@@ -12,12 +12,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "UnicornSemanticFixture.h"
-
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/pass/mir/MIRPass.h"
 #include "neverd/pass/mir/NOPPass.h"
+
+#include "UnicornSemanticFixture.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/IRBuilder.h"
