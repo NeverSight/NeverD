@@ -44,7 +44,11 @@ function(add_neverd_component_library name)
     PUBLIC  ${_resolved_components} ${NEVERD_COMMON_LIBS}
     PRIVATE ${ARG_LINK_LIBS})
 
-  set_target_properties(${name} PROPERTIES FOLDER "NeverD/Libraries")
+  # Component archives are also linked into libneverd.  Their objects must be
+  # position-independent on ELF platforms or the shared-library link fails.
+  set_target_properties(${name} PROPERTIES
+    FOLDER "NeverD/Libraries"
+    POSITION_INDEPENDENT_CODE ON)
   set_property(GLOBAL APPEND PROPERTY NEVERD_COMPONENT_LIBS ${name})
 endfunction()
 
