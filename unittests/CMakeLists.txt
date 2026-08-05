@@ -14,6 +14,10 @@ FetchContent_MakeAvailable(googletest)
 enable_testing()
 include(GoogleTest)
 
+add_neverd_unittest(NeverDTestProcessTests
+  TestProcessTests.cpp
+)
+
 add_subdirectory(libc)
 add_subdirectory(lift)
 add_subdirectory(semantic)
