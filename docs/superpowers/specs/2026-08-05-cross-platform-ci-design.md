@@ -22,6 +22,8 @@ network, and release steps are not part of this change.
   test executables, and normal `ALL` targets.
 - Run the complete CTest inventory on every platform and print failing test
   output.
+- Make the existing test-process harness portable where Windows compilation or
+  execution would otherwise prevent the full suite from running.
 - Run automatically for pushes to `dev` and all pull requests, with an optional
   manual trigger for diagnostics.
 - Keep the first workflow small and readable so platform failures are easy to
@@ -37,6 +39,9 @@ network, and release steps are not part of this change.
 - Adding x86_64 macOS, Linux arm64, or Windows arm64 jobs. Issue #1 defines
   "all primary platforms" as the three operating-system hosts above; additional
   host architectures can be follow-up work.
+- Changing NeverD engine semantics or weakening test assertions. Portability
+  changes are limited to process launching, shell syntax, temporary-path naming,
+  and exit-status handling needed to execute the same tests on Windows.
 - An explicit job timeout. The user requested that `timeout-minutes` not be set.
 
 ## Workflow Architecture
@@ -90,6 +95,39 @@ other platform results. The workflow does not set `timeout-minutes`.
    and `--output-on-failure`. This is equivalent to `check-neverd` while keeping
    compilation and test failures in separate GitHub Actions steps.
 
+## Test-Suite Portability Boundary
+
+An initial source audit found that the current test harness is not yet compilable
+as a full MSVC test build: it directly includes `<unistd.h>` and uses `getpid`
+and `WEXITSTATUS`. Several native end-to-end commands also hard-code the POSIX
+null device and POSIX shell grouping. Delivering only the workflow would therefore
+fail the Windows acceptance criterion.
+
+The implementation may add one focused, header-only test utility under
+`unittests/` that provides:
+
+- the current process ID (`_getpid`/`<process.h>` on Windows, `getpid`/
+  `<unistd.h>` on POSIX);
+- conversion of `std::system` results into a comparable process exit code
+  (direct status on Windows, wait-status decoding on POSIX);
+- the platform null device (`NUL` or `/dev/null`);
+- shell-safe quoting/redirection for paths and commands used by tests; and
+- the native executable suffix where a host-compiled fixture needs one.
+
+The duplicated process handling in these known consumers should use that
+utility:
+
+- `unittests/lift/NeverDLiftFixture.h`
+- `unittests/semantic/SemanticRoundTripFixture.h`
+- `unittests/semantic/CLIEndToEndTests.cpp`
+- `unittests/semantic/PatchFullSubstRTTests.cpp`
+
+These changes must preserve the existing commands and assertions on POSIX. On
+Windows they should execute the equivalent command rather than broadly disable
+the suite. A narrowly documented skip is acceptable only when a test inherently
+depends on a host behavior Windows cannot provide; a skip must not hide a build,
+lift, decompile, patch, or semantic-equivalence failure.
+
 ## Failure Handling and Diagnostics
 
 - Dependency and tool-version checks fail early with the missing executable in
@@ -105,7 +143,7 @@ other platform results. The workflow does not set `timeout-minutes`.
 
 ## Validation
 
-Before handoff, validate the change at four levels:
+Before handoff, validate the change at five levels:
 
 1. Parse the YAML and inspect the resolved event and matrix structure.
 2. Run a GitHub Actions-oriented workflow linter if one is available locally.
@@ -114,6 +152,8 @@ Before handoff, validate the change at four levels:
 4. Treat Linux and Windows support as fully verified only after the corresponding
    GitHub-hosted matrix jobs complete successfully. Local static validation is
    not sufficient evidence for cross-platform completion.
+5. Inspect each platform's CTest inventory and result counts so accidental test
+   filtering or broad Windows skips cannot be mistaken for full-suite coverage.
 
 ## Acceptance-Criteria Mapping
 
@@ -124,6 +164,7 @@ Before handoff, validate the change at four levels:
 | Linux, macOS, Windows build | Three-entry explicit runner matrix |
 | CLI, shared library, tests built | Default CMake build with `BUILD_TESTING=ON` |
 | Full suite on every host | Unfiltered CTest invocation in the matrix job |
+| Windows test harness builds/runs | Focused cross-platform process utility and migrated consumers |
 | Actionable failure output | Separate steps plus `--output-on-failure` |
 | Recursive submodules | Checkout `submodules: recursive` |
 | Reasonable macOS runtime | Published arm64 prebuilt LLVM package |
