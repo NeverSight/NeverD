@@ -8,3 +8,7 @@
 [submodule "third_party/unicorn"]
 	path = third_party/unicorn
 	url = https://github.com/NeverSight/unicorn
+[submodule "signatures"]
+	path = signatures
+	url = https://github.com/NeverSight/signatures.git
+	branch = main
