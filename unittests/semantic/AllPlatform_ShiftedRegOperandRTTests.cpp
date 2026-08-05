@@ -54,7 +54,7 @@ static const std::vector<RoundTripTC> kA64 = {
    "  r += (long)(unsigned char)b << 2;\n" // uxtb #2
    "  r -= (long)(unsigned short)b;\n"     // uxth
    "  return r; }\n",
-   {0x7777777777LL, (long)0xFFFFFF93A5C781LL}, "ShiftedReg", 2, ""},
+   {0x7777777777LL, 0xFFFFFF93A5C781ULL}, "ShiftedReg", 2, ""},
 };
 
 static const std::vector<RoundTripTC> kARM = {
