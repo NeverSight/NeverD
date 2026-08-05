@@ -281,10 +281,14 @@ endforeach()
 foreach(src ${X86_32_TEST_SOURCES})
   get_filename_component(base ${src} NAME_WE)
   set(obj "${CMAKE_CURRENT_BINARY_DIR}/${base}.o")
+  set(x86_32_extra_flags)
+  if(src MATCHES "test_fp32")
+    set(x86_32_extra_flags -msse2)
+  endif()
   add_custom_command(
     OUTPUT ${obj}
     COMMAND ${CLANG_EXEC} -target i386-linux-gnu -m32 -nostdlib -static
-            -O0 -fno-stack-protector -fno-pie -c
+            -O0 -fno-stack-protector -fno-pie ${x86_32_extra_flags} -c
             ${CMAKE_CURRENT_SOURCE_DIR}/${src} -o ${obj}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${src}
     COMMENT "Compiling ${src} -> ${base}.o (i386 ELF)"
