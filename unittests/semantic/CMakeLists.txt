@@ -869,6 +869,16 @@ add_neverd_unittest(NeverDPatchFullTests
   TIMEOUT 1800
 )
 
+# This generated 36k-line test harness is prohibitively expensive to optimize
+# and does not contain the code under test.  Keep NeverD and LLVM in Release,
+# but compile the harness itself without optimization so all CI hosts can reach
+# the actual test run in a reasonable time.
+if(MSVC)
+  target_compile_options(NeverDPatchFullTests PRIVATE /Od)
+else()
+  target_compile_options(NeverDPatchFullTests PRIVATE -O0)
+endif()
+
 target_compile_definitions(NeverDPatchFullTests PRIVATE
   NEVERD_BINARY="$<TARGET_FILE:neverd>"
   TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
