@@ -53,6 +53,7 @@
 
 #include <capstone/capstone.h>
 
+#include <bit>
 #include <cstdint>
 #include <cstring>
 
@@ -192,7 +193,7 @@ inline bool decodeBitMasks(bool Sf, unsigned N, unsigned Imms, unsigned Immr,
   const unsigned V = (N << 6) | ((~Imms) & 0x3Fu); // immN:NOT(imms), 7 bits
   if (V == 0)
     return false; // len < 0
-  const int Len = 31 - __builtin_clz(V);
+  const int Len = static_cast<int>(std::bit_width(V)) - 1;
   if (Len < 1)
     return false;
   const unsigned ESize = 1u << Len;

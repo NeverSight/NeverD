@@ -15,6 +15,7 @@
 #include "neverd/Limits.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 
 namespace neverd {
@@ -408,7 +409,7 @@ bool NdOpEmulator::executeMisc(const LowOp &Op) {
     if (Op.NumInputs < 1)
       return false;
     uint64_t Val = readOperand(Op.Inputs[0]);
-    writeOutput(Op.Output, __builtin_popcountll(Val));
+    writeOutput(Op.Output, std::popcount(Val));
     return true;
   }
   case NdOp::LZCOUNT: {
@@ -424,9 +425,9 @@ bool NdOpEmulator::executeMisc(const LowOp &Op) {
     if (Val == 0)
       writeOutput(Op.Output, BitWidth);
     else if (BitWidth == 64)
-      writeOutput(Op.Output, __builtin_clzll(Val));
+      writeOutput(Op.Output, std::countl_zero(Val));
     else
-      writeOutput(Op.Output, __builtin_clzll(Val) - (64 - BitWidth));
+      writeOutput(Op.Output, std::countl_zero(Val) - (64 - BitWidth));
     return true;
   }
   case NdOp::INSERT: {
