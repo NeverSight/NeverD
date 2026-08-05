@@ -213,7 +213,7 @@ NdVar AArch64Lifter::operandRead(LiftState &S, const cs_aarch64_op &Op) {
   case AARCH64_OP_FP: {
     double FPVal = Op.fp;
     uint64_t Bits;
-    __builtin_memcpy(&Bits, &FPVal, 8);
+    std::memcpy(&Bits, &FPVal, 8);
     return NdVar::cst(Bits, 8);
   }
   default:

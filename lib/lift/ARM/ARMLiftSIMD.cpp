@@ -16,6 +16,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstring>
+
 #define DEBUG_TYPE "neverd-lift-arm"
 
 namespace neverd {
@@ -525,7 +527,7 @@ bool ARMLifter::liftSIMD(LiftState &S, const cs_insn *Insn, const cs_arm &ARM) {
       if (Dst.Size == 4) {
         float fval = static_cast<float>(SrcOp.fp);
         uint32_t fbits;
-        __builtin_memcpy(&fbits, &fval, 4);
+        std::memcpy(&fbits, &fval, 4);
         S.emit(NdOp::COPY, Dst, {NdVar::cst(fbits, 4)});
       } else {
         S.emit(NdOp::SUBBYTES, Dst, {Src, NdVar::cst(0, 4)});

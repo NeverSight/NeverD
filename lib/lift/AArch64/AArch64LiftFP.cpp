@@ -17,6 +17,8 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/Support/Debug.h"
 
+#include <cstring>
+
 #define DEBUG_TYPE "neverd-lift-aarch64"
 
 namespace neverd {
@@ -185,11 +187,11 @@ bool AArch64Lifter::liftFP(LiftState &S, const cs_insn *Insn,
       double dv = ARM64.operands[1].fp;
       uint64_t Bits = 0;
       if (LaneSz == 8) {
-        __builtin_memcpy(&Bits, &dv, 8);
+        std::memcpy(&Bits, &dv, 8);
       } else if (LaneSz == 4) {
         float fv = static_cast<float>(dv);
         uint32_t b;
-        __builtin_memcpy(&b, &fv, 4);
+        std::memcpy(&b, &fv, 4);
         Bits = b;
       } else {
         Bits = encodeHalfBits(dv);
@@ -210,7 +212,7 @@ bool AArch64Lifter::liftFP(LiftState &S, const cs_insn *Insn,
         Src.Size == 8) {
       float fval = static_cast<float>(ARM64.operands[1].fp);
       uint32_t fbits;
-      __builtin_memcpy(&fbits, &fval, 4);
+      std::memcpy(&fbits, &fval, 4);
       Src = NdVar::cst(fbits, 4);
     } else if (ARM64.operands[1].type == AARCH64_OP_FP && Dst.Size == 2 &&
                Src.Size == 8) {
