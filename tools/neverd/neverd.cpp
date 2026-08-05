@@ -77,7 +77,7 @@ static int realMain(int Argc, char *Argv[]) {
 
   neverd_session_t Sess = neverd_session_create();
   SessionGuard SessGuard(Sess);
-  if (!neverd_session_load(Sess, Path.c_str())) {
+  if (!neverd_session_load(Sess, InputFile.getValue().c_str())) {
     WithColor::error() << "failed to load: " << takeLastError(Sess) << "\n";
     return 1;
   }
