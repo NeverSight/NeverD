@@ -1,0 +1,29 @@
+add_neverd_component_library(NeverDBackendC
+  HighC/HighCEmitter.cpp
+  HighC/HighCExprWriter.cpp
+  HighC/HighCFuncWriter.cpp
+  HighC/HighCStmtWriter.cpp
+  LLVMC/LLVMCEmitter.cpp
+  LLVMC/LLVMCExprWriter.cpp
+  LLVMC/LLVMCFuncWriter.cpp
+  LLVMC/LLVMCStmtWriter.cpp
+  pass/HighC/DeadStoreAnalysis.cpp
+  pass/HighC/StoreForwarding.cpp
+  pass/HighC/VoidAnalysis.cpp
+  pass/HighC/HiLoCollapse.cpp
+  pass/LLVMC/DeadStoreAnalysis.cpp
+  pass/LLVMC/StoreForwarding.cpp
+  pass/LLVMC/VoidAnalysis.cpp
+  pass/LLVMC/IntrinsicAnalysis.cpp
+  pass/LLVMC/HiLoCollapse.cpp
+  render/CTypeFormat.cpp
+  render/HighC/HighCIntrinsicRender.cpp
+  render/HighC/X86/HighCIntrinsicRenderX86.cpp
+  render/HighC/ARM/HighCIntrinsicRenderARM.cpp
+  render/LLVMC/LLVMCIntrinsicRender.cpp
+  render/LLVMC/X86/LLVMCIntrinsicRenderX86.cpp
+  render/LLVMC/ARM/LLVMCIntrinsicRenderARM.cpp
+
+  LINK_COMPONENTS
+  IR
+)

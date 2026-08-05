@@ -1,0 +1,26 @@
+add_neverd_component_library(NeverDBackendLLVM
+  MedLLVMEmitter.cpp
+  MedLLVMOpEmitter.cpp
+  MedLLVMFloatEmitter.cpp
+  MedLLVMCall.cpp
+  MedLLVMIntrinsic.cpp
+  MedLLVMAddrResolve.cpp
+  MedLLVMFrameResolve.cpp
+  MedLLVMVarAccess.cpp
+  MedLLVMConstClass.cpp
+  MedLLVMGlobalData.cpp
+  MedLLVMSwitch.cpp
+  X86/MedLLVMX86Sideeffect.cpp
+  X86/MedLLVMX86ValueEmitter.cpp
+  X86/MedLLVMX86SimdEmitter.cpp
+  X86/MedLLVMX86CryptoEmitter.cpp
+  X86/MedLLVMX86ShuffleEmitter.cpp
+  X86/MedLLVMX86GlobalData.cpp
+  AArch64/MedLLVMAArch64Sideeffect.cpp
+  AArch64/MedLLVMAArch64ValueEmitter.cpp
+  ARM/MedLLVMARMSideeffect.cpp
+  ARM/MedLLVMARMValueEmitter.cpp
+
+  LINK_COMPONENTS
+  IR
+)

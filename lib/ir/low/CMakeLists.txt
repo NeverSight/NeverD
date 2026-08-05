@@ -1,0 +1,11 @@
+add_neverd_component_library(NeverDIRLow
+  CFGBuilder.cpp
+  CFGBuilderX86Fpu.cpp
+  CircleRange.cpp
+  FuncDetector.cpp
+  JumpTableResolver.cpp
+  JumpTableResolverARM.cpp
+  JumpTableResolverGuards.cpp
+  JumpTableResolverSource.cpp
+  NdOpEmulator.cpp
+)

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="128 128 248 260" width="248" height="260" role="img" aria-labelledby="neverd-logo-title">
+  <title id="neverd-logo-title">NeverD</title>
+
+  <!-- Same mark as the dark theme: NeverC's crescent-and-blade flipped across
+       the vertical axis, opening left with the gold scratch through the lower
+       right. Only the palette changes — and it changes exactly the way
+       NeverC's light mark does, so the pair stays matched on pale paper. -->
+  <defs>
+    <linearGradient id="moon" x1="370" y1="370" x2="199" y2="142" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0E8FA5"/>
+      <stop offset="1" stop-color="#1B55C9"/>
+    </linearGradient>
+
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C2690A"/>
+      <stop offset="0.7" stop-color="#F2B824"/>
+      <stop offset="1" stop-color="#E09A10"/>
+    </linearGradient>
+
+    <mask id="kerf" maskUnits="userSpaceOnUse" x="128" y="128" width="248" height="260">
+      <rect x="128" y="128" width="248" height="260" fill="#fff"/>
+      <g transform="translate(512 0) scale(-1 1)">
+        <g transform="translate(264.44 275.74) rotate(52) scale(0.51667)">
+          <path d="M 0 0 C 75.31 70 111.31 180 3 300 C 27.81 180 66.81 70 0 0 Z"
+                fill="#000" stroke="#000" stroke-width="30.97" stroke-linejoin="round"/>
+        </g>
+      </g>
+    </mask>
+  </defs>
+
+  <g mask="url(#kerf)">
+    <g transform="translate(512 0) scale(-1 1)">
+      <path d="M 346.53 186.72 A 114 114 0 1 0 346.53 325.28 A 92 92 0 1 1 346.53 186.72 Z"
+            transform="rotate(-15 256 256)" fill="url(#moon)"/>
+    </g>
+  </g>
+
+  <g transform="translate(512 0) scale(-1 1)">
+    <g transform="translate(264.44 275.74) rotate(52) scale(0.51667)">
+      <path d="M 0 0 C 75.31 70 111.31 180 3 300 C 27.81 180 66.81 70 0 0 Z" fill="url(#edge)"/>
+    </g>
+  </g>
+</svg>

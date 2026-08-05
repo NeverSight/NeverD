@@ -1,0 +1,148 @@
+//===- MachOLoaderUtils.h - Mach-O loader helpers -----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Mach-O-specific loader utilities: entry-point extraction from
+/// LC_MAIN / LC_UNIXTHREAD, dyld bind opcode parsing, and export trie
+/// walking.  Layouts follow llvm/BinaryFormat/MachO.h.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_LOADER_MACHO_MACHOLOADERUTILS_H
+#define NEVERD_LOADER_MACHO_MACHOLOADERUTILS_H
+
+#include "neverd/loader/BinaryImage.h"
+
+#include "llvm/Object/MachO.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/MemoryBuffer.h"
+
+#include <filesystem>
+#include <memory>
+
+namespace neverd {
+namespace macho_loader {
+
+struct SectionInfo {
+  std::string Name;
+  std::string SegName;
+  uint64_t Addr = 0;
+  uint64_t Size = 0;
+  uint32_t Reserved1 = 0;
+  uint32_t Flags = 0;
+  uint32_t StubSize = 0;
+};
+
+/// Offsets from LC_DYLD_INFO / LC_DYLD_INFO_ONLY
+/// (llvm::MachO::dyld_info_command).
+struct DyldInfoOffsets {
+  uint32_t BindOff = 0;
+  uint32_t BindSize = 0;
+  uint32_t LazyBindOff = 0;
+  uint32_t LazyBindSize = 0;
+  uint32_t ExportOff = 0;
+  uint32_t ExportSize = 0;
+};
+
+/// File offsets for LC_FUNCTION_STARTS (llvm::MachO::linkedit_data_command).
+struct FunctionStartsInfo {
+  uint32_t DataOff = 0;
+  uint32_t DataSize = 0;
+};
+
+/// Collect dyld bind/export regions from load commands.
+void parseDyldInfoLoadCommands(const llvm::object::MachOObjectFile &Obj,
+                               DyldInfoOffsets &Out);
+
+/// Collect LC_LOAD_DYLIB and related dependency paths.
+void parseNeededLibraries(const llvm::object::MachOObjectFile &Obj,
+                          BinaryImage &Img);
+
+/// Decode LC_FUNCTION_STARTS ULEB128 deltas into function symbols.
+void parseFunctionStarts(const uint8_t *BasePtr, size_t FileSize,
+                         const FunctionStartsInfo &Info, uint64_t TextVMAddr,
+                         BinaryImage &Img);
+
+/// Open a thin or universal Mach-O executable and return the buffer plus a
+/// MachOObjectFile for the host architecture (cf. llvm-objdump -arch).
+llvm::Expected<std::pair<std::unique_ptr<llvm::MemoryBuffer>,
+                         std::unique_ptr<llvm::object::MachOObjectFile>>>
+openMachOFile(const std::filesystem::path &Path);
+
+/// Resolve the image entry from LC_MAIN or LC_UNIXTHREAD.
+void parseEntryPoint(const llvm::object::MachOObjectFile &Obj, BinaryImage &Img,
+                     uint64_t TextVMAddr);
+
+/// Walk LC_DYLD_INFO bind / lazy_bind bytecode and enrich \p Img imports.
+void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
+                      const DyldInfoOffsets &DyldInfo, BinaryImage &Img);
+
+/// Parse the export trie from DyldInfo offsets and append to \p Img exports.
+void parseExportTrie(const uint8_t *BasePtr, size_t FileSize,
+                     const DyldInfoOffsets &DyldInfo, uint64_t TextVMAddr,
+                     BinaryImage &Img);
+
+/// Parse __stubs sections via the indirect symbol table and populate
+/// Img.Imports and Img.Symbols with stub-to-import mappings.
+void parseStubImports(const llvm::object::MachOObjectFile &Obj,
+                      const std::vector<SectionInfo> &Sections,
+                      const uint8_t *BasePtr, size_t FileSize, bool Is64,
+                      BinaryImage &Img);
+
+/// Map non-lazy / lazy pointer-table slots (__got, __la_symbol_ptr) to their
+/// imported symbol via the indirect symbol table and record them in
+/// Img.ImportPtrSlots.  Unlike __stubs these are pointer tables (slot size =
+/// pointer size), and a GOT-indirect call to a slot has no call-site
+/// relocation, so this is the only way to name routines invoked that way (e.g.
+/// Darwin's ____chkstk_darwin stack probe).
+void parseNonLazyPtrImports(const llvm::object::MachOObjectFile &Obj,
+                            const std::vector<SectionInfo> &Sections,
+                            const uint8_t *BasePtr, size_t FileSize, bool Is64,
+                            BinaryImage &Img);
+
+/// File offsets for LC_DYLD_CHAINED_FIXUPS
+/// (llvm::MachO::linkedit_data_command).
+struct ChainedFixupsInfo {
+  uint32_t DataOff = 0;
+  uint32_t DataSize = 0;
+};
+
+/// Parse LC_DYLD_CHAINED_FIXUPS to extract import names from the chained
+/// fixups import table.  Used on macOS 12+ binaries that replaced
+/// LC_DYLD_INFO with chained pointer fixups.
+void parseChainedFixupsImports(const uint8_t *BasePtr, size_t FileSize,
+                               const ChainedFixupsInfo &Info, BinaryImage &Img);
+
+/// Walk the LC_DYLD_CHAINED_FIXUPS rebase chains (64-bit pointer formats) and
+/// record each rebase slot that holds an absolute pointer into an executable
+/// segment in Img.CodePtrRelocSlots (and into a read-only data segment in
+/// Img.DataPtrRelocSlots).  This is the chained-fixups analogue of the classic
+/// R_*_64/ABS64 relocation recording the ELF loader does: a run of such slots
+/// starting at a table base is the signature of a computed-goto / threaded-
+/// dispatch jump table (no comparison guard bounds it), letting the jump-table
+/// resolver recover it and rebuild it as relocatable control flow.  \p
+/// TextVMAddr is the __TEXT segment vmaddr (the load-time image base for the
+/// chains).
+void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
+                               const ChainedFixupsInfo &Info, va_t TextVMAddr,
+                               BinaryImage &Img);
+
+/// Parse LC_UUID and store the hex-encoded UUID in Img.DynInfo.UUID.
+void parseUUID(const llvm::object::MachOObjectFile &Obj, BinaryImage &Img);
+
+/// Parse LC_BUILD_VERSION and store the min OS version string in
+/// Img.DynInfo.MinOSVersion.
+void parseBuildVersion(const llvm::object::MachOObjectFile &Obj,
+                       BinaryImage &Img);
+
+/// Apply architecture-specific relocations to mapped MH_OBJECT sections.
+void applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
+                            BinaryImage &Img);
+
+} // namespace macho_loader
+} // namespace neverd
+
+#endif // NEVERD_LOADER_MACHO_MACHOLOADERUTILS_H

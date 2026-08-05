@@ -1,0 +1,17 @@
+[
+  {"addr":4295000149,"encoding":"ascii","content":"_printf","xrefs":[]},
+  {"addr":4295000200,"encoding":"ascii","content":"_mh_execute_header","xrefs":[]},
+  {"addr":4295000219,"encoding":"ascii","content":"\tadd","xrefs":[]},
+  {"addr":4295000224,"encoding":"ascii","content":"\rclassify","xrefs":[]},
+  {"addr":4295000235,"encoding":"ascii","content":"factorial","xrefs":[]},
+  {"addr":4295000246,"encoding":"ascii","content":"main","xrefs":[]},
+  {"addr":4295000252,"encoding":"ascii","content":"sum_array","xrefs":[]},
+  {"addr":4295000394,"encoding":"ascii","content":"__mh_execute_header","xrefs":[]},
+  {"addr":4295000414,"encoding":"ascii","content":"_add","xrefs":[]},
+  {"addr":4295000419,"encoding":"ascii","content":"_classify","xrefs":[]},
+  {"addr":4295000429,"encoding":"ascii","content":"_factorial","xrefs":[]},
+  {"addr":4295000440,"encoding":"ascii","content":"_main","xrefs":[]},
+  {"addr":4295000446,"encoding":"ascii","content":"_sum_array","xrefs":[]},
+  {"addr":4295000457,"encoding":"ascii","content":"_printf","xrefs":[]},
+  {"addr":4295000588,"encoding":"ascii","content":"test_simple_arm64","xrefs":[]}
+]

@@ -1,0 +1,8 @@
+[
+  {"addr":131340,"name":"add","size":8,"num_blocks":1,"num_med_ops":5,"num_high_stmts":1},
+  {"addr":131348,"name":"multiply","size":8,"num_blocks":1,"num_med_ops":5,"num_high_stmts":1},
+  {"addr":131356,"name":"factorial","size":40,"num_blocks":3,"num_med_ops":14,"num_high_stmts":10},
+  {"addr":131396,"name":"abs_val","size":12,"num_blocks":1,"num_med_ops":7,"num_high_stmts":1},
+  {"addr":131408,"name":"bitops","size":32,"num_blocks":1,"num_med_ops":15,"num_high_stmts":1},
+  {"addr":131440,"name":"_start","size":4,"num_blocks":1,"num_med_ops":2,"num_high_stmts":1}
+]

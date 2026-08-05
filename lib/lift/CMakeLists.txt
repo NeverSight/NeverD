@@ -1,0 +1,34 @@
+add_neverd_component_library(NeverDLift
+  X86/X86Lifter.cpp
+  X86/X86LiftCore.cpp
+  X86/X86LiftControl.cpp
+  X86/X86LiftAtomic.cpp
+  X86/X86LiftString.cpp
+  X86/X86LiftFPU.cpp
+  X86/X86LiftExt.cpp
+  X86/X86LiftSIMD.cpp
+  X86/X86LiftSIMDAVX.cpp
+  X86/X86LiftSIMDLegacy.cpp
+  X86/X86Regs.cpp
+
+  ARM/ARMLifter.cpp
+  ARM/ARMLiftCore.cpp
+  ARM/ARMLiftCoreExt.cpp
+  ARM/ARMLiftControl.cpp
+  ARM/ARMLiftMem.cpp
+  ARM/ARMLiftMul.cpp
+  ARM/ARMLiftSIMD.cpp
+  ARM/ARMLiftSIMDNEON.cpp
+  ARM/ARMRegs.cpp
+
+  AArch64/AArch64Lifter.cpp
+  AArch64/AArch64LiftCore.cpp
+  AArch64/AArch64LiftCoreNEON.cpp
+  AArch64/AArch64LiftControl.cpp
+  AArch64/AArch64LiftMem.cpp
+  AArch64/AArch64LiftAtomic.cpp
+  AArch64/AArch64LiftFP.cpp
+  AArch64/AArch64LiftSIMD.cpp
+  AArch64/AArch64LiftSIMDExt.cpp
+  AArch64/AArch64Regs.cpp
+)

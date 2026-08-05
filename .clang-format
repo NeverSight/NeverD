@@ -1,0 +1,17 @@
+BasedOnStyle: LLVM
+IncludeBlocks: Regroup
+# Categories are matched top-to-bottom (first match wins); Priority sets the
+# emitted group order. The main header stays first automatically.
+IncludeCategories:
+  # Project public headers.
+  - Regex: '^"neverd/'
+    Priority: 2
+  # Third-party dependency headers, quoted as the codebase writes them.
+  - Regex: '^"(llvm|capstone)/'
+    Priority: 3
+  # System / standard-library headers.
+  - Regex: '^<'
+    Priority: 4
+  # Sibling private headers ("SessionImpl.h", "MapParsers.h", ...).
+  - Regex: '.*'
+    Priority: 1

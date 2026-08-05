@@ -1,0 +1,11 @@
+{
+  "load_ms":3,
+  "decode_ms":15,
+  "low_ms":3,
+  "med_ms":3,
+  "high_ms":6,
+  "llvm_ms":17,
+  "total_ms":48,
+  "peak_rss_mb":7.40625,
+  "functions_detected":6
+}

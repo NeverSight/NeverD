@@ -1,0 +1,21 @@
+add_neverd_component_library(NeverDCodeGen
+  CodeGen.cpp
+  CodeGenX86.cpp
+  CodeGenAArch64.cpp
+  CodeGenARM.cpp
+  BinaryRewriter.cpp
+  InplaceRewriter.cpp
+  COFF/COFFPatch.cpp
+  COFF/COFFInplace.cpp
+  COFF/COFFReloc.cpp
+  ELF/ELFPatch.cpp
+  ELF/ELFInplace.cpp
+  ELF/ELFReloc.cpp
+  MachO/MachOPatch.cpp
+  MachO/MachOInplace.cpp
+  MachO/MachOReloc.cpp
+
+  LINK_COMPONENTS
+  IR
+  Loader
+)

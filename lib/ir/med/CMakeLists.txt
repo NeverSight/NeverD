@@ -1,0 +1,21 @@
+add_neverd_component_library(NeverDIRMed
+  LowToMed.cpp
+  LowToMedCallReturn.cpp
+  LowToMedX86.cpp
+  LowToMedARM.cpp
+  MedABIPass.cpp
+  MedABIPassSupport.cpp
+  MedCallingConv.cpp
+  MedCallingConvX86.cpp
+  MedVariadic.cpp
+  MedCFGSimplify.cpp
+  MedDCE.cpp
+  MedDisplay.cpp
+  MedFlags.cpp
+  MedFlagsARM.cpp
+  MedFlagsX86.cpp
+  MedPropagation.cpp
+  MedSSA.cpp
+  MedTypePass.cpp
+  MedVerifier.cpp
+)

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="128 128 248 260" width="248" height="260" role="img" aria-labelledby="neverd-logo-title">
+  <title id="neverd-logo-title">NeverD</title>
+
+  <!-- Sibling to NeverC: the same crescent-and-blade mark, flipped across the
+       vertical axis so the two repos face each other. NeverC opens right with
+       the gold scratch through its lower left; NeverD opens left with the
+       scratch through its lower right. Same cyan/blue moon and gold blade —
+       brothers share a palette, not an invert. Dark theme. -->
+  <defs>
+    <!-- Moonlight: NeverC's ramp with x mirrored (512−x) so the flipped crescent
+         keeps the same limb lighting after translate(512 0) scale(-1 1). -->
+    <linearGradient id="moon" x1="370" y1="370" x2="199" y2="142" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22C7D6"/>
+      <stop offset="1" stop-color="#3D7BF5"/>
+    </linearGradient>
+
+    <!-- Same gold ramp as NeverC: tip in the hollow is amber, belly near white,
+         exit tip bright gold. Declared in the blade's own coordinate system. -->
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EF8A0A"/>
+      <stop offset="0.7" stop-color="#FFE97A"/>
+      <stop offset="1" stop-color="#FFC93C"/>
+    </linearGradient>
+
+    <!-- Kerf travels with the blade under the same horizontal flip. -->
+    <mask id="kerf" maskUnits="userSpaceOnUse" x="128" y="128" width="248" height="260">
+      <rect x="128" y="128" width="248" height="260" fill="#fff"/>
+      <g transform="translate(512 0) scale(-1 1)">
+        <g transform="translate(264.44 275.74) rotate(52) scale(0.51667)">
+          <path d="M 0 0 C 75.31 70 111.31 180 3 300 C 27.81 180 66.81 70 0 0 Z"
+                fill="#000" stroke="#000" stroke-width="30.97" stroke-linejoin="round"/>
+        </g>
+      </g>
+    </mask>
+  </defs>
+
+  <!-- Exact NeverC crescent geometry, mirrored: opens left, still rolled 15°. -->
+  <g mask="url(#kerf)">
+    <g transform="translate(512 0) scale(-1 1)">
+      <path d="M 346.53 186.72 A 114 114 0 1 0 346.53 325.28 A 92 92 0 1 1 346.53 186.72 Z"
+            transform="rotate(-15 256 256)" fill="url(#moon)"/>
+    </g>
+  </g>
+
+  <!-- Exact NeverC blade, mirrored with the crescent so the X crossing lands
+       on the belly the same way — just on the other side. -->
+  <g transform="translate(512 0) scale(-1 1)">
+    <g transform="translate(264.44 275.74) rotate(52) scale(0.51667)">
+      <path d="M 0 0 C 75.31 70 111.31 180 3 300 C 27.81 180 66.81 70 0 0 Z" fill="url(#edge)"/>
+    </g>
+  </g>
+</svg>

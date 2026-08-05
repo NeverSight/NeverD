@@ -1,0 +1,15 @@
+add_neverd_component_library(NeverDLoader
+  Loader.cpp
+  FunctionDiscovery.cpp
+  FunctionDiscoveryX86.cpp
+  FunctionDiscoveryAArch64.cpp
+  FunctionDiscoveryARM.cpp
+  COFF/COFFLoader.cpp
+  COFF/COFFUnwind.cpp
+  COFF/COFFLoaderUtils.cpp
+  ELF/ELFLoader.cpp
+  ELF/ELFLoaderUtils.cpp
+  MachO/MachOLoader.cpp
+  MachO/MachORelocations.cpp
+  MachO/MachOLoaderUtils.cpp
+)

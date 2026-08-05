@@ -1,0 +1,34 @@
+# Force LF line endings on all platforms (including Windows),
+# to avoid CRLF causing build failures or noisy diffs on Windows / shared dirs.
+* text=auto eol=lf
+
+# Build-critical scripts and assembly: explicitly force LF (never CRLF, even on Windows)
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.S     text eol=lf
+*.s     text eol=lf
+*.asm   text eol=lf
+
+# Binary / build artifacts: no line-ending or encoding conversion, keep bytes as-is
+*.bc    binary
+*.o     binary
+*.obj   binary
+*.a     binary
+*.lib   binary
+*.so    binary
+*.dylib binary
+*.dll   binary
+*.exe   binary
+*.elf   binary
+*.vm    binary
+*.vmp   binary
+*.bin   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary

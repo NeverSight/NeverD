@@ -1,0 +1,7 @@
+[
+  {"addr":4294968416,"name":"_add","size":8,"num_blocks":1,"num_med_ops":6,"num_high_stmts":1},
+  {"addr":4294968424,"name":"_factorial","size":36,"num_blocks":3,"num_med_ops":18,"num_high_stmts":17},
+  {"addr":4294968460,"name":"_sum_array","size":52,"num_blocks":5,"num_med_ops":24,"num_high_stmts":17},
+  {"addr":4294968512,"name":"_classify","size":36,"num_blocks":1,"num_med_ops":12,"num_high_stmts":1},
+  {"addr":4294968548,"name":"_main","size":112,"num_blocks":1,"num_med_ops":40,"num_high_stmts":6}
+]

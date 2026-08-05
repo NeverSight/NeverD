@@ -1,0 +1,7 @@
+[
+  {"addr":4198400,"name":"fibonacci","size":43,"num_blocks":3,"num_med_ops":28,"num_high_stmts":5},
+  {"addr":4198443,"name":"switch_test","size":50,"num_blocks":8,"num_med_ops":27,"num_high_stmts":7},
+  {"addr":4198493,"name":"nested_loop","size":65,"num_blocks":8,"num_med_ops":59,"num_high_stmts":37},
+  {"addr":4198558,"name":"bitops","size":34,"num_blocks":1,"num_med_ops":13,"num_high_stmts":1},
+  {"addr":4198592,"name":"_start","size":56,"num_blocks":1,"num_med_ops":27,"num_high_stmts":4}
+]

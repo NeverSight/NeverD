@@ -1,0 +1,539 @@
+//===- NeverDCAPI.h - C API for NeverD decompiler -------------*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Pure C API that wraps NeverD's C++ Pipeline/Loader/Decoder/Emitter.
+/// Used by CLI, Qt GUI, and third-party plugins via libneverd shared library.
+///
+/// All returned strings are heap-allocated via strdup(); callers must
+/// free them with neverd_free_string().
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SDK_CAPI_H
+#define NEVERD_SDK_CAPI_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef _WIN32
+#ifdef NEVERD_EXPORTS
+#define NEVERD_API __declspec(dllexport)
+#else
+#define NEVERD_API __declspec(dllimport)
+#endif
+#else
+#define NEVERD_API __attribute__((visibility("default")))
+#endif
+
+typedef void *neverd_session_t;
+typedef unsigned long long neverd_va_t;
+
+// ===--------------------------------------------------------------------===//
+// Session lifecycle
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API neverd_session_t neverd_session_create(void);
+NEVERD_API void neverd_session_destroy(neverd_session_t Sess);
+NEVERD_API int neverd_session_load(neverd_session_t Sess, const char *Path);
+NEVERD_API int neverd_session_is_loaded(neverd_session_t Sess);
+
+/// Run the full analysis pipeline (lift → optimize → decompile).
+/// Call after neverd_session_load() to pre-compute analysis data.
+/// Returns 1 on success, 0 on failure.  Thread-safe if called once.
+NEVERD_API int neverd_session_analyze(neverd_session_t Sess);
+
+NEVERD_API const char *neverd_session_file_path(neverd_session_t Sess);
+NEVERD_API const char *neverd_session_arch_name(neverd_session_t Sess);
+NEVERD_API const char *neverd_session_format_name(neverd_session_t Sess);
+NEVERD_API int neverd_session_is_64bit(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// Function list
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API int neverd_func_count(neverd_session_t Sess);
+NEVERD_API neverd_va_t neverd_func_entry(neverd_session_t Sess, int Idx);
+NEVERD_API int neverd_func_size(neverd_session_t Sess, int Idx);
+NEVERD_API const char *neverd_func_name(neverd_session_t Sess, int Idx);
+
+// ===--------------------------------------------------------------------===//
+// Disassembly (returns JSON array)
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_disasm_json(neverd_session_t Sess,
+                                          neverd_va_t Addr, int MaxInsns);
+
+// ===--------------------------------------------------------------------===//
+// Decompilation
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
+                                        neverd_va_t FuncEntry);
+
+// ===--------------------------------------------------------------------===//
+// Multi-stage IR
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_ir_low(neverd_session_t Sess,
+                                     neverd_va_t FuncEntry);
+NEVERD_API const char *neverd_ir_med(neverd_session_t Sess,
+                                     neverd_va_t FuncEntry);
+NEVERD_API const char *neverd_ir_high(neverd_session_t Sess,
+                                      neverd_va_t FuncEntry);
+NEVERD_API const char *neverd_ir_llvm(neverd_session_t Sess,
+                                      neverd_va_t FuncEntry);
+
+// ===--------------------------------------------------------------------===//
+// Function lookup helpers
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API int neverd_func_find_by_name(neverd_session_t Sess,
+                                        const char *Name);
+NEVERD_API int neverd_func_find_by_addr(neverd_session_t Sess,
+                                        neverd_va_t Addr);
+
+// ===--------------------------------------------------------------------===//
+// Raw bytes
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API int neverd_read_bytes(neverd_session_t Sess, neverd_va_t Addr,
+                                 unsigned char *Buf, int Size);
+
+// ===--------------------------------------------------------------------===//
+// Info panels (return JSON)
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_imports_json(neverd_session_t Sess);
+NEVERD_API const char *neverd_exports_json(neverd_session_t Sess);
+NEVERD_API const char *neverd_segments_json(neverd_session_t Sess);
+NEVERD_API const char *neverd_strings_json(neverd_session_t Sess,
+                                           int MinLength);
+NEVERD_API const char *neverd_xrefs_to_json(neverd_session_t Sess,
+                                            neverd_va_t Addr);
+NEVERD_API const char *neverd_xrefs_from_json(neverd_session_t Sess,
+                                              neverd_va_t Addr);
+
+// ===--------------------------------------------------------------------===//
+// CFG graph (returns JSON: nodes + edges)
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_cfg_json(neverd_session_t Sess,
+                                       neverd_va_t FuncEntry);
+
+// ===--------------------------------------------------------------------===//
+// Patch operations
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API int neverd_patch_from_ir(neverd_session_t Sess, const char *IRText,
+                                    int Strategy, const char *OutputPath);
+NEVERD_API int neverd_patch_from_c(neverd_session_t Sess, const char *CText,
+                                   neverd_va_t FuncAddr,
+                                   const char *OutputPath);
+
+/// Enable/disable the instruction-substitution pass for subsequent
+/// patch operations.  When enabled, every patch entry point (from-ir, from-c,
+/// full) runs the IR pass before codegen, replacing integer add/sub/and/or/xor
+/// with equivalent instruction sequences.  \p Rounds (>=1) repeats the pass.
+/// This is a demo-level sample obfuscation transform; more passes will follow.
+NEVERD_API void neverd_set_inst_substitution(neverd_session_t Sess, int Enable,
+                                             int Rounds);
+
+/// Number of operators substituted by the most recent patch (0 if disabled).
+NEVERD_API int neverd_patch_substitution_count(neverd_session_t Sess);
+
+/// Enable/disable the constant-encryption pass for subsequent patch
+/// operations.  When enabled, every patch entry point (from-ir, from-c, full)
+/// runs the IR pass before codegen, replacing integer constant operands of
+/// binary operators / comparisons with run-time-decrypted values.  This is a
+/// demo-level sample obfuscation transform; more passes will follow.
+NEVERD_API void neverd_set_constant_encryption(neverd_session_t Sess,
+                                               int Enable);
+
+/// Number of constant operands encrypted by the most recent patch (0 if
+/// disabled).
+NEVERD_API int neverd_patch_constant_encryption_count(neverd_session_t Sess);
+
+/// Enable/disable the opaque-predicate pass for subsequent patch operations.
+/// When enabled, every patch entry point (from-ir, from-c, full) runs the IR
+/// pass before codegen, guarding basic blocks behind an always-true predicate
+/// the backend cannot fold.  This is a demo-level sample obfuscation transform;
+/// more passes will follow.
+NEVERD_API void neverd_set_opaque_predicate(neverd_session_t Sess, int Enable);
+
+/// Number of opaque predicates inserted by the most recent patch (0 if
+/// disabled).
+NEVERD_API int neverd_patch_opaque_predicate_count(neverd_session_t Sess);
+
+/// Enable/disable the control-flow flattening pass for subsequent patch
+/// operations.  When enabled, every patch entry point (from-ir, from-c, full)
+/// runs the IR pass before codegen, rebuilding each function's control-flow
+/// graph as a dispatcher loop.  This is a demo-level sample obfuscation
+/// transform; more passes will follow.
+NEVERD_API void neverd_set_control_flow_flattening(neverd_session_t Sess,
+                                                   int Enable);
+
+/// Number of basic blocks flattened by the most recent patch (0 if disabled).
+NEVERD_API int
+neverd_patch_control_flow_flattening_count(neverd_session_t Sess);
+
+/// Enable/disable the bogus-control-flow pass for subsequent patch operations.
+/// When enabled, every patch entry point (from-ir, from-c, full) runs the IR
+/// pass before codegen, growing a dead, opaque-guarded fake control-flow
+/// sub-graph around each basic block.  This is a demo-level sample obfuscation
+/// transform; more passes will follow.
+NEVERD_API void neverd_set_bogus_control_flow(neverd_session_t Sess,
+                                              int Enable);
+
+/// Number of basic blocks given a bogus sub-graph by the most recent patch
+/// (0 if disabled).
+NEVERD_API int neverd_patch_bogus_control_flow_count(neverd_session_t Sess);
+
+/// Enable/disable the indirect-branch pass for subsequent patch operations.
+/// When enabled, every patch entry point (from-ir, from-c, full) runs the IR
+/// pass before codegen, rewriting two-way conditional branches into
+/// table-driven `indirectbr`.  This is a demo-level sample obfuscation
+/// transform; more passes will follow.
+NEVERD_API void neverd_set_indirect_branch(neverd_session_t Sess, int Enable);
+
+/// Number of conditional branches converted to indirect branches by the most
+/// recent patch (0 if disabled).
+NEVERD_API int neverd_patch_indirect_branch_count(neverd_session_t Sess);
+
+/// Enable/disable the indirect-call pass for subsequent patch operations.
+/// When enabled, every patch entry point (from-ir, from-c, full) runs the IR
+/// pass before codegen, rewriting direct calls to defined functions into
+/// position-independent indirect calls through an opaque function pointer.
+/// This is a demo-level sample obfuscation transform; more passes will follow.
+NEVERD_API void neverd_set_indirect_call(neverd_session_t Sess, int Enable);
+
+/// Number of direct calls converted to indirect calls by the most recent patch
+/// (0 if disabled).
+NEVERD_API int neverd_patch_indirect_call_count(neverd_session_t Sess);
+
+/// Enable/disable the mixed-boolean-arithmetic pass for subsequent patch
+/// operations.  When enabled, every patch entry point (from-ir, from-c, full)
+/// runs the IR pass before codegen, injecting a provably-zero MBA term into
+/// every integer add/sub/mul/and/or/xor result.  This is a demo-level sample
+/// obfuscation transform; more passes will follow.
+NEVERD_API void neverd_set_mba(neverd_session_t Sess, int Enable);
+
+/// Number of operators wrapped with an MBA term by the most recent patch
+/// (0 if disabled).
+NEVERD_API int neverd_patch_mba_count(neverd_session_t Sess);
+
+/// Enable/disable the indirect global-variable pass for subsequent patch
+/// operations.  When enabled, every patch entry point (from-ir, from-c, full)
+/// runs the IR pass before codegen, rewriting direct references to defined
+/// globals into position-independent indirect addresses through an opaque
+/// pointer.  This is a demo-level sample obfuscation transform; more passes
+/// will follow.
+NEVERD_API void neverd_set_indirect_global(neverd_session_t Sess, int Enable);
+
+/// Number of global-variable references made indirect by the most recent patch
+/// (0 if disabled).
+NEVERD_API int neverd_patch_indirect_global_count(neverd_session_t Sess);
+
+/// Enable/disable the value-laundering pass for subsequent patch operations.
+/// When enabled, every patch entry point (from-ir, from-c, full) runs the IR
+/// pass before codegen, routing integer (scalar / integer-vector) instruction
+/// results through a volatile stack slot and redirecting their uses to the
+/// reloaded value.  This is a demo-level sample obfuscation transform; more
+/// passes will follow.
+NEVERD_API void neverd_set_value_launder(neverd_session_t Sess, int Enable);
+
+/// Number of values laundered by the most recent patch (0 if disabled).
+NEVERD_API int neverd_patch_value_launder_count(neverd_session_t Sess);
+
+/// Enable/disable the constant-pooling pass for subsequent patch operations.
+/// When enabled, integer constant operands of binary operators / comparisons
+/// are moved into a pass-created read-only global pool and fetched at run time
+/// through an opaque index.  This is a demo-level sample obfuscation transform;
+/// more passes will follow.
+NEVERD_API void neverd_set_constant_pooling(neverd_session_t Sess, int Enable);
+
+/// Number of constant operands pooled by the most recent patch (0 if disabled).
+NEVERD_API int neverd_patch_constant_pooling_count(neverd_session_t Sess);
+
+/// Enable/disable the bit-masking pass for subsequent patch operations.  When
+/// enabled, every patch entry point (from-ir, from-c, full) runs the IR pass
+/// before codegen, replacing integer (scalar / integer-vector) results with the
+/// bitwise identity `(x & m) | (x & ~m)` where the two masks come from
+/// independent volatile slots (so the backend cannot fold them away).  This is
+/// a demo-level sample obfuscation transform; more passes will follow.
+NEVERD_API void neverd_set_bit_masking(neverd_session_t Sess, int Enable);
+
+/// Number of values bit-masked by the most recent patch (0 if disabled).
+NEVERD_API int neverd_patch_bit_masking_count(neverd_session_t Sess);
+
+/// Force the original code-section name used by subsequent patch operations.
+/// Pass the section that holds the code to patch when it is not the canonical
+/// ".text"/"__text" — e.g. a binary processed by a packer/protector that
+/// renamed it (VMProtect ".vmp0", UPX "UPX1", Themida, randomised names).
+/// Pass NULL or "" to clear the override and use the format default.  Applies
+/// to in-place rewriting (all formats) and to COFF/Mach-O section-mode
+/// patching; ELF section-mode patching is segment-based and ignores it.
+NEVERD_API void neverd_set_text_section(neverd_session_t Sess,
+                                        const char *Name);
+
+NEVERD_API const char *neverd_patch_output_path(neverd_session_t Sess);
+NEVERD_API unsigned long long neverd_patch_code_size(neverd_session_t Sess);
+NEVERD_API int neverd_patch_trampoline_count(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// Error handling
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_last_error(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// Memory management
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API void neverd_free_string(const char *Str);
+
+// ===--------------------------------------------------------------------===//
+// Session metadata
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API unsigned long long neverd_session_file_size(neverd_session_t Sess);
+NEVERD_API neverd_va_t neverd_session_base_addr(neverd_session_t Sess);
+NEVERD_API neverd_va_t neverd_session_entry_addr(neverd_session_t Sess);
+NEVERD_API int neverd_session_segment_count(neverd_session_t Sess);
+NEVERD_API int neverd_session_section_count(neverd_session_t Sess);
+NEVERD_API int neverd_session_import_count(neverd_session_t Sess);
+NEVERD_API int neverd_session_export_count(neverd_session_t Sess);
+NEVERD_API int neverd_session_symbol_count(neverd_session_t Sess);
+
+NEVERD_API const char *neverd_hex_dump(neverd_session_t Sess, neverd_va_t Addr,
+                                       int Size);
+
+// ===--------------------------------------------------------------------===//
+// Annotations (per-address user comments, persisted to JSON sidecar file)
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API void neverd_annotation_set(neverd_session_t Sess, neverd_va_t Addr,
+                                      const char *Text);
+NEVERD_API void neverd_annotation_remove(neverd_session_t Sess,
+                                         neverd_va_t Addr);
+NEVERD_API const char *neverd_annotation_get(neverd_session_t Sess,
+                                             neverd_va_t Addr);
+NEVERD_API const char *neverd_annotations_json(neverd_session_t Sess);
+NEVERD_API int neverd_annotations_save(neverd_session_t Sess);
+NEVERD_API int neverd_annotations_load(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// Binary diff (function-level comparison between two sessions)
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_diff_functions(neverd_session_t SessA,
+                                             neverd_session_t SessB);
+NEVERD_API const char *neverd_diff_decompile(neverd_session_t SessA,
+                                             neverd_va_t EntryA,
+                                             neverd_session_t SessB,
+                                             neverd_va_t EntryB);
+
+// ===--------------------------------------------------------------------===//
+// Symbol renaming (persisted to JSON sidecar file)
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API int neverd_rename_func(neverd_session_t Sess, const char *OldName,
+                                  const char *NewName);
+NEVERD_API const char *neverd_renames_json(neverd_session_t Sess);
+NEVERD_API int neverd_renames_save(neverd_session_t Sess);
+NEVERD_API int neverd_renames_load(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// Call graph (function-level call relationships)
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_callgraph_json(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// Address resolution
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_resolve_addr(neverd_session_t Sess,
+                                           neverd_va_t Addr);
+
+// ===--------------------------------------------------------------------===//
+// Byte pattern / string search across all segments
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_search_bytes(neverd_session_t Sess,
+                                           const unsigned char *Pattern,
+                                           int PatternLen, int MaxResults);
+NEVERD_API const char *neverd_search_string(neverd_session_t Sess,
+                                            const char *Pattern,
+                                            int CaseSensitive, int MaxResults);
+
+// ===--------------------------------------------------------------------===//
+// Sections / Symbols / Relocations / Headers / Entry points / Dashboard
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_sections_json(neverd_session_t Sess);
+NEVERD_API const char *neverd_symbols_json(neverd_session_t Sess);
+NEVERD_API const char *neverd_relocs_json(neverd_session_t Sess);
+NEVERD_API const char *neverd_headers_json(neverd_session_t Sess);
+NEVERD_API const char *neverd_entrypoints_json(neverd_session_t Sess);
+NEVERD_API const char *neverd_dashboard_json(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// FLIRT signature matching
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API int neverd_apply_signatures(neverd_session_t Sess,
+                                       const char *SigDir);
+NEVERD_API int neverd_auto_apply_signatures(neverd_session_t Sess,
+                                            const char *SigBaseDir);
+NEVERD_API int neverd_apply_signature_file(neverd_session_t Sess,
+                                           const char *SigPath);
+NEVERD_API int neverd_sig_match_count(neverd_session_t Sess);
+NEVERD_API const char *neverd_sig_matches_json(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// High-level pipeline operations (lift / patch / decompile)
+//
+// These wrap Pipeline + Codegen + Emitter so that consumer TUs (CLI, GUI)
+// never instantiate LLVM PassManager templates — avoiding weak_def symbol
+// duplication across shared-library boundaries.
+// ===--------------------------------------------------------------------===//
+
+NEVERD_API const char *neverd_lift_module(neverd_session_t Sess,
+                                          const char *InputPath, int NoOpt,
+                                          int MaxFunctions);
+
+/// Lift binary → LLVM IR → compile back to relocatable object in one call.
+/// Returns 0 on success.  Use neverd_roundtrip_* getters for results.
+NEVERD_API int neverd_lift_to_obj(neverd_session_t Sess, const char *InputPath,
+                                  int NoOpt, int MaxFunctions);
+NEVERD_API const char *neverd_roundtrip_ir(neverd_session_t Sess);
+NEVERD_API const unsigned char *
+neverd_roundtrip_obj(neverd_session_t Sess, unsigned long long *OutLen);
+NEVERD_API int neverd_roundtrip_func_count(neverd_session_t Sess);
+NEVERD_API const char *neverd_roundtrip_func_name(neverd_session_t Sess,
+                                                  int Index);
+NEVERD_API unsigned long long
+neverd_roundtrip_func_offset(neverd_session_t Sess, int Index);
+NEVERD_API unsigned long long neverd_roundtrip_func_size(neverd_session_t Sess,
+                                                         int Index);
+NEVERD_API int neverd_roundtrip_func_param_count(neverd_session_t Sess,
+                                                 int Index);
+NEVERD_API const char *neverd_lift_dump(neverd_session_t Sess,
+                                        const char *InputPath, int Level,
+                                        int MaxFunctions);
+NEVERD_API int neverd_patch_full(neverd_session_t Sess, const char *InputPath,
+                                 const char *OutputPath, int Strategy,
+                                 int NoOpt, int InjectHello, int RunNop,
+                                 int MaxFunctions);
+NEVERD_API const char *neverd_decompile_all(neverd_session_t Sess,
+                                            const char *InputPath,
+                                            int UseLlvmRoute, int NoOpt,
+                                            int MaxFunctions);
+NEVERD_API int neverd_inject_hello(neverd_session_t Sess);
+NEVERD_API const char *neverd_disasm_text(neverd_session_t Sess,
+                                          const char *FuncNameOrAddr,
+                                          int Annotate);
+NEVERD_API const char *neverd_xrefs_scan(neverd_session_t Sess,
+                                         const char *InputPath,
+                                         neverd_va_t Target);
+NEVERD_API const char *neverd_cfg_dot(neverd_session_t Sess,
+                                      const char *InputPath,
+                                      const char *FuncNameOrAddr, int Styled);
+
+// ===--------------------------------------------------------------------===//
+// Benchmark support (structured pipeline access for timing)
+// ===--------------------------------------------------------------------===//
+
+/// Run the full pipeline and return structured JSON benchmark data:
+/// {"func_count":N, "import_count":N, "string_count":N,
+///  "low_time_ms":N, "med_time_ms":N, "high_time_ms":N,
+///  "llvm_time_ms":N, "total_time_ms":N,
+///  "functions":[{"name":"...","entry":"0x...","blocks":N,"ops":N},...]}.
+/// Caller frees.
+NEVERD_API const char *neverd_bench_run(neverd_session_t Sess,
+                                        const char *InputPath,
+                                        int MaxFunctions);
+
+/// Measure raw instruction-decode throughput over the loaded image's
+/// executable segments and return JSON:
+///   {"arch":"...","exec_bytes":N,"insns":N,
+///    "full_detail_insns_per_sec":N,"light_insns_per_sec":N,
+///    "full_detail_mb_per_sec":F,"light_mb_per_sec":F,
+///    "detail_off_speedup":F,
+///    "mt_threads":N,"mt_full_detail_insns_per_sec":N,
+///    "mt_full_detail_mb_per_sec":F,"mt_scaling":F,
+///    "aarch64_blscan_words_per_sec":N,"aarch64_blscan_speedup":F}
+/// The "full_detail" figures use the operand-detail decode the lift path needs;
+/// "light" uses the detail-free classification decode; the "mt_" figures are
+/// the multi-threaded aggregate over workerThreadCount() per-thread decoders
+/// (the rate a real pipeline decode achieves), with mt_scaling the wall-clock
+/// speedup over the single-threaded full-detail pass; the AArch64 fields (when
+/// applicable) measure the fixed-width BL scan used for call-target discovery.
+/// Requires a binary to be loaded via neverd_session_load().  Caller frees.
+NEVERD_API const char *neverd_bench_decode(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
+// Signature generation utilities
+// ===--------------------------------------------------------------------===//
+
+/// Compute CRC16 over a byte buffer (FLIRT-compatible algorithm).
+NEVERD_API unsigned short neverd_sig_compute_crc16(const unsigned char *Data,
+                                                   int Length);
+
+// ===--------------------------------------------------------------------===//
+// Plugin management
+//
+// Wraps PluginManager so tools never reference the internal C++ class.
+// ===--------------------------------------------------------------------===//
+
+/// Load all plugins (*.dylib / *.dll / *.so) from \p Dir.
+/// Returns the number of plugins successfully loaded.
+NEVERD_API int neverd_plugins_load_dir(neverd_session_t Sess, const char *Dir);
+
+/// Return a JSON array of loaded plugins:
+///   [{"name":"…","version":"…","author":"…","description":"…","path":"…"},…]
+/// Caller frees with neverd_free_string().
+NEVERD_API const char *neverd_plugins_list_json(neverd_session_t Sess);
+
+/// Initialize all loaded plugins (calls each plugin's Init callback).
+NEVERD_API void neverd_plugins_init(neverd_session_t Sess);
+
+/// Terminate and unload all loaded plugins.
+NEVERD_API void neverd_plugins_term(neverd_session_t Sess);
+
+/// Run a specific plugin by name.  Returns the plugin's return code,
+/// or -1 if the plugin was not found.
+NEVERD_API int neverd_plugins_run(neverd_session_t Sess, const char *Name,
+                                  int Arg);
+
+/// Return the number of currently loaded plugins.
+NEVERD_API int neverd_plugins_count(neverd_session_t Sess);
+
+/// Dispatch an event to all loaded plugins.
+/// Requires the caller to include NeverDPlugin.h for neverd_event_t.
+NEVERD_API void neverd_plugins_dispatch_event(neverd_session_t Sess,
+                                              const void *Event);
+
+// ===--------------------------------------------------------------------===//
+// Version info
+// ===--------------------------------------------------------------------===//
+
+/// Full version string, e.g. "NeverD v0.3".  Caller frees.
+NEVERD_API const char *neverd_version(void);
+
+/// Project name only, e.g. "NeverD".  Caller frees.
+NEVERD_API const char *neverd_project_name(void);
+
+/// Version number only, e.g. "0.3".  Caller frees.
+NEVERD_API const char *neverd_version_number(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // NEVERD_SDK_CAPI_H

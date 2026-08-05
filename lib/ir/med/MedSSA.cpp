@@ -1,0 +1,399 @@
+//===- MedSSA.cpp - SSA construction for MedIR -------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// SSA construction: live-in analysis, dominance computation
+/// (Cooper-Harvey-Kennedy), dominance frontier calculation, phi insertion,
+/// and iterative SSA renaming over the dominator tree.
+///
+//===----------------------------------------------------------------------===//
+
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/LowToMed.h"
+
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <algorithm>
+#include <map>
+#include <queue>
+#include <set>
+
+#define DEBUG_TYPE "neverd-med-ssa"
+
+namespace neverd {
+
+void LowToMedConverter::buildSsa(MedFunc &Func) {
+  if (Func.Blocks.empty())
+    return;
+  Func.CallClobbers.clear();
+
+  int N = static_cast<int>(Func.Blocks.size());
+
+  // Reverse post-order + immediate dominators (Cooper-Harvey-Kennedy), computed
+  // up front because both the live-in analysis (Step 0) and the dominance
+  // frontiers (Step 2) need them.
+  std::vector<int> RPO;
+  std::vector<int> RPONum(N, -1);
+  {
+    std::vector<bool> Visited(N, false);
+    std::vector<std::pair<int, size_t>> Stk;
+    Stk.reserve(N);
+    Visited[0] = true;
+    Stk.push_back({0, 0});
+    while (!Stk.empty()) {
+      int B = Stk.back().first;
+      size_t I = Stk.back().second;
+      auto &Succs = Func.Blocks[B].Succs;
+      if (I < Succs.size()) {
+        Stk.back().second = I + 1;
+        int S = Succs[I];
+        if (S < 0 || S >= N)
+          continue;
+        if (!Visited[S]) {
+          Visited[S] = true;
+          Stk.push_back({S, 0});
+        }
+      } else {
+        RPO.push_back(B);
+        Stk.pop_back();
+      }
+    }
+    std::reverse(RPO.begin(), RPO.end());
+    for (int I = 0; I < static_cast<int>(RPO.size()); ++I)
+      RPONum[RPO[I]] = I;
+  }
+
+  std::vector<int> IDom(N, -1);
+  IDom[0] = 0;
+
+  auto Intersect = [&](int B1, int B2) -> int {
+    int F1 = B1, F2 = B2;
+    while (F1 != F2) {
+      while (RPONum[F1] > RPONum[F2])
+        F1 = IDom[F1];
+      while (RPONum[F2] > RPONum[F1])
+        F2 = IDom[F2];
+    }
+    return F1;
+  };
+
+  {
+    bool Changed = true;
+    while (Changed) {
+      Changed = false;
+      for (int B : RPO) {
+        if (B == 0)
+          continue;
+        int NewIDom = -1;
+        for (int P : Func.Blocks[B].Preds) {
+          if (IDom[P] == -1)
+            continue;
+          if (NewIDom == -1)
+            NewIDom = P;
+          else
+            NewIDom = Intersect(NewIDom, P);
+        }
+        if (NewIDom != -1 && IDom[B] != NewIDom) {
+          IDom[B] = NewIDom;
+          Changed = true;
+        }
+      }
+    }
+  }
+
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  std::map<uint64_t, std::set<int>> RegOffToIds;
+  std::map<int, MedVar> RegVarOfId;
+  for (const MedBlock &Blk : Func.Blocks) {
+    for (const MedOp &Op : Blk.Ops) {
+      auto AddReg = [&](const MedVar &V) {
+        if (V.Kind != MedVar::Reg || V.Id < 0)
+          return;
+        RegOffToIds[V.RegOff].insert(V.Id);
+        RegVarOfId.emplace(V.Id, V);
+      };
+      AddReg(Op.Output);
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        AddReg(Op.Inputs[I]);
+    }
+  }
+
+  auto CallClobberedIds = [&](const MedOp &Op) {
+    std::set<int> Result;
+    if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
+        Op.PreservesCallerSaved)
+      return Result;
+    for (const auto &[RegOff, Ids] : RegOffToIds) {
+      if (TRI.isFrameOrLinkReg(RegOff) || TRI.isStackPointer(RegOff) ||
+          (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == RegOff))
+        continue;
+      for (int Id : Ids) {
+        auto It = RegVarOfId.find(Id);
+        if (It == RegVarOfId.end() ||
+            TRI.callPreservedPrefixSize(RegOff, It->second.Size) <
+                It->second.Size)
+          Result.insert(Id);
+      }
+    }
+    return Result;
+  };
+
+  // Step 0: Insert implicit definitions for live-in variables in the entry
+  // block.  A variable is live-in to the function when some path from entry
+  // uses it before any definition — exactly the values the caller supplies.
+  // This is a standard backward liveness fixpoint: a plain "defined earlier in
+  // reverse post-order" test is unsound, since a definition in a sibling or
+  // return block reaches no use here yet would mask a genuine live-in (e.g. a
+  // pointer parameter first read in a loop preheader while a `n==0` exit block
+  // also clears that register).
+  {
+    auto &Entry = Func.Blocks[0];
+
+    // Per-block upward-exposed uses (read before any local definition) and
+    // kills (definitions, alias-expanded), plus a representative MedVar per Id
+    // for materialising the self-copy.
+    std::vector<std::set<int>> UEVar(N), VarKill(N);
+    std::map<int, MedVar> VarOfId;
+    for (int B = 0; B < N; ++B) {
+      std::set<int> &Kill = VarKill[B];
+      for (auto &Op : Func.Blocks[B].Ops) {
+        for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+          const auto &Inp = Op.Inputs[I];
+          if (Inp.Id >= 0 && !Kill.count(Inp.Id)) {
+            UEVar[B].insert(Inp.Id);
+            VarOfId.emplace(Inp.Id, Inp);
+          }
+        }
+        // A partial call clobber reads the pre-call value to retain its ABI-
+        // preserved low prefix.  Account for that hidden use before applying
+        // the call's kill, otherwise a first-use v8-v15 Q view would lack its
+        // live-in definition.
+        for (int Id : CallClobberedIds(Op)) {
+          auto It = RegVarOfId.find(Id);
+          if (It == RegVarOfId.end())
+            continue;
+          uint16_t Prefix =
+              TRI.callPreservedPrefixSize(It->second.RegOff, It->second.Size);
+          if (Prefix > 0 && Prefix < It->second.Size && !Kill.count(Id)) {
+            UEVar[B].insert(Id);
+            VarOfId.emplace(Id, It->second);
+          }
+        }
+        if (Op.Output.Id >= 0 && Op.Output.Size > 0) {
+          Kill.insert(Op.Output.Id);
+          if (Op.Output.Kind == MedVar::Reg) {
+            auto It = RegOffToIds.find(Op.Output.RegOff);
+            if (It != RegOffToIds.end())
+              Kill.insert(It->second.begin(), It->second.end());
+          }
+        }
+        std::set<int> Clobbered = CallClobberedIds(Op);
+        Kill.insert(Clobbered.begin(), Clobbered.end());
+      }
+    }
+
+    std::vector<std::set<int>> LiveIn(N), LiveOut(N);
+    bool Changed = true;
+    while (Changed) {
+      Changed = false;
+      for (auto It = RPO.rbegin(); It != RPO.rend(); ++It) {
+        int B = *It;
+        std::set<int> NewOut;
+        for (int S : Func.Blocks[B].Succs)
+          if (S >= 0 && S < N)
+            NewOut.insert(LiveIn[S].begin(), LiveIn[S].end());
+        std::set<int> NewIn = UEVar[B];
+        for (int V : NewOut)
+          if (!VarKill[B].count(V))
+            NewIn.insert(V);
+        if (NewIn != LiveIn[B] || NewOut != LiveOut[B]) {
+          LiveIn[B] = std::move(NewIn);
+          LiveOut[B] = std::move(NewOut);
+          Changed = true;
+        }
+      }
+    }
+
+    std::vector<MedOp> InitOps;
+    for (int Id : LiveIn[0]) {
+      auto VIt = VarOfId.find(Id);
+      if (VIt == VarOfId.end())
+        continue;
+      MedOp Init;
+      Init.Opcode = NdOp::COPY;
+      Init.Output = VIt->second;
+      Init.addInput(VIt->second);
+      Init.Addr = Func.Entry;
+      InitOps.push_back(Init);
+      LLVM_DEBUG(llvm::dbgs() << "  live-in: " << VIt->second.display()
+                              << " (id=" << Id << ")\n");
+    }
+    Entry.Ops.insert(Entry.Ops.begin(), InitOps.begin(), InitOps.end());
+  }
+
+  // Step 2: Compute dominance frontiers
+  std::vector<std::set<int>> DF(N);
+  for (int B = 0; B < N; ++B) {
+    if (Func.Blocks[B].Preds.size() < 2)
+      continue;
+    for (int P : Func.Blocks[B].Preds) {
+      int Runner = P;
+      while (Runner != IDom[B] && Runner != -1) {
+        DF[Runner].insert(B);
+        Runner = IDom[Runner];
+      }
+    }
+  }
+
+  // Step 3: Collect all variable definitions per block
+  std::map<int, std::set<int>> VarDefs;
+  for (int B = 0; B < N; ++B) {
+    for (auto &Op : Func.Blocks[B].Ops) {
+      if (Op.Output.Id >= 0 && Op.Output.Size > 0)
+        VarDefs[Op.Output.Id].insert(B);
+      for (int Id : CallClobberedIds(Op))
+        VarDefs[Id].insert(B);
+    }
+  }
+
+  // Step 4: Insert phi nodes
+  std::map<int, MedVar> VarIdToVar = RegVarOfId;
+  for (auto &Blk : Func.Blocks)
+    for (auto &Op : Blk.Ops)
+      if (Op.Output.Id >= 0 && Op.Output.Size > 0)
+        VarIdToVar.emplace(Op.Output.Id, Op.Output);
+
+  for (auto &[VarId, DefBlocks] : VarDefs) {
+    std::set<int> PhiBlocks;
+    std::queue<int> Worklist;
+    for (int B : DefBlocks)
+      Worklist.push(B);
+
+    while (!Worklist.empty()) {
+      int B = Worklist.front();
+      Worklist.pop();
+      for (int D : DF[B]) {
+        if (PhiBlocks.insert(D).second) {
+          auto VIt = VarIdToVar.find(VarId);
+          MedVar PhiVar = (VIt != VarIdToVar.end()) ? VIt->second : MedVar{};
+
+          PhiNode Phi;
+          Phi.Output = PhiVar;
+          for (int P : Func.Blocks[D].Preds)
+            Phi.Args.push_back({P, PhiVar});
+          Func.Blocks[D].Phis.push_back(Phi);
+
+          Worklist.push(D);
+        }
+      }
+    }
+  }
+
+  // Step 5: SSA renaming (assign version numbers)
+  std::map<int, int> VarCounter;
+  std::map<int, std::vector<int>> VarStack;
+
+  auto GetVersion = [&](int VarId) -> int {
+    if (VarStack[VarId].empty())
+      return 0;
+    return VarStack[VarId].back();
+  };
+  auto NewVersion = [&](int VarId) -> int {
+    int V = VarCounter[VarId]++;
+    VarStack[VarId].push_back(V);
+    return V;
+  };
+
+  std::vector<std::vector<int>> DomChildren(N);
+  for (int C = 0; C < N; ++C) {
+    if (C != 0 && IDom[C] != -1 && IDom[C] != C)
+      DomChildren[IDom[C]].push_back(C);
+  }
+
+  struct Frame {
+    int B;
+    size_t ChildIdx;
+    std::map<int, int> SavedSizes;
+  };
+  std::vector<Frame> Stk;
+  Stk.reserve(N);
+
+  auto ProcessBlock = [&](Frame &F) {
+    if (F.B < 0 || F.B >= N)
+      return;
+    auto &Blk = Func.Blocks[F.B];
+    for (auto &Phi : Blk.Phis) {
+      Phi.Output.SSAVer = NewVersion(Phi.Output.Id);
+      F.SavedSizes[Phi.Output.Id]++;
+    }
+    for (auto &Op : Blk.Ops) {
+      for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+        if (Op.Inputs[I].Id >= 0)
+          Op.Inputs[I].SSAVer = GetVersion(Op.Inputs[I].Id);
+      }
+      if (Op.Output.Id >= 0 && Op.Output.Size > 0) {
+        Op.Output.SSAVer = NewVersion(Op.Output.Id);
+        F.SavedSizes[Op.Output.Id]++;
+      }
+      for (int Id : CallClobberedIds(Op)) {
+        auto It = RegVarOfId.find(Id);
+        MedVar PreservedInput;
+        uint16_t PreservedPrefixSize = 0;
+        if (It != RegVarOfId.end()) {
+          PreservedPrefixSize =
+              TRI.callPreservedPrefixSize(It->second.RegOff, It->second.Size);
+          if (PreservedPrefixSize > 0 &&
+              PreservedPrefixSize < It->second.Size) {
+            PreservedInput = It->second;
+            PreservedInput.SSAVer = GetVersion(Id);
+          } else {
+            PreservedPrefixSize = 0;
+          }
+        }
+        int Version = NewVersion(Id);
+        F.SavedSizes[Id]++;
+        if (It != RegVarOfId.end()) {
+          MedVar Clobber = It->second;
+          Clobber.SSAVer = Version;
+          Func.CallClobbers.push_back(
+              {Clobber, Op.CallSiteId, PreservedInput, PreservedPrefixSize});
+        }
+      }
+    }
+    for (int S : Blk.Succs) {
+      if (S < 0 || S >= N)
+        continue;
+      for (auto &Phi : Func.Blocks[S].Phis) {
+        for (auto &[Pred, Arg] : Phi.Args) {
+          if (Pred == F.B)
+            Arg.SSAVer = GetVersion(Arg.Id);
+        }
+      }
+    }
+  };
+
+  Stk.push_back({0, 0, {}});
+  ProcessBlock(Stk.back());
+
+  while (!Stk.empty()) {
+    auto &F = Stk.back();
+    auto &Children = DomChildren[F.B];
+    if (F.ChildIdx < Children.size()) {
+      int C = Children[F.ChildIdx++];
+      Stk.push_back({C, 0, {}});
+      ProcessBlock(Stk.back());
+    } else {
+      for (auto &[VId, Cnt] : F.SavedSizes) {
+        for (int I = 0; I < Cnt; ++I)
+          VarStack[VId].pop_back();
+      }
+      Stk.pop_back();
+    }
+  }
+}
+
+} // namespace neverd

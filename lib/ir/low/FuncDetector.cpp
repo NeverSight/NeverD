@@ -1,0 +1,419 @@
+//===- FuncDetector.cpp - Function entry-point detection
+//-------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Implements function entry-point detection via symbol tables, exports,
+/// call-target scanning across executable segments, and heuristic
+/// validation of candidate addresses.
+///
+//===----------------------------------------------------------------------===//
+
+#include "neverd/ir/low/FuncDetector.h"
+
+#include "neverd/Limits.h"
+#include "neverd/Support/Parallel.h"
+#include "neverd/ir/low/LowIR.h"
+#include "neverd/lift/AArch64Lifter.h"
+
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <thread>
+
+#define DEBUG_TYPE "neverd-func-detector"
+
+namespace neverd {
+
+//===----------------------------------------------------------------------===//
+// FuncDetector::detect
+//===----------------------------------------------------------------------===//
+
+std::vector<std::pair<va_t, std::string>>
+FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
+  Entries.clear();
+  std::vector<std::pair<va_t, std::string>> Results;
+
+  if (Img.Entry != 0) {
+    Entries.insert(Img.Entry);
+    std::string EntryName = "_start";
+    for (const auto &Sym : Img.Symbols) {
+      if (Sym.Addr == Img.Entry && !Sym.Name.empty()) {
+        EntryName = Sym.Name;
+        break;
+      }
+    }
+    for (const auto &Exp : Img.Exports) {
+      if (Exp.Addr == Img.Entry && !Exp.Name.empty()) {
+        EntryName = Exp.Name;
+        break;
+      }
+    }
+    Results.push_back({Img.Entry, EntryName});
+  }
+
+  std::set<va_t> SkipAddrs;
+  if (Img.Format == BinaryFormat::MachO && !Img.IsRelocatable) {
+    for (const auto &Seg : Img.Segments)
+      SkipAddrs.insert(Seg.VA);
+  }
+
+  for (const auto &Exp : Img.Exports) {
+    if (Entries.count(Exp.Addr))
+      continue;
+    // Skip the image base marker for linked ELFs; relocatable .o files use
+    // Base==0 with real functions at VA 0.
+    if (Exp.Addr == Img.Base && Img.Base != 0)
+      continue;
+    if (SkipAddrs.count(Exp.Addr))
+      continue;
+    const auto *Seg = Img.getSegmentFor(Exp.Addr);
+    if (Seg && Seg->isExecutable()) {
+      Entries.insert(Exp.Addr);
+      Results.push_back({Exp.Addr, Exp.Name});
+    }
+  }
+
+  for (const auto &Sym : Img.Symbols) {
+    if (!Sym.IsFunc)
+      continue;
+    if (Sym.Addr == 0) {
+      const auto *Seg = Img.getSegmentFor(0);
+      if (!Seg || !Seg->isExecutable())
+        continue;
+    }
+    if (Entries.count(Sym.Addr))
+      continue;
+    if (SkipAddrs.count(Sym.Addr))
+      continue;
+    const auto *Seg = Img.getSegmentFor(Sym.Addr);
+    if (Seg && Seg->isExecutable()) {
+      Entries.insert(Sym.Addr);
+      Results.push_back({Sym.Addr, Sym.Name});
+    }
+  }
+
+  if (Img.Entry != 0)
+    scanCallTargets(Img, Dec);
+
+  std::set<va_t> Already;
+  for (auto &[A, _] : Results)
+    Already.insert(A);
+  for (va_t Addr : Entries) {
+    if (Already.insert(Addr).second)
+      Results.push_back(
+          {Addr, (kAutoFuncPrefix + llvm::utohexstr(Addr)).str()});
+  }
+
+  if (Img.Entry != 0) {
+    std::set<va_t> Trusted{Img.Entry};
+    for (const auto &Exp : Img.Exports)
+      Trusted.insert(Exp.Addr);
+    for (const auto &Sym : Img.Symbols)
+      if (Sym.IsFunc && Sym.Size > 0)
+        Trusted.insert(Sym.Addr);
+
+    const auto &Known = Img.KnownCodeRanges;
+    auto InsideKnownButNotStart = [&](va_t A) -> bool {
+      auto It = std::upper_bound(Known.begin(), Known.end(),
+                                 std::make_pair(A, va_t(~va_t(0))));
+      if (It == Known.begin())
+        return false;
+      --It;
+      return A > It->first && A < It->second;
+    };
+
+    // Per-candidate keep decision.  A trusted entry (image entry, export, sized
+    // function symbol) is kept without decoding; an entry inside a known code
+    // range but not at its start is dropped.  Those two decisions are cheap set
+    // lookups; classify every candidate with them first.  Only what remains —
+    // an untrusted entry, typically a call-target-scan hit in a stripped
+    // binary — needs the expensive trial decode to a terminator.
+    const size_t N = Results.size();
+    std::vector<char> Keep(N, 0);
+    std::vector<size_t> NeedVerify;
+    for (size_t I = 0; I < N; ++I) {
+      va_t Addr = Results[I].first;
+      if (Trusted.count(Addr))
+        Keep[I] = 1;
+      else if (!InsideKnownButNotStart(Addr))
+        NeedVerify.push_back(I);
+    }
+
+    // The trial decode dominates only when the scan produced many untrusted
+    // candidates; each check is independent and reads only the immutable image,
+    // so spread that subset across worker threads with per-thread decoders.  A
+    // symbol-rich binary (almost everything trusted) leaves NeedVerify small
+    // and stays single-threaded, avoiding pointless thread-spawn overhead.
+    auto verifyIdx = [&](Decoder &LocalDec, size_t I) {
+      Keep[I] = verifyFunctionDecode(Img, LocalDec, Results[I].first) ? 1 : 0;
+    };
+    if (NeedVerify.size() < limits::kMinParallelVerify) {
+      // verifyFunctionDecode only reads instruction size and terminator id, so
+      // run the shared decoder with operand detail off for the duration of the
+      // verification walk, then restore it.
+      const bool PrevDetail = Dec.detailEnabled();
+      Dec.setDetail(false);
+      for (size_t I : NeedVerify)
+        verifyIdx(Dec, I);
+      Dec.setDetail(PrevDetail);
+    } else {
+      parallelForEach(NeedVerify.size(), [&](auto Claim, size_t Count) {
+        Decoder LocalDec;
+        if (!LocalDec.init(Img.Arch, Img.Mode))
+          return;
+        LocalDec.setDetail(false);
+        for (size_t P; (P = Claim()) < Count;)
+          verifyIdx(LocalDec, NeedVerify[P]);
+      });
+    }
+
+    std::vector<std::pair<va_t, std::string>> Kept;
+    Kept.reserve(N);
+    for (size_t I = 0; I < N; ++I)
+      if (Keep[I])
+        Kept.push_back(std::move(Results[I]));
+    Results = std::move(Kept);
+  }
+
+  // Reject auto-detected entries that fall strictly *inside* a sized function
+  // symbol's [Addr, Addr+Size) range.  Such a symbol claims its whole extent as
+  // one function, so any non-symbol entry inside it is spurious — most often an
+  // ARM embedded constant pool ($d region) decoded as code, which would be
+  // lifted as a garbage `sub_XXXX` full of undecodable instructions (e.g. a
+  // bare `msr`/`svc`) and break recompilation of the whole object.  Runs
+  // unconditionally (not only when Img.Entry != 0) so relocatable .o objects
+  // are covered too.
+  {
+    std::vector<std::pair<va_t, va_t>> SizedRanges;
+    std::set<va_t> SizedStarts;
+    for (const auto &Sym : Img.Symbols) {
+      if (!Sym.IsFunc || Sym.Size == 0 ||
+          Sym.Size > InvalidVA - Sym.Addr)
+        continue;
+      SizedStarts.insert(Sym.Addr);
+      SizedRanges.push_back({Sym.Addr, Sym.Addr + Sym.Size});
+    }
+    if (!SizedRanges.empty()) {
+      auto InsideSized = [&](va_t A) -> bool {
+        for (auto &[S, E] : SizedRanges)
+          if (A > S && A < E)
+            return true;
+        return false;
+      };
+      // A sized function symbol authoritatively claims its whole [Addr,
+      // Addr+Size) extent.  Keep an entry only if it is NOT strictly inside any
+      // such range, or it IS itself a sized-function start.  This drops
+      // spurious entries inside the range — even ones mis-promoted to exports —
+      // such as an ARM embedded constant pool ($d) decoded as a bogus
+      // `sub_XXXX` (full of undecodable `msr`/`svc` that breaks recompilation).
+      std::vector<std::pair<va_t, std::string>> Filtered;
+      Filtered.reserve(Results.size());
+      for (auto &R : Results) {
+        if (InsideSized(R.first) && !SizedStarts.count(R.first))
+          continue;
+        Filtered.push_back(R);
+      }
+      Results = std::move(Filtered);
+    }
+  }
+
+  // AArch64 instructions are unconditionally 4-byte aligned, so a function
+  // entry whose address is not 4-aligned is provably spurious.  These appear
+  // when the call-target scan resynchronises after an undecodable byte (or
+  // begins a worker chunk) mid-instruction and then decodes a `bl`/`b` at an
+  // unaligned PC, yielding an unaligned branch target that happens to land
+  // inside real code.  Without symbol sizes (e.g. Mach-O) neither the
+  // sized-range nor the known-code-range filter above can reject it, so it
+  // survives as a garbage `sub_<addr>` that is lifted and — in the in-place
+  // patcher — trampolined at its unaligned VA.  That trampoline lands inside
+  // the enclosing real function and overwrites live instructions (e.g. an
+  // ADRP+ADD literal load), crashing the otherwise-fit function (section mode
+  // escapes only because it relocates the whole function, leaving the clobbered
+  // original bytes dead).  Drop them. x86 is variable-length, and ARM/Thumb
+  // encode the instruction set in entry bit 0, so this guard is gated strictly
+  // to AArch64.
+  if (Img.Arch == Arch::AArch64) {
+    std::vector<std::pair<va_t, std::string>> Aligned;
+    Aligned.reserve(Results.size());
+    for (auto &R : Results) {
+      if ((R.first & 0x3) != 0) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "func-detector: dropping misaligned AArch64 entry 0x"
+                   << llvm::utohexstr(R.first) << "\n");
+        continue;
+      }
+      Aligned.push_back(std::move(R));
+    }
+    Results = std::move(Aligned);
+  }
+
+  std::sort(Results.begin(), Results.end());
+  return Results;
+}
+
+//===----------------------------------------------------------------------===//
+// verifyFunctionDecode
+//===----------------------------------------------------------------------===//
+
+bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
+                                        va_t Addr) {
+  constexpr int kMaxInsns = limits::kMaxVerifyInsns;
+  const auto *Seg = Img.getSegmentFor(Addr);
+  if (!Seg || !Seg->isExecutable())
+    return false;
+
+  va_t Cur = Addr;
+  for (int I = 0; I < kMaxInsns; ++I) {
+    size_t Off = static_cast<size_t>(Cur - Seg->VA);
+    if (Off >= Seg->Data.size())
+      return false;
+    size_t Remain = Seg->Data.size() - Off;
+
+    // Classification only: this walk needs the instruction size and whether it
+    // is a function terminator (a check keyed on the capstone id).  Neither
+    // reads operand detail, so the lightweight, detail-free decode is used —
+    // the caller disables detail on the decoder before this loop.
+    DecodedInsn DI;
+    int Sz = Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
+    if (Sz <= 0)
+      return false;
+    if (!DI.Raw)
+      return false;
+
+    if (Dec.isFunctionTerminator(DI))
+      return true;
+    Cur += Sz;
+  }
+  return false;
+}
+
+//===----------------------------------------------------------------------===//
+// Call-target scanning
+//===----------------------------------------------------------------------===//
+
+// AArch64 is fixed 4-byte width and 4-byte aligned, so direct-call (BL)
+// discovery does not need a full capstone decode of every position: read each
+// aligned 32-bit word and classify it with a single mask+shift.  This visits
+// exactly the aligned instruction addresses the capstone-based sweep would
+// (real code is 4-aligned), at a fraction of the cost, and shares the BL
+// encoding knowledge with the lifter's directCallTarget.
+static void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
+                                    va_t Start, va_t End, std::set<va_t> &Out) {
+  va_t Cur = (Start + 3) & ~static_cast<va_t>(3);
+  const uint8_t *Data = Seg->Data.data();
+  const size_t DataSize = Seg->Data.size();
+  while (Cur < End) {
+    size_t Off = static_cast<size_t>(Cur - Seg->VA);
+    if (Off + 4 > DataSize)
+      break;
+    const uint8_t *P = Data + Off;
+    uint32_t Word = static_cast<uint32_t>(P[0]) |
+                    (static_cast<uint32_t>(P[1]) << 8) |
+                    (static_cast<uint32_t>(P[2]) << 16) |
+                    (static_cast<uint32_t>(P[3]) << 24);
+    va_t Tgt = AArch64Lifter::decodeBranchLinkTarget(Word, Cur);
+    if (Tgt != InvalidVA) {
+      const auto *TS = Img.getSegmentFor(Tgt);
+      if (TS && TS->isExecutable())
+        Out.insert(Tgt);
+    }
+    Cur += 4;
+  }
+}
+
+static void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
+                             const Segment *Seg, va_t Start, va_t End,
+                             std::set<va_t> &Out) {
+  if (Img.Arch == Arch::AArch64) {
+    scanSegmentCallsAArch64(Img, Seg, Start, End, Out);
+    return;
+  }
+
+  va_t Cur = Start;
+  while (Cur < End) {
+    size_t Off = static_cast<size_t>(Cur - Seg->VA);
+    if (Off >= Seg->Data.size())
+      break;
+    DecodedInsn DI;
+    int Sz =
+        Dec.decodeOne(Seg->Data.data() + Off, Seg->Data.size() - Off, Cur, DI);
+    if (Sz == 0) {
+      Cur++;
+      continue;
+    }
+    va_t Tgt = Dec.directCallTarget(DI);
+    if (Tgt != InvalidVA) {
+      const auto *TS = Img.getSegmentFor(Tgt);
+      if (TS && TS->isExecutable())
+        Out.insert(Tgt);
+    }
+    Cur += Sz;
+  }
+}
+
+void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec) {
+  struct ScanChunk {
+    const Segment *Seg;
+    va_t Start;
+    va_t End;
+  };
+  std::vector<ScanChunk> Chunks;
+
+  const unsigned ThreadsN = workerThreadCount();
+  constexpr size_t MinChunk = limits::kMinFuncScanChunk;
+
+  for (const auto &Seg : Img.Segments) {
+    if (!Seg.isExecutable() || Seg.Data.empty())
+      continue;
+    size_t SegLen = Seg.Data.size();
+    size_t ChunkSz = std::max(MinChunk, SegLen / ThreadsN);
+    for (size_t Off = 0; Off < SegLen; Off += ChunkSz) {
+      size_t CEnd = std::min(Off + ChunkSz, SegLen);
+      Chunks.push_back({&Seg, Seg.VA + Off, Seg.VA + CEnd});
+    }
+  }
+
+  if (Chunks.size() <= 1) {
+    for (auto &[Seg, Start, End] : Chunks)
+      scanSegmentCalls(Img, Dec, Seg, Start, End, Entries);
+    return;
+  }
+
+  std::mutex Mtx;
+  std::atomic<size_t> NextChunk{0};
+
+  auto Worker = [&]() {
+    Decoder LocalDec;
+    if (!LocalDec.init(Img.Arch, Img.Mode))
+      return;
+    std::set<va_t> LocalEntries;
+
+    while (true) {
+      size_t CI = NextChunk.fetch_add(1, std::memory_order_relaxed);
+      if (CI >= Chunks.size())
+        break;
+      auto &[Seg, Start, End] = Chunks[CI];
+      scanSegmentCalls(Img, LocalDec, Seg, Start, End, LocalEntries);
+    }
+
+    std::lock_guard<std::mutex> Lk(Mtx);
+    Entries.insert(LocalEntries.begin(), LocalEntries.end());
+  };
+
+  std::vector<std::thread> Ts;
+  Ts.reserve(ThreadsN);
+  for (unsigned T = 0; T < ThreadsN; ++T)
+    Ts.emplace_back(Worker);
+  for (auto &T : Ts)
+    T.join();
+}
+
+} // namespace neverd

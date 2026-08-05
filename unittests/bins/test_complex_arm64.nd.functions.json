@@ -1,0 +1,9 @@
+[
+  {"addr":4294968184,"name":"_manhattan_distance","size":36,"num_blocks":1,"num_med_ops":21,"num_high_stmts":1},
+  {"addr":4294968220,"name":"_binary_search","size":80,"num_blocks":5,"num_med_ops":44,"num_high_stmts":22},
+  {"addr":4294968300,"name":"_collatz_steps","size":56,"num_blocks":5,"num_med_ops":28,"num_high_stmts":13},
+  {"addr":4294968356,"name":"_apply_op","size":16,"num_blocks":1,"num_med_ops":13,"num_high_stmts":1},
+  {"addr":4294968372,"name":"_add_fn","size":8,"num_blocks":1,"num_med_ops":6,"num_high_stmts":1},
+  {"addr":4294968380,"name":"_mul_fn","size":8,"num_blocks":1,"num_med_ops":6,"num_high_stmts":1},
+  {"addr":4294968388,"name":"_main","size":120,"num_blocks":8,"num_med_ops":61,"num_high_stmts":38}
+]

@@ -1,0 +1,18 @@
+[
+  {"addr":4294983761,"encoding":"ascii","content":"dd_fn","xrefs":[]},
+  {"addr":4294983767,"encoding":"ascii","content":"\rpply_op","xrefs":[]},
+  {"addr":4294983802,"encoding":"ascii","content":"3nhattan_distance","xrefs":[]},
+  {"addr":4294983830,"encoding":"ascii","content":"=ul_fn","xrefs":[]},
+  {"addr":4294983840,"encoding":"ascii","content":"_mh_execute_header","xrefs":[]},
+  {"addr":4294983863,"encoding":"ascii","content":"binary_search","xrefs":[]},
+  {"addr":4294983877,"encoding":"ascii","content":")collatz_steps","xrefs":[]},
+  {"addr":4294984042,"encoding":"ascii","content":"__mh_execute_header","xrefs":[]},
+  {"addr":4294984062,"encoding":"ascii","content":"_add_fn","xrefs":[]},
+  {"addr":4294984070,"encoding":"ascii","content":"_apply_op","xrefs":[]},
+  {"addr":4294984080,"encoding":"ascii","content":"_binary_search","xrefs":[]},
+  {"addr":4294984095,"encoding":"ascii","content":"_collatz_steps","xrefs":[]},
+  {"addr":4294984110,"encoding":"ascii","content":"_main","xrefs":[]},
+  {"addr":4294984116,"encoding":"ascii","content":"_manhattan_distance","xrefs":[]},
+  {"addr":4294984136,"encoding":"ascii","content":"_mul_fn","xrefs":[]},
+  {"addr":4294984252,"encoding":"ascii","content":"test_complex_arm64","xrefs":[]}
+]

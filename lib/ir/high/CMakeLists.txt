@@ -1,0 +1,22 @@
+add_neverd_component_library(NeverDIRHigh
+  CallArgCollection.cpp
+  CFStructurer.cpp
+  HighCFSimplify.cpp
+  HighCleanup.cpp
+  HighCopyProp.cpp
+  HighDCE.cpp
+  HighDeadStoreElim.cpp
+  HighExpr.cpp
+  HighExprSimplify.cpp
+  HighIfChainToSwitch.cpp
+  HighIRPrint.cpp
+  HighLoopRecovery.cpp
+  HighTypeInference.cpp
+  HighVarRename.cpp
+  MedOpToExpr.cpp
+  MedToHigh.cpp
+  NdOpCallIndLowering.cpp
+  NdOpLowering.cpp
+  NdOpReturnLowering.cpp
+  NdOpSwitchRecovery.cpp
+)

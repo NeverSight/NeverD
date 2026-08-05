@@ -1,0 +1,216 @@
+//===- LibCNamesTests.cpp - Unit tests for LibCNames ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#include "neverd/libc/LibCNames.h"
+
+#include <gtest/gtest.h>
+
+using namespace neverd::libc;
+
+// =====================================================================
+// varArgFixedCount — pattern matching for *printf / *scanf
+// =====================================================================
+
+TEST(VarArgFixedCount, PrintfFamily1Fixed) {
+  EXPECT_EQ(varArgFixedCount("printf"), 1u);
+  EXPECT_EQ(varArgFixedCount("scanf"), 1u);
+  EXPECT_EQ(varArgFixedCount("wprintf"), 1u);
+  EXPECT_EQ(varArgFixedCount("wscanf"), 1u);
+}
+
+TEST(VarArgFixedCount, PrintfFamily2Fixed) {
+  EXPECT_EQ(varArgFixedCount("fprintf"), 2u);
+  EXPECT_EQ(varArgFixedCount("fscanf"), 2u);
+  EXPECT_EQ(varArgFixedCount("sprintf"), 2u);
+  EXPECT_EQ(varArgFixedCount("sscanf"), 2u);
+  EXPECT_EQ(varArgFixedCount("dprintf"), 2u);
+  EXPECT_EQ(varArgFixedCount("asprintf"), 2u);
+  EXPECT_EQ(varArgFixedCount("fwprintf"), 2u);
+  EXPECT_EQ(varArgFixedCount("fwscanf"), 2u);
+  EXPECT_EQ(varArgFixedCount("swscanf"), 2u);
+}
+
+TEST(VarArgFixedCount, PrintfFamily3Fixed) {
+  EXPECT_EQ(varArgFixedCount("snprintf"), 3u);
+  EXPECT_EQ(varArgFixedCount("snwprintf"), 3u);
+  // C99 swprintf(buf, size, fmt, ...) has same shape as snprintf
+  EXPECT_EQ(varArgFixedCount("swprintf"), 3u);
+}
+
+// Fortified _FORTIFY_SOURCE variants: __<name>_chk prepend guard arguments
+// (flag, and for the buffer forms the dest/object size) before the format.
+// The caller strips at most one leading '_' (a Mach-O prefix), so the matcher
+// must accept both "__snprintf_chk" (Mach-O) and "_snprintf_chk" (ELF
+// over-strip) by normalizing every leading underscore.
+TEST(VarArgFixedCount, FortifiedChkVariants) {
+  // Mach-O form (one '_' already stripped from "___snprintf_chk").
+  EXPECT_EQ(varArgFixedCount("__printf_chk"), 2u);   // flag, fmt
+  EXPECT_EQ(varArgFixedCount("__fprintf_chk"), 3u);  // stream, flag, fmt
+  EXPECT_EQ(varArgFixedCount("__dprintf_chk"), 3u);  // fd, flag, fmt
+  EXPECT_EQ(varArgFixedCount("__asprintf_chk"), 3u); // &buf, flag, fmt
+  EXPECT_EQ(varArgFixedCount("__sprintf_chk"), 4u);  // buf, flag, slen, fmt
+  EXPECT_EQ(varArgFixedCount("__snprintf_chk"), 5u); // buf, maxlen, flag, slen, fmt
+  // ELF form (over-stripped to a single leading '_').
+  EXPECT_EQ(varArgFixedCount("_snprintf_chk"), 5u);
+  EXPECT_EQ(varArgFixedCount("_printf_chk"), 2u);
+  // va_list _chk variants are not variadic.
+  EXPECT_EQ(varArgFixedCount("__vsnprintf_chk"), 0u);
+  EXPECT_EQ(varArgFixedCount("__vsprintf_chk"), 0u);
+  EXPECT_EQ(varArgFixedCount("__vprintf_chk"), 0u);
+  // Unknown _chk callees stay non-variadic (e.g. memcpy/strcpy fortified forms).
+  EXPECT_EQ(varArgFixedCount("__memcpy_chk"), 0u);
+  EXPECT_EQ(varArgFixedCount("__strcpy_chk"), 0u);
+}
+
+// =====================================================================
+// varArgFixedCount — POSIX whitelist
+// =====================================================================
+
+TEST(VarArgFixedCount, PosixWhitelist) {
+  EXPECT_EQ(varArgFixedCount("open"), 1u);
+  EXPECT_EQ(varArgFixedCount("openat"), 1u);
+  EXPECT_EQ(varArgFixedCount("fcntl"), 1u);
+  EXPECT_EQ(varArgFixedCount("ioctl"), 1u);
+  EXPECT_EQ(varArgFixedCount("execl"), 1u);
+  EXPECT_EQ(varArgFixedCount("execlp"), 1u);
+  EXPECT_EQ(varArgFixedCount("execle"), 1u);
+  EXPECT_EQ(varArgFixedCount("syslog"), 1u);
+  EXPECT_EQ(varArgFixedCount("err"), 1u);
+  EXPECT_EQ(varArgFixedCount("errx"), 1u);
+  EXPECT_EQ(varArgFixedCount("warn"), 1u);
+  EXPECT_EQ(varArgFixedCount("warnx"), 1u);
+  EXPECT_EQ(varArgFixedCount("mq_open"), 1u);
+  EXPECT_EQ(varArgFixedCount("sem_open"), 1u);
+}
+
+// =====================================================================
+// varArgFixedCount — non-variadic functions should return 0
+// =====================================================================
+
+TEST(VarArgFixedCount, NonVariadicReturnsZero) {
+  EXPECT_EQ(varArgFixedCount("strlen"), 0u);
+  EXPECT_EQ(varArgFixedCount("memcpy"), 0u);
+  EXPECT_EQ(varArgFixedCount("malloc"), 0u);
+  EXPECT_EQ(varArgFixedCount("free"), 0u);
+  EXPECT_EQ(varArgFixedCount("exit"), 0u);
+  EXPECT_EQ(varArgFixedCount("read"), 0u);
+  EXPECT_EQ(varArgFixedCount("write"), 0u);
+  EXPECT_EQ(varArgFixedCount("close"), 0u);
+  EXPECT_EQ(varArgFixedCount("puts"), 0u);
+  EXPECT_EQ(varArgFixedCount("fopen"), 0u);
+}
+
+TEST(VarArgFixedCount, AllVaListVariantsReturnZero) {
+  EXPECT_EQ(varArgFixedCount("vprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vscanf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vfprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vfscanf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vsprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vsscanf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vsnprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vasprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vdprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vwprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vwscanf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vswprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vswscanf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vfwprintf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vfwscanf"), 0u);
+  EXPECT_EQ(varArgFixedCount("vsnwprintf"), 0u);
+}
+
+TEST(VarArgFixedCount, EmptyAndGarbage) {
+  EXPECT_EQ(varArgFixedCount(""), 0u);
+  EXPECT_EQ(varArgFixedCount("x"), 0u);
+  EXPECT_EQ(varArgFixedCount("__some_internal_func"), 0u);
+}
+
+// =====================================================================
+// isVaListConsumer — the v*printf/v*scanf family and __v*_chk variants
+// =====================================================================
+
+TEST(IsVaListConsumer, VPrintfScanfFamily) {
+  EXPECT_TRUE(isVaListConsumer("vprintf"));
+  EXPECT_TRUE(isVaListConsumer("vfprintf"));
+  EXPECT_TRUE(isVaListConsumer("vsprintf"));
+  EXPECT_TRUE(isVaListConsumer("vsnprintf"));
+  EXPECT_TRUE(isVaListConsumer("vdprintf"));
+  EXPECT_TRUE(isVaListConsumer("vasprintf"));
+  EXPECT_TRUE(isVaListConsumer("vscanf"));
+  EXPECT_TRUE(isVaListConsumer("vfscanf"));
+  EXPECT_TRUE(isVaListConsumer("vsscanf"));
+  EXPECT_TRUE(isVaListConsumer("vwprintf"));
+  EXPECT_TRUE(isVaListConsumer("vfwprintf"));
+  EXPECT_TRUE(isVaListConsumer("vswprintf"));
+}
+
+TEST(IsVaListConsumer, FortifiedChkVariants) {
+  EXPECT_TRUE(isVaListConsumer("vsnprintf_chk"));
+  EXPECT_TRUE(isVaListConsumer("vsprintf_chk"));
+  EXPECT_TRUE(isVaListConsumer("vprintf_chk"));
+  EXPECT_TRUE(isVaListConsumer("vfprintf_chk"));
+  EXPECT_TRUE(isVaListConsumer("vdprintf_chk"));
+  EXPECT_TRUE(isVaListConsumer("vasprintf_chk"));
+}
+
+TEST(IsVaListConsumer, IrregularConsumers) {
+  EXPECT_TRUE(isVaListConsumer("vsyslog"));
+  EXPECT_TRUE(isVaListConsumer("verr"));
+  EXPECT_TRUE(isVaListConsumer("verrx"));
+  EXPECT_TRUE(isVaListConsumer("vwarn"));
+  EXPECT_TRUE(isVaListConsumer("vwarnx"));
+}
+
+TEST(IsVaListConsumer, NotConsumers) {
+  // The "..." variadic producers take a format + ellipsis, not a va_list.
+  EXPECT_FALSE(isVaListConsumer("printf"));
+  EXPECT_FALSE(isVaListConsumer("fprintf"));
+  EXPECT_FALSE(isVaListConsumer("snprintf"));
+  EXPECT_FALSE(isVaListConsumer("scanf"));
+  EXPECT_FALSE(isVaListConsumer("syslog"));
+  EXPECT_FALSE(isVaListConsumer("err"));
+  EXPECT_FALSE(isVaListConsumer("warn"));
+  // Ordinary non-variadic functions.
+  EXPECT_FALSE(isVaListConsumer("strlen"));
+  EXPECT_FALSE(isVaListConsumer("memcpy"));
+  EXPECT_FALSE(isVaListConsumer("vsnprint")); // not a real printf suffix
+  EXPECT_FALSE(isVaListConsumer(""));
+  EXPECT_FALSE(isVaListConsumer("v"));
+}
+
+// =====================================================================
+// isKnownFunction
+// =====================================================================
+
+TEST(IsKnownFunction, BasicLibCFunctions) {
+  EXPECT_TRUE(isKnownFunction("printf"));
+  EXPECT_TRUE(isKnownFunction("strlen"));
+  EXPECT_TRUE(isKnownFunction("malloc"));
+  EXPECT_TRUE(isKnownFunction("free"));
+  EXPECT_TRUE(isKnownFunction("memcpy"));
+}
+
+TEST(IsKnownFunction, NotLibC) {
+  EXPECT_FALSE(isKnownFunction("my_custom_func"));
+  EXPECT_FALSE(isKnownFunction(""));
+  EXPECT_FALSE(isKnownFunction("printk"));
+  EXPECT_FALSE(isKnownFunction("NSLog"));
+}
+
+// =====================================================================
+// headerFor
+// =====================================================================
+
+TEST(HeaderFor, StdioFunctions) {
+  EXPECT_STREQ(headerFor("printf"), "stdio.h");
+  EXPECT_STREQ(headerFor("fprintf"), "stdio.h");
+  EXPECT_STREQ(headerFor("snprintf"), "stdio.h");
+}
+
+TEST(HeaderFor, UnknownReturnsNull) {
+  EXPECT_EQ(headerFor("not_a_real_function"), nullptr);
+  EXPECT_EQ(headerFor(""), nullptr);
+}

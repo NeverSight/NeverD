@@ -1,0 +1,10 @@
+[submodule "third_party/capstone"]
+	path = third_party/capstone
+	url = https://github.com/NeverSight/capstone.git
+	branch = next
+[submodule "third_party/llvm-project"]
+	path = third_party/llvm-project
+	url = https://github.com/NeverSight/llvm-project.git
+[submodule "third_party/unicorn"]
+	path = third_party/unicorn
+	url = https://github.com/NeverSight/unicorn
