@@ -42,6 +42,18 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDSigs
     ${NEVERD_COMMON_LIBS})
 
+# The aggregate IR archive and its subcomponent archives reference each other.
+# GNU-style linkers scan a static archive only once unless the archives are in
+# a rescan group, which otherwise leaves symbols such as NdType::str unresolved
+# in libneverd.so.
+if(UNIX AND NOT APPLE)
+    get_property(_neverd_component_libs GLOBAL PROPERTY NEVERD_COMPONENT_LIBS)
+    target_link_libraries(neverd_shared PRIVATE
+        "-Wl,--start-group"
+        ${_neverd_component_libs}
+        "-Wl,--end-group")
+endif()
+
 # On macOS, shared-backed frontends resolve LLVM support APIs from libneverd.
 # Static archives only contribute referenced objects, so force the complete
 # support archive into the dylib (notably InitLLVM and the single command-line
