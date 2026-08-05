@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+            cc: clang
+            cxx: clang++
+            parallel: 4
+          - name: macOS arm64
+            runner: macos-15
+            cc: clang
+            cxx: clang++
+            parallel: 3
+          - name: Windows x64
+            runner: windows-latest
+            cc: cl
+            cxx: cl
+            parallel: 4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang cmake lld ninja-build
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install cmake lld ninja
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install ninja --yes --no-progress
+
+      - name: Enable the MSVC x64 toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - name: Verify Unix toolchain
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cmake --version
+          ninja --version
+          "$CC" --version
+          ld.lld --version
+        env:
+          CC: ${{ matrix.cc }}
+
+      - name: Verify Windows toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          where.exe cl
+          where.exe clang
+          where.exe ld.lld
+          where.exe lld-link
+
+      - name: Configure Release build
+        shell: bash
+        run: |
+          cmake -S . -B build-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DBUILD_TESTING=ON \
+            -DNEVERD_LLVM_PREBUILT=OFF \
+            -DCMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE=PRE_TEST
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+
+      - name: Build default targets
+        shell: bash
+        run: cmake --build build-ci --config Release --parallel "$BUILD_PARALLEL"
+        env:
+          BUILD_PARALLEL: ${{ matrix.parallel }}
+
+      - name: Inventory tests
+        id: inventory
+        shell: bash
+        run: |
+          inventory="$(ctest --test-dir build-ci --build-config Release -N)"
+          printf '%s\n' "$inventory"
+          count="$(printf '%s\n' "$inventory" | tr -d '\r' | sed -n 's/^Total Tests: //p' | tail -n 1)"
+          if [[ ! "$count" =~ ^[1-9][0-9]*$ ]]; then
+            echo "CTest did not discover a non-zero test inventory" >&2
+            exit 1
+          fi
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "### $MATRIX_NAME" >> "$GITHUB_STEP_SUMMARY"
+          echo "Discovered tests: $count" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
+
+      - name: Run complete test suite
+        shell: bash
+        run: |
+          set -o pipefail
+          ctest --test-dir build-ci \
+            --build-config Release \
+            --output-on-failure \
+            --progress \
+            --parallel "$TEST_PARALLEL" 2>&1 | tee ctest.log
+          executed="$(tr -d '\r' < ctest.log | sed -nE 's/.*tests passed, 0 tests failed out of ([0-9]+).*/\1/p' | tail -n 1)"
+          if [[ "$executed" != "$EXPECTED_TESTS" ]]; then
+            echo "CTest executed $executed tests; expected $EXPECTED_TESTS" >&2
+            exit 1
+          fi
+        env:
+          EXPECTED_TESTS: ${{ steps.inventory.outputs.count }}
+          TEST_PARALLEL: ${{ matrix.parallel }}
