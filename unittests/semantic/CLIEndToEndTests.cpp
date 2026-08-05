@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../TestProcess.h"
 #include "UnicornSemanticFixture.h"
 
 #include <cstdlib>
@@ -25,7 +26,8 @@ protected:
   void SetUp() override {
     LLVMMCAssembler::initTargets();
     TmpDir = fs::temp_directory_path() /
-             ("nd_e2e_" + std::to_string(::getpid()) + "_" +
+             ("nd_e2e_" +
+              std::to_string(neverd::test::currentProcessId()) + "_" +
               ::testing::UnitTest::GetInstance()
                   ->current_test_info()
                   ->name());
@@ -54,10 +56,11 @@ protected:
   ExecResult exec(const std::string &Cmd) const {
     auto OutFile = (TmpDir / "_stdout.txt").string();
     auto ErrFile = (TmpDir / "_stderr.txt").string();
-    std::string FullCmd = Cmd + " >" + OutFile + " 2>" + ErrFile;
+    std::string FullCmd =
+        Cmd + neverd::test::redirectOutput(OutFile, ErrFile);
     int RC = std::system(FullCmd.c_str());
     ExecResult R;
-    R.ExitCode = WEXITSTATUS(RC);
+    R.ExitCode = neverd::test::systemExitCode(RC);
     R.Out = readFile(OutFile);
     R.Err = readFile(ErrFile);
     return R;
@@ -73,10 +76,14 @@ protected:
 
     auto CompileResult = exec(
         "clang -target " + Target +
-        " -nostdlib -c -O0 -fno-stack-protector -o " + ObjPath + " " + CPath);
+        " -nostdlib -c -O0 -fno-stack-protector -o " +
+        neverd::test::shellQuote(ObjPath) + " " +
+        neverd::test::shellQuote(CPath));
     ASSERT_TRUE(CompileResult.ok()) << "clang failed: " << CompileResult.Err;
 
-    auto LiftResult = exec(ndBin() + " lift -no-opt " + ObjPath);
+    auto LiftResult = exec(neverd::test::shellQuote(ndBin()) +
+                           " lift -no-opt " +
+                           neverd::test::shellQuote(ObjPath));
     ASSERT_EQ(LiftResult.ExitCode, 0)
         << "neverd lift failed: " << LiftResult.Err;
     ASSERT_FALSE(LiftResult.Out.empty()) << "LLVM IR output is empty";

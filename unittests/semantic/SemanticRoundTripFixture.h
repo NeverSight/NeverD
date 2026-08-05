@@ -26,6 +26,7 @@
 #ifndef NEVERD_UNITTESTS_SEMANTIC_SEMANTICROUNDTRIPFIXTURE_H
 #define NEVERD_UNITTESTS_SEMANTIC_SEMANTICROUNDTRIPFIXTURE_H
 
+#include "../TestProcess.h"
 #include "UnicornSemanticFixture.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
@@ -41,7 +42,6 @@
 #include <fstream>
 #include <sstream>
 #include <thread>
-#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -115,7 +115,8 @@ protected:
     // suites follow it in the same process), only per-test guards clean up.
     if (TmpDir.empty())
       TmpDir = fs::temp_directory_path() /
-               ("neverd_rt_" + std::to_string(::getpid()));
+               ("neverd_rt_" +
+                std::to_string(neverd::test::currentProcessId()));
     std::error_code EC;
     fs::create_directories(TmpDir, EC);
   }
@@ -211,9 +212,10 @@ private:
     for (int Attempt = 0; Attempt < kSpawnRetries; ++Attempt) {
       std::error_code MkEC;
       fs::create_directories(Work, MkEC);
-      int RC = std::system((Cmd + " >" + OutF + " 2>" + ErrF).c_str());
+      int RC = std::system(
+          (Cmd + neverd::test::redirectOutput(OutF, ErrF)).c_str());
       R = ExecResult{};
-      R.Code = (RC == -1) ? -1 : WEXITSTATUS(RC);
+      R.Code = neverd::test::systemExitCode(RC);
       {
         std::ifstream F(OutF);
         R.Out.assign(std::istreambuf_iterator<char>(F), {});
@@ -269,7 +271,8 @@ private:
       CompileCmd += " -mcpu=cortex-a15";
     if (!TC.ExtraFlags.empty())
       CompileCmd += " " + TC.ExtraFlags;
-    CompileCmd += " -o " + ObjPath + " " + CPath;
+    CompileCmd += " -o " + neverd::test::shellQuote(ObjPath) + " " +
+                  neverd::test::shellQuote(CPath);
     auto CR = runCmd(CompileCmd);
     if (!CR.ok()) {
       GTEST_SKIP() << "clang compilation failed: " << CR.Err;
@@ -686,7 +689,8 @@ private:
         " -fno-unwind-tables -fno-asynchronous-unwind-tables";
     if (IsARM32 && ClangTargetOverride.empty())
       Cmd += " -mcpu=cortex-a15";
-    Cmd += " -o " + ObjPath + " " + SrcPath;
+    Cmd += " -o " + neverd::test::shellQuote(ObjPath) + " " +
+           neverd::test::shellQuote(SrcPath);
     auto R = runCmd(Cmd);
     if (!R.ok() || !fs::exists(ObjPath))
       return "";
@@ -772,10 +776,12 @@ private:
                           " --image-base=" + HexBuf +
                           " -Ttext=" + HexBuf +
                           " --oformat=elf -nostdlib --no-dynamic-linker"
-                          " --noinhibit-exec -o " + LinkedFile + " " + ObjPath;
+                          " --noinhibit-exec -o " +
+                          neverd::test::shellQuote(LinkedFile) + " " +
+                          neverd::test::shellQuote(ObjPath);
     if (!MemHelperObj.empty())
-      LinkCmd += " " + MemHelperObj;
-    LinkCmd += " 2>/dev/null";
+      LinkCmd += " " + neverd::test::shellQuote(MemHelperObj);
+    LinkCmd += neverd::test::silenceStderr();
     // A required link almost never fails for a real reason (NeverD codegen and
     // clang both emit well-formed objects); a failure is a transient infra
     // disruption, so retry with backoff before giving up.  runCmd already

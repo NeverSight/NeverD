@@ -44,6 +44,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../TestProcess.h"
 #include "neverd/backend/codegen/CodeGen.h" // Codegen, Arch, BinaryFormat (via Common.h)
 #include "neverd/pipeline/Pipeline.h"
 
@@ -34246,11 +34247,14 @@ std::string ndBinary() {
   return NEVERD_BINARY;
 }
 
-bool haveClang() { return std::system("clang --version >/dev/null 2>&1") == 0; }
+bool haveClang() {
+  auto Cmd = std::string("clang --version") + neverd::test::silenceOutput();
+  return neverd::test::systemExitCode(std::system(Cmd.c_str())) == 0;
+}
 
 int runExit(const std::string &Cmd) {
   int RC = std::system(Cmd.c_str());
-  return WEXITSTATUS(RC);
+  return neverd::test::systemExitCode(RC);
 }
 
 // Self-contained program (no libc) exercising all five substituted operators;
@@ -34312,27 +34316,34 @@ void runHostE2E(const char *Mode, const char *Flag, const char *Program,
   std::error_code EC;
   fs::create_directories(Dir, EC);
   auto CSrc = (Dir / "m.c").string();
-  auto Exe = (Dir / "m").string();
-  auto Patched = (Dir / "m.patched").string();
+  auto Exe =
+      (Dir / (std::string("m") + neverd::test::executableSuffix())).string();
+  auto Patched =
+      (Dir / (std::string("m.patched") + neverd::test::executableSuffix()))
+          .string();
   {
     std::ofstream OS(CSrc);
     OS << Program;
   }
 
-  if (runExit("clang -O0 -fno-stack-protector -o " + Exe + " " + CSrc) != 0)
+  if (runExit("clang -O0 -fno-stack-protector -o " +
+              neverd::test::shellQuote(Exe) + " " +
+              neverd::test::shellQuote(CSrc)) != 0)
     GTEST_SKIP() << "host clang could not build the sample";
 
-  int Base = runExit(Exe);
+  int Base = runExit(neverd::test::shellQuote(Exe));
 
   std::string ModeFlag =
       (std::string(Mode) == "inplace") ? " --mode inplace" : "";
-  std::string Cmd = ndBinary() + " patch " + Exe + ModeFlag + " " + Flag +
-                    " -o " + Patched + " >/dev/null 2>&1";
+  std::string Cmd = neverd::test::shellQuote(ndBinary()) + " patch " +
+                    neverd::test::shellQuote(Exe) + ModeFlag + " " + Flag +
+                    " -o " + neverd::test::shellQuote(Patched) +
+                    neverd::test::silenceOutput();
   ASSERT_EQ(runExit(Cmd), 0)
       << "neverd patch " << Flag << " (" << Mode << ") failed";
   ASSERT_TRUE(fs::exists(Patched)) << "patched binary not produced";
 
-  int Sub = runExit(Patched);
+  int Sub = runExit(neverd::test::shellQuote(Patched));
   EXPECT_EQ(Base, Sub) << "exit code changed after " << Tag << " (" << Mode
                        << "): orig=" << Base << " obf=" << Sub;
 
@@ -35975,8 +35986,11 @@ void runHostE2EStringOutput(const char *Mode, const char *Program,
   std::error_code EC;
   fs::create_directories(Dir, EC);
   auto CSrc = (Dir / "m.c").string();
-  auto Exe = (Dir / "m").string();
-  auto Patched = (Dir / "m.patched").string();
+  auto Exe =
+      (Dir / (std::string("m") + neverd::test::executableSuffix())).string();
+  auto Patched =
+      (Dir / (std::string("m.patched") + neverd::test::executableSuffix()))
+          .string();
   auto NatOut = (Dir / "native.out").string();
   auto PatOut = (Dir / "patched.out").string();
   {
@@ -35985,19 +35999,26 @@ void runHostE2EStringOutput(const char *Mode, const char *Program,
   }
 
   if (runExit("clang " + std::string(OptFlag) + " -fno-stack-protector -o " +
-              Exe + " " + CSrc) != 0)
+              neverd::test::shellQuote(Exe) + " " +
+              neverd::test::shellQuote(CSrc)) != 0)
     GTEST_SKIP() << "host clang could not build the sample";
 
-  int Base = runExit(Exe + " > " + NatOut + " 2>/dev/null");
+  int Base = runExit(neverd::test::shellQuote(Exe) +
+                     neverd::test::redirectStdout(NatOut) +
+                     neverd::test::silenceStderr());
 
   std::string ModeFlag =
       (std::string(Mode) == "inplace") ? " --mode inplace" : "";
-  std::string Cmd = ndBinary() + " patch " + Exe + ModeFlag + " -o " + Patched +
-                    " >/dev/null 2>&1";
+  std::string Cmd = neverd::test::shellQuote(ndBinary()) + " patch " +
+                    neverd::test::shellQuote(Exe) + ModeFlag + " -o " +
+                    neverd::test::shellQuote(Patched) +
+                    neverd::test::silenceOutput();
   ASSERT_EQ(runExit(Cmd), 0) << "neverd patch (" << Mode << ") failed";
   ASSERT_TRUE(fs::exists(Patched)) << "patched binary not produced";
 
-  int Sub = runExit(Patched + " > " + PatOut + " 2>/dev/null");
+  int Sub = runExit(neverd::test::shellQuote(Patched) +
+                    neverd::test::redirectStdout(PatOut) +
+                    neverd::test::silenceStderr());
   EXPECT_EQ(Base, Sub) << "exit code changed after " << Tag << " patch ("
                        << Mode << ")";
   EXPECT_EQ(readFile(NatOut), readFile(PatOut))
@@ -36037,8 +36058,11 @@ void runHostE2ENoSilentMiscompile(const char *Mode, const char *Program,
   std::error_code EC;
   fs::create_directories(Dir, EC);
   auto CSrc = (Dir / "m.c").string();
-  auto Exe = (Dir / "m").string();
-  auto Patched = (Dir / "m.patched").string();
+  auto Exe =
+      (Dir / (std::string("m") + neverd::test::executableSuffix())).string();
+  auto Patched =
+      (Dir / (std::string("m.patched") + neverd::test::executableSuffix()))
+          .string();
   auto NatOut = (Dir / "native.out").string();
   auto PatOut = (Dir / "patched.out").string();
   {
@@ -36047,27 +36071,34 @@ void runHostE2ENoSilentMiscompile(const char *Mode, const char *Program,
   }
 
   if (runExit("clang " + std::string(OptFlag) + " -fno-stack-protector -o " +
-              Exe + " " + CSrc) != 0)
+              neverd::test::shellQuote(Exe) + " " +
+              neverd::test::shellQuote(CSrc)) != 0)
     GTEST_SKIP() << "host clang could not build the sample";
 
-  int Base = runExit(Exe + " > " + NatOut + " 2>/dev/null");
+  int Base = runExit(neverd::test::shellQuote(Exe) +
+                     neverd::test::redirectStdout(NatOut) +
+                     neverd::test::silenceStderr());
   std::string Nat = readFile(NatOut);
   ASSERT_FALSE(Nat.empty()) << "native produced no output";
 
   std::string ModeFlag =
       (std::string(Mode) == "inplace") ? " --mode inplace" : "";
-  std::string Cmd = ndBinary() + " patch " + Exe + ModeFlag + " -o " + Patched +
-                    " >/dev/null 2>&1";
+  std::string Cmd = neverd::test::shellQuote(ndBinary()) + " patch " +
+                    neverd::test::shellQuote(Exe) + ModeFlag + " -o " +
+                    neverd::test::shellQuote(Patched) +
+                    neverd::test::silenceOutput();
   ASSERT_EQ(runExit(Cmd), 0) << "neverd patch (" << Mode << ") failed";
   ASSERT_TRUE(fs::exists(Patched)) << "patched binary not produced";
 
   // Trapping is an accepted outcome here (see the contract above), so wrap the
   // run in a brace group whose stderr is redirected.  That silences the parent
-  // shell's own "Trace/BPT trap: 5" diagnostic -- which the inner 2>/dev/null
-  // does not cover -- while still preserving the 128+signal exit status tested
-  // below.  (A bare subshell `( ... ) 2>/dev/null` does not work: the outer
-  // shell, not the subshell, reports the child's signal death.)
-  int Sub = runExit("{ " + Patched + " > " + PatOut + " ; } 2>/dev/null");
+  // shell's own "Trace/BPT trap: 5" diagnostic -- which redirecting only the
+  // child does not cover -- while still preserving the 128+signal exit status
+  // tested below.  (A bare subshell with redirected stderr does not work: the
+  // outer shell, not the subshell, reports the child's signal death.)
+  int Sub = runExit("{ " + neverd::test::shellQuote(Patched) +
+                    neverd::test::redirectStdout(PatOut) + " ; }" +
+                    neverd::test::silenceStderr());
   std::string Pat = readFile(PatOut);
 
   // A signal death (trap) reports as shell exit >= 128; a normal exit is < 128.

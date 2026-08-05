@@ -13,6 +13,8 @@
 #ifndef NEVERD_UNITTESTS_LIFT_NEVERDLIFTFIXTURE_H
 #define NEVERD_UNITTESTS_LIFT_NEVERDLIFTFIXTURE_H
 
+#include "../TestProcess.h"
+
 #include "gtest/gtest.h"
 
 #include <algorithm>
@@ -44,7 +46,8 @@ class NeverDLiftTest : public ::testing::Test {
 protected:
   void SetUp() override {
     TmpDir = fs::temp_directory_path() /
-             ("nd_test_" + std::to_string(::getpid()) + "_" +
+             ("nd_test_" +
+              std::to_string(neverd::test::currentProcessId()) + "_" +
               ::testing::UnitTest::GetInstance()
                   ->current_test_info()
                   ->name());
@@ -68,15 +71,15 @@ protected:
 
   RunResult exec(const std::string &Program,
                  const std::vector<std::string> &Args) const {
-    std::string Cmd = Program;
+    std::string Cmd = neverd::test::shellQuote(Program);
     for (const auto &A : Args)
-      Cmd += " " + shellQuote(A);
+      Cmd += " " + neverd::test::shellQuote(A);
     auto OutFile = tmpFile("_stdout.txt");
     auto ErrFile = tmpFile("_stderr.txt");
-    Cmd += " >" + OutFile.string() + " 2>" + ErrFile.string();
+    Cmd += neverd::test::redirectOutput(OutFile.string(), ErrFile.string());
     int RC = std::system(Cmd.c_str());
     RunResult R;
-    R.exitCode = WEXITSTATUS(RC);
+    R.exitCode = neverd::test::systemExitCode(RC);
     R.out = readFile(OutFile);
     R.err = readFile(ErrFile);
     return R;
@@ -286,12 +289,6 @@ private:
     return SS.str();
   }
 
-  static std::string shellQuote(const std::string &S) {
-    if (S.find(' ') == std::string::npos &&
-        S.find('\'') == std::string::npos)
-      return S;
-    return "'" + S + "'";
-  }
 };
 
 #endif // NEVERD_UNITTESTS_LIFT_NEVERDLIFTFIXTURE_H
