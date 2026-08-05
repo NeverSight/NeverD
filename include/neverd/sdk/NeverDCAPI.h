@@ -523,13 +523,13 @@ NEVERD_API void neverd_plugins_dispatch_event(neverd_session_t Sess,
 // Version info
 // ===--------------------------------------------------------------------===//
 
-/// Full version string, e.g. "NeverD v0.3".  Caller frees.
+/// Full version string, e.g. "NeverD v3389.0.1".  Caller frees.
 NEVERD_API const char *neverd_version(void);
 
 /// Project name only, e.g. "NeverD".  Caller frees.
 NEVERD_API const char *neverd_project_name(void);
 
-/// Version number only, e.g. "0.3".  Caller frees.
+/// Version number only, e.g. "3389.0.1".  Caller frees.
 NEVERD_API const char *neverd_version_number(void);
 
 #ifdef __cplusplus

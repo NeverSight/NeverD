@@ -24,7 +24,7 @@
 namespace neverd {
 
 inline constexpr const char *ProjectName = "NeverD";
-inline constexpr const char *VersionString = "0.3";
+inline constexpr const char *VersionString = "3389.0.1";
 inline constexpr const char *ModuleName = "neverd_output";
 
 using va_t = uint64_t;
