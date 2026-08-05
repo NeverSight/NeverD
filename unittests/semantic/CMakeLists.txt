@@ -7,6 +7,14 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/unicorn
                  ${CMAKE_BINARY_DIR}/third_party/unicorn
                  EXCLUDE_FROM_ALL)
 
+# Unicorn's public platform header includes windows.h on MSVC.  Keep the
+# Windows min/max macros out of every semantic-test translation unit because
+# they corrupt LLVM headers included afterwards (for example
+# std::numeric_limits<T>::max()).
+if(WIN32)
+  add_compile_definitions(NOMINMAX)
+endif()
+
 add_neverd_unittest(NeverDSemanticTests
   X64_IntegerSemanticTests.cpp
   X64_ControlSemanticTests.cpp
