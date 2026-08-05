@@ -1216,6 +1216,80 @@ void modelCallWideIntReturn(MedFunc &Func, Arch TheArch,
             HiLive = false;
         }
       }
+
+      // A split return can be consumed directly in a successor that has only
+      // this call path as a predecessor (an exit block after a loop is the
+      // common shape).  No PHI is needed there, so SSA still names the stale
+      // call-clobber version unless the direct reads are rewired explicitly.
+      // Walk only single-predecessor blocks, where the call result provably
+      // dominates, and stop each register half at its first real definition.
+      struct SuccState {
+        int BlockId;
+        bool Lo;
+        bool Hi;
+      };
+      std::vector<SuccState> Work;
+      for (int Succ : Blk.Succs)
+        Work.push_back({Succ, LoLive, HiLive});
+      std::set<int> Seen;
+      while (!Work.empty()) {
+        SuccState State = Work.back();
+        Work.pop_back();
+        if (!Seen.insert(State.BlockId).second)
+          continue;
+        MedBlock *SB = nullptr;
+        for (auto &B : Func.Blocks)
+          if (B.Id == State.BlockId) {
+            SB = &B;
+            break;
+          }
+        if (!SB || SB->Preds.size() != 1)
+          continue;
+
+        // A PHI is itself the reaching definition for reads in this block; its
+        // incoming edge is updated by the existing PHI rewrite below.
+        for (const auto &Phi : SB->Phis) {
+          if (Phi.Output.Kind != MedVar::Reg)
+            continue;
+          if (Phi.Output.RegOff == LoReg)
+            State.Lo = false;
+          if (Phi.Output.RegOff == HiReg)
+            State.Hi = false;
+        }
+
+        for (auto &Nx : SB->Ops) {
+          if (Nx.Opcode == NdOp::CALL || Nx.Opcode == NdOp::INDIR_CALL) {
+            State.Lo = State.Hi = false;
+            break;
+          }
+          for (uint8_t I = 0; I < Nx.NumInputs; ++I) {
+            auto &In = Nx.Inputs[I];
+            if (In.Kind != MedVar::Reg)
+              continue;
+            if (State.Lo && In.RegOff == LoReg && In.Id == OrigLo.Id &&
+                In.SSAVer == LoOrigVer)
+              In.SSAVer = LoVer;
+            else if (State.Hi && matchHiLive(In)) {
+              In.Id = HiId;
+              In.SSAVer = HiVer;
+            }
+          }
+          if (Nx.Output.Kind == MedVar::Reg) {
+            if (State.Lo && Nx.Output.RegOff == LoReg &&
+                !isAliasView(Nx, LoReg))
+              State.Lo = false;
+            if (State.Hi && Nx.Output.RegOff == HiReg &&
+                !isAliasView(Nx, HiReg))
+              State.Hi = false;
+          }
+          if (!State.Lo && !State.Hi)
+            break;
+        }
+        if (State.Lo || State.Hi)
+          for (int Succ : SB->Succs)
+            Work.push_back({Succ, State.Lo, State.Hi});
+      }
+
       for (int Succ : Blk.Succs)
         for (auto &B : Func.Blocks) {
           if (B.Id != Succ)

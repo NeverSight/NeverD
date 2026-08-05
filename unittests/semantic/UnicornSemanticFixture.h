@@ -65,7 +65,11 @@ void LLVMInitializeARMAsmParser();
 // ============================================================================
 constexpr uint64_t CODE_BASE = 0x400000;
 constexpr uint64_t STACK_BASE = 0x7FF000;
-constexpr uint64_t STACK_SIZE = 0x10000;
+// Recompiled stress fixtures can legitimately use stack frames above 64 KiB
+// before LLVM's late code generation has coalesced every lifted temporary.
+// Keep the emulator representative of a normal process stack so those frames
+// test semantics instead of faulting at the function prologue.
+constexpr uint64_t STACK_SIZE = 0x200000;
 constexpr uint64_t DATA_BASE = 0x500000;
 constexpr uint64_t DATA_SIZE = 0x10000;
 

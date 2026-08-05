@@ -1069,11 +1069,34 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         CurFrom = D - 1;
         continue;
       }
+      if (O.Opcode == NdOp::SUBBYTES && O.NumInputs >= 2 &&
+          O.Inputs[1].isConst() && O.Inputs[1].Offset == 0) {
+        auto F = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
+        if (!F)
+          break;
+        uint16_t Bytes = O.Output.Size;
+        if (Bytes == 0 || Bytes >= sizeof(uint64_t))
+          return F;
+        uint16_t Bits = static_cast<uint16_t>(Bytes * 8);
+        return *F & ((uint64_t{1} << Bits) - 1);
+      }
       if (O.Opcode == NdOp::INT_ADD && O.NumInputs >= 2) {
         auto A = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
         auto B = foldArm(O.Inputs[1], D - 1, Cutoff, Depth + 1);
         if (A && B)
           return *A + *B;
+        // i386 PIC materialises a table base as GOT_base + GOTOFF.  GOT_base
+        // is legitimately zero in the relocatable image model, but
+        // foldRegConstant deliberately rejects a zero fold, leaving just the
+        // GOTOFF addend here.  Accept that addend only when the image proves it
+        // starts a code-pointer relocation run; this keeps an unrelated
+        // partially-folded add from being mistaken for a table address.
+        if (!A && B && TableEntW != 0 &&
+            countCodePtrRelocRun(Img, *B, TableEntW) > 0)
+          return B;
+        if (A && !B && TableEntW != 0 &&
+            countCodePtrRelocRun(Img, *A, TableEntW) > 0)
+          return A;
         break;
       }
       if (O.Opcode == NdOp::LOAD) {

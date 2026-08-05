@@ -211,6 +211,29 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
             HasIndirectWideRet = true;
         }
 
+    // When the indirect target itself folds to a known function (notably an
+    // ARM32 PC-relative literal-pool pointer), the widened call site is direct
+    // evidence for that callee's register-pair return.  The address-taken scan
+    // below cannot see this shape because no operand contains the final target
+    // VA as a standalone constant.
+    if (HasIndirectWideRet)
+      for (const auto &MF : Result.MedFuncs)
+        for (const auto &Blk : MF.Blocks)
+          for (const auto &Op : Blk.Ops) {
+            if (Op.Opcode != NdOp::INDIR_CALL ||
+                Op.Output.Kind != MedVar::Temp ||
+                Op.Output.Size != 2 * TRI.PointerSize || Op.NumInputs < 1)
+              continue;
+            auto Tgt = resolveCallTargetVA(MF, Img, Op.Inputs[0]);
+            if (!Tgt)
+              continue;
+            for (const auto &Callee : Result.MedFuncs)
+              if (Callee.Entry == *Tgt && returnsRegisterPairI64(Callee, TRI)) {
+                WideRetCallees.insert(*Tgt);
+                break;
+              }
+          }
+
     // A register-pair i64 callee reached ONLY through a function pointer
     // never appears as a direct-call target, so the scan above misses it; its
     // RETURN would splice only the low half and drop the high 32 bits the

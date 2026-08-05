@@ -555,19 +555,31 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
         Prefix.push_back(Op);
     NdOpEmulator Emu(Img);
     Emu.setCallPreservedRegisters(callPreservedRegs(Img));
-    Emu.run(Prefix);
+    size_t Executed = Emu.run(Prefix);
+    int LastRegDef = -1;
+    for (int I = static_cast<int>(Prefix.size()) - 1; I >= 0; --I)
+      if (Prefix[I].Output.isReg() && Prefix[I].Output.Offset == Reg) {
+        LastRegDef = I;
+        break;
+      }
     auto V = Emu.getRegister(Reg);
-    if (V && *V && Img.getSegmentFor(*V))
+    // A failed load or unsupported operation can stop emulation before the
+    // table-base LEA while leaving an older value in the same register.  That
+    // stale value may coincidentally fall inside .text (for example RCX == 1),
+    // so accept it only when the defining op itself was actually executed.
+    if (LastRegDef >= 0 && Executed > static_cast<size_t>(LastRegDef) && V &&
+        *V && Img.getSegmentFor(*V))
       return V;
 
     // The linear emulator may stop at an unrelated operation it cannot model
     // (notably an x87 80-bit LOAD) before a later LEA/ADR materialises the
     // table base.  Recover that common case without treating unknown register
-    // inputs as zero: find the last definition of Reg in the first basic block
-    // covered by this prefix, then retain it only when every value in its
-    // same-instruction backward slice is either a constant or is itself
-    // defined earlier by that instruction.  PC-relative address formation is
-    // self-contained this way, while `add reg, unknown_reg` is rejected.
+    // inputs as zero: find the last definition of Reg before the first control
+    // transfer, then retain it only when every value in its backward slice is
+    // a constant or has an earlier definition in the same straight-line
+    // prefix.  This covers both one-instruction RIP-relative LEA and a split
+    // AArch64 ADRP+ADD after unsupported vector loads; `add reg, unknown_reg`
+    // still fails because the unknown input has no definition in the slice.
     size_t StraightEnd = Prefix.size();
     for (size_t I = 0; I < Prefix.size(); ++I)
       switch (Prefix[I].Opcode) {
@@ -591,7 +603,6 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
     if (RegDef < 0)
       return std::nullopt;
 
-    const va_t DefAddr = Prefix[RegDef].Addr;
     std::set<int> SliceIdx;
     std::function<bool(const NdVar &, int)> addConstantDef =
         [&](const NdVar &Var, int Before) -> bool {
@@ -600,7 +611,8 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
       if (!Var.isReg() && !Var.isTemp())
         return false;
       int Def = -1;
-      for (int I = Before; I >= 0 && Prefix[I].Addr == DefAddr; --I)
+      for (int I = std::min(Before, static_cast<int>(StraightEnd) - 1); I >= 0;
+           --I)
         if (Prefix[I].Output.Space == Var.Space &&
             Prefix[I].Output.Offset == Var.Offset) {
           Def = I;
