@@ -139,5 +139,8 @@ function(add_neverd_unittest name)
   # (e.g. ctest -L NeverDSemanticTests) — pure CTest, no helper scripts.
   gtest_discover_tests(${name}
     PROPERTIES TIMEOUT ${ARG_TIMEOUT} LABELS ${name}
-    DISCOVERY_TIMEOUT 30)
+    # CMake treats a negative execute_process timeout as unlimited.  Use that
+    # sentinel here because enumerating the full parameterized suite can take
+    # longer than the GoogleTest module's finite discovery defaults.
+    DISCOVERY_TIMEOUT -1)
 endfunction()
