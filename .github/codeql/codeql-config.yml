@@ -1,0 +1,15 @@
+name: "NeverD CodeQL"
+
+paths:
+  - include
+  - lib
+  - tools
+  - unittests
+  - scripts
+  - cmake
+
+paths-ignore:
+  - third_party
+  - local_docs
+  - .agents
+  - build
