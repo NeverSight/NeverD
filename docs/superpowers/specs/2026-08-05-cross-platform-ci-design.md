@@ -33,7 +33,7 @@ network, and release steps are not part of this change.
 ## Non-Goals
 
 - Release packaging or GitHub Release publication (issue #4).
-- Linux/Windows prebuilt LLVM publication (issue #3).
+- Publishing or refreshing prebuilt LLVM packages (issue #3 follow-up work).
 - PGO, LTO, sanitizers, fuzzing, CodeQL, or plugin smoke tests.
 - Uploading build artifacts.
 - Adding x86_64 macOS, Linux arm64, or Windows arm64 jobs. Issue #1 defines
@@ -55,7 +55,7 @@ The matrix has three explicit entries:
 | Name | Runner | Host architecture | C/C++ compiler | LLVM source |
 |---|---|---|---|---|
 | Linux x64 | `ubuntu-24.04` | x86_64 | Clang | bundled submodule, built locally |
-| macOS arm64 | `macos-15` | arm64 | Apple Clang | `neverd-llvm-v23.0.0` prebuilt package |
+| macOS arm64 | `macos-15` | arm64 | Apple Clang | bundled submodule, built locally |
 | Windows x64 | `windows-latest` | x64 | MSVC | bundled submodule, built locally |
 
 The strategy uses `fail-fast: false`, so a failure on one host does not hide the
@@ -86,9 +86,11 @@ other platform results. The workflow does not set `timeout-minutes`.
 4. Configure a single-config Ninja Release build with `BUILD_TESTING=ON`.
    GoogleTest discovery uses `PRE_TEST` so test enumeration happens under the
    same runtime environment as CTest.
-5. On macOS only, pass `NEVERD_LLVM_PREBUILT=ON` and pin
-   `NEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0`. Linux and Windows retain the
-   default integrated LLVM submodule build.
+5. Build the integrated LLVM submodule on every platform. The published macOS
+   package `neverd-llvm-v23.0.0` is not usable for this revision: it was built
+   from LLVM commit `cd003a6b`, while the pinned submodule is 27 commits newer
+   and requires `BinaryRewrite.h`, `AddressModelBackend`, and
+   `FinalImageObjectWriter`, none of which are present in that package.
 6. Run the default build target. This covers the CLI, shared library, test
    executables, tools, SDK header copy, and signatures copy.
 7. Run CTest over the complete build tree with progress, parallel execution,
@@ -148,7 +150,7 @@ Before handoff, validate the change at five levels:
 1. Parse the YAML and inspect the resolved event and matrix structure.
 2. Run a GitHub Actions-oriented workflow linter if one is available locally.
 3. Configure, build, and run the complete CTest suite on the available macOS
-   arm64 development host using the same Release/prebuilt-LLVM settings.
+   arm64 development host using the same Release/source-LLVM settings.
 4. Treat Linux and Windows support as fully verified only after the corresponding
    GitHub-hosted matrix jobs complete successfully. Local static validation is
    not sufficient evidence for cross-platform completion.
@@ -167,14 +169,17 @@ Before handoff, validate the change at five levels:
 | Windows test harness builds/runs | Focused cross-platform process utility and migrated consumers |
 | Actionable failure output | Separate steps plus `--output-on-failure` |
 | Recursive submodules | Checkout `submodules: recursive` |
-| Reasonable macOS runtime | Published arm64 prebuilt LLVM package |
+| Consistent LLVM revision | Every host builds the pinned LLVM submodule |
 | README visibility | CI badge linked to the workflow |
 | No artifacts or secrets | Read-only permissions and no upload steps |
 
 ## Trade-Offs
 
-Linux and Windows will have long cold builds because their prebuilt LLVM packages
-do not exist yet. This is accepted for issue #1: it preserves real source-build
-coverage and avoids coupling the initial CI implementation to issue #3. Caching
-is deliberately deferred until actual run data shows it is needed; this keeps
-the first workflow aligned with the user's request for the simplest solution.
+All three jobs will have long cold builds because compatible prebuilt packages do
+not exist for the current LLVM submodule. The only published macOS package is 27
+LLVM commits behind and lacks both the custom binary-rewrite interface and its
+implementation, so overlaying a header would still fail at link/runtime. Building
+the pinned submodule is the smallest correct option and provides real source-build
+coverage; publishing refreshed prebuilt packages remains separate work under
+issue #3. Caching is deliberately deferred until actual run data shows it is
+needed.
