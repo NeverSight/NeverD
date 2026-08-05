@@ -60,6 +60,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <set>
 
 #define DEBUG_TYPE "neverd-cfg-builder"
@@ -558,6 +559,75 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(const BinaryImage &Img,
     auto V = Emu.getRegister(Reg);
     if (V && *V && Img.getSegmentFor(*V))
       return V;
+
+    // The linear emulator may stop at an unrelated operation it cannot model
+    // (notably an x87 80-bit LOAD) before a later LEA/ADR materialises the
+    // table base.  Recover that common case without treating unknown register
+    // inputs as zero: find the last definition of Reg in the first basic block
+    // covered by this prefix, then retain it only when every value in its
+    // same-instruction backward slice is either a constant or is itself
+    // defined earlier by that instruction.  PC-relative address formation is
+    // self-contained this way, while `add reg, unknown_reg` is rejected.
+    size_t StraightEnd = Prefix.size();
+    for (size_t I = 0; I < Prefix.size(); ++I)
+      switch (Prefix[I].Opcode) {
+      case NdOp::BRANCH:
+      case NdOp::COND_BR:
+      case NdOp::INDIR_BR:
+      case NdOp::RETURN:
+        StraightEnd = I;
+        I = Prefix.size();
+        break;
+      default:
+        break;
+      }
+
+    int RegDef = -1;
+    for (int I = static_cast<int>(StraightEnd) - 1; I >= 0; --I)
+      if (Prefix[I].Output.isReg() && Prefix[I].Output.Offset == Reg) {
+        RegDef = I;
+        break;
+      }
+    if (RegDef < 0)
+      return std::nullopt;
+
+    const va_t DefAddr = Prefix[RegDef].Addr;
+    std::set<int> SliceIdx;
+    std::function<bool(const NdVar &, int)> addConstantDef =
+        [&](const NdVar &Var, int Before) -> bool {
+      if (Var.isConst())
+        return true;
+      if (!Var.isReg() && !Var.isTemp())
+        return false;
+      int Def = -1;
+      for (int I = Before; I >= 0 && Prefix[I].Addr == DefAddr; --I)
+        if (Prefix[I].Output.Space == Var.Space &&
+            Prefix[I].Output.Offset == Var.Offset) {
+          Def = I;
+          break;
+        }
+      if (Def < 0)
+        return false;
+      if (!SliceIdx.insert(Def).second)
+        return true;
+      for (uint8_t I = 0; I < Prefix[Def].NumInputs; ++I)
+        if (!addConstantDef(Prefix[Def].Inputs[I], Def - 1))
+          return false;
+      return true;
+    };
+
+    if (!addConstantDef(Prefix[RegDef].Output, RegDef))
+      return std::nullopt;
+    std::vector<LowOp> Slice;
+    Slice.reserve(SliceIdx.size());
+    for (int I : SliceIdx)
+      Slice.push_back(Prefix[I]);
+    NdOpEmulator LocalEmu(Img);
+    if (LocalEmu.run(Slice) != Slice.size())
+      return std::nullopt;
+    auto LocalV = LocalEmu.getRegister(Reg);
+    if (LocalV && *LocalV && Img.getSegmentFor(*LocalV))
+      return LocalV;
     return std::nullopt;
   };
 
