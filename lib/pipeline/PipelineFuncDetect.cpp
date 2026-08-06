@@ -17,6 +17,7 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -45,11 +46,11 @@ bool isELFImportStub(const BinaryImage &Img, va_t Addr) {
 }
 
 bool isELFRuntimeScaffold(llvm::StringRef Name) {
-  return Name == "call_weak_fn" || Name == "deregister_tm_clones" ||
-         Name == "register_tm_clones" || Name == "__do_global_dtors_aux" ||
-         Name == "frame_dummy" || Name == "__libc_csu_init" ||
-         Name == "__libc_csu_fini" || Name == "__libc_csu_irel" ||
-         Name == "_dl_relocate_static_pie";
+  return llvm::StringSwitch<bool>(Name)
+#define ELF_RUNTIME_SYMBOL(Symbol) .Case(Symbol, true)
+#include "neverd/Object/ELFRuntimeSymbols.inc"
+#undef ELF_RUNTIME_SYMBOL
+      .Default(false);
 }
 
 } // namespace
