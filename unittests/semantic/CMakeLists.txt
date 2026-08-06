@@ -848,6 +848,7 @@ target_include_directories(NeverDSemanticTests PRIVATE
 target_link_libraries(NeverDSemanticTests PRIVATE
   unicorn
   neverd_shared
+  NeverDCodeGen
   NeverDPassMIR
   LLVMMC
   LLVMMCParser
@@ -882,7 +883,7 @@ add_neverd_unittest(NeverDPatchFullTests
 # but compile the harness itself without optimization so all CI hosts can reach
 # the actual test run in a reasonable time.
 if(MSVC)
-  target_compile_options(NeverDPatchFullTests PRIVATE /Od)
+  target_compile_options(NeverDPatchFullTests PRIVATE /Od /bigobj)
 else()
   target_compile_options(NeverDPatchFullTests PRIVATE -O0)
 endif()
@@ -901,6 +902,7 @@ target_include_directories(NeverDPatchFullTests PRIVATE
 target_link_libraries(NeverDPatchFullTests PRIVATE
   unicorn
   neverd_shared
+  NeverDCodeGen
   NeverDPassMIR
   LLVMMC
   LLVMMCParser
@@ -1124,6 +1126,7 @@ target_include_directories(PatchFullRepro PRIVATE
 target_link_libraries(PatchFullRepro PRIVATE
   unicorn
   neverd_shared
+  NeverDCodeGen
   NeverDPassMIR
   LLVMMC
   LLVMMCParser
