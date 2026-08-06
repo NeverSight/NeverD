@@ -17,6 +17,8 @@
 
 #include "llvm/Object/COFF.h"
 
+#include <cstddef>
+
 namespace neverd {
 namespace coff_loader {
 
@@ -25,8 +27,7 @@ namespace coff_loader {
 void parseExceptions(const llvm::object::COFFObjectFile &Obj, BinaryImage &Img,
                      uint64_t ImageBase);
 
-/// Parse a single imported symbol and append to Img.Imports.
-/// Shared by normal and delay imports.
+/// Parse a single ordinary imported symbol and append to Img.Imports.
 void addImportedSymbol(const llvm::object::imported_symbol_iterator &SI,
                        llvm::StringRef ModuleName, va_t IATAddr,
                        BinaryImage &Img);
@@ -36,8 +37,19 @@ void addImportedSymbol(const llvm::object::imported_symbol_iterator &SI,
 void parseSymbolTable(const llvm::object::COFFObjectFile &Obj, BinaryImage &Img,
                       uint64_t ImageBase);
 
-/// Parse the TLS directory and populate DynInfo with TLS callback
-/// addresses.  Handles both PE32 and PE32+.
+/// Parse one delay-import descriptor from the already mapped image.  Supports
+/// current RVA descriptors and legacy VA descriptors, returning the number of
+/// imports appended.  Exposed separately for bounded synthetic-image tests.
+size_t parseDelayImportDescriptor(
+    const llvm::object::delay_import_directory_table_entry &Desc,
+    BinaryImage &Img);
+
+/// Parse every PE delay-import descriptor.
+void parseDelayImports(const llvm::object::COFFObjectFile &Obj,
+                       BinaryImage &Img);
+
+/// Parse the TLS directory and populate function symbols plus runtime callback
+/// metadata.  Handles both PE32 and PE32+.
 void parseTLSDirectory(const llvm::object::COFFObjectFile &Obj,
                        BinaryImage &Img, uint64_t ImageBase);
 

@@ -20,7 +20,7 @@
 namespace neverd {
 
 size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
-                               const std::set<va_t> &Targets,
+                               const std::map<va_t, size_t> &Targets,
                                std::set<va_t> &Existing) {
   using namespace aarch64;
   const uint8_t *D = Seg.Data.data();
@@ -50,8 +50,10 @@ size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
     va_t Page = (AdrpVA & kPageMask) + Imm;
     uint32_t LdrOff = ((W1 >> kLDR_Imm12Shift) & kLDR_Imm12Mask) << 3;
     va_t Target = Page + LdrOff;
-    if (!Targets.count(Target))
+    auto TargetIt = Targets.find(Target);
+    if (TargetIt == Targets.end())
       continue;
+    Img.recordImportStub(AdrpVA, TargetIt->second);
     if (!Existing.insert(AdrpVA).second)
       continue;
     Img.Symbols.push_back(Symbol::makeFunc(AdrpVA, kThunkLen));

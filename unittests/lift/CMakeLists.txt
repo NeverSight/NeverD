@@ -91,6 +91,7 @@ add_neverd_unittest(NeverDLiftTests
   CircleRangeTests.cpp
   JumpTableEnhancedTests.cpp
   PatchFormatTests.cpp
+  RuntimeMetadataTests.cpp
   TextSectionDetectionTests.cpp
 )
 

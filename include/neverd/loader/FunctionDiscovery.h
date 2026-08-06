@@ -42,9 +42,9 @@ inline bool insideInterval(const std::vector<std::pair<va_t, va_t>> &Ivs,
 bool checkPrologueAtOffset(const Segment &Seg, size_t Off, Arch A);
 
 /// Scan executable segments for import thunk patterns (jmp [rip+disp32]
-/// on x86_64, jmp [abs32] on x86, ADRP/LDR/BR x16 on AArch64) and
-/// register them as function symbols.  Shared by all loaders (COFF IAT
-/// thunks, ELF PLT stubs).
+/// on x86_64, jmp [abs32] on x86, ADRP/LDR/BR x16 on AArch64), map each
+/// recognized veneer to its Import, and register it as a function symbol.
+/// Shared by all loaders (COFF IAT thunks, ELF PLT stubs).
 void scanImportThunks(BinaryImage &Img);
 
 /// Scan executable segments for padding boundaries (int3 / zero runs)

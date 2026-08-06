@@ -85,14 +85,18 @@ COFFLoader::load(const std::filesystem::path &Path) {
       return llvm::make_error<llvm::StringError>(
           "coff: entry point address overflows",
           llvm::inconvertibleErrorCode());
-    Img.Entry = ImageBase + PE32Plus->AddressOfEntryPoint;
+    Img.Entry = PE32Plus->AddressOfEntryPoint == 0
+                    ? 0
+                    : ImageBase + PE32Plus->AddressOfEntryPoint;
     Img.Bits = Bitness::Bits64;
   } else if (const auto *PE32 = Obj.getPE32Header()) {
     if (PE32->AddressOfEntryPoint > InvalidVA - ImageBase)
       return llvm::make_error<llvm::StringError>(
           "coff: entry point address overflows",
           llvm::inconvertibleErrorCode());
-    Img.Entry = ImageBase + PE32->AddressOfEntryPoint;
+    Img.Entry = PE32->AddressOfEntryPoint == 0
+                    ? 0
+                    : ImageBase + PE32->AddressOfEntryPoint;
     Img.Bits = Bitness::Bits32;
   } else {
     IsRelocatable = true;
@@ -101,6 +105,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
                    ? Bitness::Bits64
                    : Bitness::Bits32;
   }
+  Img.IsRelocatable = IsRelocatable;
   if (!IsRelocatable)
     Img.Entry = normalizeCodeAddress(Img.Entry, Img.Arch, Img.Mode);
   Img.Base = ImageBase;
@@ -110,13 +115,11 @@ COFFLoader::load(const std::filesystem::path &Path) {
     const coff_section *CoffSec = Obj.getCOFFSection(SecRef);
     if (CoffSec->VirtualAddress > InvalidVA - ImageBase)
       return llvm::make_error<llvm::StringError>(
-          "coff: section address overflows",
-          llvm::inconvertibleErrorCode());
+          "coff: section address overflows", llvm::inconvertibleErrorCode());
     va_t SectionVA = ImageBase + CoffSec->VirtualAddress;
     if (CoffSec->VirtualSize > InvalidVA - SectionVA)
       return llvm::make_error<llvm::StringError>(
-          "coff: section range overflows",
-          llvm::inconvertibleErrorCode());
+          "coff: section range overflows", llvm::inconvertibleErrorCode());
 
     Segment Seg;
     if (auto NameOrErr = Obj.getSectionName(CoffSec))
@@ -373,19 +376,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
   }
 
   // --- Delay Imports ---
-  for (auto I = Obj.delay_import_directory_begin(),
-            E = Obj.delay_import_directory_end();
-       I != E; ++I) {
-    llvm::StringRef DLLName;
-    if (auto Err = I->getName(DLLName)) {
-      llvm::consumeError(std::move(Err));
-      continue;
-    }
-    std::string DelayModule = (DLLName + kDelayImportSuffix).str();
-    for (auto SI = I->imported_symbol_begin(), SE = I->imported_symbol_end();
-         SI != SE; ++SI)
-      coff_loader::addImportedSymbol(SI, DelayModule, 0, Img);
-  }
+  coff_loader::parseDelayImports(Obj, Img);
 
   // --- Base Relocation Table (.reloc) ---
   coff_loader::parseBaseRelocations(Obj, Img, ImageBase);
@@ -404,6 +395,9 @@ COFFLoader::load(const std::filesystem::path &Path) {
 
   // --- Load Configuration (security cookie, CF Guard) ---
   coff_loader::parseLoadConfiguration(Obj, Img, ImageBase);
+
+  if (!IsRelocatable && Img.Entry != 0)
+    Img.recordRuntimeFunction(Img.Entry);
 
   runPostLoadDiscovery(Img, "coff: loaded " + Path.filename().string());
   return Img;

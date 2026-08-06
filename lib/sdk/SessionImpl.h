@@ -202,9 +202,8 @@ struct Session {
     if (PipeResult.MedFuncs.empty())
       return false;
     std::vector<std::pair<va_t, std::string>> ImportMap;
-    for (const auto &Imp : Img.Imports)
-      if (Imp.IATAddr != 0)
-        ImportMap.push_back({Imp.IATAddr, Imp.Name});
+    for (const auto &[Addr, Name] : Img.getImportAddressNames())
+      ImportMap.emplace_back(Addr, Name);
     MedLLVMEmitter Emitter;
     PipeResult.LlvmModule =
         Emitter.emit(PipeResult.MedFuncs, *LLVMCtx, "neverd_output", Img.Arch,

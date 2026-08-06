@@ -72,9 +72,20 @@ llvm::Expected<std::pair<std::unique_ptr<llvm::MemoryBuffer>,
                          std::unique_ptr<llvm::object::MachOObjectFile>>>
 openMachOFile(const std::filesystem::path &Path);
 
-/// Resolve the image entry from LC_MAIN or LC_UNIXTHREAD.
+/// Resolve the image entry from LC_MAIN, LC_UNIXTHREAD, or LC_THREAD.  LC_MAIN
+/// names the ordinary main function; thread-state entries are recorded as
+/// loader/runtime functions.
 void parseEntryPoint(const llvm::object::MachOObjectFile &Obj, BinaryImage &Img,
                      uint64_t TextVMAddr);
+
+/// Record LC_ROUTINES / LC_ROUTINES_64 initialization entry points.
+void parseRuntimeLoadCommands(const llvm::object::MachOObjectFile &Obj,
+                              BinaryImage &Img);
+
+/// Record loader-invoked functions from Mach-O initializer, terminator,
+/// thread-local initializer, and compact initializer-offset sections.
+void parseRuntimeFunctionSections(const std::vector<SectionInfo> &Sections,
+                                  uint64_t TextVMAddr, BinaryImage &Img);
 
 /// Walk LC_DYLD_INFO bind / lazy_bind bytecode and enrich \p Img imports.
 void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,

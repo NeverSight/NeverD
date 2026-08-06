@@ -14,9 +14,9 @@
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -24,6 +24,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 
 #define DEBUG_TYPE "neverd-macho-loader"
@@ -35,32 +36,72 @@ using namespace llvm::MachO;
 
 namespace {
 
-/// LC_UNIXTHREAD: load_command header + {flavor, count} + register state.
+/// LC_THREAD / LC_UNIXTHREAD: load_command header followed by one or more
+/// {flavor, count, register state} records.
 struct UnixThreadFlavorHeader {
   uint32_t Flavor;
   uint32_t Count;
 };
-constexpr uint32_t kUnixThreadStateOffset =
-    sizeof(llvm::MachO::load_command) + sizeof(UnixThreadFlavorHeader);
 
-va_t readUnixThreadEntry(const uint8_t *StatePtr, size_t StateBytes, Arch A) {
-  if (A == Arch::X86 && StateBytes >= sizeof(x86_thread_state32_t)) {
-    auto *TS = reinterpret_cast<const x86_thread_state32_t *>(StatePtr);
-    return TS->eip;
+va_t normalizeMachOFunctionAddress(va_t Addr, const BinaryImage &Img) {
+  return Img.Arch == Arch::ARM ? clearThumbBit(Addr) : Addr;
+}
+
+template <typename StateT, typename GetPC>
+std::optional<va_t> readThreadState(const uint8_t *StatePtr, size_t StateBytes,
+                                    GetPC GetProgramCounter) {
+  if (StateBytes < sizeof(StateT))
+    return std::nullopt;
+  StateT State;
+  std::memcpy(&State, StatePtr, sizeof(State));
+  return static_cast<va_t>(GetProgramCounter(State));
+}
+
+std::optional<va_t> readThreadCommandEntry(const uint8_t *Command,
+                                           size_t CommandSize, Arch A) {
+  size_t Offset = sizeof(llvm::MachO::load_command);
+  while (rangeInBounds(Offset, sizeof(UnixThreadFlavorHeader), CommandSize)) {
+    UnixThreadFlavorHeader Header;
+    std::memcpy(&Header, Command + Offset, sizeof(Header));
+    Offset += sizeof(Header);
+    if (Header.Count > (CommandSize - Offset) / sizeof(uint32_t))
+      return std::nullopt;
+    size_t StateBytes = static_cast<size_t>(Header.Count) * sizeof(uint32_t);
+    const uint8_t *StatePtr = Command + Offset;
+
+    if (A == Arch::X86 && Header.Flavor == x86_THREAD_STATE32)
+      if (auto Entry = readThreadState<x86_thread_state32_t>(
+              StatePtr, StateBytes,
+              [](const x86_thread_state32_t &State) { return State.eip; }))
+        return Entry;
+    if (A == Arch::X64 && Header.Flavor == x86_THREAD_STATE64)
+      if (auto Entry = readThreadState<x86_thread_state64_t>(
+              StatePtr, StateBytes,
+              [](const x86_thread_state64_t &State) { return State.rip; }))
+        return Entry;
+    if (A == Arch::ARM && Header.Flavor == ARM_THREAD_STATE)
+      if (auto Entry = readThreadState<arm_thread_state32_t>(
+              StatePtr, StateBytes,
+              [](const arm_thread_state32_t &State) { return State.pc; }))
+        return clearThumbBit(*Entry);
+    if (A == Arch::AArch64 && Header.Flavor == ARM_THREAD_STATE64)
+      if (auto Entry = readThreadState<arm_thread_state64_t>(
+              StatePtr, StateBytes,
+              [](const arm_thread_state64_t &State) { return State.pc; }))
+        return Entry;
+
+    Offset += StateBytes;
   }
-  if (A == Arch::X64 && StateBytes >= sizeof(x86_thread_state64_t)) {
-    auto *TS = reinterpret_cast<const x86_thread_state64_t *>(StatePtr);
-    return TS->rip;
-  }
-  if (A == Arch::ARM && StateBytes >= sizeof(arm_thread_state32_t)) {
-    auto *TS = reinterpret_cast<const arm_thread_state32_t *>(StatePtr);
-    return clearThumbBit(TS->pc);
-  }
-  if (A == Arch::AArch64 && StateBytes >= sizeof(arm_thread_state64_t)) {
-    auto *TS = reinterpret_cast<const arm_thread_state64_t *>(StatePtr);
-    return TS->pc;
-  }
-  return 0;
+  return std::nullopt;
+}
+
+void appendRuntimeFunction(va_t Addr, std::vector<va_t> *Out,
+                           BinaryImage &Img) {
+  Addr = normalizeMachOFunctionAddress(Addr, Img);
+  if (!Img.recordRuntimeFunction(Addr))
+    return;
+  if (Out && std::find(Out->begin(), Out->end(), Addr) == Out->end())
+    Out->push_back(Addr);
 }
 
 } // anonymous namespace
@@ -193,9 +234,12 @@ void parseFunctionStarts(const uint8_t *BasePtr, size_t FileSize,
 
 void parseEntryPoint(const llvm::object::MachOObjectFile &Obj, BinaryImage &Img,
                      uint64_t TextVMAddr) {
+  // LC_MAIN is main(), not a loader scaffold, and takes precedence regardless
+  // of command ordering.
   for (const auto &LC : Obj.load_commands()) {
     if (LC.C.cmd == LC_MAIN && LC.C.cmdsize >= sizeof(entry_point_command)) {
-      auto EP = *reinterpret_cast<const entry_point_command *>(LC.Ptr);
+      entry_point_command EP;
+      std::memcpy(&EP, LC.Ptr, sizeof(EP));
       if (EP.entryoff > InvalidVA - TextVMAddr)
         continue;
       Img.Entry = TextVMAddr + EP.entryoff;
@@ -203,18 +247,94 @@ void parseEntryPoint(const llvm::object::MachOObjectFile &Obj, BinaryImage &Img,
         Img.Entry = clearThumbBit(Img.Entry);
       return;
     }
+  }
 
-    if (LC.C.cmd != LC_UNIXTHREAD || Img.Entry != 0)
+  auto FindThreadEntry = [&](uint32_t CommandType) -> std::optional<va_t> {
+    for (const auto &LC : Obj.load_commands()) {
+      if (LC.C.cmd != CommandType ||
+          LC.C.cmdsize < sizeof(llvm::MachO::load_command))
+        continue;
+      auto Entry = readThreadCommandEntry(
+          reinterpret_cast<const uint8_t *>(LC.Ptr), LC.C.cmdsize, Img.Arch);
+      if (Entry)
+        return normalizeMachOFunctionAddress(*Entry, Img);
+    }
+    return std::nullopt;
+  };
+
+  std::optional<va_t> Entry = FindThreadEntry(LC_UNIXTHREAD);
+  if (!Entry)
+    Entry = FindThreadEntry(LC_THREAD);
+  if (Entry) {
+    Img.Entry = *Entry;
+    Img.recordRuntimeFunction(*Entry);
+  }
+}
+
+void parseRuntimeLoadCommands(const llvm::object::MachOObjectFile &Obj,
+                              BinaryImage &Img) {
+  for (const auto &LC : Obj.load_commands()) {
+    va_t InitAddress = 0;
+    if (LC.C.cmd == LC_ROUTINES && LC.C.cmdsize >= sizeof(routines_command)) {
+      routines_command Command;
+      std::memcpy(&Command, LC.Ptr, sizeof(Command));
+      InitAddress = Command.init_address;
+    } else if (LC.C.cmd == LC_ROUTINES_64 &&
+               LC.C.cmdsize >= sizeof(routines_command_64)) {
+      routines_command_64 Command;
+      std::memcpy(&Command, LC.Ptr, sizeof(Command));
+      InitAddress = Command.init_address;
+    } else
       continue;
-    if (LC.C.cmdsize <= kUnixThreadStateOffset)
+    if (InitAddress == 0)
+      continue;
+    InitAddress = normalizeMachOFunctionAddress(InitAddress, Img);
+    if (Img.recordRuntimeFunction(InitAddress) && Img.DynInfo.InitAddr == 0)
+      Img.DynInfo.InitAddr = InitAddress;
+  }
+}
+
+void parseRuntimeFunctionSections(const std::vector<SectionInfo> &Sections,
+                                  uint64_t TextVMAddr, BinaryImage &Img) {
+  for (const SectionInfo &Sec : Sections) {
+    std::vector<va_t> *Out = nullptr;
+    uint32_t EntrySize = Img.getPointerSize();
+    if (Sec.Flags == S_MOD_INIT_FUNC_POINTERS ||
+        Sec.Flags == S_THREAD_LOCAL_INIT_FUNCTION_POINTERS)
+      Out = &Img.DynInfo.InitArray;
+    else if (Sec.Flags == S_MOD_TERM_FUNC_POINTERS)
+      Out = &Img.DynInfo.FiniArray;
+    else if (Sec.Flags == S_INIT_FUNC_OFFSETS) {
+      Out = &Img.DynInfo.InitArray;
+      EntrySize = sizeof(uint32_t);
+    } else {
+      continue;
+    }
+
+    const Segment *DataSeg = Img.getSegmentFor(Sec.Addr);
+    if (!DataSeg || !DataSeg->isReadable())
       continue;
 
-    const uint8_t *StatePtr =
-        reinterpret_cast<const uint8_t *>(LC.Ptr) + kUnixThreadStateOffset;
-    size_t StateBytes = LC.C.cmdsize - kUnixThreadStateOffset;
-    va_t Entry = readUnixThreadEntry(StatePtr, StateBytes, Img.Arch);
-    if (Entry != 0)
-      Img.Entry = Entry;
+    uint64_t Count = Sec.Size / EntrySize;
+    for (uint64_t I = 0; I < Count; ++I) {
+      if (I > (InvalidVA - Sec.Addr) / EntrySize)
+        break;
+      const uint8_t *P = Img.readVA(Sec.Addr + I * EntrySize, EntrySize);
+      if (!P)
+        break;
+      va_t Addr = 0;
+      if (Sec.Flags == S_INIT_FUNC_OFFSETS) {
+        uint32_t Offset = readLE<uint32_t>(P);
+        if (Offset > InvalidVA - TextVMAddr)
+          continue;
+        Addr = TextVMAddr + Offset;
+      } else {
+        Addr = static_cast<va_t>(readPtr(P, Img.is64Bit()));
+        if (Addr == 0)
+          continue;
+      }
+      appendRuntimeFunction(Addr, Out, Img);
+    }
   }
 }
 
@@ -276,8 +396,8 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
       case BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB: {
         uint64_t Ordinal = 0;
         if (!ReadULEB(Ordinal) ||
-            Ordinal > static_cast<uint64_t>(
-                          std::numeric_limits<int64_t>::max()))
+            Ordinal >
+                static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
           return;
         LibOrdinal = static_cast<int64_t>(Ordinal);
         break;
@@ -380,8 +500,7 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
           if (Delta > InvalidVA - SegOff)
             return;
           SegOff += Delta;
-        }
-        else if (Opcode == BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB) {
+        } else if (Opcode == BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB) {
           if (Skip > InvalidVA - PtrSz)
             return;
           uint64_t Stride = PtrSz + Skip;
@@ -389,8 +508,7 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
             return;
           SegOff += Skip;
           uint64_t Repeats = Count - 1;
-          if (Repeats != 0 &&
-              Stride > (InvalidVA - SegOff) / Repeats)
+          if (Repeats != 0 && Stride > (InvalidVA - SegOff) / Repeats)
             return;
           SegOff += Repeats * Stride;
         }
@@ -468,8 +586,7 @@ void parseExportTrie(const uint8_t *BasePtr, size_t FileSize,
       // Re-exports encode a library ordinal and import name after the flags,
       // not an address relative to __TEXT.
       if ((Flags & EXPORT_SYMBOL_FLAGS_REEXPORT) == 0) {
-        if (!ReadULEB(TermP, TermEnd, Addr) ||
-            Addr > InvalidVA - TextVMAddr)
+        if (!ReadULEB(TermP, TermEnd, Addr) || Addr > InvalidVA - TextVMAddr)
           continue;
         va_t ExportAddr = TextVMAddr + Addr;
         if (ExistingExports.insert(ExportAddr).second) {
@@ -501,8 +618,7 @@ void parseExportTrie(const uint8_t *BasePtr, size_t FileSize,
         break;
       if (ChildOff < TrieSize &&
           SeenNodes.insert(static_cast<size_t>(ChildOff)).second)
-        Stack.push_back(
-            {static_cast<size_t>(ChildOff), Prefix + EdgeLabel});
+        Stack.push_back({static_cast<size_t>(ChildOff), Prefix + EdgeLabel});
     }
   }
   LLVM_DEBUG(llvm::dbgs() << "macho: export trie added " << Added
@@ -553,12 +669,14 @@ void parseStubImports(const llvm::object::MachOObjectFile &Obj,
     uint32_t IndirectBase = Sect.Reserved1;
 
     for (uint32_t SI = 0; SI < NStubs; ++SI) {
+      if (SI > std::numeric_limits<uint32_t>::max() - IndirectBase)
+        break;
       uint32_t ISymIdx = IndirectBase + SI;
       if (ISymIdx >= DysymtabCmd.nindirectsyms)
         continue;
 
       uint32_t SymIdx = Obj.getIndirectSymbolTableEntry(DysymtabCmd, ISymIdx);
-      if (SymIdx == INDIRECT_SYMBOL_LOCAL || SymIdx == INDIRECT_SYMBOL_ABS ||
+      if ((SymIdx & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) != 0 ||
           SymIdx >= SymtabCmd.nsyms)
         continue;
 
@@ -571,7 +689,9 @@ void parseStubImports(const llvm::object::MachOObjectFile &Obj,
       Import Imp;
       Imp.Name = SymName;
       Imp.IATAddr = StubAddr;
+      size_t ImportIndex = Img.Imports.size();
       Img.Imports.push_back(std::move(Imp));
+      Img.recordImportStub(StubAddr, ImportIndex);
 
       Symbol Sym = Symbol::makeFunc(StubAddr);
       Sym.Name = SymName;
@@ -630,12 +750,14 @@ void parseNonLazyPtrImports(const llvm::object::MachOObjectFile &Obj,
     uint32_t IndirectBase = Sect.Reserved1;
 
     for (uint64_t SI = 0; SI < NSlots; ++SI) {
+      if (SI > std::numeric_limits<uint32_t>::max() - IndirectBase)
+        break;
       uint32_t ISymIdx = IndirectBase + static_cast<uint32_t>(SI);
       if (ISymIdx >= DysymtabCmd.nindirectsyms)
         continue;
 
       uint32_t SymIdx = Obj.getIndirectSymbolTableEntry(DysymtabCmd, ISymIdx);
-      if (SymIdx == INDIRECT_SYMBOL_LOCAL || SymIdx == INDIRECT_SYMBOL_ABS ||
+      if ((SymIdx & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) != 0 ||
           SymIdx >= SymtabCmd.nsyms)
         continue;
 
@@ -799,8 +921,7 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
     if (SegInfoOff == 0)
       continue;
     uint64_t SegAbs = StartsAbs + SegInfoOff;
-    if (!rangeInBounds(SegAbs, sizeof(dyld_chained_starts_in_segment),
-                       DataEnd))
+    if (!rangeInBounds(SegAbs, sizeof(dyld_chained_starts_in_segment), DataEnd))
       continue;
     const auto *Seg = reinterpret_cast<const dyld_chained_starts_in_segment *>(
         BasePtr + SegAbs);
@@ -819,9 +940,9 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
     uint16_t PageCount = Seg->page_count;
     uint64_t PageStartArr =
         SegAbs + offsetof(dyld_chained_starts_in_segment, page_start);
-    if (!rangeInBounds(
-            PageStartArr,
-            static_cast<uint64_t>(PageCount) * sizeof(uint16_t), SegEnd))
+    if (!rangeInBounds(PageStartArr,
+                       static_cast<uint64_t>(PageCount) * sizeof(uint16_t),
+                       SegEnd))
       continue;
     uint64_t SegVMOff = Seg->segment_offset;
     for (uint16_t P = 0; P < PageCount; ++P) {

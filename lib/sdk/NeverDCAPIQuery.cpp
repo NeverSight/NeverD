@@ -231,6 +231,12 @@ const char *neverd_headers_json(neverd_session_t Sess) {
     Dyn["init_addr"] = vaHex(DI.InitAddr);
   if (DI.FiniAddr)
     Dyn["fini_addr"] = vaHex(DI.FiniAddr);
+  if (!DI.PreinitArray.empty()) {
+    llvm::json::Array PA;
+    for (auto A : DI.PreinitArray)
+      PA.push_back(vaHex(A));
+    Dyn["preinit_array"] = std::move(PA);
+  }
   if (!DI.InitArray.empty()) {
     llvm::json::Array IA;
     for (auto A : DI.InitArray)
@@ -281,16 +287,16 @@ const char *neverd_entrypoints_json(neverd_session_t Sess) {
     Arr.push_back(std::move(O));
   };
 
-  addEntry("entry", Img.Entry, "_start");
-  addEntry("init", DI.InitAddr, "_init");
-  addEntry("fini", DI.FiniAddr, "_fini");
+  addEntry("entry", Img.Entry, Img.getFunctionNameAt(Img.Entry));
+  addEntry("init", DI.InitAddr, Img.getFunctionNameAt(DI.InitAddr));
+  addEntry("fini", DI.FiniAddr, Img.getFunctionNameAt(DI.FiniAddr));
 
-  for (size_t I = 0; I < DI.InitArray.size(); ++I)
-    addEntry("init_array", DI.InitArray[I],
-             "init_array[" + std::to_string(I) + "]");
-  for (size_t I = 0; I < DI.FiniArray.size(); ++I)
-    addEntry("fini_array", DI.FiniArray[I],
-             "fini_array[" + std::to_string(I) + "]");
+  for (va_t Addr : DI.PreinitArray)
+    addEntry("preinit_array", Addr, Img.getFunctionNameAt(Addr));
+  for (va_t Addr : DI.InitArray)
+    addEntry("init_array", Addr, Img.getFunctionNameAt(Addr));
+  for (va_t Addr : DI.FiniArray)
+    addEntry("fini_array", Addr, Img.getFunctionNameAt(Addr));
 
   return dupStr(jsonToString(llvm::json::Value(std::move(Arr))));
 }
@@ -371,11 +377,10 @@ const char *neverd_dashboard_json(neverd_session_t Sess) {
   Counts["segments"] = static_cast<int64_t>(S->Img.Segments.size());
   Counts["sections"] = static_cast<int64_t>(S->Img.Sections.size());
   Counts["relocations"] = static_cast<int64_t>(S->Img.Relocations.size());
-  Counts["entrypoints"] =
-      1 + static_cast<int64_t>(S->Img.DynInfo.InitArray.size() +
-                               S->Img.DynInfo.FiniArray.size() +
-                               (S->Img.DynInfo.InitAddr ? 1 : 0) +
-                               (S->Img.DynInfo.FiniAddr ? 1 : 0));
+  Counts["entrypoints"] = static_cast<int64_t>(
+      (S->Img.Entry ? 1 : 0) + S->Img.DynInfo.PreinitArray.size() +
+      S->Img.DynInfo.InitArray.size() + S->Img.DynInfo.FiniArray.size() +
+      (S->Img.DynInfo.InitAddr ? 1 : 0) + (S->Img.DynInfo.FiniAddr ? 1 : 0));
   Root["counts"] = std::move(Counts);
 
   llvm::json::Array Libs;
@@ -503,10 +508,9 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
         break;
       size_t Off = static_cast<size_t>(Off64);
       size_t Avail = static_cast<size_t>(std::min<uint64_t>(
-          16, std::min<uint64_t>(
-                  B.EndAddr - Cur,
-                  std::min<uint64_t>(Seg->Size - Off64,
-                                     Seg->Data.size() - Off))));
+          16, std::min<uint64_t>(B.EndAddr - Cur,
+                                 std::min<uint64_t>(Seg->Size - Off64,
+                                                    Seg->Data.size() - Off))));
       if (Avail == 0)
         break;
       const uint8_t *Bytes = Seg->Data.data() + Off;
@@ -514,9 +518,8 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
       int Sz = S->Dec.decodeOne(Bytes, Avail, Cur, DI);
       if (Sz <= 0)
         break;
-      std::string Line = vaHex(Cur) + ": " +
-                         (DI.Raw ? DI.Raw->mnemonic : "") + " " +
-                         (DI.Raw ? DI.Raw->op_str : "");
+      std::string Line = vaHex(Cur) + ": " + (DI.Raw ? DI.Raw->mnemonic : "") +
+                         " " + (DI.Raw ? DI.Raw->op_str : "");
       DisasmLines.push_back(Line);
       Cur += Sz;
     }
@@ -685,14 +688,12 @@ const char *neverd_resolve_addr(neverd_session_t Sess, neverd_va_t Addr) {
     }
   }
 
-  for (const auto &Imp : S->Img.Imports) {
-    if (Imp.IATAddr == Addr) {
-      Obj["type"] = "import";
-      Obj["name"] = Imp.Name;
-      Obj["module"] = Imp.Module;
-      Obj["addr"] = vaHex(Addr);
-      return dupStr(jsonToString(llvm::json::Value(std::move(Obj))));
-    }
+  if (const Import *Imp = S->Img.findImportAt(Addr)) {
+    Obj["type"] = "import";
+    Obj["name"] = Imp->Name;
+    Obj["module"] = Imp->Module;
+    Obj["addr"] = vaHex(Addr);
+    return dupStr(jsonToString(llvm::json::Value(std::move(Obj))));
   }
 
   for (const auto &Exp : S->Img.Exports) {
@@ -775,8 +776,7 @@ const char *neverd_search_string(neverd_session_t Sess, const char *Pattern,
   if (!CaseSensitive) {
     PatLower.resize(Pat.size());
     std::transform(Pat.begin(), Pat.end(), PatLower.begin(), [](char Ch) {
-      return static_cast<char>(
-          std::tolower(static_cast<unsigned char>(Ch)));
+      return static_cast<char>(std::tolower(static_cast<unsigned char>(Ch)));
     });
   }
 

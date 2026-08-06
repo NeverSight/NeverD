@@ -43,20 +43,7 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
 
   if (Img.Entry != 0) {
     Entries.insert(Img.Entry);
-    std::string EntryName = "_start";
-    for (const auto &Sym : Img.Symbols) {
-      if (Sym.Addr == Img.Entry && !Sym.Name.empty()) {
-        EntryName = Sym.Name;
-        break;
-      }
-    }
-    for (const auto &Exp : Img.Exports) {
-      if (Exp.Addr == Img.Entry && !Exp.Name.empty()) {
-        EntryName = Exp.Name;
-        break;
-      }
-    }
-    Results.push_back({Img.Entry, EntryName});
+    Results.push_back({Img.Entry, Img.getFunctionNameAt(Img.Entry)});
   }
 
   std::set<va_t> SkipAddrs;
@@ -195,8 +182,7 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     std::vector<std::pair<va_t, va_t>> SizedRanges;
     std::set<va_t> SizedStarts;
     for (const auto &Sym : Img.Symbols) {
-      if (!Sym.IsFunc || Sym.Size == 0 ||
-          Sym.Size > InvalidVA - Sym.Addr)
+      if (!Sym.IsFunc || Sym.Size == 0 || Sym.Size > InvalidVA - Sym.Addr)
         continue;
       SizedStarts.insert(Sym.Addr);
       SizedRanges.push_back({Sym.Addr, Sym.Addr + Sym.Size});

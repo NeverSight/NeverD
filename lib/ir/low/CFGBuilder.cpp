@@ -315,14 +315,12 @@ bool CFGBuilder::isTailCallTarget(va_t Target) const {
     return false;
   if (KnownFuncEntries && KnownFuncEntries->count(Target) > 0)
     return true;
-  // A direct branch landing on an import's code stub (Mach-O __stubs / ELF PLT
-  // entry, whose IATAddr is the stub VA) is a tail call to that external
-  // function -- e.g. clang -O2 lowers `double cmag(c){return cabs(c);}` to a
-  // lone `b _cabs`.  Without this the stub thunk (`adrp/ldr/br`) is followed
-  // and inlined into the caller as an untyped GOT indirect call, dropping the
-  // import's identity and ABI: the FP-returning libc result then comes back as
-  // a raw i64 (cabs silently returns 0).  Formats whose IATAddr is a data slot
-  // (COFF IAT) never match a code branch target, so this is format-safe.
+  // A direct branch landing on a registered import veneer is a tail call to
+  // that external function.  Without this the veneer is followed and inlined
+  // into the caller as an untyped indirect call, dropping import identity and
+  // ABI.  BinaryImage resolves both the format-native IAT address and exact
+  // executable stubs, so this also covers COFF thunks whose IATAddr stays a
+  // data slot.
   if (CurrentImg && CurrentImg->findImportAt(Target))
     return true;
   return false;
@@ -340,8 +338,7 @@ bool CFGBuilder::isNoReturnCall(const InsnRecord &Rec) const {
     }
   if (Target == InvalidVA)
     return false;
-  // External libc (Mach-O __stubs / ELF PLT): the import's IATAddr is the stub
-  // VA the `bl`/`call` directly targets.
+  // External libc through any registered import address or executable veneer.
   if (const Import *Imp = CurrentImg->findImportAt(Target))
     if (libc::isNoReturnFunction(Imp->Name))
       return true;

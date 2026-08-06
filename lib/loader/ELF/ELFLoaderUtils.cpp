@@ -15,7 +15,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstring>
+#include <optional>
 
 #define DEBUG_TYPE "neverd-elf-loader"
 
@@ -23,6 +25,99 @@ namespace neverd {
 namespace elf_loader {
 
 using namespace llvm::ELF;
+
+namespace {
+
+va_t normalizeELFFunctionAddress(va_t Addr, const BinaryImage &Img) {
+  return Img.Arch == Arch::ARM ? clearThumbBit(Addr) : Addr;
+}
+
+bool isIRelativeRelocation(uint32_t Type, Arch TargetArch) {
+  switch (TargetArch) {
+  case Arch::X86:
+    return Type == R_386_IRELATIVE;
+  case Arch::X64:
+    return Type == R_X86_64_IRELATIVE;
+  case Arch::ARM:
+    return Type == R_ARM_IRELATIVE;
+  case Arch::AArch64:
+    return Type == R_AARCH64_IRELATIVE;
+  default:
+    return false;
+  }
+}
+
+} // anonymous namespace
+
+void recordRuntimePointerArray(va_t Addr, uint64_t Size, std::vector<va_t> &Out,
+                               BinaryImage &Img) {
+  const uint32_t PtrSize = Img.getPointerSize();
+  if (Size < PtrSize)
+    return;
+
+  const Segment *Seg = Img.getSegmentFor(Addr);
+  if (!Seg || !Seg->isReadable())
+    return;
+  size_t Offset = static_cast<size_t>(Addr - Seg->VA);
+  if (Offset >= Seg->Data.size())
+    return;
+
+  uint64_t Count = Size / PtrSize;
+  Count = std::min<uint64_t>(Count, (Seg->Data.size() - Offset) / PtrSize);
+  for (uint64_t I = 0; I < Count; ++I) {
+    if (I > (InvalidVA - Addr) / PtrSize)
+      break;
+    const uint8_t *P = Img.readVA(Addr + I * PtrSize, PtrSize);
+    if (!P)
+      break;
+    va_t Target = static_cast<va_t>(readPtr(P, Img.is64Bit()));
+    if (Target == 0)
+      continue;
+    Target = normalizeELFFunctionAddress(Target, Img);
+    if (!Img.recordRuntimeFunction(Target))
+      continue;
+    if (std::find(Out.begin(), Out.end(), Target) == Out.end())
+      Out.push_back(Target);
+  }
+}
+
+void parseRuntimeSections(BinaryImage &Img) {
+  for (const Section &Sec : Img.Sections) {
+    std::vector<va_t> *Out = nullptr;
+    if (Sec.Type == SHT_PREINIT_ARRAY ||
+        Sec.Name == section_names::elf::PreinitArray)
+      Out = &Img.DynInfo.PreinitArray;
+    else if (Sec.Type == SHT_INIT_ARRAY ||
+             Sec.Name == section_names::elf::InitArray ||
+             Sec.Name == section_names::elf::Ctors)
+      Out = &Img.DynInfo.InitArray;
+    else if (Sec.Type == SHT_FINI_ARRAY ||
+             Sec.Name == section_names::elf::FiniArray ||
+             Sec.Name == section_names::elf::Dtors)
+      Out = &Img.DynInfo.FiniArray;
+    if (Out)
+      recordRuntimePointerArray(Sec.VA, Sec.Size, *Out, Img);
+  }
+}
+
+bool recordIRelativeResolver(uint32_t RelocType, va_t Slot,
+                             std::optional<int64_t> Addend, BinaryImage &Img) {
+  if (!isIRelativeRelocation(RelocType, Img.Arch))
+    return false;
+
+  va_t Resolver = 0;
+  if (Addend) {
+    if (*Addend < 0)
+      return false;
+    Resolver = static_cast<va_t>(*Addend);
+  } else {
+    const uint8_t *P = Img.readVA(Slot, Img.getPointerSize());
+    if (!P)
+      return false;
+    Resolver = static_cast<va_t>(readPtr(P, Img.is64Bit()));
+  }
+  return Img.recordRuntimeFunction(normalizeELFFunctionAddress(Resolver, Img));
+}
 
 // ===--------------------------------------------------------------------===//
 // .dynamic section parsing
@@ -34,8 +129,6 @@ void parseDynamic(const llvm::object::ELFFile<ELFT> &ELF,
                   size_t Size, BinaryImage &Img) {
   using Elf_Dyn = typename ELFT::Dyn;
   using Elf_Shdr = typename ELFT::Shdr;
-  constexpr size_t PtrSize = sizeof(typename ELFT::Addr);
-
   if (DynamicSH.sh_entsize < sizeof(Elf_Dyn) ||
       !rangeInBounds(DynamicSH.sh_offset, DynamicSH.sh_size, Size))
     return;
@@ -68,8 +161,8 @@ void parseDynamic(const llvm::object::ELFFile<ELFT> &ELF,
 
   size_t Count = static_cast<size_t>(DynamicSH.sh_size / DynamicSH.sh_entsize);
   for (size_t I = 0; I < Count; ++I) {
-    uint64_t Off64 = DynamicSH.sh_offset +
-                     static_cast<uint64_t>(I) * DynamicSH.sh_entsize;
+    uint64_t Off64 =
+        DynamicSH.sh_offset + static_cast<uint64_t>(I) * DynamicSH.sh_entsize;
     if (!rangeInBounds(Off64, sizeof(Elf_Dyn), Size))
       break;
     Elf_Dyn D;
@@ -84,31 +177,6 @@ void parseDynamic(const llvm::object::ELFFile<ELFT> &ELF,
       if (E.Tag == Tag)
         return E.Val;
     return 0;
-  };
-
-  auto ReadPtrArray = [&](uint64_t Addr, uint64_t ArrSize,
-                          std::vector<va_t> &Out) {
-    if (ArrSize == 0)
-      return;
-    for (const auto &Seg : Img.Segments) {
-      if (!Seg.contains(Addr))
-        continue;
-      size_t Off = static_cast<size_t>(Addr - Seg.VA);
-      if (Off >= Seg.Data.size())
-        break;
-      uint64_t NumPtrs64 = ArrSize / PtrSize;
-      size_t MaxPtrs = (Seg.Data.size() - Off) / PtrSize;
-      if (NumPtrs64 > MaxPtrs)
-        NumPtrs64 = MaxPtrs;
-      size_t NumPtrs = static_cast<size_t>(NumPtrs64);
-      for (size_t K = 0; K < NumPtrs; ++K) {
-        typename ELFT::Addr Val;
-        std::memcpy(&Val, Seg.Data.data() + Off + K * PtrSize, PtrSize);
-        if (Val != 0)
-          Out.push_back(static_cast<va_t>(Val));
-      }
-      break;
-    }
   };
 
   for (auto &E : Entries) {
@@ -143,16 +211,24 @@ void parseDynamic(const llvm::object::ELFFile<ELFT> &ELF,
     }
     switch (E.Tag) {
     case DT_INIT:
-      Img.DynInfo.InitAddr = E.Val;
+      Img.DynInfo.InitAddr = normalizeELFFunctionAddress(E.Val, Img);
+      Img.recordRuntimeFunction(Img.DynInfo.InitAddr);
       break;
     case DT_FINI:
-      Img.DynInfo.FiniAddr = E.Val;
+      Img.DynInfo.FiniAddr = normalizeELFFunctionAddress(E.Val, Img);
+      Img.recordRuntimeFunction(Img.DynInfo.FiniAddr);
+      break;
+    case DT_PREINIT_ARRAY:
+      recordRuntimePointerArray(E.Val, FindVal(DT_PREINIT_ARRAYSZ),
+                                Img.DynInfo.PreinitArray, Img);
       break;
     case DT_INIT_ARRAY:
-      ReadPtrArray(E.Val, FindVal(DT_INIT_ARRAYSZ), Img.DynInfo.InitArray);
+      recordRuntimePointerArray(E.Val, FindVal(DT_INIT_ARRAYSZ),
+                                Img.DynInfo.InitArray, Img);
       break;
     case DT_FINI_ARRAY:
-      ReadPtrArray(E.Val, FindVal(DT_FINI_ARRAYSZ), Img.DynInfo.FiniArray);
+      recordRuntimePointerArray(E.Val, FindVal(DT_FINI_ARRAYSZ),
+                                Img.DynInfo.FiniArray, Img);
       break;
     default:
       break;
@@ -340,8 +416,7 @@ void parseNotes(const llvm::object::ELFFile<ELFT> &ELF, const uint8_t *Data,
 
       uint64_t NameAlign = elfNoteAlign(NH.NameSz);
       uint64_t DescAlign = elfNoteAlign(NH.DescSz);
-      uint64_t TotalSize =
-          sizeof(ELFNoteHeader) + NameAlign + DescAlign;
+      uint64_t TotalSize = sizeof(ELFNoteHeader) + NameAlign + DescAlign;
       if (TotalSize > static_cast<uint64_t>(End - P))
         break;
 

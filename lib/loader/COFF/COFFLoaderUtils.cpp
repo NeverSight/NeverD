@@ -18,6 +18,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstring>
+#include <limits>
+#include <optional>
 #include <set>
 
 #define DEBUG_TYPE "neverd-coff-loader"
@@ -27,6 +29,92 @@ namespace coff_loader {
 
 using namespace llvm::COFF;
 using namespace llvm::object;
+
+namespace {
+
+enum class DelayAddressMode { RVA, VA };
+
+constexpr uint32_t kDelayAddressIsRVA = 1;
+
+std::optional<va_t> resolveDelayField(uint32_t Raw, DelayAddressMode Mode,
+                                      const BinaryImage &Img) {
+  if (Raw == 0)
+    return std::nullopt;
+  va_t Addr = Raw;
+  if (Mode == DelayAddressMode::RVA) {
+    if (Raw > InvalidVA - Img.Base)
+      return std::nullopt;
+    Addr = Img.Base + Raw;
+  }
+  if (!Img.containsVA(Addr))
+    return std::nullopt;
+  return Addr;
+}
+
+std::optional<std::string> readMappedCString(const BinaryImage &Img,
+                                             va_t Addr) {
+  const Segment *Seg = Img.getSegmentFor(Addr);
+  if (!Seg || !Seg->isReadable())
+    return std::nullopt;
+  size_t Off = static_cast<size_t>(Addr - Seg->VA);
+  if (Off >= Seg->Data.size())
+    return std::nullopt;
+  const char *Begin = reinterpret_cast<const char *>(Seg->Data.data() + Off);
+  size_t MaxLen = Seg->Data.size() - Off;
+  const void *End = std::memchr(Begin, '\0', MaxLen);
+  if (!End)
+    return std::nullopt;
+  return std::string(Begin, static_cast<const char *>(End));
+}
+
+size_t mappedEntryCapacity(const BinaryImage &Img, va_t Addr,
+                           uint32_t EntrySize) {
+  const Segment *Seg = Img.getSegmentFor(Addr);
+  if (!Seg || !Seg->isReadable() || EntrySize == 0)
+    return 0;
+  size_t Off = static_cast<size_t>(Addr - Seg->VA);
+  if (Off >= Seg->Data.size())
+    return 0;
+  return (Seg->Data.size() - Off) / EntrySize;
+}
+
+struct ResolvedDelayDescriptor {
+  DelayAddressMode Mode;
+  va_t IATAddr;
+  va_t INTAddr;
+  std::string Module;
+};
+
+std::optional<ResolvedDelayDescriptor>
+resolveDelayDescriptor(const delay_import_directory_table_entry &Desc,
+                       const BinaryImage &Img) {
+  auto TryMode =
+      [&](DelayAddressMode Mode) -> std::optional<ResolvedDelayDescriptor> {
+    auto NameAddr = resolveDelayField(Desc.Name, Mode, Img);
+    auto IATAddr = resolveDelayField(Desc.DelayImportAddressTable, Mode, Img);
+    auto INTAddr = resolveDelayField(Desc.DelayImportNameTable, Mode, Img);
+    if (!NameAddr || !IATAddr || !INTAddr)
+      return std::nullopt;
+    auto Module = readMappedCString(Img, *NameAddr);
+    uint32_t PtrSize = Img.getPointerSize();
+    if (!Module || Module->empty() || !Img.readVA(*IATAddr, PtrSize) ||
+        !Img.readVA(*INTAddr, PtrSize))
+      return std::nullopt;
+    return ResolvedDelayDescriptor{Mode, *IATAddr, *INTAddr,
+                                   std::move(*Module)};
+  };
+
+  // dlattrRva explicitly selects RVA fields.  Zero-attribute descriptors in
+  // current PE files are also documented as RVAs, while old delayimp images
+  // used absolute VAs; mapped-address validation makes both forms safe.
+  if ((static_cast<uint32_t>(Desc.Attributes) & kDelayAddressIsRVA) != 0)
+    return TryMode(DelayAddressMode::RVA);
+  if (auto Resolved = TryMode(DelayAddressMode::RVA))
+    return Resolved;
+  return TryMode(DelayAddressMode::VA);
+}
+
+} // anonymous namespace
 
 void addImportedSymbol(const llvm::object::imported_symbol_iterator &SI,
                        llvm::StringRef ModuleName, va_t IATAddr,
@@ -54,6 +142,74 @@ void addImportedSymbol(const llvm::object::imported_symbol_iterator &SI,
   }
 
   Img.Imports.push_back(std::move(Imp));
+}
+
+size_t
+parseDelayImportDescriptor(const delay_import_directory_table_entry &Desc,
+                           BinaryImage &Img) {
+  auto Resolved = resolveDelayDescriptor(Desc, Img);
+  if (!Resolved)
+    return 0;
+
+  const uint32_t PtrSize = Img.getPointerSize();
+  size_t Count = std::min(mappedEntryCapacity(Img, Resolved->IATAddr, PtrSize),
+                          mappedEntryCapacity(Img, Resolved->INTAddr, PtrSize));
+  size_t Added = 0;
+  for (size_t I = 0; I < Count; ++I) {
+    if (I > (InvalidVA - Resolved->INTAddr) / PtrSize ||
+        I > (InvalidVA - Resolved->IATAddr) / PtrSize)
+      break;
+    va_t INTSlot = Resolved->INTAddr + I * PtrSize;
+    va_t IATSlot = Resolved->IATAddr + I * PtrSize;
+    const uint8_t *P = Img.readVA(INTSlot, PtrSize);
+    if (!P || !Img.readVA(IATSlot, PtrSize))
+      break;
+    uint64_t Raw = readPtr(P, Img.is64Bit());
+    if (Raw == 0)
+      break;
+
+    Import Imp;
+    Imp.Module = (llvm::Twine(Resolved->Module) + kDelayImportSuffix).str();
+    Imp.IATAddr = IATSlot;
+
+    const uint64_t OrdinalMask =
+        Img.is64Bit() ? (uint64_t(1) << 63) : (uint64_t(1) << 31);
+    if ((Raw & OrdinalMask) != 0) {
+      Imp.Ordinal = static_cast<uint16_t>(Raw & 0xffffu);
+      Imp.Name = (kOrdinalPrefix + llvm::Twine(Imp.Ordinal)).str();
+    } else {
+      if (Raw > std::numeric_limits<uint32_t>::max())
+        continue;
+      auto HintNameAddr =
+          resolveDelayField(static_cast<uint32_t>(Raw), Resolved->Mode, Img);
+      if (!HintNameAddr || *HintNameAddr > InvalidVA - sizeof(uint16_t))
+        continue;
+      auto Name = readMappedCString(Img, *HintNameAddr + sizeof(uint16_t));
+      if (!Name || Name->empty())
+        continue;
+      Imp.Name = std::move(*Name);
+    }
+
+    Img.Imports.push_back(std::move(Imp));
+    ++Added;
+  }
+  return Added;
+}
+
+void parseDelayImports(const COFFObjectFile &Obj, BinaryImage &Img) {
+  [[maybe_unused]] size_t Added = 0;
+  for (auto I = Obj.delay_import_directory_begin(),
+            E = Obj.delay_import_directory_end();
+       I != E; ++I) {
+    const delay_import_directory_table_entry *Desc = nullptr;
+    if (auto Err = I->getDelayImportTable(Desc)) {
+      llvm::consumeError(std::move(Err));
+      continue;
+    }
+    if (Desc)
+      Added += parseDelayImportDescriptor(*Desc, Img);
+  }
+  LLVM_DEBUG(llvm::dbgs() << "coff: parsed " << Added << " delay imports\n");
 }
 
 void parseSymbolTable(const COFFObjectFile &Obj, BinaryImage &Img,
@@ -119,21 +275,27 @@ void parseTLSDirectory(const COFFObjectFile &Obj, BinaryImage &Img,
   if (CallbackTableVA == 0)
     return;
 
+  const Segment *TableSeg = Img.getSegmentFor(CallbackTableVA);
+  if (!TableSeg || !TableSeg->isReadable())
+    return;
+  size_t TableOff = static_cast<size_t>(CallbackTableVA - TableSeg->VA);
+  if (TableOff >= TableSeg->Data.size())
+    return;
+
   [[maybe_unused]] size_t Added = 0;
   auto Existing = Img.getSymbolAddresses();
-  constexpr size_t kMaxTLSCallbacks = 256;
-  for (size_t I = 0; I < kMaxTLSCallbacks; ++I) {
+  size_t MaxCallbacks = (TableSeg->Data.size() - TableOff) / PtrSize;
+  for (size_t I = 0; I < MaxCallbacks; ++I) {
     if (I > (InvalidVA - CallbackTableVA) / PtrSize)
       break;
-    const uint8_t *P =
-        Img.readVA(CallbackTableVA + I * PtrSize, PtrSize);
+    const uint8_t *P = Img.readVA(CallbackTableVA + I * PtrSize, PtrSize);
     if (!P)
       break;
     uint64_t RawAddr = readPtr(P, Is64);
     if (RawAddr == 0)
       break;
     uint64_t Addr = normalizeCodeAddress(RawAddr, Img.Arch, Img.Mode);
-    if (Addr == 0)
+    if (!Img.recordRuntimeFunction(Addr))
       continue;
     if (Existing.insert(Addr).second) {
       Symbol S;
@@ -179,8 +341,7 @@ void parseBaseRelocations(const COFFObjectFile &Obj, BinaryImage &Img,
     std::memcpy(&Block, P, sizeof(Block));
     uint32_t PageRVA = Block.PageRVA;
     uint32_t BlockSize = Block.BlockSize;
-    if (BlockSize < BlockHeaderSize ||
-        BlockSize > static_cast<size_t>(End - P))
+    if (BlockSize < BlockHeaderSize || BlockSize > static_cast<size_t>(End - P))
       break;
     uint32_t Count = (BlockSize - BlockHeaderSize) / 2;
     for (uint32_t I = 0; I < Count; ++I) {
@@ -255,8 +416,7 @@ void parseDebugDirectory(const COFFObjectFile &Obj, BinaryImage &Img) {
     PDB70 Info;
     std::memcpy(&Info, reinterpret_cast<const void *>(CvPtr), sizeof(Info));
     if (Info.CVSignature == llvm::OMF::Signature::PDB70) {
-      const char *Path =
-          reinterpret_cast<const char *>(CvPtr + sizeof(PDB70));
+      const char *Path = reinterpret_cast<const char *>(CvPtr + sizeof(PDB70));
       size_t MaxLen = std::min<size_t>(DataSize, CvAvail) - sizeof(PDB70);
       Img.DynInfo.PDBPath = readFixedName(Path, MaxLen);
       LLVM_DEBUG(llvm::dbgs()
@@ -276,8 +436,7 @@ void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
   if (Cfg.SecurityCookie >= ImageBase)
     Img.DynInfo.SecurityCookieRVA = Cfg.SecurityCookie - ImageBase;
   if (Cfg.GuardCFCheckFunction >= ImageBase)
-    Img.DynInfo.GuardCFCheckFunctionRVA =
-        Cfg.GuardCFCheckFunction - ImageBase;
+    Img.DynInfo.GuardCFCheckFunctionRVA = Cfg.GuardCFCheckFunction - ImageBase;
 }
 } // anonymous namespace
 

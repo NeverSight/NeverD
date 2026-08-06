@@ -66,11 +66,10 @@ Segment makeExecutableSegment(va_t VA, llvm::ArrayRef<uint8_t> Bytes) {
 void encodeThumbMovImm16(uint8_t *P, uint16_t Imm) {
   uint16_t Op1 = readLE<uint16_t>(P);
   uint16_t Op2 = readLE<uint16_t>(P + 2);
-  Op1 = uint16_t((Op1 & arm::kThumbMovImmOp1Mask) |
-                 ((Imm & 0x0800u) >> 1) |
+  Op1 = uint16_t((Op1 & arm::kThumbMovImmOp1Mask) | ((Imm & 0x0800u) >> 1) |
                  ((Imm >> 12) & 0x000fu));
-  Op2 = uint16_t((Op2 & arm::kThumbMovIPOp2Mask) |
-                 ((Imm & 0x0700u) << 4) | (Imm & 0x00ffu));
+  Op2 = uint16_t((Op2 & arm::kThumbMovIPOp2Mask) | ((Imm & 0x0700u) << 4) |
+                 (Imm & 0x00ffu));
   writeLE<uint16_t>(P, Op1);
   writeLE<uint16_t>(P + 2, Op2);
 }
@@ -225,6 +224,8 @@ TEST(FunctionDiscoveryThumb, NormalizesTLSCallbackCodePointers) {
   Obj = createCOFFObject(Bytes);
   ASSERT_NE(Obj, nullptr);
   BinaryImage Img = makeThumbImage();
+  const std::array<uint8_t, 4> CallbackCode = {0x10, 0xb5, 0x70, 0x47};
+  Img.Segments.push_back(makeExecutableSegment(0x1000, CallbackCode));
   Segment CallbackTable;
   CallbackTable.VA = CallbackTableVA;
   CallbackTable.Size = 2 * sizeof(uint32_t);
@@ -239,6 +240,7 @@ TEST(FunctionDiscoveryThumb, NormalizesTLSCallbackCodePointers) {
   ASSERT_EQ(Img.Symbols.size(), 1u);
   EXPECT_TRUE(Img.Symbols.front().IsFunc);
   EXPECT_EQ(Img.Symbols.front().Addr, 0x1000u);
+  EXPECT_TRUE(Img.isRuntimeFunctionAt(0x1000));
 }
 
 TEST(FunctionDiscoveryThumb, RecognizesLldImportThunk) {
@@ -261,6 +263,10 @@ TEST(FunctionDiscoveryThumb, RecognizesLldImportThunk) {
   EXPECT_EQ(Img.Symbols.front().Addr, ThunkVA);
   EXPECT_EQ(Img.Symbols.front().Addr & 1u, 0u);
   EXPECT_EQ(Img.Symbols.front().Size, arm::kThumbImportThunkLen);
+  ASSERT_EQ(Img.ImportStubIndices.size(), 1u);
+  EXPECT_EQ(Img.ImportStubIndices.at(ThunkVA), 0u);
+  EXPECT_EQ(Img.findImportAt(ThunkVA), &Img.Imports[0]);
+  EXPECT_EQ(Img.Imports[0].IATAddr, IATAddr);
 }
 
 TEST(FunctionDiscoveryThumb, RejectsThunkWithDifferentTerminalOpcode) {

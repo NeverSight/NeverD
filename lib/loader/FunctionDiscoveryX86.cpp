@@ -21,7 +21,7 @@
 namespace neverd {
 
 size_t scanImportThunksX86(BinaryImage &Img, const Segment &Seg,
-                           const std::set<va_t> &Targets,
+                           const std::map<va_t, size_t> &Targets,
                            std::set<va_t> &Existing) {
   const uint8_t *D = Seg.Data.data();
   size_t N = Seg.Data.size();
@@ -45,8 +45,10 @@ size_t scanImportThunksX86(BinaryImage &Img, const Segment &Seg,
                   sizeof(AbsAddr));
       Target = AbsAddr;
     }
-    if (!Targets.count(Target))
+    auto TargetIt = Targets.find(Target);
+    if (TargetIt == Targets.end())
       continue;
+    Img.recordImportStub(InsnVA, TargetIt->second);
     if (!Existing.insert(InsnVA).second)
       continue;
     Img.Symbols.push_back(Symbol::makeFunc(InsnVA, x86::kJmpIndirectLen));

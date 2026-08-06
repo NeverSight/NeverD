@@ -119,10 +119,9 @@ MachOLoader::load(const std::filesystem::path &Path) {
     Info.Flags = Flags & llvm::MachO::SECTION_TYPE;
     Info.StubSize = Reserved2;
     Sections.push_back(Info);
-    bool IsZeroFill =
-        Info.Flags == llvm::MachO::S_ZEROFILL ||
-        Info.Flags == llvm::MachO::S_GB_ZEROFILL ||
-        Info.Flags == llvm::MachO::S_THREAD_LOCAL_ZEROFILL;
+    bool IsZeroFill = Info.Flags == llvm::MachO::S_ZEROFILL ||
+                      Info.Flags == llvm::MachO::S_GB_ZEROFILL ||
+                      Info.Flags == llvm::MachO::S_THREAD_LOCAL_ZEROFILL;
     if (!IsZeroFill && Size > 0 && !rangeInBounds(Offset, Size, FileSize)) {
       InvalidFileRange = true;
       return;
@@ -313,6 +312,12 @@ MachOLoader::load(const std::filesystem::path &Path) {
       }
 
   macho_loader::parseEntryPoint(Obj, Img, TextVMAddr);
+  macho_loader::parseRuntimeLoadCommands(Obj, Img);
+
+  for (const macho_loader::SectionInfo &Sec : Sections)
+    if (Sec.Flags == llvm::MachO::S_SYMBOL_STUBS ||
+        Sec.Name == section_names::macho::StubHelper)
+      Img.recordImportStubRange(Sec.Addr, Sec.Size);
 
   // --- Symbol table ---
   for (auto SI = Obj.symbol_begin(), SE = Obj.symbol_end(); SI != SE; ++SI) {
@@ -382,6 +387,7 @@ MachOLoader::load(const std::filesystem::path &Path) {
                                           Img);
   macho_loader::parseChainedFixupsRebases(BasePtr, FileSize, ChainedFixups,
                                           TextVMAddr, Img);
+  macho_loader::parseRuntimeFunctionSections(Sections, TextVMAddr, Img);
   macho_loader::parseExportTrie(BasePtr, FileSize, DyldInfo, TextVMAddr, Img);
   macho_loader::parseUUID(Obj, Img);
   macho_loader::parseBuildVersion(Obj, Img);

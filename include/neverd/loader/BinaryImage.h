@@ -152,9 +152,7 @@ struct Section {
   bool isExecutable() const { return hasFlag(Flags, SegmentFlags::Executable); }
   bool isWritable() const { return hasFlag(Flags, SegmentFlags::Writable); }
   bool isReadable() const { return hasFlag(Flags, SegmentFlags::Readable); }
-  bool contains(va_t Addr) const {
-    return Addr >= VA && Addr - VA < Size;
-  }
+  bool contains(va_t Addr) const { return Addr >= VA && Addr - VA < Size; }
 };
 
 // ===--------------------------------------------------------------------===//
@@ -189,6 +187,7 @@ struct DynamicInfo {
   std::vector<std::string> RPaths;
   va_t InitAddr = 0;
   va_t FiniAddr = 0;
+  std::vector<va_t> PreinitArray;
   std::vector<va_t> InitArray;
   std::vector<va_t> FiniArray;
 
@@ -320,6 +319,18 @@ struct BinaryImage {
   /// size argument it cannot model and whose stack allocation it already lowers
   /// via a real alloca.
   std::map<va_t, std::string> ImportPtrSlots;
+  /// Exact executable import veneer address -> Imports index.  Import::IATAddr
+  /// intentionally keeps its format-native, API-visible meaning (a PE/ELF data
+  /// slot, historically a Mach-O stub); recording another executable spelling
+  /// of the import must never repurpose that field.
+  std::map<va_t, size_t> ImportStubIndices;
+  /// Half-open executable intervals occupied by linker/dynamic-loader import
+  /// machinery whose individual entries may not be recoverable (ELF PLT
+  /// families, Mach-O symbol stubs and stub helper).
+  std::vector<std::pair<va_t, va_t>> ImportStubRanges;
+  /// Loader/CRT invoked function entries whose calling convention is not an
+  /// ordinary user-function ABI.  Patch mode preserves these original bodies.
+  std::set<va_t> RuntimeFunctionAddrs;
   DynamicInfo DynInfo;
   /// Sorted (start, end) intervals describing code regions that already
   /// belong to a function.  Used by post-pdata scanners (padding scan,
@@ -435,8 +446,7 @@ struct BinaryImage {
   std::vector<va_t> getExecutableRanges() const {
     std::vector<va_t> Ranges;
     for (const auto &Seg : Segments) {
-      if (!Seg.isExecutable() || Seg.Size == 0 ||
-          Seg.Size > InvalidVA - Seg.VA)
+      if (!Seg.isExecutable() || Seg.Size == 0 || Seg.Size > InvalidVA - Seg.VA)
         continue;
       Ranges.push_back(Seg.VA);
       Ranges.push_back(Seg.VA + Seg.Size);
@@ -571,6 +581,14 @@ struct BinaryImage {
   const Export *findExport(llvm::StringRef Name) const {
     for (const auto &Exp : Exports)
       if (Exp.Name == Name)
+        return &Exp;
+    return nullptr;
+  }
+
+  /// Find an export by address.
+  const Export *findExportAt(va_t Addr) const {
+    for (const auto &Exp : Exports)
+      if (Exp.Addr == Addr)
         return &Exp;
     return nullptr;
   }
@@ -748,12 +766,97 @@ struct BinaryImage {
     return Result;
   }
 
-  /// Find an import by address.
+  /// Find an import by its format-native IAT address or an exact executable
+  /// veneer registered for it.
   const Import *findImportAt(va_t Addr) const {
     for (const auto &Imp : Imports)
       if (Imp.IATAddr == Addr)
         return &Imp;
+    auto It = ImportStubIndices.find(Addr);
+    if (It != ImportStubIndices.end() && It->second < Imports.size())
+      return &Imports[It->second];
     return nullptr;
+  }
+
+  /// Return every address spelling that can identify an import.  Data slots
+  /// remain present for indirect-call recovery; executable veneers add the
+  /// direct branch targets used by CFG and ABI recovery.
+  std::map<va_t, std::string> getImportAddressNames() const {
+    std::map<va_t, std::string> Result;
+    for (const auto &Imp : Imports)
+      if (Imp.IATAddr != 0 && !Imp.Name.empty())
+        Result.try_emplace(Imp.IATAddr, Imp.Name);
+    for (const auto &[Addr, Index] : ImportStubIndices)
+      if (Index < Imports.size() && !Imports[Index].Name.empty())
+        Result[Addr] = Imports[Index].Name;
+    return Result;
+  }
+
+  /// Resolve the best available display name for a function address.
+  std::string getFunctionNameAt(va_t Addr) const {
+    if (const Export *Exp = findExportAt(Addr); Exp && !Exp->Name.empty())
+      return Exp->Name;
+    if (const Symbol *Sym = findSymbolAt(Addr); Sym && !Sym->Name.empty())
+      return Sym->Name;
+    return (kAutoFuncPrefix + llvm::utohexstr(Addr)).str();
+  }
+
+  /// Register an executable import veneer without changing Import::IATAddr.
+  bool recordImportStub(va_t StubAddr, size_t ImportIndex) {
+    if (ImportIndex >= Imports.size())
+      return false;
+    const Segment *Seg = getSegmentFor(StubAddr);
+    if (!Seg || !Seg->isExecutable())
+      return false;
+    auto [It, Inserted] = ImportStubIndices.try_emplace(StubAddr, ImportIndex);
+    return Inserted || It->second == ImportIndex;
+  }
+
+  /// Register a checked half-open range of import/binder machinery.
+  bool recordImportStubRange(va_t Start, uint64_t Size) {
+    if (Size == 0 || Size > InvalidVA - Start)
+      return false;
+    const Segment *Seg = getSegmentFor(Start);
+    if (!Seg || !Seg->isExecutable() || Start - Seg->VA > Seg->Size ||
+        Size > Seg->Size - (Start - Seg->VA))
+      return false;
+    std::pair<va_t, va_t> Range{Start, Start + Size};
+    if (std::find(ImportStubRanges.begin(), ImportStubRanges.end(), Range) ==
+        ImportStubRanges.end())
+      ImportStubRanges.push_back(Range);
+    return true;
+  }
+
+  /// True when \p Addr is an exact or range-backed executable import veneer.
+  bool isImportStubAt(va_t Addr) const {
+    auto Exact = ImportStubIndices.find(Addr);
+    if (Exact != ImportStubIndices.end() && Exact->second < Imports.size())
+      return true;
+    for (const auto &[Start, End] : ImportStubRanges)
+      if (Addr >= Start && Addr < End)
+        return true;
+    // Compatibility for format loaders that historically put a code stub in
+    // IATAddr (Mach-O).  A PE/ELF data slot cannot pass the executable check.
+    for (const auto &Imp : Imports)
+      if (Imp.IATAddr == Addr) {
+        const Segment *Seg = getSegmentFor(Addr);
+        return Seg && Seg->isExecutable();
+      }
+    return false;
+  }
+
+  /// Record a structurally identified loader/runtime function when it maps to
+  /// executable code.  Address zero is valid for relocatable images.
+  bool recordRuntimeFunction(va_t Addr) {
+    const Segment *Seg = getSegmentFor(Addr);
+    if (!Seg || !Seg->isExecutable())
+      return false;
+    RuntimeFunctionAddrs.insert(Addr);
+    return true;
+  }
+
+  bool isRuntimeFunctionAt(va_t Addr) const {
+    return RuntimeFunctionAddrs.count(Addr) != 0;
   }
 
   /// Get imports for a specific module/library.

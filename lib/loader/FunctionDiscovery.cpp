@@ -27,14 +27,14 @@ namespace neverd {
 //
 // The per-architecture machine-code recognition lives in
 // FunctionDiscovery{X86,AArch64,ARM}.cpp; this dispatcher only builds the
-// import-target set and routes each executable segment by Arch.
+// import-target map and routes each executable segment by Arch.
 
 void scanImportThunks(BinaryImage &Img) {
-  std::set<va_t> TargetAddrs;
-  for (const auto &Imp : Img.Imports)
-    if (Imp.IATAddr)
-      TargetAddrs.insert(Imp.IATAddr);
-  if (TargetAddrs.empty())
+  std::map<va_t, size_t> TargetImports;
+  for (size_t I = 0; I < Img.Imports.size(); ++I)
+    if (Img.Imports[I].IATAddr != 0)
+      TargetImports.try_emplace(Img.Imports[I].IATAddr, I);
+  if (TargetImports.empty())
     return;
 
   auto Existing = Img.getSymbolAddresses();
@@ -46,13 +46,13 @@ void scanImportThunks(BinaryImage &Img) {
     switch (Img.Arch) {
     case Arch::X64:
     case Arch::X86:
-      Added += scanImportThunksX86(Img, Seg, TargetAddrs, Existing);
+      Added += scanImportThunksX86(Img, Seg, TargetImports, Existing);
       break;
     case Arch::AArch64:
-      Added += scanImportThunksAArch64(Img, Seg, TargetAddrs, Existing);
+      Added += scanImportThunksAArch64(Img, Seg, TargetImports, Existing);
       break;
     case Arch::ARM:
-      Added += scanImportThunksARM(Img, Seg, TargetAddrs, Existing);
+      Added += scanImportThunksARM(Img, Seg, TargetImports, Existing);
       break;
     default:
       break;

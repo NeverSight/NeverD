@@ -12,6 +12,7 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "PipelineReturnModeling.h"
+
 #include "neverd/Limits.h"
 #include "neverd/Support/Diagnostic.h"
 #include "neverd/Support/Parallel.h"
@@ -253,8 +254,8 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     const std::vector<std::pair<va_t, std::string>> &Imports,
     const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumShards) {
   const size_t N = Funcs.size();
-  NumShards = std::max(1u, std::min<unsigned>(NumShards, static_cast<unsigned>(
-                                                             N ? N : 1)));
+  NumShards = std::max(
+      1u, std::min<unsigned>(NumShards, static_cast<unsigned>(N ? N : 1)));
 
   // Assign each function to a shard by longest-processing-time bin packing:
   // sort by emitted-work weight (op count is a good proxy for both emit and
@@ -333,8 +334,8 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     Pool.reserve(NumThreads);
     for (unsigned T = 0; T < NumThreads; ++T)
       Pool.emplace_back([&] {
-        for (unsigned S; (S = Next.fetch_add(1, std::memory_order_relaxed)) <
-                         NumShards;)
+        for (unsigned S;
+             (S = Next.fetch_add(1, std::memory_order_relaxed)) < NumShards;)
           runShard(S);
       });
     for (auto &T : Pool)
@@ -351,13 +352,13 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     auto MOr = llvm::parseBitcodeFile(Buf, Ctx);
     if (!MOr) {
       llvm::WithColor::warning()
-          << "pipeline: shard " << S << " bitcode parse failed: "
-          << llvm::toString(MOr.takeError()) << "\n";
+          << "pipeline: shard " << S
+          << " bitcode parse failed: " << llvm::toString(MOr.takeError())
+          << "\n";
       continue;
     }
     if (L.linkInModule(std::move(*MOr)))
-      llvm::WithColor::warning()
-          << "pipeline: shard " << S << " link failed\n";
+      llvm::WithColor::warning() << "pipeline: shard " << S << " link failed\n";
   }
 
   // Restore the original (address-order) function layout.  Sharding + link
@@ -663,9 +664,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.Format);
 
   std::vector<std::pair<va_t, std::string>> ImportMap;
-  for (auto &Imp : Img.Imports)
-    if (Imp.IATAddr != 0)
-      ImportMap.push_back({Imp.IATAddr, Imp.Name});
+  for (const auto &[Addr, Name] : Img.getImportAddressNames())
+    ImportMap.emplace_back(Addr, Name);
 
   // Parallel emit + optimize (the two single-threaded phases that dominate
   // lift).  Only for lift mode — the patch backend depends on the serial path's
@@ -675,8 +675,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // below 8 functions the shard emit/verify/optimize/link setup outweighs the
   // parallelism it buys.
   unsigned HwCores = std::max(2u, std::thread::hardware_concurrency());
-  bool Parallel =
-      !Opts.PatchMode && HwCores > 1 && Result.MedFuncs.size() >= 8;
+  bool Parallel = !Opts.PatchMode && HwCores > 1 && Result.MedFuncs.size() >= 8;
   unsigned Shards = std::min<unsigned>(
       HwCores, static_cast<unsigned>(Result.MedFuncs.size()));
 

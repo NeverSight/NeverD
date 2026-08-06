@@ -21,29 +21,11 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <set>
-
 #define DEBUG_TYPE "neverd-pipeline"
 
 namespace neverd {
 
 namespace {
-
-bool isELFImportStub(const BinaryImage &Img, va_t Addr) {
-  if (!Img.isELF())
-    return false;
-
-  for (const auto &Sec : Img.Sections) {
-    if (!Sec.isExecutable() || !Sec.contains(Addr))
-      continue;
-    llvm::StringRef Name = Sec.Name;
-    if (Name == section_names::elf::Plt ||
-        Name.starts_with(section_names::elf::PltPrefix) ||
-        Name == section_names::elf::Iplt)
-      return true;
-  }
-  return false;
-}
 
 bool isELFRuntimeScaffold(llvm::StringRef Name) {
   return llvm::StringSwitch<bool>(Name)
@@ -154,9 +136,8 @@ Pipeline::buildFuncNameMap(const BinaryImage &Img,
   std::map<va_t, std::string> Names;
   for (auto &LF : Result.LowFuncs)
     Names[LF.Entry] = LF.Name;
-  for (auto &Imp : Img.Imports)
-    if (Imp.IATAddr != 0)
-      Names[Imp.IATAddr] = Imp.Name;
+  for (const auto &[Addr, Name] : Img.getImportAddressNames())
+    Names[Addr] = Name;
   return Names;
 }
 
@@ -175,24 +156,6 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
   if (Dbg && Dbg->hasInfo())
     mergeDebugSymbols(FuncEntries, *Dbg);
 
-  std::set<va_t> StubAddrs;
-  for (auto &Imp : Img.Imports)
-    if (Imp.IATAddr != 0)
-      StubAddrs.insert(Imp.IATAddr);
-
-  std::set<va_t> RuntimeAddrs;
-  if (Opts.PatchMode && Img.isELF()) {
-    if (Img.DynInfo.InitAddr != 0)
-      RuntimeAddrs.insert(Img.DynInfo.InitAddr);
-    if (Img.DynInfo.FiniAddr != 0)
-      RuntimeAddrs.insert(Img.DynInfo.FiniAddr);
-    RuntimeAddrs.insert(Img.DynInfo.InitArray.begin(),
-                        Img.DynInfo.InitArray.end());
-    RuntimeAddrs.insert(Img.DynInfo.FiniArray.begin(),
-                        Img.DynInfo.FiniArray.end());
-    RuntimeAddrs.erase(0);
-  }
-
   std::vector<std::pair<va_t, std::string>> Candidates;
   Candidates.reserve(Opts.MaxFunctions > 0
                          ? std::min(FuncEntries.size(), Opts.MaxFunctions + 64)
@@ -200,23 +163,18 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
   for (auto &[Entry, FName] : FuncEntries) {
     if (Opts.MaxFunctions > 0 && Candidates.size() >= Opts.MaxFunctions * 2)
       break;
-    // ELF import metadata points at the GOT slot, while direct calls target
-    // executable PLT stubs.  Treat the whole family of PLT sections as import
-    // machinery so lazy-binding register conventions remain intact.
-    if (StubAddrs.count(Entry) || isELFImportStub(Img, Entry))
+    // Preserve linker/dynamic-loader import veneers.  Loaders register section
+    // ranges (ELF PLT, Mach-O stubs/helper), while architecture scanners map
+    // exact COFF/ELF thunks back to their Import without changing IATAddr.
+    if (Img.isImportStubAt(Entry))
       continue;
-    // A process entry point follows the platform loader ABI, not an ordinary
-    // C function ABI.  Recompiling ELF `_start`, for example, discards the
-    // register setup that passes main/argc/argv to __libc_start_main.  Keep
-    // the original entry point in patch mode; calls it makes still reach
-    // rewritten functions through their installed trampolines.
-    if (Opts.PatchMode && Img.isELF() && Entry == Img.Entry)
-      continue;
-    // ELF startup/finalization routines run under dynamic-loader and CRT
-    // conventions.  Preserve both recorded dynamic entry points and their
-    // standard helper functions; user code remains eligible for rewriting.
-    if (Opts.PatchMode && Img.isELF() &&
-        (RuntimeAddrs.count(Entry) || isELFRuntimeScaffold(FName)))
+    // A loader entry or lifecycle callback may follow a process/TLS/CRT ABI,
+    // not an ordinary inferred C function signature.  Each loader records the
+    // exact structural targets.  The ELF name table remains only a
+    // compatibility fallback for old symbol-rich CRT scaffolding without
+    // metadata.
+    if (Opts.PatchMode && (Img.isRuntimeFunctionAt(Entry) ||
+                           (Img.isELF() && isELFRuntimeScaffold(FName))))
       continue;
     Candidates.push_back({Entry, FName});
   }

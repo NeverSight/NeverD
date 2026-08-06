@@ -33,7 +33,7 @@ bool readThumbMovImm16(const uint8_t *P, bool IsMovT, uint16_t &Imm) {
 }
 
 size_t scanThumbImportThunks(BinaryImage &Img, const Segment &Seg,
-                             const std::set<va_t> &Targets,
+                             const std::map<va_t, size_t> &Targets,
                              std::set<va_t> &Existing) {
   const uint8_t *D = Seg.Data.data();
   size_t N = Seg.Data.size();
@@ -53,9 +53,11 @@ size_t scanThumbImportThunks(BinaryImage &Img, const Segment &Seg,
 
     va_t Target = normalizeCodeAddress(uint32_t(Low) | (uint32_t(High) << 16),
                                        Img.Arch, Img.Mode);
-    if (!Targets.count(Target))
+    auto TargetIt = Targets.find(Target);
+    if (TargetIt == Targets.end())
       continue;
     va_t ThunkVA = normalizeCodeAddress(Seg.VA + I, Img.Arch, Img.Mode);
+    Img.recordImportStub(ThunkVA, TargetIt->second);
     if (!Existing.insert(ThunkVA).second)
       continue;
     Img.Symbols.push_back(Symbol::makeFunc(ThunkVA, arm::kThumbImportThunkLen));
@@ -67,7 +69,7 @@ size_t scanThumbImportThunks(BinaryImage &Img, const Segment &Seg,
 } // anonymous namespace
 
 size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
-                           const std::set<va_t> &Targets,
+                           const std::map<va_t, size_t> &Targets,
                            std::set<va_t> &Existing) {
   if (Img.Mode == InstructionMode::Thumb)
     return scanThumbImportThunks(Img, Seg, Targets, Existing);
@@ -84,9 +86,11 @@ size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
       continue;
     uint32_t AbsAddr = readLE<uint32_t>(D + I + arm::kInsnSize);
     va_t Target = AbsAddr;
-    if (!Targets.count(Target))
+    auto TargetIt = Targets.find(Target);
+    if (TargetIt == Targets.end())
       continue;
     va_t InsnVA = Seg.VA + I;
+    Img.recordImportStub(InsnVA, TargetIt->second);
     if (!Existing.insert(InsnVA).second)
       continue;
     Img.Symbols.push_back(Symbol::makeFunc(InsnVA, arm::kLdrPCTrampLen));

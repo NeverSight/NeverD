@@ -29,6 +29,7 @@
 
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -70,6 +71,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
 
   const Elf_Ehdr &EH = ELF.getHeader();
   bool IsRelocatable = (EH.e_type == ET_REL);
+  Img.IsRelocatable = IsRelocatable;
 
   Img.Arch = tripleToArch(Obj.getArch());
   if (Img.Arch == Arch::Unknown)
@@ -119,8 +121,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
         uint64_t A = SH.sh_addralign ? SH.sh_addralign : 1;
         if ((A & (A - 1)) != 0 || Next > InvalidVA - (A - 1))
           return llvm::make_error<llvm::StringError>(
-              "elf: invalid section alignment",
-              llvm::inconvertibleErrorCode());
+              "elf: invalid section alignment", llvm::inconvertibleErrorCode());
         Next = (Next + A - 1) & ~(A - 1);
         if (SH.sh_size > InvalidVA - Next)
           return llvm::make_error<llvm::StringError>(
@@ -156,8 +157,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
       return llvm::make_error<llvm::StringError>(
           "elf: PT_LOAD virtual address range overflows",
           llvm::inconvertibleErrorCode());
-    if (PH.p_filesz > 0 &&
-        !rangeInBounds(PH.p_offset, PH.p_filesz, Size))
+    if (PH.p_filesz > 0 && !rangeInBounds(PH.p_offset, PH.p_filesz, Size))
       return llvm::make_error<llvm::StringError>(
           "elf: PT_LOAD file range is out of bounds",
           llvm::inconvertibleErrorCode());
@@ -174,8 +174,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
       Seg.Data.assign(Data + PH.p_offset, Data + PH.p_offset + PH.p_filesz);
     // p_memsz is untrusted; only zero-fill up to the cap (see
     // kMaxSegmentZeroFill) so a crafted size cannot force a huge allocation.
-    if (PH.p_memsz > PH.p_filesz &&
-        PH.p_memsz <= limits::kMaxSegmentZeroFill)
+    if (PH.p_memsz > PH.p_filesz && PH.p_memsz <= limits::kMaxSegmentZeroFill)
       Seg.Data.resize(static_cast<size_t>(PH.p_memsz), 0);
 
     if (Seg.VA < Lo)
@@ -204,8 +203,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
         return llvm::make_error<llvm::StringError>(
             "elf: allocatable section range overflows",
             llvm::inconvertibleErrorCode());
-      if (Seg.FileSz > 0 &&
-          !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
+      if (Seg.FileSz > 0 && !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
         return llvm::make_error<llvm::StringError>(
             "elf: allocatable section file range is out of bounds",
             llvm::inconvertibleErrorCode());
@@ -261,8 +259,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
         (SH.sh_addralign != 0 &&
          (SH.sh_addralign & (SH.sh_addralign - 1)) != 0))
       return llvm::make_error<llvm::StringError>(
-          "elf: invalid section alignment",
-          llvm::inconvertibleErrorCode());
+          "elf: invalid section alignment", llvm::inconvertibleErrorCode());
     Sec.Alignment =
         SH.sh_addralign ? static_cast<uint32_t>(SH.sh_addralign) : 1;
     Sec.Flags = elfSHFlagsToNd(SH.sh_flags);
@@ -270,8 +267,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
       return llvm::make_error<llvm::StringError>(
           "elf: section virtual address range overflows",
           llvm::inconvertibleErrorCode());
-    if (Sec.FileSz > 0 &&
-        !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
+    if (Sec.FileSz > 0 && !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
       return llvm::make_error<llvm::StringError>(
           "elf: section file range is out of bounds",
           llvm::inconvertibleErrorCode());
@@ -307,8 +303,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
     llvm::StringRef SecName = GetSecName(SH);
     size_t Count = static_cast<size_t>(SH.sh_size / SH.sh_entsize);
     for (size_t I = 0; I < Count; ++I) {
-      uint64_t ROff64 =
-          SH.sh_offset + static_cast<uint64_t>(I) * SH.sh_entsize;
+      uint64_t ROff64 = SH.sh_offset + static_cast<uint64_t>(I) * SH.sh_entsize;
       RelocationEntry RE;
       uint32_t SymIdx = 0;
       if (IsRela) {
@@ -343,6 +338,11 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
             llvm::consumeError(SymNameOr.takeError());
         }
       }
+
+      if (!IsRelocatable)
+        elf_loader::recordIRelativeResolver(
+            RE.Type, RE.Address,
+            IsRela ? std::optional<int64_t>(RE.Addend) : std::nullopt, Img);
       Img.Relocations.push_back(std::move(RE));
     }
   }
@@ -407,8 +407,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
           if (SymsOr && RSym < SymsOr->size()) {
             const Elf_Sym &Sym = (*SymsOr)[RSym];
             SymVal = Sym.st_value;
-            if (Sym.st_shndx != SHN_UNDEF &&
-                Sym.st_shndx < SHN_LORESERVE) {
+            if (Sym.st_shndx != SHN_UNDEF && Sym.st_shndx < SHN_LORESERVE) {
               if (const Elf_Shdr *TSH = GetShdr(Sym.st_shndx)) {
                 if (SymVal > InvalidVA - SecBase[Sym.st_shndx])
                   continue;
@@ -513,7 +512,8 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
           const Segment *PSeg = Img.getSegmentFor(P);
           const Segment *TSeg = Img.getSegmentFor(AnchorVA);
           if (PSeg && PSeg->isExecutable() && TSeg && TSeg->isReadable() &&
-              !TSeg->isWritable() && !TSeg->isExecutable() && !TSeg->Data.empty())
+              !TSeg->isWritable() && !TSeg->isExecutable() &&
+              !TSeg->Data.empty())
             Img.RelCodeTableAnchors.insert(AnchorVA);
         };
 
@@ -808,17 +808,21 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
       uint8_t Bind = Sym.getBinding();
       uint8_t Type = Sym.getType();
 
-      if (Img.Arch == Arch::ARM && Type == STT_FUNC)
+      bool IsFunction = Type == STT_FUNC || Type == STT_GNU_IFUNC;
+      if (Img.Arch == Arch::ARM && IsFunction)
         Value = clearThumbBit(Value);
 
       Symbol S;
       S.Name = NameOr->str();
       S.Addr = Value;
       S.Size = Sym.st_size;
-      S.IsFunc = (Type == STT_FUNC);
+      S.IsFunc = IsFunction;
       Img.Symbols.push_back(std::move(S));
 
-      if (Type == STT_FUNC && (Bind == STB_GLOBAL || Bind == STB_WEAK)) {
+      if (Type == STT_GNU_IFUNC)
+        Img.recordRuntimeFunction(Value);
+
+      if (IsFunction && (Bind == STB_GLOBAL || Bind == STB_WEAK)) {
         Export Exp;
         Exp.Name = NameOr->str();
         Exp.Addr = Value;
@@ -841,6 +845,18 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
   // --- .rela.plt / .rel.plt imports ---
   elf_loader::parsePLTImports(ELF, *SectionsOr, Data, Size, Img);
 
+  // --- Loader-invoked lifecycle arrays and legacy constructor sections ---
+  elf_loader::parseRuntimeSections(Img);
+
+  // Every PLT family is dynamic-linker machinery even when a malformed or
+  // stripped indirect-symbol table prevents exact stub-to-import recovery.
+  for (const Section &Sec : Img.Sections) {
+    llvm::StringRef Name = Sec.Name;
+    if (Name == section_names::elf::Plt || Name == section_names::elf::Iplt ||
+        Name.starts_with(section_names::elf::PltPrefix))
+      Img.recordImportStubRange(Sec.VA, Sec.Size);
+  }
+
   // --- .got / .got.plt ---
   elf_loader::parseGOTEntries(ELF, *SectionsOr, Data, Size, Img);
 
@@ -854,6 +870,9 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
     elf_loader::addFunctionsFromEhFrameHdr(Data, Size, SH, Img);
     break;
   }
+
+  if (!IsRelocatable && EH.e_entry != 0)
+    Img.recordRuntimeFunction(Img.Entry);
 
   return llvm::Error::success();
 }

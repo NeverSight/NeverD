@@ -20,6 +20,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include <map>
 #include <set>
 
 namespace neverd {
@@ -32,17 +33,17 @@ namespace neverd {
 ///
 /// x86/x86-64: jmp [rip+disp32] (PE/IAT) or jmp [abs32].
 size_t scanImportThunksX86(BinaryImage &Img, const Segment &Seg,
-                           const std::set<va_t> &Targets,
+                           const std::map<va_t, size_t> &Targets,
                            std::set<va_t> &Existing);
 
 /// AArch64: ADRP x16 / LDR x16,[x16] / BR x16.
 size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
-                               const std::set<va_t> &Targets,
+                               const std::map<va_t, size_t> &Targets,
                                std::set<va_t> &Existing);
 
 /// ARM32: LDR pc,[pc,#-4] veneer followed by the absolute target word.
 size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
-                           const std::set<va_t> &Targets,
+                           const std::map<va_t, size_t> &Targets,
                            std::set<va_t> &Existing);
 
 } // namespace neverd
