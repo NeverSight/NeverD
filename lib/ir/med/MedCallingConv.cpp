@@ -23,6 +23,8 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -47,6 +49,52 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
                     BinaryFormat Fmt);
 
 namespace med_calling_conv_detail {
+ValueKey valueKey(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer}; }
+
+bool containsValue(const ValueSet &Values, const MedVar &V) {
+  return !V.isConst() && Values.contains(valueKey(V));
+}
+
+ValueSet computeForwardValueClosure(
+    const MedFunc &Func, llvm::ArrayRef<MedVar> Seeds,
+    llvm::function_ref<bool(const MedOp &, unsigned)> ForwardsInput) {
+  llvm::DenseMap<ValueKey, llvm::SmallVector<ValueKey, 2>> Successors;
+  auto AddEdge = [&](const MedVar &From, const MedVar &To) {
+    if (!From.isConst() && !To.isConst())
+      Successors[valueKey(From)].push_back(valueKey(To));
+  };
+
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        (void)Pred;
+        AddEdge(Arg, Phi.Output);
+      }
+
+    for (const MedOp &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        if (!Op.Output.isConst() && ForwardsInput(Op, I))
+          AddEdge(Op.Inputs[I], Op.Output);
+  }
+
+  ValueSet Reached;
+  llvm::SmallVector<ValueKey, 32> Worklist;
+  for (const MedVar &Seed : Seeds)
+    if (!Seed.isConst() && Reached.insert(valueKey(Seed)).second)
+      Worklist.push_back(valueKey(Seed));
+
+  while (!Worklist.empty()) {
+    ValueKey From = Worklist.pop_back_val();
+    auto It = Successors.find(From);
+    if (It == Successors.end())
+      continue;
+    for (const ValueKey &To : It->second)
+      if (Reached.insert(To).second)
+        Worklist.push_back(To);
+  }
+  return Reached;
+}
+
 /// Scan all blocks to determine the widest data width at which the entry
 /// live-in value of a parameter register is actually consumed. Returns 0 if
 /// no use found. Later SSA values in the same physical register are clobbers,

@@ -10,6 +10,8 @@
 namespace {
 
 using namespace neverd;
+using med_calling_conv_detail::computeForwardValueClosure;
+using med_calling_conv_detail::containsValue;
 using med_calling_conv_detail::findFirstUseSize;
 
 MedVar reg(int Id, int SSAVer, uint16_t Size, uint64_t RegOff, Arch TheArch) {
@@ -52,6 +54,61 @@ MedOp binary(NdOp Opcode, MedVar Output, MedVar Left, MedVar Right) {
 
 void addLiveIn(MedBlock &Entry, const MedVar &LiveIn) {
   Entry.Ops.push_back(unary(NdOp::COPY, LiveIn, LiveIn));
+}
+
+TEST(MedCallingConvValueClosure, ReachesReverseBlockOrderChain) {
+  MedVar Seed = temp(1, 0, 4, Arch::X86);
+  MedVar Mid = temp(2, 0, 4, Arch::X86);
+  MedVar End = temp(3, 0, 4, Arch::X86);
+
+  MedFunc Func;
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Ops.push_back(unary(NdOp::COPY, End, Mid));
+  Func.Blocks[1].Ops.push_back(unary(NdOp::COPY, Mid, Seed));
+
+  auto Values =
+      computeForwardValueClosure(Func, Seed, [](const MedOp &Op, unsigned I) {
+        return Op.Opcode == NdOp::COPY && I == 0;
+      });
+
+  EXPECT_TRUE(containsValue(Values, Mid));
+  EXPECT_TRUE(containsValue(Values, End));
+}
+
+TEST(MedCallingConvValueClosure, TerminatesOnPhiCycle) {
+  MedVar Seed = temp(1, 0, 4, Arch::X86);
+  MedVar Merged = temp(2, 0, 4, Arch::X86);
+  MedVar Backedge = temp(3, 0, 4, Arch::X86);
+
+  MedFunc Func;
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Phis.push_back({Merged, {{0, Seed}, {1, Backedge}}});
+  Func.Blocks[1].Ops.push_back(unary(NdOp::COPY, Backedge, Merged));
+
+  auto Values =
+      computeForwardValueClosure(Func, Seed, [](const MedOp &Op, unsigned I) {
+        return Op.Opcode == NdOp::COPY && I == 0;
+      });
+
+  EXPECT_TRUE(containsValue(Values, Merged));
+  EXPECT_TRUE(containsValue(Values, Backedge));
+}
+
+TEST(MedCallingConvValueClosure, StopsAtNonForwardingOperation) {
+  MedVar Seed = temp(1, 0, 4, Arch::X86);
+  MedVar Product = temp(2, 0, 4, Arch::X86);
+
+  MedFunc Func;
+  Func.Blocks.resize(1);
+  Func.Blocks[0].Ops.push_back(
+      binary(NdOp::INT_MULT, Product, Seed, MedVar::makeConst(2, 4)));
+
+  auto Values =
+      computeForwardValueClosure(Func, Seed, [](const MedOp &Op, unsigned I) {
+        return Op.Opcode == NdOp::COPY && I == 0;
+      });
+
+  EXPECT_FALSE(containsValue(Values, Product));
 }
 
 TEST(MedCallingConvValueFlow, FindsNarrowUseThroughBranchPhi) {
