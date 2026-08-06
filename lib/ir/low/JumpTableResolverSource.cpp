@@ -22,6 +22,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/libc/LibCNames.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -541,12 +542,6 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
   // code-pointer reloc run.  The reloc-run gate is the table signature, so a
   // non-table memcpy into a stack buffer is never misread.
   if (BestSource == InvalidVA && TRI.IntParamRegs.size() >= 2) {
-    auto isMemCopyName = [](llvm::StringRef N) {
-      while (N.starts_with("_"))
-        N = N.drop_front();
-      return N == "memcpy" || N == "memmove" || N == "__memcpy_chk" ||
-             N == "__memmove_chk";
-    };
     for (int I = 0; I < static_cast<int>(FuncOps.size()); ++I) {
       const LowOp &Op = FuncOps[I];
       if (Op.Opcode != NdOp::CALL || Op.NumInputs < 1 ||
@@ -555,10 +550,10 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
       va_t Target = static_cast<va_t>(Op.Inputs[0].Offset);
       bool IsCopy = false;
       if (const Import *Imp = Img.findImportAt(Target))
-        IsCopy = isMemCopyName(Imp->Name);
+        IsCopy = libc::isMemCopyName(Imp->Name);
       if (!IsCopy)
         if (const Symbol *Sym = Img.findSymbolAt(Target))
-          IsCopy = isMemCopyName(Sym->Name);
+          IsCopy = libc::isMemCopyName(Sym->Name);
       // Relocatable objects (the lift roundtrip input) leave the call's
       // constant target at the placeholder 0 — the real callee is named by a
       // relocation at the call instruction (x86 `call rel32` reloc at +1,
@@ -570,7 +565,7 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
       if (!IsCopy)
         for (const RelocationEntry &R : Img.Relocations)
           if ((R.Address == Op.Addr || R.Address == Op.Addr + 1) &&
-              !R.SymbolName.empty() && isMemCopyName(R.SymbolName)) {
+              !R.SymbolName.empty() && libc::isMemCopyName(R.SymbolName)) {
             IsCopy = true;
             break;
           }

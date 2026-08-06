@@ -11,6 +11,7 @@
 
 #include "neverd/libc/LibCNames.h"
 
+#include "neverd/Common.h"
 #include "neverd/libc/LibCAssert.h"
 #include "neverd/libc/LibCComplex.h"
 #include "neverd/libc/LibCCtype.h"
@@ -63,6 +64,8 @@
 #include "neverd/libc/sys/LibCUio.h"
 #include "neverd/libc/sys/LibCUtsname.h"
 #include "neverd/libc/sys/LibCWait.h"
+
+#include "llvm/ADT/StringSwitch.h"
 
 #include <array>
 #include <optional>
@@ -195,68 +198,20 @@ const ArityRegistry &getArityRegistry() {
 // the same style as the kXxxArity tables above rather than scattered as inline
 // string comparisons inside varArgFixedCount/isVaListConsumer.
 
-// A (name, fixed-parameter-count) row of a variadic-function table: the number
-// of parameters before the trailing "..." for the named function.
-struct VarArgEntry {
-  std::string_view Name;
-  unsigned FixedCount;
-};
+unsigned fortifiedChkFixedCount(std::string_view Core) {
+  return llvm::StringSwitch<unsigned>(Core)
+#define LIBC_FORTIFIED_CHK_FIXED(Name, Count) .Case(Name, Count)
+#include "neverd/libc/LibCFortifiedChkFixed.inc"
+#undef LIBC_FORTIFIED_CHK_FIXED
+      .Default(0);
+}
 
-// Fortified _FORTIFY_SOURCE forms `__<core>_chk` prepend guard arguments (a
-// flag, and for the buffer-writing forms the destination/object size) before
-// the format string, so they carry more fixed parameters than the plain
-// `<core>` they wrap.  Keyed by the core name with leading underscores and the
-// `_chk` suffix already stripped.
-inline constexpr auto kFortifiedChkFixed = std::to_array<VarArgEntry>({
-    {"printf", 2},   // (flag, fmt, ...)
-    {"fprintf", 3},  // (stream, flag, fmt, ...)
-    {"dprintf", 3},  // (fd, flag, fmt, ...)
-    {"asprintf", 3}, // (&buf, flag, fmt, ...)
-    {"sprintf", 4},  // (buf, flag, slen, fmt, ...)
-    {"snprintf", 5}, // (buf, maxlen, flag, slen, fmt, ...)
-});
-
-// Irregular variadic functions whose fixed-parameter count is not derivable
-// from a printf/scanf suffix (the syslog/err/warn families, and the POSIX
-// open/fcntl/ioctl/exec*/mq_open/sem_open forms).  Each takes one fixed
-// parameter before "...".
-inline constexpr auto kIrregularVarArg = std::to_array<VarArgEntry>({
-    {"syslog", 1},
-    {"err", 1},
-    {"errx", 1},
-    {"warn", 1},
-    {"warnx", 1},
-    {"open", 1},
-    {"openat", 1},
-    {"fcntl", 1},
-    {"ioctl", 1},
-    {"execl", 1},
-    {"execlp", 1},
-    {"execle", 1},
-    {"mq_open", 1},
-    {"sem_open", 1},
-});
-
-// Irregular `va_list`-consuming functions with no printf/scanf suffix (the
-// v-prefixed syslog/err/warn forms).
-inline constexpr auto kIrregularVaListConsumers =
-    std::to_array<std::string_view>({
-        "vsyslog",
-        "verr",
-        "verrx",
-        "vwarn",
-        "vwarnx",
-    });
-
-// Looks up Name in a (name, fixed-count) table; nullopt if absent.
-template <size_t N>
-std::optional<unsigned>
-lookupFixedCount(const std::array<VarArgEntry, N> &Table,
-                 std::string_view Name) {
-  for (const VarArgEntry &E : Table)
-    if (E.Name == Name)
-      return E.FixedCount;
-  return std::nullopt;
+unsigned irregularVarArgFixedCount(std::string_view Name) {
+  return llvm::StringSwitch<unsigned>(Name)
+#define LIBC_IRREGULAR_VARARG(Name, Count) .Case(Name, Count)
+#include "neverd/libc/LibCIrregularVarArg.inc"
+#undef LIBC_IRREGULAR_VARARG
+      .Default(0);
 }
 
 } // anonymous namespace
@@ -288,7 +243,7 @@ unsigned varArgFixedCount(std::string_view Name) {
   // '_' (a Mach-O symbol prefix), so the name arrives as "__snprintf_chk"
   // (Mach-O) or
   // "_snprintf_chk" (ELF over-strip); normalize by dropping every leading
-  // underscore, then map the core name through kFortifiedChkFixed.
+  // underscore, then map the core name through LibCFortifiedChkFixed.inc.
   if (Name.ends_with("_chk")) {
     std::string_view Core = Name.substr(0, Name.size() - 4);
     while (!Core.empty() && Core.front() == '_')
@@ -296,7 +251,7 @@ unsigned varArgFixedCount(std::string_view Name) {
     // v*_chk take a va_list, not "...", so they are not variadic.
     if (!Core.empty() && Core.front() == 'v')
       return 0;
-    return lookupFixedCount(kFortifiedChkFixed, Core).value_or(0);
+    return fortifiedChkFixedCount(Core);
   }
 
   // The *printf / *scanf families: the fixed-parameter count follows from the
@@ -309,9 +264,12 @@ unsigned varArgFixedCount(std::string_view Name) {
       return 0;
     // "printf" / "scanf" (and the wide w* forms) alone → 1 fixed (format
     // string).
-    if (Name == "printf" || Name == "scanf" || Name == "wprintf" ||
-        Name == "wscanf")
-      return 1;
+    if (unsigned Count = llvm::StringSwitch<unsigned>(Name)
+#define LIBC_VARARG_FORMAT_NAME(Name, FixedCount) .Case(Name, FixedCount)
+#include "neverd/libc/LibCVarArgFormatNames.inc"
+#undef LIBC_VARARG_FORMAT_NAME
+            .Default(0))
+      return Count;
     // "snprintf", "snwprintf", "swprintf" → 3 fixed (buf + size + fmt).  C99
     // swprintf has the same signature shape as snprintf.
     if (Name.substr(0, 2) == "sn" || Name == "swprintf")
@@ -321,7 +279,7 @@ unsigned varArgFixedCount(std::string_view Name) {
   }
 
   // Irregular variadic functions with no printf/scanf suffix.
-  return lookupFixedCount(kIrregularVarArg, Name).value_or(0);
+  return irregularVarArgFixedCount(Name);
 }
 
 bool isVaListConsumer(std::string_view Name) {
@@ -335,41 +293,50 @@ bool isVaListConsumer(std::string_view Name) {
       (Name.ends_with("printf") || Name.ends_with("scanf")))
     return true;
   // Irregular va_list consumers (no printf/scanf suffix).
-  for (std::string_view S : kIrregularVaListConsumers)
-    if (Name == S)
-      return true;
-  return false;
+  return llvm::StringSwitch<bool>(Name)
+#define LIBC_VA_LIST_CONSUMER(Name) .Case(Name, true)
+#include "neverd/libc/LibCVaListConsumers.inc"
+#undef LIBC_VA_LIST_CONSUMER
+      .Default(false);
 }
 
 bool isNoReturnFunction(std::string_view Name) {
-  while (!Name.empty() && Name.front() == '_')
-    Name.remove_prefix(1);
   // Every entry is unconditionally __attribute__((noreturn)) in its standard
   // header.  Names whose canonical form keeps a leading underscore appear here
   // already underscore-stripped (_exit -> "exit", _Exit -> "Exit").  Functions
   // that only *sometimes* return (warn/warnx, GNU error/error_at_line) are
   // deliberately excluded so the CFG builder never drops genuinely reachable
   // fall-through code.
-  static constexpr std::string_view kNoReturn[] = {
-      "abort",          "exit",       "Exit",
-      "quick_exit",     "longjmp",    "siglongjmp",
-      "pthread_exit",   "thrd_exit",  "err",
-      "errx",           "verr",       "verrx",
-      "assert_fail",    "assert_rtn", "assert_perror_fail",
-      "stack_chk_fail", "cxa_throw",  "cxa_rethrow",
-      "Unwind_Resume",
-  };
-  for (std::string_view S : kNoReturn)
-    if (Name == S)
-      return true;
-  return false;
+  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
+#define LIBC_NO_RETURN_SYMBOL(Name) .Case(Name, true)
+#include "neverd/libc/LibCNoReturn.inc"
+#undef LIBC_NO_RETURN_SYMBOL
+      .Default(false);
 }
 
 bool isReturnsTwiceFunction(std::string_view Name) {
-  while (!Name.empty() && Name.front() == '_')
-    Name.remove_prefix(1);
   // setjmp / _setjmp / sigsetjmp / __sigsetjmp all normalize to one of these.
-  return Name == "setjmp" || Name == "sigsetjmp";
+  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
+#define LIBC_RETURNS_TWICE_SYMBOL(Name) .Case(Name, true)
+#include "neverd/libc/LibCReturnsTwice.inc"
+#undef LIBC_RETURNS_TWICE_SYMBOL
+      .Default(false);
+}
+
+bool isMemCopyName(std::string_view Name) {
+  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
+#define LIBC_MEM_COPY_SYMBOL(Name) .Case(Name, true)
+#include "neverd/libc/LibCMemCopyNames.inc"
+#undef LIBC_MEM_COPY_SYMBOL
+      .Default(false);
+}
+
+bool isMemSetName(std::string_view Name) {
+  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
+#define LIBC_MEM_SET_SYMBOL(Name) .Case(Name, true)
+#include "neverd/libc/LibCMemSetNames.inc"
+#undef LIBC_MEM_SET_SYMBOL
+      .Default(false);
 }
 
 } // namespace neverd::libc

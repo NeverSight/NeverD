@@ -2,6 +2,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Object/SectionNames.h"
 #include "neverd/Support/BinaryEncoding.h"
 #include "neverd/Support/ISAEncoding.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
@@ -188,7 +189,7 @@ TEST(FunctionDiscoveryThumb, NormalizesTLSCallbackCodePointers) {
     auto NameOrErr = SecRef.getName();
     ASSERT_TRUE(static_cast<bool>(NameOrErr))
         << llvm::toString(NameOrErr.takeError());
-    if (*NameOrErr != ".rdata")
+    if (*NameOrErr != section_names::coff::Rdata)
       continue;
     const llvm::object::coff_section *Sec = Obj->getCOFFSection(SecRef);
     ASSERT_NE(Sec, nullptr);

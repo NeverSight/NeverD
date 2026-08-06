@@ -29,7 +29,7 @@ inline constexpr const char *kDefaultNdTextSegment = "__NDTEXT";
 struct MachOPatchOptions : PatchOptionsBase {
   std::string SegmentName = kDefaultNdTextSegment;
 
-  MachOPatchOptions() { SectionName = "__ndtext"; }
+  MachOPatchOptions() { SectionName = kNdTextSectionMachO.str(); }
 };
 
 class MachOPatcher : public BinaryPatcher {

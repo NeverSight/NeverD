@@ -214,3 +214,67 @@ TEST(HeaderFor, UnknownReturnsNull) {
   EXPECT_EQ(headerFor("not_a_real_function"), nullptr);
   EXPECT_EQ(headerFor(""), nullptr);
 }
+
+// =====================================================================
+// isMemCopyName / isMemSetName
+// =====================================================================
+
+TEST(IsMemCopyName, RecognizesCopyFamily) {
+  EXPECT_TRUE(isMemCopyName("memcpy"));
+  EXPECT_TRUE(isMemCopyName("memmove"));
+  EXPECT_TRUE(isMemCopyName("memcpy_chk"));
+  EXPECT_TRUE(isMemCopyName("memmove_chk"));
+  EXPECT_TRUE(isMemCopyName("_memcpy"));
+  EXPECT_TRUE(isMemCopyName("__memcpy"));
+}
+
+TEST(IsMemCopyName, RejectsUnrelated) {
+  EXPECT_FALSE(isMemCopyName("memset"));
+  EXPECT_FALSE(isMemCopyName("memcmp"));
+  EXPECT_FALSE(isMemCopyName("strlen"));
+  EXPECT_FALSE(isMemCopyName(""));
+}
+
+TEST(IsMemSetName, RecognizesSetFamily) {
+  EXPECT_TRUE(isMemSetName("memset"));
+  EXPECT_TRUE(isMemSetName("memset_chk"));
+  EXPECT_TRUE(isMemSetName("_memset"));
+  EXPECT_TRUE(isMemSetName("__memset"));
+}
+
+TEST(IsMemSetName, RejectsUnrelated) {
+  EXPECT_FALSE(isMemSetName("memcpy"));
+  EXPECT_FALSE(isMemSetName("memmove"));
+  EXPECT_FALSE(isMemSetName(""));
+}
+
+// =====================================================================
+// isNoReturnFunction / isReturnsTwiceFunction
+// =====================================================================
+
+TEST(IsNoReturnFunction, Terminators) {
+  EXPECT_TRUE(isNoReturnFunction("abort"));
+  EXPECT_TRUE(isNoReturnFunction("exit"));
+  EXPECT_TRUE(isNoReturnFunction("_exit"));
+  EXPECT_TRUE(isNoReturnFunction("longjmp"));
+  EXPECT_TRUE(isNoReturnFunction("_longjmp"));
+}
+
+TEST(IsNoReturnFunction, SometimesReturningExcluded) {
+  EXPECT_FALSE(isNoReturnFunction("warn"));
+  EXPECT_FALSE(isNoReturnFunction("warnx"));
+  EXPECT_FALSE(isNoReturnFunction("printf"));
+}
+
+TEST(IsReturnsTwiceFunction, SetjmpFamily) {
+  EXPECT_TRUE(isReturnsTwiceFunction("setjmp"));
+  EXPECT_TRUE(isReturnsTwiceFunction("sigsetjmp"));
+  EXPECT_TRUE(isReturnsTwiceFunction("_setjmp"));
+  EXPECT_TRUE(isReturnsTwiceFunction("__sigsetjmp"));
+}
+
+TEST(IsReturnsTwiceFunction, RejectsUnrelated) {
+  EXPECT_FALSE(isReturnsTwiceFunction("longjmp"));
+  EXPECT_FALSE(isReturnsTwiceFunction("malloc"));
+  EXPECT_FALSE(isReturnsTwiceFunction(""));
+}

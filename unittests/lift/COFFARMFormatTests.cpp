@@ -9,6 +9,7 @@
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/Object/SectionNames.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/FunctionDiscovery.h"
 
@@ -508,7 +509,7 @@ std::optional<uint32_t> oddDataRVA(const llvm::object::COFFObjectFile &Obj) {
       llvm::consumeError(NameOrErr.takeError());
       continue;
     }
-    if (*NameOrErr != ".data")
+    if (*NameOrErr != section_names::coff::Data)
       continue;
     const llvm::object::coff_section *Sec = Obj.getCOFFSection(SecRef);
     if (!Sec)
@@ -923,7 +924,7 @@ TEST_F(COFFARMFormat, TruncatedARM64XDataIsSkipped) {
       llvm::consumeError(NameOrErr.takeError());
       continue;
     }
-    if (*NameOrErr == ".pdata") {
+    if (*NameOrErr == section_names::coff::Pdata) {
       PData = Obj->getCOFFSection(SecRef);
       break;
     }

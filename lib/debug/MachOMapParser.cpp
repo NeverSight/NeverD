@@ -89,9 +89,7 @@ void parseMachOMap(llvm::StringRef Content,
       if (AddrStr.getAsInteger(0, Addr) || SizeStr.getAsInteger(0, Size))
         continue;
 
-      bool IsCode = (Segment == section_names::macho::TextSeg &&
-                     (SecName == section_names::macho::Text ||
-                      SecName == section_names::macho::Stubs));
+      bool IsCode = section_names::isMachOExecutableMapSection(Segment, SecName);
       if (IsCode) {
         MachOSectionRange SR;
         SR.Addr = static_cast<va_t>(Addr);

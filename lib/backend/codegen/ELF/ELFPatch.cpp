@@ -233,7 +233,7 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
 
         uint64_t TextSize = Img.Bytes.size();
         uint64_t Placed =
-            appendExecSegment(Binary, Img.Bytes, ".ndtext", TargetArch);
+            appendExecSegment(Binary, Img.Bytes, kNdTextSection, TargetArch);
         if (Placed == 0) {
           llvm::WithColor::error() << "elf_patch: appendExecSegment failed\n";
           return false;

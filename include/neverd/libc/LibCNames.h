@@ -113,6 +113,14 @@ bool isNoReturnFunction(std::string_view Name);
 /// platform underscores are stripped internally.
 bool isReturnsTwiceFunction(std::string_view Name);
 
+/// True if \p Name names a memory-copy libc routine (memcpy/memmove and their
+/// fortified forms).  Leading platform underscores are stripped internally.
+bool isMemCopyName(std::string_view Name);
+
+/// True if \p Name names a memory-set libc routine (memset and its fortified
+/// form).  Leading platform underscores are stripped internally.
+bool isMemSetName(std::string_view Name);
+
 } // namespace neverd::libc
 
 #endif // NEVERD_LIBC_LIBCNAMES_H

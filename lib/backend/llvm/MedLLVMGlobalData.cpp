@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
+#include "neverd/Object/SectionNames.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 
@@ -99,7 +100,8 @@ MedLLVMEmitter::embedRodataRun(uint64_t SegVA) {
   auto *Init = llvm::ConstantDataArray::get(*Ctx, llvm::ArrayRef<uint8_t>(Buf));
   auto *GV = new llvm::GlobalVariable(
       *Mod, ArrTy, /*isConstant=*/true, dataLinkage(), Init,
-      (kNdDataPrefix + llvm::utohexstr(RunStart)).str() + ".rodata");
+      (kNdDataPrefix + llvm::utohexstr(RunStart)).str() +
+          section_names::elf::Rodata);
   GV->setAlignment(llvm::Align(16));
   markSharedLocal(GV);
   SegmentDataGlobals[RunStart] = GV;
@@ -121,7 +123,8 @@ MedLLVMEmitter::embedExecSegmentRun(const Segment *Seg) {
       llvm::ConstantDataArray::get(*Ctx, llvm::ArrayRef<uint8_t>(Seg->Data));
   auto *GV = new llvm::GlobalVariable(
       *Mod, ArrTy, /*isConstant=*/true, dataLinkage(), Init,
-      (kNdDataPrefix + llvm::utohexstr(RunStart)).str() + ".rodata");
+      (kNdDataPrefix + llvm::utohexstr(RunStart)).str() +
+          section_names::elf::Rodata);
   GV->setAlignment(llvm::Align(16));
   markSharedLocal(GV);
   SegmentDataGlobals[RunStart] = GV;
@@ -133,7 +136,7 @@ bool MedLLVMEmitter::isMutableDataSeg(const Segment *S) const {
     return false;
   // RELRO is writable in section flags but a relocated pointer table that is
   // read-only after relocation; it is owned by the pointer-table machinery.
-  if (llvm::StringRef(S->Name).starts_with(".data.rel.ro"))
+  if (section_names::isDataRelRoSectionName(S->Name))
     return false;
   if (!Img)
     return true;
@@ -165,7 +168,7 @@ bool MedLLVMEmitter::segHasPtrRelocSlots(const Segment *S) const {
 bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
   return S && S->isReadable() && !S->isExecutable() && !S->Data.empty() &&
          (!S->isWritable() ||
-          llvm::StringRef(S->Name).starts_with(".data.rel.ro"));
+          section_names::isDataRelRoSectionName(S->Name));
 }
 
 void MedLLVMEmitter::readOnlyAfterRelocRun(const Segment *Seg,
@@ -304,7 +307,8 @@ MedLLVMEmitter::embedWritableRun(uint64_t SegVA) {
   auto *Init = llvm::ConstantDataArray::get(*Ctx, llvm::ArrayRef<uint8_t>(Buf));
   auto *GV = new llvm::GlobalVariable(
       *Mod, ArrTy, /*isConstant=*/false, dataLinkage(), Init,
-      (kNdDataPrefix + llvm::utohexstr(RunStart)).str() + ".data");
+      (kNdDataPrefix + llvm::utohexstr(RunStart)).str() +
+          section_names::elf::Data);
   GV->setAlignment(llvm::Align(16));
   markSharedLocal(GV);
   WritableSegmentGlobals[RunStart] = GV;
@@ -1569,7 +1573,7 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
     auto *Init = llvm::ConstantDataArray::get(
         *Ctx, llvm::ArrayRef<uint8_t>(Start, EmbedLen));
     auto *GV = new llvm::GlobalVariable(*Mod, ArrTy, true, dataLinkage(), Init,
-                                        SymName + ".rodata");
+                                        SymName + section_names::elf::Rodata);
     GV->setAlignment(llvm::Align(4));
     markSharedLocal(GV);
     llvm::Constant *Indices[] = {Zero, Zero};
@@ -1600,9 +1604,10 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
       // fold the length into the name so two globals only ever share a name
       // when they share content (ODR-safe); standalone mode keeps the plain
       // per-address name (one emitter, one length).
-      std::string GName = MergeableGlobals ? (SymName + "." +
-                                              llvm::utostr(NBytes) + ".rodata")
-                                           : (SymName + ".rodata");
+      std::string GName = MergeableGlobals
+                              ? (SymName + "." + llvm::utostr(NBytes) +
+                                 section_names::elf::Rodata)
+                              : (SymName + section_names::elf::Rodata);
       auto *GV = new llvm::GlobalVariable(*Mod, ArrTy, IsConst, dataLinkage(),
                                           Init, GName);
       unsigned Al = (TypeSize > 0 && TypeSize <= 16) ? TypeSize : 1;

@@ -20,7 +20,7 @@ static BinaryImage makeDummyImage() {
   Img.Arch = Arch::X64;
   Img.Format = BinaryFormat::ELF;
   Segment Seg;
-  Seg.Name = ".text";
+  Seg.Name = section_names::elf::Text;
   Seg.VA = 0x1000;
   Seg.Size = 256;
   Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;

@@ -20,6 +20,8 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Object/SectionNames.h"
+
 #include <unicorn/unicorn.h>
 
 #include "llvm/MC/MCAsmBackend.h"
@@ -251,7 +253,7 @@ public:
       auto NameOrErr = Sec.getName();
       if (!NameOrErr)
         continue;
-      if (*NameOrErr == ".text") {
+      if (*NameOrErr == section_names::elf::Text) {
         auto ContentsOrErr = Sec.getContents();
         if (!ContentsOrErr)
           continue;

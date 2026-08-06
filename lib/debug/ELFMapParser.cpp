@@ -70,12 +70,8 @@ void parseELFMap(llvm::StringRef Content,
       if (LastToken.contains(":(.") || LastToken.contains(":("))
         continue;
 
-      bool IsCodeSection = llvm::StringRef(CurrentSection)
-                               .starts_with(section_names::elf::Text) ||
-                           CurrentSection == section_names::elf::Init ||
-                           CurrentSection == section_names::elf::Fini ||
-                           CurrentSection == section_names::elf::Plt ||
-                           CurrentSection == section_names::elf::PltGot;
+      bool IsCodeSection =
+          section_names::isELFExecutableMapSection(CurrentSection);
 
       if (IsCodeSection) {
         std::string Name = LastToken.str();

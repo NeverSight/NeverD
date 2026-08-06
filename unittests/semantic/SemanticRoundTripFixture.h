@@ -28,6 +28,8 @@
 
 #include "../TestProcess.h"
 #include "UnicornSemanticFixture.h"
+#include "neverd/Object/SectionNames.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/Object/ELFObjectFile.h"
@@ -582,14 +584,12 @@ private:
       if (!NameOrErr)
         continue;
       llvm::StringRef Name = *NameOrErr;
-      if (Name == ".text") {
+      if (Name == section_names::elf::Text) {
         if (auto C = Sec.getContents())
           SD.Text = {C->begin(), C->end()};
         continue;
       }
-      bool IsData = Name.starts_with(".rodata") || Name == ".data.rel.ro" ||
-                    Name == ".data" || Name.starts_with(".data.") ||
-                    Name == ".bss" || Name.starts_with(".bss.");
+      bool IsData = section_names::isElfImageDataSectionName(Name);
       if (!IsData)
         continue;
       DataSeg Seg;
@@ -662,7 +662,7 @@ private:
       if (!NameOrErr)
         continue;
       llvm::StringRef N = *NameOrErr;
-      if (N == "memcpy" || N == "memset" || N == "memmove")
+      if (libc::isMemCopyName(N) || libc::isMemSetName(N))
         return true;
     }
     return false;
@@ -734,7 +734,7 @@ private:
       auto NameOrErr = Sec.getName();
       if (!NameOrErr)
         continue;
-      if (*NameOrErr == ".text") {
+      if (*NameOrErr == section_names::elf::Text) {
         auto ContentsOrErr = Sec.getContents();
         if (!ContentsOrErr)
           continue;

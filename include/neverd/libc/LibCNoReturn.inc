@@ -1,0 +1,22 @@
+// libc/POSIX functions that never return to their caller.
+// Included by LibCNames.cpp with LIBC_NO_RETURN_SYMBOL defined.
+
+LIBC_NO_RETURN_SYMBOL("abort")
+LIBC_NO_RETURN_SYMBOL("exit")
+LIBC_NO_RETURN_SYMBOL("Exit")
+LIBC_NO_RETURN_SYMBOL("quick_exit")
+LIBC_NO_RETURN_SYMBOL("longjmp")
+LIBC_NO_RETURN_SYMBOL("siglongjmp")
+LIBC_NO_RETURN_SYMBOL("pthread_exit")
+LIBC_NO_RETURN_SYMBOL("thrd_exit")
+LIBC_NO_RETURN_SYMBOL("err")
+LIBC_NO_RETURN_SYMBOL("errx")
+LIBC_NO_RETURN_SYMBOL("verr")
+LIBC_NO_RETURN_SYMBOL("verrx")
+LIBC_NO_RETURN_SYMBOL("assert_fail")
+LIBC_NO_RETURN_SYMBOL("assert_rtn")
+LIBC_NO_RETURN_SYMBOL("assert_perror_fail")
+LIBC_NO_RETURN_SYMBOL("stack_chk_fail")
+LIBC_NO_RETURN_SYMBOL("cxa_throw")
+LIBC_NO_RETURN_SYMBOL("cxa_rethrow")
+LIBC_NO_RETURN_SYMBOL("Unwind_Resume")

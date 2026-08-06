@@ -85,7 +85,7 @@ struct TextLayout {
 // ===--------------------------------------------------------------------===//
 
 struct PatchOptionsBase {
-  std::string SectionName = ".ndtext";
+  std::string SectionName = kNdTextSection.str();
 };
 
 // ===--------------------------------------------------------------------===//

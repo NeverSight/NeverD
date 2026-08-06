@@ -135,7 +135,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (Op.Opcode == NdOp::CALL && CI && Args.size() >= 3) {
     std::string LibNameStr = resolveCalleeName();
     llvm::StringRef LibName = stripLeadingUnderscores(LibNameStr);
-    if (LibName == "memset") {
+    if (libc::isMemSetName(LibName)) {
       llvm::Value *Dest = Args[0];
       if (Dest->getType()->isIntegerTy()) {
         llvm::Value *Sym = (CI && !CI->Args.empty())

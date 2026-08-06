@@ -65,11 +65,8 @@ void parseGNUldMap(llvm::StringRef Content,
       continue;
     }
 
-    bool IsCodeSection = llvm::StringRef(CurrentOutSection)
-                             .starts_with(section_names::elf::Text) ||
-                         CurrentOutSection == section_names::elf::Init ||
-                         CurrentOutSection == section_names::elf::Fini ||
-                         CurrentOutSection == section_names::elf::Plt;
+    bool IsCodeSection =
+        section_names::isELFExecutableMapSection(CurrentOutSection);
 
     if (!IsCodeSection)
       continue;

@@ -52,8 +52,8 @@ Segment makeSegment(std::string Name, va_t VA, uint64_t Size, bool Exec) {
 //===----------------------------------------------------------------------===//
 
 TEST(IsTextSectionName, AcceptsCanonicalNames) {
-  EXPECT_TRUE(section_names::isTextSectionName(".text"));   // ELF / COFF
-  EXPECT_TRUE(section_names::isTextSectionName("__text"));  // Mach-O
+  EXPECT_TRUE(section_names::isTextSectionName(section_names::elf::Text));
+  EXPECT_TRUE(section_names::isTextSectionName(section_names::macho::Text));
 }
 
 TEST(IsTextSectionName, AcceptsElfFunctionSplitSections) {
@@ -77,13 +77,56 @@ TEST(IsTextSectionName, RejectsTextbssAndLookalikes) {
 }
 
 TEST(IsTextSectionName, RejectsUnrelatedNames) {
-  EXPECT_FALSE(section_names::isTextSectionName(".data"));
-  EXPECT_FALSE(section_names::isTextSectionName(".rodata"));
-  EXPECT_FALSE(section_names::isTextSectionName(".bss"));
-  EXPECT_FALSE(section_names::isTextSectionName("__data"));
+  EXPECT_FALSE(section_names::isTextSectionName(section_names::elf::Data));
+  EXPECT_FALSE(section_names::isTextSectionName(section_names::elf::Rodata));
+  EXPECT_FALSE(section_names::isTextSectionName(section_names::elf::Bss));
+  EXPECT_FALSE(section_names::isTextSectionName(section_names::macho::Data));
   EXPECT_FALSE(section_names::isTextSectionName("text")); // no leading dot
   EXPECT_FALSE(section_names::isTextSectionName(".tex"));
   EXPECT_FALSE(section_names::isTextSectionName(""));
+}
+
+TEST(IsElfImageDataSectionName, AcceptsEmbeddedDataSections) {
+  EXPECT_TRUE(section_names::isElfImageDataSectionName(section_names::elf::Rodata));
+  EXPECT_TRUE(section_names::isElfImageDataSectionName(section_names::elf::Data));
+  EXPECT_TRUE(section_names::isElfImageDataSectionName(section_names::elf::Bss));
+  EXPECT_TRUE(
+      section_names::isElfImageDataSectionName(section_names::elf::DataRelRo));
+  EXPECT_TRUE(section_names::isElfImageDataSectionName(".rodata.str1.1"));
+  EXPECT_TRUE(section_names::isElfImageDataSectionName(".data.rel.local"));
+}
+
+TEST(IsElfImageDataSectionName, RejectsTextAndUnknown) {
+  EXPECT_FALSE(
+      section_names::isElfImageDataSectionName(section_names::elf::Text));
+  EXPECT_FALSE(section_names::isElfImageDataSectionName(".vmp0"));
+  EXPECT_FALSE(section_names::isElfImageDataSectionName(""));
+}
+
+TEST(IsELFExecutableMapSection, AcceptsCodeOutputSections) {
+  EXPECT_TRUE(section_names::isELFExecutableMapSection(section_names::elf::Text));
+  EXPECT_TRUE(section_names::isELFExecutableMapSection(section_names::elf::Init));
+  EXPECT_TRUE(section_names::isELFExecutableMapSection(section_names::elf::Plt));
+}
+
+TEST(IsELFExecutableMapSection, RejectsDataSections) {
+  EXPECT_FALSE(section_names::isELFExecutableMapSection(section_names::elf::Data));
+  EXPECT_FALSE(
+      section_names::isELFExecutableMapSection(section_names::elf::Rodata));
+}
+
+TEST(IsMachOExecutableMapSection, AcceptsTextStubs) {
+  EXPECT_TRUE(section_names::isMachOExecutableMapSection(
+      section_names::macho::TextSeg, section_names::macho::Text));
+  EXPECT_TRUE(section_names::isMachOExecutableMapSection(
+      section_names::macho::TextSeg, section_names::macho::Stubs));
+}
+
+TEST(IsMachOExecutableMapSection, RejectsOtherSegments) {
+  EXPECT_FALSE(section_names::isMachOExecutableMapSection(
+      section_names::macho::DataSeg, section_names::macho::Text));
+  EXPECT_FALSE(section_names::isMachOExecutableMapSection(
+      section_names::macho::TextSeg, section_names::macho::Data));
 }
 
 //===----------------------------------------------------------------------===//
@@ -95,23 +138,25 @@ TEST(GetTextSection, NamedElfTextWinsOverHeuristic) {
   Img.Format = BinaryFormat::ELF;
   // A small ".text" plus a much larger exec section that also holds the entry.
   // The named lookup must take precedence over the size/entry heuristic.
-  Img.Sections.push_back(makeSection(".text", 0x1000, 0x100, /*Exec=*/true));
+  Img.Sections.push_back(
+      makeSection(section_names::elf::Text, 0x1000, 0x100, /*Exec=*/true));
   Img.Sections.push_back(makeSection(".other", 0x2000, 0x7000, /*Exec=*/true));
   Img.Entry = 0x2000;
 
   const Section *T = Img.getTextSection();
   ASSERT_NE(T, nullptr);
-  EXPECT_EQ(T->Name, ".text");
+  EXPECT_EQ(T->Name, section_names::elf::Text);
 }
 
 TEST(GetTextSection, NamedMachOTextWins) {
   BinaryImage Img;
   Img.Format = BinaryFormat::MachO;
-  Img.Sections.push_back(makeSection("__text", 0x4000, 0x200, /*Exec=*/true));
+  Img.Sections.push_back(
+      makeSection(section_names::macho::Text, 0x4000, 0x200, /*Exec=*/true));
 
   const Section *T = Img.getTextSection();
   ASSERT_NE(T, nullptr);
-  EXPECT_EQ(T->Name, "__text");
+  EXPECT_EQ(T->Name, section_names::macho::Text);
 }
 
 //===----------------------------------------------------------------------===//
@@ -177,7 +222,8 @@ TEST(GetTextSection, IgnoresNonExecutableSections) {
   // never be picked over a smaller executable one.
   BinaryImage Img;
   Img.Format = BinaryFormat::ELF;
-  Img.Sections.push_back(makeSection(".rodata", 0x1000, 0x9000, /*Exec=*/false));
+  Img.Sections.push_back(
+      makeSection(section_names::elf::Rodata, 0x1000, 0x9000, /*Exec=*/false));
   Img.Sections.push_back(makeSection(".vmp0", 0x20000, 0x80, /*Exec=*/true));
   Img.Entry = 0;
 
@@ -189,8 +235,10 @@ TEST(GetTextSection, IgnoresNonExecutableSections) {
 TEST(GetTextSection, ReturnsNullWhenNoExecutableSection) {
   BinaryImage Img;
   Img.Format = BinaryFormat::ELF;
-  Img.Sections.push_back(makeSection(".data", 0x1000, 0x1000, /*Exec=*/false));
-  Img.Sections.push_back(makeSection(".rodata", 0x2000, 0x1000, /*Exec=*/false));
+  Img.Sections.push_back(
+      makeSection(section_names::elf::Data, 0x1000, 0x1000, /*Exec=*/false));
+  Img.Sections.push_back(
+      makeSection(section_names::elf::Rodata, 0x2000, 0x1000, /*Exec=*/false));
   Img.Entry = 0x1000;
 
   EXPECT_EQ(Img.getTextSection(), nullptr);

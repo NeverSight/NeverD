@@ -12,6 +12,7 @@
 
 #include "NeverDLiftFixture.h"
 
+#include "neverd/Object/SectionNames.h"
 #include "neverd/Object/PELayout.h"
 #include "neverd/Support/BinaryLoading.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
@@ -229,7 +230,7 @@ TEST_F(PatchCOFF_ARM32, EntryTrampolineBranchesIntoAppendedExecSection) {
 
   auto NewText = std::find_if(
       Img.Sections.begin(), Img.Sections.end(),
-      [](const Section &S) { return S.Name == ".ndtext" && S.isExecutable(); });
+      [](const Section &S) { return S.Name == kNdTextSection && S.isExecutable(); });
   ASSERT_NE(NewText, Img.Sections.end());
   EXPECT_TRUE(NewText->contains(Target))
       << "Thumb b.w target 0x" << std::hex << Target
@@ -280,7 +281,7 @@ TEST_F(PatchCOFF_ARM32, InstallerSkipsTwoByteFunctionWithoutTouchingSentinel) {
   auto Headers = locatePEHeaders(Bytes.data(), Bytes.size());
   ASSERT_TRUE(Headers.valid());
   PESectionFields Text;
-  ASSERT_TRUE(findPESection(Headers, ".text", Text));
+  ASSERT_TRUE(findPESection(Headers, section_names::coff::Text, Text));
 
   COFFPatcher Patcher;
   Patcher.setImageContext(&Img);
@@ -378,7 +379,7 @@ TEST_F(PatchCOFF_AArch64, EntryTrampolineBranchesIntoAppendedExecSection) {
 
   auto NewText = std::find_if(
       Img.Sections.begin(), Img.Sections.end(),
-      [](const Section &S) { return S.Name == ".ndtext" && S.isExecutable(); });
+      [](const Section &S) { return S.Name == kNdTextSection && S.isExecutable(); });
   ASSERT_NE(NewText, Img.Sections.end());
   EXPECT_TRUE(NewText->contains(Target))
       << "AArch64 b target 0x" << std::hex << Target
@@ -582,7 +583,7 @@ TEST_F(RenamedSectionPatch, ElfInplaceAutoRecovers) {
   if (!fs::exists(Elf))
     GTEST_SKIP() << "ELF executable not built";
   auto Renamed = tmpFile("renamed.elf");
-  ASSERT_TRUE(renameCodeSection(Elf, Renamed, ".text", ".vmp0"))
+  ASSERT_TRUE(renameCodeSection(Elf, Renamed, section_names::elf::Text, ".vmp0"))
       << "could not rename .text in test ELF";
   auto Out = tmpFile("patched_ip");
   auto R = exec(ndBin(),
@@ -598,7 +599,7 @@ TEST_F(RenamedSectionPatch, ElfInplaceExplicitOverride) {
   if (!fs::exists(Elf))
     GTEST_SKIP() << "ELF executable not built";
   auto Renamed = tmpFile("renamed.elf");
-  ASSERT_TRUE(renameCodeSection(Elf, Renamed, ".text", ".vmp0"));
+  ASSERT_TRUE(renameCodeSection(Elf, Renamed, section_names::elf::Text, ".vmp0"));
   auto Out = tmpFile("patched_ovr");
   auto R = exec(ndBin(), {"patch", "-mode=inplace", "-text-section=.vmp0", "-o",
                           Out.string(), Renamed.string()});
@@ -627,7 +628,7 @@ TEST_F(RenamedSectionPatch, MachOSectionModeAutoRecovers) {
     GTEST_SKIP() << "host clang could not build Mach-O test: " << CR.err;
 
   auto Renamed = tmpFile("m_renamed");
-  ASSERT_TRUE(renameCodeSection(Bin, Renamed, "__text", "__vmp0"))
+  ASSERT_TRUE(renameCodeSection(Bin, Renamed, section_names::macho::Text, "__vmp0"))
       << "could not rename __text in host Mach-O";
   auto Out = tmpFile("m_patched");
   auto R = exec(ndBin(), {"patch", "-o", Out.string(), Renamed.string()});
@@ -657,7 +658,7 @@ TEST_F(RenamedSectionPatch, MachOSectionModeExplicitOverride) {
     GTEST_SKIP() << "host clang could not build Mach-O test: " << CR.err;
 
   auto Renamed = tmpFile("mo_renamed");
-  ASSERT_TRUE(renameCodeSection(Bin, Renamed, "__text", "__vmp0"))
+  ASSERT_TRUE(renameCodeSection(Bin, Renamed, section_names::macho::Text, "__vmp0"))
       << "could not rename __text in host Mach-O";
   auto Out = tmpFile("mo_patched");
   auto R = exec(ndBin(),

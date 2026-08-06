@@ -62,6 +62,11 @@ inline constexpr llvm::StringLiteral kBuildIdPrefix("build-id:");
 /// Used to produce relocatable references instead of absolute addresses.
 inline constexpr llvm::StringLiteral kNdDataPrefix("__nd_data_");
 
+/// Default synthetic code section appended by patch-mode rewriters (ELF/COFF).
+inline constexpr llvm::StringLiteral kNdTextSection(".ndtext");
+/// Mach-O spelling of \c kNdTextSection.
+inline constexpr llvm::StringLiteral kNdTextSectionMachO("__ndtext");
+
 /// Prefix for synthesized function-pointer dispatch tables recovered from a
 /// `.data.rel.ro` code-pointer array (callback table / vtable / threaded
 /// dispatch).  Each entry is `ptrtoint @func`, so the recompiled object's

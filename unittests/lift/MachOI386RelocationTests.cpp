@@ -3,6 +3,7 @@
 #include "NeverDLiftFixture.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Object/SectionNames.h"
 #include "neverd/Support/BinaryEncoding.h"
 #include "neverd/Support/BinaryLoading.h"
 #include "neverd/ir/low/FuncDetector.h"
@@ -390,7 +391,7 @@ TEST_F(MachOI386Relocation, RealFixturesContainRequiredRawRelocationShapes) {
   EXPECT_EQ(PIC->getHeader().cputype, llvm::MachO::CPU_TYPE_I386);
   EXPECT_EQ(PIC->getHeader().filetype, llvm::MachO::MH_OBJECT);
 
-  auto PICText = findSection(*PIC, "__text");
+  auto PICText = findSection(*PIC, section_names::macho::Text);
   ASSERT_TRUE(PICText.has_value());
   auto PICRelocs = relocations(*PICText);
   size_t DifferencePairs = 0;
@@ -413,7 +414,7 @@ TEST_F(MachOI386Relocation, RealFixturesContainRequiredRawRelocationShapes) {
   }
   EXPECT_GE(DifferencePairs, 3u);
 
-  auto NoPICText = findSection(*NoPIC, "__text");
+  auto NoPICText = findSection(*NoPIC, section_names::macho::Text);
   ASSERT_TRUE(NoPICText.has_value());
   size_t LocalVanilla = 0;
   for (const auto &Reloc : relocations(*NoPICText)) {
@@ -429,7 +430,7 @@ TEST_F(MachOI386Relocation, RealFixturesContainRequiredRawRelocationShapes) {
   EXPECT_GE(LocalVanilla, 3u);
 
   for (const auto *Obj : {PIC.get(), NoPIC.get()}) {
-    auto Data = findSection(*Obj, "__data");
+    auto Data = findSection(*Obj, section_names::macho::Data);
     ASSERT_TRUE(Data.has_value());
     auto DataRelocs = relocations(*Data);
     ASSERT_GE(DataRelocs.size(), 2u);
@@ -474,8 +475,8 @@ TEST_F(MachOI386Relocation,
       EXPECT_EQ(It->Data, Sec.Data);
     }
 
-    const Section *Text = Img.getSectionByName("__text");
-    const Section *Const = Img.getSectionByName("__const");
+    const Section *Text = Img.getSectionByName(section_names::macho::Text);
+    const Section *Const = Img.getSectionByName(section_names::macho::Const);
     const Segment *TextSegment = Img.getTextSegment();
     ASSERT_NE(Text, nullptr);
     ASSERT_NE(Const, nullptr);
@@ -496,7 +497,7 @@ TEST_F(MachOI386Relocation,
       }
     }
 
-    const Section *Bss = Img.getSectionByName("__bss");
+    const Section *Bss = Img.getSectionByName(section_names::macho::Bss);
     ASSERT_NE(Bss, nullptr);
     EXPECT_EQ(Bss->FileSz, 0u);
     ASSERT_EQ(Bss->Data.size(), Bss->Size);
@@ -507,8 +508,8 @@ TEST_F(MachOI386Relocation,
 
 TEST_F(MachOI386Relocation, OverlappingObjectSectionsReturnControlledError) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
-  auto Text = rawSectionLayout(Bytes, "__text");
-  auto DataHeader = rawSectionHeaderOffset(Bytes, "__data");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
+  auto DataHeader = rawSectionHeaderOffset(Bytes, section_names::macho::Data);
   ASSERT_TRUE(Text.has_value());
   ASSERT_TRUE(DataHeader.has_value());
   size_t AddressOffset = *DataHeader + offsetof(llvm::MachO::section, addr);
@@ -629,9 +630,9 @@ TEST_F(MachOI386Relocation,
       ++SecIndex;
     }
 
-    const Section *Text = Img.getSectionByName("__text");
-    const Section *ReadOnly = Img.getSectionByName("__const");
-    const Section *Data = Img.getSectionByName("__data");
+    const Section *Text = Img.getSectionByName(section_names::macho::Text);
+    const Section *ReadOnly = Img.getSectionByName(section_names::macho::Const);
+    const Section *Data = Img.getSectionByName(section_names::macho::Data);
     ASSERT_NE(Text, nullptr);
     ASSERT_NE(ReadOnly, nullptr);
     ASSERT_NE(Data, nullptr);
@@ -672,7 +673,7 @@ TEST_F(MachOI386Relocation,
 
 TEST_F(MachOI386Relocation, DefinedExternalPCRelRestoresOldPlaceExactly) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
-  auto Text = rawSectionLayout(Bytes, "__text");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
   auto GlobalIndex = findSymbolIndex(Bytes, "_global_value");
   ASSERT_TRUE(Text.has_value());
   ASSERT_TRUE(GlobalIndex.has_value());
@@ -691,7 +692,7 @@ TEST_F(MachOI386Relocation, DefinedExternalPCRelRestoresOldPlaceExactly) {
   ASSERT_TRUE(static_cast<bool>(ImgOrErr))
       << llvm::toString(ImgOrErr.takeError());
   const BinaryImage &Img = *ImgOrErr;
-  const Section *LoadedText = Img.getSectionByName("__text");
+  const Section *LoadedText = Img.getSectionByName(section_names::macho::Text);
   const Symbol *Global = findSymbol(Img, "_global_value");
   const Symbol *Local = findSymbol(Img, "_local_bias");
   ASSERT_NE(LoadedText, nullptr);
@@ -715,7 +716,7 @@ TEST_F(MachOI386Relocation,
        ExternalSymbolIndexEqualToSymtabCountIsRejectedAndContinues) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
   auto Obj = createMachOObject(Bytes);
-  auto Text = rawSectionLayout(Bytes, "__text");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
   ASSERT_NE(Obj, nullptr);
   ASSERT_TRUE(Text.has_value());
   auto RelocOffset = findRawRelocation(Bytes, *Text, 0x25);
@@ -736,7 +737,7 @@ TEST_F(MachOI386Relocation,
           llvm::consumeError(ImgOrErr.takeError());
           std::_Exit(1);
         }
-        const Section *LoadedText = ImgOrErr->getSectionByName("__text");
+        const Section *LoadedText = ImgOrErr->getSectionByName(section_names::macho::Text);
         const Symbol *Local = findSymbol(*ImgOrErr, "_local_bias");
         if (!LoadedText || !Local)
           std::_Exit(2);
@@ -755,8 +756,8 @@ TEST_F(MachOI386Relocation,
        ExternalSymbolIndexMustBeWithinSymtabAndLaterRelocationContinues) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
   auto Obj = createMachOObject(Bytes);
-  auto Text = rawSectionLayout(Bytes, "__text");
-  auto Data = rawSectionLayout(Bytes, "__data");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
+  auto Data = rawSectionLayout(Bytes, section_names::macho::Data);
   ASSERT_NE(Obj, nullptr);
   ASSERT_TRUE(Text.has_value());
   ASSERT_TRUE(Data.has_value());
@@ -796,7 +797,7 @@ TEST_F(MachOI386Relocation,
           llvm::consumeError(ImgOrErr.takeError());
           std::_Exit(1);
         }
-        const Section *LoadedText = ImgOrErr->getSectionByName("__text");
+        const Section *LoadedText = ImgOrErr->getSectionByName(section_names::macho::Text);
         const Symbol *Local = findSymbol(*ImgOrErr, "_local_bias");
         if (!LoadedText || !Local)
           std::_Exit(2);
@@ -815,8 +816,8 @@ TEST_F(MachOI386Relocation,
        ExternalSectionSymbolPastEndIsRejectedAndLaterRelocationContinues) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
   auto Obj = createMachOObject(Bytes);
-  auto Text = rawSectionLayout(Bytes, "__text");
-  auto Data = rawSectionLayout(Bytes, "__data");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
+  auto Data = rawSectionLayout(Bytes, section_names::macho::Data);
   auto GlobalIndex = findSymbolIndex(Bytes, "_global_value");
   ASSERT_NE(Obj, nullptr);
   ASSERT_TRUE(Text.has_value());
@@ -845,7 +846,7 @@ TEST_F(MachOI386Relocation,
       loadBinary(writeMutation("external_symbol_past_end.o", Bytes));
   ASSERT_TRUE(static_cast<bool>(ImgOrErr))
       << llvm::toString(ImgOrErr.takeError());
-  const Section *LoadedText = ImgOrErr->getSectionByName("__text");
+  const Section *LoadedText = ImgOrErr->getSectionByName(section_names::macho::Text);
   const Symbol *Local = findSymbol(*ImgOrErr, "_local_bias");
   ASSERT_NE(LoadedText, nullptr);
   ASSERT_NE(Local, nullptr);
@@ -859,8 +860,8 @@ TEST_F(MachOI386Relocation,
        ExternalSectionSymbolAtEndIsAcceptedAndLaterRelocationContinues) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
   auto Obj = createMachOObject(Bytes);
-  auto Text = rawSectionLayout(Bytes, "__text");
-  auto Data = rawSectionLayout(Bytes, "__data");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
+  auto Data = rawSectionLayout(Bytes, section_names::macho::Data);
   auto GlobalIndex = findSymbolIndex(Bytes, "_global_value");
   ASSERT_NE(Obj, nullptr);
   ASSERT_TRUE(Text.has_value());
@@ -886,8 +887,8 @@ TEST_F(MachOI386Relocation,
   auto ImgOrErr = loadBinary(writeMutation("external_symbol_at_end.o", Bytes));
   ASSERT_TRUE(static_cast<bool>(ImgOrErr))
       << llvm::toString(ImgOrErr.takeError());
-  const Section *LoadedText = ImgOrErr->getSectionByName("__text");
-  const Section *LoadedData = ImgOrErr->getSectionByName("__data");
+  const Section *LoadedText = ImgOrErr->getSectionByName(section_names::macho::Text);
+  const Section *LoadedData = ImgOrErr->getSectionByName(section_names::macho::Data);
   const Symbol *Local = findSymbol(*ImgOrErr, "_local_bias");
   ASSERT_NE(LoadedText, nullptr);
   ASSERT_NE(LoadedData, nullptr);
@@ -902,7 +903,7 @@ TEST_F(MachOI386Relocation,
        UndefinedExternalIsUnchangedAndLaterRelocationContinues) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
   auto Obj = createMachOObject(Bytes);
-  auto Text = rawSectionLayout(Bytes, "__text");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
   auto UndefinedIndex = findSymbolIndex(Bytes, "_i386_global_address");
   ASSERT_NE(Obj, nullptr);
   ASSERT_TRUE(Text.has_value());
@@ -930,7 +931,7 @@ TEST_F(MachOI386Relocation,
   ASSERT_TRUE(static_cast<bool>(ImgOrErr))
       << llvm::toString(ImgOrErr.takeError());
   const BinaryImage &Img = *ImgOrErr;
-  const Section *LoadedText = Img.getSectionByName("__text");
+  const Section *LoadedText = Img.getSectionByName(section_names::macho::Text);
   const Symbol *Local = findSymbol(Img, "_local_bias");
   ASSERT_NE(LoadedText, nullptr);
   ASSERT_NE(Local, nullptr);
@@ -972,8 +973,8 @@ TEST_F(MachOI386Relocation, AbsoluteZeroSymbolIsIgnored) {
 TEST_F(MachOI386Relocation,
        ScatteredVanillaNormalizesNonzeroOriginalSectionBase) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
-  auto Text = rawSectionLayout(Bytes, "__text");
-  auto Data = rawSectionLayout(Bytes, "__data");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
+  auto Data = rawSectionLayout(Bytes, section_names::macho::Data);
   ASSERT_TRUE(Text.has_value());
   ASSERT_TRUE(Data.has_value());
   auto RelocOffset = findRawRelocation(Bytes, *Text, 0x25);
@@ -990,8 +991,8 @@ TEST_F(MachOI386Relocation,
   ASSERT_TRUE(static_cast<bool>(ImgOrErr))
       << llvm::toString(ImgOrErr.takeError());
   const BinaryImage &Img = *ImgOrErr;
-  const Section *LoadedText = Img.getSectionByName("__text");
-  const Section *LoadedData = Img.getSectionByName("__data");
+  const Section *LoadedText = Img.getSectionByName(section_names::macho::Text);
+  const Section *LoadedData = Img.getSectionByName(section_names::macho::Data);
   ASSERT_NE(LoadedText, nullptr);
   ASSERT_NE(LoadedData, nullptr);
   uint64_t Expected = LoadedData->VA + Addend;
@@ -1008,7 +1009,7 @@ TEST_F(MachOI386Relocation,
                         uint32_t(llvm::MachO::GENERIC_RELOC_TLV)}) {
     SCOPED_TRACE(Type);
     auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
-    auto Text = rawSectionLayout(Bytes, "__text");
+    auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
     ASSERT_TRUE(Text.has_value());
     auto RelocOffset = findRawRelocation(Bytes, *Text, 0x25);
     ASSERT_TRUE(RelocOffset.has_value());
@@ -1023,7 +1024,7 @@ TEST_F(MachOI386Relocation,
     ASSERT_TRUE(static_cast<bool>(ImgOrErr))
         << llvm::toString(ImgOrErr.takeError());
     const BinaryImage &Img = *ImgOrErr;
-    const Section *LoadedText = Img.getSectionByName("__text");
+    const Section *LoadedText = Img.getSectionByName(section_names::macho::Text);
     const Symbol *Local = findSymbol(Img, "_local_bias");
     ASSERT_NE(LoadedText, nullptr);
     ASSERT_NE(Local, nullptr);
@@ -1038,7 +1039,7 @@ TEST_F(MachOI386Relocation,
        InvalidLengthAndTruncatedFieldDoNotWriteAndContinue) {
   {
     auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
-    auto Text = rawSectionLayout(Bytes, "__text");
+    auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
     ASSERT_TRUE(Text.has_value());
     auto RelocOffset = findRawRelocation(Bytes, *Text, 0x25);
     ASSERT_TRUE(RelocOffset.has_value());
@@ -1052,7 +1053,7 @@ TEST_F(MachOI386Relocation,
     ASSERT_TRUE(static_cast<bool>(ImgOrErr))
         << llvm::toString(ImgOrErr.takeError());
     const BinaryImage &Img = *ImgOrErr;
-    const Section *LoadedText = Img.getSectionByName("__text");
+    const Section *LoadedText = Img.getSectionByName(section_names::macho::Text);
     const Symbol *Local = findSymbol(Img, "_local_bias");
     ASSERT_NE(LoadedText, nullptr);
     ASSERT_NE(Local, nullptr);
@@ -1064,7 +1065,7 @@ TEST_F(MachOI386Relocation,
 
   {
     auto Bytes = readBinaryFile(fixture("test_macho_i386_nopic.o"));
-    auto Text = rawSectionLayout(Bytes, "__text");
+    auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
     ASSERT_TRUE(Text.has_value());
     auto RelocOffset = findRawRelocation(Bytes, *Text, 0x25);
     ASSERT_TRUE(RelocOffset.has_value());
@@ -1081,7 +1082,7 @@ TEST_F(MachOI386Relocation,
     ASSERT_TRUE(static_cast<bool>(ImgOrErr))
         << llvm::toString(ImgOrErr.takeError());
     const BinaryImage &Img = *ImgOrErr;
-    const Section *LoadedText = Img.getSectionByName("__text");
+    const Section *LoadedText = Img.getSectionByName(section_names::macho::Text);
     const Symbol *Local = findSymbol(Img, "_local_bias");
     ASSERT_NE(LoadedText, nullptr);
     ASSERT_NE(Local, nullptr);
@@ -1099,7 +1100,7 @@ TEST_F(MachOI386Relocation,
                      Mutation::PCRelMismatch}) {
     SCOPED_TRACE(static_cast<unsigned>(M));
     auto Bytes = readBinaryFile(fixture("test_macho_i386.o"));
-    auto Text = rawSectionLayout(Bytes, "__text");
+    auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
     ASSERT_TRUE(Text.has_value());
     auto DifferenceOffset = findRawRelocation(Bytes, *Text, 0x2b);
     ASSERT_TRUE(DifferenceOffset.has_value());
@@ -1140,10 +1141,10 @@ TEST_F(MachOI386Relocation,
         << llvm::toString(ImgOrErr.takeError());
     auto LoadedText =
         std::find_if(ImgOrErr->Sections.begin(), ImgOrErr->Sections.end(),
-                     [](const Section &Sec) { return Sec.Name == "__text"; });
+                     [](const Section &Sec) { return Sec.Name == section_names::macho::Text; });
     auto LoadedData =
         std::find_if(ImgOrErr->Sections.begin(), ImgOrErr->Sections.end(),
-                     [](const Section &Sec) { return Sec.Name == "__data"; });
+                     [](const Section &Sec) { return Sec.Name == section_names::macho::Data; });
     ASSERT_NE(LoadedText, ImgOrErr->Sections.end());
     ASSERT_NE(LoadedData, ImgOrErr->Sections.end());
     auto DataSegment = std::find_if(
@@ -1168,7 +1169,7 @@ TEST_F(MachOI386Relocation,
 TEST_F(MachOI386Relocation,
        MissingSectionDifferencePairDoesNotWriteUnrelatedSectionsContinue) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386.o"));
-  auto Text = rawSectionLayout(Bytes, "__text");
+  auto Text = rawSectionLayout(Bytes, section_names::macho::Text);
   ASSERT_TRUE(Text.has_value());
   auto DifferenceOffset = findRawRelocation(Bytes, *Text, 0x2b);
   ASSERT_TRUE(DifferenceOffset.has_value());
@@ -1190,8 +1191,8 @@ TEST_F(MachOI386Relocation,
   ASSERT_TRUE(static_cast<bool>(ImgOrErr))
       << llvm::toString(ImgOrErr.takeError());
   const BinaryImage &Img = *ImgOrErr;
-  const Section *LoadedText = Img.getSectionByName("__text");
-  const Section *LoadedData = Img.getSectionByName("__data");
+  const Section *LoadedText = Img.getSectionByName(section_names::macho::Text);
+  const Section *LoadedData = Img.getSectionByName(section_names::macho::Data);
   ASSERT_NE(LoadedText, nullptr);
   ASSERT_NE(LoadedData, nullptr);
   auto Actual = readLoadedField(Img, LoadedText->VA + 0x2b, 4, false);
@@ -1250,7 +1251,7 @@ TEST_F(MachOI386Relocation, SectionDefinedFunctionAtZeroIsRetainedAndDetected) {
 TEST_F(MachOI386Relocation,
        ZExtConstantDoesNotCreatePointerMirrorWithoutPointerSlots) {
   auto Bytes = readBinaryFile(fixture("test_macho_i386.o"));
-  auto Data = rawSectionLayout(Bytes, "__data");
+  auto Data = rawSectionLayout(Bytes, section_names::macho::Data);
   ASSERT_TRUE(Data.has_value());
   for (uint32_t Offset : {8u, 12u}) {
     auto RelocOffset = findRawRelocation(Bytes, *Data, Offset);
@@ -1277,8 +1278,8 @@ TEST_F(MachOI386Relocation,
        DispatchUsesRelinkablePointerToRecompiledZeroAddressFunction) {
   auto PICBytes = readBinaryFile(fixture("test_macho_i386.o"));
   auto PICObj = createMachOObject(PICBytes);
-  auto PICText = PICObj ? findSection(*PICObj, "__text") : std::nullopt;
-  auto PICData = rawSectionLayout(PICBytes, "__data");
+  auto PICText = PICObj ? findSection(*PICObj, section_names::macho::Text) : std::nullopt;
+  auto PICData = rawSectionLayout(PICBytes, section_names::macho::Data);
   ASSERT_NE(PICObj, nullptr);
   ASSERT_TRUE(PICText.has_value());
   ASSERT_TRUE(PICData.has_value());
@@ -1299,8 +1300,8 @@ TEST_F(MachOI386Relocation,
   auto PICImgOrErr = loadBinary(fixture("test_macho_i386.o"));
   ASSERT_TRUE(static_cast<bool>(PICImgOrErr))
       << llvm::toString(PICImgOrErr.takeError());
-  const Section *LoadedText = PICImgOrErr->getSectionByName("__text");
-  const Section *LoadedData = PICImgOrErr->getSectionByName("__data");
+  const Section *LoadedText = PICImgOrErr->getSectionByName(section_names::macho::Text);
+  const Section *LoadedData = PICImgOrErr->getSectionByName(section_names::macho::Data);
   ASSERT_NE(LoadedText, nullptr);
   ASSERT_NE(LoadedData, nullptr);
   EXPECT_EQ(PICImgOrErr->CodePtrRelocSlots.count(LoadedText->VA +

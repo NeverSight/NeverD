@@ -182,7 +182,7 @@ uint64_t COFFPatcher::appendExecSegment(std::vector<uint8_t> &Binary,
 
   coff_section NewSec = {};
   // COFF short section names are at most 8 bytes.
-  std::string Name = SegName.empty() ? ".ndtext" : SegName.str();
+  std::string Name = SegName.empty() ? kNdTextSection.str() : SegName.str();
   std::memcpy(NewSec.Name, Name.data(), std::min<size_t>(Name.size(), 8));
   NewSec.VirtualSize = static_cast<uint32_t>(TextSize);
   NewSec.VirtualAddress = NewSecRva;
@@ -284,7 +284,7 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
 
         uint64_t TextSize = Img.Bytes.size();
         uint64_t Placed =
-            appendExecSegment(Binary, Img.Bytes, ".ndtext", TargetArch);
+            appendExecSegment(Binary, Img.Bytes, kNdTextSection, TargetArch);
         if (Placed == 0) {
           llvm::WithColor::error() << "coff_patch: appendExecSegment failed\n";
           return false;

@@ -19,6 +19,7 @@
 #define NEVERD_OBJECT_SECTIONNAMES_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
 
 namespace neverd {
 namespace section_names {
@@ -29,7 +30,10 @@ constexpr const char *Text = ".text";
 // splitting: ".text.hot", ".text.unlikely", ".text.<symbol>", ...
 constexpr const char *TextSplitPrefix = ".text.";
 constexpr const char *Data = ".data";
+constexpr const char *DataSplitPrefix = ".data.";
+constexpr const char *DataRelRo = ".data.rel.ro";
 constexpr const char *Bss = ".bss";
+constexpr const char *BssSplitPrefix = ".bss.";
 constexpr const char *Rodata = ".rodata";
 constexpr const char *RelaPlt = ".rela.plt";
 constexpr const char *RelPlt = ".rel.plt";
@@ -112,6 +116,46 @@ inline bool isTextSectionName(llvm::StringRef Name) {
   return Name == macho::Text || Name == elf::Text ||
          Name.starts_with(elf::TextSplitPrefix) ||
          Name.starts_with(coff::TextPrefix);
+}
+
+/// True if \p Name is a RELRO pointer-table section (`.data.rel.ro` and its
+/// `.data.rel.ro.*` variants).  Writable in section flags but read-only after
+/// relocation; never plain mutable scalar/array data.
+inline bool isDataRelRoSectionName(llvm::StringRef Name) {
+  return Name.starts_with(elf::DataRelRo);
+}
+
+/// True if \p Name is an ELF data/rodata/bss section whose contents are
+/// embedded alongside code in roundtrip and Unicorn test images.
+inline bool isElfImageDataSectionName(llvm::StringRef Name) {
+  return Name.starts_with(elf::Rodata) || isDataRelRoSectionName(Name) ||
+         Name == elf::Data || Name.starts_with(elf::DataSplitPrefix) ||
+         Name == elf::Bss || Name.starts_with(elf::BssSplitPrefix);
+}
+
+/// True if \p Name is an ELF linker-map output section that carries
+/// executable symbols (`.text*`, `.init`, `.fini`, `.plt`, `.plt.got`).
+inline bool isELFExecutableMapSection(llvm::StringRef Name) {
+  if (Name.starts_with(elf::Text))
+    return true;
+  return llvm::StringSwitch<bool>(Name)
+#define ELF_EXECUTABLE_MAP_SECTION(Section) .Case(Section, true)
+#include "neverd/Object/ELFExecutableMapSections.inc"
+#undef ELF_EXECUTABLE_MAP_SECTION
+      .Default(false);
+}
+
+/// True if \p Segment/\p Section name a Mach-O linker-map row that carries
+/// executable symbols (`__TEXT` + `__text`/`__stubs`).
+inline bool isMachOExecutableMapSection(llvm::StringRef Segment,
+                                        llvm::StringRef Section) {
+  if (Segment != macho::TextSeg)
+    return false;
+  return llvm::StringSwitch<bool>(Section)
+#define MACHO_EXECUTABLE_MAP_SECTION(SectionName) .Case(SectionName, true)
+#include "neverd/Object/MachOExecutableMapSections.inc"
+#undef MACHO_EXECUTABLE_MAP_SECTION
+      .Default(false);
 }
 
 } // namespace section_names

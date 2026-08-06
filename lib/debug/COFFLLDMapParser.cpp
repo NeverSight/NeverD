@@ -70,8 +70,8 @@ void parseCOFFLLDMap(llvm::StringRef Content,
     if (LastToken.contains(":(.") || LastToken.contains(":("))
       continue;
 
-    bool IsCodeSection = llvm::StringRef(CurrentOutSection)
-                             .starts_with(section_names::coff::Text);
+    bool IsCodeSection =
+        section_names::isTextSectionName(CurrentOutSection);
 
     if (!IsCodeSection)
       continue;

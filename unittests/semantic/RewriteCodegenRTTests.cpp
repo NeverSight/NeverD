@@ -14,6 +14,7 @@
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/CodeGen.h"
+#include "neverd/Object/SectionNames.h"
 #include "neverd/pass/mir/MIRPass.h"
 #include "neverd/pass/mir/NOPPass.h"
 
@@ -6498,7 +6499,7 @@ TEST(RewriteCodegen_SmaxSmin, ClampI16_viaCompile) {
   for (auto &Sec : Obj.sections()) {
     auto NameOrErr = Sec.getName();
     if (!NameOrErr) continue;
-    if (*NameOrErr == ".text") {
+    if (*NameOrErr == section_names::elf::Text) {
       auto ContOrErr = Sec.getContents();
       if (ContOrErr)
         TextBytes.assign(ContOrErr->begin(), ContOrErr->end());

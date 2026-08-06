@@ -16,6 +16,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/Object/SectionNames.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -1428,7 +1429,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   // legal; RELRO and rodata pointer tables stay constant (read-only after
   // relocation) — their slots are never stored to.
   bool SegWritable = Seg->isWritable() && !Seg->isExecutable() &&
-                     !llvm::StringRef(Seg->Name).starts_with(".data.rel.ro");
+                     !section_names::isDataRelRoSectionName(Seg->Name);
   auto *GV = new llvm::GlobalVariable(
       *Mod, StructTy, /*isConstant=*/!SegWritable, dataLinkage(),
       llvm::ConstantAggregateZero::get(StructTy),
