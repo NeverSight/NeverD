@@ -16,6 +16,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-x86-value"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -157,7 +158,8 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
                                            llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
   auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
-  auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+  const unsigned AddrRegBits = getTargetRegInfo(TargetArch).PointerSize * 8;
+  auto *AddrRegTy = llvm::Type::getIntNTy(*Ctx, AddrRegBits);
 
   // Element size + AT&T mnemonic suffix (b/w/l/q) per intrinsic variant.
   unsigned ElemSz = 0;
@@ -224,7 +226,7 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
     if (DfK == DfBwd)
       return "std\n\t" + Rep + "\n\tcld";
     if (DfK == DfDyn)
-      return "test %" + std::to_string(DfOperand) + ",%" +
+      return "test $" + std::to_string(DfOperand) + ",$" +
              std::to_string(DfOperand) + "\n\tje 1f\n\tstd\n\t1:\n\t" + Rep +
              "\n\tcld";
     return Rep;
@@ -235,21 +237,22 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
   // values are discarded because the lifter already updates the register slots
   // in MedIR.
   if (IsStos && Op.NumInputs >= 4) {
-    auto *RDI = Coerce(getVar(Op.Inputs[1], Builder), I64Ty);
-    auto *RCX = Coerce(getVar(Op.Inputs[2], Builder), I64Ty);
+    auto *RDI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
+    auto *RCX = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
     auto *ValTy = llvm::Type::getIntNTy(*Ctx, ElemSz * 8);
     auto *Val = Coerce(getVar(Op.Inputs[3], Builder), ValTy);
     std::string Mn = dirWrap(std::string("rep stos") + Suffix, 5);
-    auto *RetTy = llvm::StructType::get(*Ctx, {I64Ty, I64Ty});
+    auto *RetTy = llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy});
     if (DfK == DfDyn) {
-      auto *Df = Coerce(getVar(Op.Inputs[4], Builder), I64Ty);
-      auto *FnTy =
-          llvm::FunctionType::get(RetTy, {I64Ty, I64Ty, ValTy, I64Ty}, false);
+      auto *Df = Coerce(getVar(Op.Inputs[4], Builder), AddrRegTy);
+      auto *FnTy = llvm::FunctionType::get(
+          RetTy, {AddrRegTy, AddrRegTy, ValTy, AddrRegTy}, false);
       auto *IA = llvm::InlineAsm::get(
           FnTy, Mn, "={di},={cx},0,1,{ax},r,~{memory},~{dirflag},~{cc}", true);
       Builder.CreateCall(IA, {RDI, RCX, Val, Df});
     } else {
-      auto *FnTy = llvm::FunctionType::get(RetTy, {I64Ty, I64Ty, ValTy}, false);
+      auto *FnTy =
+          llvm::FunctionType::get(RetTy, {AddrRegTy, AddrRegTy, ValTy}, false);
       auto *IA = llvm::InlineAsm::get(
           FnTy, Mn, "={di},={cx},0,1,{ax},~{memory},~{dirflag},~{cc}", true);
       Builder.CreateCall(IA, {RDI, RCX, Val});
@@ -259,21 +262,23 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
 
   // MOVS: inputs [RSI, RDI, RCX], all written by the hardware (discarded).
   if (IsMovs && Op.NumInputs >= 4) {
-    auto *RSI = Coerce(getVar(Op.Inputs[1], Builder), I64Ty);
-    auto *RDI = Coerce(getVar(Op.Inputs[2], Builder), I64Ty);
-    auto *RCX = Coerce(getVar(Op.Inputs[3], Builder), I64Ty);
+    auto *RSI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
+    auto *RDI = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
+    auto *RCX = Coerce(getVar(Op.Inputs[3], Builder), AddrRegTy);
     std::string Mn = dirWrap(std::string("rep movs") + Suffix, 6);
-    auto *RetTy = llvm::StructType::get(*Ctx, {I64Ty, I64Ty, I64Ty});
+    auto *RetTy =
+        llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy, AddrRegTy});
     if (DfK == DfDyn) {
-      auto *Df = Coerce(getVar(Op.Inputs[4], Builder), I64Ty);
-      auto *FnTy =
-          llvm::FunctionType::get(RetTy, {I64Ty, I64Ty, I64Ty, I64Ty}, false);
+      auto *Df = Coerce(getVar(Op.Inputs[4], Builder), AddrRegTy);
+      auto *FnTy = llvm::FunctionType::get(
+          RetTy, {AddrRegTy, AddrRegTy, AddrRegTy, AddrRegTy}, false);
       auto *IA = llvm::InlineAsm::get(
           FnTy, Mn, "={si},={di},={cx},0,1,2,r,~{memory},~{dirflag},~{cc}",
           true);
       Builder.CreateCall(IA, {RSI, RDI, RCX, Df});
     } else {
-      auto *FnTy = llvm::FunctionType::get(RetTy, {I64Ty, I64Ty, I64Ty}, false);
+      auto *FnTy = llvm::FunctionType::get(
+          RetTy, {AddrRegTy, AddrRegTy, AddrRegTy}, false);
       auto *IA = llvm::InlineAsm::get(
           FnTy, Mn, "={si},={di},={cx},0,1,2,~{memory},~{dirflag},~{cc}", true);
       Builder.CreateCall(IA, {RSI, RDI, RCX});

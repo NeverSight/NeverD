@@ -859,6 +859,13 @@ target_link_libraries(NeverDSemanticTests PRIVATE
   LLVMSupport
 )
 
+# LibCNames' C++ helpers are intentionally not exported from neverd_shared on
+# Windows.  SemanticRoundTripFixture calls them directly, so provide their
+# static definitions to the test executable.
+if(WIN32)
+  target_link_libraries(NeverDSemanticTests PRIVATE NeverDLibC)
+endif()
+
 if(TARGET neverd)
   add_dependencies(NeverDSemanticTests neverd)
 endif()

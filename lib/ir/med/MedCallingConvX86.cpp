@@ -349,6 +349,14 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
     auto Off = traceOff(AddrVar, 0);
     if (!Off || *Off < 4 || *Off > 0x400 || (*Off % 4) != 0)
       return std::nullopt;
+    // A detected variadic callee recovers only its named prefix here.  Values
+    // at and above the va_list overflow base are walked dynamically and are
+    // finalized from call sites; rewriting one loop iteration to a fixed
+    // parameter (notably the high word of an i386 long long) corrupts every
+    // later va_arg and also duplicates overflow homes in the emitter.
+    if (Func.IsVariadic && Func.VariadicOverflowBase > 0 &&
+        *Off >= Func.VariadicOverflowBase)
+      return std::nullopt;
     return *Off;
   };
 
@@ -363,6 +371,9 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
       return std::nullopt;
     auto Off = traceOff(AddrVar, 0);
     if (!Off || *Off < 4 || *Off > 0x400)
+      return std::nullopt;
+    if (Func.IsVariadic && Func.VariadicOverflowBase > 0 &&
+        *Off >= Func.VariadicOverflowBase)
       return std::nullopt;
     return *Off;
   };

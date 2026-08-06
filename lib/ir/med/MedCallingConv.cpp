@@ -256,14 +256,29 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
       return false;
     }
   };
-  // `reg & 0xFF..F00` / `& 0xFFFF0000`: keep the upper bits, clear the low
-  // byte/word that a narrow sub-register write is about to supply.
-  auto isUpperPreserveMask = [](const MedOp &Op, int TaintedIdx) {
+  // Preserve masks emitted while reconstructing an i386 partial-register
+  // write.  Besides low-byte/low-word writes, AH/CH/DH/BH clear bits 8..15 and
+  // therefore use 0xFFFF00FF, whose low byte is deliberately nonzero.
+  auto isPartialWritePreserveMask = [](const MedOp &Op, int TaintedIdx) {
     if (Op.Opcode != NdOp::INT_AND || Op.NumInputs < 2)
       return false;
     const MedVar &M = Op.Inputs[TaintedIdx == 0 ? 1 : 0];
-    return M.Kind == MedVar::Const && M.ConstVal != 0 &&
-           (M.ConstVal & 0xFFULL) == 0;
+    if (M.Kind != MedVar::Const)
+      return false;
+    switch (Op.Output.Size) {
+    case 2:
+      return M.ConstVal == 0xFF00ULL;
+    case 4:
+      return M.ConstVal == 0xFFFFFF00ULL || M.ConstVal == 0xFFFF00FFULL ||
+             M.ConstVal == 0xFFFF0000ULL;
+    case 8:
+      return M.ConstVal == 0xFFFFFFFFFFFFFF00ULL ||
+             M.ConstVal == 0xFFFFFFFFFFFF00FFULL ||
+             M.ConstVal == 0xFFFFFFFFFFFF0000ULL ||
+             M.ConstVal == 0xFFFFFFFF00000000ULL;
+    default:
+      return false;
+    }
   };
   // The BSR/BSF zero-source preserve `SELECT(src==0, old_dst, computed)` reads
   // the register only as `old_dst` (input 1); `computed` is `(bits-1) -
@@ -308,7 +323,7 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
             Changed = true;
           continue;
         }
-        if (isUpperPreserveMask(Op, TIdx))
+        if (isPartialWritePreserveMask(Op, TIdx))
           continue; // partial-write reconstruction, not a genuine use
         if (isBsrBsfPreserve(Op, TIdx))
           continue;   // BSR/BSF zero-source preserve, not a genuine use

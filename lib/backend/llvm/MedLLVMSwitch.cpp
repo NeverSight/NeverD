@@ -889,6 +889,17 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     return false;
   auto *IdxTy = llvm::cast<llvm::IntegerType>(Index->getType());
 
+  // The table address calculation wraps at the target's pointer width.  Some
+  // i386 lifts represent preceding arithmetic in i64 (for example after a
+  // zext), but comparing that widened, non-wrapping value against sign-extended
+  // i32 case labels lets LLVM prove every negative case impossible.  Bring the
+  // switch condition back into the machine-address domain before optimization.
+  const unsigned PtrBits = getTargetRegInfo(TargetArch).PointerSize * 8;
+  if (PtrBits != 0 && IdxTy->getBitWidth() > PtrBits) {
+    IdxTy = llvm::IntegerType::get(*Ctx, PtrBits);
+    Index = Builder.CreateTrunc(Index, IdxTy, "jt.idx.machine");
+  }
+
   // A masked index covers every case, so the default is unreachable; route it
   // to the first target to satisfy LLVM's required default destination.
   auto *SW = Builder.CreateSwitch(Index, CaseBlocks[0],

@@ -1043,9 +1043,15 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       // GOTOFF`/`pc+litpool`) folds via prefix emulation; a runtime copy of it
       // in the loop body does not (the emulator halts at the loop back-edge),
       // so try each register along the COPY chain and take the first that
-      // folds.
+      // folds.  Once the def chain moves before a register overwrite, emulate
+      // only up to that earlier use point; using the select's cutoff throughout
+      // would observe the newer register value and can mistake the other table
+      // arm for this one.
       if (Cur.isReg()) {
-        auto F = foldRegConstant(Img, Rec, Cur.Offset, Cutoff);
+        va_t FoldCutoff = Cutoff;
+        if (CurFrom >= 0 && CurFrom < static_cast<int>(Ops.size()))
+          FoldCutoff = std::min(FoldCutoff, Ops[CurFrom].Addr);
+        auto F = foldRegConstant(Img, Rec, Cur.Offset, FoldCutoff);
         if (F && *F) {
           if (TableEntW == 0 || countCodePtrRelocRun(Img, *F, TableEntW) > 0)
             return F;
@@ -1078,8 +1084,12 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (O.Opcode == NdOp::INT_ADD && O.NumInputs >= 2) {
         auto A = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
         auto B = foldArm(O.Inputs[1], D - 1, Cutoff, Depth + 1);
-        if (A && B)
-          return *A + *B;
+        if (A && B) {
+          uint64_t Sum = *A + *B;
+          if (O.Output.Size > 0 && O.Output.Size < sizeof(uint64_t))
+            Sum &= (uint64_t{1} << (O.Output.Size * 8)) - 1;
+          return Sum;
+        }
         // i386 PIC materialises a table base as GOT_base + GOTOFF.  GOT_base
         // is legitimately zero in the relocatable image model, but
         // foldRegConstant deliberately rejects a zero fold, leaving just the
@@ -1092,6 +1102,17 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         if (A && !B && TableEntW != 0 &&
             countCodePtrRelocRun(Img, *A, TableEntW) > 0)
           return A;
+        break;
+      }
+      if (O.Opcode == NdOp::INT_SUB && O.NumInputs >= 2) {
+        auto A = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
+        auto B = foldArm(O.Inputs[1], D - 1, Cutoff, Depth + 1);
+        if (A && B) {
+          uint64_t Diff = *A - *B;
+          if (O.Output.Size > 0 && O.Output.Size < sizeof(uint64_t))
+            Diff &= (uint64_t{1} << (O.Output.Size * 8)) - 1;
+          return Diff;
+        }
         break;
       }
       if (O.Opcode == NdOp::LOAD) {
