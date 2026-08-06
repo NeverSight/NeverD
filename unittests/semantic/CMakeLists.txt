@@ -859,13 +859,6 @@ target_link_libraries(NeverDSemanticTests PRIVATE
   LLVMSupport
 )
 
-# LibCNames' C++ helpers are intentionally not exported from neverd_shared on
-# Windows.  SemanticRoundTripFixture calls them directly, so provide their
-# static definitions to the test executable.
-if(WIN32)
-  target_link_libraries(NeverDSemanticTests PRIVATE NeverDLibC)
-endif()
-
 if(TARGET neverd)
   add_dependencies(NeverDSemanticTests neverd)
 endif()
@@ -1125,6 +1118,21 @@ target_link_libraries(NeverDAvxUpperXformTests PRIVATE
 
 if(TARGET neverd)
   add_dependencies(NeverDAvxUpperXformTests neverd)
+endif()
+
+# LibCNames' C++ helpers are intentionally not exported from neverd_shared on
+# Windows.  Every executable that compiles SemanticRoundTripFixture calls them
+# directly, so provide their static definitions to all fixture users.
+if(WIN32)
+  foreach(_neverd_semantic_fixture_target IN ITEMS
+      NeverDSemanticTests
+      NeverDSwitchXformTests
+      NeverDIndCallXformTests
+      NeverDCFGLoopXformTests
+      NeverDTwoTableXformTests
+      NeverDAvxUpperXformTests)
+    target_link_libraries(${_neverd_semantic_fixture_target} PRIVATE NeverDLibC)
+  endforeach()
 endif()
 
 # --- Throwaway fast repro for obfuscation/codegen debugging ---
