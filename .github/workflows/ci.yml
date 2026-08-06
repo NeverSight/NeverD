@@ -137,7 +137,7 @@ jobs:
             --output-on-failure \
             --progress \
             --parallel "$TEST_PARALLEL" 2>&1 | tee ctest.log
-          executed="$(tr -d '\r' < ctest.log | sed -nE 's/.*tests passed, 0 tests failed out of ([0-9]+).*/\1/p' | tail -n 1)"
+          executed="$(tr -d '\r' < ctest.log | sed -nE 's/^100% tests passed(, 0 tests failed)? out of ([0-9]+)$/\2/p' | tail -n 1)"
           if [[ "$executed" != "$EXPECTED_TESTS" ]]; then
             echo "CTest executed $executed tests; expected $EXPECTED_TESTS" >&2
             exit 1
