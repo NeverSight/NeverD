@@ -649,12 +649,18 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
           MaxI = std::max(MaxI, P.Id);
       }
       CRA2[MF.Entry] = MaxRI + 1;
-      CTA2[MF.Entry] = MaxI + 1;
+      // Keep a detected variadic callee's total arity open on the i386
+      // recovery pass too.  The first pass deliberately does this above so a
+      // constant-folded named argument can leave slot 0 empty while real
+      // varargs remain in later stack slots.  Replacing that open bound with
+      // the currently recovered fixed prefix here truncates those later
+      // varargs before finalizeVariadicCallees can size the overflow tail.
+      CTA2[MF.Entry] = MF.IsVariadic ? limits::kMaxCallArgs : MaxI + 1;
     }
     for (auto &MF : Result.MedFuncs)
       recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CRA2, &CTA2,
                      &CalleeFPArity, &CalleeReturnsVec, &CalleeFPRegs,
-                     &CalleeHasSret);
+                     &CalleeHasSret, &CalleeIsVariadic);
   }
 
   // Variadic callees: size each one's overflow stack-parameter list from its
