@@ -104,12 +104,10 @@ uint16_t findFirstUseSize(const MedFunc &Func, uint64_t ParamRegOff,
   if (Func.Blocks.empty())
     return 0;
 
-  using ValueKey = std::tuple<MedVar::VarKind, int, int>;
   struct ValueEdge {
     ValueKey To;
     uint16_t WidthLimit = 0;
   };
-  auto Key = [](const MedVar &V) { return ValueKey{V.Kind, V.Id, V.SSAVer}; };
   auto IsValue = [](const MedVar &V) { return V.Kind != MedVar::Const; };
   auto LimitWidth = [](uint16_t Width, uint16_t Limit) {
     if (Width == 0)
@@ -123,7 +121,7 @@ uint16_t findFirstUseSize(const MedFunc &Func, uint64_t ParamRegOff,
   std::deque<ValueKey> Worklist;
   auto Seed = [&](const MedVar &V) {
     uint16_t Width = TRI.FullRegWidth;
-    auto [It, Inserted] = LiveInWidths.emplace(Key(V), Width);
+    auto [It, Inserted] = LiveInWidths.emplace(valueKey(V), Width);
     if (Inserted || It->second < Width) {
       It->second = Width;
       Worklist.push_back(It->first);
@@ -146,7 +144,7 @@ uint16_t findFirstUseSize(const MedFunc &Func, uint64_t ParamRegOff,
   auto AddEdge = [&](const MedVar &From, const MedVar &To,
                      uint16_t WidthLimit = 0) {
     if (IsValue(From) && IsValue(To))
-      Edges[Key(From)].push_back({Key(To), WidthLimit});
+      Edges[valueKey(From)].push_back({valueKey(To), WidthLimit});
   };
   for (const MedBlock &Blk : Func.Blocks) {
     for (const PhiNode &Phi : Blk.Phis)
@@ -198,7 +196,7 @@ uint16_t findFirstUseSize(const MedFunc &Func, uint64_t ParamRegOff,
   auto ConsumedWidth = [&](const MedVar &V) -> uint16_t {
     if (!IsValue(V) || V.Size == 0)
       return 0;
-    auto It = LiveInWidths.find(Key(V));
+    auto It = LiveInWidths.find(valueKey(V));
     if (It == LiveInWidths.end())
       return 0;
     return LimitWidth(V.Size, It->second);
@@ -254,34 +252,33 @@ namespace {
 bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
   if (Func.Blocks.empty())
     return false;
-  auto key = [](const MedVar &V) { return std::make_pair(V.Id, V.SSAVer); };
 
+  llvm::DenseMap<med_calling_conv_detail::ValueKey, const MedOp *> Definitions;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (!Op.Output.isConst())
+        Definitions.try_emplace(med_calling_conv_detail::valueKey(Op.Output),
+                                &Op);
   auto findDef = [&](const MedVar &V) -> const MedOp * {
-    for (const auto &Blk : Func.Blocks)
-      for (const auto &Op : Blk.Ops)
-        if (Op.Output.Id == V.Id && Op.Output.SSAVer == V.SSAVer &&
-            Op.Output.Kind == V.Kind)
-          return &Op;
-    return nullptr;
+    if (V.isConst())
+      return nullptr;
+    auto It = Definitions.find(med_calling_conv_detail::valueKey(V));
+    return It == Definitions.end() ? nullptr : It->second;
   };
 
   // Seed the taint set with the entry-block live-in self-copies of the
   // register.
-  std::set<std::pair<int, int>> Taint;
+  llvm::SmallVector<MedVar, 2> Seeds;
   for (const auto &Op : Func.Blocks[0].Ops) {
     if (Op.Opcode != NdOp::COPY || Op.NumInputs < 1)
       continue;
     if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == ParamRegOff &&
         Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].Id == Op.Output.Id)
-      Taint.insert(key(Op.Output));
+      Seeds.push_back(Op.Output);
   }
-  if (Taint.empty())
+  if (Seeds.empty())
     return false; // no identifiable live-in value: keep existing behavior
 
-  auto tainted = [&](const MedVar &V) {
-    return (V.Kind == MedVar::Reg || V.Kind == MedVar::Temp) &&
-           Taint.count(key(V)) != 0;
-  };
   // Value-preserving forwards through which taint must propagate.  A COPY only
   // keeps "this is still the live-in register" when it targets the *same*
   // register (an SSA version bump / the live-in self-copy); a COPY to a
@@ -342,41 +339,34 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
     return Lz && Lz->Opcode == NdOp::LZCOUNT;
   };
 
-  bool Changed = true;
-  int Guard = 0;
-  while (Changed && Guard++ < 100000) {
-    Changed = false;
-    for (const auto &Blk : Func.Blocks) {
-      for (const auto &Phi : Blk.Phis) {
-        for (const auto &[Pred, AV] : Phi.Args)
-          if (tainted(AV)) {
-            if (Taint.insert(key(Phi.Output)).second)
-              Changed = true;
-            break;
-          }
-      }
-      for (const auto &Op : Blk.Ops) {
-        int TIdx = -1;
-        for (uint8_t K = 0; K < Op.NumInputs; ++K)
-          if (tainted(Op.Inputs[K])) {
-            TIdx = K;
-            break;
-          }
-        if (TIdx < 0)
-          continue;
-        if (isPassThrough(Op)) {
-          if ((Op.Output.Kind == MedVar::Reg ||
-               Op.Output.Kind == MedVar::Temp) &&
-              Taint.insert(key(Op.Output)).second)
-            Changed = true;
-          continue;
+  med_calling_conv_detail::ValueSet Taint =
+      med_calling_conv_detail::computeForwardValueClosure(
+          Func, Seeds, [&](const MedOp &Op, unsigned InputIdx) {
+            return InputIdx == 0 &&
+                   (Op.Output.Kind == MedVar::Reg ||
+                    Op.Output.Kind == MedVar::Temp) &&
+                   isPassThrough(Op);
+          });
+  auto tainted = [&](const MedVar &V) {
+    return (V.Kind == MedVar::Reg || V.Kind == MedVar::Temp) &&
+           med_calling_conv_detail::containsValue(Taint, V);
+  };
+
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const MedOp &Op : Block.Ops) {
+      int TaintedIdx = -1;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (tainted(Op.Inputs[I])) {
+          TaintedIdx = I;
+          break;
         }
-        if (isPartialWritePreserveMask(Op, TIdx))
-          continue; // partial-write reconstruction, not a genuine use
-        if (isBsrBsfPreserve(Op, TIdx))
-          continue;   // BSR/BSF zero-source preserve, not a genuine use
-        return false; // a genuine consumer of the live-in value: keep the param
-      }
+      if (TaintedIdx < 0 || isPassThrough(Op))
+        continue;
+      if (isPartialWritePreserveMask(Op, TaintedIdx))
+        continue; // partial-write reconstruction, not a genuine use
+      if (isBsrBsfPreserve(Op, TaintedIdx))
+        continue;   // BSR/BSF zero-source preserve, not a genuine use
+      return false; // a genuine consumer of the live-in value: keep the param
     }
   }
   return true; // every use is a sub-register merge: a scratch false positive

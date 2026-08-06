@@ -13,6 +13,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedCallingConvDetail.h"
 
 #include <algorithm>
 #include <functional>
@@ -21,6 +22,9 @@
 #include <tuple>
 
 namespace neverd {
+
+using med_calling_conv_detail::computeForwardValueClosure;
+using med_calling_conv_detail::containsValue;
 
 //===----------------------------------------------------------------------===//
 // XMM / floating-point parameter detection (x86-64)
@@ -47,11 +51,6 @@ void detectXMMParams(
   // stack argument to a wrong offset; recover the register only when its
   // live-in is truly used.
   auto liveInValueUsed = [&](const MedVar &LiveIn) {
-    auto key = [](const MedVar &V) { return std::make_pair(V.Id, V.SSAVer); };
-    auto tainted = [](const MedVar &V, const std::set<std::pair<int, int>> &T) {
-      return (V.Kind == MedVar::Reg || V.Kind == MedVar::Temp) &&
-             T.count(std::make_pair(V.Id, V.SSAVer)) != 0;
-    };
     // A value-preserving forward (the live-in keeps flowing, not yet consumed).
     auto isPassThrough = [](const MedOp &Op) {
       switch (Op.Opcode) {
@@ -70,62 +69,57 @@ void detectXMMParams(
     // `x ^ x` / `x - x`: both operands the same tainted value, result is 0 —
     // the value is discarded, not consumed.
     auto isSelfCancel = [&](const MedOp &Op,
-                            const std::set<std::pair<int, int>> &T) {
+                            const med_calling_conv_detail::ValueSet &Values) {
       if ((Op.Opcode != NdOp::INT_XOR && Op.Opcode != NdOp::INT_SUB) ||
           Op.NumInputs != 2)
         return false;
       const MedVar &A = Op.Inputs[0], &B = Op.Inputs[1];
-      return tainted(A, T) && A.Id == B.Id && A.SSAVer == B.SSAVer &&
+      return containsValue(Values, A) && A.Id == B.Id && A.SSAVer == B.SSAVer &&
              A.Kind == B.Kind;
     };
 
-    std::set<std::pair<int, int>> Taint{key(LiveIn)};
-    bool Changed = true;
-    int Guard = 0;
-    while (Changed && Guard++ < 100000) {
-      Changed = false;
-      for (const auto &Blk : Func.Blocks) {
-        for (const auto &Phi : Blk.Phis)
-          for (const auto &[Pred, AV] : Phi.Args)
-            if (tainted(AV, Taint) && Taint.insert(key(Phi.Output)).second)
-              Changed = true;
-        for (const auto &Op : Blk.Ops) {
-          bool Reads = false;
-          for (uint8_t K = 0; K < Op.NumInputs; ++K)
-            if (tainted(Op.Inputs[K], Taint)) {
-              Reads = true;
-              break;
-            }
-          if (!Reads)
-            continue;
-          // The self-copy that re-publishes the live-in keeps the same value.
-          bool IsSelfCopy = Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
-                            Op.Output.Kind == MedVar::Reg &&
-                            Op.Inputs[0].Id == Op.Output.Id;
-          if (isSelfCancel(Op, Taint))
-            continue; // discards the value
-          // A reinterpret of the FP value into a general-purpose register
-          // (`fmov w0, s0` / `movd eax, xmm0`) materializes the float's bits in
-          // the integer domain: a genuine use of the FP parameter even though
-          // it is a single-operand COPY/cast.  A function that only bit-casts
-          // its float argument to its integer representation (`uint32_t
-          // fbits(float f){ return *(uint32_t*)&f; }`) has no other consumer,
-          // so without this its incoming value looks "unused" and the FP
-          // parameter is dropped (the function then reads 0).  Same-class
-          // FP->FP forwards and flows into a Temp stay value-preserving
-          // (handled below).
-          if ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT ||
-               Op.Opcode == NdOp::INT_SEXT || Op.Opcode == NdOp::SUBBYTES) &&
-              Op.Output.Kind == MedVar::Reg &&
-              !TRI.isVectorReg(Op.Output.RegOff))
-            return true;
-          if (IsSelfCopy || isPassThrough(Op)) {
-            if (Taint.insert(key(Op.Output)).second)
-              Changed = true;
-            continue;
+    auto isSelfCopy = [](const MedOp &Op) {
+      return Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+             Op.Output.Kind == MedVar::Reg && Op.Inputs[0].Id == Op.Output.Id;
+    };
+    auto Taint = computeForwardValueClosure(
+        Func, LiveIn, [&](const MedOp &Op, unsigned InputIdx) {
+          return InputIdx == 0 &&
+                 (Op.Output.Kind == MedVar::Reg ||
+                  Op.Output.Kind == MedVar::Temp) &&
+                 (isSelfCopy(Op) || isPassThrough(Op));
+        });
+    auto tainted = [&](const MedVar &V) {
+      return (V.Kind == MedVar::Reg || V.Kind == MedVar::Temp) &&
+             containsValue(Taint, V);
+    };
+
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const MedOp &Op : Block.Ops) {
+        bool Reads = false;
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (tainted(Op.Inputs[I])) {
+            Reads = true;
+            break;
           }
-          return true; // a genuine consumer of the live-in value
-        }
+        if (!Reads || isSelfCancel(Op, Taint))
+          continue;
+        // A reinterpret of the FP value into a general-purpose register
+        // (`fmov w0, s0` / `movd eax, xmm0`) materializes the float's bits in
+        // the integer domain: a genuine use of the FP parameter even though
+        // it is a single-operand COPY/cast.  A function that only bit-casts
+        // its float argument to its integer representation (`uint32_t
+        // fbits(float f){ return *(uint32_t*)&f; }`) has no other consumer,
+        // so without this its incoming value looks "unused" and the FP
+        // parameter is dropped (the function then reads 0).  Same-class
+        // FP->FP forwards and flows into a Temp stay value-preserving.
+        if ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT ||
+             Op.Opcode == NdOp::INT_SEXT || Op.Opcode == NdOp::SUBBYTES) &&
+            Op.Output.Kind == MedVar::Reg && !TRI.isVectorReg(Op.Output.RegOff))
+          return true;
+        if (isSelfCopy(Op) || isPassThrough(Op))
+          continue;
+        return true; // a genuine consumer of the live-in value
       }
     }
     return false;
@@ -343,6 +337,10 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
   // Byte offset of an incoming stack argument loaded through \p AddrVar (the
   // address relative to the entry esp must land at +4 or above, since +0 is the
   // return address); std::nullopt otherwise.
+  auto isVariadicOverflowOffset = [&](int64_t Off) {
+    return Func.IsVariadic && Func.VariadicOverflowBase > 0 &&
+           Off >= Func.VariadicOverflowBase;
+  };
   auto stackArgOffset = [&](const MedVar &AddrVar) -> std::optional<int64_t> {
     if (AddrVar.Kind != MedVar::Temp)
       return std::nullopt;
@@ -354,8 +352,7 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
     // finalized from call sites; rewriting one loop iteration to a fixed
     // parameter (notably the high word of an i386 long long) corrupts every
     // later va_arg and also duplicates overflow homes in the emitter.
-    if (Func.IsVariadic && Func.VariadicOverflowBase > 0 &&
-        *Off >= Func.VariadicOverflowBase)
+    if (isVariadicOverflowOffset(*Off))
       return std::nullopt;
     return *Off;
   };
@@ -372,8 +369,7 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
     auto Off = traceOff(AddrVar, 0);
     if (!Off || *Off < 4 || *Off > 0x400)
       return std::nullopt;
-    if (Func.IsVariadic && Func.VariadicOverflowBase > 0 &&
-        *Off >= Func.VariadicOverflowBase)
+    if (isVariadicOverflowOffset(*Off))
       return std::nullopt;
     return *Off;
   };

@@ -24,14 +24,19 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/MedIR.h"
+
+#include "llvm/ADT/SmallVector.h"
 
 #include <functional>
 #include <optional>
 #include <set>
-#include <tuple>
 
 namespace neverd {
+
+using med_calling_conv_detail::computeForwardValueClosure;
+using med_calling_conv_detail::containsValue;
 
 namespace {
 
@@ -342,18 +347,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     // stored to a frame slot S, AND a reload from that same slot S.
     const int64_t MinPtrDelta = 2 * TRI.PointerSize;
     std::set<int64_t> HomeSlots;
-    using VarKey = std::tuple<int, int, int>;
-    std::set<VarKey> DirectWalkPtrs;
-    std::set<VarKey> AdvancedWalkPtrs;
-    auto key = [](const MedVar &V) {
-      return VarKey{static_cast<int>(V.Kind), V.Id, V.SSAVer};
-    };
-    auto tainted = [&](const MedVar &V) {
-      return !V.isConst() && DirectWalkPtrs.count(key(V)) != 0;
-    };
-    auto advanced = [&](const MedVar &V) {
-      return !V.isConst() && AdvancedWalkPtrs.count(key(V)) != 0;
-    };
+    llvm::SmallVector<MedVar, 2> DirectSeeds;
     for (const auto &Blk : Func.Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
@@ -362,7 +356,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
                 TRI.PointerSize > 0 && (*VD % TRI.PointerSize) == 0)
               if (auto AD = entrySpDelta(Func, SpOff, Op.Inputs[0], 0)) {
                 HomeSlots.insert(*AD);
-                DirectWalkPtrs.insert(key(Op.Inputs[1]));
+                DirectSeeds.push_back(Op.Inputs[1]);
               }
     bool Reloaded = false;
     for (const auto &Blk : Func.Blocks)
@@ -377,66 +371,53 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     // home slot.  Follow that seed through PHIs, width-preserving views, and
     // constant pointer advances; a load through the resulting value proves the
     // stored entry-SP-positive pointer is an active va_arg walk.
-    bool Changed = true;
-    for (int Guard = 0; Changed && Guard < 100000; ++Guard) {
-      Changed = false;
-      for (const auto &Blk : Func.Blocks) {
-        for (const auto &Phi : Blk.Phis) {
-          bool PhiTainted = false;
-          bool PhiAdvanced = false;
-          for (const auto &[Pred, V] : Phi.Args) {
-            (void)Pred;
-            PhiTainted |= tainted(V);
-            PhiAdvanced |= advanced(V);
-          }
-          if (PhiTainted && DirectWalkPtrs.insert(key(Phi.Output)).second)
-            Changed = true;
-          if (PhiAdvanced && AdvancedWalkPtrs.insert(key(Phi.Output)).second)
-            Changed = true;
-        }
-        for (const auto &Op : Blk.Ops) {
-          bool Forward = false;
-          bool ForwardAdvanced = false;
-          switch (Op.Opcode) {
-          case NdOp::COPY:
-          case NdOp::INT_ZEXT:
-          case NdOp::INT_SEXT:
-            Forward = Op.NumInputs >= 1 && tainted(Op.Inputs[0]);
-            ForwardAdvanced = Forward && advanced(Op.Inputs[0]);
-            break;
-          case NdOp::SUBBYTES:
-            Forward = Op.NumInputs >= 2 && tainted(Op.Inputs[0]) &&
-                      Op.Inputs[1].isConst() && Op.Inputs[1].ConstVal == 0;
-            ForwardAdvanced = Forward && advanced(Op.Inputs[0]);
-            break;
-          case NdOp::INT_ADD:
-            Forward = Op.NumInputs >= 2 &&
-                      ((tainted(Op.Inputs[0]) && Op.Inputs[1].isConst()) ||
-                       (Op.Inputs[0].isConst() && tainted(Op.Inputs[1])));
-            ForwardAdvanced = Forward;
-            break;
-          case NdOp::INT_SUB:
-            Forward = Op.NumInputs >= 2 && tainted(Op.Inputs[0]) &&
-                      Op.Inputs[1].isConst();
-            ForwardAdvanced = Forward;
-            break;
-          default:
-            break;
-          }
-          if (Forward && !Op.Output.isConst() &&
-              DirectWalkPtrs.insert(key(Op.Output)).second)
-            Changed = true;
-          if (ForwardAdvanced && !Op.Output.isConst() &&
-              AdvancedWalkPtrs.insert(key(Op.Output)).second)
-            Changed = true;
-        }
+    auto forwardsTransparent = [](const MedOp &Op, unsigned InputIdx) {
+      if (InputIdx != 0)
+        return false;
+      switch (Op.Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+        return Op.NumInputs >= 1;
+      case NdOp::SUBBYTES:
+        return Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+               Op.Inputs[1].ConstVal == 0;
+      default:
+        return false;
       }
-    }
+    };
+    auto forwardsConstantAdvance = [](const MedOp &Op, unsigned InputIdx) {
+      if (Op.NumInputs < 2)
+        return false;
+      if (Op.Opcode == NdOp::INT_ADD)
+        return (InputIdx == 0 && Op.Inputs[1].isConst()) ||
+               (InputIdx == 1 && Op.Inputs[0].isConst());
+      return Op.Opcode == NdOp::INT_SUB && InputIdx == 0 &&
+             Op.Inputs[1].isConst();
+    };
+
+    auto DirectWalkPtrs = computeForwardValueClosure(
+        Func, DirectSeeds, [&](const MedOp &Op, unsigned InputIdx) {
+          return forwardsTransparent(Op, InputIdx) ||
+                 forwardsConstantAdvance(Op, InputIdx);
+        });
+    llvm::SmallVector<MedVar, 4> AdvancedSeeds;
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          if (forwardsConstantAdvance(Op, I) &&
+              containsValue(DirectWalkPtrs, Op.Inputs[I])) {
+            AdvancedSeeds.push_back(Op.Output);
+            break;
+          }
+    auto AdvancedWalkPtrs =
+        computeForwardValueClosure(Func, AdvancedSeeds, forwardsTransparent);
+
     bool UsedAsLoad = false;
     for (const auto &Blk : Func.Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-            advanced(Op.Inputs[0]))
+            containsValue(AdvancedWalkPtrs, Op.Inputs[0]))
           UsedAsLoad = true;
     Marked = !HomeSlots.empty() && (Reloaded || UsedAsLoad);
   }
