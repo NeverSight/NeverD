@@ -673,6 +673,113 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
   if (!RunGV)
     return nullptr;
 
+  // A compiler may merge two forms of the same writable-data pointer at a
+  // MedIR PHI: one arm loaded from a relocated data-pointer table (already
+  // emitted as ptrtoint(@writable_run + off)), and another arm materialized
+  // from an executable literal pool (still the original image VA).  MedIR
+  // phis are lowered through edge copies and allocas, so inspect the MedIR
+  // provenance here; the pre-optimization LLVM value is only an alloca load.
+  std::function<bool(const MedVar &, int)> carriesSymbolizedPointer =
+      [&](const MedVar &V, int Depth) -> bool {
+    if (V.isConst() || Depth > 16)
+      return false;
+    if (const PhiNode *Phi = lookupPhi(V)) {
+      for (const auto &[PredId, Arg] : Phi->Args) {
+        (void)PredId;
+        if (carriesSymbolizedPointer(Arg, Depth + 1))
+          return true;
+      }
+      return false;
+    }
+    const MedOp *Def = lookupDef(V);
+    if (!Def)
+      return false;
+    if (Def->Opcode == NdOp::LOAD)
+      return Def->NumInputs >= 1 && ptrTableUniqueSegment(Def->Inputs[0]) != 0;
+    switch (Def->Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+    case NdOp::SUBBYTES:
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+    case NdOp::INT_OR:
+    case NdOp::INT_AND:
+    case NdOp::INT_XOR:
+    case NdOp::SELECT:
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        if (carriesSymbolizedPointer(Def->Inputs[I], Depth + 1))
+          return true;
+      break;
+    default:
+      break;
+    }
+    return false;
+  };
+  auto resolveMixedPointerPhi = [&]() -> llvm::Value * {
+    const PhiNode *BasePhi = lookupPhi(AddrVar);
+    if (!BasePhi)
+      if (const MedOp *Def = lookupDef(AddrVar))
+        if (Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB ||
+            Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
+            Def->Opcode == NdOp::INT_SEXT || Def->Opcode == NdOp::SUBBYTES)
+          for (uint8_t I = 0; I < Def->NumInputs; ++I)
+            if (const PhiNode *Candidate = lookupPhi(Def->Inputs[I])) {
+              BasePhi = Candidate;
+              break;
+            }
+    if (!BasePhi)
+      return nullptr;
+    bool AnySymbolized = false;
+    bool AnyRaw = false;
+    for (const auto &[PredId, Arg] : BasePhi->Args) {
+      (void)PredId;
+      bool IsSymbolized = carriesSymbolizedPointer(Arg, 0);
+      AnySymbolized |= IsSymbolized;
+      AnyRaw |= !IsSymbolized;
+    }
+    if (!AnySymbolized)
+      return nullptr;
+
+    llvm::Value *Raw = getVar(AddrVar, Builder);
+    if (!Raw)
+      return nullptr;
+    auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
+    if (!AnyRaw)
+      return Raw->getType()->isPointerTy()
+                 ? Raw
+                 : Builder.CreateIntToPtr(Raw, PtrTy, "wrptr.symbolized");
+
+    const Segment *RunSeg = Img->getSegmentFor(RunStart);
+    uint64_t RunLen =
+        RunSeg ? (RunSeg->Size ? RunSeg->Size : RunSeg->Data.size()) : 0;
+    if (RunLen == 0)
+      return nullptr;
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    llvm::Value *RawInt = Raw;
+    if (RawInt->getType()->isPointerTy())
+      RawInt = Builder.CreatePtrToInt(RawInt, I64Ty);
+    else if (RawInt->getType() != I64Ty)
+      RawInt = Builder.CreateZExtOrTrunc(RawInt, I64Ty);
+    llvm::Value *InOldRun = Builder.CreateAnd(
+        Builder.CreateICmpUGE(RawInt, llvm::ConstantInt::get(I64Ty, RunStart)),
+        Builder.CreateICmpULT(
+            RawInt, llvm::ConstantInt::get(I64Ty, RunStart + RunLen)));
+    llvm::Value *OldOff =
+        Builder.CreateSub(RawInt, llvm::ConstantInt::get(I64Ty, RunStart));
+    llvm::Value *Rebased = Builder.CreateGEP(llvm::Type::getInt8Ty(*Ctx), RunGV,
+                                             OldOff, "wrptr.rebased");
+    llvm::Value *AlreadySymbolized =
+        Raw->getType()->isPointerTy()
+            ? Raw
+            : Builder.CreateIntToPtr(Raw, PtrTy, "wrptr.relocated");
+    return Builder.CreateSelect(InOldRun, Rebased, AlreadySymbolized,
+                                "wrptr.mixed");
+  };
+  if (!IsValueOperand)
+    if (llvm::Value *P = resolveMixedPointerPhi())
+      return P;
+
   auto i386WritableBlendAddr = [&](const MedVar &V) -> bool {
     if (TargetArch != Arch::X86 || !CurMedFunc || V.isConst())
       return false;

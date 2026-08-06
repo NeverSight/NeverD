@@ -755,6 +755,13 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
     // XMM0 vector) is also carried in the FP return register, not RAX.
     bool WantFloat =
         RetTy->isFloatTy() || RetTy->isDoubleTy() || RetTy->isVectorTy();
+    // i386 cdecl returns scalar FP values through the x87 stack.  The physical
+    // register carrying logical st0 depends on TOP at the return site (often
+    // ST7 after a final `fld`), so match the newest x87-stack write instead of
+    // an older XMM0 temporary.  Apple Clang commonly leaves the final value in
+    // XMM0 as well, but upstream Clang is free to schedule the calculation so
+    // only the x87 load materializes the ABI return.
+    const bool WantX87 = WantFloat && CurMedFunc->FPReturnViaX87;
     // x86 returns FP in XMM0; on ARM/AArch64 the FP return value is modeled
     // in the integer return register here (V0/D0 are not the tracked var).
     uint64_t FloatRetOff = TRI.fpReturnModelReg();
@@ -784,7 +791,11 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
         if (RIt->Output.Kind != MedVar::Reg || RIt->Output.Size == 0)
           continue;
 
-        if (WantFloat && RIt->Output.RegOff == FloatRetOff) {
+        if (WantX87 && TRI.isX87StackReg(RIt->Output.RegOff)) {
+          // Reverse iteration sees the value at the current x87 top first.
+          if (!RetVar)
+            RetVar = &RIt->Output;
+        } else if (WantFloat && !WantX87 && RIt->Output.RegOff == FloatRetOff) {
           if (!RetVar || RIt->Output.Size > RetVar->Size)
             RetVar = &RIt->Output;
         }
@@ -813,7 +824,11 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
         for (auto &Phi : Blk.Phis) {
           if (Phi.Output.Kind != MedVar::Reg || Phi.Output.Size == 0)
             continue;
-          if (WantFloat && Phi.Output.RegOff == FloatRetOff) {
+          if (WantX87 && TRI.isX87StackReg(Phi.Output.RegOff)) {
+            if (!RetVar || Phi.Output.Size > RetVar->Size)
+              RetVar = &Phi.Output;
+          } else if (WantFloat && !WantX87 &&
+                     Phi.Output.RegOff == FloatRetOff) {
             if (!RetVar || Phi.Output.Size > RetVar->Size)
               RetVar = &Phi.Output;
           }
@@ -876,6 +891,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
     // for a `<2 x i64>` function type produces a type-mismatched `ret`.
     bool WantFloat =
         RetTy->isFloatTy() || RetTy->isDoubleTy() || RetTy->isVectorTy();
+    const bool WantX87 = WantFloat && CurMedFunc->FPReturnViaX87;
     uint64_t RetRegOff = WantFloat ? TRI.fpReturnModelReg() : TRI.IntReturnReg;
     int RetBlkId = -1;
     for (auto &Blk : CurMedFunc->Blocks) {
@@ -907,7 +923,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
         const MedVar *RetVar = nullptr;
         for (auto BIt = Blk.Ops.rbegin(); BIt != Blk.Ops.rend(); ++BIt) {
           if (BIt->Output.Kind == MedVar::Reg && BIt->Output.Size > 0 &&
-              BIt->Output.RegOff == RetRegOff) {
+              (WantX87 ? TRI.isX87StackReg(BIt->Output.RegOff)
+                       : BIt->Output.RegOff == RetRegOff)) {
             if (!RetVar || BIt->Output.Size > RetVar->Size)
               RetVar = &BIt->Output;
           }
@@ -918,7 +935,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
         }
         for (auto &Phi : Blk.Phis) {
           if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
-              Phi.Output.RegOff == RetRegOff) {
+              (WantX87 ? TRI.isX87StackReg(Phi.Output.RegOff)
+                       : Phi.Output.RegOff == RetRegOff)) {
             RetVal = getVar(Phi.Output, Builder);
             break;
           }
@@ -934,7 +952,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
     // returned unchanged (e.g. `double f(int n,double x){ if(n<=0) return x;
     // …}` on the `n<=0` path, where the FP return register is never written).
     // Read it as the live-in value of the FP return register.
-    if (!RetVal && WantFloat && RetRegOff != 0) {
+    if (!RetVal && WantFloat && !WantX87 && RetRegOff != 0) {
       MedVar FpLiveIn;
       FpLiveIn.Kind = MedVar::Reg;
       FpLiveIn.RegOff = RetRegOff;
@@ -960,7 +978,17 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
   }
 
   if (RetVal->getType() != RetTy) {
-    if (RetTy->isIntegerTy() && RetVal->getType()->isIntegerTy()) {
+    if ((RetTy->isFloatTy() || RetTy->isDoubleTy()) && CurMedFunc &&
+        CurMedFunc->FPReturnViaX87 &&
+        (RetVal->getType()->isX86_FP80Ty() ||
+         RetVal->getType()->isIntegerTy(80))) {
+      // The x87 register is an 80-bit numeric value, not a wider bit container
+      // whose low bits encode an IEEE float/double.  Convert its precision;
+      // bitcasting and truncating the i80 representation corrupts the result.
+      if (RetVal->getType()->isIntegerTy())
+        RetVal = Builder.CreateBitCast(RetVal, llvm::Type::getX86_FP80Ty(*Ctx));
+      RetVal = Builder.CreateFPTrunc(RetVal, RetTy);
+    } else if (RetTy->isIntegerTy() && RetVal->getType()->isIntegerTy()) {
       if (RetVal->getType()->getIntegerBitWidth() > RetTy->getIntegerBitWidth())
         RetVal = Builder.CreateTrunc(RetVal, RetTy);
       else

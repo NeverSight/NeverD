@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/decode/AArch64NativeDecode.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64Lifter.h"
 
@@ -496,10 +497,8 @@ bool AArch64Lifter::liftCore(LiftState &S, const cs_insn *Insn,
       bool Is64 = (Enc >> 31) & 1;
       unsigned RnIdx = (Enc >> 5) & 0x1F;
       unsigned RmIdx = (Enc >> 16) & 0x1F;
-      auto RnReg = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RnIdx
-                                                 : AARCH64_REG_W0 + RnIdx);
-      auto RmReg = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RmIdx
-                                                 : AARCH64_REG_W0 + RmIdx);
+      auto RnReg = a64native::gpr(RnIdx, Is64);
+      auto RmReg = a64native::gpr(RmIdx, Is64);
       auto RnRI = mapCapstoneReg(RnReg);
       auto RmRI = mapCapstoneReg(RmReg);
       A = (RnRI.Size > 0) ? NdVar::reg(RnRI.Offset, RnRI.Size)
@@ -539,10 +538,8 @@ bool AArch64Lifter::liftCore(LiftState &S, const cs_insn *Insn,
       bool Is64 = (Enc >> 31) & 1;
       unsigned RnIdx = (Enc >> 5) & 0x1F;
       unsigned RmIdx = (Enc >> 16) & 0x1F;
-      auto RnReg = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RnIdx
-                                                 : AARCH64_REG_W0 + RnIdx);
-      auto RmReg = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RmIdx
-                                                 : AARCH64_REG_W0 + RmIdx);
+      auto RnReg = a64native::gpr(RnIdx, Is64);
+      auto RmReg = a64native::gpr(RmIdx, Is64);
       auto RnRI = mapCapstoneReg(RnReg);
       auto RmRI = mapCapstoneReg(RmReg);
       A = (RnRI.Size > 0) ? NdVar::reg(RnRI.Offset, RnRI.Size)
@@ -582,10 +579,8 @@ bool AArch64Lifter::liftCore(LiftState &S, const cs_insn *Insn,
       bool Is64 = (Enc >> 31) & 1;
       unsigned RnIdx = (Enc >> 5) & 0x1F;
       unsigned RmIdx = (Enc >> 16) & 0x1F;
-      auto RnReg = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RnIdx
-                                                 : AARCH64_REG_W0 + RnIdx);
-      auto RmReg = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RmIdx
-                                                 : AARCH64_REG_W0 + RmIdx);
+      auto RnReg = a64native::gpr(RnIdx, Is64);
+      auto RmReg = a64native::gpr(RmIdx, Is64);
       auto RnRI = mapCapstoneReg(RnReg);
       auto RmRI = mapCapstoneReg(RmReg);
       A = (RnRI.Size > 0) ? NdVar::reg(RnRI.Offset, RnRI.Size)
@@ -1418,10 +1413,8 @@ bool AArch64Lifter::liftCore(LiftState &S, const cs_insn *Insn,
       bool Is64 = (Enc >> 31) & 1;
       unsigned RnIdx = (Enc >> 5) & 0x1F;
       unsigned RmIdx = (Enc >> 16) & 0x1F;
-      auto RnReg = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RnIdx
-                                                 : AARCH64_REG_W0 + RnIdx);
-      auto RmReg = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RmIdx
-                                                 : AARCH64_REG_W0 + RmIdx);
+      auto RnReg = a64native::gpr(RnIdx, Is64);
+      auto RmReg = a64native::gpr(RmIdx, Is64);
       auto RnRI = mapCapstoneReg(RnReg);
       auto RmRI = mapCapstoneReg(RmReg);
       Src = (RnRI.Size > 0) ? NdVar::reg(RnRI.Offset, RnRI.Size)

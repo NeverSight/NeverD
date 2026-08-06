@@ -91,9 +91,15 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
                                     llvm::IRBuilder<> &Builder) {
   if (V.isConst()) {
     constexpr uint64_t kMinGlobalDataAddr = limits::kMinGlobalDataAddr;
-    // A constant above the heuristic threshold, or one the loader proved is a
-    // relocation target inside read-only data, is a real pointer rather than an
-    // integer literal — resolve it to the embedded global.  The relocation set
+    unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
+    bool IsPointerWidth = V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz;
+    // A pointer-width constant above the heuristic threshold, or one the
+    // loader proved is a relocation target inside read-only data, is a real
+    // pointer rather than an integer literal — resolve it to the embedded
+    // global.  Requiring pointer width on the heuristic-only path keeps narrow
+    // arithmetic immediates such as an x86-64 `and r32, 0x2000` from becoming
+    // pointers when their value happens to fall inside a large rodata run.  The
+    // relocation set
     // catches low-VA rodata bases (e.g. an i386 GOTOFF `.rodata` base walked by
     // an induction pointer) that the bare numeric threshold cannot tell apart
     // from a small integer.  EXCEPTION: a value that the function also uses as
@@ -116,7 +122,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // i386 PIC stack table of node pointers mix two addressing models and
     // corrupt the mirror-relative load (the head nodes raw, the rodata tail
     // recompiled).
-    if (Img && (V.ConstVal > kMinGlobalDataAddr ||
+    if (Img && ((IsPointerWidth && V.ConstVal > kMinGlobalDataAddr) ||
                 ((Img->RelocDataAddrs.count(V.ConstVal) ||
                   Img->RodataAnchorSeg.count(V.ConstVal)) &&
                  !constValueUsedAsInteger(V.ConstVal) &&
@@ -172,7 +178,6 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // 4 bytes < 8, so the width guard keeps it an integer; the genuine
     // code-pointer call target is always materialized at the full pointer width
     // and is unaffected.
-    unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
     if (Img && (V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz) &&
         (V.ConstVal >= kMinGlobalDataAddr ||
          Img->CodeRefTargets.count(V.ConstVal))) {
