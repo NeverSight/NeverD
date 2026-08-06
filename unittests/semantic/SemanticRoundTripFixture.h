@@ -265,10 +265,17 @@ private:
         "clang -target " + EffTarget +
         " -nostdlib -c " + OptFlag + " -fno-stack-protector -fno-exceptions"
         " -fno-unwind-tables -fno-asynchronous-unwind-tables";
-    // The default ARM32 CPU pins armv7; an override target (e.g. ARMv8 crypto)
-    // supplies its own -march/-mfpu via ExtraFlags, so skip the pinned CPU.
+    // Normalize cross-target defaults across Clang distributions.  Apple Clang
+    // enables Cortex-A15 FP/NEON instructions for gnueabi and selects Pentium 4
+    // (SSE2) for i386, while Ubuntu Clang defaults those targets to soft-float
+    // and i686/x87 respectively.  The semantic grid tests NeverD, so keep its
+    // generated input stable instead of testing host-driver policy.  Explicit
+    // per-case flags follow these defaults and can still override them.
     if (IsARM32 && TC.ClangTargetOverride.empty())
-      CompileCmd += " -mcpu=cortex-a15";
+      CompileCmd += " -mcpu=cortex-a15 -mfloat-abi=softfp";
+    else if (UcArch == UC_ARCH_X86 && UcMode == UC_MODE_32 &&
+             TC.ClangTargetOverride.empty())
+      CompileCmd += " -march=pentium4";
     if (!TC.ExtraFlags.empty())
       CompileCmd += " " + TC.ExtraFlags;
     CompileCmd += " -o " + neverd::test::shellQuote(ObjPath) + " " +
@@ -688,7 +695,10 @@ private:
         " -nostdlib -c -O0 -fno-builtin -fno-stack-protector -fno-exceptions"
         " -fno-unwind-tables -fno-asynchronous-unwind-tables";
     if (IsARM32 && ClangTargetOverride.empty())
-      Cmd += " -mcpu=cortex-a15";
+      Cmd += " -mcpu=cortex-a15 -mfloat-abi=softfp";
+    else if (llvm::StringRef(EffTarget).starts_with("i386-") &&
+             ClangTargetOverride.empty())
+      Cmd += " -march=pentium4";
     Cmd += " -o " + neverd::test::shellQuote(ObjPath) + " " +
            neverd::test::shellQuote(SrcPath);
     auto R = runCmd(Cmd);

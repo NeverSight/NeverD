@@ -110,8 +110,9 @@ TEST_F(AArch64_RoundTrip, ParameterWidthFlowsThroughBranchPhi) {
   EXPECT_EQ(C.find("v1_0"), std::string::npos) << C;
   EXPECT_EQ(C.find("v2_0"), std::string::npos) << C;
 
-  auto Syntax = exec("clang", {"-target", "arm64-apple-darwin", "-fsyntax-only",
-                               CFile.string()});
+  // This only validates generated C syntax.  A Darwin cross-target on Linux
+  // suppresses the host libc include paths even though no target ABI is used.
+  auto Syntax = exec("clang", {"-fsyntax-only", CFile.string()});
   EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err << "\n" << C;
 }
 
@@ -189,7 +190,8 @@ TEST_F(AArch64_RoundTrip, LiveInIdentityAndCallClobbersStayExact) {
   EXPECT_NE(Q9LLVM.find("Q9.1_call_clobber = or i128"), std::string::npos)
       << Q9LLVM;
 
-  auto Syntax = exec("clang", {"-target", "arm64-apple-darwin", "-fsyntax-only",
-                               CFile.string()});
+  // This only validates generated C syntax.  A Darwin cross-target on Linux
+  // suppresses the host libc include paths even though no target ABI is used.
+  auto Syntax = exec("clang", {"-fsyntax-only", CFile.string()});
   EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err << "\n" << C;
 }
