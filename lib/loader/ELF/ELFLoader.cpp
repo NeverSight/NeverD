@@ -93,7 +93,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
   auto GetSecName = [&](const Elf_Shdr &SH) -> llvm::StringRef {
     if (SH.sh_name >= ShStrTab.size())
       return {};
-    return ShStrTab.substr(SH.sh_name);
+    return ShStrTab.substr(SH.sh_name).split('\0').first;
   };
 
   // Relocatable .o files often use sh_addr==0 for every SHF_ALLOC section.

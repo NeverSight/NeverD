@@ -26,6 +26,34 @@
 
 namespace neverd {
 
+namespace {
+
+bool isELFImportStub(const BinaryImage &Img, va_t Addr) {
+  if (!Img.isELF())
+    return false;
+
+  for (const auto &Sec : Img.Sections) {
+    if (!Sec.isExecutable() || !Sec.contains(Addr))
+      continue;
+    llvm::StringRef Name = Sec.Name;
+    if (Name == section_names::elf::Plt ||
+        Name.starts_with(section_names::elf::PltPrefix) ||
+        Name == section_names::elf::Iplt)
+      return true;
+  }
+  return false;
+}
+
+bool isELFRuntimeScaffold(llvm::StringRef Name) {
+  return Name == "call_weak_fn" || Name == "deregister_tm_clones" ||
+         Name == "register_tm_clones" || Name == "__do_global_dtors_aux" ||
+         Name == "frame_dummy" || Name == "__libc_csu_init" ||
+         Name == "__libc_csu_fini" || Name == "__libc_csu_irel" ||
+         Name == "_dl_relocate_static_pie";
+}
+
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // Debug symbol merging
 //===----------------------------------------------------------------------===//
@@ -151,6 +179,19 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
     if (Imp.IATAddr != 0)
       StubAddrs.insert(Imp.IATAddr);
 
+  std::set<va_t> RuntimeAddrs;
+  if (Opts.PatchMode && Img.isELF()) {
+    if (Img.DynInfo.InitAddr != 0)
+      RuntimeAddrs.insert(Img.DynInfo.InitAddr);
+    if (Img.DynInfo.FiniAddr != 0)
+      RuntimeAddrs.insert(Img.DynInfo.FiniAddr);
+    RuntimeAddrs.insert(Img.DynInfo.InitArray.begin(),
+                        Img.DynInfo.InitArray.end());
+    RuntimeAddrs.insert(Img.DynInfo.FiniArray.begin(),
+                        Img.DynInfo.FiniArray.end());
+    RuntimeAddrs.erase(0);
+  }
+
   std::vector<std::pair<va_t, std::string>> Candidates;
   Candidates.reserve(Opts.MaxFunctions > 0
                          ? std::min(FuncEntries.size(), Opts.MaxFunctions + 64)
@@ -158,7 +199,23 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
   for (auto &[Entry, FName] : FuncEntries) {
     if (Opts.MaxFunctions > 0 && Candidates.size() >= Opts.MaxFunctions * 2)
       break;
-    if (StubAddrs.count(Entry))
+    // ELF import metadata points at the GOT slot, while direct calls target
+    // executable PLT stubs.  Treat the whole family of PLT sections as import
+    // machinery so lazy-binding register conventions remain intact.
+    if (StubAddrs.count(Entry) || isELFImportStub(Img, Entry))
+      continue;
+    // A process entry point follows the platform loader ABI, not an ordinary
+    // C function ABI.  Recompiling ELF `_start`, for example, discards the
+    // register setup that passes main/argc/argv to __libc_start_main.  Keep
+    // the original entry point in patch mode; calls it makes still reach
+    // rewritten functions through their installed trampolines.
+    if (Opts.PatchMode && Img.isELF() && Entry == Img.Entry)
+      continue;
+    // ELF startup/finalization routines run under dynamic-loader and CRT
+    // conventions.  Preserve both recorded dynamic entry points and their
+    // standard helper functions; user code remains eligible for rewriting.
+    if (Opts.PatchMode && Img.isELF() &&
+        (RuntimeAddrs.count(Entry) || isELFRuntimeScaffold(FName)))
       continue;
     Candidates.push_back({Entry, FName});
   }

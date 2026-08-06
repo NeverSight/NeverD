@@ -180,7 +180,7 @@ void parsePLTImports(const llvm::object::ELFFile<ELFT> &ELF,
     }
     if (SH.sh_name >= ShStrTabOr->size())
       return {};
-    return ShStrTabOr->substr(SH.sh_name);
+    return ShStrTabOr->substr(SH.sh_name).split('\0').first;
   };
 
   const Elf_Shdr *DynSymSH = nullptr;
@@ -283,7 +283,7 @@ void parseGOTEntries(const llvm::object::ELFFile<ELFT> &ELF,
   auto GetSecName = [&](const Elf_Shdr &SH) -> llvm::StringRef {
     if (SH.sh_name >= ShStrTabOr->size())
       return {};
-    return ShStrTabOr->substr(SH.sh_name);
+    return ShStrTabOr->substr(SH.sh_name).split('\0').first;
   };
 
   for (const Elf_Shdr &SH : Sections) {
