@@ -65,7 +65,7 @@ bool COFFRelocResolver::parse(const std::vector<uint8_t> &Binary,
       if (!SymName.empty() && ByName.count(SymName.str()) == 0) {
         RelocEntry E;
         E.Name = SymName.str();
-        E.Addr = ImageBase + IATRVA + Idx * PtrSize;
+        E.Addr = ImageBase + IATRVA + static_cast<uint64_t>(Idx) * PtrSize;
         E.IsCode = false;
         ByName[E.Name] = Entries.size();
         Entries.push_back(E);

@@ -280,7 +280,8 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
           llvm::Value *Lane = Builder.CreateZExt(getVar(Sub, Builder), WideTy);
           if (K > 0)
             Lane = Builder.CreateShl(
-                Lane, llvm::ConstantInt::get(WideTy, K * Slot * 8));
+                Lane, llvm::ConstantInt::get(WideTy, static_cast<uint64_t>(K) *
+                                                         Slot * 8));
           Acc = Acc ? Builder.CreateOr(Acc, Lane) : Lane;
         }
         return Acc;

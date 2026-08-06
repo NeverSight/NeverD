@@ -118,7 +118,7 @@ uint64_t ELFPatcher::appendExecSegment(std::vector<uint8_t> &Binary,
   uint64_t TotalFileSz = PhdrTableSz + TextSize;
   uint64_t TotalMemSz = alignUp(TotalFileSz, PageSize);
 
-  std::vector<uint8_t> OldPhdrs(OldPhNum * PhdrSize);
+  std::vector<uint8_t> OldPhdrs(static_cast<size_t>(OldPhNum) * PhdrSize);
   // OldPhOff is the untrusted e_phoff: compare against remaining space so a
   // crafted offset cannot wrap the check and read the old headers out of
   // bounds.

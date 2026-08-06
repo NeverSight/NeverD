@@ -1566,7 +1566,8 @@ bool AArch64Lifter::liftCoreNEON(LiftState &S, const cs_insn *Insn,
     unsigned Half = NLanes / 2;
     auto extractElem = [&](const NdVar &Src, unsigned Idx) -> NdVar {
       NdVar E = S.makeTemp(ElemSz);
-      S.emit(NdOp::SUBBYTES, E, {Src, NdVar::cst(Idx * ElemSz, 4)});
+      S.emit(NdOp::SUBBYTES, E,
+             {Src, NdVar::cst(static_cast<uint64_t>(Idx) * ElemSz, 4)});
       return E;
     };
     NdVar Acc;

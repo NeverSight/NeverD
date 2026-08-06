@@ -584,12 +584,12 @@ private:
       if (!NameOrErr)
         continue;
       llvm::StringRef Name = *NameOrErr;
-      if (Name == section_names::elf::Text) {
+      if (Name == neverd::section_names::elf::Text) {
         if (auto C = Sec.getContents())
           SD.Text = {C->begin(), C->end()};
         continue;
       }
-      bool IsData = section_names::isElfImageDataSectionName(Name);
+      bool IsData = neverd::section_names::isElfImageDataSectionName(Name);
       if (!IsData)
         continue;
       DataSeg Seg;
@@ -662,7 +662,7 @@ private:
       if (!NameOrErr)
         continue;
       llvm::StringRef N = *NameOrErr;
-      if (libc::isMemCopyName(N) || libc::isMemSetName(N))
+      if (neverd::libc::isMemCopyName(N) || neverd::libc::isMemSetName(N))
         return true;
     }
     return false;
@@ -734,7 +734,7 @@ private:
       auto NameOrErr = Sec.getName();
       if (!NameOrErr)
         continue;
-      if (*NameOrErr == section_names::elf::Text) {
+      if (*NameOrErr == neverd::section_names::elf::Text) {
         auto ContentsOrErr = Sec.getContents();
         if (!ContentsOrErr)
           continue;

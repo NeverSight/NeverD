@@ -112,7 +112,7 @@ bool ELFRelocResolver::parse(const std::vector<uint8_t> &Binary,
 
         RelocEntry E;
         E.Name = NameOr->str();
-        E.Addr = PLTAddr + Idx * PLTEntrySize;
+        E.Addr = PLTAddr + static_cast<uint64_t>(Idx) * PLTEntrySize;
         E.Size = PLTEntrySize;
         E.IsCode = true;
         ByName[E.Name] = Entries.size();
@@ -175,7 +175,7 @@ bool ELFRelocResolver::populateFromImage(const BinaryImage &Image,
   for (const auto &Imp : Image.Imports) {
     if (Imp.Name.empty())
       continue;
-    uint64_t StubVA = PltSec->VA + Idx * EntrySize;
+    uint64_t StubVA = PltSec->VA + static_cast<uint64_t>(Idx) * EntrySize;
     if (StubVA >= PltSec->VA + PltSec->Size)
       break;
     RelocEntry E;

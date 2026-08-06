@@ -127,11 +127,13 @@ bool ARMLifter::liftSIMD(LiftState &S, const cs_insn *Insn, const cs_arm &ARM) {
       NdVar Acc = NdVar::cst(0, 0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar LA = S.makeTemp(LaneSz);
-        S.emit(NdOp::SUBBYTES, LA, {A, NdVar::cst(I * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, LA,
+               {A, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar LB = ScalarB;
         if (BLane < 0) {
           LB = S.makeTemp(LaneSz);
-          S.emit(NdOp::SUBBYTES, LB, {B, NdVar::cst(I * LaneSz, 4)});
+          S.emit(NdOp::SUBBYTES, LB,
+                 {B, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         }
         NdVar LR = S.makeTemp(LaneSz);
         S.emit(Op, LR, {LA, LB});

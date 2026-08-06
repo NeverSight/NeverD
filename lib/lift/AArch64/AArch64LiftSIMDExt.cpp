@@ -657,7 +657,8 @@ bool AArch64Lifter::liftSIMDExt(LiftState &S, const cs_insn *Insn,
     bool ImSub = (Rot == 180 || Rot == 270);
     auto lane = [&](NdVar V, unsigned Idx) {
       NdVar T = S.makeTemp(ES);
-      S.emit(NdOp::SUBBYTES, T, {V, NdVar::cst(Idx * ES, 4)});
+      S.emit(NdOp::SUBBYTES, T,
+             {V, NdVar::cst(static_cast<uint64_t>(Idx) * ES, 4)});
       return T;
     };
     NdVar Acc = NdVar::cst(0, 0);
@@ -1328,7 +1329,8 @@ bool AArch64Lifter::liftSIMDExt(LiftState &S, const cs_insn *Insn,
     }
     auto lane = [&](NdVar V, unsigned Idx) {
       NdVar T = S.makeTemp(ES);
-      S.emit(NdOp::SUBBYTES, T, {V, NdVar::cst(Idx * ES, 4)});
+      S.emit(NdOp::SUBBYTES, T,
+             {V, NdVar::cst(static_cast<uint64_t>(Idx) * ES, 4)});
       return T;
     };
     NdVar Acc = NdVar::cst(0, 0);

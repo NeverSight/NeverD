@@ -913,6 +913,13 @@ target_link_libraries(NeverDPatchFullTests PRIVATE
   LLVMSupport
 )
 
+# Pipeline's C++ entry points are intentionally not part of the Windows DLL
+# ABI.  This test calls them directly, so provide their static definitions on
+# Windows instead of relying on neverd_shared to export C++ internals.
+if(WIN32)
+  target_link_libraries(NeverDPatchFullTests PRIVATE NeverDPipeline)
+endif()
+
 if(TARGET neverd)
   add_dependencies(NeverDPatchFullTests neverd)
 endif()
@@ -1136,3 +1143,7 @@ target_link_libraries(PatchFullRepro PRIVATE
   LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
   LLVMSupport
 )
+
+if(WIN32)
+  target_link_libraries(PatchFullRepro PRIVATE NeverDPipeline)
+endif()

@@ -493,20 +493,33 @@ TEST(RuntimeMetadata, RecordsMachORoutines32And64Commands) {
   Routines64.cmd = llvm::MachO::LC_ROUTINES_64;
   Routines64.cmdsize = static_cast<uint32_t>(sizeof(Routines64));
   Routines64.init_address = 0x1020;
-  std::vector<uint8_t> Bytes =
-      makeMachOImage({objectBytes(Routines32), objectBytes(Routines64)});
-  auto Obj = createMachOObject(Bytes);
-  ASSERT_NE(Obj, nullptr);
 
-  BinaryImage Img;
-  Img.Arch = Arch::X64;
-  Img.Bits = Bitness::Bits64;
-  Img.Segments.push_back(makeSegment(0x1000, 0x100, true));
-  macho_loader::parseRuntimeLoadCommands(*Obj, Img);
+  // Mach-O permits at most one routines command.  Exercise the 32- and 64-bit
+  // variants in separate legal objects rather than constructing a malformed
+  // image that LLVM's object reader correctly rejects.
+  std::vector<uint8_t> Bytes32 = makeMachOImage({objectBytes(Routines32)});
+  auto Obj32 = createMachOObject(Bytes32);
+  ASSERT_NE(Obj32, nullptr);
+  BinaryImage Img32;
+  Img32.Arch = Arch::X64;
+  Img32.Bits = Bitness::Bits64;
+  Img32.Segments.push_back(makeSegment(0x1000, 0x100, true));
+  macho_loader::parseRuntimeLoadCommands(*Obj32, Img32);
 
-  EXPECT_EQ(Img.DynInfo.InitAddr, 0x1010u);
-  EXPECT_TRUE(Img.isRuntimeFunctionAt(0x1010));
-  EXPECT_TRUE(Img.isRuntimeFunctionAt(0x1020));
+  EXPECT_EQ(Img32.DynInfo.InitAddr, 0x1010u);
+  EXPECT_TRUE(Img32.isRuntimeFunctionAt(0x1010));
+
+  std::vector<uint8_t> Bytes64 = makeMachOImage({objectBytes(Routines64)});
+  auto Obj64 = createMachOObject(Bytes64);
+  ASSERT_NE(Obj64, nullptr);
+  BinaryImage Img64;
+  Img64.Arch = Arch::X64;
+  Img64.Bits = Bitness::Bits64;
+  Img64.Segments.push_back(makeSegment(0x1000, 0x100, true));
+  macho_loader::parseRuntimeLoadCommands(*Obj64, Img64);
+
+  EXPECT_EQ(Img64.DynInfo.InitAddr, 0x1020u);
+  EXPECT_TRUE(Img64.isRuntimeFunctionAt(0x1020));
 }
 
 } // namespace

@@ -136,8 +136,10 @@ void emitPerLaneCmpMask(ARMLifter::LiftState &S, NdVar Dst, NdVar A,
   NdVar Acc = S.makeTemp(0);
   for (unsigned I = 0; I < NLanes; ++I) {
     NdVar La = S.makeTemp(LaneSz), Lb = S.makeTemp(LaneSz);
-    S.emit(NdOp::SUBBYTES, La, {A, NdVar::cst(I * LaneSz, 4)});
-    S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * LaneSz, 4)});
+    S.emit(NdOp::SUBBYTES, La,
+           {A, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
+    S.emit(NdOp::SUBBYTES, Lb,
+           {B, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
     NdVar Cmp = S.makeTemp(1);
     S.emit(CmpOp, Cmp, {La, Lb});
     NdVar Mask = S.makeTemp(LaneSz);
@@ -248,7 +250,9 @@ bool ARMLifter::liftSIMDNEON(LiftState &S, const cs_insn *Insn,
           if (ElemIdx == 0)
             return Base;
           NdVar A = S.makeTemp(4);
-          S.emit(NdOp::INT_ADD, A, {Base, NdVar::cst(ElemIdx * ElemSz, 4)});
+          S.emit(
+              NdOp::INT_ADD, A,
+              {Base, NdVar::cst(static_cast<uint64_t>(ElemIdx) * ElemSz, 4)});
           return A;
         };
         for (unsigned d = 0; d < NRegsInList; ++d) {
@@ -635,10 +639,13 @@ bool ARMLifter::liftSIMDNEON(LiftState &S, const cs_insn *Insn,
       auto doAdd = [&](const NdVar &Src, unsigned PairIdx) {
         for (unsigned P = 0; P < NPairs; ++P) {
           NdVar Lo = S.makeTemp(LI.LaneSz);
-          S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(P * 2 * LI.LaneSz, 4)});
+          S.emit(
+              NdOp::SUBBYTES, Lo,
+              {Src, NdVar::cst(static_cast<uint64_t>(P) * 2 * LI.LaneSz, 4)});
           NdVar Hi = S.makeTemp(LI.LaneSz);
           S.emit(NdOp::SUBBYTES, Hi,
-                 {Src, NdVar::cst((P * 2 + 1) * LI.LaneSz, 4)});
+                 {Src, NdVar::cst(
+                           (static_cast<uint64_t>(P) * 2 + 1) * LI.LaneSz, 4)});
           NdVar Sum = S.makeTemp(LI.LaneSz);
           if (LI.IsFloat)
             S.emit(NdOp::FLOAT_ADD, Sum, {Lo, Hi});
@@ -1042,7 +1049,8 @@ bool ARMLifter::liftSIMDNEON(LiftState &S, const cs_insn *Insn,
     }
     auto lane = [&](NdVar V, unsigned Idx) {
       NdVar T = S.makeTemp(ES);
-      S.emit(NdOp::SUBBYTES, T, {V, NdVar::cst(Idx * ES, 4)});
+      S.emit(NdOp::SUBBYTES, T,
+             {V, NdVar::cst(static_cast<uint64_t>(Idx) * ES, 4)});
       return T;
     };
     NdVar Acc = NdVar::cst(0, 0);
@@ -1859,7 +1867,8 @@ bool ARMLifter::liftSIMDNEON(LiftState &S, const cs_insn *Insn,
 
     auto getLane = [&](NdVar Reg, unsigned Idx) {
       NdVar L = S.makeTemp(LaneSz);
-      S.emit(NdOp::SUBBYTES, L, {Reg, NdVar::cst(Idx * LaneSz, 4)});
+      S.emit(NdOp::SUBBYTES, L,
+             {Reg, NdVar::cst(static_cast<uint64_t>(Idx) * LaneSz, 4)});
       return L;
     };
     auto assemble = [&](NdVar Out, const std::vector<NdVar> &Elems) {
@@ -2975,10 +2984,13 @@ bool ARMLifter::liftSIMDNEON(LiftState &S, const cs_insn *Insn,
       auto doCmp = [&](const NdVar &Src, unsigned SetIdx) {
         for (unsigned P = 0; P < NPairs; ++P) {
           NdVar Lo = S.makeTemp(LI.LaneSz);
-          S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(P * 2 * LI.LaneSz, 4)});
+          S.emit(
+              NdOp::SUBBYTES, Lo,
+              {Src, NdVar::cst(static_cast<uint64_t>(P) * 2 * LI.LaneSz, 4)});
           NdVar Hi = S.makeTemp(LI.LaneSz);
           S.emit(NdOp::SUBBYTES, Hi,
-                 {Src, NdVar::cst((P * 2 + 1) * LI.LaneSz, 4)});
+                 {Src, NdVar::cst(
+                           (static_cast<uint64_t>(P) * 2 + 1) * LI.LaneSz, 4)});
           NdVar Sel = S.makeTemp(LI.LaneSz);
           if (LI.IsFloat) {
             S.emit(FMM, Sel, {Lo, Hi});
@@ -3102,7 +3114,8 @@ bool ARMLifter::liftSIMDNEON(LiftState &S, const cs_insn *Insn,
     bool ImSub = (Rot == 180 || Rot == 270);
     auto lane = [&](NdVar V, unsigned Idx) {
       NdVar T = S.makeTemp(ES);
-      S.emit(NdOp::SUBBYTES, T, {V, NdVar::cst(Idx * ES, 4)});
+      S.emit(NdOp::SUBBYTES, T,
+             {V, NdVar::cst(static_cast<uint64_t>(Idx) * ES, 4)});
       return T;
     };
     NdVar Acc = NdVar::cst(0, 0);

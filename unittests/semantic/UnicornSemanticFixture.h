@@ -253,7 +253,7 @@ public:
       auto NameOrErr = Sec.getName();
       if (!NameOrErr)
         continue;
-      if (*NameOrErr == section_names::elf::Text) {
+      if (*NameOrErr == neverd::section_names::elf::Text) {
         auto ContentsOrErr = Sec.getContents();
         if (!ContentsOrErr)
           continue;

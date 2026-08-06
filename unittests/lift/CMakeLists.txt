@@ -383,7 +383,8 @@ if(LLD_LINK_EXEC)
   set(coff_exe "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff.exe")
   add_custom_command(
     OUTPUT ${coff_obj}
-    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -O1 -c ${coff_src} -o ${coff_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -O1
+            -fno-inline-functions -c ${coff_src} -o ${coff_obj}
     DEPENDS ${coff_src}
     COMMENT "Compiling test_patch_coff.c -> .obj (x86_64 COFF)")
   add_custom_command(

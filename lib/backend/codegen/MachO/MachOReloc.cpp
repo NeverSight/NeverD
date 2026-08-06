@@ -118,7 +118,7 @@ bool MachORelocResolver::parse(const std::vector<uint8_t> &Binary,
 
     for (uint32_t SI = 0; SI < NStubEntries; ++SI) {
       RelocEntry E;
-      E.Addr = SectAddr + SI * StubSz;
+      E.Addr = SectAddr + static_cast<uint64_t>(SI) * StubSz;
       E.Size = StubSz;
       E.IsCode = true;
 

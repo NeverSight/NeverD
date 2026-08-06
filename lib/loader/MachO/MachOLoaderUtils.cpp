@@ -684,7 +684,7 @@ void parseStubImports(const llvm::object::MachOObjectFile &Obj,
       if (SymName.empty())
         continue;
 
-      va_t StubAddr = Sect.Addr + SI * Sect.StubSize;
+      va_t StubAddr = Sect.Addr + static_cast<uint64_t>(SI) * Sect.StubSize;
 
       Import Imp;
       Imp.Name = SymName;
