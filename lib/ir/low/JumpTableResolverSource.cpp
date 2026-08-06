@@ -25,9 +25,11 @@
 #include "neverd/libc/LibCNames.h"
 
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -37,6 +39,12 @@
 #define DEBUG_TYPE "neverd-cfg-builder"
 
 namespace neverd {
+
+static uint64_t truncateToByteWidth(uint64_t Value, uint16_t Bytes) {
+  if (Bytes == 0 || Bytes >= sizeof(Value))
+    return Value;
+  return Value & llvm::maskTrailingOnes<uint64_t>(Bytes * CHAR_BIT);
+}
 
 uint64_t
 CFGBuilder::forwardIndexThroughStackSpill(const std::vector<LowOp> &BlockOps,
@@ -1075,20 +1083,13 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         auto F = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
         if (!F)
           break;
-        uint16_t Bytes = O.Output.Size;
-        if (Bytes == 0 || Bytes >= sizeof(uint64_t))
-          return F;
-        uint16_t Bits = static_cast<uint16_t>(Bytes * 8);
-        return *F & ((uint64_t{1} << Bits) - 1);
+        return truncateToByteWidth(*F, O.Output.Size);
       }
       if (O.Opcode == NdOp::INT_ADD && O.NumInputs >= 2) {
         auto A = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
         auto B = foldArm(O.Inputs[1], D - 1, Cutoff, Depth + 1);
         if (A && B) {
-          uint64_t Sum = *A + *B;
-          if (O.Output.Size > 0 && O.Output.Size < sizeof(uint64_t))
-            Sum &= (uint64_t{1} << (O.Output.Size * 8)) - 1;
-          return Sum;
+          return truncateToByteWidth(*A + *B, O.Output.Size);
         }
         // i386 PIC materialises a table base as GOT_base + GOTOFF.  GOT_base
         // is legitimately zero in the relocatable image model, but
@@ -1108,10 +1109,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         auto A = foldArm(O.Inputs[0], D - 1, Cutoff, Depth + 1);
         auto B = foldArm(O.Inputs[1], D - 1, Cutoff, Depth + 1);
         if (A && B) {
-          uint64_t Diff = *A - *B;
-          if (O.Output.Size > 0 && O.Output.Size < sizeof(uint64_t))
-            Diff &= (uint64_t{1} << (O.Output.Size * 8)) - 1;
-          return Diff;
+          return truncateToByteWidth(*A - *B, O.Output.Size);
         }
         break;
       }

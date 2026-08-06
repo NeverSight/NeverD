@@ -75,6 +75,13 @@ void annotateDebugInfo(LowFunc &Func, DebugContext &Dbg) {
     Func.OriginalSize = FSym->Size;
 }
 
+// Variadic overflow parameters are finalized only after call recovery.  Keep
+// their interim arity open so neither recovery pass truncates the caller's
+// recovered stack tail to the currently known fixed prefix.
+int callRecoveryTotalArity(const MedFunc &Func, int MaxParamIndex) {
+  return Func.IsVariadic ? limits::kMaxCallArgs : MaxParamIndex + 1;
+}
+
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
@@ -464,13 +471,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       }
       std::sort(FPRegs.begin(), FPRegs.end());
       CalleeRegArity[MF.Entry] = MaxRegIdx + 1;
-      // A variadic callee's overflow stack parameters are not yet recovered
-      // (finalizeVariadicCallees adds them after this pass), so report an open
-      // total arity: the caller must keep every recovered overflow stack
-      // argument instead of truncating to the register-only count (the ARM
-      // assemble-to-arity gate would otherwise drop them).
-      CalleeTotalArity[MF.Entry] =
-          MF.IsVariadic ? limits::kMaxCallArgs : MaxIdx + 1;
+      CalleeTotalArity[MF.Entry] = callRecoveryTotalArity(MF, MaxIdx);
       CalleeHasSret[MF.Entry] = HasSret;
       CalleeIsVariadic[MF.Entry] = MF.IsVariadic;
       int FpArity = static_cast<int>(FPRegs.size());
@@ -649,13 +650,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
           MaxI = std::max(MaxI, P.Id);
       }
       CRA2[MF.Entry] = MaxRI + 1;
-      // Keep a detected variadic callee's total arity open on the i386
-      // recovery pass too.  The first pass deliberately does this above so a
-      // constant-folded named argument can leave slot 0 empty while real
-      // varargs remain in later stack slots.  Replacing that open bound with
-      // the currently recovered fixed prefix here truncates those later
-      // varargs before finalizeVariadicCallees can size the overflow tail.
-      CTA2[MF.Entry] = MF.IsVariadic ? limits::kMaxCallArgs : MaxI + 1;
+      CTA2[MF.Entry] = callRecoveryTotalArity(MF, MaxI);
     }
     for (auto &MF : Result.MedFuncs)
       recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CRA2, &CTA2,

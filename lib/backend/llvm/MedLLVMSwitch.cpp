@@ -36,6 +36,7 @@
 #include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -895,7 +896,9 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
   // i32 case labels lets LLVM prove every negative case impossible.  Bring the
   // switch condition back into the machine-address domain before optimization.
   const unsigned PtrBits = getTargetRegInfo(TargetArch).PointerSize * 8;
-  if (PtrBits != 0 && IdxTy->getBitWidth() > PtrBits) {
+  assert((PtrBits == 32 || PtrBits == 64) &&
+         "jump-table switch requires a supported pointer width");
+  if (IdxTy->getBitWidth() > PtrBits) {
     IdxTy = llvm::IntegerType::get(*Ctx, PtrBits);
     Index = Builder.CreateTrunc(Index, IdxTy, "jt.idx.machine");
   }

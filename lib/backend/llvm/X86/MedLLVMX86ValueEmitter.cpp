@@ -26,6 +26,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsX86.h"
 
+#include <cassert>
 #include <map>
 
 namespace neverd {
@@ -159,6 +160,8 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
   using I = Intrinsic;
   auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
   const unsigned AddrRegBits = getTargetRegInfo(TargetArch).PointerSize * 8;
+  assert((AddrRegBits == 32 || AddrRegBits == 64) &&
+         "x86 REP emission requires a 32- or 64-bit target");
   auto *AddrRegTy = llvm::Type::getIntNTy(*Ctx, AddrRegBits);
 
   // Element size + AT&T mnemonic suffix (b/w/l/q) per intrinsic variant.
