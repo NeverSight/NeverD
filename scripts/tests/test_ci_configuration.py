@@ -54,17 +54,41 @@ class CiConfigurationTests(unittest.TestCase):
 
     def test_workflow_audits_json_then_uses_the_approved_expression(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("--show-only=json-v1", source)
-        self.assertIn('"$PYTHON" scripts/audit_ci_test_inventory.py', source)
-        self.assertIn('--profile "$TEST_PROFILE"', source)
-        self.assertIn('--exclude-label-regex "$EXCLUDE_LABELS"', source)
-        self.assertIn('--label-exclude "$EXCLUDE_LABELS"', source)
-        self.assertIn(
-            "EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}", source
+
+        def named_step(step_name):
+            step_marker = f"      - name: {step_name}\n"
+            self.assertEqual(source.count(step_marker), 1)
+            return source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
+
+        audit_step = named_step("Audit and select test profile")
+        audit_contract = (
+            "id: inventory",
+            "ctest --test-dir build-ci --build-config Release --show-only=json-v1 |",
+            '"$PYTHON" scripts/audit_ci_test_inventory.py',
+            '--profile "$TEST_PROFILE"',
+            '--exclude-label-regex "$EXCLUDE_LABELS"',
+            '--matrix-name "$MATRIX_NAME"',
+            "EXCLUDE_LABELS: ${{ matrix.exclude_labels }}",
+            "MATRIX_NAME: ${{ matrix.name }}",
+            "PYTHON: ${{ matrix.python }}",
+            "TEST_PROFILE: ${{ matrix.test_profile }}",
         )
-        self.assertIn(
-            "EXPECTED_TESTS: ${{ steps.inventory.outputs.count }}", source
+        for expected in audit_contract:
+            with self.subTest(step="audit", expected=expected):
+                self.assertIn(expected, audit_step)
+
+        run_step = named_step("Run selected test profile")
+        run_contract = (
+            '--label-exclude "$EXCLUDE_LABELS"',
+            'if [[ "$executed" != "$EXPECTED_TESTS" ]]; then',
+            'echo "CTest executed $executed tests; expected $EXPECTED_TESTS" >&2',
+            "EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}",
+            "EXPECTED_TESTS: ${{ steps.inventory.outputs.count }}",
+            "TEST_PARALLEL: ${{ matrix.parallel }}",
         )
+        for expected in run_contract:
+            with self.subTest(step="run", expected=expected):
+                self.assertIn(expected, run_step)
 
     def test_workflow_still_builds_the_unfiltered_default_target(self):
         source = WORKFLOW.read_text(encoding="utf-8")
