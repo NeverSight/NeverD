@@ -598,12 +598,38 @@ void ARMLifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
   // block at such a COND_BR, so any op after it (e.g. a predicated store) would
   // be silently dropped by the emitter.
   //   * register/flag write `Out = expr`  →  `Out = cond ? expr : Out`
-  //   * memory store `M[addr] = val`        →  `M[addr] = cond ? val : M[addr]`
+  //   * memory access `M[addr]`             →  `M[cond ? addr : SP]`
+  //   * memory store `M[addr] = val`        →  `M[safe] = cond ? val : M[safe]`
   //     (read-modify-write)
-  // The store address is computed unconditionally and does not depend on the
-  // predicate, so the inserted read targets the same always-valid location the
-  // store would write.
+  // A false predicated load/store must not even dereference its architectural
+  // address: ARM code commonly leaves that address invalid on the untaken path
+  // (for example `ldrne r2, [r0, #-60]` where r0 is unrelated when Z is set).
+  // Keep the branchless representation, but redirect the speculative access to
+  // the ABI-valid stack pointer.  The register SELECT below discards a false
+  // load and the read-modify-write preserves the fallback word for a false
+  // store.
   if (IsCond && !IsBranchInsn && ArmCondVar.Size > 0) {
+    // Guard the address of every memory effect before wrapping its result.  Do
+    // this as a separate pass so insertion does not interfere with the
+    // register/store transformations below.
+    for (size_t I = CondOpsStart; I < Ops.size(); ++I) {
+      auto &Op = Ops[I];
+      if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
+          Op.NumInputs == 0)
+        continue;
+      NdVar SafeEA = S.makeTemp(4);
+      LowOp SelEA;
+      SelEA.Opcode = NdOp::SELECT;
+      SelEA.Addr = S.Addr;
+      SelEA.Output = SafeEA;
+      SelEA.addInput(ArmCondVar);
+      SelEA.addInput(Op.Inputs[0]);
+      SelEA.addInput(NdVar::reg(armreg::SP, 4));
+      Op.Inputs[0] = SafeEA;
+      Ops.insert(Ops.begin() + static_cast<long>(I), SelEA);
+      ++I;
+    }
+
     // Wrap each register/flag write `Out = expr` as `Out = cond ? expr : Out`.
     // The SELECT is inserted immediately after the defining op (not appended
     // at the end) so later ops in the same instruction that read `Out` observe

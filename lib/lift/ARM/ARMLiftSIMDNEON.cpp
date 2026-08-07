@@ -2689,17 +2689,21 @@ bool ARMLifter::liftSIMDNEON(LiftState &S, const cs_insn *Insn,
           S.emit(NdOp::SUBBYTES, Clamped, {C2, NdVar::cst(0, 4)});
         } else {
           uint64_t MaxV = (1ULL << Bits) - 1;
-          NdVar TooHi = S.makeTemp(1);
-          S.emit(NdOp::INT_LESS, TooHi, {NdVar::cst(MaxV, WideSz), Wide});
           NdVar C1 = S.makeTemp(WideSz);
-          S.emit(NdOp::SELECT, C1, {TooHi, NdVar::cst(MaxV, WideSz), Wide});
-          if (!IsAdd) {
-            // unsigned subtract can underflow -> clamp negatives to 0.
-            NdVar Neg = S.makeTemp(1);
-            S.emit(NdOp::INT_SLESS, Neg, {C1, NdVar::cst(0, WideSz)});
-            NdVar C2 = S.makeTemp(WideSz);
-            S.emit(NdOp::SELECT, C2, {Neg, NdVar::cst(0, WideSz), C1});
-            C1 = C2;
+          if (IsAdd) {
+            NdVar TooHi = S.makeTemp(1);
+            S.emit(NdOp::INT_LESS, TooHi,
+                   {NdVar::cst(MaxV, WideSz), Wide});
+            S.emit(NdOp::SELECT, C1,
+                   {TooHi, NdVar::cst(MaxV, WideSz), Wide});
+          } else {
+            // Detect unsigned underflow from the widened operands.  Testing
+            // the wrapped subtraction result after an upper clamp loses the
+            // sign and incorrectly saturates underflow to MaxV instead of 0.
+            NdVar Underflow = S.makeTemp(1);
+            S.emit(NdOp::INT_LESS, Underflow, {Wa, Wb});
+            S.emit(NdOp::SELECT, C1,
+                   {Underflow, NdVar::cst(0, WideSz), Wide});
           }
           S.emit(NdOp::SUBBYTES, Clamped, {C1, NdVar::cst(0, 4)});
         }

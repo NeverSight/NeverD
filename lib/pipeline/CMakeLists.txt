@@ -7,6 +7,7 @@ add_neverd_component_library(NeverDPipeline
 
   LINK_COMPONENTS
   IR
+  PassIR
   Decode
   Lift
   BackendLLVM

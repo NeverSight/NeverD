@@ -37,6 +37,22 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return getVar(Op.Inputs[Idx], Builder);
   };
 
+  // Some operation contexts prove that a constant is a bit pattern or offset,
+  // not a standalone address.  Materialize it without the general data-global
+  // symbolization performed by getVar.  A completed address remains eligible
+  // for normal symbolization when it is later used by a memory operation.
+  auto GetRawInput = [&](uint8_t Idx) -> llvm::Value * {
+    if (Idx >= Op.NumInputs)
+      return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), 0);
+    const MedVar &V = Op.Inputs[Idx];
+    if (!V.isConst())
+      return getVar(V, Builder);
+    auto *IntTy = llvm::cast<llvm::IntegerType>(sizeToType(V.Size));
+    return llvm::ConstantInt::get(
+        *Ctx, llvm::APInt(IntTy->getBitWidth(), V.ConstVal,
+                          /*isSigned=*/false, /*implicitTrunc=*/true));
+  };
+
   auto Coerce = [&](llvm::Value *A,
                     llvm::Value *B) -> std::pair<llvm::Value *, llvm::Value *> {
     if (A->getType() == B->getType())
@@ -112,11 +128,23 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         break;
       }
     }
+    // A constant added to a frame-derived value is a stack displacement.  Its
+    // numeric value may coincide with a low-VA data relocation (notably i386
+    // array offsets such as 0x100); symbolizing that operand would turn
+    // `sp + index + offset` into `sp + index + &global`.
+    bool RawL = Op.NumInputs > 1 && Op.Inputs[0].isConst() &&
+                varIsFrameDerived(Op.Inputs[1]);
+    bool RawR = Op.NumInputs > 1 && Op.Inputs[1].isConst() &&
+                varIsFrameDerived(Op.Inputs[0]);
+    auto AddInput = [&](uint8_t Idx) -> llvm::Value * {
+      return ((Idx == 0 && RawL) || (Idx == 1 && RawR)) ? GetRawInput(Idx)
+                                                        : GetInput(Idx);
+    };
     if (TargetArch == Arch::AArch64 && Op.Output.Size > 0 &&
         Op.Output.Size <= 4) {
       auto *Ty = sizeToType(Op.Output.Size);
-      llvm::Value *L = GetInput(0);
-      llvm::Value *R = GetInput(1);
+      llvm::Value *L = AddInput(0);
+      llvm::Value *R = AddInput(1);
       if (L->getType() != Ty)
         L = L->getType()->getIntegerBitWidth() > Ty->getIntegerBitWidth()
                 ? Builder.CreateTrunc(L, Ty)
@@ -127,7 +155,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                 : Builder.CreateZExt(R, Ty);
       Result = Builder.CreateAdd(L, R, "add");
     } else {
-      auto [L, R] = Coerce(GetInput(0), GetInput(1));
+      auto [L, R] = Coerce(AddInput(0), AddInput(1));
       Result = Builder.CreateAdd(L, R, "add");
     }
     break;
@@ -239,7 +267,9 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_LEFT: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    // Shift operands are raw bit patterns.  In particular, an ARM MOVT high
+    // half must not become a pointer when it happens to equal a relocation VA.
+    auto [L, R] = Coerce(GetRawInput(0), GetRawInput(1));
     unsigned Bits = L->getType()->getIntegerBitWidth();
     auto *Zero = llvm::ConstantInt::get(L->getType(), 0);
     auto *Limit = llvm::ConstantInt::get(R->getType(), Bits);

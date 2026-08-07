@@ -345,6 +345,8 @@ bool ARMLifter::liftMem(LiftState &S, const cs_insn *Insn, const cs_arm &ARM) {
       break;
     auto RI = mapCapstoneReg(static_cast<arm_reg>(ARM.operands[0].reg));
     NdVar Base = NdVar::reg(RI.Offset, 4);
+    NdVar BaseAddr = S.makeTemp(4);
+    S.emit(NdOp::COPY, BaseAddr, {Base});
 
     int OffsetStart = 0;
     int Delta = 4;
@@ -357,25 +359,33 @@ bool ARMLifter::liftMem(LiftState &S, const cs_insn *Insn, const cs_arm &ARM) {
     }
 
     bool LoadsPC = false;
+    std::vector<std::pair<NdVar, NdVar>> LoadedRegs;
+    LoadedRegs.reserve(ARM.op_count - 1);
     for (int I = 1; I < ARM.op_count; I++) {
       int Off = OffsetStart + (I - 1) * Delta;
       NdVar EA = S.makeTemp(4);
       S.emit(NdOp::INT_ADD, EA,
-             {Base, NdVar::cst(
+             {BaseAddr, NdVar::cst(
                         static_cast<uint64_t>(static_cast<uint32_t>(Off)), 4)});
       NdVar Val = S.makeTemp(4);
       S.emit(NdOp::LOAD, Val, {EA});
       NdVar Dst = operandWrite(ARM.operands[I]);
-      S.emit(NdOp::COPY, Dst, {Val});
+      LoadedRegs.emplace_back(Dst, Val);
       if (Dst.Offset == armreg::PC)
         LoadsPC = true;
     }
+    // LDM reads every word using the pre-instruction base value.  Delay all
+    // architectural register writes until the complete register list has
+    // been loaded: the base itself may legally appear in a non-writeback list
+    // (for example `ldm r1, {r1, r7}`).
+    for (const auto &[Dst, Val] : LoadedRegs)
+      S.emit(NdOp::COPY, Dst, {Val});
     if (Insn->detail->writeback) {
       int Total = (ARM.op_count - 1) * 4;
       if (Insn->id == ARM_INS_LDM || Insn->id == ARM_INS_LDMIB)
-        S.emit(NdOp::INT_ADD, Base, {Base, NdVar::cst(Total, 4)});
+        S.emit(NdOp::INT_ADD, Base, {BaseAddr, NdVar::cst(Total, 4)});
       else
-        S.emit(NdOp::INT_SUB, Base, {Base, NdVar::cst(Total, 4)});
+        S.emit(NdOp::INT_SUB, Base, {BaseAddr, NdVar::cst(Total, 4)});
     }
     if (LoadsPC) {
       S.emit(NdOp::RETURN, {}, {NdVar::reg(armreg::PC, 4)});
@@ -454,14 +464,15 @@ bool ARMLifter::liftMem(LiftState &S, const cs_insn *Insn, const cs_arm &ARM) {
       bool PostIdx = Insn->detail->writeback && ARM.post_index;
       NdVar EA = emitLdrdStrdEA(S, MemOp, PostIdx);
 
-      NdVar V1 = S.makeTemp(4);
-      S.emit(NdOp::LOAD, V1, {EA});
-      S.emit(NdOp::COPY, Dst1, {V1});
-
       NdVar EA2 = S.makeTemp(4);
       S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(4, 4)});
+      NdVar V1 = S.makeTemp(4);
       NdVar V2 = S.makeTemp(4);
+      S.emit(NdOp::LOAD, V1, {EA});
       S.emit(NdOp::LOAD, V2, {EA2});
+      // Both words are read before either architectural destination is
+      // updated.  In particular, LDRD may use a destination as its base.
+      S.emit(NdOp::COPY, Dst1, {V1});
       S.emit(NdOp::COPY, Dst2, {V2});
 
       emitLdrdStrdWriteback(S, Insn, ARM, MemOp, EA);
@@ -533,10 +544,14 @@ bool ARMLifter::liftMem(LiftState &S, const cs_insn *Insn, const cs_arm &ARM) {
     NdVar EA = (ARM.operands[2].type == ARM_OP_MEM)
                      ? operandEffAddr(S, ARM.operands[2])
                      : operandRead(S, ARM.operands[2]);
-    S.emit(NdOp::LOAD, Dst1, {EA});
     NdVar EA2 = S.makeTemp(4);
     S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(4, 4)});
-    S.emit(NdOp::LOAD, Dst2, {EA2});
+    NdVar V1 = S.makeTemp(4);
+    NdVar V2 = S.makeTemp(4);
+    S.emit(NdOp::LOAD, V1, {EA});
+    S.emit(NdOp::LOAD, V2, {EA2});
+    S.emit(NdOp::COPY, Dst1, {V1});
+    S.emit(NdOp::COPY, Dst2, {V2});
     break;
   }
   case ARM_INS_STREX:
