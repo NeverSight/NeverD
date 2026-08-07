@@ -2256,8 +2256,10 @@ bool X86Lifter::liftSIMD(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     for (unsigned I = 0; I < NLanes; ++I) {
       NdVar Lane = S.makeTemp(LaneSz);
       S.emit(NdOp::SUBBYTES, Lane, {Src, NdVar::cst(I * LaneSz, 4)});
-      NdVar Sign = S.makeTemp(LaneSz);
-      S.emit(NdOp::INT_RIGHT, Sign, {Lane, NdVar::cst(SignBit, LaneSz)});
+      NdVar SignWide = S.makeTemp(LaneSz);
+      S.emit(NdOp::INT_RIGHT, SignWide, {Lane, NdVar::cst(SignBit, LaneSz)});
+      NdVar Sign = S.makeTemp(1);
+      S.emit(NdOp::SUBBYTES, Sign, {SignWide, NdVar::cst(0, 4)});
       NdVar SignExt = S.makeTemp(Dst.Size);
       S.emit(NdOp::INT_ZEXT, SignExt, {Sign});
       NdVar Shifted = S.makeTemp(Dst.Size);

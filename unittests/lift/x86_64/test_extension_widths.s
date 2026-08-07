@@ -49,6 +49,13 @@ test_lahf_width:
         retq
         .size   test_lahf_width, .-test_lahf_width
 
+        .globl  test_movmskpd_width
+        .type   test_movmskpd_width,@function
+test_movmskpd_width:
+        movmskpd %xmm0, %eax
+        retq
+        .size   test_movmskpd_width, .-test_movmskpd_width
+
         .globl  test_genuine_zext_width
         .type   test_genuine_zext_width,@function
 test_genuine_zext_width:
