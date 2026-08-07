@@ -28,16 +28,25 @@ jobs:
             cc: clang
             cxx: clang++
             parallel: 4
+            test_profile: linux-semantic
+            exclude_labels: '^NeverDPatchFullTests$'
+            python: python3
           - name: macOS arm64
             runner: macos-15
             cc: clang
             cxx: clang++
             parallel: 3
+            test_profile: macos-patch
+            exclude_labels: '^NeverDSemanticTests$'
+            python: python3
           - name: Windows x64
             runner: windows-latest
             cc: cl
             cxx: cl
             parallel: 4
+            test_profile: windows-focused
+            exclude_labels: '^NeverD(Semantic|PatchFull)Tests$'
+            python: python
 
     steps:
       - name: Checkout repository
@@ -111,29 +120,29 @@ jobs:
         env:
           BUILD_PARALLEL: ${{ matrix.parallel }}
 
-      - name: Inventory tests
+      - name: Audit and select test profile
         id: inventory
         shell: bash
         run: |
-          inventory="$(ctest --test-dir build-ci --build-config Release -N)"
-          printf '%s\n' "$inventory"
-          count="$(printf '%s\n' "$inventory" | tr -d '\r' | sed -n 's/^Total Tests: //p' | tail -n 1)"
-          if [[ ! "$count" =~ ^[1-9][0-9]*$ ]]; then
-            echo "CTest did not discover a non-zero test inventory" >&2
-            exit 1
-          fi
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-          echo "### $MATRIX_NAME" >> "$GITHUB_STEP_SUMMARY"
-          echo "Discovered tests: $count" >> "$GITHUB_STEP_SUMMARY"
+          set -o pipefail
+          ctest --test-dir build-ci --build-config Release --show-only=json-v1 |
+            "$PYTHON" scripts/audit_ci_test_inventory.py \
+              --profile "$TEST_PROFILE" \
+              --exclude-label-regex "$EXCLUDE_LABELS" \
+              --matrix-name "$MATRIX_NAME"
         env:
+          EXCLUDE_LABELS: ${{ matrix.exclude_labels }}
           MATRIX_NAME: ${{ matrix.name }}
+          PYTHON: ${{ matrix.python }}
+          TEST_PROFILE: ${{ matrix.test_profile }}
 
-      - name: Run complete test suite
+      - name: Run selected test profile
         shell: bash
         run: |
           set -o pipefail
           ctest --test-dir build-ci \
             --build-config Release \
+            --label-exclude "$EXCLUDE_LABELS" \
             --output-on-failure \
             --progress \
             --parallel "$TEST_PARALLEL" 2>&1 | tee ctest.log
@@ -143,5 +152,6 @@ jobs:
             exit 1
           fi
         env:
+          EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}
           EXPECTED_TESTS: ${{ steps.inventory.outputs.count }}
           TEST_PARALLEL: ${{ matrix.parallel }}
