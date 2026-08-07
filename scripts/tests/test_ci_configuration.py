@@ -17,15 +17,40 @@ class CiConfigurationTests(unittest.TestCase):
 
     def test_workflow_declares_all_three_test_profiles(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        self.assertEqual(source.count("test_profile:"), 3)
-        self.assertIn("test_profile: linux-semantic", source)
-        self.assertIn("exclude_labels: '^NeverDPatchFullTests$'", source)
-        self.assertIn("test_profile: macos-patch", source)
-        self.assertIn("exclude_labels: '^NeverDSemanticTests$'", source)
-        self.assertIn("test_profile: windows-focused", source)
-        self.assertIn(
-            "exclude_labels: '^NeverD(Semantic|PatchFull)Tests$'", source
-        )
+        matrix_source = source.split("        include:\n", 1)[1].split(
+            "\n    steps:", 1
+        )[0]
+        expected_profiles = {
+            "Linux x64": (
+                "runner: ubuntu-24.04",
+                "test_profile: linux-semantic",
+                "exclude_labels: '^NeverDPatchFullTests$'",
+                "python: python3",
+            ),
+            "macOS arm64": (
+                "runner: macos-15",
+                "test_profile: macos-patch",
+                "exclude_labels: '^NeverDSemanticTests$'",
+                "python: python3",
+            ),
+            "Windows x64": (
+                "runner: windows-latest",
+                "test_profile: windows-focused",
+                "exclude_labels: '^NeverD(Semantic|PatchFull)Tests$'",
+                "python: python",
+            ),
+        }
+
+        self.assertEqual(matrix_source.count("test_profile:"), len(expected_profiles))
+        for matrix_name, expected_fields in expected_profiles.items():
+            entry_marker = f"          - name: {matrix_name}\n"
+            with self.subTest(matrix_name=matrix_name):
+                self.assertEqual(matrix_source.count(entry_marker), 1)
+                entry = matrix_source.split(entry_marker, 1)[1].split(
+                    "\n          - name:", 1
+                )[0]
+                for expected_field in expected_fields:
+                    self.assertIn(f"            {expected_field}\n", f"{entry}\n")
 
     def test_workflow_audits_json_then_uses_the_approved_expression(self):
         source = WORKFLOW.read_text(encoding="utf-8")
