@@ -78,7 +78,7 @@ protected:
     auto OutFile = tmpFile("_stdout.txt");
     auto ErrFile = tmpFile("_stderr.txt");
     Cmd += neverd::test::redirectOutput(OutFile.string(), ErrFile.string());
-    int RC = std::system(Cmd.c_str());
+    int RC = neverd::test::runShellCommand(Cmd);
     RunResult R;
     R.exitCode = neverd::test::systemExitCode(RC);
     R.out = readFile(OutFile);

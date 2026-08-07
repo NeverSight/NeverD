@@ -214,8 +214,8 @@ private:
     for (int Attempt = 0; Attempt < kSpawnRetries; ++Attempt) {
       std::error_code MkEC;
       fs::create_directories(Work, MkEC);
-      int RC = std::system(
-          (Cmd + neverd::test::redirectOutput(OutF, ErrF)).c_str());
+      int RC = neverd::test::runShellCommand(
+          Cmd + neverd::test::redirectOutput(OutF, ErrF));
       R = ExecResult{};
       R.Code = neverd::test::systemExitCode(RC);
       {

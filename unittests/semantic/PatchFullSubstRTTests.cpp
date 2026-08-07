@@ -34249,11 +34249,12 @@ std::string ndBinary() {
 
 bool haveClang() {
   auto Cmd = std::string("clang --version") + neverd::test::silenceOutput();
-  return neverd::test::systemExitCode(std::system(Cmd.c_str())) == 0;
+  return neverd::test::systemExitCode(
+             neverd::test::runShellCommand(Cmd)) == 0;
 }
 
 int runExit(const std::string &Cmd) {
-  int RC = std::system(Cmd.c_str());
+  int RC = neverd::test::runShellCommand(Cmd);
   return neverd::test::systemExitCode(RC);
 }
 

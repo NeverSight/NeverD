@@ -58,7 +58,7 @@ protected:
     auto ErrFile = (TmpDir / "_stderr.txt").string();
     std::string FullCmd =
         Cmd + neverd::test::redirectOutput(OutFile, ErrFile);
-    int RC = std::system(FullCmd.c_str());
+    int RC = neverd::test::runShellCommand(FullCmd);
     ExecResult R;
     R.ExitCode = neverd::test::systemExitCode(RC);
     R.Out = readFile(OutFile);
