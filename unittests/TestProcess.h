@@ -2,6 +2,7 @@
 #define NEVERD_UNITTESTS_TESTPROCESS_H
 
 #include <cstddef>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 
@@ -20,6 +21,19 @@ inline unsigned long long currentProcessId() {
 #else
   return static_cast<unsigned long long>(::getpid());
 #endif
+}
+
+inline int runShellCommand(std::string_view Command) {
+#ifdef _WIN32
+  std::string NativeCommand;
+  NativeCommand.reserve(Command.size() + 2);
+  NativeCommand.push_back('"');
+  NativeCommand.append(Command);
+  NativeCommand.push_back('"');
+#else
+  std::string NativeCommand(Command);
+#endif
+  return std::system(NativeCommand.c_str());
 }
 
 inline int systemExitCode(int Status) {
