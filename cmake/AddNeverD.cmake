@@ -93,6 +93,8 @@ function(add_neverd_tool name)
 endfunction()
 
 # add_neverd_unittest(<name> source1 [source2 ...]
+#     [TIMEOUT seconds]
+#     [DISCOVERY_TIMEOUT seconds]
 #     [LINK_COMPONENTS comp1 ...]
 #     [LINK_LIBS lib1 ...])
 #
@@ -106,7 +108,7 @@ set_target_properties(NeverDUnitTests PROPERTIES FOLDER "NeverD/Tests")
 function(add_neverd_unittest name)
   cmake_parse_arguments(ARG
     ""
-    "TIMEOUT"
+    "TIMEOUT;DISCOVERY_TIMEOUT"
     "LINK_COMPONENTS;LINK_LIBS"
     ${ARGN})
 
@@ -116,6 +118,12 @@ function(add_neverd_unittest name)
   # flake under ctest -j parallelism on a busy machine.
   if(NOT DEFINED ARG_TIMEOUT OR ARG_TIMEOUT STREQUAL "")
     set(ARG_TIMEOUT 120)
+  endif()
+
+  # GoogleTest enumeration has a separate finite timeout.  Most binaries
+  # discover quickly; inventory-heavy suites can opt into a larger bound.
+  if(NOT DEFINED ARG_DISCOVERY_TIMEOUT OR ARG_DISCOVERY_TIMEOUT STREQUAL "")
+    set(ARG_DISCOVERY_TIMEOUT 120)
   endif()
 
   add_executable(${name} ${ARG_UNPARSED_ARGUMENTS})
@@ -142,5 +150,5 @@ function(add_neverd_unittest name)
   gtest_discover_tests(${name}
     PROPERTIES TIMEOUT ${ARG_TIMEOUT} LABELS ${name}
     DISCOVERY_MODE PRE_TEST
-    DISCOVERY_TIMEOUT 120)
+    DISCOVERY_TIMEOUT ${ARG_DISCOVERY_TIMEOUT})
 endfunction()

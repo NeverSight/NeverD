@@ -15,6 +15,8 @@ if(WIN32)
   add_compile_definitions(NOMINMAX)
 endif()
 
+# This binary's large inventory can take several minutes to enumerate on
+# hosted Windows runners, so widen its still-finite PRE_TEST discovery bound.
 add_neverd_unittest(NeverDSemanticTests
   X64_IntegerSemanticTests.cpp
   X64_ControlSemanticTests.cpp
@@ -832,6 +834,7 @@ add_neverd_unittest(NeverDSemanticTests
   AllPlatform_BigGlobalRTTests.cpp
   AllPlatform_MemBuiltinLiveRTTests.cpp
   RewriteCodegenRTTests.cpp
+  DISCOVERY_TIMEOUT 600
 )
 
 target_compile_definitions(NeverDSemanticTests PRIVATE
@@ -871,12 +874,14 @@ endif()
 # A handful of fully-obfuscated ARM forms (FarBr / FarLoop / VecWide512 run
 # through all 11 L1 passes) compile a single very large function and can take
 # several minutes under `ctest -j` on a busy machine; give this suite a larger
-# per-test ctest timeout so slow codegen never flakes as a false Timeout
+# per-test ctest timeout so slow codegen never flakes as a false Timeout.  Its
+# 22,960-case list also needs a wider, independently bounded discovery timeout
 # (the Unicorn emulation itself is already bounded by a deterministic 200M
 # instruction budget, so only codegen wall-clock is load-sensitive).
 add_neverd_unittest(NeverDPatchFullTests
   PatchFullSubstRTTests.cpp
   TIMEOUT 1800
+  DISCOVERY_TIMEOUT 600
 )
 
 # This generated 36k-line test harness is prohibitively expensive to optimize

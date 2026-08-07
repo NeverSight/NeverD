@@ -4,16 +4,39 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CMAKE_HELPERS = ROOT / "cmake" / "AddNeverD.cmake"
+SEMANTIC_CMAKE = ROOT / "unittests" / "semantic" / "CMakeLists.txt"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 class CiConfigurationTests(unittest.TestCase):
-    def test_google_test_discovery_is_serial_and_bounded(self):
+    def test_google_test_discovery_is_serial_configurable_and_bounded(self):
         source = CMAKE_HELPERS.read_text(encoding="utf-8")
+        self.assertIn('"TIMEOUT;DISCOVERY_TIMEOUT"', source)
+        self.assertIn(
+            'if(NOT DEFINED ARG_DISCOVERY_TIMEOUT OR ARG_DISCOVERY_TIMEOUT STREQUAL "")',
+            source,
+        )
+        self.assertIn("set(ARG_DISCOVERY_TIMEOUT 120)", source)
         self.assertIn("DISCOVERY_MODE PRE_TEST", source)
-        self.assertIn("DISCOVERY_TIMEOUT 120", source)
+        self.assertIn("DISCOVERY_TIMEOUT ${ARG_DISCOVERY_TIMEOUT}", source)
         self.assertNotIn("DISCOVERY_MODE POST_BUILD", source)
         self.assertNotIn("DISCOVERY_TIMEOUT -1", source)
+
+    def test_inventory_heavy_test_suites_extend_discovery_timeout(self):
+        source = SEMANTIC_CMAKE.read_text(encoding="utf-8")
+
+        self.assertEqual(source.count("  DISCOVERY_TIMEOUT 600\n"), 2)
+        for target in ("NeverDSemanticTests", "NeverDPatchFullTests"):
+            marker = f"add_neverd_unittest({target}\n"
+            with self.subTest(target=target):
+                self.assertEqual(source.count(marker), 1)
+                invocation = source.split(marker, 1)[1].split("\n)", 1)[0]
+                self.assertIn("  DISCOVERY_TIMEOUT 600\n", f"{invocation}\n")
+
+        patch_invocation = source.split(
+            "add_neverd_unittest(NeverDPatchFullTests\n", 1
+        )[1].split("\n)", 1)[0]
+        self.assertIn("  TIMEOUT 1800\n", f"{patch_invocation}\n")
 
     def test_workflow_declares_all_three_test_profiles(self):
         source = WORKFLOW.read_text(encoding="utf-8")
