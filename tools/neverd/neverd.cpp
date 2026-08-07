@@ -22,10 +22,12 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdlib>
 #include <filesystem>
 
 using namespace llvm;
@@ -38,8 +40,31 @@ int main(int Argc, char *Argv[]) {
   return neverd::runWithLargeStack(realMain, Argc, Argv);
 }
 
+// LLVM's default reaction to a failed allocation is "LLVM ERROR: out of memory"
+// plus a symbol-less stack trace, which reads like an LLVM bug and tells the
+// user nothing about what to do.  Name the levers that lower lift memory.  LLVM
+// requires a bad-allocation handler not to allocate and not to return, so keep
+// this to raw diagnostic writes and terminate immediately afterwards.
+static void reportOutOfMemory(void *, const char *Reason, bool) {
+  errs() << "error: out of memory: "
+         << (Reason ? Reason : "allocation failed")
+         << "\n"
+            "  Large binaries retain more IR, and concurrent LLVM emission\n"
+            "  adds one working set per worker thread.  To lower the peak:\n"
+            "    * NEVERD_THREADS=1 (or 2) to shrink the concurrent working set\n"
+            "    * --max-func=N to lift only the first N functions\n"
+            "    * --no-opt to skip the LLVM optimization pipeline\n";
+  if constexpr (sizeof(void *) == 4)
+    errs() << "  This is a 32-bit build; its address space caps usable memory\n"
+              "  at 2-4 GB regardless of how much RAM the machine has.  A\n"
+              "  64-bit build is the real fix for multi-megabyte inputs.\n";
+  errs().flush();
+  std::_Exit(1);
+}
+
 static int realMain(int Argc, char *Argv[]) {
   InitLLVM X(Argc, Argv);
+  install_bad_alloc_error_handler(reportOutOfMemory);
 
   cl::ParseCommandLineOptions(
       Argc, Argv,

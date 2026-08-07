@@ -118,6 +118,14 @@ private:
   bool liftControl(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftAtomic(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftString(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+
+  /// Lift a REP/REPE/REPNE-prefixed CMPS or SCAS.  The loop terminates on a
+  /// data-dependent ZF transition, so the hardware instruction the backend
+  /// emits for the intrinsic returns its leftover count.  The lifter derives
+  /// the pointer advances from that count and recomputes the status flags in
+  /// MedIR from the last element pair the loop compared.
+  void liftRepCmpScas(LiftState &S, Intrinsic Id, unsigned ElemSz, bool IsScas,
+                      bool IsRepne);
   bool liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftSIMD(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);

@@ -184,6 +184,18 @@ constexpr int64_t kMaxFrameSize = 16 * 1024 * 1024; // 16 MiB
 // Backend / code generation
 //===----------------------------------------------------------------------===//
 
+/// Target MedIR op count for one LLVM emission shard.
+///
+/// Peak lift memory is dominated by the shards in flight at once: each holds a
+/// private LLVMContext and its slice in the emitter's pre-mem2reg form (an
+/// alloca plus load/store per temporary, several times the size of the
+/// optimized IR).  Bounding a shard's slice therefore bounds that transient
+/// emission component to roughly (worker threads) x (this budget), rather than
+/// keeping the whole input's unoptimized LLVM IR resident at once.  Retained
+/// Low/MedIR, bitcode, and the final module still scale with the input.  The
+/// budget is large enough that per-shard setup and extra link steps stay noise.
+constexpr uint64_t kMaxShardOps = 8000;
+
 /// Addresses below this threshold are not considered valid global data
 /// references.
 constexpr uint64_t kMinGlobalDataAddr = 0x1000;

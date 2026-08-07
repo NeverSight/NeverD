@@ -220,6 +220,7 @@ add_neverd_unittest(NeverDSemanticTests
   AArch64_FjcvtzsRTTests.cpp
   AArch64_FcvtxnRTTests.cpp
   X64_ScasCmpsRTTests.cpp
+  X64_RepCmpScasRTTests.cpp
   AArch64_SetfFlagsRTTests.cpp
   AArch64_XAFlagRTTests.cpp
   AArch64_RmifRTTests.cpp

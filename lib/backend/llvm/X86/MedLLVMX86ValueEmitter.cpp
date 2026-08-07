@@ -170,21 +170,29 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
   switch (IC) {
   case I::Movsb:
   case I::Stosb:
+  case I::Cmpsb:
+  case I::Scasb:
     ElemSz = 1;
     Suffix = 'b';
     break;
   case I::Movsw:
   case I::Stosw:
+  case I::Cmpsw:
+  case I::Scasw:
     ElemSz = 2;
     Suffix = 'w';
     break;
   case I::Movsd:
   case I::Stosd:
+  case I::Cmpsd_str:
+  case I::Scasd:
     ElemSz = 4;
     Suffix = 'l';
     break;
   case I::Movsq:
   case I::Stosq:
+  case I::Cmpsq:
+  case I::Scasq:
     ElemSz = 8;
     Suffix = 'q';
     break;
@@ -195,6 +203,10 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
       (IC == I::Stosb || IC == I::Stosw || IC == I::Stosd || IC == I::Stosq);
   bool IsMovs =
       (IC == I::Movsb || IC == I::Movsw || IC == I::Movsd || IC == I::Movsq);
+  bool IsCmps = (IC == I::Cmpsb || IC == I::Cmpsw || IC == I::Cmpsd_str ||
+                 IC == I::Cmpsq);
+  bool IsScas =
+      (IC == I::Scasb || IC == I::Scasw || IC == I::Scasd || IC == I::Scasq);
 
   auto Coerce = [&](llvm::Value *V, llvm::Type *T) -> llvm::Value * {
     return (V->getType() == T) ? V : Builder.CreateZExtOrTrunc(V, T);
@@ -261,6 +273,76 @@ llvm::Value *MedLLVMEmitter::emitRepString(const MedOp &Op, Intrinsic IC,
       Builder.CreateCall(IA, {RDI, RCX, Val});
     }
     return Handled();
+  }
+
+  // CMPS / SCAS: unlike MOVS/STOS these stop on a data-dependent ZF transition,
+  // so the trip count is only known at run time.  The hardware's leftover RCX
+  // is the intrinsic's result and the lifter derives the advanced pointers from
+  // it (see liftRepCmpScas); the pointer outputs are still declared so the
+  // register allocator models the clobber.  REPE (`repz`) repeats while the
+  // elements match, REPNE (`repnz`) while they differ; the lifter passes which
+  // one as the trailing constant input.
+  if ((IsCmps || IsScas) && Op.NumInputs >= 5) {
+    const bool RepNE = Op.NumInputs > 5 && Op.Inputs[5].isConst() &&
+                       Op.Inputs[5].ConstVal != 0;
+    const std::string RepPfx = RepNE ? "repnz " : "repz ";
+    llvm::Value *LeftCount = nullptr;
+    if (IsScas) {
+      // Inputs [RDI, RCX, AL/AX/EAX/RAX]: RDI/RCX are tied in-out, the
+      // accumulator is a plain {ax} input (SCAS never writes it).
+      auto *RDI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
+      auto *RCX = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
+      auto *ValTy = llvm::Type::getIntNTy(*Ctx, ElemSz * 8);
+      auto *Val = Coerce(getVar(Op.Inputs[3], Builder), ValTy);
+      std::string Mn = dirWrap(RepPfx + "scas" + Suffix, 5);
+      auto *RetTy = llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy});
+      llvm::CallInst *Call = nullptr;
+      if (DfK == DfDyn) {
+        auto *Df = Coerce(getVar(Op.Inputs[4], Builder), AddrRegTy);
+        auto *FnTy = llvm::FunctionType::get(
+            RetTy, {AddrRegTy, AddrRegTy, ValTy, AddrRegTy}, false);
+        auto *IA = llvm::InlineAsm::get(
+            FnTy, Mn, "={di},={cx},0,1,{ax},r,~{memory},~{dirflag},~{cc}",
+            true);
+        Call = Builder.CreateCall(IA, {RDI, RCX, Val, Df}, "rep_scas");
+      } else {
+        auto *FnTy = llvm::FunctionType::get(
+            RetTy, {AddrRegTy, AddrRegTy, ValTy}, false);
+        auto *IA = llvm::InlineAsm::get(
+            FnTy, Mn, "={di},={cx},0,1,{ax},~{memory},~{dirflag},~{cc}", true);
+        Call = Builder.CreateCall(IA, {RDI, RCX, Val}, "rep_scas");
+      }
+      LeftCount = Builder.CreateExtractValue(Call, {1}, "scas_cx");
+    } else {
+      // Inputs [RSI, RDI, RCX], all three tied in-out.
+      auto *RSI = Coerce(getVar(Op.Inputs[1], Builder), AddrRegTy);
+      auto *RDI = Coerce(getVar(Op.Inputs[2], Builder), AddrRegTy);
+      auto *RCX = Coerce(getVar(Op.Inputs[3], Builder), AddrRegTy);
+      std::string Mn = dirWrap(RepPfx + "cmps" + Suffix, 6);
+      auto *RetTy =
+          llvm::StructType::get(*Ctx, {AddrRegTy, AddrRegTy, AddrRegTy});
+      llvm::CallInst *Call = nullptr;
+      if (DfK == DfDyn) {
+        auto *Df = Coerce(getVar(Op.Inputs[4], Builder), AddrRegTy);
+        auto *FnTy = llvm::FunctionType::get(
+            RetTy, {AddrRegTy, AddrRegTy, AddrRegTy, AddrRegTy}, false);
+        auto *IA = llvm::InlineAsm::get(
+            FnTy, Mn, "={si},={di},={cx},0,1,2,r,~{memory},~{dirflag},~{cc}",
+            true);
+        Call = Builder.CreateCall(IA, {RSI, RDI, RCX, Df}, "rep_cmps");
+      } else {
+        auto *FnTy = llvm::FunctionType::get(
+            RetTy, {AddrRegTy, AddrRegTy, AddrRegTy}, false);
+        auto *IA = llvm::InlineAsm::get(
+            FnTy, Mn, "={si},={di},={cx},0,1,2,~{memory},~{dirflag},~{cc}",
+            true);
+        Call = Builder.CreateCall(IA, {RSI, RDI, RCX}, "rep_cmps");
+      }
+      LeftCount = Builder.CreateExtractValue(Call, {2}, "cmps_cx");
+    }
+    if (Op.Output.Size == 0)
+      return nullptr;
+    return Coerce(LeftCount, sizeToType(Op.Output.Size));
   }
 
   // MOVS: inputs [RSI, RDI, RCX], all written by the hardware (discarded).
@@ -451,7 +533,10 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     return emitXgetbvValue(Op, Builder);
 
   if (IC == I::Movsb || IC == I::Movsw || IC == I::Movsd || IC == I::Movsq ||
-      IC == I::Stosb || IC == I::Stosw || IC == I::Stosd || IC == I::Stosq)
+      IC == I::Stosb || IC == I::Stosw || IC == I::Stosd || IC == I::Stosq ||
+      IC == I::Cmpsb || IC == I::Cmpsw || IC == I::Cmpsd_str ||
+      IC == I::Cmpsq || IC == I::Scasb || IC == I::Scasw || IC == I::Scasd ||
+      IC == I::Scasq)
     return emitRepString(Op, IC, Builder);
 
   // Per-lane saturating add/sub: map to @llvm.{s,u}{add,sub}.sat intrinsics.

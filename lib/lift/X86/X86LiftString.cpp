@@ -16,6 +16,8 @@
 
 #include "llvm/Support/Debug.h"
 
+#include <iterator>
+
 #define DEBUG_TYPE "neverd-lift-x86"
 
 namespace neverd {
@@ -52,6 +54,16 @@ unsigned stringElemSize(unsigned InsnId) {
 bool hasRepPrefix(const cs_x86 &X86) {
   for (int I = 0; I < 4; ++I)
     if (X86.prefix[I] == X86_PREFIX_REP)
+      return true;
+  return false;
+}
+
+// True when a REPNE/REPNZ prefix (0xF2) is attached.  On CMPS/SCAS this selects
+// the "repeat while equal fails" loop (`memchr` / `strlen` idioms); REP/REPE
+// (0xF3) selects the "repeat while equal" loop (`memcmp`).
+bool hasRepnePrefix(const cs_x86 &X86) {
+  for (int I = 0; I < 4; ++I)
+    if (X86.prefix[I] == X86_PREFIX_REPNE)
       return true;
   return false;
 }
@@ -105,6 +117,113 @@ NdVar X86Lifter::dirStep(LiftState &S, unsigned ElemSz) {
           NdVar::cst(static_cast<uint64_t>(-static_cast<int64_t>(ElemSz)), 8),
           NdVar::cst(ElemSz, 8)});
   return Step;
+}
+
+// REP/REPE/REPNE CMPS / SCAS.
+//
+// The loop exits on whichever comes first: RCX hitting zero, or the ZF
+// transition the prefix selects (REPE stops on the first mismatch, REPNE on the
+// first match).  That termination point is data dependent, so unlike REP
+// MOVS/STOS the trip count is not known here; the backend lowers the intrinsic
+// to the real `rep cmps/scas` and yields the hardware's leftover RCX.
+//
+// Everything else follows from that one value.  The loop decrements RCX and
+// advances the pointer(s) by one direction step in lockstep, so
+//   iterations = RCX_in - RCX_out,  RSI/RDI += iterations * step,
+// and the flags are those of the LAST element pair compared, which sits one
+// step back from the final pointers.  Recomputing them as an ordinary CMP keeps
+// the flags real MedIR values that condition recovery and flag elimination can
+// still reason about, instead of opaque asm outputs.  A loop that never ran
+// (RCX == 0 on entry) compares nothing and leaves the flags untouched: the
+// flag-reconstruction loads are redirected to the live stack frame, and each
+// flag falls back to its incoming value.
+void X86Lifter::liftRepCmpScas(LiftState &S, Intrinsic Id, unsigned ElemSz,
+                               bool IsScas, bool IsRepne) {
+  NdVar Rsi = NdVar::reg(x86reg::RSI, 8);
+  NdVar Rdi = NdVar::reg(x86reg::RDI, 8);
+  NdVar Rcx = NdVar::reg(x86reg::RCX, 8);
+  NdVar Df = NdVar::reg(x86reg::DF, 1);
+  NdVar RepKind = NdVar::cst(IsRepne ? 1 : 0, 1);
+
+  // Snapshot the entry count and "the loop body ran at least once" before the
+  // count is overwritten.
+  NdVar RcxIn = S.makeTemp(8);
+  S.emit(NdOp::COPY, RcxIn, {Rcx});
+  NdVar RcxNZ = S.makeTemp(1);
+  S.emit(NdOp::INT_NOTEQUAL, RcxNZ, {RcxIn, NdVar::cst(0, 8)});
+  NdVar Step = dirStep(S, ElemSz);
+
+  // The intrinsic yields the leftover count.  Note the destination is NOT the
+  // default RAX: SCAS reads the accumulator but never writes it, so an RAX
+  // destination would clobber a live accumulator.
+  NdVar RcxOut = S.makeTemp(8);
+  if (IsScas)
+    S.emitIntrinsic(Id, RcxOut,
+                    {Rdi, Rcx, NdVar::reg(x86reg::RAX, ElemSz), Df, RepKind});
+  else
+    S.emitIntrinsic(Id, RcxOut, {Rsi, Rdi, Rcx, Df, RepKind});
+
+  NdVar Iters = S.makeTemp(8);
+  S.emit(NdOp::INT_SUB, Iters, {RcxIn, RcxOut});
+  NdVar Delta = S.makeTemp(8);
+  S.emit(NdOp::INT_MULT, Delta, {Iters, Step});
+
+  NdVar NewSi;
+  if (!IsScas) {
+    NewSi = S.makeTemp(8);
+    S.emit(NdOp::INT_ADD, NewSi, {Rsi, Delta});
+  }
+  NdVar NewDi = S.makeTemp(8);
+  S.emit(NdOp::INT_ADD, NewDi, {Rdi, Delta});
+  if (!IsScas)
+    S.emit(NdOp::COPY, Rsi, {NewSi});
+  S.emit(NdOp::COPY, Rdi, {NewDi});
+  S.emit(NdOp::COPY, Rcx, {RcxOut});
+
+  // Re-read the last compared pair through the final pointers.
+  NdVar Back = S.makeTemp(8);
+  S.emit(NdOp::SELECT, Back, {RcxNZ, Step, NdVar::cst(0, 8)});
+  NdVar DiLast = S.makeTemp(8);
+  S.emit(NdOp::INT_SUB, DiLast, {NewDi, Back});
+  // A MedIR LOAD is unconditional even when its value later feeds the false
+  // arm of a SELECT.  REP with an entry count of zero must not touch RSI/RDI,
+  // so route that otherwise-dead probe through the live stack frame instead.
+  NdVar SafeProbe = NdVar::reg(x86reg::RSP, 8);
+  NdVar DiProbe = S.makeTemp(8);
+  S.emit(NdOp::SELECT, DiProbe, {RcxNZ, DiLast, SafeProbe});
+  NdVar B = S.makeTemp(ElemSz);
+  S.emit(NdOp::LOAD, B, {DiProbe});
+  NdVar A;
+  if (IsScas) {
+    A = NdVar::reg(x86reg::RAX, ElemSz);
+  } else {
+    NdVar SiLast = S.makeTemp(8);
+    S.emit(NdOp::INT_SUB, SiLast, {NewSi, Back});
+    NdVar SiProbe = S.makeTemp(8);
+    S.emit(NdOp::SELECT, SiProbe, {RcxNZ, SiLast, SafeProbe});
+    A = S.makeTemp(ElemSz);
+    S.emit(NdOp::LOAD, A, {SiProbe});
+  }
+
+  static constexpr uint64_t FlagRegs[] = {x86reg::CF, x86reg::PF, x86reg::AF,
+                                          x86reg::ZF, x86reg::SF, x86reg::OF};
+  NdVar Old[std::size(FlagRegs)];
+  for (size_t I = 0; I < std::size(FlagRegs); ++I) {
+    Old[I] = S.makeTemp(1);
+    S.emit(NdOp::COPY, Old[I], {NdVar::reg(FlagRegs[I], 1)});
+  }
+
+  NdVar Res = S.makeTemp(ElemSz);
+  S.emit(NdOp::INT_SUB, Res, {A, B});
+  emitFlagsArith(S, Res, A, B, /*IsSub=*/true);
+
+  for (size_t I = 0; I < std::size(FlagRegs); ++I) {
+    NdVar New = S.makeTemp(1);
+    S.emit(NdOp::COPY, New, {NdVar::reg(FlagRegs[I], 1)});
+    NdVar Sel = S.makeTemp(1);
+    S.emit(NdOp::SELECT, Sel, {RcxNZ, New, Old[I]});
+    S.emit(NdOp::COPY, NdVar::reg(FlagRegs[I], 1), {Sel});
+  }
 }
 
 bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
@@ -362,12 +481,11 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, 8), Step});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, 8), {NewDi});
     } else {
-      S.emitIntrinsic(Intrinsic::Cmpsd_str);
-      for (uint64_t RO : {x86reg::RSI, x86reg::RDI, x86reg::RCX}) {
-        NdVar Tmp = S.makeTemp(8);
-        S.emit(NdOp::COPY, NdVar::reg(RO, 8), {Tmp});
-      }
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::ZF, 1), {NdVar::cst(0, 1)});
+      // String CMPSD (`cmpsl`) under REP/REPE/REPNE.  stringElemSize cannot
+      // classify X86_INS_CMPSD (it doubles as the SSE scalar compare), so the
+      // 4-byte element size is passed explicitly.
+      liftRepCmpScas(S, Intrinsic::Cmpsd_str, /*ElemSz=*/4, /*IsScas=*/false,
+                     hasRepnePrefix(X86));
     }
     break;
   }
@@ -548,9 +666,8 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
   // single MOVS/STOS/LODS handlers above.
   //
   // The REP/REPE/REPNE forms terminate on a data-dependent ZF transition, so
-  // the final RCX/RDI/RSI and flags cannot be computed in closed form; they are
-  // left as a non-crashing placeholder (compilers virtually never emit them —
-  // memcmp/strlen/memchr are open-coded or call the libc routine).
+  // the final RCX/RDI/RSI come back from the hardware loop the backend emits
+  // for the intrinsic; see liftRepCmpScas.
   case X86_INS_CMPSB:
   case X86_INS_CMPSW:
   case X86_INS_CMPSQ:
@@ -589,7 +706,8 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, 8), {NewDi});
       break;
     }
-    // REP/REPE/REPNE form: data-dependent loop — non-crashing placeholder.
+    // REP/REPE/REPNE form: data-dependent loop, lowered to the hardware
+    // instruction (see liftRepCmpScas).
     Intrinsic Id;
     switch (InsnId) {
     case X86_INS_CMPSB:
@@ -614,12 +732,8 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       Id = Intrinsic::Scasq;
       break;
     }
-    S.emitIntrinsic(Id);
-    for (uint64_t RO : {x86reg::RSI, x86reg::RDI, x86reg::RCX}) {
-      NdVar Tmp = S.makeTemp(8);
-      S.emit(NdOp::COPY, NdVar::reg(RO, 8), {Tmp});
-    }
-    S.emit(NdOp::COPY, NdVar::reg(x86reg::ZF, 1), {NdVar::cst(0, 1)});
+    liftRepCmpScas(S, Id, stringElemSize(InsnId), IsScas,
+                   hasRepnePrefix(X86));
     break;
   }
 

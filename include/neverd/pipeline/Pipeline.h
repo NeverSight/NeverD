@@ -214,22 +214,27 @@ private:
                         const PipelineOptions &Opts, PipelineResult &Result);
 
   /// Emit + verify + optimize the MedIR functions in parallel and return the
-  /// combined module in \p Ctx.  The functions are split into \p NumShards
-  /// contiguous ranges; each range is emitted (with link-mergeable globals),
-  /// verified and optimized in its own LLVMContext on a worker thread, then the
-  /// shard modules are serialized to bitcode and linked into one module in
-  /// \p Ctx.  Because the emit and (function-local) optimization passes are the
+  /// combined module in \p Ctx.  The functions are split into shards; each
+  /// shard is emitted (with link-mergeable globals), verified and optimized in
+  /// its own LLVMContext on one of \p NumThreads workers, then the shard
+  /// modules are serialized to bitcode and linked into one module in \p Ctx.
+  /// Because the emit and (function-local) optimization passes are the
   /// single-threaded bottleneck of lift, this is the main end-to-end speedup.
   /// The result is semantically identical to the serial path: every function is
   /// defined in exactly one shard and per-address globals (crucially the
   /// writable .data/.bss segment globals) merge to one shared object at link
   /// time.  Returns null only if no shard produced a module.
+  ///
+  /// The shard count is derived from the total MedIR work rather than pinned to
+  /// \p NumThreads: peak memory is (in-flight shards) x (slice size), so
+  /// slicing finely keeps a large binary's unoptimized IR from all being
+  /// resident at once while still saturating every worker.
   static std::unique_ptr<llvm::Module>
   emitLLVMSharded(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
                   Arch TheArch,
                   const std::vector<std::pair<va_t, std::string>> &Imports,
                   const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt,
-                  unsigned NumShards);
+                  unsigned NumThreads);
 
   /// Phase 3: convert MedIR -> HighIR in parallel.
   void buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,

@@ -39,9 +39,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <map>
 #include <mutex>
+#include <queue>
 #include <set>
 #include <string>
 #include <thread>
@@ -62,6 +64,23 @@ bool hasRealOps(const LowFunc &Func) {
       if (Op.Opcode != NdOp::NOP)
         return true;
   return false;
+}
+
+// Both IRs are built by repeated push_back and then kept alive for the rest of
+// the run, so every block carries whatever slack its last geometric growth left
+// behind -- across tens of thousands of blocks that slack is a sizeable
+// fraction of the pipeline's resident set.  Trimming each function once, on the
+// worker that just finished building it, costs one copy of data already in
+// cache and is invisible next to decode/SSA.
+template <typename Func> void trimFuncStorage(Func &F) {
+  for (auto &B : F.Blocks) {
+    B.Ops.shrink_to_fit();
+    B.Succs.shrink_to_fit();
+    B.Preds.shrink_to_fit();
+    if constexpr (requires { B.Phis; })
+      B.Phis.shrink_to_fit();
+  }
+  F.Blocks.shrink_to_fit();
 }
 
 void annotateDebugInfo(LowFunc &Func, DebugContext &Dbg) {
@@ -123,9 +142,11 @@ void Pipeline::buildLowIR(
       return;
     CFGBuilder LocalCFG;
     LocalCFG.setKnownFuncEntries(&FuncEntries);
-    for (size_t I; (I = Claim()) < N;)
+    for (size_t I; (I = Claim()) < N;) {
       AllLow[I] = LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                  Candidates[I].second);
+      trimFuncStorage(AllLow[I]);
+    }
   });
 
   // Merge each function's relocation-free PC-relative code references (x86
@@ -208,6 +229,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img,
             Local.convert(Result.LowFuncs[I], Img.Arch, Img.Format);
         auto &MF = Result.MedFuncs[I];
         auto &LF = Result.LowFuncs[I];
+        trimFuncStorage(MF);
         MF.OriginalSize = LF.OriginalSize;
         MF.DebugName = LF.DebugName;
         MF.SourceFile = LF.SourceFile;
@@ -259,39 +281,70 @@ static int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI) {
 std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
     const std::vector<std::pair<va_t, std::string>> &Imports,
-    const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumShards) {
+    const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumThreads) {
   const size_t N = Funcs.size();
-  NumShards = std::max(
-      1u, std::min<unsigned>(NumShards, static_cast<unsigned>(N ? N : 1)));
+  NumThreads = std::max(
+      1u, std::min<unsigned>(NumThreads, static_cast<unsigned>(N ? N : 1)));
+
+  std::vector<uint64_t> Weight(N, 0);
+  uint64_t TotalWeight = 0;
+  for (size_t I = 0; I < N; ++I) {
+    uint64_t W = 1;
+    for (const auto &B : Funcs[I].Blocks)
+      W += B.Ops.size() + B.Phis.size();
+    Weight[I] = W;
+    TotalWeight += W;
+  }
+
+  // Slice size, not core count, is what bounds peak memory here: a shard holds
+  // its own LLVMContext plus its slice in the emitter's pre-mem2reg form (an
+  // alloca + load/store per temp, several times the optimized IR), and every
+  // in-flight shard's module is live at once.  Pinning one shard per core --
+  // the original scheme -- therefore held the WHOLE program's unoptimized IR in
+  // memory simultaneously, which is what exhausts a 32-bit address space on a
+  // multi-megabyte input (issue #10).  Sizing shards to a work budget instead
+  // keeps every core busy while capping the concurrent set at
+  // threads x budget, and costs only a few more link steps: a shard's
+  // duplicated declarations/globals are negligible next to its function bodies.
+  const uint64_t PerShard =
+      std::max<uint64_t>(1, TotalWeight / std::max(1u, NumThreads));
+  uint64_t Budget = std::min<uint64_t>(PerShard, limits::kMaxShardOps);
+  // A 32-bit host has 2-4 GB of address space for everything, so keep the
+  // in-flight set far smaller there than on a 64-bit host.
+  if constexpr (sizeof(void *) == 4)
+    Budget = std::min<uint64_t>(Budget, limits::kMaxShardOps / 4);
+  unsigned NumShards = static_cast<unsigned>(
+      std::min<uint64_t>(N, (TotalWeight + Budget - 1) / Budget));
+  NumShards = std::max(NumShards, NumThreads);
+  NumShards = std::max(1u, std::min<unsigned>(NumShards, N ? N : 1));
 
   // Assign each function to a shard by longest-processing-time bin packing:
   // sort by emitted-work weight (op count is a good proxy for both emit and
   // per-function optimization cost) descending, then greedily place each into
   // the currently least-loaded shard.  A few very large functions otherwise
   // dominate one shard's wall time and cap the speedup; LPT keeps shards even.
-  std::vector<std::vector<char>> Masks(NumShards, std::vector<char>(N, 0));
+  // The assignment is stored as one shard index per function (not a mask per
+  // shard) so the bookkeeping stays O(N) however finely the work is sliced.
+  std::vector<unsigned> ShardOf(N, 0);
   {
-    std::vector<uint64_t> Weight(N, 0);
-    for (size_t I = 0; I < N; ++I) {
-      uint64_t W = 1;
-      for (const auto &B : Funcs[I].Blocks)
-        W += B.Ops.size() + B.Phis.size();
-      Weight[I] = W;
-    }
     std::vector<size_t> Order(N);
     for (size_t I = 0; I < N; ++I)
       Order[I] = I;
     std::sort(Order.begin(), Order.end(), [&](size_t A, size_t B) {
       return Weight[A] != Weight[B] ? Weight[A] > Weight[B] : A < B;
     });
-    std::vector<uint64_t> Load(NumShards, 0);
+    // Least-loaded-first via a min-heap keyed on (load, shard index); scanning
+    // every shard per function would be O(N * NumShards) now that shards are
+    // sized by work rather than capped at the core count.
+    using Bin = std::pair<uint64_t, unsigned>;
+    std::priority_queue<Bin, std::vector<Bin>, std::greater<Bin>> Load;
+    for (unsigned S = 0; S < NumShards; ++S)
+      Load.emplace(0, S);
     for (size_t Idx : Order) {
-      unsigned Best = 0;
-      for (unsigned S = 1; S < NumShards; ++S)
-        if (Load[S] < Load[Best])
-          Best = S;
-      Masks[Best][Idx] = 1;
-      Load[Best] += Weight[Idx];
+      auto [L, S] = Load.top();
+      Load.pop();
+      ShardOf[Idx] = S;
+      Load.emplace(L + Weight[Idx], S);
     }
   }
 
@@ -308,15 +361,18 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
 
   // Each shard emits its slice + all declarations, verifies, optimizes, and
   // serializes to bitcode in its own context (LLVMContext is not thread-safe,
-  // so cross-context transfer goes through bitcode).  Spawn one thread per core
-  // (not the 12-capped IR-phase pool) so a many-core host is fully used; work
-  // is claimed atomically so an uneven shard never idles a core.
+  // so cross-context transfer goes through bitcode).  Work is claimed
+  // atomically, so an uneven shard never idles a worker and only NumThreads
+  // shard modules exist at any instant.
   std::vector<std::string> BC(NumShards);
   auto runShard = [&](unsigned S) {
+    std::vector<char> Mask(N, 0);
+    for (size_t I = 0; I < N; ++I)
+      Mask[I] = (ShardOf[I] == S);
     llvm::LLVMContext ShardCtx;
     MedLLVMEmitter Em;
     auto M = Em.emit(Funcs, ShardCtx, "neverd_output", TheArch, Imports, &Img,
-                     Fmt, /*MergeableGlobals=*/true, &Masks[S]);
+                     Fmt, /*MergeableGlobals=*/true, &Mask);
     if (!M)
       return;
     std::string VErr;
@@ -330,8 +386,6 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     llvm::raw_string_ostream OS(BC[S]);
     llvm::WriteBitcodeToFile(*M, OS);
   };
-  const unsigned HwCores = std::max(1u, std::thread::hardware_concurrency());
-  const unsigned NumThreads = std::min<unsigned>(NumShards, HwCores);
   if (NumThreads <= 1) {
     for (unsigned S = 0; S < NumShards; ++S)
       runShard(S);
@@ -350,12 +404,18 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
   }
 
   // Serial link into the caller's context, in shard order for determinism.
+  // Each shard's bitcode is released as soon as it is linked: all of them
+  // together are a second copy of the program that would otherwise stay
+  // resident until the whole link finishes.
   auto Linked = std::make_unique<llvm::Module>("neverd_output", Ctx);
   llvm::Linker L(*Linked);
   for (unsigned S = 0; S < NumShards; ++S) {
-    if (BC[S].empty())
+    std::string ShardBC = std::move(BC[S]);
+    BC[S].clear();
+    BC[S].shrink_to_fit();
+    if (ShardBC.empty())
       continue;
-    auto Buf = llvm::MemoryBufferRef(BC[S], "neverd_shard");
+    auto Buf = llvm::MemoryBufferRef(ShardBC, "neverd_shard");
     auto MOr = llvm::parseBitcodeFile(Buf, Ctx);
     if (!MOr) {
       llvm::WithColor::warning()
@@ -670,20 +730,24 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   // Parallel emit + optimize (the two single-threaded phases that dominate
   // lift).  Only for lift mode — the patch backend depends on the serial path's
-  // single-module, internal-linkage globals.  The shard count tracks the core
-  // count directly (not the 12-capped worker pool used by the earlier IR
-  // phases) so a many-core machine is fully used.  Small inputs stay serial:
-  // below 8 functions the shard emit/verify/optimize/link setup outweighs the
-  // parallelism it buys.
-  unsigned HwCores = std::max(2u, std::thread::hardware_concurrency());
-  bool Parallel = !Opts.PatchMode && HwCores > 1 && Result.MedFuncs.size() >= 8;
-  unsigned Shards = std::min<unsigned>(
-      HwCores, static_cast<unsigned>(Result.MedFuncs.size()));
+  // single-module, internal-linkage globals.  Worker count comes from the
+  // shared pool setting, so NEVERD_THREADS / setWorkerThreadCount() throttle
+  // this phase too: it is by far the most memory-hungry one, and capping it was
+  // previously impossible (it read hardware_concurrency() directly).  Small
+  // inputs stay serial: below 8 functions the shard
+  // emit/verify/optimize/link setup outweighs the memory and parallelism gains.
+  // A large input still takes this path with one worker: the work-budgeted
+  // shards then run serially, which is what makes NEVERD_THREADS=1 actually
+  // bound the transient LLVM emission working set.
+  unsigned Workers = std::max(
+      1u, std::min<unsigned>(workerThreadCount(),
+                             static_cast<unsigned>(Result.MedFuncs.size())));
+  bool UseShards = !Opts.PatchMode && Result.MedFuncs.size() >= 8;
 
-  if (Parallel && Shards > 1) {
+  if (UseShards) {
     Result.LlvmModule =
         emitLLVMSharded(Result.MedFuncs, Ctx, Img.Arch, ImportMap, Img,
-                        Img.Format, Opts.NoOpt, Shards);
+                        Img.Format, Opts.NoOpt, Workers);
     if (!Result.LlvmModule)
       return false;
     return true;
