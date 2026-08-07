@@ -205,3 +205,7 @@ X86_Umax,      // unsigned maximum (@llvm.umax)
 // would not roundtrip and would call functions absent under Unicorn).
 X87Fsin, X87Fcos, X87F2xm1, X87Fscale, X87Fprem, X87Fprem1, X87Fpatan,
 X87Fyl2x, X87Fyl2xp1, X87Fptan, X87Fxtractsig, X87Fxtractexp,
+
+// x87 state operations. These have no integer result and must remain
+// side-effecting instructions through MedIR/LLVM lowering.
+X87Fninit, X87Fnclex,

@@ -49,6 +49,8 @@ SIDEEFFECT(Intrinsic::Outsw);
 SIDEEFFECT(Intrinsic::Outsd);
 SIDEEFFECT(Intrinsic::Vmcall);
 SIDEEFFECT(Intrinsic::Vmmcall);
+SIDEEFFECT(Intrinsic::X87Fninit);
+SIDEEFFECT(Intrinsic::X87Fnclex);
 // string ops (side-effect)
 SIDEEFFECT(Intrinsic::Movsb);
 SIDEEFFECT(Intrinsic::Movsw);

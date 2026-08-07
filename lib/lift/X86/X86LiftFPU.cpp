@@ -528,10 +528,12 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   }
 
   case X86_INS_FNINIT:
-  case X86_INS_FNCLEX:
-    S.emitIntrinsic(Intrinsic::X87Op);
+    S.emitVoidIntrinsic(Intrinsic::X87Fninit);
     FPUTop = 0;
     FpuReset = true;
+    break;
+  case X86_INS_FNCLEX:
+    S.emitVoidIntrinsic(Intrinsic::X87Fnclex);
     break;
 
   // x87 transcendental / special ops: emit the genuine instruction (the backend

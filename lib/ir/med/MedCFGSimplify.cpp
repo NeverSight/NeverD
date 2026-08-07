@@ -109,17 +109,22 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
     NewBlocks.push_back(std::move(Blk));
   }
   for (auto &Blk : NewBlocks) {
-    for (auto &S : Blk.Succs) {
+    std::vector<int> RemappedSuccs;
+    RemappedSuccs.reserve(Blk.Succs.size());
+    for (int S : Blk.Succs) {
       auto It = OldToNew.find(S);
       if (It != OldToNew.end())
-        S = It->second;
+        RemappedSuccs.push_back(It->second);
     }
-    for (auto &P : Blk.Preds) {
-      auto It = OldToNew.find(P);
-      if (It != OldToNew.end())
-        P = It->second;
-    }
+    Blk.Succs = std::move(RemappedSuccs);
+    Blk.Preds.clear();
   }
+  // Preds are derived data. Rebuild them from the retained successor edges so
+  // removing an empty block cannot leave a stale predecessor ID or make the
+  // two edge directions disagree.
+  for (const auto &Blk : NewBlocks)
+    for (int S : Blk.Succs)
+      NewBlocks[S].Preds.push_back(Blk.Id);
   Func.Blocks = std::move(NewBlocks);
 }
 

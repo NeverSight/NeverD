@@ -21,6 +21,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -206,6 +207,54 @@ void CFGBuilder::splitBlocks() {
   }
 }
 
+void CFGBuilder::normalizeEntryBlock(LowFunc &Func) {
+  if (Func.Blocks.empty())
+    return;
+
+  auto EntryIt = std::find_if(
+      Func.Blocks.begin(), Func.Blocks.end(),
+      [&](const LowBlock &Blk) { return Blk.StartAddr == Func.Entry; });
+  if (EntryIt == Func.Blocks.end())
+    llvm::report_fatal_error("CFGBuilder: function entry block is missing");
+
+  const size_t EntryIndex =
+      static_cast<size_t>(std::distance(Func.Blocks.begin(), EntryIt));
+  const size_t NumBlocks = Func.Blocks.size();
+  std::vector<size_t> NewToOld;
+  NewToOld.reserve(NumBlocks);
+  NewToOld.push_back(EntryIndex);
+  for (size_t I = 0; I < NumBlocks; ++I)
+    if (I != EntryIndex)
+      NewToOld.push_back(I);
+
+  std::vector<int> OldToNew(NumBlocks, -1);
+  for (size_t NewId = 0; NewId < NumBlocks; ++NewId) {
+    const int OldId = Func.Blocks[NewToOld[NewId]].Id;
+    if (OldId < 0 || static_cast<size_t>(OldId) >= NumBlocks ||
+        OldToNew[OldId] != -1)
+      llvm::report_fatal_error("CFGBuilder: invalid block identity");
+    OldToNew[OldId] = static_cast<int>(NewId);
+  }
+
+  std::vector<LowBlock> Normalized;
+  Normalized.reserve(NumBlocks);
+  for (size_t NewId = 0; NewId < NumBlocks; ++NewId) {
+    LowBlock Blk = std::move(Func.Blocks[NewToOld[NewId]]);
+    auto RemapEdges = [&](std::vector<int> &Edges) {
+      for (int &Id : Edges) {
+        if (Id < 0 || static_cast<size_t>(Id) >= NumBlocks || OldToNew[Id] < 0)
+          llvm::report_fatal_error("CFGBuilder: invalid block edge");
+        Id = OldToNew[Id];
+      }
+    };
+    RemapEdges(Blk.Succs);
+    RemapEdges(Blk.Preds);
+    Blk.Id = static_cast<int>(NewId);
+    Normalized.push_back(std::move(Blk));
+  }
+  Func.Blocks = std::move(Normalized);
+}
+
 void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   Func.Blocks.clear();
   Func.JumpTables.clear();
@@ -234,6 +283,7 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   }
 
   linkSuccessors(Func, AddrToBlock);
+  normalizeEntryBlock(Func);
   extractJumpTables(Func);
   fixupFpuStack(Func);
 }

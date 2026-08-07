@@ -50,6 +50,7 @@ add_neverd_unittest(NeverDLiftTests
   X86_64_BMITests.cpp
   X86_64_CarryOpsTests.cpp
   X86_64_CmpxchgTests.cpp
+  X86_64_CFGEntryTests.cpp
   X86_64_ControlFlowTests.cpp
   X86_64_ControlSemanticsTests.cpp
   X86_64_DoubleShiftTests.cpp
@@ -129,6 +130,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_arith.c
   x86_64/test_muldiv.c
   x86_64/test_control_flow.c
+  x86_64/test_backward_entry.s
   x86_64/test_stack_mov.c
   x86_64/test_sse_fp.c
   x86_64/test_carry_ops.c

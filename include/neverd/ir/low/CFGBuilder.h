@@ -105,6 +105,11 @@ private:
   /// unresolved indirect branch into an indirect tail call and rebuild blocks.
   void convertIndirectTailCalls(LowFunc &Func);
 
+  /// Make the block beginning at Func.Entry block 0 and remap every CFG edge
+  /// through the same stable permutation.  Block byte ranges are still built
+  /// in address order; only their public vector/ID order is normalized.
+  void normalizeEntryBlock(LowFunc &Func);
+
   /// (Re)build Func.Blocks from the current Insns/BlockStarts, then link
   /// successors and extract jump tables.  Shared by the initial build, the
   /// multi-stage re-resolution, and the indirect-tail-call conversion.

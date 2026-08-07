@@ -399,6 +399,8 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
   case I::Outsd:
   case I::Vmcall:
   case I::Vmmcall:
+  case I::X87Fninit:
+  case I::X87Fnclex:
   case I::Syscall: {
     const char *Mn = intrinsicAsmMnemonic(IC);
     if (Mn)
