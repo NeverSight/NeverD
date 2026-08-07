@@ -290,7 +290,9 @@ bool AArch64Lifter::liftCoreNEON(LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = operandWrite(ARM64.operands[0]);
     NdVar Src = operandRead(S, ARM64.operands[1]);
-    if (Insn->id == AARCH64_INS_SMOV)
+    if (Src.Size == Dst.Size)
+      S.emit(NdOp::COPY, Dst, {Src});
+    else if (Insn->id == AARCH64_INS_SMOV)
       S.emit(NdOp::INT_SEXT, Dst, {Src});
     else
       S.emit(NdOp::INT_ZEXT, Dst, {Src});

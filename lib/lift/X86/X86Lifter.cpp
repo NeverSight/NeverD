@@ -361,13 +361,8 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
       if (ROffs == x86reg::RSP || ROffs == x86reg::RBP)
         continue;
 
-      LowOp ZextOp;
-      ZextOp.Opcode = NdOp::INT_ZEXT;
-      ZextOp.Addr = S.Addr;
-      ZextOp.Seq = S.Seq++;
-      ZextOp.Output = NdVar::reg(ROffs, 8);
-      ZextOp.addInput(NdVar::reg(ROffs, 4));
-      Ops.push_back(ZextOp);
+      S.emit(NdOp::INT_ZEXT, NdVar::reg(ROffs, 8),
+             {NdVar::reg(ROffs, 4)});
     }
   }
 }

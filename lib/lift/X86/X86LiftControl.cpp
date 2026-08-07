@@ -337,9 +337,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     }
 
     if (X86.operands[0].type == X86_OP_MEM) {
-      NdVar ByteVal = S.makeTemp(1);
-      S.emit(NdOp::INT_ZEXT, ByteVal, {Cond});
-      S.storeToMem(X86.operands[0], ByteVal);
+      S.storeToMem(X86.operands[0], Cond);
     } else {
       // SETcc writes exactly ONE byte to the destination register's low byte
       // (AL/BL/.../R15B) or high byte (AH/BH/CH/DH); the enclosing 32/64-bit

@@ -98,6 +98,10 @@ TEST_F(AArch64_RoundTrip, LowIRHasExpectedOpcodes) {
   EXPECT_TRUE(R.contains("RETURN")) << "Expected RETURN in LowIR";
 }
 
+TEST_F(AArch64_RoundTrip, IntegerExtensionsStrictlyWiden) {
+  verifyIntegerExtensionsStrictlyWiden(paramPhiObj());
+}
+
 TEST_F(AArch64_RoundTrip, ParameterWidthFlowsThroughBranchPhi) {
   auto R = decompileToHighC(paramPhiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;

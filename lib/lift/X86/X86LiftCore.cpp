@@ -25,6 +25,16 @@ namespace neverd {
 
 bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
+  auto snapshotCarryAtWidth = [&](uint16_t Size) {
+    NdVar Carry = NdVar::reg(x86reg::CF, 1);
+    NdVar Snapshot = S.makeTemp(Size);
+    // ADC/SBB still consume the incoming carry while computing OF after they
+    // have written the new CF. Keep a stable temp even for byte operations;
+    // only the width conversion disappears in that case.
+    S.emit(Size == 1 ? NdOp::COPY : NdOp::INT_ZEXT, Snapshot, {Carry});
+    return Snapshot;
+  };
+
   switch (InsnId) {
 
   // --- NOP ---
@@ -972,8 +982,7 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     NdVar B = S.makeTemp(Src.Size);
     S.emit(NdOp::COPY, B, {Src});
     NdVar Result = MemDst ? S.makeTemp(A.Size) : DstW;
-    NdVar CfExt = S.makeTemp(A.Size);
-    S.emit(NdOp::INT_ZEXT, CfExt, {NdVar::reg(x86reg::CF, 1)});
+    NdVar CfExt = snapshotCarryAtWidth(A.Size);
     NdVar CarryInner = S.makeTemp(1);
     S.emit(NdOp::INT_CARRY, CarryInner, {B, CfExt});
     NdVar Adj = S.makeTemp(A.Size);
@@ -1017,8 +1026,7 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     NdVar B = S.makeTemp(Src.Size);
     S.emit(NdOp::COPY, B, {Src});
     NdVar Result = MemDst ? S.makeTemp(A.Size) : DstW;
-    NdVar CfExt = S.makeTemp(A.Size);
-    S.emit(NdOp::INT_ZEXT, CfExt, {NdVar::reg(x86reg::CF, 1)});
+    NdVar CfExt = snapshotCarryAtWidth(A.Size);
     NdVar CarryInner = S.makeTemp(1);
     S.emit(NdOp::INT_CARRY, CarryInner, {B, CfExt});
     NdVar Adj = S.makeTemp(A.Size);
@@ -1285,8 +1293,7 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
              {Cnt, NdVar::cst((uint64_t)Bits + 1, Sz)});
       Cnt = Modded;
     }
-    NdVar CfExt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_ZEXT, CfExt, {NdVar::reg(x86reg::CF, 1)});
+    NdVar CfExt = snapshotCarryAtWidth(Sz);
     NdVar CfIdx = S.makeTemp(Sz);
     S.emit(NdOp::INT_SUB, CfIdx, {Cnt, NdVar::cst(1, Sz)});
     NdVar CfShifted = S.makeTemp(Sz);
@@ -1354,8 +1361,7 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
              {Cnt, NdVar::cst((uint64_t)Bits + 1, Sz)});
       Cnt = Modded;
     }
-    NdVar CfExt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_ZEXT, CfExt, {NdVar::reg(x86reg::CF, 1)});
+    NdVar CfExt = snapshotCarryAtWidth(Sz);
     NdVar CfBitPos = S.makeTemp(Sz);
     S.emit(NdOp::INT_SUB, CfBitPos, {NdVar::cst(Bits, Sz), Cnt});
     NdVar CfShifted = S.makeTemp(Sz);
@@ -1440,24 +1446,18 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   }
   case X86_INS_LAHF: {
     NdVar Ah = NdVar::reg(x86reg::RAX + 1, 1);
-    NdVar Sf = S.makeTemp(1);
-    S.emit(NdOp::INT_ZEXT, Sf, {NdVar::reg(x86reg::SF, 1)});
     NdVar SfSh = S.makeTemp(1);
-    S.emit(NdOp::INT_LEFT, SfSh, {Sf, NdVar::cst(7, 1)});
-    NdVar Zf = S.makeTemp(1);
-    S.emit(NdOp::INT_ZEXT, Zf, {NdVar::reg(x86reg::ZF, 1)});
+    S.emit(NdOp::INT_LEFT, SfSh,
+           {NdVar::reg(x86reg::SF, 1), NdVar::cst(7, 1)});
     NdVar ZfSh = S.makeTemp(1);
-    S.emit(NdOp::INT_LEFT, ZfSh, {Zf, NdVar::cst(6, 1)});
-    NdVar Pf = S.makeTemp(1);
-    S.emit(NdOp::INT_ZEXT, Pf, {NdVar::reg(x86reg::PF, 1)});
+    S.emit(NdOp::INT_LEFT, ZfSh,
+           {NdVar::reg(x86reg::ZF, 1), NdVar::cst(6, 1)});
     NdVar PfSh = S.makeTemp(1);
-    S.emit(NdOp::INT_LEFT, PfSh, {Pf, NdVar::cst(2, 1)});
-    NdVar Af = S.makeTemp(1);
-    S.emit(NdOp::INT_ZEXT, Af, {NdVar::reg(x86reg::AF, 1)});
+    S.emit(NdOp::INT_LEFT, PfSh,
+           {NdVar::reg(x86reg::PF, 1), NdVar::cst(2, 1)});
     NdVar AfSh = S.makeTemp(1);
-    S.emit(NdOp::INT_LEFT, AfSh, {Af, NdVar::cst(4, 1)});
-    NdVar Cf = S.makeTemp(1);
-    S.emit(NdOp::INT_ZEXT, Cf, {NdVar::reg(x86reg::CF, 1)});
+    S.emit(NdOp::INT_LEFT, AfSh,
+           {NdVar::reg(x86reg::AF, 1), NdVar::cst(4, 1)});
     NdVar M1 = S.makeTemp(1);
     S.emit(NdOp::INT_OR, M1, {SfSh, ZfSh});
     NdVar M2 = S.makeTemp(1);
@@ -1466,7 +1466,7 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     S.emit(NdOp::INT_OR, M2a, {M2, AfSh});
     NdVar M3 = S.makeTemp(1);
     S.emit(NdOp::INT_OR, M3, {M2a, NdVar::cst(0x02, 1)});
-    S.emit(NdOp::INT_OR, Ah, {M3, Cf});
+    S.emit(NdOp::INT_OR, Ah, {M3, NdVar::reg(x86reg::CF, 1)});
     break;
   }
 

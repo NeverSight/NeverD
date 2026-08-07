@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -191,6 +192,39 @@ protected:
     EXPECT_TRUE(R.out.find(Needle) != std::string::npos)
         << "Expected '" << Needle << "' in LowIR:\n"
         << R.out;
+  }
+
+  void verifyIntegerExtensionsStrictlyWiden(const fs::path &Binary,
+                                            size_t MinExtensions = 1) {
+    auto R = liftToLowIR(Binary);
+    ASSERT_EQ(R.exitCode, 0) << "LowIR lift failed: " << R.err;
+
+    const std::regex Extension(
+        R"(INT_(?:ZEXT|SEXT)\s+\S+:([0-9]+)\s+\S+:([0-9]+))");
+    std::istringstream Lines(R.out);
+    std::string Line;
+    size_t Count = 0;
+    while (std::getline(Lines, Line)) {
+      if (Line.find("INT_ZEXT") == std::string::npos &&
+          Line.find("INT_SEXT") == std::string::npos)
+        continue;
+
+      std::smatch Match;
+      ASSERT_TRUE(std::regex_search(Line, Match, Extension))
+          << "Unable to parse integer-extension widths: " << Line;
+      const unsigned OutputSize = std::stoul(Match[1].str());
+      const unsigned InputSize = std::stoul(Match[2].str());
+      EXPECT_LT(InputSize, OutputSize)
+          << "Integer extension must strictly widen: " << Line;
+      ++Count;
+    }
+
+    EXPECT_GE(Count, MinExtensions)
+        << "Expected genuine integer extensions in LowIR:\n"
+        << R.out;
+    EXPECT_EQ(R.err.find("ZEXT/SEXT input not narrower than output"),
+              std::string::npos)
+        << R.err;
   }
 
   RunResult decompileToC(const fs::path &Binary) {

@@ -54,6 +54,7 @@ add_neverd_unittest(NeverDLiftTests
   X86_64_ControlFlowTests.cpp
   X86_64_ControlSemanticsTests.cpp
   X86_64_DoubleShiftTests.cpp
+  X86_64_ExtensionInvariantTests.cpp
   X86_64_FlagOpsTests.cpp
   X86_64_FlagsMiscTests.cpp
   X86_64_FmaMiscTests.cpp
@@ -84,6 +85,7 @@ add_neverd_unittest(NeverDLiftTests
   ARM32_SwitchTests.cpp
   ARM32_RoundTripTests.cpp
   InstructionModeTests.cpp
+  LiftCommonTests.cpp
   MachOI386RelocationTests.cpp
   MedCallingConvTests.cpp
   COFFARMFormatTests.cpp
@@ -131,6 +133,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_muldiv.c
   x86_64/test_control_flow.c
   x86_64/test_backward_entry.s
+  x86_64/test_extension_widths.s
   x86_64/test_stack_mov.c
   x86_64/test_sse_fp.c
   x86_64/test_carry_ops.c

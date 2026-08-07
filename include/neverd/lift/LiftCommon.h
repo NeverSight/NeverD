@@ -17,6 +17,8 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 
+#include "llvm/Support/ErrorHandling.h"
+
 #include <initializer_list>
 #include <vector>
 
@@ -47,6 +49,16 @@ struct LiftStateBase {
   }
 
   void emit(NdOp Opc, NdVar Out, std::initializer_list<NdVar> Ins) {
+    if ((Opc == NdOp::INT_ZEXT || Opc == NdOp::INT_SEXT) && Ins.size() == 1) {
+      const NdVar &In = *Ins.begin();
+      if (In.Size > Out.Size)
+        llvm::report_fatal_error(
+            "LiftStateBase: integer extension input must be narrower than "
+            "output");
+      if (In.Size == Out.Size)
+        Opc = NdOp::COPY;
+    }
+
     LowOp Op;
     Op.Opcode = Opc;
     Op.Addr = Addr;
