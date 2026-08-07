@@ -79,7 +79,7 @@ TEST(TestProcess, RunsQuotedExecutableWithQuotedRedirects) {
   const char *CommandProcessor = std::getenv("COMSPEC");
   ASSERT_NE(CommandProcessor, nullptr);
   std::string Command = shellQuote(CommandProcessor) +
-                        " /d /c echo neverd-process-probe";
+                        " /d /c \"echo neverd-process-probe\"";
 #else
   std::string Command = shellQuote("/bin/echo") +
                         " neverd-process-probe";
