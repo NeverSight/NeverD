@@ -135,13 +135,12 @@ function(add_neverd_unittest name)
   add_dependencies(NeverDUnitTests ${name})
 
   include(GoogleTest)
-  # LABELS ${name} lets `ctest -L <binary>` run just this binary's cases
-  # (e.g. ctest -L NeverDSemanticTests) — pure CTest, no helper scripts.
+  # LABELS ${name} lets `ctest -L <binary>` run just this binary's cases.
+  # PRE_TEST avoids concurrent POST_BUILD discovery races across test targets.
+  # Discovery gets its own finite timeout; PROPERTIES TIMEOUT remains the
+  # independent per-test execution timeout.
   gtest_discover_tests(${name}
     PROPERTIES TIMEOUT ${ARG_TIMEOUT} LABELS ${name}
-    # POST_BUILD consistently uses execute_process across supported CMake
-    # versions.  Its negative timeout sentinel means unlimited discovery;
-    # CMake 4.4's newer PRE_TEST path interprets that sentinel differently.
-    DISCOVERY_MODE POST_BUILD
-    DISCOVERY_TIMEOUT -1)
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 120)
 endfunction()
