@@ -106,6 +106,33 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return Builder.CreateSelect(IsZero, Zero, Raw(SafeR), "divres");
   };
 
+  auto GetPredicatedMemorySelect = [&](const MedVar &AddrVar) -> const MedOp * {
+    const MedOp *SafeSel = lookupDef(AddrVar);
+    const auto &TRI = getTargetRegInfo(TargetArch);
+    if (TargetArch != Arch::ARM || !SafeSel ||
+        SafeSel->Opcode != NdOp::SELECT || SafeSel->NumInputs < 3 ||
+        SafeSel->Inputs[2].Kind != MedVar::Reg ||
+        !TRI.isStackPointer(SafeSel->Inputs[2].RegOff))
+      return nullptr;
+    return SafeSel;
+  };
+
+  // Predicated ARM memory ops use SELECT(Cond, architectural-EA, SP) so an
+  // untaken instruction never speculatively touches an invalid EA.  When the
+  // true arm is relocated to a data global, select between the final pointers;
+  // rebasing the SELECT as a whole would also rebase SP and make it unmapped.
+  auto GuardPredicatedMemoryPtr = [&](const MedOp *SafeSel,
+                                      llvm::Value *ArchPtr,
+                                      llvm::Type *ValTy) -> llvm::Value * {
+    llvm::Value *Cond = getVar(SafeSel->Inputs[0], Builder);
+    if (!Cond->getType()->isIntegerTy(1))
+      Cond = Builder.CreateICmpNE(Cond,
+                                  llvm::ConstantInt::get(Cond->getType(), 0));
+    llvm::Value *SafeAddr = getVar(SafeSel->Inputs[2], Builder);
+    llvm::Value *SafePtr = getMemoryPtr(SafeAddr, ValTy, Builder);
+    return Builder.CreateSelect(Cond, ArchPtr, SafePtr, "predmem");
+  };
+
   llvm::Value *Result = nullptr;
 
   switch (Op.Opcode) {
@@ -569,16 +596,19 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   case NdOp::LOAD: {
     auto *ValTy = sizeToType(Op.Output.Size);
     llvm::Value *Ptr = nullptr;
+    const MedOp *PredSel =
+        Op.NumInputs >= 1 ? GetPredicatedMemorySelect(Op.Inputs[0]) : nullptr;
+    const MedVar &AddrVar = PredSel ? PredSel->Inputs[1] : Op.Inputs[0];
     uint64_t ResolvedAddr = 0;
     if (Op.NumInputs >= 1 && Img) {
-      if (Op.Inputs[0].isConst()) {
-        ResolvedAddr = Op.Inputs[0].ConstVal;
-      } else if (auto Traced = traceSSAConst(Op.Inputs[0])) {
+      if (AddrVar.isConst()) {
+        ResolvedAddr = AddrVar.ConstVal;
+      } else if (auto Traced = traceSSAConst(AddrVar)) {
         ResolvedAddr = *Traced;
       }
     }
     if (ResolvedAddr != 0) {
-      unsigned AddrBits = Op.Inputs[0].Size > 0 ? Op.Inputs[0].Size * 8 : 64;
+      unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
       if (!isFrameRelativeDisplacement(ResolvedAddr, AddrBits)) {
         uint16_t Hint = Op.Output.Size;
         Ptr = tryResolveGlobalData(ResolvedAddr, Hint);
@@ -590,34 +620,35 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // into the cohesive mutable global so it aliases the direct (constant)
       // loads/stores of the same global.  Checked first as it is the only path
       // that claims writable data (the rodata resolvers below reject it).
-      Ptr = tryResolveWritableData(Op.Inputs[0], Op.Output.Size, Builder);
+      Ptr = tryResolveWritableData(AddrVar, Op.Output.Size, Builder);
       if (!Ptr)
         // Function-pointer table dispatch: addr = code_ptr_table + idx*ptrsize.
         // Checked next so a `.data.rel.ro` code-pointer table is rebuilt as a
         // `ptrtoint @func` array instead of falling into the raw-byte data
         // path.
-        Ptr = tryResolveCodePtrTablePtr(Op.Inputs[0], Builder);
+        Ptr = tryResolveCodePtrTablePtr(AddrVar, Builder);
       if (!Ptr)
         // Indexed lookup-table access: addr = const_base + index.
-        Ptr = tryResolveIndexedGlobalPtr(Op.Inputs[0], Op.Output.Size, Builder);
+        Ptr = tryResolveIndexedGlobalPtr(AddrVar, Op.Output.Size, Builder);
       if (!Ptr)
         // ARM literal-pool value table: addr = (ldr[pc]+pc) + index*scale.
-        Ptr = tryResolveLiteralPoolTable(Op.Inputs[0], Op.Output.Size, Builder);
+        Ptr = tryResolveLiteralPoolTable(AddrVar, Op.Output.Size, Builder);
       if (!Ptr)
         // rodata-walking induction pointer: addr = PHI(litbase, addr+stride).
-        Ptr =
-            tryResolveInductionGlobalPtr(Op.Inputs[0], Op.Output.Size, Builder);
+        Ptr = tryResolveInductionGlobalPtr(AddrVar, Op.Output.Size, Builder);
       if (!Ptr)
         // Nested multi-way table select merged through a cross-block PHI base:
         // addr = INT_ADD(PHI(blend1, blend2), idx).
-        Ptr = tryResolveSelectMergeTable(Op.Inputs[0], Op.Output.Size, Builder);
+        Ptr = tryResolveSelectMergeTable(AddrVar, Op.Output.Size, Builder);
       if (!Ptr)
         // Direct literal-pool data pointer: addr = ldr[pc]+pc (no index), the
         // ARM address-of a `.rodata` constant (e.g. a cst16 initializer).
-        Ptr = tryResolveLiteralPoolBase(Op.Inputs[0], Op.Output.Size, Builder);
+        Ptr = tryResolveLiteralPoolBase(AddrVar, Op.Output.Size, Builder);
       if (Ptr)
         IsGlobalData = true;
     }
+    if (Ptr && PredSel)
+      Ptr = GuardPredicatedMemoryPtr(PredSel, Ptr, ValTy);
     if (!Ptr) {
       auto *Addr = GetInput(0);
       Ptr = getMemoryPtr(Addr, ValTy, Builder);
@@ -631,16 +662,19 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   case NdOp::STORE: {
     auto *Val = GetInput(1);
     llvm::Value *Ptr = nullptr;
+    const MedOp *PredSel =
+        Op.NumInputs >= 1 ? GetPredicatedMemorySelect(Op.Inputs[0]) : nullptr;
+    const MedVar &AddrVar = PredSel ? PredSel->Inputs[1] : Op.Inputs[0];
     uint64_t ResolvedAddr = 0;
     if (Op.NumInputs >= 1 && Img) {
-      if (Op.Inputs[0].isConst()) {
-        ResolvedAddr = Op.Inputs[0].ConstVal;
-      } else if (auto Traced = traceSSAConst(Op.Inputs[0])) {
+      if (AddrVar.isConst()) {
+        ResolvedAddr = AddrVar.ConstVal;
+      } else if (auto Traced = traceSSAConst(AddrVar)) {
         ResolvedAddr = *Traced;
       }
     }
     if (ResolvedAddr != 0) {
-      unsigned AddrBits = Op.Inputs[0].Size > 0 ? Op.Inputs[0].Size * 8 : 64;
+      unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
       if (!isFrameRelativeDisplacement(ResolvedAddr, AddrBits)) {
         uint16_t Hint = 0;
         if (Val->getType()->isSized()) {
@@ -656,7 +690,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (!Ptr && Img && Op.NumInputs >= 1) {
       // Runtime-indexed store into a writable .data / .bss segment: redirect
       // into the cohesive mutable global so it aliases that global's loads.
-      Ptr = tryResolveWritableData(Op.Inputs[0], Op.Inputs[0].Size, Builder);
+      Ptr = tryResolveWritableData(AddrVar, AddrVar.Size, Builder);
       if (!Ptr)
         // Store into a writable function-pointer table (`ft[i] = &f`): use the
         // SAME base+index resolver the LOAD uses.  Its Path 1 isolates the RAW
@@ -666,14 +700,16 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         // applies the base when getVar has already symbolized the table base
         // const to `@codeptr` — yielding `@codeptr + (@codeptr + idx - segVA)`
         // (the fptab store, whose load was already correct via this path).
-        Ptr = tryResolveCodePtrTablePtr(Op.Inputs[0], Builder);
+        Ptr = tryResolveCodePtrTablePtr(AddrVar, Builder);
       if (!Ptr)
         // Store into a writable function-pointer global (.data slot holding a
         // code pointer): route to the relocated code-pointer segment mirror.
-        Ptr = tryResolveCodePtrSegPtr(Op.Inputs[0], Builder);
+        Ptr = tryResolveCodePtrSegPtr(AddrVar, Builder);
       if (Ptr)
         IsGlobalData = true;
     }
+    if (Ptr && PredSel)
+      Ptr = GuardPredicatedMemoryPtr(PredSel, Ptr, Val->getType());
     if (!Ptr) {
       auto *Addr = GetInput(0);
       Ptr = getMemoryPtr(Addr, Val->getType(), Builder);
