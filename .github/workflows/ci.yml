@@ -143,6 +143,7 @@ jobs:
           ctest --test-dir build-ci \
             --build-config Release \
             --label-exclude "$EXCLUDE_LABELS" \
+            --stop-on-failure \
             --output-on-failure \
             --progress \
             --parallel "$TEST_PARALLEL" 2>&1 | tee ctest.log

@@ -90,6 +90,22 @@ class CiConfigurationTests(unittest.TestCase):
             with self.subTest(step="run", expected=expected):
                 self.assertIn(expected, run_step)
 
+    def test_workflow_stops_each_failed_profile_but_keeps_other_hosts_running(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        strategy = source.split("    strategy:\n", 1)[1].split(
+            "\n    steps:", 1
+        )[0]
+        self.assertIn("      fail-fast: false\n", strategy)
+
+        step_marker = "      - name: Run selected test profile\n"
+        self.assertEqual(source.count(step_marker), 1)
+        run_step = source.split(step_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("set -o pipefail", run_step)
+        self.assertIn("--stop-on-failure", run_step)
+        self.assertIn("--output-on-failure", run_step)
+
     def test_workflow_still_builds_the_unfiltered_default_target(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
