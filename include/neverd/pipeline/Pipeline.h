@@ -28,6 +28,10 @@
 #include <string>
 #include <vector>
 
+namespace llvm {
+class raw_ostream;
+}
+
 namespace neverd {
 
 class Decoder;
@@ -37,6 +41,7 @@ struct PipelineOptions {
   bool DumpMed = false;
   bool DumpHigh = false;
   bool DumpLlvm = false;
+  bool EmitDumpOutput = true;
   bool NoOpt = false;
   bool PatchMode = false;
   bool LiftMode = false;
@@ -192,6 +197,16 @@ public:
   /// skipped.
   static ObfuscationCounts runObfuscationPasses(llvm::Module &Mod,
                                                 const ObfuscationConfig &Cfg);
+
+  /// Serialize the canonical textual IR dumps without writing to global
+  /// stdout. High-level APIs use these overloads to return one stable dump
+  /// across executable/shared-library boundaries.
+  static void dumpLowIR(const std::vector<LowFunc> &Funcs,
+                        llvm::raw_ostream &OS);
+  static void dumpMedIR(const std::vector<MedFunc> &Funcs,
+                        llvm::raw_ostream &OS);
+  static void dumpHighIR(const std::vector<HighFunc> &Funcs,
+                         llvm::raw_ostream &OS);
 
 private:
   /// Detect function entries, merge debug symbols, and filter import stubs.

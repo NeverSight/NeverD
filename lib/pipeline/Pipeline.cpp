@@ -876,13 +876,13 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
   }
 
-  if (Opts.DumpLow)
+  if (Opts.DumpLow && Opts.EmitDumpOutput)
     dumpLowIR(Result.LowFuncs);
 
   // Phase 2: LowIR -> MedIR (parallel).
   buildMedIR(Img, Opts, Result);
 
-  if (Opts.DumpMed)
+  if (Opts.DumpMed && Opts.EmitDumpOutput)
     dumpMedIR(Result.MedFuncs);
 
   // If only dumping intermediate IR (LowIR/MedIR), skip LLVM emission
@@ -902,7 +902,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // Phase 3: MedIR -> HighIR (parallel).
   buildHighIR(Img, Opts, Result);
 
-  if (Opts.DumpHigh)
+  if (Opts.DumpHigh && Opts.EmitDumpOutput)
     dumpHighIR(Result.HighFuncs);
 
   LLVM_DEBUG(llvm::dbgs() << "pipeline: HighIR ready ("

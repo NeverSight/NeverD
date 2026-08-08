@@ -262,6 +262,10 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
     Opts.DumpMed = true;
   else
     Opts.DumpHigh = true;
+  // The C API returns the dump as a string. Printing it from inside the shared
+  // library as well gives Windows DLL and executable instances of llvm::outs()
+  // independent buffers whose flush order is not deterministic.
+  Opts.EmitDumpOutput = false;
   if (!R.run(Opts, Err)) {
     if (S)
       S->setError(Err);
@@ -270,33 +274,12 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
 
   std::string Buf;
   llvm::raw_string_ostream OS(Buf);
-  if (Level == 0) {
-    OS << "=== LowIR Dump ===\n";
-    for (const auto &F : R.Result.LowFuncs) {
-      OS << "func " << F.Name << " @ 0x" << llvm::utohexstr(F.Entry) << " ("
-         << F.Blocks.size() << " blocks)\n";
-      for (const auto &B : F.Blocks) {
-        OS << "  bb" << B.Id << " [0x" << llvm::utohexstr(B.StartAddr)
-           << " - 0x" << llvm::utohexstr(B.EndAddr) << "] (" << B.Ops.size()
-           << " ops)\n";
-      }
-    }
-  } else if (Level == 1) {
-    OS << "=== MedIR Dump ===\n";
-    for (const auto &F : R.Result.MedFuncs) {
-      OS << "func " << F.Name << " @ 0x" << llvm::utohexstr(F.Entry) << " ("
-         << F.Blocks.size() << " blocks)\n";
-      for (const auto &B : F.Blocks) {
-        OS << "  bb" << B.Id << " (" << B.Ops.size() << " ops)\n";
-      }
-    }
-  } else {
-    OS << "=== HighIR Dump ===\n";
-    for (const auto &F : R.Result.HighFuncs) {
-      OS << "func " << F.Name << " @ 0x" << llvm::utohexstr(F.Entry) << " ("
-         << F.Body.size() << " stmts, " << F.Locals.size() << " locals)\n";
-    }
-  }
+  if (Level == 0)
+    Pipeline::dumpLowIR(R.Result.LowFuncs, OS);
+  else if (Level == 1)
+    Pipeline::dumpMedIR(R.Result.MedFuncs, OS);
+  else
+    Pipeline::dumpHighIR(R.Result.HighFuncs, OS);
   return dupStr(Buf);
 }
 

@@ -25,6 +25,14 @@ std::string functionDump(const std::string &Dump, const std::string &Name) {
   return Dump.substr(Begin, End == std::string::npos ? End : End - Begin);
 }
 
+size_t countOccurrences(const std::string &Text, const std::string &Needle) {
+  size_t Count = 0;
+  for (size_t Pos = 0; (Pos = Text.find(Needle, Pos)) != std::string::npos;
+       Pos += Needle.size())
+    ++Count;
+  return Count;
+}
+
 std::string llvmFunction(const std::string &IR, const std::string &Name) {
   size_t Symbol = IR.find("@" + Name + "(");
   if (Symbol == std::string::npos)
@@ -80,6 +88,9 @@ TEST_F(X86_64_CFGEntry, TrueEntryIsBlockZeroAndBackwardEdgeSurvives) {
   ASSERT_TRUE(fs::exists(testObj())) << "test_backward_entry.o not built";
   auto Run = liftToLowIR(testObj());
   ASSERT_EQ(Run.exitCode, 0) << Run.err;
+  EXPECT_EQ(countOccurrences(Run.out, "=== LowIR Dump ==="), 1U)
+      << "lift dump must have one stable representation:\n"
+      << Run.out;
 
   std::string Dump = functionDump(Run.out, "test_backward_entry");
   ASSERT_FALSE(Dump.empty()) << Run.out;
@@ -104,6 +115,9 @@ TEST_F(X86_64_CFGEntry, TrueEntryIsBlockZeroAndBackwardEdgeSurvives) {
 TEST_F(X86_64_CFGEntry, MedSsaHasNoCallClobberDefinitionCollision) {
   auto Run = liftToMedIR(testObj());
   ASSERT_EQ(Run.exitCode, 0) << Run.err;
+  EXPECT_EQ(countOccurrences(Run.out, "=== MedIR Dump ==="), 1U)
+      << "lift dump must have one stable representation:\n"
+      << Run.out;
   EXPECT_EQ(Run.err.find("call clobber duplicates explicit definition"),
             std::string::npos)
       << Run.err;
