@@ -1067,7 +1067,12 @@ TEST_F(COFFARMFormat, ARM32PackedFragmentIsRangeOnly) {
   std::vector<uint8_t> Bytes = readFile(Source);
   auto Obj = createCOFFObject(Bytes);
   ASSERT_NE(Obj, nullptr);
-  auto EntryOff = findPDataEntryOffsetByFlag(*Obj, 1u);
+  // Clang may encode every source function as unpacked (LLVM 22) or include a
+  // packed leaf (older releases).  The mutation below replaces either form
+  // with a packed fragment, so do not require the compiler to provide one.
+  auto EntryOff = findUnpackedPDataEntryOffset(*Obj);
+  if (!EntryOff)
+    EntryOff = findPDataEntryOffsetByFlag(*Obj, 1u);
   ASSERT_TRUE(EntryOff.has_value());
   uint32_t BeginWord = readLE<uint32_t>(Bytes.data() + *EntryOff);
   va_t Addr = Obj->getImageBase() + clearThumbBit(BeginWord);
