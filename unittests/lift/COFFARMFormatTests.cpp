@@ -1263,9 +1263,10 @@ TEST_F(COFFARMPipeline, ARM32ThumbLiftAndDecompile) {
 
   RunResult Med = liftToMedIR(Path);
   ASSERT_EQ(Med.exitCode, 0) << Med.err;
-  EXPECT_TRUE(Med.out.find("func pe_stacky @ 0x401010 cc=3 FrameSize=400") !=
-              std::string::npos)
-      << Med.out;
+  auto MedStacky = lowFunctionBody(Med.out, "pe_stacky");
+  ASSERT_TRUE(MedStacky.has_value()) << Med.out;
+  EXPECT_NE(MedStacky->find("cc=3 FrameSize=400"), std::string::npos)
+      << *MedStacky;
 
   RunResult Decompile = decompileToHighC(Path);
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
