@@ -123,8 +123,8 @@ TEST(FunctionDiscoveryThumb, NormalizesOnlyFunctionSymbols) {
   auto Obj = createCOFFObject(Bytes);
   ASSERT_NE(Obj, nullptr);
 
-  bool MutatedFunction = false;
-  bool MutatedData = false;
+  std::optional<va_t> ExpectedFunctionAddr;
+  std::optional<va_t> ExpectedDataAddr;
   const char *FileBegin = Obj->getData().data();
   for (const llvm::object::SymbolRef &SymRef : Obj->symbols()) {
     llvm::object::COFFSymbolRef Sym = Obj->getCOFFSymbol(SymRef);
@@ -140,12 +140,25 @@ TEST(FunctionDiscoveryThumb, NormalizesOnlyFunctionSymbols) {
     size_t ValueOff =
         SymOff + offsetof(llvm::object::coff_symbol_generic, Value);
     ASSERT_TRUE(rangeInBounds(ValueOff, sizeof(uint32_t), Bytes.size()));
-    writeLE<uint32_t>(Bytes.data() + ValueOff, Sym.getValue() | 1u);
-    MutatedFunction |= *NameOrErr == "pe_stacky";
-    MutatedData |= *NameOrErr == "g_result";
+    uint32_t OddValue = Sym.getValue() | 1u;
+    writeLE<uint32_t>(Bytes.data() + ValueOff, OddValue);
+
+    va_t Addr = OddValue;
+    if (Sym.getSectionNumber() > 0) {
+      auto SecOrErr = Obj->getSection(Sym.getSectionNumber());
+      ASSERT_TRUE(static_cast<bool>(SecOrErr))
+          << llvm::toString(SecOrErr.takeError());
+      Addr += (*SecOrErr)->VirtualAddress;
+    }
+    if (*NameOrErr == "pe_stacky")
+      ExpectedFunctionAddr = clearThumbBit(Addr);
+    else
+      ExpectedDataAddr = Addr;
   }
-  ASSERT_TRUE(MutatedFunction);
-  ASSERT_TRUE(MutatedData);
+  ASSERT_TRUE(ExpectedFunctionAddr.has_value());
+  ASSERT_TRUE(ExpectedDataAddr.has_value());
+  ASSERT_EQ(*ExpectedFunctionAddr & 1u, 0u);
+  ASSERT_EQ(*ExpectedDataAddr & 1u, 1u);
 
   Obj = createCOFFObject(Bytes);
   ASSERT_NE(Obj, nullptr);
@@ -159,12 +172,12 @@ TEST(FunctionDiscoveryThumb, NormalizesOnlyFunctionSymbols) {
   auto Function = Find("pe_stacky");
   ASSERT_NE(Function, Img.Symbols.end());
   EXPECT_TRUE(Function->IsFunc);
-  EXPECT_EQ(Function->Addr, 0x10u);
+  EXPECT_EQ(Function->Addr, *ExpectedFunctionAddr);
 
   auto Data = Find("g_result");
   ASSERT_NE(Data, Img.Symbols.end());
   EXPECT_FALSE(Data->IsFunc);
-  EXPECT_EQ(Data->Addr, 1u);
+  EXPECT_EQ(Data->Addr, *ExpectedDataAddr);
 }
 
 TEST(FunctionDiscoveryThumb, NormalizesTLSCallbackCodePointers) {
