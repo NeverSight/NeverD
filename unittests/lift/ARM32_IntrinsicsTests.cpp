@@ -150,6 +150,27 @@ TEST_F(ARM32_Intrinsics, LlvmC_VoidInference) {
     }
 }
 
+TEST_F(ARM32_Intrinsics, LlvmC_FramePointerReturnAddressIsVoid) {
+    auto r = decompileToC(obj("test_frame_pointer_void_arm.o"));
+    ASSERT_EQ(r.exitCode, 0) << "LLVM C decompile failed: " << r.err;
+    auto content = readDecompiledFile("decompiled.c");
+    EXPECT_NE(content.find("void test_frame_pointer_void_arm("),
+              std::string::npos)
+        << "saved/restored lr should not become an r0 return value:\n"
+        << content;
+}
+
+TEST_F(ARM32_Intrinsics, LlvmC_ExplicitReturnAddressStaysNonVoid) {
+    auto r = decompileToC(obj("test_frame_pointer_void_arm.o"));
+    ASSERT_EQ(r.exitCode, 0) << "LLVM C decompile failed: " << r.err;
+    auto content = readDecompiledFile("decompiled.c");
+    EXPECT_NE(content.find(
+                  "uint32_t test_frame_pointer_return_address_arm("),
+              std::string::npos)
+        << "a return address explicitly loaded into r0 is a real result:\n"
+        << content;
+}
+
 TEST_F(ARM32_Intrinsics, LlvmC_SelUsesParams) {
     auto r = decompileToC(obj("test_intrinsics_arm.o"));
     ASSERT_EQ(r.exitCode, 0) << "LLVM C decompile failed: " << r.err;

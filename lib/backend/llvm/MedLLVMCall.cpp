@@ -965,16 +965,16 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
   }
 
   if (!RetVal) {
-    if (Op.NumInputs > 0) {
-      auto &In0 = Op.Inputs[0];
-      uint64_t LRoff = getTargetRegInfo(TargetArch).LinkRegister;
-      if (In0.Kind == MedVar::Reg && LRoff != 0 && In0.RegOff == LRoff)
-        RetVal = llvm::ConstantInt::get(RetTy, 0);
-      else
-        RetVal = GetInput(0);
-    } else {
+    const auto &TRI = getTargetRegInfo(TargetArch);
+    // ARM/AArch64 RETURN operands are control-flow targets (LR or a pc value
+    // restored from the stack), never ABI return values.  If no write to the
+    // real return register was found above, materialize the neutral residual
+    // used by void inference instead of returning that branch target.  X86
+    // lifters put RAX/EAX in the RETURN operand, so retain their fallback.
+    if (TRI.LinkRegister != 0 || Op.NumInputs == 0)
       RetVal = llvm::ConstantInt::get(RetTy, 0);
-    }
+    else
+      RetVal = GetInput(0);
   }
 
   if (RetVal->getType() != RetTy) {
