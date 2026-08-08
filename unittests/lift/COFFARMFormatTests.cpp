@@ -770,6 +770,11 @@ TEST_F(COFFARMFormat, ARM32IsThumbWithNormalizedEntryAndBoundedRanges) {
   if (!fs::exists(Path))
     GTEST_SKIP() << "ARM32 PE fixture not built (lld-link unavailable)";
 
+  // push.w {r11, lr}: Thumb-2 encodes the first halfword (0xE92D) first in
+  // memory, so a little-endian 32-bit load places it in the low 16 bits.
+  constexpr std::array<uint8_t, 4> WidePush = {0x2d, 0xe9, 0x00, 0x48};
+  ASSERT_TRUE(isPrologueAt(WidePush.data(), WidePush.size(), Arch::ARM));
+
   auto ImgOrErr = loadBinary(Path);
   ASSERT_TRUE(static_cast<bool>(ImgOrErr))
       << llvm::toString(ImgOrErr.takeError());

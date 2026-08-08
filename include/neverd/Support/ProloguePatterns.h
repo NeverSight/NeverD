@@ -181,7 +181,7 @@ inline bool isStrictPrologueWordARM(uint32_t W, bool IsThumb) {
     if ((HW & 0xFF00) == 0xB500)
       return true;
     // PUSH {r4, ..., lr} wide: 0xE92D — STMDB sp!, {reglist}
-    if ((W & 0xFFFF0000) == 0xE92D0000)
+    if (HW == 0xE92D)
       return true;
     // SUB sp, sp, #imm — 0xB0xx
     if ((HW & 0xFF80) == 0xB080)
