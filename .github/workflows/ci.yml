@@ -101,6 +101,15 @@ jobs:
           where.exe ld.lld
           where.exe lld-link
 
+      - name: Verify Debug and Release target flags
+        shell: bash
+        run: |
+          "$PYTHON" -m unittest scripts.tests.test_debug_build_configuration -v
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          PYTHON: ${{ matrix.python }}
+
       - name: Configure Release build
         shell: bash
         run: |

@@ -35,6 +35,9 @@
 # Nested build directory
 /build*
 
+# cmake --system-information dump (default output dir)
+/__cmake_systeminformation/
+
 # build directory
 compiler-rt-build/
 runtimes-build/

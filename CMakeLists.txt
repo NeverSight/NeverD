@@ -85,24 +85,25 @@ set(CAPSTONE_ARM_SUPPORT        ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_AARCH64_SUPPORT    ON  CACHE BOOL "" FORCE)
 add_subdirectory(third_party/capstone)
 
-# Capstone's decode DFA is the single hottest dependency in the front end:
-# function detection and CFG construction spend the bulk of their time inside
-# it.  It is self-contained third-party code we never step through, so build it
-# fully optimized irrespective of the application's own build type.  A Release
-# build already compiles it at -O3 -DNDEBUG, but a Debug tree would otherwise
-# get -O0 capstone (~3x slower decode) and a RelWithDebInfo tree only -O2 — both
-# used for the day-to-day and profiling runs where decode throughput still
-# matters.  Force -O3 + NDEBUG (the latter also strips capstone's internal
-# asserts) on the capstone OBJECT target so the speed-up flows through both the
-# static and shared capstone libraries.  The per-target options are appended
-# after the global build-type flags, so they win on the optimization level.
+# Capstone's decode DFA is the single hottest dependency in the front end, so
+# keep it explicitly optimized in non-Debug configurations.  This preserves
+# representative decode throughput in Release and RelWithDebInfo builds while
+# allowing Debug to honor its source-level debugging contract: no forced
+# optimization and Capstone's internal assertions enabled.  In particular,
+# MSVC's Debug runtime checks are incompatible with /O2.  The options apply to
+# the capstone OBJECT target so they flow through its static and shared
+# libraries.  Use RelWithDebInfo when both symbols and decode performance
+# matter.
 if(TARGET capstone)
     if(MSVC)
-        target_compile_options(capstone PRIVATE /O2)
+        target_compile_options(capstone PRIVATE
+            "$<$<NOT:$<CONFIG:Debug>>:/O2>")
     else()
-        target_compile_options(capstone PRIVATE -O3 -fomit-frame-pointer)
+        target_compile_options(capstone PRIVATE
+            "$<$<NOT:$<CONFIG:Debug>>:-O3;-fomit-frame-pointer>")
     endif()
-    target_compile_definitions(capstone PRIVATE NDEBUG)
+    target_compile_definitions(capstone PRIVATE
+        "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
 endif()
 
 # --- NeverD CMake helpers (mirrors LLVM's AddLLVM.cmake) ---
