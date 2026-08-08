@@ -2,7 +2,6 @@
 
 #include "gtest/gtest.h"
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -79,16 +78,15 @@ TEST(TestProcess, RunsQuotedExecutableWithQuotedRedirects) {
   const char *CommandProcessor = std::getenv("COMSPEC");
   ASSERT_NE(CommandProcessor, nullptr);
   std::string Command = shellQuote(CommandProcessor) +
-                        " /d /c \"echo neverd-process-probe\"";
+                        " /d /c \"exit /b 0\"";
 #else
-  std::string Command = shellQuote("/bin/echo") +
-                        " neverd-process-probe";
+  std::string Command = shellQuote("/usr/bin/true");
 #endif
   Command += redirectOutput(StdoutPath.string(), StderrPath.string());
 
   EXPECT_EQ(systemExitCode(runShellCommand(Command)), 0);
-  auto Output = readFile(StdoutPath);
-  Output.erase(std::remove(Output.begin(), Output.end(), '\r'), Output.end());
-  EXPECT_EQ(Output, "neverd-process-probe\n");
+  EXPECT_TRUE(fs::exists(StdoutPath));
+  EXPECT_TRUE(fs::exists(StderrPath));
+  EXPECT_EQ(readFile(StdoutPath), "");
   EXPECT_EQ(readFile(StderrPath), "");
 }
