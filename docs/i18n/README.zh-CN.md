@@ -19,7 +19,7 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 [![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#支持的目标)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-与插件)
 
-[文档](../README.zh-CN.md) · [路线图](../roadmap/README.zh-CN.md) · [贡献](#贡献)
+[文档](../README.zh-CN.md) · [路线图](../roadmap/README.zh-CN.md) · [贡献](CONTRIBUTING.zh-CN.md)
 
 </div>
 
@@ -29,13 +29,13 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## 概览
 
-NeverD 是以 **1:1 指令级提升** 为核心的原生二进制分析与反编译引擎。它加载 **PE**、**ELF**、**Mach-O**，用 [Capstone](https://www.capstone-engine.org/) 解码，经 **手写语义** 的四级 IR 管线提升——不是近似翻译。目标是 **100% 语义保真**：已支持指令在 **LLVM IR**、**结构化 C** 或 **重写后的二进制** 中保持完整可观察行为。
+NeverD 是以 **1:1 指令级提升** 为核心的原生二进制分析与反编译引擎。它加载 **PE**、**ELF**、**Mach-O**，用 [Capstone](https://www.capstone-engine.org/) 解码，再通过四种 IR 表示配合 **手写语义** 完成处理——不是近似翻译。目标是 **100% 语义保真**：已支持指令在 **LLVM IR**、**结构化 C** 或 **重写后的二进制** 中保持完整可观察行为。
 
 **默认开启 strict**：没有 lifter 的指令抛出 `UnliftedInstruction`，不会跳过、猜测或静默变成 `NOP`。
 
 CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`libneverd`**，不直接链接 Capstone、LLVM 或内部 C++。
 
-后续版本将在同一 IR 栈上增加 [EVM](../roadmap/README.zh-CN.md#2-evm-字节码反编译) 与 [Solana eBPF / SBF](../roadmap/README.zh-CN.md#3-solana-ebpf-sbf-反编译) 反编译 — 见 [路线图](../roadmap/README.zh-CN.md)。
+后续版本将在同一 IR 栈上增加 [EVM](../roadmap/README.zh-CN.md#2-evm-字节码反编译) 与 [Solana eBPF / SBF](../roadmap/README.zh-CN.md#3-solana-ebpfsbf反编译) 反编译 — 见 [路线图](../roadmap/README.zh-CN.md)。
 
 ## 为什么选 NeverD？
 
@@ -53,7 +53,7 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 | **ELF**（Linux / Android） | ✓ | ✓ | ✓ | ✓ |
 | **Mach-O**（macOS / iOS） | ✓ | ✓ | ✓ | ✓ |
 
-> Mach-O i386 集成覆盖使用 `thin` 可重定位对象及可执行文件重写后端测试；当前 macOS 主机无法链接历史 i386 可执行文件。
+> 矩阵中的每个单元格都已实现，但集成测试深度不同。详见[架构覆盖矩阵](../architecture.zh-CN.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位对象，因为现代 macOS 无法链接历史 i386 可执行文件。
 
 ## 工作原理
 
@@ -145,6 +145,8 @@ cmake --build build --target check-neverd
 |------|------|
 | `check-neverd` | 全部测试 |
 | `check-neverd-semantic` | 仅语义 roundtrip（Unicorn） |
+
+聚焦目标、CTest 标签、fixture 要求与跨格式重写网格详见[测试 NeverD](../testing.zh-CN.md)。
 
 **CMake 选项**
 
@@ -238,15 +240,7 @@ neverd_session_destroy(s);
 
 ## 贡献
 
-风格遵循 LLVM 惯例（`.clang-format`）。
-
-开发在 **`dev`** 分支进行（GitHub 默认分支）。
-
-```bash
-git clone -b dev https://github.com/NeverSight/NeverD.git
-cd NeverD
-git submodule update --init --recursive
-```
+开发成果合入 **`dev`** 分支。环境搭建、Release/Debug 指引、风格、聚焦测试和拉取请求要求见[贡献指南](CONTRIBUTING.zh-CN.md)。[架构](../architecture.zh-CN.md)与[测试](../testing.zh-CN.md)指南将常见变更映射到对应代码与验证套件。
 
 ## 许可证
 

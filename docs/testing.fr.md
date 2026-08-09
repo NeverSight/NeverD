@@ -1,0 +1,198 @@
+**Langues**: [English](testing.md) | [简体中文](testing.zh-CN.md) | [繁體中文](testing.zh-TW.md) | [日本語](testing.ja.md) | [한국어](testing.ko.md) | [Français](testing.fr.md) | [Deutsch](testing.de.md) | [Español](testing.es.md) | [Italiano](testing.it.md) | [Русский](testing.ru.md) | [العربية](testing.ar.md)
+
+[← Index de la documentation](README.fr.md)
+
+# Tester NeverD
+
+Les tests de NeverD répondent à trois questions distinctes : la représentation
+a-t-elle la forme attendue, un parcours complet fonctionne-t-il avec une
+fixture binaire et le code généré préserve-t-il le comportement ? Choisissez la
+plus petite suite qui répond à la question du changement, puis exécutez
+l’agrégat plus large avant une pull request à haut risque.
+
+## Configurer une compilation de test
+
+Les tests sont désactivés sans `BUILD_TESTING`. Une compilation Release est le
+choix normal pour la suite complète ; Debug conserve les assertions et le pas à
+pas, mais n’est volontairement pas optimisé ni représentatif des benchmarks de
+décodage.
+
+```bash
+cmake -S . -B build-release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON
+cmake --build build-release --parallel 4
+```
+
+L’ensemble complet de fixtures nécessite `clang` pour compiler vers plusieurs
+cibles et les linkers LLVM (`ld.lld` et `lld-link`) sur le `PATH`. CMake produit
+sans condition de nombreux objets relogeables et les fixtures ELF/PE liées
+lorsque le linker correspondant existe. Un test ignoré parce que l’hôte ne peut
+pas compiler ou lier sa fixture est une couverture non exécutée, pas une
+réussite de la cible.
+
+Consultez [CONTRIBUTING.md](i18n/CONTRIBUTING.fr.md) pour le clone, les profils
+de compilation et LLVM précompilé sur macOS.
+
+## Organisation des tests
+
+`add_neverd_unittest` crée un exécutable GoogleTest et attribue à chaque cas
+découvert un label CTest identique au nom de cette cible.
+
+| Zone source | Cible et label CTest | Couverture |
+|-------------|----------------------|------------|
+| `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Invocation de sous-processus multiplateforme, quoting, redirections et codes de sortie |
+| `unittests/libc` | `NeverDLibCTests` | Noms libc connus et classification |
+| `unittests/lift` | `NeverDLiftTests` | Formes LowIR decoder/lifter, étapes IR, loaders, relocations, fixtures de format, décompilation et patch représentatif |
+| La plupart de `unittests/semantic` | `NeverDSemanticTests` | Sémantique différentielle des instructions, ABI, contrôle, expressions C et lift/recompile |
+| `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Équivalence réécriture/obfuscation sur quatre ISA et trois formats objet |
+| Fichiers de transformation ciblés dans `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Sondes rapides à relier séparées du gros binaire sémantique |
+
+Les références d’enregistrement sont
+[`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
+[`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) et
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt).
+
+## Production des fixtures
+
+### Fixtures de lift et de format
+
+`unittests/lift/CMakeLists.txt` compile les sources C et assembleur vers
+plusieurs cibles pendant le build. Les triples Clang produisent des objets ELF
+x86-64, i386, AArch64 et ARM32, des objets et images liées PE/COFF, ainsi que des
+objets Mach-O i386 PIC/non-PIC. Avec LLD, certains objets sont aussi liés en
+exécutables pour les tests de patch. `NeverDLiftTests` dépend de la cible
+`lift-test-objects` ; une compilation normale de ce binaire rafraîchit donc les
+fixtures générées.
+
+La plupart des tests lift utilisent `NeverDLiftFixture.h` pour invoquer le CLI
+`neverd` construit et inspecter LowIR, MedIR, HighIR, LLVM IR, le C généré ou un
+binaire réécrit. La variable d’environnement `NEVERD` peut remplacer le chemin
+du CLI lors d’une expérience manuelle ciblée ; les exécutions CTest ordinaires
+utilisent l’exécutable intégré par CMake.
+
+### Allers-retours différentiels Unicorn
+
+La fixture sémantique teste le comportement plutôt que la forme textuelle :
+
+1. Écrire un petit cas C/assembleur ou construire du LLVM IR.
+2. Le compiler avec Clang/LLVM pour la cible demandée.
+3. Exécuter le code machine original dans Unicorn et capturer le retour attendu ou un autre état défini par la fixture.
+4. Le charger et le lifter dans NeverD, émettre LLVM IR puis recompiler le résultat en code machine.
+5. Exécuter le code régénéré avec les mêmes ABI, entrées, disposition mémoire et modèle CPU.
+6. Comparer les résultats observables.
+
+L’implémentation principale est
+[`SemanticRoundTripFixture.h`](../unittests/semantic/SemanticRoundTripFixture.h).
+La fixture patch-full utilise `Codegen::compileForRewrite`, le même backend de
+réécriture que les opérations patch, puis compare le code de référence et
+transformé sur toute la grille ISA/format 4×3.
+
+Un échec sémantique déterministe de NeverD doit faire échouer le test. Réservez
+les skips aux frontières explicites de capacité externe et lisez leur raison :
+un résumé vert sans cross-linker ne prouve pas que le parcours du format a été
+exécuté.
+
+## Cibles en une commande
+
+Les cibles personnalisées construisent leurs dépendances puis exécutent CTest
+avec un parallélisme dérivé des CPU de l’hôte :
+
+| Cible CMake | Sélection |
+|-------------|-----------|
+| `check-neverd` | Tous les tests enregistrés |
+| `check-neverd-semantic` | `NeverDSemanticTests` uniquement |
+| `check-neverd-patch-full` | `NeverDPatchFullTests` uniquement |
+| `check-neverd-switch-xform` | `NeverDSwitchXformTests` uniquement |
+| `check-neverd-cfgloop-xform` | `NeverDCFGLoopXformTests` uniquement |
+| `check-neverd-twotable-xform` | `NeverDTwoTableXformTests` uniquement |
+
+```bash
+cmake --build build-release --target check-neverd
+cmake --build build-release --target check-neverd-semantic
+```
+
+`NeverDIndCallXformTests` et `NeverDAvxUpperXformTests` n’ont actuellement pas
+de cible pratique `check-neverd-*`. Construisez-les et sélectionnez leur label
+comme ci-dessous. `check-neverd-semantic` n’inclut pas non plus les binaires de
+transformation ou patch-full séparés ; utilisez `check-neverd` pour l’agrégat
+complet.
+
+## Flux CTest incrémental
+
+Construisez d’abord l’exécutable propriétaire, puis sélectionnez son label. Vous
+évitez ainsi de relier de grandes cibles sémantiques sans rapport.
+
+```bash
+# Lifter, loader, and format tests
+cmake --build build-release --target NeverDLiftTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -L '^NeverDLiftTests$' --output-on-failure --parallel 4
+
+# Main semantic binary
+cmake --build build-release --target NeverDSemanticTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -L '^NeverDSemanticTests$' --output-on-failure --parallel 4
+
+# A label-only focused transform binary
+cmake --build build-release --target NeverDIndCallXformTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
+```
+
+Utilisez un nom CTest dérivé de GoogleTest pour une seule régression :
+
+```bash
+ctest --test-dir build-release --build-config Release -N \
+  -L '^NeverDLiftTests$'
+ctest --test-dir build-release --build-config Release \
+  -R '^COFFARMPipeline\.ARM32ThumbLiftAndDecompile$' \
+  --output-on-failure
+```
+
+Sélecteurs utiles :
+
+| Commande | Rôle |
+|----------|------|
+| `ctest --test-dir build-release -N` | Lister les cas découverts sans les exécuter |
+| `ctest --test-dir build-release -L '<regex>'` | Sélectionner un label de binaire de test |
+| `ctest --test-dir build-release -R '<regex>'` | Sélectionner des noms de cas |
+| `ctest --test-dir build-release --output-on-failure` | Afficher les diagnostics uniquement en cas d’échec |
+| `ctest --test-dir build-release --stop-on-failure` | Arrêter au premier échec |
+| `ctest --test-dir build-release --parallel 4` | Exécuter jusqu’à quatre cas en parallèle |
+
+La découverte GoogleTest utilise `DISCOVERY_MODE PRE_TEST` ; le binaire
+correspondant doit donc exister avant l’énumération par CTest. Les timeouts par
+cas et de découverte séparés sont définis dans `cmake/AddNeverD.cmake` et ne
+doivent être élargis que pour des suites dont les cas lourds ont été mesurés.
+
+## Quels tests changent avec le code ?
+
+| Zone modifiée | Commencer par | Puis envisager |
+|---------------|---------------|----------------|
+| Lifter d’architecture ou decode | Cas nommé dans `NeverDLiftTests` | Aller-retour sémantique de l’ISA correspondant |
+| CFG LowIR, découverte de fonctions, tables de saut | Cas lift CFG/switch | `NeverDSwitchXformTests`, `NeverDCFGLoopXformTests` ou `NeverDTwoTableXformTests` |
+| MedIR, ABI, flags, types, SSA | Cas lift MedIR/convention d’appel | Cas `NeverDSemanticTests` multi-ISA |
+| HighIR ou C structuré | Cas HighIR/decompile | `NeverDCFGLoopXformTests` et compilation du C généré |
+| Loader PE/ELF/Mach-O ou relocation d’entrée | Fixture de format correspondante dans `unittests/lift` | Test de chargement/décompilation toutes étapes de la cellule |
+| Codegen de réécriture ou relocation de sortie | Cas `RewriteCodegenRTTests` | `NeverDPatchFullTests` et fixture patch liée si disponible |
+| Transformation LLVM IR utilisée par patch | Binaire de transformation ciblé | Grille de passes composées `NeverDPatchFullTests` |
+| C API ou CLI | Test SDK/query direct et `unittests/semantic/CLIEndToEndTests.cpp` | Suite pipeline/format pertinente |
+| Reconnaissance libc | `NeverDLibCTests` | Cas sémantiques call/ABI si le comportement change |
+| Exécution ou quoting de processus | `NeverDTestProcessTests` | Un cas CLI/sémantique affecté sur chaque hôte pris en charge |
+
+Les tests doivent exprimer le contrat à la frontière stable la plus basse. Un
+test de forme LowIR est utile pour attribuer le lifter ; un aller-retour
+sémantique est nécessaire si deux formes IR plausibles peuvent se comporter
+différemment. Évitez les dumps de fonction complets quand une petite assertion
+opcode, CFG ou d’état observable suffit.
+
+## Relation avec la CI
+
+La CI construit en Release avec les tests activés sur Linux, macOS et Windows,
+puis audite l’inventaire découvert avant d’appliquer les exclusions de labels
+propres à la plateforme. Les profils sont définis dans
+`.github/workflows/ci.yml` et `scripts/audit_ci_test_inventory.py`. Comme aucun
+shard de la matrice ne représente toutes les suites coûteuses, un
+`check-neverd` local reste le signal pré-fusion complet le plus clair si la
+machine possède tous les outils croisés nécessaires.

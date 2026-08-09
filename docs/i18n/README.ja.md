@@ -19,7 +19,7 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 [![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#対応ターゲット)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-とプラグイン)
 
-[ドキュメント](../README.ja.md) · [ロードマップ](../roadmap/README.ja.md) · [貢献](#貢献)
+[ドキュメント](../README.ja.md) · [ロードマップ](../roadmap/README.ja.md) · [貢献](CONTRIBUTING.ja.md)
 
 </div>
 
@@ -29,13 +29,13 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## 概要
 
-NeverD は **1:1 の命令レベルリフト** を中核とするネイティブバイナリ分析・逆コンパイルエンジンです。**PE**、**ELF**、**Mach-O** を読み込み、[Capstone](https://www.capstone-engine.org/) でデコードし、**手書きセマンティクス** の 4 段階 IR パイプラインでリフトします——近似変換ではありません。目標は **100% の意味論的忠実性**：サポート済み命令を **LLVM IR**、**構造化 C**、または **書き換え済みバイナリ** で完全な観測可能振る舞いまま保つことです。
+NeverD は **1:1 の命令レベルリフト** を中核とするネイティブバイナリ分析・逆コンパイルエンジンです。**PE**、**ELF**、**Mach-O** を読み込み、[Capstone](https://www.capstone-engine.org/) でデコードし、4 つの IR 表現と **手書きセマンティクス** で処理します——近似変換ではありません。目標は **100% の意味論的忠実性**：サポート済み命令を **LLVM IR**、**構造化 C**、または **書き換え済みバイナリ** で完全な観測可能振る舞いまま保つことです。
 
 **strict はデフォルト ON**。lifter がない命令は `UnliftedInstruction` を送出し、スキップ・推測・黙っての `NOP` 化はしません。
 
 CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエンジン **`libneverd`** を使い、Capstone・LLVM・内部 C++ には直接リンクしません。
 
-今後のリリースでは、同じ IR スタック上に [EVM](../roadmap/README.ja.md#2-evm-バイトコード逆コンパイル) と [Solana eBPF / SBF](../roadmap/README.ja.md#3-solana-ebpf-sbf-逆コンパイル) の逆コンパイルを追加します — [ロードマップ](../roadmap/README.ja.md) を参照。
+今後のリリースでは、同じ IR スタック上に [EVM](../roadmap/README.ja.md#2-evm-バイトコード逆コンパイル) と [Solana eBPF / SBF](../roadmap/README.ja.md#3-solana-ebpfsbf逆コンパイル) の逆コンパイルを追加します — [ロードマップ](../roadmap/README.ja.md) を参照。
 
 ## なぜ NeverD？
 
@@ -53,7 +53,7 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 | **ELF** (Linux / Android) | ✓ | ✓ | ✓ | ✓ |
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
-> Mach-O i386 の統合カバレッジには `thin` 再配置可能オブジェクトと実行形式リライトバックエンドのテストを使用しています。現在の macOS ホストでは旧式の i386 実行ファイルをリンクできません。
+> 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](../architecture.ja.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
 
 ## 仕組み
 
@@ -145,6 +145,8 @@ cmake --build build --target check-neverd
 |------------|------|
 | `check-neverd` | 全テスト |
 | `check-neverd-semantic` | セマンティック roundtrip のみ（Unicorn） |
+
+フォーカスターゲット、CTest ラベル、fixture 要件、形式横断の書き換えグリッドについては、[NeverD のテスト](../testing.ja.md)を参照してください。
 
 **CMake オプション**
 
@@ -238,15 +240,7 @@ neverd_session_destroy(s);
 
 ## 貢献
 
-スタイルは LLVM 慣習（`.clang-format`）に従います。
-
-開発は **`dev`** ブランチで行われます（GitHub のデフォルトブランチ）。
-
-```bash
-git clone -b dev https://github.com/NeverSight/NeverD.git
-cd NeverD
-git submodule update --init --recursive
-```
+開発成果は **`dev`** ブランチへ統合します。環境構築、Release/Debug の手順、スタイル、フォーカステスト、プルリクエスト要件は[貢献ガイド](CONTRIBUTING.ja.md)を参照してください。[アーキテクチャ](../architecture.ja.md)と[テスト](../testing.ja.md)のガイドでは、一般的な変更を対応するコードと検証スイートへマッピングしています。
 
 ## ライセンス
 

@@ -1,0 +1,183 @@
+**اللغات**: [English](testing.md) | [简体中文](testing.zh-CN.md) | [繁體中文](testing.zh-TW.md) | [日本語](testing.ja.md) | [한국어](testing.ko.md) | [Français](testing.fr.md) | [Deutsch](testing.de.md) | [Español](testing.es.md) | [Italiano](testing.it.md) | [Русский](testing.ru.md) | [العربية](testing.ar.md)
+
+[← فهرس التوثيق](README.ar.md)
+
+# اختبار NeverD
+
+تجيب اختبارات NeverD عن ثلاثة أسئلة مختلفة: هل للتمثيل الشكل المتوقع، وهل يعمل
+مسار pipeline كامل مع fixture ثنائية، وهل تحافظ الشفرة المولدة على السلوك؟ اختر
+أصغر مجموعة تجيب عن سؤال التغيير، ثم شغّل التجميع الأوسع قبل طلب سحب عالي المخاطر.
+
+## تهيئة بناء الاختبار
+
+تكون الاختبارات معطلة ما لم يُفعّل `BUILD_TESTING`. يمثل Release الخيار العادي
+للمجموعة الكاملة؛ يحتفظ Debug بالتأكيدات والتتبع، لكنه غير محسّن عمدًا ولا يمثل
+معايير decode.
+
+```bash
+cmake -S . -B build-release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON
+cmake --build build-release --parallel 4
+```
+
+تحتاج مجموعة fixtures الكاملة إلى `clang` للتجميع العابر للأهداف وإلى linker
+الخاصة بـ LLVM ‏(`ld.lld` و`lld-link`) في `PATH`. يبني CMake كثيرًا من fixtures
+القابلة لإعادة التموضع دائمًا، وfixtures ‏ELF/PE المرتبطة عند توفر linker المطابق.
+الاختبار المتخطى لأن المضيف لا يستطيع تجميع fixture أو ربطها هو تغطية غير
+منفذة، وليس نجاحًا للهدف.
+
+راجع [CONTRIBUTING.md](i18n/CONTRIBUTING.ar.md) للاستنساخ وملفات البناء وLLVM
+الجاهز على macOS.
+
+## توزيع الاختبارات
+
+ينشئ `add_neverd_unittest` ملف GoogleTest تنفيذيًا واحدًا، ويمنح كل حالة مكتشفة
+وسم CTest يساوي اسم ذلك الهدف التنفيذي.
+
+| منطقة المصدر | الهدف ووسم CTest | التغطية |
+|--------------|------------------|---------|
+| `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | استدعاء العمليات الفرعية عابر المنصات، وquoting، وإعادة التوجيه، ورموز الخروج |
+| `unittests/libc` | `NeverDLibCTests` | أسماء libc المعروفة وتصنيفها |
+| `unittests/lift` | `NeverDLiftTests` | أشكال LowIR لـ decoder/lifter، ومراحل IR، وloader، وrelocation، وfixtures الصيغ، وإعادة التجميع، ومسارات patch الممثلة |
+| معظم ملفات `unittests/semantic` | `NeverDSemanticTests` | دلالات تفاضلية للتعليمات وABI والتحكم وتعابير C وlift/recompile |
+| `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | تكافؤ إعادة الكتابة/التشويش عبر أربع ISA وثلاث صيغ كائنات |
+| ملفات التحويل المحددة في `unittests/semantic` | `NeverDSwitchXformTests` و`NeverDIndCallXformTests` و`NeverDCFGLoopXformTests` و`NeverDTwoTableXformTests` و`NeverDAvxUpperXformTests` | مجسات سريعة الربط منفصلة عن الثنائي الدلالي الكبير |
+
+مصادر التسجيل الموثوقة هي
+[`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt) و
+[`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) و
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt).
+
+## كيفية إنتاج fixtures
+
+### Fixtures الرفع والصيغ
+
+يجمع `unittests/lift/CMakeLists.txt` مصادر C وassembly لأهداف متعددة أثناء
+البناء. تنتج triple ‏Clang كائنات ELF لـ x86-64 وi386 وAArch64 وARM32، وكائنات
+PE/COFF وصورًا مرتبطة، وكائنات Mach-O i386 ‏PIC/no-PIC. عند توفر LLD، تُربط
+كائنات مختارة أيضًا كملفات تنفيذية لاختبارات patch. يعتمد `NeverDLiftTests` على
+هدف `lift-test-objects`، لذلك يجدّد البناء العادي لذلك الثنائي fixtures المولدة.
+
+تستخدم معظم اختبارات lift ‏`NeverDLiftFixture.h` لاستدعاء CLI المبنية `neverd`
+وفحص LowIR وMedIR وHighIR وLLVM IR وC المولدة أو ثنائي معاد كتابته. يمكن لمتغير
+البيئة `NEVERD` تجاوز مسار CLI في تجربة يدوية محددة؛ وتستخدم عمليات CTest العادية
+الملف التنفيذي الذي يضمنه CMake.
+
+### دورات Unicorn التفاضلية
+
+تختبر fixture الدلالية السلوك بدل الشكل النصي:
+
+1. اكتب حالة C/assembly صغيرة أو أنشئ LLVM IR.
+2. اجمعها بـ Clang/LLVM للهدف المطلوب.
+3. نفّذ شفرة الآلة الأصلية في Unicorn والتقط قيمة العودة المتوقعة أو حالة أخرى تعرفها fixture.
+4. حمّلها وارفعها عبر NeverD، وأصدر LLVM IR، ثم أعد تجميع النتيجة إلى شفرة آلة.
+5. نفّذ الشفرة المعاد توليدها بنفس ABI والمدخلات وتخطيط الذاكرة ونموذج CPU.
+6. قارن النتائج الملحوظة.
+
+التنفيذ الأساسي هو
+[`SemanticRoundTripFixture.h`](../unittests/semantic/SemanticRoundTripFixture.h).
+تستخدم fixture ‏patch-full ‏`Codegen::compileForRewrite`، وهو backend إعادة
+الكتابة نفسه لعمليات patch، ثم تقارن الشفرة الأساس والمحوّلة عبر شبكة ISA/صيغة
+الكاملة 4×3.
+
+يجب أن يكون فشل NeverD الدلالي الحتمي اختبارًا فاشلًا. احصر skips في حدود قدرة
+خارجية صريحة واقرأ سببها: لا يثبت ملخص أخضر بلا cross-linker أن مسار الصيغة نُفذ.
+
+## أهداف بأمر واحد
+
+تبني الأهداف المخصصة تبعياتها ثم تشغّل CTest بتوازٍ مشتق من CPU المضيف:
+
+| هدف CMake | الاختيار |
+|-----------|----------|
+| `check-neverd` | كل الاختبارات المسجلة |
+| `check-neverd-semantic` | `NeverDSemanticTests` فقط |
+| `check-neverd-patch-full` | `NeverDPatchFullTests` فقط |
+| `check-neverd-switch-xform` | `NeverDSwitchXformTests` فقط |
+| `check-neverd-cfgloop-xform` | `NeverDCFGLoopXformTests` فقط |
+| `check-neverd-twotable-xform` | `NeverDTwoTableXformTests` فقط |
+
+```bash
+cmake --build build-release --target check-neverd
+cmake --build build-release --target check-neverd-semantic
+```
+
+لا يملك `NeverDIndCallXformTests` و`NeverDAvxUpperXformTests` حاليًا هدف راحة
+`check-neverd-*`. ابنِهما واخترهما بالوسم كما أدناه. كذلك لا يتضمن
+`check-neverd-semantic` ثنائيات التحويل أو patch-full المنفصلة؛ استخدم
+`check-neverd` للتجميع الكامل.
+
+## سير CTest التزايدي
+
+ابنِ الملف التنفيذي المالك أولًا ثم اختر وسمه. يتجنب ذلك إعادة ربط أهداف
+دلالية كبيرة غير مرتبطة.
+
+```bash
+# Lifter, loader, and format tests
+cmake --build build-release --target NeverDLiftTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -L '^NeverDLiftTests$' --output-on-failure --parallel 4
+
+# Main semantic binary
+cmake --build build-release --target NeverDSemanticTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -L '^NeverDSemanticTests$' --output-on-failure --parallel 4
+
+# A label-only focused transform binary
+cmake --build build-release --target NeverDIndCallXformTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
+```
+
+استخدم اسم CTest مشتقًا من GoogleTest لانحدار واحد:
+
+```bash
+ctest --test-dir build-release --build-config Release -N \
+  -L '^NeverDLiftTests$'
+ctest --test-dir build-release --build-config Release \
+  -R '^COFFARMPipeline\.ARM32ThumbLiftAndDecompile$' \
+  --output-on-failure
+```
+
+محددات مفيدة:
+
+| الأمر | الغرض |
+|-------|-------|
+| `ctest --test-dir build-release -N` | سرد الحالات المكتشفة دون تشغيلها |
+| `ctest --test-dir build-release -L '<regex>'` | اختيار وسم ثنائي اختبار |
+| `ctest --test-dir build-release -R '<regex>'` | اختيار أسماء الحالات |
+| `ctest --test-dir build-release --output-on-failure` | عرض التشخيص عند الفشل فقط |
+| `ctest --test-dir build-release --stop-on-failure` | التوقف بعد أول فشل |
+| `ctest --test-dir build-release --parallel 4` | تشغيل أربع حالات بالتوازي كحد أقصى |
+
+يستخدم اكتشاف GoogleTest ‏`DISCOVERY_MODE PRE_TEST`، لذلك يجب أن يوجد ثنائي
+الاختبار المطابق قبل تعداد CTest. تُعرّف مهلات الحالة والاكتشاف المنفصل في
+`cmake/AddNeverD.cmake`، ولا تُوسّع إلا لمجموعات ذات حالات ثقيلة مقاسة.
+
+## أي اختبارات يجب أن تتغير مع الشفرة؟
+
+| منطقة التغيير | ابدأ بـ | ثم فكّر في |
+|---------------|---------|------------|
+| lifter العمارة أو decode | الحالة المسماة في `NeverDLiftTests` | دورة دلالية لـ ISA المطابقة |
+| LowIR CFG واكتشاف الدوال وجداول القفز | حالات lift ‏CFG/switch | `NeverDSwitchXformTests` أو `NeverDCFGLoopXformTests` أو `NeverDTwoTableXformTests` |
+| MedIR وABI والأعلام والأنواع وSSA | حالات lift ‏MedIR/أعراف الاستدعاء | حالات `NeverDSemanticTests` العابرة لـ ISA |
+| HighIR أو C المنظمة | حالات HighIR/decompile | `NeverDCFGLoopXformTests` وفحوص تجميع C المولدة |
+| loader ‏PE/ELF/Mach-O أو relocation الإدخال | fixture الصيغة المطابقة في `unittests/lift` | اختبار تحميل/إعادة تجميع كل المراحل للخلية |
+| Rewrite codegen أو relocation الإخراج | حالات `RewriteCodegenRTTests` | `NeverDPatchFullTests` وfixture ‏patch مرتبطة عند توفرها |
+| تحويل LLVM IR يستخدمه patch | ثنائي التحويل المحدد | شبكة pass المركبة لـ `NeverDPatchFullTests` |
+| C API أو CLI | اختبار SDK/query مباشر و`unittests/semantic/CLIEndToEndTests.cpp` | مجموعة pipeline/صيغة ذات الصلة |
+| تعرف libc | `NeverDLibCTests` | حالات call/ABI دلالية إذا تغير السلوك |
+| تنفيذ العمليات أو quoting | `NeverDTestProcessTests` | حالة CLI/دلالية متأثرة على كل مضيف مدعوم |
+
+يجب أن تعبر الاختبارات عن العقد عند أدنى حد مستقر. يفيد اختبار شكل LowIR في
+نسب السلوك إلى lifter؛ وتلزم دورة دلالية إذا كان لشكلين IR معقولين سلوك مختلف.
+تجنب golden dump لدوال كاملة عندما يكفي assertion صغير على opcode أو CFG أو
+حالة ملحوظة.
+
+## العلاقة مع CI
+
+تبني CI ‏Release مع الاختبارات على Linux وmacOS وWindows، ثم تدقق المخزون
+المكتشف قبل تطبيق استثناءات الوسوم الخاصة بالمنصة. تُعرّف الملفات في
+`.github/workflows/ci.yml` و`scripts/audit_ci_test_inventory.py`. ولأن لا shard
+واحدًا من المصفوفة يمثل كل المجموعات المكلفة، يبقى `check-neverd` المحلي أوضح
+إشارة كاملة قبل الدمج عندما تملك الآلة كل الأدوات العابرة اللازمة.

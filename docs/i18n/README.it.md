@@ -19,7 +19,7 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 [![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#target-supportati)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-e-plugin)
 
-[Documentazione](../README.it.md) · [Roadmap](../roadmap/README.it.md) · [Contribuire](#contribuire)
+[Documentazione](../README.it.md) · [Roadmap](../roadmap/README.it.md) · [Contribuire](CONTRIBUTING.it.md)
 
 </div>
 
@@ -29,7 +29,7 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## Panoramica
 
-NeverD è un motore di analisi e decompilazione di binari nativi basato su **lifting istruzione per istruzione 1:1**. Carica **PE**, **ELF** e **Mach-O**, decodifica con [Capstone](https://www.capstone-engine.org/) e solleva attraverso una pipeline IR a quattro stadi con **semantiche scritte a mano** — non una traduzione approssimativa. L’obiettivo è la **fedeltà semantica al 100%**: le istruzioni supportate mantengono il comportamento osservabile completo in **LLVM IR**, **C strutturato** o un **binario riscritto**.
+NeverD è un motore di analisi e decompilazione di binari nativi basato su **lifting istruzione per istruzione 1:1**. Carica **PE**, **ELF** e **Mach-O**, decodifica con [Capstone](https://www.capstone-engine.org/) e li elabora attraverso quattro rappresentazioni IR con **semantiche scritte a mano** — non una traduzione approssimativa. L’obiettivo è la **fedeltà semantica al 100%**: le istruzioni supportate mantengono il comportamento osservabile completo in **LLVM IR**, **C strutturato** o un **binario riscritto**.
 
 La modalità strict è **attiva di default**. Un’istruzione senza lifter lancia `UnliftedInstruction` invece di saltare, indovinare o emettere un `NOP` silenzioso.
 
@@ -53,7 +53,7 @@ Le prossime versioni aggiungeranno la decompilazione [EVM](../roadmap/README.it.
 | **ELF** (Linux / Android) | ✓ | ✓ | ✓ | ✓ |
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
-> La copertura d’integrazione Mach-O i386 usa oggetti `thin` rilocabili e test del backend di riscrittura degli eseguibili; l’host macOS corrente non può collegare gli eseguibili i386 storici.
+> Ogni cella della matrice è implementata, ma la profondità dei test d’integrazione varia. Consulta la [matrice di copertura dell’architettura](../architecture.it.md#support-and-test-depth). Mach-O i386 usa oggetti `thin` rilocabili perché macOS moderno non può collegare gli eseguibili i386 storici.
 
 ## Come funziona
 
@@ -145,6 +145,8 @@ cmake --build build --target check-neverd
 |--------|-------------|
 | `check-neverd` | Tutti i test |
 | `check-neverd-semantic` | Solo roundtrip semantico (Unicorn) |
+
+Per target mirati, etichette CTest, requisiti delle fixture e griglia di riscrittura tra formati, consulta [Testare NeverD](../testing.it.md).
 
 **Opzioni CMake**
 
@@ -238,15 +240,7 @@ I componenti di terze parti mantengono le proprie licenze.
 
 ## Contribuire
 
-Lo stile segue le convenzioni LLVM (`.clang-format`).
-
-Lo sviluppo avviene sul branch **`dev`** (branch predefinito su GitHub).
-
-```bash
-git clone -b dev https://github.com/NeverSight/NeverD.git
-cd NeverD
-git submodule update --init --recursive
-```
+I contributi vengono integrati nel branch **`dev`**. Consulta la [guida per contribuire](CONTRIBUTING.it.md) per configurazione, istruzioni Release/Debug, stile, test mirati e requisiti delle pull request. Le guide di [architettura](../architecture.it.md) e [test](../testing.it.md) collegano le modifiche comuni al codice e alle suite di validazione corrispondenti.
 
 ## Licenza
 

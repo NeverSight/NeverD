@@ -4,12 +4,13 @@
 
 # NeverD Documentation
 
-Project overview and build/CLI notes live in the repository README. Start with the English homepage below, or switch language above to stay in the same docs hub for that locale.
+Project overview and build/CLI notes live in the repository README. Contributor-facing design and test references are indexed here.
 
 | Document | Description |
 |----------|-------------|
 | [README (English)](../README.md) | Overview, quick start, build, SDK, CLI |
+| [Contributing](../CONTRIBUTING.md) | Development setup, build profiles, workflow, style, and PR expectations |
+| [Architecture](architecture.md) | IR routes, component boundaries, strict lifting, support depth, and where to edit |
+| [Testing](testing.md) | Test suites, generated fixtures, Unicorn roundtrips, and incremental commands |
 | [Roadmap](roadmap/README.md) | Planned work: EVM / Solana eBPF decompilation, format completeness |
 | [Localized READMEs](i18n/) | Same project overview in 10 languages |
-
-Additional design notes (architecture, ISA matrix, lifter internals) will be added here over time.

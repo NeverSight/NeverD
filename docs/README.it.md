@@ -4,13 +4,14 @@
 
 # Documentazione NeverD
 
-Panoramica, build e CLI sono nel README del repository. Inizia dalla versione italiana qui sotto; i link lingua sopra passano tra **hub di documentazione della stessa lingua**, senza forzare l’inglese.
+Panoramica, build e CLI sono nel README del repository. I riferimenti di design e test per i contributor sono raccolti qui.
 
 | Documento | Descrizione |
 |-----------|-------------|
 | [README (italiano)](i18n/README.it.md) | Panoramica, avvio rapido, build, SDK, CLI |
+| [Contribuire](i18n/CONTRIBUTING.it.md) | Ambiente, profili di build, workflow, stile e requisiti PR |
+| [Architettura](architecture.it.md) | Percorsi IR, confini dei componenti, lifting strict, profondità del supporto e punti di modifica |
+| [Test](testing.it.md) | Suite, fixture generate, roundtrip Unicorn e comandi incrementali |
 | [Roadmap](roadmap/README.it.md) | In piano: decompilazione EVM / Solana eBPF, formati nativi |
 | [English README](../README.md) | Versione inglese |
 | [Altre lingue](i18n/) | Altre versioni localizzate |
-
-Note di design (architettura, matrice ISA, lifter) saranno aggiunte qui nel tempo.

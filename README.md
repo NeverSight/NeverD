@@ -19,7 +19,7 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 [![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#supported-targets)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-and-plugins)
 
-[Documentation](docs/README.md) · [Roadmap](docs/roadmap/README.md) · [Contributing](#contributing)
+[Documentation](docs/README.md) · [Roadmap](docs/roadmap/README.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -29,7 +29,7 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## Overview
 
-NeverD is a native binary analysis and decompilation engine built around **1:1 instruction-level lifting**. It loads **PE**, **ELF**, and **Mach-O**, decodes with [Capstone](https://www.capstone-engine.org/), and lifts through a four-stage IR pipeline with **hand-written semantics** — not approximate translation. The goal is **100% semantic fidelity**: supported instructions keep their full observable behavior in **LLVM IR**, **structured C**, or a **rewritten binary**.
+NeverD is a native binary analysis and decompilation engine built around **1:1 instruction-level lifting**. It loads **PE**, **ELF**, and **Mach-O**, decodes with [Capstone](https://www.capstone-engine.org/), and uses four IR representations with **hand-written semantics** — not approximate translation. The goal is **100% semantic fidelity**: supported instructions keep their full observable behavior in **LLVM IR**, **structured C**, or a **rewritten binary**.
 
 Strict mode is **on by default**. An instruction with no lifter throws `UnliftedInstruction` instead of skipping, guessing, or emitting a silent `NOP`.
 
@@ -53,7 +53,7 @@ Future releases will add [EVM](docs/roadmap/README.md#2-evm-bytecode-decompilati
 | **ELF** (Linux / Android) | ✓ | ✓ | ✓ | ✓ |
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
-> Mach-O i386 integration coverage uses thin relocatable objects plus executable rewrite-backend tests; the current macOS host cannot link historical i386 executables.
+> Every cell is implemented, but integration depth differs. See the [architecture coverage matrix](docs/architecture.md#support-and-test-depth). Mach-O i386 uses thin relocatable objects because modern macOS cannot link historical i386 executables.
 
 ## How it works
 
@@ -145,6 +145,8 @@ cmake --build build --target check-neverd
 |--------|-------------|
 | `check-neverd` | All tests |
 | `check-neverd-semantic` | Semantic roundtrip only (Unicorn) |
+
+See [Testing NeverD](docs/testing.md) for focused targets, CTest labels, fixture requirements, and the cross-format rewrite grid.
 
 **CMake options**
 
@@ -238,15 +240,11 @@ Third-party components keep their own licenses.
 
 ## Contributing
 
-Style follows LLVM conventions (`.clang-format`).
-
-Development happens on the **`dev`** branch (GitHub default).
-
-```bash
-git clone -b dev https://github.com/NeverSight/NeverD.git
-cd NeverD
-git submodule update --init --recursive
-```
+Development is integrated on the **`dev`** branch. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup, Release versus Debug guidance,
+style, targeted tests, and pull-request expectations. The
+[architecture](docs/architecture.md) and [testing](docs/testing.md) guides map
+common changes to their owning code and verification suites.
 
 ## License
 

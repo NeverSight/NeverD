@@ -4,13 +4,14 @@
 
 # NeverD 문서
 
-프로젝트 개요·빌드·CLI는 저장소 README에 있습니다. 아래 한국어 문서부터 시작하세요. 위 언어 링크는 **같은 언어의 문서 허브**끼리 전환하며 영어로 강제하지 않습니다.
+프로젝트 개요·빌드·CLI는 저장소 README에 있습니다. 기여자용 설계와 테스트 자료를 여기에 모았습니다.
 
 | 문서 | 설명 |
 |------|------|
 | [프로젝트 설명（한국어）](i18n/README.ko.md) | 개요, 빠른 시작, 빌드, SDK, CLI |
+| [기여 가이드](i18n/CONTRIBUTING.ko.md) | 개발 환경, 빌드 프로필, 워크플로, 스타일, PR 요구 사항 |
+| [아키텍처](architecture.ko.md) | IR 경로, 구성 요소 경계, strict lifting, 지원 깊이, 수정 위치 |
+| [테스트](testing.ko.md) | 테스트 스위트, 생성 fixture, Unicorn 왕복, 증분 명령 |
 | [로드맵](roadmap/README.ko.md) | 계획: EVM / Solana eBPF 디컴파일, 포맷 완성 |
 | [English README](../README.md) | 영어 버전 |
 | [기타 언어 README](i18n/) | 나머지 현지화 버전 |
-
-아키텍처, ISA 매트릭스, lifter 내부 등 설계 노트는 여기에 점차 추가됩니다.

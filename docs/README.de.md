@@ -4,13 +4,14 @@
 
 # NeverD-Dokumentation
 
-Projektüberblick, Build und CLI stehen in der Repository-README. Beginnen Sie mit der deutschen Version unten; die Sprachlinks oben wechseln zwischen **Dokumentations-Hubs derselben Sprache** und erzwingen kein Englisch.
+Projektüberblick, Build und CLI stehen in der Repository-README. Architektur- und Testreferenzen für Mitwirkende sind hier gebündelt.
 
 | Dokument | Beschreibung |
 |----------|--------------|
 | [README (Deutsch)](i18n/README.de.md) | Überblick, Schnellstart, Build, SDK, CLI |
+| [Mitwirken](i18n/CONTRIBUTING.de.md) | Entwicklungsumgebung, Build-Profile, Ablauf, Stil und PR-Anforderungen |
+| [Architektur](architecture.de.md) | IR-Pfade, Komponentengrenzen, striktes Lifting, Supporttiefe und Änderungsorte |
+| [Tests](testing.de.md) | Testsuiten, generierte Fixtures, Unicorn-Roundtrips und inkrementelle Befehle |
 | [Roadmap](roadmap/README.de.md) | Geplant: EVM-/Solana-eBPF-Dekompilation, Formatvollständigkeit |
 | [English README](../README.md) | Englische Version |
 | [Andere Sprachen](i18n/) | Weitere lokalisierte Versionen |
-
-Architektur-, ISA- und Lifter-Notizen werden hier nach und nach ergänzt.

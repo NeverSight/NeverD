@@ -1,0 +1,201 @@
+**Languages**: [English](architecture.md) | [简体中文](architecture.zh-CN.md) | [繁體中文](architecture.zh-TW.md) | [日本語](architecture.ja.md) | [한국어](architecture.ko.md) | [Français](architecture.fr.md) | [Deutsch](architecture.de.md) | [Español](architecture.es.md) | [Italiano](architecture.it.md) | [Русский](architecture.ru.md) | [العربية](architecture.ar.md)
+
+[← Documentation Index](README.md)
+
+# NeverD Architecture
+
+This guide describes the production boundaries a contributor needs in order to
+change NeverD safely. It intentionally covers NeverD-owned code only; the LLVM,
+Capstone, and Unicorn submodules keep their own internal architecture.
+
+## System boundary
+
+```mermaid
+flowchart LR
+  CLI["tools/neverd CLI"] --> CAPI["libneverd C API"]
+  SDKUser["SDK user or plugin"] --> CAPI
+  CAPI --> Session["sdk::Session"]
+  Session --> Loader["format loader"]
+  Loader --> Image["BinaryImage"]
+  Image --> Pipeline["Pipeline"]
+  Pipeline --> Low["LowIR"]
+  Low --> Med["MedIR"]
+  Med --> High["HighIR"]
+  High --> HighC["structured C"]
+  Med --> LLVM["LLVM IR"]
+  LLVM --> LLVMOut["LLVM IR or LLVM-derived C"]
+  LLVM --> Codegen["target codegen"]
+  Codegen --> Rewriter["PE / ELF / Mach-O rewriter"]
+  Rewriter --> Patched["patched binary"]
+```
+
+NeverD has four IR representations, but they are not one mandatory four-hop
+sequence. `LowIR -> MedIR` is shared. Structured decompilation then uses
+`MedIR -> HighIR -> C`; `lift`, `decompile --llvm`, and `patch` use the direct
+`MedIR -> LLVM IR` route. In particular, patch and lift modes deliberately skip
+HighIR.
+
+The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
+calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
+`lib/sdk/SessionImpl.h`; `neverd_session_load` selects a loader and builds a
+`BinaryImage`, while IR-backed operations run `lib/pipeline/Pipeline.cpp`
+lazily. The `neverd` executable links `neverd_shared`; the component archives
+and their LLVM/Capstone dependencies remain private implementation details of
+that shared library. The CLI still uses LLVM Support for its command-line UI,
+but it does not bypass the C API to drive the engine.
+
+## IR representations and routes
+
+| Representation | Purpose | Primary definitions and transformations |
+|----------------|---------|-----------------------------------------|
+| LowIR | Architecture-neutral `NdOp` operations, basic blocks, CFG, and jump-table metadata | `include/neverd/ir/low`, `lib/ir/low`, produced by `lib/decode` + `lib/lift` |
+| MedIR | Types, ABI/calling conventions, memory and stack model, flags, calls, and SSA-like data flow | `include/neverd/ir/med`, `lib/ir/med` |
+| HighIR | Structured expressions and control flow for readable C | `include/neverd/ir/high`, `lib/ir/high`, emitted by `lib/backend/c/HighC` |
+| LLVM IR | Optimization, LLVM-derived C, target code generation, and binary rewrite input | `lib/backend/llvm`, optimized/orchestrated by `lib/pipeline` |
+
+| User route | Representation path | Exit |
+|------------|---------------------|------|
+| Low/Med dump | Binary -> LowIR, optionally -> MedIR | Diagnostic text |
+| High dump or `decompile` | Binary -> LowIR -> MedIR -> HighIR | HighIR or structured C |
+| `lift` | Binary -> LowIR -> MedIR -> LLVM IR | `.ll` |
+| `decompile --llvm` | Binary -> LowIR -> MedIR -> LLVM IR | LLVM-derived C |
+| `patch` | Binary -> LowIR -> MedIR -> LLVM IR -> codegen | Rewritten binary |
+
+`lib/pipeline/Pipeline.cpp` is the source of truth for route selection. Keep
+representation-specific logic in its owning IR or backend library; the pipeline
+should orchestrate those components rather than absorb their algorithms.
+
+## Component map
+
+Every component is a static archive created by `add_neverd_component_library`.
+The table lists important NeverD dependencies, not the common LLVM and Capstone
+libraries supplied by the CMake helper.
+
+| Directory | Responsibility | Important dependencies |
+|-----------|----------------|------------------------|
+| `lib/loader` | Format detection, PE/COFF, ELF, and Mach-O loading; normalized `BinaryImage`; function discovery | LLVM Object APIs |
+| `lib/lift` | Hand-written x86/i386, AArch64, and ARM32 instruction semantics | IR data types |
+| `lib/decode` | Capstone/native decode and dispatch into the architecture lifters | `NeverDIR`, `NeverDLift` |
+| `lib/ir` | Common types plus LowIR, MedIR, HighIR, and intrinsic definitions/transforms | Its four IR subcomponents |
+| `lib/pipeline` | Function detection and Low/Med/High/LLVM route orchestration | IR, decode, lift, LLVM backend, debug info, IR passes |
+| `lib/backend/c` | HighIR-to-C and LLVM-IR-to-C rendering | IR |
+| `lib/backend/llvm` | MedIR-to-LLVM lowering | IR |
+| `lib/backend/codegen` | Target code generation plus PE/ELF/Mach-O patch and in-place rewrite | IR, loader |
+| `lib/sdk` | Public C ABI, session lifecycle, queries, persistence, plugins, lift/decompile/patch entry points | Aggregates the engine components into `libneverd` |
+| `lib/pass` | LLVM IR obfuscation passes and MIR pass runner | IR |
+| `lib/debug` | DWARF, PDB, and linker-map debug contexts | IR |
+| `lib/sigs` | Signature parsing, databases, and matching | Loader |
+| `lib/libc` | Known libc names and call-model support | Standalone component |
+| `lib/Support` | Shared binary-loading helpers | Loader |
+
+Public headers mirror these areas under `include/neverd`. Avoid making an
+internal C++ class part of the SDK by accident: stable external operations
+belong in the pure C header and one of the focused `lib/sdk/NeverDCAPI*.cpp`
+files.
+
+## Strict lifting contract
+
+`Decoder` and every architecture lifter start in strict mode. If Capstone can
+decode an instruction but the selected lifter has no implementation, the
+lifter throws `UnliftedInstruction`. The exception records the instruction
+address, mnemonic, and operand string; unsupported semantics must therefore
+fail visibly instead of being omitted or guessed.
+
+The internal non-strict path emits `NdOp::NOP`, but it is a diagnostic escape
+hatch, not an acceptable implementation of an instruction. Contributor and CI
+tests should keep strict mode enabled. When a strict failure appears:
+
+1. Reproduce it with the smallest architecture-specific fixture.
+2. Add the missing semantics in `lib/lift/<ISA>`.
+3. Assert the expected LowIR shape in `unittests/lift`.
+4. Add a Unicorn differential roundtrip in `unittests/semantic` when the
+   instruction has observable behavior.
+
+Do not catch `UnliftedInstruction` merely to make a pipeline continue. A new
+intentional approximation would need an explicit contract and tests; it must
+not masquerade as 1:1 lifting.
+
+## Format and ISA ownership
+
+Input format logic and output rewrite logic are deliberately separate:
+
+| Format | Load, metadata, and input relocations | Patch and output relocations |
+|--------|---------------------------------------|------------------------------|
+| PE/COFF | `lib/loader/COFF` | `lib/backend/codegen/COFF` |
+| ELF | `lib/loader/ELF` | `lib/backend/codegen/ELF` |
+| Mach-O | `lib/loader/MachO` | `lib/backend/codegen/MachO` |
+
+Architecture lifters live in `lib/lift/X86`, `lib/lift/AArch64`, and
+`lib/lift/ARM`. The corresponding public lifter/register declarations live in
+`include/neverd/lift`. Target-specific LLVM emission and code generation live
+under `lib/backend/llvm/<ISA>` and `lib/backend/codegen/CodeGen<ISA>.cpp`.
+
+<a id="support-and-test-depth"></a>
+
+### Support and test depth
+
+The root support matrix means that each cell is implemented. It does not mean
+that every opcode, ABI edge case, binary producer, or operating-system version
+has been exhaustively tested. Strict mode is the guardrail for instruction
+coverage that has not yet landed.
+
+All 12 format-by-architecture cells have semantic rewrite-backend coverage in
+`unittests/semantic/PatchFullSubstRTTests.cpp`. Integration depth is more
+specific:
+
+| Format | x86-64 | i386 | AArch64 | ARM32 |
+|--------|--------|------|---------|-------|
+| PE/COFF | Linked fixture | Backend grid | Linked fixture | Linked Thumb fixture |
+| ELF | Linked fixture + semantic roundtrip | Object pipeline + semantic roundtrip | Linked fixture + semantic roundtrip | Linked fixture + semantic roundtrip |
+| Mach-O | Linked fixture\* | PIC/no-PIC object pipeline\* | Linked fixture\* | Backend grid |
+
+- **Linked fixture** exercises a linked executable through loader/pipeline and
+  patch behavior for representative programs.
+- **Object pipeline** exercises loading, all IR stages, and decompilation of a
+  relocatable object, but not host linking and execution of a patched binary.
+- **Backend grid** compiles representative IR through the exact rewrite
+  code-generation path and compares behavior in Unicorn; it does not exercise
+  that format's loader on a linked executable.
+- `*` Mach-O linked fixtures depend on a host toolchain that can produce the
+  requested target. Modern macOS cannot link historical i386 executables, so
+  i386 coverage uses both PIC and no-PIC thin objects plus the rewrite grid.
+
+Treat linked-fixture cells as the strongest current format-integration
+evidence for those representative programs. Object-pipeline and backend-grid
+cells have partial format-integration coverage. No cell is “fully tested”
+without that qualification, and none claims exhaustive ISA coverage.
+
+The principal evidence is
+[`PatchFormatTests.cpp`](../unittests/lift/PatchFormatTests.cpp) for linked ELF
+and PE fixtures,
+[`COFFARMFormatTests.cpp`](../unittests/lift/COFFARMFormatTests.cpp) for Windows
+ARM loading/decompilation,
+[`MachOI386RelocationTests.cpp`](../unittests/lift/MachOI386RelocationTests.cpp)
+for i386 thin objects,
+[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/X86_64_PipelineE2ETests.cpp)
+and
+[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/AArch64_PipelineE2ETests.cpp)
+for linked Mach-O, and
+[`PatchFullSubstRTTests.cpp`](../unittests/semantic/PatchFullSubstRTTests.cpp)
+for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
+
+## Where to edit
+
+| Change | Start here | Minimum focused verification |
+|--------|------------|------------------------------|
+| Add or fix an instruction | Matching files in `lib/lift/X86`, `AArch64`, or `ARM`; public lifter header if dispatch changes | Architecture test in `unittests/lift`; semantic roundtrip in `unittests/semantic` |
+| Add an `NdOp` | `include/neverd/ir/NdOps.h`, then audit Low-to-Med, emitters/renderers, verifier/emulator, and dumps | `NeverDLiftTests` + relevant `NeverDSemanticTests` cases |
+| Change CFG or function discovery | `lib/ir/low`, `lib/loader/FunctionDiscovery*.cpp`, `lib/pipeline/PipelineFuncDetect.cpp` | Lift CFG/jump-table tests and focused semantic transform suite |
+| Add a PE input relocation or unwind rule | `lib/loader/COFF` | `COFFARMFormatTests` or a new focused loader fixture |
+| Add a PE output relocation or patch rule | `lib/backend/codegen/COFF` | `PatchFormatTests`, `RewriteCodegenRTTests`, and the PE backend grid |
+| Change ELF or Mach-O format behavior | Matching `lib/loader/<Format>` and/or `lib/backend/codegen/<Format>` directory | Matching format tests plus rewrite grid |
+| Change MedIR/ABI recovery | `lib/ir/med` | Calling-convention lift tests + cross-ISA semantic roundtrips |
+| Change structured control-flow recovery | `lib/ir/high` | `NeverDCFGLoopXformTests` and structured-C tests |
+| Add an LLVM transform | `lib/pass/ir`, public header in `include/neverd/pass/ir`, pipeline toggle if exposed | Focused transform suite + `NeverDPatchFullTests` when patch output changes |
+| Add a C API operation | `include/neverd/sdk/NeverDCAPI.h`, focused `lib/sdk/NeverDCAPI*.cpp`, `SessionImpl.h` only for state | SDK/CLI semantic tests; preserve `neverd_last_error` and allocation conventions |
+| Add a CLI command | `tools/neverd/NeverDCLIOptions.cpp`, `NeverDCLI.h`, a focused `NeverDCmd*.cpp`, and dispatch in `neverd.cpp` | `unittests/semantic/CLIEndToEndTests.cpp` and direct CLI smoke test |
+| Add a semantic regression | Focused `unittests/semantic/*Tests.cpp`; register a new file in `unittests/semantic/CMakeLists.txt` | Build its test binary, then use `ctest -R` for the named case |
+
+Keep edits narrow. Files that define a representation may change with their
+transforms, but unrelated loaders, lifters, and backends should not be modified
+solely to make a broad refactor appear uniform.

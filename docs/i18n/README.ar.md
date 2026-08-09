@@ -19,7 +19,7 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 [![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#الأهداف-المدعومة)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-والإضافات)
 
-[التوثيق](../README.ar.md) · [خارطة الطريق](../roadmap/README.ar.md) · [المساهمة](#المساهمة)
+[التوثيق](../README.ar.md) · [خارطة الطريق](../roadmap/README.ar.md) · [المساهمة](CONTRIBUTING.ar.md)
 
 </div>
 
@@ -29,7 +29,7 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## نظرة عامة
 
-NeverD محرك تحليل وإعادة تجميع للثنائيات الأصلية مبني حول **رفع التعليمات 1:1**. يحمّل **PE** و**ELF** و**Mach-O**، ويفكّ الشفرة بـ[Capstone](https://www.capstone-engine.org/)، ويرفع عبر خط أنابيب IR من أربع مراحل بـ**دلالات مكتوبة يدويًا** — وليس ترجمة تقريبية. الهدف **وفاء دلالي 100%**: التعليمات المدعومة تحافظ على سلوكها القابل للرصد كاملًا في **LLVM IR** أو **C منظّم** أو **ثنائي معاد كتابته**.
+NeverD محرك تحليل وإعادة تجميع للثنائيات الأصلية مبني حول **رفع التعليمات 1:1**. يحمّل **PE** و**ELF** و**Mach-O**، ويفكّ الشفرة بـ[Capstone](https://www.capstone-engine.org/)، ثم يعالجها باستخدام أربعة تمثيلات IR مع **دلالات مكتوبة يدويًا** — وليس ترجمة تقريبية. الهدف **وفاء دلالي 100%**: التعليمات المدعومة تحافظ على سلوكها القابل للرصد كاملًا في **LLVM IR** أو **C منظّم** أو **ثنائي معاد كتابته**.
 
 وضع strict **مفعّل افتراضيًا**. تعليمة بلا lifter ترمي `UnliftedInstruction` بدل التخطي أو التخمين أو إصدار `NOP` صامت.
 
@@ -53,7 +53,7 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 | **ELF** (Linux / Android) | ✓ | ✓ | ✓ | ✓ |
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
-> تستخدم تغطية تكامل Mach-O i386 كائنات `thin` قابلة لإعادة التموضع إلى جانب اختبارات خلفية إعادة كتابة الملفات التنفيذية؛ لا يستطيع مضيف macOS الحالي ربط ملفات i386 التنفيذية التاريخية.
+> نُفّذت كل خلية في المصفوفة، لكن عمق اختبارات التكامل يختلف. راجع [مصفوفة تغطية المعمارية](../architecture.ar.md#support-and-test-depth). يستخدم Mach-O i386 كائنات `thin` قابلة لإعادة التموضع لأن macOS الحديث لا يستطيع ربط ملفات i386 التنفيذية التاريخية.
 
 ## كيف يعمل
 
@@ -145,6 +145,8 @@ cmake --build build --target check-neverd
 |-------|--------|
 | `check-neverd` | كل الاختبارات |
 | `check-neverd-semantic` | roundtrip دلالي فقط (Unicorn) |
+
+راجع [اختبار NeverD](../testing.ar.md) للاطلاع على الأهداف المركّزة، وتسميات CTest، ومتطلبات fixtures، وشبكة إعادة الكتابة عبر الصيغ.
 
 **خيارات CMake**
 
@@ -238,15 +240,7 @@ neverd_session_destroy(s);
 
 ## المساهمة
 
-الأسلوب يتبع عرف LLVM (`.clang-format`).
-
-يُجرى التطوير على فرع **`dev`** (الفرع الافتراضي على GitHub).
-
-```bash
-git clone -b dev https://github.com/NeverSight/NeverD.git
-cd NeverD
-git submodule update --init --recursive
-```
+تُدمج المساهمات في فرع **`dev`**. راجع [دليل المساهمة](CONTRIBUTING.ar.md) لإعداد البيئة، وإرشادات Release/Debug، والأسلوب، والاختبارات المركّزة، ومتطلبات pull request. تربط أدلة [المعمارية](../architecture.ar.md) و[الاختبار](../testing.ar.md) التغييرات الشائعة بالشيفرة وحزم التحقق المناسبة.
 
 ## الترخيص
 
