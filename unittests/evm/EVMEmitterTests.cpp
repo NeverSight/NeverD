@@ -12,6 +12,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
@@ -66,11 +67,19 @@ TEST(EVMLLVMEmitter, EmitsGuardedSignedDivisionAndEnvironmentHooks) {
 
 std::filesystem::path writeTemporarySource(llvm::StringRef Extension,
                                            llvm::StringRef Source) {
-  static unsigned Sequence = 0;
-  auto Path =
-      std::filesystem::temp_directory_path() /
-      ("neverd-evm-emitter-" + std::to_string(++Sequence) + Extension.str());
+  llvm::SmallString<128> UniquePath;
+  const std::error_code EC = llvm::sys::fs::createTemporaryFile(
+      "neverd-evm-emitter", Extension.ltrim(".-"), UniquePath);
+  if (EC) {
+    ADD_FAILURE() << "cannot create temporary source: " << EC.message();
+    return {};
+  }
+  const std::filesystem::path Path(UniquePath.str().str());
   std::ofstream Output(Path, std::ios::binary);
+  if (!Output) {
+    ADD_FAILURE() << "cannot open temporary source: " << Path;
+    return {};
+  }
   Output.write(Source.data(), static_cast<std::streamsize>(Source.size()));
   return Path;
 }

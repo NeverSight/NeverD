@@ -39,11 +39,20 @@ namespace neverd::cli {
 
 namespace {
 
+const char *hardforkSpelling(evm::Hardfork Fork) {
+  switch (Fork) {
+#define EVM_HARDFORK(NAME, SPELLING)                                           \
+  case evm::Hardfork::NAME:                                                    \
+    return SPELLING;
+#include "neverd/evm/EVMHardforks.def"
+  }
+  return "";
+}
+
 bool configureEVM(neverd_session_t Sess) {
   neverd_evm_set_strict(Sess, EVMRelaxed ? 0 : 1);
-  const std::string ForkName =
-      evm::hardforkName(EVMHardfork.getValue()).str();
-  if (!neverd_evm_set_hardfork(Sess, ForkName.c_str())) {
+  if (!neverd_evm_set_hardfork(Sess,
+                               hardforkSpelling(EVMHardfork.getValue()))) {
     WithColor::error() << "invalid EVM hardfork: " << takeLastError(Sess)
                        << "\n";
     return false;
