@@ -6,6 +6,12 @@ on:
       - dev
   pull_request:
   workflow_dispatch:
+    inputs:
+      use_prebuilt_llvm:
+        description: 'Use the published prebuilt NeverD LLVM packages'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,6 +24,8 @@ jobs:
   build-and-test:
     name: Build and test (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
+    env:
+      NEVERD_LLVM_PREBUILT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.use_prebuilt_llvm && 'ON' || 'OFF' }}
 
     strategy:
       fail-fast: false
@@ -118,7 +126,7 @@ jobs:
             -DCMAKE_C_COMPILER="$CC" \
             -DCMAKE_CXX_COMPILER="$CXX" \
             -DBUILD_TESTING=ON \
-            -DNEVERD_LLVM_PREBUILT=OFF
+            -DNEVERD_LLVM_PREBUILT="$NEVERD_LLVM_PREBUILT_MODE"
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}

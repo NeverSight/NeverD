@@ -1,0 +1,444 @@
+import hashlib
+import os
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+RELEASE_WORKFLOW = (
+    ROOT
+    / "third_party"
+    / "llvm-project"
+    / ".github"
+    / "workflows"
+    / "neverd-release.yml"
+)
+CONSUMER = ROOT / "cmake" / "NeverDLLVMPrebuilt.cmake"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+README = ROOT / "README.md"
+
+
+class PrebuiltLlvmReleaseWorkflowTests(unittest.TestCase):
+    def test_release_matrix_contains_every_supported_package(self):
+        source = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        expected_packages = {
+            "neverd-llvm-macos-arm64": ("macos-14", "tar.xz"),
+            "neverd-llvm-linux-x86_64": ("ubuntu-24.04", "tar.xz"),
+            "neverd-llvm-windows-x64": ("windows-latest", "zip"),
+        }
+
+        self.assertEqual(source.count("            pkg: neverd-llvm-"), 3)
+        for package, (runner, archive) in expected_packages.items():
+            with self.subTest(package=package):
+                self.assertEqual(source.count(f"            pkg: {package}\n"), 1)
+                self.assertIn(f"            runner: {runner}\n", source)
+                self.assertIn(f"            archive: {archive}\n", source)
+
+    def test_release_workflow_has_explicit_existing_release_policy(self):
+        source = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        required_contract = (
+            "overwrite_existing_assets:",
+            "jobs:\n  prepare:",
+            "release_exists:",
+            "immutable",
+            "needs: prepare",
+            "needs: [prepare, build]",
+            "overwrite_files: ${{ needs.prepare.outputs.overwrite }}",
+            "tag_name: ${{ needs.prepare.outputs.tag }}",
+            "target_commitish: ${{ github.sha }}",
+            "generate_release_notes: ${{ needs.prepare.outputs.release_exists != 'true' }}",
+        )
+        for expected in required_contract:
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source)
+
+    def test_release_workflow_declares_platform_cache_strategies(self):
+        source = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("-DLLVM_CCACHE_BUILD=ON", source)
+        self.assertIn("mozilla-actions/sccache-action@", source)
+        self.assertIn("SCCACHE_GHA_ENABLED: 'true'", source)
+        self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=sccache", source)
+        self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=sccache", source)
+
+    def test_release_workflow_records_and_publishes_required_metadata(self):
+        source = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        for field in (
+            "llvm_version:",
+            "llvm_commit:",
+            "platform:",
+            "host_arch:",
+            "runner:",
+            "targets:",
+            "build_type:",
+            "link:",
+            "built_at:",
+            "built_by:",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, source)
+
+        self.assertIn("include/llvm/MC/BinaryRewrite.h", source)
+
+        for asset_glob in (
+            "dist/*.tar.xz",
+            "dist/*.tar.xz.sha256",
+            "dist/*.zip",
+            "dist/*.zip.sha256",
+        ):
+            with self.subTest(asset_glob=asset_glob):
+                self.assertIn(asset_glob, source)
+
+    def test_checksum_manifests_use_portable_relative_asset_names(self):
+        source = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn('( cd "$GITHUB_WORKSPACE" &&', source)
+        self.assertIn(
+            'cmake -E sha256sum "${pkg}.${{ matrix.archive }}"', source
+        )
+        self.assertIn(
+            '$checksum = cmake -E sha256sum "$pkg.${{ matrix.archive }}"',
+            source,
+        )
+        self.assertNotIn('cmake -E sha256sum "$archive"', source)
+        self.assertNotIn("cmake -E sha256sum $archive", source)
+
+    def test_ci_defaults_to_source_llvm_and_manual_dispatch_can_opt_in(self):
+        source = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn(
+            """  workflow_dispatch:
+    inputs:
+      use_prebuilt_llvm:
+        description: 'Use the published prebuilt NeverD LLVM packages'
+        required: true
+        type: boolean
+        default: false
+""",
+            source,
+        )
+        self.assertIn(
+            "NEVERD_LLVM_PREBUILT_MODE: "
+            "${{ github.event_name == 'workflow_dispatch' "
+            "&& inputs.use_prebuilt_llvm && 'ON' || 'OFF' }}",
+            source,
+        )
+        self.assertEqual(source.count("-DNEVERD_LLVM_PREBUILT="), 1)
+        self.assertIn(
+            '-DNEVERD_LLVM_PREBUILT="$NEVERD_LLVM_PREBUILT_MODE"',
+            source,
+        )
+        self.assertNotIn("-DNEVERD_LLVM_PREBUILT=ON", source)
+        self.assertNotIn("-DNEVERD_LLVM_PREBUILT=OFF", source)
+        for matrix_name in ("Linux x64", "macOS arm64", "Windows x64"):
+            with self.subTest(matrix_name=matrix_name):
+                self.assertIn(f"          - name: {matrix_name}\n", source)
+
+
+class PrebuiltLlvmPackageResolutionTests(unittest.TestCase):
+    def run_resolver(
+        self,
+        system_name: str,
+        processor: str,
+        osx_architectures: str = "",
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(prefix="neverd-prebuilt-resolver-") as tmp:
+            script = Path(tmp) / "resolve.cmake"
+            script.write_text(
+                f"""
+set(CMAKE_HOST_SYSTEM_NAME "${{TEST_SYSTEM_NAME}}")
+set(CMAKE_HOST_SYSTEM_PROCESSOR "${{TEST_PROCESSOR}}")
+set(CMAKE_OSX_ARCHITECTURES "${{TEST_OSX_ARCHITECTURES}}")
+include("{CONSUMER.as_posix()}")
+_neverd_resolve_prebuilt_llvm_package(
+  resolved_platform resolved_arch resolved_pkg resolved_archive)
+message(STATUS
+  "NEVERD_RESULT=${{resolved_platform}};${{resolved_arch}};${{resolved_pkg}};${{resolved_archive}}")
+""".lstrip(),
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                [
+                    "cmake",
+                    f"-DTEST_SYSTEM_NAME={system_name}",
+                    f"-DTEST_PROCESSOR={processor}",
+                    f"-DTEST_OSX_ARCHITECTURES={osx_architectures}",
+                    "-P",
+                    str(script),
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+
+    def test_supported_hosts_resolve_to_published_packages(self):
+        cases = (
+            (
+                "Darwin",
+                "arm64",
+                "",
+                "macos;arm64;neverd-llvm-macos-arm64;tar.xz",
+            ),
+            (
+                "Darwin",
+                "x86_64",
+                "arm64",
+                "macos;arm64;neverd-llvm-macos-arm64;tar.xz",
+            ),
+            (
+                "Linux",
+                "x86_64",
+                "",
+                "linux;x86_64;neverd-llvm-linux-x86_64;tar.xz",
+            ),
+            (
+                "Windows",
+                "AMD64",
+                "",
+                "windows;x64;neverd-llvm-windows-x64;zip",
+            ),
+        )
+
+        for system_name, processor, architectures, expected in cases:
+            with self.subTest(
+                system_name=system_name,
+                processor=processor,
+                architectures=architectures,
+            ):
+                result = self.run_resolver(system_name, processor, architectures)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn(f"NEVERD_RESULT={expected}", result.stdout)
+
+    def test_unsupported_hosts_fail_with_actionable_diagnostics(self):
+        cases = (
+            ("Darwin", "arm64", "arm64;x86_64", "universal builds"),
+            ("Darwin", "x86_64", "", "only publishes arm64"),
+            ("Linux", "aarch64", "", "only publishes x86_64"),
+            ("Windows", "ARM64", "", "only publishes x64"),
+            ("FreeBSD", "x86_64", "", "does not publish"),
+        )
+
+        for system_name, processor, architectures, diagnostic in cases:
+            with self.subTest(
+                system_name=system_name,
+                processor=processor,
+                architectures=architectures,
+            ):
+                result = self.run_resolver(system_name, processor, architectures)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(diagnostic, result.stdout)
+
+    def create_test_package(
+        self,
+        release_directory: Path,
+        package: str,
+        archive_extension: str,
+        checksum: str | None = None,
+    ) -> Path:
+        package_directory = release_directory / package
+        llvm_config = package_directory / "lib" / "cmake" / "llvm" / "LLVMConfig.cmake"
+        llvm_config.parent.mkdir(parents=True)
+        llvm_config.write_text("set(LLVM_PACKAGE_VERSION 23.0.0)\n", encoding="utf-8")
+
+        archive = release_directory / f"{package}.{archive_extension}"
+        if archive_extension == "tar.xz":
+            with tarfile.open(archive, "w:xz") as output:
+                output.add(package_directory, arcname=package)
+        elif archive_extension == "zip":
+            with zipfile.ZipFile(
+                archive, "w", compression=zipfile.ZIP_DEFLATED
+            ) as output:
+                for source in sorted(package_directory.rglob("*")):
+                    if source.is_file():
+                        output.write(source, source.relative_to(release_directory))
+        else:
+            self.fail(f"unsupported test archive extension: {archive_extension}")
+
+        shutil.rmtree(package_directory)
+        actual_checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+        archive.with_name(f"{archive.name}.sha256").write_text(
+            f"{checksum or actual_checksum}  {archive.name}\n",
+            encoding="ascii",
+        )
+        return archive
+
+    def run_fetcher(
+        self,
+        system_name: str,
+        processor: str,
+        release_directory: Path,
+        cache_directory: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        script = release_directory / "fetch.cmake"
+        script.write_text(
+            f"""
+set(CMAKE_HOST_SYSTEM_NAME "{system_name}")
+set(CMAKE_HOST_SYSTEM_PROCESSOR "{processor}")
+set(CMAKE_OSX_ARCHITECTURES "")
+set(NEVERD_LLVM_PREBUILT_TAG "test-tag" CACHE STRING "" FORCE)
+set(NEVERD_LLVM_PREBUILT_BASE_URL "{release_directory.as_uri()}" CACHE STRING "" FORCE)
+set(NEVERD_LLVM_PREBUILT_CACHE_DIR "{cache_directory.as_posix()}" CACHE PATH "" FORCE)
+include("{CONSUMER.as_posix()}")
+neverd_fetch_prebuilt_llvm()
+message(STATUS "FETCHED_LLVM_DIR=${{LLVM_DIR}}")
+""".lstrip(),
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            ["cmake", "-P", str(script)],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+
+    def test_each_archive_format_is_verified_and_extracted(self):
+        cases = (
+            (
+                "Darwin",
+                "arm64",
+                "arm64",
+                "neverd-llvm-macos-arm64",
+                "tar.xz",
+            ),
+            (
+                "Linux",
+                "x86_64",
+                "x86_64",
+                "neverd-llvm-linux-x86_64",
+                "tar.xz",
+            ),
+            (
+                "Windows",
+                "AMD64",
+                "x64",
+                "neverd-llvm-windows-x64",
+                "zip",
+            ),
+        )
+
+        for system_name, processor, arch, package, extension in cases:
+            with self.subTest(system_name=system_name), tempfile.TemporaryDirectory(
+                prefix="neverd-prebuilt-fetch-"
+            ) as tmp:
+                temporary_root = Path(tmp)
+                release_directory = temporary_root / "release"
+                cache_directory = temporary_root / "cache"
+                release_directory.mkdir()
+                self.create_test_package(release_directory, package, extension)
+
+                result = self.run_fetcher(
+                    system_name,
+                    processor,
+                    release_directory,
+                    cache_directory,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stdout)
+                expected_config = (
+                    cache_directory
+                    / "test-tag"
+                    / arch
+                    / package
+                    / "lib"
+                    / "cmake"
+                    / "llvm"
+                    / "LLVMConfig.cmake"
+                )
+                self.assertTrue(expected_config.is_file(), result.stdout)
+                self.assertIn("NeverD prebuilt LLVM: checksum OK", result.stdout)
+
+    def test_checksum_mismatch_rejects_and_removes_archive(self):
+        with tempfile.TemporaryDirectory(
+            prefix="neverd-prebuilt-checksum-"
+        ) as tmp:
+            temporary_root = Path(tmp)
+            release_directory = temporary_root / "release"
+            cache_directory = temporary_root / "cache"
+            release_directory.mkdir()
+            package = "neverd-llvm-linux-x86_64"
+            archive = self.create_test_package(
+                release_directory,
+                package,
+                "tar.xz",
+                checksum="0" * 64,
+            )
+
+            result = self.run_fetcher(
+                "Linux", "x86_64", release_directory, cache_directory
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("SHA256 mismatch", result.stdout)
+            cached_archive = cache_directory / "test-tag" / "x86_64" / archive.name
+            self.assertFalse(cached_archive.exists(), result.stdout)
+
+    def test_cache_default_uses_userprofile_when_home_is_unset(self):
+        with tempfile.TemporaryDirectory(
+            prefix="neverd-prebuilt-home-"
+        ) as tmp:
+            temporary_root = Path(tmp)
+            user_profile = temporary_root / "windows-user"
+            script = temporary_root / "cache-default.cmake"
+            script.write_text(
+                f"""
+include("{CONSUMER.as_posix()}")
+message(STATUS "DEFAULT_CACHE=${{NEVERD_LLVM_PREBUILT_CACHE_DIR}}")
+""".lstrip(),
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment.pop("HOME", None)
+            environment["USERPROFILE"] = str(user_profile)
+
+            result = subprocess.run(
+                ["cmake", "-P", str(script)],
+                cwd=ROOT,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn(
+                f"DEFAULT_CACHE={user_profile.as_posix()}/.cache/neverd-llvm",
+                result.stdout,
+            )
+
+
+class PrebuiltLlvmDocumentationTests(unittest.TestCase):
+    def test_readme_documents_hosts_rebuilds_and_caches(self):
+        source = README.read_text(encoding="utf-8")
+
+        for expected in (
+            "macOS arm64",
+            "Linux x86_64",
+            "Windows x64",
+            "overwrite_existing_assets",
+            "neverd-llvm-v23.0.0-r1",
+            "sccache",
+            "GitHub Actions cache",
+            ".cache/neverd-llvm/neverd-llvm-v23.0.0",
+            "use_prebuilt_llvm",
+            "push and pull-request CI",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source)
+
+        self.assertRegex(source, r"only a manually\s+selected `true`")
+
+
+if __name__ == "__main__":
+    unittest.main()

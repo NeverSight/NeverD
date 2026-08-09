@@ -123,6 +123,53 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build
 ```
 
+NeverD's normal push and pull-request CI deliberately builds the LLVM submodule
+from source. When manually running the `CI` workflow, select
+`use_prebuilt_llvm` to validate the published packages; only a manually
+selected `true` enables prebuilt LLVM. Leaving it unchecked keeps the same
+source-build path as automatic CI.
+
+Published packages are selected from the host running CMake:
+
+| Host | Release asset |
+|------|---------------|
+| macOS arm64 | `neverd-llvm-macos-arm64.tar.xz` |
+| Linux x86_64 | `neverd-llvm-linux-x86_64.tar.xz` |
+| Windows x64 | `neverd-llvm-windows-x64.zip` |
+
+Each archive is checked against its published `.sha256` file before extraction
+under `~/.cache/neverd-llvm/<tag>/<arch>/` (or the path set by
+`NEVERD_LLVM_PREBUILT_CACHE_DIR`). The release build uses ccache on macOS and
+Linux. Windows clang-cl builds use sccache with the GitHub Actions cache
+backend; compiler caches only accelerate rebuilds and are never published as
+release assets.
+
+The release tag versions the NeverD package, while `BUILDINFO.txt` records the
+exact LLVM fork commit. If LLVM still reports `23.0.0` but the fork source has
+changed, the normal immutable choice is a package revision such as
+`neverd-llvm-v23.0.0-r1` (then `-r2`) — not `23.0.1`, unless LLVM's own patch
+version changed. Point `NEVERD_LLVM_PREBUILT_TAG` at that new revision.
+
+To repair the existing mutable `neverd-llvm-v23.0.0` release in place, run the
+`NeverD LLVM Release` workflow from the llvm-project `main` branch and enable
+`overwrite_existing_assets`:
+
+```bash
+gh workflow run neverd-release.yml \
+  --repo NeverSight/llvm-project \
+  --ref main \
+  -f release_tag=neverd-llvm-v23.0.0 \
+  -f overwrite_existing_assets=true
+```
+
+This replaces same-named assets but deliberately does not force-move the
+existing Git tag. Consumers cache by tag, so an in-place repair also requires
+removing the existing
+`~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` directory; a new `-rN` tag avoids
+that cache ambiguity. The workflow rejects accidental replacement unless the
+checkbox is enabled and rejects replacement entirely if GitHub marks the
+release immutable.
+
 **Artifacts**
 
 | Path | Description |
