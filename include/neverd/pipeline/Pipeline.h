@@ -15,6 +15,7 @@
 #define NEVERD_PIPELINE_PIPELINE_H
 
 #include "neverd/debug/DebugContext.h"
+#include "neverd/evm/EVMIR.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
@@ -47,6 +48,8 @@ struct PipelineOptions {
   bool LiftMode = false;
   size_t MaxFunctions = 0;
   std::string OutputFile;
+  evm::Hardfork EVMFork = evm::Hardfork::Latest;
+  bool EVMStrict = true;
 };
 
 struct PipelineResult {
@@ -54,6 +57,8 @@ struct PipelineResult {
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;
   std::unique_ptr<llvm::Module> LlvmModule;
+  std::unique_ptr<evm::EVMProgram> EVM;
+  std::string Error;
   bool Success = false;
 };
 

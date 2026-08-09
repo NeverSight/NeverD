@@ -1,0 +1,19 @@
+//===- EVMExitStatuses.def - Lifted-program exit status database -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. These values are the stable
+// ABI shared by the LLVM, C, and Solidity backends.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_EXIT_STATUS
+#define EVM_EXIT_STATUS(NAME, C_NAME, VALUE)
+#endif
+
+EVM_EXIT_STATUS(Stopped, NEVERD_EVM_STOPPED, 0)
+EVM_EXIT_STATUS(Returned, NEVERD_EVM_RETURNED, 1)
+EVM_EXIT_STATUS(Reverted, NEVERD_EVM_REVERTED, 2)
+EVM_EXIT_STATUS(SelfDestructed, NEVERD_EVM_SELFDESTRUCTED, 3)
+
+#undef EVM_EXIT_STATUS

@@ -22,6 +22,7 @@
 #define NEVERD_TOOLS_NEVERDCLI_H
 
 #include "neverd/sdk/NeverDCAPI.h"
+#include "neverd/evm/Opcodes.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
@@ -75,6 +76,17 @@ inline std::string takeLastError(neverd_session_t Sess) {
   std::string Result = Error ? Error : "";
   neverd_free_string(Error);
   return Result;
+}
+
+inline llvm::StringRef
+outputLanguageDisplayName(neverd_output_language_t Language) {
+  switch (Language) {
+#define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
+  case NEVERD_OUTPUT_##NAME:                                                  \
+    return DISPLAY_NAME;
+#include "neverd/OutputLanguages.def"
+  }
+  return "unknown";
 }
 
 /// Parse an address argument that may carry an optional "0x" prefix; both
@@ -152,6 +164,9 @@ extern llvm::cl::opt<bool> DumpHigh;
 
 // Decompile.
 extern llvm::cl::opt<bool> LlvmRoute;
+extern llvm::cl::opt<neverd_output_language_t> OutputLanguage;
+extern llvm::cl::opt<evm::Hardfork> EVMHardfork;
+extern llvm::cl::opt<bool> EVMRelaxed;
 
 // Strings.
 extern llvm::cl::opt<unsigned> MinStrLen;

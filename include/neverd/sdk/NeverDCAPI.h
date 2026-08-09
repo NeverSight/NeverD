@@ -33,6 +33,12 @@ extern "C" {
 typedef void *neverd_session_t;
 typedef unsigned long long neverd_va_t;
 
+typedef enum neverd_output_language {
+#define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
+  NEVERD_OUTPUT_##NAME = VALUE,
+#include "neverd/OutputLanguages.def"
+} neverd_output_language_t;
+
 // ===--------------------------------------------------------------------===//
 // Session lifecycle
 // ===--------------------------------------------------------------------===//
@@ -51,6 +57,8 @@ NEVERD_API const char *neverd_session_file_path(neverd_session_t Sess);
 NEVERD_API const char *neverd_session_arch_name(neverd_session_t Sess);
 NEVERD_API const char *neverd_session_format_name(neverd_session_t Sess);
 NEVERD_API int neverd_session_is_64bit(neverd_session_t Sess);
+/// Return the target word size (32, 64, or 256), or 0 when unloaded.
+NEVERD_API int neverd_session_bitness(neverd_session_t Sess);
 
 // ===--------------------------------------------------------------------===//
 // Function list
@@ -434,6 +442,15 @@ NEVERD_API const char *neverd_decompile_all(neverd_session_t Sess,
                                             const char *InputPath,
                                             int UseLlvmRoute, int NoOpt,
                                             int MaxFunctions);
+/// Decompile with an explicit output language. Solidity is supported for EVM
+/// inputs; native binaries return an actionable unsupported-language error.
+NEVERD_API const char *neverd_decompile_all_ex(
+    neverd_session_t Sess, const char *InputPath,
+    neverd_output_language_t Language, int NoOpt, int MaxFunctions);
+/// Configure EVM analysis for subsequent session and high-level operations.
+NEVERD_API void neverd_evm_set_strict(neverd_session_t Sess, int Strict);
+NEVERD_API int neverd_evm_set_hardfork(neverd_session_t Sess,
+                                       const char *Hardfork);
 NEVERD_API int neverd_inject_hello(neverd_session_t Sess);
 NEVERD_API const char *neverd_disasm_text(neverd_session_t Sess,
                                           const char *FuncNameOrAddr,

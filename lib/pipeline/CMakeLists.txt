@@ -12,4 +12,5 @@ add_neverd_component_library(NeverDPipeline
   Lift
   BackendLLVM
   DebugInfo
+  EVM
 )

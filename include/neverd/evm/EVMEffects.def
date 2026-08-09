@@ -1,0 +1,32 @@
+//===- EVMEffects.def - EVM semantic effect database ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. It is a hand-maintained LLVM
+// style definition database and may be included repeatedly with EVM_EFFECT
+// defined to generate enums, names, and validation tables.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_EFFECT
+#define EVM_EFFECT(NAME, SPELLING)
+#endif
+
+EVM_EFFECT(None, "pure")
+EVM_EFFECT(MemoryRead, "memory.read")
+EVM_EFFECT(MemoryWrite, "memory.write")
+EVM_EFFECT(StorageRead, "storage.read")
+EVM_EFFECT(StorageWrite, "storage.write")
+EVM_EFFECT(TransientRead, "transient.read")
+EVM_EFFECT(TransientWrite, "transient.write")
+EVM_EFFECT(ContextRead, "context.read")
+EVM_EFFECT(ExternalCall, "external.call")
+EVM_EFFECT(Create, "create")
+EVM_EFFECT(Log, "log")
+EVM_EFFECT(Return, "return")
+EVM_EFFECT(Revert, "revert")
+EVM_EFFECT(Halt, "halt")
+EVM_EFFECT(Control, "control")
+EVM_EFFECT(Unknown, "unknown")
+
+#undef EVM_EFFECT

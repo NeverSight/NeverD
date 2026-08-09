@@ -1,0 +1,18 @@
+//===- OutputLanguages.def - NeverD source language database ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. It is shared by the C ABI and
+// the C++ command-line parser, so numeric ABI values and user-facing spellings
+// remain one definition.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_OUTPUT_LANGUAGE
+#define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)
+#endif
+
+NEVERD_OUTPUT_LANGUAGE(C, 0, "c", "C")
+NEVERD_OUTPUT_LANGUAGE(SOLIDITY, 1, "solidity", "Solidity")
+
+#undef NEVERD_OUTPUT_LANGUAGE

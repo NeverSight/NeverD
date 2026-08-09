@@ -9,7 +9,11 @@ add_neverd_component_library(NeverDLoader
   COFF/COFFLoaderUtils.cpp
   ELF/ELFLoader.cpp
   ELF/ELFLoaderUtils.cpp
+  EVM/EVMLoader.cpp
   MachO/MachOLoader.cpp
   MachO/MachORelocations.cpp
   MachO/MachOLoaderUtils.cpp
+
+  LINK_COMPONENTS
+  EVM
 )

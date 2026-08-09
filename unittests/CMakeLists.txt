@@ -21,6 +21,7 @@ add_neverd_unittest(NeverDTestProcessTests
 add_subdirectory(libc)
 add_subdirectory(lift)
 add_subdirectory(semantic)
+add_subdirectory(evm)
 
 # One-shot test runners (like NeverC's check-neverc): build deps, then invoke
 # CTest.  Pure CMake/CTest — no shell scripts, so it works the same on

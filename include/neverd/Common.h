@@ -29,6 +29,7 @@ inline constexpr const char *ModuleName = "neverd_output";
 
 using va_t = uint64_t;
 constexpr va_t InvalidVA = ~va_t(0);
+inline constexpr unsigned kBitsPerByte = 8;
 
 /// Default prefix for auto-generated function symbols (e.g. "sub_1234").
 inline constexpr llvm::StringLiteral kAutoFuncPrefix("sub_");
@@ -66,6 +67,14 @@ inline constexpr llvm::StringLiteral kNdDataPrefix("__nd_data_");
 inline constexpr llvm::StringLiteral kNdTextSection(".ndtext");
 /// Mach-O spelling of \c kNdTextSection.
 inline constexpr llvm::StringLiteral kNdTextSectionMachO("__ndtext");
+
+/// Stable names shared by the EVM loader, generic image model, and public API.
+/// Protocol-only constants remain in neverd/evm/EVMConstants.h.
+inline constexpr llvm::StringLiteral kEVMArchName("evm");
+inline constexpr llvm::StringLiteral kEVMFormatName("EVM");
+inline constexpr llvm::StringLiteral kEVMCodeSegmentName("EVM_CODE");
+inline constexpr llvm::StringLiteral kEVMCodeSectionName(".evm.code");
+inline constexpr llvm::StringLiteral kEVMEntrySymbolName("evm_entry");
 
 /// Prefix for synthesized function-pointer dispatch tables recovered from a
 /// `.data.rel.ro` code-pointer array (callback table / vtable / threaded
@@ -139,9 +148,9 @@ inline bool isDarwinStackProbeName(llvm::StringRef Name) {
   return stripLeadingUnderscores(Name).contains("chkstk");
 }
 
-/// Four ISA targets: 64-bit (X64, AArch64) and 32-bit (X86, ARM).
+/// Native ISA targets plus the 256-bit Ethereum Virtual Machine.
 /// Backend support (lift/codegen/patch): neverd/ir/arch_support.h.
-enum class Arch : uint8_t { X64, AArch64, X86, ARM, Unknown };
+enum class Arch : uint8_t { X64, AArch64, X86, ARM, EVM, Unknown };
 
 enum class InstructionMode : uint8_t { Default, ARM, Thumb };
 
@@ -155,14 +164,29 @@ inline const char *getArchName(Arch A) {
     return "x86";
   case Arch::ARM:
     return "arm";
+  case Arch::EVM:
+    return kEVMArchName.data();
   default:
     return "unknown";
   }
 }
 
-enum class BinaryFormat : uint8_t { ELF, COFF, MachO, Unknown };
+enum class BinaryFormat : uint8_t { ELF, COFF, MachO, EVM, Unknown };
 
-enum class Bitness : uint8_t { Bits32, Bits64, Unknown };
+enum class Bitness : uint8_t { Bits32, Bits64, Bits256, Unknown };
+
+inline constexpr unsigned getBitnessValue(Bitness B) {
+  switch (B) {
+  case Bitness::Bits32:
+    return 32;
+  case Bitness::Bits64:
+    return 64;
+  case Bitness::Bits256:
+    return 256;
+  default:
+    return 0;
+  }
+}
 
 inline const char *getBitnessName(Bitness B) {
   switch (B) {
@@ -170,6 +194,8 @@ inline const char *getBitnessName(Bitness B) {
     return "32";
   case Bitness::Bits64:
     return "64";
+  case Bitness::Bits256:
+    return "256";
   default:
     return "unknown";
   }
@@ -177,6 +203,7 @@ inline const char *getBitnessName(Bitness B) {
 
 inline bool is64Bit(Bitness B) { return B == Bitness::Bits64; }
 inline bool is32Bit(Bitness B) { return B == Bitness::Bits32; }
+inline bool is256Bit(Bitness B) { return B == Bitness::Bits256; }
 
 enum class SegmentFlags : uint32_t {
   None = 0,

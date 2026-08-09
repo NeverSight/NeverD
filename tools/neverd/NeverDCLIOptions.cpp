@@ -37,7 +37,7 @@ std::optional<uint64_t> parseAddrArg(StringRef Ref) {
 //===----------------------------------------------------------------------===//
 
 cl::SubCommand LiftCmd("lift", "Lift binary to LLVM IR");
-cl::SubCommand DecompileCmd("decompile", "Decompile binary to C source");
+cl::SubCommand DecompileCmd("decompile", "Decompile binary to C or Solidity");
 cl::SubCommand PatchCmd("patch", "Patch binary with modified IR");
 cl::SubCommand InfoCmd("info", "Show binary metadata summary");
 cl::SubCommand StringsCmd("strings", "Scan binary for strings");
@@ -208,6 +208,33 @@ cl::opt<bool>
     LlvmRoute("llvm",
               cl::desc("Route through LLVM IR + opt passes (goto-style C)"),
               cl::sub(DecompileCmd));
+
+cl::opt<neverd_output_language_t> OutputLanguage(
+    "language", cl::desc("Output source language"),
+    cl::ValuesClass({
+#define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
+      clEnumValN(NEVERD_OUTPUT_##NAME, SPELLING, DISPLAY_NAME " source"),
+#include "neverd/OutputLanguages.def"
+    }),
+    cl::init(NEVERD_OUTPUT_C), cl::sub(DecompileCmd));
+
+cl::opt<evm::Hardfork> EVMHardfork(
+    "evm-hardfork",
+    cl::desc("EVM hardfork"),
+    cl::ValuesClass({
+#define EVM_HARDFORK(NAME, SPELLING)                                          \
+      clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
+#define EVM_HARDFORK_ALIAS(SPELLING, NAME)                                    \
+      clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
+#include "neverd/evm/EVMHardforks.def"
+    }),
+    cl::init(evm::Hardfork::Latest), cl::sub(LiftCmd),
+    cl::sub(DecompileCmd));
+
+cl::opt<bool> EVMRelaxed(
+    "evm-relaxed",
+    cl::desc("Keep unknown/inactive EVM opcodes as explicit fault nodes"),
+    cl::sub(LiftCmd), cl::sub(DecompileCmd));
 
 //===----------------------------------------------------------------------===//
 // Strings-specific options

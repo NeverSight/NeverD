@@ -115,6 +115,10 @@ int neverd_patch_from_ir(neverd_session_t Sess, const char *IRText,
     S->setError("no binary loaded");
     return 0;
   }
+  if (S->Img.Arch == Arch::EVM) {
+    S->setError("binary patching is not supported for EVM bytecode");
+    return 0;
+  }
   if (!IRText) {
     S->setError("IR text is null");
     return 0;
@@ -189,6 +193,10 @@ int neverd_patch_from_c(neverd_session_t Sess, const char *CText,
 
   if (!S->Loaded) {
     S->setError("no binary loaded");
+    return 0;
+  }
+  if (S->Img.Arch == Arch::EVM) {
+    S->setError("binary patching is not supported for EVM bytecode");
     return 0;
   }
   if (!CText) {
@@ -347,6 +355,11 @@ int neverd_patch_full(neverd_session_t Sess, const char *InputPath,
   if (!R.load(InputPath, Err)) {
     if (S)
       S->setError(Err);
+    return 1;
+  }
+  if (R.Img.Arch == Arch::EVM) {
+    if (S)
+      S->setError("binary patching is not supported for EVM bytecode");
     return 1;
   }
 

@@ -55,7 +55,8 @@ bool PipelineRunner::load(const char *InputPath, std::string &Err) {
     return false;
   }
   Img = std::move(*ImgOrErr);
-  Dbg = DWARFDebugContext::load(Path, Img.Format);
+  if (Img.Arch != Arch::EVM)
+    Dbg = DWARFDebugContext::load(Path, Img.Format);
   return true;
 }
 
@@ -63,7 +64,7 @@ bool PipelineRunner::run(PipelineOptions Opts, std::string &Err) {
   Pipeline ThePipeline;
   Result = ThePipeline.run(Img, LLVMCtx, Opts, Dbg.get());
   if (!Result.Success) {
-    Err = "pipeline failed";
+    Err = Result.Error.empty() ? "pipeline failed" : Result.Error;
     return false;
   }
   return true;
@@ -113,7 +114,7 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   S->Annotations.clear();
   S->Renames.clear();
 
-  if (!S->Dec.init(S->Img.Arch, S->Img.Mode)) {
+  if (S->Img.Arch != Arch::EVM && !S->Dec.init(S->Img.Arch, S->Img.Mode)) {
     S->setError("failed to init decoder for arch");
     S->Loaded = false;
     return 0;
@@ -159,6 +160,13 @@ const char *neverd_session_format_name(neverd_session_t Sess) {
 int neverd_session_is_64bit(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   return (S->Loaded && S->Img.is64Bit()) ? 1 : 0;
+}
+
+int neverd_session_bitness(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  if (!S || !S->Loaded)
+    return 0;
+  return static_cast<int>(getBitnessValue(S->Img.Bits));
 }
 
 // ===--------------------------------------------------------------------===//

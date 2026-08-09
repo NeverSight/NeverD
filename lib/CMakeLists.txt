@@ -1,4 +1,5 @@
 add_subdirectory(ir)
+add_subdirectory(evm)
 add_subdirectory(loader)
 add_subdirectory(decode)
 add_subdirectory(lift)

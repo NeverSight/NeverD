@@ -14,8 +14,10 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/ELF/ELFLoader.h"
+#include "neverd/loader/EVM/EVMLoader.h"
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/ObjectFileUtils.h"
+#include "neverd/evm/Bytecode.h"
 
 namespace neverd {
 
@@ -27,6 +29,8 @@ std::unique_ptr<Loader> Loader::create(BinaryFormat Format) {
     return std::make_unique<COFFLoader>();
   case BinaryFormat::MachO:
     return std::make_unique<MachOLoader>();
+  case BinaryFormat::EVM:
+    return std::make_unique<EVMLoader>();
   default:
     return nullptr;
   }
@@ -34,8 +38,12 @@ std::unique_ptr<Loader> Loader::create(BinaryFormat Format) {
 
 std::unique_ptr<Loader> Loader::create(const std::filesystem::path &Path) {
   BinaryFormat Fmt = detectFormat(Path);
-  if (Fmt == BinaryFormat::Unknown)
-    return nullptr;
+  if (Fmt == BinaryFormat::Unknown) {
+    if (evm::hasEVMFileExtension(Path) || evm::looksLikeEVMInput(Path))
+      Fmt = BinaryFormat::EVM;
+    else
+      return nullptr;
+  }
   return create(Fmt);
 }
 

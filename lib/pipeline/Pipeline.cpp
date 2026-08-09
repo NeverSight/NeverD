@@ -18,6 +18,8 @@
 #include "neverd/Support/Parallel.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/evm/Analyzer.h"
+#include "neverd/evm/LLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -837,6 +839,36 @@ void Pipeline::buildHighIR(const BinaryImage &Img,
 PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                              const PipelineOptions &Opts, DebugContext *Dbg) {
   PipelineResult Result;
+
+  if (Img.Arch == Arch::EVM) {
+    evm::AnalyzeOptions EVMOptions;
+    EVMOptions.Fork = Opts.EVMFork;
+    EVMOptions.Strict = Opts.EVMStrict;
+    auto Program = evm::analyze(Img.Raw, EVMOptions);
+    if (!Program) {
+      Result.Error = llvm::toString(Program.takeError());
+      return Result;
+    }
+    Result.EVM = std::make_unique<evm::EVMProgram>(std::move(*Program));
+    if (Opts.EmitDumpOutput) {
+      if (Opts.DumpLow)
+        llvm::outs() << evm::dumpLowIR(Result.EVM->Low);
+      if (Opts.DumpMed)
+        llvm::outs() << evm::dumpMedIR(Result.EVM->Med);
+      if (Opts.DumpHigh)
+        llvm::outs() << evm::dumpHighIR(Result.EVM->High);
+    }
+    if (Opts.LiftMode || Opts.PatchMode || Opts.DumpLlvm) {
+      auto Module = evm::emitLLVM(*Result.EVM, Ctx);
+      if (!Module) {
+        Result.Error = llvm::toString(Module.takeError());
+        return Result;
+      }
+      Result.LlvmModule = std::move(*Module);
+    }
+    Result.Success = true;
+    return Result;
+  }
 
   Decoder Dec;
   if (!Dec.init(Img.Arch, Img.Mode)) {

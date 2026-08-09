@@ -37,6 +37,22 @@ using namespace llvm;
 
 namespace neverd::cli {
 
+namespace {
+
+bool configureEVM(neverd_session_t Sess) {
+  neverd_evm_set_strict(Sess, EVMRelaxed ? 0 : 1);
+  const std::string ForkName =
+      evm::hardforkName(EVMHardfork.getValue()).str();
+  if (!neverd_evm_set_hardfork(Sess, ForkName.c_str())) {
+    WithColor::error() << "invalid EVM hardfork: " << takeLastError(Sess)
+                       << "\n";
+    return false;
+  }
+  return true;
+}
+
+} // namespace
+
 int runPlugins(const char *Argv0) {
   neverd_session_t Sess = neverd_session_create();
   SessionGuard SessGuard(Sess);
@@ -116,6 +132,8 @@ int runPlugins(const char *Argv0) {
 
 int runLift(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
+  if (!configureEVM(Sess))
+    return 1;
 
   if (DumpLow || DumpMed || DumpHigh) {
     int Level = DumpLow ? 0 : (DumpMed ? 1 : 2);
@@ -154,9 +172,19 @@ int runLift(neverd_session_t Sess) {
 int runDecompile(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
 
-  const char *CCode =
-      neverd_decompile_all(Sess, InPath, LlvmRoute ? 1 : 0, NoOpt, MaxFunc);
-  if (!CCode) {
+  if (!configureEVM(Sess))
+    return 1;
+
+  const neverd_output_language_t Language = OutputLanguage.getValue();
+  const bool Solidity = Language == NEVERD_OUTPUT_SOLIDITY;
+  const char *Source = Solidity
+                           ? neverd_decompile_all_ex(
+                                 Sess, InPath, NEVERD_OUTPUT_SOLIDITY, NoOpt,
+                                 MaxFunc)
+                           : neverd_decompile_all(Sess, InPath,
+                                                  LlvmRoute ? 1 : 0, NoOpt,
+                                                  MaxFunc);
+  if (!Source) {
     WithColor::error() << "decompile failed: " << takeLastError(Sess) << "\n";
     return 1;
   }
@@ -165,15 +193,16 @@ int runDecompile(neverd_session_t Sess) {
     raw_fd_ostream OS(OutputFile, EC);
     if (EC) {
       WithColor::error() << "cannot open: " << EC.message() << "\n";
-      neverd_free_string(CCode);
+      neverd_free_string(Source);
       return 1;
     }
-    OS << CCode;
-    outs() << "C source written to " << OutputFile.getValue() << "\n";
+    OS << Source;
+    outs() << outputLanguageDisplayName(Language) << " source written to "
+           << OutputFile.getValue() << "\n";
   } else {
-    outs() << CCode;
+    outs() << Source;
   }
-  neverd_free_string(CCode);
+  neverd_free_string(Source);
   return 0;
 }
 

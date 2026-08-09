@@ -481,6 +481,61 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
   if (!S->ensurePipeline())
     return dupStr(std::string("{}"));
 
+  if (S->PipeResult.EVM) {
+    if (FuncEntry != 0) {
+      S->setError("EVM program entry is pc 0");
+      return dupStr(std::string("{}"));
+    }
+    llvm::json::Array Nodes;
+    llvm::json::Array Edges;
+    for (const auto &Block : S->PipeResult.EVM->Low.Blocks) {
+      llvm::json::Object Node;
+      Node["id"] = static_cast<int64_t>(Block.StartPC);
+      Node["start"] = vaHex(Block.StartPC);
+      Node["end"] = vaHex(Block.EndPC);
+      Node["insn_count"] = static_cast<int64_t>(Block.InstructionCount);
+      Node["reachable"] = Block.Reachable;
+      llvm::json::Array Lines;
+      for (size_t I = Block.FirstInstruction;
+           I < Block.FirstInstruction + Block.InstructionCount; ++I) {
+        const auto &Instruction = S->PipeResult.EVM->Low.Instructions[I];
+        Lines.push_back(vaHex(Instruction.PC) + ": " +
+                        std::string(Instruction.Info.Name));
+      }
+      Node["disasm"] = std::move(Lines);
+      Nodes.push_back(std::move(Node));
+      for (const auto &Successor : Block.Successors) {
+        llvm::json::Object Edge;
+        Edge["from"] = static_cast<int64_t>(Block.StartPC);
+        if (Successor.Target)
+          Edge["to"] = static_cast<int64_t>(*Successor.Target);
+        else
+          Edge["to"] = nullptr;
+        switch (Successor.Kind) {
+        case evm::EdgeKind::ConditionalTrue:
+          Edge["type"] = "true";
+          break;
+        case evm::EdgeKind::ConditionalFalse:
+          Edge["type"] = "false";
+          break;
+        case evm::EdgeKind::Indirect:
+          Edge["type"] = "indirect";
+          break;
+        default:
+          Edge["type"] = "unconditional";
+          break;
+        }
+        Edges.push_back(std::move(Edge));
+      }
+    }
+    llvm::json::Object Root;
+    Root["name"] = kEVMEntrySymbolName;
+    Root["entry"] = "0x0";
+    Root["nodes"] = std::move(Nodes);
+    Root["edges"] = std::move(Edges);
+    return dupStr(jsonToString(llvm::json::Value(std::move(Root))));
+  }
+
   const LowFunc *F = S->findLowFunc(FuncEntry);
   if (!F) {
     S->setError("function not found");
@@ -557,10 +612,31 @@ const char *neverd_cfg_dot(neverd_session_t Sess, const char *InputPath,
     return nullptr;
   }
   PipelineOptions Opts;
+  if (S) {
+    Opts.EVMFork = S->EVMFork;
+    Opts.EVMStrict = S->EVMStrict;
+  }
   if (!R.run(Opts, Err)) {
     if (S)
       S->setError(Err);
     return nullptr;
+  }
+
+  if (R.Result.EVM) {
+    std::string Buf;
+    llvm::raw_string_ostream OS(Buf);
+    OS << "digraph cfg {\n"
+          "  node [shape=box, fontname=\"Courier\", fontsize=10];\n";
+    for (const auto &Block : R.Result.EVM->Low.Blocks)
+      OS << "  bb" << Block.StartPC << " [label=\"PC 0x"
+         << llvm::utohexstr(Block.StartPC) << "\"];\n";
+    for (const auto &Block : R.Result.EVM->Low.Blocks)
+      for (const auto &Edge : Block.Successors)
+        if (Edge.Target)
+          OS << "  bb" << Block.StartPC << " -> bb" << *Edge.Target
+             << ";\n";
+    OS << "}\n";
+    return dupStr(Buf);
   }
 
   std::string FN(FuncNameOrAddr ? FuncNameOrAddr : "");

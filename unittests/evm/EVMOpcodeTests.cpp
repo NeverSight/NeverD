@@ -1,0 +1,145 @@
+//===- EVMOpcodeTests.cpp - EVM opcode metadata tests --------------------===//
+
+#include "gtest/gtest.h"
+
+#include "neverd/evm/Opcodes.h"
+
+namespace neverd::evm {
+namespace {
+
+TEST(EVMOpcodeMetadata, FrontierAddHasExactStackContract) {
+  const auto Info = opcodeInfo(Opcode::ADD, Hardfork::Frontier);
+  ASSERT_TRUE(Info.has_value());
+  EXPECT_EQ(Info->Name, "ADD");
+  EXPECT_EQ(Info->StackInputs, 2);
+  EXPECT_EQ(Info->StackOutputs, 1);
+  EXPECT_FALSE(Info->IsTerminator);
+  EXPECT_TRUE(Info->IsView);
+  EXPECT_TRUE(Info->IsPure);
+  EXPECT_EQ(Info->Effect, EffectKind::None);
+  EXPECT_EQ(opcodeByte(Info->Op), 0x01u);
+}
+
+TEST(EVMOpcodeMetadata, LatestContainsTheCompleteAssignedLegacySet) {
+  unsigned Assigned = 0;
+  for (unsigned Byte = 0; Byte <= 0xff; ++Byte)
+    Assigned +=
+        opcodeInfo(static_cast<uint8_t>(Byte), Hardfork::Fusaka).has_value();
+
+  EXPECT_EQ(Assigned, 150u);
+
+  struct ExpectedOpcode {
+    Opcode Op;
+    const char *Name;
+    uint8_t StackInputs;
+    uint8_t StackOutputs;
+    bool IsTerminator;
+  };
+  constexpr ExpectedOpcode Expected[] = {
+      {Opcode::STOP, "STOP", 0, 0, true},
+      {Opcode::SIGNEXTEND, "SIGNEXTEND", 2, 1, false},
+      {Opcode::CLZ, "CLZ", 1, 1, false},
+      {Opcode::SHA3, "SHA3", 2, 1, false},
+      {Opcode::CALLDATALOAD, "CALLDATALOAD", 1, 1, false},
+      {Opcode::BLOBHASH, "BLOBHASH", 1, 1, false},
+      {Opcode::BLOBBASEFEE, "BLOBBASEFEE", 0, 1, false},
+      {Opcode::SLOAD, "SLOAD", 1, 1, false},
+      {Opcode::SSTORE, "SSTORE", 2, 0, false},
+      {Opcode::JUMPI, "JUMPI", 2, 0, false},
+      {Opcode::TLOAD, "TLOAD", 1, 1, false},
+      {Opcode::TSTORE, "TSTORE", 2, 0, false},
+      {Opcode::MCOPY, "MCOPY", 3, 0, false},
+      {Opcode::PUSH0, "PUSH0", 0, 1, false},
+      {Opcode::PUSH32, "PUSH32", 0, 1, false},
+      {Opcode::DUP16, "DUP16", 16, 17, false},
+      {Opcode::SWAP16, "SWAP16", 17, 17, false},
+      {Opcode::LOG4, "LOG4", 6, 0, false},
+      {Opcode::CREATE2, "CREATE2", 4, 1, false},
+      {Opcode::STATICCALL, "STATICCALL", 6, 1, false},
+      {Opcode::REVERT, "REVERT", 2, 0, true},
+      {Opcode::INVALID, "INVALID", 0, 0, true},
+      {Opcode::SELFDESTRUCT, "SELFDESTRUCT", 1, 0, true},
+  };
+
+  for (const auto &Want : Expected) {
+    const auto Info = opcodeInfo(Want.Op, Hardfork::Fusaka);
+    ASSERT_TRUE(Info.has_value())
+        << "opcode 0x" << std::hex
+        << static_cast<unsigned>(opcodeByte(Want.Op));
+    EXPECT_EQ(Info->Name, llvm::StringRef(Want.Name));
+    EXPECT_EQ(Info->StackInputs, Want.StackInputs) << Info->Name.str();
+    EXPECT_EQ(Info->StackOutputs, Want.StackOutputs) << Info->Name.str();
+    EXPECT_EQ(Info->IsTerminator, Want.IsTerminator) << Info->Name.str();
+  }
+
+  EXPECT_FALSE(opcodeInfo(0x0c, Hardfork::Fusaka).has_value());
+  EXPECT_EQ(opcodeName(0x0c, Hardfork::Fusaka), "UNKNOWN");
+}
+
+TEST(EVMOpcodeMetadata, DefinitionDatabaseRoundTripsEveryAssignedByte) {
+  unsigned Assigned = 0;
+  for (unsigned Byte = 0; Byte < kOpcodeSpaceSize; ++Byte) {
+    const auto Info = opcodeInfo(static_cast<uint8_t>(Byte), Hardfork::Latest);
+    if (!Info)
+      continue;
+    ++Assigned;
+    EXPECT_EQ(opcodeByte(Info->Op), Byte);
+    EXPECT_FALSE(Info->Name.empty());
+    EXPECT_EQ(opcodeName(Info->Op, Hardfork::Latest), Info->Name);
+  }
+  EXPECT_EQ(Assigned, kAssignedOpcodeCount);
+  EXPECT_EQ(kAssignedOpcodeCount, 150u);
+  EXPECT_EQ(maxOpcodeStackInputs(), 17u);
+  EXPECT_EQ(maxHostOpcodeArguments(), 7u);
+}
+
+TEST(EVMOpcodeMetadata, OpcodeFamiliesExposeWidthsAndDepthsWithoutMagicRanges) {
+  EXPECT_TRUE(isPush(Opcode::PUSH0));
+  EXPECT_TRUE(isPush(Opcode::PUSH32));
+  EXPECT_FALSE(isPush(Opcode::DUP1));
+  EXPECT_EQ(pushDataSize(Opcode::PUSH0), 0u);
+  EXPECT_EQ(pushDataSize(Opcode::PUSH1), 1u);
+  EXPECT_EQ(pushDataSize(Opcode::PUSH32), kWordBytes);
+
+  EXPECT_EQ(dupDepth(Opcode::DUP1), 1u);
+  EXPECT_EQ(dupDepth(Opcode::DUP16), 16u);
+  EXPECT_EQ(dupDepth(Opcode::ADD), 0u);
+  EXPECT_EQ(swapDepth(Opcode::SWAP1), 1u);
+  EXPECT_EQ(swapDepth(Opcode::SWAP16), 16u);
+  EXPECT_EQ(logTopicCount(Opcode::LOG0), 0u);
+  EXPECT_EQ(logTopicCount(Opcode::LOG4), 4u);
+  EXPECT_TRUE(isJump(Opcode::JUMP));
+  EXPECT_TRUE(isJump(Opcode::JUMPI));
+  EXPECT_FALSE(isJump(Opcode::JUMPDEST));
+}
+
+TEST(EVMOpcodeMetadata, EffectsComeFromTheInstructionDatabase) {
+  EXPECT_EQ(opcodeInfo(Opcode::MLOAD)->Effect, EffectKind::MemoryRead);
+  EXPECT_EQ(opcodeInfo(Opcode::SSTORE)->Effect, EffectKind::StorageWrite);
+  EXPECT_EQ(opcodeInfo(Opcode::STATICCALL)->Effect,
+            EffectKind::ExternalCall);
+  EXPECT_EQ(opcodeInfo(Opcode::LOG4)->Effect, EffectKind::Log);
+  EXPECT_EQ(effectName(EffectKind::TransientWrite), "transient.write");
+}
+
+TEST(EVMOpcodeMetadata, HardforkActivationIsExplicitAndNameAware) {
+  EXPECT_FALSE(opcodeInfo(0x5f, Hardfork::London).has_value());
+  EXPECT_TRUE(opcodeInfo(0x5f, Hardfork::Shanghai).has_value());
+  EXPECT_FALSE(opcodeInfo(0x5c, Hardfork::Shanghai).has_value());
+  EXPECT_TRUE(opcodeInfo(0x5c, Hardfork::Cancun).has_value());
+  EXPECT_FALSE(opcodeInfo(0x1e, Hardfork::Pectra).has_value());
+  EXPECT_TRUE(opcodeInfo(0x1e, Hardfork::Fusaka).has_value());
+
+  EXPECT_EQ(opcodeName(0x44, Hardfork::London), "DIFFICULTY");
+  EXPECT_EQ(opcodeName(0x44, Hardfork::Paris), "PREVRANDAO");
+  EXPECT_EQ(parseHardfork("CaNcUn"), Hardfork::Cancun);
+  EXPECT_EQ(parseHardfork("berlin"), Hardfork::Berlin);
+  EXPECT_EQ(parseHardfork("merge"), Hardfork::Paris);
+  EXPECT_EQ(parseHardfork("prague"), Hardfork::Pectra);
+  EXPECT_EQ(parseHardfork("osaka"), Hardfork::Fusaka);
+  EXPECT_EQ(hardforkName(Hardfork::Latest), "fusaka");
+  EXPECT_FALSE(parseHardfork("future-fork").has_value());
+}
+
+} // namespace
+} // namespace neverd::evm

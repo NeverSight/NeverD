@@ -342,7 +342,10 @@ struct BinaryImage {
 
   bool is64Bit() const { return neverd::is64Bit(Bits); }
   bool is32Bit() const { return neverd::is32Bit(Bits); }
-  uint32_t getPointerSize() const { return is64Bit() ? 8 : 4; }
+  bool is256Bit() const { return neverd::is256Bit(Bits); }
+  uint32_t getPointerSize() const {
+    return getBitnessValue(Bits) / kBitsPerByte;
+  }
 
   std::set<va_t> getSymbolAddresses() const {
     std::set<va_t> Addrs;
@@ -459,6 +462,7 @@ struct BinaryImage {
   bool isELF() const { return Format == BinaryFormat::ELF; }
   bool isCOFF() const { return Format == BinaryFormat::COFF; }
   bool isMachO() const { return Format == BinaryFormat::MachO; }
+  bool isEVM() const { return Format == BinaryFormat::EVM; }
 
   /// Get the main code section (".text" / "__text").
   ///
@@ -469,8 +473,7 @@ struct BinaryImage {
   /// executable section. Returns nullptr only when there is no executable
   /// section at all.
   const Section *getTextSection() const {
-    if (const Section *Named = getSectionByName(
-            isMachO() ? section_names::macho::Text : section_names::elf::Text))
+    if (const Section *Named = getSectionByName(getTextSectionName()))
       return Named;
 
     const Section *Best = nullptr;
@@ -651,6 +654,8 @@ struct BinaryImage {
 
   /// Get the format-appropriate text section name.
   llvm::StringRef getTextSectionName() const {
+    if (isEVM())
+      return kEVMCodeSectionName;
     return isMachO() ? section_names::macho::Text : section_names::elf::Text;
   }
 
@@ -682,6 +687,8 @@ struct BinaryImage {
       return "PE";
     case BinaryFormat::MachO:
       return "Mach-O";
+    case BinaryFormat::EVM:
+      return kEVMFormatName.data();
     default:
       return "Unknown";
     }
@@ -923,7 +930,7 @@ struct BinaryImage {
 
   /// Dump a summary for LLVM_DEBUG output (shared by all loaders).
   void debugDumpSummary(llvm::raw_ostream &OS, llvm::StringRef Prefix) const {
-    OS << Prefix << " " << getFormatName() << (is64Bit() ? "64" : "32")
+    OS << Prefix << " " << getFormatName() << getBitnessName(Bits)
        << " | arch=" << getArchName(Arch) << " base=0x" << llvm::utohexstr(Base)
        << " entry=0x" << llvm::utohexstr(Entry) << " segs=" << Segments.size()
        << " secs=" << Sections.size() << " syms=" << Symbols.size()
@@ -977,6 +984,8 @@ private:
       return "coff";
     case BinaryFormat::MachO:
       return "macho";
+    case BinaryFormat::EVM:
+      return kEVMArchName.data();
     default:
       return "loader";
     }

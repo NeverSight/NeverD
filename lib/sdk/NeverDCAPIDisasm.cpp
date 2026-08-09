@@ -11,6 +11,9 @@
 
 #include "SessionImpl.h"
 
+#include "neverd/evm/Analyzer.h"
+
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
 
@@ -19,6 +22,28 @@
 
 using namespace neverd;
 using namespace neverd::sdk;
+
+namespace {
+
+inline constexpr size_t kShortInstructionByteColumnWidth = 18;
+
+std::string evmImmediate(const evm::LowInstruction &Instruction) {
+  if (Instruction.Info.ImmediateBytes == 0)
+    return {};
+  llvm::SmallString<evm::kWordBytes * evm::kHexDigitsPerByte> Digits;
+  Instruction.Immediate.toStringUnsigned(Digits, 16);
+  return "0x" + Digits.str().str();
+}
+
+std::string evmBytes(const evm::LowInstruction &Instruction) {
+  std::string Bytes;
+  for (uint8_t Byte : Instruction.Encoding)
+    Bytes += llvm::utohexstr(Byte, /*LowerCase=*/true,
+                            evm::kHexDigitsPerByte);
+  return Bytes;
+}
+
+} // namespace
 
 // ===--------------------------------------------------------------------===//
 // Disassembly (JSON array)
@@ -33,6 +58,29 @@ const char *neverd_disasm_json(neverd_session_t Sess, neverd_va_t Addr,
   if (!S->Loaded) {
     S->setError("no binary loaded");
     return dupStr(std::string("[]"));
+  }
+
+  if (S->Img.Arch == Arch::EVM) {
+    if (!S->ensurePipeline() || !S->PipeResult.EVM)
+      return dupStr(std::string("[]"));
+    llvm::json::Array EVMInstructions;
+    int Count = 0;
+    for (const auto &Instruction : S->PipeResult.EVM->Low.Instructions) {
+      if (Instruction.PC < Addr)
+        continue;
+      if (MaxInsns > 0 && Count >= MaxInsns)
+        break;
+      llvm::json::Object Object;
+      Object["addr"] = vaHex(Instruction.PC);
+      Object["size"] = static_cast<int64_t>(Instruction.Encoding.size());
+      Object["mnemonic"] = std::string(Instruction.Info.Name);
+      Object["op_str"] = evmImmediate(Instruction);
+      Object["bytes"] = evmBytes(Instruction);
+      EVMInstructions.push_back(std::move(Object));
+      ++Count;
+    }
+    return dupStr(jsonToString(
+        llvm::json::Value(std::move(EVMInstructions))));
   }
 
   llvm::json::Array Arr;
@@ -110,6 +158,28 @@ const char *neverd_disasm_text(neverd_session_t Sess,
   auto *S = static_cast<Session *>(Sess);
   if (!S || !S->Loaded)
     return nullptr;
+
+  if (S->Img.Arch == Arch::EVM) {
+    if (!S->ensurePipeline() || !S->PipeResult.EVM)
+      return nullptr;
+    std::string Buffer;
+    llvm::raw_string_ostream OS(Buffer);
+    OS << "; " << kEVMEntrySymbolName << " (0x0, " << S->Img.Raw.size()
+       << " bytes)\n";
+    for (const auto &Instruction : S->PipeResult.EVM->Low.Instructions) {
+      OS << "  0x" << llvm::utohexstr(Instruction.PC) << "  ";
+      const std::string Bytes = evmBytes(Instruction);
+      OS << Bytes;
+      if (Bytes.size() < kShortInstructionByteColumnWidth)
+        OS.indent(kShortInstructionByteColumnWidth - Bytes.size());
+      OS << " " << Instruction.Info.Name;
+      const std::string Immediate = evmImmediate(Instruction);
+      if (!Immediate.empty())
+        OS << " " << Immediate;
+      OS << "\n";
+    }
+    return dupStr(Buffer);
+  }
 
   const Symbol *Sym = nullptr;
   std::string FN(FuncNameOrAddr ? FuncNameOrAddr : "");

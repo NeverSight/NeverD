@@ -1,0 +1,9 @@
+add_neverd_component_library(NeverDEVM
+  Analyzer.cpp
+  Bytecode.cpp
+  CEmitter.cpp
+  Interpreter.cpp
+  LLVMEmitter.cpp
+  Opcodes.cpp
+  SolidityEmitter.cpp
+)

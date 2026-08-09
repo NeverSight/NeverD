@@ -19,6 +19,7 @@
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/evm/LLVMEmitter.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
@@ -57,6 +58,8 @@ struct Session {
   std::unique_ptr<llvm::LLVMContext> LLVMCtx;
   PipelineResult PipeResult;
   bool PipeRan = false;
+  evm::Hardfork EVMFork = evm::Hardfork::Latest;
+  bool EVMStrict = true;
 
   Decoder Dec;
 
@@ -172,11 +175,13 @@ struct Session {
     }
     LLVMCtx = std::make_unique<llvm::LLVMContext>();
     PipelineOptions Opts;
+    Opts.EVMFork = EVMFork;
+    Opts.EVMStrict = EVMStrict;
     Pipeline ThePipeline;
     PipeResult = ThePipeline.run(Img, *LLVMCtx, Opts);
     PipeRan = true;
     if (!PipeResult.Success)
-      setError("pipeline failed");
+      setError(PipeResult.Error.empty() ? "pipeline failed" : PipeResult.Error);
     return PipeResult.Success;
   }
 
@@ -199,6 +204,15 @@ struct Session {
       return true;
     if (!ensurePipeline())
       return false;
+    if (PipeResult.EVM) {
+      auto Module = evm::emitLLVM(*PipeResult.EVM, *LLVMCtx);
+      if (!Module) {
+        setError(llvm::toString(Module.takeError()));
+        return false;
+      }
+      PipeResult.LlvmModule = std::move(*Module);
+      return true;
+    }
     if (PipeResult.MedFuncs.empty())
       return false;
     std::vector<std::pair<va_t, std::string>> ImportMap;

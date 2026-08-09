@@ -16,6 +16,9 @@
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/evm/Analyzer.h"
+#include "neverd/evm/CEmitter.h"
+#include "neverd/evm/SolidityEmitter.h"
 #include "neverd/ir/NdOps.h"
 
 using namespace neverd;
@@ -31,6 +34,15 @@ const char *neverd_decompile(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   if (!S->ensurePipeline())
     return dupStr(std::string());
+
+  if (S->PipeResult.EVM) {
+    auto Output = evm::emitC(*S->PipeResult.EVM);
+    if (!Output) {
+      S->setError(llvm::toString(Output.takeError()));
+      return dupStr(std::string());
+    }
+    return dupStr(*Output);
+  }
 
   const HighFunc *HF = S->findHighFunc(FuncEntry);
   if (!HF) {
@@ -61,6 +73,9 @@ const char *neverd_ir_low(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   if (!S->ensurePipeline())
     return dupStr(std::string());
+
+  if (S->PipeResult.EVM)
+    return dupStr(evm::dumpLowIR(S->PipeResult.EVM->Low));
 
   const LowFunc *F = S->findLowFunc(FuncEntry);
   if (!F) {
@@ -103,6 +118,9 @@ const char *neverd_ir_med(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   if (!S->ensurePipeline())
     return dupStr(std::string());
+
+  if (S->PipeResult.EVM)
+    return dupStr(evm::dumpMedIR(S->PipeResult.EVM->Med));
 
   for (const auto &F : S->PipeResult.MedFuncs) {
     if (F.Entry != FuncEntry)
@@ -154,6 +172,9 @@ const char *neverd_ir_high(neverd_session_t Sess, neverd_va_t FuncEntry) {
   if (!S->ensurePipeline())
     return dupStr(std::string());
 
+  if (S->PipeResult.EVM)
+    return dupStr(evm::dumpHighIR(S->PipeResult.EVM->High));
+
   const HighFunc *HF = S->findHighFunc(FuncEntry);
   if (!HF) {
     S->setError("function not found in HighIR");
@@ -176,9 +197,13 @@ const char *neverd_ir_llvm(neverd_session_t Sess, neverd_va_t FuncEntry) {
   S->clearError();
 
   if (!S->ensureLlvmModule()) {
-    S->setError("failed to generate LLVM module");
+    if (S->LastError.empty())
+      S->setError("failed to generate LLVM module");
     return dupStr(std::string());
   }
+
+  if (S->PipeResult.EVM)
+    return dupStr(evm::emitLLVMText(*S->PipeResult.LlvmModule));
 
   std::string FuncName = "sub_" + llvm::utohexstr(FuncEntry);
 
@@ -224,6 +249,10 @@ const char *neverd_lift_module(neverd_session_t Sess, const char *InputPath,
   Opts.NoOpt = NoOpt != 0;
   Opts.MaxFunctions =
       MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
+  if (S) {
+    Opts.EVMFork = S->EVMFork;
+    Opts.EVMStrict = S->EVMStrict;
+  }
   if (!R.run(Opts, Err)) {
     if (S)
       S->setError(Err);
@@ -256,6 +285,10 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
   PipelineOptions Opts;
   Opts.MaxFunctions =
       MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
+  if (S) {
+    Opts.EVMFork = S->EVMFork;
+    Opts.EVMStrict = S->EVMStrict;
+  }
   if (Level == 0)
     Opts.DumpLow = true;
   else if (Level == 1)
@@ -274,7 +307,14 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
 
   std::string Buf;
   llvm::raw_string_ostream OS(Buf);
-  if (Level == 0)
+  if (R.Result.EVM) {
+    if (Level == 0)
+      OS << evm::dumpLowIR(R.Result.EVM->Low);
+    else if (Level == 1)
+      OS << evm::dumpMedIR(R.Result.EVM->Med);
+    else
+      OS << evm::dumpHighIR(R.Result.EVM->High);
+  } else if (Level == 0)
     Pipeline::dumpLowIR(R.Result.LowFuncs, OS);
   else if (Level == 1)
     Pipeline::dumpMedIR(R.Result.MedFuncs, OS);
@@ -287,9 +327,10 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
 // High-level pipeline: decompile all
 // ===--------------------------------------------------------------------===//
 
-const char *neverd_decompile_all(neverd_session_t Sess, const char *InputPath,
-                                 int UseLlvmRoute, int NoOpt,
-                                 int MaxFunctions) {
+static const char *decompileAllImpl(neverd_session_t Sess,
+                                    const char *InputPath, int UseLlvmRoute,
+                                    neverd_output_language_t Language,
+                                    int NoOpt, int MaxFunctions) {
   auto *S = static_cast<Session *>(Sess);
   PipelineRunner R;
   std::string Err;
@@ -303,6 +344,10 @@ const char *neverd_decompile_all(neverd_session_t Sess, const char *InputPath,
   Opts.NoOpt = NoOpt != 0;
   Opts.MaxFunctions =
       MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
+  if (S) {
+    Opts.EVMFork = S->EVMFork;
+    Opts.EVMStrict = S->EVMStrict;
+  }
   if (UseLlvmRoute)
     Opts.LiftMode = true;
   if (!R.run(Opts, Err)) {
@@ -313,6 +358,31 @@ const char *neverd_decompile_all(neverd_session_t Sess, const char *InputPath,
 
   std::string Buf;
   llvm::raw_string_ostream OS(Buf);
+
+  if (R.Result.EVM) {
+    if (Language == NEVERD_OUTPUT_SOLIDITY) {
+      auto Output = evm::emitSolidity(*R.Result.EVM);
+      if (!Output) {
+        if (S)
+          S->setError(llvm::toString(Output.takeError()));
+        return nullptr;
+      }
+      return dupStr(*Output);
+    }
+    auto Output = evm::emitC(*R.Result.EVM);
+    if (!Output) {
+      if (S)
+        S->setError(llvm::toString(Output.takeError()));
+      return nullptr;
+    }
+    return dupStr(*Output);
+  }
+
+  if (Language == NEVERD_OUTPUT_SOLIDITY) {
+    if (S)
+      S->setError("Solidity output is supported only for EVM bytecode");
+    return nullptr;
+  }
 
   if (UseLlvmRoute) {
     if (!R.Result.LlvmModule)
@@ -330,6 +400,60 @@ const char *neverd_decompile_all(neverd_session_t Sess, const char *InputPath,
     Emitter.emit(R.Result.HighFuncs, OS, COpts, R.Dbg.get());
   }
   return dupStr(Buf);
+}
+
+const char *neverd_decompile_all(neverd_session_t Sess, const char *InputPath,
+                                 int UseLlvmRoute, int NoOpt,
+                                 int MaxFunctions) {
+  return decompileAllImpl(Sess, InputPath, UseLlvmRoute, NEVERD_OUTPUT_C,
+                          NoOpt, MaxFunctions);
+}
+
+const char *neverd_decompile_all_ex(neverd_session_t Sess,
+                                    const char *InputPath,
+                                    neverd_output_language_t Language,
+                                    int NoOpt, int MaxFunctions) {
+  const bool KnownLanguage = [&] {
+    switch (Language) {
+#define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
+    case NEVERD_OUTPUT_##NAME:                                                \
+      return true;
+#include "neverd/OutputLanguages.def"
+    }
+    return false;
+  }();
+  if (!KnownLanguage) {
+    if (auto *S = static_cast<Session *>(Sess))
+      S->setError("unknown output language");
+    return nullptr;
+  }
+  return decompileAllImpl(Sess, InputPath, 0, Language, NoOpt, MaxFunctions);
+}
+
+void neverd_evm_set_strict(neverd_session_t Sess, int Strict) {
+  auto *S = static_cast<Session *>(Sess);
+  if (!S)
+    return;
+  S->clearError();
+  S->EVMStrict = Strict != 0;
+  S->PipeRan = false;
+  S->PipeResult = {};
+}
+
+int neverd_evm_set_hardfork(neverd_session_t Sess, const char *Hardfork) {
+  auto *S = static_cast<Session *>(Sess);
+  if (!S || !Hardfork)
+    return 0;
+  auto Fork = evm::parseHardfork(Hardfork);
+  if (!Fork) {
+    S->setError("unknown EVM hardfork: " + std::string(Hardfork));
+    return 0;
+  }
+  S->clearError();
+  S->EVMFork = *Fork;
+  S->PipeRan = false;
+  S->PipeResult = {};
+  return 1;
 }
 
 // ===--------------------------------------------------------------------===//

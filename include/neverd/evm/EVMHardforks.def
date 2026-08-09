@@ -1,0 +1,51 @@
+//===- EVMHardforks.def - Ordered EVM hardfork database -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. Canonical forks are ordered by
+// activation. Aliases are accepted spellings and do not create enum values.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_HARDFORK
+#define EVM_HARDFORK(NAME, SPELLING)
+#endif
+
+#ifndef EVM_HARDFORK_ALIAS
+#define EVM_HARDFORK_ALIAS(SPELLING, NAME)
+#endif
+
+EVM_HARDFORK(Frontier, "frontier")
+EVM_HARDFORK(Homestead, "homestead")
+EVM_HARDFORK(DaoFork, "dao-fork")
+EVM_HARDFORK(TangerineWhistle, "tangerine-whistle")
+EVM_HARDFORK(SpuriousDragon, "spurious-dragon")
+EVM_HARDFORK(Byzantium, "byzantium")
+EVM_HARDFORK(Constantinople, "constantinople")
+EVM_HARDFORK(Petersburg, "petersburg")
+EVM_HARDFORK(Istanbul, "istanbul")
+EVM_HARDFORK(MuirGlacier, "muir-glacier")
+EVM_HARDFORK(Berlin, "berlin")
+EVM_HARDFORK(London, "london")
+EVM_HARDFORK(ArrowGlacier, "arrow-glacier")
+EVM_HARDFORK(GrayGlacier, "gray-glacier")
+EVM_HARDFORK(Paris, "paris")
+EVM_HARDFORK(Shanghai, "shanghai")
+EVM_HARDFORK(Cancun, "cancun")
+EVM_HARDFORK(Pectra, "pectra")
+EVM_HARDFORK(Fusaka, "fusaka")
+
+EVM_HARDFORK_ALIAS("dao", DaoFork)
+EVM_HARDFORK_ALIAS("dao_fork", DaoFork)
+EVM_HARDFORK_ALIAS("tangerine_whistle", TangerineWhistle)
+EVM_HARDFORK_ALIAS("spurious_dragon", SpuriousDragon)
+EVM_HARDFORK_ALIAS("muir_glacier", MuirGlacier)
+EVM_HARDFORK_ALIAS("arrow_glacier", ArrowGlacier)
+EVM_HARDFORK_ALIAS("gray_glacier", GrayGlacier)
+EVM_HARDFORK_ALIAS("merge", Paris)
+EVM_HARDFORK_ALIAS("prague", Pectra)
+EVM_HARDFORK_ALIAS("osaka", Fusaka)
+EVM_HARDFORK_ALIAS("latest", Fusaka)
+
+#undef EVM_HARDFORK_ALIAS
+#undef EVM_HARDFORK
