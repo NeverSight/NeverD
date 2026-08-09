@@ -3,6 +3,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/evm/Bytecode.h"
+#include "neverd/evm/EVMConstants.h"
 
 #include "llvm/Support/Error.h"
 
@@ -102,6 +103,31 @@ TEST(EVMBytecode, SupportsNestedArtifactsAndRejectsAmbiguousContracts) {
   EXPECT_EQ(Selected->Code, (std::vector<uint8_t>{0x60, 0x01}));
 }
 
+TEST(EVMBytecode, RequiresQualifiedSelectorForDuplicateContractNames) {
+  constexpr llvm::StringLiteral Artifact = R"json({
+    "contracts": {
+      "src/A.sol": {"Token": {"evm": {"deployedBytecode": {
+        "object": "0x6000"
+      }}}},
+      "src/B.sol": {"Token": {"evm": {"deployedBytecode": {
+        "object": "0x6001"
+      }}}}
+    }
+  })json";
+  BytecodeLoadOptions Options;
+  Options.ArtifactContract = "Token";
+  auto Ambiguous = decodeBytecodeInput(Artifact, "duplicate.json", Options);
+  ASSERT_FALSE(static_cast<bool>(Ambiguous));
+  EXPECT_NE(llvm::toString(Ambiguous.takeError()).find("ambiguous"),
+            std::string::npos);
+
+  Options.ArtifactContract = "src/B.sol:Token";
+  auto Selected = decodeBytecodeInput(Artifact, "duplicate.json", Options);
+  ASSERT_TRUE(static_cast<bool>(Selected))
+      << llvm::toString(Selected.takeError());
+  EXPECT_EQ(Selected->Code, (std::vector<uint8_t>{0x60, 0x01}));
+}
+
 TEST(EVMBytecode, ExtractsStaticRuntimeFromCreationCode) {
   // PUSH1 5; PUSH1 12; PUSH1 0; CODECOPY; PUSH1 5; PUSH1 0; RETURN
   // followed by the five-byte deployed program.
@@ -111,6 +137,28 @@ TEST(EVMBytecode, ExtractsStaticRuntimeFromCreationCode) {
   EXPECT_EQ(Loaded->Code, (std::vector<uint8_t>{0x60, 0x01, 0x60, 0x00, 0x55}));
   EXPECT_TRUE(Loaded->RuntimeExtracted);
   EXPECT_EQ(Loaded->OriginalSize, 17u);
+}
+
+TEST(EVMBytecode, DoesNotExtractRuntimeModifiedAfterCodecopy) {
+  // Copy the final STOP byte to memory[0], overwrite it with MSTORE8, then
+  // return the modified byte. Static slicing must not claim the copied STOP is
+  // the deployed runtime.
+  constexpr llvm::StringLiteral Creation = "6001600e5f3960aa5f5360015ff300";
+  auto Loaded = decodeBytecodeInput(Creation, "modified-creation.hex");
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  EXPECT_FALSE(Loaded->RuntimeExtracted);
+  EXPECT_EQ(Loaded->Code.size(), Creation.size() / kHexDigitsPerByte);
+}
+
+TEST(EVMBytecode, RuntimeExtractionStopsAtTheFirstTerminalInstruction) {
+  // The first RETURN ends constructor execution. Bytes after it deliberately
+  // resemble a complete CODECOPY/RETURN wrapper, but are unreachable data and
+  // must never become the selected runtime.
+  constexpr llvm::StringLiteral Creation = "5f5ff36001600d5f3960015ff300";
+  auto Loaded = decodeBytecodeInput(Creation, "terminal-creation.hex");
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  EXPECT_FALSE(Loaded->RuntimeExtracted);
+  EXPECT_EQ(Loaded->Code.size(), Creation.size() / kHexDigitsPerByte);
 }
 
 TEST(EVMBytecode, StripsValidatedSolidityMetadataTrailer) {

@@ -1,4 +1,4 @@
-//===- EVMExitStatuses.def - Lifted-program exit status database -*- C++ -*-===//
+//===- EVMExitStatuses.def - EVM exit statuses ---------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

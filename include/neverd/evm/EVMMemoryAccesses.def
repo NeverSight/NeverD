@@ -1,0 +1,23 @@
+//===- EVMMemoryAccesses.def - EVM memory-access kinds ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. It defines the orthogonal
+// access kinds for byte-addressable EVM memory. Per-opcode values live on the
+// corresponding EVMOpcodes.def record, alongside the other required metadata.
+//
+// EVM_MEMORY_ACCESS_KIND(NAME, SPELLING)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_MEMORY_ACCESS_KIND
+#define EVM_MEMORY_ACCESS_KIND(NAME, SPELLING)
+#endif
+
+EVM_MEMORY_ACCESS_KIND(None, "memory.none")
+EVM_MEMORY_ACCESS_KIND(Read, "memory.read")
+EVM_MEMORY_ACCESS_KIND(Write, "memory.write")
+EVM_MEMORY_ACCESS_KIND(ReadWrite, "memory.readwrite")
+EVM_MEMORY_ACCESS_KIND(Unknown, "memory.unknown")
+
+#undef EVM_MEMORY_ACCESS_KIND

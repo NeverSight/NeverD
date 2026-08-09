@@ -1,0 +1,22 @@
+//===- EVMStateAccesses.def - EVM state-access kinds -----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. State access is the
+// source-level mutability constraint imposed by an opcode; it is independent
+// of byte-addressable EVM memory and of the opcode's primary semantic effect.
+//
+// EVM_STATE_ACCESS_KIND(NAME, SPELLING)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_STATE_ACCESS_KIND
+#define EVM_STATE_ACCESS_KIND(NAME, SPELLING)
+#endif
+
+EVM_STATE_ACCESS_KIND(None, "state.none")
+EVM_STATE_ACCESS_KIND(Read, "state.read")
+EVM_STATE_ACCESS_KIND(Write, "state.write")
+EVM_STATE_ACCESS_KIND(Unknown, "state.unknown")
+
+#undef EVM_STATE_ACCESS_KIND

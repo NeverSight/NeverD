@@ -21,8 +21,8 @@
 #ifndef NEVERD_TOOLS_NEVERDCLI_H
 #define NEVERD_TOOLS_NEVERDCLI_H
 
-#include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/evm/Opcodes.h"
+#include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
@@ -82,7 +82,7 @@ inline llvm::StringRef
 outputLanguageDisplayName(neverd_output_language_t Language) {
   switch (Language) {
 #define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
-  case NEVERD_OUTPUT_##NAME:                                                  \
+  case NEVERD_OUTPUT_##NAME:                                                   \
     return DISPLAY_NAME;
 #include "neverd/OutputLanguages.def"
   }

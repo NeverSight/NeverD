@@ -13,7 +13,6 @@
 
 #include "neverd/evm/Analyzer.h"
 
-#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
 
@@ -27,19 +26,10 @@ namespace {
 
 inline constexpr size_t kShortInstructionByteColumnWidth = 18;
 
-std::string evmImmediate(const evm::LowInstruction &Instruction) {
-  if (Instruction.Info.ImmediateBytes == 0)
-    return {};
-  llvm::SmallString<evm::kWordBytes * evm::kHexDigitsPerByte> Digits;
-  Instruction.Immediate.toStringUnsigned(Digits, 16);
-  return "0x" + Digits.str().str();
-}
-
 std::string evmBytes(const evm::LowInstruction &Instruction) {
   std::string Bytes;
   for (uint8_t Byte : Instruction.Encoding)
-    Bytes += llvm::utohexstr(Byte, /*LowerCase=*/true,
-                            evm::kHexDigitsPerByte);
+    Bytes += llvm::utohexstr(Byte, /*LowerCase=*/true, evm::kHexDigitsPerByte);
   return Bytes;
 }
 
@@ -74,13 +64,12 @@ const char *neverd_disasm_json(neverd_session_t Sess, neverd_va_t Addr,
       Object["addr"] = vaHex(Instruction.PC);
       Object["size"] = static_cast<int64_t>(Instruction.Encoding.size());
       Object["mnemonic"] = std::string(Instruction.Info.Name);
-      Object["op_str"] = evmImmediate(Instruction);
+      Object["op_str"] = evm::formatImmediate(Instruction);
       Object["bytes"] = evmBytes(Instruction);
       EVMInstructions.push_back(std::move(Object));
       ++Count;
     }
-    return dupStr(jsonToString(
-        llvm::json::Value(std::move(EVMInstructions))));
+    return dupStr(jsonToString(llvm::json::Value(std::move(EVMInstructions))));
   }
 
   llvm::json::Array Arr;
@@ -93,8 +82,7 @@ const char *neverd_disasm_json(neverd_session_t Sess, neverd_va_t Addr,
     }
   }
   uint64_t Limit =
-      MaxInsns > 0 ? static_cast<uint64_t>(MaxInsns)
-                    : (Span > 0 ? Span : 256);
+      MaxInsns > 0 ? static_cast<uint64_t>(MaxInsns) : (Span > 0 ? Span : 256);
 
   for (uint64_t I = 0; I < Limit; ++I) {
     if (Cur < Addr)
@@ -111,10 +99,8 @@ const char *neverd_disasm_json(neverd_session_t Sess, neverd_va_t Addr,
     if (Off64 >= Seg->Data.size())
       break;
     size_t Off = static_cast<size_t>(Off64);
-    uint64_t Avail64 =
-        std::min<uint64_t>(16, std::min<uint64_t>(
-                                   Seg->Size - Off64,
-                                   Seg->Data.size() - Off));
+    uint64_t Avail64 = std::min<uint64_t>(
+        16, std::min<uint64_t>(Seg->Size - Off64, Seg->Data.size() - Off));
     if (Span > 0)
       Avail64 = std::min(Avail64, Span - Consumed);
     if (Avail64 == 0)
@@ -164,7 +150,8 @@ const char *neverd_disasm_text(neverd_session_t Sess,
       return nullptr;
     std::string Buffer;
     llvm::raw_string_ostream OS(Buffer);
-    OS << "; " << kEVMEntrySymbolName << " (0x0, " << S->Img.Raw.size()
+    OS << "; " << kEVMEntrySymbolName << " (0x"
+       << llvm::utohexstr(evm::kEntryPC) << ", " << S->Img.Raw.size()
        << " bytes)\n";
     for (const auto &Instruction : S->PipeResult.EVM->Low.Instructions) {
       OS << "  0x" << llvm::utohexstr(Instruction.PC) << "  ";
@@ -173,7 +160,7 @@ const char *neverd_disasm_text(neverd_session_t Sess,
       if (Bytes.size() < kShortInstructionByteColumnWidth)
         OS.indent(kShortInstructionByteColumnWidth - Bytes.size());
       OS << " " << Instruction.Info.Name;
-      const std::string Immediate = evmImmediate(Instruction);
+      const std::string Immediate = evm::formatImmediate(Instruction);
       if (!Immediate.empty())
         OS << " " << Immediate;
       OS << "\n";
@@ -214,8 +201,7 @@ const char *neverd_disasm_text(neverd_session_t Sess,
 
   va_t Addr = Sym->Addr;
   uint64_t Span = Sym->Size > 0 ? Sym->Size : 0x100;
-  while (Addr >= Sym->Addr && Addr - Sym->Addr < Span &&
-         Seg->contains(Addr)) {
+  while (Addr >= Sym->Addr && Addr - Sym->Addr < Span && Seg->contains(Addr)) {
     uint64_t Off64 = Addr - Seg->VA;
     // contains() only checks the VA span (Seg->Size), which can exceed the
     // materialized bytes; guard so Remain does not underflow into a huge
@@ -226,8 +212,7 @@ const char *neverd_disasm_text(neverd_session_t Sess,
     const uint8_t *Bytes = Seg->Data.data() + Off;
     size_t Remain = static_cast<size_t>(std::min<uint64_t>(
         Seg->Size - Off64,
-        std::min<uint64_t>(Seg->Data.size() - Off,
-                           Span - (Addr - Sym->Addr))));
+        std::min<uint64_t>(Seg->Data.size() - Off, Span - (Addr - Sym->Addr))));
     DecodedInsn Insn;
     int Sz = S->Dec.decodeOne(Bytes, Remain, Addr, Insn);
     if (Sz <= 0)

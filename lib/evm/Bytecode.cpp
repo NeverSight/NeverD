@@ -4,14 +4,13 @@
 
 #include "neverd/evm/Opcodes.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
-#include <array>
-#include <cctype>
 #include <limits>
 #include <optional>
 #include <string>
@@ -28,11 +27,10 @@ inline constexpr llvm::StringLiteral kArtifactDeployedBytecodeKey =
 inline constexpr llvm::StringLiteral kArtifactRuntimeBytecodeKey =
     "runtimeBytecode";
 inline constexpr llvm::StringLiteral kArtifactBytecodeKey = "bytecode";
-inline constexpr std::array<llvm::StringLiteral, 2> kRawExtensions = {
-    ".raw", ".evmraw"};
-inline constexpr std::array<llvm::StringLiteral, 7> kEVMExtensions = {
+inline constexpr llvm::StringLiteral kRawExtensions[] = {".raw", ".evmraw"};
+inline constexpr llvm::StringLiteral kEVMExtensions[] = {
     ".evm", ".hex", ".bin", ".bytecode", ".json", ".raw", ".evmraw"};
-inline constexpr std::array<llvm::StringLiteral, 4> kSolidityMetadataKeys = {
+inline constexpr llvm::StringLiteral kSolidityMetadataKeys[] = {
     "solc", "ipfs", "bzzr0", "bzzr1"};
 inline constexpr uint8_t kCBORMajorTypeMask = 0xe0U;
 inline constexpr uint8_t kCBORMapMajorType = 0xa0U;
@@ -46,27 +44,16 @@ llvm::Error inputError(llvm::StringRef SourceName, llvm::Twine Message) {
                                              llvm::inconvertibleErrorCode());
 }
 
-int hexValue(char C) {
-  if (C >= '0' && C <= '9')
-    return C - '0';
-  if (C >= 'a' && C <= 'f')
-    return C - 'a' + 10;
-  if (C >= 'A' && C <= 'F')
-    return C - 'A' + 10;
-  return -1;
-}
-
 bool hasRawSuffix(llvm::StringRef SourceName) {
   std::string Lower = SourceName.lower();
-  return std::any_of(kRawExtensions.begin(), kRawExtensions.end(),
-                     [&](llvm::StringRef Extension) {
-                       return llvm::StringRef(Lower).ends_with(Extension);
-                     });
+  return llvm::any_of(kRawExtensions, [&](llvm::StringRef Extension) {
+    return llvm::StringRef(Lower).ends_with(Extension);
+  });
 }
 
 bool looksBinary(llvm::StringRef Content) {
-  return llvm::any_of(Content, [](unsigned char C) {
-    return C == 0 || (!std::isprint(C) && !std::isspace(C));
+  return llvm::any_of(Content, [](char C) {
+    return C == 0 || (!llvm::isPrint(C) && !llvm::isSpace(C));
   });
 }
 
@@ -74,9 +61,9 @@ llvm::Expected<std::vector<uint8_t>> decodeHex(llvm::StringRef Content,
                                                llvm::StringRef SourceName) {
   std::string Compact;
   Compact.reserve(Content.size());
-  for (unsigned char C : Content)
-    if (!std::isspace(C))
-      Compact.push_back(static_cast<char>(C));
+  for (char C : Content)
+    if (!llvm::isSpace(C))
+      Compact.push_back(C);
 
   llvm::StringRef Text(Compact);
   if (Text.consume_front("0x") || Text.consume_front("0X")) {
@@ -86,18 +73,18 @@ llvm::Expected<std::vector<uint8_t>> decodeHex(llvm::StringRef Content,
     return inputError(SourceName, "empty bytecode");
   if (Text.contains("__") || Text.contains('$'))
     return inputError(SourceName, "unresolved library placeholder in bytecode");
-  if ((Text.size() & 1U) != 0)
+  static_assert(kHexDigitsPerByte == 2);
+  if (Text.size() % kHexDigitsPerByte != 0)
     return inputError(SourceName, "hex bytecode has an odd number of digits");
 
   std::vector<uint8_t> Result;
-  Result.reserve(Text.size() / 2);
-  for (size_t I = 0; I < Text.size(); I += 2) {
-    const int Hi = hexValue(Text[I]);
-    const int Lo = hexValue(Text[I + 1]);
-    if (Hi < 0 || Lo < 0)
+  Result.reserve(Text.size() / kHexDigitsPerByte);
+  for (size_t I = 0; I < Text.size(); I += kHexDigitsPerByte) {
+    uint8_t Byte = 0;
+    if (!llvm::tryGetHexFromNibbles(Text[I], Text[I + 1], Byte))
       return inputError(SourceName, "invalid hexadecimal digit at offset " +
                                         llvm::Twine(I));
-    Result.push_back(static_cast<uint8_t>((Hi << 4) | Lo));
+    Result.push_back(Byte);
   }
   return Result;
 }
@@ -106,7 +93,7 @@ std::optional<llvm::StringRef> bytecodeObject(const llvm::json::Value *Value) {
   if (!Value)
     return std::nullopt;
   if (auto Text = Value->getAsString())
-    return *Text;
+    return Text;
   if (const auto *Object = Value->getAsObject())
     return Object->getString(kArtifactObjectKey);
   return std::nullopt;
@@ -173,11 +160,19 @@ selectArtifactBytecode(const llvm::json::Value &Root,
   if (!Options.ArtifactContract.empty()) {
     llvm::StringRef Selector(Options.ArtifactContract);
     const std::string ContractSuffix = ":" + Selector.str();
+    const ArtifactCandidate *Match = nullptr;
     for (const auto &Candidate : Candidates) {
       llvm::StringRef Qualified(Candidate.Contract);
-      if (Qualified == Selector || Qualified.ends_with(ContractSuffix))
-        return Candidate;
+      if (Qualified != Selector && !Qualified.ends_with(ContractSuffix))
+        continue;
+      if (Match)
+        return inputError(SourceName,
+                          "contract selector '" + Selector +
+                              "' is ambiguous; use path/File.sol:Contract");
+      Match = &Candidate;
     }
+    if (Match)
+      return *Match;
     return inputError(SourceName,
                       "contract '" + Selector + "' is not present in artifact");
   }
@@ -263,17 +258,29 @@ extractStaticRuntime(const std::vector<uint8_t> &Code) {
       if (Offset && Size && LastCopy && LastCopy->Destination == *Offset &&
           LastCopy->Size == *Size && LastCopy->Source <= Code.size() &&
           LastCopy->Size <= Code.size() - LastCopy->Source) {
-        const auto Begin = Code.begin() + LastCopy->Source;
-        return std::vector<uint8_t>(Begin, Begin + LastCopy->Size);
+        const size_t Source = static_cast<size_t>(LastCopy->Source);
+        const size_t Size = static_cast<size_t>(LastCopy->Size);
+        const auto Begin = Code.begin() + static_cast<std::ptrdiff_t>(Source);
+        return std::vector<uint8_t>(Begin,
+                                    Begin + static_cast<std::ptrdiff_t>(Size));
       }
-      continue;
+      return std::nullopt;
     }
 
     const auto Info = opcodeInfo(Op);
-    if (!Info) {
-      Stack.clear();
-      continue;
-    }
+    if (!Info)
+      return std::nullopt;
+    // This bounded abstract interpreter follows only the constructor's linear
+    // path. A terminal/control-transfer instruction ends that proof; scanning
+    // fallthrough bytes would reinterpret unreachable runtime data as code.
+    if (Info->IsTerminator)
+      return std::nullopt;
+    // The extractor remembers that a CODECOPY established a byte-for-byte
+    // provenance relationship with the creation code. Any later memory write
+    // invalidates that conservative proof, including compound host operations
+    // such as CALL and EXTCODECOPY whose primary effect is not memory access.
+    if (mayWriteMemory(*Info))
+      LastCopy.reset();
     for (uint8_t I = 0; I < Info->StackInputs; ++I)
       (void)Pop();
     for (uint8_t I = 0; I < Info->StackOutputs; ++I)
@@ -286,12 +293,13 @@ bool containsBytes(const std::vector<uint8_t> &Data, size_t Begin, size_t End,
                    llvm::StringRef Needle) {
   if (Begin > End || End > Data.size())
     return false;
-  return std::search(Data.begin() + Begin, Data.begin() + End, Needle.begin(),
-                     Needle.end()) != Data.begin() + End;
+  const auto First = Data.begin() + static_cast<std::ptrdiff_t>(Begin);
+  const auto Last = Data.begin() + static_cast<std::ptrdiff_t>(End);
+  return std::search(First, Last, Needle.begin(), Needle.end()) != Last;
 }
 
 bool stripSolidityMetadata(std::vector<uint8_t> &Code) {
-  if (Code.size() < 2 * kMetadataLengthBytes)
+  if (Code.size() <= kMetadataLengthBytes)
     return false;
   const size_t MetadataSize =
       (static_cast<size_t>(Code[Code.size() - kMetadataLengthBytes])
@@ -305,10 +313,9 @@ bool stripSolidityMetadata(std::vector<uint8_t> &Code) {
   if ((Code[Start] & kCBORMajorTypeMask) != kCBORMapMajorType)
     return false;
   const size_t End = Code.size() - kMetadataLengthBytes;
-  if (std::none_of(kSolidityMetadataKeys.begin(), kSolidityMetadataKeys.end(),
-                   [&](llvm::StringRef Key) {
-                     return containsBytes(Code, Start, End, Key);
-                   }))
+  if (llvm::none_of(kSolidityMetadataKeys, [&](llvm::StringRef Key) {
+        return containsBytes(Code, Start, End, Key);
+      }))
     return false;
   Code.resize(Start);
   return true;
@@ -345,7 +352,7 @@ llvm::Expected<LoadedBytecode> finishLoaded(std::vector<uint8_t> Code,
 
 llvm::Expected<LoadedBytecode>
 decodeBytecodeInput(llvm::StringRef Content, llvm::StringRef SourceName,
-                    BytecodeLoadOptions Options) {
+                    const BytecodeLoadOptions &Options) {
   BytecodeInputFormat Format = Options.Format;
   llvm::StringRef Trimmed = Content.trim();
   if (Format == BytecodeInputFormat::Auto) {
@@ -390,23 +397,21 @@ decodeBytecodeInput(llvm::StringRef Content, llvm::StringRef SourceName,
 
 llvm::Expected<LoadedBytecode>
 loadBytecodeFile(const std::filesystem::path &Path,
-                 BytecodeLoadOptions Options) {
+                 const BytecodeLoadOptions &Options) {
   auto Buffer = llvm::MemoryBuffer::getFile(Path.string(), /*IsText=*/false,
                                             /*RequiresNullTerminator=*/false);
   if (!Buffer)
     return inputError(Path.string(), "cannot open input file");
-  return decodeBytecodeInput((*Buffer)->getBuffer(), Path.string(),
-                             std::move(Options));
+  return decodeBytecodeInput((*Buffer)->getBuffer(), Path.string(), Options);
 }
 
 bool hasEVMFileExtension(const std::filesystem::path &Path) {
   std::string Extension = Path.extension().string();
   std::transform(Extension.begin(), Extension.end(), Extension.begin(),
-                 [](unsigned char C) { return std::tolower(C); });
-  return std::any_of(kEVMExtensions.begin(), kEVMExtensions.end(),
-                     [&](llvm::StringRef Known) {
-                       return llvm::StringRef(Extension) == Known;
-                     });
+                 [](char C) { return llvm::toLower(C); });
+  return llvm::any_of(kEVMExtensions, [&](llvm::StringRef Known) {
+    return llvm::StringRef(Extension) == Known;
+  });
 }
 
 bool looksLikeEVMInput(const std::filesystem::path &Path) {
@@ -420,8 +425,8 @@ bool looksLikeEVMInput(const std::filesystem::path &Path) {
   Options.Format = (*Buffer)->getBuffer().trim().starts_with("{")
                        ? BytecodeInputFormat::Artifact
                        : BytecodeInputFormat::Hex;
-  auto Loaded = decodeBytecodeInput((*Buffer)->getBuffer(), Path.string(),
-                                    std::move(Options));
+  auto Loaded =
+      decodeBytecodeInput((*Buffer)->getBuffer(), Path.string(), Options);
   if (!Loaded) {
     llvm::consumeError(Loaded.takeError());
     return false;

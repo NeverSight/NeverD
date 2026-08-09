@@ -3,6 +3,12 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Declares normalization of raw, hexadecimal, and Solidity compiler-artifact
+/// inputs into executable EVM bytecode.
+///
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_EVM_BYTECODE_H
 #define NEVERD_EVM_BYTECODE_H
@@ -22,6 +28,7 @@ enum class BytecodeSourceKind : uint8_t { Raw, Hex, Artifact };
 
 enum class BytecodeInputFormat : uint8_t { Auto, Raw, Hex, Artifact };
 
+/// Selects the accepted container and optional runtime normalization steps.
 struct BytecodeLoadOptions {
   BytecodeInputFormat Format = BytecodeInputFormat::Auto;
   bool ExtractRuntime = true;
@@ -31,6 +38,7 @@ struct BytecodeLoadOptions {
   std::string ArtifactContract;
 };
 
+/// Owns normalized executable bytes and records transformations that occurred.
 struct LoadedBytecode {
   std::vector<uint8_t> Code;
   BytecodeSourceKind Source = BytecodeSourceKind::Raw;
@@ -43,11 +51,11 @@ struct LoadedBytecode {
 /// runtime bytecode. SourceName is used for diagnostics and input hints only.
 llvm::Expected<LoadedBytecode>
 decodeBytecodeInput(llvm::StringRef Content, llvm::StringRef SourceName = {},
-                    BytecodeLoadOptions Options = {});
+                    const BytecodeLoadOptions &Options = {});
 
 llvm::Expected<LoadedBytecode>
 loadBytecodeFile(const std::filesystem::path &Path,
-                 BytecodeLoadOptions Options = {});
+                 const BytecodeLoadOptions &Options = {});
 
 /// Return true only for files that can be fully validated as EVM input.
 bool looksLikeEVMInput(const std::filesystem::path &Path);

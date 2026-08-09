@@ -247,8 +247,7 @@ const char *neverd_lift_module(neverd_session_t Sess, const char *InputPath,
   PipelineOptions Opts;
   Opts.LiftMode = true;
   Opts.NoOpt = NoOpt != 0;
-  Opts.MaxFunctions =
-      MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
+  Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (S) {
     Opts.EVMFork = S->EVMFork;
     Opts.EVMStrict = S->EVMStrict;
@@ -283,8 +282,7 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
   }
 
   PipelineOptions Opts;
-  Opts.MaxFunctions =
-      MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
+  Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (S) {
     Opts.EVMFork = S->EVMFork;
     Opts.EVMStrict = S->EVMStrict;
@@ -342,8 +340,7 @@ static const char *decompileAllImpl(neverd_session_t Sess,
 
   PipelineOptions Opts;
   Opts.NoOpt = NoOpt != 0;
-  Opts.MaxFunctions =
-      MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
+  Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (S) {
     Opts.EVMFork = S->EVMFork;
     Opts.EVMStrict = S->EVMStrict;
@@ -360,6 +357,12 @@ static const char *decompileAllImpl(neverd_session_t Sess,
   llvm::raw_string_ostream OS(Buf);
 
   if (R.Result.EVM) {
+    if (UseLlvmRoute) {
+      if (S)
+        S->setError("LLVM-to-C route is not supported for EVM; use the "
+                    "dedicated C backend");
+      return nullptr;
+    }
     if (Language == NEVERD_OUTPUT_SOLIDITY) {
       auto Output = evm::emitSolidity(*R.Result.EVM);
       if (!Output) {
@@ -405,8 +408,8 @@ static const char *decompileAllImpl(neverd_session_t Sess,
 const char *neverd_decompile_all(neverd_session_t Sess, const char *InputPath,
                                  int UseLlvmRoute, int NoOpt,
                                  int MaxFunctions) {
-  return decompileAllImpl(Sess, InputPath, UseLlvmRoute, NEVERD_OUTPUT_C,
-                          NoOpt, MaxFunctions);
+  return decompileAllImpl(Sess, InputPath, UseLlvmRoute, NEVERD_OUTPUT_C, NoOpt,
+                          MaxFunctions);
 }
 
 const char *neverd_decompile_all_ex(neverd_session_t Sess,
@@ -416,8 +419,8 @@ const char *neverd_decompile_all_ex(neverd_session_t Sess,
   const bool KnownLanguage = [&] {
     switch (Language) {
 #define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
-    case NEVERD_OUTPUT_##NAME:                                                \
-      return true;
+  case NEVERD_OUTPUT_##NAME:                                                   \
+    return true;
 #include "neverd/OutputLanguages.def"
     }
     return false;

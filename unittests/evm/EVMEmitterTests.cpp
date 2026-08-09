@@ -23,6 +23,8 @@
 namespace neverd::evm {
 namespace {
 
+inline constexpr unsigned kSStoreValueArgumentIndex = 1;
+
 TEST(EVMLLVMEmitter, ProducesVerifiedI256StateMachine) {
   const std::vector<uint8_t> Code = {
       0x60, 0x01, 0x60, 0x02, 0x60, 0x03, 0x08, // ADDMOD
@@ -84,6 +86,154 @@ std::filesystem::path writeTemporarySource(llvm::StringRef Extension,
   return Path;
 }
 
+void appendPush(std::vector<uint8_t> &Code, const llvm::APInt &Value) {
+  if (Value.isZero()) {
+    Code.push_back(opcodeByte(Opcode::PUSH0));
+    return;
+  }
+  const unsigned DataBytes =
+      (Value.getActiveBits() + kBitsPerByte - 1) / kBitsPerByte;
+  Code.push_back(
+      static_cast<uint8_t>(opcodeByte(Opcode::PUSH1) + DataBytes - 1));
+  for (unsigned I = DataBytes; I != 0; --I)
+    Code.push_back(static_cast<uint8_t>(
+        Value.extractBitsAsZExtValue(kBitsPerByte, (I - 1) * kBitsPerByte)));
+}
+
+std::vector<uint8_t> differentialALUProgram() {
+  // Fold every scalar ALU family into one observable storage word. Inputs hit
+  // non-commutative, signed, overflow, zero-divisor, saturated-shift, byte,
+  // wide modular, exponent, and Fusaka CLZ behavior in all three backends.
+  std::vector<uint8_t> Code;
+  appendPush(Code, llvm::APInt(kWordBits, 0));
+  const auto Fold = [&] { Code.push_back(opcodeByte(Opcode::XOR)); };
+  const auto Unary = [&](Opcode Op, const llvm::APInt &A) {
+    appendPush(Code, A);
+    Code.push_back(opcodeByte(Op));
+    Fold();
+  };
+  const auto Binary = [&](Opcode Op, const llvm::APInt &A,
+                          const llvm::APInt &B) {
+    appendPush(Code, B);
+    appendPush(Code, A);
+    Code.push_back(opcodeByte(Op));
+    Fold();
+  };
+  const auto Ternary = [&](Opcode Op, const llvm::APInt &A,
+                           const llvm::APInt &B, const llvm::APInt &Modulus) {
+    appendPush(Code, Modulus);
+    appendPush(Code, B);
+    appendPush(Code, A);
+    Code.push_back(opcodeByte(Op));
+    Fold();
+  };
+
+  const llvm::APInt Zero(kWordBits, 0);
+  const llvm::APInt One(kWordBits, 1);
+  const llvm::APInt Two(kWordBits, 2);
+  const llvm::APInt Max = llvm::APInt::getMaxValue(kWordBits);
+  const llvm::APInt SignedMin = llvm::APInt::getSignedMinValue(kWordBits);
+  const llvm::APInt NegativeOne = llvm::APInt::getAllOnes(kWordBits);
+  const llvm::APInt Negative123 = -llvm::APInt(kWordBits, 123);
+
+  Binary(Opcode::ADD, Max, Two);
+  Binary(Opcode::MUL, llvm::APInt(kWordBits, 0x123456789ULL),
+         llvm::APInt(kWordBits, 0xfedcba987ULL));
+  Binary(Opcode::SUB, llvm::APInt(kWordBits, 10), llvm::APInt(kWordBits, 3));
+  Binary(Opcode::DIV, Max, llvm::APInt(kWordBits, 17));
+  Binary(Opcode::DIV, llvm::APInt(kWordBits, 5), Zero);
+  Binary(Opcode::SDIV, Negative123, llvm::APInt(kWordBits, 7));
+  Binary(Opcode::SDIV, SignedMin, NegativeOne);
+  Binary(Opcode::SDIV, Negative123, Zero);
+  Binary(Opcode::MOD, Max, llvm::APInt(kWordBits, 97));
+  Binary(Opcode::SMOD, Negative123, llvm::APInt(kWordBits, 10));
+  Binary(Opcode::SMOD, Negative123, Zero);
+  Ternary(Opcode::ADDMOD, Max, Max, llvm::APInt(kWordBits, 97));
+  Ternary(Opcode::ADDMOD, Max, One, Zero);
+  Ternary(Opcode::MULMOD, Max, Max, llvm::APInt(kWordBits, 101));
+  Ternary(Opcode::MULMOD, Max, One, Zero);
+  Binary(Opcode::EXP, llvm::APInt(kWordBits, 3), llvm::APInt(kWordBits, 19));
+  Binary(Opcode::EXP, Max, Two);
+  Binary(Opcode::SIGNEXTEND, Zero, llvm::APInt(kWordBits, 0x80));
+  Binary(Opcode::SIGNEXTEND, llvm::APInt(kWordBits, kWordBytes), Max);
+
+  Binary(Opcode::LT, Two, llvm::APInt(kWordBits, 3));
+  Binary(Opcode::GT, llvm::APInt(kWordBits, 4), llvm::APInt(kWordBits, 3));
+  Binary(Opcode::SLT, NegativeOne, One);
+  Binary(Opcode::SGT, One, NegativeOne);
+  Binary(Opcode::EQ, Max, Max);
+  Unary(Opcode::ISZERO, Zero);
+  Unary(Opcode::ISZERO, One);
+
+  Binary(Opcode::AND, llvm::APInt(kWordBits, 0xf0f0),
+         llvm::APInt(kWordBits, 0x0ff0));
+  Binary(Opcode::OR, llvm::APInt(kWordBits, 0xf000),
+         llvm::APInt(kWordBits, 0x0f0f));
+  Binary(Opcode::XOR, llvm::APInt(kWordBits, 0xaaaa),
+         llvm::APInt(kWordBits, 0x5555));
+  Unary(Opcode::NOT, llvm::APInt(kWordBits, 0x1234));
+  Binary(Opcode::BYTE, llvm::APInt(kWordBits, kWordBytes - 2),
+         llvm::APInt(kWordBits, 0x1234));
+  Binary(Opcode::BYTE, llvm::APInt(kWordBits, kWordBytes), Max);
+  Binary(Opcode::SHL, llvm::APInt(kWordBits, 5),
+         llvm::APInt(kWordBits, 0x1234));
+  Binary(Opcode::SHR, llvm::APInt(kWordBits, 9), Max);
+  Binary(Opcode::SAR, llvm::APInt(kWordBits, 9), Negative123);
+  Binary(Opcode::SHL, llvm::APInt(kWordBits, kWordBits), One);
+  Binary(Opcode::SHR, llvm::APInt(kWordBits, kWordBits), Max);
+  Binary(Opcode::SAR, llvm::APInt(kWordBits, kWordBits), One);
+  Binary(Opcode::SAR, llvm::APInt(kWordBits, kWordBits), NegativeOne);
+  Unary(Opcode::CLZ, Zero);
+  Unary(Opcode::CLZ, One);
+  Unary(Opcode::CLZ, SignedMin);
+
+  appendPush(Code, Zero);
+  Code.push_back(opcodeByte(Opcode::SSTORE));
+  Code.push_back(opcodeByte(Opcode::STOP));
+  return Code;
+}
+
+TEST(EVMEmitters, ProduceValidEmptyPrograms) {
+  EVMProgram Program;
+
+  llvm::LLVMContext Context;
+  auto Module = emitLLVM(Program, Context);
+  ASSERT_TRUE(static_cast<bool>(Module)) << llvm::toString(Module.takeError());
+  EXPECT_FALSE(llvm::verifyModule(**Module, &llvm::errs()));
+
+  auto CSource = emitC(Program);
+  ASSERT_TRUE(static_cast<bool>(CSource))
+      << llvm::toString(CSource.takeError());
+  auto SoliditySource = emitSolidity(Program);
+  ASSERT_TRUE(static_cast<bool>(SoliditySource))
+      << llvm::toString(SoliditySource.takeError());
+
+  const char *Clang =
+      std::filesystem::exists("/opt/homebrew/opt/llvm/bin/clang")
+          ? "/opt/homebrew/opt/llvm/bin/clang"
+          : "clang";
+  if (std::system(
+          (std::string("command -v ") + Clang + " >/dev/null 2>&1").c_str()) !=
+          0 ||
+      std::system("command -v solc >/dev/null 2>&1") != 0)
+    GTEST_SKIP() << "clang or solc is unavailable";
+
+  const auto CPath = writeTemporarySource("-empty.c", *CSource);
+  const auto SolidityPath = writeTemporarySource("-empty.sol", *SoliditySource);
+  const std::string CompileC = std::string(Clang) +
+                               " -std=c2x -Werror -fsyntax-only -ffreestanding "
+                               "-target x86_64-unknown-linux-gnu '" +
+                               CPath.string() + "'";
+  const std::string CompileSolidity =
+      "solc --bin '" + SolidityPath.string() + "' >/dev/null 2>&1";
+  EXPECT_EQ(std::system(CompileC.c_str()), 0);
+  EXPECT_EQ(std::system(CompileSolidity.c_str()), 0);
+
+  std::error_code EC;
+  std::filesystem::remove(CPath, EC);
+  std::filesystem::remove(SolidityPath, EC);
+}
+
 std::string differentialHarness(const llvm::APInt &ExpectedWord,
                                 size_t ExpectedTraces,
                                 bool UseLoweredCABI = false) {
@@ -91,39 +241,60 @@ std::string differentialHarness(const llvm::APInt &ExpectedWord,
   ExpectedWord.toStringUnsigned(Word, 10);
   std::string Harness;
   llvm::raw_string_ostream OS(Harness);
-  OS << "@captured = internal global i256 0\n"
+  OS << "@captured = internal global i" << kWordBits
+     << " 0\n"
         "@trace_count = internal global i64 0\n\n"
-        "declare i32 @evm_execute(ptr)\n\n";
+        "declare i32 @"
+     << kDefaultExecutionFunctionName << "(ptr)\n\n";
   if (UseLoweredCABI) {
-    OS << "define void @neverd_evm_host_op(ptr sret(i256) %result, ptr %env, "
-          "i8 %opcode, ptr byval(i256) %a0, ptr byval(i256) %a1, "
-          "ptr byval(i256) %a2, ptr byval(i256) %a3, ptr byval(i256) %a4, "
-          "ptr byval(i256) %a5, ptr byval(i256) %a6) {\n"
+    OS << "define void @" << kHostFunctionName << "(ptr sret(i" << kWordBits
+       << ") %result, ptr %env, i8 %opcode";
+    for (unsigned I = 0; I < maxHostOpcodeArguments(); ++I)
+      OS << ", ptr byval(i" << kWordBits << ") %a" << I;
+    OS << ") {\n"
           "entry:\n"
-          "  %is_store = icmp eq i8 %opcode, 85\n"
+          "  %is_store = icmp eq i8 %opcode, "
+       << static_cast<unsigned>(opcodeByte(Opcode::SSTORE))
+       << "\n"
           "  br i1 %is_store, label %store, label %done\n"
           "store:\n"
-          "  %value = load i256, ptr %a1\n"
-          "  store i256 %value, ptr @captured\n"
+          "  %value = load i"
+       << kWordBits << ", ptr %a" << kSStoreValueArgumentIndex
+       << "\n"
+          "  store i"
+       << kWordBits
+       << " %value, ptr @captured\n"
           "  br label %done\n"
           "done:\n"
-          "  store i256 0, ptr %result\n"
+          "  store i"
+       << kWordBits
+       << " 0, ptr %result\n"
           "  ret void\n"
           "}\n\n";
   } else {
-    OS << "define i256 @neverd_evm_host_op(ptr %env, i8 %opcode, i256 %a0, "
-          "i256 %a1, i256 %a2, i256 %a3, i256 %a4, i256 %a5, i256 %a6) {\n"
+    OS << "define i" << kWordBits << " @" << kHostFunctionName
+       << "(ptr %env, i8 %opcode";
+    for (unsigned I = 0; I < maxHostOpcodeArguments(); ++I)
+      OS << ", i" << kWordBits << " %a" << I;
+    OS << ") {\n"
           "entry:\n"
-          "  %is_store = icmp eq i8 %opcode, 85\n"
+          "  %is_store = icmp eq i8 %opcode, "
+       << static_cast<unsigned>(opcodeByte(Opcode::SSTORE))
+       << "\n"
           "  br i1 %is_store, label %store, label %done\n"
           "store:\n"
-          "  store i256 %a1, ptr @captured\n"
+          "  store i"
+       << kWordBits << " %a" << kSStoreValueArgumentIndex
+       << ", ptr @captured\n"
           "  br label %done\n"
           "done:\n"
-          "  ret i256 0\n"
+          "  ret i"
+       << kWordBits
+       << " 0\n"
           "}\n\n";
   }
-  OS << "define void @neverd_evm_trace(ptr %env, i64 %pc, i8 %opcode) {\n"
+  OS << "define void @" << kTraceFunctionName
+     << "(ptr %env, i64 %pc, i8 %opcode) {\n"
         "entry:\n"
         "  %old = load i64, ptr @trace_count\n"
         "  %next = add i64 %old, 1\n"
@@ -132,19 +303,27 @@ std::string differentialHarness(const llvm::APInt &ExpectedWord,
         "}\n\n"
         "define i32 @main() {\n"
         "entry:\n"
-        "  %status = call i32 @evm_execute(ptr null)\n"
-        "  %captured = load i256, ptr @captured\n"
+        "  %status = call i32 @"
+     << kDefaultExecutionFunctionName
+     << "(ptr null)\n"
+        "  %captured = load i"
+     << kWordBits
+     << ", ptr @captured\n"
         "  %traces = load i64, ptr @trace_count\n"
-        "  %status_ok = icmp eq i32 %status, 0\n"
-        "  %value_ok = icmp eq i256 %captured, "
-     << Word
+        "  %status_ok = icmp eq i32 %status, "
+     << static_cast<unsigned>(exitStatusCode(ExitStatus::Stopped))
+     << "\n"
+        "  %value_ok = icmp eq i"
+     << kWordBits << " %captured, " << Word
      << "\n"
         "  %trace_ok = icmp eq i64 %traces, "
      << ExpectedTraces
      << "\n"
         "  %first = and i1 %status_ok, %value_ok\n"
         "  %all = and i1 %first, %trace_ok\n"
-        "  %exit = select i1 %all, i32 0, i32 1\n"
+        "  %exit = select i1 %all, i32 "
+     << EXIT_SUCCESS << ", i32 " << EXIT_FAILURE
+     << "\n"
         "  ret i32 %exit\n"
         "}\n";
   OS.flush();
@@ -152,17 +331,14 @@ std::string differentialHarness(const llvm::APInt &ExpectedWord,
 }
 
 TEST(EVMLLVMEmitter, ExecutesDifferentiallyAgainstInterpreter) {
-  // The non-commutative result is exported through SSTORE so the LLVM host
-  // harness can compare observable state without depending on an i256 C ABI.
-  const std::vector<uint8_t> Code = {0x60, 0x03, 0x60, 0x0a, 0x03, // 10 - 3 = 7
-                                     0x5f, 0x55, 0x00}; // storage[0] = 7; stop
+  const std::vector<uint8_t> Code = differentialALUProgram();
   auto Program = analyze(Code);
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
   auto Oracle = execute(Program->Low);
   ASSERT_TRUE(static_cast<bool>(Oracle)) << llvm::toString(Oracle.takeError());
   ASSERT_EQ(Oracle->Status, ExecutionStatus::Stopped);
-  const auto Stored = Oracle->Storage.find(llvm::APInt(256, 0));
+  const auto Stored = Oracle->Storage.find(llvm::APInt(kWordBits, 0));
   ASSERT_NE(Stored, Oracle->Storage.end());
 
   llvm::LLVMContext Context;
@@ -211,6 +387,9 @@ TEST(EVMCEmitter, ProducesStandaloneCompilableC23) {
             std::string::npos);
   EXPECT_NE(Source->find("neverd_evm_host_op"), std::string::npos);
   EXPECT_NE(Source->find("pc_0:"), std::string::npos);
+  EXPECT_NE(Source->find("evm_word negative = v >> NEVERD_EVM_WORD_MSB"),
+            std::string::npos);
+  EXPECT_EQ(Source->find("(evm_sword)v >>"), std::string::npos);
 
   const char *Clang =
       std::filesystem::exists("/opt/homebrew/opt/llvm/bin/clang")
@@ -231,14 +410,13 @@ TEST(EVMCEmitter, ProducesStandaloneCompilableC23) {
 }
 
 TEST(EVMCEmitter, ExecutesDifferentiallyAgainstInterpreter) {
-  const std::vector<uint8_t> Code = {0x60, 0x03, 0x60, 0x0a, 0x03, // 10 - 3 = 7
-                                     0x5f, 0x55, 0x00}; // storage[0] = 7; stop
+  const std::vector<uint8_t> Code = differentialALUProgram();
   auto Program = analyze(Code);
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
   auto Oracle = execute(Program->Low);
   ASSERT_TRUE(static_cast<bool>(Oracle)) << llvm::toString(Oracle.takeError());
-  const auto Stored = Oracle->Storage.find(llvm::APInt(256, 0));
+  const auto Stored = Oracle->Storage.find(llvm::APInt(kWordBits, 0));
   ASSERT_NE(Stored, Oracle->Storage.end());
 
   auto Source = emitC(*Program);
@@ -298,12 +476,36 @@ TEST(EVMSolidityEmitter, ProducesCompilableRecoveredContractAndStateMachine) {
   EXPECT_NE(Source->find("selector 0x12345678"), std::string::npos);
   EXPECT_NE(Source->find("function func_12345678"), std::string::npos);
   EXPECT_NE(Source->find("uint256[1024] memory evmStack"), std::string::npos);
-  EXPECT_NE(Source->find("recovered_storage_slot_3"), std::string::npos);
+  EXPECT_NE(Source->find("constant recovered_storage_slot_3"),
+            std::string::npos);
   EXPECT_NE(Source->find("error EVMInvalidJump"), std::string::npos);
 
   if (std::system("command -v solc >/dev/null 2>&1") != 0)
     GTEST_SKIP() << "solc is unavailable";
   const auto Path = writeTemporarySource(".sol", *Source);
+  const std::string Command =
+      "solc --bin '" + Path.string() + "' >/dev/null 2>&1";
+  EXPECT_EQ(std::system(Command.c_str()), 0);
+  std::error_code EC;
+  std::filesystem::remove(Path, EC);
+}
+
+TEST(EVMSolidityEmitter, StopsOnFalseTerminalJumpWithoutJumpDestinations) {
+  const std::vector<uint8_t> Code = {opcodeByte(Opcode::PUSH0),
+                                     opcodeByte(Opcode::PUSH0),
+                                     opcodeByte(Opcode::JUMPI)};
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  auto Source = emitSolidity(*Program);
+  ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
+  EXPECT_NE(Source->find("if (condition == 0) { return "
+                         "NEVERD_EVM_STOPPED; }"),
+            std::string::npos);
+
+  if (std::system("command -v solc >/dev/null 2>&1") != 0)
+    GTEST_SKIP() << "solc is unavailable";
+  const auto Path = writeTemporarySource("-terminal-jump.sol", *Source);
   const std::string Command =
       "solc --bin '" + Path.string() + "' >/dev/null 2>&1";
   EXPECT_EQ(std::system(Command.c_str()), 0);
@@ -321,31 +523,37 @@ TEST(EVMSolidityEmitter, ExecutesDifferentiallyOnAnvil) {
                   "command -v jq >/dev/null 2>&1") != 0)
     GTEST_SKIP() << "solc, anvil, cast, or jq is unavailable";
 
-  const std::vector<uint8_t> Code = {0x60, 0x03, 0x60, 0x0a, 0x03, // 10 - 3 = 7
-                                     0x5f, 0x55, 0x00}; // storage[0] = 7; stop
+  const std::vector<uint8_t> Code = differentialALUProgram();
   auto Program = analyze(Code);
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
   auto Oracle = execute(Program->Low);
   ASSERT_TRUE(static_cast<bool>(Oracle)) << llvm::toString(Oracle.takeError());
-  const auto Stored = Oracle->Storage.find(llvm::APInt(256, 0));
+  const auto Stored = Oracle->Storage.find(llvm::APInt(kWordBits, 0));
   ASSERT_NE(Stored, Oracle->Storage.end());
 
   auto Source = emitSolidity(*Program);
   ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
-  *Source += R"sol(
-
-contract NeverDDifferentialHarness is NeverDRecovered {
-    uint256 public captured;
-
-    function _evmHost(uint8 opcode, uint256[7] memory args_, bytes memory)
-        internal override returns (uint256)
-    {
-        if (opcode == 0x55) captured = args_[1];
-        return 0;
-    }
-}
-)sol";
+  std::string Harness;
+  llvm::raw_string_ostream HarnessOS(Harness);
+  HarnessOS << "\ncontract NeverDDifferentialHarness is "
+            << kDefaultContractName
+            << " {\n"
+               "    uint256 public captured;\n\n"
+               "    function _evmHost(uint8 opcode, uint256["
+            << static_cast<unsigned>(maxHostOpcodeArguments())
+            << "] memory args_, bytes memory)\n"
+               "        internal override returns (uint256)\n"
+               "    {\n"
+               "        if (opcode == 0x"
+            << llvm::utohexstr(opcodeByte(Opcode::SSTORE))
+            << ") captured = args_[" << kSStoreValueArgumentIndex
+            << "];\n"
+               "        return 0;\n"
+               "    }\n"
+               "}\n";
+  HarnessOS.flush();
+  *Source += Harness;
 
   const auto SourcePath = writeTemporarySource("-anvil.sol", *Source);
   const auto ArtifactDirectory =
@@ -383,11 +591,20 @@ contract NeverDDifferentialHarness is NeverDRecovered {
       "receipt=$(cast send \"$address\" 'execute(bytes)' 0x --rpc-url '" +
       URL + "' --private-key '" + PrivateKey.str() +
       "' --json); "
-      "test \"$(printf '%s' \"$receipt\" | jq -r .status)\" = 0x1; "
-      "test \"$(printf '%s' \"$receipt\" | jq '.logs | length')\" -eq " +
+      "status=$(printf '%s' \"$receipt\" | jq -r .status); "
+      "if test \"$status\" != 0x1; then printf 'transaction status: %s\\n' "
+      "\"$status\" >&2; exit 1; fi; "
+      "actual_logs=$(printf '%s' \"$receipt\" | jq '.logs | length'); "
+      "if test \"$actual_logs\" -ne " +
       std::to_string(Oracle->Trace.size()) +
-      "; value=$(cast call \"$address\" 'captured()(uint256)' --rpc-url '" +
-      URL + "'); test \"$value\" = " + StoredDecimal.str().str() + ";";
+      "; then printf 'trace count: expected %s, got %s\\n' '" +
+      std::to_string(Oracle->Trace.size()) +
+      "' \"$actual_logs\" >&2; exit 1; fi; "
+      "value=$(cast call \"$address\" 'captured()(uint256)' --rpc-url '" +
+      URL + "' | awk '{print $1}'); if test \"$value\" != " +
+      StoredDecimal.str().str() +
+      "; then printf 'captured value: expected %s, got %s\\n' '" +
+      StoredDecimal.str().str() + "' \"$value\" >&2; exit 1; fi;";
   EXPECT_EQ(std::system(Command.c_str()), 0);
 
   std::error_code EC;

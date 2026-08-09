@@ -1,4 +1,14 @@
 //===- Interpreter.h - Deterministic EVM semantic oracle ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Declares the deterministic, resource-bounded EVM interpreter used as the
+/// semantic oracle for backend differential tests.
+///
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_EVM_INTERPRETER_H
 #define NEVERD_EVM_INTERPRETER_H
@@ -18,6 +28,11 @@ namespace neverd::evm {
 
 struct WordLess {
   bool operator()(const llvm::APInt &Left, const llvm::APInt &Right) const {
+    // APInt relational operators assert when widths differ. Ordering widths
+    // first lets malformed public input reach validateEnvironment(), which
+    // can return a diagnostic instead of aborting inside std::map insertion.
+    if (Left.getBitWidth() != Right.getBitWidth())
+      return Left.getBitWidth() < Right.getBitWidth();
     return Left.ult(Right);
   }
 };
@@ -25,6 +40,7 @@ struct WordLess {
 using WordMap = std::map<llvm::APInt, llvm::APInt, WordLess>;
 using BytecodeMap = std::map<llvm::APInt, std::vector<uint8_t>, WordLess>;
 
+/// Supplies deterministic values for EVM context and host-state operations.
 struct ExecutionEnvironment {
   llvm::APInt Address = llvm::APInt(kWordBits, 0);
   llvm::APInt Origin = llvm::APInt(kWordBits, 0);
@@ -41,6 +57,8 @@ struct ExecutionEnvironment {
   llvm::APInt BlobBaseFee = llvm::APInt(kWordBits, 0);
   llvm::APInt GasRemaining = llvm::APInt(kWordBits, kDefaultGasLimit);
   std::vector<uint8_t> Calldata;
+  /// Optional pre-execution EIP-211 buffer snapshot. This is useful for
+  /// resumed-state tests; it is not the current frame's final return value.
   std::vector<uint8_t> InitialReturnData;
   WordMap Storage;
   WordMap TransientStorage;
@@ -49,9 +67,14 @@ struct ExecutionEnvironment {
   WordMap BlockHashes;
   BytecodeMap ExternalCode;
   std::vector<llvm::APInt> BlobHashes;
+  /// Deterministic outcome exposed by CALL-family instructions.
   bool CallSuccess = true;
   std::vector<uint8_t> CallReturnData;
+  /// Deterministic outcome exposed by CREATE/CREATE2. A failed creation pushes
+  /// zero and may expose revert bytes through the EIP-211 return-data buffer.
+  bool CreateSuccess = true;
   llvm::APInt CreatedAddress = llvm::APInt(kWordBits, 0);
+  std::vector<uint8_t> CreateReturnData;
 };
 
 struct LogEntry {
@@ -76,6 +99,7 @@ enum class ExecutionStatus : uint8_t {
   StepLimit,
 };
 
+/// Captures observable execution state, diagnostics, logs, and trace entries.
 struct ExecutionResult {
   ExecutionStatus Status = ExecutionStatus::Running;
   std::string Error;
@@ -91,12 +115,15 @@ struct ExecutionResult {
   std::optional<llvm::APInt> SelfDestructBeneficiary;
 };
 
+/// Bounds execution resources and controls trace collection.
 struct InterpreterOptions {
   size_t MaxSteps = kDefaultMaxSteps;
   size_t MaxMemoryBytes = kDefaultMaxMemoryBytes;
   bool RecordTrace = true;
 };
 
+/// Executes a decoded program. Runtime faults are returned in
+/// `ExecutionResult::Status`; `llvm::Error` is reserved for API failures.
 llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
                                         ExecutionEnvironment Environment = {},
                                         InterpreterOptions Options = {});

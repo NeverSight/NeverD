@@ -2,16 +2,19 @@
 
 #include "neverd/evm/Interpreter.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/bit.h"
+#include "llvm/Support/MathExtras.h"
+
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <limits>
-#include <unordered_map>
+#include <utility>
 
 namespace neverd::evm {
 namespace {
 
-inline constexpr unsigned kKeccakLaneBits = 64;
 inline constexpr unsigned kKeccakDimension = 5;
 inline constexpr unsigned kKeccakLaneCount =
     kKeccakDimension * kKeccakDimension;
@@ -25,8 +28,103 @@ llvm::APInt boolWord(bool Value) {
   return llvm::APInt(kWordBits, Value ? 1 : 0);
 }
 
+llvm::Error validateWordWidth(llvm::Twine Field, const llvm::APInt &Value) {
+  if (Value.getBitWidth() == kWordBits)
+    return llvm::Error::success();
+  return llvm::make_error<llvm::StringError>(
+      "evm: environment field " + Field + " must be " + llvm::Twine(kWordBits) +
+          "-bit, got " + llvm::Twine(Value.getBitWidth()) + "-bit",
+      llvm::inconvertibleErrorCode());
+}
+
+llvm::Error validateWordMap(llvm::StringRef Name, const WordMap &Map) {
+  for (const auto &[Key, Value] : Map) {
+    if (llvm::Error E = validateWordWidth(llvm::Twine(Name) + " key", Key))
+      return E;
+    if (llvm::Error E = validateWordWidth(llvm::Twine(Name) + " value", Value))
+      return E;
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error validateAddress(llvm::Twine Field, const llvm::APInt &Value) {
+  if (llvm::Error E = validateWordWidth(Field, Value))
+    return E;
+  if (Value.getActiveBits() <= kAddressBits)
+    return llvm::Error::success();
+  return llvm::make_error<llvm::StringError>(
+      "evm: environment field " + Field + " must fit a " +
+          llvm::Twine(kAddressBits) + "-bit EVM address",
+      llvm::inconvertibleErrorCode());
+}
+
+llvm::Error validateAddressMap(llvm::StringRef Name, const WordMap &Map) {
+  for (const auto &[Key, Value] : Map) {
+    if (llvm::Error E = validateAddress(llvm::Twine(Name) + " key", Key))
+      return E;
+    if (llvm::Error E = validateWordWidth(llvm::Twine(Name) + " value", Value))
+      return E;
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error validateEnvironment(const ExecutionEnvironment &Environment) {
+  struct NamedWord {
+    llvm::StringLiteral Name;
+    const llvm::APInt *Value;
+  };
+  const NamedWord Words[] = {
+      {"CallValue", &Environment.CallValue},
+      {"GasPrice", &Environment.GasPrice},
+      {"Timestamp", &Environment.Timestamp},
+      {"BlockNumber", &Environment.BlockNumber},
+      {"PrevRandao", &Environment.PrevRandao},
+      {"GasLimit", &Environment.GasLimit},
+      {"ChainID", &Environment.ChainID},
+      {"BaseFee", &Environment.BaseFee},
+      {"BlobBaseFee", &Environment.BlobBaseFee},
+      {"GasRemaining", &Environment.GasRemaining},
+  };
+  for (const NamedWord &Word : Words)
+    if (llvm::Error E = validateWordWidth(Word.Name, *Word.Value))
+      return E;
+
+  const NamedWord Addresses[] = {
+      {"Address", &Environment.Address},
+      {"Origin", &Environment.Origin},
+      {"Caller", &Environment.Caller},
+      {"Coinbase", &Environment.Coinbase},
+      {"CreatedAddress", &Environment.CreatedAddress},
+  };
+  for (const NamedWord &Address : Addresses)
+    if (llvm::Error E = validateAddress(Address.Name, *Address.Value))
+      return E;
+
+  const std::pair<llvm::StringLiteral, const WordMap *> Maps[] = {
+      {"Storage", &Environment.Storage},
+      {"TransientStorage", &Environment.TransientStorage},
+      {"BlockHashes", &Environment.BlockHashes},
+  };
+  for (const auto &[Name, Map] : Maps)
+    if (llvm::Error E = validateWordMap(Name, *Map))
+      return E;
+
+  if (llvm::Error E = validateAddressMap("Balances", Environment.Balances))
+    return E;
+  if (llvm::Error E = validateAddressMap("CodeHashes", Environment.CodeHashes))
+    return E;
+
+  for (const auto &Entry : Environment.ExternalCode)
+    if (llvm::Error E = validateAddress("ExternalCode key", Entry.first))
+      return E;
+  for (const llvm::APInt &Hash : Environment.BlobHashes)
+    if (llvm::Error E = validateWordWidth("BlobHashes value", Hash))
+      return E;
+  return llvm::Error::success();
+}
+
 std::optional<size_t> toSize(const llvm::APInt &Word, size_t Limit) {
-  if (Word.getActiveBits() > sizeof(size_t) * kBitsPerByte)
+  if (Word.getActiveBits() > std::numeric_limits<size_t>::digits)
     return std::nullopt;
   const uint64_t Value = Word.getZExtValue();
   if (Value > Limit)
@@ -53,16 +151,9 @@ llvm::APInt bytesToWord(const std::vector<uint8_t> &Bytes, size_t Offset) {
 
 void wordToBytes(const llvm::APInt &Word, uint8_t *Output) {
   for (size_t I = 0; I < kWordBytes; ++I)
-    Output[I] = static_cast<uint8_t>(
-        Word.extractBitsAsZExtValue(
-            kBitsPerByte,
-            static_cast<unsigned>((kWordBytes - 1 - I) * kBitsPerByte)));
-}
-
-uint64_t rotateLeft(uint64_t Value, unsigned Shift) {
-  return Shift == 0 ? Value
-                    : (Value << Shift) |
-                          (Value >> (kKeccakLaneBits - Shift));
+    Output[I] = static_cast<uint8_t>(Word.extractBitsAsZExtValue(
+        kBitsPerByte,
+        static_cast<unsigned>((kWordBytes - 1 - I) * kBitsPerByte)));
 }
 
 void keccakF1600(std::array<uint64_t, kKeccakLaneCount> &State) {
@@ -76,29 +167,26 @@ void keccakF1600(std::array<uint64_t, kKeccakLaneCount> &State) {
       0x000000000000800aULL, 0x800000008000000aULL, 0x8000000080008081ULL,
       0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL};
   static constexpr unsigned Rotation[kKeccakLaneCount] = {
-      0,  1, 62, 28, 27, 36, 44, 6,  55, 20, 3, 10, 43,
-      25, 39, 41, 45, 15, 21, 8, 18, 2,  61, 56, 14};
+      0,  1,  62, 28, 27, 36, 44, 6,  55, 20, 3,  10, 43,
+      25, 39, 41, 45, 15, 21, 8,  18, 2,  61, 56, 14};
 
   for (uint64_t RC : RoundConstants) {
-    uint64_t C[kKeccakDimension], D[kKeccakDimension],
-        B[kKeccakLaneCount];
+    uint64_t C[kKeccakDimension], D[kKeccakDimension], B[kKeccakLaneCount];
     for (unsigned X = 0; X < kKeccakDimension; ++X)
       C[X] = State[X] ^ State[X + kKeccakDimension] ^
-             State[X + 2 * kKeccakDimension] ^
-             State[X + 3 * kKeccakDimension] ^
+             State[X + 2 * kKeccakDimension] ^ State[X + 3 * kKeccakDimension] ^
              State[X + 4 * kKeccakDimension];
     for (unsigned X = 0; X < kKeccakDimension; ++X)
       D[X] = C[(X + kKeccakDimension - 1) % kKeccakDimension] ^
-             rotateLeft(C[(X + 1) % kKeccakDimension], 1);
+             llvm::rotl(C[(X + 1) % kKeccakDimension], 1);
     for (unsigned Y = 0; Y < kKeccakDimension; ++Y)
       for (unsigned X = 0; X < kKeccakDimension; ++X)
         State[X + kKeccakDimension * Y] ^= D[X];
     for (unsigned Y = 0; Y < kKeccakDimension; ++Y)
       for (unsigned X = 0; X < kKeccakDimension; ++X)
-        B[Y + kKeccakDimension *
-                  ((2 * X + 3 * Y) % kKeccakDimension)] =
-            rotateLeft(State[X + kKeccakDimension * Y],
-                       Rotation[X + kKeccakDimension * Y]);
+        B[Y + kKeccakDimension * ((2 * X + 3 * Y) % kKeccakDimension)] =
+            llvm::rotl(State[X + kKeccakDimension * Y],
+                       static_cast<int>(Rotation[X + kKeccakDimension * Y]));
     for (unsigned Y = 0; Y < kKeccakDimension; ++Y)
       for (unsigned X = 0; X < kKeccakDimension; ++X)
         State[X + kKeccakDimension * Y] =
@@ -113,29 +201,27 @@ llvm::APInt keccak256(const uint8_t *Data, size_t Size) {
   std::array<uint64_t, kKeccakLaneCount> State{};
   while (Size >= kKeccak256RateBytes) {
     for (size_t I = 0; I < kKeccak256RateBytes; ++I)
-      State[I / sizeof(uint64_t)] ^=
-          static_cast<uint64_t>(Data[I])
-          << ((I % sizeof(uint64_t)) * kBitsPerByte);
+      State[I / sizeof(uint64_t)] ^= static_cast<uint64_t>(Data[I])
+                                     << ((I % sizeof(uint64_t)) * kBitsPerByte);
     keccakF1600(State);
     Data += kKeccak256RateBytes;
     Size -= kKeccak256RateBytes;
   }
   std::array<uint8_t, kKeccak256RateBytes> Last{};
-  std::copy_n(Data, Size, Last.begin());
+  if (Size != 0)
+    std::copy_n(Data, Size, Last.begin());
   Last[Size] = kKeccakDomainSeparator;
   Last[kKeccak256RateBytes - 1] |= kKeccakFinalBit;
   for (size_t I = 0; I < kKeccak256RateBytes; ++I)
-    State[I / sizeof(uint64_t)] ^=
-        static_cast<uint64_t>(Last[I])
-        << ((I % sizeof(uint64_t)) * kBitsPerByte);
+    State[I / sizeof(uint64_t)] ^= static_cast<uint64_t>(Last[I])
+                                   << ((I % sizeof(uint64_t)) * kBitsPerByte);
   keccakF1600(State);
 
   llvm::APInt Result(kWordBits, 0);
   for (size_t I = 0; I < kWordBytes; ++I) {
     Result <<= kBitsPerByte;
-    Result |= static_cast<uint8_t>(
-        State[I / sizeof(uint64_t)] >>
-        ((I % sizeof(uint64_t)) * kBitsPerByte));
+    Result |= static_cast<uint8_t>(State[I / sizeof(uint64_t)] >>
+                                   ((I % sizeof(uint64_t)) * kBitsPerByte));
   }
   return Result;
 }
@@ -164,10 +250,26 @@ llvm::APInt mapLookup(const WordMap &Map, const llvm::APInt &Key) {
   return It == Map.end() ? zeroWord() : It->second;
 }
 
+llvm::APInt canonicalAddress(const llvm::APInt &Word) {
+  return Word.trunc(kAddressBits).zext(kWordBits);
+}
+
+std::vector<uint8_t>::iterator byteIterator(std::vector<uint8_t> &Bytes,
+                                            size_t Offset) {
+  return Bytes.begin() +
+         static_cast<std::vector<uint8_t>::difference_type>(Offset);
+}
+
+std::vector<uint8_t>::const_iterator
+byteIterator(const std::vector<uint8_t> &Bytes, size_t Offset) {
+  return Bytes.begin() +
+         static_cast<std::vector<uint8_t>::difference_type>(Offset);
+}
+
 const std::vector<uint8_t> &codeLookup(const BytecodeMap &Map,
                                        const llvm::APInt &Address) {
   static const std::vector<uint8_t> Empty;
-  auto It = Map.find(Address);
+  auto It = Map.find(canonicalAddress(Address));
   return It == Map.end() ? Empty : It->second;
 }
 
@@ -176,16 +278,25 @@ const std::vector<uint8_t> &codeLookup(const BytecodeMap &Map,
 llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
                                         ExecutionEnvironment Environment,
                                         InterpreterOptions Options) {
+  if (llvm::Error E = validateEnvironment(Environment))
+    return std::move(E);
+
   ExecutionResult Result;
   Result.Storage = std::move(Environment.Storage);
   Result.TransientStorage = std::move(Environment.TransientStorage);
-  Result.ReturnData = std::move(Environment.InitialReturnData);
+  // EIP-211's return-data buffer belongs to the executing frame but is not the
+  // frame's output.  STOP must not expose the most recent subcall's bytes as
+  // though this frame had returned them.
+  std::vector<uint8_t> ReturnDataBuffer =
+      std::move(Environment.InitialReturnData);
+  const size_t MemoryLimit =
+      Options.MaxMemoryBytes - (Options.MaxMemoryBytes % kWordBytes);
 
-  std::unordered_map<uint64_t, const LowInstruction *> Instructions;
+  llvm::DenseMap<uint64_t, const LowInstruction *> Instructions;
   for (const auto &Instruction : Program.Instructions)
     Instructions[Instruction.PC] = &Instruction;
 
-  uint64_t PC = 0;
+  uint64_t PC = kEntryPC;
   bool Fault = false;
   auto Fail = [&](llvm::Twine Message) {
     if (!Fault) {
@@ -213,21 +324,21 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
   };
   auto Range = [&](const llvm::APInt &OffsetWord, const llvm::APInt &SizeWord,
                    size_t &Offset, size_t &Size, size_t &End) {
-    auto S = toSize(SizeWord, Options.MaxMemoryBytes);
+    auto S = toSize(SizeWord, MemoryLimit);
     if (!S) {
       Fail("memory range exceeds configured limit");
       return false;
     }
     // EVM zero-length memory operations do not expand memory and accept any
-    // A full-word offset is valid because the offset is never dereferenced.
+    // full-word offset because the offset is never dereferenced.
     if (*S == 0) {
       Offset = 0;
       Size = 0;
       End = 0;
       return true;
     }
-    auto O = toSize(OffsetWord, Options.MaxMemoryBytes);
-    if (!O || !checkedRange(*O, *S, Options.MaxMemoryBytes, End)) {
+    auto O = toSize(OffsetWord, MemoryLimit);
+    if (!O || !checkedRange(*O, *S, MemoryLimit, End)) {
       Fail("memory range exceeds configured limit");
       return false;
     }
@@ -237,8 +348,7 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
   };
   auto EnsureMemory = [&](size_t End) {
     if (End > Result.Memory.size()) {
-      const size_t RoundedEnd =
-          (End + kWordBytes - 1) & ~size_t(kWordBytes - 1);
+      const size_t RoundedEnd = llvm::alignTo(End, size_t{kWordBytes});
       Result.Memory.resize(RoundedEnd, 0);
     }
   };
@@ -247,14 +357,13 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
                           size_t Destination, size_t Size) {
     EnsureMemory(Destination + Size);
     if (!SourceOffset || *SourceOffset >= Source.size()) {
-      std::fill_n(Result.Memory.begin() + Destination, Size, uint8_t{0});
+      std::fill_n(byteIterator(Result.Memory, Destination), Size, uint8_t{0});
       return;
     }
-    const size_t Available =
-        std::min(Size, Source.size() - *SourceOffset);
-    std::copy_n(Source.begin() + *SourceOffset, Available,
-                Result.Memory.begin() + Destination);
-    std::fill_n(Result.Memory.begin() + Destination + Available,
+    const size_t Available = std::min(Size, Source.size() - *SourceOffset);
+    std::copy_n(byteIterator(Source, *SourceOffset), Available,
+                byteIterator(Result.Memory, Destination));
+    std::fill_n(byteIterator(Result.Memory, Destination + Available),
                 Size - Available, uint8_t{0});
   };
 
@@ -276,39 +385,39 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
       break;
     }
     const LowInstruction &Instruction = *Found->second;
-    const Opcode Op = Instruction.Op;
+    const Opcode Op = Instruction.opcode();
     TraceEntry Trace{PC, Op, Result.Stack.size(), 0};
     ++Result.Steps;
     uint64_t NextPC = Instruction.NextPC;
 
-    if (!Instruction.Known) {
+    if (!Instruction.isKnown()) {
       Fail("unknown or inactive opcode");
-    } else if (Op == Opcode::STOP) {
+    } else if (Instruction.is(Opcode::STOP)) {
       Result.Status = ExecutionStatus::Stopped;
-    } else if (isPush(Op)) {
+    } else if (Instruction.isPush()) {
       Push(Instruction.Immediate);
-    } else if (isDup(Op)) {
+    } else if (Instruction.isDup()) {
       const size_t Depth = dupDepth(Op);
       if (Result.Stack.size() < Depth)
         Fail("stack underflow in DUP");
       else
         Push(Result.Stack[Result.Stack.size() - Depth]);
-    } else if (isSwap(Op)) {
+    } else if (Instruction.isSwap()) {
       const size_t Depth = swapDepth(Op);
       if (Result.Stack.size() <= Depth)
         Fail("stack underflow in SWAP");
       else
         std::swap(Result.Stack.back(),
                   Result.Stack[Result.Stack.size() - Depth - 1]);
-    } else if (isLog(Op)) {
+    } else if (Instruction.isLog()) {
       llvm::APInt OffsetWord = Pop();
       llvm::APInt SizeWord = Pop();
       size_t Offset = 0, Size = 0, End = 0;
       LogEntry Log;
       if (!Fault && Range(OffsetWord, SizeWord, Offset, Size, End)) {
         EnsureMemory(End);
-        Log.Data.assign(Result.Memory.begin() + Offset,
-                        Result.Memory.begin() + End);
+        Log.Data.assign(byteIterator(Result.Memory, Offset),
+                        byteIterator(Result.Memory, End));
         for (unsigned I = 0; I < logTopicCount(Op); ++I)
           Log.Topics.push_back(Pop());
         if (!Fault)
@@ -439,13 +548,12 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
           if (Index.uge(kWordBytes))
             Push(zeroWord());
           else
-            Push(
-                llvm::APInt(kWordBits,
-                            Value.extractBitsAsZExtValue(
-                                kBitsPerByte,
-                                static_cast<unsigned>(
-                                    (kWordBytes - 1 - Index.getZExtValue()) *
-                                    kBitsPerByte))));
+            Push(llvm::APInt(
+                kWordBits,
+                Value.extractBitsAsZExtValue(
+                    kBitsPerByte, static_cast<unsigned>(
+                                      (kWordBytes - 1 - Index.getZExtValue()) *
+                                      kBitsPerByte))));
         }
         break;
       }
@@ -478,7 +586,9 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
         size_t Offset = 0, Size = 0, End = 0;
         if (!Fault && Range(OffsetWord, SizeWord, Offset, Size, End)) {
           EnsureMemory(End);
-          Push(keccak256(Result.Memory.data() + Offset, Size));
+          const uint8_t *Data =
+              Size == 0 ? nullptr : Result.Memory.data() + Offset;
+          Push(keccak256(Data, Size));
         }
         break;
       }
@@ -488,7 +598,7 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
       case Opcode::BALANCE: {
         llvm::APInt Address = Pop();
         if (!Fault)
-          Push(mapLookup(Environment.Balances, Address));
+          Push(mapLookup(Environment.Balances, canonicalAddress(Address)));
         break;
       }
       case Opcode::ORIGIN:
@@ -521,10 +631,9 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
         if (!Fault &&
             Range(DestinationWord, SizeWord, Destination, Size, End)) {
           const std::vector<uint8_t> *Bytes =
-              Op == Opcode::CALLDATACOPY
-                  ? &Environment.Calldata
-                  : Op == Opcode::CODECOPY ? &Program.Code
-                                           : &Result.ReturnData;
+              Op == Opcode::CALLDATACOPY ? &Environment.Calldata
+              : Op == Opcode::CODECOPY   ? &Program.Code
+                                         : &ReturnDataBuffer;
           if (Op == Opcode::RETURNDATACOPY &&
               (!Source || *Source > Bytes->size() ||
                Size > Bytes->size() - *Source)) {
@@ -553,25 +662,31 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
                     SourceWord = Pop(), SizeWord = Pop();
         size_t Destination = 0, Size = 0, End = 0;
         auto Source = toSize(SourceWord, std::numeric_limits<size_t>::max());
-        if (!Fault &&
-            Range(DestinationWord, SizeWord, Destination, Size, End))
+        if (!Fault && Range(DestinationWord, SizeWord, Destination, Size, End))
           CopyToMemory(codeLookup(Environment.ExternalCode, Address), Source,
                        Destination, Size);
         break;
       }
       case Opcode::RETURNDATASIZE:
-        Push(llvm::APInt(kWordBits, Result.ReturnData.size()));
+        Push(llvm::APInt(kWordBits, ReturnDataBuffer.size()));
         break;
       case Opcode::EXTCODEHASH: {
         llvm::APInt Address = Pop();
         if (!Fault)
-          Push(mapLookup(Environment.CodeHashes, Address));
+          Push(mapLookup(Environment.CodeHashes, canonicalAddress(Address)));
         break;
       }
       case Opcode::BLOCKHASH: {
         llvm::APInt Number = Pop();
-        if (!Fault)
-          Push(mapLookup(Environment.BlockHashes, Number));
+        if (!Fault) {
+          const bool IsPrevious = Number.ult(Environment.BlockNumber);
+          const bool IsAvailable =
+              IsPrevious &&
+              (Environment.BlockNumber - Number)
+                  .ule(llvm::APInt(kWordBits, kBlockHashHistoryWindow));
+          Push(IsAvailable ? mapLookup(Environment.BlockHashes, Number)
+                           : zeroWord());
+        }
         break;
       }
       case Opcode::COINBASE:
@@ -593,7 +708,8 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
         Push(Environment.ChainID);
         break;
       case Opcode::SELFBALANCE:
-        Push(mapLookup(Environment.Balances, Environment.Address));
+        Push(mapLookup(Environment.Balances,
+                       canonicalAddress(Environment.Address)));
         break;
       case Opcode::BASEFEE:
         Push(Environment.BaseFee);
@@ -601,7 +717,7 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
       case Opcode::BLOBHASH: {
         llvm::APInt Index = Pop();
         if (!Fault &&
-            Index.getActiveBits() <= sizeof(size_t) * kBitsPerByte &&
+            Index.getActiveBits() <= std::numeric_limits<size_t>::digits &&
             Index.getZExtValue() < Environment.BlobHashes.size())
           Push(Environment.BlobHashes[Index.getZExtValue()]);
         else if (!Fault)
@@ -616,8 +732,9 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
         break;
       case Opcode::MLOAD: {
         llvm::APInt OffsetWord = Pop();
-        auto Offset = toSize(OffsetWord, Options.MaxMemoryBytes);
-        if (!Offset || *Offset > Options.MaxMemoryBytes - kWordBytes)
+        auto Offset = toSize(OffsetWord, MemoryLimit);
+        if (!Offset || MemoryLimit < kWordBytes ||
+            *Offset > MemoryLimit - kWordBytes)
           Fail("MLOAD offset exceeds configured memory limit");
         else if (!Fault) {
           EnsureMemory(*Offset + kWordBytes);
@@ -627,8 +744,9 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
       }
       case Opcode::MSTORE: {
         llvm::APInt OffsetWord = Pop(), Value = Pop();
-        auto Offset = toSize(OffsetWord, Options.MaxMemoryBytes);
-        if (!Offset || *Offset > Options.MaxMemoryBytes - kWordBytes)
+        auto Offset = toSize(OffsetWord, MemoryLimit);
+        if (!Offset || MemoryLimit < kWordBytes ||
+            *Offset > MemoryLimit - kWordBytes)
           Fail("MSTORE offset exceeds configured memory limit");
         else if (!Fault) {
           EnsureMemory(*Offset + kWordBytes);
@@ -638,14 +756,13 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
       }
       case Opcode::MSTORE8: {
         llvm::APInt OffsetWord = Pop(), Value = Pop();
-        auto Offset = toSize(OffsetWord, Options.MaxMemoryBytes);
-        if (!Offset || *Offset >= Options.MaxMemoryBytes)
+        auto Offset = toSize(OffsetWord, MemoryLimit);
+        if (!Offset || *Offset >= MemoryLimit)
           Fail("MSTORE8 offset exceeds configured memory limit");
         else if (!Fault) {
           EnsureMemory(*Offset + 1);
-          Result.Memory[*Offset] =
-              static_cast<uint8_t>(
-                  Value.extractBitsAsZExtValue(kBitsPerByte, 0));
+          Result.Memory[*Offset] = static_cast<uint8_t>(
+              Value.extractBitsAsZExtValue(kBitsPerByte, 0));
         }
         break;
       }
@@ -668,7 +785,7 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
             Op == Opcode::JUMPI ? Pop() : llvm::APInt(kWordBits, 1);
         if (!Fault && !Condition.isZero()) {
           if (Destination.getActiveBits() >
-                  sizeof(uint64_t) * kBitsPerByte ||
+                  std::numeric_limits<uint64_t>::digits ||
               !Program.JumpDestinations.contains(Destination.getZExtValue()))
             Fail("jump target is not a JUMPDEST");
           else
@@ -709,8 +826,9 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
                   DestinationEnd) &&
             Range(SourceWord, SizeWord, Source, Ignored, SourceEnd)) {
           EnsureMemory(std::max(DestinationEnd, SourceEnd));
-          std::memmove(Result.Memory.data() + Destination,
-                       Result.Memory.data() + Source, Size);
+          if (Size != 0)
+            std::memmove(Result.Memory.data() + Destination,
+                         Result.Memory.data() + Source, Size);
         }
         break;
       }
@@ -723,8 +841,13 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
         size_t Offset = 0, Size = 0, End = 0;
         if (!Fault && Range(OffsetWord, SizeWord, Offset, Size, End)) {
           EnsureMemory(End);
-          Result.ReturnData.clear();
-          Push(Environment.CreatedAddress);
+          if (Environment.CreateSuccess) {
+            ReturnDataBuffer.clear();
+            Push(canonicalAddress(Environment.CreatedAddress));
+          } else {
+            ReturnDataBuffer = Environment.CreateReturnData;
+            Push(zeroWord());
+          }
         }
         break;
       }
@@ -746,11 +869,10 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
             Range(OutputOffsetWord, OutputSizeWord, OutputOffset, OutputSize,
                   OutputEnd)) {
           EnsureMemory(std::max(InputEnd, OutputEnd));
-          Result.ReturnData = Environment.CallReturnData;
-          const size_t CopySize =
-              std::min(OutputSize, Result.ReturnData.size());
-          std::copy_n(Result.ReturnData.begin(), CopySize,
-                      Result.Memory.begin() + OutputOffset);
+          ReturnDataBuffer = Environment.CallReturnData;
+          const size_t CopySize = std::min(OutputSize, ReturnDataBuffer.size());
+          std::copy_n(ReturnDataBuffer.begin(), CopySize,
+                      byteIterator(Result.Memory, OutputOffset));
           Push(boolWord(Environment.CallSuccess));
         }
         break;
@@ -761,8 +883,8 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
         size_t Offset = 0, Size = 0, End = 0;
         if (!Fault && Range(OffsetWord, SizeWord, Offset, Size, End)) {
           EnsureMemory(End);
-          Result.ReturnData.assign(Result.Memory.begin() + Offset,
-                                   Result.Memory.begin() + End);
+          Result.ReturnData.assign(byteIterator(Result.Memory, Offset),
+                                   byteIterator(Result.Memory, End));
           Result.Status = Op == Opcode::RETURN ? ExecutionStatus::Returned
                                                : ExecutionStatus::Reverted;
         }
@@ -774,7 +896,7 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
       case Opcode::SELFDESTRUCT: {
         llvm::APInt Beneficiary = Pop();
         if (!Fault) {
-          Result.SelfDestructBeneficiary = std::move(Beneficiary);
+          Result.SelfDestructBeneficiary = canonicalAddress(Beneficiary);
           Result.Status = ExecutionStatus::SelfDestructed;
         }
         break;

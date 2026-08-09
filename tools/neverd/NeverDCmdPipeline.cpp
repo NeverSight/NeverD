@@ -39,20 +39,10 @@ namespace neverd::cli {
 
 namespace {
 
-const char *hardforkSpelling(evm::Hardfork Fork) {
-  switch (Fork) {
-#define EVM_HARDFORK(NAME, SPELLING)                                           \
-  case evm::Hardfork::NAME:                                                    \
-    return SPELLING;
-#include "neverd/evm/EVMHardforks.def"
-  }
-  return "";
-}
-
 bool configureEVM(neverd_session_t Sess) {
   neverd_evm_set_strict(Sess, EVMRelaxed ? 0 : 1);
-  if (!neverd_evm_set_hardfork(Sess,
-                               hardforkSpelling(EVMHardfork.getValue()))) {
+  const std::string ForkName = evm::hardforkName(EVMHardfork.getValue()).str();
+  if (!neverd_evm_set_hardfork(Sess, ForkName.c_str())) {
     WithColor::error() << "invalid EVM hardfork: " << takeLastError(Sess)
                        << "\n";
     return false;
@@ -116,8 +106,8 @@ int runPlugins(const char *Argv0) {
   if (!PluginRun.empty()) {
     if (!PluginBinary.empty()) {
       if (!neverd_session_load(Sess, PluginBinary.getValue().c_str())) {
-        WithColor::error()
-            << "failed to load binary: " << PluginBinary.getValue() << "\n";
+        WithColor::error() << "failed to load binary: "
+                           << PluginBinary.getValue() << "\n";
         return 1;
       }
     }
@@ -186,13 +176,16 @@ int runDecompile(neverd_session_t Sess) {
 
   const neverd_output_language_t Language = OutputLanguage.getValue();
   const bool Solidity = Language == NEVERD_OUTPUT_SOLIDITY;
-  const char *Source = Solidity
-                           ? neverd_decompile_all_ex(
-                                 Sess, InPath, NEVERD_OUTPUT_SOLIDITY, NoOpt,
-                                 MaxFunc)
-                           : neverd_decompile_all(Sess, InPath,
-                                                  LlvmRoute ? 1 : 0, NoOpt,
-                                                  MaxFunc);
+  if (Solidity && LlvmRoute) {
+    WithColor::error()
+        << "--llvm cannot be combined with --language=solidity\n";
+    return 1;
+  }
+  const char *Source =
+      Solidity ? neverd_decompile_all_ex(Sess, InPath, NEVERD_OUTPUT_SOLIDITY,
+                                         NoOpt, MaxFunc)
+               : neverd_decompile_all(Sess, InPath, LlvmRoute ? 1 : 0, NoOpt,
+                                      MaxFunc);
   if (!Source) {
     WithColor::error() << "decompile failed: " << takeLastError(Sess) << "\n";
     return 1;

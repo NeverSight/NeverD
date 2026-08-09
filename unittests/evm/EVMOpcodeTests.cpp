@@ -4,8 +4,12 @@
 
 #include "neverd/evm/Opcodes.h"
 
+#include <type_traits>
+
 namespace neverd::evm {
 namespace {
+
+static_assert(!std::is_default_constructible_v<OpcodeInfo>);
 
 TEST(EVMOpcodeMetadata, FrontierAddHasExactStackContract) {
   const auto Info = opcodeInfo(Opcode::ADD, Hardfork::Frontier);
@@ -14,15 +18,14 @@ TEST(EVMOpcodeMetadata, FrontierAddHasExactStackContract) {
   EXPECT_EQ(Info->StackInputs, 2);
   EXPECT_EQ(Info->StackOutputs, 1);
   EXPECT_FALSE(Info->IsTerminator);
-  EXPECT_TRUE(Info->IsView);
-  EXPECT_TRUE(Info->IsPure);
+  EXPECT_EQ(Info->StateAccess, StateAccessKind::None);
   EXPECT_EQ(Info->Effect, EffectKind::None);
   EXPECT_EQ(opcodeByte(Info->Op), 0x01u);
 }
 
 TEST(EVMOpcodeMetadata, LatestContainsTheCompleteAssignedLegacySet) {
   unsigned Assigned = 0;
-  for (unsigned Byte = 0; Byte <= 0xff; ++Byte)
+  for (unsigned Byte = 0; Byte < kOpcodeSpaceSize; ++Byte)
     Assigned +=
         opcodeInfo(static_cast<uint8_t>(Byte), Hardfork::Fusaka).has_value();
 
@@ -45,7 +48,7 @@ TEST(EVMOpcodeMetadata, LatestContainsTheCompleteAssignedLegacySet) {
       {Opcode::BLOBBASEFEE, "BLOBBASEFEE", 0, 1, false},
       {Opcode::SLOAD, "SLOAD", 1, 1, false},
       {Opcode::SSTORE, "SSTORE", 2, 0, false},
-      {Opcode::JUMPI, "JUMPI", 2, 0, false},
+      {Opcode::JUMPI, "JUMPI", 2, 0, true},
       {Opcode::TLOAD, "TLOAD", 1, 1, false},
       {Opcode::TSTORE, "TSTORE", 2, 0, false},
       {Opcode::MCOPY, "MCOPY", 3, 0, false},
@@ -63,9 +66,8 @@ TEST(EVMOpcodeMetadata, LatestContainsTheCompleteAssignedLegacySet) {
 
   for (const auto &Want : Expected) {
     const auto Info = opcodeInfo(Want.Op, Hardfork::Fusaka);
-    ASSERT_TRUE(Info.has_value())
-        << "opcode 0x" << std::hex
-        << static_cast<unsigned>(opcodeByte(Want.Op));
+    ASSERT_TRUE(Info.has_value()) << "opcode 0x" << std::hex
+                                  << static_cast<unsigned>(opcodeByte(Want.Op));
     EXPECT_EQ(Info->Name, llvm::StringRef(Want.Name));
     EXPECT_EQ(Info->StackInputs, Want.StackInputs) << Info->Name.str();
     EXPECT_EQ(Info->StackOutputs, Want.StackOutputs) << Info->Name.str();
@@ -93,6 +95,19 @@ TEST(EVMOpcodeMetadata, DefinitionDatabaseRoundTripsEveryAssignedByte) {
   EXPECT_EQ(maxHostOpcodeArguments(), 7u);
 }
 
+TEST(EVMOpcodeMetadata, UnknownMetadataPreservesTheRawByteAndFaultPolicy) {
+  const OpcodeInfo Info = unknownOpcodeInfo(0x0c);
+  EXPECT_EQ(opcodeByte(Info.Op), 0x0c);
+  EXPECT_FALSE(Info.isKnown());
+  EXPECT_EQ(Info.Name, kUnknownOpcodeName);
+  EXPECT_EQ(Info.Effect, EffectKind::Unknown);
+  EXPECT_EQ(Info.MemoryAccess, MemoryAccessKind::Unknown);
+  EXPECT_EQ(Info.StateAccess, StateAccessKind::Unknown);
+  EXPECT_TRUE(mayReadMemory(Info));
+  EXPECT_TRUE(mayWriteMemory(Info));
+  EXPECT_TRUE(Info.IsTerminator);
+}
+
 TEST(EVMOpcodeMetadata, OpcodeFamiliesExposeWidthsAndDepthsWithoutMagicRanges) {
   EXPECT_TRUE(isPush(Opcode::PUSH0));
   EXPECT_TRUE(isPush(Opcode::PUSH32));
@@ -114,12 +129,49 @@ TEST(EVMOpcodeMetadata, OpcodeFamiliesExposeWidthsAndDepthsWithoutMagicRanges) {
 }
 
 TEST(EVMOpcodeMetadata, EffectsComeFromTheInstructionDatabase) {
-  EXPECT_EQ(opcodeInfo(Opcode::MLOAD)->Effect, EffectKind::MemoryRead);
+  EXPECT_EQ(opcodeInfo(Opcode::MLOAD)->Effect, EffectKind::None);
+  EXPECT_EQ(opcodeInfo(Opcode::CALLDATACOPY)->Effect, EffectKind::ContextRead);
+  EXPECT_EQ(opcodeInfo(Opcode::CALLVALUE)->Effect,
+            EffectKind::CallValueRead);
   EXPECT_EQ(opcodeInfo(Opcode::SSTORE)->Effect, EffectKind::StorageWrite);
-  EXPECT_EQ(opcodeInfo(Opcode::STATICCALL)->Effect,
-            EffectKind::ExternalCall);
+  EXPECT_EQ(opcodeInfo(Opcode::STATICCALL)->Effect, EffectKind::ExternalCall);
   EXPECT_EQ(opcodeInfo(Opcode::LOG4)->Effect, EffectKind::Log);
+  EXPECT_EQ(opcodeInfo(Opcode::SELFDESTRUCT)->Effect, EffectKind::SelfDestruct);
+  EXPECT_EQ(effectName(EffectKind::None), "none");
+  EXPECT_EQ(effectName(EffectKind::SelfDestruct), "selfdestruct");
   EXPECT_EQ(effectName(EffectKind::TransientWrite), "transient.write");
+  EXPECT_EQ(effectName(EffectKind::CallValueRead), "callvalue.read");
+
+  EXPECT_EQ(opcodeInfo(Opcode::SHA3)->StateAccess, StateAccessKind::None);
+  EXPECT_EQ(opcodeInfo(Opcode::ADDRESS)->StateAccess, StateAccessKind::Read);
+  EXPECT_EQ(opcodeInfo(Opcode::CALLVALUE)->StateAccess, StateAccessKind::Read);
+  EXPECT_EQ(opcodeInfo(Opcode::STATICCALL)->StateAccess, StateAccessKind::Read);
+  EXPECT_EQ(opcodeInfo(Opcode::CALL)->StateAccess, StateAccessKind::Write);
+  EXPECT_EQ(stateAccessName(StateAccessKind::Write), "state.write");
+
+  EXPECT_TRUE(isALU(*opcodeInfo(Opcode::ADD)));
+  EXPECT_TRUE(isALU(*opcodeInfo(Opcode::CLZ)));
+  EXPECT_FALSE(isALU(*opcodeInfo(Opcode::SHA3)));
+  EXPECT_FALSE(isALU(unknownOpcodeInfo(0x0c)));
+}
+
+TEST(EVMOpcodeMetadata, MemoryAccessesDescribeCompoundInstructionBehavior) {
+  EXPECT_EQ(memoryAccess(Opcode::ADD), MemoryAccessKind::None);
+  EXPECT_EQ(memoryAccess(static_cast<Opcode>(0x0c)), MemoryAccessKind::Unknown);
+  EXPECT_EQ(memoryAccess(Opcode::SHA3), MemoryAccessKind::Read);
+  EXPECT_EQ(memoryAccess(Opcode::MSTORE8), MemoryAccessKind::Write);
+  EXPECT_EQ(memoryAccess(Opcode::MCOPY), MemoryAccessKind::ReadWrite);
+
+  EXPECT_TRUE(mayReadMemory(*opcodeInfo(Opcode::SHA3)));
+  EXPECT_FALSE(mayWriteMemory(*opcodeInfo(Opcode::SHA3)));
+  EXPECT_TRUE(mayWriteMemory(*opcodeInfo(Opcode::EXTCODECOPY)));
+  EXPECT_TRUE(mayReadMemory(*opcodeInfo(Opcode::CALL)));
+  EXPECT_TRUE(mayWriteMemory(*opcodeInfo(Opcode::CALL)));
+  EXPECT_FALSE(mayReadMemory(*opcodeInfo(Opcode::ADD)));
+  EXPECT_FALSE(mayWriteMemory(*opcodeInfo(Opcode::ADD)));
+  EXPECT_EQ(opcodeInfo(Opcode::CALL)->MemoryAccess,
+            MemoryAccessKind::ReadWrite);
+  EXPECT_EQ(memoryAccessName(MemoryAccessKind::ReadWrite), "memory.readwrite");
 }
 
 TEST(EVMOpcodeMetadata, HardforkActivationIsExplicitAndNameAware) {
@@ -139,6 +191,11 @@ TEST(EVMOpcodeMetadata, HardforkActivationIsExplicitAndNameAware) {
   EXPECT_EQ(parseHardfork("osaka"), Hardfork::Fusaka);
   EXPECT_EQ(hardforkName(Hardfork::Latest), "fusaka");
   EXPECT_FALSE(parseHardfork("future-fork").has_value());
+
+  const auto InvalidFork = static_cast<Hardfork>(kByteMax);
+  EXPECT_FALSE(isValidHardfork(InvalidFork));
+  EXPECT_FALSE(opcodeInfo(Opcode::ADD, InvalidFork).has_value());
+  EXPECT_EQ(hardforkName(InvalidFork), kUnknownName);
 }
 
 } // namespace

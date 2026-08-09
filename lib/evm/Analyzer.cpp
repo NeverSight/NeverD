@@ -2,6 +2,8 @@
 
 #include "neverd/evm/Analyzer.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Format.h"
@@ -13,7 +15,6 @@
 #include <map>
 #include <queue>
 #include <set>
-#include <unordered_map>
 
 namespace neverd::evm {
 namespace {
@@ -26,6 +27,19 @@ inline constexpr size_t kDispatcherDestinationSearchDistance = 2;
 inline constexpr size_t kEventTopicSearchWindow = 8;
 inline constexpr size_t kErrorSelectorSearchWindow = 10;
 
+Mutability recoveredMutability(StateAccessKind Access) {
+  switch (Access) {
+  case StateAccessKind::None:
+    return Mutability::Pure;
+  case StateAccessKind::Read:
+    return Mutability::View;
+  case StateAccessKind::Write:
+  case StateAccessKind::Unknown:
+    return Mutability::NonPayable;
+  }
+  return Mutability::NonPayable;
+}
+
 llvm::Error analysisError(uint64_t PC, llvm::Twine Message) {
   return llvm::make_error<llvm::StringError>(
       "evm: " + Message + " at pc 0x" + llvm::Twine(llvm::utohexstr(PC)),
@@ -33,39 +47,23 @@ llvm::Error analysisError(uint64_t PC, llvm::Twine Message) {
 }
 
 std::string byteHex(uint8_t Byte) {
-  static constexpr char Digits[] = "0123456789abcdef";
-  std::string Result = "0x00";
-  Result[2] = Digits[Byte >> kHexDigitBits];
-  Result[3] = Digits[Byte & kHexDigitMask];
+  return "0x" + llvm::utohexstr(Byte, /*LowerCase=*/true, kHexDigitsPerByte);
+}
+
+std::string wordHexDigits(const llvm::APInt &Value, unsigned MinDigits = 1) {
+  llvm::SmallString<kWordBytes * kHexDigitsPerByte> Digits;
+  Value.toStringUnsigned(Digits, kHexRadix);
+  std::string Result = Digits.str().str();
+  if (Result.size() < MinDigits)
+    Result.insert(Result.begin(), MinDigits - Result.size(), '0');
   return Result;
 }
 
 std::string wordHex(const llvm::APInt &Value, unsigned MinDigits = 1) {
-  llvm::SmallString<kWordBytes * kHexDigitsPerByte> Digits;
-  Value.toStringUnsigned(Digits, 16);
-  std::string Result = Digits.str().str();
-  if (Result.size() < MinDigits)
-    Result.insert(Result.begin(), MinDigits - Result.size(), '0');
-  return "0x" + Result;
+  return "0x" + wordHexDigits(Value, MinDigits);
 }
 
-OpcodeInfo unknownOpcode(uint8_t Byte) {
-  return OpcodeInfo{static_cast<Opcode>(Byte),
-                    kUnknownOpcodeName,
-                    0,
-                    0,
-                    0,
-                    OpcodeClass::Unknown,
-                    Hardfork::Frontier,
-                    EffectKind::Unknown,
-                    true,
-                    false,
-                    false};
-}
-
-Constant boolWord(bool Value) {
-  return llvm::APInt(kWordBits, Value ? 1 : 0);
-}
+Constant boolWord(bool Value) { return llvm::APInt(kWordBits, Value ? 1 : 0); }
 
 llvm::APInt modularExponent(llvm::APInt Base, llvm::APInt Exponent) {
   llvm::APInt Result(kWordBits, 1);
@@ -86,104 +84,102 @@ llvm::APInt signExtend(const llvm::APInt &ByteIndex, const llvm::APInt &Value) {
   return Value.trunc(Width).sext(kWordBits);
 }
 
-Constant evaluatePure(Opcode Op, const std::vector<Constant> &Inputs,
-                      uint64_t PC, size_t CodeSize) {
-  auto Has = [&](size_t Count) {
-    if (Inputs.size() < Count)
-      return false;
-    for (size_t I = 0; I < Count; ++I)
-      if (!Inputs[I])
-        return false;
-    return true;
+Constant evaluatePure(Opcode Op, llvm::ArrayRef<Constant> Inputs, uint64_t PC,
+                      size_t CodeSize) {
+  const auto GetInput = [&](size_t Index) -> const llvm::APInt * {
+    if (Index >= Inputs.size() || !Inputs[Index].has_value())
+      return nullptr;
+    return &Inputs[Index].value();
   };
   if (Op == Opcode::PC)
     return llvm::APInt(kWordBits, PC);
   if (Op == Opcode::CODESIZE)
     return llvm::APInt(kWordBits, CodeSize);
-  if (Op == Opcode::ISZERO && Has(1))
-    return boolWord(Inputs[0]->isZero());
-  if (Op == Opcode::NOT && Has(1))
-    return ~*Inputs[0];
-  if (Op == Opcode::CLZ && Has(1))
-    return llvm::APInt(kWordBits, Inputs[0]->countl_zero());
-  if (!Has(2))
+  const llvm::APInt *A = GetInput(0);
+  if (!A)
     return std::nullopt;
-
-  const llvm::APInt &A = *Inputs[0];
-  const llvm::APInt &B = *Inputs[1];
+  if (Op == Opcode::ISZERO)
+    return boolWord(A->isZero());
+  if (Op == Opcode::NOT)
+    return ~*A;
+  if (Op == Opcode::CLZ)
+    return llvm::APInt(kWordBits, A->countl_zero());
+  const llvm::APInt *B = GetInput(1);
+  if (!B)
+    return std::nullopt;
   switch (Op) {
   case Opcode::ADD:
-    return A + B;
+    return *A + *B;
   case Opcode::MUL:
-    return A * B;
+    return *A * *B;
   case Opcode::SUB:
-    return A - B;
+    return *A - *B;
   case Opcode::DIV:
-    return B.isZero() ? llvm::APInt(kWordBits, 0) : A.udiv(B);
+    return B->isZero() ? llvm::APInt(kWordBits, 0) : A->udiv(*B);
   case Opcode::SDIV:
-    if (B.isZero())
+    if (B->isZero())
       return llvm::APInt(kWordBits, 0);
-    if (A.isMinSignedValue() && B.isAllOnes())
-      return A;
-    return A.sdiv(B);
+    if (A->isMinSignedValue() && B->isAllOnes())
+      return *A;
+    return A->sdiv(*B);
   case Opcode::MOD:
-    return B.isZero() ? llvm::APInt(kWordBits, 0) : A.urem(B);
+    return B->isZero() ? llvm::APInt(kWordBits, 0) : A->urem(*B);
   case Opcode::SMOD:
-    return B.isZero() || (A.isMinSignedValue() && B.isAllOnes())
+    return B->isZero() || (A->isMinSignedValue() && B->isAllOnes())
                ? llvm::APInt(kWordBits, 0)
-               : A.srem(B);
+               : A->srem(*B);
   case Opcode::ADDMOD:
   case Opcode::MULMOD: {
-    if (!Has(3))
+    const llvm::APInt *Modulus = GetInput(2);
+    if (!Modulus)
       return std::nullopt;
-    const llvm::APInt &Modulus = *Inputs[2];
-    if (Modulus.isZero())
+    if (Modulus->isZero())
       return llvm::APInt(kWordBits, 0);
     const llvm::APInt Wide =
-        Op == Opcode::ADDMOD
-            ? A.zext(kWideWordBits) + B.zext(kWideWordBits)
-            : A.zext(kWideWordBits) * B.zext(kWideWordBits);
-    return Wide.urem(Modulus.zext(kWideWordBits)).trunc(kWordBits);
+        Op == Opcode::ADDMOD ? A->zext(kWideWordBits) + B->zext(kWideWordBits)
+                             : A->zext(kWideWordBits) * B->zext(kWideWordBits);
+    return Wide.urem(Modulus->zext(kWideWordBits)).trunc(kWordBits);
   }
   case Opcode::EXP:
-    return modularExponent(A, B);
+    return modularExponent(*A, *B);
   case Opcode::SIGNEXTEND:
-    return signExtend(A, B);
+    return signExtend(*A, *B);
   case Opcode::LT:
-    return boolWord(A.ult(B));
+    return boolWord(A->ult(*B));
   case Opcode::GT:
-    return boolWord(A.ugt(B));
+    return boolWord(A->ugt(*B));
   case Opcode::SLT:
-    return boolWord(A.slt(B));
+    return boolWord(A->slt(*B));
   case Opcode::SGT:
-    return boolWord(A.sgt(B));
+    return boolWord(A->sgt(*B));
   case Opcode::EQ:
-    return boolWord(A == B);
+    return boolWord(*A == *B);
   case Opcode::AND:
-    return A & B;
+    return *A & *B;
   case Opcode::OR:
-    return A | B;
+    return *A | *B;
   case Opcode::XOR:
-    return A ^ B;
+    return *A ^ *B;
   case Opcode::BYTE: {
-    if (A.uge(kWordBytes))
+    if (A->uge(kWordBytes))
       return llvm::APInt(kWordBits, 0);
     const unsigned Shift = static_cast<unsigned>(
-        (kWordBytes - 1 - A.getZExtValue()) * kBitsPerByte);
-    return llvm::APInt(
-        kWordBits, B.extractBitsAsZExtValue(kBitsPerByte, Shift));
+        (kWordBytes - 1 - A->getZExtValue()) * kBitsPerByte);
+    return llvm::APInt(kWordBits,
+                       B->extractBitsAsZExtValue(kBitsPerByte, Shift));
   }
   case Opcode::SHL:
-    return A.uge(kWordBits) ? llvm::APInt(kWordBits, 0)
-                      : B.shl(static_cast<unsigned>(A.getZExtValue()));
+    return A->uge(kWordBits) ? llvm::APInt(kWordBits, 0)
+                             : B->shl(static_cast<unsigned>(A->getZExtValue()));
   case Opcode::SHR:
-    return A.uge(kWordBits) ? llvm::APInt(kWordBits, 0)
-                      : B.lshr(static_cast<unsigned>(A.getZExtValue()));
+    return A->uge(kWordBits)
+               ? llvm::APInt(kWordBits, 0)
+               : B->lshr(static_cast<unsigned>(A->getZExtValue()));
   case Opcode::SAR:
-    return A.uge(kWordBits)
-               ? (B.isNegative() ? llvm::APInt::getAllOnes(kWordBits)
-                                 : llvm::APInt(kWordBits, 0))
-                      : B.ashr(static_cast<unsigned>(A.getZExtValue()));
+    return A->uge(kWordBits)
+               ? (B->isNegative() ? llvm::APInt::getAllOnes(kWordBits)
+                                  : llvm::APInt(kWordBits, 0))
+               : B->ashr(static_cast<unsigned>(A->getZExtValue()));
   default:
     return std::nullopt;
   }
@@ -208,18 +204,20 @@ BlockConstants analyzeBlockConstants(const EVMLowIR &Low,
   for (size_t Index = Block.FirstInstruction;
        Index < Block.FirstInstruction + Block.InstructionCount; ++Index) {
     const LowInstruction &Instruction = Low.Instructions[Index];
-    const Opcode Op = Instruction.Op;
-    if (isPush(Op)) {
+    const Opcode Op = Instruction.opcode();
+    if (!Instruction.isKnown())
+      break;
+    if (Instruction.isPush()) {
       Stack.push_back(Instruction.Immediate);
       continue;
     }
-    if (isDup(Op)) {
+    if (Instruction.isDup()) {
       const size_t Depth = dupDepth(Op);
       Stack.push_back(Stack.size() >= Depth ? Stack[Stack.size() - Depth]
                                             : Constant{});
       continue;
     }
-    if (isSwap(Op)) {
+    if (Instruction.isSwap()) {
       const size_t Depth = swapDepth(Op);
       if (Stack.size() > Depth)
         std::swap(Stack.back(), Stack[Stack.size() - Depth - 1]);
@@ -227,7 +225,7 @@ BlockConstants analyzeBlockConstants(const EVMLowIR &Low,
         Stack.clear();
       continue;
     }
-    if (Op == Opcode::POP) {
+    if (Instruction.is(Opcode::POP)) {
       (void)Pop();
       continue;
     }
@@ -236,9 +234,9 @@ BlockConstants analyzeBlockConstants(const EVMLowIR &Low,
     Inputs.reserve(Instruction.Info.StackInputs);
     for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
       Inputs.push_back(Pop());
-    if (isJump(Op)) {
+    if (Instruction.isJump()) {
       Result.JumpTarget = Inputs.empty() ? Constant{} : Inputs[0];
-      if (Op == Opcode::JUMPI)
+      if (Instruction.is(Opcode::JUMPI))
         Result.JumpCondition = Inputs.size() > 1 ? Inputs[1] : Constant{};
     }
     const Constant Folded =
@@ -250,8 +248,7 @@ BlockConstants analyzeBlockConstants(const EVMLowIR &Low,
 }
 
 std::optional<uint64_t> asAddress(const Constant &Value) {
-  if (!Value ||
-      Value->getActiveBits() > std::numeric_limits<uint64_t>::digits)
+  if (!Value || Value->getActiveBits() > std::numeric_limits<uint64_t>::digits)
     return std::nullopt;
   return Value->getZExtValue();
 }
@@ -274,7 +271,7 @@ llvm::Error addValidatedJump(EVMLowIR &Low, LowBlock &Block, EdgeKind Kind,
         {JumpPC, "jump target " + TargetText + " is not a JUMPDEST"});
     return llvm::Error::success();
   }
-  Block.Successors.push_back({Kind, *Address});
+  Block.Successors.push_back({Kind, Address});
   return llvm::Error::success();
 }
 
@@ -291,30 +288,33 @@ llvm::Error computeStackHeights(EVMLowIR &Low, AnalyzeOptions Options) {
   std::deque<size_t> Worklist{0};
   std::vector<bool> Queued(Low.Blocks.size(), false);
   Queued[0] = true;
-  std::unordered_map<uint64_t, size_t> BlockIndex;
+  llvm::DenseMap<uint64_t, size_t> BlockIndex;
   for (size_t I = 0; I < Low.Blocks.size(); ++I)
-    BlockIndex.emplace(Low.Blocks[I].StartPC, I);
+    BlockIndex.insert({Low.Blocks[I].StartPC, I});
 
   while (!Worklist.empty()) {
     const size_t BI = Worklist.front();
     Worklist.pop_front();
     Queued[BI] = false;
     LowBlock &Block = Low.Blocks[BI];
-    size_t Height = *Block.EntryStackHeight;
+    if (!Block.EntryStackHeight)
+      return analysisError(Block.StartPC,
+                           "internal CFG block has no entry stack height");
+    size_t Height = Block.EntryStackHeight.value();
     for (size_t II = Block.FirstInstruction;
          II < Block.FirstInstruction + Block.InstructionCount; ++II) {
       const LowInstruction &Instruction = Low.Instructions[II];
-      size_t Required = Instruction.Info.StackInputs;
-      int Delta = static_cast<int>(Instruction.Info.StackOutputs) -
-                  static_cast<int>(Instruction.Info.StackInputs);
-      if (isPush(Instruction.Op)) {
+      size_t Required = Instruction.stackInputs();
+      int Delta = static_cast<int>(Instruction.stackOutputs()) -
+                  static_cast<int>(Instruction.stackInputs());
+      if (Instruction.isPush()) {
         Required = 0;
         Delta = 1;
-      } else if (isDup(Instruction.Op)) {
-        Required = dupDepth(Instruction.Op);
+      } else if (Instruction.isDup()) {
+        Required = dupDepth(Instruction.opcode());
         Delta = 1;
-      } else if (isSwap(Instruction.Op)) {
-        Required = swapDepth(Instruction.Op) + 1;
+      } else if (Instruction.isSwap()) {
+        Required = swapDepth(Instruction.opcode()) + 1;
         Delta = 0;
       }
       if (Height < Required) {
@@ -330,8 +330,8 @@ llvm::Error computeStackHeights(EVMLowIR &Low, AnalyzeOptions Options) {
       Height = static_cast<size_t>(static_cast<int64_t>(Height) + Delta);
       if (Height > kStackLimit) {
         if (Options.Strict)
-          return analysisError(Instruction.PC,
-                               "stack limit exceeds " + llvm::Twine(kStackLimit));
+          return analysisError(Instruction.PC, "stack limit exceeds " +
+                                                   llvm::Twine(kStackLimit));
         Low.Diagnostics.push_back(
             {Instruction.PC,
              "stack limit exceeds " + std::to_string(kStackLimit)});
@@ -369,7 +369,7 @@ llvm::Error computeStackHeights(EVMLowIR &Low, AnalyzeOptions Options) {
 void markReachable(EVMLowIR &Low) {
   if (Low.Blocks.empty())
     return;
-  std::unordered_map<uint64_t, size_t> Indices;
+  llvm::DenseMap<uint64_t, size_t> Indices;
   for (size_t I = 0; I < Low.Blocks.size(); ++I)
     Indices[Low.Blocks[I].StartPC] = I;
   std::queue<size_t> Queue;
@@ -437,14 +437,15 @@ std::set<uint64_t> reachableFrom(const EVMLowIR &Low, uint64_t Entry) {
   return Seen;
 }
 
-std::optional<llvm::APInt> precedingPush(const EVMLowIR &Low, size_t Index,
-                                         size_t Window =
-                                             kDefaultPrecedingPushWindow) {
+std::optional<llvm::APInt>
+precedingPush(const EVMLowIR &Low, size_t Index,
+              size_t Window = kDefaultPrecedingPushWindow) {
   const size_t Begin = Index > Window ? Index - Window : 0;
   for (size_t I = Index; I-- > Begin;) {
-    if (isPush(Low.Instructions[I].Op))
+    if (Low.Instructions[I].isPush())
       return Low.Instructions[I].Immediate;
-    if (Low.Instructions[I].Info.Class == OpcodeClass::Control)
+    if (!Low.Instructions[I].isKnown() ||
+        Low.Instructions[I].Info.Class == OpcodeClass::Control)
       break;
   }
   return std::nullopt;
@@ -452,12 +453,21 @@ std::optional<llvm::APInt> precedingPush(const EVMLowIR &Low, size_t Index,
 
 } // namespace
 
-llvm::Expected<EVMLowIR> decodeLowIR(std::span<const uint8_t> Code,
+std::string formatImmediate(const LowInstruction &Instruction) {
+  if (Instruction.Info.ImmediateBytes == 0)
+    return {};
+  return wordHex(Instruction.Immediate,
+                 Instruction.Info.ImmediateBytes * kHexDigitsPerByte);
+}
+
+llvm::Expected<EVMLowIR> decodeLowIR(llvm::ArrayRef<uint8_t> Code,
                                      AnalyzeOptions Options) {
+  if (!isValidHardfork(Options.Fork))
+    return analysisError(kEntryPC, "invalid hardfork value");
   if (Code.empty())
-    return analysisError(0, "empty bytecode");
+    return analysisError(kEntryPC, "empty bytecode");
   if (Code.size() > Options.MaxCodeSize)
-    return analysisError(0, "bytecode exceeds configured size limit");
+    return analysisError(kEntryPC, "bytecode exceeds configured size limit");
 
   EVMLowIR Low;
   Low.Fork = Options.Fork;
@@ -467,17 +477,17 @@ llvm::Expected<EVMLowIR> decodeLowIR(std::span<const uint8_t> Code,
   for (size_t PC = 0; PC < Code.size();) {
     const size_t Start = PC;
     const uint8_t Byte = Code[PC++];
-    const auto Info = opcodeInfo(Byte, Options.Fork);
-    LowInstruction Instruction;
-    Instruction.PC = Start;
-    Instruction.Op = static_cast<Opcode>(Byte);
-    Instruction.Info = Info.value_or(unknownOpcode(Byte));
-    Instruction.Known = Info.has_value();
+    const auto AssignedInfo = assignedOpcodeInfo(Byte);
+    const auto ActiveInfo = opcodeInfo(Byte, Options.Fork);
+    LowInstruction Instruction{
+        Start, 0,
+        ActiveInfo ? *ActiveInfo
+                   : AssignedInfo.value_or(unknownOpcodeInfo(Byte)),
+        ActiveInfo.has_value()};
     Instruction.Encoding.push_back(Byte);
-    if (!Info) {
-      const bool AssignedLater = opcodeInfo(Byte, Hardfork::Latest).has_value();
+    if (!ActiveInfo) {
       const std::string Reason =
-          AssignedLater ? "inactive opcode " : "unknown opcode ";
+          AssignedInfo ? "inactive opcode " : "unknown opcode ";
       if (Options.Strict)
         return analysisError(Start, Reason + llvm::Twine(byteHex(Byte)));
       Low.Diagnostics.push_back({Start, Reason + byteHex(Byte)});
@@ -498,21 +508,20 @@ llvm::Expected<EVMLowIR> decodeLowIR(std::span<const uint8_t> Code,
       Instruction.Immediate = std::move(Value);
     }
     Instruction.NextPC = PC;
-    if (Instruction.Op == Opcode::JUMPDEST)
+    if (Instruction.is(Opcode::JUMPDEST))
       Low.JumpDestinations.insert(Start);
     Low.Instructions.push_back(std::move(Instruction));
   }
 
-  std::set<uint64_t> Starts{0};
+  std::set<uint64_t> Starts{kEntryPC};
   for (const auto &Instruction : Low.Instructions) {
-    if (Instruction.Op == Opcode::JUMPDEST)
+    if (Instruction.is(Opcode::JUMPDEST))
       Starts.insert(Instruction.PC);
-    if ((Instruction.Info.IsTerminator || isJump(Instruction.Op)) &&
-        Instruction.NextPC < Low.Code.size())
+    if (Instruction.isTerminator() && Instruction.NextPC < Low.Code.size())
       Starts.insert(Instruction.NextPC);
   }
 
-  std::unordered_map<uint64_t, size_t> InstructionIndex;
+  llvm::DenseMap<uint64_t, size_t> InstructionIndex;
   for (size_t I = 0; I < Low.Instructions.size(); ++I)
     InstructionIndex[Low.Instructions[I].PC] = I;
   for (auto It = Starts.begin(); It != Starts.end(); ++It) {
@@ -539,11 +548,11 @@ llvm::Expected<EVMLowIR> decodeLowIR(std::span<const uint8_t> Code,
     const LowInstruction &Last =
         Low.Instructions[Block.FirstInstruction + Block.InstructionCount - 1];
     const BlockConstants Constants = analyzeBlockConstants(Low, Block);
-    if (Last.Op == Opcode::JUMP) {
+    if (Last.is(Opcode::JUMP)) {
       if (llvm::Error E = addValidatedJump(Low, Block, EdgeKind::Jump, Last.PC,
                                            Constants.JumpTarget, Options))
         return std::move(E);
-    } else if (Last.Op == Opcode::JUMPI) {
+    } else if (Last.is(Opcode::JUMPI)) {
       const bool MaybeTrue =
           !Constants.JumpCondition || !Constants.JumpCondition->isZero();
       const bool MaybeFalse =
@@ -555,10 +564,10 @@ llvm::Expected<EVMLowIR> decodeLowIR(std::span<const uint8_t> Code,
           return std::move(E);
       if (MaybeFalse)
         if (auto Next = nextBlock(Low, BI))
-          Block.Successors.push_back({EdgeKind::ConditionalFalse, *Next});
-    } else if (!Last.Info.IsTerminator) {
+          Block.Successors.push_back({EdgeKind::ConditionalFalse, Next});
+    } else if (!Last.isTerminator()) {
       if (auto Next = nextBlock(Low, BI))
-        Block.Successors.push_back({EdgeKind::Fallthrough, *Next});
+        Block.Successors.push_back({EdgeKind::Fallthrough, Next});
     }
   }
 
@@ -616,18 +625,28 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
       const LowInstruction &Instruction = Low.Instructions[II];
       MedOperation Operation;
       Operation.PC = Instruction.PC;
-      Operation.Op = Instruction.Op;
+      Operation.Op = Instruction.opcode();
       Operation.Name = std::string(Instruction.Info.Name);
-      Operation.Effect = Instruction.Known ? Instruction.Info.Effect
-                                           : EffectKind::Unknown;
+      Operation.Effect =
+          Instruction.isKnown() ? Instruction.Info.Effect : EffectKind::Unknown;
+      Operation.MemoryAccess = Instruction.isKnown()
+                                   ? Instruction.Info.MemoryAccess
+                                   : MemoryAccessKind::Unknown;
+      Operation.StateAccess = Instruction.isKnown()
+                                  ? Instruction.Info.StateAccess
+                                  : StateAccessKind::Unknown;
 
-      if (isPush(Instruction.Op)) {
+      if (!Instruction.isKnown()) {
+        Block.Operations.push_back(std::move(Operation));
+        continue;
+      }
+      if (Instruction.isPush()) {
         ValueID Value = addValue(Med, ValueKind::Constant, Instruction.PC,
                                  "constant", {}, Instruction.Immediate);
         Stack.push_back(Value);
         Operation.Outputs.push_back(Value);
-      } else if (isDup(Instruction.Op)) {
-        const size_t Depth = dupDepth(Instruction.Op);
+      } else if (Instruction.isDup()) {
+        const size_t Depth = dupDepth(Instruction.opcode());
         Ensure(Depth, Instruction.PC);
         ValueID Input = Stack[Stack.size() - Depth];
         Constant Folded = Med.Values[Input].Constant;
@@ -636,8 +655,8 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
         Operation.Inputs.push_back(Input);
         Operation.Outputs.push_back(Output);
         Stack.push_back(Output);
-      } else if (isSwap(Instruction.Op)) {
-        const size_t Depth = swapDepth(Instruction.Op);
+      } else if (Instruction.isSwap()) {
+        const size_t Depth = swapDepth(Instruction.opcode());
         Ensure(Depth + 1, Instruction.PC);
         Operation.Inputs = {Stack.back(), Stack[Stack.size() - Depth - 1]};
         std::swap(Stack.back(), Stack[Stack.size() - Depth - 1]);
@@ -649,7 +668,7 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
         Constants.reserve(Operation.Inputs.size());
         for (ValueID Input : Operation.Inputs)
           Constants.push_back(Med.Values[Input].Constant);
-        Constant Folded = evaluatePure(Instruction.Op, Constants,
+        Constant Folded = evaluatePure(Instruction.opcode(), Constants,
                                        Instruction.PC, Low.Code.size());
         for (uint8_t I = 0; I < Instruction.Info.StackOutputs; ++I) {
           ValueID Output = addValue(Med, ValueKind::Instruction, Instruction.PC,
@@ -664,7 +683,7 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
     Block.ExitStack = std::move(Stack);
   }
 
-  std::unordered_map<uint64_t, size_t> Indices;
+  llvm::DenseMap<uint64_t, size_t> Indices;
   for (size_t I = 0; I < Low.Blocks.size(); ++I)
     Indices[Low.Blocks[I].StartPC] = I;
   for (size_t BI = 0; BI < Low.Blocks.size(); ++BI) {
@@ -700,15 +719,16 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
   EVMHighIR High;
   High.Diagnostics = Low.Diagnostics;
   std::map<uint32_t, RecoveredFunction> Functions;
+  std::set<uint32_t> AmbiguousSelectors;
 
   for (size_t I = 0; I < Low.Instructions.size(); ++I) {
     const auto &Push = Low.Instructions[I];
-    if (Push.Info.ImmediateBytes != kSelectorBytes)
+    if (!Push.is(Opcode::PUSH4))
       continue;
     size_t EQ = I + 1;
     while (EQ < Low.Instructions.size() &&
            EQ <= I + kDispatcherEqualitySearchDistance &&
-           Low.Instructions[EQ].Op != Opcode::EQ)
+           !Low.Instructions[EQ].is(Opcode::EQ))
       ++EQ;
     if (EQ >= Low.Instructions.size() ||
         EQ > I + kDispatcherEqualitySearchDistance)
@@ -716,61 +736,68 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
     size_t DestinationPush = EQ + 1;
     while (DestinationPush < Low.Instructions.size() &&
            DestinationPush <= EQ + kDispatcherDestinationSearchDistance &&
-           !isPush(Low.Instructions[DestinationPush].Op))
+           !Low.Instructions[DestinationPush].isPush())
       ++DestinationPush;
     if (DestinationPush >= Low.Instructions.size() ||
         DestinationPush > EQ + kDispatcherDestinationSearchDistance ||
         DestinationPush + 1 >= Low.Instructions.size() ||
-        Low.Instructions[DestinationPush + 1].Op != Opcode::JUMPI)
+        !Low.Instructions[DestinationPush + 1].is(Opcode::JUMPI))
       continue;
     const auto Entry = asAddress(Low.Instructions[DestinationPush].Immediate);
     if (!Entry || !Low.JumpDestinations.contains(*Entry))
       continue;
     const uint32_t Selector =
         static_cast<uint32_t>(Push.Immediate.getZExtValue());
-    RecoveredFunction &Function = Functions[Selector];
+    if (AmbiguousSelectors.contains(Selector))
+      continue;
+    auto [FunctionIt, Inserted] = Functions.try_emplace(Selector);
+    if (!Inserted) {
+      if (FunctionIt->second.EntryPC == *Entry)
+        continue;
+      High.Diagnostics.push_back(
+          {Push.PC, "duplicate selector 0x" +
+                        wordHexDigits(llvm::APInt(kSelectorBits, Selector),
+                                      kSelectorHexDigits) +
+                        " maps to multiple entry points"});
+      Functions.erase(FunctionIt);
+      AmbiguousSelectors.insert(Selector);
+      continue;
+    }
+    RecoveredFunction &Function = FunctionIt->second;
     Function.Selector = Selector;
     Function.EntryPC = *Entry;
     Function.Name =
         kRecoveredFunctionPrefix.str() +
-        wordHex(llvm::APInt(kSelectorBits, Selector), kSelectorHexDigits)
-            .substr(2);
+        wordHexDigits(llvm::APInt(kSelectorBits, Selector), kSelectorHexDigits);
   }
 
   for (auto &[Selector, Function] : Functions) {
     const std::set<uint64_t> FunctionBlocks =
         reachableFrom(Low, Function.EntryPC);
-    bool ReadsState = false;
-    bool WritesState = false;
+    StateAccessKind StateAccess = StateAccessKind::None;
     bool ReturnsWord = false;
     std::set<uint64_t> ArgumentOffsets;
     for (uint64_t BlockPC : FunctionBlocks) {
       const LowBlock *Block = Low.findBlock(BlockPC);
       if (!Block)
         continue;
+      if (Block->HasIndirectSuccessor)
+        StateAccess = mergeStateAccess(StateAccess, StateAccessKind::Unknown);
       for (size_t I = Block->FirstInstruction;
            I < Block->FirstInstruction + Block->InstructionCount; ++I) {
         const LowInstruction &Instruction = Low.Instructions[I];
-        const Opcode Op = Instruction.Op;
-        ReadsState |= Instruction.Info.Effect == EffectKind::StorageRead ||
-                      Instruction.Info.Effect == EffectKind::TransientRead ||
-                      Instruction.Info.Effect == EffectKind::ContextRead;
-        WritesState |=
-            Instruction.Info.Effect == EffectKind::StorageWrite ||
-            Instruction.Info.Effect == EffectKind::TransientWrite ||
-            Instruction.Info.Effect == EffectKind::Log ||
-            Instruction.Info.Effect == EffectKind::Create ||
-            Instruction.Info.Effect == EffectKind::ExternalCall ||
-            Op == Opcode::SELFDESTRUCT;
-        if (Op == Opcode::CALLDATALOAD && I > 0 &&
-            isPush(Low.Instructions[I - 1].Op)) {
+        StateAccess = mergeStateAccess(
+            StateAccess, Instruction.isKnown() ? Instruction.Info.StateAccess
+                                               : StateAccessKind::Unknown);
+        if (Instruction.is(Opcode::CALLDATALOAD) && I > 0 &&
+            Low.Instructions[I - 1].isPush()) {
           const auto Offset = asAddress(Low.Instructions[I - 1].Immediate);
           if (Offset && *Offset >= kSelectorBytes)
             ArgumentOffsets.insert(*Offset);
         }
-        if (Op == Opcode::RETURN && I > Block->FirstInstruction) {
+        if (Instruction.is(Opcode::RETURN) && I > Block->FirstInstruction) {
           for (size_t J = I; J-- > Block->FirstInstruction;)
-            if (Low.Instructions[J].Op == Opcode::MSTORE) {
+            if (Low.Instructions[J].is(Opcode::MSTORE)) {
               ReturnsWord = true;
               break;
             }
@@ -788,9 +815,7 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
     }
     if (ReturnsWord)
       Function.Returns.push_back(kDefaultRecoveredWordType.str());
-    Function.StateMutability =
-        WritesState ? Mutability::NonPayable
-                    : (ReadsState ? Mutability::View : Mutability::Pure);
+    Function.StateMutability = recoveredMutability(StateAccess);
     High.Functions.push_back(Function);
     High.Regions.push_back({Function.EntryPC,
                             RegionKind::Function,
@@ -799,33 +824,31 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
 
   for (size_t I = 0; I < Low.Instructions.size(); ++I) {
     const auto &Instruction = Low.Instructions[I];
-    if (Instruction.Op == Opcode::SLOAD ||
-        Instruction.Op == Opcode::SSTORE ||
-        Instruction.Op == Opcode::TLOAD ||
-        Instruction.Op == Opcode::TSTORE) {
+    if (Instruction.is(Opcode::SLOAD) || Instruction.is(Opcode::SSTORE) ||
+        Instruction.is(Opcode::TLOAD) || Instruction.is(Opcode::TSTORE)) {
       StorageFact Fact;
       Fact.PC = Instruction.PC;
-      Fact.IsWrite = Instruction.Op == Opcode::SSTORE ||
-                     Instruction.Op == Opcode::TSTORE;
-      Fact.IsTransient = Instruction.Op == Opcode::TLOAD ||
-                         Instruction.Op == Opcode::TSTORE;
+      Fact.IsWrite =
+          Instruction.is(Opcode::SSTORE) || Instruction.is(Opcode::TSTORE);
+      Fact.IsTransient =
+          Instruction.is(Opcode::TLOAD) || Instruction.is(Opcode::TSTORE);
       Fact.Slot = precedingPush(Low, I);
       Fact.SuggestedName = kUnknownStorageName.str();
       if (Fact.Slot)
         Fact.SuggestedName =
-            kStorageSlotPrefix.str() + wordHex(*Fact.Slot).substr(2);
+            kStorageSlotPrefix.str() + wordHexDigits(*Fact.Slot);
       High.Storage.push_back(std::move(Fact));
     }
-    if (isLog(Instruction.Op)) {
+    if (Instruction.isLog()) {
       EventFact Fact;
       Fact.PC = Instruction.PC;
-      Fact.Topics = logTopicCount(Instruction.Op);
+      Fact.Topics = logTopicCount(Instruction.opcode());
       Fact.Topic0 = precedingPush(Low, I, kEventTopicSearchWindow);
       Fact.SuggestedName =
           kRecoveredEventPrefix.str() + llvm::utohexstr(Instruction.PC);
       High.Events.push_back(std::move(Fact));
     }
-    if (Instruction.Op == Opcode::REVERT) {
+    if (Instruction.is(Opcode::REVERT)) {
       ErrorFact Fact;
       Fact.PC = Instruction.PC;
       if (auto Candidate = precedingPush(Low, I, kErrorSelectorSearchWindow);
@@ -834,22 +857,21 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
       Fact.SuggestedName =
           Fact.Selector
               ? kRecoveredErrorPrefix.str() +
-                    wordHex(llvm::APInt(kSelectorBits, *Fact.Selector),
-                            kSelectorHexDigits)
-                        .substr(2)
+                    wordHexDigits(llvm::APInt(kSelectorBits, *Fact.Selector),
+                                  kSelectorHexDigits)
               : kRecoveredRevertName.str();
       High.Errors.push_back(std::move(Fact));
     }
   }
 
   for (size_t I = 1; I < Low.Instructions.size(); ++I)
-    if (Low.Instructions[I].Op == Opcode::ISZERO &&
-        Low.Instructions[I - 1].Op == Opcode::CALLDATASIZE)
+    if (Low.Instructions[I].is(Opcode::ISZERO) &&
+        Low.Instructions[I - 1].is(Opcode::CALLDATASIZE))
       High.HasReceive = true;
   High.HasFallback = true;
   if (High.Regions.empty()) {
     StructuredRegion Root;
-    Root.EntryPC = 0;
+    Root.EntryPC = kEntryPC;
     Root.Kind = RegionKind::CFG;
     for (const auto &Block : Low.Blocks)
       Root.Blocks.push_back(Block.StartPC);
@@ -858,7 +880,7 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
   return High;
 }
 
-llvm::Expected<EVMProgram> analyze(std::span<const uint8_t> Code,
+llvm::Expected<EVMProgram> analyze(llvm::ArrayRef<uint8_t> Code,
                                    AnalyzeOptions Options) {
   auto Low = decodeLowIR(Code, Options);
   if (!Low)
@@ -887,8 +909,9 @@ std::string dumpLowIR(const EVMLowIR &Low) {
       const auto &Instruction = Low.Instructions[I];
       OS << "  0x" << llvm::utohexstr(Instruction.PC) << ": "
          << Instruction.Info.Name;
-      if (Instruction.Info.ImmediateBytes)
-        OS << " " << wordHex(Instruction.Immediate);
+      if (const std::string Immediate = formatImmediate(Instruction);
+          !Immediate.empty())
+        OS << " " << Immediate;
       OS << "\n";
     }
     for (const auto &Edge : Block.Successors) {
@@ -906,7 +929,7 @@ std::string dumpLowIR(const EVMLowIR &Low) {
 std::string dumpMedIR(const EVMMedIR &Med) {
   std::string Text;
   llvm::raw_string_ostream OS(Text);
-  OS << "evm.med word=i256\n";
+  OS << "evm.med word=i" << kWordBits << "\n";
   for (const auto &Block : Med.Blocks) {
     OS << "block 0x" << llvm::utohexstr(Block.StartPC) << "\n";
     for (const auto &Operation : Block.Operations) {
@@ -917,8 +940,18 @@ std::string dumpMedIR(const EVMMedIR &Med) {
       OS << Operation.Name;
       for (ValueID Input : Operation.Inputs)
         OS << " %" << Input;
+      llvm::SmallVector<llvm::StringRef, 3> Effects;
       if (Operation.Effect != EffectKind::None)
-        OS << " ; " << effectName(Operation.Effect);
+        Effects.push_back(effectName(Operation.Effect));
+      if (Operation.MemoryAccess != MemoryAccessKind::None) {
+        const llvm::StringRef Memory = memoryAccessName(Operation.MemoryAccess);
+        if (!llvm::is_contained(Effects, Memory))
+          Effects.push_back(Memory);
+      }
+      if (Operation.StateAccess != StateAccessKind::None)
+        Effects.push_back(stateAccessName(Operation.StateAccess));
+      if (!Effects.empty())
+        OS << " ; " << llvm::join(Effects, ", ");
       OS << "\n";
     }
   }
@@ -933,8 +966,7 @@ std::string dumpHighIR(const EVMHighIR &High) {
     OS << "function " << Function.Name << " selector "
        << wordHex(llvm::APInt(kSelectorBits, Function.Selector),
                   kSelectorHexDigits)
-       << " entry 0x"
-       << llvm::utohexstr(Function.EntryPC) << "\n";
+       << " entry 0x" << llvm::utohexstr(Function.EntryPC) << "\n";
   }
   for (const auto &Storage : High.Storage)
     OS << (Storage.IsTransient ? "transient" : "storage") << " "

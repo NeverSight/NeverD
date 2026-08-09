@@ -2,6 +2,7 @@
 
 #include "neverd/evm/LLVMEmitter.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -11,24 +12,19 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <array>
-#include <unordered_map>
 
 namespace neverd::evm {
 namespace {
 
-inline constexpr llvm::StringLiteral kStackPushFunctionName =
-    "evm_stack_push";
+inline constexpr llvm::StringLiteral kStackPushFunctionName = "evm_stack_push";
 inline constexpr llvm::StringLiteral kStackPopFunctionName = "evm_stack_pop";
-inline constexpr llvm::StringLiteral kStackPeekFunctionName =
-    "evm_stack_peek";
-inline constexpr llvm::StringLiteral kStackSwapFunctionName =
-    "evm_stack_swap";
+inline constexpr llvm::StringLiteral kStackPeekFunctionName = "evm_stack_peek";
+inline constexpr llvm::StringLiteral kStackSwapFunctionName = "evm_stack_swap";
 inline constexpr llvm::StringLiteral kExponentFunctionName = "evm_exp";
-inline constexpr llvm::StringLiteral kHostFunctionName = "neverd_evm_host_op";
-inline constexpr llvm::StringLiteral kTraceFunctionName = "neverd_evm_trace";
 
 struct StackHelpers {
   llvm::Function *Push = nullptr;
@@ -56,9 +52,9 @@ StackHelpers buildStackHelpers(llvm::Module &Module, llvm::Type *StackType,
   StackHelpers Helpers;
 
   auto *PushTy = llvm::FunctionType::get(Void, {Ptr, Ptr, WordType}, false);
-  Helpers.Push = llvm::Function::Create(
-      PushTy, llvm::GlobalValue::InternalLinkage, kStackPushFunctionName,
-      Module);
+  Helpers.Push =
+      llvm::Function::Create(PushTy, llvm::GlobalValue::InternalLinkage,
+                             kStackPushFunctionName, Module);
   {
     auto Args = Helpers.Push->arg_begin();
     llvm::Value *Stack = &*Args++;
@@ -89,8 +85,7 @@ StackHelpers buildStackHelpers(llvm::Module &Module, llvm::Type *StackType,
 
   auto *PopTy = llvm::FunctionType::get(WordType, {Ptr, Ptr}, false);
   Helpers.Pop = llvm::Function::Create(
-      PopTy, llvm::GlobalValue::InternalLinkage, kStackPopFunctionName,
-      Module);
+      PopTy, llvm::GlobalValue::InternalLinkage, kStackPopFunctionName, Module);
   {
     auto Args = Helpers.Pop->arg_begin();
     llvm::Value *Stack = &*Args++;
@@ -116,9 +111,9 @@ StackHelpers buildStackHelpers(llvm::Module &Module, llvm::Type *StackType,
   }
 
   auto *PeekTy = llvm::FunctionType::get(WordType, {Ptr, Ptr, I32}, false);
-  Helpers.Peek = llvm::Function::Create(
-      PeekTy, llvm::GlobalValue::InternalLinkage, kStackPeekFunctionName,
-      Module);
+  Helpers.Peek =
+      llvm::Function::Create(PeekTy, llvm::GlobalValue::InternalLinkage,
+                             kStackPeekFunctionName, Module);
   {
     auto Args = Helpers.Peek->arg_begin();
     llvm::Value *Stack = &*Args++;
@@ -142,9 +137,9 @@ StackHelpers buildStackHelpers(llvm::Module &Module, llvm::Type *StackType,
   }
 
   auto *SwapTy = llvm::FunctionType::get(Void, {Ptr, Ptr, I32}, false);
-  Helpers.Swap = llvm::Function::Create(
-      SwapTy, llvm::GlobalValue::InternalLinkage, kStackSwapFunctionName,
-      Module);
+  Helpers.Swap =
+      llvm::Function::Create(SwapTy, llvm::GlobalValue::InternalLinkage,
+                             kStackSwapFunctionName, Module);
   {
     auto Args = Helpers.Swap->arg_begin();
     llvm::Value *Stack = &*Args++;
@@ -231,8 +226,7 @@ llvm::Value *safeSignedDiv(llvm::IRBuilder<> &B, llvm::Value *A,
   llvm::Value *IsZero = B.CreateICmpEQ(Divisor, word(Type, 0));
   llvm::Value *IsMin = B.CreateICmpEQ(
       A,
-      llvm::ConstantInt::get(Type,
-                             llvm::APInt::getSignedMinValue(kWordBits)));
+      llvm::ConstantInt::get(Type, llvm::APInt::getSignedMinValue(kWordBits)));
   llvm::Value *IsMinusOne = B.CreateICmpEQ(
       Divisor,
       llvm::ConstantInt::get(Type, llvm::APInt::getAllOnes(kWordBits)));
@@ -246,18 +240,11 @@ llvm::Value *safeSignedDiv(llvm::IRBuilder<> &B, llvm::Value *A,
   return B.CreateSelect(IsZero, word(Type, 0), Value);
 }
 
-bool isInlinePure(Opcode Op) {
-  const auto Info = opcodeInfo(Op);
-  return Info && (Info->Class == OpcodeClass::Arithmetic ||
-                  Info->Class == OpcodeClass::Comparison ||
-                  Info->Class == OpcodeClass::Bitwise);
-}
-
 } // namespace
 
 llvm::Expected<std::unique_ptr<llvm::Module>>
 emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
-         LLVMEmitterOptions Options) {
+         const LLVMEmitterOptions &Options) {
   auto Module = std::make_unique<llvm::Module>(Options.ModuleName, Context);
   auto *I8 = llvm::Type::getInt8Ty(Context);
   auto *I32 = llvm::Type::getInt32Ty(Context);
@@ -282,9 +269,9 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
                               false));
 
   auto *ExecuteTy = llvm::FunctionType::get(I32, {Ptr}, false);
-  auto *Execute = llvm::Function::Create(
-      ExecuteTy, llvm::GlobalValue::ExternalLinkage, Options.FunctionName,
-      *Module);
+  auto *Execute =
+      llvm::Function::Create(ExecuteTy, llvm::GlobalValue::ExternalLinkage,
+                             Options.FunctionName, *Module);
   llvm::Value *Environment = Execute->getArg(0);
   Environment->setName("environment");
   auto *Entry = llvm::BasicBlock::Create(Context, "entry", Execute);
@@ -294,11 +281,11 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
   llvm::Value *SP = EntryBuilder.CreateAlloca(I32, nullptr, "sp");
   EntryBuilder.CreateStore(llvm::ConstantInt::get(I32, 0), SP);
 
-  std::unordered_map<uint64_t, llvm::BasicBlock *> Blocks;
+  llvm::DenseMap<uint64_t, llvm::BasicBlock *> Blocks;
   for (const auto &Instruction : Program.Low.Instructions)
     Blocks[Instruction.PC] = llvm::BasicBlock::Create(
         Context, "pc_" + std::to_string(Instruction.PC), Execute);
-  if (auto It = Blocks.find(0); It != Blocks.end())
+  if (auto It = Blocks.find(kEntryPC); It != Blocks.end())
     EntryBuilder.CreateBr(It->second);
   else
     EntryBuilder.CreateRet(
@@ -312,8 +299,8 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
   };
   auto EmitHost = [&](llvm::IRBuilder<> &B, Opcode Op,
                       const std::vector<llvm::Value *> &Inputs) {
-    std::vector<llvm::Value *> Args{
-        Environment, llvm::ConstantInt::get(I8, opcodeByte(Op))};
+    std::vector<llvm::Value *> Args{Environment,
+                                    llvm::ConstantInt::get(I8, opcodeByte(Op))};
     for (size_t I = 0; I < maxHostOpcodeArguments(); ++I)
       Args.push_back(I < Inputs.size() ? Inputs[I] : word(I256, 0));
     return B.CreateCall(Host, Args, "host.result");
@@ -331,53 +318,50 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
     auto *Switch =
         B.CreateSwitch(Destination, Bad, Program.Low.JumpDestinations.size());
     for (uint64_t Target : Program.Low.JumpDestinations)
-      Switch->addCase(word(I256, Target), Blocks.at(Target));
+      Switch->addCase(word(I256, Target), Blocks.lookup(Target));
     llvm::IRBuilder<> BadBuilder(Bad);
     BadBuilder.CreateCall(Trap);
     BadBuilder.CreateUnreachable();
   };
 
   for (const auto &Instruction : Program.Low.Instructions) {
-    llvm::IRBuilder<> B(Blocks.at(Instruction.PC));
-    const Opcode Op = Instruction.Op;
+    llvm::IRBuilder<> B(Blocks.lookup(Instruction.PC));
+    const Opcode Op = Instruction.opcode();
     if (Options.EmitTraceHooks)
       B.CreateCall(Trace,
                    {Environment, llvm::ConstantInt::get(I64, Instruction.PC),
                     llvm::ConstantInt::get(I8, opcodeByte(Op))});
 
-    if (!Instruction.Known || Op == Opcode::INVALID) {
+    if (!Instruction.isKnown() || Instruction.is(Opcode::INVALID)) {
       B.CreateCall(Trap);
       B.CreateUnreachable();
       continue;
     }
-    if (Op == Opcode::STOP) {
+    if (Instruction.is(Opcode::STOP)) {
       B.CreateRet(
           llvm::ConstantInt::get(I32, exitStatusCode(ExitStatus::Stopped)));
       continue;
     }
-    if (isPush(Op)) {
+    if (Instruction.isPush()) {
       EmitPush(B, word(I256, Instruction.Immediate));
       EmitNext(B, Instruction.NextPC);
       continue;
     }
-    if (isDup(Op)) {
-      llvm::Value *Value = B.CreateCall(
-          Stack.Peek,
-          {StackStorage, SP,
-           llvm::ConstantInt::get(I32, dupDepth(Op))});
+    if (Instruction.isDup()) {
+      llvm::Value *Value =
+          B.CreateCall(Stack.Peek, {StackStorage, SP,
+                                    llvm::ConstantInt::get(I32, dupDepth(Op))});
       EmitPush(B, Value);
       EmitNext(B, Instruction.NextPC);
       continue;
     }
-    if (isSwap(Op)) {
-      B.CreateCall(
-          Stack.Swap,
-          {StackStorage, SP,
-           llvm::ConstantInt::get(I32, swapDepth(Op))});
+    if (Instruction.isSwap()) {
+      B.CreateCall(Stack.Swap, {StackStorage, SP,
+                                llvm::ConstantInt::get(I32, swapDepth(Op))});
       EmitNext(B, Instruction.NextPC);
       continue;
     }
-    if (isJump(Op)) {
+    if (Instruction.isJump()) {
       llvm::Value *Destination = EmitPop(B);
       if (Op == Opcode::JUMP) {
         EmitJumpSwitch(B, Destination,
@@ -395,8 +379,8 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
               Context, "jumpi." + std::to_string(Instruction.PC) + ".end",
               Execute);
           llvm::IRBuilder<> EndBuilder(NotTaken);
-          EndBuilder.CreateRet(llvm::ConstantInt::get(
-              I32, exitStatusCode(ExitStatus::Stopped)));
+          EndBuilder.CreateRet(
+              llvm::ConstantInt::get(I32, exitStatusCode(ExitStatus::Stopped)));
         }
         B.CreateCondBr(B.CreateICmpNE(Condition, word(I256, 0)), Taken,
                        NotTaken);
@@ -408,6 +392,7 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
     }
 
     std::vector<llvm::Value *> Inputs;
+    Inputs.reserve(Instruction.Info.StackInputs);
     for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
       Inputs.push_back(EmitPop(B));
 
@@ -427,7 +412,7 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
     }
 
     llvm::Value *Output = nullptr;
-    if (isInlinePure(Op)) {
+    if (isALU(Instruction.Info)) {
       llvm::Value *A = Inputs.empty() ? nullptr : Inputs[0];
       llvm::Value *Second = Inputs.size() > 1 ? Inputs[1] : nullptr;
       switch (Op) {
@@ -476,12 +461,11 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
       case Opcode::SIGNEXTEND: {
         // Sanitizing k before constructing shifts avoids poison when the
         // shift count reaches the EVM word width.
-        llvm::Value *NoOp =
-            B.CreateICmpUGE(A, word(I256, kWordBytes - 1));
+        llvm::Value *NoOp = B.CreateICmpUGE(A, word(I256, kWordBytes - 1));
         llvm::Value *SafeK = B.CreateSelect(NoOp, word(I256, 0), A);
-        llvm::Value *Bit = B.CreateAdd(
-            B.CreateMul(SafeK, word(I256, kBitsPerByte)),
-            word(I256, kBitsPerByte - 1));
+        llvm::Value *Bit =
+            B.CreateAdd(B.CreateMul(SafeK, word(I256, kBitsPerByte)),
+                        word(I256, kBitsPerByte - 1));
         llvm::Value *SignBit = B.CreateShl(word(I256, 1), Bit);
         llvm::Value *LowMask =
             B.CreateSub(B.CreateShl(SignBit, word(I256, 1)), word(I256, 1));
@@ -524,12 +508,11 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
         Output = B.CreateNot(A);
         break;
       case Opcode::BYTE: {
-        llvm::Value *TooLarge =
-            B.CreateICmpUGE(A, word(I256, kWordBytes));
+        llvm::Value *TooLarge = B.CreateICmpUGE(A, word(I256, kWordBytes));
         llvm::Value *SafeIndex = B.CreateSelect(TooLarge, word(I256, 0), A);
-        llvm::Value *Shift = B.CreateMul(
-            B.CreateSub(word(I256, kWordBytes - 1), SafeIndex),
-            word(I256, kBitsPerByte));
+        llvm::Value *Shift =
+            B.CreateMul(B.CreateSub(word(I256, kWordBytes - 1), SafeIndex),
+                        word(I256, kBitsPerByte));
         llvm::Value *Byte =
             B.CreateAnd(B.CreateLShr(Second, Shift), word(I256, kByteMax));
         Output = B.CreateSelect(TooLarge, word(I256, 0), Byte);
@@ -540,18 +523,16 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
       case Opcode::SAR: {
         llvm::Value *TooLarge = B.CreateICmpUGE(A, word(I256, kWordBits));
         llvm::Value *SafeShift = B.CreateSelect(TooLarge, word(I256, 0), A);
-        llvm::Value *Shifted = Op == Opcode::SHL
-                                   ? B.CreateShl(Second, SafeShift)
-                               : Op == Opcode::SHR
-                                   ? B.CreateLShr(Second, SafeShift)
-                                   : B.CreateAShr(Second, SafeShift);
+        llvm::Value *Shifted =
+            Op == Opcode::SHL   ? B.CreateShl(Second, SafeShift)
+            : Op == Opcode::SHR ? B.CreateLShr(Second, SafeShift)
+                                : B.CreateAShr(Second, SafeShift);
         llvm::Value *LargeResult = word(I256, 0);
         if (Op == Opcode::SAR) {
           llvm::Value *Negative = B.CreateICmpSLT(Second, word(I256, 0));
           LargeResult = B.CreateSelect(
               Negative,
-              llvm::ConstantInt::get(
-                  I256, llvm::APInt::getAllOnes(kWordBits)),
+              llvm::ConstantInt::get(I256, llvm::APInt::getAllOnes(kWordBits)),
               word(I256, 0));
         }
         Output = B.CreateSelect(TooLarge, LargeResult, Shifted);
@@ -564,7 +545,7 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
         break;
       }
       default:
-        break;
+        llvm_unreachable("unhandled EVM ALU opcode in LLVM backend");
       }
     } else {
       Output = EmitHost(B, Op, Inputs);
@@ -573,10 +554,10 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
     if (Op == Opcode::RETURN || Op == Opcode::REVERT ||
         Op == Opcode::SELFDESTRUCT) {
       (void)Output;
-      const ExitStatus Status =
-          Op == Opcode::RETURN   ? ExitStatus::Returned
-          : Op == Opcode::REVERT ? ExitStatus::Reverted
-                                 : ExitStatus::SelfDestructed;
+      const ExitStatus Status = Op == Opcode::RETURN ? ExitStatus::Returned
+                                : Op == Opcode::REVERT
+                                    ? ExitStatus::Reverted
+                                    : ExitStatus::SelfDestructed;
       B.CreateRet(llvm::ConstantInt::get(I32, exitStatusCode(Status)));
       continue;
     }
@@ -585,8 +566,11 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
           llvm::ConstantInt::get(I32, exitStatusCode(ExitStatus::Stopped)));
       continue;
     }
-    for (uint8_t I = 0; I < Instruction.Info.StackOutputs; ++I)
-      EmitPush(B, I == 0 && Output ? Output : word(I256, 0));
+    if (Instruction.Info.StackOutputs != 0) {
+      if (!Output)
+        llvm_unreachable("EVM opcode output was not lowered");
+      EmitPush(B, Output);
+    }
     EmitNext(B, Instruction.NextPC);
   }
 

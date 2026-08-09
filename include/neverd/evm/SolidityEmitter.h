@@ -1,4 +1,14 @@
 //===- SolidityEmitter.h - EVM to recovered Solidity backend --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Declares emission of a compilable abstract Solidity reconstruction and
+/// checked EVM state machine.
+///
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_EVM_SOLIDITYEMITTER_H
 #define NEVERD_EVM_SOLIDITYEMITTER_H
@@ -11,6 +21,7 @@
 
 namespace neverd::evm {
 
+/// Controls source compatibility, contract naming, tracing, and declarations.
 struct SolidityEmitterOptions {
   std::string ContractName = kDefaultContractName.str();
   std::string Pragma = kDefaultSolidityPragma.str();
@@ -18,8 +29,11 @@ struct SolidityEmitterOptions {
   bool EmitRecoveredDeclarations = true;
 };
 
-llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
-                                         SolidityEmitterOptions Options = {});
+/// Emits Solidity source with explicit host hooks for unrecovered environment
+/// semantics.
+llvm::Expected<std::string>
+emitSolidity(const EVMProgram &Program,
+             const SolidityEmitterOptions &Options = {});
 
 } // namespace neverd::evm
 

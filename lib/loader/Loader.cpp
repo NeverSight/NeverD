@@ -11,13 +11,13 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/evm/Bytecode.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/loader/EVM/EVMLoader.h"
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/ObjectFileUtils.h"
-#include "neverd/evm/Bytecode.h"
 
 namespace neverd {
 

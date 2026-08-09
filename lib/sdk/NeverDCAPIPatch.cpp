@@ -366,8 +366,7 @@ int neverd_patch_full(neverd_session_t Sess, const char *InputPath,
   PipelineOptions Opts;
   Opts.PatchMode = true;
   Opts.NoOpt = NoOpt != 0;
-  Opts.MaxFunctions =
-      MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
+  Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (!R.run(Opts, Err)) {
     if (S)
       S->setError(Err);
@@ -571,12 +570,15 @@ int neverd_lift_to_obj(neverd_session_t Sess, const char *InputPath, int NoOpt,
       S->setError(Err);
     return 1;
   }
+  if (R.Img.Arch == Arch::EVM) {
+    S->setError("object-code roundtrip is not supported for EVM bytecode");
+    return 1;
+  }
 
   PipelineOptions Opts;
   Opts.LiftMode = true;
   Opts.NoOpt = NoOpt != 0;
-  Opts.MaxFunctions =
-      MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
+  Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (!R.run(Opts, Err)) {
     if (S)
       S->setError(Err);

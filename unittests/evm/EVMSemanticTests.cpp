@@ -128,6 +128,19 @@ TEST(EVMInterpreter, ComputesEthereumKeccak256) {
       256, "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
       16);
   EXPECT_EQ(Result.Stack.back(), Expected);
+
+  // Store "abc" in the low bytes of a word and hash exactly those bytes.
+  Result = executeCode({opcodeByte(Opcode::PUSH3), 0x61, 0x62, 0x63,
+                        opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::MSTORE),
+                        opcodeByte(Opcode::PUSH1), 3, opcodeByte(Opcode::PUSH1),
+                        kWordBytes - 3, opcodeByte(Opcode::SHA3),
+                        opcodeByte(Opcode::STOP)});
+  ASSERT_EQ(Result.Stack.size(), 1u);
+  const llvm::APInt ABC(
+      kWordBits,
+      "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45",
+      kHexRadix);
+  EXPECT_EQ(Result.Stack.back(), ABC);
 }
 
 TEST(EVMInterpreter, ImplementsOverlappingMcopyAndBlobhash) {
@@ -173,10 +186,9 @@ TEST(EVMInterpreter, HugeCopySourceOffsetsZeroFillAndExpandMemory) {
   std::vector<uint8_t> Code = {opcodeByte(Opcode::PUSH1), 1,
                                opcodeByte(Opcode::PUSH32)};
   Code.insert(Code.end(), kWordBytes, kByteMax);
-  Code.insert(Code.end(), {opcodeByte(Opcode::PUSH0),
-                           opcodeByte(Opcode::CALLDATACOPY),
-                           opcodeByte(Opcode::MSIZE),
-                           opcodeByte(Opcode::STOP)});
+  Code.insert(Code.end(),
+              {opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::CALLDATACOPY),
+               opcodeByte(Opcode::MSIZE), opcodeByte(Opcode::STOP)});
 
   auto Result = executeCode(Code);
   ASSERT_EQ(Result.Status, ExecutionStatus::Stopped);
@@ -186,16 +198,175 @@ TEST(EVMInterpreter, HugeCopySourceOffsetsZeroFillAndExpandMemory) {
   EXPECT_EQ(Result.Stack.back().getZExtValue(), kWordBytes);
 }
 
+TEST(EVMInterpreter, KeepsSubcallReturnBufferSeparateFromFrameOutput) {
+  ExecutionEnvironment Environment;
+  Environment.InitialReturnData = {0xaa, 0xbb, 0xcc};
+  auto Result = executeCode(
+      {opcodeByte(Opcode::RETURNDATASIZE), opcodeByte(Opcode::STOP)},
+      std::move(Environment));
+  ASSERT_EQ(Result.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Result.Stack.size(), 1u);
+  EXPECT_EQ(Result.Stack.back().getZExtValue(), 3u);
+  EXPECT_TRUE(Result.ReturnData.empty());
+
+  ExecutionEnvironment CallEnvironment;
+  CallEnvironment.CallReturnData = {0x11, 0x22};
+  Result =
+      executeCode({opcodeByte(Opcode::PUSH1), 2,
+                   opcodeByte(Opcode::PUSH0), // output size and offset
+                   opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::PUSH0),
+                   opcodeByte(Opcode::PUSH0), // input size, offset, and value
+                   opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::PUSH0),
+                   opcodeByte(Opcode::CALL), opcodeByte(Opcode::RETURNDATASIZE),
+                   opcodeByte(Opcode::STOP)},
+                  std::move(CallEnvironment));
+  ASSERT_EQ(Result.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Result.Stack.size(), 2u);
+  EXPECT_EQ(Result.Stack.back().getZExtValue(), 2u);
+  ASSERT_GE(Result.Memory.size(), 2u);
+  EXPECT_EQ(Result.Memory[0], 0x11u);
+  EXPECT_EQ(Result.Memory[1], 0x22u);
+  EXPECT_TRUE(Result.ReturnData.empty());
+
+  ExecutionEnvironment CreateEnvironment;
+  CreateEnvironment.CreateSuccess = false;
+  CreateEnvironment.CreateReturnData = {0x44};
+  Result = executeCode({opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::PUSH0),
+                        opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::CREATE),
+                        opcodeByte(Opcode::RETURNDATASIZE),
+                        opcodeByte(Opcode::STOP)},
+                       std::move(CreateEnvironment));
+  ASSERT_EQ(Result.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Result.Stack.size(), 2u);
+  EXPECT_TRUE(Result.Stack.front().isZero());
+  EXPECT_EQ(Result.Stack.back().getZExtValue(), 1u);
+  EXPECT_TRUE(Result.ReturnData.empty());
+}
+
+TEST(EVMInterpreter, EnforcesMemoryLimitAtEVMWordGranularity) {
+  const std::vector<uint8_t> Code = {
+      opcodeByte(Opcode::PUSH1), 0xaa, opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::MSTORE8), opcodeByte(Opcode::STOP)};
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  InterpreterOptions TooSmall;
+  TooSmall.MaxMemoryBytes = kWordBytes - 1;
+  auto Faulted = execute(Program->Low, {}, TooSmall);
+  ASSERT_TRUE(static_cast<bool>(Faulted))
+      << llvm::toString(Faulted.takeError());
+  EXPECT_EQ(Faulted->Status, ExecutionStatus::Faulted);
+  EXPECT_TRUE(Faulted->Memory.empty());
+
+  InterpreterOptions OneWord;
+  OneWord.MaxMemoryBytes = kWordBytes;
+  auto Stored = execute(Program->Low, {}, OneWord);
+  ASSERT_TRUE(static_cast<bool>(Stored)) << llvm::toString(Stored.takeError());
+  EXPECT_EQ(Stored->Status, ExecutionStatus::Stopped);
+  EXPECT_EQ(Stored->Memory.size(), kWordBytes);
+}
+
+TEST(EVMInterpreter, RejectsEnvironmentValuesWithTheWrongWordWidth) {
+  auto Program = analyze(std::vector<uint8_t>{opcodeByte(Opcode::ADDRESS),
+                                              opcodeByte(Opcode::STOP)});
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  ExecutionEnvironment Environment;
+  Environment.Address = llvm::APInt(kWordBits / 2, 0);
+  auto Result = execute(Program->Low, std::move(Environment));
+  ASSERT_FALSE(static_cast<bool>(Result));
+  const std::string Error = llvm::toString(Result.takeError());
+  EXPECT_NE(Error.find("Address"), std::string::npos);
+  EXPECT_NE(Error.find("256-bit"), std::string::npos);
+}
+
+TEST(EVMInterpreter, DiagnosesMixedWidthMapKeysWithoutAPIntAssertions) {
+  auto Program = analyze(std::vector<uint8_t>{opcodeByte(Opcode::STOP)});
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  ExecutionEnvironment Environment;
+  Environment.Balances.emplace(llvm::APInt(kWordBits / 2, 1),
+                               llvm::APInt(kWordBits, 2));
+  Environment.Balances.emplace(llvm::APInt(kWordBits, 3),
+                               llvm::APInt(kWordBits, 4));
+  auto Result = execute(Program->Low, std::move(Environment));
+  ASSERT_FALSE(static_cast<bool>(Result));
+  const std::string Error = llvm::toString(Result.takeError());
+  EXPECT_NE(Error.find("Balances key"), std::string::npos);
+  EXPECT_NE(Error.find("256-bit"), std::string::npos);
+}
+
+TEST(EVMInterpreter, MasksAccountOperandsToTheEVMAddressWidth) {
+  std::vector<uint8_t> Code{opcodeByte(Opcode::PUSH32)};
+  Code.insert(Code.end(), kWordBytes, uint8_t{0});
+  Code[1] = kByteMax;
+  Code[kWordBytes] = 0x42;
+  Code.push_back(opcodeByte(Opcode::BALANCE));
+  Code.push_back(opcodeByte(Opcode::STOP));
+
+  ExecutionEnvironment Environment;
+  Environment.Balances.emplace(llvm::APInt(kWordBits, 0x42),
+                               llvm::APInt(kWordBits, 7));
+  auto Result = executeCode(Code, std::move(Environment));
+  ASSERT_EQ(Result.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Result.Stack.size(), 1u);
+  EXPECT_EQ(Result.Stack.back().getZExtValue(), 7u);
+}
+
+TEST(EVMInterpreter, BlockhashRejectsCurrentFutureAndExpiredBlocks) {
+  constexpr uint64_t kCurrentBlock = 1000;
+  constexpr uint64_t kOldestAvailableBlock =
+      kCurrentBlock - kBlockHashHistoryWindow;
+  constexpr uint64_t kExpiredBlock = kOldestAvailableBlock - 1;
+
+  const struct {
+    uint64_t Number;
+    uint64_t Expected;
+  } Cases[] = {
+      {kCurrentBlock - 1, 0x11}, {kOldestAvailableBlock, 0x22},
+      {kExpiredBlock, 0},        {kCurrentBlock, 0},
+      {kCurrentBlock + 1, 0},
+  };
+
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Number);
+    const std::vector<uint8_t> Code = {
+        opcodeByte(Opcode::PUSH2), static_cast<uint8_t>(Case.Number >> 8),
+        static_cast<uint8_t>(Case.Number), opcodeByte(Opcode::BLOCKHASH),
+        opcodeByte(Opcode::STOP)};
+    ExecutionEnvironment Environment;
+    Environment.BlockNumber = llvm::APInt(kWordBits, kCurrentBlock);
+    Environment.BlockHashes.emplace(llvm::APInt(kWordBits, kCurrentBlock - 1),
+                                    llvm::APInt(kWordBits, 0x11));
+    Environment.BlockHashes.emplace(
+        llvm::APInt(kWordBits, kOldestAvailableBlock),
+        llvm::APInt(kWordBits, 0x22));
+    Environment.BlockHashes.emplace(llvm::APInt(kWordBits, kExpiredBlock),
+                                    llvm::APInt(kWordBits, 0x33));
+    Environment.BlockHashes.emplace(llvm::APInt(kWordBits, kCurrentBlock),
+                                    llvm::APInt(kWordBits, 0x44));
+    Environment.BlockHashes.emplace(llvm::APInt(kWordBits, kCurrentBlock + 1),
+                                    llvm::APInt(kWordBits, 0x55));
+
+    auto Result = executeCode(Code, std::move(Environment));
+    ASSERT_EQ(Result.Status, ExecutionStatus::Stopped);
+    ASSERT_EQ(Result.Stack.size(), 1u);
+    EXPECT_EQ(Result.Stack.back().getZExtValue(), Case.Expected);
+  }
+}
+
 TEST(EVMInterpreter, EveryAssignedOpcodeHasAStackSafeDispatchPath) {
   for (size_t Byte = 0; Byte < kOpcodeSpaceSize; ++Byte) {
     const auto Info = opcodeInfo(static_cast<uint8_t>(Byte));
     if (!Info)
       continue;
-    SCOPED_TRACE(testing::Message() << Info->Name.str() << " (0x" << std::hex
-                                    << Byte << ")");
+    SCOPED_TRACE(testing::Message()
+                 << Info->Name.str() << " (0x" << std::hex << Byte << ")");
 
-    std::vector<uint8_t> Code(Info->StackInputs,
-                              opcodeByte(Opcode::PUSH0));
+    std::vector<uint8_t> Code(Info->StackInputs, opcodeByte(Opcode::PUSH0));
     Code.push_back(static_cast<uint8_t>(Byte));
     Code.insert(Code.end(), Info->ImmediateBytes, uint8_t{0});
     Code.push_back(opcodeByte(Opcode::STOP));

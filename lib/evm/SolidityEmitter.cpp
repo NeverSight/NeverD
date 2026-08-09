@@ -2,6 +2,7 @@
 
 #include "neverd/evm/SolidityEmitter.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -13,10 +14,17 @@
 namespace neverd::evm {
 namespace {
 
+inline constexpr llvm::StringLiteral kSolidityHostFunctionName = "_evmHost";
+inline constexpr llvm::StringLiteral kSolidityTraceFunctionName = "_evmTrace";
+inline constexpr llvm::StringLiteral kSolidityPushFunctionName = "_evmPush";
+inline constexpr llvm::StringLiteral kSolidityPopFunctionName = "_evmPop";
+inline constexpr llvm::StringLiteral kSolidityExecuteFunctionName =
+    "_executeEVM";
+
 llvm::StringRef solidityExitStatusName(ExitStatus Status) {
   switch (Status) {
 #define EVM_EXIT_STATUS(NAME, C_NAME, VALUE)                                   \
-  case ExitStatus::NAME:                                                      \
+  case ExitStatus::NAME:                                                       \
     return #C_NAME;
 #include "neverd/evm/EVMExitStatuses.def"
   }
@@ -25,11 +33,11 @@ llvm::StringRef solidityExitStatusName(ExitStatus Status) {
 
 std::string solidityWord(const llvm::APInt &Value) {
   llvm::SmallString<kWordBytes * kHexDigitsPerByte> Digits;
-  Value.toStringUnsigned(Digits, 16);
+  Value.toStringUnsigned(Digits, kHexRadix);
   return "uint256(0x" + Digits.str().str() + ")";
 }
 
-std::string mutabilityText(Mutability MutabilityValue) {
+llvm::StringRef mutabilityText(Mutability MutabilityValue) {
   switch (MutabilityValue) {
   case Mutability::Pure:
     return " pure";
@@ -40,19 +48,12 @@ std::string mutabilityText(Mutability MutabilityValue) {
   case Mutability::NonPayable:
     return "";
   }
-  return "";
+  llvm_unreachable("invalid recovered Solidity mutability");
 }
 
 std::string hostExpression(Opcode Op) {
-  return "_evmHost(0x" + llvm::utohexstr(opcodeByte(Op)) +
-         ", args_, input)";
-}
-
-bool isInlinePure(Opcode Op) {
-  const auto Info = opcodeInfo(Op);
-  return Info && (Info->Class == OpcodeClass::Arithmetic ||
-                  Info->Class == OpcodeClass::Comparison ||
-                  Info->Class == OpcodeClass::Bitwise);
+  return kSolidityHostFunctionName.str() + "(0x" +
+         llvm::utohexstr(opcodeByte(Op)) + ", args_, input)";
 }
 
 std::string pureExpression(Opcode Op) {
@@ -72,9 +73,9 @@ std::string pureExpression(Opcode Op) {
   case Opcode::SMOD:
     return "_evmSMod(args_[0], args_[1])";
   case Opcode::ADDMOD:
-    return "addmod(args_[0], args_[1], args_[2])";
+    return "args_[2] == 0 ? 0 : addmod(args_[0], args_[1], args_[2])";
   case Opcode::MULMOD:
-    return "mulmod(args_[0], args_[1], args_[2])";
+    return "args_[2] == 0 ? 0 : mulmod(args_[0], args_[1], args_[2])";
   case Opcode::EXP:
     return "args_[0] ** args_[1]";
   case Opcode::SIGNEXTEND:
@@ -110,32 +111,37 @@ std::string pureExpression(Opcode Op) {
   case Opcode::CLZ:
     return "_evmClz(args_[0])";
   default:
-    return "0";
+    llvm_unreachable("unhandled EVM ALU opcode in Solidity backend");
   }
 }
 
-bool hasPC(const EVMProgram &Program, uint64_t PC) {
-  for (const auto &Instruction : Program.Low.Instructions)
-    if (Instruction.PC == PC)
-      return true;
-  return false;
+std::string advanceStatement(const llvm::DenseSet<uint64_t> &InstructionPCs,
+                             uint64_t NextPC) {
+  if (InstructionPCs.contains(NextPC))
+    return "pc = " + std::to_string(NextPC) + "; continue;";
+  return "return " + solidityExitStatusName(ExitStatus::Stopped).str() + ";";
 }
 
-void emitAdvance(llvm::raw_ostream &OS, const EVMProgram &Program,
+void emitAdvance(llvm::raw_ostream &OS,
+                 const llvm::DenseSet<uint64_t> &InstructionPCs,
                  uint64_t NextPC) {
-  if (hasPC(Program, NextPC))
-    OS << "        pc = " << NextPC << "; continue;\n";
+  if (InstructionPCs.contains(NextPC))
+    OS << "                pc = " << NextPC << "; continue;\n";
   else
-    OS << "        return " << solidityExitStatusName(ExitStatus::Stopped)
-       << ";\n";
+    OS << "                return "
+       << solidityExitStatusName(ExitStatus::Stopped) << ";\n";
 }
 
 } // namespace
 
-llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
-                                         SolidityEmitterOptions Options) {
+llvm::Expected<std::string>
+emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
   std::string Text;
   llvm::raw_string_ostream OS(Text);
+  llvm::DenseSet<uint64_t> InstructionPCs;
+  InstructionPCs.reserve(Program.Low.Instructions.size());
+  for (const LowInstruction &Instruction : Program.Low.Instructions)
+    InstructionPCs.insert(Instruction.PC);
   OS << "// SPDX-License-Identifier: UNLICENSED\n"
      << "pragma solidity " << Options.Pragma
      << ";\n\n"
@@ -145,8 +151,9 @@ llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
         " * @dev Names and ABI types marked recovered are heuristics; this "
         "file\n"
         " *      does not claim to reproduce the original Solidity source.\n"
-        " *      Override _evmHost to supply memory, storage, calldata, "
-        "hashing,\n"
+        " *      Override "
+     << kSolidityHostFunctionName
+     << " to supply memory, storage, calldata, hashing,\n"
         " *      call, log, return/revert, and blockchain-environment "
         "effects.\n"
         " *      args_[0] is the original stack top; the hook returns the "
@@ -164,10 +171,8 @@ llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
      << "    uint256 private constant _EVM_BITS_PER_BYTE = " << kBitsPerByte
      << ";\n"
      << "    uint256 private constant _EVM_BYTE_MAX = " << kByteMax << ";\n"
-     << "    uint256 private constant _EVM_WORD_BITS = " << kWordBits
-     << ";\n"
-     << "    uint256 private constant _EVM_WORD_BYTES = " << kWordBytes
-     << ";\n"
+     << "    uint256 private constant _EVM_WORD_BITS = " << kWordBits << ";\n"
+     << "    uint256 private constant _EVM_WORD_BYTES = " << kWordBytes << ";\n"
      << "    uint256 private constant _EVM_WORD_MAX_BYTE_INDEX = "
      << kWordMaxByteIndex << ";\n"
      << "    uint256 private constant _EVM_WORD_MSB = "
@@ -175,7 +180,7 @@ llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
      << "    uint256 private constant _EVM_STACK_LIMIT = " << kStackLimit
      << ";\n";
 #define EVM_EXIT_STATUS(NAME, C_NAME, VALUE)                                   \
-  OS << "    uint8 private constant " #C_NAME " = "                          \
+  OS << "    uint8 private constant " #C_NAME " = "                            \
      << static_cast<unsigned>(exitStatusCode(ExitStatus::NAME)) << ";\n";
 #include "neverd/evm/EVMExitStatuses.def"
   OS << "\n";
@@ -185,11 +190,13 @@ llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
     for (const auto &Fact : Program.High.Storage) {
       if (!Fact.Slot)
         continue;
-      const std::string Name = "recovered_" + Fact.SuggestedName;
+      const std::string Name =
+          kRecoveredDeclarationPrefix.str() + Fact.SuggestedName;
       if (StorageNames.insert(Name).second)
         OS << "    // Recovered access to absolute EVM slot "
            << solidityWord(*Fact.Slot) << ".\n"
-           << "    uint256 internal " << Name << ";\n";
+           << "    uint256 internal constant " << Name << " = "
+           << solidityWord(*Fact.Slot) << ";\n";
     }
     if (!StorageNames.empty())
       OS << "\n";
@@ -232,22 +239,25 @@ llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
     }
   }
 
-  OS << "    function _evmHost(uint8 opcode, uint256["
+  OS << "    function " << kSolidityHostFunctionName
+     << "(uint8 opcode, uint256["
      << static_cast<unsigned>(maxHostOpcodeArguments())
      << "] memory args_, bytes memory input) internal virtual returns "
         "(uint256);\n\n"
-        "    function _evmTrace(uint256 pc, uint8 opcode) internal virtual {\n"
+        "    function "
+     << kSolidityTraceFunctionName
+     << "(uint256 pc, uint8 opcode) internal virtual {\n"
         "        emit EVMTrace(pc, opcode);\n"
         "    }\n\n"
-        "    function _evmPush(uint256["
-     << kStackLimit
+        "    function "
+     << kSolidityPushFunctionName << "(uint256[" << kStackLimit
      << "] memory stack_, uint256 sp, "
         "uint256 value, uint256 pc) internal pure returns (uint256) {\n"
         "        if (sp >= _EVM_STACK_LIMIT) revert EVMStackOverflow(pc);\n"
         "        stack_[sp] = value; return sp + 1;\n"
         "    }\n\n"
-        "    function _evmPop(uint256["
-     << kStackLimit
+        "    function "
+     << kSolidityPopFunctionName << "(uint256[" << kStackLimit
      << "] memory stack_, uint256 sp, "
         "uint256 pc) internal pure returns (uint256, uint256) {\n"
         "        if (sp == 0) revert EVMStackUnderflow(pc);\n"
@@ -277,67 +287,83 @@ llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
         "{ unchecked { ++n; "
         "v <<= 1; } } }\n\n"
         "    function execute(bytes calldata input) external payable returns "
-        "(uint8) { return _executeEVM(input); }\n\n"
+        "(uint8) { return "
+     << kSolidityExecuteFunctionName
+     << "(input); }\n\n"
         "    fallback() external payable {\n"
-        "        uint8 status = _executeEVM(msg.data);\n"
+        "        uint8 status = "
+     << kSolidityExecuteFunctionName
+     << "(msg.data);\n"
         "        if (status == NEVERD_EVM_REVERTED) "
         "revert EVMExecutionReverted();\n"
         "    }\n\n"
         "    receive() external payable {\n"
-        "        uint8 status = _executeEVM(bytes(\"\"));\n"
+        "        uint8 status = "
+     << kSolidityExecuteFunctionName
+     << "(bytes(\"\"));\n"
         "        if (status == NEVERD_EVM_REVERTED) "
         "revert EVMExecutionReverted();\n"
         "    }\n\n"
-        "    function _executeEVM(bytes memory input) internal returns "
+        "    function "
+     << kSolidityExecuteFunctionName
+     << "(bytes memory input) internal returns "
         "(uint8 status) {\n"
         "        uint256["
      << kStackLimit
      << "] memory evmStack;\n"
-        "        uint256 evmSP = 0;\n"
-        "        uint256 pc = 0;\n"
+        "        uint256 evmSP = 0;\n";
+  if (!InstructionPCs.contains(kEntryPC)) {
+    OS << "        return " << solidityExitStatusName(ExitStatus::Stopped)
+       << ";\n"
+          "    }\n"
+          "}\n";
+    return Text;
+  }
+  OS << "        uint256 pc = " << kEntryPC
+     << ";\n"
         "        unchecked {\n"
         "        while (true) {\n";
 
   for (size_t Index = 0; Index < Program.Low.Instructions.size(); ++Index) {
     const auto &Instruction = Program.Low.Instructions[Index];
     const uint64_t PC = Instruction.PC;
-    const Opcode Op = Instruction.Op;
+    const Opcode Op = Instruction.opcode();
     OS << "            " << (Index == 0 ? "if" : "else if") << " (pc == " << PC
        << ") { // " << Instruction.Info.Name << "\n";
     if (Options.EmitTraceEvents)
-      OS << "                _evmTrace(" << PC << ", 0x"
-         << llvm::utohexstr(opcodeByte(Op)) << ");\n";
+      OS << "                " << kSolidityTraceFunctionName << "(" << PC
+         << ", 0x" << llvm::utohexstr(opcodeByte(Op)) << ");\n";
 
-    if (!Instruction.Known || Op == Opcode::INVALID) {
+    if (!Instruction.isKnown() || Instruction.is(Opcode::INVALID)) {
       OS << "                revert EVMUnsupportedOpcode(pc, 0x"
          << llvm::utohexstr(opcodeByte(Op)) << ");\n            }\n";
       continue;
     }
-    if (Op == Opcode::STOP) {
+    if (Instruction.is(Opcode::STOP)) {
       OS << "                return "
-         << solidityExitStatusName(ExitStatus::Stopped)
-         << ";\n            }\n";
+         << solidityExitStatusName(ExitStatus::Stopped) << ";\n            }\n";
       continue;
     }
-    if (isPush(Op)) {
-      OS << "                evmSP = _evmPush(evmStack, evmSP, "
-         << solidityWord(Instruction.Immediate) << ", pc);\n";
-      emitAdvance(OS, Program, Instruction.NextPC);
+    if (Instruction.isPush()) {
+      OS << "                evmSP = " << kSolidityPushFunctionName
+         << "(evmStack, evmSP, " << solidityWord(Instruction.Immediate)
+         << ", pc);\n";
+      emitAdvance(OS, InstructionPCs, Instruction.NextPC);
       OS << "            }\n";
       continue;
     }
-    if (isDup(Op)) {
+    if (Instruction.isDup()) {
       const unsigned Depth = dupDepth(Op);
       OS << "                if (evmSP < " << Depth
          << ") revert EVMStackUnderflow(pc);\n"
-            "                evmSP = _evmPush(evmStack, evmSP, evmStack[evmSP "
-            "- "
+            "                evmSP = "
+         << kSolidityPushFunctionName << "(evmStack, evmSP, evmStack[evmSP - "
          << Depth << "], pc);\n";
-      emitAdvance(OS, Program, Instruction.NextPC);
+      emitAdvance(OS, InstructionPCs, Instruction.NextPC);
       OS << "            }\n";
       continue;
     }
-    if (isSwap(Op)) {
+    if (Instruction.isSwap()) {
       const unsigned Depth = swapDepth(Op);
       OS << "                if (evmSP <= " << Depth
          << ") revert EVMStackUnderflow(pc);\n"
@@ -345,87 +371,89 @@ llvm::Expected<std::string> emitSolidity(const EVMProgram &Program,
             "                evmStack[evmSP - 1] = evmStack[evmSP - "
          << Depth + 1 << "];\n                evmStack[evmSP - " << Depth + 1
          << "] = swapValue;\n";
-      emitAdvance(OS, Program, Instruction.NextPC);
+      emitAdvance(OS, InstructionPCs, Instruction.NextPC);
       OS << "            }\n";
       continue;
     }
-    if (isJump(Op)) {
+    if (Instruction.isJump()) {
       OS << "                uint256 destination;\n"
-            "                (evmSP, destination) = _evmPop(evmStack, evmSP, "
-            "pc);\n";
+            "                (evmSP, destination) = "
+         << kSolidityPopFunctionName << "(evmStack, evmSP, pc);\n";
       if (Op == Opcode::JUMPI) {
         OS << "                uint256 condition;\n"
-              "                (evmSP, condition) = _evmPop(evmStack, evmSP, "
-              "pc);\n"
-              "                if (condition == 0) { pc = "
-           << Instruction.NextPC << "; continue; }\n";
+              "                (evmSP, condition) = "
+           << kSolidityPopFunctionName
+           << "(evmStack, evmSP, pc);\n"
+              "                if (condition == 0) { "
+           << advanceStatement(InstructionPCs, Instruction.NextPC) << " }\n";
       }
-      bool FirstTarget = true;
-      for (uint64_t Target : Program.Low.JumpDestinations) {
-        OS << "                " << (FirstTarget ? "if" : "else if")
-           << " (destination == " << Target << ") pc = " << Target << ";\n";
-        FirstTarget = false;
+      if (Program.Low.JumpDestinations.empty()) {
+        OS << "                revert EVMInvalidJump(destination);\n";
+      } else {
+        bool FirstTarget = true;
+        for (uint64_t Target : Program.Low.JumpDestinations) {
+          OS << "                " << (FirstTarget ? "if" : "else if")
+             << " (destination == " << Target << ") pc = " << Target << ";\n";
+          FirstTarget = false;
+        }
+        OS << "                else revert EVMInvalidJump(destination);\n"
+              "                continue;\n";
       }
-      OS << "                else revert EVMInvalidJump(destination);\n"
-            "                continue;\n            }\n";
+      OS << "            }\n";
       continue;
     }
 
-    if (Instruction.Info.StackInputs != 0)
-      OS << "                uint256["
-         << static_cast<unsigned>(maxHostOpcodeArguments())
-         << "] memory args_;\n";
-    else if (!isInlinePure(Op) && Op != Opcode::PC && Op != Opcode::CODESIZE)
+    if (Instruction.Info.StackInputs != 0 ||
+        (!isALU(Instruction.Info) && Op != Opcode::PC &&
+         Op != Opcode::CODESIZE))
       OS << "                uint256["
          << static_cast<unsigned>(maxHostOpcodeArguments())
          << "] memory args_;\n";
     for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
       OS << "                (evmSP, args_[" << static_cast<unsigned>(I)
-         << "]) = _evmPop(evmStack, evmSP, pc);\n";
+         << "]) = " << kSolidityPopFunctionName << "(evmStack, evmSP, pc);\n";
 
     if (Op == Opcode::POP || Op == Opcode::JUMPDEST) {
-      emitAdvance(OS, Program, Instruction.NextPC);
+      emitAdvance(OS, InstructionPCs, Instruction.NextPC);
       OS << "            }\n";
       continue;
     }
     if (Op == Opcode::PC || Op == Opcode::CODESIZE) {
-      const uint64_t Value =
-          Op == Opcode::PC ? PC : Program.Low.Code.size();
-      OS << "                evmSP = _evmPush(evmStack, evmSP, " << Value
-         << ", pc);\n";
-      emitAdvance(OS, Program, Instruction.NextPC);
+      const uint64_t Value = Op == Opcode::PC ? PC : Program.Low.Code.size();
+      OS << "                evmSP = " << kSolidityPushFunctionName
+         << "(evmStack, evmSP, " << Value << ", pc);\n";
+      emitAdvance(OS, InstructionPCs, Instruction.NextPC);
       OS << "            }\n";
       continue;
     }
 
+    const bool HasInlineALULowering = isALU(Instruction.Info);
     const std::string Output =
-        isInlinePure(Op) ? pureExpression(Op) : hostExpression(Op);
+        HasInlineALULowering ? pureExpression(Op) : hostExpression(Op);
     if (Instruction.Info.StackOutputs != 0)
       OS << "                uint256 result = " << Output << ";\n";
-    else if (!isInlinePure(Op))
+    else if (!HasInlineALULowering)
       OS << "                " << Output << ";\n";
 
     if (Op == Opcode::RETURN || Op == Opcode::REVERT ||
         Op == Opcode::SELFDESTRUCT) {
       OS << "                return "
-         << (Op == Opcode::RETURN
-                 ? solidityExitStatusName(ExitStatus::Returned)
-                 : Op == Opcode::REVERT
-                       ? solidityExitStatusName(ExitStatus::Reverted)
-                       : solidityExitStatusName(ExitStatus::SelfDestructed))
+         << (Op == Opcode::RETURN ? solidityExitStatusName(ExitStatus::Returned)
+             : Op == Opcode::REVERT
+                 ? solidityExitStatusName(ExitStatus::Reverted)
+                 : solidityExitStatusName(ExitStatus::SelfDestructed))
          << ";\n            }\n";
       continue;
     }
     if (Instruction.Info.IsTerminator) {
       OS << "                return "
-         << solidityExitStatusName(ExitStatus::Stopped)
-         << ";\n            }\n";
+         << solidityExitStatusName(ExitStatus::Stopped) << ";\n            }\n";
       continue;
     }
-    for (uint8_t I = 0; I < Instruction.Info.StackOutputs; ++I)
-      OS << "                evmSP = _evmPush(evmStack, evmSP, "
-         << (I == 0 ? "result" : "0") << ", pc);\n";
-    emitAdvance(OS, Program, Instruction.NextPC);
+    if (Instruction.Info.StackOutputs != 0)
+      OS << "                evmSP = " << kSolidityPushFunctionName
+         << "(evmStack, evmSP, result, pc);\n";
+    emitAdvance(OS, InstructionPCs, Instruction.NextPC);
     OS << "            }\n";
   }
   OS << "            else { revert EVMInvalidJump(pc); }\n"

@@ -4,6 +4,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/evm/Bytecode.h"
+#include "neverd/evm/EVMConstants.h"
 
 namespace neverd {
 
@@ -16,13 +17,14 @@ llvm::Expected<BinaryImage> EVMLoader::load(const std::filesystem::path &Path) {
   Image.Arch = Arch::EVM;
   Image.Format = BinaryFormat::EVM;
   Image.Bits = Bitness::Bits256;
-  Image.Base = 0;
-  Image.Entry = 0;
+  Image.Base = evm::kEntryPC;
+  Image.Entry = evm::kEntryPC;
   Image.Raw = Loaded->Code;
 
   const auto Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Segment CodeSegment;
   CodeSegment.Name = kEVMCodeSegmentName.str();
+  CodeSegment.VA = evm::kEntryPC;
   CodeSegment.Size = Loaded->Code.size();
   CodeSegment.FileSz = Loaded->Code.size();
   CodeSegment.Flags = Flags;
@@ -32,14 +34,16 @@ llvm::Expected<BinaryImage> EVMLoader::load(const std::filesystem::path &Path) {
   Section CodeSection;
   CodeSection.Name = kEVMCodeSectionName.str();
   CodeSection.SegmentName = kEVMCodeSegmentName.str();
+  CodeSection.VA = evm::kEntryPC;
   CodeSection.Size = Loaded->Code.size();
   CodeSection.FileSz = Loaded->Code.size();
   CodeSection.Flags = Flags;
-  CodeSection.Alignment = 1;
+  CodeSection.Alignment = evm::kCodeAlignment;
   CodeSection.Data = Loaded->Code;
   Image.Sections.push_back(std::move(CodeSection));
 
-  Image.addSymbol(kEVMEntrySymbolName.str(), 0, Loaded->Code.size(), true);
+  Image.addSymbol(kEVMEntrySymbolName.str(), evm::kEntryPC, Loaded->Code.size(),
+                  true);
   return Image;
 }
 

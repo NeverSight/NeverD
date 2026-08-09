@@ -4,7 +4,9 @@
 
 #include "neverd/sdk/NeverDCAPI.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/FileSystem.h"
 
 #include <filesystem>
 #include <fstream>
@@ -23,8 +25,11 @@ std::string takeString(const char *Text) {
 class EVMIntegrationTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    Path = std::filesystem::temp_directory_path() /
-           ("neverd-api-" + std::to_string(++Sequence) + ".evm");
+    llvm::SmallString<128> UniquePath;
+    const std::error_code EC =
+        llvm::sys::fs::createTemporaryFile("neverd-api", "evm", UniquePath);
+    ASSERT_FALSE(EC) << EC.message();
+    Path = std::filesystem::path(UniquePath.str().str());
     Session = neverd_session_create();
   }
   void TearDown() override {
@@ -37,7 +42,6 @@ protected:
     Output.write(Text.data(), static_cast<std::streamsize>(Text.size()));
   }
 
-  inline static unsigned Sequence = 0;
   std::filesystem::path Path;
   neverd_session_t Session = nullptr;
 };
@@ -69,12 +73,26 @@ TEST_F(EVMIntegrationTest, ExposesAllStagesAndBothSourceLanguages) {
 
   const std::string C = takeString(neverd_decompile_all_ex(
       Session, Path.string().c_str(), NEVERD_OUTPUT_C, 0, 0));
-  EXPECT_NE(
-      C.find("typedef unsigned _BitInt(NEVERD_EVM_WORD_BITS) evm_word;"),
-      std::string::npos);
+  EXPECT_NE(C.find("typedef unsigned _BitInt(NEVERD_EVM_WORD_BITS) evm_word;"),
+            std::string::npos);
   const std::string Solidity = takeString(neverd_decompile_all_ex(
       Session, Path.string().c_str(), NEVERD_OUTPUT_SOLIDITY, 0, 0));
   EXPECT_NE(Solidity.find("abstract contract NeverDRecovered"),
+            std::string::npos);
+
+  EXPECT_EQ(neverd_decompile_all(Session, Path.string().c_str(),
+                                 /*UseLlvmRoute=*/1, /*NoOpt=*/0,
+                                 /*MaxFunctions=*/0),
+            nullptr);
+  EXPECT_NE(takeString(neverd_last_error(Session))
+                .find("LLVM-to-C route is not supported for EVM"),
+            std::string::npos);
+
+  EXPECT_EQ(neverd_lift_to_obj(Session, Path.string().c_str(),
+                               /*NoOpt=*/0, /*MaxFunctions=*/0),
+            1);
+  EXPECT_NE(takeString(neverd_last_error(Session))
+                .find("object-code roundtrip is not supported for EVM"),
             std::string::npos);
 }
 

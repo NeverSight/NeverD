@@ -1,4 +1,14 @@
 //===- EVMIR.h - Staged Ethereum Virtual Machine IR ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Defines the lossless EVM LowIR, 256-bit stack-SSA MedIR, recovered HighIR,
+/// and the aggregate program passed to backends.
+///
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_EVM_EVMIR_H
 #define NEVERD_EVM_EVMIR_H
@@ -6,12 +16,13 @@
 #include "neverd/evm/Opcodes.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace neverd::evm {
@@ -21,15 +32,48 @@ struct Diagnostic {
   std::string Message;
 };
 
+/// A decoded instruction whose metadata records both byte identity and
+/// activation in the selected hardfork.
 struct LowInstruction {
   uint64_t PC = 0;
   uint64_t NextPC = 0;
-  Opcode Op = Opcode::STOP;
   OpcodeInfo Info;
-  bool Known = true;
+  bool Active = false;
   llvm::APInt Immediate = llvm::APInt(kWordBits, 0);
   bool ImmediateTruncated = false;
   std::vector<uint8_t> Encoding;
+
+  [[nodiscard]] Opcode opcode() const { return Info.Op; }
+  [[nodiscard]] bool isAssigned() const { return Info.isKnown(); }
+  [[nodiscard]] bool isKnown() const { return Active && isAssigned(); }
+  /// Inactive and unassigned bytes fault at runtime and therefore terminate
+  /// the semantic block even when their assigned opcode metadata does not.
+  [[nodiscard]] bool isTerminator() const {
+    return !isKnown() || Info.IsTerminator;
+  }
+  [[nodiscard]] uint8_t stackInputs() const {
+    return isKnown() ? Info.StackInputs : 0;
+  }
+  [[nodiscard]] uint8_t stackOutputs() const {
+    return isKnown() ? Info.StackOutputs : 0;
+  }
+  /// Returns true only when this is an active opcode equal to \p Candidate.
+  [[nodiscard]] bool is(Opcode Candidate) const {
+    return isKnown() && opcode() == Candidate;
+  }
+  /// Opcode-family queries include the hardfork activation check. This keeps
+  /// relaxed decoding from treating a future opcode as executable semantics.
+  [[nodiscard]] bool isPush() const {
+    return isKnown() && evm::isPush(opcode());
+  }
+  [[nodiscard]] bool isDup() const { return isKnown() && evm::isDup(opcode()); }
+  [[nodiscard]] bool isSwap() const {
+    return isKnown() && evm::isSwap(opcode());
+  }
+  [[nodiscard]] bool isLog() const { return isKnown() && evm::isLog(opcode()); }
+  [[nodiscard]] bool isJump() const {
+    return isKnown() && evm::isJump(opcode());
+  }
 };
 
 enum class EdgeKind : uint8_t {
@@ -58,6 +102,7 @@ struct LowBlock {
   std::optional<size_t> ExitStackHeight;
 };
 
+/// Lossless bytecode and CFG representation at the decoder boundary.
 struct EVMLowIR {
   Hardfork Fork = Hardfork::Latest;
   bool Strict = true;
@@ -68,16 +113,18 @@ struct EVMLowIR {
   std::vector<Diagnostic> Diagnostics;
 
   const LowBlock *findBlock(uint64_t PC) const {
-    for (const auto &Block : Blocks)
-      if (Block.StartPC == PC)
-        return &Block;
-    return nullptr;
+    const auto It = llvm::lower_bound(
+        Blocks, PC, [](const LowBlock &Block, uint64_t Address) {
+          return Block.StartPC < Address;
+        });
+    return It != Blocks.end() && It->StartPC == PC ? &*It : nullptr;
   }
   LowBlock *findBlock(uint64_t PC) {
-    for (auto &Block : Blocks)
-      if (Block.StartPC == PC)
-        return &Block;
-    return nullptr;
+    const auto It = llvm::lower_bound(
+        Blocks, PC, [](const LowBlock &Block, uint64_t Address) {
+          return Block.StartPC < Address;
+        });
+    return It != Blocks.end() && It->StartPC == PC ? &*It : nullptr;
   }
   bool hasEdge(uint64_t From, uint64_t To, EdgeKind Kind) const {
     const LowBlock *Block = findBlock(From);
@@ -111,6 +158,8 @@ struct MedOperation {
   std::vector<ValueID> Inputs;
   std::vector<ValueID> Outputs;
   EffectKind Effect = EffectKind::None;
+  MemoryAccessKind MemoryAccess = MemoryAccessKind::Unknown;
+  StateAccessKind StateAccess = StateAccessKind::Unknown;
 };
 
 struct MedBlock {
@@ -121,6 +170,7 @@ struct MedBlock {
   std::vector<ValueID> ExitStack;
 };
 
+/// Stack SSA representation with explicit values, phis, and semantic effects.
 struct EVMMedIR {
   std::vector<MedValue> Values;
   std::vector<MedBlock> Blocks;
@@ -180,17 +230,19 @@ struct StructuredRegion {
   std::vector<uint64_t> Blocks;
 };
 
+/// Best-effort source-level facts recovered without claiming source identity.
 struct EVMHighIR {
   std::vector<RecoveredFunction> Functions;
   std::vector<StorageFact> Storage;
   std::vector<EventFact> Events;
   std::vector<ErrorFact> Errors;
   std::vector<StructuredRegion> Regions;
-  bool HasFallback = true;
+  bool HasFallback = false;
   bool HasReceive = false;
   std::vector<Diagnostic> Diagnostics;
 };
 
+/// Owns all EVM pipeline stages for one normalized runtime program.
 struct EVMProgram {
   EVMLowIR Low;
   EVMMedIR Med;

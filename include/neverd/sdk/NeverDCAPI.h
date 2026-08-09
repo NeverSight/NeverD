@@ -35,7 +35,7 @@ typedef unsigned long long neverd_va_t;
 
 typedef enum neverd_output_language {
 #define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
-  NEVERD_OUTPUT_##NAME = VALUE,
+  NEVERD_OUTPUT_##NAME = (VALUE),
 #include "neverd/OutputLanguages.def"
 } neverd_output_language_t;
 
@@ -415,8 +415,9 @@ NEVERD_API const char *neverd_lift_module(neverd_session_t Sess,
                                           const char *InputPath, int NoOpt,
                                           int MaxFunctions);
 
-/// Lift binary → LLVM IR → compile back to relocatable object in one call.
-/// Returns 0 on success.  Use neverd_roundtrip_* getters for results.
+/// Lift a native binary → LLVM IR → relocatable object in one call. EVM
+/// bytecode is rejected because LLVM target object emission has no EVM ABI.
+/// Returns 0 on success. Use neverd_roundtrip_* getters for results.
 NEVERD_API int neverd_lift_to_obj(neverd_session_t Sess, const char *InputPath,
                                   int NoOpt, int MaxFunctions);
 NEVERD_API const char *neverd_roundtrip_ir(neverd_session_t Sess);
@@ -444,9 +445,10 @@ NEVERD_API const char *neverd_decompile_all(neverd_session_t Sess,
                                             int MaxFunctions);
 /// Decompile with an explicit output language. Solidity is supported for EVM
 /// inputs; native binaries return an actionable unsupported-language error.
-NEVERD_API const char *neverd_decompile_all_ex(
-    neverd_session_t Sess, const char *InputPath,
-    neverd_output_language_t Language, int NoOpt, int MaxFunctions);
+NEVERD_API const char *
+neverd_decompile_all_ex(neverd_session_t Sess, const char *InputPath,
+                        neverd_output_language_t Language, int NoOpt,
+                        int MaxFunctions);
 /// Configure EVM analysis for subsequent session and high-level operations.
 NEVERD_API void neverd_evm_set_strict(neverd_session_t Sess, int Strict);
 NEVERD_API int neverd_evm_set_hardfork(neverd_session_t Sess,

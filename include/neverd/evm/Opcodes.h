@@ -3,6 +3,12 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Exposes strongly typed opcode, hardfork, and effect metadata generated from
+/// the EVM definition databases.
+///
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_EVM_OPCODES_H
 #define NEVERD_EVM_OPCODES_H
@@ -19,13 +25,29 @@ namespace neverd::evm {
 
 enum class Hardfork : uint8_t {
 #define EVM_HARDFORK(NAME, SPELLING) NAME,
+#define EVM_HARDFORK_LATEST(NAME, SPELLING) Latest = (NAME),
 #include "neverd/evm/EVMHardforks.def"
-  Latest = Fusaka,
 };
 
 enum class EffectKind : uint8_t {
 #define EVM_EFFECT(NAME, SPELLING) NAME,
 #include "neverd/evm/EVMEffects.def"
+};
+
+/// Orthogonal access to byte-addressable EVM memory. This is deliberately
+/// separate from EffectKind because an instruction can both interact with the
+/// host and access memory (for example, CALL and EXTCODECOPY).
+enum class MemoryAccessKind : uint8_t {
+#define EVM_MEMORY_ACCESS_KIND(NAME, SPELLING) NAME,
+#include "neverd/evm/EVMMemoryAccesses.def"
+};
+
+/// Source-level state access used when recovering Solidity mutability. This
+/// is separate from EffectKind: CALLDATACOPY has a context-read effect but is
+/// valid in a pure function, whereas ADDRESS requires at least view.
+enum class StateAccessKind : uint8_t {
+#define EVM_STATE_ACCESS_KIND(NAME, SPELLING) NAME,
+#include "neverd/evm/EVMStateAccesses.def"
 };
 
 enum class OpcodeClass : uint8_t {
@@ -45,49 +67,167 @@ enum class OpcodeClass : uint8_t {
 };
 
 enum class Opcode : uint8_t {
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,         \
-                   INTRODUCED, EFFECT, TERMINATOR, VIEW, PURE)                 \
-  NAME = BYTE,
+#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
+                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+                   TERMINATOR)                                                 \
+  NAME = (BYTE),
 #include "neverd/evm/EVMOpcodes.def"
 };
 
+/// Canonical metadata for one active opcode. Names always have static lifetime
+/// because records and historical aliases are sourced from string literals.
 struct OpcodeInfo {
-  Opcode Op = Opcode::STOP;
-  llvm::StringRef Name = kUnknownOpcodeName;
-  uint8_t StackInputs = 0;
-  uint8_t StackOutputs = 0;
-  uint8_t ImmediateBytes = 0;
-  OpcodeClass Class = OpcodeClass::Unknown;
-  Hardfork Introduced = Hardfork::Frontier;
-  EffectKind Effect = EffectKind::Unknown;
-  bool IsTerminator = false;
-  bool IsView = true;
-  bool IsPure = true;
+  /// Opcode metadata must come from the definition database or the explicit
+  /// unknown-byte factory; a partially initialized record is never valid.
+  OpcodeInfo() = delete;
+  constexpr OpcodeInfo(Opcode OpValue, llvm::StringLiteral NameValue,
+                       uint8_t StackInputsValue, uint8_t StackOutputsValue,
+                       uint8_t ImmediateBytesValue, OpcodeClass ClassValue,
+                       Hardfork IntroducedValue, EffectKind EffectValue,
+                       MemoryAccessKind MemoryAccessValue,
+                       StateAccessKind StateAccessValue, bool IsTerminatorValue)
+      : Op(OpValue), Name(NameValue), StackInputs(StackInputsValue),
+        StackOutputs(StackOutputsValue), ImmediateBytes(ImmediateBytesValue),
+        Class(ClassValue), Introduced(IntroducedValue), Effect(EffectValue),
+        MemoryAccess(MemoryAccessValue), StateAccess(StateAccessValue),
+        IsTerminator(IsTerminatorValue) {}
+
+  Opcode Op;
+  llvm::StringLiteral Name;
+  uint8_t StackInputs;
+  uint8_t StackOutputs;
+  uint8_t ImmediateBytes;
+  OpcodeClass Class;
+  Hardfork Introduced;
+  EffectKind Effect;
+  MemoryAccessKind MemoryAccess;
+  StateAccessKind StateAccess;
+  bool IsTerminator;
+
+  [[nodiscard]] constexpr bool isKnown() const {
+    return Class != OpcodeClass::Unknown;
+  }
 };
 
-inline constexpr unsigned kAssignedOpcodeCount =
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,         \
-                   INTRODUCED, EFFECT, TERMINATOR, VIEW, PURE)                 \
-  1U +
+/// Returns whether \p Class belongs to the EVM's scalar ALU. Backends use
+/// this shared classification to select their inline arithmetic lowering.
+[[nodiscard]] constexpr bool isALU(OpcodeClass Class) {
+  return Class == OpcodeClass::Arithmetic || Class == OpcodeClass::Comparison ||
+         Class == OpcodeClass::Bitwise;
+}
+
+[[nodiscard]] constexpr bool isALU(const OpcodeInfo &Info) {
+  return Info.isKnown() && isALU(Info.Class);
+}
+
+[[nodiscard]] constexpr bool isAssignedOpcode(Opcode Op) {
+  switch (Op) {
+#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
+                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+                   TERMINATOR)                                                 \
+  case Opcode::NAME:                                                           \
+    return true;
 #include "neverd/evm/EVMOpcodes.def"
-    0U;
+  }
+  return false;
+}
+
+/// Returns the memory behavior declared on the EVMOpcodes.def record.
+/// Unassigned enum values are conservative rather than silently appearing
+/// memory-free.
+[[nodiscard]] constexpr MemoryAccessKind memoryAccess(Opcode Op) {
+  switch (Op) {
+#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
+                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+                   TERMINATOR)                                                 \
+  case Opcode::NAME:                                                           \
+    return MemoryAccessKind::MEMORY_ACCESS;
+#include "neverd/evm/EVMOpcodes.def"
+  }
+  return MemoryAccessKind::Unknown;
+}
+
+[[nodiscard]] constexpr bool mayReadMemory(MemoryAccessKind Access) {
+  switch (Access) {
+  case MemoryAccessKind::None:
+  case MemoryAccessKind::Write:
+    return false;
+  case MemoryAccessKind::Read:
+  case MemoryAccessKind::ReadWrite:
+  case MemoryAccessKind::Unknown:
+    return true;
+  }
+  return true;
+}
+
+[[nodiscard]] constexpr bool mayWriteMemory(MemoryAccessKind Access) {
+  switch (Access) {
+  case MemoryAccessKind::None:
+  case MemoryAccessKind::Read:
+    return false;
+  case MemoryAccessKind::Write:
+  case MemoryAccessKind::ReadWrite:
+  case MemoryAccessKind::Unknown:
+    return true;
+  }
+  return true;
+}
+
+[[nodiscard]] constexpr bool mayReadMemory(const OpcodeInfo &Info) {
+  return mayReadMemory(Info.MemoryAccess);
+}
+
+[[nodiscard]] constexpr bool mayWriteMemory(const OpcodeInfo &Info) {
+  return mayWriteMemory(Info.MemoryAccess);
+}
+
+/// Least upper bound for state-access requirements across a function.
+[[nodiscard]] constexpr StateAccessKind
+mergeStateAccess(StateAccessKind Left, StateAccessKind Right) {
+  const auto IsValid = [](StateAccessKind Access) {
+    return Access == StateAccessKind::None || Access == StateAccessKind::Read ||
+           Access == StateAccessKind::Write ||
+           Access == StateAccessKind::Unknown;
+  };
+  if (!IsValid(Left) || !IsValid(Right))
+    return StateAccessKind::Unknown;
+  if (Left == StateAccessKind::Unknown || Right == StateAccessKind::Unknown)
+    return StateAccessKind::Unknown;
+  if (Left == StateAccessKind::Write || Right == StateAccessKind::Write)
+    return StateAccessKind::Write;
+  if (Left == StateAccessKind::Read || Right == StateAccessKind::Read)
+    return StateAccessKind::Read;
+  return StateAccessKind::None;
+}
+
+inline constexpr unsigned kAssignedOpcodeCount = [] {
+  unsigned Count = 0;
+#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
+                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+                   TERMINATOR)                                                 \
+  ++Count;
+#include "neverd/evm/EVMOpcodes.def"
+  return Count;
+}();
 
 inline constexpr uint8_t kMaxOpcodeStackInputs = [] {
   uint8_t Maximum = 0;
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,         \
-                   INTRODUCED, EFFECT, TERMINATOR, VIEW, PURE)                 \
-  if (INPUTS > Maximum)                                                        \
-    Maximum = INPUTS;
+#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
+                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+                   TERMINATOR)                                                 \
+  if ((INPUTS) > Maximum)                                                      \
+    Maximum = (INPUTS);
 #include "neverd/evm/EVMOpcodes.def"
   return Maximum;
 }();
 
 inline constexpr uint8_t kMaxHostOpcodeArguments = [] {
   uint8_t Maximum = 0;
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,         \
-                   INTRODUCED, EFFECT, TERMINATOR, VIEW, PURE)                 \
-  if (OpcodeClass::CLASS != OpcodeClass::Stack && INPUTS > Maximum)            \
-    Maximum = INPUTS;
+#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
+                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+                   TERMINATOR)                                                 \
+  if (OpcodeClass::CLASS != OpcodeClass::Stack && (INPUTS) > Maximum)          \
+    Maximum = (INPUTS);
 #include "neverd/evm/EVMOpcodes.def"
   return Maximum;
 }();
@@ -96,9 +236,20 @@ inline constexpr uint8_t kMaxHostOpcodeArguments = [] {
   return static_cast<uint8_t>(Op);
 }
 
+[[nodiscard]] constexpr bool isValidHardfork(Hardfork Fork) {
+  switch (Fork) {
+#define EVM_HARDFORK(NAME, SPELLING)                                           \
+  case Hardfork::NAME:                                                         \
+    return true;
+#include "neverd/evm/EVMHardforks.def"
+  }
+  return false;
+}
+
 [[nodiscard]] constexpr bool hardforkAtLeast(Hardfork Fork,
-                                              Hardfork Introduced) {
-  return static_cast<uint8_t>(Fork) >= static_cast<uint8_t>(Introduced);
+                                             Hardfork Introduced) {
+  return isValidHardfork(Fork) && isValidHardfork(Introduced) &&
+         static_cast<uint8_t>(Fork) >= static_cast<uint8_t>(Introduced);
 }
 
 [[nodiscard]] constexpr bool isPush(Opcode Op) {
@@ -149,10 +300,19 @@ inline constexpr uint8_t kMaxHostOpcodeArguments = [] {
   return kMaxHostOpcodeArguments;
 }
 
+/// Returns canonical metadata for an assigned byte without applying hardfork
+/// activation. Decoders use this to preserve instruction width and identity
+/// for relaxed analysis of future/inactive opcodes.
+[[nodiscard]] std::optional<OpcodeInfo> assignedOpcodeInfo(Opcode Op);
+[[nodiscard]] std::optional<OpcodeInfo> assignedOpcodeInfo(uint8_t Byte);
 [[nodiscard]] std::optional<OpcodeInfo>
 opcodeInfo(Opcode Op, Hardfork Fork = Hardfork::Latest);
+/// Returns no value for an unassigned byte or an opcode inactive at \p Fork.
 [[nodiscard]] std::optional<OpcodeInfo>
 opcodeInfo(uint8_t Byte, Hardfork Fork = Hardfork::Latest);
+/// Build conservative faulting metadata while preserving an unassigned or
+/// fork-inactive byte for relaxed decoding and diagnostics.
+[[nodiscard]] OpcodeInfo unknownOpcodeInfo(uint8_t Byte);
 [[nodiscard]] llvm::StringRef opcodeName(Opcode Op,
                                          Hardfork Fork = Hardfork::Latest);
 [[nodiscard]] llvm::StringRef opcodeName(uint8_t Byte,
@@ -160,6 +320,8 @@ opcodeInfo(uint8_t Byte, Hardfork Fork = Hardfork::Latest);
 [[nodiscard]] std::optional<Hardfork> parseHardfork(llvm::StringRef Name);
 [[nodiscard]] llvm::StringRef hardforkName(Hardfork Fork);
 [[nodiscard]] llvm::StringRef effectName(EffectKind Effect);
+[[nodiscard]] llvm::StringRef memoryAccessName(MemoryAccessKind Access);
+[[nodiscard]] llvm::StringRef stateAccessName(StateAccessKind Access);
 
 } // namespace neverd::evm
 

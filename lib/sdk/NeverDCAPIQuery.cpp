@@ -482,8 +482,8 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
     return dupStr(std::string("{}"));
 
   if (S->PipeResult.EVM) {
-    if (FuncEntry != 0) {
-      S->setError("EVM program entry is pc 0");
+    if (FuncEntry != evm::kEntryPC) {
+      S->setError("EVM program entry is pc " + std::to_string(evm::kEntryPC));
       return dupStr(std::string("{}"));
     }
     llvm::json::Array Nodes;
@@ -530,7 +530,7 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
     }
     llvm::json::Object Root;
     Root["name"] = kEVMEntrySymbolName;
-    Root["entry"] = "0x0";
+    Root["entry"] = vaHex(evm::kEntryPC);
     Root["nodes"] = std::move(Nodes);
     Root["edges"] = std::move(Edges);
     return dupStr(jsonToString(llvm::json::Value(std::move(Root))));
@@ -633,8 +633,7 @@ const char *neverd_cfg_dot(neverd_session_t Sess, const char *InputPath,
     for (const auto &Block : R.Result.EVM->Low.Blocks)
       for (const auto &Edge : Block.Successors)
         if (Edge.Target)
-          OS << "  bb" << Block.StartPC << " -> bb" << *Edge.Target
-             << ";\n";
+          OS << "  bb" << Block.StartPC << " -> bb" << *Edge.Target << ";\n";
     OS << "}\n";
     return dupStr(Buf);
   }

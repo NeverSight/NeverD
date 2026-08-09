@@ -110,9 +110,9 @@ cl::opt<bool>
                        "sequences (instruction substitution pass)"),
               cl::sub(PatchCmd));
 
-cl::opt<unsigned>
-    InstSubstRounds("subst-rounds", cl::desc("Instruction substitution rounds"),
-                    cl::init(1), cl::sub(PatchCmd));
+cl::opt<unsigned> InstSubstRounds("subst-rounds",
+                                  cl::desc("Instruction substitution rounds"),
+                                  cl::init(1), cl::sub(PatchCmd));
 
 cl::opt<bool>
     ConstEnc("const-enc",
@@ -126,11 +126,10 @@ cl::opt<bool>
                         "(opaque predicate pass)"),
                cl::sub(PatchCmd));
 
-cl::opt<bool>
-    Flatten("flatten",
-            cl::desc("Flatten control flow into a dispatcher loop "
-                     "(control-flow flattening pass)"),
-            cl::sub(PatchCmd));
+cl::opt<bool> Flatten("flatten",
+                      cl::desc("Flatten control flow into a dispatcher loop "
+                               "(control-flow flattening pass)"),
+                      cl::sub(PatchCmd));
 
 cl::opt<bool> BogusCF(
     "bogus",
@@ -164,25 +163,28 @@ cl::opt<bool> IndirectGv(
 
 cl::opt<bool> ValueLaunder(
     "launder",
-    cl::desc("Route integer (scalar / integer-vector) values through a volatile "
-             "stack slot (value-laundering pass)"),
+    cl::desc(
+        "Route integer (scalar / integer-vector) values through a volatile "
+        "stack slot (value-laundering pass)"),
     cl::sub(PatchCmd));
 
 cl::opt<bool> ConstPool(
     "const-pool",
-    cl::desc("Move integer constants into a read-only global pool, fetching "
-             "them at run time through an opaque index (constant-pooling pass)"),
+    cl::desc(
+        "Move integer constants into a read-only global pool, fetching "
+        "them at run time through an opaque index (constant-pooling pass)"),
     cl::sub(PatchCmd));
 
 cl::opt<bool> BitMask(
     "bit-mask",
-    cl::desc("Replace integer (scalar / integer-vector) values with the bitwise "
-             "identity (x & m) | (x & ~m) using opaque masks (bit-masking pass)"),
+    cl::desc(
+        "Replace integer (scalar / integer-vector) values with the bitwise "
+        "identity (x & m) | (x & ~m) using opaque masks (bit-masking pass)"),
     cl::sub(PatchCmd));
 
 cl::opt<bool> NoDebug("no-debug", cl::desc("Skip debug info loading"),
-                      cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
-                      cl::sub(CfgCmd));
+                      cl::sub(LiftCmd), cl::sub(DecompileCmd),
+                      cl::sub(PatchCmd), cl::sub(CfgCmd));
 
 cl::opt<bool> NoOpt("no-opt", cl::desc("Skip LLVM optimization passes"),
                     cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
@@ -209,27 +211,27 @@ cl::opt<bool>
               cl::desc("Route through LLVM IR + opt passes (goto-style C)"),
               cl::sub(DecompileCmd));
 
-cl::opt<neverd_output_language_t> OutputLanguage(
-    "language", cl::desc("Output source language"),
-    cl::ValuesClass({
+cl::opt<neverd_output_language_t>
+    OutputLanguage("language", cl::desc("Output source language"),
+                   cl::ValuesClass({
 #define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
-      clEnumValN(NEVERD_OUTPUT_##NAME, SPELLING, DISPLAY_NAME " source"),
+  clEnumValN(NEVERD_OUTPUT_##NAME, SPELLING, DISPLAY_NAME " source"),
 #include "neverd/OutputLanguages.def"
-    }),
-    cl::init(NEVERD_OUTPUT_C), cl::sub(DecompileCmd));
+                   }),
+                   cl::init(NEVERD_OUTPUT_C), cl::sub(DecompileCmd));
 
-cl::opt<evm::Hardfork> EVMHardfork(
-    "evm-hardfork",
-    cl::desc("EVM hardfork"),
-    cl::ValuesClass({
-#define EVM_HARDFORK(NAME, SPELLING)                                          \
-      clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
-#define EVM_HARDFORK_ALIAS(SPELLING, NAME)                                    \
-      clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
+cl::opt<evm::Hardfork> EVMHardfork("evm-hardfork", cl::desc("EVM hardfork"),
+                                   cl::ValuesClass({
+#define EVM_HARDFORK(NAME, SPELLING)                                           \
+  clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
+#define EVM_HARDFORK_ALIAS(SPELLING, NAME)                                     \
+  clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
+#define EVM_HARDFORK_LATEST(NAME, SPELLING)                                    \
+  clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
 #include "neverd/evm/EVMHardforks.def"
-    }),
-    cl::init(evm::Hardfork::Latest), cl::sub(LiftCmd),
-    cl::sub(DecompileCmd));
+                                   }),
+                                   cl::init(evm::Hardfork::Latest),
+                                   cl::sub(LiftCmd), cl::sub(DecompileCmd));
 
 cl::opt<bool> EVMRelaxed(
     "evm-relaxed",
@@ -321,9 +323,9 @@ cl::opt<std::string> BookmarkAdd("add",
 cl::opt<std::string> BookmarkName("name", cl::desc("Bookmark name (for --add)"),
                                   cl::init(""), cl::sub(BookmarksCmd));
 
-cl::opt<std::string> BookmarkRemove("remove",
-                                    cl::desc("Remove bookmark at address (hex)"),
-                                    cl::init(""), cl::sub(BookmarksCmd));
+cl::opt<std::string>
+    BookmarkRemove("remove", cl::desc("Remove bookmark at address (hex)"),
+                   cl::init(""), cl::sub(BookmarksCmd));
 
 //===----------------------------------------------------------------------===//
 // Diff-specific options
