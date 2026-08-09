@@ -67,12 +67,11 @@ Ziele abschließen, die Loader schon teilweise erkennen.
 
 ## Zeitplan
 
-Forschung / Design. Keine Termine zugesagt.
+EVM und Solana bleiben in Forschung / Design; die native Formatvollständigkeit ist abgeschlossen und regressionstestgedeckt. Keine Termine zugesagt.
 
 | Feature | Status |
 |---------|--------|
-| Native Formatvollständigkeit (PE ARM*, Mach-O i386) | Design / frühe Umsetzung |
+| Native Formatvollständigkeit (PE ARM*, Mach-O i386) | Abgeschlossen |
 | EVM-Bytecode-Dekompilation | Forschung / Design |
 | Solana-eBPF-(SBF)-Dekompilation | Forschung / Design |
 | Engine- & Produkt-Härtung | Laufend |
-

@@ -454,7 +454,24 @@ std::string readTextFile(const fs::path &Path) {
   return std::string(std::istreambuf_iterator<char>(In), {});
 }
 
-class COFFARMPipeline : public NeverDLiftTest {};
+class COFFARMPipeline : public NeverDLiftTest {
+protected:
+  void expectGeneratedCCompiles(const fs::path &CPath,
+                                llvm::StringRef TargetTriple) {
+    const fs::path IncludeDir = tmpFile("windows-arm-include");
+    fs::create_directories(IncludeDir);
+    std::ofstream StringHeader(IncludeDir / "string.h");
+    StringHeader << "#include <stddef.h>\n"
+                    "void *memcpy(void *, const void *, size_t);\n";
+    StringHeader.close();
+    ASSERT_TRUE(StringHeader.good());
+
+    RunResult Syntax = exec(
+        "clang", {"-std=c11", "-target", TargetTriple.str(), "-ffreestanding",
+                  "-I", IncludeDir.string(), "-fsyntax-only", CPath.string()});
+    EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err;
+  }
+};
 
 std::optional<size_t>
 exportAddressEntryFileOffset(const llvm::object::COFFObjectFile &Obj,
@@ -1285,18 +1302,7 @@ TEST_F(COFFARMPipeline, ARM32ThumbLiftAndDecompile) {
   expectNoLocalReadBeforeDefinition(*StackyC);
   expectFrameBaseInitializedOnce(*StackyC);
 
-  const fs::path IncludeDir = tmpFile("arm-include");
-  fs::create_directories(IncludeDir);
-  std::ofstream StringHeader(IncludeDir / "string.h");
-  StringHeader << "#include <stddef.h>\n"
-                  "void *memcpy(void *, const void *, size_t);\n";
-  StringHeader.close();
-  ASSERT_TRUE(StringHeader.good());
-  RunResult Syntax =
-      exec("clang",
-           {"-std=c11", "-target", "thumbv7-pc-windows-msvc", "-ffreestanding",
-            "-I", IncludeDir.string(), "-fsyntax-only", CPath.string()});
-  EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err;
+  expectGeneratedCCompiles(CPath, "thumbv7-pc-windows-msvc");
 }
 
 TEST_F(COFFARMPipeline, AArch64LiftAndDecompile) {
@@ -1334,6 +1340,7 @@ TEST_F(COFFARMPipeline, AArch64LiftAndDecompile) {
   expectLeafCallUsesParameter(*StackyC, "arg0");
   expectNoLocalReadBeforeDefinition(*StackyC);
   expectFrameBaseInitializedOnce(*StackyC);
+  expectGeneratedCCompiles(CPath, "aarch64-pc-windows-msvc");
 }
 
 TEST_F(COFFARMPipeline, X86_64StackFrameUsesDefinedEntrySP) {

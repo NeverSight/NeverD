@@ -18,6 +18,14 @@ Finish container-level support for targets the loaders already partially recogni
 | PE ARM32 (Thumb-2) | Windows on ARM is Thumb-only; decode/emit must honor that mode |
 | Mach-O i386 | Apply common clang relocations; thin objects first |
 
+**Status:** Complete. Format-level coverage is locked by
+[`COFFARMFormatTests.cpp`](../../unittests/lift/COFFARMFormatTests.cpp),
+[`MachOI386RelocationTests.cpp`](../../unittests/lift/MachOI386RelocationTests.cpp),
+and the PE/Mach-O cases in
+[`PatchFormatTests.cpp`](../../unittests/lift/PatchFormatTests.cpp). Mach-O i386
+uses PIC and no-PIC thin objects because modern macOS hosts cannot link
+historical i386 executables.
+
 ### Design principles
 
 - Do not mark a format×arch cell supported until format-level tests pass (load → lift → decompile / patch)
@@ -83,11 +91,11 @@ Cross-cutting work that unblocks the items above and improves today’s native e
 
 ## Timeline
 
-These items are in research and design (or early implementation for native format completeness). No release dates are committed. Progress will be tracked here.
+EVM and Solana remain in research and design; native format completeness is complete and regression-covered. No release dates are committed. Progress will be tracked here.
 
 | Feature | Status |
 |---------|--------|
-| Native format completeness (PE ARM*, Mach-O i386) | Design / early implementation |
+| Native format completeness (PE ARM*, Mach-O i386) | Complete — regression-covered |
 | EVM bytecode decompilation | Research / Design |
 | Solana eBPF (SBF) decompilation | Research / Design |
 | Engine & product hardening | Ongoing |

@@ -67,12 +67,11 @@ Programmi **Solana eBPF / SBF** con la stessa semantica strict.
 
 ## Tempistica
 
-Ricerca / progettazione. Nessuna data impegnativa.
+EVM e Solana restano in ricerca / progettazione; la completezza dei formati nativi è terminata e coperta da test di regressione. Nessuna data impegnativa.
 
 | Funzione | Stato |
 |----------|-------|
-| Completezza formati nativi (PE ARM*, Mach-O i386) | Progettazione / early implementation |
+| Completezza formati nativi (PE ARM*, Mach-O i386) | Completata |
 | Decompilazione EVM | Ricerca / progettazione |
 | Decompilazione Solana eBPF (SBF) | Ricerca / progettazione |
 | Rafforzamento motore e prodotto | Continuo |
-

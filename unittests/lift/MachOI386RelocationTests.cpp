@@ -28,6 +28,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,19 @@ protected:
     return Path;
   }
 };
+
+struct MachOI386PipelineCase {
+  const char *FixtureName;
+  const char *TestName;
+};
+
+void PrintTo(const MachOI386PipelineCase &TestCase, std::ostream *Out) {
+  *Out << TestCase.FixtureName;
+}
+
+class MachOI386Pipeline
+    : public MachOI386Relocation,
+      public ::testing::WithParamInterface<MachOI386PipelineCase> {};
 
 std::vector<uint8_t> readBinaryFile(const fs::path &Path) {
   std::ifstream In(Path, std::ios::binary);
@@ -1323,8 +1337,8 @@ TEST_F(MachOI386Relocation,
   }
 }
 
-TEST_F(MachOI386Relocation, ThinObjectCompletesLiftAndDecompilation) {
-  const fs::path Path = fixture("test_macho_i386.o");
+TEST_P(MachOI386Pipeline, CompletesLiftAndDecompilation) {
+  const fs::path Path = fixture(GetParam().FixtureName);
   verifyAllStages(Path);
   verifyNoUnlifted(Path);
 
@@ -1369,5 +1383,14 @@ TEST_F(MachOI386Relocation, ThinObjectCompletesLiftAndDecompilation) {
   EXPECT_TRUE(C.contains("i386_global_address"));
   EXPECT_FALSE(C.contains_insensitive("unlifted"));
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    ThinObjects, MachOI386Pipeline,
+    ::testing::Values(MachOI386PipelineCase{"test_macho_i386.o", "PIC"},
+                      MachOI386PipelineCase{"test_macho_i386_nopic.o",
+                                            "NoPIC"}),
+    [](const ::testing::TestParamInfo<MachOI386PipelineCase> &Info) {
+      return Info.param.TestName;
+    });
 
 } // namespace

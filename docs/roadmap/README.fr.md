@@ -67,12 +67,11 @@ Programmes **Solana eBPF / SBF** avec la même sémantique strict.
 
 ## Calendrier
 
-Recherche / conception. Pas de dates promises.
+EVM et Solana restent en recherche / conception ; la complétude des formats natifs est terminée et couverte par des tests de régression. Pas de dates promises.
 
 | Fonctionnalité | Statut |
 |----------------|--------|
-| Complétude formats natifs (PE ARM*, Mach-O i386) | Conception / début d’implémentation |
+| Complétude formats natifs (PE ARM*, Mach-O i386) | Terminée |
 | Décompilation EVM | Recherche / conception |
 | Décompilation Solana eBPF (SBF) | Recherche / conception |
 | Renforcement moteur & produit | Continu |
-
