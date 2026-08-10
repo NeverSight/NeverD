@@ -50,6 +50,13 @@ enum class StateAccessKind : uint8_t {
 #include "neverd/evm/EVMStateAccesses.def"
 };
 
+/// Source-level access to msg.value used when recovering Solidity payability.
+/// It remains independent from both state mutability and the primary effect.
+enum class CallValueAccessKind : uint8_t {
+#define EVM_CALL_VALUE_ACCESS_KIND(NAME, SPELLING) NAME,
+#include "neverd/evm/EVMCallValueAccesses.def"
+};
+
 enum class OpcodeClass : uint8_t {
   Arithmetic,
   Comparison,
@@ -69,7 +76,7 @@ enum class OpcodeClass : uint8_t {
 enum class Opcode : uint8_t {
 #define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
                    INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
-                   TERMINATOR)                                                 \
+                   CALL_VALUE_ACCESS, TERMINATOR)                              \
   NAME = (BYTE),
 #include "neverd/evm/EVMOpcodes.def"
 };
@@ -85,12 +92,15 @@ struct OpcodeInfo {
                        uint8_t ImmediateBytesValue, OpcodeClass ClassValue,
                        Hardfork IntroducedValue, EffectKind EffectValue,
                        MemoryAccessKind MemoryAccessValue,
-                       StateAccessKind StateAccessValue, bool IsTerminatorValue)
+                       StateAccessKind StateAccessValue,
+                       CallValueAccessKind CallValueAccessValue,
+                       bool IsTerminatorValue)
       : Op(OpValue), Name(NameValue), StackInputs(StackInputsValue),
         StackOutputs(StackOutputsValue), ImmediateBytes(ImmediateBytesValue),
         Class(ClassValue), Introduced(IntroducedValue), Effect(EffectValue),
         MemoryAccess(MemoryAccessValue), StateAccess(StateAccessValue),
-        IsTerminator(IsTerminatorValue) {}
+        CallValueAccess(CallValueAccessValue), IsTerminator(IsTerminatorValue) {
+  }
 
   Opcode Op;
   llvm::StringLiteral Name;
@@ -102,6 +112,7 @@ struct OpcodeInfo {
   EffectKind Effect;
   MemoryAccessKind MemoryAccess;
   StateAccessKind StateAccess;
+  CallValueAccessKind CallValueAccess;
   bool IsTerminator;
 
   [[nodiscard]] constexpr bool isKnown() const {
@@ -124,7 +135,7 @@ struct OpcodeInfo {
   switch (Op) {
 #define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
                    INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
-                   TERMINATOR)                                                 \
+                   CALL_VALUE_ACCESS, TERMINATOR)                              \
   case Opcode::NAME:                                                           \
     return true;
 #include "neverd/evm/EVMOpcodes.def"
@@ -139,7 +150,7 @@ struct OpcodeInfo {
   switch (Op) {
 #define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
                    INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
-                   TERMINATOR)                                                 \
+                   CALL_VALUE_ACCESS, TERMINATOR)                              \
   case Opcode::NAME:                                                           \
     return MemoryAccessKind::MEMORY_ACCESS;
 #include "neverd/evm/EVMOpcodes.def"
@@ -204,7 +215,7 @@ inline constexpr unsigned kAssignedOpcodeCount = [] {
   unsigned Count = 0;
 #define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
                    INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
-                   TERMINATOR)                                                 \
+                   CALL_VALUE_ACCESS, TERMINATOR)                              \
   ++Count;
 #include "neverd/evm/EVMOpcodes.def"
   return Count;
@@ -214,7 +225,7 @@ inline constexpr uint8_t kMaxOpcodeStackInputs = [] {
   uint8_t Maximum = 0;
 #define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
                    INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
-                   TERMINATOR)                                                 \
+                   CALL_VALUE_ACCESS, TERMINATOR)                              \
   if ((INPUTS) > Maximum)                                                      \
     Maximum = (INPUTS);
 #include "neverd/evm/EVMOpcodes.def"
@@ -225,8 +236,19 @@ inline constexpr uint8_t kMaxHostOpcodeArguments = [] {
   uint8_t Maximum = 0;
 #define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
                    INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
-                   TERMINATOR)                                                 \
+                   CALL_VALUE_ACCESS, TERMINATOR)                              \
   if (OpcodeClass::CLASS != OpcodeClass::Stack && (INPUTS) > Maximum)          \
+    Maximum = (INPUTS);
+#include "neverd/evm/EVMOpcodes.def"
+  return Maximum;
+}();
+
+inline constexpr uint8_t kMaxALUStackInputs = [] {
+  uint8_t Maximum = 0;
+#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
+                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+                   CALL_VALUE_ACCESS, TERMINATOR)                              \
+  if (isALU(OpcodeClass::CLASS) && (INPUTS) > Maximum)                         \
     Maximum = (INPUTS);
 #include "neverd/evm/EVMOpcodes.def"
   return Maximum;
@@ -322,6 +344,7 @@ opcodeInfo(uint8_t Byte, Hardfork Fork = Hardfork::Latest);
 [[nodiscard]] llvm::StringRef effectName(EffectKind Effect);
 [[nodiscard]] llvm::StringRef memoryAccessName(MemoryAccessKind Access);
 [[nodiscard]] llvm::StringRef stateAccessName(StateAccessKind Access);
+[[nodiscard]] llvm::StringRef callValueAccessName(CallValueAccessKind Access);
 
 } // namespace neverd::evm
 

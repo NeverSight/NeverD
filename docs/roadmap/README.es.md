@@ -28,11 +28,16 @@ Cerrar objetivos que los loaders ya reconocen parcialmente.
 
 ## 2. Descompilación de bytecode EVM
 
-Extender NeverD al **bytecode EVM** con elevación 1:1 a la misma pila IR.
+Extender NeverD al **bytecode EVM** con lifting 1:1 a la misma pila IR y salida C, Solidity y LLVM IR.
 
 ### Objetivos
 
-- Loader EVM · lifter 1:1 (strict) · pila/memoria · JUMP/JUMPI → CFG · storage/calldata · HighIR/LLVM-C · CLI/C API unificados
+- Loader EVM · lifter 1:1 (strict) · pila/memoria · JUMP/JUMPI → CFG · storage/calldata · C23/Solidity/LLVM · CLI/C API unificados
+
+**Estado:** Completo para EVM legacy de Frontier a Fusaka: 150 opcodes, entradas
+raw/hex/artifact, extracción runtime, CFG y stack-SSA, análisis strict/relaxed,
+backends C23/LLVM/Solidity, CLI/C API y diferenciales contra Anvil. Consulte
+[descompilación EVM](../evm.es.md) para la ABI host y los límites.
 
 ### Por qué EVM
 
@@ -69,11 +74,11 @@ Programas **Solana eBPF / SBF** con la misma semántica strict.
 
 ## Calendario
 
-La descompilación de Solana SBF y la completitud de formatos nativos están terminadas y cubiertas por pruebas de regresión. EVM sigue en investigación / diseño. Sin fechas comprometidas.
+Los formatos nativos y las descompilaciones EVM y Solana SBF están terminados y cubiertos por regresión. Sin fechas comprometidas.
 
 | Función | Estado |
 |---------|--------|
 | Completitud formatos nativos (PE ARM*, Mach-O i386) | Completa |
-| Descompilación EVM | Investigación / diseño |
+| Descompilación EVM | Completa — C, Solidity y LLVM; cubierta por regresión |
 | Descompilación Solana eBPF (SBF) | Completa — v0-v4, C, Rust y LLVM; cubierta por regresión |
 | Endurecimiento motor y producto | Continuo |

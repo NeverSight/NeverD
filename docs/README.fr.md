@@ -12,7 +12,8 @@ L’aperçu du projet, la compilation et le CLI se trouvent dans le README du d�
 | [Contribution](i18n/CONTRIBUTING.fr.md) | Environnement, profils de compilation, workflow, style et exigences de PR |
 | [Architecture](architecture.fr.md) | Parcours IR, frontières, lifting strict, profondeur de support et points de modification |
 | [Tests](testing.fr.md) | Suites, fixtures générées, allers-retours Unicorn et commandes incrémentales |
+| [Décompilation EVM](evm.fr.md) | Entrées, hardforks, IR par étapes, ABI host C/LLVM, reconstruction Solidity et limites |
 | [Décompilation Solana SBF](sbf.fr.md) | SBF v0-v4, LLVM IR, sorties C/Rust, vérification et limites connues |
-| [Feuille de route](roadmap/README.fr.md) | État actuel, prochains objectifs et finalisation des formats natifs |
+| [Feuille de route](roadmap/README.fr.md) | État : formats natifs, EVM et Solana SBF implémentés |
 | [English README](../README.md) | Version anglaise |
 | [Autres langues](i18n/) | Autres versions localisées |

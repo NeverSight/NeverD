@@ -23,6 +23,7 @@ TEST(EVMOpcodeMetadata, FrontierAddHasExactStackContract) {
   EXPECT_EQ(Info->StackOutputs, 1);
   EXPECT_FALSE(Info->IsTerminator);
   EXPECT_EQ(Info->StateAccess, StateAccessKind::None);
+  EXPECT_EQ(Info->CallValueAccess, CallValueAccessKind::None);
   EXPECT_EQ(Info->Effect, EffectKind::None);
   EXPECT_EQ(opcodeByte(Info->Op), 0x01u);
 }
@@ -107,6 +108,7 @@ TEST(EVMOpcodeMetadata, UnknownMetadataPreservesTheRawByteAndFaultPolicy) {
   EXPECT_EQ(Info.Effect, EffectKind::Unknown);
   EXPECT_EQ(Info.MemoryAccess, MemoryAccessKind::Unknown);
   EXPECT_EQ(Info.StateAccess, StateAccessKind::Unknown);
+  EXPECT_EQ(Info.CallValueAccess, CallValueAccessKind::Unknown);
   EXPECT_TRUE(mayReadMemory(Info));
   EXPECT_TRUE(mayWriteMemory(Info));
   EXPECT_TRUE(Info.IsTerminator);
@@ -132,7 +134,7 @@ TEST(EVMOpcodeMetadata, OpcodeFamiliesExposeWidthsAndDepthsWithoutMagicRanges) {
   EXPECT_FALSE(isJump(Opcode::JUMPDEST));
 }
 
-TEST(EVMOpcodeMetadata, EffectsComeFromTheInstructionDatabase) {
+TEST(EVMOpcodeMetadata, EffectsAndSourceConstraintsComeFromTheDatabase) {
   EXPECT_EQ(opcodeInfo(Opcode::MLOAD)->Effect, EffectKind::None);
   EXPECT_EQ(opcodeInfo(Opcode::CALLDATACOPY)->Effect, EffectKind::ContextRead);
   EXPECT_EQ(opcodeInfo(Opcode::CALLVALUE)->Effect, EffectKind::ContextRead);
@@ -151,6 +153,12 @@ TEST(EVMOpcodeMetadata, EffectsComeFromTheInstructionDatabase) {
   EXPECT_EQ(opcodeInfo(Opcode::STATICCALL)->StateAccess, StateAccessKind::Read);
   EXPECT_EQ(opcodeInfo(Opcode::CALL)->StateAccess, StateAccessKind::Write);
   EXPECT_EQ(stateAccessName(StateAccessKind::Write), "state.write");
+
+  EXPECT_EQ(opcodeInfo(Opcode::CALLVALUE)->CallValueAccess,
+            CallValueAccessKind::Read);
+  EXPECT_EQ(opcodeInfo(Opcode::ADDRESS)->CallValueAccess,
+            CallValueAccessKind::None);
+  EXPECT_EQ(callValueAccessName(CallValueAccessKind::Read), "callvalue.read");
 
   EXPECT_TRUE(isALU(*opcodeInfo(Opcode::ADD)));
   EXPECT_TRUE(isALU(*opcodeInfo(Opcode::CLZ)));

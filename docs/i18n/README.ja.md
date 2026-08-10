@@ -11,12 +11,12 @@
 
 **AI フレンドリーなバイナリ分析・逆コンパイルエンジン — 1:1 リフト、LLVM 上に構築**
 
-PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · SBF &nbsp;|&nbsp; 純粋 C SDK
+PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · EVM256 · SBF &nbsp;|&nbsp; 純粋 C SDK
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#ビルド)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20SBF-informational.svg)](#対応ターゲット)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20SBF-orange.svg)](#対応ターゲット)
+[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20EVM%20%7C%20SBF-informational.svg)](#対応ターゲット)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20EVM256%20%7C%20SBF-orange.svg)](#対応ターゲット)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-とプラグイン)
 
 [ドキュメント](../README.ja.md) · [ロードマップ](../roadmap/README.ja.md) · [貢献](CONTRIBUTING.ja.md)
@@ -29,19 +29,19 @@ PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM
 
 ## 概要
 
-NeverD は **1:1 の命令レベルリフト** を中核とするネイティブバイナリおよびスマートコントラクト解析・逆コンパイルエンジンです。**PE**、**ELF**、**Mach-O** と Solana **SBF ELF** program を読み込みます。native target は [Capstone](https://www.capstone-engine.org/) で decode し、SBF は専用の version-aware decoder と staged IR を使います。すべての経路は近似変換ではなく hand-written semantics を使用します。対応 instruction は **LLVM IR**、**構造化 C**、**SBF 向けの安全な stable Rust**、または native の**書き換え済み binary**で observable behavior を保持します。
+NeverD は **1:1 の命令レベルリフト** を中核とするネイティブおよびスマートコントラクト解析・逆コンパイルエンジンです。**PE**、**ELF**、**Mach-O**、legacy **EVM** bytecode、Solana **SBF ELF** program を読み込みます。native target は [Capstone](https://www.capstone-engine.org/) で decode し、EVM/SBF は専用 version-aware decoder と staged IR を使います。すべて hand-written semantics です。対応 instruction は **LLVM IR**、**C**、**SBF Rust**、**EVM Solidity reconstruction**、または native の**書き換え済み binary**で observable behavior を保持します。
 
 **strict はデフォルト ON**。lifter がない命令は `UnliftedInstruction` を送出し、スキップ・推測・黙っての `NOP` 化はしません。
 
 CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエンジン **`libneverd`** を使い、Capstone・LLVM・内部 C++ には直接リンクしません。
 
-Solana SBF 逆コンパイルは利用可能です。[SBF ガイド](../sbf.ja.md)を参照してください。その他の target と hardening は[ロードマップ](../roadmap/README.ja.md)で追跡します。
+input format、host contract、制限は [EVM ガイド](../evm.ja.md)と [Solana SBF ガイド](../sbf.ja.md)を参照してください。
 
 ## なぜ NeverD？
 
 - **1:1 セマンティクス** — 手書き lifter；デフォルト strict では未対応命令が例外を送出
 - **LLM フレンドリー** — 構造化 C・LLVM IR・JSON 分析を純粋 C API で公開し、エラーは決定的
-- **1 本のパイプライン、複数の出口** — `lift` → LLVM IR · `decompile` → C/Rust · `patch` → ネイティブバイナリ書き換え
+- **1 本のパイプライン、複数の出口** — `lift` → LLVM IR · `decompile` → C/Solidity/Rust · `patch` → ネイティブバイナリ書き換え
 - **バイナリ書き換え** — PE / ELF / Mach-O、section トランポリンまたは inplace
 - **分析ツール群** — CLI、デバッグ情報、シグネチャ、プラグイン、任意の難読化パス
 
@@ -54,6 +54,10 @@ Solana SBF 逆コンパイルは利用可能です。[SBF ガイド](../sbf.ja.m
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](../architecture.ja.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
+
+legacy EVM bytecode は native container と独立して対応します。Frontier から Fusaka
+までの 150 assigned opcode が専用 Low/Med/High IR、verified LLVM `i256`、C23
+`_BitInt(256)`、Solidity output に入ります。[EVM 逆コンパイル](../evm.ja.md)を参照。
 
 Solana SBF v0-v4 ELF プログラムは専用 strict loader、完全なバージョン別 ISA
 metadata、Low/Med/High IR、検証済み LLVM、portable C11、安全な stable Rust を
@@ -72,6 +76,12 @@ Binary (PE / ELF / Mach-O)
        ├─ decompile   MedIR → HighIR → C
        │              MedIR → LLVM IR → opt → C   (-llvm)
        └─ patch       MedIR → LLVM IR → codegen → binary
+
+EVM (raw / hex / compiler artifact)
+  → runtime normalization + hardfork-aware decode
+  → EVM LowIR → EVM stack-SSA MedIR → recovered EVM HighIR
+       ├─ lift        → verified LLVM i256/i512
+       └─ decompile   → C23 _BitInt(256) または Solidity reconstruction
 
 Solana SBF ELF (v0-v4)
   → バージョン対応 legacy/strict loader + verifier
@@ -98,6 +108,11 @@ cmake --build build
 ./build/bin/neverd lift -o out.ll binary
 ./build/bin/neverd decompile -o out.c binary
 ./build/bin/neverd patch -hello -o patched binary
+
+# EVM
+./build/bin/neverd lift contract.evm -o contract.ll
+./build/bin/neverd decompile --language=c contract.evm -o contract.c
+./build/bin/neverd decompile --language=solidity contract.evm -o contract.sol
 
 # Solana SBF
 ./build/bin/neverd info program.so
@@ -186,7 +201,7 @@ neverd <command> [options] <binary>
 | コマンド | 出力 | 説明 |
 |----------|------|------|
 | `lift` | `.ll` | LLVM IR へリフト |
-| `decompile` | `.c` / `.rs` | `--language` で C または SBF Rust を選択 |
+| `decompile` | `.c` / `.sol` / `.rs` | `--language` で C、EVM Solidity、SBF Rust を選択 |
 | `decompile -llvm` | `.c` | LLVM IR + 最適化経由 |
 | `patch` | バイナリ | 機械語の書き換え |
 
@@ -242,6 +257,10 @@ const char *c = neverd_decompile(s, 0x401000);
 neverd_free_string(c);
 neverd_session_destroy(s);
 ```
+
+EVM では `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)` で Solidity
+を明示選択します。従来の `neverd_decompile_all` は C を出力します。詳細は
+[EVM C API 例](../evm.ja.md#c-api)を参照してください。
 
 `-DNEVERD_BUILD_PLUGINS=ON` でサンプルプラグインをビルド。読み込みパス：`<neverd-dir>/plugins`、`~/.neverd/plugins`、`$NEVERD_PLUGIN_PATH`。
 

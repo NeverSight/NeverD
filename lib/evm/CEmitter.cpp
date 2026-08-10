@@ -23,6 +23,9 @@ inline constexpr unsigned kEmitterLimbBits =
     std::numeric_limits<uint64_t>::digits;
 inline constexpr unsigned kEmitterLimbCount = kWordBits / kEmitterLimbBits;
 
+static_assert(kWordBits % kEmitterLimbBits == 0,
+              "C constants require a whole number of uint64_t limbs");
+
 llvm::StringRef cExitStatusName(ExitStatus Status) {
   switch (Status) {
 #define EVM_EXIT_STATUS(NAME, C_NAME, VALUE)                                   \

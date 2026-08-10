@@ -5,5 +5,6 @@ add_neverd_component_library(NeverDEVM
   Interpreter.cpp
   LLVMEmitter.cpp
   Opcodes.cpp
+  Semantics.cpp
   SolidityEmitter.cpp
 )

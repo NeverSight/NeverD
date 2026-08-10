@@ -12,7 +12,8 @@ Projektüberblick, Build und CLI stehen in der Repository-README. Architektur- u
 | [Mitwirken](i18n/CONTRIBUTING.de.md) | Entwicklungsumgebung, Build-Profile, Ablauf, Stil und PR-Anforderungen |
 | [Architektur](architecture.de.md) | IR-Pfade, Komponentengrenzen, striktes Lifting, Supporttiefe und Änderungsorte |
 | [Tests](testing.de.md) | Testsuiten, generierte Fixtures, Unicorn-Roundtrips und inkrementelle Befehle |
+| [EVM-Dekompilation](evm.de.md) | Eingaben, Hardforks, IR-Stufen, C-/LLVM-Host-ABI, Solidity-Rekonstruktion und Grenzen |
 | [Solana-SBF-Dekompilation](sbf.de.md) | SBF v0-v4, LLVM IR, C-/Rust-Ausgabe, Verifikation und bekannte Grenzen |
-| [Roadmap](roadmap/README.de.md) | Aktueller Stand, nächste Ziele und Vervollständigung nativer Formate |
+| [Roadmap](roadmap/README.de.md) | Status: Native Formate, EVM und Solana SBF implementiert |
 | [English README](../README.md) | Englische Version |
 | [Andere Sprachen](i18n/) | Weitere lokalisierte Versionen |

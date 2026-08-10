@@ -22,7 +22,7 @@ constexpr OpcodeTable buildOpcodeTable() {
   OpcodeTable Result{};
 #define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
                    INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
-                   TERMINATOR)                                                 \
+                   CALL_VALUE_ACCESS, TERMINATOR)                              \
   Result[BYTE] = OpcodeInfo{Opcode::NAME,                                      \
                             llvm::StringLiteral(#NAME),                        \
                             static_cast<uint8_t>(INPUTS),                      \
@@ -33,6 +33,7 @@ constexpr OpcodeTable buildOpcodeTable() {
                             EffectKind::EFFECT,                                \
                             MemoryAccessKind::MEMORY_ACCESS,                   \
                             StateAccessKind::STATE_ACCESS,                     \
+                            CallValueAccessKind::CALL_VALUE_ACCESS,            \
                             TERMINATOR};
 #include "neverd/evm/EVMOpcodes.def"
   return Result;
@@ -85,7 +86,11 @@ constexpr bool validateOpcodeTable() {
         Info->MemoryAccess == MemoryAccessKind::Unknown ||
         Info->MemoryAccess != memoryAccess(Info->Op) ||
         Info->StateAccess == StateAccessKind::Unknown ||
+        Info->CallValueAccess == CallValueAccessKind::Unknown ||
         !stateAccessMatchesEffect(*Info))
+      return false;
+    if ((Info->CallValueAccess == CallValueAccessKind::Read) !=
+        (Info->Op == Opcode::CALLVALUE))
       return false;
     if (isALU(*Info) &&
         (Info->StackInputs == 0 || Info->StackOutputs != 1 ||
@@ -135,6 +140,9 @@ static_assert(validateOpcodeTable(),
               "EVMOpcodes.def contains invalid or duplicate opcode metadata");
 static_assert(kMaxOpcodeStackInputs <= kStackLimit,
               "an opcode cannot consume more than the EVM stack limit");
+static_assert(kMaxALUStackInputs > 0 &&
+                  kMaxALUStackInputs <= kMaxHostOpcodeArguments,
+              "scalar ALU inputs must fit the shared host argument bound");
 
 } // namespace
 
@@ -177,6 +185,7 @@ OpcodeInfo unknownOpcodeInfo(uint8_t Byte) {
       EffectKind::Unknown,
       MemoryAccessKind::Unknown,
       StateAccessKind::Unknown,
+      CallValueAccessKind::Unknown,
       true,
   };
 }
@@ -236,6 +245,16 @@ llvm::StringRef stateAccessName(StateAccessKind Access) {
   case StateAccessKind::NAME:                                                  \
     return llvm::StringLiteral(SPELLING);
 #include "neverd/evm/EVMStateAccesses.def"
+  }
+  return kUnknownName;
+}
+
+llvm::StringRef callValueAccessName(CallValueAccessKind Access) {
+  switch (Access) {
+#define EVM_CALL_VALUE_ACCESS_KIND(NAME, SPELLING)                             \
+  case CallValueAccessKind::NAME:                                              \
+    return llvm::StringLiteral(SPELLING);
+#include "neverd/evm/EVMCallValueAccesses.def"
   }
   return kUnknownName;
 }

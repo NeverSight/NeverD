@@ -39,6 +39,7 @@ cmake --build build-release --parallel 4
 | `unittests/libc` | `NeverDLibCTests` | 已知 libc 名称与分类 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 形状、IR 阶段、loader、重定位、格式 fixture、反编译与代表性 patch 流程 |
 | `unittests/semantic` 中的大多数文件 | `NeverDSemanticTests` | 指令、ABI、控制流、C 表达式和 lift/recompile 差分语义 |
+| `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | 硬分叉元数据、输入规范化、CFG/SSA/恢复、解释器语义、LLVM/C/Solidity 差分执行及公共 API 路由 |
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 元数据与 ELF 布局、严格验证、CFG/恢复、独立原始执行、LLVM 验证、C/Rust 编译及公共 API 路由 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 四 ISA×三对象格式的重写/混淆等价性 |
 | `unittests/semantic` 中的聚焦变换文件 | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 从大型语义二进制拆出的快速重链接探针 |
@@ -46,7 +47,8 @@ cmake --build build-release --parallel 4
 注册的事实来源是
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt)、
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) 和
-[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) 和
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
+[`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 和
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
 
 ## fixture 如何生成
@@ -81,6 +83,18 @@ backend），随后在完整 4×3 ISA/格式网格中比较基线与变换后代
 
 确定性的 NeverD 语义失败应当成为失败测试。跳过只用于明确的外部能力边界，并应
 阅读 skip 原因：缺少跨目标 linker 的绿色摘要不能证明该格式路径实际运行。
+
+### EVM 差分后端
+
+EVM 解释器测试提供确定性的 256 位 oracle。emitter suite 直接编译执行生成 LLVM，
+通过 Clang lower 生成 C23 并在同一 host harness 中执行；安装 `solc`、`anvil`、
+`cast` 与 `jq` 后，还会将生成 Solidity harness 部署至本地 Anvil。测试比较 status、
+storage 与 instruction trace count。独立 raw-bytecode corpus 直接在 Anvil 原生 EVM
+中执行 pre-Fusaka 标量 ALU、calldata/memory 复制、重叠 `MCOPY`、Keccak 与 return data。
+
+`NeverDEVMOpcodeTests` 还约束 metadata 架构：全部 150 个 opcode 在 byte encoding 与
+typed value 之间往返，测试 family helper 边界与 hardfork alias，完整 stack contract
+和 host argument maximum 保持推导而不在 backend 中重复。
 
 ### Solana SBF 差分后端
 
@@ -133,6 +147,14 @@ cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
 
+# 所有聚焦的 EVM 目标/用例
+cmake --build build-release --target \
+  NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
+  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'EVM' --output-on-failure --parallel 4
+
 # 所有聚焦的 Solana SBF 目标/用例
 cmake --build build-release --target \
   NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
@@ -179,6 +201,7 @@ GoogleTest 发现使用 `DISCOVERY_MODE PRE_TEST`，因此 CTest 枚举前必须
 | 重写 codegen 或输出重定位 | `RewriteCodegenRTTests` 用例 | `NeverDPatchFullTests` 及存在时的已链接 patch fixture |
 | patch 使用的 LLVM IR 变换 | 聚焦变换二进制 | `NeverDPatchFullTests` 组合 pass 网格 |
 | C API 或 CLI | 直接 SDK/query 测试与 `unittests/semantic/CLIEndToEndTests.cpp` | 相关 pipeline/格式套件 |
+| EVM loader、opcode、IR 或 backend | 最小的所属 `NeverDEVM*Tests` 目标 | 所有 EVM 目标，以及生成 C/Solidity 的编译检查 |
 | SBF loader、ISA、IR 或后端 | 最小的所属 `NeverDSBF*Tests` 目标 | 所有 SBF 目标，以及生成 C/Rust 的编译检查 |
 | Libc 识别 | `NeverDLibCTests` | 行为变化时的语义 call/ABI 用例 |
 | 进程执行或 quoting | `NeverDTestProcessTests` | 每个受支持主机上的一个受影响 CLI/语义用例 |

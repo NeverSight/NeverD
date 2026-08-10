@@ -26,6 +26,44 @@ LOCALES = (
     "zh-CN",
     "zh-TW",
 )
+GUIDE_STEMS = ("evm", "sbf")
+GUIDE_REQUIRED_TOKENS = {
+    "evm": (
+        "frontier",
+        "fusaka",
+        "--language=c",
+        "--language=solidity",
+        "EVMOpcodes.def",
+        "Instruction.def",
+        "TableGen",
+        "_BitInt",
+        "neverd_evm_set_hardfork",
+        "NEVERD_OUTPUT_SOLIDITY",
+        "Anvil",
+    ),
+    "sbf": (
+        "| v0 |",
+        "| v1 |",
+        "| v2 |",
+        "| v3 |",
+        "| v4 |",
+        "--language=c",
+        "--language=rust",
+        "llvm::verifyModule",
+        "neverd_sbf_set_version",
+        "NEVERD_OUTPUT_RUST",
+        "R_BPF_64_64",
+        "sol_invoke_signed_rust",
+        "Anchor IDL",
+    ),
+}
+ENGLISH_DOCS = (
+    Path("README.md"),
+    Path("docs/README.md"),
+    Path("docs/roadmap/README.md"),
+    Path("docs/testing.md"),
+    *(Path(f"docs/{stem}.md") for stem in GUIDE_STEMS),
+)
 
 
 def localized_paths(locale: str) -> tuple[Path, ...]:
@@ -34,15 +72,14 @@ def localized_paths(locale: str) -> tuple[Path, ...]:
         Path(f"docs/README.{locale}.md"),
         Path(f"docs/roadmap/README.{locale}.md"),
         Path(f"docs/testing.{locale}.md"),
+        Path(f"docs/evm.{locale}.md"),
         Path(f"docs/sbf.{locale}.md"),
     )
 
 
 LOCALIZED_DOCS = tuple(path for locale in LOCALES for path in localized_paths(locale))
-MARKDOWN_DOCS = (Path("docs/sbf.md"),) + LOCALIZED_DOCS
-STAGED_ALLOWLIST = frozenset(
-    {"scripts/check_docs_i18n.py", *(path.as_posix() for path in MARKDOWN_DOCS)}
-)
+MARKDOWN_DOCS = ENGLISH_DOCS + LOCALIZED_DOCS
+PROHIBITED_STAGED_PREFIXES = ("docs/superpowers/",)
 
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
@@ -60,6 +97,7 @@ class RepositoryView:
         self.use_index = use_index
         self._text_cache: dict[Path, str] = {}
         self._index_cache: dict[Path, str | None] = {}
+        self._index_exists_cache: dict[Path, bool] = {}
 
     @staticmethod
     def relative(path: Path) -> Path:
@@ -83,18 +121,45 @@ class RepositoryView:
     def read_text(self, path: Path) -> str:
         relative_path = self.relative(path)
         if relative_path not in self._text_cache:
-            indexed = self.index_text(relative_path) if self.use_index else None
-            self._text_cache[relative_path] = (
-                indexed
-                if indexed is not None
-                else (REPO_ROOT / relative_path).read_text(encoding="utf-8")
-            )
+            if self.use_index:
+                indexed = self.index_text(relative_path)
+                if indexed is None:
+                    raise FileNotFoundError(relative_path)
+                self._text_cache[relative_path] = indexed
+            else:
+                self._text_cache[relative_path] = (
+                    REPO_ROOT / relative_path
+                ).read_text(encoding="utf-8")
         return self._text_cache[relative_path]
+
+    def index_exists(self, path: Path) -> bool:
+        relative_path = self.relative(path)
+        if relative_path not in self._index_exists_cache:
+            if self.index_text(relative_path) is not None:
+                self._index_exists_cache[relative_path] = True
+            else:
+                result = subprocess.run(
+                    (
+                        "git",
+                        "ls-files",
+                        "--cached",
+                        "--",
+                        relative_path.as_posix(),
+                    ),
+                    cwd=REPO_ROOT,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self._index_exists_cache[relative_path] = bool(
+                    result.stdout.strip()
+                )
+        return self._index_exists_cache[relative_path]
 
     def exists(self, path: Path) -> bool:
         relative_path = self.relative(path)
-        if self.use_index and self.index_text(relative_path) is not None:
-            return True
+        if self.use_index:
+            return self.index_exists(relative_path)
         return (REPO_ROOT / relative_path).exists()
 
 
@@ -243,52 +308,78 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     if errors:
         return
 
-    selector_tokens = ("sbf.md", *(f"sbf.{locale}.md" for locale in LOCALES))
-    require_tokens(Path("docs/sbf.md"), selector_tokens, errors, view)
-    for locale in LOCALES:
-        project_readme, index, roadmap, testing, guide = localized_paths(locale)
+    selector_tokens = {
+        stem: (f"{stem}.md", *(f"{stem}.{locale}.md" for locale in LOCALES))
+        for stem in GUIDE_STEMS
+    }
+    for stem in GUIDE_STEMS:
         require_tokens(
-            project_readme,
-            ("Solana SBF", "v0-v4", "--language=rust", f"../sbf.{locale}.md"),
+            Path(f"docs/{stem}.md"),
+            (*selector_tokens[stem], *GUIDE_REQUIRED_TOKENS[stem]),
             errors,
             view,
         )
-        require_tokens(index, (f"sbf.{locale}.md",), errors, view)
+
+    for locale in LOCALES:
+        project_readme, index, roadmap, testing, evm_guide, sbf_guide = (
+            localized_paths(locale)
+        )
+        require_tokens(
+            project_readme,
+            (
+                "EVM256",
+                "Solana SBF",
+                "v0-v4",
+                "--language=solidity",
+                "--language=rust",
+                f"../evm.{locale}.md",
+                f"../sbf.{locale}.md",
+            ),
+            errors,
+            view,
+        )
+        require_tokens(
+            index,
+            (f"evm.{locale}.md", f"sbf.{locale}.md"),
+            errors,
+            view,
+        )
         require_tokens(
             roadmap,
-            ("v0-v4", "Rust", f"../sbf.{locale}.md"),
+            (
+                "v0-v4",
+                "Solidity",
+                "Rust",
+                f"../evm.{locale}.md",
+                f"../sbf.{locale}.md",
+            ),
             errors,
             view,
         )
         require_tokens(
             testing,
             (
+                "NeverDEVMOpcodeTests",
+                "NeverDEVMSemanticTests",
+                "NeverDEVMIntegrationTests",
                 "NeverDSBFMetadataTests",
                 "NeverDSBFSemanticTests",
                 "NeverDSBFIntegrationTests",
-                "check-neverd-sbf",
+                "-R 'EVM'",
+                "-R 'SBF'",
             ),
             errors,
             view,
         )
         require_tokens(
-            guide,
-            (
-                *selector_tokens,
-                "| v0 |",
-                "| v1 |",
-                "| v2 |",
-                "| v3 |",
-                "| v4 |",
-                "--language=c",
-                "--language=rust",
-                "llvm::verifyModule",
-                "neverd_sbf_set_version",
-                "NEVERD_OUTPUT_RUST",
-                "R_BPF_64_64",
-                "sol_invoke_signed_rust",
-                "Anchor IDL",
-            ),
+            evm_guide,
+            (*selector_tokens["evm"], *GUIDE_REQUIRED_TOKENS["evm"]),
+            errors,
+            view,
+        )
+        require_tokens(
+            sbf_guide,
+            (*selector_tokens["sbf"], *GUIDE_REQUIRED_TOKENS["sbf"]),
             errors,
             view,
         )
@@ -302,13 +393,15 @@ def validate_staged(errors: list[str]) -> None:
         capture_output=True,
         text=True,
     )
-    staged = frozenset(line for line in result.stdout.splitlines() if line)
-    missing = sorted(STAGED_ALLOWLIST - staged)
-    unexpected = sorted(staged - STAGED_ALLOWLIST)
-    if missing:
-        report(errors, "staged allowlist is missing: " + ", ".join(missing))
-    if unexpected:
-        report(errors, "staged paths are not allowed: " + ", ".join(unexpected))
+    staged = tuple(line for line in result.stdout.splitlines() if line)
+    prohibited = sorted(
+        path
+        for path in staged
+        if path.startswith(PROHIBITED_STAGED_PREFIXES)
+        or "/plans/" in f"/{path}"
+    )
+    if prohibited:
+        report(errors, "plan documents must not be staged: " + ", ".join(prohibited))
 
 
 def main() -> int:
@@ -316,7 +409,7 @@ def main() -> int:
     parser.add_argument(
         "--check-staged",
         action="store_true",
-        help="also require the Git index to contain exactly the localization change set",
+        help="validate the Git index snapshot and reject staged plan documents",
     )
     arguments = parser.parse_args()
 

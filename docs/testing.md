@@ -43,6 +43,7 @@ discovered case a CTest label equal to that executable's target name.
 | `unittests/libc` | `NeverDLibCTests` | Known libc names and classification |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR shapes, IR stages, loaders, relocations, format fixtures, decompilation, and representative patch flows |
 | Most files in `unittests/semantic` | `NeverDSemanticTests` | Instruction, ABI, control-flow, C-expression, and lift/recompile differential semantics |
+| `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Hardfork metadata, input normalization, CFG/SSA/recovery, interpreter semantics, LLVM/C/Solidity differential execution, and public API routing |
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4 metadata and ELF layouts, strict verification, CFG/recovery, independent raw execution, LLVM verification, C/Rust compilation, and public API routing |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Rewrite/obfuscation equivalence across four ISAs and three object formats |
 | Focused transform files in `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Small, fast-to-relink probes split out of the large semantic binary |
@@ -50,7 +51,8 @@ discovered case a CTest label equal to that executable's target name.
 The source of truth for registration is
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt), and
-[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt), and
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
+[`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt), and
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
 ## How fixtures are produced
@@ -92,6 +94,24 @@ the full 4 x 3 ISA/format grid.
 A deterministic NeverD semantic failure should be a failed test. Reserve skips
 for an explicit external capability boundary, and read the skip reason: a green
 summary with a missing cross-linker does not prove that format path ran.
+
+### EVM differential backends
+
+EVM interpreter tests provide a deterministic 256-bit oracle. The emitter
+suite compiles and runs generated LLVM directly, lowers generated C23 through
+Clang and executes it against the same host harness, and—when `solc`, `anvil`,
+`cast`, and `jq` are installed—deploys a generated Solidity harness to a local
+Anvil node. It compares status, storage, and instruction trace counts rather
+than relying only on output text. A separate raw-bytecode corpus executes the
+pre-Fusaka scalar ALU, calldata/memory copying, overlapping `MCOPY`, Keccak,
+and return-data paths directly in Anvil and compares them with the interpreter,
+guarding against a lowering mistake shared by all generated backends.
+
+`NeverDEVMOpcodeTests` also enforces the metadata architecture: all 150 assigned
+opcodes round-trip between byte encodings and typed values, family helpers are
+checked at their boundaries, hardfork aliases resolve through the shared
+database, and the complete stack-contract and host-argument maxima remain
+derived rather than duplicated in backends.
 
 ### Solana SBF differential backends
 
@@ -155,6 +175,14 @@ cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
 
+# Every focused EVM target/case
+cmake --build build-release --target \
+  NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
+  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'EVM' --output-on-failure --parallel 4
+
 # Every focused Solana SBF target/case
 cmake --build build-release --target \
   NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
@@ -202,6 +230,7 @@ widened only for suites with measured heavy cases.
 | Rewrite codegen or output relocation | `RewriteCodegenRTTests` cases | `NeverDPatchFullTests` and a linked patch fixture where available |
 | LLVM IR transform used by patch | Focused transform binary | `NeverDPatchFullTests` composed-pass grid |
 | C API or CLI | Direct SDK/query test and `unittests/semantic/CLIEndToEndTests.cpp` | Relevant pipeline/format suite |
+| EVM loader, opcode, IR, or backend | Smallest owning `NeverDEVM*Tests` target | All EVM targets plus generated C/Solidity compilation |
 | SBF loader, ISA, IR, or backend | Smallest owning `NeverDSBF*Tests` target | All SBF targets plus generated C/Rust compilation |
 | Libc recognition | `NeverDLibCTests` | Semantic call/ABI cases if behavior changes |
 | Process execution or quoting | `NeverDTestProcessTests` | One affected CLI/semantic case on each supported host |

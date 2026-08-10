@@ -11,12 +11,12 @@
 
 **محرك تحليل وإعادة تجميع صديق للذكاء الاصطناعي — رفع 1:1 مبني على LLVM**
 
-PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · SBF &nbsp;|&nbsp; SDK بلغة C خالصة
+PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · EVM256 · SBF &nbsp;|&nbsp; SDK بلغة C خالصة
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#البناء)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20SBF-informational.svg)](#الأهداف-المدعومة)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20SBF-orange.svg)](#الأهداف-المدعومة)
+[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20EVM%20%7C%20SBF-informational.svg)](#الأهداف-المدعومة)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20EVM256%20%7C%20SBF-orange.svg)](#الأهداف-المدعومة)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-والإضافات)
 
 [التوثيق](../README.ar.md) · [خارطة الطريق](../roadmap/README.ar.md) · [المساهمة](CONTRIBUTING.ar.md)
@@ -29,19 +29,19 @@ PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM
 
 ## نظرة عامة
 
-NeverD محرك تحليل وفك ترجمة للثنائيات الأصلية والعقود الذكية مبني حول **رفع التعليمات 1:1**. يحمّل **PE** و**ELF** و**Mach-O** وبرامج Solana **SBF ELF**. تفك الأهداف الأصلية بواسطة [Capstone](https://www.capstone-engine.org/)، بينما يستخدم SBF decoder مخصصاً واعياً بالإصدار وIR مرحلياً. تستخدم كل المسارات دلالات مكتوبة يدوياً لا ترجمة تقريبية. تحافظ التعليمات المدعومة على السلوك في **LLVM IR** أو **C منظّم** أو **Rust مستقر وآمن لـSBF** أو **ثنائي أصلي معاد كتابته**.
+NeverD محرك تحليل وفك ترجمة للبرامج الأصلية والعقود الذكية مبني على **رفع التعليمات 1:1**. يحمّل **PE** و**ELF** و**Mach-O** وبايت كود **EVM** التقليدي وبرامج Solana **SBF ELF**. تستخدم الأهداف الأصلية [Capstone](https://www.capstone-engine.org/)، بينما يملك EVM وSBF decoders واعية بالإصدار وIR مرحليًا. كل المسارات ذات دلالات مكتوبة يدويًا. تحافظ التعليمات على السلوك في **LLVM IR** و**C** و**Rust لـSBF** و**إعادة بناء Solidity لـEVM** أو **ثنائي أصلي معاد كتابته**.
 
 وضع strict **مفعّل افتراضيًا**. تعليمة بلا lifter ترمي `UnliftedInstruction` بدل التخطي أو التخمين أو إصدار `NOP` صامت.
 
 CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخدمون محركًا واحدًا — **`libneverd`** — عبر **واجهة C خالصة**. لا يربطون Capstone أو LLVM أو C++ الداخلي مباشرة.
 
-فك ترجمة Solana SBF متاح الآن؛ راجع [دليل SBF](../sbf.ar.md). تُتابع الأهداف الأخرى وأعمال التقوية في [خارطة الطريق](../roadmap/README.ar.md).
+توثق أدلة [EVM](../evm.ar.md) و[Solana SBF](../sbf.ar.md) صيغ الإدخال وعقود host والحدود.
 
 ## لماذا NeverD؟
 
 - **دلالات 1:1** — lifter مكتوب يدويًا؛ العمليات غير المدعومة ترمي استثناءً في strict الافتراضي
 - **صديق لنماذج LLM** — C منظّم وLLVM IR وتحليل JSON عبر واجهة C خالصة، بأخطاء حتمية
-- **خط أنابيب واحد، مخارج متعددة** — `lift` → LLVM IR · `decompile` → C/Rust · `patch` → ثنائي أصلي معاد كتابته
+- **خط أنابيب واحد، مخارج متعددة** — `lift` → LLVM IR · `decompile` → C/Solidity/Rust · `patch` → ثنائي أصلي معاد كتابته
 - **إعادة كتابة الثنائي** — PE / ELF / Mach-O بقفزات section أو overwrite inplace
 - **مجموعة أدوات التحليل** — CLI، معلومات تصحيح، توقيعات، إضافات، وتمريرات تشويش اختيارية
 
@@ -54,6 +54,10 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > نُفّذت كل خلية في المصفوفة، لكن عمق اختبارات التكامل يختلف. راجع [مصفوفة تغطية المعمارية](../architecture.ar.md#support-and-test-depth). يستخدم Mach-O i386 كائنات `thin` قابلة لإعادة التموضع لأن macOS الحديث لا يستطيع ربط ملفات i386 التنفيذية التاريخية.
+
+يدعم بايت كود EVM التقليدي مستقلًا عن الحاويات الأصلية: تمر كل opcodes المخصصة
+وعددها 150 من Frontier إلى Fusaka عبر Low/Med/High IR وLLVM `i256` متحقق وC23
+`_BitInt(256)` وSolidity. راجع [فك تجميع EVM](../evm.ar.md).
 
 تستخدم برامج Solana SBF v0-v4 ELF loader صارماً مخصصاً، وmetadata ISA كاملة
 حسب الإصدار، وLow/Med/High IR، وLLVM متحققاً منه، وC11 محمولاً، وRust مستقراً
@@ -72,6 +76,12 @@ Binary (PE / ELF / Mach-O)
        ├─ decompile   MedIR → HighIR → C
        │              MedIR → LLVM IR → opt → C   (-llvm)
        └─ patch       MedIR → LLVM IR → codegen → binary
+
+EVM (raw / hex / compiler artifact)
+  → تطبيع runtime + decode واعٍ بالـhardfork
+  → EVM LowIR → EVM stack-SSA MedIR → EVM HighIR مستعاد
+       ├─ lift        → LLVM i256/i512 متحقق منه
+       └─ decompile   → C23 _BitInt(256) أو إعادة بناء Solidity
 
 Solana SBF ELF (v0-v4)
   → loader legacy/strict واعٍ بالإصدار + verifier
@@ -98,6 +108,11 @@ cmake --build build
 ./build/bin/neverd lift -o out.ll binary
 ./build/bin/neverd decompile -o out.c binary
 ./build/bin/neverd patch -hello -o patched binary
+
+# EVM
+./build/bin/neverd lift contract.evm -o contract.ll
+./build/bin/neverd decompile --language=c contract.evm -o contract.c
+./build/bin/neverd decompile --language=solidity contract.evm -o contract.sol
 
 # Solana SBF
 ./build/bin/neverd info program.so
@@ -186,7 +201,7 @@ neverd <command> [options] <binary>
 | الأمر | المخرج | الوصف |
 |-------|--------|--------|
 | `lift` | `.ll` | رفع إلى LLVM IR |
-| `decompile` | `.c` / `.rs` | C أو SBF Rust عبر `--language` |
+| `decompile` | `.c` / `.sol` / `.rs` | C أو Solidity لـEVM أو Rust لـSBF عبر `--language` |
 | `decompile -llvm` | `.c` | عبر LLVM IR + المحسّن |
 | `patch` | ثنائي | إعادة كتابة شفرة الآلة |
 
@@ -242,6 +257,10 @@ const char *c = neverd_decompile(s, 0x401000);
 neverd_free_string(c);
 neverd_session_destroy(s);
 ```
+
+يختار `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)` Solidity صراحة
+لـEVM، بينما يواصل `neverd_decompile_all` إخراج C. راجع
+[أمثلة C API لـEVM](../evm.ar.md#c-api).
 
 ابنِ إضافة المثال بـ`-DNEVERD_BUILD_PLUGINS=ON`. مسارات التحميل: `<neverd-dir>/plugins`، `~/.neverd/plugins`، `$NEVERD_PLUGIN_PATH`.
 

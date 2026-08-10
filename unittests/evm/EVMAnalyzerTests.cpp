@@ -223,18 +223,26 @@ TEST(EVMAnalyzer, LowersStackOperationsTo256BitSSA) {
   EXPECT_EQ(Block.Operations.back().Effect, EffectKind::StorageWrite);
 }
 
-TEST(EVMAnalyzer, PreservesOrthogonalMemoryAccessesInMediumIR) {
+TEST(EVMAnalyzer, PreservesOrthogonalSemanticPropertiesInMediumIR) {
   const std::vector<uint8_t> Code = {
       opcodeByte(Opcode::PUSH0),       opcodeByte(Opcode::PUSH0),
       opcodeByte(Opcode::PUSH0),       opcodeByte(Opcode::PUSH0),
-      opcodeByte(Opcode::EXTCODECOPY), opcodeByte(Opcode::STOP)};
+      opcodeByte(Opcode::EXTCODECOPY), opcodeByte(Opcode::CALLVALUE),
+      opcodeByte(Opcode::STOP)};
   auto Program = analyze(Code);
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
   const MedOperation &Copy = Program->Med.Blocks.front().Operations[4];
   EXPECT_EQ(Copy.Effect, EffectKind::ContextRead);
   EXPECT_EQ(Copy.MemoryAccess, MemoryAccessKind::Write);
-  EXPECT_NE(dumpMedIR(Program->Med).find("context.read, memory.write"),
+  EXPECT_EQ(Copy.CallValueAccess, CallValueAccessKind::None);
+  const MedOperation &Value = Program->Med.Blocks.front().Operations[5];
+  EXPECT_EQ(Value.Effect, EffectKind::ContextRead);
+  EXPECT_EQ(Value.StateAccess, StateAccessKind::Read);
+  EXPECT_EQ(Value.CallValueAccess, CallValueAccessKind::Read);
+  const std::string Dump = dumpMedIR(Program->Med);
+  EXPECT_NE(Dump.find("context.read, memory.write"), std::string::npos);
+  EXPECT_NE(Dump.find("context.read, state.read, callvalue.read"),
             std::string::npos);
 }
 
@@ -366,6 +374,27 @@ TEST(EVMAnalyzer, RecoversMutabilityFromCanonicalOpcodeMetadata) {
     ASSERT_EQ(Program->High.Functions.size(), 1u);
     EXPECT_EQ(Program->High.Functions.front().StateMutability, Case.Expected);
   }
+
+  // Canonical Solidity non-payable guard:
+  // CALLVALUE; DUP1; ISZERO; PUSH1 continuation; JUMPI; PUSH0; DUP1; REVERT.
+  // The guard itself is not a source-level msg.value read and must not turn an
+  // otherwise pure recovered body into view/payable.
+  constexpr uint8_t kGuardContinuation = 0x1f;
+  auto Guarded = dispatcherFor(Opcode::STOP, 0);
+  Guarded.resize(kFunctionEntry + 1);
+  Guarded.insert(Guarded.end(),
+                 {opcodeByte(Opcode::CALLVALUE), opcodeByte(Opcode::DUP1),
+                  opcodeByte(Opcode::ISZERO), opcodeByte(Opcode::PUSH1),
+                  kGuardContinuation, opcodeByte(Opcode::JUMPI),
+                  opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::DUP1),
+                  opcodeByte(Opcode::REVERT), opcodeByte(Opcode::JUMPDEST),
+                  opcodeByte(Opcode::POP), opcodeByte(Opcode::STOP)});
+  auto GuardedProgram = analyze(Guarded);
+  ASSERT_TRUE(static_cast<bool>(GuardedProgram))
+      << llvm::toString(GuardedProgram.takeError());
+  ASSERT_EQ(GuardedProgram->High.Functions.size(), 1u);
+  EXPECT_EQ(GuardedProgram->High.Functions.front().StateMutability,
+            Mutability::Pure);
 
   // A dynamic jump can reach code outside the recovered region. Do not claim
   // pure/view when the complete state-access set cannot be proven.

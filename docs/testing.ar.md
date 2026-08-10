@@ -41,6 +41,7 @@ cmake --build build-release --parallel 4
 | `unittests/libc` | `NeverDLibCTests` | أسماء libc المعروفة وتصنيفها |
 | `unittests/lift` | `NeverDLiftTests` | أشكال LowIR لـ decoder/lifter، ومراحل IR، وloader، وrelocation، وfixtures الصيغ، وإعادة التجميع، ومسارات patch الممثلة |
 | معظم ملفات `unittests/semantic` | `NeverDSemanticTests` | دلالات تفاضلية للتعليمات وABI والتحكم وتعابير C وlift/recompile |
+| `unittests/evm` | `NeverDEVMOpcodeTests` و`NeverDEVMBytecodeTests` و`NeverDEVMLoaderTests` و`NeverDEVMAnalyzerTests` و`NeverDEVMSemanticTests` و`NeverDEVMEmitterTests` و`NeverDEVMIntegrationTests` | metadata للـhardfork وتطبيع الإدخال وCFG/SSA والاستعادة ودلالات interpreter وتنفيذ LLVM/C/Solidity التفاضلي وتوجيه API العامة |
 | `unittests/sbf` | `NeverDSBFMetadataTests` و`NeverDSBFLoaderTests` و`NeverDSBFAnalyzerTests` و`NeverDSBFSemanticTests` و`NeverDSBFLLVMEmitterTests` و`NeverDSBFEmitterTests` و`NeverDSBFIntegrationTests` | بيانات v0-v4 الوصفية وتخطيطات ELF، والتحقق الصارم، وCFG/الاستعادة، والتنفيذ الخام المستقل، والتحقق من LLVM، وتجميع C/Rust، وتوجيه API العامة |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | تكافؤ إعادة الكتابة/التشويش عبر أربع ISA وثلاث صيغ كائنات |
 | ملفات التحويل المحددة في `unittests/semantic` | `NeverDSwitchXformTests` و`NeverDIndCallXformTests` و`NeverDCFGLoopXformTests` و`NeverDTwoTableXformTests` و`NeverDAvxUpperXformTests` | مجسات سريعة الربط منفصلة عن الثنائي الدلالي الكبير |
@@ -49,6 +50,7 @@ cmake --build build-release --parallel 4
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt) و
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) و
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) و
+[`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) و
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
 ## كيفية إنتاج fixtures
@@ -85,6 +87,18 @@ PE/COFF وصورًا مرتبطة، وكائنات Mach-O i386 ‏PIC/no-PIC. ع
 
 يجب أن يكون فشل NeverD الدلالي الحتمي اختبارًا فاشلًا. احصر skips في حدود قدرة
 خارجية صريحة واقرأ سببها: لا يثبت ملخص أخضر بلا cross-linker أن مسار الصيغة نُفذ.
+
+### واجهات EVM الخلفية التفاضلية
+
+توفر اختبارات interpreter لـEVM oracle حتميًا بعرض 256 بت. تبني suite الـemitter
+وتشغل LLVM، وتحوّل C23 عبر Clang إلى harness host نفسه، وعند توفر `solc` و`anvil`
+و`cast` و`jq` تنشر Solidity مولدًا إلى Anvil محلي. تقارن status وstorage وعدد
+تعليمات trace. ويشغل corpus raw-bytecode مستقل ALU قبل Fusaka ونسخ calldata/
+memory و`MCOPY` المتداخل وKeccak وreturn data في EVM الأصلي لـAnvil.
+
+يفرض `NeverDEVMOpcodeTests` بنية metadata أيضًا: تدور كل 150 opcode بين encoding
+وtyped value، وتُختبر حدود العائلات وaliases للـhardfork، وتبقى maxima لعقد stack
+وhost arguments مشتقة بدل تكرارها في backends.
 
 ### واجهات Solana SBF الخلفية التفاضلية
 
@@ -138,6 +152,14 @@ cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
 
+# جميع أهداف/حالات EVM المحددة
+cmake --build build-release --target \
+  NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
+  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'EVM' --output-on-failure --parallel 4
+
 # جميع أهداف/حالات Solana SBF المحددة
 cmake --build build-release --target \
   NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
@@ -184,6 +206,7 @@ ctest --test-dir build-release --build-config Release \
 | Rewrite codegen أو relocation الإخراج | حالات `RewriteCodegenRTTests` | `NeverDPatchFullTests` وfixture ‏patch مرتبطة عند توفرها |
 | تحويل LLVM IR يستخدمه patch | ثنائي التحويل المحدد | شبكة pass المركبة لـ `NeverDPatchFullTests` |
 | C API أو CLI | اختبار SDK/query مباشر و`unittests/semantic/CLIEndToEndTests.cpp` | مجموعة pipeline/صيغة ذات الصلة |
+| ‏EVM loader أو opcode أو IR أو backend | أصغر هدف مالك من `NeverDEVM*Tests` | جميع أهداف EVM مع فحوص تجميع C/Solidity المولدين |
 | ‏SBF loader أو ISA أو IR أو backend | أصغر هدف مالك من `NeverDSBF*Tests` | جميع أهداف SBF مع فحوص تجميع C/Rust المولدين |
 | تعرف libc | `NeverDLibCTests` | حالات call/ABI دلالية إذا تغير السلوك |
 | تنفيذ العمليات أو quoting | `NeverDTestProcessTests` | حالة CLI/دلالية متأثرة على كل مضيف مدعوم |

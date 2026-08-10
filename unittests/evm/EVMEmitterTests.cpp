@@ -12,6 +12,7 @@
 #include "neverd/evm/LLVMEmitter.h"
 #include "neverd/evm/SolidityEmitter.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
@@ -23,11 +24,19 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <utility>
 
 namespace neverd::evm {
 namespace {
 
 inline constexpr unsigned kSStoreValueArgumentIndex = 1;
+inline constexpr unsigned kAnvilBasePort = 28545;
+inline constexpr unsigned kAnvilPortSpan = 10000;
+inline constexpr uint8_t kDifferentialMemoryOffset = 1;
+inline constexpr llvm::StringLiteral kAnvilPrivateKey =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+inline constexpr llvm::StringLiteral kAnvilTestAddress =
+    "0x1000000000000000000000000000000000000000";
 
 TEST(EVMLLVMEmitter, ProducesVerifiedI256StateMachine) {
   const std::vector<uint8_t> Code = {
@@ -104,7 +113,7 @@ void appendPush(std::vector<uint8_t> &Code, const llvm::APInt &Value) {
         Value.extractBitsAsZExtValue(kBitsPerByte, (I - 1) * kBitsPerByte)));
 }
 
-std::vector<uint8_t> differentialALUProgram() {
+std::vector<uint8_t> differentialALUProgram(bool IncludeFusaka = true) {
   // Fold every scalar ALU family into one observable storage word. Inputs hit
   // non-commutative, signed, overflow, zero-divisor, saturated-shift, byte,
   // wide modular, exponent, and Fusaka CLZ behavior in all three backends.
@@ -187,14 +196,55 @@ std::vector<uint8_t> differentialALUProgram() {
   Binary(Opcode::SHR, llvm::APInt(kWordBits, kWordBits), Max);
   Binary(Opcode::SAR, llvm::APInt(kWordBits, kWordBits), One);
   Binary(Opcode::SAR, llvm::APInt(kWordBits, kWordBits), NegativeOne);
-  Unary(Opcode::CLZ, Zero);
-  Unary(Opcode::CLZ, One);
-  Unary(Opcode::CLZ, SignedMin);
+  if (IncludeFusaka) {
+    Unary(Opcode::CLZ, Zero);
+    Unary(Opcode::CLZ, One);
+    Unary(Opcode::CLZ, SignedMin);
+  }
 
   appendPush(Code, Zero);
   Code.push_back(opcodeByte(Opcode::SSTORE));
   Code.push_back(opcodeByte(Opcode::STOP));
   return Code;
+}
+
+std::vector<uint8_t> differentialMemoryProgram() {
+  static_assert(kWordBytes <= kByteMax);
+  return {
+      opcodeByte(Opcode::CALLDATASIZE), opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH0),        opcodeByte(Opcode::CALLDATACOPY),
+      opcodeByte(Opcode::CALLDATASIZE), opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::PUSH1),        kDifferentialMemoryOffset,
+      opcodeByte(Opcode::MCOPY),        opcodeByte(Opcode::CALLDATASIZE),
+      opcodeByte(Opcode::PUSH1),        kDifferentialMemoryOffset,
+      opcodeByte(Opcode::SHA3),         opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::MSTORE),       opcodeByte(Opcode::PUSH1),
+      static_cast<uint8_t>(kWordBytes), opcodeByte(Opcode::PUSH0),
+      opcodeByte(Opcode::RETURN),
+  };
+}
+
+std::string bytecodeHex(llvm::ArrayRef<uint8_t> Code) {
+  std::string Result = "0x";
+  Result.reserve(Result.size() + Code.size() * kHexDigitsPerByte);
+  for (uint8_t Byte : Code)
+    Result += llvm::utohexstr(Byte, /*LowerCase=*/true, kHexDigitsPerByte);
+  return Result;
+}
+
+std::string wordHex(const llvm::APInt &Value) {
+  llvm::SmallString<kWordBytes * kHexDigitsPerByte> Digits;
+  Value.toStringUnsigned(Digits, kHexRadix);
+  const std::string LowerDigits = Digits.str().lower();
+  return "0x" +
+         std::string(kWordBytes * kHexDigitsPerByte - LowerDigits.size(), '0') +
+         LowerDigits;
+}
+
+unsigned anvilPort(const std::filesystem::path &UniquePath) {
+  return kAnvilBasePort +
+         static_cast<unsigned>(std::hash<std::string>{}(UniquePath.string()) %
+                               kAnvilPortSpan);
 }
 
 TEST(EVMEmitters, ProduceValidEmptyPrograms) {
@@ -463,6 +513,93 @@ TEST(EVMCEmitter, ExecutesDifferentiallyAgainstInterpreter) {
   std::filesystem::remove(ExecutablePath, EC);
 }
 
+TEST(EVMInterpreter, MatchesCanonicalLegacyALUAndMemoryOnAnvil) {
+#if defined(_WIN32)
+  GTEST_SKIP() << "Anvil differential test requires a POSIX shell";
+#else
+  if (std::system("command -v anvil >/dev/null 2>&1 && "
+                  "command -v cast >/dev/null 2>&1 && "
+                  "command -v jq >/dev/null 2>&1") != 0)
+    GTEST_SKIP() << "anvil, cast, or jq is unavailable";
+
+  // The installed external EVM may predate Fusaka, so this independent oracle
+  // covers the complete pre-Fusaka scalar ALU and leaves CLZ to the dedicated
+  // Fusaka vectors plus the three generated-backend differential tests.
+  const std::vector<uint8_t> Code = differentialALUProgram(false);
+  AnalyzeOptions Options;
+  Options.Fork = Hardfork::Cancun;
+  auto Program = analyze(Code, Options);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  auto Oracle = execute(Program->Low);
+  ASSERT_TRUE(static_cast<bool>(Oracle)) << llvm::toString(Oracle.takeError());
+  const auto Stored = Oracle->Storage.find(llvm::APInt(kWordBits, 0));
+  ASSERT_NE(Stored, Oracle->Storage.end());
+
+  const std::vector<uint8_t> MemoryCode = differentialMemoryProgram();
+  auto MemoryProgram = analyze(MemoryCode, Options);
+  ASSERT_TRUE(static_cast<bool>(MemoryProgram))
+      << llvm::toString(MemoryProgram.takeError());
+  const std::vector<uint8_t> Calldata = {0x00, 0x01, 0x7f, 0x80, 0xff, 0x42,
+                                         0x10, 0x20, 0x30, 0x40, 0x50};
+  ExecutionEnvironment Environment;
+  Environment.Calldata = Calldata;
+  auto MemoryOracle = execute(MemoryProgram->Low, std::move(Environment));
+  ASSERT_TRUE(static_cast<bool>(MemoryOracle))
+      << llvm::toString(MemoryOracle.takeError());
+  ASSERT_EQ(MemoryOracle->Status, ExecutionStatus::Returned);
+  ASSERT_EQ(MemoryOracle->ReturnData.size(), kWordBytes);
+
+  const auto MarkerPath = writeTemporarySource("-raw-anvil", "");
+  const unsigned Port = anvilPort(MarkerPath);
+  const std::string URL = "http://127.0.0.1:" + std::to_string(Port);
+  const std::string Runtime = bytecodeHex(Code);
+  const std::string Expected = wordHex(Stored->second);
+  const std::string MemoryRuntime = bytecodeHex(MemoryCode);
+  const std::string CalldataHex = bytecodeHex(Calldata);
+  const std::string ExpectedReturn = bytecodeHex(MemoryOracle->ReturnData);
+  const std::string Command =
+      "set -eu; anvil --silent --port " + std::to_string(Port) +
+      " >/dev/null 2>&1 & anvil_pid=$!; "
+      "trap 'kill $anvil_pid >/dev/null 2>&1 || true' EXIT; "
+      "ready=0; for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 "
+      "17 18 19 20; do if cast block-number --rpc-url '" +
+      URL +
+      "' >/dev/null 2>&1; then ready=1; break; fi; sleep 0.1; done; "
+      "test $ready -eq 1; "
+      "cast rpc anvil_setCode '" +
+      kAnvilTestAddress.str() + "' '" + Runtime + "' --rpc-url '" + URL +
+      "' >/dev/null; "
+      "receipt=$(cast send '" +
+      kAnvilTestAddress.str() + "' 0x --rpc-url '" + URL + "' --private-key '" +
+      kAnvilPrivateKey.str() +
+      "' --json); "
+      "status=$(printf '%s' \"$receipt\" | jq -r .status); "
+      "if test \"$status\" != 0x1; then printf 'transaction status: %s\\n' "
+      "\"$status\" >&2; exit 1; fi; "
+      "value=$(cast storage '" +
+      kAnvilTestAddress.str() + "' 0 --rpc-url '" + URL +
+      "'); "
+      "if test \"$value\" != '" +
+      Expected + "'; then printf 'storage: expected %s, got %s\\n' '" +
+      Expected +
+      "' \"$value\" >&2; exit 1; fi; "
+      "cast rpc anvil_setCode '" +
+      kAnvilTestAddress.str() + "' '" + MemoryRuntime + "' --rpc-url '" + URL +
+      "' >/dev/null; "
+      "actual=$(cast call '" +
+      kAnvilTestAddress.str() + "' '" + CalldataHex + "' --rpc-url '" + URL +
+      "'); "
+      "if test \"$actual\" != '" +
+      ExpectedReturn + "'; then printf 'return: expected %s, got %s\\n' '" +
+      ExpectedReturn + "' \"$actual\" >&2; exit 1; fi;";
+  EXPECT_EQ(std::system(Command.c_str()), 0);
+
+  std::error_code EC;
+  std::filesystem::remove(MarkerPath, EC);
+#endif
+}
+
 TEST(EVMSolidityEmitter, ProducesCompilableRecoveredContractAndStateMachine) {
   const std::vector<uint8_t> Code = {
       0x60, 0x00, 0x35, 0x60, 0xe0, 0x1c, 0x80, 0x63, 0x12, 0x34,
@@ -492,6 +629,19 @@ TEST(EVMSolidityEmitter, ProducesCompilableRecoveredContractAndStateMachine) {
   EXPECT_EQ(std::system(Command.c_str()), 0);
   std::error_code EC;
   std::filesystem::remove(Path, EC);
+}
+
+TEST(EVMSolidityEmitter, EmitsRecoveredPayabilityIndependentlyOfStateAccess) {
+  EVMProgram Program;
+  RecoveredFunction Function;
+  Function.Name = "payable_entry";
+  Function.StateMutability = Mutability::Payable;
+  Program.High.Functions.push_back(std::move(Function));
+
+  auto Source = emitSolidity(Program);
+  ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
+  EXPECT_NE(Source->find("function payable_entry() external payable virtual;"),
+            std::string::npos);
 }
 
 TEST(EVMSolidityEmitter, StopsOnFalseTerminalJumpWithoutJumpDestinations) {
@@ -564,12 +714,8 @@ TEST(EVMSolidityEmitter, ExecutesDifferentiallyOnAnvil) {
       SourcePath.parent_path() / (SourcePath.stem().string() + "-artifacts");
   std::filesystem::create_directories(ArtifactDirectory);
   const auto BinaryPath = ArtifactDirectory / "NeverDDifferentialHarness.bin";
-  const unsigned Port =
-      28545u + static_cast<unsigned>(
-                   std::hash<std::string>{}(SourcePath.string()) % 10000u);
+  const unsigned Port = anvilPort(SourcePath);
   const std::string URL = "http://127.0.0.1:" + std::to_string(Port);
-  constexpr llvm::StringLiteral PrivateKey(
-      "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
   llvm::SmallString<80> StoredDecimal;
   Stored->second.toStringUnsigned(StoredDecimal, 10);
 
@@ -589,11 +735,11 @@ TEST(EVMSolidityEmitter, ExecutesDifferentiallyOnAnvil) {
       BinaryPath.string() +
       "'); "
       "address=$(cast send --rpc-url '" +
-      URL + "' --private-key '" + PrivateKey.str() +
+      URL + "' --private-key '" + kAnvilPrivateKey.str() +
       "' --create \"$deploy_bin\" --json | jq -r .contractAddress); "
       "test \"$address\" != null; "
       "receipt=$(cast send \"$address\" 'execute(bytes)' 0x --rpc-url '" +
-      URL + "' --private-key '" + PrivateKey.str() +
+      URL + "' --private-key '" + kAnvilPrivateKey.str() +
       "' --json); "
       "status=$(printf '%s' \"$receipt\" | jq -r .status); "
       "if test \"$status\" != 0x1; then printf 'transaction status: %s\\n' "

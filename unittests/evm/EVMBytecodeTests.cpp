@@ -68,6 +68,18 @@ TEST(EVMBytecode, PrefersDeployedBytecodeFromCompilerArtifacts) {
   EXPECT_FALSE(Loaded->RuntimeExtracted);
 }
 
+TEST(EVMBytecode, IgnoresEmptyRuntimeFieldsInCompilerArtifacts) {
+  constexpr llvm::StringLiteral Artifact = R"json({
+    "bytecode": {"object": "0x6000"},
+    "deployedBytecode": {"object": "0x"}
+  })json";
+  auto Loaded = decodeBytecodeInput(Artifact, "CreationOnly.json");
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  EXPECT_EQ(Loaded->Code, (std::vector<uint8_t>{0x60, 0x00}));
+  EXPECT_EQ(Loaded->Source, BytecodeSourceKind::Artifact);
+  EXPECT_FALSE(Loaded->RuntimeExtracted);
+}
+
 TEST(EVMBytecode, SelectsAContractFromSolcStandardJson) {
   constexpr llvm::StringLiteral Artifact = R"json({
     "contracts": {"src/C.sol": {"Counter": {"evm": {
@@ -152,6 +164,17 @@ TEST(EVMBytecode, DoesNotExtractRuntimeModifiedAfterCodecopy) {
   ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
   EXPECT_FALSE(Loaded->RuntimeExtracted);
   EXPECT_EQ(Loaded->Code.size(), Creation.size() / kHexDigitsPerByte);
+}
+
+TEST(EVMBytecode, DoesNotMistakeRuntimeCodecopyForConstructorWrapper) {
+  // This executable program returns a byte copied from the beginning of its
+  // own code. A constructor wrapper must copy an embedded runtime located
+  // after the wrapper's terminal RETURN, not reinterpret earlier code.
+  constexpr llvm::StringLiteral Runtime = "600160005f3960015ff3";
+  auto Loaded = decodeBytecodeInput(Runtime, "runtime-codecopy.hex");
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  EXPECT_FALSE(Loaded->RuntimeExtracted);
+  EXPECT_EQ(Loaded->Code.size(), Runtime.size() / kHexDigitsPerByte);
 }
 
 TEST(EVMBytecode, RuntimeExtractionStopsAtTheFirstTerminalInstruction) {

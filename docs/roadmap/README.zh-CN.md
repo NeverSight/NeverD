@@ -30,7 +30,7 @@
 
 ## 2. EVM 字节码反编译
 
-将 NeverD 从原生 ISA 扩展到 **以太坊虚拟机（EVM）** 合约字节码——把 EVM 操作码提升进同一 IR 栈，输出结构化 C / LLVM IR，服务审计与分析。
+将 NeverD 扩展到 **以太坊虚拟机（EVM）** 合约字节码——把 EVM 操作码提升进同一 IR 栈，输出 C、面向 Solidity 的源码与 LLVM IR，服务审计与分析。
 
 ### 目标
 
@@ -39,8 +39,13 @@
 - **栈与内存模型** — 将 EVM 栈机状态回收为 MedIR 变量 / 内存操作
 - **控制流恢复** — JUMP / JUMPI → CFG；尽量结构化为 HighIR
 - **存储与 calldata** — 建模 `SLOAD`/`SSTORE`、calldata、returndata 及常见 ABI 调用形态
-- **反编译输出** — 经现有 HighIR / LLVM-C 路径输出结构化 C（后续可考虑 Solidity 向视图）
+- **反编译输出** — 带显式 host-effect 契约的可编译 C23 与 Solidity 状态机，以及已验证 LLVM IR
 - **CLI / C API** — `neverd decompile` / session API 对 EVM 输入与原生二进制一致
+
+**状态：** 传统 EVM 字节码从 Frontier 到 Fusaka 已完成。实现覆盖全部 150 个已分配
+opcode、raw/hex/artifact 输入、creation-to-runtime 提取、CFG 与 stack-SSA 恢复、
+strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，以及与 Anvil 原生 EVM
+的独立差分执行。host ABI 与明确限制见 [EVM 反编译](../evm.zh-CN.md)。
 
 ### 为什么做 EVM？
 
@@ -89,12 +94,12 @@
 
 ## 时间线
 
-Solana SBF 反编译与原生格式补齐已完成，并有回归测试覆盖。EVM 仍处于研究与设计阶段。不承诺具体发布日期；进展将在此文档跟踪。
+原生格式补齐、传统 EVM 与 Solana SBF 反编译均已完成，并有回归测试覆盖。不承诺具体发布日期。
 
 
 | 功能                          | 状态        |
 | --------------------------- | --------- |
 | 原生格式补齐（PE ARM*、Mach-O i386） | 已完成       |
-| EVM 字节码反编译                  | 研究 / 设计   |
+| EVM 字节码反编译                  | 已完成 — C、Solidity 与 LLVM；有回归测试覆盖 |
 | Solana eBPF（SBF）反编译         | 已完成 — v0-v4、C、Rust 与 LLVM；有回归测试覆盖 |
 | 引擎与产品加固                     | 持续进行      |

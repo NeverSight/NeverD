@@ -41,6 +41,7 @@ target 이름과 같은 CTest label을 지정합니다.
 | `unittests/libc` | `NeverDLibCTests` | 알려진 libc 이름과 분류 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 모양, IR 단계, loader, relocation, 포맷 fixture, 디컴파일, 대표 patch 흐름 |
 | `unittests/semantic`의 대부분 파일 | `NeverDSemanticTests` | 명령어, ABI, 제어 흐름, C 표현식, lift/recompile 차등 의미론 |
+| `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | hardfork metadata, input normalization, CFG/SSA/recovery, interpreter semantics, LLVM/C/Solidity differential execution, public API routing |
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4 메타데이터와 ELF 레이아웃, 엄격한 검증, CFG/복원, 독립 raw 실행, LLVM 검증, C/Rust 컴파일, 공개 API 라우팅 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 네 ISA×세 object 포맷 재작성/난독화 동등성 |
 | `unittests/semantic`의 집중 변환 파일 | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | 큰 의미론 바이너리에서 분리한 빠른 재링크 probe |
@@ -49,6 +50,7 @@ target 이름과 같은 CTest label을 지정합니다.
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt),
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
+[`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt),
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)입니다.
 
 ## fixture 생성 방식
@@ -87,6 +89,18 @@ patch-full fixture는 patch 작업과 같은 rewrite backend인
 결정적인 NeverD 의미론 실패는 실패 테스트여야 합니다. skip은 명시적인 외부 기능
 경계에만 사용하고 이유를 읽으세요. 교차 linker가 없는 녹색 요약은 해당 포맷 경로가
 실행되었음을 증명하지 않습니다.
+
+### EVM 차등 백엔드
+
+interpreter test는 deterministic 256-bit oracle입니다. emitter suite는 LLVM을
+compile/execute하고 C23을 Clang으로 같은 host harness에 lower하며 `solc`, `anvil`,
+`cast`, `jq`가 있으면 generated Solidity를 local node에 deploy합니다. status, storage,
+instruction trace count를 비교합니다. 별도 raw-bytecode corpus는 Anvil native EVM에서
+pre-Fusaka ALU, calldata/memory copy, overlapping `MCOPY`, Keccak, return data를 실행합니다.
+
+`NeverDEVMOpcodeTests`는 metadata architecture도 강제합니다. 150 opcode의
+encoding/typed-value roundtrip, family boundary, hardfork alias, derived stack/host
+maxima를 검증합니다.
 
 ### Solana SBF 차등 백엔드
 
@@ -140,6 +154,14 @@ cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
 
+# 모든 집중 EVM target/case
+cmake --build build-release --target \
+  NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
+  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'EVM' --output-on-failure --parallel 4
+
 # 모든 집중 Solana SBF target/case
 cmake --build build-release --target \
   NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
@@ -186,6 +208,7 @@ GoogleTest discovery는 `DISCOVERY_MODE PRE_TEST`를 사용하므로 CTest가 �
 | Rewrite codegen 또는 출력 relocation | `RewriteCodegenRTTests` 사례 | `NeverDPatchFullTests` 및 가능한 링크된 patch fixture |
 | patch가 쓰는 LLVM IR 변환 | 집중 변환 바이너리 | `NeverDPatchFullTests` 조합 pass grid |
 | C API 또는 CLI | 직접 SDK/query 테스트 및 `unittests/semantic/CLIEndToEndTests.cpp` | 관련 pipeline/포맷 스위트 |
+| EVM loader, opcode, IR 또는 backend | 가장 작은 소유 `NeverDEVM*Tests` target | 모든 EVM target과 생성 C/Solidity 컴파일 검사 |
 | SBF loader, ISA, IR 또는 backend | 가장 작은 소유 `NeverDSBF*Tests` target | 모든 SBF target과 생성 C/Rust 컴파일 검사 |
 | Libc 인식 | `NeverDLibCTests` | 동작 변경 시 의미론 call/ABI 사례 |
 | 프로세스 실행 또는 quoting | `NeverDTestProcessTests` | 지원 host마다 영향받는 CLI/의미론 사례 하나 |

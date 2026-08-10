@@ -36,7 +36,7 @@ historical i386 executables.
 
 ## 2. EVM bytecode decompilation
 
-Extend NeverD from native ISAs to **Ethereum Virtual Machine (EVM)** contract bytecode — lift EVM opcodes into the same IR stack and emit structured C / LLVM IR for audit and analysis.
+Extend NeverD from native ISAs to **Ethereum Virtual Machine (EVM)** contract bytecode — lift EVM opcodes into the same IR stack and emit C, Solidity-oriented source, and LLVM IR for audit and analysis.
 
 ### Goals
 
@@ -45,8 +45,19 @@ Extend NeverD from native ISAs to **Ethereum Virtual Machine (EVM)** contract by
 - **Stack & memory model** — recover EVM stack machine state into MedIR variables / memory ops
 - **Control-flow recovery** — JUMP / JUMPI → CFG; structured HighIR where possible
 - **Storage & calldata** — model `SLOAD`/`SSTORE`, calldata, returndata, and common ABI call patterns
-- **Decompile outputs** — structured C (and optional Solidity-oriented views later) via the existing HighIR / LLVM-C paths
+- **Decompile outputs** — compilable C23 and Solidity-oriented state machines,
+  with explicit host-effect contracts, plus verified LLVM IR
 - **CLI / C API** — `neverd decompile` / session APIs work on EVM inputs the same way as native binaries
+
+**Status:** Complete for legacy EVM bytecode from Frontier through Fusaka. The
+implementation covers all 150 assigned legacy opcodes, raw/hex/artifact inputs,
+creation-to-runtime extraction, CFG and stack-SSA recovery, strict and relaxed
+analysis, C23/LLVM/Solidity backends, and CLI/C API integration. The focused EVM
+suite includes interpreter-to-generated-C, LLVM, and deployed Solidity
+differential execution, plus an independent comparison against Anvil's native
+EVM. See [EVM decompilation](../evm.md) for the host
+ABI and the intentionally explicit limits around dynamic jumps, external host
+effects, heuristic high-level naming, and EOF bytecode.
 
 ### Why EVM in NeverD?
 
@@ -100,13 +111,13 @@ Cross-cutting work that unblocks the items above and improves today’s native e
 
 ## Timeline
 
-Solana SBF decompilation and native format completeness are complete and
-regression-covered. No release dates are committed. Progress will be tracked
-here.
+Native format completeness, legacy EVM decompilation, and Solana SBF
+decompilation are complete and regression-covered. No release dates are
+committed. Progress will be tracked here.
 
 | Feature | Status |
 |---------|--------|
 | Native format completeness (PE ARM*, Mach-O i386) | Complete — regression-covered |
-| EVM bytecode decompilation | Research / Design |
+| EVM bytecode decompilation | Complete — C, Solidity, and LLVM; regression-covered |
 | Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
 | Engine & product hardening | Ongoing |

@@ -6,7 +6,10 @@
 
 #include "neverd/evm/Interpreter.h"
 
+#include "neverd/evm/Semantics.h"
+
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -26,6 +29,11 @@ inline constexpr unsigned kKeccakRoundCount = 24;
 inline constexpr size_t kKeccak256RateBytes = 136;
 inline constexpr uint8_t kKeccakDomainSeparator = 0x01;
 inline constexpr uint8_t kKeccakFinalBit = 0x80;
+
+static_assert(kKeccak256RateBytes % sizeof(uint64_t) == 0,
+              "Keccak rate must contain complete lanes");
+static_assert(kWordBytes <= kKeccak256RateBytes,
+              "one Keccak squeeze must contain an EVM word");
 
 llvm::APInt zeroWord() { return llvm::APInt(kWordBits, 0); }
 llvm::APInt boolWord(bool Value) {
@@ -161,7 +169,7 @@ void wordToBytes(const llvm::APInt &Word, uint8_t *Output) {
 }
 
 void keccakF1600(std::array<uint64_t, kKeccakLaneCount> &State) {
-  static constexpr uint64_t RoundConstants[kKeccakRoundCount] = {
+  static constexpr uint64_t RoundConstants[] = {
       0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL,
       0x8000000080008000ULL, 0x000000000000808bULL, 0x0000000080000001ULL,
       0x8000000080008081ULL, 0x8000000000008009ULL, 0x000000000000008aULL,
@@ -170,9 +178,12 @@ void keccakF1600(std::array<uint64_t, kKeccakLaneCount> &State) {
       0x8000000000008003ULL, 0x8000000000008002ULL, 0x8000000000000080ULL,
       0x000000000000800aULL, 0x800000008000000aULL, 0x8000000080008081ULL,
       0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL};
-  static constexpr unsigned Rotation[kKeccakLaneCount] = {
-      0,  1,  62, 28, 27, 36, 44, 6,  55, 20, 3,  10, 43,
-      25, 39, 41, 45, 15, 21, 8,  18, 2,  61, 56, 14};
+  static constexpr unsigned Rotation[] = {0,  1, 62, 28, 27, 36, 44, 6,  55,
+                                          20, 3, 10, 43, 25, 39, 41, 45, 15,
+                                          21, 8, 18, 2,  61, 56, 14};
+
+  static_assert(std::size(RoundConstants) == kKeccakRoundCount);
+  static_assert(std::size(Rotation) == kKeccakLaneCount);
 
   for (uint64_t RC : RoundConstants) {
     uint64_t C[kKeccakDimension], D[kKeccakDimension], B[kKeccakLaneCount];
@@ -228,25 +239,6 @@ llvm::APInt keccak256(const uint8_t *Data, size_t Size) {
                                    ((I % sizeof(uint64_t)) * kBitsPerByte));
   }
   return Result;
-}
-
-llvm::APInt modularExponent(llvm::APInt Base, llvm::APInt Exponent) {
-  llvm::APInt Result(kWordBits, 1);
-  while (!Exponent.isZero()) {
-    if (Exponent[0])
-      Result *= Base;
-    Exponent.lshrInPlace(1);
-    Base *= Base;
-  }
-  return Result;
-}
-
-llvm::APInt signExtend(const llvm::APInt &ByteIndex, const llvm::APInt &Value) {
-  if (ByteIndex.uge(kWordBytes))
-    return Value;
-  const unsigned Width =
-      static_cast<unsigned>((ByteIndex.getZExtValue() + 1) * kBitsPerByte);
-  return Value.trunc(Width).sext(kWordBits);
 }
 
 llvm::APInt mapLookup(const WordMap &Map, const llvm::APInt &Key) {
@@ -427,164 +419,20 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
         if (!Fault)
           Result.Logs.push_back(std::move(Log));
       }
+    } else if (isALU(Instruction.Info)) {
+      llvm::SmallVector<llvm::APInt, kMaxALUStackInputs> Inputs;
+      Inputs.reserve(Instruction.Info.StackInputs);
+      for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
+        Inputs.push_back(Pop());
+      if (!Fault) {
+        auto Value = evaluateALU(Op, Inputs);
+        if (!Value)
+          Fail("scalar ALU semantics are not implemented");
+        else
+          Push(std::move(*Value));
+      }
     } else {
       switch (Op) {
-      case Opcode::ADD: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault)
-          Push(A + B);
-        break;
-      }
-      case Opcode::MUL: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault)
-          Push(A * B);
-        break;
-      }
-      case Opcode::SUB: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault)
-          Push(A - B);
-        break;
-      }
-      case Opcode::DIV: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault)
-          Push(B.isZero() ? zeroWord() : A.udiv(B));
-        break;
-      }
-      case Opcode::SDIV: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault) {
-          if (B.isZero())
-            Push(zeroWord());
-          else if (A.isMinSignedValue() && B.isAllOnes())
-            Push(A);
-          else
-            Push(A.sdiv(B));
-        }
-        break;
-      }
-      case Opcode::MOD: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault)
-          Push(B.isZero() ? zeroWord() : A.urem(B));
-        break;
-      }
-      case Opcode::SMOD: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault) {
-          if (B.isZero() || (A.isMinSignedValue() && B.isAllOnes()))
-            Push(zeroWord());
-          else
-            Push(A.srem(B));
-        }
-        break;
-      }
-      case Opcode::ADDMOD:
-      case Opcode::MULMOD: {
-        llvm::APInt A = Pop(), B = Pop(), Modulus = Pop();
-        if (!Fault) {
-          if (Modulus.isZero()) {
-            Push(zeroWord());
-          } else {
-            llvm::APInt WideModulus = Modulus.zext(kWideWordBits);
-            llvm::APInt Wide =
-                Op == Opcode::ADDMOD
-                    ? A.zext(kWideWordBits) + B.zext(kWideWordBits)
-                    : A.zext(kWideWordBits) * B.zext(kWideWordBits);
-            Push(Wide.urem(WideModulus).trunc(kWordBits));
-          }
-        }
-        break;
-      }
-      case Opcode::EXP: {
-        llvm::APInt Base = Pop(), Exponent = Pop();
-        if (!Fault)
-          Push(modularExponent(std::move(Base), std::move(Exponent)));
-        break;
-      }
-      case Opcode::SIGNEXTEND: {
-        llvm::APInt Index = Pop(), Value = Pop();
-        if (!Fault)
-          Push(signExtend(Index, Value));
-        break;
-      }
-      case Opcode::LT:
-      case Opcode::GT:
-      case Opcode::SLT:
-      case Opcode::SGT:
-      case Opcode::EQ: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault) {
-          bool Value = Op == Opcode::LT    ? A.ult(B)
-                       : Op == Opcode::GT  ? A.ugt(B)
-                       : Op == Opcode::SLT ? A.slt(B)
-                       : Op == Opcode::SGT ? A.sgt(B)
-                                           : A == B;
-          Push(boolWord(Value));
-        }
-        break;
-      }
-      case Opcode::ISZERO: {
-        llvm::APInt A = Pop();
-        if (!Fault)
-          Push(boolWord(A.isZero()));
-        break;
-      }
-      case Opcode::AND:
-      case Opcode::OR:
-      case Opcode::XOR: {
-        llvm::APInt A = Pop(), B = Pop();
-        if (!Fault)
-          Push(Op == Opcode::AND ? A & B : Op == Opcode::OR ? A | B : A ^ B);
-        break;
-      }
-      case Opcode::NOT: {
-        llvm::APInt A = Pop();
-        if (!Fault)
-          Push(~A);
-        break;
-      }
-      case Opcode::BYTE: {
-        llvm::APInt Index = Pop(), Value = Pop();
-        if (!Fault) {
-          if (Index.uge(kWordBytes))
-            Push(zeroWord());
-          else
-            Push(llvm::APInt(
-                kWordBits,
-                Value.extractBitsAsZExtValue(
-                    kBitsPerByte, static_cast<unsigned>(
-                                      (kWordBytes - 1 - Index.getZExtValue()) *
-                                      kBitsPerByte))));
-        }
-        break;
-      }
-      case Opcode::SHL:
-      case Opcode::SHR:
-      case Opcode::SAR: {
-        llvm::APInt Shift = Pop(), Value = Pop();
-        if (!Fault) {
-          if (Shift.uge(kWordBits))
-            Push(Op == Opcode::SAR && Value.isNegative()
-                     ? llvm::APInt::getAllOnes(kWordBits)
-                     : zeroWord());
-          else {
-            unsigned Amount = static_cast<unsigned>(Shift.getZExtValue());
-            Push(Op == Opcode::SHL   ? Value.shl(Amount)
-                 : Op == Opcode::SHR ? Value.lshr(Amount)
-                                     : Value.ashr(Amount));
-          }
-        }
-        break;
-      }
-      case Opcode::CLZ: {
-        llvm::APInt Value = Pop();
-        if (!Fault)
-          Push(llvm::APInt(kWordBits, Value.countl_zero()));
-        break;
-      }
       case Opcode::SHA3: {
         llvm::APInt OffsetWord = Pop(), SizeWord = Pop();
         size_t Offset = 0, Size = 0, End = 0;

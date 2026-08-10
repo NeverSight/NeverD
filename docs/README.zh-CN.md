@@ -12,7 +12,8 @@
 | [贡献指南](i18n/CONTRIBUTING.zh-CN.md) | 开发环境、构建配置、工作流、风格与 PR 要求 |
 | [架构](architecture.zh-CN.md) | IR 路径、组件边界、严格提升、支持深度与修改位置 |
 | [测试](testing.zh-CN.md) | 测试套件、生成 fixture、Unicorn 往返与增量命令 |
+| [EVM 反编译](evm.zh-CN.md) | EVM 输入、硬分叉、分级 IR、C/LLVM host ABI、Solidity 重建与限制 |
 | [Solana SBF 反编译](sbf.zh-CN.md) | SBF v0-v4、LLVM IR、C/Rust 输出、验证与已知限制 |
-| [路线图](roadmap/README.zh-CN.md) | 当前状态、后续目标与原生格式补齐计划 |
+| [路线图](roadmap/README.zh-CN.md) | 状态：原生格式、EVM 与 Solana SBF 均已实现 |
 | [English README](../README.md) | 英文版主文档 |
 | [其他语言 README](i18n/) | 其余本地化版本 |

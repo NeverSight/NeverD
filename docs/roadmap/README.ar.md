@@ -28,11 +28,16 @@
 
 ## 2. إعادة تجميع بايتكود EVM
 
-توسيع NeverD إلى **بايتكود EVM** برفع 1:1 إلى نفس مكدس IR.
+توسيع NeverD إلى **بايتكود EVM** برفع 1:1 إلى نفس مكدس IR وإخراج C وSolidity وLLVM IR.
 
 ### الأهداف
 
-- محمّل EVM · lifter أكواد 1:1 (strict) · مكدس/ذاكرة · JUMP/JUMPI → CFG · تخزين/calldata · HighIR/LLVM-C · CLI/C API موحّدة
+- محمّل EVM · lifter أكواد 1:1 (strict) · مكدس/ذاكرة · JUMP/JUMPI → CFG · تخزين/calldata · C23 وSolidity وLLVM · CLI/C API موحّدة
+
+**الحالة:** مكتمل لبايت كود EVM التقليدي من Frontier حتى Fusaka: كل 150 opcode
+مخصصة، ومدخلات raw/hex/artifact، واستخراج runtime، وCFG وstack-SSA، وتحليل
+strict/relaxed، وbackends C23/LLVM/Solidity، وتكامل CLI/C API، واختبارات تفاضلية
+مقابل Anvil. راجع [فك تجميع EVM](../evm.ar.md) لعقود host والحدود الصريحة.
 
 ### لماذا EVM
 
@@ -69,11 +74,11 @@
 
 ## الجدول الزمني
 
-اكتمل تفكيك Solana SBF واكتمال الصيغ الأصلية وتغطيهما اختبارات انحدار. يبقى EVM في مرحلة البحث / التصميم. لا تواريخ ملزمة.
+اكتملت الصيغ الأصلية وفك تجميع EVM وSolana SBF وتغطيها اختبارات انحدار. لا تواريخ ملزمة.
 
 | الميزة | الحالة |
 |--------|--------|
 | اكتمال الصيغ الأصلية (PE ARM*، Mach-O i386) | مكتمل |
-| إعادة تجميع EVM | بحث / تصميم |
+| إعادة تجميع EVM | مكتمل — C وSolidity وLLVM؛ مغطى باختبارات انحدار |
 | إعادة تجميع Solana eBPF (SBF) | مكتمل — v0-v4 وC وRust وLLVM؛ مغطى باختبارات انحدار |
 | تعزيز المحرك والمنتج | مستمر |

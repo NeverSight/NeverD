@@ -28,7 +28,7 @@
 
 ## 2. EVM 位元組碼反編譯
 
-將 NeverD 從原生 ISA 擴展到 **以太坊虛擬機（EVM）** 合約位元組碼——把 EVM 操作碼提升進同一 IR 堆疊，輸出結構化 C / LLVM IR，服務稽核與分析。
+將 NeverD 擴展至 **以太坊虛擬機（EVM）** 合約位元組碼——把 EVM 操作碼提升至同一 IR 堆疊，輸出 C、面向 Solidity 的原始碼與 LLVM IR，服務稽核與分析。
 
 ### 目標
 
@@ -37,8 +37,14 @@
 - **堆疊與記憶體模型** — 將 EVM 堆疊機狀態回收為 MedIR 變數 / 記憶體操作
 - **控制流還原** — JUMP / JUMPI → CFG；盡量結構化為 HighIR
 - **儲存與 calldata** — 建模 `SLOAD`/`SSTORE`、calldata、returndata 及常見 ABI 呼叫形態
-- **反編譯輸出** — 經現有 HighIR / LLVM-C 路徑輸出結構化 C
+- **反編譯輸出** — 具明確 host-effect contract 的可編譯 C23 與 Solidity state machine，以及已驗證 LLVM IR
 - **CLI / C API** — 對 EVM 輸入與原生二進位一致
+
+**狀態：** 傳統 EVM 位元組碼從 Frontier 到 Fusaka 已完成。實作涵蓋全部 150 個
+assigned opcode、raw/hex/artifact 輸入、creation-to-runtime 擷取、CFG 與
+stack-SSA 復原、strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，
+以及與 Anvil 原生 EVM 的獨立差分執行。host ABI 與明確限制見
+[EVM 反編譯](../evm.zh-TW.md)。
 
 ### 為什麼做 EVM？
 
@@ -83,11 +89,11 @@
 
 ## 時間線
 
-Solana SBF 反編譯與原生格式補齊已完成，並有迴歸測試覆蓋。EVM 仍處於研究與設計階段。不承諾具體發布日期；進展將在此文件追蹤。
+原生格式補齊、傳統 EVM 與 Solana SBF 反編譯均已完成，並有迴歸測試覆蓋。不承諾具體發布日期。
 
 | 功能 | 狀態 |
 |------|------|
 | 原生格式補齊（PE ARM*、Mach-O i386） | 已完成 |
-| EVM 位元組碼反編譯 | 研究 / 設計 |
+| EVM 位元組碼反編譯 | 已完成 — C、Solidity 與 LLVM；有迴歸測試覆蓋 |
 | Solana eBPF（SBF）反編譯 | 已完成 — v0-v4、C、Rust 與 LLVM；有迴歸測試覆蓋 |
 | 引擎與產品加固 | 持續進行 |

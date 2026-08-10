@@ -28,11 +28,16 @@
 
 ## 2. EVM 바이트코드 디컴파일
 
-**EVM** 컨트랙트 바이트코드를 동일 IR 스택으로 1:1 리프트하고 구조화 C / LLVM IR를 출력합니다.
+**EVM** 컨트랙트 바이트코드를 동일 IR 스택으로 1:1 리프트하고 C, Solidity-oriented source, LLVM IR를 출력합니다.
 
 ### 목표
 
-- EVM loader, 1:1 opcode lifter (strict), 스택/메모리 모델, JUMP/JUMPI CFG, storage/calldata, 기존 HighIR/LLVM-C 경로, 통일 CLI/C API
+- EVM loader, 1:1 opcode lifter (strict), 스택/메모리, JUMP/JUMPI CFG, storage/calldata, C23/Solidity/LLVM, 통일 CLI/C API
+
+**상태:** Frontier부터 Fusaka legacy EVM을 완료했습니다. 150 assigned opcode,
+raw/hex/artifact input, runtime extraction, CFG/stack-SSA, strict/relaxed analysis,
+C23/LLVM/Solidity backend, CLI/C API, Anvil differential을 포함합니다. host ABI와
+제한은 [EVM 디컴파일](../evm.ko.md)을 참고하세요.
 
 ### 왜 EVM인가
 
@@ -69,11 +74,11 @@
 
 ## 일정
 
-Solana SBF 디컴파일과 네이티브 포맷 완성은 구현 및 회귀 테스트가 완료되었습니다. EVM은 연구·설계 단계입니다. 출시일을 약속하지 않습니다.
+네이티브 포맷, EVM, Solana SBF 디컴파일은 구현 및 회귀 테스트가 완료되었습니다. 출시일을 약속하지 않습니다.
 
 | 기능 | 상태 |
 |------|------|
 | 네이티브 포맷 완성 (PE ARM*, Mach-O i386) | 완료 |
-| EVM 바이트코드 디컴파일 | 연구 / 설계 |
+| EVM 바이트코드 디컴파일 | 완료 — C, Solidity, LLVM; 회귀 테스트 완료 |
 | Solana eBPF (SBF) 디컴파일 | 완료 — v0-v4, C, Rust, LLVM; 회귀 테스트 완료 |
 | 엔진·제품 강화 | 지속 |

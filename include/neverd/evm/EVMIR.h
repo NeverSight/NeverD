@@ -157,9 +157,10 @@ struct MedOperation {
   std::string Name;
   std::vector<ValueID> Inputs;
   std::vector<ValueID> Outputs;
-  EffectKind Effect = EffectKind::None;
+  EffectKind Effect = EffectKind::Unknown;
   MemoryAccessKind MemoryAccess = MemoryAccessKind::Unknown;
   StateAccessKind StateAccess = StateAccessKind::Unknown;
+  CallValueAccessKind CallValueAccess = CallValueAccessKind::Unknown;
 };
 
 struct MedBlock {

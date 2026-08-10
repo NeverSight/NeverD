@@ -103,6 +103,12 @@ std::optional<llvm::StringRef> bytecodeObject(const llvm::json::Value *Value) {
   return std::nullopt;
 }
 
+bool hasHexPayload(llvm::StringRef Text) {
+  Text = Text.trim();
+  (void)(Text.consume_front("0x") || Text.consume_front("0X"));
+  return !Text.trim().empty();
+}
+
 struct ArtifactCandidate {
   std::string Contract;
   llvm::StringRef Text;
@@ -116,17 +122,17 @@ void appendContractCandidate(std::vector<ArtifactCandidate> &Candidates,
   const llvm::json::Object &Container = EVM ? *EVM : Object;
 
   if (auto Text = bytecodeObject(Container.get(kArtifactDeployedBytecodeKey));
-      Text && !Text->empty()) {
+      Text && hasHexPayload(*Text)) {
     Candidates.push_back({Contract.str(), *Text, true});
     return;
   }
   if (auto Text = bytecodeObject(Container.get(kArtifactRuntimeBytecodeKey));
-      Text && !Text->empty()) {
+      Text && hasHexPayload(*Text)) {
     Candidates.push_back({Contract.str(), *Text, true});
     return;
   }
   if (auto Text = bytecodeObject(Container.get(kArtifactBytecodeKey));
-      Text && !Text->empty())
+      Text && hasHexPayload(*Text))
     Candidates.push_back({Contract.str(), *Text, false});
 }
 
@@ -259,8 +265,12 @@ extractStaticRuntime(const std::vector<uint8_t> &Code) {
     if (Op == Opcode::RETURN) {
       const AbstractValue Offset = Pop();
       const AbstractValue Size = Pop();
+      // A static constructor wrapper copies an embedded runtime that follows
+      // its terminal RETURN. Requiring that provenance prevents ordinary
+      // runtime CODECOPY/RETURN logic from being destructively reclassified.
       if (Offset && Size && LastCopy && LastCopy->Destination == *Offset &&
-          LastCopy->Size == *Size && LastCopy->Source <= Code.size() &&
+          LastCopy->Size == *Size && LastCopy->Source >= PC &&
+          LastCopy->Source <= Code.size() &&
           LastCopy->Size <= Code.size() - LastCopy->Source) {
         const size_t Source = static_cast<size_t>(LastCopy->Source);
         const size_t Size = static_cast<size_t>(LastCopy->Size);

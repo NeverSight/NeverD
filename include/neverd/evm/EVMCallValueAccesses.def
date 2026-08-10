@@ -1,0 +1,21 @@
+//===- EVMCallValueAccesses.def - EVM call-value access -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. Call-value access is the
+// source-level payability constraint imposed by an opcode; it is independent
+// of state access and of the opcode's primary semantic effect.
+//
+// EVM_CALL_VALUE_ACCESS_KIND(NAME, SPELLING)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_CALL_VALUE_ACCESS_KIND
+#define EVM_CALL_VALUE_ACCESS_KIND(NAME, SPELLING)
+#endif
+
+EVM_CALL_VALUE_ACCESS_KIND(None, "callvalue.none")
+EVM_CALL_VALUE_ACCESS_KIND(Read, "callvalue.read")
+EVM_CALL_VALUE_ACCESS_KIND(Unknown, "callvalue.unknown")
+
+#undef EVM_CALL_VALUE_ACCESS_KIND

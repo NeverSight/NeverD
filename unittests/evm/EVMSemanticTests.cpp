@@ -8,6 +8,7 @@
 
 #include "neverd/evm/Analyzer.h"
 #include "neverd/evm/Interpreter.h"
+#include "neverd/evm/Semantics.h"
 
 #include "llvm/Support/Error.h"
 
@@ -29,6 +30,24 @@ ExecutionResult executeCode(const std::vector<uint8_t> &Code,
     return {};
   }
   return std::move(*Result);
+}
+
+TEST(EVMSemantics, EveryScalarALUHasOneSharedEvaluator) {
+  for (size_t Byte = 0; Byte < kOpcodeSpaceSize; ++Byte) {
+    const auto Info = assignedOpcodeInfo(static_cast<uint8_t>(Byte));
+    if (!Info || !isALU(*Info))
+      continue;
+    SCOPED_TRACE(Info->Name.str());
+    std::vector<llvm::APInt> Inputs(Info->StackInputs,
+                                    llvm::APInt(kWordBits, 0));
+    EXPECT_TRUE(evaluateALU(Info->Op, Inputs).has_value());
+  }
+
+  EXPECT_FALSE(evaluateALU(Opcode::SLOAD, {}).has_value());
+  EXPECT_FALSE(
+      evaluateALU(Opcode::ADD, {llvm::APInt(kWordBits, 0)}).has_value());
+  EXPECT_FALSE(
+      evaluateALU(Opcode::ISZERO, {llvm::APInt(kWordBits / 2, 0)}).has_value());
 }
 
 TEST(EVMInterpreter, ExecutesArithmeticStorageMemoryAndReturn) {

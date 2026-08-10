@@ -6,9 +6,11 @@
 
 #include "neverd/evm/Analyzer.h"
 
+#include "neverd/evm/Semantics.h"
+
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -34,6 +36,9 @@ inline constexpr size_t kErrorSelectorSearchWindow = 10;
 Mutability recoveredMutability(StateAccessKind Access, bool ReadsCallValue) {
   if (Access == StateAccessKind::Unknown)
     return Mutability::NonPayable;
+  // Solidity payability is orthogonal to its pure/view state-access lattice.
+  // An unguarded source-level CALLVALUE read cannot be declared pure, view, or
+  // nonpayable in modern Solidity, even when it performs no state writes.
   if (ReadsCallValue)
     return Mutability::Payable;
   switch (Access) {
@@ -71,126 +76,23 @@ std::string wordHex(const llvm::APInt &Value, unsigned MinDigits = 1) {
   return "0x" + wordHexDigits(Value, MinDigits);
 }
 
-Constant boolWord(bool Value) { return llvm::APInt(kWordBits, Value ? 1 : 0); }
-
-llvm::APInt modularExponent(llvm::APInt Base, llvm::APInt Exponent) {
-  llvm::APInt Result(kWordBits, 1);
-  while (!Exponent.isZero()) {
-    if (Exponent[0])
-      Result *= Base;
-    Exponent.lshrInPlace(1);
-    Base *= Base;
-  }
-  return Result;
-}
-
-llvm::APInt signExtend(const llvm::APInt &ByteIndex, const llvm::APInt &Value) {
-  if (ByteIndex.uge(kWordBytes))
-    return Value;
-  const unsigned Width =
-      static_cast<unsigned>((ByteIndex.getZExtValue() + 1) * kBitsPerByte);
-  return Value.trunc(Width).sext(kWordBits);
-}
-
 Constant evaluatePure(Opcode Op, llvm::ArrayRef<Constant> Inputs, uint64_t PC,
                       size_t CodeSize) {
-  const auto GetInput = [&](size_t Index) -> const llvm::APInt * {
-    if (Index >= Inputs.size() || !Inputs[Index].has_value())
-      return nullptr;
-    return &Inputs[Index].value();
-  };
   if (Op == Opcode::PC)
     return llvm::APInt(kWordBits, PC);
   if (Op == Opcode::CODESIZE)
     return llvm::APInt(kWordBits, CodeSize);
-  const llvm::APInt *A = GetInput(0);
-  if (!A)
+  const auto Info = assignedOpcodeInfo(Op);
+  if (!Info || !isALU(*Info))
     return std::nullopt;
-  if (Op == Opcode::ISZERO)
-    return boolWord(A->isZero());
-  if (Op == Opcode::NOT)
-    return ~*A;
-  if (Op == Opcode::CLZ)
-    return llvm::APInt(kWordBits, A->countl_zero());
-  const llvm::APInt *B = GetInput(1);
-  if (!B)
-    return std::nullopt;
-  switch (Op) {
-  case Opcode::ADD:
-    return *A + *B;
-  case Opcode::MUL:
-    return *A * *B;
-  case Opcode::SUB:
-    return *A - *B;
-  case Opcode::DIV:
-    return B->isZero() ? llvm::APInt(kWordBits, 0) : A->udiv(*B);
-  case Opcode::SDIV:
-    if (B->isZero())
-      return llvm::APInt(kWordBits, 0);
-    if (A->isMinSignedValue() && B->isAllOnes())
-      return *A;
-    return A->sdiv(*B);
-  case Opcode::MOD:
-    return B->isZero() ? llvm::APInt(kWordBits, 0) : A->urem(*B);
-  case Opcode::SMOD:
-    return B->isZero() || (A->isMinSignedValue() && B->isAllOnes())
-               ? llvm::APInt(kWordBits, 0)
-               : A->srem(*B);
-  case Opcode::ADDMOD:
-  case Opcode::MULMOD: {
-    const llvm::APInt *Modulus = GetInput(2);
-    if (!Modulus)
+  llvm::SmallVector<llvm::APInt, kMaxALUStackInputs> ConcreteInputs;
+  ConcreteInputs.reserve(Inputs.size());
+  for (const Constant &Input : Inputs) {
+    if (!Input)
       return std::nullopt;
-    if (Modulus->isZero())
-      return llvm::APInt(kWordBits, 0);
-    const llvm::APInt Wide =
-        Op == Opcode::ADDMOD ? A->zext(kWideWordBits) + B->zext(kWideWordBits)
-                             : A->zext(kWideWordBits) * B->zext(kWideWordBits);
-    return Wide.urem(Modulus->zext(kWideWordBits)).trunc(kWordBits);
+    ConcreteInputs.push_back(*Input);
   }
-  case Opcode::EXP:
-    return modularExponent(*A, *B);
-  case Opcode::SIGNEXTEND:
-    return signExtend(*A, *B);
-  case Opcode::LT:
-    return boolWord(A->ult(*B));
-  case Opcode::GT:
-    return boolWord(A->ugt(*B));
-  case Opcode::SLT:
-    return boolWord(A->slt(*B));
-  case Opcode::SGT:
-    return boolWord(A->sgt(*B));
-  case Opcode::EQ:
-    return boolWord(*A == *B);
-  case Opcode::AND:
-    return *A & *B;
-  case Opcode::OR:
-    return *A | *B;
-  case Opcode::XOR:
-    return *A ^ *B;
-  case Opcode::BYTE: {
-    if (A->uge(kWordBytes))
-      return llvm::APInt(kWordBits, 0);
-    const unsigned Shift = static_cast<unsigned>(
-        (kWordBytes - 1 - A->getZExtValue()) * kBitsPerByte);
-    return llvm::APInt(kWordBits,
-                       B->extractBitsAsZExtValue(kBitsPerByte, Shift));
-  }
-  case Opcode::SHL:
-    return A->uge(kWordBits) ? llvm::APInt(kWordBits, 0)
-                             : B->shl(static_cast<unsigned>(A->getZExtValue()));
-  case Opcode::SHR:
-    return A->uge(kWordBits)
-               ? llvm::APInt(kWordBits, 0)
-               : B->lshr(static_cast<unsigned>(A->getZExtValue()));
-  case Opcode::SAR:
-    return A->uge(kWordBits)
-               ? (B->isNegative() ? llvm::APInt::getAllOnes(kWordBits)
-                                  : llvm::APInt(kWordBits, 0))
-               : B->ashr(static_cast<unsigned>(A->getZExtValue()));
-  default:
-    return std::nullopt;
-  }
+  return evaluateALU(Op, ConcreteInputs);
 }
 
 struct BlockConstants {
@@ -445,6 +347,98 @@ std::set<uint64_t> reachableFrom(const EVMLowIR &Low, uint64_t Entry) {
   return Seen;
 }
 
+enum class PayabilityValueKind : uint8_t {
+  Other,
+  CallValue,
+  IsZeroCallValue,
+};
+
+struct PayabilityValue {
+  PayabilityValueKind Kind = PayabilityValueKind::Other;
+  uint64_t CallValuePC = 0;
+};
+
+/// Recognize Solidity's canonical non-payable modifier without relying on
+/// instruction adjacency. The condition must be ISZERO(CALLVALUE), with DUP
+/// and SWAP stack transport handled symbolically, and its false edge must end
+/// in REVERT. Returning the originating PC lets mutability recovery suppress
+/// only the compiler guard read rather than every CALLVALUE in the function.
+std::optional<uint64_t> nonPayableGuardCallValue(const EVMLowIR &Low,
+                                                 const LowBlock &Block) {
+  std::vector<PayabilityValue> Stack(Block.EntryStackHeight.value_or(0),
+                                     PayabilityValue{});
+  const auto Ensure = [&](size_t Count) {
+    while (Stack.size() < Count)
+      Stack.insert(Stack.begin(), PayabilityValue{});
+  };
+  const auto Pop = [&] {
+    PayabilityValue Value = Stack.back();
+    Stack.pop_back();
+    return Value;
+  };
+
+  for (size_t I = Block.FirstInstruction;
+       I < Block.FirstInstruction + Block.InstructionCount; ++I) {
+    const LowInstruction &Instruction = Low.Instructions[I];
+    if (!Instruction.isKnown())
+      return std::nullopt;
+    if (Instruction.isPush()) {
+      Stack.push_back({});
+      continue;
+    }
+    if (Instruction.isDup()) {
+      const size_t Depth = dupDepth(Instruction.opcode());
+      Ensure(Depth);
+      Stack.push_back(Stack[Stack.size() - Depth]);
+      continue;
+    }
+    if (Instruction.isSwap()) {
+      const size_t Depth = swapDepth(Instruction.opcode());
+      Ensure(Depth + 1);
+      std::swap(Stack.back(), Stack[Stack.size() - Depth - 1]);
+      continue;
+    }
+
+    Ensure(Instruction.Info.StackInputs);
+    std::vector<PayabilityValue> Inputs;
+    Inputs.reserve(Instruction.Info.StackInputs);
+    for (uint8_t Input = 0; Input < Instruction.Info.StackInputs; ++Input)
+      Inputs.push_back(Pop());
+
+    PayabilityValue Output;
+    if (Instruction.Info.CallValueAccess == CallValueAccessKind::Read) {
+      Output = {PayabilityValueKind::CallValue, Instruction.PC};
+    } else if (Instruction.is(Opcode::ISZERO) && !Inputs.empty() &&
+               Inputs.front().Kind == PayabilityValueKind::CallValue) {
+      Output = {PayabilityValueKind::IsZeroCallValue,
+                Inputs.front().CallValuePC};
+    }
+
+    if (Instruction.is(Opcode::JUMPI)) {
+      if (Inputs.size() <= 1 ||
+          Inputs[1].Kind != PayabilityValueKind::IsZeroCallValue)
+        return std::nullopt;
+      for (const LowEdge &Edge : Block.Successors) {
+        if (Edge.Kind != EdgeKind::ConditionalFalse || !Edge.Target)
+          continue;
+        const LowBlock *Failure = Low.findBlock(*Edge.Target);
+        if (!Failure || Failure->InstructionCount == 0)
+          continue;
+        const LowInstruction &Last =
+            Low.Instructions[Failure->FirstInstruction +
+                             Failure->InstructionCount - 1];
+        if (Last.is(Opcode::REVERT))
+          return Inputs[1].CallValuePC;
+      }
+      return std::nullopt;
+    }
+
+    for (uint8_t Result = 0; Result < Instruction.Info.StackOutputs; ++Result)
+      Stack.push_back(Result == 0 ? Output : PayabilityValue{});
+  }
+  return std::nullopt;
+}
+
 std::optional<llvm::APInt>
 precedingPush(const EVMLowIR &Low, size_t Index,
               size_t Window = kDefaultPrecedingPushWindow) {
@@ -643,6 +637,9 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
       Operation.StateAccess = Instruction.isKnown()
                                   ? Instruction.Info.StateAccess
                                   : StateAccessKind::Unknown;
+      Operation.CallValueAccess = Instruction.isKnown()
+                                      ? Instruction.Info.CallValueAccess
+                                      : CallValueAccessKind::Unknown;
 
       if (!Instruction.isKnown()) {
         Block.Operations.push_back(std::move(Operation));
@@ -782,6 +779,11 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
   for (auto &[Selector, Function] : Functions) {
     const std::set<uint64_t> FunctionBlocks =
         reachableFrom(Low, Function.EntryPC);
+    std::set<uint64_t> NonPayableGuardReads;
+    for (uint64_t BlockPC : FunctionBlocks)
+      if (const LowBlock *Block = Low.findBlock(BlockPC))
+        if (auto GuardRead = nonPayableGuardCallValue(Low, *Block))
+          NonPayableGuardReads.insert(*GuardRead);
     StateAccessKind StateAccess = StateAccessKind::None;
     bool ReadsCallValue = false;
     bool ReturnsWord = false;
@@ -795,10 +797,17 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
       for (size_t I = Block->FirstInstruction;
            I < Block->FirstInstruction + Block->InstructionCount; ++I) {
         const LowInstruction &Instruction = Low.Instructions[I];
-        StateAccess = mergeStateAccess(
-            StateAccess, Instruction.isKnown() ? Instruction.Info.StateAccess
-                                               : StateAccessKind::Unknown);
-        ReadsCallValue |= Instruction.is(Opcode::CALLVALUE);
+        const bool IsNonPayableGuardRead =
+            NonPayableGuardReads.contains(Instruction.PC);
+        StateAccessKind InstructionAccess = StateAccessKind::Unknown;
+        if (Instruction.isKnown())
+          InstructionAccess = IsNonPayableGuardRead
+                                  ? StateAccessKind::None
+                                  : Instruction.Info.StateAccess;
+        StateAccess = mergeStateAccess(StateAccess, InstructionAccess);
+        ReadsCallValue |=
+            !IsNonPayableGuardRead && Instruction.isKnown() &&
+            Instruction.Info.CallValueAccess == CallValueAccessKind::Read;
         if (Instruction.is(Opcode::CALLDATALOAD) && I > 0 &&
             Low.Instructions[I - 1].isPush()) {
           const auto Offset = asAddress(Low.Instructions[I - 1].Immediate);
@@ -950,18 +959,19 @@ std::string dumpMedIR(const EVMMedIR &Med) {
       OS << Operation.Name;
       for (ValueID Input : Operation.Inputs)
         OS << " %" << Input;
-      llvm::SmallVector<llvm::StringRef, 3> Effects;
+      bool HasAnnotation = false;
+      const auto EmitAnnotation = [&](llvm::StringRef Annotation) {
+        OS << (HasAnnotation ? ", " : " ; ") << Annotation;
+        HasAnnotation = true;
+      };
       if (Operation.Effect != EffectKind::None)
-        Effects.push_back(effectName(Operation.Effect));
-      if (Operation.MemoryAccess != MemoryAccessKind::None) {
-        const llvm::StringRef Memory = memoryAccessName(Operation.MemoryAccess);
-        if (!llvm::is_contained(Effects, Memory))
-          Effects.push_back(Memory);
-      }
+        EmitAnnotation(effectName(Operation.Effect));
+      if (Operation.MemoryAccess != MemoryAccessKind::None)
+        EmitAnnotation(memoryAccessName(Operation.MemoryAccess));
       if (Operation.StateAccess != StateAccessKind::None)
-        Effects.push_back(stateAccessName(Operation.StateAccess));
-      if (!Effects.empty())
-        OS << " ; " << llvm::join(Effects, ", ");
+        EmitAnnotation(stateAccessName(Operation.StateAccess));
+      if (Operation.CallValueAccess != CallValueAccessKind::None)
+        EmitAnnotation(callValueAccessName(Operation.CallValueAccess));
       OS << "\n";
     }
   }

@@ -12,6 +12,7 @@ Project overview and build/CLI notes live in the repository README. Contributor-
 | [Contributing](../CONTRIBUTING.md) | Development setup, build profiles, workflow, style, and PR expectations |
 | [Architecture](architecture.md) | IR routes, component boundaries, strict lifting, support depth, and where to edit |
 | [Testing](testing.md) | Test suites, generated fixtures, Unicorn roundtrips, and incremental commands |
+| [EVM decompilation](evm.md) | EVM inputs, hardforks, staged IR, C/LLVM host ABI, Solidity reconstruction, and limitations |
 | [Solana SBF decompilation](sbf.md) | SBF v0-v4 ELF rules, staged IR, syscalls, C/Rust/LLVM backends, and host contracts |
-| [Roadmap](roadmap/README.md) | Planned work and implementation status |
+| [Roadmap](roadmap/README.md) | Status: native formats, EVM, and Solana SBF implemented |
 | [Localized READMEs](i18n/) | Same project overview in 10 languages |

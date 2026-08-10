@@ -42,6 +42,7 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 | `unittests/libc` | `NeverDLibCTests` | 既知の libc 名と分類 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter の LowIR 形状、IR 段階、loader、relocation、形式 fixture、デコンパイル、代表的 patch 経路 |
 | `unittests/semantic` の大半 | `NeverDSemanticTests` | 命令、ABI、制御フロー、C 式、lift/recompile の差分セマンティクス |
+| `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | hardfork metadata、input normalization、CFG/SSA/recovery、interpreter semantics、LLVM/C/Solidity differential execution、public API routing |
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 メタデータと ELF レイアウト、厳格な検証、CFG/復元、独立した raw 実行、LLVM 検証、C/Rust コンパイル、公開 API ルーティング |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 4 ISA×3 オブジェクト形式の書き換え/難読化等価性 |
 | `unittests/semantic` の重点変換ファイル | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 大きなセマンティック実行形式から分離した高速再リンク用プローブ |
@@ -50,6 +51,7 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt)、
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt)、
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
+[`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt)、
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) です。
 
 ## fixture の生成方法
@@ -89,6 +91,19 @@ CMake が埋め込んだ実行ファイルを使います。
 決定的な NeverD のセマンティック失敗はテスト失敗にしてください。skip は明示的な
 外部能力の境界に限り、その理由を読んでください。クロス linker がない状態の緑色
 サマリーは、形式経路の実行を証明しません。
+
+### EVM 差分バックエンド
+
+interpreter test は deterministic 256-bit oracle です。emitter suite は LLVM を
+compile/execute し、C23 を Clang で同じ host harness に lower し、`solc`、`anvil`、
+`cast`、`jq` があれば generated Solidity を local node に deploy します。status、
+storage、instruction trace count を比較します。別の raw-bytecode corpus は Anvil native
+EVM 上で pre-Fusaka ALU、calldata/memory copy、overlapping `MCOPY`、Keccak、return
+data を実行します。
+
+`NeverDEVMOpcodeTests` は metadata architecture も強制します。150 opcode の
+encoding/typed-value roundtrip、family boundary、hardfork alias、derived stack/host
+maxima を検証します。
 
 ### Solana SBF 差分バックエンド
 
@@ -143,6 +158,14 @@ cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
 
+# すべての重点 EVM ターゲット/ケース
+cmake --build build-release --target \
+  NeverDEVMOpcodeTests NeverDEVMBytecodeTests NeverDEVMLoaderTests \
+  NeverDEVMAnalyzerTests NeverDEVMSemanticTests NeverDEVMEmitterTests \
+  NeverDEVMIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'EVM' --output-on-failure --parallel 4
+
 # すべての重点 Solana SBF ターゲット/ケース
 cmake --build build-release --target \
   NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
@@ -189,6 +212,7 @@ GoogleTest の検出は `DISCOVERY_MODE PRE_TEST` を使うため、CTest が列
 | Rewrite codegen または出力 relocation | `RewriteCodegenRTTests` ケース | `NeverDPatchFullTests` と利用可能なリンク済み patch fixture |
 | patch で使う LLVM IR 変換 | 重点変換バイナリ | `NeverDPatchFullTests` の合成 pass グリッド |
 | C API または CLI | 直接 SDK/query テストと `unittests/semantic/CLIEndToEndTests.cpp` | 関連 pipeline/形式スイート |
+| EVM loader、opcode、IR、backend | 所有する最小の `NeverDEVM*Tests` ターゲット | 全 EVM ターゲットと生成 C/Solidity のコンパイル |
 | SBF loader、ISA、IR、backend | 所有する最小の `NeverDSBF*Tests` ターゲット | 全 SBF ターゲットと生成 C/Rust のコンパイル |
 | Libc 認識 | `NeverDLibCTests` | 動作変更時のセマンティック call/ABI ケース |
 | プロセス実行または quoting | `NeverDTestProcessTests` | 対応各ホストの影響を受ける CLI/セマンティックケース 1 件 |

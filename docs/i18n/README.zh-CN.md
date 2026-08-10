@@ -11,12 +11,12 @@
 
 **AI 友好的二进制分析与反编译引擎 — 1:1 提升，基于 LLVM**
 
-PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · SBF &nbsp;|&nbsp; 纯 C SDK
+PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · EVM256 · SBF &nbsp;|&nbsp; 纯 C SDK
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#构建)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20SBF-informational.svg)](#支持的目标)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20SBF-orange.svg)](#支持的目标)
+[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20EVM%20%7C%20SBF-informational.svg)](#支持的目标)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20EVM256%20%7C%20SBF-orange.svg)](#支持的目标)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-与插件)
 
 [文档](../README.zh-CN.md) · [路线图](../roadmap/README.zh-CN.md) · [贡献](CONTRIBUTING.zh-CN.md)
@@ -29,19 +29,19 @@ PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM
 
 ## 概览
 
-NeverD 是以 **1:1 指令级提升** 为核心的原生二进制与智能合约分析/反编译引擎。它加载 **PE**、**ELF**、**Mach-O** 和 Solana **SBF ELF** 程序。原生目标由 [Capstone](https://www.capstone-engine.org/) 解码；SBF 使用专用的版本感知 decoder 和分阶段 IR。所有路径均采用手写语义，而不是近似翻译。已支持指令在 **LLVM IR**、**结构化 C**、**面向 SBF 的安全 stable Rust**，或原生目标的**重写后二进制**中保持可观察行为。
+NeverD 是以 **1:1 指令级提升** 为核心的原生与智能合约分析/反编译引擎。它加载 **PE**、**ELF**、**Mach-O**、传统 **EVM** 字节码和 Solana **SBF ELF** 程序。原生目标由 [Capstone](https://www.capstone-engine.org/) 解码；EVM 与 SBF 使用各自感知版本的 decoder 和分阶段 IR。所有路径均采用手写语义。已支持指令在 **LLVM IR**、**C**、**面向 SBF 的 Rust**、**面向 EVM 的 Solidity 重建**，或原生目标的**重写后二进制**中保持可观察行为。
 
 **默认开启 strict**：没有 lifter 的指令抛出 `UnliftedInstruction`，不会跳过、猜测或静默变成 `NOP`。
 
 CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`libneverd`**，不直接链接 Capstone、LLVM 或内部 C++。
 
-Solana SBF 反编译已经可用；详见 [SBF 指南](../sbf.zh-CN.md)。其他目标与加固工作记录在[路线图](../roadmap/README.zh-CN.md)中。
+输入格式、host 契约与限制详见 [EVM 指南](../evm.zh-CN.md)和 [Solana SBF 指南](../sbf.zh-CN.md)。
 
 ## 为什么选 NeverD？
 
 - **1:1 语义** — 手写 lifter；默认 strict 下未支持指令抛出异常
 - **LLM 友好** — 结构化 C、LLVM IR 与 JSON 分析经纯 C API 暴露，错误行为确定
-- **一条管线，多种出口** — `lift` → LLVM IR · `decompile` → C/Rust · `patch` → 重写原生二进制
+- **一条管线，多种出口** — `lift` → LLVM IR · `decompile` → C/Solidity/Rust · `patch` → 重写原生二进制
 - **二进制重写** — PE / ELF / Mach-O，section 跳板或 inplace 覆盖
 - **分析工具集** — CLI、调试信息、签名、插件，以及可选混淆通路
 
@@ -54,6 +54,10 @@ Solana SBF 反编译已经可用；详见 [SBF 指南](../sbf.zh-CN.md)。其他
 | **Mach-O**（macOS / iOS） | ✓ | ✓ | ✓ | ✓ |
 
 > 矩阵中的每个单元格都已实现，但集成测试深度不同。详见[架构覆盖矩阵](../architecture.zh-CN.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位对象，因为现代 macOS 无法链接历史 i386 可执行文件。
+
+传统 EVM 字节码独立于原生 container：从 Frontier 到 Fusaka 的 150 个已分配
+opcode 全部进入专用 Low/Med/High IR、已验证 LLVM `i256`、C23 `_BitInt(256)`
+和 Solidity 输出。详见 [EVM 反编译](../evm.zh-CN.md)。
 
 Solana SBF v0-v4 ELF 程序使用专用 strict loader、完整版本化 ISA metadata、
 Low/Med/High IR、已验证 LLVM、可移植 C11 与安全 stable Rust。详见
@@ -72,6 +76,12 @@ Binary (PE / ELF / Mach-O)
        ├─ decompile   MedIR → HighIR → C
        │              MedIR → LLVM IR → opt → C   (-llvm)
        └─ patch       MedIR → LLVM IR → codegen → binary
+
+EVM (raw / hex / compiler artifact)
+  → runtime 正规化 + hardfork-aware decode
+  → EVM LowIR → EVM stack-SSA MedIR → recovered EVM HighIR
+       ├─ lift        → verified LLVM i256/i512
+       └─ decompile   → C23 _BitInt(256) 或 Solidity reconstruction
 
 Solana SBF ELF (v0-v4)
   → 感知版本的 legacy/strict loader + verifier
@@ -98,6 +108,11 @@ cmake --build build
 ./build/bin/neverd lift -o out.ll binary
 ./build/bin/neverd decompile -o out.c binary
 ./build/bin/neverd patch -hello -o patched binary
+
+# EVM
+./build/bin/neverd lift contract.evm -o contract.ll
+./build/bin/neverd decompile --language=c contract.evm -o contract.c
+./build/bin/neverd decompile --language=solidity contract.evm -o contract.sol
 
 # Solana SBF
 ./build/bin/neverd info program.so
@@ -186,7 +201,7 @@ neverd <command> [options] <binary>
 | 命令 | 输出 | 说明 |
 |------|------|------|
 | `lift` | `.ll` | 提升到 LLVM IR |
-| `decompile` | `.c` / `.rs` | 通过 `--language` 选择 C 或 SBF Rust |
+| `decompile` | `.c` / `.sol` / `.rs` | 通过 `--language` 选择 C、EVM Solidity 或 SBF Rust |
 | `decompile -llvm` | `.c` | 经 LLVM IR + 优化器 |
 | `patch` | 二进制 | 重写机器码 |
 
@@ -242,6 +257,10 @@ const char *c = neverd_decompile(s, 0x401000);
 neverd_free_string(c);
 neverd_session_destroy(s);
 ```
+
+对 EVM 使用 `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)` 明确
+选择 Solidity；旧的 `neverd_decompile_all` 仍输出 C。参见
+[EVM C API 示例](../evm.zh-CN.md#c-api)。
 
 `-DNEVERD_BUILD_PLUGINS=ON` 构建示例插件。加载路径：`<neverd-dir>/plugins`、`~/.neverd/plugins`、`$NEVERD_PLUGIN_PATH`。
 

@@ -11,12 +11,12 @@
 
 **The AI-friendly binary analysis & decompilation engine — 1:1 lift, built on LLVM**
 
-PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · SBF &nbsp;|&nbsp; Pure C SDK
+PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · EVM256 · SBF &nbsp;|&nbsp; Pure C SDK
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#building)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20SBF-informational.svg)](#supported-targets)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20SBF-orange.svg)](#supported-targets)
+[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20EVM%20%7C%20SBF-informational.svg)](#supported-targets)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20EVM256%20%7C%20SBF-orange.svg)](#supported-targets)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-and-plugins)
 
 [Documentation](docs/README.md) · [Roadmap](docs/roadmap/README.md) · [Contributing](CONTRIBUTING.md)
@@ -29,19 +29,19 @@ PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM
 
 ## Overview
 
-NeverD is a native and smart-contract binary analysis/decompilation engine built around **1:1 instruction-level lifting**. It loads **PE**, **ELF**, **Mach-O**, and Solana **SBF ELF** programs. Native targets decode with [Capstone](https://www.capstone-engine.org/); SBF uses a dedicated version-aware decoder and staged IR. Every path uses hand-written semantics rather than approximate translation. Supported instructions preserve their observable behavior in **LLVM IR**, **structured C**, **safe stable Rust for SBF**, or—on native targets—a **rewritten binary**.
+NeverD is a native and smart-contract analysis/decompilation engine built around **1:1 instruction-level lifting**. It loads **PE**, **ELF**, **Mach-O**, legacy **EVM** bytecode, and Solana **SBF ELF** programs. Native targets decode with [Capstone](https://www.capstone-engine.org/); EVM and SBF use dedicated version-aware decoders and staged IR. Every path uses hand-written semantics rather than approximate translation. Supported instructions preserve their observable behavior in **LLVM IR**, **C**, **Rust for SBF**, **Solidity-oriented EVM reconstruction**, or—on native targets—a **rewritten binary**.
 
 Strict mode is **on by default**. An instruction with no lifter throws `UnliftedInstruction` instead of skipping, guessing, or emitting a silent `NOP`.
 
 CLI tools, integrators, and AI agents use one engine — **`libneverd`** — through a **pure C API**. They do not link Capstone, LLVM, or internal C++ directly.
 
-Solana SBF decompilation is available now; see the [SBF guide](docs/sbf.md). Additional targets and hardening work are tracked in the [roadmap](docs/roadmap/README.md).
+Input formats, host contracts, and limitations are documented in the [EVM guide](docs/evm.md) and [Solana SBF guide](docs/sbf.md).
 
 ## Why NeverD?
 
 - **1:1 semantics** — hand-written lifters; unsupported opcodes throw under default strict mode
 - **LLM-friendly** — structured C, LLVM IR, and JSON analysis through a pure C API with deterministic errors
-- **One pipeline, multiple exits** — `lift` → LLVM IR · `decompile` → C/Rust · `patch` → rewritten native binary
+- **One pipeline, multiple exits** — `lift` → LLVM IR · `decompile` → C/Solidity/Rust · `patch` → rewritten native binary
 - **Binary rewrite** — PE / ELF / Mach-O with section trampolines or in-place overwrite
 - **Analysis toolkit** — CLI, debug info, signatures, plugins, and optional obfuscation passes
 
@@ -54,6 +54,8 @@ Solana SBF decompilation is available now; see the [SBF guide](docs/sbf.md). Add
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > Every cell is implemented, but integration depth differs. See the [architecture coverage matrix](docs/architecture.md#support-and-test-depth). Mach-O i386 uses thin relocatable objects because modern macOS cannot link historical i386 executables.
+
+Legacy EVM bytecode is supported independently of native containers: all 150 assigned opcodes through Fusaka feed dedicated Low/Med/High IR, verified LLVM `i256`, C23 `_BitInt(256)`, and Solidity output. See [EVM decompilation](docs/evm.md).
 
 Solana SBF v0-v4 ELF programs use a dedicated strict loader, complete
 versioned ISA metadata, Low/Med/High IR, verified LLVM, portable C11, and safe
@@ -72,6 +74,12 @@ Binary (PE / ELF / Mach-O)
        ├─ decompile   MedIR → HighIR → C
        │              MedIR → LLVM IR → opt → C   (-llvm)
        └─ patch       MedIR → LLVM IR → codegen → binary
+
+EVM (raw / hex / compiler artifact)
+  → runtime normalization + hardfork-aware decode
+  → EVM LowIR → EVM stack-SSA MedIR → recovered EVM HighIR
+       ├─ lift        → verified LLVM i256/i512
+       └─ decompile   → C23 _BitInt(256) or Solidity reconstruction
 
 Solana SBF ELF (v0-v4)
   → version-aware legacy/strict loader + verifier
@@ -98,6 +106,11 @@ cmake --build build
 ./build/bin/neverd lift -o out.ll binary
 ./build/bin/neverd decompile -o out.c binary
 ./build/bin/neverd patch -hello -o patched binary
+
+# EVM
+./build/bin/neverd lift contract.evm -o contract.ll
+./build/bin/neverd decompile --language=c contract.evm -o contract.c
+./build/bin/neverd decompile --language=solidity contract.evm -o contract.sol
 
 # Solana SBF
 ./build/bin/neverd info program.so
@@ -233,7 +246,7 @@ neverd <command> [options] <binary>
 | Command | Output | Description |
 |---------|--------|-------------|
 | `lift` | `.ll` | Lift to LLVM IR |
-| `decompile` | `.c` / `.rs` | C or SBF Rust selected with `--language` |
+| `decompile` | `.c` / `.sol` / `.rs` | C, EVM Solidity, or SBF Rust selected with `--language` |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimizer |
 | `patch` | binary | Rewrite machine code |
 
@@ -289,6 +302,10 @@ const char *c = neverd_decompile(s, 0x401000);
 neverd_free_string(c);
 neverd_session_destroy(s);
 ```
+
+For EVM, use `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)` to
+select Solidity explicitly; legacy `neverd_decompile_all` continues to emit C.
+See the [EVM C API examples](docs/evm.md#c-api).
 
 Build the example plugin with `-DNEVERD_BUILD_PLUGINS=ON`. Load paths: `<neverd-dir>/plugins`, `~/.neverd/plugins`, `$NEVERD_PLUGIN_PATH`.
 

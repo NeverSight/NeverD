@@ -28,7 +28,7 @@
 
 ## 2. EVM バイトコード逆コンパイル
 
-NeverD をネイティブ ISA から **Ethereum Virtual Machine (EVM)** コントラクトバイトコードへ拡張し、同一 IR スタックへ 1:1 リフトして構造化 C / LLVM IR を出します。
+NeverD を **Ethereum Virtual Machine (EVM)** bytecode へ拡張し、同一 IR stack へ 1:1 lift して C、Solidity-oriented source、LLVM IR を出力します。
 
 ### 目標
 
@@ -37,8 +37,13 @@ NeverD をネイティブ ISA から **Ethereum Virtual Machine (EVM)** コン�
 - **スタックとメモリ** — EVM スタックマシンを MedIR へ
 - **制御フロー** — JUMP / JUMPI → CFG；可能なら HighIR
 - **ストレージと calldata** — `SLOAD`/`SSTORE` 等
-- **出力** — 既存 HighIR / LLVM-C 経路
+- **出力** — explicit host contract を持つ C23/Solidity state machine と verified LLVM IR
 - **CLI / C API** — ネイティブと同じ入口
+
+**状態:** Frontier から Fusaka の legacy EVM について完了しました。150 assigned
+opcode、raw/hex/artifact input、runtime extraction、CFG/stack-SSA、strict/relaxed
+analysis、C23/LLVM/Solidity backend、CLI/C API、Anvil differential を網羅します。
+host ABI と制限は [EVM 逆コンパイル](../evm.ja.md)を参照してください。
 
 ### なぜ EVM か
 
@@ -83,11 +88,11 @@ NeverD をネイティブ ISA から **Ethereum Virtual Machine (EVM)** コン�
 
 ## タイムライン
 
-Solana SBF 逆コンパイルとネイティブ形式の完成は実装済みで、回帰試験により保護されています。EVM は研究・設計段階です。リリース日は約束しません。進捗はこの文書で追跡します。
+native format、EVM、Solana SBF は実装済みで回帰試験により保護されています。リリース日は約束しません。
 
 | 機能 | 状態 |
 |------|------|
 | ネイティブ形式の完成（PE ARM*、Mach-O i386） | 完了 |
-| EVM バイトコード逆コンパイル | 研究 / 設計 |
+| EVM バイトコード逆コンパイル | 完了 — C、Solidity、LLVM；回帰試験済み |
 | Solana eBPF（SBF）逆コンパイル | 完了 — v0-v4、C、Rust、LLVM；回帰試験済み |
 | エンジンとプロダクト強化 | 継続 |

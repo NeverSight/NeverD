@@ -28,11 +28,16 @@
 
 ## 2. Декомпиляция байткода EVM
 
-Расширить NeverD на **байткод EVM**: 1:1-поднятие в тот же IR, структурированный C / LLVM IR.
+Расширить NeverD на **байткод EVM**: 1:1-поднятие в тот же IR с выводом C, Solidity и LLVM IR.
 
 ### Цели
 
-- Loader EVM · 1:1 lifter опкодов (strict) · стек/память · JUMP/JUMPI → CFG · storage/calldata · HighIR/LLVM-C · единый CLI/C API
+- Loader EVM · 1:1 lifter opcodes (strict) · стек/память · JUMP/JUMPI → CFG · storage/calldata · C23/Solidity/LLVM · единый CLI/C API
+
+**Статус:** Завершено для legacy EVM от Frontier до Fusaka: 150 opcodes,
+raw/hex/artifact, runtime extraction, CFG и stack-SSA, strict/relaxed analysis,
+backends C23/LLVM/Solidity, CLI/C API и differential tests с Anvil. Host ABI и
+ограничения описаны в [декомпиляции EVM](../evm.ru.md).
 
 ### Зачем EVM
 
@@ -69,11 +74,11 @@
 
 ## Сроки
 
-Декомпиляция Solana SBF и завершение нативных форматов закончены и покрыты регрессионными тестами. EVM остаётся на стадии исследования / дизайна. Даты не обещаем.
+Нативные форматы и декомпиляции EVM и Solana SBF завершены и покрыты регрессионными тестами. Даты не обещаем.
 
 | Функция | Статус |
 |---------|--------|
 | Завершение нативных форматов (PE ARM*, Mach-O i386) | Завершено |
-| Декомпиляция EVM | Исследование / дизайн |
+| Декомпиляция EVM | Завершено — C, Solidity и LLVM; регрессионное покрытие |
 | Декомпиляция Solana eBPF (SBF) | Завершено — v0-v4, C, Rust и LLVM; регрессионное покрытие |
 | Укрепление движка и продукта | Постоянно |

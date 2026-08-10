@@ -28,11 +28,17 @@ Ziele abschließen, die Loader schon teilweise erkennen.
 
 ## 2. EVM-Bytecode-Dekompilation
 
-**EVM**-Vertragsbytecode 1:1 in denselben IR-Stack heben; strukturiertes C / LLVM IR.
+**EVM**-Vertragsbytecode 1:1 in denselben IR-Stack heben und C, Solidity-orientierten Quelltext und LLVM IR ausgeben.
 
 ### Ziele
 
-- EVM-Loader · 1:1-Opcode-Lifter (strict) · Stack/Speicher · JUMP/JUMPI-CFG · Storage/Calldata · HighIR/LLVM-C · einheitliche CLI/C-API
+- EVM-Loader · 1:1-Opcode-Lifter (strict) · Stack/Speicher · JUMP/JUMPI-CFG · Storage/Calldata · C23/Solidity/LLVM · einheitliche CLI/C-API
+
+**Status:** Für Legacy-EVM von Frontier bis Fusaka abgeschlossen: alle 150
+zugewiesenen Opcodes, Raw/Hex/Artifact-Eingaben, Runtime-Extraktion, CFG und
+Stack-SSA, Strict/Relaxed-Analyse, C23/LLVM/Solidity-Backends, CLI/C-API und
+Differentialtests gegen Anvil. Host-ABI und Grenzen stehen unter
+[EVM-Dekompilation](../evm.de.md).
 
 ### Warum EVM
 
@@ -69,11 +75,11 @@ Ziele abschließen, die Loader schon teilweise erkennen.
 
 ## Zeitplan
 
-Solana-SBF-Dekompilation und native Formatvollständigkeit sind abgeschlossen und regressionstestgedeckt. EVM bleibt in Forschung / Design. Keine Termine zugesagt.
+Native Formatvollständigkeit, EVM- und Solana-SBF-Dekompilation sind abgeschlossen und regressionstestgedeckt. Keine Termine zugesagt.
 
 | Feature | Status |
 |---------|--------|
 | Native Formatvollständigkeit (PE ARM*, Mach-O i386) | Abgeschlossen |
-| EVM-Bytecode-Dekompilation | Forschung / Design |
+| EVM-Bytecode-Dekompilation | Abgeschlossen — C, Solidity und LLVM; regressionstestgedeckt |
 | Solana-eBPF-(SBF)-Dekompilation | Abgeschlossen — v0-v4, C, Rust und LLVM; regressionstestgedeckt |
 | Engine- & Produkt-Härtung | Laufend |
