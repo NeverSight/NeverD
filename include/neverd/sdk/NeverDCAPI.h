@@ -444,7 +444,8 @@ NEVERD_API const char *neverd_decompile_all(neverd_session_t Sess,
                                             int UseLlvmRoute, int NoOpt,
                                             int MaxFunctions);
 /// Decompile with an explicit output language. Solidity is supported for EVM
-/// inputs; native binaries return an actionable unsupported-language error.
+/// inputs and Rust is supported for Solana SBF inputs; unsupported
+/// input/language combinations return an actionable error.
 NEVERD_API const char *
 neverd_decompile_all_ex(neverd_session_t Sess, const char *InputPath,
                         neverd_output_language_t Language, int NoOpt,
@@ -453,6 +454,11 @@ neverd_decompile_all_ex(neverd_session_t Sess, const char *InputPath,
 NEVERD_API void neverd_evm_set_strict(neverd_session_t Sess, int Strict);
 NEVERD_API int neverd_evm_set_hardfork(neverd_session_t Sess,
                                        const char *Hardfork);
+/// Configure Solana SBF verification and the optional explicit VM version
+/// (`auto`, `v0`, `v1`, `v2`, `v3`, or `v4`) for subsequent operations.
+NEVERD_API void neverd_sbf_set_strict(neverd_session_t Sess, int Strict);
+NEVERD_API int neverd_sbf_set_version(neverd_session_t Sess,
+                                      const char *Version);
 NEVERD_API int neverd_inject_hello(neverd_session_t Sess);
 NEVERD_API const char *neverd_disasm_text(neverd_session_t Sess,
                                           const char *FuncNameOrAddr,

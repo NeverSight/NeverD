@@ -101,7 +101,7 @@ TEST_F(EVMIntegrationTest, ExposesAllStagesAndBothSourceLanguages) {
                                /*NoOpt=*/0, /*MaxFunctions=*/0),
             1);
   EXPECT_NE(takeString(neverd_last_error(Session))
-                .find("object-code roundtrip is not supported for EVM"),
+                .find("object-code roundtrip is not supported"),
             std::string::npos);
 }
 

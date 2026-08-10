@@ -68,6 +68,15 @@ Support **Solana’s eBPF / SBF** on-chain programs — lift SBF machine code in
 - **CFG & structured output** — same pipeline as native: LowIR → MedIR → HighIR / LLVM → C
 - **CLI / C API** — uniform session load / analyze / decompile entry points
 
+**Status:** Complete for the current Anza `sbpf` v0-v4 contracts. The
+implementation supports legacy section/relocation ELFs and strict
+program-header-only ELFs, a complete versioned instruction database, strict
+verification, staged Low/Med/High IR, syscall/CPI/account observations,
+verified LLVM, portable C11, safe stable Rust, CLI/C API integration, and an
+independent bounded raw-bytecode semantic oracle. v4 is tracked from upstream;
+whether it can be deployed or executed on a particular cluster still depends
+on that cluster's feature activation. See [Solana SBF decompilation](../sbf.md).
+
 ### Why Solana eBPF in NeverD?
 
 - On-chain SBF is a first-class audit target alongside EVM
@@ -91,11 +100,13 @@ Cross-cutting work that unblocks the items above and improves today’s native e
 
 ## Timeline
 
-EVM and Solana remain in research and design; native format completeness is complete and regression-covered. No release dates are committed. Progress will be tracked here.
+Solana SBF decompilation and native format completeness are complete and
+regression-covered. No release dates are committed. Progress will be tracked
+here.
 
 | Feature | Status |
 |---------|--------|
 | Native format completeness (PE ARM*, Mach-O i386) | Complete — regression-covered |
 | EVM bytecode decompilation | Research / Design |
-| Solana eBPF (SBF) decompilation | Research / Design |
+| Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
 | Engine & product hardening | Ongoing |

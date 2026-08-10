@@ -22,6 +22,7 @@
 #define NEVERD_TOOLS_NEVERDCLI_H
 
 #include "neverd/evm/Opcodes.h"
+#include "neverd/sbf/Version.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -167,6 +168,8 @@ extern llvm::cl::opt<bool> LlvmRoute;
 extern llvm::cl::opt<neverd_output_language_t> OutputLanguage;
 extern llvm::cl::opt<evm::Hardfork> EVMHardfork;
 extern llvm::cl::opt<bool> EVMRelaxed;
+extern llvm::cl::opt<sbf::Version> SBFVersion;
+extern llvm::cl::opt<bool> SBFRelaxed;
 
 // Strings.
 extern llvm::cl::opt<unsigned> MinStrLen;

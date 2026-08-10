@@ -16,6 +16,7 @@
 #include "neverd/Limits.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/loader/ELF/EhFrameHdr.h"
+#include "neverd/loader/ELF/SBFELFLoader.h"
 #include "neverd/loader/FunctionDiscovery.h"
 
 #include "llvm/BinaryFormat/ELF.h"
@@ -899,6 +900,12 @@ llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
   if (Data[llvm::ELF::EI_DATA] != llvm::ELF::ELFDATA2LSB)
     return llvm::make_error<llvm::StringError>("elf: big-endian not supported",
                                                llvm::inconvertibleErrorCode());
+
+  auto IsSBF = loadSBFELF(Img);
+  if (!IsSBF)
+    return IsSBF.takeError();
+  if (*IsSBF)
+    return Img;
 
   auto ObjOrErr =
       llvm::object::ObjectFile::createObjectFile(Buf->getMemBufferRef());

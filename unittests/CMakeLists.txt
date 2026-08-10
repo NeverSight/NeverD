@@ -22,6 +22,7 @@ add_subdirectory(libc)
 add_subdirectory(lift)
 add_subdirectory(semantic)
 add_subdirectory(evm)
+add_subdirectory(sbf)
 
 # One-shot test runners (like NeverC's check-neverc): build deps, then invoke
 # CTest.  Pure CMake/CTest — no shell scripts, so it works the same on
@@ -57,6 +58,17 @@ add_custom_target(check-neverd-semantic
   DEPENDS NeverDSemanticTests ${_neverd_run_deps}
   USES_TERMINAL
   COMMENT "Running NeverDSemanticTests via CTest")
+
+# Solana SBF loader, ISA, analysis, LLVM, C/Rust, and public API coverage.
+add_custom_target(check-neverd-sbf
+  COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
+          -L ^NeverDSBF
+          --output-on-failure --progress -j ${_neverd_ncpu} -C $<CONFIG>
+  DEPENDS NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests
+          NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests
+          NeverDSBFEmitterTests NeverDSBFIntegrationTests ${_neverd_run_deps}
+  USES_TERMINAL
+  COMMENT "Running Solana SBF tests via CTest")
 
 # Instruction-substitution (patch) equivalence only: verifies the --subst /
 # neverd_patch_full transform preserves semantics across 4 ISAs x 3 formats.

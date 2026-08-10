@@ -24,6 +24,7 @@
 #include "neverd/Common.h"
 #include "neverd/Object/SectionNames.h"
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/sbf/SBFMetadata.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -162,6 +163,7 @@ struct Section {
 struct RelocationEntry {
   va_t Address = 0;
   int64_t Addend = 0;
+  bool HasExplicitAddend = false;
   uint32_t Type = 0;
   std::string SymbolName;
   uint32_t SymbolIndex = 0;
@@ -229,6 +231,9 @@ struct BinaryImage {
   std::vector<Symbol> Symbols;
   std::vector<RelocationEntry> Relocations;
   std::vector<BaseRelocation> BaseRelocations;
+  /// Present only for Solana SBF ELF inputs.  The dedicated loader owns ELF
+  /// parsing; the frontend consumes this typed record and never reparses Raw.
+  std::optional<sbf::Metadata> SBF;
   /// Virtual addresses that a relocation resolves to inside a read-only data
   /// segment (filled by the loader as it applies relocations).  A code constant
   /// equal to one of these is a genuine pointer into rodata — e.g. a low-VA

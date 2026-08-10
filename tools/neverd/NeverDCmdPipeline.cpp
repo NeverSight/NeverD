@@ -60,6 +60,22 @@ bool configureEVM(neverd_session_t Sess) {
   return true;
 }
 
+bool configureSBF(neverd_session_t Sess) {
+  neverd_sbf_set_strict(Sess, SBFRelaxed ? 0 : 1);
+  const std::string VersionName =
+      sbf::versionName(SBFVersion.getValue()).str();
+  if (!neverd_sbf_set_version(Sess, VersionName.c_str())) {
+    WithColor::error() << "invalid SBF version: " << takeLastError(Sess)
+                       << "\n";
+    return false;
+  }
+  return true;
+}
+
+bool configureVirtualMachines(neverd_session_t Sess) {
+  return configureEVM(Sess) && configureSBF(Sess);
+}
+
 } // namespace
 
 int runPlugins(const char *Argv0) {
@@ -141,7 +157,7 @@ int runPlugins(const char *Argv0) {
 
 int runLift(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
-  if (!configureEVM(Sess))
+  if (!configureVirtualMachines(Sess))
     return 1;
 
   if (DumpLow || DumpMed || DumpHigh) {
@@ -181,21 +197,22 @@ int runLift(neverd_session_t Sess) {
 int runDecompile(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
 
-  if (!configureEVM(Sess))
+  if (!configureVirtualMachines(Sess))
     return 1;
 
   const neverd_output_language_t Language = OutputLanguage.getValue();
-  const bool Solidity = Language == NEVERD_OUTPUT_SOLIDITY;
-  if (Solidity && LlvmRoute) {
+  const bool DedicatedLanguage = Language != NEVERD_OUTPUT_C;
+  if (DedicatedLanguage && LlvmRoute) {
     WithColor::error()
-        << "--llvm cannot be combined with --language=solidity\n";
+        << "--llvm cannot be combined with a dedicated source language\n";
     return 1;
   }
-  const char *Source =
-      Solidity ? neverd_decompile_all_ex(Sess, InPath, NEVERD_OUTPUT_SOLIDITY,
-                                         NoOpt, MaxFunc)
-               : neverd_decompile_all(Sess, InPath, LlvmRoute ? 1 : 0, NoOpt,
-                                      MaxFunc);
+  const char *Source = DedicatedLanguage
+                           ? neverd_decompile_all_ex(Sess, InPath, Language,
+                                                    NoOpt, MaxFunc)
+                           : neverd_decompile_all(Sess, InPath,
+                                                 LlvmRoute ? 1 : 0, NoOpt,
+                                                 MaxFunc);
   if (!Source) {
     WithColor::error() << "decompile failed: " << takeLastError(Sess) << "\n";
     return 1;

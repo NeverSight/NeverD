@@ -13,4 +13,5 @@ add_neverd_component_library(NeverDPipeline
   BackendLLVM
   DebugInfo
   EVM
+  SBF
 )

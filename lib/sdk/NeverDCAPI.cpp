@@ -30,8 +30,56 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
+#include <iterator>
+
 using namespace neverd;
 using namespace neverd::sdk;
+
+namespace neverd::sdk {
+
+bool Session::synchronizeFunctions() {
+  if (Img.Arch != Arch::SBF)
+    return true;
+  if (SBFFunctionsSynchronized)
+    return true;
+  if (!ensurePipeline() || !PipeResult.SBF)
+    return false;
+
+  resetFunctionsFromImage();
+
+  const sbf::SBFProgram &Program = *PipeResult.SBF;
+  for (const sbf::Function &Function : Program.High.Functions) {
+    uint64_t Size = 0;
+    for (size_t BlockID : Function.Blocks) {
+      if (BlockID >= Program.Low.Blocks.size())
+        continue;
+      const sbf::BasicBlock &Block = Program.Low.Blocks[BlockID];
+      Size += (Block.EndSlot - Block.StartSlot) * sbf::kInstructionSize;
+    }
+
+    auto Existing = std::find_if(
+        Functions.begin(), Functions.end(),
+        [&](const FuncInfo &Info) { return Info.Entry == Function.Address; });
+    if (Existing == Functions.end()) {
+      Functions.push_back({Function.Address, Size, Function.Name});
+      Existing = std::prev(Functions.end());
+    } else if (Existing->Size == 0) {
+      Existing->Size = Size;
+    }
+    OriginalNames.try_emplace(Function.Address, Function.Name);
+    if (auto Rename = Renames.find(Function.Address); Rename != Renames.end())
+      Existing->Name = Rename->second;
+  }
+  std::sort(Functions.begin(), Functions.end(),
+            [](const FuncInfo &Left, const FuncInfo &Right) {
+              return Left.Entry < Right.Entry;
+            });
+  SBFFunctionsSynchronized = true;
+  return true;
+}
+
+} // namespace neverd::sdk
 
 // ===--------------------------------------------------------------------===//
 // PipelineRunner implementation (shared by high-level C API functions)
@@ -55,7 +103,7 @@ bool PipelineRunner::load(const char *InputPath, std::string &Err) {
     return false;
   }
   Img = std::move(*ImgOrErr);
-  if (Img.Arch != Arch::EVM)
+  if (Img.Arch != Arch::EVM && Img.Arch != Arch::SBF)
     Dbg = DWARFDebugContext::load(Path, Img.Format);
   return true;
 }
@@ -106,25 +154,15 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   S->Img = std::move(*ImgOrErr);
   S->FilePath = P;
   S->Loaded = true;
-  S->PipeRan = false;
-  S->PipeResult = {};
-  S->LLVMCtx.reset();
-  S->Functions.clear();
-  S->OriginalNames.clear();
   S->Annotations.clear();
   S->Renames.clear();
+  S->invalidatePipeline();
 
-  if (S->Img.Arch != Arch::EVM && !S->Dec.init(S->Img.Arch, S->Img.Mode)) {
+  if (S->Img.Arch != Arch::EVM && S->Img.Arch != Arch::SBF &&
+      !S->Dec.init(S->Img.Arch, S->Img.Mode)) {
     S->setError("failed to init decoder for arch");
     S->Loaded = false;
     return 0;
-  }
-
-  auto FuncSyms = S->Img.getFunctionSymbols();
-  S->Functions.reserve(FuncSyms.size());
-  for (const auto *Sym : FuncSyms) {
-    S->Functions.push_back({Sym->Addr, Sym->Size, Sym->Name});
-    S->OriginalNames[Sym->Addr] = Sym->Name;
   }
 
   neverd_annotations_load(Sess);
@@ -139,7 +177,7 @@ int neverd_session_is_loaded(neverd_session_t Sess) {
 
 int neverd_session_analyze(neverd_session_t Sess) {
   auto *S = toSession(Sess);
-  return S->ensurePipeline() ? 1 : 0;
+  return (S->ensurePipeline() && S->synchronizeFunctions()) ? 1 : 0;
 }
 
 const char *neverd_session_file_path(neverd_session_t Sess) {
@@ -175,26 +213,31 @@ int neverd_session_bitness(neverd_session_t Sess) {
 
 int neverd_func_count(neverd_session_t Sess) {
   auto *S = toSession(Sess);
-  return S->Loaded ? static_cast<int>(S->Functions.size()) : 0;
+  if (!S || !S->Loaded || !S->synchronizeFunctions())
+    return 0;
+  return static_cast<int>(S->Functions.size());
 }
 
 neverd_va_t neverd_func_entry(neverd_session_t Sess, int Idx) {
   auto *S = toSession(Sess);
-  if (!S->Loaded || Idx < 0 || Idx >= static_cast<int>(S->Functions.size()))
+  if (!S || !S->Loaded || !S->synchronizeFunctions() || Idx < 0 ||
+      Idx >= static_cast<int>(S->Functions.size()))
     return 0;
   return S->Functions[Idx].Entry;
 }
 
 int neverd_func_size(neverd_session_t Sess, int Idx) {
   auto *S = toSession(Sess);
-  if (!S->Loaded || Idx < 0 || Idx >= static_cast<int>(S->Functions.size()))
+  if (!S || !S->Loaded || !S->synchronizeFunctions() || Idx < 0 ||
+      Idx >= static_cast<int>(S->Functions.size()))
     return 0;
   return static_cast<int>(S->Functions[Idx].Size);
 }
 
 const char *neverd_func_name(neverd_session_t Sess, int Idx) {
   auto *S = toSession(Sess);
-  if (!S->Loaded || Idx < 0 || Idx >= static_cast<int>(S->Functions.size()))
+  if (!S || !S->Loaded || !S->synchronizeFunctions() || Idx < 0 ||
+      Idx >= static_cast<int>(S->Functions.size()))
     return dupStr(std::string());
   return dupStr(S->Functions[Idx].Name);
 }
@@ -205,7 +248,7 @@ const char *neverd_func_name(neverd_session_t Sess, int Idx) {
 
 int neverd_func_find_by_name(neverd_session_t Sess, const char *Name) {
   auto *S = toSession(Sess);
-  if (!S->Loaded || !Name)
+  if (!S || !S->Loaded || !Name || !S->synchronizeFunctions())
     return -1;
   for (size_t I = 0; I < S->Functions.size(); ++I)
     if (S->Functions[I].Name == Name)
@@ -215,7 +258,7 @@ int neverd_func_find_by_name(neverd_session_t Sess, const char *Name) {
 
 int neverd_func_find_by_addr(neverd_session_t Sess, neverd_va_t Addr) {
   auto *S = toSession(Sess);
-  if (!S->Loaded)
+  if (!S || !S->Loaded || !S->synchronizeFunctions())
     return -1;
   for (size_t I = 0; I < S->Functions.size(); ++I)
     if (S->Functions[I].Entry == Addr)

@@ -115,8 +115,8 @@ int neverd_patch_from_ir(neverd_session_t Sess, const char *IRText,
     S->setError("no binary loaded");
     return 0;
   }
-  if (S->Img.Arch == Arch::EVM) {
-    S->setError("binary patching is not supported for EVM bytecode");
+  if (S->Img.Arch == Arch::EVM || S->Img.Arch == Arch::SBF) {
+    S->setError("binary patching is not supported for virtual-machine inputs");
     return 0;
   }
   if (!IRText) {
@@ -195,8 +195,8 @@ int neverd_patch_from_c(neverd_session_t Sess, const char *CText,
     S->setError("no binary loaded");
     return 0;
   }
-  if (S->Img.Arch == Arch::EVM) {
-    S->setError("binary patching is not supported for EVM bytecode");
+  if (S->Img.Arch == Arch::EVM || S->Img.Arch == Arch::SBF) {
+    S->setError("binary patching is not supported for virtual-machine inputs");
     return 0;
   }
   if (!CText) {
@@ -357,9 +357,10 @@ int neverd_patch_full(neverd_session_t Sess, const char *InputPath,
       S->setError(Err);
     return 1;
   }
-  if (R.Img.Arch == Arch::EVM) {
+  if (R.Img.Arch == Arch::EVM || R.Img.Arch == Arch::SBF) {
     if (S)
-      S->setError("binary patching is not supported for EVM bytecode");
+      S->setError(
+          "binary patching is not supported for virtual-machine inputs");
     return 1;
   }
 
@@ -570,8 +571,9 @@ int neverd_lift_to_obj(neverd_session_t Sess, const char *InputPath, int NoOpt,
       S->setError(Err);
     return 1;
   }
-  if (R.Img.Arch == Arch::EVM) {
-    S->setError("object-code roundtrip is not supported for EVM bytecode");
+  if (R.Img.Arch == Arch::EVM || R.Img.Arch == Arch::SBF) {
+    S->setError(
+        "object-code roundtrip is not supported for virtual-machine inputs");
     return 1;
   }
 

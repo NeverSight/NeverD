@@ -12,7 +12,9 @@
 #include "SessionImpl.h"
 
 #include "neverd/evm/Analyzer.h"
+#include "neverd/sbf/Analyzer.h"
 
+#include "llvm/ADT/BitVector.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
 
@@ -31,6 +33,28 @@ std::string evmBytes(const evm::LowInstruction &Instruction) {
   for (uint8_t Byte : Instruction.Encoding)
     Bytes += llvm::utohexstr(Byte, /*LowerCase=*/true, evm::kHexDigitsPerByte);
   return Bytes;
+}
+
+std::string sbfBytes(const sbf::LowInstruction &Instruction) {
+  std::string Bytes;
+  for (uint8_t Byte : Instruction.Encoding)
+    Bytes += llvm::utohexstr(Byte, /*LowerCase=*/true, evm::kHexDigitsPerByte);
+  return Bytes;
+}
+
+llvm::BitVector functionSlots(const sbf::SBFProgram &Program,
+                              const sbf::Function &Function) {
+  llvm::BitVector Slots(Program.Low.Instructions.size());
+  for (size_t BlockID : Function.Blocks) {
+    if (BlockID >= Program.Low.Blocks.size())
+      continue;
+    const sbf::BasicBlock &Block = Program.Low.Blocks[BlockID];
+    const size_t End =
+        std::min(Block.EndSlot, static_cast<size_t>(Slots.size()));
+    for (size_t Slot = Block.StartSlot; Slot < End; ++Slot)
+      Slots.set(Slot);
+  }
+  return Slots;
 }
 
 } // namespace
@@ -70,6 +94,39 @@ const char *neverd_disasm_json(neverd_session_t Sess, neverd_va_t Addr,
       ++Count;
     }
     return dupStr(jsonToString(llvm::json::Value(std::move(EVMInstructions))));
+  }
+
+  if (S->Img.Arch == Arch::SBF) {
+    if (!S->ensurePipeline() || !S->PipeResult.SBF)
+      return dupStr(std::string("[]"));
+    llvm::json::Array Instructions;
+    int Count = 0;
+    llvm::BitVector SelectedSlots;
+    if (MaxInsns <= 0)
+      for (const sbf::Function &Function : S->PipeResult.SBF->High.Functions)
+        if (Function.Address == Addr) {
+          SelectedSlots = functionSlots(*S->PipeResult.SBF, Function);
+          break;
+        }
+    for (const auto &Instruction : S->PipeResult.SBF->Low.Instructions) {
+      if (Instruction.Address < Addr || Instruction.IsContinuation)
+        continue;
+      if (!SelectedSlots.empty() && !SelectedSlots.test(Instruction.Slot))
+        continue;
+      if (MaxInsns > 0 && Count >= MaxInsns)
+        break;
+      llvm::json::Object Object;
+      Object["addr"] = vaHex(Instruction.Address);
+      Object["size"] =
+          static_cast<int64_t>(Instruction.SlotWidth * sbf::kInstructionSize);
+      Object["mnemonic"] =
+          Instruction.Info ? Instruction.Info->Mnemonic.str() : ".byte";
+      Object["op_str"] = sbf::formatInstruction(Instruction);
+      Object["bytes"] = sbfBytes(Instruction);
+      Instructions.push_back(std::move(Object));
+      ++Count;
+    }
+    return dupStr(jsonToString(llvm::json::Value(std::move(Instructions))));
   }
 
   llvm::json::Array Arr;
@@ -164,6 +221,35 @@ const char *neverd_disasm_text(neverd_session_t Sess,
       if (!Immediate.empty())
         OS << " " << Immediate;
       OS << "\n";
+    }
+    return dupStr(Buffer);
+  }
+
+  if (S->Img.Arch == Arch::SBF) {
+    if (!S->ensurePipeline() || !S->PipeResult.SBF)
+      return nullptr;
+    std::string Buffer;
+    llvm::raw_string_ostream OS(Buffer);
+    const auto &Program = *S->PipeResult.SBF;
+    const llvm::StringRef Identifier = FuncNameOrAddr ? FuncNameOrAddr : "";
+    const sbf::Function *Function = sbf::findFunction(Program, Identifier);
+    if (!Function) {
+      S->setError("SBF function not found: " + Identifier.str());
+      return nullptr;
+    }
+    const llvm::BitVector SelectedSlots = functionSlots(Program, *Function);
+    OS << "; " << Function->Name << " (0x" << llvm::utohexstr(Function->Address)
+       << ", " << SelectedSlots.count() * sbf::kInstructionSize << " bytes, "
+       << sbf::versionDisplayName(Program.Low.TheVersion) << ")\n";
+    for (const auto &Instruction : Program.Low.Instructions) {
+      if (Instruction.IsContinuation || !SelectedSlots.test(Instruction.Slot))
+        continue;
+      OS << "  0x" << llvm::utohexstr(Instruction.Address) << "  ";
+      const std::string Bytes = sbfBytes(Instruction);
+      OS << Bytes;
+      if (Bytes.size() < kShortInstructionByteColumnWidth)
+        OS.indent(kShortInstructionByteColumnWidth - Bytes.size());
+      OS << " " << sbf::formatInstruction(Instruction) << "\n";
     }
     return dupStr(Buffer);
   }

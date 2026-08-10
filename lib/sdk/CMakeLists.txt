@@ -40,6 +40,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDLibC
     NeverDDebugInfo
     NeverDSigs
+    NeverDSBF
     ${NEVERD_COMMON_LIBS})
 
 # The aggregate IR archive and its subcomponent archives reference each other.

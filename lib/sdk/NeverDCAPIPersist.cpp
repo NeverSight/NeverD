@@ -158,6 +158,7 @@ int neverd_rename_func(neverd_session_t Sess, const char *OldName,
   auto *S = toSession(Sess);
   if (!S->Loaded || !OldName || !NewName)
     return -1;
+  (void)neverd_func_count(Sess);
 
   for (auto &F : S->Functions) {
     if (F.Name == OldName) {

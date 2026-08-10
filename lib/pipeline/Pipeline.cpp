@@ -20,6 +20,8 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/evm/Analyzer.h"
 #include "neverd/evm/LLVMEmitter.h"
+#include "neverd/sbf/Analyzer.h"
+#include "neverd/sbf/LLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -860,6 +862,41 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
     if (Opts.LiftMode || Opts.PatchMode || Opts.DumpLlvm) {
       auto Module = evm::emitLLVM(*Result.EVM, Ctx);
+      if (!Module) {
+        Result.Error = llvm::toString(Module.takeError());
+        return Result;
+      }
+      Result.LlvmModule = std::move(*Module);
+    }
+    Result.Success = true;
+    return Result;
+  }
+
+  if (Img.Arch == Arch::SBF) {
+    if (Opts.PatchMode) {
+      Result.Error =
+          "sbf: binary patching is not supported; use lift or decompile";
+      return Result;
+    }
+    sbf::AnalyzeOptions SBFOptions;
+    SBFOptions.VersionOverride = Opts.SBFVersion;
+    SBFOptions.Strict = Opts.SBFStrict;
+    auto Program = sbf::analyze(Img, SBFOptions);
+    if (!Program) {
+      Result.Error = llvm::toString(Program.takeError());
+      return Result;
+    }
+    Result.SBF = std::make_unique<sbf::SBFProgram>(std::move(*Program));
+    if (Opts.EmitDumpOutput) {
+      if (Opts.DumpLow)
+        llvm::outs() << sbf::dumpLowIR(Result.SBF->Low);
+      if (Opts.DumpMed)
+        llvm::outs() << sbf::dumpMedIR(Result.SBF->Med);
+      if (Opts.DumpHigh)
+        llvm::outs() << sbf::dumpHighIR(Result.SBF->High);
+    }
+    if (Opts.LiftMode || Opts.DumpLlvm) {
+      auto Module = sbf::emitLLVM(*Result.SBF, Ctx);
       if (!Module) {
         Result.Error = llvm::toString(Module.takeError());
         return Result;

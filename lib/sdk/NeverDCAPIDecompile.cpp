@@ -20,6 +20,9 @@
 #include "neverd/evm/CEmitter.h"
 #include "neverd/evm/SolidityEmitter.h"
 #include "neverd/ir/NdOps.h"
+#include "neverd/sbf/Analyzer.h"
+#include "neverd/sbf/CEmitter.h"
+#include "neverd/sbf/RustEmitter.h"
 
 using namespace neverd;
 using namespace neverd::sdk;
@@ -37,6 +40,15 @@ const char *neverd_decompile(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   if (S->PipeResult.EVM) {
     auto Output = evm::emitC(*S->PipeResult.EVM);
+    if (!Output) {
+      S->setError(llvm::toString(Output.takeError()));
+      return dupStr(std::string());
+    }
+    return dupStr(*Output);
+  }
+
+  if (S->PipeResult.SBF) {
+    auto Output = sbf::emitC(*S->PipeResult.SBF);
     if (!Output) {
       S->setError(llvm::toString(Output.takeError()));
       return dupStr(std::string());
@@ -76,6 +88,8 @@ const char *neverd_ir_low(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   if (S->PipeResult.EVM)
     return dupStr(evm::dumpLowIR(S->PipeResult.EVM->Low));
+  if (S->PipeResult.SBF)
+    return dupStr(sbf::dumpLowIR(S->PipeResult.SBF->Low));
 
   const LowFunc *F = S->findLowFunc(FuncEntry);
   if (!F) {
@@ -121,6 +135,8 @@ const char *neverd_ir_med(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   if (S->PipeResult.EVM)
     return dupStr(evm::dumpMedIR(S->PipeResult.EVM->Med));
+  if (S->PipeResult.SBF)
+    return dupStr(sbf::dumpMedIR(S->PipeResult.SBF->Med));
 
   for (const auto &F : S->PipeResult.MedFuncs) {
     if (F.Entry != FuncEntry)
@@ -174,6 +190,8 @@ const char *neverd_ir_high(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   if (S->PipeResult.EVM)
     return dupStr(evm::dumpHighIR(S->PipeResult.EVM->High));
+  if (S->PipeResult.SBF)
+    return dupStr(sbf::dumpHighIR(S->PipeResult.SBF->High));
 
   const HighFunc *HF = S->findHighFunc(FuncEntry);
   if (!HF) {
@@ -204,6 +222,8 @@ const char *neverd_ir_llvm(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   if (S->PipeResult.EVM)
     return dupStr(evm::emitLLVMText(*S->PipeResult.LlvmModule));
+  if (S->PipeResult.SBF)
+    return dupStr(sbf::emitLLVMText(*S->PipeResult.LlvmModule));
 
   std::string FuncName = "sub_" + llvm::utohexstr(FuncEntry);
 
@@ -249,8 +269,7 @@ const char *neverd_lift_module(neverd_session_t Sess, const char *InputPath,
   Opts.NoOpt = NoOpt != 0;
   Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (S) {
-    Opts.EVMFork = S->EVMFork;
-    Opts.EVMStrict = S->EVMStrict;
+    S->applyAnalysisOptions(Opts);
   }
   if (!R.run(Opts, Err)) {
     if (S)
@@ -284,8 +303,7 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
   PipelineOptions Opts;
   Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (S) {
-    Opts.EVMFork = S->EVMFork;
-    Opts.EVMStrict = S->EVMStrict;
+    S->applyAnalysisOptions(Opts);
   }
   if (Level == 0)
     Opts.DumpLow = true;
@@ -312,6 +330,13 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
       OS << evm::dumpMedIR(R.Result.EVM->Med);
     else
       OS << evm::dumpHighIR(R.Result.EVM->High);
+  } else if (R.Result.SBF) {
+    if (Level == 0)
+      OS << sbf::dumpLowIR(R.Result.SBF->Low);
+    else if (Level == 1)
+      OS << sbf::dumpMedIR(R.Result.SBF->Med);
+    else
+      OS << sbf::dumpHighIR(R.Result.SBF->High);
   } else if (Level == 0)
     Pipeline::dumpLowIR(R.Result.LowFuncs, OS);
   else if (Level == 1)
@@ -342,8 +367,7 @@ static const char *decompileAllImpl(neverd_session_t Sess,
   Opts.NoOpt = NoOpt != 0;
   Opts.MaxFunctions = MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
   if (S) {
-    Opts.EVMFork = S->EVMFork;
-    Opts.EVMStrict = S->EVMStrict;
+    S->applyAnalysisOptions(Opts);
   }
   if (UseLlvmRoute)
     Opts.LiftMode = true;
@@ -372,6 +396,11 @@ static const char *decompileAllImpl(neverd_session_t Sess,
       }
       return dupStr(*Output);
     }
+    if (Language == NEVERD_OUTPUT_RUST) {
+      if (S)
+        S->setError("Rust output is supported only for Solana SBF programs");
+      return nullptr;
+    }
     auto Output = evm::emitC(*R.Result.EVM);
     if (!Output) {
       if (S)
@@ -381,9 +410,42 @@ static const char *decompileAllImpl(neverd_session_t Sess,
     return dupStr(*Output);
   }
 
-  if (Language == NEVERD_OUTPUT_SOLIDITY) {
+  if (R.Result.SBF) {
+    if (UseLlvmRoute) {
+      if (S)
+        S->setError("LLVM-to-C route is not supported for SBF; use the "
+                    "dedicated C or Rust backend");
+      return nullptr;
+    }
+    if (Language == NEVERD_OUTPUT_SOLIDITY) {
+      if (S)
+        S->setError("Solidity output is supported only for EVM bytecode");
+      return nullptr;
+    }
+    if (Language == NEVERD_OUTPUT_RUST) {
+      auto Output = sbf::emitRust(*R.Result.SBF);
+      if (!Output) {
+        if (S)
+          S->setError(llvm::toString(Output.takeError()));
+        return nullptr;
+      }
+      return dupStr(*Output);
+    }
+    auto Output = sbf::emitC(*R.Result.SBF);
+    if (!Output) {
+      if (S)
+        S->setError(llvm::toString(Output.takeError()));
+      return nullptr;
+    }
+    return dupStr(*Output);
+  }
+
+  if (Language == NEVERD_OUTPUT_SOLIDITY || Language == NEVERD_OUTPUT_RUST) {
     if (S)
-      S->setError("Solidity output is supported only for EVM bytecode");
+      S->setError(
+          Language == NEVERD_OUTPUT_SOLIDITY
+              ? "Solidity output is supported only for EVM bytecode"
+              : "Rust output is supported only for Solana SBF programs");
     return nullptr;
   }
 
@@ -439,8 +501,7 @@ void neverd_evm_set_strict(neverd_session_t Sess, int Strict) {
     return;
   S->clearError();
   S->EVMStrict = Strict != 0;
-  S->PipeRan = false;
-  S->PipeResult = {};
+  S->invalidatePipeline();
 }
 
 int neverd_evm_set_hardfork(neverd_session_t Sess, const char *Hardfork) {
@@ -454,8 +515,31 @@ int neverd_evm_set_hardfork(neverd_session_t Sess, const char *Hardfork) {
   }
   S->clearError();
   S->EVMFork = *Fork;
-  S->PipeRan = false;
-  S->PipeResult = {};
+  S->invalidatePipeline();
+  return 1;
+}
+
+void neverd_sbf_set_strict(neverd_session_t Sess, int Strict) {
+  auto *S = static_cast<Session *>(Sess);
+  if (!S)
+    return;
+  S->clearError();
+  S->SBFStrict = Strict != 0;
+  S->invalidatePipeline();
+}
+
+int neverd_sbf_set_version(neverd_session_t Sess, const char *Version) {
+  auto *S = static_cast<Session *>(Sess);
+  if (!S || !Version)
+    return 0;
+  auto Parsed = sbf::parseVersion(Version);
+  if (!Parsed) {
+    S->setError("unknown SBF version: " + std::string(Version));
+    return 0;
+  }
+  S->clearError();
+  S->SBFVersion = *Parsed;
+  S->invalidatePipeline();
   return 1;
 }
 

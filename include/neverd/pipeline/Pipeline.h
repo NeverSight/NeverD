@@ -20,6 +20,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/sbf/SBFIR.h"
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -50,6 +51,8 @@ struct PipelineOptions {
   std::string OutputFile;
   evm::Hardfork EVMFork = evm::Hardfork::Latest;
   bool EVMStrict = true;
+  sbf::Version SBFVersion = sbf::Version::Auto;
+  bool SBFStrict = true;
 };
 
 struct PipelineResult {
@@ -58,6 +61,7 @@ struct PipelineResult {
   std::vector<HighFunc> HighFuncs;
   std::unique_ptr<llvm::Module> LlvmModule;
   std::unique_ptr<evm::EVMProgram> EVM;
+  std::unique_ptr<sbf::SBFProgram> SBF;
   std::string Error;
   bool Success = false;
 };

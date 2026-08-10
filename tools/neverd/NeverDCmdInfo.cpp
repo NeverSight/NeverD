@@ -37,6 +37,16 @@ int runInfo(neverd_session_t Sess) {
   outs() << "Base:   0x" << utohexstr(neverd_session_base_addr(Sess)) << "\n";
   outs() << "Entry:  0x" << utohexstr(neverd_session_entry_addr(Sess)) << "\n";
 
+  const char *HeaderJson = neverd_headers_json(Sess);
+  auto HeaderParsed = json::parse(HeaderJson ? HeaderJson : "{}");
+  neverd_free_string(HeaderJson);
+  if (HeaderParsed)
+    if (auto *Root = HeaderParsed->getAsObject())
+      if (auto *SBF = Root->getObject("sbf"))
+        outs() << "SBF:    " << SBF->getString("version_display").value_or("")
+               << " / " << SBF->getString("machine_name").value_or("")
+               << " / " << SBF->getString("layout").value_or("") << "\n";
+
   const char *SegJson = neverd_segments_json(Sess);
   auto SegParsed = json::parse(SegJson ? SegJson : "[]");
   neverd_free_string(SegJson);
@@ -148,6 +158,20 @@ int runHeaders(neverd_session_t Sess) {
           std::string(Root->getString("base").value_or("")).c_str());
       outs() << format("  %-20s %lld bytes\n", "File Size:",
                        Root->getInteger("file_size").value_or(0));
+
+      if (auto *SBF = Root->getObject("sbf")) {
+        outs() << "\n  --- Solana SBF ---\n";
+        outs() << format(
+            "  %-20s %s\n", "Version:",
+            SBF->getString("version_display").value_or("").str().c_str());
+        outs() << format(
+            "  %-20s %s (%lld)\n", "ELF Machine:",
+            SBF->getString("machine_name").value_or("").str().c_str(),
+            SBF->getInteger("machine").value_or(0));
+        outs() << format(
+            "  %-20s %s\n", "Layout:",
+            SBF->getString("layout").value_or("").str().c_str());
+      }
 
       outs() << "\n  --- Counts ---\n";
       outs() << format("  %-20s %lld\n", "Segments:",

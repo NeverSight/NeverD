@@ -1,0 +1,46 @@
+//===- SBFVersions.def - Solana SBF version database ------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.  Consumers define
+// SBF_VERSION_AUTO and/or SBF_VERSION before including it.
+//
+// SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS)
+//
+// The feature expression is deliberately explicit.  In particular, the v2
+// arithmetic and encoding changes do not carry into v3.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_VERSION_AUTO
+#define SBF_VERSION_AUTO(NAME, SPELLING, DISPLAY_NAME)
+#endif
+
+#ifndef SBF_VERSION
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS)
+#endif
+
+SBF_VERSION_AUTO(Auto, "auto", "auto-detect")
+SBF_VERSION(V0, 0, "v0", "SBF v0", VersionFeature::StackFrameGaps, Legacy)
+SBF_VERSION(V1, 1, "v1", "SBF v1", VersionFeature::ManualStackFrames, Legacy)
+SBF_VERSION(V2, 2, "v2", "SBF v2",
+            VersionFeature::ManualStackFrames | VersionFeature::PQR |
+                VersionFeature::ExplicitSignExtension |
+                VersionFeature::SwapSubImmediate | VersionFeature::DisableNeg |
+                VersionFeature::CallXSource | VersionFeature::DisableLDDW |
+                VersionFeature::DisableLE | VersionFeature::MovedMemory,
+            Legacy)
+SBF_VERSION(V3, 3, "v3", "SBF v3",
+            VersionFeature::StaticSyscalls | VersionFeature::StrictELF |
+                VersionFeature::LowerRodata | VersionFeature::JMP32 |
+                VersionFeature::CallXDestination,
+            Current)
+SBF_VERSION(V4, 4, "v4", "SBF v4",
+            VersionFeature::StaticSyscalls | VersionFeature::StrictELF |
+                VersionFeature::LowerRodata | VersionFeature::JMP32 |
+                VersionFeature::CallXDestination |
+                VersionFeature::AlignedMemoryMapping,
+            Upstream)
+
+#undef SBF_VERSION
+#undef SBF_VERSION_AUTO

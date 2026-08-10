@@ -37,7 +37,8 @@ std::optional<uint64_t> parseAddrArg(StringRef Ref) {
 //===----------------------------------------------------------------------===//
 
 cl::SubCommand LiftCmd("lift", "Lift binary to LLVM IR");
-cl::SubCommand DecompileCmd("decompile", "Decompile binary to C or Solidity");
+cl::SubCommand DecompileCmd("decompile",
+                            "Decompile binary to C, Rust, or Solidity");
 cl::SubCommand PatchCmd("patch", "Patch binary with modified IR");
 cl::SubCommand InfoCmd("info", "Show binary metadata summary");
 cl::SubCommand StringsCmd("strings", "Scan binary for strings");
@@ -236,6 +237,21 @@ cl::opt<evm::Hardfork> EVMHardfork("evm-hardfork", cl::desc("EVM hardfork"),
 cl::opt<bool> EVMRelaxed(
     "evm-relaxed",
     cl::desc("Keep unknown/inactive EVM opcodes as explicit fault nodes"),
+    cl::sub(LiftCmd), cl::sub(DecompileCmd));
+
+cl::opt<sbf::Version> SBFVersion(
+    "sbf-version", cl::desc("Solana SBF version"), cl::ValuesClass({
+#define SBF_VERSION_AUTO(NAME, SPELLING, DISPLAY_NAME)                         \
+  clEnumValN(sbf::Version::NAME, SPELLING, DISPLAY_NAME),
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
+  clEnumValN(sbf::Version::NAME, SPELLING, DISPLAY_NAME),
+#include "neverd/sbf/SBFVersions.def"
+    }),
+    cl::init(sbf::Version::Auto), cl::sub(LiftCmd), cl::sub(DecompileCmd));
+
+cl::opt<bool> SBFRelaxed(
+    "sbf-relaxed",
+    cl::desc("Keep invalid or version-inactive SBF instructions as fault nodes"),
     cl::sub(LiftCmd), cl::sub(DecompileCmd));
 
 //===----------------------------------------------------------------------===//

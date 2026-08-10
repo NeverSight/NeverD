@@ -25,6 +25,7 @@
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/sbf/LLVMEmitter.h"
 #include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/sigs/SignatureDB.h"
 
@@ -39,6 +40,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -58,8 +60,11 @@ struct Session {
   std::unique_ptr<llvm::LLVMContext> LLVMCtx;
   PipelineResult PipeResult;
   bool PipeRan = false;
+  bool SBFFunctionsSynchronized = false;
   evm::Hardfork EVMFork = evm::Hardfork::Latest;
   bool EVMStrict = true;
+  sbf::Version SBFVersion = sbf::Version::Auto;
+  bool SBFStrict = true;
 
   Decoder Dec;
 
@@ -166,6 +171,37 @@ struct Session {
   void setError(const std::string &Msg) { LastError = Msg; }
   void clearError() { LastError.clear(); }
 
+  void applyAnalysisOptions(PipelineOptions &Opts) const {
+    Opts.EVMFork = EVMFork;
+    Opts.EVMStrict = EVMStrict;
+    Opts.SBFVersion = SBFVersion;
+    Opts.SBFStrict = SBFStrict;
+  }
+
+  void resetFunctionsFromImage() {
+    Functions.clear();
+    OriginalNames.clear();
+    if (!Loaded)
+      return;
+    const auto Symbols = Img.getFunctionSymbols();
+    Functions.reserve(Symbols.size());
+    for (const Symbol *Symbol : Symbols) {
+      std::string Name = Symbol->Name;
+      OriginalNames[Symbol->Addr] = Name;
+      if (auto Rename = Renames.find(Symbol->Addr); Rename != Renames.end())
+        Name = Rename->second;
+      Functions.push_back({Symbol->Addr, Symbol->Size, std::move(Name)});
+    }
+  }
+
+  void invalidatePipeline() {
+    PipeResult = {};
+    LLVMCtx.reset();
+    PipeRan = false;
+    SBFFunctionsSynchronized = false;
+    resetFunctionsFromImage();
+  }
+
   bool ensurePipeline() {
     if (PipeRan)
       return PipeResult.Success;
@@ -175,8 +211,7 @@ struct Session {
     }
     LLVMCtx = std::make_unique<llvm::LLVMContext>();
     PipelineOptions Opts;
-    Opts.EVMFork = EVMFork;
-    Opts.EVMStrict = EVMStrict;
+    applyAnalysisOptions(Opts);
     Pipeline ThePipeline;
     PipeResult = ThePipeline.run(Img, *LLVMCtx, Opts);
     PipeRan = true;
@@ -184,6 +219,10 @@ struct Session {
       setError(PipeResult.Error.empty() ? "pipeline failed" : PipeResult.Error);
     return PipeResult.Success;
   }
+
+  /// Merge loader symbols with functions recovered by the SBF analyzer. All
+  /// public function-oriented APIs consume this single session view.
+  bool synchronizeFunctions();
 
   const LowFunc *findLowFunc(va_t Addr) const {
     for (const auto &F : PipeResult.LowFuncs)
@@ -206,6 +245,15 @@ struct Session {
       return false;
     if (PipeResult.EVM) {
       auto Module = evm::emitLLVM(*PipeResult.EVM, *LLVMCtx);
+      if (!Module) {
+        setError(llvm::toString(Module.takeError()));
+        return false;
+      }
+      PipeResult.LlvmModule = std::move(*Module);
+      return true;
+    }
+    if (PipeResult.SBF) {
+      auto Module = sbf::emitLLVM(*PipeResult.SBF, *LLVMCtx);
       if (!Module) {
         setError(llvm::toString(Module.takeError()));
         return false;

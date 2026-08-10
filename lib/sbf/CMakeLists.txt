@@ -1,0 +1,12 @@
+add_neverd_component_library(NeverDSBF
+  Analyzer.cpp
+  CEmitter.cpp
+  Interpreter.cpp
+  LLVMEmitter.cpp
+  Opcodes.cpp
+  Relocations.cpp
+  RustEmitter.cpp
+  StructuredCFG.cpp
+  Syscalls.cpp
+  Version.cpp
+)

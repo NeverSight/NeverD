@@ -76,6 +76,10 @@ inline constexpr llvm::StringLiteral kEVMCodeSegmentName("EVM_CODE");
 inline constexpr llvm::StringLiteral kEVMCodeSectionName(".evm.code");
 inline constexpr llvm::StringLiteral kEVMEntrySymbolName("evm_entry");
 
+/// Stable SBF architecture name shared by the loader and public API.  Solana
+/// protocol constants live in neverd/sbf/SBFConstants.h.
+inline constexpr llvm::StringLiteral kSBFArchName("sbf");
+
 /// Prefix for synthesized function-pointer dispatch tables recovered from a
 /// `.data.rel.ro` code-pointer array (callback table / vtable / threaded
 /// dispatch).  Each entry is `ptrtoint @func`, so the recompiled object's
@@ -148,9 +152,9 @@ inline bool isDarwinStackProbeName(llvm::StringRef Name) {
   return stripLeadingUnderscores(Name).contains("chkstk");
 }
 
-/// Native ISA targets plus the 256-bit Ethereum Virtual Machine.
+/// Native ISA targets plus the Ethereum VM and Solana SBF virtual machines.
 /// Backend support (lift/codegen/patch): neverd/ir/arch_support.h.
-enum class Arch : uint8_t { X64, AArch64, X86, ARM, EVM, Unknown };
+enum class Arch : uint8_t { X64, AArch64, X86, ARM, EVM, SBF, Unknown };
 
 enum class InstructionMode : uint8_t { Default, ARM, Thumb };
 
@@ -166,6 +170,8 @@ inline const char *getArchName(Arch A) {
     return "arm";
   case Arch::EVM:
     return kEVMArchName.data();
+  case Arch::SBF:
+    return kSBFArchName.data();
   default:
     return "unknown";
   }

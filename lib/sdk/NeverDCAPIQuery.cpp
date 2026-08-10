@@ -15,7 +15,9 @@
 #include "SessionImpl.h"
 
 #include "neverd/ir/NdOps.h"
+#include "neverd/sbf/Analyzer.h"
 
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/SHA256.h"
@@ -27,6 +29,35 @@
 
 using namespace neverd;
 using namespace neverd::sdk;
+
+namespace {
+
+llvm::StringRef sbfCFGEdgeType(const sbf::SBFProgram &Program,
+                               const sbf::CFGEdge &Edge) {
+  switch (Edge.Kind) {
+  case sbf::EdgeKind::Fallthrough:
+    for (const sbf::CFGEdge &Candidate : Program.Low.Edges)
+      if (Candidate.From == Edge.From &&
+          Candidate.Kind == sbf::EdgeKind::BranchTaken)
+        return "false";
+    return "fallthrough";
+  case sbf::EdgeKind::BranchTaken:
+    return "true";
+  case sbf::EdgeKind::Branch:
+    return "unconditional";
+  case sbf::EdgeKind::Call:
+    return "call";
+  case sbf::EdgeKind::IndirectCall:
+    return "indirect-call";
+  case sbf::EdgeKind::Return:
+    return "return";
+  case sbf::EdgeKind::Invalid:
+    return "invalid";
+  }
+  llvm_unreachable("covered SBF CFG edge kind");
+}
+
+} // namespace
 
 // ===--------------------------------------------------------------------===//
 // Info panels (JSON)
@@ -188,6 +219,7 @@ const char *neverd_headers_json(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   if (!S->Loaded)
     return dupStr("{}");
+  (void)S->synchronizeFunctions();
 
   llvm::json::Object Root;
   Root["entry"] = vaHex(S->Img.Entry);
@@ -210,6 +242,36 @@ const char *neverd_headers_json(neverd_session_t Sess) {
   Root["reloc_count"] = static_cast<int64_t>(S->Img.Relocations.size());
   Root["base_reloc_count"] =
       static_cast<int64_t>(S->Img.BaseRelocations.size());
+
+  if (S->Img.SBF) {
+    const sbf::Metadata &Metadata = *S->Img.SBF;
+    llvm::json::Object SBF;
+    SBF["version"] = sbf::versionName(Metadata.Version);
+    SBF["version_display"] = sbf::versionDisplayName(Metadata.Version);
+    SBF["elf_flags"] = static_cast<int64_t>(Metadata.ELFFlags);
+    SBF["machine"] = static_cast<int64_t>(Metadata.Machine);
+    llvm::StringRef MachineName = sbf::kUnknownELFMachineName;
+    if (Metadata.Machine == sbf::kELFMachineBPF)
+      MachineName = sbf::kELFMachineBPFName;
+    else if (Metadata.Machine == sbf::kELFMachineSBPF)
+      MachineName = sbf::kELFMachineSBPFName;
+    SBF["machine_name"] = MachineName;
+    SBF["layout"] =
+        Metadata.StrictLayout ? sbf::kStrictLayoutName : sbf::kLegacyLayoutName;
+    llvm::json::Object Text;
+    Text["file_offset"] = static_cast<int64_t>(Metadata.TextFile.Offset);
+    Text["file_size"] = static_cast<int64_t>(Metadata.TextFile.Size);
+    Text["vm_address"] = vaHex(Metadata.TextVM.Address);
+    Text["vm_size"] = static_cast<int64_t>(Metadata.TextVM.Size);
+    SBF["text"] = std::move(Text);
+    llvm::json::Object Rodata;
+    Rodata["file_offset"] = static_cast<int64_t>(Metadata.RodataFile.Offset);
+    Rodata["file_size"] = static_cast<int64_t>(Metadata.RodataFile.Size);
+    Rodata["vm_address"] = vaHex(Metadata.RodataVM.Address);
+    Rodata["vm_size"] = static_cast<int64_t>(Metadata.RodataVM.Size);
+    SBF["rodata"] = std::move(Rodata);
+    Root["sbf"] = std::move(SBF);
+  }
 
   llvm::json::Object Dyn;
   const auto &DI = S->Img.DynInfo;
@@ -305,6 +367,7 @@ const char *neverd_dashboard_json(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   if (!S->Loaded)
     return dupStr("{}");
+  (void)S->synchronizeFunctions();
 
   llvm::json::Object Root;
 
@@ -536,6 +599,62 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
     return dupStr(jsonToString(llvm::json::Value(std::move(Root))));
   }
 
+  if (S->PipeResult.SBF) {
+    const auto &Program = *S->PipeResult.SBF;
+    const sbf::Function *Function = nullptr;
+    for (const auto &Candidate : Program.High.Functions)
+      if (Candidate.Address == FuncEntry) {
+        Function = &Candidate;
+        break;
+      }
+    if (!Function) {
+      S->setError("SBF function entry not found");
+      return dupStr(std::string("{}"));
+    }
+    const std::set<size_t> FunctionBlocks(Function->Blocks.begin(),
+                                          Function->Blocks.end());
+    llvm::json::Array Nodes;
+    llvm::json::Array Edges;
+    for (const auto &Block : Program.Low.Blocks) {
+      if (!FunctionBlocks.contains(Block.ID))
+        continue;
+      llvm::json::Object Node;
+      Node["id"] = static_cast<int64_t>(Block.ID);
+      Node["start"] = vaHex(Program.Low.TextAddress +
+                            Block.StartSlot * sbf::kInstructionSize);
+      Node["end"] = vaHex(Program.Low.TextAddress +
+                          Block.EndSlot * sbf::kInstructionSize);
+      Node["insn_count"] =
+          static_cast<int64_t>(Block.EndSlot - Block.StartSlot);
+      Node["reachable"] = Block.Reachable;
+      llvm::json::Array Lines;
+      for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot) {
+        const auto &Instruction = Program.Low.Instructions[Slot];
+        if (!Instruction.IsContinuation)
+          Lines.push_back(vaHex(Instruction.Address) + ": " +
+                          sbf::formatInstruction(Instruction));
+      }
+      Node["disasm"] = std::move(Lines);
+      Nodes.push_back(std::move(Node));
+      for (const sbf::CFGEdge &ProgramEdge : Program.Low.Edges) {
+        if (ProgramEdge.From != Block.ID || !ProgramEdge.To ||
+            !FunctionBlocks.contains(*ProgramEdge.To))
+          continue;
+        llvm::json::Object Edge;
+        Edge["from"] = static_cast<int64_t>(Block.ID);
+        Edge["to"] = static_cast<int64_t>(*ProgramEdge.To);
+        Edge["type"] = sbfCFGEdgeType(Program, ProgramEdge);
+        Edges.push_back(std::move(Edge));
+      }
+    }
+    llvm::json::Object Root;
+    Root["name"] = Function->Name;
+    Root["entry"] = vaHex(Function->Address);
+    Root["nodes"] = std::move(Nodes);
+    Root["edges"] = std::move(Edges);
+    return dupStr(jsonToString(llvm::json::Value(std::move(Root))));
+  }
+
   const LowFunc *F = S->findLowFunc(FuncEntry);
   if (!F) {
     S->setError("function not found");
@@ -613,8 +732,7 @@ const char *neverd_cfg_dot(neverd_session_t Sess, const char *InputPath,
   }
   PipelineOptions Opts;
   if (S) {
-    Opts.EVMFork = S->EVMFork;
-    Opts.EVMStrict = S->EVMStrict;
+    S->applyAnalysisOptions(Opts);
   }
   if (!R.run(Opts, Err)) {
     if (S)
@@ -634,6 +752,45 @@ const char *neverd_cfg_dot(neverd_session_t Sess, const char *InputPath,
       for (const auto &Edge : Block.Successors)
         if (Edge.Target)
           OS << "  bb" << Block.StartPC << " -> bb" << *Edge.Target << ";\n";
+    OS << "}\n";
+    return dupStr(Buf);
+  }
+
+  if (R.Result.SBF) {
+    std::string Buf;
+    llvm::raw_string_ostream OS(Buf);
+    const sbf::Function *Function =
+        sbf::findFunction(*R.Result.SBF, FuncNameOrAddr ? FuncNameOrAddr : "");
+    if (!Function) {
+      if (S)
+        S->setError("SBF function not found");
+      return nullptr;
+    }
+    const std::set<size_t> FunctionBlocks(Function->Blocks.begin(),
+                                          Function->Blocks.end());
+    OS << "digraph cfg {\n";
+    if (Styled) {
+      OS << "  node [shape=box, fontname=\"Courier\", fontsize=10, "
+            "style=filled, fillcolor=\"#252526\", fontcolor=\"#ebebeb\", "
+            "color=\"#3c3c3c\"];\n"
+            "  edge [color=\"#569cd6\"];\n"
+            "  bgcolor=\"#1e1e1e\";\n";
+    } else {
+      OS << "  node [shape=box, fontname=\"Courier\", fontsize=10];\n";
+    }
+    for (const auto &Block : R.Result.SBF->Low.Blocks) {
+      if (!FunctionBlocks.contains(Block.ID))
+        continue;
+      OS << "  bb" << Block.ID << " [label=\"BB" << Block.ID << " (slot "
+         << Block.StartSlot << ")\"];\n";
+    }
+    for (const auto &Block : R.Result.SBF->Low.Blocks) {
+      if (!FunctionBlocks.contains(Block.ID))
+        continue;
+      for (size_t Successor : Block.Successors)
+        if (FunctionBlocks.contains(Successor))
+          OS << "  bb" << Block.ID << " -> bb" << Successor << ";\n";
+    }
     OS << "}\n";
     return dupStr(Buf);
   }
@@ -698,6 +855,8 @@ const char *neverd_callgraph_json(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   if (!S->ensurePipeline())
     return dupStr("{\"nodes\":[],\"edges\":[]}");
+  if (!S->synchronizeFunctions())
+    return dupStr("{\"nodes\":[],\"edges\":[]}");
 
   std::map<va_t, std::string> FuncNames;
   for (const auto &F : S->Functions)
@@ -714,6 +873,38 @@ const char *neverd_callgraph_json(neverd_session_t Sess) {
 
   std::set<std::pair<va_t, va_t>> Seen;
   llvm::json::Array Edges;
+  if (S->PipeResult.SBF) {
+    const auto &Program = *S->PipeResult.SBF;
+    std::map<size_t, const sbf::Function *> BlockOwners;
+    for (const auto &Function : Program.High.Functions)
+      for (size_t Block : Function.Blocks)
+        BlockOwners.try_emplace(Block, &Function);
+    std::map<size_t, size_t> SlotBlocks;
+    for (const auto &Block : Program.Low.Blocks)
+      for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot)
+        SlotBlocks[Slot] = Block.ID;
+    for (const auto &Call : Program.High.Calls) {
+      if (Call.Kind != sbf::CallKind::Internal || !Call.TargetSlot)
+        continue;
+      auto BlockIt = SlotBlocks.find(Call.SourceSlot);
+      if (BlockIt == SlotBlocks.end())
+        continue;
+      auto CallerIt = BlockOwners.find(BlockIt->second);
+      if (CallerIt == BlockOwners.end())
+        continue;
+      const va_t Target =
+          Program.Low.TextAddress + *Call.TargetSlot * sbf::kInstructionSize;
+      auto Key = std::make_pair(CallerIt->second->Address, Target);
+      if (!Seen.insert(Key).second)
+        continue;
+      llvm::json::Object Edge;
+      Edge["caller"] = vaHex(Key.first);
+      Edge["callee"] = vaHex(Key.second);
+      Edge["caller_name"] = CallerIt->second->Name;
+      Edge["callee_name"] = Call.Name;
+      Edges.push_back(std::move(Edge));
+    }
+  }
   for (const auto &LF : S->PipeResult.LowFuncs) {
     for (const auto &B : LF.Blocks) {
       for (const auto &Op : B.Ops) {
@@ -751,6 +942,7 @@ const char *neverd_resolve_addr(neverd_session_t Sess, neverd_va_t Addr) {
   auto *S = toSession(Sess);
   if (!S->Loaded)
     return nullptr;
+  (void)S->synchronizeFunctions();
 
   llvm::json::Object Obj;
 
@@ -908,6 +1100,8 @@ const char *neverd_diff_functions(neverd_session_t SessA,
   auto *B = toSession(SessB);
   if (!A->Loaded || !B->Loaded)
     return dupStr("{}");
+  (void)A->synchronizeFunctions();
+  (void)B->synchronizeFunctions();
 
   std::map<std::string, int> MapA, MapB;
   for (int I = 0; I < static_cast<int>(A->Functions.size()); ++I)
