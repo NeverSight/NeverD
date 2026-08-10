@@ -5,6 +5,12 @@
 
 #include "neverd/sdk/NeverDPlugin.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include <Python.h>
 
 #ifdef _WIN32
