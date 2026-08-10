@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress182RTTests.cpp - 2D prefix / transpose / spiral =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES.  Each reads its rodata
 // through plain forward base+index copies (symbol always referenced at offset 0;
 // the row-major index r*C+c is a runtime value, so the relocation stays at

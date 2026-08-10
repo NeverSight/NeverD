@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress308RTTests.cpp - -O0 by-value structs --------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 kernels passing and returning small aggregates BY VALUE — a distinct ABI
 // path from the scalar argument probes 305/306/307: a by-value struct is laid
 // across one or more argument slots (lane-split on the caller, reassembled on

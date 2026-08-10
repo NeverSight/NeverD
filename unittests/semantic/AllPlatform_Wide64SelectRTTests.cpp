@@ -1,5 +1,9 @@
 //===- AllPlatform_Wide64SelectRTTests.cpp - 64-bit select on 32-bit -C++-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for *selecting whole 64-bit values* on the 32-bit targets,
 // where a `long long` is a register pair and a `cond ? a64 : b64` must move both
 // halves together off one two-word comparison.  This is distinct from

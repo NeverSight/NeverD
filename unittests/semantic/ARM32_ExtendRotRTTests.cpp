@@ -1,5 +1,9 @@
 //===- ARM32_ExtendRotRTTests.cpp - extend-with-ROR roundtrip ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 sign/zero-extend instructions take an optional ROR #8/16/24 on the
 // source that rotates the whole register BEFORE the byte/halfword is extracted:
 //   SXTB/UXTB/SXTH/UXTH         Rd      = extend(rot(Rm)[low])

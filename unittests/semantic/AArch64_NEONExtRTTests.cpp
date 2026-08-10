@@ -1,5 +1,9 @@
 //===- AArch64_NEONExtRTTests.cpp - AArch64 NEON ext roundtrip ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests AArch64 NEON MUL/MLA/FMLA/widening/narrowing/pairwise operations
 // through the full lift → recompile → Unicorn pipeline.
 //

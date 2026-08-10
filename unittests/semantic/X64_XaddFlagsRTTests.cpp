@@ -1,5 +1,9 @@
 //===- X64_XaddFlagsRTTests.cpp - x86 XADD flag aliasing -------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // XADD dst, src computes sum = dst + src, then writes src = old dst and
 // dst = sum.  The status flags come from that add and must be derived from the
 // ORIGINAL operands, but the lift computed them after the register writes, so a

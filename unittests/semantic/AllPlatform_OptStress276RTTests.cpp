@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress276RTTests.cpp - nested loop CFG at -O0 ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Deeply nested loops with break / continue / early-exit and several loop-
 // carried accumulators at -O0 — exercises irreducible-free but dense control
 // flow where every induction variable and accumulator is a frame slot reloaded

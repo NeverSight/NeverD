@@ -1,5 +1,9 @@
 //===- AArch64_ClsCountRTTests.cpp - CLS (count leading sign) RT -*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64 CLS returns (number of consecutive bits below the sign bit that EQUAL
 // the sign bit), i.e. one less than the total leading-sign run.  The lifter
 // implements the standard identity CLS(x) = CLZ(x ^ (x ASR 1)) - 1, computed at

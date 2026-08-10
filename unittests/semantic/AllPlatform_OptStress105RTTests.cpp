@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress105RTTests.cpp - automaton / 2D rodata shapes --==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES, all address-independent
 // (the folded result depends only on the bytes in the globals + the control
 // flow, never on an absolute VA) and all reached by pure index arithmetic from

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress36RTTests.cpp - numeric-kernel probes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fresh numeric kernels not exercised by the earlier OptStress rounds, each
 // stressing a distinct lift corner around constant arithmetic, double-operand
 // shifts, and widening multiplies:

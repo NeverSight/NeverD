@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress45RTTests.cpp - shift-count-zero edges -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for variable-count shifts whose runtime count sweeps through
 // zero.  The existing OptStress36 `shld32` funnel kernel deliberately dodges a
 // zero count (`if(n==0u) n=1u;`), so the count==0 path of the double-precision

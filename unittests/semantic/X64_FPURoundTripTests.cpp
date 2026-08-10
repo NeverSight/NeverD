@@ -1,5 +1,9 @@
 //===- X64_FPURoundTripTests.cpp - x87 FPU roundtrip tests ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86 x87 FPU instructions through full lift pipeline.  Uses `long
 // double` or FP math functions that the compiler emits as x87 sequences.
 // These exercise X86LiftFPU.cpp: FLD/FST/FADD/FSUB/FMUL/FDIV/FSQRT/FABS etc.

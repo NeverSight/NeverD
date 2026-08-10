@@ -1,5 +1,9 @@
 //===- AllPlatform_Wide64MemRTTests.cpp - i64 values in memory --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // 64-bit integer values living in *memory arrays*, complementing Wide64Opt
 // (register-only kernels) and Wide64CallAbi (call boundaries).  On the 32-bit
 // targets (i386 / ARM32) each i64 occupies a register *pair*, so loading,

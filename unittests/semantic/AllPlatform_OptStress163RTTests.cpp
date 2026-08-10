@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress163RTTests.cpp - mono runs / heap PQ / Warshall =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES.  Each reads its rodata
 // through a plain base+index copy and folds a result that depends only on the
 // bytes + control flow (never an absolute VA), so nothing touches the deferred

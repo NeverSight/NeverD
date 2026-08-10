@@ -1,5 +1,9 @@
 //===- AllPlatform_SignedFlagFoldRTTests.cpp - signed setcc fold -*- C++ -*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The roundtrip harness only compares return values, so MedFlags' folding of a
 // signed condition (setl/setge/setle/setg, cset lt/ge/le/gt, movlt/...) back to
 // a comparison of the flag source's operands is invisible unless folded into

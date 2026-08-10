@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress39RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Targets the *inverse* of the #430 sub-register gating boundary.  #430 fixed
 // the "entry-block narrow (8/16-bit) seed, wide parent read in a later block"
 // gap (Phase B2x in LowToMedX86).  Its three gates deliberately back off when

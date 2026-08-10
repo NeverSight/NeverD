@@ -1,5 +1,9 @@
 //===- X64_FPRoundTripTests.cpp - FP roundtrip via integer bitcast -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 floating-point instructions through the lift pipeline.
 // Uses integer parameters with __builtin_memcpy to bitcast, so the function
 // ABI stays integer-register based (rdi/rsi -> rax) while exercising FP ops.

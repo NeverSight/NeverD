@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress316RTTests.cpp - int arg == function VA -------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A small INTEGER call argument whose value coincides with an ADDRESS-TAKEN
 // function's entry VA must stay an integer — it must NOT be symbolized into that
 // function's address.  This is the call-argument / general-constant arm of the

@@ -1,5 +1,9 @@
 //===- X64_RepStringBackwardRTTests.cpp - DF=1 REP string ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Backward (DF=1, `std`) REP MOVS/STOS.  The lifter previously modelled only
 // the forward (DF=0) REP form -- it unconditionally advanced RSI/RDI *up* and
 // emitted a forward `rep movs/stos`, so a `std; rep movsb` over overlapping

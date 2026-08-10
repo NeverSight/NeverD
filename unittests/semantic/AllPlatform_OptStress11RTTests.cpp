@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress11RTTests.cpp - opt-stress probes ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-stress roundtrip probes in shapes the OptStress1-10 series did not
 // reach, picked to hit flag-recovery / select-materialization paths that have
 // historically hidden optimizer / lift semantic bugs:

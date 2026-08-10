@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress299RTTests.cpp - -O0 atomic RMW probe =========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 sink differential of the OptStress298 atomic kernels.  At -O0 clang
 // keeps atomics on a non-escaping stack local (no demotion), so the RMW targets
 // a frame slot: `lock xadd [rbp-k]` (x86), `ldxr/stxr [sp+k]` (AArch64),

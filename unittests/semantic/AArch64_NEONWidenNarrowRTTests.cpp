@@ -1,5 +1,9 @@
 //===- AArch64_NEONWidenNarrowRTTests.cpp - NEON widen/narrow roundtrip --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests AArch64 NEON widening, narrowing, pairwise, and misc operations
 // through C vector types and intrinsics.
 //

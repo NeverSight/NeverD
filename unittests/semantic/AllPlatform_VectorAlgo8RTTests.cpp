@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo8RTTests.cpp - FP vectorizable algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Eighth batch of realistic clang -O2 algorithms used as high-yield lift bug
 // probes.  Unlike the earlier seven (all integer), this batch targets
 // FLOATING-POINT element-wise vectorization: per-lane FMUL/FADD/FSUB,

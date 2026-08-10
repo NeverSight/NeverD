@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo27RTTests.cpp - interleave/strided kernels C++===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twenty-seventh batch of clang -O2 probes targeting de-interleaving structure
 // access and saturating narrow chains — the patterns that lower to AArch64
 // LD2/LD3/LD4 + ST2/ST3/ST4, ARM32 VLDn/VSTn, and x86 unpack/shuffle webs:

@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo48RTTests.cpp - large constant-pool functions -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Forty-eighth batch: LARGE NEON functions whose `.text` (ARM32, with the
 // constant pool embedded inline) exceeds the single-global embed cap, exercising
 // #531's embedExecSegmentRun / embedRodataRun at scale.  Before the cap was

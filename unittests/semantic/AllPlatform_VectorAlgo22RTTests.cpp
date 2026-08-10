@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo22RTTests.cpp - SIMD integer kernels -*- C++ -*=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twenty-second batch of clang -O2 algorithm probes, weighted toward integer
 // SIMD shapes the auto-vectorizer reaches for — saturating add/sub, byte
 // packing/narrowing, interleave/deinterleave, cross-lane reduction, shuffle

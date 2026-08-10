@@ -1,5 +1,9 @@
 //===- AArch64_SemanticTests.cpp - AArch64 semantic tests --------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Migrated from scripts/lift_verifier.py — AArch64 instruction categories:
 //   Core, BitShift, Cond, Extend, Carry, Mem, MulDiv, FP, Atomic, CoreExt,
 //   MemExt, FPExt, CondSel, NEONScalar, NEONCvt, NEONMinMax, SIMDLdSt

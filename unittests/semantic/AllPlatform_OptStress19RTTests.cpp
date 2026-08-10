@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress19RTTests.cpp - dense int algorithms -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-stress roundtrip probes built from dense, real integer algorithms
 // not covered by OptStress1-18 / OptStress17's algorithm set.  Each kernel mixes
 // transforms that NeverD's own MedIR passes (flag reconstruction, sub-register

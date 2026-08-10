@@ -1,5 +1,9 @@
 //===- X86_X87ConstLoadRTTests.cpp - x87 built-in constant loads -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // FLD1/FLDZ load 1.0/0.0 and were already modeled, but the transcendental
 // constant loads FLDPI/FLDL2E/FLDL2T/FLDLG2/FLDLN2 were lifted as a bare
 // placeholder intrinsic that pushes garbage onto the x87 stack (the LLVM

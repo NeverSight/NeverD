@@ -1,5 +1,9 @@
 //===- AllPlatform_Wide64MulRTTests.cpp - i64 multiply lowering -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // 64-bit *multiply* kernels, complementing Wide64Opt (which only touches the
 // multiply path via a constant multiplier or a single 32x32->64 widening MAC).
 // On the 32-bit targets (i386 / ARM32) a full i64 x i64 -> i64 product expands

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress154RTTests.cpp - matmul / conv1d / window-max =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES.  Each copies its rodata
 // operands into a stack buffer with a plain base+index loop and then does all
 // indexed work on the stack copy, so the folded result depends only on the bytes

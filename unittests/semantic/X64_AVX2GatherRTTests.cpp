@@ -1,5 +1,9 @@
 //===- X64_AVX2GatherRTTests.cpp - AVX2 VSIB gather lift roundtrip ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86_64 probes that force clang to emit real AVX2 VSIB gather instructions
 // (VPGATHER{DD,DQ,QD,QQ} and VGATHER{DPS,DPD,QPS,QPD}) via the gather builtins
 // rather than the scalar-reload fallback an auto-vectorized loop may pick.

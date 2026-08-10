@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress14RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-stress roundtrip probes orthogonal to OptStress1-13 / SubRegMix,
 // aimed at multi-word carry/borrow chains, SWAR byte lanes, signed-overflow
 // saturation and funnel shifts -- idioms that exercise NeverD's hand-written

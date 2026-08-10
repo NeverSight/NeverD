@@ -1,5 +1,9 @@
 //===- ARM_PairRegAddrRTTests.cpp - pair / register-indexed addressing -C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Addressing modes adjacent to the #390 post-index fix that the C path rarely
 // emits: AArch64 LDP/STP pair load/store with pre- and post-index writeback,
 // ARM32 LDM/STM with base writeback, and ARM32 REGISTER post-index

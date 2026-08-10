@@ -1,5 +1,9 @@
 //===- X64_StringDirectionRTTests.cpp - x86 string DF direction -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 string instructions (LODS/STOS/SCAS/MOVS/CMPS) advance their pointers
 // FORWARD when DF=0 and BACKWARD when DF=1.  The lift modelled them as always
 // forward; these probes set DF=1 with `std`, run one element, then fold the

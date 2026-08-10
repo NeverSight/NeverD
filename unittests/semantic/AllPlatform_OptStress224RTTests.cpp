@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress224RTTests.cpp - call result cross-CFG use ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Hardening probes for the cross-block call-result propagation fixed in #502:
 // an FP / struct-return call whose result is consumed not straight-line but
 // across a richer control-flow shape -- a merge block after an if/else (multi-

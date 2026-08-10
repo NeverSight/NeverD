@@ -1,5 +1,9 @@
 //===- AllPlatform_ConstPoolRTTests.cpp - rodata constant-pool ---*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Constant-pool / rodata lookup-table stress probes.  Each kernel embeds a
 // LARGE (256-entry) `static const` table that clang lowers to .rodata and
 // indexes inside a loop, exercising the emitter's table-redirection path

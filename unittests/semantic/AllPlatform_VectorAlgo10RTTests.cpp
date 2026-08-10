@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo10RTTests.cpp - double FP algos ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tenth batch of clang -O2 algorithm probes.  VectorAlgo8 was float32; this one
 // targets DOUBLE-precision (f64) element-wise vectorization: per-lane
 // FMUL/FADD/FSUB, FMIN/FMAX, FABS, FP compare + select, FDIV and FSQRT on

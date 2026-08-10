@@ -1,5 +1,9 @@
 //===- X64_FPCompareRTTests.cpp - FP comparison roundtrip ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 FP comparison patterns that exercise UCOMISD/COMISS flag chains.
 // These are specifically designed to catch flag folding bugs like #32
 // (TESTB+CMOVNE producing NE(a,b) instead of (a&b)!=0).

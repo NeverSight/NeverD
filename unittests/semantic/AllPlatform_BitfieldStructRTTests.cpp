@@ -1,5 +1,9 @@
 //===- AllPlatform_BitfieldStructRTTests.cpp - bitfield rmw ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 C bitfield kernels across all four targets.  Bitfield writes lower
 // to a load / clear-field-mask / shift-insert / or-store read-modify-write, and
 // reads to a shift + mask (signed fields add a sign-extend from the field

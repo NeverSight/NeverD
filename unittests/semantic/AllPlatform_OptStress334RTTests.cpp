@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress334RTTests.cpp - deeper pointer symbolization ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Extends the OptStress74-76 / #473-476 pointer-symbolization family (global
 // addresses crossing memory and call boundaries) with indirection shapes those
 // batches did not cover.  The lifter must keep every relocated address symbolized

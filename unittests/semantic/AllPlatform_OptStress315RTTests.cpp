@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress315RTTests.cpp - -O0 indirect i64 ARGUMENT ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 kernels passing a 64-bit ARGUMENT THROUGH A FUNCTION POINTER — the exact
 // DUAL of the indirect i64 RETURN defect OptStress310 flagged and OptStress311
 // closed.  #311 fixed the callee-side: a `long long`-returning function reached

@@ -1,5 +1,9 @@
 //===- X64_SSEScalarChainRTTests.cpp - SSE scalar chain roundtrip ---------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers scalar SSE FP chains: ADDSS/MULSS/SUBSS/DIVSS chained operations,
 // ADDSD/MULSD/SUBSD/DIVSD chained, mixed SS/SD chains, SQRTSS/SQRTSD chains,
 // MAXSS/MINSS/MAXSD/MINSD, CMPSS/CMPSD scalar comparisons.

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress237RTTests.cpp - vector constant immediates ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Loops over stack arrays with constant operands that clang auto-vectorizes
 // into vector-immediate forms: ARM32 `vmov.i*/vmvn.i*/vbic.i*/vorr.i*`,
 // AArch64 `movi/mvni/bic/orr #imm`, x86 broadcast / all-ones (`pcmpeqd`).

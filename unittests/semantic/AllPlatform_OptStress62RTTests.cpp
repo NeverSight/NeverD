@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress62RTTests.cpp - mixed-width promote -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Mixed 8/16/32/64-bit integer promotion, narrowing stores and partial-
 // register writes — the sub-register-aliasing surface that has produced some
 // of the worst miscompiles here (e.g. x86 "write RAX, read AL" folding to 0,

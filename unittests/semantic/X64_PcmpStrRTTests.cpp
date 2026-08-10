@@ -1,5 +1,9 @@
 //===- X64_PcmpStrRTTests.cpp - SSE4.2 PCMPxSTRx roundtrip ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the SSE4.2 packed string-compare instructions
 // PCMPISTRI/PCMPESTRI (index -> ECX) and PCMPISTRM/PCMPESTRM (mask -> XMM0).
 //

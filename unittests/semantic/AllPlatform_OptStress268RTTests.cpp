@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress268RTTests.cpp - switch + calls at -O0 =======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // switch dispatch interleaved with function calls at -O0 — combines the #509
 // nested-switch register-reuse area with the #502/#508 "call near the table"
 // area: case bodies call functions (clobbering caller-saved registers including

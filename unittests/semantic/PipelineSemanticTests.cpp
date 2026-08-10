@@ -1,5 +1,9 @@
 //===- PipelineSemanticTests.cpp - Pipeline verifier tests -------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Migrated from scripts/pipeline_verifier.py
 // Verifies instruction semantics across NeverD's pipeline stages via Unicorn.
 //

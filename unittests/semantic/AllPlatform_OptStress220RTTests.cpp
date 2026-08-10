@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress220RTTests.cpp - cmp fold + nested select =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Comparison-folding and nested-select probes driven with OVERFLOW-INDUCING
 // values (INT_MIN/INT_MAX neighbourhoods) so the signed comparisons exercise
 // the SF^OF (genuine `slt`) path, not just the lone-sign-flag path, and the

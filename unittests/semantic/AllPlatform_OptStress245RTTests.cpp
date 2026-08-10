@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress245RTTests.cpp - rotate / funnel shift =======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Rotates and two-register funnel shifts.  clang folds the safe rotate idiom
 // `(x<<n)|(x>>((32-n)&31))` into a single `rol`/`ror` (x86), `ror`/`extr`
 // (AArch64) or barrel-shifter rotate (ARM32), and the two-input form into

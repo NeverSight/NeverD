@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress285RTTests.cpp - select/clamp/minmax probe ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing the conditional-select lowering that MedFlags
 // and the codegen repeatedly miscompiled: min/max/clamp idioms (SMIN/SMAX/
 // UMIN/UMAX, CMOVcc, CSEL), abs/negate/sign (CSNEG/CSINV idioms), manual

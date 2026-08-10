@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress204RTTests.cpp - by-value struct return ABI ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for by-value aggregate RETURNS across the size classes that
 // pick different ABI paths -- small (one return register), medium (a register
 // pair / two eightbytes), mixed int+FP, and large (the hidden sret pointer the

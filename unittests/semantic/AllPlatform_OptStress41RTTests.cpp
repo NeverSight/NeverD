@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress41RTTests.cpp - bit-op insn selection -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for instruction-selection corners around bit manipulation
 // and flag-producing arithmetic that earlier OptStress rounds did not target
 // directly.  Each kernel is a bounded -O2 loop returning a value-dependent hash

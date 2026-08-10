@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress312RTTests.cpp - -O0 indirect stack args ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 kernels calling THROUGH A FUNCTION POINTER with MORE integer arguments
 // than the register-argument file holds — the KNOWN-OPEN #2 defect flagged by
 // OptStress310: ARM32 indirect-call STACK-argument recovery.

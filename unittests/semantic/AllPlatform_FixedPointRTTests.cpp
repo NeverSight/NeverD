@@ -1,5 +1,9 @@
 //===- AllPlatform_FixedPointRTTests.cpp - fixed-point DSP algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 fixed-point / DSP algorithm probes.  Q-format math packs 64-bit
 // widening multiplies (smull/smlal on ARM, imul/EDX on x86, smull/smulh on
 // AArch64), constant 64-bit shifts, magic-number divides, saturation cmov/csel

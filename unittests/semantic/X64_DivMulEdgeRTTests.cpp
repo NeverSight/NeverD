@@ -1,5 +1,9 @@
 //===- X64_DivMulEdgeRTTests.cpp - Division edge cases roundtrip -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 DIV/IDIV/MUL/IMUL edge cases through lift pipeline.
 // Specifically designed to catch:
 //   - i128 sdiv/srem → __divti3 library call regression (#7)

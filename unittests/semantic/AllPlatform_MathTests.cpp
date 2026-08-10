@@ -1,5 +1,9 @@
 //===- AllPlatform_MathTests.cpp - Mathematical roundtrip tests -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Mathematical computation patterns: integer math, bit tricks, number theory.
 //
 //===----------------------------------------------------------------------===//

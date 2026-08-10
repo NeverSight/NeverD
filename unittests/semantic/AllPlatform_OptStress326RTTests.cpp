@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress326RTTests.cpp - -Os/-Oz control flow -------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // First switch / jump-table batch at the SIZE optimizer.  Prior switch probes
 // ran at -O0 (#508-#511) or -O3 (#322); -Os/-Oz emit distinct shapes: dense and
 // sparse jump tables, tail-merged shared epilogues reached from many cases, a

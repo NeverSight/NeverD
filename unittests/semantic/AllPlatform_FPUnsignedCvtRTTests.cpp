@@ -1,5 +1,9 @@
 //===- AllPlatform_FPUnsignedCvtRTTests.cpp - unsigned FP cvt --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 unsigned integer <-> floating-point conversion kernels.  Unsigned
 // conversions are the awkward ones: x86 has no unsigned cvt, so `(double)u64`
 // and `(u64)double` lower to a sign-bit test plus a 2^63 bias add/sub branch

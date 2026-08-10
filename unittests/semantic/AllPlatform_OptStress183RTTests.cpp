@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress183RTTests.cpp - Kernighan / base64 / xor-basis =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES.  Each reads its rodata
 // through plain forward base+index copies (symbol always referenced at offset 0)
 // and folds a result that depends only on the bytes + control flow (never an

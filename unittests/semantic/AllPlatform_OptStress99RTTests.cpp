@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress99RTTests.cpp - jump-table + rodata walk -*-C++-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Regression guard for #487: a `switch` lowered to a JUMP TABLE whose entries
 // land in CodePtrRelocSlots, sharing a rodata run with a `static const` array
 // that is then WALKED with a pc pointer (`prog[pc]`, clang -O2 turns the index

@@ -1,5 +1,9 @@
 //===- AllPlatform_ComputedGotoRTTests.cpp - computed-goto dispatch -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of computed goto (GCC/clang label-as-value
 // `goto *p`), the threaded-interpreter / state-machine dispatch shape.  clang
 // lowers it to a memory-indirect branch through a `.data.rel.ro` array of

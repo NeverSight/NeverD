@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress54RTTests.cpp - rodata access edge -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Edge shapes for rodata constant-pool redirect beyond plain indexed loads:
 // volatile-qualified tables, sentinel-guarded entries, union-packed bytes,
 // address-of-element pointers, switch-scattered table offsets, and XOR-mix

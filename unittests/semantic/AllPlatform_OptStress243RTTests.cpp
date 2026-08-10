@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress243RTTests.cpp - fixed-point FP<->int convert =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Locks down the #506 AArch64 `fcvtzs/fcvtzu Wd, Dn, #fbits` source-width bug
 // across both directions and widths: float vs double source, signed vs
 // unsigned, several fraction-bit counts.  clang folds `(int)(d*2^n)` into

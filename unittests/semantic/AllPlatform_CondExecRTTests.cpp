@@ -1,5 +1,9 @@
 //===- AllPlatform_CondExecRTTests.cpp - conditional/predicated exec -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of condition-code-driven code: clang lowers these
 // kernels to predicated ARM instructions (movCC/addCC/...), x86 CMOV/SETcc, and
 // AArch64 CSEL/CSINC/CSINV/CSNEG, all of which read flags the lift must keep

@@ -1,5 +1,9 @@
 //===- CLIEndToEndTests.cpp - CLI-based E2E roundtrip tests -----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Supplementary E2E tests using the neverd CLI tool:
 //   1. Create test binary with known semantics
 //   2. neverd lift → LLVM IR

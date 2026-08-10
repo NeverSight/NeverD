@@ -1,5 +1,9 @@
 //===- AllPlatform_ReturnWidthRTTests.cpp - return-width stress ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Targeted roundtrip tests for return-value width / sign-extension and
 // sub-register tracking when the RETURN lives in a different basic block
 // from the final write to the return register (loops / conditionals).

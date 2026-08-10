@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo53RTTests.cpp - i64-element reduce → switch --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fifty-third batch of clang -O2 vector probes sitting at the intersection of
 // three independently-fragile mechanisms, a combination no prior batch drove:
 //   * i64-ELEMENT vector reduction — PADDQ (x86-64), .2d (AArch64), or VADD.i64

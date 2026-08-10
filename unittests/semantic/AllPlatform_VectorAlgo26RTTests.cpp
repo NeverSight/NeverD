@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo26RTTests.cpp - field/DSP/codec kernels -*-C++-*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twenty-sixth batch of clang -O2 probes in domains not yet exercised: GF(2^8)
 // finite-field multiply (xor/shift with conditional reduction), bit-by-bit
 // integer square root (long compare/sub/shift chains), Q15 saturating multiply

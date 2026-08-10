@@ -1,5 +1,9 @@
 //===- X86_32_PicRodataRoundTripTests.cpp - i386 PIC constant pool -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // i386 has no EIP-relative addressing, so -O2 clang reaches its vectorized
 // constant pool (and other rodata) through the PIC get-PC idiom:
 //   call $+5; pop reg; add reg,_GLOBAL_OFFSET_TABLE_; movdqa LCPI@GOTOFF(reg)

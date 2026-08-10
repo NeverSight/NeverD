@@ -1,5 +1,9 @@
 //===- AllPlatform_EdgeCaseTests.cpp - Edge case tests --------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests numeric edge cases across all three platforms: overflow, underflow,
 // max/min values, zero, sign bit, and boundary conditions.
 //

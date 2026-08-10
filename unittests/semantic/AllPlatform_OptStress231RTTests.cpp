@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress231RTTests.cpp - O0 lifting stress ===========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The whole OptStress breadth so far compiles at -O2, whose register allocator
 // keeps most values in full-width registers and folds flag chains.  -O0 emits
 // dramatically different machine code: explicit sub-register moves (movb /

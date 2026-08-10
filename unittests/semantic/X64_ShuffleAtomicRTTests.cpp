@@ -1,5 +1,9 @@
 //===- X64_ShuffleAtomicRTTests.cpp - Shuffle + atomic RT ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 shuffle, byte-swap, bit-test, atomic, and misc patterns.
 //
 //===----------------------------------------------------------------------===//

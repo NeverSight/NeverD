@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress71RTTests.cpp - small struct-by-value -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Probe for the #470 open bug O-6: a small struct with floating-point fields
 // returned *by value* is split across multiple return registers, and NeverD
 // collapses it to a single value losing the others:

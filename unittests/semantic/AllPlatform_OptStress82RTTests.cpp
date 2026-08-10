@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress82RTTests.cpp - ptr compare / wrap -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The #473-#477 fixes symbolized a global address that becomes a VALUE wherever
 // it is consumed as an address (LOAD/STORE/CALL-arg/RETURN/STORE-into-global).
 // These probes push the same DNA into shapes where a global address flows into

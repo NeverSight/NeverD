@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress5RTTests.cpp - optimizer-path stressors -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fifth batch of high-yield roundtrip probes for NeverD's own MedIR passes,
 // deliberately distinct from OptStress / 2 / 3 / 4: short-circuit boolean
 // ladders that lower to real branch lattices (MedCFGSimplify + MedFlags),

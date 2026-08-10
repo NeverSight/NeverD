@@ -1,5 +1,9 @@
 //===- KnownBugTests.cpp - Tests for known bugs to be fixed -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // These tests exercise the 5 known bugs listed in the Unicorn unsupported-instructions doc.
 // Each test is expected to FAIL until the corresponding bug is fixed.
 //

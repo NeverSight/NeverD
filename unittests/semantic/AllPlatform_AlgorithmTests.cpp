@@ -1,5 +1,9 @@
 //===- AllPlatform_AlgorithmTests.cpp - Algorithm roundtrip tests -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests common algorithm patterns: hashing, encoding, searching, and
 // mathematical computations through roundtrip verification.
 //

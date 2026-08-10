@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo34RTTests.cpp - packed SIMD idiom probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirty-fourth batch of clang -O2 vector probes, covering packed-SIMD idioms
 // not in batches 31/32/33: signed saturating narrow i32->i16 (PACKSSDW/SQXTN),
 // pairwise horizontal add (PHADDD/ADDP), rounding multiply-high i16

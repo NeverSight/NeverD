@@ -1,5 +1,9 @@
 //===- X86_32_MultiArgRTTests.cpp - i386 multi-arg cdecl recovery -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // i386 cdecl passes every argument on the stack at [esp_entry + 4 + 4*i].  When
 // clang -O2 auto-vectorizes a kernel it reaches those arguments through SSE
 // broadcasts (`pshufd $0,off(%esp),%xmm`) rather than scalar `mov`, and after

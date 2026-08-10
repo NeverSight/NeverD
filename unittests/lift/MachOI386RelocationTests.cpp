@@ -1,4 +1,8 @@
 //===- MachOI386RelocationTests.cpp - Mach-O i386 relocations ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "NeverDLiftFixture.h"
 #include "gtest/gtest.h"

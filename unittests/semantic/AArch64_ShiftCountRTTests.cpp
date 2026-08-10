@@ -1,5 +1,9 @@
 //===- AArch64_ShiftCountRTTests.cpp - variable shift count modulo --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Guardrail closing the cross-platform "shift/rotate count modulo" theme
 // (#285 x86 BT, #286 ARM32 register shift, #287 x86 rotate).  AArch64's
 // variable (register) shifts LSLV/LSRV/ASRV/RORV take the amount modulo the

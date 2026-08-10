@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress102RTTests.cpp - magic-index rodata shapes ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES not previously pinned,
 // all address-independent (the folded result depends only on the bytes stored
 // in the globals + the control flow, never on an absolute VA) and all reached

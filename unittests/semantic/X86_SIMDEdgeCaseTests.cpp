@@ -1,5 +1,9 @@
 //===- X86_SIMDEdgeCaseTests.cpp - x86 SIMD edge cases -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests for x86 SIMD patterns that exercise per-lane semantics:
 // - Packed integer multiply (PMULLW, PMULLD)
 // - Packed compare (PCMPEQB/W/D)

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress80RTTests.cpp - ptr indirection ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The #473-#477 fixes all chased one DNA: a global address that becomes a
 // VALUE, flows through some path, and is read back as an address without being
 // re-symbolized at the use.  These probes push that DNA into shapes the prior

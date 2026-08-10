@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress329RTTests.cpp - computed-goto edge variants -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Hardens the #530 pre-scaled computed-goto table recovery against edge shapes
 // beyond the plain loop: case bodies with a noinline call that clobbers the
 // index register, an index carrying an offset inside the mask (`((w>>k)+c)&7`),

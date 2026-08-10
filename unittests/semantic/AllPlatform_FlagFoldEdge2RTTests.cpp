@@ -1,5 +1,9 @@
 //===- AllPlatform_FlagFoldEdge2RTTests.cpp - flag-fold edge 2 --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-on to AllPlatform_SignedFlagFoldRTTests: exercises the other two
 // MedFlags fold paths (CMOV/predicated SELECT, conditional branch) plus
 // AArch64 conditional-compare (CCMP/CCMN) chains at signed-overflow

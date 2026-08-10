@@ -1,5 +1,9 @@
 //===- X86_X87FlagFoldRTTests.cpp - FP compare flag-fold robustness *- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Stress the MedFlags optimizer's flag-folding against the #381b class of bug:
 // an integer op writes ZF (INT_EQUAL), then an x87 FP compare overwrites ZF
 // (BOOL_OR over FLOAT_EQUAL), then a SETcc reads ZF.  The fold must attribute

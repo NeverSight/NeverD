@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress253RTTests.cpp - constant div/mod (magic) ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Signed/unsigned division and modulo by compile-time constants, which clang
 // lowers to magic-multiply + shift sequences (no runtime divide, no libcall).
 // The magic constants and the high-half multiply (mulhu/mulhs, umulh, smmul)

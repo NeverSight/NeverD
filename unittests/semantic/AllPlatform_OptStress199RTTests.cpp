@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress199RTTests.cpp - rodata interior-pointer walks =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Guardrails for the #490 "rodata interior-pointer addressing" fix: each probe
 // materializes a FIXED interior rodata address (`&tab[k]`, k a compile-time
 // constant) and walks it, so the address must stay anchored to the contiguous

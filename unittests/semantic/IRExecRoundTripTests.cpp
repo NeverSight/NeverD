@@ -1,5 +1,9 @@
 //===- IRExecRoundTripTests.cpp - LLVM IR round-trip tests ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Migrated from scripts/llvm_ir_exec_verifier.py
 //
 // Verifies end-to-end round-trip: C source → cross-compile → neverd lift →

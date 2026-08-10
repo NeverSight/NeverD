@@ -1,5 +1,9 @@
 //===- AllPlatform_StackArgEscapeRTTests.cpp - overflow stack-arg guards *-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Guards for detectStackParams' handling of integer arguments that overflow the
 // parameter registers onto the stack -- the AArch64/ARM/x64 stack-argument path
 // the #493 mutable-home work touched but had no dedicated probe for (only i386

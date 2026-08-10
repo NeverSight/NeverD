@@ -1,5 +1,9 @@
 //===- AArch64_NEONByElemWidenRTTests.cpp - by-element widen mul -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for AArch64 NEON by-element widening multiplies
 // (`smull/umull/sqdmull v.Ts, v.Th, vN.h[idx]`).  MUL/MLA/MLS/FMLA/SMLAL/
 // SQDMULH already broadcast the selected lane; the widening NON-accumulate

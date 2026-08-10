@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress317RTTests.cpp - indirect i64 THREADED call --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The INDIRECT i64-THREADED variant deliberately deferred by OptStress315/316
 // (#521 KNOWN-OPEN ②): an `acc = fp(acc, c)` chain where the SAME 64-bit
 // accumulator is BOTH passed to AND returned from an indirect-only callee every

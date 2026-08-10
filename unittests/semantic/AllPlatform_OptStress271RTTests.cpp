@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress271RTTests.cpp - FP control flow at -O0 ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Scalar floating point feeding real BRANCHES (not just select) at -O0 — the
 // dual of OptStress258, which only exercised FP compare -> select.  At -O0 the
 // FP compare -> conditional-branch path is emitted very explicitly (i386

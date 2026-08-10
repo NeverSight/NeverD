@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress50RTTests.cpp - rodata+stack mix ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The constant-pool redirect must fire for a read-only `.rodata` lookup table
 // but NOT for a stack array (whose absolute frame displacement can look like a
 // low rodata VA).  These probes interleave a `static const` rodata table with a

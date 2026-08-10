@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress94RTTests.cpp - lone sign on the branch path -==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #486 / OptStress90-93 pinned the lone sign flag (`(A-B) <s 0`, NOT the
 // overflow-corrected `A <s B`) through the SETcc and SELECT folding passes.
 // This probe closes the matching gap on the COND_BR path and at 64-bit width:

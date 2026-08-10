@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress92RTTests.cpp - sign-flag vs signed-less -C++-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // `singleFlagCond(NF)` maps a lone sign flag to CondCode::SLT.  But the sign
 // flag after a real subtraction is `(A-B) < 0` on the WRAPPED result, which is
 // NOT the signed comparison `A <s B` (the latter is SF^OF, overflow-corrected).

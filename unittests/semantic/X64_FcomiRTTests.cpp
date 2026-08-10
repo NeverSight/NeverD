@@ -1,5 +1,9 @@
 //===- X64_FcomiRTTests.cpp - x87 FUCOMI/FCOMI flag roundtrip -----*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x87 `FCOMI`/`FUCOMI`(+ popping `FCOMIP`/`FUCOMIP`) compare ST(0) with another
 // x87 register and set EFLAGS DIRECTLY:
 //   ST0 > src : ZF=0 PF=0 CF=0

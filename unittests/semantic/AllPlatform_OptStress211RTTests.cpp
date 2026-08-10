@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress211RTTests.cpp - leading bit-scan param guard =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Regression guard for the i386 "phantom regparm argument from a BSR/BSF
 // zero-source preserve" miscompile.  On i386 `__builtin_clzll`/`ctzll` lower to
 // `bsr`/`bsf`, whose architecturally-undefined zero-source destination NeverD

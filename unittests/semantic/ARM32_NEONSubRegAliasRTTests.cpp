@@ -1,5 +1,9 @@
 //===- ARM32_NEONSubRegAliasRTTests.cpp - S/D/Q sub-reg aliasing -*-C++*-=====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adversarial probes for ARM32 VFP/NEON sub-register aliasing — the trickiest of
 // the three architectures because the views overlap in a tree: S0/S1 are the two
 // halves of D0, and D0/D1 are the two halves of Q0.  Unlike AArch64, a scalar S

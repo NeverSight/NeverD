@@ -1,5 +1,9 @@
 //===- X86_SimdMovdSpillZeroExtRTTests.cpp - movd/movq upper-lane zero --*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // MOVD/MOVQ (gpr/mem -> xmm) and the MEMORY forms of MOVSS/MOVSD zero-extend
 // the destination XMM: the lanes above the moved element become 0 (Intel SDM).
 // The lifter modeled the reg destination as a plain COPY of the NARROW source

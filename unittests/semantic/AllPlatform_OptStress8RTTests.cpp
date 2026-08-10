@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress8RTTests.cpp - codec / RNG stressors -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-stress roundtrip probes in domains the OptStress1-7 / VectorAlgo
 // series did not reach: a base64 encoder (a rodata character table indexed by
 // six-bit fields — exercises constant-pool mapping plus byte-shuffle lowering),

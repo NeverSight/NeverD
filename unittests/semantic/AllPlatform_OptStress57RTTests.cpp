@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress57RTTests.cpp - algo kernels II -----*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A second batch of whole-program kernels covering data/memory shapes distinct
 // from #464/#465 (VM / FSM / sort / CRC / path / string-walk): 2D matrix math,
 // bit-array manipulation, dynamic-programming tables, shift-register sequences,

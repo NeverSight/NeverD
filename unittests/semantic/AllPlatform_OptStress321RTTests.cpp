@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress321RTTests.cpp - -O3 wide 64-bit ops ---------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O3 arm of the wide-64 family (#157/#311/#441/#518/#524).  On 32-bit targets
 // these lower to register-pair (EDX:EAX / R1:R0) carry chains, 64-bit compares
 // (cmp;sbb), widening multiply-accumulate and funnel shifts — the densest lift

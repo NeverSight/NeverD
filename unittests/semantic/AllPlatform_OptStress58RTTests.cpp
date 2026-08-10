@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress58RTTests.cpp - data-structure kernels -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Data-structure-heavy whole-program kernels (distinct from the VM / FSM / sort
 // / CRC / matrix shapes of #464-#466): binary search, max-heap sift, open-
 // addressing hash probing, Dijkstra over an adjacency matrix, a rodata trie

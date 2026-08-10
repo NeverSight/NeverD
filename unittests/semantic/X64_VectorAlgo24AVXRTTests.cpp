@@ -1,5 +1,9 @@
 //===- X64_VectorAlgo24AVXRTTests.cpp - AVX256 clang -O2 probes -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86_64-only kernels compiled with -mavx2 -O2 to reach 256-bit YMM paths:
 // packed float/double add/mul, min/max, compare-blend, and byte shuffle hashes.
 //

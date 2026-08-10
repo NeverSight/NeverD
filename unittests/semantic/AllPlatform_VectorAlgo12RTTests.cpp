@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo12RTTests.cpp - reduction/narrow ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twelfth batch of clang -O2 algorithm probes.  Focuses on horizontal
 // reductions and widening/narrowing NEON paths that earlier batches under-
 // exercised: i8/i16 horizontal sums (vpaddl chains / uaddlv / psadbw),

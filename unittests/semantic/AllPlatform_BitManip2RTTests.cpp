@@ -1,5 +1,9 @@
 //===- AllPlatform_BitManip2RTTests.cpp - bit-twiddling lowerings ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of bit-manipulation idioms clang -O2 lowers to
 // native count/scan/reverse/byte-swap instructions (POPCNT/LZCNT/TZCNT, BSR/BSF,
 // BSWAP/MOVBE, RBIT/REV, CLZ/CTZ, BT-family) and the surrounding shift/mask

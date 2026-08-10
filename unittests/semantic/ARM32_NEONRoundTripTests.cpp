@@ -1,5 +1,9 @@
 //===- ARM32_NEONRoundTripTests.cpp - ARM NEON roundtrip tests -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests ARM32 NEON/VFP instructions through the full lift pipeline.
 // Uses max 2 args to avoid ABI non-consecutive-register detection bug.
 //

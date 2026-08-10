@@ -1,5 +1,9 @@
 //===- X64_PackedMulHighRoundRTTests.cpp - PMULHW/UW/RSW lane RT -*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 packed "multiply, keep the HIGH word" family — all per-16-bit-lane:
 //
 //   PMULHW   (SSE2)  : signed   a*b, result = (a*b)[31:16]

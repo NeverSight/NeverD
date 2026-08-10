@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress83RTTests.cpp - struct ptr return/write -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #478 fixed a global pointer carried INTO a callee through a by-value struct.
 // These probes push the dual and neighbouring shapes:
 //

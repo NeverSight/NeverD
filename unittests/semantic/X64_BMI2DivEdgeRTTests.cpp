@@ -1,5 +1,9 @@
 //===- X64_BMI2DivEdgeRTTests.cpp - BMI2 + sign-extend + div edges -*-C++-*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the less-exercised x86 bit-manipulation (BMI2) family
 // (PDEP/PEXT/BZHI/BEXTR/MULX), the sign-extend-into-DX idioms (CDQ/CQO/CWD)
 // that feed signed division, and signed/unsigned division edge cases.  These

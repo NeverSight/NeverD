@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress85RTTests.cpp - memcpy / kv ptr flow ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // More emission paths a global address flows through, beyond the direct/indirect
 // call args of #473-#480:
 //

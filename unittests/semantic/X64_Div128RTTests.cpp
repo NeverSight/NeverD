@@ -1,5 +1,9 @@
 //===- X64_Div128RTTests.cpp - genuine 128/64 div (no lib call) -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // `mul; div` / `imul; idiv` form a genuine 128-bit-dividend / 64-bit-divisor
 // division (RDX:RAX is a real 128-bit value from the multiply, not a sign- or
 // zero-extension of RAX).  The lifter must keep this as the hardware division

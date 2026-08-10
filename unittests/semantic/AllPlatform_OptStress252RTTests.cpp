@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress252RTTests.cpp - bit manipulation ===========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Runtime bit indexing into bitset arrays + variable-width bitfield extract /
 // deposit + multi-word bit scans.  clang lowers these to bt/bts/btr/btc (x86),
 // ubfx/bfi (AArch64), and shift+mask chains (ARM32) — the bit-addressing path

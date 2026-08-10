@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress79RTTests.cpp - funnel/subreg/ptr --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Four unrelated aggressive integer corners the prior probes never hit head-on:
 //
 //   * funnel64 - a genuine TWO-operand funnel shift `(hi<<n)|(lo>>(64-n))` with

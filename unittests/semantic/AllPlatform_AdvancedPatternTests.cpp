@@ -1,5 +1,9 @@
 //===- AllPlatform_AdvancedPatternTests.cpp - Advanced patterns -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests complex real-world code patterns across all platforms:
 // - Data structure operations (linked list, stack, queue simulation)
 // - Cryptographic primitives (TEA, XTEA, SipHash steps)

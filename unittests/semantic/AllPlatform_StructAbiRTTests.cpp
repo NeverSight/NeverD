@@ -1,5 +1,9 @@
 //===- AllPlatform_StructAbiRTTests.cpp - struct-by-value ABI ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The call-ABI probes so far passed scalars, two small all-integer structs and a
 // register-pair struct return.  These probes cross the call boundary with the
 // struct shapes that take *distinct* ABI paths the earlier tests never reached:

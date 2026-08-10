@@ -1,5 +1,9 @@
 //===- X64_PackedWideMul32RTTests.cpp - PMULDQ/PMULUDQ lane RT --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 32->64 widening packed multiplies:
 //
 //   PMULDQ  (SSE4.1) : signed   dword[0]*dword[0] and dword[2]*dword[2]

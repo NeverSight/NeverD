@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress38RTTests.cpp - jump-table relay probes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A control-flow probe family targeting the two deep jump-table-recovery shapes
 // #448 surfaced and deferred: an indirect switch dispatch whose computed target
 // is staged through a *frame slot* before the indirect branch, and a many-way

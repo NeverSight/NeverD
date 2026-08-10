@@ -1,5 +1,9 @@
 //===- AllPlatform_FPCompareHashRTTests.cpp - FP compare flag folding -C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adversarial probes for the #395 class: scalar FP compares over special values
 // (NaN / +-Inf / +-0 / normal) whose results clang fuses so a single compare
 // feeds several SETcc/Jcc reading different flag bits (ZF/CF/PF).  Mixing the

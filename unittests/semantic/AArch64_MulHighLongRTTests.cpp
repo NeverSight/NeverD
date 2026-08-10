@@ -1,5 +1,9 @@
 //===- AArch64_MulHighLongRTTests.cpp - high/long multiply edges ----------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip guard-rail probes for the AArch64 high-half and widening
 // multiply / multiply-accumulate family, exercised at the SIGNED-vs-UNSIGNED
 // boundary that distinguishes them:

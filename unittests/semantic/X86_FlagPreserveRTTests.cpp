@@ -1,5 +1,9 @@
 //===- X86_FlagPreserveRTTests.cpp - x86 partial-flag preservation -*-C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Probes the self-written MedFlags attribution against the x86 partial-flag
 // quirks that an SSA flag model can mis-track: INC/DEC update OF/SF/ZF/AF/PF but
 // PRESERVE CF, and a flag consumer (ADC / SETcc / SBB-mask) reached across such

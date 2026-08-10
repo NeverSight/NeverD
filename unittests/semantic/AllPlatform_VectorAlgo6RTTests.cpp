@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo6RTTests.cpp - more vectorizable algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Sixth batch of realistic clang -O2 auto-vectorized algorithms used as
 // high-yield lift bug probes.  Targets paths the earlier batches did not:
 // 4x4 integer matrix multiply (dense MAC + transpose), delta encode + abs sum

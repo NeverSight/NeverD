@@ -1,5 +1,9 @@
 //===- X64_AuxCarryRTTests.cpp - x86 AF (auxiliary carry) flag --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the x86 AF (auxiliary carry) flag — the carry/borrow
 // out of bit 3, used by BCD adjust idioms and observable via LAHF / PUSHF.
 //

@@ -1,5 +1,9 @@
 //===- IRStageTests.cpp - IR stage verification tests -----------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Migrated from scripts/ir_stage_verifier.py
 // Validates instruction encoding via LLVM MC + Unicorn emulation as ground
 // truth, then lifts through each NeverD pipeline stage to verify

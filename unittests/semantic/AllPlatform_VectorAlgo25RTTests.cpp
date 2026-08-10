@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo25RTTests.cpp - saturate/MAC kernels -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twenty-fifth batch of clang -O2 autovectorization probes, biased toward the
 // lane patterns that produced the most recent lift bugs: unsigned/signed
 // saturating pack and add/sub (packuswb / paddusb / paddsb / uqxtn / uqadd),

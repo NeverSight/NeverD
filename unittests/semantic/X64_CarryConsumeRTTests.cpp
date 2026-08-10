@@ -1,5 +1,9 @@
 //===- X64_CarryConsumeRTTests.cpp - CF producer -> ADC/SBB consumer -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Existing flag tests read a flag straight into a setcc/seto/jcc.  A different,
 // untested path is a non-arithmetic CF *producer* (shift, rotate, BT, NEG, or a
 // direct CMC/STC/CLC) feeding the CF as the carry-in *value* of a later ADC/SBB.

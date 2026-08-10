@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress76RTTests.cpp - pointer indirection -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress74/75 covered a single global address crossing a call boundary in or
 // out.  These probes push the indirection one level deeper — pointer tables and
 // pointer-to-pointer state held in mutable globals:

@@ -1,5 +1,9 @@
 //===- ARM32_FPRoundTripTests.cpp - ARM32 VFP roundtrip tests ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests ARM32 VFP floating-point instructions through the lift pipeline.
 // Uses integer bitcast to avoid VFP register ABI issues.
 //

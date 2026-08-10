@@ -1,5 +1,9 @@
 //===- X64_ADXCarryChainRTTests.cpp - ADX adcx/adox carry chains -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 ADX (ADCX / ADOX) exist for one reason: multi-precision arithmetic with
 // TWO INDEPENDENT carry chains running in parallel.
 //

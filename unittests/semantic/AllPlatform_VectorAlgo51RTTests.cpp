@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo51RTTests.cpp - i64 element-wise NEON/SSE ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fifty-first batch of clang -O3 vector probes targeting 64-bit-ELEMENT vector
 // arithmetic — the lane width that is native on x86-64 (PADDQ/PSUBQ/PXOR/PSLLQ)
 // and AArch64 (.2d) but is emulated on ARM32 NEON as D-register PAIRS, which is

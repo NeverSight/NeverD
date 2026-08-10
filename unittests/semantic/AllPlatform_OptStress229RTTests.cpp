@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress229RTTests.cpp - local buffers + pointers ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Breadth probes for stack-local memory: a function allocates a local array /
 // struct and accesses it through indices and pointers at several widths.  This
 // stresses frame-relative addressing (#158), sub-word load/store, and pointer

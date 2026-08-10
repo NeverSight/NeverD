@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo49RTTests.cpp - SAD / abs-diff reductions ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Forty-ninth batch of clang -O2 vector probes covering the SUM-OF-ABSOLUTE-
 // DIFFERENCES (SAD) family — an auto-vectorized horizontal-reduction idiom that
 // prior batches only touched in a single-register, x64-only packed form

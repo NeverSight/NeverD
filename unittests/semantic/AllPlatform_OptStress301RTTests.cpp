@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress301RTTests.cpp - 64-bit atomic RMW probe -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing C11 atomic read-modify-write on a 64-bit
 // `unsigned long long` global, with the returned OLD value consumed across the
 // loop body and control flow.  The point of this round is the 64-bit lowering

@@ -1,5 +1,9 @@
 //===- AllPlatform_FlagStressRTTests.cpp - flag/compare stress ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Aggressive roundtrip stress for flag-consuming patterns, the historically
 // most bug-prone area of the lifter/optimizer (bugs #32, #48, #60, #147-149):
 //   * multiple independent comparisons consumed in the same basic block

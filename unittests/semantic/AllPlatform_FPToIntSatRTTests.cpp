@@ -1,5 +1,9 @@
 //===- AllPlatform_FPToIntSatRTTests.cpp - FP->int out-of-range -----------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // FP-to-integer conversion out-of-range / NaN behavior.  Raw LLVM fptosi/fptoui
 // is UB (poison) when the value does not fit or is NaN; a compile-time-constant
 // over-range operand folds to `ret poison`, which the optimizer miscompiles.

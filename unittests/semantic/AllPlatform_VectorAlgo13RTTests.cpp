@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo13RTTests.cpp - misc NEON paths ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirteenth batch of clang -O2 algorithm probes.  Targets remaining NEON
 // corners: trailing-zero counts (rbit+clz), bit-select blends (vbsl/vbit),
 // shift-right narrow (vshrn / shrn / packsswb), saturating doubling multiply

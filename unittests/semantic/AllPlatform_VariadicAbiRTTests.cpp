@@ -1,5 +1,9 @@
 //===- AllPlatform_VariadicAbiRTTests.cpp - variadic call ABI --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Variadic (`...`) calls take an ABI path none of the earlier call probes reach:
 // the callee materializes a register save area in its prologue (x86-64 spills the
 // integer arg registers plus, gated on AL, the XMM registers; AArch64 spills the

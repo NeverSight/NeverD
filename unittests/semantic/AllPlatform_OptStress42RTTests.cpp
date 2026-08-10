@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress42RTTests.cpp - narrow mem + sign mix -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the sign/zero-extension + comparison-flag + stack-frame
 // interaction: small local byte buffers (alloca) read back at narrow signed and
 // unsigned widths, compared with both signed and unsigned predicates, and used

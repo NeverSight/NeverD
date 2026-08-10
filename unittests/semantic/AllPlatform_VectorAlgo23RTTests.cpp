@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo23RTTests.cpp - cross-lane SIMD kernels -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twenty-third batch: clang -O2 probes stressing cross-lane reductions, saturating
 // arithmetic, shuffle permutations, and flag-derived control flow.  Each kernel
 // folds lane-wise results into one integer hash so any lane drop, wrong saturation,

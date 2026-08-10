@@ -1,4 +1,8 @@
 //===- LiftCommonTests.cpp - shared lift emission invariants ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

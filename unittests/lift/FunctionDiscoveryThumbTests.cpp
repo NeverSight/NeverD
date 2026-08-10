@@ -1,4 +1,8 @@
 //===- FunctionDiscoveryThumbTests.cpp - Thumb function discovery tests --===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

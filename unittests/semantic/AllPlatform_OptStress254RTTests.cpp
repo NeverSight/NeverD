@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress254RTTests.cpp - switch / jump tables at -O0 ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Switch dispatch, computed goto, and jump-table forms at -O0 — the code-pointer
 // counterpart of the #507 / OptStress250-251 -O0 global probes.  At -O0 i386 and
 // ARM32 reach the PIC jump table through the GOT base spilled to the stack

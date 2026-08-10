@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress74RTTests.cpp - globals across calls -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress73 drove mutable .data/.bss globals but only from one function and
 // never across a call boundary; StructAbi drove the call ABI but never touched
 // a global.  Real binaries constantly do both at once, so these probes cross

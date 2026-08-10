@@ -1,5 +1,9 @@
 //===- X86_32_FpWideRoundTripTests.cpp - i386 FP + 64-bit roundtrip *- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // i386 straight-line SSE float/double (constants reached through the PIC get-PC
 // constant pool) and 64-bit (long long) arithmetic lowered into EDX:EAX register
 // pairs.  All kernels take int arguments and fold their result into the int

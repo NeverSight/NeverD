@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress69RTTests.cpp - single-precision FP -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Single-precision (`float`) counterparts of the #470 FP-return consume shapes.
 // `float` returns occupy a narrower register slice (XMM0 low 32 / AArch64 S0 /
 // ARM S0), and `float`/`double` conversions ride along the call, so any width

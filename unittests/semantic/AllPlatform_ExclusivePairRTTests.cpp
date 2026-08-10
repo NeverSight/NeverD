@@ -1,5 +1,9 @@
 //===- AllPlatform_ExclusivePairRTTests.cpp - exclusive pair atomics -C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Exclusive load/store PAIR sequences that the C path never emits: AArch64
 // LDXP/STXP and acquire/release LDAXP/STLXP (128-bit exclusive pair), plus
 // ARM32 LDREXD/STREXD (64-bit exclusive double) and word LDREX/STREX.  Each

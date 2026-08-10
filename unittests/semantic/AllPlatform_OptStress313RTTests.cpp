@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress313RTTests.cpp - i386 small-literal symbolize -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roots out the KNOWN-OPEN i386 constant-symbolization defect flagged by
 // OptStress311 (#518): a SMALL INTEGER LITERAL seed (`long long sum = 1`) is
 // mis-symbolized into a fabricated rodata pointer (`@__nd_data_1.rodata`) on

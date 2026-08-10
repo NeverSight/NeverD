@@ -1,5 +1,9 @@
 //===- X64_XlatbTableRTTests.cpp - XLATB table lookup ------------*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 `XLATB` does `AL = [RBX + ZeroExtend(AL)]`: it indexes a 256-byte table at
 // RBX by the UNSIGNED byte in AL, replacing AL with the looked-up byte while
 // leaving the rest of RAX untouched.  Two correctness hazards hide here:

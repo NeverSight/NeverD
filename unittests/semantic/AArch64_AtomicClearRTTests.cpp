@@ -1,5 +1,9 @@
 //===- AArch64_AtomicClearRTTests.cpp - LSE LDCLR load-op roundtrip ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // FEAT_LSE atomic bit-clear LOAD form (returns the old value):
 //
 //   LDCLR Ws, Wt, [Xn]:  old = *Xn ; *Xn = old AND NOT(Ws) ; Wt = old

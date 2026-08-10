@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress336RTTests.cpp - i64 pair × switch dispatch --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // New shape at the intersection of two recently-fragile mechanisms: the i64
 // register-PAIR modeling on 32-bit targets (i386 EDX:EAX, ARM32 R1:R0 — the
 // #524-#528 family) AND switch/jump-table recovery (#530/#532).  OptStress326

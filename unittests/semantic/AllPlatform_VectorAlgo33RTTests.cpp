@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo33RTTests.cpp - packed SIMD idiom probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirty-third batch of clang -O2 vector probes, covering packed-SIMD idioms
 // not exercised by batches 31/32: unsigned per-lane min+max (PMINUB/PMAXUB,
 // UMIN/UMAX), rounding average (PAVGB / URHADD), sum-of-absolute-differences

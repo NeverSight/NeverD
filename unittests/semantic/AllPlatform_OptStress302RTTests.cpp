@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress302RTTests.cpp - 64-bit atomic RMW (-O0) -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 sink-difference dual of OptStress301: the SAME 64-bit C11 atomic RMW
 // kernels compiled at -O0.  Low optimization emits markedly different machine
 // code — the 64-bit value is spilled to the stack and reloaded around every

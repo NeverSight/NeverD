@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress65RTTests.cpp - select-address deref -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Data-dependent table addresses that flow through a conditional move / select
 // / predicated instruction before the load: x86 CMOV, AArch64 CSEL, ARM32
 // IT/predication.  #468 fixed an ARM32 predicated table index

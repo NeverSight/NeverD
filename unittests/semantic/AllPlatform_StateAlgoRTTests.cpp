@@ -1,5 +1,9 @@
 //===- AllPlatform_StateAlgoRTTests.cpp - bit/fixed/state kernels -*- C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 algorithm-level "high-yield probing", second batch.  Kernels avoid
 // rodata table lookups (a known deferred lift gap, see #359) and runtime
 // division (no libcall on any arch), focusing on bit manipulation, fixed-point,

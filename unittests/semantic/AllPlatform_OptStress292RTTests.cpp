@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress292RTTests.cpp - lookup/table probe ===========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing table lookup, index computation and
 // data-dependent gather/scatter codegen paths:
 //

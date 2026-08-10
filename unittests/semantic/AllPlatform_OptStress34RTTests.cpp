@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress34RTTests.cpp - jump-table label probes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Targets the jump-table case-label recovery path (JumpTableResolver:
 // detectNormalization / recoverCaseLabels) that OptStress33's `fieldsw` exposed
 // on ARM32 (a `(expr >> j) & m` masked index whose pre-mask shift was mis-read

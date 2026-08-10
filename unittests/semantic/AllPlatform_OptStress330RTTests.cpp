@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress330RTTests.cpp - CFG/SSA + signed const arith ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Coverage guardrails over control-flow / SSA recovery and signed constant
 // strength reduction — areas distinct from the value-tracking probes:
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress300RTTests.cpp - variadic ABI probe ==========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 kernels stressing the variadic (stdarg) calling convention, which has its
 // own lift surface not covered elsewhere: the register save-area prologue, the
 // __va_list cursor and va_arg offset logic, the overflow (stack) area, and

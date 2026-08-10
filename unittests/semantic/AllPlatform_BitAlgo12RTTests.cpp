@@ -1,5 +1,9 @@
 //===- AllPlatform_BitAlgo12RTTests.cpp - narrow scalar algos ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twelfth batch of clang -O2 algorithm probes.  Targets NARROW-type (u8/u16)
 // scalar code with branch-heavy control flow: internet-checksum carry folding,
 // bit-by-bit CRC, saturating accumulation, branchless abs/min/max, conditional

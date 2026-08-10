@@ -1,5 +1,9 @@
 //===- AllPlatform_FPMinMaxRTTests.cpp - FP min/max NaN semantics -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for floating-point min/max, which the lifter had implemented
 // as a naive (a<b)?a:b select.  That gets two IEEE behaviours wrong:
 //

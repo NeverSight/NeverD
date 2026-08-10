@@ -1,5 +1,9 @@
 //===- AllPlatform_AlgorithmRTTests.cpp - Cross-platform algo RT -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests algorithmic patterns that exercise multi-BB control flow, loops,
 // and complex data dependencies across all three architectures.
 //

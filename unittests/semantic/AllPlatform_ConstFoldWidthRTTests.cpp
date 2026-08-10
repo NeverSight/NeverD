@@ -1,5 +1,9 @@
 //===- AllPlatform_ConstFoldWidthRTTests.cpp - const-fold width mask -C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adversarial probes for the MedIR copy/constant-propagation pass: a narrow
 // arithmetic op whose folded constant OVERFLOWS the operand width, then the
 // (truncated) result is widened.  At -O0 clang keeps the two constants in

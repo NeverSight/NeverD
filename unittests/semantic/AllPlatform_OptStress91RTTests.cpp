@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress91RTTests.cpp - global pointer difference -C++-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #473-#485 symbolized a global address when it is USED as a pointer (load /
 // store address, call arg, return, stored-through).  A pointer *difference*
 // `p - A` is the dual: the symbolized walking pointer and the array base must

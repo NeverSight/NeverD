@@ -1,5 +1,9 @@
 //===- AllPlatform_FPRoundConvDblRTTests.cpp - double round-convert ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // All-platform roundtrip probing of *double*-precision round-and-convert
 // idioms — a distinct lift path from the float forms (8-byte FP lanes, separate
 // emitter handling) and the family where #506 previously found a scalar

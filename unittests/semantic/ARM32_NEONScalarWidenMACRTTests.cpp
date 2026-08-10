@@ -1,5 +1,9 @@
 //===- ARM32_NEONScalarWidenMACRTTests.cpp - by-scalar widen MAC -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for ARM32 NEON multiply families #386 only partially fixed.
 // #386 taught the SAME-width VMUL/VMLA/VMLS handlers to broadcast a `dM[idx]`
 // scalar lane; the WIDENING / SATURATING-DOUBLING siblings were left behind:

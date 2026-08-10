@@ -1,5 +1,9 @@
 //===- X64_BMI2FlagShiftRTTests.cpp - BMI2 flag-less shifts -------*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 BMI2 `RORX`/`SARX`/`SHLX`/`SHRX` compute a rotate/shift WITHOUT touching
 // EFLAGS (unlike the legacy `ROR`/`SAR`/`SHL`/`SHR`, which set CF/OF/SF/ZF/PF).
 // The lifter emits the value op with NO flag updates, so a CF set beforehand

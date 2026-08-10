@@ -1,5 +1,9 @@
 //===- ARM32_MiscPatternRTTests.cpp - Misc ARM32 RT -----------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests ARM32 miscellaneous patterns: REV, CLZ, BFI, UBFX, SMULL/UMULL,
 // and conditional patterns exercising IT blocks.
 //

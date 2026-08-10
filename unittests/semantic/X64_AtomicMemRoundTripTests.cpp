@@ -1,5 +1,9 @@
 //===- X64_AtomicMemRoundTripTests.cpp - Atomic/memory roundtrip -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers: atomic CAS, atomic add, memory copy patterns, string-like ops,
 // complex pointer arithmetic, struct-like access, volatile patterns.
 //

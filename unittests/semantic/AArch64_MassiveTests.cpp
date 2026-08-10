@@ -1,5 +1,9 @@
 //===- AArch64_MassiveTests.cpp - Mass coverage AArch64 tests --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-volume AArch64 roundtrip tests covering multiply forms, shift
 // varieties, conditional select, extension chains, memory patterns,
 // complex ALU, and branch-heavy patterns.

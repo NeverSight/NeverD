@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress303RTTests.cpp - return-width merge probe ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Stresses integer return-type inference (MedTypePass::inferReturnType /
 // intRetEffWidth), the machinery #514 patched so an i64 result arriving through
 // a merged-epilogue return-register PHI is not mistyped narrow by a sibling

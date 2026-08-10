@@ -1,5 +1,9 @@
 //===- AllPlatform_PolyMulRTTests.cpp - Polynomial multiply -----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for polynomial (carry-less, GF(2)[x]) multiply, which is a
 // distinct operation from ordinary integer multiply:
 //

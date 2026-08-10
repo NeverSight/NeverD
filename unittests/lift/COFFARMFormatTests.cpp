@@ -1,4 +1,8 @@
 //===- COFFARMFormatTests.cpp - Windows ARM PE format tests --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

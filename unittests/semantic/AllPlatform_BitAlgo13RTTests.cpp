@@ -1,5 +1,9 @@
 //===- AllPlatform_BitAlgo13RTTests.cpp - scalar loop-carried --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirteenth batch of clang -O2 algorithm probes.  Targets SCALAR loop-carried,
 // branch-heavy algorithms that clang cannot auto-vectorize (each iteration
 // depends on the previous), so the recompiled code stays scalar and stresses

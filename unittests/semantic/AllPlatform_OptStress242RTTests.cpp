@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress242RTTests.cpp - saturation / clamp =========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Clamps to bit-width boundaries that clang lowers to ARM `ssat`/`usat`
 // (and the saturating-add/sub idioms to `qadd`/`qsub`) — the ARM32 saturation
 // family that was previously a coverage gap.  On x86/AArch64 the

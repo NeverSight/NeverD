@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress260RTTests.cpp - local aggregates at -O0 =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Local arrays / structs / pointer walks at -O0 — OptStress229 drove these at
 // -O2; this is the -O0 counterpart, where every element access is a fresh
 // frame-relative load/store (no register promotion), the induction pointer is

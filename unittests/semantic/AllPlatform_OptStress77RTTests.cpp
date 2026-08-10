@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress77RTTests.cpp - pointer arrays/PHI --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress75/76 covered a global address returned, stored through a parameter,
 // or kept in a scalar/struct global.  These probes push it into a global ARRAY
 // of pointers built at runtime and into branch-merged pointer values:

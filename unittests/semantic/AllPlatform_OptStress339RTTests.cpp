@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress339RTTests.cpp - non-adjacent two-table -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Runtime-selected two-table dispatch whose two label tables are NOT laid out
 // back-to-back in rodata: `tbl = cond ? A : B; goto *tbl[idx]` where an
 // alignment gap (or unrelated read-only data) separates A and B.  OptStress331

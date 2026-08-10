@@ -1,5 +1,9 @@
 //===- AllPlatform_RodataHoist3RTTests.cpp - struct/3D rodata tables -*- C++ -=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Deeper edge cases for hoisted-rodata-table redirection.  After #374 handled a
 // base nested under multi-dimensional indexing, these stress address trees that
 // also carry a *constant* addend (a struct field offset) and triple nesting:

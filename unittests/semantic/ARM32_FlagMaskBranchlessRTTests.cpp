@@ -1,5 +1,9 @@
 //===- ARM32_FlagMaskBranchlessRTTests.cpp - flag-as-value idioms -*- C++ -==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 analog of the x86/AArch64 flag-as-value probes plus ARM's distinctive
 // *conditional execution* (predicated ALU ops).  A condition is materialized as
 // a value/mask or drives predicated arithmetic, rather than a branch:

@@ -1,5 +1,9 @@
 //===- X86_32_FPReturnAbiRTTests.cpp - i386 external st0 FP return -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // i386 cdecl returns a floating-point value through the x87 top-of-stack (st0),
 // not XMM0: an external callee loads its result onto st0 (`fldl`) before `ret`
 // and the caller reads it back with `fstp [mem]`.  NeverD modeled every i386 FP

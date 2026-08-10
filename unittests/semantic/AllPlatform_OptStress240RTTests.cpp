@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress240RTTests.cpp - FP arith/compare/convert ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Floating-point arithmetic, comparisons, selects and int<->FP conversions,
 // folded back to an integer return so the harness can compare it in the GP
 // return register.  FP lift has a long bug history (#502 FP-return routing,

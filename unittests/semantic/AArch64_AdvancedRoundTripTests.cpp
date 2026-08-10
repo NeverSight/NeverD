@@ -1,5 +1,9 @@
 //===- AArch64_AdvancedRoundTripTests.cpp - Advanced pattern tests -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64 advanced roundtrip tests: atomic ops, FP patterns, NEON-triggering
 // C expressions, bit manipulation, and memory patterns.
 //

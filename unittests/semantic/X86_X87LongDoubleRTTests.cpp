@@ -1,5 +1,9 @@
 //===- X86_X87LongDoubleRTTests.cpp - 80-bit long double roundtrip -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // `long double` on x86/x86-64 is the 80-bit x87 extended-precision type: clang
 // emits `fldt`/`fstpt` (m80 load/store) and computes on the x87 stack at 64-bit
 // mantissa precision.  Earlier x87 tests dodged this by using values that are

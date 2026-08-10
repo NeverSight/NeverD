@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress277RTTests.cpp - rodata access at -O0 ========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // File-scope const-global access at -O0 — the dual of the -O2 OptStress248.  At
 // -O0 i386/ARM32 PIC reach globals through explicit GOT-base + GOTOFF / literal-
 // pool sequences that #507 showed are bug-prone (the GOT base is spilled to the

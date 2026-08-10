@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress52RTTests.cpp - vec const-pool + tail -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Loops that clang -O2 auto-vectorizes using a `.rodata` CONSTANT VECTOR (weight
 // tables, polynomial coefficients, fixed convolution kernels, splat masks) plus
 // a scalar remainder, intersecting vectorization with the constant-pool

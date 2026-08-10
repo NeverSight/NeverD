@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress37RTTests.cpp - control-flow probes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A control-flow / CFG-recovery probe family, deliberately pivoting away from
 // the arithmetic kernels of the recent OptStress rounds toward the branch and
 // loop-structure recovery path (CFGBuilder, condition flattening, loop

@@ -1,5 +1,9 @@
 //===- AllPlatform_SwitchTableRTTests.cpp - jump-table switch lowering -*-C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #397 high-yield probing of dense `switch` statements clang -O2 lowers to a
 // rodata jump table + indirect branch — an indexed rodata access whose entries
 // are *code* addresses, so it stresses both indirect-branch CFG recovery and the

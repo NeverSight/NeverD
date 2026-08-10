@@ -1,5 +1,9 @@
 //===- X64_FPAdvancedTests.cpp - Advanced FP pattern tests ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 FP patterns: sqrt, NaN, infinity, denormal, multi-step
 // conversions, FP comparison chains, and mixed int/FP patterns.
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_PermuteAlgoRTTests.cpp - permute/table kernels -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 permutation / table-lookup / transpose probes (bit-reversal table,
 // S-box substitution, 8x8 byte-matrix transpose, planar->packed interleave,
 // dynamic byte shuffle, nibble swap).  These are byte-heavy with data-dependent

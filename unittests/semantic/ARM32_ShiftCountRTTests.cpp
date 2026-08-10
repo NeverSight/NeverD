@@ -1,5 +1,9 @@
 //===- ARM32_ShiftCountRTTests.cpp - ARM32 register-shift count -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 register-specified shifts use the FULL low byte Rs[7:0] (0-255) as the
 // amount, NOT a 5-bit-masked value:
 //   * LSL/LSR by >= 32  -> 0

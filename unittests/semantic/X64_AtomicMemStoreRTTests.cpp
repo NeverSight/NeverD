@@ -1,5 +1,9 @@
 //===- X64_AtomicMemStoreRTTests.cpp - CMPXCHG/XADD mem write-back -*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 read-modify-write atomics with a MEMORY destination must write the result
 // back to memory:
 //   CMPXCHG m,r   : if AL/AX/EAX/RAX == m then m = r  (always a store)

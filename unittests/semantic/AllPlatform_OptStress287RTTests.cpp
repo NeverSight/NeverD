@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress287RTTests.cpp - memory/struct/array probe ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 kernels that drive their state through stack memory rather than registers
 // only, exercising the load/store, addressing-mode and sub-word memory-access
 // paths: strided array reduction, mixed-width struct field RMW, unaligned

@@ -1,5 +1,9 @@
 //===- X86_32_BcdRoundTripTests.cpp - i386 BCD adjust roundtrip -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the 32-bit-only BCD adjust family (AAA/AAS/AAD/AAM/
 // DAA/DAS).  These were lifted as a placeholder intrinsic followed by a COPY of
 // an *uninitialised* temp into AX, so the result was garbage and none of the

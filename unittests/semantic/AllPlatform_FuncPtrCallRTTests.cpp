@@ -1,5 +1,9 @@
 //===- AllPlatform_FuncPtrCallRTTests.cpp - function-pointer dispatch ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of indirect calls through a function-pointer
 // table — the callback-table / vtable / plugin-dispatch shape.  This is the
 // "code-pointer dual" of the constant-pool data mapping (#397) and the

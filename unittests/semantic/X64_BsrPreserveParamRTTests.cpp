@@ -1,5 +1,9 @@
 //===- X64_BsrPreserveParamRTTests.cpp - bsr-preserve param probe --------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adversarial probe for the #500 register-parameter scratch heuristic
 // (`liveInOnlyFeedsScratch` / `isBsrBsfPreserve`).  That fix drops a leading
 // register parameter whose only use is the BSR/BSF zero-source preserve idiom

@@ -1,5 +1,9 @@
 //===- X64_FlagMaskBranchlessRTTests.cpp - flag-as-value idioms --*- C++ -*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Existing flag tests read a flag into a setcc/jcc/cmov (a *condition*).  A
 // different optimizer path materializes a flag as a numeric *value* and feeds
 // it into arithmetic — the branchless idioms compilers love:

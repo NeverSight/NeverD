@@ -1,5 +1,9 @@
 //===- AllPlatform_CondCompareChainRTTests.cpp - fused cond compares -*-C++-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Short-circuit boolean conditions over edge integer values.  clang -O2 fuses
 // these into conditional-compare chains: AArch64 `cmp; ccmp`, ARM `cmp; it;
 // cmp`, x86 paired `cmp; setcc`/branch sequences.  These stress the MedFlags

@@ -1,5 +1,9 @@
 //===- ARM32_NEONShiftAdvRTTests.cpp - ARM32 NEON shift/adv roundtrip -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers: VSHL/VSHR per-lane, VQADD/VQSUB saturation, VMAX/VMIN int,
 //         VMLA/VMLS int, VABA abs-diff-accum, VDUP, VREV, VFP FMLA/FMLS
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress311RTTests.cpp - -O0 indirect i64 return ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 kernels calling a `long long`-returning callee THROUGH A FUNCTION POINTER
 // — the KNOWN-OPEN #1 defect flagged by OptStress310: a wide (i64) return
 // through an INDIRECT-only callee.

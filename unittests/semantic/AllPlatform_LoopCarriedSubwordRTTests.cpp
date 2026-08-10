@@ -1,5 +1,9 @@
 //===- AllPlatform_LoopCarriedSubwordRTTests.cpp - subword loop carries -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probes for *loop-carried sub-register values*, the case
 // NeverD's own MedIR passes (fixupSubRegisters, buildSsa phi placement,
 // mergeLoopCarriedPartialReads, propagate) must model exactly.  clang -O2 keeps

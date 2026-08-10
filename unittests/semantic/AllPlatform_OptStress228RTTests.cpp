@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress228RTTests.cpp - 64-bit compare/select =======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Breadth probes for 64-bit compare / select / min-max, which on the 32-bit
 // targets lower to multi-word (hi/lo) compare-and-conditional sequences and on
 // the 64-bit targets to single-instruction compares whose flags feed a select

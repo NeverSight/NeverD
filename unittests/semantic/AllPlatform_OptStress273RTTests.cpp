@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress273RTTests.cpp - memory aliasing at -O0 ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Memory aliasing / type punning / byte assembly at -O0 — the dual of the -O2
 // OptStress97/98 alias probes.  At -O0 every intermediate is spilled to the
 // frame, so a union write then a differently-typed read is a real store-to-load

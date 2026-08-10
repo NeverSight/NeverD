@@ -1,5 +1,9 @@
 //===- AllPlatform_DotProductRTTests.cpp - SDOT/UDOT dot product -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the SIMD byte dot-product accumulate instructions
 // (AArch64 SDOT/UDOT, FEAT_DotProd).  Each 32-bit lane accumulates the sum of
 // four byte products; these were lifted as a full-width INT_MULT+INT_ADD

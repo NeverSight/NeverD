@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress43RTTests.cpp - FP/int flag mixing ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes around the floating-point comparison-flag path that recent
 // rounds repeatedly broke (#389 COMISS signed misread, #395 FP-flag folded into
 // an integer ZF).  Each kernel interleaves float and double comparisons with

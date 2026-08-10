@@ -1,5 +1,9 @@
 //===- AllPlatform_SwitchVarietyRTTests.cpp - switch lowering forms -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probing of the many shapes clang lowers a `switch` into, beyond the
 // dense PC-relative word table the SwitchTable / SwitchDispatch / SwitchModulo
 // suites already cover.  These stress the jump-table resolver and CFG builder on

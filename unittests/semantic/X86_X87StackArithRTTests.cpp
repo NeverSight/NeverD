@@ -1,5 +1,9 @@
 //===- X86_X87StackArithRTTests.cpp - x87 deep-stack register arith -*- C++ =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The register/stack forms of FADD/FSUB/FMUL/FDIV (and the FSUBR/FDIVR reverse
 // + the P pop variants) hardcoded st0/st1 and ignored capstone's operand
 // register indices.  Any x87 expression that keeps more than two values on the

@@ -1,5 +1,9 @@
 //===- X64_RepStringRTTests.cpp - REP MOVS/STOS roundtrip ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the x86 REP string instructions (rep movs/stos), the
 // canonical inlined memcpy/memset idioms.  These were previously lifted as a
 // stub: the intrinsic was emitted with no operands and RSI/RDI/RCX were

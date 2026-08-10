@@ -1,5 +1,9 @@
 //===- X64_ShiftFlagsRTTests.cpp - x86 shift OF/CF flag probes --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The roundtrip harness only compares return values, so the flag side effects
 // of SHL/SHR/SAR are invisible unless folded into the result.  These probes
 // drive 1-bit shifts (where OF is architecturally defined) and fold OF/CF into

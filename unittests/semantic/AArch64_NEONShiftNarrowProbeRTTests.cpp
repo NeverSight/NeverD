@@ -1,5 +1,9 @@
 //===- AArch64_NEONShiftNarrowProbeRTTests.cpp - shift/narrow ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for AArch64 NEON instruction families that clang -O2 rarely
 // emits on its own but that share lifter code paths — a bug in one usually
 // implicates several:

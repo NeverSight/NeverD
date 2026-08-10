@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress101RTTests.cpp - sub-byte / deep-indirect rodata -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES, all address-independent
 // (the folded result depends only on the bytes in the globals + control flow,
 // never on an absolute VA) and all walked forward from the array base, so none

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress178RTTests.cpp - isqrt / Gray code / bit-reverse =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES.  Each reads its rodata
 // through plain base+index copies and folds a result that depends only on the
 // bytes + control flow (never an absolute VA), so nothing touches the deferred

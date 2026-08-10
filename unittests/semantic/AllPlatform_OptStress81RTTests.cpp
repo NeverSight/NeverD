@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress81RTTests.cpp - -O3 SIMD reductions --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O3 auto-vectorized kernels that lower to the less-common SIMD shapes the
 // VectorAlgo suites do not drive head-on, exercising the SIMD lift across all
 // four targets (SSE2 on x86, NEON on AArch64 / ARM32-cortex-a15):

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress26RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // PtrMem's `pun` kernel reinterprets a 32-bit value as half-words/bytes.  This
 // round drives the 64-bit counterpart: a 64-bit storage cell accessed through
 // its 32-bit and 8-bit sub-lanes.  On i386/ARM32 a 64-bit value lives in a

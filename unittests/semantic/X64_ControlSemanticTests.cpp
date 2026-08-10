@@ -1,5 +1,9 @@
 //===- X64_ControlSemanticTests.cpp - x64 control/string/rep tests -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Migrated from scripts/lift_verifier.py — StringRep, FlagMisc, Fence, etc.
 // Also from scripts/pipeline_verifier.py — x64 pipeline test cases.
 //

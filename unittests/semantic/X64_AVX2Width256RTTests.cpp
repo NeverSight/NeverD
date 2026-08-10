@@ -1,5 +1,9 @@
 //===- X64_AVX2Width256RTTests.cpp - element-wise 256-bit (YMM) AVX2 ----*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86_64-only probes that force element-wise 256-bit YMM AVX2 instructions via
 // GCC vector extensions (vector_size(32)) at -O3 -mavx2, then fold each vector
 // to a single integer for bit-exact original-vs-lifted comparison.  These are

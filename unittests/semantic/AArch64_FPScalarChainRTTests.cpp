@@ -1,5 +1,9 @@
 //===- AArch64_FPScalarChainRTTests.cpp - FP scalar chain roundtrip -------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers: FADD/FMUL/FSUB/FDIV chained, FMADD/FNMADD, FMAX/FMIN,
 // FCVTZS/UCVTF chains, FRECPE/FRSQRTE scalar, FP accumulate loops.
 //

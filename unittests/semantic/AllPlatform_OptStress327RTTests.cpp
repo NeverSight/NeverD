@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress327RTTests.cpp - pre-scaled computed goto ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roots out the KNOWN-OPEN ① jump-table-recovery limitation flagged by
 // OptStress326: the size/speed optimizer lowers a `goto *lab[idx]` whose label
 // table holds pointer-width entries into an indirect jump whose index register

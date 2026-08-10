@@ -1,5 +1,9 @@
 //===- X64_StringAtomicRTTests.cpp - String/Atomic roundtrip ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 string operation patterns and atomic operations through
 // the full lift pipeline using C expressions.
 //

@@ -1,5 +1,9 @@
 //===- AArch64_BitfieldMoveRTTests.cpp - BFM/UBFM/SBFM family RT -*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64's bitfield-move family (the BFM/UBFM/SBFM primitives and their
 // architectural aliases BFI/BFXIL, UBFX/UBFIZ, SBFX/SBFIZ, plus LSL/LSR/ASR)
 // is alias-heavy and historically bug-prone — the source-less BFC alias was a

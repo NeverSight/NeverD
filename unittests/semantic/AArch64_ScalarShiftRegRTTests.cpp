@@ -1,5 +1,9 @@
 //===- AArch64_ScalarShiftRegRTTests.cpp - scalar SSHL/USHL D-form *- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64 NEON SSHL/USHL also exist in a SCALAR (64-bit `d`-register) form:
 //
 //   USHL Dd, Dn, Dm   Dd = Dn << Dm.byte[0]   (logical;  byte[0] signed:

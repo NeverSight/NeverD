@@ -1,5 +1,9 @@
 //===- X64_SimdNarrowOperandRTTests.cpp - SSE i128-gate roundtrip *- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Several x86 SSE intrinsic emitters gate their xmm operands on
 // `isIntegerTy(128)` but do not widen first.  When an xmm operand is built from
 // a scalar via a zero-extending gpr->xmm move (movq/movd), NeverD's value

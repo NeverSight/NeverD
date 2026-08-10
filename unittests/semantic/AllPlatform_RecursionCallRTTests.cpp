@@ -1,5 +1,9 @@
 //===- AllPlatform_RecursionCallRTTests.cpp - self-call / recursion -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of intra-module function CALL/RET, which every
 // existing C-expression kernel sidesteps by being a leaf (clang lowers the
 // builtins to instructions, never a call).  A self-recursive function forces a

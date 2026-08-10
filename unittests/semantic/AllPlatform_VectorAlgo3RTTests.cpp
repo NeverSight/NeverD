@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo3RTTests.cpp - more vectorizable algos *- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Third batch of realistic clang -O2 auto-vectorized algorithms used as
 // high-yield lift bug probes.  Exercises lift paths the first two batches did
 // not: sum-of-absolute-differences (SAD), widening sum-of-squares, signed

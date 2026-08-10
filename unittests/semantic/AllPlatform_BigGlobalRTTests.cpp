@@ -1,5 +1,9 @@
 //===- AllPlatform_BigGlobalRTTests.cpp - writable global > 4 KiB --------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Drives the #531 KNOWN-OPEN: a writable global larger than the per-constant
 // embed cap (kMaxEmbeddedDataLen = 4096) was not embedded as a single mutable
 // global, so its accesses fell back to a bare `inttoptr(original VA)` that the

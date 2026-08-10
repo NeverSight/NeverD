@@ -1,5 +1,9 @@
 //===- X64_BitScanZeroRTTests.cpp - BSF/BSR zero-source dest -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the x86 BSF/BSR "zero source" quirk: when the source
 // operand is 0, ZF=1 and the DESTINATION IS LEFT UNCHANGED.  The Intel manual
 // calls the destination "undefined" in that case, but real hardware and

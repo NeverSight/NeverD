@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress314RTTests.cpp - i386 const-store coverage ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green-guardrail follow-up to OptStress313 (#520): the same i386 PIC condition
 // that mis-symbolized a stored small literal — an executable `.text` segment
 // that carries a GOTOFF function-pointer reloc slot, so `segHasPtrRelocSlots`

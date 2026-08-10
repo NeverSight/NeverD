@@ -1,5 +1,9 @@
 //===- X64_MemForwardRTTests.cpp - store-to-load forwarding ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Stress the MedIR memory model / store-to-load forwarding across mismatched
 // access sizes: a wide store followed by a narrower load at an offset, several
 // narrow stores feeding a wide load, and a narrow store under a wider load

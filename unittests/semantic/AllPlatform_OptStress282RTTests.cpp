@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress282RTTests.cpp - wide-64-on-32 opt probe ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 kernels built entirely from 64-bit `unsigned long long` arithmetic that
 // clang lowers libcall-free (add/sub/mul/shift/compare/select).  On x64/a64
 // these are native 64-bit ops; on i386/ARM32 they exercise the Wide64 split

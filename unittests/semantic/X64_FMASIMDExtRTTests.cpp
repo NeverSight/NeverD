@@ -1,5 +1,9 @@
 //===- X64_FMASIMDExtRTTests.cpp - FMA/SIMD widening roundtrip ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 FMA and SIMD widening/horizontal/complex operations through
 // the full lift → recompile → Unicorn pipeline.
 //

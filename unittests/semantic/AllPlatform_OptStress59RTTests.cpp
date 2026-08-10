@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress59RTTests.cpp - 64-bit integer mixing -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // 64-bit-heavy integer mixing / hashing kernels.  On the 32-bit targets
 // (i386, ARM32) every 64-bit op is split into register-pair sequences —
 // ADD/ADC, SUB/SBB, the three-way 64-bit IMUL/UMULL expansion, SHLD/SHRD and

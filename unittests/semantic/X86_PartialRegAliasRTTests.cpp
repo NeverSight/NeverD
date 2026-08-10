@@ -1,5 +1,9 @@
 //===- X86_PartialRegAliasRTTests.cpp - partial-register alias stress -C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adversarial probes for the x86 sub-register aliasing class that bit hard
 // historically (write a wide reg, read AL/AH/AX, optimizer folds the narrow
 // read to 0 / mis-merges).  These inline-asm sequences chain partial writes

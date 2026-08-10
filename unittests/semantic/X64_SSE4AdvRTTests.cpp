@@ -1,5 +1,9 @@
 //===- X64_SSE4AdvRTTests.cpp - SSE4.1/SSSE3/advanced SIMD roundtrip ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip tests for SSE4.1/SSSE3/SSE3 instructions that historically have
 // per-lane semantics bugs: HADDPS, ADDSUBPS, BLENDPS, DPPS, ROUNDSS,
 // INSERTPS, PHMINPOSUW, UNPCKHPS, SHUFPS, CVTPS2PD, MOVHLPS/MOVLHPS.

@@ -1,5 +1,9 @@
 //===- ARM32_ShiftedIndexRTTests.cpp - ROR/RRX shifted operands ---------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for ARM32 ROR/RRX barrel-shift handling that the lifter got
 // wrong:
 //

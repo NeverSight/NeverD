@@ -1,5 +1,9 @@
 //===- X64_ScasCmpsRTTests.cpp - single SCAS/CMPS roundtrip ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the single (non-repeated) x86 compare/scan string
 // instructions SCAS (scasb/scasw/scasl/scasq) and CMPS
 // (cmpsb/cmpsw/cmpsl/cmpsq).

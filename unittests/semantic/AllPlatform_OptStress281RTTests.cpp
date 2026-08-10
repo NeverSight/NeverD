@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress281RTTests.cpp - flag/subreg optimizer probe ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels aimed at the optimizer paths that have historically
 // miscompiled: signed-saturation flag folding (MedFlags), sub-byte/sub-word
 // register aliasing on loop-carried accumulators, nested-loop carry chains

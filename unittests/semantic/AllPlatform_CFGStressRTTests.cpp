@@ -1,5 +1,9 @@
 //===- AllPlatform_CFGStressRTTests.cpp - control-flow reconstruction -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // CFG reconstruction is where the most recent real lift bugs lived (#412's
 // mutual-recursion tail call fused two function bodies).  These probes feed the
 // CFG builder optimizer-transformed control flow it must rebuild exactly:

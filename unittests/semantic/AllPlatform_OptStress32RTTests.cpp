@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress32RTTests.cpp - overflow/carry flags -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Targets the overflow / carry / saturation flag idioms that the self-written
 // MedFlags recovery pass handles specially but the comparison-heavy kernels
 // elsewhere barely exercise.  Each kernel forces a distinct OF/CF-producing

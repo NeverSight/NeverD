@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo45RTTests.cpp - bitmask-gather SIMD probes ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Forty-fifth batch of clang -O2 vector probes, focused on the compare→bitmask
 // gather / bit-scatter idioms (the PMOVMSKB family) that lower to the most
 // constant-pool-dense NEON sequences — bit-weight vectors, zip/shuffle index

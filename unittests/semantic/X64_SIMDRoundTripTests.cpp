@@ -1,5 +1,9 @@
 //===- X64_SIMDRoundTripTests.cpp - SSE/AVX roundtrip tests ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 SIMD instructions through the full lift pipeline.
 // Uses 2-arg functions to avoid the ABI non-consecutive-register bug.
 // All tests use -O1 for clean SIMD instruction output.

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress31RTTests.cpp - realistic codec kernels -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Gnarly but realistic codecs that combine nested loops, switch/branch dispatch,
 // mixed-width (8/16/32-bit) state, byte-stream inspection and bit packing in one
 // function — the shape that historically surfaced sub-register / flag / SSA

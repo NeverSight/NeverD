@@ -1,5 +1,9 @@
 //===- X64_SSEVectorCExprRTTests.cpp - SSE vector C expression roundtrip --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 SSE/SSE2/SSE3/SSE4.1 packed vector operations through C
 // vector types. These C expressions naturally generate many SSE instructions
 // that the audit tool can't detect from mnemonic matching.

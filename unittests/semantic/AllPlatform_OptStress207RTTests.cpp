@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress207RTTests.cpp - atomic RMW under -O2 ========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for atomic read-modify-write (the __sync builtins) driven in
 // loops over writable globals -- x86 `lock xadd`/`lock cmpxchg`/`xchg`, AArch64
 // LSE or ldxr/stxr, ARM32 ldrex/strex.  Single-threaded in Unicorn the atomics

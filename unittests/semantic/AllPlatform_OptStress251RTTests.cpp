@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress251RTTests.cpp - -O0 global/pointer forms ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // More read-only global access shapes at -O0, where i386/ARM32 spill the PIC GOT
 // base (and any induction pointer) to the stack so the SSA-based base/string
 // detectors that work at -O2 are stressed differently (the axis that surfaced

@@ -1,5 +1,9 @@
 //===- AllPlatform_FPEdgeValueRTTests.cpp - FP special-value bit exact -C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adversarial probes that push FP special values (NaN payloads, +/-0, +/-Inf,
 // denormals) through arithmetic, min/max, copysign, fabs, sqrt, and float<->
 // double conversion, returning the RESULT BIT PATTERN.  This is the #389 class

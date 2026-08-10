@@ -1,5 +1,9 @@
 //===- AllPlatform_PtrWalkRTTests.cpp - pointer-walk addressing -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Pointer-walking loops with a RUNTIME trip count so clang keeps them rolled
 // (and emits real post-/pre-indexed loads and stores instead of unrolling them
 // into explicit-offset accesses).  This is the family that surfaced the #390

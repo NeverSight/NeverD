@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress230RTTests.cpp - narrow value + flags + call =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Combined stressor: each case piles three historically fragile features into
 // one function -- a narrow (8/16-bit) sub-register value, a comparison whose
 // flags are consumed across a branch, and a noinline helper call whose result

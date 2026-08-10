@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo14RTTests.cpp - sign/byte/string ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fourteenth batch of clang -O2 algorithm probes.  Targets count-leading-sign
 // (cls / vcls), byte/string scanning (memchr / count / compare), case folding,
 // signed saturating narrow (sqxtn / vqmovn), 16-bit byte swap (rev16 / vrev16)

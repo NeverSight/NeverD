@@ -1,5 +1,9 @@
 //===- AArch64_AtomicStoreOpRTTests.cpp - LSE atomic store-op roundtrip --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the AArch64 FEAT_LSE atomic *store* aliases
 // (STADD/STCLR/STSET/STEOR/STSMAX/STSMIN/STUMAX/STUMIN), which write the
 // result back to memory and discard the old value (WZR destination).

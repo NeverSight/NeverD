@@ -1,5 +1,9 @@
 //===- AllPlatform_TwoTableXformRTTests.cpp - adjacent PIC table -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Differential roundtrip probing of the shape the SwitchXform / CFGLoop suites
 // deliberately left out (§15.2 adjacent-unguarded-pic-table-note): a single
 // function body that holds *two or more* jump tables which, at -O2, each prove

@@ -1,5 +1,9 @@
 //===- AllPlatform_FloatAlgoRTTests.cpp - scalar FP algorithms --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Scalar floating-point algorithms exercised end-to-end.  clang -O2 lowers
 // these to scalar FP instructions whose lift has historically been fragile:
 //   - FP compare -> conditional select (minss/maxss, fcmp+fcsel, vcmp+vsel):

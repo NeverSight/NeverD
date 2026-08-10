@@ -1,5 +1,9 @@
 //===- AllPlatform_RodataHoist2RTTests.cpp - rodata table edges --*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-on edge cases for the #372 hoisted-rodata-table redirection
 // (`tryResolveIndexedGlobalPtr` + `isReadOnlyDataSymbol`).  The original probes
 // covered 1-byte and 4-byte element tables; these stress element/index shapes

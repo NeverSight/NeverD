@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo19RTTests.cpp - codec/hash algos ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Nineteenth batch of clang -O2 algorithm probes.  Kernels target instruction
 // mixes still under-represented by VectorAlgo1-18 — bit-field pack/unpack,
 // widening alpha blend, rodata nibble LUT, constant modulo/divide reciprocals,

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress338RTTests.cpp - writable ptr × large table -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Hardens #536 (writable store/return VALUE symbolization, gated on
 // WritableRelocDataAddrs) in forms OptStress75-87 never reached: a struct RETURN
 // whose pointer field addresses a writable global on 32-bit register-pair targets

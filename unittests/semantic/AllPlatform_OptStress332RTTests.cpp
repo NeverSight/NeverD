@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress332RTTests.cpp - real-world hash/checksum -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Real-algorithm probes: software CRC32 (inner bit loop + mask-from-sign trick),
 // FNV-1a / djb2 / MurmurHash3 finalizer multiply-shift-xor chains, xorshift PRNG,
 // and Adler-32 modular checksum.  These mix shift / multiply / xor chains, inner

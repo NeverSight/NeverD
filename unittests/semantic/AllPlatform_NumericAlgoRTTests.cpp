@@ -1,5 +1,9 @@
 //===- AllPlatform_NumericAlgoRTTests.cpp - DSP/numeric kernels -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 numeric/DSP kernel probes (1D convolution, sum-of-abs-diff, scale +
 // narrow, saturating pack, rounding average, fixed-point rounding multiply).
 // These are exactly what clang auto-vectorizes into widening multiplies

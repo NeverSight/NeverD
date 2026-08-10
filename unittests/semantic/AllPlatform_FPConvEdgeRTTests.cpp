@@ -1,5 +1,9 @@
 //===- AllPlatform_FPConvEdgeRTTests.cpp - FP<->int convert edges -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for floating-point <-> integer conversion and scalar FP
 // arithmetic over IEEE special values (NaN, +/-Inf, denormal, and magnitudes
 // straddling INT_MAX / UINT_MAX), the saturation-semantics class the lifter must

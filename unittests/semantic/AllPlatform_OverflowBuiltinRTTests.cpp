@@ -1,5 +1,9 @@
 //===- AllPlatform_OverflowBuiltinRTTests.cpp - overflow idioms -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 `__builtin_{add,sub,mul}_overflow` kernels across all four targets.
 // These read the overflow/carry flag produced by a genuine ADD/SUB/IMUL (not a
 // CMP), then branch or select on it -- exactly the "flag from arithmetic, not a

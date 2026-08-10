@@ -1,5 +1,9 @@
 //===- AllPlatform_MemBuiltinLiveRTTests.cpp - live external mem* ABI =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip equivalence for functions that emit *live* external
 // memcpy/memset/memmove calls (clang lowers a runtime-size __builtin_mem* to a
 // real libcall, not an inline loop).  These are the calls behind §15.2

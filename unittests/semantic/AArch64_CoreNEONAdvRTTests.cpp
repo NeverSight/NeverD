@@ -1,5 +1,9 @@
 //===- AArch64_CoreNEONAdvRTTests.cpp - CoreNEON adv roundtrip ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests AArch64 CoreNEON advanced instructions through the full lift pipeline:
 //   SQADD/UQADD/SQSUB/UQSUB (saturating)
 //   SHADD/UHADD/SRHADD/URHADD (halving)

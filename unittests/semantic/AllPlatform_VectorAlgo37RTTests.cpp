@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo37RTTests.cpp - packed SIMD idiom probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirty-seventh batch of clang -O2 vector probes, covering packed-SIMD idioms
 // not in batches 31-36: unsigned 16-bit rounding average (PAVGW / URHADD),
 // signed saturating 16-bit add (PADDSW / SQADD), rounding shift-right

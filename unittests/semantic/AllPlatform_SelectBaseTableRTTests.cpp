@@ -1,5 +1,9 @@
 //===- AllPlatform_SelectBaseTableRTTests.cpp - select table base -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Regression for the #469 fix: a `(cond ? A : B)[i]` access whose two table
 // bases are distinct read-only globals lowers to a load whose address is
 // INT_ADD(SELECT(baseA, baseB), idx) — the literal-pool/rodata base is a

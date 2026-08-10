@@ -1,5 +1,9 @@
 //===- AllPlatform_StackArgWidthRTTests.cpp - mixed-width stack args -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The call-ABI probes added in #405-#417 forwarded mostly uniform 4-byte stack
 // arguments.  These probes cross the call boundary with arguments of *mixed*
 // widths and beyond the register-argument count, exercising the stack-argument

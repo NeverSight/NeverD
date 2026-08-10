@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress296RTTests.cpp - interleave/unpack probe ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing interleave/deinterleave, odd-even split and
 // sub-word pack/unpack codegen paths:
 //

@@ -1,5 +1,9 @@
 //===- X64_RegressionTests.cpp - Regression tests for fixed bugs -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests that exercise patterns similar to previously discovered bugs:
 // - Sub-register aliasing (RAX→EAX→AX→AL)
 // - Shift-by-bitwidth UB (RCL/RCR)

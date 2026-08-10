@@ -1,5 +1,9 @@
 //===- AArch64_FlagChainRTTests.cpp - AArch64 flag chain RT ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests AArch64 complex flag-chain patterns: CCMP, CSEL, CSINC, CSINV, CSNEG,
 // conditional compare sequences, and multi-condition branches.
 // These exercise the optimizer's flag folding and condition-code tracking.

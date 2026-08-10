@@ -1,5 +1,9 @@
 //===- AllPlatform_ControlFlowTests.cpp - Control flow roundtrip -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests complex control flow patterns: nested loops, do-while, early return,
 // multiple branches, and loop-carried dependencies.
 //

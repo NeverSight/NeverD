@@ -1,5 +1,9 @@
 //===- X64_RepCmpScasRTTests.cpp - REP CMPS/SCAS roundtrip -----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the REP/REPE/REPNE compare & scan string instructions —
 // the inlined `memcmp` / `strlen` / `memchr` idioms.
 //

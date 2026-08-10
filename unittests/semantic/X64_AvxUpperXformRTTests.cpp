@@ -1,5 +1,9 @@
 //===- X64_AvxUpperXformRTTests.cpp - AVX2-256 immediate-shuffle guards -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Regression guards for the Unicorn-fork VEX.256 helper bug: the 256-bit
 // decoder runs each 128-bit SSE helper twice (once per 128-bit lane) with the
 // operand pointers advanced by 16 bytes.  helper_pshufd / helper_shufps /

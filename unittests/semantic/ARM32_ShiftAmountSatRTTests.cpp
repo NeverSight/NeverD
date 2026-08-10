@@ -1,5 +1,9 @@
 //===- ARM32_ShiftAmountSatRTTests.cpp - register shift >= 32 edge -*-C++-*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM register-controlled shifts (`lsl/lsr/asr/ror Rd,Rm,Rs`) use only Rs[7:0]
 // as the amount, and the architecture defines saturating behaviour once that
 // amount reaches the operand width — a corner that LLVM's raw shl/lshr/ashr do

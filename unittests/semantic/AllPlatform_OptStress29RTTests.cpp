@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress29RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Targets self-written MedIR pass interactions OptStress27/28 did not cover:
 // narrow (8/16-bit) values round-tripped through memory then sign/zero-extended
 // (store-load forwarding + sub-register width), cross-loop flag liveness (an

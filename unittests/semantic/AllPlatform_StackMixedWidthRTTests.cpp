@@ -1,5 +1,9 @@
 //===- AllPlatform_StackMixedWidthRTTests.cpp - stack narrow/wide -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Probes: i32 init on stack, i8 store to low byte, i32 reload (must not
 // forward the narrow store's wide predecessor value).
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_SubRegMixRTTests.cpp - sub-register aliasing -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Sub-register / mixed-width aliasing has historically hidden optimizer-driven
 // lift bugs (e.g. an x86 write of RAX then read of AL folded to 0 because the
 // AL/RAX alias was lost).  These probes hammer that surface across all four

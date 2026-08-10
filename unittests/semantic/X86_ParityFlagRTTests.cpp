@@ -1,5 +1,9 @@
 //===- X86_ParityFlagRTTests.cpp - parity flag + LAHF differential -*-C++-*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The x86 parity flag (PF) and LAHF flag-packing had no value-sweeping coverage:
 // the PUSHF/POPF probes only pin fixed flag combinations (PF always 1, low byte
 // 0x00) and never exercise odd parity or the data-dependent POPCOUNT path that

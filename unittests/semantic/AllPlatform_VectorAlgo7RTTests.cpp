@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo7RTTests.cpp - more vectorizable algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Seventh batch of realistic clang -O2 algorithms used as high-yield lift bug
 // probes.  Targets patterns the earlier six batches did not: inclusive prefix
 // sum (sequential scan), argmax (max value + index tracking), 3-tap Laplacian

@@ -1,5 +1,9 @@
 //===- PreviouslyUnsupportedTests.cpp - Test formerly blocked insns *- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests instructions that were previously blocked by Keystone or Unicorn.
 // LLVM MC now handles ALL assembly. Remaining failures are purely Unicorn
 // emulation gaps — fixable in our third_party/unicorn fork.

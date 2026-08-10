@@ -1,5 +1,9 @@
 //===- X64_BitCountFlagsRTTests.cpp - LZCNT/TZCNT/POPCNT flags ---*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 `LZCNT`/`TZCNT`/`POPCNT` have flag and zero-input semantics that differ
 // sharply from the `BSR`/`BSF` they superficially resemble:
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress325RTTests.cpp - -Os/-Oz i64 call threading -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The i64-threaded-through-calls hot spot (#311/#441/#518/#524) under the size
 // optimizer.  #524 fixed "-O2 register-threaded indirect i64 call chains"; this
 // re-exercises the same `acc = f(acc, c)` threading where one 64-bit accumulator

@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo24RTTests.cpp - FP/rodata/PHI kernels -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twenty-fourth batch: reverse-index rodata gather, dual LUT fusion, float
 // conditional blends, double horizontal reductions, and branchy accumulators
 // that keep PHI nodes alive through the optimizer.

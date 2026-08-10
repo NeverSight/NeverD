@@ -1,5 +1,9 @@
 //===- X64_MemStringRTTests.cpp - Memory + string pattern RT ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 memory access patterns, string-like operations, and
 // complex address mode calculations through lift pipeline.
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress46RTTests.cpp - byte/word divmod sub-regs -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for 8- and 16-bit DIV/IDIV, whose quotient/remainder land in
 // sub-registers that the existing DivMulEdge suite (32/64-bit divmod only) does
 // not exercise.  On x86 `divb` writes the quotient to AL (offset 0) AND the

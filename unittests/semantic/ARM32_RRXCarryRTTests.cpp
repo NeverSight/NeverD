@@ -1,5 +1,9 @@
 //===- ARM32_RRXCarryRTTests.cpp - RRX operand + shifter carry ---*-C++-*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // RRX (rotate right through carry by one) is a barrel-shifter mode with two
 // distinct semantic effects the harness must reproduce:
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress7RTTests.cpp - codegen-shape stressors -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Seventh batch of high-yield roundtrip probes, with kernels distinct from
 // OptStress / 2-6.  Each is shaped to make clang -O2 select an error-prone
 // instruction/optimizer interaction: a sign-extended sub-word load used as a

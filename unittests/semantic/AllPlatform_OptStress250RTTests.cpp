@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress250RTTests.cpp - writable globals at -O0 =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Read-modify-write of WRITABLE globals (.data / .bss) at -O0, the writable
 // counterpart to the #507 rodata probes.  Writable data resolves through a
 // different emitter path (tryResolveWritableData / the writable-run embed) than

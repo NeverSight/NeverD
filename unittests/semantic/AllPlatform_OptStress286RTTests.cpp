@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress286RTTests.cpp - shift/rotate/funnel probe ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing the shift, rotate and funnel-shift codegen
 // paths: constant + variable rotates (ROL/ROR, EXTR #imm), funnel/double shift
 // (SHLD/SHRD on x86, EXTR on AArch64, shift+or on ARM32), byte pack/rotate via

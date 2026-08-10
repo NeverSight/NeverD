@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress12RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-stress roundtrip probes orthogonal to OptStress1-11 / SubRegMix,
 // picked to hit value+flag duality and wide-result paths that have repeatedly
 // hidden NeverD optimizer / lift semantic bugs:

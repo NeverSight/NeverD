@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress298RTTests.cpp - atomic RMW optimizer probe ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing C11 atomic read-modify-write under the
 // optimizer, with the returned OLD value consumed across the loop body and
 // control flow.  Atomics operate on a file-scope global so the address escapes

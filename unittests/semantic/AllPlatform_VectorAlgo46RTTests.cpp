@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo46RTTests.cpp - size-opt const-pool SIMD -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Forty-sixth batch of clang vector probes, run at -Os to exercise the size
 // optimizer's vectorization + constant-pool layout, which differs markedly from
 // the -O2 form (tighter / packed pools, different `.text`-embedded literal

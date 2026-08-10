@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo20RTTests.cpp - codec/vision algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twentieth batch of clang -O2 algorithm probes.  Kernels steer the
 // auto-vectorizer into instruction mixes still under-represented by
 // VectorAlgo1-19 — block SAD, byte-matrix transpose, morphological min/max

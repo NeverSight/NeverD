@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo50RTTests.cpp - SAD block-match / fused -O3 --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fiftieth batch of clang vector probes, escalating VectorAlgo49's -O2 128-bit
 // SAD to -O3 and to real-world / fused shapes where a vector horizontal
 // reduction feeds (or shares registers with) a second reduction or a data-

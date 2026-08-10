@@ -1,5 +1,9 @@
 //===- X64_AVXPackedRTTests.cpp - AVX packed FP/int roundtrip tests -------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests AVX packed arithmetic, logic, and conversion using C expressions
 // that naturally compile to AVX instructions. All values are computed
 // from function parameters to avoid rodata constant pools.

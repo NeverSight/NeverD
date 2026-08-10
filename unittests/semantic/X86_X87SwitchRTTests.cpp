@@ -1,5 +1,9 @@
 //===- X86_X87SwitchRTTests.cpp - x87 stack across switch tables -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Stresses the CFG-order x87 TOP propagation (the #451 fixupFpuStack) through a
 // jump-table dispatch: a `switch` lowers to an indirect branch (INDIR_BR) whose
 // many successors each operate on a `long double` left resident on the x87 stack.

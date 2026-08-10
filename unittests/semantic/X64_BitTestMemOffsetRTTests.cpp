@@ -1,5 +1,9 @@
 //===- X64_BitTestMemOffsetRTTests.cpp - BT* memory bit-string addr -*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // For a MEMORY bit base, x86 BT/BTS/BTR/BTC do NOT mask the bit offset to the
 // operand width.  Instead the offset is a SIGNED bit index into a bit string,
 // and the processor (Intel SDM pseudocode) does:

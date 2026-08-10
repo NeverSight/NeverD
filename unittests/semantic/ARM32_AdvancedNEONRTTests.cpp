@@ -1,5 +1,9 @@
 //===- ARM32_AdvancedNEONRTTests.cpp - ARM32 advanced NEON RT --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests ARM32 advanced NEON/VFP patterns: widening, narrowing, FP conversion,
 // multiply-accumulate, saturating arithmetic, etc.
 //

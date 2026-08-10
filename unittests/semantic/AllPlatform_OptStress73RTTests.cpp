@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress73RTTests.cpp - mutable global data -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Every prior kernel keeps its state in locals / stack arrays or reads from
 // `static const` rodata; none mutate a file-scope global, so the writable-data
 // (.data / .bss) lift+symbolization path was never exercised.  Real binaries

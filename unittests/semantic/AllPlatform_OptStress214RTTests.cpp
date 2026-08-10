@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress214RTTests.cpp - byte-swap / reverse / rotate =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Cross-target byte-manipulation guardrails: `__builtin_bswap*` (x86 `bswap`,
 // ARM/AArch64 `rev`/`rev16`), variable rotates (x86 `rol`/`ror`, ARM `ror`),
 // and hand-rolled byte/nibble reshuffles whose result drives a rodata index, so

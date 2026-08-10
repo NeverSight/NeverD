@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress238RTTests.cpp - vectorized reductions =======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Array reductions that clang turns into vector horizontal reductions
 // (NEON `addv`/`vpadd`/`smax`/`umaxv`, x86 `paddd`+shuffle folds, `pmaxsd`,
 // `vcnt`+`vpaddl` popcount).  Reduction lift mixes per-lane vector arithmetic

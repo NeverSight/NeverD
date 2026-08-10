@@ -1,5 +1,9 @@
 //===- X64_CvtScalarUpperRTTests.cpp - CVTSI2SD/SS scalar typing -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Guardrail for the scalar integer->FP converts CVTSI2SD / CVTSI2SS.
 //
 // Design note (the reason this file exists):

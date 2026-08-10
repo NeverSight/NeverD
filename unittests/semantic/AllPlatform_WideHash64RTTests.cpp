@@ -1,5 +1,9 @@
 //===- AllPlatform_WideHash64RTTests.cpp - 64-bit multi-word arith C++ ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Probes that run every kernel through a 64-bit hash accumulator (most existing
 // probes use a 32-bit one).  On i386/ARM32 every 64-bit op lowers to a
 // multi-word sequence -- ADC/SBB carry chains, SHLD/SHRD funnel shifts, cmp/sbb

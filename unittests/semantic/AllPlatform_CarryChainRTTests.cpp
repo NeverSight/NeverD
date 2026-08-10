@@ -1,5 +1,9 @@
 //===- AllPlatform_CarryChainRTTests.cpp - multi-precision carry --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Multi-precision (multi-limb) integer arithmetic and overflow-checked builtins.
 // clang -O2 lowers 128-bit add/sub into adds/adc and subs/sbc (x86), adds/adc
 // and subs/sbc (AArch64), adds/adc and subs/sbc (ARM32 register pairs); the

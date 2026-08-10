@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress275RTTests.cpp - sub-word width mixing -O0 ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // 8/16/32-bit width mixing at -O0 — the dual of the -O2 sub-register probe
 // OptStress227.  At -O0 clang emits explicit movzbl/movswl/movb sub-register
 // moves and narrow wrap-around arithmetic instead of folding everything to

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress208RTTests.cpp - sub-word atomic RMW ========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for SUB-WORD (8-/16-bit) atomic read-modify-write -- the
 // __sync builtins on `unsigned char` / `unsigned short` globals.  These exercise
 // a distinct instruction set from OptStress207's word atomics: ARM

@@ -1,5 +1,9 @@
 //===- X64_BlsFlagsRTTests.cpp - BLSI/BLSR/BLSMSK flag semantics -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 BMI1 `BLSI`/`BLSR`/`BLSMSK` isolate/reset/mask the lowest set bit of the
 // source.  Their VALUE is exercised by existing tests, but their EFLAGS output
 // — which is subtle and DIFFERS across the three — had no coverage:

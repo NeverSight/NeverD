@@ -1,5 +1,9 @@
 //===- X64_Word32Tests.cpp - 32-bit operation tests ----------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 32-bit operation patterns. On x86-64, 32-bit operations
 // implicitly zero-extend to 64 bits, generating different encodings than
 // 64-bit ops. Covers: add/sub/mul/div/shift/compare in 32-bit mode.

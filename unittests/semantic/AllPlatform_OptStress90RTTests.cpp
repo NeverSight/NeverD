@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress90RTTests.cpp - 64-bit pair / spill probes -C++-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Corners the prior probes under-hit: 64-bit comparison / select / min-max
 // lowering (a REGISTER PAIR on the 32-bit targets) and heavy register pressure
 // forcing spill/reload, all feeding control flow so the lifted flag/spill model

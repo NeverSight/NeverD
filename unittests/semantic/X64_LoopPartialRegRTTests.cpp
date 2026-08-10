@@ -1,5 +1,9 @@
 //===- X64_LoopPartialRegRTTests.cpp - loop-carried partial regs -*- C++ -*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A sub-register write (8/16-bit) inside a loop is a loop-carried PARTIAL value:
 // the parent register's upper bits must survive every iteration (the SSA phi
 // merges the partial write with the preserved high bits).  These probes keep an

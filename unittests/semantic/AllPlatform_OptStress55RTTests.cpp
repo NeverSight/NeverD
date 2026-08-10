@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress55RTTests.cpp - mini-program kernels -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Whole-program stress: complex single functions that combine switch dispatch
 // (lowered to jump tables), a runtime-indexed memory array, and nested loops in
 // one body — the interaction surface where CFG / jump-table / stack-frame

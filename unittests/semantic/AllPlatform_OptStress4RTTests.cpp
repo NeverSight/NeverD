@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress4RTTests.cpp - optimizer-path stressors -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fourth batch of high-yield roundtrip probes aimed at NeverD's own MedIR
 // passes (MedFlags folding, MedDCE liveness, MedPropagation const/copy prop,
 // LowToMed sub-register synthesis) plus the value emitter's wide-mul / div

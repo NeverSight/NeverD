@@ -1,5 +1,9 @@
 //===- X64_SIMDLaneRTTests.cpp - Per-lane SIMD correctness tests -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip tests targeting SIMD instructions that require per-lane semantics.
 // Each test exercises an SSE intrinsic through the full pipeline:
 //   clang → original .o → Unicorn → expected value

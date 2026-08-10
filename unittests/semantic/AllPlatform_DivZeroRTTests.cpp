@@ -1,5 +1,9 @@
 //===- AllPlatform_DivZeroRTTests.cpp - AArch64/ARM32 div edge --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64 and ARM32 SDIV/UDIV do NOT trap: divide-by-zero yields 0 and the
 // signed INT_MIN / -1 overflow wraps to INT_MIN.  LLVM's sdiv/udiv, however,
 // make both cases undefined behaviour (poison), so a naive INT_SDIV/INT_DIV

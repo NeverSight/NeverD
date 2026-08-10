@@ -1,5 +1,9 @@
 //===- AllPlatform_RoundingModeRTTests.cpp - round-to-nearest-even -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes that exercise the IEEE default rounding mode (round to
 // nearest, ties to even) on the FP→int convert and round-to-integral
 // instructions.  These had been lifted with round-half-away-from-zero

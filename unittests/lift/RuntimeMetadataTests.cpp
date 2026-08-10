@@ -1,4 +1,8 @@
 //===- RuntimeMetadataTests.cpp - Cross-format runtime metadata tests -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

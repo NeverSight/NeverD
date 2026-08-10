@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress258RTTests.cpp - scalar FP at -O0 ============//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Scalar floating point at -O0 — a coverage gap: the historical FP probes are
 // almost all -O2 / auto-vectorized, while -O0 emits very different code (i386
 // x87 fld/fstp stack traffic, ARM32 VFP, x64/AArch64 scalar SSE/NEON), storing

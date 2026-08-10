@@ -1,5 +1,9 @@
 //===- X64_PackedFPRTTests.cpp - SSE packed FP roundtrip -------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 SSE/SSE2 packed floating-point operations.
 // Bug #28 (FADD V4S on AArch64) showed that packed FP can be mislifted
 // as full-width ops. These tests verify per-lane FP correctness on x86.

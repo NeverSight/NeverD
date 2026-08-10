@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress244RTTests.cpp - FP abs/neg/sqrt/min-max =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Single-instruction FP operations: abs/neg (sign-bit manipulation), sqrt
 // (`fsqrt`/`vsqrt`/`sqrtsd`), copysign, and min/max via comparison-select.
 // These map to dedicated FP opcodes on every target and are folded back to an

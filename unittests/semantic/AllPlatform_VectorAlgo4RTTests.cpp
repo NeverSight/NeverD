@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo4RTTests.cpp - more vectorizable algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fourth batch of realistic clang -O2 auto-vectorized algorithms used as
 // high-yield lift bug probes.  Exercises lift paths the first three batches did
 // not: per-byte population count (SIMD shift/mask bit-trick), Q15 fixed-point

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress56RTTests.cpp - rodata index variety -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-on to #464 crc8: that root-caused the modulo-strength-reduced rodata
 // induction pointer (`tab[(i+huge)%n]`).  These exercise neighbouring rodata
 // index shapes that drive the same induction / indexed-global / constant-pool

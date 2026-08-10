@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress295RTTests.cpp - bitfield/extract probe =======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing bitfield extract/insert, deposit/scatter and
 // sub-word pack/unpack codegen paths:
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress290RTTests.cpp - control-flow probe ==========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing branchy control flow, nested loops and
 // data-dependent iteration counts:
 //

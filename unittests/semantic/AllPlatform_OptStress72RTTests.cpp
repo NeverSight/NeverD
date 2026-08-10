@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress72RTTests.cpp - more struct return -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-up to the #471 multi-register struct-by-value return fix: lock it in
 // and exercise the adjacent shapes the OptStress71 probe did not reach.
 //

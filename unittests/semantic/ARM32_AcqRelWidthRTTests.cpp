@@ -1,5 +1,9 @@
 //===- ARM32_AcqRelWidthRTTests.cpp - ARMv8 AArch32 acq/rel width --------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for ARMv8 AArch32 acquire/release (LDA/STL) and exclusive
 // (LDREX) byte/halfword forms.  These share a handler group that issued
 // `LOAD Dst, {EA}` / `STORE EA, Src` using the full 4-byte register width —

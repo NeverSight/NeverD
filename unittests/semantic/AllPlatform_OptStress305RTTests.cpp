@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress305RTTests.cpp - param-width inference probe -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 kernels stressing the PARAMETER side of integer type inference — the
 // argument-register dual of OptStress303/304 (which probed the return side).
 // Each entry calls `noinline` helpers whose parameters are sub-word (signed/

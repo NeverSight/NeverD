@@ -1,5 +1,9 @@
 //===- ARM32_ExtendedCExprTests.cpp - Extended ARM32 tests ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 additional roundtrip: 8/16-bit ops, sign extension, conditional,
 // bitfield, complex arithmetic patterns.
 //

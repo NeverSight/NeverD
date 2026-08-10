@@ -1,5 +1,9 @@
 //===- X64_PackedCmpUnordRTTests.cpp - CMPPS/CMPPD UNORD/ORD NaN -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Packed FP compare with the UNORD (imm 3) and ORD (imm 7) predicates:
 //
 //   CMPUNORDPS/PD : lane := isNaN(a) || isNaN(b)   (all-ones if unordered)

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress89RTTests.cpp - optimizer-corner probes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Five aggressive corners aimed squarely at the self-written MedIR optimizer /
 // type-inference / memory-alias model rather than at global-pointer relocation
 // (which #473-#488 already hammered):

@@ -1,5 +1,9 @@
 //===- AllPlatform_FPSelectFlagRTTests.cpp - FP compare CMOV/select -*-C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #395 sibling probes for the SELECT (Pass 3) and COND_BR (Pass 1) flag folds:
 // an FP compare's ZF/CF feeds a CMOVcc/branch while an *integer* compare also
 // lives in the same block.  The MedFlags SELECT fold walks back for an

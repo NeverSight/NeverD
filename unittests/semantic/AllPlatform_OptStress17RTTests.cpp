@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress17RTTests.cpp - complex-algo probes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Whole-algorithm roundtrip probes that combine control flow, memory and
 // arithmetic in one kernel — historically the most productive bug surface
 // (VectorAlgo / ComplexAlgo / HashAlgo rounds) because they exercise the

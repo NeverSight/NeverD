@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress47RTTests.cpp - switch bit-test lowering -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for clang's switch-to-bit-test lowering, a dispatch shape
 // orthogonal to the jump tables the OptStress33/34/38/40 + SwitchVariety suites
 // cover.  For a sparse switch over a small dense range clang emits a range check

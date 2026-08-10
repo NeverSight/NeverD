@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress16RTTests.cpp - mem-aliasing probes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Memory-based sub-register / width-aliasing roundtrip probes.  Earlier rounds
 // stressed register sub-register aliasing; these route the width mismatch
 // *through memory* (store-to-load forwarding at a different width), which

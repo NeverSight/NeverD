@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress318RTTests.cpp - mixed-width flag cluster ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Stresses MedFlags' per-use comparison-source recovery (the #147/#148/#149
 // family): several INDEPENDENT comparisons of DIFFERENT widths and signedness
 // land in one basic block, each feeding its own select/cmov.  At -O2 clang

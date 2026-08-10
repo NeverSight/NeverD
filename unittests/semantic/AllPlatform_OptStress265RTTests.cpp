@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress265RTTests.cpp - switch index sources at -O0 =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // switch / jump-table dispatch where the selector comes from non-trivial sources
 // at -O0 — the neighbor of the #508 jump-table fix (ARM32 -O0 PIC table whose
 // index was spilled to the stack and disconnected from its bound guard).  Here

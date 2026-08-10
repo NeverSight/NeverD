@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress64RTTests.cpp - register-pressure mega -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High register-pressure "mega" kernels that interleave many live values of
 // mixed width so the optimizer is forced to spill/reload and reuse sub-
 // registers heavily — the exact conditions under which SSA/liveness and

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress75RTTests.cpp - pointers returned/stored -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress74 symbolized a global address passed INTO a call; these probes drive
 // the duals — a global address flowing OUT of a call (a returned pointer), a
 // code pointer kept in a mutable global, and a strided array-of-structs global:

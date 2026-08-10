@@ -1,5 +1,9 @@
 //===- AArch64_FMulxRTTests.cpp - FP multiply-extended (FMULX) ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for AArch64 `FMULX` (FP multiply-extended).  FMULX behaves
 // like FMUL for ordinary operands but defines 0*Inf = +/-2.0 (so the Newton-
 // Raphson reciprocal/rsqrt refinement steps stay well-defined at the

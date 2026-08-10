@@ -1,5 +1,9 @@
 //===- X64_Word16OpRTTests.cpp - 16-bit + multi-arg RT --------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 16-bit operations (AX/BX/CX/DX), multi-argument functions,
 // switch patterns, and nested loops. These exercise sub-register handling
 // for the 16-bit register file (regression for #3 sub-register aliasing).

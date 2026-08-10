@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress259RTTests.cpp - bitfield structs at -O0 =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Bitfield structs at -O0 — OptStress241 drove dense bitfield shift/mask chains
 // at -O2; this is the -O0 counterpart, where clang emits the load / shift / mask
 // / sign-extend / or-back sequence explicitly per field with every intermediate

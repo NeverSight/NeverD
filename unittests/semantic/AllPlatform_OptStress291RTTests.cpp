@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress291RTTests.cpp - fixed-point/scaling probe ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing fixed-point and multiply-shift codegen paths
 // (32x32->64 widening multiply followed by a constant shift):
 //

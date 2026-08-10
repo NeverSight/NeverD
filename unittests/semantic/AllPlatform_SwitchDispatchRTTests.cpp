@@ -1,5 +1,9 @@
 //===- AllPlatform_SwitchDispatchRTTests.cpp - jump-table edge shapes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #398 follow-up to the x86/x64 jump-table recovery fix.  Beyond the dense /
 // sparse / nested shapes in AllPlatform_SwitchTableRTTests, these stress the
 // table-index normalization the resolver must recover precisely:

@@ -1,5 +1,9 @@
 //===- ARM32_SMMulWordRTTests.cpp - SMMUL/SMMLA/SMMLS word mul -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 signed most-significant-word multiplies compute the high 32 bits of a
 // 64-bit intermediate:
 //   SMMUL{R}  Rd = (Rn*Rm{ + 0x80000000 })[63:32]

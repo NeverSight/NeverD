@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress44RTTests.cpp - vector + scalar tail -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for autovectorized integer reductions over prime-length
 // arrays, which force clang -O2 to emit a SIMD main loop plus a scalar epilogue
 // (and, for SAD/max, specific SSE/NEON ops: PSADBW, PMAXSD, PMOVSXWD + horizontal

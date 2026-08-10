@@ -1,5 +1,9 @@
 //===- AllPlatform_MemBarrierLiveRegRTTests.cpp - barrier vs live reg ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A memory barrier / fence is a side-effect-only instruction: it must NOT
 // define a register.  The lifter once emitted the barriers DMB/DSB/ISB/CLREX
 // (ARM/AArch64) and MFENCE/LFENCE/SFENCE (x86) as an intrinsic whose default

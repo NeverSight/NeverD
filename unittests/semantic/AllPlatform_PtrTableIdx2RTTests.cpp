@@ -1,5 +1,9 @@
 //===- AllPlatform_PtrTableIdx2RTTests.cpp - loaded-pointer uses -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-on to #457 PtrTableIdx: there the table-loaded pointer was dereferenced
 // with a fresh `[k]` subscript.  These exercise the OTHER ways a pointer read
 // from a global table is consumed, at the intersection of #457 (pointer tables)

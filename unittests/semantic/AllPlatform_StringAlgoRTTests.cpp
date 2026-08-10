@@ -1,5 +1,9 @@
 //===- AllPlatform_StringAlgoRTTests.cpp - byte/encoding algos --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 byte-level string / encoding algorithm probes (hex, base64, UTF-8,
 // rot13, case folding, digit extraction).  These pack byte extraction/insertion
 // (sub-register reads), cross-byte bit splicing, and deep nested-ternary range

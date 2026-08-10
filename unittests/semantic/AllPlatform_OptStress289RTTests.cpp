@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress289RTTests.cpp - carry/wide-arith probe ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing carry/borrow propagation, widening multiply
 // and overflow-detection codegen paths:
 //

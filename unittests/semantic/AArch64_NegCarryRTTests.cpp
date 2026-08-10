@@ -1,5 +1,9 @@
 //===- AArch64_NegCarryRTTests.cpp - NGC / NGCS negate-with-carry -*- C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64 `NGC Xd, Xm` / `NGCS Xd, Xm` are aliases of `SBC Xd, XZR, Xm` /
 // `SBCS ...`: Xd = 0 - Xm - NOT(C) = -Xm - 1 + C.  capstone decodes them as the
 // distinct mnemonics NGC/NGCS (not normalized to SBC), and there is no dedicated

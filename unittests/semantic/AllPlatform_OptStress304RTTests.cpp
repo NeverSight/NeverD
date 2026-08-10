@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress304RTTests.cpp - -O0 return-width merge ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 sink-difference dual of OptStress303: the SAME return-type-inference
 // kernels compiled at -O0.  Low optimization changes the lift surface that
 // MedTypePass::inferReturnType / intRetEffWidth must reconstruct: at -O2 the

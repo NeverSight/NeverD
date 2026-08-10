@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress278RTTests.cpp - array/pointer RMW at -O0 ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Compound-assignment read-modify-write through arrays and pointers at -O0 —
 // histograms, in-place transforms, pointer-based scatter, and writable-global
 // RMW.  At -O0 each `a[i] op= x` is a separate load / op / store to a computed

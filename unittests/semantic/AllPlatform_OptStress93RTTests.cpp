@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress93RTTests.cpp - lone sign-flag fold -*- C++ -*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Locks in the #486 fix across all four targets and all three MedFlags folding
 // passes.  A LONE sign flag (x86 `js`/`sets`/`cmovs`, AArch64 `cset/csel mi`,
 // ARM32 `movmi`) is the sign of the WRAPPED result `(A-B) <s 0`, NOT the

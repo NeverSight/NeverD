@@ -1,5 +1,9 @@
 //===- ARM32_MassiveTests.cpp - Mass coverage ARM32 tests ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-volume ARM32 roundtrip tests covering multiply, shift, conditional,
 // extension, memory, ALU chains, and branch patterns.
 //

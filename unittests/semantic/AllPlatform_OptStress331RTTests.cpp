@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress331RTTests.cpp - runtime-selected table base ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Two-table indirect dispatch: a computed goto whose label table is chosen at
 // runtime — `tbl = cond ? A : B; goto *tbl[idx]`.  clang lowers the base select
 // to a CMOV / CSEL / conditional-MOV between two adjacent code-pointer tables in

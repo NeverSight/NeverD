@@ -1,5 +1,9 @@
 //===- AArch64_ExtendRegFlagsRTTests.cpp - W-form extended-reg flags ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64 ADD/SUB/CMP/CMN with an EXTENDED register operand
 // (`cmp w1, w2, sxtb`) in the 32-bit (W) form.  The extended operand is always
 // materialised as a 64-bit sign/zero-extended value, but a W-form operation and

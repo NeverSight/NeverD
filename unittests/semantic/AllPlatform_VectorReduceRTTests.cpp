@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorReduceRTTests.cpp - NEON reductions ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for horizontal vector reductions, a historically bug-prone
 // area (whole-register placeholders, missing sign extension on widening
 // reductions, wrong lane ordering).  Each probe feeds signed/boundary/distinct

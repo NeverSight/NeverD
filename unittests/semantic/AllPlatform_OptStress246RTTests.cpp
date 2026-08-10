@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress246RTTests.cpp - fixed-point cross-word mul ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fixed-point (Q-format) multiplies: a 32x32->64 product followed by a
 // SUB-WORD constant shift, so the result spans the boundary between the two
 // halves of the product (bits 16..47, 15..46, 24..55 ...).  clang lowers this

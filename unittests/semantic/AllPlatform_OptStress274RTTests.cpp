@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress274RTTests.cpp - boolean/compare chains -O0 ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Short-circuit boolean chains, nested ternaries, and comparison-result
 // arithmetic at -O0 — the dual of the -O2 compare-folding probe OptStress220.
 // At -O0 each && / || / ?: emits an explicit cmp + setcc / conditional branch

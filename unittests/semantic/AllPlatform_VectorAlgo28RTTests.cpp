@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo28RTTests.cpp - shift/select/bitfield edges C++==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twenty-eighth batch of clang -O2 probes targeting the edge-count and
 // data-movement corners that historically broke (RCL/RCR shift-by-bitwidth,
 // sub-register extension, flag-fold select webs): variable shift/rotate amounts

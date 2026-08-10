@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress200RTTests.cpp - switch / interior-walk edges ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // More jump-table-recovery and rodata interior-pointer guardrails, in the
 // shapes that surfaced #491's i386 bugs (peeled switch with a spilled jump
 // target, interior string suffix copy).  Each fold depends only on the rodata

@@ -1,5 +1,9 @@
 //===- X64_IntegerSemanticTests.cpp - x64 integer ALU tests ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Migrated from scripts/lift_verifier.py — x64 integer instruction categories:
 //   Core, Ext, Shift, Rotate, BMI, MulDiv, SetccCmov, CoreExtra, Op32, Op16,
 //   BSwapBT, ShldShrd, MiscExt, FlagMisc, Fence, CoreMissing, BMIExtended

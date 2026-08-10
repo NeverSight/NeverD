@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress306RTTests.cpp - -O0 param-width inference ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 sink-difference dual of OptStress305: the SAME parameter-width inference
 // kernels compiled at -O0.  Low optimization changes the lift surface that
 // MedTypePass type inference + MedCallingConv argument typing must reconstruct:

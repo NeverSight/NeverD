@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo29RTTests.cpp - autovectorized kernels --*-C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #397 high-yield probing: kernels clang -O2 auto-vectorizes (scan, argmax,
 // saturating widening MAC, Horner, threshold sum, dot product, bit reversal)
 // over arrays derived from the runtime seed (no rodata constants — focus on the

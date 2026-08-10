@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress293RTTests.cpp - parity/byte-parity probe ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing parity, byte-reversal and nibble/byte
 // manipulation codegen paths:
 //

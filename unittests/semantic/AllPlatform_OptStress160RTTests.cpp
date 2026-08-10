@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress160RTTests.cpp - rotated search / peak / Kadane =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES.  Each reads its rodata
 // through a plain base+index copy into a stack buffer and folds a result that
 // depends only on the bytes + control flow (never an absolute VA), so nothing

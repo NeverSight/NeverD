@@ -1,5 +1,9 @@
 //===- X64_MulFlagsRTTests.cpp - one-operand MUL/IMUL CF/OF ------*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 one-operand `MUL`/`IMUL` (the widening forms: AX, DX:AX, EDX:EAX,
 // RDX:RAX) define ONLY CF and OF; SF/ZF/AF/PF are architecturally undefined.
 // The defined rule differs between the unsigned and signed forms:

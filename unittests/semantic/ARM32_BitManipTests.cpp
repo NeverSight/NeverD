@@ -1,5 +1,9 @@
 //===- ARM32_BitManipTests.cpp - ARM32 bit manipulation tests --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests ARM32 CLZ, RBIT, REV, BFC, BFI patterns and complex bit operations.
 //
 //===----------------------------------------------------------------------===//

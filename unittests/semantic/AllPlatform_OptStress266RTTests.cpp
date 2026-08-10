@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress266RTTests.cpp - nested/multi switch -O0 =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Nested-loop and multi-switch dispatch at -O0 — direct hardening of the #509
 // fix (ARM32 -O0 switch whose index shared a GPR with an inner loop counter, so
 // a stale `counter < N` guard narrowed the table bound).  These pile more loop

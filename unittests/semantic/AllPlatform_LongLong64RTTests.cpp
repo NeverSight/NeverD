@@ -1,5 +1,9 @@
 //===- AllPlatform_LongLong64RTTests.cpp - 64-bit on 32-bit ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 64-bit `unsigned long long` kernels run across all four targets.
 // On i386 and ARM32 a 64-bit value lives in a *register pair*, so every kernel
 // lowers to multi-word add/sub carry chains (adc/sbb, adds/adc), double-width

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress209RTTests.cpp - explicit-order atomics =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the C11 `__atomic_*` builtins with EXPLICIT memory
 // orders (relaxed / acquire / release / acq_rel / seq_cst) -- a distinct
 // instruction set from OptStress207/208's seq_cst `__sync_*`: AArch64

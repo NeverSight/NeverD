@@ -1,5 +1,9 @@
 //===- AArch64_AtomicLseOptRTTests.cpp - LSE atomics under the optimizer -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-driven C11-atomic round-trip probes that force the AArch64 FEAT_LSE
 // *single-instruction* lowering by compiling at -O2 with -march=armv8.1-a.  This
 // is the realistic compiler output for `__atomic_*` builtins on an LSE target,

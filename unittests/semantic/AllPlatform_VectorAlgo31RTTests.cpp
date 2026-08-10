@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo31RTTests.cpp - packed SIMD idiom probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirty-first batch of clang -O2 vector probes, aimed at the packed-SIMD
 // idioms the docs still flag as fragile: saturating add/sub (PADDS/PSUBUS,
 // SQADD/UQSUB, VQADD/VQSUB), sign-copy (PSIGN), compare-to-bitmask (PMOVMSKB),

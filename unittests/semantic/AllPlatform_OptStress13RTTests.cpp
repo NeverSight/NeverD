@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress13RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-stress roundtrip probes orthogonal to OptStress1-12 / SubRegMix,
 // aimed at the NeverD hand-written MedIR passes (LowToMed sub-register SSA,
 // MedFlags, MedPropagation) that have repeatedly hidden semantic bugs:

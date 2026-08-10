@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress322RTTests.cpp - -O3 control flow ------------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O3 control-flow shapes: jump-table generation, branch-to-select conversion,
 // loop rotation/unswitching and nested CFG differ markedly from the -O0/-O2
 // forms prior switch/jump-table probes used (#508-#511).  All integer, LCG

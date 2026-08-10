@@ -1,5 +1,9 @@
 //===- AllPlatform_DivConstRTTests.cpp - constant divisor magic -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Division / remainder by a COMPILE-TIME CONSTANT.  clang -O2 never emits a
 // real div for a constant divisor: it lowers `x / k` into a multiply-high by a
 // magic constant plus shifts (and, for signed, a sign-correction add of the

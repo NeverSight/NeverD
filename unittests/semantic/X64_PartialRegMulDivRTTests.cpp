@@ -1,5 +1,9 @@
 //===- X64_PartialRegMulDivRTTests.cpp - partial reg + mul/div -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86-64 sub-register write *merge* semantics, the one-operand 8/16-bit
 // MUL/IMUL/DIV/IDIV forms (DX:AX / AX split), and the high-byte registers
 // (AH/BH/CH/DH).  The existing X64_Word16OpRTTests only ever drives 16/8-bit

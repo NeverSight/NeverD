@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress48RTTests.cpp - switch lookup-table variants -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-on probes for clang's switch-to-lookup-table after the #456 fix for the
 // i386 PIC GOTOFF base that folds to `table - min_case*stride` and lands before
 // its rodata segment.  #456's `rangejt` used a 4-byte (i32) value table; these

@@ -1,5 +1,9 @@
 //===- AllPlatform_RoundShiftRTTests.cpp - NEON rounding right shift -------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for NEON rounding right shift by immediate, which adds a
 // `1 << (n-1)` bias before the shift.  Two systematic gaps are covered:
 //   * ARM32 VRSHR / VRSRA dropped the rounding bias entirely (treated as the

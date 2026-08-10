@@ -1,5 +1,9 @@
 //===- AllPlatform_FPCompareNaNRTTests.cpp - FP compare with NaN -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for floating-point comparisons fed a NaN operand.  Existing
 // FP-compare tests only use finite values, so the IEEE "unordered" result was
 // never exercised: every ordered relation (<, >, <=, >=, ==) must be FALSE when

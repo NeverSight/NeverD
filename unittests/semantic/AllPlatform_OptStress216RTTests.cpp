@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress216RTTests.cpp - global pointer indirection ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Symbolization probes for data-pointer tables whose entries are themselves
 // addresses of OTHER globals — the layer above a plain rodata lookup table.
 // clang -O2 lowers each table entry to a pointer relocation (`.data.rel.ro`

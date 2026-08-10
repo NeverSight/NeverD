@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress100RTTests.cpp - data-driven rodata shapes -*-C++-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three rodata/global access SHAPES not previously pinned,
 // all address-independent (the folded result depends only on the bytes stored
 // in the globals and the control flow, never on an absolute VA), so the

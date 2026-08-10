@@ -1,5 +1,9 @@
 //===- ARM32_ParallelSIMDRTTests.cpp - GE-setting parallel SIMD + SEL ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the ARMv6 GE-setting parallel (SIMD-in-GPR) add/sub
 // instructions and SEL.  SADD8/UADD8/SSUB8/.../SADD16/.../SASX set the four
 // APSR.GE[3:0] lane flags; SEL then picks each result byte from the first or

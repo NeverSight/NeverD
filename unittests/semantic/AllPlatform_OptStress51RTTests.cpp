@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress51RTTests.cpp - rodata width × subreg -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Intersect the two high-yield areas — rodata constant-table loads (constant-
 // pool redirect) and sub-register partial-write merges — by reading a `.rodata`
 // table at mixed element widths (signed/unsigned i8/i16/i32) straight into

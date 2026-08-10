@@ -1,5 +1,9 @@
 //===- AllPlatform_ImageAlgoRTTests.cpp - Image kernels ---------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 image-processing kernel probes (grayscale weighting, threshold,
 // box blur, Sobel gradient, brightness with saturation, RGB565 pack/unpack,
 // 1D median filter).  These are byte-heavy and auto-vectorize into widening

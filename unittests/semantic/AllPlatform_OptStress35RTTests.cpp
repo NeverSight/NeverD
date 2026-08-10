@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress35RTTests.cpp - integer idiom probes -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fresh integer idioms not exercised by the earlier OptStress rounds, each
 // stressing a distinct lift/optimizer corner: two-sided saturating narrowing
 // casts, conditional abs/negate with the INT_MIN wrap edge, Gray-code

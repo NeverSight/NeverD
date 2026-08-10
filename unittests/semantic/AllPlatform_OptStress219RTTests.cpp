@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress219RTTests.cpp - rodata struct-table index ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Constant-pool probes for a `static const` table of STRUCTS (mixed-width fields
 // with padding) indexed at runtime — the access is `base + idx*sizeof(struct) +
 // offsetof(field)`, a scaled-by-struct-stride index plus a field offset, which

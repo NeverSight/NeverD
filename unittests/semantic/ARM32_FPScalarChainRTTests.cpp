@@ -1,5 +1,9 @@
 //===- ARM32_FPScalarChainRTTests.cpp - ARM32 FP scalar chain roundtrip ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers: VADD/VMUL/VSUB/VDIV chained (VFP), VNMUL, VMLA/VMLS scalar,
 // VCVT chains, FP accumulate loops.
 //

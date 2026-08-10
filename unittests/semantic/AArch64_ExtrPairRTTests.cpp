@@ -1,5 +1,9 @@
 //===- AArch64_ExtrPairRTTests.cpp - EXTR / ROR-imm pair RT ----*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64 EXTR concatenates the source pair {Rn:Rm} into a double-width value
 // and extracts a `datasize`-wide window starting at bit `lsb`:
 //

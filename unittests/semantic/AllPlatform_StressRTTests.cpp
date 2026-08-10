@@ -1,5 +1,9 @@
 //===- AllPlatform_StressRTTests.cpp - Cross-platform stress RT -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Stress tests that exercise complex patterns across all platforms:
 // large functions, deep nesting, many variables, carry chains, etc.
 //

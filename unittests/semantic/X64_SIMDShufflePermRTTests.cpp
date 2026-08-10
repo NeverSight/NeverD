@@ -1,5 +1,9 @@
 //===- X64_SIMDShufflePermRTTests.cpp - SSE shuffle/permute roundtrip -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip tests for x86 SIMD shuffle, permute, unpack, interleave, and
 // pack instructions.  These have complex per-lane semantics and historically
 // have been a major source of lift bugs.

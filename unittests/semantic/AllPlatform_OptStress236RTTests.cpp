@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress236RTTests.cpp - SWAR bit tricks ============//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // SIMD-within-a-register (SWAR) byte-parallel idioms and bit-permutation
 // sequences.  These are long chains of AND/OR/XOR/SHIFT/SUB with magic
 // constants — exactly the shape the optimizer is most tempted to over-simplify

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress96RTTests.cpp - vtable / 2D / ptr-chain -*-C++-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #473-#485 symbolized global addresses flowing through calls, returns, struct
 // fields, arrays and PHI merges.  These push the "constant pool mapping" DNA into
 // three shapes those probes never hit:

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress212RTTests.cpp - bit-scan value correctness ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails that stress the EXACT numeric result of clz/ctz/ffs lifts:
 // the count drives a rodata table index or a switch selector, so an off-by-one
 // in the `(bits-1) - LZCOUNT` / zero-source handling shows up as a wrong value

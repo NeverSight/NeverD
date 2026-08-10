@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo44RTTests.cpp - packed SIMD idiom probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Forty-fourth batch of clang -O2 vector probes, covering packed-SIMD idioms
 // not in batches 31-43: unsigned byte average (PAVGB / URHADD), signed
 // saturating byte subtract (PSUBSB / SQSUB), per-lane compare-greater mask OR

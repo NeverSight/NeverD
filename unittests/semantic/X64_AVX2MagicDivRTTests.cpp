@@ -1,5 +1,9 @@
 //===- X64_AVX2MagicDivRTTests.cpp - 256-bit magic-division frontier --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86_64-only probes for the AVX2-256 frontier carried forward from #432/#433:
 // clang vectorizes `unsigned % constant` (and `/ constant`) into a magic-number
 // sequence over YMM — VPSHUFD $0xf5 (odd-dword gather), VPBROADCASTD, two

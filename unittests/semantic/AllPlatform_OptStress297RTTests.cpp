@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress297RTTests.cpp - compare/sort-network probe ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing compare-swap networks, min/max pairs and
 // sorting-network codegen paths (no division, bounded loops):
 //

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress60RTTests.cpp - branchless / select -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Branchless conditional idioms that clang -O2 lowers to flag-consuming
 // predicated moves (CMOV / CSEL / CSINC / Thumb IT, SETcc / CSET) rather than
 // branches.  These hammer the MedFlags flag-folding and predicated-select

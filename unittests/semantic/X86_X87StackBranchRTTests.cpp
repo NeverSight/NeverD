@@ -1,5 +1,9 @@
 //===- X86_X87StackBranchRTTests.cpp - x87 stack across branches -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The x87 register stack is a *physical* rotating file: ST(i) names the slot
 // (TOP+i)&7.  NeverD tracks TOP (`FPUTop`) as a single counter that advances in
 // the order instructions are *lifted* (worklist exploration order), not in CFG

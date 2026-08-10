@@ -1,5 +1,9 @@
 //===- X64_RclVarCountRTTests.cpp - RCL/RCR variable count (incl. 0) -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // RCL/RCR rotate the operand THROUGH CF as a (width+1)-bit quantity.  The
 // existing coverage drives only the immediate `$1` form; the variable `%cl`
 // form -- and in particular a runtime count of ZERO with CF pre-set -- has no

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress218RTTests.cpp - runtime-divisor div/mod =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Division / remainder by a RUNTIME (data-dependent) divisor — the real
 // `idiv`/`div` (x86), `sdiv`/`udiv` + `msub` (AArch64) and `sdiv`/`udiv`
 // (ARM32 hwdiv) instructions, NOT the magic-multiply a constant divisor lowers

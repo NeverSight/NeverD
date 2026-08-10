@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress248RTTests.cpp - global / rodata symbolize ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Pointer/global symbolization patterns adjacent to the #473-476 fixes (global
 // addresses stored into pointer arrays, escaping/returned global pointers).
 // These read globals through shapes the lift must recognize as pointers-into-

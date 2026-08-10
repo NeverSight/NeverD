@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo18RTTests.cpp - DSP/filter algos ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Eighteenth batch of clang -O2 algorithm probes.  Kernels chosen for SIMD
 // lowerings under-represented by VectorAlgo1-17 — sliding-window MAC filters,
 // strided de-interleave loads, widening int8 dot products, loop-carried IIR

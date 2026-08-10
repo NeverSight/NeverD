@@ -1,5 +1,9 @@
 //===- AllPlatform_KernelAlgoRTTests.cpp - high-yield algo probes -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 algorithm-level "high-yield probing": each kernel compiles to a
 // dense, distinct instruction mix across x64 / aarch64 / arm32, exercising many
 // lowerings at once (the project's most productive bug-finding method).  Kernels

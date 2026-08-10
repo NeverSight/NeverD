@@ -1,5 +1,9 @@
 //===- X64_PartialFlagRTTests.cpp - partial-flag preservation --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for x86 partial-flag semantics that stress the self-written
 // MedIR flag pass (MedFlags):
 //

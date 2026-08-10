@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress249RTTests.cpp - global symbolize at -O0/-O1 =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The OptStress248 global/rodata symbolization patterns rerun at -O1 (and a few
 // at -O0) as a sink differential.  Optimization level changes how clang
 // materializes a global's base: -O2 under register pressure prefers an

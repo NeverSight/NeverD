@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress256RTTests.cpp - ABI / calls at -O0 =========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Function-call ABI recovery at -O0 — the untested low-opt axis of the
 // historically bug-dense calling-convention subsystem (stack params, callee-pop,
 // struct-by-value, wide args, returns).  At -O0 clang spills every argument to

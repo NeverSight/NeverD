@@ -1,5 +1,9 @@
 //===- X64_RotateCountRTTests.cpp - 8/16-bit rotate count modulo -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 ROL/ROR/RCL/RCR mask the count to 5 bits (0x1F) for 8/16/32-bit operands
 // (6 bits / 0x3F for 64-bit), but for BYTE and WORD operands the hardware then
 // takes a SECOND reduction the lifter was missing (Intel SDM):

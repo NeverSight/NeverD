@@ -1,5 +1,9 @@
 //===- X64_SimdHighLowMoveRTTests.cpp - MOVHPS/MOVLPS family ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 partial-qword vector moves operate on ONE 64-bit half of an XMM and
 // MUST preserve / select the correct other half:
 //

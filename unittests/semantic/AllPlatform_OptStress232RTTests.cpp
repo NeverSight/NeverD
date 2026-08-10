@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress232RTTests.cpp - O1 lifting stress ===========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Companion to OptStress231 (-O0) at -O1: clang does register allocation and
 // basic folding but skips the heavier -O2 vectorization / idiom recognition,
 // so it emits yet another distinct instruction mix (scalar setcc + cmov,

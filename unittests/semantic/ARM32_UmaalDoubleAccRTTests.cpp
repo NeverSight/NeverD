@@ -1,5 +1,9 @@
 //===- ARM32_UmaalDoubleAccRTTests.cpp - UMAAL double-accumulate -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 `UMAAL RdLo, RdHi, Rn, Rm` (unsigned multiply-accumulate-accumulate
 // long) is the odd one out of the long-multiply family.  Unlike UMLAL — which
 // adds the *64-bit* pair {RdHi:RdLo} to the product — UMAAL adds RdLo and RdHi

@@ -1,5 +1,9 @@
 //===- AllPlatform_RodataInductionRTTests.cpp - rodata walk pointers -*-C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Regression probes for "constant-pool mapping" reached through a *rodata-
 // walking induction pointer* rather than `base + index`.  Under register
 // pressure (a const array of >=6 elements consumed by a long hash that also

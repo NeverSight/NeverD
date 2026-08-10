@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo30RTTests.cpp - vectorized search ---*- C++-*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirtieth batch of clang -O2 algorithm probes, aimed squarely at the
 // vectorized *index / search* shape that surfaced the #431 memcmp miscompile
 // (clang turns a full-array scan into a per-block `pcmpeqb`/`pmovmskb` reduction

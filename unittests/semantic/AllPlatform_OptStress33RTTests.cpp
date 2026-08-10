@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress33RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A further optimizer / sub-register probe targeting corners OptStress27/28/32
 // did not cover.  The recurring miscompile vein is partial-register (8/16-bit)
 // writes whose wide parent is read in another block, plus the self-written

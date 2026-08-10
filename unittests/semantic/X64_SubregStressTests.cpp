@@ -1,5 +1,9 @@
 //===- X64_SubregStressTests.cpp - Sub-register aliasing stress tests ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Targeted tests for x86_64 sub-register aliasing correctness.
 // These exercise every combination of wide-write/narrow-read and
 // narrow-write/wide-read patterns to ensure the optimizer correctly

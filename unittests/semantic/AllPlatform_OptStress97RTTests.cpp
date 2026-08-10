@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress97RTTests.cpp - sub-word memory aliasing -*-C++-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The recent arc (#473-#486, OptStress74-96) drove the "constant pool mapping"
 // (global-address symbolization) and the lone-sign-flag DNA.  This probe attacks
 // a different axis the OptStress series under-hits: the lifter's MEMORY MODEL —

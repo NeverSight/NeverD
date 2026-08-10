@@ -1,5 +1,9 @@
 //===- X64_DoubleShiftFlagsRTTests.cpp - SHLD/SHRD flags -------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 double-precision shifts SHLD/SHRD follow the same flag rules as the
 // single shifts that #312 fixed, but were not covered there: a zero (post-mask)
 // count leaves ALL flags unchanged, and the OF flag is defined only for a 1-bit

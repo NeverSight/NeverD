@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress98RTTests.cpp - overlap/unaligned forwarding -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress97 showed the lifter's memory model survives aligned-view union
 // punning, packed-field RMW, half/byte partial stores and a byte copy + one
 // unaligned 4-byte load.  This probe turns the screws on the same axis with the

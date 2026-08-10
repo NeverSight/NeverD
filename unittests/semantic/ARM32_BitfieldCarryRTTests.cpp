@@ -1,5 +1,9 @@
 //===- ARM32_BitfieldCarryRTTests.cpp - carry alias + bitfield -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // RSC (reverse subtract with carry) reads its source operands for the C/V
 // flags; when the destination aliases the minuend (rscs rD,rN,rD) the source
 // must be snapshotted before the result write.  These probes drive that form

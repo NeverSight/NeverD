@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress264RTTests.cpp - x87 long double at -O0 ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // 80-bit x87 long double at -O0 (x86 / x86-64 only) — the freshly-modified x87
 // area (TOP-relative modeling, f80 precision) is exercised here with the -O0
 // store-everything form: every long double subexpression round-trips through an

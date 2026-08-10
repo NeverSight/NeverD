@@ -1,5 +1,9 @@
 //===- AllPlatform_Wide64On32RTTests.cpp - 64-bit math on 32-bit ABI -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of 64-bit integer arithmetic, which on i386 and
 // ARM32 decomposes into register-pair operations (ADC/SBB carry chains,
 // SHLD/SHRD or lsl/lsr+orr double shifts, 64-bit compares lowered to two

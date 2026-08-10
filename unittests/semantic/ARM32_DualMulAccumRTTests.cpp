@@ -1,5 +1,9 @@
 //===- ARM32_DualMulAccumRTTests.cpp - SMLALD/SMLSLD 64-bit MAC -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 signed dual multiply-accumulate LONG instructions accumulate the sum
 // (SMLALD) or difference (SMLSLD) of two signed 16x16 products into a 64-bit
 // {RdHi:RdLo} register pair:

@@ -1,5 +1,9 @@
 //===- EdgeCaseNEONTests.cpp - AArch64/ARM32 NEON edge cases -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests for NEON patterns that previously caused issues:
 // - 8B/4H/2S arrangements (D-register operations + Q zero-extend)
 // - BFM/BFXIL with ImmR=0

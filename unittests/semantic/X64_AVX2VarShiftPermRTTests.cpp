@@ -1,5 +1,9 @@
 //===- X64_AVX2VarShiftPermRTTests.cpp - 256-bit var-shift / permute ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86_64-only probes for the AVX2-256 frontier #432 carried forward: per-element
 // variable shifts (VPSLLVD/VPSRLVD/VPSRAVD/VPSLLVQ/VPSRLVQ) and the cross-lane
 // qword permute (VPERMQ).  Both are forced via GCC vector extensions

@@ -1,5 +1,9 @@
 //===- X64_SSEIntProbeRTTests.cpp - SSSE3/SSE4.1 integer ---------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for x86 SSSE3/SSE4.1 packed-integer intrinsics that clang
 // -O2 rarely selects but that exercise distinct lifter paths:
 //   * PMULHRSW (rounding mul high), PMADDUBSW (unsigned*signed mul-add).

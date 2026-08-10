@@ -1,5 +1,9 @@
 //===- ARM32_DivFlagRTTests.cpp - ARM32 div + flag patterns ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests ARM32 division, conditional execution, and VFP operations.
 // ARM32 is unique in having predicated instructions and IT blocks.
 //

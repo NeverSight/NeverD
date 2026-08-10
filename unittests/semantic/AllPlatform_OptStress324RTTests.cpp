@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress324RTTests.cpp - -Os size-opt shapes --------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // First OptStress batch compiled at -Os: every prior probe ran at -O0/-O2/-O3,
 // leaving the size-optimizer's distinct code shapes unexercised through the lift
 // roundtrip.  At -Os clang prefers smaller code: real idiv/udiv instead of

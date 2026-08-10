@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress86RTTests.cpp - variadic global ptr args -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A global element address passed as a VARIADIC argument: `vfn(n, &G[i], ...)`.
 // The variadic call's args are recovered as fixed integer params, so the callee
 // declares the pointer varargs as `i64` rather than `ptr` — neither the

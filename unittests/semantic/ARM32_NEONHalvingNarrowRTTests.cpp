@@ -1,5 +1,9 @@
 //===- ARM32_NEONHalvingNarrowRTTests.cpp - VHSUB/VSUBHN ---------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for ARM32 NEON halving-subtract (VHSUB) and subtract-and-
 // narrow-high-half (VSUBHN/VRSUBHN), which were lifted as full-width INT_SUB
 // placeholders (no halving / no narrowing / cross-lane borrow).  Mirrors the

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStressRTTests.cpp - optimizer stress ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Scalar kernels that hammer the NeverD optimizer's most fragile machinery —
 // carry-flag SSA chains, condition-flag liveness across branches, sub-register
 // aliasing, and select/CMOV survival — historically the richest source of

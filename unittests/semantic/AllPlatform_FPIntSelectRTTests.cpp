@@ -1,5 +1,9 @@
 //===- AllPlatform_FPIntSelectRTTests.cpp - FP compare + int cmov *- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 kernels that put an INTEGER compare and a following FLOATING-POINT
 // compare in the *same* straight-line block, each feeding a branchless select
 // (cmov / csel).  The FP compare writes the same condition-flag bits (ZF/CF on

@@ -1,5 +1,9 @@
 //===- AllPlatform_RevBitfieldRTTests.cpp - rev/rbit/bitfield guards ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Guardrail coverage for byte/bit reversal (REV16/REV32/RBIT, ARM REV/REVSH),
 // bitfield extract/insert (SBFX/UBFX/BFI/BFXIL/UBFIZ, ARM BFC), and a few x86
 // 16-bit operand-size guards (IMULW flags/result, BTS register form).  All

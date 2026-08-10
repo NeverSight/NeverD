@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo38RTTests.cpp - packed SIMD idiom probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirty-eighth batch of clang -O2 vector probes, covering packed-SIMD idioms
 // not in batches 31-37: unsigned saturating byte subtract (PSUBUSB / UQSUB),
 // unsigned saturating 16-bit add (PADDUSW / UQADD), 32-bit compare-equal mask

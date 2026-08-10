@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress255RTTests.cpp - bit/div at -O0 ==============//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The most fold-prone families from OptStress252 (bit manipulation) and
 // OptStress253 (constant div/mod) rerun at -O0, as a sink differential.  At -O0
 // clang spills every temporary and emits explicit movzx/setcc/mul-high

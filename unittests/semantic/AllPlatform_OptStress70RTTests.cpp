@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress70RTTests.cpp - FP switch / tail call -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // FP control-flow shapes exercising the call/return-ABI machinery: a `switch`
 // returning distinct floating-point constants (lowered to a rodata table the
 // callee loads into the FP return register with no FLOAT_* producer — the #470

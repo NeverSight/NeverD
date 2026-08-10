@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress294RTTests.cpp - modular/mod-arith probe ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing modular arithmetic, power-of-2 masking and
 // strength-reduced modulo codegen paths:
 //

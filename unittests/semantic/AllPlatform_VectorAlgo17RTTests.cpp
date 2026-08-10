@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo17RTTests.cpp - DSP/image algos ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Seventeenth batch of clang -O2 algorithm probes, targeting DSP / image /
 // reduction kernels that auto-vectorize into dense, distinct SIMD across
 // x64 / aarch64 / arm32 — the project's most productive bug-finding method.

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress161RTTests.cpp - spiral / rotate90 / flood fill =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES.  Each copies its rodata
 // grid into a stack buffer with a plain base+index loop and folds a result that
 // depends only on the bytes + control flow (never an absolute VA), so nothing

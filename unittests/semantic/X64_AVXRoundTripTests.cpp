@@ -1,5 +1,9 @@
 //===- X64_AVXRoundTripTests.cpp - AVX/VEX roundtrip tests ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 AVX/VEX-encoded SIMD instructions through the full lift
 // pipeline.  VEX 3-operand variants historically shared per-lane bugs with
 // their SSE counterparts (#44-#47).  Uses -mavx2 -O1 to generate VEX code.

@@ -1,5 +1,9 @@
 //===- AllPlatform_DynStackCFGRTTests.cpp - irreducible goto CFG ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of dense `goto` webs that build irreducible-
 // leaning control flow with multiple back-edges into shared headers — a shape
 // the structured-loop kernels never reach.  It stresses MedSSA phi placement

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress87RTTests.cpp - data pointer-table reloc -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Deeper coverage for the wide / indexed data-pointer-table relocation fixed in
 // #483 (tryResolveGlobalData routes a non-mutable segment carrying relocated
 // pointer slots through buildCodePtrSegmentGlobal, so each entry is emitted as

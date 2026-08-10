@@ -1,5 +1,9 @@
 //===- AllPlatform_BitAlgo11RTTests.cpp - bit-manipulation algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Eleventh batch of clang -O2 algorithm probes.  Earlier batches targeted
 // data-parallel SIMD; this one targets SCALAR bit-manipulation idioms that
 // stress the optimizer's weak spots: shift-by-amount handling (funnel shifts,

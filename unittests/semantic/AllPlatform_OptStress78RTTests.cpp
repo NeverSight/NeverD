@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress78RTTests.cpp - 64-bit var shifts --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Every prior OptStress probe deliberately AVOIDED variable 64-bit shifts on
 // the 32-bit targets ("no variable i64 shift" notes throughout) for fear of a
 // libcall.  But clang -O2 actually INLINES every one of these on i386 and

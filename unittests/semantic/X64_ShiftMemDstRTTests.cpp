@@ -1,5 +1,9 @@
 //===- X64_ShiftMemDstRTTests.cpp - SHLD/SHRD/RCL/RCR mem dest --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 SHLD/SHRD/RCL/RCR all have a `r/m` (memory) DESTINATION form:
 //
 //   SHLD m, r, cnt   m = (m << cnt) | (r >> (bits-cnt))     ; write back to m

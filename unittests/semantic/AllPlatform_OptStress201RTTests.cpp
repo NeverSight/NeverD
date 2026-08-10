@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress201RTTests.cpp - threaded dispatch / switch ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Control-flow recovery guardrails beyond the dense masked switch: a computed-
 // goto threaded dispatch (a distinct reloc-bounded jump-table recovery path with
 // no comparison guard), a switch whose cases share targets, and a dense 8-way

@@ -1,5 +1,9 @@
 //===- X64_PackedMulAddWordRTTests.cpp - PMADDWD/VPMADDWD lane RT -*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // PMADDWD (SSE2) / VPMADDWD (VEX.128) multiply-add of signed 16-bit words:
 //
 //   dword[i] = SInt(a[2i])*SInt(b[2i]) + SInt(a[2i+1])*SInt(b[2i+1])

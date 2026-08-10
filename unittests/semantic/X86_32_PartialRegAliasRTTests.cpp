@@ -1,5 +1,9 @@
 //===- X86_32_PartialRegAliasRTTests.cpp - i386 partial-reg alias -*-C++-*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The i386 dual of X86_PartialRegAliasRTTests.  The x86-64 sub-register alias
 // class (write a wide reg, read AL/AH/AX, optimizer folds the narrow read to 0
 // or mis-merges) was probed only on x86-64; the i386 path through the same

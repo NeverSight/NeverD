@@ -1,5 +1,9 @@
 //===- AArch64_NEONSatDblMulhRTTests.cpp - SQDMULH/SQRDMULH edges *- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // AArch64 NEON saturating doubling multiply returning the high half:
 //   SQDMULH  Dst[i] = SignedSat((2*A[i]*B[i]) >> N)
 //   SQRDMULH Dst[i] = SignedSat((2*A[i]*B[i] + 2^(N-1)) >> N)   (rounding)

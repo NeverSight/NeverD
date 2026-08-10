@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress164RTTests.cpp - RLE decode / LZ match / suffix =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Green guardrails for three more rodata access SHAPES.  Each reads its rodata
 // through plain base+index loops (separate arrays for paired data, copies for
 // scanned data) and folds a result that depends only on the bytes + control

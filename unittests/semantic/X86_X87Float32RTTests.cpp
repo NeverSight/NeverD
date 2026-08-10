@@ -1,5 +1,9 @@
 //===- X86_X87Float32RTTests.cpp - x87 32-bit float load/store -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x87 with a 32-bit `float` memory operand (flds / fsts / fstps / fadds...).
 // Every prior x87 suite used only `double` (fldl/fstpl), so the m32fp path was
 // unverified: NeverD models the x87 stack as 64-bit, and `FLD m32fp` widened

@@ -1,5 +1,9 @@
 //===- X64_PackedMulHighRTTests.cpp - PMULHW/PMULHUW high-half RT -*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // PMULHW (SSE2, signed) / PMULHUW (SSE2, unsigned) multiply each pair of 16-bit
 // word lanes and write the HIGH 16 bits of the 32-bit product back per lane:
 //

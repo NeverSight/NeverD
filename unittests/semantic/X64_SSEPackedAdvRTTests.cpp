@@ -1,5 +1,9 @@
 //===- X64_SSEPackedAdvRTTests.cpp - SSE packed advanced roundtrip -*- C++ -*-//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Extended SSE/SSE2/SSE3/SSSE3/SSE4.1 packed vector roundtrip tests.
 // Covers: SUBPS/PD, DIVPS/PD, MAXPS/PD, MINPS/PD, SQRTPS, RCPPS,
 //         UNPCKLPS/PD, UNPCKHPS/PD, SHUFPS, MOVHLPS, MOVLHPS,

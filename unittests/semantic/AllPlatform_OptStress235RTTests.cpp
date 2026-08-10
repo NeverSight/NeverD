@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress235RTTests.cpp - mixed-stride addressing =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Non-power-of-two strides (2D arrays, arrays of padded structs, prime-step
 // walks) force real index multiplies (imul / madd / mla) and byte-precise GEP
 // arithmetic on stack frames.  This stresses frame-relative addressing

@@ -1,5 +1,9 @@
 //===- AllPlatform_Cmp64RTTests.cpp - 64-bit compare predicate probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Bisects the WideHash64 i386 min/max divergence: isolates the 64-bit signed
 // and unsigned compare predicates (cmp lo; sbb hi; setcc) from the conditional
 // select that consumes them.  The setcc kernel hashes raw 0/1 predicate values

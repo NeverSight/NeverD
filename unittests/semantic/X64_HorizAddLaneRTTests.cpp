@@ -1,5 +1,9 @@
 //===- X64_HorizAddLaneRTTests.cpp - PHADD/PHSUB lane semantics -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 horizontal add/sub (PHADDW/D, PHSUBW/D, PHADDSW/PHSUBSW) reduce ADJACENT
 // element pairs, routing src1's reductions to the low half of each 128-bit
 // result lane and src2's to the high half — INDEPENDENTLY PER 128-bit lane.

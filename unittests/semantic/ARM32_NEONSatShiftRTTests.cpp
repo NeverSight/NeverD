@@ -1,5 +1,9 @@
 //===- ARM32_NEONSatShiftRTTests.cpp - ARM32 NEON sat shift/mul roundtrip --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip tests for ARM32 NEON saturating doubling multiply, saturating /
 // rounding shifts, narrowing saturating shifts and shift-insert, using edge
 // values that force saturation:

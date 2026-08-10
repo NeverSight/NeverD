@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress261RTTests.cpp - recursion / return width -O0 //
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Recursion and call-return-width variety at -O0 — the direct neighbor of the
 // #508 bug (ARM32 -O0 recursive int return mis-typed as an i64 register pair).
 // At -O0 the callee's result and the next call's argument live in overlapping

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress63RTTests.cpp - FP numeric kernels --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Floating-point numeric kernels using only +,-,*,/ on double (no libm call:
 // Newton iteration replaces sqrt/recip).  Drives the FP lift + FP-ABI + FP
 // constant-pool paths that differ per target — x87 on i386, SSE2 on x86-64,

@@ -1,5 +1,9 @@
 //===- X64_SIMDPerLaneRTTests.cpp - SIMD per-lane roundtrip -----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 SIMD instructions that require per-lane decomposition through
 // the full lift pipeline.  These are the instructions that historically had
 // the most bugs (bugs #26-47 in the tracker).

@@ -1,5 +1,9 @@
 //===- AllPlatform_CondLoopRTTests.cpp - branchless cond loops ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Loop-carried, branchless conditional idioms.  clang -O2 lowers each per-
 // iteration branch into conditional-move / conditional-select chains that read
 // flags produced earlier in the same block (x86 cmov/bt, AArch64 csel/csinc/

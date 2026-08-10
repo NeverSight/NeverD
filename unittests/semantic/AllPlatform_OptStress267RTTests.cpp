@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress267RTTests.cpp - goto / irreducible CFG -O0 ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // goto-based and irreducible-ish control flow at -O0 — stresses CFG recovery
 // where clang emits explicit forward/backward branches with shared tails and
 // loop back-edges that don't come from structured loops, the form most likely

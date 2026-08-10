@@ -1,5 +1,9 @@
 //===- X64_LegacyBitRTTests.cpp - x86 legacy/bit-manip roundtrip *- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86 legacy instructions and TBM bit manipulation through full lift
 // pipeline.  Covers instructions from X86LiftSIMDLegacy.cpp that are
 // underrepresented in existing tests.

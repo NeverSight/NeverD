@@ -1,5 +1,9 @@
 //===- ARM32_ParallelSatHalveRTTests.cpp - ARMv6 parallel SIMD edges ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the *halving* (H), *saturating* (Q) and *exchange* (SAX)
 // members of the ARMv6 GE-setting parallel (SIMD-in-GPR) add/sub family, plus
 // the plain GE-setting forms that the existing ARM32_ParallelSIMDRTTests left

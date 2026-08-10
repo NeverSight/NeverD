@@ -1,5 +1,9 @@
 //===- AllPlatform_DataAlgoRTTests.cpp - codec/checksum/transpose -*- C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 algorithm-level "high-yield probing", third batch: checksum / codec
 // / data-movement kernels over LOCAL STACK arrays (no rodata lookup tables, no
 // runtime division — constant moduli only).  Distinct lowerings vs the prior

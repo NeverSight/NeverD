@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress257RTTests.cpp - __int128 inline arith =======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // 128-bit integer arithmetic that clang keeps inline on 64-bit targets — add /
 // sub / and / or / xor / shift-by-constant / compare lower to add+adc, sub+sbb,
 // register-pair logic, and shld/shrd-style funnels with no libcall.  This

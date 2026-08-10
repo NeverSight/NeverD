@@ -1,5 +1,9 @@
 //===- AllPlatform_VLAFrameRTTests.cpp - dynamic stack frames -----*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probing of variable-length arrays / dynamic `alloca`.  A VLA makes
 // clang adjust the stack pointer by a runtime amount (`sub rsp, reg`) and
 // address the array relative to the adjusted SP.  The emitter recognises that

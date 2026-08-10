@@ -1,5 +1,9 @@
 //===- AllPlatform4_KernelRTTests.cpp - 4-platform control/mem kernels -C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Algorithm kernels run across ALL FOUR targets including i386 (most of the big
 // VectorAlgo batches skip 32-bit x86).  These stress control flow, memory, and
 // scalar arithmetic — string hashing, run-length encode, binary search,

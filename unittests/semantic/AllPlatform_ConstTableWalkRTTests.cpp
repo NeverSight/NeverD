@@ -1,5 +1,9 @@
 //===- AllPlatform_ConstTableWalkRTTests.cpp - rodata access patterns -*-C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #397 follow-up: stress the constant-pool / rodata redirection across the
 // access shapes clang reaches under register pressure once a local const table
 // is hoisted — 2D tables, negative-stride walks, signed (sign-extending) loads,

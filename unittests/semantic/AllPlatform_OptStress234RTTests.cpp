@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress234RTTests.cpp - byte buffer reinterpret =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Stack byte buffers built a byte at a time and then re-read at wider widths
 // (via fixed-size __builtin_memcpy, which always inlines to a single load) plus
 // endian swaps.  This crosses three historically fragile subsystems at once:

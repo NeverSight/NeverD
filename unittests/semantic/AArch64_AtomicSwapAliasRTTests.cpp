@@ -1,5 +1,9 @@
 //===- AArch64_AtomicSwapAliasRTTests.cpp - SWP/LD<op> Rs==Rt ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // FEAT_LSE swap / load-op instructions allow the source (Rs) and destination
 // (Rt) to be the SAME register, e.g. `swp x0,x0,[x1]`:
 //   Rt = *[Xn];  *[Xn] = old_Rs   (with Rs==Rt the register ends up = old mem)

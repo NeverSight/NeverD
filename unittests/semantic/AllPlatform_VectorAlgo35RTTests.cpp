@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo35RTTests.cpp - packed SIMD idiom probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirty-fifth batch of clang -O2 vector probes, covering packed-SIMD idioms
 // not in batches 31/32/33/34: per-signed-byte absolute value (PABSB / ABS),
 // compare-select blend (PCMPGTD+blend / CMGT+BSL), bitwise logic chain

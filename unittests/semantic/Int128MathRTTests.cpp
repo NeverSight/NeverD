@@ -1,5 +1,9 @@
 //===- Int128MathRTTests.cpp - native 128-bit integer math ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 `__int128` kernels on the two 64-bit targets (x86-64, AArch64).
 // A native 128-bit value lives in a *register pair*, so these lower to the
 // hardware multi-word idioms that no narrower test reaches: 128-bit add/sub

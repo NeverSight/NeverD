@@ -1,5 +1,9 @@
 //===- X64_PackedSignAbsRTTests.cpp - SSSE3 PABS/PSIGN lane RT --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // SSSE3 per-lane sign manipulation, both built on a sign-driven per-lane SELECT:
 //
 //   PABS{B,W,D}   dst[i] = |src[i]|                       (abs)

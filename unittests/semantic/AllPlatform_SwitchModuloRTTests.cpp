@@ -1,5 +1,9 @@
 //===- AllPlatform_SwitchModuloRTTests.cpp - modulo-indexed switch ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probing of `switch(x % N)` for a non-power-of-two N — clang computes
 // `x % N` with a magic-reciprocal multiply and dispatches the dense 0..N-1 cases
 // through a jump table with no `cmp` range guard (the remainder already bounds

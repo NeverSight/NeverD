@@ -1,5 +1,9 @@
 //===- X64_SetccCmovRTTests.cpp - SETcc + CMOV patterns RT ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 SETcc/CMOVcc instruction families through lift pipeline.
 // These exercise flag computation + conditional selection — a rich
 // source of optimizer bugs (flag folding, condition inversion, etc).

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress25RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress 21-24 drove the partial-write -> wide-parent merge through the
 // entry-seed (#430), wide-read-return (#431) and single-join diamond (#24)
 // shapes.  This round pushes the same machinery into control-flow shapes those

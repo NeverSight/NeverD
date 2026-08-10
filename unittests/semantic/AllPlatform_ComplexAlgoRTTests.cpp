@@ -1,5 +1,9 @@
 //===- AllPlatform_ComplexAlgoRTTests.cpp - complex algorithm RT ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Realistic algorithm roundtrip tests that combine many instructions and
 // stress stack-local arrays, nested loops, and complex addressing.  These
 // exercise the whole pipeline holistically and are high-yield for exposing

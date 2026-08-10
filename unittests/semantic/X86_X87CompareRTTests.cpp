@@ -1,5 +1,9 @@
 //===- X86_X87CompareRTTests.cpp - x87 FNSTSW/SAHF compare idiom -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x87 compares feed their result back through the FPU status word, not EFLAGS:
 // `fcom/fucom/ficom/ftst; fnstsw %ax; sahf; setcc` maps C0->CF, C2->PF, C3->ZF.
 // clang uses this idiom on every x86 CPU without FCOMI (i486 and the i386

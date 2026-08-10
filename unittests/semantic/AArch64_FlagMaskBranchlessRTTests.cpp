@@ -1,5 +1,9 @@
 //===- AArch64_FlagMaskBranchlessRTTests.cpp - flag-as-value idioms -*- C++ -==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The AArch64 analog of the x86 flag-as-value probes: a condition flag is
 // materialized as a numeric *mask/value* and fed into arithmetic, rather than
 // read into a branch.  Compilers emit these branchless idioms:

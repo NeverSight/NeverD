@@ -1,5 +1,9 @@
 //===- AArch64_NEONSubRegAliasRTTests.cpp - V-reg sub-reg aliasing -*-C++*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adversarial probes for AArch64 SIMD/FP sub-register aliasing — the NEON analog
 // of the x86 RAX/AL partial-register family that bit hard historically.  The key
 // AArch64 quirk: a SCALAR write to Sn (32-bit) or Dn (64-bit) ZERO-EXTENDS the

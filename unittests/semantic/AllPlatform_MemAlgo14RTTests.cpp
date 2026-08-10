@@ -1,5 +1,9 @@
 //===- AllPlatform_MemAlgo14RTTests.cpp - memory/array algos ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fourteenth batch of clang -O2 algorithm probes.  Targets MEMORY-heavy
 // algorithms over local stack arrays: in-place sorts, 2D (row-major) matrix
 // indexing, run-length encoding, longest-increasing-subsequence, 3x3 image

@@ -1,5 +1,9 @@
 //===- ARM32_SemanticTests.cpp - ARM32 semantic tests -----------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Migrated from scripts/lift_verifier.py — ARM32 instruction categories:
 //   Core, MulDiv, Shift, Extend, Carry, Mem
 //

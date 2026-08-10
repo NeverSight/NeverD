@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress61RTTests.cpp - bit packing / swap -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Bit-level packing, endian swaps, bitfield read-modify-write and
 // extract/deposit idioms.  clang -O2 turns these into dense shift/mask/and/or
 // chains plus REV/REV16/RBIT (AArch64), BSWAP/MOVBE (x86), REV/RBIT (ARM32)

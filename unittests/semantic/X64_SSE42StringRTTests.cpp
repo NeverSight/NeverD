@@ -1,5 +1,9 @@
 //===- X64_SSE42StringRTTests.cpp - SSE4.2 string/CRC roundtrip tests ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers: CRC32 (x86), PCMPISTRI/PCMPISTRM patterns via C string ops,
 //         POPCNT/LZCNT/TZCNT via builtins,
 //         packed int accumulation patterns (horizontal add, dot product via

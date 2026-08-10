@@ -1,5 +1,9 @@
 //===- X86_DoubleShiftZeroRTTests.cpp - SHLD/SHRD zero-count value -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // SHLD/SHRD leave the destination UNCHANGED when the (post-mask) count is 0,
 // exactly like the single shifts.  X64_DoubleShiftFlagsRTTests already pins the
 // flag rule, but only ever reads the flags back — never the destination value.

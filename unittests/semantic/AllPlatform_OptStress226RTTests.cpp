@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress226RTTests.cpp - carry/borrow + overflow =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Breadth probes for carry/borrow propagation and the checked-arithmetic
 // builtins, whose flag results are consumed BOTH straight-line (a select) and
 // across a branch -- exactly the cross-block flag-liveness shape that the

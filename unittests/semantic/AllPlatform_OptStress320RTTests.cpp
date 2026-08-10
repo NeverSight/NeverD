@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress320RTTests.cpp - -O3 wide reductions ---------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // First full-C OptStress batch compiled at -O3: nearly every prior OptStress
 // probe ran at -O0/-O2, leaving the aggressive -O3 code shapes (loop unrolling,
 // auto-vectorized integer reductions, loop distribution) unexercised through

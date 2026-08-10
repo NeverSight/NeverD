@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo11RTTests.cpp - mixed DSP algos ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Eleventh batch of clang -O2 algorithm probes.  Targets paths historically
 // thin on coverage: i16 widening multiply-accumulate (pmaddwd / smlal / vmlal),
 // data-dependent gather, 4x4 matrix-vector, saturating clamp+narrow, argmax

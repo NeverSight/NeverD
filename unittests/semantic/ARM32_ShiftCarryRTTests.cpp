@@ -1,5 +1,9 @@
 //===- ARM32_ShiftCarryRTTests.cpp - ARM32 shifter carry probes -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The roundtrip harness compares return values only, so the C (carry) flag a
 // flag-setting shift produces is invisible unless folded into the result.
 // These probes drive LSLS/LSRS/ASRS/RORS and capture the shifter carry with a

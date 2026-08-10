@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress222RTTests.cpp - FP-field struct RETURN ABI ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The return-value dual of OptStress221: a callee RETURNS a small struct whose
 // fields fall in mixed classes, consumed in a loop where the caller also reuses
 // the FP register file as scratch.  This exercises the multi-register struct

@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo15RTTests.cpp - widen/narrow MAC ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fifteenth batch of clang -O2 algorithm probes.  Stresses widening/narrowing
 // and pairwise variants adjacent to the #265e/f bugs: unsigned i8 widening dot
 // product (udot/umull), signed pairwise-add-long reduction (saddlp), halving

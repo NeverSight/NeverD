@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress337RTTests.cpp - two-table goto × i64 pair ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Extends #531's runtime-selected two-table computed-goto recovery
 // (NdOpSwitchRecovery merges two adjacent rodata label tables A∪B and rebuilds
 // `tbl = cond ? A : B; goto *tbl[idx]` as one switch over the merged byte-offset

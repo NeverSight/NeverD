@@ -1,5 +1,9 @@
 //===- X64_SSESqrtRecipRTTests.cpp - SSE sqrt/reciprocal roundtrip --------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers: SQRTPS, SQRTSS, SQRTPD, SQRTSD, RCPPS, RCPSS, RSQRTPS, RSQRTSS,
 //         MAXPD, MINPD, HSUBPD, CVTPD2DQ, CVTTPD2DQ
 //

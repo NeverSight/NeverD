@@ -1,5 +1,9 @@
 //===- AArch64_AtomicMinMaxRTTests.cpp - LSE atomic min/max roundtrip ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the AArch64 FEAT_LSE atomic min/max load-ops, which the
 // lifter implemented as a broken placeholder:
 //

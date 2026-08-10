@@ -1,5 +1,9 @@
 //===- X64_StringControlRTTests.cpp - x86 string/control roundtrip -*- C++ -*-//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86 string operations (memset/memcpy/strcmp patterns) and miscellaneous
 // control operations through the full lift pipeline.  These use C standard
 // library patterns that the compiler lowers to REP STOS/MOVS/CMPS sequences.

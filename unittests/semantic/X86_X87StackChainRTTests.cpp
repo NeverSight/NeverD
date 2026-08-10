@@ -1,5 +1,9 @@
 //===- X86_X87StackChainRTTests.cpp - x87 pop-and-operate chains -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Straight-line x87 register-stack chains: an expression tree over `long double`
 // values keeps several operands resident and clang evaluates it with runs of
 // pop-and-operate ops (faddp/fsubp/fmulp/fdivp) plus `fld st(i)` duplications,

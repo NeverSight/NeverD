@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo47RTTests.cpp - const-pool × control-flow ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Forty-seventh batch of clang -O2 vector probes covering the INTERSECTION of a
 // constant-pool-dense NEON region and a switch jump table within one function.
 // On ARM32 both the NEON constant pool and the PC-relative switch offset table

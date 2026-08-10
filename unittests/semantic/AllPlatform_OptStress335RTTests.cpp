@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress335RTTests.cpp - MedFlags carry / cross-block -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adjacent MedFlags guardrails beyond OptStress318 (same-block mixed-width
 // compare clusters) and OptStress328 (single-compare fanout).  Targets shapes
 // where the flag-reconstruction pass must keep the RIGHT comparison bound to

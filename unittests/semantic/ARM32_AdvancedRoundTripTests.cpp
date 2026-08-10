@@ -1,5 +1,9 @@
 //===- ARM32_AdvancedRoundTripTests.cpp - Advanced pattern tests --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 advanced roundtrip tests: atomic ops, VFP patterns, struct access,
 // bit manipulation, and loop patterns.
 //

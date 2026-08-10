@@ -1,5 +1,9 @@
 //===- AArch64_AtomicCASPRTTests.cpp - LSE CASP roundtrip ----------------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for the AArch64 FEAT_LSE compare-and-swap *pair* (CASP /
 // CASPA / CASPAL / CASPL).  CASP Xs,Xs+1, Xt,Xt+1, [Xn] atomically:
 //   load the {lo,hi} pair from [Xn]; if it equals the expected pair {Xs,Xs+1}

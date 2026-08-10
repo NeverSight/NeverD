@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress279RTTests.cpp - scalar call results -O0 =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Scalar-returning calls whose result is consumed across control flow at -O0 —
 // the integer-return analog of the FP/struct call-result propagation that
 // #502 hardened.  At -O0 the call result is spilled to a frame slot and reloaded

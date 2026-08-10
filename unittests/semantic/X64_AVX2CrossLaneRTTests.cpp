@@ -1,5 +1,9 @@
 //===- X64_AVX2CrossLaneRTTests.cpp - 256-bit cross-lane permute ------*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86_64-only probes for the AVX2-256 frontier #432/#433 carried forward: the
 // cross-lane permutes that gen_sse_256 did not yet decode (VPERMD/VPERMPS
 // 0f38 36/16, VPERM2I128/VPERM2F128 0f3a 06/46) and byte SAD reduction

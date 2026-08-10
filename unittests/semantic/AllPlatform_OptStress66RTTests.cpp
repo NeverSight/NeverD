@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress66RTTests.cpp - ABI x FP-scratch ----*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Calling-convention corners around the #468 i386 scratch-XMM-vs-parameter
 // fix: integer/pointer-argument functions whose bodies use the vector register
 // file as FP scratch, interleaved with static helpers that DO take FP

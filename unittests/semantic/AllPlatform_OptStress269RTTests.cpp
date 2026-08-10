@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress269RTTests.cpp - switch corner cases -O0 =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // switch / jump-table corner cases at -O0 — further hardening of the #509/#510
 // -O0 register-reuse jump-table fixes with index/guard shapes that drive
 // different resolver paths: non-zero-base normalization (`sub base; cmp`), two

@@ -1,5 +1,9 @@
 //===- X64_FlagEdgeProbeRTTests.cpp - x86 flag edge probes ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The roundtrip harness only compares return values, so flag computations are
 // invisible unless folded into the result.  These probes drive flag-producing
 // instructions at their edge cases (overflow boundaries, zero source, count =

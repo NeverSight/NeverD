@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress309RTTests.cpp - -O0 struct-return variety ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 kernels exercising struct RETURN-by-value in many shapes — hardening the
 // path #516 fixed (i386 returns a struct through a hidden sret pointer the
 // callee POPS via `ret $4`; the caller's post-call stack-pointer fixup must

@@ -1,5 +1,9 @@
 //===- X64_ExtendedCExprTests.cpp - Extended C expression tests --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Additional x86_64 roundtrip tests via C expressions covering:
 // - 8/16-bit ops (movzx/movsx/cwde/cbw patterns)
 // - LEA multi-form addressing

@@ -1,5 +1,9 @@
 //===- X64_SIMDPackedRTTests.cpp - SSE packed op roundtrip ------*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 SSE/SSE2 packed integer arithmetic through lift pipeline.
 // Specifically targets per-lane correctness — past bugs (#26 PADDD, #27
 // PCMPEQ) stem from full-width i128 operations instead of per-lane decomp.

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress27RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // This round targets the self-written MedIR optimizer passes (MedFlags,
 // MedPropagation, MedDCE, LowToMed sub-register modelling) with the recurring
 // miscompile classes: partial-register (8/16-bit) flag idioms, branchless

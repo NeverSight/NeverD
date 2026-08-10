@@ -1,5 +1,9 @@
 //===- AllPlatform_RodataHoistRTTests.cpp - hoisted rodata table -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A read-only lookup table whose base clang hoists into a register OUTSIDE the
 // loop (`lea rcx,[rip+tbl]` / `adrp`+`add` / `ldr rN,[pc]`) and then indexes
 // inside the loop (`movzbl (rcx,idx)`).  When the SAME function also has a

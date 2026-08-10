@@ -1,5 +1,9 @@
 //===- X64_RoundTripSemanticTests.cpp - x64 lift roundtrip tests --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Semantic roundtrip verification for x86_64 instructions via C wrappers.
 // Each function uses inline asm to exercise one or more instructions.
 //

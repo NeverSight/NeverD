@@ -1,5 +1,9 @@
 //===- RewriteCodegenRTTests.cpp - rewrite codegen + Unicorn verify -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Verifies that the rewrite backend (AddressModelBackend) produces correct
 // machine code by:
 //   1. Building LLVM IR programmatically for a simple function

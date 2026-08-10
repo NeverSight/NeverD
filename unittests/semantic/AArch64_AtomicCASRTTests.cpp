@@ -1,5 +1,9 @@
 //===- AArch64_AtomicCASRTTests.cpp - single-word CAS roundtrip --*- C++ -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // FEAT_LSE single compare-and-swap `CAS Ws, Wt, [Xn]`:
 //   old = *[Xn];  if old == Ws then *[Xn] = Wt;  Ws = old
 //

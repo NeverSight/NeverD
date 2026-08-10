@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress319RTTests.cpp - -O2 indirect i64 thread -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The -O2 arm of the #521 ② KNOWN-OPEN that OptStress317 left open: the SAME
 // `acc = fp(acc, c)` indirect-call chain (one 64-bit accumulator both passed to
 // AND returned from an indirect-only callee each iteration), but compiled at -O2

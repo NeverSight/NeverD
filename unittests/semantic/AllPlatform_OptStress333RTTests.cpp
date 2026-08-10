@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress333RTTests.cpp - vec-init before dispatch ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adjacent probes for #532 bug② (x86-64 PIC jump-table base `lea tab(%rip)`
 // materialized at the END of a leading block whose body is a fully-unrolled
 // SSE constant-array init — a string of store INTRINSICs that previously stalled

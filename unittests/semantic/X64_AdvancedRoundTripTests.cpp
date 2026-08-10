@@ -1,5 +1,9 @@
 //===- X64_AdvancedRoundTripTests.cpp - Advanced pattern tests ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests advanced x86_64 patterns: memory ops, struct access, BT/BTS,
 // string ops, and more complex ALU patterns through lift pipeline.
 //

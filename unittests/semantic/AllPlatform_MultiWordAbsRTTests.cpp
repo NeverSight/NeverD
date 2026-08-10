@@ -1,5 +1,9 @@
 //===- AllPlatform_MultiWordAbsRTTests.cpp - 64-bit abs/neg/sbb probes ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Isolates the two-word (i386/ARM32) 64-bit abs / negate / borrow-subtract
 // idioms that WideHash64 surfaced as an i386-only divergence.  Each kernel is
 // a few iterations so a failure points at one multi-word op rather than a hash

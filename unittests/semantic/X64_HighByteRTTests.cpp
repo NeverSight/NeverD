@@ -1,5 +1,9 @@
 //===- X64_HighByteRTTests.cpp - AH/BH/CH/DH sub-register aliasing -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The existing sub-register stress tests cover the low-byte (AL, offset 0)
 // alias of a wide register.  x86 also has the *high-byte* registers AH/BH/CH/DH
 // which alias bits [15:8] (offset +1) of their parent.  Writing AH then reading

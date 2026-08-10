@@ -1,5 +1,9 @@
 //===- X86_32_SSEVectorRTTests.cpp - i386 SSE2 vector probes ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // i386 -O2 auto-vectorizes integer loops into SSE2 packed code (pmuludq /
 // pmaddwd / psadbw / packssdw / punpck...), but the large vector probe suites
 // only feed those kernels to x86_64 / aarch64 / arm32.  The 32-bit SSE2 lowering

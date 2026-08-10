@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress280RTTests.cpp - FP + memory mix at -O0 ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Scalar floating point interleaved with memory (arrays / structs / unions) at
 // -O0 — combines the FP subsystem (OptStress258/271) with the memory model on
 // the store-everything -O0 form, where every float lives in a frame slot and

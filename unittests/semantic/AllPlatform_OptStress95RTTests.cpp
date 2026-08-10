@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress95RTTests.cpp - variable rotate / funnel -*-C++-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Variable-count rotates and funnel shifts are a poison minefield: the UB-safe C
 // idiom `(x << n) | (x >> (W - n))` has a `x >> W` term when n==0 (a shift by the
 // full width — LLVM poison if the count ever folds to a constant W).  clang -O2

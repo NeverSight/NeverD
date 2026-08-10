@@ -1,5 +1,9 @@
 //===- X64_AVXPerLaneRTTests.cpp - AVX per-lane roundtrip tests -----------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip tests for x86 AVX/VEX per-lane SIMD operations that have
 // historically had full-width vs per-lane semantic bugs.  Uses C vector
 // extensions and __builtin_shufflevector since immintrin.h is unavailable

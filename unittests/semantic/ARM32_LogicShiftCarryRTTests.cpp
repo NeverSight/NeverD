@@ -1,5 +1,9 @@
 //===- ARM32_LogicShiftCarryRTTests.cpp - logical-op shifter carry -*-C++-*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM ANDS/ORRS/EORS/BICS/TST/TEQ set C to the barrel-shifter carry-out when
 // the second operand is shifted (and to bit 31 of a rotated modified immediate).
 // The roundtrip harness only compares return values, so these probes fold C in

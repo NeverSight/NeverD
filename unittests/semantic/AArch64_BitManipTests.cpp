@@ -1,5 +1,9 @@
 //===- AArch64_BitManipTests.cpp - AArch64 bit manipulation tests -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests AArch64 CLZ, CTZ, RBIT, REV, EXTR, BFM patterns, and complex
 // arithmetic through roundtrip verification.
 //

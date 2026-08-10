@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress247RTTests.cpp - rotate/mul-high at -O0 ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The OptStress245/246 rotate, funnel and cross-word multiply families rerun
 // at -O0 as a sink differential (cf. #504's -O0/-O1 probes).  At -O0 clang
 // emits the explicit, unfolded forms — `shld`/`shrd` instead of a folded

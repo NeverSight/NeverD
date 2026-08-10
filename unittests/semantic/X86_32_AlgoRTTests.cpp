@@ -1,5 +1,9 @@
 //===- X86_32_AlgoRTTests.cpp - i386 algorithm-level probes -----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // The large clang -O2 algorithm probe suites (VectorAlgo*, KernelAlgo, BitAlgo,
 // HashAlgo, ...) only run on x86_64 / aarch64 / arm32 — i386 (32-bit x86) has
 // no algorithm-level roundtrip coverage despite being a first-class target with

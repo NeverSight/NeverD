@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress84RTTests.cpp - indirect call ptr flow -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #473-#479 symbolized global addresses flowing through DIRECT calls (args,
 // returns, struct fields).  These push the same DNA through INDIRECT calls (a
 // function pointer selected from a table) and recursion:

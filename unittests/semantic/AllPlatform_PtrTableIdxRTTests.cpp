@@ -1,5 +1,9 @@
 //===- AllPlatform_PtrTableIdxRTTests.cpp - indexed pointer tables -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #456 fixed switch-returning-string POINTER tables, but only the switch-
 // dispatch shape (a PHI that merges the default string pointer with the table
 // loads).  A `static const char *const W[]` indexed by a runtime value — `W[i]`,

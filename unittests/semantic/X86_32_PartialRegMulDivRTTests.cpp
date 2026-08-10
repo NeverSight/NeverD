@@ -1,5 +1,9 @@
 //===- X86_32_PartialRegMulDivRTTests.cpp - i386 partial reg + mul/div -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // i386 (32-bit) counterpart to X64_PartialRegMulDivRTTests.  The 64-bit file
 // only reaches the x64 lift path, where a 32-bit register write zero-extends at
 // the *lift* level.  i386 has no such quirk, so EAX writes flow through

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress328RTTests.cpp - subreg/flag/narrow probes ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Coverage guardrails over the historically bug-prone NeverD value-tracking
 // areas — sub-register aliasing, sign/zero-extension merged through a PHI,
 // one comparison fanned out to several consumers, load/store width narrowing

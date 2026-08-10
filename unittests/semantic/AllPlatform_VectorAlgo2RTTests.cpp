@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo2RTTests.cpp - more vectorizable algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Second batch of realistic clang -O2 auto-vectorized algorithms used as
 // high-yield lift bug probes.  These exercise lift paths that the first batch
 // (AllPlatform_VectorAlgoRTTests.cpp) did not: widening subtract, saturating

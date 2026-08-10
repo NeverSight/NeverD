@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress202RTTests.cpp - mixed optimizer stress ======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fresh roundtrip guardrails for self-written MedIR passes / ABI / CFG recovery
 // in combinations the existing OptStress probes do not reach.  Every kernel is
 // LCG-driven (no constant folding), folds to one integer return, and uses only

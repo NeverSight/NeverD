@@ -1,5 +1,9 @@
 //===- AllPlatform_FPRoundConvRTTests.cpp - FP round-mode convert --------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // All-platform roundtrip probing of floating-point round-to-integral and
 // round-and-convert idioms that map to dedicated rounding-mode instructions:
 //

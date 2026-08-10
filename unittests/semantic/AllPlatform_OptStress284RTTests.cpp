@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress284RTTests.cpp - overflow/widen-mul probe =====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing the multiply paths and the overflow-flag
 // lowering that historically tripped MedFlags: __builtin_mul/add/sub_overflow
 // (MUL/IMUL + SETO/SETC on x86, UMULH/SMULH compare on AArch64, UMULL/SMULL +

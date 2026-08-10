@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress22RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress 1-21 hammered straight-line and single-loop register/flag/stack
 // patterns.  This round targets the two corners the NeverD hand-written MedIR
 // passes have repeatedly mishandled but that earlier probes only grazed:

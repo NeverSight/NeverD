@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress262RTTests.cpp - indirect calls at -O0 =======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Function-pointer / indirect calls at -O0 — the neighbor of the #506 indirect-
 // call ABI bug (i386 wide stack arg truncated through INDIR_CALL).  At -O0 the
 // code-pointer table and the selected pointer round-trip through the frame, and

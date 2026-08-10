@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress241RTTests.cpp - bitfield structs ===========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Bitfield reads/writes generate dense shift/mask/sign-extend chains that the
 // optimizer loves to mis-fold (sub-word width, sign extension on signed
 // bitfields, cross-byte field placement).  All containers are 32-bit so no

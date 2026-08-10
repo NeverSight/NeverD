@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress227RTTests.cpp - sub-register width mixing ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Breadth probes for partial/sub-register tracking: the SAME logical value is
 // repeatedly read and written at 8/16/32-bit widths inside a loop, then read
 // back widened.  This is the family that exposed the worst correctness bugs

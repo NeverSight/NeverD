@@ -1,5 +1,9 @@
 //===- X64_BitTestRTTests.cpp - BT/BTS/BTR/BTC bit-offset semantics -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 BT/BTS/BTR/BTC have two distinct bit-offset semantics the lifter must
 // honour:
 //   * register bit base: the offset is taken modulo the operand size (16/32/64),

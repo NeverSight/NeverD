@@ -1,5 +1,9 @@
 //===- AllPlatform_PtrMemRTTests.cpp - pointer / memory idioms ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of pointer- and memory-heavy code, the area
 // recent rounds kept finding addressing bugs in (#390 post-index, #397 constant-
 // pool induction pointers, #394 sub-register memory writes).  These idioms are

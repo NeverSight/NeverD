@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo21RTTests.cpp - numeric/FP kernels -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Twenty-first batch of clang -O2 algorithm probes, weighted toward scalar and
 // packed floating point (where the COMISS/SQRTSS width bugs surfaced) plus a few
 // integer bit kernels.  Each kernel folds its results — float results via their

@@ -1,5 +1,9 @@
 //===- X86_32_StackParamUpdateRTTests.cpp - i386 mutable stack param -C++-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Hardening probes for the i386 cdecl mutable-parameter-home fix (#493): a
 // parameter passed on the stack ([ebp+8]...) that is updated IN PLACE and read
 // back must observe the write.  detectCdeclStackParams previously folded every

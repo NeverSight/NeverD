@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress68RTTests.cpp - deeper FP-return -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-up to the #470 FP-return modeling fix (modelCallFPReturn now rewrites
 // narrow sub-register and loop-carried reads of the call's FP return, not just
 // the wide vector form): exercise the deeper consume shapes that were tracked

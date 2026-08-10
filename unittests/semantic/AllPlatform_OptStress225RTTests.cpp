@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress225RTTests.cpp - shift/rotate + subword CFG ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Breadth probes orthogonal to the call-ABI work: variable-count shifts,
 // rotates and funnel shifts whose result is consumed across a branch, plus
 // nested-loop loop-carried sub-word accumulation.  These stress the shift-count

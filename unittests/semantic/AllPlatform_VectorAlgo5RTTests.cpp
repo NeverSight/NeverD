@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo5RTTests.cpp - more vectorizable algos -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fifth batch of realistic clang -O2 auto-vectorized algorithms used as
 // high-yield lift bug probes.  Targets lift paths the first four batches did
 // not stress: signed i8 dot product (smull/smlal .8h widening MAC chains),

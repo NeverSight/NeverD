@@ -1,5 +1,9 @@
 //===- AllPlatform_RareInsnRTTests.cpp - tricky/rare instructions ---*-C++-*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // #397 high-yield probing of instructions clang rarely emits from plain C, so
 // they are exercised with inline asm: x86 BMI2 PEXT/PDEP (parallel bit gather/
 // scatter), x86 PSADBW/PMADDWD, AArch64 TBL/TBX (vector table lookup) and the

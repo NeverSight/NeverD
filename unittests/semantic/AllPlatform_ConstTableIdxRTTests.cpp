@@ -1,5 +1,9 @@
 //===- AllPlatform_ConstTableIdxRTTests.cpp - rodata table walks --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for runtime-indexed read-only (`.rodata`) constant tables in
 // *rolled* loops — the addressing shape that surfaced #411 (ARM32 keeps the
 // table base in a loop-carried induction pointer derived from a PC-relative

@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress310RTTests.cpp - -O0 indirect calls ----------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O0 kernels calling through a FUNCTION POINTER — the indirect-call (INDIR_CALL)
 // argument/return-recovery path, distinct from the direct-call path probed by
 // 305/306/307.  An opaque `asm("" : "+r"(fp))` barrier keeps the pointer from

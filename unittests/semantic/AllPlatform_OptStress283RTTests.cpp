@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress283RTTests.cpp - bit-builtin opt probe ========//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 kernels stressing the bit-manipulation builtins clang lowers to single
 // instructions (BSF/BSR/POPCNT/BSWAP on x86, CLZ/RBIT/REV on AArch64/ARM32)
 // and the lift handlers / per-element semantics that have repeatedly produced

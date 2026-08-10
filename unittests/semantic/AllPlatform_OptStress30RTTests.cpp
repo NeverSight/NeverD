@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress30RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-up to OptStress29's #442 (a jump-table case computing an 8-bit
 // accumulator in a scratch register, transferred to the accumulator register by
 // a full-width move across the loop latch, lost its update because the cross-

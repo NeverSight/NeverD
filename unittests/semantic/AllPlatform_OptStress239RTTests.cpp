@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress239RTTests.cpp - vectorized byte manipulation =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Byte-granular array transforms that clang vectorizes into NEON byte ops
 // (`vrev`, `vmax.u8`, `vabd`+`vaddl`, `vqmovn`, `vmull.u8`, `vzip`) and the
 // x86 equivalents (`pshufb`/`bswap`, `pmaxub`, `psadbw`, `packuswb`,

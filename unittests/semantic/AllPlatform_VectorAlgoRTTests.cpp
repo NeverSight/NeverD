@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgoRTTests.cpp - vectorizable algo RT --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Realistic algorithms that clang auto-vectorizes at -O2.  These are
 // high-yield bug probes: the vectorized forms exercise per-lane NEON/SSE
 // lifting (horizontal reductions, widening multiply-add, saturating ops,

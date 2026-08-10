@@ -1,5 +1,9 @@
 //===- X64_BMI2DepositRTTests.cpp - BMI2 PDEP/PEXT/BZHI/MULX -----*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip coverage for the BMI2 parallel bit deposit/extract family, which the
 // existing BMI2 suites (RORX/SARX/SHLX/SHRX flag shifts, MULX div edges) do not
 // exercise: PDEP/PEXT scatter/gather bits under a runtime mask, BZHI zeroes the

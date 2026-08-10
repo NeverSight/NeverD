@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo42RTTests.cpp - packed SIMD idiom probes -----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Forty-second batch of clang -O2 vector probes, covering packed-SIMD idioms
 // not in batches 31-41: unsigned byte max (PMAXUB / UMAX), signed 16-bit min
 // (PMINSW / SMIN), per-lane compare-equal-zero mask (PCMPEQ+zero / CMEQZ),

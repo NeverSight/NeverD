@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress40RTTests.cpp - jump-table-in-loop --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Integer-only analogues of the x87 #452 `forcepeel` shape, isolating the two
 // JumpTableResolver fixes from the open x87-TOP item so they are validated on
 // every platform.  The kernels drive a `switch` inside a peeled and/or rotated

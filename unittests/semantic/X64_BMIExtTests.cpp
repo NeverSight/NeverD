@@ -1,5 +1,9 @@
 //===- X64_BMIExtTests.cpp - BMI/extension instruction tests ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 BMI, BMI2, LZCNT, TZCNT, POPCNT, and other extension
 // instructions through C builtins and bit manipulation patterns.
 //

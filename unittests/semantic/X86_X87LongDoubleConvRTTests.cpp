@@ -1,5 +1,9 @@
 //===- X86_X87LongDoubleConvRTTests.cpp - f80 conversion edges -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Adjacent to the recently fixed f80 (`long double`) precision/lift work, this
 // probes the *conversion* edges of the 80-bit x87 type that X87LongDoubleRTTests
 // (pure f80 arithmetic) does not: narrowing f80 -> double/float (fstpl/fstps

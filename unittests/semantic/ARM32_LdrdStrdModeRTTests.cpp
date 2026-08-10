@@ -1,5 +1,9 @@
 //===- ARM32_LdrdStrdModeRTTests.cpp - LDRD/STRD addressing modes ------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ARM32 `LDRD`/`STRD` (load/store a pair of registers Rt:Rt2 from consecutive
 // words at the effective address) support the same rich addressing the single
 // `LDR`/`STR` do:

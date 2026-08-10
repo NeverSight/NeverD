@@ -1,5 +1,9 @@
 //===- X86_X87SwitchTailRTTests.cpp - x87 peeled-loop switch tails -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Peeled + rotated loops whose body is a `switch` keeping `long double` values
 // resident on the x87 stack.  clang -O2 peels the first iteration (here forced
 // by an explicit `first` flag) and reuses one rodata jump table for the peeled

@@ -1,5 +1,9 @@
 //===- ARM32_NEONPerLaneRTTests.cpp - ARM32 NEON per-lane roundtrip -*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests ARM32 NEON instructions through the full lift pipeline.
 // Focus on per-lane operations and edge cases.
 //

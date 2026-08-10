@@ -1,5 +1,9 @@
 //===- AllPlatform_DynAllocaRTTests.cpp - dynamic frame stressors -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Harder dynamic-stack-frame roundtrip probes than AllPlatform_VLAFrameRTTests,
 // stressing the emitter's real-dynamic-`alloca` lowering of a runtime `sub sp`:
 // a 2-D VLA `m[n][k]` (runtime row stride), a VLA passed by pointer to a

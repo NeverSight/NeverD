@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo32RTTests.cpp - explicit packed-SIMD probes --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Thirty-second batch: instead of relying on the autovectorizer, these kernels
 // use GCC vector extensions plus clang's __builtin_shufflevector /
 // __builtin_convertvector so clang *must* emit packed SIMD (narrow/widen,

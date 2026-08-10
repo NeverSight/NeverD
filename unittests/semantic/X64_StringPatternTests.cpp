@@ -1,5 +1,9 @@
 //===- X64_StringPatternTests.cpp - String/memory pattern tests --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests x86_64 patterns that exercise string operations, memcpy/memset-like
 // patterns, and complex memory access modes through C expressions.
 //

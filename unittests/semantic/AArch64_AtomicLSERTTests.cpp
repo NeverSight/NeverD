@@ -1,5 +1,9 @@
 //===- AArch64_AtomicLSERTTests.cpp - LSE atomic roundtrip tests -----------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers: LDADD/STADD, LDCLR/STCLR, LDSET/STSET, LDEOR/STEOR,
 //         LDSMAX/STSMAX, LDSMIN/STSMIN, LDUMAX/STUMAX, LDUMIN/STUMIN,
 //         CAS, CASA, CASAL, CASL, SWP, SWPA, SWPAL, SWPL,

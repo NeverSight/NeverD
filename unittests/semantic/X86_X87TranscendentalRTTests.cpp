@@ -1,5 +1,9 @@
 //===- X86_X87TranscendentalRTTests.cpp - x87 transcendental ops -*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x87 transcendental / special instructions (FSIN, FCOS, FSINCOS, FPTAN,
 // FPATAN, FYL2X, FYL2XP1, FPREM, FPREM1, F2XM1, FSCALE, FXTRACT) were all
 // lifted to a single value-less `X87Op` placeholder -> the emitter returned a

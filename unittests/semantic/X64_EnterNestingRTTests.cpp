@@ -1,5 +1,9 @@
 //===- X64_EnterNestingRTTests.cpp - ENTER nesting-level frame ---*- C++ -*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // x86 `ENTER imm16, imm8` builds a stack frame; the second operand is the
 // lexical NESTING LEVEL.  Intel SDM:
 //

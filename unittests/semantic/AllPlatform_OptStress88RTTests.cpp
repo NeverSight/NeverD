@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress88RTTests.cpp - ptr-table 2nd-order ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Second-order interactions of the #483 pointer-table / frame-slot pointer-array
 // symbolization, to flush out boundary cases:
 //

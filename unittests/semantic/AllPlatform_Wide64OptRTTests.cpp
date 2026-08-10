@@ -1,5 +1,9 @@
 //===- AllPlatform_Wide64OptRTTests.cpp - i64 optimizer stress --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-stress probes built entirely from 64-bit integer arithmetic.  On
 // the 32-bit targets (i386 / ARM32) every i64 value legalizes to a register
 // *pair*, so the self-written MedIR passes (MedFlags, MedPropagation, MedDCE,

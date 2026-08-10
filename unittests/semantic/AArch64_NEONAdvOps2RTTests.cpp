@@ -1,5 +1,9 @@
 //===- AArch64_NEONAdvOps2RTTests.cpp - NEON advanced ops roundtrip -------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip tests for AArch64 NEON operations that historically use
 // emitIntrinsic placeholders: halving add, across-lane reduce, byte
 // extract, narrow, and reciprocal estimates.

@@ -1,5 +1,9 @@
 //===- AArch64_NEONPackedChainRTTests.cpp - NEON packed chain roundtrip ---===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers chained NEON vector operations: ADD+MUL, SHL+ADD, AND+OR+EOR chains,
 // SADDL+SSUBL widening chains, FCVTZS+ADD int-from-float chains,
 // MLA+accumulate chains, packed compare+select chains.

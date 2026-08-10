@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress49RTTests.cpp - unaligned wide mem -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress21 assembles wide words from a stack buffer byte-by-byte with
 // explicit shifts; these probes instead use `__builtin_memcpy` of 2/4/8 bytes,
 // which clang -O2 lowers to a SINGLE unaligned wide load/store at a runtime

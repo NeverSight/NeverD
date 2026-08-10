@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress270RTTests.cpp - 2D / pointer aggregates -O0 =//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Multi-dimensional arrays, pointer-to-pointer, and struct-of-arrays at -O0 —
 // every element access is a fresh frame-relative address computation with an
 // explicit row*stride+col multiply, and pointer-to-pointer adds a second load

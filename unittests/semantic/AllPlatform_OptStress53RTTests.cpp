@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress53RTTests.cpp - rodata index variants -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-on to #457–#461 constant-pool coverage: these stress rodata table
 // indexing shapes beyond a plain `T[i]` — a non-zero table base (`&T[k]`),
 // runtime-scrambled indices, reverse / modulo walks, and chained byte shuffles.

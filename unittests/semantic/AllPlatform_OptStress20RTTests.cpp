@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress20RTTests.cpp - subreg/flag/select -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Optimizer-stress roundtrip probes aimed squarely at the MedIR passes that
 // historically produced "folded-to-0 / dropped computation" miscompiles:
 // sub-register SSA aliasing, flag reconstruction, copy/constant propagation and

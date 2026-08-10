@@ -1,5 +1,9 @@
 //===- AllPlatform_FMARoundingRTTests.cpp - fused multiply-add rounding --===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // All-platform roundtrip probing of fused multiply-add (single-rounding)
 // semantics.  `__builtin_fmaf`/`__builtin_fma` lower to a hardware FMA that
 // rounds the a*b+c result exactly ONCE:

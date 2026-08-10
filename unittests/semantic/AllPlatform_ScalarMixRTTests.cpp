@@ -1,5 +1,9 @@
 //===- AllPlatform_ScalarMixRTTests.cpp - narrow-width scalar ---*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 scalar kernels dominated by 8/16-bit arithmetic, signed/unsigned
 // division+modulo, and char<->short<->int promotion chains.  These lower very
 // differently per target: on i386/x86-64 to partial-register ops (al/ax with

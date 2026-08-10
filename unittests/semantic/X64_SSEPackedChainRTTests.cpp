@@ -1,5 +1,9 @@
 //===- X64_SSEPackedChainRTTests.cpp - SSE packed chain roundtrip ---------===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Covers chained packed operations: ADDPS+MULPS, PADDD+PSLLD,
 // PAND+POR+PXOR chains, CVTDQ2PS+ADDPS, PMULLD+PADDD,
 // packed compare+blend chains, PUNPCKL+shuffle chains.

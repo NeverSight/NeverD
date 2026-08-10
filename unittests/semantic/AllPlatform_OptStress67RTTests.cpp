@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress67RTTests.cpp - FP-return consume ---*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Follow-up to the #469 call/return-ABI fixes (FP accumulator across a call,
 // int return dropped by an xorps self-zero): exercise the FP return of a helper
 // consumed in contexts other than a plain accumulator — compared in an

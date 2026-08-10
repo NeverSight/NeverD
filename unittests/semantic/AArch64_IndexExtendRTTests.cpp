@@ -1,5 +1,9 @@
 //===- AArch64_IndexExtendRTTests.cpp - extended register memory offsets -===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Roundtrip probes for AArch64 register-offset addressing with an *extended*
 // index register: `LDR/STR Wt|Xt, [Xn, Wm, sxtw #s]` / `[Xn, Wm, uxtw #s]`.
 //

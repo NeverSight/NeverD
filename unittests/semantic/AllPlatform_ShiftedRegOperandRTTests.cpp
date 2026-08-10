@@ -1,5 +1,9 @@
 //===- AllPlatform_ShiftedRegOperandRTTests.cpp - ALU shifted ops *- C++ -*-==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // ALU instructions with a shifted/rotated/extended register operand:
 //   AArch64  add/sub/and/orr/eor/bic xD,xN,xM,{lsl|lsr|asr|ror} #s
 //            add/sub/cmp xD,xN,wM,{sxtb|sxth|sxtw|uxtb|uxth} #s

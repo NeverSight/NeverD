@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress21RTTests.cpp - stack-mem optimizer -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // OptStress 1-20 hammer the register/flag MedIR passes; this round turns the
 // same fold-to-0 / dropped-write scrutiny onto stack-resident memory.  Every
 // kernel keeps a small array or struct on the stack and indexes it with a

@@ -1,5 +1,9 @@
 //===- AllPlatform_BitFieldRTTests.cpp - C bitfield roundtrip --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // C bitfields compile to bit-precise extract/insert sequences: x86 lowers them
 // to shift + and + or, while AArch64/ARM32 use the dedicated UBFX/SBFX/BFI/BFM
 // family.  Read-modify-write of a packed field is exactly the sub-register merge

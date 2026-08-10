@@ -1,5 +1,9 @@
 //===- AllPlatform_VectorAlgo52RTTests.cpp - vector reduction → switch ----===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Fifty-second batch of clang -O2 vector probes targeting a data path no prior
 // batch has driven: the SCALAR result of an auto-vectorized HORIZONTAL REDUCTION
 // is immediately consumed as a SWITCH selector, so a jump-table dispatch block

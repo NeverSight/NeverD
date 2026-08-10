@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress217RTTests.cpp - funnel / double-shift =======//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Variable-count funnel shifts — the SHLD/SHRD family on x86 and the
 // equivalent two-source shift+OR the other targets synthesise.  A funnel shift
 // `(hi << n) | (lo >> (W-n))` reads two independent source words and a runtime

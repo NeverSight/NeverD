@@ -1,5 +1,9 @@
 //===- AllPlatform_HashAlgoRTTests.cpp - hash / mixing algos ----*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // clang -O2 hash/mixing algorithm probes.  Hash finalizers and rolling hashes
 // pack a lot of multiply / rotate / xor / shift mixing into tight loops, which
 // stresses the optimizer's constant-multiply lowering, funnel/variable-rotate

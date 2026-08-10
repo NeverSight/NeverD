@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress28RTTests.cpp - opt-stress probes --*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // A second, harder optimizer probe targeting the self-written MedIR passes from
 // angles OptStress27 did not cover: loop-carried narrow (8-bit) accumulators
 // with overflow detection (i8 phi + carry flag), __builtin_*_overflow carry

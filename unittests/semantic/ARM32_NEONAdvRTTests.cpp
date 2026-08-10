@@ -1,5 +1,9 @@
 //===- ARM32_NEONAdvRTTests.cpp - ARM32 NEON advanced roundtrip --*- C++ -*-===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Tests ARM32 NEON advanced instructions through the full lift pipeline.
 // Covers: VBSL/VBIT/VBIF, saturating ops (VQADD/VQSUB), widening add/sub
 // (VADDL/VADDW), VMULL, VABS, compare variants, and multi-lane patterns.

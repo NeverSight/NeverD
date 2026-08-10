@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress288RTTests.cpp - branchless/bitcount probe ====//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // -O2 integer kernels stressing branchless selection, min/max/clamp ladders,
 // bit-counting intrinsics and constant strength-reduced multiplies:
 //

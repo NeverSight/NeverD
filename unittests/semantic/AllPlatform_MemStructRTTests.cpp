@@ -1,5 +1,9 @@
 //===- AllPlatform_MemStructRTTests.cpp - memory / struct addressing -*-C++*-=//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // High-yield roundtrip probing of memory addressing the arithmetic-focused
 // probes do not reach: mixed-width struct field load/store, array-of-struct
 // traversal, index-based pointer chasing, strided 2D access, and byte-buffer

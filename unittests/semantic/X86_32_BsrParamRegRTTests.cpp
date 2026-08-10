@@ -1,5 +1,9 @@
 //===- X86_32_BsrParamRegRTTests.cpp - i386 regparm bsr-preserve param ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Guards the #500 i386 register-parameter scratch heuristic
 // (`liveInOnlyFeedsScratch` / `isBsrBsfPreserve`) for the regparm-callee variant
 // (the OptStress211-215 probes cover the cdecl entry function).  That fix drops

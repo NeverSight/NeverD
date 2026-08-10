@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress215RTTests.cpp - multi-arg leading bit-scan ===//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // Hardens the #500 fix (i386 BSR/BSF zero-source preserve must not be mistaken
 // for a regparm argument) on MULTI-argument functions: a leading 64-bit clz/ctz
 // makes `bsr`/`bsf` the first write to a regparm register (ECX/EDX) while the

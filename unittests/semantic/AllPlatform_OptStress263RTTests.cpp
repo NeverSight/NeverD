@@ -1,5 +1,9 @@
 //===- AllPlatform_OptStress263RTTests.cpp - long long on 32-bit at -O0 ==//
 //
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
 // 64-bit (long long) arithmetic at -O0 — on i386/ARM32 every value is a genuine
 // register pair and -O0 emits the add/adc, sub/sbb, and shld/shrd-style word
 // traffic explicitly (no folding), which is exactly where register-pair value
