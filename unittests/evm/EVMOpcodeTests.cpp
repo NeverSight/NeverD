@@ -131,8 +131,7 @@ TEST(EVMOpcodeMetadata, OpcodeFamiliesExposeWidthsAndDepthsWithoutMagicRanges) {
 TEST(EVMOpcodeMetadata, EffectsComeFromTheInstructionDatabase) {
   EXPECT_EQ(opcodeInfo(Opcode::MLOAD)->Effect, EffectKind::None);
   EXPECT_EQ(opcodeInfo(Opcode::CALLDATACOPY)->Effect, EffectKind::ContextRead);
-  EXPECT_EQ(opcodeInfo(Opcode::CALLVALUE)->Effect,
-            EffectKind::CallValueRead);
+  EXPECT_EQ(opcodeInfo(Opcode::CALLVALUE)->Effect, EffectKind::ContextRead);
   EXPECT_EQ(opcodeInfo(Opcode::SSTORE)->Effect, EffectKind::StorageWrite);
   EXPECT_EQ(opcodeInfo(Opcode::STATICCALL)->Effect, EffectKind::ExternalCall);
   EXPECT_EQ(opcodeInfo(Opcode::LOG4)->Effect, EffectKind::Log);
@@ -140,7 +139,7 @@ TEST(EVMOpcodeMetadata, EffectsComeFromTheInstructionDatabase) {
   EXPECT_EQ(effectName(EffectKind::None), "none");
   EXPECT_EQ(effectName(EffectKind::SelfDestruct), "selfdestruct");
   EXPECT_EQ(effectName(EffectKind::TransientWrite), "transient.write");
-  EXPECT_EQ(effectName(EffectKind::CallValueRead), "callvalue.read");
+  EXPECT_EQ(effectName(EffectKind::ContextRead), "context.read");
 
   EXPECT_EQ(opcodeInfo(Opcode::SHA3)->StateAccess, StateAccessKind::None);
   EXPECT_EQ(opcodeInfo(Opcode::ADDRESS)->StateAccess, StateAccessKind::Read);

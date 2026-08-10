@@ -27,7 +27,11 @@ inline constexpr size_t kDispatcherDestinationSearchDistance = 2;
 inline constexpr size_t kEventTopicSearchWindow = 8;
 inline constexpr size_t kErrorSelectorSearchWindow = 10;
 
-Mutability recoveredMutability(StateAccessKind Access) {
+Mutability recoveredMutability(StateAccessKind Access, bool ReadsCallValue) {
+  if (Access == StateAccessKind::Unknown)
+    return Mutability::NonPayable;
+  if (ReadsCallValue)
+    return Mutability::Payable;
   switch (Access) {
   case StateAccessKind::None:
     return Mutability::Pure;
@@ -775,6 +779,7 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
     const std::set<uint64_t> FunctionBlocks =
         reachableFrom(Low, Function.EntryPC);
     StateAccessKind StateAccess = StateAccessKind::None;
+    bool ReadsCallValue = false;
     bool ReturnsWord = false;
     std::set<uint64_t> ArgumentOffsets;
     for (uint64_t BlockPC : FunctionBlocks) {
@@ -789,6 +794,7 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
         StateAccess = mergeStateAccess(
             StateAccess, Instruction.isKnown() ? Instruction.Info.StateAccess
                                                : StateAccessKind::Unknown);
+        ReadsCallValue |= Instruction.is(Opcode::CALLVALUE);
         if (Instruction.is(Opcode::CALLDATALOAD) && I > 0 &&
             Low.Instructions[I - 1].isPush()) {
           const auto Offset = asAddress(Low.Instructions[I - 1].Immediate);
@@ -815,7 +821,7 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
     }
     if (ReturnsWord)
       Function.Returns.push_back(kDefaultRecoveredWordType.str());
-    Function.StateMutability = recoveredMutability(StateAccess);
+    Function.StateMutability = recoveredMutability(StateAccess, ReadsCallValue);
     High.Functions.push_back(Function);
     High.Regions.push_back({Function.EntryPC,
                             RegionKind::Function,
