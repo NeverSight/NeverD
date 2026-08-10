@@ -813,12 +813,147 @@ void runRegisterDataflow(SBFProgram &Program) {
   }
 }
 
-std::set<size_t> intersection(const std::set<size_t> &L,
-                              const std::set<size_t> &R) {
-  std::set<size_t> Result;
-  std::set_intersection(L.begin(), L.end(), R.begin(), R.end(),
-                        std::inserter(Result, Result.begin()));
-  return Result;
+constexpr size_t kNoBlock = std::numeric_limits<size_t>::max();
+
+// Immediate-dominator tree. The previous representation kept one
+// std::set<size_t> of (post)dominators per block, which needs O(blocks^2)
+// set nodes — real programs with tens of thousands of blocks exhaust the
+// host's memory. This is the classic iterative algorithm over reverse
+// postorder (Cooper, Harvey, Kennedy, "A Simple, Fast Dominance
+// Algorithm"), which is O(blocks) in space and near-linear in practice.
+struct DominatorTree {
+  size_t Root = kNoBlock;
+  std::vector<size_t> IDom;   // immediate dominator, kNoBlock when unreachable
+  std::vector<size_t> Depth;  // depth in the dominator tree
+  std::vector<size_t> RPONum; // block -> reverse postorder number, kNoBlock
+                              // when unreachable from Root
+};
+
+template <typename SuccessorsFn, typename PredecessorsFn>
+DominatorTree buildDominatorTree(size_t Count, size_t Root,
+                                 SuccessorsFn &&Successors,
+                                 PredecessorsFn &&Predecessors) {
+  DominatorTree Tree;
+  Tree.Root = Root;
+  Tree.IDom.assign(Count, kNoBlock);
+  Tree.Depth.assign(Count, 0);
+  Tree.RPONum.assign(Count, kNoBlock);
+
+  // Iterative postorder walk from Root; reverse postorder numbers entry = 0.
+  std::vector<size_t> Postorder;
+  Postorder.reserve(Count);
+  std::vector<std::pair<size_t, size_t>> Stack{{Root, 0}};
+  std::vector<size_t> SuccCache;
+  std::vector<std::vector<size_t>> Adjacent(Count);
+  while (!Stack.empty()) {
+    auto &[Node, Next] = Stack.back();
+    const std::vector<size_t> &Succs = Adjacent[Node].empty() && Next == 0
+                                           ? (Adjacent[Node] = Successors(Node))
+                                           : Adjacent[Node];
+    if (Next < Succs.size()) {
+      const size_t Succ = Succs[Next++];
+      if (Tree.RPONum[Succ] == kNoBlock && Succ != Root) {
+        Tree.RPONum[Succ] = 0; // mark visited
+        Stack.push_back({Succ, 0});
+      }
+      continue;
+    }
+    Postorder.push_back(Node);
+    Stack.pop_back();
+  }
+  for (size_t I = 0; I < Postorder.size(); ++I)
+    Tree.RPONum[Postorder[Postorder.size() - 1 - I]] = I;
+
+  auto Intersect = [&](size_t B1, size_t B2) {
+    while (B1 != B2) {
+      while (Tree.RPONum[B1] > Tree.RPONum[B2])
+        B1 = Tree.IDom[B1];
+      while (Tree.RPONum[B2] > Tree.RPONum[B1])
+        B2 = Tree.IDom[B2];
+    }
+    return B1;
+  };
+
+  Tree.IDom[Root] = Root;
+  bool Changed = true;
+  while (Changed) {
+    Changed = false;
+    for (size_t I = Postorder.size(); I-- > 0;) {
+      const size_t ID = Postorder[I];
+      if (ID == Root)
+        continue;
+      size_t NewIDom = kNoBlock;
+      for (size_t Pred : Predecessors(ID)) {
+        if (Tree.RPONum[Pred] == kNoBlock || Tree.IDom[Pred] == kNoBlock)
+          continue;
+        NewIDom = NewIDom == kNoBlock ? Pred : Intersect(NewIDom, Pred);
+      }
+      if (NewIDom != kNoBlock && NewIDom != Tree.IDom[ID]) {
+        Tree.IDom[ID] = NewIDom;
+        Changed = true;
+      }
+    }
+  }
+  // Depths in RPO order: the immediate dominator always has a smaller
+  // reverse postorder number than the block itself.
+  std::vector<size_t> RPO(Postorder.size());
+  for (size_t I = 0; I < Postorder.size(); ++I)
+    RPO[Tree.RPONum[Postorder[I]]] = Postorder[I];
+  for (size_t ID : RPO)
+    if (ID != Root)
+      Tree.Depth[ID] = Tree.Depth[Tree.IDom[ID]] + 1;
+  return Tree;
+}
+
+// Whether A dominates B under Tree (both must be reachable from the root).
+bool dominates(const DominatorTree &Tree, size_t A, size_t B) {
+  if (A >= Tree.IDom.size() || B >= Tree.IDom.size())
+    return false;
+  if (Tree.RPONum[A] == kNoBlock || Tree.RPONum[B] == kNoBlock)
+    return false;
+  size_t Cur = B;
+  while (Tree.Depth[Cur] >= Tree.Depth[A]) {
+    if (Cur == A)
+      return true;
+    if (Cur == Tree.Root)
+      return false;
+    Cur = Tree.IDom[Cur];
+  }
+  return false;
+}
+
+// Deepest common ancestor of A and B in Tree, i.e. the (post)dominator
+// candidate with the most (post)dominators. A node that is unreachable from
+// the root stands for the full node set, so the other side wins outright.
+std::optional<size_t> nearestCommonDominator(const DominatorTree &Tree,
+                                             size_t A, size_t B) {
+  const bool AReachable = A < Tree.IDom.size() && Tree.RPONum[A] != kNoBlock;
+  const bool BReachable = B < Tree.IDom.size() && Tree.RPONum[B] != kNoBlock;
+  if (!AReachable && !BReachable)
+    return std::nullopt;
+  if (!AReachable)
+    return B;
+  if (!BReachable)
+    return A;
+  while (Tree.Depth[A] > Tree.Depth[B]) {
+    A = Tree.IDom[A];
+    if (A == kNoBlock)
+      return std::nullopt;
+  }
+  while (Tree.Depth[B] > Tree.Depth[A]) {
+    B = Tree.IDom[B];
+    if (B == kNoBlock)
+      return std::nullopt;
+  }
+  while (A != B) {
+    if (A == Tree.Root || B == Tree.Root)
+      return Tree.Root;
+    A = Tree.IDom[A];
+    B = Tree.IDom[B];
+    if (A == kNoBlock || B == kNoBlock)
+      return std::nullopt;
+  }
+  return A;
 }
 
 void recoverRegions(SBFProgram &Program) {
@@ -836,31 +971,26 @@ void recoverRegions(SBFProgram &Program) {
       EntryBlock = Block.ID;
       break;
     }
-  std::vector<std::set<size_t>> Dominators(Count, Reachable);
-  Dominators[EntryBlock] = {EntryBlock};
-  bool Changed = true;
-  while (Changed) {
-    Changed = false;
-    for (size_t ID = 0; ID < Count; ++ID) {
-      if (ID == EntryBlock || !Program.Low.Blocks[ID].Reachable)
-        continue;
-      std::set<size_t> New = Reachable;
-      bool First = true;
-      for (size_t Pred : Program.Low.Blocks[ID].Predecessors) {
-        if (!Program.Low.Blocks[Pred].Reachable)
-          continue;
-        New = First ? Dominators[Pred] : intersection(New, Dominators[Pred]);
-        First = false;
-      }
-      New.insert(ID);
-      if (New != Dominators[ID]) {
-        Dominators[ID] = std::move(New);
-        Changed = true;
-      }
-    }
-  }
 
-  std::vector<std::set<size_t>> PostDominators(Count, Reachable);
+  auto CFGSuccessors = [&](size_t ID) {
+    std::vector<size_t> Result;
+    for (size_t Successor : Program.Low.Blocks[ID].Successors)
+      if (Program.Low.Blocks[Successor].Reachable)
+        Result.push_back(Successor);
+    return Result;
+  };
+  auto CFGPredecessors = [&](size_t ID) {
+    std::vector<size_t> Result;
+    for (size_t Pred : Program.Low.Blocks[ID].Predecessors)
+      if (Program.Low.Blocks[Pred].Reachable)
+        Result.push_back(Pred);
+    return Result;
+  };
+  const DominatorTree Dominators =
+      buildDominatorTree(Count, EntryBlock, CFGSuccessors, CFGPredecessors);
+
+  // Post-dominators are dominators of the reversed graph. A virtual root
+  // (index Count) links every exit block so multiple exits share one tree.
   std::set<size_t> Exits;
   for (const BasicBlock &Block : Program.Low.Blocks) {
     if (!Block.Reachable)
@@ -868,38 +998,33 @@ void recoverRegions(SBFProgram &Program) {
     const bool HasReachableSuccessor = std::any_of(
         Block.Successors.begin(), Block.Successors.end(),
         [&](size_t Successor) { return Reachable.contains(Successor); });
-    if (!HasReachableSuccessor) {
+    if (!HasReachableSuccessor)
       Exits.insert(Block.ID);
-      PostDominators[Block.ID] = {Block.ID};
-    }
   }
-  Changed = true;
-  while (Changed) {
-    Changed = false;
-    for (size_t ID = Count; ID-- > 0;) {
-      if (!Program.Low.Blocks[ID].Reachable || Exits.contains(ID))
-        continue;
-      std::set<size_t> New = Reachable;
-      bool First = true;
-      for (size_t Successor : Program.Low.Blocks[ID].Successors) {
-        if (!Reachable.contains(Successor))
-          continue;
-        New = First ? PostDominators[Successor]
-                    : intersection(New, PostDominators[Successor]);
-        First = false;
-      }
-      New.insert(ID);
-      if (New != PostDominators[ID]) {
-        PostDominators[ID] = std::move(New);
-        Changed = true;
-      }
-    }
-  }
+  const size_t VirtualRoot = Count;
+  auto RevSuccessors = [&](size_t ID) {
+    if (ID == VirtualRoot)
+      return std::vector<size_t>(Exits.begin(), Exits.end());
+    return CFGPredecessors(ID);
+  };
+  auto RevPredecessors = [&](size_t ID) {
+    std::vector<size_t> Result;
+    if (ID == VirtualRoot)
+      return Result;
+    Result = CFGSuccessors(ID);
+    if (Exits.contains(ID))
+      Result.push_back(VirtualRoot); // virtual root -> exit edge
+    return Result;
+  };
+  const DominatorTree PostDominators = buildDominatorTree(
+      Count + 1, VirtualRoot, RevSuccessors, RevPredecessors);
 
   std::set<std::pair<size_t, size_t>> SeenLoops;
   for (const BasicBlock &Source : Program.Low.Blocks) {
+    if (!Source.Reachable)
+      continue;
     for (size_t Target : Source.Successors) {
-      if (!Dominators[Source.ID].contains(Target) ||
+      if (!dominates(Dominators, Target, Source.ID) ||
           !SeenLoops.insert({Target, Source.ID}).second)
         continue;
       std::set<size_t> Loop{Target, Source.ID};
@@ -930,13 +1055,10 @@ void recoverRegions(SBFProgram &Program) {
       continue;
     const size_t Left = Block.Successors[0];
     const size_t Right = Block.Successors[1];
-    const std::set<size_t> Common =
-        intersection(PostDominators[Left], PostDominators[Right]);
-    std::optional<size_t> Join;
-    for (size_t Candidate : Common)
-      if (!Join ||
-          PostDominators[Candidate].size() > PostDominators[*Join].size())
-        Join = Candidate;
+    std::optional<size_t> Join =
+        nearestCommonDominator(PostDominators, Left, Right);
+    if (Join && *Join == VirtualRoot)
+      Join = std::nullopt; // the branches reach disjoint exits
     Region Region;
     Region.Kind = RegionKind::If;
     Region.HeaderBlock = Block.ID;
@@ -967,6 +1089,20 @@ void recoverHighIR(const BinaryImage &Image, SBFProgram &Program) {
       if (auto Slot = addressToSlot(Program.Image, Symbol.Addr))
         Entries.insert(*Slot);
 
+  // The slot→block map and the call-free successor adjacency are identical
+  // for every entry. Build them once; rebuilding them per entry (and
+  // rescanning every edge per visited block) is quadratic and does not
+  // terminate in reasonable time on large production programs.
+  constexpr size_t kNoBlock = std::numeric_limits<size_t>::max();
+  std::vector<size_t> SlotToBlock(Program.Low.Instructions.size(), kNoBlock);
+  for (const BasicBlock &Block : Program.Low.Blocks)
+    for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot)
+      SlotToBlock[Slot] = Block.ID;
+  std::vector<std::vector<size_t>> CallFreeSuccessors(Program.Low.Blocks.size());
+  for (const CFGEdge &Edge : Program.Low.Edges)
+    if (Edge.To && Edge.Kind != EdgeKind::Call)
+      CallFreeSuccessors[Edge.From].push_back(*Edge.To);
+
   for (size_t EntrySlot : Entries) {
     Function Function;
     Function.EntrySlot = EntrySlot;
@@ -978,23 +1114,20 @@ void recoverHighIR(const BinaryImage &Image, SBFProgram &Program) {
     else
       Function.Name = syntheticFunctionName(Function.Address);
 
-    std::map<size_t, size_t> SlotToBlock;
-    for (const BasicBlock &Block : Program.Low.Blocks)
-      for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot)
-        SlotToBlock[Slot] = Block.ID;
-    auto It = SlotToBlock.find(EntrySlot);
-    if (It != SlotToBlock.end()) {
-      std::deque<size_t> Work{It->second};
-      std::set<size_t> Seen;
+    const size_t EntryBlock =
+        EntrySlot < SlotToBlock.size() ? SlotToBlock[EntrySlot] : kNoBlock;
+    if (EntryBlock != kNoBlock) {
+      std::deque<size_t> Work{EntryBlock};
+      std::vector<bool> Seen(Program.Low.Blocks.size(), false);
       while (!Work.empty()) {
         size_t ID = Work.front();
         Work.pop_front();
-        if (!Seen.insert(ID).second)
+        if (Seen[ID])
           continue;
+        Seen[ID] = true;
         Function.Blocks.push_back(ID);
-        for (const CFGEdge &Edge : Program.Low.Edges)
-          if (Edge.From == ID && Edge.To && Edge.Kind != EdgeKind::Call)
-            Work.push_back(*Edge.To);
+        for (size_t To : CallFreeSuccessors[ID])
+          Work.push_back(To);
       }
     }
     Program.High.Functions.push_back(std::move(Function));
