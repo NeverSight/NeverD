@@ -39,6 +39,7 @@ jobs:
             test_profile: linux-semantic
             exclude_labels: '^NeverDPatchFullTests$'
             python: python3
+            python_version: '3.12'
           - name: macOS arm64
             runner: macos-15
             cc: clang
@@ -47,6 +48,7 @@ jobs:
             test_profile: macos-patch
             exclude_labels: '^NeverDSemanticTests$'
             python: python3
+            python_version: '3.12'
           - name: Windows x64
             runner: windows-latest
             cc: cl
@@ -55,12 +57,18 @@ jobs:
             test_profile: windows-focused
             exclude_labels: '^NeverD(Semantic|PatchFull)Tests$'
             python: python
+            python_version: '3.12'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python_version }}
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -113,23 +121,33 @@ jobs:
         shell: bash
         run: |
           "$PYTHON" -m unittest scripts.tests.test_debug_build_configuration -v
+          "$PYTHON" -m unittest discover \
+            -s pluginsdk/python/tests -v
+          "$PYTHON" -m unittest \
+            scripts.tests.test_check_python_plugin_sdk -v
+          "$PYTHON" scripts/check_python_plugin_sdk.py
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
           PYTHON: ${{ matrix.python }}
+          PYTHONPATH: pluginsdk/python
 
       - name: Configure Release build
         shell: bash
         run: |
+          PYTHON_EXECUTABLE="$("$PYTHON" -c 'import sys; print(sys.executable)')"
           cmake -S . -B build-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER="$CC" \
             -DCMAKE_CXX_COMPILER="$CXX" \
             -DBUILD_TESTING=ON \
+            -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
+            -DPython3_EXECUTABLE="$PYTHON_EXECUTABLE" \
             -DNEVERD_LLVM_PREBUILT="$NEVERD_LLVM_PREBUILT_MODE"
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
+          PYTHON: ${{ matrix.python }}
 
       - name: Build default targets
         shell: bash

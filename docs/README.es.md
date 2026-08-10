@@ -12,6 +12,7 @@ La visión general, la compilación y el CLI están en el README del repositorio
 | [Contribución](i18n/CONTRIBUTING.es.md) | Entorno, perfiles de compilación, flujo, estilo y requisitos de PR |
 | [Arquitectura](architecture.es.md) | Rutas IR, límites de componentes, lifting estricto, profundidad de soporte y puntos de edición |
 | [Pruebas](testing.es.md) | Suites, fixtures generadas, recorridos Unicorn y comandos incrementales |
+| [Plugins de Python](python-plugins.es.md) | Autoría, API de sesión y eventos, aislamiento, pruebas y publicación |
 | [Descompilación EVM](evm.es.md) | Entradas, hardforks, IR por fases, ABI host C/LLVM, reconstrucción Solidity y límites |
 | [Descompilación de Solana SBF](sbf.es.md) | SBF v0-v4, LLVM IR, salida C/Rust, verificación y límites conocidos |
 | [Hoja de ruta](roadmap/README.es.md) | Estado: formatos nativos, EVM y Solana SBF implementados |

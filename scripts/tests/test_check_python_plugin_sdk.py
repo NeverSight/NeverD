@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import subprocess
+import sys
+import unittest
+
+from scripts import check_python_plugin_sdk as audit
+
+
+class PythonPluginSDKAuditTests(unittest.TestCase):
+    def test_audit_is_directly_runnable_without_pythonpath(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(audit.ROOT / "scripts" / "check_python_plugin_sdk.py"),
+                "--without-workflows",
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("audit passed", result.stdout)
+
+    def test_build_stages_an_installable_sdk_without_generated_caches(self) -> None:
+        source = (audit.ROOT / "lib" / "sdk" / "CMakeLists.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("copy_directory", source)
+        for required in (
+            "LICENSE",
+            "README.md",
+            "pyproject.toml",
+            "py.typed",
+            "analysis_report.py",
+            "minimal.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+
+    def test_header_parser_ignores_the_export_macro_definition(self) -> None:
+        declarations = audit.parse_c_api(
+            """
+#define NEVERD_API __attribute__((visibility("default")))
+NEVERD_API neverd_session_t neverd_session_create(void);
+"""
+        )
+        self.assertEqual(
+            declarations,
+            {"neverd_session_create": ("neverd_session_t", ())},
+        )
+
+    def test_multiline_header_parser_preserves_types_and_order(self) -> None:
+        declarations = audit.parse_c_api(
+            """
+NEVERD_API const char *neverd_name(neverd_session_t Session);
+NEVERD_API int neverd_read(
+    neverd_session_t Session, neverd_va_t Address,
+    unsigned char *Buffer, int Size);
+"""
+        )
+        self.assertEqual(
+            declarations,
+            {
+                "neverd_name": ("const char *", ("neverd_session_t",)),
+                "neverd_read": (
+                    "int",
+                    (
+                        "neverd_session_t",
+                        "neverd_va_t",
+                        "unsigned char *",
+                        "int",
+                    ),
+                ),
+            },
+        )
+
+    def test_named_enum_parser_ignores_comments_and_preserves_values(self) -> None:
+        entries = audit.parse_c_enum(
+            """
+typedef enum {
+  NEVERD_SAMPLE_ZERO = 0,
+  /* reserved = 8 */
+  NEVERD_SAMPLE_NINE = 9,
+} neverd_sample_t;
+""",
+            "neverd_sample_t",
+        )
+        self.assertEqual(
+            entries,
+            {"NEVERD_SAMPLE_ZERO": 0, "NEVERD_SAMPLE_NINE": 9},
+        )
+
+    def test_repository_abi_enum_and_versions_do_not_drift(self) -> None:
+        errors: list[str] = []
+        audit.check_abi(errors)
+        audit.check_plugin_enums(errors)
+        audit.check_output_languages(errors)
+        audit.check_versions(errors)
+        self.assertEqual(errors, [])
+
+    def test_multilingual_documentation_is_complete_and_examples_match(self) -> None:
+        errors: list[str] = []
+        audit.check_documentation(errors)
+        self.assertEqual(errors, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

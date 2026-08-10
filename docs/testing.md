@@ -45,6 +45,7 @@ discovered case a CTest label equal to that executable's target name.
 | Most files in `unittests/semantic` | `NeverDSemanticTests` | Instruction, ABI, control-flow, C-expression, and lift/recompile differential semantics |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Hardfork metadata, input normalization, CFG/SSA/recovery, interpreter semantics, LLVM/C/Solidity differential execution, and public API routing |
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4 metadata and ELF layouts, strict verification, CFG/recovery, independent raw execution, LLVM verification, C/Rust compilation, and public API routing |
+| `unittests/plugin` | `NeverDPluginRuntimeTests`, `NeverDPythonRuntimeTests`, `NeverDPluginTests`, `NeverDPythonPluginTests` | Native/Python loading, metadata, duplicates, lifecycle, GIL handoff, stale sessions, tracebacks, mixed discovery, and public C routing |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Rewrite/obfuscation equivalence across four ISAs and three object formats |
 | Focused transform files in `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Small, fast-to-relink probes split out of the large semantic binary |
 
@@ -52,8 +53,26 @@ The source of truth for registration is
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt), and
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
-[`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt), and
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
+[`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt),
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt), and
+[`unittests/plugin/CMakeLists.txt`](../unittests/plugin/CMakeLists.txt).
+
+Python plugin changes also have an exact C/Python/workflow drift audit:
+
+```bash
+PYTHONPATH=pluginsdk/python python3 -m unittest discover \
+  -s pluginsdk/python/tests -v
+PYTHONPATH=pluginsdk/python python3 -m unittest \
+  scripts.tests.test_check_python_plugin_sdk -v
+python3 -m mypy --config-file pluginsdk/python/pyproject.toml \
+  pluginsdk/python/neverd_plugin
+PYTHONPATH=pluginsdk/python python3 scripts/check_python_plugin_sdk.py
+```
+
+The first two runtime targets do not depend on the decompiler core and are the
+fastest way to isolate loader, CPython, GIL, traceback, and capsule-lifetime
+failures. `NeverDPluginTests` and `NeverDPythonPluginTests` then exercise the
+same behavior through the exported `libneverd` C API.
 
 ## How fixtures are produced
 

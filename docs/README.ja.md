@@ -12,6 +12,7 @@
 | [貢献ガイド](i18n/CONTRIBUTING.ja.md) | 開発環境、ビルドプロファイル、ワークフロー、スタイル、PR 要件 |
 | [アーキテクチャ](architecture.ja.md) | IR 経路、コンポーネント境界、strict lifting、サポート深度、変更箇所 |
 | [テスト](testing.ja.md) | テストスイート、生成 fixture、Unicorn ラウンドトリップ、増分コマンド |
+| [Python プラグイン](python-plugins.ja.md) | プラグイン作成、セッション／イベント API、分離、テスト、公開 |
 | [EVM 逆コンパイル](evm.ja.md) | 入力、hardfork、段階 IR、C/LLVM host ABI、Solidity 復元、制限 |
 | [Solana SBF 逆コンパイル](sbf.ja.md) | SBF v0-v4、LLVM IR、C/Rust 出力、検証、既知の制限 |
 | [ロードマップ](roadmap/README.ja.md) | 状態：native format、EVM、Solana SBF を実装済み |

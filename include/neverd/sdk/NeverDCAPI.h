@@ -516,12 +516,19 @@ NEVERD_API unsigned short neverd_sig_compute_crc16(const unsigned char *Data,
 // Wraps PluginManager so tools never reference the internal C++ class.
 // ===--------------------------------------------------------------------===//
 
-/// Load all plugins (*.dylib / *.dll / *.so) from \p Dir.
+/// Load all supported native (*.dylib / *.dll / *.so) and Python (*.py)
+/// plugins from \p Dir in deterministic canonical-path order.
 /// Returns the number of plugins successfully loaded.
 NEVERD_API int neverd_plugins_load_dir(neverd_session_t Sess, const char *Dir);
 
+/// Load one plugin file. Returns 1 on success or 0 on failure. The native
+/// diagnostic is available through neverd_last_error().
+NEVERD_API int neverd_plugins_load_file(neverd_session_t Sess,
+                                        const char *Path);
+
 /// Return a JSON array of loaded plugins:
-///   [{"name":"…","version":"…","author":"…","description":"…","path":"…"},…]
+///   [{"name":"…","version":"…","author":"…","description":"…",
+///     "type":0,"kind":"python","path":"…"},…]
 /// Caller frees with neverd_free_string().
 NEVERD_API const char *neverd_plugins_list_json(neverd_session_t Sess);
 

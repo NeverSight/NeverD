@@ -1,6 +1,6 @@
 # libneverd shared library — core engine for CLI, GUI, and plugins.
 # All NeverD frontends link this single shared library.
-add_library(neverd_shared SHARED
+set(NEVERD_SDK_SOURCES
     NeverDCAPI.cpp
     NeverDCAPIDisasm.cpp
     NeverDCAPIDecompile.cpp
@@ -9,6 +9,12 @@ add_library(neverd_shared SHARED
     NeverDCAPIPersist.cpp
     NeverDCAPIBench.cpp
     PluginManager.cpp)
+
+if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
+    list(APPEND NEVERD_SDK_SOURCES PythonPluginRuntime.cpp)
+endif()
+
+add_library(neverd_shared SHARED ${NEVERD_SDK_SOURCES})
 
 target_include_directories(neverd_shared
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
@@ -42,6 +48,14 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDSigs
     NeverDSBF
     ${NEVERD_COMMON_LIBS})
+
+if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
+    target_link_libraries(neverd_shared PRIVATE Python3::Python)
+    target_compile_definitions(neverd_shared PRIVATE
+        NEVERD_ENABLE_PYTHON_PLUGINS=1
+        NEVERD_PYTHON_SDK_SOURCE_DIR="${CMAKE_SOURCE_DIR}/pluginsdk/python"
+        NEVERD_PYTHON_SDK_VERSION="${PROJECT_VERSION}")
+endif()
 
 # The aggregate IR archive and its subcomponent archives reference each other.
 # GNU-style linkers scan a static archive only once unless the archives are in
@@ -94,3 +108,35 @@ add_custom_command(TARGET neverd_shared POST_BUILD
         ${NEVERD_SDK_HEADERS}
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/"
     COMMENT "Copying SDK headers to ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/")
+
+if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
+  set(NEVERD_PYTHON_SDK_ROOT_FILES
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/LICENSE"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/README.md"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/pyproject.toml")
+  set(NEVERD_PYTHON_SDK_PACKAGE_FILES
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/neverd_plugin/__init__.py"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/neverd_plugin/_version.py"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/neverd_plugin/abi.py"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/neverd_plugin/api.py"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/neverd_plugin/ffi.py"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/neverd_plugin/py.typed")
+  set(NEVERD_PYTHON_SDK_EXAMPLE_FILES
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/examples/analysis_report.py"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/examples/minimal.py")
+  add_custom_command(TARGET neverd_shared POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/neverd_plugin"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/examples"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NEVERD_PYTHON_SDK_ROOT_FILES}
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NEVERD_PYTHON_SDK_PACKAGE_FILES}
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/neverd_plugin"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NEVERD_PYTHON_SDK_EXAMPLE_FILES}
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/examples"
+    COMMENT "Copying Python plugin SDK to ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/")
+endif()

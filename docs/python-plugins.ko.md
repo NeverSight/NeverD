@@ -1,0 +1,112 @@
+**언어**: [English](python-plugins.md) | [简体中文](python-plugins.zh-CN.md) | [繁體中文](python-plugins.zh-TW.md) | [日本語](python-plugins.ja.md) | [한국어](python-plugins.ko.md) | [Français](python-plugins.fr.md) | [Deutsch](python-plugins.de.md) | [Español](python-plugins.es.md) | [Italiano](python-plugins.it.md) | [Русский](python-plugins.ru.md) | [العربية](python-plugins.ar.md)
+
+[← 문서 색인](README.ko.md)
+
+# Python 플러그인
+
+NeverD는 Python 파일을 일급 플러그인으로 로드할 수 있습니다. Python 플러그인은 네이티브 플러그인과 동일한 메타데이터, 수명 주기, 순서, 이름 중복 규칙, 이벤트 스트림 및 세션 C ABI를 공유합니다. 지원되는 작성 패키지는 `neverd-plugin`입니다. 비공개 `_neverd_plugin` 브리지를 직접 import하지 마십시오.
+
+## 빌드 및 런타임 요구 사항
+
+`NEVERD_ENABLE_PYTHON_PLUGINS`의 기본값은 `ON`입니다. 활성화된 빌드에는 CMake가 찾을 수 있는 CPython 3.10 이상 인터프리터와 임베딩 개발 라이브러리가 필요합니다.
+
+```bash
+cmake -S . -B build -G Ninja \
+  -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
+  -DPython3_EXECUTABLE="$(python3 -c 'import sys; print(sys.executable)')"
+cmake --build build
+```
+
+CPython 링크 의존성이 없는 네이티브 전용 `libneverd`를 만들려면 `-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF`를 지정하십시오. Python을 활성화한 빌드는 일치하는 패키지와 예제를 `build/bin/sdk/python/` 아래에 배치합니다. 이 디렉터리는 `python3 -m pip install build/bin/sdk/python`으로 바로 설치할 수도 있습니다.
+
+## 플러그인 작성
+
+하나의 모듈은 데코레이터가 적용된 클래스를 정확히 하나 선언합니다.
+
+```python
+from neverd_plugin import Event, Plugin, PluginType, Session
+
+
+@Plugin(
+    name="Analysis Report",
+    version="1.0.0",
+    author="Your team",
+    description="Reports basic information about the loaded binary",
+    type=PluginType.PROCESSOR,
+)
+class AnalysisReport:
+    def on_init(self, session: Session) -> int | None:
+        print(session.architecture)
+        return None
+
+    def on_run(self, session: Session, arg: int) -> int | None:
+        print(session.file_path, session.function_count)
+        return 0
+
+    def on_event(self, event: Event) -> int | None:
+        print(event.type.name)
+        return None
+
+    def on_term(self) -> None:
+        pass
+```
+
+모든 hook은 선택 사항입니다. `None`은 성공을 의미하며 정수 결과는 C `int` 범위에 들어가야 합니다. 메타데이터 버전은 엄격한 SemVer를 사용합니다. 이름은 비어 있지 않은 UTF-8이어야 하며 내장 NUL이 포함된 모든 메타데이터는 거부됩니다.
+
+저장소 예제는 [`minimal.py`](../pluginsdk/python/examples/minimal.py)와 [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py)입니다.
+
+## 플러그인 로드 및 검사
+
+C API는 특정 `.py` 파일을 결정적으로 로드하거나 디렉터리를 검색할 수 있습니다.
+
+```c
+if (!neverd_plugins_load_file(session, "plugins/report.py")) {
+  const char *message = neverd_last_error(session);
+  /* log message */
+  neverd_free_string(message);
+}
+
+neverd_plugins_init(session);
+int result = neverd_plugins_run(session, "Analysis Report", 0);
+neverd_plugins_term(session);
+```
+
+`neverd_plugins_list_json`은 각 항목을 `"kind":"python"` 또는 `"kind":"native"`로 식별합니다. 디렉터리 탐색은 정규 경로순으로 정렬되며 같은 디렉터리에서 네이티브 라이브러리와 Python 파일을 함께 처리합니다. 중복 정규 경로와 중복 플러그인 이름은 오류입니다.
+
+## 세션 및 이벤트 API
+
+`Session`은 C를 호출할 때마다 호스트 기능을 다시 검증합니다. 형식화된 표면에는 파일·아키텍처·형식 메타데이터, 비트 수와 테이블 개수, 함수 뷰, 로드와 분석, 바이트 읽기, 디스어셈블, 디컴파일 및 일반 쿼리가 포함됩니다. 고급 작업에서는 `session.raw`를 통해 `neverd_plugin.abi`의 모든 선언에 접근할 수 있습니다.
+
+```python
+count = session.raw.session_call("neverd_plugins_count")
+version = session.raw.owned_string("neverd_version")
+object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
+```
+
+변경 불가능한 여섯 이벤트는 `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE`, `PATCH_APPLIED`입니다. 콜백 중 payload 문자열이 복사되며 해당 이벤트 종류와 관계없는 필드는 `None`입니다.
+
+종료 후 사용하기 위해 `Session`을 저장하지 마십시오. 네이티브 capsule은 `on_term`이 시작되기 전과 네이티브 세션을 해제할 수 있기 전에 무효화됩니다. 이후 호출은 오래된 메모리를 역참조하지 않고 `RuntimeError`로 실패합니다.
+
+## 오류, 격리 및 신뢰
+
+Python 예외는 절대로 C++을 가로질러 unwind되지 않습니다. NeverD는 완전히 포맷된 traceback을 캡처해 `neverd_last_error`로 제공합니다. 각 정규 플러그인 경로는 고유한 모듈 이름으로 로드됩니다. 종료 시 모듈을 제거하므로 나중에 다시 로드하면 새로운 모듈과 클래스 상태를 얻습니다. CPython은 한 번만 초기화되고 bootstrap GIL은 해제됩니다. 모든 호스트 스레드의 콜백은 GIL을 획득하며 NeverD는 다른 구성 요소와 공유할 수 있는 인터프리터를 종료하지 않습니다.
+
+플러그인은 NeverD 프로세스 안에서 임의의 Python을 실행하고 전체 C API를 호출할 수 있습니다. 신뢰할 수 있는 파일만 로드하십시오. 이것은 확장 경계이지 sandbox가 아닙니다.
+
+## 개발, 테스트 및 패키지
+
+편집기와 타입 검사기 지원을 받으려면 순수 Python 패키지를 설치하거나 소스 트리를 `PYTHONPATH`에 지정하십시오.
+
+```bash
+python3 -m pip install -e pluginsdk/python
+
+PYTHONPATH=pluginsdk/python python3 -m unittest discover \
+  -s pluginsdk/python/tests -v
+python3 -m mypy --config-file pluginsdk/python/pyproject.toml \
+  pluginsdk/python/neverd_plugin
+PYTHONPATH=pluginsdk/python python3 scripts/check_python_plugin_sdk.py
+```
+
+감사는 내보낸 모든 C 선언과 `ctypes` 서명·소유권 규칙이 정확히 일치하도록 요구합니다. 또한 출력 언어 값, CMake 및 패키지 버전, CI 기능 플래그, Action 고정 버전, artifact 흐름과 PyPI OIDC 정책을 검사합니다. 네이티브 어댑터 테스트는 `NeverDPluginRuntimeTests`이며 임베디드 Python 테스트는 `NeverDPythonRuntimeTests`와 `NeverDPythonPluginTests`입니다.
+
+`Python Plugin SDK` workflow는 wheel과 소스 배포본을 하나씩 빌드하고 둘 다 깨끗한 환경에 설치한 뒤 검증된 artifact를 업로드합니다. 게시된 GitHub Release에 대해서만 승인으로 보호되는 `pypi` environment와 Trusted Publishing을 통해 배포하며 장기 PyPI token은 사용하지 않습니다.

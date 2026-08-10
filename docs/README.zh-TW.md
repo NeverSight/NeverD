@@ -12,6 +12,7 @@
 | [貢獻指南](i18n/CONTRIBUTING.zh-TW.md) | 開發環境、建置設定、工作流程、風格與 PR 要求 |
 | [架構](architecture.zh-TW.md) | IR 路徑、元件邊界、嚴格提升、支援深度與修改位置 |
 | [測試](testing.zh-TW.md) | 測試套件、產生的 fixture、Unicorn 往返與增量命令 |
+| [Python 外掛](python-plugins.zh-TW.md) | 外掛撰寫、工作階段與事件 API、隔離、測試及發佈 |
 | [EVM 反編譯](evm.zh-TW.md) | EVM 輸入、硬分叉、分級 IR、C/LLVM host ABI、Solidity 重建與限制 |
 | [Solana SBF 反編譯](sbf.zh-TW.md) | SBF v0-v4、LLVM IR、C/Rust 輸出、驗證與已知限制 |
 | [路線圖](roadmap/README.zh-TW.md) | 狀態：原生格式、EVM 與 Solana SBF 均已實作 |

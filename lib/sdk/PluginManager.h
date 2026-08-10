@@ -13,9 +13,11 @@
 #ifndef NEVERD_PLUGINMANAGER_H
 #define NEVERD_PLUGINMANAGER_H
 
-#include "neverd/sdk/NeverDPlugin.h"
+#include "PluginRuntime.h"
 
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 /// Discovers, loads, and manages NeverD plugins.
@@ -24,24 +26,33 @@ class PluginManager {
 public:
   struct LoadedPlugin {
     std::string Path;
-    neverd_plugin_t *Descriptor;
-    void *Handle;
+    std::unique_ptr<PluginRuntime> Runtime;
+    bool Initialized = false;
+    bool Terminated = false;
+
+    const neverd_plugin_t &descriptor() const { return Runtime->descriptor(); }
   };
 
   ~PluginManager();
 
-  void loadPluginsFromDir(const std::string &Dir);
+  int loadPluginsFromDir(const std::string &Dir);
+  bool loadPluginFile(const std::string &Path);
   void initAll(neverd_session_t Session);
   void termAll();
   void dispatchEvent(const neverd_event_t &Event);
   int runPlugin(const std::string &Name, neverd_session_t Session, int Arg);
 
   const std::vector<LoadedPlugin> &plugins() const { return Plugins; }
+  const std::string &lastError() const { return LastError; }
 
 private:
   std::vector<LoadedPlugin> Plugins;
+  std::string LastError;
 
-  bool loadPlugin(const std::string &Path);
+  bool loadNativePlugin(const std::string &CanonicalPath);
+  bool validateAndAdd(std::string CanonicalPath,
+                      std::unique_ptr<PluginRuntime> Runtime);
+  void setError(std::string Message) { LastError = std::move(Message); }
 };
 
 #endif // NEVERD_PLUGINMANAGER_H

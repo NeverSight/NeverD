@@ -1,0 +1,134 @@
+name: Python Plugin SDK
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - '.github/workflows/python-plugin-sdk.yml'
+      - 'include/neverd/OutputLanguages.def'
+      - 'include/neverd/sdk/**'
+      - 'docs/python-plugins*.md'
+      - 'docs/README*.md'
+      - 'pluginsdk/python/**'
+      - 'scripts/check_python_plugin_sdk.py'
+      - 'scripts/tests/test_check_python_plugin_sdk.py'
+  pull_request:
+    paths:
+      - '.github/workflows/python-plugin-sdk.yml'
+      - 'include/neverd/OutputLanguages.def'
+      - 'include/neverd/sdk/**'
+      - 'docs/python-plugins*.md'
+      - 'docs/README*.md'
+      - 'pluginsdk/python/**'
+      - 'scripts/check_python_plugin_sdk.py'
+      - 'scripts/tests/test_check_python_plugin_sdk.py'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  SDK_VERSION: '3389.0.1'
+
+concurrency:
+  group: python-plugin-sdk-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run SDK and drift tests
+        env:
+          PYTHONPATH: pluginsdk/python
+        run: |
+          python -m unittest discover -s pluginsdk/python/tests -v
+          python -m unittest scripts.tests.test_check_python_plugin_sdk -v
+          python scripts/check_python_plugin_sdk.py
+          python -m py_compile pluginsdk/python/examples/*.py
+
+  package:
+    name: Build and verify distributions
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install packaging tools
+        run: >-
+          python -m pip install --disable-pip-version-check
+          build==1.5.0 mypy==2.3.0 twine==7.0.0
+
+      - name: Type-check the public package
+        run: >-
+          python -m mypy --config-file pluginsdk/python/pyproject.toml
+          pluginsdk/python/neverd_plugin
+
+      - name: Build wheel and source distribution
+        run: python -m build pluginsdk/python --outdir dist
+
+      - name: Verify distribution metadata
+        run: python -m twine check dist/*
+
+      - name: Verify wheel in a clean environment
+        run: |
+          python -m venv .venv-wheel
+          .venv-wheel/bin/python -m pip install --disable-pip-version-check --no-deps dist/*.whl
+          .venv-wheel/bin/python -c "import neverd_plugin; assert neverd_plugin.__version__ == '3389.0.1'"
+
+      - name: Verify source distribution in a clean environment
+        run: |
+          python -m venv .venv-sdist
+          .venv-sdist/bin/python -m pip install --disable-pip-version-check --no-deps dist/*.tar.gz
+          .venv-sdist/bin/python -c "from neverd_plugin import Plugin, Session; assert Plugin and Session"
+
+      - name: Upload verified distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: neverd-python-plugin-dist
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-24.04
+    needs: package
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Verify release tag matches the package version
+        run: test "$GITHUB_REF_NAME" = "v$SDK_VERSION"
+
+      - name: Download verified distributions from this workflow run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: neverd-python-plugin-dist
+          path: dist
+
+      - name: Publish with PyPI Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d # v1.14.0

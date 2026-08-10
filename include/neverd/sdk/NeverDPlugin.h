@@ -4,9 +4,11 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Public header for writing NeverD plugins.
-// Plugins are shared libraries (.dylib/.dll/.so) that export a
-// `neverd_plugin` symbol of type neverd_plugin_t.
+// Public header for writing native NeverD plugins.
+// Native plugins are shared libraries (.dylib/.dll/.so) that export a
+// `neverd_plugin` symbol of type neverd_plugin_t. Python plugins use the
+// separately distributed `neverd-plugin` authoring package and participate in
+// the same metadata and lifecycle contract.
 //
 // Pure C API — safe across any compiler/CRT combination.
 //

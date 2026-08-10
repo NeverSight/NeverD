@@ -16,6 +16,7 @@ Before editing, read the [architecture guide](docs/architecture.md). Use the
 - CMake 3.20 or newer
 - Ninja
 - A C++20 compiler
+- CPython 3.10+ with embedding development files when Python plugins are enabled
 - Clang and LLD (`ld.lld` and `lld-link`) for the complete cross-target fixture
   set
 
@@ -155,6 +156,24 @@ The [testing guide](docs/testing.md) documents all convenience targets,
 label-only transform suites, single-test regexes, fixture compilation, and
 Unicorn roundtrips. If a target is skipped because a cross-compiler or linker is
 missing, report that limitation; do not describe the skipped path as passing.
+
+For Python plugin SDK changes, run the pure-Python and drift suites before the
+native adapter tests:
+
+```bash
+PYTHONPATH=pluginsdk/python python3 -m unittest discover \
+  -s pluginsdk/python/tests -v
+python3 -m mypy --config-file pluginsdk/python/pyproject.toml \
+  pluginsdk/python/neverd_plugin
+PYTHONPATH=pluginsdk/python python3 scripts/check_python_plugin_sdk.py
+cmake --build build-release --target \
+  NeverDPluginRuntimeTests NeverDPythonRuntimeTests NeverDPythonPluginTests
+ctest --test-dir build-release -R 'NeverD(Python|Plugin)' --output-on-failure
+```
+
+Public C declarations, Python ABI signatures, package/CMake versions, and
+delivery workflow policy are one reviewed contract; update them in the same
+change. See the [Python plugin guide](docs/python-plugins.md).
 
 ## Pull-request checklist
 

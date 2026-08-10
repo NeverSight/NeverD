@@ -23,6 +23,7 @@ add_subdirectory(lift)
 add_subdirectory(semantic)
 add_subdirectory(evm)
 add_subdirectory(sbf)
+add_subdirectory(plugin)
 
 # One-shot test runners (like NeverC's check-neverc): build deps, then invoke
 # CTest.  Pure CMake/CTest — no shell scripts, so it works the same on

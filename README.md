@@ -11,12 +11,12 @@
 
 **The AI-friendly binary analysis & decompilation engine — 1:1 lift, built on LLVM**
 
-PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · EVM256 · SBF &nbsp;|&nbsp; Pure C SDK
+PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · EVM256 · SBF &nbsp;|&nbsp; C + Python SDKs
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#building)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
-[![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk-and-plugins)
+[![SDK](https://img.shields.io/badge/SDK-C%20%2B%20Python-orange.svg)](#sdk-and-plugins)
 
 [Documentation](docs/README.md) · [Roadmap](docs/roadmap/README.md) · [Contributing](CONTRIBUTING.md)
 
@@ -207,6 +207,7 @@ release immutable.
 | `build/bin/neverd-sigmaker` | `.pat` generator from static libraries |
 | `build/bin/libneverd.*` | Engine shared library |
 | `build/bin/sdk/` | `NeverDCAPI.h`, `NeverDPlugin.h` |
+| `build/bin/sdk/python/` | Typed Python plugin package and examples |
 | `build/bin/signatures/` | Bundled signature libraries |
 
 **Tests**
@@ -229,6 +230,7 @@ See [Testing NeverD](docs/testing.md) for focused targets, CTest labels, fixture
 |--------|---------|-------------|
 | `NEVERD_LLVM_PREBUILT` | `OFF` | CI prebuilt LLVM |
 | `NEVERD_BUILD_SHARED` | `ON` | Build `libneverd` |
+| `NEVERD_ENABLE_PYTHON_PLUGINS` | `ON` | Embed CPython 3.10+ plugin support |
 | `NEVERD_BUILD_PLUGINS` | `OFF` | Example plugins |
 | `BUILD_TESTING` | `OFF` | Unit tests |
 
@@ -306,7 +308,13 @@ For EVM, use `neverd_decompile_all_ex(..., NEVERD_OUTPUT_SOLIDITY, ...)` to
 select Solidity explicitly; legacy `neverd_decompile_all` continues to emit C.
 See the [EVM C API examples](docs/evm.md#c-api).
 
-Build the example plugin with `-DNEVERD_BUILD_PLUGINS=ON`. Load paths: `<neverd-dir>/plugins`, `~/.neverd/plugins`, `$NEVERD_PLUGIN_PATH`.
+Native shared libraries and Python `.py` files use the same plugin lifecycle.
+Build the native example with `-DNEVERD_BUILD_PLUGINS=ON`; Python support is on
+by default and can be removed completely with
+`-DNEVERD_ENABLE_PYTHON_PLUGINS=OFF`. See the
+[Python plugin guide](docs/python-plugins.md) for the typed SDK, lifecycle,
+loading API, examples, safety model, and package workflow. Load paths:
+`<neverd-dir>/plugins`, `~/.neverd/plugins`, `$NEVERD_PLUGIN_PATH`.
 
 ## Dependencies
 

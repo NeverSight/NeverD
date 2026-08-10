@@ -124,7 +124,13 @@ bool PipelineRunner::run(PipelineOptions Opts, std::string &Err) {
 
 neverd_session_t neverd_session_create(void) { return new Session(); }
 
-void neverd_session_destroy(neverd_session_t Sess) { delete toSession(Sess); }
+void neverd_session_destroy(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return;
+  S->PM.termAll();
+  delete S;
+}
 
 int neverd_session_load(neverd_session_t Sess, const char *Path) {
   auto *S = toSession(Sess);
@@ -403,23 +409,47 @@ const char *neverd_hex_dump(neverd_session_t Sess, neverd_va_t Addr, int Size) {
 
 int neverd_plugins_load_dir(neverd_session_t Sess, const char *Dir) {
   auto *S = toSession(Sess);
-  if (!Dir)
+  if (!S || !Dir) {
+    if (S)
+      S->setError("plugin directory path is null");
     return 0;
-  size_t Before = S->PM.plugins().size();
-  S->PM.loadPluginsFromDir(Dir);
-  return static_cast<int>(S->PM.plugins().size() - Before);
+  }
+  S->clearError();
+  const int Loaded = S->PM.loadPluginsFromDir(Dir);
+  if (!S->PM.lastError().empty())
+    S->setError(S->PM.lastError());
+  return Loaded;
+}
+
+int neverd_plugins_load_file(neverd_session_t Sess, const char *Path) {
+  auto *S = toSession(Sess);
+  if (!S || !Path) {
+    if (S)
+      S->setError("plugin file path is null");
+    return 0;
+  }
+  S->clearError();
+  if (!S->PM.loadPluginFile(Path)) {
+    S->setError(S->PM.lastError());
+    return 0;
+  }
+  return 1;
 }
 
 const char *neverd_plugins_list_json(neverd_session_t Sess) {
   auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
   llvm::json::Array Arr;
   for (const auto &P : S->PM.plugins()) {
+    const neverd_plugin_t &Descriptor = P.descriptor();
     llvm::json::Object Obj;
-    Obj["name"] = P.Descriptor->Name ? P.Descriptor->Name : "";
-    Obj["version"] = P.Descriptor->Version ? P.Descriptor->Version : "";
-    Obj["author"] = P.Descriptor->Author ? P.Descriptor->Author : "";
-    Obj["description"] =
-        P.Descriptor->Description ? P.Descriptor->Description : "";
+    Obj["name"] = Descriptor.Name ? Descriptor.Name : "";
+    Obj["version"] = Descriptor.Version ? Descriptor.Version : "";
+    Obj["author"] = Descriptor.Author ? Descriptor.Author : "";
+    Obj["description"] = Descriptor.Description ? Descriptor.Description : "";
+    Obj["type"] = static_cast<int64_t>(Descriptor.Type);
+    Obj["kind"] = P.Runtime->kind();
     Obj["path"] = P.Path;
     Arr.push_back(std::move(Obj));
   }
@@ -427,28 +457,51 @@ const char *neverd_plugins_list_json(neverd_session_t Sess) {
 }
 
 void neverd_plugins_init(neverd_session_t Sess) {
-  toSession(Sess)->PM.initAll(Sess);
+  auto *S = toSession(Sess);
+  if (!S)
+    return;
+  S->clearError();
+  S->PM.initAll(Sess);
+  if (!S->PM.lastError().empty())
+    S->setError(S->PM.lastError());
 }
 
 void neverd_plugins_term(neverd_session_t Sess) {
-  toSession(Sess)->PM.termAll();
+  auto *S = toSession(Sess);
+  if (!S)
+    return;
+  S->clearError();
+  S->PM.termAll();
+  if (!S->PM.lastError().empty())
+    S->setError(S->PM.lastError());
 }
 
 int neverd_plugins_run(neverd_session_t Sess, const char *Name, int Arg) {
-  if (!Name)
+  auto *S = toSession(Sess);
+  if (!S || !Name)
     return -1;
-  return toSession(Sess)->PM.runPlugin(Name, Sess, Arg);
+  S->clearError();
+  const int Result = S->PM.runPlugin(Name, Sess, Arg);
+  if (Result == -1 && !S->PM.lastError().empty())
+    S->setError(S->PM.lastError());
+  return Result;
 }
 
 int neverd_plugins_count(neverd_session_t Sess) {
-  return static_cast<int>(toSession(Sess)->PM.plugins().size());
+  auto *S = toSession(Sess);
+  return S ? static_cast<int>(S->PM.plugins().size()) : 0;
 }
 
 void neverd_plugins_dispatch_event(neverd_session_t Sess, const void *Event) {
   if (!Event)
     return;
-  toSession(Sess)->PM.dispatchEvent(
-      *static_cast<const neverd_event_t *>(Event));
+  auto *S = toSession(Sess);
+  if (!S)
+    return;
+  S->clearError();
+  S->PM.dispatchEvent(*static_cast<const neverd_event_t *>(Event));
+  if (!S->PM.lastError().empty())
+    S->setError(S->PM.lastError());
 }
 
 // ===--------------------------------------------------------------------===//

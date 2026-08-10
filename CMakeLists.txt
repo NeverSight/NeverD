@@ -115,6 +115,18 @@ add_subdirectory(lib)
 # --- libneverd shared library (core engine, C API) ---
 # CLI, GUI, and plugins all link this shared library.
 option(NEVERD_BUILD_SHARED "Build libneverd shared library" ON)
+option(NEVERD_ENABLE_PYTHON_PLUGINS
+       "Enable embedded CPython support for NeverD plugins" ON)
+
+set(NEVERD_PYTHON_PLUGIN_HOST_ENABLED OFF)
+if(NEVERD_ENABLE_PYTHON_PLUGINS AND NEVERD_BUILD_SHARED)
+    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter Development.Embed)
+    set(NEVERD_PYTHON_PLUGIN_HOST_ENABLED ON)
+elseif(NEVERD_ENABLE_PYTHON_PLUGINS)
+    message(STATUS
+        "Python plugin host omitted because NEVERD_BUILD_SHARED is OFF")
+endif()
+
 if(NEVERD_BUILD_SHARED)
     add_subdirectory(lib/sdk)
 endif()
