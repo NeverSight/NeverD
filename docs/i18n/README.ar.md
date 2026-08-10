@@ -15,9 +15,6 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#البناء)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20EVM%20%7C%20SBF-informational.svg)](#الأهداف-المدعومة)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20EVM256%20%7C%20SBF-orange.svg)](#الأهداف-المدعومة)
-[![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-والإضافات)
 
 [التوثيق](../README.ar.md) · [خارطة الطريق](../roadmap/README.ar.md) · [المساهمة](CONTRIBUTING.ar.md)
 
