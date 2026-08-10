@@ -16,10 +16,7 @@ PE · ELF · Mach-O · EVM · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#빌드)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg)
-[![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-blue.svg)](#sdk와-플러그인)
-<br>
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20EVM%20%7C%20SBF-informational.svg)](#지원-대상)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20EVM256%20%7C%20SBF-orange.svg)](#지원-대상)
+[![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-orange.svg)](#sdk와-플러그인)
 
 [문서](../README.ko.md) · [로드맵](../roadmap/README.ko.md) · [기여](CONTRIBUTING.ko.md)
 
