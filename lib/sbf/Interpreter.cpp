@@ -1,4 +1,16 @@
 //===- Interpreter.cpp - Deterministic SBF semantic oracle --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Implements direct execution of verified SBF instruction bytes for
+/// differential backend testing.  Validates program layout and VM memory,
+/// decodes raw opcodes, and interprets ALU, memory, control-flow, call, and
+/// syscall semantics without consuming MedIR.
+///
+//===----------------------------------------------------------------------===//
 
 #include "neverd/sbf/Interpreter.h"
 
@@ -15,6 +27,10 @@
 
 namespace neverd::sbf {
 namespace {
+
+//===----------------------------------------------------------------------===//
+// Instruction decoding, validation, and semantic helpers
+//===----------------------------------------------------------------------===//
 
 constexpr unsigned kBitsPerByte = 8;
 constexpr size_t kLDDWSlotWidth = 2;
@@ -217,6 +233,10 @@ uint64_t extendALU32(uint32_t Value, const OpcodeInfo &Info,
 }
 
 } // namespace
+
+//===----------------------------------------------------------------------===//
+// executeRaw
+//===----------------------------------------------------------------------===//
 
 llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
                                            ExecutionEnvironment Environment,

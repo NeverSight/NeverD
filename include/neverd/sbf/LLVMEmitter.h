@@ -1,4 +1,8 @@
 //===- LLVMEmitter.h - Solana SBF to LLVM IR backend ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_SBF_LLVMEMITTER_H
 #define NEVERD_SBF_LLVMEMITTER_H

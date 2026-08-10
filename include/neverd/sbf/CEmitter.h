@@ -1,4 +1,8 @@
 //===- CEmitter.h - Solana SBF to portable C backend ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_SBF_CEMITTER_H
 #define NEVERD_SBF_CEMITTER_H

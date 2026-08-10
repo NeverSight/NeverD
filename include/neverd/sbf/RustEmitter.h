@@ -1,4 +1,8 @@
 //===- RustEmitter.h - Solana SBF to safe Rust backend --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_SBF_RUSTEMITTER_H
 #define NEVERD_SBF_RUSTEMITTER_H

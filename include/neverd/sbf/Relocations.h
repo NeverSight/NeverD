@@ -1,4 +1,8 @@
 //===- Relocations.h - Solana SBF relocation metadata --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_SBF_RELOCATIONS_H
 #define NEVERD_SBF_RELOCATIONS_H
