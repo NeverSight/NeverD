@@ -81,6 +81,14 @@ add_neverd_unittest(NeverDSBFIntegrationTests
   neverd_shared
 )
 
+# The integration fixture also uses internal SBF and LLVM support helpers.
+# ELF and Mach-O resolve those symbols from neverd_shared, but the Windows
+# import library only exposes public DLL exports, so link the component archive
+# explicitly on Windows.
+if(WIN32)
+  target_link_libraries(NeverDSBFIntegrationTests PRIVATE NeverDSBF)
+endif()
+
 target_include_directories(NeverDSBFIntegrationTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}
