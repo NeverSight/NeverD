@@ -341,6 +341,16 @@ TEST(SBFRustEmitter, StructuredProgramMatchesTheRawBytecodeOracle) {
   if (!Rustc)
     GTEST_SKIP() << "rustc is not available";
 
+#ifdef _WIN32
+  // Git for Windows also ships a link.exe, but it is the POSIX hard-link
+  // utility rather than an MSVC-compatible linker.  Git Bash places it ahead
+  // of the Visual Studio linker when CTest launches rustc, so select the
+  // unambiguous COFF linker explicitly.
+  auto Linker = llvm::sys::findProgramByName("lld-link");
+  ASSERT_TRUE(static_cast<bool>(Linker)) << "lld-link is not available";
+  std::string LinkerArgument = "linker=" + *Linker;
+#endif
+
   auto Program = analyze(makeReducibleImage());
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
@@ -375,10 +385,13 @@ fn main() {
     ASSERT_TRUE(Output);
     Output << *Source;
   }
-  llvm::SmallVector<llvm::StringRef, 14> Arguments{
-      *Rustc, "--edition=2021", "--crate-name=neverd_sbf_generated",
-      "-D",   "warnings",       SourceFile.str(),
-      "-o",   Executable.str()};
+  llvm::SmallVector<llvm::StringRef, 16> Arguments{
+      *Rustc, "--edition=2021", "--crate-name=neverd_sbf_generated", "-D",
+      "warnings"};
+#ifdef _WIN32
+  Arguments.append({"-C", LinkerArgument});
+#endif
+  Arguments.append({SourceFile.str(), "-o", Executable.str()});
   std::string Error;
   ASSERT_EQ(llvm::sys::ExecuteAndWait(*Rustc, Arguments, std::nullopt, {}, 0, 0,
                                       &Error),
