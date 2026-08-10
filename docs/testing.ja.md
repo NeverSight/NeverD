@@ -42,13 +42,15 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 | `unittests/libc` | `NeverDLibCTests` | 既知の libc 名と分類 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter の LowIR 形状、IR 段階、loader、relocation、形式 fixture、デコンパイル、代表的 patch 経路 |
 | `unittests/semantic` の大半 | `NeverDSemanticTests` | 命令、ABI、制御フロー、C 式、lift/recompile の差分セマンティクス |
+| `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 メタデータと ELF レイアウト、厳格な検証、CFG/復元、独立した raw 実行、LLVM 検証、C/Rust コンパイル、公開 API ルーティング |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 4 ISA×3 オブジェクト形式の書き換え/難読化等価性 |
 | `unittests/semantic` の重点変換ファイル | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 大きなセマンティック実行形式から分離した高速再リンク用プローブ |
 
 登録の信頼できる情報源は
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt)、
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt)、
-[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) です。
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) です。
 
 ## fixture の生成方法
 
@@ -88,6 +90,12 @@ CMake が埋め込んだ実行ファイルを使います。
 外部能力の境界に限り、その理由を読んでください。クロス linker がない状態の緑色
 サマリーは、形式経路の実行を証明しません。
 
+### Solana SBF 差分バックエンド
+
+SBF メタデータテストは、各バージョン機能、オペコード衝突境界、Murmur3 syscall hash、リロケーション、ELF machine、レジスタ、VM アドレス定数を検証します。Loader fixture は vendored バイナリを使わず、従来の v0-v2 section レイアウトと section を持たない厳格な v3/v4 program-header レイアウトの両方を生成します。
+
+`NeverDSBFSemanticTests` は検証済み命令バイトを直接実行し、MedIR を消費しません。このため、正規化 IR の変更や破損によって source oracle と backend が偶然一致することはありません。非単調な v2 セマンティクス、メモリ、syscall、内部 call frame、fault、trace、resource limit を網羅します。LLVM module は検証され、生成 C は warning を error として、Rust は `-D warnings` 付きでコンパイルされます。公開 API テストは生成した厳格な SBF ELF から、全 IR 段階、逆アセンブル、CFG、メタデータ、LLVM、C、Rust を通過します。
+
 ## 一括ターゲット
 
 カスタムターゲットは依存関係をビルドし、ホスト CPU から決めた並列度で CTest を
@@ -97,6 +105,7 @@ CMake が埋め込んだ実行ファイルを使います。
 |------------------|----------|
 | `check-neverd` | 登録済みの全テスト |
 | `check-neverd-semantic` | `NeverDSemanticTests` のみ |
+| `check-neverd-sbf` | すべての `NeverDSBF*Tests` ターゲット/ケース |
 | `check-neverd-patch-full` | `NeverDPatchFullTests` のみ |
 | `check-neverd-switch-xform` | `NeverDSwitchXformTests` のみ |
 | `check-neverd-cfgloop-xform` | `NeverDCFGLoopXformTests` のみ |
@@ -105,6 +114,7 @@ CMake が埋め込んだ実行ファイルを使います。
 ```bash
 cmake --build build-release --target check-neverd
 cmake --build build-release --target check-neverd-semantic
+cmake --build build-release --target check-neverd-sbf
 ```
 
 `NeverDIndCallXformTests` と `NeverDAvxUpperXformTests` には現在
@@ -132,6 +142,14 @@ ctest --test-dir build-release --build-config Release \
 cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
+
+# すべての重点 Solana SBF ターゲット/ケース
+cmake --build build-release --target \
+  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
+  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
+  NeverDSBFIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'SBF' --output-on-failure --parallel 4
 ```
 
 GoogleTest 由来の CTest 名を使って単一の回帰を実行します。
@@ -171,6 +189,7 @@ GoogleTest の検出は `DISCOVERY_MODE PRE_TEST` を使うため、CTest が列
 | Rewrite codegen または出力 relocation | `RewriteCodegenRTTests` ケース | `NeverDPatchFullTests` と利用可能なリンク済み patch fixture |
 | patch で使う LLVM IR 変換 | 重点変換バイナリ | `NeverDPatchFullTests` の合成 pass グリッド |
 | C API または CLI | 直接 SDK/query テストと `unittests/semantic/CLIEndToEndTests.cpp` | 関連 pipeline/形式スイート |
+| SBF loader、ISA、IR、backend | 所有する最小の `NeverDSBF*Tests` ターゲット | 全 SBF ターゲットと生成 C/Rust のコンパイル |
 | Libc 認識 | `NeverDLibCTests` | 動作変更時のセマンティック call/ABI ケース |
 | プロセス実行または quoting | `NeverDTestProcessTests` | 対応各ホストの影響を受ける CLI/セマンティックケース 1 件 |
 

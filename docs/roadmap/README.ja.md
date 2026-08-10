@@ -60,6 +60,8 @@ NeverD をネイティブ ISA から **Ethereum Virtual Machine (EVM)** コン�
 - **CFG と構造化出力** — ネイティブと同じパイプライン
 - **CLI / C API** — 統一 session API
 
+**状況：** 現行 Anza `sbpf` v0-v4 コントラクトへの対応は完了しています。従来の section/relocation ELF と厳格な program-header-only ELF、完全なバージョン別命令データベース、厳格な検証、段階化された Low/Med/High IR、syscall/CPI/account の観測、検証済み LLVM、移植可能な C11、安全な stable Rust、CLI/C API 統合、および独立した有界 raw-bytecode セマンティック oracle を実装済みです。v4 は upstream に追従しますが、特定クラスターでのデプロイ・実行可否は、そのクラスターの feature activation に依存します。詳しくは [Solana SBF 逆コンパイル](../sbf.ja.md) を参照してください。
+
 ### なぜ Solana eBPF か
 
 - EVM と並ぶ監査対象
@@ -81,11 +83,11 @@ NeverD をネイティブ ISA から **Ethereum Virtual Machine (EVM)** コン�
 
 ## タイムライン
 
-EVM と Solana は研究・設計段階です。ネイティブ形式の完成は回帰試験で検証済みです。リリース日は約束しません。進捗はこの文書で追跡します。
+Solana SBF 逆コンパイルとネイティブ形式の完成は実装済みで、回帰試験により保護されています。EVM は研究・設計段階です。リリース日は約束しません。進捗はこの文書で追跡します。
 
 | 機能 | 状態 |
 |------|------|
 | ネイティブ形式の完成（PE ARM*、Mach-O i386） | 完了 |
 | EVM バイトコード逆コンパイル | 研究 / 設計 |
-| Solana eBPF（SBF）逆コンパイル | 研究 / 設計 |
+| Solana eBPF（SBF）逆コンパイル | 完了 — v0-v4、C、Rust、LLVM；回帰試験済み |
 | エンジンとプロダクト強化 | 継続 |

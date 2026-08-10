@@ -39,13 +39,15 @@ cmake --build build-release --parallel 4
 | `unittests/libc` | `NeverDLibCTests` | 已知 libc 名称与分类 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 形状、IR 阶段、loader、重定位、格式 fixture、反编译与代表性 patch 流程 |
 | `unittests/semantic` 中的大多数文件 | `NeverDSemanticTests` | 指令、ABI、控制流、C 表达式和 lift/recompile 差分语义 |
+| `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 元数据与 ELF 布局、严格验证、CFG/恢复、独立原始执行、LLVM 验证、C/Rust 编译及公共 API 路由 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 四 ISA×三对象格式的重写/混淆等价性 |
 | `unittests/semantic` 中的聚焦变换文件 | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 从大型语义二进制拆出的快速重链接探针 |
 
 注册的事实来源是
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt)、
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) 和
-[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)。
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) 和
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
 
 ## fixture 如何生成
 
@@ -80,6 +82,12 @@ backend），随后在完整 4×3 ISA/格式网格中比较基线与变换后代
 确定性的 NeverD 语义失败应当成为失败测试。跳过只用于明确的外部能力边界，并应
 阅读 skip 原因：缺少跨目标 linker 的绿色摘要不能证明该格式路径实际运行。
 
+### Solana SBF 差分后端
+
+SBF 元数据测试会验证每个版本特性、操作码冲突边界、Murmur3 syscall hash、重定位、ELF machine、寄存器和 VM 地址常量。Loader fixture 不依赖 vendored 二进制，直接生成旧式 v0-v2 section 布局和无 section 的严格 v3/v4 program-header 布局。
+
+`NeverDSBFSemanticTests` 直接执行已验证的指令字节而不消费 MedIR，因此修改或破坏规范化 IR 不会让源 oracle 与后端意外达成一致。覆盖范围包括非单调的 v2 语义、内存、syscall、内部调用帧、fault、trace 和资源限制。LLVM module 会被验证；生成的 C 以 warnings-as-errors 编译，Rust 使用 `-D warnings`。公共 API 测试从生成的严格 SBF ELF 出发，遍历所有 IR 阶段、反汇编、CFG、元数据、LLVM、C 与 Rust。
+
 ## 一次性目标
 
 自定义目标会构建其依赖，然后以主机 CPU 推导的并行度运行 CTest：
@@ -88,6 +96,7 @@ backend），随后在完整 4×3 ISA/格式网格中比较基线与变换后代
 |------------|----------|
 | `check-neverd` | 所有已注册测试 |
 | `check-neverd-semantic` | 仅 `NeverDSemanticTests` |
+| `check-neverd-sbf` | 所有 `NeverDSBF*Tests` 目标/用例 |
 | `check-neverd-patch-full` | 仅 `NeverDPatchFullTests` |
 | `check-neverd-switch-xform` | 仅 `NeverDSwitchXformTests` |
 | `check-neverd-cfgloop-xform` | 仅 `NeverDCFGLoopXformTests` |
@@ -96,6 +105,7 @@ backend），随后在完整 4×3 ISA/格式网格中比较基线与变换后代
 ```bash
 cmake --build build-release --target check-neverd
 cmake --build build-release --target check-neverd-semantic
+cmake --build build-release --target check-neverd-sbf
 ```
 
 `NeverDIndCallXformTests` 与 `NeverDAvxUpperXformTests` 当前没有
@@ -122,6 +132,14 @@ ctest --test-dir build-release --build-config Release \
 cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
+
+# 所有聚焦的 Solana SBF 目标/用例
+cmake --build build-release --target \
+  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
+  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
+  NeverDSBFIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'SBF' --output-on-failure --parallel 4
 ```
 
 用 GoogleTest 派生的 CTest 名称运行单个回归：
@@ -161,6 +179,7 @@ GoogleTest 发现使用 `DISCOVERY_MODE PRE_TEST`，因此 CTest 枚举前必须
 | 重写 codegen 或输出重定位 | `RewriteCodegenRTTests` 用例 | `NeverDPatchFullTests` 及存在时的已链接 patch fixture |
 | patch 使用的 LLVM IR 变换 | 聚焦变换二进制 | `NeverDPatchFullTests` 组合 pass 网格 |
 | C API 或 CLI | 直接 SDK/query 测试与 `unittests/semantic/CLIEndToEndTests.cpp` | 相关 pipeline/格式套件 |
+| SBF loader、ISA、IR 或后端 | 最小的所属 `NeverDSBF*Tests` 目标 | 所有 SBF 目标，以及生成 C/Rust 的编译检查 |
 | Libc 识别 | `NeverDLibCTests` | 行为变化时的语义 call/ABI 用例 |
 | 进程执行或 quoting | `NeverDTestProcessTests` | 每个受支持主机上的一个受影响 CLI/语义用例 |
 

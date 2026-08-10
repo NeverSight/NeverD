@@ -48,6 +48,8 @@ Programmes **Solana eBPF / SBF** avec la même sémantique strict.
 
 - Loader SBF · lifter eBPF/SBF 1:1 · Account/CPI · même pipeline · API unifiée
 
+**État :** La prise en charge des contrats Anza `sbpf` v0-v4 actuels est terminée. L’implémentation couvre les anciens ELF à sections/relocations et les ELF stricts reposant uniquement sur les program headers, une base d’instructions versionnée complète, une vérification stricte, les IR Low/Med/High par étapes, les observations syscall/CPI/account, LLVM vérifié, du C11 portable, du Rust stable sûr, l’intégration CLI/C API et un oracle sémantique indépendant et borné pour le bytecode brut. v4 suit l’upstream ; son déploiement ou son exécution sur un cluster donné dépend toujours de l’activation des fonctionnalités de ce cluster. Voir [Décompilation Solana SBF](../sbf.fr.md).
+
 ### Pourquoi Solana eBPF
 
 - Cible d’audit majeure · ISA type BPF adaptée au MedIR · un seul SDK C
@@ -67,11 +69,11 @@ Programmes **Solana eBPF / SBF** avec la même sémantique strict.
 
 ## Calendrier
 
-EVM et Solana restent en recherche / conception ; la complétude des formats natifs est terminée et couverte par des tests de régression. Pas de dates promises.
+La décompilation Solana SBF et la complétude des formats natifs sont terminées et couvertes par des tests de régression. EVM reste en recherche / conception. Pas de dates promises.
 
 | Fonctionnalité | Statut |
 |----------------|--------|
 | Complétude formats natifs (PE ARM*, Mach-O i386) | Terminée |
 | Décompilation EVM | Recherche / conception |
-| Décompilation Solana eBPF (SBF) | Recherche / conception |
+| Décompilation Solana eBPF (SBF) | Terminée — v0-v4, C, Rust et LLVM ; couverte par régression |
 | Renforcement moteur & produit | Continu |

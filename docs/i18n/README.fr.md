@@ -11,12 +11,12 @@
 
 **Le moteur d’analyse et de décompilation AI-friendly — lift 1:1, basé sur LLVM**
 
-PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbsp; SDK C pur
+PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · SBF &nbsp;|&nbsp; SDK C pur
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#construction)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O-informational.svg)](#cibles-prises-en-charge)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#cibles-prises-en-charge)
+[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20SBF-informational.svg)](#cibles-prises-en-charge)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20SBF-orange.svg)](#cibles-prises-en-charge)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-et-plugins)
 
 [Documentation](../README.fr.md) · [Feuille de route](../roadmap/README.fr.md) · [Contribution](CONTRIBUTING.fr.md)
@@ -29,19 +29,19 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## Vue d’ensemble
 
-NeverD est un moteur d’analyse et de décompilation de binaires natifs centré sur le **lifting d’instructions 1:1**. Il charge **PE**, **ELF** et **Mach-O**, décode avec [Capstone](https://www.capstone-engine.org/), puis les traite au moyen de quatre représentations IR et de **sémantiques écrites à la main** — pas une traduction approximative. L’objectif est une **fidélité sémantique à 100 %** : les instructions supportées conservent leur comportement observable complet en **LLVM IR**, **C structuré**, ou **binaire réécrit**.
+NeverD est un moteur d’analyse et de décompilation de binaires natifs et de smart contracts centré sur le **lifting d’instructions 1:1**. Il charge **PE**, **ELF**, **Mach-O** et les programmes Solana **SBF ELF**. Les cibles natives sont décodées avec [Capstone](https://www.capstone-engine.org/) ; SBF utilise un decoder dédié sensible à la version et un IR par étapes. Tous les parcours emploient des sémantiques écrites à la main plutôt qu’une traduction approximative. Les instructions prises en charge conservent leur comportement en **LLVM IR**, **C structuré**, **Rust stable sûr pour SBF**, ou dans un **binaire natif réécrit**.
 
 Le mode strict est **activé par défaut**. Une instruction sans lifter lève `UnliftedInstruction` au lieu de sauter, deviner, ou émettre un `NOP` silencieux.
 
 CLI, intégrateurs et agents IA utilisent un seul moteur — **`libneverd`** — via une **API C pure**. Ils ne lient pas Capstone, LLVM, ni le C++ interne directement.
 
-Les prochaines versions ajouteront la décompilation [EVM](../roadmap/README.fr.md#2-décompilation-bytecode-evm) et [Solana eBPF / SBF](../roadmap/README.fr.md#3-décompilation-solana-ebpf-sbf) sur la même pile IR — voir la [feuille de route](../roadmap/README.fr.md).
+La décompilation Solana SBF est disponible ; consultez le [guide SBF](../sbf.fr.md). Les autres cibles et travaux de durcissement sont suivis dans la [feuille de route](../roadmap/README.fr.md).
 
 ## Pourquoi NeverD ?
 
 - **Sémantique 1:1** — lifters manuscrits ; opcodes non supportés lèvent une exception en mode strict par défaut
 - **Compatible LLM** — C structuré, LLVM IR et analyse JSON via une API C pure, avec des erreurs déterministes
-- **Un pipeline, trois sorties** — `lift` → LLVM IR · `decompile` → C · `patch` → binaire réécrit
+- **Un pipeline, plusieurs sorties** — `lift` → LLVM IR · `decompile` → C/Rust · `patch` → binaire natif réécrit
 - **Réécriture binaire** — PE / ELF / Mach-O, trampolines de section ou écrasement inplace
 - **Boîte à outils d’analyse** — CLI, infos de debug, signatures, plugins, et passes d’obfuscation optionnelles
 
@@ -54,6 +54,10 @@ Les prochaines versions ajouteront la décompilation [EVM](../roadmap/README.fr.
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > Chaque cellule de la matrice est implémentée, mais la profondeur des tests d’intégration varie. Consultez la [matrice de couverture de l’architecture](../architecture.fr.md#support-and-test-depth). Mach-O i386 utilise des objets relogeables `thin`, car macOS moderne ne peut pas lier les anciens exécutables i386.
+
+Les programmes Solana SBF v0-v4 ELF utilisent un loader strict dédié, des
+métadonnées ISA versionnées complètes, Low/Med/High IR, LLVM vérifié, C11
+portable et Rust stable sûr. Voir la [décompilation Solana SBF](../sbf.fr.md).
 
 ## Fonctionnement
 
@@ -68,6 +72,12 @@ Binary (PE / ELF / Mach-O)
        ├─ decompile   MedIR → HighIR → C
        │              MedIR → LLVM IR → opt → C   (-llvm)
        └─ patch       MedIR → LLVM IR → codegen → binary
+
+Solana SBF ELF (v0-v4)
+  → loader legacy/strict sensible à la version + verifier
+  → SBF LowIR → MedIR normalisé → SBF HighIR récupéré
+       ├─ lift        → ABI runtime LLVM i64 vérifiée
+       └─ decompile   → C11 portable ou Rust stable sûr
 ```
 
 | Étape | Rôle |
@@ -88,6 +98,12 @@ cmake --build build
 ./build/bin/neverd lift -o out.ll binary
 ./build/bin/neverd decompile -o out.c binary
 ./build/bin/neverd patch -hello -o patched binary
+
+# Solana SBF
+./build/bin/neverd info program.so
+./build/bin/neverd lift program.so -o program.ll
+./build/bin/neverd decompile --language=c program.so -o program.c
+./build/bin/neverd decompile --language=rust program.so -o program.rs
 
 # Analyse
 ./build/bin/neverd funcs binary
@@ -170,7 +186,7 @@ neverd <command> [options] <binary>
 | Commande | Sortie | Description |
 |----------|--------|-------------|
 | `lift` | `.ll` | Lever vers LLVM IR |
-| `decompile` | `.c` | C structuré (HighIR) |
+| `decompile` | `.c` / `.rs` | C ou Rust SBF choisi avec `--language` |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimiseur |
 | `patch` | binaire | Réécrire le code machine |
 

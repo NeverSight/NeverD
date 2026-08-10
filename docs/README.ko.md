@@ -12,6 +12,7 @@
 | [기여 가이드](i18n/CONTRIBUTING.ko.md) | 개발 환경, 빌드 프로필, 워크플로, 스타일, PR 요구 사항 |
 | [아키텍처](architecture.ko.md) | IR 경로, 구성 요소 경계, strict lifting, 지원 깊이, 수정 위치 |
 | [테스트](testing.ko.md) | 테스트 스위트, 생성 fixture, Unicorn 왕복, 증분 명령 |
-| [로드맵](roadmap/README.ko.md) | 계획: EVM / Solana eBPF 디컴파일, 포맷 완성 |
+| [Solana SBF 디컴파일](sbf.ko.md) | SBF v0-v4, LLVM IR, C/Rust 출력, 검증 및 알려진 제한 사항 |
+| [로드맵](roadmap/README.ko.md) | 현재 상태, 향후 목표 및 네이티브 포맷 완성 계획 |
 | [English README](../README.md) | 영어 버전 |
 | [기타 언어 README](i18n/) | 나머지 현지화 버전 |

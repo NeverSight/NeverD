@@ -12,6 +12,7 @@ La visión general, la compilación y el CLI están en el README del repositorio
 | [Contribución](i18n/CONTRIBUTING.es.md) | Entorno, perfiles de compilación, flujo, estilo y requisitos de PR |
 | [Arquitectura](architecture.es.md) | Rutas IR, límites de componentes, lifting estricto, profundidad de soporte y puntos de edición |
 | [Pruebas](testing.es.md) | Suites, fixtures generadas, recorridos Unicorn y comandos incrementales |
-| [Hoja de ruta](roadmap/README.es.md) | Plan: descompilación EVM / Solana eBPF, formatos nativos |
+| [Descompilación de Solana SBF](sbf.es.md) | SBF v0-v4, LLVM IR, salida C/Rust, verificación y límites conocidos |
+| [Hoja de ruta](roadmap/README.es.md) | Estado actual, próximos objetivos y finalización de formatos nativos |
 | [English README](../README.md) | Versión en inglés |
 | [Otros idiomas](i18n/) | Resto de versiones localizadas |

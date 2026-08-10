@@ -41,13 +41,15 @@ cmake --build build-release --parallel 4
 | `unittests/libc` | `NeverDLibCTests` | أسماء libc المعروفة وتصنيفها |
 | `unittests/lift` | `NeverDLiftTests` | أشكال LowIR لـ decoder/lifter، ومراحل IR، وloader، وrelocation، وfixtures الصيغ، وإعادة التجميع، ومسارات patch الممثلة |
 | معظم ملفات `unittests/semantic` | `NeverDSemanticTests` | دلالات تفاضلية للتعليمات وABI والتحكم وتعابير C وlift/recompile |
+| `unittests/sbf` | `NeverDSBFMetadataTests` و`NeverDSBFLoaderTests` و`NeverDSBFAnalyzerTests` و`NeverDSBFSemanticTests` و`NeverDSBFLLVMEmitterTests` و`NeverDSBFEmitterTests` و`NeverDSBFIntegrationTests` | بيانات v0-v4 الوصفية وتخطيطات ELF، والتحقق الصارم، وCFG/الاستعادة، والتنفيذ الخام المستقل، والتحقق من LLVM، وتجميع C/Rust، وتوجيه API العامة |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | تكافؤ إعادة الكتابة/التشويش عبر أربع ISA وثلاث صيغ كائنات |
 | ملفات التحويل المحددة في `unittests/semantic` | `NeverDSwitchXformTests` و`NeverDIndCallXformTests` و`NeverDCFGLoopXformTests` و`NeverDTwoTableXformTests` و`NeverDAvxUpperXformTests` | مجسات سريعة الربط منفصلة عن الثنائي الدلالي الكبير |
 
 مصادر التسجيل الموثوقة هي
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt) و
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) و
-[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt).
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) و
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
 ## كيفية إنتاج fixtures
 
@@ -84,6 +86,12 @@ PE/COFF وصورًا مرتبطة، وكائنات Mach-O i386 ‏PIC/no-PIC. ع
 يجب أن يكون فشل NeverD الدلالي الحتمي اختبارًا فاشلًا. احصر skips في حدود قدرة
 خارجية صريحة واقرأ سببها: لا يثبت ملخص أخضر بلا cross-linker أن مسار الصيغة نُفذ.
 
+### واجهات Solana SBF الخلفية التفاضلية
+
+تتحقق اختبارات بيانات SBF الوصفية من كل ميزة مرتبطة بالإصدار، وحدود تصادم opcodes، وhash ‏Murmur3 لـ syscall، وrelocations، وثوابت ELF machine والسجلات وعناوين VM. تولّد fixtures الخاصة بالـ loader، من دون ثنائيات مضمّنة، تخطيطات sections القديمة لـ v0-v2 وتخطيطات v3/v4 الصارمة الخالية من sections والمعتمدة على program headers.
+
+ينفّذ `NeverDSBFSemanticTests` بايتات التعليمات المتحقق منها مباشرة ولا يستهلك MedIR، لذلك لا يمكن لتغيير IR المطبّع أو إفساده أن يجعل oracle المصدر يتفق مصادفةً مع backend. ويغطي دلالات v2 غير الرتيبة، والذاكرة، وsyscalls، وإطارات الاستدعاء الداخلية، وfaults، وtraces، وحدود الموارد. يجري التحقق من وحدات LLVM؛ ويُجمّع C المولد مع اعتبار warnings أخطاء، وRust مع `-D warnings`. تمر اختبارات API العامة عبر جميع مراحل IR والتفكيك وCFG والبيانات الوصفية وLLVM وC وRust بدءًا من ملف SBF ELF صارم مولد.
+
 ## أهداف بأمر واحد
 
 تبني الأهداف المخصصة تبعياتها ثم تشغّل CTest بتوازٍ مشتق من CPU المضيف:
@@ -92,6 +100,7 @@ PE/COFF وصورًا مرتبطة، وكائنات Mach-O i386 ‏PIC/no-PIC. ع
 |-----------|----------|
 | `check-neverd` | كل الاختبارات المسجلة |
 | `check-neverd-semantic` | `NeverDSemanticTests` فقط |
+| `check-neverd-sbf` | جميع أهداف/حالات `NeverDSBF*Tests` |
 | `check-neverd-patch-full` | `NeverDPatchFullTests` فقط |
 | `check-neverd-switch-xform` | `NeverDSwitchXformTests` فقط |
 | `check-neverd-cfgloop-xform` | `NeverDCFGLoopXformTests` فقط |
@@ -100,6 +109,7 @@ PE/COFF وصورًا مرتبطة، وكائنات Mach-O i386 ‏PIC/no-PIC. ع
 ```bash
 cmake --build build-release --target check-neverd
 cmake --build build-release --target check-neverd-semantic
+cmake --build build-release --target check-neverd-sbf
 ```
 
 لا يملك `NeverDIndCallXformTests` و`NeverDAvxUpperXformTests` حاليًا هدف راحة
@@ -127,6 +137,14 @@ ctest --test-dir build-release --build-config Release \
 cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
+
+# جميع أهداف/حالات Solana SBF المحددة
+cmake --build build-release --target \
+  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
+  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
+  NeverDSBFIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'SBF' --output-on-failure --parallel 4
 ```
 
 استخدم اسم CTest مشتقًا من GoogleTest لانحدار واحد:
@@ -166,6 +184,7 @@ ctest --test-dir build-release --build-config Release \
 | Rewrite codegen أو relocation الإخراج | حالات `RewriteCodegenRTTests` | `NeverDPatchFullTests` وfixture ‏patch مرتبطة عند توفرها |
 | تحويل LLVM IR يستخدمه patch | ثنائي التحويل المحدد | شبكة pass المركبة لـ `NeverDPatchFullTests` |
 | C API أو CLI | اختبار SDK/query مباشر و`unittests/semantic/CLIEndToEndTests.cpp` | مجموعة pipeline/صيغة ذات الصلة |
+| ‏SBF loader أو ISA أو IR أو backend | أصغر هدف مالك من `NeverDSBF*Tests` | جميع أهداف SBF مع فحوص تجميع C/Rust المولدين |
 | تعرف libc | `NeverDLibCTests` | حالات call/ABI دلالية إذا تغير السلوك |
 | تنفيذ العمليات أو quoting | `NeverDTestProcessTests` | حالة CLI/دلالية متأثرة على كل مضيف مدعوم |
 

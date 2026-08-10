@@ -45,13 +45,15 @@ gefundenen Fall ein CTest-Label mit dem Namen dieses Executable-Targets zu.
 | `unittests/libc` | `NeverDLibCTests` | Bekannte libc-Namen und Klassifizierung |
 | `unittests/lift` | `NeverDLiftTests` | Decoder-/Lifter-LowIR-Formen, IR-Stufen, Loader, Relokationen, Format-Fixtures, Dekompilierung und repräsentative Patch-Flows |
 | Die meisten Dateien in `unittests/semantic` | `NeverDSemanticTests` | Differentielle Semantik von Instruktionen, ABI, Kontrollfluss, C-Ausdrücken und Lift/Recompile |
+| `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4-Metadaten und ELF-Layouts, strikte Verifikation, CFG/Recovery, unabhängige Raw-Ausführung, LLVM-Verifikation, C-/Rust-Kompilierung und Routing der öffentlichen API |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Rewrite-/Obfuskationsäquivalenz über vier ISAs und drei Objektformate |
 | Fokussierte Transformationsdateien in `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Schnell relinkbare Sonden außerhalb des großen Semantikprogramms |
 
 Die Registrierungsquellen sind
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) und
-[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt).
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) und
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
 ## Erzeugung der Fixtures
 
@@ -93,6 +95,12 @@ Skips sind expliziten externen Fähigkeitsgrenzen vorbehalten; lesen Sie die
 Begründung. Eine grüne Zusammenfassung ohne Cross-Linker beweist nicht, dass der
 Formatpfad lief.
 
+### Differentielle Solana-SBF-Backends
+
+Die SBF-Metadatentests prüfen jedes Versionsmerkmal, Opcode-Kollisionsgrenzen, Murmur3-Syscall-Hashes, Relokationen, ELF-Machine-, Register- und VM-Adresskonstanten. Loader-Fixtures erzeugen ohne eingebundene Binärdateien sowohl ältere v0-v2-Section-Layouts als auch sectionlose, strikte v3/v4-Program-Header-Layouts.
+
+`NeverDSBFSemanticTests` führt verifizierte Instruktionsbytes direkt aus und verwendet kein MedIR. Eine Änderung oder Beschädigung der normalisierten IR kann daher nicht versehentlich dazu führen, dass Source-Oracle und Backend übereinstimmen. Abgedeckt werden nicht-monotone v2-Semantik, Speicher, Syscalls, interne Call-Frames, Faults, Traces und Ressourcenlimits. LLVM-Module werden verifiziert; generiertes C wird mit Warnungen als Fehler und Rust mit `-D warnings` kompiliert. Tests der öffentlichen API durchlaufen ausgehend von einem generierten strikten SBF-ELF alle IR-Stufen, Disassembly, CFG, Metadaten, LLVM, C und Rust.
+
 ## Einmalziele
 
 Benutzerdefinierte Targets bauen ihre Abhängigkeiten und starten dann CTest mit
@@ -102,6 +110,7 @@ aus der Host-CPU abgeleiteter Parallelität:
 |--------------|---------|
 | `check-neverd` | Alle registrierten Tests |
 | `check-neverd-semantic` | Nur `NeverDSemanticTests` |
+| `check-neverd-sbf` | Alle `NeverDSBF*Tests`-Targets/-Fälle |
 | `check-neverd-patch-full` | Nur `NeverDPatchFullTests` |
 | `check-neverd-switch-xform` | Nur `NeverDSwitchXformTests` |
 | `check-neverd-cfgloop-xform` | Nur `NeverDCFGLoopXformTests` |
@@ -110,6 +119,7 @@ aus der Host-CPU abgeleiteter Parallelität:
 ```bash
 cmake --build build-release --target check-neverd
 cmake --build build-release --target check-neverd-semantic
+cmake --build build-release --target check-neverd-sbf
 ```
 
 `NeverDIndCallXformTests` und `NeverDAvxUpperXformTests` haben derzeit kein
@@ -138,6 +148,14 @@ ctest --test-dir build-release --build-config Release \
 cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
+
+# Alle fokussierten Solana-SBF-Targets/-Fälle
+cmake --build build-release --target \
+  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
+  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
+  NeverDSBFIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'SBF' --output-on-failure --parallel 4
 ```
 
 Verwenden Sie einen aus GoogleTest abgeleiteten CTest-Namen für eine einzelne
@@ -179,6 +197,7 @@ mit gemessenen schweren Fällen erweitert werden.
 | Rewrite-Codegen oder Ausgaberelokation | `RewriteCodegenRTTests`-Fälle | `NeverDPatchFullTests` und gelinktes Patch-Fixture, falls verfügbar |
 | Von Patch genutzte LLVM-IR-Transformation | Fokussiertes Transformationsprogramm | Kombiniertes Pass-Raster `NeverDPatchFullTests` |
 | C-API oder CLI | Direkter SDK-/Query-Test und `unittests/semantic/CLIEndToEndTests.cpp` | Relevante Pipeline-/Formatsuite |
+| SBF-Loader, ISA, IR oder Backend | Kleinstes zuständiges `NeverDSBF*Tests`-Target | Alle SBF-Targets plus Kompilierung des generierten C/Rust |
 | Libc-Erkennung | `NeverDLibCTests` | Semantische Call-/ABI-Fälle bei Verhaltensänderung |
 | Prozessausführung oder Quoting | `NeverDTestProcessTests` | Ein betroffener CLI-/Semantikfall je unterstütztem Host |
 

@@ -48,6 +48,8 @@ Ziele abschließen, die Loader schon teilweise erkennen.
 
 - SBF-Loader · 1:1-eBPF/SBF-Lifter · Account/CPI · gleiche Pipeline · einheitliche API
 
+**Status:** Die Unterstützung für die aktuellen Anza-`sbpf`-Verträge v0-v4 ist abgeschlossen. Implementiert sind ältere Section-/Relocation-ELFs und strikte Program-Header-only-ELFs, eine vollständige versionierte Instruktionsdatenbank, strikte Verifikation, gestufte Low/Med/High IR, Syscall-/CPI-/Account-Beobachtungen, verifiziertes LLVM, portables C11, sicheres stabiles Rust, CLI-/C-API-Integration sowie ein unabhängiges, begrenztes semantisches Raw-Bytecode-Oracle. v4 wird gemäß Upstream nachgeführt; ob es auf einem bestimmten Cluster deployt oder ausgeführt werden kann, hängt weiterhin von dessen Feature-Aktivierung ab. Siehe [Solana-SBF-Dekompilation](../sbf.de.md).
+
 ### Warum Solana eBPF
 
 - Wichtiges Audit-Ziel · BPF-ISA passt zu MedIR · ein C-SDK
@@ -67,11 +69,11 @@ Ziele abschließen, die Loader schon teilweise erkennen.
 
 ## Zeitplan
 
-EVM und Solana bleiben in Forschung / Design; die native Formatvollständigkeit ist abgeschlossen und regressionstestgedeckt. Keine Termine zugesagt.
+Solana-SBF-Dekompilation und native Formatvollständigkeit sind abgeschlossen und regressionstestgedeckt. EVM bleibt in Forschung / Design. Keine Termine zugesagt.
 
 | Feature | Status |
 |---------|--------|
 | Native Formatvollständigkeit (PE ARM*, Mach-O i386) | Abgeschlossen |
 | EVM-Bytecode-Dekompilation | Forschung / Design |
-| Solana-eBPF-(SBF)-Dekompilation | Forschung / Design |
+| Solana-eBPF-(SBF)-Dekompilation | Abgeschlossen — v0-v4, C, Rust und LLVM; regressionstestgedeckt |
 | Engine- & Produkt-Härtung | Laufend |

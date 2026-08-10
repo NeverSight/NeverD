@@ -60,6 +60,8 @@
 - **CFG 與結構化輸出** — 與原生相同管線
 - **CLI / C API** — 統一的 session 入口
 
+**狀態：** 目前 Anza `sbpf` v0-v4 合約支援已完成。實作支援舊式 section/relocation ELF 與嚴格的僅 program-header ELF、完整的版本化指令資料庫、嚴格驗證、分階段 Low/Med/High IR、syscall/CPI/account 觀察、已驗證的 LLVM、可攜式 C11、安全的穩定版 Rust、CLI/C API 整合，以及獨立且有界的原始位元組碼語意 oracle。v4 會跟隨上游維護；能否在特定叢集部署或執行仍取決於該叢集的 feature activation。詳見 [Solana SBF 反編譯](../sbf.zh-TW.md)。
+
 ### 為什麼做 Solana eBPF？
 
 - 鏈上 SBF 與 EVM 同為重要稽核目標
@@ -81,11 +83,11 @@
 
 ## 時間線
 
-EVM 與 Solana 仍處於研究與設計階段；原生格式補齊已完成並有迴歸測試覆蓋。不承諾具體發布日期；進展將在此文件追蹤。
+Solana SBF 反編譯與原生格式補齊已完成，並有迴歸測試覆蓋。EVM 仍處於研究與設計階段。不承諾具體發布日期；進展將在此文件追蹤。
 
 | 功能 | 狀態 |
 |------|------|
 | 原生格式補齊（PE ARM*、Mach-O i386） | 已完成 |
 | EVM 位元組碼反編譯 | 研究 / 設計 |
-| Solana eBPF（SBF）反編譯 | 研究 / 設計 |
+| Solana eBPF（SBF）反編譯 | 已完成 — v0-v4、C、Rust 與 LLVM；有迴歸測試覆蓋 |
 | 引擎與產品加固 | 持續進行 |

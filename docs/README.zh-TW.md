@@ -12,6 +12,7 @@
 | [貢獻指南](i18n/CONTRIBUTING.zh-TW.md) | 開發環境、建置設定、工作流程、風格與 PR 要求 |
 | [架構](architecture.zh-TW.md) | IR 路徑、元件邊界、嚴格提升、支援深度與修改位置 |
 | [測試](testing.zh-TW.md) | 測試套件、產生的 fixture、Unicorn 往返與增量命令 |
-| [路線圖](roadmap/README.zh-TW.md) | 規劃：EVM / Solana eBPF 反編譯、原生格式補齊 |
+| [Solana SBF 反編譯](sbf.zh-TW.md) | SBF v0-v4、LLVM IR、C/Rust 輸出、驗證與已知限制 |
+| [路線圖](roadmap/README.zh-TW.md) | 目前狀態、後續目標與原生格式補齊計畫 |
 | [English README](../README.md) | 英文版主文件 |
 | [其他語言 README](i18n/) | 其餘在地化版本 |

@@ -41,13 +41,15 @@ target 이름과 같은 CTest label을 지정합니다.
 | `unittests/libc` | `NeverDLibCTests` | 알려진 libc 이름과 분류 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 모양, IR 단계, loader, relocation, 포맷 fixture, 디컴파일, 대표 patch 흐름 |
 | `unittests/semantic`의 대부분 파일 | `NeverDSemanticTests` | 명령어, ABI, 제어 흐름, C 표현식, lift/recompile 차등 의미론 |
+| `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4 메타데이터와 ELF 레이아웃, 엄격한 검증, CFG/복원, 독립 raw 실행, LLVM 검증, C/Rust 컴파일, 공개 API 라우팅 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 네 ISA×세 object 포맷 재작성/난독화 동등성 |
 | `unittests/semantic`의 집중 변환 파일 | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | 큰 의미론 바이너리에서 분리한 빠른 재링크 probe |
 
 등록의 기준은
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt),
-[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)입니다.
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)입니다.
 
 ## fixture 생성 방식
 
@@ -86,6 +88,12 @@ patch-full fixture는 patch 작업과 같은 rewrite backend인
 경계에만 사용하고 이유를 읽으세요. 교차 linker가 없는 녹색 요약은 해당 포맷 경로가
 실행되었음을 증명하지 않습니다.
 
+### Solana SBF 차등 백엔드
+
+SBF 메타데이터 테스트는 모든 버전 기능, opcode 충돌 경계, Murmur3 syscall hash, 재배치, ELF machine, 레지스터, VM 주소 상수를 검증합니다. Loader fixture는 vendored 바이너리 없이 레거시 v0-v2 section 레이아웃과 section이 없는 엄격한 v3/v4 program-header 레이아웃을 모두 생성합니다.
+
+`NeverDSBFSemanticTests`는 검증된 명령 바이트를 직접 실행하고 MedIR을 사용하지 않으므로, 정규화된 IR을 변경하거나 손상해도 source oracle과 backend가 우연히 일치할 수 없습니다. 비단조 v2 시맨틱, 메모리, syscall, 내부 call frame, fault, trace, resource limit을 다룹니다. LLVM module은 검증하며, 생성 C는 warning을 error로 처리하고 Rust는 `-D warnings`로 컴파일합니다. 공개 API 테스트는 생성된 엄격한 SBF ELF에서 모든 IR 단계, 디스어셈블리, CFG, 메타데이터, LLVM, C, Rust를 통과합니다.
+
 ## 일회성 target
 
 custom target은 의존성을 빌드한 뒤 host CPU에서 정한 병렬도로 CTest를 실행합니다.
@@ -94,6 +102,7 @@ custom target은 의존성을 빌드한 뒤 host CPU에서 정한 병렬도로 C
 |--------------|-----------|
 | `check-neverd` | 등록된 모든 테스트 |
 | `check-neverd-semantic` | `NeverDSemanticTests`만 |
+| `check-neverd-sbf` | 모든 `NeverDSBF*Tests` target/case |
 | `check-neverd-patch-full` | `NeverDPatchFullTests`만 |
 | `check-neverd-switch-xform` | `NeverDSwitchXformTests`만 |
 | `check-neverd-cfgloop-xform` | `NeverDCFGLoopXformTests`만 |
@@ -102,6 +111,7 @@ custom target은 의존성을 빌드한 뒤 host CPU에서 정한 병렬도로 C
 ```bash
 cmake --build build-release --target check-neverd
 cmake --build build-release --target check-neverd-semantic
+cmake --build build-release --target check-neverd-sbf
 ```
 
 `NeverDIndCallXformTests`와 `NeverDAvxUpperXformTests`에는 현재
@@ -129,6 +139,14 @@ ctest --test-dir build-release --build-config Release \
 cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
+
+# 모든 집중 Solana SBF target/case
+cmake --build build-release --target \
+  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
+  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
+  NeverDSBFIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'SBF' --output-on-failure --parallel 4
 ```
 
 GoogleTest에서 파생된 CTest 이름으로 단일 회귀를 실행합니다.
@@ -168,6 +186,7 @@ GoogleTest discovery는 `DISCOVERY_MODE PRE_TEST`를 사용하므로 CTest가 �
 | Rewrite codegen 또는 출력 relocation | `RewriteCodegenRTTests` 사례 | `NeverDPatchFullTests` 및 가능한 링크된 patch fixture |
 | patch가 쓰는 LLVM IR 변환 | 집중 변환 바이너리 | `NeverDPatchFullTests` 조합 pass grid |
 | C API 또는 CLI | 직접 SDK/query 테스트 및 `unittests/semantic/CLIEndToEndTests.cpp` | 관련 pipeline/포맷 스위트 |
+| SBF loader, ISA, IR 또는 backend | 가장 작은 소유 `NeverDSBF*Tests` target | 모든 SBF target과 생성 C/Rust 컴파일 검사 |
 | Libc 인식 | `NeverDLibCTests` | 동작 변경 시 의미론 call/ABI 사례 |
 | 프로세스 실행 또는 quoting | `NeverDTestProcessTests` | 지원 host마다 영향받는 CLI/의미론 사례 하나 |
 

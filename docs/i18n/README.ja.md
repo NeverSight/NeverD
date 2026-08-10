@@ -11,12 +11,12 @@
 
 **AI フレンドリーなバイナリ分析・逆コンパイルエンジン — 1:1 リフト、LLVM 上に構築**
 
-PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbsp; 純粋 C SDK
+PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · SBF &nbsp;|&nbsp; 純粋 C SDK
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#ビルド)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O-informational.svg)](#対応ターゲット)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#対応ターゲット)
+[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20SBF-informational.svg)](#対応ターゲット)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20SBF-orange.svg)](#対応ターゲット)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-とプラグイン)
 
 [ドキュメント](../README.ja.md) · [ロードマップ](../roadmap/README.ja.md) · [貢献](CONTRIBUTING.ja.md)
@@ -29,19 +29,19 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## 概要
 
-NeverD は **1:1 の命令レベルリフト** を中核とするネイティブバイナリ分析・逆コンパイルエンジンです。**PE**、**ELF**、**Mach-O** を読み込み、[Capstone](https://www.capstone-engine.org/) でデコードし、4 つの IR 表現と **手書きセマンティクス** で処理します——近似変換ではありません。目標は **100% の意味論的忠実性**：サポート済み命令を **LLVM IR**、**構造化 C**、または **書き換え済みバイナリ** で完全な観測可能振る舞いまま保つことです。
+NeverD は **1:1 の命令レベルリフト** を中核とするネイティブバイナリおよびスマートコントラクト解析・逆コンパイルエンジンです。**PE**、**ELF**、**Mach-O** と Solana **SBF ELF** program を読み込みます。native target は [Capstone](https://www.capstone-engine.org/) で decode し、SBF は専用の version-aware decoder と staged IR を使います。すべての経路は近似変換ではなく hand-written semantics を使用します。対応 instruction は **LLVM IR**、**構造化 C**、**SBF 向けの安全な stable Rust**、または native の**書き換え済み binary**で observable behavior を保持します。
 
 **strict はデフォルト ON**。lifter がない命令は `UnliftedInstruction` を送出し、スキップ・推測・黙っての `NOP` 化はしません。
 
 CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエンジン **`libneverd`** を使い、Capstone・LLVM・内部 C++ には直接リンクしません。
 
-今後のリリースでは、同じ IR スタック上に [EVM](../roadmap/README.ja.md#2-evm-バイトコード逆コンパイル) と [Solana eBPF / SBF](../roadmap/README.ja.md#3-solana-ebpfsbf逆コンパイル) の逆コンパイルを追加します — [ロードマップ](../roadmap/README.ja.md) を参照。
+Solana SBF 逆コンパイルは利用可能です。[SBF ガイド](../sbf.ja.md)を参照してください。その他の target と hardening は[ロードマップ](../roadmap/README.ja.md)で追跡します。
 
 ## なぜ NeverD？
 
 - **1:1 セマンティクス** — 手書き lifter；デフォルト strict では未対応命令が例外を送出
 - **LLM フレンドリー** — 構造化 C・LLVM IR・JSON 分析を純粋 C API で公開し、エラーは決定的
-- **1 本のパイプライン、3 つの出口** — `lift` → LLVM IR · `decompile` → C · `patch` → 書き換えバイナリ
+- **1 本のパイプライン、複数の出口** — `lift` → LLVM IR · `decompile` → C/Rust · `patch` → ネイティブバイナリ書き換え
 - **バイナリ書き換え** — PE / ELF / Mach-O、section トランポリンまたは inplace
 - **分析ツール群** — CLI、デバッグ情報、シグネチャ、プラグイン、任意の難読化パス
 
@@ -54,6 +54,10 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](../architecture.ja.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
+
+Solana SBF v0-v4 ELF プログラムは専用 strict loader、完全なバージョン別 ISA
+metadata、Low/Med/High IR、検証済み LLVM、portable C11、安全な stable Rust を
+使用します。[Solana SBF 逆コンパイル](../sbf.ja.md)を参照してください。
 
 ## 仕組み
 
@@ -68,6 +72,12 @@ Binary (PE / ELF / Mach-O)
        ├─ decompile   MedIR → HighIR → C
        │              MedIR → LLVM IR → opt → C   (-llvm)
        └─ patch       MedIR → LLVM IR → codegen → binary
+
+Solana SBF ELF (v0-v4)
+  → バージョン対応 legacy/strict loader + verifier
+  → SBF LowIR → 正規化 MedIR → 復元 SBF HighIR
+       ├─ lift        → 検証済み LLVM i64 runtime ABI
+       └─ decompile   → portable C11 または安全な stable Rust
 ```
 
 | 段階 | 役割 |
@@ -88,6 +98,12 @@ cmake --build build
 ./build/bin/neverd lift -o out.ll binary
 ./build/bin/neverd decompile -o out.c binary
 ./build/bin/neverd patch -hello -o patched binary
+
+# Solana SBF
+./build/bin/neverd info program.so
+./build/bin/neverd lift program.so -o program.ll
+./build/bin/neverd decompile --language=c program.so -o program.c
+./build/bin/neverd decompile --language=rust program.so -o program.rs
 
 # 分析
 ./build/bin/neverd funcs binary
@@ -170,7 +186,7 @@ neverd <command> [options] <binary>
 | コマンド | 出力 | 説明 |
 |----------|------|------|
 | `lift` | `.ll` | LLVM IR へリフト |
-| `decompile` | `.c` | 構造化 C（HighIR） |
+| `decompile` | `.c` / `.rs` | `--language` で C または SBF Rust を選択 |
 | `decompile -llvm` | `.c` | LLVM IR + 最適化経由 |
 | `patch` | バイナリ | 機械語の書き換え |
 

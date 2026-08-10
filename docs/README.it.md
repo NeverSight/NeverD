@@ -12,6 +12,7 @@ Panoramica, build e CLI sono nel README del repository. I riferimenti di design 
 | [Contribuire](i18n/CONTRIBUTING.it.md) | Ambiente, profili di build, workflow, stile e requisiti PR |
 | [Architettura](architecture.it.md) | Percorsi IR, confini dei componenti, lifting strict, profondità del supporto e punti di modifica |
 | [Test](testing.it.md) | Suite, fixture generate, roundtrip Unicorn e comandi incrementali |
-| [Roadmap](roadmap/README.it.md) | In piano: decompilazione EVM / Solana eBPF, formati nativi |
+| [Decompilazione Solana SBF](sbf.it.md) | SBF v0-v4, LLVM IR, output C/Rust, verifica e limiti noti |
+| [Roadmap](roadmap/README.it.md) | Stato attuale, obiettivi successivi e completamento dei formati nativi |
 | [English README](../README.md) | Versione inglese |
 | [Altre lingue](i18n/) | Altre versioni localizzate |

@@ -11,12 +11,12 @@
 
 **محرك تحليل وإعادة تجميع صديق للذكاء الاصطناعي — رفع 1:1 مبني على LLVM**
 
-PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbsp; SDK بلغة C خالصة
+PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · SBF &nbsp;|&nbsp; SDK بلغة C خالصة
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#البناء)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O-informational.svg)](#الأهداف-المدعومة)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#الأهداف-المدعومة)
+[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20SBF-informational.svg)](#الأهداف-المدعومة)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20SBF-orange.svg)](#الأهداف-المدعومة)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-والإضافات)
 
 [التوثيق](../README.ar.md) · [خارطة الطريق](../roadmap/README.ar.md) · [المساهمة](CONTRIBUTING.ar.md)
@@ -29,19 +29,19 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## نظرة عامة
 
-NeverD محرك تحليل وإعادة تجميع للثنائيات الأصلية مبني حول **رفع التعليمات 1:1**. يحمّل **PE** و**ELF** و**Mach-O**، ويفكّ الشفرة بـ[Capstone](https://www.capstone-engine.org/)، ثم يعالجها باستخدام أربعة تمثيلات IR مع **دلالات مكتوبة يدويًا** — وليس ترجمة تقريبية. الهدف **وفاء دلالي 100%**: التعليمات المدعومة تحافظ على سلوكها القابل للرصد كاملًا في **LLVM IR** أو **C منظّم** أو **ثنائي معاد كتابته**.
+NeverD محرك تحليل وفك ترجمة للثنائيات الأصلية والعقود الذكية مبني حول **رفع التعليمات 1:1**. يحمّل **PE** و**ELF** و**Mach-O** وبرامج Solana **SBF ELF**. تفك الأهداف الأصلية بواسطة [Capstone](https://www.capstone-engine.org/)، بينما يستخدم SBF decoder مخصصاً واعياً بالإصدار وIR مرحلياً. تستخدم كل المسارات دلالات مكتوبة يدوياً لا ترجمة تقريبية. تحافظ التعليمات المدعومة على السلوك في **LLVM IR** أو **C منظّم** أو **Rust مستقر وآمن لـSBF** أو **ثنائي أصلي معاد كتابته**.
 
 وضع strict **مفعّل افتراضيًا**. تعليمة بلا lifter ترمي `UnliftedInstruction` بدل التخطي أو التخمين أو إصدار `NOP` صامت.
 
 CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخدمون محركًا واحدًا — **`libneverd`** — عبر **واجهة C خالصة**. لا يربطون Capstone أو LLVM أو C++ الداخلي مباشرة.
 
-ستضيف الإصدارات القادمة إعادة تجميع [EVM](../roadmap/README.ar.md#2-إعادة-تجميع-بايتكود-evm) و[Solana eBPF / SBF](../roadmap/README.ar.md#3-إعادة-تجميع-solana-ebpf-sbf) على نفس مكدس IR — انظر [خارطة الطريق](../roadmap/README.ar.md).
+فك ترجمة Solana SBF متاح الآن؛ راجع [دليل SBF](../sbf.ar.md). تُتابع الأهداف الأخرى وأعمال التقوية في [خارطة الطريق](../roadmap/README.ar.md).
 
 ## لماذا NeverD؟
 
 - **دلالات 1:1** — lifter مكتوب يدويًا؛ العمليات غير المدعومة ترمي استثناءً في strict الافتراضي
 - **صديق لنماذج LLM** — C منظّم وLLVM IR وتحليل JSON عبر واجهة C خالصة، بأخطاء حتمية
-- **خط أنابيب واحد، ثلاث مخارج** — `lift` → LLVM IR · `decompile` → C · `patch` → ثنائي معاد كتابته
+- **خط أنابيب واحد، مخارج متعددة** — `lift` → LLVM IR · `decompile` → C/Rust · `patch` → ثنائي أصلي معاد كتابته
 - **إعادة كتابة الثنائي** — PE / ELF / Mach-O بقفزات section أو overwrite inplace
 - **مجموعة أدوات التحليل** — CLI، معلومات تصحيح، توقيعات، إضافات، وتمريرات تشويش اختيارية
 
@@ -54,6 +54,10 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 | **Mach-O** (macOS / iOS) | ✓ | ✓ | ✓ | ✓ |
 
 > نُفّذت كل خلية في المصفوفة، لكن عمق اختبارات التكامل يختلف. راجع [مصفوفة تغطية المعمارية](../architecture.ar.md#support-and-test-depth). يستخدم Mach-O i386 كائنات `thin` قابلة لإعادة التموضع لأن macOS الحديث لا يستطيع ربط ملفات i386 التنفيذية التاريخية.
+
+تستخدم برامج Solana SBF v0-v4 ELF loader صارماً مخصصاً، وmetadata ISA كاملة
+حسب الإصدار، وLow/Med/High IR، وLLVM متحققاً منه، وC11 محمولاً، وRust مستقراً
+وآمناً. راجع [فك ترجمة Solana SBF](../sbf.ar.md).
 
 ## كيف يعمل
 
@@ -68,6 +72,12 @@ Binary (PE / ELF / Mach-O)
        ├─ decompile   MedIR → HighIR → C
        │              MedIR → LLVM IR → opt → C   (-llvm)
        └─ patch       MedIR → LLVM IR → codegen → binary
+
+Solana SBF ELF (v0-v4)
+  → loader legacy/strict واعٍ بالإصدار + verifier
+  → SBF LowIR → MedIR مطبّع → SBF HighIR مستعاد
+       ├─ lift        → LLVM i64 runtime ABI متحقق منه
+       └─ decompile   → C11 محمول أو Rust مستقر وآمن
 ```
 
 | المرحلة | الدور |
@@ -88,6 +98,12 @@ cmake --build build
 ./build/bin/neverd lift -o out.ll binary
 ./build/bin/neverd decompile -o out.c binary
 ./build/bin/neverd patch -hello -o patched binary
+
+# Solana SBF
+./build/bin/neverd info program.so
+./build/bin/neverd lift program.so -o program.ll
+./build/bin/neverd decompile --language=c program.so -o program.c
+./build/bin/neverd decompile --language=rust program.so -o program.rs
 
 # التحليل
 ./build/bin/neverd funcs binary
@@ -170,7 +186,7 @@ neverd <command> [options] <binary>
 | الأمر | المخرج | الوصف |
 |-------|--------|--------|
 | `lift` | `.ll` | رفع إلى LLVM IR |
-| `decompile` | `.c` | C منظّم (HighIR) |
+| `decompile` | `.c` / `.rs` | C أو SBF Rust عبر `--language` |
 | `decompile -llvm` | `.c` | عبر LLVM IR + المحسّن |
 | `patch` | ثنائي | إعادة كتابة شفرة الآلة |
 

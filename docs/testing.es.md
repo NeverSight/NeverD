@@ -44,13 +44,15 @@ descubierto una etiqueta CTest igual al nombre de ese objetivo ejecutable.
 | `unittests/libc` | `NeverDLibCTests` | Nombres libc conocidos y clasificación |
 | `unittests/lift` | `NeverDLiftTests` | Formas LowIR decoder/lifter, etapas IR, loaders, relocations, fixtures de formato, descompilación y flujos patch representativos |
 | La mayoría de `unittests/semantic` | `NeverDSemanticTests` | Semántica diferencial de instrucciones, ABI, control de flujo, expresiones C y lift/recompile |
+| `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | Metadatos v0-v4 y diseños ELF, verificación estricta, CFG/recuperación, ejecución raw independiente, verificación LLVM, compilación C/Rust y enrutamiento de la API pública |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Equivalencia de reescritura/ofuscación entre cuatro ISA y tres formatos objeto |
 | Archivos de transformación enfocados en `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Sondas rápidas de reenlazar separadas del gran binario semántico |
 
 Las fuentes de registro son
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) y
-[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt).
+[`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) y
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
 ## Cómo se producen las fixtures
 
@@ -92,6 +94,12 @@ los skips para límites explícitos de capacidad externa y lea su motivo: un
 resumen verde sin cross-linker no demuestra que se haya ejecutado la ruta del
 formato.
 
+### Backends diferenciales de Solana SBF
+
+Las pruebas de metadatos SBF validan cada función de versión, los límites de colisión de opcodes, los hash syscall Murmur3, las reubicaciones y las constantes de machine ELF, registro y dirección VM. Las fixtures del loader generan, sin binarios vendorizados, tanto diseños legacy con secciones v0-v2 como diseños estrictos v3/v4 sin secciones y basados en program headers.
+
+`NeverDSBFSemanticTests` ejecuta directamente bytes de instrucciones verificados y no consume MedIR, de modo que cambiar o corromper el IR normalizado no puede hacer que el oracle de origen coincida accidentalmente con un backend. Cubre la semántica v2 no monótona, memoria, syscalls, frames de llamadas internas, faults, traces y límites de recursos. Los módulos LLVM se verifican; el C generado se compila tratando los warnings como errores y Rust con `-D warnings`. Las pruebas de la API pública recorren todas las etapas IR, desensamblado, CFG, metadatos, LLVM, C y Rust desde un ELF SBF estricto generado.
+
 ## Objetivos de una sola orden
 
 Los objetivos personalizados compilan sus dependencias y ejecutan CTest con
@@ -101,6 +109,7 @@ paralelismo derivado de las CPU del host:
 |----------------|-----------|
 | `check-neverd` | Todas las pruebas registradas |
 | `check-neverd-semantic` | Solo `NeverDSemanticTests` |
+| `check-neverd-sbf` | Todos los targets/casos `NeverDSBF*Tests` |
 | `check-neverd-patch-full` | Solo `NeverDPatchFullTests` |
 | `check-neverd-switch-xform` | Solo `NeverDSwitchXformTests` |
 | `check-neverd-cfgloop-xform` | Solo `NeverDCFGLoopXformTests` |
@@ -109,6 +118,7 @@ paralelismo derivado de las CPU del host:
 ```bash
 cmake --build build-release --target check-neverd
 cmake --build build-release --target check-neverd-semantic
+cmake --build build-release --target check-neverd-sbf
 ```
 
 `NeverDIndCallXformTests` y `NeverDAvxUpperXformTests` no tienen actualmente un
@@ -137,6 +147,14 @@ ctest --test-dir build-release --build-config Release \
 cmake --build build-release --target NeverDIndCallXformTests --parallel 4
 ctest --test-dir build-release --build-config Release \
   -L '^NeverDIndCallXformTests$' --output-on-failure --parallel 4
+
+# Todos los targets/casos específicos de Solana SBF
+cmake --build build-release --target \
+  NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests \
+  NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests NeverDSBFEmitterTests \
+  NeverDSBFIntegrationTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -R 'SBF' --output-on-failure --parallel 4
 ```
 
 Use un nombre CTest derivado de GoogleTest para una sola regresión:
@@ -178,6 +196,7 @@ medidos.
 | Codegen de reescritura o relocation de salida | Casos `RewriteCodegenRTTests` | `NeverDPatchFullTests` y fixture patch enlazada si existe |
 | Transformación LLVM IR usada por patch | Binario de transformación enfocado | Cuadrícula de pases compuestos `NeverDPatchFullTests` |
 | C API o CLI | Prueba SDK/query directa y `unittests/semantic/CLIEndToEndTests.cpp` | Suite pipeline/formato pertinente |
+| Loader, ISA, IR o backend SBF | Menor target propietario `NeverDSBF*Tests` | Todos los targets SBF y compilación del C/Rust generado |
 | Reconocimiento libc | `NeverDLibCTests` | Casos semánticos call/ABI si cambia el comportamiento |
 | Ejecución o quoting de procesos | `NeverDTestProcessTests` | Un caso CLI/semántico afectado en cada host soportado |
 

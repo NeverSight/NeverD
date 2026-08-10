@@ -48,6 +48,8 @@
 
 - SBF loader · 1:1 eBPF/SBF lifter · Account/CPI 인지 · 동일 파이프라인 · 통일 API
 
+**상태:** 현재 Anza `sbpf` v0-v4 계약 지원이 완료되었습니다. 레거시 section/relocation ELF와 엄격한 program-header-only ELF, 완전한 버전별 명령 데이터베이스, 엄격한 검증, 단계별 Low/Med/High IR, syscall/CPI/account 관찰, 검증된 LLVM, 이식 가능한 C11, 안전한 stable Rust, CLI/C API 통합, 독립적이고 범위가 제한된 raw-bytecode 시맨틱 oracle을 지원합니다. v4는 upstream을 추적하지만 특정 클러스터에서 배포·실행할 수 있는지는 해당 클러스터의 feature activation에 따라 달라집니다. 자세한 내용은 [Solana SBF 디컴파일](../sbf.ko.md)을 참조하세요.
+
 ### 왜 Solana eBPF인가
 
 - EVM과 함께 주요 감사 대상 · BPF형 ISA가 MedIR에 적합 · 하나의 C SDK
@@ -67,11 +69,11 @@
 
 ## 일정
 
-EVM과 Solana는 연구·설계 단계에 있으며, 네이티브 포맷 완성은 회귀 테스트로 검증되었습니다. 출시일을 약속하지 않습니다.
+Solana SBF 디컴파일과 네이티브 포맷 완성은 구현 및 회귀 테스트가 완료되었습니다. EVM은 연구·설계 단계입니다. 출시일을 약속하지 않습니다.
 
 | 기능 | 상태 |
 |------|------|
 | 네이티브 포맷 완성 (PE ARM*, Mach-O i386) | 완료 |
 | EVM 바이트코드 디컴파일 | 연구 / 설계 |
-| Solana eBPF (SBF) 디컴파일 | 연구 / 설계 |
+| Solana eBPF (SBF) 디컴파일 | 완료 — v0-v4, C, Rust, LLVM; 회귀 테스트 완료 |
 | 엔진·제품 강화 | 지속 |

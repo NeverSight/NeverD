@@ -11,12 +11,12 @@
 
 **AI 友好的二进制分析与反编译引擎 — 1:1 提升，基于 LLVM**
 
-PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbsp; 纯 C SDK
+PE · ELF · Mach-O · Solana SBF &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 · SBF &nbsp;|&nbsp; 纯 C SDK
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](../../LICENSE)
 [![C++20](https://img.shields.io/badge/Standard-C%2B%2B20-brightgreen.svg)](#构建)
-[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O-informational.svg)](#支持的目标)
-[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM-orange.svg)](#支持的目标)
+[![Formats](https://img.shields.io/badge/Formats-PE%20%7C%20ELF%20%7C%20Mach--O%20%7C%20SBF-informational.svg)](#支持的目标)
+[![Arch](https://img.shields.io/badge/Arch-x86__64%20%7C%20i386%20%7C%20AArch64%20%7C%20ARM%20%7C%20SBF-orange.svg)](#支持的目标)
 [![SDK](https://img.shields.io/badge/SDK-Pure%20C%20API-lightgrey.svg)](#sdk-与插件)
 
 [文档](../README.zh-CN.md) · [路线图](../roadmap/README.zh-CN.md) · [贡献](CONTRIBUTING.zh-CN.md)
@@ -29,19 +29,19 @@ PE · ELF · Mach-O &nbsp;|&nbsp; x86-64 · i386 · AArch64 · ARM32 &nbsp;|&nbs
 
 ## 概览
 
-NeverD 是以 **1:1 指令级提升** 为核心的原生二进制分析与反编译引擎。它加载 **PE**、**ELF**、**Mach-O**，用 [Capstone](https://www.capstone-engine.org/) 解码，再通过四种 IR 表示配合 **手写语义** 完成处理——不是近似翻译。目标是 **100% 语义保真**：已支持指令在 **LLVM IR**、**结构化 C** 或 **重写后的二进制** 中保持完整可观察行为。
+NeverD 是以 **1:1 指令级提升** 为核心的原生二进制与智能合约分析/反编译引擎。它加载 **PE**、**ELF**、**Mach-O** 和 Solana **SBF ELF** 程序。原生目标由 [Capstone](https://www.capstone-engine.org/) 解码；SBF 使用专用的版本感知 decoder 和分阶段 IR。所有路径均采用手写语义，而不是近似翻译。已支持指令在 **LLVM IR**、**结构化 C**、**面向 SBF 的安全 stable Rust**，或原生目标的**重写后二进制**中保持可观察行为。
 
 **默认开启 strict**：没有 lifter 的指令抛出 `UnliftedInstruction`，不会跳过、猜测或静默变成 `NOP`。
 
 CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`libneverd`**，不直接链接 Capstone、LLVM 或内部 C++。
 
-后续版本将在同一 IR 栈上增加 [EVM](../roadmap/README.zh-CN.md#2-evm-字节码反编译) 与 [Solana eBPF / SBF](../roadmap/README.zh-CN.md#3-solana-ebpfsbf反编译) 反编译 — 见 [路线图](../roadmap/README.zh-CN.md)。
+Solana SBF 反编译已经可用；详见 [SBF 指南](../sbf.zh-CN.md)。其他目标与加固工作记录在[路线图](../roadmap/README.zh-CN.md)中。
 
 ## 为什么选 NeverD？
 
 - **1:1 语义** — 手写 lifter；默认 strict 下未支持指令抛出异常
 - **LLM 友好** — 结构化 C、LLVM IR 与 JSON 分析经纯 C API 暴露，错误行为确定
-- **一条管线，三种出口** — `lift` → LLVM IR · `decompile` → C · `patch` → 重写二进制
+- **一条管线，多种出口** — `lift` → LLVM IR · `decompile` → C/Rust · `patch` → 重写原生二进制
 - **二进制重写** — PE / ELF / Mach-O，section 跳板或 inplace 覆盖
 - **分析工具集** — CLI、调试信息、签名、插件，以及可选混淆通路
 
@@ -54,6 +54,10 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 | **Mach-O**（macOS / iOS） | ✓ | ✓ | ✓ | ✓ |
 
 > 矩阵中的每个单元格都已实现，但集成测试深度不同。详见[架构覆盖矩阵](../architecture.zh-CN.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位对象，因为现代 macOS 无法链接历史 i386 可执行文件。
+
+Solana SBF v0-v4 ELF 程序使用专用 strict loader、完整版本化 ISA metadata、
+Low/Med/High IR、已验证 LLVM、可移植 C11 与安全 stable Rust。详见
+[Solana SBF 反编译](../sbf.zh-CN.md)。
 
 ## 工作原理
 
@@ -68,6 +72,12 @@ Binary (PE / ELF / Mach-O)
        ├─ decompile   MedIR → HighIR → C
        │              MedIR → LLVM IR → opt → C   (-llvm)
        └─ patch       MedIR → LLVM IR → codegen → binary
+
+Solana SBF ELF (v0-v4)
+  → 感知版本的 legacy/strict loader + verifier
+  → SBF LowIR → 规范化 MedIR → 恢复的 SBF HighIR
+       ├─ lift        → 已验证 LLVM i64 runtime ABI
+       └─ decompile   → 可移植 C11 或安全 stable Rust
 ```
 
 | 阶段 | 作用 |
@@ -88,6 +98,12 @@ cmake --build build
 ./build/bin/neverd lift -o out.ll binary
 ./build/bin/neverd decompile -o out.c binary
 ./build/bin/neverd patch -hello -o patched binary
+
+# Solana SBF
+./build/bin/neverd info program.so
+./build/bin/neverd lift program.so -o program.ll
+./build/bin/neverd decompile --language=c program.so -o program.c
+./build/bin/neverd decompile --language=rust program.so -o program.rs
 
 # 分析
 ./build/bin/neverd funcs binary
@@ -170,7 +186,7 @@ neverd <command> [options] <binary>
 | 命令 | 输出 | 说明 |
 |------|------|------|
 | `lift` | `.ll` | 提升到 LLVM IR |
-| `decompile` | `.c` | 结构化 C（HighIR） |
+| `decompile` | `.c` / `.rs` | 通过 `--language` 选择 C 或 SBF Rust |
 | `decompile -llvm` | `.c` | 经 LLVM IR + 优化器 |
 | `patch` | 二进制 | 重写机器码 |
 
