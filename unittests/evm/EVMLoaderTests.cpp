@@ -1,4 +1,8 @@
 //===- EVMLoaderTests.cpp - EVM BinaryImage loader tests ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

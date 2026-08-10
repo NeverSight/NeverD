@@ -1,4 +1,8 @@
 //===- MachORelocations.cpp - Mach-O object relocations ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/loader/MachO/MachORelocations.h"
 

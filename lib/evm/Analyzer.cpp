@@ -1,4 +1,8 @@
 //===- Analyzer.cpp - Staged EVM bytecode analysis ----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/evm/Analyzer.h"
 

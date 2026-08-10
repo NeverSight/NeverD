@@ -1,4 +1,8 @@
 //===- LLVMEmitter.cpp - EVM to LLVM i256 backend -----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/evm/LLVMEmitter.h"
 

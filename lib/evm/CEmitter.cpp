@@ -1,4 +1,8 @@
 //===- CEmitter.cpp - EVM to standalone C23 backend ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/evm/CEmitter.h"
 

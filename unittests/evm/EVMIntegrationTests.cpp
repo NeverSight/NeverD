@@ -1,4 +1,8 @@
 //===- EVMIntegrationTests.cpp - public API EVM tests -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

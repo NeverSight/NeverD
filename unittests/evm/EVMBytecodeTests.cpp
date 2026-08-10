@@ -1,4 +1,8 @@
 //===- EVMBytecodeTests.cpp - EVM bytecode input tests -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

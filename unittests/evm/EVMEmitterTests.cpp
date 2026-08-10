@@ -1,4 +1,8 @@
 //===- EVMEmitterTests.cpp - EVM backend tests --------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

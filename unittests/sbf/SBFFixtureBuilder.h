@@ -1,4 +1,8 @@
 //===- SBFFixtureBuilder.h - Deterministic Solana SBF ELF fixtures -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_UNITTESTS_SBF_SBFFIXTUREBUILDER_H
 #define NEVERD_UNITTESTS_SBF_SBFFIXTUREBUILDER_H

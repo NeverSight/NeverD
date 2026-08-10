@@ -1,4 +1,8 @@
 //===- EVMOpcodeTests.cpp - EVM opcode metadata tests --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

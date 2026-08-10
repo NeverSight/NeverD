@@ -1,4 +1,8 @@
 //===- EVMLoader.cpp - Ethereum Virtual Machine bytecode loader ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/loader/EVM/EVMLoader.h"
 

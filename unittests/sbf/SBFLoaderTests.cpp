@@ -1,4 +1,8 @@
 //===- SBFLoaderTests.cpp - Solana SBF ELF loader tests -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "SBFFixtureBuilder.h"
 #include "gtest/gtest.h"

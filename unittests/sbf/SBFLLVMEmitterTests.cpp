@@ -1,4 +1,8 @@
 //===- SBFLLVMEmitterTests.cpp - Solana SBF LLVM backend tests ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

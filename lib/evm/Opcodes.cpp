@@ -1,4 +1,8 @@
 //===- Opcodes.cpp - Ethereum Virtual Machine opcode metadata -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/evm/Opcodes.h"
 

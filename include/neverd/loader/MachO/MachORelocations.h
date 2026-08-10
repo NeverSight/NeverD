@@ -1,4 +1,8 @@
 //===- MachORelocations.h - Mach-O object relocation helpers ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LOADER_MACHO_MACHORELOCATIONS_H
 #define NEVERD_LOADER_MACHO_MACHORELOCATIONS_H

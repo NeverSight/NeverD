@@ -1,4 +1,8 @@
 //===- SBFAnalyzerTests.cpp - Solana SBF staged analysis tests ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

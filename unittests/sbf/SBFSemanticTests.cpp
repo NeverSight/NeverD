@@ -1,4 +1,8 @@
 //===- SBFSemanticTests.cpp - Solana SBF semantic oracle tests ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

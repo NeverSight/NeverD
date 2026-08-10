@@ -1,4 +1,8 @@
 //===- EVMSemanticTests.cpp - EVM interpreter semantics tests -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

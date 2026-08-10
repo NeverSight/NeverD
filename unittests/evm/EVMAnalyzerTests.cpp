@@ -1,4 +1,8 @@
 //===- EVMAnalyzerTests.cpp - staged EVM analysis tests -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

@@ -1,4 +1,8 @@
 //===- MedCallingConvDetail.h - Calling convention queries -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_MED_MEDCALLINGCONVDETAIL_H
 #define NEVERD_IR_MED_MEDCALLINGCONVDETAIL_H

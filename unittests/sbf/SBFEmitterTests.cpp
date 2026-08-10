@@ -1,4 +1,8 @@
 //===- SBFEmitterTests.cpp - Solana SBF source backend tests ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

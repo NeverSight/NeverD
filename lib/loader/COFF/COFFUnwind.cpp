@@ -1,4 +1,8 @@
 //===- COFFUnwind.cpp - PE exception-table parsing ----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/Support/BinaryEncoding.h"
 #include "neverd/Support/ISAEncoding.h"

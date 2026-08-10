@@ -1,4 +1,8 @@
 //===- Bytecode.cpp - EVM bytecode input normalization ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/evm/Bytecode.h"
 

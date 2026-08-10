@@ -1,4 +1,8 @@
 //===- SolidityEmitter.cpp - EVM to recovered Solidity backend ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/evm/SolidityEmitter.h"
 

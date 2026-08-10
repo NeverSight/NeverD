@@ -1,4 +1,8 @@
 //===- SBFMetadataTests.cpp - Solana SBF definition-table tests ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 

@@ -1,4 +1,8 @@
 //===- Interpreter.cpp - Deterministic EVM semantic oracle --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 
 #include "neverd/evm/Interpreter.h"
 
