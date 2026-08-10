@@ -4,15 +4,27 @@
 
 #include "neverd/sdk/NeverDCAPI.h"
 
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/FileSystem.h"
 
 #include <filesystem>
 #include <fstream>
 #include <string>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
+
+unsigned long long currentProcessId() {
+#ifdef _WIN32
+  return static_cast<unsigned long long>(::_getpid());
+#else
+  return static_cast<unsigned long long>(::getpid());
+#endif
+}
 
 std::string takeString(const char *Text) {
   if (!Text)
@@ -25,11 +37,8 @@ std::string takeString(const char *Text) {
 class EVMIntegrationTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    llvm::SmallString<128> UniquePath;
-    const std::error_code EC =
-        llvm::sys::fs::createTemporaryFile("neverd-api", "evm", UniquePath);
-    ASSERT_FALSE(EC) << EC.message();
-    Path = std::filesystem::path(UniquePath.str().str());
+    Path = std::filesystem::temp_directory_path() /
+           ("neverd-api-" + std::to_string(currentProcessId()) + ".evm");
     Session = neverd_session_create();
   }
   void TearDown() override {
