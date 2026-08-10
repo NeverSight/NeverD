@@ -386,25 +386,37 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
     ++Result.Steps;
     uint64_t NextPC = Instruction.NextPC;
 
-    if (!Instruction.isKnown()) {
-      Fail("unknown or inactive opcode");
+    if (!Instruction.isExecutable()) {
+      if (Instruction.ImmediateStatus == ImmediateDecodeStatus::Invalid)
+        Fail("invalid immediate in " + std::string(Instruction.Info.Name));
+      else if (Instruction.DecodeStatus == OpcodeDecodeStatus::Inactive)
+        Fail("inactive opcode");
+      else
+        Fail("unknown opcode");
     } else if (Instruction.is(Opcode::STOP)) {
       Result.Status = ExecutionStatus::Stopped;
     } else if (Instruction.isPush()) {
       Push(Instruction.Immediate);
     } else if (Instruction.isDup()) {
-      const size_t Depth = dupDepth(Op);
+      const size_t Depth = Instruction.dupDepth();
       if (Result.Stack.size() < Depth)
         Fail("stack underflow in DUP");
       else
         Push(Result.Stack[Result.Stack.size() - Depth]);
     } else if (Instruction.isSwap()) {
-      const size_t Depth = swapDepth(Op);
+      const size_t Depth = Instruction.swapDepth();
       if (Result.Stack.size() <= Depth)
         Fail("stack underflow in SWAP");
       else
         std::swap(Result.Stack.back(),
                   Result.Stack[Result.Stack.size() - Depth - 1]);
+    } else if (Instruction.isExchange()) {
+      const auto [First, Second] = *Instruction.exchangeDepths();
+      if (Result.Stack.size() <= Second)
+        Fail("stack underflow in EXCHANGE");
+      else
+        std::swap(Result.Stack[Result.Stack.size() - First - 1],
+                  Result.Stack[Result.Stack.size() - Second - 1]);
     } else if (Instruction.isLog()) {
       llvm::APInt OffsetWord = Pop();
       llvm::APInt SizeWord = Pop();
@@ -420,9 +432,9 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
           Result.Logs.push_back(std::move(Log));
       }
     } else if (isALU(Instruction.Info)) {
-      llvm::SmallVector<llvm::APInt, kMaxALUStackInputs> Inputs;
-      Inputs.reserve(Instruction.Info.StackInputs);
-      for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
+      llvm::SmallVector<llvm::APInt, kMaxALUStackPops> Inputs;
+      Inputs.reserve(Instruction.Info.StackPops);
+      for (uint8_t I = 0; I < Instruction.Info.StackPops; ++I)
         Inputs.push_back(Pop());
       if (!Fault) {
         auto Value = evaluateALU(Op, Inputs);
@@ -578,6 +590,9 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
       }
       case Opcode::BLOBBASEFEE:
         Push(Environment.BlobBaseFee);
+        break;
+      case Opcode::SLOTNUM:
+        Push(llvm::APInt(kWordBits, Environment.SlotNumber));
         break;
       case Opcode::POP:
         (void)Pop();

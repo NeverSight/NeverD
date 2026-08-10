@@ -120,7 +120,10 @@ jobs:
       - name: Verify Debug and Release target flags
         shell: bash
         run: |
-          "$PYTHON" -m unittest scripts.tests.test_debug_build_configuration -v
+          "$PYTHON" -m unittest \
+            scripts.tests.test_debug_build_configuration \
+            scripts.tests.test_audit_evm_opcode_metadata \
+            -v
           "$PYTHON" -m unittest discover \
             -s pluginsdk/python/tests -v
           "$PYTHON" -m unittest \

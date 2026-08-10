@@ -19,6 +19,10 @@
 #define EVM_HARDFORK_LATEST(NAME, SPELLING)
 #endif
 
+#ifndef EVM_HARDFORK_NEWEST
+#define EVM_HARDFORK_NEWEST(NAME)
+#endif
+
 EVM_HARDFORK(Frontier, "frontier")
 EVM_HARDFORK(Homestead, "homestead")
 EVM_HARDFORK(DaoFork, "dao-fork")
@@ -38,7 +42,10 @@ EVM_HARDFORK(Shanghai, "shanghai")
 EVM_HARDFORK(Cancun, "cancun")
 EVM_HARDFORK(Pectra, "pectra")
 EVM_HARDFORK(Fusaka, "fusaka")
+EVM_HARDFORK(Amsterdam, "amsterdam")
+EVM_HARDFORK(Bogota, "bogota")
 EVM_HARDFORK_LATEST(Fusaka, "latest")
+EVM_HARDFORK_NEWEST(Bogota)
 
 EVM_HARDFORK_ALIAS("dao", DaoFork)
 EVM_HARDFORK_ALIAS("dao_fork", DaoFork)
@@ -50,7 +57,9 @@ EVM_HARDFORK_ALIAS("gray_glacier", GrayGlacier)
 EVM_HARDFORK_ALIAS("merge", Paris)
 EVM_HARDFORK_ALIAS("prague", Pectra)
 EVM_HARDFORK_ALIAS("osaka", Fusaka)
+EVM_HARDFORK_ALIAS("glamsterdam", Amsterdam)
 
+#undef EVM_HARDFORK_NEWEST
 #undef EVM_HARDFORK_LATEST
 #undef EVM_HARDFORK_ALIAS
 #undef EVM_HARDFORK

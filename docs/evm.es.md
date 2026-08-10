@@ -71,7 +71,7 @@ selecciona Fusaka por defecto.
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
 Se aceptan `dao`, variantes con guion bajo, `merge`, `prague` y `osaka`.
@@ -81,9 +81,10 @@ Actualmente `latest` y `osaka` resuelven a la revisión canónica `fusaka`.
 cabeza de desarrollo de Ethereum. [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/)
 está previsto para Q4 2026; las instrucciones aún en Review
 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843) y
-[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) quedan fuera hasta
-su finalización. El byte inmediato de EIP-8024 tiene reglas de máscara
-`JUMPDEST` distintas de `PUSH`.
+[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) sólo se activan
+con `--evm-hardfork=amsterdam` (o `bogota`) y quedan fuera de `latest` hasta su
+finalización. En EIP-8024 sólo se consume un inmediato válido; un candidato
+inválido sigue siendo la siguiente instrucción.
 
 EOF se retiró en
 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2) y figura
@@ -98,8 +99,9 @@ se convierten silenciosamente en NOP.
 
 La metadata EVM mantenida a mano sigue el patrón `.def` multi-incluido de LLVM:
 
-- `EVMOpcodes.def` es la única fuente para los 150 opcodes. Encoding, contrato
-  completo de pila, ancho inmediato, clase, fork de activación, efecto principal,
+- `EVMOpcodes.def` es la única fuente para 150 opcodes finalizados y cuatro de
+  desarrollo opt-in. Encoding, cambios pop/push reales, tipo de inmediato,
+  clase, fork de activación, efecto principal,
   acceso ortogonal a memoria, estado, call-value y terminación viven en cada
   registro; no hay valores predeterminados silenciosos.
 - `EVMMemoryAccesses.def`, `EVMStateAccesses.def` y
@@ -241,7 +243,8 @@ rechazan de forma explícita, nunca se ignoran.
 ## Limitaciones explícitas
 
 - Sólo bytecode legacy; aún no se decodifican contenedores EOF.
-- Los opcodes Amsterdam en Review están desactivados; `latest` es Fusaka final.
+- Amsterdam/Bogota son objetivos de desarrollo explícitos; `latest` permanece
+  en Fusaka finalizado hasta que se finalicen los opcodes previstos.
 - Sin RPC, descubrimiento de estado, gas/reembolsos ni ejecución de precompiles.
 - La extracción de creation reconoce wrappers estáticos, no una transacción completa.
 - Los saltos dinámicos quedan indirectos salvo prueba constante acotada.

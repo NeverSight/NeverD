@@ -1,0 +1,28 @@
+//===- EVMDecodeStatuses.def - EVM decode-state database -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. These spellings are stable
+// diagnostic and tooling vocabulary shared by LowIR dumps and disassembly.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_OPCODE_DECODE_STATUS
+#define EVM_OPCODE_DECODE_STATUS(NAME, SPELLING)
+#endif
+
+#ifndef EVM_IMMEDIATE_DECODE_STATUS
+#define EVM_IMMEDIATE_DECODE_STATUS(NAME, SPELLING)
+#endif
+
+EVM_OPCODE_DECODE_STATUS(Active, "active")
+EVM_OPCODE_DECODE_STATUS(Inactive, "inactive")
+EVM_OPCODE_DECODE_STATUS(Unknown, "unknown")
+
+EVM_IMMEDIATE_DECODE_STATUS(None, "none")
+EVM_IMMEDIATE_DECODE_STATUS(Complete, "complete")
+EVM_IMMEDIATE_DECODE_STATUS(Truncated, "truncated")
+EVM_IMMEDIATE_DECODE_STATUS(Invalid, "invalid")
+
+#undef EVM_IMMEDIATE_DECODE_STATUS
+#undef EVM_OPCODE_DECODE_STATUS

@@ -272,7 +272,7 @@ llvm::Expected<std::string> emitC(const EVMProgram &Program,
       OS << "  " << kTraceFunctionName << "(environment, " << PC << "u, 0x"
          << llvm::utohexstr(opcodeByte(Op)) << "u);\n";
 
-    if (!Instruction.isKnown() || Instruction.is(Opcode::INVALID)) {
+    if (!Instruction.isExecutable() || Instruction.is(Opcode::INVALID)) {
       OS << "  evm_fault();\n}\n";
       continue;
     }
@@ -288,13 +288,21 @@ llvm::Expected<std::string> emitC(const EVMProgram &Program,
     }
     if (Instruction.isDup()) {
       OS << "  evm_push(evm_stack, &evm_sp, evm_peek(evm_stack, evm_sp, "
-         << static_cast<unsigned>(dupDepth(Op)) << "u));\n  "
+         << Instruction.dupDepth() << "u));\n  "
          << nextStatement(InstructionPCs, Instruction.NextPC) << "\n}\n";
       continue;
     }
     if (Instruction.isSwap()) {
-      OS << "  evm_swap(evm_stack, evm_sp, "
-         << static_cast<unsigned>(swapDepth(Op)) << "u);\n  "
+      OS << "  evm_swap(evm_stack, evm_sp, " << Instruction.swapDepth()
+         << "u);\n  " << nextStatement(InstructionPCs, Instruction.NextPC)
+         << "\n}\n";
+      continue;
+    }
+    if (Instruction.isExchange()) {
+      const auto [First, Second] = *Instruction.exchangeDepths();
+      OS << "  evm_swap(evm_stack, evm_sp, " << First << "u);\n"
+         << "  evm_swap(evm_stack, evm_sp, " << Second << "u);\n"
+         << "  evm_swap(evm_stack, evm_sp, " << First << "u);\n  "
          << nextStatement(InstructionPCs, Instruction.NextPC) << "\n}\n";
       continue;
     }
@@ -312,7 +320,7 @@ llvm::Expected<std::string> emitC(const EVMProgram &Program,
     }
 
     std::vector<std::string> Inputs;
-    for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I) {
+    for (uint8_t I = 0; I < Instruction.Info.StackPops; ++I) {
       std::string Name = "a" + std::to_string(I);
       OS << "  evm_word " << Name << " = evm_pop(evm_stack, &evm_sp);\n";
       Inputs.push_back(std::move(Name));
@@ -332,7 +340,7 @@ llvm::Expected<std::string> emitC(const EVMProgram &Program,
     const bool HasInlineALULowering = isALU(Instruction.Info);
     const std::string Output = HasInlineALULowering ? pureExpression(Op, Inputs)
                                                     : hostCall(Op, Inputs);
-    if (Instruction.Info.StackOutputs != 0)
+    if (Instruction.Info.StackPushes != 0)
       OS << "  evm_word result = " << Output << ";\n";
     else if (!HasInlineALULowering)
       OS << "  (void)" << Output << ";\n";
@@ -351,7 +359,7 @@ llvm::Expected<std::string> emitC(const EVMProgram &Program,
       OS << "  return " << cExitStatusName(ExitStatus::Stopped) << ";\n}\n";
       continue;
     }
-    if (Instruction.Info.StackOutputs != 0)
+    if (Instruction.Info.StackPushes != 0)
       OS << "  evm_push(evm_stack, &evm_sp, result);\n";
     OS << "  " << nextStatement(InstructionPCs, Instruction.NextPC) << "\n}\n";
   }

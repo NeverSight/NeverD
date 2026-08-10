@@ -74,7 +74,7 @@ cible Fusaka par défaut.
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
 Les alias `dao`, les formes avec underscore, `merge`, `prague` et `osaka` sont
@@ -85,9 +85,10 @@ acceptés. `latest` et `osaka` correspondent actuellement à la révision canoni
 de développement Ethereum. [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/)
 est annoncé pour le T4 2026 ; les instructions encore en Review
 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843) et
-[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) restent hors de
-la table jusqu’à finalisation. L’octet immédiat EIP-8024 possède notamment des
-règles de masquage `JUMPDEST` différentes de `PUSH`.
+[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) ne sont activées
+qu’avec `--evm-hardfork=amsterdam` (ou `bogota`) et restent hors de `latest`
+jusqu’à finalisation. Pour EIP-8024, seul un immédiat valide est consommé ; un
+candidat invalide reste l’instruction suivante.
 
 EOF a été retiré dans
 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2) et est
@@ -103,8 +104,9 @@ les atteint ; ils ne deviennent jamais silencieusement des NOP.
 
 Les metadata EVM écrites à la main suivent le modèle `.def` multi-inclus de LLVM :
 
-- `EVMOpcodes.def` est l’unique source de vérité des 150 opcodes : encodage,
-  contrat de pile complet, largeur immédiate, classe, fork d’activation, effet
+- `EVMOpcodes.def` est l’unique source de vérité pour 150 opcodes finalisés et
+  quatre opcodes de développement opt-in : encodage, mutations pop/push
+  réelles, type d’immédiat, classe, fork d’activation, effet
   principal, accès mémoire EVM, état source, call-value et terminaison figurent
   dans chaque enregistrement ; aucun défaut implicite n’est hérité.
 - `EVMMemoryAccesses.def`, `EVMStateAccesses.def` et
@@ -250,7 +252,8 @@ sont refusés explicitement, jamais ignorés.
 ## Limites explicites
 
 - Bytecode legacy uniquement ; les conteneurs EOF ne sont pas décodés.
-- Les opcodes Amsterdam en Review sont désactivés ; `latest` est Fusaka finalisé.
+- Amsterdam/Bogota sont des cibles de développement explicites ; `latest`
+  reste Fusaka finalisé jusqu’à la finalisation des opcodes prévus.
 - Pas de RPC, découverte d’état, comptabilité gas/remboursement ou précompiles.
 - L’extraction de création reconnaît des wrappers statiques, pas une transaction complète.
 - Les sauts dynamiques restent indirects sauf preuve constante bornée.

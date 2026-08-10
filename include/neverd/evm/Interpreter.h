@@ -50,6 +50,7 @@ struct ExecutionEnvironment {
   llvm::APInt Coinbase = llvm::APInt(kWordBits, 0);
   llvm::APInt Timestamp = llvm::APInt(kWordBits, 0);
   llvm::APInt BlockNumber = llvm::APInt(kWordBits, 0);
+  uint64_t SlotNumber = 0;
   llvm::APInt PrevRandao = llvm::APInt(kWordBits, 0);
   llvm::APInt GasLimit = llvm::APInt(kWordBits, kDefaultGasLimit);
   llvm::APInt ChainID = llvm::APInt(kWordBits, kDefaultChainID);

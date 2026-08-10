@@ -47,3 +47,11 @@ add_neverd_unittest(NeverDEVMIntegrationTests
   LINK_LIBS
   neverd_shared
 )
+
+target_compile_definitions(NeverDEVMIntegrationTests PRIVATE
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+)
+
+if(TARGET neverd)
+  add_dependencies(NeverDEVMIntegrationTests neverd)
+endif()

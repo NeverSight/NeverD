@@ -70,7 +70,7 @@ Frontier から Fusaka までの 150 個の割り当て済み legacy opcode を�
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
 `dao`、`tangerine_whistle` のような underscore 形式、`merge`、`prague`、`osaka`
@@ -80,9 +80,10 @@ fusaka, latest
 branch の先端ではありません。[Glamsterdam](https://ethereum.org/roadmap/glamsterdam/)
 は 2026 Q4 予定で、Review 段階の
 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843) と
-[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) は fork と encoding
-が確定するまで既定 table に入りません。EIP-8024 の immediate byte は `PUSH` と
-異なる `JUMPDEST` masking rule を持つため、通常の 1-byte immediate と扱えません。
+[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) は
+`--evm-hardfork=amsterdam`（または `bogota`）でのみ有効になり、確定までは
+`latest` に入りません。EIP-8024 は有効な immediate だけを消費し、無効な候補は
+次の instruction のままです。
 
 EOF は [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2) で
 除外され、execution-spec-tests でも
@@ -97,8 +98,9 @@ LowIR/diagnostic に保持しますが、実行が到達すれば backend は fa
 
 手書き EVM metadata は LLVM の multiply-included `.def` pattern に従います。
 
-- `EVMOpcodes.def` が 150 opcode の唯一の source of truth です。encoding、完全な
-  stack contract、immediate width、class、activation fork、primary effect、独立した
+- `EVMOpcodes.def` が 150 個の確定 opcode と 4 個の opt-in 開発 opcode の唯一の
+  source of truth です。encoding、実際の pop/push 変化、immediate kind、class、
+  activation fork、primary effect、独立した
   EVM memory/state/call-value access、termination を 1 record に収め、暗黙 default を
   許しません。
 - `EVMMemoryAccesses.def`、`EVMStateAccesses.def`、
@@ -238,7 +240,8 @@ EVM に native object roundtrip を要求すると、黙って無視せず明示
 ## 明示的な制限
 
 - legacy bytecode のみ。EOF container は未対応です。
-- Review 段階の Amsterdam opcode は無効で、`latest` は確定 Fusaka です。
+- Amsterdam/Bogota は明示的な開発 target です。予定 opcode が確定するまで
+  `latest` は確定済み Fusaka のままです。
 - RPC、chain-state discovery、gas/refund、precompile execution は行いません。
 - creation extraction は一般的な static wrapper に限り、constructor emulator ではありません。
 - dynamic jump は bounded constant analysis で証明できない限り indirect edge のままです。

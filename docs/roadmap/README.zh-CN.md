@@ -45,7 +45,9 @@
 **状态：** 传统 EVM 字节码从 Frontier 到 Fusaka 已完成。实现覆盖全部 150 个已分配
 opcode、raw/hex/artifact 输入、creation-to-runtime 提取、CFG 与 stack-SSA 恢复、
 strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，以及与 Anvil 原生 EVM
-的独立差分执行。host ABI 与明确限制见 [EVM 反编译](../evm.zh-CN.md)。
+的独立差分执行。另有四个 Amsterdam 操作码通过显式开发分叉 target 提供，并由
+官方/上游向量与元数据漂移审计约束；`latest` 仍保持已定案 Fusaka。host ABI 与明确
+限制见 [EVM 反编译](../evm.zh-CN.md)。
 
 ### 为什么做 EVM？
 

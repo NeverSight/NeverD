@@ -336,7 +336,7 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
                    {Environment, llvm::ConstantInt::get(I64, Instruction.PC),
                     llvm::ConstantInt::get(I8, opcodeByte(Op))});
 
-    if (!Instruction.isKnown() || Instruction.is(Opcode::INVALID)) {
+    if (!Instruction.isExecutable() || Instruction.is(Opcode::INVALID)) {
       B.CreateCall(Trap);
       B.CreateUnreachable();
       continue;
@@ -352,16 +352,29 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
       continue;
     }
     if (Instruction.isDup()) {
-      llvm::Value *Value =
-          B.CreateCall(Stack.Peek, {StackStorage, SP,
-                                    llvm::ConstantInt::get(I32, dupDepth(Op))});
+      llvm::Value *Value = B.CreateCall(
+          Stack.Peek, {StackStorage, SP,
+                       llvm::ConstantInt::get(I32, Instruction.dupDepth())});
       EmitPush(B, Value);
       EmitNext(B, Instruction.NextPC);
       continue;
     }
     if (Instruction.isSwap()) {
-      B.CreateCall(Stack.Swap, {StackStorage, SP,
-                                llvm::ConstantInt::get(I32, swapDepth(Op))});
+      B.CreateCall(Stack.Swap,
+                   {StackStorage, SP,
+                    llvm::ConstantInt::get(I32, Instruction.swapDepth())});
+      EmitNext(B, Instruction.NextPC);
+      continue;
+    }
+    if (Instruction.isExchange()) {
+      const auto EmitSwap = [&](uint16_t Depth) {
+        B.CreateCall(Stack.Swap,
+                     {StackStorage, SP, llvm::ConstantInt::get(I32, Depth)});
+      };
+      const auto [First, Second] = *Instruction.exchangeDepths();
+      EmitSwap(First);
+      EmitSwap(Second);
+      EmitSwap(First);
       EmitNext(B, Instruction.NextPC);
       continue;
     }
@@ -396,8 +409,8 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
     }
 
     std::vector<llvm::Value *> Inputs;
-    Inputs.reserve(Instruction.Info.StackInputs);
-    for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
+    Inputs.reserve(Instruction.Info.StackPops);
+    for (uint8_t I = 0; I < Instruction.Info.StackPops; ++I)
       Inputs.push_back(EmitPop(B));
 
     if (Op == Opcode::POP || Op == Opcode::JUMPDEST) {
@@ -570,7 +583,7 @@ emitLLVM(const EVMProgram &Program, llvm::LLVMContext &Context,
           llvm::ConstantInt::get(I32, exitStatusCode(ExitStatus::Stopped)));
       continue;
     }
-    if (Instruction.Info.StackOutputs != 0) {
+    if (Instruction.Info.StackPushes != 0) {
       if (!Output)
         llvm_unreachable("EVM opcode output was not lowered");
       EmitPush(B, Output);

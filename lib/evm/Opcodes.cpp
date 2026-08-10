@@ -16,18 +16,19 @@ namespace neverd::evm {
 namespace {
 
 using OpcodeTable = std::array<std::optional<OpcodeInfo>, kOpcodeSpaceSize>;
-inline constexpr uint8_t kLogDataStackInputs = 2;
+inline constexpr uint8_t kLogDataStackPops = 2;
 
 constexpr OpcodeTable buildOpcodeTable() {
   OpcodeTable Result{};
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
-                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+#define EVM_OPCODE(NAME, BYTE, POPS, PUSHES, IMMEDIATE_BYTES, IMMEDIATE_KIND,  \
+                   CLASS, INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,     \
                    CALL_VALUE_ACCESS, TERMINATOR)                              \
   Result[BYTE] = OpcodeInfo{Opcode::NAME,                                      \
                             llvm::StringLiteral(#NAME),                        \
-                            static_cast<uint8_t>(INPUTS),                      \
-                            static_cast<uint8_t>(OUTPUTS),                     \
+                            static_cast<uint8_t>(POPS),                        \
+                            static_cast<uint8_t>(PUSHES),                      \
                             static_cast<uint8_t>(IMMEDIATE_BYTES),             \
+                            ImmediateKind::IMMEDIATE_KIND,                     \
                             OpcodeClass::CLASS,                                \
                             Hardfork::INTRODUCED,                              \
                             EffectKind::EFFECT,                                \
@@ -80,7 +81,7 @@ constexpr bool validateOpcodeTable() {
     ++Assigned;
     if (opcodeByte(Info->Op) != Byte || Info->Name.empty() ||
         Info->ImmediateBytes > kWordBytes ||
-        !hardforkAtLeast(Hardfork::Latest, Info->Introduced) ||
+        !hardforkAtLeast(kNewestKnownHardfork, Info->Introduced) ||
         Info->Class == OpcodeClass::Unknown ||
         Info->Effect == EffectKind::Unknown ||
         Info->MemoryAccess == MemoryAccessKind::Unknown ||
@@ -93,38 +94,67 @@ constexpr bool validateOpcodeTable() {
         (Info->Op == Opcode::CALLVALUE))
       return false;
     if (isALU(*Info) &&
-        (Info->StackInputs == 0 || Info->StackOutputs != 1 ||
-         Info->ImmediateBytes != 0 || Info->Effect != EffectKind::None ||
+        (Info->StackPops == 0 || Info->StackPushes != 1 ||
+         Info->ImmediateBytes != 0 || Info->Immediate != ImmediateKind::None ||
+         Info->Effect != EffectKind::None ||
          Info->MemoryAccess != MemoryAccessKind::None || Info->IsTerminator ||
          Info->StateAccess != StateAccessKind::None))
       return false;
     // The shared host ABI returns one word. Stack-family instructions are
-    // lowered directly and may have wider logical stack contracts (DUP16 is
-    // the current maximum); every other opcode must fit the host result ABI.
-    if (Info->Class != OpcodeClass::Stack && Info->StackOutputs > 1)
+    // lowered directly; every other opcode must fit the host result ABI.
+    if (Info->Class != OpcodeClass::Stack && Info->StackPushes > 1)
       return false;
     // Adding a new stack-family encoding requires an explicit family helper
     // and backend lowering; do not let it silently fall through to a host ABI
     // whose argument bound deliberately excludes stack-only operations.
     if (Info->Class == OpcodeClass::Stack && !isPush(Info->Op) &&
-        !isDup(Info->Op) && !isSwap(Info->Op) && Info->Op != Opcode::POP)
+        !isDup(Info->Op) && !isSwap(Info->Op) && !isDeepDup(Info->Op) &&
+        !isDeepSwap(Info->Op) && !isExchange(Info->Op) &&
+        Info->Op != Opcode::POP)
       return false;
     if (isPush(Info->Op) &&
         (Info->ImmediateBytes != pushDataSize(Info->Op) ||
-         Info->StackInputs != 0 || Info->StackOutputs != 1 ||
+         Info->Immediate != (Info->Op == Opcode::PUSH0
+                                 ? ImmediateKind::None
+                                 : ImmediateKind::PushData) ||
+         Info->StackPops != 0 || Info->StackPushes != 1 ||
          Info->Class != OpcodeClass::Stack))
       return false;
-    if (isDup(Info->Op) && (Info->StackInputs != dupDepth(Info->Op) ||
-                            Info->StackOutputs != dupDepth(Info->Op) + 1 ||
-                            Info->Class != OpcodeClass::Stack))
+    if (isDup(Info->Op) &&
+        (Info->StackPops != 0 || Info->StackPushes != 1 ||
+         Info->ImmediateBytes != 0 || Info->Immediate != ImmediateKind::None ||
+         Info->Class != OpcodeClass::Stack))
       return false;
-    if (isSwap(Info->Op) && (Info->StackInputs != swapDepth(Info->Op) + 1 ||
-                             Info->StackOutputs != Info->StackInputs ||
-                             Info->Class != OpcodeClass::Stack))
+    if (isSwap(Info->Op) &&
+        (Info->StackPops != 0 || Info->StackPushes != 0 ||
+         Info->ImmediateBytes != 0 || Info->Immediate != ImmediateKind::None ||
+         Info->Class != OpcodeClass::Stack))
+      return false;
+    if (isDeepDup(Info->Op) &&
+        (Info->StackPops != 0 || Info->StackPushes != 1 ||
+         Info->ImmediateBytes != 1 ||
+         Info->Immediate != ImmediateKind::EIP8024Single ||
+         Info->Class != OpcodeClass::Stack))
+      return false;
+    if (isDeepSwap(Info->Op) &&
+        (Info->StackPops != 0 || Info->StackPushes != 0 ||
+         Info->ImmediateBytes != 1 ||
+         Info->Immediate != ImmediateKind::EIP8024Single ||
+         Info->Class != OpcodeClass::Stack))
+      return false;
+    if (isExchange(Info->Op) &&
+        (Info->StackPops != 0 || Info->StackPushes != 0 ||
+         Info->ImmediateBytes != 1 ||
+         Info->Immediate != ImmediateKind::EIP8024Pair ||
+         Info->Class != OpcodeClass::Stack))
+      return false;
+    if ((Info->Immediate == ImmediateKind::None) != (Info->ImmediateBytes == 0))
+      return false;
+    if (Info->Immediate == ImmediateKind::PushData && !isPush(Info->Op))
       return false;
     if (isLog(Info->Op) &&
-        (Info->StackInputs != logTopicCount(Info->Op) + kLogDataStackInputs ||
-         Info->StackOutputs != 0 || Info->Class != OpcodeClass::Log))
+        (Info->StackPops != logTopicCount(Info->Op) + kLogDataStackPops ||
+         Info->StackPushes != 0 || Info->Class != OpcodeClass::Log))
       return false;
     const bool EffectTerminates = Info->Effect == EffectKind::Halt ||
                                   Info->Effect == EffectKind::Return ||
@@ -138,10 +168,10 @@ constexpr bool validateOpcodeTable() {
 
 static_assert(validateOpcodeTable(),
               "EVMOpcodes.def contains invalid or duplicate opcode metadata");
-static_assert(kMaxOpcodeStackInputs <= kStackLimit,
+static_assert(kMaxOpcodeStackPops <= kStackLimit,
               "an opcode cannot consume more than the EVM stack limit");
-static_assert(kMaxALUStackInputs > 0 &&
-                  kMaxALUStackInputs <= kMaxHostOpcodeArguments,
+static_assert(kMaxALUStackPops > 0 &&
+                  kMaxALUStackPops <= kMaxHostOpcodeArguments,
               "scalar ALU inputs must fit the shared host argument bound");
 
 } // namespace
@@ -180,6 +210,7 @@ OpcodeInfo unknownOpcodeInfo(uint8_t Byte) {
       0,
       0,
       0,
+      ImmediateKind::None,
       OpcodeClass::Unknown,
       Hardfork::Frontier,
       EffectKind::Unknown,
@@ -215,6 +246,16 @@ llvm::StringRef hardforkName(Hardfork Fork) {
   case Hardfork::NAME:                                                         \
     return llvm::StringLiteral(SPELLING);
 #include "neverd/evm/EVMHardforks.def"
+  }
+  return kUnknownName;
+}
+
+llvm::StringRef immediateKindName(ImmediateKind Kind) {
+  switch (Kind) {
+#define EVM_IMMEDIATE_KIND(NAME, SPELLING)                                     \
+  case ImmediateKind::NAME:                                                    \
+    return llvm::StringLiteral(SPELLING);
+#include "neverd/evm/EVMImmediateKinds.def"
   }
   return kUnknownName;
 }

@@ -68,7 +68,7 @@ storage, `MCOPY`, blob opcode, `CLZ`를 포함합니다. 기본 `latest`는 Fusa
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
 `dao`, `tangerine_whistle` 같은 underscore 표기, `merge`, `prague`, `osaka`도 허용하며
@@ -77,9 +77,10 @@ fusaka, latest
 `latest`는 NeverD가 구현한 최신 확정 mainnet revision이지 Ethereum 개발 branch의
 끝이 아닙니다. [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/)은 2026년 4분기
 예정이며 Review 단계의 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843)과
-[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024)는 fork와 encoding이
-확정될 때까지 기본 table에서 제외됩니다. EIP-8024 immediate byte는 `PUSH`와 다른
-`JUMPDEST` masking rule을 가지므로 일반 1-byte immediate로 볼 수 없습니다.
+[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024)는
+`--evm-hardfork=amsterdam`(또는 `bogota`)에서만 활성화되며 확정 전까지 `latest`에서
+제외됩니다. EIP-8024는 유효한 immediate만 소비하고, 유효하지 않은 후보는 다음
+instruction으로 남습니다.
 
 EOF는 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2)에서
 제외되었고 execution-spec-tests도
@@ -94,8 +95,9 @@ NOP으로 조용히 처리하지 않습니다.
 
 수동 EVM metadata는 LLVM의 multiply-included `.def` pattern을 따릅니다.
 
-- `EVMOpcodes.def`는 150 opcode의 단일 source of truth입니다. encoding, 전체 stack
-  contract, immediate width, class, activation fork, primary effect, 독립된 EVM
+- `EVMOpcodes.def`는 확정 opcode 150개와 opt-in 개발 opcode 4개의 단일 source of
+  truth입니다. encoding, 실제 pop/push 변화, immediate kind, class, activation
+  fork, primary effect, 독립된 EVM
   memory/state/call-value access와 termination을 한 record에 두어 암묵적 default가 없습니다.
 - `EVMMemoryAccesses.def`, `EVMStateAccesses.def`,
   `EVMCallValueAccesses.def`는 닫힌 typed domain입니다. `CALL`은 external call이면서
@@ -234,7 +236,8 @@ native object roundtrip을 요청하면 조용히 무시하지 않고 명시적�
 ## 명시적 제한
 
 - legacy bytecode만 지원하며 EOF container는 아직 디코딩하지 않습니다.
-- Review 단계 Amsterdam opcode는 비활성이며 `latest`는 확정 Fusaka입니다.
+- Amsterdam/Bogota는 명시적 개발 target이며, 예정 opcode가 확정될 때까지 `latest`는
+  확정된 Fusaka로 유지됩니다.
 - RPC, chain-state discovery, gas/refund, precompile execution은 제공하지 않습니다.
 - creation extraction은 흔한 static wrapper만 인식하며 constructor emulator가 아닙니다.
 - dynamic jump는 bounded constant analysis로 증명되지 않으면 indirect edge로 남습니다.

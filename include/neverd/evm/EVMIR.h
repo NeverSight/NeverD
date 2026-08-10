@@ -18,6 +18,8 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -32,47 +34,128 @@ struct Diagnostic {
   std::string Message;
 };
 
+enum class OpcodeDecodeStatus : uint8_t {
+#define EVM_OPCODE_DECODE_STATUS(NAME, SPELLING) NAME,
+#include "neverd/evm/EVMDecodeStatuses.def"
+};
+
+enum class ImmediateDecodeStatus : uint8_t {
+#define EVM_IMMEDIATE_DECODE_STATUS(NAME, SPELLING) NAME,
+#include "neverd/evm/EVMDecodeStatuses.def"
+};
+
 /// A decoded instruction whose metadata records both byte identity and
 /// activation in the selected hardfork.
 struct LowInstruction {
   uint64_t PC = 0;
   uint64_t NextPC = 0;
   OpcodeInfo Info;
-  bool Active = false;
+  OpcodeDecodeStatus DecodeStatus = OpcodeDecodeStatus::Unknown;
   llvm::APInt Immediate = llvm::APInt(kWordBits, 0);
-  bool ImmediateTruncated = false;
+  ImmediateDecodeStatus ImmediateStatus = ImmediateDecodeStatus::None;
+  std::array<uint16_t, kMaxImmediateStackOperands> StackOperands{};
+  uint8_t StackOperandCount = 0;
   std::vector<uint8_t> Encoding;
 
   [[nodiscard]] Opcode opcode() const { return Info.Op; }
-  [[nodiscard]] bool isAssigned() const { return Info.isKnown(); }
-  [[nodiscard]] bool isKnown() const { return Active && isAssigned(); }
-  /// Inactive and unassigned bytes fault at runtime and therefore terminate
-  /// the semantic block even when their assigned opcode metadata does not.
+  [[nodiscard]] bool isAssigned() const { return Info.isAssigned(); }
+  [[nodiscard]] bool isActive() const {
+    return DecodeStatus == OpcodeDecodeStatus::Active;
+  }
+  [[nodiscard]] bool hasWellFormedImmediate() const {
+    switch (Info.Immediate) {
+    case ImmediateKind::None:
+      return ImmediateStatus == ImmediateDecodeStatus::None &&
+             StackOperandCount == 0;
+    case ImmediateKind::PushData:
+      return (ImmediateStatus == ImmediateDecodeStatus::Complete ||
+              ImmediateStatus == ImmediateDecodeStatus::Truncated) &&
+             StackOperandCount == 0;
+    case ImmediateKind::EIP8024Single:
+      return (ImmediateStatus == ImmediateDecodeStatus::Complete ||
+              ImmediateStatus == ImmediateDecodeStatus::Truncated) &&
+             StackOperandCount == 1;
+    case ImmediateKind::EIP8024Pair:
+      return (ImmediateStatus == ImmediateDecodeStatus::Complete ||
+              ImmediateStatus == ImmediateDecodeStatus::Truncated) &&
+             StackOperandCount == 2;
+    }
+    return false;
+  }
+  [[nodiscard]] bool isExecutable() const {
+    return isActive() && isAssigned() && hasWellFormedImmediate();
+  }
+  /// Any non-executable instruction faults at runtime and therefore terminates
+  /// the semantic block even when its assigned opcode metadata does not.
   [[nodiscard]] bool isTerminator() const {
-    return !isKnown() || Info.IsTerminator;
+    return !isExecutable() || Info.IsTerminator;
   }
-  [[nodiscard]] uint8_t stackInputs() const {
-    return isKnown() ? Info.StackInputs : 0;
+  [[nodiscard]] uint8_t stackPops() const {
+    return isExecutable() ? Info.StackPops : 0;
   }
-  [[nodiscard]] uint8_t stackOutputs() const {
-    return isKnown() ? Info.StackOutputs : 0;
+  [[nodiscard]] uint8_t stackPushes() const {
+    return isExecutable() ? Info.StackPushes : 0;
   }
   /// Returns true only when this is an active opcode equal to \p Candidate.
   [[nodiscard]] bool is(Opcode Candidate) const {
-    return isKnown() && opcode() == Candidate;
+    return isExecutable() && opcode() == Candidate;
   }
   /// Opcode-family queries include the hardfork activation check. This keeps
   /// relaxed decoding from treating a future opcode as executable semantics.
   [[nodiscard]] bool isPush() const {
-    return isKnown() && evm::isPush(opcode());
+    return isExecutable() && evm::isPush(opcode());
   }
-  [[nodiscard]] bool isDup() const { return isKnown() && evm::isDup(opcode()); }
+  [[nodiscard]] bool isDup() const {
+    return isExecutable() && (evm::isDup(opcode()) || evm::isDeepDup(opcode()));
+  }
   [[nodiscard]] bool isSwap() const {
-    return isKnown() && evm::isSwap(opcode());
+    return isExecutable() &&
+           (evm::isSwap(opcode()) || evm::isDeepSwap(opcode()));
   }
-  [[nodiscard]] bool isLog() const { return isKnown() && evm::isLog(opcode()); }
+  [[nodiscard]] bool isExchange() const {
+    return isExecutable() && evm::isExchange(opcode());
+  }
+  [[nodiscard]] uint16_t dupDepth() const {
+    if (!isDup())
+      return 0;
+    return evm::isDeepDup(opcode()) && StackOperandCount == 1
+               ? StackOperands[0]
+               : evm::dupDepth(opcode());
+  }
+  [[nodiscard]] uint16_t swapDepth() const {
+    if (!isSwap())
+      return 0;
+    return evm::isDeepSwap(opcode()) && StackOperandCount == 1
+               ? StackOperands[0]
+               : evm::swapDepth(opcode());
+  }
+  [[nodiscard]] std::optional<StackDepthPair> exchangeDepths() const {
+    if (!isExchange() || StackOperandCount != 2)
+      return std::nullopt;
+    return StackDepthPair{StackOperands[0], StackOperands[1]};
+  }
+  [[nodiscard]] size_t requiredStackHeight() const {
+    if (!isExecutable())
+      return 0;
+    if (isDup())
+      return dupDepth();
+    if (isSwap())
+      return static_cast<size_t>(swapDepth()) + 1;
+    if (const auto Depths = exchangeDepths())
+      return static_cast<size_t>(std::max(Depths->First, Depths->Second)) + 1;
+    return Info.StackPops;
+  }
+  [[nodiscard]] std::ptrdiff_t stackDelta() const {
+    if (!isExecutable())
+      return 0;
+    return static_cast<std::ptrdiff_t>(Info.StackPushes) -
+           static_cast<std::ptrdiff_t>(Info.StackPops);
+  }
+  [[nodiscard]] bool isLog() const {
+    return isExecutable() && evm::isLog(opcode());
+  }
   [[nodiscard]] bool isJump() const {
-    return isKnown() && evm::isJump(opcode());
+    return isExecutable() && evm::isJump(opcode());
   }
 };
 

@@ -106,6 +106,9 @@ static int realMain(int Argc, char *Argv[]) {
     WithColor::error() << "failed to load: " << takeLastError(Sess) << "\n";
     return 1;
   }
+  if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd) &&
+      !configureAnalysisSession(Sess))
+    return 1;
 
   if (!JsonOutput) {
     const char *ArchStr = neverd_session_arch_name(Sess);

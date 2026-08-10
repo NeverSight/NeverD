@@ -52,6 +52,24 @@ inline constexpr unsigned kMetadataLengthBytes = 2;
 inline constexpr std::size_t kMebibyte = std::size_t{1024} * 1024;
 inline constexpr std::size_t kOpcodeSpaceSize = 1U << kBitsPerByte;
 inline constexpr std::size_t kStackLimit = 1024;
+inline constexpr std::size_t kMaxImmediateStackOperands = 2;
+inline constexpr uint8_t kEIP8024SingleForbiddenFirst = 91;
+inline constexpr uint8_t kEIP8024SingleForbiddenLast = 127;
+inline constexpr uint8_t kEIP8024PairForbiddenFirst = 82;
+inline constexpr uint8_t kEIP8024PairForbiddenLast =
+    kEIP8024SingleForbiddenLast;
+inline constexpr unsigned kEIP8024SingleDecodeBias = 145;
+inline constexpr unsigned kEIP8024PairXorMask = 143;
+inline constexpr unsigned kEIP8024PairGridBits = kHexDigitBits;
+inline constexpr unsigned kEIP8024PairGridMask =
+    (1U << kEIP8024PairGridBits) - 1U;
+inline constexpr unsigned kEIP8024PairLowerTriangleSum = 29;
+inline constexpr uint16_t kEIP8024MinimumSingleDepth = 17;
+inline constexpr uint16_t kEIP8024MaximumSingleDepth = 235;
+inline constexpr uint16_t kEIP8024MaximumPairDepth =
+    kEIP8024PairLowerTriangleSum;
+inline constexpr uint16_t kMaximumInstructionStackHeight =
+    kEIP8024MaximumSingleDepth + 1;
 inline constexpr uint64_t kEntryPC = 0;
 inline constexpr uint64_t kCodeAlignment = 1;
 inline constexpr std::size_t kMaxCodeSize = 64 * kMebibyte;
@@ -64,6 +82,8 @@ inline constexpr uint64_t kBlockHashHistoryWindow = 256;
 static_assert(kWordBits % kBitsPerByte == 0);
 static_assert(kByteMax == std::numeric_limits<uint8_t>::max());
 static_assert(kOpcodeSpaceSize == static_cast<std::size_t>(kByteMax) + 1);
+static_assert(kMaximumInstructionStackHeight <= kStackLimit);
+static_assert(kEIP8024PairGridMask == kHexRadix - 1);
 static_assert(1U << kHexDigitBits == kHexRadix);
 static_assert(kWideWordBits == 2 * kWordBits);
 static_assert((kWordBytes & (kWordBytes - 1)) == 0,

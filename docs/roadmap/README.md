@@ -55,7 +55,10 @@ creation-to-runtime extraction, CFG and stack-SSA recovery, strict and relaxed
 analysis, C23/LLVM/Solidity backends, and CLI/C API integration. The focused EVM
 suite includes interpreter-to-generated-C, LLVM, and deployed Solidity
 differential execution, plus an independent comparison against Anvil's native
-EVM. See [EVM decompilation](../evm.md) for the host
+EVM. Four Amsterdam opcodes are additionally available behind an explicit
+development-fork target, with official/upstream vectors and metadata-drift
+auditing while `latest` remains finalized Fusaka. See
+[EVM decompilation](../evm.md) for the host
 ABI and the intentionally explicit limits around dynamic jumps, external host
 effects, heuristic high-level naming, and EOF bytecode.
 

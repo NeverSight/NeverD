@@ -232,12 +232,14 @@ cl::opt<evm::Hardfork> EVMHardfork("evm-hardfork", cl::desc("EVM hardfork"),
 #include "neverd/evm/EVMHardforks.def"
                                    }),
                                    cl::init(evm::Hardfork::Latest),
-                                   cl::sub(LiftCmd), cl::sub(DecompileCmd));
+                                   cl::sub(LiftCmd), cl::sub(DecompileCmd),
+                                   cl::sub(DisasmCmd), cl::sub(CfgCmd));
 
 cl::opt<bool> EVMRelaxed(
     "evm-relaxed",
     cl::desc("Keep unknown/inactive EVM opcodes as explicit fault nodes"),
-    cl::sub(LiftCmd), cl::sub(DecompileCmd));
+    cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(DisasmCmd),
+    cl::sub(CfgCmd));
 
 cl::opt<sbf::Version> SBFVersion(
     "sbf-version", cl::desc("Solana SBF version"), cl::ValuesClass({

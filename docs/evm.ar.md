@@ -69,7 +69,7 @@ EVM مسجل في core loader registry وليس مخفيًا خلف backend plug
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
 تُقبل الأسماء البديلة `dao` وصيغ underscore و`merge` و`prague` و`osaka`.
@@ -79,9 +79,9 @@ fusaka, latest
 Ethereum. ترقية [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/) مقررة
 للربع الرابع 2026؛ وتبقى تعليمات Review
 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843) و
-[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) خارج الجدول حتى
-تثبيت fork وencoding. فبايت immediate في EIP-8024 له قواعد masking لـ`JUMPDEST`
-تختلف عن `PUSH`.
+[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) لا تُفعّل إلا مع
+`--evm-hardfork=amsterdam` (أو `bogota`) وتبقى خارج `latest` حتى التثبيت. في
+EIP-8024 يُستهلك immediate صالح فقط، وتبقى القيمة غير الصالحة تعليمة تالية.
 
 أزيل EOF في
 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2)، وتسجله
@@ -97,8 +97,9 @@ execution-spec-tests على أنه
 
 تتبع metadata اليدوية لـEVM نمط LLVM لملفات `.def` متعددة التضمين:
 
-- `EVMOpcodes.def` هو مصدر الحقيقة الوحيد لكل 150 opcode. يجمع encoding وعقد
-  المكدس الكامل وعرض immediate وclass وactivation fork وprimary effect والوصول
+- `EVMOpcodes.def` هو مصدر الحقيقة الوحيد لـ150 opcode نهائية وأربعة opcodes
+  تطويرية opt-in. يجمع encoding وتغييرات pop/push الفعلية ونوع immediate وclass
+  وactivation fork وprimary effect والوصول
   المستقل إلى EVM memory وsource state وcall-value وtermination في سجل واحد بلا
   قيم افتراضية صامتة.
 - تحدد `EVMMemoryAccesses.def` و`EVMStateAccesses.def` و
@@ -234,7 +235,8 @@ neverd_session_destroy(session);
 ## حدود صريحة
 
 - يدعم legacy bytecode فقط؛ لا يفك EOF containers بعد.
-- opcodes الخاصة بـAmsterdam في Review معطلة؛ `latest` هو Fusaka النهائي.
+- Amsterdam/Bogota هدفا تطوير صريحان؛ يبقى `latest` على Fusaka النهائي حتى
+  تثبيت opcodes المجدولة.
 - لا RPC ولا اكتشاف chain state ولا حساب gas/refund ولا تنفيذ precompile.
 - يستخرج creation من wrappers ثابتة شائعة، وليس محاكاة transaction كاملة.
 - تبقى dynamic jumps غير مباشرة ما لم يثبتها تحليل ثابت محدود.

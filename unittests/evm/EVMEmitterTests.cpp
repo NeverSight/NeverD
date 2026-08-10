@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <utility>
 
 namespace neverd::evm {
@@ -224,6 +225,29 @@ std::vector<uint8_t> differentialMemoryProgram() {
   };
 }
 
+std::vector<uint8_t> amsterdamDifferentialProgram() {
+  std::vector<uint8_t> Code{opcodeByte(Opcode::SLOTNUM)};
+  for (unsigned Value = 1; Value <= 20; ++Value)
+    appendPush(Code, llvm::APInt(kWordBits, Value));
+
+  Code.insert(Code.end(), {
+                              opcodeByte(Opcode::DUPN),
+                              0x80,
+                              opcodeByte(Opcode::SWAPN),
+                              0x81,
+                              opcodeByte(Opcode::EXCHANGE),
+                              0x9d,
+                          });
+  // Use a non-commutative fold so incorrect SWAPN or EXCHANGE lowering changes
+  // the observable storage value rather than merely permuting dead stack data.
+  for (unsigned RemainingValues = 22; RemainingValues > 1; --RemainingValues)
+    Code.push_back(opcodeByte(Opcode::SUB));
+  Code.insert(Code.end(),
+              {opcodeByte(Opcode::PUSH0), opcodeByte(Opcode::SSTORE),
+               opcodeByte(Opcode::STOP)});
+  return Code;
+}
+
 std::string bytecodeHex(llvm::ArrayRef<uint8_t> Code) {
   std::string Result = "0x";
   Result.reserve(Result.size() + Code.size() * kHexDigitsPerByte);
@@ -288,11 +312,14 @@ TEST(EVMEmitters, ProduceValidEmptyPrograms) {
   std::filesystem::remove(SolidityPath, EC);
 }
 
-std::string differentialHarness(const llvm::APInt &ExpectedWord,
-                                size_t ExpectedTraces,
-                                bool UseLoweredCABI = false) {
+std::string
+differentialHarness(const llvm::APInt &ExpectedWord, size_t ExpectedTraces,
+                    bool UseLoweredCABI = false,
+                    std::optional<llvm::APInt> SlotNumber = std::nullopt) {
   llvm::SmallString<80> Word;
   ExpectedWord.toStringUnsigned(Word, 10);
+  llvm::SmallString<80> Slot;
+  SlotNumber.value_or(llvm::APInt(kWordBits, 0)).toStringUnsigned(Slot, 10);
   std::string Harness;
   llvm::raw_string_ostream OS(Harness);
   OS << "@captured = internal global i" << kWordBits
@@ -310,6 +337,9 @@ std::string differentialHarness(const llvm::APInt &ExpectedWord,
           "  %is_store = icmp eq i8 %opcode, "
        << static_cast<unsigned>(opcodeByte(Opcode::SSTORE))
        << "\n"
+          "  %is_slot = icmp eq i8 %opcode, "
+       << static_cast<unsigned>(opcodeByte(Opcode::SLOTNUM))
+       << "\n"
           "  br i1 %is_store, label %store, label %done\n"
           "store:\n"
           "  %value = load i"
@@ -320,9 +350,12 @@ std::string differentialHarness(const llvm::APInt &ExpectedWord,
        << " %value, ptr @captured\n"
           "  br label %done\n"
           "done:\n"
+          "  %host_result = select i1 %is_slot, i"
+       << kWordBits << " " << Slot << ", i" << kWordBits
+       << " 0\n"
           "  store i"
        << kWordBits
-       << " 0, ptr %result\n"
+       << " %host_result, ptr %result\n"
           "  ret void\n"
           "}\n\n";
   } else {
@@ -335,6 +368,9 @@ std::string differentialHarness(const llvm::APInt &ExpectedWord,
           "  %is_store = icmp eq i8 %opcode, "
        << static_cast<unsigned>(opcodeByte(Opcode::SSTORE))
        << "\n"
+          "  %is_slot = icmp eq i8 %opcode, "
+       << static_cast<unsigned>(opcodeByte(Opcode::SLOTNUM))
+       << "\n"
           "  br i1 %is_store, label %store, label %done\n"
           "store:\n"
           "  store i"
@@ -342,9 +378,12 @@ std::string differentialHarness(const llvm::APInt &ExpectedWord,
        << ", ptr @captured\n"
           "  br label %done\n"
           "done:\n"
+          "  %host_result = select i1 %is_slot, i"
+       << kWordBits << " " << Slot << ", i" << kWordBits
+       << " 0\n"
           "  ret i"
        << kWordBits
-       << " 0\n"
+       << " %host_result\n"
           "}\n\n";
   }
   OS << "define void @" << kTraceFunctionName
@@ -423,6 +462,109 @@ TEST(EVMLLVMEmitter, ExecutesDifferentiallyAgainstInterpreter) {
   std::filesystem::remove(ModulePath, EC);
   std::filesystem::remove(HarnessPath, EC);
   std::filesystem::remove(ExecutablePath, EC);
+}
+
+TEST(EVMEmitters, AmsterdamOpcodesExecuteAcrossGeneratedBackends) {
+  AnalyzeOptions Amsterdam;
+  Amsterdam.Fork = Hardfork::Amsterdam;
+  const std::vector<uint8_t> Code = amsterdamDifferentialProgram();
+  auto Program = analyze(Code, Amsterdam);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  constexpr uint64_t SlotNumber = 0x123456789abcdef0ULL;
+  ExecutionEnvironment Environment;
+  Environment.SlotNumber = SlotNumber;
+  auto Oracle = execute(Program->Low, std::move(Environment));
+  ASSERT_TRUE(static_cast<bool>(Oracle)) << llvm::toString(Oracle.takeError());
+  ASSERT_EQ(Oracle->Status, ExecutionStatus::Stopped);
+  const auto Stored = Oracle->Storage.find(llvm::APInt(kWordBits, 0));
+  ASSERT_NE(Stored, Oracle->Storage.end());
+
+  llvm::LLVMContext Context;
+  auto Module = emitLLVM(*Program, Context);
+  ASSERT_TRUE(static_cast<bool>(Module)) << llvm::toString(Module.takeError());
+  EXPECT_FALSE(llvm::verifyModule(**Module, &llvm::errs()));
+  const std::string LLVMText = emitLLVMText(**Module);
+  EXPECT_NE(LLVMText.find("@evm_stack_peek(ptr %stack, ptr %sp, i32 17)"),
+            std::string::npos);
+  EXPECT_NE(LLVMText.find("@evm_stack_swap"), std::string::npos);
+
+  auto CSource = emitC(*Program);
+  ASSERT_TRUE(static_cast<bool>(CSource))
+      << llvm::toString(CSource.takeError());
+  EXPECT_NE(CSource->find("evm_peek(evm_stack, evm_sp, 17u)"),
+            std::string::npos);
+  EXPECT_NE(CSource->find("evm_swap(evm_stack, evm_sp, 18u)"),
+            std::string::npos);
+  const std::string SlotHostCall =
+      "neverd_evm_host_op(environment, 0x" +
+      llvm::utohexstr(opcodeByte(Opcode::SLOTNUM)) + "u";
+  EXPECT_NE(CSource->find(SlotHostCall), std::string::npos);
+
+  auto SoliditySource = emitSolidity(*Program);
+  ASSERT_TRUE(static_cast<bool>(SoliditySource))
+      << llvm::toString(SoliditySource.takeError());
+  EXPECT_NE(SoliditySource->find("_evmSwap(evmStack, evmSP, 18, pc)"),
+            std::string::npos);
+  EXPECT_NE(SoliditySource->find("_evmSwap(evmStack, evmSP, 3, pc)"),
+            std::string::npos);
+
+  const char *Clang =
+      std::filesystem::exists("/opt/homebrew/opt/llvm/bin/clang")
+          ? "/opt/homebrew/opt/llvm/bin/clang"
+          : "clang";
+  if (std::system(
+          (std::string("command -v ") + Clang + " >/dev/null 2>&1").c_str()) !=
+      0)
+    GTEST_SKIP() << "clang is unavailable";
+
+  const llvm::APInt SlotWord(kWordBits, SlotNumber);
+  const auto LLVMPath = writeTemporarySource("-amsterdam.ll", LLVMText);
+  const auto LLVMHarnessPath = writeTemporarySource(
+      "-amsterdam-harness.ll",
+      differentialHarness(Stored->second, Oracle->Trace.size(), false,
+                          SlotWord));
+  const auto LLVMExecutablePath = writeTemporarySource("-amsterdam-runner", "");
+  const std::string CompileLLVM =
+      std::string(Clang) + " '" + LLVMPath.string() + "' '" +
+      LLVMHarnessPath.string() + "' -o '" + LLVMExecutablePath.string() + "'";
+  ASSERT_EQ(std::system(CompileLLVM.c_str()), 0);
+  EXPECT_EQ(std::system(("'" + LLVMExecutablePath.string() + "'").c_str()), 0);
+
+  const auto CPath = writeTemporarySource("-amsterdam.c", *CSource);
+  const auto CModulePath = writeTemporarySource("-amsterdam-from-c.ll", "");
+  const auto CHarnessPath = writeTemporarySource(
+      "-amsterdam-c-harness.ll",
+      differentialHarness(Stored->second, Oracle->Trace.size(), true,
+                          SlotWord));
+  const auto CExecutablePath = writeTemporarySource("-amsterdam-c-runner", "");
+  const std::string LowerC = std::string(Clang) +
+                             " -std=c2x -Werror -ffreestanding -target "
+                             "x86_64-unknown-linux-gnu -S -emit-llvm '" +
+                             CPath.string() + "' -o '" + CModulePath.string() +
+                             "'";
+  ASSERT_EQ(std::system(LowerC.c_str()), 0);
+  const std::string LinkC = std::string(Clang) + " '" + CModulePath.string() +
+                            "' '" + CHarnessPath.string() + "' -o '" +
+                            CExecutablePath.string() + "'";
+  ASSERT_EQ(std::system(LinkC.c_str()), 0);
+  EXPECT_EQ(std::system(("'" + CExecutablePath.string() + "'").c_str()), 0);
+
+  std::optional<std::filesystem::path> SolidityPath;
+  if (std::system("command -v solc >/dev/null 2>&1") == 0) {
+    SolidityPath = writeTemporarySource("-amsterdam.sol", *SoliditySource);
+    const std::string CompileSolidity =
+        "solc --bin '" + SolidityPath->string() + "' >/dev/null 2>&1";
+    EXPECT_EQ(std::system(CompileSolidity.c_str()), 0);
+  }
+
+  std::error_code EC;
+  for (const auto &Path : {LLVMPath, LLVMHarnessPath, LLVMExecutablePath, CPath,
+                           CModulePath, CHarnessPath, CExecutablePath})
+    std::filesystem::remove(Path, EC);
+  if (SolidityPath)
+    std::filesystem::remove(*SolidityPath, EC);
 }
 
 TEST(EVMCEmitter, ProducesStandaloneCompilableC23) {

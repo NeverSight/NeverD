@@ -288,6 +288,7 @@ int runExport(neverd_session_t Sess);
 int runDiff();
 
 // NeverDCmdPipeline.cpp — engine-driven operations.
+bool configureAnalysisSession(neverd_session_t Sess);
 int runPlugins(const char *Argv0);
 int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);

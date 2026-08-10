@@ -74,6 +74,19 @@ fastest way to isolate loader, CPython, GIL, traceback, and capsule-lifetime
 failures. `NeverDPluginTests` and `NeverDPythonPluginTests` then exercise the
 same behavior through the exported `libneverd` C API.
 
+When a current go-ethereum checkout is available under `local_docs`, audit the
+closed EVM opcode inventory and byte assignments with:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+The audit permits only exclusions named in
+`EVMUpstreamOpcodePolicy.def`; an upstream opcode not represented or explicitly
+reviewed fails the command. Its parser and drift diagnostics have independent
+Python unit coverage in CI.
+
 ## How fixtures are produced
 
 ### Lift and format fixtures

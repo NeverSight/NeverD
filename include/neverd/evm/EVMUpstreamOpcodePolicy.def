@@ -1,0 +1,45 @@
+//===- EVMUpstreamOpcodePolicy.def - Upstream opcode policy ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. It records naming differences
+// and deliberately unsupported opcode constants found in go-ethereum. The
+// drift audit fails on every upstream constant not covered here or by
+// EVMOpcodes.def, forcing new protocol work through an explicit review.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_UPSTREAM_OPCODE_ALIAS
+#define EVM_UPSTREAM_OPCODE_ALIAS(NEVERD_NAME, UPSTREAM_NAME)
+#endif
+
+#ifndef EVM_UPSTREAM_OPCODE_IGNORE
+#define EVM_UPSTREAM_OPCODE_IGNORE(NAME, REASON)
+#endif
+
+EVM_UPSTREAM_OPCODE_ALIAS(SHA3, KECCAK256)
+
+// Historical spellings sharing PREVRANDAO's byte.
+EVM_UPSTREAM_OPCODE_IGNORE(DIFFICULTY, HistoricalAlias)
+EVM_UPSTREAM_OPCODE_IGNORE(RANDOM, HistoricalAlias)
+
+// Withdrawn or unscheduled EOF proposal constants retained by go-ethereum.
+EVM_UPSTREAM_OPCODE_IGNORE(DATALOAD, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(DATALOADN, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(DATASIZE, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(DATACOPY, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(RJUMP, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(RJUMPI, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(RJUMPV, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(CALLF, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(RETF, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(JUMPF, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(EOFCREATE, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(RETURNCONTRACT, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(RETURNDATALOAD, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(EXTCALL, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(EXTDELEGATECALL, WithdrawnEOF)
+EVM_UPSTREAM_OPCODE_IGNORE(EXTSTATICCALL, WithdrawnEOF)
+
+#undef EVM_UPSTREAM_OPCODE_IGNORE
+#undef EVM_UPSTREAM_OPCODE_ALIAS

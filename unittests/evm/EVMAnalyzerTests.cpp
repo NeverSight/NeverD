@@ -21,7 +21,8 @@ TEST(EVMAnalyzer, PushDataIsLosslessAndZeroPaddedAtEOF) {
   EXPECT_EQ(Low->Instructions[0].PC, 0u);
   EXPECT_EQ(Low->Instructions[0].Info.Name, "PUSH2");
   EXPECT_EQ(Low->Instructions[0].Immediate.getZExtValue(), 0x1200u);
-  EXPECT_TRUE(Low->Instructions[0].ImmediateTruncated);
+  EXPECT_EQ(Low->Instructions[0].ImmediateStatus,
+            ImmediateDecodeStatus::Truncated);
   EXPECT_EQ(formatImmediate(Low->Instructions[0]), "0x1200");
 
   auto LeadingZero = decodeLowIR(std::vector<uint8_t>{0x61, 0x00, 0x01});
@@ -47,11 +48,157 @@ TEST(EVMAnalyzer, EveryTruncatedPushIsRightZeroPadded) {
     auto Low = decodeLowIR(Code);
     ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
     ASSERT_EQ(Low->Instructions.size(), 1u);
-    EXPECT_TRUE(Low->Instructions.front().ImmediateTruncated);
+    EXPECT_EQ(Low->Instructions.front().ImmediateStatus,
+              ImmediateDecodeStatus::Truncated);
     const llvm::APInt Expected =
         Width == 1 ? llvm::APInt(256, 0)
                    : llvm::APInt(256, 0xab).shl((Width - 1) * 8);
     EXPECT_EQ(Low->Instructions.front().Immediate, Expected);
+  }
+}
+
+TEST(EVMAnalyzer, DecodesOfficialEIP8024InstructionBoundaries) {
+  AnalyzeOptions Amsterdam;
+  Amsterdam.Fork = Hardfork::Amsterdam;
+  Amsterdam.Strict = false;
+
+  const struct {
+    std::vector<uint8_t> Code;
+    Opcode Op;
+    uint16_t FirstDepth;
+    uint16_t SecondDepth;
+  } Valid[] = {
+      {{0xe6, 0x80, 0x5b}, Opcode::DUPN, 17, 0},
+      {{0xe7, 0xdb, 0x5b}, Opcode::SWAPN, 108, 0},
+      {{0xe8, 0x9d, 0x5b}, Opcode::EXCHANGE, 2, 3},
+      {{0xe8, 0x2f, 0x5b}, Opcode::EXCHANGE, 1, 19},
+      {{0xe8, 0x50, 0x5b}, Opcode::EXCHANGE, 14, 16},
+      {{0xe8, 0x51, 0x5b}, Opcode::EXCHANGE, 14, 15},
+  };
+
+  for (const auto &Case : Valid) {
+    auto Low = decodeLowIR(Case.Code, Amsterdam);
+    ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+    ASSERT_EQ(Low->Instructions.size(), 2u);
+    const LowInstruction &Instruction = Low->Instructions.front();
+    EXPECT_TRUE(Instruction.is(Case.Op));
+    EXPECT_EQ(Instruction.NextPC, 2u);
+    EXPECT_EQ(Instruction.Encoding.size(), 2u);
+    EXPECT_EQ(Instruction.ImmediateStatus, ImmediateDecodeStatus::Complete);
+    ASSERT_GE(Instruction.StackOperandCount, 1u);
+    EXPECT_EQ(Instruction.StackOperands[0], Case.FirstDepth);
+    if (Case.SecondDepth != 0) {
+      ASSERT_EQ(Instruction.StackOperandCount, 2u);
+      EXPECT_EQ(Instruction.StackOperands[1], Case.SecondDepth);
+    }
+    EXPECT_EQ(Low->Instructions[1].PC, 2u);
+    EXPECT_TRUE(Low->Instructions[1].is(Opcode::JUMPDEST));
+  }
+}
+
+TEST(EVMAnalyzer, InvalidEIP8024ImmediatePreservesLegacyBoundaries) {
+  AnalyzeOptions Amsterdam;
+  Amsterdam.Fork = Hardfork::Amsterdam;
+
+  const struct {
+    std::vector<uint8_t> Code;
+    Opcode InvalidOp;
+    Opcode FollowingOp;
+  } Cases[] = {
+      {{0xe7, 0x5b}, Opcode::SWAPN, Opcode::JUMPDEST},
+      {{0xe6, 0x60, 0x5b}, Opcode::DUPN, Opcode::PUSH1},
+      {{0xe7, 0x61, 0x00, 0x00}, Opcode::SWAPN, Opcode::PUSH2},
+      {{0xe6, 0x5f}, Opcode::DUPN, Opcode::PUSH0},
+      {{0xe8, 0x52}, Opcode::EXCHANGE, Opcode::MSTORE},
+  };
+
+  for (const auto &Case : Cases) {
+    auto Low = decodeLowIR(Case.Code, Amsterdam);
+    ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+    ASSERT_GE(Low->Instructions.size(), 2u);
+    const LowInstruction &Invalid = Low->Instructions[0];
+    EXPECT_EQ(Invalid.opcode(), Case.InvalidOp);
+    EXPECT_FALSE(Invalid.isExecutable());
+    EXPECT_TRUE(Invalid.isTerminator());
+    EXPECT_EQ(Invalid.ImmediateStatus, ImmediateDecodeStatus::Invalid);
+    EXPECT_EQ(formatDecodeAnnotation(Invalid), "immediate=invalid");
+    EXPECT_EQ(Invalid.NextPC, 1u);
+    EXPECT_EQ(Invalid.Encoding.size(), 1u);
+    EXPECT_EQ(Low->Instructions[1].PC, 1u);
+    EXPECT_TRUE(Low->Instructions[1].is(Case.FollowingOp));
+  }
+
+  auto Jump = decodeLowIR({0x60, 0x04, 0x56, 0xe6, 0x5b, 0x00}, Amsterdam);
+  ASSERT_TRUE(static_cast<bool>(Jump)) << llvm::toString(Jump.takeError());
+  EXPECT_TRUE(Jump->JumpDestinations.contains(4));
+  EXPECT_TRUE(Jump->hasEdge(0, 4, EdgeKind::Jump));
+}
+
+TEST(EVMAnalyzer, MissingEIP8024ImmediateUsesSemanticZero) {
+  AnalyzeOptions Amsterdam;
+  Amsterdam.Fork = Hardfork::Amsterdam;
+  Amsterdam.Strict = false;
+
+  auto Low = decodeLowIR({opcodeByte(Opcode::DUPN)}, Amsterdam);
+  ASSERT_TRUE(static_cast<bool>(Low)) << llvm::toString(Low.takeError());
+  ASSERT_EQ(Low->Instructions.size(), 1u);
+  const LowInstruction &Instruction = Low->Instructions.front();
+  EXPECT_TRUE(Instruction.is(Opcode::DUPN));
+  EXPECT_EQ(Instruction.ImmediateStatus, ImmediateDecodeStatus::Truncated);
+  EXPECT_EQ(formatDecodeAnnotation(Instruction), "immediate=truncated");
+  EXPECT_EQ(Instruction.Encoding.size(), 1u);
+  EXPECT_EQ(Instruction.NextPC, 1u);
+  ASSERT_EQ(Instruction.StackOperandCount, 1u);
+  EXPECT_EQ(Instruction.StackOperands[0], 145u);
+  EXPECT_EQ(Instruction.requiredStackHeight(), 145u);
+  EXPECT_EQ(Instruction.stackDelta(), 1);
+  EXPECT_EQ(formatImmediate(Instruction), "0x00");
+
+  AnalyzeOptions FusakaRelaxed;
+  FusakaRelaxed.Fork = Hardfork::Fusaka;
+  FusakaRelaxed.Strict = false;
+  auto Inactive = decodeLowIR({opcodeByte(Opcode::DUPN), 0x80}, FusakaRelaxed);
+  ASSERT_TRUE(static_cast<bool>(Inactive))
+      << llvm::toString(Inactive.takeError());
+  ASSERT_EQ(Inactive->Instructions.size(), 2u);
+  EXPECT_EQ(Inactive->Instructions[0].NextPC, 1u);
+  EXPECT_EQ(Inactive->Instructions[1].PC, 1u);
+  EXPECT_TRUE(Inactive->Instructions[1].is(Opcode::DUP1));
+}
+
+TEST(EVMAnalyzer, EIP8024ConsumptionPolicyIsExhaustive) {
+  DecodeOptions Amsterdam;
+  Amsterdam.Fork = Hardfork::Amsterdam;
+  Amsterdam.Strict = false;
+
+  const Opcode ConditionalOpcodes[] = {Opcode::DUPN, Opcode::SWAPN,
+                                       Opcode::EXCHANGE};
+  for (const Opcode Op : ConditionalOpcodes) {
+    for (unsigned Candidate = 0; Candidate <= kByteMax; ++Candidate) {
+      SCOPED_TRACE(testing::Message()
+                   << opcodeName(Op, Hardfork::Amsterdam).str() << " 0x"
+                   << std::hex << Candidate);
+      const uint8_t Encoded = static_cast<uint8_t>(Candidate);
+      const bool IsValid = isExchange(Op)
+                               ? decodeEIP8024Pair(Encoded).has_value()
+                               : decodeEIP8024Single(Encoded).has_value();
+      const std::vector<uint8_t> Code = {opcodeByte(Op), Encoded,
+                                         opcodeByte(Opcode::STOP)};
+      auto Decoded = decodeBytecode(Code, Amsterdam);
+      ASSERT_TRUE(static_cast<bool>(Decoded))
+          << llvm::toString(Decoded.takeError());
+      ASSERT_FALSE(Decoded->Instructions.empty());
+      const LowInstruction &Instruction = Decoded->Instructions.front();
+
+      EXPECT_EQ(Instruction.NextPC, IsValid ? 2u : 1u);
+      EXPECT_EQ(Instruction.Encoding.size(), IsValid ? 2u : 1u);
+      EXPECT_EQ(Instruction.ImmediateStatus,
+                IsValid ? ImmediateDecodeStatus::Complete
+                        : ImmediateDecodeStatus::Invalid);
+      EXPECT_EQ(Instruction.isExecutable(), IsValid);
+      ASSERT_GE(Decoded->Instructions.size(), 2u);
+      EXPECT_EQ(Decoded->Instructions[1].PC, IsValid ? 2u : 1u);
+    }
   }
 }
 
@@ -87,7 +234,9 @@ TEST(EVMAnalyzer, StrictModeRejectsUnknownAndInactiveOpcodes) {
   ASSERT_TRUE(static_cast<bool>(Accepted))
       << llvm::toString(Accepted.takeError());
   ASSERT_EQ(Accepted->Diagnostics.size(), 1u);
-  EXPECT_FALSE(Accepted->Instructions[0].isKnown());
+  EXPECT_FALSE(Accepted->Instructions[0].isExecutable());
+  EXPECT_EQ(formatDecodeAnnotation(Accepted->Instructions[0]),
+            "opcode=unknown");
 
   AnalyzeOptions InvalidFork;
   InvalidFork.Fork = static_cast<Hardfork>(kByteMax);
@@ -108,11 +257,12 @@ TEST(EVMAnalyzer, RelaxedInactiveOpcodesRemainFaultNodesAcrossIRStages) {
       London);
   ASSERT_TRUE(static_cast<bool>(Push0)) << llvm::toString(Push0.takeError());
   const LowInstruction &InactivePush0 = Push0->Low.Instructions.front();
-  EXPECT_TRUE(InactivePush0.Info.isKnown());
+  EXPECT_TRUE(InactivePush0.Info.isAssigned());
   EXPECT_EQ(InactivePush0.Info.Name, "PUSH0");
   EXPECT_EQ(InactivePush0.Info.Introduced, Hardfork::Shanghai);
-  EXPECT_FALSE(InactivePush0.isKnown());
+  EXPECT_FALSE(InactivePush0.isExecutable());
   EXPECT_TRUE(InactivePush0.isTerminator());
+  EXPECT_EQ(formatDecodeAnnotation(InactivePush0), "opcode=inactive");
   ASSERT_TRUE(Push0->Low.Blocks.front().ExitStackHeight.has_value());
   EXPECT_EQ(*Push0->Low.Blocks.front().ExitStackHeight, 0u);
   ASSERT_FALSE(Push0->Med.Blocks.front().Operations.empty());
@@ -320,7 +470,7 @@ TEST(EVMAnalyzer, RejectsAmbiguousDuplicateSelectorRecovery) {
 
 TEST(EVMAnalyzer, RecoversMutabilityFromCanonicalOpcodeMetadata) {
   constexpr uint8_t kFunctionEntry = 0x15;
-  const auto dispatcherFor = [](Opcode BodyOpcode, uint8_t StackInputs) {
+  const auto dispatcherFor = [](Opcode BodyOpcode, uint8_t StackPops) {
     std::vector<uint8_t> Code = {
         opcodeByte(Opcode::PUSH1),
         0,
@@ -345,9 +495,9 @@ TEST(EVMAnalyzer, RecoversMutabilityFromCanonicalOpcodeMetadata) {
         opcodeByte(Opcode::REVERT),
         opcodeByte(Opcode::JUMPDEST),
     };
-    Code.insert(Code.end(), StackInputs, opcodeByte(Opcode::PUSH0));
+    Code.insert(Code.end(), StackPops, opcodeByte(Opcode::PUSH0));
     Code.push_back(opcodeByte(BodyOpcode));
-    if (opcodeInfo(BodyOpcode)->StackOutputs != 0)
+    if (opcodeInfo(BodyOpcode)->StackPushes != 0)
       Code.push_back(opcodeByte(Opcode::POP));
     Code.push_back(opcodeByte(Opcode::STOP));
     return Code;
@@ -355,7 +505,7 @@ TEST(EVMAnalyzer, RecoversMutabilityFromCanonicalOpcodeMetadata) {
 
   const struct {
     Opcode Op;
-    uint8_t StackInputs;
+    uint8_t StackPops;
     Mutability Expected;
   } Cases[] = {
       {Opcode::SHA3, 2, Mutability::Pure},
@@ -368,7 +518,7 @@ TEST(EVMAnalyzer, RecoversMutabilityFromCanonicalOpcodeMetadata) {
 
   for (const auto &Case : Cases) {
     SCOPED_TRACE(opcodeName(Case.Op).str());
-    auto Program = analyze(dispatcherFor(Case.Op, Case.StackInputs));
+    auto Program = analyze(dispatcherFor(Case.Op, Case.StackPops));
     ASSERT_TRUE(static_cast<bool>(Program))
         << llvm::toString(Program.takeError());
     ASSERT_EQ(Program->High.Functions.size(), 1u);

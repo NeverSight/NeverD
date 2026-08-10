@@ -22,6 +22,7 @@ inline constexpr llvm::StringLiteral kSolidityHostFunctionName = "_evmHost";
 inline constexpr llvm::StringLiteral kSolidityTraceFunctionName = "_evmTrace";
 inline constexpr llvm::StringLiteral kSolidityPushFunctionName = "_evmPush";
 inline constexpr llvm::StringLiteral kSolidityPopFunctionName = "_evmPop";
+inline constexpr llvm::StringLiteral kSoliditySwapFunctionName = "_evmSwap";
 inline constexpr llvm::StringLiteral kSolidityExecuteFunctionName =
     "_executeEVM";
 
@@ -267,6 +268,16 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
         "        if (sp == 0) revert EVMStackUnderflow(pc);\n"
         "        unchecked { --sp; } return (sp, stack_[sp]);\n"
         "    }\n\n"
+        "    function "
+     << kSoliditySwapFunctionName << "(uint256[" << kStackLimit
+     << "] memory stack_, uint256 sp, uint256 depth, uint256 pc) "
+        "internal pure {\n"
+        "        if (sp <= depth) revert EVMStackUnderflow(pc);\n"
+        "        uint256 topIndex = sp - 1;\n"
+        "        uint256 otherIndex = topIndex - depth;\n"
+        "        (stack_[topIndex], stack_[otherIndex]) = "
+        "(stack_[otherIndex], stack_[topIndex]);\n"
+        "    }\n\n"
         "    function _evmSDiv(uint256 a, uint256 b) internal pure returns "
         "(uint256) { int256 x = int256(a); int256 y = int256(b); "
         "if (y == 0) return 0; if (x == type(int256).min && y == -1) return a; "
@@ -338,7 +349,7 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
       OS << "                " << kSolidityTraceFunctionName << "(" << PC
          << ", 0x" << llvm::utohexstr(opcodeByte(Op)) << ");\n";
 
-    if (!Instruction.isKnown() || Instruction.is(Opcode::INVALID)) {
+    if (!Instruction.isExecutable() || Instruction.is(Opcode::INVALID)) {
       OS << "                revert EVMUnsupportedOpcode(pc, 0x"
          << llvm::utohexstr(opcodeByte(Op)) << ");\n            }\n";
       continue;
@@ -357,7 +368,7 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
       continue;
     }
     if (Instruction.isDup()) {
-      const unsigned Depth = dupDepth(Op);
+      const uint16_t Depth = Instruction.dupDepth();
       OS << "                if (evmSP < " << Depth
          << ") revert EVMStackUnderflow(pc);\n"
             "                evmSP = "
@@ -368,13 +379,20 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
       continue;
     }
     if (Instruction.isSwap()) {
-      const unsigned Depth = swapDepth(Op);
-      OS << "                if (evmSP <= " << Depth
-         << ") revert EVMStackUnderflow(pc);\n"
-            "                uint256 swapValue = evmStack[evmSP - 1];\n"
-            "                evmStack[evmSP - 1] = evmStack[evmSP - "
-         << Depth + 1 << "];\n                evmStack[evmSP - " << Depth + 1
-         << "] = swapValue;\n";
+      OS << "                " << kSoliditySwapFunctionName
+         << "(evmStack, evmSP, " << Instruction.swapDepth() << ", pc);\n";
+      emitAdvance(OS, InstructionPCs, Instruction.NextPC);
+      OS << "            }\n";
+      continue;
+    }
+    if (Instruction.isExchange()) {
+      const auto [First, Second] = *Instruction.exchangeDepths();
+      OS << "                " << kSoliditySwapFunctionName
+         << "(evmStack, evmSP, " << First << ", pc);\n"
+         << "                " << kSoliditySwapFunctionName
+         << "(evmStack, evmSP, " << Second << ", pc);\n"
+         << "                " << kSoliditySwapFunctionName
+         << "(evmStack, evmSP, " << First << ", pc);\n";
       emitAdvance(OS, InstructionPCs, Instruction.NextPC);
       OS << "            }\n";
       continue;
@@ -407,13 +425,13 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
       continue;
     }
 
-    if (Instruction.Info.StackInputs != 0 ||
+    if (Instruction.Info.StackPops != 0 ||
         (!isALU(Instruction.Info) && Op != Opcode::PC &&
          Op != Opcode::CODESIZE))
       OS << "                uint256["
          << static_cast<unsigned>(maxHostOpcodeArguments())
          << "] memory args_;\n";
-    for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
+    for (uint8_t I = 0; I < Instruction.Info.StackPops; ++I)
       OS << "                (evmSP, args_[" << static_cast<unsigned>(I)
          << "]) = " << kSolidityPopFunctionName << "(evmStack, evmSP, pc);\n";
 
@@ -434,7 +452,7 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
     const bool HasInlineALULowering = isALU(Instruction.Info);
     const std::string Output =
         HasInlineALULowering ? pureExpression(Op) : hostExpression(Op);
-    if (Instruction.Info.StackOutputs != 0)
+    if (Instruction.Info.StackPushes != 0)
       OS << "                uint256 result = " << Output << ";\n";
     else if (!HasInlineALULowering)
       OS << "                " << Output << ";\n";
@@ -454,7 +472,7 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
          << solidityExitStatusName(ExitStatus::Stopped) << ";\n            }\n";
       continue;
     }
-    if (Instruction.Info.StackOutputs != 0)
+    if (Instruction.Info.StackPushes != 0)
       OS << "                evmSP = " << kSolidityPushFunctionName
          << "(evmStack, evmSP, result, pc);\n";
     emitAdvance(OS, InstructionPCs, Instruction.NextPC);

@@ -72,7 +72,7 @@ plugin. Поэтому CLI, API C, дизассемблер, CFG и запрос
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
 Принимаются `dao`, варианты с подчёркиванием, `merge`, `prague` и `osaka`.
@@ -82,9 +82,10 @@ fusaka, latest
 вершину разработки Ethereum. [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/)
 планируется на Q4 2026; инструкции в стадии Review
 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843) и
-[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) не входят в
-таблицу до финализации. Immediate byte EIP-8024 имеет иные правила маскирования
-`JUMPDEST`, чем `PUSH`.
+[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) включаются только
+при `--evm-hardfork=amsterdam` (или `bogota`) и до финализации не входят в
+`latest`. В EIP-8024 потребляется только допустимый immediate; недопустимый
+кандидат остаётся следующей инструкцией.
 
 EOF исключили в
 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2), а
@@ -100,8 +101,9 @@ Strict mode отвергает неизвестные и fork-inactive bytes. `-
 
 Ручные EVM metadata следуют многократно включаемому шаблону LLVM `.def`:
 
-- `EVMOpcodes.def` — единственный источник истины для 150 opcodes. Encoding,
-  полный контракт стека, ширина immediate, class, activation fork, основной
+- `EVMOpcodes.def` — единственный источник истины для 150 финальных и четырёх
+  opt-in development opcodes. Encoding, реальные изменения pop/push,
+  immediate kind, class, activation fork, основной
   effect, независимые доступы к EVM memory, source state и call-value, а также
   termination находятся в одной записи без неявных defaults.
 - `EVMMemoryAccesses.def`, `EVMStateAccesses.def` и
@@ -243,7 +245,8 @@ neverd_session_destroy(session);
 ## Явные ограничения
 
 - Только legacy bytecode; EOF containers пока не декодируются.
-- Review-stage Amsterdam opcodes выключены; `latest` — финальный Fusaka.
+- Amsterdam/Bogota — явные development targets; до финализации запланированных
+  opcodes `latest` остаётся финальным Fusaka.
 - Нет RPC, поиска chain state, учёта gas/refund и выполнения precompiles.
 - Извлечение creation распознаёт обычные static wrappers, но не эмулирует транзакцию.
 - Dynamic jumps остаются indirect без ограниченного constant proof.

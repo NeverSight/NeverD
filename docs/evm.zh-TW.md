@@ -67,7 +67,7 @@ blob 操作碼與 `CLZ`。預設 `latest` 指向 Fusaka。可接受名稱為：
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
 也接受 `dao`、`tangerine_whistle` 等底線拼法、`merge`、`prague` 與 `osaka`。
@@ -77,9 +77,9 @@ fusaka, latest
 Ethereum 將 [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/) 描述為預計於
 2026 年第四季的升級；仍在 Review 階段的
 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843) 與
-[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) 在分叉和編碼最終
-確定前不會進入預設表。EIP-8024 的立即數位元組有別於 `PUSH` 的 `JUMPDEST`
-遮罩規則，不能假裝成普通單位元組立即數。
+[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) 僅在選擇
+`--evm-hardfork=amsterdam`（或 `bogota`）時啟用，最終確定前不會進入 `latest`。
+EIP-8024 只消耗合法立即數；非法候選仍是下一條指令，缺失位元組的語義值為零。
 
 EOF 不屬於 Fusaka：Ethereum 在
 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2) 移除了它，
@@ -94,8 +94,9 @@ NeverD 不會把已撤回的 EOF 提案當作最終主網行為。
 
 手工維護的 EVM metadata 採用 LLVM 可多次 include 的 `.def` 模式：
 
-- `EVMOpcodes.def` 是 150 個已分配傳統操作碼的唯一事實來源：編碼、完整堆疊契約、
-  立即數寬度、類別、啟用分叉、主要 effect、正交 EVM 記憶體存取、原始碼層狀態存取、
+- `EVMOpcodes.def` 是 150 個已定案操作碼與 4 個 opt-in 開發操作碼的唯一事實來源：
+  編碼、實際 pop/push 變化、立即數種類、類別、啟用分叉、主要 effect、正交 EVM
+  記憶體存取、原始碼層狀態存取、
   call-value 存取與終止屬性全在同一筆記錄，新增操作碼不會靜默繼承預設值。
 - `EVMMemoryAccesses.def`、`EVMStateAccesses.def`、
   `EVMCallValueAccesses.def` 定義封閉且具名的屬性域。屬性具型別且彼此正交：`CALL`
@@ -264,7 +265,8 @@ backend，驗證 LLVM IR 使用 `lift`/LLVM query API。native object round-trip
 ## 明確限制
 
 - 僅支援傳統位元組碼，尚不解碼 EOF container。
-- Review 階段 Amsterdam 操作碼未啟用；`latest` 目前選擇已定案 Fusaka 指令集。
+- Amsterdam/Bogota 是明確的開發 target；在計畫操作碼最終確定前，`latest` 仍選擇
+  已定案的 Fusaka 指令集。
 - 無 RPC 擷取、鏈狀態探索、gas 計量/退款或 precompile 執行。call 和環境值以確定性
   interpreter field 或 backend host hook 表達。
 - 建立程式碼擷取僅辨識常見靜態 wrapper，不是完整 constructor transaction emulator。

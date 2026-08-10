@@ -29,6 +29,21 @@ enum class Hardfork : uint8_t {
 #include "neverd/evm/EVMHardforks.def"
 };
 
+inline constexpr Hardfork kLatestStableHardfork =
+#define EVM_HARDFORK_LATEST(NAME, SPELLING) Hardfork::NAME
+#include "neverd/evm/EVMHardforks.def"
+    ;
+
+inline constexpr Hardfork kNewestKnownHardfork =
+#define EVM_HARDFORK_NEWEST(NAME) Hardfork::NAME
+#include "neverd/evm/EVMHardforks.def"
+    ;
+
+enum class ImmediateKind : uint8_t {
+#define EVM_IMMEDIATE_KIND(NAME, SPELLING) NAME,
+#include "neverd/evm/EVMImmediateKinds.def"
+};
+
 enum class EffectKind : uint8_t {
 #define EVM_EFFECT(NAME, SPELLING) NAME,
 #include "neverd/evm/EVMEffects.def"
@@ -74,11 +89,19 @@ enum class OpcodeClass : uint8_t {
 };
 
 enum class Opcode : uint8_t {
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
-                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+#define EVM_OPCODE(NAME, BYTE, POPS, PUSHES, IMMEDIATE_BYTES, IMMEDIATE_KIND,  \
+                   CLASS, INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,     \
                    CALL_VALUE_ACCESS, TERMINATOR)                              \
   NAME = (BYTE),
 #include "neverd/evm/EVMOpcodes.def"
+};
+
+struct StackDepthPair {
+  uint16_t First;
+  uint16_t Second;
+
+  friend constexpr bool operator==(const StackDepthPair &,
+                                   const StackDepthPair &) = default;
 };
 
 /// Canonical metadata for one active opcode. Names always have static lifetime
@@ -88,25 +111,28 @@ struct OpcodeInfo {
   /// unknown-byte factory; a partially initialized record is never valid.
   OpcodeInfo() = delete;
   constexpr OpcodeInfo(Opcode OpValue, llvm::StringLiteral NameValue,
-                       uint8_t StackInputsValue, uint8_t StackOutputsValue,
-                       uint8_t ImmediateBytesValue, OpcodeClass ClassValue,
+                       uint8_t StackPopsValue, uint8_t StackPushesValue,
+                       uint8_t ImmediateBytesValue,
+                       ImmediateKind ImmediateValue, OpcodeClass ClassValue,
                        Hardfork IntroducedValue, EffectKind EffectValue,
                        MemoryAccessKind MemoryAccessValue,
                        StateAccessKind StateAccessValue,
                        CallValueAccessKind CallValueAccessValue,
                        bool IsTerminatorValue)
-      : Op(OpValue), Name(NameValue), StackInputs(StackInputsValue),
-        StackOutputs(StackOutputsValue), ImmediateBytes(ImmediateBytesValue),
-        Class(ClassValue), Introduced(IntroducedValue), Effect(EffectValue),
+      : Op(OpValue), Name(NameValue), StackPops(StackPopsValue),
+        StackPushes(StackPushesValue), ImmediateBytes(ImmediateBytesValue),
+        Immediate(ImmediateValue), Class(ClassValue),
+        Introduced(IntroducedValue), Effect(EffectValue),
         MemoryAccess(MemoryAccessValue), StateAccess(StateAccessValue),
         CallValueAccess(CallValueAccessValue), IsTerminator(IsTerminatorValue) {
   }
 
   Opcode Op;
   llvm::StringLiteral Name;
-  uint8_t StackInputs;
-  uint8_t StackOutputs;
+  uint8_t StackPops;
+  uint8_t StackPushes;
   uint8_t ImmediateBytes;
+  ImmediateKind Immediate;
   OpcodeClass Class;
   Hardfork Introduced;
   EffectKind Effect;
@@ -115,7 +141,7 @@ struct OpcodeInfo {
   CallValueAccessKind CallValueAccess;
   bool IsTerminator;
 
-  [[nodiscard]] constexpr bool isKnown() const {
+  [[nodiscard]] constexpr bool isAssigned() const {
     return Class != OpcodeClass::Unknown;
   }
 };
@@ -128,13 +154,13 @@ struct OpcodeInfo {
 }
 
 [[nodiscard]] constexpr bool isALU(const OpcodeInfo &Info) {
-  return Info.isKnown() && isALU(Info.Class);
+  return Info.isAssigned() && isALU(Info.Class);
 }
 
 [[nodiscard]] constexpr bool isAssignedOpcode(Opcode Op) {
   switch (Op) {
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
-                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+#define EVM_OPCODE(NAME, BYTE, POPS, PUSHES, IMMEDIATE_BYTES, IMMEDIATE_KIND,  \
+                   CLASS, INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,     \
                    CALL_VALUE_ACCESS, TERMINATOR)                              \
   case Opcode::NAME:                                                           \
     return true;
@@ -148,8 +174,8 @@ struct OpcodeInfo {
 /// memory-free.
 [[nodiscard]] constexpr MemoryAccessKind memoryAccess(Opcode Op) {
   switch (Op) {
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
-                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+#define EVM_OPCODE(NAME, BYTE, POPS, PUSHES, IMMEDIATE_BYTES, IMMEDIATE_KIND,  \
+                   CLASS, INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,     \
                    CALL_VALUE_ACCESS, TERMINATOR)                              \
   case Opcode::NAME:                                                           \
     return MemoryAccessKind::MEMORY_ACCESS;
@@ -213,43 +239,43 @@ mergeStateAccess(StateAccessKind Left, StateAccessKind Right) {
 
 inline constexpr unsigned kAssignedOpcodeCount = [] {
   unsigned Count = 0;
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
-                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+#define EVM_OPCODE(NAME, BYTE, POPS, PUSHES, IMMEDIATE_BYTES, IMMEDIATE_KIND,  \
+                   CLASS, INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,     \
                    CALL_VALUE_ACCESS, TERMINATOR)                              \
   ++Count;
 #include "neverd/evm/EVMOpcodes.def"
   return Count;
 }();
 
-inline constexpr uint8_t kMaxOpcodeStackInputs = [] {
+inline constexpr uint8_t kMaxOpcodeStackPops = [] {
   uint8_t Maximum = 0;
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
-                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+#define EVM_OPCODE(NAME, BYTE, POPS, PUSHES, IMMEDIATE_BYTES, IMMEDIATE_KIND,  \
+                   CLASS, INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,     \
                    CALL_VALUE_ACCESS, TERMINATOR)                              \
-  if ((INPUTS) > Maximum)                                                      \
-    Maximum = (INPUTS);
+  if ((POPS) > Maximum)                                                        \
+    Maximum = (POPS);
 #include "neverd/evm/EVMOpcodes.def"
   return Maximum;
 }();
 
 inline constexpr uint8_t kMaxHostOpcodeArguments = [] {
   uint8_t Maximum = 0;
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
-                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+#define EVM_OPCODE(NAME, BYTE, POPS, PUSHES, IMMEDIATE_BYTES, IMMEDIATE_KIND,  \
+                   CLASS, INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,     \
                    CALL_VALUE_ACCESS, TERMINATOR)                              \
-  if (OpcodeClass::CLASS != OpcodeClass::Stack && (INPUTS) > Maximum)          \
-    Maximum = (INPUTS);
+  if (OpcodeClass::CLASS != OpcodeClass::Stack && (POPS) > Maximum)            \
+    Maximum = (POPS);
 #include "neverd/evm/EVMOpcodes.def"
   return Maximum;
 }();
 
-inline constexpr uint8_t kMaxALUStackInputs = [] {
+inline constexpr uint8_t kMaxALUStackPops = [] {
   uint8_t Maximum = 0;
-#define EVM_OPCODE(NAME, BYTE, INPUTS, OUTPUTS, IMMEDIATE_BYTES, CLASS,        \
-                   INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,            \
+#define EVM_OPCODE(NAME, BYTE, POPS, PUSHES, IMMEDIATE_BYTES, IMMEDIATE_KIND,  \
+                   CLASS, INTRODUCED, EFFECT, MEMORY_ACCESS, STATE_ACCESS,     \
                    CALL_VALUE_ACCESS, TERMINATOR)                              \
-  if (isALU(OpcodeClass::CLASS) && (INPUTS) > Maximum)                         \
-    Maximum = (INPUTS);
+  if (isALU(OpcodeClass::CLASS) && (POPS) > Maximum)                           \
+    Maximum = (POPS);
 #include "neverd/evm/EVMOpcodes.def"
   return Maximum;
 }();
@@ -314,8 +340,55 @@ inline constexpr uint8_t kMaxALUStackInputs = [] {
   return Op == Opcode::JUMP || Op == Opcode::JUMPI;
 }
 
-[[nodiscard]] constexpr uint8_t maxOpcodeStackInputs() {
-  return kMaxOpcodeStackInputs;
+[[nodiscard]] constexpr bool isDeepDup(Opcode Op) { return Op == Opcode::DUPN; }
+
+[[nodiscard]] constexpr bool isDeepSwap(Opcode Op) {
+  return Op == Opcode::SWAPN;
+}
+
+[[nodiscard]] constexpr bool isExchange(Opcode Op) {
+  return Op == Opcode::EXCHANGE;
+}
+
+[[nodiscard]] constexpr std::optional<uint16_t>
+decodeEIP8024Single(uint8_t Encoded) {
+  if (Encoded >= kEIP8024SingleForbiddenFirst &&
+      Encoded <= kEIP8024SingleForbiddenLast)
+    return std::nullopt;
+  const auto Depth = static_cast<uint16_t>(
+      (static_cast<unsigned>(Encoded) + kEIP8024SingleDecodeBias) & kByteMax);
+  if (Depth < kEIP8024MinimumSingleDepth || Depth > kEIP8024MaximumSingleDepth)
+    return std::nullopt;
+  return Depth;
+}
+
+[[nodiscard]] constexpr std::optional<StackDepthPair>
+decodeEIP8024Pair(uint8_t Encoded) {
+  if (Encoded >= kEIP8024PairForbiddenFirst &&
+      Encoded <= kEIP8024PairForbiddenLast)
+    return std::nullopt;
+  const unsigned Grid = Encoded ^ kEIP8024PairXorMask;
+  const unsigned Row = Grid >> kEIP8024PairGridBits;
+  const unsigned Column = Grid & kEIP8024PairGridMask;
+  StackDepthPair Result =
+      Row < Column ? StackDepthPair{static_cast<uint16_t>(Row + 1),
+                                    static_cast<uint16_t>(Column + 1)}
+                   : StackDepthPair{static_cast<uint16_t>(Column + 1),
+                                    static_cast<uint16_t>(
+                                        kEIP8024PairLowerTriangleSum - Row)};
+  if (Result.First == 0 || Result.First >= Result.Second ||
+      Result.Second > kEIP8024MaximumPairDepth ||
+      Result.First + Result.Second > kEIP8024PairLowerTriangleSum + 1)
+    return std::nullopt;
+  return Result;
+}
+
+[[nodiscard]] constexpr uint8_t maxOpcodeStackPops() {
+  return kMaxOpcodeStackPops;
+}
+
+[[nodiscard]] constexpr uint16_t maxInstructionStackHeight() {
+  return kMaximumInstructionStackHeight;
 }
 
 [[nodiscard]] constexpr uint8_t maxHostOpcodeArguments() {
@@ -332,8 +405,8 @@ opcodeInfo(Opcode Op, Hardfork Fork = Hardfork::Latest);
 /// Returns no value for an unassigned byte or an opcode inactive at \p Fork.
 [[nodiscard]] std::optional<OpcodeInfo>
 opcodeInfo(uint8_t Byte, Hardfork Fork = Hardfork::Latest);
-/// Build conservative faulting metadata while preserving an unassigned or
-/// fork-inactive byte for relaxed decoding and diagnostics.
+/// Builds conservative faulting metadata for an unassigned byte. Assigned but
+/// fork-inactive bytes retain their canonical database record in the decoder.
 [[nodiscard]] OpcodeInfo unknownOpcodeInfo(uint8_t Byte);
 [[nodiscard]] llvm::StringRef opcodeName(Opcode Op,
                                          Hardfork Fork = Hardfork::Latest);
@@ -341,6 +414,7 @@ opcodeInfo(uint8_t Byte, Hardfork Fork = Hardfork::Latest);
                                          Hardfork Fork = Hardfork::Latest);
 [[nodiscard]] std::optional<Hardfork> parseHardfork(llvm::StringRef Name);
 [[nodiscard]] llvm::StringRef hardforkName(Hardfork Fork);
+[[nodiscard]] llvm::StringRef immediateKindName(ImmediateKind Kind);
 [[nodiscard]] llvm::StringRef effectName(EffectKind Effect);
 [[nodiscard]] llvm::StringRef memoryAccessName(MemoryAccessKind Access);
 [[nodiscard]] llvm::StringRef stateAccessName(StateAccessKind Access);

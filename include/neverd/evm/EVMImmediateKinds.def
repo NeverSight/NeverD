@@ -1,0 +1,20 @@
+//===- EVMImmediateKinds.def - EVM immediate encodings -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. Opcode records name one of
+// these encodings explicitly; the decoder never infers operand consumption
+// from an opcode byte range.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_IMMEDIATE_KIND
+#define EVM_IMMEDIATE_KIND(NAME, SPELLING)
+#endif
+
+EVM_IMMEDIATE_KIND(None, "none")
+EVM_IMMEDIATE_KIND(PushData, "push-data")
+EVM_IMMEDIATE_KIND(EIP8024Single, "eip8024.single")
+EVM_IMMEDIATE_KIND(EIP8024Pair, "eip8024.pair")
+
+#undef EVM_IMMEDIATE_KIND

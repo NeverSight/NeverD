@@ -39,7 +39,7 @@ llvm::APInt signExtend(const llvm::APInt &ByteIndex, const llvm::APInt &Value) {
 std::optional<llvm::APInt> evaluateALU(Opcode Op,
                                        llvm::ArrayRef<llvm::APInt> Inputs) {
   const auto Info = assignedOpcodeInfo(Op);
-  if (!Info || !isALU(*Info) || Inputs.size() != Info->StackInputs)
+  if (!Info || !isALU(*Info) || Inputs.size() != Info->StackPops)
     return std::nullopt;
   for (const llvm::APInt &Input : Inputs)
     if (Input.getBitWidth() != kWordBits)

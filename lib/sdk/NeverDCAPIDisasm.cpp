@@ -89,6 +89,10 @@ const char *neverd_disasm_json(neverd_session_t Sess, neverd_va_t Addr,
       Object["size"] = static_cast<int64_t>(Instruction.Encoding.size());
       Object["mnemonic"] = std::string(Instruction.Info.Name);
       Object["op_str"] = evm::formatImmediate(Instruction);
+      Object["decode_status"] =
+          evm::opcodeDecodeStatusName(Instruction.DecodeStatus);
+      Object["immediate_status"] =
+          evm::immediateDecodeStatusName(Instruction.ImmediateStatus);
       Object["bytes"] = evmBytes(Instruction);
       EVMInstructions.push_back(std::move(Object));
       ++Count;
@@ -220,6 +224,9 @@ const char *neverd_disasm_text(neverd_session_t Sess,
       const std::string Immediate = evm::formatImmediate(Instruction);
       if (!Immediate.empty())
         OS << " " << Immediate;
+      const std::string Annotation = evm::formatDecodeAnnotation(Instruction);
+      if (!Annotation.empty())
+        OS << " ; " << Annotation;
       OS << "\n";
     }
     return dupStr(Buffer);

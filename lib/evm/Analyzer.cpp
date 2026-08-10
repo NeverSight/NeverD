@@ -59,10 +59,6 @@ llvm::Error analysisError(uint64_t PC, llvm::Twine Message) {
       llvm::inconvertibleErrorCode());
 }
 
-std::string byteHex(uint8_t Byte) {
-  return "0x" + llvm::utohexstr(Byte, /*LowerCase=*/true, kHexDigitsPerByte);
-}
-
 std::string wordHexDigits(const llvm::APInt &Value, unsigned MinDigits = 1) {
   llvm::SmallString<kWordBytes * kHexDigitsPerByte> Digits;
   Value.toStringUnsigned(Digits, kHexRadix);
@@ -85,7 +81,7 @@ Constant evaluatePure(Opcode Op, llvm::ArrayRef<Constant> Inputs, uint64_t PC,
   const auto Info = assignedOpcodeInfo(Op);
   if (!Info || !isALU(*Info))
     return std::nullopt;
-  llvm::SmallVector<llvm::APInt, kMaxALUStackInputs> ConcreteInputs;
+  llvm::SmallVector<llvm::APInt, kMaxALUStackPops> ConcreteInputs;
   ConcreteInputs.reserve(Inputs.size());
   for (const Constant &Input : Inputs) {
     if (!Input)
@@ -115,22 +111,31 @@ BlockConstants analyzeBlockConstants(const EVMLowIR &Low,
        Index < Block.FirstInstruction + Block.InstructionCount; ++Index) {
     const LowInstruction &Instruction = Low.Instructions[Index];
     const Opcode Op = Instruction.opcode();
-    if (!Instruction.isKnown())
+    if (!Instruction.isExecutable())
       break;
     if (Instruction.isPush()) {
       Stack.push_back(Instruction.Immediate);
       continue;
     }
     if (Instruction.isDup()) {
-      const size_t Depth = dupDepth(Op);
+      const size_t Depth = Instruction.dupDepth();
       Stack.push_back(Stack.size() >= Depth ? Stack[Stack.size() - Depth]
                                             : Constant{});
       continue;
     }
     if (Instruction.isSwap()) {
-      const size_t Depth = swapDepth(Op);
+      const size_t Depth = Instruction.swapDepth();
       if (Stack.size() > Depth)
         std::swap(Stack.back(), Stack[Stack.size() - Depth - 1]);
+      else
+        Stack.clear();
+      continue;
+    }
+    if (Instruction.isExchange()) {
+      const auto [First, Second] = *Instruction.exchangeDepths();
+      if (Stack.size() > Second)
+        std::swap(Stack[Stack.size() - First - 1],
+                  Stack[Stack.size() - Second - 1]);
       else
         Stack.clear();
       continue;
@@ -141,8 +146,8 @@ BlockConstants analyzeBlockConstants(const EVMLowIR &Low,
     }
 
     std::vector<Constant> Inputs;
-    Inputs.reserve(Instruction.Info.StackInputs);
-    for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
+    Inputs.reserve(Instruction.Info.StackPops);
+    for (uint8_t I = 0; I < Instruction.Info.StackPops; ++I)
       Inputs.push_back(Pop());
     if (Instruction.isJump()) {
       Result.JumpTarget = Inputs.empty() ? Constant{} : Inputs[0];
@@ -151,7 +156,7 @@ BlockConstants analyzeBlockConstants(const EVMLowIR &Low,
     }
     const Constant Folded =
         evaluatePure(Op, Inputs, Instruction.PC, Low.Code.size());
-    for (uint8_t I = 0; I < Instruction.Info.StackOutputs; ++I)
+    for (uint8_t I = 0; I < Instruction.Info.StackPushes; ++I)
       Stack.push_back(I == 0 ? Folded : Constant{});
   }
   return Result;
@@ -214,19 +219,8 @@ llvm::Error computeStackHeights(EVMLowIR &Low, AnalyzeOptions Options) {
     for (size_t II = Block.FirstInstruction;
          II < Block.FirstInstruction + Block.InstructionCount; ++II) {
       const LowInstruction &Instruction = Low.Instructions[II];
-      size_t Required = Instruction.stackInputs();
-      int Delta = static_cast<int>(Instruction.stackOutputs()) -
-                  static_cast<int>(Instruction.stackInputs());
-      if (Instruction.isPush()) {
-        Required = 0;
-        Delta = 1;
-      } else if (Instruction.isDup()) {
-        Required = dupDepth(Instruction.opcode());
-        Delta = 1;
-      } else if (Instruction.isSwap()) {
-        Required = swapDepth(Instruction.opcode()) + 1;
-        Delta = 0;
-      }
+      const size_t Required = Instruction.requiredStackHeight();
+      const std::ptrdiff_t Delta = Instruction.stackDelta();
       if (Height < Required) {
         if (Options.Strict)
           return analysisError(Instruction.PC,
@@ -237,7 +231,7 @@ llvm::Error computeStackHeights(EVMLowIR &Low, AnalyzeOptions Options) {
              "stack underflow in " + std::string(Instruction.Info.Name)});
         Height = Required;
       }
-      Height = static_cast<size_t>(static_cast<int64_t>(Height) + Delta);
+      Height = static_cast<size_t>(static_cast<std::ptrdiff_t>(Height) + Delta);
       if (Height > kStackLimit) {
         if (Options.Strict)
           return analysisError(Instruction.PC, "stack limit exceeds " +
@@ -380,29 +374,36 @@ std::optional<uint64_t> nonPayableGuardCallValue(const EVMLowIR &Low,
   for (size_t I = Block.FirstInstruction;
        I < Block.FirstInstruction + Block.InstructionCount; ++I) {
     const LowInstruction &Instruction = Low.Instructions[I];
-    if (!Instruction.isKnown())
+    if (!Instruction.isExecutable())
       return std::nullopt;
     if (Instruction.isPush()) {
       Stack.push_back({});
       continue;
     }
     if (Instruction.isDup()) {
-      const size_t Depth = dupDepth(Instruction.opcode());
+      const size_t Depth = Instruction.dupDepth();
       Ensure(Depth);
       Stack.push_back(Stack[Stack.size() - Depth]);
       continue;
     }
     if (Instruction.isSwap()) {
-      const size_t Depth = swapDepth(Instruction.opcode());
+      const size_t Depth = Instruction.swapDepth();
       Ensure(Depth + 1);
       std::swap(Stack.back(), Stack[Stack.size() - Depth - 1]);
       continue;
     }
+    if (Instruction.isExchange()) {
+      const auto [First, Second] = *Instruction.exchangeDepths();
+      Ensure(Second + 1);
+      std::swap(Stack[Stack.size() - First - 1],
+                Stack[Stack.size() - Second - 1]);
+      continue;
+    }
 
-    Ensure(Instruction.Info.StackInputs);
+    Ensure(Instruction.Info.StackPops);
     std::vector<PayabilityValue> Inputs;
-    Inputs.reserve(Instruction.Info.StackInputs);
-    for (uint8_t Input = 0; Input < Instruction.Info.StackInputs; ++Input)
+    Inputs.reserve(Instruction.Info.StackPops);
+    for (uint8_t Input = 0; Input < Instruction.Info.StackPops; ++Input)
       Inputs.push_back(Pop());
 
     PayabilityValue Output;
@@ -433,7 +434,7 @@ std::optional<uint64_t> nonPayableGuardCallValue(const EVMLowIR &Low,
       return std::nullopt;
     }
 
-    for (uint8_t Result = 0; Result < Instruction.Info.StackOutputs; ++Result)
+    for (uint8_t Result = 0; Result < Instruction.Info.StackPushes; ++Result)
       Stack.push_back(Result == 0 ? Output : PayabilityValue{});
   }
   return std::nullopt;
@@ -446,7 +447,7 @@ precedingPush(const EVMLowIR &Low, size_t Index,
   for (size_t I = Index; I-- > Begin;) {
     if (Low.Instructions[I].isPush())
       return Low.Instructions[I].Immediate;
-    if (!Low.Instructions[I].isKnown() ||
+    if (!Low.Instructions[I].isExecutable() ||
         Low.Instructions[I].Info.Class == OpcodeClass::Control)
       break;
   }
@@ -455,65 +456,19 @@ precedingPush(const EVMLowIR &Low, size_t Index,
 
 } // namespace
 
-std::string formatImmediate(const LowInstruction &Instruction) {
-  if (Instruction.Info.ImmediateBytes == 0)
-    return {};
-  return wordHex(Instruction.Immediate,
-                 Instruction.Info.ImmediateBytes * kHexDigitsPerByte);
-}
-
 llvm::Expected<EVMLowIR> decodeLowIR(llvm::ArrayRef<uint8_t> Code,
                                      AnalyzeOptions Options) {
-  if (!isValidHardfork(Options.Fork))
-    return analysisError(kEntryPC, "invalid hardfork value");
-  if (Code.empty())
-    return analysisError(kEntryPC, "empty bytecode");
-  if (Code.size() > Options.MaxCodeSize)
-    return analysisError(kEntryPC, "bytecode exceeds configured size limit");
+  auto Decoded = decodeBytecode(Code, Options);
+  if (!Decoded)
+    return Decoded.takeError();
 
   EVMLowIR Low;
-  Low.Fork = Options.Fork;
-  Low.Strict = Options.Strict;
-  Low.Code.assign(Code.begin(), Code.end());
-
-  for (size_t PC = 0; PC < Code.size();) {
-    const size_t Start = PC;
-    const uint8_t Byte = Code[PC++];
-    const auto AssignedInfo = assignedOpcodeInfo(Byte);
-    const auto ActiveInfo = opcodeInfo(Byte, Options.Fork);
-    LowInstruction Instruction{
-        Start, 0,
-        ActiveInfo ? *ActiveInfo
-                   : AssignedInfo.value_or(unknownOpcodeInfo(Byte)),
-        ActiveInfo.has_value()};
-    Instruction.Encoding.push_back(Byte);
-    if (!ActiveInfo) {
-      const std::string Reason =
-          AssignedInfo ? "inactive opcode " : "unknown opcode ";
-      if (Options.Strict)
-        return analysisError(Start, Reason + llvm::Twine(byteHex(Byte)));
-      Low.Diagnostics.push_back({Start, Reason + byteHex(Byte)});
-    }
-
-    if (Instruction.Info.ImmediateBytes != 0) {
-      const uint8_t Width = Instruction.Info.ImmediateBytes;
-      llvm::APInt Value(kWordBits, 0);
-      for (uint8_t I = 0; I < Width; ++I) {
-        Value <<= kBitsPerByte;
-        if (PC < Code.size()) {
-          Value |= Code[PC];
-          Instruction.Encoding.push_back(Code[PC++]);
-        } else {
-          Instruction.ImmediateTruncated = true;
-        }
-      }
-      Instruction.Immediate = std::move(Value);
-    }
-    Instruction.NextPC = PC;
-    if (Instruction.is(Opcode::JUMPDEST))
-      Low.JumpDestinations.insert(Start);
-    Low.Instructions.push_back(std::move(Instruction));
-  }
+  Low.Fork = Decoded->Fork;
+  Low.Strict = Decoded->Strict;
+  Low.Code = std::move(Decoded->Code);
+  Low.Instructions = std::move(Decoded->Instructions);
+  Low.JumpDestinations = std::move(Decoded->JumpDestinations);
+  Low.Diagnostics = std::move(Decoded->Diagnostics);
 
   std::set<uint64_t> Starts{kEntryPC};
   for (const auto &Instruction : Low.Instructions) {
@@ -629,19 +584,19 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
       Operation.PC = Instruction.PC;
       Operation.Op = Instruction.opcode();
       Operation.Name = std::string(Instruction.Info.Name);
-      Operation.Effect =
-          Instruction.isKnown() ? Instruction.Info.Effect : EffectKind::Unknown;
-      Operation.MemoryAccess = Instruction.isKnown()
+      Operation.Effect = Instruction.isExecutable() ? Instruction.Info.Effect
+                                                    : EffectKind::Unknown;
+      Operation.MemoryAccess = Instruction.isExecutable()
                                    ? Instruction.Info.MemoryAccess
                                    : MemoryAccessKind::Unknown;
-      Operation.StateAccess = Instruction.isKnown()
+      Operation.StateAccess = Instruction.isExecutable()
                                   ? Instruction.Info.StateAccess
                                   : StateAccessKind::Unknown;
-      Operation.CallValueAccess = Instruction.isKnown()
+      Operation.CallValueAccess = Instruction.isExecutable()
                                       ? Instruction.Info.CallValueAccess
                                       : CallValueAccessKind::Unknown;
 
-      if (!Instruction.isKnown()) {
+      if (!Instruction.isExecutable()) {
         Block.Operations.push_back(std::move(Operation));
         continue;
       }
@@ -651,7 +606,7 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
         Stack.push_back(Value);
         Operation.Outputs.push_back(Value);
       } else if (Instruction.isDup()) {
-        const size_t Depth = dupDepth(Instruction.opcode());
+        const size_t Depth = Instruction.dupDepth();
         Ensure(Depth, Instruction.PC);
         ValueID Input = Stack[Stack.size() - Depth];
         Constant Folded = Med.Values[Input].Constant;
@@ -661,13 +616,20 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
         Operation.Outputs.push_back(Output);
         Stack.push_back(Output);
       } else if (Instruction.isSwap()) {
-        const size_t Depth = swapDepth(Instruction.opcode());
+        const size_t Depth = Instruction.swapDepth();
         Ensure(Depth + 1, Instruction.PC);
         Operation.Inputs = {Stack.back(), Stack[Stack.size() - Depth - 1]};
         std::swap(Stack.back(), Stack[Stack.size() - Depth - 1]);
+      } else if (Instruction.isExchange()) {
+        const auto [First, Second] = *Instruction.exchangeDepths();
+        Ensure(Second + 1, Instruction.PC);
+        Operation.Inputs = {Stack[Stack.size() - First - 1],
+                            Stack[Stack.size() - Second - 1]};
+        std::swap(Stack[Stack.size() - First - 1],
+                  Stack[Stack.size() - Second - 1]);
       } else {
-        Ensure(Instruction.Info.StackInputs, Instruction.PC);
-        for (uint8_t I = 0; I < Instruction.Info.StackInputs; ++I)
+        Ensure(Instruction.Info.StackPops, Instruction.PC);
+        for (uint8_t I = 0; I < Instruction.Info.StackPops; ++I)
           Operation.Inputs.push_back(Pop());
         std::vector<Constant> Constants;
         Constants.reserve(Operation.Inputs.size());
@@ -675,7 +637,7 @@ llvm::Expected<EVMMedIR> lowerToMedIR(const EVMLowIR &Low) {
           Constants.push_back(Med.Values[Input].Constant);
         Constant Folded = evaluatePure(Instruction.opcode(), Constants,
                                        Instruction.PC, Low.Code.size());
-        for (uint8_t I = 0; I < Instruction.Info.StackOutputs; ++I) {
+        for (uint8_t I = 0; I < Instruction.Info.StackPushes; ++I) {
           ValueID Output = addValue(Med, ValueKind::Instruction, Instruction.PC,
                                     Operation.Name, Operation.Inputs,
                                     I == 0 ? Folded : Constant{});
@@ -800,13 +762,13 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &) {
         const bool IsNonPayableGuardRead =
             NonPayableGuardReads.contains(Instruction.PC);
         StateAccessKind InstructionAccess = StateAccessKind::Unknown;
-        if (Instruction.isKnown())
+        if (Instruction.isExecutable())
           InstructionAccess = IsNonPayableGuardRead
                                   ? StateAccessKind::None
                                   : Instruction.Info.StateAccess;
         StateAccess = mergeStateAccess(StateAccess, InstructionAccess);
         ReadsCallValue |=
-            !IsNonPayableGuardRead && Instruction.isKnown() &&
+            !IsNonPayableGuardRead && Instruction.isExecutable() &&
             Instruction.Info.CallValueAccess == CallValueAccessKind::Read;
         if (Instruction.is(Opcode::CALLDATALOAD) && I > 0 &&
             Low.Instructions[I - 1].isPush()) {
@@ -931,6 +893,9 @@ std::string dumpLowIR(const EVMLowIR &Low) {
       if (const std::string Immediate = formatImmediate(Instruction);
           !Immediate.empty())
         OS << " " << Immediate;
+      if (const std::string Annotation = formatDecodeAnnotation(Instruction);
+          !Annotation.empty())
+        OS << " ; " << Annotation;
       OS << "\n";
     }
     for (const auto &Edge : Block.Successors) {

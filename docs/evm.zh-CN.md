@@ -60,26 +60,29 @@ C API、反汇编器、CFG 构建器以及 Low/Med/High/LLVM 查询路径会收�
 
 ## 硬分叉与操作码
 
-传统操作码集从 Frontier 到 Fusaka 全部覆盖，包括 `PUSH0`、瞬态存储、`MCOPY`、
-blob 操作码与 `CLZ`。默认的 `latest` 指向 Fusaka。可接受名称为：
+已最终确定的传统操作码集从 Frontier 到 Fusaka 全部覆盖，包括 `PUSH0`、瞬态存储、
+`MCOPY`、blob 操作码与 `CLZ`。Amsterdam 的四个计划操作码也已作为显式开发分叉
+target 实现；默认 `latest` 仍指向 Fusaka。可接受名称为：
 
 ```text
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
-也接受常用别名：`dao`、`tangerine_whistle` 等下划线拼法、`merge`、`prague`
-和 `osaka`。目前 `latest` 与 `osaka` 均解析为规范的 `fusaka` 执行版本。
+也接受常用别名：`dao`、`tangerine_whistle` 等下划线拼法、`merge`、`prague`、
+`osaka` 和 `glamsterdam`。目前 `latest` 与 `osaka` 均解析为规范的 `fusaka`
+执行版本；`glamsterdam` 解析为 `amsterdam`。
 
 `latest` 特指 NeverD 已实现的最新主网最终版本，而非 Ethereum 开发分支顶端。
 Ethereum 将 [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/) 描述为计划于
-2026 年第四季度的升级；仍处于 Review 阶段的
+2026 年第四季度的升级。其仍处于 Review 阶段的
 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843) 与
-[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) 在分叉及编码最终
-确定前不会进入默认表。尤其是 EIP-8024 的立即数字节具有不同于 `PUSH` 的
-`JUMPDEST` 屏蔽规则，不能假装成普通单字节立即数。
+[DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) 仅在显式选择
+`--evm-hardfork=amsterdam`（或 `bogota`）时启用，最终确定前不会进入 `latest`。
+EIP-8024 只有合法候选字节会被消费；非法候选仍是下一条指令，缺失字节的语义值为零。
+把它当作普通定宽立即数会破坏指令与 `JUMPDEST` 边界。
 
 EOF 不属于 Fusaka：Ethereum 在
 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2) 中移除了它，
@@ -95,8 +98,9 @@ LowIR 与诊断中，但执行到它们时，生成 backend 仍会故障；宽�
 
 手工维护的 EVM 元数据采用 LLVM 的可多次包含 `.def` 模式：
 
-- `EVMOpcodes.def` 是 150 个已分配传统操作码的唯一事实来源：编码、完整栈契约、
-  立即数宽度、操作码类别、启用分叉、主要 effect、正交 EVM 内存访问、源码级
+- `EVMOpcodes.def` 是 150 个最终操作码与 4 个 opt-in 开发分叉操作码的唯一事实来源：
+  编码、实际 pop/push 变化、立即数编码、操作码类别、启用分叉、主要 effect、正交
+  EVM 内存访问、源码级
   状态访问、call-value 访问和终止属性都在同一记录中；新增操作码不会静默继承默认值。
 - `EVMMemoryAccesses.def`、`EVMStateAccesses.def` 与
   `EVMCallValueAccesses.def` 定义封闭且具名的属性域。属性保持有类型且彼此正交：
@@ -106,6 +110,10 @@ LowIR 与诊断中，但执行到它们时，生成 backend 仍会故障；宽�
   输出为 `payable`，而不是错误的 `view`。分析器另行识别规范的
   `ISZERO(CALLVALUE)` 非 payable 守卫；只有确认其非零分支以 `REVERT` 结束时，
   才忽略这次编译器生成的读取。
+- `EVMImmediateKinds.def` 定义定宽 PUSH data 与 EIP-8024 条件 single/pair 编码；
+  `EVMDecodeStatuses.def` 统一 LowIR 与反汇编公开的稳定状态词汇。
+  `EVMUpstreamOpcodePolicy.def` 记录 go-ethereum 名称别名及有意排除的历史/已撤回项；
+  `scripts/audit_evm_opcode_metadata.py` 会拒绝字节漂移和任何未审阅的上游新常量。
 - `EVMHardforks.def`、`EVMEffects.def`、`EVMExitStatuses.def` 和
   `OutputLanguages.def` 生成对应的有序枚举、解析器、显示名称、CLI 选项与 C ABI 值。
 - `EVMConstants.h` 统一拥有协议宽度、限制和稳定默认名称。
@@ -113,16 +121,16 @@ LowIR 与诊断中，但执行到它们时，生成 backend 仍会故障；宽�
   检查的 `APInt` 实现；LLVM、C、Solidity 保持显式目标 lowering，使 backend
   契约及不支持情形始终可见。
 
-decoder 是原始字节边界。操作码身份与硬分叉启用状态刻意分离：宽松解码会保留已分配
-但在所选历史分叉中未启用指令的名称、引入分叉与立即数宽度，同时让其语义查询保持
-保守并会故障。这样，携带立即数的未启用指令不会移动后续字节边界或意外获得当前语义。
-分析、解释与所有 emitter 均使用生成的 `Opcode` 枚举和元数据查询；原始编码只在
-trace、host callback 等面向字节的 ABI 边界再次出现。`SWAP16` 有 17 个逻辑栈输入，
-而最大的非栈 host 操作有 7 个参数；两项限制分别在编译期推导。
+独立 decoder 是原始字节边界；CFG 与栈分析在后一阶段消费其无损结果。操作码身份、
+分叉启用、立即数合法性、实际 pop/push 变化和执行前所需栈深度彼此分离。宽松解码
+不会让未启用操作码获得语义，也不会让其“可能的立即数”移动后续边界。EIP-8024
+深度只解码一次并存入类型化指令字段，分析器、解释器与所有 backend 统一消费该字段。
+最大动态栈需求为 236 word，最大非栈 host 操作为 7 个参数；两项限制独立命名并推导
+或验证。
 
 `OpcodeInfo` 不能默认构造成半有效记录，其名称使用 `llvm::StringLiteral`，不会形成
 悬空 `StringRef`。编译期表验证器会拒绝重复编码、未知类别或属性、非法标量 ALU
-契约、effect/状态访问不一致、PUSH/DUP/SWAP/LOG 家族契约错误，以及未标记为基本块
+契约、effect/状态访问不一致、立即数/栈家族契约错误，以及未标记为基本块
 终结指令的分支。它还拒绝返回多于一个栈结果的非栈操作（共享 host ABI 只返回一个
 word），并在专用 lowering 尚未实现时拒绝未知栈家族操作。宽松解码只能通过显式的
 未知字节工厂取得保守故障元数据。
@@ -146,7 +154,8 @@ switch 仍保持显式，遗漏 ALU case 时立即失败。
 
 ## 分析模型
 
-- **EVM LowIR** 保留 PC、编码、PUSH 立即数（截断时右侧补零）、基本块、前驱/后继边、
+- **EVM LowIR** 保留 PC、编码、类型化立即数状态与解码后的栈深度操作数（包括 PUSH
+  截断右补零和 EIP-8024 条件消费规则）、基本块、前驱/后继边、
   已验证的 `JUMPDEST` 目标、可达性与栈高度。
 - **EVM MedIR** 把每个栈值表示为 256 位 SSA 值，创建合并 phi，对纯操作做常量折叠，
   并保留主要 effect、正交的 `none/read/write/readwrite` EVM 内存访问、源码级状态访问
@@ -266,7 +275,8 @@ neverd_session_destroy(session);
 ## 明确限制
 
 - 仅支持传统字节码；尚不解码 EOF 容器。
-- Review 阶段的 Amsterdam 操作码未启用；`latest` 当前选择最终确定的 Fusaka 指令集。
+- Amsterdam/Bogota 是显式开发 target；在计划操作码最终确定前，`latest` 仍选择
+  已最终确定的 Fusaka 指令集。
 - 不提供 RPC 获取、链状态发现、gas 计量/退款或预编译执行。call 与环境值通过确定性
   解释器字段或 backend host hook 表达。
 - 创建代码提取只识别常见静态包装，并非完整构造器交易模拟器。

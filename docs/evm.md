@@ -73,31 +73,36 @@ points.
 
 ## Hardforks and opcodes
 
-The assigned legacy opcode set is covered from Frontier through Fusaka,
-including `PUSH0`, transient storage, `MCOPY`, blob opcodes, and `CLZ`. The
-default `latest` target is Fusaka. Accepted names are:
+The finalized legacy opcode set is covered from Frontier through Fusaka,
+including `PUSH0`, transient storage, `MCOPY`, blob opcodes, and `CLZ`.
+Amsterdam's four scheduled opcodes are also implemented behind an explicit
+development-fork target. The default `latest` target remains Fusaka. Accepted
+names are:
 
 ```text
 frontier, homestead, dao-fork, tangerine-whistle, spurious-dragon,
 byzantium, constantinople, petersburg, istanbul, muir-glacier, berlin,
 london, arrow-glacier, gray-glacier, paris, shanghai, cancun, pectra,
-fusaka, latest
+fusaka, amsterdam, bogota, latest
 ```
 
 Common aliases are accepted: `dao`, underscore spellings such as
-`tangerine_whistle`, `merge`, `prague`, and `osaka`. `latest` and `osaka`
-currently resolve to the canonical `fusaka` execution revision.
+`tangerine_whistle`, `merge`, `prague`, `osaka`, and `glamsterdam`. `latest`
+and `osaka` currently resolve to the canonical `fusaka` execution revision;
+`glamsterdam` resolves to `amsterdam`.
 
 `latest` deliberately means the latest finalized mainnet revision implemented
 by NeverD, not the tip of Ethereum's development branch. Ethereum currently
 describes [Glamsterdam](https://ethereum.org/roadmap/glamsterdam/) as an
-upcoming Q4 2026 upgrade. Its scheduled-but-still-Review-stage
+upcoming Q4 2026 upgrade. NeverD exposes its scheduled-but-still-Review-stage
 [SLOTNUM](https://eips.ethereum.org/EIPS/eip-7843),
 [DUPN/SWAPN/EXCHANGE](https://eips.ethereum.org/EIPS/eip-8024) instructions
-remain outside the default table until the fork and encodings are finalized.
-This matters especially for EIP-8024: its immediate byte deliberately has
-different `JUMPDEST` masking rules from `PUSH`, so pretending it is an ordinary
-one-byte immediate would be backwards-incompatible.
+only when `--evm-hardfork=amsterdam` (or `bogota`) is selected. They remain
+outside `latest` until the fork and encodings are finalized. This matters
+especially for EIP-8024: a valid immediate is consumed, an invalid candidate
+remains the next instruction byte, and a missing byte has semantic value zero.
+Treating it as an ordinary fixed-width immediate would corrupt instruction and
+`JUMPDEST` boundaries.
 
 EOF is not part of the Fusaka target: Ethereum removed it from the upgrade in
 [Fusaka checkpoint 2](https://blog.ethereum.org/2025/04/29/checkpoint-2), and
@@ -114,9 +119,10 @@ reaches one; relaxed mode never silently treats an unknown byte as a NOP.
 
 Hand-maintained EVM metadata follows LLVM's multiply-included `.def` pattern:
 
-- `EVMOpcodes.def` is the single source of truth for the 150 assigned legacy
-  opcodes: encoding, complete stack contract, immediate width, opcode class,
-  activation fork, primary effect, orthogonal EVM-memory access,
+- `EVMOpcodes.def` is the single source of truth for 150 finalized and four
+  opt-in development-fork opcodes: encoding, actual pop/push mutations,
+  immediate encoding, opcode class, activation fork, primary effect,
+  orthogonal EVM-memory access,
   source-level state access, call-value access, and termination. Every required
   property is on the same record, so adding an opcode cannot silently inherit
   a default.
@@ -133,6 +139,12 @@ Hand-maintained EVM metadata follows LLVM's multiply-included `.def` pattern:
   unsound `view` classification. The analyzer separately recognizes the
   canonical `ISZERO(CALLVALUE)` non-payable guard, verifies that its non-zero
   branch ends in `REVERT`, and suppresses only that compiler-generated read.
+- `EVMImmediateKinds.def` defines fixed PUSH data and EIP-8024's conditional
+  single/pair encodings; `EVMDecodeStatuses.def` owns the stable vocabulary
+  exposed by LowIR and disassembly. `EVMUpstreamOpcodePolicy.def` records the
+  sole go-ethereum naming alias plus deliberate historical/withdrawn
+  exclusions; `scripts/audit_evm_opcode_metadata.py` rejects byte drift and
+  every new unreviewed upstream constant.
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def`, and
   `OutputLanguages.def` provide the corresponding ordered enums, parsers,
   display names, CLI choices, and C ABI values.
@@ -142,23 +154,24 @@ Hand-maintained EVM metadata follows LLVM's multiply-included `.def` pattern:
   LLVM, C, and Solidity retain explicit target lowerings so backend contracts
   and unsupported cases remain visible.
 
-The decoder is the raw-byte boundary. Assigned identity and hardfork activation
-are deliberately separate: relaxed decoding preserves an assigned instruction's
-name, introduction fork, and immediate width even when it is inactive for the
-selected historical fork, but its semantic queries remain conservative and
-faulting. This prevents an inactive immediate-bearing opcode from shifting all
-later byte boundaries or accidentally acquiring current semantics. Analysis,
-interpretation, and all emitters otherwise use the generated `Opcode` enum and
-metadata queries. Raw encodings reappear only at byte-oriented ABI boundaries,
-such as tracing and host callbacks. `SWAP16` has 17 logical stack inputs, while
-the largest non-stack host operation has seven arguments; these are separate,
-compile-time-derived limits.
+The dedicated decoder is the raw-byte boundary; CFG and stack analysis consume
+its lossless result in a later stage. Assigned identity, fork activation,
+immediate validity, actual pop/push mutations, and required pre-execution stack
+height are deliberately separate. Relaxed decoding preserves an assigned
+instruction's identity without giving an inactive opcode semantics or letting
+its would-be immediate shift later boundaries. EIP-8024 depth operands are
+decoded once into typed instruction fields, and every analyzer/interpreter/
+backend consumes those fields rather than re-decoding bytes. Raw encodings
+reappear only at byte-oriented ABI boundaries such as tracing and host
+callbacks. The largest dynamic stack requirement is 236 words, while the
+largest non-stack host operation has seven arguments; both limits are named
+and independently derived or validated.
 
 `OpcodeInfo` cannot be default-constructed into a half-valid record, and its
 name is an `llvm::StringLiteral`, not a potentially dangling `StringRef`. A
 compile-time table validator rejects duplicate encodings, unknown classes or
 properties on assigned rows, invalid scalar ALU contracts,
-effect/state-access mismatches, incorrect PUSH/DUP/SWAP/LOG family contracts,
+effect/state-access mismatches, incorrect immediate/stack-family contracts,
 and branch opcodes not marked as basic-block terminators. It also rejects a
 non-stack opcode with more than one pushed result because the shared host ABI
 returns one word, and rejects an unrecognized stack-family opcode until its
@@ -193,9 +206,10 @@ semantic switches remain explicit and fail loudly if an ALU case is omitted.
 
 ## Analysis model
 
-- **EVM LowIR** preserves PC, encoding, PUSH immediates (including truncated
-  right-zero padding), basic blocks, predecessor/successor edges, validated
-  `JUMPDEST` targets, reachability, and stack heights.
+- **EVM LowIR** preserves PC, encoding, typed immediate status and decoded
+  stack-depth operands (including PUSH right-zero padding and EIP-8024's
+  conditional-consumption rule), basic blocks, predecessor/successor edges,
+  validated `JUMPDEST` targets, reachability, and stack heights.
 - **EVM MedIR** represents every stack value as a 256-bit SSA value, creates
   merge phis, constant-folds pure operations, and preserves both the primary
   semantic effect, orthogonal `none/read/write/readwrite` EVM-memory access,
@@ -350,8 +364,8 @@ provides an EVM ABI.
 ## Explicit limitations
 
 - Legacy bytecode only; EOF containers are not decoded yet.
-- Review-stage Amsterdam opcodes are not enabled; `latest` currently selects
-  the finalized Fusaka instruction set.
+- Amsterdam/Bogota are explicit development targets; `latest` remains the
+  finalized Fusaka instruction set until the scheduled opcodes are final.
 - No RPC fetching, chain-state discovery, gas accounting/refunds, or precompile
   execution. Calls and environment values are represented by deterministic
   interpreter fields or backend host hooks.

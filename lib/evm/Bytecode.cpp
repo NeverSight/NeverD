@@ -295,9 +295,9 @@ extractStaticRuntime(const std::vector<uint8_t> &Code) {
     // such as CALL and EXTCODECOPY whose primary effect is not memory access.
     if (mayWriteMemory(*Info))
       LastCopy.reset();
-    for (uint8_t I = 0; I < Info->StackInputs; ++I)
+    for (uint8_t I = 0; I < Info->StackPops; ++I)
       (void)Pop();
-    for (uint8_t I = 0; I < Info->StackOutputs; ++I)
+    for (uint8_t I = 0; I < Info->StackPushes; ++I)
       Stack.push_back(std::nullopt);
   }
   return std::nullopt;

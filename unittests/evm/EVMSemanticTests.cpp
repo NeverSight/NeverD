@@ -16,8 +16,9 @@ namespace neverd::evm {
 namespace {
 
 ExecutionResult executeCode(const std::vector<uint8_t> &Code,
-                            ExecutionEnvironment Environment = {}) {
-  auto Program = analyze(Code);
+                            ExecutionEnvironment Environment = {},
+                            AnalyzeOptions Options = {}) {
+  auto Program = analyze(Code, Options);
   EXPECT_TRUE(static_cast<bool>(Program));
   if (!Program) {
     ADD_FAILURE() << llvm::toString(Program.takeError());
@@ -32,14 +33,114 @@ ExecutionResult executeCode(const std::vector<uint8_t> &Code,
   return std::move(*Result);
 }
 
+TEST(EVMInterpreter, ExecutesAmsterdamSlotAndDeepStackOpcodes) {
+  AnalyzeOptions Amsterdam;
+  Amsterdam.Fork = Hardfork::Amsterdam;
+
+  ExecutionEnvironment Environment;
+  Environment.SlotNumber = 0x123456789abcdef0ULL;
+  auto Slot =
+      executeCode({opcodeByte(Opcode::SLOTNUM), opcodeByte(Opcode::STOP)},
+                  std::move(Environment), Amsterdam);
+  ASSERT_EQ(Slot.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Slot.Stack.size(), 1u);
+  EXPECT_EQ(Slot.Stack.back().getZExtValue(), 0x123456789abcdef0ULL);
+
+  std::vector<uint8_t> Dup = {opcodeByte(Opcode::PUSH1), 1};
+  for (unsigned I = 0; I < 16; ++I)
+    Dup.insert(Dup.end(), {opcodeByte(Opcode::PUSH1), 0});
+  Dup.insert(Dup.end(),
+             {opcodeByte(Opcode::DUPN), 0x80, opcodeByte(Opcode::STOP)});
+  auto Duplicated = executeCode(Dup, {}, Amsterdam);
+  ASSERT_EQ(Duplicated.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Duplicated.Stack.size(), 18u);
+  EXPECT_EQ(Duplicated.Stack.front().getZExtValue(), 1u);
+  EXPECT_EQ(Duplicated.Stack.back().getZExtValue(), 1u);
+
+  const auto Exchanged = executeCode({0x60, 0x00, 0x60, 0x01, 0x60, 0x02,
+                                      opcodeByte(Opcode::EXCHANGE), 0x8e,
+                                      opcodeByte(Opcode::STOP)},
+                                     {}, Amsterdam);
+  ASSERT_EQ(Exchanged.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Exchanged.Stack.size(), 3u);
+  EXPECT_EQ(Exchanged.Stack[0].getZExtValue(), 1u);
+  EXPECT_EQ(Exchanged.Stack[1].getZExtValue(), 0u);
+  EXPECT_EQ(Exchanged.Stack[2].getZExtValue(), 2u);
+
+  const auto JumpPastInvalid = executeCode(
+      {0x60, 0x04, 0x56, opcodeByte(Opcode::DUPN), 0x5b, 0x00}, {}, Amsterdam);
+  EXPECT_EQ(JumpPastInvalid.Status, ExecutionStatus::Stopped);
+  EXPECT_TRUE(JumpPastInvalid.Error.empty());
+}
+
+TEST(EVMInterpreter, MatchesGoEthereumEIP8024ExecutionVectors) {
+  AnalyzeOptions Amsterdam;
+  Amsterdam.Fork = Hardfork::Amsterdam;
+
+  const auto PushSequence = [](unsigned Count) {
+    std::vector<uint8_t> Code;
+    for (unsigned Value = 1; Value <= Count; ++Value)
+      Code.insert(Code.end(),
+                  {opcodeByte(Opcode::PUSH1), static_cast<uint8_t>(Value)});
+    return Code;
+  };
+
+  auto DupCode = PushSequence(17);
+  DupCode.insert(DupCode.end(), {opcodeByte(Opcode::DUPN), 0x80});
+  const auto Duplicated = executeCode(DupCode, {}, Amsterdam);
+  ASSERT_EQ(Duplicated.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Duplicated.Stack.size(), 18u);
+  EXPECT_EQ(Duplicated.Stack.front().getZExtValue(), 1u);
+  EXPECT_EQ(Duplicated.Stack.back().getZExtValue(), 1u);
+
+  auto SwapCode = PushSequence(18);
+  SwapCode.insert(SwapCode.end(), {opcodeByte(Opcode::SWAPN), 0x80});
+  const auto Swapped = executeCode(SwapCode, {}, Amsterdam);
+  ASSERT_EQ(Swapped.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(Swapped.Stack.size(), 18u);
+  EXPECT_EQ(Swapped.Stack.front().getZExtValue(), 18u);
+  EXPECT_EQ(Swapped.Stack.back().getZExtValue(), 1u);
+
+  auto MissingExchangeCode = PushSequence(17);
+  MissingExchangeCode.push_back(opcodeByte(Opcode::EXCHANGE));
+  const auto MissingExchange = executeCode(MissingExchangeCode, {}, Amsterdam);
+  ASSERT_EQ(MissingExchange.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(MissingExchange.Stack.size(), 17u);
+  EXPECT_EQ(MissingExchange.Stack.front().getZExtValue(), 8u);
+  EXPECT_EQ(MissingExchange.Stack[7].getZExtValue(), 1u);
+
+  auto MaximumExchangeCode = PushSequence(30);
+  MaximumExchangeCode.insert(MaximumExchangeCode.end(),
+                             {opcodeByte(Opcode::EXCHANGE), 0x8f});
+  const auto MaximumExchange = executeCode(MaximumExchangeCode, {}, Amsterdam);
+  ASSERT_EQ(MaximumExchange.Status, ExecutionStatus::Stopped);
+  ASSERT_EQ(MaximumExchange.Stack.size(), 30u);
+  EXPECT_EQ(MaximumExchange.Stack.front().getZExtValue(), 29u);
+  EXPECT_EQ(MaximumExchange.Stack[28].getZExtValue(), 1u);
+  EXPECT_EQ(MaximumExchange.Stack.back().getZExtValue(), 30u);
+
+  Amsterdam.Strict = false;
+  auto UnderflowCode = PushSequence(16);
+  UnderflowCode.insert(UnderflowCode.end(), {opcodeByte(Opcode::DUPN), 0x80});
+  const auto Underflow = executeCode(UnderflowCode, {}, Amsterdam);
+  EXPECT_EQ(Underflow.Status, ExecutionStatus::Faulted);
+  EXPECT_NE(Underflow.Error.find("stack underflow in DUP"), std::string::npos);
+
+  const auto Invalid =
+      executeCode({opcodeByte(Opcode::EXCHANGE), opcodeByte(Opcode::MSTORE)},
+                  {}, Amsterdam);
+  EXPECT_EQ(Invalid.Status, ExecutionStatus::Faulted);
+  EXPECT_NE(Invalid.Error.find("invalid immediate in EXCHANGE"),
+            std::string::npos);
+}
+
 TEST(EVMSemantics, EveryScalarALUHasOneSharedEvaluator) {
   for (size_t Byte = 0; Byte < kOpcodeSpaceSize; ++Byte) {
     const auto Info = assignedOpcodeInfo(static_cast<uint8_t>(Byte));
     if (!Info || !isALU(*Info))
       continue;
     SCOPED_TRACE(Info->Name.str());
-    std::vector<llvm::APInt> Inputs(Info->StackInputs,
-                                    llvm::APInt(kWordBits, 0));
+    std::vector<llvm::APInt> Inputs(Info->StackPops, llvm::APInt(kWordBits, 0));
     EXPECT_TRUE(evaluateALU(Info->Op, Inputs).has_value());
   }
 
@@ -383,18 +484,33 @@ TEST(EVMInterpreter, BlockhashRejectsCurrentFutureAndExpiredBlocks) {
 
 TEST(EVMInterpreter, EveryAssignedOpcodeHasAStackSafeDispatchPath) {
   for (size_t Byte = 0; Byte < kOpcodeSpaceSize; ++Byte) {
-    const auto Info = opcodeInfo(static_cast<uint8_t>(Byte));
+    const auto Info =
+        opcodeInfo(static_cast<uint8_t>(Byte), Hardfork::Amsterdam);
     if (!Info)
       continue;
     SCOPED_TRACE(testing::Message()
                  << Info->Name.str() << " (0x" << std::hex << Byte << ")");
 
-    std::vector<uint8_t> Code(Info->StackInputs, opcodeByte(Opcode::PUSH0));
-    Code.push_back(static_cast<uint8_t>(Byte));
-    Code.insert(Code.end(), Info->ImmediateBytes, uint8_t{0});
+    std::vector<uint8_t> EncodedInstruction{static_cast<uint8_t>(Byte)};
+    EncodedInstruction.insert(EncodedInstruction.end(), Info->ImmediateBytes,
+                              uint8_t{0});
+    DecodeOptions Decode;
+    Decode.Fork = Hardfork::Amsterdam;
+    Decode.Strict = false;
+    auto Decoded = decodeBytecode(EncodedInstruction, Decode);
+    ASSERT_TRUE(static_cast<bool>(Decoded))
+        << llvm::toString(Decoded.takeError());
+    ASSERT_FALSE(Decoded->Instructions.empty());
+
+    std::vector<uint8_t> Code(
+        Decoded->Instructions.front().requiredStackHeight(),
+        opcodeByte(Opcode::PUSH0));
+    Code.insert(Code.end(), EncodedInstruction.begin(),
+                EncodedInstruction.end());
     Code.push_back(opcodeByte(Opcode::STOP));
 
     AnalyzeOptions Options;
+    Options.Fork = Hardfork::Amsterdam;
     Options.Strict = false;
     auto Program = analyze(Code, Options);
     ASSERT_TRUE(static_cast<bool>(Program))

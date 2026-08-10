@@ -85,11 +85,11 @@ bool configureSBF(neverd_session_t Sess) {
   return true;
 }
 
-bool configureVirtualMachines(neverd_session_t Sess) {
+} // namespace
+
+bool configureAnalysisSession(neverd_session_t Sess) {
   return configureEVM(Sess) && configureSBF(Sess);
 }
-
-} // namespace
 
 int runPlugins(const char *Argv0) {
   neverd_session_t Sess = neverd_session_create();
@@ -170,8 +170,6 @@ int runPlugins(const char *Argv0) {
 
 int runLift(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
-  if (!configureVirtualMachines(Sess))
-    return 1;
 
   if (DumpLow || DumpMed || DumpHigh) {
     int Level = DumpLow ? 0 : (DumpMed ? 1 : 2);
@@ -210,9 +208,6 @@ int runLift(neverd_session_t Sess) {
 int runDecompile(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
 
-  if (!configureVirtualMachines(Sess))
-    return 1;
-
   const neverd_output_language_t Language = OutputLanguage.getValue();
   const bool DedicatedLanguage = Language != NEVERD_OUTPUT_C;
   if (DedicatedLanguage && LlvmRoute) {
@@ -220,12 +215,11 @@ int runDecompile(neverd_session_t Sess) {
         << "--llvm cannot be combined with a dedicated source language\n";
     return 1;
   }
-  const char *Source = DedicatedLanguage
-                           ? neverd_decompile_all_ex(Sess, InPath, Language,
-                                                    NoOpt, MaxFunc)
-                           : neverd_decompile_all(Sess, InPath,
-                                                 LlvmRoute ? 1 : 0, NoOpt,
-                                                 MaxFunc);
+  const char *Source =
+      DedicatedLanguage
+          ? neverd_decompile_all_ex(Sess, InPath, Language, NoOpt, MaxFunc)
+          : neverd_decompile_all(Sess, InPath, LlvmRoute ? 1 : 0, NoOpt,
+                                 MaxFunc);
   if (!Source) {
     WithColor::error() << "decompile failed: " << takeLastError(Sess) << "\n";
     return 1;
