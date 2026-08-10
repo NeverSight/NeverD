@@ -22,7 +22,13 @@ inline constexpr size_t kOpcodeOffset = 0;
 inline constexpr size_t kRegisterByteOffset = 1;
 inline constexpr size_t kBranchOffsetOffset = 2;
 inline constexpr size_t kImmediateOffset = 4;
-inline constexpr size_t kMaxInstructions = 65'536;
+
+// The Anza sbpf loader/verifier imposes no instruction-count cap; the only
+// on-chain bound is the maximum program account data length (10 MiB).
+// Anything larger cannot be deployed, so treat it as malformed input.
+inline constexpr size_t kMaxProgramAccountSize = 10 * 1024 * 1024;
+inline constexpr size_t kMaxInstructions =
+    kMaxProgramAccountSize / kInstructionSize;
 
 inline constexpr unsigned kRegisterEncodingBits = 4;
 inline constexpr uint8_t kRegisterEncodingMask =
