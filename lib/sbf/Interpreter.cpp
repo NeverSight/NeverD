@@ -78,6 +78,24 @@ uint64_t arithmeticShiftRight64(uint64_t Value, uint64_t Shift) {
   return Result;
 }
 
+uint64_t unsignedHighMultiply64(uint64_t Left, uint64_t Right) {
+  const uint64_t LeftLow = static_cast<uint32_t>(Left);
+  const uint64_t LeftHigh = Left >> 32;
+  const uint64_t RightLow = static_cast<uint32_t>(Right);
+  const uint64_t RightHigh = Right >> 32;
+  const uint64_t LowProduct = LeftLow * RightLow;
+  const uint64_t CrossProduct = LeftHigh * RightLow + (LowProduct >> 32);
+  uint64_t Middle = static_cast<uint32_t>(CrossProduct);
+  const uint64_t Carry = CrossProduct >> 32;
+  Middle += LeftLow * RightHigh;
+  return LeftHigh * RightHigh + Carry + (Middle >> 32);
+}
+
+uint64_t signedHighMultiply64(uint64_t Left, uint64_t Right) {
+  return unsignedHighMultiply64(Left, Right) - ((Left >> 63) != 0 ? Right : 0) -
+         ((Right >> 63) != 0 ? Left : 0);
+}
+
 RawInstruction decodeRaw(const SBFProgram &Program, size_t Slot) {
   const uint8_t *Bytes = Program.Text.data() + Slot * kInstructionSize;
   RawInstruction Instruction;
@@ -515,15 +533,11 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
         Registers[Instruction.Dst] = Value;
       }
     } else if (Info.Op == Operation::UHighMul) {
-      const unsigned __int128 Product =
-          static_cast<unsigned __int128>(Registers[Instruction.Dst]) * Source;
-      Registers[Instruction.Dst] = static_cast<uint64_t>(Product >> 64);
-    } else if (Info.Op == Operation::SHighMul) {
-      const __int128 Product =
-          static_cast<__int128>(signed64(Registers[Instruction.Dst])) *
-          static_cast<__int128>(signed64(Source));
       Registers[Instruction.Dst] =
-          static_cast<uint64_t>(static_cast<unsigned __int128>(Product) >> 64);
+          unsignedHighMultiply64(Registers[Instruction.Dst], Source);
+    } else if (Info.Op == Operation::SHighMul) {
+      Registers[Instruction.Dst] =
+          signedHighMultiply64(Registers[Instruction.Dst], Source);
     } else if (Info.Op == Operation::UDiv || Info.Op == Operation::URem ||
                Info.Op == Operation::SDiv || Info.Op == Operation::SRem) {
       if (Info.Width == 32) {

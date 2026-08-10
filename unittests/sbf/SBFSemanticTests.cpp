@@ -109,6 +109,39 @@ TEST(SBFInterpreter, ImplementsNonMonotonicV2ArithmeticSemantics) {
   EXPECT_EQ(Result->ReturnValue, UINT64_C(0xfffffffffffffff9));
 }
 
+TEST(SBFInterpreter, ImplementsV2HighMultiplySemantics) {
+  SBFProgram Unsigned = analyzeProgram(
+      Version::V2, {encode(Opcode::MOV64_IMM, 1, 0, 0, -1),
+                    encode(Opcode::UHMUL64_IMM, 1, 0, 0, 2),
+                    encode(Opcode::MOV64_REG, 0, 1), encode(Opcode::EXIT)});
+  auto UnsignedResult = executeRaw(Unsigned);
+  ASSERT_TRUE(static_cast<bool>(UnsignedResult))
+      << llvm::toString(UnsignedResult.takeError());
+  EXPECT_EQ(UnsignedResult->Status, ExecutionStatus::Returned);
+  EXPECT_EQ(UnsignedResult->ReturnValue, 1u);
+
+  SBFProgram SignedPositive = analyzeProgram(
+      Version::V2, {encode(Opcode::MOV64_IMM, 1, 0, 0, -1),
+                    encode(Opcode::SHMUL64_IMM, 1, 0, 0, -1),
+                    encode(Opcode::MOV64_REG, 0, 1), encode(Opcode::EXIT)});
+  auto SignedPositiveResult = executeRaw(SignedPositive);
+  ASSERT_TRUE(static_cast<bool>(SignedPositiveResult))
+      << llvm::toString(SignedPositiveResult.takeError());
+  EXPECT_EQ(SignedPositiveResult->Status, ExecutionStatus::Returned);
+  EXPECT_EQ(SignedPositiveResult->ReturnValue, 0u);
+
+  SBFProgram SignedNegative = analyzeProgram(
+      Version::V2, {encode(Opcode::MOV64_IMM, 1, 0, 0, 1),
+                    encode(Opcode::LSH64_IMM, 1, 0, 0, 63),
+                    encode(Opcode::SHMUL64_IMM, 1, 0, 0, 2),
+                    encode(Opcode::MOV64_REG, 0, 1), encode(Opcode::EXIT)});
+  auto SignedNegativeResult = executeRaw(SignedNegative);
+  ASSERT_TRUE(static_cast<bool>(SignedNegativeResult))
+      << llvm::toString(SignedNegativeResult.takeError());
+  EXPECT_EQ(SignedNegativeResult->Status, ExecutionStatus::Returned);
+  EXPECT_EQ(SignedNegativeResult->ReturnValue, UINT64_MAX);
+}
+
 TEST(SBFInterpreter, ModelsMemorySyscallsAndInternalCallFrames) {
   const SyscallInfo *Log64 = findSyscallByName("sol_log_64_");
   ASSERT_NE(Log64, nullptr);
