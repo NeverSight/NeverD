@@ -180,7 +180,12 @@ class Session:
     ) -> None:
         self._native_handle = native_handle
         self._native = _native if _native is not None else _native_bridge()
-        self._host = _host if _host is not None else HostAPI()
+        self._host = _host
+
+    def _host_api(self) -> _Host:
+        if self._host is None:
+            self._host = HostAPI()
+        return self._host
 
     def _pointer(self) -> ctypes.c_void_p:
         address = self._native.session_address(self._native_handle)
@@ -196,10 +201,12 @@ class Session:
         return value
 
     def _owned_string(self, name: str, *arguments: object) -> str | None:
-        return self._host.owned_string(name, self._pointer(), *arguments)
+        pointer = self._pointer()
+        return self._host_api().owned_string(name, pointer, *arguments)
 
     def _call(self, name: str, *arguments: object) -> Any:
-        return self._host.call(name, self._pointer(), *arguments)
+        pointer = self._pointer()
+        return self._host_api().call(name, pointer, *arguments)
 
     def _require_success(self, result: Any, operation: str) -> None:
         if int(result) != 0:
@@ -277,11 +284,11 @@ class Session:
 
     @property
     def project_name(self) -> str:
-        return self._host.owned_string("neverd_project_name") or ""
+        return self._host_api().owned_string("neverd_project_name") or ""
 
     @property
     def version(self) -> str:
-        return self._host.owned_string("neverd_version_number") or ""
+        return self._host_api().owned_string("neverd_version_number") or ""
 
     def load(self, path: os.PathLike[str] | str) -> None:
         encoded = _utf8_argument("path", os.fspath(path), allow_empty=False)
@@ -511,21 +518,23 @@ class Session:
     def diff_functions(self, other: "Session") -> object:
         if not isinstance(other, Session):
             raise TypeError("other must be a Session")
+        left = self._pointer()
+        right = other._pointer()
         return _decode_json(
             "function diff",
-            self._host.owned_string(
-                "neverd_diff_functions", self._pointer(), other._pointer()
-            ),
+            self._host_api().owned_string("neverd_diff_functions", left, right),
         )
 
     def diff_decompile(self, address: int, other: "Session", other_address: int) -> str:
         if not isinstance(other, Session):
             raise TypeError("other must be a Session")
-        value = self._host.owned_string(
+        left = self._pointer()
+        right = other._pointer()
+        value = self._host_api().owned_string(
             "neverd_diff_decompile",
-            self._pointer(),
+            left,
             _unsigned("address", address, 64),
-            other._pointer(),
+            right,
             _unsigned("other address", other_address, 64),
         )
         if value is None:
@@ -693,27 +702,26 @@ class RawSessionAPI:
         self._session = session
 
     def function(self, name: str) -> Any:
-        return self._session._host.function(name)
+        return self._session._host_api().function(name)
 
     def call(self, name: str, *arguments: object) -> Any:
-        return self._session._host.call(name, *arguments)
+        return self._session._host_api().call(name, *arguments)
 
     def session_call(self, name: str, *arguments: object) -> object:
         return self._session._call(name, *arguments)
 
     def owned_string(self, name: str, *arguments: object) -> str | None:
-        return self._session._host.owned_string(name, *arguments)
+        return self._session._host_api().owned_string(name, *arguments)
 
     def session_owned_string(self, name: str, *arguments: object) -> str | None:
         return self._session._owned_string(name, *arguments)
 
     def borrowed_bytes(self, name: str, *arguments: object) -> bytes:
-        return self._session._host.borrowed_bytes(name, *arguments)
+        return self._session._host_api().borrowed_bytes(name, *arguments)
 
     def session_borrowed_bytes(self, name: str, *arguments: object) -> bytes:
-        return self._session._host.borrowed_bytes(
-            name, self._session._pointer(), *arguments
-        )
+        pointer = self._session._pointer()
+        return self._session._host_api().borrowed_bytes(name, pointer, *arguments)
 
 
 @dataclass(frozen=True, slots=True)

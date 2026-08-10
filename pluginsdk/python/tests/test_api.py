@@ -4,6 +4,7 @@ import sys
 import types
 import unittest
 from dataclasses import FrozenInstanceError
+from unittest import mock
 
 
 class PluginDecoratorTests(unittest.TestCase):
@@ -158,6 +159,32 @@ class _BorrowingHost:
 
 
 class SessionTests(unittest.TestCase):
+    def test_default_host_is_lazy_and_cached(self) -> None:
+        import neverd_plugin.api as api_module
+        from neverd_plugin import Session
+
+        host = _RecordingHost()
+        with mock.patch.object(api_module, "HostAPI", return_value=host) as factory:
+            session = Session(object(), _native=_FakeNativeBridge())
+
+            factory.assert_not_called()
+            self.assertTrue(session.loaded)
+            self.assertEqual(session.project_name, "NeverD")
+            factory.assert_called_once_with()
+
+    def test_stale_default_session_is_rejected_before_host_loading(self) -> None:
+        import neverd_plugin.api as api_module
+        from neverd_plugin import Session
+
+        native = _FakeNativeBridge()
+        with mock.patch.object(api_module, "HostAPI") as factory:
+            session = Session(object(), _native=native)
+            native.active = False
+
+            with self.assertRaisesRegex(RuntimeError, "no longer active"):
+                _ = session.file_path
+            factory.assert_not_called()
+
     def test_raw_borrowed_buffers_offer_global_and_lifetime_checked_calls(
         self,
     ) -> None:
