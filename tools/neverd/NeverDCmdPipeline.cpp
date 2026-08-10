@@ -49,6 +49,20 @@ const char *hardforkSpelling(evm::Hardfork Fork) {
   return "";
 }
 
+const char *sbfVersionSpelling(sbf::Version TheVersion) {
+  switch (TheVersion) {
+#define SBF_VERSION_AUTO(NAME, SPELLING, DISPLAY_NAME)                         \
+  case sbf::Version::NAME:                                                     \
+    return SPELLING;
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
+  case sbf::Version::NAME:                                                     \
+    return SPELLING;
+#include "neverd/sbf/SBFVersions.def"
+  default:
+    return "";
+  }
+}
+
 bool configureEVM(neverd_session_t Sess) {
   neverd_evm_set_strict(Sess, EVMRelaxed ? 0 : 1);
   if (!neverd_evm_set_hardfork(Sess,
@@ -62,9 +76,8 @@ bool configureEVM(neverd_session_t Sess) {
 
 bool configureSBF(neverd_session_t Sess) {
   neverd_sbf_set_strict(Sess, SBFRelaxed ? 0 : 1);
-  const std::string VersionName =
-      sbf::versionName(SBFVersion.getValue()).str();
-  if (!neverd_sbf_set_version(Sess, VersionName.c_str())) {
+  if (!neverd_sbf_set_version(Sess,
+                              sbfVersionSpelling(SBFVersion.getValue()))) {
     WithColor::error() << "invalid SBF version: " << takeLastError(Sess)
                        << "\n";
     return false;
