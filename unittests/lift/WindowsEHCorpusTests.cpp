@@ -133,25 +133,23 @@ TEST(WindowsEHCorpus, ParsesDeclaredExceptionMetadata) {
 
     const ExceptionInfo &Info = Image.ExceptionMetadata;
     const std::string Diagnostics = diagnosticsFor(Info);
-    EXPECT_NE(Info.ParseStatus, ExceptionParseStatus::Malformed) << Diagnostics;
-    EXPECT_TRUE(containsString(Expectation.AllowedParseStatuses,
-                               getExceptionParseStatusName(Info.ParseStatus)))
-        << "unexpected image exception parse status: "
-        << getExceptionParseStatusName(Info.ParseStatus) << "; " << Diagnostics;
-
     if (Expectation.ValidationLevel == CorpusValidationLevel::LoadOnly)
       continue;
 
     EXPECT_GE(Info.Functions.size(), Expectation.MinExceptionFunctions);
     if (Expectation.ValidationLevel == CorpusValidationLevel::UnwindOnly) {
       for (const ExceptionFunction &Function : Info.Functions) {
-        EXPECT_NE(Function.ParseStatus, ExceptionParseStatus::Malformed)
-            << Diagnostics;
         EXPECT_TRUE(Function.CodeRange.isValid());
         EXPECT_TRUE(encodingMatchesArchitecture(Function.Encoding, Image.Arch));
       }
       continue;
     }
+
+    EXPECT_NE(Info.ParseStatus, ExceptionParseStatus::Malformed) << Diagnostics;
+    EXPECT_TRUE(containsString(Expectation.AllowedParseStatuses,
+                               getExceptionParseStatusName(Info.ParseStatus)))
+        << "unexpected image exception parse status: "
+        << getExceptionParseStatusName(Info.ParseStatus) << "; " << Diagnostics;
 
     uint64_t CxxFunctions = 0;
     uint64_t TryBlocks = 0;

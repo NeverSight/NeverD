@@ -110,7 +110,7 @@ bool decodeV1V2Operations(ExceptionFunction &F, const uint8_t *Codes,
     const bool IsV2Epilog = F.UnwindVersion == 2 && Opcode == UOP_Epilog;
     if ((!IsV2Epilog && CodeOffset > F.PrologueSize) ||
         (F.UnwindVersion == 1 && PreviousCodeOffset &&
-         CodeOffset >= *PreviousCodeOffset)) {
+         CodeOffset > *PreviousCodeOffset)) {
       diagnose(F, ExceptionParseStatus::Malformed,
                "invalid x64 unwind-code ordering or prologue offset");
       return false;
@@ -1207,8 +1207,17 @@ bool parseFH4(ExceptionFunction &F, const BinaryImage &Img) {
     Info.UnwindMap.reserve(Count);
     std::vector<va_t> EntryStarts;
     EntryStarts.reserve(Count);
+    std::optional<va_t> EmptyStateTarget;
     for (uint32_t I = 0; I < Count; ++I) {
       va_t EntryStart = Reader.position();
+      if (!EmptyStateTarget) {
+        if (EntryStart == 0) {
+          diagnose(F, ExceptionParseStatus::Malformed,
+                   "FH4 unwind-map base underflows");
+          return false;
+        }
+        EmptyStateTarget = EntryStart - 1;
+      }
       uint32_t Encoded = 0;
       if (!Reader.readCompressedUInt(Encoded)) {
         diagnose(F, ExceptionParseStatus::Malformed,
@@ -1225,14 +1234,16 @@ bool parseFH4(ExceptionFunction &F, const BinaryImage &Img) {
           return false;
         }
         va_t Target = EntryStart - NextOffset;
-        auto It = std::find(EntryStarts.begin(), EntryStarts.end(), Target);
-        if (It == EntryStarts.end()) {
-          diagnose(F, ExceptionParseStatus::Malformed,
-                   "FH4 unwind predecessor is not an entry boundary");
-          return false;
+        if (Target != *EmptyStateTarget) {
+          auto It = std::find(EntryStarts.begin(), EntryStarts.end(), Target);
+          if (It == EntryStarts.end()) {
+            diagnose(F, ExceptionParseStatus::Malformed,
+                     "FH4 unwind predecessor is not an entry boundary");
+            return false;
+          }
+          Action.ToState =
+              static_cast<int32_t>(std::distance(EntryStarts.begin(), It));
         }
-        Action.ToState =
-            static_cast<int32_t>(std::distance(EntryStarts.begin(), It));
       }
 
       uint32_t ObjectOffset = 0;
@@ -1393,7 +1404,6 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
   std::vector<ExceptionAddressRange> FunctionGroupRanges{F.CodeRange};
   for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
     if (&Candidate == &F || Candidate.Kind != RuntimeFunctionKind::Primary ||
-        Candidate.PersonalityVA != F.PersonalityVA ||
         Candidate.HandlerDataVA == 0 || !Candidate.CodeRange.isValid())
       continue;
     auto CandidateFuncInfoRVA =
@@ -1699,6 +1709,103 @@ std::optional<va_t> sehGSCookieAddress(const ExceptionFunction &F,
   return F.HandlerDataVA + sizeof(uint32_t) + ScopeBytes;
 }
 
+std::optional<ExceptionPersonality>
+inferX64GSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
+  if (Img.Arch != Arch::X64 || F.PersonalityVA == 0 || F.HandlerDataVA == 0)
+    return std::nullopt;
+
+  const ExceptionFunction *Wrapper = nullptr;
+  for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
+    if (Candidate.Kind == RuntimeFunctionKind::Primary &&
+        Candidate.CodeRange.isValid() &&
+        Candidate.CodeRange.Begin == F.PersonalityVA) {
+      Wrapper = &Candidate;
+      break;
+    }
+  }
+  if (!Wrapper ||
+      Wrapper->CodeRange.size() > std::numeric_limits<size_t>::max())
+    return std::nullopt;
+
+  const size_t CodeSize = static_cast<size_t>(Wrapper->CodeRange.size());
+  const uint8_t *Code = Img.readVA(Wrapper->CodeRange.Begin, CodeSize);
+  if (!Code)
+    return std::nullopt;
+
+  // Static runtime wrappers may be stripped of their COFF names.  Require two
+  // independent signals before recovering GS provenance: a bounded call from
+  // the wrapper runtime function to a named base handler, and a payload that
+  // is valid for that handler followed by valid GS cookie data.
+  ExceptionPersonality BasePersonality = ExceptionPersonality::Unknown;
+  for (size_t Offset = 0; Offset + 5 <= CodeSize; ++Offset) {
+    std::string Name;
+    if (Code[Offset] == 0xe8) {
+      int32_t Disp = readLE<int32_t>(Code + Offset + 1);
+      va_t NextIP = Wrapper->CodeRange.Begin + Offset + 5;
+      auto Target = addSignedOffset(NextIP, Disp);
+      if (Target)
+        Name = resolvePersonality(Img, *Target).second;
+    } else if (Offset + 6 <= CodeSize && Code[Offset] == 0xff &&
+               Code[Offset + 1] == 0x15) {
+      int32_t Disp = readLE<int32_t>(Code + Offset + 2);
+      va_t NextIP = Wrapper->CodeRange.Begin + Offset + 6;
+      auto Slot = addSignedOffset(NextIP, Disp);
+      if (Slot)
+        Name = directNameAt(Img, *Slot);
+    } else {
+      continue;
+    }
+    ExceptionPersonality Candidate = classifyPersonality(Name);
+    if (Candidate != ExceptionPersonality::CSpecificHandler &&
+        Candidate != ExceptionPersonality::CxxFrameHandler3 &&
+        Candidate != ExceptionPersonality::CxxFrameHandler4)
+      continue;
+    if (BasePersonality != ExceptionPersonality::Unknown &&
+        BasePersonality != Candidate)
+      return std::nullopt;
+    BasePersonality = Candidate;
+  }
+  if (BasePersonality == ExceptionPersonality::Unknown)
+    return std::nullopt;
+
+  ExceptionFunction Probe = F;
+  Probe.ParseStatus = ExceptionParseStatus::Complete;
+  Probe.Diagnostics.clear();
+  Probe.SEH.reset();
+  Probe.Cxx.reset();
+  Probe.GSCookie.reset();
+  bool PayloadMatches = false;
+  switch (BasePersonality) {
+  case ExceptionPersonality::CSpecificHandler:
+    if (parseSEH(Probe, Img)) {
+      std::optional<va_t> CookieVA = sehGSCookieAddress(Probe, Img);
+      PayloadMatches = CookieVA && parseGSCookie(Probe, Img, *CookieVA);
+    }
+    if (PayloadMatches)
+      return ExceptionPersonality::GSHandlerCheckSEH;
+    break;
+  case ExceptionPersonality::CxxFrameHandler3:
+    PayloadMatches =
+        parseFH3(Probe, Img) &&
+        F.HandlerDataVA <= InvalidVA - sizeof(uint32_t) &&
+        parseGSCookie(Probe, Img, F.HandlerDataVA + sizeof(uint32_t));
+    if (PayloadMatches)
+      return ExceptionPersonality::GSHandlerCheckEH;
+    break;
+  case ExceptionPersonality::CxxFrameHandler4:
+    PayloadMatches =
+        parseFH4(Probe, Img) &&
+        F.HandlerDataVA <= InvalidVA - sizeof(uint32_t) &&
+        parseGSCookie(Probe, Img, F.HandlerDataVA + sizeof(uint32_t));
+    if (PayloadMatches)
+      return ExceptionPersonality::GSHandlerCheckEH4;
+    break;
+  default:
+    break;
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
@@ -1762,8 +1869,8 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
       return F;
     }
     const uint8_t *Codes = nullptr;
-    if (!readBytes(Img, F.UnwindInfoVA + 4, static_cast<size_t>(CodeBytes),
-                   Codes)) {
+    if (CodeBytes != 0 && !readBytes(Img, F.UnwindInfoVA + 4,
+                                     static_cast<size_t>(CodeBytes), Codes)) {
       diagnose(F, ExceptionParseStatus::Malformed,
                "truncated x64 unwind-code array");
       return F;
@@ -1813,6 +1920,13 @@ void resolveExceptionHandlers(BinaryImage &Img) {
     auto [ResolvedVA, Name] = resolvePersonality(Img, F.PersonalityVA);
     F.PersonalityName = Name;
     F.Personality = classifyPersonality(Name);
+    if (F.Personality == ExceptionPersonality::Unknown)
+      if (std::optional<ExceptionPersonality> Inferred =
+              inferX64GSPersonality(F, Img)) {
+        F.Personality = *Inferred;
+        F.PersonalityName = getExceptionPersonalityName(*Inferred);
+        ResolvedVA = F.PersonalityVA;
+      }
     if (F.Personality == ExceptionPersonality::Unknown) {
       diagnose(F, ExceptionParseStatus::Partial,
                "unknown Windows language personality");

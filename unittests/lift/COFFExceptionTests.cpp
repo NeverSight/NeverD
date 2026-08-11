@@ -188,6 +188,20 @@ TEST(COFFExceptionParser, RejectsTruncatedX64UnwindSlots) {
   EXPECT_FALSE(F.Diagnostics.empty());
 }
 
+TEST(COFFExceptionParser, AcceptsZeroX64UnwindSlotsAtSectionEnd) {
+  BinaryImage Img = makeX64ExceptionImage(4);
+  uint8_t *X = Img.Segments[1].Data.data();
+  X[0] = 1;
+  X[1] = 0;
+  X[2] = 0;
+  X[3] = 0;
+
+  ExceptionFunction F = coff_loader::decodeX64ExceptionFunction(
+      Img, Img.Base, 0x2000, 0x1000, 0x1040, 0x3000);
+  EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Complete);
+  EXPECT_TRUE(F.UnwindOperations.empty());
+}
+
 TEST(COFFExceptionParser, RejectsInvalidX64V1CodeOrdering) {
   BinaryImage Img = makeX64ExceptionImage();
   uint8_t *X = Img.Segments[1].Data.data();
@@ -202,6 +216,26 @@ TEST(COFFExceptionParser, RejectsInvalidX64V1CodeOrdering) {
   ExceptionFunction F = coff_loader::decodeX64ExceptionFunction(
       Img, Img.Base, 0x2000, 0x1000, 0x1040, 0x3000);
   EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Malformed);
+}
+
+TEST(COFFExceptionParser, AcceptsX64V1OperationsAtTheSameCodeOffset) {
+  BinaryImage Img = makeX64ExceptionImage();
+  uint8_t *X = Img.Segments[1].Data.data();
+  X[0] = 1;
+  X[1] = 4;
+  X[2] = 2;
+  X[3] = 5; // rbp is the frame register
+  X[4] = 4;
+  X[5] = 3; // set frame pointer
+  X[6] = 4;
+  X[7] = (3 << 4) | 2; // allocate 32 bytes at the same prologue offset
+
+  ExceptionFunction F = coff_loader::decodeX64ExceptionFunction(
+      Img, Img.Base, 0x2000, 0x1000, 0x1040, 0x3000);
+  EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_EQ(F.UnwindOperations.size(), 2u);
+  EXPECT_EQ(F.UnwindOperations[0].Kind, UnwindOperationKind::SetFramePointer);
+  EXPECT_EQ(F.UnwindOperations[1].Kind, UnwindOperationKind::AllocateSmall);
 }
 
 TEST(COFFExceptionParser, DecodesX64V3PayloadAndWODPool) {
@@ -432,6 +466,7 @@ TEST(COFFExceptionParser, ReconstructsCxxFrameHandler3StateGraph) {
 TEST(COFFExceptionParser, AcceptsFH3IPMapAcrossSharedFuncInfoGroup) {
   BinaryImage Img = makeX64ExceptionImage(0x200);
   addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler3");
+  addPersonalityImport(Img, Img.Base + 0x1110, "__CxxFrameHandler3");
   uint8_t *X = Img.Segments[1].Data.data();
   writeLE<uint32_t>(X, 0x3040);
   writeLE<uint32_t>(X + 4, 0x3040);
@@ -482,7 +517,7 @@ TEST(COFFExceptionParser, AcceptsFH3IPMapAcrossSharedFuncInfoGroup) {
 
   ExceptionFunction CatchFunclet;
   CatchFunclet.CodeRange = {Img.Base + 0x1150, Img.Base + 0x1180};
-  CatchFunclet.PersonalityVA = Img.Base + 0x1100;
+  CatchFunclet.PersonalityVA = Img.Base + 0x1110;
   CatchFunclet.HandlerDataVA = Img.Base + 0x3004;
   Img.ExceptionMetadata.Functions.push_back(std::move(CatchFunclet));
 
@@ -550,8 +585,8 @@ TEST(COFFExceptionParser, ReconstructsCompressedCxxFrameHandler4Graph) {
 
   // Two unwind entries.  FH4 compressed integers below are all one byte
   // (value << 1).  Entry 1 points five bytes back to entry 0.
-  X[0x80] = 4; // count = 2
-  X[0x81] = 6; // direct action, terminal state
+  X[0x80] = 4;  // count = 2
+  X[0x81] = 14; // direct action, one-byte empty-state sentinel
   writeLE<uint32_t>(X + 0x82, 0x1120);
   X[0x86] = 46; // direct action, predecessor byte distance = 5
   writeLE<uint32_t>(X + 0x87, 0x1130);
@@ -684,6 +719,39 @@ TEST(COFFExceptionParser, KeepsGSWrapperDistinctAndFailClosed) {
   EXPECT_TRUE(Decoded.GSCookie->HasAlignment);
   EXPECT_EQ(Decoded.GSCookie->Alignment, 0x10u);
   EXPECT_FALSE(Decoded.canRegenerateLanguageMetadata());
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+}
+
+TEST(COFFExceptionParser, InfersStrippedX64GSWrapperFromCheckedStructure) {
+  BinaryImage Img = makeX64ExceptionImage();
+  addPersonalityImport(Img, Img.Base + 0x1180, "__C_specific_handler");
+
+  uint8_t *Text = Img.Segments[0].Data.data();
+  Text[0x100] = 0xe8;
+  writeLE<int32_t>(Text + 0x101, 0x7b); // call 0x1180 from 0x1100
+
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0);         // no SEH scopes
+  writeLE<uint32_t>(X + 4, 0x25);  // EH + aligned, cookie offset 0x20
+  writeLE<int32_t>(X + 8, -0x10);  // alignment base
+  writeLE<uint32_t>(X + 12, 0x10); // alignment
+
+  ExceptionFunction Guarded;
+  Guarded.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1080};
+  Guarded.PersonalityVA = Img.Base + 0x1100;
+  Guarded.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(Guarded));
+
+  ExceptionFunction Wrapper;
+  Wrapper.CodeRange = {Img.Base + 0x1100, Img.Base + 0x1160};
+  Img.ExceptionMetadata.Functions.push_back(std::move(Wrapper));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.Personality, ExceptionPersonality::GSHandlerCheckSEH);
+  EXPECT_EQ(Decoded.PersonalityName, "__GSHandlerCheck_SEH");
+  ASSERT_TRUE(Decoded.SEH.has_value());
+  ASSERT_TRUE(Decoded.GSCookie.has_value());
   EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
 }
 
