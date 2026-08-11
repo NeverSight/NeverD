@@ -2,9 +2,12 @@ add_neverd_component_library(NeverDEVM
   Analyzer.cpp
   Bytecode.cpp
   CEmitter.cpp
+  ControlFlow.cpp
   Decoder.cpp
+  HighAnalysis.cpp
   Interpreter.cpp
   LLVMEmitter.cpp
+  MedAnalysis.cpp
   Opcodes.cpp
   Semantics.cpp
   SolidityEmitter.cpp

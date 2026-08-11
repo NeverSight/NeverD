@@ -57,6 +57,52 @@ The source of truth for registration is
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt), and
 [`unittests/plugin/CMakeLists.txt`](../unittests/plugin/CMakeLists.txt).
 
+When a current go-ethereum checkout is available under `local_docs`, audit the
+closed EVM opcode inventory and byte assignments with:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+The audit permits only exclusions named in
+`EVMUpstreamOpcodePolicy.def`; an upstream opcode not represented or explicitly
+reviewed fails the command. Its parser and drift diagnostics have independent
+Python unit coverage in CI, runnable with:
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+For EVM control-flow work, run the fixed-point and height-domain contract first:
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+These cases cover cross-block internal returns, finite multi-target merges,
+loop convergence and deterministic edge ordering, path-dependent stack
+heights, bounded widening, correlation-induced Cartesian over-approximation,
+unknown jumps, exact invalid targets, and strict versus relaxed stack faults.
+Then run all seven EVM binaries plus the upstream metadata audit; CFG changes
+can affect emitter and integration behavior even when the analyzer shape is
+locally correct.
+
+For MedIR/HighIR dataflow changes, also run the constant-phi, selector,
+typed-operand, malformed-graph, and deep-chain contracts:
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+These cases prove equal and conflicting cyclic phis, non-adjacent and
+cross-block selector expressions, both equality operand orders, exact ABI
+width checks, typed storage/event/calldata operands, deterministic malformed
+MedIR handling, and an iterative 16,384-value producer walk.
+
 Python plugin changes also have an exact C/Python/workflow drift audit:
 
 ```bash
@@ -73,19 +119,6 @@ The first two runtime targets do not depend on the decompiler core and are the
 fastest way to isolate loader, CPython, GIL, traceback, and capsule-lifetime
 failures. `NeverDPluginTests` and `NeverDPythonPluginTests` then exercise the
 same behavior through the exported `libneverd` C API.
-
-When a current go-ethereum checkout is available under `local_docs`, audit the
-closed EVM opcode inventory and byte assignments with:
-
-```bash
-python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
-```
-
-The audit permits only exclusions named in
-`EVMUpstreamOpcodePolicy.def`; an upstream opcode not represented or explicitly
-reviewed fails the command. Its parser and drift diagnostics have independent
-Python unit coverage in CI.
 
 ## How fixtures are produced
 

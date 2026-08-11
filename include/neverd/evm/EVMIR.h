@@ -16,6 +16,7 @@
 #include "neverd/evm/Opcodes.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
@@ -172,6 +173,35 @@ struct LowEdge {
   std::optional<uint64_t> Target;
 };
 
+/// Sorted, duplicate-free concrete operand-stack heights reaching a block.
+/// An empty domain means the block is unreachable from the program entry.
+class StackHeightDomain {
+public:
+  bool insert(size_t Height) {
+    auto It = llvm::lower_bound(Heights, Height);
+    if (It != Heights.end() && *It == Height)
+      return false;
+    Heights.insert(It, Height);
+    return true;
+  }
+
+  [[nodiscard]] bool empty() const { return Heights.empty(); }
+  [[nodiscard]] llvm::ArrayRef<size_t> values() const { return Heights; }
+
+  [[nodiscard]] std::optional<size_t> singleton() const {
+    return Heights.size() == 1 ? std::optional<size_t>(Heights.front())
+                               : std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<size_t> maximum() const {
+    return Heights.empty() ? std::nullopt
+                           : std::optional<size_t>(Heights.back());
+  }
+
+private:
+  std::vector<size_t> Heights;
+};
+
 struct LowBlock {
   uint64_t StartPC = 0;
   uint64_t EndPC = 0;
@@ -181,8 +211,8 @@ struct LowBlock {
   std::vector<uint64_t> Predecessors;
   bool Reachable = false;
   bool HasIndirectSuccessor = false;
-  std::optional<size_t> EntryStackHeight;
-  std::optional<size_t> ExitStackHeight;
+  StackHeightDomain EntryStackHeights;
+  StackHeightDomain ExitStackHeights;
 };
 
 /// Lossless bytecode and CFG representation at the decoder boundary.
