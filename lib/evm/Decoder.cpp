@@ -64,7 +64,7 @@ bool decodeEIP8024Immediate(LowInstruction &Instruction, uint8_t Encoded) {
 
 void decodeConditionalImmediate(LowInstruction &Instruction,
                                 llvm::ArrayRef<uint8_t> Code, size_t &PC,
-                                std::vector<Diagnostic> &Diagnostics) {
+                                std::vector<Diagnostic> *Diagnostics) {
   const bool HasEncodedByte = PC < Code.size();
   const uint8_t Encoded = HasEncodedByte ? Code[PC] : uint8_t{0};
   Instruction.Immediate = llvm::APInt(kWordBits, Encoded);
@@ -81,9 +81,10 @@ void decodeConditionalImmediate(LowInstruction &Instruction,
   }
 
   Instruction.ImmediateStatus = ImmediateDecodeStatus::Invalid;
-  Diagnostics.push_back(
-      {Instruction.PC, "invalid immediate " + byteHex(Encoded) + " for " +
-                           std::string(Instruction.Info.Name)});
+  if (Diagnostics)
+    Diagnostics->push_back(
+        {Instruction.PC, "invalid immediate " + byteHex(Encoded) + " for " +
+                             std::string(Instruction.Info.Name)});
 }
 
 } // namespace
@@ -132,6 +133,44 @@ std::string formatDecodeAnnotation(const LowInstruction &Instruction) {
   return {};
 }
 
+LowInstruction decodeInstructionAt(llvm::ArrayRef<uint8_t> Code, size_t PC,
+                                   Hardfork Fork,
+                                   std::vector<Diagnostic> *Diagnostics) {
+  const size_t Start = PC;
+  const uint8_t Byte = Code[PC++];
+  const auto AssignedInfo = assignedOpcodeInfo(Byte);
+  const auto ActiveInfo = opcodeInfo(Byte, Fork);
+  const OpcodeDecodeStatus DecodeStatus =
+      ActiveInfo     ? OpcodeDecodeStatus::Active
+      : AssignedInfo ? OpcodeDecodeStatus::Inactive
+                     : OpcodeDecodeStatus::Unknown;
+  LowInstruction Instruction{
+      Start, 0,
+      ActiveInfo ? *ActiveInfo : AssignedInfo.value_or(unknownOpcodeInfo(Byte)),
+      DecodeStatus};
+  Instruction.Encoding.push_back(Byte);
+
+  // An inactive or unassigned byte consumes nothing beyond itself. Reading the
+  // immediate its record declares would skip bytes the fork under analysis
+  // executes as instructions.
+  if (ActiveInfo) {
+    switch (Instruction.Info.Immediate) {
+    case ImmediateKind::None:
+      break;
+    case ImmediateKind::PushData:
+      decodePushData(Instruction, Code, PC);
+      break;
+    case ImmediateKind::EIP8024Single:
+    case ImmediateKind::EIP8024Pair:
+      decodeConditionalImmediate(Instruction, Code, PC, Diagnostics);
+      break;
+    }
+  }
+
+  Instruction.NextPC = PC;
+  return Instruction;
+}
+
 llvm::Expected<DecodedBytecode> decodeBytecode(llvm::ArrayRef<uint8_t> Code,
                                                DecodeOptions Options) {
   if (!isValidHardfork(Options.Fork))
@@ -147,46 +186,21 @@ llvm::Expected<DecodedBytecode> decodeBytecode(llvm::ArrayRef<uint8_t> Code,
   Result.Code.assign(Code.begin(), Code.end());
 
   for (size_t PC = 0; PC < Code.size();) {
-    const size_t Start = PC;
-    const uint8_t Byte = Code[PC++];
-    const auto AssignedInfo = assignedOpcodeInfo(Byte);
-    const auto ActiveInfo = opcodeInfo(Byte, Options.Fork);
-    const OpcodeDecodeStatus DecodeStatus =
-        ActiveInfo     ? OpcodeDecodeStatus::Active
-        : AssignedInfo ? OpcodeDecodeStatus::Inactive
-                       : OpcodeDecodeStatus::Unknown;
-    LowInstruction Instruction{
-        Start, 0,
-        ActiveInfo ? *ActiveInfo
-                   : AssignedInfo.value_or(unknownOpcodeInfo(Byte)),
-        DecodeStatus};
-    Instruction.Encoding.push_back(Byte);
+    LowInstruction Instruction =
+        decodeInstructionAt(Code, PC, Options.Fork, &Result.Diagnostics);
+    PC = Instruction.NextPC;
 
-    if (!ActiveInfo) {
+    if (!Instruction.isActive()) {
       const std::string Reason =
-          AssignedInfo ? "inactive opcode " : "unknown opcode ";
+          Instruction.isAssigned() ? "inactive opcode " : "unknown opcode ";
+      const std::string Spelled = byteHex(Instruction.Encoding.front());
       if (Options.Strict)
-        return decoderError(Start, Reason + llvm::Twine(byteHex(Byte)));
-      Result.Diagnostics.push_back({Start, Reason + byteHex(Byte)});
+        return decoderError(Instruction.PC, Reason + llvm::Twine(Spelled));
+      Result.Diagnostics.push_back({Instruction.PC, Reason + Spelled});
     }
 
-    if (ActiveInfo) {
-      switch (Instruction.Info.Immediate) {
-      case ImmediateKind::None:
-        break;
-      case ImmediateKind::PushData:
-        decodePushData(Instruction, Code, PC);
-        break;
-      case ImmediateKind::EIP8024Single:
-      case ImmediateKind::EIP8024Pair:
-        decodeConditionalImmediate(Instruction, Code, PC, Result.Diagnostics);
-        break;
-      }
-    }
-
-    Instruction.NextPC = PC;
     if (Instruction.is(Opcode::JUMPDEST))
-      Result.JumpDestinations.insert(Start);
+      Result.JumpDestinations.insert(Instruction.PC);
     Result.Instructions.push_back(std::move(Instruction));
   }
 

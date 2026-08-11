@@ -24,6 +24,7 @@
 #include "neverd/Common.h"
 #include "neverd/Object/SectionNames.h"
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/evm/EVMImageMetadata.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/sbf/SBFMetadata.h"
 
@@ -245,6 +246,13 @@ struct BinaryImage {
   /// Present only for Solana SBF ELF inputs.  The dedicated loader owns ELF
   /// parsing; the frontend consumes this typed record and never reparses Raw.
   std::optional<sbf::Metadata> SBF;
+  /// Present only for EVM inputs.  An EVM input has no header, so what kind of
+  /// container it is and which compiler emitted it are conclusions the loader
+  /// reaches by reading the bytes.  Dropping them at this boundary would leave
+  /// the frontend to re-derive them — under a different hardfork, and therefore
+  /// differently — or to report an unknown build for a contract that named
+  /// itself.
+  std::optional<evm::ImageMetadata> EVM;
   /// Virtual addresses that a relocation resolves to inside a read-only data
   /// segment (filled by the loader as it applies relocations).  A code constant
   /// equal to one of these is a genuine pointer into rodata — e.g. a low-VA

@@ -51,11 +51,49 @@ native-binary operation.
 Runtime/deployed bytecode is preferred over creation bytecode. When only
 creation code is available, NeverD recognizes bounded, constant
 `CODECOPY`/`RETURN` constructor wrappers and extracts the copied runtime slice.
-A compiler artifact field containing only an optional `0x` prefix is treated
-as empty, so an empty `deployedBytecode` or `runtimeBytecode` field cannot hide
-a usable creation-bytecode fallback.
-A trailing Solidity CBOR map is stripped only when its encoded length, CBOR
-map marker, and a known `solc`, `ipfs`, or Swarm key all validate.
+The constructor walk uses the same single-instruction decoder as the real
+decoder, under the hardfork being analyzed, so a byte that is data on one fork
+and an opcode on another cannot move the boundary. A compiler artifact field
+containing only an optional `0x` prefix is treated as empty, so an empty
+`deployedBytecode` or `runtimeBytecode` field cannot hide a usable
+creation-bytecode fallback.
+
+### Compiler trailers
+
+`EVMMetadataFields.def` tabulates both trailer formats. Solidity writes a CBOR
+map whose two trailing bytes count the map alone; `vyper` writes a CBOR array
+ending in that map, whose two trailing bytes count the whole footer including
+themselves. Reading one framing as the other does not fail loudly — it lands
+two bytes away and removes two bytes of real code — so both are attempted and an
+input matching neither is left alone.
+
+The trailer is read twice: once on the input as given and once on the runtime
+code that remains after a deployment wrapper is unwrapped. Vyper moved its
+trailer into the initcode and leaves the runtime code without one, so a reader
+that only looks after unwrapping reports an unknown build for a contract that
+named itself. A sequence footer also states the runtime code length, the data
+section lengths and the immutables length, which bound the returned code
+without executing the constructor.
+
+### Containers that are not instructions
+
+`EVMBytecodeContainers.def` classifies the input before any decoding. Since
+EIP-3541 made `0xEF` undeployable, a leading `0xEF` promises the bytes are not
+instructions:
+
+| Container | Marker | Disposition |
+|-----------|--------|-------------|
+| legacy | — | decoded as instructions |
+| delegation (`eip-7702`) | `0xef0100` and exactly 23 bytes | reports the target account; analysis stops |
+| eof (`eip-3540`) | `0xef00` | rejected; no fork has activated it |
+
+A delegation indicator's twenty bytes are an address, not code. Decoding them
+would read the address as opcodes and produce a control-flow graph of an
+account, so `info` reports the target and analysis refuses with the reason. The
+refusal distinguishes the two cases: before Pectra the marker is not assigned
+yet, and from Pectra on the target's runtime code is simply missing. A marker at
+any other length is malformed input rather than a variant of the container, and
+stays instructions so the decoder can name the byte it could not read.
 
 Malformed hex, odd digit counts, unresolved linker placeholders, ambiguous
 multi-contract artifacts, invalid metadata bounds, and empty normalized code
@@ -154,9 +192,15 @@ Hand-maintained EVM metadata follows LLVM's multiply-included `.def` pattern:
   derives every later operand position, and the table is validated against the
   opcode database so the derivation cannot drift from the declared pop counts.
 - `EVMPrecompiles.def` is the dictionary of addresses the protocol answers at
-  itself, each with the fork that reserved it. Gas is deliberately absent: a
+  itself, each with the fork that reserved it and the proposal that scheduled
+  it. `P256VERIFY` at `0x100` is credited to `eip-7951`, which is the Final
+  proposal that reserved it on mainnet with Fusaka; the rollup proposal its
+  interface came from never scheduled it. Gas is deliberately absent: a
   precompile's cost is a function of its input and has been repriced without
   the address or the operation changing.
+- `EVMMetadataFields.def` and `EVMBytecodeContainers.def` describe what an
+  input is before it is decoded: the two compiler trailer framings, and the
+  containers whose bytes are not instructions at all.
 - `EVMRecoveredFacts.def` owns the spellings of the recovered-fact
   vocabularies, so a name that reaches output lives in one place rather than
   in a switch a new enumerator can be left out of. `EVMKnownSignatures.def`

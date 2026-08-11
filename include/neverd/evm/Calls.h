@@ -133,7 +133,7 @@ struct PrecompileInfo {
   /// the same call reaches an empty account and returns nothing.
   Hardfork Introduced;
   /// The reserved address. This is a whole address rather than a byte because
-  /// EIP-7212 reserved one that does not fit in a byte.
+  /// EIP-7951 reserved one that does not fit in a byte.
   uint16_t Address;
   llvm::StringLiteral Name;
   /// The proposal that reserved the address, empty for the four that predate

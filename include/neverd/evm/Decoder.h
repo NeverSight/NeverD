@@ -48,6 +48,21 @@ struct DecodedBytecode {
   std::vector<Diagnostic> Diagnostics;
 };
 
+/// Decodes exactly one instruction at \p PC under \p Fork.
+///
+/// This is the single place the width of an instruction is decided. Where an
+/// immediate ends is a question the fork answers — PUSH0 is a plain byte before
+/// Shanghai, and a conditional immediate is only consumed when it decodes — so
+/// any second walk over the same bytes that answers it independently will
+/// eventually disagree with this one about where the next instruction starts.
+///
+/// \p PC must be inside \p Code. The returned NextPC always advances, so a walk
+/// driven by this terminates. \p Diagnostics may be null when the caller has
+/// nowhere to report a malformed immediate.
+LowInstruction decodeInstructionAt(llvm::ArrayRef<uint8_t> Code, size_t PC,
+                                   Hardfork Fork,
+                                   std::vector<Diagnostic> *Diagnostics);
+
 /// Decodes bytecode without building a CFG or performing stack analysis.
 llvm::Expected<DecodedBytecode> decodeBytecode(llvm::ArrayRef<uint8_t> Code,
                                                DecodeOptions Options = {});

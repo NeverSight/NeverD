@@ -23,7 +23,13 @@ llvm::Expected<BinaryImage> EVMLoader::load(const std::filesystem::path &Path) {
   Image.Bits = Bitness::Bits256;
   Image.Base = evm::kEntryPC;
   Image.Entry = evm::kEntryPC;
-  Image.Raw = Loaded->Code;
+  // Raw is the container as the input spelled it, not the executable
+  // remainder. Which bytes of a deployment container are code is a question
+  // the hardfork answers, and the loader does not know which fork the session
+  // will analyze; keeping the container is what lets that answer be reached
+  // once, later, instead of guessed here.
+  Image.Raw = Loaded->Original;
+  Image.EVM = evm::describeBytecode(*Loaded);
 
   const auto Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Segment CodeSegment;

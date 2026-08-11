@@ -14,9 +14,11 @@
 
 #include "SessionImpl.h"
 
+#include "neverd/evm/Bytecode.h"
 #include "neverd/ir/NdOps.h"
 #include "neverd/sbf/Analyzer.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MD5.h"
@@ -55,6 +57,71 @@ llvm::StringRef sbfCFGEdgeType(const sbf::SBFProgram &Program,
     return "invalid";
   }
   llvm_unreachable("covered SBF CFG edge kind");
+}
+
+/// Render one compiler trailer. The whole point of reporting a trailer is that
+/// it says who built the contract, so the version and the source address are
+/// named rather than left as an opaque byte count.
+llvm::json::Object describeContractMetadata(const evm::ContractMetadata &Meta) {
+  llvm::json::Object Trailer;
+  Trailer["container"] = evm::metadataContainerName(Meta.Container);
+  Trailer["offset"] = static_cast<int64_t>(Meta.Offset);
+  Trailer["size"] = static_cast<int64_t>(Meta.Size);
+  Trailer["language"] = evm::metadataLanguageName(Meta.language());
+  if (std::string Version = Meta.compilerVersion(); !Version.empty())
+    Trailer["compiler_version"] = std::move(Version);
+  if (const evm::MetadataEntry *Hash = Meta.sourceHash()) {
+    llvm::json::Object Source;
+    Source["kind"] = Hash->Key;
+    Source["value"] = llvm::toHex(Hash->Value.Bytes, /*LowerCase=*/true);
+    Trailer["source_hash"] = std::move(Source);
+  }
+
+  llvm::json::Array Keys;
+  for (const evm::MetadataEntry &Entry : Meta.Entries)
+    Keys.push_back(Entry.Key);
+  Trailer["keys"] = std::move(Keys);
+
+  // A sequence footer describes the runtime code the constructor returns,
+  // which is a layout no other part of the input states.
+  for (const evm::MetadataSequenceEntry &Entry : Meta.Sequence) {
+    if (Entry.Value.Kind != evm::MetadataValueKind::Unsigned)
+      continue;
+    Trailer[Entry.Element->Name] = static_cast<int64_t>(Entry.Value.Unsigned);
+  }
+  if (const evm::MetadataSequenceEntry *Integrity =
+          Meta.find(evm::MetadataSequenceElement::IntegrityHash))
+    Trailer[Integrity->Element->Name] =
+        llvm::toHex(Integrity->Value.Bytes, /*LowerCase=*/true);
+  return Trailer;
+}
+
+llvm::json::Object describeEVMImage(const evm::ImageMetadata &Meta) {
+  llvm::json::Object EVM;
+  const evm::BytecodeContainerInfo &Container =
+      evm::getBytecodeContainerInfo(Meta.Container);
+  EVM["source"] = evm::bytecodeSourceName(Meta.Source);
+  EVM["container"] = Container.Name;
+  EVM["hardfork"] = evm::hardforkName(Meta.Fork);
+  EVM["runtime_extracted"] = Meta.RuntimeExtracted;
+  EVM["metadata_stripped"] = Meta.MetadataStripped;
+  if (!Container.EIP.empty())
+    EVM["container_eip"] = Container.EIP;
+  // Whether the marker means anything at the fork being analyzed is a separate
+  // fact from what the bytes say, and both are worth reporting.
+  if (std::optional<evm::Hardfork> Activated =
+          evm::bytecodeContainerActivation(Meta.Container)) {
+    EVM["container_activated_at"] = evm::hardforkName(*Activated);
+    EVM["container_active"] = evm::hardforkAtLeast(Meta.Fork, *Activated);
+  }
+  if (!Meta.DelegateTarget.empty())
+    EVM["delegate_target"] =
+        "0x" + llvm::toHex(Meta.DelegateTarget, /*LowerCase=*/true);
+  if (Meta.InputMetadata)
+    EVM["input_metadata"] = describeContractMetadata(*Meta.InputMetadata);
+  if (Meta.RuntimeMetadata)
+    EVM["runtime_metadata"] = describeContractMetadata(*Meta.RuntimeMetadata);
+  return EVM;
 }
 
 } // namespace
@@ -274,6 +341,9 @@ const char *neverd_headers_json(neverd_session_t Sess) {
     SBF["rodata"] = std::move(Rodata);
     Root["sbf"] = std::move(SBF);
   }
+
+  if (S->Img.EVM)
+    Root["evm"] = describeEVMImage(*S->Img.EVM);
 
   llvm::json::Object Dyn;
   const auto &DI = S->Img.DynInfo;

@@ -19,6 +19,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/evm/Analyzer.h"
+#include "neverd/evm/Bytecode.h"
 #include "neverd/evm/LLVMEmitter.h"
 #include "neverd/sbf/Analyzer.h"
 #include "neverd/sbf/LLVMEmitter.h"
@@ -843,10 +844,32 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   PipelineResult Result;
 
   if (Img.Arch == Arch::EVM) {
+    // The loader kept the container rather than the executable remainder,
+    // because unwrapping it walks a constructor whose instruction boundaries
+    // the hardfork decides. Redoing that walk here is what makes the session's
+    // fork the one that answered, instead of whichever fork the loader
+    // happened to default to.
+    evm::BytecodeLoadOptions LoadOptions;
+    LoadOptions.Fork = Opts.EVMFork;
+    const bool SourceIsRuntime = Img.EVM && Img.EVM->SourceIsRuntime;
+    const auto Source =
+        Img.EVM ? Img.EVM->Source : evm::BytecodeSourceKind::Raw;
+    auto Normalized =
+        evm::normalizeBytecode(Img.Raw, Source, SourceIsRuntime,
+                               /*SourceName=*/{}, LoadOptions);
+    if (!Normalized) {
+      Result.Error = llvm::toString(Normalized.takeError());
+      return Result;
+    }
+    if (llvm::Error Undecodable = evm::checkDecodable(*Normalized)) {
+      Result.Error = llvm::toString(std::move(Undecodable));
+      return Result;
+    }
+
     evm::AnalyzeOptions EVMOptions;
     EVMOptions.Fork = Opts.EVMFork;
     EVMOptions.Strict = Opts.EVMStrict;
-    auto Program = evm::analyze(Img.Raw, EVMOptions);
+    auto Program = evm::analyze(Normalized->Code, EVMOptions);
     if (!Program) {
       Result.Error = llvm::toString(Program.takeError());
       return Result;

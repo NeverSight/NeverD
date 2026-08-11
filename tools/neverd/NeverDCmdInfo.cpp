@@ -41,11 +41,28 @@ int runInfo(neverd_session_t Sess) {
   auto HeaderParsed = json::parse(HeaderJson ? HeaderJson : "{}");
   neverd_free_string(HeaderJson);
   if (HeaderParsed)
-    if (auto *Root = HeaderParsed->getAsObject())
+    if (auto *Root = HeaderParsed->getAsObject()) {
       if (auto *SBF = Root->getObject("sbf"))
         outs() << "SBF:    " << SBF->getString("version_display").value_or("")
                << " / " << SBF->getString("machine_name").value_or("")
                << " / " << SBF->getString("layout").value_or("") << "\n";
+      if (auto *EVM = Root->getObject("evm")) {
+        outs() << "EVM:    " << EVM->getString("container").value_or("")
+               << " / " << EVM->getString("hardfork").value_or("") << "\n";
+        // The delegate target is the only address at which this account's
+        // behavior can be read, so it belongs in the one-screen summary.
+        if (auto Target = EVM->getString("delegate_target"))
+          outs() << "        delegates to " << *Target << "\n";
+        for (const char *Key : {"runtime_metadata", "input_metadata"})
+          if (auto *Trailer = EVM->getObject(Key))
+            if (auto Version = Trailer->getString("compiler_version")) {
+              outs() << "        built by "
+                     << Trailer->getString("language").value_or("") << " "
+                     << *Version << "\n";
+              break;
+            }
+      }
+    }
 
   const char *SegJson = neverd_segments_json(Sess);
   auto SegParsed = json::parse(SegJson ? SegJson : "[]");
@@ -171,6 +188,52 @@ int runHeaders(neverd_session_t Sess) {
         outs() << format(
             "  %-20s %s\n", "Layout:",
             SBF->getString("layout").value_or("").str().c_str());
+      }
+
+      if (auto *EVM = Root->getObject("evm")) {
+        outs() << "\n  --- Ethereum EVM ---\n";
+        outs() << format(
+            "  %-20s %s\n", "Input:",
+            EVM->getString("source").value_or("").str().c_str());
+        outs() << format(
+            "  %-20s %s\n", "Container:",
+            EVM->getString("container").value_or("").str().c_str());
+        outs() << format(
+            "  %-20s %s\n", "Hardfork:",
+            EVM->getString("hardfork").value_or("").str().c_str());
+        if (auto Activated = EVM->getString("container_activated_at"))
+          outs() << format("  %-20s %s (%s)\n", "Container Active:",
+                           EVM->getBoolean("container_active").value_or(false)
+                               ? "yes"
+                               : "no",
+                           Activated->str().c_str());
+        if (auto Target = EVM->getString("delegate_target"))
+          outs() << format("  %-20s %s\n",
+                           "Delegates To:", Target->str().c_str());
+        outs() << format("  %-20s %s\n", "Runtime Extracted:",
+                         EVM->getBoolean("runtime_extracted").value_or(false)
+                             ? "yes"
+                             : "no");
+
+        // The trailer lives in the deployment container for one compiler and
+        // in the runtime code for the other, so which one carried it is a fact
+        // about the build worth printing beside the version.
+        for (const char *Key : {"runtime_metadata", "input_metadata"}) {
+          auto *Trailer = EVM->getObject(Key);
+          if (!Trailer)
+            continue;
+          outs() << format(
+              "  %-20s %s %s (%s)\n", "Compiler:",
+              Trailer->getString("language").value_or("").str().c_str(),
+              Trailer->getString("compiler_version").value_or("?").str().c_str(),
+              Trailer->getString("container").value_or("").str().c_str());
+          if (auto *Hash = Trailer->getObject("source_hash"))
+            outs() << format(
+                "  %-20s %s:%s\n", "Source:",
+                Hash->getString("kind").value_or("").str().c_str(),
+                Hash->getString("value").value_or("").str().c_str());
+          break;
+        }
       }
 
       outs() << "\n  --- Counts ---\n";

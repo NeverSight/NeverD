@@ -120,7 +120,12 @@ EVM_PRECOMPILE(BLS12381MapFp2ToG2, 0x11, Pectra, "bls12381MapFp2ToG2",
 // table stores an address rather than a byte.
 //===----------------------------------------------------------------------===//
 
-EVM_PRECOMPILE(P256Verify, 0x0100, Fusaka, "p256Verify", "eip-7212",
+// The interface is the one L2s already answer at this address under RIP-7212,
+// so a contract written against a rollup's precompile works unchanged here.
+// The proposal that reserved it on mainnet is a different, later document, and
+// naming the rollup one would credit the address to a proposal that never
+// scheduled it.
+EVM_PRECOMPILE(P256Verify, 0x0100, Fusaka, "p256Verify", "eip-7951",
                "verifies a secp256r1 signature, which is the curve a phone's "
                "secure enclave and a passkey sign with, and therefore what an "
                "account-abstraction wallet checks")

@@ -67,6 +67,49 @@ TEST_F(EVMLoaderTest, AutoDetectsAndBuildsAnEVMImage) {
   EXPECT_EQ(Image->getFunctionSymbols()[0]->Name, "evm_entry");
 }
 
+TEST_F(EVMLoaderTest, KeepsTheContainerAndWhatWasLearnedFromIt) {
+  // A constructor that returns five bytes, followed by those bytes and the
+  // trailer naming the compiler.
+  const auto Path = write("counter.creation.evm",
+                          "0x6005600c60003960056000f3"
+                          "6001600055"
+                          "a164736f6c634300081e000a");
+  auto Image = loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+
+  // The image keeps the container. Which of its bytes are code depends on the
+  // fork a session picks, and the loader is not the place that decides.
+  EXPECT_EQ(Image->Raw.size(), 29u);
+  ASSERT_EQ(Image->Segments.size(), 1u);
+  EXPECT_EQ(Image->Segments[0].Data,
+            (std::vector<uint8_t>{0x60, 0x01, 0x60, 0x00, 0x55}));
+
+  ASSERT_TRUE(Image->EVM.has_value());
+  EXPECT_EQ(Image->EVM->Source, evm::BytecodeSourceKind::Hex);
+  EXPECT_EQ(Image->EVM->Container, evm::BytecodeContainer::Legacy);
+  EXPECT_TRUE(Image->EVM->RuntimeExtracted);
+  EXPECT_TRUE(Image->EVM->MetadataStripped);
+  ASSERT_TRUE(Image->EVM->RuntimeMetadata.has_value());
+  EXPECT_EQ(Image->EVM->RuntimeMetadata->compilerVersion(), "0.8.30");
+}
+
+TEST_F(EVMLoaderTest, ReportsADelegationIndicatorInsteadOfDecodingIt) {
+  const auto Path =
+      write("delegated.evm",
+            "0xef01003333333333333333333333333333333333333333");
+  auto Image = loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+
+  ASSERT_TRUE(Image->EVM.has_value());
+  EXPECT_EQ(Image->EVM->Container, evm::BytecodeContainer::Delegation);
+  // The address is the one thing these bytes say, so loading has to keep it:
+  // it is where a reader has to go to find the code that actually runs.
+  EXPECT_EQ(Image->EVM->DelegateTarget.size(), evm::kAddressBytes);
+  EXPECT_EQ(Image->EVM->DelegateTarget.front(), 0x33);
+  EXPECT_FALSE(Image->EVM->RuntimeExtracted);
+  EXPECT_FALSE(Image->EVM->MetadataStripped);
+}
+
 TEST_F(EVMLoaderTest, RefusesUnknownTextFiles) {
   const auto Path = write("notes.txt", "hello, not bytecode");
   EXPECT_EQ(Loader::create(Path), nullptr);

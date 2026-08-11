@@ -47,10 +47,52 @@ EVM. Binäres EVM-Rewriting wird ausdrücklich abgelehnt; `patch` bleibt nativ.
 
 Runtime-/Deployment-Bytecode hat Vorrang vor Creation-Code. Ist nur Creation
 vorhanden, erkennt NeverD begrenzte konstante `CODECOPY`/`RETURN`-Wrapper und
-extrahiert den kopierten Runtime-Bereich. Ein Feld mit nur optionalem `0x` gilt
-als leer; ein leeres Runtime-Feld verdeckt keinen nutzbaren Creation-Fallback.
-Eine abschließende Solidity-CBOR-Map wird nur entfernt, wenn Länge, Map-Marker
-und ein bekannter `solc`-, `ipfs`- oder Swarm-Schlüssel gültig sind.
+extrahiert den kopierten Runtime-Bereich. Der Constructor-Durchlauf verwendet
+denselben Einzelinstruktions-Decoder wie der echte Decoder, unter dem
+analysierten Hardfork; ein Byte, das auf einem Fork Daten und auf einem anderen
+ein Opcode ist, kann die Grenze daher nicht verschieben. Ein Feld mit nur
+optionalem `0x` gilt als leer; ein leeres Runtime-Feld verdeckt keinen nutzbaren
+Creation-Fallback.
+
+### Compiler-Trailer
+
+`EVMMetadataFields.def` führt beide Trailer-Formate. Solidity schreibt eine
+CBOR-Map, deren zwei Schlussbytes nur die Map zählen; `vyper` schreibt ein
+CBOR-Array, das mit dieser Map endet und dessen zwei Schlussbytes den gesamten
+Footer inklusive ihrer selbst zählen. Die eine Rahmung als die andere zu lesen
+scheitert nicht laut — es landet zwei Bytes daneben und entfernt zwei Bytes
+echten Code —, deshalb werden beide versucht, und eine Eingabe, die zu keiner
+passt, bleibt unangetastet.
+
+Der Trailer wird zweimal gelesen: einmal auf der Eingabe wie gegeben und einmal
+auf dem Runtime-Code, der nach dem Auspacken eines Deployment-Wrappers übrig
+bleibt. Vyper hat seinen Trailer in den Initcode verschoben und lässt den
+Runtime-Code ohne einen; ein Leser, der erst nach dem Auspacken hinsieht, meldet
+deshalb einen unbekannten Build für einen Contract, der sich selbst benannt hat.
+Ein Sequenz-Footer nennt zusätzlich die Länge des Runtime-Codes, die Längen der
+Datensektionen und die Länge der Immutables, was den zurückgegebenen Code
+begrenzt, ohne den Constructor auszuführen.
+
+### Container, die keine Instruktionen sind
+
+`EVMBytecodeContainers.def` klassifiziert die Eingabe vor jedem Decode. Seit
+EIP-3541 `0xEF` undeploybar gemacht hat, verspricht ein führendes `0xEF`, dass
+die Bytes keine Instruktionen sind:
+
+| Container | Marker | Behandlung |
+|-----------|--------|------------|
+| legacy | — | wird als Instruktionen dekodiert |
+| delegation (`eip-7702`) | `0xef0100` und genau 23 Byte | meldet das Zielkonto; Analyse endet |
+| eof (`eip-3540`) | `0xef00` | abgelehnt; kein Fork hat es aktiviert |
+
+Die zwanzig Bytes eines Delegation-Indikators sind eine Adresse, kein Code. Sie
+zu dekodieren läse die Adresse als Opcodes und erzeugte den Kontrollflussgraphen
+eines Kontos; deshalb meldet `info` das Ziel und die Analyse verweigert mit
+Begründung. Die Verweigerung unterscheidet beide Fälle: Vor Pectra ist der
+Marker noch nicht vergeben, ab Pectra fehlt schlicht der Runtime-Code des Ziels.
+Ein Marker in jeder anderen Länge ist fehlerhafte Eingabe statt einer Variante
+des Containers und bleibt Instruktionen, damit der Decoder das Byte benennen
+kann, das er nicht lesen konnte.
 
 Fehlerhaftes Hex, ungerade Ziffern, ungelöste Linker-Platzhalter, mehrdeutige
 Multi-Contract-Artefakte, ungültige Metadata-Grenzen und leerer Code erzeugen
@@ -131,9 +173,17 @@ Handgeschriebene EVM-Metadata folgt LLVMs mehrfach eingebundenem `.def`-Muster:
   Opcode-Datenbank geprüft, damit die Ableitung nicht von den deklarierten
   Pop-Zahlen abweicht.
 - `EVMPrecompiles.def` ist das Verzeichnis der Adressen, an denen das Protokoll
-  selbst antwortet, jeweils mit dem Fork, der sie reserviert hat. Gas fehlt
-  absichtlich: Die Kosten einer Precompile sind eine Funktion ihrer Eingabe und
-  wurden mehrfach neu bepreist, ohne dass Adresse oder Operation sich änderten.
+  selbst antwortet, jeweils mit dem Fork, der sie reserviert hat, und dem
+  Vorschlag, der sie eingeplant hat. `P256VERIFY` an `0x100` wird `eip-7951`
+  zugeschrieben, dem finalen Vorschlag, der die Adresse mit Fusaka im Mainnet
+  reserviert hat; der Rollup-Vorschlag, aus dem ihre Schnittstelle stammt, hat
+  sie nie eingeplant. Gas fehlt absichtlich: Die Kosten einer Precompile sind
+  eine Funktion ihrer Eingabe und wurden mehrfach neu bepreist, ohne dass
+  Adresse oder Operation sich änderten.
+- `EVMMetadataFields.def` und `EVMBytecodeContainers.def` beschreiben, was eine
+  Eingabe ist, bevor sie dekodiert wird: die beiden Rahmungen des
+  Compiler-Trailers und die Container, deren Bytes überhaupt keine Instruktionen
+  sind.
 - `EVMRecoveredFacts.def` besitzt die Schreibweisen der
   Rekonstruktionsvokabulare, damit ein Name, der in der Ausgabe erscheint, an
   einer Stelle lebt statt in einem `switch`, in dem ein neuer Enumerator fehlen

@@ -43,10 +43,40 @@ Solidity 與 C 輸出屬於語意重建：它們保留解碼後的操作碼順�
 | 編譯器產物 | `.json` 根節點或 `evm` 下的 `deployedBytecode`、`runtimeBytecode`、`bytecode`；也支援 `contracts → file → contract → evm` 形式的 solc 標準 JSON |
 
 執行期/部署位元組碼優先於建立位元組碼。若只有建立程式碼，NeverD 會辨識有界、常數
-的 `CODECOPY`/`RETURN` 建構子包裝並擷取被複製的執行期切片。只含可選 `0x` 前綴的
-產物欄位視為空，因此空的 `deployedBytecode` 或 `runtimeBytecode` 不會遮蔽可用的
-建立位元組碼回退。只有編碼長度、CBOR map 標記及已知 `solc`、`ipfs` 或 Swarm key
-都驗證成功時，才移除尾端 Solidity CBOR map。
+的 `CODECOPY`/`RETURN` 建構子包裝並擷取被複製的執行期切片。建構子巡訪使用與真正解碼
+器相同的單指令解碼器，並以正在分析的硬分叉為準，因此某個位元組在一個分叉是資料、在
+另一個分叉是操作碼時，也無法移動這條邊界。只含可選 `0x` 前綴的產物欄位視為空，因此
+空的 `deployedBytecode` 或 `runtimeBytecode` 不會遮蔽可用的建立位元組碼回退。
+
+### 編譯器尾端資料
+
+`EVMMetadataFields.def` 列出兩種尾端格式。Solidity 寫入一個 CBOR map，其最後兩個位元
+組只計算該 map 本身；`vyper` 寫入一個以該 map 結尾的 CBOR array，其最後兩個位元組計
+算含自身在內的整段尾端。把其中一種取框方式當成另一種來讀不會大聲失敗——它只會落在偏
+離兩個位元組之處，並削掉兩個位元組的真實程式碼——因此兩種都會嘗試，兩者皆不符的輸入
+則原樣保留。
+
+尾端會被讀取兩次：一次針對給定的輸入，一次針對剝除部署包裝後剩下的執行期程式碼。
+Vyper 把尾端搬進了 initcode，執行期程式碼不再留有尾端，因此只在剝除之後才查看的讀取
+器，會把一個自報名號的合約回報成未知的建置。sequence footer 另外載明執行期程式碼長
+度、data section 長度與 immutables 長度，因此無須執行建構子即可界定回傳的程式碼。
+
+### 不是指令的容器
+
+`EVMBytecodeContainers.def` 在任何解碼之前先為輸入分類。自 EIP-3541 使 `0xEF` 不可
+部署之後，開頭的 `0xEF` 就等於承諾這些位元組不是指令：
+
+| 容器 | 標記 | 處置方式 |
+|------|------|----------|
+| legacy | — | 以指令解碼 |
+| delegation（`eip-7702`） | `0xef0100` 且恰好 23 位元組 | 回報目標帳戶；分析停止 |
+| eof（`eip-3540`） | `0xef00` | 拒絕；尚無分叉啟用它 |
+
+delegation 指示子的二十個位元組是一個位址，而不是程式碼。解碼它們等於把位址當成操作
+碼來讀，並產出一個帳戶的控制流程圖，因此 `info` 會回報目標，分析則帶著理由拒絕。這次
+拒絕會區分兩種情況：Pectra 之前該標記尚未指派，自 Pectra 起則是目標的執行期程式碼根
+本不存在。長度不是此值的標記屬於格式錯誤的輸入，而非該容器的一種變體，因此仍當作指令
+處理，好讓解碼器能指出它讀不了的那個位元組。
 
 格式錯誤的十六進位、奇數位數、未解析 linker placeholder、有歧義的多合約產物、
 無效 metadata 邊界與正規化後的空程式碼都會產生可操作錯誤。C++ loader API 可用
@@ -117,9 +147,12 @@ NeverD 不會把已撤回的 EOF 提案當作最終主網行為。
   每筆記錄只有一個旗標——value operand 是否位於被呼叫者與引數 window 之間——由它
   推導出之後每一個 operand 位置；該表會與 opcode 資料庫交叉驗證，使推導不會偏離
   已宣告的 pop 數。
-- `EVMPrecompiles.def` 是協定自身回應的位址字典，每項都帶有保留該位址的 fork。
-  其中刻意不含 gas：precompile 的成本是其輸入的函式，且在位址與操作皆未改變的情況
-  下被多次重新定價。
+- `EVMPrecompiles.def` 是協定自身回應的位址字典，每項都帶有保留該位址的 fork，以及
+  排定它的提案。`0x100` 上的 `P256VERIFY` 歸於 `eip-7951`：它才是隨 Fusaka 在主網上
+  保留該位址的 Final 提案；其介面所出自的 rollup 提案從未排程。其中刻意不含 gas：
+  precompile 的成本是其輸入的函式，且在位址與操作皆未改變的情況下被多次重新定價。
+- `EVMMetadataFields.def` 與 `EVMBytecodeContainers.def` 描述一個輸入在被解碼之前
+  究竟是什麼：兩種編譯器尾端取框方式，以及那些位元組根本不是指令的容器。
 - `EVMRecoveredFacts.def` 擁有復原事實各詞彙的拼寫，使出現在輸出中的名稱集中於
   一處，而不是散落在可能遺漏新列舉項的 `switch` 中。`EVMKnownSignatures.def`
   對 signature 的三種角色做同樣的事。

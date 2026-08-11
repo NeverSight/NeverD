@@ -45,9 +45,46 @@ rewrite는 명시적으로 거부되며 `patch`는 native binary 전용입니다
 
 runtime/deployed bytecode가 creation bytecode보다 우선합니다. creation code만 있으면
 bounded constant `CODECOPY`/`RETURN` constructor wrapper를 인식해 복사된 runtime
-slice를 추출합니다. 선택적 `0x`만 든 field는 비어 있다고 보므로 빈 runtime field가
-사용 가능한 creation fallback을 숨기지 않습니다. 마지막 Solidity CBOR map은 encoded
-length, map marker, 알려진 `solc`/`ipfs`/Swarm key를 모두 검증한 경우에만 제거합니다.
+slice를 추출합니다. constructor 순회는 분석 대상 hardfork 아래에서 실제 decoder와
+동일한 단일 instruction decoder를 사용하므로, 어떤 fork에서는 데이터이고 다른
+fork에서는 opcode인 byte가 경계를 옮길 수 없습니다. 선택적 `0x`만 든 field는 비어
+있다고 보므로 빈 `deployedBytecode`나 `runtimeBytecode` field가 사용 가능한 creation
+bytecode fallback을 숨기지 않습니다.
+
+### 컴파일러 trailer
+
+`EVMMetadataFields.def`는 두 trailer 형식을 모두 표로 정리합니다. Solidity는 마지막
+두 byte가 map 자체만 세는 CBOR map을 쓰고, `vyper`는 그 map으로 끝나는 CBOR array를
+쓰는데 그 마지막 두 byte는 자기 자신을 포함한 footer 전체를 셉니다. 한쪽 framing을
+다른 쪽으로 읽어도 요란하게 실패하지 않습니다. 두 byte 어긋난 자리에 떨어져 실제
+code 두 byte를 지울 뿐이므로, 둘 다 시도하고 어느 쪽에도 맞지 않는 입력은 그대로
+둡니다.
+
+trailer는 두 번 읽습니다. 주어진 입력 그대로 한 번, deployment wrapper를 벗겨낸 뒤
+남은 runtime code에 대해 한 번입니다. Vyper는 trailer를 initcode로 옮겨 runtime
+code에는 남기지 않으므로, 벗겨낸 뒤에만 보는 reader는 스스로 이름을 밝힌 contract를
+알 수 없는 build로 보고하게 됩니다. sequence footer는 runtime code 길이, data
+section 길이, immutables 길이도 밝히며, 이는 constructor를 실행하지 않고도 반환될
+code를 한정합니다.
+
+### instruction이 아닌 container
+
+`EVMBytecodeContainers.def`는 어떤 decode보다 먼저 입력을 분류합니다. EIP-3541이
+`0xEF`를 배포 불가로 만든 이후로, 선두 `0xEF`는 그 byte들이 instruction이 아님을
+약속합니다.
+
+| 컨테이너 | 마커 | 처리 |
+|----------|------|------|
+| legacy | — | instruction으로 decode |
+| delegation (`eip-7702`) | `0xef0100`과 정확히 23 byte | 대상 account를 보고하고 분석 중단 |
+| eof (`eip-3540`) | `0xef00` | 거부; 활성화한 fork 없음 |
+
+delegation indicator의 20 byte는 code가 아니라 주소입니다. 이를 decode하면 주소를
+opcode로 읽어 account의 control-flow graph를 만들어내므로, `info`는 대상을 보고하고
+분석은 이유를 밝히며 거부합니다. 그 거부는 두 경우를 구분합니다. Pectra 이전에는
+marker가 아직 할당되지 않았고, Pectra부터는 대상의 runtime code가 단지 없는
+것입니다. 길이가 다른 marker는 container의 변종이 아니라 malformed 입력이므로
+instruction으로 남겨, decoder가 읽지 못한 byte를 지목할 수 있게 합니다.
 
 잘못된 hex, 홀수 자릿수, 미해결 linker placeholder, 모호한 multi-contract artifact,
 잘못된 metadata bound, 정규화 후 빈 code는 실행 가능한 오류를 냅니다. C++ API의
@@ -120,8 +157,14 @@ NOP으로 조용히 처리하지 않습니다.
   window 사이에 value operand가 있는지 여부가 이후 모든 operand 위치를 유도하며,
   그 유도가 선언된 pop 수와 어긋나지 않도록 opcode 데이터베이스에 대해 검증됩니다.
 - `EVMPrecompiles.def`는 프로토콜이 직접 응답하는 주소들의 사전이며, 각 항목은 그
-  주소를 예약한 fork를 함께 가집니다. gas는 의도적으로 없습니다. precompile의 비용은
+  주소를 예약한 fork와 그것을 일정에 올린 proposal을 함께 가집니다. `0x100`의
+  `P256VERIFY`는 `eip-7951`에 귀속됩니다. Fusaka와 함께 mainnet에 그 주소를 예약한
+  Final proposal이 바로 이것이며, 그 인터페이스가 유래한 rollup proposal은 끝내
+  일정에 올리지 못했기 때문입니다. gas는 의도적으로 없습니다. precompile의 비용은
   입력의 함수이고, 주소나 연산이 바뀌지 않은 채로 여러 번 재가격되었기 때문입니다.
+- `EVMMetadataFields.def`와 `EVMBytecodeContainers.def`는 입력이 decode되기 전에
+  그것이 무엇인지를 기술합니다. 두 가지 컴파일러 trailer framing, 그리고 그 byte가
+  애초에 instruction이 아닌 container들입니다.
 - `EVMRecoveredFacts.def`는 복구 사실 어휘의 철자를 소유하므로, 출력에 도달하는
   이름은 새 enumerator가 빠질 수 있는 `switch`가 아니라 한 곳에 존재합니다.
   `EVMKnownSignatures.def`는 signature가 가지는 세 가지 역할에 대해 같은 일을 합니다.

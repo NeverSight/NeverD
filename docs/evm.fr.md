@@ -48,10 +48,51 @@ opération pour binaires natifs.
 
 Le bytecode runtime/déployé est préféré au code de création. À défaut, NeverD
 reconnaît les wrappers de constructeur constants et bornés `CODECOPY`/`RETURN`
-et extrait la tranche runtime. Un champ ne contenant que le préfixe facultatif
-`0x` est vide : un runtime vide ne masque donc pas un fallback de création utile.
-La map CBOR Solidity finale n’est retirée que si sa longueur, son marqueur et
-une clé `solc`, `ipfs` ou Swarm connue sont tous valides.
+et extrait la tranche runtime. Le parcours du constructeur emploie le même
+décodeur d’instruction unique que le décodeur réel, sous le hardfork analysé :
+un octet qui est une donnée sur un fork et un opcode sur un autre ne peut donc
+pas déplacer la frontière. Un champ ne contenant que le préfixe facultatif `0x`
+est vide : un `deployedBytecode` ou `runtimeBytecode` vide ne masque donc pas un
+fallback de création utile.
+
+### Trailers de compilateur
+
+`EVMMetadataFields.def` recense les deux formats de trailer. Solidity écrit une
+map CBOR dont les deux derniers octets ne comptent que la map ; `vyper` écrit un
+tableau CBOR terminé par cette map, dont les deux derniers octets comptent tout
+le footer, eux compris. Lire un cadrage comme s’il était l’autre n’échoue pas
+bruyamment : on tombe deux octets plus loin et on retire deux octets de code
+réel. Les deux sont donc tentés, et une entrée qui ne correspond à aucun est
+laissée telle quelle.
+
+Le trailer est lu deux fois : une fois sur l’entrée telle qu’elle est donnée, une
+fois sur le code runtime restant après déballage d’un wrapper de déploiement.
+Vyper a déplacé son trailer dans l’initcode et laisse le code runtime sans
+trailer ; un lecteur qui ne regarde qu’après déballage signale donc un build
+inconnu pour un contrat qui s’était nommé. Un footer de séquence indique en outre
+la longueur du code runtime, celles des sections de données et celle des
+immutables, qui bornent le code renvoyé sans exécuter le constructeur.
+
+### Conteneurs qui ne sont pas des instructions
+
+`EVMBytecodeContainers.def` classe l’entrée avant tout décodage. Depuis
+qu’EIP-3541 a rendu `0xEF` non déployable, un `0xEF` en tête promet que les
+octets ne sont pas des instructions :
+
+| Conteneur | Marqueur | Traitement |
+|-----------|----------|------------|
+| legacy | — | décodé comme instructions |
+| délégation (`eip-7702`) | `0xef0100` et exactement 23 octets | signale le compte cible ; l’analyse s’arrête |
+| eof (`eip-3540`) | `0xef00` | refusé ; aucun fork ne l’a activé |
+
+Les vingt octets d’un indicateur de délégation sont une adresse, pas du code.
+Les décoder lirait l’adresse comme des opcodes et produirait un graphe de flot de
+contrôle d’un compte : `info` signale donc la cible et l’analyse refuse en
+donnant la raison. Ce refus distingue les deux cas : avant Pectra le marqueur
+n’est pas encore attribué, et à partir de Pectra le code runtime de la cible est
+simplement absent. Un marqueur de toute autre longueur est une entrée mal formée
+plutôt qu’une variante du conteneur, et reste des instructions pour que le
+décodeur puisse nommer l’octet qu’il n’a pas su lire.
 
 Hexadécimal mal formé, nombre impair de chiffres, placeholder de liaison non
 résolu, artefact multi-contrat ambigu, bornes de metadata invalides ou code vide
@@ -133,9 +174,15 @@ Les metadata EVM écrites à la main suivent le modèle `.def` multi-inclus de L
   est validée face à la base d’opcodes pour que la dérivation ne dérive pas des
   compteurs de pop déclarés.
 - `EVMPrecompiles.def` est le dictionnaire des adresses auxquelles le protocole
-  répond lui-même, chacune avec le fork qui l’a réservée. Le gas en est
+  répond lui-même, chacune avec le fork qui l’a réservée et la proposition qui
+  l’a programmée. `P256VERIFY` à `0x100` est créditée à `eip-7951`, la
+  proposition Final qui l’a réservée sur mainnet avec Fusaka ; la proposition
+  rollup dont vient son interface ne l’a jamais programmée. Le gas en est
   volontairement absent : le coût d’une precompile est fonction de son entrée et
   a été retarifé sans que l’adresse ni l’opération changent.
+- `EVMMetadataFields.def` et `EVMBytecodeContainers.def` décrivent ce qu’est une
+  entrée avant tout décodage : les deux cadrages de trailer de compilateur, et
+  les conteneurs dont les octets ne sont pas du tout des instructions.
 - `EVMRecoveredFacts.def` détient les orthographes des vocabulaires de faits
   récupérés, afin qu’un nom atteignant la sortie vive à un seul endroit plutôt
   que dans un `switch` où un nouvel énumérateur peut être oublié.

@@ -45,10 +45,46 @@ EVM の binary rewrite は明示的に拒否され、`patch` は native binary �
 
 runtime/deployed bytecode を creation bytecode より優先します。creation code しかない
 場合は、有界かつ定数の `CODECOPY`/`RETURN` constructor wrapper を認識して runtime
-slice を抽出します。`0x` だけの artifact field は空とみなし、空の runtime field が
-利用可能な creation fallback を隠すことはありません。末尾の Solidity CBOR map は、
-encoded length、map marker、既知の `solc`/`ipfs`/Swarm key がすべて妥当な場合だけ
-除去します。
+slice を抽出します。この constructor の走査は、解析対象の hardfork のもとで実際の
+decoder と同じ single-instruction decoder を使うため、ある fork では data であり別の
+fork では opcode である byte が境界を動かすことはありません。`0x` だけの artifact
+field は空とみなし、空の `deployedBytecode` や `runtimeBytecode` が利用可能な
+creation bytecode fallback を隠すことはありません。
+
+### コンパイラの trailer
+
+`EVMMetadataFields.def` は二つの trailer 形式を表にします。Solidity は CBOR map を
+書き、その末尾 2 byte は map だけの長さを数えます。`vyper` はその map で終わる CBOR
+array を書き、その末尾 2 byte は自分自身を含む footer 全体を数えます。一方の framing
+を他方として読んでも派手に失敗はしません。2 byte ずれた位置に着地し、実際のコードを
+2 byte 削るだけです。そのため両方を試し、どちらにも一致しない入力はそのまま残します。
+
+trailer は 2 回読みます。与えられたままの入力に対して 1 回、deploy wrapper を外した
+後に残る runtime code に対して 1 回です。Vyper は trailer を initcode 側へ移し、
+runtime code には残しません。そのため unwrap 後だけを見る読み手は、自ら名乗っている
+contract を build 不明と報告してしまいます。sequence footer は runtime code の長さ、
+data section の長さ、immutable の長さも示し、constructor を実行せずに返されるコードを
+限界づけます。
+
+### 命令ではない container
+
+`EVMBytecodeContainers.def` は、いかなるデコードよりも前に入力を分類します。
+EIP-3541 が `0xEF` を deploy 不可にして以来、先頭の `0xEF` はその byte 列が命令では
+ないことの表明です。
+
+| Container | Marker | 扱い |
+|-----------|--------|------|
+| legacy | — | 命令としてデコード |
+| delegation (`eip-7702`) | `0xef0100` かつちょうど 23 byte | 委譲先アカウントを報告し、解析は停止 |
+| eof (`eip-3540`) | `0xef00` | 拒否。有効化した fork は存在しない |
+
+delegation indicator の 20 byte はアドレスであってコードではありません。デコードすれば
+アドレスを opcode として読み、アカウントの control-flow graph を作ってしまうため、
+`info` は委譲先を報告し、解析は理由を添えて拒否します。この拒否は二つの場合を区別
+します。Pectra より前では marker がまだ割り当てられておらず、Pectra 以降では委譲先の
+runtime code が単に存在しません。長さが異なる marker は container の変種ではなく
+malformed な入力なので、decoder が読めなかった byte を名指しできるよう命令のままに
+します。
 
 不正 hex、奇数桁、未解決 linker placeholder、曖昧な multi-contract artifact、
 不正 metadata bounds、正規化後の空 code は実用的なエラーになります。C++ API の
@@ -125,9 +161,15 @@ LowIR/diagnostic に保持しますが、実行が到達すれば backend は fa
   その導出が宣言された pop 数からずれないよう opcode データベースに対して検証され
   ます。
 - `EVMPrecompiles.def` はプロトコル自身が応答するアドレスの辞書で、各エントリは
-  それを予約した fork を持ちます。gas は意図的に含めません。precompile のコストは
+  それを予約した fork と、それを予定に載せた提案を持ちます。`0x100` の
+  `P256VERIFY` は `eip-7951` に帰属します。これは Fusaka とともに mainnet へ
+  予約した Final 提案であり、そのインターフェースの出どころである rollup 側の提案
+  は一度も予定に載せていません。gas は意図的に含めません。precompile のコストは
   入力の関数であり、アドレスや操作を変えないまま何度も再価格付けされてきたためで
   す。
+- `EVMMetadataFields.def` と `EVMBytecodeContainers.def` は、デコード前の入力が
+  何であるかを記述します。すなわち compiler trailer の二つの framing と、byte 列が
+  そもそも命令ではない container です。
 - `EVMRecoveredFacts.def` は復元事実の語彙の綴りを所有します。出力に現れる名前が
   1 箇所に集まり、新しい列挙子が漏れうる `switch` に散らばりません。
   `EVMKnownSignatures.def` は signature が持つ 3 つの役割について同じことを行いま

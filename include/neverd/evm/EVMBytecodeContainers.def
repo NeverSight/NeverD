@@ -1,0 +1,110 @@
+//===- EVMBytecodeContainers.def - What a code blob actually is -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_BYTECODE_SOURCE(ID, SPELLING, SUMMARY)
+// EVM_BYTECODE_CONTAINER(ID, SPELLING, MARKER, MARKER_BYTES, EXACT_SIZE,
+//                        DISPOSITION, EIP, SUMMARY)
+// EVM_BYTECODE_CONTAINER_ACTIVATION(ID, HARDFORK)
+//
+//   Not every blob of code an account holds is a program. Since EIP-3541 made
+//   0xEF undeployable, a leading 0xEF is a promise that the bytes are not
+//   instructions at all, and two proposals have since spent that promise on
+//   containers with their own meanings.
+//
+//   Deciding which one is in front of the decoder is not cosmetic. 0xEF is an
+//   unassigned byte, so a decoder handed a delegation indicator will read it as
+//   a fault, read the twenty bytes of the target address as opcodes, and
+//   produce a control-flow graph of an address. Every fact recovered from that
+//   graph is invented.
+//
+//   MARKER is the leading bytes that identify the container, big-endian, and
+//   MARKER_BYTES is how many of them there are. MARKER_BYTES is zero for the
+//   fallback, which matches whatever the others do not.
+//
+//   EXACT_SIZE is the only size the container is ever encoded at, and zero when
+//   it does not have one. A blob that carries a marker at the wrong size is not
+//   a shorter or longer version of that container: it is malformed input, and
+//   it falls back to being read as instructions so the decoder can say exactly
+//   which byte it could not read.
+//
+//   DISPOSITION says what analysis can do with it:
+//
+//     Decodable               the bytes are instructions
+//     RequiresDelegateTarget  the bytes name where the instructions are, which
+//                             is somewhere this analysis was not given
+//     Unrecognized            the bytes are a container this analysis does not
+//                             read
+//
+//   ACTIVATION is the fork at which the protocol assigns the marker its
+//   meaning. Before it, an account could not hold these bytes at all, so
+//   reporting the container would be reporting a state the chain did not have.
+//   A container with no activation record has never been scheduled, which is a
+//   different statement from "not supported here" and is worth making
+//   separately.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_BYTECODE_SOURCE
+#define EVM_BYTECODE_SOURCE(ID, SPELLING, SUMMARY)
+#endif
+
+#ifndef EVM_BYTECODE_CONTAINER
+#define EVM_BYTECODE_CONTAINER(ID, SPELLING, MARKER, MARKER_BYTES, EXACT_SIZE, \
+                               DISPOSITION, EIP, SUMMARY)
+#endif
+
+#ifndef EVM_BYTECODE_CONTAINER_ACTIVATION
+#define EVM_BYTECODE_CONTAINER_ACTIVATION(ID, HARDFORK)
+#endif
+
+//===----------------------------------------------------------------------===//
+// How the input spelled the bytes
+//
+// None of these change what the code means, but which one an input used is the
+// difference between "this is what the chain holds" and "this is what a build
+// produced", and only one of them can carry a contract name.
+//===----------------------------------------------------------------------===//
+
+EVM_BYTECODE_SOURCE(Raw, "raw", "the bytes exactly as the file holds them")
+EVM_BYTECODE_SOURCE(Hex, "hex",
+                    "hexadecimal text, which is how an explorer publishes the "
+                    "code an account holds")
+EVM_BYTECODE_SOURCE(Artifact, "artifact",
+                    "a compiler artifact, from which one contract's code was "
+                    "selected")
+
+//===----------------------------------------------------------------------===//
+// What the bytes are
+//===----------------------------------------------------------------------===//
+
+EVM_BYTECODE_CONTAINER(Legacy, "legacy", 0x00, 0, 0, Decodable, "",
+                       "ordinary bytecode, which is every account that is not "
+                       "one of the cases below")
+
+// The account holds twenty bytes naming where its code actually lives. The
+// target's runtime code is what executes, against this account's storage and
+// this account's balance, so a decompilation of these twenty-three bytes
+// describes no behavior whatsoever.
+EVM_BYTECODE_CONTAINER(Delegation, "delegation", 0xef0100, 3, 23,
+                       RequiresDelegateTarget, "eip-7702",
+                       "a delegation indicator: the twenty bytes after the "
+                       "marker are the account whose code runs here")
+
+// The EVM Object Format replaces the flat instruction stream with a sectioned
+// container carrying its own type, code, and data sections. It reached neither
+// activation nor a finished specification, so a reader that guessed at the
+// sections would be inventing a format rather than reading one. The ID spells
+// the acronym out because EOF is a macro in <cstdio>.
+EVM_BYTECODE_CONTAINER(EVMObjectFormat, "eof", 0xef00, 2, 0, Unrecognized,
+                       "eip-3540",
+                       "an EOF container, which is a sectioned format this "
+                       "analysis does not read and no fork has activated")
+
+EVM_BYTECODE_CONTAINER_ACTIVATION(Delegation, Pectra)
+
+#undef EVM_BYTECODE_CONTAINER_ACTIVATION
+#undef EVM_BYTECODE_CONTAINER
+#undef EVM_BYTECODE_SOURCE

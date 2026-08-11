@@ -4,19 +4,37 @@
 //
 // This file intentionally has no include guard.
 //
+// EVM_METADATA_VALUE_KIND(ID, SPELLING)
+// EVM_METADATA_CONTAINER(ID, SPELLING, LENGTH_COUNTS_ITSELF, SUMMARY)
 // EVM_METADATA_LANGUAGE(ID, NAME, SUMMARY)
 // EVM_METADATA_FIELD(ID, KEY, KIND, LANGUAGE, NAME, SUMMARY)
+// EVM_METADATA_SEQUENCE_ELEMENT(ID, POSITION_FROM_END, VALUE_KIND, REQUIRED,
+//                               NAME, SUMMARY)
 //
-// A compiler appends a CBOR map and its two-byte length to the code it emits.
+// A compiler appends CBOR and its two-byte length to the code it emits.
 // Nothing on chain reads it, so it is the one part of a deployed contract that
 // still says who built it: which compiler, which version, and where the source
 // it was built from can be fetched.
 //
+// The two compilers disagree about what those two bytes count, and getting it
+// wrong does not fail loudly: it lands the reader two bytes away from the CBOR
+// and, if stripping is enabled, removes two bytes of real code or leaves two
+// bytes of trailer in the instruction stream. LENGTH_COUNTS_ITSELF is that
+// disagreement, written down rather than assumed:
+//
+//   solidity  the two bytes count the CBOR alone
+//   vyper     the two bytes count the whole footer, themselves included
+//
+// They also disagree about the shape. Solidity writes one map. Vyper, since it
+// moved the trailer out of the runtime code and into the initcode, writes an
+// array whose last member is that map and whose earlier members describe the
+// layout of the runtime code the initcode is about to return.
+//
 // KEY is the map key exactly as the compiler writes it. KIND says how to read
 // the value:
 //
-//   CompilerVersion  a three-byte release triple, or the text a prerelease
-//                    build writes instead
+//   CompilerVersion  three components, written as a three-byte string, an
+//                    array of three numbers, or the text a prerelease spells
 //   SourceHash       a content address of the source metadata document
 //   Flag             a boolean the compiler sets about the build itself
 //
@@ -26,7 +44,22 @@
 // appended by anything, so a recovered version names a claim the code makes
 // about itself.
 //
+// POSITION_FROM_END counts an array member back from the last one, because
+// that is the end the format is stable at: the release that added the
+// integrity hash put it at the front, moving every member's index up by one
+// while leaving every member's distance from the compiler map unchanged.
+// REQUIRED marks the members every release writes, which is what makes a
+// shorter array a legal older footer rather than a malformed one.
+//
 //===----------------------------------------------------------------------===//
+
+#ifndef EVM_METADATA_VALUE_KIND
+#define EVM_METADATA_VALUE_KIND(ID, SPELLING)
+#endif
+
+#ifndef EVM_METADATA_CONTAINER
+#define EVM_METADATA_CONTAINER(ID, SPELLING, LENGTH_COUNTS_ITSELF, SUMMARY)
+#endif
 
 #ifndef EVM_METADATA_LANGUAGE
 #define EVM_METADATA_LANGUAGE(ID, NAME, SUMMARY)
@@ -36,10 +69,50 @@
 #define EVM_METADATA_FIELD(ID, KEY, KIND, LANGUAGE, NAME, SUMMARY)
 #endif
 
+#ifndef EVM_METADATA_SEQUENCE_ELEMENT
+#define EVM_METADATA_SEQUENCE_ELEMENT(ID, POSITION_FROM_END, VALUE_KIND,       \
+                                      REQUIRED, NAME, SUMMARY)
+#endif
+
+//===----------------------------------------------------------------------===//
+// The CBOR a trailer is allowed to contain
+//
+// Anything outside this list — an indefinite length, a tag, a negative number,
+// a simple value that is not a boolean — makes the trailer unreadable, which is
+// reported rather than guessed around.
+//===----------------------------------------------------------------------===//
+
+EVM_METADATA_VALUE_KIND(Unsigned, "unsigned")
+EVM_METADATA_VALUE_KIND(ByteString, "bytes")
+EVM_METADATA_VALUE_KIND(Text, "text")
+EVM_METADATA_VALUE_KIND(Boolean, "boolean")
+EVM_METADATA_VALUE_KIND(Array, "array")
+EVM_METADATA_VALUE_KIND(Map, "map")
+
+//===----------------------------------------------------------------------===//
+// How a footer frames itself
+//===----------------------------------------------------------------------===//
+
+EVM_METADATA_CONTAINER(SolidityMap, "solidity-map", false,
+                       "a CBOR map, whose two trailing bytes count the map "
+                       "alone")
+EVM_METADATA_CONTAINER(VyperSequence, "vyper-sequence", true,
+                       "a CBOR array ending in the compiler map, whose two "
+                       "trailing bytes count the whole footer including "
+                       "themselves")
+
+//===----------------------------------------------------------------------===//
+// The compilers
+//===----------------------------------------------------------------------===//
+
 EVM_METADATA_LANGUAGE(Unknown, "unknown",
                       "no tabulated compiler field was present")
 EVM_METADATA_LANGUAGE(Solidity, "solidity", "the Solidity compiler")
 EVM_METADATA_LANGUAGE(Vyper, "vyper", "the Vyper compiler")
+
+//===----------------------------------------------------------------------===//
+// The keys of the compiler map
+//===----------------------------------------------------------------------===//
 
 EVM_METADATA_FIELD(Solc, "solc", CompilerVersion, Solidity, "solc",
                    "the Solidity compiler release the contract was built with")
@@ -55,5 +128,39 @@ EVM_METADATA_FIELD(Experimental, "experimental", Flag, Unknown, "experimental",
                    "an experimental language feature was enabled, which makes "
                    "the metadata document itself unreliable")
 
+//===----------------------------------------------------------------------===//
+// The members of a sequence footer, counted back from the compiler map
+//
+// These describe the runtime code the initcode returns, not the initcode the
+// footer is attached to, which is why they are worth recovering: they say where
+// the returned code ends and where its immutables begin without executing the
+// constructor.
+//===----------------------------------------------------------------------===//
+
+EVM_METADATA_SEQUENCE_ELEMENT(CompilerMap, 0, Map, true, "compiler",
+                              "the map every footer ends in, holding the "
+                              "compiler release")
+EVM_METADATA_SEQUENCE_ELEMENT(ImmutableSectionLength, 1, Unsigned, true,
+                              "immutable-section-length",
+                              "how many bytes of immutables the constructor "
+                              "appends to the returned runtime code")
+EVM_METADATA_SEQUENCE_ELEMENT(DataSectionLengths, 2, Array, true,
+                              "data-section-lengths",
+                              "the length of each data section the runtime "
+                              "code carries, which is where a jump table and "
+                              "a string literal live")
+EVM_METADATA_SEQUENCE_ELEMENT(RuntimeCodeLength, 3, Unsigned, true,
+                              "runtime-code-length",
+                              "how many bytes of the returned code are "
+                              "instructions, which bounds decoding without "
+                              "running the constructor")
+EVM_METADATA_SEQUENCE_ELEMENT(IntegrityHash, 4, ByteString, false,
+                              "integrity-hash",
+                              "the hash of the resolved source bundle, which "
+                              "a verifier compares against its own build")
+
+#undef EVM_METADATA_SEQUENCE_ELEMENT
 #undef EVM_METADATA_FIELD
 #undef EVM_METADATA_LANGUAGE
+#undef EVM_METADATA_CONTAINER
+#undef EVM_METADATA_VALUE_KIND

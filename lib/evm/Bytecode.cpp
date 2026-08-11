@@ -6,6 +6,7 @@
 
 #include "neverd/evm/Bytecode.h"
 
+#include "neverd/evm/Decoder.h"
 #include "neverd/evm/Metadata.h"
 #include "neverd/evm/Opcodes.h"
 
@@ -16,6 +17,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <optional>
 #include <string>
@@ -192,15 +194,19 @@ selectArtifactBytecode(const llvm::json::Value &Root,
 
 using AbstractValue = std::optional<uint64_t>;
 
-AbstractValue readPushValue(const std::vector<uint8_t> &Code, size_t Offset,
-                            size_t Width) {
-  if (Width > sizeof(uint64_t) || Offset > Code.size() ||
-      Width > Code.size() - Offset)
+AbstractValue pushedValue(const LowInstruction &Instruction) {
+  // PUSH0 carries no immediate, so it has no decode status to be complete and
+  // nothing that could have been truncated. It pushes zero.
+  if (Instruction.Info.ImmediateBytes == 0)
+    return uint64_t{0};
+  // A push whose data ran off the end of the code pushes bytes the chain never
+  // supplied, so its value is unknown rather than zero-padded.
+  if (Instruction.ImmediateStatus != ImmediateDecodeStatus::Complete)
     return std::nullopt;
-  uint64_t Value = 0;
-  for (size_t I = 0; I < Width; ++I)
-    Value = (Value << kBitsPerByte) | Code[Offset + I];
-  return Value;
+  if (Instruction.Immediate.getActiveBits() >
+      std::numeric_limits<uint64_t>::digits)
+    return std::nullopt;
+  return Instruction.Immediate.getZExtValue();
 }
 
 struct StaticCopy {
@@ -210,7 +216,7 @@ struct StaticCopy {
 };
 
 std::optional<std::vector<uint8_t>>
-extractStaticRuntime(const std::vector<uint8_t> &Code) {
+extractStaticRuntime(llvm::ArrayRef<uint8_t> Code, Hardfork Fork) {
   std::vector<AbstractValue> Stack;
   std::optional<StaticCopy> LastCopy;
   auto Pop = [&]() -> AbstractValue {
@@ -222,12 +228,17 @@ extractStaticRuntime(const std::vector<uint8_t> &Code) {
   };
 
   for (size_t PC = 0; PC < Code.size();) {
-    const Opcode Op = static_cast<Opcode>(Code[PC++]);
+    const LowInstruction Instruction =
+        decodeInstructionAt(Code, PC, Fork, /*Diagnostics=*/nullptr);
+    PC = Instruction.NextPC;
+    // A byte the fork does not execute faults, which ends the constructor's
+    // linear path just as a terminator does.
+    if (!Instruction.isExecutable())
+      return std::nullopt;
+
+    const Opcode Op = Instruction.opcode();
     if (isPush(Op)) {
-      const size_t Width = pushDataSize(Op);
-      Stack.push_back(Width == 0 ? AbstractValue{uint64_t{0}}
-                                 : readPushValue(Code, PC, Width));
-      PC = std::min(Code.size(), PC + Width);
+      Stack.push_back(pushedValue(Instruction));
       continue;
     }
     if (isDup(Op)) {
@@ -244,6 +255,12 @@ extractStaticRuntime(const std::vector<uint8_t> &Code) {
         Stack.clear();
       continue;
     }
+    // The operand-indexed stack instructions reach an arbitrary depth chosen
+    // by an immediate. No compiler emits one in a constructor wrapper, so
+    // declining to model them costs nothing and keeps this walk from claiming
+    // a provenance it did not follow.
+    if (isDeepDup(Op) || isDeepSwap(Op) || isExchange(Op))
+      return std::nullopt;
     if (Op == Opcode::POP) {
       (void)Pop();
       continue;
@@ -270,30 +287,26 @@ extractStaticRuntime(const std::vector<uint8_t> &Code) {
           LastCopy->Size <= Code.size() - LastCopy->Source) {
         const size_t Source = static_cast<size_t>(LastCopy->Source);
         const size_t Size = static_cast<size_t>(LastCopy->Size);
-        const auto Begin = Code.begin() + static_cast<std::ptrdiff_t>(Source);
-        return std::vector<uint8_t>(Begin,
-                                    Begin + static_cast<std::ptrdiff_t>(Size));
+        const llvm::ArrayRef<uint8_t> Runtime = Code.slice(Source, Size);
+        return std::vector<uint8_t>(Runtime.begin(), Runtime.end());
       }
       return std::nullopt;
     }
 
-    const auto Info = opcodeInfo(Op);
-    if (!Info)
-      return std::nullopt;
     // This bounded abstract interpreter follows only the constructor's linear
     // path. A terminal/control-transfer instruction ends that proof; scanning
     // fallthrough bytes would reinterpret unreachable runtime data as code.
-    if (Info->IsTerminator)
+    if (Instruction.Info.IsTerminator)
       return std::nullopt;
     // The extractor remembers that a CODECOPY established a byte-for-byte
     // provenance relationship with the creation code. Any later memory write
     // invalidates that conservative proof, including compound host operations
     // such as CALL and EXTCODECOPY whose primary effect is not memory access.
-    if (mayWriteMemory(*Info))
+    if (mayWriteMemory(Instruction.Info))
       LastCopy.reset();
-    for (uint8_t I = 0; I < Info->StackPops; ++I)
+    for (uint8_t I = 0; I < Instruction.Info.StackPops; ++I)
       (void)Pop();
-    for (uint8_t I = 0; I < Info->StackPushes; ++I)
+    for (uint8_t I = 0; I < Instruction.Info.StackPushes; ++I)
       Stack.push_back(std::nullopt);
   }
   return std::nullopt;
@@ -301,28 +314,53 @@ extractStaticRuntime(const std::vector<uint8_t> &Code) {
 
 llvm::Expected<LoadedBytecode> finishLoaded(std::vector<uint8_t> Code,
                                             BytecodeSourceKind Source,
-                                            bool AlreadyRuntime,
+                                            bool SourceIsRuntime,
                                             const BytecodeLoadOptions &Options,
                                             llvm::StringRef SourceName) {
   if (Code.empty())
     return inputError(SourceName, "empty bytecode");
+  if (!isValidHardfork(Options.Fork))
+    return inputError(SourceName, "invalid hardfork value");
 
   LoadedBytecode Result;
   Result.Source = Source;
-  Result.OriginalSize = Code.size();
-  if (Options.ExtractRuntime && !AlreadyRuntime) {
-    if (auto Runtime = extractStaticRuntime(Code);
+  Result.Fork = Options.Fork;
+  Result.SourceIsRuntime = SourceIsRuntime;
+  Result.Original = Code;
+  Result.Container = classifyBytecodeContainer(Code);
+
+  // A container that is not instructions has no deployment wrapper to unwrap
+  // and no trailer to find. Running either step would report a transformation
+  // that did not happen, on bytes that are not code.
+  if (getBytecodeContainerInfo(Result.Container).Disposition !=
+      ContainerDisposition::Decodable) {
+    Result.Code = std::move(Code);
+    return Result;
+  }
+
+  // The trailer is read before extraction as well as after it. One compiler
+  // writes it into the deployment container and leaves the runtime code
+  // without one, because the layout it records is about code that has not been
+  // returned yet; a reader that only looks after unwrapping finds nothing and
+  // reports an unknown build for a contract that named itself.
+  Result.InputMetadata = findContractMetadata(Code);
+
+  if (Options.ExtractRuntime && !SourceIsRuntime) {
+    if (auto Runtime = extractStaticRuntime(Code, Options.Fork);
         Runtime && !Runtime->empty() && *Runtime != Code) {
       Code = std::move(*Runtime);
       Result.RuntimeExtracted = true;
     }
   }
+
   // The trailer is read whether or not it is removed: finding it is what tells
   // the decoder which bytes are not code, and what it says about the compiler
   // is worth reporting either way.
-  Result.Metadata = findContractMetadata(Code);
-  if (Options.StripMetadata && Result.Metadata && Result.Metadata->Offset != 0) {
-    Code.resize(Result.Metadata->Offset);
+  Result.RuntimeMetadata = Result.RuntimeExtracted ? findContractMetadata(Code)
+                                                   : Result.InputMetadata;
+  if (Options.StripMetadata && Result.RuntimeMetadata &&
+      Result.RuntimeMetadata->Offset != 0) {
+    Code.resize(Result.RuntimeMetadata->Offset);
     Result.MetadataStripped = true;
   }
   if (Code.empty())
@@ -333,6 +371,153 @@ llvm::Expected<LoadedBytecode> finishLoaded(std::vector<uint8_t> Code,
 }
 
 } // namespace
+
+llvm::ArrayRef<BytecodeSourceInfo> bytecodeSourceInfos() {
+  static const std::array Table = {
+#define EVM_BYTECODE_SOURCE(ID, SPELLING, SUMMARY)                             \
+  BytecodeSourceInfo{BytecodeSourceKind::ID, SPELLING, SUMMARY},
+#include "neverd/evm/EVMBytecodeContainers.def"
+  };
+  return Table;
+}
+
+llvm::StringRef bytecodeSourceName(BytecodeSourceKind Source) {
+  return bytecodeSourceInfos()[static_cast<size_t>(Source)].Name;
+}
+
+llvm::ArrayRef<BytecodeContainerInfo> bytecodeContainerInfos() {
+  static const std::array Table = {
+#define EVM_BYTECODE_CONTAINER(ID, SPELLING, MARKER, MARKER_BYTES, EXACT_SIZE, \
+                               DISPOSITION, EIP, SUMMARY)                      \
+  BytecodeContainerInfo{BytecodeContainer::ID,                                 \
+                        SPELLING,                                              \
+                        (MARKER),                                              \
+                        (MARKER_BYTES),                                        \
+                        (EXACT_SIZE),                                          \
+                        ContainerDisposition::DISPOSITION,                     \
+                        EIP,                                                   \
+                        SUMMARY},
+#include "neverd/evm/EVMBytecodeContainers.def"
+  };
+  return Table;
+}
+
+// An indicator is a marker followed by an address and nothing else, which is
+// what makes its size a complete identity check rather than a lower bound.
+#define EVM_BYTECODE_CONTAINER(ID, SPELLING, MARKER, MARKER_BYTES, EXACT_SIZE, \
+                               DISPOSITION, EIP, SUMMARY)                      \
+  static_assert(ContainerDisposition::DISPOSITION !=                           \
+                        ContainerDisposition::RequiresDelegateTarget ||        \
+                    (EXACT_SIZE) == (MARKER_BYTES) + kAddressBytes,            \
+                "a delegation indicator is a marker followed by an address");
+#include "neverd/evm/EVMBytecodeContainers.def"
+
+const BytecodeContainerInfo &
+getBytecodeContainerInfo(BytecodeContainer Container) {
+  return bytecodeContainerInfos()[static_cast<size_t>(Container)];
+}
+
+llvm::StringRef bytecodeContainerName(BytecodeContainer Container) {
+  return getBytecodeContainerInfo(Container).Name;
+}
+
+std::optional<Hardfork>
+bytecodeContainerActivation(BytecodeContainer Container) {
+  switch (Container) {
+#define EVM_BYTECODE_CONTAINER_ACTIVATION(ID, HARDFORK)                        \
+  case BytecodeContainer::ID:                                                  \
+    return Hardfork::HARDFORK;
+#include "neverd/evm/EVMBytecodeContainers.def"
+  default:
+    return std::nullopt;
+  }
+}
+
+BytecodeContainer classifyBytecodeContainer(llvm::ArrayRef<uint8_t> Code) {
+  for (const BytecodeContainerInfo &Info : bytecodeContainerInfos()) {
+    if (Info.MarkerBytes == 0 || Code.size() < Info.MarkerBytes)
+      continue;
+    uint32_t Leading = 0;
+    for (uint8_t I = 0; I < Info.MarkerBytes; ++I)
+      Leading = (Leading << kBitsPerByte) | Code[I];
+    if (Leading != Info.Marker)
+      continue;
+    // A marker at any other size is malformed input rather than a variant of
+    // the container. It stays instructions so the decoder can say which byte
+    // it could not read, instead of this reporting a container that is not
+    // there.
+    if (Info.ExactSize != 0 && Code.size() != Info.ExactSize)
+      continue;
+    return Info.ID;
+  }
+  return BytecodeContainer::Legacy;
+}
+
+llvm::ArrayRef<uint8_t> delegationTarget(llvm::ArrayRef<uint8_t> Code,
+                                         BytecodeContainer Container) {
+  const BytecodeContainerInfo &Info = getBytecodeContainerInfo(Container);
+  if (Info.Disposition != ContainerDisposition::RequiresDelegateTarget ||
+      Code.size() != Info.ExactSize)
+    return {};
+  return Code.drop_front(Info.MarkerBytes);
+}
+
+llvm::ArrayRef<uint8_t> LoadedBytecode::delegateTarget() const {
+  return delegationTarget(Original, Container);
+}
+
+ContainerDisposition LoadedBytecode::disposition() const {
+  return getBytecodeContainerInfo(Container).Disposition;
+}
+
+llvm::Error checkDecodable(const LoadedBytecode &Loaded,
+                           llvm::StringRef SourceName) {
+  const BytecodeContainerInfo &Info =
+      getBytecodeContainerInfo(Loaded.Container);
+  const std::string Named =
+      (Info.Name + " container (" + Info.EIP + ")").str();
+
+  switch (Info.Disposition) {
+  case ContainerDisposition::Decodable:
+    return llvm::Error::success();
+  case ContainerDisposition::RequiresDelegateTarget: {
+    const std::optional<Hardfork> Activated =
+        bytecodeContainerActivation(Loaded.Container);
+    // Before activation the protocol would not let an account hold these
+    // bytes, so naming a delegation would be describing a state the chain
+    // could not have been in.
+    if (Activated && !hardforkAtLeast(Loaded.Fork, *Activated))
+      return inputError(SourceName,
+                        Named + " is not assigned until " +
+                            hardforkName(*Activated) + ", and the analyzed "
+                            "fork is " +
+                            hardforkName(Loaded.Fork));
+    return inputError(SourceName,
+                      Named + ": the code that runs here belongs to 0x" +
+                          llvm::toHex(Loaded.delegateTarget(),
+                                      /*LowerCase=*/true) +
+                          ", whose runtime code was not supplied");
+  }
+  case ContainerDisposition::Unrecognized:
+    return inputError(SourceName, Named + " is " + Info.Summary);
+  }
+  return inputError(SourceName, Named + " has no disposition");
+}
+
+ImageMetadata describeBytecode(const LoadedBytecode &Loaded) {
+  ImageMetadata Described;
+  Described.Source = Loaded.Source;
+  Described.Container = Loaded.Container;
+  Described.Fork = Loaded.Fork;
+  Described.SourceIsRuntime = Loaded.SourceIsRuntime;
+  Described.RuntimeExtracted = Loaded.RuntimeExtracted;
+  Described.MetadataStripped = Loaded.MetadataStripped;
+  const llvm::ArrayRef<uint8_t> Target = Loaded.delegateTarget();
+  Described.DelegateTarget.assign(Target.begin(), Target.end());
+  Described.InputMetadata = Loaded.InputMetadata;
+  Described.RuntimeMetadata = Loaded.RuntimeMetadata;
+  return Described;
+}
 
 llvm::Expected<LoadedBytecode>
 decodeBytecodeInput(llvm::StringRef Content, llvm::StringRef SourceName,
@@ -377,6 +562,14 @@ decodeBytecodeInput(llvm::StringRef Content, llvm::StringRef SourceName,
     return Code.takeError();
   return finishLoaded(std::move(*Code), BytecodeSourceKind::Artifact,
                       Candidate->IsRuntime, Options, SourceName);
+}
+
+llvm::Expected<LoadedBytecode>
+normalizeBytecode(llvm::ArrayRef<uint8_t> Original, BytecodeSourceKind Source,
+                  bool SourceIsRuntime, llvm::StringRef SourceName,
+                  const BytecodeLoadOptions &Options) {
+  return finishLoaded(std::vector<uint8_t>(Original.begin(), Original.end()),
+                      Source, SourceIsRuntime, Options, SourceName);
 }
 
 llvm::Expected<LoadedBytecode>
