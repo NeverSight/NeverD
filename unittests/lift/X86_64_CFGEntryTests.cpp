@@ -186,7 +186,7 @@ TEST(FuncDetectorCoverage, DistinguishesExecutableDataExportsFromFunctions) {
 
   Segment Text;
   Text.VA = Img.Entry;
-  Text.Size = 0x30;
+  Text.Size = 0xc0;
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data.assign(Text.Size, 0x90);
   Text.Data[0] = 0xc3;    // ret
@@ -203,16 +203,27 @@ TEST(FuncDetectorCoverage, DistinguishesExecutableDataExportsFromFunctions) {
   FunctionExport.Name = "ordinary_export";
   FunctionExport.Addr = Img.Entry + 0x20;
   Img.Exports.push_back(std::move(FunctionExport));
+  Export LongFunctionExport;
+  LongFunctionExport.Name = "ordinary_long_export";
+  LongFunctionExport.Addr = Img.Entry + 0x40;
+  Img.Exports.push_back(std::move(LongFunctionExport));
+  Img.Segments[0].Data[0x90] = 0xc3;
+  // An exported alternate entry can legitimately lie inside an unwind range
+  // whose primary start is elsewhere.  It still requires decode validation,
+  // but must not be discarded solely for being inside that range.
+  Img.KnownCodeRanges.push_back({Img.Entry + 0x30, Img.Entry + 0xa0});
 
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X64));
   FuncDetector Detector;
   auto Functions = Detector.detect(Img, Dec);
 
-  ASSERT_EQ(Functions.size(), 2u);
-  EXPECT_EQ(Functions[0].first, Img.Entry);
-  EXPECT_EQ(Functions[1].first, Img.Entry + 0x20);
-  EXPECT_EQ(Functions[1].second, "ordinary_export");
+  std::map<va_t, std::string> ByEntry(Functions.begin(), Functions.end());
+  EXPECT_EQ(ByEntry.size(), 3u);
+  EXPECT_EQ(ByEntry.count(Img.Entry), 1u);
+  EXPECT_EQ(ByEntry.count(Img.Entry + 0x10), 0u);
+  EXPECT_EQ(ByEntry[Img.Entry + 0x20], "ordinary_export");
+  EXPECT_EQ(ByEntry[Img.Entry + 0x40], "ordinary_long_export");
 }
 
 TEST(CFGBuilderCoverage, StopsAtTrapTerminatorBeforeEmbeddedData) {

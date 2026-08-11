@@ -29,7 +29,11 @@ public:
 
 private:
   void scanCallTargets(const BinaryImage &Img, Decoder &Dec);
-  bool verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec, va_t Addr);
+  /// Validate a heuristic entry.  When KeepInconclusive is true, bounded
+  /// probes that exhaust their budget remain candidates for the formal audit;
+  /// definite decode or mapping failures are still rejected.
+  bool verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec, va_t Addr,
+                            bool KeepInconclusive = false);
 
   std::set<va_t> Entries;
 };

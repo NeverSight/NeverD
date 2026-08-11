@@ -48,6 +48,7 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
   }
 
   std::set<va_t> SkipAddrs;
+  std::set<va_t> UntypedCOFFExports;
   if (Img.Format == BinaryFormat::MachO && !Img.IsRelocatable) {
     for (const auto &Seg : Img.Segments)
       SkipAddrs.insert(Seg.VA);
@@ -66,6 +67,8 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     if (Seg && Seg->isExecutable()) {
       Entries.insert(Exp.Addr);
       Results.push_back({Exp.Addr, Exp.Name});
+      if (Img.Format == BinaryFormat::COFF)
+        UntypedCOFFExports.insert(Exp.Addr);
     }
   }
 
@@ -125,12 +128,11 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       return A > It->first && A < It->second;
     };
 
-    // Per-candidate keep decision.  A trusted entry (image entry, export, sized
-    // function symbol) is kept without decoding; an entry inside a known code
-    // range but not at its start is dropped.  Those two decisions are cheap set
-    // lookups; classify every candidate with them first.  Only what remains —
-    // an untrusted entry, typically a call-target-scan hit in a stripped
-    // binary — needs the expensive trial decode to a terminator.
+    // Per-candidate keep decision.  A trusted entry (image entry, typed export,
+    // sized function symbol) is kept without decoding; an ordinary scan hit
+    // inside a known code range but not at its start is dropped.  Untyped COFF
+    // exports are always verified because they can be either callable aliases
+    // or data.  Only the remaining candidates need the expensive trial decode.
     const size_t N = Results.size();
     std::vector<char> Keep(N, 0);
     std::vector<size_t> NeedVerify;
@@ -138,7 +140,7 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       va_t Addr = Results[I].first;
       if (Trusted.count(Addr))
         Keep[I] = 1;
-      else if (!InsideKnownButNotStart(Addr))
+      else if (UntypedCOFFExports.count(Addr) || !InsideKnownButNotStart(Addr))
         NeedVerify.push_back(I);
     }
 
@@ -148,12 +150,16 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     // symbol-rich binary (almost everything trusted) leaves NeedVerify small
     // and stays single-threaded, avoiding pointless thread-spawn overhead.
     auto verifyIdx = [&](Decoder &LocalDec, size_t I) {
-      Keep[I] = verifyFunctionDecode(Img, LocalDec, Results[I].first) ? 1 : 0;
+      const va_t Addr = Results[I].first;
+      Keep[I] = verifyFunctionDecode(Img, LocalDec, Addr,
+                                     UntypedCOFFExports.count(Addr) != 0)
+                    ? 1
+                    : 0;
     };
     if (NeedVerify.size() < limits::kMinParallelVerify) {
-      // verifyFunctionDecode only reads instruction size and terminator id, so
-      // run the shared decoder with operand detail off for the duration of the
-      // verification walk, then restore it.
+      // The initial classification pass reads only instruction size and
+      // terminator id.  Start detail-free; verifyFunctionDecode enables detail
+      // only for its bounded reachable-arm probe, then restores this state.
       const bool PrevDetail = Dec.detailEnabled();
       Dec.setDetail(false);
       for (size_t I : NeedVerify)
@@ -258,7 +264,7 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
 //===----------------------------------------------------------------------===//
 
 bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
-                                        va_t Addr) {
+                                        va_t Addr, bool KeepInconclusive) {
   constexpr int kMaxInsns = limits::kMaxVerifyInsns;
   const auto *Seg = Img.getSegmentFor(Addr);
   if (!Seg || !Seg->isExecutable())
@@ -289,7 +295,7 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
     }
     Cur += Sz;
   }
-  if (!SawTerminator)
+  if (!SawTerminator && !KeepInconclusive)
     return false;
 
   // A linear walk can encounter RET on one arm while a conditional branch on
