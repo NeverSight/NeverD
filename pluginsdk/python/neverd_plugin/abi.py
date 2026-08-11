@@ -106,6 +106,7 @@ _C_TYPES: dict[str, object] = {
     "unsigned long long": ctypes.c_ulonglong,
     "neverd_session_t": SessionHandle,
     "neverd_va_t": VirtualAddress,
+    "neverd_slot_t": ctypes.c_ulonglong,
     "neverd_output_language_t": ctypes.c_int,
     "const char *": ctypes.c_char_p,
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -529,6 +530,10 @@ _declare("neverd_evm_set_hardfork", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_sbf_set_strict", "void", ["neverd_session_t", "int"])
 _declare("neverd_sbf_set_version", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_sbf_set_idl", "int", ["neverd_session_t", "const char *"])
+_declare("neverd_sbf_set_cluster", "int", ["neverd_session_t", "const char *"])
+_declare("neverd_sbf_set_slot", "void", ["neverd_session_t", "neverd_slot_t"])
+_declare("neverd_sbf_set_loader", "int", ["neverd_session_t", "const char *"])
+_declare("neverd_sbf_set_purpose", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_inject_hello", "int", ["neverd_session_t"])
 _declare(
     "neverd_disasm_text",
