@@ -528,6 +528,7 @@ _declare("neverd_evm_set_strict", "void", ["neverd_session_t", "int"])
 _declare("neverd_evm_set_hardfork", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_sbf_set_strict", "void", ["neverd_session_t", "int"])
 _declare("neverd_sbf_set_version", "int", ["neverd_session_t", "const char *"])
+_declare("neverd_sbf_set_idl", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_inject_hello", "int", ["neverd_session_t"])
 _declare(
     "neverd_disasm_text",

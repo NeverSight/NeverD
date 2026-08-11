@@ -670,7 +670,13 @@ class Session:
                 "select EVM hardfork",
             )
 
-    def set_sbf(self, *, strict: bool = True, version: str = "auto") -> None:
+    def set_sbf(
+        self,
+        *,
+        strict: bool = True,
+        version: str = "auto",
+        idl: str | None = None,
+    ) -> None:
         self._call("neverd_sbf_set_strict", int(_boolean("strict", strict)))
         self._require_success(
             self._call(
@@ -679,6 +685,14 @@ class Session:
             ),
             "select SBF version",
         )
+        if idl is not None:
+            self._require_success(
+                self._call(
+                    "neverd_sbf_set_idl",
+                    _utf8_argument("Anchor IDL", idl, allow_empty=True),
+                ),
+                "load Anchor IDL",
+            )
 
 
 class NeverDError(RuntimeError):
