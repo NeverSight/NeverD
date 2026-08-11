@@ -113,6 +113,16 @@ NeverD 不會把已撤回的 EOF 提案當作最終主網行為。
   upstream 新常數。
 - `EVMHardforks.def`、`EVMEffects.def`、`EVMExitStatuses.def` 和
   `OutputLanguages.def` 生成有序 enum、parser、顯示名稱、CLI 選項與 C ABI 值。
+- `EVMCalls.def` 描述呼叫另一個程式的四條指令，以及被呼叫位址來源的 lattice。
+  每筆記錄只有一個旗標——value operand 是否位於被呼叫者與引數 window 之間——由它
+  推導出之後每一個 operand 位置；該表會與 opcode 資料庫交叉驗證，使推導不會偏離
+  已宣告的 pop 數。
+- `EVMPrecompiles.def` 是協定自身回應的位址字典，每項都帶有保留該位址的 fork。
+  其中刻意不含 gas：precompile 的成本是其輸入的函式，且在位址與操作皆未改變的情況
+  下被多次重新定價。
+- `EVMRecoveredFacts.def` 擁有復原事實各詞彙的拼寫，使出現在輸出中的名稱集中於
+  一處，而不是散落在可能遺漏新列舉項的 `switch` 中。`EVMKnownSignatures.def`
+  對 signature 的三種角色做同樣的事。
 - `EVMConstants.h` 統一管理協定寬度、限制與穩定預設名稱。
 - `Semantics.h` 管理與目標無關的 scalar ALU evaluator。常數折疊與 interpreter 使用
   同一套已檢查 `APInt` 實作；LLVM、C、Solidity 保持明確 target lowering，使
@@ -183,8 +193,22 @@ generator、只看似生成的 EVM `.inc` 只會增加形式負擔。
   walk 由 MedIR graph 提供結構邊界，將 malformed、mixed 或 cyclic expression 視為 unknown。
   同一 selector 的 conflicting target 會被診斷並省略。payability 與 state-access lattice
   維持獨立，可達但未解析的 dynamic jump 會強制保守的 `nonpayable` recovery。在 MedIR
-  尚無 memory SSA 前，custom-error payload recovery 是唯一保留的 bounded
-  instruction-window heuristic；復原的名稱與型別仍明確屬於 heuristic。
+  尚無 memory SSA 前，custom-error payload recovery 與對外 call 的 payload recovery
+  是僅存的兩項 bounded instruction-window heuristic；復原的名稱與型別仍明確屬於 heuristic。
+
+  HighIR 同時記錄 interface 的對外一半：每一條 `CALL`、`CALLCODE`、`DELEGATECALL`
+  與 `STATICCALL`，包含被呼叫者的來源、當所分析的 fork 在該位址上有保留時它所命名的
+  保留位址、呼叫寫入被呼叫者 calldata 開頭的 selector，以及轉帳金額為常數時的取值。
+  `CREATE` 與 `CREATE2` 被排除在外：它們執行的程式碼尚無位址，因此沒有可復原的被呼叫者。
+
+  復原出的對外 signature 絕不會計入程式自身回應的標準集合。送出
+  `transfer(address,uint256)` 說明程式使用了某個代幣，而非說明它本身是代幣；混淆兩者
+  會把每一個 router 與 vault 都報告為 ERC-20。delegate 呼叫會額外記為一條 proxy 事實，
+  因為它是該族中唯一讓被呼叫者程式碼執行在本程式自身 storage 上的成員。
+
+  precompile 查找以所分析的 fork 為準，而不是以現存最新的 fork 為準。呼叫某個由後續
+  fork 引入的 precompile 位址，實際到達的是一個沒有程式碼的帳戶，呼叫會成功且不回傳
+  任何內容，因此為其命名等於報告一個程式確鑿未曾執行的操作。
 - **LLVM** 輸出通過 verifier 的 `i32 @evm_execute(ptr)` state machine，包含已檢查
   1024-word `i256` stack、`i512` modular intermediate、有 guard signed division、
   saturated shift、精確 `BYTE`/`SIGNEXTEND`/`CLZ` 與驗證過的 dynamic-jump switch。

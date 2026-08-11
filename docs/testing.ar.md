@@ -315,10 +315,10 @@ differential إلى `rustc` بالإضافة إلى clang؛ تخطي compiler ي
 `NeverDSBFMalformedCorpusTests` و`NeverDSBFISAConformanceTests` و
 `NeverDSBFUpstreamConformanceTests` و`NeverDSBFLLVMDifferentialTests` و
 `NeverDSBFSourceDifferentialTests` مع targets metadata/loader/analyzer/semantic/
-emitter/integration. يمر profile المتكامل 124/124 حالة في 13 binaries.
+emitter/integration. يمر profile المتكامل 145/145 حالة في 14 binaries.
 
-يجب بناء profile sanitizer في `build-sbf-asan-ubsan` منفصلًا. يمر 121/121 حالة
-core في 12 binaries بلا ASan أو UBSan report؛ ويظل integration في build LLVM
+يجب بناء profile sanitizer في `build-sbf-asan-ubsan` منفصلًا. يمر 141/141 حالة
+core في 13 binaries بلا ASan أو UBSan report؛ ويظل integration في build LLVM
 المتكامل لأن package الجاهزة لا تحتوي fork-only header المطلوب.
 
 ```bash

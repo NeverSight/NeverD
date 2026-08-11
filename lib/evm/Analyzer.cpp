@@ -186,11 +186,47 @@ std::string dumpHighIR(const EVMHighIR &High) {
       OS << "  return " << Return << " "
          << abiTypeSourceName(Function.ReturnSource) << "\n";
   }
-  for (const auto &Storage : High.Storage)
+  for (const auto &Storage : High.Storage) {
     OS << (Storage.IsTransient ? "transient" : "storage") << " "
        << (Storage.IsWrite ? "write" : "read") << " "
        << storageKeyKindName(Storage.KeyKind) << " "
-       << (Storage.Slot ? wordHex(*Storage.Slot) : "dynamic") << "\n";
+       << (Storage.Slot ? wordHex(*Storage.Slot) : "dynamic");
+    if (Storage.Known)
+      OS << " " << Storage.Known->Name;
+    OS << "\n";
+  }
+  for (const auto &Proxy : High.Proxies) {
+    OS << "delegate 0x" << llvm::utohexstr(Proxy.PC) << " "
+       << calleeKindName(Proxy.Kind);
+    if (Proxy.Known)
+      OS << " " << Proxy.Known->Name;
+    else if (Proxy.Slot)
+      OS << " slot " << wordHex(*Proxy.Slot);
+    if (Proxy.Implementation)
+      OS << " implementation " << wordHex(*Proxy.Implementation);
+    OS << "\n";
+  }
+  for (const auto &Call : High.Calls) {
+    OS << "call 0x" << llvm::utohexstr(Call.PC) << " " << opcodeName(Call.Op)
+       << " " << calleeKindName(Call.TargetKind) << " " << Call.SuggestedName;
+    if (Call.Precompiled)
+      OS << " precompile " << Call.Precompiled->Name;
+    else if (Call.Target)
+      OS << " target " << wordHex(*Call.Target);
+    if (Call.NamedSlot)
+      OS << " " << Call.NamedSlot->Name;
+    else if (Call.Slot)
+      OS << " slot " << wordHex(*Call.Slot);
+    if (Call.Known)
+      OS << " signature " << Call.Known->Signature;
+    else if (Call.Selector)
+      OS << " selector "
+         << wordHex(llvm::APInt(kSelectorBits, *Call.Selector),
+                    kSelectorHexDigits);
+    if (Call.Value && !Call.Value->isZero())
+      OS << " value " << wordHex(*Call.Value);
+    OS << "\n";
+  }
   for (const auto &Event : High.Events)
     OS << "event " << Event.SuggestedName << " topics=" << Event.Topics << "\n";
   for (const auto &Error : High.Errors) {

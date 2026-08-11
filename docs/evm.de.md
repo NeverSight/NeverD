@@ -124,6 +124,21 @@ Handgeschriebene EVM-Metadata folgt LLVMs mehrfach eingebundenem `.def`-Muster:
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def` und
   `OutputLanguages.def` erzeugen geordnete Enums, Parser, Anzeigenamen,
   CLI-Auswahl und C-ABI-Werte. `EVMConstants.h` besitzt Breiten und Limits.
+- `EVMCalls.def` beschreibt die vier Instruktionen, die ein anderes Programm
+  aufrufen, und das Gitter der Herkünfte einer Callee-Adresse. Ein einziges Flag
+  pro Eintrag, ob ein Value-Operand zwischen Callee und Argumentfenster liegt,
+  leitet jede spätere Operandenposition ab; die Tabelle wird gegen die
+  Opcode-Datenbank geprüft, damit die Ableitung nicht von den deklarierten
+  Pop-Zahlen abweicht.
+- `EVMPrecompiles.def` ist das Verzeichnis der Adressen, an denen das Protokoll
+  selbst antwortet, jeweils mit dem Fork, der sie reserviert hat. Gas fehlt
+  absichtlich: Die Kosten einer Precompile sind eine Funktion ihrer Eingabe und
+  wurden mehrfach neu bepreist, ohne dass Adresse oder Operation sich änderten.
+- `EVMRecoveredFacts.def` besitzt die Schreibweisen der
+  Rekonstruktionsvokabulare, damit ein Name, der in der Ausgabe erscheint, an
+  einer Stelle lebt statt in einem `switch`, in dem ein neuer Enumerator fehlen
+  kann. `EVMKnownSignatures.def` tut dasselbe für die drei Rollen einer
+  Signatur.
 - `Semantics.h` enthält den zielunabhängigen Scalar-ALU-Evaluator. Interpreter
   und Constant Folding teilen die geprüfte `APInt`-Implementierung; LLVM-, C-
   und Solidity-Lowering bleiben explizit und fail-loud.
@@ -205,9 +220,31 @@ Lookup, Validierung, Klassifikation und CLI wachsen ohne Paralleltabellen.
   unbekannt. Widersprüchliche Ziele desselben Selectors werden diagnostiziert
   und weggelassen. Payability bleibt unabhängig vom State-Access-Gitter; ein
   erreichbarer ungelöster dynamischer Sprung erzwingt konservatives
-  `nonpayable`. Bis MedIR Memory SSA besitzt, bleibt die Rekonstruktion von
-  Custom-Error-Payloads die einzige beschränkte Instruktionsfenster-Heuristik;
+  `nonpayable`. Bis MedIR Memory SSA besitzt, bleiben die Rekonstruktion von
+  Custom-Error-Payloads und die des ausgehenden Aufruf-Payloads die einzigen
+  beschränkten Instruktionsfenster-Heuristiken;
   rekonstruierte Namen und Typen bleiben ausdrücklich heuristisch.
+
+  HighIR erfasst außerdem die ausgehende Hälfte der Schnittstelle: jeden `CALL`,
+  `CALLCODE`, `DELEGATECALL` und `STATICCALL` mit der Herkunft des Callees, der
+  reservierten Adresse, die er benennt, wenn der analysierte Fork dort eine
+  reserviert, dem Selector, den der Aufruf an den Anfang der Callee-Calldata
+  schreibt, und dem übertragenen Wert, sofern er konstant ist. `CREATE` und
+  `CREATE2` bleiben ausgeschlossen: Sie führen Code aus, der noch keine Adresse
+  hat, es gibt also keinen Callee zu rekonstruieren.
+
+  Eine rekonstruierte ausgehende Signatur zählt nie zu den Standards, denen das
+  Programm selbst antwortet. `transfer(address,uint256)` zu senden sagt, dass
+  das Programm einen Token benutzt, nicht dass es einer ist; beides zu
+  vermengen würde jeden Router und Vault als ERC-20 melden. Ein delegierender
+  Aufruf wird zusätzlich als Proxy-Fakt gemeldet, weil nur bei ihm der Code des
+  Callees gegen den eigenen Storage dieses Programms läuft.
+
+  Die Precompile-Suche richtet sich nach dem analysierten Fork, nicht nach dem
+  neuesten existierenden. Der Aufruf einer Precompile-Adresse, die erst ein
+  späterer Fork einführt, erreicht ein Konto ohne Code, gelingt und liefert
+  nichts zurück; sie zu benennen würde eine Operation melden, die das Programm
+  nachweislich nicht ausgeführt hat.
 - **LLVM** emittiert eine verifier-saubere `i32 @evm_execute(ptr)`-State-Machine
   mit geprüftem 1024-Wort-`i256`-Stack, `i512`-Zwischenwerten, geschützter signed
   division, saturierenden Shifts, exaktem `BYTE`/`SIGNEXTEND`/`CLZ` und

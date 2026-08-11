@@ -116,6 +116,16 @@ LowIR 与诊断中，但执行到它们时，生成 backend 仍会故障；宽�
   `scripts/audit_evm_opcode_metadata.py` 会拒绝字节漂移和任何未审阅的上游新常量。
 - `EVMHardforks.def`、`EVMEffects.def`、`EVMExitStatuses.def` 和
   `OutputLanguages.def` 生成对应的有序枚举、解析器、显示名称、CLI 选项与 C ABI 值。
+- `EVMCalls.def` 描述调用另一个程序的四条指令，以及被调用地址来源的格。
+  每条记录只有一个标志——value 操作数是否位于被调用者与参数窗口之间——由它推导出
+  之后每一个操作数位置；该表会与操作码数据库交叉校验，使推导不会偏离已声明的
+  pop 数。
+- `EVMPrecompiles.def` 是协议自身应答的地址字典，每项都带有保留该地址的分叉。
+  其中有意不含 gas：precompile 的开销是其输入的函数，且在地址与操作都不变的情况下
+  被多次重新定价。
+- `EVMRecoveredFacts.def` 拥有恢复事实各词汇的拼写，使出现在输出中的名称集中在
+  一处，而不是散落在可能遗漏新枚举项的 `switch` 里。`EVMKnownSignatures.def`
+  对签名的三种角色做同样的事。
 - `EVMConstants.h` 统一拥有协议宽度、限制和稳定默认名称。
 - `Semantics.h` 拥有与目标无关的标量 ALU 求值器。常量折叠与解释器调用同一套经过
   检查的 `APInt` 实现；LLVM、C、Solidity 保持显式目标 lowering，使 backend
@@ -182,8 +192,23 @@ switch 仍保持显式，遗漏 ALU case 时立即失败。
   return size 均读取语义输入。遍历由有限 MedIR 图提供结构边界；格式错误、混合或成环
   的表达式保守为 unknown。同一 selector 指向不同入口时会诊断并省略。payability 与
   状态访问格仍保持正交，可达但未解析的动态 jump 会令恢复保守回退为 `nonpayable`。
-  在 MedIR 尚无 memory SSA 前，custom-error payload 是唯一保留的有界指令窗口启发式；
+  在 MedIR 尚无 memory SSA 前，custom-error payload 与对外调用 payload 是仅存的两项
+  有界指令窗口启发式；
   恢复出的名称和类型仍明确属于启发式。
+
+  HighIR 同时记录接口的对外一半：每一条 `CALL`、`CALLCODE`、`DELEGATECALL` 和
+  `STATICCALL`，包括被调用者的来源、当所分析的分叉在该地址上有保留时它所命名的保留
+  地址、调用写入被调用者 calldata 开头的 selector，以及转账金额为常量时的取值。
+  `CREATE` 与 `CREATE2` 被排除在外：它们执行的代码尚无地址，因此没有可恢复的被调用者。
+
+  恢复出的对外签名绝不会计入程序自身应答的标准集合。发送
+  `transfer(address,uint256)` 说明程序使用了某个代币，而不是说明它本身是代币；混淆
+  两者会把每一个 router 和 vault 都报告为 ERC-20。委托调用会额外记为一条 proxy 事实，
+  因为它是该族中唯一让被调用者代码运行在本程序自身 storage 上的成员。
+
+  precompile 查找以所分析的分叉为准，而不是以现存最新的分叉为准。调用某个由后续分叉
+  引入的 precompile 地址，实际到达的是一个没有代码的账户，调用会成功且不返回任何内容，
+  因此为其命名等于报告一个程序确凿没有执行过的操作。
 - **LLVM** 输出通过 verifier 的 `i32 @evm_execute(ptr)` 状态机，包含受检查的
   1024-word `i256` 栈、`i512` 模运算中间值、有守卫的有符号除法、饱和移位、精确
   `BYTE`/`SIGNEXTEND`/`CLZ`，以及经过验证的动态 jump switch。

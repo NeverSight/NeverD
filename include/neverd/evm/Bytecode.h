@@ -13,12 +13,15 @@
 #ifndef NEVERD_EVM_BYTECODE_H
 #define NEVERD_EVM_BYTECODE_H
 
+#include "neverd/evm/Metadata.h"
+
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,6 +48,12 @@ struct LoadedBytecode {
   bool RuntimeExtracted = false;
   bool MetadataStripped = false;
   size_t OriginalSize = 0;
+  /// The compiler trailer, when the input carried one. Set whether or not the
+  /// trailer was removed, because what it says about the build is a fact about
+  /// the input rather than a step of normalization. Its offset is relative to
+  /// the bytes normalization was given, which is the runtime code once a
+  /// deployment container has been unwrapped.
+  std::optional<ContractMetadata> Metadata;
 };
 
 /// Normalize raw binary, hexadecimal text, or a compiler artifact into EVM

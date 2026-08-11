@@ -148,6 +148,19 @@ Hand-maintained EVM metadata follows LLVM's multiply-included `.def` pattern:
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def`, and
   `OutputLanguages.def` provide the corresponding ordered enums, parsers,
   display names, CLI choices, and C ABI values.
+- `EVMCalls.def` describes the four instructions that call another program and
+  the lattice of places a callee address can come from. One flag per record,
+  whether a value operand sits between the callee and the argument window,
+  derives every later operand position, and the table is validated against the
+  opcode database so the derivation cannot drift from the declared pop counts.
+- `EVMPrecompiles.def` is the dictionary of addresses the protocol answers at
+  itself, each with the fork that reserved it. Gas is deliberately absent: a
+  precompile's cost is a function of its input and has been repriced without
+  the address or the operation changing.
+- `EVMRecoveredFacts.def` owns the spellings of the recovered-fact
+  vocabularies, so a name that reaches output lives in one place rather than
+  in a switch a new enumerator can be left out of. `EVMKnownSignatures.def`
+  does the same for the three roles a signature holds.
 - `EVMConstants.h` owns protocol widths, limits, and stable default names.
 - `Semantics.h` owns the target-independent scalar ALU evaluator. Constant
   folding and interpretation call the same checked `APInt` implementation;
@@ -250,9 +263,30 @@ semantic switches remain explicit and fail loudly if an ALU case is omitted.
   unknown. Conflicting dispatcher targets for the same selector are diagnosed
   and omitted. Solidity payability remains independent from the state-access
   lattice, and a reachable unresolved dynamic jump forces conservative
-  `nonpayable` recovery. Until MedIR gains memory SSA, custom-error payload
-  recovery is the sole retained bounded instruction-window heuristic;
-  recovered names and types remain explicitly heuristic.
+  `nonpayable` recovery. Until MedIR gains memory SSA, custom-error and
+  outgoing-call payload recovery are the retained bounded instruction-window
+  heuristics; recovered names and types remain explicitly heuristic.
+
+  HighIR also records the outgoing half of the interface: every `CALL`,
+  `CALLCODE`, `DELEGATECALL`, and `STATICCALL`, with the callee's provenance,
+  the reserved address it names when the analyzed fork reserves one, the
+  selector the call places at the head of the callee's calldata, and the
+  transferred value when it is constant. `CREATE` and `CREATE2` are excluded
+  because they run code that has no address yet, so there is no callee to
+  recover.
+
+  A recovered outgoing signature never joins the standards the program answers
+  to. Sending `transfer(address,uint256)` says the program uses a token, not
+  that it is one, and conflating the two would report every router and vault
+  as an ERC-20. A delegating call is additionally reported as a proxy fact,
+  because it is the only member of the family whose callee runs against this
+  program's own storage.
+
+  The precompile lookup is gated on the fork being analyzed rather than on the
+  newest one that exists. Calling the address of a precompile a later fork
+  introduces reaches an account with no code, which succeeds and returns
+  nothing, so naming it would report an operation the program provably did not
+  perform.
 - **LLVM** emits a verifier-clean `i32 @evm_execute(ptr)` state machine with a
   checked 1024-word `i256` stack, `i512` modular intermediates, guarded signed
   division, saturated shifts, exact `BYTE`/`SIGNEXTEND`/`CLZ`, and validated

@@ -217,6 +217,30 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
   OS << "\n";
 
   if (Options.EmitRecoveredDeclarations) {
+    // What a program calls is as much a part of what it does as what it
+    // answers to. A set of selectors is still not an interface, though:
+    // nothing here says the callee declares only these, so they are reported
+    // rather than declared.
+    std::set<std::string> OutgoingCalls;
+    for (const auto &Fact : Program.High.Calls) {
+      std::string Line = opcodeName(Fact.Op).str() + " " +
+                         calleeKindName(Fact.TargetKind).str() + " " +
+                         Fact.SuggestedName;
+      if (Fact.Known)
+        Line += " " + Fact.Known->Signature.str();
+      if (Fact.Target)
+        Line += " at " + solidityWord(*Fact.Target);
+      else if (Fact.NamedSlot)
+        Line += " at " + Fact.NamedSlot->Name.str();
+      else if (Fact.Slot)
+        Line += " at slot " + solidityWord(*Fact.Slot);
+      OutgoingCalls.insert(std::move(Line));
+    }
+    for (const std::string &Line : OutgoingCalls)
+      OS << "    // calls out: " << Line << "\n";
+    if (!OutgoingCalls.empty())
+      OS << "\n";
+
     std::set<std::string> StorageNames;
     for (const auto &Fact : Program.High.Storage) {
       if (!Fact.Slot)

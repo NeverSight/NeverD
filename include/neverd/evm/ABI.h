@@ -175,8 +175,18 @@ private:
 // The signature dictionary
 //===----------------------------------------------------------------------===//
 
-enum class SignatureKind : uint8_t { Function, Event, Error };
+enum class SignatureKind : uint8_t {
+#define EVM_SIGNATURE_KIND(ID, NAME, SUMMARY) ID,
+#include "neverd/evm/EVMKnownSignatures.def"
+};
 
+struct SignatureKindInfo {
+  SignatureKind ID;
+  llvm::StringLiteral Name;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<SignatureKindInfo> signatureKindInfos();
 llvm::StringRef signatureKindName(SignatureKind Kind);
 
 enum class KnownStandard : uint8_t {

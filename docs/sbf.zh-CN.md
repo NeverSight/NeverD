@@ -23,7 +23,7 @@ SBF ELF
 下的 `.def` 数据库；loader 与 backend 使用生成的类型化表，不重复编码或拼写。
 
 闭集表包括 `SBFVersions.def`、`SBFOpcodes.def`、`SBFRelocations.def`、
-`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、`SBFSyscalls.def`、
+`SBFArgumentRegisters.def`、`SBFVersionFeatures.def`, `SBFProtocolLimits.def`、`SBFSyscalls.def`、
 `SBFSyscallMemory.def`、`SBFCPIABI.def`、`SBFProgramInstructions.def` 与
 `SBFUpstreamSources.def`；
 单次使用的诊断文本和 LLVM block 名称仍留在局部，遵循 LLVM 自身的 `.def` 策略。
@@ -46,6 +46,14 @@ image，不再保留可能与 loader 语义漂移的独立 text/rodata 副本。
 | v2 | 传统 section 与 relocation | `EM_BPF`、`EM_SBPF` | PQR 算术、移动后的 memory encoding、互换的立即数减法、source-register CALLX | legacy，非单调 |
 | v3 | strict program header，无动态 relocation | `EM_BPF` | static syscall/call、JMP32、destination-register CALLX，bytecode 位于 `0x100000000`，rodata 位于零 | 当前已部署 toolchain 格式 |
 | v4 | strict program header，无动态 relocation | `EM_BPF` | v3 ISA 加对齐 memory-mapping 契约 | 当前上游 `sbpf`；集群可用性可能不同 |
+
+版本号本身不是规范，因此 `SBFVersionFeatures.def` 持有各项行为变更，由版本表将它们
+组合起来。每条记录都带上接纳该变更的 SIMD 提案，以及 `anza-xyz/sbpf` 就同一问题
+暴露的谓词——因为多个提案会落在同一个版本里，而一个提案又会改变彼此无关的多件事：
+SIMD-0173 既搬迁了内存指令类，也淘汰了 `lddw`；SIMD-0174 则在同一版本中独立地加入
+PQR 类。把提案记录在特性上而不是版本上，才能让恢复出的版本结论一路追溯到决定它的
+文档；这也是两条 `callx` 规则被拆成两个特性的原因：SIMD-0173 读源寄存器，
+SIMD-0377 读目的寄存器。
 
 v2 变更刻意不会泄漏到 v3；feature check 是显式条件，不用 `version >= N`
 猜测。默认 strict 会拒绝畸形 header/range/alignment、不支持的 writable legacy
@@ -274,8 +282,8 @@ neverd_session_destroy(session);
 | raw-byte oracle | 直接执行验证后的 instruction bytes，不读取 MedIR，因此 MedIR 构造/损坏与 backend lowering 缺陷不会自动一致；显式上游结果与 semantic unit test 独立约束共享的类型化语义模型 |
 | LLVM ORC 差分 | 对 versioned arithmetic、call/CALLX、memory、syscall 与 runtime fault 比较 return/fault、可写 memory 和 syscall trace |
 | C/Rust 执行差分 | 生成 C11 以 `-Werror`、stable Rust 以 `-D warnings` 编译，并比较同一可观察状态，包含官方 relocated-data ELF |
-| SBF 集成聚合 | `check-neverd-sbf` 在 13 个测试二进制中发现并通过 124/124 个 case，其中包含 3 个 public C API integration case |
-| ASan + UBSan | 12 个核心二进制的 121/121 个 case 在 fail-fast sanitizer 配置下通过；prebuilt LLVM package 缺少 public integration 所需的 NeverD fork-only header，因此该 integration binary 在 integrated build 中链接并运行 |
+| SBF 集成聚合 | `check-neverd-sbf` 在 14 个测试二进制中发现并通过 145/145 个 case，其中包含 4 个 public C API integration case |
+| ASan + UBSan | 13 个核心二进制的 141/141 个 case 在 fail-fast sanitizer 配置下通过；prebuilt LLVM package 缺少 public integration 所需的 NeverD fork-only header，因此该 integration binary 在 integrated build 中链接并运行 |
 
 backend 的执行契约对外暴露 `r0` return value、fault status、VM memory effect 与
 syscall call/result；其他最终 register 属于内部实现细节，不宣称为外部 ABI。

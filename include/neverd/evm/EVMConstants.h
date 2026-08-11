@@ -96,6 +96,11 @@ inline constexpr std::size_t kMaxRecoveredArguments = 256;
 /// pathological phi web from dominating recovery.
 inline constexpr std::size_t kMaxArgumentAliasRounds = 8;
 
+/// The most moving and cleaning operations a call's callee is followed back
+/// through. A compiler emits a load, a mask, and a duplicate or two; a longer
+/// chain is a computation this analysis declines to read.
+inline constexpr std::size_t kMaxCalleeTraceSteps = 8;
+
 static_assert(kWordBits % kBitsPerByte == 0);
 static_assert(kByteMax == std::numeric_limits<uint8_t>::max());
 static_assert(kOpcodeSpaceSize == static_cast<std::size_t>(kByteMax) + 1);
@@ -143,6 +148,8 @@ inline constexpr llvm::StringLiteral kStorageElementPrefix = "storage_element_";
 inline constexpr llvm::StringLiteral kRecoveredEventPrefix = "RecoveredEvent_";
 inline constexpr llvm::StringLiteral kRecoveredErrorPrefix = "RecoveredError_";
 inline constexpr llvm::StringLiteral kRecoveredRevertName = "RecoveredRevert";
+inline constexpr llvm::StringLiteral kRecoveredCallPrefix = "call_";
+inline constexpr llvm::StringLiteral kUnknownCallName = "call_unknown";
 } // namespace neverd::evm
 
 #endif // NEVERD_EVM_EVMCONSTANTS_H

@@ -166,16 +166,17 @@ ABIType ABIConstraint::resolve() const {
 // The signature dictionary
 //===----------------------------------------------------------------------===//
 
+llvm::ArrayRef<SignatureKindInfo> signatureKindInfos() {
+  static const std::array Table = {
+#define EVM_SIGNATURE_KIND(ID, NAME, SUMMARY)                                  \
+  SignatureKindInfo{SignatureKind::ID, NAME, SUMMARY},
+#include "neverd/evm/EVMKnownSignatures.def"
+  };
+  return Table;
+}
+
 llvm::StringRef signatureKindName(SignatureKind Kind) {
-  switch (Kind) {
-  case SignatureKind::Function:
-    return "function";
-  case SignatureKind::Event:
-    return "event";
-  case SignatureKind::Error:
-    return "error";
-  }
-  llvm_unreachable("invalid signature kind");
+  return signatureKindInfos()[static_cast<size_t>(Kind)].Name;
 }
 
 llvm::ArrayRef<KnownStandardInfo> knownStandardInfos() {

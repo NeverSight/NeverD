@@ -1,0 +1,62 @@
+//===- EVMRecoveredFacts.def - Vocabularies of recovered facts -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_STORAGE_KEY_KIND(ID, NAME, SUMMARY)
+//
+//   How a storage access formed the key it used. This is what separates a
+//   variable the source declared from an element the program addressed, which
+//   is the difference between `owner` and `balances[msg.sender]`.
+//
+// EVM_REVERT_KIND(ID, NAME, SUMMARY)
+//
+//   What a revert hands back to its caller. The three that carry a payload are
+//   distinguished by which selector starts it, so a bare revert is the one
+//   case that is established by the absence of evidence rather than by its
+//   presence.
+//
+// Both are spellings a reader and a downstream consumer see, so they live in a
+// table for the same reason the opcode names do: a name that appears in output
+// belongs in one place, not in a switch that a new enumerator can silently be
+// left out of.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_STORAGE_KEY_KIND
+#define EVM_STORAGE_KEY_KIND(ID, NAME, SUMMARY)
+#endif
+
+#ifndef EVM_REVERT_KIND
+#define EVM_REVERT_KIND(ID, NAME, SUMMARY)
+#endif
+
+//===----------------------------------------------------------------------===//
+// How a storage key was formed
+//===----------------------------------------------------------------------===//
+
+EVM_STORAGE_KEY_KIND(Slot, "slot",
+                     "a constant, which is a directly declared variable")
+EVM_STORAGE_KEY_KIND(Hashed, "hashed",
+                     "a hash, which is how a mapping addresses an element")
+EVM_STORAGE_KEY_KIND(HashedOffset, "hashed-offset",
+                     "a hash displaced by a computed amount, which is how a "
+                     "dynamic array addresses an element and how a struct "
+                     "inside a mapping addresses a field")
+EVM_STORAGE_KEY_KIND(Unknown, "unknown", "nothing proved how the key was "
+                                         "formed")
+
+//===----------------------------------------------------------------------===//
+// What a revert hands back
+//===----------------------------------------------------------------------===//
+
+EVM_REVERT_KIND(Bare, "bare", "nothing, or nothing this analysis could read")
+EVM_REVERT_KIND(Message, "message", "the language's own Error(string)")
+EVM_REVERT_KIND(Panic, "panic",
+                "the language's own Panic(uint256), which reports that a "
+                "check the compiler inserted failed")
+EVM_REVERT_KIND(Custom, "custom", "a selector the contract declared itself")
+
+#undef EVM_REVERT_KIND
+#undef EVM_STORAGE_KEY_KIND

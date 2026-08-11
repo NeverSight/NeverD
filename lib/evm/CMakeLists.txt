@@ -3,6 +3,7 @@ add_neverd_component_library(NeverDEVM
   Analyzer.cpp
   Bytecode.cpp
   CEmitter.cpp
+  Calls.cpp
   ControlFlow.cpp
   Decoder.cpp
   EVMIR.cpp
@@ -11,7 +12,9 @@ add_neverd_component_library(NeverDEVM
   Keccak.cpp
   LLVMEmitter.cpp
   MedAnalysis.cpp
+  Metadata.cpp
   Opcodes.cpp
   Semantics.cpp
   SolidityEmitter.cpp
+  StorageSlots.cpp
 )

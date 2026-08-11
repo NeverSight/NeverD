@@ -119,6 +119,19 @@ LowIR/diagnostic に保持しますが、実行が到達すれば backend は fa
 - `EVMHardforks.def`、`EVMEffects.def`、`EVMExitStatuses.def`、
   `OutputLanguages.def` が ordered enum、parser、display name、CLI choice、C ABI value
   を生成します。`EVMConstants.h` は protocol width/limit/default name を所有します。
+- `EVMCalls.def` は別プログラムを呼び出す 4 命令と、callee アドレスの出所を表す
+  lattice を記述します。レコードごとの 1 つのフラグ、すなわち callee と引数
+  window の間に value operand があるかどうかが以降の operand 位置をすべて導出し、
+  その導出が宣言された pop 数からずれないよう opcode データベースに対して検証され
+  ます。
+- `EVMPrecompiles.def` はプロトコル自身が応答するアドレスの辞書で、各エントリは
+  それを予約した fork を持ちます。gas は意図的に含めません。precompile のコストは
+  入力の関数であり、アドレスや操作を変えないまま何度も再価格付けされてきたためで
+  す。
+- `EVMRecoveredFacts.def` は復元事実の語彙の綴りを所有します。出力に現れる名前が
+  1 箇所に集まり、新しい列挙子が漏れうる `switch` に散らばりません。
+  `EVMKnownSignatures.def` は signature が持つ 3 つの役割について同じことを行いま
+  す。
 - `Semantics.h` は target-independent scalar ALU evaluator です。constant folding と
   interpreter が同じ checked `APInt` を使い、LLVM/C/Solidity lowering は target
   contract と unsupported case を明示するため独立に fail-loud です。
@@ -191,8 +204,27 @@ lowering、focused test の順です。hardfork は ordered `EVM_HARDFORK` recor
   bounded で、malformed、mixed、cyclic expression は unknown とします。同一 selector の
   conflicting target は診断して省略します。payability は state-access lattice と独立で、
   reachable unresolved dynamic jump は保守的な `nonpayable` recovery を強制します。
-  MedIR に memory SSA が入るまでは custom-error payload recovery だけが残る bounded
-  instruction-window heuristic です。復元した name と type は明示的に heuristic です。
+  MedIR に memory SSA が入るまでは custom-error payload recovery と外向き call の
+  payload recovery だけが残る bounded instruction-window heuristic です。復元した name と type は明示的に heuristic です。
+
+  HighIR は interface の外向き半分も記録します。すなわち `CALL`、`CALLCODE`、
+  `DELEGATECALL`、`STATICCALL` のそれぞれについて、callee の出所、解析対象の fork
+  が予約していればその予約アドレス、呼び出しが callee の calldata 先頭に置く
+  selector、そして定数であれば転送 value を記録します。`CREATE` と `CREATE2` は
+  まだアドレスを持たないコードを実行するため、復元すべき callee が存在せず対象外
+  です。
+
+  復元した外向き signature が、そのプログラム自身が応答する標準に数えられること
+  はありません。`transfer(address,uint256)` を送ることはトークンを使うという意味
+  であってトークンであるという意味ではなく、両者を混同すればあらゆる router と
+  vault が ERC-20 として報告されてしまいます。delegate する call はさらに proxy
+  fact としても報告されます。callee のコードがこのプログラム自身の storage に対し
+  て動くのは、この family でそれだけだからです。
+
+  precompile の検索は、存在する最新の fork ではなく解析対象の fork で gate されま
+  す。後の fork が導入する precompile のアドレスを呼び出してもコードのないアカウ
+  ントに届き、成功して何も返しません。名前を付ければ、プログラムが明らかに行って
+  いない操作を報告することになります。
 - **LLVM**: verifier-clean `i32 @evm_execute(ptr)` state machine、checked 1024-word
   `i256` stack、`i512` intermediate、guarded signed division、saturated shifts、正確な
   `BYTE`/`SIGNEXTEND`/`CLZ`、validated dynamic-jump switch。

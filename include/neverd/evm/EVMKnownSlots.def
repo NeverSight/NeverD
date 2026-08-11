@@ -1,0 +1,131 @@
+//===- EVMKnownSlots.def - Well-known storage slots ------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_SLOT_DERIVATION(ID, NAME, SUMMARY)
+// EVM_KNOWN_SLOT(ID, PREIMAGE, DERIVATION, STANDARD, NAME, SUMMARY)
+//
+// A contract that wants a storage slot no compiler will ever allocate derives
+// one from a hash. The specifications that do this publish the preimage, not
+// the number, so PREIMAGE is what is written here and the slot is derived from
+// it the same way the signature dictionary derives its selectors. A recovered
+// constant that equals a derived slot exhibits a preimage, so the match proves
+// the slot rather than suggesting it; a table of transcribed hashes could only
+// ever suggest, and would silently keep a typo.
+//
+// STANDARD names an entry of the standards table in EVMKnownSignatures.def, so
+// a slot and the selectors that go with it report as one standard.
+//
+// NAME is what a recovered access is called wherever it is reported, including
+// in generated source, so it has to spell a legal identifier.
+//
+// A match names a slot. It never changes decoded semantics, and it never says
+// the contract obeys the specification the slot comes from: writing to the
+// ERC-1967 implementation slot is what an upgradeable proxy does, and also what
+// a contract imitating one does.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_SLOT_DERIVATION
+#define EVM_SLOT_DERIVATION(ID, NAME, SUMMARY)
+#endif
+
+#ifndef EVM_KNOWN_SLOT
+#define EVM_KNOWN_SLOT(ID, PREIMAGE, DERIVATION, STANDARD, NAME, SUMMARY)
+#endif
+
+//===----------------------------------------------------------------------===//
+// How a published preimage becomes a slot number
+//===----------------------------------------------------------------------===//
+
+EVM_SLOT_DERIVATION(Keccak, "keccak", "the Keccak-256 of the preimage")
+EVM_SLOT_DERIVATION(KeccakMinusOne, "keccak-1",
+                    "one less than the Keccak-256 of the preimage, which is "
+                    "how ERC-1967 puts its slots out of reach of a preimage "
+                    "attack on the hash itself")
+EVM_SLOT_DERIVATION(ERC7201, "erc-7201",
+                    "the ERC-7201 namespace formula: the Keccak-256 of the "
+                    "big-endian encoding of one less than the Keccak-256 of "
+                    "the preimage, with the low byte cleared so a namespace "
+                    "owns an aligned run of 256 slots")
+
+//===----------------------------------------------------------------------===//
+// ERC-1967, the slots an upgradeable proxy keeps its own state in
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_SLOT(ERC1967Implementation, "eip1967.proxy.implementation",
+               KeccakMinusOne, ERC1967, "erc1967_implementation",
+               "the address a transparent or UUPS proxy delegates to")
+EVM_KNOWN_SLOT(ERC1967Admin, "eip1967.proxy.admin", KeccakMinusOne, ERC1967,
+               "erc1967_admin", "the account permitted to upgrade the proxy")
+EVM_KNOWN_SLOT(ERC1967Beacon, "eip1967.proxy.beacon", KeccakMinusOne, ERC1967,
+               "erc1967_beacon",
+               "the contract a beacon proxy asks for its implementation")
+EVM_KNOWN_SLOT(ERC1967Rollback, "eip1967.proxy.rollback", KeccakMinusOne,
+               ERC1967, "erc1967_rollback",
+               "set while a UUPS upgrade tests that the new implementation can "
+               "still upgrade itself")
+
+//===----------------------------------------------------------------------===//
+// The proxy slots that predate and extend ERC-1967
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_SLOT(ERC1822Proxiable, "PROXIABLE", Keccak, ERC1822,
+               "erc1822_proxiable",
+               "the ERC-1822 logic slot, which a UUPS implementation returns "
+               "from proxiableUUID to prove it is upgrade-aware")
+EVM_KNOWN_SLOT(ZeppelinOSImplementation, "org.zeppelinos.proxy.implementation",
+               Keccak, OpenZeppelin, "zeppelinos_implementation",
+               "the implementation slot of the proxies OpenZeppelin shipped "
+               "before ERC-1967 settled the layout")
+EVM_KNOWN_SLOT(ZeppelinOSAdmin, "org.zeppelinos.proxy.admin", Keccak,
+               OpenZeppelin, "zeppelinos_admin",
+               "the admin slot of those same proxies")
+EVM_KNOWN_SLOT(DiamondStorage, "diamond.standard.diamond.storage", Keccak,
+               ERC2535, "erc2535_diamond",
+               "the base of the struct a diamond keeps its selector-to-facet "
+               "routing table in")
+
+//===----------------------------------------------------------------------===//
+// ERC-7201 namespaces
+//
+// A library that upgrades has to keep its own variables from colliding with a
+// derived contract's, so it puts them at a namespace instead of at slot zero.
+// These are the namespaces OpenZeppelin's upgradeable contracts declare, which
+// is what most deployed proxy implementations are built out of.
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_SLOT(OZInitializable, "openzeppelin.storage.Initializable", ERC7201,
+               OpenZeppelin, "openzeppelin_Initializable",
+               "which initializer version has run, and whether one is running")
+EVM_KNOWN_SLOT(OZOwnable, "openzeppelin.storage.Ownable", ERC7201,
+               OpenZeppelin, "openzeppelin_Ownable", "the single owner")
+EVM_KNOWN_SLOT(OZOwnable2Step, "openzeppelin.storage.Ownable2Step", ERC7201,
+               OpenZeppelin, "openzeppelin_Ownable2Step",
+               "the owner an ownership transfer is waiting on")
+EVM_KNOWN_SLOT(OZAccessControl, "openzeppelin.storage.AccessControl", ERC7201,
+               OpenZeppelin, "openzeppelin_AccessControl",
+               "the role membership and role admin tables")
+EVM_KNOWN_SLOT(OZPausable, "openzeppelin.storage.Pausable", ERC7201,
+               OpenZeppelin, "openzeppelin_Pausable", "the paused flag")
+EVM_KNOWN_SLOT(OZReentrancyGuard, "openzeppelin.storage.ReentrancyGuard",
+               ERC7201, OpenZeppelin, "openzeppelin_ReentrancyGuard",
+               "the entered flag a nonReentrant modifier sets")
+EVM_KNOWN_SLOT(OZERC20, "openzeppelin.storage.ERC20", ERC7201, OpenZeppelin,
+               "openzeppelin_ERC20",
+               "balances, allowances, total supply, name, and symbol")
+EVM_KNOWN_SLOT(OZERC721, "openzeppelin.storage.ERC721", ERC7201, OpenZeppelin,
+               "openzeppelin_ERC721",
+               "owners, balances, and the approval tables")
+EVM_KNOWN_SLOT(OZERC1155, "openzeppelin.storage.ERC1155", ERC7201,
+               OpenZeppelin, "openzeppelin_ERC1155",
+               "per-identifier balances and the operator approval table")
+EVM_KNOWN_SLOT(OZERC20Permit, "openzeppelin.storage.ERC20Permit", ERC7201,
+               OpenZeppelin, "openzeppelin_ERC20Permit", "the permit nonces")
+EVM_KNOWN_SLOT(OZEIP712, "openzeppelin.storage.EIP712", ERC7201, OpenZeppelin,
+               "openzeppelin_EIP712", "the cached typed-data domain")
+
+#undef EVM_KNOWN_SLOT
+#undef EVM_SLOT_DERIVATION

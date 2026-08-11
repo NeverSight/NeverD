@@ -35,6 +35,18 @@ SBF ELF
 | v3 | strict program headers, без dynamic relocations | `EM_BPF` | static syscalls/calls, JMP32, destination-register CALLX, bytecode `0x100000000`, rodata в нуле | текущий deploy toolchain format |
 | v4 | strict program headers, без dynamic relocations | `EM_BPF` | ISA v3 и aligned memory-mapping contract | текущий upstream `sbpf`; доступность зависит от cluster |
 
+Номер версии сам по себе не является спецификацией, поэтому
+`SBFVersionFeatures.def` хранит поведенческие изменения, а таблица версий их
+составляет. Каждая запись несёт предложение SIMD, принявшее изменение, и
+предикат, который `anza-xyz/sbpf` предоставляет для того же вопроса: несколько
+предложений попадают в одну версию, а одно предложение меняет несколько
+несвязанных вещей. SIMD-0173 одновременно переносит классы инструкций памяти и
+выводит из обращения `lddw`, тогда как SIMD-0174 независимо добавляет класс PQR
+в той же версии. Запись предложения у возможности, а не у версии, и делает
+восстановленное утверждение о версии прослеживаемым до документа, который его
+решил; по той же причине два правила `callx` — разные возможности: SIMD-0173
+читает регистр источника, а SIMD-0377 — регистр назначения.
+
 Изменения v2 намеренно не переходят в v3. Feature checks явны, это не догадки
 `version >= N`. Strict по умолчанию отвергает malformed headers/ranges/alignments,
 unsupported writable legacy sections, invalid continuations/registers/
@@ -267,7 +279,7 @@ LLVM/C/Rust. Отдельных копий text или rodata, способны�
 loader, больше нет.
 
 Замкнутые наборы записаны в `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFVersionFeatures.def`, `SBFProtocolLimits.def`,
 `SBFSyscalls.def`, `SBFSyscallMemory.def`, `SBFCPIABI.def`,
 `SBFProgramInstructions.def` и
 `SBFUpstreamSources.def`. Одноразовые диагностики и имена LLVM blocks остаются
@@ -289,8 +301,8 @@ image недействительным при отсутствии или пов
 | Официальный ELF manifest | 20/20 артефактов из `sbpf/tests/elfs` |
 | ISA-матрица | все 256 encoding для v0-v4, то есть 1,280 ячеек, плюс границы verifier |
 | Дифференциальное выполнение | raw-byte oracle против LLVM ORC, C11 и stable Rust с trace memory/fault/syscall |
-| Интегрированный набор | 124/124 случаев в 13 тестовых бинарниках |
-| ASan + UBSan | 121/121 core-случаев в 12 бинарниках без отчётов |
+| Интегрированный набор | 145/145 случаев в 14 тестовых бинарниках |
+| ASan + UBSan | 141/141 core-случаев в 13 бинарниках без отчётов |
 
 Аудит закреплён на Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` и Agave

@@ -121,6 +121,20 @@ La metadata EVM mantenida a mano sigue el patrón `.def` multi-incluido de LLVM:
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def` y
   `OutputLanguages.def` generan enums ordenados, parsers, nombres, opciones CLI
   y valores ABI C. `EVMConstants.h` centraliza anchos, límites y nombres.
+- `EVMCalls.def` describe las cuatro instrucciones que llaman a otro programa y
+  el retículo de procedencias de una dirección de callee. Un único flag por
+  registro, si un operando de value se sitúa entre el callee y la ventana de
+  argumentos, deriva todas las posiciones posteriores, y la tabla se valida
+  contra la base de datos de opcodes para que la derivación no se desvíe de los
+  pops declarados.
+- `EVMPrecompiles.def` es el diccionario de direcciones en las que responde el
+  propio protocolo, cada una con el fork que la reservó. El gas está ausente a
+  propósito: el coste de una precompile es función de su entrada y se ha
+  re-tarifado sin que cambien la dirección ni la operación.
+- `EVMRecoveredFacts.def` posee las grafías de los vocabularios de hechos
+  recuperados, de modo que un nombre que llega a la salida vive en un solo
+  lugar y no en un `switch` del que puede quedar fuera un nuevo enumerador.
+  `EVMKnownSignatures.def` hace lo mismo con los tres roles de una firma.
 - `Semantics.h` contiene el evaluador ALU escalar independiente del target.
   Interpreter y constant folding comparten el mismo `APInt` comprobado; los
   lowerings LLVM/C/Solidity siguen explícitos y fail-loud.
@@ -204,9 +218,30 @@ y CLI crecen sin tablas paralelas.
   un mismo selector se diagnostican y omiten. Payability permanece independiente
   del lattice de acceso a estado, y un salto dinámico alcanzable no resuelto
   fuerza una recuperación `nonpayable` conservadora. Hasta que MedIR tenga
-  memory SSA, la recuperación del payload de custom errors es la única heurística
-  de ventana de instrucciones acotada; los nombres y tipos recuperados siguen
+  memory SSA, la recuperación del payload de custom errors y la de la llamada
+  saliente son las únicas heurísticas de ventana de instrucciones acotada; los nombres y tipos recuperados siguen
   siendo explícitamente heurísticos.
+
+  HighIR registra además la mitad saliente de la interfaz: cada `CALL`,
+  `CALLCODE`, `DELEGATECALL` y `STATICCALL`, con la procedencia del callee, la
+  dirección reservada que nombra cuando el fork analizado reserva una, el
+  selector que la llamada coloca al inicio del calldata del callee y el valor
+  transferido cuando es constante. `CREATE` y `CREATE2` quedan excluidos porque
+  ejecutan código que aún no tiene dirección, así que no hay callee que
+  recuperar.
+
+  Una firma saliente recuperada nunca se suma a los estándares a los que el
+  programa responde. Enviar `transfer(address,uint256)` dice que el programa usa
+  un token, no que lo sea, y confundir ambas cosas reportaría todo router y todo
+  vault como ERC-20. Una llamada delegante se reporta además como hecho de
+  proxy, porque es el único miembro de la familia cuyo callee se ejecuta contra
+  el storage de este mismo programa.
+
+  La búsqueda de precompiles se filtra por el fork analizado, no por el más
+  nuevo que exista. Llamar a la dirección de una precompile que introduce un
+  fork posterior alcanza una cuenta sin código, tiene éxito y no devuelve nada,
+  de modo que nombrarla reportaría una operación que el programa demostrablemente
+  no realizó.
 - **LLVM** emite una máquina `i32 @evm_execute(ptr)` limpia para el verifier, con
   pila comprobada de 1024 palabras `i256`, intermedios `i512`, división signed
   protegida, shifts saturados, `BYTE`/`SIGNEXTEND`/`CLZ` exactos y switches válidos.

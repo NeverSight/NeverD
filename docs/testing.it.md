@@ -334,10 +334,10 @@ indica coverage mancante. L’aggregato completo include
 `NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
 `NeverDSBFLLVMDifferentialTests` e `NeverDSBFSourceDifferentialTests`, oltre ai
 target metadata, loader, analyzer, semantic, emitter e integration. Il profilo
-integrato supera 124/124 casi in 13 binari.
+integrato supera 145/145 casi in 14 binari.
 
 Il profilo sanitizer viene costruito separatamente in `build-sbf-asan-ubsan`.
-Supera 121/121 casi core in 12 binari senza report ASan o UBSan; integration
+Supera 141/141 casi core in 13 binari senza report ASan o UBSan; integration
 resta nella build LLVM integrata perché il package prebuilt omette l’header
 fork-only richiesto.
 

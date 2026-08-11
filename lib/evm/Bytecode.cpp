@@ -6,6 +6,7 @@
 
 #include "neverd/evm/Bytecode.h"
 
+#include "neverd/evm/Metadata.h"
 #include "neverd/evm/Opcodes.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -34,11 +35,6 @@ inline constexpr llvm::StringLiteral kArtifactBytecodeKey = "bytecode";
 inline constexpr llvm::StringLiteral kRawExtensions[] = {".raw", ".evmraw"};
 inline constexpr llvm::StringLiteral kEVMExtensions[] = {
     ".evm", ".hex", ".bin", ".bytecode", ".json", ".raw", ".evmraw"};
-inline constexpr llvm::StringLiteral kSolidityMetadataKeys[] = {
-    "solc", "ipfs", "bzzr0", "bzzr1"};
-inline constexpr uint8_t kCBORMajorTypeMask = 0xe0U;
-inline constexpr uint8_t kCBORMapMajorType = 0xa0U;
-
 llvm::Error inputError(llvm::StringRef SourceName, llvm::Twine Message) {
   std::string Text = kEVMArchName.str();
   if (!SourceName.empty())
@@ -303,38 +299,6 @@ extractStaticRuntime(const std::vector<uint8_t> &Code) {
   return std::nullopt;
 }
 
-bool containsBytes(const std::vector<uint8_t> &Data, size_t Begin, size_t End,
-                   llvm::StringRef Needle) {
-  if (Begin > End || End > Data.size())
-    return false;
-  const auto First = Data.begin() + static_cast<std::ptrdiff_t>(Begin);
-  const auto Last = Data.begin() + static_cast<std::ptrdiff_t>(End);
-  return std::search(First, Last, Needle.begin(), Needle.end()) != Last;
-}
-
-bool stripSolidityMetadata(std::vector<uint8_t> &Code) {
-  if (Code.size() <= kMetadataLengthBytes)
-    return false;
-  const size_t MetadataSize =
-      (static_cast<size_t>(Code[Code.size() - kMetadataLengthBytes])
-       << kBitsPerByte) |
-      Code.back();
-  if (MetadataSize == 0 || MetadataSize + kMetadataLengthBytes >= Code.size())
-    return false;
-  const size_t Start = Code.size() - MetadataSize - kMetadataLengthBytes;
-  // Solidity appends a CBOR map. Validate both the major type and a compiler
-  // metadata key so arbitrary bytecode ending in a small integer is untouched.
-  if ((Code[Start] & kCBORMajorTypeMask) != kCBORMapMajorType)
-    return false;
-  const size_t End = Code.size() - kMetadataLengthBytes;
-  if (llvm::none_of(kSolidityMetadataKeys, [&](llvm::StringRef Key) {
-        return containsBytes(Code, Start, End, Key);
-      }))
-    return false;
-  Code.resize(Start);
-  return true;
-}
-
 llvm::Expected<LoadedBytecode> finishLoaded(std::vector<uint8_t> Code,
                                             BytecodeSourceKind Source,
                                             bool AlreadyRuntime,
@@ -353,8 +317,14 @@ llvm::Expected<LoadedBytecode> finishLoaded(std::vector<uint8_t> Code,
       Result.RuntimeExtracted = true;
     }
   }
-  if (Options.StripMetadata)
-    Result.MetadataStripped = stripSolidityMetadata(Code);
+  // The trailer is read whether or not it is removed: finding it is what tells
+  // the decoder which bytes are not code, and what it says about the compiler
+  // is worth reporting either way.
+  Result.Metadata = findContractMetadata(Code);
+  if (Options.StripMetadata && Result.Metadata && Result.Metadata->Offset != 0) {
+    Code.resize(Result.Metadata->Offset);
+    Result.MetadataStripped = true;
+  }
   if (Code.empty())
     return inputError(SourceName,
                       "no executable bytecode remains after normalization");

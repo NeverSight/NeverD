@@ -25,7 +25,8 @@ call-argument ABI, and protocol metadata live in the `.def` databases under
 `include/neverd/sbf/`; loaders and backends consume generated typed tables
 instead of duplicating encodings or spellings.
 
-The closed tables include `SBFVersions.def`, `SBFOpcodes.def`,
+The closed tables include `SBFVersions.def`, `SBFVersionFeatures.def`,
+`SBFOpcodes.def`,
 `SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
 `SBFSyscalls.def`, `SBFSyscallMemory.def`, `SBFCPIABI.def`,
 `SBFProgramInstructions.def`, `SBFKnownAddresses.def`,
@@ -56,7 +57,21 @@ two layouts used by the current VM:
 | v4 | strict program headers, no dynamic relocations | `EM_BPF` | v3 ISA plus the aligned memory-mapping contract | current upstream `sbpf`; cluster availability may vary |
 
 The v2 changes intentionally do not leak into v3. Feature checks are explicit,
-not `version >= N` guesses. Strict mode is the default and rejects malformed
+not `version >= N` guesses.
+
+A version number is not itself a specification, so `SBFVersionFeatures.def`
+holds the behavioural changes and the version table composes them. Each record
+carries the SIMD proposal that accepted the change and the predicate
+`anza-xyz/sbpf` exposes for the same question, because several proposals land
+in one version and one proposal changes several unrelated things: SIMD-0173
+both moves the memory instruction classes and retires `lddw`, while SIMD-0174
+independently adds the PQR class in the same version. Recording the proposal on
+the feature rather than on the version is what keeps a recovered version claim
+traceable to the document that decided it, and it is why the two `callx` rules
+are separate features: SIMD-0173 reads the source register and SIMD-0377 reads
+the destination.
+
+Strict mode is the default and rejects malformed
 headers, ranges, alignments, unsupported writable legacy sections, invalid
 continuations, bad registers, illegal frame-pointer writes, invalid branches,
 and version-inactive opcodes with instruction slot and virtual address.
@@ -350,8 +365,8 @@ The conformance baseline was audited on 2026-08-10 against Anza `sbpf`
 | LLVM ORC differential | Compares return/fault, writable memory, and syscall trace across versioned arithmetic, calls/CALLX, memory, syscalls, and runtime faults |
 | C/Rust execution differential | Compiles generated C11 with `-Werror` and stable Rust with `-D warnings`, then compares the same observable state, including an official relocated-data ELF |
 | Solana recovery | Base58 round-trips the whole byte domain, every known address decodes to 32 bytes and re-encodes to its recorded spelling, Anchor discriminators match the published reference values, the account layout tiles without a gap, and end-to-end recovery is checked to stay silent when nothing is proven |
-| Integrated SBF aggregate | `check-neverd-sbf` discovers and passes 124/124 cases across 14 binaries, including three public C API integration cases |
-| ASan + UBSan | 121/121 core cases across 13 binaries pass with fail-fast sanitizer settings; the public integration binary is linked and run in the integrated build because the prebuilt LLVM package omits the NeverD fork-only header it requires |
+| Integrated SBF aggregate | `check-neverd-sbf` discovers and passes 145/145 cases across 14 binaries, including four public C API integration cases |
+| ASan + UBSan | 141/141 core cases across 13 binaries pass with fail-fast sanitizer settings; the public integration binary is linked and run in the integrated build because the prebuilt LLVM package omits the NeverD fork-only header it requires |
 
 The backend execution contract exposes `r0` as the return value, plus fault
 status, VM memory effects, and syscall calls/results. Other final registers are

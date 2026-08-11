@@ -6,36 +6,34 @@
 
 #include "neverd/evm/EVMIR.h"
 
-#include "llvm/Support/ErrorHandling.h"
+#include <array>
 
 namespace neverd::evm {
 
+llvm::ArrayRef<StorageKeyKindInfo> storageKeyKindInfos() {
+  static const std::array Table = {
+#define EVM_STORAGE_KEY_KIND(ID, NAME, SUMMARY)                                \
+  StorageKeyKindInfo{StorageKeyKind::ID, NAME, SUMMARY},
+#include "neverd/evm/EVMRecoveredFacts.def"
+  };
+  return Table;
+}
+
 llvm::StringRef storageKeyKindName(StorageKeyKind Kind) {
-  switch (Kind) {
-  case StorageKeyKind::Slot:
-    return "slot";
-  case StorageKeyKind::Hashed:
-    return "hashed";
-  case StorageKeyKind::HashedOffset:
-    return "hashed-offset";
-  case StorageKeyKind::Unknown:
-    return "unknown";
-  }
-  llvm_unreachable("invalid storage key kind");
+  return storageKeyKindInfos()[static_cast<size_t>(Kind)].Name;
+}
+
+llvm::ArrayRef<RevertKindInfo> revertKindInfos() {
+  static const std::array Table = {
+#define EVM_REVERT_KIND(ID, NAME, SUMMARY)                                     \
+  RevertKindInfo{RevertKind::ID, NAME, SUMMARY},
+#include "neverd/evm/EVMRecoveredFacts.def"
+  };
+  return Table;
 }
 
 llvm::StringRef revertKindName(RevertKind Kind) {
-  switch (Kind) {
-  case RevertKind::Bare:
-    return "bare";
-  case RevertKind::Message:
-    return "message";
-  case RevertKind::Panic:
-    return "panic";
-  case RevertKind::Custom:
-    return "custom";
-  }
-  llvm_unreachable("invalid revert kind");
+  return revertKindInfos()[static_cast<size_t>(Kind)].Name;
 }
 
 } // namespace neverd::evm

@@ -34,6 +34,20 @@ add_neverd_unittest(NeverDEVMAnalyzerTests
   EVM
 )
 
+add_neverd_unittest(NeverDEVMProxyTests
+  EVMProxyTests.cpp
+
+  LINK_COMPONENTS
+  EVM
+)
+
+add_neverd_unittest(NeverDEVMCallTests
+  EVMCallTests.cpp
+
+  LINK_COMPONENTS
+  EVM
+)
+
 add_neverd_unittest(NeverDEVMSemanticTests
   EVMSemanticTests.cpp
 

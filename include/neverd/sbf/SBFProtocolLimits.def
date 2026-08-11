@@ -15,8 +15,8 @@
 #define SBF_PROTOCOL_LIMIT(NAME, VALUE, SOURCE)
 #endif
 
-// anza-xyz/sbpf/src/ebpf.rs retains this historical constant, although the
-// current loader and verifier do not enforce it.
+// anza-xyz/sbpf/src/ebpf.rs retains this historical constant as
+// PROG_MAX_INSNS, although the current loader and verifier do not enforce it.
 SBF_PROTOCOL_LIMIT(LegacyProgramInstructionCount, 65'536, SBPFMain)
 
 // anza-xyz/solana-sdk/system-interface/src/lib.rs defines the maximum account

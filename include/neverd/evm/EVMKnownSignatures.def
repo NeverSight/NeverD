@@ -4,6 +4,7 @@
 //
 // This file intentionally has no include guard.
 //
+// EVM_SIGNATURE_KIND(ID, NAME, SUMMARY)
 // EVM_KNOWN_STANDARD(ID, NAME, SUMMARY)
 // EVM_KNOWN_FUNCTION(SIGNATURE, RETURNS, STANDARD)
 // EVM_KNOWN_EVENT(SIGNATURE, STANDARD)
@@ -11,11 +12,13 @@
 // EVM_LANGUAGE_REVERT(ID, SIGNATURE)
 // EVM_PANIC_CODE(ID, CODE, NAME, SUMMARY)
 //
-// The first four name the values a contract's ABI carries. The fifth names the
-// two payloads the language reserves for itself, which are errors like any
-// other except that recovery has to ask for them by role rather than by
-// spelling; each therefore joins the error table from its own record. The last
-// names the argument of the second of those two.
+// The first names the three roles a signature can hold, which decide how much
+// of its digest a program carries and where. The next four name the values a
+// contract's ABI carries. The sixth names the two payloads the language
+// reserves for itself, which are errors like any other except that recovery has
+// to ask for them by role rather than by spelling; each therefore joins the
+// error table from its own record. The last names the argument of the second of
+// those two.
 //
 // SIGNATURE is the canonical ABI spelling, with no spaces and with every type
 // in its full form. Selectors and topics are not written here: they are the
@@ -37,6 +40,10 @@
 // an authority: a match names a selector, it never changes decoded semantics.
 //
 //===----------------------------------------------------------------------===//
+
+#ifndef EVM_SIGNATURE_KIND
+#define EVM_SIGNATURE_KIND(ID, NAME, SUMMARY)
+#endif
 
 #ifndef EVM_KNOWN_STANDARD
 #define EVM_KNOWN_STANDARD(ID, NAME, SUMMARY)
@@ -63,6 +70,24 @@
 #endif
 
 //===----------------------------------------------------------------------===//
+// What role a signature holds
+//
+// The role decides how much of the digest a program carries: a call and a
+// custom error carry the leading four bytes, and an event carries the whole
+// thirty-two in its first topic.
+//===----------------------------------------------------------------------===//
+
+EVM_SIGNATURE_KIND(Function, "function",
+                   "something a caller can invoke, selected by the leading "
+                   "four bytes of its digest")
+EVM_SIGNATURE_KIND(Event, "event",
+                   "something the program logs, identified by the whole "
+                   "digest in the log's first topic")
+EVM_SIGNATURE_KIND(Error, "error",
+                   "something a revert hands back, selected by the leading "
+                   "four bytes of its digest")
+
+//===----------------------------------------------------------------------===//
 // Standards
 //===----------------------------------------------------------------------===//
 
@@ -79,6 +104,7 @@ EVM_KNOWN_STANDARD(ERC3156, "erc-3156", "flash loan")
 EVM_KNOWN_STANDARD(ERC4626, "erc-4626", "tokenized vault")
 EVM_KNOWN_STANDARD(ERC5267, "erc-5267", "typed-data domain retrieval")
 EVM_KNOWN_STANDARD(ERC1967, "erc-1967", "upgradeable proxy")
+EVM_KNOWN_STANDARD(ERC1822, "erc-1822", "universal upgradeable proxy standard")
 EVM_KNOWN_STANDARD(ERC2535, "erc-2535", "diamond multi-facet proxy")
 EVM_KNOWN_STANDARD(ERC4337, "erc-4337", "account abstraction")
 EVM_KNOWN_STANDARD(OpenZeppelin, "openzeppelin",
@@ -464,3 +490,4 @@ EVM_KNOWN_FUNCTION("version()", "string", Common)
 #undef EVM_KNOWN_EVENT
 #undef EVM_KNOWN_FUNCTION
 #undef EVM_KNOWN_STANDARD
+#undef EVM_SIGNATURE_KIND

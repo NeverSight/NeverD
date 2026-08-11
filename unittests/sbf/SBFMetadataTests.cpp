@@ -49,6 +49,67 @@ TEST(SBFVersions, ModelsNonMonotonicFeatureSetsExplicitly) {
       versionHasFeature(Version::V4, VersionFeature::AlignedMemoryMapping));
 }
 
+TEST(SBFVersions, AttributesEveryFeatureToOneDistinctBitAndProposal) {
+  ASSERT_EQ(versionFeatureInfos().size(), kVersionFeatureCount);
+
+  uint32_t Seen = 0;
+  for (size_t Index = 0; Index < versionFeatureInfos().size(); ++Index) {
+    const VersionFeatureInfo &Info = versionFeatureInfos()[Index];
+    SCOPED_TRACE(Info.Name.str());
+    EXPECT_EQ(&getVersionFeatureInfo(static_cast<VersionFeatureBit>(Index)),
+              &Info);
+    EXPECT_EQ(versionFeatureName(Info.ID), Info.Name);
+    EXPECT_FALSE(Info.Summary.empty());
+    EXPECT_FALSE(Info.Upstream.empty());
+    // A version number is not a specification; the proposal that decided the
+    // change is what a recovered version claim traces back to.
+    EXPECT_TRUE(Info.SIMD.starts_with("simd-")) << Info.SIMD.str();
+
+    const auto Bit = static_cast<uint32_t>(Info.ID);
+    EXPECT_EQ(Bit & (Bit - 1), 0u) << "a feature must occupy one bit";
+    EXPECT_EQ(Seen & Bit, 0u) << "two features share a bit";
+    Seen |= Bit;
+  }
+
+  // Every bit the version table composes has to be a tabulated feature, so a
+  // version cannot claim a capability nothing describes.
+  for (const VersionInfo &Info : versionInfos())
+    EXPECT_EQ(static_cast<uint32_t>(Info.Features) & ~Seen, 0u)
+        << Info.Name.str();
+}
+
+TEST(SBFVersions, RecordsTheProposalsUpstreamAttributesEachChangeTo) {
+  // These are the attributions anza-xyz/sbpf documents on the predicates in
+  // src/program.rs. Reading them off the version number instead would lose
+  // that SIMD-0173 and SIMD-0174 both land in v2 and that neither carries
+  // into v3.
+  const auto Proposal = [](VersionFeature Feature) {
+    for (const VersionFeatureInfo &Info : versionFeatureInfos())
+      if (Info.ID == Feature)
+        return Info.SIMD;
+    return llvm::StringLiteral("");
+  };
+  EXPECT_EQ(Proposal(VersionFeature::StackFrameGaps), "simd-0166");
+  EXPECT_EQ(Proposal(VersionFeature::ManualStackFrames), "simd-0166");
+  EXPECT_EQ(Proposal(VersionFeature::PQR), "simd-0174");
+  EXPECT_EQ(Proposal(VersionFeature::SwapSubImmediate), "simd-0174");
+  EXPECT_EQ(Proposal(VersionFeature::MovedMemory), "simd-0173");
+  EXPECT_EQ(Proposal(VersionFeature::DisableLDDW), "simd-0173");
+  EXPECT_EQ(Proposal(VersionFeature::StaticSyscalls), "simd-0178");
+  EXPECT_EQ(Proposal(VersionFeature::StrictELF), "simd-0189");
+  EXPECT_EQ(Proposal(VersionFeature::LowerRodata), "simd-0189");
+  EXPECT_EQ(Proposal(VersionFeature::JMP32), "simd-0377");
+  EXPECT_EQ(Proposal(VersionFeature::CallXDestination), "simd-0377");
+  EXPECT_EQ(Proposal(VersionFeature::AlignedMemoryMapping), "simd-0177");
+
+  // The two callx rules come from different proposals and pick opposite
+  // registers, which is why they are separate features rather than one.
+  EXPECT_NE(Proposal(VersionFeature::CallXSource),
+            Proposal(VersionFeature::CallXDestination));
+  EXPECT_TRUE(versionHasFeature(Version::V2, VersionFeature::CallXSource));
+  EXPECT_FALSE(versionHasFeature(Version::V3, VersionFeature::CallXSource));
+}
+
 TEST(SBFOpcodes, HasNoEncodingCollisionWithinAnyVersion) {
   constexpr std::array Versions{Version::V0, Version::V1, Version::V2,
                                 Version::V3, Version::V4};
@@ -234,7 +295,7 @@ TEST(SBFSyscalls, MatchesCurrentStableABIAndTracksProposalsSeparately) {
   EXPECT_EQ(syscallSourceRevision(SyscallSource::AgaveMaster),
             "cae40aa610fdbdb313209bc1eec737079eb59688");
   EXPECT_EQ(syscallSourceRevision(SyscallSource::SBPFMain),
-            "9476336b901181d68e00c5b38252a15694d4d6aa");
+            "71425d0de59e0bff048c6be8f4a8a9bc655916e2");
   EXPECT_EQ(syscallSourceRevision(SyscallSource::SolanaSDKMaster),
             "d045b94c18f8cae8bc30eec310984030ead8d4f4");
   EXPECT_EQ(Decompress->ArgumentCount, 3u);

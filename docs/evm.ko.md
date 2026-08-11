@@ -115,6 +115,16 @@ NOP으로 조용히 처리하지 않습니다.
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def`,
   `OutputLanguages.def`가 ordered enum, parser, display name, CLI choice, C ABI value를
   생성합니다. `EVMConstants.h`가 protocol width/limit/default name을 소유합니다.
+- `EVMCalls.def`는 다른 프로그램을 호출하는 네 개의 instruction과 callee 주소가
+  올 수 있는 출처의 lattice를 기술합니다. 레코드당 하나의 flag, 즉 callee와 인자
+  window 사이에 value operand가 있는지 여부가 이후 모든 operand 위치를 유도하며,
+  그 유도가 선언된 pop 수와 어긋나지 않도록 opcode 데이터베이스에 대해 검증됩니다.
+- `EVMPrecompiles.def`는 프로토콜이 직접 응답하는 주소들의 사전이며, 각 항목은 그
+  주소를 예약한 fork를 함께 가집니다. gas는 의도적으로 없습니다. precompile의 비용은
+  입력의 함수이고, 주소나 연산이 바뀌지 않은 채로 여러 번 재가격되었기 때문입니다.
+- `EVMRecoveredFacts.def`는 복구 사실 어휘의 철자를 소유하므로, 출력에 도달하는
+  이름은 새 enumerator가 빠질 수 있는 `switch`가 아니라 한 곳에 존재합니다.
+  `EVMKnownSignatures.def`는 signature가 가지는 세 가지 역할에 대해 같은 일을 합니다.
 - `Semantics.h`는 target-independent scalar ALU evaluator입니다. constant folding과
   interpreter가 같은 checked `APInt`를 사용하고 LLVM/C/Solidity lowering은 target
   contract와 unsupported case가 보이도록 각각 명시적으로 fail-loud합니다.
@@ -185,8 +195,26 @@ semantic case 누락은 즉시 실패합니다.
   cyclic expression을 unknown으로 취급합니다. 같은 selector의 conflicting target은 진단 후
   생략합니다. payability는 state-access lattice와 독립이고 reachable unresolved dynamic jump는
   보수적인 `nonpayable` recovery를 강제합니다. MedIR에 memory SSA가 생길 때까지 custom-error
-  payload recovery만 bounded instruction-window heuristic으로 남으며 복구된 name과 type은
+  payload recovery와 외부 call payload recovery만 bounded instruction-window
+  heuristic으로 남으며 복구된 name과 type은
   명시적으로 heuristic입니다.
+
+  HighIR는 interface의 나가는 절반도 기록합니다. 즉 모든 `CALL`, `CALLCODE`,
+  `DELEGATECALL`, `STATICCALL`에 대해 callee의 출처, 분석 대상 fork가 예약한 경우 그
+  예약 주소, 호출이 callee의 calldata 앞에 놓는 selector, 그리고 상수일 때 전송되는
+  value를 기록합니다. `CREATE`와 `CREATE2`는 아직 주소가 없는 코드를 실행하므로 복구할
+  callee가 없어 제외됩니다.
+
+  복구된 외부 signature는 프로그램이 응답하는 표준 목록에 결코 들어가지 않습니다.
+  `transfer(address,uint256)`를 보낸다는 것은 프로그램이 토큰을 사용한다는 뜻이지
+  토큰이라는 뜻이 아니며, 둘을 뒤섞으면 모든 router와 vault가 ERC-20으로 보고됩니다.
+  delegate하는 call은 추가로 proxy fact로도 보고되는데, callee의 코드가 이 프로그램
+  자신의 storage에 대해 실행되는 것은 이 family에서 그것뿐이기 때문입니다.
+
+  precompile 조회는 존재하는 가장 새로운 fork가 아니라 분석 대상 fork를 기준으로
+  gate됩니다. 나중 fork가 도입하는 precompile 주소를 호출하면 코드 없는 계정에 도달해
+  성공하고 아무것도 반환하지 않으므로, 이름을 붙이면 프로그램이 명백히 수행하지 않은
+  연산을 보고하게 됩니다.
 - **LLVM**: verifier-clean `i32 @evm_execute(ptr)` state machine, checked 1024-word
   `i256` stack, `i512` intermediate, guarded signed division, saturated shift, 정확한
   `BYTE`/`SIGNEXTEND`/`CLZ`, validated dynamic-jump switch.

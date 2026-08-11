@@ -34,6 +34,14 @@ opcode、syscall、relocation 和 protocol metadata 集中於 `include/neverd/sb
 | v3 | strict program header、無 dynamic relocation | `EM_BPF` | static syscall/call、JMP32、destination-register CALLX，bytecode 在 `0x100000000`、rodata 在零 | 目前部署 toolchain format |
 | v4 | strict program header、無 dynamic relocation | `EM_BPF` | v3 ISA 加 aligned memory-mapping contract | 目前上游 `sbpf`；cluster availability 可能不同 |
 
+版本號本身不是規範，因此 `SBFVersionFeatures.def` 持有各項行為變更，由版本表將它們
+組合起來。每筆記錄都帶上接納該變更的 SIMD 提案，以及 `anza-xyz/sbpf` 就同一問題
+公開的述詞——因為多個提案會落在同一個版本裡，而一個提案又會改變彼此無關的多件事：
+SIMD-0173 既搬遷了記憶體指令類，也淘汰了 `lddw`；SIMD-0174 則在同一版本中獨立加入
+PQR 類。把提案記錄在特性上而不是版本上，才能讓復原出的版本結論一路追溯到決定它的
+文件；這也是兩條 `callx` 規則被拆成兩個特性的原因：SIMD-0173 讀來源暫存器，
+SIMD-0377 讀目的暫存器。
+
 v2 變更刻意不延伸到 v3；feature check 採明確條件，不猜測 `version >= N`。預設
 strict 拒絕畸形 header/range/alignment、不支援 writable legacy section、非法
 continuation/register/frame-pointer write/branch，以及版本未啟用 opcode，並回報
@@ -250,7 +258,7 @@ interpreter、string recovery 以及 LLVM/C/Rust backend 共用的事實來源�
 可能與 loader semantics 漂移的獨立 text/rodata copy。
 
 封閉資料表放在 `SBFVersions.def`、`SBFOpcodes.def`、`SBFRelocations.def`、
-`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、`SBFSyscalls.def`、
+`SBFArgumentRegisters.def`、`SBFVersionFeatures.def`, `SBFProtocolLimits.def`、`SBFSyscalls.def`、
 `SBFSyscallMemory.def`、`SBFCPIABI.def`、`SBFProgramInstructions.def` 與
 `SBFUpstreamSources.def`。
 只使用一次的診斷文字與 LLVM block name 仍留在 local，符合 LLVM 自身慣例。
@@ -268,8 +276,8 @@ legacy v0-v2 合併 `.text`、`.rodata`、`.data.rel.ro` 與 `.eh_frame`，並�
 | 官方 ELF manifest | `sbpf/tests/elfs` 的 20/20 個 artifact |
 | ISA matrix | v0-v4 各版本全部 256 個 encoding，共 1,280 個 cell，另含 verifier boundary |
 | differential execution | raw-byte oracle 對 LLVM ORC、C11、stable Rust，比較 memory/fault/syscall trace |
-| integrated aggregate | 13 個 test binary 的 124/124 個 case |
-| ASan + UBSan | 12 個 core binary 的 121/121 個 case，無 report |
+| integrated aggregate | 14 個 test binary 的 145/145 個 case |
+| ASan + UBSan | 13 個 core binary 的 141/141 個 case，無 report |
 
 稽核固定於 Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` 與 Agave

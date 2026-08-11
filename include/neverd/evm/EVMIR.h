@@ -14,7 +14,9 @@
 #define NEVERD_EVM_EVMIR_H
 
 #include "neverd/evm/ABI.h"
+#include "neverd/evm/Calls.h"
 #include "neverd/evm/Opcodes.h"
+#include "neverd/evm/StorageSlots.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -329,17 +331,17 @@ struct RecoveredFunction {
 /// How a storage key was formed, which is what separates a variable the source
 /// declared from an element the program addressed.
 enum class StorageKeyKind : uint8_t {
-  /// A constant, which is a directly declared variable.
-  Slot,
-  /// A hash, which is how a mapping addresses an element.
-  Hashed,
-  /// A hash displaced by a computed amount, which is how a dynamic array
-  /// addresses an element and how a struct inside a mapping addresses a field.
-  HashedOffset,
-  /// Nothing proved how the key was formed.
-  Unknown,
+#define EVM_STORAGE_KEY_KIND(ID, NAME, SUMMARY) ID,
+#include "neverd/evm/EVMRecoveredFacts.def"
 };
 
+struct StorageKeyKindInfo {
+  StorageKeyKind ID;
+  llvm::StringLiteral Name;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<StorageKeyKindInfo> storageKeyKindInfos();
 llvm::StringRef storageKeyKindName(StorageKeyKind Kind);
 
 struct StorageFact {
@@ -348,6 +350,69 @@ struct StorageFact {
   bool IsTransient = false;
   StorageKeyKind KeyKind = StorageKeyKind::Unknown;
   std::optional<llvm::APInt> Slot;
+  /// The tabulated slot the key equals, null when no specification fixes that
+  /// number. A compiler numbers a contract's own variables from zero, so this
+  /// is the difference between a slot that means something outside this
+  /// binary and one that means nothing without the source.
+  const KnownSlotInfo *Known = nullptr;
+  std::string SuggestedName;
+};
+
+/// One call that runs another contract's code against this contract's storage.
+///
+/// This is what makes an upgradeable contract readable: the code at this
+/// address is a router, and the code that actually runs is wherever the target
+/// points. Recovering which slot the target is read from, or which address it
+/// is fixed to, is what tells a reader where to look next.
+struct ProxyFact {
+  uint64_t PC = 0;
+  CalleeKind Kind = CalleeKind::Dynamic;
+  /// DELEGATECALL, or CALLCODE for the retired form that does the same thing.
+  Opcode Op = Opcode::DELEGATECALL;
+  /// The slot the target was loaded from, when it is a constant.
+  std::optional<llvm::APInt> Slot;
+  const KnownSlotInfo *Known = nullptr;
+  /// The target itself, when the code fixes it rather than loading it. This is
+  /// what a minimal-proxy clone compiles to.
+  std::optional<llvm::APInt> Implementation;
+};
+
+/// One call this program makes into another program.
+///
+/// A deployed contract is usually a participant in a system rather than a whole
+/// one, so what it calls is as much a part of its interface as what it answers
+/// to. This records the outgoing half: which address, established how, and
+/// which selector was sent there.
+///
+/// The recovered signature is never counted towards the standards the program
+/// answers to. Sending `transfer(address,uint256)` says the program uses a
+/// token, not that it is one, and conflating the two would report every router
+/// and vault as an ERC-20.
+struct CallFact {
+  uint64_t PC = 0;
+  Opcode Op = Opcode::CALL;
+  CalleeKind TargetKind = CalleeKind::Dynamic;
+  /// The callee address, when the code fixes it rather than loading it.
+  std::optional<llvm::APInt> Target;
+  /// The precompile the analyzed fork reserves that address for, null when it
+  /// reserves nothing there.
+  const PrecompileInfo *Precompiled = nullptr;
+  /// The slot the callee was read from, when it is a constant.
+  std::optional<llvm::APInt> Slot;
+  /// The tabulated slot that number is, null when no specification fixes it.
+  const KnownSlotInfo *NamedSlot = nullptr;
+  /// The selector the call places at the start of the callee's calldata, when
+  /// a store before the call proves it. A call with no selector is a plain
+  /// value transfer, which is how a contract pays an address that may not have
+  /// code at all.
+  std::optional<uint32_t> Selector;
+  /// The tabulated signature that selector is the hash of, null when the
+  /// dictionary does not know it.
+  const KnownSignatureInfo *Known = nullptr;
+  /// The value transferred, for the members of the family that carry one and
+  /// when it is a constant. A proven zero is what distinguishes a call that
+  /// only invokes from one that also pays.
+  std::optional<llvm::APInt> Value;
   std::string SuggestedName;
 };
 
@@ -362,17 +427,17 @@ struct EventFact {
 
 /// What a revert hands back to its caller.
 enum class RevertKind : uint8_t {
-  /// Nothing, or nothing this analysis could read.
-  Bare,
-  /// The language's own `Error(string)`.
-  Message,
-  /// The language's own `Panic(uint256)`, which reports that a check the
-  /// compiler inserted failed.
-  Panic,
-  /// A selector the contract declared itself.
-  Custom,
+#define EVM_REVERT_KIND(ID, NAME, SUMMARY) ID,
+#include "neverd/evm/EVMRecoveredFacts.def"
 };
 
+struct RevertKindInfo {
+  RevertKind ID;
+  llvm::StringLiteral Name;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<RevertKindInfo> revertKindInfos();
 llvm::StringRef revertKindName(RevertKind Kind);
 
 struct ErrorFact {
@@ -401,11 +466,18 @@ struct EVMHighIR {
   std::vector<StorageFact> Storage;
   std::vector<EventFact> Events;
   std::vector<ErrorFact> Errors;
+  std::vector<ProxyFact> Proxies;
+  /// Every call this program makes into another program, in program order.
+  std::vector<CallFact> Calls;
   std::vector<StructuredRegion> Regions;
   /// The standards the program answers to, in table order. One matched
   /// selector says little on its own; the set is what makes a contract
   /// recognizable as a token, a proxy, or a pool.
   std::vector<KnownStandard> Standards;
+  /// True only when the path taken by a call whose selector matched nothing
+  /// provably does something other than reject it. A dispatcher that only
+  /// reverts has no fallback to reach, and a fallback that only reverts is
+  /// indistinguishable from not having one.
   bool HasFallback = false;
   bool HasReceive = false;
   std::vector<Diagnostic> Diagnostics;

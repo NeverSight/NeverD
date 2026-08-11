@@ -1,0 +1,128 @@
+//===- EVMPrecompiles.def - The addresses the protocol reserves *- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_PRECOMPILE(ID, ADDRESS, INTRODUCED, NAME, EIP, SUMMARY)
+//
+//   An address that runs native code instead of bytecode. Nothing is deployed
+//   at one, so a program that calls it is not calling a contract this or any
+//   other analysis could find and read: the whole meaning of the call site is
+//   the address itself.
+//
+//   That is why these belong in a table rather than in a comment. A recovered
+//   `staticcall(gas(), 0x1, ...)` says nothing until the address is named, and
+//   once it is named it says the program is checking a signature, which is
+//   usually the most important thing a permit, a meta-transaction relay, or a
+//   multisignature account does.
+//
+//   INTRODUCED is the first fork at which the protocol answers at ADDRESS. A
+//   call to a later fork's address is an ordinary call to an empty account,
+//   which succeeds and returns nothing, so the lookup is gated on the fork
+//   being analyzed rather than on the newest one that exists.
+//
+//   NAME is what the reserved address is called wherever a recovered call is
+//   reported, so it has to spell a legal identifier. EIP names the proposal
+//   that reserved the address, and is empty for the four that predate the
+//   proposal process.
+//
+//   Gas is deliberately absent. A precompile's cost is a function of its input
+//   and has been repriced repeatedly without the address or the operation
+//   changing, and no recovered fact depends on it.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_PRECOMPILE
+#define EVM_PRECOMPILE(ID, ADDRESS, INTRODUCED, NAME, EIP, SUMMARY)
+#endif
+
+//===----------------------------------------------------------------------===//
+// The four the protocol shipped with
+//===----------------------------------------------------------------------===//
+
+EVM_PRECOMPILE(ECRecover, 0x01, Frontier, "ecrecover", "",
+               "recovers the address that signed a hash, which is how every "
+               "signature check on chain is ultimately performed")
+EVM_PRECOMPILE(SHA256, 0x02, Frontier, "sha256", "",
+               "the SHA-256 digest of the input, which the EVM has no opcode "
+               "for")
+EVM_PRECOMPILE(RIPEMD160, 0x03, Frontier, "ripemd160", "",
+               "the RIPEMD-160 digest of the input, left-padded into a word")
+EVM_PRECOMPILE(Identity, 0x04, Frontier, "identity", "",
+               "returns its input unchanged, which older compilers used to "
+               "copy memory before MCOPY existed")
+
+//===----------------------------------------------------------------------===//
+// Byzantium: modular exponentiation and the alt_bn128 curve
+//
+// The curve operations are what a zero-knowledge verifier is built out of, so
+// a program that calls all three is almost always checking a proof.
+//===----------------------------------------------------------------------===//
+
+EVM_PRECOMPILE(ModExp, 0x05, Byzantium, "modexp", "eip-198",
+               "arbitrary-precision modular exponentiation, which is how an "
+               "RSA verifier and a primality check are written on chain")
+EVM_PRECOMPILE(BN256Add, 0x06, Byzantium, "bn256Add", "eip-196",
+               "adds two points on the alt_bn128 curve")
+EVM_PRECOMPILE(BN256ScalarMul, 0x07, Byzantium, "bn256ScalarMul", "eip-196",
+               "multiplies an alt_bn128 point by a scalar")
+EVM_PRECOMPILE(BN256Pairing, 0x08, Byzantium, "bn256Pairing", "eip-197",
+               "the alt_bn128 pairing check a zero-knowledge proof verifier "
+               "ends in")
+
+//===----------------------------------------------------------------------===//
+// Istanbul
+//===----------------------------------------------------------------------===//
+
+EVM_PRECOMPILE(Blake2F, 0x09, Istanbul, "blake2F", "eip-152",
+               "the BLAKE2b compression function, which lets a contract "
+               "verify a proof from a chain that hashes with BLAKE2b")
+
+//===----------------------------------------------------------------------===//
+// Cancun
+//===----------------------------------------------------------------------===//
+
+EVM_PRECOMPILE(KZGPointEvaluation, 0x0a, Cancun, "kzgPointEvaluation",
+               "eip-4844",
+               "verifies that a blob commitment opens to a claimed value at a "
+               "point, which is how a rollup proves what it posted")
+
+//===----------------------------------------------------------------------===//
+// Pectra: the BLS12-381 curve
+//
+// This is the curve the consensus layer signs with, so these are what a
+// contract that validates a beacon-chain signature is built out of.
+//===----------------------------------------------------------------------===//
+
+EVM_PRECOMPILE(BLS12381G1Add, 0x0b, Pectra, "bls12381G1Add", "eip-2537",
+               "adds two points in the BLS12-381 G1 group")
+EVM_PRECOMPILE(BLS12381G1MSM, 0x0c, Pectra, "bls12381G1MSM", "eip-2537",
+               "a multi-scalar multiplication in the BLS12-381 G1 group")
+EVM_PRECOMPILE(BLS12381G2Add, 0x0d, Pectra, "bls12381G2Add", "eip-2537",
+               "adds two points in the BLS12-381 G2 group")
+EVM_PRECOMPILE(BLS12381G2MSM, 0x0e, Pectra, "bls12381G2MSM", "eip-2537",
+               "a multi-scalar multiplication in the BLS12-381 G2 group")
+EVM_PRECOMPILE(BLS12381PairingCheck, 0x0f, Pectra, "bls12381PairingCheck",
+               "eip-2537",
+               "the BLS12-381 pairing check that verifies an aggregated "
+               "consensus-layer signature")
+EVM_PRECOMPILE(BLS12381MapFpToG1, 0x10, Pectra, "bls12381MapFpToG1",
+               "eip-2537", "maps a base field element onto the G1 group")
+EVM_PRECOMPILE(BLS12381MapFp2ToG2, 0x11, Pectra, "bls12381MapFp2ToG2",
+               "eip-2537",
+               "maps an extension field element onto the G2 group")
+
+//===----------------------------------------------------------------------===//
+// Fusaka
+//
+// The first reserved address that does not fit in a byte, which is why the
+// table stores an address rather than a byte.
+//===----------------------------------------------------------------------===//
+
+EVM_PRECOMPILE(P256Verify, 0x0100, Fusaka, "p256Verify", "eip-7212",
+               "verifies a secp256r1 signature, which is the curve a phone's "
+               "secure enclave and a passkey sign with, and therefore what an "
+               "account-abstraction wallet checks")
+
+#undef EVM_PRECOMPILE

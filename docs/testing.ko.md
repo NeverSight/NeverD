@@ -313,10 +313,10 @@ audit한 다음 플랫폼별 label 제외를 적용합니다. 프로필은
 `NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
 `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`와 metadata,
 loader, analyzer, semantic, emitter, integration target이 포함됩니다. integrated
-profile은 13 binary의 124/124 case를 통과합니다.
+profile은 14 binary의 145/145 case를 통과합니다.
 
-sanitizer profile은 `build-sbf-asan-ubsan`에 별도로 build합니다. 12 core binary의
-121/121 case가 ASan/UBSan report 없이 통과합니다. prebuilt package에 필요한
+sanitizer profile은 `build-sbf-asan-ubsan`에 별도로 build합니다. 13 core binary의
+141/141 case가 ASan/UBSan report 없이 통과합니다. prebuilt package에 필요한
 fork-only header가 없으므로 integration은 integrated LLVM build에서 실행합니다.
 
 ```bash

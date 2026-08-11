@@ -12,8 +12,11 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
+#include <type_traits>
 
 namespace neverd::sbf {
 
@@ -27,25 +30,29 @@ enum class Version : uint8_t {
 
 enum class VersionStatus : uint8_t { Legacy, Current, Upstream };
 
+/// The position each feature occupies in a feature set. Record order in
+/// SBFVersionFeatures.def assigns these, which is safe because no bit is ever
+/// serialized: a feature set only ever exists in memory.
+enum class VersionFeatureBit : uint8_t {
+#define SBF_VERSION_FEATURE(ID, NAME, SIMD, UPSTREAM, SUMMARY) ID,
+#include "neverd/sbf/SBFVersionFeatures.def"
+  Count,
+};
+
+inline constexpr size_t kVersionFeatureCount =
+    static_cast<size_t>(VersionFeatureBit::Count);
+
 enum class VersionFeature : uint32_t {
   None = 0,
-  StackFrameGaps = 1u << 0,
-  ManualStackFrames = 1u << 1,
-  PQR = 1u << 2,
-  ExplicitSignExtension = 1u << 3,
-  SwapSubImmediate = 1u << 4,
-  DisableNeg = 1u << 5,
-  CallXSource = 1u << 6,
-  DisableLDDW = 1u << 7,
-  DisableLE = 1u << 8,
-  MovedMemory = 1u << 9,
-  StaticSyscalls = 1u << 10,
-  StrictELF = 1u << 11,
-  LowerRodata = 1u << 12,
-  JMP32 = 1u << 13,
-  CallXDestination = 1u << 14,
-  AlignedMemoryMapping = 1u << 15,
+#define SBF_VERSION_FEATURE(ID, NAME, SIMD, UPSTREAM, SUMMARY)                 \
+  ID = uint32_t{1} << static_cast<uint32_t>(VersionFeatureBit::ID),
+#include "neverd/sbf/SBFVersionFeatures.def"
 };
+
+static_assert(kVersionFeatureCount <=
+                  std::numeric_limits<
+                      std::underlying_type_t<VersionFeature>>::digits,
+              "a version feature set must hold every tabulated feature");
 
 constexpr VersionFeature operator|(VersionFeature L, VersionFeature R) {
   return static_cast<VersionFeature>(static_cast<uint32_t>(L) |
@@ -121,6 +128,23 @@ struct VersionInfo {
   VersionFeature Features;
   VersionStatus Status;
 };
+
+/// One behavioural change a version makes, and the proposal that decided it.
+struct VersionFeatureInfo {
+  VersionFeature ID;
+  llvm::StringLiteral Name;
+  /// The SIMD proposal that accepted this change. Several proposals land in
+  /// one version and one proposal changes several things, so this is recorded
+  /// per feature rather than per version.
+  llvm::StringLiteral SIMD;
+  /// The predicate anza-xyz/sbpf exposes for the same question.
+  llvm::StringLiteral Upstream;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<VersionFeatureInfo> versionFeatureInfos();
+const VersionFeatureInfo &getVersionFeatureInfo(VersionFeatureBit Bit);
+llvm::StringRef versionFeatureName(VersionFeature Feature);
 
 llvm::ArrayRef<VersionInfo> versionInfos();
 const VersionInfo *getVersionInfo(Version V);

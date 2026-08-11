@@ -304,10 +304,10 @@ CI 在 Linux、macOS 和 Windows 上以 Release 開啟測試建置，先稽核�
 `NeverDSBFISAConformanceTests`、`NeverDSBFUpstreamConformanceTests`、
 `NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`，以及 metadata、
 loader、analyzer、semantic、emitter、integration target。integrated profile 在
-13 個 binary 中通過 124/124 個 case。
+14 個 binary 中通過 145/145 個 case。
 
-sanitizer profile 分開建置於 `build-sbf-asan-ubsan`。12 個 core binary 的
-121/121 個 case 全數通過，且沒有 ASan/UBSan report；prebuilt package 缺少必要的
+sanitizer profile 分開建置於 `build-sbf-asan-ubsan`。13 個 core binary 的
+141/141 個 case 全數通過，且沒有 ASan/UBSan report；prebuilt package 缺少必要的
 fork-only header，因此 integration 在 integrated LLVM build 執行。
 
 ```bash

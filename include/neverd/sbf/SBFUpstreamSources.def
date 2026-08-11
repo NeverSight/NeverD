@@ -20,7 +20,7 @@ SBF_UPSTREAM_SOURCE(SolanaReference, "solana-syscall-reference", "")
 SBF_UPSTREAM_SOURCE(AgaveMaster, "agave-master",
                     "cae40aa610fdbdb313209bc1eec737079eb59688")
 SBF_UPSTREAM_SOURCE(SBPFMain, "anza-sbpf-main",
-                    "9476336b901181d68e00c5b38252a15694d4d6aa")
+                    "71425d0de59e0bff048c6be8f4a8a9bc655916e2")
 SBF_UPSTREAM_SOURCE(SolanaSDKMaster, "anza-solana-sdk-master",
                     "d045b94c18f8cae8bc30eec310984030ead8d4f4")
 SBF_UPSTREAM_SOURCE(Legacy, "legacy-loader-api", "")

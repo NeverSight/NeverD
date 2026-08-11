@@ -1,0 +1,80 @@
+//===- EVMCalls.def - Calls into another program ---------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_CALL_FAMILY(ID, OPCODE, VALUE_OPERAND, DELEGATES, STATIC, SUMMARY)
+//
+//   The four instructions that run another program's code. They differ in
+//   three ways that decide how a call site reads: whether a value operand sits
+//   between the callee and the argument window, whether the callee's code runs
+//   against this program's storage, and whether the callee is forbidden to
+//   write state at all.
+//
+//   VALUE_OPERAND is what makes the family a table rather than a list. It
+//   shifts every operand after the callee by one, so reading a DELEGATECALL's
+//   argument window with CALL's layout does not fail: it silently reports the
+//   gas allowance as an address and the wrong memory as the payload.
+//
+// EVM_CALLEE_KIND(ID, NAME, SUMMARY)
+//
+//   Where a call site's callee address came from. This is the difference
+//   between a call whose destination is fixed in the code and one an upgrade
+//   can repoint, and it is established the same way for every member of the
+//   family: a delegating call's target and a token transfer's recipient are
+//   the same operand read the same way.
+//
+//   Each kind describes one recovered call site, not one contract. A diamond
+//   delegates from a computed key and a transparent proxy delegates from a
+//   named slot, and a contract that does both reports both.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_CALL_FAMILY
+#define EVM_CALL_FAMILY(ID, OPCODE, VALUE_OPERAND, DELEGATES, STATIC, SUMMARY)
+#endif
+
+#ifndef EVM_CALLEE_KIND
+#define EVM_CALLEE_KIND(ID, NAME, SUMMARY)
+#endif
+
+//===----------------------------------------------------------------------===//
+// The instructions that call another program
+//===----------------------------------------------------------------------===//
+
+EVM_CALL_FAMILY(Call, CALL, true, false, false,
+                "runs the callee's code against the callee's own storage, "
+                "optionally transferring value")
+EVM_CALL_FAMILY(CallCode, CALLCODE, true, true, false,
+                "runs the callee's code against this program's storage while "
+                "still presenting this program as the caller, which is the "
+                "retired form DELEGATECALL replaced")
+EVM_CALL_FAMILY(DelegateCall, DELEGATECALL, false, true, false,
+                "runs the callee's code against this program's storage, "
+                "caller, and value, which is what an upgradeable proxy does")
+EVM_CALL_FAMILY(StaticCall, STATICCALL, false, false, true,
+                "runs the callee's code with every state write forbidden, "
+                "which is what a compiler emits for a call it declared view")
+
+//===----------------------------------------------------------------------===//
+// Where a callee address came from
+//===----------------------------------------------------------------------===//
+
+EVM_CALLEE_KIND(Fixed, "fixed",
+                "the callee is a literal in the code, which is what a "
+                "precompile call, a minimal proxy clone, and a hardcoded "
+                "library delegate compile to")
+EVM_CALLEE_KIND(NamedSlot, "named-slot",
+                "the callee is read from a storage slot the table names")
+EVM_CALLEE_KIND(ConstantSlot, "constant-slot",
+                "the callee is read from a constant storage slot no table "
+                "names")
+EVM_CALLEE_KIND(ComputedSlot, "computed-slot",
+                "the callee is read from a key the program derived, which is "
+                "how a diamond routes one selector to one facet")
+EVM_CALLEE_KIND(Dynamic, "dynamic",
+                "nothing proved where the callee came from")
+
+#undef EVM_CALLEE_KIND
+#undef EVM_CALL_FAMILY

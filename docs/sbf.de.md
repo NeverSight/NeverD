@@ -35,6 +35,19 @@ Eingabe ist ein ELF64-Little-Endian-Solana-Programm (`.so`).
 | v3 | strikte Program Headers, keine dynamischen Relocations | `EM_BPF` | statische Syscalls/Calls, JMP32, Destination-Register-CALLX, Bytecode bei `0x100000000`, Rodata bei Null | aktuelles Deploy-Toolchain-Format |
 | v4 | strikte Program Headers, keine dynamischen Relocations | `EM_BPF` | v3-ISA plus aligned Memory-Mapping-Vertrag | aktuelles Upstream-`sbpf`; Cluster variieren |
 
+Eine Versionsnummer ist selbst keine Spezifikation, daher hält
+`SBFVersionFeatures.def` die Verhaltensänderungen und die Versionstabelle setzt
+sie zusammen. Jeder Eintrag trägt den SIMD-Vorschlag, der die Änderung
+angenommen hat, sowie das Prädikat, das `anza-xyz/sbpf` für dieselbe Frage
+anbietet, denn mehrere Vorschläge landen in einer Version und ein Vorschlag
+ändert mehrere unabhängige Dinge: SIMD-0173 verschiebt die
+Memory-Instruktionsklassen und zieht `lddw` zurück, während SIMD-0174 in
+derselben Version unabhängig davon die PQR-Klasse ergänzt. Den Vorschlag am
+Feature statt an der Version festzuhalten, hält eine rekonstruierte
+Versionsaussage auf das Dokument rückführbar, das sie entschieden hat, und ist
+der Grund, weshalb die beiden `callx`-Regeln getrennte Features sind: SIMD-0173
+liest das Quellregister, SIMD-0377 das Zielregister.
+
 v2-Änderungen gelten bewusst nicht für v3. Feature-Checks sind explizit, keine
 `version >= N`-Vermutungen. Strict ist Standard und lehnt fehlerhafte Header,
 Ranges, Alignments, unsupported writable Legacy-Sections, ungültige
@@ -272,7 +285,7 @@ LLVM-, C- und Rust-Backends. Separate Text- oder Rodata-Kopien können daher
 nicht von der Loader-Semantik abweichen.
 
 Geschlossene Datensätze liegen in `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFVersionFeatures.def`, `SBFProtocolLimits.def`,
 `SBFSyscalls.def`, `SBFSyscallMemory.def`, `SBFCPIABI.def`,
 `SBFProgramInstructions.def` und
 `SBFUpstreamSources.def`. Einmalige Diagnosen und LLVM-Blocknamen bleiben lokal,
@@ -294,8 +307,8 @@ des Images angewandt.
 | Offizielles ELF-Manifest | 20/20 Artefakte aus `sbpf/tests/elfs` |
 | ISA-Matrix | alle 256 Encodings für v0-v4, also 1,280 Zellen, plus Verifier-Grenzen |
 | Ausführungsdifferenz | Raw-Byte-Oracle gegen LLVM ORC, C11 und stabiles Rust samt Memory/Fault/Syscall-Trace |
-| Integriertes Aggregat | 124/124 Fälle in 13 Test-Binaries |
-| ASan + UBSan | 121/121 Core-Fälle in 12 Binaries ohne Report |
+| Integriertes Aggregat | 145/145 Fälle in 14 Test-Binaries |
+| ASan + UBSan | 141/141 Core-Fälle in 13 Binaries ohne Report |
 
 Die Prüfung ist auf Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` und Agave

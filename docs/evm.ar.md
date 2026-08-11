@@ -116,6 +116,17 @@ execution-spec-tests على أنه
 - تولد `EVMHardforks.def` و`EVMEffects.def` و`EVMExitStatuses.def` و
   `OutputLanguages.def` enums مرتبة وparsers وأسماء وخيارات CLI وقيم C ABI.
   ويملك `EVMConstants.h` العروض والحدود والأسماء الثابتة.
+- `EVMCalls.def` يصف التعليمات الأربع التي تستدعي برنامجًا آخر، وشبكة الأماكن
+  التي يمكن أن يأتي منها عنوان المستدعى. علَم واحد في كل سجل، وهو ما إذا كان
+  معامل القيمة يقع بين المستدعى ونافذة الوسائط، يشتق كل موضع معامل لاحق، ويُتحقق
+  من الجدول أمام قاعدة بيانات الأوبكود حتى لا ينحرف الاشتقاق عن أعداد الـ pop
+  المعلنة.
+- `EVMPrecompiles.def` هو قاموس العناوين التي يجيب عندها البروتوكول بنفسه، مع
+  الـ fork الذي حجز كلًا منها. الغاز غائب عمدًا: كلفة الـ precompile دالة في
+  مدخلاته وقد أُعيد تسعيرها دون أن يتغير العنوان أو العملية.
+- `EVMRecoveredFacts.def` يملك تهجئة مفردات الحقائق المستعادة، فالاسم الذي يظهر
+  في المخرجات يعيش في مكان واحد بدل `switch` قد يُنسى فيه عنصر جديد.
+  و`EVMKnownSignatures.def` يفعل الشيء نفسه للأدوار الثلاثة التي يحملها التوقيع.
 - يملك `Semantics.h` scalar ALU evaluator مستقلًا عن target. يشترك interpreter
   وconstant folding في تطبيق `APInt` المتحقق، بينما تبقى lowerings الخاصة بـ
   LLVM/C/Solidity صريحة وfail-loud.
@@ -187,8 +198,25 @@ ADT/string على الحدود وsemantic switches شاملة وfail-loud.
   تُشخّص الأهداف المتعارضة للـselector نفسه وتُحذف. تبقى payability مستقلة عن
   state-access lattice، ويجبر reachable unresolved dynamic jump الاستعادة على
   `nonpayable` المحافظ. وحتى يملك MedIR ‏memory SSA، تبقى استعادة custom-error
-  payload هي وحدها bounded instruction-window heuristic؛ وتظل الأسماء والأنواع
+  payload وحمولة الاستدعاء الصادر هما الـ bounded instruction-window heuristics
+  المتبقيتان؛ وتظل الأسماء والأنواع
   المستعادة heuristics صريحة.
+
+  كما يسجل HighIR النصف الصادر من الواجهة: كل `CALL` و`CALLCODE`
+  و`DELEGATECALL` و`STATICCALL`، مع مصدر عنوان المستدعى، والعنوان المحجوز الذي
+  يسميه عندما يحجزه الـ fork المحلَّل، والـ selector الذي يضعه الاستدعاء في مقدمة
+  calldata المستدعى، والقيمة المحوَّلة عندما تكون ثابتة. أما `CREATE` و`CREATE2`
+  فمستثنيان لأنهما ينفذان شيفرة لا عنوان لها بعد، فلا يوجد مستدعى لاستعادته.
+
+  التوقيع الصادر المستعاد لا ينضم أبدًا إلى المعايير التي يستجيب لها البرنامج.
+  إرسال `transfer(address,uint256)` يقول إن البرنامج يستخدم رمزًا، لا أنه رمز،
+  والخلط بينهما سيجعل كل router وvault يظهر كـ ERC-20. ويُبلَّغ عن الاستدعاء
+  المفوَّض إضافةً إلى ذلك كحقيقة proxy، لأنه العضو الوحيد في العائلة الذي تعمل
+  شيفرة المستدعى فيه على تخزين هذا البرنامج نفسه.
+
+  يخضع البحث عن precompile للـ fork قيد التحليل لا لأحدث fork موجود. فاستدعاء
+  عنوان precompile يقدمه fork لاحق يصل إلى حساب بلا شيفرة، وينجح ولا يعيد شيئًا،
+  لذا فتسميته ستُبلغ عن عملية لم يقم بها البرنامج قطعًا.
 - **LLVM** يخرج state machine نظيفة للـverifier باسم
   `i32 @evm_execute(ptr)`، مع مكدس 1024 كلمة `i256` متحقق وintermediates `i512`
   وsigned division محروسة وshifts مشبعة و`BYTE`/`SIGNEXTEND`/`CLZ` دقيقة وswitches

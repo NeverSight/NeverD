@@ -1,0 +1,136 @@
+//===- SBFVersionFeatures.def - SBF version feature database ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_VERSION_FEATURE(ID, NAME, SIMD, UPSTREAM, SUMMARY)
+//
+// One behavioural change an SBF version makes. The version table composes
+// these; nothing else decides what a version means.
+//
+// A version number is not itself a specification. Each of these changes was
+// accepted as its own SIMD proposal, several proposals land in one version,
+// and one proposal can change several unrelated things: SIMD-0173 both moves
+// the memory instruction classes and retires `lddw`. Recording the proposal on
+// the feature rather than on the version is therefore what makes a recovered
+// version claim traceable back to the document that decided it.
+//
+// UPSTREAM is the predicate anza-xyz/sbpf exposes for the same question, named
+// so that this table can be checked against it by hand. It is the reason a
+// feature is spelled as a capability rather than as a version comparison: the
+// upstream predicates are not monotonic, and reading them as though they were
+// is the single easiest way to decode v3 as though it were v2. The whole v2
+// arithmetic and encoding group is exactly that trap, since none of it carries
+// into v3.
+//
+// The order of the records assigns the bits, so a record may be appended but
+// not reordered without invalidating nothing else: the bits are not serialized
+// anywhere. Keep them grouped by proposal so the table reads as the proposals
+// read.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_VERSION_FEATURE
+#define SBF_VERSION_FEATURE(ID, NAME, SIMD, UPSTREAM, SUMMARY)
+#endif
+
+//===----------------------------------------------------------------------===//
+// SIMD-0166: dynamic stack frames
+//===----------------------------------------------------------------------===//
+
+SBF_VERSION_FEATURE(StackFrameGaps, "stack-frame-gaps", "simd-0166",
+                    "stack_frame_gaps",
+                    "the loader leaves an unmapped gap between stack frames, "
+                    "which is what makes a v0 frame layout unlike every later "
+                    "one")
+SBF_VERSION_FEATURE(ManualStackFrames, "manual-stack-frames", "simd-0166",
+                    "manual_stack_frame_bump",
+                    "the program moves the frame pointer itself with "
+                    "`add64 r10, imm` instead of the loader sizing frames")
+
+//===----------------------------------------------------------------------===//
+// SIMD-0174: arithmetic improvements
+//===----------------------------------------------------------------------===//
+
+SBF_VERSION_FEATURE(PQR, "pqr", "simd-0174", "enable_pqr",
+                    "the product/quotient/remainder class, which adds signed "
+                    "division and the high half of a multiply")
+SBF_VERSION_FEATURE(ExplicitSignExtension, "explicit-sign-extension",
+                    "simd-0174", "explicit_sign_extension_of_results",
+                    "a 32-bit result is sign-extended rather than "
+                    "zero-extended into its 64-bit register")
+SBF_VERSION_FEATURE(SwapSubImmediate, "swap-sub-immediate", "simd-0174",
+                    "swap_sub_reg_imm_operands",
+                    "`sub` with an immediate computes `imm - reg` rather than "
+                    "`reg - imm`, so the same encoding means the opposite")
+SBF_VERSION_FEATURE(DisableNeg, "disable-neg", "simd-0174", "disable_neg",
+                    "`neg` is retired, since subtracting from an immediate "
+                    "now expresses it")
+
+//===----------------------------------------------------------------------===//
+// SIMD-0173: instruction encoding improvements
+//===----------------------------------------------------------------------===//
+
+SBF_VERSION_FEATURE(CallXSource, "callx-source", "simd-0173",
+                    "callx_uses_src_reg",
+                    "`callx` takes its target from the source register")
+SBF_VERSION_FEATURE(DisableLDDW, "disable-lddw", "simd-0173", "disable_lddw",
+                    "the two-slot `lddw` is retired in favour of `hor64` "
+                    "composing a wide constant from two instructions")
+SBF_VERSION_FEATURE(DisableLE, "disable-le", "simd-0173", "disable_le",
+                    "the little-endian byte-swap is retired, leaving only the "
+                    "big-endian direction")
+SBF_VERSION_FEATURE(MovedMemory, "moved-memory", "simd-0173",
+                    "move_memory_instruction_classes",
+                    "the load and store classes move into the encoding space "
+                    "the ALU classes used, so one opcode byte means a memory "
+                    "access here and arithmetic everywhere else")
+
+//===----------------------------------------------------------------------===//
+// SIMD-0178: static syscalls
+//===----------------------------------------------------------------------===//
+
+SBF_VERSION_FEATURE(StaticSyscalls, "static-syscalls", "simd-0178",
+                    "static_syscalls",
+                    "a call names a syscall by hash in its immediate and an "
+                    "internal function by a PC-relative displacement, so a "
+                    "relocation no longer decides which one it is")
+
+//===----------------------------------------------------------------------===//
+// SIMD-0189: stricter ELF headers
+//===----------------------------------------------------------------------===//
+
+SBF_VERSION_FEATURE(StrictELF, "strict-elf", "simd-0189",
+                    "enable_stricter_elf_headers",
+                    "the loader reads program headers and rejects dynamic "
+                    "relocations rather than assembling an image from "
+                    "sections")
+SBF_VERSION_FEATURE(LowerRodata, "lower-rodata", "simd-0189",
+                    "enable_lower_rodata_vaddr",
+                    "read-only data is mapped at virtual address zero, which "
+                    "makes a low address and a length indistinguishable "
+                    "without knowing which syscall arguments are pointers")
+
+//===----------------------------------------------------------------------===//
+// SIMD-0377: 32-bit jumps
+//===----------------------------------------------------------------------===//
+
+SBF_VERSION_FEATURE(JMP32, "jmp32", "simd-0377", "enable_jmp32",
+                    "the 32-bit conditional jump class, which compares the "
+                    "low halves of its operands")
+SBF_VERSION_FEATURE(CallXDestination, "callx-destination", "simd-0377",
+                    "callx_uses_dst_reg",
+                    "`callx` takes its target from the destination register, "
+                    "reversing the register SIMD-0173 chose")
+
+//===----------------------------------------------------------------------===//
+// SIMD-0177: aligned memory mapping
+//===----------------------------------------------------------------------===//
+
+SBF_VERSION_FEATURE(AlignedMemoryMapping, "aligned-memory-mapping",
+                    "simd-0177", "sbpf_version >= V4",
+                    "the VM maps regions at aligned addresses unconditionally "
+                    "rather than only when the host configuration asks for it")
+
+#undef SBF_VERSION_FEATURE

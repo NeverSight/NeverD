@@ -121,6 +121,20 @@ I metadata EVM mantenuti a mano seguono il pattern `.def` multi-incluso di LLVM:
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def` e
   `OutputLanguages.def` generano enum ordinate, parser, nomi, scelte CLI e
   valori C ABI. `EVMConstants.h` centralizza width, limiti e nomi.
+- `EVMCalls.def` descrive le quattro istruzioni che chiamano un altro programma
+  e il reticolo delle provenienze di un indirizzo di callee. Un solo flag per
+  record, cioè se un operando di value sta fra il callee e la finestra degli
+  argomenti, deriva ogni posizione successiva, e la tabella è validata contro il
+  database degli opcode perché la derivazione non possa divergere dai pop
+  dichiarati.
+- `EVMPrecompiles.def` è il dizionario degli indirizzi a cui risponde il
+  protocollo stesso, ciascuno con il fork che lo ha riservato. Il gas è assente
+  di proposito: il costo di una precompile è funzione del suo input ed è stato
+  riprezzato senza che indirizzo od operazione cambiassero.
+- `EVMRecoveredFacts.def` possiede le grafie dei vocabolari dei fatti
+  recuperati, così un nome che raggiunge l’output vive in un unico posto invece
+  che in uno `switch` da cui un nuovo enumeratore può restare fuori.
+  `EVMKnownSignatures.def` fa lo stesso per i tre ruoli di una firma.
 - `Semantics.h` contiene il scalar ALU evaluator target-independent. Interpreter
   e constant folding condividono lo stesso `APInt` verificato; i lowering
   LLVM/C/Solidity restano espliciti e fail-loud.
@@ -204,9 +218,30 @@ classification e CLI crescono senza tabelle parallele.
   conflitto per lo stesso selector sono diagnosticati e omessi. Payability resta
   indipendente dallo state-access lattice e un dynamic jump raggiungibile non
   risolto impone un recupero `nonpayable` conservativo. Finché MedIR non avrà
-  memory SSA, il recupero del payload di custom error resterà l’unica euristica
-  con instruction window limitata; nomi e tipi recuperati restano esplicitamente
+  memory SSA, il recupero del payload di custom error e quello della chiamata
+  uscente resteranno le uniche euristiche con instruction window limitata; nomi e tipi recuperati restano esplicitamente
   euristici.
+
+  HighIR registra anche la metà uscente dell’interfaccia: ogni `CALL`,
+  `CALLCODE`, `DELEGATECALL` e `STATICCALL`, con la provenienza del callee,
+  l’indirizzo riservato che nomina quando il fork analizzato ne riserva uno, il
+  selector che la chiamata pone in testa al calldata del callee e il valore
+  trasferito quando è costante. `CREATE` e `CREATE2` sono esclusi perché
+  eseguono codice che non ha ancora un indirizzo, quindi non c’è alcun callee da
+  recuperare.
+
+  Una firma uscente recuperata non entra mai fra gli standard a cui il programma
+  risponde. Inviare `transfer(address,uint256)` dice che il programma usa un
+  token, non che lo sia, e confondere le due cose segnalerebbe ogni router e
+  ogni vault come ERC-20. Una chiamata delegante è inoltre segnalata come fatto
+  di proxy, perché è l’unico membro della famiglia il cui callee esegue sullo
+  storage di questo stesso programma.
+
+  La ricerca delle precompile è vincolata al fork analizzato, non al più recente
+  esistente. Chiamare l’indirizzo di una precompile introdotta da un fork
+  successivo raggiunge un account senza codice, riesce e non restituisce nulla:
+  nominarla segnalerebbe un’operazione che il programma dimostrabilmente non ha
+  eseguito.
 - **LLVM** emette una state machine `i32 @evm_execute(ptr)` verifier-clean con
   stack controllato di 1024 parole `i256`, intermedi `i512`, signed division
   protetta, shift saturi, `BYTE`/`SIGNEXTEND`/`CLZ` esatti e switch validati.

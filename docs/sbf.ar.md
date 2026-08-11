@@ -34,6 +34,15 @@ SBF ELF
 | v3 | program headers صارمة، بلا dynamic relocations | `EM_BPF` | syscalls/calls ثابتة وJMP32 وCALLX من destination register وbytecode عند `0x100000000` وrodata عند صفر | صيغة toolchain المنشورة الحالية |
 | v4 | program headers صارمة، بلا dynamic relocations | `EM_BPF` | ISA v3 مع عقد memory mapping بمحاذاة | upstream `sbpf` الحالي؛ يختلف توفر cluster |
 
+رقم النسخة ليس مواصفة بحد ذاته، لذلك يحمل `SBFVersionFeatures.def` التغييرات
+السلوكية بينما يؤلفها جدول النسخ. يحمل كل سجل مقترح SIMD الذي اعتمد التغيير
+والمُسنَد الذي يعرضه `anza-xyz/sbpf` للسؤال نفسه، لأن عدة مقترحات تهبط في نسخة
+واحدة والمقترح الواحد يغير أشياء غير مترابطة: فـSIMD-0173 ينقل أصناف تعليمات
+الذاكرة ويتقاعد `lddw` معًا، بينما يضيف SIMD-0174 صنف PQR بشكل مستقل في النسخة
+ذاتها. تسجيل المقترح على الخاصية لا على النسخة هو ما يبقي ادعاء النسخة المستعادة
+قابلًا للتتبع إلى الوثيقة التي قررته، وهو سبب فصل قاعدتَي `callx`: فـSIMD-0173
+يقرأ سجل المصدر وSIMD-0377 يقرأ سجل الوجهة.
+
 لا تنتقل تغييرات v2 عمدًا إلى v3. feature checks صريحة وليست تخمين
 `version >= N`. يرفض strict الافتراضي headers/ranges/alignments التالفة وwritable
 legacy sections غير المدعومة وcontinuations/registers/frame-pointer writes/
@@ -248,7 +257,7 @@ VM هي مصدر الحقيقة المشترك للـdecoder وinterpreter وا�
 LLVM/C/Rust. لا توجد نسخ مستقلة من text أو rodata يمكن أن تنحرف عن loader.
 
 توجد السجلات المغلقة في `SBFVersions.def` و`SBFOpcodes.def` و
-`SBFRelocations.def` و`SBFArgumentRegisters.def` و`SBFProtocolLimits.def` و
+`SBFRelocations.def` و`SBFArgumentRegisters.def` و`SBFVersionFeatures.def`, `SBFProtocolLimits.def` و
 `SBFSyscalls.def` و`SBFSyscallMemory.def` و`SBFCPIABI.def` و
 `SBFProgramInstructions.def` و
 `SBFUpstreamSources.def`. تبقى رسائل التشخيص وأسماء LLVM ذات الاستخدام الواحد
@@ -267,8 +276,8 @@ tables فهي debug enrichment اختيارية لا تُسقط image صالحة
 | manifest ELF الرسمي | 20/20 artifact من `sbpf/tests/elfs` |
 | مصفوفة ISA | كل 256 encoding عبر v0-v4، أي 1,280 خلية، مع حدود verifier |
 | differential execution | raw-byte oracle مقابل LLVM ORC وC11 وstable Rust، مع memory/fault/syscall trace |
-| التجميع المتكامل | 124/124 حالة في 13 test binary |
-| ASan + UBSan | 121/121 حالة core في 12 binary بلا report |
+| التجميع المتكامل | 145/145 حالة في 14 test binary |
+| ASan + UBSan | 141/141 حالة core في 13 binary بلا report |
 
 المراجعة مثبتة على Anza `sbpf` revision
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` وAgave

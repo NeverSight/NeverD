@@ -34,6 +34,16 @@ database에 모으며 loader/backend는 generated typed table을 사용합니다
 | v3 | strict program header, dynamic relocation 없음 | `EM_BPF` | static syscall/call, JMP32, destination-register CALLX, bytecode `0x100000000`, rodata zero | 현재 deploy toolchain format |
 | v4 | strict program header, dynamic relocation 없음 | `EM_BPF` | v3 ISA와 aligned memory-mapping contract | 현재 upstream `sbpf`; cluster availability는 다를 수 있음 |
 
+version 번호 자체는 명세가 아니므로 `SBFVersionFeatures.def`가 동작 변경을 담고
+version 표가 그것들을 조합합니다. 각 레코드는 그 변경을 채택한 SIMD 제안과
+`anza-xyz/sbpf`가 같은 질문에 대해 노출하는 predicate를 함께 가집니다. 여러 제안이
+하나의 version에 안착하고 하나의 제안이 서로 무관한 여러 가지를 바꾸기 때문입니다.
+SIMD-0173은 memory instruction class를 옮기면서 동시에 `lddw`를 폐기하고,
+SIMD-0174는 같은 version에서 독립적으로 PQR class를 추가합니다. 제안을 version이
+아니라 feature에 기록하는 것이 복구된 version 주장을 그것을 결정한 문서까지
+추적 가능하게 하며, 두 `callx` 규칙을 별개의 feature로 두는 이유이기도 합니다.
+SIMD-0173은 source register를, SIMD-0377은 destination register를 읽습니다.
+
 v2 변경은 의도적으로 v3에 이어지지 않습니다. feature check는 명시적이며
 `version >= N`으로 추측하지 않습니다. 기본 strict mode는 malformed header/range/
 alignment, unsupported writable legacy section, invalid continuation/register/
@@ -252,7 +262,7 @@ interpreter, string recovery, LLVM/C/Rust backend가 공유하는 source of trut
 loader semantics와 달라질 수 있는 별도 text/rodata copy는 없습니다.
 
 닫힌 record는 `SBFVersions.def`, `SBFOpcodes.def`, `SBFRelocations.def`,
-`SBFArgumentRegisters.def`, `SBFProtocolLimits.def`, `SBFSyscalls.def`,
+`SBFArgumentRegisters.def`, `SBFVersionFeatures.def`, `SBFProtocolLimits.def`, `SBFSyscalls.def`,
 `SBFSyscallMemory.def`, `SBFCPIABI.def`, `SBFProgramInstructions.def`,
 `SBFUpstreamSources.def`에 둡니다.
 한 번만 쓰는 diagnostic과 LLVM block name은 LLVM 자체 관례대로 local에 둡니다.
@@ -271,8 +281,8 @@ image가 immutable해지기 전에 정확히 한 번 적용합니다.
 | official ELF manifest | `sbpf/tests/elfs` artifact 20/20 |
 | ISA matrix | v0-v4 각각 모든 256 encoding, 총 1,280 cell과 verifier boundary |
 | differential execution | raw-byte oracle과 LLVM ORC/C11/stable Rust의 memory/fault/syscall trace 비교 |
-| integrated aggregate | 13 test binary의 124/124 case |
-| ASan + UBSan | 12 core binary의 121/121 case, report 없음 |
+| integrated aggregate | 14 test binary의 145/145 case |
+| ASan + UBSan | 13 core binary의 141/141 case, report 없음 |
 
 감사는 Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2`와 Agave

@@ -205,5 +205,115 @@ TEST(EVMBytecode, StripsValidatedSolidityMetadataTrailer) {
   EXPECT_FALSE(Loaded->MetadataStripped);
 }
 
+TEST(EVMBytecode, ReportsWhoBuiltTheContractAndFromWhat) {
+  // runtime 6000 + CBOR {"ipfs": h'1220 00..1f', "solc": h'00081a'} + length.
+  auto Loaded = decodeBytecodeInput(
+      "6000"
+      "a2"
+      "6469706673"
+      "58221220000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      "64736f6c6343" "00081a"
+      "0033",
+      "metadata.hex");
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  EXPECT_EQ(Loaded->Code, (std::vector<uint8_t>{0x60, 0x00}));
+  EXPECT_TRUE(Loaded->MetadataStripped);
+
+  ASSERT_TRUE(Loaded->Metadata.has_value());
+  EXPECT_EQ(Loaded->Metadata->Offset, 2u);
+  EXPECT_EQ(Loaded->Metadata->Size, Loaded->OriginalSize - 2);
+  EXPECT_EQ(Loaded->Metadata->language(), MetadataLanguage::Solidity);
+  EXPECT_EQ(Loaded->Metadata->compilerVersion(), "0.8.26");
+
+  const MetadataEntry *Hash = Loaded->Metadata->sourceHash();
+  ASSERT_NE(Hash, nullptr);
+  ASSERT_NE(Hash->Field, nullptr);
+  EXPECT_EQ(Hash->Field->ID, MetadataField::IPFS);
+  EXPECT_EQ(Hash->Value.Kind, MetadataValueKind::ByteString);
+  // A CIDv0 multihash is the SHA-256 identifier, a length, and the digest.
+  ASSERT_EQ(Hash->Value.Bytes.size(), 34u);
+  EXPECT_EQ(Hash->Value.Bytes[0], 0x12);
+  EXPECT_EQ(Hash->Value.Bytes[1], 0x20);
+
+  // Keys arrive in the order the compiler wrote them, so a reader can tell two
+  // builds apart by more than their contents.
+  ASSERT_EQ(Loaded->Metadata->Entries.size(), 2u);
+  EXPECT_EQ(Loaded->Metadata->Entries[0].Key, "ipfs");
+  EXPECT_EQ(Loaded->Metadata->Entries[1].Key, "solc");
+}
+
+TEST(EVMBytecode, ReadsThePrereleaseVersionAndUntabulatedKeys) {
+  // CBOR {"solc": "0.9.0-nightly", "surprise": true}: a prerelease version does
+  // not fit three bytes and is written as text, and a key no table knows still
+  // reaches a reader.
+  auto Metadata = findContractMetadata(std::vector<uint8_t>{
+      0xa2, 0x64, 's',  'o',  'l',  'c',  0x6d, '0',  '.',  '9',  '.',
+      '0',  '-',  'n',  'i',  'g',  'h',  't',  'l',  'y',  0x68, 's',
+      'u',  'r',  'p',  'r',  'i',  's',  'e',  0xf5, 0x00, 0x1e});
+  ASSERT_TRUE(Metadata.has_value());
+  EXPECT_EQ(Metadata->Offset, 0u);
+  EXPECT_EQ(Metadata->language(), MetadataLanguage::Solidity);
+  EXPECT_EQ(Metadata->compilerVersion(), "0.9.0-nightly");
+  EXPECT_EQ(Metadata->sourceHash(), nullptr);
+
+  ASSERT_EQ(Metadata->Entries.size(), 2u);
+  EXPECT_EQ(Metadata->Entries[1].Key, "surprise");
+  EXPECT_EQ(Metadata->Entries[1].Field, nullptr);
+  EXPECT_EQ(Metadata->Entries[1].Value.Kind, MetadataValueKind::Boolean);
+  EXPECT_TRUE(Metadata->Entries[1].Value.Boolean);
+}
+
+TEST(EVMBytecode, RefusesTrailersThatDoNotAccountForEveryDeclaredByte) {
+  // The declared length covers one byte more than the map occupies. Reading it
+  // anyway would remove a byte of code.
+  EXPECT_FALSE(findContractMetadata(std::vector<uint8_t>{
+                   0xa1, 0x64, 's', 'o', 'l', 'c', 0x43, 0x00, 0x08, 0x1e, 0x00,
+                   0x00, 0x0b})
+                   .has_value());
+
+  // A well-formed map that names no tabulated key is not evidence that these
+  // bytes are a trailer at all.
+  EXPECT_FALSE(
+      findContractMetadata(std::vector<uint8_t>{0xa1, 0x61, 'x', 0x01, 0x00,
+                                                0x04})
+          .has_value());
+
+  // An indefinite-length map is CBOR this reader does not claim to understand.
+  EXPECT_FALSE(findContractMetadata(std::vector<uint8_t>{
+                   0xbf, 0x64, 's', 'o', 'l', 'c', 0x43, 0x00, 0x08, 0x1e, 0xff,
+                   0x00, 0x0b})
+                   .has_value());
+
+  EXPECT_FALSE(findContractMetadata(std::vector<uint8_t>{0x00}).has_value());
+}
+
+TEST(EVMBytecode, KeepsTheTrailerWhenStrippingIsDisabled) {
+  BytecodeLoadOptions Options;
+  Options.StripMetadata = false;
+  auto Loaded =
+      decodeBytecodeInput("6000a164736f6c634300081e000a", "metadata.hex",
+                          Options);
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  EXPECT_FALSE(Loaded->MetadataStripped);
+  EXPECT_EQ(Loaded->Code.size(), 14u);
+  // Reading the trailer and removing it are separate decisions, so what it
+  // says about the build survives either way.
+  ASSERT_TRUE(Loaded->Metadata.has_value());
+  EXPECT_EQ(Loaded->Metadata->compilerVersion(), "0.8.30");
+}
+
+TEST(EVMBytecode, DescribesEveryTabulatedMetadataField) {
+  for (const MetadataFieldInfo &Info : metadataFieldInfos()) {
+    SCOPED_TRACE(Info.Key.str());
+    EXPECT_EQ(&getMetadataFieldInfo(Info.ID), &Info);
+    EXPECT_EQ(findMetadataField(Info.Key), &Info);
+    EXPECT_FALSE(Info.Summary.empty());
+  }
+  EXPECT_EQ(findMetadataField("nothing-claims-this"), nullptr);
+
+  for (const MetadataLanguageInfo &Info : metadataLanguageInfos())
+    EXPECT_EQ(metadataLanguageName(Info.ID), Info.Name);
+}
+
 } // namespace
 } // namespace neverd::evm

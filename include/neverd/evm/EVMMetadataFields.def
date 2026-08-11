@@ -1,0 +1,59 @@
+//===- EVMMetadataFields.def - The compiler metadata trailer ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_METADATA_LANGUAGE(ID, NAME, SUMMARY)
+// EVM_METADATA_FIELD(ID, KEY, KIND, LANGUAGE, NAME, SUMMARY)
+//
+// A compiler appends a CBOR map and its two-byte length to the code it emits.
+// Nothing on chain reads it, so it is the one part of a deployed contract that
+// still says who built it: which compiler, which version, and where the source
+// it was built from can be fetched.
+//
+// KEY is the map key exactly as the compiler writes it. KIND says how to read
+// the value:
+//
+//   CompilerVersion  a three-byte release triple, or the text a prerelease
+//                    build writes instead
+//   SourceHash       a content address of the source metadata document
+//   Flag             a boolean the compiler sets about the build itself
+//
+// LANGUAGE is the language a field identifies, and Unknown for the fields every
+// language shares. A trailer proves what it contains and nothing more: a
+// contract can be compiled with metadata suppressed, and the bytes can be
+// appended by anything, so a recovered version names a claim the code makes
+// about itself.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_METADATA_LANGUAGE
+#define EVM_METADATA_LANGUAGE(ID, NAME, SUMMARY)
+#endif
+
+#ifndef EVM_METADATA_FIELD
+#define EVM_METADATA_FIELD(ID, KEY, KIND, LANGUAGE, NAME, SUMMARY)
+#endif
+
+EVM_METADATA_LANGUAGE(Unknown, "unknown",
+                      "no tabulated compiler field was present")
+EVM_METADATA_LANGUAGE(Solidity, "solidity", "the Solidity compiler")
+EVM_METADATA_LANGUAGE(Vyper, "vyper", "the Vyper compiler")
+
+EVM_METADATA_FIELD(Solc, "solc", CompilerVersion, Solidity, "solc",
+                   "the Solidity compiler release the contract was built with")
+EVM_METADATA_FIELD(Vyper, "vyper", CompilerVersion, Vyper, "vyper",
+                   "the Vyper compiler release the contract was built with")
+EVM_METADATA_FIELD(IPFS, "ipfs", SourceHash, Unknown, "ipfs",
+                   "the IPFS multihash of the source metadata document")
+EVM_METADATA_FIELD(Swarm0, "bzzr0", SourceHash, Unknown, "bzzr0",
+                   "the Swarm hash written by compilers before 0.5.9")
+EVM_METADATA_FIELD(Swarm1, "bzzr1", SourceHash, Unknown, "bzzr1",
+                   "the Swarm hash written by later compilers")
+EVM_METADATA_FIELD(Experimental, "experimental", Flag, Unknown, "experimental",
+                   "an experimental language feature was enabled, which makes "
+                   "the metadata document itself unreliable")
+
+#undef EVM_METADATA_FIELD
+#undef EVM_METADATA_LANGUAGE

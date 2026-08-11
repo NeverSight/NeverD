@@ -35,6 +35,18 @@ La entrada es un programa Solana ELF64 little-endian (`.so`).
 | v3 | program headers strict, sin relocation dinámica | `EM_BPF` | syscalls/calls estáticos, JMP32, CALLX por destino, bytecode en `0x100000000`, rodata en cero | formato actual del toolchain desplegado |
 | v4 | program headers strict, sin relocation dinámica | `EM_BPF` | ISA v3 y contrato de memory mapping alineado | upstream `sbpf` actual; varía por cluster |
 
+Un número de versión no es en sí una especificación, por lo que
+`SBFVersionFeatures.def` contiene los cambios de comportamiento y la tabla de
+versiones los compone. Cada registro lleva la propuesta SIMD que aceptó el
+cambio y el predicado que `anza-xyz/sbpf` expone para la misma pregunta, porque
+varias propuestas aterrizan en una versión y una propuesta cambia varias cosas
+sin relación: SIMD-0173 mueve las clases de instrucciones de memoria y retira
+`lddw`, mientras que SIMD-0174 añade de forma independiente la clase PQR en la
+misma versión. Registrar la propuesta en la característica y no en la versión
+es lo que mantiene una versión recuperada trazable hasta el documento que la
+decidió, y es la razón de que las dos reglas de `callx` sean características
+distintas: SIMD-0173 lee el registro fuente y SIMD-0377 el de destino.
+
 Los cambios v2 no pasan intencionadamente a v3. Los feature checks son explícitos,
 no suposiciones `version >= N`. Strict, por defecto, rechaza headers, rangos o
 alineaciones mal formados, secciones legacy writable no soportadas, continuations,
@@ -274,7 +286,7 @@ recuperación de strings y backends LLVM/C/Rust. No existen copias separadas de
 text o rodata que puedan divergir de la semántica del loader.
 
 Los registros cerrados viven en `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFVersionFeatures.def`, `SBFProtocolLimits.def`,
 `SBFSyscalls.def`, `SBFSyscallMemory.def`, `SBFCPIABI.def`,
 `SBFProgramInstructions.def` y
 `SBFUpstreamSources.def`. Los diagnósticos y nombres de bloque LLVM de un solo
@@ -296,8 +308,8 @@ inmutabilizar la imagen.
 | Manifest ELF oficial | 20/20 artefactos de `sbpf/tests/elfs` |
 | Matriz ISA | los 256 encodings para v0-v4, 1,280 celdas, más límites del verifier |
 | Ejecución diferencial | oracle de bytes raw frente a LLVM ORC, C11 y Rust stable, incluidos memory/fault/syscall trace |
-| Agregado integrado | 124/124 casos en 13 binarios de prueba |
-| ASan + UBSan | 121/121 casos core en 12 binarios sin informes |
+| Agregado integrado | 145/145 casos en 14 binarios de prueba |
+| ASan + UBSan | 141/141 casos core en 13 binarios sin informes |
 
 La auditoría fija Anza `sbpf` en
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` y Agave en

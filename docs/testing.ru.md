@@ -330,11 +330,11 @@ coverage. Полный aggregate включает `NeverDSBFProgramImageTests`,
 `NeverDSBFMalformedCorpusTests`, `NeverDSBFISAConformanceTests`,
 `NeverDSBFUpstreamConformanceTests`, `NeverDSBFLLVMDifferentialTests` и
 `NeverDSBFSourceDifferentialTests`, а также targets metadata, loader, analyzer,
-semantic, emitter и integration. Интегрированный профиль проходит 124/124
-случаев в 13 бинарниках.
+semantic, emitter и integration. Интегрированный профиль проходит 145/145
+случаев в 14 бинарниках.
 
 Sanitizer-профиль собирается отдельно в `build-sbf-asan-ubsan`. Он проходит
-121/121 core-случаев в 12 бинарниках без отчётов ASan или UBSan; integration
+141/141 core-случаев в 13 бинарниках без отчётов ASan или UBSan; integration
 остаётся в интегрированной LLVM-сборке, поскольку prebuilt package не содержит
 нужный fork-only header.
 

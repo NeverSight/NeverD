@@ -34,6 +34,16 @@ version/opcode/syscall/relocation/protocol metadata は `include/neverd/sbf/` �
 | v3 | strict program header、dynamic relocation なし | `EM_BPF` | static syscall/call、JMP32、destination-register CALLX、bytecode `0x100000000`、rodata zero | 現行 deploy toolchain format |
 | v4 | strict program header、dynamic relocation なし | `EM_BPF` | v3 ISA と aligned memory-mapping contract | upstream `sbpf` 現行。cluster availability は異なり得る |
 
+version 番号それ自体は仕様ではないため、`SBFVersionFeatures.def` が振る舞いの変更
+を保持し、version テーブルがそれらを合成します。各レコードはその変更を受理した
+SIMD 提案と、`anza-xyz/sbpf` が同じ問いに対して公開している述語を持ちます。複数
+の提案が 1 つの version に着地し、1 つの提案が無関係な複数の点を変えるためです。
+SIMD-0173 は memory instruction class を移すと同時に `lddw` を廃止し、SIMD-0174
+は同じ version で独立に PQR class を追加します。提案を version ではなく feature
+に記録することが、復元した version の主張をそれを決めた文書まで辿れるようにし、
+2 つの `callx` 規則を別々の feature にしている理由でもあります。SIMD-0173 は
+source register を、SIMD-0377 は destination register を読みます。
+
 v2 の変更は v3 に漏れません。feature check は明示的で、`version >= N` とは推測
 しません。既定の strict mode は malformed header/range/alignment、unsupported
 writable legacy section、invalid continuation/register/frame-pointer write/branch、
@@ -252,7 +262,7 @@ interpreter、string recovery、LLVM/C/Rust backend 共通の source of truth �
 loader semantics とずれ得る独立した text/rodata copy はありません。
 
 閉じた record は `SBFVersions.def`、`SBFOpcodes.def`、
-`SBFRelocations.def`、`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、
+`SBFRelocations.def`、`SBFArgumentRegisters.def`、`SBFVersionFeatures.def`, `SBFProtocolLimits.def`、
 `SBFSyscalls.def`、`SBFSyscallMemory.def`、`SBFCPIABI.def`、
 `SBFProgramInstructions.def`、
 `SBFUpstreamSources.def` に置きます。一度しか使わない diagnostic と LLVM block
@@ -272,8 +282,8 @@ image を無効にしません。legacy v0-v2 は `.text`、`.rodata`、`.data.r
 | official ELF manifest | `sbpf/tests/elfs` の 20/20 artifact |
 | ISA matrix | v0-v4 ごとに全 256 encoding、合計 1,280 cell と verifier boundary |
 | differential execution | raw-byte oracle と LLVM ORC/C11/stable Rust の memory/fault/syscall trace 比較 |
-| integrated aggregate | 13 test binary の 124/124 case |
-| ASan + UBSan | 12 core binary の 121/121 case、report なし |
+| integrated aggregate | 14 test binary の 145/145 case |
+| ASan + UBSan | 13 core binary の 141/141 case、report なし |
 
 監査 pin は Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` と Agave
