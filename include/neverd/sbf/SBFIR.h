@@ -9,8 +9,10 @@
 
 #include "neverd/Common.h"
 #include "neverd/sbf/Opcodes.h"
+#include "neverd/sbf/ProgramImage.h"
 #include "neverd/sbf/SBFConstants.h"
 #include "neverd/sbf/SBFMetadata.h"
+#include "neverd/sbf/Semantics.h"
 #include "neverd/sbf/Syscalls.h"
 
 #include <array>
@@ -96,9 +98,6 @@ struct LowIR {
   std::vector<Diagnostic> Diagnostics;
 };
 
-enum class ResultExtension : uint8_t { None, Zero32, Sign32 };
-enum class ImmediateExtension : uint8_t { Sign32, Zero32, Full64 };
-
 struct MedInstruction {
   size_t Slot = 0;
   va_t Address = 0;
@@ -108,11 +107,10 @@ struct MedInstruction {
   uint8_t Width = 0;
   uint8_t Dst = 0;
   uint8_t Src = 0;
+  uint8_t SlotWidth = 1;
   int16_t Offset = 0;
   uint64_t Immediate = 0;
-  ImmediateExtension ImmediateMode = ImmediateExtension::Sign32;
-  ResultExtension Extension = ResultExtension::None;
-  bool SwapOperands = false;
+  SemanticTraits Semantics;
   std::optional<size_t> BranchTarget;
   CallKind Call = CallKind::None;
   std::optional<size_t> CallTarget;
@@ -190,11 +188,13 @@ struct HighIR {
 
 struct SBFProgram {
   Metadata Image;
-  std::vector<uint8_t> Text;
-  std::vector<uint8_t> Rodata;
+  SBFVMConfig Config;
+  ProgramImage ExecutableImage;
   LowIR Low;
   MedIR Med;
   HighIR High;
+
+  llvm::ArrayRef<uint8_t> text() const { return ExecutableImage.text(); }
 };
 
 } // namespace neverd::sbf

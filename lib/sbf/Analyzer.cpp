@@ -9,15 +9,15 @@
 #include "neverd/sbf/Relocations.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
-#include <array>
-#include <cctype>
+#include <bit>
 #include <deque>
-#include <limits>
 #include <map>
 #include <set>
 
@@ -32,45 +32,6 @@ llvm::Error analysisError(size_t Slot, va_t Address, llvm::Twine Message) {
       llvm::inconvertibleErrorCode());
 }
 
-bool isStore(const OpcodeInfo &Info) { return Info.Op == Operation::Store; }
-
-bool isALUResult(const OpcodeInfo &Info) {
-  switch (Info.Op) {
-  case Operation::LoadImm:
-  case Operation::Load:
-  case Operation::Add:
-  case Operation::Sub:
-  case Operation::Mul:
-  case Operation::UHighMul:
-  case Operation::SHighMul:
-  case Operation::UDiv:
-  case Operation::URem:
-  case Operation::SDiv:
-  case Operation::SRem:
-  case Operation::Or:
-  case Operation::And:
-  case Operation::Xor:
-  case Operation::LSh:
-  case Operation::RSh:
-  case Operation::ARSh:
-  case Operation::Neg:
-  case Operation::Mov:
-  case Operation::EndianLE:
-  case Operation::EndianBE:
-  case Operation::HighOr:
-    return true;
-  default:
-    return false;
-  }
-}
-
-bool isImmediateDivision(const OpcodeInfo &Info) {
-  if (Info.Form != OperandForm::DstImm)
-    return false;
-  return Info.Op == Operation::UDiv || Info.Op == Operation::URem ||
-         Info.Op == Operation::SDiv || Info.Op == Operation::SRem;
-}
-
 size_t nextInstructionSlot(const LowInstruction &Instruction) {
   return Instruction.Slot + Instruction.SlotWidth;
 }
@@ -80,124 +41,6 @@ const RelocationEntry *findRelocation(const BinaryImage &Image, va_t Address) {
     if (Relocation.Address == Address)
       return &Relocation;
   return nullptr;
-}
-
-llvm::Error relocationError(const RelocationEntry &Relocation,
-                            llvm::Twine Message) {
-  return llvm::make_error<llvm::StringError>(
-      (llvm::Twine("sbf: relocation ") + llvm::Twine(Relocation.Type) +
-       " at 0x" + llvm::utohexstr(Relocation.Address) + ": " + Message)
-          .str(),
-      llvm::inconvertibleErrorCode());
-}
-
-uint32_t legacyInternalCallHash(size_t TargetSlot, llvm::StringRef Name) {
-  if (Name == kEntrySymbolName)
-    return hashSymbolName(Name);
-  std::array<uint8_t, sizeof(uint64_t)> Bytes{};
-  llvm::support::endian::write64le(Bytes.data(), TargetSlot);
-  return hashSymbolName(llvm::StringRef(
-      reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
-}
-
-llvm::Error applyLegacyTextRelocations(const BinaryImage &Image,
-                                       SBFProgram &Program) {
-  const va_t TextAddress = Program.Image.TextVM.Address;
-  const uint64_t TextSize = Program.Text.size();
-  for (const RelocationEntry &Relocation : Image.Relocations) {
-    const RelocationInfo *Info = getRelocationInfo(Relocation.Type);
-    if (!Info)
-      return relocationError(Relocation, "unsupported relocation type");
-
-    if (Relocation.Address < TextAddress ||
-        Relocation.Address - TextAddress >= TextSize)
-      continue;
-    const uint64_t TextOffset = Relocation.Address - TextAddress;
-    if (TextOffset % kInstructionSize != 0)
-      return relocationError(Relocation,
-                             "text relocation is not instruction-aligned");
-    if (TextSize - TextOffset < kInstructionSize)
-      return relocationError(Relocation, "text relocation is out of bounds");
-
-    if (Info->ID == Relocation::Call32) {
-      const OpcodeInfo *Opcode =
-          getOpcodeInfo(Program.Text[TextOffset], Program.Image.Version);
-      if (!Opcode || Opcode->ID != Opcode::CALL_IMM)
-        return relocationError(Relocation,
-                               "R_BPF_64_32 does not reference a CALL");
-      if (Relocation.SymbolName.empty())
-        return relocationError(Relocation,
-                               "R_BPF_64_32 has no resolvable symbol name");
-      uint32_t Key = hashSymbolName(Relocation.SymbolName);
-      if (const Symbol *Symbol = Image.findSymbol(Relocation.SymbolName)) {
-        if (Symbol->IsFunc && Symbol->Addr >= TextAddress &&
-            Symbol->Addr - TextAddress < TextSize &&
-            (Symbol->Addr - TextAddress) % kInstructionSize == 0) {
-          const size_t TargetSlot = static_cast<size_t>(
-              (Symbol->Addr - TextAddress) / kInstructionSize);
-          Key = legacyInternalCallHash(TargetSlot, Symbol->Name);
-        }
-      }
-      llvm::support::endian::write32le(
-          Program.Text.data() + TextOffset + kImmediateOffset, Key);
-      continue;
-    }
-
-    if (TextSize - TextOffset < 2 * kInstructionSize)
-      return relocationError(Relocation,
-                             "64-bit text relocation is missing an LDDW slot");
-    const OpcodeInfo *Opcode =
-        getOpcodeInfo(Program.Text[TextOffset], Program.Image.Version);
-    if (!Opcode || Opcode->ID != Opcode::LDDW ||
-        Program.Text[TextOffset + kInstructionSize + kOpcodeOffset] != 0)
-      return relocationError(Relocation,
-                             "64-bit text relocation does not reference LDDW");
-
-    const uint32_t Low = llvm::support::endian::read32le(
-        Program.Text.data() + TextOffset + kImmediateOffset);
-    const uint32_t High = llvm::support::endian::read32le(
-        Program.Text.data() + TextOffset + kInstructionSize + kImmediateOffset);
-    uint64_t Value =
-        static_cast<uint64_t>(Low) | (static_cast<uint64_t>(High) << 32);
-
-    if (Info->ID == Relocation::Abs64) {
-      const Symbol *Symbol = Image.findSymbol(Relocation.SymbolName);
-      if (!Symbol)
-        return relocationError(Relocation,
-                               "R_BPF_64_64 has no resolvable symbol");
-      const uint64_t RawSymbol = Symbol->Addr >= kBytecodeStart
-                                     ? Symbol->Addr - kBytecodeStart
-                                     : Symbol->Addr;
-      if (RawSymbol > std::numeric_limits<uint64_t>::max() - Low)
-        return relocationError(Relocation, "relocated address overflows");
-      Value = RawSymbol + Low;
-      if (Value < kMemoryRegionSize) {
-        if (Value > std::numeric_limits<uint64_t>::max() - kBytecodeStart)
-          return relocationError(Relocation, "relocated address overflows");
-        Value += kBytecodeStart;
-      }
-    } else if (Info->ID == Relocation::Relative64) {
-      if (Value == 0)
-        return relocationError(Relocation,
-                               "R_BPF_64_RELATIVE has a zero value");
-      if (Value < kMemoryRegionSize) {
-        if (Value > std::numeric_limits<uint64_t>::max() - kBytecodeStart)
-          return relocationError(Relocation, "relative address overflows");
-        Value += kBytecodeStart;
-      }
-    } else {
-      return relocationError(Relocation,
-                             "relocation cannot be applied to program text");
-    }
-
-    llvm::support::endian::write32le(Program.Text.data() + TextOffset +
-                                         kImmediateOffset,
-                                     static_cast<uint32_t>(Value));
-    llvm::support::endian::write32le(Program.Text.data() + TextOffset +
-                                         kInstructionSize + kImmediateOffset,
-                                     static_cast<uint32_t>(Value >> 32));
-  }
-  return llvm::Error::success();
 }
 
 const Symbol *findFunctionSymbol(const BinaryImage &Image, va_t Address) {
@@ -238,11 +81,13 @@ struct DecodeContext {
 
 llvm::Error decodeInstructions(DecodeContext &Context) {
   LowIR &Low = Context.Program.Low;
-  const std::vector<uint8_t> &Text = Context.Program.Text;
+  const llvm::ArrayRef<uint8_t> Text = Context.Program.text();
   if (Text.empty())
     return Context.report(0, "program text is empty");
   if (Text.size() % kInstructionSize != 0)
-    return Context.report(0, "program length is not a multiple of 8 bytes");
+    return Context.report(0,
+                          llvm::Twine("program length is not a multiple of ") +
+                              llvm::Twine(kInstructionSize) + " bytes");
   const size_t Count = Text.size() / kInstructionSize;
   if (Count > kMaxInstructions)
     return Context.report(0, "program exceeds the SBF instruction limit");
@@ -291,17 +136,18 @@ llvm::Error decodeInstructions(DecodeContext &Context) {
             llvm::support::endian::read32le(Continuation + kImmediateOffset);
         Instruction.Immediate = static_cast<uint64_t>(static_cast<uint32_t>(
                                     Instruction.RawImmediate)) |
-                                (static_cast<uint64_t>(High) << 32);
-        Instruction.SlotWidth = 2;
+                                (static_cast<uint64_t>(High) << kWordBitWidth);
+        Instruction.SlotWidth = kLDDWSlotCount;
       }
     }
 
     if (Instruction.Src >= kRegisterCount) {
-      if (llvm::Error Error =
-              Context.report(Slot, "source register is outside r0-r10"))
+      if (llvm::Error Error = Context.report(
+              Slot, llvm::Twine("source register is outside r0-r") +
+                        llvm::Twine(kRegisterCount - 1)))
         return Error;
     }
-    const bool Store = isStore(*Instruction.Info);
+    const bool Store = Instruction.Info->writesMemory();
     const bool ManualFrameBump =
         Instruction.Info->ID == Opcode::ADD64_IMM &&
         versionHasFeature(Low.TheVersion, VersionFeature::ManualStackFrames);
@@ -309,9 +155,12 @@ llvm::Error decodeInstructions(DecodeContext &Context) {
         (Instruction.Dst == kFramePointerRegister && !Store &&
          !ManualFrameBump)) {
       if (llvm::Error Error = Context.report(
-              Slot, Instruction.Dst == kFramePointerRegister
-                        ? "instruction cannot write frame pointer r10"
-                        : "destination register is outside r0-r10"))
+              Slot,
+              Instruction.Dst == kFramePointerRegister
+                  ? llvm::Twine("instruction cannot write frame pointer r") +
+                        llvm::Twine(kFramePointerRegister)
+                  : llvm::Twine("destination register is outside r0-r") +
+                        llvm::Twine(kRegisterCount - 1)))
         return Error;
     }
     if (ManualFrameBump && Instruction.Dst == kFramePointerRegister &&
@@ -319,10 +168,15 @@ llvm::Error decodeInstructions(DecodeContext &Context) {
                 static_cast<int32_t>(kDynamicStackFrameAlignment) !=
             0) {
       if (llvm::Error Error = Context.report(
-              Slot, "dynamic stack-frame adjustment is not 64-byte aligned"))
+              Slot, llvm::Twine("dynamic stack-frame adjustment is not ") +
+                        llvm::Twine(kDynamicStackFrameAlignment) +
+                        "-byte aligned"))
         return Error;
     }
-    if (isImmediateDivision(*Instruction.Info) &&
+    const SemanticTraits Traits =
+        semanticTraits(*Instruction.Info, Low.TheVersion);
+    if (Instruction.Info->Form == OperandForm::DstImm &&
+        hasFaultPolicy(Traits.Faults, FaultPolicy::DivideByZero) &&
         Instruction.RawImmediate == 0) {
       if (llvm::Error Error =
               Context.report(Slot, "immediate division or remainder by zero"))
@@ -340,23 +194,25 @@ llvm::Error decodeInstructions(DecodeContext &Context) {
     }
     if ((Instruction.Info->Op == Operation::EndianLE ||
          Instruction.Info->Op == Operation::EndianBE) &&
-        Instruction.RawImmediate != 16 && Instruction.RawImmediate != 32 &&
-        Instruction.RawImmediate != 64) {
+        Instruction.RawImmediate != kHalfWordBitWidth &&
+        Instruction.RawImmediate != kWordBitWidth &&
+        Instruction.RawImmediate != kDoubleWordBitWidth) {
       if (llvm::Error Error = Context.report(
-              Slot, "endianness conversion width must be 16, 32, or 64"))
+              Slot, llvm::Twine("endianness conversion width must be ") +
+                        llvm::Twine(kHalfWordBitWidth) + ", " +
+                        llvm::Twine(kWordBitWidth) + ", or " +
+                        llvm::Twine(kDoubleWordBitWidth)))
         return Error;
     }
 
     if (Instruction.Info->ID == Opcode::CALL_REG) {
-      int64_t Register = Instruction.RawImmediate;
-      if (versionHasFeature(Low.TheVersion, VersionFeature::CallXSource))
-        Register = Instruction.Src;
-      else if (versionHasFeature(Low.TheVersion,
-                                 VersionFeature::CallXDestination))
-        Register = Instruction.Dst;
+      const int64_t Register =
+          callxRegisterIndex(Low.TheVersion, Instruction.Dst, Instruction.Src,
+                             Instruction.RawImmediate);
       if (Register < 0 || Register >= kFramePointerRegister) {
-        if (llvm::Error Error =
-                Context.report(Slot, "CALLX register must be in r0-r9"))
+        if (llvm::Error Error = Context.report(
+                Slot, llvm::Twine("CALLX register must be in r0-r") +
+                          llvm::Twine(kFramePointerRegister - 1)))
           return Error;
       }
       Instruction.Call = CallKind::Indirect;
@@ -364,7 +220,7 @@ llvm::Error decodeInstructions(DecodeContext &Context) {
     }
 
     Low.Instructions.push_back(std::move(Instruction));
-    if (Low.Instructions.back().SlotWidth == 2) {
+    if (Low.Instructions.back().SlotWidth == kLDDWSlotCount) {
       ++Slot;
       const uint8_t *ContinuationBytes = Text.data() + Slot * kInstructionSize;
       LowInstruction Continuation;
@@ -413,6 +269,12 @@ llvm::Error resolveControlFlow(DecodeContext &Context) {
         Instruction.ResolvedName = Instruction.Syscall
                                        ? Instruction.Syscall->Name.str()
                                        : kUnknownSyscallName.str();
+        if (!Instruction.Syscall)
+          if (llvm::Error Error = Context.report(
+                  Instruction.Slot,
+                  "static syscall hash is absent from the audited runtime ABI",
+                  DiagnosticSeverity::Warning))
+            return Error;
       } else if (Instruction.Src == 1) {
         const int64_t Target = static_cast<int64_t>(Instruction.Slot) + 1 +
                                static_cast<int64_t>(Instruction.RawImmediate);
@@ -458,6 +320,12 @@ llvm::Error resolveControlFlow(DecodeContext &Context) {
       Instruction.SyscallHash = hashSymbolName(Relocation->SymbolName);
       Instruction.Syscall = getSyscallInfo(Instruction.SyscallHash);
       Instruction.ResolvedName = Relocation->SymbolName;
+      if (!Instruction.Syscall)
+        if (llvm::Error Error = Context.report(
+                Instruction.Slot,
+                "legacy CALL relocation names an unaudited runtime syscall",
+                DiagnosticSeverity::Warning))
+          return Error;
       continue;
     }
 
@@ -480,7 +348,7 @@ llvm::Error resolveControlFlow(DecodeContext &Context) {
       if (!Symbol.IsFunc)
         continue;
       const auto Target = addressToSlot(Context.Program.Image, Symbol.Addr);
-      if (!Target || legacyInternalCallHash(*Target, Symbol.Name) != Hash)
+      if (!Target || legacyFunctionKey(*Target, Symbol.Name) != Hash)
         continue;
       if (HashedTarget && *HashedTarget != *Target) {
         HashCollision = true;
@@ -634,37 +502,6 @@ void buildCFG(LowIR &Low) {
   }
 }
 
-ResultExtension resultExtension(const LowInstruction &Instruction,
-                                Version Version) {
-  if (!Instruction.Info || Instruction.Info->Width != 32 ||
-      !isALUResult(*Instruction.Info))
-    return ResultExtension::None;
-  if (Instruction.Info->ID == Opcode::MOV32_REG &&
-      versionHasFeature(Version, VersionFeature::ExplicitSignExtension))
-    return ResultExtension::Sign32;
-  if ((Instruction.Info->Op == Operation::Add ||
-       Instruction.Info->Op == Operation::Sub ||
-       Instruction.Info->Op == Operation::Mul) &&
-      !versionHasFeature(Version, VersionFeature::ExplicitSignExtension))
-    return ResultExtension::Sign32;
-  return ResultExtension::Zero32;
-}
-
-ImmediateExtension immediateExtension(const LowInstruction &Instruction,
-                                      Version Version) {
-  if (!Instruction.Info)
-    return ImmediateExtension::Sign32;
-  if (Instruction.Info->ID == Opcode::LDDW)
-    return ImmediateExtension::Full64;
-  if (versionHasFeature(Version, VersionFeature::PQR) &&
-      (Instruction.Info->Op == Operation::UHighMul ||
-       Instruction.Info->Op == Operation::UDiv ||
-       Instruction.Info->Op == Operation::URem ||
-       Instruction.Info->Op == Operation::HighOr))
-    return ImmediateExtension::Zero32;
-  return ImmediateExtension::Sign32;
-}
-
 void buildMedIR(SBFProgram &Program) {
   Program.Med.TheVersion = Program.Low.TheVersion;
   for (const LowInstruction &Instruction : Program.Low.Instructions) {
@@ -679,29 +516,17 @@ void buildMedIR(SBFProgram &Program) {
     Med.Width = Instruction.Info->Width;
     Med.Dst = Instruction.Dst;
     Med.Src = Instruction.Src;
+    Med.SlotWidth = Instruction.SlotWidth;
     Med.Offset = Instruction.Offset;
     Med.Immediate = Instruction.Immediate;
-    Med.ImmediateMode = immediateExtension(Instruction, Program.Low.TheVersion);
-    Med.Extension = resultExtension(Instruction, Program.Low.TheVersion);
-    Med.SwapOperands = Instruction.Info->Op == Operation::Sub &&
-                       Instruction.Info->Form == OperandForm::DstImm &&
-                       versionHasFeature(Program.Low.TheVersion,
-                                         VersionFeature::SwapSubImmediate);
+    Med.Semantics = semanticTraits(*Instruction.Info, Program.Low.TheVersion);
     Med.BranchTarget = Instruction.BranchTarget;
     Med.Call = Instruction.Call;
     Med.CallTarget = Instruction.CallTarget;
     Med.SyscallHash = Instruction.SyscallHash;
     Med.Syscall = Instruction.Syscall;
-    if (Instruction.Info->ID == Opcode::CALL_REG) {
-      if (versionHasFeature(Program.Low.TheVersion,
-                            VersionFeature::CallXSource))
-        Med.CallRegister = Instruction.CallRegister;
-      else if (versionHasFeature(Program.Low.TheVersion,
-                                 VersionFeature::CallXDestination))
-        Med.CallRegister = Instruction.CallRegister;
-      else
-        Med.CallRegister = Instruction.CallRegister;
-    }
+    if (Instruction.Info->ID == Opcode::CALL_REG)
+      Med.CallRegister = Instruction.CallRegister;
     Program.Med.Instructions.push_back(std::move(Med));
   }
   for (const BasicBlock &Block : Program.Low.Blocks) {
@@ -729,6 +554,14 @@ RegisterValue mergeValue(const std::vector<const MedBlock *> &Predecessors,
   return Result;
 }
 
+uint64_t normalizeDataflowResult(const MedInstruction &Instruction,
+                                 uint64_t Value) {
+  if (Instruction.Width == kWordBitWidth)
+    return extendALU32Result(static_cast<uint32_t>(Value),
+                             Instruction.Semantics.Result);
+  return Value;
+}
+
 void runRegisterDataflow(SBFProgram &Program) {
   if (Program.Med.Blocks.empty())
     return;
@@ -744,7 +577,8 @@ void runRegisterDataflow(SBFProgram &Program) {
       break;
     }
   Program.Med.Blocks[EntryBlock].Inputs[kFramePointerRegister] = {
-      RegisterValue::Kind::StackAddress, kStackStart, 0};
+      RegisterValue::Kind::StackAddress,
+      initialFramePointer(Program.Low.TheVersion, Program.Config), 0};
   const size_t IterationLimit = Program.Med.Blocks.size() * 4 + 1;
   for (size_t Iteration = 0; Iteration < IterationLimit; ++Iteration) {
     bool Changed = false;
@@ -772,29 +606,63 @@ void runRegisterDataflow(SBFProgram &Program) {
           State[Instruction.Dst] = {RegisterValue::Kind::Constant, Value, 0};
         };
         if (Instruction.Op == Operation::LoadImm) {
-          Constant(Instruction.Immediate);
+          Constant(normalizeDataflowResult(
+              Instruction,
+              normalizeImmediate(Instruction.Immediate,
+                                 Instruction.Semantics.Immediate)));
         } else if (Instruction.Op == Operation::Mov) {
-          if (Instruction.Form == OperandForm::DstImm)
-            Constant(Instruction.Immediate);
-          else
-            State[Instruction.Dst] = State[Instruction.Src];
+          if (Instruction.Form == OperandForm::DstImm) {
+            Constant(normalizeDataflowResult(
+                Instruction,
+                normalizeImmediate(Instruction.Immediate,
+                                   Instruction.Semantics.Immediate)));
+          } else {
+            const RegisterValue Source = State[Instruction.Src];
+            if (Source.ValueKind == RegisterValue::Kind::Constant)
+              Constant(normalizeDataflowResult(Instruction, Source.Value));
+            else if (Instruction.Width == kDoubleWordBitWidth)
+              State[Instruction.Dst] = Source;
+            else
+              State[Instruction.Dst] = {};
+          }
         } else if ((Instruction.Op == Operation::Add ||
                     Instruction.Op == Operation::Sub) &&
                    Instruction.Form == OperandForm::DstImm) {
           RegisterValue &Value = State[Instruction.Dst];
-          const int64_t Delta = static_cast<int64_t>(Instruction.Immediate);
-          if (Value.ValueKind == RegisterValue::Kind::Constant)
-            Value.Value = Instruction.Op == Operation::Add
-                              ? Value.Value + Instruction.Immediate
-                              : Value.Value - Instruction.Immediate;
-          else if (Value.ValueKind == RegisterValue::Kind::StackAddress ||
-                   Value.ValueKind == RegisterValue::Kind::RodataAddress)
-            Value.Offset += Instruction.Op == Operation::Add ? Delta : -Delta;
-          else
+          const uint64_t Immediate = normalizeImmediate(
+              Instruction.Immediate, Instruction.Semantics.Immediate);
+          if (Value.ValueKind == RegisterValue::Kind::Constant) {
+            const uint64_t ArithmeticResult =
+                Instruction.Op == Operation::Add     ? Value.Value + Immediate
+                : Instruction.Semantics.SwapOperands ? Immediate - Value.Value
+                                                     : Value.Value - Immediate;
+            Value.Value =
+                normalizeDataflowResult(Instruction, ArithmeticResult);
+          } else if ((Value.ValueKind == RegisterValue::Kind::StackAddress ||
+                      Value.ValueKind == RegisterValue::Kind::RodataAddress) &&
+                     Instruction.Width == kDoubleWordBitWidth &&
+                     !Instruction.Semantics.SwapOperands) {
+            const int64_t Delta = std::bit_cast<int64_t>(Immediate);
+            int64_t NewOffset = 0;
+            const bool Overflow =
+                Instruction.Op == Operation::Add
+                    ? llvm::AddOverflow(Value.Offset, Delta, NewOffset)
+                    : llvm::SubOverflow(Value.Offset, Delta, NewOffset);
+            if (Overflow)
+              Value = {};
+            else
+              Value.Offset = NewOffset;
+          } else {
             Value = {};
-        } else if (Instruction.Op == Operation::Load ||
-                   (isALUResult(*getOpcodeInfo(Instruction.SourceOpcode)) &&
-                    Instruction.Op != Operation::HighOr)) {
+          }
+        } else if (Instruction.Op == Operation::HighOr &&
+                   State[Instruction.Dst].ValueKind ==
+                       RegisterValue::Kind::Constant) {
+          State[Instruction.Dst].Value |=
+              static_cast<uint64_t>(
+                  static_cast<uint32_t>(Instruction.Immediate))
+              << kWordBitWidth;
+        } else if (Instruction.Semantics.WritesDestination) {
           State[Instruction.Dst] = {};
         }
         if (Instruction.Call != CallKind::None) {
@@ -1024,22 +892,30 @@ void recoverHighIR(const BinaryImage &Image, SBFProgram &Program) {
     }
   }
 
-  const uint64_t RodataBase = Program.Image.RodataVM.Address;
-  size_t Start = 0;
-  while (Start < Program.Rodata.size()) {
-    while (Start < Program.Rodata.size() &&
-           !std::isprint(static_cast<unsigned char>(Program.Rodata[Start])))
-      ++Start;
-    size_t End = Start;
-    while (End < Program.Rodata.size() &&
-           std::isprint(static_cast<unsigned char>(Program.Rodata[End])))
-      ++End;
-    if (End - Start >= 4)
-      Program.High.Strings.push_back(
-          {RodataBase + Start, std::string(reinterpret_cast<const char *>(
-                                               Program.Rodata.data() + Start),
-                                           End - Start)});
-    Start = End + (End < Program.Rodata.size());
+  for (const ProgramRegion &Region : Program.ExecutableImage.regions()) {
+    for (const ProgramSectionSpan &Section : Region.Sections) {
+      if (Section.Executable || Section.Offset > Region.Bytes.size() ||
+          Section.Size > Region.Bytes.size() - Section.Offset)
+        continue;
+      const llvm::ArrayRef<uint8_t> Bytes =
+          llvm::ArrayRef(Region.Bytes).slice(Section.Offset, Section.Size);
+      size_t Start = 0;
+      while (Start < Bytes.size()) {
+        while (Start < Bytes.size() &&
+               !llvm::isPrint(static_cast<char>(Bytes[Start])))
+          ++Start;
+        size_t End = Start;
+        while (End < Bytes.size() &&
+               llvm::isPrint(static_cast<char>(Bytes[End])))
+          ++End;
+        if (End - Start >= 4)
+          Program.High.Strings.push_back(
+              {Region.Address + Section.Offset + Start,
+               std::string(reinterpret_cast<const char *>(Bytes.data() + Start),
+                           End - Start)});
+        Start = End + (End < Bytes.size());
+      }
+    }
   }
   recoverRegions(Program);
 }
@@ -1123,6 +999,7 @@ llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,
         llvm::inconvertibleErrorCode());
   SBFProgram Program;
   Program.Image = *Image.SBF;
+  Program.Config = Options.VMConfig;
   if (Options.VersionOverride != Version::Auto) {
     if (!isConcreteVersion(Options.VersionOverride))
       return llvm::make_error<llvm::StringError>(
@@ -1131,22 +1008,13 @@ llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,
     Program.Image.Version = Options.VersionOverride;
   }
 
-  const Section *Text = Image.getSectionByName(kTextSectionName);
-  if (!Text)
-    Text = Image.getTextSection();
-  if (!Text)
-    return llvm::make_error<llvm::StringError>(
-        "sbf: loaded image has no executable text section",
-        llvm::inconvertibleErrorCode());
-  Program.Text = Text->Data;
-  if (Program.Image.RodataFile.Size != 0) {
-    if (const Section *Rodata = Image.getSectionByName(kRodataSectionName))
-      Program.Rodata = Rodata->Data;
-  }
+  auto ExecutableImage =
+      buildProgramImage(Image, Program.Image, Program.Config);
+  if (!ExecutableImage)
+    return ExecutableImage.takeError();
+  Program.ExecutableImage = std::move(*ExecutableImage);
   Program.Low.TheVersion = Program.Image.Version;
   Program.Low.TextAddress = Program.Image.TextVM.Address;
-  if (llvm::Error Error = applyLegacyTextRelocations(Image, Program))
-    return std::move(Error);
   if (Image.Entry < Program.Low.TextAddress ||
       (Image.Entry - Program.Low.TextAddress) % kInstructionSize != 0)
     return llvm::make_error<llvm::StringError>(
@@ -1328,7 +1196,7 @@ std::string dumpMedIR(const MedIR &IR) {
                Instruction.Form == OperandForm::BranchImm ||
                Instruction.Form == OperandForm::LDDW)
         OS << ", 0x" << llvm::utohexstr(Instruction.Immediate);
-      if (Instruction.SwapOperands)
+      if (Instruction.Semantics.SwapOperands)
         OS << " [swapped]";
       if (Instruction.BranchTarget)
         OS << " -> slot " << *Instruction.BranchTarget;

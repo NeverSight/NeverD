@@ -15,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 namespace neverd::sbf {
@@ -81,10 +82,11 @@ TEST(SBFAnalyzer, CombinesLDDWAndRetainsTheContinuationSlot) {
       << llvm::toString(Program.takeError());
   ASSERT_EQ(Program->Low.Instructions.size(), 3u);
   EXPECT_EQ(Program->Low.Instructions[0].Immediate, 0x1122334455667788ULL);
-  EXPECT_EQ(Program->Low.Instructions[0].SlotWidth, 2u);
+  EXPECT_EQ(Program->Low.Instructions[0].SlotWidth, kLDDWSlotCount);
   EXPECT_TRUE(Program->Low.Instructions[1].IsContinuation);
   ASSERT_EQ(Program->Med.Instructions.size(), 2u);
-  EXPECT_EQ(Program->Med.Instructions[0].ImmediateMode,
+  EXPECT_EQ(Program->Med.Instructions[0].SlotWidth, kLDDWSlotCount);
+  EXPECT_EQ(Program->Med.Instructions[0].Semantics.Immediate,
             ImmediateExtension::Full64);
 }
 
@@ -94,8 +96,8 @@ TEST(SBFAnalyzer, NormalizesTheNonMonotonicV2Semantics) {
       encode(Opcode::CALL_REG, 0, 7, 0, 9), encode(Opcode::EXIT)};
   auto V2 = analyze(makeImage(Version::V2, Instructions));
   ASSERT_TRUE(static_cast<bool>(V2)) << llvm::toString(V2.takeError());
-  EXPECT_EQ(V2->Med.Instructions[0].Extension, ResultExtension::Sign32);
-  EXPECT_TRUE(V2->Med.Instructions[1].SwapOperands);
+  EXPECT_EQ(V2->Med.Instructions[0].Semantics.Result, ResultExtension::Sign32);
+  EXPECT_TRUE(V2->Med.Instructions[1].Semantics.SwapOperands);
   EXPECT_EQ(V2->Low.Instructions[2].CallRegister, 7u);
 
   const auto V3Instructions = {
@@ -103,8 +105,8 @@ TEST(SBFAnalyzer, NormalizesTheNonMonotonicV2Semantics) {
       encode(Opcode::CALL_REG, 8, 0, 0, 9), encode(Opcode::EXIT)};
   auto V3 = analyze(makeImage(Version::V3, V3Instructions));
   ASSERT_TRUE(static_cast<bool>(V3)) << llvm::toString(V3.takeError());
-  EXPECT_EQ(V3->Med.Instructions[0].Extension, ResultExtension::Zero32);
-  EXPECT_FALSE(V3->Med.Instructions[1].SwapOperands);
+  EXPECT_EQ(V3->Med.Instructions[0].Semantics.Result, ResultExtension::Zero32);
+  EXPECT_FALSE(V3->Med.Instructions[1].Semantics.SwapOperands);
   EXPECT_EQ(V3->Low.Instructions[2].CallRegister, 8u);
 }
 
@@ -146,6 +148,41 @@ TEST(SBFAnalyzer, UsesTheRealEntryBlockForDataflowAndStructuring) {
   EXPECT_EQ(*If.ExitBlock, 3u);
 }
 
+TEST(SBFAnalyzer, HighOrUpdatesThePreviousDataflowValue) {
+  auto Program =
+      analyze(makeImage(Version::V2, {encode(Opcode::MOV64_IMM, 1, 0, 0, 7),
+                                      encode(Opcode::HOR64_IMM, 1, 0, 0, 1),
+                                      encode(Opcode::EXIT)}));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ASSERT_EQ(Program->Med.Blocks.size(), 1u);
+  EXPECT_EQ(Program->Med.Blocks.front().Outputs[1].ValueKind,
+            RegisterValue::Kind::Constant);
+  EXPECT_EQ(Program->Med.Blocks.front().Outputs[1].Value,
+            UINT64_C(0x100000007));
+}
+
+TEST(SBFAnalyzer, DataflowUsesNormalizedWidthAndVersionSemantics) {
+  auto V3 =
+      analyze(makeImage(Version::V3, {encode(Opcode::MOV32_IMM, 1, 0, 0, -1),
+                                      encode(Opcode::EXIT)}));
+  ASSERT_TRUE(static_cast<bool>(V3)) << llvm::toString(V3.takeError());
+  ASSERT_EQ(V3->Med.Blocks.size(), 1u);
+  EXPECT_EQ(V3->Med.Blocks.front().Outputs[1].ValueKind,
+            RegisterValue::Kind::Constant);
+  EXPECT_EQ(V3->Med.Blocks.front().Outputs[1].Value, UINT64_C(0xffffffff));
+
+  auto V2 =
+      analyze(makeImage(Version::V2, {encode(Opcode::MOV64_IMM, 1, 0, 0, 5),
+                                      encode(Opcode::SUB64_IMM, 1, 0, 0, 9),
+                                      encode(Opcode::EXIT)}));
+  ASSERT_TRUE(static_cast<bool>(V2)) << llvm::toString(V2.takeError());
+  ASSERT_EQ(V2->Med.Blocks.size(), 1u);
+  EXPECT_EQ(V2->Med.Blocks.front().Outputs[1].ValueKind,
+            RegisterValue::Kind::Constant);
+  EXPECT_EQ(V2->Med.Blocks.front().Outputs[1].Value, 4u);
+}
+
 TEST(SBFAnalyzer, AppliesLegacyTextRelocationsBeforeDecoding) {
   EncodedInstruction Continuation{};
   BinaryImage AddressImage =
@@ -166,10 +203,10 @@ TEST(SBFAnalyzer, AppliesLegacyTextRelocationsBeforeDecoding) {
       << llvm::toString(AddressProgram.takeError());
   const uint64_t ExpectedAddress = Target.Addr + 0x20;
   EXPECT_EQ(AddressProgram->Low.Instructions[0].Immediate, ExpectedAddress);
-  EXPECT_EQ(llvm::support::endian::read32le(AddressProgram->Text.data() +
+  EXPECT_EQ(llvm::support::endian::read32le(AddressProgram->text().data() +
                                             kImmediateOffset),
             static_cast<uint32_t>(ExpectedAddress));
-  EXPECT_EQ(llvm::support::endian::read32le(AddressProgram->Text.data() +
+  EXPECT_EQ(llvm::support::endian::read32le(AddressProgram->text().data() +
                                             kInstructionSize +
                                             kImmediateOffset),
             static_cast<uint32_t>(ExpectedAddress >> 32));
@@ -202,7 +239,7 @@ TEST(SBFAnalyzer, AppliesLegacyTextRelocationsBeforeDecoding) {
   ASSERT_EQ(CallProgram->Low.Instructions[0].Call, CallKind::Syscall);
   EXPECT_EQ(CallProgram->Low.Instructions[0].SyscallHash,
             hashSymbolName(CallRelocation.SymbolName));
-  EXPECT_EQ(llvm::support::endian::read32le(CallProgram->Text.data() +
+  EXPECT_EQ(llvm::support::endian::read32le(CallProgram->text().data() +
                                             kImmediateOffset),
             hashSymbolName(CallRelocation.SymbolName));
 
@@ -228,7 +265,7 @@ TEST(SBFAnalyzer, AppliesLegacyTextRelocationsBeforeDecoding) {
   llvm::support::endian::write64le(TargetBytes.data(), uint64_t{1});
   const uint32_t InternalHash = hashSymbolName(llvm::StringRef(
       reinterpret_cast<const char *>(TargetBytes.data()), TargetBytes.size()));
-  EXPECT_EQ(llvm::support::endian::read32le(InternalProgram->Text.data() +
+  EXPECT_EQ(llvm::support::endian::read32le(InternalProgram->text().data() +
                                             kImmediateOffset),
             InternalHash);
 
@@ -281,6 +318,40 @@ TEST(SBFAnalyzer, ResolvesAlreadyRelocatedLegacyInternalCalls) {
   EXPECT_EQ(Program->Low.Instructions.front().Call, CallKind::Internal);
   EXPECT_EQ(Program->Low.Instructions.front().CallTarget, TargetSlot);
   EXPECT_EQ(Program->Low.Instructions.front().ResolvedName, Function.Name);
+}
+
+TEST(SBFAnalyzer, DiagnosesSyscallsOutsideTheAuditedRuntimeABI) {
+  ASSERT_EQ(getSyscallInfo(0), nullptr);
+  auto Static =
+      analyze(makeImage(Version::V3, {encode(Opcode::CALL_IMM, 0, 0, 0, 0),
+                                      encode(Opcode::EXIT)}));
+  ASSERT_TRUE(static_cast<bool>(Static)) << llvm::toString(Static.takeError());
+  ASSERT_EQ(Static->Low.Instructions.front().Call, CallKind::Syscall);
+  ASSERT_EQ(Static->Low.Diagnostics.size(), 1u);
+  EXPECT_EQ(Static->Low.Diagnostics.front().Severity,
+            DiagnosticSeverity::Warning);
+  EXPECT_NE(Static->Low.Diagnostics.front().Message.find("audited runtime ABI"),
+            std::string::npos);
+
+  BinaryImage Legacy =
+      makeImage(Version::V0,
+                {encode(Opcode::CALL_IMM, 0, 0, 0, -1), encode(Opcode::EXIT)});
+  RelocationEntry UnknownRelocation;
+  UnknownRelocation.Address = kBytecodeStart;
+  UnknownRelocation.Type = static_cast<uint32_t>(Relocation::Call32);
+  UnknownRelocation.SymbolName = "custom_runtime_syscall";
+  ASSERT_EQ(findSyscallByName(UnknownRelocation.SymbolName), nullptr);
+  Legacy.Relocations.push_back(UnknownRelocation);
+
+  auto LegacyProgram = analyze(Legacy);
+  ASSERT_TRUE(static_cast<bool>(LegacyProgram))
+      << llvm::toString(LegacyProgram.takeError());
+  ASSERT_EQ(LegacyProgram->Low.Instructions.front().Call, CallKind::Syscall);
+  ASSERT_EQ(LegacyProgram->Low.Diagnostics.size(), 1u);
+  EXPECT_EQ(LegacyProgram->Low.Diagnostics.front().Severity,
+            DiagnosticSeverity::Warning);
+  EXPECT_NE(LegacyProgram->Low.Diagnostics.front().Message.find("unaudited"),
+            std::string::npos);
 }
 
 } // namespace

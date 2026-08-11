@@ -8,6 +8,7 @@
 
 #include "neverd/sbf/Analyzer.h"
 #include "neverd/sbf/Interpreter.h"
+#include "neverd/sbf/Semantics.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
@@ -21,6 +22,9 @@
 
 namespace neverd::sbf {
 namespace {
+
+constexpr std::array<Version, 5> kConcreteVersions{
+    Version::V0, Version::V1, Version::V2, Version::V3, Version::V4};
 
 using EncodedInstruction = std::array<uint8_t, kInstructionSize>;
 
@@ -76,6 +80,96 @@ analyzeProgram(Version TheVersion,
   EXPECT_TRUE(static_cast<bool>(Program))
       << (Program ? std::string() : llvm::toString(Program.takeError()));
   return Program ? std::move(*Program) : SBFProgram{};
+}
+
+TEST(SBFSemantics, NormalizesVersionedOperandsAndResults) {
+  const OpcodeInfo &UnsignedPQR = *getOpcodeInfo(Opcode::UDIV64_IMM);
+  const OpcodeInfo &SignedPQR = *getOpcodeInfo(Opcode::SDIV64_IMM);
+  const OpcodeInfo &Move32Register = *getOpcodeInfo(Opcode::MOV32_REG);
+  const OpcodeInfo &Add32Immediate = *getOpcodeInfo(Opcode::ADD32_IMM);
+  const OpcodeInfo &Load = *getOpcodeInfo(Opcode::LD_DW_REG);
+  const OpcodeInfo &HighOr = *getOpcodeInfo(Opcode::HOR64_IMM);
+  const OpcodeInfo &Store = *getOpcodeInfo(Opcode::ST_DW_REG);
+
+  EXPECT_EQ(semanticTraits(UnsignedPQR, Version::V2).Immediate,
+            ImmediateExtension::Zero32);
+  EXPECT_EQ(semanticTraits(SignedPQR, Version::V2).Immediate,
+            ImmediateExtension::Sign32);
+  EXPECT_EQ(semanticTraits(Move32Register, Version::V2).Result,
+            ResultExtension::Sign32);
+  EXPECT_EQ(semanticTraits(Move32Register, Version::V3).Result,
+            ResultExtension::Zero32);
+  EXPECT_EQ(semanticTraits(Add32Immediate, Version::V2).Result,
+            ResultExtension::Zero32);
+  EXPECT_EQ(semanticTraits(Add32Immediate, Version::V3).Result,
+            ResultExtension::Sign32);
+  EXPECT_EQ(semanticTraits(Load, Version::V3).Source,
+            OperandSourceKind::SourceRegister);
+  EXPECT_TRUE(semanticTraits(HighOr, Version::V2).WritesDestination);
+  EXPECT_FALSE(semanticTraits(Store, Version::V3).WritesDestination);
+
+  EXPECT_EQ(
+      normalizeImmediate(UINT64_C(0x80000000), ImmediateExtension::Sign32),
+      UINT64_C(0xffffffff80000000));
+  EXPECT_EQ(normalizeImmediate(UINT64_C(0xffffffff80000000),
+                               ImmediateExtension::Zero32),
+            UINT64_C(0x80000000));
+  EXPECT_EQ(extendALU32Result(UINT32_C(0x80000000), ResultExtension::Sign32),
+            UINT64_C(0xffffffff80000000));
+  EXPECT_EQ(extendALU32Result(UINT32_C(0x80000000), ResultExtension::Zero32),
+            UINT64_C(0x80000000));
+}
+
+TEST(SBFSemantics, ClassifiesEveryActiveOpcodeConsistently) {
+  for (Version TheVersion : kConcreteVersions) {
+    for (const OpcodeInfo &Info : opcodeInfos()) {
+      if (!Info.isAvailableIn(TheVersion))
+        continue;
+      SCOPED_TRACE(versionName(TheVersion).str() + ":" + Info.Mnemonic.str());
+      const SemanticTraits Traits = semanticTraits(Info, TheVersion);
+
+      const OperandSourceKind ExpectedSource =
+          Info.Form == OperandForm::CallReg
+              ? OperandSourceKind::VersionedCallRegister
+          : Info.usesSourceRegister() ? OperandSourceKind::SourceRegister
+          : Info.usesImmediate()      ? OperandSourceKind::Immediate
+                                      : OperandSourceKind::None;
+      EXPECT_EQ(Traits.Source, ExpectedSource);
+      EXPECT_EQ(Traits.MemoryWidth,
+                Info.readsMemory() || Info.writesMemory() ? Info.Width : 0);
+
+      if (Info.Op == Operation::UDiv || Info.Op == Operation::URem) {
+        EXPECT_TRUE(hasFaultPolicy(Traits.Faults, FaultPolicy::DivideByZero));
+        EXPECT_FALSE(
+            hasFaultPolicy(Traits.Faults, FaultPolicy::DivideOverflow));
+      } else if (Info.Op == Operation::SDiv || Info.Op == Operation::SRem) {
+        EXPECT_TRUE(hasFaultPolicy(Traits.Faults, FaultPolicy::DivideByZero));
+        EXPECT_TRUE(hasFaultPolicy(Traits.Faults, FaultPolicy::DivideOverflow));
+      } else if (Info.readsMemory() || Info.writesMemory()) {
+        EXPECT_TRUE(hasFaultPolicy(Traits.Faults, FaultPolicy::MemoryAccess));
+      } else if (Info.isCall()) {
+        EXPECT_TRUE(hasFaultPolicy(Traits.Faults, FaultPolicy::Call));
+      } else {
+        EXPECT_EQ(Traits.Faults, FaultPolicy::None);
+      }
+
+      const TerminatorKind ExpectedTerminator =
+          Info.Op == Operation::Jump   ? TerminatorKind::Jump
+          : Info.isConditionalBranch() ? TerminatorKind::ConditionalJump
+          : Info.isCall()              ? TerminatorKind::Call
+          : Info.isExit()              ? TerminatorKind::Return
+                                       : TerminatorKind::None;
+      EXPECT_EQ(Traits.Terminator, ExpectedTerminator);
+    }
+  }
+}
+
+TEST(SBFSemantics, SelectsTheVersionedCallXRegister) {
+  EXPECT_EQ(callxRegisterIndex(Version::V0, 3, 4, 5), 5);
+  EXPECT_EQ(callxRegisterIndex(Version::V1, 3, 4, 5), 5);
+  EXPECT_EQ(callxRegisterIndex(Version::V2, 3, 4, 5), 4);
+  EXPECT_EQ(callxRegisterIndex(Version::V3, 3, 4, 5), 3);
+  EXPECT_EQ(callxRegisterIndex(Version::V4, 3, 4, 5), 3);
 }
 
 TEST(SBFInterpreter, ExecutesRawBytesIndependentlyOfMedIR) {
@@ -198,6 +292,13 @@ TEST(SBFInterpreter, ReportsRuntimeFaultsAndStepLimits) {
       << llvm::toString(LoopResult.takeError());
   EXPECT_EQ(LoopResult->Status, ExecutionStatus::StepLimit);
   EXPECT_EQ(LoopResult->Steps, 3u);
+
+  Options.MaxSteps = kDefaultMaxExecutionSteps;
+  Options.MaxCallDepth = Loop.Config.MaxCallDepth + 1;
+  auto InvalidLimit = executeRaw(Loop, {}, Options);
+  ASSERT_FALSE(static_cast<bool>(InvalidLimit));
+  EXPECT_NE(llvm::toString(InvalidLimit.takeError()).find("exceeds"),
+            std::string::npos);
 }
 
 TEST(SBFInterpreter, EnforcesTheV4AlignedMemoryMappingContract) {

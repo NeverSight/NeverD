@@ -258,6 +258,8 @@ const char *neverd_headers_json(neverd_session_t Sess) {
     SBF["machine_name"] = MachineName;
     SBF["layout"] =
         Metadata.StrictLayout ? sbf::kStrictLayoutName : sbf::kLegacyLayoutName;
+    SBF["debug_enrichment"] =
+        sbf::debugEnrichmentStatusName(Metadata.DebugEnrichment);
     llvm::json::Object Text;
     Text["file_offset"] = static_cast<int64_t>(Metadata.TextFile.Offset);
     Text["file_size"] = static_cast<int64_t>(Metadata.TextFile.Size);

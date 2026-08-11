@@ -25,6 +25,48 @@ constexpr std::array OpcodeTable = {
 #include "neverd/sbf/SBFOpcodes.def"
 };
 
+constexpr std::array ConcreteVersions = {
+#define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
+  Version::NAME,
+#include "neverd/sbf/SBFVersions.def"
+};
+
+constexpr bool validateOpcodeTable() {
+  for (size_t Index = 0; Index < OpcodeTable.size(); ++Index) {
+    const OpcodeInfo &Info = OpcodeTable[Index];
+    if (Info.Mnemonic.empty() || Info.Versions == VersionMask::None ||
+        (Info.Width != 0 && Info.Width != kBitsPerByte &&
+         Info.Width != kHalfWordBitWidth && Info.Width != kWordBitWidth &&
+         Info.Width != kDoubleWordBitWidth))
+      return false;
+    if ((Info.Form == OperandForm::Endian) != (Info.Width == 0))
+      return false;
+    if ((Info.Op == Operation::Load) != Info.readsMemory() ||
+        (Info.Op == Operation::Store) != Info.writesMemory())
+      return false;
+    if ((Info.Op == Operation::Call || Info.Op == Operation::CallX) !=
+        Info.isCall())
+      return false;
+    if ((Info.Op == Operation::Exit) != Info.isExit())
+      return false;
+
+    for (size_t Other = Index + 1; Other < OpcodeTable.size(); ++Other) {
+      const OpcodeInfo &Candidate = OpcodeTable[Other];
+      if (Info.ID == Candidate.ID)
+        return false;
+      for (Version TheVersion : ConcreteVersions)
+        if (Info.Encoding == Candidate.Encoding &&
+            Info.isAvailableIn(TheVersion) &&
+            Candidate.isAvailableIn(TheVersion))
+          return false;
+    }
+  }
+  return true;
+}
+
+static_assert(validateOpcodeTable(),
+              "SBFOpcodes.def contains inconsistent metadata");
+
 } // namespace
 
 llvm::ArrayRef<OpcodeInfo> opcodeInfos() { return OpcodeTable; }

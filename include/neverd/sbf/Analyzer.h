@@ -21,6 +21,7 @@ struct AnalyzeOptions {
   Version VersionOverride = Version::Auto;
   bool Strict = true;
   bool RecoverHighIR = true;
+  SBFVMConfig VMConfig;
 };
 
 llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,

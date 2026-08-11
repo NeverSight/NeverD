@@ -306,3 +306,32 @@ ctest --test-dir build-release --build-config Release \
 `.github/workflows/ci.yml` و`scripts/audit_ci_test_inventory.py`. ولأن لا shard
 واحدًا من المصفوفة يمثل كل المجموعات المكلفة، يبقى `check-neverd` المحلي أوضح
 إشارة كاملة قبل الدمج عندما تملك الآلة كل الأدوات العابرة اللازمة.
+
+## ملف مطابقة وتعقيم Solana SBF الحالي
+
+تحل هذه القائمة الحالية محل قائمة SBF المختصرة أعلاه. تحتاج اختبارات source
+differential إلى `rustc` بالإضافة إلى clang؛ تخطي compiler يعني coverage ناقصة.
+يشمل التجميع الكامل `NeverDSBFProgramImageTests` و
+`NeverDSBFMalformedCorpusTests` و`NeverDSBFISAConformanceTests` و
+`NeverDSBFUpstreamConformanceTests` و`NeverDSBFLLVMDifferentialTests` و
+`NeverDSBFSourceDifferentialTests` مع targets metadata/loader/analyzer/semantic/
+emitter/integration. يمر profile المتكامل 104/104 حالة في 13 binaries.
+
+يجب بناء profile sanitizer في `build-sbf-asan-ubsan` منفصلًا. يمر 101/101 حالة
+core في 12 binaries بلا ASan أو UBSan report؛ ويظل integration في build LLVM
+المتكامل لأن package الجاهزة لا تحتوي fork-only header المطلوب.
+
+```bash
+cmake --build build-sbf-asan-ubsan --parallel 4 --target \
+  NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
+  NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
+  NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+
+ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
+  -L '^NeverDSBF' -E 'SBFIntegration'
+```

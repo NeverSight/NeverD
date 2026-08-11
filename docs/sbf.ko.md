@@ -164,3 +164,43 @@ verified LLVM, warning-free C/Rust compile, MedIR과 독립된 raw interpreter, 
 - Anchor IDL/type recovery와 live RPC/account fetch는 loader 범위 밖입니다.
 - generated source의 syscall/VM memory는 host contract 경유이며 독립 runtime이 아닙니다.
 - relaxed mode는 inspection용이며 invalid instruction에 추측 semantics를 주지 않습니다.
+
+## 현재 conformance baseline (2026-08-10)
+
+relocation 뒤에는 VM address 기반의 단일 immutable `ProgramImage`가 decoder,
+interpreter, string recovery, LLVM/C/Rust backend가 공유하는 source of truth입니다.
+loader semantics와 달라질 수 있는 별도 text/rodata copy는 없습니다.
+
+닫힌 record는 `SBFVersions.def`, `SBFOpcodes.def`, `SBFRelocations.def`,
+`SBFArgumentRegisters.def`, `SBFSyscalls.def`, `SBFUpstreamSources.def`에 둡니다.
+한 번만 쓰는 diagnostic과 LLVM block name은 LLVM 자체 관례대로 local에 둡니다.
+
+strict v3/v4에서는 bounds-check된 program header가 runtime contract입니다.
+section/symbol table은 optional debug enrichment이므로 누락되거나 손상되어도 유효한
+image를 무효화하지 않습니다. legacy v0-v2는 `.text`, `.rodata`, `.data.rel.ro`,
+`.eh_frame`을 합치고 `R_BPF_64_64`, `R_BPF_64_RELATIVE`, `R_BPF_64_32`을
+image가 immutable해지기 전에 정확히 한 번 적용합니다.
+
+| Evidence | 감사 결과 |
+|----------|-----------|
+| official ELF manifest | `sbpf/tests/elfs` artifact 20/20 |
+| ISA matrix | v0-v4 각각 모든 256 encoding, 총 1,280 cell과 verifier boundary |
+| differential execution | raw-byte oracle과 LLVM ORC/C11/stable Rust의 memory/fault/syscall trace 비교 |
+| integrated aggregate | 13 test binary의 104/104 case |
+| ASan + UBSan | 12 core binary의 101/101 case, report 없음 |
+
+감사는 Anza `sbpf`
+`71425d0de59e0bff048c6be8f4a8a9bc655916e2`와 Agave
+`cae40aa610fdbdb313209bc1eec737079eb59688`에 pin되어 있습니다. 갱신 시
+`SBFUpstreamManifest.def`, `SBFUpstreamOpcodes.def`, `SBFUpstreamSources.def`를
+검토하고 다음을 실행합니다.
+
+```bash
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+  cmake --build build --target check-neverd-sbf
+```
+
+비교 결과 `sol-azy`는 현재 strict ELF에서 crash하고 legacy CFG에 undefined node를
+남겼습니다. `solana-data-reverser`는 account data용이고, `SolDragon`은 analysis를
+WIP로 표시하며, `bn-ebpf-solana`는 Binary Ninja가 필요합니다. 따라서 official
+`sbpf`와 Agave가 semantic authority입니다.

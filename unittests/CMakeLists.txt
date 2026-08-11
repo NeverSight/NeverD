@@ -61,13 +61,15 @@ add_custom_target(check-neverd-semantic
   COMMENT "Running NeverDSemanticTests via CTest")
 
 # Solana SBF loader, ISA, analysis, LLVM, C/Rust, and public API coverage.
+get_property(_neverd_sbf_test_targets GLOBAL PROPERTY NEVERD_SBF_TEST_TARGETS)
+if(NOT _neverd_sbf_test_targets)
+  message(FATAL_ERROR "No NeverDSBF test targets were registered")
+endif()
 add_custom_target(check-neverd-sbf
   COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
           -L ^NeverDSBF
           --output-on-failure --progress -j ${_neverd_ncpu} -C $<CONFIG>
-  DEPENDS NeverDSBFMetadataTests NeverDSBFLoaderTests NeverDSBFAnalyzerTests
-          NeverDSBFSemanticTests NeverDSBFLLVMEmitterTests
-          NeverDSBFEmitterTests NeverDSBFIntegrationTests ${_neverd_run_deps}
+  DEPENDS ${_neverd_sbf_test_targets} ${_neverd_run_deps}
   USES_TERMINAL
   COMMENT "Running Solana SBF tests via CTest")
 

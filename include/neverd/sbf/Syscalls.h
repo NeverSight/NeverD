@@ -15,8 +15,30 @@
 namespace neverd::sbf {
 
 enum class Syscall : uint8_t {
-#define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, CATEGORY, EFFECTS) ID,
+#define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, RETURN_KIND, CATEGORY, EFFECTS,  \
+                    AVAILABILITY, SOURCE)                                      \
+  ID,
 #include "neverd/sbf/SBFSyscalls.def"
+  Unknown,
+};
+
+enum class SyscallReturnKind : uint8_t {
+  Never,
+  Void,
+  Status,
+  Value,
+  Boolean,
+  Address,
+};
+
+enum class SyscallAvailability : uint8_t {
+#define SBF_SYSCALL_AVAILABILITY(ID, SPELLING) ID,
+#include "neverd/sbf/SBFSyscallAvailability.def"
+};
+
+enum class SyscallSource : uint8_t {
+#define SBF_UPSTREAM_SOURCE(ID, NAME, REVISION) ID,
+#include "neverd/sbf/SBFUpstreamSources.def"
   Unknown,
 };
 
@@ -54,9 +76,23 @@ struct SyscallInfo {
   llvm::StringLiteral Name;
   uint32_t Hash;
   uint8_t ArgumentCount;
+  SyscallReturnKind ReturnKind;
   SyscallCategory Category;
   SyscallEffect Effects;
+  SyscallAvailability Availability;
+  SyscallSource Source;
 };
+
+struct SyscallSourceInfo {
+  SyscallSource ID;
+  llvm::StringLiteral Name;
+  llvm::StringLiteral Revision;
+};
+
+llvm::StringRef syscallAvailabilityName(SyscallAvailability Availability);
+llvm::ArrayRef<SyscallSourceInfo> syscallSourceInfos();
+llvm::StringRef syscallSourceName(SyscallSource Source);
+llvm::StringRef syscallSourceRevision(SyscallSource Source);
 
 uint32_t hashSymbolName(llvm::StringRef Name);
 llvm::ArrayRef<SyscallInfo> syscallInfos();

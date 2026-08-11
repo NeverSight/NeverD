@@ -1,0 +1,31 @@
+//===- SBFUpstreamProfiles.def - sbpf test execution profiles -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// Shared profile vocabulary for SBFUpstreamManifest.def. This is deliberately
+// independent from the production metadata tables.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_UPSTREAM_VM_PROFILE
+#define SBF_UPSTREAM_VM_PROFILE(ID, OPTIMIZE_RODATA)
+#endif
+#ifndef SBF_UPSTREAM_INPUT_PROFILE
+#define SBF_UPSTREAM_INPUT_PROFILE(ID, FIRST_BYTE)
+#endif
+#ifndef SBF_UPSTREAM_SYSCALL_PROFILE
+#define SBF_UPSTREAM_SYSCALL_PROFILE(ID, NAME)
+#endif
+
+SBF_UPSTREAM_VM_PROFILE(Default, true)
+SBF_UPSTREAM_VM_PROFILE(UnoptimizedRodata, false)
+
+SBF_UPSTREAM_INPUT_PROFILE(None, 0)
+SBF_UPSTREAM_INPUT_PROFILE(ByteOne, 1)
+
+SBF_UPSTREAM_SYSCALL_PROFILE(None, "")
+SBF_UPSTREAM_SYSCALL_PROFILE(Log, "log")
+
+#undef SBF_UPSTREAM_VM_PROFILE
+#undef SBF_UPSTREAM_INPUT_PROFILE
+#undef SBF_UPSTREAM_SYSCALL_PROFILE

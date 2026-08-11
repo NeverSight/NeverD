@@ -73,6 +73,14 @@ else()
     )
 endif()
 
+# ORC is deliberately opt-in for the differential JIT tests. Keep it out of
+# NEVERD_COMMON_LIBS so production components do not inherit a JIT dependency.
+if(NEVERD_LLVM_PREBUILT)
+    llvm_map_components_to_libnames(NEVERD_LLVM_JIT_LIBS orcjit)
+else()
+    set(NEVERD_LLVM_JIT_LIBS LLVMOrcJIT)
+endif()
+
 # --- Capstone (our fork, built from submodule) ---
 set(CAPSTONE_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CAPSTONE_BUILD_STATIC_LIBS ON  CACHE BOOL "" FORCE)

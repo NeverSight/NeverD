@@ -170,3 +170,47 @@ plus-Loop-Fixture läuft in beiden Sprachen gegen den Raw-Oracle; das offizielle
 - Syscalls und VM-Memory des Outputs laufen über einen Host-Vertrag, nicht eine
   eigenständige Solana-Runtime.
 - Relaxed dient der Inspektion; ungültige Instruktionen erhalten keine geratene Semantik.
+
+## Aktuelle Konformitätsbasis (2026-08-10)
+
+Nach den Relocations ist ein unveränderliches, VM-adressiertes `ProgramImage`
+die gemeinsame Wahrheit für Decoder, Interpreter, String-Recovery sowie die
+LLVM-, C- und Rust-Backends. Separate Text- oder Rodata-Kopien können daher
+nicht von der Loader-Semantik abweichen.
+
+Geschlossene Datensätze liegen in `SBFVersions.def`, `SBFOpcodes.def`,
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFSyscalls.def` und
+`SBFUpstreamSources.def`. Einmalige Diagnosen und LLVM-Blocknamen bleiben lokal,
+entsprechend der tatsächlichen LLVM-Konvention.
+
+Bei strict v3/v4 bilden begrenzte Program Headers den Runtime-Vertrag; Section-
+und Symboltabellen sind optionale Debug-Anreicherung und machen ein gültiges
+Image bei Fehlen oder Beschädigung nicht ungültig. Legacy v0-v2 vereinigt
+`.text`, `.rodata`, `.data.rel.ro` und `.eh_frame`; `R_BPF_64_64`,
+`R_BPF_64_RELATIVE` und `R_BPF_64_32` werden genau einmal vor dem Einfrieren
+des Images angewandt.
+
+| Nachweis | Geprüftes Ergebnis |
+|----------|--------------------|
+| Offizielles ELF-Manifest | 20/20 Artefakte aus `sbpf/tests/elfs` |
+| ISA-Matrix | alle 256 Encodings für v0-v4, also 1,280 Zellen, plus Verifier-Grenzen |
+| Ausführungsdifferenz | Raw-Byte-Oracle gegen LLVM ORC, C11 und stabiles Rust samt Memory/Fault/Syscall-Trace |
+| Integriertes Aggregat | 104/104 Fälle in 13 Test-Binaries |
+| ASan + UBSan | 101/101 Core-Fälle in 12 Binaries ohne Report |
+
+Die Prüfung ist auf Anza `sbpf`
+`71425d0de59e0bff048c6be8f4a8a9bc655916e2` und Agave
+`cae40aa610fdbdb313209bc1eec737079eb59688` fixiert. Zur Aktualisierung
+`SBFUpstreamManifest.def`, `SBFUpstreamOpcodes.def` und
+`SBFUpstreamSources.def` prüfen und ausführen:
+
+```bash
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+  cmake --build build --target check-neverd-sbf
+```
+
+Der Vergleich zeigte: `sol-azy` stürzt beim aktuellen strict ELF ab und lässt
+einen undefinierten Legacy-CFG-Knoten zurück; `solana-data-reverser` behandelt
+Account-Daten, `SolDragon` kennzeichnet die Analyse als WIP und
+`bn-ebpf-solana` benötigt Binary Ninja. Offizielles `sbpf` und Agave bleiben
+daher die semantische Autorität.

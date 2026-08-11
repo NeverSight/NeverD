@@ -1,0 +1,60 @@
+//===- SBFUpstreamManifest.def - Anza sbpf ELF conformance data -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// Derived from anza-xyz/sbpf tests/elf.rs and tests/execution.rs at
+// 71425d0de59e0bff048c6be8f4a8a9bc655916e2 (audited 2026-08-10).
+// This file intentionally has no include guard.
+//
+// SBF_UPSTREAM_ELF(FILE, VERSION, LOAD, VM_PROFILE, INPUT_PROFILE,
+//                  SYSCALL_PROFILE, BUDGET, EXECUTION, RESULT)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_UPSTREAM_ELF
+#define SBF_UPSTREAM_ELF(FILE, VERSION, LOAD, VM_PROFILE, INPUT_PROFILE,       \
+                         SYSCALL_PROFILE, BUDGET, EXECUTION, RESULT)
+#endif
+
+SBF_UPSTREAM_ELF("bss_section_sbpfv0.so", V0, Reject, Default, None, None, 0,
+                 NotRun, 0)
+SBF_UPSTREAM_ELF("callx_unaligned.so", V0, Accept, Default, None, None, 129,
+                 FaultCallDepth, 0)
+SBF_UPSTREAM_ELF("data_section_sbpfv0.so", V0, Reject, Default, None, None, 0,
+                 NotRun, 0)
+SBF_UPSTREAM_ELF("long_section_name.so", V0, Reject, Default, None, None, 0,
+                 NotRun, 0)
+SBF_UPSTREAM_ELF("program_headers_overflow.so", V3, Reject, Default, None,
+                 None, 0, NotRun, 0)
+SBF_UPSTREAM_ELF("relative_call.so", V3, Accept, Default, ByteOne, None, 16,
+                 Return, 3)
+SBF_UPSTREAM_ELF("relative_call_sbpfv0.so", V0, Accept, Default, ByteOne, None,
+                 16, Return, 3)
+SBF_UPSTREAM_ELF("reloc_64_64.so", V3, Accept, Default, None, None, 2, Return,
+                 UINT64_C(0x100000000))
+SBF_UPSTREAM_ELF("reloc_64_64_sbpfv0.so", V0, Accept, Default, None, None, 2,
+                 Return, UINT64_C(0x100000120))
+SBF_UPSTREAM_ELF("reloc_64_relative.so", V3, Accept, Default, None, None, 2,
+                 Return, 0)
+SBF_UPSTREAM_ELF("reloc_64_relative_data.so", V3, Accept, Default, None, None,
+                 3, Return, 0)
+SBF_UPSTREAM_ELF("reloc_64_relative_data_sbpfv0.so", V0, Accept, Default, None,
+                 None, 3, Return, UINT64_C(0x100000140))
+SBF_UPSTREAM_ELF("reloc_64_relative_sbpfv0.so", V0, Accept, Default, None,
+                 None, 2, Return, UINT64_C(0x100000138))
+SBF_UPSTREAM_ELF("rodata_section.so", V3, Accept, UnoptimizedRodata, None, None,
+                 3, Return, 42)
+SBF_UPSTREAM_ELF("rodata_section_sbpfv0.so", V0, Accept, UnoptimizedRodata,
+                 None, None, 3, Return, 42)
+SBF_UPSTREAM_ELF("strict_header.so", V3, Accept, Default, None, None, 5, Return,
+                 42)
+SBF_UPSTREAM_ELF("struct_func_pointer.so", V3, Accept, Default, None, None, 2,
+                 Return, UINT64_C(0x0102030405060708))
+SBF_UPSTREAM_ELF("struct_func_pointer_sbpfv0.so", V0, Accept, Default, None,
+                 None, 2, Return, UINT64_C(0x0102030405060708))
+SBF_UPSTREAM_ELF("syscall_reloc_64_32_sbpfv0.so", V0, Accept, Default, None,
+                 Log, 5, Return, 0)
+SBF_UPSTREAM_ELF("syscall_static.so", V3, Accept, Default, None, Log, 5, Return,
+                 0)
+
+#undef SBF_UPSTREAM_ELF

@@ -105,6 +105,7 @@ TEST_F(SBFIntegrationTest, ExposesAllStagesAndBothSourceLanguages) {
   EXPECT_EQ(SBF->getInteger("machine"), neverd::sbf::kELFMachineBPF);
   EXPECT_EQ(SBF->getString("machine_name"), "EM_BPF");
   EXPECT_EQ(SBF->getString("layout"), "strict-program-header");
+  EXPECT_EQ(SBF->getString("debug_enrichment"), "unavailable");
 
   ASSERT_EQ(neverd_session_analyze(Session), 1)
       << takeString(neverd_last_error(Session));

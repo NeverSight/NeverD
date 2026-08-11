@@ -6,6 +6,8 @@
 
 #include "neverd/sbf/Syscalls.h"
 
+#include "neverd/sbf/SBFConstants.h"
+
 #include "llvm/Support/Endian.h"
 
 #include <array>
@@ -25,7 +27,6 @@ constexpr unsigned kMurmurBlockRotation = 15;
 constexpr unsigned kMurmurHashRotation = 13;
 constexpr unsigned kMurmurFinalShift1 = 16;
 constexpr unsigned kMurmurFinalShift2 = 13;
-constexpr unsigned kBitsPerByte = 8;
 constexpr uint32_t kMurmurBlockMultiplier1 = 0xcc9e2d51u;
 constexpr uint32_t kMurmurBlockMultiplier2 = 0x1b873593u;
 constexpr uint32_t kMurmurFinalMultiplier1 = 0x85ebca6bu;
@@ -88,16 +89,53 @@ uint32_t hashSymbolName(llvm::StringRef Name) {
 
 llvm::ArrayRef<SyscallInfo> syscallInfos() {
   static const std::array Table = {
-#define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, CATEGORY, EFFECTS)               \
+#define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, RETURN_KIND, CATEGORY, EFFECTS,  \
+                    AVAILABILITY, SOURCE)                                      \
   SyscallInfo{Syscall::ID,                                                     \
               NAME,                                                            \
               hashSymbolName(NAME),                                            \
               ARGUMENT_COUNT,                                                  \
+              SyscallReturnKind::RETURN_KIND,                                  \
               SyscallCategory::CATEGORY,                                       \
-              EFFECTS},
+              EFFECTS,                                                         \
+              SyscallAvailability::AVAILABILITY,                               \
+              SyscallSource::SOURCE},
 #include "neverd/sbf/SBFSyscalls.def"
   };
   return Table;
+}
+
+llvm::StringRef syscallAvailabilityName(SyscallAvailability Availability) {
+  switch (Availability) {
+#define SBF_SYSCALL_AVAILABILITY(ID, SPELLING)                                 \
+  case SyscallAvailability::ID:                                                \
+    return SPELLING;
+#include "neverd/sbf/SBFSyscallAvailability.def"
+  }
+  return "unknown";
+}
+
+llvm::ArrayRef<SyscallSourceInfo> syscallSourceInfos() {
+  static const std::array Table = {
+#define SBF_UPSTREAM_SOURCE(ID, NAME, REVISION)                                \
+  SyscallSourceInfo{SyscallSource::ID, NAME, REVISION},
+#include "neverd/sbf/SBFUpstreamSources.def"
+  };
+  return Table;
+}
+
+llvm::StringRef syscallSourceName(SyscallSource Source) {
+  for (const SyscallSourceInfo &Info : syscallSourceInfos())
+    if (Info.ID == Source)
+      return Info.Name;
+  return "unknown";
+}
+
+llvm::StringRef syscallSourceRevision(SyscallSource Source) {
+  for (const SyscallSourceInfo &Info : syscallSourceInfos())
+    if (Info.ID == Source)
+      return Info.Revision;
+  return {};
 }
 
 const SyscallInfo *getSyscallInfo(uint32_t Hash) {

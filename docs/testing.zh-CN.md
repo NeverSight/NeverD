@@ -292,3 +292,32 @@ CI 在 Linux、macOS 和 Windows 上以 Release 开启测试构建，先审核�
 再应用平台特定的标签排除。配置定义于 `.github/workflows/ci.yml` 和
 `scripts/audit_ci_test_inventory.py`。由于没有单个矩阵 shard 代表所有昂贵套件，当
 机器具备全部跨目标工具时，本地 `check-neverd` 仍是最清晰的完整合并前信号。
+
+## 当前 Solana SBF 一致性与 sanitizer 配置
+
+本节的当前清单取代上方较短的 SBF 清单。source differential suite 除 clang 外还
+需要 `rustc`；compiler skip 表示覆盖缺失。完整 aggregate 包括
+`NeverDSBFProgramImageTests`、`NeverDSBFMalformedCorpusTests`、
+`NeverDSBFISAConformanceTests`、`NeverDSBFUpstreamConformanceTests`、
+`NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`，以及 metadata、
+loader、analyzer、semantic、emitter、integration target。integrated profile 在
+13 个 binary 中通过 104/104 个 case。
+
+sanitizer profile 单独构建在 `build-sbf-asan-ubsan`。12 个 core binary 的
+101/101 个 case 均通过，且没有 ASan/UBSan report；prebuilt package 缺少所需的
+fork-only header，因此 integration 在 integrated LLVM build 中运行。
+
+```bash
+cmake --build build-sbf-asan-ubsan --parallel 4 --target \
+  NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
+  NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
+  NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+
+ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
+  -L '^NeverDSBF' -E 'SBFIntegration'
+```

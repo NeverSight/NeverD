@@ -164,3 +164,44 @@ official `sbpf` ELF corpus も vendoring せず local compatibility check に使
 - Anchor IDL/type recovery と live RPC/account fetch は loader 範囲外です。
 - generated source の syscall/VM memory は host contract 経由で、単独 runtime ではありません。
 - relaxed mode は inspection 用で、invalid instruction に推測 semantics を与えません。
+
+## 現在の conformance baseline（2026-08-10）
+
+relocation 後は、VM address を持つ単一の immutable `ProgramImage` が decoder、
+interpreter、string recovery、LLVM/C/Rust backend 共通の source of truth です。
+loader semantics とずれ得る独立した text/rodata copy はありません。
+
+閉じた record は `SBFVersions.def`、`SBFOpcodes.def`、
+`SBFRelocations.def`、`SBFArgumentRegisters.def`、`SBFSyscalls.def`、
+`SBFUpstreamSources.def` に置きます。一度しか使わない diagnostic と LLVM block
+name は、LLVM 自身の方針どおり local に保ちます。
+
+strict v3/v4 では bounds-check 済み program header が runtime contract です。
+section/symbol table は optional debug enrichment なので、欠落・破損しても有効な
+image を無効にしません。legacy v0-v2 は `.text`、`.rodata`、`.data.rel.ro`、
+`.eh_frame` を統合し、`R_BPF_64_64`、`R_BPF_64_RELATIVE`、`R_BPF_64_32`
+を image の immutable 化前に一度だけ適用します。
+
+| Evidence | 監査結果 |
+|----------|----------|
+| official ELF manifest | `sbpf/tests/elfs` の 20/20 artifact |
+| ISA matrix | v0-v4 ごとに全 256 encoding、合計 1,280 cell と verifier boundary |
+| differential execution | raw-byte oracle と LLVM ORC/C11/stable Rust の memory/fault/syscall trace 比較 |
+| integrated aggregate | 13 test binary の 104/104 case |
+| ASan + UBSan | 12 core binary の 101/101 case、report なし |
+
+監査 pin は Anza `sbpf`
+`71425d0de59e0bff048c6be8f4a8a9bc655916e2` と Agave
+`cae40aa610fdbdb313209bc1eec737079eb59688` です。更新時は
+`SBFUpstreamManifest.def`、`SBFUpstreamOpcodes.def`、
+`SBFUpstreamSources.def` を確認して実行します。
+
+```bash
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+  cmake --build build --target check-neverd-sbf
+```
+
+比較では `sol-azy` が現在の strict ELF で crash し、legacy CFG に undefined node
+を残しました。`solana-data-reverser` は account data 向け、`SolDragon` は analysis
+を WIP とし、`bn-ebpf-solana` は Binary Ninja を必要とします。したがって official
+`sbpf` と Agave が semantic authority です。

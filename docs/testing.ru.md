@@ -321,3 +321,34 @@ CI собирает Release с тестами на Linux, macOS и Windows, пр
 ни один shard матрицы не представляет все дорогие наборы, локальный
 `check-neverd` остаётся самым ясным полным сигналом перед merge на машине со
 всеми необходимыми cross-инструментами.
+
+## Текущий профиль соответствия и sanitizer для Solana SBF
+
+Этот актуальный список заменяет сокращённый SBF-список выше. Suite source
+differential требует `rustc` помимо clang; пропуск compiler означает отсутствие
+coverage. Полный aggregate включает `NeverDSBFProgramImageTests`,
+`NeverDSBFMalformedCorpusTests`, `NeverDSBFISAConformanceTests`,
+`NeverDSBFUpstreamConformanceTests`, `NeverDSBFLLVMDifferentialTests` и
+`NeverDSBFSourceDifferentialTests`, а также targets metadata, loader, analyzer,
+semantic, emitter и integration. Интегрированный профиль проходит 104/104
+случаев в 13 бинарниках.
+
+Sanitizer-профиль собирается отдельно в `build-sbf-asan-ubsan`. Он проходит
+101/101 core-случаев в 12 бинарниках без отчётов ASan или UBSan; integration
+остаётся в интегрированной LLVM-сборке, поскольку prebuilt package не содержит
+нужный fork-only header.
+
+```bash
+cmake --build build-sbf-asan-ubsan --parallel 4 --target \
+  NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
+  NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
+  NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+
+ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
+  -L '^NeverDSBF' -E 'SBFIntegration'
+```

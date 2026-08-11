@@ -65,6 +65,8 @@ bool checkedAdd(uint64_t L, uint64_t R, uint64_t &Result) {
 }
 
 va_t legacyRuntimeAddress(uint64_t Address) {
+  if (Address >= sbf::kBytecodeStart)
+    return Address;
   uint64_t Result = 0;
   if (!checkedAdd(sbf::kBytecodeStart, Address, Result))
     return InvalidVA;
@@ -179,8 +181,12 @@ llvm::Error addRelocations(const ELFFile &ELF,
     const bool IsRela = SH.sh_type == SHT_RELA;
     if (!IsRela && SH.sh_type != SHT_REL)
       continue;
-    if (SH.sh_entsize == 0 ||
-        !rangeInBounds(SH.sh_offset, SH.sh_size, Image.Raw.size()))
+    const uint64_t ExpectedEntrySize =
+        IsRela ? sizeof(Elf_Rela) : sizeof(Elf_Rel);
+    if (SH.sh_entsize != ExpectedEntrySize ||
+        SH.sh_size % ExpectedEntrySize != 0)
+      return sbfError("relocation section has an invalid entry size");
+    if (!rangeInBounds(SH.sh_offset, SH.sh_size, Image.Raw.size()))
       return sbfError("relocation section is out of bounds");
     if (SH.sh_info >= Sections.size())
       return sbfError("relocation target section index is out of bounds");
@@ -200,7 +206,7 @@ llvm::Error addRelocations(const ELFFile &ELF,
       SymbolNames = *Names;
     }
 
-    const size_t Count = static_cast<size_t>(SH.sh_size / SH.sh_entsize);
+    const size_t Count = static_cast<size_t>(SH.sh_size / ExpectedEntrySize);
     for (size_t I = 0; I < Count; ++I) {
       const uint64_t Offset = SH.sh_offset + I * SH.sh_entsize;
       RelocationEntry Entry;
@@ -252,11 +258,54 @@ llvm::Error addRelocations(const ELFFile &ELF,
   return llvm::Error::success();
 }
 
+void enrichStrictDebugMetadata(const ELFFile &ELF, const Elf_Ehdr &Header,
+                               sbf::Metadata &Metadata, BinaryImage &Image) {
+  using namespace llvm::ELF;
+  if (Header.e_shoff == 0 && Header.e_shnum == 0 &&
+      Header.e_shstrndx == SHN_UNDEF) {
+    Metadata.DebugEnrichment = sbf::DebugEnrichmentStatus::Unavailable;
+    return;
+  }
+
+  auto Sections = ELF.sections();
+  if (!Sections) {
+    llvm::consumeError(Sections.takeError());
+    Metadata.DebugEnrichment = sbf::DebugEnrichmentStatus::Malformed;
+    return;
+  }
+  if (Sections->empty()) {
+    Metadata.DebugEnrichment = sbf::DebugEnrichmentStatus::Unavailable;
+    return;
+  }
+
+  llvm::StringRef SectionNames;
+  if (Header.e_shstrndx != SHN_UNDEF) {
+    auto Names = ELF.getSectionStringTable(*Sections);
+    if (!Names) {
+      llvm::consumeError(Names.takeError());
+      Metadata.DebugEnrichment = sbf::DebugEnrichmentStatus::Malformed;
+      return;
+    }
+    SectionNames = *Names;
+  }
+
+  const size_t OriginalSymbolCount = Image.Symbols.size();
+  if (llvm::Error Error =
+          addSymbols(ELF, *Sections, SectionNames, Metadata.Version, Image)) {
+    llvm::consumeError(std::move(Error));
+    Image.Symbols.resize(OriginalSymbolCount);
+    Metadata.DebugEnrichment = sbf::DebugEnrichmentStatus::Malformed;
+    return;
+  }
+  Metadata.DebugEnrichment = sbf::DebugEnrichmentStatus::Complete;
+}
+
 llvm::Error loadStrict(const ELFFile &ELF, const Elf_Ehdr &Header,
                        BinaryImage &Image, sbf::Metadata &Metadata) {
   using namespace llvm::ELF;
   if (Header.e_machine != sbf::kELFMachineBPF)
-    return sbfError("v3+ strict ELF requires EM_BPF");
+    return sbfError(llvm::Twine("v3+ strict ELF requires ") +
+                    sbf::kELFMachineBPFName);
   if (Header.e_phoff != sizeof(Elf_Ehdr) ||
       Header.e_ehsize != sizeof(Elf_Ehdr) ||
       Header.e_phentsize != sizeof(Elf_Phdr) || Header.e_phnum == 0)
@@ -319,20 +368,8 @@ llvm::Error loadStrict(const ELFFile &ELF, const Elf_Ehdr &Header,
   Metadata.TextFile = {TextHeader.p_offset, TextHeader.p_filesz};
   Metadata.TextVM = {TextHeader.p_vaddr, TextHeader.p_memsz};
 
-  auto Sections = ELF.sections();
-  if (!Sections)
-    return Sections.takeError();
-  llvm::StringRef SectionNames;
-  if (!Sections->empty() && Header.e_shstrndx != SHN_UNDEF) {
-    auto Names = ELF.getSectionStringTable(*Sections);
-    if (!Names)
-      return Names.takeError();
-    SectionNames = *Names;
-  }
-  for (const Elf_Shdr &SH : *Sections)
-    if (SH.sh_type == SHT_REL || SH.sh_type == SHT_RELA)
-      return sbfError("v3+ strict ELF must not contain relocations");
-  return addSymbols(ELF, *Sections, SectionNames, Metadata.Version, Image);
+  enrichStrictDebugMetadata(ELF, Header, Metadata, Image);
+  return llvm::Error::success();
 }
 
 llvm::Error loadLegacy(const ELFFile &ELF, const Elf_Ehdr &Header,
@@ -367,18 +404,22 @@ llvm::Error loadLegacy(const ELFFile &ELF, const Elf_Ehdr &Header,
         return sbfError("legacy ELF contains multiple .text sections");
       Text = &SH;
     }
-    if ((SH.sh_flags & SHF_ALLOC) == 0 || SH.sh_size == 0)
-      continue;
     if (Name.starts_with(sbf::kBSSSectionPrefix) ||
         ((SH.sh_flags & SHF_WRITE) != 0 &&
          Name.starts_with(sbf::kDataSectionPrefix) &&
          !Name.starts_with(sbf::kDataRelSectionPrefix)))
       return sbfError(llvm::Twine("writable legacy section is unsupported: ") +
                       Name);
+    if (!rangeInBounds(SH.sh_offset, SH.sh_size, Image.Raw.size()))
+      return sbfError("legacy section is out of file bounds");
+    if ((SH.sh_flags & SHF_ALLOC) == 0 || SH.sh_size == 0)
+      continue;
+    if (Name.empty())
+      continue;
     if (SH.sh_type == SHT_NOBITS)
       return sbfError("writable/NOBITS legacy sections are unsupported");
-    if (!rangeInBounds(SH.sh_offset, SH.sh_size, Image.Raw.size()))
-      return sbfError("legacy allocatable section is out of bounds");
+    if (SH.sh_addr > sbf::kBytecodeStart)
+      return sbfError("legacy section virtual address exceeds bytecode range");
     const uint64_t Alignment = SH.sh_addralign == 0 ? 1 : SH.sh_addralign;
     if (Alignment > std::numeric_limits<uint32_t>::max() ||
         (Alignment & (Alignment - 1)) != 0)
@@ -388,9 +429,8 @@ llvm::Error loadLegacy(const ELFFile &ELF, const Elf_Ehdr &Header,
     if (Address == InvalidVA)
       return sbfError("legacy section virtual address overflows");
     SegmentFlags Flags = elfSHFlagsToNd(SH.sh_flags);
-    addMappedRegion(Image, Name.empty() ? sbf::kRodataSectionName : Name,
-                    Address, SH.sh_offset, SH.sh_size, SH.sh_size, Flags,
-                    static_cast<uint32_t>(Alignment));
+    addMappedRegion(Image, Name, Address, SH.sh_offset, SH.sh_size, SH.sh_size,
+                    Flags, static_cast<uint32_t>(Alignment));
     if (Name == sbf::kRodataSectionName && Metadata.RodataFile.Size == 0) {
       Metadata.RodataFile = {SH.sh_offset, SH.sh_size};
       Metadata.RodataVM = {Address, SH.sh_size};
@@ -415,6 +455,7 @@ llvm::Error loadLegacy(const ELFFile &ELF, const Elf_Ehdr &Header,
   if (llvm::Error Error =
           addSymbols(ELF, *Sections, SectionNames, Metadata.Version, Image))
     return Error;
+  Metadata.DebugEnrichment = sbf::DebugEnrichmentStatus::Complete;
   return addRelocations(ELF, *Sections, SectionNames, Image);
 }
 

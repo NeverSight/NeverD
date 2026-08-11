@@ -9,8 +9,10 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace neverd::sbf {
 
@@ -23,27 +25,53 @@ inline constexpr size_t kRegisterByteOffset = 1;
 inline constexpr size_t kBranchOffsetOffset = 2;
 inline constexpr size_t kImmediateOffset = 4;
 inline constexpr size_t kMaxInstructions = 65'536;
+inline constexpr unsigned kLDDWSlotCount = 2;
+inline constexpr unsigned kBitsPerByte = std::numeric_limits<uint8_t>::digits;
+inline constexpr unsigned kHalfWordBitWidth =
+    std::numeric_limits<uint16_t>::digits;
+inline constexpr unsigned kWordBitWidth = std::numeric_limits<uint32_t>::digits;
+inline constexpr unsigned kDoubleWordBitWidth =
+    std::numeric_limits<uint64_t>::digits;
 
 inline constexpr unsigned kRegisterEncodingBits = 4;
 inline constexpr uint8_t kRegisterEncodingMask =
     (uint8_t{1} << kRegisterEncodingBits) - 1;
 
 inline constexpr unsigned kRegisterCount = 11;
-inline constexpr unsigned kVMRegisterCount = 12;
 inline constexpr unsigned kReturnRegister = 0;
-inline constexpr unsigned kFirstArgumentRegister = 1;
-inline constexpr unsigned kArgumentRegisterCount = 5;
-inline constexpr unsigned kFirstCalleeSavedRegister = 6;
-inline constexpr unsigned kCalleeSavedRegisterCount = 4;
-inline constexpr unsigned kFramePointerRegister = 10;
-inline constexpr unsigned kProgramCounterRegister = 11;
+inline constexpr std::array kArgumentRegisters = {
+#define SBF_ARGUMENT_REGISTER(ID, REGISTER) unsigned{REGISTER},
+#include "neverd/sbf/SBFArgumentRegisters.def"
+};
+inline constexpr unsigned kFirstArgumentRegister = kArgumentRegisters.front();
+inline constexpr unsigned kArgumentRegisterCount = kArgumentRegisters.size();
+inline constexpr unsigned kFramePointerRegister = kRegisterCount - 1;
+inline constexpr unsigned kFirstCalleeSavedRegister =
+    kFirstArgumentRegister + kArgumentRegisterCount;
+inline constexpr unsigned kCalleeSavedRegisterCount =
+    kFramePointerRegister - kFirstCalleeSavedRegister;
+inline constexpr unsigned kProgramCounterRegister = kRegisterCount;
+inline constexpr unsigned kVMRegisterCount = kProgramCounterRegister + 1;
+
+constexpr bool argumentRegistersAreContiguous() {
+  for (size_t Index = 0; Index < kArgumentRegisters.size(); ++Index)
+    if (kArgumentRegisters[Index] != kFirstArgumentRegister + Index)
+      return false;
+  return true;
+}
+
+static_assert(argumentRegistersAreContiguous(),
+              "SBF argument registers must form a contiguous ABI range");
+static_assert(kFirstArgumentRegister == kReturnRegister + 1,
+              "SBF arguments must immediately follow the return register");
+static_assert(kFirstCalleeSavedRegister + kCalleeSavedRegisterCount ==
+                  kFramePointerRegister,
+              "SBF callee-saved registers must end at the frame pointer");
 
 inline constexpr size_t kDefaultStackFrameSize = 4'096;
 inline constexpr size_t kDefaultMaxCallDepth = 64;
 inline constexpr size_t kStackFrameGapMultiplier = 2;
 inline constexpr size_t kDynamicStackFrameAlignment = 64;
-inline constexpr size_t kDefaultStackSize =
-    kDefaultStackFrameSize * kDefaultMaxCallDepth;
 inline constexpr size_t kDefaultMaxExecutionSteps = 1'000'000;
 
 inline constexpr unsigned kVirtualAddressBits = 32;
@@ -79,6 +107,38 @@ inline constexpr llvm::StringLiteral kRuntimeStoreName("neverd_sbf_store");
 inline constexpr llvm::StringLiteral kRuntimeSyscallName("neverd_sbf_syscall");
 inline constexpr llvm::StringLiteral kRuntimeCallXName("neverd_sbf_callx");
 inline constexpr llvm::StringLiteral kRuntimeFaultName("neverd_sbf_fault");
+
+inline constexpr unsigned kRuntimeEnvironmentParameter = 0;
+inline constexpr unsigned kRuntimeLoadAddressParameter =
+    kRuntimeEnvironmentParameter + 1;
+inline constexpr unsigned kRuntimeLoadWidthParameter =
+    kRuntimeLoadAddressParameter + 1;
+inline constexpr unsigned kRuntimeLoadOutputParameter =
+    kRuntimeLoadWidthParameter + 1;
+inline constexpr unsigned kRuntimeLoadArgumentCount =
+    kRuntimeLoadOutputParameter + 1;
+inline constexpr unsigned kRuntimeStoreAddressParameter =
+    kRuntimeEnvironmentParameter + 1;
+inline constexpr unsigned kRuntimeStoreWidthParameter =
+    kRuntimeStoreAddressParameter + 1;
+inline constexpr unsigned kRuntimeStoreValueParameter =
+    kRuntimeStoreWidthParameter + 1;
+inline constexpr unsigned kRuntimeStoreArgumentCount =
+    kRuntimeStoreValueParameter + 1;
+inline constexpr unsigned kRuntimeSyscallHashParameter =
+    kRuntimeEnvironmentParameter + 1;
+inline constexpr unsigned kRuntimeSyscallFirstArgumentParameter =
+    kRuntimeSyscallHashParameter + 1;
+inline constexpr unsigned kRuntimeSyscallOutputParameter =
+    kRuntimeSyscallFirstArgumentParameter + kArgumentRegisterCount;
+inline constexpr unsigned kRuntimeSyscallArgumentCount =
+    kRuntimeSyscallOutputParameter + 1;
+inline constexpr unsigned kRuntimeFaultCodeParameter =
+    kRuntimeEnvironmentParameter + 1;
+inline constexpr unsigned kRuntimeFaultAddressParameter =
+    kRuntimeFaultCodeParameter + 1;
+inline constexpr unsigned kRuntimeFaultArgumentCount =
+    kRuntimeFaultAddressParameter + 1;
 
 enum class FaultCode : uint32_t {
   None = 0,

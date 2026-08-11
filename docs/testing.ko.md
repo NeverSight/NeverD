@@ -304,3 +304,32 @@ audit한 다음 플랫폼별 label 제외를 적용합니다. 프로필은
 `.github/workflows/ci.yml`과 `scripts/audit_ci_test_inventory.py`에 있습니다.
 비싼 모든 스위트를 대표하는 단일 matrix shard는 없으므로 필요한 교차 도구를 갖춘
 머신에서는 로컬 `check-neverd`가 가장 명확한 전체 병합 전 신호입니다.
+
+## 현재 Solana SBF conformance 및 sanitizer profile
+
+이 current list는 위의 짧은 SBF list를 대체합니다. source differential suite는 clang
+외에 `rustc`가 필요하며 compiler skip은 coverage 누락입니다. 전체 aggregate에는
+`NeverDSBFProgramImageTests`, `NeverDSBFMalformedCorpusTests`,
+`NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
+`NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`와 metadata,
+loader, analyzer, semantic, emitter, integration target이 포함됩니다. integrated
+profile은 13 binary의 104/104 case를 통과합니다.
+
+sanitizer profile은 `build-sbf-asan-ubsan`에 별도로 build합니다. 12 core binary의
+101/101 case가 ASan/UBSan report 없이 통과합니다. prebuilt package에 필요한
+fork-only header가 없으므로 integration은 integrated LLVM build에서 실행합니다.
+
+```bash
+cmake --build build-sbf-asan-ubsan --parallel 4 --target \
+  NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
+  NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
+  NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+
+ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
+  -L '^NeverDSBF' -E 'SBFIntegration'
+```

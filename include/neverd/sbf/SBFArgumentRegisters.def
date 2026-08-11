@@ -1,0 +1,21 @@
+//===- SBFArgumentRegisters.def - SBF call argument ABI -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_ARGUMENT_REGISTER(ID, REGISTER)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_ARGUMENT_REGISTER
+#define SBF_ARGUMENT_REGISTER(ID, REGISTER)
+#endif
+
+SBF_ARGUMENT_REGISTER(Argument0, 1)
+SBF_ARGUMENT_REGISTER(Argument1, 2)
+SBF_ARGUMENT_REGISTER(Argument2, 3)
+SBF_ARGUMENT_REGISTER(Argument3, 4)
+SBF_ARGUMENT_REGISTER(Argument4, 5)
+
+#undef SBF_ARGUMENT_REGISTER

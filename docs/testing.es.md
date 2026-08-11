@@ -330,3 +330,34 @@ de plataforma. Los perfiles están en `.github/workflows/ci.yml` y
 todas las suites costosas, un `check-neverd` local sigue siendo la señal previa
 a fusión completa más clara si la máquina dispone de todas las herramientas
 cruzadas necesarias.
+
+## Perfil actual de conformidad y sanitizers de Solana SBF
+
+Esta lista actual sustituye la lista SBF abreviada anterior. La suite source
+differential requiere `rustc` además de clang; omitir el compilador significa
+coverage ausente. El agregado completo incluye `NeverDSBFProgramImageTests`,
+`NeverDSBFMalformedCorpusTests`, `NeverDSBFISAConformanceTests`,
+`NeverDSBFUpstreamConformanceTests`, `NeverDSBFLLVMDifferentialTests` y
+`NeverDSBFSourceDifferentialTests`, junto con los targets de metadata, loader,
+analyzer, semantic, emitter e integration. El perfil integrado supera 104/104
+casos en 13 binarios.
+
+El perfil sanitizer se construye por separado en `build-sbf-asan-ubsan`.
+Supera 101/101 casos core en 12 binarios sin informes ASan o UBSan; integration
+permanece en la build LLVM integrada porque al paquete prebuilt le falta el
+header fork-only requerido.
+
+```bash
+cmake --build build-sbf-asan-ubsan --parallel 4 --target \
+  NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
+  NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
+  NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+
+ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
+  -L '^NeverDSBF' -E 'SBFIntegration'
+```

@@ -1,0 +1,24 @@
+//===- SBFUpstreamSources.def - SBF ABI provenance database -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_UPSTREAM_SOURCE(ID, NAME, REVISION)
+//
+// An empty revision denotes a moving published specification rather than a
+// repository snapshot. Repository sources always carry the full audited
+// object ID; shortened hashes are presentation details, never identities.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_UPSTREAM_SOURCE
+#define SBF_UPSTREAM_SOURCE(ID, NAME, REVISION)
+#endif
+
+SBF_UPSTREAM_SOURCE(SolanaReference, "solana-syscall-reference", "")
+SBF_UPSTREAM_SOURCE(AgaveMaster, "agave-master",
+                    "cae40aa610fdbdb313209bc1eec737079eb59688")
+SBF_UPSTREAM_SOURCE(Legacy, "legacy-loader-api", "")
+
+#undef SBF_UPSTREAM_SOURCE

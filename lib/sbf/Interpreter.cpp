@@ -14,6 +14,8 @@
 
 #include "neverd/sbf/Interpreter.h"
 
+#include "neverd/sbf/Semantics.h"
+
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
@@ -31,9 +33,6 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Instruction decoding, validation, and semantic helpers
 //===----------------------------------------------------------------------===//
-
-constexpr unsigned kBitsPerByte = 8;
-constexpr size_t kLDDWSlotWidth = 2;
 
 struct RawInstruction {
   size_t Slot = 0;
@@ -54,50 +53,49 @@ struct CallFrame {
 int64_t signed64(uint64_t Value) { return std::bit_cast<int64_t>(Value); }
 int32_t signed32(uint32_t Value) { return std::bit_cast<int32_t>(Value); }
 
-uint64_t signExtend32(uint32_t Value) {
-  return static_cast<uint64_t>(static_cast<int64_t>(signed32(Value)));
-}
-
 uint32_t arithmeticShiftRight32(uint32_t Value, uint32_t Shift) {
-  Shift &= 31;
+  Shift &= kWordBitWidth - 1;
   if (Shift == 0)
     return Value;
   uint32_t Result = Value >> Shift;
-  if ((Value & (uint32_t{1} << 31)) != 0)
-    Result |= std::numeric_limits<uint32_t>::max() << (32 - Shift);
+  if ((Value & (uint32_t{1} << (kWordBitWidth - 1))) != 0)
+    Result |= std::numeric_limits<uint32_t>::max() << (kWordBitWidth - Shift);
   return Result;
 }
 
 uint64_t arithmeticShiftRight64(uint64_t Value, uint64_t Shift) {
-  Shift &= 63;
+  Shift &= kDoubleWordBitWidth - 1;
   if (Shift == 0)
     return Value;
   uint64_t Result = Value >> Shift;
-  if ((Value & (uint64_t{1} << 63)) != 0)
-    Result |= std::numeric_limits<uint64_t>::max() << (64 - Shift);
+  if ((Value & (uint64_t{1} << (kDoubleWordBitWidth - 1))) != 0)
+    Result |= std::numeric_limits<uint64_t>::max()
+              << (kDoubleWordBitWidth - Shift);
   return Result;
 }
 
 uint64_t unsignedHighMultiply64(uint64_t Left, uint64_t Right) {
   const uint64_t LeftLow = static_cast<uint32_t>(Left);
-  const uint64_t LeftHigh = Left >> 32;
+  const uint64_t LeftHigh = Left >> kWordBitWidth;
   const uint64_t RightLow = static_cast<uint32_t>(Right);
-  const uint64_t RightHigh = Right >> 32;
+  const uint64_t RightHigh = Right >> kWordBitWidth;
   const uint64_t LowProduct = LeftLow * RightLow;
-  const uint64_t CrossProduct = LeftHigh * RightLow + (LowProduct >> 32);
+  const uint64_t CrossProduct =
+      LeftHigh * RightLow + (LowProduct >> kWordBitWidth);
   uint64_t Middle = static_cast<uint32_t>(CrossProduct);
-  const uint64_t Carry = CrossProduct >> 32;
+  const uint64_t Carry = CrossProduct >> kWordBitWidth;
   Middle += LeftLow * RightHigh;
-  return LeftHigh * RightHigh + Carry + (Middle >> 32);
+  return LeftHigh * RightHigh + Carry + (Middle >> kWordBitWidth);
 }
 
 uint64_t signedHighMultiply64(uint64_t Left, uint64_t Right) {
-  return unsignedHighMultiply64(Left, Right) - ((Left >> 63) != 0 ? Right : 0) -
-         ((Right >> 63) != 0 ? Left : 0);
+  return unsignedHighMultiply64(Left, Right) -
+         ((Left >> (kDoubleWordBitWidth - 1)) != 0 ? Right : 0) -
+         ((Right >> (kDoubleWordBitWidth - 1)) != 0 ? Left : 0);
 }
 
 RawInstruction decodeRaw(const SBFProgram &Program, size_t Slot) {
-  const uint8_t *Bytes = Program.Text.data() + Slot * kInstructionSize;
+  const uint8_t *Bytes = Program.text().data() + Slot * kInstructionSize;
   RawInstruction Instruction;
   Instruction.Slot = Slot;
   Instruction.RawOpcode = Bytes[kOpcodeOffset];
@@ -114,25 +112,33 @@ RawInstruction decodeRaw(const SBFProgram &Program, size_t Slot) {
 
 llvm::Error validateProgram(const SBFProgram &Program,
                             const InterpreterOptions &Options) {
+  if (llvm::Error Error = validateVMConfig(Program.Config))
+    return Error;
   if (!isConcreteVersion(Program.Low.TheVersion))
     return llvm::make_error<llvm::StringError>(
         "sbf: raw interpreter requires a concrete SBF version",
         llvm::inconvertibleErrorCode());
-  if (Program.Text.empty() || Program.Text.size() % kInstructionSize != 0)
+  const llvm::ArrayRef<uint8_t> Text = Program.text();
+  if (Text.empty() || Text.size() % kInstructionSize != 0)
     return llvm::make_error<llvm::StringError>(
         "sbf: raw interpreter requires non-empty, instruction-aligned text",
         llvm::inconvertibleErrorCode());
-  if (Program.Text.size() / kInstructionSize > kMaxInstructions)
+  if (Text.size() / kInstructionSize > kMaxInstructions)
     return llvm::make_error<llvm::StringError>(
         "sbf: raw interpreter program exceeds the instruction limit",
         llvm::inconvertibleErrorCode());
-  if (Program.Low.EntrySlot >= Program.Text.size() / kInstructionSize)
+  if (Program.Low.EntrySlot >= Text.size() / kInstructionSize)
     return llvm::make_error<llvm::StringError>(
         "sbf: raw interpreter entry point is outside program text",
         llvm::inconvertibleErrorCode());
-  if (Options.MaxCallDepth == 0)
+  if (Options.MaxCallDepth && *Options.MaxCallDepth == 0)
     return llvm::make_error<llvm::StringError>(
         "sbf: raw interpreter call-depth limit must be non-zero",
+        llvm::inconvertibleErrorCode());
+  if (Options.MaxCallDepth &&
+      *Options.MaxCallDepth > Program.Config.MaxCallDepth)
+    return llvm::make_error<llvm::StringError>(
+        "sbf: raw interpreter call-depth limit exceeds the VM configuration",
         llvm::inconvertibleErrorCode());
   return llvm::Error::success();
 }
@@ -194,17 +200,16 @@ llvm::Error validateMemory(const std::vector<MemoryRegion> &Memory,
 
 void appendProgramMemory(const SBFProgram &Program,
                          std::vector<MemoryRegion> &Memory) {
-  if (!Program.Rodata.empty() && Program.Image.RodataVM.Size != 0)
-    Memory.push_back({Program.Image.RodataVM.Address, Program.Rodata, false,
-                      kRodataSegmentName.str()});
+  for (const ProgramRegion &Region : Program.ExecutableImage.regions())
+    if (Region.DataVisible && !Region.Bytes.empty())
+      Memory.push_back({Region.Address, Region.Bytes, false, Region.Name});
 
-  if (versionHasFeature(Program.Low.TheVersion,
-                        VersionFeature::StackFrameGaps)) {
-    for (size_t Frame = 0; Frame < kDefaultMaxCallDepth; ++Frame) {
+  if (usesStackFrameGaps(Program.Low.TheVersion, Program.Config)) {
+    for (size_t Frame = 0; Frame < Program.Config.MaxCallDepth; ++Frame) {
       MemoryRegion Stack;
-      Stack.Address = kStackStart +
-                      Frame * kDefaultStackFrameSize * kStackFrameGapMultiplier;
-      Stack.Bytes.resize(kDefaultStackFrameSize);
+      Stack.Address = kStackStart + Frame * Program.Config.StackFrameSize *
+                                        kStackFrameGapMultiplier;
+      Stack.Bytes.resize(Program.Config.StackFrameSize);
       Stack.Writable = true;
       Stack.Name = "stack." + std::to_string(Frame);
       Memory.push_back(std::move(Stack));
@@ -212,7 +217,7 @@ void appendProgramMemory(const SBFProgram &Program,
   } else {
     MemoryRegion Stack;
     Stack.Address = kStackStart;
-    Stack.Bytes.resize(kDefaultStackSize);
+    Stack.Bytes.resize(stackSize(Program.Config));
     Stack.Writable = true;
     Stack.Name = "stack";
     Memory.push_back(std::move(Stack));
@@ -226,28 +231,6 @@ const LowInstruction *findAnalyzedInstruction(const SBFProgram &Program,
   const LowInstruction &Instruction = Program.Low.Instructions[Slot];
   return Instruction.Slot == Slot && !Instruction.IsContinuation ? &Instruction
                                                                  : nullptr;
-}
-
-uint64_t immediateValue(const RawInstruction &Instruction, Version TheVersion) {
-  if (versionHasFeature(TheVersion, VersionFeature::PQR) &&
-      (Instruction.Info->Op == Operation::UHighMul ||
-       Instruction.Info->Op == Operation::UDiv ||
-       Instruction.Info->Op == Operation::URem ||
-       Instruction.Info->Op == Operation::HighOr))
-    return static_cast<uint32_t>(Instruction.Immediate);
-  return static_cast<uint64_t>(static_cast<int64_t>(Instruction.Immediate));
-}
-
-uint64_t extendALU32(uint32_t Value, const OpcodeInfo &Info,
-                     Version TheVersion) {
-  if (Info.ID == Opcode::MOV32_REG &&
-      versionHasFeature(TheVersion, VersionFeature::ExplicitSignExtension))
-    return signExtend32(Value);
-  if ((Info.Op == Operation::Add || Info.Op == Operation::Sub ||
-       Info.Op == Operation::Mul) &&
-      !versionHasFeature(TheVersion, VersionFeature::ExplicitSignExtension))
-    return signExtend32(Value);
-  return Value;
 }
 
 } // namespace
@@ -271,10 +254,13 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
   std::array<uint64_t, kRegisterCount> Registers{};
   Registers[kFirstArgumentRegister] = Environment.Input;
   Registers[kFramePointerRegister] =
-      initialFramePointer(Program.Low.TheVersion);
+      initialFramePointer(Program.Low.TheVersion, Program.Config);
   std::vector<CallFrame> Frames;
-  Frames.reserve(Options.MaxCallDepth);
-  const size_t InstructionCount = Program.Text.size() / kInstructionSize;
+  const size_t MaxCallDepth =
+      Options.MaxCallDepth.value_or(Program.Config.MaxCallDepth);
+  Frames.reserve(MaxCallDepth);
+  const llvm::ArrayRef<uint8_t> Text = Program.text();
+  const size_t InstructionCount = Text.size() / kInstructionSize;
   size_t PC = Program.Low.EntrySlot;
 
   auto Finish = [&] {
@@ -328,7 +314,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
   auto PushFrame = [&](size_t ReturnSlot) {
     // The current Anza interpreter increments depth and faults when it reaches
     // max_call_depth, so the terminal depth value is reserved for the fault.
-    if (Frames.size() + 1 >= Options.MaxCallDepth) {
+    if (Frames.size() + 1 >= MaxCallDepth) {
       Fail(FaultCode::CallDepth, "maximum SBF call depth exceeded");
       return false;
     }
@@ -342,7 +328,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
     if (!versionHasFeature(Program.Low.TheVersion,
                            VersionFeature::ManualStackFrames)) {
       Registers[kFramePointerRegister] +=
-          automaticFrameStride(Program.Low.TheVersion);
+          automaticFrameStride(Program.Low.TheVersion, Program.Config);
     }
     return true;
   };
@@ -394,11 +380,10 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
     Result.FinalSlot = PC;
     size_t NextPC = PC + 1;
     const OpcodeInfo &Info = *Instruction.Info;
-    const uint64_t Immediate =
-        immediateValue(Instruction, Program.Low.TheVersion);
-    const uint64_t Source = Info.Form == OperandForm::DstSrc ||
-                                    Info.Form == OperandForm::BranchReg ||
-                                    Info.Form == OperandForm::StoreReg
+    const SemanticTraits Traits = semanticTraits(Info, Program.Low.TheVersion);
+    const uint64_t Immediate = normalizeImmediate(
+        static_cast<uint32_t>(Instruction.Immediate), Traits.Immediate);
+    const uint64_t Source = Traits.Source == OperandSourceKind::SourceRegister
                                 ? Registers[Instruction.Src]
                                 : Immediate;
 
@@ -408,8 +393,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
              "LDDW is missing its continuation slot");
         continue;
       }
-      const uint8_t *Continuation =
-          Program.Text.data() + (PC + 1) * kInstructionSize;
+      const uint8_t *Continuation = Text.data() + (PC + 1) * kInstructionSize;
       if (Continuation[kOpcodeOffset] != 0) {
         Fail(FaultCode::InvalidInstruction,
              "LDDW continuation has a non-zero opcode");
@@ -418,8 +402,9 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
       const uint64_t High =
           llvm::support::endian::read32le(Continuation + kImmediateOffset);
       Registers[Instruction.Dst] =
-          static_cast<uint32_t>(Instruction.Immediate) | (High << 32);
-      NextPC = PC + kLDDWSlotWidth;
+          static_cast<uint32_t>(Instruction.Immediate) |
+          (High << kWordBitWidth);
+      NextPC = PC + kLDDWSlotCount;
     } else if (Info.Op == Operation::Load) {
       const uint64_t Address =
           Registers[Instruction.Src] +
@@ -433,10 +418,9 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           static_cast<uint64_t>(static_cast<int64_t>(Instruction.Offset));
       Store(Address, Info.Width, Source);
     } else if (Info.Op == Operation::Mov) {
-      if (Info.Width == 32) {
+      if (Info.Width == kWordBitWidth) {
         const uint32_t Value = static_cast<uint32_t>(Source);
-        Registers[Instruction.Dst] =
-            extendALU32(Value, Info, Program.Low.TheVersion);
+        Registers[Instruction.Dst] = extendALU32Result(Value, Traits.Result);
       } else {
         Registers[Instruction.Dst] = Source;
       }
@@ -445,7 +429,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
                Info.Op == Operation::And || Info.Op == Operation::Xor ||
                Info.Op == Operation::LSh || Info.Op == Operation::RSh ||
                Info.Op == Operation::ARSh || Info.Op == Operation::Neg) {
-      if (Info.Width == 32) {
+      if (Info.Width == kWordBitWidth) {
         const uint32_t Left = static_cast<uint32_t>(Registers[Instruction.Dst]);
         const uint32_t Right = static_cast<uint32_t>(Source);
         uint32_t Value = 0;
@@ -454,11 +438,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           Value = Left + Right;
           break;
         case Operation::Sub:
-          Value = versionHasFeature(Program.Low.TheVersion,
-                                    VersionFeature::SwapSubImmediate) &&
-                          Info.Form == OperandForm::DstImm
-                      ? Right - Left
-                      : Left - Right;
+          Value = Traits.SwapOperands ? Right - Left : Left - Right;
           break;
         case Operation::Mul:
           Value = Left * Right;
@@ -473,10 +453,10 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           Value = Left ^ Right;
           break;
         case Operation::LSh:
-          Value = Left << (Right & 31);
+          Value = Left << (Right & (kWordBitWidth - 1));
           break;
         case Operation::RSh:
-          Value = Left >> (Right & 31);
+          Value = Left >> (Right & (kWordBitWidth - 1));
           break;
         case Operation::ARSh:
           Value = arithmeticShiftRight32(Left, Right);
@@ -487,8 +467,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
         default:
           llvm_unreachable("covered ALU32 operation");
         }
-        Registers[Instruction.Dst] =
-            extendALU32(Value, Info, Program.Low.TheVersion);
+        Registers[Instruction.Dst] = extendALU32Result(Value, Traits.Result);
       } else {
         const uint64_t Left = Registers[Instruction.Dst];
         uint64_t Value = 0;
@@ -497,11 +476,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           Value = Left + Source;
           break;
         case Operation::Sub:
-          Value = versionHasFeature(Program.Low.TheVersion,
-                                    VersionFeature::SwapSubImmediate) &&
-                          Info.Form == OperandForm::DstImm
-                      ? Source - Left
-                      : Left - Source;
+          Value = Traits.SwapOperands ? Source - Left : Left - Source;
           break;
         case Operation::Mul:
           Value = Left * Source;
@@ -516,10 +491,10 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           Value = Left ^ Source;
           break;
         case Operation::LSh:
-          Value = Left << (Source & 63);
+          Value = Left << (Source & (kDoubleWordBitWidth - 1));
           break;
         case Operation::RSh:
-          Value = Left >> (Source & 63);
+          Value = Left >> (Source & (kDoubleWordBitWidth - 1));
           break;
         case Operation::ARSh:
           Value = arithmeticShiftRight64(Left, Source);
@@ -540,7 +515,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           signedHighMultiply64(Registers[Instruction.Dst], Source);
     } else if (Info.Op == Operation::UDiv || Info.Op == Operation::URem ||
                Info.Op == Operation::SDiv || Info.Op == Operation::SRem) {
-      if (Info.Width == 32) {
+      if (Info.Width == kWordBitWidth) {
         const uint32_t Left = static_cast<uint32_t>(Registers[Instruction.Dst]);
         const uint32_t Right = static_cast<uint32_t>(Source);
         if (Right == 0) {
@@ -592,17 +567,17 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
           (Info.Op == Operation::EndianLE &&
            llvm::endianness::native == llvm::endianness::big);
       switch (Instruction.Immediate) {
-      case 16: {
+      case kHalfWordBitWidth: {
         uint16_t Narrow = static_cast<uint16_t>(Value);
         Registers[Instruction.Dst] = Swap ? llvm::byteswap(Narrow) : Narrow;
         break;
       }
-      case 32: {
+      case kWordBitWidth: {
         uint32_t Narrow = static_cast<uint32_t>(Value);
         Registers[Instruction.Dst] = Swap ? llvm::byteswap(Narrow) : Narrow;
         break;
       }
-      case 64:
+      case kDoubleWordBitWidth:
         Registers[Instruction.Dst] = Swap ? llvm::byteswap(Value) : Value;
         break;
       default:
@@ -613,7 +588,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
     } else if (Info.Op == Operation::HighOr) {
       Registers[Instruction.Dst] |=
           static_cast<uint64_t>(static_cast<uint32_t>(Instruction.Immediate))
-          << 32;
+          << kWordBitWidth;
     } else if (Info.Op == Operation::Jump) {
       auto Target = BranchTarget(static_cast<int64_t>(PC) + 1 +
                                  static_cast<int64_t>(Instruction.Offset));
@@ -623,7 +598,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
       const uint64_t Left64 = Registers[Instruction.Dst];
       const uint64_t Right64 = Source;
       bool Taken = false;
-      if (Info.Width == 32) {
+      if (Info.Width == kWordBitWidth) {
         const uint32_t Left = static_cast<uint32_t>(Left64);
         const uint32_t Right = static_cast<uint32_t>(Right64);
         switch (Info.Op) {
@@ -749,26 +724,28 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
              "SBF immediate call target cannot be resolved");
       }
     } else if (Info.Op == Operation::CallX) {
-      unsigned Register = static_cast<unsigned>(Instruction.Immediate);
-      if (versionHasFeature(Program.Low.TheVersion,
-                            VersionFeature::CallXSource))
-        Register = Instruction.Src;
-      else if (versionHasFeature(Program.Low.TheVersion,
-                                 VersionFeature::CallXDestination))
-        Register = Instruction.Dst;
-      if (Register >= kFramePointerRegister) {
+      const int64_t Register =
+          callxRegisterIndex(Program.Low.TheVersion, Instruction.Dst,
+                             Instruction.Src, Instruction.Immediate);
+      if (Register < 0 || Register >= kFramePointerRegister) {
         Fail(FaultCode::InvalidRegister,
              "SBF indirect call uses an invalid register");
       } else {
-        const uint64_t TargetAddress = Registers[Register];
+        const uint64_t TargetAddress =
+            Registers[static_cast<unsigned>(Register)];
         const uint64_t TargetSlot =
             (TargetAddress - Program.Low.TextAddress) / kInstructionSize;
-        auto Target = BranchTarget(static_cast<int64_t>(TargetSlot));
-        if (Target && PushFrame(NextPC))
-          NextPC = *Target;
-        else if (Result.Status == ExecutionStatus::Faulted &&
-                 Result.Fault == FaultCode::InvalidBranch)
-          Result.Fault = FaultCode::UnknownIndirectCall;
+        // Upstream pushes the frame before checking the dynamic PC. This
+        // determines fault precedence when both call depth and target are bad.
+        if (PushFrame(NextPC)) {
+          if (TargetSlot >= InstructionCount)
+            Fail(FaultCode::UnknownIndirectCall,
+                 "SBF indirect call target is outside program text");
+          else
+            // A target may be any in-range slot. Landing on an LDDW
+            // continuation is observed as InvalidInstruction on the next step.
+            NextPC = static_cast<size_t>(TargetSlot);
+        }
       }
     } else if (Info.Op == Operation::Exit) {
       if (Frames.empty()) {

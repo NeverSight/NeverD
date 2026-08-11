@@ -24,25 +24,29 @@ std::string reg(unsigned Register) {
   return "r[" + std::to_string(Register) + "]";
 }
 
-std::string immediate(const MedInstruction &Instruction) {
-  switch (Instruction.ImmediateMode) {
-  case ImmediateExtension::Zero32:
-    return word(static_cast<uint32_t>(Instruction.Immediate));
-  case ImmediateExtension::Full64:
-    return word(Instruction.Immediate);
-  case ImmediateExtension::Sign32:
-    return word(static_cast<uint64_t>(
-        static_cast<int64_t>(static_cast<int32_t>(Instruction.Immediate))));
+std::string argumentRegisters() {
+  std::string Result = "[";
+  for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index) {
+    if (Index != 0)
+      Result += ", ";
+    Result += reg(kFirstArgumentRegister + Index);
   }
-  return word(Instruction.Immediate);
+  Result += "]";
+  return Result;
+}
+
+std::string immediate(const MedInstruction &Instruction) {
+  return word(normalizeImmediate(Instruction.Immediate,
+                                 Instruction.Semantics.Immediate));
 }
 
 std::string source(const MedInstruction &Instruction) {
-  switch (Instruction.Form) {
-  case OperandForm::DstSrc:
-  case OperandForm::BranchReg:
-  case OperandForm::StoreReg:
+  switch (Instruction.Semantics.Source) {
+  case OperandSourceKind::SourceRegister:
     return reg(Instruction.Src);
+  case OperandSourceKind::None:
+  case OperandSourceKind::Immediate:
+  case OperandSourceKind::VersionedCallRegister:
   default:
     return immediate(Instruction);
   }
@@ -50,7 +54,7 @@ std::string source(const MedInstruction &Instruction) {
 
 std::string applyExtension(const MedInstruction &Instruction,
                            llvm::StringRef Expression) {
-  switch (Instruction.Extension) {
+  switch (Instruction.Semantics.Result) {
   case ResultExtension::Zero32:
     return "(" + Expression.str() + " as u32) as u64";
   case ResultExtension::Sign32:
@@ -71,8 +75,10 @@ void assign(llvm::raw_ostream &OS, const MedInstruction &Instruction,
 std::string comparison(const MedInstruction &Instruction) {
   const std::string L = reg(Instruction.Dst);
   const std::string R = source(Instruction);
-  const std::string LU = Instruction.Width == 32 ? "(" + L + " as u32)" : L;
-  const std::string RU = Instruction.Width == 32 ? "(" + R + " as u32)" : R;
+  const std::string LU =
+      Instruction.Width == kWordBitWidth ? "(" + L + " as u32)" : L;
+  const std::string RU =
+      Instruction.Width == kWordBitWidth ? "(" + R + " as u32)" : R;
   switch (Instruction.Op) {
   case Operation::Eq:
     return LU + " == " + RU;
@@ -87,17 +93,21 @@ std::string comparison(const MedInstruction &Instruction) {
   case Operation::ULe:
     return LU + " <= " + RU;
   case Operation::SGt:
-    return Instruction.Width == 32 ? LU + " as i32 > " + RU + " as i32"
-                                   : LU + " as i64 > " + RU + " as i64";
+    return Instruction.Width == kWordBitWidth
+               ? LU + " as i32 > " + RU + " as i32"
+               : LU + " as i64 > " + RU + " as i64";
   case Operation::SGe:
-    return Instruction.Width == 32 ? LU + " as i32 >= " + RU + " as i32"
-                                   : LU + " as i64 >= " + RU + " as i64";
+    return Instruction.Width == kWordBitWidth
+               ? LU + " as i32 >= " + RU + " as i32"
+               : LU + " as i64 >= " + RU + " as i64";
   case Operation::SLt:
-    return Instruction.Width == 32 ? LU + " as i32 < " + RU + " as i32"
-                                   : LU + " as i64 < " + RU + " as i64";
+    return Instruction.Width == kWordBitWidth
+               ? LU + " as i32 < " + RU + " as i32"
+               : LU + " as i64 < " + RU + " as i64";
   case Operation::SLe:
-    return Instruction.Width == 32 ? LU + " as i32 <= " + RU + " as i32"
-                                   : LU + " as i64 <= " + RU + " as i64";
+    return Instruction.Width == kWordBitWidth
+               ? LU + " as i32 <= " + RU + " as i32"
+               : LU + " as i64 <= " + RU + " as i64";
   case Operation::Set:
     return "(" + LU + " & " + RU + ") != 0";
   default:
@@ -119,27 +129,28 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
     break;
   case Operation::Add:
     assign(OS, Instruction,
-           Instruction.Width == 32
+           Instruction.Width == kWordBitWidth
                ? "(" + D + " as u32).wrapping_add(" + S + " as u32)"
                : D + ".wrapping_add(" + S + ")",
            Indent);
     break;
   case Operation::Sub:
-    if (Instruction.Width == 32)
+    if (Instruction.Width == kWordBitWidth)
       assign(OS, Instruction,
-             Instruction.SwapOperands
+             Instruction.Semantics.SwapOperands
                  ? "(" + S + " as u32).wrapping_sub(" + D + " as u32)"
                  : "(" + D + " as u32).wrapping_sub(" + S + " as u32)",
              Indent);
     else
       assign(OS, Instruction,
-             Instruction.SwapOperands ? S + ".wrapping_sub(" + D + ")"
-                                      : D + ".wrapping_sub(" + S + ")",
+             Instruction.Semantics.SwapOperands
+                 ? S + ".wrapping_sub(" + D + ")"
+                 : D + ".wrapping_sub(" + S + ")",
              Indent);
     break;
   case Operation::Mul:
     assign(OS, Instruction,
-           Instruction.Width == 32
+           Instruction.Width == kWordBitWidth
                ? "(" + D + " as u32).wrapping_mul(" + S + " as u32)"
                : D + ".wrapping_mul(" + S + ")",
            Indent);
@@ -169,21 +180,21 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
     break;
   case Operation::LSh:
     assign(OS, Instruction,
-           Instruction.Width == 32
+           Instruction.Width == kWordBitWidth
                ? "(" + D + " as u32).wrapping_shl(" + S + " as u32)"
                : D + ".wrapping_shl(" + S + " as u32)",
            Indent);
     break;
   case Operation::RSh:
     assign(OS, Instruction,
-           Instruction.Width == 32
+           Instruction.Width == kWordBitWidth
                ? "(" + D + " as u32).wrapping_shr(" + S + " as u32)"
                : D + ".wrapping_shr(" + S + " as u32)",
            Indent);
     break;
   case Operation::ARSh:
     assign(OS, Instruction,
-           Instruction.Width == 32
+           Instruction.Width == kWordBitWidth
                ? "(" + D + " as i32).wrapping_shr(" + S + " as u32) as u32"
                : "(" + D + " as i64).wrapping_shr(" + S + " as u32) as u64",
            Indent);
@@ -191,9 +202,9 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
   case Operation::UDiv:
   case Operation::URem: {
     const std::string Divisor =
-        Instruction.Width == 32 ? "(" + S + " as u32)" : S;
+        Instruction.Width == kWordBitWidth ? "(" + S + " as u32)" : S;
     const std::string Dividend =
-        Instruction.Width == 32 ? "(" + D + " as u32)" : D;
+        Instruction.Width == kWordBitWidth ? "(" + D + " as u32)" : D;
     OS << Indent << "if " << Divisor
        << " == 0 { return Err(SbfError::DivideByZero); }\n";
     assign(OS, Instruction,
@@ -204,7 +215,7 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
   }
   case Operation::SDiv:
   case Operation::SRem: {
-    const bool Width32 = Instruction.Width == 32;
+    const bool Width32 = Instruction.Width == kWordBitWidth;
     const std::string SignedD =
         Width32 ? "(" + D + " as i32)" : "(" + D + " as i64)";
     const std::string SignedS =
@@ -219,17 +230,17 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
     break;
   }
   case Operation::EndianLE:
-    if (Instruction.Immediate == 16)
+    if (Instruction.Immediate == kHalfWordBitWidth)
       assign(OS, Instruction, D + " as u16", Indent);
-    else if (Instruction.Immediate == 32)
+    else if (Instruction.Immediate == kWordBitWidth)
       assign(OS, Instruction, D + " as u32", Indent);
     else
       assign(OS, Instruction, D, Indent);
     break;
   case Operation::EndianBE:
-    if (Instruction.Immediate == 16)
+    if (Instruction.Immediate == kHalfWordBitWidth)
       assign(OS, Instruction, "(" + D + " as u16).swap_bytes()", Indent);
-    else if (Instruction.Immediate == 32)
+    else if (Instruction.Immediate == kWordBitWidth)
       assign(OS, Instruction, "(" + D + " as u32).swap_bytes()", Indent);
     else
       assign(OS, Instruction, D + ".swap_bytes()", Indent);
@@ -237,7 +248,7 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
   case Operation::HighOr:
     assign(OS, Instruction,
            D + " | (" + word(static_cast<uint32_t>(Instruction.Immediate)) +
-               " << 32)",
+               " << " + std::to_string(kWordBitWidth) + ")",
            Indent);
     break;
   case Operation::Load: {
@@ -267,9 +278,9 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
   case Operation::Call:
     if (Instruction.Call != CallKind::Syscall)
       return false;
-    OS << Indent << "r[0] = env.syscall(0x"
-       << llvm::utohexstr(Instruction.SyscallHash, true)
-       << "u32, [r[1], r[2], r[3], r[4], r[5]])?;\n";
+    OS << Indent << "r[RETURN_REGISTER] = env.syscall(0x"
+       << llvm::utohexstr(Instruction.SyscallHash, true) << "u32, "
+       << argumentRegisters() << ")?;\n";
     break;
   case Operation::Jump:
   case Operation::Eq:
@@ -293,8 +304,7 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
 
 void advance(llvm::raw_ostream &OS, const MedInstruction &Instruction,
              size_t Count) {
-  const size_t Next =
-      Instruction.Slot + (Instruction.SourceOpcode == Opcode::LDDW ? 2 : 1);
+  const size_t Next = Instruction.Slot + Instruction.SlotWidth;
   if (Next < Count)
     OS << "                pc = " << Next << ";\n";
   else
@@ -302,7 +312,7 @@ void advance(llvm::raw_ostream &OS, const MedInstruction &Instruction,
 }
 
 void pushFrame(llvm::raw_ostream &OS, const MedInstruction &Instruction,
-               Version Version) {
+               const SBFProgram &Program) {
   OS << "                if depth + 1 >= MAX_CALL_DEPTH { return "
         "Err(SbfError::CallDepth); }\n"
      << "                return_pc[depth] = " << Instruction.Slot + 1 << ";\n"
@@ -311,9 +321,11 @@ void pushFrame(llvm::raw_ostream &OS, const MedInstruction &Instruction,
         "SAVED_REGISTERS]);\n"
      << "                saved_fp[depth] = r[FRAME_POINTER];\n"
      << "                depth += 1;\n";
-  if (!versionHasFeature(Version, VersionFeature::ManualStackFrames)) {
+  if (!versionHasFeature(Program.Low.TheVersion,
+                         VersionFeature::ManualStackFrames)) {
     OS << "                r[FRAME_POINTER] = r[FRAME_POINTER].wrapping_add("
-       << automaticFrameStride(Version) << "u64);\n";
+       << automaticFrameStride(Program.Low.TheVersion, Program.Config)
+       << "u64);\n";
   }
 }
 
@@ -352,16 +364,16 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
     return;
   case Operation::Call:
     if (Instruction.Call == CallKind::Internal && Instruction.CallTarget) {
-      pushFrame(OS, Instruction, Program.Low.TheVersion);
+      pushFrame(OS, Instruction, Program);
       OS << "                pc = " << *Instruction.CallTarget << ";\n"
          << "            }\n";
       return;
     }
-    OS << "                return Err(SbfError::UnknownFunction);\n"
+    OS << "                return Err(SbfError::UnknownSyscall);\n"
        << "            }\n";
     return;
   case Operation::CallX:
-    pushFrame(OS, Instruction, Program.Low.TheVersion);
+    pushFrame(OS, Instruction, Program);
     OS << "                let target = r["
        << unsigned(Instruction.CallRegister)
        << "];\n"
@@ -374,7 +386,7 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
           "            }\n";
     return;
   case Operation::Exit:
-    OS << "                if depth == 0 { return Ok(r[0]); }\n"
+    OS << "                if depth == 0 { return Ok(r[RETURN_REGISTER]); }\n"
           "                depth -= 1;\n"
           "                r[FIRST_SAVED..FIRST_SAVED + SAVED_REGISTERS]"
           ".copy_from_slice(&saved[depth]);\n"
@@ -446,7 +458,7 @@ bool emitStructuredBlock(llvm::raw_ostream &OS, const SBFProgram &Program,
                          Instruction.BranchTarget.has_value()))
       continue;
     if (Instruction.Op == Operation::Exit) {
-      OS << Indent << "return Ok(r[0]);\n";
+      OS << Indent << "return Ok(r[RETURN_REGISTER]);\n";
       continue;
     }
     if (!emitLinearInstruction(OS, Instruction, Indent))
@@ -506,6 +518,8 @@ bool emitStructuredNodes(llvm::raw_ostream &OS, const SBFProgram &Program,
 
 llvm::Expected<std::string> emitRust(const SBFProgram &Program,
                                      const RustEmitterOptions &Options) {
+  if (llvm::Error Error = validateVMConfig(Program.Config))
+    return std::move(Error);
   if (Program.Med.Instructions.empty())
     return llvm::make_error<llvm::StringError>(
         "sbf: cannot emit Rust for an empty MedIR",
@@ -523,7 +537,8 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
   bool NeedsCallFrames = false;
   bool NeedsIndirectCall = false;
   for (const MedInstruction &Instruction : Program.Med.Instructions) {
-    NeedsSignExtension |= Instruction.Extension == ResultExtension::Sign32;
+    NeedsSignExtension |=
+        Instruction.Semantics.Result == ResultExtension::Sign32;
     NeedsCallFrames |= Instruction.Call == CallKind::Internal ||
                        Instruction.Op == Operation::CallX;
     NeedsIndirectCall |= Instruction.Op == Operation::CallX;
@@ -544,16 +559,20 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
         "SbfError>;\n"
         "    fn store(&mut self, address: u64, width: u8, value: u64) -> "
         "Result<(), SbfError>;\n"
-        "    fn syscall(&mut self, hash: u32, args: [u64; 5]) -> Result<u64, "
-        "SbfError>;\n"
+        "    fn syscall(&mut self, hash: u32, args: [u64; "
+     << kArgumentRegisterCount
+     << "]) -> Result<u64, SbfError>;\n"
         "}\n\n"
         "const REGISTER_COUNT: usize = "
      << kRegisterCount
+     << ";\nconst RETURN_REGISTER: usize = " << kReturnRegister
+     << ";\nconst INPUT_REGISTER: usize = " << kFirstArgumentRegister
      << ";\nconst FRAME_POINTER: usize = " << kFramePointerRegister << ";\n";
   if (!Structured)
     OS << "const FIRST_SAVED: usize = " << kFirstCalleeSavedRegister
        << ";\nconst SAVED_REGISTERS: usize = " << kCalleeSavedRegisterCount
-       << ";\nconst MAX_CALL_DEPTH: usize = " << kDefaultMaxCallDepth << ";\n";
+       << ";\nconst MAX_CALL_DEPTH: usize = " << Program.Config.MaxCallDepth
+       << ";\n";
   if (NeedsIndirectCall)
     OS << "const INSTRUCTION_SIZE: u64 = " << kInstructionSize
        << ";\nconst TEXT_ADDRESS: u64 = " << word(Program.Low.TextAddress)
@@ -562,9 +581,9 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
   OS << "const STACK_START: u64 = " << word(kStackStart) << ";\n";
   if (versionHasFeature(Program.Low.TheVersion,
                         VersionFeature::ManualStackFrames))
-    OS << "const STACK_SIZE: u64 = " << kDefaultStackSize << "u64;\n\n";
+    OS << "const STACK_SIZE: u64 = " << stackSize(Program.Config) << "u64;\n\n";
   else
-    OS << "const STACK_FRAME_SIZE: u64 = " << kDefaultStackFrameSize
+    OS << "const STACK_FRAME_SIZE: u64 = " << Program.Config.StackFrameSize
        << "u64;\n\n";
   if (NeedsSignExtension)
     OS << "#[inline] fn sext32(value: u32) -> u64 { (value as i32 as i64) as "
@@ -601,7 +620,7 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
           "    let mut pc = "
        << Program.Low.EntrySlot << "usize;\n";
   }
-  OS << "    r[1] = input; r[FRAME_POINTER] = STACK_START + "
+  OS << "    r[INPUT_REGISTER] = input; r[FRAME_POINTER] = STACK_START + "
      << (versionHasFeature(Program.Low.TheVersion,
                            VersionFeature::ManualStackFrames)
              ? "STACK_SIZE"
@@ -619,8 +638,12 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
 
   OS << "    loop {\n        match pc {\n";
   for (size_t Slot = 0; Slot < Program.Low.Instructions.size(); ++Slot) {
-    if (Program.Low.Instructions[Slot].IsContinuation)
+    if (Program.Low.Instructions[Slot].IsContinuation) {
+      if (NeedsIndirectCall)
+        OS << "            " << Slot
+           << " => return Err(SbfError::InvalidInstruction),\n";
       continue;
+    }
     auto It = BySlot.find(Slot);
     if (It == BySlot.end()) {
       OS << "            " << Slot

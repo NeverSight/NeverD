@@ -245,6 +245,20 @@ TEST(SBFRustEmitter, MatchesCurrentCallFrameAndCallXSemantics) {
   EXPECT_NE(Source->find("pc >= INSTRUCTION_COUNT"), std::string::npos);
 }
 
+TEST(SBFSourceEmitters, RejectInvalidVMConfiguration) {
+  SBFProgram Program = makeReturnProgram();
+  Program.Config.MaxCallDepth = 0;
+  auto C = emitC(Program);
+  ASSERT_FALSE(static_cast<bool>(C));
+  EXPECT_NE(llvm::toString(C.takeError()).find("call depth"),
+            std::string::npos);
+
+  auto Rust = emitRust(Program);
+  ASSERT_FALSE(static_cast<bool>(Rust));
+  EXPECT_NE(llvm::toString(Rust.takeError()).find("call depth"),
+            std::string::npos);
+}
+
 TEST(SBFCEmitter, StructuresReducibleConditionAndNaturalLoop) {
   auto Program = analyze(makeReducibleImage());
   ASSERT_TRUE(static_cast<bool>(Program))
@@ -300,11 +314,15 @@ static int no_store(void *context, uint64_t address, uint32_t width,
                     uint64_t value) {
   (void)context; (void)address; (void)width; (void)value; return 1;
 }
-static int no_syscall(void *context, uint32_t hash, uint64_t a1, uint64_t a2,
-                      uint64_t a3, uint64_t a4, uint64_t a5,
-                      uint64_t *value) {
-  (void)context; (void)hash; (void)a1; (void)a2; (void)a3; (void)a4;
-  (void)a5; (void)value; return 1;
+)";
+  *Source += "static int no_syscall(void *context, uint32_t hash";
+  for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
+    *Source += ", uint64_t a" + std::to_string(kFirstArgumentRegister + Index);
+  *Source += ", uint64_t *value) {\n  (void)context; (void)hash;";
+  for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
+    *Source +=
+        " (void)a" + std::to_string(kFirstArgumentRegister + Index) + ";";
+  *Source += R"( (void)value; return 1;
 }
 int main(void) {
   neverd_sbf_environment env = {0, no_load, no_store, no_syscall};
@@ -366,7 +384,9 @@ impl SbfEnvironment for Env {
         -> Result<(), SbfError> {
         Err(SbfError::MemoryAccess)
     }
-    fn syscall(&mut self, _hash: u32, _args: [u64; 5])
+)";
+  *Source += "    fn syscall(&mut self, _hash: u32, _args: [u64; " +
+             std::to_string(kArgumentRegisterCount) + R"(])
         -> Result<u64, SbfError> {
         Err(SbfError::UnknownSyscall)
     }

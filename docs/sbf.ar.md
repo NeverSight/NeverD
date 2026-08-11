@@ -162,3 +162,43 @@ MedIR وC API. تعمل fixture فيها conditional+loop باللغتين مق�
 - استعادة Anchor IDL/types وlive RPC/accounts خارج نطاق loader.
 - تمر syscalls وVM memory في المصدر المولد عبر host contract؛ ليس runtime مستقلًا.
 - relaxed للفحص فقط ولا يمنح instruction غير صالح semantics مخمنة.
+
+## خط أساس المطابقة الحالي (2026-08-10)
+
+بعد تطبيق relocation تصبح `ProgramImage` واحدة غير قابلة للتغيير ومفهرسة بعناوين
+VM هي مصدر الحقيقة المشترك للـdecoder وinterpreter واستعادة strings وواجهات
+LLVM/C/Rust. لا توجد نسخ مستقلة من text أو rodata يمكن أن تنحرف عن loader.
+
+توجد السجلات المغلقة في `SBFVersions.def` و`SBFOpcodes.def` و
+`SBFRelocations.def` و`SBFArgumentRegisters.def` و`SBFSyscalls.def` و
+`SBFUpstreamSources.def`. تبقى رسائل التشخيص وأسماء LLVM ذات الاستخدام الواحد
+محلية، وفق أسلوب LLVM الفعلي.
+
+في strict v3/v4 تكون program headers المحدودة هي عقد runtime؛ أما section وsymbol
+tables فهي debug enrichment اختيارية لا تُسقط image صالحة عند غيابها أو تلفها.
+وفي legacy v0-v2 تُدمج `.text` و`.rodata` و`.data.rel.ro` و`.eh_frame`، ثم
+تُطبق `R_BPF_64_64` و`R_BPF_64_RELATIVE` و`R_BPF_64_32` مرة واحدة قبل تجميد image.
+
+| الدليل | النتيجة المدققة |
+|--------|-----------------|
+| manifest ELF الرسمي | 20/20 artifact من `sbpf/tests/elfs` |
+| مصفوفة ISA | كل 256 encoding عبر v0-v4، أي 1,280 خلية، مع حدود verifier |
+| differential execution | raw-byte oracle مقابل LLVM ORC وC11 وstable Rust، مع memory/fault/syscall trace |
+| التجميع المتكامل | 104/104 حالة في 13 test binary |
+| ASan + UBSan | 101/101 حالة core في 12 binary بلا report |
+
+المراجعة مثبتة على Anza `sbpf` revision
+`71425d0de59e0bff048c6be8f4a8a9bc655916e2` وAgave
+`cae40aa610fdbdb313209bc1eec737079eb59688`. لتحديثها راجع
+`SBFUpstreamManifest.def` و`SBFUpstreamOpcodes.def` و`SBFUpstreamSources.def`
+ثم شغّل:
+
+```bash
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+  cmake --build build --target check-neverd-sbf
+```
+
+أظهرت المقارنة أن `sol-azy` يتعطل على ELF strict الحالي ويحتفظ بعقدة CFG legacy
+غير معرّفة؛ `solana-data-reverser` يركز على account data، و`SolDragon` يصف
+التحليل كعمل قيد التطوير، و`bn-ebpf-solana` يتطلب Binary Ninja. لذلك يبقى
+`sbpf` وAgave الرسميان المرجع الدلالي.

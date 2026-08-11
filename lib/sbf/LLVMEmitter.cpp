@@ -7,6 +7,8 @@
 #include "neverd/sbf/LLVMEmitter.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -16,9 +18,10 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/ModRef.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <map>
+#include <algorithm>
 
 namespace neverd::sbf {
 namespace {
@@ -29,6 +32,20 @@ struct RuntimeABI {
   llvm::FunctionCallee Syscall;
   llvm::FunctionCallee Fault;
 };
+
+void addRuntimeAttributes(llvm::FunctionCallee Callee) {
+  auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+  Function->addFnAttr(llvm::Attribute::NoUnwind);
+}
+
+void addRuntimeOutputAttributes(llvm::FunctionCallee Callee,
+                                unsigned Parameter) {
+  auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+  Function->addParamAttr(
+      Parameter, llvm::Attribute::getWithCaptureInfo(
+                     Function->getContext(), llvm::CaptureInfo::none()));
+  Function->addParamAttr(Parameter, llvm::Attribute::WriteOnly);
+}
 
 struct EmitContext {
   const SBFProgram &Program;
@@ -53,6 +70,7 @@ struct EmitContext {
   llvm::Value *Environment;
   RuntimeABI Runtime;
   llvm::DenseMap<size_t, llvm::BasicBlock *> Blocks;
+  llvm::DenseMap<size_t, const MedInstruction *> Instructions;
   llvm::BasicBlock *ReturnDispatch = nullptr;
   llvm::BasicBlock *ReturnValue = nullptr;
   unsigned FaultSerial = 0;
@@ -63,15 +81,17 @@ struct EmitContext {
         Builder(Module.getContext()),
         I32(llvm::Type::getInt32Ty(Module.getContext())),
         I64(llvm::Type::getInt64Ty(Module.getContext())),
-        I128(llvm::IntegerType::get(Module.getContext(), 128)),
+        I128(llvm::IntegerType::get(Module.getContext(),
+                                    kDoubleWordBitWidth * 2)),
         Ptr(llvm::PointerType::getUnqual(Module.getContext())),
         RegisterArrayType(llvm::ArrayType::get(I64, kRegisterCount)),
-        ReturnArrayType(llvm::ArrayType::get(I32, kDefaultMaxCallDepth)),
-        SavedFPArrayType(llvm::ArrayType::get(I64, kDefaultMaxCallDepth)),
+        ReturnArrayType(llvm::ArrayType::get(I32, Program.Config.MaxCallDepth)),
+        SavedFPArrayType(
+            llvm::ArrayType::get(I64, Program.Config.MaxCallDepth)),
         SavedRegisterRowType(
             llvm::ArrayType::get(I64, kCalleeSavedRegisterCount)),
-        SavedRegisterArrayType(
-            llvm::ArrayType::get(SavedRegisterRowType, kDefaultMaxCallDepth)),
+        SavedRegisterArrayType(llvm::ArrayType::get(
+            SavedRegisterRowType, Program.Config.MaxCallDepth)),
         Registers(nullptr), Depth(nullptr), ReturnPC(nullptr), SavedFP(nullptr),
         SavedRegisters(nullptr), RuntimeResult(nullptr), Environment(nullptr),
         Runtime(Runtime) {}
@@ -126,6 +146,11 @@ RuntimeABI declareRuntime(llvm::Module &Module) {
   auto *I32 = llvm::Type::getInt32Ty(Context);
   auto *I64 = llvm::Type::getInt64Ty(Context);
   auto *Void = llvm::Type::getVoidTy(Context);
+  llvm::SmallVector<llvm::Type *, kRuntimeSyscallArgumentCount>
+      SyscallParameters{Ptr, I32};
+  for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
+    SyscallParameters.push_back(I64);
+  SyscallParameters.push_back(Ptr);
   RuntimeABI ABI{
       Module.getOrInsertFunction(
           kRuntimeLoadName,
@@ -135,35 +160,35 @@ RuntimeABI declareRuntime(llvm::Module &Module) {
           llvm::FunctionType::get(I32, {Ptr, I64, I32, I64}, false)),
       Module.getOrInsertFunction(
           kRuntimeSyscallName,
-          llvm::FunctionType::get(I32, {Ptr, I32, I64, I64, I64, I64, I64, Ptr},
-                                  false)),
+          llvm::FunctionType::get(I32, SyscallParameters, false)),
       Module.getOrInsertFunction(
           kRuntimeFaultName,
           llvm::FunctionType::get(Void, {Ptr, I32, I64}, false)),
   };
+  addRuntimeAttributes(ABI.Load);
+  addRuntimeAttributes(ABI.Store);
+  addRuntimeAttributes(ABI.Syscall);
+  addRuntimeAttributes(ABI.Fault);
+  addRuntimeOutputAttributes(ABI.Load, kRuntimeLoadOutputParameter);
+  addRuntimeOutputAttributes(ABI.Syscall, kRuntimeSyscallOutputParameter);
+  llvm::cast<llvm::Function>(ABI.Fault.getCallee())
+      ->addFnAttr(llvm::Attribute::Cold);
   return ABI;
 }
 
 llvm::Value *immediate(EmitContext &Context,
                        const MedInstruction &Instruction) {
-  switch (Instruction.ImmediateMode) {
-  case ImmediateExtension::Zero32:
-    return Context.i64(static_cast<uint32_t>(Instruction.Immediate));
-  case ImmediateExtension::Full64:
-    return Context.i64(Instruction.Immediate);
-  case ImmediateExtension::Sign32:
-    return Context.i64(static_cast<uint64_t>(
-        static_cast<int64_t>(static_cast<int32_t>(Instruction.Immediate))));
-  }
-  return Context.i64(Instruction.Immediate);
+  return Context.i64(normalizeImmediate(Instruction.Immediate,
+                                        Instruction.Semantics.Immediate));
 }
 
 llvm::Value *source(EmitContext &Context, const MedInstruction &Instruction) {
-  switch (Instruction.Form) {
-  case OperandForm::DstSrc:
-  case OperandForm::BranchReg:
-  case OperandForm::StoreReg:
+  switch (Instruction.Semantics.Source) {
+  case OperandSourceKind::SourceRegister:
     return Context.loadReg(Instruction.Src);
+  case OperandSourceKind::None:
+  case OperandSourceKind::Immediate:
+  case OperandSourceKind::VersionedCallRegister:
   default:
     return immediate(Context, Instruction);
   }
@@ -171,7 +196,7 @@ llvm::Value *source(EmitContext &Context, const MedInstruction &Instruction) {
 
 llvm::Value *widthValue(EmitContext &Context, llvm::Value *Value,
                         unsigned Width) {
-  if (Width == 32)
+  if (Width == kWordBitWidth)
     return Context.Builder.CreateTrunc(Value, Context.I32);
   return Value;
 }
@@ -229,7 +254,8 @@ llvm::Value *comparison(EmitContext &Context,
 void pushFrame(EmitContext &Context, const MedInstruction &Instruction) {
   llvm::Value *Depth = Context.Builder.CreateLoad(Context.I32, Context.Depth);
   Context.guard(Context.Builder.CreateICmpULT(
-                    Depth, Context.i32(kDefaultMaxCallDepth - 1)),
+                    Depth, Context.i32(static_cast<uint32_t>(
+                               Context.Program.Config.MaxCallDepth - 1))),
                 FaultCode::CallDepth, Instruction.Address, "call.depth");
   Depth = Context.Builder.CreateLoad(Context.I32, Context.Depth);
   Context.Builder.CreateStore(
@@ -251,7 +277,8 @@ void pushFrame(EmitContext &Context, const MedInstruction &Instruction) {
         kFramePointerRegister,
         Context.Builder.CreateAdd(
             Context.loadReg(kFramePointerRegister),
-            Context.i64(automaticFrameStride(Context.Program.Low.TheVersion))));
+            Context.i64(automaticFrameStride(Context.Program.Low.TheVersion,
+                                             Context.Program.Config))));
   }
 }
 
@@ -261,12 +288,15 @@ llvm::BasicBlock *blockFor(EmitContext &Context, size_t Slot) {
 }
 
 void branchNext(EmitContext &Context, const MedInstruction &Instruction) {
-  const size_t Next =
-      Instruction.Slot + (Instruction.SourceOpcode == Opcode::LDDW ? 2 : 1);
+  const size_t Next = Instruction.Slot + Instruction.SlotWidth;
   if (llvm::BasicBlock *Block = blockFor(Context, Next)) {
     Context.Builder.CreateBr(Block);
     return;
   }
+  // A missing LLVM block is the common straight-line case: the next SBF
+  // instruction is represented in the current LLVM basic block.
+  if (Context.Instructions.contains(Next))
+    return;
   Context.Builder.CreateCall(
       Context.Runtime.Fault,
       {Context.Environment,
@@ -302,7 +332,8 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
   }
   case Operation::Sub: {
     auto [L, R] = Operands();
-    Result = Instruction.SwapOperands ? B.CreateSub(R, L) : B.CreateSub(L, R);
+    Result = Instruction.Semantics.SwapOperands ? B.CreateSub(R, L)
+                                                : B.CreateSub(L, R);
     break;
   }
   case Operation::Mul: {
@@ -315,7 +346,8 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
     llvm::Value *Wide = B.CreateMul(B.CreateZExt(L, Context.I128),
                                     B.CreateZExt(R, Context.I128));
     Result = B.CreateTrunc(
-        B.CreateLShr(Wide, llvm::ConstantInt::get(Context.I128, 64)),
+        B.CreateLShr(Wide,
+                     llvm::ConstantInt::get(Context.I128, kDoubleWordBitWidth)),
         Context.I64);
     break;
   }
@@ -324,7 +356,8 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
     llvm::Value *Wide = B.CreateMul(B.CreateSExt(L, Context.I128),
                                     B.CreateSExt(R, Context.I128));
     Result = B.CreateTrunc(
-        B.CreateAShr(Wide, llvm::ConstantInt::get(Context.I128, 64)),
+        B.CreateAShr(Wide,
+                     llvm::ConstantInt::get(Context.I128, kDoubleWordBitWidth)),
         Context.I64);
     break;
   }
@@ -392,12 +425,12 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
   }
   case Operation::EndianLE: {
     llvm::Value *Value = Context.loadReg(Instruction.Dst);
-    if (Instruction.Immediate == 16)
+    if (Instruction.Immediate == kHalfWordBitWidth)
       Result = B.CreateZExt(
           B.CreateTrunc(Value,
                         llvm::Type::getInt16Ty(Context.Module.getContext())),
           Context.I64);
-    else if (Instruction.Immediate == 32)
+    else if (Instruction.Immediate == kWordBitWidth)
       Result = B.CreateZExt(B.CreateTrunc(Value, Context.I32), Context.I64);
     else
       Result = Value;
@@ -406,9 +439,9 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
   case Operation::EndianBE: {
     llvm::Value *Value = Context.loadReg(Instruction.Dst);
     llvm::IntegerType *Ty = Context.I64;
-    if (Instruction.Immediate == 16)
+    if (Instruction.Immediate == kHalfWordBitWidth)
       Ty = llvm::Type::getInt16Ty(Context.Module.getContext());
-    else if (Instruction.Immediate == 32)
+    else if (Instruction.Immediate == kWordBitWidth)
       Ty = Context.I32;
     llvm::Value *Narrow = Ty == Context.I64 ? Value : B.CreateTrunc(Value, Ty);
     llvm::Function *BSwap = llvm::Intrinsic::getOrInsertDeclaration(
@@ -422,7 +455,7 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
         Context.loadReg(Instruction.Dst),
         Context.i64(
             static_cast<uint64_t>(static_cast<uint32_t>(Instruction.Immediate))
-            << 32));
+            << kWordBitWidth));
     break;
   case Operation::Load: {
     llvm::Value *Base = Context.loadReg(Instruction.Src);
@@ -495,12 +528,13 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
   }
   case Operation::Call:
     if (Instruction.Call == CallKind::Syscall) {
-      llvm::Value *Status = B.CreateCall(
-          Context.Runtime.Syscall,
-          {Context.Environment, Context.i32(Instruction.SyscallHash),
-           Context.loadReg(1), Context.loadReg(2), Context.loadReg(3),
-           Context.loadReg(4), Context.loadReg(5), Context.RuntimeResult},
-          "syscall.status");
+      llvm::SmallVector<llvm::Value *, kRuntimeSyscallArgumentCount> Arguments{
+          Context.Environment, Context.i32(Instruction.SyscallHash)};
+      for (unsigned Index = 0; Index < kArgumentRegisterCount; ++Index)
+        Arguments.push_back(Context.loadReg(kFirstArgumentRegister + Index));
+      Arguments.push_back(Context.RuntimeResult);
+      llvm::Value *Status =
+          B.CreateCall(Context.Runtime.Syscall, Arguments, "syscall.status");
       Context.guard(B.CreateICmpEQ(Status, Context.i32(0)),
                     FaultCode::UnknownSyscall, Instruction.Address, "syscall");
       Result =
@@ -531,18 +565,16 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
     return;
   case Operation::CallX: {
     llvm::Value *Target = Context.loadReg(Instruction.CallRegister);
-    llvm::Value *AtOrAbove =
-        B.CreateICmpUGE(Target, Context.i64(Context.Program.Low.TextAddress));
     llvm::Value *Offset =
         B.CreateSub(Target, Context.i64(Context.Program.Low.TextAddress));
-    llvm::Value *BelowEnd =
-        B.CreateICmpULT(Offset, Context.i64(Context.Program.Text.size()));
-    Context.guard(B.CreateAnd(AtOrAbove, BelowEnd),
-                  FaultCode::UnknownIndirectCall, Instruction.Address,
-                  "callx.target");
     pushFrame(Context, Instruction);
-    llvm::Value *TargetSlot = B.CreateTrunc(
-        B.CreateUDiv(Offset, Context.i64(kInstructionSize)), Context.I32);
+    llvm::Value *TargetSlot64 =
+        B.CreateUDiv(Offset, Context.i64(kInstructionSize));
+    Context.guard(
+        B.CreateICmpULT(TargetSlot64,
+                        Context.i64(Context.Program.Low.Instructions.size())),
+        FaultCode::UnknownIndirectCall, Instruction.Address, "callx.target");
+    llvm::Value *TargetSlot = B.CreateTrunc(TargetSlot64, Context.I32);
     auto *Default = llvm::BasicBlock::Create(
         Context.Module.getContext(), "callx.invalid", &Context.Function);
     llvm::SwitchInst *Switch =
@@ -591,7 +623,7 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
   }
 
   if (Result) {
-    Result = extendResult(Context, Result, Instruction.Extension);
+    Result = extendResult(Context, Result, Instruction.Semantics.Result);
     Context.storeReg(Instruction.Dst, Result);
   }
   branchNext(Context, Instruction);
@@ -602,6 +634,8 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
 llvm::Expected<std::unique_ptr<llvm::Module>>
 emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
          const LLVMEmitterOptions &Options) {
+  if (llvm::Error Error = validateVMConfig(Program.Config))
+    return std::move(Error);
   if (Program.Med.Instructions.empty())
     return llvm::make_error<llvm::StringError>(
         "sbf: cannot emit LLVM IR for an empty MedIR",
@@ -614,6 +648,7 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
   auto *Function =
       llvm::Function::Create(FunctionType, llvm::GlobalValue::ExternalLinkage,
                              Options.FunctionName, *Module);
+  Function->addFnAttr(llvm::Attribute::NoUnwind);
   auto Arguments = Function->arg_begin();
   llvm::Value *Environment = &*Arguments++;
   llvm::Value *Input = &*Arguments;
@@ -622,14 +657,63 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
 
   EmitContext EC(Program, *Module, *Function, Runtime);
   EC.Environment = Environment;
+  for (const MedInstruction &Instruction : Program.Med.Instructions) {
+    if (Instruction.Slot >= Program.Low.Instructions.size() ||
+        Program.Low.Instructions[Instruction.Slot].IsContinuation ||
+        Program.Low.Instructions[Instruction.Slot].Address !=
+            Instruction.Address)
+      return llvm::make_error<llvm::StringError>(
+          "sbf: LLVM emitter received inconsistent LowIR and MedIR slots",
+          llvm::inconvertibleErrorCode());
+    if (!EC.Instructions.insert({Instruction.Slot, &Instruction}).second)
+      return llvm::make_error<llvm::StringError>(
+          "sbf: LLVM emitter found duplicate MedIR instruction slots",
+          llvm::inconvertibleErrorCode());
+  }
+  for (size_t Slot = 0; Slot < Program.Low.Instructions.size(); ++Slot)
+    if (Program.Low.Instructions[Slot].Slot != Slot)
+      return llvm::make_error<llvm::StringError>(
+          "sbf: LLVM emitter received a non-canonical LowIR slot table",
+          llvm::inconvertibleErrorCode());
   auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
   EC.ReturnDispatch =
       llvm::BasicBlock::Create(Context, "return.dispatch", Function);
   EC.ReturnValue = llvm::BasicBlock::Create(Context, "return.value", Function);
-  for (const LowInstruction &Instruction : Program.Low.Instructions)
-    if (!Instruction.IsContinuation)
-      EC.Blocks[Instruction.Slot] = llvm::BasicBlock::Create(
-          Context, "pc." + std::to_string(Instruction.Slot), Function);
+  if (Program.Low.Blocks.empty())
+    return llvm::make_error<llvm::StringError>(
+        "sbf: LLVM emitter requires a non-empty LowIR CFG",
+        llvm::inconvertibleErrorCode());
+  for (const BasicBlock &Block : Program.Low.Blocks) {
+    if (Block.StartSlot >= Block.EndSlot ||
+        Block.EndSlot > Program.Low.Instructions.size() ||
+        !EC.Instructions.contains(Block.StartSlot) ||
+        !EC.Blocks
+             .insert({Block.StartSlot,
+                      llvm::BasicBlock::Create(
+                          Context,
+                          "sbf.bb." + std::to_string(Block.ID) + ".pc." +
+                              std::to_string(Block.StartSlot),
+                          Function)})
+             .second)
+      return llvm::make_error<llvm::StringError>(
+          "sbf: LLVM emitter received an inconsistent LowIR CFG",
+          llvm::inconvertibleErrorCode());
+  }
+
+  // CALLX accepts any complete instruction address at runtime. Splitting every
+  // possible dynamic entry preserves that contract while ordinary programs
+  // retain one LLVM block per analyzed SBF basic block.
+  const bool HasIndirectCall = std::any_of(
+      Program.Med.Instructions.begin(), Program.Med.Instructions.end(),
+      [](const MedInstruction &Instruction) {
+        return Instruction.Op == Operation::CallX;
+      });
+  if (HasIndirectCall)
+    for (const LowInstruction &Instruction : Program.Low.Instructions)
+      if (!EC.Blocks.contains(Instruction.Slot))
+        EC.Blocks[Instruction.Slot] = llvm::BasicBlock::Create(
+            Context, "sbf.callx.pc." + std::to_string(Instruction.Slot),
+            Function);
 
   EC.Builder.SetInsertPoint(Entry);
   EC.Registers = EC.Builder.CreateAlloca(EC.RegisterArrayType, nullptr, "regs");
@@ -644,8 +728,9 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
   for (unsigned Register = 0; Register < kRegisterCount; ++Register)
     EC.storeReg(Register, EC.i64(0));
   EC.storeReg(kFirstArgumentRegister, Input);
-  EC.storeReg(kFramePointerRegister,
-              EC.i64(initialFramePointer(Program.Low.TheVersion)));
+  EC.storeReg(
+      kFramePointerRegister,
+      EC.i64(initialFramePointer(Program.Low.TheVersion, Program.Config)));
   EC.Builder.CreateStore(EC.i32(0), EC.Depth);
   llvm::BasicBlock *Entrypoint = blockFor(EC, Program.Low.EntrySlot);
   if (!Entrypoint)
@@ -654,25 +739,44 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
         llvm::inconvertibleErrorCode());
   EC.Builder.CreateBr(Entrypoint);
 
-  std::map<size_t, const MedInstruction *> BySlot;
-  for (const MedInstruction &Instruction : Program.Med.Instructions)
-    BySlot[Instruction.Slot] = &Instruction;
-  for (const LowInstruction &Low : Program.Low.Instructions) {
-    if (Low.IsContinuation)
-      continue;
-    EC.Builder.SetInsertPoint(blockFor(EC, Low.Slot));
-    auto It = BySlot.find(Low.Slot);
-    if (It == BySlot.end()) {
+  for (const BasicBlock &Block : Program.Low.Blocks) {
+    EC.Builder.SetInsertPoint(blockFor(EC, Block.StartSlot));
+    for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot) {
+      const LowInstruction &Low = Program.Low.Instructions[Slot];
+      if (Low.IsContinuation)
+        continue;
+      if (llvm::BasicBlock *Split = blockFor(EC, Slot);
+          Slot != Block.StartSlot && Split)
+        EC.Builder.SetInsertPoint(Split);
+      auto It = EC.Instructions.find(Slot);
+      if (It == EC.Instructions.end()) {
+        EC.Builder.CreateCall(
+            Runtime.Fault,
+            {Environment,
+             EC.i32(static_cast<uint32_t>(FaultCode::InvalidInstruction)),
+             EC.i64(Low.Address)});
+        EC.Builder.CreateRet(EC.i64(0));
+        break;
+      }
+      if (EC.Builder.GetInsertBlock()->hasTerminator())
+        return llvm::make_error<llvm::StringError>(
+            "sbf: LLVM emitter found an instruction after a CFG terminator",
+            llvm::inconvertibleErrorCode());
+      emitInstruction(EC, *It->second);
+    }
+  }
+  if (HasIndirectCall)
+    for (const LowInstruction &Low : Program.Low.Instructions) {
+      if (!Low.IsContinuation)
+        continue;
+      EC.Builder.SetInsertPoint(blockFor(EC, Low.Slot));
       EC.Builder.CreateCall(
           Runtime.Fault,
           {Environment,
            EC.i32(static_cast<uint32_t>(FaultCode::InvalidInstruction)),
            EC.i64(Low.Address)});
       EC.Builder.CreateRet(EC.i64(0));
-      continue;
     }
-    emitInstruction(EC, *It->second);
-  }
 
   EC.Builder.SetInsertPoint(EC.ReturnDispatch);
   llvm::Value *Depth = EC.Builder.CreateLoad(EC.I32, EC.Depth);
@@ -697,12 +801,20 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
   EC.Builder.SetInsertPoint(EC.ReturnValue);
   EC.Builder.CreateRet(EC.loadReg(kReturnRegister));
 
-  if (!Program.Rodata.empty()) {
-    auto *Data = llvm::ConstantDataArray::get(Context, Program.Rodata);
+  unsigned RegionNumber = 0;
+  for (const ProgramRegion &Region : Program.ExecutableImage.regions()) {
+    if (!Region.DataVisible || Region.Bytes.empty())
+      continue;
+    auto *Data = llvm::ConstantDataArray::get(Context, Region.Bytes);
+    const std::string Name =
+        Region.Kind == ProgramRegionKind::ReadOnly && RegionNumber == 0
+            ? "sbf.rodata"
+            : "sbf.program." + std::to_string(RegionNumber);
     auto *Global = new llvm::GlobalVariable(*Module, Data->getType(), true,
                                             llvm::GlobalValue::InternalLinkage,
-                                            Data, "sbf.rodata");
+                                            Data, Name);
     Global->setAlignment(llvm::Align(kInstructionSize));
+    ++RegionNumber;
   }
   llvm::NamedMDNode *VersionMetadata =
       Module->getOrInsertNamedMetadata("neverd.sbf.version");

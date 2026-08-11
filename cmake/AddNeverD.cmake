@@ -142,6 +142,13 @@ function(add_neverd_unittest name)
   set_target_properties(${name} PROPERTIES FOLDER "NeverD/Tests")
   add_dependencies(NeverDUnitTests ${name})
 
+  # Keep focused SBF aggregation complete as the suite grows. Test binaries
+  # follow the existing NeverDSBF* naming convention and register themselves
+  # here rather than duplicating a dependency list in unittests/CMakeLists.txt.
+  if(name MATCHES "^NeverDSBF")
+    set_property(GLOBAL APPEND PROPERTY NEVERD_SBF_TEST_TARGETS ${name})
+  endif()
+
   include(GoogleTest)
   # LABELS ${name} lets `ctest -L <binary>` run just this binary's cases.
   # PRE_TEST avoids concurrent POST_BUILD discovery races across test targets.

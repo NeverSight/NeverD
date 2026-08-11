@@ -63,6 +63,15 @@ GUIDE_REQUIRED_TOKENS = {
         "R_BPF_64_64",
         "sol_invoke_signed_rust",
         "Anchor IDL",
+        "ProgramImage",
+        "SBFArgumentRegisters.def",
+        "SBFUpstreamSources.def",
+        "SBFUpstreamManifest.def",
+        "SBFUpstreamOpcodes.def",
+        "1,280",
+        "104/104",
+        "101/101",
+        "sol-azy",
     ),
 }
 TESTING_REQUIRED_TOKENS = (
@@ -76,6 +85,17 @@ TESTING_REQUIRED_TOKENS = (
     "EVMAnalyzer.MediumIR",
     "EVMAnalyzer.HighIR",
     "RecoversStorageAndEventFactsFromTypedOperands",
+    "NeverDSBFProgramImageTests",
+    "NeverDSBFMalformedCorpusTests",
+    "NeverDSBFISAConformanceTests",
+    "NeverDSBFUpstreamConformanceTests",
+    "NeverDSBFLLVMDifferentialTests",
+    "NeverDSBFSourceDifferentialTests",
+    "build-sbf-asan-ubsan",
+    "ASAN_OPTIONS",
+    "UBSAN_OPTIONS",
+    "104/104",
+    "101/101",
 )
 ENGLISH_DOCS = (
     Path("README.md"),

@@ -2,16 +2,21 @@
 //
 // NeverD Decompiler
 //
-// SBF_RELOCATION(ID, VALUE, NAME, WIDTH_BITS, PURPOSE)
+// SBF_RELOCATION(ID, VALUE, NAME, WIDTH_BITS, PURPOSE, FIELD_LAYOUT,
+//                TARGETS, SYMBOL_REQUIREMENT, VERSION_POLICY)
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef SBF_RELOCATION
-#define SBF_RELOCATION(ID, VALUE, NAME, WIDTH_BITS, PURPOSE)
+#define SBF_RELOCATION(ID, VALUE, NAME, WIDTH_BITS, PURPOSE, FIELD_LAYOUT,     \
+                       TARGETS, SYMBOL_REQUIREMENT, VERSION_POLICY)
 #endif
 
-SBF_RELOCATION(Abs64, 1, "R_BPF_64_64", 64, Absolute)
-SBF_RELOCATION(Relative64, 8, "R_BPF_64_RELATIVE", 64, Relative)
-SBF_RELOCATION(Call32, 10, "R_BPF_64_32", 32, Call)
+SBF_RELOCATION(Abs64, 1, "R_BPF_64_64", 64, Absolute, SplitLDDWImmediate,
+               TextLDDW, Required, LegacyOnly)
+SBF_RELOCATION(Relative64, 8, "R_BPF_64_RELATIVE", 64, Relative,
+               SplitLDDWOrData, TextLDDW | ReadOnlyData, None, LegacyOnly)
+SBF_RELOCATION(Call32, 10, "R_BPF_64_32", 32, Call, CallImmediate, TextCall,
+               Required, LegacyOnly)
 
 #undef SBF_RELOCATION

@@ -115,29 +115,42 @@ struct OpcodeInfo {
   VersionMask Versions;
   OpcodeEffect Effect;
 
-  bool isAvailableIn(Version V) const { return versionInMask(V, Versions); }
-  bool isBranch() const {
+  constexpr bool isAvailableIn(Version V) const {
+    return versionInMask(V, Versions);
+  }
+  constexpr bool isBranch() const {
     return hasEffect(Effect, OpcodeEffect::Branches) ||
            hasEffect(Effect, OpcodeEffect::Terminates);
   }
-  bool isConditionalBranch() const {
+  constexpr bool isConditionalBranch() const {
     return hasEffect(Effect, OpcodeEffect::Branches);
   }
-  bool isCall() const { return hasEffect(Effect, OpcodeEffect::Calls); }
-  bool isExit() const { return hasEffect(Effect, OpcodeEffect::Returns); }
-  bool mayFault() const { return hasEffect(Effect, OpcodeEffect::MayFault); }
-  bool readsMemory() const {
+  constexpr bool isCall() const {
+    return hasEffect(Effect, OpcodeEffect::Calls);
+  }
+  constexpr bool isExit() const {
+    return hasEffect(Effect, OpcodeEffect::Returns);
+  }
+  constexpr bool mayFault() const {
+    return hasEffect(Effect, OpcodeEffect::MayFault);
+  }
+  constexpr bool readsMemory() const {
     return hasEffect(Effect, OpcodeEffect::ReadsMemory);
   }
-  bool writesMemory() const {
+  constexpr bool writesMemory() const {
     return hasEffect(Effect, OpcodeEffect::WritesMemory);
   }
-  bool usesImmediate() const {
+  constexpr bool writesDestinationRegister() const {
+    return Form == OperandForm::Dst || Form == OperandForm::DstImm ||
+           Form == OperandForm::DstSrc || Form == OperandForm::LDDW ||
+           Form == OperandForm::Load || Form == OperandForm::Endian;
+  }
+  constexpr bool usesImmediate() const {
     return Form == OperandForm::DstImm || Form == OperandForm::StoreImm ||
            Form == OperandForm::BranchImm || Form == OperandForm::CallImm ||
            Form == OperandForm::Endian || Form == OperandForm::LDDW;
   }
-  bool usesSourceRegister() const {
+  constexpr bool usesSourceRegister() const {
     return Form == OperandForm::DstSrc || Form == OperandForm::Load ||
            Form == OperandForm::StoreReg || Form == OperandForm::BranchReg;
   }

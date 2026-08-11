@@ -332,3 +332,34 @@ Label-Ausschlüsse an. Die Profile stehen in `.github/workflows/ci.yml` und
 `scripts/audit_ci_test_inventory.py`. Da kein einzelner Matrix-Shard alle
 teuren Suiten darstellt, bleibt ein lokales `check-neverd` auf einer Maschine
 mit allen Cross-Werkzeugen das klarste vollständige Signal vor dem Merge.
+
+## Aktuelles Solana-SBF-Konformitäts- und Sanitizer-Profil
+
+Diese aktuelle Liste ersetzt die kürzere SBF-Liste oben. Die Source-
+Differential-Suite benötigt neben clang auch `rustc`; ein Compiler-Skip ist
+fehlende Abdeckung. Das vollständige Aggregat enthält
+`NeverDSBFProgramImageTests`, `NeverDSBFMalformedCorpusTests`,
+`NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
+`NeverDSBFLLVMDifferentialTests` und `NeverDSBFSourceDifferentialTests` sowie
+die Metadata-/Loader-/Analyzer-/Semantic-/Emitter-/Integration-Targets. Das
+integrierte Profil besteht 104/104 Fälle in 13 Binaries.
+
+Das Sanitizer-Profil wird separat in `build-sbf-asan-ubsan` gebaut. Es besteht
+101/101 Core-Fälle in 12 Binaries ohne ASan- oder UBSan-Report; Integration
+bleibt im integrierten LLVM-Build, weil dem Prebuilt-Paket der benötigte
+fork-only Header fehlt.
+
+```bash
+cmake --build build-sbf-asan-ubsan --parallel 4 --target \
+  NeverDSBFMetadataTests NeverDSBFProgramImageTests NeverDSBFLoaderTests \
+  NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
+  NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
+  NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+
+ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
+  -L '^NeverDSBF' -E 'SBFIntegration'
+```

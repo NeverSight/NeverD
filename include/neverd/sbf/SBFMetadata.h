@@ -9,9 +9,32 @@
 
 #include "neverd/sbf/Version.h"
 
+#include "llvm/ADT/StringRef.h"
+
 #include <cstdint>
 
 namespace neverd::sbf {
+
+enum class DebugEnrichmentStatus : uint8_t {
+  NotAttempted,
+  Complete,
+  Unavailable,
+  Malformed,
+};
+
+inline llvm::StringRef debugEnrichmentStatusName(DebugEnrichmentStatus Status) {
+  switch (Status) {
+  case DebugEnrichmentStatus::NotAttempted:
+    return "not-attempted";
+  case DebugEnrichmentStatus::Complete:
+    return "complete";
+  case DebugEnrichmentStatus::Unavailable:
+    return "unavailable";
+  case DebugEnrichmentStatus::Malformed:
+    return "malformed";
+  }
+  return "unknown";
+}
 
 struct FileRange {
   uint64_t Offset = 0;
@@ -28,6 +51,7 @@ struct Metadata {
   uint32_t ELFFlags = 0;
   neverd::sbf::Version Version = neverd::sbf::Version::Reserved;
   bool StrictLayout = false;
+  DebugEnrichmentStatus DebugEnrichment = DebugEnrichmentStatus::NotAttempted;
   FileRange TextFile;
   VMRange TextVM;
   FileRange RodataFile;

@@ -87,11 +87,11 @@ struct ExecutionResult {
 /// Bounds execution resources and controls trace collection.
 struct InterpreterOptions {
   size_t MaxSteps = kDefaultMaxExecutionSteps;
-  size_t MaxCallDepth = kDefaultMaxCallDepth;
+  std::optional<size_t> MaxCallDepth;
   bool RecordTrace = true;
 };
 
-/// Executes Program.Text directly. Runtime faults are represented in the
+/// Executes Program.text() directly. Runtime faults are represented in the
 /// returned ExecutionResult; llvm::Error is reserved for malformed API input.
 llvm::Expected<ExecutionResult>
 executeRaw(const SBFProgram &Program, ExecutionEnvironment Environment = {},

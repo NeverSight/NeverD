@@ -71,23 +71,6 @@ constexpr bool versionHasFeature(Version V, VersionFeature Feature) {
   return hasFeature(versionFeatures(V), Feature);
 }
 
-/// Returns the initial r10 value used by the current Anza VM. Dynamic-frame
-/// versions begin at the top of the complete stack; fixed-frame versions begin
-/// at the top of frame zero.
-constexpr uint64_t initialFramePointer(Version V) {
-  return kStackStart + (versionHasFeature(V, VersionFeature::ManualStackFrames)
-                            ? kDefaultStackSize
-                            : kDefaultStackFrameSize);
-}
-
-/// Returns the r10 increment performed by a fixed-frame internal call.
-constexpr uint64_t automaticFrameStride(Version V) {
-  return kDefaultStackFrameSize *
-         (versionHasFeature(V, VersionFeature::StackFrameGaps)
-              ? kStackFrameGapMultiplier
-              : 1);
-}
-
 constexpr bool isConcreteVersion(Version V) {
   switch (V) {
 #define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \

@@ -175,3 +175,42 @@ MedIR 的 raw-bytecode interpreter 與 public C API。非平凡 conditional+loop
   recovered address/call metadata。
 - 生成 source 透過 host contract 暴露 syscall 與 VM memory，不是獨立 Solana runtime。
 - relaxed mode 僅供檢查；invalid instruction 保持明確，絕不指派猜測 semantics。
+
+## 目前 conformance baseline（2026-08-10）
+
+relocation 完成後，唯一且不可變、以 VM address 定址的 `ProgramImage` 是 decoder、
+interpreter、string recovery 以及 LLVM/C/Rust backend 共用的事實來源；不再存在
+可能與 loader semantics 漂移的獨立 text/rodata copy。
+
+封閉資料表放在 `SBFVersions.def`、`SBFOpcodes.def`、`SBFRelocations.def`、
+`SBFArgumentRegisters.def`、`SBFSyscalls.def` 與 `SBFUpstreamSources.def`。
+只使用一次的診斷文字與 LLVM block name 仍留在 local，符合 LLVM 自身慣例。
+
+strict v3/v4 以完成 bounds check 的 program header 作為 runtime contract；
+section/symbol table 只是 optional debug enrichment，缺失或損壞不會否決有效 image。
+legacy v0-v2 合併 `.text`、`.rodata`、`.data.rel.ro` 與 `.eh_frame`，並在 image
+凍結前只套用一次 `R_BPF_64_64`、`R_BPF_64_RELATIVE` 與 `R_BPF_64_32`。
+
+| 證據 | 稽核結果 |
+|------|----------|
+| 官方 ELF manifest | `sbpf/tests/elfs` 的 20/20 個 artifact |
+| ISA matrix | v0-v4 各版本全部 256 個 encoding，共 1,280 個 cell，另含 verifier boundary |
+| differential execution | raw-byte oracle 對 LLVM ORC、C11、stable Rust，比較 memory/fault/syscall trace |
+| integrated aggregate | 13 個 test binary 的 104/104 個 case |
+| ASan + UBSan | 12 個 core binary 的 101/101 個 case，無 report |
+
+稽核固定於 Anza `sbpf`
+`71425d0de59e0bff048c6be8f4a8a9bc655916e2` 與 Agave
+`cae40aa610fdbdb313209bc1eec737079eb59688`。更新時請檢查
+`SBFUpstreamManifest.def`、`SBFUpstreamOpcodes.def`、`SBFUpstreamSources.def`
+後執行：
+
+```bash
+NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+  cmake --build build --target check-neverd-sbf
+```
+
+對比顯示 `sol-azy` 會在目前 strict ELF crash，且 legacy CFG 保留 undefined node；
+`solana-data-reverser` 聚焦 account data，`SolDragon` 將 analysis 標為 WIP，
+`bn-ebpf-solana` 需要 Binary Ninja。因此 official `sbpf` 與 Agave 仍是 semantic
+authority。

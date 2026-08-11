@@ -85,14 +85,83 @@ TEST(SBFOpcodes, HasNoEncodingCollisionWithinAnyVersion) {
 TEST(SBFSyscalls, HashesAndLookupsAreStableAndUnique) {
   EXPECT_EQ(hashSymbolName("log"), 0x6bf5c3feu);
   std::set<uint32_t> Hashes;
+  std::set<std::string> Names;
   for (const SyscallInfo &Info : syscallInfos()) {
     EXPECT_TRUE(Hashes.insert(Info.Hash).second) << Info.Name.str();
+    EXPECT_TRUE(Names.insert(Info.Name.str()).second) << Info.Name.str();
     EXPECT_EQ(Info.Hash, hashSymbolName(Info.Name));
+    EXPECT_LE(Info.ArgumentCount, kArgumentRegisterCount);
+    EXPECT_NE(syscallAvailabilityName(Info.Availability), "unknown");
+    EXPECT_NE(syscallSourceName(Info.Source), "unknown");
+    if (Info.ReturnKind == SyscallReturnKind::Never)
+      EXPECT_TRUE(hasEffect(Info.Effects, SyscallEffect::Terminal));
+    if (hasEffect(Info.Effects, SyscallEffect::Terminal))
+      EXPECT_EQ(Info.ReturnKind, SyscallReturnKind::Never);
+    if (Info.Category == SyscallCategory::CPI)
+      EXPECT_TRUE(hasEffect(Info.Effects, SyscallEffect::CPI));
     EXPECT_EQ(getSyscallInfo(Info.Hash), &Info);
     EXPECT_EQ(getSyscallInfo(Info.ID), &Info);
     EXPECT_EQ(findSyscallByName(Info.Name), &Info);
   }
   EXPECT_EQ(getSyscallInfo(0), nullptr);
+
+  std::set<std::string> SourceNames;
+  for (const SyscallSourceInfo &Source : syscallSourceInfos()) {
+    EXPECT_TRUE(SourceNames.insert(Source.Name.str()).second);
+    EXPECT_EQ(syscallSourceName(Source.ID), Source.Name);
+    EXPECT_EQ(syscallSourceRevision(Source.ID), Source.Revision);
+  }
+}
+
+TEST(SBFSyscalls, MatchesCurrentStableABIAndTracksProposalsSeparately) {
+  const auto ExpectArity = [](llvm::StringRef Name, uint8_t Arity) {
+    const SyscallInfo *Info = findSyscallByName(Name);
+    ASSERT_NE(Info, nullptr) << Name.str();
+    EXPECT_EQ(Info->ArgumentCount, Arity) << Name.str();
+  };
+  ExpectArity("sol_panic_", 4);
+  ExpectArity("sol_curve_validate_point", 2);
+  ExpectArity("sol_curve_group_op", 5);
+  ExpectArity("sol_poseidon", 5);
+  ExpectArity("sol_alt_bn128_compression", 4);
+  ExpectArity("sol_big_mod_exp", 2);
+  ExpectArity("sol_get_processed_sibling_instruction", 5);
+
+  const SyscallInfo *Sha512 = findSyscallByName("sol_sha512");
+  const SyscallInfo *Decompress = findSyscallByName("sol_curve_decompress");
+  const SyscallInfo *Pairing = findSyscallByName("sol_curve_pairing_map");
+  ASSERT_NE(Sha512, nullptr);
+  ASSERT_NE(Decompress, nullptr);
+  ASSERT_NE(Pairing, nullptr);
+  EXPECT_EQ(Sha512->Availability, SyscallAvailability::Proposed);
+  EXPECT_EQ(Decompress->Availability, SyscallAvailability::FeatureGated);
+  EXPECT_EQ(Pairing->Availability, SyscallAvailability::FeatureGated);
+  EXPECT_EQ(Sha512->Source, SyscallSource::AgaveMaster);
+  EXPECT_EQ(syscallSourceRevision(SyscallSource::AgaveMaster),
+            "cae40aa610fdbdb313209bc1eec737079eb59688");
+  EXPECT_EQ(Decompress->ArgumentCount, 3u);
+  EXPECT_EQ(Pairing->ArgumentCount, 5u);
+
+  constexpr std::array FeatureGated{
+      "sol_blake3",
+      "sol_poseidon",
+      "sol_curve_validate_point",
+      "sol_curve_group_op",
+      "sol_curve_multiscalar_mul",
+      "sol_alt_bn128_group_op",
+      "sol_alt_bn128_compression",
+      "sol_big_mod_exp",
+      "sol_get_last_restart_slot",
+      "sol_get_sysvar",
+      "sol_get_epoch_stake",
+      "sol_remaining_compute_units",
+  };
+  for (llvm::StringRef Name : FeatureGated) {
+    const SyscallInfo *Info = findSyscallByName(Name);
+    ASSERT_NE(Info, nullptr) << Name.str();
+    EXPECT_EQ(Info->Availability, SyscallAvailability::FeatureGated)
+        << Name.str();
+  }
 }
 
 TEST(SBFRelocations, CentralTableMatchesTheELFABI) {
