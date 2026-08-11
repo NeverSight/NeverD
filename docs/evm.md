@@ -209,25 +209,50 @@ semantic switches remain explicit and fail loudly if an ALU case is omitted.
 - **EVM LowIR** preserves PC, encoding, typed immediate status and decoded
   stack-depth operands (including PUSH right-zero padding and EIP-8024's
   conditional-consumption rule), basic blocks, predecessor/successor edges,
-  validated `JUMPDEST` targets, reachability, and stack heights.
-- **EVM MedIR** represents every stack value as a 256-bit SSA value, creates
-  merge phis, constant-folds pure operations, and preserves both the primary
-  semantic effect, orthogonal `none/read/write/readwrite` EVM-memory access,
-  source-level state-access constraint, and call-value access. This keeps
-  compound instructions honest for later dataflow, alias, mutability, and
-  payability work.
-- **EVM HighIR** recovers Solidity dispatcher selectors, likely calldata words,
+  validated `JUMPDEST` targets, reachability, and stack-height domains. CFG
+  recovery is a deterministic whole-program fixed point: one bounded finite
+  set of 256-bit values is propagated per stack slot and one abstract stack is
+  retained per concrete height. Constants carried through internal-call and
+  return blocks, stack shuffles, `PC`/`CODESIZE`, and scalar ALU operations can
+  therefore resolve one or several concrete jump targets. A genuinely unknown
+  target remains an explicit indirect edge instead of being guessed.
+
+  `AnalyzeOptions::MaxAbstractValuesPerSlot` bounds each finite value set;
+  exceeding it widens the slot to `Unknown`. `MaxStackHeightVariants` bounds
+  the number of path-dependent heights at a block and produces an explicit
+  analysis-limit error instead of truncating the CFG. Both limits reject zero.
+  Finite values created by a Cartesian operation after a non-relational stack
+  merge are marked as over-approximations: invalid candidates are diagnosed,
+  but cannot make strict analysis reject bytecode solely because slot
+  correlation was lost. Precise invalid targets still fail at the exact jump
+  PC. In relaxed mode, stack faults are diagnosed and terminate only the
+  faulting abstract path; no impossible post-fault fallthrough is fabricated.
+- **EVM MedIR** represents every stack value as a 256-bit SSA value and wires
+  all merge phis before running a deterministic sparse constant worklist. Its
+  private lattice is `Uninitialized`, one exact `Constant`, or `Overdefined`:
+  equal constants propagate across blocks and anchored phi cycles, while a
+  conflicting or runtime-dependent cycle cannot fabricate a constant. The
+  worklist uses checked def-use IDs and the same `Semantics.h` ALU evaluator as
+  the interpreter. MedIR also preserves the primary semantic effect plus
+  orthogonal `none/read/write/readwrite` EVM-memory, source-level state, and
+  call-value access. A polymorphic LowIR stack is conservatively top-aligned at
+  this boundary: slots absent on some incoming height become explicit unknown
+  values and a deterministic diagnostic records the precision loss.
+- **EVM HighIR** recovers Solidity dispatcher selectors, likely calldata and
   return words, mutability, constant storage slots, LOG/event facts, revert
-  facts, and function/CFG regions. Recovered names and types are explicitly
-  heuristic. Solidity payability is combined independently from the state
-  access lattice because `payable` is not a stronger form of `view`; an
-  unguarded `CALLVALUE` effect therefore dominates the recovered declaration,
-  while a proven non-payable guard does not contaminate body mutability. A
-  reachable unresolved dynamic jump joins state access with
-  `Unknown`, so recovered Solidity falls back to `nonpayable` instead of making
-  an unsound `pure` or `view` promise. Conflicting dispatcher patterns for the
-  same selector are diagnosed and omitted instead of allowing one entry point
-  to overwrite another.
+  facts, and function/CFG regions. A checked producer index and iterative,
+  memoized value walk recover facts from typed MedIR operands, not instruction
+  distance: selector comparisons may cross blocks and phis, use either `EQ`
+  operand order, and retain a derived 32-bit mask; argument offsets, storage
+  keys, event topic0, non-payable and receive guards, and exact 32-byte return
+  sizes use their semantic inputs. The iterative walk is structurally bounded
+  by the MedIR graph and treats malformed, mixed, or cyclic expressions as
+  unknown. Conflicting dispatcher targets for the same selector are diagnosed
+  and omitted. Solidity payability remains independent from the state-access
+  lattice, and a reachable unresolved dynamic jump forces conservative
+  `nonpayable` recovery. Until MedIR gains memory SSA, custom-error payload
+  recovery is the sole retained bounded instruction-window heuristic;
+  recovered names and types remain explicitly heuristic.
 - **LLVM** emits a verifier-clean `i32 @evm_execute(ptr)` state machine with a
   checked 1024-word `i256` stack, `i512` modular intermediates, guarded signed
   division, saturated shifts, exact `BYTE`/`SIGNEXTEND`/`CLZ`, and validated

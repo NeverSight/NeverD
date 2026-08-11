@@ -156,16 +156,34 @@ switch 仍保持显式，遗漏 ALU case 时立即失败。
 
 - **EVM LowIR** 保留 PC、编码、类型化立即数状态与解码后的栈深度操作数（包括 PUSH
   截断右补零和 EIP-8024 条件消费规则）、基本块、前驱/后继边、
-  已验证的 `JUMPDEST` 目标、可达性与栈高度。
-- **EVM MedIR** 把每个栈值表示为 256 位 SSA 值，创建合并 phi，对纯操作做常量折叠，
-  并保留主要 effect、正交的 `none/read/write/readwrite` EVM 内存访问、源码级状态访问
-  与 call-value 访问，为后续数据流、别名、mutability 和 payability 分析保留真实信息。
+  已验证的 `JUMPDEST` 目标、可达性与栈高度域。CFG 恢复采用确定性的全程序不动点：
+  每个栈槽传播一个有界的 256 位有限值集合，每个具体高度保留一个抽象栈。因此，跨
+  internal-call/return 基本块携带的常量、栈置换、`PC`/`CODESIZE` 与标量 ALU 运算都能
+  解析一个或多个具体跳转目标；真正未知的目标会保留为显式 indirect 边，不会被猜测。
+
+  `AnalyzeOptions::MaxAbstractValuesPerSlot` 限制每个有限集合，超限时将该槽 widening 为
+  `Unknown`；`MaxStackHeightVariants` 限制一个基本块的路径相关高度数量，超限会返回明确
+  的分析资源错误，而不是截断 CFG。两个限制都拒绝零值。非关系栈合并后的多输入
+  Cartesian 运算会把结果标成 over-approximation：非法候选会被诊断，但 strict 分析不会
+  仅因丢失槽间相关性而错误拒绝字节码；精确的非法目标仍在对应 jump PC 失败。relaxed
+  模式会诊断栈 fault 并只终止该抽象路径，不会虚构 fault 后的 fallthrough。
+- **EVM MedIR** 把每个栈值表示为 256 位 SSA 值，先连接全部合流 phi，再执行确定性的
+  稀疏常量工作队列。私有格由 `Uninitialized`、单个精确 `Constant` 和 `Overdefined`
+  组成：相同常量能跨基本块及带锚点的 phi 环传播，冲突或依赖运行时的环则不能伪造
+  常量。工作队列检查全部 def-use ID，并复用解释器所用的 `Semantics.h` ALU 求值器。
+  MedIR 还保留主要 effect、正交的 `none/read/write/readwrite` EVM 内存访问、源码级状态
+  与 call-value 访问。多高度 LowIR 栈在该边界保守地栈顶对齐；部分路径不存在的槽变成
+  显式 unknown，并以确定性诊断记录精度损失。
 - **EVM HighIR** 恢复 Solidity dispatcher selector、可能的 calldata/return word、
-  mutability、常量 storage slot、LOG/event、revert 事实和函数/CFG 区域。名称和类型明确
-  属于启发式。payability 与状态访问格独立组合：无守卫 `CALLVALUE` 决定声明为
-  `payable`；已证明的非 payable 守卫不会污染函数体 mutability。可达但未解析的动态
-  jump 将状态访问合并为 `Unknown`，使 Solidity 保守回退为 `nonpayable`，不会作出
-  不可靠的 `pure`/`view` 承诺。同一 selector 的冲突 dispatcher 模式会被诊断并省略。
+  mutability、常量 storage slot、LOG/event、revert 事实和函数/CFG 区域。经过检查的
+  producer 索引与显式栈、带 memo 的值遍历从 MedIR 类型化操作数恢复事实，不再依赖
+  指令距离：selector 比较可跨基本块与 phi，支持 `EQ` 任一操作数顺序及推导出的 32 位
+  mask；参数偏移、storage key、event topic0、non-payable/receive 守卫和精确 32 字节
+  return size 均读取语义输入。遍历由有限 MedIR 图提供结构边界；格式错误、混合或成环
+  的表达式保守为 unknown。同一 selector 指向不同入口时会诊断并省略。payability 与
+  状态访问格仍保持正交，可达但未解析的动态 jump 会令恢复保守回退为 `nonpayable`。
+  在 MedIR 尚无 memory SSA 前，custom-error payload 是唯一保留的有界指令窗口启发式；
+  恢复出的名称和类型仍明确属于启发式。
 - **LLVM** 输出通过 verifier 的 `i32 @evm_execute(ptr)` 状态机，包含受检查的
   1024-word `i256` 栈、`i512` 模运算中间值、有守卫的有符号除法、饱和移位、精确
   `BYTE`/`SIGNEXTEND`/`CLZ`，以及经过验证的动态 jump switch。

@@ -24,9 +24,12 @@
 
 namespace neverd::evm {
 
-/// Extends linear-decoder options with higher-level recovery controls.
+/// Extends linear-decoder options with higher-level recovery controls and
+/// deterministic hostile-input bounds for whole-program abstract analysis.
 struct AnalyzeOptions : DecodeOptions {
   bool RecoverHighLevel = true;
+  size_t MaxAbstractValuesPerSlot = kDefaultMaxAbstractValuesPerSlot;
+  size_t MaxStackHeightVariants = kDefaultMaxStackHeightVariants;
 };
 
 /// Decodes bytecode into lossless instructions, blocks, edges, and stack

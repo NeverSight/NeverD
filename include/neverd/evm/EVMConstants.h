@@ -79,6 +79,12 @@ inline constexpr uint64_t kDefaultGasLimit = 30'000'000;
 inline constexpr uint64_t kDefaultChainID = 1;
 inline constexpr uint64_t kBlockHashHistoryWindow = 256;
 
+/// Hostile-input bounds for the non-consensus control-flow analysis lattice.
+/// These deliberately live apart from protocol resource limits such as the
+/// operand stack maximum above.
+inline constexpr std::size_t kDefaultMaxAbstractValuesPerSlot = 32;
+inline constexpr std::size_t kDefaultMaxStackHeightVariants = 16;
+
 static_assert(kWordBits % kBitsPerByte == 0);
 static_assert(kByteMax == std::numeric_limits<uint8_t>::max());
 static_assert(kOpcodeSpaceSize == static_cast<std::size_t>(kByteMax) + 1);
@@ -95,9 +101,13 @@ static_assert(kMetadataLengthBytes <= sizeof(uint64_t));
 static_assert(kStackLimit <= std::numeric_limits<uint32_t>::max());
 static_assert(kBlockHashHistoryWindow > 0);
 static_assert(kCodeAlignment > 0);
+static_assert(kDefaultMaxAbstractValuesPerSlot > 0);
+static_assert(kDefaultMaxStackHeightVariants > 0);
 
 inline constexpr llvm::StringLiteral kUnknownOpcodeName = "UNKNOWN";
 inline constexpr llvm::StringLiteral kUnknownName = "unknown";
+inline constexpr llvm::StringLiteral kConstantValueName = "constant";
+inline constexpr llvm::StringLiteral kUnknownStackEntryName = "stack.unknown";
 inline constexpr llvm::StringLiteral kDefaultExecutionFunctionName =
     "evm_execute";
 inline constexpr llvm::StringLiteral kDefaultContractName = "NeverDRecovered";
@@ -107,6 +117,12 @@ inline constexpr llvm::StringLiteral kHostFunctionName = "neverd_evm_host_op";
 inline constexpr llvm::StringLiteral kTraceFunctionName = "neverd_evm_trace";
 inline constexpr llvm::StringLiteral kDefaultRecoveredWordType = "uint256";
 inline constexpr llvm::StringLiteral kStackPhiValueName = "stack.phi";
+inline constexpr llvm::StringLiteral kPolymorphicStackDiagnostic =
+    "polymorphic entry stack heights conservatively top-aligned";
+inline constexpr llvm::StringLiteral kOverapproximatedJumpTargetPrefix =
+    "over-approximated jump candidate ";
+inline constexpr llvm::StringLiteral kMalformedMedIRDiagnostic =
+    "malformed MedIR disables value recovery";
 inline constexpr llvm::StringLiteral kRecoveredFunctionPrefix = "func_";
 inline constexpr llvm::StringLiteral kRecoveredArgumentPrefix = "arg";
 inline constexpr llvm::StringLiteral kRecoveredDeclarationPrefix = "recovered_";
