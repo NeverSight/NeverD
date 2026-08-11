@@ -320,7 +320,7 @@ clang に加えて `rustc` が必要で、compiler skip は coverage 欠落で�
 `NeverDSBFISAConformanceTests`、`NeverDSBFUpstreamConformanceTests`、
 `NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests` と、metadata、
 loader、analyzer、semantic、emitter、integration target が含まれます。integrated
-profile は 13 binary の 104/104 case を通過します。
+profile は 13 binary の 107/107 case を通過します。
 
 sanitizer profile は `build-sbf-asan-ubsan` に分離して build します。12 core binary
 の 101/101 case が ASan/UBSan report なしで通過します。prebuilt package に必要な

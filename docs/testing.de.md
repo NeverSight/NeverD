@@ -342,7 +342,7 @@ fehlende Abdeckung. Das vollständige Aggregat enthält
 `NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
 `NeverDSBFLLVMDifferentialTests` und `NeverDSBFSourceDifferentialTests` sowie
 die Metadata-/Loader-/Analyzer-/Semantic-/Emitter-/Integration-Targets. Das
-integrierte Profil besteht 104/104 Fälle in 13 Binaries.
+integrierte Profil besteht 107/107 Fälle in 13 Binaries.
 
 Das Sanitizer-Profil wird separat in `build-sbf-asan-ubsan` gebaut. Es besteht
 101/101 Core-Fälle in 12 Binaries ohne ASan- oder UBSan-Report; Integration

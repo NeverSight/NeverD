@@ -200,7 +200,7 @@ inmutabilizar la imagen.
 | Manifest ELF oficial | 20/20 artefactos de `sbpf/tests/elfs` |
 | Matriz ISA | los 256 encodings para v0-v4, 1,280 celdas, más límites del verifier |
 | Ejecución diferencial | oracle de bytes raw frente a LLVM ORC, C11 y Rust stable, incluidos memory/fault/syscall trace |
-| Agregado integrado | 104/104 casos en 13 binarios de prueba |
+| Agregado integrado | 107/107 casos en 13 binarios de prueba |
 | ASan + UBSan | 101/101 casos core en 12 binarios sin informes |
 
 La auditoría fija Anza `sbpf` en

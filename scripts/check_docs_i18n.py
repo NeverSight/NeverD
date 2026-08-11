@@ -70,7 +70,7 @@ GUIDE_REQUIRED_TOKENS = {
         "SBFUpstreamManifest.def",
         "SBFUpstreamOpcodes.def",
         "1,280",
-        "104/104",
+        "107/107",
         "101/101",
         "sol-azy",
     ),
@@ -95,7 +95,7 @@ TESTING_REQUIRED_TOKENS = (
     "build-sbf-asan-ubsan",
     "ASAN_OPTIONS",
     "UBSAN_OPTIONS",
-    "104/104",
+    "107/107",
     "101/101",
 )
 ENGLISH_DOCS = (

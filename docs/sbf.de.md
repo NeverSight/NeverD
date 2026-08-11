@@ -200,7 +200,7 @@ des Images angewandt.
 | Offizielles ELF-Manifest | 20/20 Artefakte aus `sbpf/tests/elfs` |
 | ISA-Matrix | alle 256 Encodings für v0-v4, also 1,280 Zellen, plus Verifier-Grenzen |
 | Ausführungsdifferenz | Raw-Byte-Oracle gegen LLVM ORC, C11 und stabiles Rust samt Memory/Fault/Syscall-Trace |
-| Integriertes Aggregat | 104/104 Fälle in 13 Test-Binaries |
+| Integriertes Aggregat | 107/107 Fälle in 13 Test-Binaries |
 | ASan + UBSan | 101/101 Core-Fälle in 12 Binaries ohne Report |
 
 Die Prüfung ist auf Anza `sbpf`

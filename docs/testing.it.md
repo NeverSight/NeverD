@@ -334,7 +334,7 @@ indica coverage mancante. L’aggregato completo include
 `NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
 `NeverDSBFLLVMDifferentialTests` e `NeverDSBFSourceDifferentialTests`, oltre ai
 target metadata, loader, analyzer, semantic, emitter e integration. Il profilo
-integrato supera 104/104 casi in 13 binari.
+integrato supera 107/107 casi in 13 binari.
 
 Il profilo sanitizer viene costruito separatamente in `build-sbf-asan-ubsan`.
 Supera 101/101 casi core in 12 binari senza report ASan o UBSan; integration

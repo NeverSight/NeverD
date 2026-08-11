@@ -191,7 +191,7 @@ image を無効にしません。legacy v0-v2 は `.text`、`.rodata`、`.data.r
 | official ELF manifest | `sbpf/tests/elfs` の 20/20 artifact |
 | ISA matrix | v0-v4 ごとに全 256 encoding、合計 1,280 cell と verifier boundary |
 | differential execution | raw-byte oracle と LLVM ORC/C11/stable Rust の memory/fault/syscall trace 比較 |
-| integrated aggregate | 13 test binary の 104/104 case |
+| integrated aggregate | 13 test binary の 107/107 case |
 | ASan + UBSan | 12 core binary の 101/101 case、report なし |
 
 監査 pin は Anza `sbpf`

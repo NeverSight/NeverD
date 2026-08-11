@@ -190,7 +190,7 @@ image가 immutable해지기 전에 정확히 한 번 적용합니다.
 | official ELF manifest | `sbpf/tests/elfs` artifact 20/20 |
 | ISA matrix | v0-v4 각각 모든 256 encoding, 총 1,280 cell과 verifier boundary |
 | differential execution | raw-byte oracle과 LLVM ORC/C11/stable Rust의 memory/fault/syscall trace 비교 |
-| integrated aggregate | 13 test binary의 104/104 case |
+| integrated aggregate | 13 test binary의 107/107 case |
 | ASan + UBSan | 12 core binary의 101/101 case, report 없음 |
 
 감사는 Anza `sbpf`

@@ -340,7 +340,7 @@ couverture absente. L’agrégat complet comprend `NeverDSBFProgramImageTests`,
 `NeverDSBFMalformedCorpusTests`, `NeverDSBFISAConformanceTests`,
 `NeverDSBFUpstreamConformanceTests`, `NeverDSBFLLVMDifferentialTests` et
 `NeverDSBFSourceDifferentialTests`, ainsi que les targets metadata, loader,
-analyzer, semantic, emitter et integration. Le profil intégré réussit 104/104
+analyzer, semantic, emitter et integration. Le profil intégré réussit 107/107
 cas dans 13 binaires.
 
 Le profil sanitizer se construit séparément dans `build-sbf-asan-ubsan`. Il

@@ -276,7 +276,7 @@ for leak coverage. The prebuilt package also omits the NeverD LLVM fork's
 in the normal integrated-LLVM build. This is a packaging boundary, not a
 sanitizer skip for the 12 core SBF binaries. The audited profile passes 101/101
 core cases with no ASan or UBSan report; the normal integrated profile passes
-all 104/104 SBF cases across 13 binaries.
+all 107/107 SBF cases across 13 binaries.
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \

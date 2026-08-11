@@ -330,7 +330,7 @@ coverage. Полный aggregate включает `NeverDSBFProgramImageTests`,
 `NeverDSBFMalformedCorpusTests`, `NeverDSBFISAConformanceTests`,
 `NeverDSBFUpstreamConformanceTests`, `NeverDSBFLLVMDifferentialTests` и
 `NeverDSBFSourceDifferentialTests`, а также targets metadata, loader, analyzer,
-semantic, emitter и integration. Интегрированный профиль проходит 104/104
+semantic, emitter и integration. Интегрированный профиль проходит 107/107
 случаев в 13 бинарниках.
 
 Sanitizer-профиль собирается отдельно в `build-sbf-asan-ubsan`. Он проходит

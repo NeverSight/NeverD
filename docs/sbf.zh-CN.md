@@ -207,7 +207,7 @@ neverd_session_destroy(session);
 | raw-byte oracle | 直接执行验证后的 instruction bytes，不读取 MedIR，因此 MedIR 构造/损坏与 backend lowering 缺陷不会自动一致；显式上游结果与 semantic unit test 独立约束共享的类型化语义模型 |
 | LLVM ORC 差分 | 对 versioned arithmetic、call/CALLX、memory、syscall 与 runtime fault 比较 return/fault、可写 memory 和 syscall trace |
 | C/Rust 执行差分 | 生成 C11 以 `-Werror`、stable Rust 以 `-D warnings` 编译，并比较同一可观察状态，包含官方 relocated-data ELF |
-| SBF 集成聚合 | `check-neverd-sbf` 在 13 个测试二进制中发现并通过 104/104 个 case，其中包含 3 个 public C API integration case |
+| SBF 集成聚合 | `check-neverd-sbf` 在 13 个测试二进制中发现并通过 107/107 个 case，其中包含 3 个 public C API integration case |
 | ASan + UBSan | 12 个核心二进制的 101/101 个 case 在 fail-fast sanitizer 配置下通过；prebuilt LLVM package 缺少 public integration 所需的 NeverD fork-only header，因此该 integration binary 在 integrated build 中链接并运行 |
 
 backend 的执行契约对外暴露 `r0` return value、fault status、VM memory effect 与

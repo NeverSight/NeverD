@@ -240,7 +240,7 @@ The conformance baseline was audited on 2026-08-10 against Anza `sbpf`
 | Raw-byte oracle | Executes verified instruction bytes without consuming MedIR, so MedIR construction/corruption and backend-lowering defects cannot automatically agree; explicit upstream outcomes and semantic unit tests independently constrain the shared typed semantic model |
 | LLVM ORC differential | Compares return/fault, writable memory, and syscall trace across versioned arithmetic, calls/CALLX, memory, syscalls, and runtime faults |
 | C/Rust execution differential | Compiles generated C11 with `-Werror` and stable Rust with `-D warnings`, then compares the same observable state, including an official relocated-data ELF |
-| Integrated SBF aggregate | `check-neverd-sbf` discovers and passes 104/104 cases across 13 binaries, including three public C API integration cases |
+| Integrated SBF aggregate | `check-neverd-sbf` discovers and passes 107/107 cases across 13 binaries, including three public C API integration cases |
 | ASan + UBSan | 101/101 core cases across 12 binaries pass with fail-fast sanitizer settings; the public integration binary is linked and run in the integrated build because the prebuilt LLVM package omits the NeverD fork-only header it requires |
 
 The backend execution contract exposes `r0` as the return value, plus fault

@@ -301,7 +301,7 @@ CI 在 Linux、macOS 和 Windows 上以 Release 开启测试构建，先审核�
 `NeverDSBFISAConformanceTests`、`NeverDSBFUpstreamConformanceTests`、
 `NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`，以及 metadata、
 loader、analyzer、semantic、emitter、integration target。integrated profile 在
-13 个 binary 中通过 104/104 个 case。
+13 个 binary 中通过 107/107 个 case。
 
 sanitizer profile 单独构建在 `build-sbf-asan-ubsan`。12 个 core binary 的
 101/101 个 case 均通过，且没有 ASan/UBSan report；prebuilt package 缺少所需的

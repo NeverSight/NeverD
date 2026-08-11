@@ -12,6 +12,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <initializer_list>
@@ -146,6 +147,38 @@ TEST(SBFAnalyzer, UsesTheRealEntryBlockForDataflowAndStructuring) {
   EXPECT_EQ(If.HeaderBlock, 1u);
   ASSERT_TRUE(If.ExitBlock.has_value());
   EXPECT_EQ(*If.ExitBlock, 3u);
+}
+
+TEST(SBFAnalyzer, LeavesDisjointBranchExitsUnjoined) {
+  auto Program = analyze(
+      makeImage(Version::V3, {encode(Opcode::JEQ64_IMM, 0, 0, 1, 0),
+                              encode(Opcode::EXIT), encode(Opcode::EXIT)}));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ASSERT_EQ(Program->High.Regions.size(), 1u);
+  const Region &If = Program->High.Regions.front();
+  EXPECT_EQ(If.Kind, RegionKind::If);
+  EXPECT_FALSE(If.ExitBlock.has_value());
+}
+
+TEST(SBFAnalyzer, KeepsADeadPredecessorOutOfASelfLoop) {
+  auto Program = analyze(makeImage(
+      Version::V3,
+      {encode(Opcode::JA, 0, 0, 0), encode(Opcode::MOV64_IMM, 0, 0, 0, 0),
+       encode(Opcode::JLT64_IMM, 0, 0, -2, 1), encode(Opcode::EXIT)},
+      1));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  const auto Loop =
+      std::find_if(Program->High.Regions.begin(), Program->High.Regions.end(),
+                   [](const Region &Candidate) {
+                     return Candidate.Kind == RegionKind::Loop;
+                   });
+  ASSERT_NE(Loop, Program->High.Regions.end());
+  ASSERT_EQ(Loop->Blocks.size(), 1u);
+  EXPECT_EQ(Loop->Blocks.front(), Loop->HeaderBlock);
+  EXPECT_FALSE(Program->Low.Blocks.front().Reachable);
+  EXPECT_NE(Loop->HeaderBlock, Program->Low.Blocks.front().ID);
 }
 
 TEST(SBFAnalyzer, HighOrUpdatesThePreviousDataflowValue) {

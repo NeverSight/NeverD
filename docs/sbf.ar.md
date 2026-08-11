@@ -188,7 +188,7 @@ tables فهي debug enrichment اختيارية لا تُسقط image صالحة
 | manifest ELF الرسمي | 20/20 artifact من `sbpf/tests/elfs` |
 | مصفوفة ISA | كل 256 encoding عبر v0-v4، أي 1,280 خلية، مع حدود verifier |
 | differential execution | raw-byte oracle مقابل LLVM ORC وC11 وstable Rust، مع memory/fault/syscall trace |
-| التجميع المتكامل | 104/104 حالة في 13 test binary |
+| التجميع المتكامل | 107/107 حالة في 13 test binary |
 | ASan + UBSan | 101/101 حالة core في 12 binary بلا report |
 
 المراجعة مثبتة على Anza `sbpf` revision

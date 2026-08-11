@@ -200,7 +200,7 @@ legacy v0-v2 合併 `.text`、`.rodata`、`.data.rel.ro` 與 `.eh_frame`，並�
 | 官方 ELF manifest | `sbpf/tests/elfs` 的 20/20 個 artifact |
 | ISA matrix | v0-v4 各版本全部 256 個 encoding，共 1,280 個 cell，另含 verifier boundary |
 | differential execution | raw-byte oracle 對 LLVM ORC、C11、stable Rust，比較 memory/fault/syscall trace |
-| integrated aggregate | 13 個 test binary 的 104/104 個 case |
+| integrated aggregate | 13 個 test binary 的 107/107 個 case |
 | ASan + UBSan | 12 個 core binary 的 101/101 個 case，無 report |
 
 稽核固定於 Anza `sbpf`
