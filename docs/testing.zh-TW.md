@@ -51,6 +51,48 @@ cmake --build build-release --parallel 4
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 與
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
 
+當 `local_docs` 下有最新 go-ethereum checkout 時，使用以下命令稽核封閉的 EVM
+操作碼清單與 byte assignment：
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+此稽核僅允許 `EVMUpstreamOpcodePolicy.def` 中明確列出的排除項；任何未表示或未經明確
+review 的 upstream opcode 都會使命令失敗。parser 與 drift diagnostic 在 CI 中有獨立
+Python unit coverage，可用下列命令執行：
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+修改 EVM control flow 時，先執行 fixed-point 與 height-domain contract：
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+這些案例涵蓋跨基本塊 internal return、有限 multi-target merge、loop convergence 與
+deterministic edge ordering、path-dependent stack height、bounded widening、correlation
+造成的 Cartesian over-approximation、unknown jump、exact invalid target，以及 strict
+與 relaxed stack fault。接著應執行全部七個 EVM binary 和 upstream metadata audit；
+即使 analyzer 的局部形狀正確，CFG 修改仍可能影響 emitter 與 integration 行為。
+
+修改 MedIR/HighIR dataflow 時，另需執行 constant-phi、selector、typed-operand、
+malformed-graph 與 deep-chain contract：
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+這些案例驗證相同與衝突的 cyclic phi、不相鄰及跨基本塊的 selector expression、等式兩種
+operand order、exact ABI width check、typed storage/event/calldata operand、malformed
+MedIR 的 deterministic handling，以及針對 16,384 個值的 iterative producer walk。
+
 ## fixture 如何產生
 
 ### Lift 與格式 fixture

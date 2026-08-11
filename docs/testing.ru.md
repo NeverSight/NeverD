@@ -54,6 +54,53 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) и
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
+Если в `local_docs` доступен актуальный checkout go-ethereum, проверьте закрытый
+перечень opcodes EVM и назначения байтов командой:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+Аудит разрешает только исключения, перечисленные в
+`EVMUpstreamOpcodePolicy.def`; opcode upstream, который не представлен и не
+проверен явно, приводит к ошибке. Parser и диагностика drift имеют независимое
+покрытие Python unit tests в CI:
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+При изменении управления EVM сначала запустите контракт fixed point и домена
+высот:
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+Эти случаи покрывают межблочные внутренние returns, конечные multi-target
+merges, сходимость циклов и детерминированный порядок edges, зависящие от пути
+высоты стека, ограниченный widening, вызванную корреляцией Cartesian
+over-approximation, неизвестные jumps, точные недопустимые цели и stack faults
+в strict- и relaxed-режимах. Затем запустите все семь бинарников EVM и аудит
+upstream metadata: изменение CFG может влиять на emitter и integration, даже
+если локальная форма analyzer корректна.
+
+При изменении dataflow MedIR/HighIR запустите также контракты constant-phi,
+selector, typed-operand, malformed-graph и deep-chain:
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+Эти случаи доказывают равные и конфликтующие циклические phi, несмежные и
+межблочные выражения selector, оба порядка операндов равенства, точные проверки
+ширины ABI, типизированные операнды storage/event/calldata, детерминированную
+обработку malformed MedIR и итеративный producer walk по 16 384 значениям.
+
 ## Создание fixture
 
 ### Fixture подъёма и форматов

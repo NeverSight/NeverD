@@ -116,6 +116,13 @@ Les metadata EVM écrites à la main suivent le modèle `.def` multi-inclus de L
   lattice `None/Read/Write/Unknown`. La payabilité reste indépendante : une
   lecture `CALLVALUE` implique `payable`, sauf si l’analyse prouve le garde
   canonique `ISZERO(CALLVALUE)` dont la branche non nulle termine en `REVERT`.
+- `EVMImmediateKinds.def` définit les données PUSH de largeur fixe et les
+  encodages single/pair conditionnels d’EIP-8024 ; `EVMDecodeStatuses.def`
+  possède le vocabulaire stable exposé par LowIR et le désassemblage.
+  `EVMUpstreamOpcodePolicy.def` consigne l’alias de nom go-ethereum et les
+  exclusions historiques/retirées volontaires ;
+  `scripts/audit_evm_opcode_metadata.py` refuse toute dérive d’octet et toute
+  nouvelle constante upstream non examinée.
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def` et
   `OutputLanguages.def` génèrent enums ordonnées, parseurs, noms, choix CLI et
   valeurs ABI C. `EVMConstants.h` centralise largeurs, limites et noms stables.
@@ -155,16 +162,59 @@ classification et CLI s’étendent sans tables parallèles.
 
 ## Modèle d’analyse
 
-- **LowIR** conserve PC, encodage, immédiats PUSH (zero-padding droit si
-  tronqués), blocs, arêtes, `JUMPDEST` validés, atteignabilité et hauteur de pile.
-- **MedIR** transforme chaque valeur de pile en SSA 256 bits, crée les phi,
-  replie les opérations pures et conserve séparément effet, mémoire, état et
-  call-value pour dataflow, alias, mutabilité et payabilité.
-- **HighIR** récupère selectors, mots calldata/retour probables, mutabilité,
-  slots constants, événements, revert et régions function/CFG. Noms et types
-  restent heuristiques. Un saut dynamique atteignable non résolu joint l’état à
-  `Unknown` et force Solidity à `nonpayable`; les selectors contradictoires sont
-  diagnostiqués et omis.
+- **EVM LowIR** conserve PC, encodage, état typé de l’immédiat et opérandes de
+  profondeur de pile décodés (dont le remplissage à droite par des zéros pour
+  PUSH et la règle de consommation conditionnelle d’EIP-8024), blocs, arêtes
+  prédécesseur/successeur, cibles `JUMPDEST` validées, atteignabilité et domaines
+  de hauteur de pile. La reconstruction du CFG est un point fixe déterministe à
+  l’échelle du programme : chaque slot propage un ensemble fini borné de valeurs
+  256 bits et chaque hauteur concrète conserve une pile abstraite. Les constantes
+  transportées à travers les blocs d’appel/retour internes, les permutations de
+  pile, `PC`/`CODESIZE` et les opérations ALU scalaires peuvent donc résoudre une
+  ou plusieurs cibles concrètes. Une cible réellement inconnue reste une arête
+  indirecte explicite au lieu d’être devinée.
+
+  `AnalyzeOptions::MaxAbstractValuesPerSlot` borne chaque ensemble fini ; tout
+  dépassement élargit le slot à `Unknown`. `MaxStackHeightVariants` borne le
+  nombre de hauteurs dépendantes du chemin dans un bloc et produit une erreur
+  explicite de limite d’analyse plutôt que de tronquer le CFG. Les deux limites
+  refusent zéro. Les valeurs finies issues d’une opération cartésienne après une
+  fusion de pile non relationnelle sont marquées comme sur-approximations : les
+  candidats invalides sont diagnostiqués, mais ne suffisent pas à faire rejeter
+  le bytecode par l’analyse stricte quand seule la corrélation des slots a été
+  perdue. Une cible précisément invalide échoue toujours au PC exact du saut. En
+  mode relâché, les fautes de pile sont diagnostiquées et ne terminent que le
+  chemin abstrait fautif ; aucun fallthrough impossible n’est fabriqué.
+- **EVM MedIR** représente chaque valeur de pile par une valeur SSA 256 bits et
+  relie tous les phi de fusion avant d’exécuter une worklist déterministe de
+  constantes clairsemées. Son treillis privé vaut `Uninitialized`, une
+  `Constant` exacte ou `Overdefined` : les constantes égales se propagent entre
+  blocs et cycles phi ancrés, tandis qu’un cycle contradictoire ou dépendant du
+  runtime ne peut inventer une constante. La worklist vérifie les identifiants
+  def-use et emploie le même évaluateur ALU de `Semantics.h` que l’interpréteur.
+  MedIR conserve aussi l’effet sémantique principal et, orthogonalement, l’accès
+  mémoire EVM `none/read/write/readwrite`, l’accès à l’état source et au
+  call-value. À cette frontière, une pile LowIR polymorphe est alignée
+  prudemment par le sommet ; les slots absents sur certains chemins deviennent
+  des valeurs inconnues explicites et un diagnostic déterministe consigne la
+  perte de précision.
+- **EVM HighIR** récupère les selectors du dispatcher Solidity, les mots
+  probables de calldata et de retour, la mutabilité, les slots de storage
+  constants, les faits LOG/event et revert, ainsi que les régions function/CFG.
+  Un index de producteurs vérifié et un parcours de valeurs itératif et mémoïsé
+  récupèrent les faits depuis les opérandes typés de MedIR, et non selon la
+  distance entre instructions : les comparaisons de selector peuvent traverser
+  blocs et phi, employer les deux ordres d’opérandes de `EQ` et conserver un
+  masque 32 bits dérivé ; offsets d’arguments, clés de storage, topic0 d’event,
+  gardes non-payable/receive et tailles exactes de retour de 32 octets utilisent
+  leurs entrées sémantiques. Le graphe MedIR borne structurellement ce parcours,
+  qui traite toute expression mal formée, mixte ou cyclique comme inconnue. Les
+  cibles contradictoires d’un même selector sont diagnostiquées et omises. La
+  payabilité reste indépendante du treillis d’accès à l’état, et un saut
+  dynamique atteignable non résolu impose une reconstruction `nonpayable`
+  prudente. Tant que MedIR ne possède pas de memory SSA, la récupération du
+  payload d’une custom error reste la seule heuristique à fenêtre d’instructions
+  bornée ; noms et types récupérés demeurent explicitement heuristiques.
 - **LLVM** produit une machine `i32 @evm_execute(ptr)` vérifiée avec pile de
   1024 mots `i256`, intermédiaires `i512`, division signée gardée, shifts saturés,
   `BYTE`/`SIGNEXTEND`/`CLZ` exacts et switches de sauts validés.

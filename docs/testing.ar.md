@@ -53,6 +53,50 @@ cmake --build build-release --parallel 4
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) و
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
+عند توفر checkout حديث من go-ethereum تحت `local_docs`، دقّق inventory المغلق
+لـopcodes ‏EVM وتعيينات bytes عبر:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+لا يسمح التدقيق إلا بالاستثناءات المسماة في `EVMUpstreamOpcodePolicy.def`؛ ويفشل
+الأمر إذا لم يكن opcode من upstream ممثلًا أو مراجعًا صراحة. للـparser وتشخيص
+الانحراف تغطية unit مستقلة في CI، ويمكن تشغيلها عبر:
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+لتغييرات control flow في EVM، شغّل أولًا عقد fixed point وheight domain:
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+تغطي هذه الحالات returns داخلية عابرة للـblocks وmerges محدودة متعددة الأهداف
+وتقارب loops وترتيب edges الحتمي وstack heights المعتمدة على المسار وwidening
+المحدود وCartesian over-approximation الناتجة عن correlation وunknown jumps
+والأهداف غير الصالحة الدقيقة وstack faults في الوضعين strict وrelaxed. بعدها
+شغّل ثنائيات EVM السبعة كلها مع تدقيق metadata upstream؛ فتغييرات CFG قد تؤثر
+في emitter وintegration حتى لو كان شكل analyzer المحلي صحيحًا.
+
+ولتغييرات dataflow في MedIR/HighIR، شغّل أيضًا عقود constant-phi وselector
+وtyped-operand وmalformed-graph وdeep-chain:
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+تثبت هذه الحالات phis الدورية المتساوية والمتعارضة، وتعابير selector غير
+المتجاورة والعابرة للـblocks، وترتيبي operands للمساواة، وفحوص ABI width الدقيقة،
+وoperands النوعية لـstorage/event/calldata، والتعامل الحتمي مع MedIR malformed،
+وproducer walk تكرارية من 16,384 قيمة.
+
 ## كيفية إنتاج fixtures
 
 ### Fixtures الرفع والصيغ

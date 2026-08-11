@@ -110,6 +110,12 @@ LowIR/diagnostic に保持しますが、実行が到達すれば backend は fa
   `CALLVALUE` read は通常 `payable` を導きます。一方、解析器は canonical
   `ISZERO(CALLVALUE)` guard と非 zero branch の `REVERT` を証明した場合だけ、その
   compiler-generated read を除外します。
+- `EVMImmediateKinds.def` は fixed-width PUSH data と EIP-8024 の conditional
+  single/pair encoding を定義し、`EVMDecodeStatuses.def` は LowIR と disassembly が
+  公開する stable vocabulary を所有します。`EVMUpstreamOpcodePolicy.def` は
+  go-ethereum の naming alias と意図的な historical/withdrawn exclusion を記録し、
+  `scripts/audit_evm_opcode_metadata.py` は byte drift と未 review の新しい upstream
+  constant を拒否します。
 - `EVMHardforks.def`、`EVMEffects.def`、`EVMExitStatuses.def`、
   `OutputLanguages.def` が ordered enum、parser、display name、CLI choice、C ABI value
   を生成します。`EVMConstants.h` は protocol width/limit/default name を所有します。
@@ -146,15 +152,47 @@ lowering、focused test の順です。hardfork は ordered `EVM_HARDFORK` recor
 
 ## 解析モデル
 
-- **LowIR**: PC、encoding、右 zero-pad した truncated PUSH immediate、block/edge、
-  validated `JUMPDEST`、reachability、stack height。
-- **MedIR**: 256-bit stack SSA、merge phi、pure constant folding、primary effect と
-  orthogonal memory/state/call-value property。dataflow、alias、mutability、payability に
-  compound instruction の正確な情報を渡します。
-- **HighIR**: dispatcher selector、calldata/return word、mutability、constant slot、
-  event/revert、function/CFG region を best-effort で復元します。payability と state
-  lattice は独立です。unresolved reachable jump は `Unknown` に join し、Solidity を
-  `nonpayable` に保守化します。同一 selector の矛盾 pattern は診断して省略します。
+- **EVM LowIR**: PC、encoding、typed immediate status、decode 済み stack-depth operand
+  （PUSH の right-zero padding と EIP-8024 の conditional-consumption rule を含む）、
+  basic block、predecessor/successor edge、validated `JUMPDEST` target、reachability、
+  stack-height domain を保持します。CFG recovery は deterministic whole-program fixed
+  point です。各 stack slot に bounded finite set of 256-bit values を伝播し、具体的な
+  height ごとに abstract stack を 1 つ保持します。internal-call/return block をまたぐ
+  constant、stack shuffle、`PC`/`CODESIZE`、scalar ALU operation により、1 つまたは
+  複数の concrete jump target を解決できます。本当に不明な target は推測せず、
+  explicit indirect edge のままです。
+
+  `AnalyzeOptions::MaxAbstractValuesPerSlot` は各 finite value set を制限し、超過時は
+  slot を `Unknown` に widen します。`MaxStackHeightVariants` は block の
+  path-dependent height 数を制限し、CFG を切り詰める代わりに explicit
+  analysis-limit error を返します。どちらも zero を拒否します。non-relational stack
+  merge 後の Cartesian operation で作られた finite value は over-approximation として
+  mark されます。invalid candidate は診断しますが、slot correlation が失われただけで
+  strict analysis が bytecode を拒否することはありません。precise invalid target は
+  exact jump PC で引き続き失敗します。relaxed mode の stack fault は診断され、fault
+  した abstract path だけを終了します。存在しない post-fault fallthrough は作りません。
+- **EVM MedIR**: 各 stack value を 256-bit SSA value として表し、すべての merge phi を
+  配線してから deterministic sparse constant worklist を実行します。private lattice は
+  `Uninitialized`、1 つの exact `Constant`、`Overdefined` です。同じ constant は block
+  と anchored phi cycle を越えて伝播し、conflict する cycle や runtime-dependent cycle
+  が constant を捏造することはありません。worklist は def-use ID を検査し、interpreter
+  と同じ `Semantics.h` ALU evaluator を使用します。MedIR は primary semantic effect に
+  加え、orthogonal な `none/read/write/readwrite` EVM-memory access、source-level state
+  access、call-value access も保持します。この境界では polymorphic LowIR stack を
+  top-align して保守的に扱い、一部の incoming height に存在しない slot は explicit
+  unknown value となり、deterministic diagnostic が精度低下を記録します。
+- **EVM HighIR**: Solidity dispatcher selector、推定 calldata/return word、mutability、
+  constant storage slot、LOG/event と revert の fact、function/CFG region を復元します。
+  checked producer index と iterative memoized value walk は instruction distance ではなく
+  typed MedIR operand から fact を復元します。selector comparison は block と phi を
+  またぎ、`EQ` のどちらの operand order も扱い、derived 32-bit mask を保持できます。
+  argument offset、storage key、event topic0、non-payable/receive guard、exact 32-byte
+  return size は semantic input を使います。iterative walk は MedIR graph により構造的に
+  bounded で、malformed、mixed、cyclic expression は unknown とします。同一 selector の
+  conflicting target は診断して省略します。payability は state-access lattice と独立で、
+  reachable unresolved dynamic jump は保守的な `nonpayable` recovery を強制します。
+  MedIR に memory SSA が入るまでは custom-error payload recovery だけが残る bounded
+  instruction-window heuristic です。復元した name と type は明示的に heuristic です。
 - **LLVM**: verifier-clean `i32 @evm_execute(ptr)` state machine、checked 1024-word
   `i256` stack、`i512` intermediate、guarded signed division、saturated shifts、正確な
   `BYTE`/`SIGNEXTEND`/`CLZ`、validated dynamic-jump switch。

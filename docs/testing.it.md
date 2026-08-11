@@ -56,6 +56,53 @@ Le fonti autorevoli per la registrazione sono
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) e
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
+Quando è disponibile un checkout corrente di go-ethereum sotto `local_docs`,
+verifica l’inventario chiuso degli opcode EVM e le assegnazioni dei byte con:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+L’audit consente soltanto le esclusioni nominate in
+`EVMUpstreamOpcodePolicy.def`; un opcode upstream non rappresentato né
+esplicitamente revisionato fa fallire il comando. Il parser e i diagnostic di
+drift hanno una copertura unit Python indipendente in CI, eseguibile con:
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+Per modifiche al control flow EVM, esegui prima il contratto di punto fisso e
+dominio delle altezze:
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+Questi casi coprono return interni tra block, merge finiti con più target,
+convergenza dei loop e ordine deterministico degli edge, stack height dipendenti
+dal percorso, widening limitato, over-approximation cartesiana indotta dalla
+correlazione, jump sconosciuti, target precisamente non validi e stack fault in
+modalità strict e relaxed. Esegui poi tutti e sette i binari EVM e l’audit della
+metadata upstream; modifiche al CFG possono influire su emitter e integration
+anche quando la forma locale dell’analyzer è corretta.
+
+Per modifiche al dataflow MedIR/HighIR, esegui anche i contratti constant-phi,
+selector, typed-operand, malformed-graph e deep-chain:
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+Questi casi provano phi ciclici uguali e in conflitto, espressioni selector non
+adiacenti e tra block, entrambi gli ordini degli operandi di uguaglianza, check
+esatti delle width ABI, operandi tipizzati storage/event/calldata, gestione
+deterministica di MedIR malformed e un producer walk iterativo su 16.384 valori.
+
 ## Come vengono prodotte le fixture
 
 ### Fixture di lift e formato

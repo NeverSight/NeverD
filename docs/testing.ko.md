@@ -53,6 +53,49 @@ target 이름과 같은 CTest label을 지정합니다.
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt),
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)입니다.
 
+`local_docs` 아래에 최신 go-ethereum checkout이 있으면 closed EVM opcode inventory와
+byte assignment를 다음 명령으로 감사합니다.
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+감사는 `EVMUpstreamOpcodePolicy.def`에 이름이 있는 제외만 허용합니다. 표현되지도 명시적으로
+검토되지도 않은 upstream opcode가 있으면 명령이 실패합니다. parser와 drift diagnostic은
+CI에서 독립적인 Python unit coverage를 가지며 다음과 같이 실행할 수 있습니다.
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+EVM control-flow 변경에서는 fixed-point 및 height-domain contract를 먼저 실행합니다.
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+이 case들은 block을 가로지르는 internal return, finite multi-target merge, loop convergence와
+deterministic edge ordering, path-dependent stack height, bounded widening, correlation이 만든
+Cartesian over-approximation, unknown jump, exact invalid target, strict 및 relaxed stack fault를
+포함합니다. 이어서 EVM binary 일곱 개와 upstream metadata audit를 모두 실행하세요. CFG
+변경은 analyzer의 로컬 모양이 올바르더라도 emitter와 integration에 영향을 줄 수 있습니다.
+
+MedIR/HighIR dataflow 변경에서는 constant-phi, selector, typed-operand,
+malformed-graph, deep-chain contract도 실행합니다.
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+이 case들은 equal/conflicting cyclic phi, 인접하지 않거나 block을 가로지르는 selector
+expression, 두 equality operand order, exact ABI width check, typed
+storage/event/calldata operand, malformed MedIR의 deterministic handling, 16,384-value iterative
+producer walk를 검증합니다.
+
 ## fixture 생성 방식
 
 ### Lift 및 포맷 fixture

@@ -106,6 +106,11 @@ NeverD 不會把已撤回的 EOF 提案當作最終主網行為。
   輸出為 `payable`，不會錯標為 `view`。分析器另辨識規範的
   `ISZERO(CALLVALUE)` 非 payable guard；僅確認其非零分支以 `REVERT` 結束時，
   才忽略這次編譯器生成的讀取。
+- `EVMImmediateKinds.def` 定義固定寬度 PUSH data 與 EIP-8024 條件 single/pair
+  encoding；`EVMDecodeStatuses.def` 統一 LowIR 與 disassembly 公開的穩定狀態詞彙。
+  `EVMUpstreamOpcodePolicy.def` 記錄 go-ethereum naming alias 及有意排除的歷史/已撤回
+  項目；`scripts/audit_evm_opcode_metadata.py` 會拒絕 byte drift 和任何未經 review 的
+  upstream 新常數。
 - `EVMHardforks.def`、`EVMEffects.def`、`EVMExitStatuses.def` 和
   `OutputLanguages.def` 生成有序 enum、parser、顯示名稱、CLI 選項與 C ABI 值。
 - `EVMConstants.h` 統一管理協定寬度、限制與穩定預設名稱。
@@ -146,17 +151,40 @@ generator、只看似生成的 EVM `.inc` 只會增加形式負擔。
 
 ## 分析模型
 
-- **EVM LowIR** 保留 PC、編碼、PUSH 立即數（截斷時右側補零）、基本塊、前驅/後繼
-  edge、已驗證 `JUMPDEST` target、可達性與堆疊高度。
-- **EVM MedIR** 將每個堆疊值表示為 256 位元 SSA，建立 merge phi、常數摺疊純操作，
-  並保留主要 effect、正交 `none/read/write/readwrite` EVM memory access、原始碼層
-  state access 與 call-value access，供後續 dataflow、alias、mutability、payability。
+- **EVM LowIR** 保留 PC、編碼、型別化立即數狀態與解碼後的堆疊深度操作元（包括 PUSH
+  截斷時右側補零及 EIP-8024 條件消耗規則）、基本塊、前驅/後繼 edge、已驗證
+  `JUMPDEST` target、可達性與堆疊高度 domain。CFG 復原採確定性的全程式 fixed point：
+  每個堆疊 slot 傳播一組有界的 256 位元有限值，每個具體高度保留一個 abstract stack。
+  因此，跨 internal-call/return 基本塊攜帶的常數、stack shuffle、`PC`/`CODESIZE` 與
+  scalar ALU operation 能解析一個或多個具體 jump target；真正未知的 target 則保留為
+  明確 indirect edge，不會被猜測。
+
+  `AnalyzeOptions::MaxAbstractValuesPerSlot` 限制每個 finite value set，超限時將 slot
+  widening 為 `Unknown`；`MaxStackHeightVariants` 限制一個基本塊內與路徑相關的高度數量，
+  超限會回報明確的 analysis-limit error，而不是截斷 CFG。兩個限制均拒絕零值。非關聯
+  stack merge 後的 Cartesian operation 會將 finite value 標為 over-approximation：
+  無效 candidate 會被診斷，但 strict analysis 不會僅因 slot correlation 遺失就拒絕
+  bytecode；精確的無效 target 仍會在對應 jump PC 失敗。relaxed mode 會診斷 stack fault，
+  並只終止出錯的 abstract path，不會虛構 fault 後的 fallthrough。
+- **EVM MedIR** 將每個堆疊值表示為 256 位元 SSA value，先連接所有 merge phi，再執行
+  確定性的 sparse constant worklist。私有 lattice 為 `Uninitialized`、一個精確
+  `Constant` 或 `Overdefined`：相同常數可跨基本塊及有 anchor 的 phi cycle 傳播，衝突或
+  依賴 runtime 的 cycle 則不能虛構常數。worklist 會檢查 def-use ID，並使用與 interpreter
+  相同的 `Semantics.h` ALU evaluator。MedIR 亦保留主要 semantic effect，以及正交的
+  `none/read/write/readwrite` EVM-memory access、source-level state access 與 call-value
+  access。多高度 LowIR stack 在此邊界保守地以堆疊頂端對齊；某些 incoming height 不存在
+  的 slot 會成為明確 unknown value，並由確定性 diagnostic 記錄精確度損失。
 - **EVM HighIR** 復原 Solidity dispatcher selector、可能的 calldata/return word、
-  mutability、常數 storage slot、LOG/event、revert 事實及 function/CFG region。名稱和
-  型別是啟發式。payability 與狀態存取格獨立組合：無 guard `CALLVALUE` 決定宣告為
-  `payable`；已證明的非 payable guard 不污染 body mutability。可達未解析 dynamic
-  jump 將 state access 合併為 `Unknown`，Solidity 保守回退為 `nonpayable`，不作
-  不可靠 `pure`/`view` 保證。同一 selector 的衝突 dispatcher pattern 會被診斷並省略。
+  mutability、常數 storage slot、LOG/event 與 revert 事實及 function/CFG region。經檢查的
+  producer index 與 iterative、memoized value walk 從型別化 MedIR operand 復原事實，
+  不再依賴指令距離：selector comparison 可跨基本塊與 phi，支援 `EQ` 任一 operand order，
+  並保留推導出的 32 位元 mask；argument offset、storage key、event topic0、
+  non-payable/receive guard 與精確 32-byte return size 均使用其 semantic input。iterative
+  walk 由 MedIR graph 提供結構邊界，將 malformed、mixed 或 cyclic expression 視為 unknown。
+  同一 selector 的 conflicting target 會被診斷並省略。payability 與 state-access lattice
+  維持獨立，可達但未解析的 dynamic jump 會強制保守的 `nonpayable` recovery。在 MedIR
+  尚無 memory SSA 前，custom-error payload recovery 是唯一保留的 bounded
+  instruction-window heuristic；復原的名稱與型別仍明確屬於 heuristic。
 - **LLVM** 輸出通過 verifier 的 `i32 @evm_execute(ptr)` state machine，包含已檢查
   1024-word `i256` stack、`i512` modular intermediate、有 guard signed division、
   saturated shift、精確 `BYTE`/`SIGNEXTEND`/`CLZ` 與驗證過的 dynamic-jump switch。

@@ -108,6 +108,11 @@ execution-spec-tests على أنه
   state شبكة `None/Read/Write/Unknown`. أما payability فقيد مستقل: يؤدي
   `CALLVALUE` عادة إلى `payable`، ولا تُهمل القراءة إلا إذا أثبت analyzer الحارس
   القانوني `ISZERO(CALLVALUE)` وانتهاء الفرع nonzero بـ`REVERT`.
+- يعرّف `EVMImmediateKinds.def` بيانات PUSH ذات العرض الثابت وencoding الـsingle/pair
+  الشرطي في EIP-8024، ويملك `EVMDecodeStatuses.def` المفردات المستقرة التي يكشفها
+  LowIR وdisassembly. يسجل `EVMUpstreamOpcodePolicy.def` alias تسمية go-ethereum
+  والاستثناءات التاريخية/المسحوبة المقصودة؛ ويرفض
+  `scripts/audit_evm_opcode_metadata.py` أي byte drift أو ثابت upstream جديد غير مراجع.
 - تولد `EVMHardforks.def` و`EVMEffects.def` و`EVMExitStatuses.def` و
   `OutputLanguages.def` enums مرتبة وparsers وأسماء وخيارات CLI وقيم C ABI.
   ويملك `EVMConstants.h` العروض والحدود والأسماء الثابتة.
@@ -143,15 +148,47 @@ ADT/string على الحدود وsemantic switches شاملة وfail-loud.
 
 ## نموذج التحليل
 
-- **LowIR** يحفظ PC وencoding وPUSH immediate مع right-zero padding عند القطع
-  وblocks وedges وأهداف `JUMPDEST` المتحققة وreachability وstack height.
-- **MedIR** يمثل المكدس SSA بعرض 256 بت، وينشئ phi ويطوي العمليات pure ويحفظ
-  effect وmemory وstate وcall-value كخصائص مستقلة.
-- **HighIR** يستعيد best-effort selectors وكلمات calldata/return المحتملة و
-  mutability وconstant slots وevents وreverts ومناطق function/CFG. تبقى payability
-  مستقلة عن state lattice. يجعل dynamic jump القابل للوصول وغير المحلول state
-  تساوي `Unknown` ويجعل Solidity محافظًا `nonpayable`؛ وتُشخّص selectors المتعارضة
-  وتُحذف.
+- **EVM LowIR** يحفظ PC وencoding وحالة immediate المعرّفة نوعيًا وoperands عمق
+  المكدس بعد فكها (بما في ذلك right-zero padding لـPUSH وقاعدة الاستهلاك الشرطي في
+  EIP-8024)، وblocks وpredecessor/successor edges وأهداف `JUMPDEST` المتحققة
+  وreachability وstack-height domains. استعادة CFG هي fixed point حتمي على كامل
+  البرنامج: تُمرَّر مجموعة محدودة ومقيدة من قيم 256-bit لكل stack slot، ويُحتفظ
+  بمكدس abstract لكل ارتفاع concrete. لذلك تستطيع الثوابت المحمولة عبر blocks
+  الـinternal-call والـreturn وstack shuffles و`PC`/`CODESIZE` وعمليات ALU scalar
+  حل هدف قفز concrete واحد أو عدة أهداف. ويبقى الهدف المجهول فعلًا indirect edge
+  صريحًا بدل تخمينه.
+
+  يحد `AnalyzeOptions::MaxAbstractValuesPerSlot` كل مجموعة finite، وتؤدي مجاوزته
+  إلى widening للـslot إلى `Unknown`. ويحد `MaxStackHeightVariants` عدد الارتفاعات
+  المعتمدة على المسار في block، ويصدر خطأ analysis-limit صريحًا بدل بتر CFG؛ وكلا
+  الحدين يرفضان الصفر. تُعلَّم القيم الناتجة من عملية Cartesian بعد دمج stack غير
+  علائقي بأنها over-approximation: تُشخَّص الأهداف غير الصالحة، لكنها لا تجعل
+  التحليل strict يرفض bytecode لمجرد فقد correlation بين slots. أما الهدف غير
+  الصالح الدقيق فيفشل عند jump PC نفسه. في الوضع relaxed تُشخَّص stack faults
+  وينتهي المسار abstract المتأثر فقط، من دون اختلاق fallthrough بعد fault.
+- **EVM MedIR** يمثل كل stack value بقيمة SSA بعرض 256-bit، ويوصل كل merge phis
+  قبل تشغيل sparse constant worklist حتمية. الـlattice الخاصة هي
+  `Uninitialized` أو `Constant` دقيقة واحدة أو `Overdefined`: تنتشر الثوابت
+  المتساوية عبر blocks ودورات phi المثبتة بمرساة، بينما لا تستطيع دورة متعارضة أو
+  معتمدة على runtime اختلاق ثابت. تتحقق worklist من def-use IDs وتستخدم evaluator
+  الـALU نفسه في `Semantics.h` الذي يستخدمه interpreter. ويحفظ MedIR أيضًا effect
+  الأساسي مع EVM-memory ‏`none/read/write/readwrite` وstate على مستوى المصدر
+  وcall-value كخصائص مستقلة. عند هذا الحد يُحاذى stack متعدد الارتفاعات من LowIR
+  تحفظيًا من الأعلى؛ وتصبح slots الغائبة في بعض المسارات قيم unknown صريحة، مع
+  diagnostic حتمي لفقد الدقة.
+- **EVM HighIR** يستعيد Solidity dispatcher selectors وكلمات calldata وreturn
+  المحتملة وmutability وconstant storage slots وحقائق LOG/event وrevert ومناطق
+  function/CFG. يستعيد producer index متحقق منه وvalue walk تكرارية مع memoization
+  الحقائق من typed MedIR operands لا من مسافة التعليمات: قد تعبر مقارنة selector
+  blocks وphis، وتستخدم أي ترتيب لـoperands ‏`EQ`، وتحفظ mask مشتقًا بعرض 32-bit؛
+  كما تستخدم argument offsets وstorage keys وevent topic0 وnon-payable/receive
+  guards وأحجام return الدقيقة 32-byte مدخلاتها الدلالية. يحد رسم MedIR بنيويًا
+  الـwalk التكرارية، وتعامل التعبيرات malformed أو mixed أو cyclic كـunknown.
+  تُشخّص الأهداف المتعارضة للـselector نفسه وتُحذف. تبقى payability مستقلة عن
+  state-access lattice، ويجبر reachable unresolved dynamic jump الاستعادة على
+  `nonpayable` المحافظ. وحتى يملك MedIR ‏memory SSA، تبقى استعادة custom-error
+  payload هي وحدها bounded instruction-window heuristic؛ وتظل الأسماء والأنواع
+  المستعادة heuristics صريحة.
 - **LLVM** يخرج state machine نظيفة للـverifier باسم
   `i32 @evm_execute(ptr)`، مع مكدس 1024 كلمة `i256` متحقق وintermediates `i512`
   وsigned division محروسة وshifts مشبعة و`BYTE`/`SIGNEXTEND`/`CLZ` دقيقة وswitches

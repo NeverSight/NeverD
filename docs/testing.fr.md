@@ -57,6 +57,55 @@ Les références d’enregistrement sont
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) et
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
+Lorsqu’un checkout récent de go-ethereum est disponible sous `local_docs`,
+auditez l’inventaire fermé des opcodes EVM et leur affectation d’octets avec :
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+L’audit n’autorise que les exclusions nommées dans
+`EVMUpstreamOpcodePolicy.def` ; tout opcode upstream ni représenté ni
+explicitement examiné fait échouer la commande. Son parser et ses diagnostics
+de dérive disposent d’une couverture unitaire Python indépendante en CI :
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+Pour une modification du contrôle de flux EVM, exécutez d’abord le contrat de
+point fixe et de domaine des hauteurs :
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+Ces cas couvrent les retours internes entre blocs, les fusions finies à
+plusieurs cibles, la convergence des boucles et l’ordre déterministe des arêtes,
+les hauteurs de pile dépendantes du chemin, le widening borné, la
+sur-approximation cartésienne induite par la corrélation, les sauts inconnus,
+les cibles précisément invalides et les fautes de pile en modes strict et
+relâché. Exécutez ensuite les sept binaires EVM et l’audit des métadonnées
+upstream ; une modification du CFG peut affecter l’emitter et l’intégration même
+si la forme locale de l’analyseur est correcte.
+
+Pour les modifications de dataflow MedIR/HighIR, exécutez aussi les contrats de
+phi constant, selector, opérande typé, graphe mal formé et chaîne profonde :
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+Ces cas prouvent les phi cycliques égaux et contradictoires, les expressions de
+selector non adjacentes et inter-blocs, les deux ordres d’opérandes d’égalité,
+les contrôles exacts de largeur ABI, les opérandes typés storage/event/calldata,
+le traitement déterministe d’un MedIR mal formé et un parcours itératif de
+16 384 valeurs productrices.
+
 ## Production des fixtures
 
 ### Fixtures de lift et de format

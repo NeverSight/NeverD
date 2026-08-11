@@ -106,6 +106,12 @@ NOP으로 조용히 처리하지 않습니다.
   일반 `CALLVALUE` read는 `payable`을 유도합니다. 분석기는 canonical
   `ISZERO(CALLVALUE)` guard와 nonzero branch의 `REVERT`를 증명한 경우에만 컴파일러가
   만든 read를 제외합니다.
+- `EVMImmediateKinds.def`는 fixed-width PUSH data와 EIP-8024 conditional single/pair
+  encoding을 정의하고 `EVMDecodeStatuses.def`는 LowIR 및 disassembly가 공개하는 stable
+  vocabulary를 소유합니다. `EVMUpstreamOpcodePolicy.def`는 go-ethereum naming alias와
+  의도적인 historical/withdrawn exclusion을 기록하며,
+  `scripts/audit_evm_opcode_metadata.py`는 byte drift와 검토하지 않은 새 upstream constant를
+  거부합니다.
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def`,
   `OutputLanguages.def`가 ordered enum, parser, display name, CLI choice, C ABI value를
   생성합니다. `EVMConstants.h`가 protocol width/limit/default name을 소유합니다.
@@ -142,15 +148,45 @@ semantic case 누락은 즉시 실패합니다.
 
 ## 분석 모델
 
-- **LowIR**: PC, encoding, truncated PUSH의 right-zero padding, block/edge, validated
-  `JUMPDEST`, reachability, stack height.
-- **MedIR**: 256-bit stack SSA, merge phi, pure constant folding, primary effect와
-  orthogonal memory/state/call-value property. dataflow, alias, mutability, payability에
-  compound instruction 정보를 정확히 전달합니다.
-- **HighIR**: dispatcher selector, calldata/return word, mutability, constant slot,
-  event/revert, function/CFG region을 best-effort로 복구합니다. payability와 state lattice는
-  독립적입니다. unresolved reachable jump는 `Unknown`으로 join되어 Solidity가
-  `nonpayable`로 보수화됩니다. 같은 selector의 충돌 pattern은 진단 후 생략합니다.
+- **EVM LowIR**: PC, encoding, typed immediate status, 디코딩된 stack-depth operand
+  (PUSH right-zero padding과 EIP-8024 conditional-consumption rule 포함), basic block,
+  predecessor/successor edge, 검증된 `JUMPDEST` target, reachability, stack-height domain을
+  보존합니다. CFG recovery는 deterministic whole-program fixed point입니다. stack slot마다
+  bounded finite set of 256-bit values를 전파하고 concrete height마다 abstract stack 하나를
+  유지합니다. internal-call/return block을 가로지르는 constant, stack shuffle,
+  `PC`/`CODESIZE`, scalar ALU operation으로 하나 이상의 concrete jump target을 해결할 수
+  있습니다. 실제로 알 수 없는 target은 추측하지 않고 explicit indirect edge로 남습니다.
+
+  `AnalyzeOptions::MaxAbstractValuesPerSlot`은 각 finite value set을 제한하며 초과하면 slot을
+  `Unknown`으로 widen합니다. `MaxStackHeightVariants`는 block의 path-dependent height 수를
+  제한하고 CFG를 자르는 대신 explicit analysis-limit error를 냅니다. 두 제한 모두 zero를
+  거부합니다. non-relational stack merge 뒤 Cartesian operation이 만든 finite value는
+  over-approximation으로 표시됩니다. invalid candidate는 진단하지만 slot correlation이
+  사라졌다는 이유만으로 strict analysis가 bytecode를 거부하지는 않습니다. precise invalid
+  target은 정확한 jump PC에서 계속 실패합니다. relaxed mode의 stack fault는 진단되고
+  fault가 난 abstract path만 종료하며 불가능한 post-fault fallthrough를 만들지 않습니다.
+- **EVM MedIR**: 모든 stack value를 256-bit SSA value로 표현하고 모든 merge phi를 연결한
+  뒤 deterministic sparse constant worklist를 실행합니다. private lattice는
+  `Uninitialized`, 하나의 exact `Constant`, `Overdefined`입니다. 같은 constant는 block과
+  anchored phi cycle을 넘어 전파되지만 conflict하거나 runtime-dependent인 cycle은 constant를
+  만들어낼 수 없습니다. worklist는 def-use ID를 검사하고 interpreter와 같은
+  `Semantics.h` ALU evaluator를 사용합니다. MedIR은 primary semantic effect와 별도로
+  `none/read/write/readwrite` EVM-memory access, source-level state access, call-value access도
+  보존합니다. 이 경계에서 polymorphic LowIR stack은 보수적으로 top-align되며 일부 incoming
+  height에 없는 slot은 explicit unknown value가 되고 deterministic diagnostic이 정밀도 손실을
+  기록합니다.
+- **EVM HighIR**: Solidity dispatcher selector, 추정 calldata/return word, mutability,
+  constant storage slot, LOG/event 및 revert fact, function/CFG region을 복구합니다. checked
+  producer index와 iterative memoized value walk는 instruction distance가 아니라 typed MedIR
+  operand에서 fact를 복구합니다. selector comparison은 block과 phi를 가로지를 수 있고 `EQ`
+  operand 순서를 모두 지원하며 derived 32-bit mask를 유지합니다. argument offset, storage
+  key, event topic0, non-payable/receive guard, exact 32-byte return size는 semantic input을
+  사용합니다. iterative walk는 MedIR graph에 의해 구조적으로 bounded되며 malformed, mixed,
+  cyclic expression을 unknown으로 취급합니다. 같은 selector의 conflicting target은 진단 후
+  생략합니다. payability는 state-access lattice와 독립이고 reachable unresolved dynamic jump는
+  보수적인 `nonpayable` recovery를 강제합니다. MedIR에 memory SSA가 생길 때까지 custom-error
+  payload recovery만 bounded instruction-window heuristic으로 남으며 복구된 name과 type은
+  명시적으로 heuristic입니다.
 - **LLVM**: verifier-clean `i32 @evm_execute(ptr)` state machine, checked 1024-word
   `i256` stack, `i512` intermediate, guarded signed division, saturated shift, 정확한
   `BYTE`/`SIGNEXTEND`/`CLZ`, validated dynamic-jump switch.

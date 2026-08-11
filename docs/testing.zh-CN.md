@@ -51,6 +51,46 @@ cmake --build build-release --parallel 4
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 和
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
 
+当 `local_docs` 下存在最新 go-ethereum checkout 时，用以下命令审计封闭的 EVM
+操作码清单与字节分配：
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+该审计只允许 `EVMUpstreamOpcodePolicy.def` 中明确列出的排除项；任何未表示或未明确
+评审的上游操作码都会令命令失败。其 parser 与漂移诊断在 CI 中有独立 Python 单元测试：
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+修改 EVM 控制流时，先运行不动点与高度域契约：
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+这些用例覆盖跨基本块 internal return、有限多目标合并、循环收敛与确定性边排序、
+路径相关栈高度、有界 widening、相关性丢失导致的 Cartesian 过近似、未知跳转、精确
+非法目标，以及 strict/relaxed 栈 fault。随后应运行全部七个 EVM 二进制和上游元数据
+审计；即使 analyzer 的局部形状正确，CFG 修改也可能影响 emitter 与集成行为。
+
+修改 MedIR/HighIR 数据流时，还要运行 constant-phi、selector、类型化操作数、
+格式错误图和深链契约：
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+这些用例验证相等与冲突的循环 phi、非相邻和跨基本块 selector 表达式、等式两种操作数
+顺序、精确 ABI 位宽检查、类型化 storage/event/calldata 操作数、格式错误 MedIR 的
+确定性处理，以及对 16,384 个值进行的迭代式 producer walk。
+
 ## fixture 如何生成
 
 ### Lift 与格式 fixture

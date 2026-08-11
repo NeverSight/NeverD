@@ -114,6 +114,13 @@ Handgeschriebene EVM-Metadata folgt LLVMs mehrfach eingebundenem `.def`-Muster:
   Payability ist unabhängig: `CALLVALUE` führt normalerweise zu `payable`.
   Nur wenn der Analyzer den kanonischen `ISZERO(CALLVALUE)`-Guard und `REVERT`
   im Nonzero-Zweig beweist, wird dieser compiler-generierte Read unterdrückt.
+- `EVMImmediateKinds.def` definiert PUSH-Daten fester Breite und EIP-8024s
+  bedingte Single-/Pair-Encodings; `EVMDecodeStatuses.def` besitzt das stabile
+  Vokabular, das LowIR und Disassembly veröffentlichen.
+  `EVMUpstreamOpcodePolicy.def` verzeichnet den go-ethereum-Namensalias und die
+  absichtlichen historischen/zurückgezogenen Ausschlüsse;
+  `scripts/audit_evm_opcode_metadata.py` lehnt Byte-Drift und jede neue
+  ungeprüfte Upstream-Konstante ab.
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def` und
   `OutputLanguages.def` erzeugen geordnete Enums, Parser, Anzeigenamen,
   CLI-Auswahl und C-ABI-Werte. `EVMConstants.h` besitzt Breiten und Limits.
@@ -151,16 +158,56 @@ Lookup, Validierung, Klassifikation und CLI wachsen ohne Paralleltabellen.
 
 ## Analysemodell
 
-- **LowIR** erhält PC, Encoding, PUSH-Immediates (rechts mit Null aufgefüllt),
-  Blöcke, Kanten, validierte `JUMPDEST`-Ziele, Erreichbarkeit und Stack-Höhe.
-- **MedIR** bildet Stack-Werte als 256-Bit-SSA ab, erzeugt Merge-Phis, faltet
-  reine Operationen und hält Effect, Memory, State und Call-Value orthogonal.
-- **HighIR** rekonstruiert Dispatcher-Selector, wahrscheinliche Calldata-/Return-
-  Wörter, Mutability, konstante Slots, Events, Reverts und Function-/CFG-Regionen
-  best-effort. Payability und State-Lattice sind unabhängig. Ein erreichbarer
-  ungelöster Jump joint zu `Unknown` und macht Solidity konservativ
-  `nonpayable`; widersprüchliche Selector-Muster werden diagnostiziert und
-  weggelassen.
+- **EVM LowIR** erhält PC, Encoding, typisierten Immediate-Status und dekodierte
+  Stack-Tiefenoperanden (einschließlich Rechts-Nullauffüllung von PUSH und der
+  bedingten Verbrauchsregel aus EIP-8024), Blöcke, Vorgänger-/Nachfolgerkanten,
+  validierte `JUMPDEST`-Ziele, Erreichbarkeit und Stack-Höhendomänen. Die
+  CFG-Rekonstruktion ist ein deterministischer, programmweiter Fixpunkt: Pro
+  Stack-Slot wird eine beschränkte endliche Menge von 256-Bit-Werten propagiert,
+  pro konkreter Höhe bleibt ein abstrakter Stack erhalten. Konstanten über
+  Internal-Call-/Return-Blöcke, Stack-Shuffles, `PC`/`CODESIZE` und skalare
+  ALU-Operationen können so ein oder mehrere konkrete Sprungziele auflösen. Ein
+  wirklich unbekanntes Ziel bleibt eine explizite indirekte Kante.
+
+  `AnalyzeOptions::MaxAbstractValuesPerSlot` begrenzt jede endliche Wertemenge;
+  bei Überschreitung wird der Slot zu `Unknown` aufgeweitet.
+  `MaxStackHeightVariants` begrenzt die Zahl pfadabhängiger Höhen eines Blocks
+  und erzeugt bei Überschreitung einen ausdrücklichen Analysis-Limit-Fehler,
+  statt den CFG abzuschneiden. Beide Grenzen lehnen Null ab. Endliche Werte aus
+  einer kartesischen Operation nach einem nicht-relationalen Stack-Merge werden
+  als Over-Approximation markiert: Ungültige Kandidaten werden diagnostiziert,
+  führen aber nicht allein wegen verlorener Slot-Korrelation zur Ablehnung durch
+  die strikte Analyse. Präzise ungültige Ziele scheitern weiterhin am exakten
+  Jump-PC. Im Relaxed-Modus werden Stackfehler diagnostiziert und beenden nur
+  den fehlerhaften abstrakten Pfad; es entsteht kein unmöglicher Fallthrough.
+- **EVM MedIR** bildet jeden Stack-Wert als 256-Bit-SSA-Wert ab und verdrahtet
+  alle Merge-Phis, bevor eine deterministische Sparse-Constant-Worklist läuft.
+  Das private Gitter ist `Uninitialized`, eine exakte `Constant` oder
+  `Overdefined`: Gleiche Konstanten propagieren über Blöcke und verankerte
+  Phi-Zyklen, während ein widersprüchlicher oder laufzeitabhängiger Zyklus keine
+  Konstante erfinden kann. Die Worklist prüft Def-Use-IDs und verwendet denselben
+  ALU-Evaluator aus `Semantics.h` wie der Interpreter. MedIR erhält außerdem den
+  primären semantischen Effekt sowie orthogonalen EVM-Speicherzugriff
+  `none/read/write/readwrite`, Quellzustands- und Call-Value-Zugriff. Ein
+  polymorpher LowIR-Stack wird an dieser Grenze konservativ am Stack-Top
+  ausgerichtet; auf manchen Pfaden fehlende Slots werden explizit unbekannt und
+  ein deterministischer Hinweis protokolliert den Präzisionsverlust.
+- **EVM HighIR** rekonstruiert Solidity-Dispatcher-Selector, wahrscheinliche
+  Calldata- und Return-Wörter, Mutability, konstante Storage-Slots, LOG-/Event-
+  Fakten, Revert-Fakten und Function-/CFG-Regionen. Ein geprüfter Producer-Index
+  und ein iterativer, memoizierter Value-Walk gewinnen Fakten aus typisierten
+  MedIR-Operanden statt aus Instruktionsabständen: Selector-Vergleiche dürfen
+  Blöcke und Phis überqueren, beide `EQ`-Operandenreihenfolgen verwenden und eine
+  abgeleitete 32-Bit-Maske behalten; Argument-Offsets, Storage-Keys, Event
+  topic0, Non-Payable-/Receive-Guards und exakte 32-Byte-Return-Größen nutzen
+  ihre semantischen Eingaben. Der Walk ist durch den MedIR-Graphen strukturell
+  begrenzt und behandelt fehlerhafte, gemischte oder zyklische Ausdrücke als
+  unbekannt. Widersprüchliche Ziele desselben Selectors werden diagnostiziert
+  und weggelassen. Payability bleibt unabhängig vom State-Access-Gitter; ein
+  erreichbarer ungelöster dynamischer Sprung erzwingt konservatives
+  `nonpayable`. Bis MedIR Memory SSA besitzt, bleibt die Rekonstruktion von
+  Custom-Error-Payloads die einzige beschränkte Instruktionsfenster-Heuristik;
+  rekonstruierte Namen und Typen bleiben ausdrücklich heuristisch.
 - **LLVM** emittiert eine verifier-saubere `i32 @evm_execute(ptr)`-State-Machine
   mit geprüftem 1024-Wort-`i256`-Stack, `i512`-Zwischenwerten, geschützter signed
   division, saturierenden Shifts, exaktem `BYTE`/`SIGNEXTEND`/`CLZ` und

@@ -54,6 +54,50 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt)、
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) です。
 
+`local_docs` に最新の go-ethereum checkout がある場合は、closed EVM opcode
+inventory と byte assignment を次のコマンドで監査します。
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py \
+  --geth-root local_docs/go-ethereum
+```
+
+この監査が許可する除外は `EVMUpstreamOpcodePolicy.def` に明記されたものだけです。
+表現も明示的な review もない upstream opcode があれば command は失敗します。parser と
+drift diagnostic は CI で独立した Python unit coverage を持ち、次で実行できます。
+
+```bash
+python3 -m unittest -v scripts.tests.test_audit_evm_opcode_metadata
+```
+
+EVM control-flow の変更では、まず fixed-point と height-domain contract を実行します。
+
+```bash
+cmake --build build --target NeverDEVMAnalyzerTests --parallel 4
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.StackHeightDomain*:EVMAnalyzer.WholeProgram*'
+```
+
+これらの case は block をまたぐ internal return、有限 multi-target merge、loop
+convergence と deterministic edge ordering、path-dependent stack height、bounded
+widening、correlation による Cartesian over-approximation、unknown jump、exact invalid
+target、strict/relaxed の stack fault を網羅します。続けて 7 つすべての EVM binary と
+upstream metadata audit を実行してください。CFG の変更は analyzer の局所的な形が正しく
+ても emitter と integration に影響し得ます。
+
+MedIR/HighIR dataflow の変更では、constant-phi、selector、typed-operand、
+malformed-graph、deep-chain contract も実行します。
+
+```bash
+build/bin/NeverDEVMAnalyzerTests \
+  --gtest_filter='EVMAnalyzer.MediumIR*:EVMAnalyzer.HighIR*:EVMAnalyzer.*Selector*:EVMAnalyzer.*MedIR*:EVMAnalyzer.RecoversStorageAndEventFactsFromTypedOperands:EVMAnalyzer.RecoversComputedCalldataArgumentOffset:EVMAnalyzer.*Return*:EVMAnalyzer.*Receive*'
+```
+
+これらは equal/conflicting cyclic phi、非隣接または block をまたぐ selector expression、
+両方の equality operand order、exact ABI width check、typed storage/event/calldata
+operand、malformed MedIR の deterministic handling、16,384-value の iterative producer
+walk を検証します。
+
 ## fixture の生成方法
 
 ### Lift と形式 fixture

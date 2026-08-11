@@ -113,6 +113,12 @@ Strict mode отвергает неизвестные и fork-inactive bytes. `-
   Payability независимо: `CALLVALUE` обычно приводит к `payable`; read исключают
   лишь когда analyzer доказывает канонический guard `ISZERO(CALLVALUE)` и
   `REVERT` в ненулевой ветви.
+- `EVMImmediateKinds.def` задаёт данные PUSH фиксированной ширины и условные
+  single/pair encodings EIP-8024; `EVMDecodeStatuses.def` хранит стабильный
+  словарь, доступный через LowIR и disassembly. `EVMUpstreamOpcodePolicy.def`
+  фиксирует naming alias go-ethereum и намеренные исторические/отозванные
+  исключения; `scripts/audit_evm_opcode_metadata.py` отвергает byte drift и
+  любую новую непроверенную константу upstream.
 - `EVMHardforks.def`, `EVMEffects.def`, `EVMExitStatuses.def` и
   `OutputLanguages.def` порождают упорядоченные enums, parsers, display names,
   варианты CLI и значения C ABI. `EVMConstants.h` хранит ширины и пределы.
@@ -150,15 +156,55 @@ LLVM ADT/string types на границах и исчерпывающим fail-l
 
 ## Модель анализа
 
-- **LowIR** хранит PC, encoding, PUSH immediate с дополнением нулями справа,
-  blocks, edges, проверенные `JUMPDEST`, reachability и stack height.
-- **MedIR** представляет стек как 256-bit SSA, создаёт phi, сворачивает pure
-  operations и независимо сохраняет effect, memory, state и call-value.
-- **HighIR** best-effort восстанавливает selectors, вероятные calldata/return
-  words, mutability, constant slots, events, reverts и function/CFG regions.
-  Payability и state lattice независимы. Достижимый неразрешённый jump объединяет
-  state с `Unknown` и консервативно делает Solidity `nonpayable`; конфликтующие
-  selectors диагностируются и пропускаются.
+- **EVM LowIR** хранит PC, encoding, типизированный статус immediate и
+  декодированные операнды глубины стека (включая дополнение PUSH нулями справа и
+  правило условного потребления EIP-8024), blocks, predecessor/successor edges,
+  проверенные цели `JUMPDEST`, reachability и домены высоты стека. CFG
+  восстанавливается детерминированным fixed point для всей программы: для
+  каждого stack slot распространяется ограниченное конечное множество 256-bit
+  значений, а для каждой конкретной высоты сохраняется отдельный abstract stack.
+  Поэтому константы через blocks внутренних call/return, перестановки стека,
+  `PC`/`CODESIZE` и скалярные операции ALU могут разрешать одну или несколько
+  конкретных целей. Действительно неизвестная цель остаётся явным indirect edge.
+
+  `AnalyzeOptions::MaxAbstractValuesPerSlot` ограничивает каждое конечное
+  множество; превышение расширяет slot до `Unknown`. `MaxStackHeightVariants`
+  ограничивает число зависящих от пути высот в block и выдаёт явную ошибку
+  analysis-limit вместо усечения CFG. Оба лимита отвергают ноль. Конечные
+  значения, созданные Cartesian-операцией после нереляционного слияния стеков,
+  помечаются как over-approximation: недопустимые кандидаты диагностируются, но
+  не заставляют strict-анализ отвергать bytecode только из-за потерянной
+  корреляции slot. Точная недопустимая цель по-прежнему завершается ошибкой на
+  соответствующем jump PC. В relaxed-режиме stack faults диагностируются и
+  завершают только ошибочный abstract path; невозможный fallthrough не создаётся.
+- **EVM MedIR** представляет каждое значение стека как 256-bit SSA и связывает
+  все merge phi до запуска детерминированной sparse constant worklist. Частный
+  lattice имеет состояния `Uninitialized`, одна точная `Constant` или
+  `Overdefined`: равные константы распространяются через blocks и закреплённые
+  phi-циклы, а конфликтующий или зависящий от runtime цикл не может придумать
+  константу. Worklist проверяет def-use ID и использует тот же ALU evaluator из
+  `Semantics.h`, что и interpreter. MedIR также независимо сохраняет основной
+  semantic effect, доступ к EVM-memory `none/read/write/readwrite`, доступ к
+  source-level state и call-value. Полиморфный стек LowIR на этой границе
+  консервативно выравнивается по вершине; отсутствующие на некоторых путях slots
+  становятся явными unknown values, а детерминированная диагностика фиксирует
+  потерю точности.
+- **EVM HighIR** восстанавливает Solidity dispatcher selectors, вероятные слова
+  calldata и return, mutability, постоянные storage slots, факты LOG/event и
+  revert, а также function/CFG regions. Проверенный producer index и итеративный
+  memoized value walk восстанавливают факты из типизированных операндов MedIR, а
+  не по расстоянию между инструкциями: сравнения selector могут пересекать
+  blocks и phi, использовать любой порядок операндов `EQ` и сохранять
+  производную 32-bit mask; argument offsets, storage keys, event topic0,
+  non-payable/receive guards и точные размеры return в 32 байта используют свои
+  семантические входы. Граф MedIR структурно ограничивает итеративный обход, а
+  malformed, смешанные или циклические выражения считаются unknown.
+  Конфликтующие цели одного selector диагностируются и пропускаются. Payability
+  остаётся независимой от state-access lattice, а достижимый неразрешённый
+  dynamic jump вынуждает консервативное восстановление `nonpayable`. Пока MedIR
+  не имеет memory SSA, восстановление payload custom error остаётся единственной
+  ограниченной эвристикой окна инструкций; восстановленные имена и типы явно
+  остаются эвристическими.
 - **LLVM** выдаёт verifier-clean state machine `i32 @evm_execute(ptr)` с
   проверенным стеком 1024 × `i256`, intermediates `i512`, защищённым signed
   division, saturating shifts, точными `BYTE`/`SIGNEXTEND`/`CLZ` и switches.
