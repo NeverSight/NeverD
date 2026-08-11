@@ -159,12 +159,17 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   Func.Entry = Low.Entry;
   Func.Name = Low.Name;
   Func.JumpTables = Low.JumpTables;
+  Func.ExceptionMetadata = Low.ExceptionMetadata;
 
   for (const auto &LB : Low.Blocks) {
     MedBlock MB;
     MB.Id = LB.Id;
+    MB.StartAddr = LB.StartAddr;
+    MB.EndAddr = LB.EndAddr;
     MB.Succs = LB.Succs;
     MB.Preds = LB.Preds;
+    MB.ExceptionalSuccs = LB.ExceptionalSuccs;
+    MB.ExceptionalPreds = LB.ExceptionalPreds;
 
     for (const auto &LOp : LB.Ops) {
       MedOp MOp;

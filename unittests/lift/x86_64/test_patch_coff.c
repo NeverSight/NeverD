@@ -27,8 +27,15 @@ int coff_switch_offset(int x) {
     }
 }
 
+__declspec(noinline) int coff_unwind_helper(int x) {
+    volatile int slots[8];
+    slots[0] = x;
+    return slots[0] + 1;
+}
+
 void mainCRTStartup(void) {
     sink = coff_switch_simple(3);
     sink = coff_switch_offset(102);
+    sink = coff_unwind_helper(41);
     while(1) {}
 }

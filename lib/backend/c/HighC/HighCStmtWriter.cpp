@@ -207,6 +207,90 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     }
     break;
 
+  case StmtKind::SEHTry: {
+    if (!Stmt.EHIsReducible || Stmt.EHClauses.size() != 1 ||
+        Stmt.EHClauseBodies.size() != 1) {
+      emitIndent(Indent);
+      OS << "/* unstructured SEH region [0x"
+         << llvm::utohexstr(Stmt.EHRange.Begin) << ", 0x"
+         << llvm::utohexstr(Stmt.EHRange.End) << ") */\n";
+      writeStmts(Stmt.Body, Indent);
+      break;
+    }
+    const HighEHClause &Clause = Stmt.EHClauses.front();
+    emitIndent(Indent);
+    OS << "__try {\n";
+    writeStmts(Stmt.Body, Indent + 1);
+    emitIndent(Indent);
+    if (Clause.Kind == HighEHClauseKind::SEHFinally) {
+      OS << "} __finally {\n";
+      writeStmts(Stmt.EHClauseBodies.front(), Indent + 1);
+      if (Stmt.EHClauseBodies.front().empty()) {
+        emitIndent(Indent + 1);
+        OS << "/* native finally funclet @ 0x"
+           << llvm::utohexstr(Clause.FilterOrActionVA) << " */\n";
+      }
+    } else {
+      OS << "} __except (";
+      if (Clause.FilterOrActionVA == 0) {
+        OS << "1";
+      } else {
+        OS << "((int (__cdecl *)(void *))(uintptr_t)0x"
+           << llvm::utohexstr(Clause.FilterOrActionVA)
+           << ")(GetExceptionInformation())";
+      }
+      OS << ") {\n";
+      writeStmts(Stmt.EHClauseBodies.front(), Indent + 1);
+      if (Stmt.EHClauseBodies.front().empty()) {
+        emitIndent(Indent + 1);
+        if (CurrentFunc && CurrentFunc->ExceptionMetadata &&
+            CurrentFunc->ExceptionMetadata->CodeRange.contains(
+                Clause.HandlerVA))
+          OS << "goto L_" << llvm::utohexstr(Clause.HandlerVA) << ";\n";
+        else
+          OS << "/* native handler target @ 0x"
+             << llvm::utohexstr(Clause.HandlerVA) << " */\n";
+      }
+    }
+    emitIndent(Indent);
+    OS << "}\n";
+    break;
+  }
+
+  case StmtKind::CxxTry:
+    emitIndent(Indent);
+    OS << "/* C++ try [0x" << llvm::utohexstr(Stmt.EHRange.Begin) << ", 0x"
+       << llvm::utohexstr(Stmt.EHRange.End)
+       << ") reconstructed from the native state map */\n";
+    emitIndent(Indent);
+    OS << "{\n";
+    writeStmts(Stmt.Body, Indent + 1);
+    emitIndent(Indent);
+    OS << "}\n";
+    for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
+      const HighEHClause &Clause = Stmt.EHClauses[I];
+      emitIndent(Indent);
+      if (Clause.Kind == HighEHClauseKind::CxxCleanup) {
+        OS << "/* cleanup(state=" << Clause.State
+           << ", kind=" << getCxxUnwindActionKindName(Clause.UnwindActionKind)
+           << ", object_offset=" << Clause.UnwindObjectOffset << ") -> 0x"
+           << llvm::utohexstr(Clause.FilterOrActionVA) << " */\n";
+      } else {
+        OS << "/* catch(";
+        if (Clause.TypeDescriptorVA)
+          OS << "type_descriptor@0x"
+             << llvm::utohexstr(Clause.TypeDescriptorVA);
+        else
+          OS << "...";
+        OS << ") -> funclet@0x" << llvm::utohexstr(Clause.HandlerVA)
+           << ", adjectives=0x" << llvm::utohexstr(Clause.Adjectives)
+           << ", object_offset=" << Clause.CatchObjectOffset << " */\n";
+      }
+      if (I < Stmt.EHClauseBodies.size())
+        writeStmts(Stmt.EHClauseBodies[I], Indent);
+    }
+    break;
+
   case StmtKind::Nop:
     break;
   }
@@ -230,6 +314,8 @@ void HighCWriter::collectGotoTargets(const std::vector<HighStmt> &Stmts) {
     for (auto &C : S.Cases)
       collectGotoTargets(C.Body);
     collectGotoTargets(S.DefaultBody);
+    for (auto &ClauseBody : S.EHClauseBodies)
+      collectGotoTargets(ClauseBody);
   }
 }
 

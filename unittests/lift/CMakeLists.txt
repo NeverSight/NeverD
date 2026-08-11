@@ -88,6 +88,7 @@ add_neverd_unittest(NeverDLiftTests
   LiftCommonTests.cpp
   MachOI386RelocationTests.cpp
   MedCallingConvTests.cpp
+  COFFExceptionTests.cpp
   COFFARMFormatTests.cpp
   FunctionDiscoveryThumbTests.cpp
   NdOpEmulatorTests.cpp
@@ -399,6 +400,52 @@ if(LLD_LINK_EXEC)
     DEPENDS ${coff_obj}
     COMMENT "Linking test_patch_coff.obj -> .exe (x86_64 PE)")
   list(APPEND TEST_OBJECTS ${coff_obj} ${coff_exe})
+
+  set(coff_seh_guard_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_seh_guard.s")
+  set(coff_seh_guard_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_seh_guard.obj")
+  set(coff_seh_guard_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_seh_guard.exe")
+  add_custom_command(
+    OUTPUT ${coff_seh_guard_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${coff_seh_guard_src} -o ${coff_seh_guard_obj}
+    DEPENDS ${coff_seh_guard_src}
+    COMMENT "Compiling guarded x64 SEH fixture")
+  add_custom_command(
+    OUTPUT ${coff_seh_guard_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:seh_fixture_entry /subsystem:console
+            /nodefaultlib /guard:cf /guard:ehcont
+            /export:guarded_main /export:may_throw_stub
+            /export:__C_specific_handler ${coff_seh_guard_obj}
+            /out:${coff_seh_guard_exe}
+    DEPENDS ${coff_seh_guard_obj}
+    COMMENT "Linking guarded x64 SEH fixture")
+  list(APPEND TEST_OBJECTS ${coff_seh_guard_obj} ${coff_seh_guard_exe})
+
+  set(coff_cxx_fh3_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_cxx_fh3.s")
+  set(coff_cxx_fh3_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_cxx_fh3.obj")
+  set(coff_cxx_fh3_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_cxx_fh3.exe")
+  add_custom_command(
+    OUTPUT ${coff_cxx_fh3_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${coff_cxx_fh3_src} -o ${coff_cxx_fh3_obj}
+    DEPENDS ${coff_cxx_fh3_src}
+    COMMENT "Compiling x64 FH3 reconstruction fixture")
+  add_custom_command(
+    OUTPUT ${coff_cxx_fh3_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:cxx_fixture_entry /subsystem:console
+            /nodefaultlib
+            /export:cxx_main /export:cxx_may_throw
+            /export:__CxxFrameHandler3 ${coff_cxx_fh3_obj}
+            /out:${coff_cxx_fh3_exe}
+    DEPENDS ${coff_cxx_fh3_obj}
+    COMMENT "Linking x64 FH3 reconstruction fixture")
+  list(APPEND TEST_OBJECTS ${coff_cxx_fh3_obj} ${coff_cxx_fh3_exe})
 
   set(coff_arm_src "${CMAKE_CURRENT_SOURCE_DIR}/format/test_pe_arm.c")
 

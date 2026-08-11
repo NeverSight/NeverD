@@ -148,6 +148,34 @@ inspect LowIR, MedIR, HighIR, LLVM IR, generated C, or a rewritten binary. The
 `NEVERD` environment variable can override the CLI path for a focused manual
 experiment; ordinary CTest runs use the executable embedded by CMake.
 
+### Windows exception reconstruction
+
+Windows table-based exception changes need both representation tests and a
+linked-PE patch test. The focused lift-suite filter covers the normalized
+unwind/SEH/C++ model, corrupt-input handling, exceptional CFG edges, HighIR,
+LLVM WinEH generation, exception-directory replacement, and Guard CF/EH
+continuation reconstruction:
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+The guarded x64 assembly fixture requires Clang's Windows target and
+`lld-link`; its CMake link uses `/guard:cf` and `/guard:ehcont`. A skip caused
+by a missing cross-linker is not evidence for the final-image path. A passing
+integration case proves that the rewritten PE can be reloaded and that its
+runtime-function, unwind, load-config, Guard CF, and Guard EH continuation
+tables remain sorted, file-backed, and executable-target valid.
+
+The linked FH3 fixture covers the native C++ closure independently: fixed
+state tables, HighC annotations, personality preservation, generated catch
+targets, and the reloaded IP-to-state graph.
+
+See [Windows Exception Reconstruction](windows-exception-reconstruction.md)
+for the analysis/native support matrix and the fail-closed patch contract.
+
 ### Unicorn differential roundtrips
 
 The semantic fixture tests behavior rather than textual shape:

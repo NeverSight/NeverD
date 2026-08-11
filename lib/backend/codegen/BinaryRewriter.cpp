@@ -37,9 +37,11 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <cstring>
 #include <filesystem>
+#include <limits>
 
 #define DEBUG_TYPE "neverd-rewriter"
 
@@ -82,7 +84,8 @@ std::unique_ptr<InplaceRewriter> InplaceRewriter::create(BinaryFormat Format) {
 CompiledImage compileImageForPatch(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn) {
+        ResolveFn,
+    uint64_t ImageBaseVA) {
   CompiledImage Out;
   Out.BaseVA = BaseVA;
 
@@ -99,17 +102,36 @@ CompiledImage compileImageForPatch(
   // (fixups are fixed-width, applied in place) are exact and drive the layout.
   llvm::mc_rewrite::RewriteOptions Pass1;
   Pass1.Model.TextVA = BaseVA;
+  Pass1.Model.ImageBaseVA = ImageBaseVA;
   Pass1.Model.getSectionVA = [&](llvm::StringRef) { return BaseVA; };
   Pass1.Model.resolve = [&](llvm::StringRef S, uint32_t Sp) {
     return ResolveFn(S, Sp);
   };
   Codegen CG1;
-  auto Res1 = CG1.compileForRewrite(Mod, TargetArch, Pass1, Fmt);
+  auto Pass1Mod = llvm::CloneModule(Mod);
+  auto Res1 = CG1.compileForRewrite(*Pass1Mod, TargetArch, Pass1, Fmt);
   if (Res1.Sections.empty())
     return Out;
 
   if (Res1.Sections.size() == 1) {
-    Out.Bytes = std::move(Res1.Sections.front().Bytes);
+    auto &S = Res1.Sections.front();
+    if (S.Alignment == 0 || (S.Alignment & (S.Alignment - 1)) != 0 ||
+        (S.IsAllocated && BaseVA % S.Alignment != 0)) {
+      llvm::WithColor::error()
+          << "compileImageForPatch: invalid single-section alignment\n";
+      return Out;
+    }
+    CompiledSection CS{S.Name,
+                       0,
+                       S.IsAllocated ? BaseVA : 0,
+                       static_cast<uint64_t>(S.Bytes.size()),
+                       S.Alignment,
+                       S.Kind,
+                       S.IsAllocated};
+    CS.SymbolIndexReferences = std::move(S.SymbolIndexReferences);
+    Out.Sections.push_back(std::move(CS));
+    if (S.IsAllocated)
+      Out.Bytes = std::move(S.Bytes);
     Out.SymbolAddrs = std::move(Res1.SymbolAddrs);
     Out.Unresolved = std::move(Res1.Unresolved);
     Out.Success = true;
@@ -120,8 +142,9 @@ CompiledImage compileImageForPatch(
   }
 
   // Plan a contiguous layout: text first at BaseVA, then the remaining sections
-  // in emission order, each 16-byte aligned (covers 8-byte pointer/blockaddress
-  // tables — whose loads use scale8 fixups — and vector constants).  Section
+  // in emission order, each honoring both a 16-byte patch-image floor (covers
+  // pointer/blockaddress tables and vector constants) and the alignment
+  // reported by MC.  Section
   // spacing uses a per-section MONOTONIC max size (MaxSize, grown each round)
   // rather than this compile's size, so a section never moves backward and the
   // layout cannot oscillate (see the iteration note below).
@@ -129,22 +152,40 @@ CompiledImage compileImageForPatch(
   std::map<std::string, uint64_t> MaxSize;
   auto planLayout =
       [&](const std::vector<llvm::mc_rewrite::RewriteSection> &Secs,
-          std::map<std::string, uint64_t> &VA, uint64_t &Total) {
-        VA.clear();
-        uint64_t Cur = BaseVA;
-        auto add = [&](const llvm::mc_rewrite::RewriteSection &S) {
-          uint64_t V = alignUp(Cur, Align);
-          VA[S.Name] = V;
-          Cur = V + MaxSize[S.Name];
-        };
-        for (auto &S : Secs)
-          if (IsText(S.Name))
-            add(S);
-        for (auto &S : Secs)
-          if (!IsText(S.Name))
-            add(S);
-        Total = Cur - BaseVA;
-      };
+          std::map<std::string, uint64_t> &VA, uint64_t &Total) -> bool {
+    VA.clear();
+    uint64_t Cur = BaseVA;
+    bool Valid = true;
+    auto add = [&](const llvm::mc_rewrite::RewriteSection &S) {
+      if (!S.IsAllocated)
+        return;
+      uint64_t SectionAlign = std::max<uint64_t>(Align, S.Alignment);
+      if (S.Alignment == 0 || (S.Alignment & (S.Alignment - 1)) != 0 ||
+          SectionAlign == 0 || (SectionAlign & (SectionAlign - 1)) != 0 ||
+          Cur > std::numeric_limits<uint64_t>::max() - (SectionAlign - 1)) {
+        Valid = false;
+        return;
+      }
+      uint64_t V = alignUp(Cur, SectionAlign);
+      if (MaxSize[S.Name] > std::numeric_limits<uint64_t>::max() - V) {
+        Valid = false;
+        return;
+      }
+      VA[S.Name] = V;
+      Cur = V + MaxSize[S.Name];
+    };
+    for (auto &S : Secs)
+      if (IsText(S.Name))
+        add(S);
+    for (auto &S : Secs)
+      if (!IsText(S.Name))
+        add(S);
+    if (!Valid || Cur < BaseVA ||
+        Cur - BaseVA > std::numeric_limits<size_t>::max())
+      return false;
+    Total = Cur - BaseVA;
+    return true;
+  };
 
   // Iterate to a self-consistent layout. A section's size can shift between
   // compiles because MC relaxation depends on the (VA-derived) fixup values,
@@ -164,14 +205,20 @@ CompiledImage compileImageForPatch(
   // case relaxation) the layout is stable. The accepted compile's actual bytes
   // are <= the spacing, so each section is placed at its planned VA with zero
   // padding after it and every fixup still targets the exact VA the compile was
-  // given. compileForRewrite's module mutations (triple/data-layout,
-  // funnel-shift expansion, data-global externalisation) are idempotent, so
-  // re-running on Mod is safe.
+  // given.  Each code-generation pass gets a fresh clone of the same input
+  // module.  Target lowering is not generally repeatable on already-lowered
+  // IR: WinEH preparation, in particular, rewrites catch/cleanup regions and
+  // a second pass can reject or discard the transformed function.  Cloning
+  // also keeps this layout probe from mutating the caller's module.
   for (auto &S : Res1.Sections)
     MaxSize[S.Name] = std::max<uint64_t>(MaxSize[S.Name], S.Bytes.size());
   std::map<std::string, uint64_t> SectionVA;
   uint64_t TotalSize = 0;
-  planLayout(Res1.Sections, SectionVA, TotalSize);
+  if (!planLayout(Res1.Sections, SectionVA, TotalSize)) {
+    llvm::WithColor::error()
+        << "compileImageForPatch: section layout overflows\n";
+    return Out;
+  }
   if (SectionVA.empty())
     return Out;
 
@@ -180,6 +227,7 @@ CompiledImage compileImageForPatch(
   for (int Iter = 0; Iter < 8 && !Converged; ++Iter) {
     llvm::mc_rewrite::RewriteOptions PassN;
     PassN.Model.TextVA = BaseVA;
+    PassN.Model.ImageBaseVA = ImageBaseVA;
     PassN.Model.getSectionVA = [&](llvm::StringRef N) -> uint64_t {
       auto It = SectionVA.find(N.str());
       return It != SectionVA.end() ? It->second : BaseVA;
@@ -188,7 +236,8 @@ CompiledImage compileImageForPatch(
       return ResolveFn(S, Sp);
     };
     Codegen CGn;
-    auto ResN = CGn.compileForRewrite(Mod, TargetArch, PassN, Fmt);
+    auto IterMod = llvm::CloneModule(Mod);
+    auto ResN = CGn.compileForRewrite(*IterMod, TargetArch, PassN, Fmt);
     if (ResN.Sections.empty())
       return Out;
 
@@ -197,7 +246,11 @@ CompiledImage compileImageForPatch(
       MaxSize[S.Name] = std::max<uint64_t>(MaxSize[S.Name], S.Bytes.size());
     std::map<std::string, uint64_t> NewVA;
     uint64_t NewTotal = 0;
-    planLayout(ResN.Sections, NewVA, NewTotal);
+    if (!planLayout(ResN.Sections, NewVA, NewTotal)) {
+      llvm::WithColor::error()
+          << "compileImageForPatch: section layout overflows\n";
+      return Out;
+    }
     if (NewVA == SectionVA) {
       // The layout this compile was given regenerates itself (the max sizes
       // have settled) → its fixups already target the final addresses. Accept
@@ -221,10 +274,24 @@ CompiledImage compileImageForPatch(
   // Assemble the image at the converged VAs.
   Out.Bytes.assign(static_cast<size_t>(TotalSize), 0);
   for (auto &S : Final.Sections) {
+    if (!S.IsAllocated) {
+      CompiledSection CS{
+          S.Name,      0,      0,    static_cast<uint64_t>(S.Bytes.size()),
+          S.Alignment, S.Kind, false};
+      CS.SymbolIndexReferences = std::move(S.SymbolIndexReferences);
+      Out.Sections.push_back(std::move(CS));
+      continue;
+    }
     auto VAIt = SectionVA.find(S.Name);
     if (VAIt == SectionVA.end())
       continue;
     uint64_t Off = VAIt->second - BaseVA;
+    CompiledSection CS{S.Name,       Off,
+                       VAIt->second, static_cast<uint64_t>(S.Bytes.size()),
+                       S.Alignment,  S.Kind,
+                       true};
+    CS.SymbolIndexReferences = std::move(S.SymbolIndexReferences);
+    Out.Sections.push_back(std::move(CS));
     if (!S.Bytes.empty()) {
       // Off/size come from the converged layout; guard the write so a layout
       // miscalculation (or a VA < BaseVA underflow) fails loudly instead of
@@ -424,7 +491,9 @@ size_t BinaryPatcher::installTrampolines(
     uint64_t OrigTextSize, uint64_t OrigTextFileOff, uint64_t ImageBase,
     Arch TargetArch, InstructionMode Mode, const std::vector<Symbol> *Symbols,
     const std::vector<std::pair<va_t, va_t>> *KnownRanges,
-    const std::vector<Export> *Exports) {
+    const std::vector<Export> *Exports,
+    std::vector<va_t> *PatchedOriginalEntries,
+    std::vector<std::pair<va_t, va_t>> *PatchedEntryMappings) {
   if (OrigTextSize > InvalidVA - OrigTextVA ||
       OrigTextVA > InvalidVA - ImageBase)
     return 0;
@@ -479,6 +548,10 @@ size_t BinaryPatcher::installTrampolines(
     if (writeTrampoline(Binary, OrigOff, FuncNewVA, ImageBase + OrigRVA,
                         TargetArch, Mode, MaxOverwriteBytes)) {
       ++Count;
+      if (PatchedOriginalEntries)
+        PatchedOriginalEntries->push_back(OrigAnalysisVA);
+      if (PatchedEntryMappings)
+        PatchedEntryMappings->push_back({OrigAnalysisVA, FuncNewVA});
       LLVM_DEBUG(llvm::dbgs() << "patch: trampoline " << Name << " @ VA 0x"
                               << llvm::utohexstr(OrigRVA) << " -> 0x"
                               << llvm::utohexstr(FuncNewVA) << "\n");

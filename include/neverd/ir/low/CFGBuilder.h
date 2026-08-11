@@ -69,6 +69,7 @@ private:
   void explore(const BinaryImage &Img, Decoder &Dec, va_t Addr);
   void splitBlocks();
   void linkSuccessors(LowFunc &Func, const std::map<va_t, int> &AddrToBlock);
+  void linkExceptionalSuccessors(LowFunc &Func);
   void classifyInsn(InsnRecord &Rec);
 
   /// Re-base x87 ST(i) register references so each block's TOP matches its CFG

@@ -17,6 +17,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -429,14 +431,40 @@ namespace {
 template <typename LoadCfgT>
 void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
                           uint64_t ImageBase, BinaryImage &Img) {
-  if (AvailableSize < sizeof(LoadCfgT))
+  if (AvailableSize < sizeof(uint32_t))
     return;
-  LoadCfgT Cfg;
-  std::memcpy(&Cfg, reinterpret_cast<const void *>(CfgPtr), sizeof(Cfg));
-  if (Cfg.SecurityCookie >= ImageBase)
+  LoadCfgT Cfg{};
+  std::memcpy(&Cfg, reinterpret_cast<const void *>(CfgPtr),
+              std::min(AvailableSize, sizeof(Cfg)));
+  auto Has = [&](size_t Offset, size_t Size) {
+    return rangeInBounds(Offset, Size, AvailableSize);
+  };
+  auto ToRVA = [&](uint64_t VA) -> va_t {
+    return VA >= ImageBase ? VA - ImageBase : 0;
+  };
+
+  if (Has(offsetof(LoadCfgT, SecurityCookie), sizeof(Cfg.SecurityCookie)) &&
+      Cfg.SecurityCookie >= ImageBase)
     Img.DynInfo.SecurityCookieRVA = Cfg.SecurityCookie - ImageBase;
-  if (Cfg.GuardCFCheckFunction >= ImageBase)
+  if (Has(offsetof(LoadCfgT, GuardCFCheckFunction),
+          sizeof(Cfg.GuardCFCheckFunction)) &&
+      Cfg.GuardCFCheckFunction >= ImageBase)
     Img.DynInfo.GuardCFCheckFunctionRVA = Cfg.GuardCFCheckFunction - ImageBase;
+  if (Has(offsetof(LoadCfgT, GuardFlags), sizeof(Cfg.GuardFlags)))
+    Img.DynInfo.GuardFlags = Cfg.GuardFlags;
+  if (Has(offsetof(LoadCfgT, GuardCFFunctionTable),
+          sizeof(Cfg.GuardCFFunctionTable)))
+    Img.DynInfo.GuardCFFunctionTableRVA = ToRVA(Cfg.GuardCFFunctionTable);
+  if (Has(offsetof(LoadCfgT, GuardCFFunctionCount),
+          sizeof(Cfg.GuardCFFunctionCount)))
+    Img.DynInfo.GuardCFFunctionCount = Cfg.GuardCFFunctionCount;
+  if (Has(offsetof(LoadCfgT, GuardEHContinuationTable),
+          sizeof(Cfg.GuardEHContinuationTable)))
+    Img.DynInfo.GuardEHContinuationTableRVA =
+        ToRVA(Cfg.GuardEHContinuationTable);
+  if (Has(offsetof(LoadCfgT, GuardEHContinuationCount),
+          sizeof(Cfg.GuardEHContinuationCount)))
+    Img.DynInfo.GuardEHContinuationCount = Cfg.GuardEHContinuationCount;
 }
 } // anonymous namespace
 
@@ -448,6 +476,8 @@ void parseLoadConfiguration(const COFFObjectFile &Obj, BinaryImage &Img,
   if (!LoadCfgDir || LoadCfgDir->RelativeVirtualAddress == 0 ||
       LoadCfgDir->Size == 0)
     return;
+
+  Img.DynInfo.LoadConfigRVA = LoadCfgDir->RelativeVirtualAddress;
 
   uintptr_t CfgPtr;
   if (auto Err = Obj.getRvaPtr(LoadCfgDir->RelativeVirtualAddress, CfgPtr)) {
@@ -461,6 +491,14 @@ void parseLoadConfiguration(const COFFObjectFile &Obj, BinaryImage &Img,
   size_t AvailableSize =
       (CfgPtr >= FileBegin && CfgPtr <= FileEnd) ? (FileEnd - CfgPtr) : 0;
   AvailableSize = std::min<size_t>(AvailableSize, LoadCfgDir->Size);
+  if (AvailableSize < sizeof(uint32_t))
+    return;
+  uint32_t DeclaredSize =
+      readLE<uint32_t>(reinterpret_cast<const uint8_t *>(CfgPtr));
+  if (DeclaredSize < sizeof(uint32_t))
+    return;
+  AvailableSize = std::min<size_t>(AvailableSize, DeclaredSize);
+  Img.DynInfo.LoadConfigSize = static_cast<uint32_t>(AvailableSize);
 
   if (Is64)
     extractLoadCfgFields<llvm::object::coff_load_configuration64>(

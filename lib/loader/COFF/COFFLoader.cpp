@@ -16,6 +16,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/FunctionDiscovery.h"
 
@@ -400,6 +401,10 @@ COFFLoader::load(const std::filesystem::path &Path) {
     Img.recordRuntimeFunction(Img.Entry);
 
   runPostLoadDiscovery(Img, "coff: loaded " + Path.filename().string());
+  // Handler names may sit behind executable import veneers found during
+  // post-load discovery.  Decode language tables only after those mappings and
+  // the COFF symbol table are both available.
+  coff_loader::resolveExceptionHandlers(Img);
   return Img;
 }
 

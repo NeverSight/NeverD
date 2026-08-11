@@ -14,6 +14,7 @@
 #include "neverd/Support/TargetCodegenInfo.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
+#include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Module.h"
@@ -139,6 +140,10 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     // too — so it is forced through the relocating (grower) path, which uses
     // compileImageForPatch for proper multi-section layout.
     bool HasExtraSections = false;
+    /// Any existing table-based unwind contract forces relocation so the
+    /// original runtime entry can be replaced atomically with codegen's new
+    /// `.pdata/.xdata` rather than leaving stale prologue metadata in place.
+    bool HasExceptionMetadata = false;
   };
   std::vector<FuncPlan> Plans;
 
@@ -169,6 +174,8 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     P.IRName = F.getName().str();
     P.OrigVA = OrigVA;
     P.OrigSize = OrigSize;
+    P.HasExceptionMetadata =
+        Image.ExceptionMetadata.findFunction(OrigVA) != nullptr;
     Plans.push_back(std::move(P));
   }
 
@@ -191,6 +198,17 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     Resolver->parse(State.Binary, TargetArch);
 
   BinaryFormat Fmt = getBinaryFormat();
+  bool RequireGeneratedEHContinuations = false;
+  if (Fmt == BinaryFormat::COFF) {
+    auto EHPlanOrErr = planCOFFExceptionPatch(Mod, Image, TargetArch);
+    if (!EHPlanOrErr) {
+      llvm::WithColor::error()
+          << llvm::toString(EHPlanOrErr.takeError()) << "\n";
+      return PatchResult{};
+    }
+    RequireGeneratedEHContinuations =
+        !EHPlanOrErr->LanguageExceptionFunctionEntries.empty();
+  }
   InstructionMode ResolveMode = Image.Mode;
   auto SerializeResolvedCode = [&](uint64_t VA, bool IsCode) {
     return IsCode ? serializeCodePointer(VA, TargetArch, ResolveMode) : VA;
@@ -219,6 +237,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
 
     llvm::mc_rewrite::RewriteOptions RwOpts;
     RwOpts.Model.TextVA = Plan.OrigVA;
+    RwOpts.Model.ImageBaseVA = Image.Base;
     RwOpts.Model.getSectionVA = [&](llvm::StringRef) -> uint64_t {
       return Plan.OrigVA;
     };
@@ -285,7 +304,8 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
   // functions directly at their unchanged VAs, and call each other in-section.
   std::set<std::string> GrowNames;
   for (const auto &Plan : Plans)
-    if (Plan.NewBytes.size() > Plan.OrigSize || Plan.HasExtraSections)
+    if (Plan.NewBytes.size() > Plan.OrigSize || Plan.HasExtraSections ||
+        Plan.HasExceptionMetadata)
       GrowNames.insert(Plan.IRName);
 
   if (!GrowNames.empty()) {
@@ -305,6 +325,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
       Patcher->setImageContext(&Image);
       return Patcher->patch(InputPath, OutputPath, Mod, TargetArch);
     }
+    Patcher->setImageContext(&Image);
 
     // Compile just the growers together, laid out at the new segment VA.
     auto GrowMod = llvm::CloneModule(Mod);
@@ -315,6 +336,9 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     auto ResolveFn = [&](llvm::StringRef Sym,
                          uint32_t) -> std::optional<uint64_t> {
       std::string Name = Sym.str();
+      if (Fmt == BinaryFormat::COFF)
+        if (auto Personality = findCOFFExceptionPersonalityVA(Image, Sym))
+          return SerializeResolvedCode(*Personality, true);
       auto FIt = FuncOrigVAs.find(Name);
       if (FIt != FuncOrigVAs.end())
         return SerializeResolvedCode(FIt->second, true);
@@ -340,18 +364,11 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     // indirect-branch offset table) contiguously from NewSegVA and resolves all
     // cross-section fixups, so a grower that emits a data table works too.  For
     // text-only growers it is a single-section fast path identical to before.
-    auto ImageOut =
-        compileImageForPatch(*GrowMod, TargetArch, Fmt, NewSegVA, ResolveFn);
+    auto ImageOut = compileImageForPatch(*GrowMod, TargetArch, Fmt, NewSegVA,
+                                         ResolveFn, Image.Base);
     if (!ImageOut.Success || ImageOut.Bytes.empty()) {
       llvm::WithColor::error()
           << "inplace: grower recompile produced no code\n";
-      return PatchResult{};
-    }
-
-    uint64_t Placed = Patcher->appendExecSegment(State.Binary, ImageOut.Bytes,
-                                                 "", TargetArch);
-    if (Placed == 0) {
-      llvm::WithColor::error() << "inplace: appendExecSegment failed\n";
       return PatchResult{};
     }
 
@@ -412,6 +429,8 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     };
 
     size_t InstalledTrampolines = 0;
+    std::vector<va_t> PatchedOriginalEntries;
+    std::vector<std::pair<va_t, va_t>> PatchedEntryMappings;
     for (auto &Plan : Plans) {
       if (!GrowNames.count(Plan.IRName))
         continue;
@@ -446,10 +465,59 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
         return PatchResult{};
       }
       ++InstalledTrampolines;
+      PatchedOriginalEntries.push_back(Plan.OrigVA);
+      PatchedEntryMappings.push_back({Plan.OrigVA, NewVA});
       RecordApplied(Plan);
       LLVM_DEBUG(llvm::dbgs() << "inplace: relocated grower '" << Plan.Name
                               << "' VA=0x" << llvm::utohexstr(Plan.OrigVA)
                               << " -> 0x" << llvm::utohexstr(NewVA) << "\n");
+    }
+
+    COFFExceptionDirectoryUpdate EHUpdate;
+    COFFGuardTableUpdate GuardUpdate;
+    if (Fmt == BinaryFormat::COFF) {
+      auto EHUpdateOrErr = prepareCOFFExceptionDirectory(
+          State.Binary, Image, ImageOut, PatchedOriginalEntries,
+          PatchedEntryMappings, NewSegVA, TargetArch);
+      if (!EHUpdateOrErr) {
+        llvm::WithColor::error()
+            << llvm::toString(EHUpdateOrErr.takeError()) << "\n";
+        return PatchResult{};
+      }
+      EHUpdate = *EHUpdateOrErr;
+      auto GuardUpdateOrErr = prepareCOFFGuardTables(
+          State.Binary, Image, ImageOut, PatchedEntryMappings, NewSegVA,
+          TargetArch, RequireGeneratedEHContinuations);
+      if (!GuardUpdateOrErr) {
+        llvm::WithColor::error()
+            << llvm::toString(GuardUpdateOrErr.takeError()) << "\n";
+        return PatchResult{};
+      }
+      GuardUpdate = *GuardUpdateOrErr;
+    }
+
+    uint64_t Placed = Patcher->appendExecSegment(State.Binary, ImageOut.Bytes,
+                                                 "", TargetArch);
+    if (Placed == 0 || Placed != NewSegVA) {
+      llvm::WithColor::error() << "inplace: appendExecSegment failed\n";
+      return PatchResult{};
+    }
+    if (Fmt == BinaryFormat::COFF) {
+      if (llvm::Error Err =
+              applyCOFFExceptionDirectoryUpdate(State.Binary, EHUpdate)) {
+        llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
+        return PatchResult{};
+      }
+      if (llvm::Error Err =
+              applyCOFFGuardTableUpdate(State.Binary, Image, GuardUpdate)) {
+        llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
+        return PatchResult{};
+      }
+      if (llvm::Error Err =
+              validatePatchedCOFFImage(State.Binary, TargetArch)) {
+        llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
+        return PatchResult{};
+      }
     }
 
     if (!ImageOut.Unresolved.empty())
@@ -498,6 +566,13 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
   }
 
   State.ObjText.clear();
+
+  if (Fmt == BinaryFormat::COFF) {
+    if (llvm::Error Err = validatePatchedCOFFImage(State.Binary, TargetArch)) {
+      llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
+      return PatchResult{};
+    }
+  }
 
   return writeResult(OutputPath, State, needsExecPermission());
 }

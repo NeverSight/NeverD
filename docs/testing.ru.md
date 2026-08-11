@@ -131,6 +131,35 @@ PE/COFF-объекты и слинкованные образы, а также P
 переопределить путь CLI для целевого ручного эксперимента; обычные запуски CTest
 используют встроенный CMake исполняемый файл.
 
+### Реконструкция исключений Windows
+
+Изменения табличных исключений Windows требуют как тестов представления, так и
+patch-теста связанного PE. Целевой фильтр набора lift охватывает нормализованную
+модель unwind/SEH/C++, обработку повреждённых входов, исключительные рёбра CFG,
+HighIR, генерацию LLVM WinEH, замену каталога исключений и реконструкцию Guard
+CF/EH continuation:
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+Защищённой x64 assembly fixture нужны Windows-target Clang и `lld-link`; её
+CMake-link использует `/guard:cf` и `/guard:ehcont`. Skip из-за отсутствующего
+cross-linker не является доказательством для пути final-image. Успешный
+интеграционный тест доказывает, что переписанный PE можно повторно загрузить, а
+его таблицы runtime-function, unwind, load-config, Guard CF и Guard EH
+continuation остаются отсортированными, присутствуют в файле и указывают только
+на исполняемые цели.
+
+Связанная FH3 fixture независимо проверяет нативное C++-замыкание: фиксированные
+таблицы состояний, аннотации HighC, сохранение personality, созданные catch-цели
+и повторно загруженный граф IP-to-state.
+
+См. [Реконструкцию исключений Windows](windows-exception-reconstruction.ru.md)
+для матрицы поддержки анализа/нативной генерации и fail-closed-контракта patch.
+
 ### Дифференциальные циклы Unicorn
 
 Семантический fixture проверяет поведение, а не текстовую форму:

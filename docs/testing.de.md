@@ -138,6 +138,36 @@ umgeschriebenes Binary. Für ein fokussiertes manuelles Experiment kann die
 Umgebungsvariable `NEVERD` den CLI-Pfad überschreiben; normale CTest-Läufe
 verwenden das von CMake eingebettete Executable.
 
+### Windows-Ausnahmerekonstruktion
+
+Änderungen an tabellenbasierten Windows-Ausnahmen benötigen sowohl
+Repräsentationstests als auch einen Patch-Test mit einer gelinkten PE-Datei.
+Der fokussierte Lift-Filter deckt das normalisierte Unwind-/SEH-/C++-Modell,
+beschädigte Eingaben, außergewöhnliche CFG-Kanten, HighIR, LLVM-WinEH-Erzeugung,
+den Austausch des Ausnahmeverzeichnisses sowie die Rekonstruktion von Guard CF
+und Guard EH Continuation ab:
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+Das geschützte x64-Assembly-Fixture benötigt Clangs Windows-Target und
+`lld-link`; der CMake-Link verwendet `/guard:cf` und `/guard:ehcont`. Ein Skip
+wegen eines fehlenden Cross-Linkers ist kein Nachweis für den Final-Image-Pfad.
+Ein erfolgreicher Integrationstest beweist, dass das umgeschriebene PE erneut
+geladen werden kann und seine Runtime-Function-, Unwind-, Load-Config-, Guard-CF-
+und Guard-EH-Continuation-Tabellen sortiert, dateigestützt und auf ausführbare
+Ziele beschränkt bleiben.
+
+Das gelinkte FH3-Fixture prüft den nativen C++-Abschluss unabhängig: feste
+Zustandstabellen, HighC-Anmerkungen, Erhalt der Personality, erzeugte Catch-Ziele
+und den erneut geladenen IP-to-State-Graphen.
+
+Siehe [Windows-Ausnahmerekonstruktion](windows-exception-reconstruction.de.md)
+für die Analyse-/Native-Supportmatrix und den Fail-Closed-Patch-Vertrag.
+
 ### Differentielle Unicorn-Roundtrips
 
 Das Semantik-Fixture prüft Verhalten statt Textform:

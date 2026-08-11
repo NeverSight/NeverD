@@ -24,6 +24,7 @@
 #include "neverd/Common.h"
 #include "neverd/Object/SectionNames.h"
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/loader/ExceptionInfo.h"
 #include "neverd/sbf/SBFMetadata.h"
 
 #include "llvm/BinaryFormat/COFF.h"
@@ -207,6 +208,16 @@ struct DynamicInfo {
 
   /// PE/COFF: CF Guard check function pointer RVA.
   va_t GuardCFCheckFunctionRVA = 0;
+
+  /// PE/COFF load-configuration provenance and guard tables.  Native table
+  /// pointers are normalized from VAs to RVAs at load time.
+  va_t LoadConfigRVA = 0;
+  uint32_t LoadConfigSize = 0;
+  uint32_t GuardFlags = 0;
+  va_t GuardCFFunctionTableRVA = 0;
+  uint64_t GuardCFFunctionCount = 0;
+  va_t GuardEHContinuationTableRVA = 0;
+  uint64_t GuardEHContinuationCount = 0;
 };
 
 // ===--------------------------------------------------------------------===//
@@ -343,6 +354,9 @@ struct BinaryImage {
   /// Includes BOTH primary RUNTIME_FUNCTION entries and chained-info
   /// continuation chunks.
   std::vector<std::pair<va_t, va_t>> KnownCodeRanges;
+  /// Checked, normalized table-based unwind and language exception metadata.
+  /// Empty for formats/targets without a supported exception directory.
+  ExceptionInfo ExceptionMetadata;
   std::vector<uint8_t> Raw;
 
   bool is64Bit() const { return neverd::is64Bit(Bits); }

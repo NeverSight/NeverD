@@ -15,7 +15,9 @@
 #define NEVERD_IR_LOW_LOWIR_H
 
 #include "neverd/ir/NdOps.h"
+#include "neverd/loader/ExceptionInfo.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -85,6 +87,8 @@ struct LowBlock {
   std::vector<LowOp> Ops;
   std::vector<int> Succs;
   std::vector<int> Preds;
+  std::vector<ExceptionalEdge> ExceptionalSuccs;
+  std::vector<ExceptionalEdge> ExceptionalPreds;
 
   bool hasSucc(int S) const {
     for (auto X : Succs)
@@ -176,6 +180,7 @@ struct LowFunc {
   uint32_t SourceLine = 0;
   std::vector<LowBlock> Blocks;
   std::vector<JumpTable> JumpTables;
+  std::optional<ExceptionFunction> ExceptionMetadata;
 
   /// Bytes this function pops off the caller's stack on return beyond the
   /// return address (x86 `ret imm`, the i386 SysV callee-cleanup convention

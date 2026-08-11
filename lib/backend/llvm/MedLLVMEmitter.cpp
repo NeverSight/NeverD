@@ -19,6 +19,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #include "neverd/Common.h"
+#include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
@@ -26,12 +27,17 @@
 #include "neverd/Limits.h"
 #include "neverd/Support/Diagnostic.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/COFF.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -42,6 +48,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <set>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -72,6 +79,29 @@ uint64_t positiveRangeEnd(int64_t Start, uint64_t Size) {
     return checkedSyntheticStackAdd(static_cast<uint64_t>(Start), Size);
   uint64_t Distance = static_cast<uint64_t>(-(Start + 1)) + 1;
   return Size > Distance ? Size - Distance : 0;
+}
+
+llvm::Metadata *mdUInt(llvm::LLVMContext &Ctx, uint64_t Value,
+                       unsigned Bits = 64) {
+  return llvm::ConstantAsMetadata::get(
+      llvm::ConstantInt::get(llvm::IntegerType::get(Ctx, Bits), Value));
+}
+
+llvm::Metadata *mdSInt(llvm::LLVMContext &Ctx, int64_t Value,
+                       unsigned Bits = 64) {
+  return llvm::ConstantAsMetadata::get(
+      llvm::ConstantInt::getSigned(llvm::IntegerType::get(Ctx, Bits), Value));
+}
+
+std::string hexBytes(const std::vector<uint8_t> &Bytes) {
+  static constexpr char Digits[] = "0123456789abcdef";
+  std::string Result;
+  Result.reserve(Bytes.size() * 2);
+  for (uint8_t Byte : Bytes) {
+    Result.push_back(Digits[Byte >> 4]);
+    Result.push_back(Digits[Byte & 0x0f]);
+  }
+  return Result;
 }
 
 } // anonymous namespace
@@ -315,6 +345,808 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   return LLVMFunc;
 }
 
+void MedLLVMEmitter::emitExceptionMetadata(const MedFunc &Func,
+                                           llvm::Function &LLVMFunc) {
+  if (!Func.ExceptionMetadata)
+    return;
+  const ExceptionFunction &EH = *Func.ExceptionMetadata;
+  auto Str = [&](llvm::StringRef Value) -> llvm::Metadata * {
+    return llvm::MDString::get(*Ctx, Value);
+  };
+  auto Node = [&](const std::vector<llvm::Metadata *> &Values) {
+    return llvm::MDNode::get(*Ctx, Values);
+  };
+
+  std::vector<llvm::Metadata *> UnwindOps;
+  UnwindOps.reserve(EH.UnwindOperations.size());
+  for (const UnwindOperation &Op : EH.UnwindOperations) {
+    UnwindOps.push_back(
+        Node({mdUInt(*Ctx, static_cast<uint8_t>(Op.Kind), 8),
+              mdUInt(*Ctx, Op.CodeOffset, 32), mdUInt(*Ctx, Op.OpInfo, 8),
+              mdUInt(*Ctx, Op.SlotCount, 8), mdUInt(*Ctx, Op.Register, 16),
+              mdUInt(*Ctx, Op.StackOffset), Str(hexBytes(Op.OperandBytes))}));
+  }
+
+  std::vector<llvm::Metadata *> Epilogs;
+  Epilogs.reserve(EH.Epilogs.size());
+  for (const UnwindEpilog &Epilog : EH.Epilogs) {
+    std::vector<llvm::Metadata *> Ops;
+    for (const UnwindOperation &Op : Epilog.Operations)
+      Ops.push_back(
+          Node({mdUInt(*Ctx, static_cast<uint8_t>(Op.Kind), 8),
+                mdUInt(*Ctx, Op.CodeOffset, 32), mdUInt(*Ctx, Op.OpInfo, 8),
+                mdUInt(*Ctx, Op.SlotCount, 8), mdUInt(*Ctx, Op.Register, 16),
+                mdUInt(*Ctx, Op.StackOffset), Str(hexBytes(Op.OperandBytes))}));
+    Epilogs.push_back(
+        Node({mdSInt(*Ctx, Epilog.StartOffset), mdUInt(*Ctx, Epilog.Flags, 8),
+              mdUInt(*Ctx, Epilog.FirstOperationOffset, 32),
+              mdUInt(*Ctx, Epilog.LastInstructionOffset, 32), Node(Ops)}));
+  }
+
+  std::vector<llvm::Metadata *> SEHScopes;
+  if (EH.SEH) {
+    SEHScopes.reserve(EH.SEH->Scopes.size());
+    for (const SEHScopeRecord &Scope : EH.SEH->Scopes)
+      SEHScopes.push_back(Node(
+          {mdUInt(*Ctx, Scope.GuardedRange.Begin),
+           mdUInt(*Ctx, Scope.GuardedRange.End),
+           mdUInt(*Ctx, static_cast<uint8_t>(Scope.Kind), 8),
+           mdUInt(*Ctx, Scope.FilterOrFinallyVA), mdUInt(*Ctx, Scope.HandlerVA),
+           mdUInt(*Ctx, Scope.ContinuationVA),
+           Str(getExceptionParseStatusName(Scope.ParseStatus))}));
+  }
+
+  std::vector<llvm::Metadata *> CxxUnwind;
+  std::vector<llvm::Metadata *> CxxTry;
+  std::vector<llvm::Metadata *> CxxIP;
+  llvm::Metadata *CxxHeader = nullptr;
+  if (EH.Cxx) {
+    const CxxExceptionInfo &Cxx = *EH.Cxx;
+    CxxHeader = Node(
+        {mdUInt(*Ctx, static_cast<uint8_t>(Cxx.NativeEncoding), 8),
+         mdUInt(*Ctx, Cxx.Magic, 32), mdUInt(*Ctx, Cxx.Flags, 32),
+         mdUInt(*Ctx, Cxx.MaxState, 32), mdSInt(*Ctx, Cxx.UnwindHelpOffset, 32),
+         mdUInt(*Ctx, Cxx.ESTypeListVA), mdUInt(*Ctx, Cxx.BBTFlags, 32),
+         mdUInt(*Ctx, Cxx.FrameOffset, 32), mdUInt(*Ctx, Cxx.IsCatchFunclet, 1),
+         mdUInt(*Ctx, Cxx.IsSeparated, 1), mdUInt(*Ctx, Cxx.IsSynchronous, 1),
+         mdUInt(*Ctx, Cxx.IsNoExcept, 1)});
+    for (const CxxUnwindAction &Action : Cxx.UnwindMap)
+      CxxUnwind.push_back(
+          Node({mdSInt(*Ctx, Action.ToState, 32), mdUInt(*Ctx, Action.ActionVA),
+                mdUInt(*Ctx, static_cast<uint8_t>(Action.Kind), 8),
+                mdSInt(*Ctx, Action.ObjectOffset, 32)}));
+    for (const CxxTryBlock &Try : Cxx.TryBlocks) {
+      std::vector<llvm::Metadata *> Catches;
+      for (const CxxCatchHandler &Catch : Try.Handlers) {
+        std::vector<llvm::Metadata *> Continuations;
+        for (va_t Address : Catch.ContinuationVAs)
+          Continuations.push_back(mdUInt(*Ctx, Address));
+        Catches.push_back(Node({mdUInt(*Ctx, Catch.Adjectives, 32),
+                                mdUInt(*Ctx, Catch.TypeDescriptorVA),
+                                mdSInt(*Ctx, Catch.CatchObjectOffset, 32),
+                                mdUInt(*Ctx, Catch.HandlerVA),
+                                mdSInt(*Ctx, Catch.ParentFrameOffset, 32),
+                                Node(Continuations)}));
+      }
+      CxxTry.push_back(
+          Node({mdSInt(*Ctx, Try.TryLow, 32), mdSInt(*Ctx, Try.TryHigh, 32),
+                mdSInt(*Ctx, Try.CatchHigh, 32), Node(Catches)}));
+    }
+    for (const CxxIPState &IP : Cxx.IPMap)
+      CxxIP.push_back(Node({mdUInt(*Ctx, IP.IP), mdSInt(*Ctx, IP.State, 32)}));
+  } else {
+    CxxHeader = Node({});
+  }
+
+  llvm::Metadata *GSCookie = Node({});
+  if (EH.GSCookie) {
+    const GSCookieInfo &GS = *EH.GSCookie;
+    GSCookie = Node(
+        {Str(getExceptionParseStatusName(GS.ParseStatus)),
+         mdSInt(*Ctx, GS.CookieOffset, 32),
+         mdUInt(*Ctx, GS.HasExceptionHandler, 1),
+         mdUInt(*Ctx, GS.HasUnwindHandler, 1), mdUInt(*Ctx, GS.HasAlignment, 1),
+         mdSInt(*Ctx, GS.AlignmentBaseOffset, 32),
+         mdUInt(*Ctx, GS.Alignment, 32), Str(hexBytes(GS.Payload))});
+  }
+
+  std::vector<llvm::Metadata *> Diagnostics;
+  for (const std::string &Message : EH.Diagnostics)
+    Diagnostics.push_back(Str(Message));
+
+  llvm::Metadata *PrimaryFunctionIndex = Node({});
+  if (EH.PrimaryFunctionIndex)
+    PrimaryFunctionIndex =
+        Node({mdUInt(*Ctx, static_cast<uint64_t>(*EH.PrimaryFunctionIndex))});
+  llvm::Metadata *ChainedPrimaryRange = Node({});
+  if (EH.ChainedPrimaryRange)
+    ChainedPrimaryRange = Node({mdUInt(*Ctx, EH.ChainedPrimaryRange->Begin),
+                                mdUInt(*Ctx, EH.ChainedPrimaryRange->End)});
+
+  llvm::MDNode *Payload =
+      Node({mdUInt(*Ctx, windows_eh_md::SchemaVersion, 32),
+            Str(getExceptionParseStatusName(EH.ParseStatus)),
+            Str(getExceptionEncodingName(EH.Encoding)),
+            mdUInt(*Ctx, static_cast<uint8_t>(EH.Kind), 8),
+            mdUInt(*Ctx, EH.CodeRange.Begin),
+            mdUInt(*Ctx, EH.CodeRange.End),
+            mdUInt(*Ctx, EH.RuntimeFunctionRVA, 32),
+            mdUInt(*Ctx, EH.UnwindInfoRVA, 32),
+            mdUInt(*Ctx, EH.UnwindInfoVA),
+            mdUInt(*Ctx, EH.UnwindVersion, 8),
+            mdUInt(*Ctx, EH.UnwindFlags, 8),
+            mdUInt(*Ctx, EH.PrologueSize, 32),
+            mdUInt(*Ctx, EH.FrameRegister, 16),
+            mdUInt(*Ctx, EH.FrameOffset, 32),
+            mdUInt(*Ctx, EH.PackedUnwindData, 32),
+            Str(getExceptionPersonalityName(EH.Personality)),
+            Str(EH.PersonalityName),
+            mdUInt(*Ctx, EH.PersonalityVA),
+            mdUInt(*Ctx, EH.HandlerDataVA),
+            Str(hexBytes(EH.NativeUnwindBytes)),
+            Node(UnwindOps),
+            Node(Epilogs),
+            Node(SEHScopes),
+            CxxHeader,
+            Node(CxxUnwind),
+            Node(CxxTry),
+            Node(CxxIP),
+            GSCookie,
+            PrimaryFunctionIndex,
+            ChainedPrimaryRange,
+            mdUInt(*Ctx, EH.ChainedUnwindInfoRVA, 32),
+            Node(Diagnostics),
+            mdUInt(*Ctx, EH.canRegenerateLanguageMetadata(), 1)});
+  LLVMFunc.setMetadata(windows_eh_md::FunctionAttachment, Payload);
+  llvm::NamedMDNode *Table =
+      Mod->getOrInsertNamedMetadata(windows_eh_md::FunctionTable);
+  Table->addOperand(Node({llvm::ValueAsMetadata::get(&LLVMFunc), Payload}));
+}
+
+bool MedLLVMEmitter::emitNativeSEH(
+    const MedFunc &Func, llvm::Function &LLVMFunc,
+    const std::map<int, llvm::BasicBlock *> &OriginalBlockMap) {
+  if (TargetArch != Arch::X64 || TargetFormat != BinaryFormat::COFF ||
+      !Func.ExceptionMetadata)
+    return false;
+  const ExceptionFunction &EH = *Func.ExceptionMetadata;
+  if (EH.ParseStatus != ExceptionParseStatus::Complete ||
+      EH.Personality != ExceptionPersonality::CSpecificHandler || !EH.SEH ||
+      EH.SEH->Scopes.empty() ||
+      (EH.Encoding != ExceptionEncoding::X64UnwindV1 &&
+       EH.Encoding != ExceptionEncoding::X64UnwindV2))
+    return false;
+
+  struct Region {
+    const SEHScopeRecord *Scope = nullptr;
+    llvm::BasicBlock *Handler = nullptr;
+    llvm::Function *Callback = nullptr;
+    llvm::BasicBlock *UnwindDest = nullptr;
+    int Parent = -1;
+    std::set<llvm::BasicBlock *> Blocks;
+  };
+
+  auto FunctionAt = [&](va_t Address) -> llvm::Function * {
+    auto NameIt = FuncNames.find(Address);
+    return NameIt == FuncNames.end() ? nullptr
+                                     : Mod->getFunction(NameIt->second);
+  };
+  auto BlockAt = [&](va_t Address) -> llvm::BasicBlock * {
+    for (const MedBlock &Block : Func.Blocks) {
+      if (Block.StartAddr != Address)
+        continue;
+      auto It = OriginalBlockMap.find(Block.Id);
+      return It == OriginalBlockMap.end() ? nullptr : It->second;
+    }
+    return nullptr;
+  };
+
+  std::vector<Region> Regions;
+  Regions.reserve(EH.SEH->Scopes.size());
+  for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+    if (Scope.ParseStatus != ExceptionParseStatus::Complete ||
+        !Scope.GuardedRange.isValid() ||
+        !EH.CodeRange.contains(Scope.GuardedRange))
+      return false;
+
+    Region R;
+    R.Scope = &Scope;
+    if (Scope.Kind == SEHScopeKind::Finally) {
+      R.Callback = FunctionAt(Scope.FilterOrFinallyVA);
+      if (!R.Callback || R.Callback == &LLVMFunc)
+        return false;
+    } else {
+      R.Handler = BlockAt(Scope.HandlerVA);
+      if (!R.Handler || Scope.GuardedRange.contains(Scope.HandlerVA))
+        return false;
+      if (Scope.Kind == SEHScopeKind::Filter) {
+        R.Callback = FunctionAt(Scope.FilterOrFinallyVA);
+        if (!R.Callback || R.Callback == &LLVMFunc)
+          return false;
+      }
+    }
+
+    bool HasBegin = false;
+    bool HasEnd = false;
+    for (const MedBlock &Block : Func.Blocks) {
+      ExceptionAddressRange BlockRange{Block.StartAddr, Block.EndAddr};
+      if (!BlockRange.isValid())
+        continue;
+      if (Scope.GuardedRange.overlaps(BlockRange) &&
+          !Scope.GuardedRange.contains(BlockRange))
+        return false;
+      if (!Scope.GuardedRange.contains(BlockRange))
+        continue;
+      auto It = OriginalBlockMap.find(Block.Id);
+      if (It == OriginalBlockMap.end())
+        return false;
+      R.Blocks.insert(It->second);
+      HasBegin |= Block.StartAddr == Scope.GuardedRange.Begin;
+      HasEnd |= Block.EndAddr == Scope.GuardedRange.End;
+    }
+    if (R.Blocks.empty() || !HasBegin || !HasEnd)
+      return false;
+    Regions.push_back(std::move(R));
+  }
+
+  // Native WinEH can express nested or disjoint intervals.  Crossing and
+  // duplicate intervals have no unambiguous unwind-parent relation, so leave
+  // those functions in lossless-metadata-only form.
+  for (size_t I = 0; I < Regions.size(); ++I) {
+    for (size_t J = I + 1; J < Regions.size(); ++J) {
+      const ExceptionAddressRange &A = Regions[I].Scope->GuardedRange;
+      const ExceptionAddressRange &B = Regions[J].Scope->GuardedRange;
+      if (!A.overlaps(B))
+        continue;
+      if ((A.Begin == B.Begin && A.End == B.End) ||
+          (!A.contains(B) && !B.contains(A)))
+        return false;
+    }
+  }
+  std::stable_sort(
+      Regions.begin(), Regions.end(), [](const Region &A, const Region &B) {
+        if (A.Scope->GuardedRange.size() != B.Scope->GuardedRange.size())
+          return A.Scope->GuardedRange.size() > B.Scope->GuardedRange.size();
+        return A.Scope->GuardedRange.Begin < B.Scope->GuardedRange.Begin;
+      });
+  for (size_t I = 0; I < Regions.size(); ++I) {
+    uint64_t ParentSize = std::numeric_limits<uint64_t>::max();
+    for (size_t J = 0; J < I; ++J) {
+      if (!Regions[J].Scope->GuardedRange.contains(
+              Regions[I].Scope->GuardedRange))
+        continue;
+      if (Regions[J].Scope->GuardedRange.size() < ParentSize) {
+        Regions[I].Parent = static_cast<int>(J);
+        ParentSize = Regions[J].Scope->GuardedRange.size();
+      }
+    }
+  }
+
+  auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
+  auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
+  llvm::FunctionCallee Personality =
+      Mod->getOrInsertFunction("__C_specific_handler", PersonalityTy);
+  LLVMFunc.setPersonalityFn(
+      llvm::cast<llvm::Constant>(Personality.getCallee()));
+
+  auto *TokenNone = llvm::ConstantTokenNone::get(*Ctx);
+  auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
+  for (size_t I = 0; I < Regions.size(); ++I) {
+    Region &R = Regions[I];
+    llvm::BasicBlock *ParentDest =
+        R.Parent >= 0 ? Regions[static_cast<size_t>(R.Parent)].UnwindDest
+                      : nullptr;
+    std::string Suffix = std::to_string(I);
+    if (R.Scope->Kind == SEHScopeKind::Finally) {
+      auto *PadBB = llvm::BasicBlock::Create(
+          *Ctx, "seh.finally.dispatch." + Suffix, &LLVMFunc);
+      llvm::IRBuilder<> B(PadBB);
+      auto *Pad = B.CreateCleanupPad(TokenNone, {}, "seh.finally.pad");
+      llvm::Function *LocalAddress = llvm::Intrinsic::getOrInsertDeclaration(
+          Mod, llvm::Intrinsic::localaddress);
+      llvm::Value *Frame = B.CreateCall(LocalAddress);
+      auto *CallbackTy =
+          llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx),
+                                  {llvm::Type::getInt8Ty(*Ctx), PtrTy}, false);
+      llvm::SmallVector<llvm::Value *, 2> Args{
+          llvm::ConstantInt::get(llvm::Type::getInt8Ty(*Ctx), 1), Frame};
+      llvm::SmallVector<llvm::Value *, 1> BundleInputs{Pad};
+      llvm::OperandBundleDef Funclet("funclet", BundleInputs);
+      B.CreateCall(CallbackTy, R.Callback, Args, {Funclet});
+      B.CreateCleanupRet(Pad, ParentDest);
+      R.UnwindDest = PadBB;
+      continue;
+    }
+
+    auto *Dispatch = llvm::BasicBlock::Create(
+        *Ctx, "seh.catch.dispatch." + Suffix, &LLVMFunc);
+    llvm::IRBuilder<> DB(Dispatch);
+    auto *Switch =
+        DB.CreateCatchSwitch(TokenNone, ParentDest, 1, "seh.catch.switch");
+    auto *PadBB =
+        llvm::BasicBlock::Create(*Ctx, "seh.catch.pad." + Suffix, &LLVMFunc);
+    Switch->addHandler(PadBB);
+    llvm::IRBuilder<> PB(PadBB);
+    llvm::Value *Filter =
+        R.Scope->Kind == SEHScopeKind::CatchAll
+            ? static_cast<llvm::Value *>(llvm::ConstantPointerNull::get(
+                  llvm::cast<llvm::PointerType>(PtrTy)))
+            : static_cast<llvm::Value *>(R.Callback);
+    auto *Pad = PB.CreateCatchPad(Switch, {Filter}, "seh.catch.pad.token");
+    PB.CreateCatchRet(Pad, R.Handler);
+    R.UnwindDest = Dispatch;
+  }
+
+  // Replace may-unwind calls in each protected machine block with invokes to
+  // the innermost active region.  Non-call hardware faults are covered by the
+  // asynchronous try markers installed below.
+  for (const MedBlock &MedBB : Func.Blocks) {
+    auto BBIt = OriginalBlockMap.find(MedBB.Id);
+    if (BBIt == OriginalBlockMap.end())
+      continue;
+    llvm::BasicBlock *InitialBB = BBIt->second;
+    int Innermost = -1;
+    uint64_t InnermostSize = std::numeric_limits<uint64_t>::max();
+    for (size_t I = 0; I < Regions.size(); ++I) {
+      if (!Regions[I].Blocks.count(InitialBB) ||
+          Regions[I].Scope->GuardedRange.size() >= InnermostSize)
+        continue;
+      Innermost = static_cast<int>(I);
+      InnermostSize = Regions[I].Scope->GuardedRange.size();
+    }
+    if (Innermost < 0)
+      continue;
+
+    llvm::SmallVector<llvm::CallInst *, 8> Calls;
+    for (llvm::Instruction &Inst : *InitialBB)
+      if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst))
+        if (!Call->doesNotThrow() && !Call->isMustTailCall() &&
+            !llvm::isa<llvm::IntrinsicInst>(Call))
+          Calls.push_back(Call);
+
+    for (llvm::CallInst *Call : Calls) {
+      llvm::BasicBlock *CallBB = Call->getParent();
+      llvm::Instruction *Next = Call->getNextNode();
+      if (!Next)
+        return false;
+      llvm::BasicBlock *Cont =
+          CallBB->splitBasicBlock(Next, CallBB->getName() + ".seh.cont");
+      auto *OldBranch = CallBB->getTerminator();
+      llvm::SmallVector<llvm::Value *, 8> Args;
+      for (llvm::Use &Arg : Call->args())
+        Args.push_back(Arg.get());
+      llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
+      Call->getOperandBundlesAsDefs(Bundles);
+      auto *Invoke = llvm::InvokeInst::Create(
+          Call->getFunctionType(), Call->getCalledOperand(), Cont,
+          Regions[static_cast<size_t>(Innermost)].UnwindDest, Args, Bundles,
+          Call->getName(), OldBranch->getIterator());
+      Invoke->setCallingConv(Call->getCallingConv());
+      Invoke->setAttributes(Call->getAttributes());
+      Invoke->setDebugLoc(Call->getDebugLoc());
+      Invoke->copyMetadata(*Call);
+      Call->replaceAllUsesWith(Invoke);
+      Call->eraseFromParent();
+      OldBranch->eraseFromParent();
+      for (Region &R : Regions)
+        if (R.Blocks.count(CallBB))
+          R.Blocks.insert(Cont);
+    }
+  }
+
+  llvm::Function *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod, llvm::Intrinsic::seh_try_begin);
+  llvm::Function *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod, llvm::Intrinsic::seh_try_end);
+  auto IsNormalSuccessor = [](llvm::Instruction *Term, unsigned Index) {
+    if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term))
+      return Index == 0 && Invoke->getNormalDest();
+    if (llvm::isa<llvm::CatchSwitchInst, llvm::CleanupReturnInst>(Term))
+      return false;
+    return true;
+  };
+
+  // Outer-first placement produces the required nesting order on a shared
+  // boundary: outer.begin -> inner.begin -> body -> inner.end -> outer.end.
+  for (size_t RegionIndex = 0; RegionIndex < Regions.size(); ++RegionIndex) {
+    Region &R = Regions[RegionIndex];
+    struct EntryEdge {
+      llvm::BasicBlock *Pred = nullptr;
+      llvm::BasicBlock *Target = nullptr;
+      unsigned SuccessorIndex = 0;
+    };
+    llvm::SmallVector<EntryEdge, 8> Entries;
+    bool EntryWithoutPred = false;
+    llvm::BasicBlock *FunctionEntry = &LLVMFunc.getEntryBlock();
+    for (llvm::BasicBlock *Target : R.Blocks) {
+      bool HasNormalPred = false;
+      for (llvm::BasicBlock *Pred : llvm::predecessors(Target)) {
+        llvm::Instruction *Term = Pred->getTerminator();
+        for (unsigned I = 0; I < Term->getNumSuccessors(); ++I) {
+          if (Term->getSuccessor(I) != Target || !IsNormalSuccessor(Term, I))
+            continue;
+          HasNormalPred = true;
+          if (!R.Blocks.count(Pred))
+            Entries.push_back({Pred, Target, I});
+        }
+      }
+      EntryWithoutPred |= Target == FunctionEntry && !HasNormalPred;
+    }
+
+    unsigned Marker = 0;
+    for (const EntryEdge &Edge : Entries) {
+      auto *BeginBB = llvm::BasicBlock::Create(
+          *Ctx,
+          "seh.try.begin." + std::to_string(RegionIndex) + "." +
+              std::to_string(Marker++),
+          &LLVMFunc, Edge.Target);
+      Edge.Pred->getTerminator()->setSuccessor(Edge.SuccessorIndex, BeginBB);
+      llvm::IRBuilder<> B(BeginBB);
+      B.CreateInvoke(TryBegin, Edge.Target, R.UnwindDest);
+      for (int Parent = R.Parent; Parent >= 0;
+           Parent = Regions[static_cast<size_t>(Parent)].Parent)
+        Regions[static_cast<size_t>(Parent)].Blocks.insert(BeginBB);
+    }
+    if (EntryWithoutPred) {
+      auto *OldEntry = &LLVMFunc.getEntryBlock();
+      auto *BeginBB = llvm::BasicBlock::Create(
+          *Ctx, "seh.try.begin." + std::to_string(RegionIndex) + ".entry",
+          &LLVMFunc, OldEntry);
+      llvm::IRBuilder<> B(BeginBB);
+      B.CreateInvoke(TryBegin, OldEntry, R.UnwindDest);
+      for (int Parent = R.Parent; Parent >= 0;
+           Parent = Regions[static_cast<size_t>(Parent)].Parent)
+        Regions[static_cast<size_t>(Parent)].Blocks.insert(BeginBB);
+    }
+
+    struct ExitEdge {
+      llvm::Instruction *Term = nullptr;
+      llvm::BasicBlock *Target = nullptr;
+      unsigned SuccessorIndex = 0;
+    };
+    llvm::SmallVector<ExitEdge, 8> Exits;
+    llvm::SmallVector<llvm::ReturnInst *, 4> Returns;
+    for (llvm::BasicBlock *Source : R.Blocks) {
+      llvm::Instruction *Term = Source->getTerminator();
+      if (auto *Ret = llvm::dyn_cast<llvm::ReturnInst>(Term)) {
+        Returns.push_back(Ret);
+        continue;
+      }
+      for (unsigned I = 0; I < Term->getNumSuccessors(); ++I) {
+        llvm::BasicBlock *Target = Term->getSuccessor(I);
+        if (IsNormalSuccessor(Term, I) && !R.Blocks.count(Target))
+          Exits.push_back({Term, Target, I});
+      }
+    }
+
+    Marker = 0;
+    for (const ExitEdge &Edge : Exits) {
+      auto *EndBB = llvm::BasicBlock::Create(*Ctx,
+                                             "seh.try.end." +
+                                                 std::to_string(RegionIndex) +
+                                                 "." + std::to_string(Marker++),
+                                             &LLVMFunc, Edge.Target);
+      Edge.Term->setSuccessor(Edge.SuccessorIndex, EndBB);
+      llvm::IRBuilder<> B(EndBB);
+      B.CreateInvoke(TryEnd, Edge.Target, R.UnwindDest);
+      for (int Parent = R.Parent; Parent >= 0;
+           Parent = Regions[static_cast<size_t>(Parent)].Parent)
+        Regions[static_cast<size_t>(Parent)].Blocks.insert(EndBB);
+    }
+    for (llvm::ReturnInst *Ret : Returns) {
+      llvm::BasicBlock *Source = Ret->getParent();
+      auto *EndBB = llvm::BasicBlock::Create(
+          *Ctx,
+          "seh.try.end." + std::to_string(RegionIndex) + ".ret." +
+              std::to_string(Marker++),
+          &LLVMFunc);
+      auto *RetBB = llvm::BasicBlock::Create(
+          *Ctx, "seh.try.ret." + std::to_string(RegionIndex), &LLVMFunc);
+      llvm::Value *ReturnValue = Ret->getReturnValue();
+      Ret->eraseFromParent();
+      llvm::IRBuilder<> SourceBuilder(Source);
+      SourceBuilder.CreateBr(EndBB);
+      llvm::IRBuilder<> EndBuilder(EndBB);
+      EndBuilder.CreateInvoke(TryEnd, RetBB, R.UnwindDest);
+      llvm::IRBuilder<> RetBuilder(RetBB);
+      if (ReturnValue)
+        RetBuilder.CreateRet(ReturnValue);
+      else
+        RetBuilder.CreateRetVoid();
+      for (int Parent = R.Parent; Parent >= 0;
+           Parent = Regions[static_cast<size_t>(Parent)].Parent)
+        Regions[static_cast<size_t>(Parent)].Blocks.insert(EndBB);
+    }
+  }
+
+  if (!Mod->getModuleFlag("eh-asynch"))
+    Mod->addModuleFlag(llvm::Module::Warning, "eh-asynch", 1);
+  LLVMFunc.setMetadata(
+      windows_eh_md::NativeAttachment,
+      llvm::MDNode::get(*Ctx, {mdUInt(*Ctx, 1, 1),
+                               llvm::MDString::get(*Ctx, "seh-x64-native")}));
+  return true;
+}
+
+bool MedLLVMEmitter::emitNativeCxxEH(
+    const MedFunc &Func, llvm::Function &LLVMFunc,
+    const std::map<int, llvm::BasicBlock *> &OriginalBlockMap) {
+  if (TargetArch != Arch::X64 || TargetFormat != BinaryFormat::COFF ||
+      !Func.ExceptionMetadata)
+    return false;
+  const ExceptionFunction &EH = *Func.ExceptionMetadata;
+  if (EH.ParseStatus != ExceptionParseStatus::Complete ||
+      EH.Personality != ExceptionPersonality::CxxFrameHandler3 || !EH.Cxx ||
+      (EH.Encoding != ExceptionEncoding::X64UnwindV1 &&
+       EH.Encoding != ExceptionEncoding::X64UnwindV2))
+    return false;
+  const CxxExceptionInfo &Cxx = *EH.Cxx;
+
+  // This native closure is intentionally exact and narrow.  Destructors,
+  // catch-object frame homes, noexcept, asynchronous /EHa, and out-of-line
+  // catch funclets all need parent-frame rewriting; metadata-only IR is safer
+  // until that proof is available.  Typed catches without a catch object are
+  // representable because the RTTI address remains an external absolute data
+  // symbol in the original image.
+  if (!Cxx.hasValidStateGraph() || Cxx.TryBlocks.empty() || Cxx.IPMap.empty() ||
+      Cxx.IsCatchFunclet || Cxx.IsSeparated || !Cxx.IsSynchronous ||
+      Cxx.IsNoExcept || (Cxx.Flags & ~uint32_t(1)) != 0)
+    return false;
+  for (const CxxUnwindAction &Action : Cxx.UnwindMap)
+    if (Action.ActionVA != 0 ||
+        Action.Kind != CxxUnwindAction::ActionKind::None)
+      return false;
+
+  struct Handler {
+    const CxxCatchHandler *Catch = nullptr;
+    llvm::BasicBlock *Target = nullptr;
+  };
+  struct Region {
+    const CxxTryBlock *Try = nullptr;
+    std::set<llvm::BasicBlock *> Blocks;
+    std::vector<Handler> Handlers;
+    llvm::BasicBlock *UnwindDest = nullptr;
+    int Parent = -1;
+  };
+
+  auto StateAt = [&](va_t Address) {
+    int32_t State = -1;
+    for (const CxxIPState &Entry : Cxx.IPMap) {
+      if (Entry.IP > Address)
+        break;
+      State = Entry.State;
+    }
+    return State;
+  };
+  auto BlockAt = [&](va_t Address) -> llvm::BasicBlock * {
+    for (const MedBlock &Block : Func.Blocks) {
+      if (Block.StartAddr != Address)
+        continue;
+      auto It = OriginalBlockMap.find(Block.Id);
+      return It == OriginalBlockMap.end() ? nullptr : It->second;
+    }
+    return nullptr;
+  };
+  auto IsMayUnwindCall = [](const llvm::CallInst &Call) {
+    return !Call.doesNotThrow() && !Call.isMustTailCall() &&
+           !llvm::isa<llvm::IntrinsicInst>(Call);
+  };
+
+  // Every IP-state boundary must already be a machine-block boundary.  This
+  // avoids assigning one generated call site to two native states.
+  for (const MedBlock &Block : Func.Blocks) {
+    if (Block.StartAddr >= Block.EndAddr)
+      return false;
+    for (const CxxIPState &Entry : Cxx.IPMap)
+      if (Entry.IP > Block.StartAddr && Entry.IP < Block.EndAddr)
+        return false;
+  }
+
+  std::vector<Region> Regions;
+  Regions.reserve(Cxx.TryBlocks.size());
+  for (const CxxTryBlock &Try : Cxx.TryBlocks) {
+    if (Try.Handlers.empty())
+      return false;
+    Region R;
+    R.Try = &Try;
+    for (const MedBlock &Block : Func.Blocks) {
+      int32_t State = StateAt(Block.StartAddr);
+      if (State < Try.TryLow || State > Try.TryHigh)
+        continue;
+      auto It = OriginalBlockMap.find(Block.Id);
+      if (It == OriginalBlockMap.end())
+        return false;
+      R.Blocks.insert(It->second);
+    }
+    if (R.Blocks.empty())
+      return false;
+    for (const CxxCatchHandler &Catch : Try.Handlers) {
+      if (Catch.CatchObjectOffset != 0 || Catch.ParentFrameOffset != 0 ||
+          Catch.HandlerVA == 0)
+        return false;
+      llvm::BasicBlock *Target = BlockAt(Catch.HandlerVA);
+      if (!Target || Target == &LLVMFunc.getEntryBlock() ||
+          R.Blocks.count(Target) || !llvm::pred_empty(Target))
+        return false;
+      R.Handlers.push_back({&Catch, Target});
+    }
+    Regions.push_back(std::move(R));
+  }
+
+  auto IsSubset = [](const std::set<llvm::BasicBlock *> &A,
+                     const std::set<llvm::BasicBlock *> &B) {
+    return std::includes(B.begin(), B.end(), A.begin(), A.end());
+  };
+  auto Overlaps = [](const std::set<llvm::BasicBlock *> &A,
+                     const std::set<llvm::BasicBlock *> &B) {
+    for (llvm::BasicBlock *Block : A)
+      if (B.count(Block))
+        return true;
+    return false;
+  };
+  for (size_t I = 0; I < Regions.size(); ++I) {
+    for (size_t J = I + 1; J < Regions.size(); ++J) {
+      if (!Overlaps(Regions[I].Blocks, Regions[J].Blocks))
+        continue;
+      if (Regions[I].Blocks == Regions[J].Blocks ||
+          (!IsSubset(Regions[I].Blocks, Regions[J].Blocks) &&
+           !IsSubset(Regions[J].Blocks, Regions[I].Blocks)))
+        return false;
+    }
+  }
+  std::stable_sort(Regions.begin(), Regions.end(),
+                   [](const Region &A, const Region &B) {
+                     return A.Blocks.size() > B.Blocks.size();
+                   });
+  for (size_t I = 0; I < Regions.size(); ++I) {
+    size_t ParentSize = std::numeric_limits<size_t>::max();
+    for (size_t J = 0; J < I; ++J) {
+      if (!IsSubset(Regions[I].Blocks, Regions[J].Blocks) ||
+          Regions[J].Blocks.size() >= ParentSize)
+        continue;
+      Regions[I].Parent = static_cast<int>(J);
+      ParentSize = Regions[J].Blocks.size();
+    }
+  }
+
+  // Catch bodies in this closure execute after catchret.  They must therefore
+  // be ordinary, call-free continuation blocks and cannot themselves be in a
+  // protected region.  This is equivalent for simple catch bodies and avoids
+  // pretending an out-of-line native funclet has the regenerated frame ABI.
+  for (const Region &R : Regions)
+    for (const Handler &H : R.Handlers) {
+      for (const Region &Protected : Regions)
+        if (Protected.Blocks.count(H.Target))
+          return false;
+      for (const llvm::Instruction &Inst : *H.Target)
+        if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+            Call && IsMayUnwindCall(*Call))
+          return false;
+    }
+
+  std::set<const llvm::CallInst *> MayUnwindCallSet;
+  for (const Region &R : Regions)
+    for (llvm::BasicBlock *Block : R.Blocks)
+      for (const llvm::Instruction &Inst : *Block)
+        if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+            Call && IsMayUnwindCall(*Call))
+          MayUnwindCallSet.insert(Call);
+  size_t MayUnwindCalls = MayUnwindCallSet.size();
+  if (MayUnwindCalls == 0)
+    return false;
+
+  auto *I8Ty = llvm::Type::getInt8Ty(*Ctx);
+  auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
+  auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
+  auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
+  llvm::FunctionCallee Personality =
+      Mod->getOrInsertFunction("__CxxFrameHandler3", PersonalityTy);
+  LLVMFunc.setPersonalityFn(
+      llvm::cast<llvm::Constant>(Personality.getCallee()));
+
+  auto TypeDescriptor = [&](va_t Address) -> llvm::Constant * {
+    if (Address == 0)
+      return llvm::ConstantPointerNull::get(PtrTy);
+    std::string Name = makeNdDataSymbol(Address);
+    llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
+    if (!GV)
+      GV = new llvm::GlobalVariable(*Mod, I8Ty, /*isConstant=*/true,
+                                    llvm::GlobalValue::ExternalLinkage, nullptr,
+                                    Name);
+    return GV;
+  };
+
+  auto *TokenNone = llvm::ConstantTokenNone::get(*Ctx);
+  for (size_t I = 0; I < Regions.size(); ++I) {
+    Region &R = Regions[I];
+    llvm::BasicBlock *ParentDest =
+        R.Parent >= 0 ? Regions[static_cast<size_t>(R.Parent)].UnwindDest
+                      : nullptr;
+    auto *Dispatch = llvm::BasicBlock::Create(
+        *Ctx, "cxx.catch.dispatch." + std::to_string(I), &LLVMFunc);
+    llvm::IRBuilder<> DB(Dispatch);
+    auto *Switch = DB.CreateCatchSwitch(TokenNone, ParentDest,
+                                        R.Handlers.size(), "cxx.catch.switch");
+    for (size_t J = 0; J < R.Handlers.size(); ++J) {
+      const Handler &H = R.Handlers[J];
+      auto *PadBB = llvm::BasicBlock::Create(
+          *Ctx, "cxx.catch.pad." + std::to_string(I) + "." + std::to_string(J),
+          &LLVMFunc);
+      Switch->addHandler(PadBB);
+      llvm::IRBuilder<> PB(PadBB);
+      llvm::SmallVector<llvm::Value *, 3> Args{
+          TypeDescriptor(H.Catch->TypeDescriptorVA),
+          llvm::ConstantInt::get(I32Ty, H.Catch->Adjectives),
+          llvm::ConstantPointerNull::get(PtrTy)};
+      auto *Pad = PB.CreateCatchPad(Switch, Args, "cxx.catch.pad.token");
+      PB.CreateCatchRet(Pad, H.Target);
+    }
+    R.UnwindDest = Dispatch;
+  }
+
+  size_t ConvertedCalls = 0;
+  for (const MedBlock &MedBB : Func.Blocks) {
+    auto BBIt = OriginalBlockMap.find(MedBB.Id);
+    if (BBIt == OriginalBlockMap.end())
+      continue;
+    llvm::BasicBlock *InitialBB = BBIt->second;
+    int Innermost = -1;
+    size_t InnermostSize = std::numeric_limits<size_t>::max();
+    for (size_t I = 0; I < Regions.size(); ++I) {
+      if (!Regions[I].Blocks.count(InitialBB) ||
+          Regions[I].Blocks.size() >= InnermostSize)
+        continue;
+      Innermost = static_cast<int>(I);
+      InnermostSize = Regions[I].Blocks.size();
+    }
+    if (Innermost < 0)
+      continue;
+
+    llvm::SmallVector<llvm::CallInst *, 8> Calls;
+    for (llvm::Instruction &Inst : *InitialBB)
+      if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+          Call && IsMayUnwindCall(*Call))
+        Calls.push_back(Call);
+    for (llvm::CallInst *Call : Calls) {
+      llvm::BasicBlock *CallBB = Call->getParent();
+      llvm::Instruction *Next = Call->getNextNode();
+      if (!Next)
+        return false;
+      llvm::BasicBlock *Cont =
+          CallBB->splitBasicBlock(Next, CallBB->getName() + ".cxx.cont");
+      llvm::Instruction *OldBranch = CallBB->getTerminator();
+      llvm::SmallVector<llvm::Value *, 8> Args;
+      for (llvm::Use &Arg : Call->args())
+        Args.push_back(Arg.get());
+      llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
+      Call->getOperandBundlesAsDefs(Bundles);
+      auto *Invoke = llvm::InvokeInst::Create(
+          Call->getFunctionType(), Call->getCalledOperand(), Cont,
+          Regions[static_cast<size_t>(Innermost)].UnwindDest, Args, Bundles,
+          Call->getName(), OldBranch->getIterator());
+      Invoke->setCallingConv(Call->getCallingConv());
+      Invoke->setAttributes(Call->getAttributes());
+      Invoke->setDebugLoc(Call->getDebugLoc());
+      Invoke->copyMetadata(*Call);
+      Call->replaceAllUsesWith(Invoke);
+      Call->eraseFromParent();
+      OldBranch->eraseFromParent();
+      for (Region &Protected : Regions)
+        if (Protected.Blocks.count(InitialBB))
+          Protected.Blocks.insert(Cont);
+      ++ConvertedCalls;
+    }
+  }
+  if (ConvertedCalls != MayUnwindCalls)
+    return false;
+
+  LLVMFunc.setMetadata(
+      windows_eh_md::NativeAttachment,
+      llvm::MDNode::get(*Ctx, {mdUInt(*Ctx, 1, 1),
+                               llvm::MDString::get(*Ctx, "cxx-fh3-native")}));
+  return true;
+}
+
 llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   if (Func.Blocks.empty())
     return nullptr;
@@ -322,6 +1154,7 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   CurMedFunc = &Func;
 
   auto *LLVMFunc = declareFunc(Func);
+  emitExceptionMetadata(Func, *LLVMFunc);
   CurFunc = LLVMFunc;
   VarAllocs.clear();
   ParamArgs.clear();
@@ -352,107 +1185,120 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     ++PI;
   }
 
+  const bool NeedsWindowsEHPrologue =
+      TargetArch == Arch::X64 && TargetFormat == BinaryFormat::COFF &&
+      Func.ExceptionMetadata &&
+      (Func.ExceptionMetadata->Personality ==
+           ExceptionPersonality::CSpecificHandler ||
+       Func.ExceptionMetadata->Personality ==
+           ExceptionPersonality::CxxFrameHandler3);
+  const bool NeedsFrameSetup = Func.FrameSize > 0 || Func.FrameHeadroom > 0 ||
+                               Func.IsVariadic ||
+                               !Func.MutableStackParamHomes.empty();
   llvm::BasicBlock *FrameSetupBB = nullptr;
-  if (Func.FrameSize > 0 || Func.FrameHeadroom > 0 || Func.IsVariadic ||
-      !Func.MutableStackParamHomes.empty()) {
-    const auto &TRI = getTargetRegInfo(TargetArch);
+  if (NeedsFrameSetup || NeedsWindowsEHPrologue) {
     FrameSetupBB = llvm::BasicBlock::Create(*Ctx, kFrameSetupBlock, LLVMFunc);
-    llvm::IRBuilder<> FrameB(FrameSetupBB);
-    // Preserve the target ABI's entry-SP residue: AArch64 enters aligned,
-    // x86-64 is 8 mod 16, and Darwin i386 is 12 mod 16.
-    uint64_t AlignedFrameSize = alignSyntheticStack(
-        Func.FrameSize > 0 ? static_cast<uint64_t>(Func.FrameSize) : 0);
-    uint64_t EntryResidue =
-        syntheticEntryStackResidue(TargetArch, TargetFormat);
-    uint64_t FrameBaseOffset =
-        checkedSyntheticStackAdd(AlignedFrameSize, EntryResidue);
-    // A variadic function reads its overflow (incoming-stack) arguments at
-    // entry_sp + base + i*slot, above frame_end.  Reserve headroom there (kept
-    // separate from frame_end so the SP self-copy stays at frame_end) and spill
-    // the recovered overflow stack parameters into it below.
-    uint64_t Headroom = 0;
-    // If no overflow arguments were recovered as LLVM parameters, the
-    // variadic walk still reads the caller's native entry-stack area.  Putting
-    // generic positive stack slots in local headroom would shadow that area
-    // with uninitialised storage.  Explicitly seeded homes below remain safe.
-    uint64_t MaxHomeEnd = 0;
-    if (!(Func.IsVariadic && Func.VariadicOverflowCount == 0) &&
-        Func.FrameHeadroom > 0)
-      MaxHomeEnd = static_cast<uint64_t>(Func.FrameHeadroom);
-    if (Func.IsVariadic && Func.VariadicOverflowCount > 0) {
-      uint64_t OverflowBytes = checkedSyntheticStackMul(
-          static_cast<uint64_t>(Func.VariadicOverflowCount),
-          static_cast<uint64_t>(TRI.PointerSize));
-      MaxHomeEnd =
-          std::max(MaxHomeEnd,
-                   positiveRangeEnd(Func.VariadicOverflowBase, OverflowBytes));
-    }
-    // Written incoming stack-argument home slots (a parameter updated in place)
-    // also live above frame_end and are seeded at entry below, so the headroom
-    // must cover them too.
-    for (const auto &Home : Func.MutableStackParamHomes)
-      MaxHomeEnd =
-          std::max(MaxHomeEnd, positiveRangeEnd(Home.second, TRI.PointerSize));
-    if (MaxHomeEnd > 0) {
-      Headroom = alignSyntheticStack(checkedSyntheticStackAdd(
-          MaxHomeEnd, static_cast<uint64_t>(limits::kVariadicOverflowSlop)));
-    }
-    uint64_t StorageSize = checkedSyntheticStackAdd(FrameBaseOffset, Headroom);
-    auto *FrameTy =
-        llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), StorageSize);
-    FrameAlloca = FrameB.CreateAlloca(FrameTy, nullptr, "frame");
-    FrameAlloca->setAlignment(llvm::Align(16));
-    auto *FrameEnd = FrameB.CreateInBoundsGEP(
-        llvm::Type::getInt8Ty(*Ctx), FrameAlloca,
-        llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), FrameBaseOffset),
-        "frame_end");
-    FrameBaseInt = FrameB.CreatePtrToInt(FrameEnd, llvm::Type::getInt64Ty(*Ctx),
-                                         kRspInitValue);
-
-    // Spill the variadic overflow stack parameters (the trailing parameters)
-    // into the headroom at entry_sp + base + i*slot, so the unchanged va_arg
-    // walk — which the LLVM optimizer resolves to those addresses — reads the
-    // caller's overflow arguments instead of uninitialised frame memory.
-    if (Func.IsVariadic && Func.VariadicOverflowCount > 0) {
-      const int K = Func.VariadicOverflowCount;
-      const int NumParams = static_cast<int>(Func.Params.size());
-      std::vector<llvm::Argument *> OverflowArgs;
-      int PIdx = 0;
-      for (auto &A : LLVMFunc->args()) {
-        if (PIdx >= NumParams - K && PIdx < NumParams)
-          OverflowArgs.push_back(&A);
-        ++PIdx;
+    if (NeedsFrameSetup) {
+      const auto &TRI = getTargetRegInfo(TargetArch);
+      llvm::IRBuilder<> FrameB(FrameSetupBB);
+      // Preserve the target ABI's entry-SP residue: AArch64 enters aligned,
+      // x86-64 is 8 mod 16, and Darwin i386 is 12 mod 16.
+      uint64_t AlignedFrameSize = alignSyntheticStack(
+          Func.FrameSize > 0 ? static_cast<uint64_t>(Func.FrameSize) : 0);
+      uint64_t EntryResidue =
+          syntheticEntryStackResidue(TargetArch, TargetFormat);
+      uint64_t FrameBaseOffset =
+          checkedSyntheticStackAdd(AlignedFrameSize, EntryResidue);
+      // A variadic function reads its overflow (incoming-stack) arguments at
+      // entry_sp + base + i*slot, above frame_end.  Reserve headroom there
+      // (kept separate from frame_end so the SP self-copy stays at frame_end)
+      // and spill the recovered overflow stack parameters into it below.
+      uint64_t Headroom = 0;
+      // If no overflow arguments were recovered as LLVM parameters, the
+      // variadic walk still reads the caller's native entry-stack area. Putting
+      // generic positive stack slots in local headroom would shadow that area
+      // with uninitialised storage.  Explicitly seeded homes below remain safe.
+      uint64_t MaxHomeEnd = 0;
+      if (!(Func.IsVariadic && Func.VariadicOverflowCount == 0) &&
+          Func.FrameHeadroom > 0)
+        MaxHomeEnd = static_cast<uint64_t>(Func.FrameHeadroom);
+      if (Func.IsVariadic && Func.VariadicOverflowCount > 0) {
+        uint64_t OverflowBytes = checkedSyntheticStackMul(
+            static_cast<uint64_t>(Func.VariadicOverflowCount),
+            static_cast<uint64_t>(TRI.PointerSize));
+        MaxHomeEnd =
+            std::max(MaxHomeEnd, positiveRangeEnd(Func.VariadicOverflowBase,
+                                                  OverflowBytes));
       }
-      for (int I = 0; I < static_cast<int>(OverflowArgs.size()); ++I) {
-        int64_t Off = Func.VariadicOverflowBase +
-                      static_cast<int64_t>(I) * TRI.PointerSize;
-        auto *AddrInt = FrameB.CreateAdd(
-            FrameBaseInt, llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx),
-                                                 static_cast<uint64_t>(Off)));
-        auto *AddrPtr =
-            FrameB.CreateIntToPtr(AddrInt, llvm::PointerType::get(*Ctx, 0));
-        FrameB.CreateStore(OverflowArgs[I], AddrPtr);
+      // Written incoming stack-argument home slots (a parameter updated in
+      // place) also live above frame_end and are seeded at entry below, so the
+      // headroom must cover them too.
+      for (const auto &Home : Func.MutableStackParamHomes)
+        MaxHomeEnd = std::max(MaxHomeEnd,
+                              positiveRangeEnd(Home.second, TRI.PointerSize));
+      if (MaxHomeEnd > 0) {
+        Headroom = alignSyntheticStack(checkedSyntheticStackAdd(
+            MaxHomeEnd, static_cast<uint64_t>(limits::kVariadicOverflowSlop)));
       }
-    }
+      uint64_t StorageSize =
+          checkedSyntheticStackAdd(FrameBaseOffset, Headroom);
+      auto *FrameTy =
+          llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), StorageSize);
+      FrameAlloca = FrameB.CreateAlloca(FrameTy, nullptr, "frame");
+      FrameAlloca->setAlignment(llvm::Align(16));
+      auto *FrameEnd = FrameB.CreateInBoundsGEP(
+          llvm::Type::getInt8Ty(*Ctx), FrameAlloca,
+          llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), FrameBaseOffset),
+          "frame_end");
+      FrameBaseInt = FrameB.CreatePtrToInt(
+          FrameEnd, llvm::Type::getInt64Ty(*Ctx), kRspInitValue);
 
-    // Seed each written incoming stack-argument home slot with its parameter so
-    // the in-IR memory loads/stores through [frame_end + Off] read the argument
-    // and observe later in-place writes (mirrors the variadic overflow spill).
-    if (!Func.MutableStackParamHomes.empty()) {
-      const int NumParams = static_cast<int>(Func.Params.size());
-      std::vector<llvm::Argument *> ArgPtrs;
-      for (auto &A : LLVMFunc->args())
-        ArgPtrs.push_back(&A);
-      for (const auto &[PIdx, Off] : Func.MutableStackParamHomes) {
-        if (PIdx < 0 || PIdx >= NumParams ||
-            PIdx >= static_cast<int>(ArgPtrs.size()))
-          continue;
-        auto *AddrInt = FrameB.CreateAdd(
-            FrameBaseInt, llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx),
-                                                 static_cast<uint64_t>(Off)));
-        auto *AddrPtr =
-            FrameB.CreateIntToPtr(AddrInt, llvm::PointerType::get(*Ctx, 0));
-        FrameB.CreateStore(ArgPtrs[PIdx], AddrPtr);
+      // Spill the variadic overflow stack parameters (the trailing parameters)
+      // into the headroom at entry_sp + base + i*slot, so the unchanged va_arg
+      // walk — which the LLVM optimizer resolves to those addresses — reads the
+      // caller's overflow arguments instead of uninitialised frame memory.
+      if (Func.IsVariadic && Func.VariadicOverflowCount > 0) {
+        const int K = Func.VariadicOverflowCount;
+        const int NumParams = static_cast<int>(Func.Params.size());
+        std::vector<llvm::Argument *> OverflowArgs;
+        int PIdx = 0;
+        for (auto &A : LLVMFunc->args()) {
+          if (PIdx >= NumParams - K && PIdx < NumParams)
+            OverflowArgs.push_back(&A);
+          ++PIdx;
+        }
+        for (int I = 0; I < static_cast<int>(OverflowArgs.size()); ++I) {
+          int64_t Off = Func.VariadicOverflowBase +
+                        static_cast<int64_t>(I) * TRI.PointerSize;
+          auto *AddrInt = FrameB.CreateAdd(
+              FrameBaseInt, llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx),
+                                                   static_cast<uint64_t>(Off)));
+          auto *AddrPtr =
+              FrameB.CreateIntToPtr(AddrInt, llvm::PointerType::get(*Ctx, 0));
+          FrameB.CreateStore(OverflowArgs[I], AddrPtr);
+        }
+      }
+
+      // Seed each written incoming stack-argument home slot with its parameter
+      // so the in-IR memory loads/stores through [frame_end + Off] read the
+      // argument and observe later in-place writes (mirrors the variadic
+      // overflow spill).
+      if (!Func.MutableStackParamHomes.empty()) {
+        const int NumParams = static_cast<int>(Func.Params.size());
+        std::vector<llvm::Argument *> ArgPtrs;
+        for (auto &A : LLVMFunc->args())
+          ArgPtrs.push_back(&A);
+        for (const auto &[PIdx, Off] : Func.MutableStackParamHomes) {
+          if (PIdx < 0 || PIdx >= NumParams ||
+              PIdx >= static_cast<int>(ArgPtrs.size()))
+            continue;
+          auto *AddrInt = FrameB.CreateAdd(
+              FrameBaseInt, llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx),
+                                                   static_cast<uint64_t>(Off)));
+          auto *AddrPtr =
+              FrameB.CreateIntToPtr(AddrInt, llvm::PointerType::get(*Ctx, 0));
+          FrameB.CreateStore(ArgPtrs[PIdx], AddrPtr);
+        }
       }
     }
   }
@@ -870,6 +1716,9 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     }
   }
 
+  if (!emitNativeSEH(Func, *LLVMFunc, BBMap))
+    emitNativeCxxEH(Func, *LLVMFunc, BBMap);
+
   for (auto &BB : *CurFunc) {
     if (BB.empty() || !BB.back().isTerminator()) {
       llvm::IRBuilder<> FixBuilder(&BB);
@@ -910,6 +1759,17 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   const char *Triple = llvmEmitTriple(TheArch, Fmt);
   if (Triple)
     Mod_->setTargetTriple(llvm::Triple(Triple));
+  if (Fmt == BinaryFormat::COFF && Img) {
+    uint32_t GuardFlags = Img->DynInfo.GuardFlags;
+    if ((GuardFlags & uint32_t(llvm::COFF::GuardFlags::CF_INSTRUMENTED)) != 0)
+      Mod_->addModuleFlag(llvm::Module::Warning, "cfguard", 2);
+    else if ((GuardFlags &
+              uint32_t(llvm::COFF::GuardFlags::CF_FUNCTION_TABLE_PRESENT)) != 0)
+      Mod_->addModuleFlag(llvm::Module::Warning, "cfguard", 1);
+    if ((GuardFlags &
+         uint32_t(llvm::COFF::GuardFlags::EH_CONTINUATION_TABLE_PRESENT)) != 0)
+      Mod_->addModuleFlag(llvm::Module::Warning, "ehcontguard", 1);
+  }
 
   FuncNames.clear();
   for (auto &F : Funcs)

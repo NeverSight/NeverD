@@ -143,6 +143,8 @@ void HighCWriter::collectCallTargets(const std::vector<HighStmt> &Stmts,
     for (auto &C : S.Cases)
       collectCallTargets(C.Body, Targets);
     collectCallTargets(S.DefaultBody, Targets);
+    for (auto &ClauseBody : S.EHClauseBodies)
+      collectCallTargets(ClauseBody, Targets);
   }
 }
 

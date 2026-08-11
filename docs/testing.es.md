@@ -136,6 +136,35 @@ un binario reescrito. La variable de entorno `NEVERD` puede sustituir la ruta
 del CLI en un experimento manual enfocado; las ejecuciones CTest normales usan
 el ejecutable incrustado por CMake.
 
+### Reconstrucción de excepciones de Windows
+
+Los cambios de excepciones tabulares de Windows necesitan tanto pruebas de
+representación como una prueba de patch sobre un PE enlazado. El filtro
+específico de lift cubre el modelo normalizado de unwind/SEH/C++, las entradas
+corruptas, las aristas excepcionales del CFG, HighIR, la generación LLVM WinEH,
+el reemplazo del directorio de excepciones y la reconstrucción de Guard CF/EH
+continuation:
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+La fixture ensamblador x64 protegida requiere el objetivo Windows de Clang y
+`lld-link`; su enlace CMake usa `/guard:cf` y `/guard:ehcont`. Un skip por falta
+del cross-linker no demuestra el camino de imagen final. Un caso de integración
+correcto demuestra que el PE reescrito puede volver a cargarse y que sus tablas
+runtime-function, unwind, load-config, Guard CF y Guard EH continuation siguen
+ordenadas, respaldadas por el archivo y limitadas a objetivos ejecutables.
+
+La fixture FH3 enlazada cubre de forma independiente el cierre C++ nativo:
+tablas de estado fijas, anotaciones HighC, conservación de la personality,
+objetivos catch generados y el grafo IP-to-state recargado.
+
+Consulte [Reconstrucción de excepciones de Windows](windows-exception-reconstruction.es.md)
+para la matriz de soporte de análisis/nativo y el contrato de patch fail-closed.
+
 ### Recorridos diferenciales Unicorn
 
 La fixture semántica prueba comportamiento en vez de forma textual:

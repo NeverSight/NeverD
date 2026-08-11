@@ -223,6 +223,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   Func.FrameSize = Med.FrameSize;
   Func.FrameHeadroom = Med.FrameHeadroom;
   Func.Name = Med.Name;
+  Func.ExceptionMetadata = Med.ExceptionMetadata;
   Func.ReturnType = NdType::makeInt(inferReturnSize(Med));
 
   for (auto &ML : Med.Locals) {
@@ -276,6 +277,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
 
   auto TDceStart = std::chrono::steady_clock::now();
   eliminateDeadStmts(Func);
+  structureExceptionRegions(Func, Med);
   auto TEnd = std::chrono::steady_clock::now();
 
   {

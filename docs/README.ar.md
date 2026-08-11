@@ -12,6 +12,7 @@
 | [المساهمة](i18n/CONTRIBUTING.ar.md) | البيئة، وملفات البناء، وسير العمل، والنمط، ومتطلبات PR |
 | [العمارة](architecture.ar.md) | مسارات IR، وحدود المكونات، والرفع الصارم، وعمق الدعم، ومواقع التعديل |
 | [الاختبارات](testing.ar.md) | المجموعات، وfixtures المولدة، ودورات Unicorn، والأوامر التزايدية |
+| [إعادة بناء استثناءات Windows](windows-exception-reconstruction.ar.md) | مصفوفة دعم SEH/C++، وعقد IR، وقواعد patch الأصلية، والتحقق من PE |
 | [إضافات Python](python-plugins.ar.md) | تأليف الإضافات، وواجهة الجلسة والأحداث، والعزل، والاختبارات، والنشر |
 | [فك تجميع EVM](evm.ar.md) | المدخلات وhardforks وIR المرحلي وعقدا C/LLVM واستعادة Solidity والحدود |
 | [تفكيك Solana SBF](sbf.ar.md) | ‏SBF v0-v4، وLLVM IR، ومخرجات C/Rust، والتحقق، والقيود المعروفة |

@@ -59,15 +59,23 @@ inline PEHeaderPtrs locatePEHeaders(uint8_t *Data, size_t Size) {
   if (!rangeInBounds(OptOff, sizeof(uint16_t), Size))
     return P;
   uint8_t *OptHdr = Data + OptOff;
-  bool Is64 = (readLE<uint16_t>(OptHdr) == llvm::COFF::PE32Header::PE32_PLUS);
+  uint16_t Magic = readLE<uint16_t>(OptHdr);
+  if (Magic != llvm::COFF::PE32Header::PE32 &&
+      Magic != llvm::COFF::PE32Header::PE32_PLUS)
+    return P;
+  bool Is64 = Magic == llvm::COFF::PE32Header::PE32_PLUS;
   size_t OptStructSize = Is64 ? sizeof(pe32plus_header) : sizeof(pe32_header);
   if (!rangeInBounds(OptOff, OptStructSize, Size))
     return P;
-  P.FileHeader = reinterpret_cast<coff_file_header *>(Data + P.PeOffset + 4);
+  auto *FileHeader =
+      reinterpret_cast<coff_file_header *>(Data + P.PeOffset + 4);
+  uint32_t OptSize = FileHeader->SizeOfOptionalHeader;
+  if (OptSize < OptStructSize || !rangeInBounds(OptOff, OptSize, Size))
+    return P;
+  P.FileHeader = FileHeader;
   P.OptionalHeader = OptHdr;
   P.Is64 = Is64;
   P.NumSections = P.FileHeader->NumberOfSections;
-  uint32_t OptSize = P.FileHeader->SizeOfOptionalHeader;
   P.SectionTable = P.OptionalHeader + OptSize;
   // NumSections and OptSize are untrusted: make sure the whole section table
   // lies within the buffer before any consumer indexes SectionTable[0..N).
@@ -190,11 +198,15 @@ getPEDataDirectory(const PEHeaderPtrs &PE, uint32_t Index) {
   uint32_t NumDirs = getPENumberOfRvaAndSizes(PE);
   if (Index >= NumDirs)
     return nullptr;
+  size_t DirectoryBase =
+      PE.Is64 ? sizeof(pe32plus_header) : sizeof(pe32_header);
+  size_t DirectoryOffset =
+      DirectoryBase + static_cast<size_t>(Index) * sizeof(data_directory);
+  if (!PE.FileHeader || !rangeInBounds(DirectoryOffset, sizeof(data_directory),
+                                       PE.FileHeader->SizeOfOptionalHeader))
+    return nullptr;
   const uint8_t *DirBase = nullptr;
-  if (PE.Is64)
-    DirBase = PE.OptionalHeader + sizeof(pe32plus_header);
-  else
-    DirBase = PE.OptionalHeader + sizeof(pe32_header);
+  DirBase = PE.OptionalHeader + DirectoryBase;
   return reinterpret_cast<const data_directory *>(DirBase) + Index;
 }
 
@@ -253,15 +265,10 @@ inline uint32_t getPEOptionalHeaderSize(bool Is64) {
 inline void setPEDataDirectory(PEHeaderPtrs &PE, uint32_t Index, uint32_t RVA,
                                uint32_t Size) {
   using namespace llvm::object;
-  uint32_t NumDirs = getPENumberOfRvaAndSizes(PE);
-  if (Index >= NumDirs)
+  const data_directory *ConstDir = getPEDataDirectory(PE, Index);
+  if (!ConstDir)
     return;
-  uint8_t *DirBase = nullptr;
-  if (PE.Is64)
-    DirBase = PE.OptionalHeader + sizeof(pe32plus_header);
-  else
-    DirBase = PE.OptionalHeader + sizeof(pe32_header);
-  auto *Dir = reinterpret_cast<data_directory *>(DirBase) + Index;
+  auto *Dir = const_cast<data_directory *>(ConstDir);
   Dir->RelativeVirtualAddress = RVA;
   Dir->Size = Size;
 }

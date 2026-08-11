@@ -106,12 +106,29 @@ struct PatchLayoutBase {
 // CompiledImage — multi-section rewrite-backend output ready for placement
 // ===--------------------------------------------------------------------===//
 
-/// Result of compiling a module to a single relocatable RX image, with every
-/// emitted section (text + read-only data such as AArch64 absolute jump /
-/// blockaddress tables) laid out contiguously from a chosen base VA.
+/// Placement of one native section within CompiledImage::Bytes.  Section
+/// identity is retained even when a format patcher chooses to store several
+/// logical sections in one physical segment.
+struct CompiledSection {
+  std::string Name;
+  uint64_t Offset = 0;
+  uint64_t VA = 0;
+  uint64_t Size = 0;
+  uint64_t Alignment = 1;
+  llvm::mc_rewrite::RewriteSectionKind Kind =
+      llvm::mc_rewrite::RewriteSectionKind::Other;
+  bool IsAllocated = true;
+  std::vector<llvm::mc_rewrite::RewriteSymbolIndexReference>
+      SymbolIndexReferences;
+};
+
+/// Result of compiling a module to a single placement image, with every
+/// emitted section (text, data, unwind tables, and related metadata) laid out
+/// contiguously from a chosen base VA.
 struct CompiledImage {
   std::vector<uint8_t> Bytes;                  ///< Combined image (text first).
   uint64_t BaseVA = 0;                         ///< VA of Bytes[0].
+  std::vector<CompiledSection> Sections;       ///< Exact logical placements.
   std::map<std::string, uint64_t> SymbolAddrs; ///< Defined symbol → final VA.
   std::vector<std::string> Unresolved;         ///< Symbols left unresolved.
   bool Success = false;
@@ -124,11 +141,11 @@ struct CompiledImage {
 /// PC-relative from `.text`). A single-section model would drop those, so this
 /// performs a two-pass compile: (1) a probe compile on a clone learns each
 /// section's size; (2) the sections are laid out contiguously from \p BaseVA
-/// (text first, the rest 16-byte aligned to satisfy 8-byte pointer-table
-/// loads), and the module is recompiled with per-section final VAs so all
+/// (text first, each section honoring at least its native alignment), and the
+/// module is recompiled with per-section final VAs so all
 /// cross-section fixups resolve correctly; the sections are then assembled into
-/// one RX blob. The blob can be dropped into a single executable
-/// segment/section by appendExecSegment().
+/// one blob. Format patchers use Sections to preserve unwind/data identity and
+/// choose compatible physical permissions.
 ///
 /// \p ResolveFn is the address-model external-symbol resolver (PLT/IAT/stub
 /// VAs,
@@ -136,7 +153,8 @@ struct CompiledImage {
 CompiledImage compileImageForPatch(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn);
+        ResolveFn,
+    uint64_t ImageBaseVA = 0);
 
 // ===--------------------------------------------------------------------===//
 // BinaryPatcher — base class for new-section patching
@@ -239,7 +257,9 @@ public:
       Arch TargetArch, InstructionMode Mode = InstructionMode::Default,
       const std::vector<Symbol> *Symbols = nullptr,
       const std::vector<std::pair<va_t, va_t>> *KnownRanges = nullptr,
-      const std::vector<Export> *Exports = nullptr);
+      const std::vector<Export> *Exports = nullptr,
+      std::vector<va_t> *PatchedOriginalEntries = nullptr,
+      std::vector<std::pair<va_t, va_t>> *PatchedEntryMappings = nullptr);
 
   /// Common file I/O skeleton shared by all patchers: reads the input
   /// binary, calls \p PatchFn to modify the in-memory buffer and fill

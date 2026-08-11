@@ -133,6 +133,34 @@ binario riscritto. La variabile d’ambiente `NEVERD` può sovrascrivere il perc
 della CLI per un esperimento manuale mirato; le normali esecuzioni CTest usano
 l’eseguibile incorporato da CMake.
 
+### Ricostruzione delle eccezioni Windows
+
+Le modifiche alle eccezioni Windows basate su tabelle richiedono sia test della
+rappresentazione sia un test di patch su un PE collegato. Il filtro lift mirato
+copre il modello unwind/SEH/C++ normalizzato, gli input corrotti, gli archi CFG
+eccezionali, HighIR, la generazione LLVM WinEH, la sostituzione della directory
+delle eccezioni e la ricostruzione Guard CF/EH continuation:
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+La fixture assembly x64 protetta richiede il target Windows di Clang e
+`lld-link`; il link CMake usa `/guard:cf` e `/guard:ehcont`. Uno skip dovuto a
+un cross-linker mancante non dimostra il percorso final-image. Un caso di
+integrazione riuscito prova che il PE riscritto può essere ricaricato e che le
+tabelle runtime-function, unwind, load-config, Guard CF e Guard EH continuation
+restano ordinate, presenti nel file e limitate a target eseguibili.
+
+La fixture FH3 collegata copre indipendentemente la chiusura C++ nativa: tabelle
+di stato fisse, annotazioni HighC, conservazione della personality, target catch
+generati e grafo IP-to-state ricaricato.
+
+Vedere [Ricostruzione delle eccezioni Windows](windows-exception-reconstruction.it.md)
+per la matrice di supporto analisi/nativo e il contratto di patch fail-closed.
+
 ### Roundtrip differenziali Unicorn
 
 La fixture semantica verifica il comportamento anziché la forma testuale:

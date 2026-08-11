@@ -99,10 +99,17 @@ enum class CallingConv : uint8_t {
 
 struct MedBlock {
   int Id = -1;
+  /// Original half-open machine-code extent.  This survives lifting so
+  /// address-based metadata (notably Windows EH regions) never has to infer a
+  /// block boundary from an instruction name or from a possibly empty Op list.
+  va_t StartAddr = 0;
+  va_t EndAddr = 0;
   std::vector<PhiNode> Phis;
   std::vector<MedOp> Ops;
   std::vector<int> Succs;
   std::vector<int> Preds;
+  std::vector<ExceptionalEdge> ExceptionalSuccs;
+  std::vector<ExceptionalEdge> ExceptionalPreds;
 };
 
 struct MedTypedParam {
@@ -239,6 +246,7 @@ struct MedFunc {
   /// Resolved jump tables (carried from LowFunc) so the LLVM emitter can
   /// lower an INDIR_BR into a switch on the table index.
   std::vector<JumpTable> JumpTables;
+  std::optional<ExceptionFunction> ExceptionMetadata;
 
   bool hasTypeInfo() const { return ReturnType != nullptr; }
 

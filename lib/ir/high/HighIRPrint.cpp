@@ -241,6 +241,27 @@ std::string HighStmt::str(int Indent) const {
     return Pad + "break;";
   case StmtKind::Continue:
     return Pad + "continue;";
+  case StmtKind::SEHTry:
+  case StmtKind::CxxTry: {
+    std::string S = Pad + (Kind == StmtKind::SEHTry ? "__try" : "cxx.try") +
+                    " [0x" + llvm::utohexstr(EHRange.Begin) + ", 0x" +
+                    llvm::utohexstr(EHRange.End) + ") {\n";
+    for (const HighStmt &ST : Body)
+      S += ST.str(Indent + 1) + "\n";
+    S += Pad + "}";
+    for (const HighEHClause &Clause : EHClauses) {
+      S += "\n" + Pad + "handler 0x" +
+           llvm::utohexstr(Clause.HandlerVA ? Clause.HandlerVA
+                                            : Clause.FilterOrActionVA) +
+           ";";
+      if (Clause.Kind == HighEHClauseKind::CxxCleanup)
+        S += " state=" + std::to_string(Clause.State) +
+             " kind=" + getCxxUnwindActionKindName(Clause.UnwindActionKind) +
+             " object_offset=" + std::to_string(Clause.UnwindObjectOffset) +
+             ";";
+    }
+    return S;
+  }
   case StmtKind::Nop:
     return "";
   default:

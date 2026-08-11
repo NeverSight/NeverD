@@ -6,6 +6,7 @@ add_neverd_component_library(NeverDIRHigh
   HighCopyProp.cpp
   HighDCE.cpp
   HighDeadStoreElim.cpp
+  HighEHStructurer.cpp
   HighExpr.cpp
   HighExprSimplify.cpp
   HighIfChainToSwitch.cpp

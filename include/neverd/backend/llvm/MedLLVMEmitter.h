@@ -104,6 +104,12 @@ private:
   /// the dispatcher (emitted first) would otherwise not yet see.
   llvm::Function *declareFunc(const MedFunc &Func);
   llvm::Function *emitFunc(const MedFunc &Func);
+  void emitExceptionMetadata(const MedFunc &Func, llvm::Function &LLVMFunc);
+  bool emitNativeSEH(const MedFunc &Func, llvm::Function &LLVMFunc,
+                     const std::map<int, llvm::BasicBlock *> &OriginalBlockMap);
+  bool
+  emitNativeCxxEH(const MedFunc &Func, llvm::Function &LLVMFunc,
+                  const std::map<int, llvm::BasicBlock *> &OriginalBlockMap);
   void emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder, int BlockId,
               int OpIdx);
   /// CALL/INDIR_CALL and RETURN lowering, carved out of the emitOp opcode

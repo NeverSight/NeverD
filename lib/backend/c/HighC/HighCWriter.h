@@ -60,6 +60,7 @@ public:
 
   //--- Statement / function rendering helpers (HighCStmtWriter.cpp) ---
   void runAnalysisPasses(const HighFunc &Func);
+  void writeExceptionAnnotation(const HighFunc &Func);
   void emitLocalDecls(const HighFunc &Func,
                       const std::set<std::string> &ParamNames);
 

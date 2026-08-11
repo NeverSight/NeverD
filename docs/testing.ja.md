@@ -126,6 +126,33 @@ LowIR、MedIR、HighIR、LLVM IR、生成 C、書き換えバイナリを検査�
 手動実験では `NEVERD` 環境変数で CLI パスを上書きできます。通常の CTest は
 CMake が埋め込んだ実行ファイルを使います。
 
+### Windows 例外再構築
+
+Windows のテーブルベース例外を変更する場合は、表現テストとリンク済み PE の
+patch テストの両方が必要です。対象を絞った lift-suite フィルターは、正規化された
+unwind/SEH/C++ モデル、破損入力処理、例外 CFG エッジ、HighIR、LLVM WinEH 生成、
+例外ディレクトリの置換、および Guard CF/EH continuation の再構築を網羅します。
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+保護された x64 assembly fixture には Clang の Windows target と `lld-link` が必要で、
+CMake link は `/guard:cf` と `/guard:ehcont` を使用します。cross-linker 不足による
+skip は final-image 経路の証拠にはなりません。統合ケースが成功すれば、書き換えた
+PE を再ロードでき、runtime-function、unwind、load-config、Guard CF、Guard EH
+continuation の各テーブルがソート済みでファイルに裏付けられ、実行可能 target のみを
+指すことを確認できます。
+
+リンク済み FH3 fixture は、固定状態テーブル、HighC 注釈、personality の保持、生成した
+catch target、再ロード後の IP-to-state グラフからなるネイティブ C++ closure を独立して
+検証します。
+
+解析／ネイティブのサポート表と fail-closed patch 契約については、
+[Windows 例外再構築](windows-exception-reconstruction.ja.md)を参照してください。
+
 ### Unicorn 差分ラウンドトリップ
 
 セマンティック fixture はテキストの形ではなく動作を検査します。

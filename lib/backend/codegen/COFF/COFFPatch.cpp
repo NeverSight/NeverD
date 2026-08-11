@@ -16,6 +16,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Object/PELayout.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
+#include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 #include "neverd/backend/codegen/COFF/COFFReloc.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -23,6 +24,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <cstring>
@@ -227,6 +229,19 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
                  "context\n";
           return false;
         }
+        if (!CachedImage) {
+          llvm::WithColor::error()
+              << "coff_patch: parsed image context is required for safe "
+                 "exception-table rewriting\n";
+          return false;
+        }
+        auto EHPlanOrErr =
+            planCOFFExceptionPatch(Mod, *CachedImage, TargetArch);
+        if (!EHPlanOrErr) {
+          llvm::WithColor::error()
+              << llvm::toString(EHPlanOrErr.takeError()) << "\n";
+          return false;
+        }
 
         uint64_t CodeVA = plannedExecSegmentVA(Binary, TargetArch);
         if (CodeVA == 0) {
@@ -247,6 +262,10 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
         auto Resolve = [&](llvm::StringRef Sym,
                            uint32_t) -> std::optional<uint64_t> {
           std::string Name = Sym.str();
+          if (CachedImage)
+            if (auto Personality =
+                    findCOFFExceptionPersonalityVA(*CachedImage, Sym))
+              return SerializeResolvedCode(*Personality, true);
           std::string Key = resolveSymbolAlias(Name, Layout.IATMap);
           auto It = Layout.IATMap.find(Key);
           if (It != Layout.IATMap.end())
@@ -274,19 +293,28 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
           return std::nullopt;
         };
 
-        CompiledImage Img = compileImageForPatch(
-            Mod, TargetArch, BinaryFormat::COFF, CodeVA, Resolve);
+        auto CompileMod = llvm::CloneModule(Mod);
+        for (llvm::Function &F : *CompileMod) {
+          if (F.isDeclaration() ||
+              !findCOFFExceptionPersonalityVA(*CachedImage, F.getName()))
+            continue;
+          // A personality routine is part of the preserved runtime, not an
+          // ordinary lifted callee.  Re-emitting a locally defined copy would
+          // make generated unwind data name the copy and would also assume the
+          // lifter recovered its private runtime ABI.  Keep it external so the
+          // address model binds every handler reference to the proven original
+          // executable address.
+          F.deleteBody();
+          F.setLinkage(llvm::GlobalValue::ExternalLinkage);
+          F.setDSOLocal(true);
+        }
+
+        CompiledImage Img =
+            compileImageForPatch(*CompileMod, TargetArch, BinaryFormat::COFF,
+                                 CodeVA, Resolve, Layout.ImageBase);
         if (!Img.Success || Img.Bytes.empty()) {
           llvm::WithColor::error()
               << "coff_patch: compileImageForPatch failed\n";
-          return false;
-        }
-
-        uint64_t TextSize = Img.Bytes.size();
-        uint64_t Placed =
-            appendExecSegment(Binary, Img.Bytes, kNdTextSection, TargetArch);
-        if (Placed == 0) {
-          llvm::WithColor::error() << "coff_patch: appendExecSegment failed\n";
           return false;
         }
 
@@ -295,10 +323,54 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
                                      << " unresolved symbols\n";
         }
 
+        std::vector<va_t> PatchedOriginalEntries;
+        std::vector<std::pair<va_t, va_t>> PatchedEntryMappings;
         size_t TrampCount = installTrampolines(
             Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
             Layout.TextFileOff, Layout.ImageBase, TargetArch, CachedMode,
-            CachedSymbols, CachedCodeRanges, CachedExports);
+            CachedSymbols, CachedCodeRanges, CachedExports,
+            &PatchedOriginalEntries, &PatchedEntryMappings);
+
+        auto EHUpdateOrErr = prepareCOFFExceptionDirectory(
+            Binary, *CachedImage, Img, PatchedOriginalEntries,
+            PatchedEntryMappings, CodeVA, TargetArch);
+        if (!EHUpdateOrErr) {
+          llvm::WithColor::error()
+              << llvm::toString(EHUpdateOrErr.takeError()) << "\n";
+          return false;
+        }
+        auto GuardUpdateOrErr = prepareCOFFGuardTables(
+            Binary, *CachedImage, Img, PatchedEntryMappings, CodeVA, TargetArch,
+            !EHPlanOrErr->LanguageExceptionFunctionEntries.empty());
+        if (!GuardUpdateOrErr) {
+          llvm::WithColor::error()
+              << llvm::toString(GuardUpdateOrErr.takeError()) << "\n";
+          return false;
+        }
+
+        uint64_t TextSize = Img.Bytes.size();
+        uint64_t Placed =
+            appendExecSegment(Binary, Img.Bytes, kNdTextSection, TargetArch);
+        if (Placed == 0 || Placed != CodeVA) {
+          llvm::WithColor::error()
+              << "coff_patch: appended section VA does not match the "
+                 "compiled address model\n";
+          return false;
+        }
+        if (llvm::Error Err =
+                applyCOFFExceptionDirectoryUpdate(Binary, *EHUpdateOrErr)) {
+          llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
+          return false;
+        }
+        if (llvm::Error Err = applyCOFFGuardTableUpdate(Binary, *CachedImage,
+                                                        *GuardUpdateOrErr)) {
+          llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
+          return false;
+        }
+        if (llvm::Error Err = validatePatchedCOFFImage(Binary, TargetArch)) {
+          llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
+          return false;
+        }
 
         Result.Success = true;
         Result.CodeSize = TextSize;

@@ -123,6 +123,34 @@ PE/COFF وصورًا مرتبطة، وكائنات Mach-O i386 ‏PIC/no-PIC. ع
 البيئة `NEVERD` تجاوز مسار CLI في تجربة يدوية محددة؛ وتستخدم عمليات CTest العادية
 الملف التنفيذي الذي يضمنه CMake.
 
+### إعادة بناء استثناءات Windows
+
+تحتاج تغييرات الاستثناءات الجدولية في Windows إلى اختبارات للتمثيل واختبار patch
+لملف PE مرتبط. يغطي مرشح مجموعة lift المركّز النموذج الموحّد لـ
+unwind/SEH/C++، ومعالجة المدخلات التالفة، وحواف CFG الاستثنائية، وHighIR،
+وتوليد LLVM WinEH، واستبدال دليل الاستثناءات، وإعادة بناء Guard CF/EH
+continuation:
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+تتطلب fixture التجميع x64 المحمية هدف Windows في Clang و`lld-link`؛ ويستخدم
+ربط CMake الخيارين `/guard:cf` و`/guard:ehcont`. التخطي بسبب غياب cross-linker
+ليس دليلاً على مسار الصورة النهائية. تثبت حالة التكامل الناجحة أن PE المعاد
+كتابته يمكن تحميله مجددًا وأن جداول runtime-function وunwind وload-config وGuard
+CF وGuard EH continuation مرتبة، ومدعومة ببيانات الملف، وتشير إلى أهداف قابلة
+للتنفيذ.
+
+تغطي fixture FH3 المرتبطة إغلاق C++ الأصلي بصورة مستقلة: جداول الحالة الثابتة،
+وتعليقات HighC، والحفاظ على personality، وأهداف catch المولدة، ومخطط IP-to-state
+بعد إعادة التحميل.
+
+راجع [إعادة بناء استثناءات Windows](windows-exception-reconstruction.ar.md)
+لمصفوفة دعم التحليل/التوليد الأصلي وعقد patch الذي يفشل بأمان.
+
 ### دورات Unicorn التفاضلية
 
 تختبر fixture الدلالية السلوك بدل الشكل النصي:

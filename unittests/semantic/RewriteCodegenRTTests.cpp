@@ -1688,6 +1688,80 @@ TEST(RewriteCodegen_COFF_x64, ExternalCall) {
   uc_close(uc);
 }
 
+TEST(RewriteCodegen_COFF_x64, PreservesNativeSectionTraits) {
+  ensureLLVMTargets();
+
+  llvm::LLVMContext Ctx;
+  auto Mod = buildExternalCallIR(Ctx, "x86_64-pc-windows-msvc");
+  auto Resolve = [](llvm::StringRef Sym, uint32_t) -> std::optional<uint64_t> {
+    if (Sym == "external_fn")
+      return EXT_FN_VA;
+    return std::nullopt;
+  };
+  auto RR = compileRewrite(*Mod, Arch::X64, BinaryFormat::COFF, Resolve);
+  ASSERT_TRUE(RR.Unresolved.empty());
+
+  auto Find =
+      [&](llvm::StringRef Name) -> const llvm::mc_rewrite::RewriteSection * {
+    for (const auto &S : RR.Sections)
+      if (S.Name == Name)
+        return &S;
+    return nullptr;
+  };
+
+  const auto *Text = Find(".text");
+  const auto *PData = Find(".pdata");
+  const auto *XData = Find(".xdata");
+  ASSERT_NE(Text, nullptr);
+  ASSERT_NE(PData, nullptr);
+  ASSERT_NE(XData, nullptr);
+  EXPECT_EQ(Text->Kind, llvm::mc_rewrite::RewriteSectionKind::Code);
+  EXPECT_EQ(PData->Kind, llvm::mc_rewrite::RewriteSectionKind::ReadOnlyData);
+  EXPECT_EQ(XData->Kind, llvm::mc_rewrite::RewriteSectionKind::ReadOnlyData);
+  EXPECT_TRUE(Text->IsAllocated);
+  EXPECT_TRUE(PData->IsAllocated);
+  EXPECT_TRUE(XData->IsAllocated);
+  EXPECT_GE(Text->Alignment, 1u);
+  EXPECT_GE(PData->Alignment, 4u);
+  EXPECT_GE(XData->Alignment, 4u);
+
+  llvm::LLVMContext Ctx2;
+  auto Mod2 = buildExternalCallIR(Ctx2, "x86_64-pc-windows-msvc");
+  constexpr uint64_t TestImageBase = 0x100000;
+  CompiledImage Image = compileImageForPatch(
+      *Mod2, Arch::X64, BinaryFormat::COFF, CODE_VA,
+      [&](llvm::StringRef Sym, uint32_t Specifier) -> std::optional<uint64_t> {
+        return Resolve(Sym, Specifier);
+      },
+      TestImageBase);
+  ASSERT_TRUE(Image.Success);
+  ASSERT_EQ(Image.Sections.size(), RR.Sections.size());
+  for (const CompiledSection &S : Image.Sections) {
+    EXPECT_GE(S.VA, Image.BaseVA);
+    EXPECT_EQ(S.Offset, S.VA - Image.BaseVA);
+    EXPECT_LE(S.Offset + S.Size, Image.Bytes.size());
+  }
+  auto FindCompiled = [&](llvm::StringRef Name) -> const CompiledSection * {
+    for (const CompiledSection &S : Image.Sections)
+      if (S.Name == Name)
+        return &S;
+    return nullptr;
+  };
+  const CompiledSection *CompiledPData = FindCompiled(".pdata");
+  const CompiledSection *CompiledXData = FindCompiled(".xdata");
+  ASSERT_NE(CompiledPData, nullptr);
+  ASSERT_NE(CompiledXData, nullptr);
+  ASSERT_GE(CompiledPData->Size, 12u);
+  const uint8_t *Runtime = Image.Bytes.data() + CompiledPData->Offset;
+  uint32_t BeginRVA = readLE<uint32_t>(Runtime);
+  uint32_t EndRVA = readLE<uint32_t>(Runtime + 4);
+  uint32_t UnwindRVA = readLE<uint32_t>(Runtime + 8);
+  EXPECT_GE(BeginRVA, CODE_VA - TestImageBase);
+  EXPECT_GT(EndRVA, BeginRVA);
+  EXPECT_GE(UnwindRVA, CompiledXData->VA - TestImageBase);
+  EXPECT_LT(UnwindRVA, CompiledXData->VA - TestImageBase + CompiledXData->Size);
+}
+
 TEST(RewriteCodegen_COFF_x64, LoopFunction) {
   ensureLLVMTargets();
   llvm::LLVMContext Ctx;

@@ -45,6 +45,7 @@ public:
 private:
   void buildExpressions(const MedFunc &Med);
   void structureControlFlow(HighFunc &Func, const MedFunc &Med);
+  void structureExceptionRegions(HighFunc &Func, const MedFunc &Med);
   void inferTypes(HighFunc &Func);
   void simplifyControlFlow(HighFunc &Func, const MedFunc &Med);
   void inlineGotoReturns(HighFunc &Func, const MedFunc &Med);

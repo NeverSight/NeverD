@@ -50,11 +50,70 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   // each function with an empty stack so the entry block's lift TOP is 0.
   Dec.resetX86FpuState();
   BlockStarts.insert(EntryAddr);
+
+  const ExceptionFunction *Exception = nullptr;
+  for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
+    if (Candidate.CodeRange.Begin == EntryAddr &&
+        Candidate.Kind == RuntimeFunctionKind::Primary) {
+      Exception = &Candidate;
+      break;
+    }
+  }
+  if (!Exception)
+    Exception = Img.ExceptionMetadata.findFunction(EntryAddr);
+  std::vector<va_t> ExceptionalRoots;
+  if (Exception) {
+    auto AddBoundary = [&](va_t Address) {
+      if (Exception->CodeRange.contains(Address) && Address != EntryAddr)
+        BlockStarts.insert(Address);
+    };
+    auto AddExceptionalRoot = [&](va_t Address) {
+      if (!Exception->CodeRange.contains(Address))
+        return;
+      AddBoundary(Address);
+      if (Address != EntryAddr)
+        ExceptionalRoots.push_back(Address);
+    };
+    if (Exception->SEH)
+      for (const SEHScopeRecord &Scope : Exception->SEH->Scopes) {
+        AddBoundary(Scope.GuardedRange.Begin);
+        if (Scope.GuardedRange.End != Exception->CodeRange.End)
+          AddBoundary(Scope.GuardedRange.End);
+        AddExceptionalRoot(Scope.FilterOrFinallyVA);
+        AddExceptionalRoot(Scope.HandlerVA);
+        AddBoundary(Scope.ContinuationVA);
+      }
+    if (Exception->Cxx) {
+      for (const CxxIPState &State : Exception->Cxx->IPMap)
+        AddBoundary(State.IP);
+      for (const CxxUnwindAction &Action : Exception->Cxx->UnwindMap)
+        AddExceptionalRoot(Action.ActionVA);
+      for (const CxxTryBlock &Try : Exception->Cxx->TryBlocks)
+        for (const CxxCatchHandler &Catch : Try.Handlers) {
+          AddExceptionalRoot(Catch.HandlerVA);
+          for (va_t Continuation : Catch.ContinuationVAs)
+            AddBoundary(Continuation);
+        }
+    }
+  }
   explore(Img, Dec, EntryAddr);
+  // Windows handlers inside the owning runtime-function range are legal CFG
+  // roots even when no ordinary branch reaches them.  Decode them explicitly;
+  // exceptional edges remain separate and therefore do not perturb dominator
+  // or ordinary structuring semantics.
+  std::sort(ExceptionalRoots.begin(), ExceptionalRoots.end());
+  ExceptionalRoots.erase(
+      std::unique(ExceptionalRoots.begin(), ExceptionalRoots.end()),
+      ExceptionalRoots.end());
+  for (va_t Root : ExceptionalRoots)
+    if (!ExploredAddrs.count(Root))
+      explore(Img, Dec, Root);
   splitBlocks();
 
   LowFunc Func;
   Func.Entry = EntryAddr;
+  if (Exception)
+    Func.ExceptionMetadata = *Exception;
   Func.Name = FuncName.empty()
                   ? (kAutoFuncPrefix + llvm::utohexstr(EntryAddr)).str()
                   : FuncName;
@@ -284,6 +343,7 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
 
   linkSuccessors(Func, AddrToBlock);
   normalizeEntryBlock(Func);
+  linkExceptionalSuccessors(Func);
   extractJumpTables(Func);
   fixupFpuStack(Func);
 }
@@ -537,6 +597,103 @@ void CFGBuilder::linkSuccessors(LowFunc &Func,
     for (int S : Blk.Succs) {
       if (S >= 0 && S < static_cast<int>(Func.Blocks.size()))
         Func.Blocks[S].Preds.push_back(Blk.Id);
+    }
+  }
+}
+
+void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
+  for (LowBlock &Block : Func.Blocks) {
+    Block.ExceptionalSuccs.clear();
+    Block.ExceptionalPreds.clear();
+  }
+  if (!Func.ExceptionMetadata)
+    return;
+  const ExceptionFunction &Metadata = *Func.ExceptionMetadata;
+
+  auto TargetBlockId = [&](va_t TargetVA) {
+    if (LowBlock *Target = Func.blockFor(TargetVA))
+      return Target->Id;
+    return -1;
+  };
+  auto AddEdge = [&](LowBlock &Source, va_t TargetVA, ExceptionalEdgeKind Kind,
+                     uint32_t Region, int32_t State) {
+    if (TargetVA == 0)
+      return;
+    ExceptionalEdge Edge;
+    Edge.BlockId = TargetBlockId(TargetVA);
+    Edge.TargetVA = TargetVA;
+    Edge.Kind = Kind;
+    Edge.RegionIndex = Region;
+    Edge.State = State;
+    if (std::find(Source.ExceptionalSuccs.begin(),
+                  Source.ExceptionalSuccs.end(),
+                  Edge) == Source.ExceptionalSuccs.end())
+      Source.ExceptionalSuccs.push_back(Edge);
+    if (Edge.BlockId >= 0 &&
+        Edge.BlockId < static_cast<int>(Func.Blocks.size())) {
+      ExceptionalEdge Pred = Edge;
+      Pred.BlockId = Source.Id;
+      auto &Preds = Func.Blocks[Edge.BlockId].ExceptionalPreds;
+      if (std::find(Preds.begin(), Preds.end(), Pred) == Preds.end())
+        Preds.push_back(Pred);
+    }
+  };
+  auto ForProtectedBlocks = [&](const ExceptionAddressRange &Range, auto &&Fn) {
+    for (LowBlock &Block : Func.Blocks)
+      if (Block.StartAddr < Range.End && Block.EndAddr > Range.Begin)
+        Fn(Block);
+  };
+
+  if (Metadata.SEH) {
+    for (size_t I = 0; I < Metadata.SEH->Scopes.size(); ++I) {
+      const SEHScopeRecord &Scope = Metadata.SEH->Scopes[I];
+      ForProtectedBlocks(Scope.GuardedRange, [&](LowBlock &Block) {
+        switch (Scope.Kind) {
+        case SEHScopeKind::Filter:
+          AddEdge(Block, Scope.FilterOrFinallyVA,
+                  ExceptionalEdgeKind::SEHFilter, static_cast<uint32_t>(I), -1);
+          AddEdge(Block, Scope.HandlerVA, ExceptionalEdgeKind::SEHHandler,
+                  static_cast<uint32_t>(I), -1);
+          break;
+        case SEHScopeKind::CatchAll:
+          AddEdge(Block, Scope.HandlerVA, ExceptionalEdgeKind::SEHHandler,
+                  static_cast<uint32_t>(I), -1);
+          break;
+        case SEHScopeKind::Finally:
+          AddEdge(Block, Scope.FilterOrFinallyVA,
+                  ExceptionalEdgeKind::SEHFinally, static_cast<uint32_t>(I),
+                  -1);
+          break;
+        }
+      });
+    }
+  }
+
+  if (Metadata.Cxx) {
+    const CxxExceptionInfo &Cxx = *Metadata.Cxx;
+    for (LowBlock &Block : Func.Blocks) {
+      int32_t State = -1;
+      for (const CxxIPState &IPState : Cxx.IPMap) {
+        if (IPState.IP > Block.StartAddr)
+          break;
+        State = IPState.State;
+      }
+      if (State < 0 || State >= static_cast<int32_t>(Cxx.UnwindMap.size()))
+        continue;
+
+      const CxxUnwindAction &Cleanup = Cxx.UnwindMap[State];
+      if (Cleanup.ActionVA != 0)
+        AddEdge(Block, Cleanup.ActionVA, ExceptionalEdgeKind::CxxCleanup,
+                static_cast<uint32_t>(State), State);
+
+      for (size_t I = 0; I < Cxx.TryBlocks.size(); ++I) {
+        const CxxTryBlock &Try = Cxx.TryBlocks[I];
+        if (State < Try.TryLow || State > Try.TryHigh)
+          continue;
+        for (const CxxCatchHandler &Catch : Try.Handlers)
+          AddEdge(Block, Catch.HandlerVA, ExceptionalEdgeKind::CxxCatch,
+                  static_cast<uint32_t>(I), State);
+      }
     }
   }
 }

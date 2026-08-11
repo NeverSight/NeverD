@@ -21,6 +21,7 @@
 #include "neverd/ir/med/MedIR.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -126,7 +127,39 @@ enum class StmtKind : uint8_t {
   Call,
   Nop,
   Break,
-  Continue
+  Continue,
+  /// A reducible MSVC table-SEH protected region.  Body is the protected
+  /// body; EHClauses/EHClauseBodies describe the except/finally arms.
+  SEHTry,
+  /// A reducible MSVC C++ state-map region.  The C backend renders this as
+  /// faithful pseudocode because it intentionally remains a C emitter.
+  CxxTry
+};
+
+enum class HighEHClauseKind : uint8_t {
+  SEHExcept,
+  SEHFinally,
+  CxxCatch,
+  CxxCleanup,
+};
+
+/// Language-neutral payload attached to a structured HighIR exception arm.
+/// Native addresses and frame offsets are retained even when the handler body
+/// belongs to an out-of-line funclet and therefore cannot be embedded safely.
+struct HighEHClause {
+  HighEHClauseKind Kind = HighEHClauseKind::SEHExcept;
+  ExceptionParseStatus ParseStatus = ExceptionParseStatus::Complete;
+  va_t FilterOrActionVA = 0;
+  va_t HandlerVA = 0;
+  va_t TypeDescriptorVA = 0;
+  uint32_t Adjectives = 0;
+  int32_t CatchObjectOffset = 0;
+  int32_t ParentFrameOffset = 0;
+  int32_t State = -1;
+  CxxUnwindAction::ActionKind UnwindActionKind =
+      CxxUnwindAction::ActionKind::None;
+  int32_t UnwindObjectOffset = 0;
+  std::vector<va_t> ContinuationVAs;
 };
 
 struct SwitchCase {
@@ -167,6 +200,14 @@ struct HighStmt {
   ExprPtr SwitchExpr;
   std::vector<SwitchCase> Cases;
   std::vector<HighStmt> DefaultBody;
+
+  /// For SEHTry / CxxTry.  The clause and body vectors have identical sizes.
+  /// An empty clause body denotes a validated out-of-line native funclet; its
+  /// exact address remains in the corresponding descriptor.
+  ExceptionAddressRange EHRange;
+  std::vector<HighEHClause> EHClauses;
+  std::vector<std::vector<HighStmt>> EHClauseBodies;
+  bool EHIsReducible = false;
 
   bool IsPhiCopy = false;
 
@@ -257,6 +298,8 @@ template <typename F> void walkStmts(std::vector<HighStmt> &Stmts, F &&Fn) {
     for (auto &C : S.Cases)
       walkStmts(C.Body, Fn);
     walkStmts(S.DefaultBody, Fn);
+    for (auto &ClauseBody : S.EHClauseBodies)
+      walkStmts(ClauseBody, Fn);
   }
 }
 
@@ -269,6 +312,8 @@ void walkStmts(const std::vector<HighStmt> &Stmts, F &&Fn) {
     for (const auto &C : S.Cases)
       walkStmts(C.Body, Fn);
     walkStmts(S.DefaultBody, Fn);
+    for (const auto &ClauseBody : S.EHClauseBodies)
+      walkStmts(ClauseBody, Fn);
   }
 }
 
@@ -301,6 +346,9 @@ struct HighFunc {
   std::vector<HighParam> Params;
   std::vector<HighLocal> Locals;
   std::vector<HighStmt> Body;
+  std::optional<ExceptionFunction> ExceptionMetadata;
+  unsigned StructuredExceptionRegions = 0;
+  unsigned UnstructuredExceptionRegions = 0;
 };
 
 } // namespace neverd

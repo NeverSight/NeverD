@@ -123,6 +123,31 @@ LowIR, MedIR, HighIR, LLVM IR, 생성된 C 또는 재작성 바이너리를 검�
 수동 실험은 `NEVERD` 환경 변수로 CLI 경로를 override할 수 있습니다. 일반 CTest는
 CMake에 포함된 실행 파일을 사용합니다.
 
+### Windows 예외 재구성
+
+Windows 테이블 기반 예외를 변경할 때는 표현 테스트와 링크된 PE patch 테스트가 모두
+필요합니다. 집중 lift-suite 필터는 정규화된 unwind/SEH/C++ 모델, 손상 입력 처리,
+예외 CFG edge, HighIR, LLVM WinEH 생성, 예외 디렉터리 교체, Guard CF/EH
+continuation 재구성을 검사합니다.
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+보호된 x64 assembly fixture에는 Clang Windows target과 `lld-link`가 필요하며 CMake
+link는 `/guard:cf`와 `/guard:ehcont`를 사용합니다. cross-linker 누락으로 인한 skip은
+final-image 경로의 증거가 아닙니다. 통합 사례가 통과하면 다시 작성된 PE를 재로드할 수
+있고 runtime-function, unwind, load-config, Guard CF, Guard EH continuation 테이블이
+정렬되고 파일에 존재하며 실행 가능한 target만 가리킨다는 것을 입증합니다.
+
+링크된 FH3 fixture는 고정 상태 테이블, HighC 주석, personality 보존, 생성된 catch
+target, 재로드한 IP-to-state 그래프로 네이티브 C++ closure를 독립적으로 검사합니다.
+
+분석/네이티브 지원 표와 fail-closed patch 계약은
+[Windows 예외 재구성](windows-exception-reconstruction.ko.md)을 참조하십시오.
+
 ### Unicorn 차등 왕복
 
 의미론 fixture는 텍스트 모양이 아니라 동작을 테스트합니다.

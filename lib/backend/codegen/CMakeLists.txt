@@ -5,6 +5,7 @@ add_neverd_component_library(NeverDCodeGen
   CodeGenARM.cpp
   BinaryRewriter.cpp
   InplaceRewriter.cpp
+  COFF/COFFExceptionPatch.cpp
   COFF/COFFPatch.cpp
   COFF/COFFInplace.cpp
   COFF/COFFReloc.cpp

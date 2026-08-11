@@ -118,6 +118,31 @@ patch 測試所需的可執行檔。`NeverDLiftTests` 依賴 `lift-test-objects`
 LowIR、MedIR、HighIR、LLVM IR、產生的 C 或重寫後的二進位。聚焦手動實驗可用
 `NEVERD` 環境變數覆寫 CLI 路徑；一般 CTest 執行使用 CMake 內嵌的可執行檔。
 
+### Windows 例外重建
+
+修改 Windows 表格驅動例外時，既要測試表示層，也要對已連結 PE 執行 patch 測試。
+下列聚焦 lift-suite 篩選器涵蓋正規化 unwind/SEH/C++ 模型、損壞輸入處理、
+例外 CFG 邊、HighIR、LLVM WinEH 產生、例外目錄替換，以及 Guard CF/EH
+continuation 重建：
+
+```bash
+cmake --build build --target NeverDLiftTests --parallel 4
+build/bin/NeverDLiftTests \
+  --gtest_filter='COFFException*:*PatchCOFF_X64.ReconstructsGuardedSEHAndContinuationTable:*PatchCOFF_X64.ReconstructsNativeFH3StateGraph:*PatchCOFF_X64.RejectsInteriorExceptionDirectoryPadding:*PatchCOFF_X64.RebuildsSortedExceptionDirectoryInAppendedSection'
+```
+
+受保護的 x64 組合語言 fixture 需要 Clang Windows target 與 `lld-link`；其 CMake
+連結使用 `/guard:cf` 與 `/guard:ehcont`。因缺少交叉連結器而 skip，不能作為
+final-image 路徑的有效證據。整合案例通過後，才證明重寫後的 PE 可以重新載入，
+且 runtime-function、unwind、load-config、Guard CF 與 Guard EH continuation
+表維持排序、由檔案承載，並只指向可執行目標。
+
+已連結的 FH3 fixture 獨立涵蓋原生 C++ closure：固定狀態表、HighC 註解、
+personality 保留、產生的 catch 目標，以及重新載入後的 IP-to-state 圖。
+
+分析/原生支援矩陣與 fail-closed patch 契約請見
+[Windows 例外重建](windows-exception-reconstruction.zh-TW.md)。
+
 ### Unicorn 差分往返
 
 語意 fixture 測試行為而非文字形狀：

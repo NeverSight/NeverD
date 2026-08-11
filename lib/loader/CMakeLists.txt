@@ -5,6 +5,7 @@ add_neverd_component_library(NeverDLoader
   FunctionDiscoveryAArch64.cpp
   FunctionDiscoveryARM.cpp
   COFF/COFFLoader.cpp
+  COFF/COFFException.cpp
   COFF/COFFUnwind.cpp
   COFF/COFFLoaderUtils.cpp
   ELF/ELFLoader.cpp
