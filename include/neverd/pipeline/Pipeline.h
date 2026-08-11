@@ -60,6 +60,36 @@ struct PipelineOptions {
   const sbf::AnchorIdl *SBFIdl = nullptr;
 };
 
+enum class PipelineFunctionDisposition {
+  Candidate,
+  SkippedImportStub,
+  SkippedRuntimeScaffold,
+  SkippedLimit,
+  RejectedLowIR,
+  RejectedIncomplete,
+  RemovedJumpTableTarget,
+  MedIRFailed,
+  Accepted,
+};
+
+const char *pipelineFunctionDispositionName(PipelineFunctionDisposition Value);
+
+struct PipelineFunctionAudit {
+  va_t Entry = 0;
+  std::string Name;
+  PipelineFunctionDisposition Disposition =
+      PipelineFunctionDisposition::Candidate;
+  uint64_t DecodedInstructions = 0;
+  uint64_t LiftedInstructions = 0;
+  std::vector<va_t> DecodeFailures;
+  std::vector<va_t> UnsupportedInstructions;
+  std::vector<va_t> TruncatedPaths;
+  bool HasLowIR = false;
+  bool HasMedIR = false;
+  bool MedIRVerified = false;
+  bool HasLLVMDefinition = false;
+};
+
 struct PipelineResult {
   std::vector<LowFunc> LowFuncs;
   std::vector<MedFunc> MedFuncs;
@@ -67,6 +97,11 @@ struct PipelineResult {
   std::unique_ptr<llvm::Module> LlvmModule;
   std::unique_ptr<evm::EVMProgram> EVM;
   std::unique_ptr<sbf::SBFProgram> SBF;
+  std::vector<PipelineFunctionAudit> FunctionAudits;
+  uint64_t MedIRVerifierFailures = 0;
+  uint64_t BackendUnhandledValueIntrinsics = 0;
+  bool LLVMVerifierFailed = false;
+  std::vector<std::string> LLVMDefinitionNames;
   std::string Error;
   bool Success = false;
 };
@@ -226,7 +261,8 @@ private:
   /// Detect function entries, merge debug symbols, and filter import stubs.
   static std::vector<std::pair<va_t, std::string>>
   detectFunctions(const BinaryImage &Img, Decoder &Dec,
-                  const PipelineOptions &Opts, DebugContext *Dbg);
+                  const PipelineOptions &Opts, DebugContext *Dbg,
+                  PipelineResult &Result);
 
   /// Phase 1: decode + build LowIR for all candidates in parallel.
   void buildLowIR(const BinaryImage &Img,
@@ -263,7 +299,7 @@ private:
                   Arch TheArch,
                   const std::vector<std::pair<va_t, std::string>> &Imports,
                   const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt,
-                  unsigned NumThreads);
+                  unsigned NumThreads, uint64_t &UnhandledValueIntrinsics);
 
   /// Phase 3: convert MedIR -> HighIR in parallel.
   void buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,

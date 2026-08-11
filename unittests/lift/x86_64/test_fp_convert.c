@@ -10,6 +10,10 @@ float test_cvtsi2ss(int a) {
     return result;
 }
 
+float test_cvtu64ss(unsigned long long a) {
+    return (float)a;
+}
+
 int test_cvtss2si(float a) {
     int result;
     __asm__ volatile (

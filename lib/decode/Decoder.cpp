@@ -131,7 +131,8 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   size_t Sz = Len;
   uint64_t A = Addr;
 
-  if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf))
+  if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf) &&
+      !decodePrefixedX86Fence(Bytes, Len, Addr))
     return 0;
 
   fixupDecodedInsn(InsnBuf);
@@ -180,7 +181,8 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   size_t Sz = Len;
   uint64_t A = Addr;
 
-  if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf))
+  if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf) &&
+      !decodePrefixedX86Fence(Bytes, Len, Addr))
     return 0;
 
   // No fixupDecodedInsn here: the id fixups (x86 cmp/vex-cmp) read cs_detail,
@@ -192,6 +194,38 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
   return Out.Size;
+}
+
+bool Decoder::decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len,
+                                     va_t Addr) {
+  if (!X86 || !Bytes || !InsnBuf)
+    return false;
+
+  size_t PrefixCount = 0;
+  while (PrefixCount < Len && Bytes[PrefixCount] == 0x66)
+    ++PrefixCount;
+  if (PrefixCount == 0 || PrefixCount >= Len || PrefixCount >= 15)
+    return false;
+
+  const uint8_t *Code = Bytes + PrefixCount;
+  size_t Remaining = Len - PrefixCount;
+  uint64_t InnerAddr = Addr + PrefixCount;
+  if (!cs_disasm_iter(Handle, &Code, &Remaining, &InnerAddr, InsnBuf))
+    return false;
+  if (InsnBuf->id != X86_INS_LFENCE && InsnBuf->id != X86_INS_MFENCE &&
+      InsnBuf->id != X86_INS_SFENCE)
+    return false;
+
+  const size_t InnerSize = InsnBuf->size;
+  const size_t TotalSize = PrefixCount + InnerSize;
+  if (TotalSize > 15 || TotalSize > sizeof(InsnBuf->bytes))
+    return false;
+
+  std::memmove(InsnBuf->bytes + PrefixCount, InsnBuf->bytes, InnerSize);
+  std::memset(InsnBuf->bytes, 0x66, PrefixCount);
+  InsnBuf->address = Addr;
+  InsnBuf->size = static_cast<uint16_t>(TotalSize);
+  return true;
 }
 
 void Decoder::setDetail(bool On) {

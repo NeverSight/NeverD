@@ -43,6 +43,11 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   CallTargets.clear();
   DiscoveredCodeRefs.clear();
   ResolvedTableInfo.clear();
+  DecodedInstructionCount = 0;
+  LiftedInstructionCount = 0;
+  DecodeFailureAddresses.clear();
+  UnsupportedInstructionAddresses.clear();
+  TruncatedPathAddresses.clear();
 
   CurrentFuncEntry = EntryAddr;
   CurrentImg = &Img;
@@ -129,6 +134,15 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
 
   Func.CodeRefTargets.assign(DiscoveredCodeRefs.begin(),
                              DiscoveredCodeRefs.end());
+  Func.DecodedInstructionCount = DecodedInstructionCount;
+  Func.LiftedInstructionCount = LiftedInstructionCount;
+  Func.DecodeFailureAddresses.assign(DecodeFailureAddresses.begin(),
+                                     DecodeFailureAddresses.end());
+  Func.UnsupportedInstructionAddresses.assign(
+      UnsupportedInstructionAddresses.begin(),
+      UnsupportedInstructionAddresses.end());
+  Func.TruncatedPathAddresses.assign(TruncatedPathAddresses.begin(),
+                                     TruncatedPathAddresses.end());
 
   LLVM_DEBUG(llvm::dbgs() << "CFG built: " << Func.Blocks.size()
                           << " blocks for " << Func.Name << " @ 0x"
@@ -150,27 +164,40 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       ExploredAddrs.insert(Cur);
 
       const auto *Seg = Img.getSegmentFor(Cur);
-      if (!Seg || !Seg->isExecutable())
+      if (!Seg || !Seg->isExecutable()) {
+        TruncatedPathAddresses.insert(Cur);
         break;
+      }
 
       // A segment's VA range (Seg->Size) can exceed its materialized bytes
       // (e.g. .bss, or bytes the loader refused to map from a crafted header),
       // so guard before subtracting or Remain underflows into a huge length.
       size_t Off = static_cast<size_t>(Cur - Seg->VA);
-      if (Off >= Seg->Data.size())
+      if (Off >= Seg->Data.size()) {
+        TruncatedPathAddresses.insert(Cur);
         break;
+      }
       size_t Remain = Seg->Data.size() - Off;
 
       DecodedInsn DI;
       int Sz = Dec.decodeOneForLift(Seg->Data.data() + Off, Remain, Cur, DI);
-      if (Sz == 0)
+      if (Sz <= 0) {
+        DecodeFailureAddresses.insert(Cur);
         break;
+      }
+      ++DecodedInstructionCount;
 
       InsnRecord Rec;
       Rec.Addr = Cur;
       Rec.Size = static_cast<uint16_t>(Sz);
       Rec.FpuTopIn = Dec.getX86FpuTop();
-      Dec.liftToLow(DI, Rec.Ops);
+      try {
+        Dec.liftToLow(DI, Rec.Ops);
+      } catch (const UnliftedInstruction &Failure) {
+        UnsupportedInstructionAddresses.insert(Failure.getAddr());
+        break;
+      }
+      ++LiftedInstructionCount;
       Rec.FpuTopOut = Dec.getX86FpuTop();
       Rec.FpuReset = Dec.x86FpuDidReset();
 
@@ -185,6 +212,15 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       }
 
       classifyInsn(Rec);
+
+      // Keep recursive CFG exploration consistent with the decoder's
+      // architecture-specific terminator classification.  Trap instructions
+      // such as x86 INT3/UD2 lift to an intrinsic rather than a RETURN op, but
+      // control does not fall through into the inline data or padding that
+      // commonly follows them.  Real branches/returns were already classified
+      // from their LowIR ops and retain their more precise handling below.
+      if (!Rec.IsBranch && !Rec.IsRet && Dec.isFunctionTerminator(DI))
+        Rec.IsRet = true;
 
       // operator[]= returns the stored element, so bind to it directly rather
       // than doing a second tree lookup for the same key on the decode hot

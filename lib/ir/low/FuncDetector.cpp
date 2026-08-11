@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <queue>
 #include <thread>
 
 #define DEBUG_TYPE "neverd-func-detector"
@@ -257,6 +258,7 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
     return false;
 
   va_t Cur = Addr;
+  bool SawTerminator = false;
   for (int I = 0; I < kMaxInsns; ++I) {
     size_t Off = static_cast<size_t>(Cur - Seg->VA);
     if (Off >= Seg->Data.size())
@@ -274,11 +276,133 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
     if (!DI.Raw)
       return false;
 
-    if (Dec.isFunctionTerminator(DI))
-      return true;
+    if (Dec.isFunctionTerminator(DI)) {
+      SawTerminator = true;
+      break;
+    }
     Cur += Sz;
   }
-  return false;
+  if (!SawTerminator)
+    return false;
+
+  // A linear walk can encounter RET on one arm while a conditional branch on
+  // another arm lands in embedded executable data.  That pattern is common in
+  // stripped images whose executable sections contain strings or tables: a
+  // byte sequence in the data may also spell CALL, creating a bogus candidate
+  // that the straight-line probe above would accept.  Validate direct reachable
+  // arms before promoting an untrusted scan hit to a function.
+  //
+  // This deliberately remains a bounded, decode-focused probe rather than a
+  // second full CFGBuilder run.  Exhausting the budget or encountering an
+  // unsupported lift is inconclusive, so the candidate is kept for the formal
+  // pipeline audit instead of hiding a real coverage gap.
+  const bool PreviousDetail = Dec.detailEnabled();
+  Dec.setDetail(true);
+  Dec.resetX86FpuState();
+  const bool ReachablePathsDecode = [&]() {
+    constexpr size_t kCFGProbeBudget =
+        static_cast<size_t>(limits::kMaxVerifyInsns) * 4;
+    std::queue<va_t> Worklist;
+    std::set<va_t> Explored;
+    Worklist.push(Addr);
+
+    while (!Worklist.empty()) {
+      va_t Cur = Worklist.front();
+      Worklist.pop();
+
+      while (true) {
+        if (Explored.count(Cur))
+          break;
+        if (Explored.size() >= kCFGProbeBudget)
+          return true;
+
+        const auto *PathSeg = Img.getSegmentFor(Cur);
+        if (!PathSeg || !PathSeg->isExecutable() || Cur < PathSeg->VA)
+          return false;
+        size_t Off = static_cast<size_t>(Cur - PathSeg->VA);
+        if (Off >= PathSeg->Data.size())
+          return false;
+
+        DecodedInsn DI;
+        int Sz = Dec.decodeOneForLift(PathSeg->Data.data() + Off,
+                                      PathSeg->Data.size() - Off, Cur, DI);
+        if (Sz <= 0)
+          return false;
+        Explored.insert(Cur);
+
+        std::vector<LowOp> Ops;
+        try {
+          Dec.liftToLow(DI, Ops);
+        } catch (const UnliftedInstruction &) {
+          return true;
+        }
+
+        bool IsBranch = false;
+        bool IsCond = false;
+        bool IsRet = false;
+        bool IsIndirect = false;
+        va_t BranchTarget = InvalidVA;
+        for (const LowOp &Op : Ops) {
+          switch (Op.Opcode) {
+          case NdOp::BRANCH:
+            IsBranch = true;
+            if (Op.NumInputs > 0 && Op.Inputs[0].isConst())
+              BranchTarget = Op.Inputs[0].Offset;
+            break;
+          case NdOp::COND_BR:
+            IsBranch = true;
+            IsCond = true;
+            if (Op.NumInputs > 0 && Op.Inputs[0].isConst())
+              BranchTarget = Op.Inputs[0].Offset;
+            break;
+          case NdOp::INDIR_BR:
+            IsBranch = true;
+            IsIndirect = true;
+            break;
+          case NdOp::RETURN:
+            IsRet = true;
+            break;
+          default:
+            break;
+          }
+        }
+        if (!IsBranch && !IsRet && Dec.isFunctionTerminator(DI))
+          IsRet = true;
+
+        if (IsRet && !(IsCond && IsBranch))
+          break;
+        if (IsRet && IsCond && IsBranch) {
+          if (BranchTarget != InvalidVA)
+            Worklist.push(BranchTarget);
+          break;
+        }
+        if (!IsBranch) {
+          Cur += static_cast<va_t>(Sz);
+          continue;
+        }
+        if (IsIndirect)
+          break;
+        if (BranchTarget == InvalidVA)
+          return true;
+        if (BranchTarget != Addr && Entries.count(BranchTarget) > 0) {
+          if (IsCond) {
+            Cur += static_cast<va_t>(Sz);
+            continue;
+          }
+          break;
+        }
+
+        Worklist.push(BranchTarget);
+        if (!IsCond)
+          break;
+        Cur += static_cast<va_t>(Sz);
+      }
+    }
+    return true;
+  }();
+  Dec.resetX86FpuState();
+  Dec.setDetail(PreviousDetail);
+  return ReachablePathsDecode;
 }
 
 //===----------------------------------------------------------------------===//

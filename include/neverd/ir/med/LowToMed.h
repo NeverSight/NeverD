@@ -211,9 +211,22 @@ private:
 void modelCallWideIntReturn(MedFunc &Func, Arch TheArch,
                             const std::set<va_t> *ForceI64Callees = nullptr);
 
-/// Verify MedFunc structural invariants.  Returns true if OK.
-/// Active only in debug builds; no-op in release.
+/// Verify MedFunc structural invariants.  Returns true if OK in every build
+/// mode so pipeline completeness reports cannot silently skip malformed IR.
 bool verifyMedFunc(const MedFunc &Func, const char *PassName);
+
+/// Run the same verifier only in debug builds.  Intermediate conversion passes
+/// use this inexpensive release-mode wrapper; the pipeline invokes
+/// verifyMedFunc() once on the final MedIR in every build mode.
+inline bool debugVerifyMedFunc(const MedFunc &Func, const char *PassName) {
+#ifdef NDEBUG
+  (void)Func;
+  (void)PassName;
+  return true;
+#else
+  return verifyMedFunc(Func, PassName);
+#endif
+}
 
 } // namespace neverd
 

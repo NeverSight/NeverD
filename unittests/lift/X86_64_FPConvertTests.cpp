@@ -19,6 +19,16 @@ TEST_F(X86_64_FPConvert, Cvtsi2ssLifts) {
     verifyLowIRContains(testObj(), "test_cvtsi2ss", "FLOAT_INT2FLOAT");
 }
 
+TEST_F(X86_64_FPConvert, Unsigned64ConversionPreservesMedIRWidths) {
+  auto R = liftToMedIR(testObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  EXPECT_EQ(R.err.find("SUBBYTES input smaller than output"), std::string::npos)
+      << R.err;
+  EXPECT_EQ(R.err.find("ZEXT/SEXT input not narrower than output"),
+            std::string::npos)
+      << R.err;
+}
+
 TEST_F(X86_64_FPConvert, Cvtss2siLifts) {
     verifyLowIRContains(testObj(), "test_cvtss2si", "FLOAT_FLOAT2INT");
 }

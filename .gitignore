@@ -28,6 +28,8 @@
 # windows executable files
 *.exe
 *.bin
+.cursor
+
 
 # Ignore the user specified CMake presets in subproject directories.
 /*/CMakeUserPresets.json

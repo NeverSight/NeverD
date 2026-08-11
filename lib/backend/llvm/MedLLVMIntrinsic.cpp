@@ -107,6 +107,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   syncWarning() << "INTRINSIC unhandled intrinsic: code=" << IntrCode << " ("
                 << intrinsicName(IC) << ") out_sz=" << Op.Output.Size
                 << " n_in=" << static_cast<unsigned>(Op.NumInputs) << "\n";
+  if (Op.Output.Size > 0)
+    ++UnhandledValueIntrinsicCount;
   return (Op.Output.Size > 0) ? llvm::ConstantInt::get(OutTy, 0) : nullptr;
 }
 

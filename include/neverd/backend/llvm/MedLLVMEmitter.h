@@ -76,6 +76,10 @@ public:
        bool MergeableGlobals = false,
        const std::vector<char> *BodyMask = nullptr);
 
+  uint64_t unhandledValueIntrinsicCount() const {
+    return UnhandledValueIntrinsicCount;
+  }
+
 private:
   /// Linkage for a synthesized data/table global: linkonce_odr in mergeable
   /// (sharded) mode so identical per-address globals from sibling shards merge;
@@ -97,6 +101,7 @@ private:
   }
   /// True while emitting a shard whose globals must be link-mergeable.
   bool MergeableGlobals = false;
+  uint64_t UnhandledValueIntrinsicCount = 0;
   /// Create (or return the existing) LLVM function declaration for \p Func with
   /// its recovered signature, but no body.  Emitting all declarations before
   /// any body lets a body reference a not-yet-emitted sibling — e.g. a

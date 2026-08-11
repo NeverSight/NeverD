@@ -7,9 +7,11 @@
 #include "SBFFixtureBuilder.h"
 #include "gtest/gtest.h"
 
+#include "neverd/sbf/Anchor.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
@@ -52,6 +54,16 @@ encode(neverd::sbf::Opcode ID, uint8_t Dst = 0, uint8_t Src = 0,
 void append(std::vector<uint8_t> &Text,
             const std::array<uint8_t, neverd::sbf::kInstructionSize> &Bytes) {
   Text.insert(Text.end(), Bytes.begin(), Bytes.end());
+}
+
+/// Append a 64-bit constant load, which occupies two instruction slots.
+void appendLoadImm64(std::vector<uint8_t> &Text, uint8_t Dst, uint64_t Value) {
+  append(Text, encode(neverd::sbf::Opcode::LDDW, Dst, /*Src=*/0, /*Offset=*/0,
+                      static_cast<int32_t>(Value)));
+  std::array<uint8_t, neverd::sbf::kInstructionSize> High{};
+  llvm::support::endian::write32le(High.data() + neverd::sbf::kImmediateOffset,
+                                   static_cast<uint32_t>(Value >> 32));
+  append(Text, High);
 }
 
 class SBFIntegrationTest : public ::testing::Test {
@@ -148,6 +160,56 @@ TEST_F(SBFIntegrationTest, RejectsInvalidConfigurationAndPatchRoutes) {
   EXPECT_NE(takeString(neverd_last_error(Session))
                 .find("object-code roundtrip is not supported"),
             std::string::npos);
+}
+
+TEST_F(SBFIntegrationTest, SuppliedIDLNamesADispatchArmTheDictionaryCannot) {
+  // A name the built-in dictionary does not carry, so the supplied IDL is the
+  // only thing that can account for the discriminator the program compares.
+  constexpr llvm::StringLiteral Handler("record_trade_v2");
+  const neverd::sbf::AnchorDiscriminator Discriminator =
+      neverd::sbf::anchorDiscriminator(
+          neverd::sbf::AnchorNamespace::Instruction, Handler);
+
+  neverd::sbf::test::StrictELFOptions Options;
+  appendLoadImm64(Options.Text, /*Dst=*/6, Discriminator.toWord());
+  append(Options.Text, encode(neverd::sbf::Opcode::JEQ64_REG, /*Dst=*/7,
+                              /*Src=*/6, /*Offset=*/1));
+  append(Options.Text, encode(neverd::sbf::Opcode::EXIT));
+  append(Options.Text, encode(neverd::sbf::Opcode::EXIT));
+  write(neverd::sbf::test::buildStrictELF(Options));
+
+  ASSERT_EQ(neverd_session_load(Session, Path.string().c_str()), 1)
+      << takeString(neverd_last_error(Session));
+
+  // A document that cannot be trusted has to be refused with a reason, so that
+  // recovery never silently reports names from a half-read IDL.
+  EXPECT_EQ(neverd_sbf_set_idl(Session, "{"), 0);
+  EXPECT_FALSE(takeString(neverd_last_error(Session)).empty());
+  EXPECT_EQ(neverd_sbf_set_idl(Session, R"({"address": "not-an-address"})"), 0);
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("base58"),
+            std::string::npos);
+
+  const std::string Document =
+      R"({"metadata": {"name": "ledger"}, "instructions": [{"name": ")" +
+      Handler.str() + R"("}]})";
+  ASSERT_EQ(neverd_sbf_set_idl(Session, Document.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+
+  ASSERT_EQ(neverd_session_analyze(Session), 1)
+      << takeString(neverd_last_error(Session));
+  const std::string Named = takeString(neverd_ir_high(Session, 0));
+  EXPECT_NE(Named.find(Handler.str()), std::string::npos) << Named;
+  EXPECT_NE(Named.find("idl=ledger"), std::string::npos) << Named;
+
+  // Clearing returns the session to the built-in dictionary, which has no name
+  // for this discriminator. With nothing left to prove the comparison is a
+  // dispatch, recovery has to withdraw the claim rather than keep the name or
+  // guess at an unnamed arm.
+  ASSERT_EQ(neverd_sbf_set_idl(Session, nullptr), 1)
+      << takeString(neverd_last_error(Session));
+  const std::string Unnamed = takeString(neverd_ir_high(Session, 0));
+  EXPECT_EQ(Unnamed.find(Handler.str()), std::string::npos) << Unnamed;
+  EXPECT_EQ(Unnamed.find("framework anchor"), std::string::npos) << Unnamed;
 }
 
 TEST_F(SBFIntegrationTest, DisassemblyHonorsRecoveredFunctionBoundaries) {

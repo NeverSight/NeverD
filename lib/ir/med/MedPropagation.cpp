@@ -50,7 +50,13 @@ void LowToMedConverter::propagate(MedFunc &Func) {
             continue;
 
           const auto *Def = It->second;
-          if (Def->Opcode == NdOp::COPY && Def->NumInputs == 1) {
+          // A COPY may also be an explicit register-view conversion (for
+          // example, the scalar 4-byte view of a 16-byte vector register).
+          // Replacing such a use with a differently sized source erases that
+          // conversion boundary and can make SUBBYTES or integer extensions
+          // structurally invalid.
+          if (Def->Opcode == NdOp::COPY && Def->NumInputs == 1 &&
+              Def->Inputs[0].Size == Op.Inputs[I].Size) {
             if (Op.Inputs[I] != Def->Inputs[0]) {
               Op.Inputs[I] = Def->Inputs[0];
               Changed = true;

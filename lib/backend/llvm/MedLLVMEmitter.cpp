@@ -1752,6 +1752,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   TargetArch = TheArch;
   TargetFormat = Fmt;
   MergeableGlobals = MergeableGlobals_;
+  UnhandledValueIntrinsicCount = 0;
   GlobalDataCache.clear();
   SegmentDataGlobals.clear();
   GlobalStrCounter = 0;

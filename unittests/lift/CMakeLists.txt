@@ -183,6 +183,28 @@ if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
   )
 endif()
 
+# This one exercises the C API through the shared library, so it exists only
+# where that library does.  Naming a missing target in add_dependencies is a
+# configure-time error rather than a link-time one, so an unguarded reference
+# takes down every other test in the build as well.
+if(TARGET neverd_shared)
+  add_neverd_unittest(NeverDMetadataJSONTests
+    MetadataJSONTests.cpp
+  )
+
+  target_include_directories(NeverDMetadataJSONTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(NeverDMetadataJSONTests PRIVATE
+    neverd_shared
+    LLVMSupport
+  )
+
+  add_dependencies(NeverDMetadataJSONTests neverd_shared)
+endif()
+
 # --- Cross-compile test .c sources into .o objects at build time ---
 find_program(CLANG_EXEC clang)
 

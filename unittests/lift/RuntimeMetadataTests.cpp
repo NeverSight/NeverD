@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/Support/BinaryLoading.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
@@ -164,6 +165,71 @@ TEST(RuntimeMetadata, KeepsNativeIATAddressWhenRecordingStub) {
   auto Names = Img.getImportAddressNames();
   EXPECT_EQ(Names[0x3020], "imported");
   EXPECT_EQ(Names[0x1010], "imported");
+}
+
+TEST(BinaryLoading, NormalizesEveryExternalMetadataField) {
+  auto Malformed = [](llvm::StringRef Prefix) {
+    std::string Value = Prefix.str();
+    Value.push_back(static_cast<char>(0xff));
+    return Value;
+  };
+  auto Escaped = [](llvm::StringRef Prefix) {
+    return (Prefix + "\\xFF").str();
+  };
+
+  BinaryImage Img;
+  Img.Segments.push_back(Segment{});
+  Img.Segments.back().Name = Malformed("segment");
+  Img.Sections.push_back(Section{});
+  Img.Sections.back().Name = Malformed("section");
+  Img.Sections.back().SegmentName = Malformed("section-segment");
+  Img.Imports.push_back(Import{});
+  Img.Imports.back().Module = Malformed("module");
+  Img.Imports.back().Name = Malformed("import");
+  Img.Exports.push_back(Export{});
+  Img.Exports.back().Name = Malformed("export");
+  Img.Symbols.push_back(Symbol{});
+  Img.Symbols.back().Name = Malformed("symbol");
+  Img.Relocations.push_back(RelocationEntry{});
+  Img.Relocations.back().SymbolName = Malformed("reloc-symbol");
+  Img.Relocations.back().SectionName = Malformed("reloc-section");
+  Img.ImportPtrSlots[0x1000] = Malformed("pointer-slot");
+  Img.DynInfo.SOName = Malformed("soname");
+  Img.DynInfo.NeededLibs.push_back(Malformed("needed"));
+  Img.DynInfo.RPaths.push_back(Malformed("rpath"));
+  Img.DynInfo.PDBPath = Malformed("debug-path");
+  Img.DynInfo.UUID = Malformed("uuid");
+  Img.DynInfo.MinOSVersion = Malformed("minimum-os");
+  Img.ExceptionMetadata.Diagnostics.push_back(Malformed("image-diagnostic"));
+  Img.ExceptionMetadata.Functions.push_back(ExceptionFunction{});
+  Img.ExceptionMetadata.Functions.back().PersonalityName =
+      Malformed("personality");
+  Img.ExceptionMetadata.Functions.back().Diagnostics.push_back(
+      Malformed("function-diagnostic"));
+
+  normalizeBinaryMetadata(Img);
+
+  EXPECT_EQ(Img.Segments[0].Name, Escaped("segment"));
+  EXPECT_EQ(Img.Sections[0].Name, Escaped("section"));
+  EXPECT_EQ(Img.Sections[0].SegmentName, Escaped("section-segment"));
+  EXPECT_EQ(Img.Imports[0].Module, Escaped("module"));
+  EXPECT_EQ(Img.Imports[0].Name, Escaped("import"));
+  EXPECT_EQ(Img.Exports[0].Name, Escaped("export"));
+  EXPECT_EQ(Img.Symbols[0].Name, Escaped("symbol"));
+  EXPECT_EQ(Img.Relocations[0].SymbolName, Escaped("reloc-symbol"));
+  EXPECT_EQ(Img.Relocations[0].SectionName, Escaped("reloc-section"));
+  EXPECT_EQ(Img.ImportPtrSlots.at(0x1000), Escaped("pointer-slot"));
+  EXPECT_EQ(Img.DynInfo.SOName, Escaped("soname"));
+  EXPECT_EQ(Img.DynInfo.NeededLibs[0], Escaped("needed"));
+  EXPECT_EQ(Img.DynInfo.RPaths[0], Escaped("rpath"));
+  EXPECT_EQ(Img.DynInfo.PDBPath, Escaped("debug-path"));
+  EXPECT_EQ(Img.DynInfo.UUID, Escaped("uuid"));
+  EXPECT_EQ(Img.DynInfo.MinOSVersion, Escaped("minimum-os"));
+  EXPECT_EQ(Img.ExceptionMetadata.Diagnostics[0], Escaped("image-diagnostic"));
+  EXPECT_EQ(Img.ExceptionMetadata.Functions[0].PersonalityName,
+            Escaped("personality"));
+  EXPECT_EQ(Img.ExceptionMetadata.Functions[0].Diagnostics[0],
+            Escaped("function-diagnostic"));
 }
 
 TEST(RuntimeMetadata, RejectsInvalidStubIndexWithoutChangingImports) {

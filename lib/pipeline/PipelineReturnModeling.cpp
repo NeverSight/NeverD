@@ -462,7 +462,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
         inferMedTypes(Result.MedFuncs[I], Img.Arch);
         if (SelfWide)
           Result.MedFuncs[I].ReturnType = NdType::makeInt(2 * TRI.PointerSize);
-        verifyMedFunc(Result.MedFuncs[I], "reconvert(i64 caller)");
+        debugVerifyMedFunc(Result.MedFuncs[I], "reconvert(i64 caller)");
       }
 
       // Safety net for high halves the pre-SSA modeling does not reach — an
@@ -472,7 +472,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
       // already remodeled, so it is skipped here).
       for (auto &MF : Result.MedFuncs) {
         modelCallWideIntReturn(MF, Img.Arch, &I64RetCallees);
-        verifyMedFunc(MF, "modelCallWideIntReturn(forced)");
+        debugVerifyMedFunc(MF, "modelCallWideIntReturn(forced)");
       }
     }
   }

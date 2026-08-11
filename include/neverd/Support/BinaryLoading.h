@@ -21,6 +21,10 @@
 
 namespace neverd {
 
+/// Normalize every externally sourced text field in an already loaded image so
+/// downstream diagnostics and JSON writers receive valid UTF-8.
+void normalizeBinaryMetadata(BinaryImage &Img);
+
 /// Auto-detect binary format from magic bytes and load via the appropriate
 /// loader. Returns an error if the format is unrecognized.
 llvm::Expected<BinaryImage> loadBinary(const std::filesystem::path &Path);

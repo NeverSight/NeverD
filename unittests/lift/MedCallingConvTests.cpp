@@ -275,7 +275,46 @@ TEST(MedVerifier, AcceptsPartiallyPreservedCallClobber) {
   EXPECT_TRUE(verifyMedFunc(Func, "test-partial-call-clobber"));
 }
 
-#ifndef NDEBUG
+TEST(LowToMedSSA, VerifiesDisconnectedControlFlowComponents) {
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Name = "disconnected_cfg";
+  Low.Blocks.resize(2);
+
+  Low.Blocks[0].Id = 0;
+  Low.Blocks[0].StartAddr = 0x1000;
+  Low.Blocks[0].EndAddr = 0x1002;
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x1000;
+  Call.Output = NdVar::reg(x86reg::RAX, 8);
+  Call.addInput(NdVar::cst(0x2000, 8));
+  Low.Blocks[0].Ops.push_back(Call);
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = 0x1001;
+  Return.addInput(NdVar::reg(x86reg::RAX, 8));
+  Low.Blocks[0].Ops.push_back(Return);
+
+  Low.Blocks[1].Id = 1;
+  Low.Blocks[1].StartAddr = 0x1100;
+  Low.Blocks[1].EndAddr = 0x1102;
+  LowOp DefineCallerSaved;
+  DefineCallerSaved.Opcode = NdOp::COPY;
+  DefineCallerSaved.Addr = 0x1100;
+  DefineCallerSaved.Output = NdVar::reg(x86reg::RCX, 8);
+  DefineCallerSaved.addInput(NdVar::cst(7, 8));
+  Low.Blocks[1].Ops.push_back(DefineCallerSaved);
+  LowOp DetachedReturn;
+  DetachedReturn.Opcode = NdOp::RETURN;
+  DetachedReturn.Addr = 0x1101;
+  DetachedReturn.addInput(NdVar::reg(x86reg::RCX, 8));
+  Low.Blocks[1].Ops.push_back(DetachedReturn);
+
+  MedFunc Med = LowToMedConverter().convert(Low, Arch::X64);
+  EXPECT_TRUE(verifyMedFunc(Med, "test-disconnected-cfg"));
+}
+
 TEST(MedVerifier, RejectsCallClobberExplicitDefinitionCollision) {
   constexpr Arch TheArch = Arch::AArch64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
@@ -296,6 +335,5 @@ TEST(MedVerifier, RejectsCallClobberExplicitDefinitionCollision) {
 
   EXPECT_FALSE(verifyMedFunc(Func, "test-call-clobber-collision"));
 }
-#endif
 
 } // namespace

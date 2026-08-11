@@ -25,6 +25,30 @@
 
 namespace neverd {
 
+const char *pipelineFunctionDispositionName(PipelineFunctionDisposition Value) {
+  switch (Value) {
+  case PipelineFunctionDisposition::Candidate:
+    return "candidate";
+  case PipelineFunctionDisposition::SkippedImportStub:
+    return "skipped-import-stub";
+  case PipelineFunctionDisposition::SkippedRuntimeScaffold:
+    return "skipped-runtime-scaffold";
+  case PipelineFunctionDisposition::SkippedLimit:
+    return "skipped-limit";
+  case PipelineFunctionDisposition::RejectedLowIR:
+    return "rejected-low-ir";
+  case PipelineFunctionDisposition::RejectedIncomplete:
+    return "rejected-incomplete";
+  case PipelineFunctionDisposition::RemovedJumpTableTarget:
+    return "removed-jump-table-target";
+  case PipelineFunctionDisposition::MedIRFailed:
+    return "med-ir-failed";
+  case PipelineFunctionDisposition::Accepted:
+    return "accepted";
+  }
+  return "unknown";
+}
+
 namespace {
 
 bool isELFRuntimeScaffold(llvm::StringRef Name) {
@@ -147,7 +171,8 @@ Pipeline::buildFuncNameMap(const BinaryImage &Img,
 
 std::vector<std::pair<va_t, std::string>>
 Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
-                          const PipelineOptions &Opts, DebugContext *Dbg) {
+                          const PipelineOptions &Opts, DebugContext *Dbg,
+                          PipelineResult &Result) {
   FuncDetector Detector;
   auto FuncEntries = Detector.detect(Img, Dec);
   LLVM_DEBUG(llvm::dbgs() << "pipeline: detected " << FuncEntries.size()
@@ -156,27 +181,43 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
   if (Dbg && Dbg->hasInfo())
     mergeDebugSymbols(FuncEntries, *Dbg);
 
+  Result.FunctionAudits.clear();
+  Result.FunctionAudits.reserve(FuncEntries.size());
+
   std::vector<std::pair<va_t, std::string>> Candidates;
   Candidates.reserve(Opts.MaxFunctions > 0
                          ? std::min(FuncEntries.size(), Opts.MaxFunctions + 64)
                          : FuncEntries.size());
   for (auto &[Entry, FName] : FuncEntries) {
-    if (Opts.MaxFunctions > 0 && Candidates.size() >= Opts.MaxFunctions * 2)
-      break;
+    PipelineFunctionAudit Audit;
+    Audit.Entry = Entry;
+    Audit.Name = FName;
     // Preserve linker/dynamic-loader import veneers.  Loaders register section
     // ranges (ELF PLT, Mach-O stubs/helper), while architecture scanners map
     // exact COFF/ELF thunks back to their Import without changing IATAddr.
-    if (Img.isImportStubAt(Entry))
+    if (Img.isImportStubAt(Entry)) {
+      Audit.Disposition = PipelineFunctionDisposition::SkippedImportStub;
+      Result.FunctionAudits.push_back(std::move(Audit));
       continue;
+    }
     // A loader entry or lifecycle callback may follow a process/TLS/CRT ABI,
     // not an ordinary inferred C function signature.  Each loader records the
     // exact structural targets.  The ELF name table remains only a
     // compatibility fallback for old symbol-rich CRT scaffolding without
     // metadata.
     if (Opts.PatchMode && (Img.isRuntimeFunctionAt(Entry) ||
-                           (Img.isELF() && isELFRuntimeScaffold(FName))))
+                           (Img.isELF() && isELFRuntimeScaffold(FName)))) {
+      Audit.Disposition = PipelineFunctionDisposition::SkippedRuntimeScaffold;
+      Result.FunctionAudits.push_back(std::move(Audit));
       continue;
+    }
+    if (Opts.MaxFunctions > 0 && Candidates.size() >= Opts.MaxFunctions * 2) {
+      Audit.Disposition = PipelineFunctionDisposition::SkippedLimit;
+      Result.FunctionAudits.push_back(std::move(Audit));
+      continue;
+    }
     Candidates.push_back({Entry, FName});
+    Result.FunctionAudits.push_back(std::move(Audit));
   }
 
   return Candidates;

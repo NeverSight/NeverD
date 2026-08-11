@@ -140,6 +140,11 @@ public:
   int getX86RetPopBytes() const;
 
 private:
+  /// Decode an x86 fence carrying otherwise redundant operand-size prefixes.
+  /// Capstone rejects these encodings even though LLVM and real x86-64
+  /// binaries accept them.  Returns true after populating InsnBuf.
+  bool decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len, va_t Addr);
+
   /// Correct capstone decode-id quirks on \p I, dispatching to the active
   /// architecture lifter's fixup.
   void fixupDecodedInsn(cs_insn *I) const;

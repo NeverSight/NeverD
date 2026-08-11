@@ -106,6 +106,33 @@ int callRecoveryTotalArity(const MedFunc &Func, int MaxParamIndex) {
   return Func.IsVariadic ? limits::kMaxCallArgs : MaxParamIndex + 1;
 }
 
+bool recordMedIRVerification(PipelineResult &Result, const char *PassName) {
+  std::map<va_t, PipelineFunctionAudit *> AuditByEntry;
+  for (auto &Audit : Result.FunctionAudits)
+    AuditByEntry[Audit.Entry] = &Audit;
+
+  Result.MedIRVerifierFailures = 0;
+  for (size_t I = 0; I < Result.LowFuncs.size(); ++I) {
+    const LowFunc &LF = Result.LowFuncs[I];
+    const bool HasMed = I < Result.MedFuncs.size() &&
+                        Result.MedFuncs[I].Entry == LF.Entry &&
+                        !Result.MedFuncs[I].Blocks.empty();
+    const bool Verified = HasMed && verifyMedFunc(Result.MedFuncs[I], PassName);
+    if (!Verified)
+      ++Result.MedIRVerifierFailures;
+
+    auto It = AuditByEntry.find(LF.Entry);
+    if (It == AuditByEntry.end())
+      continue;
+    PipelineFunctionAudit &Audit = *It->second;
+    Audit.HasMedIR = HasMed;
+    Audit.MedIRVerified = Verified;
+    if (!Verified)
+      Audit.Disposition = PipelineFunctionDisposition::MedIRFailed;
+  }
+  return Result.MedIRVerifierFailures == 0;
+}
+
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
@@ -164,11 +191,38 @@ void Pipeline::buildLowIR(
 
   size_t FuncCount = 0;
   for (size_t I = 0; I < Total; ++I) {
-    if (Opts.MaxFunctions > 0 && FuncCount >= Opts.MaxFunctions)
-      break;
     auto &Low = AllLow[I];
-    if (!hasRealOps(Low))
+    auto AuditIt =
+        std::find_if(Result.FunctionAudits.begin(), Result.FunctionAudits.end(),
+                     [&](const PipelineFunctionAudit &Audit) {
+                       return Audit.Entry == Candidates[I].first;
+                     });
+    if (AuditIt != Result.FunctionAudits.end()) {
+      AuditIt->DecodedInstructions = Low.DecodedInstructionCount;
+      AuditIt->LiftedInstructions = Low.LiftedInstructionCount;
+      AuditIt->DecodeFailures = Low.DecodeFailureAddresses;
+      AuditIt->UnsupportedInstructions = Low.UnsupportedInstructionAddresses;
+      AuditIt->TruncatedPaths = Low.TruncatedPathAddresses;
+    }
+
+    if (Opts.MaxFunctions > 0 && FuncCount >= Opts.MaxFunctions) {
+      if (AuditIt != Result.FunctionAudits.end())
+        AuditIt->Disposition = PipelineFunctionDisposition::SkippedLimit;
       continue;
+    }
+    if (!hasRealOps(Low)) {
+      if (AuditIt != Result.FunctionAudits.end())
+        AuditIt->Disposition =
+            Low.hasCompleteLiftCoverage()
+                ? PipelineFunctionDisposition::RejectedLowIR
+                : PipelineFunctionDisposition::RejectedIncomplete;
+      continue;
+    }
+    if (!Low.hasCompleteLiftCoverage()) {
+      if (AuditIt != Result.FunctionAudits.end())
+        AuditIt->Disposition = PipelineFunctionDisposition::RejectedIncomplete;
+      continue;
+    }
 
     if (Dbg && Dbg->hasInfo())
       annotateDebugInfo(Low, *Dbg);
@@ -176,6 +230,8 @@ void Pipeline::buildLowIR(
       Low.OriginalSize = Low.computedSize();
 
     Result.LowFuncs.push_back(std::move(Low));
+    if (AuditIt != Result.FunctionAudits.end())
+      AuditIt->HasLowIR = true;
     ++FuncCount;
   }
 }
@@ -247,6 +303,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img,
     }
   });
 
+  recordMedIRVerification(Result, "pipeline-med-final");
+
   [[maybe_unused]] auto Elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - Phase2Start)
@@ -286,7 +344,9 @@ static int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI) {
 std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
     const std::vector<std::pair<va_t, std::string>> &Imports,
-    const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumThreads) {
+    const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumThreads,
+    uint64_t &UnhandledValueIntrinsics) {
+  UnhandledValueIntrinsics = 0;
   const size_t N = Funcs.size();
   NumThreads = std::max(
       1u, std::min<unsigned>(NumThreads, static_cast<unsigned>(N ? N : 1)));
@@ -370,6 +430,7 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
   // atomically, so an uneven shard never idles a worker and only NumThreads
   // shard modules exist at any instant.
   std::vector<std::string> BC(NumShards);
+  std::vector<uint64_t> ShardUnhandled(NumShards, 0);
   auto runShard = [&](unsigned S) {
     std::vector<char> Mask(N, 0);
     for (size_t I = 0; I < N; ++I)
@@ -378,6 +439,7 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     MedLLVMEmitter Em;
     auto M = Em.emit(Funcs, ShardCtx, "neverd_output", TheArch, Imports, &Img,
                      Fmt, /*MergeableGlobals=*/true, &Mask);
+    ShardUnhandled[S] = Em.unhandledValueIntrinsicCount();
     if (!M)
       return;
     std::string VErr;
@@ -407,6 +469,9 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     for (auto &T : Pool)
       T.join();
   }
+
+  for (uint64_t Count : ShardUnhandled)
+    UnhandledValueIntrinsics += Count;
 
   // Serial link into the caller's context, in shard order for determinism.
   // Each shard's bitcode is released as soon as it is linked: all of them
@@ -729,6 +794,11 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // so the unchanged va_arg walk reads the caller's overflow arguments.
   finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.Format);
 
+  if (!recordMedIRVerification(Result, "pipeline-backend-input")) {
+    Result.Error = "MedIR verification failed before backend emission";
+    return false;
+  }
+
   std::vector<std::pair<va_t, std::string>> ImportMap;
   for (const auto &[Addr, Name] : Img.getImportAddressNames())
     ImportMap.emplace_back(Addr, Name);
@@ -750,37 +820,64 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   bool UseShards = !Opts.PatchMode && Result.MedFuncs.size() >= 8;
 
   if (UseShards) {
-    Result.LlvmModule =
-        emitLLVMSharded(Result.MedFuncs, Ctx, Img.Arch, ImportMap, Img,
-                        Img.Format, Opts.NoOpt, Workers);
+    Result.LlvmModule = emitLLVMSharded(
+        Result.MedFuncs, Ctx, Img.Arch, ImportMap, Img, Img.Format, Opts.NoOpt,
+        Workers, Result.BackendUnhandledValueIntrinsics);
     if (!Result.LlvmModule)
       return false;
-    return true;
+  } else {
+    MedLLVMEmitter MedEmitter;
+    Result.LlvmModule = MedEmitter.emit(Result.MedFuncs, Ctx, "neverd_output",
+                                        Img.Arch, ImportMap, &Img, Img.Format);
+    Result.BackendUnhandledValueIntrinsics =
+        MedEmitter.unhandledValueIntrinsicCount();
+
+    if (!Result.LlvmModule)
+      return false;
+
+    std::string VerifyErr;
+    llvm::raw_string_ostream VES(VerifyErr);
+    if (!llvm::verifyModule(*Result.LlvmModule, &VES)) {
+      if (!Opts.NoOpt)
+        optimizeModule(*Result.LlvmModule, Opts.PatchMode);
+      else
+        // Even with the NeverD optimizer disabled, promote the emitter's
+        // memory-SSA scaffolding to registers.  This is semantics-preserving
+        // canonicalization (not optimization): it strips the per-temp
+        // load/store bloat so a heavily-unrolled -O2 SSE kernel does not lift
+        // to an ~80K-instruction single block that is pathological for LLVM
+        // codegen and times out under parallel test load.
+        promoteScaffoldingAllocas(*Result.LlvmModule);
+    } else {
+      llvm::WithColor::warning()
+          << "skipping optimization: " << VerifyErr << "\n";
+    }
   }
 
-  MedLLVMEmitter MedEmitter;
-  Result.LlvmModule = MedEmitter.emit(Result.MedFuncs, Ctx, "neverd_output",
-                                      Img.Arch, ImportMap, &Img, Img.Format);
+  Result.LLVMDefinitionNames.clear();
+  for (const auto &Function : *Result.LlvmModule)
+    if (!Function.isDeclaration())
+      Result.LLVMDefinitionNames.push_back(Function.getName().str());
+  std::sort(Result.LLVMDefinitionNames.begin(),
+            Result.LLVMDefinitionNames.end());
 
-  if (!Result.LlvmModule)
-    return false;
+  for (auto &Audit : Result.FunctionAudits) {
+    if (!Audit.HasMedIR)
+      continue;
+    Audit.HasLLVMDefinition =
+        std::binary_search(Result.LLVMDefinitionNames.begin(),
+                           Result.LLVMDefinitionNames.end(), Audit.Name);
+  }
 
-  std::string VerifyErr;
-  llvm::raw_string_ostream VES(VerifyErr);
-  if (!llvm::verifyModule(*Result.LlvmModule, &VES)) {
-    if (!Opts.NoOpt)
-      optimizeModule(*Result.LlvmModule, Opts.PatchMode);
-    else
-      // Even with the NeverD optimizer disabled, promote the emitter's memory-
-      // SSA scaffolding to registers.  This is semantics-preserving
-      // canonicalization (not optimization): it strips the per-temp load/store
-      // bloat so a heavily-unrolled -O2 SSE kernel does not lift to an ~80K-
-      // instruction single block that is pathological for LLVM codegen and
-      // times out under parallel test load (the sadsearch_noopt diagnostic).
-      promoteScaffoldingAllocas(*Result.LlvmModule);
-  } else {
+  std::string FinalVerifyError;
+  llvm::raw_string_ostream FinalVerifyStream(FinalVerifyError);
+  Result.LLVMVerifierFailed =
+      llvm::verifyModule(*Result.LlvmModule, &FinalVerifyStream);
+  if (Result.LLVMVerifierFailed) {
     llvm::WithColor::warning()
-        << "skipping optimization: " << VerifyErr << "\n";
+        << "pipeline: final LLVM verification failed: " << FinalVerifyError
+        << "\n";
+    return false;
   }
 
   return true;
@@ -938,7 +1035,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return Result;
   }
 
-  auto Candidates = detectFunctions(Img, Dec, Opts, Dbg);
+  auto Candidates = detectFunctions(Img, Dec, Opts, Dbg, Result);
 
   // Phase 1: Build LowIR (parallel).
   buildLowIR(Img, Candidates, Opts, Dbg, Result);
@@ -954,6 +1051,20 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
           JTTargets.insert(T);
 
     if (!JTTargets.empty()) {
+      for (const auto &LF : Result.LowFuncs) {
+        if (!JTTargets.count(LF.Entry) || !LF.JumpTables.empty())
+          continue;
+        auto AuditIt = std::find_if(Result.FunctionAudits.begin(),
+                                    Result.FunctionAudits.end(),
+                                    [&](const PipelineFunctionAudit &Audit) {
+                                      return Audit.Entry == LF.Entry;
+                                    });
+        if (AuditIt != Result.FunctionAudits.end()) {
+          AuditIt->Disposition =
+              PipelineFunctionDisposition::RemovedJumpTableTarget;
+          AuditIt->HasLowIR = false;
+        }
+      }
       size_t Before = Result.LowFuncs.size();
       Result.LowFuncs.erase(std::remove_if(Result.LowFuncs.begin(),
                                            Result.LowFuncs.end(),
@@ -970,6 +1081,16 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
   }
 
+  for (const auto &LF : Result.LowFuncs) {
+    auto AuditIt =
+        std::find_if(Result.FunctionAudits.begin(), Result.FunctionAudits.end(),
+                     [&](const PipelineFunctionAudit &Audit) {
+                       return Audit.Entry == LF.Entry;
+                     });
+    if (AuditIt != Result.FunctionAudits.end())
+      AuditIt->Disposition = PipelineFunctionDisposition::Accepted;
+  }
+
   if (Opts.DumpLow && Opts.EmitDumpOutput)
     dumpLowIR(Result.LowFuncs);
 
@@ -978,6 +1099,12 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   if (Opts.DumpMed && Opts.EmitDumpOutput)
     dumpMedIR(Result.MedFuncs);
+
+  if (Result.MedIRVerifierFailures != 0) {
+    Result.Error = "MedIR verification failed";
+    Result.Success = false;
+    return Result;
+  }
 
   // If only dumping intermediate IR (LowIR/MedIR), skip LLVM emission
   // entirely.  The dump flags are handled above; return early to avoid

@@ -182,6 +182,21 @@ struct LowFunc {
   std::vector<JumpTable> JumpTables;
   std::optional<ExceptionFunction> ExceptionMetadata;
 
+  /// Coverage accounting for recursive-descent decode and lift.  These values
+  /// describe reachable instruction starts, not a linear sweep of the section.
+  uint64_t DecodedInstructionCount = 0;
+  uint64_t LiftedInstructionCount = 0;
+  std::vector<va_t> DecodeFailureAddresses;
+  std::vector<va_t> UnsupportedInstructionAddresses;
+  std::vector<va_t> TruncatedPathAddresses;
+
+  bool hasCompleteLiftCoverage() const {
+    return DecodedInstructionCount == LiftedInstructionCount &&
+           DecodeFailureAddresses.empty() &&
+           UnsupportedInstructionAddresses.empty() &&
+           TruncatedPathAddresses.empty();
+  }
+
   /// Bytes this function pops off the caller's stack on return beyond the
   /// return address (x86 `ret imm`, the i386 SysV callee-cleanup convention
   /// used for the hidden struct-return (sret) pointer).  0 for an ordinary

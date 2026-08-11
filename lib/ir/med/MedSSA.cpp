@@ -38,37 +38,58 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
   // frontiers (Step 2) need them.
   std::vector<int> RPO;
   std::vector<int> RPONum(N, -1);
+  std::vector<int> Roots;
+  std::vector<int> Component(N, -1);
   {
     std::vector<bool> Visited(N, false);
-    std::vector<std::pair<int, size_t>> Stk;
-    Stk.reserve(N);
-    Visited[0] = true;
-    Stk.push_back({0, 0});
-    while (!Stk.empty()) {
-      int B = Stk.back().first;
-      size_t I = Stk.back().second;
-      auto &Succs = Func.Blocks[B].Succs;
-      if (I < Succs.size()) {
-        Stk.back().second = I + 1;
-        int S = Succs[I];
-        if (S < 0 || S >= N)
-          continue;
-        if (!Visited[S]) {
-          Visited[S] = true;
-          Stk.push_back({S, 0});
+    auto AppendComponent = [&](int Root) {
+      const int ComponentId = static_cast<int>(Roots.size());
+      Roots.push_back(Root);
+      const size_t RPOBegin = RPO.size();
+      std::vector<std::pair<int, size_t>> Stk;
+      Stk.reserve(N);
+      Visited[Root] = true;
+      Component[Root] = ComponentId;
+      Stk.push_back({Root, 0});
+      while (!Stk.empty()) {
+        int B = Stk.back().first;
+        size_t I = Stk.back().second;
+        auto &Succs = Func.Blocks[B].Succs;
+        if (I < Succs.size()) {
+          Stk.back().second = I + 1;
+          int S = Succs[I];
+          if (S < 0 || S >= N)
+            continue;
+          if (!Visited[S]) {
+            Visited[S] = true;
+            Component[S] = ComponentId;
+            Stk.push_back({S, 0});
+          }
+        } else {
+          RPO.push_back(B);
+          Stk.pop_back();
         }
-      } else {
-        RPO.push_back(B);
-        Stk.pop_back();
       }
-    }
-    std::reverse(RPO.begin(), RPO.end());
+      std::reverse(RPO.begin() + static_cast<long>(RPOBegin), RPO.end());
+    };
+
+    // Exception handlers and other address-discovered regions can be valid
+    // blocks without an ordinary edge from block zero.  Treat every such
+    // component as an additional SSA root so its definitions receive unique
+    // versions instead of retaining version zero and colliding with values in
+    // the entry component.
+    AppendComponent(0);
+    for (int B = 0; B < N; ++B)
+      if (!Visited[B])
+        AppendComponent(B);
+
     for (int I = 0; I < static_cast<int>(RPO.size()); ++I)
       RPONum[RPO[I]] = I;
   }
 
   std::vector<int> IDom(N, -1);
-  IDom[0] = 0;
+  for (int Root : Roots)
+    IDom[Root] = Root;
 
   auto Intersect = [&](int B1, int B2) -> int {
     int F1 = B1, F2 = B2;
@@ -86,10 +107,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     while (Changed) {
       Changed = false;
       for (int B : RPO) {
-        if (B == 0)
+        if (IDom[B] == B)
           continue;
         int NewIDom = -1;
         for (int P : Func.Blocks[B].Preds) {
+          if (P < 0 || P >= N || Component[P] != Component[B])
+            continue;
           if (IDom[P] == -1)
             continue;
           if (NewIDom == -1)
@@ -151,8 +174,6 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
   // pointer parameter first read in a loop preheader while a `n==0` exit block
   // also clears that register).
   {
-    auto &Entry = Func.Blocks[0];
-
     // Per-block upward-exposed uses (read before any local definition) and
     // kills (definitions, alias-expanded), plus a representative MedVar per Id
     // for materialising the self-copy.
@@ -218,21 +239,24 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       }
     }
 
-    std::vector<MedOp> InitOps;
-    for (int Id : LiveIn[0]) {
-      auto VIt = VarOfId.find(Id);
-      if (VIt == VarOfId.end())
-        continue;
-      MedOp Init;
-      Init.Opcode = NdOp::COPY;
-      Init.Output = VIt->second;
-      Init.addInput(VIt->second);
-      Init.Addr = Func.Entry;
-      InitOps.push_back(Init);
-      LLVM_DEBUG(llvm::dbgs() << "  live-in: " << VIt->second.display()
-                              << " (id=" << Id << ")\n");
+    for (int Root : Roots) {
+      std::vector<MedOp> InitOps;
+      for (int Id : LiveIn[Root]) {
+        auto VIt = VarOfId.find(Id);
+        if (VIt == VarOfId.end())
+          continue;
+        MedOp Init;
+        Init.Opcode = NdOp::COPY;
+        Init.Output = VIt->second;
+        Init.addInput(VIt->second);
+        Init.Addr = Func.Blocks[Root].StartAddr;
+        InitOps.push_back(Init);
+        LLVM_DEBUG(llvm::dbgs() << "  live-in: " << VIt->second.display()
+                                << " (id=" << Id << ")\n");
+      }
+      auto &RootOps = Func.Blocks[Root].Ops;
+      RootOps.insert(RootOps.begin(), InitOps.begin(), InitOps.end());
     }
-    Entry.Ops.insert(Entry.Ops.begin(), InitOps.begin(), InitOps.end());
   }
 
   // Step 2: Compute dominance frontiers
@@ -241,6 +265,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     if (Func.Blocks[B].Preds.size() < 2)
       continue;
     for (int P : Func.Blocks[B].Preds) {
+      if (P < 0 || P >= N || Component[P] != Component[B])
+        continue;
       int Runner = P;
       while (Runner != IDom[B] && Runner != -1) {
         DF[Runner].insert(B);
@@ -376,22 +402,24 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     }
   };
 
-  Stk.push_back({0, 0, {}});
-  ProcessBlock(Stk.back());
+  for (int Root : Roots) {
+    Stk.push_back({Root, 0, {}});
+    ProcessBlock(Stk.back());
 
-  while (!Stk.empty()) {
-    auto &F = Stk.back();
-    auto &Children = DomChildren[F.B];
-    if (F.ChildIdx < Children.size()) {
-      int C = Children[F.ChildIdx++];
-      Stk.push_back({C, 0, {}});
-      ProcessBlock(Stk.back());
-    } else {
-      for (auto &[VId, Cnt] : F.SavedSizes) {
-        for (int I = 0; I < Cnt; ++I)
-          VarStack[VId].pop_back();
+    while (!Stk.empty()) {
+      auto &F = Stk.back();
+      auto &Children = DomChildren[F.B];
+      if (F.ChildIdx < Children.size()) {
+        int C = Children[F.ChildIdx++];
+        Stk.push_back({C, 0, {}});
+        ProcessBlock(Stk.back());
+      } else {
+        for (auto &[VId, Cnt] : F.SavedSizes) {
+          for (int I = 0; I < Cnt; ++I)
+            VarStack[VId].pop_back();
+        }
+        Stk.pop_back();
       }
-      Stk.pop_back();
     }
   }
 }

@@ -464,6 +464,11 @@ private:
   /// LowFunc so the pipeline merges them into the image's CodeRefTargets (a
   /// sorted std::set), so this set's own iteration order does not affect output.
   llvm::DenseSet<va_t> DiscoveredCodeRefs;
+  uint64_t DecodedInstructionCount = 0;
+  uint64_t LiftedInstructionCount = 0;
+  std::set<va_t> DecodeFailureAddresses;
+  std::set<va_t> UnsupportedInstructionAddresses;
+  std::set<va_t> TruncatedPathAddresses;
   va_t CurrentFuncEntry = 0;
   const BinaryImage *CurrentImg = nullptr;
   const std::set<va_t> *KnownFuncEntries = nullptr;

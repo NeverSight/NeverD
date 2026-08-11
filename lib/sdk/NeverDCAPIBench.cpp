@@ -45,6 +45,7 @@ const char *neverd_bench_run(neverd_session_t Sess, const char *InputPath,
 
   PipelineOptions LowOpts;
   LowOpts.DumpLow = true;
+  LowOpts.EmitDumpOutput = false;
   LowOpts.MaxFunctions =
       MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
 
@@ -63,6 +64,7 @@ const char *neverd_bench_run(neverd_session_t Sess, const char *InputPath,
 
   PipelineOptions MedOpts;
   MedOpts.DumpMed = true;
+  MedOpts.EmitDumpOutput = false;
   MedOpts.MaxFunctions =
       MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
 
@@ -78,6 +80,7 @@ const char *neverd_bench_run(neverd_session_t Sess, const char *InputPath,
 
   PipelineOptions HighOpts;
   HighOpts.DumpHigh = true;
+  HighOpts.EmitDumpOutput = false;
   HighOpts.MaxFunctions =
       MaxFunctions > 0 ? static_cast<size_t>(MaxFunctions) : 0;
 
@@ -144,6 +147,126 @@ const char *neverd_bench_run(neverd_session_t Sess, const char *InputPath,
   Root["med_ops"] = MedOpsTotal;
   Root["high_stmts"] = HighStmts;
   Root["llvm_funcs"] = LlvmFuncs;
+
+  int64_t CandidateFunctions = 0;
+  int64_t AcceptedFunctions = 0;
+  int64_t RejectedFunctions = 0;
+  int64_t RemovedFunctions = 0;
+  int64_t SkippedFunctions = 0;
+  int64_t DecodedInstructions = 0;
+  int64_t LiftedInstructions = 0;
+  int64_t DecodeFailures = 0;
+  int64_t UnsupportedInstructions = 0;
+  int64_t TruncatedPaths = 0;
+  int64_t MedFailures = 0;
+  bool Complete = LlvmResult.Success && !LlvmResult.LLVMVerifierFailed &&
+                  LlvmResult.MedIRVerifierFailures == 0 &&
+                  LlvmResult.BackendUnhandledValueIntrinsics == 0;
+
+  llvm::json::Array AuditFunctions;
+  for (const auto &Audit : LlvmResult.FunctionAudits) {
+    using D = PipelineFunctionDisposition;
+    switch (Audit.Disposition) {
+    case D::Candidate:
+      ++CandidateFunctions;
+      Complete = false;
+      break;
+    case D::SkippedImportStub:
+    case D::SkippedRuntimeScaffold:
+    case D::SkippedLimit:
+      ++SkippedFunctions;
+      break;
+    case D::RejectedLowIR:
+    case D::RejectedIncomplete:
+      ++CandidateFunctions;
+      ++RejectedFunctions;
+      Complete = false;
+      break;
+    case D::RemovedJumpTableTarget:
+      ++CandidateFunctions;
+      ++RemovedFunctions;
+      break;
+    case D::MedIRFailed:
+      ++CandidateFunctions;
+      ++RejectedFunctions;
+      ++MedFailures;
+      Complete = false;
+      break;
+    case D::Accepted:
+      ++CandidateFunctions;
+      ++AcceptedFunctions;
+      if (!Audit.HasLowIR || !Audit.HasMedIR || !Audit.MedIRVerified ||
+          !Audit.HasLLVMDefinition)
+        Complete = false;
+      break;
+    }
+
+    DecodedInstructions += static_cast<int64_t>(Audit.DecodedInstructions);
+    LiftedInstructions += static_cast<int64_t>(Audit.LiftedInstructions);
+    DecodeFailures += static_cast<int64_t>(Audit.DecodeFailures.size());
+    UnsupportedInstructions +=
+        static_cast<int64_t>(Audit.UnsupportedInstructions.size());
+    TruncatedPaths += static_cast<int64_t>(Audit.TruncatedPaths.size());
+    if (Audit.DecodedInstructions != Audit.LiftedInstructions ||
+        !Audit.DecodeFailures.empty() ||
+        !Audit.UnsupportedInstructions.empty() || !Audit.TruncatedPaths.empty())
+      Complete = false;
+
+    auto AddressArray = [](const std::vector<va_t> &Addresses) {
+      llvm::json::Array Values;
+      for (va_t Address : Addresses)
+        Values.push_back(vaHex(Address));
+      return Values;
+    };
+
+    llvm::json::Object Function;
+    Function["name"] = Audit.Name;
+    Function["entry"] = vaHex(Audit.Entry);
+    Function["disposition"] =
+        pipelineFunctionDispositionName(Audit.Disposition);
+    Function["decoded_instructions"] =
+        static_cast<int64_t>(Audit.DecodedInstructions);
+    Function["lifted_instructions"] =
+        static_cast<int64_t>(Audit.LiftedInstructions);
+    Function["decode_failures"] = AddressArray(Audit.DecodeFailures);
+    Function["unsupported_instructions"] =
+        AddressArray(Audit.UnsupportedInstructions);
+    Function["truncated_paths"] = AddressArray(Audit.TruncatedPaths);
+    Function["low_ir"] = Audit.HasLowIR;
+    Function["med_ir"] = Audit.HasMedIR;
+    Function["med_ir_verified"] = Audit.MedIRVerified;
+    Function["llvm_definition"] = Audit.HasLLVMDefinition;
+    AuditFunctions.push_back(std::move(Function));
+  }
+
+  llvm::json::Object Audit;
+  Audit["complete"] = Complete;
+  Audit["pipeline_success"] = LlvmResult.Success;
+  Audit["detected_functions"] =
+      static_cast<int64_t>(LlvmResult.FunctionAudits.size());
+  Audit["candidate_functions"] = CandidateFunctions;
+  Audit["accepted_functions"] = AcceptedFunctions;
+  Audit["rejected_functions"] = RejectedFunctions;
+  Audit["removed_functions"] = RemovedFunctions;
+  Audit["skipped_functions"] = SkippedFunctions;
+  Audit["decoded_instructions"] = DecodedInstructions;
+  Audit["lifted_instructions"] = LiftedInstructions;
+  Audit["decode_failures"] = DecodeFailures;
+  Audit["unsupported_instructions"] = UnsupportedInstructions;
+  Audit["truncated_paths"] = TruncatedPaths;
+  Audit["med_failures"] = MedFailures;
+  Audit["med_ir_verifier_failures"] =
+      static_cast<int64_t>(LlvmResult.MedIRVerifierFailures);
+  Audit["backend_unhandled_value_intrinsics"] =
+      static_cast<int64_t>(LlvmResult.BackendUnhandledValueIntrinsics);
+  Audit["llvm_verifier_failed"] = LlvmResult.LLVMVerifierFailed;
+  Root["audit"] = std::move(Audit);
+  Root["audit_functions"] = std::move(AuditFunctions);
+
+  llvm::json::Array LLVMDefinitions;
+  for (const auto &Name : LlvmResult.LLVMDefinitionNames)
+    LLVMDefinitions.push_back(Name);
+  Root["llvm_definitions"] = std::move(LLVMDefinitions);
 
   llvm::json::Array Funcs;
   for (auto &LF : R.Result.LowFuncs) {

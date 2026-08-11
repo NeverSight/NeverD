@@ -242,13 +242,13 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   // threaded i64 accumulator.  No-op unless the pipeline set the i64-callee set
   // (only known after whole-program return-type inference).
   modelKnownWideCallReturns(Func);
-  verifyMedFunc(Func, "modelKnownWideCallReturns");
+  debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
 
   fixupSubRegisters(Func);
-  verifyMedFunc(Func, "fixupSubRegisters");
+  debugVerifyMedFunc(Func, "fixupSubRegisters");
 
   simplifyCfg(Func);
-  verifyMedFunc(Func, "simplifyCfg");
+  debugVerifyMedFunc(Func, "simplifyCfg");
 
   // Apple clang's prologue stack-probe (____chkstk_darwin) is modeled as an
   // ordinary call returning in x0; clear that spurious output before SSA so its
@@ -256,10 +256,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   // every register except x16/x17).  No-op unless the pipeline provided the
   // chkstk slot set (Mach-O only).
   neutralizeStackProbeCalls(Func);
-  verifyMedFunc(Func, "neutralizeStackProbeCalls");
+  debugVerifyMedFunc(Func, "neutralizeStackProbeCalls");
 
   buildSsa(Func);
-  verifyMedFunc(Func, "buildSsa");
+  debugVerifyMedFunc(Func, "buildSsa");
 
   // Model a call's floating-point/vector return (x86-64 returns it in XMM0, a
   // caller-saved vector register the lifter did not model the call as
@@ -270,22 +270,22 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   // return register of a struct-returning call as one of the aggregate fields
   // rather than the lone scalar FP result.
   modelCallStructReturn(Func);
-  verifyMedFunc(Func, "modelCallStructReturn");
+  debugVerifyMedFunc(Func, "modelCallStructReturn");
 
   modelCallFPReturn(Func);
-  verifyMedFunc(Func, "modelCallFPReturn");
+  debugVerifyMedFunc(Func, "modelCallFPReturn");
 
   // Model a call's x87 floating-point return on i386 (the cdecl convention
   // leaves it on the x87 top-of-stack, st0): reconnect the post-call `fstp`
   // read of st0 to the call's result, which the lifter did not model.
   modelCallX87Return(Func);
-  verifyMedFunc(Func, "modelCallX87Return");
+  debugVerifyMedFunc(Func, "modelCallX87Return");
 
   // Model a call's 64-bit integer return on 32-bit targets (i386 EDX:EAX, ARM32
   // R1:R0): the lifter did not model the call as defining the high-half
   // register, so reconnect post-call reads of it to the call's high result.
   modelCallWideIntReturn(Func, TargetArch);
-  verifyMedFunc(Func, "modelCallWideIntReturn");
+  debugVerifyMedFunc(Func, "modelCallWideIntReturn");
 
   // Post-SSA pass: fix sub-register reads that should reference a loop PHI.
   // When a sub-register (e.g. SIL) has SSAVer=0 (entry block definition)
@@ -382,22 +382,22 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   // narrower loop-carried sub-register PHI (e.g. byte-popcount `movl %edi` over
   // `shrb %dil`).  Runs post-SSA so the narrow phi is visible.
   mergeLoopCarriedPartialReads(Func);
-  verifyMedFunc(Func, "mergeLoopCarriedPartialReads");
+  debugVerifyMedFunc(Func, "mergeLoopCarriedPartialReads");
 
   // ARM/AArch64 analogue: a wide vector (Q) read at a loop header that resolves
   // to the loop-invariant preamble value because only its 64-bit halves (D
   // sub-registers) are loop-carried via phis.  Reconstruct from the half phis.
   mergeLoopCarriedVectorReads(Func);
-  verifyMedFunc(Func, "mergeLoopCarriedVectorReads");
+  debugVerifyMedFunc(Func, "mergeLoopCarriedVectorReads");
 
   detectCc(Func, TheArch, Fmt);
-  verifyMedFunc(Func, "detectCc");
+  debugVerifyMedFunc(Func, "detectCc");
 
   propagate(Func);
-  verifyMedFunc(Func, "propagate");
+  debugVerifyMedFunc(Func, "propagate");
 
   eliminateFlags(Func);
-  verifyMedFunc(Func, "eliminateFlags");
+  debugVerifyMedFunc(Func, "eliminateFlags");
 
   LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: " << Func.Blocks.size()
                           << " blocks, " << Func.Params.size() << " params, "

@@ -6,6 +6,13 @@
 
 #include "NeverDLiftFixture.h"
 
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/FuncDetector.h"
+#include "neverd/ir/med/MedIR.h"
+#include "neverd/loader/BinaryImage.h"
+
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -13,6 +20,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+using namespace neverd;
 
 class X86_64_CFGEntry : public NeverDLiftTest {};
 
@@ -87,6 +96,187 @@ ParsedCfg parseCfg(const std::string &Dump) {
 }
 
 } // namespace
+
+TEST(CFGBuilderCoverage, ReportsReachableDecodeLiftAndFailures) {
+  auto Build = [](std::vector<uint8_t> Bytes) {
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    Img.Bits = Bitness::Bits64;
+    Img.Format = BinaryFormat::COFF;
+    Img.Base = 0x140000000;
+    Segment Text;
+    Text.VA = Img.Base + 0x1000;
+    Text.Size = Bytes.size();
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data = std::move(Bytes);
+    Img.Segments.push_back(std::move(Text));
+
+    Decoder Dec;
+    EXPECT_TRUE(Dec.init(Arch::X64));
+    CFGBuilder Builder;
+    return Builder.build(Img, Dec, Img.Base + 0x1000, "coverage_probe");
+  };
+
+  LowFunc Complete = Build({0x90, 0xc3}); // nop; ret
+  EXPECT_TRUE(Complete.hasCompleteLiftCoverage());
+  EXPECT_EQ(Complete.DecodedInstructionCount, 2u);
+  EXPECT_EQ(Complete.LiftedInstructionCount, 2u);
+
+  LowFunc DecodeFailure = Build({0x0f}); // truncated two-byte opcode
+  EXPECT_FALSE(DecodeFailure.hasCompleteLiftCoverage());
+  EXPECT_EQ(DecodeFailure.DecodedInstructionCount, 0u);
+  ASSERT_EQ(DecodeFailure.DecodeFailureAddresses.size(), 1u);
+  EXPECT_EQ(DecodeFailure.DecodeFailureAddresses[0], 0x140001000u);
+
+  LowFunc TruncatedPath = Build({0xeb, 0x7f}); // jmp outside mapped code
+  EXPECT_FALSE(TruncatedPath.hasCompleteLiftCoverage());
+  EXPECT_EQ(TruncatedPath.DecodedInstructionCount, 1u);
+  EXPECT_EQ(TruncatedPath.LiftedInstructionCount, 1u);
+  ASSERT_EQ(TruncatedPath.TruncatedPathAddresses.size(), 1u);
+  EXPECT_EQ(TruncatedPath.TruncatedPathAddresses[0], 0x140001081u);
+}
+
+TEST(FuncDetectorCoverage, RejectsCandidateWithUndecodableBranchArm) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = Img.Base + 0x1000;
+
+  Segment Text;
+  Text.VA = Img.Entry;
+  Text.Size = 0x30;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0x90);
+  Text.Data[0] = 0xc3; // The trusted image entry is a complete function.
+
+  // Executable data can accidentally spell a direct call.  Its target has a
+  // valid linear fallthrough to RET, but the other conditional branch arm
+  // starts with POPA, which is invalid in 64-bit mode.  A straight-line probe
+  // therefore accepts a bogus function that reachable-arm validation rejects.
+  Text.Data[0x10] = 0xe8;
+  Text.Data[0x11] = 0x0b;
+  Text.Data[0x12] = 0x00;
+  Text.Data[0x13] = 0x00;
+  Text.Data[0x14] = 0x00;
+  Text.Data[0x20] = 0x75;
+  Text.Data[0x21] = 0x02;
+  Text.Data[0x22] = 0xc3;
+  Text.Data[0x24] = 0x61;
+  Img.Segments.push_back(std::move(Text));
+  Img.KnownCodeRanges.push_back({Img.Entry, Img.Entry + 1});
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  FuncDetector Detector;
+  auto Functions = Detector.detect(Img, Dec);
+
+  ASSERT_EQ(Functions.size(), 1u);
+  EXPECT_EQ(Functions[0].first, Img.Entry);
+}
+
+TEST(CFGBuilderCoverage, StopsAtTrapTerminatorBeforeEmbeddedData) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+
+  Segment Text;
+  Text.VA = Img.Base + 0x1000;
+  Text.Size = 2;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = {0xcc, 0x61}; // int3; embedded POPA byte (invalid in x86-64)
+  Img.Segments.push_back(std::move(Text));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  CFGBuilder Builder;
+  LowFunc Function =
+      Builder.build(Img, Dec, Img.Base + 0x1000, "trap_terminator");
+
+  EXPECT_TRUE(Function.hasCompleteLiftCoverage());
+  EXPECT_EQ(Function.DecodedInstructionCount, 1u);
+  EXPECT_EQ(Function.LiftedInstructionCount, 1u);
+}
+
+TEST(CFGBuilderCoverage, DecodesOperandSizePrefixedFence) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+
+  Segment Text;
+  Text.VA = Img.Base + 0x1000;
+  Text.Size = 5;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = {0x66, 0x0f, 0xae, 0xf8, 0xc3}; // 66 sfence; ret
+  Img.Segments.push_back(std::move(Text));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  DecodedInsn Fence{};
+  ASSERT_EQ(Dec.decodeOne(Img.Segments[0].Data.data(),
+                          Img.Segments[0].Data.size(), Img.Base + 0x1000,
+                          Fence),
+            4);
+  ASSERT_NE(Fence.Raw, nullptr);
+  EXPECT_EQ(Fence.Id, X86_INS_SFENCE);
+  EXPECT_EQ(Fence.Raw->address, Img.Base + 0x1000);
+  EXPECT_EQ(Fence.Raw->bytes[0], 0x66);
+
+  Dec.setDetail(false);
+  DecodedInsn LightFence{};
+  EXPECT_EQ(Dec.decodeOneLight(Img.Segments[0].Data.data(),
+                               Img.Segments[0].Data.size(), Img.Base + 0x1000,
+                               LightFence),
+            4);
+  EXPECT_EQ(LightFence.Id, X86_INS_SFENCE);
+  Dec.setDetail(true);
+
+  CFGBuilder Builder;
+  LowFunc Function =
+      Builder.build(Img, Dec, Img.Base + 0x1000, "prefixed_fence");
+
+  EXPECT_TRUE(Function.hasCompleteLiftCoverage());
+  EXPECT_EQ(Function.DecodedInstructionCount, 2u);
+  EXPECT_EQ(Function.LiftedInstructionCount, 2u);
+}
+
+TEST(MedLLVMEmitterAudit, CountsUnhandledValueIntrinsic) {
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "backend_audit_probe";
+  Func.CC = CallingConv::SysV_AMD64;
+
+  MedVar Output;
+  Output.Kind = MedVar::Temp;
+  Output.TheArch = Arch::X64;
+  Output.Id = 1;
+  Output.Size = 8;
+
+  MedOp Intrinsic;
+  Intrinsic.Opcode = NdOp::INTRINSIC;
+  Intrinsic.Output = Output;
+  Intrinsic.addInput(MedVar::makeConst(0xffff, 2));
+
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Output);
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.Ops = {Intrinsic, Return};
+  Func.Blocks.push_back(std::move(Block));
+
+  llvm::LLVMContext Context;
+  MedLLVMEmitter Emitter;
+  auto Module = Emitter.emit({Func}, Context, "backend-audit", Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  EXPECT_EQ(Emitter.unhandledValueIntrinsicCount(), 1u);
+}
 
 TEST_F(X86_64_CFGEntry, TrueEntryIsBlockZeroAndBackwardEdgeSurvives) {
   ASSERT_TRUE(fs::exists(testObj())) << "test_backward_entry.o not built";

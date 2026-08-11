@@ -9,8 +9,9 @@
 /// pass.  Catches use-before-def, size mismatches, and SSA violations
 /// early rather than letting them propagate into incorrect codegen.
 ///
-/// Active only in debug builds (NDEBUG not defined) and controlled by the
-/// LLVM_DEBUG mechanism.
+/// The final pipeline verification is active in every build mode.  Individual
+/// intermediate passes use debugVerifyMedFunc() to avoid repeated release-mode
+/// scans.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -30,11 +31,6 @@
 namespace neverd {
 
 bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
-#ifdef NDEBUG
-  (void)Func;
-  (void)PassName;
-  return true;
-#else
   bool OK = true;
 
   auto Err = [&](const char *Msg, int BlockId, va_t Addr) -> bool {
@@ -162,7 +158,6 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
   LLVM_DEBUG(if (OK) llvm::dbgs() << "MedVerifier [" << PassName << "]: OK ("
                                   << Func.Blocks.size() << " blocks)\n");
   return OK;
-#endif
 }
 
 } // namespace neverd
