@@ -904,6 +904,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     sbf::AnalyzeOptions SBFOptions;
     SBFOptions.VersionOverride = Opts.SBFVersion;
     SBFOptions.Strict = Opts.SBFStrict;
+    SBFOptions.Profile = Opts.SBFProfile;
     SBFOptions.Idl = Opts.SBFIdl;
     auto Program = sbf::analyze(Img, SBFOptions);
     if (!Program) {

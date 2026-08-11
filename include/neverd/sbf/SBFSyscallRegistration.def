@@ -1,0 +1,77 @@
+//===- SBFSyscallRegistration.def - Whether a call resolves -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_SYSCALL_GATE_POLARITY(ID, NAME, SUMMARY)
+// SBF_SYSCALL_PURPOSES(SYSCALL, PURPOSES)
+// SBF_SYSCALL_GATE(SYSCALL, FEATURE, POLARITY)
+//
+//   Whether a program's reference to a syscall resolves is not one fact. The
+//   runtime builds two registries, from the same list, with different
+//   contents, and then removes entries from whichever one it built according
+//   to what the chain has switched on.
+//
+//   PURPOSES names registries from SBFRuntimeFeatures.def rather than
+//   introducing a second vocabulary for the same two things: "which registry"
+//   and "what is being asked" are one question asked from two ends.
+//
+//   Both of the last two tables are sparse, and deliberately so. A syscall
+//   with no row is in both registries and governed by no gate, which is true
+//   of nearly all of them; writing that out once per syscall would bury the
+//   handful of entries that are actually conditional, and those are the only
+//   ones a reader needs to think about.
+//
+//   POLARITY exists because a gate can take something away as easily as it can
+//   add it. Reading a removing gate as an adding one inverts the answer for
+//   every cluster at once, which is the kind of mistake that looks like a
+//   working implementation.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_SYSCALL_GATE_POLARITY
+#define SBF_SYSCALL_GATE_POLARITY(ID, NAME, SUMMARY)
+#endif
+
+#ifndef SBF_SYSCALL_PURPOSES
+#define SBF_SYSCALL_PURPOSES(SYSCALL, PURPOSES)
+#endif
+
+#ifndef SBF_SYSCALL_GATE
+#define SBF_SYSCALL_GATE(SYSCALL, FEATURE, POLARITY)
+#endif
+
+//===----------------------------------------------------------------------===//
+// Which way a gate points
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_GATE_POLARITY(RequiresActive, "requires-active",
+                          "the syscall is registered only where the gate has "
+                          "been activated")
+SBF_SYSCALL_GATE_POLARITY(RequiresInactive, "requires-inactive",
+                          "activating the gate is what removes the syscall, "
+                          "so it resolves only where the gate is still off")
+
+//===----------------------------------------------------------------------===//
+// The syscalls that are not in both registries
+//
+// The runtime keeps running programs that call the retired allocator, because
+// refusing to would break contracts that have been on chain for years, and it
+// refuses to accept a new program that calls it. That is a difference between
+// the two registries and nothing else: it does not depend on the cluster, on
+// the slot, or on which loader owns the program.
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_PURPOSES(AllocFree, Execution)
+
+//===----------------------------------------------------------------------===//
+// The syscalls a gate governs
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_GATE(Sha512, Sha512Syscall, RequiresActive)
+SBF_SYSCALL_GATE(GetFeesSysvar, FeesSysvarDisabled, RequiresInactive)
+
+#undef SBF_SYSCALL_GATE
+#undef SBF_SYSCALL_PURPOSES
+#undef SBF_SYSCALL_GATE_POLARITY

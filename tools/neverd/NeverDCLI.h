@@ -22,6 +22,7 @@
 #define NEVERD_TOOLS_NEVERDCLI_H
 
 #include "neverd/evm/Opcodes.h"
+#include "neverd/sbf/RuntimeProfile.h"
 #include "neverd/sbf/Version.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
@@ -171,6 +172,10 @@ extern llvm::cl::opt<bool> EVMRelaxed;
 extern llvm::cl::opt<sbf::Version> SBFVersion;
 extern llvm::cl::opt<bool> SBFRelaxed;
 extern llvm::cl::opt<std::string> SBFIdl;
+extern llvm::cl::opt<sbf::Cluster> SBFCluster;
+extern llvm::cl::opt<uint64_t> SBFSlot;
+extern llvm::cl::opt<sbf::Loader> SBFLoader;
+extern llvm::cl::opt<sbf::RuntimePurpose> SBFPurpose;
 
 // Strings.
 extern llvm::cl::opt<unsigned> MinStrLen;

@@ -14,6 +14,7 @@
 #define NEVERD_SBF_SOLANARECOVERY_H
 
 #include "neverd/sbf/Anchor.h"
+#include "neverd/sbf/RuntimeProfile.h"
 #include "neverd/sbf/SolanaModel.h"
 
 #include <string>
@@ -26,6 +27,10 @@ struct SolanaRecoveryOptions {
   /// An IDL supplied by the operator. When present its names take precedence
   /// over the built-in dictionary.
   const AnchorIdl *Idl = nullptr;
+  /// The runtime the recovered facts are about. It decides which serialization
+  /// an input offset is read against and which syscalls a reference resolves
+  /// to, neither of which the program file states.
+  RuntimeProfile Profile;
 };
 
 SolanaModel recoverSolanaModel(const SBFProgram &Program,

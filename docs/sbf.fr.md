@@ -54,6 +54,66 @@ rejette headers, plages ou alignements mal formés, sections legacy writable non
 supportées, continuations, registres, écritures frame-pointer ou branches
 invalides et opcodes inactifs, avec slot et adresse virtuelle.
 
+## Le runtime dont parle une description
+
+La version de l’ISA vient du fichier. Presque rien d’autre n’en vient. Quels
+syscalls se résolvent dépend de la chaîne et du slot ; à quels octets se trouve
+un champ de compte dépend du loader qui possède le programme ; si l’entrypoint
+reçoit un second argument dépend d’un interrupteur que la chaîne actionne ; et
+savoir si un programme peut être déployé est une autre question que savoir s’il
+s’exécute. Un unique commutateur de version ne peut rien exprimer de tout cela :
+ce sont donc des axes séparés avec des tables séparées.
+
+`SBFRuntimeFeatures.def` consigne les clusters, les usages et les gates qui
+changent ce que NeverD rapporte, chacune avec son identifiant de runtime, le
+compte dont l’existence l’active et le slot auquel chaque cluster l’a activée.
+Une gate sans ligne pour un cluster n’y a pas été activée. `simd-0321` est active
+sur tous les clusters ; `simd-0449` et le syscall SHA-512 le sont sur testnet et
+devnet et pas sur mainnet, ce qui est exactement pourquoi un programme qui marche
+sur devnet échoue sur mainnet.
+
+`SBFLoaders.def` consigne la propriété et la sérialisation. Déployer et exécuter
+ont cessé d’être la même réponse il y a des années : `loader-v1` et `loader-v2`
+refusent toute instruction de gestion qu’on leur envoie et continuent d’exécuter
+les programmes qu’ils possèdent déjà, et c’est pourquoi leur sérialisation doit
+rester lisible.
+
+| Loader | Sérialisation | Déploie | Exécute |
+|--------|---------------|---------|---------|
+| loader-v1 | `abi-v0` | non | oui |
+| loader-v2 | `abi-v1` | non | oui |
+| loader-v3 | `abi-v1` | oui | oui |
+| loader-v4 | `abi-v1` | non | non (built-in retiré) |
+
+`SBFAccountLayout.def` place chaque champ de compte sous chaque sérialisation.
+Les deux ne diffèrent pas seulement par le padding : elles ordonnent les champs
+différemment, si bien qu’à l’offset trois la forme non alignée porte le premier
+octet de l’adresse du compte et la forme alignée son drapeau exécutable, sans que
+la valeur annonce laquelle a été lue. Un compte répété occupe en outre un octet
+en `abi-v0` et huit en `abi-v1`, ce qui désaligne un parcours des entrées et non
+un seul champ.
+
+Savoir si un appel se résout est trois questions et non une :
+`SBFSyscallLifecycle.def` détient le degré de stabilité de la signature publiée
+et `SBFSyscallRegistration.def` le reste — dans quel registry un syscall figure,
+quelle gate le gouverne et dans quel sens cette gate pointe. Le sens compte parce
+qu’une gate peut retirer aussi facilement qu’ajouter : activer
+`disable_fees_sysvar` est ce qui a supprimé le syscall du sysvar de fees, et lire
+une gate qui retire comme une gate qui ajoute inverse la réponse pour tous les
+clusters d’un coup. `sol_alloc_free_` n’a besoin d’aucune gate : le runtime
+continue de l’honorer et refuse d’accepter un nouveau programme qui l’appelle, ce
+qui est une différence entre les deux registries et rien d’autre.
+
+Sur un runtime qui a activé `simd-0321`, l’entrypoint reçoit aussi l’adresse des
+données de l’instruction dans `r2`. NeverD la modélise comme une sorte de valeur
+à part plutôt que comme une constante, car l’endroit où elle tombe dépend des
+comptes : inventer une adresse permettrait de rapporter un load qui la traverse
+comme un champ de compte nommé. Avant activation le registre arrive à zéro, et un
+programme qui le lit lit un zéro. Les entry points LLVM, C et Rust générés
+prennent donc le tampon d’input et les données de l’instruction, car un callable
+auquel on ne peut pas donner le second ne peut pas reproduire un programme qui le
+lit.
+
 Le toolchain Solana actuel utilise `cargo build-sbf`. Les programmes v3+ sont
 orientés Rust et l’ancien toolchain C ne cible pas v3, sans limiter NeverD :
 toute entrée acceptée peut devenir C ou Rust.
@@ -80,7 +140,20 @@ neverd decompile --language=rust -o program.rs program.so
 
 neverd lift --sbf-version=v2 program.so
 neverd lift --sbf-relaxed --dump-low program.so
+
+# Indiquer de quel runtime parle la réponse. Rien de tout cela ne se trouve
+# dans le fichier du programme.
+neverd lift --dump-high --sbf-cluster=devnet program.so
+neverd lift --dump-high --sbf-slot=410400000 program.so
+neverd lift --dump-high --sbf-loader=loader-v1 program.so
+neverd lift --dump-high --sbf-purpose=deployment program.so
 ```
+
+`--sbf-cluster`, `--sbf-slot`, `--sbf-loader` et `--sbf-purpose` sélectionnent le
+profil de runtime. Les valeurs par défaut décrivent mainnet-beta tel qu’il est,
+sous `loader-v3`, pour un programme déjà déployé. Interroger le déploiement à la
+place rapporte les syscalls qui garderaient un programme hors de la chaîne alors
+même que la chaîne continuerait de l’exécuter.
 
 `--sbf-version=auto|v0|v1|v2|v3|v4` ne change la sémantique qu’après validation
 du layout détecté. Il sert aux fixtures endommagées ou de recherche, pas à
@@ -262,6 +335,12 @@ casser l’ABI.
 neverd_session_t session = neverd_session_create();
 neverd_sbf_set_strict(session, 1);
 neverd_sbf_set_version(session, "auto");
+/* De quel runtime parle la réponse. Les valeurs par défaut décrivent
+   mainnet-beta tel qu’il est, sous loader-v3, pour un programme déjà déployé. */
+neverd_sbf_set_cluster(session, "devnet");
+neverd_sbf_set_slot(session, 474768000);
+neverd_sbf_set_loader(session, "loader-v3");
+neverd_sbf_set_purpose(session, "deployment");
 const char *rust = neverd_decompile_all_ex(
     session, "program.so", NEVERD_OUTPUT_RUST, 0, 0);
 /* consume rust, then: */

@@ -161,6 +161,33 @@ TEST(SBFAnalyzer, RefusesAFunctionSymbolPointingIntoAWideLoad) {
   EXPECT_TRUE(Reported) << "dropping the symbol silently hides a bad input";
 }
 
+TEST(SBFAnalyzer, TheEntryReceivesInstructionDataOnlyWhereItIsActivated) {
+  const auto Instructions = {encode(Opcode::MOV64_REG, 0, 2),
+                             encode(Opcode::EXIT)};
+
+  AnalyzeOptions Activated;
+  Activated.Profile = currentMainnetProfile();
+  auto WithPointer = analyze(makeImage(Version::V3, Instructions), Activated);
+  ASSERT_TRUE(static_cast<bool>(WithPointer))
+      << llvm::toString(WithPointer.takeError());
+  const RegisterValue &Live =
+      WithPointer->Med.Blocks.front().Inputs[kInstructionDataRegister];
+  // Where the instruction data lands depends on the accounts, so it is its own
+  // kind of value. Calling it a constant would let a load through it be
+  // reported as a named account field.
+  EXPECT_EQ(Live.ValueKind, RegisterValue::Kind::InstructionDataAddress);
+
+  AnalyzeOptions Earlier = Activated;
+  Earlier.Profile.Suppressed = RuntimeFeature::InstructionDataPointer;
+  auto WithoutPointer = analyze(makeImage(Version::V3, Instructions), Earlier);
+  ASSERT_TRUE(static_cast<bool>(WithoutPointer))
+      << llvm::toString(WithoutPointer.takeError());
+  const RegisterValue &Zero =
+      WithoutPointer->Med.Blocks.front().Inputs[kInstructionDataRegister];
+  EXPECT_EQ(Zero.ValueKind, RegisterValue::Kind::Constant);
+  EXPECT_EQ(Zero.Value, 0u);
+}
+
 TEST(SBFAnalyzer, NormalizesTheNonMonotonicV2Semantics) {
   const auto Instructions = {
       encode(Opcode::MOV32_REG, 1, 2), encode(Opcode::SUB64_IMM, 1, 0, 0, 7),

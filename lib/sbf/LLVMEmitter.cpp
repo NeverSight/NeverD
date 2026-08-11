@@ -644,16 +644,23 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
   RuntimeABI Runtime = declareRuntime(*Module);
   auto *Ptr = llvm::PointerType::getUnqual(Context);
   auto *I64 = llvm::Type::getInt64Ty(Context);
-  auto *FunctionType = llvm::FunctionType::get(I64, {Ptr, I64}, false);
+  // The loader hands the program two addresses, so the recovered entry point
+  // takes two. Dropping the second would not be a simplification: a program
+  // compiled for a runtime that supplies it reads the register, and a callable
+  // that cannot be given a value for it cannot reproduce that program's
+  // behaviour at all.
+  auto *FunctionType = llvm::FunctionType::get(I64, {Ptr, I64, I64}, false);
   auto *Function =
       llvm::Function::Create(FunctionType, llvm::GlobalValue::ExternalLinkage,
                              Options.FunctionName, *Module);
   Function->addFnAttr(llvm::Attribute::NoUnwind);
   auto Arguments = Function->arg_begin();
   llvm::Value *Environment = &*Arguments++;
-  llvm::Value *Input = &*Arguments;
+  llvm::Value *Input = &*Arguments++;
+  llvm::Value *InstructionData = &*Arguments;
   Environment->setName("environment");
   Input->setName("input");
+  InstructionData->setName("instruction_data");
 
   EmitContext EC(Program, *Module, *Function, Runtime);
   EC.Environment = Environment;
@@ -728,6 +735,7 @@ emitLLVM(const SBFProgram &Program, llvm::LLVMContext &Context,
   for (unsigned Register = 0; Register < kRegisterCount; ++Register)
     EC.storeReg(Register, EC.i64(0));
   EC.storeReg(kFirstArgumentRegister, Input);
+  EC.storeReg(kInstructionDataRegister, InstructionData);
   EC.storeReg(
       kFramePointerRegister,
       EC.i64(initialFramePointer(Program.Low.TheVersion, Program.Config)));

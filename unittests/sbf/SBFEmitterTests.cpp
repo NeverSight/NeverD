@@ -327,9 +327,9 @@ static int no_store(void *context, uint64_t address, uint32_t width,
 int main(void) {
   neverd_sbf_environment env = {0, no_load, no_store, no_syscall};
   uint64_t result = 0;
-  if (neverd_sbf_program(&env, 0, &result) != NEVERD_SBF_OK || result != 3)
+  if (neverd_sbf_program(&env, 0, 0, &result) != NEVERD_SBF_OK || result != 3)
     return 1;
-  if (neverd_sbf_program(&env, 1, &result) != NEVERD_SBF_OK || result != 4)
+  if (neverd_sbf_program(&env, 1, 0, &result) != NEVERD_SBF_OK || result != 4)
     return 2;
   return 0;
 }
@@ -393,8 +393,8 @@ impl SbfEnvironment for Env {
 }
 fn main() {
     let mut env = Env;
-    assert_eq!(neverd_sbf_program(&mut env, 0), Ok(3));
-    assert_eq!(neverd_sbf_program(&mut env, 1), Ok(4));
+    assert_eq!(neverd_sbf_program(&mut env, 0, 0), Ok(3));
+    assert_eq!(neverd_sbf_program(&mut env, 1, 0), Ok(4));
 }
 )";
 

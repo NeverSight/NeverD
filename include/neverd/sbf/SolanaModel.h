@@ -19,6 +19,7 @@
 #define NEVERD_SBF_SOLANAMODEL_H
 
 #include "neverd/Common.h"
+#include "neverd/sbf/AccountLayout.h"
 #include "neverd/sbf/Anchor.h"
 #include "neverd/sbf/CPI.h"
 #include "neverd/sbf/KnownAddresses.h"
@@ -35,40 +36,6 @@
 #include <vector>
 
 namespace neverd::sbf {
-
-/// Fields of the serialized entrypoint input buffer.
-enum class InputField : uint8_t {
-#define SBF_INPUT_FIELD(ID, NAME, OFFSET, SIZE) ID,
-#include "neverd/sbf/SBFAccountLayout.def"
-};
-
-/// Fixed fields of one serialized account entry.
-enum class AccountField : uint8_t {
-#define SBF_ACCOUNT_FIELD(ID, NAME, OFFSET, SIZE) ID,
-#include "neverd/sbf/SBFAccountLayout.def"
-};
-
-struct LayoutFieldInfo {
-  llvm::StringLiteral Name;
-  uint64_t Offset;
-  /// Zero when the serialized data determines the length.
-  uint64_t Size;
-};
-
-llvm::ArrayRef<LayoutFieldInfo> inputFieldInfos();
-llvm::ArrayRef<LayoutFieldInfo> accountFieldInfos();
-const LayoutFieldInfo &getInputFieldInfo(InputField Field);
-const LayoutFieldInfo &getAccountFieldInfo(AccountField Field);
-
-/// Byte offset at which the first account entry starts, which is the end of the
-/// input header.
-uint64_t firstAccountOffset();
-
-/// Total size of an account entry's fixed part.
-uint64_t accountFixedSize();
-
-/// Report a gap or overlap between adjacent fixed fields in the layout tables.
-llvm::Error validateAccountLayout();
 
 /// How a recovered fact was established.
 enum class RecoveryEvidence : uint8_t {

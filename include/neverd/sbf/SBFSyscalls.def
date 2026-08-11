@@ -5,7 +5,12 @@
 // This file intentionally has no include guard.
 //
 // SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, POINTER_ARGUMENTS, RETURN_KIND,
-//             CATEGORY, EFFECTS, AVAILABILITY, SOURCE)
+//             CATEGORY, EFFECTS, LIFECYCLE, SOURCE)
+//
+// LIFECYCLE says how settled the published signature is. It does not say
+// whether a call to this syscall resolves: that depends on which registry the
+// runtime built and what the chain has switched on, and lives in
+// SBFSyscallRegistration.def alongside the gates.
 //
 // POINTER_ARGUMENTS names the argument registers that carry a VM address, from
 // each syscall's published signature. SBPFv3 maps read-only data at virtual
@@ -23,7 +28,7 @@
 
 #ifndef SBF_SYSCALL
 #define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, POINTER_ARGUMENTS, RETURN_KIND,  \
-                    CATEGORY, EFFECTS, AVAILABILITY, SOURCE)
+                    CATEGORY, EFFECTS, LIFECYCLE, SOURCE)
 #endif
 
 SBF_SYSCALL(Abort, "abort", 0, NoPointers, Never, Terminal, Terminal, Stable,
@@ -64,8 +69,11 @@ SBF_SYSCALL(Keccak256, "sol_keccak256", 3, Arg1 | Arg3, Void, Crypto,
             ReadsMemory | WritesMemory, Stable, SolanaReference)
 SBF_SYSCALL(Blake3, "sol_blake3", 3, Arg1 | Arg3, Void, Crypto,
             ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
+// A gate governs this one, and two clusters have activated it, so calling it
+// is neither a proposal nor a portable choice. SBFSyscallRegistration.def says
+// which gate; the profile says whether the chain being analyzed has it.
 SBF_SYSCALL(Sha512, "sol_sha512", 3, Arg1 | Arg3, Void, Crypto,
-            ReadsMemory | WritesMemory, Proposed, AgaveMaster)
+            ReadsMemory | WritesMemory, FeatureGated, AgaveMaster)
 SBF_SYSCALL(Poseidon, "sol_poseidon", 5, Arg3 | Arg5, Status, Crypto,
             ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
 SBF_SYSCALL(Secp256k1Recover, "sol_secp256k1_recover", 4, Arg1 | Arg3 | Arg4,

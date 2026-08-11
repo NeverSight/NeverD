@@ -50,6 +50,59 @@ alignment, unsupported writable legacy section, invalid continuation/register/
 frame-pointer write/branch, version-inactive opcode를 instruction slot과 virtual address로
 보고하며 거부합니다.
 
+## 설명이 대상으로 삼는 runtime
+
+ISA version은 file에서 나오지만, 그 밖의 것은 거의 나오지 않습니다. 어떤 syscall이
+해석되는지는 chain과 slot에 달려 있고, account 필드가 어느 byte에 놓이는지는 그
+프로그램을 소유한 loader에 달려 있으며, entrypoint가 두 번째 인자를 받는지는 chain이
+내리는 switch에 달려 있습니다. 그리고 프로그램을 배포할 수 있는지는 그것이 실행되는지와
+별개의 질문입니다. 하나의 version switch로는 그중 무엇도 표현할 수 없으므로, 이들은
+각자의 표를 가진 별개의 축입니다.
+
+`SBFRuntimeFeatures.def`는 cluster와 purpose, 그리고 NeverD의 보고 내용을 바꾸는 gate를
+기록합니다. 각 항목은 runtime identifier, 존재만으로 그것을 켜는 account, 그리고 각
+cluster가 그것을 활성화한 slot을 함께 가집니다. 어떤 cluster에 해당하는 행이 없는
+gate는 거기서 아직 활성화되지 않은 것입니다. `simd-0321`은 모든 cluster에서 켜져
+있고, `simd-0449`와 SHA-512 syscall은 testnet과 devnet에서 켜져 있고 mainnet에서는
+꺼져 있습니다. devnet에서 되는 프로그램이 mainnet에서 실패하는 이유가 바로 이것입니다.
+
+`SBFLoaders.def`는 소유와 직렬화를 기록합니다. 배포와 실행이 같은 답이기를 그만둔 지
+여러 해가 지났습니다. `loader-v1`과 `loader-v2`는 자신에게 오는 모든 관리 instruction을
+거부하면서 이미 소유한 프로그램은 계속 실행합니다. 그래서 그 직렬화는 지금도 읽을 수
+있어야 합니다.
+
+| 로더 | 직렬화 | 배포 | 실행 |
+|------|--------|------|------|
+| loader-v1 | `abi-v0` | 아니오 | 예 |
+| loader-v2 | `abi-v1` | 아니오 | 예 |
+| loader-v3 | `abi-v1` | 예 | 예 |
+| loader-v4 | `abi-v1` | 아니오 | 아니오 (built-in 제거됨) |
+
+`SBFAccountLayout.def`는 각 직렬화 아래에서 account의 각 필드가 놓이는 자리를 정합니다.
+둘은 padding만 다른 것이 아니라 필드 순서 자체가 다릅니다. offset 3에서 unaligned
+형식은 account 주소의 첫 byte를 두고 aligned 형식은 executable flag를 두는데, 값
+자체는 어느 쪽으로 읽혔는지 알려주지 않습니다. 반복된 account도 `abi-v0`에서는 1
+byte, `abi-v1`에서는 8 byte를 차지하므로, 필드 하나가 아니라 항목 전체를 훑는 순회가
+어긋납니다.
+
+호출이 해석되는지는 하나가 아니라 세 개의 질문입니다. 그래서
+`SBFSyscallLifecycle.def`가 공표된 signature가 얼마나 확정되었는지를 담고,
+`SBFSyscallRegistration.def`가 나머지를 담습니다. syscall이 어느 registry에
+나타나는지, 어느 gate가 그것을 지배하는지, 그리고 그 gate가 어느 쪽을 가리키는지입니다.
+gate는 무언가를 더하는 것만큼 쉽게 빼앗을 수도 있으므로 방향이 중요합니다. fees sysvar
+syscall을 없앤 것이 바로 `disable_fees_sysvar`의 활성화였고, 없애는 gate를 더하는
+gate로 읽으면 모든 cluster에 대한 답이 한꺼번에 뒤집힙니다. `sol_alloc_free_`에는 gate가
+아예 필요 없습니다. runtime은 계속 그것을 받아주면서 그것을 호출하는 새 프로그램은
+받아들이지 않으며, 이는 두 registry 사이의 차이일 뿐 그 이상은 아닙니다.
+
+`simd-0321`을 활성화한 runtime에서는 entrypoint가 `r2`로 instruction data의 주소도
+받습니다. NeverD는 이를 상수가 아니라 그 자체로 하나의 값 종류로 모델링합니다. 그것이
+어디에 놓이는지는 account에 달려 있어서, 주소를 지어내면 그것을 통한 load가 이름 있는
+account 필드로 보고될 수 있기 때문입니다. 활성화 이전에는 이 register가 0으로 도착하고,
+그것을 읽는 프로그램은 0을 읽습니다. 따라서 생성되는 LLVM, C, Rust entry point는 input
+buffer와 instruction data를 함께 받습니다. 두 번째를 건넬 수 없는 callable은 그것을 읽는
+프로그램을 재현할 수 없기 때문입니다.
+
 현재 Solana toolchain은 `cargo build-sbf`를 사용하고 v3+ production program은 Rust
 중심입니다. upstream C toolchain이 v3를 target하지 않아도 NeverD output은 제한되지 않아
 모든 accepted SBF input을 C 또는 Rust로 출력할 수 있습니다.
@@ -76,7 +129,18 @@ neverd decompile --language=rust -o program.rs program.so
 
 neverd lift --sbf-version=v2 program.so
 neverd lift --sbf-relaxed --dump-low program.so
+
+# 답이 어느 runtime에 대한 것인지 밝힙니다. 이 중 무엇도 프로그램 file에 없습니다.
+neverd lift --dump-high --sbf-cluster=devnet program.so
+neverd lift --dump-high --sbf-slot=410400000 program.so
+neverd lift --dump-high --sbf-loader=loader-v1 program.so
+neverd lift --dump-high --sbf-purpose=deployment program.so
 ```
+
+`--sbf-cluster`, `--sbf-slot`, `--sbf-loader`, `--sbf-purpose`는 runtime profile을
+선택합니다. 기본값은 현재 상태의 mainnet-beta를, `loader-v3` 아래에서, 이미 배포된
+프로그램에 대해 기술합니다. 대신 배포를 물으면, chain이 계속 실행해 주기는 해도 그
+프로그램을 chain에 올리지 못하게 만들 syscall을 보고합니다.
 
 `--sbf-version=auto|v0|v1|v2|v3|v4`는 감지된 layout 검사를 통과한 뒤 instruction
 semantics만 바꾸는 연구 fixture용 option입니다. 신뢰할 수 없는 file을 다른 packaging
@@ -236,6 +300,12 @@ symbol, relocation, string, header의 session operation은 같습니다. Rust는
 neverd_session_t session = neverd_session_create();
 neverd_sbf_set_strict(session, 1);
 neverd_sbf_set_version(session, "auto");
+/* 답이 어느 runtime에 대한 것인지. 기본값은 현재 상태의 mainnet-beta를,
+   loader-v3 아래에서, 이미 배포된 프로그램에 대해 기술합니다. */
+neverd_sbf_set_cluster(session, "devnet");
+neverd_sbf_set_slot(session, 474768000);
+neverd_sbf_set_loader(session, "loader-v3");
+neverd_sbf_set_purpose(session, "deployment");
 const char *rust = neverd_decompile_all_ex(
     session, "program.so", NEVERD_OUTPUT_RUST, 0, 0);
 /* consume rust, then: */

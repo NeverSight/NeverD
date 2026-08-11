@@ -66,6 +66,7 @@ struct Session {
   bool EVMStrict = true;
   sbf::Version SBFVersion = sbf::Version::Auto;
   bool SBFStrict = true;
+  sbf::RuntimeProfile SBFProfile;
   std::optional<sbf::AnchorIdl> SBFIdl;
 
   Decoder Dec;
@@ -178,6 +179,7 @@ struct Session {
     Opts.EVMStrict = EVMStrict;
     Opts.SBFVersion = SBFVersion;
     Opts.SBFStrict = SBFStrict;
+    Opts.SBFProfile = SBFProfile;
     Opts.SBFIdl = SBFIdl ? &*SBFIdl : nullptr;
   }
 

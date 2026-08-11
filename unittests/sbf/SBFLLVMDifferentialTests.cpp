@@ -36,7 +36,7 @@ namespace {
 constexpr unsigned kBitsPerByte = 8;
 
 using EncodedInstruction = std::array<uint8_t, kInstructionSize>;
-using JITFunction = uint64_t(void *, uint64_t);
+using JITFunction = uint64_t(void *, uint64_t, uint64_t);
 
 struct JITSyscallTraceEntry {
   uint32_t Hash = 0;
@@ -46,6 +46,7 @@ struct JITSyscallTraceEntry {
 
 struct JITEnvironment {
   uint64_t Input = kInputStart;
+  uint64_t InstructionData = 0;
   std::vector<MemoryRegion> Memory;
   SyscallCallback Syscall;
   std::vector<JITSyscallTraceEntry> Syscalls;
@@ -262,7 +263,8 @@ llvm::Expected<uint64_t> runJIT(const SBFProgram &Program,
   if (!Entry)
     return Entry.takeError();
   JITFunction *Function = Entry->toPtr<JITFunction *>();
-  return Function(&Environment, Environment.Input);
+  return Function(&Environment, Environment.Input,
+                  Environment.InstructionData);
 }
 
 void expectMemoryEqual(const std::vector<MemoryRegion> &Expected,

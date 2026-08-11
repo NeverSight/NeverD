@@ -53,6 +53,10 @@ struct PipelineOptions {
   bool EVMStrict = true;
   sbf::Version SBFVersion = sbf::Version::Auto;
   bool SBFStrict = true;
+  /// The runtime a recovered Solana program is described against. It is
+  /// separate from SBFVersion because the version comes from the file and this
+  /// does not: no chain is named anywhere in a program.
+  sbf::RuntimeProfile SBFProfile;
   const sbf::AnchorIdl *SBFIdl = nullptr;
 };
 

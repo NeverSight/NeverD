@@ -49,6 +49,59 @@ v2 の変更は v3 に漏れません。feature check は明示的で、`version
 writable legacy section、invalid continuation/register/frame-pointer write/branch、
 version-inactive opcode を instruction slot と virtual address 付きで拒否します。
 
+## 記述が対象とする runtime
+
+ISA version はファイルから分かります。それ以外はほとんど分かりません。どの syscall
+が解決するかは chain と slot に依存し、account フィールドが何バイト目にあるかはその
+プログラムを所有する loader に依存し、entrypoint が第二引数を受け取るかは chain が
+入れる切り替えに依存し、プログラムを deploy できるかどうかは実行できるかどうかとは
+別の問いです。単一の version 切り替えではそのいずれも表現できないため、これらは
+別々の軸として別々のテーブルに持ちます。
+
+`SBFRuntimeFeatures.def` は cluster、用途、そして NeverD の報告内容を変える gate を
+記録し、それぞれに runtime 上の識別子、存在すればそれを有効化する account、各 cluster
+が有効化した slot を持たせます。ある cluster の行を持たない gate は、そこではまだ
+有効化されていません。`simd-0321` はすべての cluster で有効です。`simd-0449` と
+SHA-512 syscall は testnet と devnet で有効、mainnet では無効であり、devnet で動く
+プログラムが mainnet で失敗するのはまさにこのためです。
+
+`SBFLoaders.def` は所有関係とシリアライズを記録します。deploy と実行が同じ答えで
+なくなってから何年も経ちます。`loader-v1` と `loader-v2` は送られてくる management
+instruction をすべて拒否しつつ、すでに所有しているプログラムは動かし続けます。
+そのシリアライズが今も読めなければならないのはこのためです。
+
+| Loader | シリアライズ | deploy | 実行 |
+|--------|--------------|--------|------|
+| loader-v1 | `abi-v0` | 不可 | 可 |
+| loader-v2 | `abi-v1` | 不可 | 可 |
+| loader-v3 | `abi-v1` | 可 | 可 |
+| loader-v4 | `abi-v1` | 不可 | 不可（built-in が削除済み） |
+
+`SBFAccountLayout.def` は各シリアライズにおける account フィールドの位置を与えます。
+両者は padding が違うだけではなく、フィールドの順序そのものが違います。offset 3 では
+unaligned 形式は account アドレスの先頭バイト、aligned 形式は executable フラグに
+なり、値そのものはどちらを読んだのかを何も告げません。さらに重複 account は
+`abi-v0` で 1 バイト、`abi-v1` で 8 バイトを占めるため、単一フィールドではなく
+エントリ列全体の走査がずれます。
+
+呼び出しが解決するかどうかは一つではなく三つの問いなので、
+`SBFSyscallLifecycle.def` は公開シグネチャがどれだけ固まっているかを保持し、
+`SBFSyscallRegistration.def` が残りを保持します。すなわち syscall がどの registry に
+現れるか、どの gate が支配するか、その gate がどちら向きかです。向きが重要なのは、
+gate が追加と同じくらい容易に削除もできるからです。fees sysvar syscall を取り除いた
+のは `disable_fees_sysvar` の有効化でした。削除する gate を追加する gate として読めば、
+すべての cluster について答えが一度に反転します。`sol_alloc_free_` には gate が
+まったく不要です。runtime はこれを受け付け続ける一方、これを呼ぶ新しいプログラムの
+受理は拒否します。これは二つの registry の違いであって、それ以上ではありません。
+
+`simd-0321` を有効化した runtime では、entrypoint は instruction data のアドレスも
+`r2` で受け取ります。NeverD はこれを定数ではなく固有の値種別としてモデル化します。
+どこに置かれるかは account 次第であり、アドレスを捏造すれば、それを経由した load を
+名前付きの account フィールドとして報告しかねないからです。有効化前のレジスタは
+zero で届き、それを読むプログラムは zero を読みます。したがって生成される LLVM、C、
+Rust の entry point は input buffer と instruction data を受け取ります。第二引数を
+渡せない callable では、それを読むプログラムを再現できないからです。
+
 現行 toolchain は `cargo build-sbf` を使い、v3+ production program は Rust 中心です。
 upstream C toolchain が v3 を target にしないことは NeverD output を制限せず、すべての
 accepted SBF input を C/Rust の両方に出力できます。
@@ -75,7 +128,19 @@ neverd decompile --language=rust -o program.rs program.so
 
 neverd lift --sbf-version=v2 program.so
 neverd lift --sbf-relaxed --dump-low program.so
+
+# 答えがどの runtime についてのものかを指定する。いずれもプログラムファイルには
+# 書かれていない。
+neverd lift --dump-high --sbf-cluster=devnet program.so
+neverd lift --dump-high --sbf-slot=410400000 program.so
+neverd lift --dump-high --sbf-loader=loader-v1 program.so
+neverd lift --dump-high --sbf-purpose=deployment program.so
 ```
+
+`--sbf-cluster`、`--sbf-slot`、`--sbf-loader`、`--sbf-purpose` は runtime profile を
+選びます。既定値は現在の mainnet-beta を、`loader-v3` のもとで、すでに deploy 済みの
+プログラムとして記述します。代わりに deployment について尋ねると、chain 自体は動かし
+続けるにもかかわらずプログラムを chain に載せられなくする syscall を報告します。
 
 `--sbf-version=auto|v0|v1|v2|v3|v4` は検出 layout の ELF check 後に instruction
 semantics だけを変更する研究 fixture 向け option です。不信な file を別 packaging
@@ -236,6 +301,12 @@ symbol、relocation、string、header の session operation は共通です。Ru
 neverd_session_t session = neverd_session_create();
 neverd_sbf_set_strict(session, 1);
 neverd_sbf_set_version(session, "auto");
+/* 答えがどの runtime についてのものか。既定値は現在の mainnet-beta を、
+   loader-v3 のもとで、すでに deploy 済みのプログラムとして記述する。 */
+neverd_sbf_set_cluster(session, "devnet");
+neverd_sbf_set_slot(session, 474768000);
+neverd_sbf_set_loader(session, "loader-v3");
+neverd_sbf_set_purpose(session, "deployment");
 const char *rust = neverd_decompile_all_ex(
     session, "program.so", NEVERD_OUTPUT_RUST, 0, 0);
 /* consume rust, then: */

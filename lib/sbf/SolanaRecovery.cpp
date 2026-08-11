@@ -210,20 +210,24 @@ void Recovery::visitMemoryAccess(const MedInstruction &Instruction,
   Access.InputOffset = *Address - kInputStart;
   Access.IsWrite = IsWrite;
 
+  // Which field an offset names depends on the serialization the owning loader
+  // produces, so the profile is what answers it. Guessing would not fail
+  // loudly: under the other serialization the same offset is a different real
+  // field, and the recovered name would look entirely plausible.
+  const AccountABI ABI = Options.Profile.accountABI();
   const uint64_t FirstAccount = firstAccountOffset();
   if (Access.InputOffset < FirstAccount) {
     for (auto [Ordinal, Field] : llvm::enumerate(inputFieldInfos()))
       if (Access.InputOffset >= Field.Offset &&
           Access.InputOffset < Field.Offset + Field.Size)
         Access.Header = static_cast<InputField>(Ordinal);
-  } else if (Access.InputOffset < FirstAccount + accountFixedSize()) {
+  } else if (Access.InputOffset < FirstAccount + accountFixedSize(ABI)) {
     // Only the first account entry begins at a statically known offset; later
     // entries follow variable-length data.
     const uint64_t InAccount = Access.InputOffset - FirstAccount;
-    for (auto [Ordinal, Field] : llvm::enumerate(accountFieldInfos()))
-      if (Field.Size != 0 && InAccount >= Field.Offset &&
-          InAccount < Field.Offset + Field.Size)
-        Access.Field = static_cast<AccountField>(Ordinal);
+    if (const AccountLayoutInfo *Field = accountFieldAt(ABI, InAccount);
+        Field && Field->Size != 0)
+      Access.Field = Field->Field;
   }
 
   Model.AccountAccesses.push_back(Access);
@@ -592,10 +596,27 @@ void Recovery::addLints() {
   for (const SyscallUse &Use : Program.High.Syscalls) {
     if (!Use.Info)
       continue;
-    if (Use.Info->Availability == SyscallAvailability::Deprecated)
+    // "This name is on its way out" and "this call does not resolve on the
+    // chain you asked about" are different warnings, and a reader acts on them
+    // differently: one is a rewrite to schedule, the other is a program that
+    // will not run.
+    if (Use.Info->Lifecycle == SyscallLifecycle::Deprecated)
       Report(Lint::DeprecatedSyscall, Use.Slot, Use.Info->Name.str());
-    else if (Use.Info->Availability == SyscallAvailability::FeatureGated)
-      Report(Lint::FeatureGatedSyscall, Use.Slot, Use.Info->Name.str());
+    switch (syscallRegistration(Use.Info->ID, Options.Profile)) {
+    case SyscallRegistration::Registered:
+      break;
+    case SyscallRegistration::GateUnmet:
+      Report(Lint::FeatureGatedSyscall, Use.Slot,
+             Use.Info->Name.str() + " is not registered on " +
+                 clusterName(Options.Profile.OnCluster).str());
+      break;
+    case SyscallRegistration::EnvironmentExcluded:
+      Report(Lint::FeatureGatedSyscall, Use.Slot,
+             Use.Info->Name.str() + " is not in the " +
+                 runtimePurposeName(Options.Profile.Purpose).str() +
+                 " registry");
+      break;
+    }
   }
 
   if (Program.Low.TheVersion < Version::V3)
@@ -750,7 +771,7 @@ std::string dumpSolanaModel(const SolanaModel &Model) {
     if (Access.Header)
       OS << " " << getInputFieldInfo(*Access.Header).Name;
     if (Access.Field)
-      OS << " accounts[0]." << getAccountFieldInfo(*Access.Field).Name;
+      OS << " accounts[0]." << getAccountFieldName(*Access.Field).Name;
     OS << "\n";
   }
 

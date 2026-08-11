@@ -52,6 +52,10 @@ inline constexpr std::array kArgumentRegisters = {
 #include "neverd/sbf/SBFArgumentRegisters.def"
 };
 inline constexpr unsigned kFirstArgumentRegister = kArgumentRegisters.front();
+/// The register the entrypoint receives the address of the instruction data
+/// in, on a runtime that has activated it. It is the second argument register
+/// because a program's entrypoint is called like any other function.
+inline constexpr unsigned kInstructionDataRegister = kFirstArgumentRegister + 1;
 inline constexpr unsigned kArgumentRegisterCount = kArgumentRegisters.size();
 inline constexpr unsigned kFramePointerRegister = kRegisterCount - 1;
 inline constexpr unsigned kFirstCalleeSavedRegister =

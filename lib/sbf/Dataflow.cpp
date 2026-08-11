@@ -48,8 +48,10 @@ void applyAddSubImmediate(const MedInstruction &Instruction,
     return;
   }
 
-  const bool IsAddress = Value.ValueKind == RegisterValue::Kind::StackAddress ||
-                         Value.ValueKind == RegisterValue::Kind::RodataAddress;
+  const bool IsAddress =
+      Value.ValueKind == RegisterValue::Kind::StackAddress ||
+      Value.ValueKind == RegisterValue::Kind::RodataAddress ||
+      Value.ValueKind == RegisterValue::Kind::InstructionDataAddress;
   if (!IsAddress || Instruction.Width != kDoubleWordBitWidth ||
       Instruction.Semantics.SwapOperands) {
     Value = {};
@@ -287,6 +289,12 @@ std::optional<va_t> effectiveAddress(const RegisterValue &Base,
   case RegisterValue::Kind::RodataAddress:
     return Base.Value + static_cast<uint64_t>(Base.Offset) +
            static_cast<uint64_t>(Displacement);
+  case RegisterValue::Kind::InstructionDataAddress:
+    // The base depends on how many accounts the transaction passed and how
+    // long each one's data is, none of which the program file says. Tracking
+    // the displacement is still worth doing — it is how a discriminator read
+    // is recognized — but naming an address would be naming a guess.
+    return std::nullopt;
   }
   return std::nullopt;
 }

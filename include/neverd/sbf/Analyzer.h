@@ -22,6 +22,11 @@ struct AnalyzeOptions {
   bool Strict = true;
   bool RecoverHighIR = true;
   SBFVMConfig VMConfig;
+  /// The runtime the recovered description is about. The ISA version comes
+  /// from the file and this does not: which gates are on, which loader owns
+  /// the program, and whether the question is about running it or deploying it
+  /// are all facts about the chain, and the file cannot state any of them.
+  RuntimeProfile Profile;
   /// An Anchor IDL supplied by the operator. Its names take precedence over the
   /// built-in dictionary when recovering instruction dispatch.
   const AnchorIdl *Idl = nullptr;

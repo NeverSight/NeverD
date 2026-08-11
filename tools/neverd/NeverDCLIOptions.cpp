@@ -261,6 +261,48 @@ cl::opt<std::string> SBFIdl(
     cl::desc("Anchor IDL JSON file naming this program's instructions"),
     cl::value_desc("path"), cl::sub(LiftCmd), cl::sub(DecompileCmd));
 
+// Which chain, when, under which loader, and for what. None of these are in
+// the program file, and each of them changes the answer: a gate that is on for
+// one cluster is off for another, a loader decides the shape of the input
+// buffer, and a syscall the runtime keeps honouring can be one no new program
+// may use.
+cl::opt<sbf::Cluster> SBFCluster("sbf-cluster",
+                                 cl::desc("Solana cluster to describe against"),
+                                 cl::ValuesClass({
+#define SBF_CLUSTER(ID, NAME, ACTIVATES_EVERYTHING, SUMMARY)                   \
+  clEnumValN(sbf::Cluster::ID, NAME, SUMMARY),
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+                                 }),
+                                 cl::init(sbf::Cluster::MainnetBeta),
+                                 cl::sub(LiftCmd), cl::sub(DecompileCmd));
+
+cl::opt<uint64_t> SBFSlot(
+    "sbf-slot",
+    cl::desc("Slot to describe against; gates activated after it count as off"),
+    cl::value_desc("slot"), cl::init(sbf::kCurrentSlot), cl::sub(LiftCmd),
+    cl::sub(DecompileCmd));
+
+cl::opt<sbf::Loader> SBFLoader("sbf-loader",
+                               cl::desc("Loader that owns the program"),
+                               cl::ValuesClass({
+#define SBF_LOADER(ID, NAME, KNOWN_ADDRESS, ACCOUNT_ABI, DEPLOYS, EXECUTES,    \
+                   SUMMARY)                                                    \
+  clEnumValN(sbf::Loader::ID, NAME, SUMMARY),
+#include "neverd/sbf/SBFLoaders.def"
+                               }),
+                               cl::init(sbf::Loader::V3), cl::sub(LiftCmd),
+                               cl::sub(DecompileCmd));
+
+cl::opt<sbf::RuntimePurpose> SBFPurpose(
+    "sbf-purpose", cl::desc("Whether to answer for running or for deploying"),
+    cl::ValuesClass({
+#define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)                                 \
+  clEnumValN(sbf::RuntimePurpose::ID, NAME, SUMMARY),
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+    }),
+    cl::init(sbf::RuntimePurpose::Execution), cl::sub(LiftCmd),
+    cl::sub(DecompileCmd));
+
 //===----------------------------------------------------------------------===//
 // Strings-specific options
 //===----------------------------------------------------------------------===//

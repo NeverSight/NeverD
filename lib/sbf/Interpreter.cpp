@@ -253,6 +253,7 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
   ExecutionResult Result;
   std::array<uint64_t, kRegisterCount> Registers{};
   Registers[kFirstArgumentRegister] = Environment.Input;
+  Registers[kInstructionDataRegister] = Environment.InstructionData;
   Registers[kFramePointerRegister] =
       initialFramePointer(Program.Low.TheVersion, Program.Config);
   std::vector<CallFrame> Frames;

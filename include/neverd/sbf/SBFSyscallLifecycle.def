@@ -1,0 +1,39 @@
+//===- SBFSyscallLifecycle.def - How settled a syscall's API is -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_SYSCALL_LIFECYCLE(ID, SPELLING, SUMMARY)
+//
+// This says how settled the published signature is, and nothing about whether
+// a given chain will resolve a call to it. Those became different questions
+// once the same syscall started being present on one cluster and absent on
+// another, and answering the second one with this enum is what produced claims
+// like "feature-gated" for a syscall that has been on everywhere for years and
+// "stable" for one that resolves on no chain at all.
+//
+// Which registry a syscall appears in, and which gate governs it, are in
+// SBFSyscallRegistration.def.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_SYSCALL_LIFECYCLE
+#define SBF_SYSCALL_LIFECYCLE(ID, SPELLING, SUMMARY)
+#endif
+
+SBF_SYSCALL_LIFECYCLE(Stable, "stable",
+                      "the signature is settled and the runtime has offered "
+                      "it long enough that nothing is expected to change")
+SBF_SYSCALL_LIFECYCLE(FeatureGated, "feature-gated",
+                      "the runtime registers it only where a gate has been "
+                      "activated, so where it resolves is a property of the "
+                      "chain rather than of the program")
+SBF_SYSCALL_LIFECYCLE(Proposed, "proposed",
+                      "the signature exists upstream but no chain has been "
+                      "scheduled to offer it")
+SBF_SYSCALL_LIFECYCLE(Deprecated, "deprecated",
+                      "the runtime still knows the name but the operation is "
+                      "no longer the way to do what it does")
+
+#undef SBF_SYSCALL_LIFECYCLE

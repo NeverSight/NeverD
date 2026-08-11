@@ -8,6 +8,7 @@
 #define NEVERD_SBF_SYSCALLS_H
 
 #include "neverd/sbf/Pubkey.h"
+#include "neverd/sbf/RuntimeProfile.h"
 #include "neverd/sbf/SBFConstants.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -86,10 +87,25 @@ enum class SyscallReturnKind : uint8_t {
   Address,
 };
 
-enum class SyscallAvailability : uint8_t {
-#define SBF_SYSCALL_AVAILABILITY(ID, SPELLING) ID,
-#include "neverd/sbf/SBFSyscallAvailability.def"
+/// How settled a syscall's published signature is.
+///
+/// This is not the same question as whether a call to it resolves, and the two
+/// stopped having the same answer once the runtime started building two
+/// registries and gating entries in each of them per cluster. Ask
+/// syscallRegistration for that.
+enum class SyscallLifecycle : uint8_t {
+#define SBF_SYSCALL_LIFECYCLE(ID, SPELLING, SUMMARY) ID,
+#include "neverd/sbf/SBFSyscallLifecycle.def"
 };
+
+struct SyscallLifecycleInfo {
+  SyscallLifecycle ID;
+  llvm::StringLiteral Name;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<SyscallLifecycleInfo> syscallLifecycleInfos();
+llvm::StringRef syscallLifecycleName(SyscallLifecycle Lifecycle);
 
 enum class SyscallSource : uint8_t {
 #define SBF_UPSTREAM_SOURCE(ID, NAME, REVISION) ID,
@@ -135,9 +151,61 @@ struct SyscallInfo {
   SyscallReturnKind ReturnKind;
   SyscallCategory Category;
   SyscallEffect Effects;
-  SyscallAvailability Availability;
+  SyscallLifecycle Lifecycle;
   SyscallSource Source;
 };
+
+//===----------------------------------------------------------------------===//
+// Whether a call to one resolves
+//
+// Three separate things decide this, and collapsing any two of them gives an
+// answer that is right for one chain and wrong for the next.
+//===----------------------------------------------------------------------===//
+
+/// The registries \p ID appears in. Nearly every syscall is in both; the ones
+/// that are not are the reason a program that runs cannot always be deployed.
+RuntimePurposeSet syscallPurposes(Syscall ID);
+
+/// Which way a gate points, because one that removes a syscall reads exactly
+/// like one that adds it unless the direction is recorded.
+enum class SyscallGatePolarity : uint8_t {
+#define SBF_SYSCALL_GATE_POLARITY(ID, NAME, SUMMARY) ID,
+#include "neverd/sbf/SBFSyscallRegistration.def"
+};
+
+llvm::StringRef syscallGatePolarityName(SyscallGatePolarity Polarity);
+
+struct SyscallGateInfo {
+  Syscall ID;
+  RuntimeFeature Feature;
+  SyscallGatePolarity Polarity;
+};
+
+llvm::ArrayRef<SyscallGateInfo> syscallGateInfos();
+/// The gate governing \p ID, or null when nothing does.
+const SyscallGateInfo *getSyscallGate(Syscall ID);
+
+/// Why a program's reference to a syscall would or would not resolve.
+enum class SyscallRegistration : uint8_t {
+  /// The runtime registers it, so the call links.
+  Registered,
+  /// A gate the profile does not satisfy. Which gate is in getSyscallGate.
+  GateUnmet,
+  /// The registry the profile selects does not contain it at all, whatever the
+  /// chain has switched on.
+  EnvironmentExcluded,
+};
+
+llvm::StringRef syscallRegistrationName(SyscallRegistration Registration);
+
+/// Whether \p ID resolves under \p Profile, and if not, which of the two
+/// reasons applies.
+SyscallRegistration syscallRegistration(Syscall ID,
+                                        const RuntimeProfile &Profile);
+
+/// Report a gate or environment row naming a syscall the syscall table does
+/// not declare, or two rows claiming the same syscall.
+llvm::Error validateSyscallRegistrationTable();
 
 //===----------------------------------------------------------------------===//
 // Caller-memory windows
@@ -200,7 +268,6 @@ struct SyscallSourceInfo {
   llvm::StringLiteral Revision;
 };
 
-llvm::StringRef syscallAvailabilityName(SyscallAvailability Availability);
 llvm::ArrayRef<SyscallSourceInfo> syscallSourceInfos();
 llvm::StringRef syscallSourceName(SyscallSource Source);
 llvm::StringRef syscallSourceRevision(SyscallSource Source);

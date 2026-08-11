@@ -571,10 +571,18 @@ void runRegisterDataflow(SBFProgram &Program) {
   Program.Med.Blocks[EntryBlock].Inputs[kFramePointerRegister] = {
       RegisterValue::Kind::StackAddress,
       initialFramePointer(Program.Low.TheVersion, Program.Config), 0};
-  // The loader invokes a Solana program with one argument: the address of the
-  // serialized input buffer, which is always the base of the input region.
+  // The loader invokes a Solana program with the address of the serialized
+  // input buffer, which is always the base of the input region.
   Program.Med.Blocks[EntryBlock].Inputs[kFirstArgumentRegister] = {
       RegisterValue::Kind::Constant, kInputStart, 0};
+  // A runtime that has activated it also hands over the address of the
+  // instruction data. Where that lands depends on the accounts, so it is its
+  // own kind of value; before activation the register simply arrives zero, and
+  // a program that reads it reads a zero rather than an address.
+  Program.Med.Blocks[EntryBlock].Inputs[kInstructionDataRegister] =
+      isFeatureActive(Program.Profile, RuntimeFeature::InstructionDataPointer)
+          ? RegisterValue{RegisterValue::Kind::InstructionDataAddress, 0, 0}
+          : RegisterValue{RegisterValue::Kind::Constant, 0, 0};
   const size_t IterationLimit = Program.Med.Blocks.size() * 4 + 1;
   for (size_t Iteration = 0; Iteration < IterationLimit; ++Iteration) {
     bool Changed = false;
@@ -1114,6 +1122,7 @@ llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,
   SBFProgram Program;
   Program.Image = *Image.SBF;
   Program.Config = Options.VMConfig;
+  Program.Profile = Options.Profile;
   if (Options.VersionOverride != Version::Auto) {
     if (!isConcreteVersion(Options.VersionOverride))
       return llvm::make_error<llvm::StringError>(
@@ -1151,7 +1160,8 @@ llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,
   runRegisterDataflow(Program);
   if (Options.RecoverHighIR) {
     recoverHighIR(Image, Program);
-    Program.High.Solana = recoverSolanaModel(Program, {Options.Idl});
+    Program.High.Solana =
+        recoverSolanaModel(Program, {Options.Idl, Options.Profile});
   }
   return Program;
 }

@@ -252,11 +252,44 @@ TEST(SBFAccountLayout, FixedFieldsTileTheirSpan) {
 
   EXPECT_EQ(firstAccountOffset(),
             getInputFieldInfo(InputField::AccountCount).Size);
-  EXPECT_EQ(getAccountFieldInfo(AccountField::Key).Size, kPubkeyByteCount);
-  EXPECT_EQ(getAccountFieldInfo(AccountField::Owner).Size, kPubkeyByteCount);
-  EXPECT_EQ(accountFixedSize(), getAccountFieldInfo(AccountField::Data).Offset);
-  // The variable-length payload must start after both keys and both counters.
-  EXPECT_GT(accountFixedSize(), 2 * kPubkeyByteCount);
+
+  for (const AccountABIInfo &ABI : accountABIInfos()) {
+    SCOPED_TRACE(ABI.Name.str());
+    const AccountLayoutInfo *Key =
+        getAccountFieldInfo(ABI.ID, AccountField::Key);
+    ASSERT_NE(Key, nullptr);
+    EXPECT_EQ(Key->Size, kPubkeyByteCount);
+
+    const AccountLayoutInfo *Data =
+        getAccountFieldInfo(ABI.ID, AccountField::Data);
+    ASSERT_NE(Data, nullptr);
+    EXPECT_EQ(accountFixedSize(ABI.ID), Data->Offset);
+    EXPECT_EQ(accountFieldAt(ABI.ID, Key->Offset), Key);
+    EXPECT_EQ(accountFieldAt(ABI.ID, Data->Offset + 1), Data);
+  }
+}
+
+TEST(SBFAccountLayout, TheTwoSerializationsDisagreeAboutWhatAnOffsetNames) {
+  // This is the whole reason the layout is versioned. Both serializations
+  // place a real field at offset three, and they are different fields, so a
+  // reader that assumes one produces a plausible name for the other's bytes.
+  const AccountLayoutInfo *Unaligned = accountFieldAt(AccountABI::V0, 3);
+  const AccountLayoutInfo *Aligned = accountFieldAt(AccountABI::V1, 3);
+  ASSERT_NE(Unaligned, nullptr);
+  ASSERT_NE(Aligned, nullptr);
+  EXPECT_EQ(Unaligned->Field, AccountField::Key);
+  EXPECT_EQ(Aligned->Field, AccountField::Executable);
+
+  // Only the aligned form places the owner at a fixed offset; the other writes
+  // it after the account's data, where nothing static can find it.
+  EXPECT_EQ(getAccountFieldInfo(AccountABI::V0, AccountField::Owner), nullptr);
+  EXPECT_NE(getAccountFieldInfo(AccountABI::V1, AccountField::Owner), nullptr);
+
+  // A repeated account occupies a different number of bytes in each, which is
+  // what misaligns a walk over the entries rather than one field.
+  EXPECT_NE(getAccountABIInfo(AccountABI::V0).DuplicateEntrySize,
+            getAccountABIInfo(AccountABI::V1).DuplicateEntrySize);
+  EXPECT_LT(accountFixedSize(AccountABI::V0), accountFixedSize(AccountABI::V1));
 }
 
 TEST(SBFLints, CatalogIsIndexedByItsEnumerator) {
@@ -521,14 +554,15 @@ TEST(SBFSolanaRecovery, RecoversAnAnchorStyleDispatchAndItsAddresses) {
   // The loader passes the serialized input in r1, so these two reads land on
   // named fields of the first account entry.
   const uint64_t Account = firstAccountOffset();
-  Text.push_back(encode(
-      Opcode::LD_DW_REG, 8, kFirstArgumentRegister,
-      static_cast<int16_t>(
-          Account + getAccountFieldInfo(AccountField::Lamports).Offset)));
-  Text.push_back(encode(
-      Opcode::LD_B_REG, 9, kFirstArgumentRegister,
-      static_cast<int16_t>(
-          Account + getAccountFieldInfo(AccountField::IsSigner).Offset)));
+  const auto FieldOffset = [&](AccountField Field) {
+    const AccountLayoutInfo *Info =
+        getAccountFieldInfo(AccountABI::V1, Field);
+    return static_cast<int16_t>(Account + (Info ? Info->Offset : 0));
+  };
+  Text.push_back(encode(Opcode::LD_DW_REG, 8, kFirstArgumentRegister,
+                        FieldOffset(AccountField::Lamports)));
+  Text.push_back(encode(Opcode::LD_B_REG, 9, kFirstArgumentRegister,
+                        FieldOffset(AccountField::IsSigner)));
 
   // Compare the incoming program id against the address in read-only data,
   // which is how a generated entry point proves its own identity.

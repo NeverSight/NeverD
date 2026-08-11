@@ -43,6 +43,11 @@ struct MemoryRegion {
 /// Supplies deterministic input memory and syscall behavior.
 struct ExecutionEnvironment {
   uint64_t Input = kInputStart;
+  /// The address the runtime hands over in the instruction-data register, and
+  /// zero on a runtime that has not activated that. Zero is what the register
+  /// actually contains there, so a program that reads it anyway reads the same
+  /// thing here that it would on chain.
+  uint64_t InstructionData = 0;
   std::vector<MemoryRegion> Memory;
   SyscallCallback Syscall;
 };

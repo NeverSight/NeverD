@@ -1,0 +1,146 @@
+//===- SBFRuntimeFeatures.def - What the chain has turned on ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_CLUSTER(ID, NAME, ACTIVATES_EVERYTHING, SUMMARY)
+// SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)
+// SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY)
+// SBF_RUNTIME_FEATURE_ACTIVATION(ID, CLUSTER, SLOT)
+//
+//   Three questions get confused with each other constantly, and each has its
+//   own answer:
+//
+//     which instructions the program is allowed to contain   -> SBFVersions.def
+//     which loader serialized its input                      -> SBFLoaders.def
+//     which runtime behaviours the chain has switched on     -> here
+//
+//   Collapsing them produces claims like "v4 programs get r2", which is false
+//   in both directions: a v0 program running on today's mainnet gets r2, and a
+//   v4 program running on a validator that has not activated the gate does
+//   not. The version is a property of the file, the feature is a property of
+//   the chain at a slot, and neither implies the other.
+//
+//   A feature is not a boolean either. The same gate is on for one cluster and
+//   off for another, which is the entire reason a program that works on devnet
+//   fails on mainnet, and it turns on at a slot, which is why the answer for a
+//   historical transaction differs from the answer for the next one. So an
+//   activation is recorded per cluster with the slot it happened at, and a
+//   feature with no record on a cluster has not been activated there.
+//
+//   GATE is the identifier Agave gives the switch and ADDRESS is the account
+//   whose existence turns it on, which is what makes an activation checkable
+//   against a live node rather than a claim made here. SIMD is the proposal
+//   that specified the behaviour, empty for the switches that predate the
+//   process.
+//
+//   ACTIVATES_EVERYTHING marks a cluster that starts from a fresh genesis and
+//   therefore turns on every gate its validator knows. Recording that as a
+//   property of the cluster keeps a developer's local validator from needing
+//   an activation row per feature, and keeps those rows from being mistaken
+//   for observations of a real chain.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_CLUSTER
+#define SBF_CLUSTER(ID, NAME, ACTIVATES_EVERYTHING, SUMMARY)
+#endif
+
+#ifndef SBF_RUNTIME_PURPOSE
+#define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)
+#endif
+
+#ifndef SBF_RUNTIME_FEATURE
+#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY)
+#endif
+
+#ifndef SBF_RUNTIME_FEATURE_ACTIVATION
+#define SBF_RUNTIME_FEATURE_ACTIVATION(ID, CLUSTER, SLOT)
+#endif
+
+//===----------------------------------------------------------------------===//
+// The chains
+//===----------------------------------------------------------------------===//
+
+SBF_CLUSTER(MainnetBeta, "mainnet-beta", false,
+            "the chain that holds value, and the one a gate reaches last")
+SBF_CLUSTER(Testnet, "testnet", false,
+            "where a release is exercised before it reaches mainnet")
+SBF_CLUSTER(Devnet, "devnet", false,
+            "where a program is exercised before it reaches mainnet")
+SBF_CLUSTER(Localnet, "localnet", true,
+            "a validator started from a fresh genesis, which activates every "
+            "gate it knows and therefore answers differently from every real "
+            "chain")
+
+//===----------------------------------------------------------------------===//
+// What the answer is being asked for
+//
+// The runtime builds two different syscall registries, and which one applies
+// is not a property of the chain or the program but of the question. A program
+// already on chain runs against the execution registry no matter what the
+// deployment registry would have refused; asking whether the same program
+// could be deployed today is a separate question with a different answer.
+//===----------------------------------------------------------------------===//
+
+SBF_RUNTIME_PURPOSE(Execution, "execution",
+                    "running a program that is already deployed, which is "
+                    "what a recovered program is a description of")
+SBF_RUNTIME_PURPOSE(Deployment, "deployment",
+                    "getting a program accepted onto the chain, which refuses "
+                    "things it will happily keep running")
+
+//===----------------------------------------------------------------------===//
+// The gates
+//
+// Only the gates that change what this analysis reports are tabulated. A gate
+// that has been active on every cluster for years and that Agave no longer
+// even consults is history, not a variable, and adding it here would invite a
+// reader to think it could still be off.
+//===----------------------------------------------------------------------===//
+
+SBF_RUNTIME_FEATURE(InstructionDataPointer, "instruction-data-pointer",
+                    "provide_instruction_data_offset_in_vm_r2",
+                    "5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL", "simd-0321",
+                    "the entrypoint receives the address of the instruction "
+                    "data in r2, so a program no longer has to walk the "
+                    "serialized accounts to find it")
+SBF_RUNTIME_FEATURE_ACTIVATION(InstructionDataPointer, MainnetBeta, 410400000)
+SBF_RUNTIME_FEATURE_ACTIVATION(InstructionDataPointer, Testnet, 388028256)
+SBF_RUNTIME_FEATURE_ACTIVATION(InstructionDataPointer, Devnet, 446688000)
+
+SBF_RUNTIME_FEATURE(DirectAccountPointers, "direct-account-pointers",
+                    "direct_account_pointers_in_program_input",
+                    "ptr9umikaeAS7ZBBp2fsfRhie16F1V2jCKA2y6gXNAK", "simd-0449",
+                    "an array of addresses, one per account, is appended after "
+                    "the program id, so a program reaches account N without "
+                    "walking the N-1 variable-length entries before it")
+SBF_RUNTIME_FEATURE_ACTIVATION(DirectAccountPointers, Testnet, 418268256)
+SBF_RUNTIME_FEATURE_ACTIVATION(DirectAccountPointers, Devnet, 474768000)
+
+SBF_RUNTIME_FEATURE(Sha512Syscall, "sha512-syscall", "enable_sha512_syscall",
+                    "s512oDwgx8hjMnaQjXfqqrZroVj4HvC6TkN3iSSWXCh", "simd-0512",
+                    "the SHA-512 syscall is registered, so a program calling "
+                    "it links on the clusters that have it and fails to link "
+                    "on the ones that do not")
+SBF_RUNTIME_FEATURE_ACTIVATION(Sha512Syscall, Testnet, 416540256)
+SBF_RUNTIME_FEATURE_ACTIVATION(Sha512Syscall, Devnet, 471744000)
+
+// A gate that removes something. It is active everywhere, so the syscall it
+// governs is registered nowhere today; it stays a gate rather than a deletion
+// because a program deployed before those slots called it successfully, and a
+// reader looking at that program deserves the reason it no longer resolves.
+SBF_RUNTIME_FEATURE(FeesSysvarDisabled, "fees-sysvar-disabled",
+                    "disable_fees_sysvar",
+                    "JAN1trEUEtZjgXYzNBYHU9DYd7GnThhXfFP7SzPXkPsG", "",
+                    "the fees sysvar syscall is no longer registered, because "
+                    "the sysvar it reads stopped being maintained")
+SBF_RUNTIME_FEATURE_ACTIVATION(FeesSysvarDisabled, MainnetBeta, 208656004)
+SBF_RUNTIME_FEATURE_ACTIVATION(FeesSysvarDisabled, Testnet, 213500260)
+SBF_RUNTIME_FEATURE_ACTIVATION(FeesSysvarDisabled, Devnet, 234576000)
+
+#undef SBF_RUNTIME_FEATURE_ACTIVATION
+#undef SBF_RUNTIME_FEATURE
+#undef SBF_RUNTIME_PURPOSE
+#undef SBF_CLUSTER

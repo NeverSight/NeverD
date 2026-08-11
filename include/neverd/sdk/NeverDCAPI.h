@@ -32,6 +32,9 @@ extern "C" {
 
 typedef void *neverd_session_t;
 typedef unsigned long long neverd_va_t;
+/// A Solana slot. Distinct from an address because it orders time rather than
+/// memory: it is what decides which runtime gates had been activated yet.
+typedef unsigned long long neverd_slot_t;
 
 typedef enum neverd_output_language {
 #define NEVERD_OUTPUT_LANGUAGE(NAME, VALUE, SPELLING, DISPLAY_NAME)            \
@@ -464,6 +467,23 @@ NEVERD_API int neverd_sbf_set_version(neverd_session_t Sess,
 /// Passing NULL or an empty string clears any previously supplied document.
 /// Returns 0 and sets the session error when the document cannot be parsed.
 NEVERD_API int neverd_sbf_set_idl(neverd_session_t Sess, const char *Json);
+/// Select the runtime a recovered Solana program is described against.
+///
+/// None of this is in the program file. Which gates are on depends on the
+/// cluster and the slot, the shape of the input buffer depends on the loader
+/// that owns the program, and whether a syscall resolves depends on whether
+/// the question is about running the program or about deploying it. Answering
+/// without them means answering for whichever chain the defaults name.
+///
+/// Cluster accepts `mainnet-beta`, `testnet`, `devnet`, or `localnet`; loader
+/// accepts `loader-v1` through `loader-v4`; purpose accepts `execution` or
+/// `deployment`. Each returns 0 and sets the session error on an unknown name.
+NEVERD_API int neverd_sbf_set_cluster(neverd_session_t Sess,
+                                      const char *Cluster);
+NEVERD_API void neverd_sbf_set_slot(neverd_session_t Sess, neverd_slot_t Slot);
+NEVERD_API int neverd_sbf_set_loader(neverd_session_t Sess, const char *Loader);
+NEVERD_API int neverd_sbf_set_purpose(neverd_session_t Sess,
+                                      const char *Purpose);
 NEVERD_API int neverd_inject_hello(neverd_session_t Sess);
 NEVERD_API const char *neverd_disasm_text(neverd_session_t Sess,
                                           const char *FuncNameOrAddr,

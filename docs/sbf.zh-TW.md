@@ -47,6 +47,51 @@ strict 拒絕畸形 header/range/alignment、不支援 writable legacy section�
 continuation/register/frame-pointer write/branch，以及版本未啟用 opcode，並回報
 instruction slot 與 virtual address。
 
+## 描述所針對的執行環境
+
+ISA 版本來自檔案本身，其他幾乎都不是。哪些 syscall 能解析取決於鏈與 slot；某個
+account 欄位落在哪幾個位元組取決於擁有該程式的 loader；entrypoint 會不會收到第二個
+引數取決於鏈撥下的一個開關；而一個程式能不能被部署，和它跑不跑得起來是兩回事。單一
+的版本開關表達不了其中任何一項，因此這些是各自獨立的軸，各有各的表。
+
+`SBFRuntimeFeatures.def` 記錄 cluster、用途，以及會改變 NeverD 回報內容的 gate，每筆
+都帶有執行環境識別碼、其存在即代表開啟的 account，以及各 cluster 啟用它時所在的 slot。
+某個 gate 若在某個 cluster 底下沒有對應列，就表示它在那裡尚未啟用。`simd-0321` 在每個
+cluster 上都已開啟；`simd-0449` 與 SHA-512 syscall 在 testnet 與 devnet 上開啟、在
+mainnet 上關閉，這正是一個在 devnet 跑得動的程式會在 mainnet 失敗的原因。
+
+`SBFLoaders.def` 記錄歸屬與序列化。部署與執行早在多年前就不再是同一個答案：
+`loader-v1` 與 `loader-v2` 會拒絕收到的每一條管理指令，同時繼續執行它們早已擁有的
+程式，這正是它們的序列化至今仍必須可讀的原因。
+
+| Loader | 序列化 | 可部署 | 可執行 |
+|--------|--------|--------|--------|
+| loader-v1 | `abi-v0` | 否 | 是 |
+| loader-v2 | `abi-v1` | 否 | 是 |
+| loader-v3 | `abi-v1` | 是 | 是 |
+| loader-v4 | `abi-v1` | 否 | 否（內建程式已移除） |
+
+`SBFAccountLayout.def` 標明每種序列化下每個 account 欄位的位置。兩者的差異不只在
+padding——它們對欄位的排序也不同：在位移三的地方，未對齊形式放的是 account 位址的第
+一個位元組，對齊形式放的卻是它的 executable 旗標，而數值本身完全不會宣告自己是從哪
+一種讀出來的。重複出現的 account 在 `abi-v0` 佔一個位元組、在 `abi-v1` 佔八個位元組，
+這會讓整趟走訪條目的過程錯位，而不只是錯開單一欄位。
+
+一次呼叫能不能解析是三個問題而不是一個，因此 `SBFSyscallLifecycle.def` 保存已公布簽章
+的確定程度，`SBFSyscallRegistration.def` 保存其餘部分：某個 syscall 出現在哪個
+registry、由哪個 gate 管轄，以及那個 gate 指向哪一邊。方向很重要，因為 gate 拿走東西
+和加上東西一樣容易——正是 `disable_fees_sysvar` 的啟用移除了 fees sysvar syscall——
+把一個做減法的 gate 讀成做加法的，會一次把所有 cluster 的答案都反過來。
+`sol_alloc_free_` 完全不需要 gate：執行環境仍持續兌現它，同時拒絕接受呼叫它的新程式，
+這只是兩個 registry 之間的差別，而不是別的什麼。
+
+在已啟用 `simd-0321` 的執行環境上，entrypoint 還會在 `r2` 收到 instruction data 的
+位址。NeverD 把它模型化成一種自成一類的值而非常數，因為它落在哪裡取決於 account：
+憑空捏造一個位址，會讓經由它的 load 被回報成某個具名的 account 欄位。啟用之前該暫存器
+抵達時為零，讀取它的程式讀到的就是零。因此生成的 LLVM、C 與 Rust entry point 同時接收
+input buffer 與 instruction data，因為一個無法被交付第二個引數的可呼叫體，也就無法重現
+一個會讀取它的程式。
+
 目前 Solana toolchain 使用 `cargo build-sbf`。現代 v3+ production program 以 Rust
 為主，上游 C toolchain 不產生 v3；這不限制 NeverD，任何接受的 SBF 輸入均可輸出 C/Rust。
 
@@ -80,7 +125,17 @@ neverd decompile --language=rust -o program.rs program.so
 # 對研究 fixture 指定 VM contract，或保留畸形輸入供鑑識。
 neverd lift --sbf-version=v2 program.so
 neverd lift --sbf-relaxed --dump-low program.so
+
+# 說明答案針對的是哪個執行環境。這些都不在程式檔案裡。
+neverd lift --dump-high --sbf-cluster=devnet program.so
+neverd lift --dump-high --sbf-slot=410400000 program.so
+neverd lift --dump-high --sbf-loader=loader-v1 program.so
+neverd lift --dump-high --sbf-purpose=deployment program.so
 ```
+
+`--sbf-cluster`、`--sbf-slot`、`--sbf-loader` 與 `--sbf-purpose` 用來選擇執行環境
+profile。預設值描述的是目前狀態下的 mainnet-beta、`loader-v3`，以及一個已經部署的
+程式。改問部署，回報的就是哪些 syscall 會讓一個程式上不了鏈，即使鏈本身會繼續執行它。
 
 `--sbf-version=auto|v0|v1|v2|v3|v4` 只在 ELF 通過偵測 layout check 後改變
 instruction semantics，用於損壞或研究 fixture；不可把不可信檔案重新解讀為另一封裝標準。
@@ -228,6 +283,12 @@ Low/Med/High/LLVM dump、CFG/call graph JSON、section、symbol、relocation、s
 neverd_session_t session = neverd_session_create();
 neverd_sbf_set_strict(session, 1);
 neverd_sbf_set_version(session, "auto");
+/* 答案針對的是哪個執行環境。預設值描述的是目前狀態下的 mainnet-beta、loader-v3，
+   以及一個已經部署的程式。 */
+neverd_sbf_set_cluster(session, "devnet");
+neverd_sbf_set_slot(session, 474768000);
+neverd_sbf_set_loader(session, "loader-v3");
+neverd_sbf_set_purpose(session, "deployment");
 const char *rust = neverd_decompile_all_ex(
     session, "program.so", NEVERD_OUTPUT_RUST, 0, 0);
 /* consume rust, then: */

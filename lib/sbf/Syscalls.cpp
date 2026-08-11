@@ -124,7 +124,7 @@ uint32_t hashSymbolName(llvm::StringRef Name) {
 llvm::ArrayRef<SyscallInfo> syscallInfos() {
   static const std::array Table = {
 #define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, POINTER_ARGUMENTS, RETURN_KIND,  \
-                    CATEGORY, EFFECTS, AVAILABILITY, SOURCE)                   \
+                    CATEGORY, EFFECTS, LIFECYCLE, SOURCE)                      \
   SyscallInfo{Syscall::ID,                                                     \
               NAME,                                                            \
               hashSymbolName(NAME),                                            \
@@ -133,7 +133,7 @@ llvm::ArrayRef<SyscallInfo> syscallInfos() {
               SyscallReturnKind::RETURN_KIND,                                  \
               SyscallCategory::CATEGORY,                                       \
               EFFECTS,                                                         \
-              SyscallAvailability::AVAILABILITY,                               \
+              SyscallLifecycle::LIFECYCLE,                                     \
               SyscallSource::SOURCE},
 #include "neverd/sbf/SBFSyscalls.def"
   };
@@ -291,14 +291,116 @@ llvm::Error validateSyscallMemoryTable() {
   return llvm::Error::success();
 }
 
-llvm::StringRef syscallAvailabilityName(SyscallAvailability Availability) {
-  switch (Availability) {
-#define SBF_SYSCALL_AVAILABILITY(ID, SPELLING)                                 \
-  case SyscallAvailability::ID:                                                \
-    return SPELLING;
-#include "neverd/sbf/SBFSyscallAvailability.def"
+llvm::ArrayRef<SyscallLifecycleInfo> syscallLifecycleInfos() {
+  static const std::array Table = {
+#define SBF_SYSCALL_LIFECYCLE(ID, SPELLING, SUMMARY)                           \
+  SyscallLifecycleInfo{SyscallLifecycle::ID, SPELLING, SUMMARY},
+#include "neverd/sbf/SBFSyscallLifecycle.def"
+  };
+  return Table;
+}
+
+llvm::StringRef syscallLifecycleName(SyscallLifecycle Lifecycle) {
+  return syscallLifecycleInfos()[static_cast<size_t>(Lifecycle)].Name;
+}
+
+llvm::StringRef syscallGatePolarityName(SyscallGatePolarity Polarity) {
+  switch (Polarity) {
+#define SBF_SYSCALL_GATE_POLARITY(ID, NAME, SUMMARY)                           \
+  case SyscallGatePolarity::ID:                                                \
+    return NAME;
+#include "neverd/sbf/SBFSyscallRegistration.def"
   }
   return "unknown";
+}
+
+llvm::StringRef syscallRegistrationName(SyscallRegistration Registration) {
+  switch (Registration) {
+  case SyscallRegistration::Registered:
+    return "registered";
+  case SyscallRegistration::GateUnmet:
+    return "gate-unmet";
+  case SyscallRegistration::EnvironmentExcluded:
+    return "environment-excluded";
+  }
+  return "unknown";
+}
+
+RuntimePurposeSet syscallPurposes(Syscall ID) {
+  // The table records only the exceptions, because writing "both" beside every
+  // syscall would hide the one or two that are not.
+  switch (ID) {
+#define SBF_SYSCALL_PURPOSES(SYSCALL, PURPOSES)                                \
+  case Syscall::SYSCALL:                                                       \
+    return RuntimePurposeSet::PURPOSES;
+#include "neverd/sbf/SBFSyscallRegistration.def"
+  default:
+    return kEveryPurpose;
+  }
+}
+
+llvm::ArrayRef<SyscallGateInfo> syscallGateInfos() {
+  static const std::array Table = {
+#define SBF_SYSCALL_GATE(SYSCALL, FEATURE, POLARITY)                           \
+  SyscallGateInfo{Syscall::SYSCALL, RuntimeFeature::FEATURE,                   \
+                  SyscallGatePolarity::POLARITY},
+#include "neverd/sbf/SBFSyscallRegistration.def"
+  };
+  return Table;
+}
+
+const SyscallGateInfo *getSyscallGate(Syscall ID) {
+  for (const SyscallGateInfo &Info : syscallGateInfos())
+    if (Info.ID == ID)
+      return &Info;
+  return nullptr;
+}
+
+SyscallRegistration syscallRegistration(Syscall ID,
+                                        const RuntimeProfile &Profile) {
+  // Which registry is asked about comes first: a syscall the deployment
+  // registry never contains is excluded there no matter what the chain has
+  // switched on, and reporting a gate for it would send a reader looking for
+  // a cluster where it works.
+  if (!contains(syscallPurposes(ID), Profile.Purpose))
+    return SyscallRegistration::EnvironmentExcluded;
+  const SyscallGateInfo *Gate = getSyscallGate(ID);
+  if (!Gate)
+    return SyscallRegistration::Registered;
+  const bool Active = isFeatureActive(Profile, Gate->Feature);
+  const bool Wanted = Gate->Polarity == SyscallGatePolarity::RequiresActive;
+  return Active == Wanted ? SyscallRegistration::Registered
+                          : SyscallRegistration::GateUnmet;
+}
+
+llvm::Error validateSyscallRegistrationTable() {
+  const auto Report = [](llvm::Twine Message) {
+    return llvm::make_error<llvm::StringError>(
+        ("sbf: syscall registration: " + Message).str(),
+        llvm::inconvertibleErrorCode());
+  };
+
+  for (const SyscallGateInfo &Info : syscallGateInfos()) {
+    const SyscallInfo *Syscall = getSyscallInfo(Info.ID);
+    if (!Syscall)
+      return Report("a gate names a syscall the table does not declare");
+    // A gate is the whole reason a signature is conditional, so a syscall the
+    // gate table governs and the syscall table calls settled is one of the two
+    // files being wrong about the other.
+    if (Syscall->Lifecycle != SyscallLifecycle::FeatureGated &&
+        Syscall->Lifecycle != SyscallLifecycle::Deprecated)
+      return Report("syscall '" + Syscall->Name + "' is governed by gate '" +
+                    runtimeFeatureName(Info.Feature) + "' but is recorded as " +
+                    syscallLifecycleName(Syscall->Lifecycle));
+    for (const SyscallGateInfo &Other : syscallGateInfos())
+      if (&Other != &Info && Other.ID == Info.ID)
+        return Report("syscall '" + Syscall->Name + "' is governed twice");
+  }
+
+  for (const SyscallInfo &Info : syscallInfos())
+    if (syscallPurposes(Info.ID) == RuntimePurposeSet::None)
+      return Report("syscall '" + Info.Name + "' belongs to no registry");
+  return llvm::Error::success();
 }
 
 llvm::ArrayRef<SyscallSourceInfo> syscallSourceInfos() {

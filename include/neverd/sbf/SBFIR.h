@@ -121,7 +121,18 @@ struct MedInstruction {
 };
 
 struct RegisterValue {
-  enum class Kind : uint8_t { Unknown, Constant, StackAddress, RodataAddress };
+  enum class Kind : uint8_t {
+    Unknown,
+    Constant,
+    StackAddress,
+    RodataAddress,
+    /// An address inside the input buffer whose distance from the buffer's
+    /// base the serialized accounts decide, which is a runtime quantity. It is
+    /// a source of its own rather than a constant because the only honest
+    /// constant to invent for it would be wrong, and a wrong one would let a
+    /// load through it be reported as a named account field.
+    InstructionDataAddress,
+  };
   Kind ValueKind = Kind::Unknown;
   uint64_t Value = 0;
   int64_t Offset = 0;
@@ -192,6 +203,12 @@ struct HighIR {
 struct SBFProgram {
   Metadata Image;
   SBFVMConfig Config;
+  /// The runtime this description is about. It is recorded on the program
+  /// because almost nothing recovered here is true unconditionally: the same
+  /// bytes describe different behaviour on a chain that has activated a
+  /// different set of gates, and a reader given the facts without the runtime
+  /// cannot tell which chain they came from.
+  RuntimeProfile Profile;
   ProgramImage ExecutableImage;
   LowIR Low;
   MedIR Med;

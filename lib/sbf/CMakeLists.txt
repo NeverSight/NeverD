@@ -1,4 +1,5 @@
 add_neverd_component_library(NeverDSBF
+  AccountLayout.cpp
   Analyzer.cpp
   Anchor.cpp
   CEmitter.cpp
@@ -11,6 +12,7 @@ add_neverd_component_library(NeverDSBF
   ProgramImage.cpp
   Pubkey.cpp
   Relocations.cpp
+  RuntimeProfile.cpp
   RustEmitter.cpp
   Semantics.cpp
   SolanaModel.cpp

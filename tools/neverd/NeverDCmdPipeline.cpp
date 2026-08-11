@@ -82,6 +82,23 @@ bool configureSBF(neverd_session_t Sess) {
                        << "\n";
     return false;
   }
+  neverd_sbf_set_slot(Sess, SBFSlot.getValue());
+  const auto Select = [Sess](const char *What, int (*Set)(neverd_session_t,
+                                                          const char *),
+                             llvm::StringRef Name) {
+    if (Set(Sess, Name.str().c_str()))
+      return true;
+    WithColor::error() << "invalid " << What << ": " << takeLastError(Sess)
+                       << "\n";
+    return false;
+  };
+  if (!Select("Solana cluster", neverd_sbf_set_cluster,
+              sbf::clusterName(SBFCluster.getValue())) ||
+      !Select("Solana loader", neverd_sbf_set_loader,
+              sbf::loaderName(SBFLoader.getValue())) ||
+      !Select("runtime purpose", neverd_sbf_set_purpose,
+              sbf::runtimePurposeName(SBFPurpose.getValue())))
+    return false;
   if (!SBFIdl.empty()) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> Document =
         MemoryBuffer::getFile(SBFIdl);

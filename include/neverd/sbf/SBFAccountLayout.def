@@ -4,45 +4,123 @@
 //
 // This file intentionally has no include guard.
 //
+// SBF_ACCOUNT_ABI(ID, NAME, ALIGNED, DUPLICATE_ENTRY_SIZE, SUMMARY)
 // SBF_INPUT_FIELD(ID, NAME, OFFSET, SIZE)
-// SBF_ACCOUNT_FIELD(ID, NAME, OFFSET, SIZE)
+// SBF_ACCOUNT_FIELD_ID(ID, NAME, SUMMARY)
+// SBF_ACCOUNT_FIELD(ABI, ID, OFFSET, SIZE)
 //
 // The Solana loader hands a program one pointer, to a serialized buffer mapped
-// at kInputStart. SBF_INPUT_FIELD describes the buffer header, and
-// SBF_ACCOUNT_FIELD describes the fixed part of one account entry, relative to
-// that entry's start.
+// at kInputStart. SBF_INPUT_FIELD describes the buffer header, which both
+// serializations begin the same way, and SBF_ACCOUNT_FIELD places one field of
+// one account entry relative to that entry's start.
 //
-// Offsets are protocol data, not layout choices: they match the aligned
-// serialization the BPF loaders produce. Each account entry's variable-length
-// data follows the fixed part, so only the first account sits at an offset that
-// is known without executing the program. SBFSolanaModelTests asserts that the
-// fixed fields tile their span without a gap or an overlap.
+// There are two serializations, not one, and which applies is decided by the
+// loader that owns the program rather than by anything in the program file.
+// They do not merely differ in padding: they order the fields differently, so
+// reading one as the other lands on a real field of the wrong meaning. At
+// offset 3 the unaligned form has the first byte of the account's address and
+// the aligned form has its executable flag, and nothing about the resulting
+// value announces which one was read.
+//
+// Offsets are protocol data, not layout choices: they match what the runtime
+// writes. Each account entry's variable-length data follows the fixed part, so
+// only the first account sits at an offset that is known without executing the
+// program. SBFSolanaModelTests asserts that each ABI's fixed fields tile their
+// span without a gap or an overlap.
 //
 // A SIZE of zero marks a field whose length the serialized data itself
-// determines.
+// determines. A field with no row under an ABI is not at a fixed offset there:
+// the unaligned form writes the owner, the executable flag and the rent epoch
+// after the account's data, so where they land depends on how long that data
+// is.
 //
 //===----------------------------------------------------------------------===//
+
+#ifndef SBF_ACCOUNT_ABI
+#define SBF_ACCOUNT_ABI(ID, NAME, ALIGNED, DUPLICATE_ENTRY_SIZE, SUMMARY)
+#endif
 
 #ifndef SBF_INPUT_FIELD
 #define SBF_INPUT_FIELD(ID, NAME, OFFSET, SIZE)
 #endif
 
-#ifndef SBF_ACCOUNT_FIELD
-#define SBF_ACCOUNT_FIELD(ID, NAME, OFFSET, SIZE)
+#ifndef SBF_ACCOUNT_FIELD_ID
+#define SBF_ACCOUNT_FIELD_ID(ID, NAME, SUMMARY)
 #endif
+
+#ifndef SBF_ACCOUNT_FIELD
+#define SBF_ACCOUNT_FIELD(ABI, ID, OFFSET, SIZE)
+#endif
+
+//===----------------------------------------------------------------------===//
+// The two serializations
+//
+// DUPLICATE_ENTRY_SIZE is how many bytes an account that repeats an earlier one
+// occupies. It is not a detail: a walk over the entries that assumes the wrong
+// size for a repeat is misaligned for every entry after it.
+//===----------------------------------------------------------------------===//
+
+SBF_ACCOUNT_ABI(V0, "abi-v0", false, 1,
+                "the unaligned serialization, produced only for programs the "
+                "first loader owns")
+SBF_ACCOUNT_ABI(V1, "abi-v1", true, 8,
+                "the aligned serialization, produced for every program "
+                "deployed since, with a realloc window after each account's "
+                "data")
+
+//===----------------------------------------------------------------------===//
+// The buffer header
+//===----------------------------------------------------------------------===//
 
 SBF_INPUT_FIELD(AccountCount, "account_count", 0, 8)
 
-SBF_ACCOUNT_FIELD(DuplicateIndex, "duplicate_index", 0, 1)
-SBF_ACCOUNT_FIELD(IsSigner, "is_signer", 1, 1)
-SBF_ACCOUNT_FIELD(IsWritable, "is_writable", 2, 1)
-SBF_ACCOUNT_FIELD(Executable, "executable", 3, 1)
-SBF_ACCOUNT_FIELD(OriginalDataLen, "original_data_len", 4, 4)
-SBF_ACCOUNT_FIELD(Key, "key", 8, 32)
-SBF_ACCOUNT_FIELD(Owner, "owner", 40, 32)
-SBF_ACCOUNT_FIELD(Lamports, "lamports", 72, 8)
-SBF_ACCOUNT_FIELD(DataLen, "data_len", 80, 8)
-SBF_ACCOUNT_FIELD(Data, "data", 88, 0)
+//===----------------------------------------------------------------------===//
+// What an account entry can say
+//===----------------------------------------------------------------------===//
+
+SBF_ACCOUNT_FIELD_ID(DuplicateIndex, "duplicate_index",
+                     "the index of the earlier entry this one repeats, or the "
+                     "marker that says it does not")
+SBF_ACCOUNT_FIELD_ID(IsSigner, "is_signer",
+                     "whether the transaction carries this account's signature")
+SBF_ACCOUNT_FIELD_ID(IsWritable, "is_writable",
+                     "whether the program may change this account")
+SBF_ACCOUNT_FIELD_ID(Executable, "executable",
+                     "whether this account holds a program")
+SBF_ACCOUNT_FIELD_ID(OriginalDataLen, "original_data_len",
+                     "the data length before the program grew it, which is "
+                     "what bounds a reallocation")
+SBF_ACCOUNT_FIELD_ID(Key, "key", "the account's address")
+SBF_ACCOUNT_FIELD_ID(Owner, "owner",
+                     "the program allowed to change this account's data")
+SBF_ACCOUNT_FIELD_ID(Lamports, "lamports", "the account's balance")
+SBF_ACCOUNT_FIELD_ID(DataLen, "data_len", "how many bytes of data follow")
+SBF_ACCOUNT_FIELD_ID(Data, "data", "the account's data")
+
+//===----------------------------------------------------------------------===//
+// Where it sits, per serialization
+//===----------------------------------------------------------------------===//
+
+SBF_ACCOUNT_FIELD(V0, DuplicateIndex, 0, 1)
+SBF_ACCOUNT_FIELD(V0, IsSigner, 1, 1)
+SBF_ACCOUNT_FIELD(V0, IsWritable, 2, 1)
+SBF_ACCOUNT_FIELD(V0, Key, 3, 32)
+SBF_ACCOUNT_FIELD(V0, Lamports, 35, 8)
+SBF_ACCOUNT_FIELD(V0, DataLen, 43, 8)
+SBF_ACCOUNT_FIELD(V0, Data, 51, 0)
+
+SBF_ACCOUNT_FIELD(V1, DuplicateIndex, 0, 1)
+SBF_ACCOUNT_FIELD(V1, IsSigner, 1, 1)
+SBF_ACCOUNT_FIELD(V1, IsWritable, 2, 1)
+SBF_ACCOUNT_FIELD(V1, Executable, 3, 1)
+SBF_ACCOUNT_FIELD(V1, OriginalDataLen, 4, 4)
+SBF_ACCOUNT_FIELD(V1, Key, 8, 32)
+SBF_ACCOUNT_FIELD(V1, Owner, 40, 32)
+SBF_ACCOUNT_FIELD(V1, Lamports, 72, 8)
+SBF_ACCOUNT_FIELD(V1, DataLen, 80, 8)
+SBF_ACCOUNT_FIELD(V1, Data, 88, 0)
 
 #undef SBF_ACCOUNT_FIELD
+#undef SBF_ACCOUNT_FIELD_ID
 #undef SBF_INPUT_FIELD
+#undef SBF_ACCOUNT_ABI

@@ -9,6 +9,7 @@
 #include "neverd/sbf/Opcodes.h"
 #include "neverd/sbf/Pubkey.h"
 #include "neverd/sbf/Relocations.h"
+#include "neverd/sbf/RuntimeProfile.h"
 #include "neverd/sbf/SBFConstants.h"
 #include "neverd/sbf/Syscalls.h"
 #include "neverd/sbf/Version.h"
@@ -156,7 +157,7 @@ TEST(SBFSyscalls, HashesAndLookupsAreStableAndUnique) {
     EXPECT_TRUE(Names.insert(Info.Name.str()).second) << Info.Name.str();
     EXPECT_EQ(Info.Hash, hashSymbolName(Info.Name));
     EXPECT_LE(Info.ArgumentCount, kArgumentRegisterCount);
-    EXPECT_NE(syscallAvailabilityName(Info.Availability), "unknown");
+    EXPECT_FALSE(syscallLifecycleName(Info.Lifecycle).empty());
     EXPECT_NE(syscallSourceName(Info.Source), "unknown");
     if (Info.ReturnKind == SyscallReturnKind::Never)
       EXPECT_TRUE(hasEffect(Info.Effects, SyscallEffect::Terminal));
@@ -288,9 +289,9 @@ TEST(SBFSyscalls, MatchesCurrentStableABIAndTracksProposalsSeparately) {
   ASSERT_NE(Sha512, nullptr);
   ASSERT_NE(Decompress, nullptr);
   ASSERT_NE(Pairing, nullptr);
-  EXPECT_EQ(Sha512->Availability, SyscallAvailability::Proposed);
-  EXPECT_EQ(Decompress->Availability, SyscallAvailability::FeatureGated);
-  EXPECT_EQ(Pairing->Availability, SyscallAvailability::FeatureGated);
+  EXPECT_EQ(Sha512->Lifecycle, SyscallLifecycle::FeatureGated);
+  EXPECT_EQ(Decompress->Lifecycle, SyscallLifecycle::FeatureGated);
+  EXPECT_EQ(Pairing->Lifecycle, SyscallLifecycle::FeatureGated);
   EXPECT_EQ(Sha512->Source, SyscallSource::AgaveMaster);
   EXPECT_EQ(syscallSourceRevision(SyscallSource::AgaveMaster),
             "cae40aa610fdbdb313209bc1eec737079eb59688");
@@ -318,9 +319,141 @@ TEST(SBFSyscalls, MatchesCurrentStableABIAndTracksProposalsSeparately) {
   for (llvm::StringRef Name : FeatureGated) {
     const SyscallInfo *Info = findSyscallByName(Name);
     ASSERT_NE(Info, nullptr) << Name.str();
-    EXPECT_EQ(Info->Availability, SyscallAvailability::FeatureGated)
-        << Name.str();
+    EXPECT_EQ(Info->Lifecycle, SyscallLifecycle::FeatureGated) << Name.str();
   }
+}
+
+//===----------------------------------------------------------------------===//
+// Whether a call resolves, which is three questions
+//===----------------------------------------------------------------------===//
+
+TEST(SBFRuntimeProfile, TablesAgreeWithEachOther) {
+  llvm::Error ProfileError = validateRuntimeProfileTables();
+  ASSERT_FALSE(static_cast<bool>(ProfileError))
+      << llvm::toString(std::move(ProfileError));
+  llvm::Error RegistrationError = validateSyscallRegistrationTable();
+  ASSERT_FALSE(static_cast<bool>(RegistrationError))
+      << llvm::toString(std::move(RegistrationError));
+
+  for (const ClusterInfo &Info : clusterInfos()) {
+    SCOPED_TRACE(Info.Name.str());
+    EXPECT_EQ(&getClusterInfo(Info.ID), &Info);
+    EXPECT_EQ(parseCluster(Info.Name), Info.ID);
+  }
+  for (const LoaderInfo &Info : loaderInfos()) {
+    SCOPED_TRACE(Info.Name.str());
+    EXPECT_EQ(parseLoader(Info.Name), Info.ID);
+    EXPECT_EQ(loaderForAddress(Info.Address), Info.ID);
+    // Something that cannot execute cannot deploy either, or a program could
+    // be accepted onto a chain that would then refuse to run it.
+    if (Info.Deploys)
+      EXPECT_TRUE(Info.Executes);
+  }
+  for (const RuntimeFeatureInfo &Info : runtimeFeatureInfos()) {
+    SCOPED_TRACE(Info.Name.str());
+    EXPECT_EQ(parseRuntimeFeature(Info.Name), Info.ID);
+    EXPECT_EQ(parseRuntimeFeature(Info.Gate), Info.ID);
+  }
+}
+
+TEST(SBFRuntimeProfile, AGateIsOnForOneChainAndOffForAnother) {
+  RuntimeProfile Mainnet = currentMainnetProfile();
+  EXPECT_EQ(Mainnet.OnCluster, Cluster::MainnetBeta);
+  EXPECT_TRUE(isFeatureActive(Mainnet, RuntimeFeature::InstructionDataPointer));
+  EXPECT_FALSE(isFeatureActive(Mainnet, RuntimeFeature::Sha512Syscall));
+
+  RuntimeProfile Devnet = Mainnet;
+  Devnet.OnCluster = Cluster::Devnet;
+  EXPECT_TRUE(isFeatureActive(Devnet, RuntimeFeature::Sha512Syscall));
+
+  // A slot before the activation is a different chain state, and the whole
+  // point of recording the slot is that a program from that era is read in it.
+  const std::optional<uint64_t> Activated = runtimeFeatureActivation(
+      RuntimeFeature::InstructionDataPointer, Cluster::MainnetBeta);
+  ASSERT_TRUE(Activated.has_value());
+  RuntimeProfile Earlier = Mainnet;
+  Earlier.Slot = *Activated - 1;
+  EXPECT_FALSE(isFeatureActive(Earlier, RuntimeFeature::InstructionDataPointer));
+  Earlier.Slot = *Activated;
+  EXPECT_TRUE(isFeatureActive(Earlier, RuntimeFeature::InstructionDataPointer));
+
+  // A validator started from genesis is neither of those chains.
+  RuntimeProfile Local = Mainnet;
+  Local.OnCluster = Cluster::Localnet;
+  EXPECT_TRUE(isFeatureActive(Local, RuntimeFeature::Sha512Syscall));
+
+  // An override describes a validator somebody configured, and outranks what
+  // the chain did in both directions.
+  RuntimeProfile Forced = Mainnet;
+  Forced.Forced = RuntimeFeature::Sha512Syscall;
+  EXPECT_TRUE(isFeatureActive(Forced, RuntimeFeature::Sha512Syscall));
+  Forced.Suppressed = RuntimeFeature::Sha512Syscall;
+  EXPECT_FALSE(isFeatureActive(Forced, RuntimeFeature::Sha512Syscall));
+}
+
+TEST(SBFSyscalls, RegistrationSeparatesTheGateFromTheRegistry) {
+  const SyscallInfo *Sha512 = findSyscallByName("sol_sha512");
+  const SyscallInfo *Fees = findSyscallByName("sol_get_fees_sysvar");
+  const SyscallInfo *Alloc = findSyscallByName("sol_alloc_free_");
+  ASSERT_NE(Sha512, nullptr);
+  ASSERT_NE(Fees, nullptr);
+  ASSERT_NE(Alloc, nullptr);
+
+  RuntimeProfile Mainnet = currentMainnetProfile();
+  RuntimeProfile Devnet = Mainnet;
+  Devnet.OnCluster = Cluster::Devnet;
+
+  // An adding gate: absent on one chain, present on another.
+  EXPECT_EQ(syscallRegistration(Sha512->ID, Mainnet),
+            SyscallRegistration::GateUnmet);
+  EXPECT_EQ(syscallRegistration(Sha512->ID, Devnet),
+            SyscallRegistration::Registered);
+
+  // A removing gate reads exactly like an adding one unless the direction is
+  // recorded. Activating this one is what took the syscall away, so it is
+  // unavailable everywhere it has been activated.
+  const SyscallGateInfo *FeesGate = getSyscallGate(Fees->ID);
+  ASSERT_NE(FeesGate, nullptr);
+  EXPECT_EQ(FeesGate->Polarity, SyscallGatePolarity::RequiresInactive);
+  EXPECT_EQ(syscallRegistration(Fees->ID, Mainnet),
+            SyscallRegistration::GateUnmet);
+  RuntimeProfile Before = Mainnet;
+  Before.Suppressed = RuntimeFeature::FeesSysvarDisabled;
+  EXPECT_EQ(syscallRegistration(Fees->ID, Before),
+            SyscallRegistration::Registered);
+
+  // The retired allocator is a registry difference and nothing else: no gate,
+  // no cluster, no slot. A program that calls it runs and cannot be deployed.
+  EXPECT_EQ(getSyscallGate(Alloc->ID), nullptr);
+  EXPECT_EQ(syscallRegistration(Alloc->ID, Mainnet),
+            SyscallRegistration::Registered);
+  RuntimeProfile Deploying = Mainnet;
+  Deploying.Purpose = RuntimePurpose::Deployment;
+  EXPECT_EQ(syscallRegistration(Alloc->ID, Deploying),
+            SyscallRegistration::EnvironmentExcluded);
+
+  // A syscall governed by nothing resolves in both registries on every chain.
+  const SyscallInfo *Log = findSyscallByName("sol_log_");
+  ASSERT_NE(Log, nullptr);
+  for (const RuntimePurposeInfo &Purpose : runtimePurposeInfos()) {
+    RuntimeProfile Profile = Mainnet;
+    Profile.Purpose = Purpose.ID;
+    EXPECT_EQ(syscallRegistration(Log->ID, Profile),
+              SyscallRegistration::Registered)
+        << Purpose.Name.str();
+  }
+}
+
+TEST(SBFRuntimeProfile, TheLoaderDecidesTheSerialization) {
+  RuntimeProfile Profile = currentMainnetProfile();
+  EXPECT_EQ(Profile.accountABI(), AccountABI::V1);
+
+  // The first loader cannot deploy anything and still runs what it owns, which
+  // is exactly why its serialization has to stay readable.
+  Profile.OwningLoader = Loader::V1;
+  EXPECT_EQ(Profile.accountABI(), AccountABI::V0);
+  EXPECT_FALSE(getLoaderInfo(Loader::V1).Deploys);
+  EXPECT_TRUE(getLoaderInfo(Loader::V1).Executes);
 }
 
 TEST(SBFRelocations, CentralTableMatchesTheELFABI) {

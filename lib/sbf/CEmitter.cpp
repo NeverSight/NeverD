@@ -542,6 +542,7 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
         "enum { NEVERD_SBF_REGISTER_COUNT = "
      << kRegisterCount << ", NEVERD_SBF_RETURN_REGISTER = " << kReturnRegister
      << ", NEVERD_SBF_INPUT_REGISTER = " << kFirstArgumentRegister
+     << ", NEVERD_SBF_INSTRUCTION_DATA_REGISTER = " << kInstructionDataRegister
      << ", NEVERD_SBF_FRAME_POINTER = " << kFramePointerRegister
      << ", NEVERD_SBF_FIRST_SAVED_REGISTER = " << kFirstCalleeSavedRegister
      << ", NEVERD_SBF_SAVED_REGISTERS = " << kCalleeSavedRegisterCount
@@ -622,8 +623,12 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
          << " at block_" << Region.HeaderBlock << " */\n";
   }
 
+  // The loader hands the program the input buffer and, on a runtime that has
+  // activated it, the instruction data. A callable that only takes the first
+  // cannot reproduce a program that reads the second.
   OS << "neverd_sbf_status " << Options.FunctionName
-     << "(neverd_sbf_environment *env, uint64_t input, uint64_t *result) {\n"
+     << "(neverd_sbf_environment *env, uint64_t input, "
+        "uint64_t instruction_data, uint64_t *result) {\n"
         "  (void)env;\n"
         "  (void)result;\n"
         "  uint64_t r[NEVERD_SBF_REGISTER_COUNT] = {0};\n";
@@ -636,6 +641,7 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
           "  size_t depth = 0, i = 0; uint32_t pc = "
        << Program.Low.EntrySlot << ";\n";
   OS << "  r[NEVERD_SBF_INPUT_REGISTER] = input; "
+        "r[NEVERD_SBF_INSTRUCTION_DATA_REGISTER] = instruction_data; "
         "r[NEVERD_SBF_FRAME_POINTER] = NEVERD_SBF_STACK_START "
         "+ "
      << (versionHasFeature(Program.Low.TheVersion,

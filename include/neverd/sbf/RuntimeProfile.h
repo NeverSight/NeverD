@@ -1,0 +1,243 @@
+//===- RuntimeProfile.h - Which runtime the answer is about ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Declares the runtime a recovered program is being described against.
+///
+/// Almost every question about a Solana program has more than one true answer,
+/// and which one is wanted depends on facts that are not in the program file.
+/// Whether a syscall resolves depends on the chain and the slot. Which bytes an
+/// account field sits at depends on the loader that owns the program. Whether
+/// the entrypoint receives a second argument depends on a switch the chain
+/// throws. Whether a program can be deployed is a different question from
+/// whether it runs.
+///
+/// A single "version" switch cannot express that, and trying makes it express
+/// something false. These are separate axes, so they are separate fields.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SBF_RUNTIMEPROFILE_H
+#define NEVERD_SBF_RUNTIMEPROFILE_H
+
+#include "neverd/sbf/AccountLayout.h"
+#include "neverd/sbf/KnownAddresses.h"
+
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+
+namespace neverd::sbf {
+
+//===----------------------------------------------------------------------===//
+// The chain
+//===----------------------------------------------------------------------===//
+
+enum class Cluster : uint8_t {
+#define SBF_CLUSTER(ID, NAME, ACTIVATES_EVERYTHING, SUMMARY) ID,
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+};
+
+struct ClusterInfo {
+  Cluster ID;
+  llvm::StringLiteral Name;
+  /// True for a chain started from a fresh genesis, which activates every gate
+  /// its validator knows rather than the ones a real chain has reached.
+  bool ActivatesEverything;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<ClusterInfo> clusterInfos();
+const ClusterInfo &getClusterInfo(Cluster ID);
+llvm::StringRef clusterName(Cluster ID);
+std::optional<Cluster> parseCluster(llvm::StringRef Name);
+
+//===----------------------------------------------------------------------===//
+// What is being asked
+//===----------------------------------------------------------------------===//
+
+enum class RuntimePurpose : uint8_t {
+#define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY) ID,
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+};
+
+struct RuntimePurposeInfo {
+  RuntimePurpose ID;
+  llvm::StringLiteral Name;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<RuntimePurposeInfo> runtimePurposeInfos();
+llvm::StringRef runtimePurposeName(RuntimePurpose ID);
+std::optional<RuntimePurpose> parseRuntimePurpose(llvm::StringRef Name);
+
+/// A set of purposes, for saying that something belongs to one registry and
+/// not the other.
+enum class RuntimePurposeSet : uint8_t {
+  None = 0,
+#define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)                                 \
+  ID = uint8_t{1} << static_cast<uint8_t>(RuntimePurpose::ID),
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+};
+
+constexpr RuntimePurposeSet operator|(RuntimePurposeSet L,
+                                      RuntimePurposeSet R) {
+  return static_cast<RuntimePurposeSet>(static_cast<uint8_t>(L) |
+                                        static_cast<uint8_t>(R));
+}
+
+constexpr bool contains(RuntimePurposeSet Set, RuntimePurpose Purpose) {
+  return (static_cast<uint8_t>(Set) &
+          (uint8_t{1} << static_cast<uint8_t>(Purpose))) != 0;
+}
+
+/// Every purpose, which is what applies to anything with no exception
+/// recorded against it.
+inline constexpr RuntimePurposeSet kEveryPurpose = [] {
+  auto Every = RuntimePurposeSet::None;
+#define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY) Every = Every | RuntimePurposeSet::ID;
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+  return Every;
+}();
+
+//===----------------------------------------------------------------------===//
+// The loader
+//===----------------------------------------------------------------------===//
+
+enum class Loader : uint8_t {
+#define SBF_LOADER(ID, NAME, KNOWN_ADDRESS, ACCOUNT_ABI, DEPLOYS, EXECUTES,    \
+                   SUMMARY)                                                    \
+  ID,
+#include "neverd/sbf/SBFLoaders.def"
+};
+
+struct LoaderInfo {
+  Loader ID;
+  llvm::StringLiteral Name;
+  KnownAddress Address;
+  /// The shape of the buffer this loader hands the programs it owns.
+  AccountABI ABI;
+  bool Deploys;
+  bool Executes;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<LoaderInfo> loaderInfos();
+const LoaderInfo &getLoaderInfo(Loader ID);
+llvm::StringRef loaderName(Loader ID);
+std::optional<Loader> parseLoader(llvm::StringRef Name);
+
+/// The loader that owns programs at \p Address, or nothing when the address is
+/// not a loader.
+std::optional<Loader> loaderForAddress(KnownAddress Address);
+
+//===----------------------------------------------------------------------===//
+// The gates
+//===----------------------------------------------------------------------===//
+
+enum class RuntimeFeatureBit : uint8_t {
+#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY) ID,
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+  Count,
+};
+
+inline constexpr size_t kRuntimeFeatureCount =
+    static_cast<size_t>(RuntimeFeatureBit::Count);
+
+enum class RuntimeFeature : uint32_t {
+  None = 0,
+#define SBF_RUNTIME_FEATURE(ID, NAME, GATE, ADDRESS, SIMD, SUMMARY)            \
+  ID = uint32_t{1} << static_cast<uint32_t>(RuntimeFeatureBit::ID),
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+};
+
+static_assert(kRuntimeFeatureCount <=
+                  std::numeric_limits<uint32_t>::digits,
+              "a runtime feature set must hold every tabulated gate");
+
+constexpr RuntimeFeature operator|(RuntimeFeature L, RuntimeFeature R) {
+  return static_cast<RuntimeFeature>(static_cast<uint32_t>(L) |
+                                     static_cast<uint32_t>(R));
+}
+
+constexpr bool hasFeature(RuntimeFeature Set, RuntimeFeature Feature) {
+  return (static_cast<uint32_t>(Set) & static_cast<uint32_t>(Feature)) != 0;
+}
+
+struct RuntimeFeatureInfo {
+  RuntimeFeature ID;
+  llvm::StringLiteral Name;
+  /// The identifier the runtime gives the switch.
+  llvm::StringLiteral Gate;
+  /// The account whose existence turns it on, which is what makes an
+  /// activation checkable against a live node.
+  llvm::StringLiteral Address;
+  /// The proposal that specified the behaviour, empty for switches that
+  /// predate the process.
+  llvm::StringLiteral SIMD;
+  llvm::StringLiteral Summary;
+};
+
+llvm::ArrayRef<RuntimeFeatureInfo> runtimeFeatureInfos();
+const RuntimeFeatureInfo &getRuntimeFeatureInfo(RuntimeFeatureBit Bit);
+const RuntimeFeatureInfo *getRuntimeFeatureInfo(RuntimeFeature Feature);
+llvm::StringRef runtimeFeatureName(RuntimeFeature Feature);
+std::optional<RuntimeFeature> parseRuntimeFeature(llvm::StringRef Name);
+
+/// The slot \p Feature was activated at on \p Cluster, and nothing when that
+/// cluster has not activated it.
+std::optional<uint64_t> runtimeFeatureActivation(RuntimeFeature Feature,
+                                                 Cluster OnCluster);
+
+//===----------------------------------------------------------------------===//
+// The profile
+//===----------------------------------------------------------------------===//
+
+/// A slot far enough ahead to mean "everything the table records has already
+/// happened", which is what an analysis with no particular slot in mind wants.
+inline constexpr uint64_t kCurrentSlot = std::numeric_limits<uint64_t>::max();
+
+/// Which runtime a recovered program is being described against.
+struct RuntimeProfile {
+  Cluster OnCluster = Cluster::MainnetBeta;
+  /// The slot the description is about. A gate counts as on when its cluster
+  /// activated it at or before this slot, which is what lets a program that
+  /// was correct in its own era be read in that era rather than in this one.
+  uint64_t Slot = kCurrentSlot;
+  RuntimePurpose Purpose = RuntimePurpose::Execution;
+  Loader OwningLoader = Loader::V3;
+  /// Gates forced on and off regardless of what the cluster did. A validator
+  /// can be run with either, and an analysis of a proposal has to be able to
+  /// ask what would happen, so an override is a first-class input rather than
+  /// a way of lying about a cluster.
+  RuntimeFeature Forced = RuntimeFeature::None;
+  RuntimeFeature Suppressed = RuntimeFeature::None;
+
+  [[nodiscard]] AccountABI accountABI() const;
+};
+
+/// The mainnet profile as it stands, which is what a caller that says nothing
+/// gets.
+RuntimeProfile currentMainnetProfile();
+
+bool isFeatureActive(const RuntimeProfile &Profile, RuntimeFeature Feature);
+
+/// Every gate \p Profile has on, as one set.
+RuntimeFeature activeFeatures(const RuntimeProfile &Profile);
+
+/// Report a loader whose address is not a loader address, an activation naming
+/// a feature or cluster the tables do not declare, or a profile forcing and
+/// suppressing the same gate.
+llvm::Error validateRuntimeProfileTables();
+
+} // namespace neverd::sbf
+
+#endif // NEVERD_SBF_RUNTIMEPROFILE_H

@@ -567,6 +567,8 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
      << kRegisterCount
      << ";\nconst RETURN_REGISTER: usize = " << kReturnRegister
      << ";\nconst INPUT_REGISTER: usize = " << kFirstArgumentRegister
+     << ";\nconst INSTRUCTION_DATA_REGISTER: usize = "
+     << kInstructionDataRegister
      << ";\nconst FRAME_POINTER: usize = " << kFramePointerRegister << ";\n";
   if (!Structured)
     OS << "const FIRST_SAVED: usize = " << kFirstCalleeSavedRegister
@@ -598,8 +600,12 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
          << " at block_" << Region.HeaderBlock << "\n";
   }
 
+  // The loader hands the program the input buffer and, on a runtime that has
+  // activated it, the instruction data. A callable that only takes the first
+  // cannot reproduce a program that reads the second.
   OS << "pub fn " << Options.FunctionName
-     << "<E: SbfEnvironment>(env: &mut E, input: u64) -> Result<u64, SbfError> "
+     << "<E: SbfEnvironment>(env: &mut E, input: u64, instruction_data: u64) "
+        "-> Result<u64, SbfError> "
         "{\n"
         "    let _ = &mut *env;\n"
         "    let mut r = [0u64; REGISTER_COUNT];\n";
@@ -620,7 +626,9 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
           "    let mut pc = "
        << Program.Low.EntrySlot << "usize;\n";
   }
-  OS << "    r[INPUT_REGISTER] = input; r[FRAME_POINTER] = STACK_START + "
+  OS << "    r[INPUT_REGISTER] = input; "
+        "r[INSTRUCTION_DATA_REGISTER] = instruction_data; "
+        "r[FRAME_POINTER] = STACK_START + "
      << (versionHasFeature(Program.Low.TheVersion,
                            VersionFeature::ManualStackFrames)
              ? "STACK_SIZE"

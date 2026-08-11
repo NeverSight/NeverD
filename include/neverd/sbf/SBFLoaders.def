@@ -1,0 +1,54 @@
+//===- SBFLoaders.def - The programs that own programs ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_LOADER(ID, NAME, KNOWN_ADDRESS, ACCOUNT_ABI, DEPLOYS, EXECUTES, SUMMARY)
+//
+//   A deployed program is owned by a loader, and the loader decides the shape
+//   of the buffer the program is handed. That makes the owner a fact the
+//   decompiler needs before it can name a single field of the input: read an
+//   account entry with the wrong layout and every offset after the first byte
+//   is wrong, silently, with plausible-looking results.
+//
+//   DEPLOYS and EXECUTES are separate because they stopped being the same
+//   answer years ago. Two of these loaders refuse every management instruction
+//   they are sent and yet keep running the programs they already own — which
+//   is exactly why a decompiler still has to understand their serialization,
+//   long after nothing new can be deployed under them.
+//
+//   This table is about ownership and serialization only. Which instructions
+//   the program file may contain is the ISA version in SBFVersions.def, and
+//   what the chain has switched on is in SBFRuntimeFeatures.def. A loader does
+//   not imply either: the same file runs under loader-v2 and loader-v3, and
+//   both hand it the same buffer.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_LOADER
+#define SBF_LOADER(ID, NAME, KNOWN_ADDRESS, ACCOUNT_ABI, DEPLOYS, EXECUTES,    \
+                   SUMMARY)
+#endif
+
+SBF_LOADER(V1, "loader-v1", BpfLoaderDeprecated, V0, false, true,
+           "the first loader, whose management instructions are gone and "
+           "whose programs are the only ones still handed the unaligned "
+           "serialization")
+SBF_LOADER(V2, "loader-v2", BpfLoader, V1, false, true,
+           "the non-upgradeable loader, whose management instructions are "
+           "gone but whose programs are frozen on chain and still run")
+SBF_LOADER(V3, "loader-v3", BpfLoaderUpgradeable, V1, true, true,
+           "the upgradeable loader, and the only one a program can be "
+           "deployed under today")
+
+// Kept as a row rather than dropped, because its absence is a fact worth
+// stating: the built-in implementation was removed rather than never written,
+// and the design moved to an on-chain program. A reader who finds an account
+// owned by it on a test cluster should learn that here rather than conclude
+// this table is incomplete.
+SBF_LOADER(V4, "loader-v4", LoaderV4, V1, false, false,
+           "abandoned as a built-in loader and removed from the runtime, so "
+           "nothing deploys under it and nothing executes under it")
+
+#undef SBF_LOADER

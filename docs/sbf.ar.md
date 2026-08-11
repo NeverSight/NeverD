@@ -48,6 +48,56 @@ SBF ELF
 legacy sections غير المدعومة وcontinuations/registers/frame-pointer writes/
 branches غير الصالحة وopcodes غير النشطة، مع instruction slot وvirtual address.
 
+## الـ runtime الذي يتحدث عنه الوصف
+
+تأتي نسخة ISA من الملف، ولا يأتي منه سوى ذلك تقريبًا. فأيّ syscalls تُحَلّ يعتمد
+على الشبكة والـ slot؛ وعند أي بايتات يقع حقل الحساب يعتمد على loader الذي يملك
+البرنامج؛ وهل يتلقى entrypoint وسيطًا ثانيًا يعتمد على مفتاح تقلبه الشبكة؛ أما
+سؤال هل يمكن نشر البرنامج فهو غير سؤال هل يعمل. ولا يستطيع مفتاح نسخة واحد
+التعبير عن شيء من ذلك، لذا فهذه محاور منفصلة بجداول منفصلة.
+
+يسجل `SBFRuntimeFeatures.def` الـ clusters والأغراض والبوابات التي تغير ما
+يبلّغ عنه NeverD، ومع كل بوابة معرّفها في runtime والحساب الذي يشغّلها وجودُه
+والـ slot الذي فعّلها عنده كل cluster. والبوابة التي لا سطر لها في cluster لم
+تُفعّل هناك. فـ`simd-0321` مفعّلة في كل cluster، بينما `simd-0449` وsyscall
+الخاص بـSHA-512 مفعّلان في testnet وdevnet ومعطّلان في mainnet، وهذا بالضبط سبب
+فشل برنامج يعمل على devnet حين ينتقل إلى mainnet.
+
+ويسجل `SBFLoaders.def` الملكية والتسلسل. فالنشر والتنفيذ لم يعودا الجواب نفسه
+منذ سنوات: يرفض `loader-v1` و`loader-v2` كل تعليمة إدارة تصلهما ويواصلان تشغيل
+البرامج التي يملكانها فعلًا، ولهذا يجب أن يبقى تسلسلهما مقروءًا.
+
+| Loader | التسلسل | ينشر | ينفّذ |
+|--------|---------|------|-------|
+| loader-v1 | `abi-v0` | لا | نعم |
+| loader-v2 | `abi-v1` | لا | نعم |
+| loader-v3 | `abi-v1` | نعم | نعم |
+| loader-v4 | `abi-v1` | لا | لا (أُزيل built-in) |
+
+ويضع `SBFAccountLayout.def` كل حقل حساب في موضعه ضمن كل تسلسل. والاثنان لا
+يختلفان في الحشو فحسب، بل يرتبان الحقول ترتيبًا مختلفًا: فعند الإزاحة ثلاثة يحمل
+الشكل غير المحاذى أول بايت من عنوان الحساب، ويحمل الشكل المحاذى راية executable،
+ولا شيء في القيمة يعلن أيّهما قُرئ. كذلك يشغل الحساب المكرر بايتًا واحدًا في
+`abi-v0` وثمانية في `abi-v1`، وهو ما يزيح المرور على المدخلات كلها لا حقلًا
+واحدًا.
+
+وسؤال هل يُحَلّ الاستدعاء هو في الحقيقة ثلاثة أسئلة لا سؤال واحد، لذا يحمل
+`SBFSyscallLifecycle.def` مدى استقرار التوقيع المنشور، ويحمل
+`SBFSyscallRegistration.def` ما تبقى: في أي registry يظهر الـ syscall، وأي بوابة
+تحكمه، وإلى أي اتجاه تشير تلك البوابة.
+والاتجاه مهم لأن البوابة قد تسلب شيئًا كما تمنحه — فتفعيل `disable_fees_sysvar`
+هو ما أزال syscall الخاص بـ fees sysvar — وقراءة بوابة سالبة على أنها مانحة
+تقلب الجواب لكل الـ clusters دفعة واحدة. ولا يحتاج `sol_alloc_free_` إلى بوابة
+أصلًا: فالـ runtime يواصل خدمته ويرفض في الوقت نفسه قبول برنامج جديد يستدعيه،
+وهذا فرق بين الـ registries ليس إلا.
+
+وعلى runtime فعّل `simd-0321` يتلقى entrypoint أيضًا عنوان بيانات التعليمة في
+`r2`. ويمثّله NeverD نوعًا قائمًا بذاته من القيم لا ثابتًا، لأن موضعه يعتمد على
+الحسابات: فاختراع عنوان يجعل تحميلًا عبره يُبلَّغ عنه بوصفه حقل حساب مسمّى. وقبل
+التفعيل يصل السجل صفرًا، والبرنامج الذي يقرؤه يقرأ صفرًا. لذلك تأخذ نقاط الدخول
+المولدة بلغات LLVM وC وRust مخزن الإدخال وبيانات التعليمة معًا، لأن دالة لا يمكن
+إعطاؤها الثاني لا تستطيع إعادة إنتاج برنامج يقرؤه.
+
 يستخدم toolchain الحالي `cargo build-sbf`. برامج v3+ الحديثة موجهة إلى Rust ولا
 يستهدف upstream C toolchain v3؛ لا يحد ذلك خرج NeverD، فأي SBF مقبول يخرج C أو Rust.
 
@@ -73,7 +123,19 @@ neverd decompile --language=rust -o program.rs program.so
 
 neverd lift --sbf-version=v2 program.so
 neverd lift --sbf-relaxed --dump-low program.so
+
+# حدد الـ runtime الذي يتحدث عنه الجواب. لا شيء من ذلك موجود في ملف البرنامج.
+neverd lift --dump-high --sbf-cluster=devnet program.so
+neverd lift --dump-high --sbf-slot=410400000 program.so
+neverd lift --dump-high --sbf-loader=loader-v1 program.so
+neverd lift --dump-high --sbf-purpose=deployment program.so
 ```
+
+تختار `--sbf-cluster` و`--sbf-slot` و`--sbf-loader` و`--sbf-purpose` ملف
+الـ runtime. وتصف القيم الافتراضية mainnet-beta على حالها الراهن، تحت
+`loader-v3`، لبرنامج منشور بالفعل. أما السؤال عن النشر بدل التشغيل فيبلّغ عن
+الـ syscalls التي تمنع البرنامج من الوصول إلى الشبكة رغم أن الشبكة ستواصل
+تشغيله.
 
 لا يغير `--sbf-version=auto|v0|v1|v2|v3|v4` semantics إلا بعد تحقق layout
 المكتشف. هو للـfixtures التالفة أو البحثية، لا لإعادة تفسير ملف غير موثوق كمعيار
@@ -231,6 +293,12 @@ output-language enum مضافة مع ثبات ABI.
 neverd_session_t session = neverd_session_create();
 neverd_sbf_set_strict(session, 1);
 neverd_sbf_set_version(session, "auto");
+/* الـ runtime الذي يتحدث عنه الجواب. تصف القيم الافتراضية mainnet-beta على
+   حالها الراهن، تحت loader-v3، لبرنامج منشور بالفعل. */
+neverd_sbf_set_cluster(session, "devnet");
+neverd_sbf_set_slot(session, 474768000);
+neverd_sbf_set_loader(session, "loader-v3");
+neverd_sbf_set_purpose(session, "deployment");
 const char *rust = neverd_decompile_all_ex(
     session, "program.so", NEVERD_OUTPUT_RUST, 0, 0);
 /* consume rust, then: */

@@ -76,6 +76,64 @@ headers, ranges, alignments, unsupported writable legacy sections, invalid
 continuations, bad registers, illegal frame-pointer writes, invalid branches,
 and version-inactive opcodes with instruction slot and virtual address.
 
+## The runtime a description is about
+
+The ISA version comes from the file. Almost nothing else does. Which syscalls
+resolve depends on the chain and the slot; which bytes an account field sits at
+depends on the loader that owns the program; whether the entrypoint receives a
+second argument depends on a switch the chain throws; and whether a program can
+be deployed is a different question from whether it runs. A single version
+switch cannot express any of that, so these are separate axes with separate
+tables.
+
+`SBFRuntimeFeatures.def` records clusters, purposes, and the gates that change
+what NeverD reports, each with the runtime identifier, the account whose
+existence turns it on, and the slot each cluster activated it at. A gate with no
+row for a cluster has not been activated there. `simd-0321` is on for every
+cluster; `simd-0449` and the SHA-512 syscall are on for testnet and devnet and
+off for mainnet, which is exactly why a program that works on devnet fails on
+mainnet.
+
+`SBFLoaders.def` records ownership and serialization. Deploying and executing
+stopped being the same answer years ago: `loader-v1` and `loader-v2` refuse
+every management instruction they are sent and keep running the programs they
+already own, which is why their serialization still has to be readable.
+
+| Loader | Serialization | Deploys | Executes |
+|--------|---------------|---------|----------|
+| loader-v1 | `abi-v0` | no | yes |
+| loader-v2 | `abi-v1` | no | yes |
+| loader-v3 | `abi-v1` | yes | yes |
+| loader-v4 | `abi-v1` | no | no (built-in removed) |
+
+`SBFAccountLayout.def` places each account field under each serialization. The
+two do not merely differ in padding — they order the fields differently, so at
+offset three the unaligned form has the first byte of the account's address and
+the aligned form has its executable flag, and nothing about the value announces
+which one was read. A repeated account also occupies one byte in `abi-v0` and
+eight in `abi-v1`, which misaligns a walk over the entries rather than a single
+field.
+
+Whether a call resolves is three questions, not one, so
+`SBFSyscallLifecycle.def` holds how settled the published signature is and
+`SBFSyscallRegistration.def` holds the rest: which registry a syscall appears
+in, which gate governs it, and which way that gate points. Direction matters
+because a gate can take something away as easily as add it — activating
+`disable_fees_sysvar` is what removed the fees sysvar syscall — and reading a
+removing gate as an adding one inverts the answer for every cluster at once.
+`sol_alloc_free_` needs no gate at all: the runtime keeps honouring it and
+refuses to accept a new program that calls it, which is a difference between
+the two registries and nothing else.
+
+On a runtime that has activated `simd-0321` the entrypoint also receives the
+address of the instruction data in `r2`. NeverD models it as its own kind of
+value rather than a constant, because where it lands depends on the accounts:
+inventing an address would let a load through it be reported as a named account
+field. Before activation the register arrives zero, and a program that reads it
+reads a zero. Generated LLVM, C, and Rust entry points therefore take the input
+buffer and the instruction data, because a callable that cannot be given the
+second cannot reproduce a program that reads it.
+
 The current Solana toolchain builds programs with `cargo build-sbf`. Modern
 v3+ production programs are Rust-oriented; the upstream C toolchain does not
 target v3. This does not limit NeverD's output backends: any accepted SBF input
@@ -131,7 +189,19 @@ neverd decompile --language=rust -o program.rs program.so
 # forensic inspection. Auto-detection and strict verification are preferred.
 neverd lift --sbf-version=v2 program.so
 neverd lift --sbf-relaxed --dump-low program.so
+
+# Say which runtime the answer is about. None of this is in the program file.
+neverd lift --dump-high --sbf-cluster=devnet program.so
+neverd lift --dump-high --sbf-slot=410400000 program.so
+neverd lift --dump-high --sbf-loader=loader-v1 program.so
+neverd lift --dump-high --sbf-purpose=deployment program.so
 ```
+
+`--sbf-cluster`, `--sbf-slot`, `--sbf-loader`, and `--sbf-purpose` select the
+runtime profile. The defaults describe mainnet-beta as it stands, under
+`loader-v3`, for a program that is already deployed. Asking about deployment
+instead reports the syscalls that would keep a program off the chain even
+though the chain would keep running it.
 
 `--sbf-version=auto|v0|v1|v2|v3|v4` changes instruction semantics after the
 ELF has passed its detected-layout checks. It is intended for damaged or
@@ -340,6 +410,12 @@ remain ABI-stable.
 neverd_session_t session = neverd_session_create();
 neverd_sbf_set_strict(session, 1);
 neverd_sbf_set_version(session, "auto");
+/* Which runtime the answer is about. Defaults describe mainnet-beta as it
+   stands, under loader-v3, for a program that is already deployed. */
+neverd_sbf_set_cluster(session, "devnet");
+neverd_sbf_set_slot(session, 474768000);
+neverd_sbf_set_loader(session, "loader-v3");
+neverd_sbf_set_purpose(session, "deployment");
 /* Optional: name Anchor handlers from the program's own IDL. */
 neverd_sbf_set_idl(session, idl_json);
 
