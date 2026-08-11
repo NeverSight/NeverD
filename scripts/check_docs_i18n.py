@@ -66,7 +66,10 @@ GUIDE_REQUIRED_TOKENS = {
     ),
 }
 TESTING_REQUIRED_TOKENS = (
+    "git fetch",
+    "build/evm-opcode-audit/go-ethereum.git",
     "audit_evm_opcode_metadata.py",
+    "--geth-root",
     "EVMUpstreamOpcodePolicy.def",
     "EVMAnalyzer.StackHeightDomain",
     "EVMAnalyzer.WholeProgram",

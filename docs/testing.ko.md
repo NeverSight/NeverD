@@ -53,12 +53,23 @@ target 이름과 같은 CTest label을 지정합니다.
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt),
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)입니다.
 
-`local_docs` 아래에 최신 go-ethereum checkout이 있으면 closed EVM opcode inventory와
-byte assignment를 다음 명령으로 감사합니다.
+EVM opcode audit는 실행할 때마다 공식
+[go-ethereum repository](https://github.com/ethereum/go-ethereum)의 remote `HEAD`를 shallow
+`git fetch`하고 실제로 감사한 exact commit을 보고합니다. ignore되는 bare cache
+`build/evm-opcode-audit/go-ethereum.git`를 재사용하지만 closed opcode inventory와 byte
+assignment를 읽기 전에 항상 refresh합니다.
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI는 같은 live audit를 모든 push, pull request, manual dispatch, daily schedule에서 실행하여
+NeverD 변경이 없어도 upstream drift를 감지합니다. offline 또는 historical reproduction에는
+기존 checkout을 명시적으로 선택합니다.
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 감사는 `EVMUpstreamOpcodePolicy.def`에 이름이 있는 제외만 허용합니다. 표현되지도 명시적으로

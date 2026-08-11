@@ -53,12 +53,23 @@ cmake --build build-release --parallel 4
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) و
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
-عند توفر checkout حديث من go-ethereum تحت `local_docs`، دقّق inventory المغلق
-لـopcodes ‏EVM وتعيينات bytes عبر:
+ينفذ تدقيق opcodes ‏EVM في كل تشغيل `git fetch` سطحيًا للـremote `HEAD` من
+[مستودع go-ethereum الرسمي](https://github.com/ethereum/go-ethereum)، ثم يبلغ
+عن commit الدقيق الذي دُقق. يعيد استخدام bare cache المتجاهلة في
+`build/evm-opcode-audit/go-ethereum.git`، لكنه يحدّثها قبل قراءة inventory المغلق
+للـopcodes وتعيينات bytes:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+يشغل CI التدقيق الحي نفسه عند كل push وpull request وعند التشغيل اليدوي ومرة
+يوميًا، لاكتشاف upstream drift حتى إن لم يتغير NeverD. للاختبار offline أو إعادة
+إنتاج نسخة تاريخية، اختر checkout موجودة صراحة:
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 لا يسمح التدقيق إلا بالاستثناءات المسماة في `EVMUpstreamOpcodePolicy.def`؛ ويفشل

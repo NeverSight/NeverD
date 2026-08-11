@@ -51,12 +51,23 @@ cmake --build build-release --parallel 4
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 和
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
 
-当 `local_docs` 下存在最新 go-ethereum checkout 时，用以下命令审计封闭的 EVM
-操作码清单与字节分配：
+EVM 操作码审计每次运行都会对官方
+[go-ethereum 仓库](https://github.com/ethereum/go-ethereum)的远端 `HEAD` 执行浅层
+`git fetch`，并报告实际审计的精确提交。它复用已忽略的 bare cache
+`build/evm-opcode-audit/go-ethereum.git`，但在读取封闭的操作码清单与字节分配前
+一定会刷新缓存：
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI 会在每次 push、pull request、手动触发以及每日定时任务中运行同一项在线审计，
+因此即使 NeverD 没有变化，也能发现上游漂移。离线测试或复现历史版本时，才显式指定
+已有 checkout：
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 该审计只允许 `EVMUpstreamOpcodePolicy.def` 中明确列出的排除项；任何未表示或未明确

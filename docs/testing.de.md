@@ -57,12 +57,25 @@ Die Registrierungsquellen sind
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) und
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
-Wenn unter `local_docs` ein aktueller go-ethereum-Checkout vorhanden ist, prüfen
-Sie das geschlossene EVM-Opcode-Inventar und die Byte-Zuordnungen mit:
+Der EVM-Opcode-Audit führt bei jedem Lauf einen flachen `git fetch` des Remote-
+`HEAD` aus dem offiziellen
+[go-ethereum-Repository](https://github.com/ethereum/go-ethereum) aus und meldet
+anschließend den exakt geprüften Commit. Er verwendet den ignorierten Bare-Cache
+`build/evm-opcode-audit/go-ethereum.git` erneut, aktualisiert ihn jedoch vor dem
+Lesen des geschlossenen Opcode-Inventars und der Byte-Zuordnungen:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI führt denselben Live-Audit bei jedem Push und Pull Request, bei manueller
+Auslösung und einmal täglich aus. So wird Upstream-Drift auch ohne NeverD-Änderung
+erkannt. Wählen Sie für eine Offline- oder historische Reproduktion ausdrücklich
+einen vorhandenen Checkout:
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 Der Audit erlaubt ausschließlich die in `EVMUpstreamOpcodePolicy.def`

@@ -54,12 +54,25 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) и
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
-Если в `local_docs` доступен актуальный checkout go-ethereum, проверьте закрытый
-перечень opcodes EVM и назначения байтов командой:
+При каждом запуске аудит opcodes EVM выполняет неглубокий `git fetch` удалённого
+`HEAD` из [официального репозитория
+go-ethereum](https://github.com/ethereum/go-ethereum), после чего сообщает точный
+проверенный commit. Он повторно использует игнорируемый bare cache
+`build/evm-opcode-audit/go-ethereum.git`, но обновляет его перед чтением
+закрытого перечня opcodes и назначений байтов:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI выполняет тот же live audit при каждом push и pull request, при ручном
+запуске и раз в день, поэтому drift upstream обнаруживается даже без изменений
+NeverD. Для offline- или исторического воспроизведения явно выберите существующий
+checkout:
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 Аудит разрешает только исключения, перечисленные в

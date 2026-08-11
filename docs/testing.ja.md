@@ -54,12 +54,23 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt)、
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) です。
 
-`local_docs` に最新の go-ethereum checkout がある場合は、closed EVM opcode
-inventory と byte assignment を次のコマンドで監査します。
+EVM opcode audit は実行のたびに公式
+[go-ethereum repository](https://github.com/ethereum/go-ethereum) の remote `HEAD` を
+shallow `git fetch` し、実際に監査した exact commit を報告します。ignore される bare
+cache `build/evm-opcode-audit/go-ethereum.git` を再利用しますが、closed opcode
+inventory と byte assignment を読む前に必ず refresh します。
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI は同じ live audit を各 push、pull request、manual dispatch、daily schedule で実行し、
+NeverD に変更がなくても upstream drift を検出します。offline または historical
+reproduction では、既存 checkout を明示的に選択します。
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 この監査が許可する除外は `EVMUpstreamOpcodePolicy.def` に明記されたものだけです。

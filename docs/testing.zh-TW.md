@@ -51,12 +51,23 @@ cmake --build build-release --parallel 4
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 與
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
 
-當 `local_docs` 下有最新 go-ethereum checkout 時，使用以下命令稽核封閉的 EVM
-操作碼清單與 byte assignment：
+EVM 操作碼稽核每次執行都會對官方
+[go-ethereum repository](https://github.com/ethereum/go-ethereum)的 remote `HEAD` 執行
+淺層 `git fetch`，並報告實際稽核的精確 commit。它會重複使用已忽略的 bare cache
+`build/evm-opcode-audit/go-ethereum.git`，但在讀取封閉的操作碼清單與 byte assignment
+之前一定會更新 cache：
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI 會在每次 push、pull request、手動觸發及每日排程中執行同一項線上稽核，因此即使
+NeverD 沒有變更也能發現 upstream drift。離線測試或重現歷史版本時，才明確指定既有
+checkout：
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 此稽核僅允許 `EVMUpstreamOpcodePolicy.def` 中明確列出的排除項；任何未表示或未經明確

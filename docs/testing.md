@@ -57,12 +57,24 @@ The source of truth for registration is
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt), and
 [`unittests/plugin/CMakeLists.txt`](../unittests/plugin/CMakeLists.txt).
 
-When a current go-ethereum checkout is available under `local_docs`, audit the
-closed EVM opcode inventory and byte assignments with:
+The EVM opcode audit performs a shallow `git fetch` of the official
+[go-ethereum repository](https://github.com/ethereum/go-ethereum) remote `HEAD`
+on every run, then reports the exact audited commit. It reuses the ignored bare
+cache at `build/evm-opcode-audit/go-ethereum.git`, but refreshes that cache
+before reading the closed opcode inventory and byte assignments:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI runs the same live audit on every push and pull request, on manual dispatch,
+and once per day so upstream drift is detected even when NeverD does not change.
+For an offline or historical reproduction, explicitly select an existing
+checkout instead:
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 The audit permits only exclusions named in

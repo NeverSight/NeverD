@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Audit NeverD's EVM opcode database against a go-ethereum checkout."""
+"""Audit NeverD's EVM opcode database against current go-ethereum sources."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,8 +16,13 @@ from typing import Mapping, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_NEVERD_OPCODES = REPO_ROOT / "include/neverd/evm/EVMOpcodes.def"
 DEFAULT_POLICY = REPO_ROOT / "include/neverd/evm/EVMUpstreamOpcodePolicy.def"
-DEFAULT_GETH_ROOT = REPO_ROOT / "local_docs/go-ethereum"
+DEFAULT_GETH_REMOTE = "https://github.com/ethereum/go-ethereum.git"
+DEFAULT_GETH_REF = "HEAD"
+DEFAULT_GETH_CACHE = REPO_ROOT / "build/evm-opcode-audit/go-ethereum.git"
+DEFAULT_GIT_EXECUTABLE = "git"
 GETH_OPCODE_PATH = Path("core/vm/opcodes.go")
+GETH_CACHE_REF = "refs/neverd/go-ethereum"
+GIT_FETCH_TIMEOUT_SECONDS = 300
 OPCODE_BITS = 8
 OPCODE_MAX = (1 << OPCODE_BITS) - 1
 OPCODE_HEX_DIGITS = OPCODE_BITS // 4
@@ -43,6 +50,10 @@ OPCODE_EXPRESSION_RE = re.compile(
 OPCODE_DECLARATION_RE = re.compile(
     r"^\s*(?:const\s+)?([A-Z][A-Z0-9_]*)\s+OpCode\b", re.MULTILINE
 )
+GIT_OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+GIT_REF_RE = re.compile(
+    r"^(?:HEAD|refs/(?:heads|tags)/[A-Za-z0-9][A-Za-z0-9._/-]*)$"
+)
 
 
 class OpcodeAuditError(ValueError):
@@ -60,6 +71,140 @@ class AuditResult:
     neverd_count: int
     upstream_count: int
     ignored_count: int
+
+
+@dataclass(frozen=True)
+class GethOpcodeSource:
+    text: str
+    revision: str
+
+
+def _run_git(
+    arguments: Sequence[str],
+    *,
+    git_executable: str = DEFAULT_GIT_EXECUTABLE,
+) -> str:
+    environment = os.environ.copy()
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    operation = next(
+        (argument for argument in arguments if not argument.startswith("-")),
+        "command",
+    )
+    try:
+        result = subprocess.run(
+            (git_executable, *arguments),
+            check=False,
+            capture_output=True,
+            encoding="utf-8",
+            env=environment,
+            timeout=GIT_FETCH_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as error:
+        raise OpcodeAuditError(
+            f"Git executable not found: {git_executable}"
+        ) from error
+    except subprocess.TimeoutExpired as error:
+        raise OpcodeAuditError(
+            f"git {operation} exceeded {GIT_FETCH_TIMEOUT_SECONDS} seconds"
+        ) from error
+    except OSError as error:
+        raise OpcodeAuditError(f"could not execute Git: {error}") from error
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        if not detail:
+            detail = f"exit status {result.returncode}"
+        raise OpcodeAuditError(f"git {operation} failed: {detail}")
+    return result.stdout
+
+
+def _validate_geth_fetch(remote: str, ref: str) -> None:
+    if not remote or remote.startswith("-"):
+        raise OpcodeAuditError("go-ethereum remote must be a non-option value")
+    if (
+        not GIT_REF_RE.fullmatch(ref)
+        or ".." in ref
+        or "@{" in ref
+        or ref.endswith(("/", ".", ".lock"))
+    ):
+        raise OpcodeAuditError(
+            "go-ethereum ref must be HEAD or a full refs/heads/... or "
+            "refs/tags/... name"
+        )
+
+
+def _prepare_bare_cache(cache: Path, git_executable: str) -> None:
+    if cache.exists():
+        if not cache.is_dir():
+            raise OpcodeAuditError(
+                f"go-ethereum cache is not a bare Git repository: {cache}"
+            )
+        try:
+            is_bare = _run_git(
+                (f"--git-dir={cache}", "rev-parse", "--is-bare-repository"),
+                git_executable=git_executable,
+            ).strip()
+        except OpcodeAuditError as error:
+            raise OpcodeAuditError(
+                f"go-ethereum cache is not a bare Git repository: {cache}"
+            ) from error
+        if is_bare != "true":
+            raise OpcodeAuditError(
+                f"go-ethereum cache is not a bare Git repository: {cache}"
+            )
+        return
+
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    _run_git(
+        ("init", "--bare", "--quiet", str(cache)),
+        git_executable=git_executable,
+    )
+
+
+def fetch_geth_opcode_source(
+    *,
+    remote: str,
+    ref: str,
+    cache: Path,
+    git_executable: str = DEFAULT_GIT_EXECUTABLE,
+) -> GethOpcodeSource:
+    """Fetch one upstream revision and read its opcode source from Git."""
+
+    _validate_geth_fetch(remote, ref)
+    _prepare_bare_cache(cache, git_executable)
+    git_directory = f"--git-dir={cache}"
+    cache_refspec = f"+{ref}:{GETH_CACHE_REF}"
+    _run_git(
+        (
+            git_directory,
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--depth=1",
+            "--force",
+            remote,
+            cache_refspec,
+        ),
+        git_executable=git_executable,
+    )
+    revision = _run_git(
+        (
+            git_directory,
+            "rev-parse",
+            "--verify",
+            f"{GETH_CACHE_REF}^{{commit}}",
+        ),
+        git_executable=git_executable,
+    ).strip()
+    if not GIT_OBJECT_ID_RE.fullmatch(revision):
+        raise OpcodeAuditError(
+            f"go-ethereum fetch produced an invalid Git object ID: {revision!r}"
+        )
+    text = _run_git(
+        (git_directory, "show", f"{revision}:{GETH_OPCODE_PATH.as_posix()}"),
+        git_executable=git_executable,
+    )
+    return GethOpcodeSource(text=text, revision=revision)
 
 
 def _format_opcode(value: int) -> str:
@@ -231,7 +376,38 @@ def audit_opcodes(
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--geth-root", type=Path, default=DEFAULT_GETH_ROOT)
+    parser.add_argument(
+        "--geth-root",
+        type=Path,
+        help=(
+            "use an existing go-ethereum checkout instead of fetching the "
+            "current upstream revision"
+        ),
+    )
+    parser.add_argument(
+        "--geth-remote",
+        default=DEFAULT_GETH_REMOTE,
+        help="Git remote fetched when --geth-root is not supplied",
+    )
+    parser.add_argument(
+        "--geth-ref",
+        default=DEFAULT_GETH_REF,
+        help=(
+            "remote HEAD or full refs/heads/... or refs/tags/... name fetched "
+            "for the audit"
+        ),
+    )
+    parser.add_argument(
+        "--geth-cache",
+        type=Path,
+        default=DEFAULT_GETH_CACHE,
+        help="bare Git cache refreshed before each remote audit",
+    )
+    parser.add_argument(
+        "--git-executable",
+        default=DEFAULT_GIT_EXECUTABLE,
+        help="Git executable used to refresh the upstream cache",
+    )
     parser.add_argument(
         "--neverd-opcodes", type=Path, default=DEFAULT_NEVERD_OPCODES
     )
@@ -243,8 +419,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         neverd = parse_neverd_opcodes(args.neverd_opcodes.read_text(encoding="utf-8"))
-        upstream_path = args.geth_root / GETH_OPCODE_PATH
-        upstream = parse_geth_opcodes(upstream_path.read_text(encoding="utf-8"))
+        if args.geth_root is None:
+            source = fetch_geth_opcode_source(
+                remote=args.geth_remote,
+                ref=args.geth_ref,
+                cache=args.geth_cache,
+                git_executable=args.git_executable,
+            )
+            upstream_text = source.text
+            source_description = source.revision
+        else:
+            upstream_path = args.geth_root / GETH_OPCODE_PATH
+            upstream_text = upstream_path.read_text(encoding="utf-8")
+            source_description = str(upstream_path)
+        upstream = parse_geth_opcodes(upstream_text)
         policy = parse_policy(args.policy.read_text(encoding="utf-8"))
         result = audit_opcodes(neverd, upstream, policy)
     except (OSError, OpcodeAuditError) as error:
@@ -252,7 +440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     print(
-        "EVM opcode metadata matches go-ethereum: "
+        f"EVM opcode metadata matches go-ethereum {source_description}: "
         f"{result.neverd_count} NeverD records, "
         f"{result.upstream_count} upstream constants, "
         f"{result.ignored_count} explicit exclusions"

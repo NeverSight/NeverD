@@ -57,12 +57,25 @@ Les références d’enregistrement sont
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) et
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
-Lorsqu’un checkout récent de go-ethereum est disponible sous `local_docs`,
-auditez l’inventaire fermé des opcodes EVM et leur affectation d’octets avec :
+À chaque exécution, l’audit des opcodes EVM effectue un `git fetch` superficiel
+du `HEAD` distant du
+[dépôt go-ethereum officiel](https://github.com/ethereum/go-ethereum), puis
+indique le commit exact audité. Il réutilise le cache bare ignoré
+`build/evm-opcode-audit/go-ethereum.git`, mais le rafraîchit avant de lire
+l’inventaire fermé des opcodes et leur affectation d’octets :
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI exécute ce même audit live à chaque push et pull request, à la demande et une
+fois par jour, afin de détecter la dérive upstream même sans modification de
+NeverD. Pour une reproduction hors ligne ou historique, sélectionnez
+explicitement un checkout existant :
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 L’audit n’autorise que les exclusions nommées dans

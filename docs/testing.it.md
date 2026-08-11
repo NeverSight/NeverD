@@ -56,12 +56,25 @@ Le fonti autorevoli per la registrazione sono
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) e
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
 
-Quando è disponibile un checkout corrente di go-ethereum sotto `local_docs`,
-verifica l’inventario chiuso degli opcode EVM e le assegnazioni dei byte con:
+A ogni esecuzione, l’audit degli opcode EVM esegue un `git fetch` shallow del
+`HEAD` remoto dal
+[repository go-ethereum ufficiale](https://github.com/ethereum/go-ethereum),
+quindi riporta il commit esatto verificato. Riutilizza la bare cache ignorata
+`build/evm-opcode-audit/go-ethereum.git`, ma la aggiorna prima di leggere
+l’inventario chiuso degli opcode e le assegnazioni dei byte:
+
+```bash
+python3 scripts/audit_evm_opcode_metadata.py
+```
+
+CI esegue lo stesso audit live a ogni push e pull request, su avvio manuale e
+una volta al giorno, così rileva drift upstream anche quando NeverD non cambia.
+Per una riproduzione offline o storica, seleziona esplicitamente un checkout
+esistente:
 
 ```bash
 python3 scripts/audit_evm_opcode_metadata.py \
-  --geth-root local_docs/go-ethereum
+  --geth-root /path/to/go-ethereum
 ```
 
 L’audit consente soltanto le esclusioni nominate in
