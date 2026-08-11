@@ -176,6 +176,45 @@ TEST(FuncDetectorCoverage, RejectsCandidateWithUndecodableBranchArm) {
   EXPECT_EQ(Functions[0].first, Img.Entry);
 }
 
+TEST(FuncDetectorCoverage, DistinguishesExecutableDataExportsFromFunctions) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = Img.Base + 0x1000;
+
+  Segment Text;
+  Text.VA = Img.Entry;
+  Text.Size = 0x30;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0x90);
+  Text.Data[0] = 0xc3;    // ret
+  Text.Data[0x10] = 0x61; // Executable-section data, invalid in x86-64.
+  Text.Data[0x20] = 0x90; // nop
+  Text.Data[0x21] = 0xc3; // ret
+  Img.Segments.push_back(std::move(Text));
+
+  Export DataExport;
+  DataExport.Name = "ordinary_table";
+  DataExport.Addr = Img.Entry + 0x10;
+  Img.Exports.push_back(std::move(DataExport));
+  Export FunctionExport;
+  FunctionExport.Name = "ordinary_export";
+  FunctionExport.Addr = Img.Entry + 0x20;
+  Img.Exports.push_back(std::move(FunctionExport));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  FuncDetector Detector;
+  auto Functions = Detector.detect(Img, Dec);
+
+  ASSERT_EQ(Functions.size(), 2u);
+  EXPECT_EQ(Functions[0].first, Img.Entry);
+  EXPECT_EQ(Functions[1].first, Img.Entry + 0x20);
+  EXPECT_EQ(Functions[1].second, "ordinary_export");
+}
+
 TEST(CFGBuilderCoverage, StopsAtTrapTerminatorBeforeEmbeddedData) {
   BinaryImage Img;
   Img.Arch = Arch::X64;

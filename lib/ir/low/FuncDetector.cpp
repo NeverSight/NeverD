@@ -102,8 +102,15 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
 
   if (Img.Entry != 0) {
     std::set<va_t> Trusted{Img.Entry};
-    for (const auto &Exp : Img.Exports)
-      Trusted.insert(Exp.Addr);
+    // PE exports are untyped: executable-section data can legally appear in
+    // the export directory alongside functions.  A COFF export is therefore
+    // trusted only when unwind/function-symbol metadata below also identifies
+    // it as code; otherwise it must pass the same decode validation as a scan
+    // hit.  ELF and Mach-O loaders create exports only from typed executable
+    // symbols, so their exports remain authoritative.
+    if (Img.Format != BinaryFormat::COFF)
+      for (const auto &Exp : Img.Exports)
+        Trusted.insert(Exp.Addr);
     for (const auto &Sym : Img.Symbols)
       if (Sym.IsFunc && Sym.Size > 0)
         Trusted.insert(Sym.Addr);
