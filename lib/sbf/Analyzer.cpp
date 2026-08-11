@@ -845,11 +845,41 @@ void recoverRegions(SBFProgram &Program) {
     }
   }
 
+  // Having two successors does not mean a block chose between them. A block
+  // ending in an internal call has two as well — the callee and the
+  // instruction after the call — and the callee is not an alternative to the
+  // fallthrough: both run, one after the other. Reading that pair as a
+  // two-armed region invents a branch the program does not contain and puts
+  // the entire callee inside one of its arms.
+  //
+  // The edge kinds say which pair is a choice, so they are what this reads.
+  // The successor list cannot answer it: it is deduplicated and carries no
+  // kind.
+  struct ConditionalArms {
+    std::optional<size_t> Taken;
+    std::optional<size_t> Fallthrough;
+    bool Disqualified = false;
+  };
+  std::vector<ConditionalArms> Arms(Program.Low.Blocks.size());
+  for (const CFGEdge &Edge : Program.Low.Edges) {
+    ConditionalArms &Block = Arms[Edge.From];
+    std::optional<size_t> *Arm =
+        Edge.Kind == EdgeKind::BranchTaken    ? &Block.Taken
+        : Edge.Kind == EdgeKind::Fallthrough  ? &Block.Fallthrough
+                                              : nullptr;
+    if (!Arm || !Edge.To || *Arm)
+      Block.Disqualified = true;
+    else
+      *Arm = *Edge.To;
+  }
+
   for (const BasicBlock &Block : Program.Low.Blocks) {
-    if (Block.Successors.size() != 2)
+    const ConditionalArms &Choice = Arms[Block.ID];
+    if (Choice.Disqualified || !Choice.Taken || !Choice.Fallthrough ||
+        *Choice.Taken == *Choice.Fallthrough)
       continue;
-    const size_t Left = Block.Successors[0];
-    const size_t Right = Block.Successors[1];
+    const size_t Left = *Choice.Taken;
+    const size_t Right = *Choice.Fallthrough;
     std::optional<size_t> Join =
         nearestCommonDominator(PostDominators, Left, Right);
     if (Join && *Join == VirtualRoot)
@@ -879,10 +909,27 @@ void recoverHighIR(const BinaryImage &Image, SBFProgram &Program) {
   for (const LowInstruction &Instruction : Program.Low.Instructions)
     if (Instruction.CallTarget)
       Entries.insert(*Instruction.CallTarget);
-  for (const Symbol &Symbol : Image.Symbols)
-    if (Symbol.IsFunc)
-      if (auto Slot = addressToSlot(Program.Image, Symbol.Addr))
-        Entries.insert(*Slot);
+  for (const Symbol &Symbol : Image.Symbols) {
+    if (!Symbol.IsFunc)
+      continue;
+    const auto Slot = addressToSlot(Program.Image, Symbol.Addr);
+    if (!Slot || *Slot >= Program.Low.Instructions.size())
+      continue;
+    // A symbol table can name the second half of a wide load. Nothing rejects
+    // it at link time, but a function starting there begins in the middle of
+    // an instruction: the first thing decoded is the tail of the load, and
+    // every instruction after it is read four bytes out of phase. A recovered
+    // body built from that is fiction, so the symbol is reported and dropped
+    // rather than followed.
+    if (Program.Low.Instructions[*Slot].IsContinuation) {
+      Program.Low.Diagnostics.push_back(
+          {DiagnosticSeverity::Warning, *Slot, Symbol.Addr,
+           "function symbol '" + Symbol.Name +
+               "' starts inside a wide load and cannot begin a function"});
+      continue;
+    }
+    Entries.insert(*Slot);
+  }
 
   // The slot→block map and the call-free successor adjacency are identical
   // for every entry. Build them once; rebuilding them per entry (and

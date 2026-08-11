@@ -91,6 +91,76 @@ TEST(SBFAnalyzer, CombinesLDDWAndRetainsTheContinuationSlot) {
             ImmediateExtension::Full64);
 }
 
+TEST(SBFAnalyzer, DoesNotReadAnInternalCallAsAChoiceBetweenTwoPaths) {
+  // A call has two successors, the callee and the instruction after it, and
+  // neither is an alternative to the other: both run. Counting successors
+  // reads this as a two-armed region and swallows the whole callee into one
+  // arm.
+  const auto Instructions = {
+      encode(Opcode::CALL_IMM, 0, 1, 0, 2), // call the block two slots ahead
+      encode(Opcode::EXIT),
+      encode(Opcode::MOV64_IMM, 0, 0, 0, 7),
+      encode(Opcode::EXIT),
+  };
+  auto Program = analyze(makeImage(Version::V3, Instructions));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+
+  const bool CallsInternally =
+      std::any_of(Program->Low.Edges.begin(), Program->Low.Edges.end(),
+                  [](const CFGEdge &Edge) {
+                    return Edge.Kind == EdgeKind::Call;
+                  });
+  ASSERT_TRUE(CallsInternally) << "the fixture must exercise an internal call";
+  for (const Region &Region : Program->High.Regions)
+    EXPECT_NE(Region.Kind, RegionKind::If)
+        << "block_" << Region.HeaderBlock;
+}
+
+TEST(SBFAnalyzer, StillRecognizesARealConditionalBranchAsAChoice) {
+  const auto Instructions = {
+      encode(Opcode::JEQ64_IMM, 1, 0, 1, 0),
+      encode(Opcode::MOV64_IMM, 0, 0, 0, 3),
+      encode(Opcode::EXIT),
+  };
+  auto Program = analyze(makeImage(Version::V3, Instructions));
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  const bool HasIf =
+      std::any_of(Program->High.Regions.begin(), Program->High.Regions.end(),
+                  [](const Region &Region) {
+                    return Region.Kind == RegionKind::If;
+                  });
+  EXPECT_TRUE(HasIf);
+}
+
+TEST(SBFAnalyzer, RefusesAFunctionSymbolPointingIntoAWideLoad) {
+  EncodedInstruction Low = encode(Opcode::LDDW, 3, 0, 0, 0x55667788);
+  EncodedInstruction High{};
+  llvm::support::endian::write32le(High.data() + kImmediateOffset, 0x11223344);
+  BinaryImage Image =
+      makeImage(Version::V3, {Low, High, encode(Opcode::EXIT)});
+  // Nothing rejects this at link time, but a function starting here begins in
+  // the middle of an instruction: everything decoded after it is four bytes
+  // out of phase, and the recovered body is fiction.
+  Image.addSymbol("halfway", kBytecodeStart + kInstructionSize,
+                  kInstructionSize, true);
+
+  auto Program = analyze(Image);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  for (const Function &Function : Program->High.Functions)
+    EXPECT_NE(Function.Name, "halfway");
+
+  const bool Reported = std::any_of(
+      Program->Low.Diagnostics.begin(), Program->Low.Diagnostics.end(),
+      [](const Diagnostic &Note) {
+        return Note.Message.find("halfway") != std::string::npos &&
+               Note.Message.find("wide load") != std::string::npos;
+      });
+  EXPECT_TRUE(Reported) << "dropping the symbol silently hides a bad input";
+}
+
 TEST(SBFAnalyzer, NormalizesTheNonMonotonicV2Semantics) {
   const auto Instructions = {
       encode(Opcode::MOV32_REG, 1, 2), encode(Opcode::SUB64_IMM, 1, 0, 0, 7),
