@@ -125,3 +125,37 @@ INSTANTIATE_TEST_SUITE_P(X87Trans, X64X87TransRT, ::testing::ValuesIn(kX87),
                          rtTCName);
 INSTANTIATE_TEST_SUITE_P(X87Trans, X86X87TransRT, ::testing::ValuesIn(kX87),
                          rtTCName);
+
+class X64X87FpremIterativeRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(X64X87FpremIterativeRT, Verify) { roundTripX64(GetParam()); }
+
+static const std::vector<RoundTripTC> kX64X87FpremIterative = {
+    {"x87_fprem_iterative",
+     "long x87_fprem_iterative(long unused) {\n"
+     "  (void)unused;\n"
+     "  double x = 0x1.0000000000001p+1023;\n"
+     "  double y = 3.0, r;\n"
+     "  unsigned short sw;\n"
+     "  __asm__ volatile (\n"
+     "    \"fldl %[y]\\n\\t\"\n"
+     "    \"fldl %[x]\\n\\t\"\n"
+     "    \"1: fprem\\n\\t\"\n"
+     "    \"fnstsw %%ax\\n\\t\"\n"
+     "    \"testb $4, %%ah\\n\\t\"\n"
+     "    \"jnz 1b\\n\\t\"\n"
+     "    \"fstpl %[r]\\n\\t\"\n"
+     "    \"fstp %%st(0)\"\n"
+     "    : [r] \"=m\"(r), [sw] \"=a\"(sw)\n"
+     "    : [x] \"m\"(x), [y] \"m\"(y)\n"
+     "    : \"cc\", \"st\", \"st(1)\");\n"
+     "  unsigned long long bits;\n"
+     "  __builtin_memcpy(&bits, &r, 8);\n"
+     "  return (long)(bits ^ ((unsigned long long)(sw & 0x4700) << 32));\n"
+     "}\n",
+     {0}, "X87FpremIterative"},
+};
+
+INSTANTIATE_TEST_SUITE_P(X87FpremIterative, X64X87FpremIterativeRT,
+                         ::testing::ValuesIn(kX64X87FpremIterative), rtTCName);

@@ -442,6 +442,24 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
                                                    llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  // FPREM/FPREM1 expose partial-reduction progress and quotient bits through
+  // the x87 status word.  Capture it immediately after the value-producing
+  // inline asm so a lifted FNSTSW observes the same C0/C1/C2/C3 state.
+  if (IC == I::X87ReadStatus) {
+    if (Op.Output.Size == 0)
+      return nullptr;
+    auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
+    auto *FnTy = llvm::FunctionType::get(I16Ty, {}, false);
+    auto *IA = llvm::InlineAsm::get(
+        FnTy, "fnstsw $0", "={ax},~{dirflag},~{fpsr},~{flags}",
+        /*hasSideEffects=*/true);
+    llvm::Value *Status = Builder.CreateCall(IA, {}, "x87_status");
+    auto *OutTy = sizeToType(Op.Output.Size);
+    if (OutTy != I16Ty)
+      Status = Builder.CreateZExtOrTrunc(Status, OutTy);
+    return Status;
+  }
+
   // x87 transcendental / special ops: emit the genuine x87 instruction via
   // inline asm so the recompiled object runs the same hardware op as the
   // original (Unicorn executes it natively).  ST operands flow as doubles; the

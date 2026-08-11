@@ -209,3 +209,7 @@ X87Fyl2x, X87Fyl2xp1, X87Fptan, X87Fxtractsig, X87Fxtractexp,
 // x87 state operations. These have no integer result and must remain
 // side-effecting instructions through MedIR/LLVM lowering.
 X87Fninit, X87Fnclex,
+
+// Capture the hardware x87 status word after an inline-asm value operation.
+// Keep this at the end so existing intrinsic IDs remain stable.
+X87ReadStatus,

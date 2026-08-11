@@ -555,9 +555,13 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     break;
   case X86_INS_FPREM:
     S.emitIntrinsic(Intrinsic::X87Fprem, ST(0), {ST(0), ST(1)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus,
+                    NdVar::reg(x86reg::FPU_SW, 2));
     break;
   case X86_INS_FPREM1:
     S.emitIntrinsic(Intrinsic::X87Fprem1, ST(0), {ST(0), ST(1)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus,
+                    NdVar::reg(x86reg::FPU_SW, 2));
     break;
   // 2-operand, pop: result lands in st1, then st0 is popped (st1 becomes top).
   case X86_INS_FPATAN:
