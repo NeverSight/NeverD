@@ -30,6 +30,37 @@
 #define DEBUG_TYPE "neverd-cfg-builder"
 
 namespace neverd {
+namespace {
+
+/// True when \p Next begins an instruction that belongs to the same function as
+/// the resumable trap in front of it.
+///
+/// Padding is what this tells apart from a body.  A linker pads between
+/// functions with a run of `int3`, and a compiler plants a trap in front of an
+/// embedded jump table or string; in both cases the bytes after the trap are
+/// either another trap or not an instruction at all.  A `__debugbreak()` in a
+/// live function is followed by the rest of that function.
+bool codeFollowsTrap(const BinaryImage &Img, Decoder &Dec, va_t Next) {
+  const Segment *Seg = Img.getSegmentFor(Next);
+  if (!Seg || !Seg->isExecutable() || Next < Seg->VA)
+    return false;
+  const size_t Offset = static_cast<size_t>(Next - Seg->VA);
+  if (Offset >= Seg->Data.size())
+    return false;
+
+  // Classification only: this must not disturb the operand detail or the x87
+  // stack state the surrounding lift walk depends on.
+  const bool PreviousDetail = Dec.detailEnabled();
+  Dec.setDetail(false);
+  DecodedInsn Peek;
+  const int Size = Dec.decodeOneLight(Seg->Data.data() + Offset,
+                                      Seg->Data.size() - Offset, Next, Peek);
+  const bool IsTrap = Size > 0 && Dec.isResumableTrap(Peek);
+  Dec.setDetail(PreviousDetail);
+  return Size > 0 && !IsTrap;
+}
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // CFGBuilder
@@ -219,8 +250,15 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // control does not fall through into the inline data or padding that
       // commonly follows them.  Real branches/returns were already classified
       // from their LowIR ops and retain their more precise handling below.
+      //
+      // `int3` is the exception: it is resumable, and `__debugbreak()` puts one
+      // in the middle of an ordinary function with the epilogue behind it.
+      // Whether it ends the block is therefore decided by what follows, which
+      // separates that case from the run of `int3` a linker pads with and from
+      // the embedded data a trap is often planted in front of.
       if (!Rec.IsBranch && !Rec.IsRet && Dec.isFunctionTerminator(DI))
-        Rec.IsRet = true;
+        Rec.IsRet = !Dec.isResumableTrap(DI) ||
+                    !codeFollowsTrap(Img, Dec, Cur + static_cast<va_t>(Sz));
 
       // operator[]= returns the stored element, so bind to it directly rather
       // than doing a second tree lookup for the same key on the decode hot

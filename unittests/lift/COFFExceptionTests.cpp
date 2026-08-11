@@ -15,6 +15,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/COFF/COFFException.h"
+#include "neverd/loader/COFF/COFFUnwindARM.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/BinaryFormat/COFF.h"
@@ -346,6 +347,34 @@ TEST(COFFExceptionParser, ReconstructsCSpecificScopeTable) {
   EXPECT_EQ(Decoded.SEH->Scopes[0].HandlerVA, Img.Base + 0x1080);
 }
 
+// Delphi's x86-64 compiler drops the `FS:[0]` chain its 32-bit one uses and
+// describes a frame through the ordinary table mechanism, with its own scope
+// array in the handler data.  That array is not decoded, and the record must
+// say so: reported as complete it would describe a Delphi `try` as a function
+// that installs a handler and then handles nothing.
+TEST(COFFExceptionParser, ReportsAnUndecodedDelphiX64ScopeTable) {
+  BinaryImage Img = makeX64ExceptionImage(0x200);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__DelphiExceptionHandler");
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1200};
+  F.PersonalityVA = Img.Base + 0x1100;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  F.Personality = ExceptionPersonality::Unknown;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.Personality,
+            ExceptionPersonality::DelphiExceptionHandler);
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Partial);
+  EXPECT_FALSE(Decoded.Diagnostics.empty());
+  // Nothing may be invented from the undecoded table.
+  EXPECT_FALSE(Decoded.SEH.has_value());
+  EXPECT_FALSE(Decoded.Cxx.has_value());
+  EXPECT_FALSE(Decoded.canRegenerateLanguageMetadata());
+}
+
 TEST(COFFExceptionParser, ResolvesAArch64PersonalityBranchVeneer) {
   BinaryImage Img = makeX64ExceptionImage();
   Img.Arch = Arch::AArch64;
@@ -387,6 +416,9 @@ TEST(COFFExceptionParser, DoesNotTreatAArch64CallAsBranchVeneer) {
   Personality.Addr = Img.Base + 0x1120;
   Personality.IsFunc = true;
   Img.Symbols.push_back(std::move(Personality));
+  // Language data the unresolved personality leaves uninterpreted, which is
+  // what keeps the record short of complete.
+  writeLE<uint32_t>(Img.Segments[1].Data.data(), 1);
 
   ExceptionFunction F;
   F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1080};
@@ -461,6 +493,169 @@ TEST(COFFExceptionParser, ReconstructsCxxFrameHandler3StateGraph) {
   ASSERT_EQ(Decoded.Cxx->TryBlocks.size(), 1u);
   ASSERT_EQ(Decoded.Cxx->TryBlocks[0].Handlers.size(), 1u);
   EXPECT_EQ(Decoded.Cxx->TryBlocks[0].Handlers[0].HandlerVA, Img.Base + 0x1150);
+}
+
+namespace {
+
+/// Lay out a minimal but valid FH3 graph whose `FuncInfo` word is \p MagicWord.
+///
+/// Every field the magic declares is filled with something meaningful: an
+/// empty exception-specification list at 0x30e0 and `FI_EHS_FLAG`.  Every word
+/// *past* the declared end is filled with a pattern that is not a valid RVA,
+/// so a decoder reading the newest layout out of an older record is caught
+/// picking the pattern up rather than quietly producing a plausible answer.
+BinaryImage makeFH3MagicImage(uint32_t MagicWord) {
+  BinaryImage Img = makeX64ExceptionImage(0x200);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler3");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0x3040);
+
+  uint8_t *FI = X + 0x40;
+  writeLE<uint32_t>(FI, MagicWord);
+  writeLE<int32_t>(FI + 4, 1);       // maxState
+  writeLE<uint32_t>(FI + 8, 0x3080); // dispUnwindMap
+  writeLE<uint32_t>(FI + 12, 0);     // nTryBlocks
+  writeLE<uint32_t>(FI + 16, 0);     // dispTryBlockMap
+  writeLE<uint32_t>(FI + 20, 1);     // nIPMapEntries
+  writeLE<uint32_t>(FI + 24, 0x30d0);
+  writeLE<int32_t>(FI + 28, -8); // dispUnwindHelp
+
+  const uint32_t Magic = MagicWord & 0x1FFFFFFFu;
+  writeLE<uint32_t>(FI + 32, Magic >= 0x19930521 ? 0x30e0 : 0xdeadbeef);
+  writeLE<uint32_t>(FI + 36, Magic >= 0x19930522 ? 1 : 0xdeadbeef);
+
+  uint8_t *Unwind = X + 0x80;
+  writeLE<int32_t>(Unwind, -1);
+  writeLE<uint32_t>(Unwind + 4, 0);
+
+  uint8_t *IPMap = X + 0xd0;
+  writeLE<uint32_t>(IPMap, 0x1000);
+  writeLE<int32_t>(IPMap + 4, -1);
+
+  uint8_t *ESTypeList = X + 0xe0;
+  writeLE<int32_t>(ESTypeList, 0);     // throw()
+  writeLE<uint32_t>(ESTypeList + 4, 0);
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1200};
+  F.PersonalityVA = Img.Base + 0x1100;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+  return Img;
+}
+
+} // namespace
+
+TEST(COFFExceptionParser, StopsLegacyFH3RecordsAtTheirDeclaredLength) {
+  // EH_MAGIC_NUMBER1 ends after the unwind-help displacement: neither the
+  // exception-specification list nor EHFlags is part of the record, and the
+  // unreadable words that follow must not be mistaken for them.
+  {
+    BinaryImage Img = makeFH3MagicImage(0x19930520);
+    coff_loader::resolveExceptionHandlers(Img);
+    const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+    ASSERT_TRUE(Decoded.Cxx.has_value());
+    EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+    EXPECT_EQ(Decoded.Cxx->Version, CxxFuncInfoVersion::Original);
+    EXPECT_FALSE(Decoded.Cxx->hasExceptionSpecification());
+    EXPECT_EQ(Decoded.Cxx->Flags, 0u);
+    EXPECT_FALSE(Decoded.Cxx->IsSynchronous);
+  }
+
+  // EH_MAGIC_NUMBER2 owns the list but still not EHFlags, so `throw()` is
+  // recovered while the /EHs claim stays unmade.
+  {
+    BinaryImage Img = makeFH3MagicImage(0x19930521);
+    coff_loader::resolveExceptionHandlers(Img);
+    const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+    ASSERT_TRUE(Decoded.Cxx.has_value());
+    EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+    EXPECT_EQ(Decoded.Cxx->Version, CxxFuncInfoVersion::WithExceptionSpecs);
+    EXPECT_TRUE(Decoded.Cxx->hasExceptionSpecification());
+    EXPECT_TRUE(Decoded.Cxx->ExceptionSpecTypes.empty());
+    EXPECT_EQ(Decoded.Cxx->Flags, 0u);
+    EXPECT_FALSE(Decoded.Cxx->IsSynchronous);
+  }
+
+  // EH_MAGIC_NUMBER3 owns both.
+  {
+    BinaryImage Img = makeFH3MagicImage(0x19930522);
+    coff_loader::resolveExceptionHandlers(Img);
+    const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+    ASSERT_TRUE(Decoded.Cxx.has_value());
+    EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+    EXPECT_EQ(Decoded.Cxx->Version, CxxFuncInfoVersion::WithEHFlags);
+    EXPECT_TRUE(Decoded.Cxx->IsSynchronous);
+  }
+}
+
+TEST(COFFExceptionParser, SplitsBBTFlagsOutOfTheFH3MagicField) {
+  // `magicNumber` is 29 bits wide; BBT sets the three bits above it in place.
+  // A decoder that compares the whole word rejects every BBT-processed image.
+  BinaryImage Img = makeFH3MagicImage(0x19930522 | (1u << 29));
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  ASSERT_TRUE(Decoded.Cxx.has_value());
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+  EXPECT_EQ(Decoded.Cxx->Magic, 0x19930522u);
+  EXPECT_EQ(Decoded.Cxx->BBTFlags, 1u);
+  EXPECT_EQ(Decoded.Cxx->Version, CxxFuncInfoVersion::WithEHFlags);
+}
+
+TEST(COFFExceptionParser, DecodesFH3ExceptionSpecificationList) {
+  BinaryImage Img = makeX64ExceptionImage(0x200);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler3");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0x3040);
+
+  uint8_t *FI = X + 0x40;
+  writeLE<uint32_t>(FI, 0x19930522);
+  writeLE<int32_t>(FI + 4, 1);
+  writeLE<uint32_t>(FI + 8, 0x3080);
+  writeLE<uint32_t>(FI + 12, 0);
+  writeLE<uint32_t>(FI + 16, 0);
+  writeLE<uint32_t>(FI + 20, 1);
+  writeLE<uint32_t>(FI + 24, 0x30d0);
+  writeLE<int32_t>(FI + 28, -8);
+  writeLE<uint32_t>(FI + 32, 0x30e0); // dispESTypeList
+  writeLE<uint32_t>(FI + 36, 1);      // FI_EHS_FLAG
+
+  uint8_t *Unwind = X + 0x80;
+  writeLE<int32_t>(Unwind, -1);
+  writeLE<uint32_t>(Unwind + 4, 0);
+
+  uint8_t *IPMap = X + 0xd0;
+  writeLE<uint32_t>(IPMap, 0x1000);
+  writeLE<int32_t>(IPMap + 4, -1);
+
+  uint8_t *ESTypeList = X + 0xe0;
+  writeLE<int32_t>(ESTypeList, 2);         // nCount
+  writeLE<uint32_t>(ESTypeList + 4, 0x30f0); // dispTypeArray
+
+  uint8_t *Specs = X + 0xf0;
+  writeLE<uint32_t>(Specs, 0x40);      // adjectives
+  writeLE<uint32_t>(Specs + 4, 0x3180);  // type descriptor
+  writeLE<uint32_t>(Specs + 20, 0);
+  writeLE<uint32_t>(Specs + 24, 0x3190);
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1200};
+  F.PersonalityVA = Img.Base + 0x1100;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_TRUE(Decoded.Cxx.has_value());
+  EXPECT_TRUE(Decoded.Cxx->hasExceptionSpecification());
+  EXPECT_TRUE(Decoded.Cxx->IsSynchronous);
+  ASSERT_EQ(Decoded.Cxx->ExceptionSpecTypes.size(), 2u);
+  EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[0].Adjectives, 0x40u);
+  EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[0].TypeDescriptorVA,
+            Img.Base + 0x3180);
+  EXPECT_EQ(Decoded.Cxx->ExceptionSpecTypes[1].TypeDescriptorVA,
+            Img.Base + 0x3190);
 }
 
 TEST(COFFExceptionParser, AcceptsFH3IPMapAcrossSharedFuncInfoGroup) {
@@ -629,6 +824,84 @@ TEST(COFFExceptionParser, ReconstructsCompressedCxxFrameHandler4Graph) {
   EXPECT_EQ(Decoded.Cxx->TryBlocks[0].Handlers[0].ContinuationVAs[0],
             Img.Base + 0x1030);
   EXPECT_FALSE(Decoded.canRegenerateLanguageMetadata());
+}
+
+namespace {
+
+/// Build an FH4 image whose function was split into two contributions, with
+/// the IP-to-state field naming the segment directory rather than a map.  The
+/// directory files a real map under \p ListedSegmentRVA; the runtime function
+/// under test always begins at 0x1000.
+BinaryImage makeSeparatedFH4Image(uint32_t ListedSegmentRVA) {
+  BinaryImage Img = makeX64ExceptionImage(0x300);
+  addPersonalityImport(Img, Img.Base + 0x1100, "__CxxFrameHandler4");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 0x3040);
+
+  // isSeparated | UnwindMap, so the IP field addresses a SepIPtoStateMap.
+  X[0x40] = 0x02 | 0x08;
+  writeLE<uint32_t>(X + 0x41, 0x3080); // dispUnwindMap
+  writeLE<uint32_t>(X + 0x45, 0x30a0); // dispIPtoStateMap -> directory
+
+  X[0x80] = 2;  // one unwind entry
+  X[0x81] = 14; // direct action, empty-state sentinel
+  writeLE<uint32_t>(X + 0x82, 0x1120);
+
+  // Segment directory: two contributions, the second of which is the one the
+  // decoder must ignore.
+  X[0xa0] = 4;                              // count = 2
+  writeLE<uint32_t>(X + 0xa1, ListedSegmentRVA);
+  writeLE<uint32_t>(X + 0xa5, 0x30e0);      // map for that contribution
+  writeLE<uint32_t>(X + 0xa9, 0x1800);      // an unrelated contribution
+  writeLE<uint32_t>(X + 0xad, 0x3100);      // whose map must not be selected
+
+  X[0xe0] = 4;    // two IP-state entries, relative to this contribution
+  X[0xe1] = 0;    // delta 0
+  X[0xe2] = 0;    // encoded state -1
+  X[0xe3] = 0x20; // delta 0x10
+  X[0xe4] = 2;    // encoded state 0
+
+  X[0x100] = 2; // the decoy map: one entry naming state 0 at offset 0
+  X[0x101] = 0;
+  X[0x102] = 2;
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1200};
+  F.PersonalityVA = Img.Base + 0x1100;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+  return Img;
+}
+
+} // namespace
+
+TEST(COFFExceptionParser, SelectsSeparatedFH4MapForItsCodeContribution) {
+  BinaryImage Img = makeSeparatedFH4Image(/*ListedSegmentRVA=*/0x1000);
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_TRUE(Decoded.Cxx.has_value());
+  EXPECT_TRUE(Decoded.Cxx->IsSeparated);
+  EXPECT_TRUE(Decoded.Cxx->hasValidStateGraph());
+  ASSERT_EQ(Decoded.Cxx->IPMap.size(), 2u);
+  EXPECT_EQ(Decoded.Cxx->IPMap[0].IP, Img.Base + 0x1000);
+  EXPECT_EQ(Decoded.Cxx->IPMap[0].State, -1);
+  EXPECT_EQ(Decoded.Cxx->IPMap[1].IP, Img.Base + 0x1010);
+  EXPECT_EQ(Decoded.Cxx->IPMap[1].State, 0);
+}
+
+TEST(COFFExceptionParser, TreatsUnlistedSeparatedFH4ContributionAsStateless) {
+  // A contribution the directory does not name has no states at all, which is
+  // the same conclusion the runtime reaches.  It is a complete decode, not a
+  // failed lookup, and it must not inherit another contribution's map.
+  BinaryImage Img = makeSeparatedFH4Image(/*ListedSegmentRVA=*/0x1400);
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_TRUE(Decoded.Cxx.has_value());
+  EXPECT_TRUE(Decoded.Cxx->IsSeparated);
+  EXPECT_EQ(Decoded.Cxx->UnwindMap.size(), 1u);
+  EXPECT_TRUE(Decoded.Cxx->IPMap.empty());
 }
 
 TEST(COFFExceptionParser, StopsFH4RepeatedHandlerExpansionAtBudget) {
@@ -1474,6 +1747,329 @@ TEST(COFFExceptionIR, DecompileRetainsFaithfulCxxAnnotation) {
   EXPECT_NE(Source.find("adjectives=0x40"), std::string::npos);
   EXPECT_NE(Source.find("parent_frame_offset=-8"), std::string::npos);
   EXPECT_NE(Source.find("continuations=0x140001038"), std::string::npos);
+}
+
+//===----------------------------------------------------------------------===//
+// ARM and ARM64 unwind codes
+//===----------------------------------------------------------------------===//
+
+using coff_loader::decodeARM32UnwindCodes;
+using coff_loader::decodeARM64UnwindCodes;
+using coff_loader::expandARM32PackedUnwind;
+using coff_loader::expandARM64PackedUnwind;
+
+/// The set of registers an operation names, as a sorted list, so a test can
+/// state the whole of what it expects rather than probing a bitmask.
+std::vector<uint16_t> registersOf(const UnwindOperation &Op) {
+  std::vector<uint16_t> Registers;
+  for (uint16_t Reg = 0; Reg < 32; ++Reg)
+    if (Op.RegisterMask & (uint32_t(1) << Reg))
+      Registers.push_back(Reg);
+  return Registers;
+}
+
+TEST(ARM64Unwind, DecodesTheDocumentedFramePointerPrologue) {
+  // `0xe42291e1`, the unwind word Microsoft's own worked example publishes for
+  // a frame-pointer function.  Its bytes decode in the order they are stored.
+  const std::vector<uint8_t> Codes = {0xE1, 0x91, 0x22, 0xE4};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 4u);
+
+  EXPECT_EQ(Decoded.Operations[0].Kind, UnwindOperationKind::SetFramePointer);
+  EXPECT_EQ(Decoded.Operations[0].Register, 29u);
+
+  // `save_fplr_x` with Z=0x11 stores <x29,lr> at [sp-(0x11+1)*8]!.
+  EXPECT_EQ(Decoded.Operations[1].Kind,
+            UnwindOperationKind::SaveRegisterPairPreIndexed);
+  EXPECT_EQ(registersOf(Decoded.Operations[1]),
+            (std::vector<uint16_t>{29, 30}));
+  EXPECT_EQ(Decoded.Operations[1].StackOffset, 144u);
+
+  // `save_r19r20_x` with Z=2 stores <x19,x20> at [sp-2*8]!.
+  EXPECT_EQ(Decoded.Operations[2].Kind,
+            UnwindOperationKind::SaveRegisterPairPreIndexed);
+  EXPECT_EQ(registersOf(Decoded.Operations[2]),
+            (std::vector<uint16_t>{19, 20}));
+  EXPECT_EQ(Decoded.Operations[2].StackOffset, 16u);
+
+  EXPECT_EQ(Decoded.Operations[3].Kind, UnwindOperationKind::End);
+  // The terminator stands against no prologue instruction; the other three do.
+  EXPECT_EQ(Decoded.PrologueSize, 12u);
+}
+
+TEST(ARM64Unwind, StartsAnEpilogueMidwayThroughASharedCodeArray) {
+  // Microsoft's second worked example: an epilogue whose start index points
+  // into the middle of the prologue's codes, so the two share a tail.
+  const std::vector<uint8_t> Codes = {0xE3, 0xE3, 0xE3, 0xE3,
+                                      0xD6, 0x00, 0x05, 0xE4};
+  coff_loader::ARMUnwindDecode Prologue = decodeARM64UnwindCodes(Codes);
+  ASSERT_EQ(Prologue.Operations.size(), 7u);
+  for (unsigned I = 0; I < 4; ++I)
+    EXPECT_EQ(Prologue.Operations[I].Kind, UnwindOperationKind::Nop);
+
+  // `save_lrpair` pairs a callee-saved register with lr rather than with its
+  // neighbour, which is why the two are not adjacent.
+  EXPECT_EQ(Prologue.Operations[4].Kind,
+            UnwindOperationKind::SaveRegisterPair);
+  EXPECT_EQ(registersOf(Prologue.Operations[4]),
+            (std::vector<uint16_t>{19, 30}));
+
+  EXPECT_EQ(Prologue.Operations[5].Kind, UnwindOperationKind::AllocateStack);
+  EXPECT_EQ(Prologue.Operations[5].StackOffset, 80u);
+
+  coff_loader::ARMUnwindDecode Epilogue =
+      decodeARM64UnwindCodes(Codes, /*StartOffset=*/4);
+  EXPECT_EQ(Epilogue.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Epilogue.Operations.size(), 3u);
+  EXPECT_EQ(Epilogue.Operations[0].Kind,
+            UnwindOperationKind::SaveRegisterPair);
+  EXPECT_EQ(Epilogue.Operations[0].CodeOffset, 4u);
+}
+
+TEST(ARM64Unwind, ResolvesSaveNextAgainstTheCodeThatFollowsIt) {
+  // The array runs from the last prologue instruction back towards the first,
+  // so the pair a `save_next` extends is described by the *following* code.
+  // Here `save_fregp_x` stores d8,d9 while claiming 48 bytes, and the two
+  // `save_next` codes above it are the two pairs the prologue stored after it.
+  const std::vector<uint8_t> Codes = {0xE6, 0xE6, 0xDA, 0x05, 0xE4};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 4u);
+
+  EXPECT_EQ(registersOf(Decoded.Operations[2]), (std::vector<uint16_t>{8, 9}));
+  EXPECT_EQ(Decoded.Operations[2].StackOffset, 48u);
+
+  // A pre-indexed store leaves its registers at the bottom of what it claimed,
+  // so the pair above it sits at 16 rather than at 48 plus 16.
+  EXPECT_EQ(Decoded.Operations[1].Kind, UnwindOperationKind::SaveNextPair);
+  EXPECT_EQ(registersOf(Decoded.Operations[1]),
+            (std::vector<uint16_t>{10, 11}));
+  EXPECT_EQ(Decoded.Operations[1].StackOffset, 16u);
+  EXPECT_EQ(registersOf(Decoded.Operations[0]),
+            (std::vector<uint16_t>{12, 13}));
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 32u);
+  EXPECT_EQ(Decoded.Operations[0].RegisterClass,
+            UnwindRegisterClass::FloatingPoint);
+}
+
+TEST(ARM64Unwind, DecodesASaveNextFromTheCorpus) {
+  // `e2 04 44 e6 28 e4`, taken byte for byte from the clang-cl AArch64 image
+  // `xframe_eh_exe-clang-cl-aarch64-native-gs-o2.exe`.  Resolving the
+  // `save_next` against the code before it instead of the one after names
+  // x31 -- a register that does not exist -- which is how the direction was
+  // caught in the first place.
+  const std::vector<uint8_t> Codes = {0xE2, 0x04, 0x44, 0xE6, 0x28, 0xE4};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 5u);
+
+  EXPECT_EQ(Decoded.Operations[0].Kind, UnwindOperationKind::AddFramePointer);
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 32u);
+  EXPECT_EQ(registersOf(Decoded.Operations[1]),
+            (std::vector<uint16_t>{29, 30}));
+  EXPECT_EQ(Decoded.Operations[1].StackOffset, 32u);
+  // The anchor stores x19,x20 while claiming 64 bytes, so the `save_next`
+  // above it is x21,x22 one slot up from where those landed.
+  EXPECT_EQ(registersOf(Decoded.Operations[2]),
+            (std::vector<uint16_t>{21, 22}));
+  EXPECT_EQ(Decoded.Operations[2].StackOffset, 16u);
+  EXPECT_EQ(registersOf(Decoded.Operations[3]),
+            (std::vector<uint16_t>{19, 20}));
+  EXPECT_EQ(Decoded.Operations[3].StackOffset, 64u);
+}
+
+TEST(ARM64Unwind, ReportsASaveNextThatExtendsNoPair) {
+  // `save_next` immediately before `end` extends nothing at all.
+  const std::vector<uint8_t> Codes = {0xE6, 0xE4};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Partial);
+  EXPECT_FALSE(Decoded.Diagnostics.empty());
+}
+
+TEST(ARM64Unwind, DecodesTheArm64ECRegisterSaves) {
+  // `save_any_reg` is the only code that can name a full q register or a
+  // register the ordinary calling convention lets a function clobber.
+  // `E7 66 89` is `stp q6,q7,[sp,#-0xA0]!` from the Arm64EC entry thunk
+  // Microsoft documents.
+  const std::vector<uint8_t> Codes = {0xE7, 0x66, 0x89, 0xE4};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 2u);
+  EXPECT_EQ(Decoded.Operations[0].Kind,
+            UnwindOperationKind::SaveRegisterPairPreIndexed);
+  EXPECT_EQ(Decoded.Operations[0].RegisterClass, UnwindRegisterClass::Vector);
+  EXPECT_EQ(registersOf(Decoded.Operations[0]), (std::vector<uint16_t>{6, 7}));
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 0xA0u);
+}
+
+TEST(ARM64Unwind, DecodesTheWideAndSignedForms) {
+  // `alloc_l` with a 24-bit immediate, then `pac_sign_lr`.
+  const std::vector<uint8_t> Codes = {0xE0, 0x00, 0x10, 0x00, 0xFC, 0xE4};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 3u);
+  EXPECT_EQ(Decoded.Operations[0].Kind, UnwindOperationKind::AllocateStack);
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 0x1000u * 16u);
+  EXPECT_EQ(Decoded.Operations[1].Kind,
+            UnwindOperationKind::SignReturnAddress);
+}
+
+TEST(ARM64Unwind, KeepsWhatItReadBeforeATruncatedCode) {
+  // A two-byte code whose second byte is missing.  The allocation before it is
+  // still true, and reporting it beats discarding the whole frame.
+  const std::vector<uint8_t> Codes = {0x05, 0xC8};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Partial);
+  ASSERT_EQ(Decoded.Operations.size(), 1u);
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 80u);
+}
+
+TEST(ARM64Unwind, SkipsAReservedMultiByteCodeWithoutLosingSync) {
+  // `0xFA` reserves four payload bytes.  Reading it as a one-byte code would
+  // decode its payload as three more operations that do not exist.
+  const std::vector<uint8_t> Codes = {0xFA, 0x11, 0x22, 0x33, 0xE1, 0xE4};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM64UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Partial);
+  ASSERT_EQ(Decoded.Operations.size(), 3u);
+  EXPECT_EQ(Decoded.Operations[0].Kind, UnwindOperationKind::Opaque);
+  EXPECT_EQ(Decoded.Operations[1].Kind, UnwindOperationKind::SetFramePointer);
+}
+
+TEST(ARM64Unwind, ExpandsPackedDataIntoTheCanonicalPrologue) {
+  // RegI=2, RegF=0, H=0, CR=01 (unchained, lr saved), FrameSize=3 (48 bytes).
+  const uint32_t Packed = 1u | (0u << 13) | (2u << 16) | (0u << 20) |
+                          (1u << 21) | (3u << 23);
+  coff_loader::ARMUnwindDecode Decoded = expandARM64PackedUnwind(Packed);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_GE(Decoded.Operations.size(), 2u);
+
+  // x19 and x20 are saved by the store that also allocates the saved area.
+  EXPECT_EQ(Decoded.Operations[0].Kind,
+            UnwindOperationKind::SaveRegisterPairPreIndexed);
+  EXPECT_EQ(registersOf(Decoded.Operations[0]),
+            (std::vector<uint16_t>{19, 20}));
+  // intsz is 2*8 for x19/x20 plus 8 for lr, rounded up to 32.
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 32u);
+
+  // lr follows on its own, because an even RegI leaves it unpaired.
+  EXPECT_EQ(Decoded.Operations[1].Kind, UnwindOperationKind::SaveRegister);
+  EXPECT_EQ(Decoded.Operations[1].Register, 30u);
+  EXPECT_EQ(Decoded.Operations[1].StackOffset, 16u);
+
+  // 48 bytes of frame less the 32 the saves take leaves 16 of locals.
+  ASSERT_EQ(Decoded.Operations.size(), 3u);
+  EXPECT_EQ(Decoded.Operations[2].Kind, UnwindOperationKind::AllocateStack);
+  EXPECT_EQ(Decoded.Operations[2].StackOffset, 16u);
+}
+
+TEST(ARM64Unwind, PairsTheLinkRegisterWithAnOddNumberedIntegerSave) {
+  // RegI=1 with CR=01 merges lr into the one integer pair rather than storing
+  // it separately, which is the case the encoding calls out by name.
+  const uint32_t Packed = 1u | (1u << 16) | (1u << 21) | (2u << 23);
+  coff_loader::ARMUnwindDecode Decoded = expandARM64PackedUnwind(Packed);
+  ASSERT_GE(Decoded.Operations.size(), 1u);
+  EXPECT_EQ(Decoded.Operations[0].Kind,
+            UnwindOperationKind::SaveRegisterPairPreIndexed);
+  EXPECT_EQ(registersOf(Decoded.Operations[0]),
+            (std::vector<uint16_t>{19, 30}));
+}
+
+TEST(ARM64Unwind, ChainsAFrameThroughTheFramePointer) {
+  // RegI=0, RegF=0, CR=11 (chained), FrameSize=2 (32 bytes).
+  const uint32_t Packed = 1u | (3u << 21) | (2u << 23);
+  coff_loader::ARMUnwindDecode Decoded = expandARM64PackedUnwind(Packed);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 2u);
+  EXPECT_EQ(Decoded.Operations[0].Kind,
+            UnwindOperationKind::SaveRegisterPairPreIndexed);
+  EXPECT_EQ(registersOf(Decoded.Operations[0]),
+            (std::vector<uint16_t>{29, 30}));
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 32u);
+  EXPECT_EQ(Decoded.Operations[1].Kind, UnwindOperationKind::SetFramePointer);
+}
+
+TEST(ARM64Unwind, RefusesPackedDataThatSavesMoreThanItsFrameHolds) {
+  // RegI=10 needs 80 bytes of saves, but FrameSize=1 declares 16 in total.
+  const uint32_t Packed = 1u | (10u << 16) | (1u << 23);
+  coff_loader::ARMUnwindDecode Decoded = expandARM64PackedUnwind(Packed);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Malformed);
+  EXPECT_TRUE(Decoded.Operations.empty());
+}
+
+TEST(ARM32Unwind, DecodesThePopAndAllocateForms) {
+  // `pop {r4-r7,lr}` (D7), `vpop {d8-d9}` (E1), `add sp,sp,#0x20` (08), end.
+  const std::vector<uint8_t> Codes = {0xD7, 0xE1, 0x08, 0xFF};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM32UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 4u);
+
+  EXPECT_EQ(registersOf(Decoded.Operations[0]),
+            (std::vector<uint16_t>{4, 5, 6, 7, 14}));
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 20u);
+  // A `pop` of low registers is a 16-bit instruction; a `vpop` is always 32.
+  EXPECT_EQ(Decoded.Operations[0].InstructionSize, 2u);
+
+  EXPECT_EQ(Decoded.Operations[1].RegisterClass,
+            UnwindRegisterClass::FloatingPoint);
+  EXPECT_EQ(registersOf(Decoded.Operations[1]), (std::vector<uint16_t>{8, 9}));
+  EXPECT_EQ(Decoded.Operations[1].InstructionSize, 4u);
+
+  EXPECT_EQ(Decoded.Operations[2].Kind, UnwindOperationKind::AllocateStack);
+  EXPECT_EQ(Decoded.Operations[2].StackOffset, 32u);
+  EXPECT_EQ(Decoded.PrologueSize, 8u);
+}
+
+TEST(ARM32Unwind, DecodesTheWideRegisterMask) {
+  // `80-BF` carries a 13-bit mask over r0-r12 plus a separate lr bit.
+  const std::vector<uint8_t> Codes = {0xA0, 0xF0, 0xFF};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM32UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 2u);
+  EXPECT_EQ(registersOf(Decoded.Operations[0]),
+            (std::vector<uint16_t>{4, 5, 6, 7, 14}));
+  EXPECT_EQ(Decoded.Operations[0].StackOffset, 20u);
+}
+
+TEST(ARM32Unwind, DecodesTheFrameChainAndReturnAddressForms) {
+  // `mov sp,r7` (C7), `ldr lr,[sp],#8` (EF 02), end.
+  const std::vector<uint8_t> Codes = {0xC7, 0xEF, 0x02, 0xFF};
+  coff_loader::ARMUnwindDecode Decoded = decodeARM32UnwindCodes(Codes);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 3u);
+  EXPECT_EQ(Decoded.Operations[0].Kind,
+            UnwindOperationKind::SetStackPointerFromRegister);
+  EXPECT_EQ(Decoded.Operations[0].Register, 7u);
+  EXPECT_EQ(Decoded.Operations[1].Kind,
+            UnwindOperationKind::LoadReturnAddress);
+  EXPECT_EQ(Decoded.Operations[1].StackOffset, 8u);
+}
+
+TEST(ARM32Unwind, ExpandsPackedDataForAChainedFrame) {
+  // Reg=2 (r4-r6), R=0, L=1, C=1, StackAdjust=4 words.
+  const uint32_t Packed = 1u | (2u << 16) | (1u << 20) | (1u << 21) |
+                          (4u << 22);
+  coff_loader::ARMUnwindDecode Decoded = expandARM32PackedUnwind(Packed);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Decoded.Operations.size(), 3u);
+
+  // The chained frame adds r11 to the pushed set alongside lr.
+  EXPECT_EQ(registersOf(Decoded.Operations[0]),
+            (std::vector<uint16_t>{4, 5, 6, 11, 14}));
+  EXPECT_EQ(Decoded.Operations[1].Kind, UnwindOperationKind::AddFramePointer);
+  EXPECT_EQ(Decoded.Operations[1].Register, 11u);
+  EXPECT_EQ(Decoded.Operations[2].Kind, UnwindOperationKind::AllocateStack);
+  EXPECT_EQ(Decoded.Operations[2].StackOffset, 16u);
+}
+
+TEST(ARM32Unwind, RefusesAChainedFrameThatDoesNotSaveTheLinkRegister) {
+  // C=1 without L=1 is an encoding the ABI forbids, because a frame chain
+  // needs both r11 and lr.
+  const uint32_t Packed = 1u | (1u << 21);
+  coff_loader::ARMUnwindDecode Decoded = expandARM32PackedUnwind(Packed);
+  EXPECT_EQ(Decoded.Status, ExceptionParseStatus::Malformed);
+  EXPECT_TRUE(Decoded.Operations.empty());
 }
 
 } // namespace

@@ -8,8 +8,10 @@
 #include "neverd/Support/ISAEncoding.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
+#include "neverd/loader/COFF/COFFUnwindARM.h"
 #include "neverd/loader/FunctionDiscovery.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ARMWinEH.h"
 #include "llvm/Support/Debug.h"
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -208,6 +211,81 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                           << " new funcs)\n");
 }
 
+/// Note whichever operation established the frame pointer, so a consumer that
+/// only wants to know how to find the frame does not have to walk the whole
+/// prologue looking for it.
+void recordFrameRegister(ExceptionFunction &EF) {
+  for (const UnwindOperation &Op : EF.UnwindOperations) {
+    if (Op.Kind != UnwindOperationKind::SetFramePointer &&
+        Op.Kind != UnwindOperationKind::AddFramePointer)
+      continue;
+    EF.FrameRegister = Op.Register;
+    EF.FrameOffset = static_cast<uint32_t>(Op.StackOffset);
+    return;
+  }
+}
+
+/// Attach a decoded prologue sequence to \p EF.
+void applyPackedUnwind(ExceptionFunction &EF, ARMUnwindDecode Decoded) {
+  EF.PrologueSize = Decoded.PrologueSize;
+  EF.UnwindOperations = std::move(Decoded.Operations);
+  EF.ParseStatus = mergeExceptionParseStatus(EF.ParseStatus, Decoded.Status);
+  for (std::string &Message : Decoded.Diagnostics)
+    EF.Diagnostics.push_back(std::move(Message));
+  recordFrameRegister(EF);
+}
+
+/// Decode the prologue and every epilogue an unpacked `.xdata` record holds.
+///
+/// \p Codes is the unwind-code byte array and \p Scopes the epilogue scope
+/// words that precede it, empty when the record used the single-epilogue form
+/// that puts the one scope's index in the header instead.  \p SingleEpilogue,
+/// when set, is that index.
+void applyUnwindCodes(ExceptionFunction &EF, bool IsAArch64,
+                      llvm::ArrayRef<uint8_t> Codes,
+                      llvm::ArrayRef<llvm::support::ulittle32_t> Scopes,
+                      std::optional<uint32_t> SingleEpilogue) {
+  applyPackedUnwind(EF, IsAArch64 ? decodeARM64UnwindCodes(Codes)
+                                  : decodeARM32UnwindCodes(Codes));
+
+  // An epilogue's offset is stored in instruction units, which differ between
+  // the two instruction sets: ARM64 counts words, Thumb-2 halfwords.
+  const uint32_t OffsetScale = IsAArch64 ? 4 : 2;
+  auto decodeEpilogue = [&](uint32_t StartOffset, uint32_t StartIndex,
+                            uint8_t Condition) {
+    UnwindEpilog Epilog;
+    Epilog.StartOffset = int64_t(StartOffset) * OffsetScale;
+    Epilog.Flags = Condition;
+    Epilog.FirstOperationOffset = StartIndex;
+    ARMUnwindDecode Decoded = IsAArch64
+                                  ? decodeARM64UnwindCodes(Codes, StartIndex)
+                                  : decodeARM32UnwindCodes(Codes, StartIndex);
+    // The epilogue's own length is the span of the instructions its codes
+    // stand against, measured from where the scope says it starts.
+    Epilog.LastInstructionOffset =
+        static_cast<uint32_t>(Epilog.StartOffset) + Decoded.PrologueSize;
+    Epilog.Operations = std::move(Decoded.Operations);
+    EF.ParseStatus = mergeExceptionParseStatus(EF.ParseStatus, Decoded.Status);
+    for (std::string &Message : Decoded.Diagnostics)
+      EF.Diagnostics.push_back(std::move(Message));
+    EF.Epilogs.push_back(std::move(Epilog));
+  };
+
+  if (SingleEpilogue) {
+    // The compact form names no offset: the one epilogue runs to the end of
+    // the function, so where it starts is not recorded separately.
+    decodeEpilogue(0, *SingleEpilogue, 0);
+    return;
+  }
+  for (llvm::support::ulittle32_t Word : Scopes) {
+    const llvm::ARM::WinEH::EpilogueScope ES(Word);
+    decodeEpilogue(ES.EpilogueStartOffset(),
+                   IsAArch64 ? ES.EpilogueStartIndexAArch64()
+                             : ES.EpilogueStartIndexARM(),
+                   IsAArch64 ? 0 : ES.Condition());
+  }
+}
+
 void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                         uint64_t ImageBase) {
   const data_directory *ExcDir =
@@ -276,6 +354,14 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     va_t PersonalityVA = 0;
     va_t HandlerDataVA = 0;
     std::vector<uint8_t> NativeUnwindBytes;
+    // Where the unwind codes and the epilogue scopes sit inside those bytes.
+    // Recorded here rather than decoded in place because the byte vector is
+    // handed to the record before the codes are read out of it.
+    size_t UnwindCodeOffset = 0;
+    size_t UnwindCodeLength = 0;
+    size_t EpilogueScopeOffset = 0;
+    size_t EpilogueScopeCount = 0;
+    std::optional<uint32_t> SingleEpilogueIndex;
     ExceptionParseStatus EntryStatus = ExceptionParseStatus::Complete;
     std::vector<std::string> EntryDiagnostics;
     auto DiagnoseUnwindBody = [&](llvm::StringRef Message) {
@@ -382,8 +468,18 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
           HasValidBody = false;
         }
       }
-      if (HasValidBody)
+      if (HasValidBody) {
         NativeUnwindBytes.assign(XData, XData + StructuralBytes);
+        UnwindCodeOffset = static_cast<size_t>((HeaderWords + EpilogueWords) * 4);
+        UnwindCodeLength = static_cast<size_t>(CodeWords * 4);
+        EpilogueScopeOffset = static_cast<size_t>(HeaderWords * 4);
+        EpilogueScopeCount = static_cast<size_t>(EpilogueWords);
+        // With the E bit set the record carries one epilogue and no scope
+        // array, and the field that would have held the scope count holds
+        // that epilogue's first unwind code instead.
+        if (XR.E())
+          SingleEpilogueIndex = XR.EpilogueCount();
+      }
       if (HasValidBody && XR.X()) {
         uint32_t HandlerRVA =
             readLE<uint32_t>(XData + static_cast<size_t>(PreHandlerWords * 4));
@@ -456,6 +552,16 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
       EF.UnwindInfoRVA = XDataRVA;
       EF.UnwindInfoVA = XDataVA;
       EF.NativeUnwindBytes = std::move(NativeUnwindBytes);
+      if (UnwindCodeLength != 0) {
+        llvm::ArrayRef<uint8_t> Structural(EF.NativeUnwindBytes);
+        std::vector<llvm::support::ulittle32_t> Scopes(EpilogueScopeCount);
+        for (size_t S = 0; S < EpilogueScopeCount; ++S)
+          Scopes[S] = llvm::support::ulittle32_t(
+              readLE<uint32_t>(Structural.data() + EpilogueScopeOffset + S * 4));
+        applyUnwindCodes(EF, IsAArch64,
+                         Structural.slice(UnwindCodeOffset, UnwindCodeLength),
+                         Scopes, SingleEpilogueIndex);
+      }
       if (PersonalityVA != 0) {
         EF.PersonalityVA = PersonalityVA;
         EF.HandlerDataVA = HandlerDataVA;
@@ -470,9 +576,11 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     } else if (IsAArch64) {
       EF.Encoding = IsFragment ? ExceptionEncoding::ARM64PackedFragment
                                : ExceptionEncoding::ARM64Packed;
+      applyPackedUnwind(EF, expandARM64PackedUnwind(UnwindWord));
     } else {
       EF.Encoding = IsFragment ? ExceptionEncoding::ARM32PackedFragment
                                : ExceptionEncoding::ARM32Packed;
+      applyPackedUnwind(EF, expandARM32PackedUnwind(UnwindWord));
     }
     Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
         Img.ExceptionMetadata.ParseStatus, EF.ParseStatus);

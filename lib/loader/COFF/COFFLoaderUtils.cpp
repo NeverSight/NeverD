@@ -490,9 +490,15 @@ void parseLoadConfiguration(const COFFObjectFile &Obj, BinaryImage &Img,
   uintptr_t FileEnd = FileBegin + FileData.size();
   size_t AvailableSize =
       (CfgPtr >= FileBegin && CfgPtr <= FileEnd) ? (FileEnd - CfgPtr) : 0;
-  AvailableSize = std::min<size_t>(AvailableSize, LoadCfgDir->Size);
   if (AvailableSize < sizeof(uint32_t))
     return;
+  // The structure's own leading `Size` decides which fields exist, not the
+  // data directory's size.  Every MSVC link.exe since the field was added has
+  // left the directory size at the value contemporary with the linker while
+  // emitting the full modern structure, so clamping to it drops the SafeSEH
+  // handler table and the whole Control Flow Guard block on images that
+  // plainly carry them.  Windows itself reads this field, so trusting it is
+  // what makes the decode agree with the loader.
   uint32_t DeclaredSize =
       readLE<uint32_t>(reinterpret_cast<const uint8_t *>(CfgPtr));
   if (DeclaredSize < sizeof(uint32_t))

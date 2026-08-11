@@ -357,26 +357,28 @@ void MedLLVMEmitter::emitExceptionMetadata(const MedFunc &Func,
     return llvm::MDNode::get(*Ctx, Values);
   };
 
+  auto UnwindOp = [&](const UnwindOperation &Op) -> llvm::Metadata * {
+    return Node({mdUInt(*Ctx, static_cast<uint8_t>(Op.Kind), 8),
+                 mdUInt(*Ctx, Op.CodeOffset, 32), mdUInt(*Ctx, Op.OpInfo, 8),
+                 mdUInt(*Ctx, Op.SlotCount, 8), mdUInt(*Ctx, Op.Register, 16),
+                 mdUInt(*Ctx, Op.StackOffset), Str(hexBytes(Op.OperandBytes)),
+                 mdUInt(*Ctx, static_cast<uint8_t>(Op.RegisterClass), 8),
+                 mdUInt(*Ctx, Op.RegisterMask, 32),
+                 mdUInt(*Ctx, Op.InstructionSize, 8)});
+  };
+
   std::vector<llvm::Metadata *> UnwindOps;
   UnwindOps.reserve(EH.UnwindOperations.size());
-  for (const UnwindOperation &Op : EH.UnwindOperations) {
-    UnwindOps.push_back(
-        Node({mdUInt(*Ctx, static_cast<uint8_t>(Op.Kind), 8),
-              mdUInt(*Ctx, Op.CodeOffset, 32), mdUInt(*Ctx, Op.OpInfo, 8),
-              mdUInt(*Ctx, Op.SlotCount, 8), mdUInt(*Ctx, Op.Register, 16),
-              mdUInt(*Ctx, Op.StackOffset), Str(hexBytes(Op.OperandBytes))}));
-  }
+  for (const UnwindOperation &Op : EH.UnwindOperations)
+    UnwindOps.push_back(UnwindOp(Op));
 
   std::vector<llvm::Metadata *> Epilogs;
   Epilogs.reserve(EH.Epilogs.size());
   for (const UnwindEpilog &Epilog : EH.Epilogs) {
     std::vector<llvm::Metadata *> Ops;
+    Ops.reserve(Epilog.Operations.size());
     for (const UnwindOperation &Op : Epilog.Operations)
-      Ops.push_back(
-          Node({mdUInt(*Ctx, static_cast<uint8_t>(Op.Kind), 8),
-                mdUInt(*Ctx, Op.CodeOffset, 32), mdUInt(*Ctx, Op.OpInfo, 8),
-                mdUInt(*Ctx, Op.SlotCount, 8), mdUInt(*Ctx, Op.Register, 16),
-                mdUInt(*Ctx, Op.StackOffset), Str(hexBytes(Op.OperandBytes))}));
+      Ops.push_back(UnwindOp(Op));
     Epilogs.push_back(
         Node({mdSInt(*Ctx, Epilog.StartOffset), mdUInt(*Ctx, Epilog.Flags, 8),
               mdUInt(*Ctx, Epilog.FirstOperationOffset, 32),
@@ -402,6 +404,10 @@ void MedLLVMEmitter::emitExceptionMetadata(const MedFunc &Func,
   llvm::Metadata *CxxHeader = nullptr;
   if (EH.Cxx) {
     const CxxExceptionInfo &Cxx = *EH.Cxx;
+    std::vector<llvm::Metadata *> CxxSpecTypes;
+    for (const CxxExceptionSpecType &Spec : Cxx.ExceptionSpecTypes)
+      CxxSpecTypes.push_back(Node({mdUInt(*Ctx, Spec.Adjectives, 32),
+                                   mdUInt(*Ctx, Spec.TypeDescriptorVA)}));
     CxxHeader = Node(
         {mdUInt(*Ctx, static_cast<uint8_t>(Cxx.NativeEncoding), 8),
          mdUInt(*Ctx, Cxx.Magic, 32), mdUInt(*Ctx, Cxx.Flags, 32),
@@ -409,7 +415,9 @@ void MedLLVMEmitter::emitExceptionMetadata(const MedFunc &Func,
          mdUInt(*Ctx, Cxx.ESTypeListVA), mdUInt(*Ctx, Cxx.BBTFlags, 32),
          mdUInt(*Ctx, Cxx.FrameOffset, 32), mdUInt(*Ctx, Cxx.IsCatchFunclet, 1),
          mdUInt(*Ctx, Cxx.IsSeparated, 1), mdUInt(*Ctx, Cxx.IsSynchronous, 1),
-         mdUInt(*Ctx, Cxx.IsNoExcept, 1)});
+         mdUInt(*Ctx, Cxx.IsNoExcept, 1),
+         mdUInt(*Ctx, static_cast<uint8_t>(Cxx.Version), 8),
+         mdUInt(*Ctx, Cxx.HasDynamicStackAlignment, 1), Node(CxxSpecTypes)});
     for (const CxxUnwindAction &Action : Cxx.UnwindMap)
       CxxUnwind.push_back(
           Node({mdSInt(*Ctx, Action.ToState, 32), mdUInt(*Ctx, Action.ActionVA),
@@ -888,9 +896,17 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   // until that proof is available.  Typed catches without a catch object are
   // representable because the RTTI address remains an external absolute data
   // symbol in the original image.
+  //
+  // A dynamic exception specification is excluded for a different reason: it
+  // is not dispatch at all.  Escaping a `throw(A)` calls `unexpected` rather
+  // than selecting a handler, and nothing in the LLVM WinEH model spells that,
+  // so regenerating from this IR would silently drop the contract.  Only a
+  // record whose magic declares `EHFlags` can be trusted about /EHs either, and
+  // an older one leaves `IsSynchronous` unset, which the check above rejects.
   if (!Cxx.hasValidStateGraph() || Cxx.TryBlocks.empty() || Cxx.IPMap.empty() ||
       Cxx.IsCatchFunclet || Cxx.IsSeparated || !Cxx.IsSynchronous ||
-      Cxx.IsNoExcept || (Cxx.Flags & ~uint32_t(1)) != 0)
+      Cxx.IsNoExcept || Cxx.hasExceptionSpecification() ||
+      (Cxx.Flags & ~uint32_t(1)) != 0)
     return false;
   for (const CxxUnwindAction &Action : Cxx.UnwindMap)
     if (Action.ActionVA != 0 ||

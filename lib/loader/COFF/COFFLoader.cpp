@@ -16,9 +16,15 @@
 
 #include "neverd/Limits.h"
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/loader/COFF/COFFDelphiEH.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/loader/DWARF/ItaniumEH.h"
+#include "neverd/loader/Go/GoRuntimeEH.h"
+#include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/Rust/RustEH.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -401,10 +407,36 @@ COFFLoader::load(const std::filesystem::path &Path) {
     Img.recordRuntimeFunction(Img.Entry);
 
   runPostLoadDiscovery(Img, "coff: loaded " + Path.filename().string());
+  // Classified before any table is read.  A PE is the format where schema and
+  // language diverge most: Delphi and MSVC share the registration chain, Rust
+  // and C++ share the `FuncInfo`, and a MinGW image carries Itanium tables
+  // inside a PE.  None of those are separable from the table alone.
+  Img.ExceptionMetadata.Runtime = detectLanguageRuntime(Img);
+  // A Go PE has an exception directory covering only the cgo and runtime
+  // assembly that Windows itself unwinds; everything Go compiled is described
+  // by the pclntab instead.  Reading it first is what names the one routine Go
+  // installs as a personality, which lives in the pclntab and in no PE symbol
+  // table, and would otherwise leave that record permanently unclassified.
+  go_loader::parseGoExceptions(Img);
   // Handler names may sit behind executable import veneers found during
   // post-load discovery.  Decode language tables only after those mappings and
   // the COFF symbol table are both available.
   coff_loader::resolveExceptionHandlers(Img);
+  // x86-32 has no exception directory; its tables are reachable only from the
+  // prologue that installs the FS:[0] registration record, so recovery needs
+  // the discovered function bodies that scan runs over.  Delphi shares that
+  // mechanism but nothing else, and its descriptors would read as unclassified
+  // SEH handlers, so its frames are claimed first.
+  coff_loader::parseDelphiExceptions(Img);
+  coff_loader::parseX86RegistrationExceptions(Img);
+  // A MinGW or `*-pc-windows-gnu` image carries both table families: the PE
+  // exception directory Windows itself unwinds through, and a `.eh_frame` with
+  // the Itanium LSDAs GCC's personality reads.  Decoding only the first would
+  // report every C++ frame in such an image as having no handler at all.
+  dwarf_eh::parseItaniumExceptions(Img);
+  // Rust shares whichever of those two table families its target uses, so its
+  // reading of them runs last, over records that are already normalized.
+  rust_eh::parseRustExceptions(Img);
   return Img;
 }
 

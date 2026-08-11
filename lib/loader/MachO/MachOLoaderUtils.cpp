@@ -193,6 +193,19 @@ void parseNeededLibraries(const llvm::object::MachOObjectFile &Obj,
   }
 }
 
+va_t getMachHeaderVA(const BinaryImage &Img) {
+  const Segment *Fallback = nullptr;
+  for (const Segment &Seg : Img.Segments) {
+    if (Seg.FileOff != 0 || Seg.FileSz == 0)
+      continue;
+    if (Seg.Name == "__TEXT")
+      return Seg.VA;
+    if (!Fallback)
+      Fallback = &Seg;
+  }
+  return Fallback ? Fallback->VA : Img.Base;
+}
+
 void parseFunctionStarts(const uint8_t *BasePtr, size_t FileSize,
                          const FunctionStartsInfo &Info, uint64_t TextVMAddr,
                          BinaryImage &Img) {

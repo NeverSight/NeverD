@@ -26,7 +26,7 @@ if(NEVERD_LLVM_PREBUILT)
     find_package(LLVM REQUIRED CONFIG)
     message(STATUS "Using prebuilt NeverD LLVM ${LLVM_PACKAGE_VERSION} (${LLVM_DIR})")
     llvm_map_components_to_libnames(LLVM_LIBS
-        core support irreader bitwriter bitreader linker
+        core support demangle irreader bitwriter bitreader linker
         analysis passes target
         x86codegen x86asmparser x86desc x86info
         armcodegen armasmparser armdesc arminfo
@@ -60,7 +60,8 @@ else()
     add_subdirectory(third_party/llvm-project/llvm EXCLUDE_FROM_ALL)
 
     set(LLVM_LIBS
-        LLVMCore LLVMSupport LLVMIRReader LLVMBitWriter LLVMBitReader LLVMLinker
+        LLVMCore LLVMSupport LLVMDemangle LLVMIRReader LLVMBitWriter
+        LLVMBitReader LLVMLinker
         LLVMAnalysis LLVMPasses LLVMTarget
         LLVMX86CodeGen LLVMX86AsmParser LLVMX86Desc LLVMX86Info
         LLVMARMCodeGen LLVMARMAsmParser LLVMARMDesc LLVMARMInfo

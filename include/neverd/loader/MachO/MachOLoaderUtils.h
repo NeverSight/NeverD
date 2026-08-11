@@ -53,6 +53,15 @@ struct FunctionStartsInfo {
   uint32_t DataSize = 0;
 };
 
+/// Recover the VA the Mach header is mapped at, which is what every
+/// image-relative Mach-O offset (LC_MAIN entryoff, LC_FUNCTION_STARTS deltas,
+/// `__unwind_info` function offsets, chained-fixup targets) is measured from.
+/// This is *not* `Img.Base`: an executable's lowest segment is `__PAGEZERO` at
+/// VA 0, which maps no file bytes.  The header lives in whichever segment maps
+/// file offset 0 with a non-empty file range -- conventionally `__TEXT`, though
+/// a packer may rename it, so the name is a preference and not a requirement.
+va_t getMachHeaderVA(const BinaryImage &Img);
+
 /// Collect dyld bind/export regions from load commands.
 void parseDyldInfoLoadCommands(const llvm::object::MachOObjectFile &Obj,
                                DyldInfoOffsets &Out);

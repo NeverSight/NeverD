@@ -143,6 +143,21 @@ add_custom_command(
 add_custom_target(NeverDWindowsEHSyntheticCorpus
   DEPENDS "${NEVERD_SYNTHETIC_WINDOWS_EH_MANIFEST}")
 
+add_neverd_unittest(NeverDLanguageEHTests
+  LanguageEHTests.cpp
+  GoRuntimeEHTests.cpp
+  CompactUnwindTests.cpp
+  ScratchRealBinary.cpp
+)
+target_include_directories(NeverDLanguageEHTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+target_link_libraries(NeverDLanguageEHTests PRIVATE
+  NeverDLoader
+  NeverDSupport
+)
+
 add_neverd_unittest(NeverDWindowsEHCorpusManifestTests
   WindowsEHCorpusManifestTests.cpp
   WindowsEHCorpusManifest.cpp

@@ -213,12 +213,16 @@ void Pipeline::buildLowIR(
     if (!hasRealOps(Low)) {
       if (AuditIt != Result.FunctionAudits.end())
         AuditIt->Disposition =
-            Low.hasCompleteLiftCoverage()
+            Low.hasCompleteInstructionLift()
                 ? PipelineFunctionDisposition::RejectedLowIR
                 : PipelineFunctionDisposition::RejectedIncomplete;
       continue;
     }
-    if (!Low.hasCompleteLiftCoverage()) {
+    // Only an incomplete *lift* disqualifies a function.  A path that left the
+    // mapped image is recorded in the audit but is not a defect in what was
+    // recovered, and rejecting it would drop a function whose every
+    // instruction lifted cleanly.
+    if (!Low.hasCompleteInstructionLift()) {
       if (AuditIt != Result.FunctionAudits.end())
         AuditIt->Disposition = PipelineFunctionDisposition::RejectedIncomplete;
       continue;

@@ -7,6 +7,7 @@
 #include "neverd/loader/COFF/COFFException.h"
 
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/loader/LanguageRuntime.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Win64EH.h"
@@ -81,6 +82,45 @@ checkedImageRange(va_t ImageBase, uint32_t BeginRVA, uint32_t EndRVA) {
   if (!addRVA(ImageBase, BeginRVA, Begin) || !addRVA(ImageBase, EndRVA, End))
     return std::nullopt;
   return ExceptionAddressRange{Begin, End};
+}
+
+/// ARM32 language tables spell every code pointer with the Thumb interworking
+/// bit set, the form an interworking branch needs.  The Windows unwinder masks
+/// that bit before comparing an address against a function range, so a decoder
+/// that keeps it reports guarded ranges that overrun their function by one
+/// byte and handler addresses that name no instruction.  Data pointers in the
+/// same tables — type descriptors, map bases, ESTypeList — are never tagged
+/// and must not be masked.
+va_t normalizeTableCodeAddress(const BinaryImage &Img, va_t Address) {
+  return Img.Arch == Arch::ARM ? clearThumbBit(Address) : Address;
+}
+
+bool addCodeRVA(const BinaryImage &Img, uint32_t RVA, va_t &Address) {
+  if (!addRVA(Img.Base, RVA, Address))
+    return false;
+  Address = normalizeTableCodeAddress(Img, Address);
+  return true;
+}
+
+bool readCodeRVAField(const BinaryImage &Img, const uint8_t *P, va_t &Out) {
+  uint32_t RVA = readLE<uint32_t>(P);
+  if (RVA == 0) {
+    Out = 0;
+    return true;
+  }
+  return addCodeRVA(Img, RVA, Out);
+}
+
+std::optional<ExceptionAddressRange>
+checkedCodeRange(const BinaryImage &Img, uint32_t BeginRVA, uint32_t EndRVA) {
+  auto Range = checkedImageRange(Img.Base, BeginRVA, EndRVA);
+  if (!Range)
+    return std::nullopt;
+  Range->Begin = normalizeTableCodeAddress(Img, Range->Begin);
+  Range->End = normalizeTableCodeAddress(Img, Range->End);
+  if (!Range->isValid())
+    return std::nullopt;
+  return Range;
 }
 
 UnwindOperation makeV1Operation(UnwindOperationKind Kind, uint8_t CodeOffset,
@@ -827,28 +867,70 @@ std::pair<va_t, std::string> resolvePersonality(const BinaryImage &Img,
 }
 
 ExceptionPersonality classifyPersonality(llvm::StringRef Name) {
-  if (size_t Bang = Name.rfind('!'); Bang != llvm::StringRef::npos)
-    Name = Name.drop_front(Bang + 1);
-  while (Name.consume_front("__imp_"))
+  // Strip the spellings a PE personality can arrive in but a symbol table does
+  // not use: a `module!symbol` qualification, the `__imp_` prefix of an import
+  // thunk, Darwin's leading underscore, and the `@N` stdcall decoration.
+  llvm::StringRef Bare = Name;
+  if (size_t Bang = Bare.rfind('!'); Bang != llvm::StringRef::npos)
+    Bare = Bare.drop_front(Bang + 1);
+  while (Bare.consume_front("__imp_"))
     ;
-  while (Name.consume_front("_"))
+  while (Bare.consume_front("_"))
     ;
-  if (size_t At = Name.find('@'); At != llvm::StringRef::npos)
-    Name = Name.take_front(At);
+  // A leading `@` is part of a Pascal-mangled name rather than a decoration,
+  // so only a later one delimits an stdcall argument-byte suffix.
+  if (size_t At = Bare.find('@', 1); At != llvm::StringRef::npos)
+    Bare = Bare.take_front(At);
 
-  if (Name == "C_specific_handler")
+  if (Bare == "C_specific_handler")
     return ExceptionPersonality::CSpecificHandler;
-  if (Name == "CxxFrameHandler3")
+  if (Bare == "CxxFrameHandler3")
     return ExceptionPersonality::CxxFrameHandler3;
-  if (Name == "CxxFrameHandler4")
+  if (Bare == "CxxFrameHandler4")
     return ExceptionPersonality::CxxFrameHandler4;
-  if (Name == "GSHandlerCheck_SEH")
+  if (Bare == "GSHandlerCheck_SEH")
     return ExceptionPersonality::GSHandlerCheckSEH;
-  if (Name == "GSHandlerCheck_EH")
+  if (Bare == "GSHandlerCheck_EH")
     return ExceptionPersonality::GSHandlerCheckEH;
-  if (Name == "GSHandlerCheck_EH4")
+  if (Bare == "GSHandlerCheck_EH4")
     return ExceptionPersonality::GSHandlerCheckEH4;
-  return ExceptionPersonality::Unknown;
+
+  // A PE is not only ever built by MSVC.  Delphi installs its own handler on
+  // x64, MinGW installs the Itanium ones, Rust installs its own on the GNU
+  // targets, and Go installs a trampoline on the one landing pad that can be
+  // entered from C.  None of their language data is in a Windows dialect, so
+  // none of it is parsed below -- but naming the personality is the difference
+  // between reporting a frame's dispatch and reporting nothing about it.
+  // Stripping above already produced the plain spelling this expects.  A name
+  // that resolved to nothing still had a personality installed, so it is
+  // unnamed rather than absent.
+  ExceptionPersonality P = classifyPersonalityName(Bare);
+  return P == ExceptionPersonality::None ? ExceptionPersonality::Unknown : P;
+}
+
+/// True when \p Range is wholly covered by some runtime function of the image.
+///
+/// A `__C_specific_handler` scope table is emitted once per function *group*:
+/// the parent's table is the union over the parent and every funclet MSVC
+/// split out, and each funclet additionally carries its own copy of the
+/// entries that fall inside it.  An entry outside the referencing runtime
+/// function is therefore not corrupt — it simply cannot be selected from that
+/// frame, because dispatch compares the faulting PC against the range.  What
+/// must still hold is that the range names real code described by unwind
+/// information, which is what this proves.
+bool isCoveredByRuntimeFunction(const BinaryImage &Img,
+                                const ExceptionAddressRange &Range) {
+  const ExceptionInfo &Info = Img.ExceptionMetadata;
+  for (size_t I : Info.FunctionIndex) {
+    if (I >= Info.Functions.size())
+      continue;
+    const ExceptionFunction &Candidate = Info.Functions[I];
+    if (Candidate.CodeRange.Begin > Range.Begin)
+      break;
+    if (Candidate.CodeRange.contains(Range))
+      return true;
+  }
+  return false;
 }
 
 bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
@@ -881,19 +963,40 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
     uint32_t EndRVA = readLE<uint32_t>(R + 4);
     uint32_t FilterRVA = readLE<uint32_t>(R + 8);
     uint32_t JumpRVA = readLE<uint32_t>(R + 12);
-    auto Range = checkedImageRange(Img.Base, BeginRVA, EndRVA);
-    if (!Range || !F.CodeRange.contains(*Range)) {
-      diagnose(F, ExceptionParseStatus::Malformed,
-               "SEH guarded range leaves its runtime function");
-      continue;
-    }
-
     SEHScopeRecord Scope;
-    Scope.GuardedRange = *Range;
+    // An optimizer can collapse a guarded body to nothing while the scope
+    // record survives.  Dispatch compares `Begin <= Pc < End`, so such an
+    // entry can never be selected; it is fully decoded but describes no
+    // region, which is exactly what a partial scope means here.
+    if (BeginRVA == EndRVA) {
+      va_t Point = 0;
+      if (!addCodeRVA(Img, BeginRVA, Point)) {
+        diagnose(F, ExceptionParseStatus::Malformed,
+                 "SEH empty guarded range address overflows");
+        continue;
+      }
+      Scope.GuardedRange = {Point, Point};
+      Scope.ParseStatus = ExceptionParseStatus::Partial;
+      F.Diagnostics.push_back("SEH scope at 0x" + llvm::utohexstr(Point) +
+                              " guards an empty range");
+    } else {
+      auto Range = checkedCodeRange(Img, BeginRVA, EndRVA);
+      if (!Range || (!F.CodeRange.contains(*Range) &&
+                     !isCoveredByRuntimeFunction(Img, *Range))) {
+        diagnose(F, ExceptionParseStatus::Malformed,
+                 "SEH guarded range [0x" +
+                     llvm::utohexstr(Range ? Range->Begin : va_t(BeginRVA)) +
+                     ", 0x" +
+                     llvm::utohexstr(Range ? Range->End : va_t(EndRVA)) +
+                     ") is not covered by unwind information");
+        continue;
+      }
+      Scope.GuardedRange = *Range;
+    }
     if (JumpRVA == 0) {
       Scope.Kind = SEHScopeKind::Finally;
       if (FilterRVA == 0 ||
-          !addRVA(Img.Base, FilterRVA, Scope.FilterOrFinallyVA) ||
+          !addCodeRVA(Img, FilterRVA, Scope.FilterOrFinallyVA) ||
           !isExecutableAddress(Img, Scope.FilterOrFinallyVA)) {
         Scope.ParseStatus = ExceptionParseStatus::Malformed;
         diagnose(F, ExceptionParseStatus::Malformed,
@@ -905,14 +1008,14 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
       Scope.Kind =
           FilterRVA == 1 ? SEHScopeKind::CatchAll : SEHScopeKind::Filter;
       if (FilterRVA > 1 &&
-          (!addRVA(Img.Base, FilterRVA, Scope.FilterOrFinallyVA) ||
+          (!addCodeRVA(Img, FilterRVA, Scope.FilterOrFinallyVA) ||
            !isExecutableAddress(Img, Scope.FilterOrFinallyVA))) {
         Scope.ParseStatus = ExceptionParseStatus::Malformed;
         diagnose(F, ExceptionParseStatus::Malformed,
                  "invalid SEH filter target");
         continue;
       }
-      if (!addRVA(Img.Base, JumpRVA, Scope.HandlerVA) ||
+      if (!addCodeRVA(Img, JumpRVA, Scope.HandlerVA) ||
           !isExecutableAddress(Img, Scope.HandlerVA)) {
         Scope.ParseStatus = ExceptionParseStatus::Malformed;
         diagnose(F, ExceptionParseStatus::Malformed,
@@ -1183,11 +1286,52 @@ bool parseFH4(ExceptionFunction &F, const BinaryImage &Img) {
              "truncated FH4 catch-frame displacement");
     return false;
   }
+  // When the function's code was split into several contributions -- POGO and
+  // BBT both do this -- the IP-to-state field does not name a map.  It names a
+  // directory keyed by the start of each contribution, and the map that
+  // applies is the one filed under the runtime function being dispatched.
+  // Every contribution shares one unwind map and one try map, so only this
+  // lookup differs from the monolithic case; the deltas inside the selected
+  // map are still relative to the contribution it belongs to, which is exactly
+  // this record's code range.
+  bool HasSeparatedStates = true;
   if (Info.IsSeparated) {
-    F.Cxx = std::move(Info);
-    diagnose(F, ExceptionParseStatus::Partial,
-             "separated FH4 code segments are retained but not normalized");
-    return true;
+    FH4Reader Directory(Img, IPMapVA);
+    uint32_t SegmentCount = 0;
+    if (!Directory.readCompressedUInt(SegmentCount) || SegmentCount == 0 ||
+        SegmentCount > MaxLanguageRecords) {
+      diagnose(F, ExceptionParseStatus::Malformed,
+               "invalid separated FH4 segment-map count");
+      return false;
+    }
+    if (!Budget.consume(SegmentCount)) {
+      diagnose(F, ExceptionParseStatus::Partial,
+               "FH4 aggregate language graph exceeds decode budget");
+      return false;
+    }
+    // A contribution the directory does not list simply has no states, which
+    // is what the runtime concludes as well.  That is a complete answer, not a
+    // failed lookup.
+    HasSeparatedStates = false;
+    for (uint32_t I = 0; I < SegmentCount; ++I) {
+      va_t SegmentStartVA = 0;
+      va_t SegmentMapVA = 0;
+      if (!readFH4ImageAddress(Directory, Img.Base, SegmentStartVA,
+                               /*AllowZero=*/true) ||
+          !readFH4ImageAddress(Directory, Img.Base, SegmentMapVA,
+                               /*AllowZero=*/true)) {
+        diagnose(F, ExceptionParseStatus::Malformed,
+                 "truncated separated FH4 segment-map entry");
+        return false;
+      }
+      if (normalizeTableCodeAddress(Img, SegmentStartVA) != F.CodeRange.Begin)
+        continue;
+      if (SegmentMapVA == 0)
+        break;
+      IPMapVA = SegmentMapVA;
+      HasSeparatedStates = true;
+      break;
+    }
   }
 
   if (UnwindMapVA != 0) {
@@ -1333,7 +1477,7 @@ bool parseFH4(ExceptionFunction &F, const BinaryImage &Img) {
     }
   }
 
-  {
+  if (HasSeparatedStates) {
     FH4Reader Reader(Img, IPMapVA);
     uint32_t Count = 0;
     if (!Reader.readCompressedUInt(Count) || Count == 0 ||
@@ -1394,13 +1538,48 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
              "invalid C++ FuncInfo3 reference");
     return false;
   }
+  // `magicNumber` is a 29-bit field sharing its word with `bbtFlags`, and the
+  // magic decides where the record ends: `EH_MAGIC_NUMBER1` stops after the
+  // unwind-help displacement, `2` adds the exception-specification list, and
+  // `3` adds `EHFlags`.  Reading the newest layout out of an older record both
+  // invents trailing fields from whatever follows in the section and rejects a
+  // legacy record that legitimately sits within eight bytes of the end.
+  auto MagicWord = readScalar<uint32_t>(Img, FuncInfoVA);
+  if (!MagicWord) {
+    diagnose(F, ExceptionParseStatus::Malformed, "truncated C++ FuncInfo3");
+    return false;
+  }
+  const uint32_t Magic = *MagicWord & 0x1FFFFFFFu;
+  CxxFuncInfoVersion Version;
+  size_t FuncInfoSize;
+  switch (Magic) {
+  case 0x19930520:
+    Version = CxxFuncInfoVersion::Original;
+    FuncInfoSize = 32;
+    break;
+  case 0x19930521:
+    Version = CxxFuncInfoVersion::WithExceptionSpecs;
+    FuncInfoSize = 36;
+    break;
+  case 0x19930522:
+    Version = CxxFuncInfoVersion::WithEHFlags;
+    FuncInfoSize = 40;
+    break;
+  default:
+    diagnose(F, ExceptionParseStatus::Malformed, "unknown C++ FuncInfo3 magic");
+    return false;
+  }
+
   const uint8_t *FI = nullptr;
-  if (!readBytes(Img, FuncInfoVA, 40, FI)) {
+  if (!readBytes(Img, FuncInfoVA, FuncInfoSize, FI)) {
     diagnose(F, ExceptionParseStatus::Malformed, "truncated C++ FuncInfo3");
     return false;
   }
 
   CxxExceptionInfo Info;
+  Info.Magic = Magic;
+  Info.Version = Version;
+  Info.BBTFlags = *MagicWord >> 29;
   std::vector<ExceptionAddressRange> FunctionGroupRanges{F.CodeRange};
   for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
     if (&Candidate == &F || Candidate.Kind != RuntimeFunctionKind::Primary ||
@@ -1434,7 +1613,6 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
     --It;
     return It->contains(Address) || Address == It->End;
   };
-  Info.Magic = readLE<uint32_t>(FI);
   int32_t MaxState = readLE<int32_t>(FI + 4);
   uint32_t UnwindMapRVA = readLE<uint32_t>(FI + 8);
   uint32_t TryCount = readLE<uint32_t>(FI + 12);
@@ -1442,25 +1620,25 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
   uint32_t IPCount = readLE<uint32_t>(FI + 20);
   uint32_t IPMapRVA = readLE<uint32_t>(FI + 24);
   Info.UnwindHelpOffset = readLE<int32_t>(FI + 28);
-  if (!readRVAField(Img.Base, FI + 32, Info.ESTypeListVA)) {
+  if (Version >= CxxFuncInfoVersion::WithExceptionSpecs &&
+      !readRVAField(Img.Base, FI + 32, Info.ESTypeListVA)) {
     diagnose(F, ExceptionParseStatus::Malformed,
              "C++ ESTypeList RVA overflows");
     return false;
   }
-  Info.Flags = readLE<uint32_t>(FI + 36);
-  Info.IsSynchronous = (Info.Flags & 1u) != 0;
-  Info.IsNoExcept = (Info.Flags & 4u) != 0;
-
-  if (Info.Magic != 0x19930522) {
-    if (Info.Magic == 0x19930520 || Info.Magic == 0x19930521)
-      diagnose(F, ExceptionParseStatus::Partial,
-               "legacy C++ FuncInfo3 magic has version-specific fields");
-    else {
-      diagnose(F, ExceptionParseStatus::Malformed,
-               "unknown C++ FuncInfo3 magic");
-      return false;
-    }
+  if (Version >= CxxFuncInfoVersion::WithEHFlags) {
+    Info.Flags = readLE<uint32_t>(FI + 36);
+    Info.IsSynchronous = (Info.Flags & 1u) != 0;
+    Info.HasDynamicStackAlignment = (Info.Flags & 2u) != 0;
+    Info.IsNoExcept = (Info.Flags & 4u) != 0;
+  } else {
+    // A record that predates `EHFlags` cannot say whether it was built /EHs or
+    // /EHa.  Leaving the synchronous claim unset is what keeps a consumer that
+    // requires synchronous EH -- native regeneration, for one -- from acting
+    // on a guess the image never made.
+    Info.Flags = 0;
   }
+
   if (MaxState < 0 || static_cast<uint32_t>(MaxState) > MaxLanguageRecords ||
       TryCount > MaxLanguageRecords || IPCount > MaxLanguageRecords) {
     diagnose(F, ExceptionParseStatus::Malformed,
@@ -1498,7 +1676,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
       uint32_t ActionRVA = readLE<uint32_t>(E + 4);
       if (ActionRVA == 0)
         Action.Kind = CxxUnwindAction::ActionKind::None;
-      if (ActionRVA != 0 && !addRVA(Img.Base, ActionRVA, Action.ActionVA)) {
+      if (ActionRVA != 0 && !addCodeRVA(Img, ActionRVA, Action.ActionVA)) {
         diagnose(F, ExceptionParseStatus::Malformed,
                  "C++ unwind action RVA overflows");
         return false;
@@ -1578,7 +1756,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
             return false;
           }
           Catch.CatchObjectOffset = readLE<int32_t>(H + 8);
-          if (!readRVAField(Img.Base, H + 12, Catch.HandlerVA)) {
+          if (!readCodeRVAField(Img, H + 12, Catch.HandlerVA)) {
             diagnose(F, ExceptionParseStatus::Malformed,
                      "C++ catch handler RVA overflows");
             return false;
@@ -1621,7 +1799,7 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
       const uint8_t *E = Map + uint64_t(I) * 8;
       CxxIPState State;
       uint32_t IPRVA = readLE<uint32_t>(E);
-      if (!addRVA(Img.Base, IPRVA, State.IP)) {
+      if (!addCodeRVA(Img, IPRVA, State.IP)) {
         diagnose(F, ExceptionParseStatus::Malformed,
                  "C++ IP-to-state address overflows");
         return false;
@@ -1634,6 +1812,64 @@ bool parseFH3(ExceptionFunction &F, const BinaryImage &Img) {
       }
       State.State = readLE<int32_t>(E + 4);
       Info.IPMap.push_back(State);
+    }
+  }
+
+  // The exception-specification list names the types a `throw(...)` permits.
+  // It is spelled with the same `HandlerType` record a catch clause uses, but
+  // only the adjectives and the type descriptor mean anything in this
+  // position: there is no handler to run and no object to construct, because
+  // violating the specification calls `unexpected` rather than dispatching.
+  if (Info.ESTypeListVA != 0) {
+    const uint8_t *List = nullptr;
+    if (!readBytes(Img, Info.ESTypeListVA, 8, List)) {
+      diagnose(F, ExceptionParseStatus::Malformed, "truncated C++ ESTypeList");
+      return false;
+    }
+    int32_t SpecCount = readLE<int32_t>(List);
+    va_t SpecArrayVA = 0;
+    if (SpecCount < 0 || static_cast<uint32_t>(SpecCount) > MaxLanguageRecords) {
+      diagnose(F, ExceptionParseStatus::Malformed,
+               "C++ ESTypeList count exceeds decode budget");
+      return false;
+    }
+    if (!readRVAField(Img.Base, List + 4, SpecArrayVA)) {
+      diagnose(F, ExceptionParseStatus::Malformed,
+               "C++ ESTypeList array RVA overflows");
+      return false;
+    }
+    if (!Budget.consume(static_cast<uint32_t>(SpecCount))) {
+      diagnose(F, ExceptionParseStatus::Partial,
+               "FH3 aggregate language graph exceeds decode budget");
+      return false;
+    }
+    if (SpecCount != 0) {
+      const uint8_t *Specs = nullptr;
+      uint64_t SpecBytes = uint64_t(SpecCount) * 20;
+      if (SpecArrayVA == 0 || SpecBytes > std::numeric_limits<size_t>::max() ||
+          !readBytes(Img, SpecArrayVA, static_cast<size_t>(SpecBytes), Specs)) {
+        diagnose(F, ExceptionParseStatus::Malformed,
+                 "truncated C++ ESTypeList type array");
+        return false;
+      }
+      Info.ExceptionSpecTypes.reserve(static_cast<size_t>(SpecCount));
+      for (int32_t I = 0; I < SpecCount; ++I) {
+        const uint8_t *S = Specs + uint64_t(I) * 20;
+        CxxExceptionSpecType Spec;
+        Spec.Adjectives = readLE<uint32_t>(S);
+        if (!readRVAField(Img.Base, S + 4, Spec.TypeDescriptorVA)) {
+          diagnose(F, ExceptionParseStatus::Malformed,
+                   "C++ ESTypeList type-descriptor RVA overflows");
+          return false;
+        }
+        if (Spec.TypeDescriptorVA != 0 &&
+            !Img.readVA(Spec.TypeDescriptorVA, 1)) {
+          diagnose(F, ExceptionParseStatus::Malformed,
+                   "C++ ESTypeList type descriptor is not mapped");
+          return false;
+        }
+        Info.ExceptionSpecTypes.push_back(Spec);
+      }
     }
   }
 
@@ -1656,13 +1892,25 @@ bool parseGSCookie(ExceptionFunction &F, const BinaryImage &Img,
     F.GSCookie = std::move(Cookie);
     return false;
   }
-  uint32_t Flags = readLE<uint32_t>(Header);
-  Cookie.HasExceptionHandler = (Flags & 1u) != 0;
-  Cookie.HasUnwindHandler = (Flags & 2u) != 0;
-  Cookie.HasAlignment = (Flags & 4u) != 0;
-  Cookie.CookieOffset = static_cast<int32_t>(Flags & ~7u);
+  // The flags ride in the spare low bits of the cookie's frame offset, so how
+  // many of them exist is decided by the alignment of the slot the cookie sits
+  // in.  A 64-bit CRT gets three: `__GSHandlerCheckCommon` masks the word with
+  // -8, tests bit 2 for an aligned frame, and reads a base and an alignment out
+  // of the two words behind it.  A 32-bit CRT gets two, so it spends its one
+  // remaining bit on the aligned form and derives the adjustment arithmetically
+  // -- the ARM routine masks with -4, tests bit 0, and never looks past the
+  // first word.  Reading the 64-bit shape out of a 32-bit record both misreads
+  // the offset and then runs off the end of the record into whichever .xdata
+  // happens to follow.
+  const bool WideFlags = Img.is64Bit();
+  const uint32_t Flags = readLE<uint32_t>(Header);
+  const uint32_t FlagMask = WideFlags ? 7u : 3u;
+  Cookie.HasExceptionHandler = WideFlags && (Flags & 1u) != 0;
+  Cookie.HasUnwindHandler = WideFlags && (Flags & 2u) != 0;
+  Cookie.HasAlignment = (Flags & (WideFlags ? 4u : 1u)) != 0;
+  Cookie.CookieOffset = static_cast<int32_t>(Flags & ~FlagMask);
   size_t Size = sizeof(uint32_t);
-  if (Cookie.HasAlignment) {
+  if (Cookie.HasAlignment && WideFlags) {
     const uint8_t *Alignment = Img.readVA(CookieVA, 3 * sizeof(uint32_t));
     if (!Alignment) {
       Cookie.ParseStatus = ExceptionParseStatus::Malformed;
@@ -1709,16 +1957,102 @@ std::optional<va_t> sehGSCookieAddress(const ExceptionFunction &F,
   return F.HandlerDataVA + sizeof(uint32_t) + ScopeBytes;
 }
 
+/// Every routine a wrapper body calls or tail-jumps to, in whichever
+/// instruction encoding \p Arch uses.  Only the direct forms are decoded: an
+/// indirect call names nothing at this level, and a wrapper that reaches its
+/// base handler indirectly is left unclassified rather than guessed at.
+void collectDirectCallTargets(const BinaryImage &Img, Arch A, va_t BodyVA,
+                              const uint8_t *Code, size_t CodeSize,
+                              std::vector<std::string> &Names) {
+  // A Thumb routine is named at its odd, interworking-tagged address while a
+  // branch resolves to the even one, so both spellings are offered.
+  const bool IsThumb = A == Arch::ARM;
+  auto record = [&](std::optional<va_t> Target) {
+    if (!Target)
+      return;
+    Names.push_back(resolvePersonality(Img, *Target).second);
+    if (IsThumb && Names.back().empty())
+      Names.back() = resolvePersonality(Img, *Target | 1).second;
+  };
+
+  switch (A) {
+  case Arch::X64:
+  case Arch::X86:
+    for (size_t Offset = 0; Offset + 5 <= CodeSize; ++Offset) {
+      if (Code[Offset] == 0xe8) {
+        record(addSignedOffset(BodyVA + Offset + 5,
+                               readLE<int32_t>(Code + Offset + 1)));
+      } else if (Offset + 6 <= CodeSize && Code[Offset] == 0xff &&
+                 Code[Offset + 1] == 0x15) {
+        if (auto Slot = addSignedOffset(BodyVA + Offset + 6,
+                                        readLE<int32_t>(Code + Offset + 2)))
+          Names.push_back(directNameAt(Img, *Slot));
+      }
+    }
+    break;
+
+  case Arch::AArch64:
+    // `bl`/`b` share the imm26 form and differ only in bit 31, and a GS
+    // wrapper reaches its base handler both ways: it calls the cookie check
+    // and tail-jumps to the handler it wraps.
+    for (size_t Offset = 0; Offset + 4 <= CodeSize; Offset += 4) {
+      const uint32_t Word = readLE<uint32_t>(Code + Offset);
+      if ((Word & 0x7c000000u) != 0x14000000u)
+        continue;
+      const int64_t Imm =
+          static_cast<int64_t>(static_cast<int32_t>(Word << 6) >> 6) * 4;
+      record(addSignedOffset(BodyVA + Offset, Imm));
+    }
+    break;
+
+  case Arch::ARM:
+    // Thumb-2 `bl` and `b.w`, which share a first halfword and differ in bit
+    // 12 of the second.  The branch is relative to the address of the
+    // instruction plus four, and the two `J` bits are stored inverted
+    // relative to the sign.
+    for (size_t Offset = 0; Offset + 4 <= CodeSize; Offset += 2) {
+      const uint16_t Hi = readLE<uint16_t>(Code + Offset);
+      const uint16_t Lo = readLE<uint16_t>(Code + Offset + 2);
+      if ((Hi & 0xf800u) != 0xf000u || (Lo & 0xc000u) != 0xc000u)
+        continue;
+      const uint32_t S = (Hi >> 10) & 1;
+      const uint32_t J1 = (Lo >> 13) & 1;
+      const uint32_t J2 = (Lo >> 11) & 1;
+      const uint32_t I1 = (~(J1 ^ S)) & 1;
+      const uint32_t I2 = (~(J2 ^ S)) & 1;
+      uint32_t Value = (S << 24) | (I1 << 23) | (I2 << 22) |
+                       ((Hi & 0x3ffu) << 12) | ((Lo & 0x7ffu) << 1);
+      int64_t Imm = static_cast<int32_t>(Value << 7) >> 7;
+      // Thumb code addresses carry the interworking bit, which is not part of
+      // the address the branch resolves to.
+      record(addSignedOffset((BodyVA & ~va_t(1)) + Offset + 4, Imm));
+    }
+    break;
+
+  default:
+    break;
+  }
+}
+
 std::optional<ExceptionPersonality>
-inferX64GSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
-  if (Img.Arch != Arch::X64 || F.PersonalityVA == 0 || F.HandlerDataVA == 0)
+inferGSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
+  if (F.PersonalityVA == 0 || F.HandlerDataVA == 0)
     return std::nullopt;
 
+  // On ARM the handler RVA carries the Thumb interworking bit but the runtime
+  // function it names does not, so the two spellings have to meet in the
+  // middle before the wrapper can be found at all.
+  const va_t WrapperVA =
+      Img.Arch == Arch::ARM ? (F.PersonalityVA & ~va_t(1)) : F.PersonalityVA;
   const ExceptionFunction *Wrapper = nullptr;
   for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
-    if (Candidate.Kind == RuntimeFunctionKind::Primary &&
-        Candidate.CodeRange.isValid() &&
-        Candidate.CodeRange.Begin == F.PersonalityVA) {
+    if (Candidate.Kind != RuntimeFunctionKind::Primary ||
+        !Candidate.CodeRange.isValid())
+      continue;
+    const va_t CandidateVA = Img.Arch == Arch::ARM
+                                 ? (Candidate.CodeRange.Begin & ~va_t(1))
+                                 : Candidate.CodeRange.Begin;
+    if (CandidateVA == WrapperVA) {
       Wrapper = &Candidate;
       break;
     }
@@ -1727,8 +2061,13 @@ inferX64GSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
       Wrapper->CodeRange.size() > std::numeric_limits<size_t>::max())
     return std::nullopt;
 
+  // The body starts at the untagged address; reading from the tagged one would
+  // shift every instruction by a byte.
+  const va_t BodyVA = Img.Arch == Arch::ARM
+                          ? (Wrapper->CodeRange.Begin & ~va_t(1))
+                          : Wrapper->CodeRange.Begin;
   const size_t CodeSize = static_cast<size_t>(Wrapper->CodeRange.size());
-  const uint8_t *Code = Img.readVA(Wrapper->CodeRange.Begin, CodeSize);
+  const uint8_t *Code = Img.readVA(BodyVA, CodeSize);
   if (!Code)
     return std::nullopt;
 
@@ -1736,25 +2075,11 @@ inferX64GSPersonality(const ExceptionFunction &F, const BinaryImage &Img) {
   // independent signals before recovering GS provenance: a bounded call from
   // the wrapper runtime function to a named base handler, and a payload that
   // is valid for that handler followed by valid GS cookie data.
+  std::vector<std::string> Names;
+  collectDirectCallTargets(Img, Img.Arch, BodyVA, Code, CodeSize, Names);
+
   ExceptionPersonality BasePersonality = ExceptionPersonality::Unknown;
-  for (size_t Offset = 0; Offset + 5 <= CodeSize; ++Offset) {
-    std::string Name;
-    if (Code[Offset] == 0xe8) {
-      int32_t Disp = readLE<int32_t>(Code + Offset + 1);
-      va_t NextIP = Wrapper->CodeRange.Begin + Offset + 5;
-      auto Target = addSignedOffset(NextIP, Disp);
-      if (Target)
-        Name = resolvePersonality(Img, *Target).second;
-    } else if (Offset + 6 <= CodeSize && Code[Offset] == 0xff &&
-               Code[Offset + 1] == 0x15) {
-      int32_t Disp = readLE<int32_t>(Code + Offset + 2);
-      va_t NextIP = Wrapper->CodeRange.Begin + Offset + 6;
-      auto Slot = addSignedOffset(NextIP, Disp);
-      if (Slot)
-        Name = directNameAt(Img, *Slot);
-    } else {
-      continue;
-    }
+  for (const std::string &Name : Names) {
     ExceptionPersonality Candidate = classifyPersonality(Name);
     if (Candidate != ExceptionPersonality::CSpecificHandler &&
         Candidate != ExceptionPersonality::CxxFrameHandler3 &&
@@ -1922,14 +2247,30 @@ void resolveExceptionHandlers(BinaryImage &Img) {
     F.Personality = classifyPersonality(Name);
     if (F.Personality == ExceptionPersonality::Unknown)
       if (std::optional<ExceptionPersonality> Inferred =
-              inferX64GSPersonality(F, Img)) {
+              inferGSPersonality(F, Img)) {
         F.Personality = *Inferred;
         F.PersonalityName = getExceptionPersonalityName(*Inferred);
         ResolvedVA = F.PersonalityVA;
       }
     if (F.Personality == ExceptionPersonality::Unknown) {
-      diagnose(F, ExceptionParseStatus::Partial,
-               "unknown Windows language personality");
+      // An unknown personality is an incomplete decode only when the record
+      // carries language data that went uninterpreted.  A hand-written handler
+      // installed with an empty data slot -- the CRT emits several, such as the
+      // ARM64 routine that steps over an unsupported `mrs` -- has nothing more
+      // in the image to read, so the record is as complete as it will ever be
+      // and only the dispatch semantics are unnamed.  Every Windows dialect
+      // begins its language data with either a scope count or a table pointer,
+      // so a leading zero word is an empty slot under all of them.
+      const bool HasLanguageData =
+          F.HandlerDataVA != 0 &&
+          readScalar<uint32_t>(Img, F.HandlerDataVA).value_or(0) != 0;
+      diagnose(F,
+               HasLanguageData ? ExceptionParseStatus::Partial
+                               : ExceptionParseStatus::Complete,
+               HasLanguageData
+                   ? "unknown Windows language personality"
+                   : "unknown Windows personality, installed with no language "
+                     "data");
       Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
           Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
       continue;
@@ -1977,6 +2318,21 @@ void resolveExceptionHandlers(BinaryImage &Img) {
         else
           parseGSCookie(F, Img, F.HandlerDataVA + sizeof(uint32_t));
       }
+      break;
+    case ExceptionPersonality::DelphiExceptionHandler:
+      // Delphi's x86-64 compiler installs no registration record: it uses the
+      // ordinary table mechanism and puts its own `TExcScope` array in the
+      // handler data.  That array's layout is the RTL's private business and
+      // has changed across releases, so it is not decoded here.  What must not
+      // happen is reporting the frame as fully understood -- a Delphi `try`
+      // would then read as a function with an exception handler and no
+      // handlers in it.
+      if (F.HandlerDataVA != 0)
+        diagnose(F, ExceptionParseStatus::Partial,
+                 "Delphi x64 scope table at " +
+                     llvm::utohexstr(F.HandlerDataVA) +
+                     " was not decoded: its layout is private to the Delphi "
+                     "runtime and varies by release");
       break;
     default:
       break;

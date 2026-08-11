@@ -14,10 +14,14 @@
 #include "neverd/loader/ELF/ELFLoader.h"
 
 #include "neverd/Limits.h"
+#include "neverd/loader/DWARF/ItaniumEH.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/loader/ELF/EhFrameHdr.h"
 #include "neverd/loader/ELF/SBFELFLoader.h"
 #include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/loader/Go/GoRuntimeEH.h"
+#include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/Rust/RustEH.h"
 
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"
@@ -913,20 +917,37 @@ llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
     return ObjOrErr.takeError();
 
   auto *Obj = ObjOrErr->get();
-  llvm::Error Err = llvm::Error::success();
-
-  if (auto *ELF64 = llvm::dyn_cast<llvm::object::ELF64LEObjectFile>(Obj))
-    Err = loadELF(*ELF64, Img);
-  else if (auto *ELF32 = llvm::dyn_cast<llvm::object::ELF32LEObjectFile>(Obj))
-    Err = loadELF(*ELF32, Img);
-  else
+  // Produced rather than assigned: `Error::operator=` refuses to overwrite a
+  // value that has not been checked, so seeding a variable with
+  // `Error::success()` and assigning the real result over it aborts before the
+  // result is ever looked at.
+  auto Loaded = [&]() -> llvm::Error {
+    if (auto *ELF64 = llvm::dyn_cast<llvm::object::ELF64LEObjectFile>(Obj))
+      return loadELF(*ELF64, Img);
+    if (auto *ELF32 = llvm::dyn_cast<llvm::object::ELF32LEObjectFile>(Obj))
+      return loadELF(*ELF32, Img);
     return llvm::make_error<llvm::StringError>("elf: unsupported ELF class",
                                                llvm::inconvertibleErrorCode());
-
-  if (Err)
-    return std::move(Err);
+  }();
+  if (Loaded)
+    return std::move(Loaded);
 
   runPostLoadDiscovery(Img, "elf: loaded " + Path.filename().string());
+  // Classified before any table is read: a decoder that finds an Itanium LSDA
+  // cannot tell from the table alone whether its cleanup pads are C++
+  // destructors or Rust drop glue, and the evidence that settles it is the
+  // image's symbols and sections rather than anything in the table.
+  Img.ExceptionMetadata.Runtime = detectLanguageRuntime(Img);
+  // Personality routines are usually reached through a dynamically bound slot,
+  // so language-table decoding waits until imports and veneers are known.
+  dwarf_eh::parseItaniumExceptions(Img);
+  // Go emits no DWARF frame information for its own functions, so a Go image
+  // reaches this point with nothing recovered.  Its metadata lives in the
+  // runtime's own table, which is present in every container format.
+  go_loader::parseGoExceptions(Img);
+  // Rust shares the Itanium tables above rather than emitting its own, so its
+  // reading of them runs last, over records that are already normalized.
+  rust_eh::parseRustExceptions(Img);
   return Img;
 }
 

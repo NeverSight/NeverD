@@ -190,11 +190,26 @@ struct LowFunc {
   std::vector<va_t> UnsupportedInstructionAddresses;
   std::vector<va_t> TruncatedPathAddresses;
 
-  bool hasCompleteLiftCoverage() const {
+  /// True when every instruction this function reaches was decoded and lifted.
+  ///
+  /// Deliberately says nothing about a path that leaves the mapped image: the
+  /// bytes such a path names are not in this image, so nothing about the lift
+  /// could have produced them.  A function that tail-jumps to an unmapped
+  /// address -- an extern call in an unlinked object, a jump into a section
+  /// the loader did not map, or padding a scan wandered into -- is lifted
+  /// exactly as completely as one that returns.
+  bool hasCompleteInstructionLift() const {
     return DecodedInstructionCount == LiftedInstructionCount &&
            DecodeFailureAddresses.empty() &&
-           UnsupportedInstructionAddresses.empty() &&
-           TruncatedPathAddresses.empty();
+           UnsupportedInstructionAddresses.empty();
+  }
+
+  /// True when the lift is complete *and* every path stayed inside the image,
+  /// so the function is wholly described by what was recovered.  This is the
+  /// question a coverage report asks; it is not grounds for discarding a
+  /// function, which \ref hasCompleteInstructionLift settles.
+  bool hasCompleteLiftCoverage() const {
+    return hasCompleteInstructionLift() && TruncatedPathAddresses.empty();
   }
 
   /// Bytes this function pops off the caller's stack on return beyond the

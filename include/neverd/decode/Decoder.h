@@ -105,6 +105,10 @@ public:
   void setDetail(bool On);
   bool detailEnabled() const { return Detail; }
 
+  /// True when \p Insn is a trap execution can continue past, so the bytes
+  /// after it may still belong to the same function.  Only x86 `int3` is.
+  bool isResumableTrap(const DecodedInsn &Insn) const;
+
   /// Lift a single decoded instruction to LowIR ops.
   void liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops);
 

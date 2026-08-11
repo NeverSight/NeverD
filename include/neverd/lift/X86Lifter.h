@@ -59,6 +59,14 @@ public:
   /// Whether \p I ends a function's straight-line decode (ret/jmp/ud2/...).
   static bool isFunctionTerminator(const cs_insn *I);
 
+  /// Whether \p I is a trap that execution can continue past.
+  ///
+  /// `int3` is the only one: it raises a breakpoint a debugger routinely
+  /// resumes from, and a compiler emits `__debugbreak()` mid-function with the
+  /// rest of the body behind it.  `ud2` is the opposite -- it is what a
+  /// compiler emits to mark code as unreachable.
+  static bool isResumableTrap(const cs_insn *I);
+
   /// Direct (immediate) call target of \p I, or InvalidVA if \p I is not a
   /// direct call.
   static va_t directCallTarget(const cs_insn *I);

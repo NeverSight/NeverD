@@ -22,7 +22,10 @@ inline constexpr llvm::StringLiteral
     NativeAttachment("neverd.windows.eh.native");
 inline constexpr llvm::StringLiteral
     FunctionTable("neverd.windows.eh.functions");
-inline constexpr unsigned SchemaVersion = 3;
+/// Bumped whenever an operand's position or meaning changes.  Version 5 widened
+/// each unwind operation with the register file, register mask, and instruction
+/// width that the ARM and ARM64 codes carry and the x64 ones do not.
+inline constexpr unsigned SchemaVersion = 5;
 
 enum FunctionOperand : unsigned {
   Version = 0,

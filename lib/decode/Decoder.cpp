@@ -287,6 +287,12 @@ bool Decoder::isFunctionTerminator(const DecodedInsn &Insn) const {
   return false;
 }
 
+bool Decoder::isResumableTrap(const DecodedInsn &Insn) const {
+  if (!Insn.Raw || !X86)
+    return false;
+  return X86Lifter::isResumableTrap(Insn.Raw);
+}
+
 va_t Decoder::directCallTarget(const DecodedInsn &Insn) const {
   if (!Insn.Raw)
     return InvalidVA;

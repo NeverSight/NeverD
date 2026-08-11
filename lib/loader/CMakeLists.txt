@@ -4,9 +4,20 @@ add_neverd_component_library(NeverDLoader
   FunctionDiscoveryX86.cpp
   FunctionDiscoveryAArch64.cpp
   FunctionDiscoveryARM.cpp
+  DirectBranch.cpp
+  LanguageEH.cpp
+  LanguageRuntime.cpp
+  DWARF/EHFrame.cpp
+  DWARF/LSDA.cpp
+  DWARF/ItaniumEH.cpp
+  Go/GoRuntimeEH.cpp
+  Rust/RustEH.cpp
   COFF/COFFLoader.cpp
   COFF/COFFException.cpp
+  COFF/COFFDelphiEH.cpp
+  COFF/COFFRegistrationEH.cpp
   COFF/COFFUnwind.cpp
+  COFF/COFFUnwindARM.cpp
   COFF/COFFLoaderUtils.cpp
   ELF/ELFLoader.cpp
   ELF/ELFLoaderUtils.cpp
@@ -15,6 +26,8 @@ add_neverd_component_library(NeverDLoader
   MachO/MachOLoader.cpp
   MachO/MachORelocations.cpp
   MachO/MachOLoaderUtils.cpp
+  MachO/CompactUnwind.cpp
+  MachO/MachOExceptions.cpp
 
   LINK_COMPONENTS
   EVM

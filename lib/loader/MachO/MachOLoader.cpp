@@ -16,6 +16,10 @@
 #include "neverd/Limits.h"
 #include "neverd/Support/BinaryEncoding.h"
 #include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/loader/Go/GoRuntimeEH.h"
+#include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/MachO/MachOExceptions.h"
+#include "neverd/loader/Rust/RustEH.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -196,25 +200,31 @@ MachOLoader::load(const std::filesystem::path &Path) {
       InvalidAddressRange = true;
       return;
     }
-    if (FileSz > VMSize ||
-        (FileSz > 0 && !rangeInBounds(FileOff, FileSz, FileSize))) {
+    if (FileSz > 0 && !rangeInBounds(FileOff, FileSz, FileSize)) {
       InvalidFileRange = true;
       return;
     }
     if (Img.IsRelocatable)
       return;
+    // A segment may carry more file bytes than it maps.  Go's internal Mach-O
+    // linker emits `__DWARF` with a zero vmsize and the entire debug payload in
+    // the file, and a `.dSYM` companion is built the same way.  Those bytes are
+    // deliberately outside the address space, so the segment maps only what its
+    // vmsize covers; treating the excess as corruption would reject every Go
+    // macOS binary.
+    const uint64_t MappedFileSz = std::min(FileSz, VMSize);
     Segment Seg;
     Seg.Name = readMachOName(Name);
     Seg.VA = VMAddr;
     Seg.Size = VMSize;
     Seg.FileOff = FileOff;
-    Seg.FileSz = FileSz;
+    Seg.FileSz = MappedFileSz;
     Seg.Flags = machoProtToNd(Prot);
-    if (FileSz > 0) {
-      Seg.Data.assign(BasePtr + FileOff, BasePtr + FileOff + FileSz);
+    if (MappedFileSz > 0) {
+      Seg.Data.assign(BasePtr + FileOff, BasePtr + FileOff + MappedFileSz);
       // vmsize is untrusted; only zero-fill up to the cap (see
       // kMaxSegmentZeroFill) so a crafted size cannot force a huge allocation.
-      if (VMSize > FileSz && VMSize <= limits::kMaxSegmentZeroFill)
+      if (VMSize > MappedFileSz && VMSize <= limits::kMaxSegmentZeroFill)
         Seg.Data.resize(static_cast<size_t>(VMSize), 0);
     }
     if (Seg.Name == section_names::macho::TextSeg) {
@@ -393,6 +403,17 @@ MachOLoader::load(const std::filesystem::path &Path) {
   macho_loader::parseBuildVersion(Obj, Img);
 
   runPostLoadDiscovery(Img, "macho: loaded " + Path.filename().string());
+  // Classified before any table is read: a compact-unwind entry names a
+  // personality slot, not a language, so what its LSDA means is settled by the
+  // image's symbols and sections rather than by the entry.
+  Img.ExceptionMetadata.Runtime = detectLanguageRuntime(Img);
+  // Personality routines are reached through __got slots bound at load time,
+  // so language-table decoding waits until stubs and bindings are known.
+  macho_unwind::parseDarwinExceptions(Img);
+  go_loader::parseGoExceptions(Img);
+  // Rust shares the Itanium tables above rather than emitting its own, so its
+  // reading of them runs last, over records that are already normalized.
+  rust_eh::parseRustExceptions(Img);
   return Img;
 }
 

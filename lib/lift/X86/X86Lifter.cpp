@@ -452,6 +452,10 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
   }
 }
 
+bool X86Lifter::isResumableTrap(const cs_insn *I) {
+  return I->id == X86_INS_INT3;
+}
+
 va_t X86Lifter::directCallTarget(const cs_insn *I) {
   if (!I->detail)
     return InvalidVA;
