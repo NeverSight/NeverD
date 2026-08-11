@@ -131,6 +131,8 @@ private:
                                 llvm::IRBuilder<> &Builder);
   llvm::Value *emitShaIntrinsic(const MedOp &Op, Intrinsic IC,
                                 llvm::IRBuilder<> &Builder);
+  llvm::Value *emitGfniIntrinsic(const MedOp &Op, Intrinsic IC,
+                                 llvm::IRBuilder<> &Builder);
   llvm::Value *emitShuffleIntrinsic(const MedOp &Op, Intrinsic IC,
                                     llvm::IRBuilder<> &Builder);
   llvm::Value *emitPshufb(const MedOp &Op, llvm::IRBuilder<> &Builder);

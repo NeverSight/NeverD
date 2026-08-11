@@ -1,4 +1,4 @@
-//===- X64_VPermilInLaneRTTests.cpp - VPERMILPS/PD imm in-lane permute -*-C++-===//
+//===- X64_VPermilInLaneRTTests.cpp - VPERMILPS/PD in-lane permute -*-C++-===//
 //
 // NeverD Decompiler
 //
@@ -27,14 +27,11 @@
 // mis-routed lane is observed.  The source elements are four/two DISTINCT
 // runtime-seeded values so clang cannot fold the vector away.
 //
-// Scope note — the VARIABLE (register-control) forms (VPERMILPS/PD xmm,xmm,xmm,
-// the bulk of the #342 rewrite: per-element selector extraction + dynamic
-// in-lane gather) CANNOT be roundtripped here: the bundled Unicorn fork does
-// not decode the VEX.128 0F38 0C/0D variable opcodes (a bare `vpermilps
-// xmm,xmm,xmm` raises UC_ERR_INSN_INVALID on the ORIGINAL program), the same
-// decode gap it has for 256-bit AVX (cf. #341/#342).  That path stays lift-only
-// verified.  128-bit imm forms ARE decoded, so this is a pure lift-coverage
-// round.  Built with `-mavx -mno-avx2` to pin the VEX.128 encodings.
+// Variable-control probes cover PS/PD at both 128 and 256 bits.  Their controls
+// come from function arguments so clang cannot replace them with immediate
+// forms.  Together with the independent Unicorn known-answer tests, these cases
+// verify the complete compile -> lift -> recompile -> emulate path.  Built with
+// `-mavx -mno-avx2` to pin the VEX encodings without introducing AVX2 ops.
 //
 //===----------------------------------------------------------------------===//
 
@@ -46,7 +43,13 @@ TEST_P(X64VPermilInLaneRT, Verify) { roundTripX64(GetParam()); }
 
 // clang-format off
 #define V4F "typedef float v4f __attribute__((vector_size(16)));\n"
+#define V4I "typedef int v4i __attribute__((vector_size(16)));\n"
 #define V2D "typedef double v2d __attribute__((vector_size(16)));\n"
+#define V2L "typedef long long v2l __attribute__((vector_size(16)));\n"
+#define V8F "typedef float v8f __attribute__((vector_size(32)));\n"
+#define V8I "typedef int v8i __attribute__((vector_size(32)));\n"
+#define V4D "typedef double v4d __attribute__((vector_size(32)));\n"
+#define V4L "typedef long long v4l __attribute__((vector_size(32)));\n"
 
 // Fold all four single-precision result lanes into the return value.
 #define FOLD4 \
@@ -60,6 +63,20 @@ TEST_P(X64VPermilInLaneRT, Verify) { roundTripX64(GetParam()); }
   "  unsigned long o0,o1; double t;\n" \
   "  t=vr[0];__builtin_memcpy(&o0,&t,8); t=vr[1];__builtin_memcpy(&o1,&t,8);\n" \
   "  return o0*1000003ul + o1*99u;\n}\n"
+
+// Fold all eight single-precision result lanes into the return value.
+#define FOLD8 \
+  "  unsigned o[8]; float t;\n" \
+  "  for(int i=0;i<8;++i){t=vr[i];__builtin_memcpy(&o[i],&t,4);}\n" \
+  "  unsigned long r=0;\n" \
+  "  for(int i=0;i<8;++i)r=r*1000003ul+o[i];\n" \
+  "  return r;\n}\n"
+
+// Fold all four double-precision result lanes into the return value.
+#define FOLD4D \
+  "  unsigned long o[4]; double t;\n" \
+  "  for(int i=0;i<4;++i){t=vr[i];__builtin_memcpy(&o[i],&t,8);}\n" \
+  "  return ((o[0]*1000003ul+o[1])*1000033ul+o[2])*1000037ul+o[3];\n}\n"
 
 static const std::vector<RoundTripTC> kX64 = {
 
@@ -148,6 +165,48 @@ static const std::vector<RoundTripTC> kX64 = {
    "  v2d vr=__builtin_ia32_vpermilpd(va,0x3);\n"
    FOLD2,
    {0x4000000000000000ULL, 0x4052000000000000ULL}, "VPermil", 1, "-mavx -mno-avx2"},
+
+  // ============================ variable form (runtime controls) =============
+  {"vpermilps_var_128",
+   V4F V4I
+   "long f(long a,unsigned long c){\n"
+   "  float fa;__builtin_memcpy(&fa,&a,4);\n"
+   "  v4f va={fa,fa+1.0f,fa+2.0f,fa+3.0f};\n"
+   "  v4i vc={(int)c,(int)(c>>8),(int)(c>>16),(int)(c>>24)};\n"
+   "  v4f vr=__builtin_ia32_vpermilvarps(va,vc);\n"
+   FOLD4,
+   {0x40A00000ULL, 0x00020103ULL}, "VPermil", 1, "-mavx -mno-avx2"},
+
+  {"vpermilpd_var_128",
+   V2D V2L
+   "long f(long a,long b,unsigned long c){\n"
+   "  double da,db;__builtin_memcpy(&da,&a,8);__builtin_memcpy(&db,&b,8);\n"
+   "  v2d va={da,db};v2l vc={(long long)c,(long long)(c>>8)};\n"
+   "  v2d vr=__builtin_ia32_vpermilvarpd(va,vc);\n"
+   FOLD2,
+   {0x4014000000000000ULL, 0x4022000000000000ULL, 0x0002ULL},
+   "VPermil", 1, "-mavx -mno-avx2"},
+
+  {"vpermilps_var_256",
+   V8F V8I
+   "long f(long a,unsigned long c){\n"
+   "  float fa;__builtin_memcpy(&fa,&a,4);\n"
+   "  v8f va={fa,fa+1.0f,fa+2.0f,fa+3.0f,fa+4.0f,fa+5.0f,fa+6.0f,fa+7.0f};\n"
+   "  v8i vc={(int)c,(int)(c>>8),(int)(c>>16),(int)(c>>24),\n"
+   "           (int)(c>>32),(int)(c>>40),(int)(c>>48),(int)(c>>56)};\n"
+   "  v8f vr=__builtin_ia32_vpermilvarps256(va,vc);\n"
+   FOLD8,
+   {0x3FC00000ULL, 0x0200030101020003ULL}, "VPermil", 1, "-mavx -mno-avx2"},
+
+  {"vpermilpd_var_256",
+   V4D V4L
+   "long f(long a,unsigned long c){\n"
+   "  double da;__builtin_memcpy(&da,&a,8);\n"
+   "  v4d va={da,da+1.0,da+2.0,da+3.0};\n"
+   "  v4l vc={(long long)c,(long long)(c>>8),(long long)(c>>16),(long long)(c>>24)};\n"
+   "  v4d vr=__builtin_ia32_vpermilvarpd256(va,vc);\n"
+   FOLD4D,
+   {0x4004000000000000ULL, 0x02000002ULL}, "VPermil", 1, "-mavx -mno-avx2"},
 };
 // clang-format on
 

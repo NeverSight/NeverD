@@ -8,7 +8,7 @@
 /// \file
 /// x86 cryptographic intrinsic emission: AES-NI (AESENC, AESDEC, AESIMC,
 /// AESKEYGENASSIST), SHA-NI (SHA1/SHA256 rounds and message schedule), and
-/// PCLMULQDQ carry-less multiplication.
+/// PCLMULQDQ carry-less multiplication, and GFNI byte-field operations.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -187,6 +187,109 @@ llvm::Value *MedLLVMEmitter::emitShaIntrinsic(const MedOp &Op, Intrinsic IC,
     }
   }
   return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// GFNI intrinsics
+//===----------------------------------------------------------------------===//
+
+llvm::Value *MedLLVMEmitter::emitGfniIntrinsic(const MedOp &Op, Intrinsic IC,
+                                               llvm::IRBuilder<> &Builder) {
+  using I = Intrinsic;
+
+  if (IC != I::Gf2p8MulB && IC != I::Gf2p8AffineQb &&
+      IC != I::Gf2p8AffineInvQb)
+    return nullptr;
+  if (Op.Output.Size != 16 && Op.Output.Size != 32)
+    return nullptr;
+
+  const bool Is256 = Op.Output.Size == 32;
+  const unsigned NumBytes = Is256 ? 32 : 16;
+  auto *VTy =
+      llvm::FixedVectorType::get(llvm::Type::getInt8Ty(*Ctx), NumBytes);
+  auto GetInput = [&](unsigned Idx) {
+    return toVec(getVar(Op.Inputs[Idx], Builder), VTy, Builder);
+  };
+  auto Splat = [&](uint8_t Value) {
+    return llvm::ConstantVector::getSplat(
+        llvm::ElementCount::getFixed(NumBytes),
+        llvm::ConstantInt::get(llvm::Type::getInt8Ty(*Ctx), Value));
+  };
+
+  // Lower in target-independent integer IR.  Emitting the x86 GFNI LLVM
+  // intrinsic directly would make recompilation depend on a +gfni subtarget;
+  // the lifted program must remain executable on the baseline x86 target used
+  // by the semantic harness.
+  auto GfMul = [&](llvm::Value *A, llvm::Value *B) {
+    llvm::Value *Result = Splat(0);
+    for (unsigned Bit = 0; Bit < 8; ++Bit) {
+      auto *UseA = Builder.CreateICmpNE(Builder.CreateAnd(B, Splat(1)),
+                                        Splat(0), "gfni.mul.bit");
+      Result = Builder.CreateXor(
+          Result, Builder.CreateSelect(UseA, A, Splat(0)), "gfni.mul.acc");
+
+      auto *Reduce = Builder.CreateICmpNE(
+          Builder.CreateAnd(A, Splat(0x80)), Splat(0), "gfni.mul.reduce");
+      A = Builder.CreateShl(A, Splat(1), "gfni.mul.shift");
+      A = Builder.CreateXor(
+          A, Builder.CreateSelect(Reduce, Splat(0x1b), Splat(0)),
+          "gfni.mul.poly");
+      B = Builder.CreateLShr(B, Splat(1), "gfni.mul.next");
+    }
+    return Result;
+  };
+
+  if (IC == I::Gf2p8MulB) {
+    if (Op.NumInputs < 3)
+      return nullptr;
+    return fromVec(GfMul(GetInput(1), GetInput(2)), Builder);
+  }
+
+  if (Op.NumInputs < 4 || !Op.Inputs[Op.NumInputs - 1].isConst())
+    return nullptr;
+  llvm::Value *X = GetInput(1);
+  llvm::Value *Matrix = GetInput(2);
+
+  if (IC == I::Gf2p8AffineInvQb) {
+    // In GF(2^8), x^-1 = x^254 (and the same chain naturally maps 0 to 0).
+    llvm::Value *Inverse = Splat(1);
+    llvm::Value *Base = X;
+    unsigned Exponent = 254;
+    while (Exponent) {
+      if (Exponent & 1)
+        Inverse = GfMul(Inverse, Base);
+      Base = GfMul(Base, Base);
+      Exponent >>= 1;
+    }
+    X = Inverse;
+  }
+
+  const uint8_t Imm =
+      static_cast<uint8_t>(Op.Inputs[Op.NumInputs - 1].ConstVal);
+  llvm::Value *Result = Splat(0);
+  for (unsigned Bit = 0; Bit < 8; ++Bit) {
+    // Each 64-bit lane contains eight matrix rows.  Output bit N uses row
+    // byte 7-N, broadcast independently within every eight-byte lane.
+    std::vector<int> RowMask(NumBytes);
+    for (unsigned Byte = 0; Byte < NumBytes; ++Byte)
+      RowMask[Byte] = static_cast<int>((Byte & ~7u) + (7u - Bit));
+    llvm::Value *Row =
+        Builder.CreateShuffleVector(Matrix, Matrix, RowMask, "gfni.row");
+    llvm::Value *Parity = Builder.CreateAnd(Row, X, "gfni.dot");
+    Parity = Builder.CreateXor(
+        Parity, Builder.CreateLShr(Parity, Splat(4)), "gfni.parity4");
+    Parity = Builder.CreateXor(
+        Parity, Builder.CreateLShr(Parity, Splat(2)), "gfni.parity2");
+    Parity = Builder.CreateXor(
+        Parity, Builder.CreateLShr(Parity, Splat(1)), "gfni.parity1");
+    Parity = Builder.CreateAnd(Parity, Splat(1));
+    if ((Imm >> Bit) & 1)
+      Parity = Builder.CreateXor(Parity, Splat(1));
+    Result = Builder.CreateOr(Result,
+                              Builder.CreateShl(Parity, Splat(Bit)),
+                              "gfni.affine.acc");
+  }
+  return fromVec(Result, Builder);
 }
 
 } // namespace neverd

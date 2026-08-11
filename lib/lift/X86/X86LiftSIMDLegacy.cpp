@@ -543,11 +543,35 @@ bool X86Lifter::liftSIMDLegacy(LiftState &S, const cs_insn *Insn,
   case X86_INS_VGF2P8AFFINEINVQB:
   case X86_INS_VGF2P8AFFINEQB:
   case X86_INS_VGF2P8MULB: {
-    if (X86.op_count < 2)
+    const bool IsVex = InsnId == X86_INS_VGF2P8AFFINEINVQB ||
+                       InsnId == X86_INS_VGF2P8AFFINEQB ||
+                       InsnId == X86_INS_VGF2P8MULB;
+    const bool IsMul = InsnId == X86_INS_GF2P8MULB ||
+                       InsnId == X86_INS_VGF2P8MULB;
+    const unsigned RequiredOps = IsMul ? (IsVex ? 3 : 2) : (IsVex ? 4 : 3);
+    if (X86.op_count < RequiredOps)
       break;
+
     NdVar Dst = operandWrite(X86.operands[0]);
-    NdVar Src = operandRead(S, X86.operands[X86.op_count - 1]);
-    S.emit(NdOp::COPY, Dst, {Src});
+    const unsigned SrcIdx = IsVex ? 1 : 0;
+    NdVar Src1 = operandRead(S, X86.operands[SrcIdx]);
+    NdVar Src2 = operandRead(S, X86.operands[SrcIdx + 1]);
+
+    if (IsMul) {
+      S.emitIntrinsic(Intrinsic::Gf2p8MulB, Dst, {Src1, Src2});
+      break;
+    }
+
+    if (X86.operands[X86.op_count - 1].type != X86_OP_IMM)
+      break;
+    uint8_t Imm =
+        static_cast<uint8_t>(X86.operands[X86.op_count - 1].imm);
+    Intrinsic IC =
+        (InsnId == X86_INS_GF2P8AFFINEINVQB ||
+         InsnId == X86_INS_VGF2P8AFFINEINVQB)
+            ? Intrinsic::Gf2p8AffineInvQb
+            : Intrinsic::Gf2p8AffineQb;
+    S.emitIntrinsic(IC, Dst, {Src1, Src2, NdVar::cst(Imm, 1)});
     break;
   }
 

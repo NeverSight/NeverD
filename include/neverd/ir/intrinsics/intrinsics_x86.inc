@@ -213,3 +213,9 @@ X87Fninit, X87Fnclex,
 // Capture the hardware x87 status word after an inline-asm value operation.
 // Keep this at the end so existing intrinsic IDs remain stable.
 X87ReadStatus,
+
+// GFNI — per-byte operations over GF(2^8), for 128/256-bit vectors.
+// Keep new entries append-only so existing serialized intrinsic IDs stay stable.
+Gf2p8MulB,                  // (V)GF2P8MULB
+Gf2p8AffineQb,              // (V)GF2P8AFFINEQB
+Gf2p8AffineInvQb,           // (V)GF2P8AFFINEINVQB

@@ -11,10 +11,9 @@
 // INTRINSIC silently falls through to the unhandled-intrinsic 0 — every result
 // is wrong.  The AES/shuffle/PCMP emitters already widen with widenToI128; this
 // file pins the reachable handlers (PMOVMSKB, PHMINPOSUW, DPPS, MPSADBW and the
-// packed shifts PSLL/PSRL/PSRA-by-xmm).  The same widenToI128 fix is applied to
-// the SHA new-message/round helpers (emitShaIntrinsic) defensively, but SHA-NI
-// cannot be roundtrip-validated here: Unicorn's TCG has no SHA-NI decode/helper
-// (documented in the Unicorn unsupported-instructions doc, parallel to GFNI).
+// packed shifts PSLL/PSRL/PSRA-by-xmm).  SHA-NI round and message helpers are
+// also covered now that the bundled Unicorn backend has complete SHA-NI
+// decoding and instruction semantics.
 //
 // Each probe builds the xmm operand(s) from the function arguments with a movq
 // ((v..)(v2){a,0}) so the narrow-propagation path is exercised, then folds the
@@ -34,7 +33,11 @@ TEST_P(X64SimdNarrowRT, Verify) { roundTripX64(GetParam()); }
   "typedef short v8 __attribute__((vector_size(16)));"                         \
   "typedef int v4 __attribute__((vector_size(16)));"                           \
   "typedef long long v2 __attribute__((vector_size(16)));"                     \
+  "typedef unsigned long long u2 __attribute__((vector_size(16)));"            \
   "typedef float v4f __attribute__((vector_size(16)));"
+
+#define FOLDSHA                                                                 \
+  "u2 q=(u2)r;return (long)(q[0]*1000003ULL+q[1]);}"
 
 // clang-format off
 static const std::vector<RoundTripTC> kX64 = {
@@ -92,6 +95,66 @@ static const std::vector<RoundTripTC> kX64 = {
    "long f(long a,long b){v2 x=(v2){a,0},n=(v2){b,0};"
    "v2 r=__builtin_ia32_psllq128(x,n);return r[0];}\n",
    {0x0000000000000003LL, 5}, "SimdNarrow", 1, "-msse4.2"},
+
+  // SHA-NI: every result dword is folded through both qwords.  Inputs are
+  // assembled from runtime arguments so the instruction cannot be folded out.
+  {"sha1rnds4",
+   VPRO
+   "long f(long a,long b,long c,long d){v4 x=(v4)(v2){a,b},y=(v4)(v2){c,d};"
+   "v4 r=__builtin_ia32_sha1rnds4(x,y,2);" FOLDSHA,
+   {0x89ABCDEF01234567ULL, 0x76543210FEDCBA98ULL,
+    0x4B5A69780F1E2D3CULL, 0xC3D2E1F08796A5B4ULL},
+   "SimdNarrow", 1, "-msha -msse4.2", false, "", UC_CPU_X86_DENVERTON},
+
+  {"sha1nexte",
+   VPRO
+   "long f(long a,long b,long c,long d){v4 x=(v4)(v2){a,b},y=(v4)(v2){c,d};"
+   "v4 r=__builtin_ia32_sha1nexte(x,y);" FOLDSHA,
+   {0x89ABCDEF01234567ULL, 0x76543210FEDCBA98ULL,
+    0x4B5A69780F1E2D3CULL, 0xC3D2E1F08796A5B4ULL},
+   "SimdNarrow", 1, "-msha -msse4.2", false, "", UC_CPU_X86_DENVERTON},
+
+  {"sha1msg1",
+   VPRO
+   "long f(long a,long b,long c,long d){v4 x=(v4)(v2){a,b},y=(v4)(v2){c,d};"
+   "v4 r=__builtin_ia32_sha1msg1(x,y);" FOLDSHA,
+   {0x89ABCDEF01234567ULL, 0x76543210FEDCBA98ULL,
+    0x4B5A69780F1E2D3CULL, 0xC3D2E1F08796A5B4ULL},
+   "SimdNarrow", 1, "-msha -msse4.2", false, "", UC_CPU_X86_DENVERTON},
+
+  {"sha1msg2",
+   VPRO
+   "long f(long a,long b,long c,long d){v4 x=(v4)(v2){a,b},y=(v4)(v2){c,d};"
+   "v4 r=__builtin_ia32_sha1msg2(x,y);" FOLDSHA,
+   {0x89ABCDEF01234567ULL, 0x76543210FEDCBA98ULL,
+    0x4B5A69780F1E2D3CULL, 0xC3D2E1F08796A5B4ULL},
+   "SimdNarrow", 1, "-msha -msse4.2", false, "", UC_CPU_X86_DENVERTON},
+
+  {"sha256rnds2",
+   VPRO
+   "long f(long a,long b,long c,long d,long e,long g){"
+   "v4 x=(v4)(v2){a,b},y=(v4)(v2){c,d},z=(v4)(v2){e,g};"
+   "v4 r=__builtin_ia32_sha256rnds2(x,y,z);" FOLDSHA,
+   {0x89ABCDEF01234567ULL, 0x76543210FEDCBA98ULL,
+    0x4B5A69780F1E2D3CULL, 0xC3D2E1F08796A5B4ULL,
+    0x5060708010203040ULL, 0},
+   "SimdNarrow", 1, "-msha -msse4.2", false, "", UC_CPU_X86_DENVERTON},
+
+  {"sha256msg1",
+   VPRO
+   "long f(long a,long b,long c,long d){v4 x=(v4)(v2){a,b},y=(v4)(v2){c,d};"
+   "v4 r=__builtin_ia32_sha256msg1(x,y);" FOLDSHA,
+   {0x89ABCDEF01234567ULL, 0x76543210FEDCBA98ULL,
+    0x4B5A69780F1E2D3CULL, 0xC3D2E1F08796A5B4ULL},
+   "SimdNarrow", 1, "-msha -msse4.2", false, "", UC_CPU_X86_DENVERTON},
+
+  {"sha256msg2",
+   VPRO
+   "long f(long a,long b,long c,long d){v4 x=(v4)(v2){a,b},y=(v4)(v2){c,d};"
+   "v4 r=__builtin_ia32_sha256msg2(x,y);" FOLDSHA,
+   {0x89ABCDEF01234567ULL, 0x76543210FEDCBA98ULL,
+    0x4B5A69780F1E2D3CULL, 0xC3D2E1F08796A5B4ULL},
+   "SimdNarrow", 1, "-msha -msse4.2", false, "", UC_CPU_X86_DENVERTON},
 };
 // clang-format on
 

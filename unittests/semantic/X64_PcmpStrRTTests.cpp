@@ -74,6 +74,18 @@ static const std::vector<RoundTripTC> kX64 = {
    "return __builtin_ia32_pcmpistri128(x,y,0x0C);}\n",
    {0x0000000000006655LL, 0x1122334455667788LL}, "PcmpStr", 1, "-msse4.2"},
 
+  // Equal-ordered, most-significant index, both operands full width.  The
+  // only match is the one-byte suffix/prefix overlap at index 15.  Older TCG
+  // bounds checked only index 0 when both strings had no terminator.
+  {"pistri_ord_full_width_boundary",
+   PCMP_PRO
+   "long f(long a,long b,long c,long d){"
+   "v16 x=(v16)(v2){a,b},y=(v16)(v2){c,d};"
+   "return __builtin_ia32_pcmpistri128(x,y,0x4C);}\n",
+   {0x6867666564636261ULL, 0x706F6E6D6C6B6A69ULL,
+    0x6968676665646362ULL, 0x61706F6E6D6C6B6AULL},
+   "PcmpStr", 1, "-msse4.2"},
+
   // PCMPISTRI, uword (16-bit) equal-each: exercises a different data format.
   {"pistri_word_idx",
    PCMP_PRO

@@ -65,9 +65,114 @@ static const std::vector<RoundTripTC> kX64PolyMul = {
    "  return lo + hi;\n"
    "}\n",
    {0x9E3779B9ULL}, "PolyMul", 1, "-mpclmul -msse2 -ffreestanding"},
-  // NOTE: x86 GFNI (GF2P8MULB / GF2P8AFFINEQB / GF2P8AFFINEINVQB) is not
-  // emulated by this Unicorn build (UC_ERR_INSN_INVALID); it needs a TCG helper
-  // family in the fork.  Left for a dedicated Unicorn task — see docs.
+  {"x64_gf2p8mulb",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u2 __attribute__((vector_size(16)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m128i x=_mm_set_epi64x((long long)(a^0x0123456789abcdefULL),(long long)a);\n"
+   "  __m128i y=_mm_set_epi64x((long long)(b^0xfedcba9876543210ULL),(long long)b);\n"
+   "  u2 q=(u2)_mm_gf2p8mul_epi8(x,y);return q[0]*1000003ULL+q[1];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mno-avx -ffreestanding", false, "", UC_CPU_X86_ICELAKE_CLIENT},
+
+  {"x64_gf2p8affineqb",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u2 __attribute__((vector_size(16)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m128i x=_mm_set_epi64x((long long)(a^0x0123456789abcdefULL),(long long)a);\n"
+   "  __m128i m=_mm_set_epi64x((long long)(b^0xfedcba9876543210ULL),(long long)b);\n"
+   "  u2 q=(u2)_mm_gf2p8affine_epi64_epi8(x,m,0x63);"
+   "return q[0]*1000003ULL+q[1];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mno-avx -ffreestanding", false, "", UC_CPU_X86_ICELAKE_CLIENT},
+
+  {"x64_gf2p8affineinvqb",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u2 __attribute__((vector_size(16)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m128i x=_mm_set_epi64x((long long)(a^0x0123456789abcdefULL),(long long)a);\n"
+   "  __m128i m=_mm_set_epi64x((long long)(b^0xfedcba9876543210ULL),(long long)b);\n"
+   "  u2 q=(u2)_mm_gf2p8affineinv_epi64_epi8(x,m,0xa5);"
+   "return q[0]*1000003ULL+q[1];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mno-avx -ffreestanding", false, "", UC_CPU_X86_ICELAKE_CLIENT},
+
+  {"x64_vgf2p8mulb_128",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u2 __attribute__((vector_size(16)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m128i x=_mm_set_epi64x((long long)(a+0x102030405060708ULL),(long long)a);\n"
+   "  __m128i y=_mm_set_epi64x((long long)(b^0x8877665544332211ULL),(long long)b);\n"
+   "  u2 q=(u2)_mm_gf2p8mul_epi8(x,y);return q[0]*1000003ULL+q[1];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mavx -mno-avx2 -ffreestanding", false, "",
+   UC_CPU_X86_ICELAKE_CLIENT},
+
+  {"x64_vgf2p8affineqb_128",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u2 __attribute__((vector_size(16)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m128i x=_mm_set_epi64x((long long)(a+0x102030405060708ULL),(long long)a);\n"
+   "  __m128i m=_mm_set_epi64x((long long)(b^0x8877665544332211ULL),(long long)b);\n"
+   "  u2 q=(u2)_mm_gf2p8affine_epi64_epi8(x,m,0x3c);"
+   "return q[0]*1000003ULL+q[1];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mavx -mno-avx2 -ffreestanding", false, "",
+   UC_CPU_X86_ICELAKE_CLIENT},
+
+  {"x64_vgf2p8affineinvqb_128",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u2 __attribute__((vector_size(16)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m128i x=_mm_set_epi64x((long long)(a+0x102030405060708ULL),(long long)a);\n"
+   "  __m128i m=_mm_set_epi64x((long long)(b^0x8877665544332211ULL),(long long)b);\n"
+   "  u2 q=(u2)_mm_gf2p8affineinv_epi64_epi8(x,m,0xc3);"
+   "return q[0]*1000003ULL+q[1];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mavx -mno-avx2 -ffreestanding", false, "",
+   UC_CPU_X86_ICELAKE_CLIENT},
+
+  {"x64_vgf2p8mulb_256",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u4 __attribute__((vector_size(32)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m256i x=_mm256_set_epi64x((long long)(a+3),(long long)(a+2),"
+   "(long long)(a+1),(long long)a);\n"
+   "  __m256i y=_mm256_set_epi64x((long long)(b^3),(long long)(b^2),"
+   "(long long)(b^1),(long long)b);\n"
+   "  u4 q=(u4)_mm256_gf2p8mul_epi8(x,y);"
+   "return ((q[0]*1000003ULL+q[1])*1000033ULL+q[2])*1000037ULL+q[3];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mavx -mno-avx2 -ffreestanding", false, "",
+   UC_CPU_X86_ICELAKE_CLIENT},
+
+  {"x64_vgf2p8affineqb_256",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u4 __attribute__((vector_size(32)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m256i x=_mm256_set_epi64x((long long)(a+3),(long long)(a+2),"
+   "(long long)(a+1),(long long)a);\n"
+   "  __m256i m=_mm256_set_epi64x((long long)(b^3),(long long)(b^2),"
+   "(long long)(b^1),(long long)b);\n"
+   "  u4 q=(u4)_mm256_gf2p8affine_epi64_epi8(x,m,0x5a);"
+   "return ((q[0]*1000003ULL+q[1])*1000033ULL+q[2])*1000037ULL+q[3];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mavx -mno-avx2 -ffreestanding", false, "",
+   UC_CPU_X86_ICELAKE_CLIENT},
+
+  {"x64_vgf2p8affineinvqb_256",
+   "#include <immintrin.h>\n"
+   "typedef unsigned long long u4 __attribute__((vector_size(32)));\n"
+   "unsigned long long f(unsigned long long a,unsigned long long b){\n"
+   "  __m256i x=_mm256_set_epi64x((long long)(a+3),(long long)(a+2),"
+   "(long long)(a+1),(long long)a);\n"
+   "  __m256i m=_mm256_set_epi64x((long long)(b^3),(long long)(b^2),"
+   "(long long)(b^1),(long long)b);\n"
+   "  u4 q=(u4)_mm256_gf2p8affineinv_epi64_epi8(x,m,0xc3);"
+   "return ((q[0]*1000003ULL+q[1])*1000033ULL+q[2])*1000037ULL+q[3];}\n",
+   {0x8040201003020100ULL, 0x110d0b0705030100ULL}, "PolyMul", 1,
+   "-mgfni -mavx -mno-avx2 -ffreestanding", false, "",
+   UC_CPU_X86_ICELAKE_CLIENT},
 };
 
 static const std::vector<RoundTripTC> kA64PolyMul = {

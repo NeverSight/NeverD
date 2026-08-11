@@ -59,6 +59,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
       return R;
     if ((R = emitShaIntrinsic(Op, IC, Builder)))
       return R;
+    if ((R = emitGfniIntrinsic(Op, IC, Builder)))
+      return R;
     if ((R = emitShuffleIntrinsic(Op, IC, Builder)))
       return R;
     if ((R = emitPackedShift(Op, IC, Builder)))

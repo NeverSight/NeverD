@@ -110,6 +110,29 @@ TEST_F(PrevUnsupported, X64_CLWB) {
 }
 
 // ============================================================================
+// x64: SSE4.2 packed-string comparison — exact semantic regression
+// ============================================================================
+
+TEST_F(PrevUnsupported, X64_PCMPISTRI_EqualOrderedBoundary) {
+  auto Code = LLVMMCAssembler::assemble(
+      "movdqu xmm0, [rsi]; movdqu xmm1, [rsi + 16]; "
+      "pcmpistri xmm0, xmm1, 0x4c",
+      "x86_64-linux-gnu", "+sse4.2");
+  ASSERT_FALSE(Code.empty()) << "LLVM MC should assemble PCMPISTRI";
+
+  Bytes Inputs = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h',
+                  'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',
+                  'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
+                  'j', 'k', 'l', 'm', 'n', 'o', 'p', 'a'};
+  UnicornEmulator Emu;
+  auto S = Emu.run(UC_ARCH_X86, UC_MODE_64, Code,
+                   {{"rsi", DATA_BASE}}, {{DATA_BASE, Inputs}},
+                   uc_regs::lookupX64, UC_X86_REG_RSP, false);
+  ASSERT_TRUE(S.OK) << S.Error;
+  EXPECT_EQ(S.Regs["rcx"], 15u);
+}
+
+// ============================================================================
 // AArch64: LSE atomics — regression coverage (now supported)
 // ============================================================================
 

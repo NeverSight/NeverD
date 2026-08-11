@@ -48,6 +48,9 @@ C(Intrinsic::Sha1Msg2,         "_mm_sha1msg2_epu32");
 C(Intrinsic::Sha256Rnds2,      "_mm_sha256rnds2_epu32");
 C(Intrinsic::Sha256Msg1,       "_mm_sha256msg1_epu32");
 C(Intrinsic::Sha256Msg2,       "_mm_sha256msg2_epu32");
+C(Intrinsic::Gf2p8MulB,        "_mm_gf2p8mul_epi8");
+C(Intrinsic::Gf2p8AffineQb,    "_mm_gf2p8affine_epi64_epi8");
+C(Intrinsic::Gf2p8AffineInvQb, "_mm_gf2p8affineinv_epi64_epi8");
 
 // SSE misc
 C(Intrinsic::Pmovmskb,         "_mm_movemask_epi8");
