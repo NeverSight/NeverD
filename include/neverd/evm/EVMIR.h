@@ -13,6 +13,7 @@
 #ifndef NEVERD_EVM_EVMIR_H
 #define NEVERD_EVM_EVMIR_H
 
+#include "neverd/evm/ABI.h"
 #include "neverd/evm/Opcodes.h"
 
 #include "llvm/ADT/APInt.h"
@@ -304,21 +305,48 @@ struct RecoveredArgument {
   uint64_t CalldataOffset = 0;
   std::string Type = kDefaultRecoveredWordType.str();
   std::string Name;
+  ABITypeSource TypeSource = ABITypeSource::Default;
+  /// False when nothing in the function reads this position. A head slot the
+  /// body ignores is still an argument, because every later argument's offset
+  /// counts from it, so dropping it would renumber the rest.
+  bool Read = true;
 };
 
 struct RecoveredFunction {
   uint32_t Selector = 0;
   uint64_t EntryPC = 0;
   std::string Name;
+  /// The tabulated signature the selector is the hash of, null when the
+  /// dictionary does not know it. Recovery never synthesizes a signature from
+  /// inferred types: a signature is either exhibited by a preimage or absent.
+  const KnownSignatureInfo *Known = nullptr;
   std::vector<RecoveredArgument> Arguments;
   std::vector<std::string> Returns;
+  ABITypeSource ReturnSource = ABITypeSource::Default;
   Mutability StateMutability = Mutability::Pure;
 };
+
+/// How a storage key was formed, which is what separates a variable the source
+/// declared from an element the program addressed.
+enum class StorageKeyKind : uint8_t {
+  /// A constant, which is a directly declared variable.
+  Slot,
+  /// A hash, which is how a mapping addresses an element.
+  Hashed,
+  /// A hash displaced by a computed amount, which is how a dynamic array
+  /// addresses an element and how a struct inside a mapping addresses a field.
+  HashedOffset,
+  /// Nothing proved how the key was formed.
+  Unknown,
+};
+
+llvm::StringRef storageKeyKindName(StorageKeyKind Kind);
 
 struct StorageFact {
   uint64_t PC = 0;
   bool IsWrite = false;
   bool IsTransient = false;
+  StorageKeyKind KeyKind = StorageKeyKind::Unknown;
   std::optional<llvm::APInt> Slot;
   std::string SuggestedName;
 };
@@ -327,12 +355,35 @@ struct EventFact {
   uint64_t PC = 0;
   unsigned Topics = 0;
   std::optional<llvm::APInt> Topic0;
+  /// The tabulated event whose signature hashes to the first topic.
+  const KnownSignatureInfo *Known = nullptr;
   std::string SuggestedName;
 };
 
+/// What a revert hands back to its caller.
+enum class RevertKind : uint8_t {
+  /// Nothing, or nothing this analysis could read.
+  Bare,
+  /// The language's own `Error(string)`.
+  Message,
+  /// The language's own `Panic(uint256)`, which reports that a check the
+  /// compiler inserted failed.
+  Panic,
+  /// A selector the contract declared itself.
+  Custom,
+};
+
+llvm::StringRef revertKindName(RevertKind Kind);
+
 struct ErrorFact {
   uint64_t PC = 0;
+  RevertKind Kind = RevertKind::Bare;
   std::optional<uint32_t> Selector;
+  /// The tabulated error whose signature hashes to the selector.
+  const KnownSignatureInfo *Known = nullptr;
+  /// Which compiler-inserted check failed, when the payload is a panic whose
+  /// code is constant.
+  const PanicCodeInfo *Panic = nullptr;
   std::string SuggestedName;
 };
 
@@ -351,6 +402,10 @@ struct EVMHighIR {
   std::vector<EventFact> Events;
   std::vector<ErrorFact> Errors;
   std::vector<StructuredRegion> Regions;
+  /// The standards the program answers to, in table order. One matched
+  /// selector says little on its own; the set is what makes a contract
+  /// recognizable as a token, a proxy, or a pool.
+  std::vector<KnownStandard> Standards;
   bool HasFallback = false;
   bool HasReceive = false;
   std::vector<Diagnostic> Diagnostics;

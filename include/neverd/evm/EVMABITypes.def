@@ -1,0 +1,87 @@
+//===- EVMABITypes.def - Recovered ABI type lattice ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_ABI_TYPE(ID, SPELLING, WIDTH_UNIT)
+//
+//   The value types recovery can name. WIDTH_UNIT says how a width joins the
+//   spelling: None when the spelling already names the whole type, Bits when
+//   the spelling is followed by the width in bits, and Bytes when it is
+//   followed by the width in bytes. This is the whole reason the table exists:
+//   `uint128` and `bytes16` describe the same sixteen bytes and differ only in
+//   which unit their spelling counts.
+//
+// EVM_ABI_EVIDENCE(ID, NAME, SUMMARY)
+//
+//   One way the bytecode can say something about a value. Recovery records
+//   what it saw and resolves a type from the whole set, so no single pattern
+//   has to be conclusive on its own.
+//
+// EVM_ABI_TYPE_SOURCE(ID, NAME, SUMMARY)
+//
+//   How strongly a reported type is established, which a reader needs in order
+//   to tell a hashed signature apart from an inferred width.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_ABI_TYPE
+#define EVM_ABI_TYPE(ID, SPELLING, WIDTH_UNIT)
+#endif
+
+#ifndef EVM_ABI_EVIDENCE
+#define EVM_ABI_EVIDENCE(ID, NAME, SUMMARY)
+#endif
+
+#ifndef EVM_ABI_TYPE_SOURCE
+#define EVM_ABI_TYPE_SOURCE(ID, NAME, SUMMARY)
+#endif
+
+EVM_ABI_TYPE(Unsigned, "uint", Bits)
+EVM_ABI_TYPE(Signed, "int", Bits)
+EVM_ABI_TYPE(FixedBytes, "bytes", Bytes)
+EVM_ABI_TYPE(Address, "address", None)
+EVM_ABI_TYPE(Bool, "bool", None)
+EVM_ABI_TYPE(Bytes, "bytes", None)
+EVM_ABI_TYPE(String, "string", None)
+
+// The decoder a compiler emits masks a narrow argument as soon as it loads it,
+// so a mask applied directly to the loaded word is the declared width rather
+// than a cast written inside the body.
+EVM_ABI_EVIDENCE(LowByteMask, "low-byte-mask",
+                 "masked to its low bytes, so the value is left-padded the way "
+                 "the ABI pads a number or an address")
+EVM_ABI_EVIDENCE(HighByteMask, "high-byte-mask",
+                 "masked to its high bytes, so the value is right-padded the "
+                 "way the ABI pads a fixed-size byte string")
+EVM_ABI_EVIDENCE(SignExtended, "sign-extended",
+                 "widened by SIGNEXTEND, which only a signed value needs")
+EVM_ABI_EVIDENCE(SignedCompare, "signed-compare",
+                 "compared or divided under signed rules")
+EVM_ABI_EVIDENCE(BooleanTest, "boolean-test",
+                 "tested by ISZERO, which is how a boolean is read")
+EVM_ABI_EVIDENCE(Arithmetic, "arithmetic",
+                 "an operand of arithmetic, so the value is a number")
+EVM_ABI_EVIDENCE(BitShift, "bit-shift",
+                 "shifted or indexed by byte, which treats the value as a "
+                 "byte string")
+EVM_ABI_EVIDENCE(Bitwise, "bitwise",
+                 "combined with another value bit by bit, which treats the "
+                 "value as a bit pattern rather than a number")
+EVM_ABI_EVIDENCE(CallTarget, "call-target",
+                 "passed as the callee of an external call, so the value is an "
+                 "address")
+
+EVM_ABI_TYPE_SOURCE(KnownSignature, "known-signature",
+                    "the selector is the hash of a tabulated signature, so the "
+                    "argument types are that signature's, not a guess")
+EVM_ABI_TYPE_SOURCE(Dataflow, "dataflow",
+                    "recovered from how the bytecode uses the value")
+EVM_ABI_TYPE_SOURCE(Default, "default",
+                    "nothing narrowed the value, so it is reported at the "
+                    "machine word width")
+
+#undef EVM_ABI_TYPE_SOURCE
+#undef EVM_ABI_EVIDENCE
+#undef EVM_ABI_TYPE

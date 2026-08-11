@@ -85,6 +85,17 @@ inline constexpr uint64_t kBlockHashHistoryWindow = 256;
 inline constexpr std::size_t kDefaultMaxAbstractValuesPerSlot = 32;
 inline constexpr std::size_t kDefaultMaxStackHeightVariants = 16;
 
+/// The most calldata head slots one recovered function will describe. A hostile
+/// input can load calldata at any offset, and every head slot below the highest
+/// one read has to be reported so the later arguments keep their positions, so
+/// this bounds what one selector can make recovery allocate.
+inline constexpr std::size_t kMaxRecoveredArguments = 256;
+
+/// The most rounds the recovered-argument alias walk will take. The walk
+/// converges in far fewer on real dispatchers; the bound only keeps a
+/// pathological phi web from dominating recovery.
+inline constexpr std::size_t kMaxArgumentAliasRounds = 8;
+
 static_assert(kWordBits % kBitsPerByte == 0);
 static_assert(kByteMax == std::numeric_limits<uint8_t>::max());
 static_assert(kOpcodeSpaceSize == static_cast<std::size_t>(kByteMax) + 1);
@@ -128,6 +139,7 @@ inline constexpr llvm::StringLiteral kRecoveredArgumentPrefix = "arg";
 inline constexpr llvm::StringLiteral kRecoveredDeclarationPrefix = "recovered_";
 inline constexpr llvm::StringLiteral kUnknownStorageName = "storage_unknown";
 inline constexpr llvm::StringLiteral kStorageSlotPrefix = "storage_slot_";
+inline constexpr llvm::StringLiteral kStorageElementPrefix = "storage_element_";
 inline constexpr llvm::StringLiteral kRecoveredEventPrefix = "RecoveredEvent_";
 inline constexpr llvm::StringLiteral kRecoveredErrorPrefix = "RecoveredError_";
 inline constexpr llvm::StringLiteral kRecoveredRevertName = "RecoveredRevert";

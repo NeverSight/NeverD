@@ -168,20 +168,37 @@ std::string dumpHighIR(const EVMHighIR &High) {
   std::string Text;
   llvm::raw_string_ostream OS(Text);
   OS << "evm.high\n";
+  for (KnownStandard Standard : High.Standards)
+    OS << "standard " << getKnownStandardInfo(Standard).Name << "\n";
   for (const auto &Function : High.Functions) {
     OS << "function " << Function.Name << " selector "
        << wordHex(llvm::APInt(kSelectorBits, Function.Selector),
                   kSelectorHexDigits)
-       << " entry 0x" << llvm::utohexstr(Function.EntryPC) << "\n";
+       << " entry 0x" << llvm::utohexstr(Function.EntryPC);
+    if (Function.Known)
+      OS << " signature " << Function.Known->Signature;
+    OS << "\n";
+    for (const auto &Argument : Function.Arguments)
+      OS << "  argument " << Argument.Index << " " << Argument.Type << " "
+         << abiTypeSourceName(Argument.TypeSource)
+         << (Argument.Read ? "" : " unread") << "\n";
+    for (const auto &Return : Function.Returns)
+      OS << "  return " << Return << " "
+         << abiTypeSourceName(Function.ReturnSource) << "\n";
   }
   for (const auto &Storage : High.Storage)
     OS << (Storage.IsTransient ? "transient" : "storage") << " "
        << (Storage.IsWrite ? "write" : "read") << " "
+       << storageKeyKindName(Storage.KeyKind) << " "
        << (Storage.Slot ? wordHex(*Storage.Slot) : "dynamic") << "\n";
   for (const auto &Event : High.Events)
     OS << "event " << Event.SuggestedName << " topics=" << Event.Topics << "\n";
-  for (const auto &Error : High.Errors)
-    OS << "error " << Error.SuggestedName << "\n";
+  for (const auto &Error : High.Errors) {
+    OS << "error " << Error.SuggestedName << " " << revertKindName(Error.Kind);
+    if (Error.Panic)
+      OS << " " << Error.Panic->Name;
+    OS << "\n";
+  }
   return Text;
 }
 

@@ -1,0 +1,466 @@
+//===- EVMKnownSignatures.def - Well-known ABI signatures ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// EVM_KNOWN_STANDARD(ID, NAME, SUMMARY)
+// EVM_KNOWN_FUNCTION(SIGNATURE, RETURNS, STANDARD)
+// EVM_KNOWN_EVENT(SIGNATURE, STANDARD)
+// EVM_KNOWN_ERROR(SIGNATURE, STANDARD)
+// EVM_LANGUAGE_REVERT(ID, SIGNATURE)
+// EVM_PANIC_CODE(ID, CODE, NAME, SUMMARY)
+//
+// The first four name the values a contract's ABI carries. The fifth names the
+// two payloads the language reserves for itself, which are errors like any
+// other except that recovery has to ask for them by role rather than by
+// spelling; each therefore joins the error table from its own record. The last
+// names the argument of the second of those two.
+//
+// SIGNATURE is the canonical ABI spelling, with no spaces and with every type
+// in its full form. Selectors and topics are not written here: they are the
+// Keccak-256 of the text, and Recovery derives them once on first use, the same
+// way the Anchor dictionary derives its discriminators. A recovered selector
+// that equals a derived one exhibits a preimage, so the match proves the
+// signature rather than suggesting it. That is why only exact canonical
+// spellings belong here; a typo produces a selector no contract will ever use,
+// which EVMABITests detects by checking the published selectors of the entries
+// most likely to be mistyped.
+//
+// RETURNS is the return list the owning standard declares, comma-separated and
+// empty when it declares none. It is deliberately weaker evidence than the
+// signature: an ABI selector covers the arguments only, so a contract may
+// answer to a standard selector and return something else.
+//
+// Only a signature that is fixed by a specification, or that a widely deployed
+// interface has made canonical, belongs here. This is a recognition aid, never
+// an authority: a match names a selector, it never changes decoded semantics.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef EVM_KNOWN_STANDARD
+#define EVM_KNOWN_STANDARD(ID, NAME, SUMMARY)
+#endif
+
+#ifndef EVM_KNOWN_FUNCTION
+#define EVM_KNOWN_FUNCTION(SIGNATURE, RETURNS, STANDARD)
+#endif
+
+#ifndef EVM_KNOWN_EVENT
+#define EVM_KNOWN_EVENT(SIGNATURE, STANDARD)
+#endif
+
+#ifndef EVM_KNOWN_ERROR
+#define EVM_KNOWN_ERROR(SIGNATURE, STANDARD)
+#endif
+
+#ifndef EVM_LANGUAGE_REVERT
+#define EVM_LANGUAGE_REVERT(ID, SIGNATURE)
+#endif
+
+#ifndef EVM_PANIC_CODE
+#define EVM_PANIC_CODE(ID, CODE, NAME, SUMMARY)
+#endif
+
+//===----------------------------------------------------------------------===//
+// Standards
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_STANDARD(Solidity, "solidity",
+                   "revert payloads the language itself emits")
+EVM_KNOWN_STANDARD(ERC20, "erc-20", "fungible token")
+EVM_KNOWN_STANDARD(ERC721, "erc-721", "non-fungible token")
+EVM_KNOWN_STANDARD(ERC1155, "erc-1155", "multi token")
+EVM_KNOWN_STANDARD(ERC165, "erc-165", "interface detection")
+EVM_KNOWN_STANDARD(ERC1271, "erc-1271", "contract signature validation")
+EVM_KNOWN_STANDARD(ERC2612, "erc-2612", "signed token approval")
+EVM_KNOWN_STANDARD(ERC2981, "erc-2981", "royalty")
+EVM_KNOWN_STANDARD(ERC3156, "erc-3156", "flash loan")
+EVM_KNOWN_STANDARD(ERC4626, "erc-4626", "tokenized vault")
+EVM_KNOWN_STANDARD(ERC5267, "erc-5267", "typed-data domain retrieval")
+EVM_KNOWN_STANDARD(ERC1967, "erc-1967", "upgradeable proxy")
+EVM_KNOWN_STANDARD(ERC2535, "erc-2535", "diamond multi-facet proxy")
+EVM_KNOWN_STANDARD(ERC4337, "erc-4337", "account abstraction")
+EVM_KNOWN_STANDARD(OpenZeppelin, "openzeppelin",
+                   "access control, pausing, and the library's own errors")
+EVM_KNOWN_STANDARD(WrappedEther, "wrapped-ether", "the canonical WETH9 wrapper")
+EVM_KNOWN_STANDARD(UniswapV2, "uniswap-v2", "constant-product pair and router")
+EVM_KNOWN_STANDARD(UniswapV3, "uniswap-v3", "concentrated-liquidity pool")
+EVM_KNOWN_STANDARD(Multicall, "multicall", "batched call aggregation")
+EVM_KNOWN_STANDARD(Safe, "safe", "the Safe multisignature account")
+EVM_KNOWN_STANDARD(Common, "common",
+                   "no specification declares these, but deployed contracts "
+                   "spell them the same way often enough to be worth naming")
+
+//===----------------------------------------------------------------------===//
+// Solidity's own revert payloads
+//===----------------------------------------------------------------------===//
+
+EVM_LANGUAGE_REVERT(Message, "Error(string)")
+EVM_LANGUAGE_REVERT(Panic, "Panic(uint256)")
+
+// The argument of `Panic(uint256)`. A panic is the compiler reporting that one
+// of the checks it inserted failed, so a recovered code says which check that
+// was, and there is no other trace of it in the bytecode.
+EVM_PANIC_CODE(Generic, 0x00, "generic",
+               "a compiler-inserted check with no assigned code failed")
+EVM_PANIC_CODE(Assert, 0x01, "assert", "an assert argument was false")
+EVM_PANIC_CODE(ArithmeticOverflow, 0x11, "arithmetic-overflow",
+               "an arithmetic result fell outside its type")
+EVM_PANIC_CODE(DivideByZero, 0x12, "divide-by-zero",
+               "a division or modulo had a zero divisor")
+EVM_PANIC_CODE(EnumConversion, 0x21, "enum-conversion",
+               "a value converted to an enumeration was out of range")
+EVM_PANIC_CODE(StorageByteArrayEncoding, 0x22, "storage-byte-array-encoding",
+               "a storage byte array was read with an invalid encoding")
+EVM_PANIC_CODE(PopEmptyArray, 0x31, "pop-empty-array",
+               "pop was called on an empty array")
+EVM_PANIC_CODE(IndexOutOfBounds, 0x32, "index-out-of-bounds",
+               "an array or fixed-size access was out of range")
+EVM_PANIC_CODE(AllocationTooLarge, 0x41, "allocation-too-large",
+               "too much memory was allocated, or an array grew too large")
+EVM_PANIC_CODE(UninitializedFunctionPointer, 0x51,
+               "uninitialized-function-pointer",
+               "a zero-initialized internal function pointer was called")
+
+//===----------------------------------------------------------------------===//
+// ERC-165
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("supportsInterface(bytes4)", "bool", ERC165)
+
+//===----------------------------------------------------------------------===//
+// ERC-20
+//
+// The three transfer and approval entries are shared with ERC-721, which reuses
+// the same spellings with different meanings. One signature is one selector, so
+// each is listed once.
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("totalSupply()", "uint256", ERC20)
+EVM_KNOWN_FUNCTION("balanceOf(address)", "uint256", ERC20)
+EVM_KNOWN_FUNCTION("transfer(address,uint256)", "bool", ERC20)
+EVM_KNOWN_FUNCTION("transferFrom(address,address,uint256)", "bool", ERC20)
+EVM_KNOWN_FUNCTION("approve(address,uint256)", "bool", ERC20)
+EVM_KNOWN_FUNCTION("allowance(address,address)", "uint256", ERC20)
+EVM_KNOWN_FUNCTION("name()", "string", ERC20)
+EVM_KNOWN_FUNCTION("symbol()", "string", ERC20)
+EVM_KNOWN_FUNCTION("decimals()", "uint8", ERC20)
+EVM_KNOWN_FUNCTION("increaseAllowance(address,uint256)", "bool", ERC20)
+EVM_KNOWN_FUNCTION("decreaseAllowance(address,uint256)", "bool", ERC20)
+
+EVM_KNOWN_EVENT("Transfer(address,address,uint256)", ERC20)
+EVM_KNOWN_EVENT("Approval(address,address,uint256)", ERC20)
+
+//===----------------------------------------------------------------------===//
+// ERC-721
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("ownerOf(uint256)", "address", ERC721)
+EVM_KNOWN_FUNCTION("safeTransferFrom(address,address,uint256)", "", ERC721)
+EVM_KNOWN_FUNCTION("safeTransferFrom(address,address,uint256,bytes)", "",
+                   ERC721)
+EVM_KNOWN_FUNCTION("setApprovalForAll(address,bool)", "", ERC721)
+EVM_KNOWN_FUNCTION("getApproved(uint256)", "address", ERC721)
+EVM_KNOWN_FUNCTION("isApprovedForAll(address,address)", "bool", ERC721)
+EVM_KNOWN_FUNCTION("tokenURI(uint256)", "string", ERC721)
+EVM_KNOWN_FUNCTION("tokenByIndex(uint256)", "uint256", ERC721)
+EVM_KNOWN_FUNCTION("tokenOfOwnerByIndex(address,uint256)", "uint256", ERC721)
+EVM_KNOWN_FUNCTION("onERC721Received(address,address,uint256,bytes)", "bytes4",
+                   ERC721)
+
+EVM_KNOWN_EVENT("ApprovalForAll(address,address,bool)", ERC721)
+
+//===----------------------------------------------------------------------===//
+// ERC-1155
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("balanceOf(address,uint256)", "uint256", ERC1155)
+EVM_KNOWN_FUNCTION("balanceOfBatch(address[],uint256[])", "uint256[]", ERC1155)
+EVM_KNOWN_FUNCTION("safeTransferFrom(address,address,uint256,uint256,bytes)",
+                   "", ERC1155)
+EVM_KNOWN_FUNCTION(
+    "safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)", "",
+    ERC1155)
+EVM_KNOWN_FUNCTION("uri(uint256)", "string", ERC1155)
+EVM_KNOWN_FUNCTION("onERC1155Received(address,address,uint256,uint256,bytes)",
+                   "bytes4", ERC1155)
+EVM_KNOWN_FUNCTION(
+    "onERC1155BatchReceived(address,address,uint256[],uint256[],bytes)",
+    "bytes4", ERC1155)
+
+EVM_KNOWN_EVENT("TransferSingle(address,address,address,uint256,uint256)",
+                ERC1155)
+EVM_KNOWN_EVENT("TransferBatch(address,address,address,uint256[],uint256[])",
+                ERC1155)
+EVM_KNOWN_EVENT("URI(string,uint256)", ERC1155)
+
+//===----------------------------------------------------------------------===//
+// ERC-1271, ERC-2612, ERC-2981, ERC-3156, ERC-5267
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("isValidSignature(bytes32,bytes)", "bytes4", ERC1271)
+
+EVM_KNOWN_FUNCTION("permit(address,address,uint256,uint256,uint8,bytes32,"
+                   "bytes32)",
+                   "", ERC2612)
+EVM_KNOWN_FUNCTION("nonces(address)", "uint256", ERC2612)
+EVM_KNOWN_FUNCTION("DOMAIN_SEPARATOR()", "bytes32", ERC2612)
+
+EVM_KNOWN_FUNCTION("royaltyInfo(uint256,uint256)", "address,uint256", ERC2981)
+
+EVM_KNOWN_FUNCTION("maxFlashLoan(address)", "uint256", ERC3156)
+EVM_KNOWN_FUNCTION("flashFee(address,uint256)", "uint256", ERC3156)
+EVM_KNOWN_FUNCTION("flashLoan(address,address,uint256,bytes)", "bool", ERC3156)
+EVM_KNOWN_FUNCTION("onFlashLoan(address,address,uint256,uint256,bytes)",
+                   "bytes32", ERC3156)
+
+EVM_KNOWN_FUNCTION("eip712Domain()",
+                   "bytes1,string,string,uint256,address,bytes32,uint256[]",
+                   ERC5267)
+
+//===----------------------------------------------------------------------===//
+// ERC-4626
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("asset()", "address", ERC4626)
+EVM_KNOWN_FUNCTION("totalAssets()", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("convertToShares(uint256)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("convertToAssets(uint256)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("maxDeposit(address)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("previewDeposit(uint256)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("deposit(uint256,address)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("maxMint(address)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("previewMint(uint256)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("mint(uint256,address)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("maxWithdraw(address)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("previewWithdraw(uint256)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("withdraw(uint256,address,address)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("maxRedeem(address)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("previewRedeem(uint256)", "uint256", ERC4626)
+EVM_KNOWN_FUNCTION("redeem(uint256,address,address)", "uint256", ERC4626)
+
+EVM_KNOWN_EVENT("Deposit(address,address,uint256,uint256)", ERC4626)
+EVM_KNOWN_EVENT("Withdraw(address,address,address,uint256,uint256)", ERC4626)
+
+//===----------------------------------------------------------------------===//
+// ERC-1967 and the upgrade entry points around it
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("implementation()", "address", ERC1967)
+EVM_KNOWN_FUNCTION("upgradeTo(address)", "", ERC1967)
+EVM_KNOWN_FUNCTION("upgradeToAndCall(address,bytes)", "", ERC1967)
+EVM_KNOWN_FUNCTION("proxiableUUID()", "bytes32", ERC1967)
+EVM_KNOWN_FUNCTION("admin()", "address", ERC1967)
+EVM_KNOWN_FUNCTION("changeAdmin(address)", "", ERC1967)
+
+EVM_KNOWN_EVENT("Upgraded(address)", ERC1967)
+EVM_KNOWN_EVENT("AdminChanged(address,address)", ERC1967)
+EVM_KNOWN_EVENT("BeaconUpgraded(address)", ERC1967)
+
+EVM_KNOWN_ERROR("ERC1967InvalidImplementation(address)", ERC1967)
+EVM_KNOWN_ERROR("ERC1967InvalidAdmin(address)", ERC1967)
+EVM_KNOWN_ERROR("ERC1967InvalidBeacon(address)", ERC1967)
+EVM_KNOWN_ERROR("ERC1967NonPayable()", ERC1967)
+EVM_KNOWN_ERROR("UUPSUnauthorizedCallContext()", ERC1967)
+EVM_KNOWN_ERROR("UUPSUnsupportedProxiableUUID(bytes32)", ERC1967)
+
+//===----------------------------------------------------------------------===//
+// ERC-2535 and ERC-4337
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("diamondCut((address,uint8,bytes4[])[],address,bytes)", "",
+                   ERC2535)
+EVM_KNOWN_FUNCTION("facets()", "(address,bytes4[])[]", ERC2535)
+EVM_KNOWN_FUNCTION("facetFunctionSelectors(address)", "bytes4[]", ERC2535)
+EVM_KNOWN_FUNCTION("facetAddresses()", "address[]", ERC2535)
+EVM_KNOWN_FUNCTION("facetAddress(bytes4)", "address", ERC2535)
+
+EVM_KNOWN_EVENT("DiamondCut((address,uint8,bytes4[])[],address,bytes)", ERC2535)
+
+EVM_KNOWN_FUNCTION("entryPoint()", "address", ERC4337)
+EVM_KNOWN_FUNCTION("getNonce()", "uint256", ERC4337)
+EVM_KNOWN_FUNCTION("execute(address,uint256,bytes)", "", ERC4337)
+EVM_KNOWN_FUNCTION("executeBatch(address[],uint256[],bytes[])", "", ERC4337)
+
+//===----------------------------------------------------------------------===//
+// OpenZeppelin access control, pausing, and library errors
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("owner()", "address", OpenZeppelin)
+EVM_KNOWN_FUNCTION("transferOwnership(address)", "", OpenZeppelin)
+EVM_KNOWN_FUNCTION("renounceOwnership()", "", OpenZeppelin)
+EVM_KNOWN_FUNCTION("pendingOwner()", "address", OpenZeppelin)
+EVM_KNOWN_FUNCTION("acceptOwnership()", "", OpenZeppelin)
+EVM_KNOWN_FUNCTION("hasRole(bytes32,address)", "bool", OpenZeppelin)
+EVM_KNOWN_FUNCTION("getRoleAdmin(bytes32)", "bytes32", OpenZeppelin)
+EVM_KNOWN_FUNCTION("grantRole(bytes32,address)", "", OpenZeppelin)
+EVM_KNOWN_FUNCTION("revokeRole(bytes32,address)", "", OpenZeppelin)
+EVM_KNOWN_FUNCTION("renounceRole(bytes32,address)", "", OpenZeppelin)
+EVM_KNOWN_FUNCTION("DEFAULT_ADMIN_ROLE()", "bytes32", OpenZeppelin)
+EVM_KNOWN_FUNCTION("paused()", "bool", OpenZeppelin)
+EVM_KNOWN_FUNCTION("burn(uint256)", "", OpenZeppelin)
+EVM_KNOWN_FUNCTION("burnFrom(address,uint256)", "", OpenZeppelin)
+
+EVM_KNOWN_EVENT("OwnershipTransferred(address,address)", OpenZeppelin)
+EVM_KNOWN_EVENT("OwnershipTransferStarted(address,address)", OpenZeppelin)
+EVM_KNOWN_EVENT("RoleGranted(bytes32,address,address)", OpenZeppelin)
+EVM_KNOWN_EVENT("RoleRevoked(bytes32,address,address)", OpenZeppelin)
+EVM_KNOWN_EVENT("RoleAdminChanged(bytes32,bytes32,bytes32)", OpenZeppelin)
+EVM_KNOWN_EVENT("Paused(address)", OpenZeppelin)
+EVM_KNOWN_EVENT("Unpaused(address)", OpenZeppelin)
+EVM_KNOWN_EVENT("Initialized(uint64)", OpenZeppelin)
+
+EVM_KNOWN_ERROR("OwnableUnauthorizedAccount(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("OwnableInvalidOwner(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("AccessControlUnauthorizedAccount(address,bytes32)",
+                OpenZeppelin)
+EVM_KNOWN_ERROR("AccessControlBadConfirmation()", OpenZeppelin)
+EVM_KNOWN_ERROR("EnforcedPause()", OpenZeppelin)
+EVM_KNOWN_ERROR("ExpectedPause()", OpenZeppelin)
+EVM_KNOWN_ERROR("ReentrancyGuardReentrantCall()", OpenZeppelin)
+EVM_KNOWN_ERROR("AddressEmptyCode(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("AddressInsufficientBalance(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("FailedInnerCall()", OpenZeppelin)
+EVM_KNOWN_ERROR("SafeERC20FailedOperation(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("InvalidInitialization()", OpenZeppelin)
+EVM_KNOWN_ERROR("NotInitializing()", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC20InsufficientBalance(address,uint256,uint256)",
+                OpenZeppelin)
+EVM_KNOWN_ERROR("ERC20InvalidSender(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC20InvalidReceiver(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC20InsufficientAllowance(address,uint256,uint256)",
+                OpenZeppelin)
+EVM_KNOWN_ERROR("ERC20InvalidApprover(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC20InvalidSpender(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC721InvalidOwner(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC721NonexistentToken(uint256)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC721IncorrectOwner(address,uint256,address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC721InvalidSender(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC721InvalidReceiver(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC721InsufficientApproval(address,uint256)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC721InvalidApprover(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC721InvalidOperator(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC1155InsufficientBalance(address,uint256,uint256,uint256)",
+                OpenZeppelin)
+EVM_KNOWN_ERROR("ERC1155InvalidSender(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC1155InvalidReceiver(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC1155MissingApprovalForAll(address,address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC1155InvalidApprover(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC1155InvalidOperator(address)", OpenZeppelin)
+EVM_KNOWN_ERROR("ERC1155InvalidArrayLength(uint256,uint256)", OpenZeppelin)
+
+//===----------------------------------------------------------------------===//
+// Wrapped ether
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("deposit()", "", WrappedEther)
+EVM_KNOWN_FUNCTION("withdraw(uint256)", "", WrappedEther)
+
+EVM_KNOWN_EVENT("Deposit(address,uint256)", WrappedEther)
+EVM_KNOWN_EVENT("Withdrawal(address,uint256)", WrappedEther)
+
+//===----------------------------------------------------------------------===//
+// Uniswap v2 pair, factory, and router
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("getReserves()", "uint112,uint112,uint32", UniswapV2)
+EVM_KNOWN_FUNCTION("token0()", "address", UniswapV2)
+EVM_KNOWN_FUNCTION("token1()", "address", UniswapV2)
+EVM_KNOWN_FUNCTION("factory()", "address", UniswapV2)
+EVM_KNOWN_FUNCTION("swap(uint256,uint256,address,bytes)", "", UniswapV2)
+EVM_KNOWN_FUNCTION("mint(address)", "uint256", UniswapV2)
+EVM_KNOWN_FUNCTION("burn(address)", "uint256,uint256", UniswapV2)
+EVM_KNOWN_FUNCTION("skim(address)", "", UniswapV2)
+EVM_KNOWN_FUNCTION("sync()", "", UniswapV2)
+EVM_KNOWN_FUNCTION("getPair(address,address)", "address", UniswapV2)
+EVM_KNOWN_FUNCTION("createPair(address,address)", "address", UniswapV2)
+EVM_KNOWN_FUNCTION("allPairs(uint256)", "address", UniswapV2)
+EVM_KNOWN_FUNCTION("allPairsLength()", "uint256", UniswapV2)
+EVM_KNOWN_FUNCTION(
+    "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
+    "uint256[]", UniswapV2)
+EVM_KNOWN_FUNCTION(
+    "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)",
+    "uint256[]", UniswapV2)
+EVM_KNOWN_FUNCTION("swapExactETHForTokens(uint256,address[],address,uint256)",
+                   "uint256[]", UniswapV2)
+EVM_KNOWN_FUNCTION(
+    "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
+    "uint256[]", UniswapV2)
+EVM_KNOWN_FUNCTION("addLiquidity(address,address,uint256,uint256,uint256,"
+                   "uint256,address,uint256)",
+                   "uint256,uint256,uint256", UniswapV2)
+EVM_KNOWN_FUNCTION(
+    "removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)",
+    "uint256,uint256", UniswapV2)
+
+EVM_KNOWN_EVENT("Sync(uint112,uint112)", UniswapV2)
+EVM_KNOWN_EVENT("Swap(address,uint256,uint256,uint256,uint256,address)",
+                UniswapV2)
+EVM_KNOWN_EVENT("Mint(address,uint256,uint256)", UniswapV2)
+EVM_KNOWN_EVENT("Burn(address,uint256,uint256,address)", UniswapV2)
+EVM_KNOWN_EVENT("PairCreated(address,address,address,uint256)", UniswapV2)
+
+//===----------------------------------------------------------------------===//
+// Uniswap v3 pool, callback, and router
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("slot0()", "uint160,int24,uint16,uint16,uint16,uint8,bool",
+                   UniswapV3)
+EVM_KNOWN_FUNCTION("swap(address,bool,int256,uint160,bytes)", "int256,int256",
+                   UniswapV3)
+EVM_KNOWN_FUNCTION("uniswapV3SwapCallback(int256,int256,bytes)", "", UniswapV3)
+EVM_KNOWN_FUNCTION("mint(address,int24,int24,uint128,bytes)", "uint256,uint256",
+                   UniswapV3)
+EVM_KNOWN_FUNCTION("burn(int24,int24,uint128)", "uint256,uint256", UniswapV3)
+EVM_KNOWN_FUNCTION("collect(address,int24,int24,uint128,uint128)",
+                   "uint128,uint128", UniswapV3)
+EVM_KNOWN_FUNCTION("liquidity()", "uint128", UniswapV3)
+EVM_KNOWN_FUNCTION("fee()", "uint24", UniswapV3)
+EVM_KNOWN_FUNCTION("tickSpacing()", "int24", UniswapV3)
+EVM_KNOWN_FUNCTION("exactInputSingle((address,address,uint24,address,uint256,"
+                   "uint256,uint256,uint160))",
+                   "uint256", UniswapV3)
+EVM_KNOWN_FUNCTION("exactInput((bytes,address,uint256,uint256,uint256))",
+                   "uint256", UniswapV3)
+
+EVM_KNOWN_EVENT("Initialize(uint160,int24)", UniswapV3)
+EVM_KNOWN_EVENT("Swap(address,address,int256,int256,uint160,uint128,int24)",
+                UniswapV3)
+EVM_KNOWN_EVENT("Mint(address,address,int24,int24,uint128,uint256,uint256)",
+                UniswapV3)
+EVM_KNOWN_EVENT("Burn(address,int24,int24,uint128,uint256,uint256)", UniswapV3)
+
+//===----------------------------------------------------------------------===//
+// Batched calls and the Safe account
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("multicall(bytes[])", "bytes[]", Multicall)
+EVM_KNOWN_FUNCTION("aggregate((address,bytes)[])", "uint256,bytes[]", Multicall)
+EVM_KNOWN_FUNCTION("tryAggregate(bool,(address,bytes)[])", "(bool,bytes)[]",
+                   Multicall)
+
+EVM_KNOWN_FUNCTION("execTransaction(address,uint256,bytes,uint8,uint256,uint256,"
+                   "uint256,address,address,bytes)",
+                   "bool", Safe)
+EVM_KNOWN_FUNCTION("getOwners()", "address[]", Safe)
+EVM_KNOWN_FUNCTION("getThreshold()", "uint256", Safe)
+EVM_KNOWN_FUNCTION("isOwner(address)", "bool", Safe)
+EVM_KNOWN_FUNCTION("nonce()", "uint256", Safe)
+
+//===----------------------------------------------------------------------===//
+// Spellings no specification declares
+//===----------------------------------------------------------------------===//
+
+EVM_KNOWN_FUNCTION("mint(address,uint256)", "", Common)
+EVM_KNOWN_FUNCTION("initialize()", "", Common)
+EVM_KNOWN_FUNCTION("initialize(address)", "", Common)
+EVM_KNOWN_FUNCTION("version()", "string", Common)
+
+#undef EVM_PANIC_CODE
+#undef EVM_LANGUAGE_REVERT
+#undef EVM_KNOWN_ERROR
+#undef EVM_KNOWN_EVENT
+#undef EVM_KNOWN_FUNCTION
+#undef EVM_KNOWN_STANDARD

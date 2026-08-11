@@ -1,11 +1,14 @@
 add_neverd_component_library(NeverDEVM
+  ABI.cpp
   Analyzer.cpp
   Bytecode.cpp
   CEmitter.cpp
   ControlFlow.cpp
   Decoder.cpp
+  EVMIR.cpp
   HighAnalysis.cpp
   Interpreter.cpp
+  Keccak.cpp
   LLVMEmitter.cpp
   MedAnalysis.cpp
   Opcodes.cpp

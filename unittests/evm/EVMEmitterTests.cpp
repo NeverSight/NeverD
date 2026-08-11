@@ -773,6 +773,48 @@ TEST(EVMSolidityEmitter, ProducesCompilableRecoveredContractAndStateMachine) {
   std::filesystem::remove(Path, EC);
 }
 
+// A hashed signature turns a recovered entry point into a declaration a reader
+// can compare against the interface the contract claims to implement, so the
+// declaration has to be spelled the way Solidity accepts it, data locations
+// and all.
+TEST(EVMSolidityEmitter, DeclaresHashedSignaturesWithTheirDataLocations) {
+  const std::vector<uint8_t> Code = {
+      0x60, 0x00, 0x35, 0x60, 0xe0, 0x1c,             // selector
+      0x80, 0x63, 0xa9, 0x05, 0x9c, 0xbb, 0x14, 0x60, // transfer(address,
+      0x1b, 0x57,                                     //   uint256)
+      0x80, 0x63, 0x06, 0xfd, 0xde, 0x03, 0x14, 0x60, // name()
+      0x21, 0x57,                                     //
+      0x00,                                           // fallthrough STOP
+      0x5b, 0x60, 0x04, 0x35, 0x50, 0x00,             // transfer body
+      0x5b, 0x60, 0x20, 0x60, 0x00, 0xf3};            // name body
+
+  auto Program = analyze(Code);
+  ASSERT_TRUE(static_cast<bool>(Program))
+      << llvm::toString(Program.takeError());
+  ASSERT_EQ(Program->High.Functions.size(), 2u);
+
+  auto Source = emitSolidity(*Program);
+  ASSERT_TRUE(static_cast<bool>(Source)) << llvm::toString(Source.takeError());
+  EXPECT_NE(Source->find("hashed signature transfer(address,uint256) (erc-20)"),
+            std::string::npos);
+  EXPECT_NE(Source->find("function transfer(address arg0, uint256 arg1) "
+                         "external pure virtual returns (bool);"),
+            std::string::npos);
+  EXPECT_NE(
+      Source->find("function name() external pure virtual returns (string "
+                   "memory);"),
+      std::string::npos);
+
+  if (std::system("command -v solc >/dev/null 2>&1") != 0)
+    GTEST_SKIP() << "solc is unavailable";
+  const auto Path = writeTemporarySource("-hashed-signatures.sol", *Source);
+  const std::string Command =
+      "solc --bin '" + Path.string() + "' >/dev/null 2>&1";
+  EXPECT_EQ(std::system(Command.c_str()), 0);
+  std::error_code EC;
+  std::filesystem::remove(Path, EC);
+}
+
 TEST(EVMSolidityEmitter, EmitsRecoveredPayabilityIndependentlyOfStateAccess) {
   EVMProgram Program;
   RecoveredFunction Function;

@@ -247,12 +247,18 @@ llvm::Expected<std::string> emitC(const EVMProgram &Program,
         "return n; }\n\n";
 
   if (Options.EmitRecoveredComments)
-    for (const auto &Function : Program.High.Functions)
+    for (const auto &Function : Program.High.Functions) {
+      // A hashed signature is the whole declaration; a recovered name is all
+      // there is when the dictionary does not know the selector.
+      const llvm::StringRef Label =
+          Function.Known ? llvm::StringRef(Function.Known->Signature)
+                         : llvm::StringRef(Function.Name);
       OS << "/* recovered selector 0x"
          << llvm::format_hex_no_prefix(Function.Selector, kSelectorHexDigits,
                                        false)
-         << " -> " << Function.Name << " at pc 0x"
-         << llvm::utohexstr(Function.EntryPC) << " */\n";
+         << " -> " << Label << " at pc 0x" << llvm::utohexstr(Function.EntryPC)
+         << " */\n";
+    }
 
   OS << "int " << Options.FunctionName
      << "(struct neverd_evm_env *environment) {\n"

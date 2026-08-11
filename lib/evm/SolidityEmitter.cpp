@@ -7,6 +7,7 @@
 #include "neverd/evm/SolidityEmitter.h"
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -54,6 +55,31 @@ llvm::StringRef mutabilityText(Mutability MutabilityValue) {
     return "";
   }
   llvm_unreachable("invalid recovered Solidity mutability");
+}
+
+/// True when Solidity can write the type inline. A tuple needs a named struct,
+/// which recovery has no way to invent, so a declaration that would contain
+/// one is reported as its signature instead.
+bool isInlineSpellable(llvm::StringRef Type) {
+  return Type.find('(') == llvm::StringRef::npos;
+}
+
+/// The data location Solidity requires for a parameter of this type, empty
+/// when it requires none. Only reference types carry one.
+llvm::StringRef dataLocation(llvm::StringRef Type, llvm::StringRef Location) {
+  const bool IsReference =
+      Type == "bytes" || Type == "string" || Type.ends_with("]");
+  return IsReference ? Location : llvm::StringRef();
+}
+
+bool allInlineSpellable(const RecoveredFunction &Function) {
+  return llvm::all_of(Function.Arguments,
+                      [](const RecoveredArgument &Argument) {
+                        return isInlineSpellable(Argument.Type);
+                      }) &&
+         llvm::all_of(Function.Returns, [](const std::string &Type) {
+           return isInlineSpellable(Type);
+         });
 }
 
 std::string hostExpression(Opcode Op) {
@@ -207,14 +233,45 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
       OS << "\n";
 
     std::set<std::string> EventNames;
-    for (const auto &Fact : Program.High.Events)
-      if (EventNames.insert(Fact.SuggestedName).second)
+    for (const auto &Fact : Program.High.Events) {
+      if (!EventNames.insert(Fact.SuggestedName).second)
+        continue;
+      // A log carries one topic for the signature and one for each indexed
+      // parameter, so the topic count says how many of the leading parameters
+      // the source marked indexed.
+      const auto Declared = Fact.Known
+                                ? signatureArgumentTypes(Fact.Known->Signature)
+                                : llvm::SmallVector<llvm::StringRef, 8>{};
+      if (!Fact.Known || !llvm::all_of(Declared, isInlineSpellable)) {
         OS << "    event " << Fact.SuggestedName
-           << "(bytes data); // recovered LOG" << Fact.Topics << "\n";
+           << "(bytes data); // recovered LOG" << Fact.Topics;
+        if (Fact.Known)
+          OS << " " << Fact.Known->Signature;
+        OS << "\n";
+        continue;
+      }
+      OS << "    event " << Fact.SuggestedName << "(";
+      for (size_t I = 0; I < Declared.size(); ++I) {
+        if (I)
+          OS << ", ";
+        OS << Declared[I] << (I + 1 < Fact.Topics ? " indexed" : "");
+      }
+      OS << ");\n";
+    }
+
     std::set<std::string> ErrorNames;
-    for (const auto &Fact : Program.High.Errors)
-      if (ErrorNames.insert(Fact.SuggestedName).second)
+    for (const auto &Fact : Program.High.Errors) {
+      // The two payloads the language reserves are already declared by the
+      // language, so redeclaring them would not compile.
+      if (Fact.Kind == RevertKind::Message || Fact.Kind == RevertKind::Panic)
+        continue;
+      if (!ErrorNames.insert(Fact.SuggestedName).second)
+        continue;
+      if (Fact.Known && isInlineSpellable(Fact.Known->Signature))
+        OS << "    error " << Fact.Known->Signature << ";\n";
+      else
         OS << "    error " << Fact.SuggestedName << "();\n";
+    }
     if (!EventNames.empty() || !ErrorNames.empty())
       OS << "\n";
 
@@ -222,12 +279,22 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
       OS << "    // recovered selector 0x"
          << llvm::format_hex_no_prefix(Function.Selector, kSelectorHexDigits,
                                        false)
-         << ", entry pc 0x" << llvm::utohexstr(Function.EntryPC) << "\n"
-         << "    function " << Function.Name << "(";
+         << ", entry pc 0x" << llvm::utohexstr(Function.EntryPC) << "\n";
+      if (Function.Known)
+        OS << "    // hashed signature " << Function.Known->Signature << " ("
+           << getKnownStandardInfo(Function.Known->Standard).Name << ")\n";
+      if (!allInlineSpellable(Function)) {
+        OS << "    // no declaration: the signature contains a tuple, which "
+              "needs a named struct\n\n";
+        continue;
+      }
+      OS << "    function " << Function.Name << "(";
       for (size_t I = 0; I < Function.Arguments.size(); ++I) {
         if (I)
           OS << ", ";
-        OS << Function.Arguments[I].Type << " " << Function.Arguments[I].Name;
+        OS << Function.Arguments[I].Type
+           << dataLocation(Function.Arguments[I].Type, " calldata") << " "
+           << Function.Arguments[I].Name;
       }
       OS << ") external" << mutabilityText(Function.StateMutability)
          << " virtual";
@@ -236,7 +303,8 @@ emitSolidity(const EVMProgram &Program, const SolidityEmitterOptions &Options) {
         for (size_t I = 0; I < Function.Returns.size(); ++I) {
           if (I)
             OS << ", ";
-          OS << Function.Returns[I];
+          OS << Function.Returns[I]
+             << dataLocation(Function.Returns[I], " memory");
         }
         OS << ")";
       }

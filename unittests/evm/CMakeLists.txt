@@ -20,6 +20,13 @@ add_neverd_unittest(NeverDEVMLoaderTests
   Support
 )
 
+add_neverd_unittest(NeverDEVMABITests
+  EVMABITests.cpp
+
+  LINK_COMPONENTS
+  EVM
+)
+
 add_neverd_unittest(NeverDEVMAnalyzerTests
   EVMAnalyzerTests.cpp
 

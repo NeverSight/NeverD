@@ -6,6 +6,8 @@
 
 #include "neverd/evm/Interpreter.h"
 
+#include "Keccak.h"
+
 #include "neverd/evm/Semantics.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -21,19 +23,6 @@
 
 namespace neverd::evm {
 namespace {
-
-inline constexpr unsigned kKeccakDimension = 5;
-inline constexpr unsigned kKeccakLaneCount =
-    kKeccakDimension * kKeccakDimension;
-inline constexpr unsigned kKeccakRoundCount = 24;
-inline constexpr size_t kKeccak256RateBytes = 136;
-inline constexpr uint8_t kKeccakDomainSeparator = 0x01;
-inline constexpr uint8_t kKeccakFinalBit = 0x80;
-
-static_assert(kKeccak256RateBytes % sizeof(uint64_t) == 0,
-              "Keccak rate must contain complete lanes");
-static_assert(kWordBytes <= kKeccak256RateBytes,
-              "one Keccak squeeze must contain an EVM word");
 
 llvm::APInt zeroWord() { return llvm::APInt(kWordBits, 0); }
 llvm::APInt boolWord(bool Value) {
@@ -166,79 +155,6 @@ void wordToBytes(const llvm::APInt &Word, uint8_t *Output) {
     Output[I] = static_cast<uint8_t>(Word.extractBitsAsZExtValue(
         kBitsPerByte,
         static_cast<unsigned>((kWordBytes - 1 - I) * kBitsPerByte)));
-}
-
-void keccakF1600(std::array<uint64_t, kKeccakLaneCount> &State) {
-  static constexpr uint64_t RoundConstants[] = {
-      0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL,
-      0x8000000080008000ULL, 0x000000000000808bULL, 0x0000000080000001ULL,
-      0x8000000080008081ULL, 0x8000000000008009ULL, 0x000000000000008aULL,
-      0x0000000000000088ULL, 0x0000000080008009ULL, 0x000000008000000aULL,
-      0x000000008000808bULL, 0x800000000000008bULL, 0x8000000000008089ULL,
-      0x8000000000008003ULL, 0x8000000000008002ULL, 0x8000000000000080ULL,
-      0x000000000000800aULL, 0x800000008000000aULL, 0x8000000080008081ULL,
-      0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL};
-  static constexpr unsigned Rotation[] = {0,  1, 62, 28, 27, 36, 44, 6,  55,
-                                          20, 3, 10, 43, 25, 39, 41, 45, 15,
-                                          21, 8, 18, 2,  61, 56, 14};
-
-  static_assert(std::size(RoundConstants) == kKeccakRoundCount);
-  static_assert(std::size(Rotation) == kKeccakLaneCount);
-
-  for (uint64_t RC : RoundConstants) {
-    uint64_t C[kKeccakDimension], D[kKeccakDimension], B[kKeccakLaneCount];
-    for (unsigned X = 0; X < kKeccakDimension; ++X)
-      C[X] = State[X] ^ State[X + kKeccakDimension] ^
-             State[X + 2 * kKeccakDimension] ^ State[X + 3 * kKeccakDimension] ^
-             State[X + 4 * kKeccakDimension];
-    for (unsigned X = 0; X < kKeccakDimension; ++X)
-      D[X] = C[(X + kKeccakDimension - 1) % kKeccakDimension] ^
-             llvm::rotl(C[(X + 1) % kKeccakDimension], 1);
-    for (unsigned Y = 0; Y < kKeccakDimension; ++Y)
-      for (unsigned X = 0; X < kKeccakDimension; ++X)
-        State[X + kKeccakDimension * Y] ^= D[X];
-    for (unsigned Y = 0; Y < kKeccakDimension; ++Y)
-      for (unsigned X = 0; X < kKeccakDimension; ++X)
-        B[Y + kKeccakDimension * ((2 * X + 3 * Y) % kKeccakDimension)] =
-            llvm::rotl(State[X + kKeccakDimension * Y],
-                       static_cast<int>(Rotation[X + kKeccakDimension * Y]));
-    for (unsigned Y = 0; Y < kKeccakDimension; ++Y)
-      for (unsigned X = 0; X < kKeccakDimension; ++X)
-        State[X + kKeccakDimension * Y] =
-            B[X + kKeccakDimension * Y] ^
-            ((~B[(X + 1) % kKeccakDimension + kKeccakDimension * Y]) &
-             B[(X + 2) % kKeccakDimension + kKeccakDimension * Y]);
-    State[0] ^= RC;
-  }
-}
-
-llvm::APInt keccak256(const uint8_t *Data, size_t Size) {
-  std::array<uint64_t, kKeccakLaneCount> State{};
-  while (Size >= kKeccak256RateBytes) {
-    for (size_t I = 0; I < kKeccak256RateBytes; ++I)
-      State[I / sizeof(uint64_t)] ^= static_cast<uint64_t>(Data[I])
-                                     << ((I % sizeof(uint64_t)) * kBitsPerByte);
-    keccakF1600(State);
-    Data += kKeccak256RateBytes;
-    Size -= kKeccak256RateBytes;
-  }
-  std::array<uint8_t, kKeccak256RateBytes> Last{};
-  if (Size != 0)
-    std::copy_n(Data, Size, Last.begin());
-  Last[Size] = kKeccakDomainSeparator;
-  Last[kKeccak256RateBytes - 1] |= kKeccakFinalBit;
-  for (size_t I = 0; I < kKeccak256RateBytes; ++I)
-    State[I / sizeof(uint64_t)] ^= static_cast<uint64_t>(Last[I])
-                                   << ((I % sizeof(uint64_t)) * kBitsPerByte);
-  keccakF1600(State);
-
-  llvm::APInt Result(kWordBits, 0);
-  for (size_t I = 0; I < kWordBytes; ++I) {
-    Result <<= kBitsPerByte;
-    Result |= static_cast<uint8_t>(State[I / sizeof(uint64_t)] >>
-                                   ((I % sizeof(uint64_t)) * kBitsPerByte));
-  }
-  return Result;
 }
 
 llvm::APInt mapLookup(const WordMap &Map, const llvm::APInt &Key) {
@@ -450,9 +366,8 @@ llvm::Expected<ExecutionResult> execute(const EVMLowIR &Program,
         size_t Offset = 0, Size = 0, End = 0;
         if (!Fault && Range(OffsetWord, SizeWord, Offset, Size, End)) {
           EnsureMemory(End);
-          const uint8_t *Data =
-              Size == 0 ? nullptr : Result.Memory.data() + Offset;
-          Push(keccak256(Data, Size));
+          Push(
+              keccak256Word(llvm::ArrayRef(Result.Memory).slice(Offset, Size)));
         }
         break;
       }

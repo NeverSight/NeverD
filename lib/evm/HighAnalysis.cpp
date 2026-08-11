@@ -15,12 +15,15 @@
 #include <map>
 #include <queue>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd::evm {
 namespace {
 
-inline constexpr size_t kErrorSelectorSearchWindow = 10;
+/// The value of \c ArgumentRecovery's owner map for a value that is not a
+/// calldata head slot.
+inline constexpr size_t kNoArgument = std::numeric_limits<size_t>::max();
 
 std::string wordHexDigits(const llvm::APInt &Value, unsigned MinDigits = 1) {
   llvm::SmallString<kWordBytes * kHexDigitsPerByte> Digits;
@@ -31,11 +34,33 @@ std::string wordHexDigits(const llvm::APInt &Value, unsigned MinDigits = 1) {
   return Result;
 }
 
-std::optional<uint64_t> asAddress(const MedValue *Value) {
+std::string selectorHex(uint32_t Selector) {
+  return wordHexDigits(llvm::APInt(kSelectorBits, Selector),
+                       kSelectorHexDigits);
+}
+
+/// The value as a machine-word-sized number, when it is a constant that fits
+/// one.
+std::optional<uint64_t> constantWord(const MedValue *Value) {
   if (!Value || !Value->Constant ||
       Value->Constant->getActiveBits() > std::numeric_limits<uint64_t>::digits)
     return std::nullopt;
   return Value->Constant->getZExtValue();
+}
+
+/// The argument position a constant calldata offset designates, when the
+/// offset starts a head slot. An offset inside a slot reads into a dynamic
+/// value's payload rather than naming an argument of its own.
+std::optional<size_t> headSlot(uint64_t Offset) {
+  if (Offset < kSelectorBytes)
+    return std::nullopt;
+  const uint64_t Relative = Offset - kSelectorBytes;
+  if (Relative % kWordBytes != 0)
+    return std::nullopt;
+  const uint64_t Position = Relative / kWordBytes;
+  if (Position >= kMaxRecoveredArguments)
+    return std::nullopt;
+  return static_cast<size_t>(Position);
 }
 
 const LowInstruction *instructionAt(const EVMLowIR &Low, uint64_t PC) {
@@ -82,19 +107,6 @@ Mutability recoveredMutability(StateAccessKind Access, bool ReadsCallValue) {
   return Mutability::NonPayable;
 }
 
-std::optional<llvm::APInt> precedingPush(const EVMLowIR &Low, size_t Index,
-                                         size_t Window) {
-  const size_t Begin = Index > Window ? Index - Window : 0;
-  for (size_t I = Index; I-- > Begin;) {
-    if (Low.Instructions[I].isPush())
-      return Low.Instructions[I].Immediate;
-    if (!Low.Instructions[I].isExecutable() ||
-        Low.Instructions[I].Info.Class == OpcodeClass::Control)
-      break;
-  }
-  return std::nullopt;
-}
-
 bool endsInRevert(const EVMLowIR &Low, uint64_t BlockPC) {
   const LowBlock *Block = Low.findBlock(BlockPC);
   if (!Block || Block->InstructionCount == 0)
@@ -120,6 +132,17 @@ public:
   [[nodiscard]] const MedBlock *block(uint64_t StartPC) const {
     const auto It = Blocks.find(StartPC);
     return It == Blocks.end() ? nullptr : It->second;
+  }
+
+  /// The operation at \p PC and the block that contains it, which is the
+  /// context a payload built by neighbouring stores has to be read in.
+  [[nodiscard]] const MedOperation *operation(uint64_t PC) const {
+    const auto It = Operations.find(PC);
+    return It == Operations.end() ? nullptr : It->second.second;
+  }
+  [[nodiscard]] const MedBlock *containingBlock(uint64_t PC) const {
+    const auto It = Operations.find(PC);
+    return It == Operations.end() ? nullptr : It->second.first;
   }
 
 private:
@@ -151,7 +174,9 @@ private:
         return;
       }
       for (const MedOperation &Operation : Block.Operations) {
-        if (!Operations.emplace(Operation.PC, &Operation).second) {
+        if (!Operations
+                 .emplace(Operation.PC, std::make_pair(&Block, &Operation))
+                 .second) {
           fail(Operation.PC);
           return;
         }
@@ -182,7 +207,8 @@ private:
   bool Valid = true;
   uint64_t ErrorPC = kEntryPC;
   std::vector<const MedOperation *> Producers;
-  std::map<uint64_t, const MedOperation *> Operations;
+  std::map<uint64_t, std::pair<const MedBlock *, const MedOperation *>>
+      Operations;
   std::map<uint64_t, const MedBlock *> Blocks;
 };
 
@@ -434,11 +460,335 @@ private:
   std::vector<SemanticValue> Results;
 };
 
+/// The calldata head slots one function reads, and what its own code says
+/// about each of them.
+///
+/// A loaded word is followed through the operations that only move it, so a
+/// mask applied to a duplicate still narrows the argument the duplicate came
+/// from. Nothing here decides a type: the observations are handed to
+/// \c ABIConstraint::resolve, which is the one place the precedence lives.
+class ArgumentRecovery {
+public:
+  ArgumentRecovery(const EVMMedIR &Med, const ProducerIndex &Index,
+                   const std::set<uint64_t> &Blocks) {
+    for (uint64_t PC : Blocks)
+      if (const MedBlock *Block = Index.block(PC))
+        Ordered.push_back(Block);
+    Owner.assign(Med.Values.size(), kNoArgument);
+    seed(Med);
+    if (Constraints.empty())
+      return;
+    propagate(Med);
+    for (const MedBlock *Block : Ordered)
+      for (const MedOperation &Operation : Block->Operations)
+        observe(Med, Operation);
+  }
+
+  /// One past the highest head slot the function read, which is the smallest
+  /// argument count consistent with what it does.
+  [[nodiscard]] size_t count() const { return Constraints.size(); }
+  [[nodiscard]] const ABIConstraint &constraint(size_t Position) const {
+    return Constraints[Position];
+  }
+  [[nodiscard]] bool read(size_t Position) const { return Read[Position]; }
+
+private:
+  [[nodiscard]] size_t owner(ValueID Value) const {
+    return Value < Owner.size() ? Owner[Value] : kNoArgument;
+  }
+
+  bool adopt(ValueID Value, size_t Position) {
+    if (Position == kNoArgument || Value >= Owner.size() ||
+        Owner[Value] != kNoArgument)
+      return false;
+    Owner[Value] = Position;
+    return true;
+  }
+
+  void seed(const EVMMedIR &Med) {
+    llvm::SmallVector<std::pair<ValueID, size_t>, 8> Loads;
+    size_t Highest = 0;
+    for (const MedBlock *Block : Ordered)
+      for (const MedOperation &Operation : Block->Operations) {
+        if (Operation.Op != Opcode::CALLDATALOAD ||
+            Operation.Inputs.size() != 1 || Operation.Outputs.size() != 1)
+          continue;
+        const auto Offset = constantWord(Med.findValue(Operation.Inputs[0]));
+        if (!Offset)
+          continue;
+        const auto Position = headSlot(*Offset);
+        if (!Position)
+          continue;
+        Loads.emplace_back(Operation.Outputs[0], *Position);
+        Highest = std::max(Highest, *Position);
+      }
+    if (Loads.empty())
+      return;
+
+    Constraints.resize(Highest + 1);
+    Read.assign(Highest + 1, false);
+    for (const auto &[Value, Position] : Loads) {
+      adopt(Value, Position);
+      Read[Position] = true;
+    }
+  }
+
+  void propagate(const EVMMedIR &Med) {
+    for (size_t Round = 0; Round < kMaxArgumentAliasRounds; ++Round) {
+      bool Changed = false;
+      for (const MedBlock *Block : Ordered) {
+        for (const MedOperation &Operation : Block->Operations) {
+          if (!evm::isDup(Operation.Op) && !evm::isDeepDup(Operation.Op))
+            continue;
+          if (Operation.Inputs.size() != 1 || Operation.Outputs.size() != 1)
+            continue;
+          Changed |=
+              adopt(Operation.Outputs[0], owner(Operation.Inputs.front()));
+        }
+        // A merge carries one argument only when every path brought that same
+        // argument; a merge of an argument with anything else is neither.
+        for (ValueID Phi : Block->PhiValues) {
+          const MedValue *Value = Med.findValue(Phi);
+          if (!Value || Value->Inputs.empty())
+            continue;
+          size_t Common = owner(Value->Inputs.front());
+          for (ValueID Incoming : Value->Inputs)
+            if (owner(Incoming) != Common)
+              Common = kNoArgument;
+          Changed |= adopt(Phi, Common);
+        }
+      }
+      if (!Changed)
+        return;
+    }
+  }
+
+  void observe(const EVMMedIR &Med, const MedOperation &Operation);
+
+  std::vector<const MedBlock *> Ordered;
+  std::vector<size_t> Owner;
+  std::vector<ABIConstraint> Constraints;
+  std::vector<bool> Read;
+};
+
+void ArgumentRecovery::observe(const EVMMedIR &Med,
+                               const MedOperation &Operation) {
+  const auto Argument = [&](size_t Position) -> ABIConstraint * {
+    if (Position >= Operation.Inputs.size())
+      return nullptr;
+    const size_t Owned = owner(Operation.Inputs[Position]);
+    return Owned == kNoArgument ? nullptr : &Constraints[Owned];
+  };
+  const auto Literal = [&](size_t Position) -> const llvm::APInt * {
+    if (Position >= Operation.Inputs.size())
+      return nullptr;
+    const MedValue *Value = Med.findValue(Operation.Inputs[Position]);
+    return Value && Value->Constant ? &*Value->Constant : nullptr;
+  };
+  const auto EveryOperand = [&](ABIEvidence Evidence) {
+    for (size_t I = 0; I < Operation.Inputs.size(); ++I)
+      if (ABIConstraint *Constraint = Argument(I))
+        Constraint->observe(Evidence);
+  };
+
+  switch (Operation.Op) {
+  case Opcode::AND:
+  case Opcode::OR:
+    if (Operation.Inputs.size() != 2)
+      break;
+    for (size_t I = 0; I < 2; ++I) {
+      ABIConstraint *Constraint = Argument(I);
+      if (!Constraint)
+        continue;
+      const llvm::APInt *Mask = Literal(1 - I);
+      if (!Mask) {
+        Constraint->observe(ABIEvidence::Bitwise);
+        continue;
+      }
+      // AND keeps the bytes its mask sets; OR fills them, so what survives of
+      // the value is the complement.
+      const llvm::APInt Kept = Operation.Op == Opcode::AND ? *Mask : ~*Mask;
+      if (const auto Bytes = lowByteMaskWidth(Kept)) {
+        Constraint->observe(ABIEvidence::LowByteMask);
+        Constraint->narrowTo(*Bytes);
+      } else if (const auto Bytes = highByteMaskWidth(Kept)) {
+        Constraint->observe(ABIEvidence::HighByteMask);
+        Constraint->narrowTo(*Bytes);
+      } else {
+        Constraint->observe(ABIEvidence::Bitwise);
+      }
+    }
+    break;
+  case Opcode::XOR:
+  case Opcode::NOT:
+    EveryOperand(ABIEvidence::Bitwise);
+    break;
+  case Opcode::SIGNEXTEND: {
+    ABIConstraint *Constraint = Argument(1);
+    if (!Constraint)
+      break;
+    Constraint->observe(ABIEvidence::SignExtended);
+    if (const llvm::APInt *Index = Literal(0); Index && Index->ult(kWordBytes))
+      Constraint->narrowTo(static_cast<unsigned>(Index->getZExtValue()) + 1);
+    break;
+  }
+  case Opcode::SLT:
+  case Opcode::SGT:
+  case Opcode::SDIV:
+  case Opcode::SMOD:
+    EveryOperand(ABIEvidence::SignedCompare);
+    break;
+  case Opcode::ISZERO:
+    if (ABIConstraint *Constraint = Argument(0))
+      Constraint->observe(ABIEvidence::BooleanTest);
+    break;
+  case Opcode::ADD:
+  case Opcode::SUB:
+  case Opcode::MUL:
+  case Opcode::DIV:
+  case Opcode::MOD:
+  case Opcode::EXP:
+  case Opcode::ADDMOD:
+  case Opcode::MULMOD:
+  case Opcode::LT:
+  case Opcode::GT:
+    EveryOperand(ABIEvidence::Arithmetic);
+    break;
+  case Opcode::SHL:
+  case Opcode::SHR:
+  case Opcode::SAR:
+  case Opcode::BYTE:
+    // The first operand says how far to shift or which byte to take, so only
+    // the second is being treated as a byte string.
+    if (ABIConstraint *Constraint = Argument(1))
+      Constraint->observe(ABIEvidence::BitShift);
+    break;
+  case Opcode::BALANCE:
+  case Opcode::EXTCODESIZE:
+  case Opcode::EXTCODEHASH:
+    if (ABIConstraint *Constraint = Argument(0))
+      Constraint->observe(ABIEvidence::CallTarget);
+    break;
+  case Opcode::CALL:
+  case Opcode::CALLCODE:
+  case Opcode::DELEGATECALL:
+  case Opcode::STATICCALL:
+    // Every call in the family puts the callee second, after the gas
+    // allowance.
+    if (ABIConstraint *Constraint = Argument(1))
+      Constraint->observe(ABIEvidence::CallTarget);
+    break;
+  default:
+    break;
+  }
+}
+
+/// The last word a store placed at \p Offset plus \p Displacement inside
+/// \p Block before \p BeforePC.
+///
+/// A revert payload is assembled by the stores that immediately precede the
+/// revert, so this is what reads one back. Matching on the offset's own value
+/// covers the usual case where the same expression addresses both, and
+/// matching on equal constants covers a payload written field by field.
+const MedValue *storedWordAt(const EVMMedIR &Med, const MedBlock &Block,
+                             ValueID Offset, uint64_t Displacement,
+                             uint64_t BeforePC) {
+  const auto Base = constantWord(Med.findValue(Offset));
+  const MedValue *Found = nullptr;
+  for (const MedOperation &Operation : Block.Operations) {
+    if (Operation.PC >= BeforePC)
+      break;
+    if (Operation.Op != Opcode::MSTORE || Operation.Inputs.size() != 2)
+      continue;
+    const bool SameExpression =
+        Displacement == 0 && Operation.Inputs[0] == Offset;
+    const auto At = constantWord(Med.findValue(Operation.Inputs[0]));
+    const bool SameAddress =
+        Base && At &&
+        Displacement <= std::numeric_limits<uint64_t>::max() - *Base &&
+        *At == *Base + Displacement;
+    if (SameExpression || SameAddress)
+      Found = Med.findValue(Operation.Inputs[1]);
+  }
+  return Found;
+}
+
+/// What a revert hands back, to the extent the stores before it prove.
+ErrorFact classifyRevert(const EVMMedIR &Med, const MedBlock &Block,
+                         const MedOperation &Revert) {
+  ErrorFact Fact;
+  Fact.PC = Revert.PC;
+  Fact.SuggestedName = kRecoveredRevertName.str();
+  if (Revert.Inputs.size() != 2)
+    return Fact;
+
+  // A payload shorter than a selector cannot carry one, and an empty one is
+  // the bare revert a require without a message compiles to.
+  if (const auto Size = constantWord(Med.findValue(Revert.Inputs[1]));
+      Size && *Size < kSelectorBytes)
+    return Fact;
+
+  const MedValue *Payload =
+      storedWordAt(Med, Block, Revert.Inputs[0], 0, Revert.PC);
+  if (!Payload || !Payload->Constant ||
+      Payload->Constant->getBitWidth() != kWordBits)
+    return Fact;
+
+  // The ABI left-aligns a selector, so it is the leading four bytes of the
+  // word the store wrote.
+  const auto Selector =
+      static_cast<uint32_t>(Payload->Constant->extractBitsAsZExtValue(
+          kSelectorBits, kWordBits - kSelectorBits));
+  if (Selector == 0)
+    return Fact;
+
+  Fact.Selector = Selector;
+  Fact.Known = findKnownError(Selector);
+  Fact.Kind = RevertKind::Custom;
+  if (Fact.Known == &getLanguageRevertInfo(LanguageRevert::Message)) {
+    Fact.Kind = RevertKind::Message;
+  } else if (Fact.Known == &getLanguageRevertInfo(LanguageRevert::Panic)) {
+    Fact.Kind = RevertKind::Panic;
+    if (const MedValue *Code = storedWordAt(Med, Block, Revert.Inputs[0],
+                                            kSelectorBytes, Revert.PC))
+      if (const auto Value = constantWord(Code))
+        Fact.Panic = findPanicCode(*Value);
+  }
+  Fact.SuggestedName =
+      Fact.Known ? Fact.Known->name().str()
+                 : kRecoveredErrorPrefix.str() + selectorHex(Selector);
+  return Fact;
+}
+
+/// How the key of a storage access was formed, which is what separates a
+/// declared variable from an element the program addressed.
+StorageKeyKind storageKeyKind(const EVMMedIR &Med, const ProducerIndex &Index,
+                              ValueID Key) {
+  const MedValue *Value = Med.findValue(Key);
+  if (!Value)
+    return StorageKeyKind::Unknown;
+  if (Value->Constant)
+    return StorageKeyKind::Slot;
+  const MedOperation *Producer = Index.producer(Key);
+  if (!Producer)
+    return StorageKeyKind::Unknown;
+  if (Producer->Op == Opcode::SHA3)
+    return StorageKeyKind::Hashed;
+  // A mapping addresses its elements by hash; an array element, and a struct
+  // field inside a mapping, are that hash plus a displacement.
+  if (Producer->Op == Opcode::ADD)
+    for (ValueID Input : Producer->Inputs)
+      if (const MedOperation *Operand = Index.producer(Input);
+          Operand && Operand->Op == Opcode::SHA3)
+        return StorageKeyKind::HashedOffset;
+  return StorageKeyKind::Unknown;
+}
+
 std::optional<uint64_t> jumpDestination(const EVMMedIR &Med,
                                         const MedOperation &Jump) {
   if (Jump.Inputs.size() != 2)
     return std::nullopt;
-  return asAddress(Med.findValue(Jump.Inputs[0]));
+  return constantWord(Med.findValue(Jump.Inputs[0]));
 }
 
 bool hasConcreteTrueEdge(const EVMLowIR &Low, uint64_t BlockPC,
@@ -508,11 +858,8 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &Med) {
           if (FunctionIt->second.EntryPC == *Entry)
             continue;
           High.Diagnostics.push_back(
-              {Operation.PC,
-               "duplicate selector 0x" +
-                   wordHexDigits(llvm::APInt(kSelectorBits, Selector),
-                                 kSelectorHexDigits) +
-                   " maps to multiple entry points"});
+              {Operation.PC, "duplicate selector 0x" + selectorHex(Selector) +
+                                 " maps to multiple entry points"});
           Functions.erase(FunctionIt);
           AmbiguousSelectors.insert(Selector);
           continue;
@@ -520,9 +867,12 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &Med) {
         RecoveredFunction &Function = FunctionIt->second;
         Function.Selector = Selector;
         Function.EntryPC = *Entry;
-        Function.Name = kRecoveredFunctionPrefix.str() +
-                        wordHexDigits(llvm::APInt(kSelectorBits, Selector),
-                                      kSelectorHexDigits);
+        // A tabulated signature that hashes to this selector exhibits a
+        // preimage, so the name is recovered rather than invented.
+        Function.Known = findKnownFunction(Selector);
+        Function.Name = Function.Known ? Function.Known->name().str()
+                                       : kRecoveredFunctionPrefix.str() +
+                                             selectorHex(Selector);
       }
     }
   }
@@ -536,7 +886,6 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &Med) {
     StateAccessKind StateAccess = StateAccessKind::None;
     bool ReadsCallValue = false;
     bool ReturnsWord = false;
-    std::set<uint64_t> ArgumentOffsets;
     for (uint64_t BlockPC : FunctionBlocks) {
       const LowBlock *LowBlock = Low.findBlock(BlockPC);
       const MedBlock *Block = Index.block(BlockPC);
@@ -554,12 +903,6 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &Med) {
         ReadsCallValue |= !IsGuardRead && Operation.CallValueAccess ==
                                               CallValueAccessKind::Read;
 
-        if (Operation.Op == Opcode::CALLDATALOAD &&
-            Operation.Inputs.size() == 1) {
-          const auto Offset = asAddress(Med.findValue(Operation.Inputs[0]));
-          if (Offset && *Offset >= kSelectorBytes)
-            ArgumentOffsets.insert(*Offset);
-        }
         if (Operation.Op == Opcode::RETURN && Operation.Inputs.size() == 2) {
           const MedValue *Size = Med.findValue(Operation.Inputs[1]);
           ReturnsWord |= Size && Size->Constant &&
@@ -567,17 +910,40 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &Med) {
         }
       }
     }
-    unsigned ArgumentIndex = 0;
-    for (uint64_t Offset : ArgumentOffsets) {
+
+    const ArgumentRecovery Arguments(Med, Index, FunctionBlocks);
+    // A hashed signature settles the argument list, so it decides both how
+    // many arguments there are and what each one is. Otherwise the head slots
+    // the body read decide, and every slot below the highest is reported even
+    // when nothing read it: dropping a gap would renumber the rest.
+    const llvm::SmallVector<llvm::StringRef, 8> Declared =
+        Function.Known ? signatureArgumentTypes(Function.Known->Signature)
+                       : llvm::SmallVector<llvm::StringRef, 8>{};
+    const size_t Count = Function.Known ? Declared.size() : Arguments.count();
+    for (size_t Position = 0; Position < Count; ++Position) {
       RecoveredArgument Argument;
-      Argument.Index = ArgumentIndex;
-      Argument.CalldataOffset = Offset;
-      Argument.Name =
-          kRecoveredArgumentPrefix.str() + std::to_string(ArgumentIndex++);
+      Argument.Index = static_cast<unsigned>(Position);
+      Argument.CalldataOffset = kSelectorBytes + Position * kWordBytes;
+      Argument.Name = kRecoveredArgumentPrefix.str() + std::to_string(Position);
+      Argument.Read = Position < Arguments.count() && Arguments.read(Position);
+      if (Function.Known) {
+        Argument.Type = Declared[Position].str();
+        Argument.TypeSource = ABITypeSource::KnownSignature;
+      } else {
+        const ABIConstraint &Constraint = Arguments.constraint(Position);
+        Argument.Type = Constraint.resolve().spelling();
+        Argument.TypeSource = Constraint.source();
+      }
       Function.Arguments.push_back(std::move(Argument));
     }
-    if (ReturnsWord)
+
+    if (Function.Known) {
+      for (llvm::StringRef Type : splitTypeList(Function.Known->Returns))
+        Function.Returns.push_back(Type.str());
+      Function.ReturnSource = ABITypeSource::KnownSignature;
+    } else if (ReturnsWord) {
       Function.Returns.push_back(kDefaultRecoveredWordType.str());
+    }
     Function.StateMutability = recoveredMutability(StateAccess, ReadsCallValue);
     High.Functions.push_back(Function);
     High.Regions.push_back({Function.EntryPC,
@@ -598,14 +964,20 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &Med) {
             Operation.Op == Opcode::SSTORE || Operation.Op == Opcode::TSTORE;
         Fact.IsTransient =
             Operation.Op == Opcode::TLOAD || Operation.Op == Opcode::TSTORE;
-        if (Index.valid() && !Operation.Inputs.empty())
+        if (Index.valid() && !Operation.Inputs.empty()) {
+          Fact.KeyKind = storageKeyKind(Med, Index, Operation.Inputs[0]);
           if (const MedValue *Key = Med.findValue(Operation.Inputs[0]);
               Key && Key->Constant)
             Fact.Slot = Key->Constant;
+        }
         Fact.SuggestedName = kUnknownStorageName.str();
         if (Fact.Slot)
           Fact.SuggestedName =
               kStorageSlotPrefix.str() + wordHexDigits(*Fact.Slot);
+        else if (Fact.KeyKind == StorageKeyKind::Hashed ||
+                 Fact.KeyKind == StorageKeyKind::HashedOffset)
+          Fact.SuggestedName =
+              kStorageElementPrefix.str() + llvm::utohexstr(Operation.PC);
         High.Storage.push_back(std::move(Fact));
       }
       if (evm::isLog(Operation.Op)) {
@@ -614,30 +986,32 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &Med) {
         Fact.Topics = logTopicCount(Operation.Op);
         if (Index.valid() && Fact.Topics != 0 && Operation.Inputs.size() > 2)
           if (const MedValue *Topic = Med.findValue(Operation.Inputs[2]);
-              Topic && Topic->Constant)
+              Topic && Topic->Constant) {
             Fact.Topic0 = Topic->Constant;
-        Fact.SuggestedName =
-            kRecoveredEventPrefix.str() + llvm::utohexstr(Operation.PC);
+            Fact.Known = findKnownEvent(*Topic->Constant);
+          }
+        Fact.SuggestedName = Fact.Known ? Fact.Known->name().str()
+                                        : kRecoveredEventPrefix.str() +
+                                              llvm::utohexstr(Operation.PC);
         High.Events.push_back(std::move(Fact));
       }
     }
   }
 
-  for (size_t I = 0; I < Low.Instructions.size(); ++I) {
-    const LowInstruction &Instruction = Low.Instructions[I];
+  for (const LowInstruction &Instruction : Low.Instructions) {
     if (!Instruction.is(Opcode::REVERT))
       continue;
+    const MedBlock *Block = Index.containingBlock(Instruction.PC);
+    const MedOperation *Revert = Index.operation(Instruction.PC);
+    if (Index.valid() && Block && Revert) {
+      High.Errors.push_back(classifyRevert(Med, *Block, *Revert));
+      continue;
+    }
+    // Without a usable value graph the site is still worth reporting; what it
+    // hands back is not.
     ErrorFact Fact;
     Fact.PC = Instruction.PC;
-    if (auto Candidate = precedingPush(Low, I, kErrorSelectorSearchWindow);
-        Candidate && Candidate->getActiveBits() <= kSelectorBits)
-      Fact.Selector = static_cast<uint32_t>(Candidate->getZExtValue());
-    Fact.SuggestedName =
-        Fact.Selector
-            ? kRecoveredErrorPrefix.str() +
-                  wordHexDigits(llvm::APInt(kSelectorBits, *Fact.Selector),
-                                kSelectorHexDigits)
-            : kRecoveredRevertName.str();
+    Fact.SuggestedName = kRecoveredRevertName.str();
     High.Errors.push_back(std::move(Fact));
   }
 
@@ -658,6 +1032,23 @@ EVMHighIR recoverHighIR(const EVMLowIR &Low, const EVMMedIR &Med) {
       }
     }
   }
+
+  // Report the standards in table order rather than in the order the program
+  // happens to mention them, so two builds of one contract summarize alike.
+  std::vector<bool> Matched(knownStandardInfos().size(), false);
+  const auto Note = [&](const KnownSignatureInfo *Known) {
+    if (Known)
+      Matched[static_cast<size_t>(Known->Standard)] = true;
+  };
+  for (const RecoveredFunction &Function : High.Functions)
+    Note(Function.Known);
+  for (const EventFact &Event : High.Events)
+    Note(Event.Known);
+  for (const ErrorFact &Error : High.Errors)
+    Note(Error.Known);
+  for (const KnownStandardInfo &Standard : knownStandardInfos())
+    if (Matched[static_cast<size_t>(Standard.ID)])
+      High.Standards.push_back(Standard.ID);
 
   High.HasFallback = true;
   if (High.Regions.empty()) {
