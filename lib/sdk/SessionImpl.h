@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -65,6 +66,7 @@ struct Session {
   bool EVMStrict = true;
   sbf::Version SBFVersion = sbf::Version::Auto;
   bool SBFStrict = true;
+  std::optional<sbf::AnchorIdl> SBFIdl;
 
   Decoder Dec;
 
@@ -176,6 +178,7 @@ struct Session {
     Opts.EVMStrict = EVMStrict;
     Opts.SBFVersion = SBFVersion;
     Opts.SBFStrict = SBFStrict;
+    Opts.SBFIdl = SBFIdl ? &*SBFIdl : nullptr;
   }
 
   void resetFunctionsFromImage() {

@@ -1,0 +1,22 @@
+//===- SBFKnownAddressCategories.def - Address taxonomy ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_KNOWN_ADDRESS_CATEGORY(ID, SPELLING)
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_KNOWN_ADDRESS_CATEGORY
+#define SBF_KNOWN_ADDRESS_CATEGORY(ID, SPELLING)
+#endif
+
+SBF_KNOWN_ADDRESS_CATEGORY(NativeProgram, "native-program")
+SBF_KNOWN_ADDRESS_CATEGORY(Loader, "loader")
+SBF_KNOWN_ADDRESS_CATEGORY(Precompile, "precompile")
+SBF_KNOWN_ADDRESS_CATEGORY(Sysvar, "sysvar")
+SBF_KNOWN_ADDRESS_CATEGORY(SplProgram, "spl-program")
+SBF_KNOWN_ADDRESS_CATEGORY(EcosystemProgram, "ecosystem-program")
+
+#undef SBF_KNOWN_ADDRESS_CATEGORY

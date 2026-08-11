@@ -320,10 +320,10 @@ clang に加えて `rustc` が必要で、compiler skip は coverage 欠落で�
 `NeverDSBFISAConformanceTests`、`NeverDSBFUpstreamConformanceTests`、
 `NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests` と、metadata、
 loader、analyzer、semantic、emitter、integration target が含まれます。integrated
-profile は 13 binary の 107/107 case を通過します。
+profile は 13 binary の 124/124 case を通過します。
 
 sanitizer profile は `build-sbf-asan-ubsan` に分離して build します。12 core binary
-の 101/101 case が ASan/UBSan report なしで通過します。prebuilt package に必要な
+の 121/121 case が ASan/UBSan report なしで通過します。prebuilt package に必要な
 fork-only header がないため、integration は integrated LLVM build で実行します。
 
 ```bash
@@ -332,7 +332,8 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
-  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
+  NeverDSBFSolanaModelTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \

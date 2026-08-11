@@ -543,6 +543,27 @@ int neverd_sbf_set_version(neverd_session_t Sess, const char *Version) {
   return 1;
 }
 
+int neverd_sbf_set_idl(neverd_session_t Sess, const char *Json) {
+  auto *S = static_cast<Session *>(Sess);
+  if (!S)
+    return 0;
+  if (!Json || *Json == '\0') {
+    S->clearError();
+    S->SBFIdl.reset();
+    S->invalidatePipeline();
+    return 1;
+  }
+  llvm::Expected<sbf::AnchorIdl> Parsed = sbf::parseAnchorIdl(Json);
+  if (!Parsed) {
+    S->setError(llvm::toString(Parsed.takeError()));
+    return 0;
+  }
+  S->clearError();
+  S->SBFIdl = std::move(*Parsed);
+  S->invalidatePipeline();
+  return 1;
+}
+
 // ===--------------------------------------------------------------------===//
 // Inject hello world pass
 // ===--------------------------------------------------------------------===//

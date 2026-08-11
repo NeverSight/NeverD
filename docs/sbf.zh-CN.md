@@ -23,7 +23,8 @@ SBF ELF
 下的 `.def` 数据库；loader 与 backend 使用生成的类型化表，不重复编码或拼写。
 
 闭集表包括 `SBFVersions.def`、`SBFOpcodes.def`、`SBFRelocations.def`、
-`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、`SBFSyscalls.def` 与
+`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、`SBFSyscalls.def`、
+`SBFSyscallMemory.def`、`SBFCPIABI.def`、`SBFProgramInstructions.def` 与
 `SBFUpstreamSources.def`；
 单次使用的诊断文本和 LLVM block 名称仍留在局部，遵循 LLVM 自身的 `.def` 策略。
 
@@ -130,6 +131,72 @@ Agave master 存在的 SHA-512、BLS12-381 decompress/pairing 不会冒充集群
 剥离 `R_BPF_64_32` 的制品，NeverD 从 function symbol 与 target slot 重算官方
 function-registry key，以保留 internal-call 恢复。
 
+## Solana 程序恢复
+
+在 SBF 机器模型之上，NeverD 报告一个程序作为 Solana 程序意味着什么。每条记录下来的
+事实都带有产生它的证据；字节没有决定的内容保持未设置，而不是猜测。
+
+| 恢复内容 | 证据 |
+|----------|------|
+| read-only 数据中的 base58 地址 | 命中 `SBFKnownAddresses.def`，或代码物化出的常量 |
+| 程序自身声明的地址 | 针对 read-only 常量、长度恰为一个 key 的 `sol_memcmp_` |
+| Anchor instruction dispatch | 常量等于带 namespace 的 SHA-256 discriminator 的 64-bit 比较 |
+| CPI 目标 | 从 invoke 参数可达的 instruction 记录 |
+| 一次调用选中的操作 | `SBFProgramInstructions.def` 中已列出的 selector，或开头的 Anchor discriminator |
+| PDA 种子 | 从 derivation 参数可达的 seed descriptor 数组 |
+| account 字段读写 | 地址可证明落在 serialized input 内的 load/store |
+
+loader 只传一个参数，即 input region 起始处的 serialized input buffer，因此从该
+entry state 出发的常量传播给出的是有名字的 account 字段而非裸 offset。
+`SBFAccountLayout.def` 保存官方序列化布局，其固定字段会被检查为无空洞地铺满整个区间。
+
+Anchor 用 SHA-256 对 `<namespace>:<name>` 求哈希并保留前 8 字节得到 discriminator，
+这是单向的。因此 NeverD 只做候选确认：`SBFAnchorNames.def` 是部署程序中反复出现的
+名字词典，`--sbf-idl` 提供程序自身的 IDL 并优先。只有当其中至少一个解析出名字后，
+64-bit 比较才会被称作 discriminator。
+
+`SBFKnownAddresses.def` 记录协议与规范程序地址；每个条目必须恰好解码为 32 字节，
+测试会强制这一点。恢复还需要 syscall ABI：SBPFv3 把 read-only 数据映射到虚拟地址 0，
+于是长度参数与低位数据地址是同一个数值。因此 `SBFSyscalls.def` 记录哪些参数寄存器
+携带 VM 地址，只有这些会被跟踪。
+
+两个 invoke syscall 用两种不同结构描述同一条 instruction，`SBFCPIABI.def` 按选中它
+的 syscall 分别记录两套布局；用错布局不会报错，只会把第一个 account 当成被调用程序。
+`SBFProgramInstructions.def` 再按各程序自己公布的 selector 命名操作：system、stake、
+lookup-table 与 upgradeable-loader 用 bincode 变体序号，token 程序用首字节，并在与原
+token 程序共享的编号之上叠加 Token-2022 的扩展区间。未列出的 selector 按数字报告。
+
+### scratch 内存与 syscall 窗口
+
+程序几乎不会把常量直接交给 runtime：它在自己的 frame 或 heap 上拼出 seed 数组、
+序列化 instruction 及其 payload，然后只传一个指针。只读镜像会看到指针而看不到它指向
+的内容，因此恢复维护一份只有本程序能写的内存的字节级模型，上限为
+`kMaxModeledScratchBytes`。
+
+调用之后还剩下什么由两张表决定。`SBFSyscalls.def` 说明哪些参数寄存器携带 VM 地址；
+`SBFSyscallMemory.def` 说明 runtime 通过它们做什么，即一次读或写，附带 `Fixed`、
+`Counted` 或 `Opaque` 的范围。没有写窗口的 syscall 无法改动调用方的任何字节，所以
+`sol_log_` 之前证明的内容之后依然成立；由长度参数界定的写只作废该窗口；`Opaque` 写
+作废其基址及其之上的部分，因为缓冲区不会向下延伸，也不会跨越 VM region 边界。
+`SBFSyscalls.def` 的效应摘要与该窗口表会双向互校，任一方都无法单独漂移。
+
+`sol_memcpy_`、`sol_memmove_` 与 `sol_memset_` 会被跟进而不只是作废：目的地址、长度
+与来源都可证明时，目的字节随之已知。Anchor 程序的 payload 是拷贝到位而非直接映射的，
+正是这一步恢复出它调用了哪个操作。
+
+对本分析未描述的函数调用，则假定它会写到一切可达之处。被调用方运行在自己的 frame 上，
+因此当所有参数寄存器都可证明不指向 scratch 时模型得以保留，否则整体丢弃。
+`sol_invoke_signed_rust` 与 `sol_invoke_signed_c` 写的是 account data 而非调用方内存，
+所以同一个 block 内拼出的两次调用都可读。
+
+该模型是函数内 CFG 上的前向 must 分析：只有当到达某 block 的每条路径都写入相同的值，
+该字节才会存活到这个 block。call 边不跟进，因为被调用方不继承调用方的 frame。
+block 数超过 `kMaxScratchFlowBlocks` 的程序保留逐块恢复，只失去跨 block 的事实。
+
+`SBFLints.def` 归类整程序观察：缺失 signer 或 owner 检查、非常量的调用目标、已废弃
+或受 feature gate 约束的 syscall，以及 SIMD-0500 将不再接受部署的 SBPF 版本。每项都
+带 severity 与 confidence，且 lint 从不改变已解码的语义。这一层不做任何网络访问。
+
 ## 生成 LLVM 的 runtime 契约
 
 提升后的 LLVM 绝不把 VM address 当 host pointer。受检查的 load/store/syscall 声明
@@ -207,8 +274,8 @@ neverd_session_destroy(session);
 | raw-byte oracle | 直接执行验证后的 instruction bytes，不读取 MedIR，因此 MedIR 构造/损坏与 backend lowering 缺陷不会自动一致；显式上游结果与 semantic unit test 独立约束共享的类型化语义模型 |
 | LLVM ORC 差分 | 对 versioned arithmetic、call/CALLX、memory、syscall 与 runtime fault 比较 return/fault、可写 memory 和 syscall trace |
 | C/Rust 执行差分 | 生成 C11 以 `-Werror`、stable Rust 以 `-D warnings` 编译，并比较同一可观察状态，包含官方 relocated-data ELF |
-| SBF 集成聚合 | `check-neverd-sbf` 在 13 个测试二进制中发现并通过 107/107 个 case，其中包含 3 个 public C API integration case |
-| ASan + UBSan | 12 个核心二进制的 101/101 个 case 在 fail-fast sanitizer 配置下通过；prebuilt LLVM package 缺少 public integration 所需的 NeverD fork-only header，因此该 integration binary 在 integrated build 中链接并运行 |
+| SBF 集成聚合 | `check-neverd-sbf` 在 13 个测试二进制中发现并通过 124/124 个 case，其中包含 3 个 public C API integration case |
+| ASan + UBSan | 12 个核心二进制的 121/121 个 case 在 fail-fast sanitizer 配置下通过；prebuilt LLVM package 缺少 public integration 所需的 NeverD fork-only header，因此该 integration binary 在 integrated build 中链接并运行 |
 
 backend 的执行契约对外暴露 `r0` return value、fault status、VM memory effect 与
 syscall call/result；其他最终 register 属于内部实现细节，不宣称为外部 ABI。

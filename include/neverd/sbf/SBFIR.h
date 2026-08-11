@@ -13,6 +13,7 @@
 #include "neverd/sbf/SBFConstants.h"
 #include "neverd/sbf/SBFMetadata.h"
 #include "neverd/sbf/Semantics.h"
+#include "neverd/sbf/SolanaModel.h"
 #include "neverd/sbf/Syscalls.h"
 
 #include <array>
@@ -184,6 +185,8 @@ struct HighIR {
   std::vector<Region> Regions;
   bool UsesCPI = false;
   bool UsesAccounts = false;
+  /// What the program means as a Solana program rather than as SBF bytecode.
+  SolanaModel Solana;
 };
 
 struct SBFProgram {

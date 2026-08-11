@@ -99,6 +99,99 @@ verarbeitet. Text-Relocations inklusive beider LDDW-Hälften und offiziellem
 Murmur3-CALL-Key gelten vor dem Decode. Bei bereits angewandtem/gestripptem
 `R_BPF_64_32` wird der Registry-Key aus Symbolen und Target Slots rekonstruiert.
 
+## Solana-Programmrekonstruktion
+
+Über dem SBF-Maschinenmodell berichtet NeverD, was ein Programm als
+Solana-Programm bedeutet. Jede festgehaltene Aussage trägt den Beleg, der sie
+erzeugt hat; was die Bytes nicht entscheiden, bleibt offen statt geraten.
+
+| Rekonstruiert | Beleg |
+|---------------|-------|
+| Base58-Adressen in Read-only-Daten | Treffer in `SBFKnownAddresses.def` oder eine vom Code erzeugte Konstante |
+| Die deklarierte eigene Adresse | ein `sol_memcmp_` über genau eine Schlüssellänge gegen eine Read-only-Konstante |
+| Anchor-Instruktionsdispatch | ein 64-Bit-Vergleich, dessen Konstante einem SHA-256-Discriminator entspricht |
+| CPI-Ziele | der vom Invoke-Argument aus erreichbare Instruction-Datensatz |
+| Die von einem Aufruf gewählte Operation | ein in `SBFProgramInstructions.def` geführter Selektor oder ein führender Anchor-Discriminator |
+| Seeds einer abgeleiteten Adresse | das vom Derivations-Argument aus erreichbare Seed-Deskriptor-Array |
+| Zugriffe auf Account-Felder | ein Load oder Store, dessen Adresse nachweislich im serialisierten Input liegt |
+
+Der Loader übergibt ein Argument, den serialisierten Input-Puffer an der Basis
+der Input-Region. Konstantenpropagation ab diesem Eintrittszustand liefert daher
+benannte Account-Felder statt roher Offsets. `SBFAccountLayout.def` hält die
+offizielle Serialisierung; die festen Felder werden darauf geprüft, ihren Bereich
+lückenlos zu überdecken.
+
+Anchor bildet einen Discriminator, indem es `<namespace>:<name>` mit SHA-256
+hasht und die ersten acht Bytes behält, was nicht umkehrbar ist. NeverD bestätigt
+deshalb nur Kandidaten: `SBFAnchorNames.def` ist ein Wörterbuch wiederkehrender
+Namen, und `--sbf-idl` liefert das eigene IDL des Programms, das Vorrang hat. Ein
+64-Bit-Vergleich heißt erst dann Discriminator, wenn mindestens einer davon einen
+Namen auflöst.
+
+`SBFKnownAddresses.def` verzeichnet Protokoll- und kanonische Programmadressen.
+Jeder Eintrag muss zu genau 32 Byte dekodieren, was die Testsuite erzwingt. Die
+Rekonstruktion braucht zudem die Syscall-ABI: SBPFv3 bildet Read-only-Daten auf
+Adresse null ab, sodass ein Längenargument und eine niedrige Datenadresse
+dieselbe Zahl sind. `SBFSyscalls.def` hält daher fest, welche Argumentregister
+eine VM-Adresse führen; nur diesen wird gefolgt.
+
+Die beiden Invoke-Syscalls beschreiben dieselbe Instruction mit zwei
+verschiedenen Strukturen, und `SBFCPIABI.def` führt beide Layouts, verschlüsselt
+nach dem Syscall, der sie auswählt. Das falsche Layout schlägt nicht fehl, es
+meldet stillschweigend den ersten Account als aufgerufenes Programm.
+`SBFProgramInstructions.def` benennt danach die angeforderte Operation anhand des
+Selektors, den das jeweilige Interface veröffentlicht: ein Bincode-Variantenindex
+für System-, Stake-, Lookup-Table- und Upgradeable-Loader-Programm, ein
+führendes Byte für die Token-Programme, samt Token-2022-Erweiterungsbereich über
+der mit dem ursprünglichen Token-Programm geteilten Nummerierung. Ein nicht
+geführter Selektor wird als Zahl gemeldet.
+
+### Scratch-Speicher und Syscall-Fenster
+
+Ein Programm übergibt der Runtime fast nie eine Konstante. Es baut ein
+Seed-Array, eine serialisierte Instruction und deren Payload im eigenen Frame
+oder auf dem Heap zusammen und übergibt einen Zeiger. Nur das geladene Image zu
+lesen zeigte den Zeiger und nichts von dem, worauf er verweist; die
+Rekonstruktion führt deshalb ein byte-genaues Modell des Speichers, den nur
+dieses Programm schreiben kann, begrenzt durch `kMaxModeledScratchBytes`.
+
+Zwei Fakten entscheiden, was einen Aufruf überlebt. `SBFSyscalls.def` sagt,
+welche Argumentregister eine VM-Adresse führen; `SBFSyscallMemory.def` sagt, was
+die Runtime durch sie tut, als Lesen oder Schreiben mit einer Ausdehnung
+`Fixed`, `Counted` oder `Opaque`. Ein Syscall ohne Schreibfenster kann kein Byte
+des Aufrufers ändern, also gilt alles vor `sol_log_` Bewiesene auch danach. Ein
+durch ein Längenargument begrenztes Schreiben verwirft genau dieses Fenster. Ein
+`Opaque`-Schreiben verwirft seine Basisadresse und alles darüber, denn ein Puffer
+reicht nie unter seinen Anfang und nie über eine VM-Regionsgrenze. Die
+Effektzusammenfassung in `SBFSyscalls.def` und die Fenstertabelle werden in
+beiden Richtungen gegeneinander geprüft, sodass keine allein abdriften kann.
+
+`sol_memcpy_`, `sol_memmove_` und `sol_memset_` werden verfolgt statt nur
+verworfen: mit bewiesenem Ziel, bewiesener Länge und bewiesener Quelle sind die
+Zielbytes bekannt. Genau das rekonstruiert die Operation, die ein
+Anchor-Programm aufruft, denn dessen Payload wird kopiert und nicht gemappt.
+
+Ein Aufruf einer Funktion, die diese Analyse nicht beschrieben hat, gilt als
+Schreiber auf alles Erreichbare. Ein Aufgerufener läuft in einem eigenen Frame,
+also lässt ein Aufruf, dessen Argumentregister nachweislich keinen
+Scratch-Speicher adressieren, das Modell intakt; alles andere verwirft es.
+`sol_invoke_signed_rust` und `sol_invoke_signed_c` schreiben Account-Daten statt
+Aufruferspeicher, sodass zwei in einem Block zusammengebaute Invocations beide
+lesbar bleiben.
+
+Das Modell ist eine Vorwärts-Must-Analyse über den funktionsinternen CFG: Ein
+Byte überlebt in einen Block nur, wenn jeder Pfad dorthin denselben Wert
+geschrieben hat. Call-Kanten werden nicht verfolgt, weil ein Aufgerufener nichts
+vom Frame seines Aufrufers erbt. Programme mit mehr als
+`kMaxScratchFlowBlocks` Blöcken behalten die blockweise Rekonstruktion und
+verlieren nur die Fakten über Blockgrenzen hinweg.
+
+`SBFLints.def` katalogisiert Beobachtungen über das ganze Programm: fehlende
+Signer- oder Owner-Prüfung, ein nicht konstantes Invoke-Ziel, ein veralteter oder
+feature-gegateter Syscall und eine SBPF-Version, die SIMD-0500 zur Deployment
+nicht mehr annimmt. Jede trägt Schweregrad und Konfidenz, und kein Lint ändert
+die dekodierte Semantik. Nichts in dieser Schicht kontaktiert das Netzwerk.
+
 ## Vertrag der erzeugten LLVM-Runtime
 
 LLVM behandelt VM-Adressen nie als Host-Pointer. Geprüfte Load/Store/Syscall-
@@ -180,7 +273,8 @@ nicht von der Loader-Semantik abweichen.
 
 Geschlossene Datensätze liegen in `SBFVersions.def`, `SBFOpcodes.def`,
 `SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
-`SBFSyscalls.def` und
+`SBFSyscalls.def`, `SBFSyscallMemory.def`, `SBFCPIABI.def`,
+`SBFProgramInstructions.def` und
 `SBFUpstreamSources.def`. Einmalige Diagnosen und LLVM-Blocknamen bleiben lokal,
 entsprechend der tatsächlichen LLVM-Konvention.
 
@@ -200,8 +294,8 @@ des Images angewandt.
 | Offizielles ELF-Manifest | 20/20 Artefakte aus `sbpf/tests/elfs` |
 | ISA-Matrix | alle 256 Encodings für v0-v4, also 1,280 Zellen, plus Verifier-Grenzen |
 | Ausführungsdifferenz | Raw-Byte-Oracle gegen LLVM ORC, C11 und stabiles Rust samt Memory/Fault/Syscall-Trace |
-| Integriertes Aggregat | 107/107 Fälle in 13 Test-Binaries |
-| ASan + UBSan | 101/101 Core-Fälle in 12 Binaries ohne Report |
+| Integriertes Aggregat | 124/124 Fälle in 13 Test-Binaries |
+| ASan + UBSan | 121/121 Core-Fälle in 12 Binaries ohne Report |
 
 Die Prüfung ist auf Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` und Agave

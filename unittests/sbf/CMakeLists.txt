@@ -80,6 +80,20 @@ target_include_directories(NeverDSBFMetadataTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+add_neverd_unittest(NeverDSBFSolanaModelTests
+  SBFSolanaModelTests.cpp
+
+  LINK_COMPONENTS
+  Loader
+  Support
+  SBF
+)
+
+target_include_directories(NeverDSBFSolanaModelTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
 add_neverd_unittest(NeverDSBFAnalyzerTests
   SBFAnalyzerTests.cpp
 

@@ -22,6 +22,9 @@ struct AnalyzeOptions {
   bool Strict = true;
   bool RecoverHighIR = true;
   SBFVMConfig VMConfig;
+  /// An Anchor IDL supplied by the operator. Its names take precedence over the
+  /// built-in dictionary when recovering instruction dispatch.
+  const AnchorIdl *Idl = nullptr;
 };
 
 llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,

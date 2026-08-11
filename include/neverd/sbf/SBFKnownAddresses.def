@@ -1,0 +1,138 @@
+//===- SBFKnownAddresses.def - Well-known Solana addresses ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_KNOWN_ADDRESS(ID, NAME, ADDRESS, CATEGORY)
+//
+// ADDRESS is the canonical base58 spelling. Every entry must decode to exactly
+// kPubkeyByteCount bytes; SBFSolanaModelTests enforces that, so a mistyped
+// address cannot reach a report. Names use the spelling a Solana developer
+// would write in source, because they appear directly in recovered output.
+//
+// Only addresses that are fixed by the protocol or by a widely deployed
+// canonical program belong here. This is a recognition aid, never an authority:
+// a match annotates a constant, it never changes decoded semantics.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_KNOWN_ADDRESS
+#define SBF_KNOWN_ADDRESS(ID, NAME, ADDRESS, CATEGORY)
+#endif
+
+SBF_KNOWN_ADDRESS(SystemProgram, "system_program",
+                  "11111111111111111111111111111111", NativeProgram)
+SBF_KNOWN_ADDRESS(VoteProgram, "vote_program",
+                  "Vote111111111111111111111111111111111111111", NativeProgram)
+SBF_KNOWN_ADDRESS(StakeProgram, "stake_program",
+                  "Stake11111111111111111111111111111111111111", NativeProgram)
+SBF_KNOWN_ADDRESS(ConfigProgram, "config_program",
+                  "Config1111111111111111111111111111111111111", NativeProgram)
+SBF_KNOWN_ADDRESS(ComputeBudgetProgram, "compute_budget_program",
+                  "ComputeBudget111111111111111111111111111111", NativeProgram)
+SBF_KNOWN_ADDRESS(AddressLookupTableProgram, "address_lookup_table_program",
+                  "AddressLookupTab1e1111111111111111111111111", NativeProgram)
+
+SBF_KNOWN_ADDRESS(FeatureProgram, "feature_program",
+                  "Feature111111111111111111111111111111111111",
+                  NativeProgram)
+SBF_KNOWN_ADDRESS(Incinerator, "incinerator",
+                  "1nc1nerator11111111111111111111111111111111",
+                  NativeProgram)
+
+SBF_KNOWN_ADDRESS(NativeLoader, "native_loader",
+                  "NativeLoader1111111111111111111111111111111", Loader)
+SBF_KNOWN_ADDRESS(BpfLoaderDeprecated, "bpf_loader_deprecated",
+                  "BPFLoader1111111111111111111111111111111111", Loader)
+SBF_KNOWN_ADDRESS(BpfLoader, "bpf_loader",
+                  "BPFLoader2111111111111111111111111111111111", Loader)
+SBF_KNOWN_ADDRESS(BpfLoaderUpgradeable, "bpf_loader_upgradeable",
+                  "BPFLoaderUpgradeab1e11111111111111111111111", Loader)
+SBF_KNOWN_ADDRESS(LoaderV4, "loader_v4",
+                  "LoaderV411111111111111111111111111111111111", Loader)
+
+SBF_KNOWN_ADDRESS(Ed25519Program, "ed25519_program",
+                  "Ed25519SigVerify111111111111111111111111111", Precompile)
+SBF_KNOWN_ADDRESS(Secp256k1Program, "secp256k1_program",
+                  "KeccakSecp256k11111111111111111111111111111", Precompile)
+SBF_KNOWN_ADDRESS(Secp256r1Program, "secp256r1_program",
+                  "Secp256r1SigVerify1111111111111111111111111", Precompile)
+SBF_KNOWN_ADDRESS(ZkElGamalProofProgram, "zk_elgamal_proof_program",
+                  "ZkE1Gama1Proof11111111111111111111111111111", Precompile)
+
+SBF_KNOWN_ADDRESS(SysvarClock, "sysvar::clock",
+                  "SysvarC1ock11111111111111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarEpochSchedule, "sysvar::epoch_schedule",
+                  "SysvarEpochSchedu1e111111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarEpochRewards, "sysvar::epoch_rewards",
+                  "SysvarEpochRewards1111111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarFees, "sysvar::fees",
+                  "SysvarFees111111111111111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarInstructions, "sysvar::instructions",
+                  "Sysvar1nstructions1111111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarLastRestartSlot, "sysvar::last_restart_slot",
+                  "SysvarLastRestartS1ot1111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarRecentBlockhashes, "sysvar::recent_blockhashes",
+                  "SysvarRecentB1ockHashes11111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarRent, "sysvar::rent",
+                  "SysvarRent111111111111111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarSlotHashes, "sysvar::slot_hashes",
+                  "SysvarS1otHashes111111111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarSlotHistory, "sysvar::slot_history",
+                  "SysvarS1otHistory11111111111111111111111111", Sysvar)
+SBF_KNOWN_ADDRESS(SysvarStakeHistory, "sysvar::stake_history",
+                  "SysvarStakeHistory1111111111111111111111111", Sysvar)
+
+SBF_KNOWN_ADDRESS(SplToken, "spl_token",
+                  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", SplProgram)
+SBF_KNOWN_ADDRESS(SplToken2022, "spl_token_2022",
+                  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", SplProgram)
+SBF_KNOWN_ADDRESS(SplAssociatedTokenAccount, "spl_associated_token_account",
+                  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", SplProgram)
+SBF_KNOWN_ADDRESS(SplMemoLegacy, "spl_memo_v1",
+                  "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo", SplProgram)
+SBF_KNOWN_ADDRESS(SplMemo, "spl_memo",
+                  "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr", SplProgram)
+SBF_KNOWN_ADDRESS(SplNameService, "spl_name_service",
+                  "namesLPneVptA9Z5rqUDD9tMTWEJwofgaYwp8cawRkX", SplProgram)
+SBF_KNOWN_ADDRESS(SplStakePool, "spl_stake_pool",
+                  "SPoo1Ku8WFXoNDMHPsrGSTSG1Y47rzgn41SLUNakuHy", SplProgram)
+SBF_KNOWN_ADDRESS(SplAccountCompression, "spl_account_compression",
+                  "cmtDvXumGCrqC1Age74AVPhSRVXJMd8PJS91L8KbNCK", SplProgram)
+SBF_KNOWN_ADDRESS(SplNoop, "spl_noop",
+                  "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV", SplProgram)
+
+SBF_KNOWN_ADDRESS(MplTokenMetadata, "mpl_token_metadata",
+                  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+                  EcosystemProgram)
+SBF_KNOWN_ADDRESS(MplBubblegum, "mpl_bubblegum",
+                  "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+                  EcosystemProgram)
+SBF_KNOWN_ADDRESS(MplTokenAuthRules, "mpl_token_auth_rules",
+                  "auth9SigNpDKz4sJJ1DfCTuZrZNSAgh9sFD3rboVmgg",
+                  EcosystemProgram)
+
+// The exchange venues a program most often invokes. These are deployments
+// rather than protocol constants, so they are listed only where the owning
+// project publishes the address as canonical.
+SBF_KNOWN_ADDRESS(JupiterAggregatorV6, "jupiter_aggregator_v6",
+                  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+                  EcosystemProgram)
+SBF_KNOWN_ADDRESS(RaydiumAmmV4, "raydium_amm_v4",
+                  "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+                  EcosystemProgram)
+SBF_KNOWN_ADDRESS(RaydiumCpmm, "raydium_cpmm",
+                  "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+                  EcosystemProgram)
+SBF_KNOWN_ADDRESS(OrcaWhirlpool, "orca_whirlpool",
+                  "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+                  EcosystemProgram)
+SBF_KNOWN_ADDRESS(MeteoraDlmm, "meteora_dlmm",
+                  "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+                  EcosystemProgram)
+SBF_KNOWN_ADDRESS(PumpFun, "pump_fun",
+                  "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+                  EcosystemProgram)
+
+#undef SBF_KNOWN_ADDRESS

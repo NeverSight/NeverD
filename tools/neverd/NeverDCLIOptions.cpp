@@ -256,6 +256,11 @@ cl::opt<bool> SBFRelaxed(
     cl::desc("Keep invalid or version-inactive SBF instructions as fault nodes"),
     cl::sub(LiftCmd), cl::sub(DecompileCmd));
 
+cl::opt<std::string> SBFIdl(
+    "sbf-idl",
+    cl::desc("Anchor IDL JSON file naming this program's instructions"),
+    cl::value_desc("path"), cl::sub(LiftCmd), cl::sub(DecompileCmd));
+
 //===----------------------------------------------------------------------===//
 // Strings-specific options
 //===----------------------------------------------------------------------===//

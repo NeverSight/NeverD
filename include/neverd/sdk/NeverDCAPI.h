@@ -459,6 +459,11 @@ NEVERD_API int neverd_evm_set_hardfork(neverd_session_t Sess,
 NEVERD_API void neverd_sbf_set_strict(neverd_session_t Sess, int Strict);
 NEVERD_API int neverd_sbf_set_version(neverd_session_t Sess,
                                       const char *Version);
+/// Supply an Anchor IDL document, whose instruction, account, and event names
+/// take precedence over the built-in name dictionary when recovering dispatch.
+/// Passing NULL or an empty string clears any previously supplied document.
+/// Returns 0 and sets the session error when the document cannot be parsed.
+NEVERD_API int neverd_sbf_set_idl(neverd_session_t Sess, const char *Json);
 NEVERD_API int neverd_inject_hello(neverd_session_t Sess);
 NEVERD_API const char *neverd_disasm_text(neverd_session_t Sess,
                                           const char *FuncNameOrAddr,

@@ -1,0 +1,48 @@
+//===- SBFAccountLayout.def - Entrypoint input serialization ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_INPUT_FIELD(ID, NAME, OFFSET, SIZE)
+// SBF_ACCOUNT_FIELD(ID, NAME, OFFSET, SIZE)
+//
+// The Solana loader hands a program one pointer, to a serialized buffer mapped
+// at kInputStart. SBF_INPUT_FIELD describes the buffer header, and
+// SBF_ACCOUNT_FIELD describes the fixed part of one account entry, relative to
+// that entry's start.
+//
+// Offsets are protocol data, not layout choices: they match the aligned
+// serialization the BPF loaders produce. Each account entry's variable-length
+// data follows the fixed part, so only the first account sits at an offset that
+// is known without executing the program. SBFSolanaModelTests asserts that the
+// fixed fields tile their span without a gap or an overlap.
+//
+// A SIZE of zero marks a field whose length the serialized data itself
+// determines.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_INPUT_FIELD
+#define SBF_INPUT_FIELD(ID, NAME, OFFSET, SIZE)
+#endif
+
+#ifndef SBF_ACCOUNT_FIELD
+#define SBF_ACCOUNT_FIELD(ID, NAME, OFFSET, SIZE)
+#endif
+
+SBF_INPUT_FIELD(AccountCount, "account_count", 0, 8)
+
+SBF_ACCOUNT_FIELD(DuplicateIndex, "duplicate_index", 0, 1)
+SBF_ACCOUNT_FIELD(IsSigner, "is_signer", 1, 1)
+SBF_ACCOUNT_FIELD(IsWritable, "is_writable", 2, 1)
+SBF_ACCOUNT_FIELD(Executable, "executable", 3, 1)
+SBF_ACCOUNT_FIELD(OriginalDataLen, "original_data_len", 4, 4)
+SBF_ACCOUNT_FIELD(Key, "key", 8, 32)
+SBF_ACCOUNT_FIELD(Owner, "owner", 40, 32)
+SBF_ACCOUNT_FIELD(Lamports, "lamports", 72, 8)
+SBF_ACCOUNT_FIELD(DataLen, "data_len", 80, 8)
+SBF_ACCOUNT_FIELD(Data, "data", 88, 0)
+
+#undef SBF_ACCOUNT_FIELD
+#undef SBF_INPUT_FIELD

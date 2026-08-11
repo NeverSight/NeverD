@@ -102,6 +102,73 @@ instruction、compute-unit query 與 epoch rewards 等 sysvar。legacy relocatio
 若 artifact 已套用並 strip `R_BPF_64_32`，NeverD 由 function symbol 與 target slot
 重算官方 function-registry key，保留 internal-call recovery。
 
+## Solana 程式復原
+
+在 SBF 機器模型之上，NeverD 報告一個程式作為 Solana 程式的意義。每筆記錄下來的
+事實都附帶產生它的證據；位元組沒有決定的內容保持未設定，而不是猜測。
+
+| 復原內容 | 證據 |
+|----------|------|
+| read-only 資料中的 base58 位址 | 命中 `SBFKnownAddresses.def`，或程式碼物化出的常數 |
+| 程式自身宣告的位址 | 針對 read-only 常數、長度恰為一個 key 的 `sol_memcmp_` |
+| Anchor instruction dispatch | 常數等於帶 namespace 的 SHA-256 discriminator 的 64-bit 比較 |
+| CPI 目標 | 從 invoke 參數可達的 instruction 紀錄 |
+| 一次呼叫選中的操作 | `SBFProgramInstructions.def` 中已列出的 selector，或開頭的 Anchor discriminator |
+| PDA 種子 | 從 derivation 參數可達的 seed descriptor 陣列 |
+| account 欄位讀寫 | 位址可證明落在 serialized input 內的 load/store |
+
+loader 只傳一個參數，即 input region 起始處的 serialized input buffer，因此從該
+entry state 出發的常數傳播會給出具名的 account 欄位而非裸 offset。
+`SBFAccountLayout.def` 保存官方序列化布局，其固定欄位會被檢查為無空隙地鋪滿整個區間。
+
+Anchor 以 SHA-256 對 `<namespace>:<name>` 求雜湊並保留前 8 位元組得到
+discriminator，這是單向的。因此 NeverD 只做候選確認：`SBFAnchorNames.def` 是部署
+程式中反覆出現的名稱字典，`--sbf-idl` 提供程式自身的 IDL 並優先。只有當其中至少一個
+解析出名稱後，64-bit 比較才會被稱作 discriminator。
+
+`SBFKnownAddresses.def` 記錄協定與正規程式位址；每個條目必須恰好解碼為 32 位元組，
+測試會強制這一點。復原還需要 syscall ABI：SBPFv3 把 read-only 資料映射到虛擬位址 0，
+於是長度參數與低位資料位址是同一個數值。因此 `SBFSyscalls.def` 記錄哪些參數暫存器
+攜帶 VM 位址，只有這些會被追蹤。
+
+兩個 invoke syscall 用兩種不同結構描述同一條 instruction，`SBFCPIABI.def` 依選中它
+的 syscall 分別記錄兩套配置；用錯配置不會報錯，只會把第一個 account 當成被呼叫程式。
+`SBFProgramInstructions.def` 再依各程式自己公布的 selector 命名操作：system、stake、
+lookup-table 與 upgradeable-loader 用 bincode 變體序號，token 程式用首位元組，並在與
+原 token 程式共用的編號之上疊加 Token-2022 的擴充區間。未列出的 selector 以數字回報。
+
+### scratch 記憶體與 syscall 視窗
+
+程式幾乎不會把常數直接交給 runtime：它在自己的 frame 或 heap 上組出 seed 陣列、
+序列化 instruction 及其 payload，然後只傳一個指標。只讀映像只會看到指標而看不到它指
+向的內容，因此復原維護一份只有本程式能寫的記憶體的位元組級模型，上限為
+`kMaxModeledScratchBytes`。
+
+呼叫之後還剩下什麼由兩張表決定。`SBFSyscalls.def` 說明哪些參數暫存器攜帶 VM 位址；
+`SBFSyscallMemory.def` 說明 runtime 透過它們做什麼，即一次讀或寫，附帶 `Fixed`、
+`Counted` 或 `Opaque` 的範圍。沒有寫視窗的 syscall 無法改動呼叫方的任何位元組，所以
+`sol_log_` 之前證明的內容之後依然成立；由長度參數界定的寫只作廢該視窗；`Opaque` 寫
+作廢其基底位址及其之上的部分，因為緩衝區不會向下延伸，也不會跨越 VM region 邊界。
+`SBFSyscalls.def` 的效應摘要與該視窗表會雙向互校，任一方都無法單獨漂移。
+
+`sol_memcpy_`、`sol_memmove_` 與 `sol_memset_` 會被跟進而不只是作廢：目的位址、長度
+與來源都可證明時，目的位元組隨之已知。Anchor 程式的 payload 是複製到位而非直接映射，
+正是這一步復原出它呼叫了哪個操作。
+
+對本分析未描述的函式呼叫，則假定它會寫到一切可達之處。被呼叫方執行在自己的 frame 上，
+因此當所有參數暫存器都可證明不指向 scratch 時模型得以保留，否則整體丟棄。
+`sol_invoke_signed_rust` 與 `sol_invoke_signed_c` 寫的是 account data 而非呼叫方記憶
+體，所以同一個 block 內組出的兩次呼叫都可讀。
+
+該模型是函式內 CFG 上的前向 must 分析：只有當到達某 block 的每條路徑都寫入相同的值，
+該位元組才會存活到這個 block。call 邊不跟進，因為被呼叫方不繼承呼叫方的 frame。
+block 數超過 `kMaxScratchFlowBlocks` 的程式保留逐塊復原，只失去跨 block 的事實。
+
+`SBFLints.def` 歸類整個程式的觀察：缺少 signer 或 owner 檢查、非常數的呼叫目標、已
+棄用或受 feature gate 限制的 syscall，以及 SIMD-0500 將不再接受部署的 SBPF 版本。
+每項都帶 severity 與 confidence，且 lint 從不改變已解碼的語義。這一層不做任何網路
+存取。
+
 ## 生成 LLVM runtime contract
 
 提升 LLVM 絕不把 VM address 視為 host pointer。checked load/store/syscall declaration
@@ -183,7 +250,8 @@ interpreter、string recovery 以及 LLVM/C/Rust backend 共用的事實來源�
 可能與 loader semantics 漂移的獨立 text/rodata copy。
 
 封閉資料表放在 `SBFVersions.def`、`SBFOpcodes.def`、`SBFRelocations.def`、
-`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、`SBFSyscalls.def` 與
+`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、`SBFSyscalls.def`、
+`SBFSyscallMemory.def`、`SBFCPIABI.def`、`SBFProgramInstructions.def` 與
 `SBFUpstreamSources.def`。
 只使用一次的診斷文字與 LLVM block name 仍留在 local，符合 LLVM 自身慣例。
 
@@ -200,8 +268,8 @@ legacy v0-v2 合併 `.text`、`.rodata`、`.data.rel.ro` 與 `.eh_frame`，並�
 | 官方 ELF manifest | `sbpf/tests/elfs` 的 20/20 個 artifact |
 | ISA matrix | v0-v4 各版本全部 256 個 encoding，共 1,280 個 cell，另含 verifier boundary |
 | differential execution | raw-byte oracle 對 LLVM ORC、C11、stable Rust，比較 memory/fault/syscall trace |
-| integrated aggregate | 13 個 test binary 的 107/107 個 case |
-| ASan + UBSan | 12 個 core binary 的 101/101 個 case，無 report |
+| integrated aggregate | 13 個 test binary 的 124/124 個 case |
+| ASan + UBSan | 12 個 core binary 的 121/121 個 case，無 report |
 
 稽核固定於 Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` 與 Agave

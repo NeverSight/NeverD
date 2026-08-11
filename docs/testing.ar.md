@@ -315,9 +315,9 @@ differential إلى `rustc` بالإضافة إلى clang؛ تخطي compiler ي
 `NeverDSBFMalformedCorpusTests` و`NeverDSBFISAConformanceTests` و
 `NeverDSBFUpstreamConformanceTests` و`NeverDSBFLLVMDifferentialTests` و
 `NeverDSBFSourceDifferentialTests` مع targets metadata/loader/analyzer/semantic/
-emitter/integration. يمر profile المتكامل 107/107 حالة في 13 binaries.
+emitter/integration. يمر profile المتكامل 124/124 حالة في 13 binaries.
 
-يجب بناء profile sanitizer في `build-sbf-asan-ubsan` منفصلًا. يمر 101/101 حالة
+يجب بناء profile sanitizer في `build-sbf-asan-ubsan` منفصلًا. يمر 121/121 حالة
 core في 12 binaries بلا ASan أو UBSan report؛ ويظل integration في build LLVM
 المتكامل لأن package الجاهزة لا تحتوي fork-only header المطلوب.
 
@@ -327,7 +327,8 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
-  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
+  NeverDSBFSolanaModelTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \

@@ -13,6 +13,7 @@ SBF ELF
   → lossless LowIR + CFG
   → normalized MedIR + register facts
   → recovered functions, syscalls, CPI/account observations, and regions
+  → Solana program facts: program id, Anchor dispatch, addresses, lints
        ├─ verified LLVM IR
        ├─ portable C11
        └─ safe stable Rust
@@ -26,9 +27,11 @@ instead of duplicating encodings or spellings.
 
 The closed tables include `SBFVersions.def`, `SBFOpcodes.def`,
 `SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
-`SBFSyscalls.def`, and
-`SBFUpstreamSources.def`; ordinary one-use diagnostics and LLVM block names
-remain local, matching LLVM's own `.def` policy.
+`SBFSyscalls.def`, `SBFSyscallMemory.def`, `SBFCPIABI.def`,
+`SBFProgramInstructions.def`, `SBFKnownAddresses.def`,
+`SBFAnchorNamespaces.def`, `SBFAnchorNames.def`, `SBFAccountLayout.def`,
+`SBFLints.def`, and `SBFUpstreamSources.def`; ordinary one-use diagnostics and
+LLVM block names remain local, matching LLVM's own `.def` policy.
 
 `SBFProtocolLimits.def` records the historical 65,536-instruction value and
 the current 10 MiB account-data ceiling; NeverD derives its conservative
@@ -92,10 +95,15 @@ relocation behavior required by deployed function-pointer/data fixtures.
 neverd info program.so
 neverd headers --json program.so
 
-# Inspect every analysis stage.
+# Inspect every analysis stage. The high dump ends with the recovered Solana
+# program facts: addresses, Anchor dispatch, CPI targets, account fields, lints.
 neverd lift --dump-low program.so
 neverd lift --dump-med program.so
 neverd lift --dump-high program.so
+
+# Name instruction handlers from the program's own IDL instead of the built-in
+# dictionary. The file is read locally; NeverD never fetches it.
+neverd lift --dump-high --sbf-idl=program.json program.so
 
 # Verified LLVM IR.
 neverd lift -o program.ll program.so
@@ -127,8 +135,107 @@ HighIR recovers entry/internal functions, direct call edges, official syscall
 names, strings, natural loops, reducible conditionals, and conservative
 Solana-specific observations. Calls to `sol_invoke_signed_rust` or
 `sol_invoke_signed_c` are marked as CPI. Memory based on the input register is
-marked as account/input access. This layer deliberately does not invent Anchor
-types or account layouts without an IDL.
+marked as account/input access.
+
+## Solana program recovery
+
+Above the SBF machine model, NeverD reports what a program means as a Solana
+program. Every recorded fact carries the evidence that produced it, and anything
+the bytes do not decide is left unset rather than guessed.
+
+| Recovered | Evidence |
+|-----------|----------|
+| Base58 addresses in read-only data | `SBFKnownAddresses.def` match, or a constant the code materializes |
+| The program's own declared address | a `sol_memcmp_` of exactly `kPubkeyByteCount` bytes against a read-only constant |
+| Anchor instruction dispatch | a 64-bit comparison whose constant equals a namespaced SHA-256 discriminator |
+| Cross-program invocation targets | the instruction record reachable from the invoke argument |
+| The operation an invocation selects | a tabulated selector in `SBFProgramInstructions.def`, or a leading Anchor discriminator |
+| Program-derived address seeds | the seed descriptor array reachable from the derivation argument |
+| Account field reads and writes | a load or store whose address provably lands in the serialized input |
+
+The loader passes one argument, the serialized input buffer at the base of the
+input region, so constant propagation from that entry state gives named account
+fields rather than raw offsets. `SBFAccountLayout.def` holds the official
+serialization; its fixed fields are checked to tile their span exactly, so an
+offset cannot silently drift.
+
+### Scratch memory and syscall windows
+
+A program almost never hands the runtime a constant. It assembles a seed array,
+a serialized instruction, and that instruction's payload in its own frame or on
+its heap, and passes a pointer. Reading only the loaded image would see the
+pointer and nothing it addresses, so recovery carries a byte-accurate model of
+the memory only this program can write, bounded by `kMaxModeledScratchBytes`.
+
+Two facts decide what survives a call. `SBFSyscalls.def` says which argument
+registers carry a VM address; `SBFSyscallMemory.def` says what the runtime does
+through each of them, as a read or a write with a `Fixed`, `Counted`, or
+`Opaque` extent. A syscall with no write window cannot change a caller byte, so
+everything proven before `sol_log_` is still proven after it. A write bounded by
+a length argument invalidates exactly that window. An `Opaque` write invalidates
+its base address and everything above it, because a buffer never extends below
+where it starts or across a VM region boundary. The effect summary in
+`SBFSyscalls.def` and the window table are validated against each other in both
+directions, so neither can drift alone.
+
+`sol_memcpy_`, `sol_memmove_`, and `sol_memset_` are followed rather than merely
+invalidated: with a proven destination, length, and source, the destination
+bytes become known. That is what recovers the operation an Anchor program
+invokes, since its payload is copied into place rather than mapped.
+
+A call to a function this analysis has not described is assumed to write
+anything it can reach. A callee runs in a frame of its own, so a call whose
+argument registers are all proven not to address scratch leaves the model
+intact; anything else discards it. `sol_invoke_signed_rust` and
+`sol_invoke_signed_c` write account data rather than caller memory, so two
+invocations assembled in one block are both readable.
+
+The model is a forward must-analysis over the intra-function CFG: a byte
+survives into a block only when every path that reaches it wrote the same value.
+Call edges are not followed, because a callee inherits nothing from its caller's
+frame. Programs with more than `kMaxScratchFlowBlocks` blocks keep per-block
+recovery and lose only the facts that cross a block boundary.
+
+Anchor derives a discriminator by hashing `<namespace>:<name>` with SHA-256 and
+keeping the leading eight bytes, which is one-way. NeverD confirms candidates
+instead: `SBFAnchorNames.def` is a dictionary of names that recur across
+deployed programs, and `--sbf-idl` supplies the program's own IDL, which takes
+precedence. Both the modern IDL layout with explicit `discriminator` arrays and
+the legacy layout with derived discriminators are accepted; an entry that cannot
+be matched is reported rather than dropped. A 64-bit comparison is only called a
+discriminator once at least one of them resolves to a name, so an ordinary
+constant comparison is never presented as an instruction.
+
+`SBFKnownAddresses.def` records protocol and canonical-program addresses. Every
+entry must decode to exactly 32 bytes, which the test suite enforces, so the
+table validates its own spellings. The all-zero System Program address is only
+recognized where code references it, because it would otherwise match every zero
+run in read-only data.
+
+Recovery needs the syscall ABI to read this correctly. SBPFv3 maps read-only
+data at virtual address zero, so a length argument and a low data address are
+the same number; `SBFSyscalls.def` therefore records which argument registers
+carry a VM address, and only those are followed.
+
+The two invocation syscalls describe the same instruction with two different
+structures, and `SBFCPIABI.def` keys both layouts by the syscall that selects
+them. Reading one with the other's offsets does not fail; it silently reports
+the first account as the invoked program. `SBFProgramInstructions.def` then
+names the operation a canonical program was asked for, from the selector its own
+interface publishes: a bincode variant index for the system, stake, lookup-table
+and upgradeable-loader programs, and a leading byte for the token programs,
+including Token-2022's extension range on top of the numbering it shares with
+the original token program. An unlisted selector is reported as its number.
+
+`SBFLints.def` catalogs whole-program observations: a missing signer or owner
+check, an invocation target that is not constant, a deprecated or feature-gated
+syscall, and an SBPF version that SIMD-0500 will stop accepting for deployment.
+Each carries a severity and a confidence, and the signer and owner lints stay
+silent unless at least one account access was resolvable, because absence of
+evidence is not evidence. A lint never changes decoded semantics.
+
+Nothing in this layer contacts the network. Live IDL and account fetching remain
+outside the tool.
 
 C and Rust share one backend-neutral structuring pass. It emits direct
 `if`/`if-else` plus natural `while`/`loop` constructs when every reachable
@@ -218,6 +325,8 @@ remain ABI-stable.
 neverd_session_t session = neverd_session_create();
 neverd_sbf_set_strict(session, 1);
 neverd_sbf_set_version(session, "auto");
+/* Optional: name Anchor handlers from the program's own IDL. */
+neverd_sbf_set_idl(session, idl_json);
 
 const char *rust = neverd_decompile_all_ex(
     session, "program.so", NEVERD_OUTPUT_RUST, 0, 0);
@@ -240,8 +349,9 @@ The conformance baseline was audited on 2026-08-10 against Anza `sbpf`
 | Raw-byte oracle | Executes verified instruction bytes without consuming MedIR, so MedIR construction/corruption and backend-lowering defects cannot automatically agree; explicit upstream outcomes and semantic unit tests independently constrain the shared typed semantic model |
 | LLVM ORC differential | Compares return/fault, writable memory, and syscall trace across versioned arithmetic, calls/CALLX, memory, syscalls, and runtime faults |
 | C/Rust execution differential | Compiles generated C11 with `-Werror` and stable Rust with `-D warnings`, then compares the same observable state, including an official relocated-data ELF |
-| Integrated SBF aggregate | `check-neverd-sbf` discovers and passes 107/107 cases across 13 binaries, including three public C API integration cases |
-| ASan + UBSan | 101/101 core cases across 12 binaries pass with fail-fast sanitizer settings; the public integration binary is linked and run in the integrated build because the prebuilt LLVM package omits the NeverD fork-only header it requires |
+| Solana recovery | Base58 round-trips the whole byte domain, every known address decodes to 32 bytes and re-encodes to its recorded spelling, Anchor discriminators match the published reference values, the account layout tiles without a gap, and end-to-end recovery is checked to stay silent when nothing is proven |
+| Integrated SBF aggregate | `check-neverd-sbf` discovers and passes 124/124 cases across 14 binaries, including three public C API integration cases |
+| ASan + UBSan | 121/121 core cases across 13 binaries pass with fail-fast sanitizer settings; the public integration binary is linked and run in the integrated build because the prebuilt LLVM package omits the NeverD fork-only header it requires |
 
 The backend execution contract exposes `r0` as the return value, plus fault
 status, VM memory effects, and syscall calls/results. Other final registers are

@@ -95,6 +95,86 @@ relocation は LDDW 両 half と official Murmur3 CALL key を decode 前に適�
 すでに `R_BPF_64_32` が適用・strip 済みなら symbol/target slot から registry key を
 再計算して internal call を復元します。
 
+## Solana プログラム復元
+
+SBF マシンモデルの上で、NeverD はそのプログラムが Solana プログラムとして何を
+意味するかを報告します。記録される事実には必ずその根拠が付き、バイト列が決めない
+ことは推測せず未設定のままにします。
+
+| 復元対象 | 根拠 |
+|----------|------|
+| read-only データ中の base58 アドレス | `SBFKnownAddresses.def` との一致、またはコードが生成する定数 |
+| プログラム自身の宣言アドレス | read-only 定数に対する鍵長ちょうどの `sol_memcmp_` |
+| Anchor instruction dispatch | 定数が namespace 付き SHA-256 discriminator と一致する 64-bit 比較 |
+| CPI の呼び出し先 | invoke 引数から到達できる instruction レコード |
+| 呼び出しが選ぶ操作 | `SBFProgramInstructions.def` に載る selector、または先頭の Anchor discriminator |
+| PDA の seed | derivation 引数から到達できる seed descriptor 配列 |
+| account フィールドの読み書き | アドレスが serialized input 内にあると証明できる load/store |
+
+loader が渡す引数は input region 先頭の serialized input buffer 一つだけなので、
+その entry state からの定数伝播により raw offset ではなく名前付き account フィールド
+が得られます。`SBFAccountLayout.def` が公式のシリアライズを保持し、その固定
+フィールドが隙間なく領域を敷き詰めることを検査します。
+
+Anchor は `<namespace>:<name>` を SHA-256 でハッシュし先頭 8 バイトを取って
+discriminator を作る一方向処理です。そこで NeverD は候補の確認のみを行います。
+`SBFAnchorNames.def` は実運用プログラムで繰り返し現れる名前の辞書で、`--sbf-idl`
+はそのプログラム自身の IDL を与え、こちらが優先されます。64-bit 比較は、少なくとも
+一つが名前に解決されて初めて discriminator と呼ばれます。
+
+`SBFKnownAddresses.def` はプロトコルおよび正準プログラムのアドレスを記録します。
+各エントリはちょうど 32 バイトにデコードされねばならず、テストがそれを強制します。
+復元には syscall ABI も必要です。SBPFv3 は read-only データを仮想アドレス 0 に
+マップするため、長さ引数と低位のデータアドレスは同じ数値になります。したがって
+`SBFSyscalls.def` はどの引数レジスタが VM アドレスを持つかを記録し、それだけを
+追跡します。
+
+二つの invoke syscall は同じ instruction を別々の構造で表すため、`SBFCPIABI.def`
+が両方のレイアウトをそれを選ぶ syscall ごとに保持します。取り違えても失敗はせず、
+最初の account を呼び出し先として静かに誤報するだけです。`SBFProgramInstructions.def`
+は各プログラムが自ら公表する selector で操作を命名します。system、stake、
+lookup-table、upgradeable-loader は bincode の variant 番号、token 系は先頭 1 バイト
+で、元の token program と共有する番号の上に Token-2022 の拡張範囲が重なります。
+未収録の selector は数値として報告します。
+
+### scratch メモリと syscall ウィンドウ
+
+プログラムが runtime に定数を直接渡すことはほとんどありません。seed 配列、
+シリアライズされた instruction、その payload を自分の frame か heap に組み立て、
+ポインタだけを渡します。ロードした image だけを読むとポインタしか見えないため、
+復元はこのプログラムだけが書けるメモリのバイト単位モデルを保持します。上限は
+`kMaxModeledScratchBytes` です。
+
+呼び出しの後に何が残るかは二つの表が決めます。`SBFSyscalls.def` はどの引数レジスタが
+VM アドレスを持つかを、`SBFSyscallMemory.def` は runtime がそれを通して何をするかを、
+`Fixed`／`Counted`／`Opaque` の範囲を伴う read か write として記録します。write
+ウィンドウを持たない syscall は呼び出し側の 1 バイトも変えられないので、`sol_log_`
+の前に証明された内容はその後も成立します。長さ引数で区切られた write はそのウィンドウ
+だけを無効化し、`Opaque` な write は基底アドレスとその上を無効化します。バッファは
+開始位置より下へは伸びず、VM region の境界も越えないからです。`SBFSyscalls.def` の
+効果要約とこのウィンドウ表は双方向に検証され、どちらか一方だけがずれることはありません。
+
+`sol_memcpy_`、`sol_memmove_`、`sol_memset_` は無効化するだけでなく追跡します。
+宛先・長さ・元がいずれも証明できるとき、宛先のバイトが判明します。Anchor プログラムの
+payload はマップではなくコピーで置かれるため、呼び出す操作が分かるのはこの一歩です。
+
+この解析が記述していない関数への呼び出しは、到達できるすべてを書くと仮定します。
+呼び出し先は自分の frame で動くので、引数レジスタがどれも scratch を指さないと証明
+できる呼び出しではモデルが残り、それ以外では破棄されます。`sol_invoke_signed_rust`
+と `sol_invoke_signed_c` が書くのは account data であって呼び出し側のメモリでは
+ないため、同じ block で組み立てた二つの invocation はどちらも読めます。
+
+このモデルは関数内 CFG 上の前方 must 解析です。ある block に至るすべての経路が同じ値
+を書いたときだけ、そのバイトはその block まで残ります。呼び出し先は呼び出し側の frame
+を引き継がないので call edge は辿りません。`kMaxScratchFlowBlocks` を超える block を
+持つプログラムは block 単位の復元を保ち、block 境界を越える事実だけを失います。
+
+`SBFLints.def` はプログラム全体の観測を分類します。signer / owner チェックの欠落、
+定数でない invoke 先、非推奨または feature gate 付き syscall、そして SIMD-0500 が
+deploy を受け付けなくなる SBPF version です。各項目は severity と confidence を
+持ち、lint がデコード済み意味論を変えることはありません。この層はネットワークに
+一切接続しません。
+
 ## 生成 LLVM runtime contract
 
 LLVM は VM address を host pointer にしません。checked load/store/syscall declaration
@@ -173,7 +253,8 @@ loader semantics とずれ得る独立した text/rodata copy はありません
 
 閉じた record は `SBFVersions.def`、`SBFOpcodes.def`、
 `SBFRelocations.def`、`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、
-`SBFSyscalls.def`、
+`SBFSyscalls.def`、`SBFSyscallMemory.def`、`SBFCPIABI.def`、
+`SBFProgramInstructions.def`、
 `SBFUpstreamSources.def` に置きます。一度しか使わない diagnostic と LLVM block
 name は、LLVM 自身の方針どおり local に保ちます。
 
@@ -191,8 +272,8 @@ image を無効にしません。legacy v0-v2 は `.text`、`.rodata`、`.data.r
 | official ELF manifest | `sbpf/tests/elfs` の 20/20 artifact |
 | ISA matrix | v0-v4 ごとに全 256 encoding、合計 1,280 cell と verifier boundary |
 | differential execution | raw-byte oracle と LLVM ORC/C11/stable Rust の memory/fault/syscall trace 比較 |
-| integrated aggregate | 13 test binary の 107/107 case |
-| ASan + UBSan | 12 core binary の 101/101 case、report なし |
+| integrated aggregate | 13 test binary の 124/124 case |
+| ASan + UBSan | 12 core binary の 121/121 case、report なし |
 
 監査 pin は Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` と Agave

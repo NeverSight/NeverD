@@ -4,111 +4,136 @@
 //
 // This file intentionally has no include guard.
 //
-// SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, RETURN_KIND, CATEGORY, EFFECTS,
-//             AVAILABILITY, SOURCE)
+// SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, POINTER_ARGUMENTS, RETURN_KIND,
+//             CATEGORY, EFFECTS, AVAILABILITY, SOURCE)
+//
+// POINTER_ARGUMENTS names the argument registers that carry a VM address, from
+// each syscall's published signature. SBPFv3 maps read-only data at virtual
+// address zero, so a length argument and a low data address are the same
+// number; recovery can only tell them apart from this ABI fact. When a
+// signature is not settled, prefer omitting an argument here: a missing pointer
+// costs a recovery opportunity, a wrong one invents a false address.
+//
+// What the runtime does through those addresses is a separate fact, and lives
+// in SBFSyscallMemory.def. The ReadsMemory and WritesMemory effects here are
+// the summary of that table, and Syscalls.cpp fails the table validation if the
+// two ever disagree, so neither file can drift on its own.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef SBF_SYSCALL
-#define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, RETURN_KIND, CATEGORY, EFFECTS,  \
-                    AVAILABILITY, SOURCE)
+#define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, POINTER_ARGUMENTS, RETURN_KIND,  \
+                    CATEGORY, EFFECTS, AVAILABILITY, SOURCE)
 #endif
 
-SBF_SYSCALL(Abort, "abort", 0, Never, Terminal, Terminal, Stable,
+SBF_SYSCALL(Abort, "abort", 0, NoPointers, Never, Terminal, Terminal, Stable,
             SolanaReference)
-SBF_SYSCALL(Panic, "sol_panic_", 4, Never, Terminal,
+SBF_SYSCALL(Panic, "sol_panic_", 4, Arg1, Never, Terminal,
             ReadsMemory | Terminal, Stable, SolanaReference)
 
-SBF_SYSCALL(Log, "sol_log_", 2, Void, Logging, ReadsMemory, Stable,
+SBF_SYSCALL(Log, "sol_log_", 2, Arg1, Void, Logging, ReadsMemory, Stable,
             SolanaReference)
-SBF_SYSCALL(Log64, "sol_log_64_", 5, Void, Logging, None, Stable,
+SBF_SYSCALL(Log64, "sol_log_64_", 5, NoPointers, Void, Logging, None, Stable,
             SolanaReference)
-SBF_SYSCALL(LogComputeUnits, "sol_log_compute_units_", 0, Void, Logging, None,
+SBF_SYSCALL(LogComputeUnits, "sol_log_compute_units_", 0, NoPointers, Void,
+            Logging, None, Stable, SolanaReference)
+SBF_SYSCALL(LogPubkey, "sol_log_pubkey", 1, Arg1, Void, Logging, ReadsMemory,
             Stable, SolanaReference)
-SBF_SYSCALL(LogPubkey, "sol_log_pubkey", 1, Void, Logging, ReadsMemory,
+SBF_SYSCALL(LogData, "sol_log_data", 2, Arg1, Void, Logging, ReadsMemory,
             Stable, SolanaReference)
-SBF_SYSCALL(LogData, "sol_log_data", 2, Void, Logging, ReadsMemory, Stable,
+
+SBF_SYSCALL(Memcpy, "sol_memcpy_", 3, Arg1 | Arg2, Void, Memory,
+            ReadsMemory | WritesMemory, Stable, SolanaReference)
+SBF_SYSCALL(Memmove, "sol_memmove_", 3, Arg1 | Arg2, Void, Memory,
+            ReadsMemory | WritesMemory, Stable, SolanaReference)
+SBF_SYSCALL(Memcmp, "sol_memcmp_", 4, Arg1 | Arg2 | Arg4, Void, Memory,
+            ReadsMemory | WritesMemory, Stable, SolanaReference)
+SBF_SYSCALL(Memset, "sol_memset_", 3, Arg1, Void, Memory, WritesMemory, Stable,
             SolanaReference)
 
-SBF_SYSCALL(Memcpy, "sol_memcpy_", 3, Void, Memory,
+SBF_SYSCALL(CreateProgramAddress, "sol_create_program_address", 4,
+            Arg1 | Arg3 | Arg4, Status, PDA, ReadsMemory | WritesMemory,
+            Stable, SolanaReference)
+SBF_SYSCALL(TryFindProgramAddress, "sol_try_find_program_address", 5,
+            Arg1 | Arg3 | Arg4 | Arg5, Status, PDA,
             ReadsMemory | WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(Memmove, "sol_memmove_", 3, Void, Memory,
-            ReadsMemory | WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(Memcmp, "sol_memcmp_", 4, Void, Memory,
-            ReadsMemory | WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(Memset, "sol_memset_", 3, Void, Memory, WritesMemory, Stable,
-            SolanaReference)
 
-SBF_SYSCALL(CreateProgramAddress, "sol_create_program_address", 4, Status,
-            PDA, ReadsMemory | WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(TryFindProgramAddress, "sol_try_find_program_address", 5, Status,
-            PDA, ReadsMemory | WritesMemory, Stable, SolanaReference)
-
-SBF_SYSCALL(Sha256, "sol_sha256", 3, Void, Crypto,
+SBF_SYSCALL(Sha256, "sol_sha256", 3, Arg1 | Arg3, Void, Crypto,
             ReadsMemory | WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(Keccak256, "sol_keccak256", 3, Void, Crypto,
+SBF_SYSCALL(Keccak256, "sol_keccak256", 3, Arg1 | Arg3, Void, Crypto,
             ReadsMemory | WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(Blake3, "sol_blake3", 3, Void, Crypto,
+SBF_SYSCALL(Blake3, "sol_blake3", 3, Arg1 | Arg3, Void, Crypto,
             ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
-SBF_SYSCALL(Sha512, "sol_sha512", 3, Void, Crypto,
+SBF_SYSCALL(Sha512, "sol_sha512", 3, Arg1 | Arg3, Void, Crypto,
             ReadsMemory | WritesMemory, Proposed, AgaveMaster)
-SBF_SYSCALL(Poseidon, "sol_poseidon", 5, Status, Crypto,
+SBF_SYSCALL(Poseidon, "sol_poseidon", 5, Arg3 | Arg5, Status, Crypto,
             ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
-SBF_SYSCALL(Secp256k1Recover, "sol_secp256k1_recover", 4, Status, Crypto,
-            ReadsMemory | WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(CurveValidatePoint, "sol_curve_validate_point", 2, Status, Crypto,
-            ReadsMemory, FeatureGated, SolanaReference)
-SBF_SYSCALL(CurveGroupOp, "sol_curve_group_op", 5, Status, Crypto,
-            ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
-SBF_SYSCALL(CurveMultiscalarMul, "sol_curve_multiscalar_mul", 5, Status,
-            Crypto, ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
-SBF_SYSCALL(CurveDecompress, "sol_curve_decompress", 3, Status, Crypto,
-            ReadsMemory | WritesMemory, FeatureGated, AgaveMaster)
-SBF_SYSCALL(CurvePairingMap, "sol_curve_pairing_map", 5, Status, Crypto,
-            ReadsMemory | WritesMemory, FeatureGated, AgaveMaster)
-SBF_SYSCALL(AltBn128GroupOp, "sol_alt_bn128_group_op", 4, Status, Crypto,
-            ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
-SBF_SYSCALL(AltBn128Compression, "sol_alt_bn128_compression", 4, Status,
-            Crypto, ReadsMemory | WritesMemory, FeatureGated,
+SBF_SYSCALL(Secp256k1Recover, "sol_secp256k1_recover", 4, Arg1 | Arg3 | Arg4,
+            Status, Crypto, ReadsMemory | WritesMemory, Stable,
             SolanaReference)
-SBF_SYSCALL(BigModExp, "sol_big_mod_exp", 2, Void, Crypto,
+SBF_SYSCALL(CurveValidatePoint, "sol_curve_validate_point", 2, Arg2, Status,
+            Crypto, ReadsMemory, FeatureGated, SolanaReference)
+SBF_SYSCALL(CurveGroupOp, "sol_curve_group_op", 5, Arg3 | Arg4 | Arg5, Status,
+            Crypto, ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
+SBF_SYSCALL(CurveMultiscalarMul, "sol_curve_multiscalar_mul", 5,
+            Arg2 | Arg3 | Arg5, Status, Crypto, ReadsMemory | WritesMemory,
+            FeatureGated, SolanaReference)
+SBF_SYSCALL(CurveDecompress, "sol_curve_decompress", 3, Arg2 | Arg3, Status,
+            Crypto, ReadsMemory | WritesMemory, FeatureGated, AgaveMaster)
+SBF_SYSCALL(CurvePairingMap, "sol_curve_pairing_map", 5, Arg2 | Arg3 | Arg5,
+            Status, Crypto, ReadsMemory | WritesMemory, FeatureGated,
+            AgaveMaster)
+SBF_SYSCALL(AltBn128GroupOp, "sol_alt_bn128_group_op", 4, Arg2 | Arg4, Status,
+            Crypto, ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
+SBF_SYSCALL(AltBn128Compression, "sol_alt_bn128_compression", 4, Arg2 | Arg4,
+            Status, Crypto, ReadsMemory | WritesMemory, FeatureGated,
+            SolanaReference)
+SBF_SYSCALL(BigModExp, "sol_big_mod_exp", 2, Arg1 | Arg2, Void, Crypto,
             ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
 
-SBF_SYSCALL(InvokeSignedRust, "sol_invoke_signed_rust", 5, Status, CPI,
-            ReadsMemory | WritesMemory | CPI, Stable, SolanaReference)
-SBF_SYSCALL(InvokeSignedC, "sol_invoke_signed_c", 5, Status, CPI,
-            ReadsMemory | WritesMemory | CPI, Stable, SolanaReference)
+// An invocation reads the caller's serialized arguments and writes account
+// data, which lives in the input region rather than in the caller's frame or
+// heap. The CPI effect is what records those account writes; WritesMemory is
+// reserved for the caller-memory windows SBFSyscallMemory.def describes.
+SBF_SYSCALL(InvokeSignedRust, "sol_invoke_signed_rust", 5,
+            Arg1 | Arg2 | Arg4, Status, CPI, ReadsMemory | CPI, Stable,
+            SolanaReference)
+SBF_SYSCALL(InvokeSignedC, "sol_invoke_signed_c", 5, Arg1 | Arg2 | Arg4,
+            Status, CPI, ReadsMemory | CPI, Stable, SolanaReference)
 
-SBF_SYSCALL(GetClockSysvar, "sol_get_clock_sysvar", 1, Status, Sysvar,
+SBF_SYSCALL(GetClockSysvar, "sol_get_clock_sysvar", 1, Arg1, Status, Sysvar,
             WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(GetEpochScheduleSysvar, "sol_get_epoch_schedule_sysvar", 1,
+SBF_SYSCALL(GetEpochScheduleSysvar, "sol_get_epoch_schedule_sysvar", 1, Arg1,
             Status, Sysvar, WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(GetRentSysvar, "sol_get_rent_sysvar", 1, Status, Sysvar,
+SBF_SYSCALL(GetRentSysvar, "sol_get_rent_sysvar", 1, Arg1, Status, Sysvar,
             WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(GetEpochRewardsSysvar, "sol_get_epoch_rewards_sysvar", 1, Status,
-            Sysvar, WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(GetLastRestartSlot, "sol_get_last_restart_slot", 1, Status,
+SBF_SYSCALL(GetEpochRewardsSysvar, "sol_get_epoch_rewards_sysvar", 1, Arg1,
+            Status, Sysvar, WritesMemory, Stable, SolanaReference)
+SBF_SYSCALL(GetLastRestartSlot, "sol_get_last_restart_slot", 1, Arg1, Status,
             Sysvar, WritesMemory, FeatureGated, SolanaReference)
-SBF_SYSCALL(GetFeesSysvar, "sol_get_fees_sysvar", 1, Status, Sysvar,
+SBF_SYSCALL(GetFeesSysvar, "sol_get_fees_sysvar", 1, Arg1, Status, Sysvar,
             WritesMemory, Deprecated, SolanaReference)
-SBF_SYSCALL(GetSysvar, "sol_get_sysvar", 4, Status, Sysvar,
+SBF_SYSCALL(GetSysvar, "sol_get_sysvar", 4, Arg1 | Arg2, Status, Sysvar,
             ReadsMemory | WritesMemory, FeatureGated, SolanaReference)
-SBF_SYSCALL(GetEpochStake, "sol_get_epoch_stake", 1, Value, Sysvar,
+SBF_SYSCALL(GetEpochStake, "sol_get_epoch_stake", 1, Arg1, Value, Sysvar,
             ReadsMemory, FeatureGated, SolanaReference)
 
-SBF_SYSCALL(SetReturnData, "sol_set_return_data", 2, Void, Runtime,
+SBF_SYSCALL(SetReturnData, "sol_set_return_data", 2, Arg1, Void, Runtime,
             ReadsMemory, Stable, SolanaReference)
-SBF_SYSCALL(GetReturnData, "sol_get_return_data", 3, Value, Runtime,
-            WritesMemory, Stable, SolanaReference)
+SBF_SYSCALL(GetReturnData, "sol_get_return_data", 3, Arg1 | Arg3, Value,
+            Runtime, WritesMemory, Stable, SolanaReference)
 SBF_SYSCALL(GetProcessedSiblingInstruction,
-            "sol_get_processed_sibling_instruction", 5, Boolean, Runtime,
+            "sol_get_processed_sibling_instruction", 5,
+            Arg2 | Arg3 | Arg4 | Arg5, Boolean, Runtime,
             ReadsMemory | WritesMemory, Stable, SolanaReference)
-SBF_SYSCALL(GetStackHeight, "sol_get_stack_height", 0, Value, Runtime, None,
-            Stable, SolanaReference)
-SBF_SYSCALL(RemainingComputeUnits, "sol_remaining_compute_units", 0, Value,
-            Runtime, None, FeatureGated, SolanaReference)
+SBF_SYSCALL(GetStackHeight, "sol_get_stack_height", 0, NoPointers, Value,
+            Runtime, None, Stable, SolanaReference)
+SBF_SYSCALL(RemainingComputeUnits, "sol_remaining_compute_units", 0,
+            NoPointers, Value, Runtime, None, FeatureGated, SolanaReference)
 
-SBF_SYSCALL(AllocFree, "sol_alloc_free_", 2, Address, Deprecated,
-            WritesMemory, Deprecated, Legacy)
+// The retired allocator takes an address and returns one; it never reads or
+// writes memory the caller had already written.
+SBF_SYSCALL(AllocFree, "sol_alloc_free_", 2, Arg2, Address, Deprecated, None,
+            Deprecated, Legacy)
 
 #undef SBF_SYSCALL

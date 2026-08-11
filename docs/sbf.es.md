@@ -99,6 +99,101 @@ ambas mitades LDDW y la clave CALL Murmur3 oficial se aplican antes de decodific
 Si `R_BPF_64_32` ya fue aplicado y eliminado, la clave registry se recalcula
 desde symbols y slots para recuperar calls internos.
 
+## Recuperación del programa Solana
+
+Sobre el modelo de máquina SBF, NeverD informa de lo que un programa significa
+como programa Solana. Cada hecho registrado lleva la evidencia que lo produjo, y
+lo que los bytes no deciden queda sin fijar en lugar de adivinarse.
+
+| Recuperado | Evidencia |
+|------------|-----------|
+| Direcciones base58 en datos de solo lectura | coincidencia en `SBFKnownAddresses.def`, o una constante que el código materializa |
+| La dirección propia declarada | un `sol_memcmp_` de exactamente una longitud de clave contra una constante de solo lectura |
+| Despacho de instrucciones Anchor | una comparación de 64 bits cuya constante iguala un discriminator SHA-256 con namespace |
+| Destinos de CPI | el registro de instruction alcanzable desde el argumento del invoke |
+| La operación que selecciona una llamada | un selector listado en `SBFProgramInstructions.def`, o un discriminator Anchor inicial |
+| Semillas de una dirección derivada | el arreglo de descriptores de semilla alcanzable desde el argumento de derivación |
+| Lecturas y escrituras de campos de cuenta | un load o store cuya dirección cae demostrablemente en el input serializado |
+
+El loader pasa un argumento, el búfer de input serializado en la base de la
+región de input, así que la propagación de constantes desde ese estado inicial da
+campos de cuenta con nombre en vez de offsets crudos. `SBFAccountLayout.def`
+guarda la serialización oficial; se comprueba que sus campos fijos cubran su
+extensión sin hueco.
+
+Anchor deriva un discriminator hasheando `<namespace>:<name>` con SHA-256 y
+conservando los ocho primeros bytes, lo cual es unidireccional. Por eso NeverD
+solo confirma candidatos: `SBFAnchorNames.def` es un diccionario de nombres
+recurrentes y `--sbf-idl` aporta el IDL propio del programa, que tiene
+precedencia. Una comparación de 64 bits solo se llama discriminator cuando al
+menos una de ellas resuelve a un nombre.
+
+`SBFKnownAddresses.def` registra direcciones de protocolo y de programas
+canónicos. Cada entrada debe decodificar a exactamente 32 bytes, algo que la
+suite de pruebas exige. La recuperación también necesita la ABI de syscall:
+SBPFv3 mapea los datos de solo lectura en la dirección cero, de modo que un
+argumento de longitud y una dirección de datos baja son el mismo número.
+`SBFSyscalls.def` registra por ello qué registros de argumento llevan una
+dirección VM, y solo se siguen esos.
+
+Los dos syscalls de invocación describen la misma instruction con dos
+estructuras distintas, y `SBFCPIABI.def` conserva ambos diseños, indexados por el
+syscall que los elige. Leer uno con los desplazamientos del otro no falla:
+informa en silencio la primera cuenta como programa invocado.
+`SBFProgramInstructions.def` nombra después la operación que se pidió a un
+programa canónico a partir del selector que publica su propia interfaz: un índice
+de variante bincode para los programas system, stake, lookup-table y
+upgradeable-loader, y un byte inicial para los programas de token, incluido el
+rango de extensiones de Token-2022 sobre la numeración que comparte con el
+programa de token original. Un selector no listado se informa como su número.
+
+### Memoria de trabajo y ventanas de syscall
+
+Un programa casi nunca entrega una constante al runtime. Ensambla un arreglo de
+semillas, una instruction serializada y su carga útil en su propio frame o en su
+heap, y pasa un puntero. Leer solo la imagen cargada mostraría el puntero y nada
+de lo que direcciona; por eso la recuperación mantiene un modelo con precisión de
+byte de la memoria que solo este programa puede escribir, acotado por
+`kMaxModeledScratchBytes`.
+
+Dos hechos deciden qué sobrevive a una llamada. `SBFSyscalls.def` dice qué
+registros de argumento llevan una dirección VM; `SBFSyscallMemory.def` dice qué
+hace el runtime a través de ellos, como lectura o escritura con una extensión
+`Fixed`, `Counted` u `Opaque`. Un syscall sin ventana de escritura no puede
+cambiar ningún byte del llamador, así que todo lo probado antes de `sol_log_`
+sigue probado después. Una escritura acotada por un argumento de longitud
+invalida exactamente esa ventana. Una escritura `Opaque` invalida su dirección
+base y todo lo que está por encima, porque un búfer nunca se extiende por debajo
+de donde empieza ni cruza el límite de una región VM. El resumen de efectos de
+`SBFSyscalls.def` y la tabla de ventanas se validan entre sí en ambos sentidos,
+de modo que ninguno puede desviarse solo.
+
+`sol_memcpy_`, `sol_memmove_` y `sol_memset_` se siguen en lugar de solo
+invalidarse: con destino, longitud y origen probados, los bytes de destino pasan
+a conocerse. Eso es lo que recupera la operación que invoca un programa Anchor,
+ya que su carga útil se copia en su lugar en vez de mapearse.
+
+Una llamada a una función que este análisis no ha descrito se supone que escribe
+en todo lo que pueda alcanzar. El llamado corre en un frame propio, así que una
+llamada cuyos registros de argumento demostrablemente no direccionan memoria de
+trabajo deja el modelo intacto; cualquier otra cosa lo descarta.
+`sol_invoke_signed_rust` y `sol_invoke_signed_c` escriben datos de cuenta y no la
+memoria del llamador, de modo que dos invocaciones ensambladas en un mismo bloque
+quedan ambas legibles.
+
+El modelo es un análisis «must» hacia adelante sobre el CFG intraprocedural: un
+byte sobrevive hasta un bloque solo cuando todo camino que llega a él escribió el
+mismo valor. Las aristas de llamada no se siguen, porque un llamado no hereda
+nada del frame de su llamador. Los programas con más de
+`kMaxScratchFlowBlocks` bloques conservan la recuperación por bloque y solo
+pierden los hechos que cruzan un límite de bloque.
+
+`SBFLints.def` cataloga observaciones de programa completo: falta de comprobación
+de signer u owner, un destino de invocación no constante, un syscall obsoleto o
+tras feature gate, y una versión SBPF que SIMD-0500 dejará de aceptar para
+despliegue. Cada una lleva severidad y confianza, y ningún lint cambia la
+semántica decodificada. Nada de esta capa contacta con la red.
+
 ## Contrato runtime LLVM generado
 
 LLVM nunca trata una dirección VM como puntero host. Las declaraciones checked
@@ -180,7 +275,8 @@ text o rodata que puedan divergir de la semántica del loader.
 
 Los registros cerrados viven en `SBFVersions.def`, `SBFOpcodes.def`,
 `SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
-`SBFSyscalls.def` y
+`SBFSyscalls.def`, `SBFSyscallMemory.def`, `SBFCPIABI.def`,
+`SBFProgramInstructions.def` y
 `SBFUpstreamSources.def`. Los diagnósticos y nombres de bloque LLVM de un solo
 uso permanecen locales, siguiendo la convención real de LLVM.
 
@@ -200,8 +296,8 @@ inmutabilizar la imagen.
 | Manifest ELF oficial | 20/20 artefactos de `sbpf/tests/elfs` |
 | Matriz ISA | los 256 encodings para v0-v4, 1,280 celdas, más límites del verifier |
 | Ejecución diferencial | oracle de bytes raw frente a LLVM ORC, C11 y Rust stable, incluidos memory/fault/syscall trace |
-| Agregado integrado | 107/107 casos en 13 binarios de prueba |
-| ASan + UBSan | 101/101 casos core en 12 binarios sin informes |
+| Agregado integrado | 124/124 casos en 13 binarios de prueba |
+| ASan + UBSan | 121/121 casos core en 12 binarios sin informes |
 
 La auditoría fija Anza `sbpf` en
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` y Agave en

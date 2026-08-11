@@ -6,16 +6,21 @@
 //
 // SBF_ARGUMENT_REGISTER(ID, REGISTER)
 //
+// ID is spelled the way a published signature counts its arguments, from one,
+// while the position within this table is the zero-based ordinal the ABI uses.
+// One spelling serves every table that has to name an argument, so a pointer
+// declaration and a memory window can never disagree about which one they mean.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef SBF_ARGUMENT_REGISTER
 #define SBF_ARGUMENT_REGISTER(ID, REGISTER)
 #endif
 
-SBF_ARGUMENT_REGISTER(Argument0, 1)
-SBF_ARGUMENT_REGISTER(Argument1, 2)
-SBF_ARGUMENT_REGISTER(Argument2, 3)
-SBF_ARGUMENT_REGISTER(Argument3, 4)
-SBF_ARGUMENT_REGISTER(Argument4, 5)
+SBF_ARGUMENT_REGISTER(Arg1, 1)
+SBF_ARGUMENT_REGISTER(Arg2, 2)
+SBF_ARGUMENT_REGISTER(Arg3, 3)
+SBF_ARGUMENT_REGISTER(Arg4, 4)
+SBF_ARGUMENT_REGISTER(Arg5, 5)
 
 #undef SBF_ARGUMENT_REGISTER

@@ -82,6 +82,19 @@ bool configureSBF(neverd_session_t Sess) {
                        << "\n";
     return false;
   }
+  if (!SBFIdl.empty()) {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> Document =
+        MemoryBuffer::getFile(SBFIdl);
+    if (!Document) {
+      WithColor::error() << "cannot read " << SBFIdl << ": "
+                         << Document.getError().message() << "\n";
+      return false;
+    }
+    if (!neverd_sbf_set_idl(Sess, (*Document)->getBuffer().str().c_str())) {
+      WithColor::error() << takeLastError(Sess) << "\n";
+      return false;
+    }
+  }
   return true;
 }
 

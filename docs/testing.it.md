@@ -334,10 +334,10 @@ indica coverage mancante. L’aggregato completo include
 `NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
 `NeverDSBFLLVMDifferentialTests` e `NeverDSBFSourceDifferentialTests`, oltre ai
 target metadata, loader, analyzer, semantic, emitter e integration. Il profilo
-integrato supera 107/107 casi in 13 binari.
+integrato supera 124/124 casi in 13 binari.
 
 Il profilo sanitizer viene costruito separatamente in `build-sbf-asan-ubsan`.
-Supera 101/101 casi core in 12 binari senza report ASan o UBSan; integration
+Supera 121/121 casi core in 12 binari senza report ASan o UBSan; integration
 resta nella build LLVM integrata perché il package prebuilt omette l’header
 fork-only richiesto.
 
@@ -347,7 +347,8 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
-  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
+  NeverDSBFSolanaModelTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \

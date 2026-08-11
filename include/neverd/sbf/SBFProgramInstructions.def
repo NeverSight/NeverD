@@ -1,0 +1,238 @@
+//===- SBFProgramInstructions.def - Invoked instruction tags ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_INSTRUCTION_SET(ID, NAME, TAG_ENCODING)
+// SBF_INSTRUCTION_SET_PROGRAM(SET, KNOWN_ADDRESS)
+// SBF_PROGRAM_INSTRUCTION(SET, NAME, TAG, STATUS)
+//
+// When a program invokes one of the canonical programs, the leading bytes of
+// the instruction data select which operation it asked for. This table names
+// that selector, so a recovered invocation can read "spl_token::transfer"
+// instead of "an invocation of spl_token".
+//
+// TAG_ENCODING is how the selector is spelled, which differs by program and is
+// a consequence of the serializer each one uses:
+//
+//   Byte   one leading byte, as the token programs pack their enum
+//   Word   four leading little-endian bytes, as bincode encodes an enum
+//
+// STATUS is Deprecated only where the owning program says so in its own source;
+// it is what lets recovery report a stale invocation without a rule that names
+// a selector number in code.
+//
+// The relation between a set and an address is many-to-many. A set may serve
+// more than one address, because the token programs answer to the same base
+// numbering; and an address may answer to more than one set, because Token-2022
+// answers to that shared base and to its own extension range on top of it.
+// Every set one address answers to spells its selector the same way and claims
+// its own numbers, which validateProgramInstructionTables enforces.
+//
+// Anchor programs are deliberately absent. They select on an eight-byte hashed
+// discriminator, which SBFAnchorNames.def already covers, and inventing tag
+// numbers for them would name arms that do not exist.
+//
+// Provenance, read 2026-08-11: `solana-system-interface`,
+// `solana-stake-interface`, `solana-compute-budget-interface`,
+// `solana-loader-v3-interface`, `solana-address-lookup-table-interface`,
+// `spl-token-2022-interface`, and `spl-associated-token-account`. An unlisted
+// tag is reported as its number rather than guessed at.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_INSTRUCTION_SET
+#define SBF_INSTRUCTION_SET(ID, NAME, TAG_ENCODING)
+#endif
+
+#ifndef SBF_INSTRUCTION_SET_PROGRAM
+#define SBF_INSTRUCTION_SET_PROGRAM(SET, KNOWN_ADDRESS)
+#endif
+
+#ifndef SBF_PROGRAM_INSTRUCTION
+#define SBF_PROGRAM_INSTRUCTION(SET, NAME, TAG, STATUS)
+#endif
+
+//===----------------------------------------------------------------------===//
+// System program. bincode writes an enum's variant index as four bytes.
+//===----------------------------------------------------------------------===//
+
+SBF_INSTRUCTION_SET(System, "system_program", Word)
+SBF_INSTRUCTION_SET_PROGRAM(System, SystemProgram)
+SBF_PROGRAM_INSTRUCTION(System, "create_account", 0, Current)
+SBF_PROGRAM_INSTRUCTION(System, "assign", 1, Current)
+SBF_PROGRAM_INSTRUCTION(System, "transfer", 2, Current)
+SBF_PROGRAM_INSTRUCTION(System, "create_account_with_seed", 3, Current)
+SBF_PROGRAM_INSTRUCTION(System, "advance_nonce_account", 4, Current)
+SBF_PROGRAM_INSTRUCTION(System, "withdraw_nonce_account", 5, Current)
+SBF_PROGRAM_INSTRUCTION(System, "initialize_nonce_account", 6, Current)
+SBF_PROGRAM_INSTRUCTION(System, "authorize_nonce_account", 7, Current)
+SBF_PROGRAM_INSTRUCTION(System, "allocate", 8, Current)
+SBF_PROGRAM_INSTRUCTION(System, "allocate_with_seed", 9, Current)
+SBF_PROGRAM_INSTRUCTION(System, "assign_with_seed", 10, Current)
+SBF_PROGRAM_INSTRUCTION(System, "transfer_with_seed", 11, Current)
+SBF_PROGRAM_INSTRUCTION(System, "upgrade_nonce_account", 12, Current)
+SBF_PROGRAM_INSTRUCTION(System, "create_account_allow_prefund", 13, Current)
+
+//===----------------------------------------------------------------------===//
+// The token programs. Token-2022 answers to the same base numbering as the
+// original token program, so both addresses share this set.
+//===----------------------------------------------------------------------===//
+
+SBF_INSTRUCTION_SET(Token, "spl_token", Byte)
+SBF_INSTRUCTION_SET_PROGRAM(Token, SplToken)
+SBF_INSTRUCTION_SET_PROGRAM(Token, SplToken2022)
+SBF_PROGRAM_INSTRUCTION(Token, "initialize_mint", 0, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "initialize_account", 1, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "initialize_multisig", 2, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "transfer", 3, Deprecated)
+SBF_PROGRAM_INSTRUCTION(Token, "approve", 4, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "revoke", 5, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "set_authority", 6, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "mint_to", 7, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "burn", 8, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "close_account", 9, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "freeze_account", 10, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "thaw_account", 11, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "transfer_checked", 12, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "approve_checked", 13, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "mint_to_checked", 14, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "burn_checked", 15, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "initialize_account2", 16, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "sync_native", 17, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "initialize_account3", 18, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "initialize_multisig2", 19, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "initialize_mint2", 20, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "get_account_data_size", 21, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "initialize_immutable_owner", 22, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "amount_to_ui_amount", 23, Current)
+SBF_PROGRAM_INSTRUCTION(Token, "ui_amount_to_amount", 24, Current)
+
+//===----------------------------------------------------------------------===//
+// Token-2022's own range, which continues the shared numbering above. Only
+// Token-2022 answers to it; the original token program rejects these tags.
+//
+// Most entries name an extension rather than a single operation: the tag
+// selects the extension and a second byte inside the payload selects the
+// operation within it. Naming the extension is what a reader needs to see, and
+// the sub-operation is left to the payload rather than guessed at here.
+//===----------------------------------------------------------------------===//
+
+SBF_INSTRUCTION_SET(Token2022Extension, "spl_token_2022", Byte)
+SBF_INSTRUCTION_SET_PROGRAM(Token2022Extension, SplToken2022)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "initialize_mint_close_authority",
+                        25, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "transfer_fee_extension", 26,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "confidential_transfer_extension",
+                        27, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "default_account_state_extension",
+                        28, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "reallocate", 29, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "memo_transfer_extension", 30,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "create_native_mint", 31, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "initialize_non_transferable_mint",
+                        32, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "interest_bearing_mint_extension",
+                        33, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "cpi_guard_extension", 34, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "initialize_permanent_delegate", 35,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "transfer_hook_extension", 36,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension,
+                        "confidential_transfer_fee_extension", 37, Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "withdraw_excess_lamports", 38,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "metadata_pointer_extension", 39,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "group_pointer_extension", 40,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(Token2022Extension, "group_member_pointer_extension",
+                        41, Current)
+
+//===----------------------------------------------------------------------===//
+// Associated token account program. An empty instruction payload means the
+// original create, which predates the tag byte.
+//===----------------------------------------------------------------------===//
+
+SBF_INSTRUCTION_SET(AssociatedToken, "spl_associated_token_account", Byte)
+SBF_INSTRUCTION_SET_PROGRAM(AssociatedToken, SplAssociatedTokenAccount)
+SBF_PROGRAM_INSTRUCTION(AssociatedToken, "create", 0, Current)
+SBF_PROGRAM_INSTRUCTION(AssociatedToken, "create_idempotent", 1, Current)
+SBF_PROGRAM_INSTRUCTION(AssociatedToken, "recover_nested", 2, Current)
+
+//===----------------------------------------------------------------------===//
+// Compute budget program. Tag zero is a retired variant that keeps its slot.
+//===----------------------------------------------------------------------===//
+
+SBF_INSTRUCTION_SET(ComputeBudget, "compute_budget_program", Byte)
+SBF_INSTRUCTION_SET_PROGRAM(ComputeBudget, ComputeBudgetProgram)
+SBF_PROGRAM_INSTRUCTION(ComputeBudget, "unused", 0, Deprecated)
+SBF_PROGRAM_INSTRUCTION(ComputeBudget, "request_heap_frame", 1, Current)
+SBF_PROGRAM_INSTRUCTION(ComputeBudget, "set_compute_unit_limit", 2, Current)
+SBF_PROGRAM_INSTRUCTION(ComputeBudget, "set_compute_unit_price", 3, Current)
+SBF_PROGRAM_INSTRUCTION(ComputeBudget, "set_loaded_accounts_data_size_limit", 4,
+                        Current)
+
+//===----------------------------------------------------------------------===//
+// Stake program. A staking program invokes these to delegate, split, and
+// withdraw on behalf of the accounts it owns.
+//===----------------------------------------------------------------------===//
+
+SBF_INSTRUCTION_SET(Stake, "stake_program", Word)
+SBF_INSTRUCTION_SET_PROGRAM(Stake, StakeProgram)
+SBF_PROGRAM_INSTRUCTION(Stake, "initialize", 0, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "authorize", 1, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "delegate_stake", 2, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "split", 3, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "withdraw", 4, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "deactivate", 5, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "set_lockup", 6, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "merge", 7, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "authorize_with_seed", 8, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "initialize_checked", 9, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "authorize_checked", 10, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "authorize_checked_with_seed", 11, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "set_lockup_checked", 12, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "get_minimum_delegation", 13, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "deactivate_delinquent", 14, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "redelegate", 15, Deprecated)
+SBF_PROGRAM_INSTRUCTION(Stake, "move_stake", 16, Current)
+SBF_PROGRAM_INSTRUCTION(Stake, "move_lamports", 17, Current)
+
+//===----------------------------------------------------------------------===//
+// Address lookup table program.
+//===----------------------------------------------------------------------===//
+
+SBF_INSTRUCTION_SET(AddressLookupTable, "address_lookup_table_program", Word)
+SBF_INSTRUCTION_SET_PROGRAM(AddressLookupTable, AddressLookupTableProgram)
+SBF_PROGRAM_INSTRUCTION(AddressLookupTable, "create_lookup_table", 0, Current)
+SBF_PROGRAM_INSTRUCTION(AddressLookupTable, "freeze_lookup_table", 1, Current)
+SBF_PROGRAM_INSTRUCTION(AddressLookupTable, "extend_lookup_table", 2, Current)
+SBF_PROGRAM_INSTRUCTION(AddressLookupTable, "deactivate_lookup_table", 3,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(AddressLookupTable, "close_lookup_table", 4, Current)
+
+//===----------------------------------------------------------------------===//
+// Upgradeable loader. A program that manages other programs invokes these, and
+// SIMD-0500 is written in terms of exactly this numbering.
+//===----------------------------------------------------------------------===//
+
+SBF_INSTRUCTION_SET(UpgradeableLoader, "bpf_loader_upgradeable", Word)
+SBF_INSTRUCTION_SET_PROGRAM(UpgradeableLoader, BpfLoaderUpgradeable)
+SBF_PROGRAM_INSTRUCTION(UpgradeableLoader, "initialize_buffer", 0, Current)
+SBF_PROGRAM_INSTRUCTION(UpgradeableLoader, "write", 1, Current)
+SBF_PROGRAM_INSTRUCTION(UpgradeableLoader, "deploy_with_max_data_len", 2,
+                        Current)
+SBF_PROGRAM_INSTRUCTION(UpgradeableLoader, "upgrade", 3, Current)
+SBF_PROGRAM_INSTRUCTION(UpgradeableLoader, "set_authority", 4, Current)
+SBF_PROGRAM_INSTRUCTION(UpgradeableLoader, "close", 5, Current)
+SBF_PROGRAM_INSTRUCTION(UpgradeableLoader, "extend_program", 6, Current)
+SBF_PROGRAM_INSTRUCTION(UpgradeableLoader, "set_authority_checked", 7, Current)
+
+#undef SBF_PROGRAM_INSTRUCTION
+#undef SBF_INSTRUCTION_SET_PROGRAM
+#undef SBF_INSTRUCTION_SET

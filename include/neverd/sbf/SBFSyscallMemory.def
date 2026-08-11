@@ -1,0 +1,249 @@
+//===- SBFSyscallMemory.def - Syscall caller-memory windows -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_SYSCALL_MEMORY(SYSCALL, ARGUMENT, ACCESS, EXTENT, DETAIL)
+// SBF_SYSCALL_MEMORY_FIXED(SYSCALL, ARGUMENT, ACCESS, BYTES)
+// SBF_SYSCALL_MEMORY_COUNTED(SYSCALL, ARGUMENT, ACCESS, LENGTH_ARGUMENT)
+// SBF_SYSCALL_MEMORY_OPAQUE(SYSCALL, ARGUMENT, ACCESS)
+//
+// SBFSyscalls.def says which argument registers carry a VM address. This table
+// says what the runtime does through each of them, which is what decides
+// whether a value a program left in its own scratch memory still describes
+// those bytes after the call.
+//
+// Only writes constrain recovery. A syscall with no Write row cannot change
+// the caller's frame or heap at all, so everything proven before the call is
+// still proven after it; a syscall with one bounded Write row invalidates
+// exactly that window. Being wrong in the permissive direction would let
+// recovery report a stale seed or a stale instruction payload as fact, so a
+// row is only written where the published signature settles the question.
+//
+// The three extents are the three ways a signature bounds a window:
+//
+//   Fixed(BYTES)              a protocol-sized object, such as an address
+//   Counted(LENGTH_ARGUMENT)  a buffer whose length is another argument
+//   Opaque                    a buffer the signature does not bound here
+//
+// Opaque is not "unknown memory": a buffer never extends below the address it
+// starts at, so an opaque write invalidates that address and everything above
+// it and leaves what the program wrote lower down intact. It is used for the
+// descriptor arrays the hashing and derivation syscalls walk, for the sysvar
+// structures whose sizes belong to the SDK rather than to this ABI, and for
+// the curve results whose width the curve selector picks.
+//
+// Provenance, read 2026-08-11: the published Solana syscall reference and
+// agave `programs/bpf_loader/src/syscalls/`.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_SYSCALL_MEMORY
+#define SBF_SYSCALL_MEMORY(SYSCALL, ARGUMENT, ACCESS, EXTENT, DETAIL)
+#endif
+
+#ifndef SBF_SYSCALL_MEMORY_FIXED
+#define SBF_SYSCALL_MEMORY_FIXED(SYSCALL, ARGUMENT, ACCESS, BYTES)             \
+  SBF_SYSCALL_MEMORY(SYSCALL, ARGUMENT, ACCESS, Fixed, BYTES)
+#endif
+
+#ifndef SBF_SYSCALL_MEMORY_COUNTED
+#define SBF_SYSCALL_MEMORY_COUNTED(SYSCALL, ARGUMENT, ACCESS, LENGTH_ARGUMENT) \
+  SBF_SYSCALL_MEMORY(SYSCALL, ARGUMENT, ACCESS, Counted, LENGTH_ARGUMENT)
+#endif
+
+#ifndef SBF_SYSCALL_MEMORY_OPAQUE
+#define SBF_SYSCALL_MEMORY_OPAQUE(SYSCALL, ARGUMENT, ACCESS)                   \
+  SBF_SYSCALL_MEMORY(SYSCALL, ARGUMENT, ACCESS, Opaque, 0)
+#endif
+
+//===----------------------------------------------------------------------===//
+// Aborting
+//
+//   sol_panic_(file, len, line, column)
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_COUNTED(Panic, Arg1, Read, Arg2)
+
+//===----------------------------------------------------------------------===//
+// Logging
+//
+//   sol_log_(message, len)
+//   sol_log_pubkey(pubkey)
+//   sol_log_data(slices, slice_count)
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_COUNTED(Log, Arg1, Read, Arg2)
+SBF_SYSCALL_MEMORY_FIXED(LogPubkey, Arg1, Read, kPubkeyByteCount)
+SBF_SYSCALL_MEMORY_OPAQUE(LogData, Arg1, Read)
+
+//===----------------------------------------------------------------------===//
+// Memory
+//
+//   sol_memcpy_(destination, source, n)
+//   sol_memmove_(destination, source, n)
+//   sol_memcmp_(left, right, n, result)
+//   sol_memset_(destination, value, n)
+//
+// These are the only syscalls whose whole purpose is to move caller bytes, so
+// their windows are the ones recovery leans on hardest: a program that builds
+// an invocation payload copies it into place with one of them.
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_COUNTED(Memcpy, Arg1, Write, Arg3)
+SBF_SYSCALL_MEMORY_COUNTED(Memcpy, Arg2, Read, Arg3)
+SBF_SYSCALL_MEMORY_COUNTED(Memmove, Arg1, Write, Arg3)
+SBF_SYSCALL_MEMORY_COUNTED(Memmove, Arg2, Read, Arg3)
+SBF_SYSCALL_MEMORY_COUNTED(Memcmp, Arg1, Read, Arg3)
+SBF_SYSCALL_MEMORY_COUNTED(Memcmp, Arg2, Read, Arg3)
+SBF_SYSCALL_MEMORY_FIXED(Memcmp, Arg4, Write, sizeof(uint32_t))
+SBF_SYSCALL_MEMORY_COUNTED(Memset, Arg1, Write, Arg3)
+
+//===----------------------------------------------------------------------===//
+// Program-derived addresses
+//
+//   sol_create_program_address(seeds, seed_count, program_id, address)
+//   sol_try_find_program_address(seeds, seed_count, program_id, address, bump)
+//
+// The seed array is a vector of (address, length) descriptors rather than a
+// flat buffer, so it is opaque here; CPI.h owns that layout.
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_OPAQUE(CreateProgramAddress, Arg1, Read)
+SBF_SYSCALL_MEMORY_FIXED(CreateProgramAddress, Arg3, Read, kPubkeyByteCount)
+SBF_SYSCALL_MEMORY_FIXED(CreateProgramAddress, Arg4, Write, kPubkeyByteCount)
+SBF_SYSCALL_MEMORY_OPAQUE(TryFindProgramAddress, Arg1, Read)
+SBF_SYSCALL_MEMORY_FIXED(TryFindProgramAddress, Arg3, Read, kPubkeyByteCount)
+SBF_SYSCALL_MEMORY_FIXED(TryFindProgramAddress, Arg4, Write, kPubkeyByteCount)
+SBF_SYSCALL_MEMORY_FIXED(TryFindProgramAddress, Arg5, Write, sizeof(uint8_t))
+
+//===----------------------------------------------------------------------===//
+// Hashing
+//
+//   sol_sha256(slices, slice_count, result)
+//   sol_keccak256(slices, slice_count, result)
+//   sol_blake3(slices, slice_count, result)
+//   sol_sha512(slices, slice_count, result)
+//   sol_poseidon(parameters, endianness, slices, slice_count, result)
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_OPAQUE(Sha256, Arg1, Read)
+SBF_SYSCALL_MEMORY_FIXED(Sha256, Arg3, Write, kHash256ByteCount)
+SBF_SYSCALL_MEMORY_OPAQUE(Keccak256, Arg1, Read)
+SBF_SYSCALL_MEMORY_FIXED(Keccak256, Arg3, Write, kHash256ByteCount)
+SBF_SYSCALL_MEMORY_OPAQUE(Blake3, Arg1, Read)
+SBF_SYSCALL_MEMORY_FIXED(Blake3, Arg3, Write, kHash256ByteCount)
+SBF_SYSCALL_MEMORY_OPAQUE(Sha512, Arg1, Read)
+SBF_SYSCALL_MEMORY_FIXED(Sha512, Arg3, Write, kHash512ByteCount)
+SBF_SYSCALL_MEMORY_OPAQUE(Poseidon, Arg3, Read)
+SBF_SYSCALL_MEMORY_FIXED(Poseidon, Arg5, Write, kHash256ByteCount)
+
+//===----------------------------------------------------------------------===//
+// Signature and curve arithmetic
+//
+//   sol_secp256k1_recover(hash, recovery_id, signature, result)
+//   sol_curve_validate_point(curve_id, point)
+//   sol_curve_group_op(curve_id, group_op, left, right, result)
+//   sol_curve_multiscalar_mul(curve_id, scalars, points, point_count, result)
+//   sol_curve_decompress(curve_id, point, result)
+//   sol_curve_pairing_map(curve_id, left, right, count, result)
+//   sol_alt_bn128_group_op(group_op, input, input_len, result)
+//   sol_alt_bn128_compression(op, input, input_len, result)
+//   sol_big_mod_exp(parameters, result)
+//
+// The curve syscalls size their operands from the curve selector, so their
+// windows stay opaque rather than pinning one curve's width for all of them.
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_FIXED(Secp256k1Recover, Arg1, Read, kHash256ByteCount)
+SBF_SYSCALL_MEMORY_FIXED(Secp256k1Recover, Arg3, Read,
+                         kSecp256k1SignatureByteCount)
+SBF_SYSCALL_MEMORY_FIXED(Secp256k1Recover, Arg4, Write,
+                         kSecp256k1PublicKeyByteCount)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveValidatePoint, Arg2, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveGroupOp, Arg3, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveGroupOp, Arg4, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveGroupOp, Arg5, Write)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveMultiscalarMul, Arg2, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveMultiscalarMul, Arg3, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveMultiscalarMul, Arg5, Write)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveDecompress, Arg2, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(CurveDecompress, Arg3, Write)
+SBF_SYSCALL_MEMORY_OPAQUE(CurvePairingMap, Arg2, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(CurvePairingMap, Arg3, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(CurvePairingMap, Arg5, Write)
+SBF_SYSCALL_MEMORY_COUNTED(AltBn128GroupOp, Arg2, Read, Arg3)
+SBF_SYSCALL_MEMORY_OPAQUE(AltBn128GroupOp, Arg4, Write)
+SBF_SYSCALL_MEMORY_COUNTED(AltBn128Compression, Arg2, Read, Arg3)
+SBF_SYSCALL_MEMORY_OPAQUE(AltBn128Compression, Arg4, Write)
+SBF_SYSCALL_MEMORY_OPAQUE(BigModExp, Arg1, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(BigModExp, Arg2, Write)
+
+//===----------------------------------------------------------------------===//
+// Cross-program invocation
+//
+//   sol_invoke_signed_rust(instruction, account_infos, count, seeds, seed_count)
+//   sol_invoke_signed_c(instruction, account_infos, count, seeds, seed_count)
+//
+// An invocation reads the caller's scratch and writes account data, which
+// lives in the serialized input region rather than in the frame or the heap.
+// It therefore has no Write row: an instruction a program assembled before
+// invoking is still that instruction afterwards, which is what lets recovery
+// describe two invocations built in one block.
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_OPAQUE(InvokeSignedRust, Arg1, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(InvokeSignedRust, Arg2, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(InvokeSignedRust, Arg4, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(InvokeSignedC, Arg1, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(InvokeSignedC, Arg2, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(InvokeSignedC, Arg4, Read)
+
+//===----------------------------------------------------------------------===//
+// Sysvars
+//
+//   sol_get_*_sysvar(destination)
+//   sol_get_sysvar(sysvar_id, destination, offset, length)
+//   sol_get_epoch_stake(vote_address)
+//
+// The one-argument forms write a structure whose size belongs to the SDK, not
+// to this ABI, so they are opaque rather than carrying a transcribed size that
+// a later SDK release could silently invalidate.
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_OPAQUE(GetClockSysvar, Arg1, Write)
+SBF_SYSCALL_MEMORY_OPAQUE(GetEpochScheduleSysvar, Arg1, Write)
+SBF_SYSCALL_MEMORY_OPAQUE(GetRentSysvar, Arg1, Write)
+SBF_SYSCALL_MEMORY_OPAQUE(GetEpochRewardsSysvar, Arg1, Write)
+SBF_SYSCALL_MEMORY_FIXED(GetLastRestartSlot, Arg1, Write, sizeof(uint64_t))
+SBF_SYSCALL_MEMORY_OPAQUE(GetFeesSysvar, Arg1, Write)
+SBF_SYSCALL_MEMORY_FIXED(GetSysvar, Arg1, Read, kPubkeyByteCount)
+SBF_SYSCALL_MEMORY_COUNTED(GetSysvar, Arg2, Write, Arg4)
+SBF_SYSCALL_MEMORY_FIXED(GetEpochStake, Arg1, Read, kPubkeyByteCount)
+
+//===----------------------------------------------------------------------===//
+// Runtime
+//
+//   sol_set_return_data(data, len)
+//   sol_get_return_data(data, len, program_id)
+//   sol_get_processed_sibling_instruction(index, meta, program_id, data,
+//                                         accounts)
+//===----------------------------------------------------------------------===//
+
+SBF_SYSCALL_MEMORY_COUNTED(SetReturnData, Arg1, Read, Arg2)
+SBF_SYSCALL_MEMORY_COUNTED(GetReturnData, Arg1, Write, Arg2)
+SBF_SYSCALL_MEMORY_FIXED(GetReturnData, Arg3, Write, kPubkeyByteCount)
+// The meta structure is an in/out parameter: the runtime reads the buffer
+// capacities the caller put there before it writes what it found.
+SBF_SYSCALL_MEMORY_OPAQUE(GetProcessedSiblingInstruction, Arg2, Read)
+SBF_SYSCALL_MEMORY_OPAQUE(GetProcessedSiblingInstruction, Arg2, Write)
+SBF_SYSCALL_MEMORY_FIXED(GetProcessedSiblingInstruction, Arg3, Write,
+                         kPubkeyByteCount)
+SBF_SYSCALL_MEMORY_OPAQUE(GetProcessedSiblingInstruction, Arg4, Write)
+SBF_SYSCALL_MEMORY_OPAQUE(GetProcessedSiblingInstruction, Arg5, Write)
+
+#undef SBF_SYSCALL_MEMORY_OPAQUE
+#undef SBF_SYSCALL_MEMORY_COUNTED
+#undef SBF_SYSCALL_MEMORY_FIXED
+#undef SBF_SYSCALL_MEMORY

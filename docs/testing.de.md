@@ -342,10 +342,10 @@ fehlende Abdeckung. Das vollständige Aggregat enthält
 `NeverDSBFISAConformanceTests`, `NeverDSBFUpstreamConformanceTests`,
 `NeverDSBFLLVMDifferentialTests` und `NeverDSBFSourceDifferentialTests` sowie
 die Metadata-/Loader-/Analyzer-/Semantic-/Emitter-/Integration-Targets. Das
-integrierte Profil besteht 107/107 Fälle in 13 Binaries.
+integrierte Profil besteht 124/124 Fälle in 13 Binaries.
 
 Das Sanitizer-Profil wird separat in `build-sbf-asan-ubsan` gebaut. Es besteht
-101/101 Core-Fälle in 12 Binaries ohne ASan- oder UBSan-Report; Integration
+121/121 Core-Fälle in 12 Binaries ohne ASan- oder UBSan-Report; Integration
 bleibt im integrierten LLVM-Build, weil dem Prebuilt-Paket der benötigte
 fork-only Header fehlt.
 
@@ -355,7 +355,8 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
-  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
+  NeverDSBFSolanaModelTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \

@@ -1,0 +1,25 @@
+//===- SBFAnchorNamespaces.def - Anchor discriminator namespaces -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_ANCHOR_NAMESPACE(ID, PREFIX, SPELLING)
+//
+// PREFIX is the literal that Anchor prepends to the item name before hashing;
+// the discriminator is the leading kAnchorDiscriminatorLength bytes of
+// SHA-256("<PREFIX>:<name>"). Changing a prefix changes every derived
+// discriminator, so these strings are protocol data rather than presentation.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_ANCHOR_NAMESPACE
+#define SBF_ANCHOR_NAMESPACE(ID, PREFIX, SPELLING)
+#endif
+
+SBF_ANCHOR_NAMESPACE(Instruction, "global", "instruction")
+SBF_ANCHOR_NAMESPACE(Account, "account", "account")
+SBF_ANCHOR_NAMESPACE(Event, "event", "event")
+SBF_ANCHOR_NAMESPACE(State, "state", "state")
+
+#undef SBF_ANCHOR_NAMESPACE

@@ -1,0 +1,129 @@
+//===- SBFCPIABI.def - Cross-program invocation ABI layouts -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_CPI_FIELD_ID(ID, NAME)
+// SBF_CPI_META_FIELD_ID(ID, NAME)
+// SBF_CPI_ABI(ID, NAME, SYSCALL, SIZE, ACCOUNT_META_SIZE)
+// SBF_CPI_FIELD(ABI, ID, OFFSET, FORM)
+// SBF_CPI_META_FIELD(ABI, ID, OFFSET, FORM)
+// SBF_CPI_SEED_FIELD(ID, NAME, OFFSET, FORM)
+//
+// The two invocation syscalls describe the same instruction with two different
+// structures, and the difference is not cosmetic: the C form stores a pointer
+// to the target program id in its first word, while the Rust form stores the
+// key inline at the end and puts the account vector's pointer first. Reading
+// one layout with the other's offsets does not fail, it silently yields the
+// first account's address in place of the invoked program. Both layouts
+// therefore live here, keyed by the syscall that selects them.
+//
+// FORM says how to read a field, which is what keeps a caller from treating a
+// count as an address:
+//
+//   InlineKey    kPubkeyByteCount key bytes stored in place
+//   KeyAddress   a VM address of kPubkeyByteCount key bytes
+//   Address      a VM address of an array or buffer
+//   Count        a number of elements
+//   Length       a number of bytes
+//   Flag         a one-byte boolean
+//
+// Every ABI must give an offset for every declared field id; SBFCPITests
+// enforces that, so a layout can never be half-described.
+//
+// Provenance: agave `program-runtime/src/cpi.rs` (`SolInstruction`,
+// `SolAccountMeta`, `SolSignerSeedC`) and `solana-stable-layout`'s
+// `StableInstruction`, whose own layout test pins `program_id` to offset 48.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_CPI_FIELD_ID
+#define SBF_CPI_FIELD_ID(ID, NAME)
+#endif
+
+#ifndef SBF_CPI_META_FIELD_ID
+#define SBF_CPI_META_FIELD_ID(ID, NAME)
+#endif
+
+#ifndef SBF_CPI_ABI
+#define SBF_CPI_ABI(ID, NAME, SYSCALL, SIZE, ACCOUNT_META_SIZE)
+#endif
+
+#ifndef SBF_CPI_FIELD
+#define SBF_CPI_FIELD(ABI, ID, OFFSET, FORM)
+#endif
+
+#ifndef SBF_CPI_META_FIELD
+#define SBF_CPI_META_FIELD(ABI, ID, OFFSET, FORM)
+#endif
+
+#ifndef SBF_CPI_SEED_FIELD
+#define SBF_CPI_SEED_FIELD(ID, NAME, OFFSET, FORM)
+#endif
+
+// The vocabulary both layouts describe. Names are the logical field, not
+// either structure's spelling, because they appear in recovered output.
+SBF_CPI_FIELD_ID(ProgramId, "program_id")
+SBF_CPI_FIELD_ID(AccountArray, "accounts")
+SBF_CPI_FIELD_ID(AccountCount, "accounts_len")
+SBF_CPI_FIELD_ID(Data, "data")
+SBF_CPI_FIELD_ID(DataLength, "data_len")
+
+SBF_CPI_META_FIELD_ID(Key, "pubkey")
+SBF_CPI_META_FIELD_ID(IsSigner, "is_signer")
+SBF_CPI_META_FIELD_ID(IsWritable, "is_writable")
+
+//===----------------------------------------------------------------------===//
+// solana-stable-layout StableInstruction, taken by sol_invoke_signed_rust.
+//
+// Two StableVec headers of (pointer, capacity, length) precede the key, which
+// is stored inline. The capacity word has no meaning to recovery, so it is the
+// one word this table leaves unnamed.
+//===----------------------------------------------------------------------===//
+
+SBF_CPI_ABI(Rust, "rust", InvokeSignedRust, 80, 34)
+SBF_CPI_FIELD(Rust, AccountArray, 0, Address)
+SBF_CPI_FIELD(Rust, AccountCount, 16, Count)
+SBF_CPI_FIELD(Rust, Data, 24, Address)
+SBF_CPI_FIELD(Rust, DataLength, 40, Length)
+SBF_CPI_FIELD(Rust, ProgramId, 48, InlineKey)
+SBF_CPI_META_FIELD(Rust, Key, 0, InlineKey)
+SBF_CPI_META_FIELD(Rust, IsSigner, 32, Flag)
+SBF_CPI_META_FIELD(Rust, IsWritable, 33, Flag)
+
+//===----------------------------------------------------------------------===//
+// SolInstruction, taken by sol_invoke_signed_c.
+//
+// Every field is one word, and the two keys are reached through pointers. Note
+// that SolAccountMeta orders its flags the opposite way from the Rust
+// AccountMeta, and pads to eight-byte alignment.
+//===----------------------------------------------------------------------===//
+
+SBF_CPI_ABI(C, "c", InvokeSignedC, 40, 16)
+SBF_CPI_FIELD(C, ProgramId, 0, KeyAddress)
+SBF_CPI_FIELD(C, AccountArray, 8, Address)
+SBF_CPI_FIELD(C, AccountCount, 16, Count)
+SBF_CPI_FIELD(C, Data, 24, Address)
+SBF_CPI_FIELD(C, DataLength, 32, Length)
+SBF_CPI_META_FIELD(C, Key, 0, KeyAddress)
+SBF_CPI_META_FIELD(C, IsWritable, 8, Flag)
+SBF_CPI_META_FIELD(C, IsSigner, 9, Flag)
+
+//===----------------------------------------------------------------------===//
+// One seed of a program-derived address.
+//
+// Both ABIs agree here: a Rust `&[u8]` is a pointer and a length, and C's
+// SolSignerSeed declares the same two words. The address-derivation syscalls
+// take this shape whatever language built the seeds, so one table serves both.
+//===----------------------------------------------------------------------===//
+
+SBF_CPI_SEED_FIELD(Address, "addr", 0, Address)
+SBF_CPI_SEED_FIELD(Length, "len", 8, Length)
+
+#undef SBF_CPI_SEED_FIELD
+#undef SBF_CPI_META_FIELD
+#undef SBF_CPI_FIELD
+#undef SBF_CPI_ABI
+#undef SBF_CPI_META_FIELD_ID
+#undef SBF_CPI_FIELD_ID

@@ -170,6 +170,7 @@ extern llvm::cl::opt<evm::Hardfork> EVMHardfork;
 extern llvm::cl::opt<bool> EVMRelaxed;
 extern llvm::cl::opt<sbf::Version> SBFVersion;
 extern llvm::cl::opt<bool> SBFRelaxed;
+extern llvm::cl::opt<std::string> SBFIdl;
 
 // Strings.
 extern llvm::cl::opt<unsigned> MinStrLen;

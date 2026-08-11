@@ -53,6 +53,7 @@ struct PipelineOptions {
   bool EVMStrict = true;
   sbf::Version SBFVersion = sbf::Version::Auto;
   bool SBFStrict = true;
+  const sbf::AnchorIdl *SBFIdl = nullptr;
 };
 
 struct PipelineResult {

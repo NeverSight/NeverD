@@ -95,6 +95,86 @@ compute unit, epoch rewards 등을 포함합니다. legacy relocations `R_BPF_64
 LDDW 두 half와 official Murmur3 CALL key에 적용됩니다. 이미 `R_BPF_64_32`가 적용되고
 strip됐다면 symbol/target slot으로 registry key를 다시 계산해 internal call을 복구합니다.
 
+## Solana 프로그램 복원
+
+SBF 머신 모델 위에서 NeverD는 해당 프로그램이 Solana 프로그램으로서 무엇을
+의미하는지 보고합니다. 기록된 모든 사실에는 그것을 만든 근거가 함께 붙고,
+바이트가 결정하지 않는 것은 추측하지 않고 미설정으로 둡니다.
+
+| 복원 대상 | 근거 |
+|-----------|------|
+| read-only 데이터의 base58 주소 | `SBFKnownAddresses.def` 일치, 또는 코드가 만들어내는 상수 |
+| 프로그램 자신의 선언 주소 | read-only 상수에 대한 정확히 키 길이만큼의 `sol_memcmp_` |
+| Anchor instruction dispatch | 상수가 namespace 붙은 SHA-256 discriminator와 같은 64-bit 비교 |
+| CPI 대상 | invoke 인자에서 도달 가능한 instruction 레코드 |
+| 호출이 선택하는 연산 | `SBFProgramInstructions.def`에 등재된 selector, 또는 선두의 Anchor discriminator |
+| PDA seed | derivation 인자에서 도달 가능한 seed descriptor 배열 |
+| account 필드 읽기/쓰기 | 주소가 serialized input 안에 있음이 증명되는 load/store |
+
+loader가 넘기는 인자는 input region 시작의 serialized input buffer 하나뿐이므로,
+그 entry state에서의 상수 전파가 raw offset이 아니라 이름 있는 account 필드를
+만들어냅니다. `SBFAccountLayout.def`가 공식 직렬화를 담고 있으며, 고정 필드가
+빈틈없이 영역을 채우는지 검사합니다.
+
+Anchor는 `<namespace>:<name>`을 SHA-256으로 해싱해 앞 8바이트를 남기는 단방향
+방식으로 discriminator를 만듭니다. 그래서 NeverD는 후보 확인만 수행합니다.
+`SBFAnchorNames.def`는 배포된 프로그램에서 반복되는 이름 사전이고, `--sbf-idl`은
+프로그램 자신의 IDL을 제공하며 우선합니다. 64-bit 비교는 그중 최소 하나가 이름으로
+해석될 때에만 discriminator라고 부릅니다.
+
+`SBFKnownAddresses.def`는 프로토콜 및 표준 프로그램 주소를 기록합니다. 각 항목은
+정확히 32바이트로 디코딩되어야 하며 테스트가 이를 강제합니다. 복원에는 syscall
+ABI도 필요합니다. SBPFv3는 read-only 데이터를 가상 주소 0에 매핑하므로 길이 인자와
+낮은 데이터 주소가 같은 값이 됩니다. 따라서 `SBFSyscalls.def`가 어느 인자 레지스터가
+VM 주소를 담는지 기록하고, 그것만 추적합니다.
+
+두 invoke syscall은 같은 instruction을 서로 다른 구조로 표현하므로 `SBFCPIABI.def`가
+두 레이아웃을 그것을 고르는 syscall별로 보관합니다. 잘못 읽어도 실패하지 않고 첫
+account를 호출 대상으로 조용히 잘못 보고할 뿐입니다. `SBFProgramInstructions.def`는
+각 프로그램이 스스로 공표한 selector로 연산을 명명합니다. system, stake,
+lookup-table, upgradeable-loader는 bincode variant 번호를, token 프로그램은 선두
+바이트를 쓰며, 원래 token program과 공유하는 번호 위에 Token-2022의 확장 구간이
+얹힙니다. 등재되지 않은 selector는 숫자로 보고합니다.
+
+### scratch 메모리와 syscall 창
+
+프로그램이 runtime에 상수를 그대로 건네는 일은 거의 없습니다. seed 배열, 직렬화된
+instruction, 그 payload를 자신의 frame이나 heap에 조립한 뒤 포인터만 넘깁니다.
+적재된 image만 읽으면 포인터만 보이므로, 복원은 이 프로그램만 쓸 수 있는 메모리의
+바이트 단위 모델을 유지하며 상한은 `kMaxModeledScratchBytes`입니다.
+
+호출 뒤에 무엇이 남는지는 두 표가 결정합니다. `SBFSyscalls.def`는 어느 인자
+레지스터가 VM 주소를 담는지를, `SBFSyscallMemory.def`는 runtime이 그것을 통해 무엇을
+하는지를 `Fixed`, `Counted`, `Opaque` 범위를 가진 read 또는 write로 적습니다. write
+창이 없는 syscall은 호출자의 어떤 바이트도 바꿀 수 없으므로 `sol_log_` 이전에 증명된
+내용은 그 뒤에도 성립합니다. 길이 인자로 한정된 write는 그 창만 무효화하고, `Opaque`
+write는 기준 주소와 그 위를 무효화합니다. 버퍼는 시작점 아래로 자라지 않고 VM region
+경계를 넘지도 않기 때문입니다. `SBFSyscalls.def`의 효과 요약과 이 창 표는 양방향으로
+검증되어 어느 한쪽만 어긋날 수 없습니다.
+
+`sol_memcpy_`, `sol_memmove_`, `sol_memset_`은 무효화에 그치지 않고 따라갑니다.
+목적지와 길이와 원본이 모두 증명되면 목적지 바이트가 알려집니다. Anchor 프로그램의
+payload는 매핑이 아니라 복사로 놓이므로, 어떤 연산을 호출하는지는 이 단계에서
+드러납니다.
+
+이 분석이 기술하지 않은 함수 호출은 닿을 수 있는 모든 곳에 쓴다고 가정합니다.
+피호출자는 자기 frame에서 실행되므로 인자 레지스터가 모두 scratch를 가리키지 않음이
+증명된 호출에서는 모델이 남고, 그 밖에는 버립니다. `sol_invoke_signed_rust`와
+`sol_invoke_signed_c`는 호출자 메모리가 아니라 account data를 쓰므로, 한 block에서
+조립한 두 invocation은 모두 읽힙니다.
+
+이 모델은 함수 내 CFG 위의 전방 must 분석입니다. 어떤 block에 이르는 모든 경로가 같은
+값을 썼을 때에만 그 바이트가 그 block까지 살아남습니다. 피호출자는 호출자의 frame을
+물려받지 않으므로 call edge는 따라가지 않습니다. block 수가
+`kMaxScratchFlowBlocks`를 넘는 프로그램은 block 단위 복원을 유지하고 block 경계를
+넘는 사실만 잃습니다.
+
+`SBFLints.def`는 프로그램 전체 관찰을 분류합니다. signer 또는 owner 검사 누락,
+상수가 아닌 invoke 대상, deprecated 또는 feature gate 뒤의 syscall, 그리고
+SIMD-0500이 배포를 받지 않게 될 SBPF version입니다. 각각 severity와 confidence를
+가지며, lint가 디코딩된 의미를 바꾸는 일은 없습니다. 이 계층은 네트워크에 접속하지
+않습니다.
+
 ## 생성 LLVM runtime contract
 
 LLVM은 VM address를 host pointer로 사용하지 않습니다. checked load/store/syscall
@@ -173,6 +253,7 @@ loader semantics와 달라질 수 있는 별도 text/rodata copy는 없습니다
 
 닫힌 record는 `SBFVersions.def`, `SBFOpcodes.def`, `SBFRelocations.def`,
 `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`, `SBFSyscalls.def`,
+`SBFSyscallMemory.def`, `SBFCPIABI.def`, `SBFProgramInstructions.def`,
 `SBFUpstreamSources.def`에 둡니다.
 한 번만 쓰는 diagnostic과 LLVM block name은 LLVM 자체 관례대로 local에 둡니다.
 
@@ -190,8 +271,8 @@ image가 immutable해지기 전에 정확히 한 번 적용합니다.
 | official ELF manifest | `sbpf/tests/elfs` artifact 20/20 |
 | ISA matrix | v0-v4 각각 모든 256 encoding, 총 1,280 cell과 verifier boundary |
 | differential execution | raw-byte oracle과 LLVM ORC/C11/stable Rust의 memory/fault/syscall trace 비교 |
-| integrated aggregate | 13 test binary의 107/107 case |
-| ASan + UBSan | 12 core binary의 101/101 case, report 없음 |
+| integrated aggregate | 13 test binary의 124/124 case |
+| ASan + UBSan | 12 core binary의 121/121 case, report 없음 |
 
 감사는 Anza `sbpf`
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2`와 Agave

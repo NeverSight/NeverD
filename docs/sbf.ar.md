@@ -94,6 +94,84 @@ instructions وcompute units وsysvars مثل epoch rewards. تعالج relocati
 ونصفي LDDW ومفتاح Murmur3 CALL الرسمي قبل decode. وإذا طبق `R_BPF_64_32` وأزيل،
 يعاد حساب registry key من symbols وtarget slots لاستعادة internal calls.
 
+## استعادة برنامج Solana
+
+فوق نموذج آلة SBF يذكر NeverD ما يعنيه البرنامج بوصفه برنامج Solana. كل حقيقة
+مسجَّلة تحمل الدليل الذي أنتجها، وما لا تحسمه البايتات يُترك غير محدَّد بدل تخمينه.
+
+| المُستعاد | الدليل |
+|-----------|--------|
+| عناوين base58 في read-only data | تطابق `SBFKnownAddresses.def`، أو ثابت ينشئه الكود |
+| عنوان البرنامج المعلَن | `sol_memcmp_` بطول مفتاح كامل مقابل ثابت في read-only |
+| توزيع تعليمات Anchor | مقارنة 64-bit تساوي discriminator من SHA-256 مع namespace |
+| أهداف CPI | سجل instruction المتاح من وسيط الاستدعاء |
+| العملية التي يختارها الاستدعاء | selector مُدرَج في `SBFProgramInstructions.def`، أو discriminator من Anchor في المقدمة |
+| بذور العنوان المشتق | مصفوفة seed descriptor المتاحة من وسيط الاشتقاق |
+| قراءة وكتابة حقول الحساب | load/store يقع عنوانه إثباتًا داخل input المسلسل |
+
+يمرر loader وسيطًا واحدًا هو input buffer المسلسل في قاعدة منطقة input، لذا ينتج
+انتشار الثوابت أسماء حقول حساب بدل offset خام. يحفظ `SBFAccountLayout.def`
+التسلسل الرسمي، وتُفحص حقوله الثابتة لتغطية مداها تمامًا بلا فجوة.
+
+يشتق Anchor الـ discriminator بتجزئة `<namespace>:<name>` عبر SHA-256 والاحتفاظ
+بأول ثمانية بايت، وهي عملية أحادية الاتجاه. لذلك يؤكد NeverD المرشحين فقط:
+`SBFAnchorNames.def` قاموس أسماء متكررة في البرامج المنشورة، و`--sbf-idl` يوفر
+IDL البرنامج نفسه وله الأولوية. لا تُسمّى مقارنة 64-bit discriminator إلا بعد أن
+يُحلّ اسم واحد منها على الأقل.
+
+يسجل `SBFKnownAddresses.def` عناوين البروتوكول والبرامج القياسية؛ كل مدخل يجب أن
+يفك إلى 32 بايت بالضبط، وهو ما تفرضه مجموعة الاختبارات. يحتاج الاسترجاع أيضًا إلى
+ABI الخاص بـ syscall: إذ يربط SBPFv3 الـ read-only data بالعنوان صفر، فيتساوى
+وسيط الطول مع عنوان بيانات منخفض؛ لذا يسجل `SBFSyscalls.def` أي سجلات الوسائط
+تحمل عنوان VM، ولا يُتتبع سواها.
+
+يصف استدعاءا invoke التعليمة نفسها ببنيتين مختلفتين، ويحتفظ `SBFCPIABI.def`
+بالتخطيطين مفهرسين بالـ syscall الذي يختار كلًا منهما؛ قراءة أحدهما بإزاحات الآخر
+لا تفشل، بل تُبلّغ صامتة عن أول حساب باعتباره البرنامج المُستدعى. ثم يسمّي
+`SBFProgramInstructions.def` العملية المطلوبة من برنامج قياسي انطلاقًا من الـ
+selector الذي تنشره واجهته: فهرس متغير bincode لبرامج system وstake
+وlookup-table وupgradeable-loader، وبايت أول لبرامج token، بما في ذلك نطاق
+امتدادات Token-2022 فوق الترقيم المشترك مع برنامج token الأصلي. أما selector غير
+المُدرَج فيُبلَّغ عنه كرقم.
+
+### ذاكرة العمل ونوافذ syscall
+
+نادرًا ما يسلّم البرنامج ثابتًا إلى runtime؛ فهو يبني مصفوفة seed وinstruction
+مسلسلة وحمولتها داخل frame الخاص به أو على heap، ثم يمرّر مؤشرًا فقط. قراءة
+الصورة المحمّلة وحدها ترى المؤشر ولا ترى ما يشير إليه، لذا يحتفظ الاسترجاع بنموذج
+بدقة البايت للذاكرة التي لا يكتبها سوى هذا البرنامج، بحدٍّ أقصى قدره
+`kMaxModeledScratchBytes`.
+
+يقرر جدولان ما الذي يبقى بعد الاستدعاء. يذكر `SBFSyscalls.def` أي سجلات الوسائط
+تحمل عنوان VM، ويذكر `SBFSyscallMemory.def` ما يفعله runtime عبرها، قراءةً أو
+كتابةً بامتداد `Fixed` أو `Counted` أو `Opaque`. فـ syscall بلا نافذة كتابة لا
+يمكنه تغيير أي بايت لدى المستدعي، لذا يبقى ما أُثبت قبل `sol_log_` مُثبتًا بعده.
+والكتابة المحدودة بوسيط طول تُبطل تلك النافذة وحدها، بينما تُبطل الكتابة
+`Opaque` عنوانها الأساسي وكل ما فوقه، لأن المخزن المؤقت لا يمتد أسفل بدايته ولا
+يعبر حدود منطقة VM. ويجري التحقق المتبادل في الاتجاهين بين ملخص التأثيرات في
+`SBFSyscalls.def` وجدول النوافذ، فلا ينحرف أحدهما وحده.
+
+ويجري تتبّع `sol_memcpy_` و`sol_memmove_` و`sol_memset_` بدل الاكتفاء بإبطالها:
+فمتى ثبتت الوجهة والطول والمصدر أصبحت بايتات الوجهة معروفة. وهذا بالضبط ما
+يستعيد العملية التي يستدعيها برنامج Anchor، لأن حمولته تُنسخ إلى مكانها بدل أن
+تُربط.
+
+أما الاستدعاء إلى دالة لم يصفها هذا التحليل فيُفترض أنه يكتب في كل ما يمكنه
+بلوغه. المُستدعى يعمل في frame خاص به، لذا يترك النموذج سليمًا كل استدعاء تُثبَت
+فيه أن سجلات وسائطه لا تعنون ذاكرة العمل، وما عدا ذلك يُسقطه. ويكتب
+`sol_invoke_signed_rust` و`sol_invoke_signed_c` بيانات الحسابات لا ذاكرة
+المستدعي، فتبقى استدعاءتان بُنيتا في block واحد مقروءتين معًا.
+
+النموذج تحليل must أمامي على CFG داخل الدالة: لا يبقى البايت حيًا حتى block ما
+إلا إذا كتب كل مسار يصل إليه القيمة نفسها. ولا تُتتبع حواف الاستدعاء لأن المُستدعى
+لا يرث شيئًا من frame مستدعيه. أما البرامج التي تتجاوز `kMaxScratchFlowBlocks`
+block فتحتفظ بالاسترجاع لكل block وتفقد فقط الحقائق العابرة لحدود الـ block.
+
+يفهرس `SBFLints.def` ملاحظات على مستوى البرنامج: غياب فحص signer أو owner، هدف
+استدعاء غير ثابت، syscall مهجور أو خلف feature gate، ونسخة SBPF ستتوقف
+SIMD-0500 عن قبولها للنشر. لكل منها severity وconfidence، ولا يغير أي lint
+الدلالات المفكوكة. لا شيء في هذه الطبقة يتصل بالشبكة.
+
 ## عقد LLVM runtime المولد
 
 لا يعامل LLVM عنوان VM كـhost pointer. تعيد declarations المتحققة لـload/store/
@@ -171,7 +249,8 @@ LLVM/C/Rust. لا توجد نسخ مستقلة من text أو rodata يمكن أ
 
 توجد السجلات المغلقة في `SBFVersions.def` و`SBFOpcodes.def` و
 `SBFRelocations.def` و`SBFArgumentRegisters.def` و`SBFProtocolLimits.def` و
-`SBFSyscalls.def` و
+`SBFSyscalls.def` و`SBFSyscallMemory.def` و`SBFCPIABI.def` و
+`SBFProgramInstructions.def` و
 `SBFUpstreamSources.def`. تبقى رسائل التشخيص وأسماء LLVM ذات الاستخدام الواحد
 محلية، وفق أسلوب LLVM الفعلي.
 
@@ -188,8 +267,8 @@ tables فهي debug enrichment اختيارية لا تُسقط image صالحة
 | manifest ELF الرسمي | 20/20 artifact من `sbpf/tests/elfs` |
 | مصفوفة ISA | كل 256 encoding عبر v0-v4، أي 1,280 خلية، مع حدود verifier |
 | differential execution | raw-byte oracle مقابل LLVM ORC وC11 وstable Rust، مع memory/fault/syscall trace |
-| التجميع المتكامل | 107/107 حالة في 13 test binary |
-| ASan + UBSan | 101/101 حالة core في 12 binary بلا report |
+| التجميع المتكامل | 124/124 حالة في 13 test binary |
+| ASan + UBSan | 121/121 حالة core في 12 binary بلا report |
 
 المراجعة مثبتة على Anza `sbpf` revision
 `71425d0de59e0bff048c6be8f4a8a9bc655916e2` وAgave

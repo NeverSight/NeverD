@@ -7,20 +7,75 @@
 #ifndef NEVERD_SBF_SYSCALLS_H
 #define NEVERD_SBF_SYSCALLS_H
 
+#include "neverd/sbf/Pubkey.h"
+#include "neverd/sbf/SBFConstants.h"
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace neverd::sbf {
 
 enum class Syscall : uint8_t {
-#define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, RETURN_KIND, CATEGORY, EFFECTS,  \
-                    AVAILABILITY, SOURCE)                                      \
+#define SBF_SYSCALL(ID, NAME, ARGUMENT_COUNT, POINTER_ARGUMENTS, RETURN_KIND,  \
+                    CATEGORY, EFFECTS, AVAILABILITY, SOURCE)                   \
   ID,
 #include "neverd/sbf/SBFSyscalls.def"
   Unknown,
 };
+
+/// Position of one syscall argument, named the way a published signature
+/// counts them and ordered so the enumerator's value is the zero-based ordinal.
+enum class SyscallArgument : uint8_t {
+#define SBF_ARGUMENT_REGISTER(ID, REGISTER) ID,
+#include "neverd/sbf/SBFArgumentRegisters.def"
+};
+
+constexpr unsigned argumentOrdinal(SyscallArgument Argument) {
+  return static_cast<unsigned>(Argument);
+}
+
+constexpr unsigned argumentRegister(SyscallArgument Argument) {
+  return kFirstArgumentRegister + argumentOrdinal(Argument);
+}
+
+/// Which argument registers carry a VM address rather than a scalar.
+///
+/// SBPFv3 maps read-only data at virtual address zero, so a small scalar such
+/// as a length is indistinguishable from a low data address by value alone.
+/// Recovery therefore has to know the ABI to tell a pointer from a count.
+///
+/// This says only that a register holds an address. What the runtime does
+/// through that address is a separate fact, and lives in SBFSyscallMemory.def.
+enum class SyscallPointerArguments : uint8_t {
+  None = 0,
+  Arg1 = 1u << 0,
+  Arg2 = 1u << 1,
+  Arg3 = 1u << 2,
+  Arg4 = 1u << 3,
+  Arg5 = 1u << 4,
+};
+
+constexpr SyscallPointerArguments operator|(SyscallPointerArguments L,
+                                            SyscallPointerArguments R) {
+  return static_cast<SyscallPointerArguments>(static_cast<uint8_t>(L) |
+                                              static_cast<uint8_t>(R));
+}
+
+/// Whether the zero-based argument \p Ordinal carries a VM address.
+constexpr bool isPointerArgument(SyscallPointerArguments Set,
+                                 unsigned Ordinal) {
+  return Ordinal < kArgumentRegisterCount &&
+         (static_cast<uint8_t>(Set) & (uint8_t{1} << Ordinal)) != 0;
+}
+
+constexpr bool isPointerArgument(SyscallPointerArguments Set,
+                                 SyscallArgument Argument) {
+  return isPointerArgument(Set, argumentOrdinal(Argument));
+}
 
 enum class SyscallReturnKind : uint8_t {
   Never,
@@ -76,12 +131,68 @@ struct SyscallInfo {
   llvm::StringLiteral Name;
   uint32_t Hash;
   uint8_t ArgumentCount;
+  SyscallPointerArguments PointerArguments;
   SyscallReturnKind ReturnKind;
   SyscallCategory Category;
   SyscallEffect Effects;
   SyscallAvailability Availability;
   SyscallSource Source;
 };
+
+//===----------------------------------------------------------------------===//
+// Caller-memory windows
+//===----------------------------------------------------------------------===//
+
+/// Which direction the runtime moves bytes through one address argument.
+enum class SyscallMemoryAccess : uint8_t { Read, Write };
+
+/// How a signature bounds the window an address argument opens.
+enum class SyscallExtent : uint8_t {
+  /// A protocol-sized object, such as an address or a digest.
+  Fixed,
+  /// A buffer whose byte length is another argument.
+  Counted,
+  /// A buffer this signature does not bound. A buffer never extends below its
+  /// own start, so an opaque window still proves that nothing below the base
+  /// address is touched.
+  Opaque,
+};
+
+llvm::StringRef syscallMemoryAccessName(SyscallMemoryAccess Access);
+llvm::StringRef syscallExtentName(SyscallExtent Extent);
+
+/// One window of caller memory a syscall reads or writes.
+struct SyscallMemoryInfo {
+  Syscall ID;
+  /// The argument holding the window's base address.
+  SyscallArgument Argument;
+  SyscallMemoryAccess Access;
+  SyscallExtent Extent;
+  /// Bytes for a Fixed extent, the length argument's ordinal for a Counted
+  /// one, and unused otherwise. Read it through the two accessors, which
+  /// answer only for the extent the value belongs to.
+  uint64_t Detail;
+
+  std::optional<uint64_t> fixedBytes() const;
+  std::optional<SyscallArgument> lengthArgument() const;
+};
+
+llvm::ArrayRef<SyscallMemoryInfo> syscallMemoryInfos();
+
+/// The windows \p ID opens, in table order.
+llvm::ArrayRef<SyscallMemoryInfo> getSyscallMemory(Syscall ID);
+
+/// True when the table proves \p ID cannot change any byte the caller wrote.
+///
+/// This is what lets a value proven before a call still be proven after it.
+/// An unlisted syscall is not proven harmless, so it answers false.
+bool preservesCallerMemory(Syscall ID);
+
+/// Report a window on an argument the syscall does not take, on an argument
+/// not declared to hold an address, a length taken from an address argument,
+/// a duplicated window, or a window whose direction the syscall's effects do
+/// not admit.
+llvm::Error validateSyscallMemoryTable();
 
 struct SyscallSourceInfo {
   SyscallSource ID;

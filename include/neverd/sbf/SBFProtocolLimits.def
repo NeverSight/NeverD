@@ -24,4 +24,22 @@ SBF_PROTOCOL_LIMIT(LegacyProgramInstructionCount, 65'536, SBPFMain)
 // program-data account, so this is a conservative hostile-input ceiling.
 SBF_PROTOCOL_LIMIT(MaxProgramAccountDataSize, 10'485'760, SolanaSDKMaster)
 
+// anza-xyz/solana-sdk/pubkey/src/lib.rs bounds address derivation. The runtime
+// rejects a call that exceeds either, so recovery reading a seed array stops
+// there rather than following a count a program could never have used.
+SBF_PROTOCOL_LIMIT(MaxSeeds, 16, SolanaSDKMaster)
+SBF_PROTOCOL_LIMIT(MaxSeedLength, 32, SolanaSDKMaster)
+
+// Digest widths of the hashing syscalls. anza-xyz/solana-sdk publishes one
+// 32-byte digest type for sha256, keccak256, blake3, and poseidon; the sha512
+// syscall proposed on agave master writes twice that.
+SBF_PROTOCOL_LIMIT(Hash256ByteCount, 32, SolanaSDKMaster)
+SBF_PROTOCOL_LIMIT(Hash512ByteCount, 64, AgaveMaster)
+
+// anza-xyz/solana-sdk/secp256k1-recover: a signature is the r and s scalars
+// concatenated, and the recovered key is the uncompressed point without the
+// leading tag byte.
+SBF_PROTOCOL_LIMIT(Secp256k1SignatureByteCount, 64, SolanaSDKMaster)
+SBF_PROTOCOL_LIMIT(Secp256k1PublicKeyByteCount, 64, SolanaSDKMaster)
+
 #undef SBF_PROTOCOL_LIMIT

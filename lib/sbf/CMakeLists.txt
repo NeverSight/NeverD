@@ -1,13 +1,20 @@
 add_neverd_component_library(NeverDSBF
   Analyzer.cpp
+  Anchor.cpp
   CEmitter.cpp
+  CPI.cpp
+  Dataflow.cpp
   Interpreter.cpp
+  KnownAddresses.cpp
   LLVMEmitter.cpp
   Opcodes.cpp
   ProgramImage.cpp
+  Pubkey.cpp
   Relocations.cpp
   RustEmitter.cpp
   Semantics.cpp
+  SolanaModel.cpp
+  SolanaRecovery.cpp
   StructuredCFG.cpp
   Syscalls.cpp
   VMConfig.cpp

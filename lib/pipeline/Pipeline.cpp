@@ -881,6 +881,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     sbf::AnalyzeOptions SBFOptions;
     SBFOptions.VersionOverride = Opts.SBFVersion;
     SBFOptions.Strict = Opts.SBFStrict;
+    SBFOptions.Idl = Opts.SBFIdl;
     auto Program = sbf::analyze(Img, SBFOptions);
     if (!Program) {
       Result.Error = llvm::toString(Program.takeError());

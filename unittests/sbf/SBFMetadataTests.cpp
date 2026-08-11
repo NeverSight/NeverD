@@ -7,12 +7,16 @@
 #include "gtest/gtest.h"
 
 #include "neverd/sbf/Opcodes.h"
+#include "neverd/sbf/Pubkey.h"
 #include "neverd/sbf/Relocations.h"
 #include "neverd/sbf/SBFConstants.h"
 #include "neverd/sbf/Syscalls.h"
 #include "neverd/sbf/Version.h"
 
+#include "llvm/Support/Error.h"
+
 #include <array>
+#include <optional>
 #include <set>
 
 namespace neverd::sbf {
@@ -110,6 +114,96 @@ TEST(SBFSyscalls, HashesAndLookupsAreStableAndUnique) {
     EXPECT_TRUE(SourceNames.insert(Source.Name.str()).second);
     EXPECT_EQ(syscallSourceName(Source.ID), Source.Name);
     EXPECT_EQ(syscallSourceRevision(Source.ID), Source.Revision);
+  }
+}
+
+TEST(SBFSyscalls, PointerArgumentsAgreeWithArityAndMemoryEffects) {
+  for (const SyscallInfo &Info : syscallInfos()) {
+    SCOPED_TRACE(Info.Name.str());
+    for (unsigned Ordinal = 0; Ordinal < kArgumentRegisterCount; ++Ordinal)
+      if (isPointerArgument(Info.PointerArguments, Ordinal))
+        // A syscall cannot pass an address in a register it never reads.
+        EXPECT_LT(Ordinal, Info.ArgumentCount);
+
+    // Touching caller memory requires an address to touch. The converse does
+    // not hold: the retired allocator takes an address and returns one without
+    // reading or writing through it.
+    if (hasEffect(Info.Effects, SyscallEffect::ReadsMemory) ||
+        hasEffect(Info.Effects, SyscallEffect::WritesMemory))
+      EXPECT_NE(Info.PointerArguments, SyscallPointerArguments::None);
+  }
+
+  const SyscallInfo *Memcmp = findSyscallByName("sol_memcmp_");
+  ASSERT_NE(Memcmp, nullptr);
+  EXPECT_TRUE(isPointerArgument(Memcmp->PointerArguments, 0));
+  EXPECT_TRUE(isPointerArgument(Memcmp->PointerArguments, 1));
+  // The third argument is a length, not an address.
+  EXPECT_FALSE(isPointerArgument(Memcmp->PointerArguments, 2));
+  EXPECT_TRUE(isPointerArgument(Memcmp->PointerArguments, 3));
+
+  const SyscallInfo *Invoke = findSyscallByName("sol_invoke_signed_rust");
+  ASSERT_NE(Invoke, nullptr);
+  EXPECT_TRUE(isPointerArgument(Invoke->PointerArguments, 0));
+  EXPECT_FALSE(isPointerArgument(Invoke->PointerArguments, 2));
+  EXPECT_FALSE(isPointerArgument(Invoke->PointerArguments, 4));
+
+  const SyscallInfo *Log64 = findSyscallByName("sol_log_64_");
+  ASSERT_NE(Log64, nullptr);
+  EXPECT_EQ(Log64->PointerArguments, SyscallPointerArguments::None);
+}
+
+TEST(SBFSyscalls, MemoryWindowsDescribeTheCallerBytesEachSyscallTouches) {
+  llvm::Error TableError = validateSyscallMemoryTable();
+  ASSERT_FALSE(static_cast<bool>(TableError))
+      << llvm::toString(std::move(TableError));
+
+  const auto Window = [](llvm::StringRef Name, SyscallArgument Argument,
+                         SyscallMemoryAccess Access)
+      -> const SyscallMemoryInfo * {
+    const SyscallInfo *Info = findSyscallByName(Name);
+    if (!Info)
+      return nullptr;
+    for (const SyscallMemoryInfo &Row : getSyscallMemory(Info->ID))
+      if (Row.Argument == Argument && Row.Access == Access)
+        return &Row;
+    return nullptr;
+  };
+
+  // A copy is bounded by its own length argument, which is what lets recovery
+  // keep the bytes a program wrote outside the copied range.
+  const SyscallMemoryInfo *CopyOut =
+      Window("sol_memcpy_", SyscallArgument::Arg1, SyscallMemoryAccess::Write);
+  ASSERT_NE(CopyOut, nullptr);
+  EXPECT_EQ(CopyOut->Extent, SyscallExtent::Counted);
+  ASSERT_TRUE(CopyOut->lengthArgument().has_value());
+  EXPECT_EQ(*CopyOut->lengthArgument(), SyscallArgument::Arg3);
+  EXPECT_FALSE(CopyOut->fixedBytes().has_value());
+
+  // A derived address is exactly one key wide wherever it is written.
+  const SyscallMemoryInfo *Derived =
+      Window("sol_try_find_program_address", SyscallArgument::Arg4,
+             SyscallMemoryAccess::Write);
+  ASSERT_NE(Derived, nullptr);
+  ASSERT_TRUE(Derived->fixedBytes().has_value());
+  EXPECT_EQ(*Derived->fixedBytes(), kPubkeyByteCount);
+  EXPECT_FALSE(Derived->lengthArgument().has_value());
+
+  // An invocation writes account data, which is not the caller's own memory,
+  // so an instruction assembled before it is still that instruction after it.
+  const SyscallInfo *Invoke = findSyscallByName("sol_invoke_signed_rust");
+  ASSERT_NE(Invoke, nullptr);
+  EXPECT_TRUE(preservesCallerMemory(Invoke->ID));
+  EXPECT_TRUE(preservesCallerMemory(Syscall::Log));
+  EXPECT_FALSE(preservesCallerMemory(Syscall::Memcmp));
+  EXPECT_FALSE(preservesCallerMemory(Syscall::Unknown));
+
+  for (const SyscallMemoryInfo &Row : syscallMemoryInfos()) {
+    SCOPED_TRACE(getSyscallInfo(Row.ID)->Name.str());
+    EXPECT_NE(syscallMemoryAccessName(Row.Access), "unknown");
+    EXPECT_NE(syscallExtentName(Row.Extent), "unknown");
+    EXPECT_LT(argumentOrdinal(Row.Argument), kArgumentRegisterCount);
+    EXPECT_EQ(argumentRegister(Row.Argument),
+              kFirstArgumentRegister + argumentOrdinal(Row.Argument));
   }
 }
 

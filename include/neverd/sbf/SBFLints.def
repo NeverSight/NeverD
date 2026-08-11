@@ -1,0 +1,49 @@
+//===- SBFLints.def - Solana program lint catalog ---------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_LINT(ID, NAME, SEVERITY, CONFIDENCE, SUMMARY)
+//
+// These are whole-program observations about a stripped binary, not proofs
+// about source. CONFIDENCE states what a report is worth:
+//
+//   Certain   the condition is decided by the recovered facts alone
+//   Likely    the absence of evidence is meaningful for this program shape
+//   Advisory  worth a reviewer's attention, commonly benign
+//
+// A lint never changes decoded semantics and never suppresses output.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_LINT
+#define SBF_LINT(ID, NAME, SEVERITY, CONFIDENCE, SUMMARY)
+#endif
+
+SBF_LINT(MissingSignerCheck, "missing-signer-check", Warning, Likely,
+         "the program transfers authority or invokes another program but never "
+         "reads an account's is_signer flag")
+SBF_LINT(MissingOwnerCheck, "missing-owner-check", Warning, Likely,
+         "the program reads account data but never reads an account's owner "
+         "field")
+SBF_LINT(UnresolvedCPITarget, "unresolved-cpi-target", Note, Advisory,
+         "a cross-program invocation targets a program id that is not a "
+         "constant in this binary")
+SBF_LINT(DeprecatedProgramInstruction, "deprecated-program-instruction",
+         Warning, Certain,
+         "the program invokes an operation the owning program has deprecated")
+SBF_LINT(MissingDiscriminatorCheck, "missing-discriminator-check", Warning,
+         Likely,
+         "the program looks Anchor-generated but no instruction discriminator "
+         "comparison was recovered")
+SBF_LINT(DeprecatedSyscall, "deprecated-syscall", Warning, Certain,
+         "the program calls a syscall the runtime has deprecated")
+SBF_LINT(FeatureGatedSyscall, "feature-gated-syscall", Note, Certain,
+         "the program calls a syscall whose availability depends on an active "
+         "feature gate")
+SBF_LINT(LegacyDeploymentVersion, "legacy-deployment-version", Note, Certain,
+         "SIMD-0500 removes deployment of this SBPF version; redeployment will "
+         "require SBPFv3 or newer")
+
+#undef SBF_LINT

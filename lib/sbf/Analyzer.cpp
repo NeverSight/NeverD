@@ -6,7 +6,9 @@
 
 #include "neverd/sbf/Analyzer.h"
 
+#include "neverd/sbf/Dataflow.h"
 #include "neverd/sbf/Relocations.h"
+#include "neverd/sbf/SolanaRecovery.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -554,20 +556,10 @@ RegisterValue mergeValue(const std::vector<const MedBlock *> &Predecessors,
   return Result;
 }
 
-uint64_t normalizeDataflowResult(const MedInstruction &Instruction,
-                                 uint64_t Value) {
-  if (Instruction.Width == kWordBitWidth)
-    return extendALU32Result(static_cast<uint32_t>(Value),
-                             Instruction.Semantics.Result);
-  return Value;
-}
-
 void runRegisterDataflow(SBFProgram &Program) {
   if (Program.Med.Blocks.empty())
     return;
-  std::map<size_t, const MedInstruction *> BySlot;
-  for (const MedInstruction &Instruction : Program.Med.Instructions)
-    BySlot[Instruction.Slot] = &Instruction;
+  const MedInstructionIndex Index(Program.Med);
 
   size_t EntryBlock = 0;
   for (const BasicBlock &Block : Program.Low.Blocks)
@@ -579,6 +571,10 @@ void runRegisterDataflow(SBFProgram &Program) {
   Program.Med.Blocks[EntryBlock].Inputs[kFramePointerRegister] = {
       RegisterValue::Kind::StackAddress,
       initialFramePointer(Program.Low.TheVersion, Program.Config), 0};
+  // The loader invokes a Solana program with one argument: the address of the
+  // serialized input buffer, which is always the base of the input region.
+  Program.Med.Blocks[EntryBlock].Inputs[kFirstArgumentRegister] = {
+      RegisterValue::Kind::Constant, kInputStart, 0};
   const size_t IterationLimit = Program.Med.Blocks.size() * 4 + 1;
   for (size_t Iteration = 0; Iteration < IterationLimit; ++Iteration) {
     bool Changed = false;
@@ -596,81 +592,10 @@ void runRegisterDataflow(SBFProgram &Program) {
         }
       }
 
-      auto State = Block.Inputs;
-      for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot) {
-        auto It = BySlot.find(Slot);
-        if (It == BySlot.end())
-          continue;
-        const MedInstruction &Instruction = *It->second;
-        auto Constant = [&](uint64_t Value) {
-          State[Instruction.Dst] = {RegisterValue::Kind::Constant, Value, 0};
-        };
-        if (Instruction.Op == Operation::LoadImm) {
-          Constant(normalizeDataflowResult(
-              Instruction,
-              normalizeImmediate(Instruction.Immediate,
-                                 Instruction.Semantics.Immediate)));
-        } else if (Instruction.Op == Operation::Mov) {
-          if (Instruction.Form == OperandForm::DstImm) {
-            Constant(normalizeDataflowResult(
-                Instruction,
-                normalizeImmediate(Instruction.Immediate,
-                                   Instruction.Semantics.Immediate)));
-          } else {
-            const RegisterValue Source = State[Instruction.Src];
-            if (Source.ValueKind == RegisterValue::Kind::Constant)
-              Constant(normalizeDataflowResult(Instruction, Source.Value));
-            else if (Instruction.Width == kDoubleWordBitWidth)
-              State[Instruction.Dst] = Source;
-            else
-              State[Instruction.Dst] = {};
-          }
-        } else if ((Instruction.Op == Operation::Add ||
-                    Instruction.Op == Operation::Sub) &&
-                   Instruction.Form == OperandForm::DstImm) {
-          RegisterValue &Value = State[Instruction.Dst];
-          const uint64_t Immediate = normalizeImmediate(
-              Instruction.Immediate, Instruction.Semantics.Immediate);
-          if (Value.ValueKind == RegisterValue::Kind::Constant) {
-            const uint64_t ArithmeticResult =
-                Instruction.Op == Operation::Add     ? Value.Value + Immediate
-                : Instruction.Semantics.SwapOperands ? Immediate - Value.Value
-                                                     : Value.Value - Immediate;
-            Value.Value =
-                normalizeDataflowResult(Instruction, ArithmeticResult);
-          } else if ((Value.ValueKind == RegisterValue::Kind::StackAddress ||
-                      Value.ValueKind == RegisterValue::Kind::RodataAddress) &&
-                     Instruction.Width == kDoubleWordBitWidth &&
-                     !Instruction.Semantics.SwapOperands) {
-            const int64_t Delta = std::bit_cast<int64_t>(Immediate);
-            int64_t NewOffset = 0;
-            const bool Overflow =
-                Instruction.Op == Operation::Add
-                    ? llvm::AddOverflow(Value.Offset, Delta, NewOffset)
-                    : llvm::SubOverflow(Value.Offset, Delta, NewOffset);
-            if (Overflow)
-              Value = {};
-            else
-              Value.Offset = NewOffset;
-          } else {
-            Value = {};
-          }
-        } else if (Instruction.Op == Operation::HighOr &&
-                   State[Instruction.Dst].ValueKind ==
-                       RegisterValue::Kind::Constant) {
-          State[Instruction.Dst].Value |=
-              static_cast<uint64_t>(
-                  static_cast<uint32_t>(Instruction.Immediate))
-              << kWordBitWidth;
-        } else if (Instruction.Semantics.WritesDestination) {
-          State[Instruction.Dst] = {};
-        }
-        if (Instruction.Call != CallKind::None) {
-          for (unsigned Register = 0; Register < kFirstCalleeSavedRegister;
-               ++Register)
-            State[Register] = {};
-        }
-      }
+      RegisterState State = Block.Inputs;
+      for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot)
+        if (const MedInstruction *Instruction = Index.find(Slot))
+          applyRegisterTransfer(*Instruction, State);
       if (State != Block.Outputs) {
         Block.Outputs = State;
         Changed = true;
@@ -1177,8 +1102,10 @@ llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,
   buildCFG(Program.Low);
   buildMedIR(Program);
   runRegisterDataflow(Program);
-  if (Options.RecoverHighIR)
+  if (Options.RecoverHighIR) {
     recoverHighIR(Image, Program);
+    Program.High.Solana = recoverSolanaModel(Program, {Options.Idl});
+  }
   return Program;
 }
 
@@ -1378,6 +1305,7 @@ std::string dumpHighIR(const HighIR &IR) {
     OS << "string 0x" << llvm::utohexstr(String.Address) << " \""
        << String.Value << "\"\n";
   OS << "; cpi=" << IR.UsesCPI << " account-memory=" << IR.UsesAccounts << "\n";
+  OS << dumpSolanaModel(IR.Solana);
   return Buffer;
 }
 

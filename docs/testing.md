@@ -274,9 +274,9 @@ LeakSanitizer, hence the explicit `detect_leaks=0`; use a Linux sanitizer shard
 for leak coverage. The prebuilt package also omits the NeverD LLVM fork's
 `llvm/MC/BinaryRewrite.h`, so `NeverDSBFIntegrationTests` must be linked and run
 in the normal integrated-LLVM build. This is a packaging boundary, not a
-sanitizer skip for the 12 core SBF binaries. The audited profile passes 101/101
+sanitizer skip for the 13 core SBF binaries. The audited profile passes 121/121
 core cases with no ASan or UBSan report; the normal integrated profile passes
-all 107/107 SBF cases across 13 binaries.
+all 124/124 SBF cases across 14 binaries.
 
 ```bash
 cmake --build build-sbf-asan-ubsan --parallel 4 --target \
@@ -284,7 +284,8 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
   NeverDSBFAnalyzerTests NeverDSBFISAConformanceTests \
   NeverDSBFSemanticTests NeverDSBFEmitterTests NeverDSBFLLVMEmitterTests \
   NeverDSBFLLVMDifferentialTests NeverDSBFSourceDifferentialTests \
-  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests
+  NeverDSBFMalformedCorpusTests NeverDSBFUpstreamConformanceTests \
+  NeverDSBFSolanaModelTests
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
