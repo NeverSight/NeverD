@@ -126,6 +126,63 @@ if(TARGET neverd)
   add_dependencies(NeverDLiftTests neverd)
 endif()
 
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+set(NEVERD_SYNTHETIC_WINDOWS_EH_ROOT
+  "${CMAKE_CURRENT_BINARY_DIR}/windows-eh-synthetic")
+set(NEVERD_SYNTHETIC_WINDOWS_EH_MANIFEST
+  "${NEVERD_SYNTHETIC_WINDOWS_EH_ROOT}/synthetic.json")
+add_custom_command(
+  OUTPUT "${NEVERD_SYNTHETIC_WINDOWS_EH_MANIFEST}"
+  COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/make_windows_eh_corpus.py"
+          --output "${NEVERD_SYNTHETIC_WINDOWS_EH_ROOT}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/make_windows_eh_corpus.py"
+  VERBATIM
+  COMMENT "Generating synthetic Windows PE architecture corpus")
+add_custom_target(NeverDWindowsEHSyntheticCorpus
+  DEPENDS "${NEVERD_SYNTHETIC_WINDOWS_EH_MANIFEST}")
+
+add_neverd_unittest(NeverDWindowsEHCorpusManifestTests
+  WindowsEHCorpusManifestTests.cpp
+  WindowsEHCorpusManifest.cpp
+)
+add_dependencies(NeverDWindowsEHCorpusManifestTests
+  NeverDWindowsEHSyntheticCorpus)
+target_compile_definitions(NeverDWindowsEHCorpusManifestTests PRIVATE
+  NEVERD_SYNTHETIC_WINDOWS_EH_ROOT="${NEVERD_SYNTHETIC_WINDOWS_EH_ROOT}"
+)
+target_include_directories(NeverDWindowsEHCorpusManifestTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+target_link_libraries(NeverDWindowsEHCorpusManifestTests PRIVATE
+  NeverDLoader
+  NeverDSupport
+)
+
+if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
+  add_neverd_unittest(NeverDWindowsEHCorpusTests
+    WindowsEHCorpusTests.cpp
+    WindowsEHCorpusManifest.cpp
+    TIMEOUT 300
+  )
+
+  target_compile_definitions(NeverDWindowsEHCorpusTests PRIVATE
+    NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}"
+  )
+
+  target_include_directories(NeverDWindowsEHCorpusTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(NeverDWindowsEHCorpusTests PRIVATE
+    NeverDLoader
+    NeverDSupport
+  )
+endif()
+
 # --- Cross-compile test .c sources into .o objects at build time ---
 find_program(CLANG_EXEC clang)
 

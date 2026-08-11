@@ -83,6 +83,16 @@ add_custom_target(check-neverd-patch-full
   USES_TERMINAL
   COMMENT "Running NeverDPatchFullTests via CTest")
 
+if(TARGET NeverDWindowsEHCorpusTests)
+  add_custom_target(check-neverd-windows-eh-corpus
+    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
+            -L ^NeverDWindowsEHCorpusTests$
+            --output-on-failure --progress -j ${_neverd_ncpu} -C $<CONFIG>
+    DEPENDS NeverDWindowsEHCorpusTests
+    USES_TERMINAL
+    COMMENT "Running the pinned Windows multi-toolchain exception corpus")
+endif()
+
 # Switch / jump-table transformation probing only: a small standalone binary so
 # transformation + backend bugs can be hunted incrementally (ctest -L selects it).
 add_custom_target(check-neverd-switch-xform

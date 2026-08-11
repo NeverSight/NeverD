@@ -160,6 +160,23 @@ add_custom_target(copy_sigs ALL
 )
 
 # --- Unit tests ---
+option(NEVERD_ENABLE_BINARY_CORPUS_TESTS
+       "Enable integration tests backed by the pinned testbins corpus" OFF)
+set(NEVERD_BINARY_CORPUS_ROOT
+    "${CMAKE_SOURCE_DIR}/unittests/corpus"
+    CACHE PATH "Root of the NeverD binary test corpus")
+if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
+    get_filename_component(NEVERD_BINARY_CORPUS_ROOT
+        "${NEVERD_BINARY_CORPUS_ROOT}" ABSOLUTE)
+    if(NOT EXISTS
+       "${NEVERD_BINARY_CORPUS_ROOT}/manifests/windows-eh.json")
+        message(FATAL_ERROR
+            "NEVERD_ENABLE_BINARY_CORPUS_TESTS requires "
+            "${NEVERD_BINARY_CORPUS_ROOT}/manifests/windows-eh.json; "
+            "initialize the unittests/corpus submodule at a generated-corpus revision")
+    endif()
+endif()
+
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(unittests)

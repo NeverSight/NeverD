@@ -12,3 +12,7 @@
 	path = signatures
 	url = https://github.com/NeverSight/signatures.git
 	branch = main
+[submodule "unittests/corpus"]
+	path = unittests/corpus
+	url = https://github.com/NeverSight/testbins.git
+	branch = main
