@@ -179,9 +179,14 @@ recuperación de strings y backends LLVM/C/Rust. No existen copias separadas de
 text o rodata que puedan divergir de la semántica del loader.
 
 Los registros cerrados viven en `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFSyscalls.def` y
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFSyscalls.def` y
 `SBFUpstreamSources.def`. Los diagnósticos y nombres de bloque LLVM de un solo
 uso permanecen locales, siguiendo la convención real de LLVM.
+
+`SBFProtocolLimits.def` registra el valor histórico de 65.536 instrucciones y
+el límite actual de 10 MiB para account data; NeverD deriva de este último su
+límite conservador de decodificación.
 
 En strict v3/v4, los program headers acotados forman el contrato de runtime;
 section y symbol tables son enriquecimiento de debug opcional y no invalidan

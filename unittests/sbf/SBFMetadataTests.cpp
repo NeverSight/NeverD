@@ -139,6 +139,10 @@ TEST(SBFSyscalls, MatchesCurrentStableABIAndTracksProposalsSeparately) {
   EXPECT_EQ(Sha512->Source, SyscallSource::AgaveMaster);
   EXPECT_EQ(syscallSourceRevision(SyscallSource::AgaveMaster),
             "cae40aa610fdbdb313209bc1eec737079eb59688");
+  EXPECT_EQ(syscallSourceRevision(SyscallSource::SBPFMain),
+            "9476336b901181d68e00c5b38252a15694d4d6aa");
+  EXPECT_EQ(syscallSourceRevision(SyscallSource::SolanaSDKMaster),
+            "d045b94c18f8cae8bc30eec310984030ead8d4f4");
   EXPECT_EQ(Decompress->ArgumentCount, 3u);
   EXPECT_EQ(Pairing->ArgumentCount, 5u);
 

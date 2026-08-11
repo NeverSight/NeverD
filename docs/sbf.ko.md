@@ -172,8 +172,12 @@ interpreter, string recovery, LLVM/C/Rust backend가 공유하는 source of trut
 loader semantics와 달라질 수 있는 별도 text/rodata copy는 없습니다.
 
 닫힌 record는 `SBFVersions.def`, `SBFOpcodes.def`, `SBFRelocations.def`,
-`SBFArgumentRegisters.def`, `SBFSyscalls.def`, `SBFUpstreamSources.def`에 둡니다.
+`SBFArgumentRegisters.def`, `SBFProtocolLimits.def`, `SBFSyscalls.def`,
+`SBFUpstreamSources.def`에 둡니다.
 한 번만 쓰는 diagnostic과 LLVM block name은 LLVM 자체 관례대로 local에 둡니다.
+
+`SBFProtocolLimits.def`는 과거의 65,536 instruction 값과 현재의 10 MiB
+account data 상한을 기록하며, NeverD는 후자에서 보수적인 decode 상한을 유도합니다.
 
 strict v3/v4에서는 bounds-check된 program header가 runtime contract입니다.
 section/symbol table은 optional debug enrichment이므로 누락되거나 손상되어도 유효한

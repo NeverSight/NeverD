@@ -172,9 +172,13 @@ interpreter、string recovery、LLVM/C/Rust backend 共通の source of truth �
 loader semantics とずれ得る独立した text/rodata copy はありません。
 
 閉じた record は `SBFVersions.def`、`SBFOpcodes.def`、
-`SBFRelocations.def`、`SBFArgumentRegisters.def`、`SBFSyscalls.def`、
+`SBFRelocations.def`、`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、
+`SBFSyscalls.def`、
 `SBFUpstreamSources.def` に置きます。一度しか使わない diagnostic と LLVM block
 name は、LLVM 自身の方針どおり local に保ちます。
+
+`SBFProtocolLimits.def` は旧来の 65,536 instruction と現在の 10 MiB account
+data 上限を記録し、NeverD は後者から保守的な decode 上限を導出します。
 
 strict v3/v4 では bounds-check 済み program header が runtime contract です。
 section/symbol table は optional debug enrichment なので、欠落・破損しても有効な

@@ -177,9 +177,14 @@ LLVM/C/Rust. Non esistono copie separate di text o rodata che possano divergere
 dalla semantica del loader.
 
 I record chiusi risiedono in `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFSyscalls.def` e
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFSyscalls.def` e
 `SBFUpstreamSources.def`. Diagnostica e nomi di blocchi LLVM usati una sola volta
 restano locali, seguendo la convenzione effettiva di LLVM.
+
+`SBFProtocolLimits.def` registra il valore storico di 65.536 istruzioni e il
+limite corrente di 10 MiB per gli account data; NeverD deriva da quest'ultimo
+il limite conservativo di decodifica.
 
 In strict v3/v4 i program header con limiti verificati formano il contratto
 runtime; section e symbol table sono debug enrichment opzionale e non invalidano

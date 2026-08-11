@@ -177,9 +177,14 @@ LLVM/C/Rust. Отдельных копий text или rodata, способны�
 loader, больше нет.
 
 Замкнутые наборы записаны в `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFSyscalls.def` и
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFSyscalls.def` и
 `SBFUpstreamSources.def`. Одноразовые диагностики и имена LLVM blocks остаются
 локальными, как принято в самом LLVM.
+
+`SBFProtocolLimits.def` фиксирует историческое значение 65 536 инструкций и
+текущий предел account data в 10 MiB; NeverD выводит из последнего
+консервативную границу декодирования.
 
 В strict v3/v4 ограниченные program headers задают runtime-контракт; section и
 symbol tables — лишь необязательное debug enrichment и не делают корректный

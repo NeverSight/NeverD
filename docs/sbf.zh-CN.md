@@ -23,8 +23,12 @@ SBF ELF
 下的 `.def` 数据库；loader 与 backend 使用生成的类型化表，不重复编码或拼写。
 
 闭集表包括 `SBFVersions.def`、`SBFOpcodes.def`、`SBFRelocations.def`、
-`SBFArgumentRegisters.def`、`SBFSyscalls.def` 与 `SBFUpstreamSources.def`；
+`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、`SBFSyscalls.def` 与
+`SBFUpstreamSources.def`；
 单次使用的诊断文本和 LLVM block 名称仍留在局部，遵循 LLVM 自身的 `.def` 策略。
+
+`SBFProtocolLimits.def` 记录历史上的 65,536 条指令值与当前 10 MiB account data
+上限；NeverD 从后者推导保守的 decode 上限。
 
 relocation 完成后，唯一的不可变 VM 地址化 `ProgramImage` 是语义事实来源。
 decoder、interpreter、字符串恢复、LLVM backend 以及 C/Rust backend 都读取同一

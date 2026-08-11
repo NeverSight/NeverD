@@ -281,5 +281,19 @@ TEST(SBFVerifierConformance, RejectsProgramsPastTheInstructionLimit) {
   EXPECT_NE(Error.find("instruction limit"), std::string::npos) << Error;
 }
 
+TEST(SBFVerifierConformance, AcceptsProgramsPastTheLegacyInstructionLimit) {
+  const EncodedInstruction Move = encode(Opcode::MOV64_IMM);
+  const EncodedInstruction Exit = encode(Opcode::EXIT);
+  const size_t InstructionCount = kLegacyProgramInstructionCount + 1;
+  std::vector<uint8_t> Text(InstructionCount * kInstructionSize);
+  for (size_t Slot = 0; Slot + 1 < InstructionCount; ++Slot)
+    std::copy(Move.begin(), Move.end(),
+              Text.begin() + static_cast<ptrdiff_t>(Slot * kInstructionSize));
+  std::copy(Exit.begin(), Exit.end(),
+            Text.begin() + static_cast<ptrdiff_t>((InstructionCount - 1) *
+                                                  kInstructionSize));
+  EXPECT_TRUE(accepts(Version::V3, Text));
+}
+
 } // namespace
 } // namespace neverd::sbf

@@ -179,9 +179,14 @@ LLVM-, C- und Rust-Backends. Separate Text- oder Rodata-Kopien können daher
 nicht von der Loader-Semantik abweichen.
 
 Geschlossene Datensätze liegen in `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFSyscalls.def` und
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFSyscalls.def` und
 `SBFUpstreamSources.def`. Einmalige Diagnosen und LLVM-Blocknamen bleiben lokal,
 entsprechend der tatsächlichen LLVM-Konvention.
+
+`SBFProtocolLimits.def` erfasst den historischen Wert von 65.536 Instructions
+und die aktuelle Account-Data-Grenze von 10 MiB; NeverD leitet daraus die
+konservative Decode-Grenze ab.
 
 Bei strict v3/v4 bilden begrenzte Program Headers den Runtime-Vertrag; Section-
 und Symboltabellen sind optionale Debug-Anreicherung und machen ein gültiges

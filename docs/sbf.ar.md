@@ -170,9 +170,13 @@ VM هي مصدر الحقيقة المشترك للـdecoder وinterpreter وا�
 LLVM/C/Rust. لا توجد نسخ مستقلة من text أو rodata يمكن أن تنحرف عن loader.
 
 توجد السجلات المغلقة في `SBFVersions.def` و`SBFOpcodes.def` و
-`SBFRelocations.def` و`SBFArgumentRegisters.def` و`SBFSyscalls.def` و
+`SBFRelocations.def` و`SBFArgumentRegisters.def` و`SBFProtocolLimits.def` و
+`SBFSyscalls.def` و
 `SBFUpstreamSources.def`. تبقى رسائل التشخيص وأسماء LLVM ذات الاستخدام الواحد
 محلية، وفق أسلوب LLVM الفعلي.
+
+يسجل `SBFProtocolLimits.def` قيمة 65,536 instruction التاريخية وحد بيانات
+account الحالي البالغ 10 MiB؛ ويشتق NeverD حد decode المحافظ من الحد الأخير.
 
 في strict v3/v4 تكون program headers المحدودة هي عقد runtime؛ أما section وsymbol
 tables فهي debug enrichment اختيارية لا تُسقط image صالحة عند غيابها أو تلفها.

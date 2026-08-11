@@ -25,9 +25,14 @@ call-argument ABI, and protocol metadata live in the `.def` databases under
 instead of duplicating encodings or spellings.
 
 The closed tables include `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFSyscalls.def`, and
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFSyscalls.def`, and
 `SBFUpstreamSources.def`; ordinary one-use diagnostics and LLVM block names
 remain local, matching LLVM's own `.def` policy.
+
+`SBFProtocolLimits.def` records the historical 65,536-instruction value and
+the current 10 MiB account-data ceiling; NeverD derives its conservative
+decode bound from the latter.
 
 After relocation, one immutable, VM-addressed `ProgramImage` is the semantic
 source of truth. The decoder, interpreter, string recovery, LLVM backend, and

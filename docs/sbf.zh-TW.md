@@ -183,8 +183,12 @@ interpreter、string recovery 以及 LLVM/C/Rust backend 共用的事實來源�
 可能與 loader semantics 漂移的獨立 text/rodata copy。
 
 封閉資料表放在 `SBFVersions.def`、`SBFOpcodes.def`、`SBFRelocations.def`、
-`SBFArgumentRegisters.def`、`SBFSyscalls.def` 與 `SBFUpstreamSources.def`。
+`SBFArgumentRegisters.def`、`SBFProtocolLimits.def`、`SBFSyscalls.def` 與
+`SBFUpstreamSources.def`。
 只使用一次的診斷文字與 LLVM block name 仍留在 local，符合 LLVM 自身慣例。
+
+`SBFProtocolLimits.def` 記錄歷史上的 65,536 條指令值與目前 10 MiB account data
+上限；NeverD 從後者推導保守的 decode 上限。
 
 strict v3/v4 以完成 bounds check 的 program header 作為 runtime contract；
 section/symbol table 只是 optional debug enrichment，缺失或損壞不會否決有效 image。

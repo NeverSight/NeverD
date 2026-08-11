@@ -180,9 +180,14 @@ des strings et aux backends LLVM/C/Rust. Aucune copie text ou rodata distincte
 ne peut diverger de la sémantique du loader.
 
 Les ensembles fermés résident dans `SBFVersions.def`, `SBFOpcodes.def`,
-`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFSyscalls.def` et
+`SBFRelocations.def`, `SBFArgumentRegisters.def`, `SBFProtocolLimits.def`,
+`SBFSyscalls.def` et
 `SBFUpstreamSources.def`. Les diagnostics et noms de blocs LLVM à usage unique
 restent locaux, conformément à la pratique réelle de LLVM.
+
+`SBFProtocolLimits.def` consigne l'ancienne valeur de 65 536 instructions et
+la limite actuelle de 10 MiB pour les account data ; NeverD dérive de cette
+dernière sa borne de décodage conservatrice.
 
 En strict v3/v4, les program headers bornés constituent le contrat runtime ;
 les tables de sections et de symboles ne sont qu’un enrichissement debug

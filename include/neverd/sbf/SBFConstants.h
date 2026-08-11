@@ -24,7 +24,15 @@ inline constexpr size_t kOpcodeOffset = 0;
 inline constexpr size_t kRegisterByteOffset = 1;
 inline constexpr size_t kBranchOffsetOffset = 2;
 inline constexpr size_t kImmediateOffset = 4;
-inline constexpr size_t kMaxInstructions = 65'536;
+#define SBF_PROTOCOL_LIMIT(NAME, VALUE, SOURCE)                                \
+  inline constexpr size_t k##NAME = VALUE;
+#include "neverd/sbf/SBFProtocolLimits.def"
+inline constexpr size_t kMaxInstructions =
+    kMaxProgramAccountDataSize / kInstructionSize;
+static_assert(kMaxProgramAccountDataSize % kInstructionSize == 0,
+              "the SBF account-data limit must contain whole instructions");
+static_assert(kMaxInstructions > kLegacyProgramInstructionCount,
+              "the deployable-program bound must exceed the legacy cap");
 inline constexpr unsigned kLDDWSlotCount = 2;
 inline constexpr unsigned kBitsPerByte = std::numeric_limits<uint8_t>::digits;
 inline constexpr unsigned kHalfWordBitWidth =

@@ -1,0 +1,27 @@
+//===- SBFProtocolLimits.def - SBF deployment limits --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SBF_PROTOCOL_LIMIT(NAME, VALUE, SOURCE)
+//
+// Values are protocol evidence, not operational policy. Keep each entry
+// paired with a fully pinned source in SBFUpstreamSources.def.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SBF_PROTOCOL_LIMIT
+#define SBF_PROTOCOL_LIMIT(NAME, VALUE, SOURCE)
+#endif
+
+// anza-xyz/sbpf/src/ebpf.rs retains this historical constant, although the
+// current loader and verifier do not enforce it.
+SBF_PROTOCOL_LIMIT(LegacyProgramInstructionCount, 65'536, SBPFMain)
+
+// anza-xyz/solana-sdk/system-interface/src/lib.rs defines the maximum account
+// data length. A deployable ELF is necessarily smaller than its containing
+// program-data account, so this is a conservative hostile-input ceiling.
+SBF_PROTOCOL_LIMIT(MaxProgramAccountDataSize, 10'485'760, SolanaSDKMaster)
+
+#undef SBF_PROTOCOL_LIMIT

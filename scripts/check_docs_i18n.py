@@ -65,6 +65,7 @@ GUIDE_REQUIRED_TOKENS = {
         "Anchor IDL",
         "ProgramImage",
         "SBFArgumentRegisters.def",
+        "SBFProtocolLimits.def",
         "SBFUpstreamSources.def",
         "SBFUpstreamManifest.def",
         "SBFUpstreamOpcodes.def",
