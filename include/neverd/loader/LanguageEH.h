@@ -680,9 +680,13 @@ struct ObjCCatchClause {
   /// it removed.  Empty when the slot could not be resolved -- which is a fact
   /// about the image and not a catch-all.
   std::string ClassName;
-  /// True when the slot names a C++ type rather than an Objective-C class.
-  /// One table holds both in Objective-C++, and a `catch (std::exception &)`
-  /// there is not a clause any Objective-C object can satisfy.
+  /// True when the slot was *proven* to name a C++ type rather than an
+  /// Objective-C class.  One table holds both in Objective-C++, and a
+  /// `catch (std::exception &)` there is not a clause any Objective-C object
+  /// can satisfy.  The two descriptors are interchangeable for every field a
+  /// personality reads, so what proves it is the vtable they carry or the
+  /// `_ZTI` symbol that names them; where neither could be read this stays
+  /// false, which is "not shown to be C++" rather than "shown to be a class".
   bool IsCxxType = false;
 };
 

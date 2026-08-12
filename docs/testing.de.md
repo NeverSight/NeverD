@@ -200,6 +200,43 @@ und den erneut geladenen IP-to-State-Graphen.
 Siehe [Windows-Ausnahmerekonstruktion](windows-exception-reconstruction.de.md)
 für die Analyse-/Native-Supportmatrix und den Fail-Closed-Patch-Vertrag.
 
+### Sprachspezifische Ausnahmemodelle
+
+Alles, was nicht das Windows-Tabellenmodell ist, liegt in einem fokussierten
+Target. `NeverDLanguageEHTests` deckt die DWARF-Frame-Kette, den
+sprachspezifischen Itanium-Datenbereich, ARM EHABI, Darwin Compact Unwind, die
+Frame-Metadaten der Go-Runtime, Rusts Panic-Maschinerie und die drei
+Objective-C-Runtimes ab:
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+Die Tabellen dieser Suite werden Byte für Byte zusammengesetzt statt kompiliert,
+denn die meisten der geprüften Kombinationen gibt kein einzelnes Toolchain
+gemeinsam aus. Objective-C ist der deutlichste Fall: Alle drei Runtimes geben
+eine Itanium-LSDA aus und unterscheiden sich nur darin, was in einem Slot der
+Typtabelle steht — und dieser Unterschied ist vollständig, nicht graduell.
+Apples Slot adressiert ein `objc_typeinfo`, dessen erste zwei Felder
+`std::type_info` bewusst nachbilden; GNUsteps Objective-C++-Slot adressiert eine
+echte `std::type_info`-Ableitung; und der Slot der GNU-Runtime ist überhaupt kein
+Zeiger, sondern die Klassennamenszeichenkette selbst. Die Konvention einer
+Runtime auf die Tabelle einer anderen anzuwenden schlägt nicht fehl — es meldet
+einen Klassennamen, der mitten aus etwas anderem gelesen wurde. Deshalb wird die
+Runtime aus der Personality des Frames bestimmt, bevor irgendein Slot gelesen
+wird.
+
+Dieselbe Suite fixiert zwei Unterscheidungen, die leicht zusammenfallen und
+deren Zusammenfallen falsch ist. `@catch(id)` und `@catch(...)` sind
+verschiedene Handler — der erste nimmt jedes Objective-C-Objekt und lässt eine
+fremde Ausnahme daran vorbeiziehen — und jede Runtime schreibt sie anders. Ein
+Decoder, der beide als Catch-all meldet, hängt einen Handler an Ausnahmen, die
+tatsächlich vorbeigeflogen wären. Und eine setjmp/longjmp-Call-Site-Tabelle
+indiziert Aufrufstellen statt Adressen: Ein Leser, der eine der
+SJLJ-Personalities nicht erkennt, bricht nicht ab, sondern erfindet geschützte
+Bereiche und Landing Pads, die das Programm nie benannt hat.
+
 ### Differentielle Unicorn-Roundtrips
 
 Das Semantik-Fixture prüft Verhalten statt Textform:

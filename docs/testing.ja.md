@@ -183,6 +183,38 @@ catch target、再ロード後の IP-to-state グラフからなるネイティ�
 解析／ネイティブのサポート表と fail-closed patch 契約については、
 [Windows 例外再構築](windows-exception-reconstruction.ja.md)を参照してください。
 
+### 言語例外モデル
+
+Windows テーブルモデル以外のすべては一つの絞り込み target にまとまっています。
+`NeverDLanguageEHTests` は DWARF フレームチェーン、Itanium 言語固有データ領域、
+ARM EHABI、Darwin compact unwind、Go ランタイムのフレームメタデータ、Rust の
+panic 機構、そして三つの Objective-C ランタイムを網羅します。
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+このスイートのテーブルはコンパイルではなくバイト単位で組み立てています。
+検証したい組み合わせの多くは、単一の toolchain がまとめて出力することがない
+からです。Objective-C が最も分かりやすい例で、三つのランタイムはいずれも
+Itanium LSDA を出力し、違いは型テーブルのスロットに何を置くかだけ——しかも
+その違いは程度ではなく全面的です。Apple のスロットは `objc_typeinfo` を指し、
+その最初の二つのフィールドは意図的に `std::type_info` を模しています。GNUstep
+の Objective-C++ スロットは本物の `std::type_info` 派生型を指し、GNU ランタイム
+のスロットはそもそもポインタですらなくクラス名の文字列そのものです。あるランタイム
+の規約を別のランタイムのテーブルに当てはめても失敗はせず、まったく別のものの
+途中から読み取ったクラス名を報告するだけです。だからスロットを読む前に、フレーム
+の personality からランタイムを確定します。
+
+同じスイートは、まとめてしまいがちで、まとめると誤りになる二つの区別も固定します。
+`@catch(id)` と `@catch(...)` は別のハンドラで——前者は任意の Objective-C
+オブジェクトを受け取り、外来例外はその横を通過させます——各ランタイムで綴りが
+異なります。両方を catch-all として報告するデコーダは、本来素通りするはずの例外に
+ハンドラを付けてしまいます。また setjmp/longjmp の call-site テーブルはアドレスでは
+なく呼び出し位置の索引を並べるため、SJLJ personality を認識しそこねた読み取り側は
+エラーにならず、プログラムが指定していない保護範囲と landing pad を捏造します。
+
 ### Unicorn 差分ラウンドトリップ
 
 セマンティック fixture はテキストの形ではなく動作を検査します。

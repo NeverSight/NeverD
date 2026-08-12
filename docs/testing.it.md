@@ -193,6 +193,42 @@ generati e grafo IP-to-state ricaricato.
 Vedere [Ricostruzione delle eccezioni Windows](windows-exception-reconstruction.it.md)
 per la matrice di supporto analisi/nativo e il contratto di patch fail-closed.
 
+### Modelli di eccezioni per linguaggio
+
+Tutto ciò che non è il modello tabellare di Windows sta in un unico target
+mirato. `NeverDLanguageEHTests` copre la catena di frame DWARF, l'area dati
+specifica del linguaggio di Itanium, ARM EHABI, il compact unwind di Darwin, i
+metadati di frame del runtime Go, la macchineria di panic di Rust e i tre
+runtime Objective-C:
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+Le tabelle di questa suite sono assemblate byte per byte anziché compilate,
+perché la maggior parte delle combinazioni da verificare non viene emessa
+insieme da nessuna singola toolchain. Objective-C è il caso più netto: i tre
+runtime emettono tutti una LSDA Itanium e differiscono solo per ciò che sta in
+uno slot della tabella dei tipi, e quella differenza è totale, non di grado. Lo
+slot di Apple indirizza un `objc_typeinfo` i cui primi due campi imitano
+deliberatamente `std::type_info`; quello Objective-C++ di GNUstep indirizza una
+vera sottoclasse di `std::type_info`; e quello del runtime GNU non è nemmeno un
+puntatore, ma la stringa del nome della classe. Applicare la convenzione di un
+runtime alla tabella di un altro non fallisce: riporta un nome di classe letto
+dal mezzo di qualcos'altro. Per questo il runtime viene stabilito dalla
+personality del frame prima di leggere qualsiasi slot.
+
+La stessa suite fissa due distinzioni facili da confondere e sbagliate una volta
+confuse. `@catch(id)` e `@catch(...)` sono gestori diversi — il primo accetta
+qualsiasi oggetto Objective-C e lascia proseguire un'eccezione estranea — e ogni
+runtime li scrive in modo diverso; un decodificatore che riporti entrambi come
+catch-all mette un gestore su eccezioni che in realtà sarebbero passate oltre. E
+una tabella di call site setjmp/longjmp indicizza i punti di chiamata invece
+degli indirizzi: un lettore che non riconosca una delle personality SJLJ non
+fallisce, ma inventa intervalli protetti e landing pad che il programma non ha
+mai nominato.
+
 ### Roundtrip differenziali Unicorn
 
 La fixture semantica verifica il comportamento anziché la forma testuale:

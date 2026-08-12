@@ -437,14 +437,16 @@ TEST(ObjCAppleEH, TellsCatchIdApartFromCatchAll) {
   EXPECT_EQ(F.ObjC->LandingPads[1].Catches[0].Kind, ObjCCatchKind::CatchAll);
 }
 
-TEST(ObjCAppleEH, KeepsACxxTypeInAnObjectiveCxxTableApart) {
+TEST(ObjCAppleEH, KeepsAnImportedCxxTypeApartByItsSymbol) {
   // One table holds both, because Apple's descriptor is `std::type_info`
   // shaped precisely so that it can.  A `catch (std::runtime_error &)` there
-  // is not a clause any Objective-C object can satisfy.
+  // is not a clause any Objective-C object can satisfy.  The standard
+  // exceptions come from libc++abi, so the descriptor holds nothing in this
+  // image and the symbol naming it is the proof.
   BinaryImage Img =
       makeObjCImage("__objc_personality_v0", {kDescriptorVA},
                     {SiteSpec{0x10, 0x10, 0x40, /*Action=*/1}});
-  writeAppleDescriptor(Img, "St13runtime_error");
+  writeAppleDescriptor(Img, /*ClassName=*/nullptr);
   addSymbol(Img, "_ZTISt13runtime_error", kDescriptorVA, /*IsFunc=*/false);
 
   const ExceptionFunction &F = decode(Img);
@@ -452,6 +454,44 @@ TEST(ObjCAppleEH, KeepsACxxTypeInAnObjectiveCxxTableApart) {
   ASSERT_EQ(F.ObjC->LandingPads.size(), 1u);
   ASSERT_EQ(F.ObjC->LandingPads[0].Catches.size(), 1u);
   EXPECT_TRUE(F.ObjC->LandingPads[0].Catches[0].IsCxxType);
+}
+
+TEST(ObjCAppleEH, KeepsALocalCxxTypeApartByItsVTable) {
+  // A type defined in this translation unit carries its own descriptor, whose
+  // name field reads as a plain string and says nothing about which kind of
+  // descriptor it is.  The vtable in the first field does: a `type_info`
+  // subclass points into `__cxxabiv1`'s and an `objc_typeinfo` never can.
+  BinaryImage Img =
+      makeObjCImage("__objc_personality_v0", {kDescriptorVA},
+                    {SiteSpec{0x10, 0x10, 0x40, /*Action=*/1}});
+  writeAppleDescriptor(Img, "9MyCxxType");
+  // A vtable pointer addresses the second slot past the table's start, which
+  // is where `writeAppleDescriptor` puts kDataVA + 0x7f0.
+  addSymbol(Img, "_ZTVN10__cxxabiv117__class_type_infoE",
+            kDataVA + 0x7f0 - 16, /*IsFunc=*/false);
+
+  const ExceptionFunction &F = decode(Img);
+  ASSERT_TRUE(F.ObjC.has_value());
+  ASSERT_EQ(F.ObjC->LandingPads.size(), 1u);
+  ASSERT_EQ(F.ObjC->LandingPads[0].Catches.size(), 1u);
+  EXPECT_TRUE(F.ObjC->LandingPads[0].Catches[0].IsCxxType);
+  EXPECT_EQ(F.ObjC->LandingPads[0].Catches[0].ClassName, "9MyCxxType");
+}
+
+TEST(ObjCAppleEH, DoesNotClaimAnObjectiveCClassIsACxxType) {
+  BinaryImage Img =
+      makeObjCImage("__objc_personality_v0", {kDescriptorVA},
+                    {SiteSpec{0x10, 0x10, 0x40, /*Action=*/1}});
+  writeAppleDescriptor(Img, "NSException");
+  addSymbol(Img, "objc_ehtype_vtable", kDataVA + 0x7f0 - 16,
+            /*IsFunc=*/false);
+
+  const ExceptionFunction &F = decode(Img);
+  ASSERT_TRUE(F.ObjC.has_value());
+  ASSERT_EQ(F.ObjC->LandingPads.size(), 1u);
+  ASSERT_EQ(F.ObjC->LandingPads[0].Catches.size(), 1u);
+  EXPECT_FALSE(F.ObjC->LandingPads[0].Catches[0].IsCxxType);
+  EXPECT_EQ(F.ObjC->LandingPads[0].Catches[0].ClassName, "NSException");
 }
 
 TEST(ObjCAppleEH, UnwrapsAnImportedDescriptorsSymbolIntoAClassName) {

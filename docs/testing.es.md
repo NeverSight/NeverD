@@ -198,6 +198,42 @@ objetivos catch generados y el grafo IP-to-state recargado.
 Consulte [Reconstrucción de excepciones de Windows](windows-exception-reconstruction.es.md)
 para la matriz de soporte de análisis/nativo y el contrato de patch fail-closed.
 
+### Modelos de excepciones por lenguaje
+
+Todo lo que no es el modelo tabular de Windows vive en un único objetivo
+enfocado. `NeverDLanguageEHTests` cubre la cadena de frames DWARF, el área de
+datos específica del lenguaje de Itanium, ARM EHABI, el compact unwind de
+Darwin, los metadatos de frame del runtime de Go, la maquinaria de pánico de
+Rust y los tres runtimes de Objective-C:
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+Las tablas de esta suite se ensamblan byte a byte en lugar de compilarse, porque
+la mayoría de las combinaciones que se quieren probar no las emite junta ninguna
+cadena de herramientas. Objective-C es el caso más claro: los tres runtimes
+emiten una LSDA de Itanium y solo difieren en qué contiene una ranura de la
+tabla de tipos, y esa diferencia es total, no de grado. La ranura de Apple
+direcciona un `objc_typeinfo` cuyos dos primeros campos imitan deliberadamente a
+`std::type_info`; la de Objective-C++ de GNUstep direcciona una subclase real de
+`std::type_info`; y la del runtime GNU no es siquiera un puntero, sino la propia
+cadena con el nombre de la clase. Aplicar la convención de un runtime a la tabla
+de otro no falla: informa de un nombre de clase leído desde la mitad de otra
+cosa. Por eso el runtime se establece a partir de la personality del frame antes
+de leer ninguna ranura.
+
+La misma suite fija dos distinciones fáciles de colapsar y erróneas al hacerlo.
+`@catch(id)` y `@catch(...)` son manejadores distintos —el primero acepta
+cualquier objeto Objective-C y deja que una excepción ajena siga de largo— y
+cada runtime los escribe de otra forma; un decodificador que informe de ambos
+como catch-all pone un manejador sobre excepciones que de hecho habrían pasado
+de largo. Y una tabla de sitios de llamada setjmp/longjmp indexa sitios de
+llamada en vez de direcciones: un lector que no reconozca alguna de las
+personalities SJLJ no falla, sino que inventa rangos protegidos y landing pads
+que el programa nunca nombró.
+
 ### Recorridos diferenciales Unicorn
 
 La fixture semántica prueba comportamiento en vez de forma textual:

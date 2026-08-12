@@ -210,6 +210,39 @@ targets, and the reloaded IP-to-state graph.
 See [Windows Exception Reconstruction](windows-exception-reconstruction.md)
 for the analysis/native support matrix and the fail-closed patch contract.
 
+### Language exception models
+
+Everything that is not the Windows table model lives in one focused target.
+`NeverDLanguageEHTests` covers the DWARF frame chain, the Itanium
+language-specific data area, ARM EHABI, Darwin compact unwind, the Go runtime's
+frame metadata, Rust's panic machinery, and the three Objective-C runtimes:
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+The tables in this suite are assembled byte by byte rather than compiled,
+because the point of most of them is a combination no single toolchain emits.
+Objective-C is the clearest case: all three runtimes emit an Itanium LSDA and
+differ only in what a type-table slot holds, and they differ completely rather
+than in degree. Apple's slot addresses an `objc_typeinfo` whose first two
+fields imitate `std::type_info`, GNUstep's Objective-C++ slot addresses a real
+`std::type_info` subclass, and the GNU runtime's slot is not a pointer at all
+but the class name string itself. Applying one runtime's convention to
+another's table does not fail; it reports a class name read out of the middle
+of something else, which is why the runtime is established from the frame's
+personality before any slot is read.
+
+The same suite pins two distinctions that are easy to collapse and wrong to.
+`@catch(id)` and `@catch(...)` are different handlers — the first takes any
+Objective-C object and lets a foreign exception continue past it — and every
+runtime spells them differently, so a decoder that reports both as a catch-all
+puts a handler on exceptions that would in fact have flown by. And a
+setjmp/longjmp call-site table indexes call sites rather than addresses, so a
+reader that fails to recognize one of the SJLJ personalities does not error
+out; it invents guarded ranges and landing pads the program never named.
+
 ### Unicorn differential roundtrips
 
 The semantic fixture tests behavior rather than textual shape:

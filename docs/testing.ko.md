@@ -178,6 +178,38 @@ target, 재로드한 IP-to-state 그래프로 네이티브 C++ closure를 독립
 분석/네이티브 지원 표와 fail-closed patch 계약은
 [Windows 예외 재구성](windows-exception-reconstruction.ko.md)을 참조하십시오.
 
+### 언어 예외 모델
+
+Windows 테이블 모델이 아닌 모든 것은 하나의 집중 target 에 모여 있습니다.
+`NeverDLanguageEHTests` 는 DWARF 프레임 체인, Itanium 언어별 데이터 영역,
+ARM EHABI, Darwin compact unwind, Go 런타임 프레임 메타데이터, Rust panic
+기구, 그리고 세 가지 Objective-C 런타임을 다룹니다.
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+이 스위트의 테이블은 컴파일이 아니라 바이트 단위로 조립합니다. 검증하려는 조합
+대부분은 단일 toolchain 이 한꺼번에 내보내지 않기 때문입니다. Objective-C 가
+가장 분명한 사례입니다. 세 런타임 모두 Itanium LSDA 를 내보내고, 차이는 타입
+테이블 슬롯에 무엇이 들어가는지 뿐이며, 그 차이는 정도가 아니라 전면적입니다.
+Apple 의 슬롯은 `objc_typeinfo` 를 가리키며 그 첫 두 필드는 의도적으로
+`std::type_info` 를 흉내 냅니다. GNUstep 의 Objective-C++ 슬롯은 진짜
+`std::type_info` 파생 타입을 가리키고, GNU 런타임의 슬롯은 포인터조차 아닌
+클래스 이름 문자열 그 자체입니다. 한 런타임의 규약을 다른 런타임의 테이블에
+적용해도 실패하지 않습니다. 전혀 다른 것의 중간에서 읽어낸 클래스 이름을 보고할
+뿐입니다. 그래서 슬롯을 읽기 전에 프레임의 personality 로 런타임을 먼저
+확정합니다.
+
+같은 스위트는 뭉뚱그리기 쉬우면서 뭉뚱그리면 틀리는 두 가지 구분도 고정합니다.
+`@catch(id)` 와 `@catch(...)` 는 서로 다른 핸들러이며 — 앞의 것은 임의의
+Objective-C 객체를 받고 외래 예외는 그 옆으로 지나가게 둡니다 — 런타임마다
+표기가 다릅니다. 둘 다 catch-all 로 보고하는 디코더는 원래 지나쳤을 예외에
+핸들러를 붙이는 셈입니다. 또한 setjmp/longjmp call-site 테이블은 주소가 아니라
+호출 지점 색인을 담으므로, SJLJ personality 를 알아보지 못한 판독기는 오류를
+내지 않고 프로그램이 지정한 적 없는 보호 구간과 landing pad 를 지어냅니다.
+
 ### Unicorn 차등 왕복
 
 의미론 fixture는 텍스트 모양이 아니라 동작을 테스트합니다.

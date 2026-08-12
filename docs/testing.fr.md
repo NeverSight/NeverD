@@ -200,6 +200,42 @@ et graphe IP-to-state rechargé.
 Voir [Reconstruction des exceptions Windows](windows-exception-reconstruction.fr.md)
 pour la matrice de support analyse/native et le contrat de patch fail-closed.
 
+### Modèles d'exceptions par langage
+
+Tout ce qui n'est pas le modèle tabulaire Windows tient dans une cible ciblée.
+`NeverDLanguageEHTests` couvre la chaîne de frames DWARF, la zone de données
+spécifique au langage d'Itanium, ARM EHABI, le compact unwind de Darwin, les
+métadonnées de frame du runtime Go, la machinerie de panique de Rust et les
+trois runtimes Objective-C :
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+Les tables de cette suite sont assemblées octet par octet plutôt que compilées,
+car la plupart des combinaisons visées ne sont émises conjointement par aucune
+chaîne d'outils. Objective-C en est le cas le plus net : les trois runtimes
+émettent une LSDA Itanium et ne diffèrent que par le contenu d'un emplacement de
+la table de types — et cette différence est totale, non graduelle. L'emplacement
+d'Apple adresse un `objc_typeinfo` dont les deux premiers champs imitent
+délibérément `std::type_info` ; celui d'Objective-C++ de GNUstep adresse une
+véritable sous-classe de `std::type_info` ; et celui du runtime GNU n'est même
+pas un pointeur, mais la chaîne du nom de classe elle-même. Appliquer la
+convention d'un runtime à la table d'un autre n'échoue pas : cela rapporte un
+nom de classe lu au milieu d'autre chose. C'est pourquoi le runtime est établi à
+partir de la personality de la frame avant qu'un seul emplacement ne soit lu.
+
+La même suite fige deux distinctions faciles à confondre et fausses une fois
+confondues. `@catch(id)` et `@catch(...)` sont des gestionnaires différents — le
+premier prend n'importe quel objet Objective-C et laisse une exception étrangère
+poursuivre sa route — et chaque runtime les écrit différemment ; un décodeur qui
+rapporte les deux comme un catch-all pose un gestionnaire sur des exceptions qui
+seraient en fait passées à côté. Et une table de sites d'appel setjmp/longjmp
+indexe des sites d'appel et non des adresses : un lecteur qui ne reconnaît pas
+l'une des personalities SJLJ n'échoue pas, il invente des plages protégées et
+des landing pads que le programme n'a jamais nommés.
+
 ### Allers-retours différentiels Unicorn
 
 La fixture sémantique teste le comportement plutôt que la forme textuelle :

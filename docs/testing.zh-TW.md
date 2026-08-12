@@ -169,6 +169,34 @@ personality 保留、產生的 catch 目標，以及重新載入後的 IP-to-sta
 分析/原生支援矩陣與 fail-closed patch 契約請見
 [Windows 例外重建](windows-exception-reconstruction.zh-TW.md)。
 
+### 語言例外模型
+
+除 Windows 表模型以外的一切都集中在一個聚焦 target 中。
+`NeverDLanguageEHTests` 涵蓋 DWARF 框架鏈、Itanium 語言特定資料區、ARM EHABI、
+Darwin compact unwind、Go 執行期框架中繼資料、Rust panic 機制，以及三種
+Objective-C 執行期：
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+本套件中的表是逐位元組手工組裝而非編譯出來的，因為其中大多數要驗證的組合
+沒有任何單一工具鏈會同時產出。Objective-C 是最典型的例子：三種執行期都發出
+Itanium LSDA，差別只在型別表槽位裡放什麼——而這個差別是徹底的，不是程度問題。
+Apple 的槽位指向 `objc_typeinfo`，其前兩個欄位刻意模仿 `std::type_info`；
+GNUstep 的 Objective-C++ 槽位指向真正的 `std::type_info` 子類別；GNU 執行期的
+槽位根本不是指標，而是類別名字串本身。把一種執行期的約定套到另一種的表上
+不會報錯，只會報出一個從別的東西中間讀出來的類別名——所以在讀任何槽位之前，
+先由框架的 personality 確定執行期。
+
+同一套件還釘住兩個容易混為一談、但混淆即錯誤的區分。`@catch(id)` 與
+`@catch(...)` 是不同的處理器——前者接收任意 Objective-C 物件，並放外來例外
+從旁邊繼續傳播——而每種執行期對兩者的拼寫都不同，所以把兩者都報成 catch-all
+的解碼器，等於給那些本會飛過去的例外安上了處理器。另外，setjmp/longjmp 的
+call-site 表索引的是呼叫點序號而不是位址，因此沒能認出某個 SJLJ personality
+的讀取器不會報錯，而是會憑空造出程式從未指定過的保護區間和 landing pad。
+
 ### Unicorn 差分往返
 
 語意 fixture 測試行為而非文字形狀：

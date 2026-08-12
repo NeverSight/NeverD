@@ -104,6 +104,34 @@ va_t readAppleEHTypeClass(const BinaryImage &Img, va_t TypeInfoVA) {
   return Img.readVA(Class, 1) ? Class : 0;
 }
 
+/// Whether the descriptor \p Entry names is a C++ `std::type_info` rather than
+/// an Objective-C `objc_typeinfo`.
+///
+/// The two are interchangeable by design for the fields a personality reads,
+/// which is the whole reason one table can hold both, so nothing in the record
+/// proper separates them.  The vtable in the first field does: an Objective-C
+/// descriptor always points into `objc_ehtype_vtable` and a C++ one into one
+/// of `__cxxabiv1`'s.  A vtable pointer addresses the second slot past the
+/// start of its table, so the symbol is two words below what the field holds.
+///
+/// Where the descriptor comes from another library -- which is the usual case,
+/// since the Foundation classes and the standard exceptions both do -- there
+/// is no vtable in this image to read, and the symbol naming the descriptor
+/// answers instead.
+bool namesACxxType(const BinaryImage &Img, const ItaniumTypeEntry &Entry) {
+  const std::string Symbol =
+      resolveRoutineName(Img, Entry.TypeInfoVA, Entry.TypeInfoSlotVA);
+  if (stripUnderscores(Symbol).starts_with("ZTI"))
+    return true;
+
+  const unsigned PtrSize = Img.getPointerSize();
+  const va_t VTable = readPointerField(Img, Entry.TypeInfoVA);
+  if (VTable < 2 * PtrSize)
+    return false;
+  const std::string Table = resolveRoutineName(Img, VTable - 2 * PtrSize);
+  return stripUnderscores(Table).starts_with("ZTVN10__cxxabiv1");
+}
+
 /// What a type-table slot means to \p Runtime, given what the Itanium reader
 /// already made of it.
 ///
@@ -161,10 +189,11 @@ ObjCCatchClause classifySlot(const BinaryImage &Img, ObjCRuntimeKind Runtime,
   Clause.Kind = ObjCCatchKind::Class;
   // A slot naming a C++ type is ordinary in Objective-C++: one table holds
   // both, because Apple's descriptor and GNUstep's are both `std::type_info`
-  // shaped precisely so that it can.  Such a name is self-describing and is
-  // left as the mangling has it.
-  if (Name.starts_with("ZTI")) {
+  // shaped precisely so that it can.  The GNU runtime is the exception -- its
+  // slots are strings and can name nothing but a class -- so it is not asked.
+  if (Runtime != ObjCRuntimeKind::GNU && namesACxxType(Img, Entry)) {
     Clause.IsCxxType = true;
+    // A C++ type name is self-describing and is left as the mangling has it.
     Clause.ClassName = Name.str();
     return Clause;
   }

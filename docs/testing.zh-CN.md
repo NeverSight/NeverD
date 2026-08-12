@@ -166,6 +166,34 @@ personality 保留、生成的 catch 目标，以及重新加载后的 IP-to-sta
 分析/原生支持矩阵和 fail-closed patch 契约见
 [Windows 异常重建](windows-exception-reconstruction.zh-CN.md)。
 
+### 语言异常模型
+
+除 Windows 表模型以外的一切都集中在一个聚焦 target 中。
+`NeverDLanguageEHTests` 覆盖 DWARF 帧链、Itanium 语言特定数据区、ARM EHABI、
+Darwin compact unwind、Go 运行时帧元数据、Rust panic 机制，以及三种
+Objective-C 运行时：
+
+```bash
+cmake --build build --target NeverDLanguageEHTests --parallel 4
+build/bin/NeverDLanguageEHTests --gtest_filter='ObjC*'
+```
+
+本套件中的表是逐字节手工装配而非编译出来的，因为其中大多数要验证的组合
+没有任何单一工具链会同时产出。Objective-C 是最典型的例子：三种运行时都发出
+Itanium LSDA，差别只在类型表槽位里放什么——而这个差别是彻底的，不是程度问题。
+Apple 的槽位指向 `objc_typeinfo`，其前两个字段刻意模仿 `std::type_info`；
+GNUstep 的 Objective-C++ 槽位指向真正的 `std::type_info` 子类；GNU 运行时的
+槽位根本不是指针，而是类名字符串本身。把一种运行时的约定套到另一种的表上
+不会报错，只会报出一个从别的东西中间读出来的类名——所以在读任何槽位之前，
+先由帧的 personality 确定运行时。
+
+同一套件还钉住两个容易混为一谈、但混淆即错误的区分。`@catch(id)` 与
+`@catch(...)` 是不同的处理器——前者接收任意 Objective-C 对象，并放外来异常
+从旁边继续传播——而每种运行时对二者的拼写都不同，所以把两者都报成 catch-all
+的解码器，等于给那些本会飞过去的异常安上了处理器。另外，setjmp/longjmp 的
+call-site 表索引的是调用点序号而不是地址，因此没能认出某个 SJLJ personality
+的读取器不会报错，而是会凭空造出程序从未指定过的保护区间和 landing pad。
+
 ### Unicorn 差分往返
 
 语义 fixture 测试行为而不是文本形状：
