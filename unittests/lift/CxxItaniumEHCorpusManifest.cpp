@@ -31,12 +31,21 @@ struct TargetIdentity {
   StringRef Architecture;
   StringRef ObjectFormat;
   BinaryFormat Format;
-  StringRef ExeExtension;
-  StringRef SharedExtension;
   /// True when the hosted runner that builds this cell can also run its
   /// executable, which is what separates `passed` from `not-run-cross-target`.
   bool Native;
 };
+
+/// What a linked artifact is called.  This follows the container rather than
+/// the target, so it is derived instead of repeated once per target -- six
+/// spellings of the same two rules is six chances to transpose them.
+StringRef artifactExtension(StringRef ObjectFormat, StringRef ArtifactKind) {
+  if (ArtifactKind != "shared")
+    return ObjectFormat == "pe" ? StringRef(".exe") : StringRef();
+  if (ObjectFormat == "macho")
+    return ".dylib";
+  return ObjectFormat == "pe" ? StringRef(".dll") : StringRef(".so");
+}
 
 /// Everything the program name alone decides.  A variant is one program at one
 /// optimization level with symbols kept or removed; nothing else varies.
@@ -94,23 +103,20 @@ requireStringArray(const json::Object &Object, StringRef Key, StringRef Context,
 
 std::optional<TargetIdentity> getTargetIdentity(StringRef Target) {
   if (Target == "x86_64-linux-gnu")
-    return TargetIdentity{Arch::X64,  "x86_64", "elf", BinaryFormat::ELF,
-                          "",         ".so",    true};
+    return TargetIdentity{Arch::X64, "x86_64", "elf", BinaryFormat::ELF, true};
   if (Target == "aarch64-linux-gnu")
     return TargetIdentity{Arch::AArch64, "aarch64", "elf", BinaryFormat::ELF,
-                          "",            ".so",     false};
+                          false};
   if (Target == "armv7-linux-gnueabihf")
-    return TargetIdentity{Arch::ARM, "arm", "elf", BinaryFormat::ELF,
-                          "",        ".so", false};
+    return TargetIdentity{Arch::ARM, "arm", "elf", BinaryFormat::ELF, false};
   if (Target == "x86_64-w64-mingw32")
-    return TargetIdentity{Arch::X64, "x86_64", "pe",  BinaryFormat::COFF,
-                          ".exe",    ".dll",   false};
+    return TargetIdentity{Arch::X64, "x86_64", "pe", BinaryFormat::COFF, false};
   if (Target == "x86_64-apple-darwin")
     return TargetIdentity{Arch::X64, "x86_64", "macho", BinaryFormat::MachO,
-                          "",        ".dylib", false};
+                          false};
   if (Target == "arm64-apple-darwin")
     return TargetIdentity{Arch::AArch64, "aarch64", "macho",
-                          BinaryFormat::MachO, "", ".dylib", true};
+                          BinaryFormat::MachO, true};
   return std::nullopt;
 }
 
@@ -188,7 +194,8 @@ std::string cellKey(StringRef Toolchain, StringRef Target) {
 
 std::string variantKey(StringRef Program, StringRef Optimization,
                        bool Stripped) {
-  return (Program + "|" + Optimization + "|" + (Stripped ? "stripped" : "symtab"))
+  return (Program + "|" + Optimization + "|" +
+          (Stripped ? "stripped" : "symtab"))
       .str();
 }
 
@@ -270,7 +277,8 @@ Error verifyContract(const CxxItaniumEHArtifactExpectation &Expectation,
   if ((Expectation.MinTypeTableEntries != 0 ||
        Expectation.MinCatchClauses != 0) &&
       Expectation.SourceLanguage != "cxx")
-    return manifestError(Context + ": a C frame cannot claim a catch or a type");
+    return manifestError(Context +
+                         ": a C frame cannot claim a catch or a type");
   return Error::success();
 }
 
@@ -352,7 +360,8 @@ parseArtifact(const json::Object &Object, size_t Index) {
   if (Result.ArtifactKind != Shape->ArtifactKind ||
       Result.SourceLanguage != Shape->SourceLanguage ||
       Result.Exceptions != Shape->Exceptions)
-    return manifestError(Context + ": artifact shape disagrees with the program");
+    return manifestError(Context +
+                         ": artifact shape disagrees with the program");
 
   auto Optimization = requireString(Object, "optimization", Context);
   if (!Optimization)
@@ -378,9 +387,8 @@ parseArtifact(const json::Object &Object, size_t Index) {
     return manifestError(Context + ": execution status disagrees with target");
 
   const StringRef Symbols = Result.Stripped ? "stripped" : "symtab";
-  const StringRef Extension = Result.ArtifactKind == "shared"
-                                  ? Identity->SharedExtension
-                                  : Identity->ExeExtension;
+  const StringRef Extension =
+      artifactExtension(Result.ObjectFormat, Result.ArtifactKind);
   const std::string ExpectedPath =
       ("corpus/cxx-itanium-eh/" + Result.Toolchain + "/" + Result.Target + "/" +
        Result.Optimization + "/" + Symbols + "/" + Result.ArtifactKind + "/" +
@@ -423,8 +431,8 @@ parseArtifact(const json::Object &Object, size_t Index) {
       {"required_strings", &Result.RequiredStrings, true},
   };
   for (const StringList &Entry : Lists) {
-    auto Values = requireStringArray(*Evidence, Entry.Key, Context + ".evidence",
-                                     Entry.AllowEmpty);
+    auto Values = requireStringArray(*Evidence, Entry.Key,
+                                     Context + ".evidence", Entry.AllowEmpty);
     if (!Values)
       return Values.takeError();
     *Entry.Field = std::move(*Values);
@@ -579,7 +587,8 @@ getCxxItaniumValidationLevelName(CxxItaniumCorpusValidationLevel Level) {
 }
 
 Expected<std::vector<CxxItaniumEHArtifactExpectation>>
-parseCxxItaniumEHCorpusManifest(StringRef Contents, bool RequireCompleteMatrix) {
+parseCxxItaniumEHCorpusManifest(StringRef Contents,
+                                bool RequireCompleteMatrix) {
   auto Parsed = json::parse(Contents);
   if (!Parsed)
     return Parsed.takeError();

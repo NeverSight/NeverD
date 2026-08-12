@@ -88,7 +88,8 @@ parseCxxItaniumEHCorpusManifest(llvm::StringRef Contents,
                                 bool RequireCompleteMatrix);
 
 llvm::Expected<std::vector<CxxItaniumEHArtifactExpectation>>
-loadCxxItaniumEHCorpusManifest(llvm::StringRef Path, bool RequireCompleteMatrix);
+loadCxxItaniumEHCorpusManifest(llvm::StringRef Path,
+                               bool RequireCompleteMatrix);
 
 } // namespace neverd::test
 

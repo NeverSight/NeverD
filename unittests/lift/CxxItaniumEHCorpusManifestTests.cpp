@@ -149,9 +149,9 @@ std::string manifestFor(const Cell &C) {
           C.Path + "\",\"sha256\":\"" + std::string(64, 'a') +
           "\",\"size\":1024,\"toolchain\":\"" + C.Toolchain +
           "\",\"toolchain_version\":\"13.3.0\",\"target\":\"" + C.Target +
-          "\",\"architecture\":\"" + C.Architecture + "\",\"object_format\":\"" +
-          C.ObjectFormat + "\",\"program\":\"" + C.Program +
-          "\",\"artifact_kind\":\"" + C.ArtifactKind +
+          "\",\"architecture\":\"" + C.Architecture +
+          "\",\"object_format\":\"" + C.ObjectFormat + "\",\"program\":\"" +
+          C.Program + "\",\"artifact_kind\":\"" + C.ArtifactKind +
           "\",\"source_language\":\"" + C.SourceLanguage +
           "\",\"exceptions\":\"" + C.Exceptions + "\",\"optimization\":\"" +
           C.Optimization + "\",\"stripped\":" + C.Stripped +
@@ -162,8 +162,8 @@ std::string manifestFor(const Cell &C) {
           "\"runner_arch\":\"x64\",\"runner_image\":\"test\","
           "\"runner_os\":\"linux\",\"strip_tool\":\"strip\"},"
           "\"evidence\":{\"required_sections\":" +
-          C.RequiredSections + ",\"forbidden_sections\":" + C.ForbiddenSections +
-          ",\"required_symbols\":" + C.RequiredSymbols +
+          C.RequiredSections + ",\"forbidden_sections\":" +
+          C.ForbiddenSections + ",\"required_symbols\":" + C.RequiredSymbols +
           ",\"forbidden_symbols\":" + C.ForbiddenSymbols +
           ",\"required_strings\":" + C.RequiredStrings +
           ",\"symbol_names_expected\":" + C.SymbolNamesExpected +
@@ -173,9 +173,8 @@ std::string manifestFor(const Cell &C) {
           ",\"require_unwind_tables\":" + C.RequireUnwindTables +
           "},\"neverd\":{\"validation_level\":\"" + C.ValidationLevel +
           "\",\"personalities_any\":" + C.Personalities +
-          ",\"expect_no_lsda\":" + C.ExpectNoLSDA +
-          ",\"expect_arm_ehabi\":" + C.ExpectArmEHABI +
-          ",\"min_call_sites\":" + C.MinCallSites +
+          ",\"expect_no_lsda\":" + C.ExpectNoLSDA + ",\"expect_arm_ehabi\":" +
+          C.ExpectArmEHABI + ",\"min_call_sites\":" + C.MinCallSites +
           ",\"min_landing_pads\":" + C.MinLandingPads +
           ",\"min_catch_clauses\":" + C.MinCatchClauses +
           ",\"min_cleanup_pads\":" + C.MinCleanupPads +
@@ -361,7 +360,8 @@ TEST(CxxItaniumEHCorpusManifest, RejectsAShapeThatDisagreesWithItsProgram) {
 // The setting is a compiler flag before it is an axis, so a cell whose flags
 // and recorded setting disagree built something other than what the rest of
 // the contract describes.
-TEST(CxxItaniumEHCorpusManifest, RejectsFlagsThatDoNotSelectTheRecordedSetting) {
+TEST(CxxItaniumEHCorpusManifest,
+     RejectsFlagsThatDoNotSelectTheRecordedSetting) {
   Cell C;
   C.CompilerFlags = R"(["-std=c++17","-O0","-fno-exceptions"])";
   expectRejected(C, "records exceptions its flags disable");

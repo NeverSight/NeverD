@@ -164,16 +164,18 @@ TEST(CxxItaniumEHCorpus, DeclaresCompleteBuildMatrix) {
   std::set<BinaryFormat> Formats;
   std::set<Arch> Architectures;
   std::set<std::string> Levels;
-  for (const CxxItaniumEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+  for (const CxxItaniumEHArtifactExpectation &Expectation :
+       *ExpectationsOrErr) {
     Cells.insert(Expectation.Toolchain + "-" + Expectation.Target);
     Formats.insert(Expectation.ExpectedFormat);
     Architectures.insert(Expectation.ExpectedArch);
-    Levels.insert(getCxxItaniumValidationLevelName(Expectation.ValidationLevel));
+    Levels.insert(
+        getCxxItaniumValidationLevelName(Expectation.ValidationLevel));
   }
   EXPECT_EQ(Cells.size(), 9u);
-  EXPECT_EQ(Formats, (std::set<BinaryFormat>{BinaryFormat::ELF,
-                                             BinaryFormat::COFF,
-                                             BinaryFormat::MachO}));
+  EXPECT_EQ(Formats,
+            (std::set<BinaryFormat>{BinaryFormat::ELF, BinaryFormat::COFF,
+                                    BinaryFormat::MachO}));
   EXPECT_EQ(Architectures,
             (std::set<Arch>{Arch::X64, Arch::AArch64, Arch::ARM}));
   // One C++ ABI, three ways to reach the unwinder, and a control that reaches
@@ -187,7 +189,8 @@ TEST(CxxItaniumEHCorpus, MatchesDeclaredBytesAndContainer) {
       << toString(ExpectationsOrErr.takeError());
   const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
 
-  for (const CxxItaniumEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+  for (const CxxItaniumEHArtifactExpectation &Expectation :
+       *ExpectationsOrErr) {
     SCOPED_TRACE(Expectation.Path);
     const std::filesystem::path ArtifactPath = CorpusRoot / Expectation.Path;
     auto BufferOrErr = MemoryBuffer::getFile(ArtifactPath.string());
@@ -241,7 +244,8 @@ TEST(CxxItaniumEHCorpus, RecoversTheCallSiteGraphOnEveryItaniumTarget) {
 
   unsigned Images = 0;
   std::set<std::string> Containers;
-  for (const CxxItaniumEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+  for (const CxxItaniumEHArtifactExpectation &Expectation :
+       *ExpectationsOrErr) {
     if (Expectation.ValidationLevel !=
         CxxItaniumCorpusValidationLevel::LsdaGraph)
       continue;
@@ -309,8 +313,7 @@ TEST(CxxItaniumEHCorpus, RecoversTheCallSiteGraphOnEveryItaniumTarget) {
   EXPECT_EQ(Images, 49u);
   // The same table read out of three containers, which is the thing a single
   // target could never show.
-  EXPECT_EQ(Containers,
-            (std::set<std::string>{"elf", "macho", "pe"}));
+  EXPECT_EQ(Containers, (std::set<std::string>{"elf", "macho", "pe"}));
 }
 
 // `-fno-exceptions` is the control, and what it decides is narrower than "no
@@ -324,9 +327,9 @@ TEST(CxxItaniumEHCorpus, KeepsTheExceptionFreeControlFreeOfLanguageData) {
   const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
 
   unsigned Images = 0;
-  for (const CxxItaniumEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
-    if (Expectation.ValidationLevel !=
-        CxxItaniumCorpusValidationLevel::CfiOnly)
+  for (const CxxItaniumEHArtifactExpectation &Expectation :
+       *ExpectationsOrErr) {
+    if (Expectation.ValidationLevel != CxxItaniumCorpusValidationLevel::CfiOnly)
       continue;
     std::optional<BinaryImage> Image =
         loadArtifact(CorpusRoot / Expectation.Path);
@@ -377,7 +380,8 @@ TEST(CxxItaniumEHCorpus, ReportsArmEhabiAsAGapRatherThanAMisread) {
   const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
 
   unsigned Images = 0;
-  for (const CxxItaniumEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+  for (const CxxItaniumEHArtifactExpectation &Expectation :
+       *ExpectationsOrErr) {
     if (Expectation.ValidationLevel != CxxItaniumCorpusValidationLevel::Ehabi)
       continue;
     ASSERT_TRUE(Expectation.ExpectArmEHABI);
