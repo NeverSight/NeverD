@@ -1448,8 +1448,14 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
   // -O0 spills the induction pointer to the stack, hiding the walk from
   // isInductionRodataStringBase, so honor the symbol's real size here too.
   bool SizedObjectBeyondString = Img->dataObjectSizeAt(Addr) > StrLen + 1;
+  // A relocated pointer slot can begin with printable low address bytes and an
+  // early NUL (for example a Mach-O VTT entry).  Its address identity matters:
+  // turning it into an unnamed compact string lets LLVM merge/rename it and
+  // leaves patched code pointing at copied, unrebased pointer bytes.
+  bool IsRelocatedPointerSlot = Img->CodePtrRelocSlots.count(Addr) != 0 ||
+                                Img->DataPtrRelocSlots.count(Addr) != 0;
   if (IsString && StrLen > 0 && AtStringStart && !SizedObjectBeyondString &&
-      !isInductionRodataStringBase(Addr)) {
+      !IsRelocatedPointerSlot && !isInductionRodataStringBase(Addr)) {
     std::string StrVal(reinterpret_cast<const char *>(Start), StrLen);
     auto *StrConst = llvm::ConstantDataArray::getString(*Ctx, StrVal, true);
     // In mergeable (sharded) mode the name must be a pure function of the
