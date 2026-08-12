@@ -8,6 +8,7 @@
 
 #include "neverd/Support/BinaryEncoding.h"
 #include "neverd/loader/COFF/COFFDelphiEH.h"
+#include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/LanguageRuntime.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -932,6 +933,50 @@ bool isCoveredByRuntimeFunction(const BinaryImage &Img,
       return true;
   }
   return false;
+}
+
+/// Decode the Itanium language-specific data area a mingw frame carries.
+///
+/// mingw-w64 keeps the Itanium C++ ABI's language semantics and reaches them
+/// through Windows SEH: `.pdata` and `.xdata` describe the frame, and the
+/// personality slot names `__gxx_personality_seh0`.  What follows the handler
+/// in `.xdata` is not a Windows dialect at all -- GCC emits the same
+/// `.gcc_except_table` record it would have put in its own section on ELF,
+/// inline, right where the handler data begins.  So the record is read by the
+/// decoder that already reads it everywhere else, and only where to start
+/// differs.
+///
+/// The pointer bases are the ones an Itanium record can name.  There is no
+/// `.eh_frame_hdr` here for `datarel` to mean anything against, so that base
+/// stays zero and a record using it is reported as unresolved rather than
+/// resolved against a guess.
+bool parseMinGWLSDA(ExceptionFunction &F, const BinaryImage &Img) {
+  if (F.HandlerDataVA == 0)
+    return false;
+
+  dwarf_eh::LSDAParseRequest Req;
+  Req.LSDAVA = F.HandlerDataVA;
+  Req.FunctionStart = F.CodeRange.Begin;
+  Req.FunctionEnd = F.CodeRange.End;
+  Req.MaxRecords = MaxLanguageRecords;
+
+  dwarf_eh::PointerBases Bases;
+  Bases.Func = F.CodeRange.Begin;
+  if (const Section *Text = Img.getSectionByName(".text"))
+    Bases.Text = Text->VA;
+
+  dwarf_eh::LSDAParseResult Parsed = dwarf_eh::parseLSDA(Img, Req, Bases);
+  for (const std::string &Diagnostic : Parsed.Diagnostics)
+    F.Diagnostics.push_back(Diagnostic);
+  if (!Parsed.Info) {
+    diagnose(F, ExceptionParseStatus::Partial,
+             "mingw Itanium LSDA at " + llvm::utohexstr(F.HandlerDataVA) +
+                 " was not decoded");
+    return false;
+  }
+  F.Itanium = std::move(*Parsed.Info);
+  F.ParseStatus = mergeExceptionParseStatus(F.ParseStatus, Parsed.ParseStatus);
+  return true;
 }
 
 bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
@@ -2319,6 +2364,10 @@ void resolveExceptionHandlers(BinaryImage &Img) {
         else
           parseGSCookie(F, Img, F.HandlerDataVA + sizeof(uint32_t));
       }
+      break;
+    case ExceptionPersonality::GxxPersonalitySEH0:
+    case ExceptionPersonality::GccPersonalitySEH0:
+      parseMinGWLSDA(F, Img);
       break;
     case ExceptionPersonality::DelphiExceptionHandler: {
       // Delphi's x86-64 compiler installs no registration record: it uses the

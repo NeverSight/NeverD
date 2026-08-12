@@ -92,8 +92,8 @@ constexpr PersonalityName kPersonalityNames[] = {
     {"__gxx_personality_seh0", ExceptionPersonality::GxxPersonalitySEH0},
     {"__gxx_personality_sj0", ExceptionPersonality::GxxPersonalitySJ0},
     {"__gcc_personality_v0", ExceptionPersonality::GccPersonalityV0},
-    {"__gcc_personality_seh0", ExceptionPersonality::GccPersonalityV0},
-    {"__gcc_personality_sj0", ExceptionPersonality::GccPersonalityV0},
+    {"__gcc_personality_seh0", ExceptionPersonality::GccPersonalitySEH0},
+    {"__gcc_personality_sj0", ExceptionPersonality::GccPersonalitySJ0},
     {"__objc_personality_v0", ExceptionPersonality::ObjCPersonalityV0},
     {"rust_eh_personality", ExceptionPersonality::RustEhPersonality},
     // Go.  The linker emits this on windows/amd64 only, and only for
@@ -313,6 +313,8 @@ SourceLanguageRuntime getPersonalityRuntime(ExceptionPersonality P) {
   case ExceptionPersonality::GxxPersonalitySJ0:
     return SourceLanguageRuntime::CxxItanium;
   case ExceptionPersonality::GccPersonalityV0:
+  case ExceptionPersonality::GccPersonalitySEH0:
+  case ExceptionPersonality::GccPersonalitySJ0:
     return SourceLanguageRuntime::C;
   case ExceptionPersonality::ObjCPersonalityV0:
     return SourceLanguageRuntime::ObjectiveC;

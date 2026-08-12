@@ -285,6 +285,11 @@ enum class ExceptionPersonality : uint8_t {
   /// `__gcc_personality_v0`: cleanup-only, emitted for C with
   /// `-fexceptions`.
   GccPersonalityV0,
+  /// `__gcc_personality_seh0`: the same cleanup-only routine reached through
+  /// SEH dispatch, which is what mingw installs for C.
+  GccPersonalitySEH0,
+  /// `__gcc_personality_sj0`: the SJLJ variant.
+  GccPersonalitySJ0,
   ObjCPersonalityV0,
   /// Rust's own personality routine.  It uses the Itanium tables but only
   /// ever selects cleanup or its single `catch_unwind` filter.
@@ -339,6 +344,10 @@ inline const char *getExceptionPersonalityName(ExceptionPersonality P) {
     return "__gxx_personality_sj0";
   case ExceptionPersonality::GccPersonalityV0:
     return "__gcc_personality_v0";
+  case ExceptionPersonality::GccPersonalitySEH0:
+    return "__gcc_personality_seh0";
+  case ExceptionPersonality::GccPersonalitySJ0:
+    return "__gcc_personality_sj0";
   case ExceptionPersonality::ObjCPersonalityV0:
     return "__objc_personality_v0";
   case ExceptionPersonality::RustEhPersonality:
@@ -383,6 +392,8 @@ inline bool isItaniumPersonality(ExceptionPersonality P) {
   case ExceptionPersonality::GxxPersonalitySEH0:
   case ExceptionPersonality::GxxPersonalitySJ0:
   case ExceptionPersonality::GccPersonalityV0:
+  case ExceptionPersonality::GccPersonalitySEH0:
+  case ExceptionPersonality::GccPersonalitySJ0:
   case ExceptionPersonality::ObjCPersonalityV0:
   case ExceptionPersonality::RustEhPersonality:
     return true;
@@ -395,7 +406,9 @@ inline bool isItaniumPersonality(ExceptionPersonality P) {
 /// such a personality can never stop an in-flight exception, which is what
 /// lets the structurer represent it as scope-exit code instead of a handler.
 inline bool isCleanupOnlyPersonality(ExceptionPersonality P) {
-  return P == ExceptionPersonality::GccPersonalityV0;
+  return P == ExceptionPersonality::GccPersonalityV0 ||
+         P == ExceptionPersonality::GccPersonalitySEH0 ||
+         P == ExceptionPersonality::GccPersonalitySJ0;
 }
 
 enum class SEHScopeKind : uint8_t {

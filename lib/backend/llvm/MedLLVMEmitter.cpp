@@ -1178,6 +1178,8 @@ const char *itaniumPersonalitySymbol(ExceptionPersonality P) {
     return "__gxx_personality_seh0";
   case ExceptionPersonality::GccPersonalityV0:
     return "__gcc_personality_v0";
+  case ExceptionPersonality::GccPersonalitySEH0:
+    return "__gcc_personality_seh0";
   case ExceptionPersonality::ObjCPersonalityV0:
     return "__objc_personality_v0";
   case ExceptionPersonality::RustEhPersonality:

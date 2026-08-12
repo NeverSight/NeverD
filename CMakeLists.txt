@@ -175,10 +175,11 @@ set(NEVERD_BINARY_CORPUS_ROOT
 set(NEVERD_HAVE_WINDOWS_EH_CORPUS OFF)
 set(NEVERD_HAVE_RUST_EH_CORPUS OFF)
 set(NEVERD_HAVE_GO_EH_CORPUS OFF)
+set(NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS OFF)
 if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
     get_filename_component(NEVERD_BINARY_CORPUS_ROOT
         "${NEVERD_BINARY_CORPUS_ROOT}" ABSOLUTE)
-    foreach(_corpus_line windows-eh rust-eh go-eh)
+    foreach(_corpus_line windows-eh rust-eh go-eh cxx-itanium-eh)
         string(REPLACE "-" "_" _corpus_slug "${_corpus_line}")
         string(TOUPPER "${_corpus_slug}" _corpus_slug)
         set(_corpus_manifest
@@ -194,7 +195,8 @@ if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
     endforeach()
     if(NOT NEVERD_HAVE_WINDOWS_EH_CORPUS AND
        NOT NEVERD_HAVE_RUST_EH_CORPUS AND
-       NOT NEVERD_HAVE_GO_EH_CORPUS)
+       NOT NEVERD_HAVE_GO_EH_CORPUS AND
+       NOT NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS)
         message(FATAL_ERROR
             "NEVERD_ENABLE_BINARY_CORPUS_TESTS requires at least one manifest "
             "under ${NEVERD_BINARY_CORPUS_ROOT}/manifests; "

@@ -205,6 +205,19 @@ target_link_libraries(NeverDGoEHCorpusManifestTests PRIVATE
   NeverDSupport
 )
 
+add_neverd_unittest(NeverDCxxItaniumEHCorpusManifestTests
+  CxxItaniumEHCorpusManifestTests.cpp
+  CxxItaniumEHCorpusManifest.cpp
+)
+target_include_directories(NeverDCxxItaniumEHCorpusManifestTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+target_link_libraries(NeverDCxxItaniumEHCorpusManifestTests PRIVATE
+  NeverDLoader
+  NeverDSupport
+)
+
 # Each corpus line is published by its own CI workflow, so the root probes them
 # separately and a line the submodule does not yet carry simply has no target.
 # The manifest parsers above stay unconditional: they read synthetic strings and
@@ -274,6 +287,30 @@ if(NEVERD_HAVE_GO_EH_CORPUS)
   )
 
   target_link_libraries(NeverDGoEHCorpusTests PRIVATE
+    NeverDLoader
+    NeverDSupport
+  )
+endif()
+
+if(NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS)
+  # Nine toolchain cells of eight variants, and a mingw image statically links
+  # the whole C runtime, so this reads considerably more table than it emits.
+  add_neverd_unittest(NeverDCxxItaniumEHCorpusTests
+    CxxItaniumEHCorpusTests.cpp
+    CxxItaniumEHCorpusManifest.cpp
+    TIMEOUT 600
+  )
+
+  target_compile_definitions(NeverDCxxItaniumEHCorpusTests PRIVATE
+    NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}"
+  )
+
+  target_include_directories(NeverDCxxItaniumEHCorpusTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(NeverDCxxItaniumEHCorpusTests PRIVATE
     NeverDLoader
     NeverDSupport
   )
