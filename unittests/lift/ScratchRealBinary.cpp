@@ -289,6 +289,29 @@ TEST(Scratch, DumpRealBinary) {
     }
   }
 
+  if (wants("NEVERD_SCRATCH_MODULEDATA")) {
+    if (const std::optional<GoModuleInfo> &M = EH.GoModule) {
+      llvm::errs() << "moduledata va=0x" << llvm::utohexstr(M->ModuleDataVA)
+                   << " text=0x" << llvm::utohexstr(M->TextBase) << " gofunc=0x"
+                   << llvm::utohexstr(M->GoFuncBase) << "\n";
+      const unsigned Words = limitOr("NEVERD_SCRATCH_LIMIT", 48);
+      const size_t Size = Img.is64Bit() ? 8 : 4;
+      for (unsigned I = 0; I < Words; ++I) {
+        const va_t At = M->ModuleDataVA + I * Size;
+        const uint8_t *P = Img.readVA(At, Size);
+        if (!P)
+          break;
+        const uint64_t W = Img.is64Bit() ? readLE<uint64_t>(P)
+                                         : uint64_t(readLE<uint32_t>(P));
+        const Segment *S = Img.getSegmentFor(static_cast<va_t>(W));
+        llvm::errs() << "  w[" << I << "] = 0x" << llvm::utohexstr(W) << " ("
+                     << (S ? S->Name : std::string("-")) << ")\n";
+      }
+    } else {
+      llvm::errs() << "moduledata: none\n";
+    }
+  }
+
   llvm::errs() << "relocations=" << Img.Relocations.size() << "\n";
   for (const DwarfCIE &C : EH.CIEs)
     for (const RelocationEntry &R : Img.Relocations)
