@@ -719,12 +719,33 @@ TEST(ObjCRuntimeState, PrefersThePersonalityToTheImagesShape) {
 }
 
 TEST(ObjCRuntimeState, RecognizesARC) {
-  BinaryImage Img = makeObjCImage("__objc_personality_v0", {},
-                                  {SiteSpec{0x10, 0x10, 0x40, /*Action=*/0}});
-  addSymbol(Img, "objc_storeStrong", kRuntimeVA);
-  decode(Img);
-  ASSERT_TRUE(Img.ExceptionMetadata.ObjCRuntime.has_value());
-  EXPECT_TRUE(Img.ExceptionMetadata.ObjCRuntime->UsesARC);
+  // Every marker here is an entry point only a compiler emits.  The
+  // return-value handshake is the one an optimized Apple build actually
+  // reaches most often, and it is spelled `objc_retainAutoreleasedReturnValue`
+  // on the caller side -- one letter away from two other real symbols.
+  for (const char *Marker :
+       {"_objc_storeStrong", "_objc_retainAutoreleasedReturnValue",
+        "_objc_autoreleaseReturnValue", "_objc_destroyWeak"}) {
+    BinaryImage Img = makeObjCImage("__objc_personality_v0", {},
+                                    {SiteSpec{0x10, 0x10, 0x40, /*Action=*/0}});
+    addSymbol(Img, Marker, kRuntimeVA);
+    decode(Img);
+    ASSERT_TRUE(Img.ExceptionMetadata.ObjCRuntime.has_value()) << Marker;
+    EXPECT_TRUE(Img.ExceptionMetadata.ObjCRuntime->UsesARC) << Marker;
+  }
+}
+
+TEST(ObjCRuntimeState, DoesNotTakeAPlainReleaseForARC) {
+  // `objc_release` and `objc_retain` are reached by hand-written code and by
+  // the runtime itself, so neither says which memory model the image uses.
+  for (const char *Marker : {"_objc_release", "_objc_retain"}) {
+    BinaryImage Img = makeObjCImage("__objc_personality_v0", {},
+                                    {SiteSpec{0x10, 0x10, 0x40, /*Action=*/0}});
+    addSymbol(Img, Marker, kRuntimeVA);
+    decode(Img);
+    ASSERT_TRUE(Img.ExceptionMetadata.ObjCRuntime.has_value()) << Marker;
+    EXPECT_FALSE(Img.ExceptionMetadata.ObjCRuntime->UsesARC) << Marker;
+  }
 }
 
 TEST(ObjCRuntimeState, IgnoresAnImageWithoutTheObjectiveCRuntime) {

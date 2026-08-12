@@ -471,14 +471,22 @@ ObjCRuntimeKind runtimeFromImage(const BinaryImage &Img) {
 
 /// True when the image links ARC rather than managing retain counts by hand.
 ///
-/// The marker is `objc_storeStrong`: the compiler emits it for every strong
-/// assignment and nothing else calls it, whereas `objc_release` also appears
-/// in code that manages its own counts.
+/// The markers are the entry points only a compiler emits.  `objc_release` and
+/// `objc_retain` are not among them: hand-written code reaches those too, and
+/// the runtime itself is full of them.  What no hand-written code contains is
+/// the return-value handshake -- the caller-side `objc_retainAutoreleased*`
+/// paired with a callee-side `objc_autoreleaseReturnValue` -- or the weak
+/// reference helpers, both of which exist only because ARC needs them.
 bool linksARC(const BinaryImage &Img) {
   auto names = [](llvm::StringRef Raw) {
     const llvm::StringRef Name = stripUnderscores(Raw);
-    return Name == "objc_storeStrong" || Name == "objc_retainAutoreleaseReturnValue" ||
-           Name == "objc_autoreleaseReturnValue";
+    return Name == "objc_storeStrong" || Name == "objc_storeWeak" ||
+           Name == "objc_initWeak" || Name == "objc_destroyWeak" ||
+           Name == "objc_loadWeakRetained" ||
+           Name == "objc_autoreleaseReturnValue" ||
+           Name == "objc_retainAutoreleaseReturnValue" ||
+           Name == "objc_retainAutoreleasedReturnValue" ||
+           Name == "objc_unsafeClaimAutoreleasedReturnValue";
   };
   for (const Symbol &S : Img.Symbols)
     if (names(S.Name))

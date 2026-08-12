@@ -147,6 +147,47 @@ void dumpRustFunction(const ExceptionFunction &F) {
                  << getRustPanicKindName(P.Kind) << " " << P.TargetName << "\n";
 }
 
+void dumpObjCRuntime(const ExceptionInfo &EH) {
+  if (!EH.ObjCRuntime)
+    return;
+  const ObjCRuntimeInfo &O = *EH.ObjCRuntime;
+  llvm::errs() << "objc-runtime " << getObjCRuntimeKindName(O.Runtime)
+               << (O.RuntimeProvenByPersonality ? " (from personality)"
+                                                : " (inferred)")
+               << " arc=" << O.UsesARC << "\n"
+               << "  catch=" << O.CatchFrames << " cleanup=" << O.CleanupFrames
+               << " synchronized=" << O.SynchronizedFrames
+               << " fragile-try=" << O.FragileTryFrames
+               << " throw-sites=" << O.ThrowSites << "\n";
+}
+
+void dumpObjCFunction(const BinaryImage &Img, const ExceptionFunction &F) {
+  const ObjCFunctionEH &O = *F.ObjC;
+  const Symbol *Sym = Img.findSymbolAt(F.CodeRange.Begin);
+  llvm::errs() << "--- objc 0x" << llvm::utohexstr(F.CodeRange.Begin) << "-0x"
+               << llvm::utohexstr(F.CodeRange.End) << " '"
+               << (Sym ? Sym->Name : std::string()) << "' "
+               << getObjCRuntimeKindName(O.Runtime)
+               << " msvc=" << O.UsesMSVCTables
+               << " fragile=" << O.UsesFragileSetjmp << "\n";
+  for (const ObjCLandingPad &Pad : O.LandingPads) {
+    llvm::errs() << "    pad@0x" << llvm::utohexstr(Pad.PadVA) << " "
+                 << getObjCPadKindName(Pad.Kind) << " guards [0x"
+                 << llvm::utohexstr(Pad.GuardedRange.Begin) << ",0x"
+                 << llvm::utohexstr(Pad.GuardedRange.End) << ")\n";
+    for (const ObjCCatchClause &C : Pad.Catches)
+      llvm::errs() << "      catch " << getObjCCatchKindName(C.Kind) << " '"
+                   << C.ClassName << "'" << (C.IsCxxType ? " (c++)" : "")
+                   << " type=0x" << llvm::utohexstr(C.TypeInfoVA) << " slot=0x"
+                   << llvm::utohexstr(C.TypeInfoSlotVA) << " class=0x"
+                   << llvm::utohexstr(C.ClassVA) << "\n";
+  }
+  for (const ObjCRuntimeCall &C : O.RuntimeCalls)
+    llvm::errs() << "    call@0x" << llvm::utohexstr(C.CallVA) << " "
+                 << getObjCRuntimeCallKindName(C.Kind) << " " << C.TargetName
+                 << "\n";
+}
+
 void dumpItanium(const ExceptionFunction &F) {
   const ItaniumEHInfo &I = *F.Itanium;
   llvm::errs() << "--- itanium 0x" << llvm::utohexstr(F.CodeRange.Begin)
@@ -387,6 +428,21 @@ TEST(Scratch, DumpRealBinary) {
 
   dumpGoModule(EH);
   dumpRustRuntime(EH);
+  dumpObjCRuntime(EH);
+
+  if (wants("NEVERD_SCRATCH_OBJC")) {
+    unsigned ObjCShown = 0;
+    const va_t Only = addrOr("NEVERD_SCRATCH_ADDR", 0);
+    for (const ExceptionFunction &F : EH.Functions) {
+      if (!F.ObjC || (Only != 0 && !F.CodeRange.contains(Only)))
+        continue;
+      if (ObjCShown++ < limitOr("NEVERD_SCRATCH_LIMIT", 4)) {
+        dumpObjCFunction(Img, F);
+        if (F.Itanium)
+          dumpItanium(F);
+      }
+    }
+  }
 
   // Per-encoding and per-status census: the shape of a whole image says more
   // about whether a decoder is right than any single record does.
