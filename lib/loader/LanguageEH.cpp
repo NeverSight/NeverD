@@ -162,6 +162,18 @@ const char *getGoDeferKindName(GoDeferKind Kind) {
   return "unknown";
 }
 
+const char *getGoOpenCodedDeferLayoutName(GoOpenCodedDeferLayout Layout) {
+  switch (Layout) {
+  case GoOpenCodedDeferLayout::Contiguous:
+    return "contiguous";
+  case GoOpenCodedDeferLayout::Enumerated:
+    return "enumerated";
+  case GoOpenCodedDeferLayout::LegacyEnumerated:
+    return "legacy-enumerated";
+  }
+  return "unknown";
+}
+
 const char *getGoUnsafePointKindName(GoUnsafePointKind Kind) {
   switch (Kind) {
   case GoUnsafePointKind::Safe:

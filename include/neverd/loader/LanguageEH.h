@@ -606,6 +606,16 @@ struct RustFunctionEH {
   bool hasExceptionalControlFlow() const {
     return !LandingPads.empty() || !Panics.empty();
   }
+  /// True when some site here begins a panic rather than continuing one.
+  /// `_Unwind_Resume` is the tail of a cleanup pad in every language that
+  /// unwinds, so it is the one panic site that says nothing about whose
+  /// frame this is.
+  bool raisesAPanic() const {
+    for (const RustPanicSite &Site : Panics)
+      if (Site.Kind != RustPanicKind::Resume)
+        return true;
+    return false;
+  }
 
 private:
   bool hasPad(RustLandingPadKind Kind) const {
@@ -680,15 +690,41 @@ struct GoOpenCodedDefer {
   int32_t ClosureOffset = 0;
 };
 
-/// The whole of `FUNCDATA_OpenCodedDeferInfo`: two unsigned varints giving the
-/// distance *below* varp of the defer bitmask byte and of the first closure
-/// slot.  The remaining slots follow the first consecutively, one pointer
-/// apart.  The record deliberately does not store how many slots are live —
-/// the runtime learns that from the bitmask at unwind time — so a decoder that
-/// reports a slot count has invented it.
+/// Which of the three spellings Go has given `FUNCDATA_OpenCodedDeferInfo` a
+/// record uses.  The pclntab magic distinguishes none of them: it last changed
+/// in Go 1.20 while the record changed in Go 1.18 and again in Go 1.22, so one
+/// magic covers two spellings and only the bytes say which is which.
+enum class GoOpenCodedDeferLayout : uint8_t {
+  /// Go 1.22 and later.  The compiler sorts the closure slots into a single
+  /// ascending run, so the record names only where that run begins and the
+  /// runtime reaches the rest by indexing it.
+  Contiguous,
+  /// Go 1.18 through 1.21.  The compiler placed the slots wherever it liked,
+  /// so the record names how many there are and then every one of them.
+  Enumerated,
+  /// Go 1.14, where open-coded defers began, through Go 1.17.  A deferred call
+  /// could still take arguments then, so the record also leads with the
+  /// largest argument frame any of them needs and gives each defer its
+  /// argument size and argument list alongside its closure slot.  Go 1.18 made
+  /// deferred functions argumentless and dropped all of it.
+  LegacyEnumerated,
+};
+
+const char *getGoOpenCodedDeferLayoutName(GoOpenCodedDeferLayout Layout);
+
+/// The whole of `FUNCDATA_OpenCodedDeferInfo`: unsigned varints giving the
+/// distance *below* varp of the defer bitmask byte and of the closure slots.
 struct GoOpenCodedDeferInfo {
+  GoOpenCodedDeferLayout Layout = GoOpenCodedDeferLayout::Contiguous;
   uint32_t DeferBitsOffset = 0;
+  /// Frame offset of the closure slot the record names first.
   uint32_t SlotsOffset = 0;
+  /// True when the record named its slots outright, which makes
+  /// `GoFunctionEH::OpenCodedDefers` the frame's exact set.  A `Contiguous`
+  /// record deliberately does not store how many slots are live — the runtime
+  /// learns that from the bitmask at unwind time — so there the slots are an
+  /// upper bound and a decoder that reports a count has invented it.
+  bool SlotCountIsExact = false;
   /// Upper bound on live slots, fixed by the one-byte bitmask.
   static constexpr unsigned MaxSlots = 8;
 };
@@ -885,6 +921,11 @@ struct GoModuleInfo {
   /// layout this records which position the pointer maps proved; nullopt when
   /// nothing proved one, in which case no function carries stack map ranges.
   std::optional<uint32_t> StackMapPCDataIndex;
+  /// Spelling of `FUNCDATA_OpenCodedDeferInfo` the image's records were read
+  /// with.  Go 1.22 changed it without changing the pclntab magic, so this is
+  /// what the records themselves proved rather than what the header declared.
+  GoOpenCodedDeferLayout OpenCodedDeferLayout =
+      GoOpenCodedDeferLayout::Contiguous;
 };
 
 } // namespace neverd

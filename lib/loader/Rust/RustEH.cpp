@@ -376,13 +376,23 @@ void parseRustExceptions(BinaryImage &Img) {
     if (F.ParseStatus == ExceptionParseStatus::Malformed)
       continue;
     RustFunctionEH EH;
-    const bool IsRust =
+    const bool FromTables =
         annotateItanium(F, EH) |
         static_cast<int>(
             annotateMSVC(F, Img, EH, Runtime.PanicTypeDescriptorVA));
-    if (!IsRust)
-      continue;
     collectPanicSites(Img, F.CodeRange, Targets, EH);
+    // A frame that names no personality has declared no language, and calling
+    // the panic runtime is then evidence enough that it is Rust's.  Under
+    // `-C panic=abort` it is the only evidence there is: nothing the producer
+    // compiled carries a handler, so requiring one leaves every frame it wrote
+    // unclassified while the prebuilt standard library beside it -- compiled
+    // to unwind, tables and all -- is the only thing that gets read.  A frame
+    // that does name one has already said whose it is, and a `throw()`
+    // specification under the C++ personality is not a Rust nounwind guard
+    // however much the two look alike.
+    if (!FromTables && (F.Personality != ExceptionPersonality::None ||
+                        !EH.raisesAPanic()))
+      continue;
     Runtime.UsesMSVCUnwinding |= EH.UsesMSVCTables;
     Runtime.CleanupFrames += EH.runsDropGlue();
     Runtime.CatchUnwindFrames += EH.catchesUnwind();
