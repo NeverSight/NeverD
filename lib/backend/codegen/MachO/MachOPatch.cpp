@@ -539,7 +539,10 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
             GeneratedEHFrame = &Section;
             break;
           }
-        if (GeneratedEHFrame &&
+        // When the input has no __eh_frame section, the compiler leaves the
+        // generated section in Img.Bytes as before.  Only externally placed
+        // bytes need to be appended to an existing section.
+        if (GeneratedEHFrame && !GeneratedEHFrame->IsInImage &&
             (!HasEHFrameRegion ||
              !appendGeneratedEHFrame(Binary, EHRegion, *GeneratedEHFrame))) {
           llvm::WithColor::error()
