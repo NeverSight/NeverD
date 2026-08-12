@@ -148,12 +148,21 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     if (Exception->Rust)
       for (const RustLandingPad &Pad : Exception->Rust->LandingPads)
         AddExceptionalRoot(Pad.PadVA);
-    if (Exception->Registration)
+    if (Exception->Registration) {
       for (const RegistrationScopeRecord &Scope :
            Exception->Registration->Scopes) {
         AddExceptionalRoot(Scope.FilterVA);
         AddExceptionalRoot(Scope.HandlerVA);
       }
+      // A store of the current try level ends the region the previous level
+      // guarded and begins the next one.  Cutting the block after it keeps one
+      // level current throughout every block, which is what lets a block be
+      // given its scope's edges without splitting hairs over where in the block
+      // the change took effect.
+      for (const RegistrationTryLevelStore &Store :
+           Exception->Registration->TryLevelStores)
+        AddBoundary(Store.EndVA);
+    }
     if (Exception->Delphi) {
       AddExceptionalRoot(Exception->Delphi->FinallyBodyVA);
       AddExceptionalRoot(Exception->Delphi->ExceptBodyVA);
@@ -821,6 +830,47 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
         for (const CxxCatchHandler &Catch : Try.Handlers)
           AddEdge(Block, Catch.HandlerVA, ExceptionalEdgeKind::CxxCatch,
                   static_cast<uint32_t>(I), State);
+      }
+    }
+  }
+
+  // x86-32 registration chain.  This table is indexed by the try level the
+  // frame holds rather than by address, so a scope guards exactly those blocks
+  // that run while its level is current, and the recovered stores are the only
+  // record of which those are.  Nesting is by level, not by containment: when
+  // an exception arrives the runtime offers it to the current level's scope and
+  // then to each enclosing one in turn, so every scope on that chain gets an
+  // edge and not just the innermost.
+  if (Metadata.Registration && !Metadata.Registration->TryLevelStores.empty()) {
+    const RegistrationChainInfo &Chain = *Metadata.Registration;
+    const size_t ScopeCount = Chain.Scopes.size();
+    for (LowBlock &Block : Func.Blocks) {
+      // The store's own block still runs at the outgoing level, so only a store
+      // that has completed by the time the block is entered counts.
+      int32_t Level = Chain.SeededTryLevel.value_or(-1);
+      for (const RegistrationTryLevelStore &Store : Chain.TryLevelStores) {
+        if (Store.EndVA > Block.StartAddr)
+          break;
+        Level = Store.Level;
+      }
+
+      // A malformed table could name itself as its own enclosing level; the
+      // scope count bounds the walk so such a cycle cannot spin.
+      for (size_t Step = 0; Step < ScopeCount; ++Step) {
+        if (Level < 0 || static_cast<size_t>(Level) >= ScopeCount)
+          break;
+        const RegistrationScopeRecord &Scope = Chain.Scopes[Level];
+        const uint32_t Region = static_cast<uint32_t>(Level);
+        if (Scope.IsFinally) {
+          AddEdge(Block, Scope.HandlerVA, ExceptionalEdgeKind::SEHFinally,
+                  Region, Level);
+        } else {
+          AddEdge(Block, Scope.FilterVA, ExceptionalEdgeKind::SEHFilter, Region,
+                  Level);
+          AddEdge(Block, Scope.HandlerVA, ExceptionalEdgeKind::SEHHandler,
+                  Region, Level);
+        }
+        Level = Scope.EnclosingLevel;
       }
     }
   }

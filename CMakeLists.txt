@@ -166,14 +166,38 @@ option(NEVERD_ENABLE_BINARY_CORPUS_TESTS
 set(NEVERD_BINARY_CORPUS_ROOT
     "${CMAKE_SOURCE_DIR}/unittests/corpus"
     CACHE PATH "Root of the NeverD binary test corpus")
+# Each corpus line is produced by its own CI workflow and lands in the
+# submodule independently, so a checkout that predates one line's first
+# publication is a normal state rather than a broken one.  Probing the lines
+# separately keeps the ones that have shipped under test instead of failing the
+# configure for the ones that have not; only a checkout carrying no manifest at
+# all is an error, because that is an uninitialized submodule.
+set(NEVERD_HAVE_WINDOWS_EH_CORPUS OFF)
+set(NEVERD_HAVE_RUST_EH_CORPUS OFF)
+set(NEVERD_HAVE_GO_EH_CORPUS OFF)
 if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
     get_filename_component(NEVERD_BINARY_CORPUS_ROOT
         "${NEVERD_BINARY_CORPUS_ROOT}" ABSOLUTE)
-    if(NOT EXISTS
-       "${NEVERD_BINARY_CORPUS_ROOT}/manifests/windows-eh.json")
+    foreach(_corpus_line windows-eh rust-eh go-eh)
+        string(REPLACE "-" "_" _corpus_slug "${_corpus_line}")
+        string(TOUPPER "${_corpus_slug}" _corpus_slug)
+        set(_corpus_manifest
+            "${NEVERD_BINARY_CORPUS_ROOT}/manifests/${_corpus_line}.json")
+        if(EXISTS "${_corpus_manifest}")
+            set(NEVERD_HAVE_${_corpus_slug}_CORPUS ON)
+        else()
+            message(STATUS
+                "Omitting the ${_corpus_line} corpus tests: this checkout of "
+                "${NEVERD_BINARY_CORPUS_ROOT} carries no "
+                "manifests/${_corpus_line}.json")
+        endif()
+    endforeach()
+    if(NOT NEVERD_HAVE_WINDOWS_EH_CORPUS AND
+       NOT NEVERD_HAVE_RUST_EH_CORPUS AND
+       NOT NEVERD_HAVE_GO_EH_CORPUS)
         message(FATAL_ERROR
-            "NEVERD_ENABLE_BINARY_CORPUS_TESTS requires "
-            "${NEVERD_BINARY_CORPUS_ROOT}/manifests/windows-eh.json; "
+            "NEVERD_ENABLE_BINARY_CORPUS_TESTS requires at least one manifest "
+            "under ${NEVERD_BINARY_CORPUS_ROOT}/manifests; "
             "initialize the unittests/corpus submodule at a generated-corpus revision")
     endif()
 endif()

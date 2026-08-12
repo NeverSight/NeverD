@@ -404,8 +404,11 @@ TEST(ExceptionCFGEdge, LinksEachDelphiX64ScopeOverTheRangeItGuards) {
   Cleanup.Kind = DelphiScopeKind::Finally;
   Cleanup.TargetVA = kEntry + 1;
   Table.Scopes.push_back(std::move(Cleanup));
+  // Guarding the cleanup the first scope names is what puts this scope over a
+  // block that exists: nothing branches into the middle of the text, so a
+  // range no root reaches would select nothing and prove nothing.
   DelphiScopeRecord Arms;
-  Arms.GuardedRange = {kEntry + 3, kEntry + 5};
+  Arms.GuardedRange = {kEntry + 1, kEntry + 3};
   Arms.Kind = DelphiScopeKind::OnException;
   DelphiOnExceptionEntry Arm;
   Arm.HandlerVA = kEntry + 7;
@@ -414,12 +417,12 @@ TEST(ExceptionCFGEdge, LinksEachDelphiX64ScopeOverTheRangeItGuards) {
   EH.DelphiScopes = std::move(Table);
 
   const LowFunc Func = buildWith(Img, std::move(EH), Arch::X64);
-  // The scope's range is what selects the blocks, so the cleanup edge belongs
-  // to the entry alone and the arm edge to the block the second scope covers.
+  // A scope's range is what selects the blocks it applies to, so neither edge
+  // reaches the other scope's block.
   EXPECT_EQ(edgesFrom(Func, kEntry),
             (std::vector<std::pair<ExceptionalEdgeKind, va_t>>{
                 {ExceptionalEdgeKind::DelphiFinally, kEntry + 1}}));
-  EXPECT_EQ(edgesFrom(Func, kEntry + 3),
+  EXPECT_EQ(edgesFrom(Func, kEntry + 1),
             (std::vector<std::pair<ExceptionalEdgeKind, va_t>>{
                 {ExceptionalEdgeKind::DelphiOnException, kEntry + 7}}));
 }

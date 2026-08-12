@@ -43,6 +43,14 @@ symbolNameCandidates(llvm::StringRef Name) {
 
   add(Name);
   llvm::StringRef Base = Name;
+  // `DW.ref.<routine>` is not a routine: it is the word-sized slot a CIE
+  // points at when its personality is encoded indirectly, which is what every
+  // non-x86 ELF target does.  The slot is named after what it holds, so the
+  // routine's own name is recoverable without following the pointer -- and it
+  // has to be, because a shared object resolves that pointer at load time and
+  // the file on disk holds a relocation rather than an address.
+  if (Base.consume_front("DW.ref."))
+    add(Base);
   if (Base.consume_front("__imp_"))
     add(Base);
   // An x86-32 PE decorates a stdcall symbol with `@<bytes>`.
@@ -322,6 +330,30 @@ SourceLanguageRuntime getPersonalityRuntime(ExceptionPersonality P) {
   }
 }
 
+/// True for an ARM or AArch64 mapping symbol.
+///
+/// The ELF ABI for the ARM architecture defines `$a`, `$d`, `$t` and `$x` --
+/// each optionally followed by `.` and a suffix -- to mark where the
+/// instruction set changes or data begins.  The assembler emits one at the
+/// start of practically every function, at the same address as the function's
+/// own symbol, so a lookup by address that does not skip them answers `$x` for
+/// half the image.  That is not a cosmetic wrong name: it is what makes an
+/// aarch64 Rust object report an unknown personality for every frame it has.
+bool isArmMappingSymbol(llvm::StringRef Name) {
+  if (Name.size() < 2 || Name[0] != '$')
+    return false;
+  if (Name[1] != 'a' && Name[1] != 'd' && Name[1] != 't' && Name[1] != 'x')
+    return false;
+  return Name.size() == 2 || Name[2] == '.';
+}
+
+/// True when \p Name can stand for the routine at an address, as opposed to a
+/// marker the toolchain put there for its own bookkeeping.
+bool namesARoutine(llvm::StringRef Name) {
+  return !Name.empty() && !Name.starts_with(kAutoFuncPrefix) &&
+         !isArmMappingSymbol(Name);
+}
+
 std::string resolveRoutineName(const BinaryImage &Img, va_t Address,
                                va_t SlotVA) {
   // A dynamically bound slot is authoritative when present: the value it holds
@@ -336,14 +368,31 @@ std::string resolveRoutineName(const BinaryImage &Img, va_t Address,
     for (const RelocationEntry &Rel : Img.Relocations)
       if (Rel.Address == SlotVA && !Rel.SymbolName.empty())
         return Rel.SymbolName;
+    // A relative relocation names no symbol because it needs none: the routine
+    // is defined in this image, so the loader only has to add the load bias to
+    // an addend that already holds the address.  That addend is the one thing
+    // in the file that says where the slot will point, and without reading it
+    // a position-independent image resolves every personality to nothing --
+    // the slot's own contents are zero until the loader writes them.
+    for (const RelocationEntry &Rel : Img.Relocations) {
+      if (Rel.Address != SlotVA || !Rel.SymbolName.empty() || Rel.Addend <= 0)
+        continue;
+      // The addend is a link-time address, which is the loaded one only when
+      // the image was linked at the base it is being read at.  Both readings
+      // are tried because only one of them can name a routine.
+      const va_t Target = static_cast<va_t>(Rel.Addend);
+      for (va_t Candidate : {Target, Img.Base + Target})
+        for (const Symbol &Sym : Img.Symbols)
+          if (Sym.Addr == Candidate && namesARoutine(Sym.Name))
+            return Sym.Name;
+    }
   }
 
   if (Address == 0)
     return {};
 
   for (const Symbol &Sym : Img.Symbols)
-    if (Sym.Addr == Address &&
-        !llvm::StringRef(Sym.Name).starts_with(kAutoFuncPrefix))
+    if (Sym.Addr == Address && namesARoutine(Sym.Name))
       return Sym.Name;
   for (const Import &Imp : Img.Imports)
     if (Imp.IATAddr == Address && !Imp.Name.empty())
@@ -360,6 +409,17 @@ std::string resolveRoutineName(const BinaryImage &Img, va_t Address,
   for (const RelocationEntry &Rel : Img.Relocations)
     if (Rel.Address == Address && !Rel.SymbolName.empty())
       return Rel.SymbolName;
+
+  // Last resort: the slot's own name.  Every non-x86 ELF target reaches its
+  // personality through an indirection slot, and in a shared object that slot
+  // holds a relative relocation -- one with no symbol to read, resolved by the
+  // loader from an addend.  Nothing above can name the routine in that case.
+  // The static symbol table can, because the compiler names the slot after
+  // what it holds: `DW.ref.<routine>`, which `symbolNameCandidates` unwraps.
+  if (SlotVA != 0)
+    for (const Symbol &Sym : Img.Symbols)
+      if (Sym.Addr == SlotVA && namesARoutine(Sym.Name))
+        return Sym.Name;
   return {};
 }
 

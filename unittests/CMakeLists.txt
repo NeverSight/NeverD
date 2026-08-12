@@ -93,6 +93,26 @@ if(TARGET NeverDWindowsEHCorpusTests)
     COMMENT "Running the pinned Windows multi-toolchain exception corpus")
 endif()
 
+if(TARGET NeverDRustEHCorpusTests)
+  add_custom_target(check-neverd-rust-eh-corpus
+    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
+            -L ^NeverDRustEHCorpusTests$
+            --output-on-failure --progress -j ${_neverd_ncpu} -C $<CONFIG>
+    DEPENDS NeverDRustEHCorpusTests
+    USES_TERMINAL
+    COMMENT "Running the pinned Rust unwinding and panic corpus")
+endif()
+
+if(TARGET NeverDGoEHCorpusTests)
+  add_custom_target(check-neverd-go-eh-corpus
+    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
+            -L ^NeverDGoEHCorpusTests$
+            --output-on-failure --progress -j ${_neverd_ncpu} -C $<CONFIG>
+    DEPENDS NeverDGoEHCorpusTests
+    USES_TERMINAL
+    COMMENT "Running the pinned Go runtime-metadata corpus")
+endif()
+
 # Switch / jump-table transformation probing only: a small standalone binary so
 # transformation + backend bugs can be hunted incrementally (ctest -L selects it).
 add_custom_target(check-neverd-switch-xform

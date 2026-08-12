@@ -90,6 +90,7 @@ add_neverd_unittest(NeverDLiftTests
   MedCallingConvTests.cpp
   COFFExceptionTests.cpp
   ExceptionCFGSeedTests.cpp
+  RegistrationTryLevelTests.cpp
   COFFARMFormatTests.cpp
   FunctionDiscoveryThumbTests.cpp
   NdOpEmulatorTests.cpp
@@ -177,7 +178,37 @@ target_link_libraries(NeverDWindowsEHCorpusManifestTests PRIVATE
   NeverDSupport
 )
 
-if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
+add_neverd_unittest(NeverDRustEHCorpusManifestTests
+  RustEHCorpusManifestTests.cpp
+  RustEHCorpusManifest.cpp
+)
+target_include_directories(NeverDRustEHCorpusManifestTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+target_link_libraries(NeverDRustEHCorpusManifestTests PRIVATE
+  NeverDLoader
+  NeverDSupport
+)
+
+add_neverd_unittest(NeverDGoEHCorpusManifestTests
+  GoEHCorpusManifestTests.cpp
+  GoEHCorpusManifest.cpp
+)
+target_include_directories(NeverDGoEHCorpusManifestTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+target_link_libraries(NeverDGoEHCorpusManifestTests PRIVATE
+  NeverDLoader
+  NeverDSupport
+)
+
+# Each corpus line is published by its own CI workflow, so the root probes them
+# separately and a line the submodule does not yet carry simply has no target.
+# The manifest parsers above stay unconditional: they read synthetic strings and
+# are the only thing that can still be tested before a corpus exists.
+if(NEVERD_HAVE_WINDOWS_EH_CORPUS)
   add_neverd_unittest(NeverDWindowsEHCorpusTests
     WindowsEHCorpusTests.cpp
     WindowsEHCorpusManifest.cpp
@@ -194,6 +225,54 @@ if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
   )
 
   target_link_libraries(NeverDWindowsEHCorpusTests PRIVATE
+    NeverDLoader
+    NeverDSupport
+  )
+endif()
+
+if(NEVERD_HAVE_RUST_EH_CORPUS)
+  # A Rust `bin` statically links the standard library, so every artifact
+  # carries the whole of `std`'s Itanium tables alongside the probe's.
+  add_neverd_unittest(NeverDRustEHCorpusTests
+    RustEHCorpusTests.cpp
+    RustEHCorpusManifest.cpp
+    TIMEOUT 600
+  )
+
+  target_compile_definitions(NeverDRustEHCorpusTests PRIVATE
+    NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}"
+  )
+
+  target_include_directories(NeverDRustEHCorpusTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(NeverDRustEHCorpusTests PRIVATE
+    NeverDLoader
+    NeverDSupport
+  )
+endif()
+
+if(NEVERD_HAVE_GO_EH_CORPUS)
+  # Every Go image links the whole runtime, so decoding one means walking a
+  # `pclntab` of a few thousand functions and the funcdata behind each of them.
+  add_neverd_unittest(NeverDGoEHCorpusTests
+    GoEHCorpusTests.cpp
+    GoEHCorpusManifest.cpp
+    TIMEOUT 600
+  )
+
+  target_compile_definitions(NeverDGoEHCorpusTests PRIVATE
+    NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}"
+  )
+
+  target_include_directories(NeverDGoEHCorpusTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(NeverDGoEHCorpusTests PRIVATE
     NeverDLoader
     NeverDSupport
   )

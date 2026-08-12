@@ -408,7 +408,7 @@ TEST(COFFExceptionParser, DecodesADelphiX64FinallyScope) {
   // keep it from being recognized.
   EXPECT_EQ(Decoded.Personality,
             ExceptionPersonality::DelphiExceptionHandler);
-  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Ok);
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
   ASSERT_TRUE(Decoded.DelphiScopes.has_value());
   ASSERT_EQ(Decoded.DelphiScopes->Scopes.size(), 1u);
   const DelphiScopeRecord &Scope = Decoded.DelphiScopes->Scopes[0];
@@ -461,7 +461,7 @@ TEST(COFFExceptionParser, ReadsADelphiX64OnExceptionArmTable) {
 
   coff_loader::resolveExceptionHandlers(Img);
   const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
-  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Ok);
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
   ASSERT_TRUE(Decoded.DelphiScopes.has_value());
   ASSERT_EQ(Decoded.DelphiScopes->Scopes.size(), 1u);
   const DelphiScopeRecord &Scope = Decoded.DelphiScopes->Scopes[0];

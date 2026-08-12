@@ -791,6 +791,33 @@ TEST(RustEH, IgnoresAnImageWithoutTheRustRuntime) {
   EXPECT_FALSE(Img.ExceptionMetadata.RustRuntime.has_value());
 }
 
+// A PE executable keeps its names in a PDB, so a Rust image built for MSVC
+// reaches this pass with no Rust symbol to find -- and MSVC is the target
+// where Rust needs recognizing most, because its frames use the same
+// `__CxxFrameHandler3` tables as C++.  Whatever the image-wide detection
+// already concluded has to count, or the whole target goes unclassified.
+TEST(RustEH, TrustsTheImageWideDetectionWhenNoSymbolSurvives) {
+  BinaryImage Img = makeImage();
+  Img.ExceptionMetadata.Runtime.Runtime = SourceLanguageRuntime::Rust;
+  Img.ExceptionMetadata.Runtime.Evidence.push_back("rust standard library path");
+
+  EXPECT_TRUE(rust_eh::hasRustRuntime(Img));
+  rust_eh::parseRustExceptions(Img);
+  EXPECT_TRUE(Img.ExceptionMetadata.RustRuntime.has_value());
+}
+
+TEST(RustEH, TrustsRustAsASecondaryRuntimeToo) {
+  // A `cdylib` linked into a C++ program leaves both runtimes' evidence, and
+  // which one detection calls primary depends on how much of each it found.
+  BinaryImage Img = makeImage();
+  Img.ExceptionMetadata.Runtime.Runtime = SourceLanguageRuntime::CxxMSVC;
+  Img.ExceptionMetadata.Runtime.IsMixed = true;
+  Img.ExceptionMetadata.Runtime.SecondaryRuntimes.push_back(
+      SourceLanguageRuntime::Rust);
+
+  EXPECT_TRUE(rust_eh::hasRustRuntime(Img));
+}
+
 TEST(ItaniumLSDA, DecodesCallSitesActionsAndTypes) {
   BinaryImage Img = makeImage();
   const va_t FuncVA = kTextVA + 0x100;
@@ -1149,6 +1176,56 @@ TEST(LanguageRuntimeNames, ClassifiesEveryKnownPersonality) {
   EXPECT_EQ(classifyPersonalityName("not_a_personality"),
             ExceptionPersonality::Unknown);
   EXPECT_EQ(classifyPersonalityName(""), ExceptionPersonality::None);
+}
+
+// An AArch64 image puts a mapping symbol at the start of practically every
+// function, at the same address as the function's own symbol.  Resolving a
+// routine by address has to step over them, or an aarch64 Rust object reports
+// an unknown personality for every frame it has and decodes no landing pads.
+TEST(LanguageRuntimeNames, SkipsArmMappingSymbolsWhenNamingARoutine) {
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  constexpr va_t kRoutine = 0x2ecc8;
+  // The order a real symbol table has them in: the marker comes first, which
+  // is why taking the first match by address is not enough.
+  for (llvm::StringRef Name : {"$x", "rust_eh_personality"}) {
+    Symbol Sym;
+    Sym.Name = Name.str();
+    Sym.Addr = kRoutine;
+    Sym.IsFunc = Name != "$x";
+    Img.Symbols.push_back(std::move(Sym));
+  }
+
+  EXPECT_EQ(resolveRoutineName(Img, kRoutine), "rust_eh_personality");
+}
+
+TEST(LanguageRuntimeNames, TellsAMappingSymbolFromAnOrdinaryDollarName) {
+  BinaryImage Img;
+  constexpr va_t kRoutine = 0x1000;
+  // `$a`/`$d`/`$t`/`$x` and their dotted forms are the whole of the ABI's
+  // list, so a name that merely starts with `$` is still a name.
+  Symbol Sym;
+  Sym.Name = "$literal_pool_helper";
+  Sym.Addr = kRoutine;
+  Img.Symbols.push_back(std::move(Sym));
+
+  EXPECT_EQ(resolveRoutineName(Img, kRoutine), "$literal_pool_helper");
+}
+
+// Every non-x86 ELF target encodes the CIE's personality indirectly, through a
+// `DW.ref.` slot rather than the routine itself.  Left unhandled, that is not
+// a cosmetic miss: an aarch64 Rust object reports an unknown personality for
+// every frame it has, and so decodes none of its landing pads.
+TEST(LanguageRuntimeNames, LooksThroughADwarfIndirectionSlot) {
+  EXPECT_EQ(classifyPersonalityName("DW.ref.rust_eh_personality"),
+            ExceptionPersonality::RustEhPersonality);
+  EXPECT_EQ(classifyPersonalityName("DW.ref.__gxx_personality_v0"),
+            ExceptionPersonality::GxxPersonalityV0);
+  // The prefix names what the slot holds, so a slot holding nothing known is
+  // still unknown rather than becoming a personality by association.
+  EXPECT_EQ(classifyPersonalityName("DW.ref.not_a_personality"),
+            ExceptionPersonality::Unknown);
 }
 
 TEST(LanguageRuntimeNames, MapsPersonalityToItsRuntime) {

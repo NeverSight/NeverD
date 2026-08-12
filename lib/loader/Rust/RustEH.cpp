@@ -331,6 +331,14 @@ bool linksUnwinder(const BinaryImage &Img) {
 } // namespace
 
 bool hasRustRuntime(const BinaryImage &Img) {
+  // What the image-wide detection already concluded, which is the only thing
+  // that works on a PE executable: its names live in a PDB the file does not
+  // carry, so the symbol evidence below finds nothing and the string evidence
+  // -- a standard library source path in a panic message -- is all there is.
+  // That is also the target where Rust needs recognizing most, because there
+  // its frames are spelled in the same tables as C++.
+  if (Img.ExceptionMetadata.Runtime.is(SourceLanguageRuntime::Rust))
+    return true;
   for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions)
     if (F.Personality == ExceptionPersonality::RustEhPersonality)
       return true;

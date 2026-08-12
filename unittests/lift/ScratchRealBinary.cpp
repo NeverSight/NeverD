@@ -197,6 +197,9 @@ void dumpRegistration(const ExceptionFunction &F) {
                  << llvm::utohexstr(R.Scopes[I].FilterVA) << " handler=0x"
                  << llvm::utohexstr(R.Scopes[I].HandlerVA)
                  << (R.Scopes[I].IsFinally ? " (finally)" : "") << "\n";
+  for (const RegistrationTryLevelStore &S : R.TryLevelStores)
+    llvm::errs() << "    trylevel store 0x" << llvm::utohexstr(S.StoreVA)
+                 << " := " << S.Level << "\n";
   if (F.Cxx) {
     llvm::errs() << "    cxx magic=0x" << llvm::utohexstr(F.Cxx->Magic)
                  << " maxstate=" << F.Cxx->MaxState
@@ -252,6 +255,49 @@ TEST(Scratch, DumpRealBinary) {
   for (ExceptionModel M : EH.Models)
     llvm::errs() << getExceptionModelName(M) << " ";
   llvm::errs() << "\n";
+  for (const DwarfCIE &C : EH.CIEs)
+    llvm::errs() << "cie@0x" << llvm::utohexstr(C.SectionOffset) << " aug='"
+                 << C.Augmentation << "' p-enc=0x"
+                 << llvm::utohexstr(C.PersonalityEncoding) << " p=0x"
+                 << llvm::utohexstr(C.PersonalityVA) << " p-slot=0x"
+                 << llvm::utohexstr(C.PersonalitySlotVA) << " lsda-enc=0x"
+                 << llvm::utohexstr(C.LSDAPointerEncoding) << " fde-enc=0x"
+                 << llvm::utohexstr(C.FDEPointerEncoding) << " name='"
+                 << resolveRoutineName(Img, C.PersonalityVA,
+                                       C.PersonalitySlotVA)
+                 << "'\n";
+  if (wants("NEVERD_SCRATCH_CXX_TYPES")) {
+    unsigned Shown = 0;
+    for (const ExceptionFunction &F : EH.Functions) {
+      bool AnyTyped = false;
+      if (F.Cxx)
+        for (const CxxTryBlock &T : F.Cxx->TryBlocks)
+          for (const CxxCatchHandler &C : T.Handlers)
+            AnyTyped |= C.TypeDescriptorVA != 0;
+      if (!F.Cxx || !AnyTyped ||
+          Shown >= limitOr("NEVERD_SCRATCH_LIMIT", 4))
+        continue;
+      ++Shown;
+      llvm::errs() << "--- cxx 0x" << llvm::utohexstr(F.CodeRange.Begin)
+                   << " tries=" << F.Cxx->TryBlocks.size()
+                   << " unwind=" << F.Cxx->UnwindMap.size() << "\n";
+      for (const CxxTryBlock &T : F.Cxx->TryBlocks)
+        for (const CxxCatchHandler &C : T.Handlers)
+          llvm::errs() << "    catch handler=0x"
+                       << llvm::utohexstr(C.HandlerVA) << " typedesc=0x"
+                       << llvm::utohexstr(C.TypeDescriptorVA) << "\n";
+    }
+  }
+
+  llvm::errs() << "relocations=" << Img.Relocations.size() << "\n";
+  for (const DwarfCIE &C : EH.CIEs)
+    for (const RelocationEntry &R : Img.Relocations)
+      if (C.PersonalitySlotVA != 0 && R.Address == C.PersonalitySlotVA)
+        llvm::errs() << "  reloc at p-slot 0x" << llvm::utohexstr(R.Address)
+                     << " type=" << R.Type << " addend=0x"
+                     << llvm::utohexstr(static_cast<uint64_t>(R.Addend))
+                     << " explicit=" << R.HasExplicitAddend << " sym='"
+                     << R.SymbolName << "'\n";
   for (const std::string &D : EH.Diagnostics)
     llvm::errs() << "  image-diag: " << D << "\n";
 
@@ -289,9 +335,16 @@ TEST(Scratch, DumpRealBinary) {
 
   if (wants("NEVERD_SCRATCH_RUST")) {
     unsigned RustShown = 0;
-    for (const ExceptionFunction &F : EH.Functions)
-      if (F.Rust && RustShown++ < limitOr("NEVERD_SCRATCH_LIMIT", 4))
+    const va_t Only = addrOr("NEVERD_SCRATCH_ADDR", 0);
+    for (const ExceptionFunction &F : EH.Functions) {
+      if (!F.Rust || (Only != 0 && !F.CodeRange.contains(Only)))
+        continue;
+      if (RustShown++ < limitOr("NEVERD_SCRATCH_LIMIT", 4)) {
         dumpRustFunction(F);
+        if (F.Itanium)
+          dumpItanium(F);
+      }
+    }
   }
 
   size_t Reported = 0;

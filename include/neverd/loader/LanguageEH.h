@@ -362,6 +362,21 @@ struct RegistrationScopeRecord {
   bool IsFinally = false;
 };
 
+/// One store of a literal try level into the frame's try-level slot.
+///
+/// The scope table says which scope a level names but nothing about where that
+/// level is current: the runtime reads the level out of the frame, so only the
+/// stores the code makes say which region each scope guards.  Recovering them
+/// is what turns the flat table back into address ranges.
+struct RegistrationTryLevelStore {
+  /// Address of the storing instruction.  The new level takes effect after it,
+  /// so \c EndVA and not this is where the guarded region begins.
+  va_t StoreVA = 0;
+  /// Address just past the store.
+  va_t EndVA = 0;
+  int32_t Level = 0;
+};
+
 /// The prologue-established registration record for one x86-32 function.
 struct RegistrationChainInfo {
   /// Address of the handler the prologue installed (`_except_handler3`,
@@ -370,8 +385,15 @@ struct RegistrationChainInfo {
   /// Address of the scope table or `FuncInfo` the prologue pushed.
   va_t ScopeTableVA = 0;
   /// Frame offset of the current-try-level slot, relative to the established
-  /// frame register, when the prologue's stores proved it.
+  /// frame register, when the function's own stores proved it.
   std::optional<int32_t> TryLevelOffset;
+  /// The stores into that slot, in address order.  Empty when the slot could
+  /// not be proven, which leaves the scopes without recovered ranges rather
+  /// than giving them invented ones.
+  std::vector<RegistrationTryLevelStore> TryLevelStores;
+  /// The level the prologue seeded: -1 for `_except_handler3` and -2 for
+  /// `_except_handler4`.  Both mean "no scope is current".
+  std::optional<int32_t> SeededTryLevel;
   /// Address at which the prologue stored the new registration record, i.e.
   /// the value written to `FS:[0]`, expressed as a frame offset.
   std::optional<int32_t> RegistrationOffset;
