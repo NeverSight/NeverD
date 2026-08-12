@@ -63,6 +63,37 @@ const char *sbfVersionSpelling(sbf::Version TheVersion) {
   }
 }
 
+const char *sbfClusterSpelling(sbf::Cluster Cluster) {
+  switch (Cluster) {
+#define SBF_CLUSTER(ID, NAME, ACTIVATES_EVERYTHING, SUMMARY)                   \
+  case sbf::Cluster::ID:                                                       \
+    return NAME;
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+  }
+  return "";
+}
+
+const char *sbfLoaderSpelling(sbf::Loader Loader) {
+  switch (Loader) {
+#define SBF_LOADER(ID, NAME, KNOWN_ADDRESS, ACCOUNT_ABI, DEPLOYS, EXECUTES,    \
+                   SUMMARY)                                                    \
+  case sbf::Loader::ID:                                                        \
+    return NAME;
+#include "neverd/sbf/SBFLoaders.def"
+  }
+  return "";
+}
+
+const char *sbfPurposeSpelling(sbf::RuntimePurpose Purpose) {
+  switch (Purpose) {
+#define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)                                 \
+  case sbf::RuntimePurpose::ID:                                                \
+    return NAME;
+#include "neverd/sbf/SBFRuntimeFeatures.def"
+  }
+  return "";
+}
+
 bool configureEVM(neverd_session_t Sess) {
   neverd_evm_set_strict(Sess, EVMRelaxed ? 0 : 1);
   if (!neverd_evm_set_hardfork(Sess,
@@ -83,21 +114,21 @@ bool configureSBF(neverd_session_t Sess) {
     return false;
   }
   neverd_sbf_set_slot(Sess, SBFSlot.getValue());
-  const auto Select = [Sess](const char *What, int (*Set)(neverd_session_t,
-                                                          const char *),
-                             llvm::StringRef Name) {
-    if (Set(Sess, Name.str().c_str()))
+  const auto Select = [Sess](const char *What,
+                             int (*Set)(neverd_session_t, const char *),
+                             const char *Name) {
+    if (Set(Sess, Name))
       return true;
     WithColor::error() << "invalid " << What << ": " << takeLastError(Sess)
                        << "\n";
     return false;
   };
   if (!Select("Solana cluster", neverd_sbf_set_cluster,
-              sbf::clusterName(SBFCluster.getValue())) ||
+              sbfClusterSpelling(SBFCluster.getValue())) ||
       !Select("Solana loader", neverd_sbf_set_loader,
-              sbf::loaderName(SBFLoader.getValue())) ||
+              sbfLoaderSpelling(SBFLoader.getValue())) ||
       !Select("runtime purpose", neverd_sbf_set_purpose,
-              sbf::runtimePurposeName(SBFPurpose.getValue())))
+              sbfPurposeSpelling(SBFPurpose.getValue())))
     return false;
   if (!SBFIdl.empty()) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> Document =
