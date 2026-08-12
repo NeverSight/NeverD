@@ -7,6 +7,7 @@
 #include "neverd/loader/COFF/COFFException.h"
 
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/loader/COFF/COFFDelphiEH.h"
 #include "neverd/loader/LanguageRuntime.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -2319,21 +2320,23 @@ void resolveExceptionHandlers(BinaryImage &Img) {
           parseGSCookie(F, Img, F.HandlerDataVA + sizeof(uint32_t));
       }
       break;
-    case ExceptionPersonality::DelphiExceptionHandler:
+    case ExceptionPersonality::DelphiExceptionHandler: {
       // Delphi's x86-64 compiler installs no registration record: it uses the
-      // ordinary table mechanism and puts its own `TExcScope` array in the
-      // handler data.  That array's layout is the RTL's private business and
-      // has changed across releases, so it is not decoded here.  What must not
-      // happen is reporting the frame as fully understood -- a Delphi `try`
-      // would then read as a function with an exception handler and no
-      // handlers in it.
-      if (F.HandlerDataVA != 0)
+      // ordinary table mechanism and puts a `TExcData` scope array in the
+      // handler data.  A frame whose array does not check out stays Partial
+      // rather than being reported as fully understood, because a Delphi `try`
+      // would then read as a function that installs a handler and has none.
+      if (F.HandlerDataVA == 0)
+        break;
+      std::string Reason;
+      if (!parseDelphiScopeTable(Img, F, Reason))
         diagnose(F, ExceptionParseStatus::Partial,
                  "Delphi x64 scope table at " +
-                     llvm::utohexstr(F.HandlerDataVA) +
-                     " was not decoded: its layout is private to the Delphi "
-                     "runtime and varies by release");
+                     llvm::utohexstr(F.HandlerDataVA) + " was not decoded: " +
+                     (Reason.empty() ? "it does not read as a TExcData"
+                                     : Reason));
       break;
+    }
     default:
       break;
     }

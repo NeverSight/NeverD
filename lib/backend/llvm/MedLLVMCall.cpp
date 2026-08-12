@@ -574,6 +574,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                                 CoercedArgs.empty() ? "icall" : "call");
   }
 
+  // Itanium call-site ranges are tight around individual calls rather than
+  // aligned to machine blocks, so the address this call came from has to
+  // survive lowering for the LSDA to be able to name it.
+  if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallInst>(Result))
+    CallSiteAddrs[Emitted] = Op.Addr;
+
   // A direct call returning a small struct by value across multiple registers
   // (modelCallStructReturn rewrote it to a flat aggregate temp): the callee's
   // LLVM type is the matching struct, so flatten the returned aggregate into

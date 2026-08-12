@@ -26,6 +26,12 @@ unsigned limitOr(const char *Name, unsigned Default) {
   return Default;
 }
 
+va_t addrOr(const char *Name, va_t Default) {
+  if (const char *V = std::getenv(Name))
+    return static_cast<va_t>(std::strtoull(V, nullptr, 0));
+  return Default;
+}
+
 void dumpSections(const BinaryImage &Img) {
   for (const Segment &S : Img.Segments)
     llvm::errs() << "seg " << S.Name << " va=0x" << llvm::utohexstr(S.VA)
@@ -34,6 +40,23 @@ void dumpSections(const BinaryImage &Img) {
   for (const Section &S : Img.Sections)
     llvm::errs() << "sec " << S.Name << " va=0x" << llvm::utohexstr(S.VA)
                  << " size=0x" << llvm::utohexstr(S.Size) << "\n";
+}
+
+/// Function symbols in an address window, which is how to tell code the loader
+/// published from code only the tables know about.
+void dumpFuncSymbols(const BinaryImage &Img, va_t Low, va_t High) {
+  std::vector<const Symbol *> Sorted;
+  for (const Symbol &S : Img.Symbols)
+    if (S.IsFunc && S.Addr >= Low && S.Addr < High)
+      Sorted.push_back(&S);
+  llvm::sort(Sorted, [](const Symbol *A, const Symbol *B) {
+    return A->Addr < B->Addr;
+  });
+  llvm::errs() << "func symbols in [0x" << llvm::utohexstr(Low) << ",0x"
+               << llvm::utohexstr(High) << ") = " << Sorted.size() << "\n";
+  for (const Symbol *S : Sorted)
+    llvm::errs() << "  sym 0x" << llvm::utohexstr(S->Addr) << " size=0x"
+                 << llvm::utohexstr(S->Size) << " '" << S->Name << "'\n";
 }
 
 void dumpGoModule(const ExceptionInfo &EH) {
@@ -209,6 +232,9 @@ TEST(Scratch, DumpRealBinary) {
 
   if (wants("NEVERD_SCRATCH_SEGMENTS"))
     dumpSections(Img);
+  if (wants("NEVERD_SCRATCH_SYMBOLS"))
+    dumpFuncSymbols(Img, addrOr("NEVERD_SCRATCH_SYM_LOW", 0),
+                    addrOr("NEVERD_SCRATCH_SYM_HIGH", InvalidVA));
 
   LanguageRuntimeInfo RT = detectLanguageRuntime(Img);
   llvm::errs() << "runtime=" << getSourceLanguageRuntimeName(RT.Runtime)

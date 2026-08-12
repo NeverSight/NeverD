@@ -269,14 +269,16 @@ std::string demangleRustName(llvm::StringRef Name) {
 ExceptionPersonality classifyPersonalityName(llvm::StringRef Name) {
   if (Name.empty())
     return ExceptionPersonality::None;
-  // How many underscores precede a name is decoration, not identity: the same
-  // routine is `__DelphiExceptionHandler` in a PE import table and
-  // `DelphiExceptionHandler` once a caller has already undecorated it.  The
-  // table below is written the way each platform spells its routine, so the
-  // comparison ignores the prefix on both sides rather than requiring every
-  // caller to guess how much of it to leave on.
+  // What precedes a name is decoration, not identity: the same routine is
+  // `__DelphiExceptionHandler` in a PE import table, `DelphiExceptionHandler`
+  // once a caller has already undecorated it, and `@DelphiExceptionHandler` in
+  // the spelling Delphi's own RTL and every tool that reads it use — `@` is
+  // how Delphi marks a `System` unit symbol.  The table below is written the
+  // way each platform spells its routine, so the comparison ignores the prefix
+  // on both sides rather than requiring every caller to guess how much of it
+  // to leave on.
   auto undecorated = [](llvm::StringRef Value) {
-    while (Value.consume_front("_"))
+    while (Value.consume_front("_") || Value.consume_front("@"))
       ;
     return Value;
   };

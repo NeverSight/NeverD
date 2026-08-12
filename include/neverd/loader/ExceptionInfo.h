@@ -592,8 +592,49 @@ enum class ExceptionalEdgeKind : uint8_t {
   GoDeferReturn,
   /// Go `recover` continuation.
   GoRecover,
+  /// Delphi `try..finally` cleanup body.
+  DelphiFinally,
+  /// Delphi `try..except` body that catches anything, which is also what a
+  /// `safecall` wrapper's automatic handler reaches.
+  DelphiExcept,
+  /// One `except on <class> do` arm.
+  DelphiOnException,
   Unknown,
 };
+
+inline const char *getExceptionalEdgeKindName(ExceptionalEdgeKind Kind) {
+  switch (Kind) {
+  case ExceptionalEdgeKind::SEHFilter:
+    return "seh-filter";
+  case ExceptionalEdgeKind::SEHHandler:
+    return "seh-handler";
+  case ExceptionalEdgeKind::SEHFinally:
+    return "seh-finally";
+  case ExceptionalEdgeKind::CxxCleanup:
+    return "cxx-cleanup";
+  case ExceptionalEdgeKind::CxxCatch:
+    return "cxx-catch";
+  case ExceptionalEdgeKind::ItaniumCleanupPad:
+    return "itanium-cleanup";
+  case ExceptionalEdgeKind::ItaniumCatchPad:
+    return "itanium-catch";
+  case ExceptionalEdgeKind::ItaniumSpecPad:
+    return "itanium-spec";
+  case ExceptionalEdgeKind::GoDeferReturn:
+    return "go-deferreturn";
+  case ExceptionalEdgeKind::GoRecover:
+    return "go-recover";
+  case ExceptionalEdgeKind::DelphiFinally:
+    return "delphi-finally";
+  case ExceptionalEdgeKind::DelphiExcept:
+    return "delphi-except";
+  case ExceptionalEdgeKind::DelphiOnException:
+    return "delphi-on";
+  case ExceptionalEdgeKind::Unknown:
+    return "unknown";
+  }
+  return "unknown";
+}
 
 /// IR-level exceptional transfer kept separate from ordinary CFG edges.  In a
 /// successor list BlockId is the target block; in a predecessor list it is the
@@ -649,9 +690,13 @@ struct ExceptionFunction {
   std::optional<CompactUnwindEntry> Compact;
   /// x86-32 registration model: the chain the prologue installed.
   std::optional<RegistrationChainInfo> Registration;
-  /// Delphi model: the `TExcFrame` the prologue linked, present instead of
-  /// \ref Registration because a Delphi frame has no scope table to fill it.
+  /// Delphi x86-32 model: the `TExcFrame` the prologue linked, present instead
+  /// of \ref Registration because such a frame has no scope table to fill it.
   std::optional<DelphiFrameInfo> Delphi;
+  /// Delphi x86-64 model: the `TExcData` scope array in the handler data.
+  /// Delphi dropped the registration chain on this target, so a frame carries
+  /// one of these or a \ref Delphi record but never both.
+  std::optional<DelphiScopeTable> DelphiScopes;
   /// Go model: the runtime's frame metadata for this function.
   std::optional<GoFunctionEH> Go;
   /// Rust reading of whichever table model this record already carries.  Rust
@@ -671,7 +716,8 @@ struct ExceptionFunction {
   /// True when this record carries a decoded language table of any model.
   bool hasLanguageTable() const {
     return SEH.has_value() || Cxx.has_value() || Itanium.has_value() ||
-           Registration.has_value() || Delphi.has_value() || Go.has_value();
+           Registration.has_value() || Delphi.has_value() ||
+           DelphiScopes.has_value() || Go.has_value();
   }
 
   bool canRegenerateLanguageMetadata() const {

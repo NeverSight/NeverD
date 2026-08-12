@@ -642,6 +642,39 @@ TEST(GoStackMaps, DecodesBothPointerMapsAndTheirBitmaps) {
   EXPECT_FALSE(F->Go->LocalsPointerMap->Bitmaps[1].isPointerSlot(8));
 }
 
+TEST(GoStackMaps, CountsTheBitmapsOfAZeroBitMap) {
+  GoTestImage T;
+  // The record the linker shares between every function whose argument area
+  // holds no pointer: one bitmap, zero bits wide, and so no bytes at all.
+  const va_t ArgsVA = T.addPayload(buildStackMap(0, {{}}));
+  const va_t LocalsVA = T.addPayload(buildStackMap(4, {{0b0101}}));
+
+  GoFuncSpec Work = makeDeferringFunc("main.work", kTextVA + 0x100);
+  PCValueTable StackMapIndex;
+  StackMapIndex.Steps = {{0, 0x40}};
+  Work.PCData = {std::nullopt, StackMapIndex};
+  Work.FuncData = {ArgsVA, LocalsVA};
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic, {Work}, kTextVA + 0x200).Bytes);
+
+  parseGoExceptions(T.Img);
+
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
+  ASSERT_NE(F, nullptr);
+  EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Complete);
+
+  // The map declares its bitmap even though it spans no bytes, so the index
+  // that names it stays satisfiable and the table it selects into is kept.
+  ASSERT_TRUE(F->Go->ArgsPointerMap.has_value());
+  EXPECT_EQ(F->Go->ArgsPointerMap->BitCount, 0u);
+  ASSERT_EQ(F->Go->ArgsPointerMap->Bitmaps.size(), 1u);
+  EXPECT_TRUE(F->Go->ArgsPointerMap->Bitmaps[0].Bits.empty());
+  EXPECT_FALSE(F->Go->ArgsPointerMap->Bitmaps[0].isPointerSlot(0));
+  ASSERT_EQ(F->Go->StackMapRanges.size(), 1u);
+  EXPECT_EQ(F->Go->StackMapRanges[0].Index, 0);
+}
+
 TEST(GoStackMaps, StartsEachBitmapOnItsOwnByteBoundary) {
   GoTestImage T;
   // A bit count that is an exact multiple of eight is where a stride computed

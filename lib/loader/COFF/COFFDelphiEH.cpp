@@ -25,10 +25,24 @@ namespace {
 /// `vmt*` constants in `System.pas`.  A class reference points at the virtual
 /// method slots and the metadata sits in front of them, so every one of these
 /// is subtracted.
-constexpr va_t VmtSelfPtrBack = 76;
-constexpr va_t VmtClassNameBack = 44;
-constexpr va_t VmtInstanceSizeBack = 40;
-constexpr va_t VmtParentBack = 36;
+struct DelphiVmtLayout {
+  va_t SelfPtrBack;
+  va_t ClassNameBack;
+  va_t InstanceSizeBack;
+  va_t ParentBack;
+};
+
+/// The two 32-bit layouts in the wild.  Delphi 2009 inserted `Equals`,
+/// `GetHashCode` and `ToString` between `vmtParent` and `vmtSafeCallException`,
+/// which pushed every field ahead of them back by three slots — `vmtSelfPtr`
+/// moved from -76 to -88.  Reading a 2009-or-later VMT at the older offsets
+/// lands on `vmtInitTable`, so the self-reference test fails and the whole arm
+/// table is rejected; that test is also what tells the two apart, because only
+/// the right layout finds the VMT's own address.
+constexpr DelphiVmtLayout VmtLayouts[] = {
+    /*Delphi 7 through 2007*/ {76, 44, 40, 36},
+    /*Delphi 2009 and later*/ {88, 56, 52, 48},
+};
 
 /// Bound on one `except on` arm table.  Delphi allows any number of arms, but
 /// a count beyond this is a mis-identified descriptor rather than a program.
@@ -157,10 +171,11 @@ std::optional<DelphiInstall> matchInstall(const Segment &Seg, size_t Offset) {
 //===----------------------------------------------------------------------===//
 
 /// Read the `ShortString` a Delphi VMT points at for its class name.
-std::string readClassName(const BinaryImage &Img, va_t VmtVA) {
-  if (VmtVA < VmtSelfPtrBack)
+std::string readClassName(const BinaryImage &Img, va_t VmtVA,
+                          const DelphiVmtLayout &Layout) {
+  if (VmtVA < Layout.SelfPtrBack)
     return {};
-  auto NamePtr = readScalar<uint32_t>(Img, VmtVA - VmtClassNameBack);
+  auto NamePtr = readScalar<uint32_t>(Img, VmtVA - Layout.ClassNameBack);
   if (!NamePtr || *NamePtr == 0)
     return {};
   auto Length = readScalar<uint8_t>(Img, *NamePtr);
@@ -178,27 +193,37 @@ std::string readClassName(const BinaryImage &Img, va_t VmtVA) {
   return Name;
 }
 
-/// True when \p VmtVA addresses a Delphi class VMT.
+/// The VMT layout \p VmtVA is laid out in, or null when it is not a VMT.
 ///
 /// `vmtSelfPtr` makes this decisive rather than probable: the linker stores
 /// the VMT's own address there, so a candidate that points at itself is one,
-/// and the odds of unrelated data holding its own address are nil.
+/// and the odds of unrelated data holding its own address are nil.  That same
+/// property is what selects between the pre- and post-2009 layouts, so no
+/// compiler version has to be guessed from anywhere else in the image.
+const DelphiVmtLayout *classVmtLayout(const BinaryImage &Img, va_t VmtVA) {
+  for (const DelphiVmtLayout &Layout : VmtLayouts) {
+    if (VmtVA < Layout.SelfPtrBack)
+      continue;
+    auto SelfPtr = readScalar<uint32_t>(Img, VmtVA - Layout.SelfPtrBack);
+    if (!SelfPtr || *SelfPtr != VmtVA)
+      continue;
+    auto InstanceSize =
+        readScalar<uint32_t>(Img, VmtVA - Layout.InstanceSizeBack);
+    if (!InstanceSize || *InstanceSize == 0 || *InstanceSize > MaxInstanceSize)
+      continue;
+    // `vmtParent` is null only for `TObject`; anything else names a VMT slot.
+    auto Parent = readScalar<uint32_t>(Img, VmtVA - Layout.ParentBack);
+    if (!Parent)
+      continue;
+    if (*Parent != 0 && !Img.readVA(*Parent, 4))
+      continue;
+    return &Layout;
+  }
+  return nullptr;
+}
+
 bool isClassVMT(const BinaryImage &Img, va_t VmtVA) {
-  if (VmtVA < VmtSelfPtrBack)
-    return false;
-  auto SelfPtr = readScalar<uint32_t>(Img, VmtVA - VmtSelfPtrBack);
-  if (!SelfPtr || *SelfPtr != VmtVA)
-    return false;
-  auto InstanceSize = readScalar<uint32_t>(Img, VmtVA - VmtInstanceSizeBack);
-  if (!InstanceSize || *InstanceSize == 0 || *InstanceSize > MaxInstanceSize)
-    return false;
-  // `vmtParent` is null only for `TObject`; anything else names a VMT slot.
-  auto Parent = readScalar<uint32_t>(Img, VmtVA - VmtParentBack);
-  if (!Parent)
-    return false;
-  if (*Parent != 0 && !Img.readVA(*Parent, 4))
-    return false;
-  return true;
+  return classVmtLayout(Img, VmtVA) != nullptr;
 }
 
 /// Resolve one `TExcDescEntry.vTable`, which holds the address of the slot the
@@ -214,8 +239,9 @@ DelphiOnExceptionEntry resolveArm(const BinaryImage &Img, uint32_t SlotVA,
   }
   if (auto ClassVA = readScalar<uint32_t>(Img, SlotVA)) {
     Arm.ClassVA = *ClassVA;
-    if (*ClassVA != 0 && isClassVMT(Img, *ClassVA))
-      Arm.ClassName = readClassName(Img, *ClassVA);
+    if (*ClassVA != 0)
+      if (const DelphiVmtLayout *Layout = classVmtLayout(Img, *ClassVA))
+        Arm.ClassName = readClassName(Img, *ClassVA, *Layout);
   }
   return Arm;
 }
@@ -547,6 +573,178 @@ void parseDelphiExceptions(BinaryImage &Img) {
     return;
   Info.addModel(ExceptionModel::WindowsRegistration);
   Info.rebuildIndex();
+}
+
+//===----------------------------------------------------------------------===//
+// x86-64 `TExcData` scope table
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// The x86-64 VMT layout.  Every field of the 32-bit layout is a pointer, so
+/// the whole run of them doubles; `vmtSelfPtr` lands at -176 rather than -88.
+constexpr DelphiVmtLayout VmtLayoutX64{176, 112, 104, 96};
+
+/// Bound on one `TExcData`.  A Delphi function can nest any number of scopes,
+/// but a count past this says the handler data was not a `TExcData`.
+constexpr uint32_t MaxDelphiScopes = 4096;
+
+/// `TableOffset` values below this are discriminants rather than addresses.
+constexpr uint32_t FirstDescriptorTableOffset = 3;
+
+/// True when \p VmtVA addresses a 64-bit Delphi class VMT, by the same
+/// self-reference test the 32-bit reader uses.
+bool isClassVMT64(const BinaryImage &Img, va_t VmtVA) {
+  if (VmtVA < VmtLayoutX64.SelfPtrBack)
+    return false;
+  auto SelfPtr = readScalar<uint64_t>(Img, VmtVA - VmtLayoutX64.SelfPtrBack);
+  if (!SelfPtr || *SelfPtr != VmtVA)
+    return false;
+  auto InstanceSize =
+      readScalar<uint32_t>(Img, VmtVA - VmtLayoutX64.InstanceSizeBack);
+  return InstanceSize && *InstanceSize != 0 && *InstanceSize <= MaxInstanceSize;
+}
+
+std::string readClassName64(const BinaryImage &Img, va_t VmtVA) {
+  if (VmtVA < VmtLayoutX64.SelfPtrBack)
+    return {};
+  auto NamePtr = readScalar<uint64_t>(Img, VmtVA - VmtLayoutX64.ClassNameBack);
+  if (!NamePtr || *NamePtr == 0)
+    return {};
+  auto Length = readScalar<uint8_t>(Img, *NamePtr);
+  if (!Length || *Length == 0 || *Length > MaxClassNameLength)
+    return {};
+  const uint8_t *Chars = Img.readVA(*NamePtr + 1, *Length);
+  if (!Chars)
+    return {};
+  std::string Name(reinterpret_cast<const char *>(Chars), *Length);
+  for (char C : Name)
+    if (static_cast<unsigned char>(C) < 0x20 ||
+        static_cast<unsigned char>(C) > 0x7E)
+      return {};
+  return Name;
+}
+
+/// Read the `TExcDesc` an `on` scope names: a count followed by that many
+/// `{VTable RVA, Handler RVA}` pairs.  Every arm is validated, because the
+/// count is not self-describing and a mis-read `TableOffset` would otherwise
+/// turn arbitrary bytes into an arm table.
+bool readScopeDescriptor(const BinaryImage &Img, va_t DescriptorVA,
+                         const ExceptionAddressRange &Function,
+                         std::vector<DelphiOnExceptionEntry> &Arms) {
+  auto Count = readScalar<int32_t>(Img, DescriptorVA);
+  if (!Count || *Count <= 0 ||
+      static_cast<uint32_t>(*Count) > MaxOnExceptionArms)
+    return false;
+  std::vector<DelphiOnExceptionEntry> Decoded;
+  Decoded.reserve(static_cast<size_t>(*Count));
+  size_t NamedClasses = 0;
+  for (int32_t I = 0; I < *Count; ++I) {
+    const va_t EntryVA = DescriptorVA + 4 + static_cast<va_t>(I) * 8;
+    auto VTableRVA = readScalar<uint32_t>(Img, EntryVA);
+    auto HandlerRVA = readScalar<uint32_t>(Img, EntryVA + 4);
+    if (!VTableRVA || !HandlerRVA || *HandlerRVA == 0)
+      return false;
+    const va_t HandlerVA = Img.rvaToVA(*HandlerRVA);
+    if (!isExecutableAddress(Img, HandlerVA) ||
+        (Function.isValid() && !Function.contains(HandlerVA)))
+      return false;
+
+    DelphiOnExceptionEntry Arm;
+    Arm.HandlerVA = HandlerVA;
+    if (*VTableRVA == 0) {
+      // The `else` arm names no class and matches anything.
+      Arm.IsCatchAll = true;
+    } else {
+      // Unlike x86-32, the entry holds the class reference itself rather than
+      // the address of a slot that holds it, so there is no slot to record.
+      Arm.ClassVA = Img.rvaToVA(*VTableRVA);
+      if (!isClassVMT64(Img, Arm.ClassVA))
+        return false;
+      Arm.ClassName = readClassName64(Img, Arm.ClassVA);
+      ++NamedClasses;
+    }
+    Decoded.push_back(std::move(Arm));
+  }
+  // A table of nothing but `else` arms is what a run of zeroes looks like.
+  if (NamedClasses == 0)
+    return false;
+  Arms = std::move(Decoded);
+  return true;
+}
+
+} // namespace
+
+bool parseDelphiScopeTable(const BinaryImage &Img, ExceptionFunction &F,
+                           std::string &Diagnostic) {
+  if (F.HandlerDataVA == 0)
+    return false;
+  auto Count = readScalar<int32_t>(Img, F.HandlerDataVA);
+  if (!Count || *Count <= 0 ||
+      static_cast<uint32_t>(*Count) > MaxDelphiScopes) {
+    Diagnostic = "scope count is not a plausible TExcData count";
+    return false;
+  }
+  // The whole array has to be readable before any of it is trusted, so a table
+  // that runs off the end of `.xdata` is rejected rather than truncated.
+  if (!Img.readVA(F.HandlerDataVA + 4, static_cast<size_t>(*Count) * 16)) {
+    Diagnostic = "scope array of " + std::to_string(*Count) +
+                 " entries runs past the end of the section";
+    return false;
+  }
+
+  DelphiScopeTable Table;
+  Table.TableVA = F.HandlerDataVA;
+  Table.Scopes.reserve(static_cast<size_t>(*Count));
+  for (int32_t I = 0; I < *Count; ++I) {
+    const va_t ScopeVA = F.HandlerDataVA + 4 + static_cast<va_t>(I) * 16;
+    auto BeginRVA = readScalar<uint32_t>(Img, ScopeVA);
+    auto EndRVA = readScalar<uint32_t>(Img, ScopeVA + 4);
+    auto TableOffset = readScalar<uint32_t>(Img, ScopeVA + 8);
+    auto TargetRVA = readScalar<uint32_t>(Img, ScopeVA + 12);
+    if (!BeginRVA || !EndRVA || !TableOffset || !TargetRVA)
+      return false;
+
+    DelphiScopeRecord Scope;
+    Scope.GuardedRange.Begin = Img.rvaToVA(*BeginRVA);
+    Scope.GuardedRange.End = Img.rvaToVA(*EndRVA);
+    // A scope guards a stretch of the function it belongs to.  Anything else
+    // means these sixteen bytes were not a `TExcScope`.
+    if (!Scope.GuardedRange.isValid() ||
+        (F.CodeRange.isValid() && !F.CodeRange.contains(Scope.GuardedRange))) {
+      Diagnostic = "scope " + std::to_string(I) +
+                   " guards a range outside the function it belongs to";
+      return false;
+    }
+
+    if (*TableOffset < FirstDescriptorTableOffset) {
+      Scope.Kind = *TableOffset == 0     ? DelphiScopeKind::Finally
+                   : *TableOffset == 1   ? DelphiScopeKind::SafecallCatch
+                                         : DelphiScopeKind::CatchAll;
+      Scope.TargetVA = Img.rvaToVA(*TargetRVA);
+      if (*TargetRVA == 0 || !isExecutableAddress(Img, Scope.TargetVA)) {
+        Diagnostic = "scope " + std::to_string(I) +
+                     " names a handler body that is not code";
+        return false;
+      }
+    } else {
+      Scope.Kind = DelphiScopeKind::OnException;
+      Scope.DescriptorVA = Img.rvaToVA(*TableOffset);
+      // The record documents `TargetOffset` as unused here, and a nonzero one
+      // means the discriminant was misread.
+      if (*TargetRVA != 0 ||
+          !readScopeDescriptor(Img, Scope.DescriptorVA, F.CodeRange,
+                               Scope.OnExceptions)) {
+        Diagnostic = "scope " + std::to_string(I) +
+                     " names an arm table that does not read as a TExcDesc";
+        return false;
+      }
+    }
+    Table.Scopes.push_back(std::move(Scope));
+  }
+
+  F.DelphiScopes = std::move(Table);
+  return true;
 }
 
 } // namespace neverd::coff_loader

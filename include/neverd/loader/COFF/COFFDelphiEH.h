@@ -38,6 +38,20 @@ void parseDelphiExceptions(BinaryImage &Img);
 /// True when \p Img installs at least one Delphi registration frame.
 bool hasDelphiRegistrationFrames(const BinaryImage &Img);
 
+/// Decode the `TExcData` scope array a Delphi x86-64 frame keeps at
+/// `F.HandlerDataVA`, filling `F.DelphiScopes` and returning true on success.
+///
+/// Delphi's x86-64 compiler installs no registration record: it uses the
+/// ordinary table mechanism and marks the frame with `@DelphiExceptionHandler`,
+/// whose handler data is a count-prefixed array of sixteen-byte `TExcScope`
+/// records.  Each holds four RVAs — the guarded range, a `TableOffset` that is
+/// a discriminant below 3 and a `TExcDesc` address above it, and the handler
+/// body.  The layout comes from `System.pas`; every field read here is checked
+/// against the image so a frame that does not match returns false with
+/// \p Diagnostic set rather than producing a plausible-looking wrong table.
+bool parseDelphiScopeTable(const BinaryImage &Img, ExceptionFunction &F,
+                           std::string &Diagnostic);
+
 } // namespace neverd::coff_loader
 
 #endif // NEVERD_LOADER_COFF_COFFDELPHIEH_H

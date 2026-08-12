@@ -44,24 +44,6 @@ const char *vnodeSpaceAbbrev(VnodeSpace S) {
   return "?";
 }
 
-const char *exceptionalEdgeName(ExceptionalEdgeKind Kind) {
-  switch (Kind) {
-  case ExceptionalEdgeKind::SEHFilter:
-    return "seh-filter";
-  case ExceptionalEdgeKind::SEHHandler:
-    return "seh-handler";
-  case ExceptionalEdgeKind::SEHFinally:
-    return "seh-finally";
-  case ExceptionalEdgeKind::CxxCleanup:
-    return "cxx-cleanup";
-  case ExceptionalEdgeKind::CxxCatch:
-    return "cxx-catch";
-  case ExceptionalEdgeKind::Unknown:
-    return "unknown";
-  }
-  return "unknown";
-}
-
 void dumpExceptionSummary(const std::optional<ExceptionFunction> &Metadata,
                           llvm::raw_ostream &OS, llvm::StringRef Prefix) {
   if (!Metadata)
@@ -81,7 +63,7 @@ void dumpExceptionalEdges(const std::vector<ExceptionalEdge> &Edges,
     if (I)
       OS << ",";
     const ExceptionalEdge &Edge = Edges[I];
-    OS << exceptionalEdgeName(Edge.Kind) << ":";
+    OS << getExceptionalEdgeKindName(Edge.Kind) << ":";
     if (Edge.BlockId >= 0)
       OS << "b" << Edge.BlockId;
     else

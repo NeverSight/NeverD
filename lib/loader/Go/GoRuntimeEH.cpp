@@ -755,26 +755,29 @@ std::optional<GoStackMap> decodeStackMap(const ImageReader &R, va_t RecordVA) {
   Map.RecordVA = RecordVA;
   Map.BitCount = static_cast<uint32_t>(*BitCount);
   const uint32_t Stride = (Map.BitCount + 7) / 8;
-  // A map of zero-bit bitmaps carries no bytes at all; the runtime treats it
-  // as "nothing in this region is a pointer" rather than as a broken record.
-  if (Stride == 0)
-    return Map;
   if (static_cast<uint64_t>(*Count) * Stride > GoStackMap::MaxTotalBytes)
     return std::nullopt;
 
+  // A zero-bit map carries no bytes, but it still declares `n` bitmaps: the
+  // linker hands every function whose argument area holds no pointer the same
+  // shared `n=1, nbit=0` record.  Reporting no bitmaps for it would make the
+  // index a stack map names unsatisfiable and throw away a table that is in
+  // fact well formed, so the bitmaps are published empty rather than dropped.
   Map.Bitmaps.reserve(static_cast<size_t>(*Count));
   for (uint32_t I = 0; I < static_cast<uint32_t>(*Count); ++I) {
-    const uint64_t Offset = uint64_t(8) + uint64_t(I) * Stride;
-    if (Offset > InvalidVA - RecordVA)
-      return std::nullopt;
-    const uint8_t *Data =
-        R.bytes(RecordVA + static_cast<va_t>(Offset), Stride);
-    if (!Data)
-      return std::nullopt;
     GoStackMapBitmap Bitmap;
     Bitmap.Index = I;
     Bitmap.BitCount = Map.BitCount;
-    Bitmap.Bits.assign(Data, Data + Stride);
+    if (Stride != 0) {
+      const uint64_t Offset = uint64_t(8) + uint64_t(I) * Stride;
+      if (Offset > InvalidVA - RecordVA)
+        return std::nullopt;
+      const uint8_t *Data =
+          R.bytes(RecordVA + static_cast<va_t>(Offset), Stride);
+      if (!Data)
+        return std::nullopt;
+      Bitmap.Bits.assign(Data, Data + Stride);
+    }
     Map.Bitmaps.push_back(std::move(Bitmap));
   }
   return Map;

@@ -96,6 +96,20 @@ const char *getDelphiHandlerKindName(DelphiHandlerKind Kind) {
   return "unknown";
 }
 
+const char *getDelphiScopeKindName(DelphiScopeKind Kind) {
+  switch (Kind) {
+  case DelphiScopeKind::Finally:
+    return "finally";
+  case DelphiScopeKind::SafecallCatch:
+    return "safecall-catch";
+  case DelphiScopeKind::CatchAll:
+    return "catch-all";
+  case DelphiScopeKind::OnException:
+    return "on-exception";
+  }
+  return "unknown";
+}
+
 const char *getRustLandingPadKindName(RustLandingPadKind Kind) {
   switch (Kind) {
   case RustLandingPadKind::DropGlue:

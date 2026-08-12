@@ -115,6 +115,13 @@ private:
   bool
   emitNativeCxxEH(const MedFunc &Func, llvm::Function &LLVMFunc,
                   const std::map<int, llvm::BasicBlock *> &OriginalBlockMap);
+  /// Lower a decoded Itanium LSDA to the landing-pad EH model: a personality,
+  /// an `invoke` for every call the call-site table protects, and a
+  /// `landingpad` carrying the clauses the action chain names.  Rust rides the
+  /// same tables on every non-MSVC target, so this covers it too.
+  bool
+  emitNativeItaniumEH(const MedFunc &Func, llvm::Function &LLVMFunc,
+                      const std::map<int, llvm::BasicBlock *> &OriginalBlockMap);
   void emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder, int BlockId,
               int OpIdx);
   /// CALL/INDIR_CALL and RETURN lowering, carved out of the emitOp opcode
@@ -1068,6 +1075,10 @@ private:
   std::vector<PendingDispatchStore> PendingDispatchStores;
   std::map<std::string, llvm::Value *> ParamArgs;
   std::map<uint64_t, llvm::Value *> ParamRegoffMap;
+  /// Source address of every call this function emitted, which is what lets an
+  /// Itanium call-site range be matched to the calls it protects.  Cleared per
+  /// function alongside the other per-function emitter state.
+  std::map<const llvm::CallInst *, va_t> CallSiteAddrs;
   std::map<va_t, std::string> FuncNames;
   std::map<uint64_t, llvm::Constant *> GlobalDataCache;
   // One synthesized code-pointer mirror global per data segment base VA (see

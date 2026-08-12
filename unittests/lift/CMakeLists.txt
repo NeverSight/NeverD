@@ -89,6 +89,7 @@ add_neverd_unittest(NeverDLiftTests
   MachOI386RelocationTests.cpp
   MedCallingConvTests.cpp
   COFFExceptionTests.cpp
+  ExceptionCFGSeedTests.cpp
   COFFARMFormatTests.cpp
   FunctionDiscoveryThumbTests.cpp
   NdOpEmulatorTests.cpp

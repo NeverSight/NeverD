@@ -99,12 +99,15 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     Exception = Img.ExceptionMetadata.findFunction(EntryAddr);
   std::vector<va_t> ExceptionalRoots;
   if (Exception) {
+    // Every one of these tables spells "this field names no address" as zero,
+    // so a zero has to be dropped before the range test rather than left to it.
     auto AddBoundary = [&](va_t Address) {
-      if (Exception->CodeRange.contains(Address) && Address != EntryAddr)
+      if (Address != 0 && Exception->CodeRange.contains(Address) &&
+          Address != EntryAddr)
         BlockStarts.insert(Address);
     };
     auto AddExceptionalRoot = [&](va_t Address) {
-      if (!Exception->CodeRange.contains(Address))
+      if (Address == 0 || !Exception->CodeRange.contains(Address))
         return;
       AddBoundary(Address);
       if (Address != EntryAddr)
@@ -131,12 +134,54 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
             AddBoundary(Continuation);
         }
     }
+    if (Exception->Itanium)
+      for (const ItaniumCallSite &Site : Exception->Itanium->CallSites) {
+        // An SJLJ table's "ranges" are call-site indices, not addresses, so
+        // nothing in it may be read as one.
+        if (!Exception->Itanium->IsCallSiteAddressForm)
+          break;
+        AddBoundary(Site.GuardedRange.Begin);
+        if (Site.GuardedRange.End != Exception->CodeRange.End)
+          AddBoundary(Site.GuardedRange.End);
+        AddExceptionalRoot(Site.LandingPadVA);
+      }
+    if (Exception->Rust)
+      for (const RustLandingPad &Pad : Exception->Rust->LandingPads)
+        AddExceptionalRoot(Pad.PadVA);
+    if (Exception->Registration)
+      for (const RegistrationScopeRecord &Scope :
+           Exception->Registration->Scopes) {
+        AddExceptionalRoot(Scope.FilterVA);
+        AddExceptionalRoot(Scope.HandlerVA);
+      }
+    if (Exception->Delphi) {
+      AddExceptionalRoot(Exception->Delphi->FinallyBodyVA);
+      AddExceptionalRoot(Exception->Delphi->ExceptBodyVA);
+      for (const DelphiOnExceptionEntry &Arm : Exception->Delphi->OnExceptions)
+        AddExceptionalRoot(Arm.HandlerVA);
+    }
+    if (Exception->DelphiScopes)
+      for (const DelphiScopeRecord &Scope : Exception->DelphiScopes->Scopes) {
+        AddBoundary(Scope.GuardedRange.Begin);
+        if (Scope.GuardedRange.End != Exception->CodeRange.End)
+          AddBoundary(Scope.GuardedRange.End);
+        AddExceptionalRoot(Scope.TargetVA);
+        for (const DelphiOnExceptionEntry &Arm : Scope.OnExceptions)
+          AddExceptionalRoot(Arm.HandlerVA);
+      }
+    if (Exception->Go && Exception->Go->DeferReturnOffset) {
+      // The runtime resumes a panicking frame at this offset to run what the
+      // frame deferred, so it is entered without any branch reaching it.
+      AddExceptionalRoot(Exception->CodeRange.Begin +
+                         *Exception->Go->DeferReturnOffset);
+    }
   }
   explore(Img, Dec, EntryAddr);
-  // Windows handlers inside the owning runtime-function range are legal CFG
-  // roots even when no ordinary branch reaches them.  Decode them explicitly;
-  // exceptional edges remain separate and therefore do not perturb dominator
-  // or ordinary structuring semantics.
+  // A handler or landing pad inside the owning range is a legal CFG root even
+  // though no ordinary branch reaches it — only the unwinder or the dispatcher
+  // enters one, so recursive descent alone would leave its body undecoded.
+  // Decode them explicitly; exceptional edges remain separate and therefore do
+  // not perturb dominator or ordinary structuring semantics.
   std::sort(ExceptionalRoots.begin(), ExceptionalRoots.end());
   ExceptionalRoots.erase(
       std::unique(ExceptionalRoots.begin(), ExceptionalRoots.end()),
@@ -392,7 +437,16 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   Func.Blocks.clear();
   Func.JumpTables.clear();
 
-  std::vector<va_t> Starts(BlockStarts.begin(), BlockStarts.end());
+  // A boundary can name an address recursive descent never decoded: the end of
+  // a guarded range an exception table declared, or the fall-through of a
+  // conditional branch at the edge of the mapped image.  A block there would
+  // carry no instruction and so would stand for nothing, so it is dropped.  The
+  // entry survives unconditionally — the function is defined by it.
+  std::vector<va_t> Starts;
+  Starts.reserve(BlockStarts.size());
+  for (va_t Start : BlockStarts)
+    if (Start == Func.Entry || Insns.count(Start))
+      Starts.push_back(Start);
   std::sort(Starts.begin(), Starts.end());
 
   std::map<va_t, int> AddrToBlock;
@@ -768,6 +822,151 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
           AddEdge(Block, Catch.HandlerVA, ExceptionalEdgeKind::CxxCatch,
                   static_cast<uint32_t>(I), State);
       }
+    }
+  }
+
+  // Itanium.  A Rust frame is deliberately not walked separately: its landing
+  // pads are a reclassification of these same call sites (or, on MSVC targets,
+  // of the `Cxx` maps handled above), so reading both would double every edge.
+  if (Metadata.Itanium && Metadata.Itanium->IsCallSiteAddressForm) {
+    const ItaniumEHInfo &Itanium = *Metadata.Itanium;
+    auto FindAction = [&](uint64_t Offset) -> const ItaniumAction * {
+      for (const ItaniumAction &Action : Itanium.Actions)
+        if (Action.TableOffset == Offset)
+          return &Action;
+      return nullptr;
+    };
+    for (size_t I = 0; I < Itanium.CallSites.size(); ++I) {
+      const ItaniumCallSite &Site = Itanium.CallSites[I];
+      // A zero landing pad is how the table spells "no local handler": the
+      // exception leaves the frame instead of entering it, so there is no edge.
+      if (Site.LandingPadVA == 0)
+        continue;
+
+      // One clause per distinct (kind, filter) the chain names.  A chain that
+      // repeats a kind describes one pad entry, not several.
+      llvm::SmallVector<std::pair<ExceptionalEdgeKind, int32_t>, 4> Clauses;
+      auto AddClause = [&](ExceptionalEdgeKind Kind, int64_t Filter) {
+        auto Clause = std::make_pair(Kind, static_cast<int32_t>(Filter));
+        if (std::find(Clauses.begin(), Clauses.end(), Clause) == Clauses.end())
+          Clauses.push_back(Clause);
+      };
+      if (!Site.FirstActionOffset) {
+        // The ABI defines a landing pad with no action record as an
+        // unconditional cleanup, which is the shape every destructor-only
+        // frame has.
+        AddClause(ExceptionalEdgeKind::ItaniumCleanupPad, 0);
+      } else {
+        std::optional<uint64_t> Offset = Site.FirstActionOffset;
+        // The chain is a linked list inside a table the decoder already
+        // bounded, so a step budget of the action count both terminates a
+        // cycle and cannot cut a well-formed chain short.
+        for (size_t Step = 0; Offset && Step <= Itanium.Actions.size(); ++Step) {
+          const ItaniumAction *Action = FindAction(*Offset);
+          if (!Action)
+            break;
+          AddClause(Action->isCleanup()   ? ExceptionalEdgeKind::ItaniumCleanupPad
+                    : Action->isCatch()   ? ExceptionalEdgeKind::ItaniumCatchPad
+                                          : ExceptionalEdgeKind::ItaniumSpecPad,
+                    Action->TypeFilter);
+          Offset = Action->NextActionOffset;
+        }
+      }
+      ForProtectedBlocks(Site.GuardedRange, [&](LowBlock &Block) {
+        for (const auto &[Kind, Filter] : Clauses)
+          AddEdge(Block, Site.LandingPadVA, Kind, static_cast<uint32_t>(I),
+                  Filter);
+      });
+    }
+  }
+
+  // Delphi.  A `TExcFrame` has no scope table and no per-scope range: one
+  // frame guards one region, which runs from the instruction that linked the
+  // record onto the chain up to the descriptor.  The descriptor bounds it
+  // because Delphi lays the dispatch code and the handler bodies out after the
+  // guarded body — the same layout the decoder already reads the arms from.
+  if (Metadata.Delphi) {
+    const DelphiFrameInfo &Delphi = *Metadata.Delphi;
+    ExceptionAddressRange Guarded;
+    Guarded.Begin = Metadata.CodeRange.contains(Delphi.ChainInstallVA)
+                        ? Delphi.ChainInstallVA
+                        : Metadata.CodeRange.Begin;
+    Guarded.End = Metadata.CodeRange.contains(Delphi.DescriptorVA) &&
+                          Delphi.DescriptorVA > Guarded.Begin
+                      ? Delphi.DescriptorVA
+                      : Metadata.CodeRange.End;
+    if (Guarded.isValid())
+      ForProtectedBlocks(Guarded, [&](LowBlock &Block) {
+        switch (Delphi.Kind) {
+        case DelphiHandlerKind::Finally:
+          AddEdge(Block, Delphi.FinallyBodyVA,
+                  ExceptionalEdgeKind::DelphiFinally, 0, -1);
+          break;
+        case DelphiHandlerKind::AnyException:
+        case DelphiHandlerKind::AutoException:
+          AddEdge(Block, Delphi.ExceptBodyVA, ExceptionalEdgeKind::DelphiExcept,
+                  0, -1);
+          break;
+        case DelphiHandlerKind::OnException:
+          for (size_t I = 0; I < Delphi.OnExceptions.size(); ++I)
+            AddEdge(Block, Delphi.OnExceptions[I].HandlerVA,
+                    ExceptionalEdgeKind::DelphiOnException,
+                    static_cast<uint32_t>(I), -1);
+          break;
+        case DelphiHandlerKind::Unknown:
+          break;
+        }
+      });
+  }
+
+  // Delphi on x86-64, where the frame does carry a scope table and so names
+  // the exact range each handler guards.
+  if (Metadata.DelphiScopes) {
+    const std::vector<DelphiScopeRecord> &Scopes =
+        Metadata.DelphiScopes->Scopes;
+    for (size_t I = 0; I < Scopes.size(); ++I) {
+      const DelphiScopeRecord &Scope = Scopes[I];
+      ForProtectedBlocks(Scope.GuardedRange, [&](LowBlock &Block) {
+        switch (Scope.Kind) {
+        case DelphiScopeKind::Finally:
+          AddEdge(Block, Scope.TargetVA, ExceptionalEdgeKind::DelphiFinally,
+                  static_cast<uint32_t>(I), -1);
+          break;
+        case DelphiScopeKind::SafecallCatch:
+        case DelphiScopeKind::CatchAll:
+          AddEdge(Block, Scope.TargetVA, ExceptionalEdgeKind::DelphiExcept,
+                  static_cast<uint32_t>(I), -1);
+          break;
+        case DelphiScopeKind::OnException:
+          for (size_t J = 0; J < Scope.OnExceptions.size(); ++J)
+            AddEdge(Block, Scope.OnExceptions[J].HandlerVA,
+                    ExceptionalEdgeKind::DelphiOnException,
+                    static_cast<uint32_t>(I), static_cast<int32_t>(J));
+          break;
+        }
+      });
+    }
+  }
+
+  // Go.  The runtime resumes a panicking frame at `deferreturn` to run what
+  // the frame deferred, so that address is entered without any branch reaching
+  // it.  The sites that can start that transfer are the ones that register a
+  // defer and the ones that raise, which is what the frame's own metadata
+  // names; a `recover` site gets no edge here because recovery resumes the
+  // frame that deferred rather than the deferred frame the call sits in.
+  if (Metadata.Go && Metadata.Go->DeferReturnOffset) {
+    va_t DeferReturn =
+        Metadata.CodeRange.Begin + *Metadata.Go->DeferReturnOffset;
+    if (Metadata.CodeRange.contains(DeferReturn)) {
+      auto AddGoEdge = [&](va_t SiteVA) {
+        if (LowBlock *Block = Func.blockFor(SiteVA))
+          AddEdge(*Block, DeferReturn, ExceptionalEdgeKind::GoDeferReturn, 0,
+                  -1);
+      };
+      for (const GoDeferSite &Defer : Metadata.Go->Defers)
+        AddGoEdge(Defer.CallVA);
+      for (const GoPanicSite &Panic : Metadata.Go->Panics)
+        AddGoEdge(Panic.CallVA);
     }
   }
 }

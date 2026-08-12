@@ -458,6 +458,50 @@ struct DelphiFrameInfo {
   bool RuntimeHandlerNamed = false;
 };
 
+/// What a Delphi x86-64 `TExcScope.TableOffset` selects.  The field is a
+/// discriminant for its three smallest values and an RVA for everything else,
+/// which is how one 16-byte record spells four dispatch shapes.
+enum class DelphiScopeKind : uint8_t {
+  /// `TableOffset == 0`: `TargetOffset` is a `try..finally` cleanup body.
+  Finally,
+  /// `TableOffset == 1`: `TargetOffset` is the catch a `safecall` wrapper
+  /// enters to turn an escaping exception into an HRESULT.
+  SafecallCatch,
+  /// `TableOffset == 2`: `TargetOffset` is a `try..except` body that catches
+  /// anything.
+  CatchAll,
+  /// `TableOffset > 2`: it is the RVA of a `TExcDesc` arm table, and
+  /// `TargetOffset` carries nothing.
+  OnException,
+};
+
+const char *getDelphiScopeKindName(DelphiScopeKind Kind);
+
+/// One `TExcScope`: four RVAs in sixteen bytes.
+struct DelphiScopeRecord {
+  ExceptionAddressRange GuardedRange;
+  DelphiScopeKind Kind = DelphiScopeKind::Finally;
+  /// Cleanup or catch body, for every kind but \ref DelphiScopeKind::OnException.
+  va_t TargetVA = 0;
+  /// The `TExcDesc` arm table, for \ref DelphiScopeKind::OnException.
+  va_t DescriptorVA = 0;
+  std::vector<DelphiOnExceptionEntry> OnExceptions;
+};
+
+/// The `TExcData` a Delphi x86-64 frame keeps in its unwind handler data.
+///
+/// This shares nothing with \ref DelphiFrameInfo but the vendor.  Delphi on
+/// x86-64 abandoned the registration chain for the ordinary table mechanism,
+/// so the dispatch data is a count-prefixed array of pure data in `.xdata`
+/// rather than a descriptor that is itself code, and every address in it is a
+/// 32-bit RVA rather than an absolute pointer.
+struct DelphiScopeTable {
+  /// Address of the `TExcData`, which is the first byte after the unwind
+  /// info's handler RVA.
+  va_t TableVA = 0;
+  std::vector<DelphiScopeRecord> Scopes;
+};
+
 //===----------------------------------------------------------------------===//
 // Rust panic machinery
 //===----------------------------------------------------------------------===//
