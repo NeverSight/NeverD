@@ -15,6 +15,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/loader/DWARF/ItaniumEH.h"
+#include "neverd/loader/ELF/ARMEHABI.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/loader/ELF/EhFrameHdr.h"
 #include "neverd/loader/ELF/SBFELFLoader.h"
@@ -861,6 +862,11 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
         Name.starts_with(section_names::elf::PltPrefix))
       Img.recordImportStubRange(Sec.VA, Sec.Size);
   }
+  // A range says a veneer is one; it does not say which import it forwards to.
+  // On ARM that question has an answer in the veneer's own instructions, and
+  // it has to be asked: a personality routine is named by veneer address in
+  // every `.ARM.extab` entry that has one.
+  elf_loader::recordARMPLTVeneers(Img);
 
   // --- .got / .got.plt ---
   elf_loader::parseGOTEntries(ELF, *SectionsOr, Data, Size, Img);
@@ -941,6 +947,12 @@ llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
   // Personality routines are usually reached through a dynamically bound slot,
   // so language-table decoding waits until imports and veneers are known.
   dwarf_eh::parseItaniumExceptions(Img);
+  // ARM32 keeps its unwinding in an index of its own rather than in DWARF, and
+  // a C++ frame's language data inside that index's table rather than in a
+  // section.  Runs after the DWARF reader because an image built with
+  // `-fasynchronous-unwind-tables` has both, and the two agree about the
+  // frames they share.
+  arm_ehabi::parseARMEHABIExceptions(Img);
   // Go emits no DWARF frame information for its own functions, so a Go image
   // reaches this point with nothing recovered.  Its metadata lives in the
   // runtime's own table, which is present in every container format.

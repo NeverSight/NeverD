@@ -363,23 +363,22 @@ TEST(CxxItaniumEHCorpus, KeepsTheExceptionFreeControlFreeOfLanguageData) {
   EXPECT_EQ(Images, 9u);
 }
 
-// ARM EHABI is the one container in this corpus NeverD does not yet read: the
-// language data lives inline in `.ARM.extab` rather than in a
-// `.gcc_except_table` section, so nothing here has an LSDA to find.  What the
-// corpus can hold today is that the gap stays a gap -- the image loads, the
-// decode reports no malformed record, and no Itanium record is invented from
-// bytes that do not encode one.
+// The same graph, out of a container that keeps it somewhere else entirely.
 //
-// This is the test that changes when EHABI support lands: the artifacts are
-// already built, already carry their floors, and are already declared at their
-// own validation level, so what is left is to ask them for the graph.
-TEST(CxxItaniumEHCorpus, ReportsArmEhabiAsAGapRatherThanAMisread) {
+// ARM EHABI gives a C++ frame's language data no section of its own: the LSDA
+// is appended to the frame's `.ARM.extab` entry, immediately after the unwind
+// opcodes, and is reachable only by decoding the index that names the entry.
+// An image here therefore carries a complete call-site table and no
+// `.gcc_except_table` anywhere in it, which is what makes this the one cell
+// where finding nothing looks exactly like there being nothing to find.
+TEST(CxxItaniumEHCorpus, RecoversTheCallSiteGraphFromArmEhabiTables) {
   auto ExpectationsOrErr = loadExpectations();
   ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
       << toString(ExpectationsOrErr.takeError());
   const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
 
   unsigned Images = 0;
+  std::set<std::string> Toolchains;
   for (const CxxItaniumEHArtifactExpectation &Expectation :
        *ExpectationsOrErr) {
     if (Expectation.ValidationLevel != CxxItaniumCorpusValidationLevel::Ehabi)
@@ -390,6 +389,7 @@ TEST(CxxItaniumEHCorpus, ReportsArmEhabiAsAGapRatherThanAMisread) {
     if (!Image)
       continue;
     ++Images;
+    Toolchains.insert(Expectation.Toolchain);
     SCOPED_TRACE(Expectation.Path);
 
     EXPECT_EQ(Image->Arch, Arch::ARM);
@@ -399,10 +399,61 @@ TEST(CxxItaniumEHCorpus, ReportsArmEhabiAsAGapRatherThanAMisread) {
     const ExceptionInfo &Info = Image->ExceptionMetadata;
     const std::string Diagnostics = diagnosticsFor(Info);
     EXPECT_NE(Info.ParseStatus, ExceptionParseStatus::Malformed) << Diagnostics;
+    EXPECT_TRUE(Info.hasModel(ExceptionModel::ARMEHABI)) << Diagnostics;
+
+    // The index covers every function the linker placed, not only the ones
+    // that can be unwound through, so it is also the most complete function
+    // table a stripped image of this target has.
+    uint64_t IndexEntries = 0;
+    std::set<std::string> Personalities;
+    for (const ExceptionFunction &Function : Info.Functions) {
+      if (!Function.ARMEHABI)
+        continue;
+      ++IndexEntries;
+      Personalities.insert(getExceptionPersonalityName(Function.Personality));
+      EXPECT_TRUE(Function.CodeRange.isValid())
+          << "an index entry describes no code";
+      if (!Function.Itanium)
+        continue;
+      // Language data reached through the index has to belong to the frame the
+      // index named.  Both go wrong together when the entry's own extent was
+      // taken from the wrong neighbour, which is the failure that otherwise
+      // yields a plausible table attached to the function beside it.
+      for (const ItaniumCallSite &Site : Function.Itanium->CallSites) {
+        EXPECT_TRUE(Site.GuardedRange.isValid());
+        EXPECT_TRUE(Function.CodeRange.contains(Site.GuardedRange))
+            << "call site at 0x" << utohexstr(Site.GuardedRange.Begin)
+            << " lies outside the frame its index entry named";
+        if (Site.LandingPadVA == 0)
+          continue;
+        const Segment *Seg = Image->getSegmentFor(Site.LandingPadVA);
+        EXPECT_TRUE(Seg != nullptr && Seg->isExecutable())
+            << "landing pad 0x" << utohexstr(Site.LandingPadVA)
+            << " does not name code";
+      }
+      for (const ItaniumAction &Action : Function.Itanium->Actions)
+        if (Action.isCatch())
+          EXPECT_LE(static_cast<uint64_t>(Action.TypeFilter),
+                    Function.Itanium->TypeTable.size())
+              << "catch filter names a slot the type table does not have";
+    }
+    EXPECT_GE(IndexEntries, Expectation.MinArmExidxEntries) << Diagnostics;
+
+    const bool PersonalityMatched =
+        llvm::any_of(Expectation.Personalities, [&](const std::string &Name) {
+          return Personalities.contains(Name);
+        });
+    EXPECT_TRUE(PersonalityMatched)
+        << "parsed personalities did not include any the manifest allows; "
+        << Diagnostics;
+
     const GraphCensus Census = censusOf(Info);
-    EXPECT_EQ(Census.Records, 0u)
-        << "an EHABI image has no `.gcc_except_table`, so a record here was "
-           "read out of something else; "
+    EXPECT_GT(Census.Records, 0u) << Diagnostics;
+    EXPECT_GE(Census.CallSites, Expectation.MinCallSites) << Diagnostics;
+    EXPECT_GE(Census.LandingPads, Expectation.MinLandingPads) << Diagnostics;
+    EXPECT_GE(Census.CatchClauses, Expectation.MinCatchClauses) << Diagnostics;
+    EXPECT_GE(Census.CleanupPads, Expectation.MinCleanupPads) << Diagnostics;
+    EXPECT_GE(Census.TypeTableEntries, Expectation.MinTypeTableEntries)
         << Diagnostics;
   }
 
@@ -410,6 +461,65 @@ TEST(CxxItaniumEHCorpus, ReportsArmEhabiAsAGapRatherThanAMisread) {
   // exception-free build has no language data on any target, so it is the
   // control's level that names it and not the container's.
   EXPECT_EQ(Images, 14u);
+  // Both producers, because they do not spell this table the same way: GCC
+  // writes the platform's type-table convention into the LSDA header where
+  // Clang leaves the byte bare, and GCC reaches for the ARM-defined compact
+  // personalities at `-O0` where Clang never does.
+  EXPECT_EQ(Toolchains, (std::set<std::string>{"clang", "gcc"}));
+}
+
+// What a catch names, out of a table whose pointer encoding the header does
+// not describe.
+//
+// EHABI hands a type-table slot to `_Unwind_decode_typeinfo_ptr`, which
+// applies the platform's `R_ARM_TARGET2` convention and never reads the
+// encoding byte.  Both producers here emit the same relocation and disagree
+// about what to write in that byte, so a decoder that believes the header gets
+// the Clang half of this cell wrong -- and gets it wrong quietly, reporting a
+// displacement as though it were an address.
+TEST(CxxItaniumEHCorpus, NamesTheTypesArmEhabiCatchesDispatchOn) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
+
+  unsigned Images = 0;
+  for (const CxxItaniumEHArtifactExpectation &Expectation :
+       *ExpectationsOrErr) {
+    if (Expectation.ValidationLevel != CxxItaniumCorpusValidationLevel::Ehabi ||
+        Expectation.SourceLanguage != "cxx")
+      continue;
+    std::optional<BinaryImage> Image =
+        loadArtifact(CorpusRoot / Expectation.Path);
+    if (!Image)
+      continue;
+    ++Images;
+    SCOPED_TRACE(Expectation.Path);
+    const ExceptionInfo &Info = Image->ExceptionMetadata;
+    const std::string Diagnostics = diagnosticsFor(Info);
+
+    // The manifest requires the probe's own exception type as a string in the
+    // image, because that is the one identity that survives stripping.  What
+    // the type table has to do is arrive at it.
+    std::set<std::string> Named;
+    for (const ExceptionFunction &Function : Info.Functions) {
+      if (!Function.Itanium)
+        continue;
+      for (const ItaniumTypeEntry &Entry : Function.Itanium->TypeTable)
+        if (!Entry.TypeName.empty())
+          Named.insert(Entry.TypeName);
+    }
+    for (const std::string &Required : Expectation.RequiredStrings) {
+      const bool Reached = llvm::any_of(Named, [&](const std::string &Name) {
+        return llvm::StringRef(Name).contains(Required);
+      });
+      EXPECT_TRUE(Reached)
+          << "no catch reached the type `" << Required
+          << "` the manifest requires this image to throw; " << Diagnostics;
+    }
+  }
+  // The C probe carries no type table, so it is not among these.
+  EXPECT_EQ(Images, 12u);
 }
 
 } // namespace

@@ -17,6 +17,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
+#include <map>
 #include <optional>
 
 #define DEBUG_TYPE "neverd-elf-loader"
@@ -47,7 +49,110 @@ bool isIRelativeRelocation(uint32_t Type, Arch TargetArch) {
   }
 }
 
+/// Value of an ARM data-processing instruction's modified immediate: an
+/// eight-bit constant rotated right by twice its four-bit rotation field.
+uint32_t armModifiedImmediate(uint32_t Insn) {
+  const uint32_t Value = Insn & 0xFF;
+  const uint32_t Rotation = ((Insn >> 8) & 0xF) * 2;
+  return Rotation == 0 ? Value
+                       : ((Value >> Rotation) | (Value << (32 - Rotation)));
+}
+
+/// The GOT cell a standard ARM PLT veneer at \p VA loads its target from, or
+/// nullopt when the three instructions there are not one.
+///
+/// Every ARM ELF PLT entry has the same shape, because the linker writes it:
+/// two `add`s build the distance from `pc` to the cell and an `ldr` branches
+/// through it.  The middle `add` is omitted when the distance is small enough
+/// to need only one, so both lengths are accepted.
+///
+///     add ip, pc, #hi        e28fcXYZ
+///     add ip, ip, #mid       e28ccXYZ   (optional)
+///     ldr pc, [ip, #lo]!     e5bcfXYZ
+std::optional<va_t> armPLTVeneerTarget(const uint8_t *Bytes, size_t Available,
+                                       va_t VA) {
+  constexpr uint32_t kInsnMask = 0xFFFFF000u;
+  constexpr uint32_t kAddIPFromPC = 0xE28FC000u;
+  constexpr uint32_t kAddIPFromIP = 0xE28CC000u;
+  constexpr uint32_t kLdrPCFromIP = 0xE5BCF000u;
+  // `pc` reads as the address of the instruction plus two instructions.
+  constexpr uint64_t kPCBias = 8;
+
+  if (Available < 8)
+    return std::nullopt;
+  const uint32_t First = readLE<uint32_t>(Bytes);
+  if ((First & kInsnMask) != kAddIPFromPC)
+    return std::nullopt;
+
+  uint64_t Offset = armModifiedImmediate(First);
+  size_t Consumed = 4;
+  const uint32_t Second = readLE<uint32_t>(Bytes + 4);
+  if ((Second & kInsnMask) == kAddIPFromIP) {
+    if (Available < 12)
+      return std::nullopt;
+    Offset += armModifiedImmediate(Second);
+    Consumed = 8;
+  }
+  const uint32_t Last = readLE<uint32_t>(Bytes + Consumed);
+  if ((Last & kInsnMask) != kLdrPCFromIP)
+    return std::nullopt;
+  // The load's own displacement is a plain twelve-bit immediate rather than a
+  // modified one, and the pre-indexed form adds it before the load.
+  Offset += Last & 0xFFF;
+  return static_cast<va_t>((VA + kPCBias + Offset) & 0xFFFFFFFFull);
+}
+
 } // anonymous namespace
+
+size_t recordARMPLTVeneers(BinaryImage &Img) {
+  if (Img.Arch != Arch::ARM || Img.Imports.empty())
+    return 0;
+
+  std::map<va_t, size_t> CellOwners;
+  for (size_t I = 0; I < Img.Imports.size(); ++I)
+    if (Img.Imports[I].IATAddr != 0)
+      CellOwners.try_emplace(Img.Imports[I].IATAddr, I);
+  if (CellOwners.empty())
+    return 0;
+
+  size_t Paired = 0;
+  for (const Section &Sec : Img.Sections) {
+    llvm::StringRef Name(Sec.Name);
+    if (Name != section_names::elf::Plt && Name != section_names::elf::Iplt &&
+        !Name.starts_with(section_names::elf::PltPrefix))
+      continue;
+    if (Sec.Size == 0 || Sec.Size > std::numeric_limits<size_t>::max())
+      continue;
+    const size_t Size = static_cast<size_t>(Sec.Size);
+    const uint8_t *Bytes = !Sec.Data.empty()
+                               ? Sec.Data.data()
+                               : Img.readVA(Sec.VA, Size);
+    if (!Bytes)
+      continue;
+    const size_t Available = !Sec.Data.empty()
+                                 ? std::min<size_t>(Sec.Data.size(), Size)
+                                 : Size;
+
+    // Every entry is word-aligned, and the header the linker puts first is
+    // not an entry.  Stepping a word at a time rather than an entry at a time
+    // costs nothing and does not have to know how long the header was.
+    for (size_t Offset = 0; Offset + 8 <= Available; Offset += 4) {
+      const va_t VA = static_cast<va_t>(Sec.VA + Offset);
+      std::optional<va_t> Cell =
+          armPLTVeneerTarget(Bytes + Offset, Available - Offset, VA);
+      if (!Cell)
+        continue;
+      auto Owner = CellOwners.find(*Cell);
+      if (Owner == CellOwners.end())
+        continue;
+      if (Img.recordImportStub(VA, Owner->second))
+        ++Paired;
+    }
+  }
+  LLVM_DEBUG(llvm::dbgs() << "elf: paired " << Paired
+                          << " ARM PLT veneers with their imports\n");
+  return Paired;
+}
 
 void recordRuntimePointerArray(va_t Addr, uint64_t Size, std::vector<va_t> &Out,
                                BinaryImage &Img) {

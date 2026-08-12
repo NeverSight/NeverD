@@ -45,6 +45,12 @@ constexpr const char *EhFrameHdr = ".eh_frame_hdr";
 constexpr const char *EhFrame = ".eh_frame";
 constexpr const char *GccExceptTable = ".gcc_except_table";
 constexpr const char *ArmExIdx = ".ARM.exidx";
+constexpr const char *ArmExTab = ".ARM.extab";
+// The linker keeps a per-input-section index and table when it is told not to
+// merge them, which is what `-ffunction-sections` without `--merge-exidx-
+// entries` produces: ".ARM.exidx.text.<symbol>", ".ARM.extab.text.<symbol>".
+constexpr const char *ArmExIdxPrefix = ".ARM.exidx.";
+constexpr const char *ArmExTabPrefix = ".ARM.extab.";
 constexpr const char *GoPclnTab = ".gopclntab";
 constexpr const char *GoSymTab = ".gosymtab";
 constexpr const char *GoBuildInfo = ".go.buildinfo";

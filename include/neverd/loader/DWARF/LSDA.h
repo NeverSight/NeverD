@@ -38,6 +38,18 @@ struct LSDAParseRequest {
   /// True for the setjmp/longjmp call-site form, whose table holds call-site
   /// indices instead of addresses.
   bool IsSJLJ = false;
+  /// How to read a type-table slot whose header left the question open.
+  ///
+  /// A bare `DW_EH_PE_absptr` normally says the slot holds the pointer
+  /// itself.  ARM EHABI is the one place that is not the whole story: its
+  /// runtime resolves a slot through `_Unwind_decode_typeinfo_ptr`, which
+  /// applies the platform's `R_ARM_TARGET2` convention and never looks at the
+  /// header byte.  GCC writes that convention into the byte anyway while
+  /// Clang leaves it bare, so the same table is spelled two ways and only the
+  /// caller knows which platform it is reading.  An override therefore
+  /// replaces the bare form alone: a header that already spells an
+  /// application was a producer saying something, and is left to say it.
+  std::optional<uint8_t> TypeTableEncodingOverride;
   /// Upper bound on call sites, actions, and type-table entries.
   size_t MaxRecords = 1u << 16;
 };

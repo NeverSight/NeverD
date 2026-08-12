@@ -80,6 +80,34 @@ const char *getCompactUnwindKindName(CompactUnwindKind Kind) {
   return "unknown";
 }
 
+const char *getARMEHABIEntryKindName(ARMEHABIEntryKind Kind) {
+  switch (Kind) {
+  case ARMEHABIEntryKind::CantUnwind:
+    return "cantunwind";
+  case ARMEHABIEntryKind::InlineCompact:
+    return "inline-compact";
+  case ARMEHABIEntryKind::Compact:
+    return "compact";
+  case ARMEHABIEntryKind::Generic:
+    return "generic";
+  }
+  return "unknown";
+}
+
+const char *getARMTypeTableConventionName(ARMTypeTableConvention Convention) {
+  switch (Convention) {
+  case ARMTypeTableConvention::Unknown:
+    return "unknown";
+  case ARMTypeTableConvention::Absolute:
+    return "absolute";
+  case ARMTypeTableConvention::PCRelative:
+    return "pcrel";
+  case ARMTypeTableConvention::PCRelativeIndirect:
+    return "pcrel-indirect";
+  }
+  return "unknown";
+}
+
 const char *getDelphiHandlerKindName(DelphiHandlerKind Kind) {
   switch (Kind) {
   case DelphiHandlerKind::Unknown:

@@ -19,6 +19,7 @@ add_neverd_component_library(NeverDLoader
   COFF/COFFUnwind.cpp
   COFF/COFFUnwindARM.cpp
   COFF/COFFLoaderUtils.cpp
+  ELF/ARMEHABI.cpp
   ELF/ELFLoader.cpp
   ELF/ELFLoaderUtils.cpp
   ELF/SBFELFLoader.cpp

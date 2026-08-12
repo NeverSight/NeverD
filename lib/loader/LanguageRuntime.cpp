@@ -96,6 +96,14 @@ constexpr PersonalityName kPersonalityNames[] = {
     {"__gcc_personality_sj0", ExceptionPersonality::GccPersonalitySJ0},
     {"__objc_personality_v0", ExceptionPersonality::ObjCPersonalityV0},
     {"rust_eh_personality", ExceptionPersonality::RustEhPersonality},
+    // ARM EHABI.  An index entry names one of these by number rather than by
+    // address, but a linked image also carries the symbol, so both spellings
+    // have to reach the same enumerator.  They say nothing about the source
+    // language: every language that unwinds on this target uses them for the
+    // frames that only need stepping over.
+    {"__aeabi_unwind_cpp_pr0", ExceptionPersonality::AeabiUnwindCppPr0},
+    {"__aeabi_unwind_cpp_pr1", ExceptionPersonality::AeabiUnwindCppPr1},
+    {"__aeabi_unwind_cpp_pr2", ExceptionPersonality::AeabiUnwindCppPr2},
     // Go.  The linker emits this on windows/amd64 only, and only for
     // `runtime.asmcgocall_landingpad`; the `.abi0` suffix is how the Go
     // assembler spells a function that uses the pre-register ABI.

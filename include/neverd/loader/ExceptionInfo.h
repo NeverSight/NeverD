@@ -58,6 +58,16 @@ enum class ExceptionEncoding : uint8_t {
   DelphiX86Chain,
   /// Go `pclntab` frame metadata.
   GoFuncTable,
+  /// ARM EHABI `EXIDX_CANTUNWIND`: the index covers the frame in order to say
+  /// that it may not be unwound through.
+  ARMEHABICantUnwind,
+  /// ARM EHABI index entry whose own word holds the whole descriptor.
+  ARMEHABIInline,
+  /// ARM EHABI `.ARM.extab` entry using an ARM-defined personality index.
+  ARMEHABICompact,
+  /// ARM EHABI `.ARM.extab` entry naming its personality routine, which is
+  /// the form that carries an Itanium LSDA inline after its unwind opcodes.
+  ARMEHABIGeneric,
 };
 
 inline const char *getExceptionEncodingName(ExceptionEncoding Encoding) {
@@ -94,6 +104,14 @@ inline const char *getExceptionEncodingName(ExceptionEncoding Encoding) {
     return "delphi-x86-chain";
   case ExceptionEncoding::GoFuncTable:
     return "go-func-table";
+  case ExceptionEncoding::ARMEHABICantUnwind:
+    return "arm-ehabi-cantunwind";
+  case ExceptionEncoding::ARMEHABIInline:
+    return "arm-ehabi-inline";
+  case ExceptionEncoding::ARMEHABICompact:
+    return "arm-ehabi-compact";
+  case ExceptionEncoding::ARMEHABIGeneric:
+    return "arm-ehabi-generic";
   case ExceptionEncoding::Unknown:
     return "unknown";
   }
@@ -126,6 +144,11 @@ inline ExceptionModel getExceptionEncodingModel(ExceptionEncoding Encoding) {
     return ExceptionModel::WindowsRegistration;
   case ExceptionEncoding::GoFuncTable:
     return ExceptionModel::GoRuntime;
+  case ExceptionEncoding::ARMEHABICantUnwind:
+  case ExceptionEncoding::ARMEHABIInline:
+  case ExceptionEncoding::ARMEHABICompact:
+  case ExceptionEncoding::ARMEHABIGeneric:
+    return ExceptionModel::ARMEHABI;
   case ExceptionEncoding::Unknown:
     return ExceptionModel::None;
   }
@@ -203,6 +226,11 @@ enum class UnwindOperationKind : uint8_t {
   /// `end_c`: end of the codes for the current chained scope, with the parent
   /// scope's codes continuing after it.
   EndChained,
+  /// `add sp,sp,#N`: the frame the prologue leaves is *smaller* than the one
+  /// it was entered with.  ARM EHABI is the only target here that can say so,
+  /// and it says it often enough that folding it into \ref AllocateStack with
+  /// a sign nobody reads would lose the size of the frame.
+  DeallocateStack,
 };
 
 /// Register file an operation's register operand is numbered in.
@@ -294,6 +322,18 @@ enum class ExceptionPersonality : uint8_t {
   /// Rust's own personality routine.  It uses the Itanium tables but only
   /// ever selects cleanup or its single `catch_unwind` filter.
   RustEhPersonality,
+  // ARM EHABI.  These three are named by index rather than by address, and
+  // they are unwinders rather than handlers: they restore the frame and
+  // resume, so a frame that installs one stops nothing.  They stay distinct
+  // from each other because the index also decides how many opcode words the
+  // entry has and whether scope descriptors follow them.
+  /// `__aeabi_unwind_cpp_pr0`: three opcode bytes, no further words.
+  AeabiUnwindCppPr0,
+  /// `__aeabi_unwind_cpp_pr1`: a word count and scope descriptors after the
+  /// opcodes.
+  AeabiUnwindCppPr1,
+  /// `__aeabi_unwind_cpp_pr2`: as `pr1`, with the wider scope offsets.
+  AeabiUnwindCppPr2,
   // Delphi.
   /// Delphi x86-32 `@HandleAnyException` / `@HandleFinally` family.
   DelphiX86Handler,
@@ -352,6 +392,12 @@ inline const char *getExceptionPersonalityName(ExceptionPersonality P) {
     return "__objc_personality_v0";
   case ExceptionPersonality::RustEhPersonality:
     return "rust_eh_personality";
+  case ExceptionPersonality::AeabiUnwindCppPr0:
+    return "__aeabi_unwind_cpp_pr0";
+  case ExceptionPersonality::AeabiUnwindCppPr1:
+    return "__aeabi_unwind_cpp_pr1";
+  case ExceptionPersonality::AeabiUnwindCppPr2:
+    return "__aeabi_unwind_cpp_pr2";
   case ExceptionPersonality::DelphiX86Handler:
     return "@HandleAnyException";
   case ExceptionPersonality::DelphiExceptionHandler:
@@ -699,6 +745,11 @@ struct ExceptionFunction {
   /// Itanium model: the DWARF frame description and its LSDA.
   std::optional<DwarfFDE> Dwarf;
   std::optional<ItaniumEHInfo> Itanium;
+  /// ARM EHABI model: the index entry and the `.ARM.extab` entry it reached.
+  /// Present beside \ref Itanium rather than instead of it, because a C++
+  /// frame on this target keeps its language data inside the EHABI entry --
+  /// the two describe one frame and neither is readable without the other.
+  std::optional<ARMEHABIInfo> ARMEHABI;
   /// Darwin compact-unwind entry covering this range.
   std::optional<CompactUnwindEntry> Compact;
   /// x86-32 registration model: the chain the prologue installed.

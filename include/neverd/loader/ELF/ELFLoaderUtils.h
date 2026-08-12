@@ -53,6 +53,21 @@ void parsePLTImports(const llvm::object::ELFFile<ELFT> &ELF,
                      llvm::ArrayRef<typename ELFT::Shdr> Sections,
                      const uint8_t *Data, size_t Size, BinaryImage &Img);
 
+/// Attach each ARM `.plt` veneer to the import it forwards to.
+///
+/// `parsePLTImports` names an import by the GOT cell the dynamic linker binds,
+/// which is the address every *data* reference to it uses.  Code references do
+/// not go there: they branch to the veneer, and on ARM so does the address a
+/// generic `.ARM.extab` entry names for its personality routine.  Without the
+/// pairing every such routine reads as unnamed, and the frames that install it
+/// lose the one fact that says what their landing pads do.
+///
+/// A veneer is paired only when its own instructions compute a GOT cell an
+/// import already claimed, so nothing is attached on the strength of position
+/// in the table -- the layout a lazily bound PLT happens to have is not the
+/// one `-z now`, `.plt.sec`, or an IFUNC produces.
+size_t recordARMPLTVeneers(BinaryImage &Img);
+
 /// Add function symbols from the .eh_frame_hdr section's binary-search
 /// table.  Template \p ShdrT must match the ELF class (Elf32_Shdr /
 /// Elf64_Shdr).  Defined in EhFrameHdr.h.

@@ -150,6 +150,7 @@ add_neverd_unittest(NeverDLanguageEHTests
   LanguageEHTests.cpp
   GoRuntimeEHTests.cpp
   CompactUnwindTests.cpp
+  ARMEHABITests.cpp
   ScratchRealBinary.cpp
 )
 target_include_directories(NeverDLanguageEHTests PRIVATE

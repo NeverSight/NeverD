@@ -311,9 +311,16 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
         HighestIndex =
             std::max(HighestIndex, static_cast<uint64_t>(A.TypeFilter));
 
-    const size_t EntrySize = getFormat(Info.TypeTableEncoding) == Absptr
+    // The declared byte stays in the record: it is what the producer wrote,
+    // and an override says how the platform's runtime reads that slot rather
+    // than what the file claims about it.
+    const uint8_t SlotEncoding =
+        Req.TypeTableEncodingOverride && Info.TypeTableEncoding == Absptr
+            ? *Req.TypeTableEncodingOverride
+            : Info.TypeTableEncoding;
+    const size_t EntrySize = getFormat(SlotEncoding) == Absptr
                                  ? PtrSize
-                                 : getEncodedSize(Info.TypeTableEncoding);
+                                 : getEncodedSize(SlotEncoding);
     if (HighestIndex != 0 && EntrySize == 0) {
       partial("Itanium LSDA type table uses a variable-length encoding");
     } else {
@@ -336,8 +343,8 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
         va_t TypeInfo = 0;
         va_t IndirectSlot = 0;
         if (!readEncodedPointer(Slot, EntrySize, SlotCursor, EntryVA,
-                                Info.TypeTableEncoding, Bases, PtrSize, &Img,
-                                TypeInfo, &IndirectSlot)) {
+                                SlotEncoding, Bases, PtrSize, &Img, TypeInfo,
+                                &IndirectSlot)) {
           partial("unresolved Itanium LSDA type-table entry");
           break;
         }
