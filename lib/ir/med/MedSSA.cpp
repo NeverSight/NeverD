@@ -32,6 +32,37 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
   Func.CallClobbers.clear();
 
   int N = static_cast<int>(Func.Blocks.size());
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  const bool UseItaniumExceptionalFlow =
+      Func.ExceptionMetadata && Func.ExceptionMetadata->Itanium &&
+      Func.ExceptionMetadata->Itanium->IsCallSiteAddressForm;
+
+  // The machine exceptional edge carries the current frame state into a
+  // landing pad just as surely as an ordinary branch carries SSA values.  Keep
+  // that edge in the SSA-only graph while leaving MedBlock::Succs untouched:
+  // the LLVM emitter will turn the protected call into an invoke later.
+  std::vector<std::vector<int>> FlowSuccs(N), FlowPreds(N);
+  std::vector<bool> IsExceptionalTarget(N, false);
+  auto AddFlowEdge = [&](int From, int To) {
+    if (From < 0 || From >= N || To < 0 || To >= N)
+      return;
+    auto &Succs = FlowSuccs[From];
+    if (std::find(Succs.begin(), Succs.end(), To) == Succs.end())
+      Succs.push_back(To);
+  };
+  for (int B = 0; B < N; ++B) {
+    for (int S : Func.Blocks[B].Succs)
+      AddFlowEdge(B, S);
+    if (UseItaniumExceptionalFlow)
+      for (const ExceptionalEdge &Edge : Func.Blocks[B].ExceptionalSuccs)
+        if (Edge.BlockId >= 0 && Edge.BlockId < N) {
+          AddFlowEdge(B, Edge.BlockId);
+          IsExceptionalTarget[Edge.BlockId] = true;
+        }
+  }
+  for (int B = 0; B < N; ++B)
+    for (int S : FlowSuccs[B])
+      FlowPreds[S].push_back(B);
 
   // Reverse post-order + immediate dominators (Cooper-Harvey-Kennedy), computed
   // up front because both the live-in analysis (Step 0) and the dominance
@@ -54,7 +85,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       while (!Stk.empty()) {
         int B = Stk.back().first;
         size_t I = Stk.back().second;
-        auto &Succs = Func.Blocks[B].Succs;
+        auto &Succs = FlowSuccs[B];
         if (I < Succs.size()) {
           Stk.back().second = I + 1;
           int S = Succs[I];
@@ -110,7 +141,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
         if (IDom[B] == B)
           continue;
         int NewIDom = -1;
-        for (int P : Func.Blocks[B].Preds) {
+        for (int P : FlowPreds[B]) {
           if (P < 0 || P >= N || Component[P] != Component[B])
             continue;
           if (IDom[P] == -1)
@@ -128,7 +159,6 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     }
   }
 
-  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   std::map<uint64_t, std::set<int>> RegOffToIds;
   std::map<int, MedVar> RegVarOfId;
   for (const MedBlock &Blk : Func.Blocks) {
@@ -142,6 +172,49 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       AddReg(Op.Output);
       for (uint8_t I = 0; I < Op.NumInputs; ++I)
         AddReg(Op.Inputs[I]);
+    }
+  }
+
+  // An Itanium landing pad overwrites the target ABI's first two integer
+  // result registers with {exception object, selector}.  Define those values
+  // at every exceptional target before liveness/SSA construction so they kill
+  // the protected call's ordinary register values, while all preserved frame
+  // registers continue to flow over the exceptional edge.
+  const uint64_t EHSelectorReg =
+      TRI.IntReturnRegs.size() > 1 ? TRI.IntReturnRegs[1]
+                                  : TRI.IntReturnReg2;
+  auto InsertEHDefs = [&](MedBlock &Block, uint64_t RegOff,
+                          MedVar::VarKind Kind) {
+    auto IdsIt = RegOffToIds.find(RegOff);
+    if (IdsIt == RegOffToIds.end())
+      return;
+    std::vector<MedOp> Defs;
+    for (int Id : IdsIt->second) {
+      auto VarIt = RegVarOfId.find(Id);
+      if (VarIt == RegVarOfId.end())
+        continue;
+      MedOp Def;
+      Def.Opcode = NdOp::COPY;
+      Def.Output = VarIt->second;
+      MedVar Input = VarIt->second;
+      Input.Kind = Kind;
+      Input.Id = -1;
+      Input.SSAVer = 0;
+      Def.addInput(Input);
+      Def.Addr = Block.StartAddr;
+      Defs.push_back(Def);
+    }
+    Block.Ops.insert(Block.Ops.begin(), Defs.begin(), Defs.end());
+  };
+  if (UseItaniumExceptionalFlow) {
+    for (int B = 0; B < N; ++B) {
+      if (!IsExceptionalTarget[B])
+        continue;
+      // Insert selector first so the exception definition remains the first
+      // recovered register copy; neither order is semantically significant.
+      if (EHSelectorReg != 0)
+        InsertEHDefs(Func.Blocks[B], EHSelectorReg, MedVar::EHSelector);
+      InsertEHDefs(Func.Blocks[B], TRI.IntReturnReg, MedVar::EHException);
     }
   }
 
@@ -258,9 +331,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
           Input.Kind = MedVar::EHException;
           Input.Id = -1;
           Input.SSAVer = 0;
-        } else if (IsItaniumEHRoot && Input.Kind == MedVar::Reg &&
-                   TRI.IntReturnReg2 != 0 &&
-                   Input.RegOff == TRI.IntReturnReg2) {
+        } else if (IsItaniumEHRoot && EHSelectorReg != 0 &&
+                   Input.Kind == MedVar::Reg &&
+                   Input.RegOff == EHSelectorReg) {
           Input.Kind = MedVar::EHSelector;
           Input.Id = -1;
           Input.SSAVer = 0;
@@ -279,9 +352,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
   // Step 2: Compute dominance frontiers
   std::vector<std::set<int>> DF(N);
   for (int B = 0; B < N; ++B) {
-    if (Func.Blocks[B].Preds.size() < 2)
+    if (FlowPreds[B].size() < 2)
       continue;
-    for (int P : Func.Blocks[B].Preds) {
+    for (int P : FlowPreds[B]) {
       if (P < 0 || P >= N || Component[P] != Component[B])
         continue;
       int Runner = P;
@@ -326,7 +399,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
 
           PhiNode Phi;
           Phi.Output = PhiVar;
-          for (int P : Func.Blocks[D].Preds)
+          for (int P : FlowPreds[D])
             Phi.Args.push_back({P, PhiVar});
           Func.Blocks[D].Phis.push_back(Phi);
 
@@ -407,7 +480,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
         }
       }
     }
-    for (int S : Blk.Succs) {
+    for (int S : FlowSuccs[F.B]) {
       if (S < 0 || S >= N)
         continue;
       for (auto &Phi : Func.Blocks[S].Phis) {

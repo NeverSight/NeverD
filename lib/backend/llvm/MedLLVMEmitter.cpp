@@ -1208,11 +1208,11 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
   auto *I8Ty = llvm::Type::getInt8Ty(*Ctx);
   auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
 
-  // A type-table slot resolves to the RTTI object the catch matches.  The
-  // mangled name is used when the decoder could read it, because that is the
-  // identity a rebuilt object would link against; an address-derived symbol is
-  // the fallback, and a null pointer is what the ABI itself spells for a
-  // catch-all.
+  // A type-table slot resolves to the exact RTTI object the catch matches.
+  // Prefer the mapped object over TypeName: for stripped local types the latter
+  // is often only std::type_info::__type_name ("15CxxEhProbeError"), not a
+  // linkage symbol.  Declaring that byte string as an external global creates
+  // a different/invalid pointer in the regenerated LSDA.
   auto TypeInfoConstant = [&](uint64_t Index) -> llvm::Constant * {
     const ItaniumTypeEntry *Entry = nullptr;
     for (const ItaniumTypeEntry &Candidate : Itanium.TypeTable)
@@ -1224,9 +1224,16 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
       return nullptr;
     if (Entry->IsCatchAll || Entry->TypeInfoVA == 0)
       return llvm::ConstantPointerNull::get(PtrTy);
-    std::string Name = Entry->TypeName.empty()
-                           ? makeNdDataSymbol(Entry->TypeInfoVA)
-                           : Entry->TypeName;
+    if (llvm::Constant *Mapped = tryResolveGlobalData(Entry->TypeInfoVA, 1))
+      return Mapped;
+
+    // A real Itanium RTTI linkage name is still useful for an unmapped
+    // externally supplied type.  A bare encoded type-name string is not.
+    llvm::StringRef DecodedName(Entry->TypeName);
+    bool IsRTTISymbol = DecodedName.starts_with("_ZTI") ||
+                        DecodedName.starts_with("__ZTI");
+    std::string Name = IsRTTISymbol ? Entry->TypeName
+                                    : makeNdDataSymbol(Entry->TypeInfoVA);
     llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
     if (!GV)
       GV = new llvm::GlobalVariable(*Mod, I8Ty, /*isConstant=*/true,
@@ -1237,6 +1244,7 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
 
   struct Pad {
     llvm::BasicBlock *Block = nullptr;
+    int BlockId = -1;
     bool Cleanup = false;
     std::vector<llvm::Constant *> Clauses;
     bool Usable = false;
@@ -1341,6 +1349,11 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
   size_t UsablePads = 0;
   for (auto &[PadVA, P] : Pads) {
     P.Block = BlockAt(PadVA);
+    for (const MedBlock &Block : Func.Blocks)
+      if (Block.StartAddr == PadVA) {
+        P.BlockId = Block.Id;
+        break;
+      }
     if (!P.Block || P.Block == &LLVMFunc.getEntryBlock() ||
         !llvm::pred_empty(P.Block) || P.Block->isLandingPad())
       continue;
@@ -1373,6 +1386,29 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
     return Best;
   };
 
+  auto EmitExceptionalPhiCopies = [&](int PredId, int TargetId,
+                                      llvm::Instruction *Before) {
+    const MedBlock *TargetBlock = nullptr;
+    for (const MedBlock &Block : Func.Blocks)
+      if (Block.Id == TargetId) {
+        TargetBlock = &Block;
+        break;
+      }
+    if (!TargetBlock)
+      return;
+
+    llvm::IRBuilder<> CopyBuilder(Before);
+    std::vector<std::pair<MedVar, llvm::Value *>> Pending;
+    for (const PhiNode &Phi : TargetBlock->Phis)
+      for (const auto &[IncomingPred, Incoming] : Phi.Args)
+        if (IncomingPred == PredId)
+          Pending.emplace_back(Phi.Output, getVar(Incoming, CopyBuilder));
+    // Parallel-copy semantics: read every incoming value before any phi output
+    // is overwritten.
+    for (auto &[Output, Value] : Pending)
+      setVar(Output, Value, CopyBuilder);
+  };
+
   size_t LoweredCalls = 0;
   for (const MedBlock &MedBB : Func.Blocks) {
     auto BBIt = OriginalBlockMap.find(MedBB.Id);
@@ -1392,6 +1428,7 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
       Pad *Target = PadForCall(AddrIt->second);
       if (!Target)
         continue;
+      EmitExceptionalPhiCopies(MedBB.Id, Target->BlockId, Call);
       llvm::Instruction *Next = Call->getNextNode();
       if (!Next)
         continue;
@@ -1963,9 +2000,26 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     // Group: (PredId, TargetBlockId) → list of (PhiOutput, PhiArg)
     using EdgeKey = std::pair<int, int>;
     std::map<EdgeKey, std::vector<std::pair<MedVar, MedVar>>> EdgePhis;
+    auto IsExceptionalEdge = [&](int PredId, int TargetId) {
+      for (const MedBlock &Pred : Func.Blocks) {
+        if (Pred.Id != PredId)
+          continue;
+        return std::any_of(Pred.ExceptionalSuccs.begin(),
+                           Pred.ExceptionalSuccs.end(),
+                           [&](const ExceptionalEdge &Edge) {
+                             return Edge.BlockId == TargetId;
+                           });
+      }
+      return false;
+    };
     for (auto &Blk : Func.Blocks) {
       for (auto &Phi : Blk.Phis) {
         for (auto &[PredId, Var] : Phi.Args) {
+          // A throwing call never reaches its ordinary block terminator.
+          // These copies are emitted immediately before the call when it is
+          // converted to an invoke by emitNativeItaniumEH().
+          if (IsExceptionalEdge(PredId, Blk.Id))
+            continue;
           EdgePhis[{PredId, Blk.Id}].emplace_back(Phi.Output, Var);
         }
       }

@@ -325,56 +325,94 @@ TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {
   Low.ExceptionMetadata.emplace();
   Low.ExceptionMetadata->Itanium.emplace();
   Low.ExceptionMetadata->Itanium->IsCallSiteAddressForm = true;
-  Low.Blocks.resize(2);
+  Low.Blocks.resize(3);
+  ASSERT_GT(TRI.IntReturnRegs.size(), 1u);
 
   Low.Blocks[0].Id = 0;
   Low.Blocks[0].StartAddr = 0x1000;
   Low.Blocks[0].EndAddr = 0x1001;
   ExceptionalEdge ToHandler;
-  ToHandler.BlockId = 1;
+  ToHandler.BlockId = 2;
   ToHandler.TargetVA = 0x1100;
   ToHandler.Kind = ExceptionalEdgeKind::ItaniumCatchPad;
   Low.Blocks[0].ExceptionalSuccs.push_back(ToHandler);
+  LowOp SetFrame;
+  SetFrame.Opcode = NdOp::INT_ADD;
+  SetFrame.Addr = 0x1000;
+  SetFrame.Output = NdVar::reg(TRI.FramePointer, TRI.PointerSize);
+  SetFrame.addInput(NdVar::reg(TRI.StackPointer, TRI.PointerSize));
+  SetFrame.addInput(NdVar::cst(16, TRI.PointerSize));
+  Low.Blocks[0].Ops.push_back(SetFrame);
   LowOp NormalReturn;
   NormalReturn.Opcode = NdOp::RETURN;
   NormalReturn.Addr = 0x1000;
   Low.Blocks[0].Ops.push_back(NormalReturn);
 
   Low.Blocks[1].Id = 1;
-  Low.Blocks[1].StartAddr = 0x1100;
-  Low.Blocks[1].EndAddr = 0x1102;
+  Low.Blocks[1].StartAddr = 0x1080;
+  Low.Blocks[1].EndAddr = 0x1080;
+
+  Low.Blocks[2].Id = 2;
+  Low.Blocks[2].StartAddr = 0x1100;
+  Low.Blocks[2].EndAddr = 0x1103;
   ExceptionalEdge FromCall;
   FromCall.BlockId = 0;
   FromCall.TargetVA = 0x1100;
   FromCall.Kind = ExceptionalEdgeKind::ItaniumCatchPad;
-  Low.Blocks[1].ExceptionalPreds.push_back(FromCall);
+  Low.Blocks[2].ExceptionalPreds.push_back(FromCall);
   NdVar Pair = NdVar::tmp(0x8000, TRI.PointerSize);
   LowOp Combine;
   Combine.Opcode = NdOp::INT_ADD;
   Combine.Addr = 0x1100;
   Combine.Output = Pair;
   Combine.addInput(NdVar::reg(TRI.IntReturnReg, TRI.PointerSize));
-  Combine.addInput(NdVar::reg(TRI.IntReturnReg2, TRI.PointerSize));
-  Low.Blocks[1].Ops.push_back(Combine);
+  Combine.addInput(NdVar::reg(TRI.IntReturnRegs[1], TRI.PointerSize));
+  Low.Blocks[2].Ops.push_back(Combine);
+  NdVar WithFrame = NdVar::tmp(0x8010, TRI.PointerSize);
+  LowOp UseFrame;
+  UseFrame.Opcode = NdOp::INT_ADD;
+  UseFrame.Addr = 0x1101;
+  UseFrame.Output = WithFrame;
+  UseFrame.addInput(Pair);
+  UseFrame.addInput(NdVar::reg(TRI.FramePointer, TRI.PointerSize));
+  Low.Blocks[2].Ops.push_back(UseFrame);
   LowOp HandlerReturn;
   HandlerReturn.Opcode = NdOp::RETURN;
-  HandlerReturn.Addr = 0x1101;
-  HandlerReturn.addInput(Pair);
-  Low.Blocks[1].Ops.push_back(HandlerReturn);
+  HandlerReturn.Addr = 0x1102;
+  HandlerReturn.addInput(WithFrame);
+  Low.Blocks[2].Ops.push_back(HandlerReturn);
 
   MedFunc Med = LowToMedConverter().convert(Low, TheArch);
+  ASSERT_EQ(Med.Blocks.size(), 2u);
+  ASSERT_EQ(Med.Blocks[0].ExceptionalSuccs.size(), 1u);
+  EXPECT_EQ(Med.Blocks[0].ExceptionalSuccs[0].BlockId, 1);
+  ASSERT_EQ(Med.Blocks[1].ExceptionalPreds.size(), 1u);
+  EXPECT_EQ(Med.Blocks[1].ExceptionalPreds[0].BlockId, 0);
   bool SawException = false;
   bool SawSelector = false;
+  bool SawFlowingFramePointer = false;
+  bool SawHandlerFrameLiveIn = false;
   for (const MedBlock &Block : Med.Blocks) {
     for (const MedOp &Op : Block.Ops) {
+      SawHandlerFrameLiveIn |=
+          Block.Id == 1 && Op.Opcode == NdOp::COPY &&
+          Op.Output.Kind == MedVar::Reg &&
+          Op.Output.RegOff == TRI.FramePointer && Op.NumInputs == 1 &&
+          Op.Inputs[0].Kind == MedVar::Reg &&
+          Op.Inputs[0].RegOff == TRI.FramePointer;
       for (unsigned I = 0; I < Op.NumInputs; ++I) {
         SawException |= Op.Inputs[I].Kind == MedVar::EHException;
         SawSelector |= Op.Inputs[I].Kind == MedVar::EHSelector;
+        SawFlowingFramePointer |=
+            Block.Id == 1 && Op.Inputs[I].Kind == MedVar::Reg &&
+            Op.Inputs[I].RegOff == TRI.FramePointer;
       }
     }
   }
   EXPECT_TRUE(SawException);
   EXPECT_TRUE(SawSelector);
+  EXPECT_TRUE(SawFlowingFramePointer);
+  EXPECT_FALSE(SawHandlerFrameLiveIn);
   EXPECT_TRUE(verifyMedFunc(Med, "test-itanium-landing-pad-live-ins"));
 }
 

@@ -25,6 +25,12 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
       auto &Blk = Func.Blocks[I];
       if (Blk.Succs.size() != 1)
         continue;
+      // Exception edges name the exact block where native unwinding transfers
+      // control.  Removing either endpoint without rewriting that independent
+      // graph can make an invoke skip the landing-pad prologue, so retain such
+      // blocks.  The final renumbering below still remaps all retained edges.
+      if (!Blk.ExceptionalPreds.empty() || !Blk.ExceptionalSuccs.empty())
+        continue;
 
       bool IsTrivial = true;
       for (auto &Op : Blk.Ops) {
@@ -118,6 +124,13 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
     }
     Blk.Succs = std::move(RemappedSuccs);
     Blk.Preds.clear();
+    Blk.ExceptionalPreds.clear();
+    for (ExceptionalEdge &Edge : Blk.ExceptionalSuccs) {
+      if (Edge.BlockId < 0)
+        continue;
+      auto It = OldToNew.find(Edge.BlockId);
+      Edge.BlockId = It != OldToNew.end() ? It->second : -1;
+    }
   }
   // Preds are derived data. Rebuild them from the retained successor edges so
   // removing an empty block cannot leave a stale predecessor ID or make the
@@ -125,6 +138,19 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
   for (const auto &Blk : NewBlocks)
     for (int S : Blk.Succs)
       NewBlocks[S].Preds.push_back(Blk.Id);
+  // Exceptional predecessors are likewise derived from the successor graph.
+  // Rebuild them after renumbering so SSA recognizes every landing pad as an
+  // independent root and the LLVM emitter targets the prologue block itself.
+  for (const auto &Blk : NewBlocks)
+    for (const ExceptionalEdge &Edge : Blk.ExceptionalSuccs)
+      if (Edge.BlockId >= 0 &&
+          Edge.BlockId < static_cast<int>(NewBlocks.size())) {
+        ExceptionalEdge Pred = Edge;
+        Pred.BlockId = Blk.Id;
+        auto &Preds = NewBlocks[Edge.BlockId].ExceptionalPreds;
+        if (std::find(Preds.begin(), Preds.end(), Pred) == Preds.end())
+          Preds.push_back(Pred);
+      }
   Func.Blocks = std::move(NewBlocks);
 }
 
