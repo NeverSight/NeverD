@@ -2307,7 +2307,58 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
   return F;
 }
 
+/// Personality addresses the image gives no name to but which are provably
+/// mingw's Itanium routine.
+///
+/// A stripped PE keeps no symbol for `__gxx_personality_seh0`, so the routine a
+/// frame installs cannot be classified by name -- and every mingw frame in the
+/// image goes uninterpreted along with it.  What such a frame still carries is
+/// its language data, and the record it holds is not something arbitrary bytes
+/// read as: the decode has to complete, name call sites that all lie inside the
+/// frame that declared them, and dispatch on a type.  That last part is the
+/// proof rather than the guess.  Windows dispatches on a filter expression or a
+/// `FuncInfo`, never on an Itanium type table, and `__gcc_personality_*` never
+/// dispatches at all -- it is cleanup-only by construction.  So a type table
+/// reached this way can only belong to the C++ routine.
+///
+/// One address serves every frame that installs it, so proving it once settles
+/// the frames whose own data is cleanup-only and could not have proved it.
+std::set<va_t> findUnnamedMinGWPersonalities(BinaryImage &Img) {
+  std::set<va_t> Proven;
+  std::set<va_t> Rejected;
+  for (ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
+    if (F.PersonalityVA == 0 || F.HandlerDataVA == 0)
+      continue;
+    if (Proven.count(F.PersonalityVA) || Rejected.count(F.PersonalityVA))
+      continue;
+    if (classifyPersonality(resolvePersonality(Img, F.PersonalityVA).second) !=
+        ExceptionPersonality::Unknown)
+      continue;
+
+    ExceptionFunction Probe = F;
+    if (!parseMinGWLSDA(Probe, Img) ||
+        Probe.ParseStatus != ExceptionParseStatus::Complete ||
+        !Probe.Itanium || Probe.Itanium->CallSites.empty()) {
+      Rejected.insert(F.PersonalityVA);
+      continue;
+    }
+    const bool DispatchesOnAType =
+        !Probe.Itanium->TypeTable.empty() && !Probe.Itanium->isCleanupOnly();
+    const bool RangesBelongToTheFrame =
+        llvm::all_of(Probe.Itanium->CallSites, [&](const ItaniumCallSite &S) {
+          return S.GuardedRange.isValid() &&
+                 F.CodeRange.contains(S.GuardedRange);
+        });
+    if (DispatchesOnAType && RangesBelongToTheFrame)
+      Proven.insert(F.PersonalityVA);
+    else
+      Rejected.insert(F.PersonalityVA);
+  }
+  return Proven;
+}
+
 void resolveExceptionHandlers(BinaryImage &Img) {
+  const std::set<va_t> UnnamedMinGW = findUnnamedMinGWPersonalities(Img);
   for (ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
     if (F.PersonalityVA == 0)
       continue;
@@ -2321,6 +2372,13 @@ void resolveExceptionHandlers(BinaryImage &Img) {
         F.PersonalityName = getExceptionPersonalityName(*Inferred);
         ResolvedVA = F.PersonalityVA;
       }
+    if (F.Personality == ExceptionPersonality::Unknown &&
+        UnnamedMinGW.count(F.PersonalityVA)) {
+      F.Personality = ExceptionPersonality::GxxPersonalitySEH0;
+      F.PersonalityName =
+          getExceptionPersonalityName(ExceptionPersonality::GxxPersonalitySEH0);
+      ResolvedVA = F.PersonalityVA;
+    }
     if (F.Personality == ExceptionPersonality::Unknown) {
       // An unknown personality is an incomplete decode only when the record
       // carries language data that went uninterpreted.  A hand-written handler
