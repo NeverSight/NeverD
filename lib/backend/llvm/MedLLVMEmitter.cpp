@@ -1222,8 +1222,25 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
       }
     if (!Entry)
       return nullptr;
-    if (Entry->IsCatchAll || Entry->TypeInfoVA == 0)
+    if (Entry->IsCatchAll)
       return llvm::ConstantPointerNull::get(PtrTy);
+
+    // LLVM emits PIC type tables with DW_EH_PE_indirect.  The encoded value
+    // must therefore name the pointer cell, not the RTTI object loaded from
+    // it.  Reusing the original cell also preserves dyld/ld.so rebasing (and
+    // arm64e pointer authentication) in the patched image.
+    if (Entry->TypeInfoSlotVA != 0) {
+      std::string Name = makeNdDataSymbol(Entry->TypeInfoSlotVA);
+      llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
+      if (!GV)
+        GV = new llvm::GlobalVariable(*Mod, I8Ty, /*isConstant=*/true,
+                                      llvm::GlobalValue::ExternalLinkage,
+                                      /*Initializer=*/nullptr, Name);
+      return GV;
+    }
+
+    if (Entry->TypeInfoVA == 0)
+      return nullptr;
     if (llvm::Constant *Mapped = tryResolveGlobalData(Entry->TypeInfoVA, 1))
       return Mapped;
 
