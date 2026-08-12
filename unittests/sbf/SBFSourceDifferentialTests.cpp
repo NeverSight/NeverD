@@ -385,7 +385,8 @@ int main(void) {
   environment.syscall = runtime_syscall;
 )";
   OS << "  status = " << kEntryFunctionName << "(&environment, UINT64_C(0x"
-     << llvm::utohexstr(Environment.Input) << "), &result);\n"
+     << llvm::utohexstr(Environment.Input) << "), UINT64_C(0x"
+     << llvm::utohexstr(Environment.InstructionData) << "), &result);\n"
      << "  if (status != " << cStatus(Expected) << ") return 10;\n";
   if (Expected.Status == ExecutionStatus::Returned)
     OS << "  if (result != UINT64_C(0x" << llvm::utohexstr(Expected.ReturnValue)
@@ -512,7 +513,8 @@ fn main() {
   }
   OS << "    ], syscalls: Vec::new() };\n"
      << "    let result = " << kEntryFunctionName << "(&mut env, "
-     << hexWord(Environment.Input) << ");\n";
+     << hexWord(Environment.Input) << ", "
+     << hexWord(Environment.InstructionData) << ");\n";
   if (Expected.Status == ExecutionStatus::Returned)
     OS << "    assert_eq!(result, Ok(" << hexWord(Expected.ReturnValue)
        << "));\n";
@@ -638,6 +640,13 @@ void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
            encode(Opcode::ADD64_IMM, 0, 0, 0, 40),
            encode(Opcode::CALL_IMM, 0, 1, 0, 1), encode(Opcode::EXIT),
            encode(Opcode::ADD64_IMM, 0, 0, 0, 1), encode(Opcode::EXIT)}));
+
+  ExecutionEnvironment InstructionDataEnvironment;
+  InstructionDataEnvironment.InstructionData = UINT64_C(0x500000040);
+  Add("instruction-data-register",
+      analyzeProgram(Version::V3,
+                     {encode(Opcode::MOV64_REG, 0, 2), encode(Opcode::EXIT)}),
+      std::move(InstructionDataEnvironment));
 
   const SyscallInfo *Log64 = getSyscallInfo(Syscall::Log64);
   ASSERT_NE(Log64, nullptr);
