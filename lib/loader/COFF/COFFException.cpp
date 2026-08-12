@@ -2324,35 +2324,40 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
 /// One address serves every frame that installs it, so proving it once settles
 /// the frames whose own data is cleanup-only and could not have proved it.
 std::set<va_t> findUnnamedMinGWPersonalities(BinaryImage &Img) {
+  // Most frames installing the routine cannot prove anything about it: a scope
+  // with destructors and no handler is cleanup-only, and at `-O0` those come
+  // first.  So an address is retried on later frames rather than written off by
+  // the first one that could not settle it, and the cap is what keeps an
+  // address no frame can prove from costing one decode per frame.
+  constexpr unsigned MaxProofAttempts = 32;
   std::set<va_t> Proven;
-  std::set<va_t> Rejected;
+  std::map<va_t, unsigned> Attempts;
   for (ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
     if (F.PersonalityVA == 0 || F.HandlerDataVA == 0)
       continue;
-    if (Proven.count(F.PersonalityVA) || Rejected.count(F.PersonalityVA))
+    if (Proven.count(F.PersonalityVA))
       continue;
+    unsigned &Tries = Attempts[F.PersonalityVA];
+    if (Tries >= MaxProofAttempts)
+      continue;
+    ++Tries;
     if (classifyPersonality(resolvePersonality(Img, F.PersonalityVA).second) !=
         ExceptionPersonality::Unknown)
       continue;
 
     ExceptionFunction Probe = F;
     if (!parseMinGWLSDA(Probe, Img) ||
-        Probe.ParseStatus != ExceptionParseStatus::Complete ||
-        !Probe.Itanium || Probe.Itanium->CallSites.empty()) {
-      Rejected.insert(F.PersonalityVA);
+        Probe.ParseStatus != ExceptionParseStatus::Complete || !Probe.Itanium ||
+        Probe.Itanium->CallSites.empty())
       continue;
-    }
-    const bool DispatchesOnAType =
-        !Probe.Itanium->TypeTable.empty() && !Probe.Itanium->isCleanupOnly();
-    const bool RangesBelongToTheFrame =
-        llvm::all_of(Probe.Itanium->CallSites, [&](const ItaniumCallSite &S) {
-          return S.GuardedRange.isValid() &&
-                 F.CodeRange.contains(S.GuardedRange);
-        });
-    if (DispatchesOnAType && RangesBelongToTheFrame)
+    if (Probe.Itanium->TypeTable.empty() || Probe.Itanium->isCleanupOnly())
+      continue;
+    if (llvm::all_of(Probe.Itanium->CallSites,
+                     [&](const ItaniumCallSite &Site) {
+                       return Site.GuardedRange.isValid() &&
+                              F.CodeRange.contains(Site.GuardedRange);
+                     }))
       Proven.insert(F.PersonalityVA);
-    else
-      Rejected.insert(F.PersonalityVA);
   }
   return Proven;
 }

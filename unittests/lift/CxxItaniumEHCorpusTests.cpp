@@ -303,8 +303,10 @@ TEST(CxxItaniumEHCorpus, RecoversTheCallSiteGraphOnEveryItaniumTarget) {
         << Diagnostics;
   }
 
-  // Six cells of eight variants, less the ARM cells and each cell's control.
-  EXPECT_EQ(Images, 42u);
+  // Seven cells of eight variants, less each cell's control.  The two ARM
+  // cells are not among them: EHABI carries its language data somewhere this
+  // graph is not, which is what its own validation level says.
+  EXPECT_EQ(Images, 49u);
   // The same table read out of three containers, which is the thing a single
   // target could never show.
   EXPECT_EQ(Containers,
