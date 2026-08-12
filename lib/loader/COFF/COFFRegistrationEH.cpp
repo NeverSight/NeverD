@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -571,6 +572,121 @@ uint32_t decodeScopeRecords(const BinaryImage &Img, va_t ArrayVA, va_t Limit,
   return static_cast<uint32_t>(Scopes.size());
 }
 
+/// One `mov dword ptr [ebp+disp], imm32`, the only shape the compiler uses to
+/// set the current try level.
+struct FrameSlotStore {
+  va_t StoreVA = 0;
+  va_t EndVA = 0;
+  int32_t Displacement = 0;
+  int32_t Value = 0;
+};
+
+/// Every such store inside a code range.
+///
+/// This is a byte scan rather than a decode, so it can also match bytes that
+/// are the tail of some other instruction.  Nothing downstream trusts a hit on
+/// its own: a slot is only believed once the whole set of stores into it reads
+/// as a try-level sequence, which arbitrary bytes do not.
+std::vector<FrameSlotStore>
+findFrameSlotStores(const BinaryImage &Img,
+                    const ExceptionAddressRange &Range) {
+  std::vector<FrameSlotStore> Stores;
+  const Segment *Seg = Img.getSegmentFor(Range.Begin);
+  if (!Seg || !Seg->isExecutable() || Range.Begin < Seg->VA ||
+      Range.End <= Range.Begin)
+    return Stores;
+  const uint64_t Begin = Range.Begin - Seg->VA;
+  const uint64_t End =
+      std::min<uint64_t>(Range.End - Seg->VA, Seg->Data.size());
+  if (Begin >= End)
+    return Stores;
+
+  const uint8_t *Data = Seg->Data.data();
+  for (uint64_t I = Begin; I + 7 <= End; ++I) {
+    if (Data[I] != 0xC7)
+      continue;
+    // ModRM /0 with a base of EBP: mod=01 is the byte displacement and mod=10
+    // the dword one.  Both take a trailing imm32.
+    if (Data[I + 1] == 0x45) {
+      Stores.push_back(
+          {static_cast<va_t>(Seg->VA + I), static_cast<va_t>(Seg->VA + I + 7),
+           static_cast<int8_t>(Data[I + 2]),
+           static_cast<int32_t>(readLE<uint32_t>(Data + I + 3))});
+    } else if (Data[I + 1] == 0x85 && I + 10 <= End) {
+      Stores.push_back(
+          {static_cast<va_t>(Seg->VA + I), static_cast<va_t>(Seg->VA + I + 10),
+           static_cast<int32_t>(readLE<uint32_t>(Data + I + 2)),
+           static_cast<int32_t>(readLE<uint32_t>(Data + I + 6))});
+    }
+  }
+  return Stores;
+}
+
+/// Prove which frame slot holds the current try level, and keep the stores
+/// into it.
+///
+/// The scope table is indexed by a level the runtime reads out of the frame,
+/// so the table alone never says which code each scope guards — only the
+/// stores do.  Which slot holds the level is not recorded anywhere either, so
+/// it has to be proven, and the table itself supplies the vocabulary to prove
+/// it with: a try-level slot only ever receives the seed the prologue pushed
+/// or the index of a scope the table declares.  A frame slot qualifies when
+/// every store into it is one of those values, the seed is among them, and so
+/// is at least one real scope index.  Ordinary locals fail on the first count
+/// by holding something outside the range and on the second by never being set
+/// to the seed.  When more than one slot survives, nothing was proven and no
+/// ranges are published.
+void recoverTryLevelStores(const BinaryImage &Img,
+                           const ExceptionAddressRange &Range, int32_t Seed,
+                           size_t ScopeCount, RegistrationChainInfo &Chain) {
+  if (ScopeCount == 0 || ScopeCount > MaxRegistrationRecords)
+    return;
+  const int32_t Highest = static_cast<int32_t>(ScopeCount) - 1;
+
+  std::map<int32_t, std::vector<FrameSlotStore>> BySlot;
+  for (const FrameSlotStore &Store : findFrameSlotStores(Img, Range)) {
+    // The try level lives in the frame the prologue established, which is
+    // below the frame pointer.  A positive displacement addresses an incoming
+    // argument and cannot be it.
+    if (Store.Displacement < 0)
+      BySlot[Store.Displacement].push_back(Store);
+  }
+
+  const std::vector<FrameSlotStore> *Winner = nullptr;
+  int32_t WinningSlot = 0;
+  for (const auto &[Slot, Stores] : BySlot) {
+    bool SawSeed = false;
+    bool SawScope = false;
+    bool AllInRange = true;
+    for (const FrameSlotStore &Store : Stores) {
+      if (Store.Value == Seed)
+        SawSeed = true;
+      else if (Store.Value >= 0 && Store.Value <= Highest)
+        SawScope = true;
+      else
+        AllInRange = false;
+    }
+    if (!AllInRange || !SawSeed || !SawScope)
+      continue;
+    if (Winner)
+      return;
+    Winner = &Stores;
+    WinningSlot = Slot;
+  }
+  if (!Winner)
+    return;
+
+  Chain.TryLevelOffset = WinningSlot;
+  Chain.TryLevelStores.reserve(Winner->size());
+  for (const FrameSlotStore &Store : *Winner)
+    Chain.TryLevelStores.push_back({Store.StoreVA, Store.EndVA, Store.Value});
+  std::sort(Chain.TryLevelStores.begin(), Chain.TryLevelStores.end(),
+            [](const RegistrationTryLevelStore &A,
+               const RegistrationTryLevelStore &B) {
+              return A.StoreVA < B.StoreVA;
+            });
+}
+
 /// `_except_handler4` prefixes the entry array with the frame displacements of
 /// the security cookies it verifies before trusting the table.  A `-2` cookie
 /// offset is the sentinel for "this frame has no cookie of that kind".
@@ -1103,6 +1219,9 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
         if (F.Personality == ExceptionPersonality::Unknown)
           F.Personality = ExceptionPersonality::ExceptHandler3;
       }
+      // Both sentinels mean "no scope is current"; which one this frame uses
+      // follows from the handler it installed.
+      Chain.SeededTryLevel = IsEH4 ? -2 : -1;
       const va_t Limit = findNextTableAddress(TableAddresses, Site.TableVA);
       if (decodeScopeRecords(Img, ArrayVA, Limit, IsEH4, Chain.Scopes) == 0)
         diagnose(F, ExceptionParseStatus::Partial,
@@ -1114,6 +1233,10 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
                "x86 registration record installs a handler with no "
                "recoverable table");
     }
+
+    if (Chain.SeededTryLevel)
+      recoverTryLevelStores(Img, F.CodeRange, *Chain.SeededTryLevel,
+                            Chain.Scopes.size(), Chain);
 
     F.Registration = std::move(Chain);
     if (F.Personality == ExceptionPersonality::Unknown)
