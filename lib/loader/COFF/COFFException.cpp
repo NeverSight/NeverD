@@ -679,9 +679,22 @@ std::string directNameAt(const BinaryImage &Img, va_t Address) {
     return Imp->Name;
   if (const Export *Exp = Img.findExportAt(Address); Exp && !Exp->Name.empty())
     return Exp->Name;
-  if (const Symbol *Sym = Img.findSymbolAt(Address); Sym && !Sym->Name.empty())
-    return Sym->Name;
-  return {};
+  // One address can carry both a name the image stated and a `sub_` placeholder
+  // some earlier pass minted for the same code -- the unwind table alone names
+  // every function it describes that way.  A placeholder is not a name: taking
+  // the first match would let whichever pass ran first decide whether a
+  // personality is `__gxx_personality_seh0` or nothing at all.
+  const Symbol *Placeholder = nullptr;
+  for (const Symbol &Sym : Img.Symbols) {
+    if (Sym.Addr != Address || Sym.Name.empty())
+      continue;
+    if (llvm::StringRef(Sym.Name).starts_with(kAutoFuncPrefix)) {
+      Placeholder = &Sym;
+      continue;
+    }
+    return Sym.Name;
+  }
+  return Placeholder ? Placeholder->Name : std::string();
 }
 
 std::optional<va_t> addSignedOffset(va_t Base, int64_t Offset) {
@@ -903,11 +916,21 @@ ExceptionPersonality classifyPersonality(llvm::StringRef Name) {
   // entered from C.  None of their language data is in a Windows dialect, so
   // none of it is parsed below -- but naming the personality is the difference
   // between reporting a frame's dispatch and reporting nothing about it.
-  // Stripping above already produced the plain spelling this expects.  A name
-  // that resolved to nothing still had a personality installed, so it is
+  // The stripping above is for the MSVC names compared just above it, which a
+  // PE spells without their underscores.  The shared table is keyed by the
+  // canonical spelling instead, and for these routines the underscores are
+  // part of it -- `__gxx_personality_seh0` is the name, not a decoration of
+  // one -- so what was taken off is offered back rather than guessed at.  A
+  // name that resolved to nothing still had a personality installed, so it is
   // unnamed rather than absent.
-  ExceptionPersonality P = classifyPersonalityName(Bare);
-  return P == ExceptionPersonality::None ? ExceptionPersonality::Unknown : P;
+  const std::string Once = ("_" + Bare).str();
+  const std::string Twice = ("__" + Bare).str();
+  for (llvm::StringRef Candidate :
+       {Bare, llvm::StringRef(Once), llvm::StringRef(Twice)})
+    if (ExceptionPersonality P = classifyPersonalityName(Candidate);
+        P != ExceptionPersonality::None)
+      return P;
+  return ExceptionPersonality::Unknown;
 }
 
 /// True when \p Range is wholly covered by some runtime function of the image.
