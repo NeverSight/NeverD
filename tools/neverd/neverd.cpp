@@ -73,12 +73,15 @@ static int realMain(int Argc, char *Argv[]) {
   if (Verbose)
     llvm::DebugFlag = true;
 
-  // Plugins and diff are handled before the shared session load: plugins does
-  // not require an input binary, and diff takes its own -a/-b operands.
+  // These are handled before the shared session load, because none of them
+  // works from one binary at a path: plugins needs no input at all, diff takes
+  // its own -a/-b operands, and simplify's input is an expression.
   if (PluginsCmd)
     return runPlugins(Argv[0]);
   if (DiffCmd)
     return runDiff();
+  if (SimplifyCmd)
+    return runSimplify();
 
   // The active subcommand's registered name feeds the banner below.  Plugins
   // and diff returned already, so exactly one of the remaining named

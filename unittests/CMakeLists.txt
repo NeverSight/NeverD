@@ -18,6 +18,7 @@ add_neverd_unittest(NeverDTestProcessTests
   TestProcessTests.cpp
 )
 
+add_subdirectory(symbolic)
 add_subdirectory(libc)
 add_subdirectory(lift)
 add_subdirectory(semantic)

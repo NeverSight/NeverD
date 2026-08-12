@@ -8,6 +8,7 @@ set(NEVERD_SDK_SOURCES
     NeverDCAPIQuery.cpp
     NeverDCAPIPersist.cpp
     NeverDCAPIBench.cpp
+    NeverDCAPISimplify.cpp
     PluginManager.cpp)
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
@@ -45,6 +46,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDPassMIR
     NeverDLibC
     NeverDDebugInfo
+    NeverDSymbolic
     NeverDSigs
     NeverDSBF
     ${NEVERD_COMMON_LIBS})

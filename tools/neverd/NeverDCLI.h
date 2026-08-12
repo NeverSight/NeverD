@@ -128,6 +128,7 @@ extern llvm::cl::SubCommand HeadersCmd;
 extern llvm::cl::SubCommand EntryPointsCmd;
 extern llvm::cl::SubCommand DashboardCmd;
 extern llvm::cl::SubCommand SigsCmd;
+extern llvm::cl::SubCommand SimplifyCmd;
 
 //===----------------------------------------------------------------------===//
 // Options (defined in NeverDCLIOptions.cpp)
@@ -249,6 +250,13 @@ extern llvm::cl::opt<std::string> SigDir;
 extern llvm::cl::opt<std::string> SigFile;
 extern llvm::cl::opt<bool> SigAuto;
 
+// Simplify.
+extern llvm::cl::opt<std::string> SimplifyExpr;
+extern llvm::cl::opt<std::string> SimplifyFile;
+extern llvm::cl::opt<unsigned> SimplifyWidth;
+extern llvm::cl::opt<bool> SimplifyShallow;
+extern llvm::cl::opt<bool> SimplifyJson;
+
 //===----------------------------------------------------------------------===//
 // Command handlers
 //
@@ -292,6 +300,10 @@ int runSigs(neverd_session_t Sess, const char *Argv0);
 // NeverDCmdExport.cpp — file export and two-binary diff.
 int runExport(neverd_session_t Sess);
 int runDiff();
+
+// NeverDCmdSimplify.cpp — semantic optimisation of a written expression.
+// Takes no session: its input is text, not a binary.
+int runSimplify();
 
 // NeverDCmdPipeline.cpp — engine-driven operations.
 bool configureAnalysisSession(neverd_session_t Sess);

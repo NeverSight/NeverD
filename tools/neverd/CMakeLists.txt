@@ -8,6 +8,7 @@ add_neverd_tool(neverd
   NeverDCmdSearch.cpp
   NeverDCmdExport.cpp
   NeverDCmdPipeline.cpp
+  NeverDCmdSimplify.cpp
 
   LINK_LIBS
   neverd_shared

@@ -577,6 +577,31 @@ NEVERD_API void neverd_plugins_dispatch_event(neverd_session_t Sess,
                                               const void *Event);
 
 // ===--------------------------------------------------------------------===//
+// Expression simplification
+// ===--------------------------------------------------------------------===//
+
+/// Simplify a bitvector expression written in the engine's infix syntax:
+/// C operators throughout, calls for the ones C has no spelling for
+/// (`sdiv`, `ashr`, `rol`, `zext`, `extract`, …), and an optional `#bits`
+/// suffix on any leaf that leaves the ambient width.
+///
+/// \p Width is the width every leaf without such a suffix is created at.
+/// \p Deep asks for the layered walk, which reaches inside the subterms a
+/// single measurement has to treat as opaque; it is what obfuscated input
+/// needs and costs more on input that is already short.
+///
+/// Returns a JSON object.  Having simplified:
+///   {"ok":true, "input":"…", "output":"…", "changed":true,
+///    "costBefore":7, "costAfter":3, "inputs":2}
+/// where "input" is the expression as the engine read it, which is already
+/// shorter than what was written whenever building it folded something.  On a
+/// syntax error:
+///   {"ok":false, "error":"expected ')'", "offset":6}
+/// Caller frees with neverd_free_string().
+NEVERD_API const char *neverd_simplify_expr_json(const char *Expr,
+                                                 unsigned Width, int Deep);
+
+// ===--------------------------------------------------------------------===//
 // Version info
 // ===--------------------------------------------------------------------===//
 

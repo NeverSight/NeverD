@@ -65,6 +65,9 @@ cl::SubCommand HeadersCmd("headers", "Show comprehensive binary headers");
 cl::SubCommand EntryPointsCmd("entrypoints", "List binary entry points");
 cl::SubCommand DashboardCmd("dashboard", "Show binary overview dashboard");
 cl::SubCommand SigsCmd("sigs", "Apply FLIRT signatures to binary");
+// Takes text rather than a binary, so it is not among the subcommands that
+// register the positional input file below.
+cl::SubCommand SimplifyCmd("simplify", "Simplify a bitvector expression");
 
 //===----------------------------------------------------------------------===//
 // Common options (registered with all subcommands)
@@ -539,5 +542,33 @@ cl::opt<std::string> SigFile("sig-file",
 cl::opt<bool>
     SigAuto("auto", cl::desc("Auto-detect arch/format and load matching sigs"),
             cl::sub(SigsCmd));
+
+//===----------------------------------------------------------------------===//
+// Simplify-specific options
+//===----------------------------------------------------------------------===//
+
+cl::opt<std::string> SimplifyExpr(cl::Positional,
+                                  cl::desc("<expression>"), cl::init(""),
+                                  cl::sub(SimplifyCmd));
+
+cl::opt<std::string> SimplifyFile(
+    "f",
+    cl::desc("Read one expression per line from a file, or '-' for stdin"),
+    cl::init(""), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned> SimplifyWidth(
+    "width",
+    cl::desc("Bit width of every leaf without an explicit '#bits' suffix "
+             "(default 32)"),
+    cl::init(32), cl::sub(SimplifyCmd));
+
+cl::opt<bool> SimplifyShallow(
+    "shallow",
+    cl::desc("Measure the expression as one region instead of walking into "
+             "the subterms a single measurement has to treat as opaque"),
+    cl::sub(SimplifyCmd));
+
+cl::opt<bool> SimplifyJson("json", cl::desc("Output as JSON"),
+                           cl::sub(SimplifyCmd));
 
 } // namespace neverd::cli
