@@ -7,6 +7,7 @@
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 
 #include "neverd/Object/MachOLayout.h"
+#include "neverd/Object/SectionNames.h"
 #include "neverd/Support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -934,7 +935,9 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
       return;
     if (TSeg->isExecutable())
       Img.CodePtrRelocSlots.insert(SlotVA);
-    else if (TSeg->isReadable() && !TSeg->isWritable() && !TSeg->Data.empty())
+    else if (TSeg->isReadable() && !TSeg->Data.empty() &&
+             (!TSeg->isWritable() ||
+              TSeg->Name == section_names::macho::DataConstSeg))
       Img.DataPtrRelocSlots.insert(SlotVA);
   };
 
