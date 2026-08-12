@@ -46,6 +46,7 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | Метаданные v0-v4 и компоновки ELF, строгая верификация, CFG/восстановление, независимое исполнение raw-кода, проверка LLVM, компиляция C/Rust и маршрутизация публичного API |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Эквивалентность переписывания/обфускации для четырёх ISA и трёх объектных форматов |
 | Целевые файлы преобразований в `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Быстро перелинковываемые проверки отдельно от большого семантического бинарника |
+| `unittests/corpus` (подмодуль) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests` | Метаданные исключений и рантайма, прочитанные из 305 зафиксированных настоящих бинарников; для каждого манифест объявляет нижние границы, которые восстановление обязано преодолеть |
 
 Источники регистрации:
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
@@ -53,6 +54,36 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) и
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
+
+### Зафиксированный бинарный corpus
+
+Каждый другой набор сам собирает то, что проверяет. Corpus — нет: это подмодуль
+с бинарниками, которые выпустили настоящие тулчейны, на хостах и для целей,
+недоступных этому репозиторию; каждый зафиксирован по дайджесту, а рядом лежит
+манифест с нижними границами, которые обязано преодолеть восстановление. Это
+единственное место, где утверждение о том, что NeverD читает, скажем, из
+обрезанного `-O2` разделяемого объекта `armv7`, получает ответ, а не спор.
+
+Наборы собираются, только если шаг configure получил указание их искать, поэтому
+именно этот флаг и удерживает их под проверкой:
+
+```bash
+cmake -S . -B build-corpus -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON \
+  -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON
+cmake --build build-corpus --target check-neverd-corpus --parallel 4
+```
+
+`check-neverd-corpus` запускает все линии; `check-neverd-windows-eh-corpus`,
+`check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus` и
+`check-neverd-cxx-itanium-eh-corpus` — по одной. Все три хоста CI выполняют
+configure с этим флагом и прогоняют все четыре линии: байты везде одинаковы, а
+то, что их читает, — нет, и прогон corpus на одном хосте ничего не доказывает
+про два других. `scripts/audit_ci_test_inventory.py` отклоняет инвентарь, в
+котором не хватает хотя бы одной из четырёх меток, потому что сборка, тихо
+переставшая читать corpus, — это регрессия, которую не поймает ни один тест:
+пропало как раз то, что проверяло.
 
 При каждом запуске аудит opcodes EVM выполняет неглубокий `git fetch` удалённого
 `HEAD` из [официального репозитория

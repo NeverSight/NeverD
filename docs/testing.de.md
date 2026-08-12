@@ -49,6 +49,7 @@ gefundenen Fall ein CTest-Label mit dem Namen dieses Executable-Targets zu.
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4-Metadaten und ELF-Layouts, strikte Verifikation, CFG/Recovery, unabhängige Raw-Ausführung, LLVM-Verifikation, C-/Rust-Kompilierung und Routing der öffentlichen API |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Rewrite-/Obfuskationsäquivalenz über vier ISAs und drei Objektformate |
 | Fokussierte Transformationsdateien in `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Schnell relinkbare Sonden außerhalb des großen Semantikprogramms |
+| `unittests/corpus` (Submodul) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests` | Exception- und Runtime-Metadaten aus 305 per Digest fixierten echten Binärdateien, jede mit einem Manifest, das die Untergrenzen ihrer Wiederherstellung nennt |
 
 Die Registrierungsquellen sind
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
@@ -56,6 +57,37 @@ Die Registrierungsquellen sind
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) und
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
+
+### Das fixierte Binär-Corpus
+
+Jede andere Suite baut selbst, was sie prüft. Das Corpus nicht: Es ist ein
+Submodul aus Binärdateien, die echte Toolchains auf Hosts und für Ziele erzeugt
+haben, die dieses Repository nicht erreicht. Jede ist per Digest fixiert, und
+daneben nennt ein Manifest die Untergrenzen, die ihre Wiederherstellung
+überschreiten muss. Nur dort ist eine Aussage darüber, was NeverD etwa aus einem
+mit `-O2` gebauten, gestrippten `armv7`-Shared-Object liest, beantwortbar statt
+strittig.
+
+Die Suites entstehen nur, wenn der Configure-Schritt angewiesen wurde, nach
+ihnen zu suchen — dieses Flag ist also alles, was sie unter Test hält:
+
+```bash
+cmake -S . -B build-corpus -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON \
+  -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON
+cmake --build build-corpus --target check-neverd-corpus --parallel 4
+```
+
+`check-neverd-corpus` führt jede Linie aus; `check-neverd-windows-eh-corpus`,
+`check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus` und
+`check-neverd-cxx-itanium-eh-corpus` jeweils eine. Alle drei CI-Hosts
+konfigurieren mit dem Flag und fahren alle vier Linien: Die Bytes sind überall
+identisch, was sie liest jedoch nicht, und ein Corpus-Lauf auf einem Host
+beweist nichts über die anderen beiden. `scripts/audit_ci_test_inventory.py`
+weist ein Inventar zurück, dem eines der vier Labels fehlt, denn ein Build, der
+das Corpus stillschweigend nicht mehr liest, ist eine Regression, die kein Test
+fangen kann — der Test ist ja das, was abhandenkam.
 
 Der EVM-Opcode-Audit führt bei jedem Lauf einen flachen `git fetch` des Remote-
 `HEAD` aus dem offiziellen

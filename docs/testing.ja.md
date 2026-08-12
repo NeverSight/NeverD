@@ -46,6 +46,7 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 メタデータと ELF レイアウト、厳格な検証、CFG/復元、独立した raw 実行、LLVM 検証、C/Rust コンパイル、公開 API ルーティング |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 4 ISA×3 オブジェクト形式の書き換え/難読化等価性 |
 | `unittests/semantic` の重点変換ファイル | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 大きなセマンティック実行形式から分離した高速再リンク用プローブ |
+| `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests` | pin された 305 個の実バイナリから読み取る例外とランタイム metadata。各バイナリは manifest で復元が満たすべき下限を宣言している |
 
 登録の信頼できる情報源は
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt)、
@@ -53,6 +54,35 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt)、
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) です。
+
+### pin されたバイナリ corpus
+
+他のスイートはテスト対象を自分でビルドしますが、corpus は違います。これは実際の
+ツールチェーンが、このリポジトリからは到達できないホスト上で到達できないターゲット
+向けに生成したバイナリの submodule であり、各ファイルはダイジェストで pin され、
+隣の manifest がその復元の満たすべき下限を宣言しています。「`-O2` で strip された
+`armv7` の共有オブジェクトから NeverD が何を読み取れるのか」という問いに、議論では
+なく答えを出せる場所はここだけです。
+
+これらのスイートは configure がそれらを探すよう指示されたときにのみビルドされるので、
+このフラグがテスト対象であり続けるかどうかのすべてです。
+
+```bash
+cmake -S . -B build-corpus -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON \
+  -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON
+cmake --build build-corpus --target check-neverd-corpus --parallel 4
+```
+
+`check-neverd-corpus` は全ラインを、`check-neverd-windows-eh-corpus`、
+`check-neverd-rust-eh-corpus`、`check-neverd-go-eh-corpus`、
+`check-neverd-cxx-itanium-eh-corpus` はそれぞれ 1 ラインを実行します。CI の 3 ホスト
+すべてがこのフラグ付きで configure し、4 ライン全部を実行します。バイトはどこでも
+同一ですが、それを読むものは同一ではなく、1 ホストでの corpus 実行は他の 2 ホストに
+ついて何も証明しません。`scripts/audit_ci_test_inventory.py` は 4 つの label のどれ
+かを欠く inventory を拒否します。corpus を静かに読まなくなったビルドは、どのテスト
+にも捕捉できない回帰だからです。消えたものがテストそのものなのです。
 
 EVM opcode audit は実行のたびに公式
 [go-ethereum repository](https://github.com/ethereum/go-ethereum) の remote `HEAD` を

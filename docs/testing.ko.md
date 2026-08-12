@@ -45,6 +45,7 @@ target 이름과 같은 CTest label을 지정합니다.
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4 메타데이터와 ELF 레이아웃, 엄격한 검증, CFG/복원, 독립 raw 실행, LLVM 검증, C/Rust 컴파일, 공개 API 라우팅 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 네 ISA×세 object 포맷 재작성/난독화 동등성 |
 | `unittests/semantic`의 집중 변환 파일 | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | 큰 의미론 바이너리에서 분리한 빠른 재링크 probe |
+| `unittests/corpus`(submodule) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests` | pin 된 실제 바이너리 305개에서 읽어내는 예외 및 런타임 metadata. 각 바이너리는 manifest에 복원이 넘어야 할 하한을 선언한다 |
 
 등록의 기준은
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
@@ -52,6 +53,35 @@ target 이름과 같은 CTest label을 지정합니다.
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt),
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)입니다.
+
+### pin 된 바이너리 corpus
+
+다른 모든 스위트는 테스트 대상을 직접 빌드하지만 corpus는 그렇지 않습니다. 이것은
+실제 툴체인이 이 저장소가 닿을 수 없는 호스트에서, 닿을 수 없는 타깃을 대상으로
+만들어낸 바이너리들의 submodule이며, 각 파일은 다이제스트로 pin 되고 옆의 manifest가
+그 복원이 넘어야 할 하한을 선언합니다. "`-O2`로 strip 된 `armv7` 공유 오브젝트에서
+NeverD가 무엇을 읽어내는가" 같은 물음에 논쟁이 아니라 답을 줄 수 있는 곳은 여기뿐
+입니다.
+
+이 스위트들은 configure가 그것들을 찾도록 지시받았을 때에만 빌드되므로, 이 플래그가
+곧 그것들이 테스트되고 있는지의 전부입니다.
+
+```bash
+cmake -S . -B build-corpus -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON \
+  -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON
+cmake --build build-corpus --target check-neverd-corpus --parallel 4
+```
+
+`check-neverd-corpus`는 모든 라인을, `check-neverd-windows-eh-corpus`,
+`check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus`,
+`check-neverd-cxx-itanium-eh-corpus`는 각각 한 라인을 실행합니다. CI의 세 호스트
+모두 이 플래그로 configure 하고 네 라인을 전부 실행합니다. 바이트는 어디서나 같지만
+그것을 읽는 쪽은 같지 않으며, 한 호스트에서의 corpus 실행은 나머지 두 호스트에
+대해 아무것도 증명하지 않습니다. `scripts/audit_ci_test_inventory.py`는 네 label 중
+하나라도 빠진 inventory를 거부합니다. corpus를 조용히 읽지 않게 된 빌드는 어떤
+테스트도 잡을 수 없는 회귀이기 때문입니다. 사라진 것이 바로 그 테스트입니다.
 
 EVM opcode audit는 실행할 때마다 공식
 [go-ethereum repository](https://github.com/ethereum/go-ethereum)의 remote `HEAD`를 shallow

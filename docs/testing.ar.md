@@ -45,6 +45,7 @@ cmake --build build-release --parallel 4
 | `unittests/sbf` | `NeverDSBFMetadataTests` و`NeverDSBFLoaderTests` و`NeverDSBFAnalyzerTests` و`NeverDSBFSemanticTests` و`NeverDSBFLLVMEmitterTests` و`NeverDSBFEmitterTests` و`NeverDSBFIntegrationTests` | بيانات v0-v4 الوصفية وتخطيطات ELF، والتحقق الصارم، وCFG/الاستعادة، والتنفيذ الخام المستقل، والتحقق من LLVM، وتجميع C/Rust، وتوجيه API العامة |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | تكافؤ إعادة الكتابة/التشويش عبر أربع ISA وثلاث صيغ كائنات |
 | ملفات التحويل المحددة في `unittests/semantic` | `NeverDSwitchXformTests` و`NeverDIndCallXformTests` و`NeverDCFGLoopXformTests` و`NeverDTwoTableXformTests` و`NeverDAvxUpperXformTests` | مجسات سريعة الربط منفصلة عن الثنائي الدلالي الكبير |
+| `unittests/corpus` (وحدة فرعية) | `NeverDWindowsEHCorpusTests` و`NeverDRustEHCorpusTests` و`NeverDGoEHCorpusTests` و`NeverDCxxItaniumEHCorpusTests` | metadata الاستثناءات ووقت التشغيل المقروءة من 305 ثنائيات حقيقية مثبّتة، كل واحد منها معلن في manifest يذكر الحدود الدنيا التي يجب أن يتجاوزها استرجاعه |
 
 مصادر التسجيل الموثوقة هي
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt) و
@@ -52,6 +53,35 @@ cmake --build build-release --parallel 4
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) و
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) و
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
+
+### الـcorpus الثنائي المثبّت
+
+كل مجموعة اختبارات أخرى تبني ما تختبره، أما الـcorpus فلا: إنه وحدة فرعية من
+ثنائيات أنتجتها سلاسل أدوات حقيقية، على مضيفات ولأهداف لا يستطيع هذا المستودع
+بلوغها، وكل ملف مثبّت بالبصمة وإلى جانبه manifest يذكر الحدود الدنيا التي يجب أن
+يتجاوزها استرجاعه. هذا هو المكان الوحيد الذي يصير فيه ادعاء عن ما تقرأه NeverD
+من — مثلًا — كائن مشترك `armv7` مبني بـ`-O2` ومجرّد من الرموز قابلًا للإجابة بدل
+أن يكون محل جدل.
+
+لا تُبنى هذه المجموعات إلا حين يُطلب من خطوة الإعداد البحث عنها، فهذا الخيار هو
+كل ما يبقيها تحت الاختبار:
+
+```bash
+cmake -S . -B build-corpus -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON \
+  -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON
+cmake --build build-corpus --target check-neverd-corpus --parallel 4
+```
+
+يشغّل `check-neverd-corpus` كل الخطوط، بينما يشغّل
+`check-neverd-windows-eh-corpus` و`check-neverd-rust-eh-corpus` و
+`check-neverd-go-eh-corpus` و`check-neverd-cxx-itanium-eh-corpus` خطًا واحدًا لكل
+منها. تُعدّ مضيفات الـCI الثلاثة جميعها بهذا الخيار وتشغّل الخطوط الأربعة: البايتات
+واحدة في كل مكان، أما ما يقرؤها فليس كذلك، وتشغيل الـcorpus على مضيف واحد لا يثبت
+شيئًا عن المضيفين الآخرين. يرفض `scripts/audit_ci_test_inventory.py` أي inventory
+ينقصه أحد الـlabels الأربعة، لأن بناءً توقف بصمت عن قراءة الـcorpus هو انحدار لا
+يستطيع أي اختبار التقاطه — فالاختبار نفسه هو ما اختفى.
 
 ينفذ تدقيق opcodes ‏EVM في كل تشغيل `git fetch` سطحيًا للـremote `HEAD` من
 [مستودع go-ethereum الرسمي](https://github.com/ethereum/go-ethereum)، ثم يبلغ

@@ -43,6 +43,7 @@ cmake --build build-release --parallel 4
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 元数据与 ELF 布局、严格验证、CFG/恢复、独立原始执行、LLVM 验证、C/Rust 编译及公共 API 路由 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 四 ISA×三对象格式的重写/混淆等价性 |
 | `unittests/semantic` 中的聚焦变换文件 | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 从大型语义二进制拆出的快速重链接探针 |
+| `unittests/corpus`（子模块） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests` | 从 305 个钉住的真实二进制中读出的异常与运行时元数据，每个都在清单里声明了其恢复必须达到的下限 |
 
 注册的事实来源是
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt)、
@@ -50,6 +51,30 @@ cmake --build build-release --parallel 4
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 和
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
+
+### 钉住的二进制 corpus
+
+其它每个测试套件都自己构建被测对象，corpus 不是：它是一个子模块，装的是真实工具链
+在本仓库够不到的宿主机上、为够不到的目标产出的二进制，每一个都按摘要钉住，旁边的
+清单声明了它的恢复必须达到的下限。要回答"NeverD 从一个 `-O2` stripped 的 `armv7`
+共享库里到底读出了什么"这类问题，只有这里给得出答案而不是论断。
+
+这些套件只在 configure 被告知去找它们时才构建，所以这个开关就是它们是否受测的全部：
+
+```bash
+cmake -S . -B build-corpus -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON \
+  -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON
+cmake --build build-corpus --target check-neverd-corpus --parallel 4
+```
+
+`check-neverd-corpus` 跑全部产线；`check-neverd-windows-eh-corpus`、
+`check-neverd-rust-eh-corpus`、`check-neverd-go-eh-corpus` 与
+`check-neverd-cxx-itanium-eh-corpus` 各跑一条。三个 CI 宿主都带着这个开关配置并跑
+全部四条产线：字节到处都一样，但读字节的东西不一样，在一台宿主上跑通不能说明另外
+两台。`scripts/audit_ci_test_inventory.py` 会拒绝缺少四个标签中任何一个的清单——
+构建悄悄不再读 corpus 是一种没有任何测试能捕获的回归，因为消失的正是那个测试。
 
 EVM 操作码审计每次运行都会对官方
 [go-ethereum 仓库](https://github.com/ethereum/go-ethereum)的远端 `HEAD` 执行浅层

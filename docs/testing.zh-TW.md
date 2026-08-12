@@ -43,6 +43,7 @@ cmake --build build-release --parallel 4
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 中繼資料與 ELF 配置、嚴格驗證、CFG/還原、獨立原始執行、LLVM 驗證、C/Rust 編譯及公共 API 路由 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 四 ISA×三物件格式的重寫/混淆等價性 |
 | `unittests/semantic` 中的聚焦轉換檔案 | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 從大型語意二進位拆出的快速重新連結探針 |
+| `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests` | 從 305 個釘住的真實二進位讀出的例外與執行期 metadata，每一個都在 manifest 裡宣告了其復原必須達到的下限 |
 
 註冊的事實來源是
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt)、
@@ -50,6 +51,31 @@ cmake --build build-release --parallel 4
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 與
 [`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
+
+### 釘住的二進位 corpus
+
+其他每個測試套件都自己建置被測對象，corpus 不是：它是一個 submodule，裝的是真實
+工具鏈在本儲存庫搆不到的主機上、為搆不到的目標產出的二進位，每一個都按摘要釘住，
+旁邊的 manifest 宣告了它的復原必須達到的下限。要回答「NeverD 從一個 `-O2`
+stripped 的 `armv7` 共用程式庫裡到底讀出了什麼」這類問題，只有這裡給得出答案而不
+是論斷。
+
+這些套件只在 configure 被告知去找它們時才建置，所以這個開關就是它們是否受測的全部：
+
+```bash
+cmake -S . -B build-corpus -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON \
+  -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON
+cmake --build build-corpus --target check-neverd-corpus --parallel 4
+```
+
+`check-neverd-corpus` 跑全部產線；`check-neverd-windows-eh-corpus`、
+`check-neverd-rust-eh-corpus`、`check-neverd-go-eh-corpus` 與
+`check-neverd-cxx-itanium-eh-corpus` 各跑一條。三個 CI 主機都帶著這個開關配置並跑
+全部四條產線：位元組到處都一樣，但讀位元組的東西不一樣，在一台主機上跑通不能說明
+另外兩台。`scripts/audit_ci_test_inventory.py` 會拒絕缺少四個標籤中任何一個的清
+單——建置悄悄不再讀 corpus 是一種沒有任何測試能捕捉的迴歸，因為消失的正是那個測試。
 
 EVM 操作碼稽核每次執行都會對官方
 [go-ethereum repository](https://github.com/ethereum/go-ethereum)的 remote `HEAD` 執行
