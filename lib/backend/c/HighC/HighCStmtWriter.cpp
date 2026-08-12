@@ -291,6 +291,52 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     }
     break;
 
+  case StmtKind::ItaniumTry: {
+    emitIndent(Indent);
+    OS << "/* Itanium try [0x" << llvm::utohexstr(Stmt.EHRange.Begin) << ", 0x"
+       << llvm::utohexstr(Stmt.EHRange.End)
+       << ") recovered from the call-site table */\n";
+    emitIndent(Indent);
+    OS << "{\n";
+    writeStmts(Stmt.Body, Indent + 1);
+    emitIndent(Indent);
+    OS << "}\n";
+    // Every clause of an Itanium region enters the same landing pad, which is
+    // ordinary code in this function rather than a funclet.  Naming the pad is
+    // therefore the whole of what a clause adds: the pad selects between the
+    // clauses itself, from the selector the personality left it.
+    for (const HighEHClause &Clause : Stmt.EHClauses) {
+      emitIndent(Indent);
+      if (Clause.Kind == HighEHClauseKind::ItaniumSpec) {
+        OS << "/* exception specification ";
+        if (Clause.SpecTypeNames.empty()) {
+          OS << "throw()";
+        } else {
+          OS << "throw(";
+          for (size_t I = 0; I < Clause.SpecTypeNames.size(); ++I)
+            OS << (I ? ", " : "") << Clause.SpecTypeNames[I];
+          OS << ")";
+        }
+      } else {
+        OS << "/* catch (";
+        if (!Clause.TypeName.empty())
+          OS << Clause.TypeName;
+        else if (Clause.TypeDescriptorVA)
+          OS << "typeinfo@0x" << llvm::utohexstr(Clause.TypeDescriptorVA);
+        else
+          OS << "...";
+        OS << ")";
+      }
+      OS << ", filter=" << Clause.TypeFilter << ", depth=" << Clause.ChainDepth;
+      if (Clause.ParseStatus != ExceptionParseStatus::Complete)
+        OS << ", parse=" << getExceptionParseStatusName(Clause.ParseStatus);
+      for (va_t Pad : Clause.LandingPadVAs)
+        OS << " -> L_" << llvm::utohexstr(Pad);
+      OS << " */\n";
+    }
+    break;
+  }
+
   case StmtKind::Nop:
     break;
   }

@@ -90,6 +90,7 @@ add_neverd_unittest(NeverDLiftTests
   MedCallingConvTests.cpp
   COFFExceptionTests.cpp
   ExceptionCFGSeedTests.cpp
+  ItaniumEHStructurerTests.cpp
   RegistrationTryLevelTests.cpp
   COFFARMFormatTests.cpp
   FunctionDiscoveryThumbTests.cpp

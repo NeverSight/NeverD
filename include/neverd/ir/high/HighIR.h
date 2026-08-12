@@ -133,7 +133,12 @@ enum class StmtKind : uint8_t {
   SEHTry,
   /// A reducible MSVC C++ state-map region.  The C backend renders this as
   /// faithful pseudocode because it intentionally remains a C emitter.
-  CxxTry
+  CxxTry,
+  /// A region an Itanium LSDA call-site table proved to be guarded.  Kept
+  /// distinct from \ref CxxTry because the two models disagree about what a
+  /// clause names: an MSVC catch owns an out-of-line funclet, while an Itanium
+  /// clause names a landing pad shared with every other clause of the region.
+  ItaniumTry
 };
 
 enum class HighEHClauseKind : uint8_t {
@@ -141,6 +146,14 @@ enum class HighEHClauseKind : uint8_t {
   SEHFinally,
   CxxCatch,
   CxxCleanup,
+  /// A positive Itanium action filter: the region stops an exception whose
+  /// `std::type_info` matches the named type-table entry.
+  ItaniumCatch,
+  /// A negative Itanium action filter: the region names an exception
+  /// specification, which the personality resolves by calling the unexpected
+  /// handler rather than by entering a handler body.  An empty
+  /// \ref HighEHClause::SpecTypeNames is `throw()`/`noexcept`.
+  ItaniumSpec,
 };
 
 /// Language-neutral payload attached to a structured HighIR exception arm.
@@ -160,6 +173,28 @@ struct HighEHClause {
       CxxUnwindAction::ActionKind::None;
   int32_t UnwindObjectOffset = 0;
   std::vector<va_t> ContinuationVAs;
+
+  /// Itanium: position of this clause's action in the call-site action chain,
+  /// which is the order the personality tests the clauses in and therefore the
+  /// order the source wrote them in.
+  uint32_t ChainDepth = 0;
+  /// Itanium: the action record's filter, exactly as the table spells it.  A
+  /// positive value selects a 1-based type-table entry and a negative one a
+  /// 1-based exception-specification list, so the sign is what tells the two
+  /// clause kinds apart in the native record.
+  int64_t TypeFilter = 0;
+  /// Mangled RTTI symbol or `std::type_info::__type_name` for the caught type,
+  /// when the type table proved one.  Empty for a catch-all, and for a slot
+  /// whose `std::type_info` could not be named.
+  std::string TypeName;
+  /// Types an exception specification permits, in the order it lists them.
+  std::vector<std::string> SpecTypeNames;
+  /// Itanium: every landing pad through which this clause is reached.  One
+  /// try block legitimately has several — a call made after another local
+  /// object was constructed unwinds through a pad that destroys one more
+  /// thing — so a single address would misreport the region.  \ref HandlerVA
+  /// is the first of these, for consumers that only need one.
+  std::vector<va_t> LandingPadVAs;
 };
 
 struct SwitchCase {

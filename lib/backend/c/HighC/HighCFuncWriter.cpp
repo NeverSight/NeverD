@@ -41,11 +41,20 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   GotoTargets.clear();
   collectGotoTargets(Func.Body);
   walkStmts(Func.Body, [&](const HighStmt &Stmt) {
-    for (const HighEHClause &Clause : Stmt.EHClauses)
-      if (Clause.Kind == HighEHClauseKind::SEHExcept && Clause.HandlerVA &&
-          Func.ExceptionMetadata &&
-          Func.ExceptionMetadata->CodeRange.contains(Clause.HandlerVA))
+    for (const HighEHClause &Clause : Stmt.EHClauses) {
+      auto Reachable = [&](va_t Address) {
+        return Address && Func.ExceptionMetadata &&
+               Func.ExceptionMetadata->CodeRange.contains(Address);
+      };
+      if (Clause.Kind == HighEHClauseKind::SEHExcept &&
+          Reachable(Clause.HandlerVA))
         GotoTargets.insert(Clause.HandlerVA);
+      // An Itanium landing pad is a block of this function, so the clause
+      // comment can point at a real label instead of a bare address.
+      for (va_t Pad : Clause.LandingPadVAs)
+        if (Reachable(Pad))
+          GotoTargets.insert(Pad);
+    }
   });
 
   auto VarFn = [this](const MedVar &V) { return varName(V); };
@@ -232,6 +241,55 @@ void HighCWriter::writeExceptionAnnotation(const HighFunc &Func) {
          << llvm::utohexstr(EH.Cxx->IPMap[I].IP)
          << ", state=" << EH.Cxx->IPMap[I].State << "\n";
   }
+  if (EH.Itanium) {
+    const ItaniumEHInfo &LSDA = *EH.Itanium;
+    OS << " * itanium.lsda=0x" << llvm::utohexstr(LSDA.LSDAVA)
+       << ", form=" << (LSDA.IsCallSiteAddressForm ? "call-site" : "sjlj")
+       << ", call_sites=" << LSDA.CallSites.size()
+       << ", actions=" << LSDA.Actions.size()
+       << ", types=" << LSDA.TypeTable.size()
+       << ", specs=" << LSDA.ExceptionSpecs.size() << "\n";
+    for (size_t I = 0; I < LSDA.CallSites.size(); ++I) {
+      const ItaniumCallSite &Site = LSDA.CallSites[I];
+      OS << " * itanium.call_site[" << I << "]: [0x"
+         << llvm::utohexstr(Site.GuardedRange.Begin) << ", 0x"
+         << llvm::utohexstr(Site.GuardedRange.End) << ")";
+      if (Site.LandingPadVA)
+        OS << " pad=0x" << llvm::utohexstr(Site.LandingPadVA);
+      else
+        OS << " pad=none";
+      if (Site.FirstActionOffset)
+        OS << " action=+" << *Site.FirstActionOffset;
+      OS << "\n";
+    }
+    for (const ItaniumAction &Action : LSDA.Actions) {
+      OS << " * itanium.action[+" << Action.TableOffset
+         << "]: filter=" << Action.TypeFilter;
+      if (Action.NextActionOffset)
+        OS << ", next=+" << *Action.NextActionOffset;
+      OS << "\n";
+    }
+    for (const ItaniumTypeEntry &Type : LSDA.TypeTable) {
+      OS << " * itanium.type[" << Type.Index << "]: ";
+      if (Type.IsCatchAll)
+        OS << "catch-all";
+      else
+        OS << "typeinfo=0x" << llvm::utohexstr(Type.TypeInfoVA);
+      if (!Type.TypeName.empty())
+        OS << " name=" << Type.TypeName;
+      OS << "\n";
+    }
+    for (const ItaniumExceptionSpec &Spec : LSDA.ExceptionSpecs) {
+      OS << " * itanium.spec[" << Spec.Index << "]: types=";
+      if (Spec.TypeIndices.empty()) {
+        OS << "none";
+      } else {
+        for (size_t I = 0; I < Spec.TypeIndices.size(); ++I)
+          OS << (I ? "," : "") << Spec.TypeIndices[I];
+      }
+      OS << "\n";
+    }
+  }
   if (EH.GSCookie) {
     const GSCookieInfo &GS = *EH.GSCookie;
     OS << " * gs.cookie_offset=" << GS.CookieOffset
@@ -329,8 +387,7 @@ void HighCWriter::writeFunction(const HighFunc &Func) {
     ParamNames.insert(P.Name);
   if (Func.FrameSize > 0 || Func.FrameHeadroom > 0)
     ParamNames.insert("frame_base");
-  if (NeedsFrameStorage &&
-      (Func.FrameSize > 0 || Func.FrameHeadroom > 0)) {
+  if (NeedsFrameStorage && (Func.FrameSize > 0 || Func.FrameHeadroom > 0)) {
     uint64_t LowerSize = checkedStackAlign(
         Func.FrameSize > 0 ? static_cast<uint64_t>(Func.FrameSize) : 0);
     uint64_t UpperSize = checkedStackAlign(

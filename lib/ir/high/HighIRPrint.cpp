@@ -242,10 +242,13 @@ std::string HighStmt::str(int Indent) const {
   case StmtKind::Continue:
     return Pad + "continue;";
   case StmtKind::SEHTry:
-  case StmtKind::CxxTry: {
-    std::string S = Pad + (Kind == StmtKind::SEHTry ? "__try" : "cxx.try") +
-                    " [0x" + llvm::utohexstr(EHRange.Begin) + ", 0x" +
-                    llvm::utohexstr(EHRange.End) + ") {\n";
+  case StmtKind::CxxTry:
+  case StmtKind::ItaniumTry: {
+    const char *Opener = Kind == StmtKind::SEHTry   ? "__try"
+                         : Kind == StmtKind::CxxTry ? "cxx.try"
+                                                    : "itanium.try";
+    std::string S = Pad + Opener + " [0x" + llvm::utohexstr(EHRange.Begin) +
+                    ", 0x" + llvm::utohexstr(EHRange.End) + ") {\n";
     for (const HighStmt &ST : Body)
       S += ST.str(Indent + 1) + "\n";
     S += Pad + "}";
@@ -259,6 +262,23 @@ std::string HighStmt::str(int Indent) const {
              " kind=" + getCxxUnwindActionKindName(Clause.UnwindActionKind) +
              " object_offset=" + std::to_string(Clause.UnwindObjectOffset) +
              ";";
+      if (Clause.Kind == HighEHClauseKind::ItaniumCatch)
+        S += " catch " +
+             (Clause.TypeName.empty()
+                  ? (Clause.TypeDescriptorVA
+                         ? "typeinfo@0x" +
+                               llvm::utohexstr(Clause.TypeDescriptorVA)
+                         : std::string("..."))
+                  : Clause.TypeName) +
+             " filter=" + std::to_string(Clause.TypeFilter) + ";";
+      if (Clause.Kind == HighEHClauseKind::ItaniumSpec) {
+        S += " spec(";
+        for (size_t I = 0; I < Clause.SpecTypeNames.size(); ++I)
+          S += (I ? ", " : "") + Clause.SpecTypeNames[I];
+        S += ") filter=" + std::to_string(Clause.TypeFilter) + ";";
+      }
+      for (size_t I = 1; I < Clause.LandingPadVAs.size(); ++I)
+        S += " pad 0x" + llvm::utohexstr(Clause.LandingPadVAs[I]) + ";";
     }
     return S;
   }

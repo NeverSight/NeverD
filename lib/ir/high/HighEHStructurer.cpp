@@ -1,26 +1,31 @@
-//===- HighEHStructurer.cpp - Conservative Windows EH structuring -------===//
+//===- HighEHStructurer.cpp - Conservative EH region structuring --------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Converts normalized Windows guarded ranges/state maps into explicit HighIR
-/// exception nodes.  The transform is deliberately interval-conservative: it
-/// moves statements only when one contiguous HighIR slice is wholly contained
-/// by a validated native range.  Crossing or address-less shapes stay in their
-/// original order and are reported through the function's unstructured count.
+/// Converts normalized guarded ranges into explicit HighIR exception nodes.
+/// Three native shapes reach this file: a Windows SEH scope table, an MSVC C++
+/// state map, and an Itanium LSDA call-site table.  The transform is
+/// deliberately interval-conservative: it moves statements only when one
+/// contiguous HighIR slice is wholly contained by a validated native range.
+/// Crossing or address-less shapes stay in their original order and are
+/// reported through the function's unstructured count.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/high/MedToHigh.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <map>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace neverd {
 namespace {
@@ -48,7 +53,8 @@ void classifyStatement(const HighStmt &Stmt, const ExceptionAddressRange &Range,
   };
 
   AddAddress(Stmt.Addr);
-  if ((Stmt.Kind == StmtKind::SEHTry || Stmt.Kind == StmtKind::CxxTry) &&
+  if ((Stmt.Kind == StmtKind::SEHTry || Stmt.Kind == StmtKind::CxxTry ||
+       Stmt.Kind == StmtKind::ItaniumTry) &&
       Stmt.EHRange.isValid()) {
     if (Range.contains(Stmt.EHRange))
       Result.HasInside = true;
@@ -261,6 +267,228 @@ void addCxxCandidates(const ExceptionFunction &EH,
   }
 }
 
+//===----------------------------------------------------------------------===//
+// Itanium
+//===----------------------------------------------------------------------===//
+
+const ItaniumAction *findAction(const ItaniumEHInfo &LSDA, uint64_t Offset) {
+  for (const ItaniumAction &Action : LSDA.Actions)
+    if (Action.TableOffset == Offset)
+      return &Action;
+  return nullptr;
+}
+
+const ItaniumTypeEntry *findTypeEntry(const ItaniumEHInfo &LSDA,
+                                      uint64_t Index) {
+  for (const ItaniumTypeEntry &Entry : LSDA.TypeTable)
+    if (Entry.Index == Index)
+      return &Entry;
+  return nullptr;
+}
+
+const ItaniumExceptionSpec *findExceptionSpec(const ItaniumEHInfo &LSDA,
+                                              uint64_t Index) {
+  for (const ItaniumExceptionSpec &Spec : LSDA.ExceptionSpecs)
+    if (Spec.Index == Index)
+      return &Spec;
+  return nullptr;
+}
+
+/// The action records one call site names, in the order the personality tests
+/// them.  The chain is a linked list inside a table the decoder already
+/// bounded, so the action count is both a cycle breaker and a bound that no
+/// well-formed chain can exceed.
+std::vector<uint64_t> actionChain(const ItaniumEHInfo &LSDA,
+                                  const ItaniumCallSite &Site) {
+  std::vector<uint64_t> Chain;
+  std::optional<uint64_t> Offset = Site.FirstActionOffset;
+  for (size_t Step = 0; Offset && Step <= LSDA.Actions.size(); ++Step) {
+    const ItaniumAction *Action = findAction(LSDA, *Offset);
+    if (!Action)
+      break;
+    if (std::find(Chain.begin(), Chain.end(), Action->TableOffset) !=
+        Chain.end())
+      break;
+    Chain.push_back(Action->TableOffset);
+    Offset = Action->NextActionOffset;
+  }
+  return Chain;
+}
+
+/// Recover try regions from an Itanium call-site table.
+///
+/// The table is flat and sorted: it says which landing pad each stretch of
+/// code reaches, never which stretches belong to one source-level `try`.  What
+/// carries that is the action chain, because the compiler builds one chain per
+/// try nest — an inner clause first, then the clauses of every enclosing try.
+/// So the region a clause guards is the run of call sites naming its action,
+/// and an enclosing clause, being named by more of them, comes out as a region
+/// that contains the inner one.
+///
+/// A run is broken by any call site that does not name the action.  That
+/// distinction is what keeps two adjacent try blocks apart: a compiler emits
+/// an explicit entry for a stretch that can throw and reaches no handler here,
+/// and emits nothing at all for one that cannot throw.  Merging across the
+/// second but not the first covers the straight-line code between two calls in
+/// one try without swallowing the code between two separate ones.
+///
+/// That break is also the limit of what this recovers.  Where the compiler
+/// laid an inner handler out *between* two stretches the enclosing clause
+/// guards, the enclosing run breaks there too, and the one source-level try
+/// comes back as two regions that each list the enclosing clause.  Rejoining
+/// them would mean deciding that the gap holds only handler code, and the
+/// table says nothing that separates that case from a stretch which genuinely
+/// escapes the frame — so the clause is reported against the stretches it was
+/// proven to guard rather than against a hull that was guessed.
+///
+/// Cleanup actions deliberately produce no clause.  The pad runs them before
+/// it tests anything, so they are not arms of the region, and a frame whose
+/// only actions are cleanups is a scope with destructors rather than a `try`.
+void addItaniumCandidates(const ExceptionFunction &EH,
+                          std::vector<RegionCandidate> &Candidates,
+                          unsigned &Rejected) {
+  if (!EH.Itanium)
+    return;
+  const ItaniumEHInfo &LSDA = *EH.Itanium;
+  // The SJLJ form's call-site "ranges" are indices the compiler handed out,
+  // not addresses, so there is no interval here to lay over the body.
+  if (!LSDA.IsCallSiteAddressForm) {
+    Rejected += static_cast<unsigned>(LSDA.CallSites.size());
+    return;
+  }
+
+  std::vector<size_t> Order;
+  Order.reserve(LSDA.CallSites.size());
+  for (size_t I = 0; I < LSDA.CallSites.size(); ++I)
+    if (LSDA.CallSites[I].GuardedRange.isValid())
+      Order.push_back(I);
+  std::stable_sort(Order.begin(), Order.end(), [&](size_t A, size_t B) {
+    return LSDA.CallSites[A].GuardedRange.Begin <
+           LSDA.CallSites[B].GuardedRange.Begin;
+  });
+
+  std::vector<std::vector<uint64_t>> Chains(LSDA.CallSites.size());
+  for (size_t I : Order)
+    Chains[I] = actionChain(LSDA, LSDA.CallSites[I]);
+
+  // Every action a chain dispatches on, visited in table order.  The order a
+  // region's clauses end up in is fixed afterwards from their depth in that
+  // region's own chain, which is the only order that means anything: an
+  // action's depth differs between chains, so no global ordering of the table
+  // can stand for the order the personality tests one region's clauses in.
+  std::vector<uint64_t> Dispatching;
+  for (const ItaniumAction &Action : LSDA.Actions)
+    if (!Action.isCleanup())
+      Dispatching.push_back(Action.TableOffset);
+  std::sort(Dispatching.begin(), Dispatching.end());
+  Dispatching.erase(std::unique(Dispatching.begin(), Dispatching.end()),
+                    Dispatching.end());
+
+  std::map<std::pair<va_t, va_t>, size_t> ByRange;
+  std::vector<RegionCandidate> Regions;
+
+  for (uint64_t ActionOffset : Dispatching) {
+    const ItaniumAction *Action = findAction(LSDA, ActionOffset);
+    if (!Action)
+      continue;
+
+    auto Flush = [&](size_t RunBegin, size_t RunEnd) {
+      const ItaniumCallSite &First = LSDA.CallSites[Order[RunBegin]];
+      const ItaniumCallSite &Last = LSDA.CallSites[Order[RunEnd - 1]];
+      ExceptionAddressRange Range{First.GuardedRange.Begin,
+                                  Last.GuardedRange.End};
+      unsigned SiteCount = static_cast<unsigned>(RunEnd - RunBegin);
+      if (!Range.isValid() || !EH.CodeRange.contains(Range)) {
+        Rejected += SiteCount;
+        return;
+      }
+
+      auto Key = std::make_pair(Range.Begin, Range.End);
+      auto It = ByRange.find(Key);
+      if (It == ByRange.end()) {
+        It = ByRange.emplace(Key, Regions.size()).first;
+        RegionCandidate Fresh;
+        Fresh.Kind = StmtKind::ItaniumTry;
+        Fresh.Range = Range;
+        Regions.push_back(std::move(Fresh));
+      }
+      RegionCandidate &Region = Regions[It->second];
+      // Several clauses share one region, so the native records it stands for
+      // are its call sites counted once rather than once per clause.
+      Region.NativeRegionCount = std::max(Region.NativeRegionCount, SiteCount);
+
+      HighEHClause Clause;
+      Clause.TypeFilter = Action->TypeFilter;
+      const std::vector<uint64_t> &Chain = Chains[Order[RunBegin]];
+      Clause.ChainDepth = static_cast<uint32_t>(
+          std::find(Chain.begin(), Chain.end(), ActionOffset) - Chain.begin());
+      for (size_t K = RunBegin; K < RunEnd; ++K) {
+        va_t Pad = LSDA.CallSites[Order[K]].LandingPadVA;
+        if (Pad == 0)
+          continue;
+        if (std::find(Clause.LandingPadVAs.begin(), Clause.LandingPadVAs.end(),
+                      Pad) == Clause.LandingPadVAs.end())
+          Clause.LandingPadVAs.push_back(Pad);
+      }
+      if (!Clause.LandingPadVAs.empty())
+        Clause.HandlerVA = Clause.LandingPadVAs.front();
+
+      if (Action->isCatch()) {
+        Clause.Kind = HighEHClauseKind::ItaniumCatch;
+        const ItaniumTypeEntry *Type =
+            findTypeEntry(LSDA, static_cast<uint64_t>(Action->TypeFilter));
+        if (!Type) {
+          Clause.ParseStatus = ExceptionParseStatus::Partial;
+        } else {
+          Clause.TypeDescriptorVA = Type->TypeInfoVA;
+          Clause.TypeName = Type->TypeName;
+        }
+      } else {
+        Clause.Kind = HighEHClauseKind::ItaniumSpec;
+        const ItaniumExceptionSpec *Spec =
+            findExceptionSpec(LSDA, static_cast<uint64_t>(-Action->TypeFilter));
+        if (!Spec) {
+          Clause.ParseStatus = ExceptionParseStatus::Partial;
+        } else {
+          for (uint64_t Index : Spec->TypeIndices) {
+            const ItaniumTypeEntry *Type = findTypeEntry(LSDA, Index);
+            if (!Type || Type->TypeName.empty()) {
+              Clause.ParseStatus = ExceptionParseStatus::Partial;
+              continue;
+            }
+            Clause.SpecTypeNames.push_back(Type->TypeName);
+          }
+        }
+      }
+      Region.Clauses.push_back(std::move(Clause));
+    };
+
+    std::optional<size_t> RunBegin;
+    for (size_t K = 0; K < Order.size(); ++K) {
+      const std::vector<uint64_t> &Chain = Chains[Order[K]];
+      if (std::find(Chain.begin(), Chain.end(), ActionOffset) != Chain.end()) {
+        if (!RunBegin)
+          RunBegin = K;
+        continue;
+      }
+      if (RunBegin) {
+        Flush(*RunBegin, K);
+        RunBegin.reset();
+      }
+    }
+    if (RunBegin)
+      Flush(*RunBegin, Order.size());
+  }
+
+  for (RegionCandidate &Region : Regions)
+    std::stable_sort(Region.Clauses.begin(), Region.Clauses.end(),
+                     [](const HighEHClause &A, const HighEHClause &B) {
+                       return A.ChainDepth < B.ChainDepth;
+                     });
+  Candidates.insert(Candidates.end(), std::make_move_iterator(Regions.begin()),
+                    std::make_move_iterator(Regions.end()));
+}
+
 bool hasCrossingRegions(const std::vector<RegionCandidate> &Candidates,
                         size_t Index) {
   const ExceptionAddressRange &A = Candidates[Index].Range;
@@ -289,9 +517,12 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
   if (EH.ParseStatus == ExceptionParseStatus::Complete) {
     addSEHCandidates(EH, Candidates, Rejected);
     addCxxCandidates(EH, Candidates, Rejected);
+    addItaniumCandidates(EH, Candidates, Rejected);
   } else {
     Rejected += EH.SEH ? static_cast<unsigned>(EH.SEH->Scopes.size()) : 0;
     Rejected += EH.Cxx ? static_cast<unsigned>(EH.Cxx->TryBlocks.size()) : 0;
+    Rejected +=
+        EH.Itanium ? static_cast<unsigned>(EH.Itanium->CallSites.size()) : 0;
   }
 
   // Inner-first makes a nested structured node an indivisible statement when
