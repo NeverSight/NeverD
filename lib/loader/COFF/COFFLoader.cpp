@@ -24,6 +24,7 @@
 #include "neverd/loader/DWARF/ItaniumEH.h"
 #include "neverd/loader/Go/GoRuntimeEH.h"
 #include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/ObjC/ObjCEH.h"
 #include "neverd/loader/Rust/RustEH.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -434,9 +435,11 @@ COFFLoader::load(const std::filesystem::path &Path) {
   // the Itanium LSDAs GCC's personality reads.  Decoding only the first would
   // report every C++ frame in such an image as having no handler at all.
   dwarf_eh::parseItaniumExceptions(Img);
-  // Rust shares whichever of those two table families its target uses, so its
-  // reading of them runs last, over records that are already normalized.
+  // Rust and Objective-C share whichever of those two table families their
+  // target uses, so their readings of them run last, over records that are
+  // already normalized.
   rust_eh::parseRustExceptions(Img);
+  objc_eh::parseObjCExceptions(Img);
   return Img;
 }
 

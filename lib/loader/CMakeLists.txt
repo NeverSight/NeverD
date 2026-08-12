@@ -11,6 +11,7 @@ add_neverd_component_library(NeverDLoader
   DWARF/LSDA.cpp
   DWARF/ItaniumEH.cpp
   Go/GoRuntimeEH.cpp
+  ObjC/ObjCEH.cpp
   Rust/RustEH.cpp
   COFF/COFFLoader.cpp
   COFF/COFFException.cpp

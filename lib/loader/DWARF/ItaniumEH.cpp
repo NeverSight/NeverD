@@ -207,7 +207,7 @@ void parseItaniumExceptions(BinaryImage &Img) {
       Req.LSDAVA = FDE.LSDAVA;
       Req.FunctionStart = F.CodeRange.Begin;
       Req.FunctionEnd = F.CodeRange.End;
-      Req.IsSJLJ = F.Personality == ExceptionPersonality::GxxPersonalitySJ0;
+      Req.IsSJLJ = isSJLJPersonality(F.Personality);
       PointerBases LSDABases = Bases;
       LSDABases.Func = F.CodeRange.Begin;
       LSDAParseResult LSDA = parseLSDA(Img, Req, LSDABases);

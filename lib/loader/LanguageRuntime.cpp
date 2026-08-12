@@ -94,7 +94,21 @@ constexpr PersonalityName kPersonalityNames[] = {
     {"__gcc_personality_v0", ExceptionPersonality::GccPersonalityV0},
     {"__gcc_personality_seh0", ExceptionPersonality::GccPersonalitySEH0},
     {"__gcc_personality_sj0", ExceptionPersonality::GccPersonalitySJ0},
+    // Objective-C.  Which of these an image installs is decided by the
+    // runtime it was built against and, for GNUstep, by whether the
+    // translation unit was Objective-C++ -- and that choice is the whole of
+    // how the type table is read, so the spellings stay distinct rather than
+    // collapsing onto one Objective-C enumerator.
     {"__objc_personality_v0", ExceptionPersonality::ObjCPersonalityV0},
+    {"__gnu_objc_personality_v0", ExceptionPersonality::GnuObjCPersonalityV0},
+    {"__gnu_objc_personality_seh0",
+     ExceptionPersonality::GnuObjCPersonalitySEH0},
+    {"__gnu_objc_personality_sj0",
+     ExceptionPersonality::GnuObjCPersonalitySJ0},
+    {"__gnustep_objc_personality_v0",
+     ExceptionPersonality::GNUstepObjCPersonalityV0},
+    {"__gnustep_objcxx_personality_v0",
+     ExceptionPersonality::GNUstepObjCXXPersonalityV0},
     {"rust_eh_personality", ExceptionPersonality::RustEhPersonality},
     // ARM EHABI.  An index entry names one of these by number rather than by
     // address, but a linked image also carries the symbol, so both spellings
@@ -325,6 +339,11 @@ SourceLanguageRuntime getPersonalityRuntime(ExceptionPersonality P) {
   case ExceptionPersonality::GccPersonalitySJ0:
     return SourceLanguageRuntime::C;
   case ExceptionPersonality::ObjCPersonalityV0:
+  case ExceptionPersonality::GnuObjCPersonalityV0:
+  case ExceptionPersonality::GnuObjCPersonalitySEH0:
+  case ExceptionPersonality::GnuObjCPersonalitySJ0:
+  case ExceptionPersonality::GNUstepObjCPersonalityV0:
+  case ExceptionPersonality::GNUstepObjCXXPersonalityV0:
     return SourceLanguageRuntime::ObjectiveC;
   case ExceptionPersonality::CxxFrameHandler3:
   case ExceptionPersonality::CxxFrameHandler4:
@@ -516,9 +535,24 @@ LanguageRuntimeInfo detectLanguageRuntime(const BinaryImage &Img) {
     record(SourceLanguageRuntime::CxxMSVC, "microsoft c++ runtime symbol");
 
   // --- Objective-C and Swift ----------------------------------------------
+  // Apple's section names and Apple's personality are only half the language.
+  // The GNU runtimes put their classes in `.objc_class_refs`/`__objc_data` and
+  // never emit `__objc_personality_v0`, so an image built against libobjc,
+  // GNUstep, or ObjFW is recognized by its own personalities and by
+  // `objc_msg_lookup`, the message send that replaces `objc_msgSend` there.
   if (sectionExists(Img, "__objc_classlist") ||
       hasExactSymbol(Img, "__objc_personality_v0"))
     record(SourceLanguageRuntime::ObjectiveC, "objective-c runtime section");
+  else if (hasExactSymbol(Img, "__gnu_objc_personality_v0") ||
+           hasExactSymbol(Img, "__gnu_objc_personality_seh0") ||
+           hasExactSymbol(Img, "__gnu_objc_personality_sj0") ||
+           hasExactSymbol(Img, "__gnustep_objc_personality_v0") ||
+           hasExactSymbol(Img, "__gnustep_objcxx_personality_v0"))
+    record(SourceLanguageRuntime::ObjectiveC, "gnu objective-c personality");
+  else if (sectionExists(Img, ".objc_class_refs") ||
+           hasExactSymbol(Img, "objc_msg_lookup") ||
+           hasExactSymbol(Img, "objc_msgSend"))
+    record(SourceLanguageRuntime::ObjectiveC, "objective-c message send");
   if (hasSymbolPrefix(Img, "$s") || sectionExists(Img, "__swift5_types"))
     record(SourceLanguageRuntime::Swift, "swift metadata");
 

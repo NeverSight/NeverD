@@ -318,7 +318,27 @@ enum class ExceptionPersonality : uint8_t {
   GccPersonalitySEH0,
   /// `__gcc_personality_sj0`: the SJLJ variant.
   GccPersonalitySJ0,
+  /// `__objc_personality_v0`: Apple's non-fragile Objective-C runtime.  Its
+  /// type-table slots address an `objc_typeinfo`, whose first two fields are
+  /// laid out to match `std::type_info` so that one table can hold both.
   ObjCPersonalityV0,
+  /// `__gnu_objc_personality_v0`: GCC libobjc, GNUstep's older ABI, and
+  /// ObjFW.  Its type-table slots hold the class *name string* itself rather
+  /// than the address of a descriptor, so nothing in such a slot may be
+  /// dereferenced the way an Itanium or Apple slot is.
+  GnuObjCPersonalityV0,
+  /// `__gnu_objc_personality_seh0`/`_sj0`: the same routine reached through
+  /// SEH dispatch and through setjmp/longjmp.
+  GnuObjCPersonalitySEH0,
+  GnuObjCPersonalitySJ0,
+  /// `__gnustep_objc_personality_v0`: GNUstep 1.7's Objective-C routine.  It
+  /// reads the same name-string slots as `__gnu_objc_personality_v0`.
+  GNUstepObjCPersonalityV0,
+  /// `__gnustep_objcxx_personality_v0`: what GNUstep installs once C++ types
+  /// can appear in the same table, which is every Objective-C++ translation
+  /// unit.  Its slots address a `gnustep::libobjc::__objc_class_type_info`,
+  /// a real `std::type_info` subclass, so they are read as Itanium slots.
+  GNUstepObjCXXPersonalityV0,
   /// Rust's own personality routine.  It uses the Itanium tables but only
   /// ever selects cleanup or its single `catch_unwind` filter.
   RustEhPersonality,
@@ -390,6 +410,16 @@ inline const char *getExceptionPersonalityName(ExceptionPersonality P) {
     return "__gcc_personality_sj0";
   case ExceptionPersonality::ObjCPersonalityV0:
     return "__objc_personality_v0";
+  case ExceptionPersonality::GnuObjCPersonalityV0:
+    return "__gnu_objc_personality_v0";
+  case ExceptionPersonality::GnuObjCPersonalitySEH0:
+    return "__gnu_objc_personality_seh0";
+  case ExceptionPersonality::GnuObjCPersonalitySJ0:
+    return "__gnu_objc_personality_sj0";
+  case ExceptionPersonality::GNUstepObjCPersonalityV0:
+    return "__gnustep_objc_personality_v0";
+  case ExceptionPersonality::GNUstepObjCXXPersonalityV0:
+    return "__gnustep_objcxx_personality_v0";
   case ExceptionPersonality::RustEhPersonality:
     return "rust_eh_personality";
   case ExceptionPersonality::AeabiUnwindCppPr0:
@@ -441,10 +471,49 @@ inline bool isItaniumPersonality(ExceptionPersonality P) {
   case ExceptionPersonality::GccPersonalitySEH0:
   case ExceptionPersonality::GccPersonalitySJ0:
   case ExceptionPersonality::ObjCPersonalityV0:
+  case ExceptionPersonality::GnuObjCPersonalityV0:
+  case ExceptionPersonality::GnuObjCPersonalitySEH0:
+  case ExceptionPersonality::GnuObjCPersonalitySJ0:
+  case ExceptionPersonality::GNUstepObjCPersonalityV0:
+  case ExceptionPersonality::GNUstepObjCXXPersonalityV0:
   case ExceptionPersonality::RustEhPersonality:
     return true;
   default:
     return false;
+  }
+}
+
+/// True for a personality whose LSDA uses the setjmp/longjmp call-site form.
+///
+/// The two forms are told apart by the personality and by nothing else: the
+/// header they share declares an encoding for the call-site table but not
+/// which of the two things that table's first two columns are.  Under the SJLJ
+/// form they are a call-site index and an action, not an address and a length,
+/// so a reader that guesses wrong does not fail -- it produces guarded ranges
+/// and landing pads at addresses the program never named.
+inline bool isSJLJPersonality(ExceptionPersonality P) {
+  return P == ExceptionPersonality::GxxPersonalitySJ0 ||
+         P == ExceptionPersonality::GccPersonalitySJ0 ||
+         P == ExceptionPersonality::GnuObjCPersonalitySJ0;
+}
+
+/// Which Objective-C runtime \p P belongs to, or nullopt when it is not an
+/// Objective-C personality at all.  This is what decides how a type-table slot
+/// is read; see \ref ObjCRuntimeKind for why the answer matters.
+inline std::optional<ObjCRuntimeKind>
+getObjCRuntimeForPersonality(ExceptionPersonality P) {
+  switch (P) {
+  case ExceptionPersonality::ObjCPersonalityV0:
+    return ObjCRuntimeKind::AppleNonFragile;
+  case ExceptionPersonality::GnuObjCPersonalityV0:
+  case ExceptionPersonality::GnuObjCPersonalitySEH0:
+  case ExceptionPersonality::GnuObjCPersonalitySJ0:
+  case ExceptionPersonality::GNUstepObjCPersonalityV0:
+    return ObjCRuntimeKind::GNU;
+  case ExceptionPersonality::GNUstepObjCXXPersonalityV0:
+    return ObjCRuntimeKind::GNUstepObjCXX;
+  default:
+    return std::nullopt;
   }
 }
 
@@ -768,6 +837,12 @@ struct ExceptionFunction {
   /// C++, so this does not replace either -- it says what the shared structure
   /// means for a Rust frame.
   std::optional<RustFunctionEH> Rust;
+  /// Objective-C reading of whichever table model this record already carries.
+  /// Like \ref Rust this annotates a shared structure rather than replacing
+  /// it: Objective-C borrows the Itanium LSDA and, on `*-windows-msvc`, the
+  /// MSVC `FuncInfo`, and what differs is how the type table is read and what
+  /// a pad's runtime calls say it is for.
+  std::optional<ObjCFunctionEH> ObjC;
 
   /// Index of the primary record for a chained/fragment record, when known.
   std::optional<size_t> PrimaryFunctionIndex;
@@ -832,6 +907,10 @@ struct ExceptionInfo {
 
   /// Rust panic machinery, present when the image links the Rust runtime.
   std::optional<RustRuntimeInfo> RustRuntime;
+
+  /// Objective-C exception machinery, present when the image links one of the
+  /// Objective-C runtimes.
+  std::optional<ObjCRuntimeInfo> ObjCRuntime;
 
   /// Section offset -> index into \ref CIEs.
   const DwarfCIE *findCIE(uint64_t SectionOffset) const {

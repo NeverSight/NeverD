@@ -138,6 +138,66 @@ const char *getDelphiScopeKindName(DelphiScopeKind Kind) {
   return "unknown";
 }
 
+const char *getObjCRuntimeKindName(ObjCRuntimeKind Kind) {
+  switch (Kind) {
+  case ObjCRuntimeKind::AppleNonFragile:
+    return "apple-non-fragile";
+  case ObjCRuntimeKind::GNU:
+    return "gnu";
+  case ObjCRuntimeKind::GNUstepObjCXX:
+    return "gnustep-objcxx";
+  }
+  return "unknown";
+}
+
+const char *getObjCCatchKindName(ObjCCatchKind Kind) {
+  switch (Kind) {
+  case ObjCCatchKind::Class:
+    return "class";
+  case ObjCCatchKind::AnyObject:
+    return "any-object";
+  case ObjCCatchKind::CatchAll:
+    return "catch-all";
+  }
+  return "unknown";
+}
+
+const char *getObjCPadKindName(ObjCPadKind Kind) {
+  switch (Kind) {
+  case ObjCPadKind::Cleanup:
+    return "cleanup";
+  case ObjCPadKind::Catch:
+    return "catch";
+  case ObjCPadKind::SynchronizedExit:
+    return "synchronized-exit";
+  }
+  return "unknown";
+}
+
+const char *getObjCRuntimeCallKindName(ObjCRuntimeCallKind Kind) {
+  switch (Kind) {
+  case ObjCRuntimeCallKind::Throw:
+    return "throw";
+  case ObjCRuntimeCallKind::Rethrow:
+    return "rethrow";
+  case ObjCRuntimeCallKind::BeginCatch:
+    return "begin-catch";
+  case ObjCRuntimeCallKind::EndCatch:
+    return "end-catch";
+  case ObjCRuntimeCallKind::SyncEnter:
+    return "sync-enter";
+  case ObjCRuntimeCallKind::SyncExit:
+    return "sync-exit";
+  case ObjCRuntimeCallKind::Terminate:
+    return "terminate";
+  case ObjCRuntimeCallKind::ARCCleanup:
+    return "arc-cleanup";
+  case ObjCRuntimeCallKind::FragileTry:
+    return "fragile-try";
+  }
+  return "unknown";
+}
+
 const char *getRustLandingPadKindName(RustLandingPadKind Kind) {
   switch (Kind) {
   case RustLandingPadKind::DropGlue:

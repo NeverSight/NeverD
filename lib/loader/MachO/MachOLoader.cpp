@@ -19,6 +19,7 @@
 #include "neverd/loader/Go/GoRuntimeEH.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/MachO/MachOExceptions.h"
+#include "neverd/loader/ObjC/ObjCEH.h"
 #include "neverd/loader/Rust/RustEH.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 
@@ -411,9 +412,11 @@ MachOLoader::load(const std::filesystem::path &Path) {
   // so language-table decoding waits until stubs and bindings are known.
   macho_unwind::parseDarwinExceptions(Img);
   go_loader::parseGoExceptions(Img);
-  // Rust shares the Itanium tables above rather than emitting its own, so its
-  // reading of them runs last, over records that are already normalized.
+  // Rust and Objective-C share the Itanium tables above rather than emitting
+  // their own, so their readings of them run last, over records that are
+  // already normalized.
   rust_eh::parseRustExceptions(Img);
+  objc_eh::parseObjCExceptions(Img);
   return Img;
 }
 

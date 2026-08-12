@@ -22,6 +22,7 @@
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/Go/GoRuntimeEH.h"
 #include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/ObjC/ObjCEH.h"
 #include "neverd/loader/Rust/RustEH.h"
 
 #include "llvm/BinaryFormat/ELF.h"
@@ -957,9 +958,11 @@ llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
   // reaches this point with nothing recovered.  Its metadata lives in the
   // runtime's own table, which is present in every container format.
   go_loader::parseGoExceptions(Img);
-  // Rust shares the Itanium tables above rather than emitting its own, so its
-  // reading of them runs last, over records that are already normalized.
+  // Rust and Objective-C share the Itanium tables above rather than emitting
+  // their own, so their readings of them run last, over records that are
+  // already normalized.
   rust_eh::parseRustExceptions(Img);
+  objc_eh::parseObjCExceptions(Img);
   return Img;
 }
 
