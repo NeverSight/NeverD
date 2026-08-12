@@ -211,9 +211,15 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           ExternalArity.has_value() &&
           (IsDirectImport || IsRelocExtern || CalleeRegArgs < 0);
       if (UseExternalArity) {
+        // i386 external calls use cdecl even though directly-called internal
+        // functions may use the compiler's ECX/EDX regparm convention.  Do
+        // not promote scratch register values to caller parameters merely
+        // because the external function's total arity is known.
         CalleeRegArgs =
-            std::min(ExternalArity->IntArgs,
-                     static_cast<int>(TRI.IntParamRegs.size()));
+            TheArch == Arch::X86
+                ? 0
+                : std::min(ExternalArity->IntArgs,
+                           static_cast<int>(TRI.IntParamRegs.size()));
         CalleeArgs = ExternalArity->IntArgs;
       }
 

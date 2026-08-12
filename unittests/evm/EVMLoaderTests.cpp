@@ -9,7 +9,9 @@
 #include "neverd/Support/BinaryLoading.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
 
 #include <filesystem>
 #include <fstream>
@@ -20,9 +22,11 @@ namespace {
 class EVMLoaderTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    Directory = std::filesystem::temp_directory_path() /
-                ("neverd-evm-loader-" + std::to_string(++Sequence));
-    std::filesystem::create_directories(Directory);
+    llvm::SmallString<128> UniqueDirectory;
+    const std::error_code Error = llvm::sys::fs::createUniqueDirectory(
+        "neverd-evm-loader", UniqueDirectory);
+    ASSERT_FALSE(Error) << Error.message();
+    Directory = UniqueDirectory.c_str();
   }
 
   void TearDown() override {
@@ -40,7 +44,6 @@ protected:
     return Path;
   }
 
-  inline static unsigned Sequence = 0;
   std::filesystem::path Directory;
 };
 
