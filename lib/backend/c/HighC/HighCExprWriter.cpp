@@ -82,6 +82,10 @@ std::string HighCWriter::varName(const MedVar &V) {
     return "arg" + std::to_string(V.Id);
   case MedVar::RetVal:
     return "retval";
+  case MedVar::EHException:
+    return "eh_exception";
+  case MedVar::EHSelector:
+    return "eh_selector";
   case MedVar::Temp:
     return "t" + std::to_string(V.Id);
   default:

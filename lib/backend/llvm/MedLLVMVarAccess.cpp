@@ -89,6 +89,35 @@ const PhiNode *MedLLVMEmitter::lookupPhi(const MedVar &V) const {
 
 llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
                                     llvm::IRBuilder<> &Builder) {
+  if (V.Kind == MedVar::EHException || V.Kind == MedVar::EHSelector) {
+    auto &Entry = CurFunc->getEntryBlock();
+    llvm::IRBuilder<> AllocBuilder(&Entry, Entry.begin());
+    const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+    llvm::Type *StorageTy =
+        V.Kind == MedVar::EHException
+            ? sizeToType(static_cast<uint16_t>(PointerSize))
+            : llvm::Type::getInt32Ty(*Ctx);
+    llvm::AllocaInst *&Slot = V.Kind == MedVar::EHException
+                                 ? EHExceptionAlloca
+                                 : EHSelectorAlloca;
+    if (!Slot)
+      Slot = AllocBuilder.CreateAlloca(
+          StorageTy, nullptr,
+          V.Kind == MedVar::EHException ? "eh.exception.slot"
+                                        : "eh.selector.slot");
+    llvm::Value *Value = Builder.CreateLoad(
+        StorageTy, Slot,
+        V.Kind == MedVar::EHException ? "eh_exception" : "eh_selector");
+    auto *WantedTy = sizeToType(V.Size);
+    if (Value->getType() != WantedTy) {
+      unsigned Have = Value->getType()->getIntegerBitWidth();
+      unsigned Want = WantedTy->getIntegerBitWidth();
+      Value = Have > Want ? Builder.CreateTrunc(Value, WantedTy)
+                          : Builder.CreateZExt(Value, WantedTy);
+    }
+    return Value;
+  }
+
   if (V.isConst()) {
     constexpr uint64_t kMinGlobalDataAddr = limits::kMinGlobalDataAddr;
     unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;

@@ -241,6 +241,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
 
     for (int Root : Roots) {
       std::vector<MedOp> InitOps;
+      const bool IsItaniumEHRoot =
+          !Func.Blocks[Root].ExceptionalPreds.empty() &&
+          Func.ExceptionMetadata && Func.ExceptionMetadata->Itanium &&
+          Func.ExceptionMetadata->Itanium->IsCallSiteAddressForm;
       for (int Id : LiveIn[Root]) {
         auto VIt = VarOfId.find(Id);
         if (VIt == VarOfId.end())
@@ -248,7 +252,20 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
         MedOp Init;
         Init.Opcode = NdOp::COPY;
         Init.Output = VIt->second;
-        Init.addInput(VIt->second);
+        MedVar Input = VIt->second;
+        if (IsItaniumEHRoot && Input.Kind == MedVar::Reg &&
+            Input.RegOff == TRI.IntReturnReg) {
+          Input.Kind = MedVar::EHException;
+          Input.Id = -1;
+          Input.SSAVer = 0;
+        } else if (IsItaniumEHRoot && Input.Kind == MedVar::Reg &&
+                   TRI.IntReturnReg2 != 0 &&
+                   Input.RegOff == TRI.IntReturnReg2) {
+          Input.Kind = MedVar::EHSelector;
+          Input.Id = -1;
+          Input.SSAVer = 0;
+        }
+        Init.addInput(Input);
         Init.Addr = Func.Blocks[Root].StartAddr;
         InitOps.push_back(Init);
         LLVM_DEBUG(llvm::dbgs() << "  live-in: " << VIt->second.display()

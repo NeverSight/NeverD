@@ -181,6 +181,23 @@ TEST(IsVaListConsumer, NotConsumers) {
   EXPECT_FALSE(isVaListConsumer("v"));
 }
 
+TEST(LibCArity, ExceptionRuntimeFunctions) {
+  auto BeginCatch = libcArity("cxa_begin_catch");
+  ASSERT_TRUE(BeginCatch.has_value());
+  EXPECT_EQ(BeginCatch->IntArgs, 1);
+  EXPECT_EQ(BeginCatch->FpArgs, 0);
+
+  auto Throw = libcArity("cxa_throw");
+  ASSERT_TRUE(Throw.has_value());
+  EXPECT_EQ(Throw->IntArgs, 3);
+  EXPECT_EQ(Throw->FpArgs, 0);
+
+  auto ObjCThrow = libcArity("objc_exception_throw");
+  ASSERT_TRUE(ObjCThrow.has_value());
+  EXPECT_EQ(ObjCThrow->IntArgs, 1);
+  EXPECT_EQ(ObjCThrow->FpArgs, 0);
+}
+
 // =====================================================================
 // isKnownFunction
 // =====================================================================
@@ -258,6 +275,12 @@ TEST(IsNoReturnFunction, Terminators) {
   EXPECT_TRUE(isNoReturnFunction("_exit"));
   EXPECT_TRUE(isNoReturnFunction("longjmp"));
   EXPECT_TRUE(isNoReturnFunction("_longjmp"));
+}
+
+TEST(IsNoReturnFunction, ItaniumCxxTerminators) {
+  EXPECT_TRUE(isNoReturnFunction("_ZSt9terminatev"));
+  EXPECT_TRUE(isNoReturnFunction("__cxa_call_terminate"));
+  EXPECT_TRUE(isNoReturnFunction("__clang_call_terminate"));
 }
 
 TEST(IsNoReturnFunction, SometimesReturningExcluded) {

@@ -31,7 +31,17 @@ namespace neverd {
 constexpr uint64_t kNoParamReg = ~0ULL;
 
 struct MedVar {
-  enum VarKind : uint8_t { Reg, Stack, Temp, Param, RetVal, Flag, Const };
+  enum VarKind : uint8_t {
+    Reg,
+    Stack,
+    Temp,
+    Param,
+    RetVal,
+    Flag,
+    Const,
+    EHException,
+    EHSelector
+  };
   VarKind Kind = Temp;
   Arch TheArch = Arch::Unknown;
   int16_t RenameTag = -1;

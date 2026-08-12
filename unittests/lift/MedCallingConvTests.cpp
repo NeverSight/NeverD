@@ -315,6 +315,69 @@ TEST(LowToMedSSA, VerifiesDisconnectedControlFlowComponents) {
   EXPECT_TRUE(verifyMedFunc(Med, "test-disconnected-cfg"));
 }
 
+TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {
+  constexpr Arch TheArch = Arch::AArch64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Name = "itanium_landing_pad_live_ins";
+  Low.ExceptionMetadata.emplace();
+  Low.ExceptionMetadata->Itanium.emplace();
+  Low.ExceptionMetadata->Itanium->IsCallSiteAddressForm = true;
+  Low.Blocks.resize(2);
+
+  Low.Blocks[0].Id = 0;
+  Low.Blocks[0].StartAddr = 0x1000;
+  Low.Blocks[0].EndAddr = 0x1001;
+  ExceptionalEdge ToHandler;
+  ToHandler.BlockId = 1;
+  ToHandler.TargetVA = 0x1100;
+  ToHandler.Kind = ExceptionalEdgeKind::ItaniumCatchPad;
+  Low.Blocks[0].ExceptionalSuccs.push_back(ToHandler);
+  LowOp NormalReturn;
+  NormalReturn.Opcode = NdOp::RETURN;
+  NormalReturn.Addr = 0x1000;
+  Low.Blocks[0].Ops.push_back(NormalReturn);
+
+  Low.Blocks[1].Id = 1;
+  Low.Blocks[1].StartAddr = 0x1100;
+  Low.Blocks[1].EndAddr = 0x1102;
+  ExceptionalEdge FromCall;
+  FromCall.BlockId = 0;
+  FromCall.TargetVA = 0x1100;
+  FromCall.Kind = ExceptionalEdgeKind::ItaniumCatchPad;
+  Low.Blocks[1].ExceptionalPreds.push_back(FromCall);
+  NdVar Pair = NdVar::tmp(0x8000, TRI.PointerSize);
+  LowOp Combine;
+  Combine.Opcode = NdOp::INT_ADD;
+  Combine.Addr = 0x1100;
+  Combine.Output = Pair;
+  Combine.addInput(NdVar::reg(TRI.IntReturnReg, TRI.PointerSize));
+  Combine.addInput(NdVar::reg(TRI.IntReturnReg2, TRI.PointerSize));
+  Low.Blocks[1].Ops.push_back(Combine);
+  LowOp HandlerReturn;
+  HandlerReturn.Opcode = NdOp::RETURN;
+  HandlerReturn.Addr = 0x1101;
+  HandlerReturn.addInput(Pair);
+  Low.Blocks[1].Ops.push_back(HandlerReturn);
+
+  MedFunc Med = LowToMedConverter().convert(Low, TheArch);
+  bool SawException = false;
+  bool SawSelector = false;
+  for (const MedBlock &Block : Med.Blocks) {
+    for (const MedOp &Op : Block.Ops) {
+      for (unsigned I = 0; I < Op.NumInputs; ++I) {
+        SawException |= Op.Inputs[I].Kind == MedVar::EHException;
+        SawSelector |= Op.Inputs[I].Kind == MedVar::EHSelector;
+      }
+    }
+  }
+  EXPECT_TRUE(SawException);
+  EXPECT_TRUE(SawSelector);
+  EXPECT_TRUE(verifyMedFunc(Med, "test-itanium-landing-pad-live-ins"));
+}
+
 TEST(MedVerifier, RejectsCallClobberExplicitDefinitionCollision) {
   constexpr Arch TheArch = Arch::AArch64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);

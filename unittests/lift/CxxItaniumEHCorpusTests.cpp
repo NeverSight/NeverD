@@ -231,6 +231,41 @@ TEST(CxxItaniumEHCorpus, MatchesDeclaredBytesAndContainer) {
   }
 }
 
+TEST(CxxItaniumEHCorpus, ResolvesMachOPersonalityPointerSlots) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
+
+  unsigned Images = 0;
+  unsigned PersonalityImports = 0;
+  for (const CxxItaniumEHArtifactExpectation &Expectation :
+       *ExpectationsOrErr) {
+    if (Expectation.ExpectedFormat != BinaryFormat::MachO ||
+        Expectation.ValidationLevel !=
+            CxxItaniumCorpusValidationLevel::LsdaGraph)
+      continue;
+    std::optional<BinaryImage> Image =
+        loadArtifact(CorpusRoot / Expectation.Path);
+    if (!Image)
+      continue;
+    ++Images;
+    SCOPED_TRACE(Expectation.Path);
+
+    auto Personality =
+        llvm::find_if(Image->Imports, [](const Import &Candidate) {
+          return Candidate.Name == "___gxx_personality_v0";
+        });
+    if (Personality == Image->Imports.end())
+      continue;
+    ++PersonalityImports;
+    EXPECT_NE(Personality->IATAddr, 0u)
+        << "an indirect personality encoding needs the concrete GOT slot";
+  }
+  EXPECT_GT(Images, 0u);
+  EXPECT_GT(PersonalityImports, 0u);
+}
+
 // The payoff of the whole product line.  An Itanium call-site table is what
 // most C++ in the world dispatches through, and a reader that stops at "this
 // frame has an LSDA" recovers no handler at all: the type a catch names lives

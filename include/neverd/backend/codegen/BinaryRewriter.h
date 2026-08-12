@@ -120,6 +120,11 @@ struct CompiledSection {
   bool IsAllocated = true;
   std::vector<llvm::mc_rewrite::RewriteSymbolIndexReference>
       SymbolIndexReferences;
+  /// True when the section bytes live in CompiledImage::Bytes at Offset.
+  bool IsInImage = true;
+  /// Bytes for an allocated section assigned to a format-owned external
+  /// placement rather than the contiguous patch image.
+  std::vector<uint8_t> ExternalBytes;
 };
 
 /// Result of compiling a module to a single placement image, with every
@@ -154,6 +159,17 @@ CompiledImage compileImageForPatch(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
         ResolveFn,
+    uint64_t ImageBaseVA = 0);
+
+/// Compile like compileImageForPatch, but allow selected allocated sections to
+/// be assigned format-owned VAs outside the contiguous patch image.  Such
+/// sections have IsInImage=false and carry their bytes in ExternalBytes.
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
+        ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
     uint64_t ImageBaseVA = 0);
 
 // ===--------------------------------------------------------------------===//

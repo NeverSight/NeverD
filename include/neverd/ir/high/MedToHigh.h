@@ -27,6 +27,22 @@ std::string intrinsicName(const MedOp &Op);
 uint16_t inferReturnSize(const MedFunc &Med);
 std::set<uint64_t> detectPtrParamRegs(const MedFunc &Med);
 
+/// Rewrite expressions by what they compute rather than by how they are
+/// written, replacing each with the shortest equivalent the symbolic engine
+/// can find.
+///
+/// This is what reaches a mixture of arithmetic and bitwise operators, where
+/// every rewrite either algebra can state is blocked by an operator belonging
+/// to the other — the shape obfuscation is built out of, and the one a
+/// peephole pass cannot touch.  Only whole-word bitvector arithmetic is
+/// carried across; a load, a call, a cast or a comparison becomes one opaque
+/// input and comes back untouched.
+///
+/// Not part of the standard decompilation pipeline yet: it ranks candidates by
+/// the size of the expression graph, which does not always agree with what the
+/// C backend prints.  Call it directly to apply it.
+void simplifyExprSemantics(std::vector<HighStmt> &Stmts);
+
 class MedToHighConverter {
 public:
   HighFunc convert(const MedFunc &Med, Arch TheArch = Arch::Unknown);

@@ -81,10 +81,12 @@ std::unique_ptr<InplaceRewriter> InplaceRewriter::create(BinaryFormat Format) {
 // compileImageForPatch — two-pass multi-section image compile
 //===----------------------------------------------------------------------===//
 
-CompiledImage compileImageForPatch(
+static CompiledImage compileImageForPatchImpl(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
         ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
     uint64_t ImageBaseVA) {
   CompiledImage Out;
   Out.BaseVA = BaseVA;
@@ -113,7 +115,14 @@ CompiledImage compileImageForPatch(
   if (Res1.Sections.empty())
     return Out;
 
-  if (Res1.Sections.size() == 1) {
+  bool HasFixedSection = false;
+  for (const auto &S : Res1.Sections)
+    if (S.IsAllocated && FixedSectionVAFn(S.Name)) {
+      HasFixedSection = true;
+      break;
+    }
+
+  if (Res1.Sections.size() == 1 && !HasFixedSection) {
     auto &S = Res1.Sections.front();
     if (S.Alignment == 0 || (S.Alignment & (S.Alignment - 1)) != 0 ||
         (S.IsAllocated && BaseVA % S.Alignment != 0)) {
@@ -159,6 +168,15 @@ CompiledImage compileImageForPatch(
     auto add = [&](const llvm::mc_rewrite::RewriteSection &S) {
       if (!S.IsAllocated)
         return;
+      if (std::optional<uint64_t> FixedVA = FixedSectionVAFn(S.Name)) {
+        if (S.Alignment == 0 || (S.Alignment & (S.Alignment - 1)) != 0 ||
+            *FixedVA % S.Alignment != 0) {
+          Valid = false;
+          return;
+        }
+        VA[S.Name] = *FixedVA;
+        return;
+      }
       uint64_t SectionAlign = std::max<uint64_t>(Align, S.Alignment);
       if (S.Alignment == 0 || (S.Alignment & (S.Alignment - 1)) != 0 ||
           SectionAlign == 0 || (SectionAlign & (SectionAlign - 1)) != 0 ||
@@ -279,19 +297,27 @@ CompiledImage compileImageForPatch(
           S.Name,      0,      0,    static_cast<uint64_t>(S.Bytes.size()),
           S.Alignment, S.Kind, false};
       CS.SymbolIndexReferences = std::move(S.SymbolIndexReferences);
+      CS.IsInImage = false;
       Out.Sections.push_back(std::move(CS));
       continue;
     }
     auto VAIt = SectionVA.find(S.Name);
     if (VAIt == SectionVA.end())
       continue;
-    uint64_t Off = VAIt->second - BaseVA;
+    const bool IsExternallyPlaced =
+        static_cast<bool>(FixedSectionVAFn(S.Name));
+    uint64_t Off = IsExternallyPlaced ? 0 : VAIt->second - BaseVA;
     CompiledSection CS{S.Name,       Off,
                        VAIt->second, static_cast<uint64_t>(S.Bytes.size()),
                        S.Alignment,  S.Kind,
                        true};
     CS.SymbolIndexReferences = std::move(S.SymbolIndexReferences);
-    Out.Sections.push_back(std::move(CS));
+    if (IsExternallyPlaced) {
+      CS.IsInImage = false;
+      CS.ExternalBytes = std::move(S.Bytes);
+      Out.Sections.push_back(std::move(CS));
+      continue;
+    }
     if (!S.Bytes.empty()) {
       // Off/size come from the converged layout; guard the write so a layout
       // miscalculation (or a VA < BaseVA underflow) fails loudly instead of
@@ -303,6 +329,7 @@ CompiledImage compileImageForPatch(
       }
       std::memcpy(Out.Bytes.data() + Off, S.Bytes.data(), S.Bytes.size());
     }
+    Out.Sections.push_back(std::move(CS));
   }
 
   Out.SymbolAddrs = std::move(Final.SymbolAddrs);
@@ -312,6 +339,29 @@ CompiledImage compileImageForPatch(
                           << " sections, " << TotalSize << " bytes from VA 0x"
                           << llvm::utohexstr(BaseVA) << "\n");
   return Out;
+}
+
+CompiledImage compileImageForPatch(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
+        ResolveFn,
+    uint64_t ImageBaseVA) {
+  auto NoFixedSection = [](llvm::StringRef) -> std::optional<uint64_t> {
+    return std::nullopt;
+  };
+  return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
+                                  NoFixedSection, ImageBaseVA);
+}
+
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
+        ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA) {
+  return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
+                                  FixedSectionVAFn, ImageBaseVA);
 }
 
 //===----------------------------------------------------------------------===//

@@ -881,6 +881,16 @@ void parseChainedFixupsImports(const uint8_t *BasePtr, size_t FileSize,
     Import Imp;
     Imp.Name = SymName;
     Imp.Module = DylibName.empty() ? kExternModule.str() : DylibName;
+    // Chained-import records identify symbols by ordinal but do not carry the
+    // address of the pointer that dyld fixes up.  The indirect symbol table
+    // parsed above does: join the two views so data-only imports such as
+    // ___gxx_personality_v0 resolve to their concrete __got slot rather than
+    // being exposed as address zero.
+    for (const auto &[SlotVA, SlotName] : Img.ImportPtrSlots)
+      if (SlotName == SymName) {
+        Imp.IATAddr = SlotVA;
+        break;
+      }
     Img.Imports.push_back(std::move(Imp));
   }
   LLVM_DEBUG(llvm::dbgs() << "macho: parsed " << Hdr->imports_count

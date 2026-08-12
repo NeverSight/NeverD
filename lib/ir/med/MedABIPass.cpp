@@ -173,11 +173,19 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         }
       }
 
+      const bool IsDirectImport =
+          !CI.IsIndirect && Img && Img->findImportAt(CI.TargetAddr);
+      std::optional<libc::LibCArity> ExternalArity;
+      if (!CI.IsIndirect)
+        ExternalArity =
+            libc::libcArity(stripLeadingUnderscores(CI.TargetName));
+
       // The callee's integer register-argument count, if it is a known direct
       // intra-module target; -1 when unknown (external / indirect).  Used to
       // bound how many incoming registers a forwarder passes through.
       int CalleeRegArgs = -1;
-      if (!CI.IsIndirect && !IsRelocExtern && CalleeRegArity) {
+      if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport &&
+          CalleeRegArity) {
         auto AIt = CalleeRegArity->find(CI.TargetAddr);
         if (AIt != CalleeRegArity->end())
           CalleeRegArgs = AIt->second;
@@ -186,10 +194,27 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // The callee's full integer-argument count (register + stack), for
       // bounding a tail-call forwarder's passed-through stack arguments.
       int CalleeArgs = -1;
-      if (!CI.IsIndirect && !IsRelocExtern && CalleeTotalArity) {
+      if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport &&
+          CalleeTotalArity) {
         auto AIt = CalleeTotalArity->find(CI.TargetAddr);
         if (AIt != CalleeTotalArity->end())
           CalleeArgs = AIt->second;
+      }
+
+      // Executable import veneers can also appear in Callee*Arity as tiny
+      // discovered functions.  Their apparent live-in set is not the imported
+      // function's signature (an AArch64 stub seems to consume x0-x7), so a
+      // curated external signature must override that synthetic arity.  It
+      // also lets a compiler-generated helper pass an incoming exception
+      // object straight through without an explicit register write.
+      const bool UseExternalArity =
+          ExternalArity.has_value() &&
+          (IsDirectImport || IsRelocExtern || CalleeRegArgs < 0);
+      if (UseExternalArity) {
+        CalleeRegArgs =
+            std::min(ExternalArity->IntArgs,
+                     static_cast<int>(TRI.IntParamRegs.size()));
+        CalleeArgs = ExternalArity->IntArgs;
       }
 
       // Apple/Darwin AArch64 passes EVERY variadic argument on the stack
@@ -893,7 +918,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         }
         int FPLimit = static_cast<int>(FPRegs.size());
         bool KnownFPCallee = false;
-        if (!CI.IsIndirect && !IsRelocExtern && CalleeFPArity) {
+        if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport &&
+            CalleeFPArity) {
           auto AIt = CalleeFPArity->find(CI.TargetAddr);
           if (AIt != CalleeFPArity->end()) {
             FPLimit = std::min(FPLimit, AIt->second);
@@ -906,16 +932,15 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         // directly: it both bounds the probe (FPLimit) and marks the callee
         // known so the live-in recovery below can fire for `cmag -> cabs`.
         uint16_t FwdFPArgSize = 8;
-        if (!CI.IsIndirect)
-          if (auto Sig =
-                  libc::libcArity(stripLeadingUnderscores(CI.TargetName))) {
-            if (Sig->FpIsFloat)
-              FwdFPArgSize = 4;
-            if (!KnownFPCallee) {
-              FPLimit = std::min(FPLimit, Sig->FpArgs);
-              KnownFPCallee = true;
-            }
+        if (UseExternalArity) {
+          const libc::LibCArity &Sig = *ExternalArity;
+          if (Sig.FpIsFloat)
+            FwdFPArgSize = 4;
+          if (!KnownFPCallee) {
+            FPLimit = std::min(FPLimit, Sig.FpArgs);
+            KnownFPCallee = true;
           }
+        }
         // For a direct call to a known FP callee, clang may hoist an FP
         // argument's setup (e.g. `cvtsi2sd`/`ucvtf` into XMM0) above a branch
         // into the dominating predecessor — `acc += cond ? h(x) : x*0.5` puts
@@ -1054,21 +1079,17 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // places those bogus overflow arguments on the stack (Darwin AArch64),
       // corrupting the caller frame.  A known libc arity drops the surplus
       // exactly.  (Variadic libc callees are handled by DarwinVarArgBase
-      // above.) Gated to a call whose arity is otherwise unknown (CalleeRegArgs
-      // < 0: external / not an intra-module target), so an intra-module
-      // function that happens to share a libc name keeps its recovered
-      // (emitter-truncated) signature.
-      if (!CI.IsIndirect && CalleeRegArgs < 0) {
-        llvm::StringRef Bare = stripLeadingUnderscores(CI.TargetName);
-        if (auto Arity = libc::libcArity(Bare)) {
-          for (int K = std::max(0, Arity->IntArgs); K < MaxArgs; ++K) {
-            FoundMask[K] = false;
-            Found[K] = MedVar();
-            FromStackScan[K] = false;
-          }
-          if (static_cast<int>(FoundFP.size()) > Arity->FpArgs)
-            FoundFP.resize(std::max(0, Arity->FpArgs));
+      // above.) Gated to an import, relocation-named external, or call whose
+      // arity is otherwise unknown, so an intra-module function that happens
+      // to share a registered name keeps its recovered signature.
+      if (UseExternalArity) {
+        for (int K = std::max(0, ExternalArity->IntArgs); K < MaxArgs; ++K) {
+          FoundMask[K] = false;
+          Found[K] = MedVar();
+          FromStackScan[K] = false;
         }
+        if (static_cast<int>(FoundFP.size()) > ExternalArity->FpArgs)
+          FoundFP.resize(std::max(0, ExternalArity->FpArgs));
       }
 
       // --- Assemble the argument list in callee parameter order ---

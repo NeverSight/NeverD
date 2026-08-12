@@ -482,23 +482,45 @@ std::optional<SymRef> conjunctionForm(SymContext &Ctx,
 // Ranking and checking
 //===----------------------------------------------------------------------===//
 
-/// What an expression costs a reader, counted once per distinct subterm.
+/// What an expression costs whoever reads it.
 ///
-/// A plain node count is the wrong measure here.  Negation is stored as a
-/// product with all-ones, so `x - y` holds two nodes more than `x + y` while
-/// reading no worse, and a solver ranking candidates that way would prefer a
-/// bitwise form to the arithmetic one it exists to recover — it would rank
-/// `~(~x + y)` above `x - y`.  Charging nothing for the all-ones literal,
-/// which is a sign or a mask rather than a quantity and is shared across every
-/// use, restores the order a reader would give.
+/// Two things make this different from the size of the graph.
+///
+/// The first is sharing.  A subterm reachable by three paths is one node in
+/// the graph and three appearances in anything that writes the expression out,
+/// because writing it out is a walk of the tree the graph denotes.  Ranking by
+/// graph size therefore calls an expression that says the same thing three
+/// times cheaper than one that says two things once each, which is backwards.
+/// So this counts the tree.
+///
+/// The second is the all-ones literal, which costs nothing.  It is never a
+/// quantity: it is the sign of a negation — which is how negation is stored —
+/// or the mask of a complement.  Charging for it would make `x - y` dearer
+/// than `~(~x + y)` and rank the bitwise form above the arithmetic one this
+/// exists to recover.
+///
+/// Counting is memoised per node, so the walk stays linear in the graph even
+/// though the number it yields is the size of the tree.  That number saturates,
+/// because a deeply shared graph denotes an exponentially large tree and all
+/// that is ever done with the number is compare it against another candidate's.
 size_t readingCost(const SymContext &Ctx, SymRef R) {
-  size_t Cost = 0;
+  constexpr size_t kCeiling = size_t(1) << 40;
+
+  std::unordered_map<uint32_t, size_t> Cost;
+  // Ascending index order reaches every operand before the node using it.
   for (uint32_t Index : reachableInOrder(Ctx, R)) {
     SymRef N(Index);
-    if (!(Ctx.isConst(N) && Ctx.isConstOnes(N)))
-      ++Cost;
+    size_t Total = Ctx.isConst(N) && Ctx.isConstOnes(N) ? 0 : 1;
+    for (SymRef Operand : Ctx.operands(N)) {
+      Total += Cost[Operand.index()];
+      if (Total >= kCeiling) {
+        Total = kCeiling;
+        break;
+      }
+    }
+    Cost[Index] = Total;
   }
-  return Cost;
+  return Cost[R.index()];
 }
 
 llvm::APInt randomWord(std::mt19937_64 &Rng, uint32_t Width) {

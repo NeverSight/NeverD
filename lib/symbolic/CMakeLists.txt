@@ -1,6 +1,10 @@
 add_neverd_component_library(NeverDSymbolic
   SymBitwise.cpp
+  SymDispatch.cpp
+  SymExec.cpp
+  SymExplore.cpp
   SymExpr.cpp
   SymMBA.cpp
   SymParse.cpp
+  SymState.cpp
 )

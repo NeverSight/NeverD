@@ -17,6 +17,7 @@
 #include "neverd/libc/LibCCtype.h"
 #include "neverd/libc/LibCDirent.h"
 #include "neverd/libc/LibCDlfcn.h"
+#include "neverd/libc/LibCExceptionRuntime.h"
 #include "neverd/libc/LibCFcntl.h"
 #include "neverd/libc/LibCFenv.h"
 #include "neverd/libc/LibCInttypes.h"
@@ -182,6 +183,7 @@ struct ArityRegistry {
     registerArity(Map, kMathArity);
     registerArity(Map, kComplexArity);
     registerArity(Map, kTimeArity);
+    registerArity(Map, kExceptionRuntimeArity);
   }
 };
 

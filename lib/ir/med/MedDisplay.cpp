@@ -49,6 +49,12 @@ std::string MedVar::display() const {
   case RetVal:
     Base = "retval";
     break;
+  case EHException:
+    Base = "eh_exception";
+    break;
+  case EHSelector:
+    Base = "eh_selector";
+    break;
   default:
     break;
   }

@@ -39,9 +39,11 @@ static void simplifyExprRecursive(ExprPtr &E,
   }
 
   if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT &&
-      !E->Operands.empty() && E->Operands[0]->Kind == ExprKind::BinOp) {
-    auto InnerExpr = E->Operands[0];
+      !E->Operands.empty() && E->Operands[0]->Kind == ExprKind::BinOp &&
+      E->Operands[0]->Operands.size() == 2) {
+    const ExprPtr &InnerExpr = E->Operands[0];
     NdOp NegOp = NdOp::NOP;
+    bool SwapOperands = false;
     switch (InnerExpr->Op) {
     case NdOp::INT_EQUAL:
       NegOp = NdOp::INT_NOTEQUAL;
@@ -51,26 +53,35 @@ static void simplifyExprRecursive(ExprPtr &E,
       break;
     case NdOp::INT_LESS:
       NegOp = NdOp::INT_LESSEQUAL;
-      std::swap(InnerExpr->Operands[0], InnerExpr->Operands[1]);
+      SwapOperands = true;
       break;
     case NdOp::INT_SLESS:
       NegOp = NdOp::INT_SLESSEQUAL;
-      std::swap(InnerExpr->Operands[0], InnerExpr->Operands[1]);
+      SwapOperands = true;
       break;
     case NdOp::INT_LESSEQUAL:
       NegOp = NdOp::INT_LESS;
-      std::swap(InnerExpr->Operands[0], InnerExpr->Operands[1]);
+      SwapOperands = true;
       break;
     case NdOp::INT_SLESSEQUAL:
       NegOp = NdOp::INT_SLESS;
-      std::swap(InnerExpr->Operands[0], InnerExpr->Operands[1]);
+      SwapOperands = true;
       break;
     default:
       break;
     }
     if (NegOp != NdOp::NOP) {
-      InnerExpr->Op = NegOp;
-      E = InnerExpr;
+      // The negated comparison replaces `!(cmp)` and only `!(cmp)`.  Every
+      // other rewrite in this file holds wherever its node appears, so writing
+      // through the pointer is safe for them; this one holds only under this
+      // parent.  HighIR is a graph, so the comparison may well have another
+      // parent that has no negation to cancel it, and turning `<` into `<=` in
+      // place would silently flip that other reading of the same test.
+      auto Negated = std::make_shared<HighExpr>(*InnerExpr);
+      Negated->Op = NegOp;
+      if (SwapOperands)
+        std::swap(Negated->Operands[0], Negated->Operands[1]);
+      E = std::move(Negated);
     }
   }
 

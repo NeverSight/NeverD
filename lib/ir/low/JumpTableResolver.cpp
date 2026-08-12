@@ -54,6 +54,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
+#include "neverd/symbolic/SymDispatch.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -2681,6 +2682,26 @@ std::vector<va_t> CFGBuilder::tryEmulatedResolution(const BinaryImage &Img,
       SwitchReg = CommonReg;
       LLVM_DEBUG(llvm::dbgs() << "  emu: using common-pred switch reg 0x"
                               << llvm::utohexstr(SwitchReg) << "\n");
+    }
+  }
+
+  // Ask once whether this branch can go anywhere at all as the switch register
+  // varies, before running it thousands of times to find out.  An indirect
+  // tail call through a function pointer reaches the same destination for
+  // every index; the distinct-target check further down already catches that,
+  // but only after the whole limit has been emulated, and only by inferring
+  // from the answers what could have been read off the code.
+  //
+  // The engine says no only when it carried out everything in the way and the
+  // index appeared nowhere — neither in the target nor in the address of
+  // anything loaded to compute it.
+  {
+    symbolic::SymContext SymCtx;
+    if (!symbolic::dispatchVariesWithIndex(SymCtx, Rec.Ops, SwitchReg)) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  emu: target does not vary with switch reg 0x"
+                 << llvm::utohexstr(SwitchReg) << ", not a dispatch\n");
+      return {};
     }
   }
 

@@ -1103,6 +1103,12 @@ private:
 
   llvm::AllocaInst *FrameAlloca = nullptr;
   llvm::Value *FrameBaseInt = nullptr;
+  /// Shared landing-pad live-in slots.  MedIR models the Itanium ABI's
+  /// exception object and selector as implicit values at exceptional roots;
+  /// each emitted landingpad stores its pair here before the recovered handler
+  /// body reads it.
+  llvm::AllocaInst *EHExceptionAlloca = nullptr;
+  llvm::AllocaInst *EHSelectorAlloca = nullptr;
 
   // Dynamic (VLA / alloca) allocation bases of the current function, keyed by
   // the canonical identity of their runtime size (sizeRootKey), so an address

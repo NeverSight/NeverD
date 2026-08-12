@@ -8,4 +8,7 @@ add_neverd_component_library(NeverDIRLow
   JumpTableResolverGuards.cpp
   JumpTableResolverSource.cpp
   NdOpEmulator.cpp
+
+  LINK_COMPONENTS
+  Symbolic
 )

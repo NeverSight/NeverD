@@ -1441,6 +1441,25 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
     LP->setCleanup(P.Cleanup);
     for (llvm::Constant *Clause : P.Clauses)
       LP->addClause(Clause);
+
+    // Preserve the Itanium landing-pad pair for the recovered handler body.
+    // LowToMed represents the native exceptional live-ins (the first two
+    // integer return registers) as EHException/EHSelector rather than ordinary
+    // function parameters; getVar() loads those values from these slots.
+    auto &Entry = CurFunc->getEntryBlock();
+    llvm::IRBuilder<> AllocBuilder(&Entry, Entry.begin());
+    const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+    auto *ExceptionTy = sizeToType(static_cast<uint16_t>(PointerSize));
+    if (!EHExceptionAlloca)
+      EHExceptionAlloca =
+          AllocBuilder.CreateAlloca(ExceptionTy, nullptr, "eh.exception.slot");
+    if (!EHSelectorAlloca)
+      EHSelectorAlloca = AllocBuilder.CreateAlloca(
+          I32Ty, nullptr, "eh.selector.slot");
+    auto *LPEx = B.CreateExtractValue(LP, 0, "lp.ex");
+    auto *LPSel = B.CreateExtractValue(LP, 1, "lp.sel");
+    B.CreateStore(B.CreatePtrToInt(LPEx, ExceptionTy), EHExceptionAlloca);
+    B.CreateStore(LPSel, EHSelectorAlloca);
     ++LoweredPads;
   }
   if (LoweredPads == 0) {
@@ -1455,9 +1474,9 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
       language_eh_md::ItaniumAttachment,
       llvm::MDNode::get(*Ctx,
                         {llvm::MDString::get(*Ctx, PersonalitySymbol),
-                         mdUInt(*Ctx, 32, LoweredPads),
-                         mdUInt(*Ctx, 32, Pads.size() - LoweredPads),
-                         mdUInt(*Ctx, 32, LoweredCalls)}));
+                         mdUInt(*Ctx, LoweredPads, 32),
+                         mdUInt(*Ctx, Pads.size() - LoweredPads, 32),
+                         mdUInt(*Ctx, LoweredCalls, 32)}));
   return true;
 }
 
@@ -1478,6 +1497,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   PendingDispatchStores.clear();
   FrameAlloca = nullptr;
   FrameBaseInt = nullptr;
+  EHExceptionAlloca = nullptr;
+  EHSelectorAlloca = nullptr;
 
   unsigned PI = 0;
   for (auto &Arg : LLVMFunc->args()) {

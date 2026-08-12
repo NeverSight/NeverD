@@ -12,6 +12,7 @@ add_neverd_component_library(NeverDIRHigh
   HighIfChainToSwitch.cpp
   HighIRPrint.cpp
   HighLoopRecovery.cpp
+  HighSymSimplify.cpp
   HighTypeInference.cpp
   HighVarRename.cpp
   MedOpToExpr.cpp
@@ -20,4 +21,7 @@ add_neverd_component_library(NeverDIRHigh
   NdOpLowering.cpp
   NdOpReturnLowering.cpp
   NdOpSwitchRecovery.cpp
+
+  LINK_COMPONENTS
+  Symbolic
 )

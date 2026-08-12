@@ -426,6 +426,14 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 8: expr simplify (" << Func.Name
                           << ", " << Func.Body.size() << " stmts)\n");
   simplifyAllExprs(Func.Body);
+
+  // Only now is there anything to measure: the expressions have been assembled
+  // out of their separate assignments, and their easy shapes already rewritten.
+  LLVM_DEBUG(llvm::dbgs() << "    dce phase 8b: semantic simplify ("
+                          << Func.Name << ", " << Func.Body.size()
+                          << " stmts)\n");
+  simplifyExprSemantics(Func.Body);
+
   eliminateDeadConditions(Func.Body);
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 9: redundant stack store ("
