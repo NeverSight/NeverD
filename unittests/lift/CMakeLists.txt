@@ -90,6 +90,7 @@ add_neverd_unittest(NeverDLiftTests
   MedCallingConvTests.cpp
   COFFExceptionTests.cpp
   ExceptionCFGSeedTests.cpp
+  ItaniumEHEmitterTests.cpp
   ItaniumEHStructurerTests.cpp
   HighSymSimplifyTests.cpp
   RegistrationTryLevelTests.cpp
@@ -306,6 +307,7 @@ if(NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS)
 
   target_compile_definitions(NeverDCxxItaniumEHCorpusTests PRIVATE
     NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}"
+    NEVERD_BINARY="$<TARGET_FILE:neverd>"
   )
 
   target_include_directories(NeverDCxxItaniumEHCorpusTests PRIVATE
@@ -317,6 +319,7 @@ if(NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS)
     NeverDLoader
     NeverDSupport
   )
+  add_dependencies(NeverDCxxItaniumEHCorpusTests neverd)
 endif()
 
 # This one exercises the C API through the shared library, so it exists only
