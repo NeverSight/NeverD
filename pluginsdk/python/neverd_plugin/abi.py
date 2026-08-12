@@ -102,6 +102,7 @@ class Ownership(Enum):
 _C_TYPES: dict[str, object] = {
     "void": None,
     "int": ctypes.c_int,
+    "unsigned": ctypes.c_uint,
     "unsigned short": ctypes.c_ushort,
     "unsigned long long": ctypes.c_ulonglong,
     "neverd_session_t": SessionHandle,
@@ -579,6 +580,12 @@ _declare("neverd_plugins_term", "void", ["neverd_session_t"])
 _declare("neverd_plugins_run", "int", ["neverd_session_t", "const char *", "int"])
 _declare("neverd_plugins_count", "int", ["neverd_session_t"])
 _declare("neverd_plugins_dispatch_event", "void", ["neverd_session_t", "const void *"])
+_declare(
+    "neverd_simplify_expr_json",
+    "const char *",
+    ["const char *", "unsigned", "int"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_version", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_project_name", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_version_number", "const char *", [], ownership=Ownership.OWNED_STRING)
