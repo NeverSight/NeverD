@@ -84,6 +84,10 @@ struct GoCensus {
   uint64_t RecoverSites = 0;
   uint64_t PanicSites = 0;
   uint64_t OpenCodedDeferFunctions = 0;
+  /// Frames whose `FUNCDATA_OpenCodedDeferInfo` was not just declared but
+  /// read.  The two counts part company exactly when the record's shape was
+  /// misjudged, which is the failure the count above cannot see.
+  uint64_t OpenCodedDeferRecords = 0;
   uint64_t DeferReturnFunctions = 0;
 };
 
@@ -97,6 +101,7 @@ GoCensus censusOf(const ExceptionInfo &Info) {
     Census.RecoverSites += Function.Go->Recovers.size();
     Census.PanicSites += Function.Go->Panics.size();
     Census.OpenCodedDeferFunctions += Function.Go->UsesOpenCodedDefers;
+    Census.OpenCodedDeferRecords += Function.Go->OpenCodedDeferInfo.has_value();
     Census.DeferReturnFunctions += Function.Go->DeferReturnOffset.has_value();
   }
   return Census;
@@ -258,6 +263,64 @@ TEST(GoEHCorpus, RecoversDeferPanicAndRecoverSites) {
   // `-gcflags=all=-N -l` is the only thing that turns open coding off, so a
   // corpus that never exercises it leaves the funcdata path untested.
   EXPECT_LT(OpenCodedImages, Images);
+}
+
+// `FUNCDATA_OpenCodedDeferInfo` has been respelled twice since open-coded
+// defers arrived in Go 1.14, and the pclntab magic moved at neither boundary:
+// the per-defer argument fields went away inside the span of `Go118Magic`, and
+// the closure slots became one run inside the span of `Go120Magic`.  A decoder
+// that takes the record's shape from the header is therefore wrong on one side
+// of each change, and wrong quietly -- the record does not parse, which costs
+// every frame in the image its open-coded defer state while the function
+// records around it keep reading, so the image looks like a program that
+// defers nothing.  Reaching the shape the release actually wrote, from the
+// bytes, is what this asserts.
+TEST(GoEHCorpus, ReadsTheOpenCodedDeferRecordEachReleaseWrote) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
+
+  unsigned Images = 0;
+  std::set<GoOpenCodedDeferLayout> Shapes;
+  for (const GoEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
+    // `-N` clears `ssagen.hasOpenDefers`, so an unoptimized image has no
+    // record to read and nothing to say about its shape.
+    if (Expectation.MinOpenCodedDeferFuncs == 0)
+      continue;
+    std::optional<BinaryImage> Image =
+        loadArtifact(CorpusRoot / Expectation.Path);
+    if (!Image)
+      continue;
+    ++Images;
+    SCOPED_TRACE(Expectation.Path);
+
+    const ExceptionInfo &Info = Image->ExceptionMetadata;
+    const std::string Diagnostics = diagnosticsFor(Info);
+    if (!Info.GoModule) {
+      ADD_FAILURE() << "no pclntab was located; " << Diagnostics;
+      continue;
+    }
+    EXPECT_EQ(Info.GoModule->OpenCodedDeferLayout,
+              Expectation.OpenCodedDeferLayout)
+        << Diagnostics;
+    Shapes.insert(Expectation.OpenCodedDeferLayout);
+
+    // Declaring the funcdata and reading it are separate things, and only the
+    // second one needs the shape to be right.
+    const GoCensus Census = censusOf(Info);
+    EXPECT_GE(Census.OpenCodedDeferRecords, Expectation.MinOpenCodedDeferFuncs)
+        << Diagnostics;
+    EXPECT_EQ(Census.OpenCodedDeferRecords, Census.OpenCodedDeferFunctions)
+        << "a frame declared open-coded defer info that could not be read; "
+        << Diagnostics;
+  }
+
+  EXPECT_GT(Images, 0u);
+  // Two of the three shapes belong to releases no magic separates, so a corpus
+  // that reached only one of them would leave the reading this test is about
+  // unexercised while still looking complete.
+  EXPECT_EQ(Shapes.size(), 3u);
 }
 
 TEST(GoEHCorpus, ParsesDeclaredRuntimeMetadata) {

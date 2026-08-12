@@ -46,6 +46,7 @@ struct RustCell {
   StringRef AllowedStatuses = R"(["complete"])";
   StringRef Personality = "rust_eh_personality";
   StringRef ExpectNoLandingPads = "false";
+  StringRef LandingPadFreeSymbols = "[]";
   StringRef MinLandingPads = "4";
   StringRef MinDropGluePads = "2";
   StringRef MinCatchUnwindPads = "1";
@@ -68,6 +69,26 @@ RustCell msvcCell() {
   Cell.Personality = "__CxxFrameHandler3";
   Cell.MinLandingPads = "1";
   Cell.MinDropGluePads = "0";
+  Cell.MinNoUnwindGuardPads = "0";
+  Cell.MinPanicSites = "0";
+  return Cell;
+}
+
+/// The aborting cell, which is a negative control rather than a weaker probe:
+/// `-C panic=abort` compiles the producer's own frames with no landing pads at
+/// all, so every minimum is zero and every probe symbol is named pad-free.
+RustCell abortingCell() {
+  RustCell Cell;
+  Cell.Path = "corpus/rust-eh/x86_64-unknown-linux-gnu/abort/o0/bin/"
+              "rust_eh_probe-x86_64-unknown-linux-gnu-abort-o0";
+  Cell.PanicStrategy = "abort";
+  Cell.ValidationLevel = "unwind-only";
+  Cell.AllowedStatuses = R"(["complete","partial"])";
+  Cell.ExpectNoLandingPads = "true";
+  Cell.LandingPadFreeSymbols = R"(["rust_eh_c_leaf_nounwind"])";
+  Cell.MinLandingPads = "0";
+  Cell.MinDropGluePads = "0";
+  Cell.MinCatchUnwindPads = "0";
   Cell.MinNoUnwindGuardPads = "0";
   Cell.MinPanicSites = "0";
   return Cell;
@@ -102,9 +123,9 @@ std::string manifestFor(const RustCell &Cell) {
           Cell.ValidationLevel + "\",\"allowed_parse_status\":" +
           Cell.AllowedStatuses + ",\"personalities_any\":[\"" +
           Cell.Personality + "\"],\"expect_no_landing_pads\":" +
-          Cell.ExpectNoLandingPads +
-          ",\"landing_pad_free_symbols\":[\"rust_eh_c_leaf_nounwind\"],"
-          "\"min_landing_pads\":" +
+          Cell.ExpectNoLandingPads + ",\"landing_pad_free_symbols\":" +
+          Cell.LandingPadFreeSymbols +
+          ",\"min_landing_pads\":" +
           Cell.MinLandingPads + ",\"min_drop_glue_pads\":" +
           Cell.MinDropGluePads + ",\"min_catch_unwind_pads\":" +
           Cell.MinCatchUnwindPads + ",\"min_nounwind_guard_pads\":" +
@@ -189,6 +210,42 @@ TEST(RustEHCorpusManifest, RejectsMSVCContractThatClaimsDropGlue) {
 
   ASSERT_FALSE(static_cast<bool>(Parsed));
   EXPECT_NE(toString(Parsed.takeError()).find("Itanium-only classification"),
+            std::string::npos);
+}
+
+TEST(RustEHCorpusManifest, AcceptsTheAbortingNegativeControl) {
+  auto Parsed = parseRustEHCorpusManifest(manifestFor(abortingCell()), false);
+
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->size(), 1u);
+  EXPECT_EQ((*Parsed)[0].ValidationLevel,
+            RustCorpusValidationLevel::UnwindOnly);
+  EXPECT_TRUE((*Parsed)[0].ExpectNoLandingPads);
+  EXPECT_EQ((*Parsed)[0].LandingPadFreeSymbols.size(), 1u);
+}
+
+// An unwinding build gives every frame it compiles a landing pad, so naming
+// one pad-free would hand the consumer an assertion the target cannot satisfy
+// and the failure would read as a decoder gap rather than a manifest error.
+TEST(RustEHCorpusManifest, RejectsUnwindingCellThatNamesAPadFreeSymbol) {
+  RustCell Cell;
+  Cell.LandingPadFreeSymbols = R"(["rust_eh_c_leaf_nounwind"])";
+  auto Parsed = parseRustEHCorpusManifest(manifestFor(Cell), false);
+
+  ASSERT_FALSE(static_cast<bool>(Parsed));
+  EXPECT_NE(toString(Parsed.takeError()).find("landing-pad-free symbols"),
+            std::string::npos);
+}
+
+// The mirror: an empty set in an aborting cell would silently retire the one
+// assertion that proves `-C panic=abort` removed the producer's landing pads.
+TEST(RustEHCorpusManifest, RejectsAbortingCellThatNamesNoPadFreeSymbol) {
+  RustCell Cell = abortingCell();
+  Cell.LandingPadFreeSymbols = "[]";
+  auto Parsed = parseRustEHCorpusManifest(manifestFor(Cell), false);
+
+  ASSERT_FALSE(static_cast<bool>(Parsed));
+  EXPECT_NE(toString(Parsed.takeError()).find("landing-pad-free symbols"),
             std::string::npos);
 }
 

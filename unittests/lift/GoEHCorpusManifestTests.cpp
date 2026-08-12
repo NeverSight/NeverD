@@ -56,6 +56,7 @@ struct GoVariant {
   StringRef MinRecoverSites = "8";
   StringRef MinPanicSites = "20";
   StringRef MinOpenCodedDeferFuncs = "12";
+  StringRef OpenCodedDeferLayout = "contiguous";
   StringRef RequiresModuleData = "true";
 };
 
@@ -93,7 +94,8 @@ std::string manifestFor(const GoVariant &Variant) {
           ",\"min_recover_sites\":" + Variant.MinRecoverSites +
           ",\"min_panic_sites\":" + Variant.MinPanicSites +
           ",\"min_open_coded_defer_funcs\":" + Variant.MinOpenCodedDeferFuncs +
-          ",\"requires_moduledata\":" + Variant.RequiresModuleData + "}}]}")
+          ",\"open_coded_defer_layout\":\"" + Variant.OpenCodedDeferLayout +
+          "\",\"requires_moduledata\":" + Variant.RequiresModuleData + "}}]}")
       .str();
 }
 
@@ -164,7 +166,7 @@ TEST(GoEHCorpusManifest, RejectsGoNamesOnAStrippedELF) {
   auto Parsed = parseGoEHCorpusManifest(manifestFor(Variant), false);
 
   ASSERT_FALSE(static_cast<bool>(Parsed));
-  EXPECT_NE(toString(Parsed.takeError()).find("symbol table kind disagrees"),
+  EXPECT_NE(toString(Parsed.takeError()).find("still names Go functions"),
             std::string::npos);
 }
 
@@ -182,6 +184,48 @@ TEST(GoEHCorpusManifest, RejectsOpenCodedDeferClaimWithoutOptimization) {
   ASSERT_FALSE(static_cast<bool>(Parsed));
   EXPECT_NE(toString(Parsed.takeError()).find("open-coded defer claim"),
             std::string::npos);
+}
+
+// `FUNCDATA_OpenCodedDeferInfo` was respelled at Go 1.18 and again at Go 1.22,
+// and the magic moved at neither.  It is the one claim in this contract that a
+// consumer cannot reach by reading the header, so a manifest that gets it
+// wrong hands the decoder a target it cannot hit for a reason nothing else in
+// the artifact would explain.
+TEST(GoEHCorpusManifest, RejectsDeferRecordShapeTheReleaseDoesNotWrite) {
+  GoVariant Variant;
+  Variant.OpenCodedDeferLayout = "enumerated";
+  auto Parsed = parseGoEHCorpusManifest(manifestFor(Variant), false);
+
+  ASSERT_FALSE(static_cast<bool>(Parsed));
+  EXPECT_NE(toString(Parsed.takeError()).find("open-coded defer layout"),
+            std::string::npos);
+}
+
+// The release that ends one shape and the release that begins the next share a
+// magic, so the same header has to produce two different readings.
+TEST(GoEHCorpusManifest, ReadsBothShapesTheGo122RewriteSpans) {
+  GoVariant Before;
+  Before.GoVersion = "1.21.13";
+  Before.Path = "corpus/go-eh/go1.21.13/linux-amd64/exe/cgo0/stripped/opt/"
+                "eh_probe-go1.21.13-linux-amd64-exe-cgo0-stripped-opt";
+  Before.OpenCodedDeferLayout = "enumerated";
+  GoVariant After;
+  After.GoVersion = "1.22.12";
+  After.Path = "corpus/go-eh/go1.22.12/linux-amd64/exe/cgo0/stripped/opt/"
+               "eh_probe-go1.22.12-linux-amd64-exe-cgo0-stripped-opt";
+  After.OpenCodedDeferLayout = "contiguous";
+
+  auto Old = parseGoEHCorpusManifest(manifestFor(Before), false);
+  auto New = parseGoEHCorpusManifest(manifestFor(After), false);
+
+  ASSERT_TRUE(static_cast<bool>(Old)) << toString(Old.takeError());
+  ASSERT_TRUE(static_cast<bool>(New)) << toString(New.takeError());
+  EXPECT_EQ((*Old)[0].PclnTabMagic, (*New)[0].PclnTabMagic);
+  EXPECT_EQ((*Old)[0].ExpectedPclnTabVersion, (*New)[0].ExpectedPclnTabVersion);
+  EXPECT_EQ((*Old)[0].OpenCodedDeferLayout,
+            GoOpenCodedDeferLayout::Enumerated);
+  EXPECT_EQ((*New)[0].OpenCodedDeferLayout,
+            GoOpenCodedDeferLayout::Contiguous);
 }
 
 TEST(GoEHCorpusManifest, RejectsCorpusThatCoversOneGeneration) {

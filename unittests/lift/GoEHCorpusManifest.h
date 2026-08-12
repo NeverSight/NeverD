@@ -8,6 +8,7 @@
 #define NEVERD_UNITTESTS_LIFT_GOEHCORPUSMANIFEST_H
 
 #include "neverd/Common.h"
+#include "neverd/loader/LanguageEH.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -66,6 +67,11 @@ struct GoEHArtifactExpectation {
   uint64_t MinRecoverSites = 0;
   uint64_t MinPanicSites = 0;
   uint64_t MinOpenCodedDeferFuncs = 0;
+  /// Shape of `FUNCDATA_OpenCodedDeferInfo` this release writes.  Its two
+  /// boundaries are not the magic's, so this is the one claim in the contract
+  /// a consumer cannot reach by reading the `pcHeader`.
+  GoOpenCodedDeferLayout OpenCodedDeferLayout =
+      GoOpenCodedDeferLayout::Contiguous;
   bool RequiresModuleData = false;
 };
 

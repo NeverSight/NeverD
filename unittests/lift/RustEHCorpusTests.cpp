@@ -181,7 +181,18 @@ TEST(RustEHCorpus, ClassifiesEveryItaniumLandingPadKind) {
     for (const ExceptionFunction &Function : Info.Functions) {
       if (!Function.Rust)
         continue;
-      EXPECT_EQ(Function.Personality, ExceptionPersonality::RustEhPersonality);
+      // A pad is described by an LSDA, and an LSDA is reached through a CIE
+      // that names its personality, so a frame with pads must name Rust's.  A
+      // frame with none was classified on the opposite evidence -- it calls
+      // the panic runtime and declares no language at all -- and requiring a
+      // personality there would reject exactly the frames `-C panic=abort`
+      // leaves behind.  Pinning both directions is what keeps the second rule
+      // from quietly claiming a C++ or Go frame that happens to call a
+      // similarly named routine.
+      EXPECT_EQ(Function.Personality,
+                Function.Rust->LandingPads.empty()
+                    ? ExceptionPersonality::None
+                    : ExceptionPersonality::RustEhPersonality);
       EXPECT_FALSE(Function.Rust->UsesMSVCTables);
       for (const RustLandingPad &Pad : Function.Rust->LandingPads) {
         EXPECT_NE(Pad.PadVA, 0u) << Diagnostics;
@@ -226,9 +237,15 @@ TEST(RustEHCorpus, ClassifiesEveryItaniumLandingPadKind) {
 // a perfectly correct artifact.  What the flag actually decides is narrower:
 // no frame the producer compiled carries a pad.  Anchoring on the probes the
 // manifest names is what makes that checkable without the standard library's
-// own frames either drowning it or contradicting it, and it keeps working for
-// an unwinding cell, where the claim narrows to the one `extern "C"` probe
-// whose body provably cannot panic.
+// own frames either drowning it or contradicting it.
+//
+// The absent language-specific data area is the stronger claim and the one
+// that holds on every target: a pad is described by an LSDA, so a frame with
+// no LSDA cannot have one, whereas an empty pad list is also what a frame no
+// decoder classified would report.  Only counting classified Rust frames
+// would in fact make this test vacuous -- an aborting build gives its own
+// frames nothing Rust-specific to classify, which is the very thing being
+// asserted.
 TEST(RustEHCorpus, KeepsDeclaredProbeFramesFreeOfLandingPads) {
   auto ExpectationsOrErr = loadExpectations();
   ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
@@ -236,7 +253,7 @@ TEST(RustEHCorpus, KeepsDeclaredProbeFramesFreeOfLandingPads) {
   const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
 
   unsigned Images = 0;
-  unsigned Frames = 0;
+  unsigned Checked = 0;
   for (const RustEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
     if (!Expectation.SymbolNamesExpected)
       continue;
@@ -255,20 +272,27 @@ TEST(RustEHCorpus, KeepsDeclaredProbeFramesFreeOfLandingPads) {
                       << ", which this image does not";
         continue;
       }
+      // A leaf frame can be described by no unwind record at all, which is
+      // itself a build that cannot land anywhere.
       const ExceptionFunction *Function = Info.findFunction(*Addr);
-      if (!Function || !Function->Rust)
+      if (!Function)
         continue;
-      ++Frames;
-      EXPECT_TRUE(Function->Rust->LandingPads.empty())
-          << Name << " carries "
-          << getRustLandingPadKindName(Function->Rust->LandingPads.front().Kind)
-          << ", which its build cannot produce";
+      ++Checked;
+      EXPECT_FALSE(Function->Itanium.has_value())
+          << Name << " carries a language-specific data area, which its build "
+                     "cannot produce";
+      if (Function->Rust)
+        EXPECT_TRUE(Function->Rust->LandingPads.empty())
+            << Name << " carries "
+            << getRustLandingPadKindName(
+                   Function->Rust->LandingPads.front().Kind)
+            << ", which its build cannot produce";
     }
   }
 
   // Every cell but the four PE executables names its probes.
   EXPECT_EQ(Images, 36u);
-  EXPECT_GT(Frames, 0u) << "no named probe resolved to a classified frame";
+  EXPECT_GT(Checked, 0u) << "no named probe resolved to a covering frame";
 }
 
 // On `*-pc-windows-msvc` a Rust frame is spelled with the same
@@ -305,7 +329,9 @@ TEST(RustEHCorpus, IdentifiesMSVCRustFramesByPanicTypeDescriptor) {
            "C++ one on this target";
     EXPECT_GT(Runtime.CatchUnwindFrames, 0u);
     for (const ExceptionFunction &Function : Info.Functions) {
-      if (!Function.Rust)
+      // A frame recognized only by the panic runtime it calls has no pad and
+      // so dispatches nowhere; the claim below is about how a pad is reached.
+      if (!Function.Rust || Function.Rust->LandingPads.empty())
         continue;
       EXPECT_TRUE(Function.Rust->UsesMSVCTables);
       EXPECT_TRUE(isCxxPersonality(Function.Personality))

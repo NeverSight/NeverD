@@ -75,7 +75,10 @@ void dumpGoModule(const ExceptionInfo &EH) {
                << "  funcs=" << M.FunctionCount
                << " minlc=" << unsigned(M.MinLC)
                << " ptrsize=" << unsigned(M.PtrSize)
-               << " multitext=" << M.HasMultipleTextSections << "\n";
+               << " multitext=" << M.HasMultipleTextSections
+               << " defer-layout="
+               << getGoOpenCodedDeferLayoutName(M.OpenCodedDeferLayout)
+               << "\n";
 }
 
 void dumpGoFunction(const ExceptionFunction &F) {
@@ -89,11 +92,18 @@ void dumpGoFunction(const ExceptionFunction &F) {
                << " deferreturn="
                << (G.DeferReturnOffset ? int64_t(*G.DeferReturnOffset) : -1)
                << " open-coded=" << G.UsesOpenCodedDefers << "\n";
-  if (G.OpenCodedDeferInfo)
+  if (G.OpenCodedDeferInfo) {
     llvm::errs() << "    open-coded deferbits=-"
                  << G.OpenCodedDeferInfo->DeferBitsOffset << " slots=-"
                  << G.OpenCodedDeferInfo->SlotsOffset << " ("
-                 << G.OpenCodedDefers.size() << " slots)\n";
+                 << G.OpenCodedDefers.size() << " slots, "
+                 << getGoOpenCodedDeferLayoutName(G.OpenCodedDeferInfo->Layout)
+                 << (G.OpenCodedDeferInfo->SlotCountIsExact ? ", exact" : "")
+                 << ")";
+    for (const GoOpenCodedDefer &D : G.OpenCodedDefers)
+      llvm::errs() << " " << D.ClosureOffset;
+    llvm::errs() << "\n";
+  }
   for (const GoDeferSite &D : G.Defers)
     llvm::errs() << "    defer@0x" << llvm::utohexstr(D.CallVA) << " "
                  << getGoDeferKindName(D.Kind) << "\n";
@@ -221,6 +231,54 @@ void dumpRegistration(const ExceptionFunction &F) {
     llvm::errs() << "    diag: " << D << "\n";
 }
 
+/// What a named symbol resolved to, and what the exception tables say about
+/// the frame covering it.  A corpus contract is written against source-level
+/// probe names, so "the manifest names X but nothing classified it" is the
+/// question that comes up first, and answering it from the census alone means
+/// guessing which of the printed frames X was supposed to be.
+void dumpProbes(const BinaryImage &Img, llvm::StringRef Names) {
+  const ExceptionInfo &EH = Img.ExceptionMetadata;
+  while (!Names.empty()) {
+    auto [Name, Rest] = Names.split(',');
+    Names = Rest;
+    if (Name.empty())
+      continue;
+    const std::string Underscored = ("_" + Name).str();
+    va_t Addr = 0;
+    for (llvm::StringRef Candidate : {Name, llvm::StringRef(Underscored)}) {
+      if (const Symbol *S = Img.findSymbol(Candidate); S && S->Addr != 0)
+        Addr = S->Addr;
+      else if (const Export *E = Img.findExport(Candidate); E && E->Addr != 0)
+        Addr = E->Addr;
+      if (Addr != 0)
+        break;
+    }
+    if (Addr == 0) {
+      llvm::errs() << "probe '" << Name << "' = <no symbol>\n";
+      continue;
+    }
+    const ExceptionFunction *F = EH.findFunction(Addr);
+    llvm::errs() << "probe '" << Name << "' = 0x" << llvm::utohexstr(Addr);
+    if (!F) {
+      llvm::errs() << " <no covering frame>\n";
+      continue;
+    }
+    llvm::errs() << " frame [0x" << llvm::utohexstr(F->CodeRange.Begin) << ",0x"
+                 << llvm::utohexstr(F->CodeRange.End) << ") ["
+                 << getExceptionEncodingName(F->Encoding) << "] "
+                 << getExceptionParseStatusName(F->ParseStatus)
+                 << " personality='" << F->PersonalityName << "' itanium="
+                 << F->Itanium.has_value() << " rust=" << F->Rust.has_value();
+    if (F->Rust)
+      llvm::errs() << " pads=" << F->Rust->LandingPads.size()
+                   << " panics=" << F->Rust->Panics.size();
+    if (F->Itanium)
+      llvm::errs() << " lsda=0x" << llvm::utohexstr(F->Itanium->LSDAVA)
+                   << " sites=" << F->Itanium->CallSites.size();
+    llvm::errs() << "\n";
+  }
+}
+
 } // namespace
 
 TEST(Scratch, DumpRealBinary) {
@@ -323,6 +381,9 @@ TEST(Scratch, DumpRealBinary) {
                      << R.SymbolName << "'\n";
   for (const std::string &D : EH.Diagnostics)
     llvm::errs() << "  image-diag: " << D << "\n";
+
+  if (const char *Probes = std::getenv("NEVERD_SCRATCH_PROBE"))
+    dumpProbes(Img, Probes);
 
   dumpGoModule(EH);
   dumpRustRuntime(EH);

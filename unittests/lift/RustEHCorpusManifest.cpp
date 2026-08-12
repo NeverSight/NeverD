@@ -175,6 +175,14 @@ Error verifyContract(const RustEHArtifactExpectation &Expectation,
   if (Expectation.ExpectNoLandingPads == Unwinds)
     return manifestError(Context +
                          ": landing-pad claim disagrees with panic strategy");
+  // An unwinding build gives every frame it compiles a landing pad, including
+  // the `extern "C"` leaf whose body cannot panic, because rustc emits the
+  // abort guard from whether it can prove the body nounwind and an opaque
+  // `black_box` call defeats that proof.  So the pad-free set is exactly the
+  // probe symbols when aborting and exactly empty when unwinding.
+  if (Unwinds != Expectation.LandingPadFreeSymbols.empty())
+    return manifestError(
+        Context + ": landing-pad-free symbols disagree with panic strategy");
 
   if (!Unwinds) {
     if (Expectation.MinLandingPads != 0 || Expectation.MinDropGluePads != 0 ||
@@ -370,7 +378,7 @@ Expected<RustEHArtifactExpectation> parseArtifact(const json::Object &Object,
     return NoPads.takeError();
   Result.ExpectNoLandingPads = *NoPads;
   auto PadFree = requireStringArray(*NeverD, "landing_pad_free_symbols",
-                                    Context + ".neverd", false);
+                                    Context + ".neverd", true);
   if (!PadFree)
     return PadFree.takeError();
   Result.LandingPadFreeSymbols = std::move(*PadFree);

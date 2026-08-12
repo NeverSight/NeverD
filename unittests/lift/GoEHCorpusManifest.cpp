@@ -40,6 +40,10 @@ struct ReleaseIdentity {
   /// read-only data for Go 1.26, on the grounds that the table holds no
   /// relocations, so from there a PIE names it like an ordinary executable.
   bool RelroPclnTab;
+  /// Shape of `FUNCDATA_OpenCodedDeferInfo`, which is the one thing here the
+  /// magic does not settle.  It is filled in separately for that reason.
+  GoOpenCodedDeferLayout OpenCodedDeferLayout =
+      GoOpenCodedDeferLayout::Contiguous;
 };
 
 Error manifestError(const Twine &Message) {
@@ -88,6 +92,20 @@ requireStringArray(const json::Object &Object, StringRef Key, StringRef Context,
   return Result;
 }
 
+/// Which spelling of `FUNCDATA_OpenCodedDeferInfo` a release writes.  Kept
+/// apart from the identity above because its boundaries are not the magic's:
+/// the record lost its argument fields in Go 1.18, which is inside the span of
+/// `Go118Magic`, and its slots became one run in Go 1.22, which is inside the
+/// span of `Go120Magic`.  A consumer that read the header and stopped would
+/// therefore be wrong on one side of each.
+GoOpenCodedDeferLayout getOpenCodedDeferLayout(unsigned Minor) {
+  if (Minor >= 22)
+    return GoOpenCodedDeferLayout::Contiguous;
+  if (Minor >= 18)
+    return GoOpenCodedDeferLayout::Enumerated;
+  return GoOpenCodedDeferLayout::LegacyEnumerated;
+}
+
 std::optional<ReleaseIdentity> getReleaseIdentity(StringRef Version) {
   SmallVector<StringRef, 4> Parts;
   Version.split(Parts, '.');
@@ -97,27 +115,30 @@ std::optional<ReleaseIdentity> getReleaseIdentity(StringRef Version) {
   if (Parts[2].empty() ||
       !llvm::all_of(Parts[2], [](char C) { return C >= '0' && C <= '9'; }))
     return std::nullopt;
+  std::optional<ReleaseIdentity> Identity;
   if (Minor >= 26)
-    return ReleaseIdentity{"go1.20", 0xFFFFFFF1u,
-                           GoCorpusValidationLevel::RuntimeGraph, true,
-                           "go:func.*", false};
-  if (Minor >= 20)
-    return ReleaseIdentity{"go1.20", 0xFFFFFFF1u,
-                           GoCorpusValidationLevel::RuntimeGraph, true,
-                           "go:func.*", true};
-  if (Minor >= 18)
-    return ReleaseIdentity{"go1.18", 0xFFFFFFF0u,
-                           GoCorpusValidationLevel::RuntimeGraph, true,
-                           "go.func.*", true};
-  if (Minor >= 16)
-    return ReleaseIdentity{"go1.16", 0xFFFFFFFAu,
-                           GoCorpusValidationLevel::RuntimeGraph, false,
-                           "go.func.*", true};
-  if (Minor >= 2)
-    return ReleaseIdentity{"go1.2", 0xFFFFFFFBu,
-                           GoCorpusValidationLevel::TableOnly, false,
-                           "go.func.*", true};
-  return std::nullopt;
+    Identity = ReleaseIdentity{"go1.20", 0xFFFFFFF1u,
+                               GoCorpusValidationLevel::RuntimeGraph, true,
+                               "go:func.*", false};
+  else if (Minor >= 20)
+    Identity = ReleaseIdentity{"go1.20", 0xFFFFFFF1u,
+                               GoCorpusValidationLevel::RuntimeGraph, true,
+                               "go:func.*", true};
+  else if (Minor >= 18)
+    Identity = ReleaseIdentity{"go1.18", 0xFFFFFFF0u,
+                               GoCorpusValidationLevel::RuntimeGraph, true,
+                               "go.func.*", true};
+  else if (Minor >= 16)
+    Identity = ReleaseIdentity{"go1.16", 0xFFFFFFFAu,
+                               GoCorpusValidationLevel::RuntimeGraph, false,
+                               "go.func.*", true};
+  else if (Minor >= 2)
+    Identity = ReleaseIdentity{"go1.2", 0xFFFFFFFBu,
+                               GoCorpusValidationLevel::TableOnly, false,
+                               "go.func.*", true};
+  if (Identity)
+    Identity->OpenCodedDeferLayout = getOpenCodedDeferLayout(Minor);
+  return Identity;
 }
 
 std::optional<std::pair<StringRef, BinaryFormat>> getContainer(StringRef GOOS) {
@@ -502,6 +523,24 @@ Expected<GoEHArtifactExpectation> parseArtifact(const json::Object &Object,
                          ".neverd: open-coded defer claim disagrees with the "
                          "optimization axis");
 
+  auto Layout =
+      requireString(*NeverD, "open_coded_defer_layout", Context + ".neverd");
+  if (!Layout)
+    return Layout.takeError();
+  if (*Layout == "contiguous")
+    Result.OpenCodedDeferLayout = GoOpenCodedDeferLayout::Contiguous;
+  else if (*Layout == "enumerated")
+    Result.OpenCodedDeferLayout = GoOpenCodedDeferLayout::Enumerated;
+  else if (*Layout == "legacy-enumerated")
+    Result.OpenCodedDeferLayout = GoOpenCodedDeferLayout::LegacyEnumerated;
+  else
+    return manifestError(Context +
+                         ".neverd: unsupported open-coded defer layout");
+  if (Result.OpenCodedDeferLayout != Release->OpenCodedDeferLayout)
+    return manifestError(Context +
+                         ".neverd: open-coded defer layout disagrees with the "
+                         "Go release");
+
   auto RequiresModuleData =
       requireBoolean(*NeverD, "requires_moduledata", Context + ".neverd");
   if (!RequiresModuleData)
@@ -528,6 +567,7 @@ Error verifyCapabilityCoverage(ArrayRef<GoEHArtifactExpectation> Expectations) {
   std::set<std::string> Optimizations;
   std::set<bool> CgoStates;
   std::set<bool> StripStates;
+  std::set<GoOpenCodedDeferLayout> DeferLayouts;
   for (const GoEHArtifactExpectation &Expectation : Expectations) {
     Generations.insert(Expectation.ExpectedPclnTabVersion);
     ObjectFormats.insert(Expectation.ObjectFormat);
@@ -536,6 +576,8 @@ Error verifyCapabilityCoverage(ArrayRef<GoEHArtifactExpectation> Expectations) {
     Optimizations.insert(Expectation.Optimization);
     CgoStates.insert(Expectation.CgoEnabled);
     StripStates.insert(Expectation.Stripped);
+    if (Expectation.MinOpenCodedDeferFuncs != 0)
+      DeferLayouts.insert(Expectation.OpenCodedDeferLayout);
   }
   if (Generations !=
       std::set<std::string>{"go1.2", "go1.16", "go1.18", "go1.20"})
@@ -554,6 +596,15 @@ Error verifyCapabilityCoverage(ArrayRef<GoEHArtifactExpectation> Expectations) {
     return manifestError("corpus manifest does not cover both cgo states");
   if (StripStates != std::set<bool>{false, true})
     return manifestError("corpus manifest does not cover both link states");
+  // The generation set above cannot stand in for this one: the record was
+  // respelled twice on boundaries the magic does not share, so a corpus can
+  // hold every generation and still leave two of the three shapes unbuilt.
+  if (DeferLayouts !=
+      std::set<GoOpenCodedDeferLayout>{GoOpenCodedDeferLayout::Contiguous,
+                                       GoOpenCodedDeferLayout::Enumerated,
+                                       GoOpenCodedDeferLayout::LegacyEnumerated})
+    return manifestError(
+        "corpus manifest does not cover every open-coded defer record shape");
   return Error::success();
 }
 
