@@ -155,9 +155,10 @@ public:
 
   /// \p Index-th pointer-sized field of a structure starting at \p Base.
   std::optional<uint64_t> wordAt(va_t Base, unsigned Index) const {
-    if (Index > (InvalidVA - Base) / PtrSize)
+    const uint64_t Offset = static_cast<uint64_t>(Index) * PtrSize;
+    if (Offset > InvalidVA - Base)
       return std::nullopt;
-    return word(Base + Index * PtrSize);
+    return word(Base + Offset);
   }
 
   /// An LEB128-style unsigned varint, as `runtime.readvarint` decodes it.
