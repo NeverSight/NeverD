@@ -11,6 +11,7 @@
 
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstring>
@@ -273,9 +274,10 @@ bool decodeCFIProgram(const uint8_t *Buf, size_t Size, size_t Cursor,
   auto advance = [&](uint64_t Delta) {
     // The scaled advance is bounded by the entry's own address range in
     // practice; guard the multiply so a crafted delta cannot wrap.
-    uint64_t Scaled = 0;
-    if (__builtin_mul_overflow(Delta, CodeAlign, &Scaled))
+    if (CodeAlign != 0 &&
+        Delta > std::numeric_limits<uint64_t>::max() / CodeAlign)
       return false;
+    const uint64_t Scaled = Delta * CodeAlign;
     if (Scaled > std::numeric_limits<uint64_t>::max() - Location)
       return false;
     Location += Scaled;
@@ -284,9 +286,10 @@ bool decodeCFIProgram(const uint8_t *Buf, size_t Size, size_t Cursor,
 
   // The data alignment factor is negative on every stack-down architecture, so
   // a division-based range check would have to flip its comparisons with the
-  // sign.  Asking the compiler for the overflow bit is exact for either sign.
+  // sign.  LLVM's portable overflow helper is exact for either sign and also
+  // works with compilers that do not provide __builtin_mul_overflow.
   auto scaleOffset = [&](int64_t Factored, int64_t &Scaled) {
-    return !__builtin_mul_overflow(Factored, DataAlign, &Scaled);
+    return !llvm::MulOverflow(Factored, DataAlign, Scaled);
   };
 
   while (Cursor < End) {

@@ -88,9 +88,12 @@ TEST_F(EVMLoaderTest, KeepsTheContainerAndWhatWasLearnedFromIt) {
   EXPECT_EQ(Image->EVM->Source, evm::BytecodeSourceKind::Hex);
   EXPECT_EQ(Image->EVM->Container, evm::BytecodeContainer::Legacy);
   EXPECT_TRUE(Image->EVM->RuntimeExtracted);
-  EXPECT_TRUE(Image->EVM->MetadataStripped);
-  ASSERT_TRUE(Image->EVM->RuntimeMetadata.has_value());
-  EXPECT_EQ(Image->EVM->RuntimeMetadata->compilerVersion(), "0.8.30");
+  // The constructor returns only the five code bytes, so its trailing compiler
+  // map belongs to the input container rather than to the deployed runtime.
+  EXPECT_FALSE(Image->EVM->MetadataStripped);
+  ASSERT_TRUE(Image->EVM->InputMetadata.has_value());
+  EXPECT_EQ(Image->EVM->InputMetadata->compilerVersion(), "0.8.30");
+  EXPECT_FALSE(Image->EVM->RuntimeMetadata.has_value());
 }
 
 TEST_F(EVMLoaderTest, ReportsADelegationIndicatorInsteadOfDecodingIt) {

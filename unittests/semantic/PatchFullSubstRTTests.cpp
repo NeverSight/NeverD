@@ -381,12 +381,14 @@ bool emulateCall(const llvm::mc_rewrite::RewriteResult &RR, const EmuISA &E,
     }
 
   const uint64_t StackTop = STK_BASE + STK_SIZE - 0x200;
-  // Both SysV and Win64 enter a callee after an 8-byte return address has
-  // been pushed, so RSP must be 8 modulo 16.  Keeping it 16-byte aligned here
-  // makes aligned SSE spills such as `movdqa -0x18(%rsp)` fault once Unicorn
-  // correctly enforces the instruction's alignment requirement.
-  const uint64_t SP =
-      StackTop - (E.A == Arch::X64 ? sizeof(uint64_t) : 0);
+  // x86-family callees enter after CALL pushes a return address.  Model a
+  // 16-byte-aligned caller stack, which makes RSP 8 modulo 16 on x64 and ESP
+  // 12 modulo 16 on i386.  LLVM relies on those entry alignments for aligned
+  // SSE spills such as `movdqa (%esp)` after a fixed-size prologue.
+  const uint64_t ReturnAddressSize = E.A == Arch::X64   ? sizeof(uint64_t)
+                                     : E.A == Arch::X86 ? sizeof(uint32_t)
+                                                        : 0;
+  const uint64_t SP = StackTop - ReturnAddressSize;
   const uint64_t Ret = RET_ADDR;
 
   switch (E.A) {
