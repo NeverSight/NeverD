@@ -229,6 +229,26 @@ degli indirizzi: un lettore che non riconosca una delle personality SJLJ non
 fallisce, ma inventa intervalli protetti e landing pad che il programma non ha
 mai nominato.
 
+Riconoscere quella forma non equivale a rifiutarla. Una voce SJLJ è una coppia
+di valori ULEB128 — un selettore di dispatch e uno scostamento di azione — e
+quello scostamento significa lì esattamente ciò che significa nella forma a
+indirizzi: la catena di azioni, i tipi catturati e le specifiche di eccezione
+si leggono quindi tutti da una tabella che non nomina alcun codice. Resta
+ignota soltanto la regione che ciascuna voce protegge, perché a enunciarla sono
+le scritture che la funzione stessa compie nel proprio slot di call-site, non
+qualcosa nella tabella. La suite fissa anche l'unico byte di cui qui non ci si
+deve fidare: GCC scrive `DW_EH_PE_uleb128` come codifica delle call-site e LLVM
+scrive `DW_EH_PE_udata4`, entrambi emettono poi ULEB128 comunque, e nessuna
+personality lo legge mai — quindi non deve leggerlo nemmeno un decodificatore.
+
+L'identità della personality è fissata accanto a questo, perché è ciò che
+decide come si legge ognuna delle tabelle qui sopra. GNAT nomina la propria
+routine nei tre modi in cui GCC nomina quella di ogni frontend — `_v0`, `_sj0`,
+`_seh0` — e su Windows registra un simbolo mentre inoltra a un altro, così
+tutte e quattro le grafie devono ricadere su Ada. D ne è l'immagine speculare:
+tre compilatori, tre nomi per una sola routine, un unico insieme di tabelle
+alle spalle.
+
 ### Roundtrip differenziali Unicorn
 
 La fixture semantica verifica il comportamento anziché la forma testuale:

@@ -171,10 +171,55 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
   PointerBases Raw;
 
   if (Req.IsSJLJ) {
-    // The SJLJ form's "ranges" are call-site indices assigned by the
-    // front end, not addresses.  They cannot be mapped onto code without the
-    // dispatch switch, so record the record's shape and stop.
-    partial("setjmp/longjmp Itanium call-site table is not address indexed");
+    // The SJLJ form spends no bytes on addresses: an entry is a pair of
+    // ULEB128 values, a dispatch selector and an action offset, and it is
+    // named by its position rather than by the code it covers.  Which code
+    // that is stays unknown until the function's own stores into its call-site
+    // slot are recovered, but that is the *only* thing missing here -- the
+    // action offset means what it means in the address form, so the chains
+    // below, and the catch types and exception specifications they reach, are
+    // as readable in this form as in any other.  Refusing the whole table for
+    // want of its ranges threw all of that away.
+    //
+    // The call-site encoding byte is not consulted, and must not be: no
+    // personality reads it on this path, so producers do not agree on what to
+    // put there.  GCC writes `DW_EH_PE_uleb128` and LLVM writes
+    // `DW_EH_PE_udata4`, and both then emit ULEB128 regardless.
+    uint64_t Index = 0;
+    while (Cursor < CallSiteEnd) {
+      if (Info.CallSites.size() >= Req.MaxRecords) {
+        partial("Itanium LSDA call-site table exceeds decode budget");
+        break;
+      }
+      uint64_t LandingPad = 0, ActionRecord = 0;
+      if (!readULEB128(Buf, CallSiteEnd, Cursor, LandingPad) ||
+          !readULEB128(Buf, CallSiteEnd, Cursor, ActionRecord)) {
+        // Nothing in this form says how many entries it has: the declared
+        // table length is the only terminator, so bytes left over past the
+        // last whole pair mean either that a producer wrote something not
+        // modelled here or that the record is not in the form its personality
+        // claims.  Either way the pairs already read are well formed and
+        // still correctly numbered, and the action and type tables past this
+        // point are still readable, so the doubt is recorded instead of being
+        // paid for with all of that — which is what returning malformed from
+        // here would cost, since a malformed record is returned empty.
+        partial("trailing bytes in setjmp/longjmp Itanium call-site table");
+        break;
+      }
+
+      ItaniumCallSite Site;
+      // The stored index counts from one: the personality decrements what the
+      // frame handed it before reading an entry, and reserves the values at
+      // and below zero for "nothing here" and "terminate".
+      Site.CallSiteIndex = ++Index;
+      Site.NativeLandingPad = LandingPad;
+      Site.NativeActionRecord = ActionRecord;
+      if (ActionRecord != 0) {
+        Site.FirstActionOffset = ActionRecord - 1;
+        ActionRoots.push_back(ActionRecord - 1);
+      }
+      Info.CallSites.push_back(std::move(Site));
+    }
     Cursor = CallSiteEnd;
   } else if (Info.CallSiteEncoding == Omit) {
     partial("Itanium LSDA omits its call-site encoding");

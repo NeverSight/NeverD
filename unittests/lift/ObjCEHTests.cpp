@@ -772,11 +772,15 @@ TEST(ObjCRuntimeState, LeavesACxxFrameAlone) {
 //===----------------------------------------------------------------------===//
 
 TEST(ObjCSJLJ, RefusesToReadIndexFormCallSitesAsAddresses) {
-  // Under the SJLJ form the first two columns of a call-site record are an
-  // index and an action, not an address and a length.  A reader that applies
-  // the address form does not fail; it invents guarded ranges and landing pads
-  // the program never named.  Every SJLJ personality has to be recognized for
-  // that not to happen, not just C++'s.
+  // Under the SJLJ form a call-site record is a pair of ULEB128 values -- a
+  // dispatch selector and an action -- selected by counting rather than by
+  // address.  A reader that applies the address form does not fail; it invents
+  // guarded ranges and landing pads the program never named.  Every SJLJ
+  // personality has to be recognized for that not to happen, not just C++'s.
+  //
+  // What makes this a test rather than a tautology is that the bytes below are
+  // an address-form table.  Read as the personality says they must be, they do
+  // yield entries -- and not one of those entries may carry an address.
   for (const char *Personality :
        {"__gxx_personality_sj0", "__gcc_personality_sj0",
         "__gnu_objc_personality_sj0"}) {
@@ -789,7 +793,16 @@ TEST(ObjCSJLJ, RefusesToReadIndexFormCallSitesAsAddresses) {
     const ExceptionFunction &F = Img.ExceptionMetadata.Functions.front();
     ASSERT_TRUE(F.Itanium.has_value()) << Personality;
     EXPECT_FALSE(F.Itanium->IsCallSiteAddressForm) << Personality;
-    EXPECT_TRUE(F.Itanium->CallSites.empty()) << Personality;
+    for (const ItaniumCallSite &Site : F.Itanium->CallSites) {
+      EXPECT_FALSE(Site.GuardedRange.isValid()) << Personality;
+      EXPECT_EQ(Site.LandingPadVA, 0u) << Personality;
+      // An entry that named nothing at all would be indistinguishable from a
+      // decoder that skipped the table, which is what this used to do.
+      EXPECT_NE(Site.CallSiteIndex, 0u) << Personality;
+    }
+    // Address-form columns do not divide into ULEB128 pairs, so a byte is left
+    // over and the record is not fully accounted for.  That is the correct
+    // reading of a file whose table and whose personality disagree.
     EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Partial) << Personality;
   }
 }

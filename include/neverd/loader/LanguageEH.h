@@ -201,13 +201,35 @@ struct ItaniumAction {
 /// One protected region.  A zero landing pad means the region has no local
 /// handler: an exception propagates out of the frame directly, which for the
 /// `call-site` model is how a `noexcept` boundary or a plain call is spelled.
+///
+/// The SJLJ form fills a strict subset of this: an entry there is selected by
+/// counting rather than by address, so \ref CallSiteIndex is what names it and
+/// \ref GuardedRange and \ref LandingPadVA stay empty.  Everything the entry
+/// reaches past that point — its action chain, and through it the catch types
+/// and exception specifications — is the same table read the same way.
 struct ItaniumCallSite {
   ExceptionAddressRange GuardedRange;
   va_t LandingPadVA = 0;
   /// Byte offset into the action table of the first action, or nullopt when
   /// the call site declared no action (an unconditional cleanup landing pad).
   std::optional<uint64_t> FirstActionOffset;
+  /// SJLJ form only: the 1-based number that selects this entry, and zero in
+  /// the address form.
+  ///
+  /// The frame stores this number into its own function context ahead of each
+  /// call that can throw, and the personality reaches the entry by counting
+  /// from the start of the table.  Nothing in the record says which code the
+  /// entry covers, because nothing in the record has to: the stores are what
+  /// say it, and they are in the function rather than in the table.
+  uint64_t CallSiteIndex = 0;
   /// Native encoded fields, retained for provenance and regeneration.
+  ///
+  /// In the SJLJ form only the last two are written, and \ref NativeLandingPad
+  /// is not an offset from anything: it selects a pad through the dispatch
+  /// switch that the function's `setjmp` receiver runs.  The ABI's own
+  /// "landing pad" number for the entry is one more than it, a bias that
+  /// exists so the unwinder's generic "zero means no handler" test cannot fire
+  /// on a form that has no way to spell that.
   uint64_t NativeStart = 0;
   uint64_t NativeLength = 0;
   uint64_t NativeLandingPad = 0;

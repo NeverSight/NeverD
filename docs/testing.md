@@ -243,6 +243,24 @@ setjmp/longjmp call-site table indexes call sites rather than addresses, so a
 reader that fails to recognize one of the SJLJ personalities does not error
 out; it invents guarded ranges and landing pads the program never named.
 
+Recognizing that form is not the same as refusing it. An SJLJ entry is a pair
+of ULEB128 values — a dispatch selector and an action offset — and the action
+offset means there what it means in the address form, so the action chain, the
+catch types, and the exception specifications all read out of a table that
+names no code at all. Only the region each entry guards stays unknown, because
+the function's own stores into its call-site slot are what say it. The suite
+also pins the byte that must not be trusted here: GCC writes `DW_EH_PE_uleb128`
+as the call-site encoding and LLVM writes `DW_EH_PE_udata4`, both then emit
+ULEB128 regardless, and no personality ever reads it — so neither may a
+decoder.
+
+Personality identity is pinned alongside, because it decides how every table
+above is read. GNAT spells its routine the three ways GCC spells every front
+end's — `_v0`, `_sj0`, `_seh0` — and on Windows registers one symbol while
+forwarding to another, so all four spellings have to land on Ada. D is the
+mirror image: three compilers, three names for one routine, one set of tables
+behind them.
+
 ### Unicorn differential roundtrips
 
 The semantic fixture tests behavior rather than textual shape:

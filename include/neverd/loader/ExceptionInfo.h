@@ -342,6 +342,29 @@ enum class ExceptionPersonality : uint8_t {
   /// Rust's own personality routine.  It uses the Itanium tables but only
   /// ever selects cleanup or its single `catch_unwind` filter.
   RustEhPersonality,
+  // Ada.  GNAT names its routine the way GCC names every front end's, so the
+  // three spellings differ only in which unwinder reaches them.  All of them
+  // read the call-site and action tables as C++ does; what they do not share
+  // is the type table, whose slots address an Ada `Exception_Data` rather than
+  // a `std::type_info` and so may not be followed as RTTI.
+  /// `__gnat_personality_v0`: the DWARF variant.
+  GnatPersonalityV0,
+  /// `__gnat_personality_sj0`: the SJLJ variant, which is what GNAT installs
+  /// on every target configured `--enable-sjlj-exceptions`.
+  GnatPersonalitySJ0,
+  /// `__gnat_personality_seh0` and the `__gnat_personality_imp` it forwards
+  /// to once `_GCC_specific_handler` has turned the SEH state into GCC's.
+  GnatPersonalitySEH0,
+  // D.  The three compilers agree on the tables and disagree on the name.
+  /// `__dmd_personality_v0`: the reference compiler's routine.
+  DmdPersonalityV0,
+  /// `_d_eh_personality`: LDC's, generalized from DMD's.
+  DRuntimeEhPersonality,
+  /// `__gdc_personality_v0`: GDC's, which follows GCC's naming for every
+  /// front end it hosts, and so has the same three variants.
+  GdcPersonalityV0,
+  GdcPersonalitySJ0,
+  GdcPersonalitySEH0,
   // ARM EHABI.  These three are named by index rather than by address, and
   // they are unwinders rather than handlers: they restore the frame and
   // resume, so a frame that installs one stops nothing.  They stay distinct

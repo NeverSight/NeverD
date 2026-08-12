@@ -237,6 +237,26 @@ indiziert Aufrufstellen statt Adressen: Ein Leser, der eine der
 SJLJ-Personalities nicht erkennt, bricht nicht ab, sondern erfindet geschützte
 Bereiche und Landing Pads, die das Programm nie benannt hat.
 
+Diese Form zu erkennen ist nicht dasselbe, wie sie abzulehnen. Ein SJLJ-Eintrag
+ist ein Paar von ULEB128-Werten — ein Dispatch-Selektor und ein Action-Offset —
+und dieser Offset bedeutet dort genau das, was er in der Adressform bedeutet.
+Die Action-Kette, die gefangenen Typen und die Ausnahmespezifikationen lassen
+sich damit alle aus einer Tabelle lesen, die überhaupt keinen Code nennt.
+Unbekannt bleibt allein der Bereich, den jeder Eintrag schützt, denn was ihn
+angibt, sind die Schreibzugriffe der Funktion auf ihren eigenen Call-Site-Slot
+und nichts in der Tabelle. Die Suite fixiert außerdem das eine Byte, dem hier
+nicht zu trauen ist: GCC schreibt `DW_EH_PE_uleb128` als Call-Site-Kodierung,
+LLVM schreibt `DW_EH_PE_udata4`, beide geben danach ohnehin ULEB128 aus, und
+keine Personality liest es je — ein Decoder darf es also auch nicht.
+
+Die Identität der Personality wird daneben festgehalten, weil sie entscheidet,
+wie jede Tabelle darüber gelesen wird. GNAT benennt seine Routine auf die drei
+Arten, auf die GCC die jedes Frontends benennt — `_v0`, `_sj0`, `_seh0` — und
+registriert unter Windows das eine Symbol, während es an ein anderes
+weiterleitet; alle vier Schreibweisen müssen deshalb bei Ada landen. D ist das
+Spiegelbild: drei Compiler, drei Namen für eine Routine, dahinter ein einziger
+Satz Tabellen.
+
 ### Differentielle Unicorn-Roundtrips
 
 Das Semantik-Fixture prüft Verhalten statt Textform:

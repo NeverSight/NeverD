@@ -110,6 +110,23 @@ constexpr PersonalityName kPersonalityNames[] = {
     {"__gnustep_objcxx_personality_v0",
      ExceptionPersonality::GNUstepObjCXXPersonalityV0},
     {"rust_eh_personality", ExceptionPersonality::RustEhPersonality},
+    // Ada.  GNAT's Windows routine is two symbols for one frame's dispatch:
+    // `_seh0` is what the image registers and `_imp` is the GCC-shaped routine
+    // `_GCC_specific_handler` forwards to once it has translated the SEH
+    // state, so both spellings name the same handling and reach one
+    // enumerator.
+    {"__gnat_personality_v0", ExceptionPersonality::GnatPersonalityV0},
+    {"__gnat_personality_sj0", ExceptionPersonality::GnatPersonalitySJ0},
+    {"__gnat_personality_seh0", ExceptionPersonality::GnatPersonalitySEH0},
+    {"__gnat_personality_imp", ExceptionPersonality::GnatPersonalitySEH0},
+    // D.  Three compilers, one set of tables, three names for the routine
+    // that reads them.
+    {"__dmd_personality_v0", ExceptionPersonality::DmdPersonalityV0},
+    {"_d_eh_personality", ExceptionPersonality::DRuntimeEhPersonality},
+    {"__gdc_personality_v0", ExceptionPersonality::GdcPersonalityV0},
+    {"__gdc_personality_sj0", ExceptionPersonality::GdcPersonalitySJ0},
+    {"__gdc_personality_seh0", ExceptionPersonality::GdcPersonalitySEH0},
+    {"__gdc_personality_imp", ExceptionPersonality::GdcPersonalitySEH0},
     // ARM EHABI.  An index entry names one of these by number rather than by
     // address, but a linked image also carries the symbol, so both spellings
     // have to reach the same enumerator.  They say nothing about the source
@@ -227,6 +244,10 @@ const char *getSourceLanguageRuntimeName(SourceLanguageRuntime Runtime) {
     return "objective-c";
   case SourceLanguageRuntime::Swift:
     return "swift";
+  case SourceLanguageRuntime::Ada:
+    return "ada";
+  case SourceLanguageRuntime::D:
+    return "d";
   }
   return "unknown";
 }
@@ -354,6 +375,16 @@ SourceLanguageRuntime getPersonalityRuntime(ExceptionPersonality P) {
   case ExceptionPersonality::DelphiX86Handler:
   case ExceptionPersonality::DelphiExceptionHandler:
     return SourceLanguageRuntime::Delphi;
+  case ExceptionPersonality::GnatPersonalityV0:
+  case ExceptionPersonality::GnatPersonalitySJ0:
+  case ExceptionPersonality::GnatPersonalitySEH0:
+    return SourceLanguageRuntime::Ada;
+  case ExceptionPersonality::DmdPersonalityV0:
+  case ExceptionPersonality::DRuntimeEhPersonality:
+  case ExceptionPersonality::GdcPersonalityV0:
+  case ExceptionPersonality::GdcPersonalitySJ0:
+  case ExceptionPersonality::GdcPersonalitySEH0:
+    return SourceLanguageRuntime::D;
   default:
     return SourceLanguageRuntime::Unknown;
   }
@@ -521,6 +552,35 @@ LanguageRuntimeInfo detectLanguageRuntime(const BinaryImage &Img) {
            imageContains(Img, "Embarcadero Delphi") ||
            imageContains(Img, "SOFTWARE\\Borland\\Delphi"))
     record(SourceLanguageRuntime::Delphi, "delphi runtime banner");
+
+  // --- Ada -----------------------------------------------------------------
+  // GNAT mangles an Ada name as `package__subprogram`, so the runtime's own
+  // units are the most reliable evidence an image is Ada: a program can be
+  // built without ever raising an exception, but not without `system__`.
+  // `__gnat_rcheck_` is the family of routines a compiler-inserted language
+  // check calls, which is how an Ada image raises `Constraint_Error`.
+  if (hasExactSymbol(Img, "__gnat_personality_v0") ||
+      hasExactSymbol(Img, "__gnat_personality_sj0") ||
+      hasExactSymbol(Img, "__gnat_personality_seh0") ||
+      hasSymbolPrefix(Img, "__gnat_rcheck_") ||
+      hasSymbolPrefix(Img, "ada__exceptions__") ||
+      hasSymbolPrefix(Img, "system__standard_library"))
+    record(SourceLanguageRuntime::Ada, "gnat runtime symbol");
+
+  // --- D -------------------------------------------------------------------
+  // A D symbol is `_D` followed by a length-prefixed path, which is too weak
+  // a prefix to test on its own: it matches an ordinary C identifier that
+  // starts with a digit-free `D`.  The runtime's own package roots are not
+  // ambiguous, and neither are druntime's C-linkage entry points.
+  if (hasExactSymbol(Img, "__dmd_personality_v0") ||
+      hasExactSymbol(Img, "_d_eh_personality") ||
+      hasExactSymbol(Img, "__gdc_personality_v0") ||
+      hasExactSymbol(Img, "_d_throw_exception") ||
+      hasExactSymbol(Img, "_d_throwdwarf") ||
+      hasSymbolPrefix(Img, "_D3std") || hasSymbolPrefix(Img, "__D3std") ||
+      hasSymbolPrefix(Img, "_D4core") || hasSymbolPrefix(Img, "__D4core") ||
+      hasSymbolPrefix(Img, "_D6object") || hasSymbolPrefix(Img, "__D6object"))
+    record(SourceLanguageRuntime::D, "d runtime symbol");
 
   // --- C++ ----------------------------------------------------------------
   if (hasExactSymbol(Img, "__gxx_personality_v0") ||

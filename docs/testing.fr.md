@@ -236,6 +236,27 @@ indexe des sites d'appel et non des adresses : un lecteur qui ne reconnaît pas
 l'une des personalities SJLJ n'échoue pas, il invente des plages protégées et
 des landing pads que le programme n'a jamais nommés.
 
+Reconnaître cette forme n'est pas la refuser. Une entrée SJLJ est une paire de
+valeurs ULEB128 — un sélecteur de dispatch et un décalage d'action — et ce
+décalage y signifie exactement ce qu'il signifie dans la forme adressée : la
+chaîne d'actions, les types rattrapés et les spécifications d'exception se
+lisent donc tous dans une table qui ne nomme aucun code. Seule la région que
+garde chaque entrée reste inconnue, car ce sont les écritures que la fonction
+fait elle-même dans son emplacement de call-site qui l'énoncent, et non quoi
+que ce soit dans la table. La suite fixe aussi l'octet auquel il ne faut pas se
+fier ici : GCC écrit `DW_EH_PE_uleb128` comme encodage de call-site et LLVM
+écrit `DW_EH_PE_udata4`, tous deux émettent ensuite de l'ULEB128 quoi qu'il
+arrive, et aucune personality ne le lit jamais — un décodeur ne le doit donc
+pas non plus.
+
+L'identité de la personality est fixée en même temps, car c'est elle qui décide
+comment se lit chacune des tables ci-dessus. GNAT nomme sa routine des trois
+façons dont GCC nomme celle de chaque frontal — `_v0`, `_sj0`, `_seh0` — et,
+sous Windows, enregistre un symbole tout en renvoyant vers un autre : les
+quatre graphies doivent donc aboutir à Ada. D en est l'image inversée : trois
+compilateurs, trois noms pour une seule routine, un seul jeu de tables derrière
+eux.
+
 ### Allers-retours différentiels Unicorn
 
 La fixture sémantique teste le comportement plutôt que la forme textuelle :

@@ -251,13 +251,22 @@ void HighCWriter::writeExceptionAnnotation(const HighFunc &Func) {
        << ", specs=" << LSDA.ExceptionSpecs.size() << "\n";
     for (size_t I = 0; I < LSDA.CallSites.size(); ++I) {
       const ItaniumCallSite &Site = LSDA.CallSites[I];
-      OS << " * itanium.call_site[" << I << "]: [0x"
-         << llvm::utohexstr(Site.GuardedRange.Begin) << ", 0x"
-         << llvm::utohexstr(Site.GuardedRange.End) << ")";
-      if (Site.LandingPadVA)
-        OS << " pad=0x" << llvm::utohexstr(Site.LandingPadVA);
-      else
-        OS << " pad=none";
+      OS << " * itanium.call_site[" << I << "]: ";
+      if (LSDA.IsCallSiteAddressForm) {
+        OS << "[0x" << llvm::utohexstr(Site.GuardedRange.Begin) << ", 0x"
+           << llvm::utohexstr(Site.GuardedRange.End) << ")";
+        if (Site.LandingPadVA)
+          OS << " pad=0x" << llvm::utohexstr(Site.LandingPadVA);
+        else
+          OS << " pad=none";
+      } else {
+        // An SJLJ entry names neither a range nor a pad address.  What it has
+        // is the number the frame stores to select it and the selector its
+        // dispatch switch runs on, so those are what get reported rather than
+        // a pair of zeroes dressed up as a range.
+        OS << "index=" << Site.CallSiteIndex
+           << " select=" << Site.NativeLandingPad;
+      }
       if (Site.FirstActionOffset)
         OS << " action=+" << *Site.FirstActionOffset;
       OS << "\n";

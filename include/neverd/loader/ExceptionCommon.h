@@ -100,6 +100,15 @@ enum class SourceLanguageRuntime : uint8_t {
   Delphi,
   ObjectiveC,
   Swift,
+  /// Ada built by GNAT.  It unwinds through the Itanium tables and reads the
+  /// call-site and action tables exactly as C++ does, but its type table holds
+  /// Ada exception entities rather than `std::type_info`, so a positive filter
+  /// there names something that must not be followed as RTTI.
+  Ada,
+  /// D, whichever of the three compilers produced it.  DMD, GDC, and LDC all
+  /// unwind through the Itanium tables and differ only in what they call the
+  /// personality, so the personality is what tells them apart.
+  D,
 };
 
 const char *getSourceLanguageRuntimeName(SourceLanguageRuntime Runtime);
