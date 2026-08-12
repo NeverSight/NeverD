@@ -16,6 +16,15 @@ from typing import Sequence
 
 SEMANTIC_LABEL = "NeverDSemanticTests"
 PATCH_LABEL = "NeverDPatchFullTests"
+# The suites backed by the pinned `testbins` submodule.  Each is built only
+# when the configure step was told to look for the corpus, and each reads
+# several hundred real binaries that nothing else in the tree covers.
+CORPUS_LABELS = (
+    "NeverDCxxItaniumEHCorpusTests",
+    "NeverDGoEHCorpusTests",
+    "NeverDRustEHCorpusTests",
+    "NeverDWindowsEHCorpusTests",
+)
 PROFILE_EXCLUSIONS = {
     "linux-semantic": r"^NeverDPatchFullTests$",
     "macos-patch": r"^NeverDSemanticTests$",
@@ -124,6 +133,21 @@ def audit_inventory(
     if not_built:
         preview = ", ".join(repr(name) for name in not_built[:10])
         raise InventoryError(f"CTest targets are NOT_BUILT: {preview}")
+
+    # A corpus suite exists only where the configure step was told to look for
+    # the submodule, and nothing else fails when it was not: every remaining
+    # test still passes, and several hundred pinned binaries stop being read.
+    # That is a regression no test can catch, because the test is the thing
+    # that went missing, so the inventory has to insist on it.
+    present_labels = {label for record in records for label in record.labels}
+    absent = [label for label in CORPUS_LABELS if label not in present_labels]
+    if absent:
+        raise InventoryError(
+            "the pinned binary corpus is not under test: "
+            + ", ".join(absent)
+            + "; configure with -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON and "
+            "check out the unittests/corpus submodule"
+        )
 
     semantic_names = {
         record.name for record in records if SEMANTIC_LABEL in record.labels

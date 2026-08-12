@@ -129,6 +129,36 @@ class CiConfigurationTests(unittest.TestCase):
         self.assertIn("--stop-on-failure", run_step)
         self.assertIn("--output-on-failure", run_step)
 
+    # The corpus is several hundred pinned real binaries, and the only thing
+    # that puts them under test is this flag.  Losing it costs nothing that any
+    # test would notice, which is why the workflow's own text is checked.
+    def test_workflow_configures_and_verifies_the_pinned_binary_corpus(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("submodules: recursive", source)
+
+        verify_marker = "      - name: Verify the pinned binary corpus\n"
+        self.assertEqual(source.count(verify_marker), 1)
+        verify_step = source.split(verify_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        for line in ("windows-eh", "rust-eh", "go-eh", "cxx-itanium-eh"):
+            with self.subTest(line=line):
+                self.assertIn(line, verify_step)
+        self.assertIn("exit 1", verify_step)
+
+        configure_marker = "      - name: Configure Release build\n"
+        configure_step = source.split(configure_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            "-DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON", configure_step
+        )
+        # Placed before the configure that depends on it, so a checkout which
+        # did not bring the submodule says so instead of failing in CMake.
+        self.assertLess(
+            source.index(verify_marker), source.index(configure_marker)
+        )
+
     def test_workflow_still_builds_the_unfiltered_default_target(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(

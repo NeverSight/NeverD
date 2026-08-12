@@ -113,6 +113,28 @@ if(TARGET NeverDGoEHCorpusTests)
     COMMENT "Running the pinned Go runtime-metadata corpus")
 endif()
 
+if(TARGET NeverDCxxItaniumEHCorpusTests)
+  add_custom_target(check-neverd-cxx-itanium-eh-corpus
+    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
+            -L ^NeverDCxxItaniumEHCorpusTests$
+            --output-on-failure --progress -j ${_neverd_ncpu} -C $<CONFIG>
+    DEPENDS NeverDCxxItaniumEHCorpusTests
+    USES_TERMINAL
+    COMMENT "Running the pinned C++ Itanium and ARM EHABI corpus")
+endif()
+
+# One target for every line at once, because what the corpus is for is the
+# claim that no line regressed while another was being worked on.
+set(_neverd_corpus_targets)
+foreach(_line windows-eh rust-eh go-eh cxx-itanium-eh)
+  if(TARGET check-neverd-${_line}-corpus)
+    list(APPEND _neverd_corpus_targets check-neverd-${_line}-corpus)
+  endif()
+endforeach()
+if(_neverd_corpus_targets)
+  add_custom_target(check-neverd-corpus DEPENDS ${_neverd_corpus_targets})
+endif()
+
 # Switch / jump-table transformation probing only: a small standalone binary so
 # transformation + backend bugs can be hunted incrementally (ctest -L selects it).
 add_custom_target(check-neverd-switch-xform

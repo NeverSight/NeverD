@@ -135,6 +135,32 @@ jobs:
           PYTHON: ${{ matrix.python }}
           PYTHONPATH: pluginsdk/python
 
+      # The corpus is a submodule of pinned real binaries, and the configure
+      # below turns its tests on unconditionally so that a checkout which did
+      # not bring it fails here rather than quietly running without it.  What
+      # that costs is a clear message when it is the network and not the code
+      # that went wrong.
+      - name: Verify the pinned binary corpus
+        shell: bash
+        run: |
+          missing=0
+          for line in windows-eh rust-eh go-eh cxx-itanium-eh; do
+            manifest="unittests/corpus/manifests/$line.json"
+            if [[ ! -f "$manifest" ]]; then
+              echo "missing $manifest" >&2
+              missing=1
+              continue
+            fi
+            count="$("$PYTHON" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["artifacts"]))' "$manifest")"
+            echo "$line: $count pinned artifacts"
+          done
+          if [[ "$missing" != 0 ]]; then
+            echo "the unittests/corpus submodule did not check out" >&2
+            exit 1
+          fi
+        env:
+          PYTHON: ${{ matrix.python }}
+
       - name: Configure Release build
         shell: bash
         run: |
@@ -145,6 +171,7 @@ jobs:
             -DCMAKE_CXX_COMPILER="$CXX" \
             -DBUILD_TESTING=ON \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
+            -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON \
             -DPython3_EXECUTABLE="$PYTHON_EXECUTABLE" \
             -DNEVERD_LLVM_PREBUILT="$NEVERD_LLVM_PREBUILT_MODE"
         env:
