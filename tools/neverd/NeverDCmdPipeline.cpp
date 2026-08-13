@@ -165,7 +165,7 @@ int runPlugins(const char *Argv0) {
     std::string EnvStr(Env);
     size_t Pos = 0;
     while (Pos < EnvStr.size()) {
-      size_t Sep = EnvStr.find(':', Pos);
+      size_t Sep = EnvStr.find(llvm::sys::EnvPathSeparator, Pos);
       if (Sep == std::string::npos)
         Sep = EnvStr.size();
       neverd_plugins_load_dir(Sess, EnvStr.substr(Pos, Sep - Pos).c_str());

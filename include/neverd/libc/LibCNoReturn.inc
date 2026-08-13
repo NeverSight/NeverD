@@ -1,5 +1,5 @@
 // libc/POSIX functions that never return to their caller.
-// Included by LibCNames.cpp with LIBC_NO_RETURN_SYMBOL defined.
+// Included by LibCCallTraits.cpp with LIBC_NO_RETURN_SYMBOL defined.
 
 LIBC_NO_RETURN_SYMBOL("abort")
 LIBC_NO_RETURN_SYMBOL("exit")

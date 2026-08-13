@@ -7,13 +7,16 @@
 /// \file
 /// Core MedIR to LLVM IR emission: type conversion, the memory-pointer
 /// primitive, and function/module emission.  The rest of the emitter is split
-/// by concern: operation dispatch in MedLLVMOpEmitter.cpp, INTRINSIC in
-/// MedLLVMIntrinsic.cpp, floating-point ops in MedLLVMFloatEmitter.cpp, SSA
-/// constant tracing and address resolution in MedLLVMAddrResolve.cpp, variable
-/// access and constant classification in MedLLVMVarAccess.cpp, global-data
-/// resolution in MedLLVMGlobalData.cpp, and jump-table switch lowering in
-/// MedLLVMSwitch.cpp.  Exception metadata and native EH lowering live in the
-/// MedLLVMExceptionMetadata.cpp and MedLLVMNative*EH.cpp translation units.
+/// by concern: operation dispatch in MedLLVMOpEmitter.cpp, CALL/RETURN in
+/// MedLLVMCall.cpp and MedLLVMReturn.cpp, INTRINSIC in MedLLVMIntrinsic.cpp,
+/// floating-point ops in MedLLVMFloatEmitter.cpp, shared address tracing in
+/// MedLLVMAddrResolve.cpp, specialized address resolvers in
+/// MedLLVMLiteralTable.cpp, MedLLVMIndexedGlobal.cpp, and
+/// MedLLVMCodePtrResolve.cpp, variable access in MedLLVMVarAccess.cpp,
+/// global-data resolution in MedLLVMGlobalData.cpp, and jump-table switch
+/// lowering in MedLLVMSwitch.cpp.  Exception metadata and native EH lowering
+/// live in the MedLLVMExceptionMetadata.cpp and MedLLVMNative*EH.cpp translation
+/// units.
 ///
 //===----------------------------------------------------------------------===//
 

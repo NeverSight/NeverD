@@ -1,5 +1,4 @@
-//===- LLVMCIntrinsicRenderARM.cpp - ARM/AArch64 inline-asm rendering -*- C++
-//-*-===//
+//===- LLVMCIntrinsicRenderARM.cpp - ARM inline-asm rendering ---*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -23,7 +22,7 @@ namespace {
 
 static const AsmToCEntry ARMAsmTable[] = {
 #define M(a, c) {a, c},
-#include "neverd/backend/c/render/LLVMC/AsmToCARM.inc"
+#include "AsmToCARM.inc"
 #undef M
 };
 

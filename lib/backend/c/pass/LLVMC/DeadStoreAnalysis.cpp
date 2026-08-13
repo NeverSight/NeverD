@@ -1,5 +1,4 @@
-//===- LLVMCDeadStoreAnalysis.cpp - Dead frame store elimination -*- C++
-//-*-===//
+//===- DeadStoreAnalysis.cpp - Dead frame-store analysis --------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

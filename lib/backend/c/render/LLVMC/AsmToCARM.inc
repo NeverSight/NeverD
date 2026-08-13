@@ -5,7 +5,7 @@
 //===-------------------------------------------------------------===//
 //
 // ARM/AArch64 inline asm string -> C/ACLE intrinsic expression mapping.
-// Included by LLVMCIntrinsicRender.cpp.
+// Included by LLVMCIntrinsicRenderARM.cpp.
 // Macro: M(asm_string, c_expression_with_parens)
 
 // Data/instruction barrier

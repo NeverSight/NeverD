@@ -22,7 +22,7 @@ namespace {
 
 static const AsmToCEntry X86AsmTable[] = {
 #define M(a, c) {a, c},
-#include "neverd/backend/c/render/LLVMC/AsmToCX86.inc"
+#include "AsmToCX86.inc"
 #undef M
 };
 

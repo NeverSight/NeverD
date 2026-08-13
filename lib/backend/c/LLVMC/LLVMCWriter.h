@@ -43,9 +43,9 @@
 namespace neverd {
 
 /// Internal writer that converts LLVM IR modules to goto-style C source.
-/// Split across LLVMCExprWriter.cpp (value/expression rendering),
-/// LLVMCStmtWriter.cpp (instruction/function rendering), and
-/// LLVMCEmitter.cpp (module-level orchestration).
+/// Split across LLVMCEmitter.cpp (module-level orchestration),
+/// LLVMCFuncWriter.cpp (function rendering), LLVMCStmtWriter.cpp (instruction
+/// rendering), and LLVMCExprWriter.cpp (value/expression rendering).
 class LLVMCWriter {
 public:
   LLVMCWriter(llvm::raw_ostream &OS, const CEmitterOptions &Opts,
@@ -59,10 +59,18 @@ public:
   void writeGlobals(llvm::Module &Mod);
   void writeForwardDecls(llvm::Module &Mod);
 
-  //--- Statement / function rendering (LLVMCStmtWriter.cpp) ---
+  //--- Function rendering (LLVMCFuncWriter.cpp) ---
   void writeFunction(llvm::Function &Fn);
   void setupFunction(llvm::Function &Fn);
   void emitFunctionDecls(llvm::Function &Fn);
+  void scanReferencedBlocks(llvm::Function &Fn);
+  void markInlinable(llvm::Function &Fn);
+
+  bool isSimpleEntry(const llvm::BasicBlock *BB, const llvm::Function &Fn) {
+    return BB == &Fn.getEntryBlock() && !ReferencedBlocks.count(BB);
+  }
+
+  //--- Instruction rendering (LLVMCStmtWriter.cpp) ---
   void writeInstruction(llvm::Instruction &Inst, int Indent);
   void writeCall(llvm::CallInst &Call, const std::string &Name, int Indent);
   bool writeIntrinsicCall(llvm::CallInst &Call, int Indent);
@@ -72,8 +80,6 @@ public:
                 int Indent);
   void writeReturn(llvm::ReturnInst &Ret, int Indent);
   void emitIndent(int N);
-  void scanReferencedBlocks(llvm::Function &Fn);
-  void markInlinable(llvm::Function &Fn);
 
   //--- Expression rendering (LLVMCExprWriter.cpp) ---
   std::string resolveNdDataName(llvm::StringRef Name) const;
@@ -89,10 +95,6 @@ public:
   std::string cmpStr(llvm::CmpInst::Predicate Pred, const std::string &LHS,
                      const std::string &RHS, bool IsFP);
   std::string renderInline(const llvm::Instruction &Inst);
-
-  bool isSimpleEntry(const llvm::BasicBlock *BB, const llvm::Function &Fn) {
-    return BB == &Fn.getEntryBlock() && !ReferencedBlocks.count(BB);
-  }
 
   //--- State ---
   llvm::raw_ostream &OS;

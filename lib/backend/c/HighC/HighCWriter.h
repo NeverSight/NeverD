@@ -31,9 +31,10 @@
 namespace neverd {
 
 /// Internal writer that converts HighIR functions to C source text.
-/// Split across HighCExprWriter.cpp (expression rendering),
-/// HighCStmtWriter.cpp (statement/function rendering), and
-/// HighCEmitter.cpp (module-level orchestration).
+/// Split across HighCEmitter.cpp (module-level orchestration),
+/// HighCFuncWriter.cpp (function rendering), HighCStmtWriter.cpp (statement
+/// rendering), HighCExprWriter.cpp (general expression rendering), and
+/// HighCExprBinOp.cpp (binary operator rendering).
 class HighCWriter {
 public:
   HighCWriter(llvm::raw_ostream &OS, const CEmitterOptions &Opts,
@@ -43,30 +44,33 @@ public:
   //--- Module-level (HighCEmitter.cpp) ---
   void writeAll(const std::vector<HighFunc> &Funcs);
   void collectMemoryTypes(const std::vector<HighFunc> &Funcs);
+  std::string memoryTypeName(const TypeRef &Ty) const;
   void writeIncludes(const std::vector<HighFunc> &Funcs);
   void writeMemoryHelpers();
+  std::string memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr) const;
+  std::string memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                              llvm::StringRef Val) const;
   void writeForwardDecls(const std::vector<HighFunc> &Funcs);
   void collectCallTargets(const std::vector<HighStmt> &Stmts,
                           std::set<std::string> &Targets);
   void collectCallTargetsExpr(const HighExpr &Expr,
                               std::set<std::string> &Targets);
 
-  //--- Statement / function rendering (HighCStmtWriter.cpp) ---
+  //--- Function rendering (HighCFuncWriter.cpp) ---
   void writeFunction(const HighFunc &Func);
-  void writeStmt(const HighStmt &Stmt, int Indent);
-  void writeStmts(const std::vector<HighStmt> &Stmts, int Indent);
-  void emitIndent(int Indent);
-  void collectGotoTargets(const std::vector<HighStmt> &Stmts);
-
-  //--- Statement / function rendering helpers (HighCStmtWriter.cpp) ---
   void runAnalysisPasses(const HighFunc &Func);
   void writeExceptionAnnotation(const HighFunc &Func);
   void emitLocalDecls(const HighFunc &Func,
                       const std::set<std::string> &ParamNames);
 
+  //--- Statement rendering (HighCStmtWriter.cpp) ---
+  void writeStmt(const HighStmt &Stmt, int Indent);
+  void writeStmts(const std::vector<HighStmt> &Stmts, int Indent);
+  void emitIndent(int Indent);
+  void collectGotoTargets(const std::vector<HighStmt> &Stmts);
+
   //--- Expression rendering (HighCExprWriter.cpp) ---
   std::string exprStr(const HighExpr &Expr, int ParentPrec = 0);
-  std::string renderBinOp(const HighExpr &E, int ParentPrec);
   std::string renderUnaryOp(const HighExpr &E, int ParentPrec);
   std::string renderCallExpr(const HighExpr &E);
   std::string varName(const MedVar &V);
@@ -74,10 +78,9 @@ public:
   std::string formatReturnExpr(const HighExpr &Expr);
   std::string collapseHiLo(const HighExpr &Expr);
   std::string unwrapCastVar(const HighExpr &E);
-  std::string memoryTypeName(const TypeRef &Ty) const;
-  std::string memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr) const;
-  std::string memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr,
-                              llvm::StringRef Val) const;
+
+  //--- Binary expression rendering (HighCExprBinOp.cpp) ---
+  std::string renderBinOp(const HighExpr &E, int ParentPrec);
 
   //--- State ---
   llvm::raw_ostream &OS;

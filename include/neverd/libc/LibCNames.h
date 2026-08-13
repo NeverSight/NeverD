@@ -1,4 +1,4 @@
-//===- LibCNames.h - libc/POSIX symbol name registry -----*- C++ -*-===//
+//===- LibCNames.h - libc/POSIX registry and traits ------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -8,8 +8,8 @@
 #define NEVERD_LIBC_LIBCNAMES_H
 
 // Shared libc/POSIX symbol tables for C emission, MIR stub resolution, etc.
-// Per-header name lists live in libc_*.h; registry API is implemented in
-// libc_names.cpp.
+// Per-header name lists live beside this file; registry lookup and call-trait
+// APIs are implemented in LibCNames.cpp and LibCCallTraits.cpp respectively.
 
 #include <optional>
 #include <string_view>

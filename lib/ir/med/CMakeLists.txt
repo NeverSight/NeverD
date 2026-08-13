@@ -1,6 +1,11 @@
 add_neverd_component_library(NeverDIRMed
   LowToMed.cpp
-  LowToMedCallReturn.cpp
+  LowToMedStack.cpp
+  LowToMedSubReg.cpp
+  LowToMedCallReturnFP.cpp
+  LowToMedCallReturnStruct.cpp
+  LowToMedCallReturnX87.cpp
+  LowToMedCallReturnWideInt.cpp
   LowToMedX86.cpp
   LowToMedARM.cpp
   MedABIPass.cpp

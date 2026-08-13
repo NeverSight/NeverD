@@ -1,4 +1,4 @@
-//===- HighCStoreForwarding.cpp - Store forwarding analysis -----*- C++ -*-===//
+//===- StoreForwarding.cpp - Store forwarding analysis ----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

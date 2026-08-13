@@ -180,12 +180,21 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
   for (uint64_t Count : ShardUnhandled)
     UnhandledValueIntrinsics += Count;
 
+  bool HadShardFailure = false;
+  for (unsigned S = 0; S < NumShards; ++S)
+    if (BC[S].empty()) {
+      llvm::WithColor::warning()
+          << "pipeline: shard " << S << " emission failed\n";
+      HadShardFailure = true;
+    }
+
   // Serial link into the caller's context, in shard order for determinism.
   // Each shard's bitcode is released as soon as it is linked: all of them
   // together are a second copy of the program that would otherwise stay
   // resident until the whole link finishes.
   auto Linked = std::make_unique<llvm::Module>("neverd_output", Ctx);
   llvm::Linker L(*Linked);
+  unsigned LinkedShards = 0;
   for (unsigned S = 0; S < NumShards; ++S) {
     std::string ShardBC = std::move(BC[S]);
     BC[S].clear();
@@ -199,11 +208,19 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
           << "pipeline: shard " << S
           << " bitcode parse failed: " << llvm::toString(MOr.takeError())
           << "\n";
+      HadShardFailure = true;
       continue;
     }
-    if (L.linkInModule(std::move(*MOr)))
+    if (L.linkInModule(std::move(*MOr))) {
       llvm::WithColor::warning() << "pipeline: shard " << S << " link failed\n";
+      HadShardFailure = true;
+    } else {
+      ++LinkedShards;
+    }
   }
+
+  if (HadShardFailure || LinkedShards != NumShards)
+    return nullptr;
 
   // Restore the original (address-order) function layout.  Sharding + link
   // order interleaves definitions by shard, but the serial path emits them in

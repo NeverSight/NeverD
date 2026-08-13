@@ -7,8 +7,9 @@
 /// \file
 /// Top-level orchestration for the LLVM-IR C emitter: include generation,
 /// struct/global/forward-declaration emission, and per-function dispatch.
-/// Expression rendering lives in LLVMCExprWriter.cpp; instruction rendering
-/// in LLVMCStmtWriter.cpp.
+/// Function and instruction rendering live in LLVMCFuncWriter.cpp and
+/// LLVMCStmtWriter.cpp; value/expression rendering lives in
+/// LLVMCExprWriter.cpp.
 ///
 //===----------------------------------------------------------------------===//
 

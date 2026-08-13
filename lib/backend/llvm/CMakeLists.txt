@@ -7,8 +7,12 @@ add_neverd_component_library(NeverDBackendLLVM
   MedLLVMOpEmitter.cpp
   MedLLVMFloatEmitter.cpp
   MedLLVMCall.cpp
+  MedLLVMReturn.cpp
   MedLLVMIntrinsic.cpp
   MedLLVMAddrResolve.cpp
+  MedLLVMLiteralTable.cpp
+  MedLLVMIndexedGlobal.cpp
+  MedLLVMCodePtrResolve.cpp
   MedLLVMFrameResolve.cpp
   MedLLVMVarAccess.cpp
   MedLLVMConstClass.cpp

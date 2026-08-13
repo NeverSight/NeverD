@@ -1,4 +1,4 @@
-//===- LLVMCHiLoCollapse.cpp - Hi/Lo pattern collapse ------*- C++ -*-===//
+//===- HiLoCollapse.cpp - Hi/Lo pattern collapse ----------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

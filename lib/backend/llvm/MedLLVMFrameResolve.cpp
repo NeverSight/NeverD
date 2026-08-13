@@ -8,11 +8,11 @@
 /// Frame-derived / stack-pointer classification and dynamic (VLA) stack-
 /// allocation recovery for MedLLVMEmitter.  These answer "does this address
 /// trace back to the frame / stack pointer?" and rebuild `alloca`s from the
-/// `sp - size` idiom, feeding getVar/setVar in MedLLVMVarAccess.cpp.  Split out
-/// of MedLLVMAddrResolve.cpp — which keeps the read-only/literal-pool/indexed
-/// table and code-pointer resolvers — so each translation unit stays a readable
-/// size around one concern; every routine here is a MedLLVMEmitter member
-/// declared in the shared header, so this is a pure translation-unit split.
+/// `sp - size` idiom, feeding getVar/setVar in MedLLVMVarAccess.cpp.  Shared
+/// address tracing remains in MedLLVMAddrResolve.cpp; literal/select,
+/// indexed/induction, and code-pointer resolution live in their dedicated
+/// translation units.  Every routine here is a MedLLVMEmitter member declared
+/// in the shared header, so this is a pure translation-unit split.
 ///
 //===----------------------------------------------------------------------===//
 

@@ -5,7 +5,7 @@
 //===-------------------------------------------------------------===//
 //
 // x86/x64 inline asm string -> C/MSVC intrinsic name mapping.
-// Included by LLVMCIntrinsicRender.cpp.
+// Included by LLVMCIntrinsicRenderX86.cpp.
 // Macro: M(asm_string, c_function_name)
 
 // System

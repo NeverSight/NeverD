@@ -2,6 +2,9 @@ add_neverd_component_library(NeverDEVM
   ABI.cpp
   Analyzer.cpp
   Bytecode.cpp
+  BytecodeContainers.cpp
+  BytecodeDecode.cpp
+  BytecodeRuntimeExtract.cpp
   CEmitter.cpp
   Calls.cpp
   ControlFlow.cpp

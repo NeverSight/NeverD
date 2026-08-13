@@ -1,4 +1,4 @@
-//===- HighCVoidAnalysis.cpp - Void return analysis --------*- C++ -*-===//
+//===- VoidAnalysis.cpp - Void return analysis ------------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

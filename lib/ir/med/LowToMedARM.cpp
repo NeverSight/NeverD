@@ -7,8 +7,8 @@
 /// \file
 /// ARM/AArch64-specific sub-register repair passes for the LowIR→MedIR
 /// conversion (NEON D/Q half-register reconstruction).  The architecture-
-/// generic framework lives in LowToMed.cpp and dispatches to the functions
-/// here by target arch (LLVM target-dispatch pattern).
+/// generic framework lives in LowToMedSubReg.cpp and dispatches to the
+/// functions here by target arch (LLVM target-dispatch pattern).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -579,7 +579,8 @@ void LowToMedConverter::synthesizeWideVectorWritesARM(MedFunc &Func) {
   }
 }
 
-// SUBBYTES redirect (called from the generic Phase B loop in LowToMed.cpp):
+// SUBBYTES redirect (called from the generic Phase B loop in
+// LowToMedSubReg.cpp):
 // a `SUBBYTES(Q, off)` whose extracted bytes fall entirely within a narrower
 // D/S sub-register that was written *more recently* than Q reads that narrower
 // register directly.  E.g. SUBBYTES(Q8, 0, sz=2) → SUBBYTES(D16, 0, sz=2);

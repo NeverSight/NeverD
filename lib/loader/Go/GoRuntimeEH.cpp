@@ -1735,8 +1735,13 @@ void parseGoExceptions(BinaryImage &Img) {
         const va_t SiteVA = G.CodeRange.Begin + Off;
         const size_t Available =
             static_cast<size_t>(std::min<uint64_t>(Size - Off, 16));
-        const uint8_t *Code =
-            Img.readVA(SiteVA, std::min<size_t>(Available, 4));
+        // x86 direct branches are five bytes; every fixed-width form decoded
+        // here is four.  Pass exactly the span readVA proved mapped so the
+        // decoder can never inspect an unvalidated fifth byte.
+        const size_t DecodeWindow =
+            Img.Arch == Arch::X64 || Img.Arch == Arch::X86 ? 5 : 4;
+        const size_t ReadSize = std::min(Available, DecodeWindow);
+        const uint8_t *Code = Img.readVA(SiteVA, ReadSize);
         if (!Code) {
           // The table says this body extends further than the image maps, so
           // whatever edges are past here were never looked for.
@@ -1749,7 +1754,7 @@ void parseGoExceptions(BinaryImage &Img) {
         }
         size_t Length = Stride;
         std::optional<va_t> Target = decodeDirectBranchTarget(
-            Img.Arch, Img.Mode, Code, Available, SiteVA, Length);
+            Img.Arch, Img.Mode, Code, ReadSize, SiteVA, Length);
         if (!Target)
           continue;
         // Every Go function ends its stack-growth path with a jump back to its

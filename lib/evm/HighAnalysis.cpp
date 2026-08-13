@@ -91,10 +91,10 @@ std::set<uint64_t> reachableFrom(const EVMLowIR &Low, uint64_t Entry) {
 }
 
 Mutability recoveredMutability(StateAccessKind Access, bool ReadsCallValue) {
-  if (Access == StateAccessKind::Unknown)
-    return Mutability::NonPayable;
   if (ReadsCallValue)
     return Mutability::Payable;
+  if (Access == StateAccessKind::Unknown)
+    return Mutability::NonPayable;
   switch (Access) {
   case StateAccessKind::None:
     return Mutability::Pure;

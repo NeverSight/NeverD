@@ -1,4 +1,4 @@
-//===- LLVMCStoreForwarding.cpp - Store-to-load forwarding -----*- C++ -*-===//
+//===- StoreForwarding.cpp - Store-to-load forwarding -----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

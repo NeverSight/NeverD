@@ -99,7 +99,7 @@ private:
   // --- Architecture-specific sub-register fixups (LLVM target-dispatch) ---
   // Each helper guards on TargetArch internally and is a no-op on other
   // targets.  The architecture-generic framework in fixupSubRegisters()
-  // invokes them so no per-target logic remains in LowToMed.cpp.
+  // invokes them from LowToMedSubReg.cpp.
 
   /// x86/x86-64: merge a more-recent narrow partial write (AL/AH/AX/...) into a
   /// subsequent wider read of the parent register (LowToMedX86.cpp, Phase B2).

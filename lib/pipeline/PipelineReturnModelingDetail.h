@@ -1,28 +1,17 @@
-//===- PipelineReturnModeling.h - Return-value ABI recovery ----*- C++ -*-===//
+//===- PipelineReturnModelingDetail.h - Return ABI helpers ------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Return-value ABI recovery passes shared with the pipeline driver.  These run
-/// on the whole MedIR module between type inference and call-ABI recovery
-/// (Pipeline::runPatchLiftMode) to reconstruct wide-integer and by-value struct
-/// returns the per-function low->med translation cannot see on its own:
-///
-///   * register-pair i64 returns on 32-bit targets (i386 EDX:EAX, ARM32 R1:R0);
-///   * multi-register by-value struct / HFA returns (x86-64 SysV eightbytes,
-///     AArch64 homogeneous float aggregates), recovered from a callee's direct
-///     callers, its own body, and forwarded tail calls.
-///
-/// They were split out of Pipeline.cpp to keep that translation unit focused on
-/// phase orchestration; this header is an implementation detail of the pipeline
-/// library and should NOT be included by code outside lib/pipeline/.
+/// Private declarations shared by the wide-integer and aggregate return
+/// recovery implementations and the patch/lift pipeline driver.
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_PIPELINE_PIPELINERETURNMODELING_H
-#define NEVERD_PIPELINE_PIPELINERETURNMODELING_H
+#ifndef NEVERD_LIB_PIPELINE_PIPELINERETURNMODELINGDETAIL_H
+#define NEVERD_LIB_PIPELINE_PIPELINERETURNMODELINGDETAIL_H
 
 namespace neverd {
 
@@ -63,4 +52,4 @@ void remodelStructReturnForwarderCalls(const BinaryImage &Img,
 
 } // namespace neverd
 
-#endif // NEVERD_PIPELINE_PIPELINERETURNMODELING_H
+#endif // NEVERD_LIB_PIPELINE_PIPELINERETURNMODELINGDETAIL_H

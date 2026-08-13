@@ -1,4 +1,4 @@
-//===- HighCDeadStoreAnalysis.cpp - Dead store elimination ------*- C++ -*-===//
+//===- DeadStoreAnalysis.cpp - Dead store elimination -----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -169,39 +169,6 @@ void collectLoadAddrVars(const HighExpr &E, std::set<std::string> &Out,
 }
 
 } // anonymous namespace
-
-void collectUsedVarsExpr(const HighExpr &Expr,
-                         std::map<std::string, TypeRef> &Vars,
-                         VarNameFn VarFn) {
-  walkExprNodes(Expr, [&](const HighExpr &E) {
-    if (E.Kind == ExprKind::Var) {
-      std::string Name = VarFn(E.Var);
-      if (Vars.find(Name) == Vars.end())
-        Vars[Name] = E.Type;
-    }
-    for (auto &CO : E.IntrinsicOutputs) {
-      std::string Name = VarFn(CO);
-      auto Ty = NdType::makeInt(CO.Size, false);
-      if (Vars.find(Name) == Vars.end())
-        Vars[Name] = Ty;
-    }
-  });
-}
-
-void collectUsedVars(const std::vector<HighStmt> &Stmts,
-                     std::map<std::string, TypeRef> &Vars, VarNameFn VarFn) {
-  for (auto &S : Stmts) {
-    forEachExpr(S, [&](const ExprPtr &E) {
-      if (E)
-        collectUsedVarsExpr(*E, Vars, VarFn);
-    });
-    collectUsedVars(S.Body, Vars, VarFn);
-    collectUsedVars(S.ElseBody, Vars, VarFn);
-    for (auto &C : S.Cases)
-      collectUsedVars(C.Body, Vars, VarFn);
-    collectUsedVars(S.DefaultBody, Vars, VarFn);
-  }
-}
 
 void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
                        VarNameFn VarFn, ExprStrFn ExprFn) {

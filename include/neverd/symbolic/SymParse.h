@@ -14,8 +14,8 @@
 ///
 ///     parseSymExpr(Ctx, Ctx.toString(R), Ctx.width(R)).Root == R
 ///
-/// for every \p R in \p Ctx.  The printer lives beside the parser because the
-/// two halves of that identity have to be changed together.
+/// for every \p R in \p Ctx.  The parser and printer share one precedence
+/// definition so the two halves of that identity stay aligned.
 ///
 /// Operators and precedence follow C, so an expression copied out of an
 /// obfuscated decompilation reads the same here.  From loosest to tightest:

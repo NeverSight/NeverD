@@ -163,7 +163,16 @@ bool NdOpEmulator::executeArith(const LowOp &Op) {
     Result = A >> (B & 63);
     break;
   case NdOp::INT_ASHR: {
-    int64_t SA = static_cast<int64_t>(A);
+    uint64_t SignExtended = A;
+    const uint16_t InputSize = Op.Inputs[0].Size;
+    if (InputSize > 0 && InputSize < sizeof(SignExtended)) {
+      const unsigned Bits = InputSize * 8;
+      const uint64_t Mask = (1ULL << Bits) - 1;
+      SignExtended &= Mask;
+      if (SignExtended & (1ULL << (Bits - 1)))
+        SignExtended |= ~Mask;
+    }
+    int64_t SA = std::bit_cast<int64_t>(SignExtended);
     Result = static_cast<uint64_t>(SA >> (B & 63));
     break;
   }

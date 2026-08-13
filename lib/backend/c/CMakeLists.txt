@@ -1,5 +1,6 @@
 add_neverd_component_library(NeverDBackendC
   HighC/HighCEmitter.cpp
+  HighC/HighCExprBinOp.cpp
   HighC/HighCExprWriter.cpp
   HighC/HighCFuncWriter.cpp
   HighC/HighCStmtWriter.cpp
@@ -8,6 +9,7 @@ add_neverd_component_library(NeverDBackendC
   LLVMC/LLVMCFuncWriter.cpp
   LLVMC/LLVMCStmtWriter.cpp
   pass/HighC/DeadStoreAnalysis.cpp
+  pass/HighC/UsedVars.cpp
   pass/HighC/StoreForwarding.cpp
   pass/HighC/VoidAnalysis.cpp
   pass/HighC/HiLoCollapse.cpp

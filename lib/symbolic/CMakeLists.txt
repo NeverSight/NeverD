@@ -4,7 +4,9 @@ add_neverd_component_library(NeverDSymbolic
   SymExec.cpp
   SymExplore.cpp
   SymExpr.cpp
+  SymExprEval.cpp
   SymMBA.cpp
   SymParse.cpp
+  SymPrint.cpp
   SymState.cpp
 )

@@ -8,9 +8,11 @@
 /// \file
 /// Internal data-flow slicing utilities shared between the jump-table
 /// resolver's translation units: the architecture-generic framework
-/// (JumpTableResolver.cpp), the guard/bounds analysis
-/// (JumpTableResolverGuards.cpp), the table base-address detectors
-/// (JumpTableResolverSource.cpp), and the ARM-family target detectors
+/// (JumpTableResolver.cpp), guard/bounds analysis
+/// (JumpTableResolverGuards.cpp), emulation fallbacks
+/// (JumpTableResolverEmu.cpp), table source/stack/shape detectors
+/// (JumpTableResolverSource.cpp, JumpTableResolverStack.cpp, and
+/// JumpTableResolverShapes.cpp), and ARM-family target detectors
 /// (JumpTableResolverARM.cpp).
 ///
 /// This header is an implementation detail of the low/ library and should NOT
@@ -31,6 +33,11 @@ namespace neverd {
 
 struct BinaryImage;
 struct TargetRegInfo;
+
+/// Registers that survive a call under \p Img's target ABI.  Shared by
+/// constant-folding and path-emulation fallbacks.  Defined in
+/// JumpTableResolver.cpp.
+std::vector<uint64_t> callPreservedRegs(const BinaryImage &Img);
 
 //===----------------------------------------------------------------------===//
 // Backward data-flow slicing

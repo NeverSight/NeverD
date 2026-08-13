@@ -6,8 +6,9 @@
 ///
 /// \file
 /// Top-level orchestration for the HighIR C emitter: include generation,
-/// forward declarations, and per-function dispatch.  Expression rendering
-/// lives in HighCExprWriter.cpp; statement rendering in HighCStmtWriter.cpp.
+/// forward declarations, and per-function dispatch.  Function and statement
+/// rendering live in HighCFuncWriter.cpp and HighCStmtWriter.cpp; expression
+/// rendering lives in HighCExprWriter.cpp and HighCExprBinOp.cpp.
 ///
 //===----------------------------------------------------------------------===//
 

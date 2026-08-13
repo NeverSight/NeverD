@@ -300,7 +300,8 @@ private:
   /// The result is semantically identical to the serial path: every function is
   /// defined in exactly one shard and per-address globals (crucially the
   /// writable .data/.bss segment globals) merge to one shared object at link
-  /// time.  Returns null only if no shard produced a module.
+  /// time.  Returns null if any shard cannot be emitted, parsed, or linked, so
+  /// callers never mistake an incomplete module for a complete lift.
   ///
   /// The shard count is derived from the total MedIR work rather than pinned to
   /// \p NumThreads: peak memory is (in-flight shards) x (slice size), so

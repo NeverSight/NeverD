@@ -35,6 +35,9 @@ add_neverd_component_library(NeverDLoader
   MachO/MachOLoader.cpp
   MachO/MachORelocations.cpp
   MachO/MachOLoaderUtils.cpp
+  MachO/MachODyldBind.cpp
+  MachO/MachOChainedFixups.cpp
+  MachO/MachOIndirectSymbols.cpp
   MachO/CompactUnwind.cpp
   MachO/MachOExceptions.cpp
 

@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Analysis passes for the HighIR C emitter (dead stores, void analysis).
+/// Analysis passes and shared helpers for the HighIR C emitter.
 ///
 //===----------------------------------------------------------------------===//
 

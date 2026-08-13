@@ -445,6 +445,22 @@ inline const char *getExceptionPersonalityName(ExceptionPersonality P) {
     return "__gnustep_objcxx_personality_v0";
   case ExceptionPersonality::RustEhPersonality:
     return "rust_eh_personality";
+  case ExceptionPersonality::GnatPersonalityV0:
+    return "__gnat_personality_v0";
+  case ExceptionPersonality::GnatPersonalitySJ0:
+    return "__gnat_personality_sj0";
+  case ExceptionPersonality::GnatPersonalitySEH0:
+    return "__gnat_personality_seh0";
+  case ExceptionPersonality::DmdPersonalityV0:
+    return "__dmd_personality_v0";
+  case ExceptionPersonality::DRuntimeEhPersonality:
+    return "_d_eh_personality";
+  case ExceptionPersonality::GdcPersonalityV0:
+    return "__gdc_personality_v0";
+  case ExceptionPersonality::GdcPersonalitySJ0:
+    return "__gdc_personality_sj0";
+  case ExceptionPersonality::GdcPersonalitySEH0:
+    return "__gdc_personality_seh0";
   case ExceptionPersonality::AeabiUnwindCppPr0:
     return "__aeabi_unwind_cpp_pr0";
   case ExceptionPersonality::AeabiUnwindCppPr1:
@@ -500,6 +516,14 @@ inline bool isItaniumPersonality(ExceptionPersonality P) {
   case ExceptionPersonality::GNUstepObjCPersonalityV0:
   case ExceptionPersonality::GNUstepObjCXXPersonalityV0:
   case ExceptionPersonality::RustEhPersonality:
+  case ExceptionPersonality::GnatPersonalityV0:
+  case ExceptionPersonality::GnatPersonalitySJ0:
+  case ExceptionPersonality::GnatPersonalitySEH0:
+  case ExceptionPersonality::DmdPersonalityV0:
+  case ExceptionPersonality::DRuntimeEhPersonality:
+  case ExceptionPersonality::GdcPersonalityV0:
+  case ExceptionPersonality::GdcPersonalitySJ0:
+  case ExceptionPersonality::GdcPersonalitySEH0:
     return true;
   default:
     return false;
@@ -517,7 +541,9 @@ inline bool isItaniumPersonality(ExceptionPersonality P) {
 inline bool isSJLJPersonality(ExceptionPersonality P) {
   return P == ExceptionPersonality::GxxPersonalitySJ0 ||
          P == ExceptionPersonality::GccPersonalitySJ0 ||
-         P == ExceptionPersonality::GnuObjCPersonalitySJ0;
+         P == ExceptionPersonality::GnuObjCPersonalitySJ0 ||
+         P == ExceptionPersonality::GnatPersonalitySJ0 ||
+         P == ExceptionPersonality::GdcPersonalitySJ0;
 }
 
 /// Which Objective-C runtime \p P belongs to, or nullopt when it is not an

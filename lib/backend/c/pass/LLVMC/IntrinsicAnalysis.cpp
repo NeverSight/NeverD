@@ -1,4 +1,4 @@
-//===- LLVMCIntrinsicAnalysis.cpp - Intrinsic struct analysis --*- C++ -*-===//
+//===- IntrinsicAnalysis.cpp - Intrinsic struct analysis --------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

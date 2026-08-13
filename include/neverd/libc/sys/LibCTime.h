@@ -11,6 +11,7 @@ inline constexpr std::string_view kSysTimeHeader = "sys/time.h";
 
 inline constexpr std::array kSysTimeFunctions = {
     "getitimer",
+    "gettimeofday",
     "setitimer",
     "utimes",
 };

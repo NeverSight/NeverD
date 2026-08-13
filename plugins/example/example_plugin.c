@@ -9,7 +9,11 @@
 #include "neverd/sdk/NeverDPlugin.h"
 
 static int exampleInit(neverd_session_t Session) {
-  printf("[ExamplePlugin] initialized, NeverD %s\n", neverd_version());
+  const char *Version = neverd_version();
+  printf("[ExamplePlugin] initialized, NeverD %s\n",
+         Version ? Version : "<unknown>");
+  if (Version)
+    neverd_free_string(Version);
   return 0;
 }
 

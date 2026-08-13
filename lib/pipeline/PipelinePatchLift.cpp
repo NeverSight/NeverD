@@ -9,8 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "PipelineReturnModeling.h"
-#include "PipelineStageDetail.h"
+#include "PipelineMedAudit.h"
+#include "PipelineReturnModelingDetail.h"
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -483,8 +483,10 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     Result.LlvmModule = emitLLVMSharded(
         Result.MedFuncs, Ctx, Img.Arch, ImportMap, Img, Img.Format, Opts.NoOpt,
         Workers, Result.BackendUnhandledValueIntrinsics);
-    if (!Result.LlvmModule)
+    if (!Result.LlvmModule) {
+      Result.Error = "LLVM shard emission or linking failed";
       return false;
+    }
   } else {
     MedLLVMEmitter MedEmitter;
     Result.LlvmModule = MedEmitter.emit(Result.MedFuncs, Ctx, "neverd_output",

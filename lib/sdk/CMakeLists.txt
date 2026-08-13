@@ -3,10 +3,15 @@
 set(NEVERD_SDK_SOURCES
     NeverDCAPI.cpp
     NeverDCAPIDisasm.cpp
+    NeverDCAPIInfo.cpp
+    NeverDCAPIGraph.cpp
+    NeverDCAPISearch.cpp
     NeverDCAPIDecompile.cpp
+    NeverDCAPITargetConfig.cpp
     NeverDCAPIPatch.cpp
-    NeverDCAPIQuery.cpp
+    NeverDCAPIRoundtrip.cpp
     NeverDCAPIPersist.cpp
+    NeverDCAPISigs.cpp
     NeverDCAPIBench.cpp
     NeverDCAPISimplify.cpp
     NeverDCAPISymbolic.cpp

@@ -42,15 +42,27 @@ llvm::Value *MedLLVMEmitter::emitRdtscValue(const MedOp &Op, Intrinsic IC,
     return nullptr;
 
   auto *OutTy = sizeToType(Op.Output.Size);
-  auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
-      Mod, llvm::Intrinsic::readcyclecounter);
-  auto *R = Builder.CreateCall(Fn, {}, IC == I::Rdtsc ? "rdtsc" : "rdtscp");
+  llvm::Value *R = nullptr;
+  llvm::Value *Aux = nullptr;
+  if (IC == I::Rdtscp) {
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::x86_rdtscp);
+    auto *Pair = Builder.CreateCall(Fn, {}, "rdtscp");
+    R = Builder.CreateExtractValue(Pair, {0}, "rdtscp_tsc");
+    Aux = Builder.CreateExtractValue(Pair, {1}, "rdtscp_aux");
+  } else {
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::readcyclecounter);
+    R = Builder.CreateCall(Fn, {}, "rdtsc");
+  }
   auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
   auto *Lo = Builder.CreateTrunc(R, I32Ty, "tsc_lo");
   auto *Hi = Builder.CreateTrunc(Builder.CreateLShr(R, 32), I32Ty, "tsc_hi");
   PendingIntrinsicOutputs[0] = Lo;
   PendingIntrinsicOutputs[1] = Hi;
-  PendingIntrinsicCount = 2;
+  if (Aux)
+    PendingIntrinsicOutputs[2] = Aux;
+  PendingIntrinsicCount = Aux ? 3 : 2;
 
   llvm::Value *Result = R;
   if (Result->getType() != OutTy) {
@@ -80,11 +92,19 @@ llvm::Value *MedLLVMEmitter::emitCpuidValue(const MedOp &Op,
     if (Leaf->getType() != I32Ty)
       Leaf = Builder.CreateTruncOrBitCast(Leaf, I32Ty);
   }
+  llvm::Value *Subleaf = llvm::ConstantInt::get(I32Ty, 0);
+  if (Op.NumInputs > 2) {
+    Subleaf = getVar(Op.Inputs[2], Builder);
+    if (Subleaf->getType() != I32Ty)
+      Subleaf = Builder.CreateTruncOrBitCast(Subleaf, I32Ty);
+  }
   auto *StructTy = llvm::StructType::get(*Ctx, {I32Ty, I32Ty, I32Ty, I32Ty});
-  auto *AsmFnTy = llvm::FunctionType::get(StructTy, {I32Ty}, false);
+  auto *AsmFnTy =
+      llvm::FunctionType::get(StructTy, {I32Ty, I32Ty}, false);
   auto *IA = llvm::InlineAsm::get(
-      AsmFnTy, "cpuid", "={eax},={ebx},={ecx},={edx},{eax},~{memory}", true);
-  auto *Res = Builder.CreateCall(IA, {Leaf}, "cpuid");
+      AsmFnTy, "cpuid",
+      "={eax},={ebx},={ecx},={edx},{eax},{ecx},~{memory}", true);
+  auto *Res = Builder.CreateCall(IA, {Leaf, Subleaf}, "cpuid");
   auto *EAX = Builder.CreateExtractValue(Res, {0}, "cpuid_eax");
   auto *EBX = Builder.CreateExtractValue(Res, {1}, "cpuid_ebx");
   auto *ECX = Builder.CreateExtractValue(Res, {2}, "cpuid_ecx");

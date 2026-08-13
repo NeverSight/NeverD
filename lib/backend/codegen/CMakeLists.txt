@@ -1,10 +1,13 @@
 add_neverd_component_library(NeverDCodeGen
   CodeGen.cpp
+  CodeGenSymbolize.cpp
   CodeGenX86.cpp
   CodeGenAArch64.cpp
   CodeGenARM.cpp
   BinaryRewriter.cpp
+  CompiledImage.cpp
   InplaceRewriter.cpp
+  RelocResolver.cpp
   COFF/COFFExceptionPatch.cpp
   COFF/COFFPatch.cpp
   COFF/COFFInplace.cpp

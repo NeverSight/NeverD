@@ -5,17 +5,16 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// ARM-family (ARM32 + AArch64) architecture-gated jump-table detectors:
+/// ARM-family architecture-gated jump-table detectors:
 ///
-///   - tryARMTableBranch      — TBB/TBH table-branch pattern.
+///   - tryARMTableBranch      — ARM32 TBB/TBH table-branch pattern.
 ///   - tryAArch64CompactTable — AArch64 byte/halfword compact table.
 ///
 /// These are the only architecture-specific table recognizers; the generic
 /// resolver framework and every pattern-based (architecture-neutral) strategy
-/// live in JumpTableResolver.cpp, which dispatches to the functions here (LLVM
-/// target-dispatch pattern).  x86 switch tables need no dedicated detector —
-/// they are handled by the architecture-neutral relative/cross-instruction
-/// resolvers in JumpTableResolver.cpp.
+/// are dispatched from JumpTableResolver.cpp (LLVM target-dispatch pattern).
+/// x86 switch tables need no dedicated detector — they are handled by the
+/// architecture-neutral source and shape recognizers.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -29,11 +28,14 @@
 namespace neverd {
 
 //===----------------------------------------------------------------------===//
-// tryARMTableBranch — ARM/AArch64 TBB/TBH pattern detection
+// tryARMTableBranch — ARM32 TBB/TBH pattern detection
 //===----------------------------------------------------------------------===//
 
 bool CFGBuilder::tryARMTableBranch(const BinaryImage &Img,
                                    const InsnRecord &Rec, JumpTableInfo &Info) {
+  if (Img.Arch != Arch::ARM)
+    return false;
+
   // TBB (Table Branch Byte) and TBH (Table Branch Halfword) use a base
   // register (typically PC) plus a small table of 1- or 2-byte entries
   // that are scaled offsets from the table address.

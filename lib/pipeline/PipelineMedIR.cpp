@@ -9,7 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "PipelineStageDetail.h"
+#include "PipelineMedAudit.h"
+#include "PipelineTrimStorage.h"
 
 #include "neverd/Common.h"
 #include "neverd/ir/med/LowToMed.h"

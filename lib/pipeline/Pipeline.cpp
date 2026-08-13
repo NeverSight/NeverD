@@ -211,7 +211,8 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // If only dumping intermediate IR (LowIR/MedIR), skip LLVM emission
   // entirely.  The dump flags are handled above; return early to avoid
   // hitting the LLVM PassManager (which may crash on certain LLVM builds).
-  if ((Opts.DumpLow || Opts.DumpMed) && !Opts.DumpHigh && !Opts.PatchMode) {
+  if ((Opts.DumpLow || Opts.DumpMed) && !Opts.DumpHigh && !Opts.PatchMode &&
+      !Opts.LiftMode) {
     Result.Success = true;
     return Result;
   }

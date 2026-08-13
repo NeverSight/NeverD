@@ -12,10 +12,11 @@ namespace neverd::libc {
 inline constexpr std::string_view kTimeHeader = "time.h";
 
 inline constexpr std::array kTimeFunctions = {
-    "asctime",  "asctime_r",  "clock",       "clock_gettime", "clock_settime",
-    "ctime",    "ctime_r",    "difftime",    "gettimeofday",  "gmtime",
-    "gmtime_r", "localtime",  "localtime_r", "mktime",        "nanosleep",
-    "strftime", "strftime_l", "time",        "timespec_get",  "utime",
+    "asctime",       "asctime_r",    "clock",     "clock_gettime",
+    "clock_settime", "ctime",        "ctime_r",   "difftime",
+    "gmtime",        "gmtime_r",     "localtime", "localtime_r",
+    "mktime",        "nanosleep",    "strftime",  "strftime_l",
+    "time",          "timespec_get",
 };
 
 /// difftime(time_t, time_t) -> double: two integer args, FP return (FpRet).

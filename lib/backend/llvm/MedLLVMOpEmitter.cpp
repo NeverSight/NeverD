@@ -6,9 +6,10 @@
 ///
 /// \file
 /// Core MedIR operation emission: translates individual MedOps to LLVM IR
-/// instructions via the main opcode switch.  Intrinsic dispatch lives in
-/// MedLLVMIntrinsic.cpp; architecture-specific SIMD/crypto intrinsics in the
-/// per-arch emitters under X86/, AArch64/, and ARM/.
+/// instructions via the main opcode switch.  CALL/INDIR_CALL and RETURN
+/// lowering live in MedLLVMCall.cpp and MedLLVMReturn.cpp; intrinsic dispatch
+/// lives in MedLLVMIntrinsic.cpp; architecture-specific SIMD/crypto intrinsics
+/// in the per-arch emitters under X86/, AArch64/, and ARM/.
 ///
 //===----------------------------------------------------------------------===//
 

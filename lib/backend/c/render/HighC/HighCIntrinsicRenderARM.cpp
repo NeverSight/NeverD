@@ -1,5 +1,4 @@
-//===- HighCIntrinsicRenderARM.cpp - ARM/AArch64 intrinsic rendering -*- C++
-//-*-===//
+//===- HighCIntrinsicRenderARM.cpp - ARM intrinsic rendering ----*- C++ -*-===//
 //
 // NeverD Decompiler
 //

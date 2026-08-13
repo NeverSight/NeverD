@@ -11,14 +11,17 @@
 /// across several translation units grouped by concern.  MedLLVMEmitter.cpp
 /// holds the core (types, the memory-pointer primitive, function/module emit);
 /// MedLLVMOpEmitter.cpp the MedOp opcode-switch dispatch; MedLLVMFloatEmitter
-/// .cpp floating-point ops; MedLLVMIntrinsic.cpp INTRINSIC dispatch plus the
-/// inline-asm helper.  Address handling splits into MedLLVMAddrResolve.cpp (SSA
-/// constant tracing and read-only/table address resolution), MedLLVMVarAccess
-/// .cpp (getVar/setVar and constant classification), and MedLLVMGlobalData.cpp
-/// (segment embedding and writable/code-pointer resolution).  MedLLVMSwitch.cpp
-/// lowers resolved jump tables to LLVM switches.  Architecture-specific
-/// intrinsic emitters and address recognizers (e.g. the i386 PIC helpers in
-/// X86/MedLLVMX86GlobalData.cpp) live under X86/, AArch64/, and ARM/.
+/// .cpp floating-point ops; MedLLVMCall.cpp and MedLLVMReturn.cpp call/return
+/// lowering; MedLLVMIntrinsic.cpp INTRINSIC dispatch plus the inline-asm helper.
+/// Address handling splits into MedLLVMAddrResolve.cpp (shared SSA/base tracing),
+/// MedLLVMLiteralTable.cpp (literal/select tables), MedLLVMIndexedGlobal.cpp
+/// (indexed/induction globals), MedLLVMCodePtrResolve.cpp (code-pointer tables
+/// and references), MedLLVMVarAccess.cpp (getVar/setVar), and
+/// MedLLVMGlobalData.cpp (segment embedding and writable resolution).
+/// MedLLVMSwitch.cpp lowers resolved jump tables to LLVM switches.
+/// Architecture-specific intrinsic emitters and address recognizers (e.g. the
+/// i386 PIC helpers in X86/MedLLVMX86GlobalData.cpp) live under X86/, AArch64/,
+/// and ARM/.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -125,8 +128,8 @@ private:
   void emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder, int BlockId,
               int OpIdx);
   /// CALL/INDIR_CALL and RETURN lowering, carved out of the emitOp opcode
-  /// switch into MedLLVMCall.cpp (mirrors how emitIntrinsic lives in
-  /// MedLLVMIntrinsic.cpp) to keep emitOp a readable dispatcher.
+  /// switch into MedLLVMCall.cpp and MedLLVMReturn.cpp to keep emitOp a
+  /// readable dispatcher.
   void emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder, int BlockId,
                   int OpIdx);
   void defineCallClobbers(const MedOp &Op, llvm::IRBuilder<> &Builder);

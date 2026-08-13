@@ -12,7 +12,6 @@ inline constexpr std::string_view kWcharHeader = "wchar.h";
 inline constexpr std::array kWcharFunctions = {
     // conversion
     "btowc",
-    "mbrinit",
     "mbrlen",
     "mbrtowc",
     "mbsinit",

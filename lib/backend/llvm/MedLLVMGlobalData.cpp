@@ -7,10 +7,12 @@
 /// \file
 /// Global-data resolution for MedLLVMEmitter: embedding read-only, executable
 /// and writable segments as cohesive globals, the writable-data / code-pointer
-/// address resolvers, and the tryResolveGlobalData constant-address entry
-/// point.  SSA constant tracing and the read-only table resolvers live in
-/// MedLLVMAddrResolve.cpp; the architecture-gated i386 PIC address recognizers
-/// live in X86/MedLLVMX86GlobalData.cpp.
+/// segment address resolvers, and the tryResolveGlobalData constant-address
+/// entry point.  Shared SSA/address-base tracing lives in
+/// MedLLVMAddrResolve.cpp; literal/select and indexed/induction table resolvers
+/// live in MedLLVMLiteralTable.cpp and MedLLVMIndexedGlobal.cpp; code-pointer
+/// table mirroring lives in MedLLVMCodePtrResolve.cpp.  The architecture-gated
+/// i386 PIC address recognizers live in X86/MedLLVMX86GlobalData.cpp.
 ///
 //===----------------------------------------------------------------------===//
 

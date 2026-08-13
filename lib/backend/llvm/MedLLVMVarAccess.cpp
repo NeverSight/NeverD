@@ -9,8 +9,10 @@
 /// sub-register write propagation they drive, plus the per-function def/phi
 /// index those (and the constant classifiers) walk to find an SSA value's
 /// defining op.  The constant pointer/integer classification that getVar
-/// consults lives in MedLLVMConstClass.cpp; address folding in
-/// MedLLVMAddrResolve.cpp; global-data embedding in MedLLVMGlobalData.cpp.
+/// consults lives in MedLLVMConstClass.cpp; shared address folding in
+/// MedLLVMAddrResolve.cpp; specialized table/global resolution in
+/// MedLLVMLiteralTable.cpp, MedLLVMIndexedGlobal.cpp, and
+/// MedLLVMCodePtrResolve.cpp; global-data embedding in MedLLVMGlobalData.cpp.
 ///
 //===----------------------------------------------------------------------===//
 

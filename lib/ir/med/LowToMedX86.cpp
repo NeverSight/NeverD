@@ -6,9 +6,9 @@
 ///
 /// \file
 /// x86/x86-64-specific sub-register repair passes for the LowIR→MedIR
-/// conversion.  The architecture-generic framework lives in LowToMed.cpp and
-/// dispatches to the functions here by target arch (LLVM target-dispatch
-/// pattern).
+/// conversion.  The architecture-generic framework lives in
+/// LowToMedSubReg.cpp and dispatches to the functions here by target arch
+/// (LLVM target-dispatch pattern).
 ///
 //===----------------------------------------------------------------------===//
 

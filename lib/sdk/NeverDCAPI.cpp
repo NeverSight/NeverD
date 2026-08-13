@@ -11,10 +11,15 @@
 ///
 /// Additional C API domains live in sibling files:
 ///   NeverDCAPIDisasm.cpp      — disassembly (JSON + text)
+///   NeverDCAPIInfo.cpp        — info panels and address resolution
+///   NeverDCAPIGraph.cpp       — xrefs, CFG, and call graph
+///   NeverDCAPISearch.cpp      — search and diff
 ///   NeverDCAPIDecompile.cpp   — decompile, IR dump, lift, inject
+///   NeverDCAPITargetConfig.cpp — EVM and SBF analysis configuration
 ///   NeverDCAPIPatch.cpp       — patch operations
-///   NeverDCAPIQuery.cpp       — info panels, xrefs, CFG, search, diff
-///   NeverDCAPIPersist.cpp     — annotations, renames, FLIRT sigs
+///   NeverDCAPIRoundtrip.cpp   — lift-to-object verification
+///   NeverDCAPIPersist.cpp     — annotations and renames
+///   NeverDCAPISigs.cpp        — FLIRT signatures
 ///   NeverDCAPIBench.cpp       — benchmark support
 ///
 //===----------------------------------------------------------------------===//

@@ -9,7 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "PipelineStageDetail.h"
+#include "PipelineTrimStorage.h"
 
 #include "neverd/debug/DebugContext.h"
 #include "neverd/decode/Decoder.h"

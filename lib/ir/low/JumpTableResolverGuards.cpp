@@ -8,7 +8,8 @@
 /// Guard- and bounds-analysis strategies for jump-table resolution: recover a
 /// switch's entry count from the range guard that bounds the index, reading it
 /// both from the dispatching instruction's own micro-ops and from comparisons
-/// in CFG predecessor blocks.  All strategies here are architecture-neutral.
+/// in CFG predecessor blocks, including duplicated and dual-path guards.  All
+/// strategies here are architecture-neutral.
 ///
 /// Part of the CFGBuilder jump-table resolver; see JumpTableResolver.cpp for
 /// the top-level dispatch and JumpTableResolverDetail.h for the shared
@@ -324,9 +325,9 @@ CircleRange CFGBuilder::extractGuardRange(const std::vector<LowOp> &Ops,
 
 bool CFGBuilder::refineRangeFromGuards(const InsnRecord &Rec,
                                        JumpTableInfo &Info) {
-  int VarSize = 4;
-  if (CurrentImg && CurrentImg->Arch != Arch::ARM)
-    VarSize = 8;
+  int VarSize =
+      getTargetRegInfo(CurrentImg ? CurrentImg->Arch : Arch::Unknown)
+          .PointerSize;
 
   CircleRange Best = CircleRange::full(VarSize);
   bool Found = false;
@@ -868,9 +869,9 @@ bool CFGBuilder::inferBoundsFromRangePullback(const InsnRecord &Rec,
   if (Info.IndexReg == InvalidVA)
     return false;
 
-  int VarSize = 4;
-  if (CurrentImg && CurrentImg->Arch != Arch::ARM)
-    VarSize = 8;
+  int VarSize =
+      getTargetRegInfo(CurrentImg ? CurrentImg->Arch : Arch::Unknown)
+          .PointerSize;
 
   // Flatten the function prefix through the dispatch so a guard and the index
   // normalization it constrains are both visible to the backward walk.
@@ -1050,7 +1051,7 @@ bool CFGBuilder::inferBoundsFromLoadAliasGuard(const InsnRecord &Rec,
     return false;
 
   const TargetRegInfo &TRI = getTargetRegInfo(CurrentImg->Arch);
-  int VarSize = (CurrentImg->Arch == Arch::ARM) ? 4 : 8;
+  int VarSize = TRI.PointerSize;
 
   // Flatten the function prefix through the dispatch so the guard, its compared
   // reload, and the index's own reload are all visible to the backward walk.
@@ -1340,6 +1341,145 @@ bool CFGBuilder::inferBoundsFromCFGGuards(const InsnRecord &Rec,
 
   if (Best > 0 && (Info.MaxEntries == 0 || Best < Info.MaxEntries)) {
     Info.MaxEntries = Best;
+    return true;
+  }
+  return false;
+}
+
+//===----------------------------------------------------------------------===//
+// tryDualPathRecovery — default-value path detection
+//===----------------------------------------------------------------------===//
+
+/// When the standard guard analysis fails to produce a bound, check for
+/// a dual-path pattern: the block containing the INDIR_BR has two
+/// predecessor paths, one carrying a default constant and one carrying
+/// the real switch computation.  A COND_BR at the split point acts as
+/// the guard for switches with an explicit default path.
+bool CFGBuilder::tryDualPathRecovery(const InsnRecord &Rec,
+                                     JumpTableInfo &Info) {
+  auto BlockIt = BlockStarts.upper_bound(Rec.Addr);
+  if (BlockIt == BlockStarts.begin())
+    return false;
+  --BlockIt;
+  va_t BranchBlockStart = *BlockIt;
+
+  // Collect all predecessor blocks that branch into our switch block.
+  std::set<va_t> Visited;
+  Visited.insert(BranchBlockStart);
+  std::vector<va_t> Preds;
+  collectPredBlocks(BranchBlockStart, Visited, Preds);
+
+  if (Preds.size() < 2 || Preds.size() > limits::kMaxDualPathPreds)
+    return false;
+
+  // Look for the pattern: one predecessor ends with a COND_BR that
+  // gates a constant-producing path vs. a computation path.
+  // The COND_BR predecessor that has a bound comparison is our guard.
+  uint32_t BestBound = 0;
+  for (va_t PredStart : Preds) {
+    auto NextBlock = BlockStarts.upper_bound(PredStart);
+    va_t PredEnd = (NextBlock != BlockStarts.end()) ? *NextBlock : InvalidVA;
+
+    for (auto It = Insns.lower_bound(PredStart); It != Insns.end(); ++It) {
+      if (It->first >= PredEnd)
+        break;
+      auto &IRec = It->second;
+      if (!IRec.IsBranch || !IRec.IsCond)
+        continue;
+
+      // This pred has a COND_BR — scan its ops for a guard bound.
+      uint32_t Bound = findBestBound(IRec.Ops, 0, Info.IndexReg);
+      if (Bound > 0 && (BestBound == 0 || Bound < BestBound))
+        BestBound = Bound;
+
+      // Also scan the ops preceding the COND_BR in this block.
+      for (auto InnerIt = Insns.lower_bound(PredStart); InnerIt != It;
+           ++InnerIt) {
+        Bound = findBestBound(InnerIt->second.Ops, BestBound, Info.IndexReg);
+        if (Bound > 0 && (BestBound == 0 || Bound < BestBound))
+          BestBound = Bound;
+      }
+    }
+  }
+
+  if (BestBound == 0)
+    return false;
+
+  Info.MaxEntries = BestBound;
+  LLVM_DEBUG(llvm::dbgs() << "  dual-path: found guard bound " << BestBound
+                          << " from " << Preds.size() << " predecessors\n");
+  return true;
+}
+
+//===----------------------------------------------------------------------===//
+// inferBoundsFromUnrolledGuard — detect duplicated guard across preds
+//===----------------------------------------------------------------------===//
+
+/// When multiple predecessor blocks each terminate with a COND_BR, and
+/// each carries a guard comparison on the switch variable, the guard
+/// has been "unrolled" (duplicated).  This detects that pattern and
+/// extracts the tightest common bound.
+bool CFGBuilder::inferBoundsFromUnrolledGuard(const InsnRecord &Rec,
+                                              JumpTableInfo &Info) {
+  auto BlockIt = BlockStarts.upper_bound(Rec.Addr);
+  if (BlockIt == BlockStarts.begin())
+    return false;
+  --BlockIt;
+  va_t BranchBlockStart = *BlockIt;
+
+  std::set<va_t> Visited;
+  Visited.insert(BranchBlockStart);
+  std::vector<va_t> Preds;
+  collectPredBlocks(BranchBlockStart, Visited, Preds);
+
+  if (Preds.size() < 2 ||
+      static_cast<int>(Preds.size()) > limits::kMaxUnrolledGuardPreds)
+    return false;
+
+  // Every predecessor must end with a COND_BR for this to be an
+  // unrolled guard pattern.
+  uint32_t CommonBound = 0;
+  int CBranchCount = 0;
+
+  for (va_t PredStart : Preds) {
+    auto NextBlock = BlockStarts.upper_bound(PredStart);
+    va_t PredEnd = (NextBlock != BlockStarts.end()) ? *NextBlock : InvalidVA;
+
+    bool FoundCBranch = false;
+    for (auto It = Insns.lower_bound(PredStart); It != Insns.end(); ++It) {
+      if (It->first >= PredEnd)
+        break;
+      auto &IRec = It->second;
+      if (!IRec.IsBranch || !IRec.IsCond)
+        continue;
+      FoundCBranch = true;
+      ++CBranchCount;
+
+      uint32_t PredBound = findBestBound(IRec.Ops, 0, Info.IndexReg);
+      if (PredBound == 0) {
+        for (auto InnerIt = Insns.lower_bound(PredStart); InnerIt != It;
+             ++InnerIt)
+          PredBound =
+              findBestBound(InnerIt->second.Ops, PredBound, Info.IndexReg);
+      }
+
+      if (PredBound > 0) {
+        if (CommonBound == 0 || PredBound < CommonBound)
+          CommonBound = PredBound;
+      }
+    }
+    if (!FoundCBranch)
+      return false;
+  }
+
+  if (CBranchCount < 2 || CommonBound == 0)
+    return false;
+
+  if (Info.MaxEntries == 0 || CommonBound < Info.MaxEntries) {
+    Info.MaxEntries = CommonBound;
+    LLVM_DEBUG(llvm::dbgs()
+               << "  unrolled-guard: found common bound " << CommonBound
+               << " across " << Preds.size() << " predecessor COND_BRs\n");
     return true;
   }
   return false;

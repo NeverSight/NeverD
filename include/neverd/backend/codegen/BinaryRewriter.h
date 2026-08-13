@@ -144,12 +144,11 @@ struct CompiledImage {
 /// The rewrite backend may emit more than one output section (e.g. an absolute
 /// 8-byte blockaddress / jump table in `__const`/`.rodata` referenced
 /// PC-relative from `.text`). A single-section model would drop those, so this
-/// performs a two-pass compile: (1) a probe compile on a clone learns each
-/// section's size; (2) the sections are laid out contiguously from \p BaseVA
-/// (text first, each section honoring at least its native alignment), and the
-/// module is recompiled with per-section final VAs so all
-/// cross-section fixups resolve correctly; the sections are then assembled into
-/// one blob. Format patchers use Sections to preserve unwind/data identity and
+/// performs a probe compile on a clone to learn each section's size, then lays
+/// the sections out contiguously from \p BaseVA (text first, each section
+/// honoring at least its native alignment) and recompiles with per-section VAs
+/// until the layout stabilizes. The converged sections are assembled into one
+/// blob. Format patchers use Sections to preserve unwind/data identity and
 /// choose compatible physical permissions.
 ///
 /// \p ResolveFn is the address-model external-symbol resolver (PLT/IAT/stub
