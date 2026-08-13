@@ -91,6 +91,71 @@ class NeverDPlugin(ctypes.Structure):
     ]
 
 
+class SimplifyOutcome(IntEnum):
+    """Why the simplifier returned the expression it was given."""
+
+    NOT_APPLICABLE = 0
+    ALREADY_SHORTEST = 1
+    TOO_MANY_INPUTS = 2
+    BUDGET_EXHAUSTED = 3
+    REWRITTEN = 4
+
+
+class SimplifyEvidence(IntEnum):
+    """What stands behind a rewrite that was made."""
+
+    NONE = 0
+    DERIVATION = 1
+    SAMPLES = 2
+
+
+class NeverDSimplifyOptions(ctypes.Structure):
+    """Layout of ``neverd_simplify_options``.
+
+    ``struct_size`` leads the struct so the library can tell how much of it the
+    caller actually has.  Fields are only ever appended, and a field left zero
+    means "keep the engine's default", which is why the layout can grow without
+    this declaration having to move in step with it.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("width", ctypes.c_uint),
+        ("shallow", ctypes.c_int),
+        ("max_atoms", ctypes.c_uint),
+        ("max_work", ctypes.c_size_t),
+        ("verify_samples", ctypes.c_uint),
+        ("allow_growth", ctypes.c_int),
+    ]
+
+
+class NeverDSimplifyResult(ctypes.Structure):
+    """Layout of ``neverd_simplify_result``.
+
+    The string members are owned by the library; releasing them is what
+    ``neverd_simplify_result_dispose`` is for, and it must be called whatever
+    the outcome.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("ok", ctypes.c_int),
+        ("error", ctypes.c_char_p),
+        ("error_offset", ctypes.c_size_t),
+        ("input", ctypes.c_char_p),
+        ("output", ctypes.c_char_p),
+        ("changed", ctypes.c_int),
+        ("cost_before", ctypes.c_size_t),
+        ("cost_after", ctypes.c_size_t),
+        ("inputs", ctypes.c_uint),
+        ("work", ctypes.c_size_t),
+        ("outcome", ctypes.c_int),
+        ("evidence", ctypes.c_int),
+        ("outcome_name", ctypes.c_char_p),
+        ("evidence_name", ctypes.c_char_p),
+    ]
+
+
 class Ownership(Enum):
     """Memory/lifetime contract for a native result."""
 
@@ -114,6 +179,8 @@ _C_TYPES: dict[str, object] = {
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "unsigned long long *": ctypes.POINTER(ctypes.c_ulonglong),
     "const void *": ctypes.c_void_p,
+    "const neverd_simplify_options *": ctypes.POINTER(NeverDSimplifyOptions),
+    "neverd_simplify_result *": ctypes.POINTER(NeverDSimplifyResult),
 }
 
 
@@ -581,6 +648,18 @@ _declare("neverd_plugins_run", "int", ["neverd_session_t", "const char *", "int"
 _declare("neverd_plugins_count", "int", ["neverd_session_t"])
 _declare("neverd_plugins_dispatch_event", "void", ["neverd_session_t", "const void *"])
 _declare(
+    "neverd_simplify_expr",
+    "int",
+    [
+        "const char *",
+        "const neverd_simplify_options *",
+        "neverd_simplify_result *",
+    ],
+)
+_declare(
+    "neverd_simplify_result_dispose", "void", ["neverd_simplify_result *"]
+)
+_declare(
     "neverd_simplify_expr_json",
     "const char *",
     ["const char *", "unsigned", "int"],
@@ -601,6 +680,8 @@ __all__ = [
     "FunctionSpec",
     "NeverDEvent",
     "NeverDPlugin",
+    "NeverDSimplifyOptions",
+    "NeverDSimplifyResult",
     "OutputLanguage",
     "Ownership",
     "PatchAppliedData",
@@ -610,5 +691,7 @@ __all__ = [
     "PluginTermCallback",
     "PluginType",
     "SessionHandle",
+    "SimplifyEvidence",
+    "SimplifyOutcome",
     "VirtualAddress",
 ]

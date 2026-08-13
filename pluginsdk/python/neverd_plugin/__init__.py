@@ -3,6 +3,7 @@
 from .api import (
     Event,
     EventType,
+    ExpressionSyntaxError,
     Function,
     NeverDError,
     OutputLanguage,
@@ -12,12 +13,17 @@ from .api import (
     PluginType,
     RawSessionAPI,
     Session,
+    SimplifyEvidence,
+    SimplifyOutcome,
+    SimplifyResult,
+    simplify_expression,
 )
 from ._version import __version__
 
 __all__ = [
     "Event",
     "EventType",
+    "ExpressionSyntaxError",
     "Function",
     "NeverDError",
     "OutputLanguage",
@@ -27,5 +33,9 @@ __all__ = [
     "PluginType",
     "RawSessionAPI",
     "Session",
+    "SimplifyEvidence",
+    "SimplifyOutcome",
+    "SimplifyResult",
+    "simplify_expression",
     "__version__",
 ]

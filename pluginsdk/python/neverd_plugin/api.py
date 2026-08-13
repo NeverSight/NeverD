@@ -13,7 +13,15 @@ from types import ModuleType
 from types import MappingProxyType
 from typing import Any, Callable, Iterator, Mapping, Protocol, TypeVar, cast
 
-from .abi import EventType, OutputLanguage, PluginType
+from .abi import (
+    EventType,
+    NeverDSimplifyOptions,
+    NeverDSimplifyResult,
+    OutputLanguage,
+    PluginType,
+    SimplifyEvidence,
+    SimplifyOutcome,
+)
 from .ffi import HostAPI
 
 
@@ -866,9 +874,145 @@ def _decode_json(operation: str, value: str | None) -> object:
         raise NeverDError(f"NeverD returned invalid {operation} JSON") from error
 
 
+class ExpressionSyntaxError(NeverDError):
+    """An expression could not be read.
+
+    ``offset`` is the character reading stopped at, which is what lets a caller
+    point at the mistake rather than repeat the whole line back.
+    """
+
+    def __init__(self, message: str, offset: int) -> None:
+        super().__init__(message)
+        self.offset = offset
+
+
+@dataclass(frozen=True, slots=True)
+class SimplifyResult:
+    """What the engine made of one expression.
+
+    ``outcome`` is the part worth reading when ``changed`` is false: leaving an
+    expression alone because nothing shorter exists and leaving it alone because
+    the budget ran out are different answers, and only the second is worth
+    retrying.
+    """
+
+    input: str
+    output: str
+    changed: bool
+    cost_before: int
+    cost_after: int
+    inputs: int
+    work: int
+    outcome: SimplifyOutcome
+    evidence: SimplifyEvidence
+
+    @property
+    def saved(self) -> int:
+        """Reading cost the rewrite removed.  Zero when nothing was rewritten."""
+
+        return self.cost_before - self.cost_after
+
+
+_HOST: HostAPI | None = None
+
+
+def _simplify_host() -> HostAPI:
+    """The loaded library, opened once.
+
+    Simplification takes no session -- it works on a string -- so it cannot
+    borrow the one a plugin was handed, and opening the library again for every
+    expression would pay the loader's cost once per line of a corpus.
+    """
+
+    global _HOST
+    if _HOST is None:
+        _HOST = HostAPI()
+    return _HOST
+
+
+def simplify_expression(
+    expression: str,
+    *,
+    width: int = 32,
+    deep: bool = True,
+    max_atoms: int = 0,
+    max_work: int = 0,
+    exhaustive: bool = False,
+    verify_samples: int = 0,
+    allow_growth: bool = False,
+    host: HostAPI | None = None,
+) -> SimplifyResult:
+    """Simplify one bitvector expression written in the engine's infix syntax.
+
+    ``width`` is what every leaf without a ``#bits`` suffix is created at.
+    ``deep`` walks into the subterms a single measurement has to treat as
+    opaque, which is what layered obfuscation needs.  Every other argument left
+    at its default keeps the engine's own: ``max_atoms`` bounds how many inputs
+    one measurement spans (the cost is 2^n), ``max_work`` bounds how much of a
+    large expression the walk covers, and ``exhaustive`` removes that bound.
+
+    ``host`` names the library to work through.  It defaults to the NeverD this
+    is running inside, but simplification needs no session and no loaded binary,
+    so passing a library opened by hand is enough to use this from an ordinary
+    script.
+
+    Raises ``ExpressionSyntaxError`` when the expression cannot be read.
+    """
+
+    text = _utf8_argument("expression", expression, allow_empty=False)
+
+    options = NeverDSimplifyOptions()
+    options.struct_size = ctypes.sizeof(NeverDSimplifyOptions)
+    options.width = _unsigned("width", width, 32)
+    options.shallow = 0 if _boolean("deep", deep) else 1
+    options.max_atoms = _unsigned("max_atoms", max_atoms, 32)
+    options.max_work = (
+        ctypes.c_size_t(-1).value
+        if _boolean("exhaustive", exhaustive)
+        else _unsigned("max_work", max_work, 64)
+    )
+    options.verify_samples = _unsigned("verify_samples", verify_samples, 32)
+    options.allow_growth = 1 if _boolean("allow_growth", allow_growth) else 0
+
+    result = NeverDSimplifyResult()
+    result.struct_size = ctypes.sizeof(NeverDSimplifyResult)
+
+    library = host if host is not None else _simplify_host()
+    status = library.call(
+        "neverd_simplify_expr",
+        text,
+        ctypes.byref(options),
+        ctypes.byref(result),
+    )
+    try:
+        if status != 0:
+            raise NeverDError("NeverD refused the simplification request")
+        if not result.ok:
+            raise ExpressionSyntaxError(
+                (result.error or b"").decode("utf-8", errors="replace"),
+                int(result.error_offset),
+            )
+        return SimplifyResult(
+            input=(result.input or b"").decode("utf-8", errors="strict"),
+            output=(result.output or b"").decode("utf-8", errors="strict"),
+            changed=bool(result.changed),
+            cost_before=int(result.cost_before),
+            cost_after=int(result.cost_after),
+            inputs=int(result.inputs),
+            work=int(result.work),
+            outcome=SimplifyOutcome(int(result.outcome)),
+            evidence=SimplifyEvidence(int(result.evidence)),
+        )
+    finally:
+        # The library owns the strings whatever happened, including the error
+        # path, so this cannot be conditional on having read them.
+        library.call("neverd_simplify_result_dispose", ctypes.byref(result))
+
+
 __all__ = [
     "Event",
     "EventType",
+    "ExpressionSyntaxError",
     "Function",
     "NeverDError",
     "OutputLanguage",
@@ -878,4 +1022,8 @@ __all__ = [
     "PluginType",
     "RawSessionAPI",
     "Session",
+    "SimplifyEvidence",
+    "SimplifyOutcome",
+    "SimplifyResult",
+    "simplify_expression",
 ]

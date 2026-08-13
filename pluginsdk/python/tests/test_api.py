@@ -288,5 +288,114 @@ class EventTests(unittest.TestCase):
             Event.from_host(session, EventType.BINARY_LOADED)
 
 
+class _RecordingSimplifyHost:
+    """A library that records the request and answers with fixed fields."""
+
+    def __init__(self, status: int = 0, **fields: object) -> None:
+        self.status = status
+        self.fields = fields
+        self.options: object | None = None
+        self.expression: bytes | None = None
+        self.disposals = 0
+
+    def call(self, name: str, *arguments: object) -> object:
+        if name == "neverd_simplify_expr":
+            self.expression = arguments[0]
+            # byref keeps the original struct reachable, which is what lets a
+            # stand-in fill it the way the library would.
+            self.options = arguments[1]._obj
+            result = arguments[2]._obj
+            for key, value in self.fields.items():
+                setattr(result, key, value)
+            return self.status
+        if name == "neverd_simplify_result_dispose":
+            self.disposals += 1
+            return None
+        raise AssertionError(f"unexpected call {name}")
+
+
+class SimplifyExpressionTests(unittest.TestCase):
+    def test_reports_every_field_of_a_rewrite(self) -> None:
+        from neverd_plugin import SimplifyEvidence, SimplifyOutcome
+        from neverd_plugin import simplify_expression
+
+        host = _RecordingSimplifyHost(
+            ok=1,
+            input=b"(x ^ y) + 2 * (x & y)",
+            output=b"x + y",
+            changed=1,
+            cost_before=11,
+            cost_after=5,
+            inputs=2,
+            work=21,
+            outcome=int(SimplifyOutcome.REWRITTEN),
+            evidence=int(SimplifyEvidence.DERIVATION),
+        )
+        result = simplify_expression("(x ^ y) + 2 * (x & y)", host=host)
+
+        self.assertEqual(result.output, "x + y")
+        self.assertTrue(result.changed)
+        self.assertEqual(result.saved, 6)
+        self.assertEqual(result.work, 21)
+        self.assertIs(result.outcome, SimplifyOutcome.REWRITTEN)
+        self.assertIs(result.evidence, SimplifyEvidence.DERIVATION)
+        self.assertEqual(host.disposals, 1)
+
+    def test_carries_the_reason_an_expression_was_left_alone(self) -> None:
+        from neverd_plugin import SimplifyOutcome, simplify_expression
+
+        host = _RecordingSimplifyHost(
+            ok=1,
+            input=b"x + y + z",
+            output=b"x + y + z",
+            changed=0,
+            outcome=int(SimplifyOutcome.TOO_MANY_INPUTS),
+        )
+        result = simplify_expression("x + y + z", host=host, max_atoms=2)
+
+        self.assertFalse(result.changed)
+        self.assertIs(result.outcome, SimplifyOutcome.TOO_MANY_INPUTS)
+        self.assertEqual(host.options.max_atoms, 2)
+
+    def test_translates_the_policy_the_engine_reads(self) -> None:
+        import ctypes
+
+        from neverd_plugin import simplify_expression
+        from neverd_plugin.abi import NeverDSimplifyOptions
+
+        host = _RecordingSimplifyHost(ok=1, input=b"x", output=b"x")
+        simplify_expression(
+            "x", host=host, width=256, deep=False, exhaustive=True
+        )
+
+        options = host.options
+        self.assertEqual(options.struct_size, ctypes.sizeof(NeverDSimplifyOptions))
+        self.assertEqual(options.width, 256)
+        # `deep` is the useful default, so the flag crossing the ABI is its
+        # negation: a zeroed struct has to mean the layered walk.
+        self.assertEqual(options.shallow, 1)
+        self.assertEqual(options.max_work, ctypes.c_size_t(-1).value)
+
+    def test_raises_with_the_offset_when_the_expression_will_not_read(self) -> None:
+        from neverd_plugin import ExpressionSyntaxError, simplify_expression
+
+        host = _RecordingSimplifyHost(ok=0, error=b"expected ')'", error_offset=6)
+        with self.assertRaises(ExpressionSyntaxError) as raised:
+            simplify_expression("(x + ", host=host)
+
+        self.assertEqual(raised.exception.offset, 6)
+        # The library owns the strings on the error path too, so releasing them
+        # cannot be conditional on having got an answer.
+        self.assertEqual(host.disposals, 1)
+
+    def test_releases_the_result_even_when_the_call_is_refused(self) -> None:
+        from neverd_plugin import NeverDError, simplify_expression
+
+        host = _RecordingSimplifyHost(status=1)
+        with self.assertRaises(NeverDError):
+            simplify_expression("x", host=host)
+        self.assertEqual(host.disposals, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
