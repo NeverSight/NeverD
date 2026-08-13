@@ -347,7 +347,7 @@ legacy v0-v2 合併 `.text`、`.rodata`、`.data.rel.ro` 與 `.eh_frame`，並�
 後執行：
 
 ```bash
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
   cmake --build build --target check-neverd-sbf
 ```
 

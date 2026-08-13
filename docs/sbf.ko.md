@@ -361,7 +361,7 @@ image가 immutable해지기 전에 정확히 한 번 적용합니다.
 검토하고 다음을 실행합니다.
 
 ```bash
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
   cmake --build build --target check-neverd-sbf
 ```
 

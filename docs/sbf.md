@@ -454,7 +454,7 @@ To refresh the evidence, update the full revisions in
 syscall registration changes; then run:
 
 ```bash
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
   cmake --build build --target check-neverd-sbf
 ```
 

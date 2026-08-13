@@ -90,11 +90,7 @@ constexpr FixtureExpectation Fixtures[] = {
 std::filesystem::path corpusRoot() {
   if (const char *Root = std::getenv("NEVERD_SBPF_ROOT"))
     return Root;
-#ifdef NEVERD_SOURCE_ROOT
-  return std::filesystem::path(NEVERD_SOURCE_ROOT) / "local_docs" / "sbpf";
-#else
   return {};
-#endif
 }
 
 ExecutionEnvironment makeEnvironment(const FixtureExpectation &Fixture) {

@@ -449,7 +449,7 @@ cmake --build build-sbf-asan-ubsan --parallel 4 --target \
 
 ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:strict_string_checks=1 \
 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
 ctest --test-dir build-sbf-asan-ubsan --output-on-failure --parallel 4 \
   -L '^NeverDSBF' -E 'SBFIntegration'
 ```

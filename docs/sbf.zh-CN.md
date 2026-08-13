@@ -354,7 +354,7 @@ syscall call/result；其他最终 register 属于内部实现细节，不宣称
 Agave syscall 注册变化，然后运行：
 
 ```bash
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
   cmake --build build --target check-neverd-sbf
 ```
 

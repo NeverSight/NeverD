@@ -398,7 +398,7 @@ Die Prüfung ist auf Anza `sbpf`
 `SBFUpstreamSources.def` prüfen und ausführen:
 
 ```bash
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
   cmake --build build --target check-neverd-sbf
 ```
 

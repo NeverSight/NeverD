@@ -394,7 +394,7 @@ La auditoría fija Anza `sbpf` en
 `SBFUpstreamSources.def`, y ejecute:
 
 ```bash
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
   cmake --build build --target check-neverd-sbf
 ```
 

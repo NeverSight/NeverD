@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -692,9 +693,11 @@ void addSyntheticCases(std::vector<DifferentialCase> &Cases) {
 }
 
 void addOfficialRelocationCase(std::vector<DifferentialCase> &Cases) {
-#ifdef NEVERD_SOURCE_ROOT
-  const std::filesystem::path Path = std::filesystem::path(NEVERD_SOURCE_ROOT) /
-                                     "local_docs" / "sbpf" / "tests" / "elfs" /
+  const char *Root = std::getenv("NEVERD_SBPF_ROOT");
+  if (!Root)
+    return;
+  const std::filesystem::path Path = std::filesystem::path(Root) / "tests" /
+                                     "elfs" /
                                      "reloc_64_relative_data_sbpfv0.so";
   if (!std::filesystem::exists(Path))
     return;
@@ -704,7 +707,6 @@ void addOfficialRelocationCase(std::vector<DifferentialCase> &Cases) {
   ASSERT_TRUE(static_cast<bool>(Program))
       << llvm::toString(Program.takeError());
   Cases.push_back({"official-v0-relocated-data", std::move(*Program), {}});
-#endif
 }
 
 void runAllSourceCases(SourceBackend Backend) {

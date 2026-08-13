@@ -402,7 +402,7 @@ L’audit fixe Anza `sbpf` à
 `SBFUpstreamSources.def`, puis exécutez :
 
 ```bash
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
   cmake --build build --target check-neverd-sbf
 ```
 

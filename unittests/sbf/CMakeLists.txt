@@ -19,10 +19,6 @@ add_neverd_unittest(NeverDSBFSourceDifferentialTests
   SBF
 )
 
-target_compile_definitions(NeverDSBFSourceDifferentialTests PRIVATE
-  NEVERD_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
-)
-
 target_include_directories(NeverDSBFSourceDifferentialTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
@@ -191,10 +187,6 @@ add_neverd_unittest(NeverDSBFUpstreamConformanceTests
   Loader
   Support
   SBF
-)
-
-target_compile_definitions(NeverDSBFUpstreamConformanceTests PRIVATE
-  NEVERD_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
 )
 
 target_include_directories(NeverDSBFUpstreamConformanceTests PRIVATE

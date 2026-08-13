@@ -19,10 +19,10 @@
 // PascalCase, matching how the Anchor macros derive them from Rust items.
 //
 // The bulk of the instruction names were adopted from the dictionary published
-// with `local_docs/solana-data-reverser`, but none of its hashes were taken on
-// trust: an entry is listed here only when NeverD's own derivation reproduces
-// the discriminator that file records for it, and the entries whose stated
-// hash did not reproduce were dropped rather than corrected. SBFAnchorTests
+// with `solana-data-reverser`, but none of its hashes were taken on trust: an
+// entry is listed here only when NeverD's own derivation reproduces the
+// discriminator that file records for it, and the entries whose stated hash
+// did not reproduce were dropped rather than corrected. SBFAnchorTests
 // re-derives the whole table and requires it to stay injective, so a name that
 // stopped hashing to a distinct value would fail the build's tests rather than
 // silently rename a recovered instruction.

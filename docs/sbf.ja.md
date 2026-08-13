@@ -363,7 +363,7 @@ image を無効にしません。legacy v0-v2 は `.text`、`.rodata`、`.data.r
 `SBFUpstreamSources.def` を確認して実行します。
 
 ```bash
-NEVERD_SBPF_ROOT=$PWD/local_docs/sbpf \
+NEVERD_SBPF_ROOT=/path/to/sbpf \
   cmake --build build --target check-neverd-sbf
 ```
 
