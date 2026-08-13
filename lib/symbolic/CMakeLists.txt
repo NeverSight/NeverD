@@ -1,12 +1,23 @@
 add_neverd_component_library(NeverDSymbolic
-  SymBitwise.cpp
-  SymDispatch.cpp
-  SymExec.cpp
-  SymExplore.cpp
-  SymExpr.cpp
-  SymExprEval.cpp
-  SymMBA.cpp
-  SymParse.cpp
-  SymPrint.cpp
-  SymState.cpp
+  exec/SymDispatch.cpp
+  exec/SymExec.cpp
+  exec/SymExplore.cpp
+  exec/SymState.cpp
+  expr/SymExpr.cpp
+  expr/SymExprArith.cpp
+  expr/SymExprEval.cpp
+  expr/SymExprLogic.cpp
+  expr/SymExprStruct.cpp
+  expr/SymExprWalk.cpp
+  mba/SymBitwise.cpp
+  mba/SymMBA.cpp
+  mba/SymMBAAbstract.cpp
+  mba/SymMBAMeasure.cpp
+  mba/SymMBAPoly.cpp
+  mba/SymMBAProduct.cpp
+  mba/SymMBARegion.cpp
+  parse/SymParse.cpp
+  parse/SymParseCall.cpp
+  parse/SymParseLex.cpp
+  parse/SymPrint.cpp
 )

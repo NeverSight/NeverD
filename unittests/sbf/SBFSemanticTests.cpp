@@ -6,9 +6,9 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/sbf/Analyzer.h"
-#include "neverd/sbf/Interpreter.h"
-#include "neverd/sbf/Semantics.h"
+#include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/runtime/SBFInterpreter.h"
+#include "neverd/sbf/runtime/SBFSemantics.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"

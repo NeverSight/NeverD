@@ -1,45 +1,70 @@
 add_neverd_component_library(NeverDLoader
-  Loader.cpp
-  FunctionDiscovery.cpp
-  FunctionDiscoveryX86.cpp
-  FunctionDiscoveryAArch64.cpp
-  FunctionDiscoveryARM.cpp
-  DirectBranch.cpp
-  LanguageEH.cpp
-  LanguageRuntime.cpp
-  DWARF/EHFrame.cpp
-  DWARF/LSDA.cpp
-  DWARF/ItaniumEH.cpp
-  Go/GoRuntimeEH.cpp
-  ObjC/ObjCEH.cpp
-  Rust/RustEH.cpp
   COFF/COFFLoader.cpp
-  COFF/COFFException.cpp
-  COFF/COFFExceptionCommon.cpp
-  COFF/COFFExceptionX64.cpp
-  COFF/COFFExceptionPersonality.cpp
-  COFF/COFFExceptionSEH.cpp
-  COFF/COFFExceptionFH3.cpp
-  COFF/COFFExceptionFH4.cpp
-  COFF/COFFExceptionGS.cpp
-  COFF/COFFDelphiEH.cpp
-  COFF/COFFRegistrationEH.cpp
-  COFF/COFFUnwind.cpp
-  COFF/COFFUnwindARM.cpp
   COFF/COFFLoaderUtils.cpp
+  COFF/eh/COFFDelphiEH.cpp
+  COFF/eh/COFFException.cpp
+  COFF/eh/COFFExceptionCommon.cpp
+  COFF/eh/COFFExceptionFH3.cpp
+  COFF/eh/COFFExceptionFH4.cpp
+  COFF/eh/COFFExceptionGS.cpp
+  COFF/eh/COFFExceptionPersonality.cpp
+  COFF/eh/COFFExceptionSEH.cpp
+  COFF/eh/COFFExceptionX64.cpp
+  COFF/eh/COFFRegistrationEH.cpp
+  COFF/eh/COFFRegistrationEHCommon.cpp
+  COFF/eh/COFFRegistrationEHFuncInfo.cpp
+  COFF/eh/COFFRegistrationEHHandler.cpp
+  COFF/eh/COFFRegistrationEHScan.cpp
+  COFF/eh/COFFRegistrationEHScopeTable.cpp
+  COFF/unwind/COFFUnwind.cpp
+  COFF/unwind/COFFUnwindARM32Codes.cpp
+  COFF/unwind/COFFUnwindARM64Codes.cpp
+  COFF/unwind/COFFUnwindARMCommon.cpp
+  COFF/unwind/COFFUnwindARMPacked.cpp
+  DWARF/EHFrame.cpp
+  DWARF/EHFrameCFI.cpp
+  DWARF/EHFrameEncoding.cpp
+  DWARF/ItaniumEH.cpp
+  DWARF/LSDA.cpp
+  DirectBranch.cpp
   ELF/ARMEHABI.cpp
+  ELF/ARMEHABIEntry.cpp
+  ELF/ARMEHABIIndex.cpp
+  ELF/ARMEHABITypeTable.cpp
+  ELF/ARMEHABIUnwind.cpp
   ELF/ELFLoader.cpp
+  ELF/ELFLoaderRelocations.cpp
+  ELF/ELFLoaderSections.cpp
+  ELF/ELFLoaderSegments.cpp
   ELF/ELFLoaderUtils.cpp
   ELF/SBFELFLoader.cpp
   EVM/EVMLoader.cpp
-  MachO/MachOLoader.cpp
-  MachO/MachORelocations.cpp
-  MachO/MachOLoaderUtils.cpp
-  MachO/MachODyldBind.cpp
+  Go/GoDeferInfo.cpp
+  Go/GoFuncTable.cpp
+  Go/GoModuleData.cpp
+  Go/GoPclntab.cpp
+  Go/GoRuntimeEH.cpp
+  Go/GoStackMaps.cpp
+  Loader.cpp
   MachO/MachOChainedFixups.cpp
-  MachO/MachOIndirectSymbols.cpp
-  MachO/CompactUnwind.cpp
+  MachO/MachOCompactUnwind.cpp
+  MachO/MachOCompactUnwindEncoding.cpp
+  MachO/MachODyldBind.cpp
   MachO/MachOExceptions.cpp
+  MachO/MachOI386Relocations.cpp
+  MachO/MachOIndirectSymbols.cpp
+  MachO/MachOLoader.cpp
+  MachO/MachOLoaderUtils.cpp
+  MachO/MachORelocations.cpp
+  ObjC/ObjCEH.cpp
+  Rust/RustEH.cpp
+  discovery/FunctionDiscovery.cpp
+  discovery/FunctionDiscoveryAArch64.cpp
+  discovery/FunctionDiscoveryARM.cpp
+  discovery/FunctionDiscoveryX86.cpp
+  language/LanguageEH.cpp
+  language/LanguagePersonality.cpp
+  language/LanguageRuntime.cpp
 
   LINK_COMPONENTS
   EVM

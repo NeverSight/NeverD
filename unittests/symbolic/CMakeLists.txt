@@ -3,8 +3,12 @@ add_neverd_unittest(NeverDSymbolicTests
   SymExecTests.cpp
   SymExploreTests.cpp
   SymExprTests.cpp
+  SymMBAOutcomeTests.cpp
+  SymMBAPolynomialTests.cpp
+  SymMBAStressTests.cpp
   SymMBATests.cpp
   SymParseTests.cpp
+
   LINK_COMPONENTS Symbolic
 )
 

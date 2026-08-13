@@ -6,9 +6,9 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/sbf/Analyzer.h"
-#include "neverd/sbf/Interpreter.h"
-#include "neverd/sbf/LLVMEmitter.h"
+#include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/runtime/SBFInterpreter.h"
+#include "neverd/sbf/emit/SBFLLVMEmitter.h"
 
 #include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"

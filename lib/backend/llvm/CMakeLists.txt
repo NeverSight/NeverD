@@ -1,33 +1,41 @@
 add_neverd_component_library(NeverDBackendLLVM
-  MedLLVMEmitter.cpp
-  MedLLVMExceptionMetadata.cpp
-  MedLLVMNativeSEH.cpp
-  MedLLVMNativeCxxEH.cpp
-  MedLLVMNativeItaniumEH.cpp
-  MedLLVMOpEmitter.cpp
-  MedLLVMFloatEmitter.cpp
-  MedLLVMCall.cpp
-  MedLLVMReturn.cpp
-  MedLLVMIntrinsic.cpp
-  MedLLVMAddrResolve.cpp
-  MedLLVMLiteralTable.cpp
-  MedLLVMIndexedGlobal.cpp
-  MedLLVMCodePtrResolve.cpp
-  MedLLVMFrameResolve.cpp
-  MedLLVMVarAccess.cpp
-  MedLLVMConstClass.cpp
-  MedLLVMGlobalData.cpp
-  MedLLVMSwitch.cpp
-  X86/MedLLVMX86Sideeffect.cpp
-  X86/MedLLVMX86ValueEmitter.cpp
-  X86/MedLLVMX86SimdEmitter.cpp
-  X86/MedLLVMX86CryptoEmitter.cpp
-  X86/MedLLVMX86ShuffleEmitter.cpp
-  X86/MedLLVMX86GlobalData.cpp
   AArch64/MedLLVMAArch64Sideeffect.cpp
   AArch64/MedLLVMAArch64ValueEmitter.cpp
   ARM/MedLLVMARMSideeffect.cpp
   ARM/MedLLVMARMValueEmitter.cpp
+  X86/MedLLVMX86CryptoEmitter.cpp
+  X86/MedLLVMX86GlobalData.cpp
+  X86/MedLLVMX86ShuffleEmitter.cpp
+  X86/MedLLVMX86Sideeffect.cpp
+  X86/MedLLVMX86SimdEmitter.cpp
+  X86/MedLLVMX86ValueEmitter.cpp
+  data/MedLLVMConstClass.cpp
+  data/MedLLVMConstUse.cpp
+  data/MedLLVMConstWalkedBase.cpp
+  data/MedLLVMGlobalData.cpp
+  data/MedLLVMIndexedGlobal.cpp
+  data/MedLLVMLiteralTable.cpp
+  data/MedLLVMSegmentEmbed.cpp
+  data/MedLLVMSpillPredicate.cpp
+  data/MedLLVMSymbolizedPtr.cpp
+  data/MedLLVMWritableData.cpp
+  eh/MedLLVMExceptionMetadata.cpp
+  eh/MedLLVMNativeCxxEH.cpp
+  eh/MedLLVMNativeItaniumEH.cpp
+  eh/MedLLVMNativeSEH.cpp
+  emit/MedLLVMCall.cpp
+  emit/MedLLVMEmitter.cpp
+  emit/MedLLVMFloatEmitter.cpp
+  emit/MedLLVMFuncBody.cpp
+  emit/MedLLVMIntrinsic.cpp
+  emit/MedLLVMOpEmitter.cpp
+  emit/MedLLVMReturn.cpp
+  emit/MedLLVMSwitch.cpp
+  emit/MedLLVMSwitchIndex.cpp
+  resolve/MedLLVMAddrResolve.cpp
+  resolve/MedLLVMCodePtrResolve.cpp
+  resolve/MedLLVMFrameResolve.cpp
+  resolve/MedLLVMVarAccess.cpp
 
   LINK_COMPONENTS
   IR

@@ -1,24 +1,29 @@
 # libneverd shared library — core engine for CLI, GUI, and plugins.
 # All NeverD frontends link this single shared library.
 set(NEVERD_SDK_SOURCES
-    NeverDCAPI.cpp
-    NeverDCAPIDisasm.cpp
-    NeverDCAPIInfo.cpp
-    NeverDCAPIGraph.cpp
-    NeverDCAPISearch.cpp
-    NeverDCAPIDecompile.cpp
-    NeverDCAPITargetConfig.cpp
-    NeverDCAPIPatch.cpp
-    NeverDCAPIRoundtrip.cpp
-    NeverDCAPIPersist.cpp
-    NeverDCAPISigs.cpp
-    NeverDCAPIBench.cpp
-    NeverDCAPISimplify.cpp
-    NeverDCAPISymbolic.cpp
-    PluginManager.cpp)
+    capi/NeverDCAPI.cpp
+    capi/NeverDCAPIBench.cpp
+    capi/NeverDCAPIBenchDecode.cpp
+    capi/NeverDCAPIDecompile.cpp
+    capi/NeverDCAPIDisasm.cpp
+    capi/NeverDCAPIGraph.cpp
+    capi/NeverDCAPIInfo.cpp
+    capi/NeverDCAPIPatch.cpp
+    capi/NeverDCAPIPersist.cpp
+    capi/NeverDCAPIRoundtrip.cpp
+    capi/NeverDCAPISearch.cpp
+    capi/NeverDCAPISigs.cpp
+    capi/NeverDCAPISimplify.cpp
+    capi/NeverDCAPISymbolic.cpp
+    capi/NeverDCAPITargetConfig.cpp
+    plugin/PluginManager.cpp
+    plugin/PythonPluginBridge.cpp
+    plugin/PythonPluginError.cpp
+    plugin/PythonPluginInterpreter.cpp
+    plugin/PythonPluginMarshal.cpp)
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
-    list(APPEND NEVERD_SDK_SOURCES PythonPluginRuntime.cpp)
+    list(APPEND NEVERD_SDK_SOURCES plugin/PythonPluginRuntime.cpp)
 endif()
 
 add_library(neverd_shared SHARED ${NEVERD_SDK_SOURCES})
@@ -107,6 +112,16 @@ endif()
 # external consumers can find them at <bin_dir>/sdk/.
 set(NEVERD_SDK_HEADERS
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPI.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPITypes.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISession.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIDisasm.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIQuery.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISymbolic.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIPatch.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIPersist.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISigs.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIPlugin.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISimplify.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDPlugin.h)
 
 add_custom_command(TARGET neverd_shared POST_BUILD

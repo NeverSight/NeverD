@@ -1,17 +1,30 @@
 add_neverd_component_library(NeverDIRLow
   CFGBuilder.cpp
+  CFGBuilderBlocks.cpp
   CFGBuilderException.cpp
+  CFGBuilderInsn.cpp
   CFGBuilderX86Fpu.cpp
   CircleRange.cpp
   FuncDetector.cpp
-  JumpTableResolver.cpp
-  JumpTableResolverARM.cpp
-  JumpTableResolverEmu.cpp
-  JumpTableResolverGuards.cpp
-  JumpTableResolverShapes.cpp
-  JumpTableResolverSource.cpp
-  JumpTableResolverStack.cpp
   NdOpEmulator.cpp
+  NdOpEmulatorExec.cpp
+  jumptable/JumpTableResolver.cpp
+  jumptable/JumpTableResolverARM.cpp
+  jumptable/JumpTableResolverBounds.cpp
+  jumptable/JumpTableResolverEmu.cpp
+  jumptable/JumpTableResolverExtract.cpp
+  jumptable/JumpTableResolverFold.cpp
+  jumptable/JumpTableResolverGuardAlias.cpp
+  jumptable/JumpTableResolverGuardCFG.cpp
+  jumptable/JumpTableResolverGuardRange.cpp
+  jumptable/JumpTableResolverGuards.cpp
+  jumptable/JumpTableResolverNorm.cpp
+  jumptable/JumpTableResolverShapes.cpp
+  jumptable/JumpTableResolverSlice.cpp
+  jumptable/JumpTableResolverSource.cpp
+  jumptable/JumpTableResolverStack.cpp
+  jumptable/JumpTableResolverTargets.cpp
+  jumptable/JumpTableResolverTwoLevel.cpp
 
   LINK_COMPONENTS
   Symbolic

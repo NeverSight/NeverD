@@ -32,11 +32,11 @@ set_target_properties(neverd-null-name-plugin-fixture PROPERTIES
   OUTPUT_NAME "neverd_null_name_plugin_fixture")
 
 set(_neverd_plugin_runtime_test_sources
-  ${CMAKE_SOURCE_DIR}/lib/sdk/PluginManager.cpp)
+  ${CMAKE_SOURCE_DIR}/lib/sdk/plugin/PluginManager.cpp)
 set(_neverd_plugin_runtime_test_libs ${CMAKE_DL_LIBS})
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
   list(APPEND _neverd_plugin_runtime_test_sources
-    ${CMAKE_SOURCE_DIR}/lib/sdk/PythonPluginRuntime.cpp)
+    ${CMAKE_SOURCE_DIR}/lib/sdk/plugin/PythonPluginRuntime.cpp)
   list(APPEND _neverd_plugin_runtime_test_libs Python3::Python)
 endif()
 

@@ -8,13 +8,13 @@
 #define NEVERD_SBF_SBFIR_H
 
 #include "neverd/Common.h"
-#include "neverd/sbf/Opcodes.h"
-#include "neverd/sbf/ProgramImage.h"
 #include "neverd/sbf/SBFConstants.h"
 #include "neverd/sbf/SBFMetadata.h"
-#include "neverd/sbf/Semantics.h"
-#include "neverd/sbf/SolanaModel.h"
-#include "neverd/sbf/Syscalls.h"
+#include "neverd/sbf/image/SBFProgramImage.h"
+#include "neverd/sbf/runtime/SBFOpcodes.h"
+#include "neverd/sbf/runtime/SBFSemantics.h"
+#include "neverd/sbf/runtime/SBFSyscalls.h"
+#include "neverd/sbf/solana/SBFSolanaModel.h"
 
 #include <array>
 #include <cstddef>

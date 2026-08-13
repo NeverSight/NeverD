@@ -7,7 +7,7 @@
 #include "SBFFixtureBuilder.h"
 #include "gtest/gtest.h"
 
-#include "neverd/sbf/Anchor.h"
+#include "neverd/sbf/solana/SBFAnchor.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/SmallString.h"

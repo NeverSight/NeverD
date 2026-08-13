@@ -7,8 +7,8 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/BinaryImage.h"
-#include "neverd/sbf/Analyzer.h"
-#include "neverd/sbf/Opcodes.h"
+#include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/runtime/SBFOpcodes.h"
 #include "neverd/sbf/SBFConstants.h"
 
 #include "llvm/Support/Endian.h"

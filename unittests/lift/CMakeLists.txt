@@ -1,108 +1,137 @@
 add_neverd_unittest(NeverDLiftTests
-  AArch64_ArithTests.cpp
-  AArch64_AtomicTests.cpp
-  AArch64_BitShiftTests.cpp
-  AArch64_CarryTests.cpp
-  AArch64_CondTests.cpp
-  AArch64_CSelTests.cpp
-  AArch64_ExtendTests.cpp
-  AArch64_FPTests.cpp
-  AArch64_IntrinsicsTests.cpp
-  AArch64_LogicTests.cpp
-  AArch64_MemTests.cpp
-  AArch64_MulDivTests.cpp
-  AArch64_PipelineE2ETests.cpp
-  AArch64_FastClassifyParityTests.cpp
-  AArch64_NativeDecodeParityTests.cpp
-  ARM32_ArithTests.cpp
-  ARM32_CarryTests.cpp
-  ARM32_ControlTests.cpp
-  ARM32_ExtendTests.cpp
-  ARM32_IntrinsicsTests.cpp
-  ARM32_LogicTests.cpp
-  ARM32_MemTests.cpp
-  ARM32_MulDivTests.cpp
-  ARM32_PipelineE2ETests.cpp
-  ARM32_ShiftTests.cpp
-  X86_32_ArithTests.cpp
-  X86_32_BitOpsTests.cpp
-  X86_32_CarryTests.cpp
-  X86_32_CmovTests.cpp
-  X86_32_CmpxchgTests.cpp
-  X86_32_ControlTests.cpp
-  X86_32_DShiftTests.cpp
-  X86_32_FlagsTests.cpp
-  X86_32_FPTests.cpp
-  X86_32_LodsMiscTests.cpp
-  X86_32_LoopTests.cpp
-  X86_32_MiscTests.cpp
-  X86_32_MulDivTests.cpp
-  X86_32_PipelineE2ETests.cpp
-  X86_32_RotateTests.cpp
-  X86_32_SetccTests.cpp
-  X86_32_SignExtTests.cpp
-  X86_32_StackTests.cpp
-  X86_32_StringTests.cpp
-  X86_32_X87FPUTests.cpp
-  X86_64_AdxMiscTests.cpp
-  X86_64_ArithTests.cpp
-  X86_64_BitOpsTests.cpp
-  X86_64_BMITests.cpp
-  X86_64_CarryOpsTests.cpp
-  X86_64_CmpxchgTests.cpp
-  X86_64_CFGEntryTests.cpp
-  X86_64_ControlFlowTests.cpp
-  X86_64_ControlSemanticsTests.cpp
-  X86_64_DoubleShiftTests.cpp
-  X86_64_ExtensionInvariantTests.cpp
-  X86_64_FlagOpsTests.cpp
-  X86_64_FlagsMiscTests.cpp
-  X86_64_FmaMiscTests.cpp
-  X86_64_FPConvertTests.cpp
-  X86_64_IntrinsicsTests.cpp
-  X86_64_LodsMiscTests.cpp
-  X86_64_LoopBitTests.cpp
-  X86_64_MemAtomicTests.cpp
-  X86_64_MiscTests.cpp
-  X86_64_MulDivTests.cpp
-  X86_64_PipelineE2ETests.cpp
-  X86_64_RclRcrTests.cpp
-  X86_64_RotateShiftTests.cpp
-  X86_64_SemanticE2ETests.cpp
-  X86_64_SetccCmovTests.cpp
-  X86_64_SignConvTests.cpp
-  X86_64_SignExtTests.cpp
-  X86_64_SSEAVXTests.cpp
-  X86_64_SSEFPTests.cpp
-  X86_64_SSEMiscTests.cpp
-  X86_64_StackMovTests.cpp
-  X86_64_StringOpsTests.cpp
-  X86_64_X87FPUTests.cpp
-  X86_64_SwitchTests.cpp
-  X86_64_RoundTripTests.cpp
-  AArch64_SwitchTests.cpp
-  AArch64_RoundTripTests.cpp
-  ARM32_SwitchTests.cpp
-  ARM32_RoundTripTests.cpp
-  InstructionModeTests.cpp
-  LiftCommonTests.cpp
-  MachOI386RelocationTests.cpp
-  MedCallingConvTests.cpp
-  COFFExceptionTests.cpp
-  ELFExceptionTests.cpp
-  ExceptionCFGSeedTests.cpp
-  ItaniumEHEmitterTests.cpp
-  ItaniumEHStructurerTests.cpp
-  HighSymSimplifyTests.cpp
-  RegistrationTryLevelTests.cpp
-  COFFARMFormatTests.cpp
-  FunctionDiscoveryThumbTests.cpp
-  NdOpEmulatorTests.cpp
-  CircleRangeTests.cpp
-  JumpTableEnhancedTests.cpp
-  PatchFormatTests.cpp
-  RuntimeMetadataTests.cpp
-  TextSectionDetectionTests.cpp
+  aarch64/AArch64_ArithTests.cpp
+  aarch64/AArch64_AtomicTests.cpp
+  aarch64/AArch64_BitShiftTests.cpp
+  aarch64/AArch64_CarryTests.cpp
+  aarch64/AArch64_CondTests.cpp
+  aarch64/AArch64_CSelTests.cpp
+  aarch64/AArch64_ExtendTests.cpp
+  aarch64/AArch64_FPTests.cpp
+  aarch64/AArch64_IntrinsicsTests.cpp
+  aarch64/AArch64_LogicTests.cpp
+  aarch64/AArch64_MemTests.cpp
+  aarch64/AArch64_MulDivTests.cpp
+  aarch64/AArch64_PipelineE2ETests.cpp
+  aarch64/AArch64_FastClassifyParityTests.cpp
+  aarch64/AArch64_NativeDecodeParityTests.cpp
+  aarch64/AArch64_NativeDecodeParityControlTests.cpp
+  aarch64/AArch64_NativeDecodeParityFPTests.cpp
+  aarch64/AArch64_NativeDecodeParityLoadStoreTests.cpp
+  aarch64/AArch64_NativeDecodeParitySweepTests.cpp
+  arm32/ARM32_ArithTests.cpp
+  arm32/ARM32_CarryTests.cpp
+  arm32/ARM32_ControlTests.cpp
+  arm32/ARM32_ExtendTests.cpp
+  arm32/ARM32_IntrinsicsTests.cpp
+  arm32/ARM32_LogicTests.cpp
+  arm32/ARM32_MemTests.cpp
+  arm32/ARM32_MulDivTests.cpp
+  arm32/ARM32_PipelineE2ETests.cpp
+  arm32/ARM32_ShiftTests.cpp
+  x86_32/X86_32_ArithTests.cpp
+  x86_32/X86_32_BitOpsTests.cpp
+  x86_32/X86_32_CarryTests.cpp
+  x86_32/X86_32_CmovTests.cpp
+  x86_32/X86_32_CmpxchgTests.cpp
+  x86_32/X86_32_ControlTests.cpp
+  x86_32/X86_32_DShiftTests.cpp
+  x86_32/X86_32_FlagsTests.cpp
+  x86_32/X86_32_FPTests.cpp
+  x86_32/X86_32_LodsMiscTests.cpp
+  x86_32/X86_32_LoopTests.cpp
+  x86_32/X86_32_MiscTests.cpp
+  x86_32/X86_32_MulDivTests.cpp
+  x86_32/X86_32_PipelineE2ETests.cpp
+  x86_32/X86_32_RotateTests.cpp
+  x86_32/X86_32_SetccTests.cpp
+  x86_32/X86_32_SignExtTests.cpp
+  x86_32/X86_32_StackTests.cpp
+  x86_32/X86_32_StringTests.cpp
+  x86_32/X86_32_X87FPUTests.cpp
+  x86_64/X86_64_AdxMiscTests.cpp
+  x86_64/X86_64_ArithTests.cpp
+  x86_64/X86_64_BitOpsTests.cpp
+  x86_64/X86_64_BMITests.cpp
+  x86_64/X86_64_CarryOpsTests.cpp
+  x86_64/X86_64_CmpxchgTests.cpp
+  x86_64/X86_64_CFGEntryTests.cpp
+  x86_64/X86_64_ControlFlowTests.cpp
+  x86_64/X86_64_ControlSemanticsTests.cpp
+  x86_64/X86_64_DoubleShiftTests.cpp
+  x86_64/X86_64_ExtensionInvariantTests.cpp
+  x86_64/X86_64_FlagOpsTests.cpp
+  x86_64/X86_64_FlagsMiscTests.cpp
+  x86_64/X86_64_FmaMiscTests.cpp
+  x86_64/X86_64_FPConvertTests.cpp
+  x86_64/X86_64_IntrinsicsTests.cpp
+  x86_64/X86_64_LodsMiscTests.cpp
+  x86_64/X86_64_LoopBitTests.cpp
+  x86_64/X86_64_MemAtomicTests.cpp
+  x86_64/X86_64_MiscTests.cpp
+  x86_64/X86_64_MulDivTests.cpp
+  x86_64/X86_64_PipelineE2ETests.cpp
+  x86_64/X86_64_RclRcrTests.cpp
+  x86_64/X86_64_RotateShiftTests.cpp
+  x86_64/X86_64_SemanticE2ETests.cpp
+  x86_64/X86_64_SetccCmovTests.cpp
+  x86_64/X86_64_SignConvTests.cpp
+  x86_64/X86_64_SignExtTests.cpp
+  x86_64/X86_64_SSEAVXTests.cpp
+  x86_64/X86_64_SSEFPTests.cpp
+  x86_64/X86_64_SSEMiscTests.cpp
+  x86_64/X86_64_StackMovTests.cpp
+  x86_64/X86_64_StringOpsTests.cpp
+  x86_64/X86_64_X87FPUTests.cpp
+  x86_64/X86_64_SwitchTests.cpp
+  x86_64/X86_64_RoundTripTests.cpp
+  aarch64/AArch64_SwitchTests.cpp
+  aarch64/AArch64_RoundTripTests.cpp
+  arm32/ARM32_SwitchTests.cpp
+  arm32/ARM32_RoundTripTests.cpp
+  core/InstructionModeTests.cpp
+  core/LiftCommonTests.cpp
+  format/MachOI386RelocationTests.cpp
+  format/MachOI386RelocationExternalTests.cpp
+  format/MachOI386RelocationFixtureTests.cpp
+  format/MachOI386RelocationPipelineTests.cpp
+  format/MachOI386RelocationScatteredTests.cpp
+  core/MedCallingConvTests.cpp
+  eh/COFFExceptionTests.cpp
+  eh/COFFExceptionARM32UnwindTests.cpp
+  eh/COFFExceptionARM64UnwindTests.cpp
+  eh/COFFExceptionDelphiTests.cpp
+  eh/COFFExceptionFH3Tests.cpp
+  eh/COFFExceptionFH4Tests.cpp
+  eh/COFFExceptionGSTests.cpp
+  eh/COFFExceptionIRTests.cpp
+  eh/COFFExceptionNativeIRTests.cpp
+  eh/COFFExceptionPatchTests.cpp
+  eh/COFFExceptionSEHTests.cpp
+  eh/ELFExceptionTests.cpp
+  eh/ExceptionCFGSeedTests.cpp
+  eh/ItaniumEHEmitterTests.cpp
+  eh/ItaniumEHStructurerTests.cpp
+  core/HighSymSimplifyTests.cpp
+  eh/RegistrationTryLevelTests.cpp
+  format/COFFARMFormatTests.cpp
+  format/COFFARMFormatFragmentTests.cpp
+  format/COFFARMFormatMalformedTests.cpp
+  format/COFFARMHighCTests.cpp
+  format/COFFARMPipelineTests.cpp
+  format/COFFARMStackAnalysisTests.cpp
+  arm32/FunctionDiscoveryThumbTests.cpp
+  core/NdOpEmulatorTests.cpp
+  core/NdOpEmulatorBitOpsTests.cpp
+  core/NdOpEmulatorMemoryTests.cpp
+  core/CircleRangeTests.cpp
+  core/JumpTableEnhancedTests.cpp
+  format/PatchFormatTests.cpp
+  format/PatchFormatCOFFARMTests.cpp
+  format/PatchFormatCOFFTests.cpp
+  format/PatchFormatSectionTests.cpp
+  format/PatchFormatXCallTests.cpp
+  format/RuntimeMetadataTests.cpp
+  format/TextSectionDetectionTests.cpp
 )
 
 target_compile_definitions(NeverDLiftTests PRIVATE
@@ -112,6 +141,7 @@ target_compile_definitions(NeverDLiftTests PRIVATE
 )
 
 target_include_directories(NeverDLiftTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -137,11 +167,12 @@ endif()
 # PassIR component), so the stamp/skip contract can be pinned without rebuilding
 # or relinking the ~100-TU NeverDLiftTests binary.
 add_neverd_unittest(NeverDSymSimplifyGuardTests
-  SymSimplifyGuardTests.cpp
+  pipeline/SymSimplifyGuardTests.cpp
   LINK_COMPONENTS
   Pipeline
 )
 target_include_directories(NeverDSymSimplifyGuardTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -150,11 +181,12 @@ target_include_directories(NeverDSymSimplifyGuardTests PRIVATE
 # through the same prebuilt NeverDPipeline archive, so the closed loop costs a
 # single small TU rather than a relink of the large lift test binary.
 add_neverd_unittest(NeverDControlFlowRecoveryTests
-  ControlFlowRecoveryTests.cpp
+  pipeline/ControlFlowRecoveryTests.cpp
   LINK_COMPONENTS
   Pipeline
 )
 target_include_directories(NeverDControlFlowRecoveryTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -177,14 +209,32 @@ add_custom_target(NeverDWindowsEHSyntheticCorpus
   DEPENDS "${NEVERD_SYNTHETIC_WINDOWS_EH_MANIFEST}")
 
 add_neverd_unittest(NeverDLanguageEHTests
-  LanguageEHTests.cpp
-  GoRuntimeEHTests.cpp
-  CompactUnwindTests.cpp
-  ARMEHABITests.cpp
-  ObjCEHTests.cpp
-  ScratchRealBinary.cpp
+  language/LanguageEHTests.cpp
+  language/LanguageEHDirectBranchTests.cpp
+  language/LanguageEHItaniumSJLJTests.cpp
+  language/LanguageEHItaniumTests.cpp
+  language/LanguageEHRuntimeTests.cpp
+  language/LanguageEHRustTests.cpp
+  language/GoRuntimeEHTests.cpp
+  language/GoRuntimeDeferTests.cpp
+  language/GoRuntimeMalformedTests.cpp
+  language/GoRuntimePclnTabTests.cpp
+  language/GoRuntimeStackMapTests.cpp
+  language/CompactUnwindTests.cpp
+  language/CompactUnwindARM64Tests.cpp
+  language/CompactUnwindSectionTests.cpp
+  language/ARMEHABITests.cpp
+  language/ARMEHABIMalformedTests.cpp
+  language/ARMEHABITypeTableTests.cpp
+  language/ARMEHABIUnwindOpcodeTests.cpp
+  language/ObjCEHTests.cpp
+  language/ObjCEHGnuTests.cpp
+  language/ObjCEHRuntimeCallTests.cpp
+  language/ObjCEHRuntimeStateTests.cpp
+  language/ScratchRealBinary.cpp
 )
 target_include_directories(NeverDLanguageEHTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -194,8 +244,8 @@ target_link_libraries(NeverDLanguageEHTests PRIVATE
 )
 
 add_neverd_unittest(NeverDWindowsEHCorpusManifestTests
-  WindowsEHCorpusManifestTests.cpp
-  WindowsEHCorpusManifest.cpp
+  corpus/windows/WindowsEHCorpusManifestTests.cpp
+  corpus/windows/WindowsEHCorpusManifest.cpp
 )
 add_dependencies(NeverDWindowsEHCorpusManifestTests
   NeverDWindowsEHSyntheticCorpus)
@@ -203,6 +253,7 @@ target_compile_definitions(NeverDWindowsEHCorpusManifestTests PRIVATE
   NEVERD_SYNTHETIC_WINDOWS_EH_ROOT="${NEVERD_SYNTHETIC_WINDOWS_EH_ROOT}"
 )
 target_include_directories(NeverDWindowsEHCorpusManifestTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -212,10 +263,11 @@ target_link_libraries(NeverDWindowsEHCorpusManifestTests PRIVATE
 )
 
 add_neverd_unittest(NeverDRustEHCorpusManifestTests
-  RustEHCorpusManifestTests.cpp
-  RustEHCorpusManifest.cpp
+  corpus/rust/RustEHCorpusManifestTests.cpp
+  corpus/rust/RustEHCorpusManifest.cpp
 )
 target_include_directories(NeverDRustEHCorpusManifestTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -225,10 +277,11 @@ target_link_libraries(NeverDRustEHCorpusManifestTests PRIVATE
 )
 
 add_neverd_unittest(NeverDGoEHCorpusManifestTests
-  GoEHCorpusManifestTests.cpp
-  GoEHCorpusManifest.cpp
+  corpus/go/GoEHCorpusManifestTests.cpp
+  corpus/go/GoEHCorpusManifest.cpp
 )
 target_include_directories(NeverDGoEHCorpusManifestTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -238,10 +291,11 @@ target_link_libraries(NeverDGoEHCorpusManifestTests PRIVATE
 )
 
 add_neverd_unittest(NeverDCxxItaniumEHCorpusManifestTests
-  CxxItaniumEHCorpusManifestTests.cpp
-  CxxItaniumEHCorpusManifest.cpp
+  corpus/cxx/CxxItaniumEHCorpusManifestTests.cpp
+  corpus/cxx/CxxItaniumEHCorpusManifest.cpp
 )
 target_include_directories(NeverDCxxItaniumEHCorpusManifestTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
@@ -256,8 +310,8 @@ target_link_libraries(NeverDCxxItaniumEHCorpusManifestTests PRIVATE
 # are the only thing that can still be tested before a corpus exists.
 if(NEVERD_HAVE_WINDOWS_EH_CORPUS)
   add_neverd_unittest(NeverDWindowsEHCorpusTests
-    WindowsEHCorpusTests.cpp
-    WindowsEHCorpusManifest.cpp
+    corpus/windows/WindowsEHCorpusTests.cpp
+    corpus/windows/WindowsEHCorpusManifest.cpp
     TIMEOUT 300
   )
 
@@ -266,6 +320,7 @@ if(NEVERD_HAVE_WINDOWS_EH_CORPUS)
   )
 
   target_include_directories(NeverDWindowsEHCorpusTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${LLVM_INCLUDE_DIRS}
   )
@@ -280,8 +335,8 @@ if(NEVERD_HAVE_RUST_EH_CORPUS)
   # A Rust `bin` statically links the standard library, so every artifact
   # carries the whole of `std`'s Itanium tables alongside the probe's.
   add_neverd_unittest(NeverDRustEHCorpusTests
-    RustEHCorpusTests.cpp
-    RustEHCorpusManifest.cpp
+    corpus/rust/RustEHCorpusTests.cpp
+    corpus/rust/RustEHCorpusManifest.cpp
     TIMEOUT 600
   )
 
@@ -290,6 +345,7 @@ if(NEVERD_HAVE_RUST_EH_CORPUS)
   )
 
   target_include_directories(NeverDRustEHCorpusTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${LLVM_INCLUDE_DIRS}
   )
@@ -304,8 +360,8 @@ if(NEVERD_HAVE_GO_EH_CORPUS)
   # Every Go image links the whole runtime, so decoding one means walking a
   # `pclntab` of a few thousand functions and the funcdata behind each of them.
   add_neverd_unittest(NeverDGoEHCorpusTests
-    GoEHCorpusTests.cpp
-    GoEHCorpusManifest.cpp
+    corpus/go/GoEHCorpusTests.cpp
+    corpus/go/GoEHCorpusManifest.cpp
     TIMEOUT 600
   )
 
@@ -314,6 +370,7 @@ if(NEVERD_HAVE_GO_EH_CORPUS)
   )
 
   target_include_directories(NeverDGoEHCorpusTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${LLVM_INCLUDE_DIRS}
   )
@@ -328,8 +385,9 @@ if(NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS)
   # Nine toolchain cells of eight variants, and a mingw image statically links
   # the whole C runtime, so this reads considerably more table than it emits.
   add_neverd_unittest(NeverDCxxItaniumEHCorpusTests
-    CxxItaniumEHCorpusTests.cpp
-    CxxItaniumEHCorpusManifest.cpp
+    corpus/cxx/CxxItaniumEHCorpusTests.cpp
+    corpus/cxx/CxxItaniumEHCorpusGraphTests.cpp
+    corpus/cxx/CxxItaniumEHCorpusManifest.cpp
     TIMEOUT 600
   )
 
@@ -339,6 +397,7 @@ if(NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS)
   )
 
   target_include_directories(NeverDCxxItaniumEHCorpusTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${LLVM_INCLUDE_DIRS}
   )
@@ -352,7 +411,7 @@ endif()
 
 if(NEVERD_HAVE_OBJC_EH_CORPUS)
   add_neverd_unittest(NeverDObjCEHCorpusTests
-    ObjCEHCorpusTests.cpp
+    corpus/objc/ObjCEHCorpusTests.cpp
     TIMEOUT 600
   )
 
@@ -362,6 +421,7 @@ if(NEVERD_HAVE_OBJC_EH_CORPUS)
   )
 
   target_include_directories(NeverDObjCEHCorpusTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${LLVM_INCLUDE_DIRS}
   )
@@ -379,10 +439,11 @@ endif()
 # takes down every other test in the build as well.
 if(TARGET neverd_shared)
   add_neverd_unittest(NeverDMetadataJSONTests
-    MetadataJSONTests.cpp
+    sdk/MetadataJSONTests.cpp
   )
 
   target_include_directories(NeverDMetadataJSONTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${LLVM_INCLUDE_DIRS}
   )

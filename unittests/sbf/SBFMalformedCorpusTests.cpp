@@ -8,8 +8,8 @@
 #include "gtest/gtest.h"
 
 #include "neverd/support/BinaryLoading.h"
-#include "neverd/sbf/Analyzer.h"
-#include "neverd/sbf/Interpreter.h"
+#include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/runtime/SBFInterpreter.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Object/ELFTypes.h"

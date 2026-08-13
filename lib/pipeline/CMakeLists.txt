@@ -9,6 +9,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineOptimize.cpp
   PipelinePatchLift.cpp
   PipelineStructReturn.cpp
+  PipelineStructReturnCallSites.cpp
   PipelineWideIntReturn.cpp
 
   LINK_COMPONENTS

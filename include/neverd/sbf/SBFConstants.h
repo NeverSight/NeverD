@@ -1,4 +1,4 @@
-//===- SBFConstants.h - Solana SBF protocol constants ---------*- C++ -*-===//
+//===- SBFConstants.h - Solana SBF protocol constants -----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

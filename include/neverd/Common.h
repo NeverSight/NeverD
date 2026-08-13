@@ -153,7 +153,7 @@ inline bool isDarwinStackProbeName(llvm::StringRef Name) {
 }
 
 /// Native ISA targets plus the Ethereum VM and Solana SBF virtual machines.
-/// Backend support (lift/codegen/patch): neverd/ir/arch_support.h.
+/// Backend support (lift/codegen/patch): neverd/ArchSupport.h.
 enum class Arch : uint8_t { X64, AArch64, X86, ARM, EVM, SBF, Unknown };
 
 enum class InstructionMode : uint8_t { Default, ARM, Thumb };
@@ -242,9 +242,7 @@ struct Segment {
   bool isExecutable() const { return hasFlag(Flags, SegmentFlags::Executable); }
   bool isWritable() const { return hasFlag(Flags, SegmentFlags::Writable); }
   bool isReadable() const { return hasFlag(Flags, SegmentFlags::Readable); }
-  bool contains(va_t Addr) const {
-    return Addr >= VA && Addr - VA < Size;
-  }
+  bool contains(va_t Addr) const { return Addr >= VA && Addr - VA < Size; }
 };
 
 struct Import {

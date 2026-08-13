@@ -6,7 +6,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/sbf/LLVMEmitter.h"
+#include "neverd/sbf/emit/SBFLLVMEmitter.h"
 
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/LLVMContext.h"

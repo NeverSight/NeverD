@@ -6,10 +6,10 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/sbf/Analyzer.h"
-#include "neverd/sbf/CEmitter.h"
-#include "neverd/sbf/Interpreter.h"
-#include "neverd/sbf/RustEmitter.h"
+#include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/emit/SBFCEmitter.h"
+#include "neverd/sbf/runtime/SBFInterpreter.h"
+#include "neverd/sbf/emit/SBFRustEmitter.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"

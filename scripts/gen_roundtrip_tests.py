@@ -10,9 +10,9 @@ Usage:
     python3 scripts/gen_roundtrip_tests.py
 
 Output:
-    unittests/semantic/X64_AutoRoundTripTests.cpp
-    unittests/semantic/AArch64_AutoRoundTripTests.cpp
-    unittests/semantic/ARM32_AutoRoundTripTests.cpp
+    unittests/semantic/x86_64/X64_AutoRoundTripTests.cpp
+    unittests/semantic/aarch64/AArch64_AutoRoundTripTests.cpp
+    unittests/semantic/arm32/ARM32_AutoRoundTripTests.cpp
 """
 
 import os
@@ -893,6 +893,7 @@ def gen_test_file(arch_name: str, test_class: str, insn_map: dict,
     total = len(implemented)
     print(f"  {arch_name}: {mapped}/{total} instructions mapped to roundtrip tests")
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         f.write(f'//===- {output_path.name} - Auto-generated roundtrip tests --*- C++ -*-===//\n')
         f.write(f'//\n')
@@ -945,11 +946,11 @@ def main():
     out_dir = PROJ_ROOT / "unittests/semantic"
 
     gen_test_file("x86_64", "X64RoundTrip", X86_INSN_MAP, x86_ids,
-                  out_dir / "X64_AutoRoundTripTests.cpp")
+                  out_dir / "x86_64" / "X64_AutoRoundTripTests.cpp")
     gen_test_file("aarch64", "AArch64RoundTrip", A64_INSN_MAP, a64_ids,
-                  out_dir / "AArch64_AutoRoundTripTests.cpp")
+                  out_dir / "aarch64" / "AArch64_AutoRoundTripTests.cpp")
     gen_test_file("arm32", "ARM32RoundTrip", ARM32_INSN_MAP, arm_ids,
-                  out_dir / "ARM32_AutoRoundTripTests.cpp")
+                  out_dir / "arm32" / "ARM32_AutoRoundTripTests.cpp")
 
     print(f"\nGenerated test files in {out_dir}/")
     print("Add the new .cpp files to CMakeLists.txt and rebuild.")

@@ -6,9 +6,9 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/evm/Analyzer.h"
-#include "neverd/evm/Interpreter.h"
-#include "neverd/evm/Semantics.h"
+#include "neverd/evm/analysis/EVMAnalyzer.h"
+#include "neverd/evm/runtime/EVMInterpreter.h"
+#include "neverd/evm/runtime/EVMSemantics.h"
 
 #include "llvm/Support/Error.h"
 

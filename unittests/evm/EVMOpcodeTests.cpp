@@ -6,7 +6,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/evm/Opcodes.h"
+#include "neverd/evm/bytecode/EVMOpcodes.h"
 
 #include <type_traits>
 

@@ -7,9 +7,9 @@
 #ifndef NEVERD_UNITTESTS_SBF_SBFFIXTUREBUILDER_H
 #define NEVERD_UNITTESTS_SBF_SBFFIXTUREBUILDER_H
 
-#include "neverd/sbf/Opcodes.h"
+#include "neverd/sbf/runtime/SBFOpcodes.h"
 #include "neverd/sbf/SBFConstants.h"
-#include "neverd/sbf/Version.h"
+#include "neverd/sbf/image/SBFVersion.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Object/ELFTypes.h"

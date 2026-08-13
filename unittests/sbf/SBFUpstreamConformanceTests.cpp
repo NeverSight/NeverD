@@ -7,9 +7,9 @@
 #include "gtest/gtest.h"
 
 #include "neverd/support/BinaryLoading.h"
-#include "neverd/sbf/Analyzer.h"
-#include "neverd/sbf/Interpreter.h"
-#include "neverd/sbf/Syscalls.h"
+#include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/runtime/SBFInterpreter.h"
+#include "neverd/sbf/runtime/SBFSyscalls.h"
 
 #include "llvm/Support/Error.h"
 

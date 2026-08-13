@@ -235,7 +235,7 @@ cl::opt<evm::Hardfork> EVMHardfork("evm-hardfork", cl::desc("EVM hardfork"),
   clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
 #define EVM_HARDFORK_LATEST(NAME, SPELLING)                                    \
   clEnumValN(evm::Hardfork::NAME, SPELLING, SPELLING),
-#include "neverd/evm/EVMHardforks.def"
+#include "neverd/evm/bytecode/EVMHardforks.def"
                                    }),
                                    cl::init(evm::Hardfork::Latest),
                                    cl::sub(LiftCmd), cl::sub(DecompileCmd),
@@ -253,7 +253,7 @@ cl::opt<sbf::Version> SBFVersion("sbf-version", cl::desc("Solana SBF version"),
   clEnumValN(sbf::Version::NAME, SPELLING, DISPLAY_NAME),
 #define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
   clEnumValN(sbf::Version::NAME, SPELLING, DISPLAY_NAME),
-#include "neverd/sbf/SBFVersions.def"
+#include "neverd/sbf/image/SBFVersions.def"
                                  }),
                                  cl::init(sbf::Version::Auto), cl::sub(LiftCmd),
                                  cl::sub(DecompileCmd));
@@ -279,7 +279,7 @@ cl::opt<sbf::Cluster> SBFCluster("sbf-cluster",
                                  cl::ValuesClass({
 #define SBF_CLUSTER(ID, NAME, ACTIVATES_EVERYTHING, SUMMARY)                   \
   clEnumValN(sbf::Cluster::ID, NAME, SUMMARY),
-#include "neverd/sbf/SBFRuntimeFeatures.def"
+#include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
                                  }),
                                  cl::init(sbf::Cluster::MainnetBeta),
                                  cl::sub(LiftCmd), cl::sub(DecompileCmd));
@@ -296,7 +296,7 @@ cl::opt<sbf::Loader> SBFLoader("sbf-loader",
 #define SBF_LOADER(ID, NAME, KNOWN_ADDRESS, ACCOUNT_ABI, DEPLOYS, EXECUTES,    \
                    SUMMARY)                                                    \
   clEnumValN(sbf::Loader::ID, NAME, SUMMARY),
-#include "neverd/sbf/SBFLoaders.def"
+#include "neverd/sbf/runtime/SBFLoaders.def"
                                }),
                                cl::init(sbf::Loader::V3), cl::sub(LiftCmd),
                                cl::sub(DecompileCmd));
@@ -307,7 +307,7 @@ cl::opt<sbf::RuntimePurpose>
                cl::ValuesClass({
 #define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)                                 \
   clEnumValN(sbf::RuntimePurpose::ID, NAME, SUMMARY),
-#include "neverd/sbf/SBFRuntimeFeatures.def"
+#include "neverd/sbf/runtime/SBFRuntimeFeatures.def"
                }),
                cl::init(sbf::RuntimePurpose::Execution), cl::sub(LiftCmd),
                cl::sub(DecompileCmd));

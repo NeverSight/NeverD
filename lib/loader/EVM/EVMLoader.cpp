@@ -7,7 +7,7 @@
 #include "neverd/loader/EVM/EVMLoader.h"
 
 #include "neverd/Common.h"
-#include "neverd/evm/Bytecode.h"
+#include "neverd/evm/bytecode/EVMBytecode.h"
 #include "neverd/evm/EVMConstants.h"
 
 namespace neverd {

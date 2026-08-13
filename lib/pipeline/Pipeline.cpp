@@ -12,12 +12,12 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/evm/Analyzer.h"
-#include "neverd/evm/Bytecode.h"
-#include "neverd/evm/LLVMEmitter.h"
+#include "neverd/evm/analysis/EVMAnalyzer.h"
+#include "neverd/evm/bytecode/EVMBytecode.h"
+#include "neverd/evm/emit/EVMLLVMEmitter.h"
 #include "neverd/loader/BinaryImage.h"
-#include "neverd/sbf/Analyzer.h"
-#include "neverd/sbf/LLVMEmitter.h"
+#include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/emit/SBFLLVMEmitter.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"

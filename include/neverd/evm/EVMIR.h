@@ -13,10 +13,10 @@
 #ifndef NEVERD_EVM_EVMIR_H
 #define NEVERD_EVM_EVMIR_H
 
-#include "neverd/evm/ABI.h"
-#include "neverd/evm/Calls.h"
-#include "neverd/evm/Opcodes.h"
-#include "neverd/evm/StorageSlots.h"
+#include "neverd/evm/analysis/EVMStorageSlots.h"
+#include "neverd/evm/bytecode/EVMOpcodes.h"
+#include "neverd/evm/runtime/EVMABI.h"
+#include "neverd/evm/runtime/EVMCalls.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -40,12 +40,12 @@ struct Diagnostic {
 
 enum class OpcodeDecodeStatus : uint8_t {
 #define EVM_OPCODE_DECODE_STATUS(NAME, SPELLING) NAME,
-#include "neverd/evm/EVMDecodeStatuses.def"
+#include "neverd/evm/bytecode/EVMDecodeStatuses.def"
 };
 
 enum class ImmediateDecodeStatus : uint8_t {
 #define EVM_IMMEDIATE_DECODE_STATUS(NAME, SPELLING) NAME,
-#include "neverd/evm/EVMDecodeStatuses.def"
+#include "neverd/evm/bytecode/EVMDecodeStatuses.def"
 };
 
 /// A decoded instruction whose metadata records both byte identity and

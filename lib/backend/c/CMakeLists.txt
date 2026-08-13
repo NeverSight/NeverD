@@ -8,23 +8,23 @@ add_neverd_component_library(NeverDBackendC
   LLVMC/LLVMCExprWriter.cpp
   LLVMC/LLVMCFuncWriter.cpp
   LLVMC/LLVMCStmtWriter.cpp
-  pass/HighC/DeadStoreAnalysis.cpp
-  pass/HighC/UsedVars.cpp
-  pass/HighC/StoreForwarding.cpp
-  pass/HighC/VoidAnalysis.cpp
-  pass/HighC/HiLoCollapse.cpp
-  pass/LLVMC/DeadStoreAnalysis.cpp
-  pass/LLVMC/StoreForwarding.cpp
-  pass/LLVMC/VoidAnalysis.cpp
-  pass/LLVMC/IntrinsicAnalysis.cpp
-  pass/LLVMC/HiLoCollapse.cpp
+  pass/HighC/HighCDeadStoreAnalysis.cpp
+  pass/HighC/HighCHiLoCollapse.cpp
+  pass/HighC/HighCStoreForwarding.cpp
+  pass/HighC/HighCUsedVars.cpp
+  pass/HighC/HighCVoidAnalysis.cpp
+  pass/LLVMC/LLVMCDeadStoreAnalysis.cpp
+  pass/LLVMC/LLVMCHiLoCollapse.cpp
+  pass/LLVMC/LLVMCIntrinsicAnalysis.cpp
+  pass/LLVMC/LLVMCStoreForwarding.cpp
+  pass/LLVMC/LLVMCVoidAnalysis.cpp
   render/CTypeFormat.cpp
   render/HighC/HighCIntrinsicRender.cpp
-  render/HighC/HighCIntrinsicRenderX86.cpp
   render/HighC/HighCIntrinsicRenderARM.cpp
+  render/HighC/HighCIntrinsicRenderX86.cpp
   render/LLVMC/LLVMCIntrinsicRender.cpp
-  render/LLVMC/LLVMCIntrinsicRenderX86.cpp
   render/LLVMC/LLVMCIntrinsicRenderARM.cpp
+  render/LLVMC/LLVMCIntrinsicRenderX86.cpp
 
   LINK_COMPONENTS
   IR

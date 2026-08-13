@@ -11,7 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/evm/Bytecode.h"
+#include "neverd/evm/bytecode/EVMBytecode.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/ELF/ELFLoader.h"

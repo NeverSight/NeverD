@@ -19,8 +19,8 @@
 #ifndef NEVERD_EVM_EVMIMAGEMETADATA_H
 #define NEVERD_EVM_EVMIMAGEMETADATA_H
 
-#include "neverd/evm/Metadata.h"
-#include "neverd/evm/Opcodes.h"
+#include "neverd/evm/bytecode/EVMMetadata.h"
+#include "neverd/evm/bytecode/EVMOpcodes.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -45,7 +45,7 @@ enum class BytecodeContainer : uint8_t {
 #define EVM_BYTECODE_CONTAINER(ID, SPELLING, MARKER, MARKER_BYTES, EXACT_SIZE, \
                                DISPOSITION, EIP, SUMMARY)                      \
   ID,
-#include "neverd/evm/EVMBytecodeContainers.def"
+#include "neverd/evm/bytecode/EVMBytecodeContainers.def"
 };
 
 struct BytecodeContainerInfo {
@@ -86,7 +86,7 @@ llvm::ArrayRef<uint8_t> delegationTarget(llvm::ArrayRef<uint8_t> Code,
 /// How the input spelled its bytes.
 enum class BytecodeSourceKind : uint8_t {
 #define EVM_BYTECODE_SOURCE(ID, SPELLING, SUMMARY) ID,
-#include "neverd/evm/EVMBytecodeContainers.def"
+#include "neverd/evm/bytecode/EVMBytecodeContainers.def"
 };
 
 struct BytecodeSourceInfo {

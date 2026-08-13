@@ -6,6 +6,9 @@ add_subdirectory(high)
 add_neverd_component_library(NeverDIR
   NdTypes.cpp
   TargetRegInfo.cpp
+  TargetRegInfoAArch64.cpp
+  TargetRegInfoARM.cpp
+  TargetRegInfoX86.cpp
 
   LINK_COMPONENTS
   IRHigh

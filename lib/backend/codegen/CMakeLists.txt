@@ -1,25 +1,25 @@
 add_neverd_component_library(NeverDCodeGen
+  COFF/COFFExceptionPatch.cpp
+  COFF/COFFInplace.cpp
+  COFF/COFFPatch.cpp
+  COFF/COFFReloc.cpp
   CodeGen.cpp
-  CodeGenSymbolize.cpp
-  CodeGenX86.cpp
   CodeGenAArch64.cpp
   CodeGenARM.cpp
-  BinaryRewriter.cpp
+  CodeGenSymbolize.cpp
+  CodeGenX86.cpp
   CompiledImage.cpp
-  InplaceRewriter.cpp
-  RelocResolver.cpp
-  COFF/COFFExceptionPatch.cpp
-  COFF/COFFPatch.cpp
-  COFF/COFFInplace.cpp
-  COFF/COFFReloc.cpp
   ELF/ELFExceptionPatch.cpp
-  ELF/ELFPatch.cpp
   ELF/ELFInplace.cpp
+  ELF/ELFPatch.cpp
   ELF/ELFReloc.cpp
   MachO/MachOExceptionPatch.cpp
-  MachO/MachOPatch.cpp
   MachO/MachOInplace.cpp
+  MachO/MachOPatch.cpp
   MachO/MachOReloc.cpp
+  RelocResolver.cpp
+  rewrite/BinaryRewriter.cpp
+  rewrite/InplaceRewriter.cpp
 
   LINK_COMPONENTS
   IR

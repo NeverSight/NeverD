@@ -1,19 +1,20 @@
 add_neverd_component_library(NeverDPassIR
   HelloWorldPass.cpp
-  InstSubstitutionPass.cpp
-  ConstantEncryptionPass.cpp
-  OpaquePredicatePass.cpp
-  ControlFlowFlatteningPass.cpp
-  BogusControlFlowPass.cpp
-  IndirectBranchPass.cpp
-  IndirectCallPass.cpp
-  MBAPass.cpp
-  IndirectGlobalPass.cpp
-  ValueLaunderingPass.cpp
-  ConstantPoolingPass.cpp
-  BitMaskingPass.cpp
-  SymSimplifyPass.cpp
-  ControlFlowRecoveryPass.cpp
+  obf/BitMaskingPass.cpp
+  obf/BogusControlFlowPass.cpp
+  obf/ConstantEncryptionPass.cpp
+  obf/ConstantPoolingPass.cpp
+  obf/ControlFlowFlatteningPass.cpp
+  obf/IndirectBranchPass.cpp
+  obf/IndirectCallPass.cpp
+  obf/IndirectGlobalPass.cpp
+  obf/InstSubstitutionPass.cpp
+  obf/MBAPass.cpp
+  obf/OpaquePredicatePass.cpp
+  obf/ValueLaunderingPass.cpp
+  simplify/ControlFlowRecoveryPass.cpp
+  simplify/SymSimplifyPass.cpp
+  simplify/SymSimplifyTranslator.cpp
 
   LINK_COMPONENTS
   IR

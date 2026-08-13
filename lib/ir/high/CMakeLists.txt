@@ -1,26 +1,27 @@
 add_neverd_component_library(NeverDIRHigh
-  CallArgCollection.cpp
-  CFStructurer.cpp
-  HighCFSimplify.cpp
-  HighCleanup.cpp
-  HighCopyProp.cpp
-  HighDCE.cpp
-  HighDeadStoreElim.cpp
-  HighEHStructurer.cpp
   HighExpr.cpp
-  HighExprSimplify.cpp
-  HighIfChainToSwitch.cpp
   HighIRPrint.cpp
-  HighLoopRecovery.cpp
-  HighSymSimplify.cpp
-  HighTypeInference.cpp
-  HighVarRename.cpp
-  MedOpToExpr.cpp
-  MedToHigh.cpp
-  NdOpCallIndLowering.cpp
-  NdOpLowering.cpp
-  NdOpReturnLowering.cpp
-  NdOpSwitchRecovery.cpp
+  lower/CFStructurer.cpp
+  lower/CallArgCollection.cpp
+  lower/MedOpToExpr.cpp
+  lower/MedToHigh.cpp
+  lower/NdOpCallIndLowering.cpp
+  lower/NdOpLowering.cpp
+  lower/NdOpReturnLowering.cpp
+  lower/NdOpSwitchRecovery.cpp
+  pass/HighCleanup.cpp
+  pass/HighCopyProp.cpp
+  pass/HighDCE.cpp
+  pass/HighDeadStoreElim.cpp
+  pass/HighExprSimplify.cpp
+  pass/HighSymSimplify.cpp
+  pass/HighTypeInference.cpp
+  pass/HighVarRename.cpp
+  structure/HighCFSimplify.cpp
+  structure/HighCFSimplifyIfElse.cpp
+  structure/HighEHStructurer.cpp
+  structure/HighIfChainToSwitch.cpp
+  structure/HighLoopRecovery.cpp
 
   LINK_COMPONENTS
   Symbolic

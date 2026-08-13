@@ -7,11 +7,11 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/BinaryImage.h"
-#include "neverd/sbf/Opcodes.h"
-#include "neverd/sbf/ProgramImage.h"
-#include "neverd/sbf/Relocations.h"
+#include "neverd/sbf/runtime/SBFOpcodes.h"
+#include "neverd/sbf/image/SBFProgramImage.h"
+#include "neverd/sbf/image/SBFRelocations.h"
 #include "neverd/sbf/SBFConstants.h"
-#include "neverd/sbf/Syscalls.h"
+#include "neverd/sbf/runtime/SBFSyscalls.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"

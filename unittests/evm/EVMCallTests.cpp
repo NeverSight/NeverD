@@ -6,9 +6,9 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/evm/Analyzer.h"
-#include "neverd/evm/Calls.h"
-#include "neverd/evm/StorageSlots.h"
+#include "neverd/evm/analysis/EVMAnalyzer.h"
+#include "neverd/evm/runtime/EVMCalls.h"
+#include "neverd/evm/analysis/EVMStorageSlots.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"

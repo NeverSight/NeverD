@@ -6,7 +6,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/evm/ABI.h"
+#include "neverd/evm/runtime/EVMABI.h"
 
 #include "llvm/Support/Error.h"
 

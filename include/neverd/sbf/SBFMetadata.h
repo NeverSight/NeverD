@@ -1,4 +1,4 @@
-//===- SBFMetadata.h - Loader-to-frontend SBF metadata --------*- C++ -*-===//
+//===- SBFMetadata.h - Loader-to-frontend SBF metadata ----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -7,7 +7,7 @@
 #ifndef NEVERD_SBF_SBFMETADATA_H
 #define NEVERD_SBF_SBFMETADATA_H
 
-#include "neverd/sbf/Version.h"
+#include "neverd/sbf/image/SBFVersion.h"
 
 #include "llvm/ADT/StringRef.h"
 

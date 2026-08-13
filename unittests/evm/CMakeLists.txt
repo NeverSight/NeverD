@@ -7,6 +7,8 @@ add_neverd_unittest(NeverDEVMOpcodeTests
 
 add_neverd_unittest(NeverDEVMBytecodeTests
   EVMBytecodeTests.cpp
+  EVMBytecodeContainerTests.cpp
+  EVMBytecodeMetadataTests.cpp
 
   LINK_COMPONENTS
   EVM
@@ -28,7 +30,10 @@ add_neverd_unittest(NeverDEVMABITests
 )
 
 add_neverd_unittest(NeverDEVMAnalyzerTests
-  EVMAnalyzerTests.cpp
+  EVMAnalyzerHighIRTests.cpp
+  EVMAnalyzerControlFlowTests.cpp
+  EVMAnalyzerDecodeTests.cpp
+  EVMAnalyzerMedIRTests.cpp
 
   LINK_COMPONENTS
   EVM
@@ -57,6 +62,9 @@ add_neverd_unittest(NeverDEVMSemanticTests
 
 add_neverd_unittest(NeverDEVMEmitterTests
   EVMEmitterTests.cpp
+  EVMCEmitterTests.cpp
+  EVMLLVMEmitterTests.cpp
+  EVMSolidityEmitterTests.cpp
 
   LINK_COMPONENTS
   EVM

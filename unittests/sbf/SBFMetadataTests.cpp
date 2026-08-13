@@ -6,13 +6,13 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/sbf/Opcodes.h"
-#include "neverd/sbf/Pubkey.h"
-#include "neverd/sbf/Relocations.h"
-#include "neverd/sbf/RuntimeProfile.h"
+#include "neverd/sbf/runtime/SBFOpcodes.h"
+#include "neverd/sbf/solana/SBFPubkey.h"
+#include "neverd/sbf/image/SBFRelocations.h"
+#include "neverd/sbf/runtime/SBFRuntimeProfile.h"
 #include "neverd/sbf/SBFConstants.h"
-#include "neverd/sbf/Syscalls.h"
-#include "neverd/sbf/Version.h"
+#include "neverd/sbf/runtime/SBFSyscalls.h"
+#include "neverd/sbf/image/SBFVersion.h"
 
 #include "llvm/Support/Error.h"
 

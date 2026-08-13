@@ -21,9 +21,9 @@
 #ifndef NEVERD_TOOLS_NEVERDCLI_H
 #define NEVERD_TOOLS_NEVERDCLI_H
 
-#include "neverd/evm/Opcodes.h"
-#include "neverd/sbf/RuntimeProfile.h"
-#include "neverd/sbf/Version.h"
+#include "neverd/evm/bytecode/EVMOpcodes.h"
+#include "neverd/sbf/runtime/SBFRuntimeProfile.h"
+#include "neverd/sbf/image/SBFVersion.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/StringRef.h"

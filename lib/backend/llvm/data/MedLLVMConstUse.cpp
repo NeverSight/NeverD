@@ -1,0 +1,313 @@
+//===- MedLLVMConstUse.cpp - Constant use classification -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Use-site classification of a bare constant for MedLLVMEmitter: whether
+/// it is used as a genuine pointer (a memory address, or compared /
+/// differenced against one) or as a genuine integer (a loop counter that
+/// merely coincides with a data VA), plus the per-function memo caches
+/// that keep both queries cheap.  The run-boundary and symbolization
+/// predicates that consult these live in MedLLVMConstClass.cpp.  Every
+/// routine here is a MedLLVMEmitter member declared in the shared header,
+/// so this is a pure translation-unit split.
+///
+//===----------------------------------------------------------------------===//
+
+#include "neverd/Common.h"
+#include "neverd/Limits.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <set>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace neverd {
+
+void MedLLVMEmitter::ensureConstClassCache() const {
+  if (ConstClassCacheFor == CurMedFunc)
+    return;
+  ConstClassCacheFor = CurMedFunc;
+  ConstUsedAsPointerCache.clear();
+  ConstValueUsedAsIntegerCache.clear();
+}
+
+bool MedLLVMEmitter::constUsedAsPointer(uint64_t Val) const {
+  ensureConstClassCache();
+  auto It = ConstUsedAsPointerCache.find(Val);
+  if (It != ConstUsedAsPointerCache.end())
+    return It->second;
+  bool Result = constUsedAsPointerImpl(Val);
+  ConstUsedAsPointerCache.emplace(Val, Result);
+  return Result;
+}
+
+bool MedLLVMEmitter::constUsedAsPointerImpl(uint64_t Val) const {
+  if (!CurMedFunc)
+    return false;
+
+  // Backward walk from every memory-access address through address arithmetic;
+  // return true when any visited operand satisfies \p Match.
+  auto reaches = [&](auto &&Match) {
+    for (const auto &Blk : CurMedFunc->Blocks)
+      for (const auto &Op : Blk.Ops) {
+        if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
+            Op.NumInputs < 1)
+          continue;
+        std::vector<MedVar> Work{Op.Inputs[0]};
+        std::set<std::tuple<int, int, int>> Seen;
+        int Budget = 256;
+        while (!Work.empty() && Budget-- > 0) {
+          MedVar Cur = Work.back();
+          Work.pop_back();
+          if (Match(Cur))
+            return true;
+          if (Cur.isConst())
+            continue;
+          if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
+            continue;
+          if (const MedOp *D = lookupDef(Cur))
+            switch (D->Opcode) {
+            // Additive / compositional address forming: a constant operand can
+            // be a base (`baseConst + index`, or `alignedBase | scaledIndex`),
+            // so follow every operand.
+            case NdOp::INT_ADD:
+            case NdOp::INT_SUB:
+            case NdOp::INT_OR:
+            case NdOp::INT_XOR:
+            case NdOp::INT_ZEXT:
+            case NdOp::INT_SEXT:
+            case NdOp::COPY:
+            case NdOp::SUBBYTES:
+              for (int I = 0; I < D->NumInputs; ++I)
+                Work.push_back(D->Inputs[I]);
+              break;
+            // Index arithmetic: a CONSTANT operand is a mask (AND), scale
+            // (MULT), or shift amount (LEFT) — never a base address.  A
+            // scaled-index byte mask `(w >> 9) & ((2^11-1)<<2)` carries 0x1FFC,
+            // which can land inside a low-VA `.bss` run's range; it must stay
+            // an integer, not be taken for a pointer into that run.  Follow
+            // only the non-constant operand (the value being masked/scaled,
+            // which may trace back to a real base).
+            case NdOp::INT_AND:
+            case NdOp::INT_MULT:
+            case NdOp::INT_LEFT:
+              for (int I = 0; I < D->NumInputs; ++I)
+                if (!D->Inputs[I].isConst())
+                  Work.push_back(D->Inputs[I]);
+              break;
+            default:
+              break;
+            }
+        }
+      }
+    return false;
+  };
+
+  // (1) The constant (or anything derived from it) is a memory-access address.
+  if (reaches(
+          [&](const MedVar &C) { return C.isConst() && C.ConstVal == Val; }))
+    return true;
+
+  // (2) The constant is compared / offset against a value that is itself a
+  //     pointer (`p != end`, `end - begin`): the one-past-the-end idioms.
+  auto varIsPointer = [&](const MedVar &Y) {
+    if (Y.isConst())
+      return false;
+    return reaches([&](const MedVar &C) {
+      return !C.isConst() && C.Kind == Y.Kind && C.Id == Y.Id &&
+             C.SSAVer == Y.SSAVer;
+    });
+  };
+  for (const auto &Blk : CurMedFunc->Blocks)
+    for (const auto &Op : Blk.Ops) {
+      switch (Op.Opcode) {
+      case NdOp::INT_ADD:
+      case NdOp::INT_SUB:
+      case NdOp::INT_EQUAL:
+      case NdOp::INT_NOTEQUAL:
+      case NdOp::INT_LESS:
+      case NdOp::INT_SLESS:
+      case NdOp::INT_LESSEQUAL:
+      case NdOp::INT_SLESSEQUAL:
+        break;
+      default:
+        continue;
+      }
+      if (Op.NumInputs < 2)
+        continue;
+      for (int I = 0; I < 2; ++I)
+        if (Op.Inputs[I].isConst() && Op.Inputs[I].ConstVal == Val &&
+            varIsPointer(Op.Inputs[1 - I]))
+          return true;
+    }
+  return false;
+}
+
+bool MedLLVMEmitter::constValueUsedAsInteger(uint64_t Val) const {
+  ensureConstClassCache();
+  auto It = ConstValueUsedAsIntegerCache.find(Val);
+  if (It != ConstValueUsedAsIntegerCache.end())
+    return It->second;
+  bool Result = constValueUsedAsIntegerImpl(Val);
+  ConstValueUsedAsIntegerCache.emplace(Val, Result);
+  return Result;
+}
+
+bool MedLLVMEmitter::constValueUsedAsIntegerImpl(uint64_t Val) const {
+  if (!CurMedFunc)
+    return false;
+
+  // Does var X (or anything derived from it through address arithmetic) serve
+  // as a LOAD/STORE address operand?  A backward walk from every memory access
+  // address; if it reaches X, X is a pointer, not an integer.
+  auto reachesMemAddr = [&](const MedVar &X) {
+    auto sameVar = [&](const MedVar &A, const MedVar &B) {
+      return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
+             A.SSAVer == B.SSAVer;
+    };
+    for (const auto &Blk : CurMedFunc->Blocks)
+      for (const auto &Op : Blk.Ops) {
+        if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
+            Op.NumInputs < 1)
+          continue;
+        std::vector<MedVar> Work{Op.Inputs[0]};
+        std::set<std::tuple<int, int, int>> Seen;
+        int Budget = 256;
+        while (!Work.empty() && Budget-- > 0) {
+          MedVar Cur = Work.back();
+          Work.pop_back();
+          if (Cur.isConst())
+            continue;
+          if (sameVar(Cur, X))
+            return true;
+          if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
+            continue;
+          if (const MedOp *D = lookupDef(Cur))
+            switch (D->Opcode) {
+            case NdOp::INT_ADD:
+            case NdOp::INT_SUB:
+            case NdOp::INT_AND:
+            case NdOp::INT_OR:
+            case NdOp::INT_XOR:
+            case NdOp::INT_LEFT:
+            case NdOp::INT_MULT:
+            case NdOp::INT_ZEXT:
+            case NdOp::INT_SEXT:
+            case NdOp::COPY:
+            case NdOp::SUBBYTES:
+              for (int I = 0; I < D->NumInputs; ++I)
+                Work.push_back(D->Inputs[I]);
+              break;
+            default:
+              break;
+            }
+        }
+      }
+    return false;
+  };
+
+  for (const auto &Blk : CurMedFunc->Blocks)
+    for (const auto &P : Blk.Phis) {
+      bool HasConst = false;
+      std::set<uint64_t> DistinctConsts;
+      for (const auto &[Pred, Arg] : P.Args) {
+        (void)Pred;
+        // The init value may be an inline const or a COPY of one (`COPY ESI,
+        // 0xA0` feeding the counter PHI), so fold through copies.
+        auto C = Arg.isConst() ? std::optional<uint64_t>(Arg.ConstVal)
+                               : traceSSAConst(Arg);
+        if (C) {
+          DistinctConsts.insert(*C);
+          if (*C == Val)
+            HasConst = true;
+        }
+      }
+      // A loop counter PHI has exactly ONE constant arg (the init) plus a
+      // computed back-edge increment, so its const is a genuine integer.  A
+      // multi-way SELECTION PHI (a `switch` returning string literals merges
+      // the several `&"..."` arms, `cond ? &A : &B`) has SEVERAL constant args
+      // that are pointers — the returned address is dereferenced in the CALLER,
+      // so reachesMemAddr is locally false and must NOT mark these reloc-target
+      // pointer constants as integers.  Only the single-const counter form
+      // does.
+      if (HasConst && DistinctConsts.size() == 1 && !reachesMemAddr(P.Output))
+        return true;
+    }
+
+  // A constant consumed as an INT_MULT factor is a multiplier/scale, never a
+  // pointer (pointers are not multiplied).  When the product never flows into a
+  // memory address it is a pure integer computation (e.g. the hash multiplier
+  // `h*131`), so a value that merely equals a rodata reloc-target VA (the i386
+  // switch-string table places a 5-char string at VA 0x83==131) must stay an
+  // integer rather than be redirected to that string global.  Gated on the
+  // product not reaching a load/store address so an `index*scale` that forms an
+  // address is unaffected.
+  for (const auto &Blk : CurMedFunc->Blocks)
+    for (const auto &Op : Blk.Ops) {
+      if (Op.Opcode != NdOp::INT_MULT)
+        continue;
+      bool HasConst = false;
+      for (int I = 0; I < Op.NumInputs; ++I) {
+        auto C = Op.Inputs[I].isConst()
+                     ? std::optional<uint64_t>(Op.Inputs[I].ConstVal)
+                     : traceSSAConst(Op.Inputs[I]);
+        if (C && *C == Val) {
+          HasConst = true;
+          break;
+        }
+      }
+      if (HasConst && !reachesMemAddr(Op.Output))
+        return true;
+    }
+
+  // A constant compared (==/!=/</<=, signed or unsigned) against a value that
+  // is itself a pure integer — a loop-trip-count bound tested against the
+  // induction counter (`i+1 == N`) — is an integer, not a pointer.  Without
+  // this a bound whose value merely equals a low rodata/string reloc-target VA
+  // (the i386
+  // `.o` places "hotel" at VA 0xC8 == loop bound 200) is redirected to that
+  // string global and the loop count is destroyed.  Guarded so a genuine
+  // pointer comparison `p == &g` (where p reaches a memory address, i.e. is a
+  // pointer) keeps &g redirected.  Only reachable for a low-VA reloc-target
+  // constant: the `> kMinGlobalDataAddr` redirect path short-circuits earlier.
+  for (const auto &Blk : CurMedFunc->Blocks)
+    for (const auto &Op : Blk.Ops) {
+      switch (Op.Opcode) {
+      case NdOp::INT_EQUAL:
+      case NdOp::INT_NOTEQUAL:
+      case NdOp::INT_LESS:
+      case NdOp::INT_SLESS:
+      case NdOp::INT_LESSEQUAL:
+      case NdOp::INT_SLESSEQUAL:
+        break;
+      default:
+        continue;
+      }
+      if (Op.NumInputs < 2)
+        continue;
+      for (int I = 0; I < 2; ++I) {
+        auto C = Op.Inputs[I].isConst()
+                     ? std::optional<uint64_t>(Op.Inputs[I].ConstVal)
+                     : traceSSAConst(Op.Inputs[I]);
+        if (!C || *C != Val)
+          continue;
+        const MedVar &Other = Op.Inputs[1 - I];
+        // The compared-against value is a pure integer (not a dereferenced
+        // pointer): no constant pointer comparison, and it never feeds a memory
+        // address.  That makes Val an integer bound.
+        if (!Other.isConst() && !reachesMemAddr(Other))
+          return true;
+      }
+    }
+  return false;
+}
+
+} // namespace neverd

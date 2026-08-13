@@ -78,6 +78,9 @@ target_include_directories(NeverDSBFMetadataTests PRIVATE
 
 add_neverd_unittest(NeverDSBFSolanaModelTests
   SBFSolanaModelTests.cpp
+  SBFSolanaCPITests.cpp
+  SBFSolanaPDATests.cpp
+  SBFSolanaRecoveryTests.cpp
 
   LINK_COMPONENTS
   Loader
@@ -87,6 +90,7 @@ add_neverd_unittest(NeverDSBFSolanaModelTests
 
 target_include_directories(NeverDSBFSolanaModelTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}
   ${LLVM_INCLUDE_DIRS}
 )
 

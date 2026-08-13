@@ -8,7 +8,7 @@
 
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/sbf/SBFConstants.h"
-#include "neverd/sbf/Version.h"
+#include "neverd/sbf/image/SBFVersion.h"
 
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"
