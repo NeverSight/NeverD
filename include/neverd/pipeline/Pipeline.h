@@ -327,7 +327,6 @@ private:
   static void dumpLowIR(const std::vector<LowFunc> &Funcs);
   static void dumpMedIR(const std::vector<MedFunc> &Funcs);
   static void dumpHighIR(const std::vector<HighFunc> &Funcs);
-  static void optimizeModule(llvm::Module &Mod, bool Conservative = false);
   /// Promote the emitter's SSA-via-memory scaffolding (per-temp allocas getVar
   /// materializes) to registers WITHOUT any value-changing optimization.  Run
   /// even when the NeverD optimizer is disabled (NoOpt): it is

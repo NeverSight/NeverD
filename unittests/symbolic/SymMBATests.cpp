@@ -156,6 +156,39 @@ TEST(SymMBA, LeavesAWideExpressionWhoseInputsAreGenuinelyTangled) {
 }
 
 //===----------------------------------------------------------------------===//
+// Regions guarded by constant masks
+//===----------------------------------------------------------------------===//
+
+TEST(SymMBA, RecoversArithmeticGuardedByAMask) {
+  // A mask defeats a corner measurement -- it is the one thing that tells bit
+  // positions apart -- so the obfuscation underneath one used to be out of
+  // reach.  Measured a column at a time, it comes back.
+  simplifiesTo("((x ^ y) + 2 * (x & y)) & 0xff", "(x + y) & 0xff");
+  simplifiesTo("((x | y) - (x & y)) & 0xffff", "(x ^ y) & 0xffff");
+}
+
+TEST(SymMBA, MeasuresEachMaskColumnOnItsOwn) {
+  // Two masks that overlap nowhere cut the word into three columns, two of them
+  // carrying an obfuscation of their own.  Each is measured at its own width
+  // and only the bits it owns survive into the answer.
+  simplifiesTo("(((x ^ y) + 2 * (x & y)) & 0xff) | "
+               "(((a | b) - (a & b)) & 0xff0000)",
+               "((x + y) & 0xff) | ((a ^ b) & 0xff0000)");
+}
+
+TEST(SymMBA, DeclinesAMaskSplitThatACarryWouldCross) {
+  // The column split is exact only while no carry crosses a boundary.  Here the
+  // unmasked summand carries into the masked nibble, so a per-column answer
+  // would be wrong however well each column measured.  Declining is the only
+  // correct outcome, and the sample check is what reaches it.
+  SymContext Ctx;
+  SymParseResult Parsed =
+      parseSymExpr(Ctx, "(((x ^ y) + 2 * (x & y)) & 15) + z", W32);
+  ASSERT_TRUE(Parsed.ok()) << Parsed.Error;
+  EXPECT_FALSE(simplifyMBA(Ctx, Parsed.Root).Changed);
+}
+
+//===----------------------------------------------------------------------===//
 // Degree two
 //===----------------------------------------------------------------------===//
 

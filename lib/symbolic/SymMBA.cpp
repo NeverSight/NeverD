@@ -60,6 +60,16 @@ namespace neverd::symbolic {
 
 namespace {
 
+/// Highest degree of product the symbolic expansion carries.
+///
+/// This bounds the *shape* the expansion is written for, not how deeply an
+/// obfuscation may be nested: a product of this many bitwise terms is expanded
+/// exactly, and the walk that reaches nested layers is separate and unbounded.
+/// Eight is where the packed monomial key below runs out of bytes; the useful
+/// limit is far lower, because the search for a matching product grows with the
+/// degree and obfuscators build from products of two or three terms.
+constexpr unsigned kMaxProductDegree = 4;
+
 //===----------------------------------------------------------------------===//
 // Deciding what the measurement can see
 //===----------------------------------------------------------------------===//
@@ -165,14 +175,14 @@ void classify(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Order,
           Ctx.isConst(Ops[0]) ? Ops.drop_front() : Ops;
       if (Unknown.size() == 1) {
         Result = Role::Linear;
-      } else if (AllowProducts && Unknown.size() == 2 &&
+      } else if (AllowProducts && Unknown.size() <= kMaxProductDegree &&
                  llvm::all_of(Unknown, [&](SymRef C) {
                    return isBitwiseOrAtom(roleOf(C));
                  })) {
         Result = Role::Product;
       } else {
-        // Degree three or higher, or a factor that is itself a sum.  Neither
-        // is something the expansion below covers.
+        // Past the degree the expansion carries, or a factor that is itself a
+        // sum.  Neither is something it covers.
         Result = Role::Atom;
       }
       break;
@@ -613,23 +623,23 @@ struct Candidate {
 };
 
 //===----------------------------------------------------------------------===//
-// Degree two
+// Products
 //===----------------------------------------------------------------------===//
 //
-// A product of two bitwise terms cannot be measured the way a linear MBA can.
-// At a corner every bitwise term is all-zeros or all-ones, so `B * B` and `-B`
-// agree at all 2^t of them and disagree everywhere else: the corner values no
-// longer pin the expression down.
+// A product of bitwise terms cannot be measured the way a linear MBA can.  At a
+// corner every bitwise term is all-zeros or all-ones, so `B * B` and `-B` agree
+// at all 2^t of them and disagree everywhere else: the corner values no longer
+// pin the expression down.
 //
 // They do not have to.  Writing each factor as the sum of the minterms it
-// selects and multiplying out gives, for any degree-two polynomial in bitwise
-// terms of t inputs,
+// selects and multiplying out gives, for any polynomial in bitwise terms of t
+// inputs,
 //
-//     e  =  sum_m w_m M_m  +  sum_{m <= n} d_mn M_m M_n
+//     e  =  sum_m w_m M_m  +  sum over monomials M_{m1} * ... * M_{md} of c * ..
 //
-// and both coefficient sets can be computed *symbolically* — each factor's
-// truth table is one corner sweep of that factor alone, and the rest is
-// bookkeeping.  No system has to be solved and nothing is guessed.
+// and every coefficient can be computed *symbolically* — each factor's truth
+// table is one corner sweep of that factor alone, and the rest is bookkeeping.
+// No system has to be solved and nothing is guessed.
 //
 // What that buys is the identity underneath polynomial MBA obfuscation.  From
 // the disjoint splits `x = (x & y) + (x & ~y)` and `y = (x & y) + (~x & y)`,
@@ -639,14 +649,16 @@ struct Candidate {
 //
 // and the right-hand side expands to exactly the coefficients of the left.  So
 // searching the small products for one whose expansion matches is enough to
-// recognise it, however it was written.
+// recognise it, however it was written.  The same argument runs at any degree,
+// which is what reaches `x * y * z` and the cubes above it: only the arity of
+// the monomials changes, not the reasoning.
 
 /// One term of a polynomial: a coefficient and the factors it multiplies.  No
-/// factors is a constant, one is a linear term, two is where measurement stops
-/// working.
+/// factors is a constant, one is a linear term, more is where measurement stops
+/// working and the expansion takes over.
 struct PolyTerm {
   llvm::APInt Coeff;
-  llvm::SmallVector<SymRef, 2> Factors;
+  llvm::SmallVector<SymRef, kMaxProductDegree> Factors;
 };
 
 /// Accumulate the terms of `Scale * Node` into \p Out, or fail when some term
@@ -680,14 +692,14 @@ bool collectTerms(const SymContext &Ctx, SymRef Node, const llvm::APInt &Scale,
       First = 1;
     }
     llvm::ArrayRef<SymRef> Factors = Ops.drop_front(First);
-    if (Factors.size() > 2)
+    if (Factors.size() > kMaxProductDegree)
       return false;
     // A scaled sum has to be distributed rather than treated as one factor:
     // `3 * (a + b)` is two terms, and reading it as a single factor would hand
     // the expansion something that is not a bitwise function at all.
     if (Factors.size() == 1)
       return collectTerms(Ctx, Factors[0], Coeff, Depth - 1, Out);
-    Out.push_back(PolyTerm{Coeff, {Factors[0], Factors[1]}});
+    Out.push_back(PolyTerm{Coeff, {Factors.begin(), Factors.end()}});
     return true;
   }
 
@@ -695,8 +707,8 @@ bool collectTerms(const SymContext &Ctx, SymRef Node, const llvm::APInt &Scale,
   return true;
 }
 
-/// Split \p Body into terms of degree at most two, or nothing when some term
-/// is of a higher degree than the expansion covers.
+/// Split \p Body into terms the expansion covers, or nothing when some term is
+/// of a higher degree than it does.
 std::optional<llvm::SmallVector<PolyTerm, 8>>
 splitIntoTerms(const SymContext &Ctx, SymRef Body) {
   llvm::SmallVector<PolyTerm, 8> Terms;
@@ -1150,12 +1162,181 @@ SymRef solveWide(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
   return Rebuilt;
 }
 
-/// Measure \p E, and when it is too wide for one measurement, try again in
-/// independent parts.
-SymRef solveRegionOrSplit(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
-                          unsigned *NumAtomsOut) {
+/// Measure \p E as one region, then in independent parts when it is too wide.
+/// This is the mask-free half of the region solver; \c solveMasked reduces to
+/// it once it has split a masked expression into mask-free columns, so keeping
+/// it separate is what stops the mask split from recursing into itself.
+SymRef solveOneRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
+                      unsigned *NumAtomsOut) {
   SymRef Solved = solveRegion(Ctx, E, Opts, NumAtomsOut);
   return Solved == E ? solveWide(Ctx, E, Opts, NumAtomsOut) : Solved;
+}
+
+//===----------------------------------------------------------------------===//
+// Regions guarded by constant masks
+//===----------------------------------------------------------------------===//
+
+/// The distinct constants that appear as an operand of an `&`, `|` or `^`.
+///
+/// These are exactly the constants a corner measurement cannot see past.  A
+/// bitwise term is uniform at a corner — all-zeros or all-ones — which is what
+/// the whole measurement depends on; a constant operand breaks that uniformity
+/// because it tells one bit position from another.  The builders have already
+/// folded away the all-zeros and all-ones cases, so anything left here is a
+/// genuine mask.  A constant used as a summand or a coefficient is not
+/// collected: it does not defeat the measurement and does not partition the
+/// word.
+void collectBitwiseMasks(const SymContext &Ctx, SymRef E,
+                         llvm::SmallVectorImpl<llvm::APInt> &Out) {
+  for (uint32_t Index : reachableInOrder(Ctx, E)) {
+    SymRef R(Index);
+    SymOp Op = Ctx.op(R);
+    if (Op != SymOp::And && Op != SymOp::Or && Op != SymOp::Xor)
+      continue;
+    for (SymRef C : Ctx.operands(R))
+      if (Ctx.isConst(C)) {
+        llvm::APInt V = Ctx.constValue(C);
+        if (llvm::none_of(Out, [&](const llvm::APInt &S) { return S == V; }))
+          Out.push_back(V);
+      }
+  }
+}
+
+/// Partition the bit positions of a \p Width word into the columns on which
+/// every mask is constant, each returned as the set of positions it holds.
+///
+/// Two positions belong together when no mask tells them apart.  Splitting the
+/// full word by one mask at a time reaches that partition directly, and drops
+/// the empty pieces so the column count is the number of distinct signatures
+/// rather than the 2^k an enumeration of signatures would suggest.
+llvm::SmallVector<llvm::APInt, 8>
+maskColumns(uint32_t Width, llvm::ArrayRef<llvm::APInt> Masks) {
+  llvm::SmallVector<llvm::APInt, 8> Cols;
+  Cols.push_back(llvm::APInt::getAllOnes(Width));
+  for (const llvm::APInt &M : Masks) {
+    llvm::SmallVector<llvm::APInt, 8> Next;
+    for (const llvm::APInt &Col : Cols) {
+      llvm::APInt In = Col & M;
+      llvm::APInt Out = Col & ~M;
+      if (!In.isZero())
+        Next.push_back(std::move(In));
+      if (!Out.isZero())
+        Next.push_back(std::move(Out));
+    }
+    Cols = std::move(Next);
+  }
+  return Cols;
+}
+
+/// Rewrite \p E as it behaves on the positions in \p ColMask.
+///
+/// Every collected mask is constant across the column, so inside a bitwise
+/// operator it is all-ones (drop it) or all-zeros (kill the term) — which the
+/// builders fold — and the result no longer distinguishes bit positions.  What
+/// comes out is a mask-free expression that equals \p E on the column's bits.
+SymRef restrictToColumn(SymContext &Ctx, SymRef E, const llvm::APInt &ColMask,
+                        llvm::ArrayRef<llvm::APInt> Masks) {
+  llvm::DenseMap<uint32_t, SymRef> Done;
+  for (uint32_t Index : reachableInOrder(Ctx, E)) {
+    SymRef R(Index);
+    llvm::ArrayRef<SymRef> Ops = Ctx.operands(R);
+    if (Ops.empty()) {
+      Done[Index] = R;
+      continue;
+    }
+    SymOp Op = Ctx.op(R);
+    const bool Bitwise =
+        Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor;
+    llvm::SmallVector<SymRef, 8> NewOps;
+    NewOps.reserve(Ops.size());
+    for (SymRef C : Ops) {
+      SymRef NC = Done.lookup(C.index());
+      if (Bitwise && Ctx.isConst(C) &&
+          llvm::any_of(Masks, [&](const llvm::APInt &M) {
+            return M == Ctx.constValue(C);
+          })) {
+        // Uniform on the column by construction, so this is exact rather than a
+        // choice: the mask either covers every position the column holds or
+        // none of them.
+        bool AllSet = (Ctx.constValue(C) & ColMask) == ColMask;
+        NC = AllSet ? Ctx.mkOnes(Ctx.width(R)) : Ctx.mkZero(Ctx.width(R));
+      }
+      NewOps.push_back(NC);
+    }
+    Done[Index] = Ctx.rebuild(R, NewOps);
+  }
+  return Done.lookup(E.index());
+}
+
+/// Solve a region a constant mask has made unmeasurable, by measuring each
+/// mask-uniform column of the word on its own.
+///
+/// A mask defeats the corner measurement, but only across a column boundary:
+/// on the positions where every mask is constant the expression is an ordinary
+/// linear MBA, and there it can be measured.  Solving each column and keeping
+/// the bits it owns reassembles the whole — which is what recovers, say,
+/// `((x ^ y) + 2 * (x & y)) & 0xff` as `(x + y) & 0xff`.
+///
+/// The split is exact only when no arithmetic carry crosses a column boundary.
+/// A low mask over a sum discards the carry it would have produced, so the
+/// common case holds, but two summands masked to the same nibble do not: the
+/// carry between them lands in a position the split has already decided.  Unlike
+/// the linear and product derivations, whose exactness is structural, this one
+/// is conditional, so the sample check is a filter that declines a bad split
+/// rather than an assertion that no split is ever bad.
+SymRef solveMasked(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
+                   unsigned *NumAtomsOut) {
+  llvm::SmallVector<llvm::APInt, 8> Masks;
+  collectBitwiseMasks(Ctx, E, Masks);
+  if (Masks.empty())
+    return E;
+
+  const uint32_t Width = Ctx.width(E);
+  llvm::SmallVector<llvm::APInt, 8> Cols = maskColumns(Width, Masks);
+  if (Cols.size() < 2)
+    return E;
+
+  llvm::SmallVector<SymRef, 8> Parts;
+  Parts.reserve(Cols.size());
+  unsigned Widest = 0;
+  bool AnySolved = false;
+  for (const llvm::APInt &Col : Cols) {
+    SymRef Ecol = restrictToColumn(Ctx, E, Col, Masks);
+    unsigned Atoms = 0;
+    SymRef Scol = solveOneRegion(Ctx, Ecol, Opts, &Atoms);
+    if (Scol != Ecol) {
+      AnySolved = true;
+      Widest = std::max(Widest, Atoms);
+    }
+    // Clip each column to the bits it owns.  The columns are disjoint, so the
+    // clipped parts share no bit and combining them with `|` is exact.
+    Parts.push_back(Ctx.mkAnd(Scol, Ctx.mkConst(Col)));
+  }
+  if (!AnySolved)
+    return E;
+
+  SymRef Rebuilt = Ctx.mkOr(Parts);
+  if (Rebuilt == E)
+    return E;
+
+  // A carry that crossed a column makes the reassembly wrong; the check catches
+  // that and leaves the expression as it was.
+  if (!agreeOnSamples(Ctx, E, Rebuilt, Opts.VerifySamples))
+    return E;
+  if (!Opts.AllowGrowth && readingCost(Ctx, Rebuilt) > readingCost(Ctx, E))
+    return E;
+
+  if (NumAtomsOut)
+    *NumAtomsOut = Widest;
+  return Rebuilt;
+}
+
+/// Measure \p E as one region, splitting a wide one into independent parts and
+/// a masked one into mask-uniform columns.
+SymRef solveRegionOrSplit(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
+                          unsigned *NumAtomsOut) {
+  SymRef Solved = solveOneRegion(Ctx, E, Opts, NumAtomsOut);
+  return Solved == E ? solveMasked(Ctx, E, Opts, NumAtomsOut) : Solved;
 }
 
 } // namespace
