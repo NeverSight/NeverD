@@ -126,14 +126,11 @@ jobs:
             -v
           "$PYTHON" -m unittest discover \
             -s pluginsdk/python/tests -v
-          # The provenance test gates NeverD's own sources at zero findings.
-          # Running check_source_provenance.py over the whole tree is the
-          # stronger gate and is what should replace this once the assistant
-          # tooling under .agents is settled one way or the other.
           "$PYTHON" -m unittest \
             scripts.tests.test_check_python_plugin_sdk \
             scripts.tests.test_check_source_provenance -v
           "$PYTHON" scripts/check_python_plugin_sdk.py
+          "$PYTHON" scripts/check_source_provenance.py
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}

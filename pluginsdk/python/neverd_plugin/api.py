@@ -17,6 +17,7 @@ from .abi import (
     EventType,
     NeverDSimplifyOptions,
     NeverDSimplifyResult,
+    NeverDSymbolicExploreOptions,
     OutputLanguage,
     PluginType,
     SimplifyEvidence,
@@ -172,6 +173,30 @@ def _native_bridge() -> _NativeBridge:
             "Session objects are supplied only to Python-enabled NeverD plugins"
         ) from error
     return cast(_NativeBridge, native_module)
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolicPath:
+    outcome: str
+    block: int
+    blocks: tuple[int, ...]
+    constraints: int
+    unmodelled_ops: int
+    predicate: str | None = None
+    target: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolicExploration:
+    function: str
+    entry: int
+    lift_complete: bool
+    complete: bool
+    exact: bool
+    reachable_paths: int
+    executed_steps: int
+    unmodelled_ops: int
+    paths: tuple[SymbolicPath, ...]
 
 
 class Session:
@@ -429,6 +454,86 @@ class Session:
             "neverd_cfg_json",
             "control-flow graph",
             _unsigned("address", address, 64),
+        )
+
+    def symbolic_explore(
+        self,
+        address: int,
+        *,
+        max_paths: int = 64,
+        max_steps: int = 1 << 16,
+        max_block_visits: int = 3,
+        include_expressions: bool = False,
+    ) -> SymbolicExploration:
+        """Explore every bounded LowIR path through a native function.
+
+        ``complete`` is false when a resource bound or unresolved indirect
+        branch stopped the walk.  ``exact`` additionally requires that no
+        operation had to be replaced by an unconstrained value.
+        """
+
+        options = NeverDSymbolicExploreOptions()
+        options.struct_size = ctypes.sizeof(NeverDSymbolicExploreOptions)
+        options.max_paths = _unsigned("max_paths", max_paths, 32)
+        options.max_steps = _unsigned("max_steps", max_steps, 32)
+        options.max_block_visits = _unsigned(
+            "max_block_visits", max_block_visits, 32
+        )
+        options.include_expressions = (
+            1 if _boolean("include_expressions", include_expressions) else 0
+        )
+        report = self._json(
+            "neverd_symbolic_explore_json",
+            "symbolic exploration",
+            _unsigned("address", address, 64),
+            ctypes.byref(options),
+        )
+        if not isinstance(report, Mapping) or report.get("ok") is not True:
+            message = (
+                report.get("error")
+                if isinstance(report, Mapping)
+                else "invalid symbolic exploration report"
+            )
+            raise NeverDError(str(message or self.last_error))
+
+        paths: list[SymbolicPath] = []
+        raw_paths = report.get("paths", ())
+        if not isinstance(raw_paths, list):
+            raise NeverDError("NeverD returned invalid symbolic paths")
+        for raw_path in raw_paths:
+            if not isinstance(raw_path, Mapping):
+                raise NeverDError("NeverD returned an invalid symbolic path")
+            raw_blocks = raw_path.get("blocks", ())
+            if not isinstance(raw_blocks, list):
+                raise NeverDError("NeverD returned invalid symbolic path blocks")
+            paths.append(
+                SymbolicPath(
+                    outcome=str(raw_path.get("outcome", "")),
+                    block=int(raw_path.get("block", -1)),
+                    blocks=tuple(int(block) for block in raw_blocks),
+                    constraints=int(raw_path.get("constraints", 0)),
+                    unmodelled_ops=int(raw_path.get("unmodelledOps", 0)),
+                    predicate=(
+                        str(raw_path["predicate"])
+                        if "predicate" in raw_path
+                        else None
+                    ),
+                    target=(
+                        str(raw_path["target"]) if "target" in raw_path else None
+                    ),
+                )
+            )
+
+        return SymbolicExploration(
+            function=str(report.get("function", "")),
+            entry=int(str(report.get("entry", "0")), 0),
+            lift_complete=bool(report.get("liftComplete", False)),
+            complete=bool(report.get("complete", False)),
+            exact=bool(report.get("exact", False)),
+            reachable_paths=int(report.get("reachablePaths", 0)),
+            executed_steps=int(report.get("executedSteps", 0)),
+            unmodelled_ops=int(report.get("unmodelledOps", 0)),
+            paths=tuple(paths),
         )
 
     def hex_dump(self, address: int, size: int) -> str:
@@ -1026,5 +1131,7 @@ __all__ = [
     "SimplifyEvidence",
     "SimplifyOutcome",
     "SimplifyResult",
+    "SymbolicExploration",
+    "SymbolicPath",
     "simplify_expression",
 ]

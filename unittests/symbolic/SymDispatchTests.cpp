@@ -14,9 +14,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/symbolic/SymDispatch.h"
-
 #include "gtest/gtest.h"
+
+#include "neverd/symbolic/SymDispatch.h"
 
 #include <vector>
 
@@ -56,6 +56,39 @@ TEST(SymDispatch, ReadsAnAbsoluteTableOffOneExecution) {
   EXPECT_EQ(Shape->TableBase, kTable);
   EXPECT_EQ(Shape->EntryStride, 8u);
   EXPECT_EQ(Shape->EntrySize, 8u);
+}
+
+TEST(SymDispatch, KeepsPhysicalStrideSeparateFromEntryWidth) {
+  SymContext Ctx;
+  std::vector<LowOp> Ops = {
+      op(NdOp::INT_MULT, NdVar::tmp(0, 8),
+         {NdVar::reg(kIndexReg, 8), NdVar::cst(8, 8)}),
+      op(NdOp::INT_ADD, NdVar::tmp(8, 8),
+         {NdVar::tmp(0, 8), NdVar::cst(kTable, 8)}),
+      op(NdOp::LOAD, NdVar::tmp(16, 4), {NdVar::tmp(8, 8)}),
+      op(NdOp::INDIR_BR, NdVar{}, {NdVar::tmp(16, 4)})};
+
+  std::optional<DispatchShape> Shape = analyzeDispatch(Ctx, Ops, kIndexReg);
+  ASSERT_TRUE(Shape.has_value());
+  EXPECT_EQ(Shape->EntryStride, 8u);
+  EXPECT_EQ(Shape->EntrySize, 4u);
+}
+
+TEST(SymDispatch, ReachesTheBranchPastAnUnrelatedUnknownOperation) {
+  SymContext Ctx;
+  std::vector<LowOp> Ops = {
+      op(NdOp::INT_MULT, NdVar::tmp(0, 8),
+         {NdVar::reg(kIndexReg, 8), NdVar::cst(8, 8)}),
+      op(NdOp::FLOAT_SQRT, NdVar::reg(kScratch, 8), {NdVar::reg(kScratch, 8)}),
+      op(NdOp::INT_ADD, NdVar::tmp(8, 8),
+         {NdVar::tmp(0, 8), NdVar::cst(kTable, 8)}),
+      op(NdOp::LOAD, NdVar::tmp(16, 8), {NdVar::tmp(8, 8)}),
+      op(NdOp::INDIR_BR, NdVar{}, {NdVar::tmp(16, 8)})};
+
+  std::optional<DispatchShape> Shape = analyzeDispatch(Ctx, Ops, kIndexReg);
+  ASSERT_TRUE(Shape.has_value());
+  EXPECT_EQ(Shape->TableBase, kTable);
+  EXPECT_EQ(Shape->EntryStride, 8u);
 }
 
 TEST(SymDispatch, AShiftIsTheSameScaleAsAMultiply) {
@@ -147,12 +180,11 @@ TEST(SymDispatch, RefusesATargetThatWasNeverLoaded) {
   // `jmp base + idx*8` with no load: an address computed from the index, not a
   // table of them.  Reporting a table here would invent entries out of code.
   SymContext Ctx;
-  std::vector<LowOp> Ops = {
-      op(NdOp::INT_MULT, NdVar::tmp(0, 8),
-         {NdVar::reg(kIndexReg, 8), NdVar::cst(8, 8)}),
-      op(NdOp::INT_ADD, NdVar::tmp(8, 8),
-         {NdVar::tmp(0, 8), NdVar::cst(kCodeBase, 8)}),
-      op(NdOp::INDIR_BR, NdVar{}, {NdVar::tmp(8, 8)})};
+  std::vector<LowOp> Ops = {op(NdOp::INT_MULT, NdVar::tmp(0, 8),
+                               {NdVar::reg(kIndexReg, 8), NdVar::cst(8, 8)}),
+                            op(NdOp::INT_ADD, NdVar::tmp(8, 8),
+                               {NdVar::tmp(0, 8), NdVar::cst(kCodeBase, 8)}),
+                            op(NdOp::INDIR_BR, NdVar{}, {NdVar::tmp(8, 8)})};
   EXPECT_FALSE(analyzeDispatch(Ctx, Ops, kIndexReg).has_value());
 }
 

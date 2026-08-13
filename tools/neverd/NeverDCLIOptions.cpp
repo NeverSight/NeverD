@@ -65,6 +65,8 @@ cl::SubCommand HeadersCmd("headers", "Show comprehensive binary headers");
 cl::SubCommand EntryPointsCmd("entrypoints", "List binary entry points");
 cl::SubCommand DashboardCmd("dashboard", "Show binary overview dashboard");
 cl::SubCommand SigsCmd("sigs", "Apply FLIRT signatures to binary");
+cl::SubCommand SymbolicCmd("sym-explore",
+                           "Explore bounded symbolic paths through a function");
 // Takes text rather than a binary, so it is not among the subcommands that
 // register the positional input file below.
 cl::SubCommand SimplifyCmd("simplify", "Simplify a bitvector expression");
@@ -83,7 +85,7 @@ cl::opt<std::string>
               cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
               cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
               cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
-              cl::sub(DashboardCmd), cl::sub(SigsCmd));
+              cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd));
 
 cl::opt<std::string> OutputFile("o", cl::desc("Output file"), cl::init(""),
                                 cl::sub(LiftCmd), cl::sub(DecompileCmd),
@@ -98,7 +100,8 @@ cl::opt<bool>
             cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
             cl::sub(RenameCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
             cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
-            cl::sub(EntryPointsCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd));
+            cl::sub(EntryPointsCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+            cl::sub(SymbolicCmd));
 
 cl::opt<bool> InjectHello("hello",
                           cl::desc("Inject hello_world() test function"),
@@ -244,25 +247,27 @@ cl::opt<bool> EVMRelaxed(
     cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(DisasmCmd),
     cl::sub(CfgCmd));
 
-cl::opt<sbf::Version> SBFVersion(
-    "sbf-version", cl::desc("Solana SBF version"), cl::ValuesClass({
+cl::opt<sbf::Version> SBFVersion("sbf-version", cl::desc("Solana SBF version"),
+                                 cl::ValuesClass({
 #define SBF_VERSION_AUTO(NAME, SPELLING, DISPLAY_NAME)                         \
   clEnumValN(sbf::Version::NAME, SPELLING, DISPLAY_NAME),
 #define SBF_VERSION(NAME, ELF_FLAGS, SPELLING, DISPLAY_NAME, FEATURES, STATUS) \
   clEnumValN(sbf::Version::NAME, SPELLING, DISPLAY_NAME),
 #include "neverd/sbf/SBFVersions.def"
-    }),
-    cl::init(sbf::Version::Auto), cl::sub(LiftCmd), cl::sub(DecompileCmd));
+                                 }),
+                                 cl::init(sbf::Version::Auto), cl::sub(LiftCmd),
+                                 cl::sub(DecompileCmd));
 
 cl::opt<bool> SBFRelaxed(
     "sbf-relaxed",
-    cl::desc("Keep invalid or version-inactive SBF instructions as fault nodes"),
+    cl::desc(
+        "Keep invalid or version-inactive SBF instructions as fault nodes"),
     cl::sub(LiftCmd), cl::sub(DecompileCmd));
 
-cl::opt<std::string> SBFIdl(
-    "sbf-idl",
-    cl::desc("Anchor IDL JSON file naming this program's instructions"),
-    cl::value_desc("path"), cl::sub(LiftCmd), cl::sub(DecompileCmd));
+cl::opt<std::string>
+    SBFIdl("sbf-idl",
+           cl::desc("Anchor IDL JSON file naming this program's instructions"),
+           cl::value_desc("path"), cl::sub(LiftCmd), cl::sub(DecompileCmd));
 
 // Which chain, when, under which loader, and for what. None of these are in
 // the program file, and each of them changes the answer: a gate that is on for
@@ -296,15 +301,16 @@ cl::opt<sbf::Loader> SBFLoader("sbf-loader",
                                cl::init(sbf::Loader::V3), cl::sub(LiftCmd),
                                cl::sub(DecompileCmd));
 
-cl::opt<sbf::RuntimePurpose> SBFPurpose(
-    "sbf-purpose", cl::desc("Whether to answer for running or for deploying"),
-    cl::ValuesClass({
+cl::opt<sbf::RuntimePurpose>
+    SBFPurpose("sbf-purpose",
+               cl::desc("Whether to answer for running or for deploying"),
+               cl::ValuesClass({
 #define SBF_RUNTIME_PURPOSE(ID, NAME, SUMMARY)                                 \
   clEnumValN(sbf::RuntimePurpose::ID, NAME, SUMMARY),
 #include "neverd/sbf/SBFRuntimeFeatures.def"
-    }),
-    cl::init(sbf::RuntimePurpose::Execution), cl::sub(LiftCmd),
-    cl::sub(DecompileCmd));
+               }),
+               cl::init(sbf::RuntimePurpose::Execution), cl::sub(LiftCmd),
+               cl::sub(DecompileCmd));
 
 //===----------------------------------------------------------------------===//
 // Strings-specific options
@@ -326,7 +332,8 @@ cl::opt<std::string> XrefAddr("addr", cl::desc("Target address (hex)"),
 
 cl::opt<std::string> DisasmFunc("func",
                                 cl::desc("Function name or address (hex)"),
-                                cl::sub(DisasmCmd), cl::sub(CfgCmd));
+                                cl::sub(DisasmCmd), cl::sub(CfgCmd),
+                                cl::sub(SymbolicCmd));
 
 cl::opt<bool>
     DisasmAnnotate("annotate",
@@ -343,6 +350,24 @@ cl::opt<bool> CfgDot("dot", cl::desc("Output in DOT format"), cl::sub(CfgCmd));
 
 cl::opt<std::string> CfgSvg("svg", cl::desc("Output CFG as SVG file"),
                             cl::init(""), cl::sub(CfgCmd));
+
+cl::opt<unsigned>
+    SymbolicMaxPaths("max-paths", cl::desc("Maximum reachable paths to report"),
+                     cl::init(64), cl::sub(SymbolicCmd));
+
+cl::opt<unsigned>
+    SymbolicMaxSteps("max-steps",
+                     cl::desc("Maximum operations along each path"),
+                     cl::init(1u << 16), cl::sub(SymbolicCmd));
+
+cl::opt<unsigned>
+    SymbolicMaxBlockVisits("max-block-visits",
+                           cl::desc("Maximum visits to one block per path"),
+                           cl::init(3), cl::sub(SymbolicCmd));
+
+cl::opt<bool> SymbolicExpressions(
+    "expressions", cl::desc("Include path predicates and unresolved targets"),
+    cl::sub(SymbolicCmd));
 
 //===----------------------------------------------------------------------===//
 // JSON output option (shared)
@@ -547,13 +572,11 @@ cl::opt<bool>
 // Simplify-specific options
 //===----------------------------------------------------------------------===//
 
-cl::opt<std::string> SimplifyExpr(cl::Positional,
-                                  cl::desc("<expression>"), cl::init(""),
-                                  cl::sub(SimplifyCmd));
+cl::opt<std::string> SimplifyExpr(cl::Positional, cl::desc("<expression>"),
+                                  cl::init(""), cl::sub(SimplifyCmd));
 
 cl::opt<std::string> SimplifyFile(
-    "f",
-    cl::desc("Read one expression per line from a file, or '-' for stdin"),
+    "f", cl::desc("Read one expression per line from a file, or '-' for stdin"),
     cl::init(""), cl::sub(SimplifyCmd));
 
 cl::opt<unsigned> SimplifyWidth(
@@ -570,8 +593,9 @@ cl::opt<bool> SimplifyShallow(
 
 cl::opt<unsigned> SimplifyMaxAtoms(
     "max-atoms",
-    cl::desc("Most distinct inputs one measurement may span; the cost is 2^n, "
-             "so this is the dial between reach and time (0 keeps the default)"),
+    cl::desc(
+        "Most distinct inputs one measurement may span; the cost is 2^n, "
+        "so this is the dial between reach and time (0 keeps the default)"),
     cl::init(0), cl::sub(SimplifyCmd));
 
 cl::opt<unsigned long long> SimplifyMaxWork(
@@ -581,8 +605,7 @@ cl::opt<unsigned long long> SimplifyMaxWork(
     cl::init(0), cl::sub(SimplifyCmd));
 
 cl::opt<bool> SimplifyExhaustive(
-    "exhaustive",
-    cl::desc("Remove the walk and polynomial-search work budget"),
+    "exhaustive", cl::desc("Remove the walk and polynomial-search work budget"),
     cl::sub(SimplifyCmd));
 
 cl::opt<unsigned> SimplifyVerifySamples(

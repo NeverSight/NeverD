@@ -38,9 +38,11 @@ std::set<uint64_t> detectPtrParamRegs(const MedFunc &Med);
 /// carried across; a load, a call, a cast or a comparison becomes one opaque
 /// input and comes back untouched.
 ///
-/// Not part of the standard decompilation pipeline yet: it ranks candidates by
-/// the size of the expression graph, which does not always agree with what the
-/// C backend prints.  Call it directly to apply it.
+/// The standard HighIR cleanup runs this after copy propagation, dead-code
+/// elimination and renaming have assembled the final expression DAG.  A
+/// rewrite must improve the engine's rendered-tree cost by a material margin,
+/// which avoids replacing a compact shared form with text that repeats one of
+/// its subexpressions.
 void simplifyExprSemantics(std::vector<HighStmt> &Stmts);
 
 class MedToHighConverter {

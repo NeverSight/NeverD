@@ -12,9 +12,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/symbolic/SymExpr.h"
-
 #include "gtest/gtest.h"
+
+#include "neverd/symbolic/SymExpr.h"
 
 #include <random>
 
@@ -86,7 +86,8 @@ TEST(SymExpr, ShiftsByConstantsBecomeProductsSoSumsCanCollectThem) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", W32);
 
-  EXPECT_EQ(Ctx.mkShl(X, Ctx.mkConst(W32, 1)), Ctx.mkMul(Ctx.mkConst(W32, 2), X));
+  EXPECT_EQ(Ctx.mkShl(X, Ctx.mkConst(W32, 1)),
+            Ctx.mkMul(Ctx.mkConst(W32, 2), X));
   // This is the point of the normalisation: `x + (x << 1)` is `3*x`.
   EXPECT_EQ(Ctx.mkAdd(X, Ctx.mkShl(X, Ctx.mkConst(W32, 1))),
             Ctx.mkMul(Ctx.mkConst(W32, 3), X));
@@ -122,8 +123,9 @@ TEST(SymExpr, StructuralOperatorsCollapseWhereTheyCan) {
   // Adjacent literals in a concatenation merge into one word.
   EXPECT_EQ(Ctx.mkConcat(Ctx.mkConst(8, 0xAB), Ctx.mkConst(8, 0xCD)),
             Ctx.mkConst(16, 0xABCD));
-  EXPECT_EQ(Ctx.width(Ctx.mkConcat(Ctx.mkExtract(X, 0, 8), Ctx.mkExtract(X, 8, 8))),
-            16u);
+  EXPECT_EQ(
+      Ctx.width(Ctx.mkConcat(Ctx.mkExtract(X, 0, 8), Ctx.mkExtract(X, 8, 8))),
+      16u);
 }
 
 TEST(SymExpr, SelectFoldsToItsConditionWhenTheArmsAreTheTruthValues) {
@@ -150,6 +152,27 @@ TEST(SymExpr, DagSizeCountsSharedSubtermsOnce) {
   size_t After = Ctx.dagSize(Ctx.mkAdd(Shared, Shared));
   EXPECT_EQ(Before, 3u);
   EXPECT_EQ(After, Before + 2);
+}
+
+TEST(SymExpr, ReadabilityCostCountsEveryPrintedUse) {
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", W32);
+  SymRef Y = Ctx.mkVar("y", W32);
+  SymRef Z = Ctx.mkVar("z", W32);
+  SymRef W = Ctx.mkVar("w", W32);
+  SymRef Shared = Ctx.mkXor(X, Y);
+
+  // Populate the cache before appending the expressions below: a later query
+  // must extend it rather than recompute or return a stale prefix.
+  EXPECT_EQ(Ctx.readabilityCost(Shared), 3u);
+
+  SymRef Twice = Ctx.mkOr(Ctx.mkAnd(Shared, Z), Ctx.mkAnd(Shared, W));
+  EXPECT_EQ(Ctx.dagSize(Twice), 8u);
+  EXPECT_EQ(Ctx.readabilityCost(Twice), 11u);
+
+  // The all-ones factor is how the graph spells a sign, so it is not a printed
+  // quantity in the cost model.
+  EXPECT_EQ(Ctx.readabilityCost(Ctx.mkNeg(Shared)), 4u);
 }
 
 TEST(SymExpr, CollectVarsReportsEveryReachableVariableOnce) {
@@ -234,6 +257,19 @@ TEST(SymExpr, EvaluationPlanReportsTheVariablesItReads) {
   EXPECT_EQ(Plan.vars()[0], Ctx.varId(X));
   EXPECT_EQ(Plan.vars()[1], Ctx.varId(Y));
   EXPECT_GT(Plan.numSteps(), 0u);
+}
+
+TEST(SymExpr, U64ArithmeticShiftByZeroKeepsTheWholeWord) {
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", 64);
+  SymRef Amount = Ctx.mkVar("amount", 64);
+  SymEvalPlan Plan(Ctx, Ctx.mkAShr(X, Amount));
+  ASSERT_TRUE(Plan.fitsU64());
+
+  std::vector<uint64_t> Vars(Ctx.numVars(), 0);
+  Vars[Ctx.varId(X)] = 0x8000000000000001ull;
+  Vars[Ctx.varId(Amount)] = 0;
+  EXPECT_EQ(Plan.evalU64(Vars), 0x8000000000000001ull);
 }
 
 TEST(SymExpr, DivisionAndRemainderFollowTheBitvectorTheory) {

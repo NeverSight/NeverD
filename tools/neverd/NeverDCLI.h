@@ -129,6 +129,7 @@ extern llvm::cl::SubCommand EntryPointsCmd;
 extern llvm::cl::SubCommand DashboardCmd;
 extern llvm::cl::SubCommand SigsCmd;
 extern llvm::cl::SubCommand SimplifyCmd;
+extern llvm::cl::SubCommand SymbolicCmd;
 
 //===----------------------------------------------------------------------===//
 // Options (defined in NeverDCLIOptions.cpp)
@@ -191,6 +192,10 @@ extern llvm::cl::opt<std::string> HexAddr;
 extern llvm::cl::opt<unsigned> HexSize;
 extern llvm::cl::opt<bool> CfgDot;
 extern llvm::cl::opt<std::string> CfgSvg;
+extern llvm::cl::opt<unsigned> SymbolicMaxPaths;
+extern llvm::cl::opt<unsigned> SymbolicMaxSteps;
+extern llvm::cl::opt<unsigned> SymbolicMaxBlockVisits;
+extern llvm::cl::opt<bool> SymbolicExpressions;
 
 // Plugins.
 extern llvm::cl::opt<bool> PluginList;
@@ -292,6 +297,7 @@ int runHex(neverd_session_t Sess);
 int runCfg(neverd_session_t Sess);
 int runXrefs(neverd_session_t Sess);
 int runCallGraph(neverd_session_t Sess);
+int runSymbolicExplore(neverd_session_t Sess);
 
 // NeverDCmdMarkup.cpp — user annotations persisted beside the binary.
 // runBookmarks operates purely on the JSON sidecar, so it needs no session.

@@ -19,28 +19,31 @@
 ///      each table entry is a 32-bit signed offset from the table base:
 ///        target = base + (int32_t)table[index]
 ///
-///   3. **Backward slicing** — trace data flow from the INDIR_BR input
+///   3. **Symbolic dispatch decomposition** — execute the dispatch with each
+///      register input symbolic and recover an exact linear table shape.
+///
+///   4. **Backward slicing** — trace data flow from the INDIR_BR input
 ///      through INT_ADD, INT_MULT, LOAD, INT_ZEXT, INT_LEFT, INT_RIGHT,
 ///      INT_ASHR, INT_SEXT, SUBBYTES, and COPY to identify the base
 ///      address and entry layout.  Cross-instruction base recovery
 ///      (stack-materialized, two-table, prior-insn PIC bases) lives in
 ///      JumpTableResolverSource.cpp.
 ///
-///   4. **Guard analysis** — scan preceding instructions *and* CFG
+///   5. **Guard analysis** — scan preceding instructions *and* CFG
 ///      predecessor blocks for comparison/mask ops (INT_LESS,
 ///      INT_LESSEQUAL, INT_SUB, INT_AND) that bound the switch
 ///      variable, giving a precise entry count.  Lives in
 ///      JumpTableResolverGuards.cpp.
 ///
-///   5. **Multi-format entries** — read 1, 2, 4, or 8 byte entries,
+///   6. **Multi-format entries** — read 1, 2, 4, or 8 byte entries,
 ///      both signed and unsigned, with tolerance for sparse invalid
 ///      entries in bounded tables.
 ///
-///   6. **Sanity validation** — each target is checked for executable
+///   7. **Sanity validation** — each target is checked for executable
 ///      segment membership, data availability at the target address,
 ///      reasonable distance from the function, and duplicate-run limits.
 ///
-///   7. **Multi-stage fallback** — when the primary strategy produces
+///   8. **Multi-stage fallback** — when the primary strategy produces
 ///      too few entries, retry with alternative entry sizes to recover
 ///      tables that use an unexpected format.
 ///
@@ -62,6 +65,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <set>
 
 #define DEBUG_TYPE "neverd-cfg-builder"
@@ -270,8 +274,7 @@ bool CFGBuilder::tryRelativeTable(const BinaryImage &Img, const InsnRecord &Rec,
         // Reject a spill/reload relay: a target loaded from a frame slot is not
         // a table entry, and its stack displacement must not be read as a table
         // base.  Defer to the cross-instruction resolver for the real table.
-        const NdVar &LAddr =
-            (Op.NumInputs >= 2) ? Op.Inputs[1] : Op.Inputs[0];
+        const NdVar &LAddr = (Op.NumInputs >= 2) ? Op.Inputs[1] : Op.Inputs[0];
         if (loadAddrIsFrameSlot(Rec.Ops, J - 1, LAddr,
                                 getTargetRegInfo(Img.Arch)))
           return false;
@@ -313,8 +316,7 @@ bool CFGBuilder::tryRelativeTable(const BinaryImage &Img, const InsnRecord &Rec,
 //===----------------------------------------------------------------------===//
 
 /// Reaching-definition index of `V` searching backward from `FromIdx`.
-int reachingDefIdx(const std::vector<LowOp> &Ops, int FromIdx,
-                   const NdVar &V) {
+int reachingDefIdx(const std::vector<LowOp> &Ops, int FromIdx, const NdVar &V) {
   for (int I = FromIdx; I >= 0; --I) {
     const NdVar &O = Ops[I].Output;
     if (O.Space == V.Space && O.Offset == V.Offset)
@@ -324,8 +326,7 @@ int reachingDefIdx(const std::vector<LowOp> &Ops, int FromIdx,
 }
 
 /// Trace a nd-var backward through COPY chains to a plain register.
-uint64_t traceToRegister(const std::vector<LowOp> &Ops, int FromIdx,
-                         NdVar V) {
+uint64_t traceToRegister(const std::vector<LowOp> &Ops, int FromIdx, NdVar V) {
   for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
     if (V.isReg())
       return V.Offset;
@@ -1038,12 +1039,17 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
   std::vector<va_t> Targets;
   Targets.reserve(std::min(Limit, 64u));
   size_t Off = static_cast<size_t>(Info.BaseAddr - Seg->VA);
+  const uint64_t EntryStride =
+      Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
   va_t PrevTarget = InvalidVA;
   int DuplicateRun = 0;
   int SkippedRun = 0;
 
   for (uint32_t I = 0; I < Limit; ++I) {
-    size_t EntryOff = Off + I * Info.EntrySize;
+    if (I != 0 &&
+        EntryStride > (std::numeric_limits<size_t>::max() - Off) / uint64_t(I))
+      break;
+    size_t EntryOff = Off + static_cast<size_t>(uint64_t(I) * EntryStride);
     if (!rangeInBounds(EntryOff, Info.EntrySize, Seg->Data.size()))
       break;
 
@@ -1096,8 +1102,8 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
 /// a register the index is reused for *after* the table read (e.g. a peeled
 /// loop iteration's accumulator) from contributing a phantom normalization.
 static void traceIndexTransform(const std::vector<LowOp> &Ops, int FromIdx,
-                                NdVar V, int64_t &NormBase,
-                                uint32_t &NormShift, uint32_t &Stride) {
+                                NdVar V, int64_t &NormBase, uint32_t &NormShift,
+                                uint32_t &Stride) {
   for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
     if (!V.isReg() && !V.isTemp())
       return;
@@ -1344,11 +1350,12 @@ void CFGBuilder::detectNormalization(const InsnRecord &Rec,
       // the other the constant base — so the index-keyed bound strategies still
       // engage for constant-base tables.
       int AddIdx = reachingDefIdx(BlockOps, I - 1, AddrV);
-      for (int G = 0; AddIdx >= 0 && BlockOps[AddIdx].Opcode == NdOp::COPY &&
-                      BlockOps[AddIdx].NumInputs >= 1 &&
-                      G < limits::kMaxQuasiCopyDepth;
+      for (int G = 0;
+           AddIdx >= 0 && BlockOps[AddIdx].Opcode == NdOp::COPY &&
+           BlockOps[AddIdx].NumInputs >= 1 && G < limits::kMaxQuasiCopyDepth;
            ++G)
-        AddIdx = reachingDefIdx(BlockOps, AddIdx - 1, BlockOps[AddIdx].Inputs[0]);
+        AddIdx =
+            reachingDefIdx(BlockOps, AddIdx - 1, BlockOps[AddIdx].Inputs[0]);
       if (AddIdx < 0 || BlockOps[AddIdx].Opcode != NdOp::INT_ADD ||
           BlockOps[AddIdx].NumInputs < 2)
         continue;
@@ -1879,7 +1886,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Recovered = tryCrossInstrRelativeTable(Img, Rec, Info);
 
   // Strategy 2c: constant-base absolute table whose load is decoupled from the
-  // branch by an -O0 spill/reload relay (`... mov tab(,idx,W),%r; mov %r,[slot];
+  // branch by an -O0 spill/reload relay (`... mov tab(,idx,W),%r; mov
+  // %r,[slot];
   // ... mov [slot],%r; jmp *%r`), including a shared multi-site computed-goto
   // dispatch where several goto-site predecessors feed one common table.  The
   // cross-instruction resolver above only reaches a load in the branch's own
@@ -1889,7 +1897,55 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   if (!Recovered)
     Recovered = tryConstBaseAbsoluteTable(Img, Rec, Info);
 
-  // Strategy 3: Backward slicing for absolute tables.
+  // Strategy 3: execute the dispatch once with each register input left as the
+  // one whole-word unknown.  A successful decomposition is exact: the loaded
+  // address itself states the table base, entry width and index stride.  Keep
+  // this behind the specialised forms above, whose multi-table and
+  // architecture-specific layouts intentionally carry more metadata than one
+  // linear expression can describe.
+  if (!Recovered) {
+    std::set<std::pair<uint64_t, uint16_t>> Candidates;
+    for (const LowOp &Op : Rec.Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (Op.Inputs[I].isReg() && Op.Inputs[I].Size != 0)
+          Candidates.emplace(Op.Inputs[I].Offset, Op.Inputs[I].Size);
+
+    std::optional<symbolic::DispatchShape> Shape;
+    uint64_t ShapeIndex = InvalidVA;
+    bool Ambiguous = false;
+    for (const auto &[Reg, Bytes] : Candidates) {
+      symbolic::SymContext SymCtx;
+      std::optional<symbolic::DispatchShape> Candidate =
+          symbolic::analyzeDispatch(SymCtx, Rec.Ops, Reg, Bytes);
+      if (!Candidate || Candidate->EntryStride == 0 ||
+          Candidate->EntryScale > std::numeric_limits<uint32_t>::max())
+        continue;
+      if (Shape) {
+        Ambiguous = true;
+        break;
+      }
+      Shape = *Candidate;
+      ShapeIndex = Reg;
+    }
+
+    if (Shape && !Ambiguous) {
+      Info.BaseAddr = Shape->TableBase;
+      Info.EntrySize = Shape->EntrySize;
+      Info.EntryStride = Shape->EntryStride;
+      Info.IndexReg = ShapeIndex;
+      Info.IsRelative = Shape->Kind == symbolic::DispatchKind::Relative;
+      Info.IsSigned = Shape->EntryIsSigned;
+      Info.TargetBase = Shape->RelativeBase;
+      Info.EntryScale = static_cast<uint32_t>(Shape->EntryScale);
+      Recovered = true;
+      LLVM_DEBUG(llvm::dbgs() << "  symbolic-dispatch: table=0x"
+                              << llvm::utohexstr(Info.BaseAddr)
+                              << " entry=" << Info.EntrySize << " index=0x"
+                              << llvm::utohexstr(Info.IndexReg) << "\n");
+    }
+  }
+
+  // Strategy 4: Backward slicing for absolute tables.
   if (!Recovered && !sliceBackForTableBase(Rec, Info))
     return {};
 
@@ -1955,10 +2011,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // index; the size that lands there is the entry count.
     if (!GuardFound)
       GuardFound = inferBoundsFromRangePullback(Rec, Info);
-    // Final guard strategy: the guard constrains a *separate reload* of the same
-    // spilled switch variable that feeds the index (the -O0 shape where `cmp`
-    // and the table index each reload the value from the same stack slot, with
-    // no copy chain linking their registers).  Match by exact location
+    // Final guard strategy: the guard constrains a *separate reload* of the
+    // same spilled switch variable that feeds the index (the -O0 shape where
+    // `cmp` and the table index each reload the value from the same stack slot,
+    // with no copy chain linking their registers).  Match by exact location
     // equivalence rather than register identity.
     if (!GuardFound)
       GuardFound = inferBoundsFromLoadAliasGuard(Rec, Info);
@@ -2025,10 +2081,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Info.NormBase = 0;
     Info.NormShift = 0;
     Info.Stride = 1;
-    LLVM_DEBUG(llvm::dbgs()
-               << "  abs-reloc-run: bounded absolute table to "
-               << Info.MaxEntries
-               << " entries from code-pointer relocation run\n");
+    LLVM_DEBUG(llvm::dbgs() << "  abs-reloc-run: bounded absolute table to "
+                            << Info.MaxEntries
+                            << " entries from code-pointer relocation run\n");
   }
 
   // A `switch(x % N)` table whose entries carry no relocations (AArch64 compact
@@ -2115,9 +2170,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Info.MaxEntries = NCMask;
       Info.Stride = 1;
       Info.RelocBounded = true;
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  covering-mask: bounded table to " << NCMask
-                 << " entries from non-contiguous index mask\n");
+      LLVM_DEBUG(llvm::dbgs() << "  covering-mask: bounded table to " << NCMask
+                              << " entries from non-contiguous index mask\n");
     }
   }
 
@@ -2248,10 +2302,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       for (size_t I = 0; ExtendsStatic && I < Targets.size(); ++I)
         ExtendsStatic = EmuTargets[I] == Targets[I];
       if (ExtendsStatic) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  emu-verify: extended bounded table from "
-                   << Targets.size() << " to " << EmuTargets.size()
-                   << " entries via dispatch emulation\n");
+        LLVM_DEBUG(llvm::dbgs() << "  emu-verify: extended bounded table from "
+                                << Targets.size() << " to " << EmuTargets.size()
+                                << " entries via dispatch emulation\n");
         Targets = std::move(EmuTargets);
         KeptIdx.clear(); // dense positional labels apply
       }
@@ -2296,7 +2349,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // revisit because the count already looks complete.  The emulation reads the
   // same table bytes and applies the same transform the processor would, so
   // when it is fully grounded — every index read the recovered table slot
-  // (BaseAddr + i*EntrySize) and produced a valid target — its result is
+  // (BaseAddr + i*EntryStride) and produced a valid target — its result is
   // authoritative and supersedes a disagreeing static decode.
   //
   // Guarded to be a no-op wherever the static decode is already trustworthy, so
@@ -2310,9 +2363,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   for (size_t I = 0; DenseStatic && I < KeptIdx.size(); ++I)
     DenseStatic = KeptIdx[I] == I;
   if (CurrentImg && DenseStatic && !Targets.empty() &&
-      Info.IndexReg != InvalidVA && Info.BaseAddr != 0 && Info.TargetBase == 0 &&
-      Info.EntryScale == 1 && !Info.PreScaledIndex && !Info.TwoTableSelect &&
-      !Info.RelocAbsolute && !Info.RelocBounded &&
+      Info.IndexReg != InvalidVA && Info.BaseAddr != 0 &&
+      Info.TargetBase == 0 && Info.EntryScale == 1 && !Info.PreScaledIndex &&
+      !Info.TwoTableSelect && !Info.RelocAbsolute && !Info.RelocBounded &&
       (Info.EntrySize == 1 || Info.EntrySize == 2 || Info.EntrySize == 4 ||
        Info.EntrySize == 8)) {
     bool Grounded = false;
@@ -2790,11 +2843,11 @@ std::vector<va_t> CFGBuilder::tryEmulatedResolution(const BinaryImage &Img,
 // emulateGroundedTargets — execute the real dispatch per index
 //===----------------------------------------------------------------------===//
 
-std::vector<va_t>
-CFGBuilder::emulateGroundedTargets(const BinaryImage &Img,
-                                   const InsnRecord &Rec,
-                                   const JumpTableInfo &Info, uint32_t Count,
-                                   bool &Grounded) {
+std::vector<va_t> CFGBuilder::emulateGroundedTargets(const BinaryImage &Img,
+                                                     const InsnRecord &Rec,
+                                                     const JumpTableInfo &Info,
+                                                     uint32_t Count,
+                                                     bool &Grounded) {
   Grounded = false;
   std::vector<va_t> Out;
   if (Count == 0 || Count > limits::kMaxJumpTableEntries || Info.EntrySize == 0)
@@ -2835,10 +2888,10 @@ CFGBuilder::emulateGroundedTargets(const BinaryImage &Img,
   NdVar InjVar;
   int LoadPos = -1;
   auto peelCopy = [&](int D) {
-    for (int G = 0; D >= 0 && Ops[D].Opcode == NdOp::COPY &&
-                    Ops[D].NumInputs >= 1 &&
-                    (Ops[D].Inputs[0].isReg() || Ops[D].Inputs[0].isTemp()) &&
-                    G < limits::kMaxQuasiCopyDepth;
+    for (int G = 0;
+         D >= 0 && Ops[D].Opcode == NdOp::COPY && Ops[D].NumInputs >= 1 &&
+         (Ops[D].Inputs[0].isReg() || Ops[D].Inputs[0].isTemp()) &&
+         G < limits::kMaxQuasiCopyDepth;
          ++G)
       D = reachingDefIdx(Ops, D - 1, Ops[D].Inputs[0]);
     return D;
@@ -2847,7 +2900,8 @@ CFGBuilder::emulateGroundedTargets(const BinaryImage &Img,
     if (Ops[I].Opcode != NdOp::LOAD || Ops[I].NumInputs < 1 ||
         Ops[I].Output.Size != Info.EntrySize)
       continue;
-    const NdVar &AddrV = (Ops[I].NumInputs >= 2) ? Ops[I].Inputs[1] : Ops[I].Inputs[0];
+    const NdVar &AddrV =
+        (Ops[I].NumInputs >= 2) ? Ops[I].Inputs[1] : Ops[I].Inputs[0];
     int AddIdx = peelCopy(reachingDefIdx(Ops, I - 1, AddrV));
     if (AddIdx < 0 || Ops[AddIdx].Opcode != NdOp::INT_ADD ||
         Ops[AddIdx].NumInputs < 2)
@@ -2906,7 +2960,13 @@ CFGBuilder::emulateGroundedTargets(const BinaryImage &Img,
     // injection point or an unmaterialised base reads a different address, so
     // this ties the emulated target to the recovered table and makes adoption
     // safe regardless of how the injection site was chosen.
-    uint64_t Slot = Info.BaseAddr + static_cast<uint64_t>(I) * Info.EntrySize;
+    const uint64_t EntryStride =
+        Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+    if (I != 0 &&
+        EntryStride > (std::numeric_limits<uint64_t>::max() - Info.BaseAddr) /
+                          uint64_t(I))
+      return {};
+    uint64_t Slot = Info.BaseAddr + uint64_t(I) * EntryStride;
     bool Hit = false;
     for (auto &L : Emu.getLoadRecords())
       if (L.Addr == Slot) {

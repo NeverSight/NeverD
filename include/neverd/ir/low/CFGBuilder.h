@@ -97,9 +97,9 @@ private:
   void rewriteAsTailCall(InsnRecord &Rec);
 
   /// Rewrite an unconditional indirect branch (`bx reg` / `br reg` / `jmp *reg`
-  /// through a function pointer, not a jump table) into an INDIR_CALL + RETURN pair
-  /// — an indirect tail call.  Without this the unresolved INDIR_BR lowers to
-  /// a fall-through `ret 0`, dropping the call.
+  /// through a function pointer, not a jump table) into an INDIR_CALL + RETURN
+  /// pair — an indirect tail call.  Without this the unresolved INDIR_BR lowers
+  /// to a fall-through `ret 0`, dropping the call.
   void rewriteAsIndirectTailCall(InsnRecord &Rec);
 
   /// After all jump-table resolution, convert any remaining unconditional
@@ -127,6 +127,9 @@ private:
   struct JumpTableInfo {
     va_t BaseAddr = 0;
     uint16_t EntrySize = 0;
+    /// Physical byte distance between adjacent entries.  Zero means packed
+    /// entries and therefore uses EntrySize.
+    uint64_t EntryStride = 0;
     uint32_t MaxEntries = 0;
     bool IsRelative = false;
     bool IsSigned = false;
@@ -355,14 +358,14 @@ private:
   /// register the `cmp` guards (`ldr rG,[sp,#k]; cmp rG,N`) and again into the
   /// register that scales the table (`ldr rIdx,[sp,#k]; ldr t,[tab,rIdx,4]`).
   /// No value-preserving copy chain links rG to rIdx, so the register-identity
-  /// matchers (findBestBound / refineRangeFromGuards / range-pullback) never see
-  /// that the guard bounds the index.  But both registers are loaded from the
-  /// same location, so — provided nothing writes that location between the two
-  /// loads — they hold the same value and the guard bounds the index.  This is
-  /// the last-resort guard strategy: it runs only after every register-keyed
-  /// matcher failed, so it can only add a bound.  Soundness rests on exact value
-  /// equivalence (identical load address + no intervening aliasing store) and a
-  /// check that the comparison actually reaches a conditional branch.
+  /// matchers (findBestBound / refineRangeFromGuards / range-pullback) never
+  /// see that the guard bounds the index.  But both registers are loaded from
+  /// the same location, so — provided nothing writes that location between the
+  /// two loads — they hold the same value and the guard bounds the index.  This
+  /// is the last-resort guard strategy: it runs only after every register-keyed
+  /// matcher failed, so it can only add a bound.  Soundness rests on exact
+  /// value equivalence (identical load address + no intervening aliasing store)
+  /// and a check that the comparison actually reaches a conditional branch.
   bool inferBoundsFromLoadAliasGuard(const InsnRecord &Rec,
                                      JumpTableInfo &Info);
   bool inferBoundsFromModulo(const BinaryImage &Img, const InsnRecord &Rec,
@@ -462,7 +465,8 @@ private:
   /// Executable addresses taken via a relocation-free PC-relative `lea` while
   /// exploring this function (same-section function pointers); copied into the
   /// LowFunc so the pipeline merges them into the image's CodeRefTargets (a
-  /// sorted std::set), so this set's own iteration order does not affect output.
+  /// sorted std::set), so this set's own iteration order does not affect
+  /// output.
   llvm::DenseSet<va_t> DiscoveredCodeRefs;
   uint64_t DecodedInstructionCount = 0;
   uint64_t LiftedInstructionCount = 0;

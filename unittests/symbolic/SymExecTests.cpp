@@ -15,11 +15,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/symbolic/SymExec.h"
-
-#include "neverd/symbolic/SymParse.h"
-
 #include "gtest/gtest.h"
+
+#include "neverd/symbolic/SymExec.h"
+#include "neverd/symbolic/SymParse.h"
 
 #include <string>
 #include <vector>
@@ -51,11 +50,21 @@ TEST(SymState, ALocationNeverWrittenReadsAsAnInputNamedForItself) {
   SymContext Ctx;
   SymState State(Ctx);
   EXPECT_EQ(Ctx.toString(State.read(SymSpace::Register, kRax, 1)), "reg$0");
-  // Four bytes of an untouched register are four separate unknowns, because
-  // nothing says they were written together.  The width suffixes are the
-  // printer noting that each leaf is narrower than the word being printed.
+  // The first byte was already touched on its own, so a later wider read keeps
+  // that partition and fills the remaining bytes independently.  The width
+  // suffixes note that each leaf is narrower than the word being printed.
   EXPECT_EQ(Ctx.toString(State.read(SymSpace::Register, kRax, 4)),
             "concat(reg$3#8, reg$2#8, reg$1#8, reg$0#8)");
+}
+
+TEST(SymState, AWholeUntouchedRegisterStartsAsOneInput) {
+  SymContext Ctx;
+  SymState State(Ctx);
+
+  SymRef Whole = State.read(SymSpace::Register, kRax, 8);
+  EXPECT_EQ(Ctx.op(Whole), SymOp::Var);
+  EXPECT_EQ(State.read(SymSpace::Register, kRax, 4),
+            Ctx.mkExtract(Whole, 0, 32));
 }
 
 TEST(SymState, AWriteAndAReadOfTheSameWidthCancelOut) {
@@ -142,6 +151,134 @@ TEST(SymState, AStoreThroughAnUnknownAddressForgetsEverything) {
   EXPECT_FALSE(Ctx.isConst(State.load(Addr, 4)));
 }
 
+TEST(SymState, AKnownStoreReestablishesBytesAfterMemoryWasClobbered) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymRef Addr = Ctx.mkConst(64, 0x401000);
+
+  State.store(Ctx.mkVar("p", 64), Ctx.mkConst(32, 1));
+  ASSERT_TRUE(State.memoryIsUnknown());
+  State.store(Addr, Ctx.mkConst(32, 0xDEADBEEF));
+
+  SymRef Back = State.load(Addr, 4);
+  ASSERT_TRUE(Ctx.isConst(Back));
+  EXPECT_EQ(Ctx.constValue(Back).getZExtValue(), 0xDEADBEEFu);
+  EXPECT_FALSE(Ctx.isConst(State.load(Ctx.mkConst(64, 0x402000), 4)));
+}
+
+TEST(SymState, AnAddressThatDoesNotFitTheAddressSpaceStaysSymbolic) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  llvm::APInt WideAddress(256, 0);
+  WideAddress.setBit(200);
+  SymRef Addr = Ctx.mkConst(WideAddress);
+
+  SymRef Loaded = State.load(Addr, 4);
+  const SymState::LoadOrigin *Origin = State.loadOrigin(Loaded);
+  ASSERT_NE(Origin, nullptr);
+  EXPECT_EQ(Origin->Address, Addr);
+
+  State.store(Addr, Ctx.mkConst(32, 1));
+  EXPECT_TRUE(State.memoryIsUnknown());
+}
+
+TEST(SymState, RepeatedSymbolicLoadsObserveOneMemoryValue) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymRef Address = Ctx.mkVar("address", 64);
+
+  SymRef First = State.load(Address, 4);
+  EXPECT_EQ(State.load(Address, 4), First);
+
+  // A concrete write may alias the unresolved address, so it begins a new
+  // symbolic-load epoch even when its concrete bytes are known.
+  State.store(Ctx.mkConst(64, 0x401000), Ctx.mkConst(32, 1));
+  EXPECT_NE(State.load(Address, 4), First);
+}
+
+TEST(SymState, OverlappingSymbolicLoadsShareTheirBytes) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymRef Address = Ctx.mkVar("address", 64);
+
+  SymRef Wide = State.load(Address, 8);
+  EXPECT_EQ(State.load(Address, 4), Ctx.mkExtract(Wide, 0, 32));
+
+  SymRef ShiftedAddress = Ctx.mkAdd(Address, Ctx.mkConst(64, uint64_t(1)));
+  EXPECT_EQ(State.load(ShiftedAddress, 4), Ctx.mkExtract(Wide, 8, 32));
+}
+
+TEST(SymState, ForksShareSymbolicLoadsUntilTheirMemoryDiverges) {
+  SymContext Ctx;
+  SymState Initial(Ctx);
+  SymState Left = Initial;
+  SymState Right = Initial;
+  SymRef Address = Ctx.mkVar("address", 64);
+
+  SymRef BeforeStore = Left.load(Address, 4);
+  EXPECT_EQ(Right.load(Address, 4), BeforeStore);
+
+  Left.store(Ctx.mkConst(64, 0x401000), Ctx.mkConst(32, 1));
+  EXPECT_NE(Left.load(Address, 4), BeforeStore);
+  EXPECT_EQ(Right.load(Address, 4), BeforeStore);
+}
+
+TEST(SymState, FreshInputsDoNotAliasAcrossCopiedStates) {
+  SymContext Ctx;
+  SymState Left(Ctx);
+  SymState Right = Left;
+
+  EXPECT_NE(Left.freshInput("load", 32), Right.freshInput("load", 32));
+}
+
+TEST(SymState, EveryRegisterClobberCreatesANewUnknownState) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymRef Entry = State.read(SymSpace::Register, kRax, 8);
+
+  State.clobberRegistersExcept({});
+  SymRef AfterFirst = State.read(SymSpace::Register, kRax, 8);
+  State.clobberRegistersExcept({});
+  SymRef AfterSecond = State.read(SymSpace::Register, kRax, 8);
+
+  EXPECT_NE(AfterFirst, Entry);
+  EXPECT_NE(AfterSecond, AfterFirst);
+}
+
+TEST(SymState, AClobberBeforeAForkNamesOneSharedUnknownState) {
+  SymContext Ctx;
+  SymState Left(Ctx);
+  Left.clobberRegistersExcept({});
+  SymState Right = Left;
+
+  EXPECT_EQ(Left.read(SymSpace::Register, kRax, 8),
+            Right.read(SymSpace::Register, kRax, 8));
+}
+
+TEST(SymState, IndependentClobbersAfterAForkStayIndependent) {
+  SymContext Ctx;
+  SymState Left(Ctx);
+  SymState Right = Left;
+  Left.clobberRegistersExcept({});
+  Right.clobberRegistersExcept({});
+
+  EXPECT_NE(Left.read(SymSpace::Register, kRax, 8),
+            Right.read(SymSpace::Register, kRax, 8));
+}
+
+TEST(SymState, ACallPreservedRangeKeepsExactlyItsDeclaredBytes) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  State.write(SymSpace::Register, kRax, Ctx.mkConst(64, 0x1122334455667788ull));
+
+  State.clobberRegistersExcept({SymRegisterRange{kRax, 4}});
+
+  SymRef Low = State.read(SymSpace::Register, kRax, 4);
+  ASSERT_TRUE(Ctx.isConst(Low));
+  EXPECT_EQ(Ctx.constValue(Low).getZExtValue(), 0x55667788u);
+  EXPECT_FALSE(Ctx.isConst(State.read(SymSpace::Register, kRax + 4, 4)));
+}
+
 //===----------------------------------------------------------------------===//
 // Operators
 //===----------------------------------------------------------------------===//
@@ -158,13 +295,16 @@ TEST(SymExec, ArithmeticBuildsTheExpressionTheCodeComputes) {
   SymContext Ctx;
   SymState State(Ctx);
   // rcx = (rax ^ rbx) + 2 * (rax & rbx)  — addition, the long way round.
-  SymRef Result = execute(
-      Ctx, State,
-      {op(NdOp::INT_XOR, NdVar::tmp(0, 8), {NdVar::reg(kRax, 8), NdVar::reg(kRbx, 8)}),
-       op(NdOp::INT_AND, NdVar::tmp(8, 8), {NdVar::reg(kRax, 8), NdVar::reg(kRbx, 8)}),
-       op(NdOp::INT_MULT, NdVar::tmp(16, 8), {NdVar::tmp(8, 8), NdVar::cst(2, 8)}),
-       op(NdOp::INT_ADD, NdVar::reg(kRcx, 8), {NdVar::tmp(0, 8), NdVar::tmp(16, 8)})},
-      kRcx, 8);
+  SymRef Result = execute(Ctx, State,
+                          {op(NdOp::INT_XOR, NdVar::tmp(0, 8),
+                              {NdVar::reg(kRax, 8), NdVar::reg(kRbx, 8)}),
+                           op(NdOp::INT_AND, NdVar::tmp(8, 8),
+                              {NdVar::reg(kRax, 8), NdVar::reg(kRbx, 8)}),
+                           op(NdOp::INT_MULT, NdVar::tmp(16, 8),
+                              {NdVar::tmp(8, 8), NdVar::cst(2, 8)}),
+                           op(NdOp::INT_ADD, NdVar::reg(kRcx, 8),
+                              {NdVar::tmp(0, 8), NdVar::tmp(16, 8)})},
+                          kRcx, 8);
 
   // The engine states what was computed; the simplifier is what recognises it.
   SymParseResult Wanted = parseSymExpr(Ctx, "(x ^ y) + 2 * (x & y)", 64);
@@ -179,12 +319,14 @@ TEST(SymExec, ArithmeticBuildsTheExpressionTheCodeComputes) {
 TEST(SymExec, ConstantsFoldStraightThrough) {
   SymContext Ctx;
   SymState State(Ctx);
-  SymRef Result = execute(
-      Ctx, State,
-      {op(NdOp::COPY, NdVar::reg(kRax, 8), {NdVar::cst(17, 8)}),
-       op(NdOp::INT_MULT, NdVar::reg(kRbx, 8), {NdVar::reg(kRax, 8), NdVar::cst(3, 8)}),
-       op(NdOp::INT_SUB, NdVar::reg(kRcx, 8), {NdVar::reg(kRbx, 8), NdVar::cst(1, 8)})},
-      kRcx, 8);
+  SymRef Result =
+      execute(Ctx, State,
+              {op(NdOp::COPY, NdVar::reg(kRax, 8), {NdVar::cst(17, 8)}),
+               op(NdOp::INT_MULT, NdVar::reg(kRbx, 8),
+                  {NdVar::reg(kRax, 8), NdVar::cst(3, 8)}),
+               op(NdOp::INT_SUB, NdVar::reg(kRcx, 8),
+                  {NdVar::reg(kRbx, 8), NdVar::cst(1, 8)})},
+              kRcx, 8);
   ASSERT_TRUE(Ctx.isConst(Result));
   EXPECT_EQ(Ctx.constValue(Result).getZExtValue(), 50u);
 }
@@ -199,11 +341,10 @@ TEST(SymExec, AnOperationHappensAtTheWidthItsOperandsDeclare) {
   State.write(SymSpace::Register, kRax, Ctx.mkConst(32, 0xFFFFFFFFu)); // -1
   State.write(SymSpace::Register, kRbx, Ctx.mkConst(32, 1));
 
-  SymRef Result =
-      execute(Ctx, State,
-              {op(NdOp::INT_SLESS, NdVar::reg(kRcx, 1),
-                  {NdVar::reg(kRax, 4), NdVar::reg(kRbx, 4)})},
-              kRcx, 1);
+  SymRef Result = execute(Ctx, State,
+                          {op(NdOp::INT_SLESS, NdVar::reg(kRcx, 1),
+                              {NdVar::reg(kRax, 4), NdVar::reg(kRbx, 4)})},
+                          kRcx, 1);
   ASSERT_TRUE(Ctx.isConst(Result));
   EXPECT_EQ(Ctx.constValue(Result).getZExtValue(), 1u) << "-1 < 1 signed";
 }
@@ -235,17 +376,17 @@ TEST(SymExec, ExtensionAndTruncationKeepTheirMeanings) {
   SymState State(Ctx);
   State.write(SymSpace::Register, kRax, Ctx.mkConst(8, 0xFF));
 
-  SymRef Signed = execute(Ctx, State,
-                          {op(NdOp::INT_SEXT, NdVar::reg(kRbx, 4),
-                              {NdVar::reg(kRax, 1)})},
-                          kRbx, 4);
+  SymRef Signed =
+      execute(Ctx, State,
+              {op(NdOp::INT_SEXT, NdVar::reg(kRbx, 4), {NdVar::reg(kRax, 1)})},
+              kRbx, 4);
   ASSERT_TRUE(Ctx.isConst(Signed));
   EXPECT_EQ(Ctx.constValue(Signed).getZExtValue(), 0xFFFFFFFFu);
 
-  SymRef Unsigned = execute(Ctx, State,
-                            {op(NdOp::INT_ZEXT, NdVar::reg(kRcx, 4),
-                                {NdVar::reg(kRax, 1)})},
-                            kRcx, 4);
+  SymRef Unsigned =
+      execute(Ctx, State,
+              {op(NdOp::INT_ZEXT, NdVar::reg(kRcx, 4), {NdVar::reg(kRax, 1)})},
+              kRcx, 4);
   ASSERT_TRUE(Ctx.isConst(Unsigned));
   EXPECT_EQ(Ctx.constValue(Unsigned).getZExtValue(), 0xFFu);
 }
@@ -345,7 +486,8 @@ TEST(SymExec, AnOperationTheEngineCannotModelBecomesANamedUnknown) {
             StepResult::Unmodelled);
   SymRef Result = State.read(SymSpace::Register, kRax, 8);
   EXPECT_FALSE(Ctx.isConst(Result));
-  EXPECT_EQ(Ctx.toString(Result).rfind("undef$", 0), 0u) << Ctx.toString(Result);
+  EXPECT_EQ(Ctx.toString(Result).rfind("undef$", 0), 0u)
+      << Ctx.toString(Result);
 
   // And the code after it still executes exactly, in terms of that unknown.
   Exec.step(op(NdOp::INT_ADD, NdVar::reg(kRcx, 8),
@@ -354,11 +496,26 @@ TEST(SymExec, AnOperationTheEngineCannotModelBecomesANamedUnknown) {
             "1 + " + Ctx.toString(Result));
 }
 
+TEST(SymExec, RunContinuesPastAnUnmodelledOperationToControlFlow) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymExec Exec(Ctx, State);
+  std::vector<LowOp> Ops{
+      op(NdOp::FLOAT_SQRT, NdVar::reg(kRax, 8), {NdVar::reg(kRbx, 8)}),
+      op(NdOp::NOP, NdVar{}, {}),
+      op(NdOp::BRANCH, NdVar{}, {NdVar::cst(0x401020, 8)})};
+
+  EXPECT_EQ(Exec.run(Ops), Ops.size());
+  EXPECT_EQ(Exec.unmodelledCount(), 1u);
+  ASSERT_TRUE(Ctx.isConst(Exec.branchTarget()));
+  EXPECT_EQ(Ctx.constValue(Exec.branchTarget()).getZExtValue(), 0x401020u);
+}
+
 TEST(SymExec, ACallLosesTheRegistersItIsAllowedToAndKeepsTheRest) {
   SymContext Ctx;
   SymState State(Ctx);
   SymExec Exec(Ctx, State);
-  Exec.setCallPreservedRegisters({kRbx});
+  Exec.setCallPreservedRegisters({SymRegisterRange{kRbx, 8}});
 
   Exec.step(op(NdOp::COPY, NdVar::reg(kRax, 8), {NdVar::cst(1, 8)}));
   Exec.step(op(NdOp::COPY, NdVar::reg(kRbx, 8), {NdVar::cst(2, 8)}));
@@ -369,6 +526,21 @@ TEST(SymExec, ACallLosesTheRegistersItIsAllowedToAndKeepsTheRest) {
   ASSERT_TRUE(Ctx.isConst(Preserved));
   EXPECT_EQ(Ctx.constValue(Preserved).getZExtValue(), 2u);
   EXPECT_FALSE(Ctx.isConst(State.read(SymSpace::Register, kRax, 8)));
+}
+
+TEST(SymExec, ACallInvalidatesMemoryTheCalleeMayHaveWritten) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymExec Exec(Ctx, State);
+  SymRef Addr = Ctx.mkConst(64, 0x401000);
+  State.store(Addr, Ctx.mkConst(32, 0xDEADBEEF));
+  ASSERT_TRUE(Ctx.isConst(State.load(Addr, 4)));
+
+  ASSERT_EQ(Exec.step(op(NdOp::CALL, NdVar{}, {NdVar::cst(0x401500, 8)})),
+            StepResult::Continue);
+
+  EXPECT_TRUE(State.memoryIsUnknown());
+  EXPECT_FALSE(Ctx.isConst(State.load(Addr, 4)));
 }
 
 } // namespace

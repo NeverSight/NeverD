@@ -28,5 +28,10 @@ NeverD stages a matching copy beside `libneverd` and injects a private native
 bridge. Host-backed `Session` calls outside that context fail with an actionable
 exception instead of loading an arbitrary library.
 
+Plugins can request a bounded symbolic walk of a native LowIR function with
+`session.symbolic_explore(address)`. The typed result reports whether the walk
+was complete and exact, the path outcomes, resource use, and any unmodelled
+operations; pass `include_expressions=True` to include path predicates.
+
 Python 3.10 or newer is supported. This package and NeverD are licensed under
 the GNU Affero General Public License, version 3 only.

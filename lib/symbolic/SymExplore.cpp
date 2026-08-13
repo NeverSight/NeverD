@@ -18,12 +18,33 @@
 
 #include "neverd/symbolic/SymExplore.h"
 
+#include "neverd/symbolic/SymExec.h"
+
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <utility>
 
 namespace neverd::symbolic {
+
+const char *pathOutcomeName(PathOutcome Outcome) {
+  switch (Outcome) {
+  case PathOutcome::Returned:
+    return "returned";
+  case PathOutcome::LeftFunction:
+    return "left_function";
+  case PathOutcome::UnresolvedBranch:
+    return "unresolved_branch";
+  case PathOutcome::LoopBudget:
+    return "loop_budget";
+  case PathOutcome::StepBudget:
+    return "step_budget";
+  case PathOutcome::Infeasible:
+    return "infeasible";
+  }
+  llvm_unreachable("unhandled symbolic path outcome");
+}
 
 SymRef SymPath::predicate(SymContext &Ctx) const {
   if (Constraints.empty())
@@ -46,7 +67,21 @@ struct Frontier {
   /// nothing to say about each other.
   llvm::DenseMap<int, unsigned> Visits;
   int BlockId;
+  bool Infeasible = false;
+  unsigned Steps = 0;
+  unsigned UnmodelledOps = 0;
 };
+
+/// Add one side of a branch and decide every contradiction the expression
+/// builders can prove on their own.  This deliberately stays solver-free: a
+/// non-constant conjunction is unknown, never guessed to be impossible.
+bool addConstraint(SymContext &Ctx, Frontier &F, SymRef Condition) {
+  F.Constraints.push_back(Condition);
+  SymRef Predicate =
+      F.Constraints.size() == 1 ? Condition : Ctx.mkAnd(F.Constraints);
+  std::optional<llvm::APInt> Decided = Ctx.asConst(Predicate);
+  return !Decided || !Decided->isZero();
+}
 
 /// Everything the walk needs to know about the shape of the function, worked
 /// out once.
@@ -89,7 +124,8 @@ private:
 /// Where a constant branch target points, as a block.
 int resolve(const SymContext &Ctx, const BlockIndex &Index, SymRef Target) {
   std::optional<llvm::APInt> Addr = Ctx.asConst(Target);
-  return Addr ? Index.at(Addr->getZExtValue()) : -1;
+  return Addr && Addr->getActiveBits() <= 64 ? Index.at(Addr->getZExtValue())
+                                             : -1;
 }
 
 SymPath finish(Frontier &&F, PathOutcome Outcome, SymRef Target = SymRef()) {
@@ -98,62 +134,83 @@ SymPath finish(Frontier &&F, PathOutcome Outcome, SymRef Target = SymRef()) {
                std::move(F.Constraints),
                std::move(F.Blocks),
                std::move(F.State),
-               Target};
+               Target,
+               F.UnmodelledOps};
   return Done;
 }
 
 } // namespace
 
-std::vector<SymPath> explorePaths(SymContext &Ctx, const LowFunc &Func,
-                                  const ExploreOptions &Opts) {
+SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
+                                    const ExploreOptions &Opts) {
   std::vector<SymPath> Finished;
   BlockIndex Index(Func);
   if (Index.entry() < 0)
-    return Finished;
+    return SymExploration{std::move(Finished), true, 0, 0, 0};
 
   llvm::SmallVector<Frontier, 8> Pending;
-  Pending.push_back(Frontier(SymState(Ctx), Index.entry()));
+  Pending.push_back(Frontier(SymState(Ctx, Opts.ByteOrder), Index.entry()));
 
-  unsigned Steps = 0;
-  while (!Pending.empty() && Finished.size() < Opts.MaxPaths) {
+  unsigned ReachablePaths = 0;
+  size_t ExecutedSteps = 0;
+  unsigned UnmodelledOps = 0;
+  bool HitIncompleteOutcome = false;
+  auto Record = [&](Frontier &&F, PathOutcome Outcome,
+                    SymRef Target = SymRef()) {
+    ReachablePaths += Outcome != PathOutcome::Infeasible;
+    HitIncompleteOutcome |= Outcome == PathOutcome::UnresolvedBranch ||
+                            Outcome == PathOutcome::LoopBudget ||
+                            Outcome == PathOutcome::StepBudget;
+    Finished.push_back(finish(std::move(F), Outcome, Target));
+  };
+
+  while (!Pending.empty() && ReachablePaths < Opts.MaxPaths) {
     Frontier Current = std::move(Pending.back());
     Pending.pop_back();
+    if (Current.Infeasible) {
+      Record(std::move(Current), PathOutcome::Infeasible);
+      continue;
+    }
 
     // Follow this path through as many blocks as it takes, forking only where
     // there is a genuine choice.
     for (;;) {
       const LowBlock *Block = Index.block(Current.BlockId);
       if (!Block) {
-        Finished.push_back(finish(std::move(Current), PathOutcome::LeftFunction));
+        Record(std::move(Current), PathOutcome::LeftFunction);
         break;
       }
       if (++Current.Visits[Current.BlockId] > Opts.MaxBlockVisits) {
-        Finished.push_back(finish(std::move(Current), PathOutcome::LoopBudget));
+        Record(std::move(Current), PathOutcome::LoopBudget);
         break;
       }
       Current.Blocks.push_back(Current.BlockId);
 
       SymExec Exec(Ctx, Current.State);
+      Exec.setCallPreservedRegisters(Opts.CallPreservedRegisters);
       StepResult Result = StepResult::Continue;
       bool Budget = false;
       for (const LowOp &Op : Block->Ops) {
-        if (++Steps > Opts.MaxSteps) {
+        if (++Current.Steps > Opts.MaxSteps) {
           Budget = true;
           break;
         }
+        ++ExecutedSteps;
         Result = Exec.step(Op);
         // An operation the engine declined to model still wrote a named
         // unknown to its destination, so the path carries on around it.
         if (Result != StepResult::Continue && Result != StepResult::Unmodelled)
           break;
       }
+      Current.UnmodelledOps += Exec.unmodelledCount();
+      UnmodelledOps += Exec.unmodelledCount();
       if (Budget) {
-        Finished.push_back(finish(std::move(Current), PathOutcome::StepBudget));
+        Record(std::move(Current), PathOutcome::StepBudget);
         break;
       }
 
       if (Result == StepResult::Return) {
-        Finished.push_back(finish(std::move(Current), PathOutcome::Returned));
+        Record(std::move(Current), PathOutcome::Returned);
         break;
       }
 
@@ -162,8 +219,7 @@ std::vector<SymPath> explorePaths(SymContext &Ctx, const LowFunc &Func,
         // a block that simply falls into the next one.
         int Next = Block->Succs.size() == 1 ? Block->Succs.front() : -1;
         if (Next < 0) {
-          Finished.push_back(
-              finish(std::move(Current), PathOutcome::LeftFunction));
+          Record(std::move(Current), PathOutcome::LeftFunction);
           break;
         }
         Current.BlockId = Next;
@@ -174,11 +230,10 @@ std::vector<SymPath> explorePaths(SymContext &Ctx, const LowFunc &Func,
           Result == StepResult::IndirectBranch) {
         int Next = resolve(Ctx, Index, Exec.branchTarget());
         if (Next < 0) {
-          Finished.push_back(finish(std::move(Current),
-                                    Result == StepResult::Branch
-                                        ? PathOutcome::LeftFunction
-                                        : PathOutcome::UnresolvedBranch,
-                                    Exec.branchTarget()));
+          Record(std::move(Current),
+                 Result == StepResult::Branch ? PathOutcome::LeftFunction
+                                              : PathOutcome::UnresolvedBranch,
+                 Exec.branchTarget());
           break;
         }
         Current.BlockId = Next;
@@ -195,9 +250,8 @@ std::vector<SymPath> explorePaths(SymContext &Ctx, const LowFunc &Func,
       if (std::optional<llvm::APInt> Decided = Ctx.asConst(Condition)) {
         int Next = Decided->isZero() ? NotTaken : Taken;
         if (Next < 0) {
-          Finished.push_back(finish(std::move(Current),
-                                    PathOutcome::LeftFunction,
-                                    Exec.branchTarget()));
+          Record(std::move(Current), PathOutcome::LeftFunction,
+                 Exec.branchTarget());
           break;
         }
         Current.BlockId = Next;
@@ -209,23 +263,35 @@ std::vector<SymPath> explorePaths(SymContext &Ctx, const LowFunc &Func,
       // the front of the results.
       if (NotTaken >= 0) {
         Frontier Fork = Current;
-        Fork.Constraints.push_back(Ctx.mkNot(Condition));
-        Fork.BlockId = NotTaken;
+        if (addConstraint(Ctx, Fork, Ctx.mkNot(Condition)))
+          Fork.BlockId = NotTaken;
+        else
+          Fork.Infeasible = true;
         Pending.push_back(std::move(Fork));
       }
-      if (Taken < 0) {
-        Current.Constraints.push_back(Condition);
-        Finished.push_back(finish(std::move(Current),
-                                  PathOutcome::LeftFunction,
-                                  Exec.branchTarget()));
+      if (!addConstraint(Ctx, Current, Condition)) {
+        Record(std::move(Current), PathOutcome::Infeasible);
         break;
       }
-      Current.Constraints.push_back(Condition);
+      if (Taken < 0) {
+        Record(std::move(Current), PathOutcome::LeftFunction,
+               Exec.branchTarget());
+        break;
+      }
       Current.BlockId = Taken;
     }
   }
 
-  return Finished;
+  const bool HasReachableFrontier =
+      llvm::any_of(Pending, [](const Frontier &F) { return !F.Infeasible; });
+  return SymExploration{std::move(Finished),
+                        !HitIncompleteOutcome && !HasReachableFrontier,
+                        ReachablePaths, ExecutedSteps, UnmodelledOps};
+}
+
+std::vector<SymPath> explorePaths(SymContext &Ctx, const LowFunc &Func,
+                                  const ExploreOptions &Opts) {
+  return explorePathsDetailed(Ctx, Func, Opts).Paths;
 }
 
 } // namespace neverd::symbolic

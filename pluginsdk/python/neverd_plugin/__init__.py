@@ -16,6 +16,8 @@ from .api import (
     SimplifyEvidence,
     SimplifyOutcome,
     SimplifyResult,
+    SymbolicExploration,
+    SymbolicPath,
     simplify_expression,
 )
 from ._version import __version__
@@ -36,6 +38,8 @@ __all__ = [
     "SimplifyEvidence",
     "SimplifyOutcome",
     "SimplifyResult",
+    "SymbolicExploration",
+    "SymbolicPath",
     "simplify_expression",
     "__version__",
 ]

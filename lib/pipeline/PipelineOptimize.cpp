@@ -105,7 +105,11 @@ SemanticFixedPointPass::run(llvm::Function &F,
   bool ResidueUnfolded = false;
 
   for (;;) {
-    Canonicalize.run(F, FAM);
+    // This wrapper is itself a pass and must report changes made by the nested
+    // canonicalizer even when semantic measurement finds nothing afterwards.
+    // Returning `all()` after InstCombine changed the function would let a
+    // caller keep analyses computed for the old IR.
+    Changed |= !Canonicalize.run(F, FAM).areAllPreserved();
     ResidueUnfolded = false;
 
     unsigned Rewritten = SymSimplifyPass::simplify(F);
@@ -128,7 +132,7 @@ SemanticFixedPointPass::run(llvm::Function &F,
   }
 
   if (ResidueUnfolded)
-    Canonicalize.run(F, FAM);
+    Changed |= !Canonicalize.run(F, FAM).areAllPreserved();
 
   return Changed ? llvm::PreservedAnalyses::none()
                  : llvm::PreservedAnalyses::all();

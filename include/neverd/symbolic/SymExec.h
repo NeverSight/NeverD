@@ -66,8 +66,10 @@ public:
   /// Execute one operation against the state.
   StepResult step(const LowOp &Op);
 
-  /// Execute operations in order, stopping at the first that does not fall
-  /// through.  Returns how many were executed, the last of them included.
+  /// Execute operations in order, stopping when one changes control flow.
+  /// An unmodelled operation has already written a named unknown and therefore
+  /// falls through like an ordinary operation.  Returns how many were executed,
+  /// the last of them included.
   size_t run(llvm::ArrayRef<LowOp> Ops);
 
   /// Where the last branch went, as an expression.  Constant for a direct
@@ -94,8 +96,8 @@ public:
 
   /// Registers a call leaves alone.  Until this is set a call forgets every
   /// register, which is correct and loses more than it has to.
-  void setCallPreservedRegisters(std::vector<uint64_t> Offsets) {
-    CallPreserved = std::move(Offsets);
+  void setCallPreservedRegisters(std::vector<SymRegisterRange> Ranges) {
+    CallPreserved = std::move(Ranges);
   }
 
   /// How many operations were replaced by a named unknown rather than
@@ -128,7 +130,7 @@ private:
   SymRef Target;
   SymRef Condition;
   std::vector<SymRef> Constraints;
-  std::vector<uint64_t> CallPreserved;
+  std::vector<SymRegisterRange> CallPreserved;
   unsigned Unmodelled = 0;
 };
 

@@ -156,6 +156,18 @@ class NeverDSimplifyResult(ctypes.Structure):
     ]
 
 
+class NeverDSymbolicExploreOptions(ctypes.Structure):
+    """Layout of ``neverd_symbolic_explore_options``."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("max_paths", ctypes.c_uint),
+        ("max_steps", ctypes.c_uint),
+        ("max_block_visits", ctypes.c_uint),
+        ("include_expressions", ctypes.c_int),
+    ]
+
+
 class Ownership(Enum):
     """Memory/lifetime contract for a native result."""
 
@@ -181,6 +193,9 @@ _C_TYPES: dict[str, object] = {
     "const void *": ctypes.c_void_p,
     "const neverd_simplify_options *": ctypes.POINTER(NeverDSimplifyOptions),
     "neverd_simplify_result *": ctypes.POINTER(NeverDSimplifyResult),
+    "const neverd_symbolic_explore_options *": ctypes.POINTER(
+        NeverDSymbolicExploreOptions
+    ),
 }
 
 
@@ -349,6 +364,16 @@ _declare(
     "neverd_cfg_json",
     "const char *",
     ["neverd_session_t", "neverd_va_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_symbolic_explore_json",
+    "const char *",
+    [
+        "neverd_session_t",
+        "neverd_va_t",
+        "const neverd_symbolic_explore_options *",
+    ],
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
@@ -682,6 +707,7 @@ __all__ = [
     "NeverDPlugin",
     "NeverDSimplifyOptions",
     "NeverDSimplifyResult",
+    "NeverDSymbolicExploreOptions",
     "OutputLanguage",
     "Ownership",
     "PatchAppliedData",

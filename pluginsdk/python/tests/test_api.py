@@ -158,6 +158,40 @@ class _BorrowingHost:
         return b"\x01\x02"
 
 
+class _SymbolicHost:
+    def __init__(self) -> None:
+        self.options: object | None = None
+
+    def owned_string(self, name: str, *arguments: object) -> str:
+        if name != "neverd_symbolic_explore_json":
+            raise AssertionError(name)
+        self.options = arguments[2]._obj
+        return json.dumps(
+            {
+                "ok": True,
+                "function": "dispatch",
+                "entry": "0x401000",
+                "liftComplete": True,
+                "complete": True,
+                "exact": True,
+                "reachablePaths": 1,
+                "reportedPaths": 1,
+                "executedSteps": 7,
+                "unmodelledOps": 0,
+                "paths": [
+                    {
+                        "outcome": "returned",
+                        "block": 2,
+                        "blocks": [0, 2],
+                        "constraints": 1,
+                        "unmodelledOps": 0,
+                        "predicate": "x == 1",
+                    }
+                ],
+            }
+        )
+
+
 class SessionTests(unittest.TestCase):
     def test_default_host_is_lazy_and_cached(self) -> None:
         import neverd_plugin.api as api_module
@@ -250,6 +284,30 @@ class SessionTests(unittest.TestCase):
         host.results["neverd_session_analyze"] = 0
         with self.assertRaisesRegex(NeverDError, "host failure"):
             session.analyze()
+
+    def test_symbolic_exploration_is_typed_and_passes_resource_limits(self) -> None:
+        from neverd_plugin import Session, SymbolicExploration
+
+        host = _SymbolicHost()
+        session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+        result = session.symbolic_explore(
+            0x401000,
+            max_paths=9,
+            max_steps=100,
+            max_block_visits=4,
+            include_expressions=True,
+        )
+
+        self.assertIsInstance(result, SymbolicExploration)
+        self.assertEqual(result.entry, 0x401000)
+        self.assertTrue(result.exact)
+        self.assertEqual(result.executed_steps, 7)
+        self.assertEqual(result.paths[0].blocks, (0, 2))
+        self.assertEqual(result.paths[0].predicate, "x == 1")
+        self.assertEqual(host.options.max_paths, 9)
+        self.assertEqual(host.options.max_steps, 100)
+        self.assertEqual(host.options.max_block_visits, 4)
+        self.assertEqual(host.options.include_expressions, 1)
 
 
 class EventTests(unittest.TestCase):

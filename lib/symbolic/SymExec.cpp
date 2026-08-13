@@ -55,8 +55,7 @@ SymRef SymExec::read(const NdVar &V) {
   if (V.isConst())
     return Ctx.mkConst(Width, V.Offset);
   if (V.isRam())
-    return State.load(Ctx.mkConst(64, V.Offset),
-                      V.Size ? V.Size : uint16_t(8));
+    return State.load(Ctx.mkConst(64, V.Offset), V.Size ? V.Size : uint16_t(8));
   return State.read(spaceOf(V), V.Offset, V.Size ? V.Size : uint16_t(8));
 }
 
@@ -244,10 +243,13 @@ StepResult SymExec::stepUnary(const LowOp &Op) {
     std::optional<llvm::APInt> Offset =
         Op.NumInputs >= 2 ? Ctx.asConst(read(Op.Inputs[1]))
                           : std::optional<llvm::APInt>(llvm::APInt(64, 0));
-    if (!Offset || OutWidth == 0)
+    if (!Offset || Offset->getActiveBits() > 64 || OutWidth == 0)
       return unmodelled(Op);
-    const uint64_t Low = Offset->getZExtValue() * kByteBits;
-    if (Low + OutWidth > Ctx.width(A))
+    const uint64_t ByteOffset = Offset->getZExtValue();
+    if (ByteOffset > Ctx.width(A) / kByteBits)
+      return unmodelled(Op);
+    const uint64_t Low = ByteOffset * kByteBits;
+    if (Low > Ctx.width(A) || OutWidth > Ctx.width(A) - Low)
       return unmodelled(Op);
     writeResult(Op.Output, Ctx.mkExtract(A, uint32_t(Low), OutWidth));
     return StepResult::Continue;
@@ -273,8 +275,9 @@ StepResult SymExec::stepBoolean(const LowOp &Op) {
   // reduced to a bit before the logic and widened again afterwards.
   auto asBit = [&](const NdVar &V) {
     SymRef Value = read(V);
-    return Ctx.width(Value) == 1 ? Value
-                                 : Ctx.mkNe(Value, Ctx.mkZero(Ctx.width(Value)));
+    return Ctx.width(Value) == 1
+               ? Value
+               : Ctx.mkNe(Value, Ctx.mkZero(Ctx.width(Value)));
   };
 
   SymRef Bit;
@@ -357,6 +360,10 @@ StepResult SymExec::stepControl(const LowOp &Op) {
     // is another.  Both are named, so the code after the call is still
     // executed exactly.
     State.clobberRegistersExcept(CallPreserved);
+    // With no function summary, the callee may write through any pointer it
+    // can reach.  Keeping a pre-call memory byte would turn that uncertainty
+    // into a false constant.
+    State.clobberMemory();
     if (widthOf(Op.Output) != 0)
       writeResult(Op.Output, State.freshInput("call", widthOf(Op.Output)));
     return StepResult::Continue;
@@ -454,7 +461,8 @@ size_t SymExec::run(llvm::ArrayRef<LowOp> Ops) {
   size_t Executed = 0;
   for (const LowOp &Op : Ops) {
     ++Executed;
-    if (step(Op) != StepResult::Continue)
+    StepResult Result = step(Op);
+    if (Result != StepResult::Continue && Result != StepResult::Unmodelled)
       break;
   }
   return Executed;

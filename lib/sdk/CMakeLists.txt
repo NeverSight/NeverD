@@ -9,6 +9,7 @@ set(NEVERD_SDK_SOURCES
     NeverDCAPIPersist.cpp
     NeverDCAPIBench.cpp
     NeverDCAPISimplify.cpp
+    NeverDCAPISymbolic.cpp
     PluginManager.cpp)
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)

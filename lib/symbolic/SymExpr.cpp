@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <limits>
 #include <map>
 
 namespace neverd::symbolic {
@@ -728,8 +729,8 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
     return mkConst(constValue(A).extractBits(Width, Low));
   // extract(extract(x, l1), l2) == extract(x, l1 + l2)
   if (op(A) == SymOp::Extract)
-    return mkExtract(operand(A, 0),
-                     static_cast<uint32_t>(node(A).Aux) + Low, Width);
+    return mkExtract(operand(A, 0), static_cast<uint32_t>(node(A).Aux) + Low,
+                     Width);
   // Taking the low bits of a widening cast reaches straight through to the
   // original value when the window stays inside it.
   if ((op(A) == SymOp::ZExt || op(A) == SymOp::SExt) && Low == 0 &&
@@ -792,7 +793,8 @@ SymRef SymContext::mkConcat(llvm::ArrayRef<SymRef> Ops) {
         llvm::APInt Hi = constValue(Prev);
         llvm::APInt Lo = constValue(R);
         uint32_t NW = Hi.getBitWidth() + Lo.getBitWidth();
-        Merged.back() = mkConst(Hi.zext(NW).shl(Lo.getBitWidth()) | Lo.zext(NW));
+        Merged.back() =
+            mkConst(Hi.zext(NW).shl(Lo.getBitWidth()) | Lo.zext(NW));
         continue;
       }
 
@@ -842,8 +844,7 @@ SymRef SymContext::mkConcat(llvm::ArrayRef<SymRef> Ops) {
       if (UpperBase == LowerBase && UpperLow == LowerLow + LowerBits) {
         // mkExtract collapses a slice that covers the whole value back to the
         // value, so a full round trip leaves nothing behind at all.
-        Merged.back() =
-            mkExtract(UpperBase, LowerLow, LowerBits + UpperBits);
+        Merged.back() = mkExtract(UpperBase, LowerLow, LowerBits + UpperBits);
         continue;
       }
     }
@@ -984,6 +985,31 @@ size_t SymContext::dagSize(SymRef R) const {
       Work.push_back(C);
   }
   return Seen.size();
+}
+
+size_t SymContext::readabilityCost(SymRef R) const {
+  constexpr size_t Ceiling = std::numeric_limits<size_t>::max();
+
+  // Interning appends a node only after all of its operands exist.  Extending
+  // one prefix cache therefore computes every new cost in a single pass, even
+  // when a solver asks again after interning more candidates.
+  ReadabilityCosts.reserve(Nodes.size());
+  while (ReadabilityCosts.size() < Nodes.size()) {
+    SymRef Current(static_cast<uint32_t>(ReadabilityCosts.size()));
+    size_t Total = isConst(Current) && isConstOnes(Current) ? 0 : 1;
+    for (SymRef Operand : operands(Current)) {
+      assert(Operand.index() < ReadabilityCosts.size() &&
+             "a symbolic node precedes one of its operands");
+      const size_t OperandCost = ReadabilityCosts[Operand.index()];
+      if (OperandCost > Ceiling - Total) {
+        Total = Ceiling;
+        break;
+      }
+      Total += OperandCost;
+    }
+    ReadabilityCosts.push_back(Total);
+  }
+  return ReadabilityCosts[R.index()];
 }
 
 void SymContext::collectVars(SymRef R,
@@ -1280,7 +1306,9 @@ uint64_t SymEvalPlan::evalU64(llvm::ArrayRef<uint64_t> VarVals) {
     case SymOp::AShr: {
       uint64_t V = S[A[0]], Sh = S[A[1]];
       bool Neg = (V >> (W - 1)) & 1;
-      if (Sh >= W)
+      if (Sh == 0)
+        Res = V;
+      else if (Sh >= W)
         Res = Neg ? ~uint64_t(0) : 0;
       else
         Res = Neg ? ((V >> Sh) | ~((uint64_t(1) << (W - Sh)) - 1)) : (V >> Sh);
@@ -1343,8 +1371,8 @@ llvm::APInt SymEvalPlan::eval(llvm::ArrayRef<llvm::APInt> VarVals) {
       continue;
     }
     if (St.Op == SymOp::Var) {
-      llvm::APInt V = St.Aux < VarVals.size() ? VarVals[St.Aux]
-                                              : llvm::APInt(St.Width, 0);
+      llvm::APInt V =
+          St.Aux < VarVals.size() ? VarVals[St.Aux] : llvm::APInt(St.Width, 0);
       ScratchAP[I] = V.getBitWidth() == St.Width ? V : V.zextOrTrunc(St.Width);
       continue;
     }

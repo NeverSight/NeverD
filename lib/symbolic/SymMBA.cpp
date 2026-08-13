@@ -94,6 +94,27 @@ enum class Role : uint8_t {
 /// result a bitwise function of the inputs.
 bool isBitwiseOrAtom(Role R) { return R == Role::Bitwise || R == Role::Atom; }
 
+/// Whether measuring at \p R can do more than rebuilding its children.
+///
+/// Operators outside this set are opaque boundaries in both linear and
+/// polynomial readings.  Their children have already been visited by the deep
+/// walk, so running a region analysis at the boundary can only rediscover that
+/// it is opaque.  Skipping it is what keeps a long chain of divisions, casts or
+/// extracts linear in depth without hiding an MBA nested underneath.
+bool canMeasureAtRoot(const SymContext &Ctx, SymRef R) {
+  switch (Ctx.op(R)) {
+  case SymOp::Add:
+  case SymOp::Mul:
+  case SymOp::And:
+  case SymOp::Or:
+  case SymOp::Xor:
+  case SymOp::Not:
+    return true;
+  default:
+    return false;
+  }
+}
+
 /// Every node reachable from \p Root, in an order where each child precedes
 /// its parent.  Interning appends a node only once its operands exist, so
 /// ascending index order is such an order.
@@ -509,28 +530,12 @@ std::optional<SymRef> conjunctionForm(SymContext &Ctx,
 /// than `~(~x + y)` and rank the bitwise form above the arithmetic one this
 /// exists to recover.
 ///
-/// Counting is memoised per node, so the walk stays linear in the graph even
-/// though the number it yields is the size of the tree.  That number saturates,
-/// because a deeply shared graph denotes an exponentially large tree and all
-/// that is ever done with the number is compare it against another candidate's.
+/// SymContext caches this per node.  Candidate generation appends nodes to the
+/// context and asks for their costs repeatedly; extending one prefix cache
+/// keeps all of those queries linear in the number of nodes built, while the
+/// number returned still describes the tree a reader sees.
 size_t readingCost(const SymContext &Ctx, SymRef R) {
-  constexpr size_t kCeiling = size_t(1) << 40;
-
-  std::unordered_map<uint32_t, size_t> Cost;
-  // Ascending index order reaches every operand before the node using it.
-  for (uint32_t Index : reachableInOrder(Ctx, R)) {
-    SymRef N(Index);
-    size_t Total = Ctx.isConst(N) && Ctx.isConstOnes(N) ? 0 : 1;
-    for (SymRef Operand : Ctx.operands(N)) {
-      Total += Cost[Operand.index()];
-      if (Total >= kCeiling) {
-        Total = kCeiling;
-        break;
-      }
-    }
-    Cost[Index] = Total;
-  }
-  return Cost[R.index()];
+  return Ctx.readabilityCost(R);
 }
 
 llvm::APInt randomWord(std::mt19937_64 &Rng, uint32_t Width) {
@@ -1864,7 +1869,15 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
         Rebuilt = Ctx.rebuild(R, NewOps);
     }
 
-    if (Budget.consume(Ctx.dagSize(Rebuilt))) {
+    if (!canMeasureAtRoot(Ctx, Rebuilt)) {
+      Solved[Index] = Rebuilt;
+      continue;
+    }
+
+    // Do not compute a subtree size after the budget has gone: the argument to
+    // consume() would otherwise repeat the very traversal the exhausted budget
+    // is meant to stop paying for at every remaining node.
+    if (!Budget.exhausted() && Budget.consume(Ctx.dagSize(Rebuilt))) {
       SolveReport Rep;
       SymRef Measured = solveRegionOrSplit(Ctx, Rebuilt, Opts, Budget, Rep);
       if (Measured != Rebuilt) {

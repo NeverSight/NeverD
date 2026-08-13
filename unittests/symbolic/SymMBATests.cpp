@@ -699,11 +699,12 @@ SymRef randomExpr(SymContext &Ctx, llvm::ArrayRef<SymRef> Vars, uint32_t Width,
 }
 
 TEST(SymMBA, IsExhaustivelyEquivalentAtASmallWidth) {
-  // Sampling says a rewrite is probably right.  Enumerating every input says it
-  // is right, and a narrow word makes that affordable: three four-bit inputs is
-  // 4096 points, checked in full.  It is worth doing at a narrow width because
-  // none of the algebra depends on the width -- the same derivation runs at 4
-  // bits and at 256 -- so a fault in it has nowhere to hide here.
+  // The coefficient derivation is what authorizes a rewrite.  Enumerating every
+  // input independently checks its implementation, and a narrow word makes
+  // that affordable: three four-bit inputs is 4096 points, checked in full.  It
+  // is worth doing at a narrow width because none of the algebra depends on the
+  // width -- the same derivation runs at 4 bits and at 256 -- so a fault in it
+  // has nowhere to hide here.
   //
   // This is the equivalence gate: it has to find nothing, every time.
   constexpr uint32_t Width = 4;
@@ -791,6 +792,35 @@ TEST(SymMBA, ExpandsPolynomialTermsWithoutANestingLimit) {
                       /*implicitTrunc=*/true);
     EXPECT_EQ(Before.eval(Assignment), After.eval(Assignment));
   }
+}
+
+TEST(SymMBA, DoesNotSpendTheRegionBudgetAtOpaqueBoundaries) {
+  // An unsupported operator is a boundary, not a region.  The deep walk still
+  // has to simplify what is nested under it, but analysing every enclosing
+  // boundary would repeatedly traverse an ever-larger prefix and turn depth
+  // into quadratic work.
+  constexpr unsigned kLayers = 8192;
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", W32);
+  SymRef Y = Ctx.mkVar("y", W32);
+  SymRef Divisor = Ctx.mkConst(W32, 3);
+  SymRef E = Ctx.mkAdd(Ctx.mkXor(X, Y),
+                       Ctx.mkMul(Ctx.mkConst(W32, 2), Ctx.mkAnd(X, Y)));
+  for (unsigned I = 0; I < kLayers; ++I)
+    E = Ctx.mkUDiv(E, Divisor);
+
+  MBAResult R = simplifyMBADeep(Ctx, E);
+  ASSERT_TRUE(R.Changed);
+  EXPECT_EQ(R.Evidence, MBAEvidence::Derivation);
+  EXPECT_LT(R.Work, kLayers);
+
+  SymRef Core = R.Expr;
+  for (unsigned I = 0; I < kLayers; ++I) {
+    ASSERT_EQ(Ctx.op(Core), SymOp::UDiv);
+    EXPECT_EQ(Ctx.operand(Core, 1), Divisor);
+    Core = Ctx.operand(Core, 0);
+  }
+  EXPECT_EQ(Core, Ctx.mkAdd(X, Y));
 }
 
 TEST(SymMBA, TerminatesOnNestingFarPastAnyBudget) {

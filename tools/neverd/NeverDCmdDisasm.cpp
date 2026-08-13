@@ -118,10 +118,9 @@ int runFuncs(neverd_session_t Sess) {
     outs() << "  " << std::string(60, '-') << "\n";
     for (int I = 0; I < Count; ++I) {
       const char *N = neverd_func_name(Sess, I);
-      outs() << format("  0x%-16s %-8u %s\n",
-                       utohexstr(neverd_func_entry(Sess, I)).c_str(),
-                       static_cast<unsigned>(neverd_func_size(Sess, I)),
-                       N ? N : "");
+      outs() << format(
+          "  0x%-16s %-8u %s\n", utohexstr(neverd_func_entry(Sess, I)).c_str(),
+          static_cast<unsigned>(neverd_func_size(Sess, I)), N ? N : "");
       neverd_free_string(N);
     }
   }
@@ -302,8 +301,7 @@ int runCfg(neverd_session_t Sess) {
       WithColor::error() << "cfg failed: function not found\n";
       return 1;
     }
-    const char *Json =
-        neverd_cfg_json(Sess, neverd_func_entry(Sess, FuncIdx));
+    const char *Json = neverd_cfg_json(Sess, neverd_func_entry(Sess, FuncIdx));
     if (Json) {
       outs() << Json << "\n";
       neverd_free_string(Json);
@@ -392,8 +390,8 @@ int runCallGraph(neverd_session_t Sess) {
 
     std::string SvgPath = CgSvg.getValue();
     SmallString<128> DotTmpPath;
-    if (std::error_code EC = sys::fs::createTemporaryFile(
-            "neverd-callgraph", "dot", DotTmpPath)) {
+    if (std::error_code EC = sys::fs::createTemporaryFile("neverd-callgraph",
+                                                          "dot", DotTmpPath)) {
       WithColor::error() << "cannot create temp dot: " << EC.message() << "\n";
       neverd_free_string(Json);
       return 1;
@@ -453,6 +451,41 @@ int runCallGraph(neverd_session_t Sess) {
 
   neverd_free_string(Json);
   return 0;
+}
+
+int runSymbolicExplore(neverd_session_t Sess) {
+  if (DisasmFunc.empty()) {
+    WithColor::error() << "sym-explore requires --func <name or hex addr>\n";
+    return 1;
+  }
+
+  int FuncIdx = findFunction(Sess, DisasmFunc.getValue());
+  if (FuncIdx < 0) {
+    WithColor::error() << "sym-explore failed: function not found\n";
+    return 1;
+  }
+
+  neverd_symbolic_explore_options Options{};
+  Options.struct_size = sizeof(Options);
+  Options.max_paths = SymbolicMaxPaths;
+  Options.max_steps = SymbolicMaxSteps;
+  Options.max_block_visits = SymbolicMaxBlockVisits;
+  Options.include_expressions = SymbolicExpressions ? 1 : 0;
+
+  const char *Report = neverd_symbolic_explore_json(
+      Sess, neverd_func_entry(Sess, FuncIdx), &Options);
+  if (!Report) {
+    WithColor::error() << "sym-explore failed: " << takeLastError(Sess) << "\n";
+    return 1;
+  }
+
+  bool Ok = false;
+  if (Expected<json::Value> Parsed = json::parse(Report))
+    if (const json::Object *Root = Parsed->getAsObject())
+      Ok = Root->getBoolean("ok").value_or(false);
+  outs() << Report << "\n";
+  neverd_free_string(Report);
+  return Ok ? 0 : 1;
 }
 
 } // namespace neverd::cli

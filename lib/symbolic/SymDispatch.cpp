@@ -36,6 +36,12 @@ struct Linear {
   SymRef Index;
 };
 
+std::optional<uint64_t> asU64(const llvm::APInt &Value) {
+  return Value.getActiveBits() <= 64
+             ? std::optional<uint64_t>(Value.getZExtValue())
+             : std::nullopt;
+}
+
 /// Decompose \p E into an offset, a scale and one remaining unknown.
 ///
 /// Fails when the expression is not of that shape, which for this purpose
@@ -48,7 +54,10 @@ std::optional<Linear> matchLinear(const SymContext &Ctx, SymRef E) {
     llvm::ArrayRef<SymRef> Terms = Ctx.operands(E);
     if (Terms.size() != 2 || !Ctx.isConst(Terms[0]))
       return std::nullopt;
-    Out.Offset = Ctx.constValue(Terms[0]).getZExtValue();
+    std::optional<uint64_t> Offset = asU64(Ctx.constValue(Terms[0]));
+    if (!Offset)
+      return std::nullopt;
+    Out.Offset = *Offset;
     E = Terms[1];
   }
 
@@ -58,7 +67,10 @@ std::optional<Linear> matchLinear(const SymContext &Ctx, SymRef E) {
     llvm::ArrayRef<SymRef> Factors = Ctx.operands(E);
     if (Factors.size() != 2 || !Ctx.isConst(Factors[0]))
       return std::nullopt;
-    Out.Scale = Ctx.constValue(Factors[0]).getZExtValue();
+    std::optional<uint64_t> Scale = asU64(Ctx.constValue(Factors[0]));
+    if (!Scale)
+      return std::nullopt;
+    Out.Scale = *Scale;
     E = Factors[1];
   }
 
@@ -129,8 +141,9 @@ bool runToBranch(SymContext &Ctx, SymState &State, llvm::ArrayRef<LowOp> Ops,
 } // namespace
 
 bool dispatchVariesWithIndex(SymContext &Ctx, llvm::ArrayRef<LowOp> Ops,
-                             uint64_t IndexRegOffset, uint16_t IndexRegSize) {
-  SymState State(Ctx);
+                             uint64_t IndexRegOffset, uint16_t IndexRegSize,
+                             llvm::endianness ByteOrder) {
+  SymState State(Ctx, ByteOrder);
   SymRef Target;
   unsigned Unmodelled = 0;
   if (!runToBranch(Ctx, State, Ops, IndexRegOffset, IndexRegSize, Target,
@@ -171,8 +184,9 @@ bool dispatchVariesWithIndex(SymContext &Ctx, llvm::ArrayRef<LowOp> Ops,
 std::optional<DispatchShape> analyzeDispatch(SymContext &Ctx,
                                              llvm::ArrayRef<LowOp> Ops,
                                              uint64_t IndexRegOffset,
-                                             uint16_t IndexRegSize) {
-  SymState State(Ctx);
+                                             uint16_t IndexRegSize,
+                                             llvm::endianness ByteOrder) {
+  SymState State(Ctx, ByteOrder);
   SymRef Target;
   if (!runToBranch(Ctx, State, Ops, IndexRegOffset, IndexRegSize, Target) ||
       Ctx.isConst(Target))

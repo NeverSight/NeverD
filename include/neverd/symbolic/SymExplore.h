@@ -26,9 +26,9 @@
 #define NEVERD_SYMBOLIC_SYMEXPLORE_H
 
 #include "neverd/ir/low/LowIR.h"
-#include "neverd/symbolic/SymExec.h"
 #include "neverd/symbolic/SymState.h"
 
+#include <cstddef>
 #include <vector>
 
 namespace neverd::symbolic {
@@ -52,15 +52,22 @@ enum class PathOutcome : uint8_t {
   Infeasible,
 };
 
+const char *pathOutcomeName(PathOutcome Outcome);
+
 struct ExploreOptions {
-  /// How many paths to finish before giving up on the rest.
+  /// How many reachable paths to finish before giving up on the rest.
+  /// Infeasible diagnostics do not consume this allowance.
   unsigned MaxPaths = 64;
-  /// Operations across the whole walk, not per path.
+  /// Operations allowed along one path.
   unsigned MaxSteps = 1u << 16;
   /// How often one path may enter the same block.  This is the loop bound:
   /// two visits is one iteration plus the exit, so the default unrolls a
   /// couple of times before conceding.
   unsigned MaxBlockVisits = 3;
+  /// Target byte order used for register and memory split/join operations.
+  llvm::endianness ByteOrder = llvm::endianness::little;
+  /// Register byte ranges preserved by the target's calling convention.
+  std::vector<SymRegisterRange> CallPreservedRegisters;
 };
 
 /// One finished path.
@@ -78,10 +85,26 @@ struct SymPath {
   SymState State;
   /// For \c UnresolvedBranch and \c LeftFunction, where it was trying to go.
   SymRef Target;
+  /// Operations conservatively replaced by unknown values along this path.
+  unsigned UnmodelledOps = 0;
 
   /// The conjunction of the constraints, or true when there are none.
   SymRef predicate(SymContext &Ctx) const;
 };
+
+/// Paths and completeness information from one function walk.
+struct SymExploration {
+  std::vector<SymPath> Paths;
+  /// True only when every reachable frontier ended without a path or loop
+  /// budget and without an unresolved indirect branch.
+  bool Complete = false;
+  unsigned ReachablePaths = 0;
+  size_t ExecutedSteps = 0;
+  unsigned UnmodelledOps = 0;
+};
+
+SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
+                                    const ExploreOptions &Opts = {});
 
 /// Walk \p Func from its entry block.
 ///

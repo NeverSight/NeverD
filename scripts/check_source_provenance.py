@@ -192,6 +192,36 @@ ALLOWED: tuple[Allowance, ...] = (
             "naming them is the point of the section"
         ),
     ),
+    Allowance(
+        path=".agents/skills/awesome-game-security-overview/SKILL.md",
+        rule="foreign-terminology",
+        reason="the skill routes research queries by the external tools they name",
+    ),
+    Allowance(
+        path=".agents/skills/binary-lifting/SKILL.md",
+        rule="foreign-project",
+        reason="the skill is an attributed survey of binary-lifting frameworks",
+    ),
+    Allowance(
+        path=".agents/skills/game-engine-resources/SKILL.md",
+        rule="foreign-terminology",
+        reason="the skill documents the external tools used in engine research",
+    ),
+    Allowance(
+        path=".agents/skills/mobile-security/SKILL.md",
+        rule="foreign-terminology",
+        reason="the skill documents the external tools used in mobile research",
+    ),
+    Allowance(
+        path=".agents/skills/reverse-engineering-tools/SKILL.md",
+        rule="foreign-project",
+        reason="the skill is an attributed catalog of reverse-engineering tools",
+    ),
+    Allowance(
+        path=".agents/skills/reverse-engineering-tools/SKILL.md",
+        rule="foreign-terminology",
+        reason="the skill is an attributed catalog of reverse-engineering tools",
+    ),
 )
 
 

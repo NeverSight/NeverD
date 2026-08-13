@@ -70,10 +70,10 @@ struct DispatchShape {
 /// starts out unknown too, so nothing has to be set up.  Returns nothing when
 /// the branch is not a table dispatch, which includes the case where the
 /// target does not depend on that register at all.
-std::optional<DispatchShape> analyzeDispatch(SymContext &Ctx,
-                                             llvm::ArrayRef<LowOp> Ops,
-                                             uint64_t IndexRegOffset,
-                                             uint16_t IndexRegSize = 8);
+std::optional<DispatchShape>
+analyzeDispatch(SymContext &Ctx, llvm::ArrayRef<LowOp> Ops,
+                uint64_t IndexRegOffset, uint16_t IndexRegSize = 8,
+                llvm::endianness ByteOrder = llvm::endianness::little);
 
 /// Whether the branch \p Ops ends in can go anywhere at all as the register at
 /// \p IndexRegOffset varies.
@@ -93,9 +93,10 @@ std::optional<DispatchShape> analyzeDispatch(SymContext &Ctx,
 /// through it, leaving something indistinguishable from independence.  The
 /// asymmetry is deliberate: a wrong false discards a real dispatch, while a
 /// wrong true only means carrying on and finding out.
-bool dispatchVariesWithIndex(SymContext &Ctx, llvm::ArrayRef<LowOp> Ops,
-                             uint64_t IndexRegOffset,
-                             uint16_t IndexRegSize = 8);
+bool dispatchVariesWithIndex(
+    SymContext &Ctx, llvm::ArrayRef<LowOp> Ops, uint64_t IndexRegOffset,
+    uint16_t IndexRegSize = 8,
+    llvm::endianness ByteOrder = llvm::endianness::little);
 
 } // namespace neverd::symbolic
 

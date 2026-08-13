@@ -139,6 +139,31 @@ NEVERD_API const char *neverd_cfg_json(neverd_session_t Sess,
                                        neverd_va_t FuncEntry);
 
 // ===--------------------------------------------------------------------===//
+// Symbolic path exploration
+// ===--------------------------------------------------------------------===//
+
+/// Resource limits and output policy for symbolic path exploration.  Zero the
+/// struct, set `struct_size`, and leave any numeric field zero to use the
+/// engine default.
+typedef struct neverd_symbolic_explore_options {
+  size_t struct_size;
+  unsigned max_paths;
+  unsigned max_steps;
+  unsigned max_block_visits;
+  /// Include the rendered path predicate and unresolved target expression.
+  int include_expressions;
+} neverd_symbolic_explore_options;
+
+/// Explore one native LowIR function and return an owned JSON report.
+///
+/// The report distinguishes a complete walk from one stopped by a loop, step,
+/// path, or unresolved-indirect-branch bound, and reports every unmodelled
+/// operation.  Caller frees the returned string with neverd_free_string().
+NEVERD_API const char *neverd_symbolic_explore_json(
+    neverd_session_t Sess, neverd_va_t FuncEntry,
+    const neverd_symbolic_explore_options *Options);
+
+// ===--------------------------------------------------------------------===//
 // Patch operations
 // ===--------------------------------------------------------------------===//
 

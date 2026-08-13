@@ -31,7 +31,7 @@
 
 #include <cstdint>
 #include <map>
-#include <optional>
+#include <memory>
 
 namespace neverd::symbolic {
 
@@ -40,6 +40,12 @@ namespace neverd::symbolic {
 /// share an offset range with nothing.
 enum class SymSpace : uint8_t { Register, Temporary, Memory };
 
+/// A contiguous byte range in the register space.
+struct SymRegisterRange {
+  uint64_t Offset = 0;
+  uint16_t Bytes = 0;
+};
+
 /// The state is a regular value: copying one is what forking a path is, so it
 /// has to sit in a container and be assigned like anything else.  A copy is
 /// three maps of small integers, which is cheap enough that nothing more
@@ -47,7 +53,8 @@ enum class SymSpace : uint8_t { Register, Temporary, Memory };
 class SymState {
 public:
   SymState(SymContext &Ctx, llvm::endianness Order = llvm::endianness::little)
-      : Ctx(&Ctx), Order(Order) {}
+      : Ctx(&Ctx), Order(Order),
+        SymbolicLoads(std::make_shared<SymbolicLoadValues>()) {}
 
   SymContext &context() const { return *Ctx; }
   llvm::endianness byteOrder() const { return Order; }
@@ -56,9 +63,10 @@ public:
   // Registers and temporaries
   //===--------------------------------------------------------------------===//
 
-  /// Read \p Bytes bytes starting at \p Offset.  Bytes never written read as
-  /// fresh inputs named for where they are, so a read of an uninitialised
-  /// register yields an expression that says so.
+  /// Read \p Bytes bytes starting at \p Offset.  A wholly untouched range
+  /// starts as one input; overlapping reads thereafter use its exact byte
+  /// views.  This keeps ordinary whole-register inputs compact without losing
+  /// sub-register aliasing.
   SymRef read(SymSpace Space, uint64_t Offset, uint16_t Bytes);
   void write(SymSpace Space, uint64_t Offset, SymRef Value);
 
@@ -66,9 +74,9 @@ public:
   // Memory
   //===--------------------------------------------------------------------===//
 
-  /// Read \p Bytes at \p Addr.  A symbolic address, or any address at all once
-  /// something has been stored through one, reads as a fresh input: see
-  /// \c clobberMemory.
+  /// Read \p Bytes at \p Addr.  A symbolic address reads as a fresh input.
+  /// After an unknown store, concrete loads read stable unknown bytes except
+  /// where a later concrete store has established a value again.
   SymRef load(SymRef Addr, uint16_t Bytes);
   void store(SymRef Addr, SymRef Value);
 
@@ -101,7 +109,7 @@ public:
 
   /// Forget the registers a call is allowed to overwrite, keeping the ones it
   /// is not.  Passing an empty list forgets all of them.
-  void clobberRegistersExcept(llvm::ArrayRef<uint64_t> PreservedOffsets);
+  void clobberRegistersExcept(llvm::ArrayRef<SymRegisterRange> PreservedRanges);
 
   /// A value nothing determines, of the given width.  Every unknown the engine
   /// invents comes from here, so they are all named and none can collide.
@@ -113,8 +121,20 @@ public:
   }
 
 private:
+  /// Lazily materialised bytes belonging to one clobber event.  States copied
+  /// after that event share the set; independently clobbered forks do not.
+  struct UnknownBytes {
+    std::map<uint64_t, SymRef> Values;
+  };
+
+  /// Values read through unresolved addresses during one memory epoch.
+  struct SymbolicLoadValues {
+    std::map<uint32_t, SymRef> Bytes;
+  };
+
   std::map<uint64_t, SymRef> &spaceMap(SymSpace Space);
   const std::map<uint64_t, SymRef> &spaceMap(SymSpace Space) const;
+  std::shared_ptr<UnknownBytes> &unknownBytes(SymSpace Space);
   static const char *spaceName(SymSpace Space);
 
   /// One byte of a space, minting a named input for it when it has none.
@@ -129,11 +149,14 @@ private:
   std::map<uint64_t, SymRef> Registers;
   std::map<uint64_t, SymRef> Temporaries;
   std::map<uint64_t, SymRef> Memory;
+  std::shared_ptr<UnknownBytes> RegisterUnknowns;
+  std::shared_ptr<UnknownBytes> TemporaryUnknowns;
+  std::shared_ptr<UnknownBytes> MemoryUnknowns;
+  std::shared_ptr<SymbolicLoadValues> SymbolicLoads;
   /// Keyed by the node index of the value the load produced.
   std::map<uint32_t, LoadOrigin> LoadOrigins;
 
   bool MemoryClobbered = false;
-  unsigned FreshCounter = 0;
 };
 
 } // namespace neverd::symbolic

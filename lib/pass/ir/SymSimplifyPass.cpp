@@ -30,6 +30,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/ConstantFolder.h"
@@ -612,12 +613,15 @@ bool rewriteRoot(llvm::Instruction *Root,
   llvm::SmallVector<llvm::Instruction *, 32> NewInsts;
   llvm::Value *After = Xlat.out(Res.Expr, Root, NewInsts);
 
-  // Nothing built here has a use yet, so deleting what the rebuild produced
-  // reclaims exactly this attempt's instructions and stops at every operand the
-  // original code still reads.
+  // Nothing built here has an external use yet.  Delete every instruction the
+  // attempt inserted, in reverse construction order, rather than only walking
+  // from After: a failed rebuild may have produced children before discovering
+  // an operator it cannot spell, in which case After is null and there is no
+  // root from which a recursive deletion could reach them.
   auto abandon = [&]() {
-    if (auto *I = llvm::dyn_cast_or_null<llvm::Instruction>(After))
-      llvm::RecursivelyDeleteTriviallyDeadInstructions(I);
+    for (llvm::Instruction *I : llvm::reverse(NewInsts))
+      if (I->use_empty())
+        I->eraseFromParent();
     return false;
   };
 

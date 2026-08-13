@@ -13,9 +13,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/symbolic/SymExplore.h"
-
 #include "gtest/gtest.h"
+
+#include "neverd/symbolic/SymExplore.h"
 
 #include <vector>
 
@@ -90,13 +90,46 @@ TEST(SymExplore, AStraightLineFunctionIsOnePath) {
   EXPECT_EQ(Paths[0].Blocks, std::vector<int>{0});
 }
 
+TEST(SymExplore, TargetByteOrderConfiguresTheInitialState) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::COPY, NdVar::reg(kRax, 4), {NdVar::cst(0xAABBCCDD, 4)}),
+           op(NdOp::RETURN, NdVar{}, {})},
+          {});
+  ExploreOptions Opts;
+  Opts.ByteOrder = llvm::endianness::big;
+
+  std::vector<SymPath> Paths = explorePaths(Ctx, B.function(), Opts);
+  ASSERT_EQ(Paths.size(), 1u);
+  SymRef FirstByte = Paths[0].State.read(SymSpace::Register, kRax, 1);
+  ASSERT_TRUE(Ctx.isConst(FirstByte));
+  EXPECT_EQ(Ctx.constValue(FirstByte).getZExtValue(), 0xAAu);
+}
+
+TEST(SymExplore, TargetCallingConventionPreservesDeclaredRegisterBytes) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::COPY, NdVar::reg(kRbx, 8), {NdVar::cst(2, 8)}),
+           op(NdOp::CALL, NdVar{}, {NdVar::cst(0x401500, 8)}),
+           op(NdOp::RETURN, NdVar{}, {})},
+          {});
+  ExploreOptions Opts;
+  Opts.CallPreservedRegisters.push_back({kRbx, 8});
+
+  std::vector<SymPath> Paths = explorePaths(Ctx, B.function(), Opts);
+  ASSERT_EQ(Paths.size(), 1u);
+  SymRef Preserved = Paths[0].State.read(SymSpace::Register, kRbx, 8);
+  ASSERT_TRUE(Ctx.isConst(Preserved));
+  EXPECT_EQ(Ctx.constValue(Preserved).getZExtValue(), 2u);
+}
+
 TEST(SymExplore, ARealBranchBecomesTwoPathsWithOppositeConditions) {
   SymContext Ctx;
   FunctionBuilder B;
   int Then = 1, Else = 2;
-  B.block({compareRax(10), op(NdOp::COND_BR, NdVar{},
-                              {FunctionBuilder::addressOf(1),
-                               NdVar::reg(kFlag, 1)})},
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(1), NdVar::reg(kFlag, 1)})},
           {Then, Else});
   B.block({op(NdOp::COPY, NdVar::reg(kRbx, 8), {NdVar::cst(1, 8)}),
            op(NdOp::RETURN, NdVar{}, {})},
@@ -125,6 +158,82 @@ TEST(SymExplore, ARealBranchBecomesTwoPathsWithOppositeConditions) {
   ASSERT_TRUE(Ctx.isConst(ElseValue));
   EXPECT_EQ(Ctx.constValue(ThenValue).getZExtValue(), 1u);
   EXPECT_EQ(Ctx.constValue(ElseValue).getZExtValue(), 2u);
+}
+
+TEST(SymExplore, UnknownsCreatedAfterAForkRemainPathLocal) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  int Then = 1, Else = 2;
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(Then), NdVar::reg(kFlag, 1)})},
+          {Then, Else});
+  B.block({op(NdOp::FLOAT_SQRT, NdVar::reg(kRbx, 8), {NdVar::reg(kRax, 8)}),
+           op(NdOp::RETURN, NdVar{}, {})},
+          {});
+  B.block({op(NdOp::FLOAT_SQRT, NdVar::reg(kRbx, 8), {NdVar::reg(kRax, 8)}),
+           op(NdOp::RETURN, NdVar{}, {})},
+          {});
+
+  std::vector<SymPath> Paths = explorePaths(Ctx, B.function());
+  ASSERT_EQ(Paths.size(), 2u);
+  EXPECT_NE(Paths[0].State.read(SymSpace::Register, kRbx, 8),
+            Paths[1].State.read(SymSpace::Register, kRbx, 8));
+  EXPECT_EQ(Paths[0].UnmodelledOps, 1u);
+  EXPECT_EQ(Paths[1].UnmodelledOps, 1u);
+}
+
+TEST(SymExplore, ContradictoryPathConditionsAreNotExecuted) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  int Repeat = 1, Taken = 2, Else = 3;
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(Repeat), NdVar::reg(kFlag, 1)})},
+          {Repeat, Else});
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(Taken), NdVar::reg(kFlag, 1)})},
+          {Taken, Else});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+
+  ExploreOptions Opts;
+  Opts.MaxPaths = 2;
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  const std::vector<SymPath> &Paths = Exploration.Paths;
+  EXPECT_TRUE(Exploration.Complete);
+  EXPECT_EQ(Exploration.ReachablePaths, 2u);
+  ASSERT_EQ(Paths.size(), 3u);
+  EXPECT_EQ(Paths[0].Outcome, PathOutcome::Returned);
+  EXPECT_EQ(Paths[0].Blocks, (std::vector<int>{0, Repeat, Taken}));
+  EXPECT_EQ(Paths[1].Outcome, PathOutcome::Infeasible);
+  EXPECT_EQ(Paths[1].Blocks, (std::vector<int>{0, Repeat}));
+  EXPECT_EQ(Paths[1].predicate(Ctx), Ctx.mkFalse());
+  EXPECT_EQ(Paths[2].Outcome, PathOutcome::Returned);
+  EXPECT_EQ(Paths[2].Blocks, (std::vector<int>{0, Else}));
+}
+
+TEST(SymExplore, StepBudgetsApplyIndependentlyToEachPath) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  int Then = 1, Else = 2;
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(Then), NdVar::reg(kFlag, 1)})},
+          {Then, Else});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  ExploreOptions Opts;
+  Opts.MaxSteps = 3;
+
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  const std::vector<SymPath> &Paths = Exploration.Paths;
+  EXPECT_TRUE(Exploration.Complete);
+  EXPECT_EQ(Exploration.ExecutedSteps, 4u);
+  ASSERT_EQ(Paths.size(), 2u);
+  EXPECT_EQ(Paths[0].Outcome, PathOutcome::Returned);
+  EXPECT_EQ(Paths[1].Outcome, PathOutcome::Returned);
 }
 
 TEST(SymExplore, APredicateTheCodeAlreadyDecidedDoesNotFork) {
@@ -157,9 +266,9 @@ TEST(SymExplore, ALoopWithNoKnownTripCountStopsAtItsBound) {
   SymContext Ctx;
   FunctionBuilder B;
   int Header = 0, Body = 1, Exit = 2;
-  B.block({compareRax(10), op(NdOp::COND_BR, NdVar{},
-                              {FunctionBuilder::addressOf(1),
-                               NdVar::reg(kFlag, 1)})},
+  B.block({compareRax(10),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(1), NdVar::reg(kFlag, 1)})},
           {Body, Exit});
   B.block({op(NdOp::INT_ADD, NdVar::reg(kRax, 8),
               {NdVar::reg(kRax, 8), NdVar::cst(1, 8)}),

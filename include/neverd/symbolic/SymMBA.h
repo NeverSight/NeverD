@@ -64,10 +64,9 @@
 namespace neverd::symbolic {
 
 struct MBAOptions {
-  /// Largest number of distinct inputs the solver will measure over.  The cost
-  /// is 2^MaxAtoms evaluations, so this is the dial between reach and time.
-  /// The identities obfuscators build from are overwhelmingly over two or
-  /// three variables, so the default leaves a wide margin.
+  /// Largest number of mutually dependent inputs measured in one region.  The
+  /// cost is 2^MaxAtoms evaluations, so independent dependency components and
+  /// mask-uniform columns are split before this bound is considered.
   unsigned MaxAtoms = 16;
 
   /// Random assignments the rewrite is checked against before it is returned.
@@ -79,13 +78,12 @@ struct MBAOptions {
   /// measuring the solver, not for using it.
   bool AllowGrowth = false;
 
-  /// Work units available to the deep region walk and to combinatorial product
-  /// expansion and factor recovery.  Walking a large expression region by
-  /// region is quadratic in its size, while polynomial search is exponential
-  /// in its factors; past this budget the remaining expression stays intact
-  /// and the result reports \c MBAOutcome::BudgetExhausted.  Setting this to
-  /// the largest size_t removes the resource budget without changing semantic
-  /// coverage.
+  /// Work units available to region measurement and combinatorial product
+  /// expansion/factor recovery.  This is a resource budget, not a nesting or
+  /// expression-shape cutoff: the iterative deep walk still visits every node,
+  /// and opaque boundaries do not spend it.  Once exhausted, remaining regions
+  /// stay intact and the result reports \c MBAOutcome::BudgetExhausted.
+  /// Setting this to the largest size_t removes the resource budget.
   size_t MaxWork = size_t(1) << 22;
 };
 

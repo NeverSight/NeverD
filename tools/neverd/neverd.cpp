@@ -46,14 +46,14 @@ int main(int Argc, char *Argv[]) {
 // requires a bad-allocation handler not to allocate and not to return, so keep
 // this to raw diagnostic writes and terminate immediately afterwards.
 static void reportOutOfMemory(void *, const char *Reason, bool) {
-  errs() << "error: out of memory: "
-         << (Reason ? Reason : "allocation failed")
-         << "\n"
-            "  Large binaries retain more IR, and concurrent LLVM emission\n"
-            "  adds one working set per worker thread.  To lower the peak:\n"
-            "    * NEVERD_THREADS=1 (or 2) to shrink the concurrent working set\n"
-            "    * --max-func=N to lift only the first N functions\n"
-            "    * --no-opt to skip the LLVM optimization pipeline\n";
+  errs()
+      << "error: out of memory: " << (Reason ? Reason : "allocation failed")
+      << "\n"
+         "  Large binaries retain more IR, and concurrent LLVM emission\n"
+         "  adds one working set per worker thread.  To lower the peak:\n"
+         "    * NEVERD_THREADS=1 (or 2) to shrink the concurrent working set\n"
+         "    * --max-func=N to lift only the first N functions\n"
+         "    * --no-opt to skip the LLVM optimization pipeline\n";
   if constexpr (sizeof(void *) == 4)
     errs() << "  This is a 32-bit build; its address space caps usable memory\n"
               "  at 2-4 GB regardless of how much RAM the machine has.  A\n"
@@ -109,11 +109,11 @@ static int realMain(int Argc, char *Argv[]) {
     WithColor::error() << "failed to load: " << takeLastError(Sess) << "\n";
     return 1;
   }
-  if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd) &&
+  if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd || SymbolicCmd) &&
       !configureAnalysisSession(Sess))
     return 1;
 
-  if (!JsonOutput) {
+  if (!JsonOutput && !SymbolicCmd) {
     const char *ArchStr = neverd_session_arch_name(Sess);
     outs() << "=== " << ProjectName << " v" << VersionString << " (" << Command
            << ") ===\n";
@@ -154,6 +154,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runHex(Sess);
   if (CfgCmd)
     return runCfg(Sess);
+  if (SymbolicCmd)
+    return runSymbolicExplore(Sess);
   if (XrefsCmd)
     return runXrefs(Sess);
   if (CallGraphCmd)

@@ -85,19 +85,10 @@ class ProvenanceScanTests(unittest.TestCase):
 
 
 class ProvenanceOfThisRepositoryTests(unittest.TestCase):
-    def test_no_finding_outside_developer_tooling(self) -> None:
-        """NeverD's own sources carry no provenance markers.
+    def test_no_unreviewed_finding_in_tracked_files(self) -> None:
+        """Every finding in a tracked file has an explicit reviewed allowance."""
 
-        ``.agents`` holds assistant tooling rather than anything NeverD builds
-        or ships, so it is reported separately: what matters for this assertion
-        is that nothing in the product itself is flagged.
-        """
-
-        findings = [
-            finding
-            for finding in provenance.scan(provenance.tracked_files())
-            if not finding.startswith(".agents/")
-        ]
+        findings = provenance.scan(provenance.tracked_files())
         self.assertEqual(findings, [], "\n".join(findings))
 
 

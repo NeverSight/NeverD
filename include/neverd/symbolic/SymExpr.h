@@ -318,10 +318,18 @@ public:
   std::optional<uint32_t> findVar(llvm::StringRef Name) const;
 
   /// Number of distinct nodes reachable from \p R, i.e. the size of the DAG.
-  /// This is the metric the simplifier uses to decide whether a rewrite was an
-  /// improvement, and it counts shared subterms once — a tree-shaped count
-  /// would call an aggressively shared expression "large" when it is cheap.
+  /// Used to account structural traversal work; shared subterms count once.
   size_t dagSize(SymRef R) const;
+
+  /// Cost of rendering the expression tree rooted at \p R.
+  ///
+  /// A shared node is charged once per appearance because a textual expression
+  /// prints it once per path.  The all-ones literal is free: it represents the
+  /// sign of a negation or the mask of a complement rather than a quantity.
+  /// Costs are cached as nodes are appended, so asking repeatedly while a
+  /// solver builds candidates remains linear in the total number of nodes
+  /// interned in this context.
+  size_t readabilityCost(SymRef R) const;
 
   /// Every variable reachable from \p R, in ascending variable-id order.
   void collectVars(SymRef R, llvm::SmallVectorImpl<uint32_t> &Out) const;
@@ -385,6 +393,8 @@ private:
   std::vector<SymNode> Nodes;
   std::vector<SymRef> OperandPool;
   std::vector<SymVarInfo> Vars;
+  /// One readability cost per prefix of \c Nodes, filled lazily.
+  mutable std::vector<size_t> ReadabilityCosts;
   /// Literals wider than 64 bits, referenced by index from SymNode::Aux.
   std::vector<llvm::APInt> WideConsts;
 
