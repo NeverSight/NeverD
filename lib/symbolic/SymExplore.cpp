@@ -110,12 +110,6 @@ public:
   /// falls through to.  Blocks carry their successors, so the fallthrough does
   /// not have to be guessed from an address.
   int fallthroughOf(const LowBlock &B, int Taken) const {
-    // A target outside the function does not appear in Succs, leaving the one
-    // in-function fallthrough as the sole edge.  With several edges, however,
-    // a failed target resolution identifies none of them: every successor
-    // differs from -1, so the loop below would silently guess Succs[0].
-    if (Taken < 0)
-      return B.Succs.size() == 1 ? B.Succs.front() : -1;
     for (int S : B.Succs)
       if (S != Taken)
         return S;

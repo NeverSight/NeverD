@@ -92,35 +92,6 @@ SymRef stripExtension(const SymContext &Ctx, SymRef E, bool &Signed) {
   }
 }
 
-/// Whether \p View is a transparent width view of \p Index.
-///
-/// Widening and taking a low subpiece keep the source register unambiguous,
-/// even though they can change its range.  That is enough here: the table base
-/// and physical stride are still exact, while the caller records the source
-/// register rather than an algebraic expression for every possible index.
-/// Deliberately do not look through high slices, masks or arithmetic; those can
-/// select or combine bits in ways that no longer identify one index.
-bool isIndexView(const SymContext &Ctx, SymRef View, SymRef Index) {
-  for (;;) {
-    if (View == Index)
-      return true;
-
-    switch (Ctx.op(View)) {
-    case SymOp::ZExt:
-    case SymOp::SExt:
-      View = Ctx.operand(View, 0);
-      continue;
-    case SymOp::Extract:
-      if (Ctx.node(View).Aux != 0)
-        return false;
-      View = Ctx.operand(View, 0);
-      continue;
-    default:
-      return false;
-    }
-  }
-}
-
 /// Fill in the table half of the shape from the address an entry was read at.
 bool describeTable(const SymContext &Ctx, const SymState &State, SymRef Entry,
                    SymRef Index, uint16_t EntrySize, DispatchShape &Shape) {
@@ -136,7 +107,7 @@ bool describeTable(const SymContext &Ctx, const SymState &State, SymRef Entry,
   // with entries one byte apart.  Entries would then be read out of whatever
   // happens to be mapped at the bottom of the image, and every one of them
   // would be believed.
-  if (!isIndexView(Ctx, Address->Index, Index))
+  if (Address->Index != Index)
     return false;
 
   Shape.TableBase = Address->Offset;

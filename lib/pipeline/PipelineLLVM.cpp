@@ -213,7 +213,7 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     }
     if (L.linkInModule(std::move(*MOr))) {
       llvm::WithColor::warning() << "pipeline: shard " << S << " link failed\n";
-      HadShardFailure = true;
+      return nullptr;
     } else {
       ++LinkedShards;
     }
