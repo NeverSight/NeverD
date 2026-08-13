@@ -70,6 +70,33 @@ def parse_c_api(source: str) -> dict[str, tuple[str, tuple[str, ...]]]:
     return declarations
 
 
+def parse_c_api_header(path: Path) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Parse the C API exposed by a public header and its local includes."""
+
+    sources: list[str] = []
+    pending = [path]
+    visited: set[Path] = set()
+    while pending:
+        current = pending.pop()
+        resolved = current.resolve()
+        if resolved in visited:
+            continue
+        visited.add(resolved)
+
+        source = current.read_text(encoding="utf-8")
+        sources.append(source)
+        for include in re.findall(
+            r'^\s*#\s*include\s+"([^"]+)"',
+            _without_comments(source),
+            flags=re.MULTILINE,
+        ):
+            included = ROOT / "include" / include
+            if included.is_file():
+                pending.append(included)
+
+    return parse_c_api("\n".join(sources))
+
+
 def parse_c_enum(source: str, typedef_name: str) -> dict[str, int]:
     pattern = re.compile(
         r"\btypedef\s+enum(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*"
@@ -104,7 +131,7 @@ def expected_ownership(result: str):
 def check_abi(errors: list[str]) -> None:
     from neverd_plugin import abi
 
-    declarations = parse_c_api(C_API_HEADER.read_text(encoding="utf-8"))
+    declarations = parse_c_api_header(C_API_HEADER)
     native_names = set(declarations)
     python_names = set(abi.FUNCTION_SPECS)
     for name in sorted(native_names - python_names):

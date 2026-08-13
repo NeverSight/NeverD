@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.check_python_plugin_sdk import parse_c_api
-
-from scripts.check_python_plugin_sdk import C_API_HEADER
+from scripts.check_python_plugin_sdk import C_API_HEADER, parse_c_api_header
 
 
 class ABIInventoryTests(unittest.TestCase):
@@ -19,7 +17,7 @@ class ABIInventoryTests(unittest.TestCase):
     def test_every_exported_c_function_has_a_python_signature(self) -> None:
         from neverd_plugin import abi
 
-        declarations = parse_c_api(C_API_HEADER.read_text(encoding="utf-8"))
+        declarations = parse_c_api_header(C_API_HEADER)
         self.assertEqual(set(abi.FUNCTION_SPECS), set(declarations))
         for name, (result, arguments) in declarations.items():
             with self.subTest(name=name):

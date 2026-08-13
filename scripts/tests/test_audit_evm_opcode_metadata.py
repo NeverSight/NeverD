@@ -7,6 +7,8 @@ from scripts.audit_evm_opcode_metadata import (
     DEFAULT_GETH_CACHE,
     DEFAULT_GETH_REF,
     DEFAULT_GETH_REMOTE,
+    DEFAULT_NEVERD_OPCODES,
+    DEFAULT_POLICY,
     OpcodeAuditError,
     audit_opcodes,
     fetch_geth_opcode_source,
@@ -38,6 +40,10 @@ class EVMOpcodeAuditTests(unittest.TestCase):
         self.assertEqual(arguments.geth_remote, DEFAULT_GETH_REMOTE)
         self.assertEqual(arguments.geth_ref, DEFAULT_GETH_REF)
         self.assertEqual(arguments.geth_cache, DEFAULT_GETH_CACHE)
+
+    def test_default_neverd_metadata_paths_exist(self):
+        self.assertTrue(DEFAULT_NEVERD_OPCODES.is_file())
+        self.assertTrue(DEFAULT_POLICY.is_file())
 
     def test_fetches_and_refreshes_remote_head(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

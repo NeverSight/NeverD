@@ -14,8 +14,10 @@ from typing import Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_NEVERD_OPCODES = REPO_ROOT / "include/neverd/evm/EVMOpcodes.def"
-DEFAULT_POLICY = REPO_ROOT / "include/neverd/evm/EVMUpstreamOpcodePolicy.def"
+DEFAULT_NEVERD_OPCODES = REPO_ROOT / "include/neverd/evm/bytecode/EVMOpcodes.def"
+DEFAULT_POLICY = (
+    REPO_ROOT / "include/neverd/evm/bytecode/EVMUpstreamOpcodePolicy.def"
+)
 DEFAULT_GETH_REMOTE = "https://github.com/ethereum/go-ethereum.git"
 DEFAULT_GETH_REF = "HEAD"
 DEFAULT_GETH_CACHE = REPO_ROOT / "build/evm-opcode-audit/go-ethereum.git"
