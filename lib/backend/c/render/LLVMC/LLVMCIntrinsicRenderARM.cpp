@@ -23,7 +23,7 @@ namespace {
 
 static const AsmToCEntry ARMAsmTable[] = {
 #define M(a, c) {a, c},
-#include "neverd/backend/c/render/LLVMC/ARM/AsmToCARM.inc"
+#include "neverd/backend/c/render/LLVMC/AsmToCARM.inc"
 #undef M
 };
 

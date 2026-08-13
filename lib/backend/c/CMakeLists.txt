@@ -18,11 +18,11 @@ add_neverd_component_library(NeverDBackendC
   pass/LLVMC/HiLoCollapse.cpp
   render/CTypeFormat.cpp
   render/HighC/HighCIntrinsicRender.cpp
-  render/HighC/X86/HighCIntrinsicRenderX86.cpp
-  render/HighC/ARM/HighCIntrinsicRenderARM.cpp
+  render/HighC/HighCIntrinsicRenderX86.cpp
+  render/HighC/HighCIntrinsicRenderARM.cpp
   render/LLVMC/LLVMCIntrinsicRender.cpp
-  render/LLVMC/X86/LLVMCIntrinsicRenderX86.cpp
-  render/LLVMC/ARM/LLVMCIntrinsicRenderARM.cpp
+  render/LLVMC/LLVMCIntrinsicRenderX86.cpp
+  render/LLVMC/LLVMCIntrinsicRenderARM.cpp
 
   LINK_COMPONENTS
   IR
