@@ -40,9 +40,9 @@ std::set<uint64_t> detectPtrParamRegs(const MedFunc &Med);
 ///
 /// The standard HighIR cleanup runs this after copy propagation, dead-code
 /// elimination and renaming have assembled the final expression DAG.  A
-/// rewrite must improve the engine's rendered-tree cost by a material margin,
-/// which avoids replacing a compact shared form with text that repeats one of
-/// its subexpressions.
+/// rewrite must strictly improve the engine's rendered-tree cost, which avoids
+/// replacing a compact shared form with text that repeats one of its
+/// subexpressions.
 void simplifyExprSemantics(std::vector<HighStmt> &Stmts);
 
 class MedToHighConverter {

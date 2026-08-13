@@ -77,6 +77,22 @@ llvm::Function *buildCarrySaveAdd(llvm::Module &M) {
   return F;
 }
 
+/// The smallest expression for which semantic measurement can improve on the
+/// canonical builders: `~x + 1 == -x`.
+llvm::Function *buildComplementPlusOne(llvm::Module &M) {
+  llvm::LLVMContext &C = M.getContext();
+  auto *I32 = llvm::Type::getInt32Ty(C);
+  auto *FT = llvm::FunctionType::get(I32, {I32}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage,
+                                   "complement_plus_one", &M);
+
+  auto *BB = llvm::BasicBlock::Create(C, "entry", F);
+  llvm::IRBuilder<> B(BB);
+  llvm::Value *X = F->getArg(0);
+  B.CreateRet(B.CreateAdd(B.CreateNot(X), llvm::ConstantInt::get(I32, 1)));
+  return F;
+}
+
 /// A carry-save spelling whose left input is supplied by \p MakeLeft.  It gives
 /// the poison-domain tests below a shape the solver would otherwise shorten
 /// from `(left ^ y) + 2*(left & y)` to `left + y`.
@@ -111,6 +127,17 @@ TEST(SymSimplifyGuard, RewritesMixedBooleanArithmeticWhenUnstamped) {
   llvm::Function *F = buildCarrySaveAdd(M);
 
   EXPECT_GT(SymSimplifyPass::simplify(*F), 0u);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+TEST(SymSimplifyGuard, RewritesTheSmallestNontrivialIdentity) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F = buildComplementPlusOne(M);
+  unsigned Before = instructionCount(*F);
+
+  EXPECT_GT(SymSimplifyPass::simplify(*F), 0u);
+  EXPECT_LT(instructionCount(*F), Before);
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
@@ -205,9 +232,16 @@ TEST(SymSimplifyGuard, LeavesExplicitUndefAndPoisonOpaque) {
       M, "with_poison", [](llvm::IRBuilder<> &B, llvm::Value *X) {
         return B.CreateXor(X, llvm::PoisonValue::get(X->getType()));
       });
+  llvm::Function *WithUndefSelect = buildCarrySaveWithLeft(
+      M, "with_undef_select", [](llvm::IRBuilder<> &B, llvm::Value *X) {
+        llvm::Value *Cond =
+            B.CreateICmpEQ(X, llvm::ConstantInt::get(X->getType(), 0));
+        return B.CreateSelect(Cond, llvm::UndefValue::get(X->getType()), X);
+      });
 
   EXPECT_EQ(SymSimplifyPass::simplify(*WithUndef), 0u);
   EXPECT_EQ(SymSimplifyPass::simplify(*WithPoison), 0u);
+  EXPECT_EQ(SymSimplifyPass::simplify(*WithUndefSelect), 0u);
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 

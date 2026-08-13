@@ -44,7 +44,6 @@
 #include "llvm/Transforms/Utils/Local.h"
 
 #include <cstdint>
-#include <limits>
 #include <string>
 
 namespace neverd {
@@ -53,9 +52,9 @@ namespace {
 
 namespace sym = neverd::symbolic;
 
-/// Expressions with fewer nodes than this are left alone: nothing that short
-/// can be hiding anything, and translating it costs more than the answer.
-constexpr size_t kMinInterestingNodes = 6;
+/// A leaf or one already-canonical operator cannot become shorter.  Four nodes
+/// is the first useful case: `~x + 1` is four and simplifies to `-x`.
+constexpr size_t kMinInterestingNodes = 4;
 
 /// A rewrite is made only when it materializes at least this many fewer
 /// instructions than it replaces.  One is enough because the InstCombine that
@@ -154,6 +153,40 @@ bool isTranslatable(const llvm::Value *V, bool WithComparisons) {
 /// explicitly rather than silently dropping it.
 bool hasCompatibleSemantics(const llvm::Instruction &I) {
   return !llvm::canCreatePoison(llvm::cast<llvm::Operator>(&I));
+}
+
+/// Whether a translatable value hidden behind an opaque shared leaf contains
+/// semantics the total bitvector engine cannot preserve.
+///
+/// Ordinary translation visits every operand and rejects the whole candidate
+/// when it reaches undef, poison, or a poison-generating instruction.  A value
+/// with multiple uses deliberately stays opaque, though, so its operands would
+/// otherwise escape that check.  Follow the defining operand graph only to
+/// reject unsafe candidates; this never makes an opaque operation
+/// translatable.
+bool hasHiddenIncompatibleSemantics(const llvm::Instruction &Root,
+                                    bool WithComparisons) {
+  llvm::SmallVector<const llvm::Value *, 8> Work;
+  for (const llvm::Use &Op : Root.operands())
+    Work.push_back(Op.get());
+
+  llvm::DenseSet<const llvm::Value *> Seen;
+  while (!Work.empty()) {
+    const llvm::Value *V = Work.pop_back_val();
+    if (!Seen.insert(V).second)
+      continue;
+    if (llvm::isa<llvm::UndefValue, llvm::PoisonValue>(V))
+      return true;
+
+    const auto *I = llvm::dyn_cast<llvm::Instruction>(V);
+    if (!I)
+      continue;
+    if (isTranslatable(I, WithComparisons) && !hasCompatibleSemantics(*I))
+      return true;
+    for (const llvm::Use &Op : I->operands())
+      Work.push_back(Op.get());
+  }
+  return false;
 }
 
 //===----------------------------------------------------------------------===//
@@ -338,6 +371,9 @@ sym::SymRef Translator::in(llvm::Value *Root) {
       return {};
 
     if (!descend(V, V == Root)) {
+      if (const auto *I = llvm::dyn_cast<llvm::Instruction>(V);
+          I && hasHiddenIncompatibleSemantics(*I, CarryComparisons))
+        return {};
       Memo[V] = leaf(V);
       continue;
     }
@@ -599,12 +635,12 @@ bool rewriteRoot(llvm::Instruction *Root,
   if (Ctx.dagSize(Before) < kMinInterestingNodes)
     return false;
 
-  sym::MBAOptions Opts;
-  // No depth or breadth cap on the region walk: the deep simplifier works from
-  // an explicit stack, and each measurement it makes strictly shortens what it
-  // found, so it terminates on the finite DAG regardless of how far it reaches.
-  Opts.MaxWork = std::numeric_limits<size_t>::max();
-  sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before, Opts);
+  // Nesting is not a budget: the deep walk is iterative and visits the finite
+  // DAG without a recursion cutoff.  Keep the production work budget for the
+  // exponential corner measurements and product search, though; callers that
+  // trust their input can explicitly remove that resource guard through the
+  // public simplify API.
+  sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before);
   // LLVM IR is a production rewrite surface: a check can find a counterexample
   // but only a derivation can authorize replacing the program.
   if (!Res.Changed || Res.Evidence != sym::MBAEvidence::Derivation)
@@ -700,9 +736,7 @@ std::optional<llvm::APInt> SymSimplifyPass::constantValueOf(llvm::Value *V) {
   if (!Before.isValid())
     return std::nullopt;
 
-  sym::MBAOptions Opts;
-  Opts.MaxWork = std::numeric_limits<size_t>::max();
-  sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before, Opts);
+  sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before);
   if (Res.Changed && Res.Evidence != sym::MBAEvidence::Derivation)
     return std::nullopt;
   return Ctx.asConst(Res.Changed ? Res.Expr : Before);

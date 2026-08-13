@@ -31,7 +31,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
-#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -43,20 +42,17 @@ namespace {
 
 namespace sym = neverd::symbolic;
 
-/// Expressions smaller than this are left alone.  Nothing that short can be
-/// hiding anything, and translating it would cost more than the answer.
-constexpr size_t kMinInterestingNodes = 6;
+/// A leaf or one already-canonical operator cannot become shorter.  Four nodes
+/// is the first useful case: `~x + 1` is four and simplifies to `-x`.
+constexpr size_t kMinInterestingNodes = 4;
 
 /// How much a rewrite has to save before it is worth making.
 ///
-/// Not a tuning knob so much as a statement about what this pass is for.
-/// Obfuscation loses enormously when it is measured — nine down to three,
-/// fifteen down to three — so nothing is given up by ignoring a rewrite that
-/// saves one.  What is gained is that the expressions this pass has no real
-/// business touching keep the shape the rest of the pipeline built: their type
-/// annotations, and the shared subterms the backend lifts into named
-/// temporaries, both of which a reshuffle can cost more than the saving.
-constexpr size_t kMinGain = 3;
+/// The cost is the rendered tree rather than the shared graph, so one unit is a
+/// real operator removed from the decompiled expression.  Requiring a strict
+/// improvement prevents canonical-form churn without hiding compact identities
+/// such as `~x + 1`.
+constexpr size_t kMinGain = 1;
 
 /// Width of \p E in bits, or zero when there is no saying what it is.
 ///
@@ -606,14 +602,11 @@ void simplifyOne(ExprPtr &E) {
   if (Ctx.dagSize(Before) < kMinInterestingNodes)
     return;
 
-  sym::MBAOptions Opts;
-  // No cap on the region walk: undoing layered obfuscation means reaching the
-  // innermost expression however deep it is buried.  Termination does not
-  // depend on the cap -- the walk is over a finite DAG and every measurement
-  // strictly shortens what it finds -- so the only thing a cap buys is giving
-  // up early on exactly the expressions this pass exists to handle.
-  Opts.MaxWork = std::numeric_limits<size_t>::max();
-  sym::MBAResult Result = sym::simplifyMBADeep(Ctx, Before, Opts);
+  // The iterative walk has no nesting cutoff.  Its default budget applies only
+  // to exponential corner measurements and product search, keeping automatic
+  // decompilation bounded while the public API still offers an explicit
+  // exhaustive policy for trusted inputs.
+  sym::MBAResult Result = sym::simplifyMBADeep(Ctx, Before);
   // Shorter by enough to be worth it.  The engine settles a tie towards its
   // own canonical form, which is the right answer to what an expression *is*;
   // the question here is what to show someone, and a rewrite that saves

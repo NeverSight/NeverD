@@ -500,8 +500,10 @@ private:
 };
 
 TEST(SymMBA, BringsBackWhateverTheIdentitiesWereUsedToHide) {
+  constexpr unsigned kTrialsPerWidth = 336;
+  unsigned Cases = 0;
   for (uint32_t Width : {8u, 32u, 64u}) {
-    for (unsigned Trial = 0; Trial < 40; ++Trial) {
+    for (unsigned Trial = 0; Trial < kTrialsPerWidth; ++Trial) {
       SymContext Ctx;
       SymRef A = Ctx.mkVar("a", Width);
       SymRef B = Ctx.mkVar("b", Width);
@@ -511,6 +513,7 @@ TEST(SymMBA, BringsBackWhateverTheIdentitiesWereUsedToHide) {
       SymRef Hidden = Obf.expand(Original, 4);
       if (Hidden == Original)
         continue;
+      ++Cases;
       // A mistyped identity would look exactly like a solver that returns the
       // wrong answer, so the obfuscation is checked before the solver is.
       ASSERT_TRUE(sameValue(Ctx, Hidden, Original, Width))
@@ -526,6 +529,8 @@ TEST(SymMBA, BringsBackWhateverTheIdentitiesWereUsedToHide) {
                                   << "\n   found: " << Ctx.toString(R.Expr);
     }
   }
+  EXPECT_GE(Cases, 1000u)
+      << "the deterministic recovery corpus fell below its acceptance floor";
 }
 
 TEST(SymMBA, NeverChangesWhatAnExpressionComputes) {

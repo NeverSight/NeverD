@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Fail the build when a tracked file would tell a reader where NeverD's ideas
-came from, or where its author's home directory is.
+"""Fail the build on private path leaks and unreviewed provenance markers.
 
-Two different things are being kept out, and they are worth telling apart.
+Two different risks are checked, and they are worth telling apart.
 
 The first is a *private path*: an absolute path from a developer's machine, or a
 reference to a working directory that is deliberately not in the repository.
@@ -14,10 +13,11 @@ wording that presents it as a source, or terminology that belongs to one
 particular tool rather than to the field.  NeverD's own vocabulary is its own --
 `NdVar`, `NdOp`, `SymRef` -- and a stray borrowed term reads as a fragment of
 somebody else's design left in place, whatever the truth is.  The point is not
-that referring to other work is wrong; published research and public tools are
-cited properly where NeverD builds on them.  The point is that a term appearing
-with no citation and no explanation is worse than either citing it or not using
-it, so this asks for one or the other.
+to conceal where work came from.  Required licence notices and attribution must
+remain, and published research or public tools should be cited deliberately
+where NeverD builds on them.  A marker with no citation or explanation instead
+requires review, so the checker asks for either a documented allowance or a
+terminology correction.
 
 Every exception is listed below with a reason, so an allowed hit is a decision
 somebody made rather than a pattern nobody tightened.
@@ -288,8 +288,10 @@ def main() -> int:
         for finding in findings:
             print(f"error: {finding}", file=sys.stderr)
         print(
-            f"\n{len(findings)} provenance findings. Either remove the text, "
-            f"or add a reviewed entry to ALLOWED in {SELF} saying why it stays.",
+            f"\n{len(findings)} provenance findings. Correct accidental text "
+            f"or add a reviewed entry to ALLOWED in {SELF} explaining the "
+            "citation, licence, or terminology reason. Do not remove required "
+            "attribution.",
             file=sys.stderr,
         )
         return 1

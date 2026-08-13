@@ -92,11 +92,10 @@ public:
     Block.Ops.push_back(std::move(Return));
     Block.EndAddr = NextAddr + 4;
     Func.Blocks.push_back(std::move(Block));
-    HighFunc High = MedToHighConverter().convert(Func, Arch::X64);
-    // Applied here rather than reached through the pipeline, because it is not
-    // part of the standard one yet.
-    simplifyExprSemantics(High.Body);
-    return High;
+    // convert() runs the production HighIR cleanup, including semantic
+    // simplification.  Do not invoke the pass a second time here: these tests
+    // must fail if the default decompilation path ever loses that integration.
+    return MedToHighConverter().convert(Func, Arch::X64);
   }
 
 private:
@@ -141,6 +140,20 @@ TEST(HighSymSimplify, RecoversAdditionFromItsBitwiseRewriting) {
   EXPECT_EQ(Expr.find('^'), std::string::npos) << Expr;
   EXPECT_EQ(Expr.find('&'), std::string::npos) << Expr;
   EXPECT_NE(Expr.find('+'), std::string::npos) << Expr;
+}
+
+TEST(HighSymSimplify, ReachesTheSmallestNontrivialIdentity) {
+  // Four DAG nodes: x, ~x, 1 and the addition.  A size gate above four would
+  // silently leave this supported identity out of the production HighIR path.
+  FunctionBuilder B;
+  MedVar X = B.param(0, 0x38);
+  MedVar NotX = B.emit(NdOp::INT_NOT, {X});
+
+  std::string Expr =
+      returnedExpr(B.finish(NdOp::INT_ADD, {NotX, FunctionBuilder::constant(1)}));
+  EXPECT_EQ(Expr.find('~'), std::string::npos) << Expr;
+  EXPECT_EQ(Expr.find('+'), std::string::npos) << Expr;
+  EXPECT_NE(Expr.find('-'), std::string::npos) << Expr;
 }
 
 TEST(HighSymSimplify, RecoversExclusiveOrFromItsArithmeticRewriting) {
