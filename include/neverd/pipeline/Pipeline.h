@@ -247,6 +247,18 @@ public:
   static ObfuscationCounts runObfuscationPasses(llvm::Module &Mod,
                                                 const ObfuscationConfig &Cfg);
 
+  /// Apply the optimization pass order lift uses on every emitted module.  This
+  /// is the counterpart to runObfuscationPasses and public for the same reason:
+  /// it is the single source of truth for that order, so anything that needs to
+  /// reason about what the optimizer does -- above all the tests that pin the
+  /// semantic simplifier's joint fixed point with InstCombine -- goes through it
+  /// rather than assembling a pass list of its own that could drift.
+  ///
+  /// \p Conservative selects the patch pipeline's order, which stops after
+  /// promotion and SROA and runs no value-changing transform, so a module it
+  /// touches keeps the decompiled program's semantics byte for byte.
+  static void optimizeModule(llvm::Module &Mod, bool Conservative = false);
+
   /// Serialize the canonical textual IR dumps without writing to global
   /// stdout. High-level APIs use these overloads to return one stable dump
   /// across executable/shared-library boundaries.

@@ -22,14 +22,19 @@
 #include "neverd/pass/ir/InstSubstitutionPass.h"
 #include "neverd/pass/ir/MBAPass.h"
 #include "neverd/pass/ir/OpaquePredicatePass.h"
+#include "neverd/pass/ir/SymSimplifyPass.h"
 #include "neverd/pass/ir/ValueLaunderingPass.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -41,6 +46,99 @@
 #define DEBUG_TYPE "neverd-pipeline"
 
 namespace neverd {
+
+namespace {
+
+/// Runs canonicalization and semantic measurement to their joint fixed point.
+///
+/// Neither transform reaches that point alone.  An expression mixing `+ - *`
+/// with `& | ^ ~` is a fixed point for every rule-driven simplifier -- being
+/// immune to peephole rewriting is what the obfuscation is for -- so
+/// InstCombine stops in front of it.  The measurement walks straight through
+/// it, but what it leaves behind is ordinary arithmetic that wants folding, and
+/// folding it can expose a further region in measurable shape.  Running the
+/// pair once therefore reaches neither transform's fixed point; running them in
+/// alternation until a measurement finds nothing left to shorten reaches both.
+///
+/// Termination does not rest on the round cap.  A measurement is only written
+/// back when it materializes strictly fewer instructions than it replaces, so
+/// every productive round strictly shrinks the function and there can only be
+/// finitely many.  The structural fingerprint below stops the one case that
+/// argument does not cover -- the two transforms trading the same edit back and
+/// forth -- and the cap is the backstop behind both, not a limit on how deeply
+/// nested an obfuscation may be: a single measurement already reaches every
+/// layer of one.
+class SemanticFixedPointPass
+    : public llvm::PassInfoMixin<SemanticFixedPointPass> {
+public:
+  llvm::PreservedAnalyses run(llvm::Function &F,
+                              llvm::FunctionAnalysisManager &FAM);
+
+private:
+  /// Enough rounds that no input reaches it before the fingerprint or the
+  /// shrinking argument does.
+  static constexpr unsigned kMaxRounds = 32;
+
+  /// A shape summary of \p F, cheap enough to take every round.  It only has to
+  /// separate two states well enough to notice a repeat; a collision costs one
+  /// round of progress, never correctness.
+  static uint64_t fingerprint(const llvm::Function &F);
+};
+
+uint64_t SemanticFixedPointPass::fingerprint(const llvm::Function &F) {
+  uint64_t H = F.size();
+  for (const llvm::BasicBlock &BB : F)
+    for (const llvm::Instruction &I : BB) {
+      H = static_cast<uint64_t>(llvm::hash_combine(
+          H, I.getOpcode(), I.getType(), I.getNumOperands()));
+      for (const llvm::Value *Op : I.operand_values())
+        H = static_cast<uint64_t>(llvm::hash_combine(H, Op->getType()));
+    }
+  return H;
+}
+
+llvm::PreservedAnalyses
+SemanticFixedPointPass::run(llvm::Function &F,
+                            llvm::FunctionAnalysisManager &FAM) {
+  // One manager, run repeatedly: InstCombine carries no state across runs, and
+  // rebuilding it every round would be the only cost this loop adds to a
+  // function that has nothing to measure.
+  llvm::FunctionPassManager Canonicalize;
+  Canonicalize.addPass(llvm::InstCombinePass());
+
+  llvm::SmallDenseSet<uint64_t, 8> Seen;
+  bool Changed = false;
+  bool ResidueUnfolded = false;
+
+  for (unsigned Round = 0; Round < kMaxRounds; ++Round) {
+    Canonicalize.run(F, FAM);
+    ResidueUnfolded = false;
+
+    unsigned Rewritten = SymSimplifyPass::simplify(F);
+    if (Rewritten == 0)
+      break;
+    Changed = true;
+    // The canonicalization that just ran folded the previous round's result;
+    // this round's has not been folded yet, so a loop that stops here owes one
+    // more run of InstCombine.
+    ResidueUnfolded = true;
+
+    // simplify() rewrote the function outside any pass manager, so everything
+    // cached about it is stale before the next InstCombine reads it.
+    FAM.invalidate(F, llvm::PreservedAnalyses::none());
+
+    if (!Seen.insert(fingerprint(F)).second)
+      break;
+  }
+
+  if (ResidueUnfolded)
+    Canonicalize.run(F, FAM);
+
+  return Changed ? llvm::PreservedAnalyses::none()
+                 : llvm::PreservedAnalyses::all();
+}
+
+} // namespace
 
 /// After SROA, bare negative inttoptr addresses (e.g.
 /// `inttoptr (i32 -4 to ptr)`) can appear for stack slots that were
@@ -151,7 +249,12 @@ void Pipeline::optimizeModule(llvm::Module &Mod, bool Conservative) {
   FPM.addPass(llvm::PromotePass());
   FPM.addPass(llvm::SROAPass(llvm::SROAOptions::PreserveCFG));
   if (!Conservative) {
-    FPM.addPass(llvm::InstCombinePass());
+    // InstCombine canonicalizes by shape, which is what a measurement reads
+    // best; the measurement collapses the mixed boolean-arithmetic InstCombine
+    // cannot touch; the arithmetic that leaves is what InstCombine folds best.
+    // They are driven in alternation rather than paired once, because each
+    // shortened layer can put a further one into measurable shape.
+    FPM.addPass(SemanticFixedPointPass());
     FPM.addPass(llvm::SimplifyCFGPass());
   }
   llvm::ModulePassManager MPM;
@@ -270,6 +373,19 @@ Pipeline::runObfuscationPasses(llvm::Module &Mod,
     C.ConstPool = runConstantPoolingPass(Mod);
   if (Cfg.BitMasking)
     C.BitMask = runBitMaskingPass(Mod);
+
+  // Once the obfuscator has actually rewritten something, stamp every
+  // definition so a later SymSimplifyPass skips this module.  That pass
+  // measures away exactly the mixed boolean-arithmetic these passes inject, so
+  // without the stamp an obfuscate-then-patch run through a shared pipeline
+  // could undo its own payload.  The stamp is module-wide on purpose: which
+  // functions a pass touched is not tracked here, and over-skipping the
+  // simplifier is free (the patch path does not run it anyway) while
+  // under-skipping would let it unpick the obfuscation.
+  if (C.total() > 0)
+    for (llvm::Function &F : Mod)
+      if (!F.isDeclaration())
+        F.addFnAttr(kObfuscatedFnAttr);
   return C;
 }
 

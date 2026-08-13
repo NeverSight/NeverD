@@ -15,7 +15,9 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/Object/ELFLayout.h"
+#include "neverd/Object/SectionNames.h"
 #include "neverd/Support/BinaryEncoding.h"
+#include "neverd/backend/codegen/ELF/ELFExceptionPatch.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -23,6 +25,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstring>
+#include <optional>
 
 #define DEBUG_TYPE "neverd-elf-patch"
 
@@ -223,11 +226,31 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
           return std::nullopt;
         };
 
-        CompiledImage Img = compileImageForPatch(
-            Mod, TargetArch, BinaryFormat::ELF, CodeStartVA, Resolve);
+        // The ELF unwinder reaches a function's FDE only through the sorted
+        // table in `.eh_frame_hdr`, so regenerated records are compiled into the
+        // file-backed tail of the existing `.eh_frame` -- pinning that section's
+        // VA there makes their PC-relative fields resolve against the address
+        // they will be registered at -- and their functions are then added to
+        // the search table below.
+        std::optional<ELFEHFrameRegion> EHRegion = findELFEHFrameRegion(Binary);
+        auto FixedSectionVA =
+            [&](llvm::StringRef Name) -> std::optional<uint64_t> {
+          if (EHRegion && Name == section_names::elf::EhFrame)
+            return EHRegion->AppendVA;
+          return std::nullopt;
+        };
+
+        CompiledImage Img = compileImageForPatchWithFixedSectionVAs(
+            Mod, TargetArch, BinaryFormat::ELF, CodeStartVA, Resolve,
+            FixedSectionVA);
         if (!Img.Success || Img.Bytes.empty()) {
           llvm::WithColor::error()
               << "elf_patch: compileImageForPatch failed\n";
+          return false;
+        }
+
+        if (llvm::Error Err = installELFEHFrame(Binary, EHRegion, Img, Mod)) {
+          llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
           return false;
         }
 

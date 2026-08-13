@@ -1027,6 +1027,137 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
   return Best->Expr;
 }
 
+//===----------------------------------------------------------------------===//
+// Regions too wide to measure whole
+//===----------------------------------------------------------------------===//
+
+/// Solve a region with more inputs than one measurement can afford by cutting
+/// it into groups of summands that share no input.
+///
+/// The 2^t cost of a measurement is real arithmetic, not a tunable: it is how
+/// many corners the weights are read off.  But it bounds a single measurement,
+/// not an expression.  Two summands of a linear MBA that share no input are
+/// independent, so a sum of them is several separate linear MBAs written next
+/// to each other, and each can be measured over its own few inputs.  The price
+/// is then set by the largest group instead of by the total, which puts an
+/// expression over any number of inputs back in reach so long as they were
+/// tangled a few at a time -- and tangling them all at once is something the
+/// obfuscator cannot afford either, for the same 2^t reason.
+///
+/// Exactness comes from the independence: no input crosses a group boundary, so
+/// summing the solved groups reproduces the original term for term.  The sample
+/// check at the end guards against a slip in that reasoning rather than being
+/// the reason to believe it.
+SymRef solveWide(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
+                 unsigned *NumAtomsOut) {
+  // An expression cannot abstract to more inputs than it has nodes, so this
+  // rejects everything narrow without paying for an abstraction first.
+  if (Ctx.dagSize(E) <= Opts.MaxAtoms)
+    return E;
+
+  std::optional<Abstraction> Abstract =
+      abstractToMBA(Ctx, E, /*AllowProducts=*/false);
+  if (!Abstract)
+    return E;
+
+  llvm::SmallVector<uint32_t, 32> AllAtoms;
+  Ctx.collectVars(Abstract->Body, AllAtoms);
+  // Measurable in one piece, which the ordinary solver has already tried;
+  // splitting it could only reach the same answer by a longer road.
+  if (AllAtoms.size() <= Opts.MaxAtoms)
+    return E;
+
+  // The cut is between summands, so there has to be a sum to cut.
+  if (Ctx.op(Abstract->Body) != SymOp::Add)
+    return E;
+  llvm::ArrayRef<SymRef> Terms = Ctx.operands(Abstract->Body);
+
+  // Two inputs share a group when one term mentions both; closing the relation
+  // up means a chain of terms puts their inputs in one group too.
+  llvm::DenseMap<uint32_t, uint32_t> Parent;
+  for (uint32_t Id : AllAtoms)
+    Parent[Id] = Id;
+  auto find = [&Parent](uint32_t X) {
+    while (Parent[X] != X) {
+      Parent[X] = Parent[Parent[X]];
+      X = Parent[X];
+    }
+    return X;
+  };
+
+  llvm::SmallVector<llvm::SmallVector<uint32_t, 4>, 16> PerTerm(Terms.size());
+  for (size_t I = 0; I < Terms.size(); ++I) {
+    Ctx.collectVars(Terms[I], PerTerm[I]);
+    for (size_t J = 1; J < PerTerm[I].size(); ++J) {
+      uint32_t A = find(PerTerm[I][0]);
+      uint32_t B = find(PerTerm[I][J]);
+      if (A != B)
+        Parent[A] = B;
+    }
+  }
+
+  // Keyed by group representative so the rebuilt sum comes out the same way on
+  // every run; a term naming no input is a constant and joins no group.
+  std::map<uint32_t, llvm::SmallVector<SymRef, 8>> Groups;
+  llvm::SmallVector<SymRef, 4> Constants;
+  for (size_t I = 0; I < Terms.size(); ++I) {
+    if (PerTerm[I].empty()) {
+      Constants.push_back(Terms[I]);
+      continue;
+    }
+    Groups[find(PerTerm[I][0])].push_back(Terms[I]);
+  }
+  // A single group means the inputs really are all tangled together, so the
+  // width belongs to the expression rather than to how it was written.
+  if (Groups.size() < 2)
+    return E;
+
+  llvm::SmallVector<SymRef, 16> Parts;
+  unsigned Widest = 0;
+  bool AnySolved = false;
+  for (const auto &Group : Groups) {
+    llvm::ArrayRef<SymRef> GroupTerms = Group.second;
+    SymRef Part =
+        GroupTerms.size() == 1 ? GroupTerms[0] : Ctx.mkAdd(GroupTerms);
+    unsigned Atoms = 0;
+    SymRef Solved = solveRegion(Ctx, Part, Opts, &Atoms);
+    if (Solved != Part) {
+      AnySolved = true;
+      Widest = std::max(Widest, Atoms);
+    }
+    Parts.push_back(Solved);
+  }
+  if (!AnySolved)
+    return E;
+
+  Parts.append(Constants.begin(), Constants.end());
+  SymRef Rebuilt = Parts.size() == 1 ? Parts[0] : Ctx.mkAdd(Parts);
+  if (!Abstract->Hidden.empty())
+    Rebuilt = Ctx.substitute(Rebuilt, Abstract->Hidden);
+  if (Rebuilt == E)
+    return E;
+
+  bool Verified = agreeOnSamples(Ctx, E, Rebuilt, Opts.VerifySamples);
+  assert(Verified && "a split MBA rewrite disagreed with what it replaces");
+  if (!Verified)
+    return E;
+
+  if (!Opts.AllowGrowth && readingCost(Ctx, Rebuilt) > readingCost(Ctx, E))
+    return E;
+
+  if (NumAtomsOut)
+    *NumAtomsOut = Widest;
+  return Rebuilt;
+}
+
+/// Measure \p E, and when it is too wide for one measurement, try again in
+/// independent parts.
+SymRef solveRegionOrSplit(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
+                          unsigned *NumAtomsOut) {
+  SymRef Solved = solveRegion(Ctx, E, Opts, NumAtomsOut);
+  return Solved == E ? solveWide(Ctx, E, Opts, NumAtomsOut) : Solved;
+}
+
 } // namespace
 
 MBAResult simplifyMBA(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
@@ -1037,7 +1168,7 @@ MBAResult simplifyMBA(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
 
   Result.SizeBefore = readingCost(Ctx, E);
   Result.SizeAfter = Result.SizeBefore;
-  Result.Expr = solveRegion(Ctx, E, Opts, &Result.NumAtoms);
+  Result.Expr = solveRegionOrSplit(Ctx, E, Opts, &Result.NumAtoms);
   if (Result.Expr == E)
     return Result;
 
@@ -1084,7 +1215,7 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
     if (Work < Opts.MaxWork) {
       Work += Ctx.dagSize(Rebuilt);
       unsigned Atoms = 0;
-      SymRef Measured = solveRegion(Ctx, Rebuilt, Opts, &Atoms);
+      SymRef Measured = solveRegionOrSplit(Ctx, Rebuilt, Opts, &Atoms);
       if (Measured != Rebuilt) {
         Rebuilt = Measured;
         Result.NumAtoms = std::max(Result.NumAtoms, Atoms);

@@ -28,7 +28,7 @@ namespace neverd {
 // (FNMADD/FNMSUB); SubAdd subtracts the addend (FMSUB/FNMSUB).  Scalar SS/SD
 // forms compute only the low ElemSz element and carry the destination's upper
 // bytes over; packed PS/PD forms fuse every ElemSz-wide lane.  Fa/Fb/Fc are the
-// full-width operand varnodes.
+// full-width operands.
 static void emitX86Fma(LiftStateBase &S, NdVar Dst, NdVar Fa, NdVar Fb,
                        NdVar Fc, bool NegProd, bool SubAdd, bool Scalar,
                        unsigned ElemSz) {

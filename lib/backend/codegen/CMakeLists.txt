@@ -9,6 +9,7 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFPatch.cpp
   COFF/COFFInplace.cpp
   COFF/COFFReloc.cpp
+  ELF/ELFExceptionPatch.cpp
   ELF/ELFPatch.cpp
   ELF/ELFInplace.cpp
   ELF/ELFReloc.cpp

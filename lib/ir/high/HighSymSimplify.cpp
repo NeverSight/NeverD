@@ -31,6 +31,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -605,7 +606,14 @@ void simplifyOne(ExprPtr &E) {
   if (Ctx.dagSize(Before) < kMinInterestingNodes)
     return;
 
-  sym::MBAResult Result = sym::simplifyMBADeep(Ctx, Before);
+  sym::MBAOptions Opts;
+  // No cap on the region walk: undoing layered obfuscation means reaching the
+  // innermost expression however deep it is buried.  Termination does not
+  // depend on the cap -- the walk is over a finite DAG and every measurement
+  // strictly shortens what it finds -- so the only thing a cap buys is giving
+  // up early on exactly the expressions this pass exists to handle.
+  Opts.MaxWork = std::numeric_limits<size_t>::max();
+  sym::MBAResult Result = sym::simplifyMBADeep(Ctx, Before, Opts);
   // Shorter by enough to be worth it.  The engine settles a tie towards its
   // own canonical form, which is the right answer to what an expression *is*;
   // the question here is what to show someone, and a rewrite that saves

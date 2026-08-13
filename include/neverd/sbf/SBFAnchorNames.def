@@ -18,14 +18,14 @@
 // Instruction and state names are snake_case, account and event names are
 // PascalCase, matching how the Anchor macros derive them from Rust items.
 //
-// The bulk of the instruction names were adopted from the dictionary published
-// with `solana-data-reverser`, but none of its hashes were taken on trust: an
-// entry is listed here only when NeverD's own derivation reproduces the
-// discriminator that file records for it, and the entries whose stated hash
-// did not reproduce were dropped rather than corrected. SBFAnchorTests
-// re-derives the whole table and requires it to stay injective, so a name that
-// stopped hashing to a distinct value would fail the build's tests rather than
-// silently rename a recovered instruction.
+// The instruction names collected here are common Anchor entry points that
+// recur across deployed Solana programs, but none of their discriminators is
+// taken on trust: an entry is listed only when NeverD's own derivation
+// reproduces the eight-byte discriminator for it, and any candidate whose
+// expected hash did not reproduce was dropped rather than corrected.
+// SBFAnchorTests re-derives the whole table and requires it to stay injective,
+// so a name that stopped hashing to a distinct value would fail the build's
+// tests rather than silently rename a recovered instruction.
 //
 //===----------------------------------------------------------------------===//
 

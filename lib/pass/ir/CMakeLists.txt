@@ -12,7 +12,9 @@ add_neverd_component_library(NeverDPassIR
   ValueLaunderingPass.cpp
   ConstantPoolingPass.cpp
   BitMaskingPass.cpp
+  SymSimplifyPass.cpp
 
   LINK_COMPONENTS
   IR
+  Symbolic
 )

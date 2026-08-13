@@ -93,7 +93,7 @@ private:
   using RegWriteMap = std::map<std::pair<uint64_t, uint16_t>, RegWriteInfo>;
 
   void analyzeStack(const LowFunc &Low);
-  MedVar varnodeToMedvar(const NdVar &VN);
+  MedVar ndVarToMedVar(const NdVar &VN);
   void fixupSubRegisters(MedFunc &Func);
 
   // --- Architecture-specific sub-register fixups (LLVM target-dispatch) ---

@@ -1092,9 +1092,9 @@ SymRef SymContext::substituteVar(SymRef R, uint32_t VarIdx, SymRef Val) {
   if (std::find(Seen.begin(), Seen.end(), VarIdx) == Seen.end())
     return R;
 
-  SymRef VarNode = intern(SymOp::Var, Vars[VarIdx].Width, {}, VarIdx);
+  SymRef VarRef = intern(SymOp::Var, Vars[VarIdx].Width, {}, VarIdx);
   std::unordered_map<uint32_t, SymRef> Map;
-  Map.emplace(VarNode.index(), Val);
+  Map.emplace(VarRef.index(), Val);
   return substitute(R, Map);
 }
 

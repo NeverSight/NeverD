@@ -1,0 +1,62 @@
+//===- SymSimplifyPass.h - Semantic simplification of LLVM IR ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Collapses mixed boolean-arithmetic and related integer obfuscation on LLVM
+/// IR by measuring what a computation does rather than matching its shape.
+///
+/// This is the counterpart to the HighIR simplifier: the same engine, run one
+/// layer earlier, so the recovered form is what the rest of the optimizer and
+/// every downstream IR sees.  It is a leaf transform over integer expression
+/// trees; it does not touch control flow, memory, or anything it cannot read
+/// exactly, so it composes with the ordinary optimization pipeline instead of
+/// standing apart from it.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PASS_IR_SYMSIMPLIFYPASS_H
+#define NEVERD_PASS_IR_SYMSIMPLIFYPASS_H
+
+#include "llvm/IR/PassManager.h"
+
+namespace llvm {
+class Function;
+} // namespace llvm
+
+namespace neverd {
+
+/// Function attribute NeverD's L1 obfuscation passes stamp on every definition
+/// they rewrite.  SymSimplifyPass skips any function carrying it: this pass
+/// measures away exactly the mixed boolean-arithmetic that obfuscation injects,
+/// so running it on obfuscated IR would take the obfuscation straight back off.
+/// The stamp is what lets an obfuscate-then-patch pipeline reuse one module
+/// without the simplifier and the obfuscator undoing each other.
+inline constexpr char kObfuscatedFnAttr[] = "neverd-obfuscated";
+
+/// Rewrites integer expressions into the shortest sequence computing the same
+/// value, using measurement rather than pattern matching.
+///
+/// Belongs in the same function pass manager as InstCombine, and immediately
+/// after it: the canonical form InstCombine leaves is the cleanest thing to
+/// measure, and the compact result of a measurement is the cleanest thing for
+/// another InstCombine to finish.  Neither reaches the other's fixed point
+/// alone -- an expression mixing `+ - *` with `& | ^ ~` blocks every rule
+/// InstCombine can state, and the arithmetic residue this pass leaves is what
+/// InstCombine folds best.
+struct SymSimplifyPass : public llvm::PassInfoMixin<SymSimplifyPass> {
+  llvm::PreservedAnalyses run(llvm::Function &F,
+                              llvm::FunctionAnalysisManager &FAM);
+
+  /// Standalone entry point that instantiates no PassManager template, so a
+  /// caller in a different image than libneverd can apply the transform without
+  /// tripping an AnalysisKey ODR violation (mirrors the L1 obfuscation passes).
+  /// Returns the number of expression roots rewritten.
+  static unsigned simplify(llvm::Function &F);
+};
+
+} // namespace neverd
+
+#endif // NEVERD_PASS_IR_SYMSIMPLIFYPASS_H

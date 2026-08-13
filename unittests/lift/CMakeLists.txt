@@ -89,6 +89,7 @@ add_neverd_unittest(NeverDLiftTests
   MachOI386RelocationTests.cpp
   MedCallingConvTests.cpp
   COFFExceptionTests.cpp
+  ELFExceptionTests.cpp
   ExceptionCFGSeedTests.cpp
   ItaniumEHEmitterTests.cpp
   ItaniumEHStructurerTests.cpp
@@ -130,6 +131,20 @@ target_link_libraries(NeverDLiftTests PRIVATE
 if(TARGET neverd)
   add_dependencies(NeverDLiftTests neverd)
 endif()
+
+# Guards the obfuscate-then-patch barrier in isolation.  A tiny TU that links
+# the prebuilt NeverDPipeline archive (which carries SymSimplifyPass through its
+# PassIR component), so the stamp/skip contract can be pinned without rebuilding
+# or relinking the ~100-TU NeverDLiftTests binary.
+add_neverd_unittest(NeverDSymSimplifyGuardTests
+  SymSimplifyGuardTests.cpp
+  LINK_COMPONENTS
+  Pipeline
+)
+target_include_directories(NeverDSymSimplifyGuardTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
 
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 set(NEVERD_SYNTHETIC_WINDOWS_EH_ROOT

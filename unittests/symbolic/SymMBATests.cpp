@@ -108,6 +108,54 @@ TEST(SymMBA, HandlesACoefficientOtherThanOne) {
 }
 
 //===----------------------------------------------------------------------===//
+// Regions too wide to measure whole
+//===----------------------------------------------------------------------===//
+
+TEST(SymMBA, RecoversASumWiderThanOneMeasurementCanReach) {
+  // Nine carry-save additions side by side: eighteen inputs, well past what a
+  // single 2^t sweep can afford, but no input interacts with more than one
+  // other.  Measured in groups this costs 9 * 2^2 instead of 2^18, and every
+  // addition comes back.
+  MBAOptions Defaults;
+  ASSERT_LT(Defaults.MaxAtoms, 18u) << "this has to be the wide case";
+
+  simplifiesTo(
+      "(a ^ b) + 2 * (a & b) + (c ^ d) + 2 * (c & d) + (e ^ f) + 2 * (e & f) + "
+      "(g ^ h) + 2 * (g & h) + (i ^ j) + 2 * (i & j) + (k ^ l) + 2 * (k & l) + "
+      "(m ^ n) + 2 * (m & n) + (o ^ p) + 2 * (o & p) + (q ^ r) + 2 * (q & r)",
+      "a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r");
+}
+
+TEST(SymMBA, SizesEachMeasurementToItsOwnGroup) {
+  // A three-input tangle among two-input ones, plus a constant belonging to no
+  // group.  Each group has to be measured at its own width rather than the
+  // whole being refused for the width of the widest.
+  simplifiesTo("(x ^ y ^ z) + 2 * ((x & y) ^ (x & z) ^ (y & z)) + "
+               "(a ^ b) + 2 * (a & b) + (c ^ d) + 2 * (c & d) + "
+               "(e ^ f) + 2 * (e & f) + (g ^ h) + 2 * (g & h) + "
+               "(i ^ j) + 2 * (i & j) + (k ^ l) + 2 * (k & l) + "
+               "(m ^ n) + 2 * (m & n) + 7",
+               "x + y + z + a + b + c + d + e + f + g + h + i + j + k + l + "
+               "m + n + 7");
+}
+
+TEST(SymMBA, LeavesAWideExpressionWhoseInputsAreGenuinelyTangled) {
+  // Every input reaches every other through the terms, so there are no
+  // independent groups to measure and the width is a property of the
+  // expression.  Refusing it is the honest answer; returning something
+  // unverified would not be.
+  const char *Tangled = "(a & b & c & d & e & f & g & h & i & j & k & l & m & "
+                        "n & o & p & q & r) + (a | b | c | d | e | f | g | h | "
+                        "i | j | k | l | m | n | o | p | q | r)";
+  EXPECT_EQ(simplified(Tangled), simplified(Tangled))
+      << "the solver must at least be deterministic about declining";
+  SymContext Ctx;
+  SymParseResult Parsed = parseSymExpr(Ctx, Tangled, W32);
+  ASSERT_TRUE(Parsed.ok()) << Parsed.Error;
+  EXPECT_FALSE(simplifyMBA(Ctx, Parsed.Root).Changed);
+}
+
+//===----------------------------------------------------------------------===//
 // Degree two
 //===----------------------------------------------------------------------===//
 

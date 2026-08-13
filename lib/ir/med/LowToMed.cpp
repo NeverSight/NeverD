@@ -179,10 +179,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
         MOp.CallSiteId = NextCallSiteId++;
 
       if (LOp.Output.Size > 0)
-        MOp.Output = varnodeToMedvar(LOp.Output);
+        MOp.Output = ndVarToMedVar(LOp.Output);
 
       for (uint8_t I = 0; I < LOp.NumInputs; ++I)
-        MOp.addInput(varnodeToMedvar(LOp.Inputs[I]));
+        MOp.addInput(ndVarToMedVar(LOp.Inputs[I]));
 
       MB.Ops.push_back(MOp);
 
@@ -204,7 +204,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
           Sp.Size = static_cast<uint16_t>(TRI.PointerSize);
           Sp.TheArch = TheArch;
           // Thread the SAME SSA variable the lifter uses for the stack pointer
-          // (varnodeToMedvar keys registers by (RegOff,Size) in RegVarMap).  A
+          // (ndVarToMedVar keys registers by (RegOff,Size) in RegVarMap).  A
           // hand-built MedVar would otherwise keep the default id 0 — a foreign
           // variable — so buildSsa would split SP into two SSA names and a
           // loop- carried SP would take this call's intermediate +imm value
@@ -432,7 +432,7 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
   // Pass 0: collect the instruction address and operand pairs of flag-setting
   // add/sub (adds/subs/cmp/cmn).  The lifter models these as an
   // INT_ADD/INT_SUB for the value plus carry/overflow flag ops
-  // (INT_CARRY/INT_SOVF/INT_SBOR).  Varnode storage is reused between machine
+  // (INT_CARRY/INT_SOVF/INT_SBOR).  Operand storage is reused between machine
   // instructions, so both the address and pair must match.  A matching op is a
   // comparison whose result is never a frame address, so it must not seed a
   // stack slot — otherwise a register that once held sp and was reused for
@@ -458,9 +458,9 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
         FlagArithPairs.insert({Op.Addr, B, A});
       }
 
-  // Pass 1: track which temp/register varnodes are frame_reg +/- const.  A
+  // Pass 1: track which temp/register operands are frame_reg +/- const.  A
   // definition kills an old association unless its opcode is one of the
-  // address-preserving forms handled below.  Varnode storage is routinely
+  // address-preserving forms handled below.  Operand storage is routinely
   // reused for unrelated data, so retaining an association across an
   // arbitrary redef is unsound even when the resulting phantom displacement
   // happens to be below kMaxFrameSize.
@@ -492,7 +492,7 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
     FrameDefsInBlock.clear();
     for (const auto &Op : Blk.Ops) {
       // Refine a frame-derived address at its actual use site.  Address
-      // varnodes are scratch storage and may be redefined later in the same
+      // operands are scratch storage and may be redefined later in the same
       // function, so a post-pass lookup in the final AddrMap state loses the
       // data width (or, worse, attributes it to the wrong displacement).
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
@@ -513,8 +513,8 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
         // A flag-setting compare (matching carry/overflow flag ops on the same
         // operands) is a comparison value, never a stack address, so it must
         // not seed a slot.  Clearing its output is essential when the
-        // comparison reuses a varnode that previously held a frame-derived
-        // value.
+        // comparison reuses an operand slot that previously held a
+        // frame-derived value.
         if (Op.NumInputs >= 2 &&
             FlagArithPairs.count(
                 {Op.Addr, VnKey(Op.Inputs[0]), VnKey(Op.Inputs[1])})) {
@@ -565,7 +565,7 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
 
           // Snapshotting Base above must precede this clear: address updates
           // are commonly in-place (`sp = sp - imm`), so output and frame input
-          // may be the same varnode.
+          // may be the same operand.
           ClearOutput(Op);
           if (IsTrackableOutput(Op)) {
             AddrMap[VnKey(Op.Output)] = Total;
@@ -636,7 +636,7 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
 // NdVar -> MedVar conversion
 //===----------------------------------------------------------------------===//
 
-MedVar LowToMedConverter::varnodeToMedvar(const NdVar &VN) {
+MedVar LowToMedConverter::ndVarToMedVar(const NdVar &VN) {
   MedVar MV;
   MV.Size = VN.Size;
 
