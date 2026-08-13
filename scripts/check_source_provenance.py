@@ -36,8 +36,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# This file necessarily spells every pattern it looks for.
+# The checker spells out every pattern it looks for, and its tests spell out
+# examples of text that must and must not match.  Both would otherwise report
+# themselves, which would make the check impossible to satisfy.
 SELF = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
+EXEMPT = frozenset({SELF, "scripts/tests/test_check_source_provenance.py"})
 
 TEXT_SUFFIXES = frozenset(
     {
@@ -216,7 +219,7 @@ def tracked_files() -> list[str]:
 def scan(paths: list[str]) -> list[str]:
     findings: list[str] = []
     for name in paths:
-        if name == SELF:
+        if name in EXEMPT:
             continue
         path = REPO_ROOT / name
         if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
@@ -255,8 +258,8 @@ def main() -> int:
         for finding in findings:
             print(f"error: {finding}", file=sys.stderr)
         print(
-            f"\n{len(findings)} provenance findings. Either remove the text, or "
-            f"add a reviewed entry to ALLOWED in {SELF} saying why it stays.",
+            f"\n{len(findings)} provenance findings. Either remove the text, "
+            f"or add a reviewed entry to ALLOWED in {SELF} saying why it stays.",
             file=sys.stderr,
         )
         return 1

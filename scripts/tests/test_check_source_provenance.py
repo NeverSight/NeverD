@@ -75,6 +75,14 @@ class ProvenanceScanTests(unittest.TestCase):
     def test_skips_files_it_cannot_read_as_text(self) -> None:
         self.assertEqual(self.scan("a.png", "Triton\n"), [])
 
+    def test_exempts_itself_and_its_own_tests(self) -> None:
+        # Both files necessarily contain examples of what is being looked for,
+        # so a check that scanned them could never pass.
+        self.assertIn("scripts/check_source_provenance.py", provenance.EXEMPT)
+        self.assertIn(
+            "scripts/tests/test_check_source_provenance.py", provenance.EXEMPT
+        )
+
 
 class ProvenanceOfThisRepositoryTests(unittest.TestCase):
     def test_no_finding_outside_developer_tooling(self) -> None:
