@@ -165,8 +165,10 @@ Published packages are selected from the host running CMake:
 | Linux x86_64 | `neverd-llvm-linux-x86_64.tar.xz` |
 | Windows x64 | `neverd-llvm-windows-x64.zip` |
 
-Each archive is checked against its published `.sha256` file before extraction
-under `~/.cache/neverd-llvm/<tag>/<arch>/` (or the path set by
+Each archive is checked against the digest pinned in
+`cmake/NeverDLLVMPrebuilt.cmake` — or its published `.sha256` file, for a tag
+those pins do not describe — before extraction under
+`~/.cache/neverd-llvm/<tag>/<arch>/` (or the path set by
 `NEVERD_LLVM_PREBUILT_CACHE_DIR`). The release build uses ccache on macOS and
 Linux. Windows clang-cl builds use sccache with the GitHub Actions cache
 backend; compiler caches only accelerate rebuilds and are never published as
@@ -191,12 +193,15 @@ gh workflow run neverd-release.yml \
 ```
 
 This replaces same-named assets but deliberately does not force-move the
-existing Git tag. Consumers cache by tag, so an in-place repair also requires
-removing the existing
-`~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` directory; a new `-rN` tag avoids
-that cache ambiguity. The workflow rejects accidental replacement unless the
-checkbox is enabled and rejects replacement entirely if GitHub marks the
-release immutable.
+existing Git tag. Refresh the digests pinned in
+`cmake/NeverDLLVMPrebuilt.cmake` as part of the same change: those digests,
+rather than the tag, are what names the build a NeverD revision expects, so a
+stale `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` is replaced on the next
+configure and an archive matching no pinned digest stops that configure with a
+checksum mismatch instead of surfacing later as a header the older package did
+not carry. A new `-rN` tag avoids the in-place rewrite altogether. The workflow
+rejects accidental replacement unless the checkbox is enabled and rejects
+replacement entirely if GitHub marks the release immutable.
 
 **Artifacts**
 

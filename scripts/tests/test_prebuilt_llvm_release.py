@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -277,7 +278,17 @@ message(STATUS
         processor: str,
         release_directory: Path,
         cache_directory: Path,
+        sha256: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        # A digest known before the fetch is what puts the cache under scrutiny
+        # at all; without one the module has nothing to compare a cached tree
+        # against and reuses it on sight.
+        pin = ""
+        if sha256 is not None:
+            pin = (
+                f'set(NEVERD_LLVM_PREBUILT_SHA256 "{sha256}" '
+                'CACHE STRING "" FORCE)\n'
+            )
         script = release_directory / "fetch.cmake"
         script.write_text(
             f"""
@@ -287,7 +298,7 @@ set(CMAKE_OSX_ARCHITECTURES "")
 set(NEVERD_LLVM_PREBUILT_TAG "test-tag" CACHE STRING "" FORCE)
 set(NEVERD_LLVM_PREBUILT_BASE_URL "{release_directory.as_uri()}" CACHE STRING "" FORCE)
 set(NEVERD_LLVM_PREBUILT_CACHE_DIR "{cache_directory.as_posix()}" CACHE PATH "" FORCE)
-include("{CONSUMER.as_posix()}")
+{pin}include("{CONSUMER.as_posix()}")
 neverd_fetch_prebuilt_llvm()
 message(STATUS "FETCHED_LLVM_DIR=${{LLVM_DIR}}")
 """.lstrip(),
@@ -383,6 +394,69 @@ message(STATUS "FETCHED_LLVM_DIR=${{LLVM_DIR}}")
             cached_archive = cache_directory / "test-tag" / "x86_64" / archive.name
             self.assertFalse(cached_archive.exists(), result.stdout)
 
+    # The release tag is republished in place, so the name of a cache
+    # directory says which tag it came from and nothing about which build.
+    # These two tests are what make the digest, rather than the tag, decide
+    # whether an extracted tree is still the one being asked for.
+    def test_a_cache_holding_the_expected_build_is_reused(self):
+        with tempfile.TemporaryDirectory(prefix="neverd-prebuilt-reuse-") as tmp:
+            temporary_root = Path(tmp)
+            release_directory = temporary_root / "release"
+            cache_directory = temporary_root / "cache"
+            release_directory.mkdir()
+            archive = self.create_test_package(
+                release_directory, "neverd-llvm-linux-x86_64", "tar.xz"
+            )
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+            first = self.run_fetcher(
+                "Linux", "x86_64", release_directory, cache_directory, digest
+            )
+            self.assertEqual(first.returncode, 0, first.stdout)
+            self.assertIn("downloading", first.stdout)
+
+            second = self.run_fetcher(
+                "Linux", "x86_64", release_directory, cache_directory, digest
+            )
+            self.assertEqual(second.returncode, 0, second.stdout)
+            self.assertIn("reusing cached", second.stdout)
+            self.assertNotIn("downloading", second.stdout)
+
+    def test_a_cache_holding_a_different_build_is_refetched(self):
+        with tempfile.TemporaryDirectory(prefix="neverd-prebuilt-stale-") as tmp:
+            temporary_root = Path(tmp)
+            release_directory = temporary_root / "release"
+            cache_directory = temporary_root / "cache"
+            release_directory.mkdir()
+            archive = self.create_test_package(
+                release_directory, "neverd-llvm-linux-x86_64", "tar.xz"
+            )
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+            first = self.run_fetcher(
+                "Linux", "x86_64", release_directory, cache_directory, digest
+            )
+            self.assertEqual(first.returncode, 0, first.stdout)
+
+            # What a republished tag looks like on disk: an extracted tree that
+            # came from bytes nobody is asking for any more.
+            stamp = (
+                cache_directory
+                / "test-tag"
+                / "x86_64"
+                / f"{archive.name}.stamp"
+            )
+            self.assertTrue(stamp.is_file(), first.stdout)
+            stamp.write_text(f"{'a' * 64}\n", encoding="ascii")
+
+            second = self.run_fetcher(
+                "Linux", "x86_64", release_directory, cache_directory, digest
+            )
+            self.assertEqual(second.returncode, 0, second.stdout)
+            self.assertIn("refetching", second.stdout)
+            self.assertIn("downloading", second.stdout)
+            self.assertEqual(stamp.read_text(encoding="ascii").strip(), digest)
+
     def test_cache_default_uses_userprofile_when_home_is_unset(self):
         with tempfile.TemporaryDirectory(
             prefix="neverd-prebuilt-home-"
@@ -418,6 +492,74 @@ message(STATUS "DEFAULT_CACHE=${{NEVERD_LLVM_PREBUILT_CACHE_DIR}}")
             )
 
 
+class PrebuiltLlvmPinTests(unittest.TestCase):
+    PACKAGES = {
+        "neverd-llvm-linux-x86_64": "_NEVERD_LLVM_PIN_LINUX_X86_64",
+        "neverd-llvm-macos-arm64": "_NEVERD_LLVM_PIN_MACOS_ARM64",
+        "neverd-llvm-windows-x64": "_NEVERD_LLVM_PIN_WINDOWS_X64",
+    }
+
+    def test_every_published_package_has_a_well_formed_pin(self):
+        source = CONSUMER.read_text(encoding="utf-8")
+
+        for package, variable in self.PACKAGES.items():
+            with self.subTest(package=package):
+                match = re.search(
+                    rf'set\({variable}\s+"([0-9a-f]{{64}})"\)', source
+                )
+                self.assertIsNotNone(
+                    match,
+                    f"{variable} must hold a lowercase 64-character SHA-256",
+                )
+
+    def resolve_pin(self, tag: str, package: str) -> str:
+        with tempfile.TemporaryDirectory(prefix="neverd-prebuilt-pin-") as tmp:
+            script = Path(tmp) / "pin.cmake"
+            script.write_text(
+                f"""
+set(NEVERD_LLVM_PREBUILT_TAG "{tag}" CACHE STRING "" FORCE)
+include("{CONSUMER.as_posix()}")
+_neverd_pinned_llvm_sha256(resolved "{package}")
+message(STATUS "PIN=[${{resolved}}]")
+""".lstrip(),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["cmake", "-P", str(script)],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout)
+            match = re.search(r"PIN=\[([0-9a-f]*)\]", result.stdout)
+            self.assertIsNotNone(match, result.stdout)
+            return match.group(1)
+
+    def test_the_pinned_tag_resolves_every_package(self):
+        source = CONSUMER.read_text(encoding="utf-8")
+        tag = re.search(
+            r'set\(NEVERD_LLVM_PREBUILT_PINNED_TAG "([^"]+)"\)', source
+        )
+        self.assertIsNotNone(tag, source)
+
+        for package in self.PACKAGES:
+            with self.subTest(package=package):
+                self.assertRegex(
+                    self.resolve_pin(tag.group(1), package), r"^[0-9a-f]{64}$"
+                )
+
+    # A caller who overrode the tag is asking for a build this file makes no
+    # claim about, so the pins must not be applied to it: doing so would reject
+    # a perfectly good archive for failing to match a digest describing an
+    # entirely different release.
+    def test_another_tag_resolves_no_pin(self):
+        for package in self.PACKAGES:
+            with self.subTest(package=package):
+                self.assertEqual(self.resolve_pin("some-other-tag", package), "")
+
+
 class PrebuiltLlvmDocumentationTests(unittest.TestCase):
     def test_readme_documents_hosts_rebuilds_and_caches(self):
         source = README.read_text(encoding="utf-8")
@@ -428,6 +570,7 @@ class PrebuiltLlvmDocumentationTests(unittest.TestCase):
             "Windows x64",
             "overwrite_existing_assets",
             "neverd-llvm-v23.0.0-r1",
+            "cmake/NeverDLLVMPrebuilt.cmake",
             "sccache",
             "GitHub Actions cache",
             ".cache/neverd-llvm/neverd-llvm-v23.0.0",
