@@ -27,6 +27,8 @@
 
 #include "neverd/pass/ir/ControlFlowRecoveryPass.h"
 
+#include "neverd/pass/ir/SymSimplifyPass.h"
+
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -140,22 +142,34 @@ bool threadThroughSlot(llvm::BasicBlock &Pred, const Dispatcher &D) {
     return false;
 
   llvm::Value *Written = Store->getValueOperand();
+  // The number is compared against the switch's case values, which is only
+  // meaningful at the width the switch reads.
+  if (Written->getType() != D.Switch->getCondition()->getType())
+    return false;
+
   llvm::Value *Condition = nullptr;
   llvm::BasicBlock *IfTrue = nullptr;
   llvm::BasicBlock *IfFalse = nullptr;
 
-  if (auto *Number = llvm::dyn_cast<llvm::ConstantInt>(Written)) {
-    IfTrue = caseFor(D.Switch, Number->getValue());
+  // The number need not be written as a literal.  An obfuscator hides which
+  // block runs next the same way it hides everything else, so the value is
+  // measured rather than merely read: what matters is that it cannot vary, not
+  // that it was spelled as a constant.
+  if (std::optional<llvm::APInt> Number =
+          SymSimplifyPass::constantValueOf(Written)) {
+    IfTrue = caseFor(D.Switch, *Number);
   } else if (auto *Choice = llvm::dyn_cast<llvm::SelectInst>(Written)) {
     // What a conditional branch becomes when it is flattened: the two block
     // numbers, picked between by the condition the branch used to test.
-    auto *Taken = llvm::dyn_cast<llvm::ConstantInt>(Choice->getTrueValue());
-    auto *NotTaken = llvm::dyn_cast<llvm::ConstantInt>(Choice->getFalseValue());
+    std::optional<llvm::APInt> Taken =
+        SymSimplifyPass::constantValueOf(Choice->getTrueValue());
+    std::optional<llvm::APInt> NotTaken =
+        SymSimplifyPass::constantValueOf(Choice->getFalseValue());
     if (!Taken || !NotTaken)
       return false;
     Condition = Choice->getCondition();
-    IfTrue = caseFor(D.Switch, Taken->getValue());
-    IfFalse = caseFor(D.Switch, NotTaken->getValue());
+    IfTrue = caseFor(D.Switch, *Taken);
+    IfFalse = caseFor(D.Switch, *NotTaken);
   } else {
     return false;
   }

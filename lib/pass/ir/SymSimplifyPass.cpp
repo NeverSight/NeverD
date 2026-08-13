@@ -628,22 +628,11 @@ bool foldOpaqueBranch(llvm::CondBrInst *Br,
   if (!Cond)
     return false;
 
-  sym::SymContext Ctx;
-  Translator Xlat(Ctx, /*CarryComparisons=*/true);
-  sym::SymRef Before = Xlat.in(Cond);
-  if (!Before.isValid())
-    return false;
-
-  sym::MBAOptions Opts;
-  Opts.MaxWork = std::numeric_limits<size_t>::max();
-  sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before, Opts);
-  sym::SymRef Folded = Res.Changed ? Res.Expr : Before;
-
   // Only a constant is worth taking.  A condition that merely got shorter is
   // still a branch, and rewriting it would mean materializing a comparison for
   // no gain the ordinary path has not already had a chance at.
-  std::optional<llvm::APInt> Value = Ctx.asConst(Folded);
-  if (!Value || Ctx.width(Folded) != 1)
+  std::optional<llvm::APInt> Value = SymSimplifyPass::constantValueOf(Cond);
+  if (!Value || Value->getBitWidth() != 1)
     return false;
 
   Br->setCondition(llvm::ConstantInt::get(
@@ -653,6 +642,28 @@ bool foldOpaqueBranch(llvm::CondBrInst *Br,
 }
 
 } // namespace
+
+std::optional<llvm::APInt> SymSimplifyPass::constantValueOf(llvm::Value *V) {
+  if (auto *Number = llvm::dyn_cast_or_null<llvm::ConstantInt>(V))
+    return Number->getValue();
+  // Only an instruction can be hiding a constant.  An argument or a global is
+  // whatever the caller passed, and measuring one would cost a translation to
+  // learn nothing.
+  if (!llvm::isa_and_nonnull<llvm::Instruction>(V) ||
+      !V->getType()->isIntegerTy())
+    return std::nullopt;
+
+  sym::SymContext Ctx;
+  Translator Xlat(Ctx, /*CarryComparisons=*/true);
+  sym::SymRef Before = Xlat.in(V);
+  if (!Before.isValid())
+    return std::nullopt;
+
+  sym::MBAOptions Opts;
+  Opts.MaxWork = std::numeric_limits<size_t>::max();
+  sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before, Opts);
+  return Ctx.asConst(Res.Changed ? Res.Expr : Before);
+}
 
 unsigned SymSimplifyPass::simplify(llvm::Function &F) {
   // A function the obfuscator stamped is off limits.  This pass measures away

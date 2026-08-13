@@ -27,10 +27,14 @@
 #ifndef NEVERD_PASS_IR_SYMSIMPLIFYPASS_H
 #define NEVERD_PASS_IR_SYMSIMPLIFYPASS_H
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/IR/PassManager.h"
+
+#include <optional>
 
 namespace llvm {
 class Function;
+class Value;
 } // namespace llvm
 
 namespace neverd {
@@ -62,6 +66,16 @@ struct SymSimplifyPass : public llvm::PassInfoMixin<SymSimplifyPass> {
   /// tripping an AnalysisKey ODR violation (mirrors the L1 obfuscation passes).
   /// Returns the number of expression roots rewritten.
   static unsigned simplify(llvm::Function &F);
+
+  /// The value \p V always holds, when measuring it says it holds one.
+  ///
+  /// Offered on its own because deciding a branch is not the only place a value
+  /// that cannot vary is worth spotting.  A flattened function computes the
+  /// number of the block to run next, and an obfuscator hides that number the
+  /// same way it hides everything else -- as arithmetic that no amount of
+  /// constant folding sees through, but that measuring collapses. Answering
+  /// with the number is what lets the control-flow recovery thread the jump.
+  static std::optional<llvm::APInt> constantValueOf(llvm::Value *V);
 };
 
 } // namespace neverd

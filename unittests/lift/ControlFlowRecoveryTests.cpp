@@ -195,6 +195,83 @@ TEST(ControlFlowRecovery, LeavesASwitchNoPredecessorDecides) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
+// A dispatcher whose next-block number is not written as a number.
+//
+// This is what a real flattening looks like once the obfuscator has been over
+// it: the block to run next is computed rather than stated, by arithmetic
+// arranged to be immune to folding.  `Vary` decides whether the computed value
+// actually depends on the inputs -- when it does not, the arithmetic is a
+// disguise and the jump is decided here; when it does, it is a real dispatch
+// and nothing may be threaded.
+llvm::Function *buildComputedDispatch(llvm::Module &M, llvm::StringRef Name,
+                                      uint32_t Case, bool Vary) {
+  llvm::LLVMContext &C = M.getContext();
+  auto *I32 = llvm::Type::getInt32Ty(C);
+  auto *FT = llvm::FunctionType::get(I32, {I32, I32}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
+
+  auto *Entry = llvm::BasicBlock::Create(C, "entry", F);
+  auto *Dispatch = llvm::BasicBlock::Create(C, "dispatch", F);
+  auto *One = llvm::BasicBlock::Create(C, "one", F);
+  auto *Other = llvm::BasicBlock::Create(C, "other", F);
+
+  llvm::Value *X = F->getArg(0);
+  llvm::Value *Y = F->getArg(1);
+
+  llvm::IRBuilder<> B(Entry);
+  auto *Slot = B.CreateAlloca(I32, nullptr, "state");
+  // `(x ^ y) + 2 * (x & y)` is `x + y`, so subtracting `x + y` leaves zero --
+  // an identity no amount of constant folding sees through, which is exactly
+  // why an obfuscator writes one.
+  llvm::Value *Mba =
+      B.CreateAdd(B.CreateXor(X, Y),
+                  B.CreateMul(B.CreateAnd(X, Y), llvm::ConstantInt::get(I32, 2)));
+  llvm::Value *Hidden = B.CreateSub(Mba, B.CreateAdd(X, Y));
+  if (Vary)
+    Hidden = B.CreateAdd(Hidden, X);
+  B.CreateStore(B.CreateAdd(Hidden, llvm::ConstantInt::get(I32, Case)), Slot);
+  B.CreateBr(Dispatch);
+
+  B.SetInsertPoint(Dispatch);
+  auto *Switch = B.CreateSwitch(B.CreateLoad(I32, Slot), Other, 1);
+  Switch->addCase(llvm::ConstantInt::get(I32, Case), One);
+
+  B.SetInsertPoint(One);
+  B.CreateRet(llvm::ConstantInt::get(I32, 11));
+  B.SetInsertPoint(Other);
+  B.CreateRet(llvm::ConstantInt::get(I32, 22));
+  return F;
+}
+
+TEST(ControlFlowRecovery, ThreadsANumberTheObfuscatorComputedRatherThanWrote) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F =
+      buildComputedDispatch(M, "computed", 0x9E3779B1u, /*Vary=*/false);
+
+  EXPECT_EQ(ControlFlowRecoveryPass::recover(*F), 1u) << printFunction(*F);
+  ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+
+  // The entry now names the case directly, and nothing reaches the switch.
+  auto *Br = llvm::dyn_cast<llvm::UncondBrInst>(F->getEntryBlock().getTerminator());
+  ASSERT_NE(Br, nullptr) << printFunction(*F);
+  EXPECT_EQ(Br->getSuccessor(0)->getName(), "one") << printFunction(*F);
+}
+
+TEST(ControlFlowRecovery, LeavesADispatchWhoseNumberReallyDependsOnTheInput) {
+  // The same arithmetic with one term that does not cancel.  Measuring has to
+  // come back with "this varies" rather than with a number, because threading
+  // here would send every call to one case.
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F =
+      buildComputedDispatch(M, "varies", 0x9E3779B1u, /*Vary=*/true);
+
+  EXPECT_EQ(ControlFlowRecoveryPass::recover(*F), 0u) << printFunction(*F);
+  EXPECT_EQ(countOf<llvm::SwitchInst>(*F), 1u);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
 // A slot whose address reaches a call could be written by that call, so the
 // value a predecessor stored is not the value the switch will read.
 TEST(ControlFlowRecovery, LeavesASlotWhoseAddressEscapes) {
