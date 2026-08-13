@@ -2,7 +2,12 @@ add_neverd_component_library(NeverDPipeline
   Pipeline.cpp
   PipelineDump.cpp
   PipelineFuncDetect.cpp
+  PipelineHighIR.cpp
+  PipelineLLVM.cpp
+  PipelineLowIR.cpp
+  PipelineMedIR.cpp
   PipelineOptimize.cpp
+  PipelinePatchLift.cpp
   PipelineReturnModeling.cpp
 
   LINK_COMPONENTS
