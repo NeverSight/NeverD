@@ -86,7 +86,7 @@ Capstone ライブラリは網羅しません。
 | `lib/debug` | DWARF、PDB、linker-map デバッグコンテキスト | IR |
 | `lib/sigs` | シグネチャ解析、データベース、マッチング | Loader |
 | `lib/libc` | 既知の libc 名と呼出モデルのサポート | 独立コンポーネント |
-| `lib/Support` | 共通のバイナリ読込み helper | Loader |
+| `lib/support` | 共通のバイナリ読込み helper | Loader |
 
 公開ヘッダーは `include/neverd` 以下で各領域に対応します。内部 C++ クラスを
 誤って SDK の一部にしないでください。安定した外部操作は純粋 C ヘッダーと、

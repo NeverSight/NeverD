@@ -11,7 +11,7 @@
 
 #include "neverd/decode/Decoder.h"
 
-#include "neverd/Support/Diagnostic.h"
+#include "neverd/support/Diagnostic.h"
 #include "neverd/decode/AArch64NativeDecode.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64Lifter.h"

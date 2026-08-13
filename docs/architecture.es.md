@@ -89,7 +89,7 @@ helper de CMake.
 | `lib/debug` | Contextos de depuración DWARF, PDB y linker-map | IR |
 | `lib/sigs` | Análisis, bases de datos y coincidencia de firmas | Loader |
 | `lib/libc` | Nombres libc conocidos y soporte del modelo de llamada | Componente independiente |
-| `lib/Support` | Helpers compartidos de carga binaria | Loader |
+| `lib/support` | Helpers compartidos de carga binaria | Loader |
 
 Los encabezados públicos reflejan estas áreas bajo `include/neverd`. Evite que
 una clase C++ interna pase a formar parte del SDK por accidente: las operaciones

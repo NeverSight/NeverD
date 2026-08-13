@@ -89,7 +89,7 @@ CMake-Helper bereitgestellten LLVM- und Capstone-Bibliotheken.
 | `lib/debug` | DWARF-, PDB- und Linker-Map-Debugkontexte | IR |
 | `lib/sigs` | Signaturparsing, Datenbanken und Matching | Loader |
 | `lib/libc` | Bekannte libc-Namen und Aufrufmodell-Unterstützung | Eigenständige Komponente |
-| `lib/Support` | Gemeinsame Hilfen zum Binärladen | Loader |
+| `lib/support` | Gemeinsame Hilfen zum Binärladen | Loader |
 
 Öffentliche Header spiegeln diese Bereiche unter `include/neverd`. Lassen Sie
 keine interne C++-Klasse versehentlich Teil des SDK werden: Stabile externe

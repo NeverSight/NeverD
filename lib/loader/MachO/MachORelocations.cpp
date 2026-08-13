@@ -6,7 +6,7 @@
 
 #include "neverd/loader/MachO/MachORelocations.h"
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 
 #include "llvm/BinaryFormat/MachO.h"

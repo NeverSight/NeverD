@@ -14,7 +14,7 @@
 
 #include "neverd/backend/codegen/COFF/COFFInplace.h"
 
-#include "neverd/Object/PELayout.h"
+#include "neverd/object/PELayout.h"
 #include "neverd/backend/codegen/COFF/COFFReloc.h"
 
 #define DEBUG_TYPE "neverd-coff-inplace"

@@ -85,7 +85,7 @@ backend 라이브러리에 두고, pipeline은 알고리즘을 흡수하지 말�
 | `lib/debug` | DWARF, PDB, linker-map 디버그 context | IR |
 | `lib/sigs` | 시그니처 파싱, 데이터베이스, 매칭 | Loader |
 | `lib/libc` | 알려진 libc 이름과 호출 모델 지원 | 독립 구성 요소 |
-| `lib/Support` | 공유 바이너리 로드 helper | Loader |
+| `lib/support` | 공유 바이너리 로드 helper | Loader |
 
 공개 헤더는 `include/neverd` 아래에서 이 영역들을 반영합니다. 내부 C++ 클래스가
 실수로 SDK의 일부가 되지 않게 하세요. 안정적인 외부 작업은 순수 C 헤더와 책임이

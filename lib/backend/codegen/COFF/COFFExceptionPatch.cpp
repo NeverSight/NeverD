@@ -6,9 +6,9 @@
 
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 
-#include "neverd/Object/PELayout.h"
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/object/PELayout.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/loader/BinaryImage.h"

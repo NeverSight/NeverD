@@ -7,7 +7,7 @@
 #include "SBFFixtureBuilder.h"
 #include "gtest/gtest.h"
 
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/support/BinaryLoading.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Object/ELFTypes.h"

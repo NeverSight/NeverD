@@ -14,7 +14,7 @@
 #include "neverd/backend/codegen/MachO/MachOInplace.h"
 
 #include "neverd/ArchSupport.h"
-#include "neverd/Object/MachOLayout.h"
+#include "neverd/object/MachOLayout.h"
 #include "neverd/backend/codegen/MachO/MachOReloc.h"
 
 #include "llvm/BinaryFormat/MachO.h"

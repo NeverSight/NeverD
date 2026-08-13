@@ -15,7 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 

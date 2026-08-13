@@ -7,9 +7,9 @@
 #include "NeverDLiftFixture.h"
 #include "gtest/gtest.h"
 
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/BinaryLoading.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/MachO/MachORelocations.h"

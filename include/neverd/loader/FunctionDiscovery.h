@@ -15,7 +15,7 @@
 #ifndef NEVERD_LOADER_FUNCTIONDISCOVERY_H
 #define NEVERD_LOADER_FUNCTIONDISCOVERY_H
 
-#include "neverd/Support/ProloguePatterns.h"
+#include "neverd/support/ProloguePatterns.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Debug.h"

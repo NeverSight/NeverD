@@ -13,8 +13,8 @@
 #ifndef NEVERD_OBJECT_MACHOLAYOUT_H
 #define NEVERD_OBJECT_MACHOLAYOUT_H
 
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/MachO.h"

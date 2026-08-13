@@ -6,8 +6,8 @@
 
 #include "neverd/loader/Go/GoRuntimeEH.h"
 
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/DirectBranch.h"
 
 #include "llvm/ADT/DenseMap.h"

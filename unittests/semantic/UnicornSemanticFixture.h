@@ -20,7 +20,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 
 #include <unicorn/unicorn.h>
 

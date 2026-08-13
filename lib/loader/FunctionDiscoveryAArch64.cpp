@@ -13,7 +13,7 @@
 
 #include "FunctionDiscoveryDetail.h"
 
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include <cstring>
 

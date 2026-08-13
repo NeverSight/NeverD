@@ -11,7 +11,7 @@
 
 #include "neverd/pass/mir/NOPPass.h"
 
-#include "neverd/Support/TargetCodegenInfo.h"
+#include "neverd/support/TargetCodegenInfo.h"
 
 #define DEBUG_TYPE "neverd-nop-pass"
 #include "llvm/Support/Debug.h"

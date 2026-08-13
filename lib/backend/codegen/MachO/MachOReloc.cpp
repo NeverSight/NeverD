@@ -13,9 +13,9 @@
 
 #include "neverd/backend/codegen/MachO/MachOReloc.h"
 
-#include "neverd/Object/MachOLayout.h"
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/object/MachOLayout.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/MachO.h"

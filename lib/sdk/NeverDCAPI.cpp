@@ -22,7 +22,7 @@
 #include "SessionImpl.h"
 
 #include "neverd/Common.h"
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/support/BinaryLoading.h"
 #include "neverd/debug/DWARFLoader.h"
 #include "neverd/sdk/NeverDPlugin.h"
 

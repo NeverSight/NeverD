@@ -6,9 +6,9 @@
 
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 
-#include "neverd/Object/MachOLayout.h"
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/MachOLayout.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/MachO.h"

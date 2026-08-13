@@ -6,8 +6,8 @@
 
 #include "neverd/loader/DWARF/EHFrame.h"
 
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/DwarfEH.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/DwarfEH.h"
 
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/Debug.h"

@@ -13,7 +13,7 @@
 
 #include "neverd/backend/codegen/ELF/ELFReloc.h"
 
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/loader/BinaryImage.h"
 

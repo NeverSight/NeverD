@@ -14,7 +14,7 @@
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 
 #include "neverd/ArchSupport.h"
-#include "neverd/Object/MachOLayout.h"
+#include "neverd/object/MachOLayout.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/loader/BinaryImage.h"
 

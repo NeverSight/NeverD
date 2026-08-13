@@ -8,7 +8,7 @@
 
 #include "FunctionDiscoveryDetail.h"
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"

@@ -158,7 +158,7 @@ inline bool isELFExecutableMapSection(llvm::StringRef Name) {
     return true;
   return llvm::StringSwitch<bool>(Name)
 #define ELF_EXECUTABLE_MAP_SECTION(Section) .Case(Section, true)
-#include "neverd/Object/ELFExecutableMapSections.inc"
+#include "neverd/object/ELFExecutableMapSections.inc"
 #undef ELF_EXECUTABLE_MAP_SECTION
       .Default(false);
 }
@@ -171,7 +171,7 @@ inline bool isMachOExecutableMapSection(llvm::StringRef Segment,
     return false;
   return llvm::StringSwitch<bool>(Section)
 #define MACHO_EXECUTABLE_MAP_SECTION(SectionName) .Case(SectionName, true)
-#include "neverd/Object/MachOExecutableMapSections.inc"
+#include "neverd/object/MachOExecutableMapSections.inc"
 #undef MACHO_EXECUTABLE_MAP_SECTION
       .Default(false);
 }

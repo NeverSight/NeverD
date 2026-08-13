@@ -6,8 +6,8 @@
 
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 
-#include "neverd/Object/ELFLayout.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/ELFLayout.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/ELF.h"

@@ -11,7 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/Support/TargetCodegenInfo.h"
+#include "neverd/support/TargetCodegenInfo.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"

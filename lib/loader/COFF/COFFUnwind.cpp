@@ -4,8 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/COFF/COFFUnwindARM.h"

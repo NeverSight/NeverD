@@ -22,7 +22,7 @@
 #ifndef NEVERD_BACKEND_CODEGEN_BINARYREWRITER_H
 #define NEVERD_BACKEND_CODEGEN_BINARYREWRITER_H
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/codegen/RelocResolver.h"
 #include "neverd/loader/BinaryImage.h"

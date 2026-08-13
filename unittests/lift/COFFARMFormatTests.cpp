@@ -7,13 +7,13 @@
 #include "gtest/gtest.h"
 
 #include "NeverDLiftFixture.h"
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/BinaryLoading.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/FunctionDiscovery.h"
 

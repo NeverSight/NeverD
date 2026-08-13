@@ -9,9 +9,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/support/BinaryLoading.h"
 
-#include "neverd/Support/TextEncoding.h"
+#include "neverd/support/TextEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Error.h"

@@ -6,8 +6,8 @@
 
 #include "neverd/loader/MachO/CompactUnwind.h"
 
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 
 #include "llvm/Support/Debug.h"

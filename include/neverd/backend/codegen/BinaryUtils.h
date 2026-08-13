@@ -8,9 +8,9 @@
 /// Codegen-layer utilities for binary patching: object-file creation from
 /// memory buffers and cross-format symbol name resolution.
 ///
-/// Format-specific header parsing lives in neverd/Object/*.h (mirrors
+/// Format-specific header parsing lives in neverd/object/*.h (mirrors
 /// llvm/Object/).  Low-level endian helpers live in
-/// neverd/Support/BinaryEncoding.h.
+/// neverd/support/BinaryEncoding.h.
 ///
 //===----------------------------------------------------------------------===//
 

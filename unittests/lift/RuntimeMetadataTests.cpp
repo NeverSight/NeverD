@@ -6,8 +6,8 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/BinaryLoading.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"

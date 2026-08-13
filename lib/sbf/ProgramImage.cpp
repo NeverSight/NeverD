@@ -6,7 +6,7 @@
 
 #include "neverd/sbf/ProgramImage.h"
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/sbf/Opcodes.h"
 #include "neverd/sbf/Relocations.h"

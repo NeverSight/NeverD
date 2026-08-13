@@ -14,7 +14,7 @@
 
 #include "neverd/backend/codegen/ELF/ELFInplace.h"
 
-#include "neverd/Object/ELFLayout.h"
+#include "neverd/object/ELFLayout.h"
 #include "neverd/backend/codegen/ELF/ELFReloc.h"
 
 #include "llvm/BinaryFormat/ELF.h"

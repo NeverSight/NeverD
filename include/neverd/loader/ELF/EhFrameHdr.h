@@ -14,8 +14,8 @@
 #ifndef NEVERD_LOADER_ELF_EHFRAMEHDR_H
 #define NEVERD_LOADER_ELF_EHFRAMEHDR_H
 
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/DwarfEH.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/DwarfEH.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Debug.h"

@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/Support/TextEncoding.h"
+#include "neverd/support/TextEncoding.h"
 
 #include "llvm/Support/ConvertUTF.h"
 

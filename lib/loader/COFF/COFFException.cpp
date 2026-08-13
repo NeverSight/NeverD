@@ -6,7 +6,7 @@
 
 #include "neverd/loader/COFF/COFFException.h"
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/COFF/COFFDelphiEH.h"
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/LanguageRuntime.h"

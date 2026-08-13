@@ -12,9 +12,9 @@
 
 #include "NeverDLiftFixture.h"
 
-#include "neverd/Object/PELayout.h"
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/object/PELayout.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryLoading.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
 #include "neverd/decode/Decoder.h"

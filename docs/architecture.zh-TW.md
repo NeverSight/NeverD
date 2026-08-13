@@ -81,7 +81,7 @@ NeverD 相依，不窮舉 CMake helper 統一提供的 LLVM 與 Capstone 程式�
 | `lib/debug` | DWARF、PDB 與 linker-map 除錯內容 | IR |
 | `lib/sigs` | 簽章解析、資料庫與比對 | Loader |
 | `lib/libc` | 已知 libc 名稱與呼叫模型支援 | 獨立元件 |
-| `lib/Support` | 共用二進位載入 helper | Loader |
+| `lib/support` | 共用二進位載入 helper | Loader |
 
 公開標頭在 `include/neverd` 下對應這些區域。不要意外讓內部 C++ 類別成為 SDK
 的一部分：穩定的外部操作應放在純 C 標頭及職責明確的

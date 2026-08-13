@@ -15,11 +15,11 @@
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
 
-#include "neverd/Object/ELFLayout.h"
-#include "neverd/Object/MachOLayout.h"
-#include "neverd/Object/PELayout.h"
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/TargetCodegenInfo.h"
+#include "neverd/object/ELFLayout.h"
+#include "neverd/object/MachOLayout.h"
+#include "neverd/object/PELayout.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/TargetCodegenInfo.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFInplace.h"
 #include "neverd/backend/codegen/COFF/COFFPatch.h"

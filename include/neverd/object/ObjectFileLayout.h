@@ -13,9 +13,9 @@
 #ifndef NEVERD_OBJECT_OBJECTFILELAYOUT_H
 #define NEVERD_OBJECT_OBJECTFILELAYOUT_H
 
-#include "neverd/Object/ELFLayout.h"
-#include "neverd/Object/MachOLayout.h"
-#include "neverd/Object/PELayout.h"
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/ELFLayout.h"
+#include "neverd/object/MachOLayout.h"
+#include "neverd/object/PELayout.h"
+#include "neverd/object/SectionNames.h"
 
 #endif // NEVERD_OBJECT_OBJECTFILELAYOUT_H

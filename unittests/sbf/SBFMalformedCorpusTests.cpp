@@ -7,7 +7,7 @@
 #include "SBFFixtureBuilder.h"
 #include "gtest/gtest.h"
 
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/support/BinaryLoading.h"
 #include "neverd/sbf/Analyzer.h"
 #include "neverd/sbf/Interpreter.h"
 

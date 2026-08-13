@@ -23,7 +23,7 @@
 
 #include "MapParsers.h"
 
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"

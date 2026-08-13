@@ -6,9 +6,9 @@
 
 #include "neverd/loader/DWARF/ItaniumEH.h"
 
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/DwarfEH.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/DwarfEH.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/LanguageRuntime.h"

@@ -13,7 +13,7 @@
 #ifndef NEVERD_OBJECT_ELFLAYOUT_H
 #define NEVERD_OBJECT_ELFLAYOUT_H
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"

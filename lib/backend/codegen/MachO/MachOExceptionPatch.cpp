@@ -6,9 +6,9 @@
 
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 
-#include "neverd/Object/MachOLayout.h"
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/MachOLayout.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 
 #include "llvm/BinaryFormat/MachO.h"

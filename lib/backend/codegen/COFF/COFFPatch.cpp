@@ -14,7 +14,7 @@
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
 
 #include "neverd/ArchSupport.h"
-#include "neverd/Object/PELayout.h"
+#include "neverd/object/PELayout.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 #include "neverd/backend/codegen/COFF/COFFReloc.h"

@@ -14,8 +14,8 @@
 #include "PipelineReturnModeling.h"
 
 #include "neverd/Limits.h"
-#include "neverd/Support/Diagnostic.h"
-#include "neverd/Support/Parallel.h"
+#include "neverd/support/Diagnostic.h"
+#include "neverd/support/Parallel.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/evm/Analyzer.h"

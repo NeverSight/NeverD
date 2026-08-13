@@ -15,7 +15,7 @@
 #include "neverd/ir/low/FuncDetector.h"
 
 #include "neverd/Limits.h"
-#include "neverd/Support/Parallel.h"
+#include "neverd/support/Parallel.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/AArch64Lifter.h"
 

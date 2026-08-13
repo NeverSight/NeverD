@@ -18,7 +18,7 @@
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/CodeGen.h"
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/pass/mir/MIRPass.h"
 #include "neverd/pass/mir/NOPPass.h"
 

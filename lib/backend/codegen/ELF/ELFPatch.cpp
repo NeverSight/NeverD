@@ -14,9 +14,9 @@
 #include "neverd/backend/codegen/ELF/ELFPatch.h"
 
 #include "neverd/ArchSupport.h"
-#include "neverd/Object/ELFLayout.h"
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/ELFLayout.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/backend/codegen/ELF/ELFExceptionPatch.h"
 
 #include "llvm/ADT/StringExtras.h"

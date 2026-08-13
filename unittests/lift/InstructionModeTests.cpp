@@ -1,5 +1,5 @@
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/TargetCodegenInfo.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/TargetCodegenInfo.h"
 #include "neverd/decode/Decoder.h"
 
 #include "gtest/gtest.h"

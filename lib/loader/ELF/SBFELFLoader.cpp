@@ -6,7 +6,7 @@
 
 #include "neverd/loader/ELF/SBFELFLoader.h"
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/sbf/SBFConstants.h"
 #include "neverd/sbf/Version.h"
 

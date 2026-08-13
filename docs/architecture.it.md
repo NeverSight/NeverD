@@ -90,7 +90,7 @@ CMake.
 | `lib/debug` | Contesti di debug DWARF, PDB e linker-map | IR |
 | `lib/sigs` | Parsing, database e matching delle firme | Loader |
 | `lib/libc` | Nomi libc noti e supporto del modello di chiamata | Componente autonomo |
-| `lib/Support` | Helper condivisi per il caricamento binario | Loader |
+| `lib/support` | Helper condivisi per il caricamento binario | Loader |
 
 Gli header pubblici rispecchiano queste aree sotto `include/neverd`. Evita che
 una classe C++ interna diventi accidentalmente parte dell’SDK: le operazioni

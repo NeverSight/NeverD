@@ -16,7 +16,7 @@
 #include "NeverDCLI.h"
 
 #include "neverd/Common.h"
-#include "neverd/Support/StackSizeMain.h"
+#include "neverd/support/StackSizeMain.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"

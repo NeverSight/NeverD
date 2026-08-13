@@ -28,7 +28,7 @@
 
 #include "../TestProcess.h"
 #include "UnicornSemanticFixture.h"
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/sdk/NeverDCAPI.h"
 

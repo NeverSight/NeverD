@@ -14,7 +14,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <gtest/gtest.h>

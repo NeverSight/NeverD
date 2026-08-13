@@ -14,7 +14,7 @@
 #include "neverd/loader/MachO/MachOLoader.h"
 
 #include "neverd/Limits.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/Go/GoRuntimeEH.h"
 #include "neverd/loader/LanguageRuntime.h"

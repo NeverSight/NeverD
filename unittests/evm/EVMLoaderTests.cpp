@@ -6,7 +6,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/Support/BinaryLoading.h"
+#include "neverd/support/BinaryLoading.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/SmallString.h"

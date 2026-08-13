@@ -18,7 +18,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/libc/LibCNames.h"
 

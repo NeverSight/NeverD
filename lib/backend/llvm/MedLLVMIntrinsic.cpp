@@ -17,7 +17,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-intrinsic"
-#include "neverd/Support/Diagnostic.h"
+#include "neverd/support/Diagnostic.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
 #include "llvm/ADT/StringExtras.h"

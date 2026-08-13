@@ -22,8 +22,8 @@
 #define NEVERD_LOADER_BINARYIMAGE_H
 
 #include "neverd/Common.h"
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/evm/EVMImageMetadata.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/sbf/SBFMetadata.h"
@@ -133,7 +133,7 @@ inline uint32_t ndToMachoProt(SegmentFlags F) {
 // Well-known section names — avoids scattered string literals
 // ===--------------------------------------------------------------------===//
 
-// section_names are defined in neverd/Object/SectionNames.h
+// section_names are defined in neverd/object/SectionNames.h
 // (included above) and re-exported here for backward compatibility.
 
 // ===--------------------------------------------------------------------===//

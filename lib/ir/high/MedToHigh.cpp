@@ -19,7 +19,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 
 #include "neverd/Limits.h"
-#include "neverd/Support/Diagnostic.h"
+#include "neverd/support/Diagnostic.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/ADT/StringExtras.h"

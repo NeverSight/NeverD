@@ -6,7 +6,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/Support/TextEncoding.h"
+#include "neverd/support/TextEncoding.h"
 #include "neverd/lift/LiftCommon.h"
 
 #include <vector>

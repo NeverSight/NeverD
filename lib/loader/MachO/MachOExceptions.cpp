@@ -6,8 +6,8 @@
 
 #include "neverd/loader/MachO/MachOExceptions.h"
 
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/LanguageRuntime.h"

@@ -26,7 +26,7 @@
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
-#include "neverd/Support/Diagnostic.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"

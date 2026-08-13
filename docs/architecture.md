@@ -86,7 +86,7 @@ libraries supplied by the CMake helper.
 | `lib/debug` | DWARF, PDB, and linker-map debug contexts | IR |
 | `lib/sigs` | Signature parsing, databases, and matching | Loader |
 | `lib/libc` | Known libc names and call-model support | Standalone component |
-| `lib/Support` | Shared binary-loading helpers | Loader |
+| `lib/support` | Shared binary-loading helpers | Loader |
 
 Public headers mirror these areas under `include/neverd`. Avoid making an
 internal C++ class part of the SDK by accident: stable external operations

@@ -15,7 +15,7 @@
 #include "neverd/loader/COFF/COFFLoader.h"
 
 #include "neverd/Limits.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/COFF/COFFDelphiEH.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"

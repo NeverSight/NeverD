@@ -6,7 +6,7 @@
 
 #include "neverd/loader/ObjC/ObjCEH.h"
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/LanguageRuntime.h"
 

@@ -18,7 +18,7 @@
 #define NEVERD_SUPPORT_PROLOGUEPATTERNS_H
 
 #include "neverd/Common.h"
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include <cstdint>
 #include <cstring>

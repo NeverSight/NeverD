@@ -54,7 +54,7 @@ namespace {
 bool isELFRuntimeScaffold(llvm::StringRef Name) {
   return llvm::StringSwitch<bool>(Name)
 #define ELF_RUNTIME_SYMBOL(Symbol) .Case(Symbol, true)
-#include "neverd/Object/ELFRuntimeSymbols.inc"
+#include "neverd/object/ELFRuntimeSymbols.inc"
 #undef ELF_RUNTIME_SYMBOL
       .Default(false);
 }

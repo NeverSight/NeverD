@@ -16,7 +16,7 @@
 #include "PipelineReturnModeling.h"
 
 #include "neverd/Common.h"
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedTypePass.h"

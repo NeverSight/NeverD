@@ -21,8 +21,8 @@
 #define NEVERD_SUPPORT_TARGETCODEGENINFO_H
 
 #include "neverd/Common.h"
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include <cstdint>
 #include <cstring>

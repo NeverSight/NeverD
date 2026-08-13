@@ -6,7 +6,7 @@
 
 #include "neverd/loader/DirectBranch.h"
 
-#include "neverd/Support/BinaryEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
 
 namespace neverd {
 namespace {

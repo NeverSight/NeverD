@@ -6,9 +6,9 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/Object/SectionNames.h"
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/FunctionDiscovery.h"
 

@@ -18,7 +18,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Limits.h"
-#include "neverd/Support/Diagnostic.h"
+#include "neverd/support/Diagnostic.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"

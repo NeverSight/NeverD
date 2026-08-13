@@ -14,7 +14,7 @@
 #include "MedABIPassDetail.h"
 
 #include "neverd/Limits.h"
-#include "neverd/Object/SectionNames.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
 

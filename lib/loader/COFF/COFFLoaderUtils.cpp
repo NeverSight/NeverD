@@ -6,8 +6,8 @@
 
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 
-#include "neverd/Support/BinaryEncoding.h"
-#include "neverd/Support/ISAEncoding.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/loader/FunctionDiscovery.h"
 
 #include "llvm/ADT/StringExtras.h"
