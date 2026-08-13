@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -50,9 +51,21 @@ const fs::path &processTempDirectory() {
     DirectoryOwner() {
       const auto Stamp =
           std::chrono::steady_clock::now().time_since_epoch().count();
-      Path = fs::temp_directory_path() /
-             ("neverd-python-runtime-process-" + std::to_string(Stamp));
-      fs::create_directories(Path);
+      const fs::path Root = fs::temp_directory_path();
+      for (unsigned Attempt = 0; Attempt != 1000; ++Attempt) {
+        const fs::path Candidate =
+            Root / ("neverd-python-runtime-process-" + std::to_string(Stamp) +
+                    "-" + std::to_string(Attempt));
+        std::error_code EC;
+        if (fs::create_directory(Candidate, EC)) {
+          Path = Candidate;
+          return;
+        }
+        if (EC)
+          throw fs::filesystem_error("could not create test directory",
+                                     Candidate, EC);
+      }
+      throw std::runtime_error("could not create a unique test directory");
     }
     ~DirectoryOwner() {
       std::error_code EC;
