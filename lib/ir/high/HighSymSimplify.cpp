@@ -618,7 +618,8 @@ void simplifyOne(ExprPtr &E) {
   // own canonical form, which is the right answer to what an expression *is*;
   // the question here is what to show someone, and a rewrite that saves
   // nothing only churns the output.
-  if (!Result.Changed || Result.SizeBefore < Result.SizeAfter + kMinGain)
+  if (!Result.Changed || Result.Evidence != sym::MBAEvidence::Derivation ||
+      Result.SizeBefore < Result.SizeAfter + kMinGain)
     return;
 
   ExprPtr After = Xlat.out(Result.Expr, Width);

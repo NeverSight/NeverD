@@ -56,14 +56,15 @@ std::string printFunction(const llvm::Function &F) {
 
 // `@f(i32 %x, i32 %y)` whose body is the carry-save spelling of `x + y`,
 //   (x ^ y) + 2*(x & y),
-// the canonical MBA rewriting of an addition.  It is at once what the simplifier
-// is meant to recover and what the obfuscator emits, so it doubles as the thing
-// that has to survive untouched once the function is stamped.
+// the canonical MBA rewriting of an addition.  It is at once what the
+// simplifier is meant to recover and what the obfuscator emits, so it doubles
+// as the thing that has to survive untouched once the function is stamped.
 llvm::Function *buildCarrySaveAdd(llvm::Module &M) {
   llvm::LLVMContext &C = M.getContext();
   auto *I32 = llvm::Type::getInt32Ty(C);
   auto *FT = llvm::FunctionType::get(I32, {I32, I32}, /*isVarArg=*/false);
-  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "f", &M);
+  auto *F =
+      llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "f", &M);
 
   auto *BB = llvm::BasicBlock::Create(C, "entry", F);
   llvm::IRBuilder<> B(BB);
@@ -76,9 +77,34 @@ llvm::Function *buildCarrySaveAdd(llvm::Module &M) {
   return F;
 }
 
+/// A carry-save spelling whose left input is supplied by \p MakeLeft.  It gives
+/// the poison-domain tests below a shape the solver would otherwise shorten
+/// from `(left ^ y) + 2*(left & y)` to `left + y`.
+llvm::Function *buildCarrySaveWithLeft(
+    llvm::Module &M, llvm::StringRef Name,
+    llvm::function_ref<llvm::Value *(llvm::IRBuilder<> &, llvm::Value *)>
+        MakeLeft) {
+  llvm::LLVMContext &C = M.getContext();
+  auto *I32 = llvm::Type::getInt32Ty(C);
+  auto *FT = llvm::FunctionType::get(I32, {I32, I32}, /*isVarArg=*/false);
+  auto *F =
+      llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
+
+  auto *BB = llvm::BasicBlock::Create(C, "entry", F);
+  llvm::IRBuilder<> B(BB);
+  llvm::Value *Left = MakeLeft(B, F->getArg(0));
+  llvm::Value *Y = F->getArg(1);
+  llvm::Value *Xor = B.CreateXor(Left, Y);
+  llvm::Value *And = B.CreateAnd(Left, Y);
+  llvm::Value *Two = B.CreateMul(And, llvm::ConstantInt::get(I32, 2));
+  B.CreateRet(B.CreateAdd(Xor, Two));
+  return F;
+}
+
 // Without the stamp the pass sees straight through the carry-save form; pinning
 // this on its own is what makes the skip test below meaningful rather than
-// vacuous (a pass that never fires would also "leave a stamped function alone").
+// vacuous (a pass that never fires would also "leave a stamped function
+// alone").
 TEST(SymSimplifyGuard, RewritesMixedBooleanArithmeticWhenUnstamped) {
   llvm::LLVMContext C;
   llvm::Module M("m", C);
@@ -119,9 +145,9 @@ TEST(SymSimplifyGuard, SweepsTheExpressionItRewroteAway) {
 llvm::Function *buildVanishingVariable(llvm::Module &M) {
   llvm::LLVMContext &C = M.getContext();
   auto *I32 = llvm::Type::getInt32Ty(C);
-  auto *FT =
-      llvm::FunctionType::get(I32, {I32, I32, I32}, /*isVarArg=*/false);
-  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "g", &M);
+  auto *FT = llvm::FunctionType::get(I32, {I32, I32, I32}, /*isVarArg=*/false);
+  auto *F =
+      llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "g", &M);
 
   auto *BB = llvm::BasicBlock::Create(C, "entry", F);
   llvm::IRBuilder<> B(BB);
@@ -163,12 +189,59 @@ TEST(SymSimplifyGuard, NeverGrowsTheInstructionCount) {
   EXPECT_EQ(instructionCount(*Plain), PlainBefore);
 }
 
-// The joint fixed point, checked through the real default pipeline rather than a
-// pass list assembled for the test.  optimizeModule wires SemanticFixedPointPass
-// exactly as production decompilation does; after it, the three-input MBA is
-// `x ^ z` and `%y` -- the input the value never truly depended on -- has no uses
-// left.  A single canonicalize/measure pairing would leave measurable residue;
-// reaching this state is what the alternation is for.
+// Undef and poison are not ordinary symbolic inputs.  Undef may choose a
+// different value at each use, while poison lies outside the engine's total
+// bitvector domain.  Turning either into one stable placeholder would make the
+// carry-save identity look applicable when LLVM does not grant that premise.
+TEST(SymSimplifyGuard, LeavesExplicitUndefAndPoisonOpaque) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+
+  llvm::Function *WithUndef = buildCarrySaveWithLeft(
+      M, "with_undef", [](llvm::IRBuilder<> &B, llvm::Value *X) {
+        return B.CreateXor(X, llvm::UndefValue::get(X->getType()));
+      });
+  llvm::Function *WithPoison = buildCarrySaveWithLeft(
+      M, "with_poison", [](llvm::IRBuilder<> &B, llvm::Value *X) {
+        return B.CreateXor(X, llvm::PoisonValue::get(X->getType()));
+      });
+
+  EXPECT_EQ(SymSimplifyPass::simplify(*WithUndef), 0u);
+  EXPECT_EQ(SymSimplifyPass::simplify(*WithPoison), 0u);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+// A total bitvector shift and an LLVM shift have different domains: the latter
+// produces poison when the amount is out of range.  Poison-generating flags
+// similarly narrow the domain of otherwise wrapping arithmetic.  Until those
+// preconditions are represented explicitly, the pass must not reason through
+// either operation or cancel it as an opaque placeholder.
+TEST(SymSimplifyGuard, LeavesPoisonGeneratingOperationsOpaque) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+
+  llvm::Function *WithOvershift = buildCarrySaveWithLeft(
+      M, "with_overshift", [](llvm::IRBuilder<> &B, llvm::Value *X) {
+        return B.CreateShl(
+            X, llvm::ConstantInt::get(X->getType(),
+                                      X->getType()->getIntegerBitWidth()));
+      });
+  llvm::Function *WithNSW = buildCarrySaveWithLeft(
+      M, "with_nsw", [](llvm::IRBuilder<> &B, llvm::Value *X) {
+        return B.CreateNSWAdd(X, llvm::ConstantInt::get(X->getType(), 1));
+      });
+
+  EXPECT_EQ(SymSimplifyPass::simplify(*WithOvershift), 0u);
+  EXPECT_EQ(SymSimplifyPass::simplify(*WithNSW), 0u);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+// The joint fixed point, checked through the real default pipeline rather than
+// a pass list assembled for the test.  optimizeModule wires
+// SemanticFixedPointPass exactly as production decompilation does; after it,
+// the three-input MBA is `x ^ z` and `%y` -- the input the value never truly
+// depended on -- has no uses left.  A single canonicalize/measure pairing would
+// leave measurable residue; reaching this state is what the alternation is for.
 TEST(SymSimplifyGuard, ReachesTheJointFixedPointThroughTheRealPipeline) {
   llvm::LLVMContext C;
   llvm::Module M("m", C);
@@ -245,7 +318,8 @@ llvm::Function *buildGuardedFunction(
   llvm::LLVMContext &C = M.getContext();
   auto *I32 = llvm::Type::getInt32Ty(C);
   auto *FT = llvm::FunctionType::get(I32, {I32, I32}, /*isVarArg=*/false);
-  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
+  auto *F =
+      llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
 
   auto *Entry = llvm::BasicBlock::Create(C, "entry", F);
   auto *Taken = llvm::BasicBlock::Create(C, "taken", F);
@@ -309,9 +383,8 @@ TEST(SymSimplifyGuard, FoldsAPredicateComparingTwoSpellingsOfOneValue) {
   llvm::Function *F = buildGuardedFunction(
       M, "opaque_mba",
       [](llvm::IRBuilder<> &B, llvm::Value *X, llvm::Value *Y) {
-        llvm::Value *Carry =
-            B.CreateMul(B.CreateAnd(X, Y),
-                        llvm::ConstantInt::get(X->getType(), 2));
+        llvm::Value *Carry = B.CreateMul(
+            B.CreateAnd(X, Y), llvm::ConstantInt::get(X->getType(), 2));
         llvm::Value *Mba = B.CreateAdd(B.CreateXor(X, Y), Carry);
         return B.CreateICmpEQ(Mba, B.CreateAdd(X, Y));
       });
@@ -328,8 +401,7 @@ TEST(SymSimplifyGuard, LeavesABranchThatIsAGenuineChoice) {
   llvm::LLVMContext C;
   llvm::Module M("m", C);
   llvm::Function *F = buildGuardedFunction(
-      M, "genuine",
-      [](llvm::IRBuilder<> &B, llvm::Value *X, llvm::Value *Y) {
+      M, "genuine", [](llvm::IRBuilder<> &B, llvm::Value *X, llvm::Value *Y) {
         return B.CreateICmpULT(X, Y);
       });
 

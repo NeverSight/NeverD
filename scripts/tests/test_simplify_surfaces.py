@@ -111,6 +111,7 @@ class SimplifySurfaceAgreementTests(unittest.TestCase):
                     "inputs": result.inputs,
                     "work": result.work,
                     "outcome": result.outcome.name.lower().replace("_", "-"),
+                    "evidence": result.evidence.name.lower(),
                 }
             )
         return out
@@ -150,6 +151,7 @@ class SimplifySurfaceAgreementTests(unittest.TestCase):
             "inputs",
             "work",
             "outcome",
+            "evidence",
         )
         for index, expression in enumerate(self.expressions):
             with self.subTest(expression=expression):

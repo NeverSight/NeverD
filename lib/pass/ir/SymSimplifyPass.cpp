@@ -31,6 +31,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/ConstantFolder.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -141,6 +142,19 @@ bool isTranslatable(const llvm::Value *V, bool WithComparisons) {
   return Tag != OpTag::None && (WithComparisons || Tag != OpTag::ICmp);
 }
 
+/// Whether \p I has the same domain in LLVM IR and in the engine's total
+/// bitvector algebra.
+///
+/// The engine deliberately gives every operator a value for every input.
+/// LLVM instructions carrying poison-generating flags, or operations such as
+/// an unchecked shift, have a smaller domain.  Looking through one would let a
+/// total-algebra identity turn poison into an ordinary value.  Keep the whole
+/// candidate opaque instead; a future translation can carry the precondition
+/// explicitly rather than silently dropping it.
+bool hasCompatibleSemantics(const llvm::Instruction &I) {
+  return !llvm::canCreatePoison(llvm::cast<llvm::Operator>(&I));
+}
+
 //===----------------------------------------------------------------------===//
 // LLVM IR <-> engine
 //===----------------------------------------------------------------------===//
@@ -180,7 +194,8 @@ private:
   }
 
   /// The operands \p I is descended through.
-  llvm::SmallVector<llvm::Value *, 2> children(const llvm::Instruction &I) const {
+  llvm::SmallVector<llvm::Value *, 2>
+  children(const llvm::Instruction &I) const {
     switch (tagOf(I)) {
     case OpTag::Trunc:
     case OpTag::ZExt:
@@ -309,6 +324,18 @@ sym::SymRef Translator::in(llvm::Value *Root) {
       continue;
     }
 
+    // An explicit undef may take a different value at each use, and poison is
+    // outside the engine's total value domain.  Likewise, do not cross an
+    // instruction that can introduce poison from otherwise ordinary operands.
+    // Aborting the candidate is stricter than standing an opaque variable in
+    // front of it: an algebraic rewrite could otherwise cancel that variable
+    // and erase the very condition the placeholder was meant to preserve.
+    if (llvm::isa<llvm::UndefValue, llvm::PoisonValue>(V))
+      return {};
+    if (const auto *I = llvm::dyn_cast<llvm::Instruction>(V);
+        I && isTranslatable(I, CarryComparisons) && !hasCompatibleSemantics(*I))
+      return {};
+
     if (!descend(V, V == Root)) {
       Memo[V] = leaf(V);
       continue;
@@ -337,8 +364,9 @@ sym::SymRef Translator::in(llvm::Value *Root) {
   return Memo.lookup(Root);
 }
 
-llvm::Value *Translator::out(sym::SymRef R, llvm::Instruction *At,
-                             llvm::SmallVectorImpl<llvm::Instruction *> &NewInsts) {
+llvm::Value *
+Translator::out(sym::SymRef R, llvm::Instruction *At,
+                llvm::SmallVectorImpl<llvm::Instruction *> &NewInsts) {
   llvm::LLVMContext &LLCtx = At->getContext();
 
   // Collecting through the inserter rather than diffing the block afterwards
@@ -416,27 +444,32 @@ llvm::Value *Translator::out(sym::SymRef R, llvm::Instruction *At,
       Result = Sources.lookup(Index);
       break;
     case sym::SymOp::Add:
-      Result = reduce([&](llvm::Value *X, llvm::Value *Y) { return B.CreateAdd(X, Y); });
+      Result = reduce(
+          [&](llvm::Value *X, llvm::Value *Y) { return B.CreateAdd(X, Y); });
       break;
     case sym::SymOp::Mul: {
-      // Negation is stored as a product with -1; `-x` reads better than `-1 * x`
-      // and folds the same.
+      // Negation is stored as a product with -1; `-x` reads better than `-1 *
+      // x` and folds the same.
       if (Ops.size() == 2 && Ctx.isConstOnes(Ops[0])) {
         llvm::Value *X = get(Ops[1]);
         Result = X ? B.CreateNeg(X) : nullptr;
       } else {
-        Result = reduce([&](llvm::Value *X, llvm::Value *Y) { return B.CreateMul(X, Y); });
+        Result = reduce(
+            [&](llvm::Value *X, llvm::Value *Y) { return B.CreateMul(X, Y); });
       }
       break;
     }
     case sym::SymOp::And:
-      Result = reduce([&](llvm::Value *X, llvm::Value *Y) { return B.CreateAnd(X, Y); });
+      Result = reduce(
+          [&](llvm::Value *X, llvm::Value *Y) { return B.CreateAnd(X, Y); });
       break;
     case sym::SymOp::Or:
-      Result = reduce([&](llvm::Value *X, llvm::Value *Y) { return B.CreateOr(X, Y); });
+      Result = reduce(
+          [&](llvm::Value *X, llvm::Value *Y) { return B.CreateOr(X, Y); });
       break;
     case sym::SymOp::Xor:
-      Result = reduce([&](llvm::Value *X, llvm::Value *Y) { return B.CreateXor(X, Y); });
+      Result = reduce(
+          [&](llvm::Value *X, llvm::Value *Y) { return B.CreateXor(X, Y); });
       break;
     case sym::SymOp::Not: {
       llvm::Value *X = get(Ctx.operand(Item.Ref, 0));
@@ -560,6 +593,8 @@ bool rewriteRoot(llvm::Instruction *Root,
   sym::SymContext Ctx;
   Translator Xlat(Ctx);
   sym::SymRef Before = Xlat.in(Root);
+  if (!Before.isValid())
+    return false;
   if (Ctx.dagSize(Before) < kMinInterestingNodes)
     return false;
 
@@ -569,7 +604,9 @@ bool rewriteRoot(llvm::Instruction *Root,
   // found, so it terminates on the finite DAG regardless of how far it reaches.
   Opts.MaxWork = std::numeric_limits<size_t>::max();
   sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before, Opts);
-  if (!Res.Changed)
+  // LLVM IR is a production rewrite surface: a check can find a counterexample
+  // but only a derivation can authorize replacing the program.
+  if (!Res.Changed || Res.Evidence != sym::MBAEvidence::Derivation)
     return false;
 
   llvm::SmallVector<llvm::Instruction *, 32> NewInsts;
@@ -662,6 +699,8 @@ std::optional<llvm::APInt> SymSimplifyPass::constantValueOf(llvm::Value *V) {
   sym::MBAOptions Opts;
   Opts.MaxWork = std::numeric_limits<size_t>::max();
   sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before, Opts);
+  if (Res.Changed && Res.Evidence != sym::MBAEvidence::Derivation)
+    return std::nullopt;
   return Ctx.asConst(Res.Changed ? Res.Expr : Before);
 }
 

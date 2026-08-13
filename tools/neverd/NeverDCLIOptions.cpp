@@ -576,14 +576,13 @@ cl::opt<unsigned> SimplifyMaxAtoms(
 
 cl::opt<unsigned long long> SimplifyMaxWork(
     "max-work",
-    cl::desc("Graph nodes the layered walk may measure over before it stops "
-             "starting new measurements (0 keeps the default)"),
+    cl::desc("Work budget for the layered walk and combinatorial polynomial "
+             "search (0 keeps the default)"),
     cl::init(0), cl::sub(SimplifyCmd));
 
 cl::opt<bool> SimplifyExhaustive(
     "exhaustive",
-    cl::desc("Remove the work budget entirely, so every region is measured "
-             "however long the walk takes"),
+    cl::desc("Remove the walk and polynomial-search work budget"),
     cl::sub(SimplifyCmd));
 
 cl::opt<unsigned> SimplifyVerifySamples(

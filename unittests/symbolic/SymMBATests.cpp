@@ -14,11 +14,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/symbolic/SymMBA.h"
-
-#include "neverd/symbolic/SymParse.h"
-
 #include "gtest/gtest.h"
+
+#include "neverd/symbolic/SymMBA.h"
+#include "neverd/symbolic/SymParse.h"
 
 #include <random>
 
@@ -180,12 +179,15 @@ TEST(SymMBA, DeclinesAMaskSplitThatACarryWouldCross) {
   // The column split is exact only while no carry crosses a boundary.  Here the
   // unmasked summand carries into the masked nibble, so a per-column answer
   // would be wrong however well each column measured.  Declining is the only
-  // correct outcome, and the sample check is what reaches it.
+  // correct outcome, and it must follow from structure even when no samples
+  // are requested.
   SymContext Ctx;
   SymParseResult Parsed =
       parseSymExpr(Ctx, "(((x ^ y) + 2 * (x & y)) & 15) + z", W32);
   ASSERT_TRUE(Parsed.ok()) << Parsed.Error;
-  EXPECT_FALSE(simplifyMBA(Ctx, Parsed.Root).Changed);
+  MBAOptions Opts;
+  Opts.VerifySamples = 0;
+  EXPECT_FALSE(simplifyMBA(Ctx, Parsed.Root, Opts).Changed);
 }
 
 //===----------------------------------------------------------------------===//
@@ -202,8 +204,9 @@ TEST(SymMBA, RecoversAProductFromItsBitwiseRewriting) {
 }
 
 TEST(SymMBA, KeepsWhateverLinearPartRidesAlongsideTheProduct) {
-  simplifiesTo("(x & y) * (x | y) + (x & ~y) * (~x & y) + (x ^ y) + 2 * (x & y)",
-               "x * y + x + y");
+  simplifiesTo(
+      "(x & y) * (x | y) + (x & ~y) * (~x & y) + (x ^ y) + 2 * (x & y)",
+      "x * y + x + y");
 }
 
 TEST(SymMBA, NoticesWhenTheProductsCancelAndTheRestIsLinear) {
@@ -246,6 +249,24 @@ TEST(SymMBA, RecoversAProductOfThreeTerms) {
                "2 * x * y * z");
 }
 
+TEST(SymMBA, RecoversAProductWithoutADegreeCutoff) {
+  // Multiplying the two-factor identity by x three more times produces a
+  // genuine degree-five region.  The representation and traversal must carry
+  // it whole; only MaxWork may stop a combinatorial search.
+  simplifiesTo("(x & y) * (x | y) * x * x * x + "
+               "(x & ~y) * (~x & y) * x * x * x",
+               "x * x * x * x * y");
+}
+
+TEST(SymMBA, RecoversAPolynomialAcrossFourInputs) {
+  // Four inputs leave the globally-minimal truth-table synthesizer's range,
+  // but the prime-implicant backend remains exact and the work budget keeps
+  // factor search bounded.
+  simplifiesTo("((x & y) & (z & w)) * ((x & y) | (z & w)) + "
+               "((x & y) & ~(z & w)) * (~(x & y) & (z & w))",
+               "(x & y) * (z & w)");
+}
+
 TEST(SymMBA, KeepsALinearPartAlongsideADegreeThreeProduct) {
   simplifiesTo("x * (y & z) * (y | z) + x * (y & ~z) * (~y & z) + "
                "(x ^ y) + 2 * (x & y)",
@@ -282,28 +303,42 @@ TEST(SymMBA, TellsTheReasonsForLeavingAnExpressionAlone) {
   MBAOptions Tight;
   Tight.MaxAtoms = 2;
   EXPECT_EQ(outcomeOf("x + y + z", Tight), MBAOutcome::TooManyInputs);
+
+  MBAOptions SmallSearch;
+  SmallSearch.MaxWork = 1;
+  EXPECT_EQ(outcomeOf("x * (y & z) * (y | z) + "
+                      "x * (y & ~z) * (~y & z)",
+                      SmallSearch),
+            MBAOutcome::BudgetExhausted);
 }
 
 TEST(SymMBA, SaysWhatStandsBehindARewrite) {
   SymContext Ctx;
+  MBAOptions ProofOnly;
+  ProofOnly.VerifySamples = 0;
   auto resultOf = [&](llvm::StringRef Text) {
     SymParseResult P = parseSymExpr(Ctx, Text, W32);
     EXPECT_TRUE(P.ok()) << Text.str() << ": " << P.Error;
-    return simplifyMBA(Ctx, P.Root);
+    return simplifyMBA(Ctx, P.Root, ProofOnly);
   };
 
-  // The measurement derivation is exact, so the rewrite stands on it.
+  // No samples are run in this test.  Every accepted result therefore has to
+  // clear its deterministic coefficient verifier on its own.
   MBAResult Measured = resultOf("(x ^ y) + 2 * (x & y)");
   EXPECT_EQ(Measured.Outcome, MBAOutcome::Rewritten);
   EXPECT_EQ(Measured.Evidence, MBAEvidence::Derivation);
   EXPECT_GT(Measured.Work, 0u);
 
-  // A mask column split is valid only while no carry crosses a boundary, which
-  // the derivation cannot establish and the sample check decides.  Saying so is
-  // the difference between a proof and a check that passed.
+  // A mask column split is accepted only when every path above each mask is
+  // bitwise and therefore cannot carry information across columns.  Sampling
+  // is only a defect net for that structural derivation.
   MBAResult Masked = resultOf("((x ^ y) + 2 * (x & y)) & 0xff");
   EXPECT_EQ(Masked.Outcome, MBAOutcome::Rewritten);
-  EXPECT_EQ(Masked.Evidence, MBAEvidence::Samples);
+  EXPECT_EQ(Masked.Evidence, MBAEvidence::Derivation);
+
+  MBAResult Polynomial = resultOf("(x & y) * (x | y) + (x & ~y) * (~x & y)");
+  EXPECT_EQ(Polynomial.Outcome, MBAOutcome::Rewritten);
+  EXPECT_EQ(Polynomial.Evidence, MBAEvidence::Derivation);
 }
 
 //===----------------------------------------------------------------------===//
@@ -326,7 +361,8 @@ TEST(SymMBA, StepsAroundWhatTheLinearTheoryDoesNotCover) {
   // A quotient, a product of two unknowns, and a variable shift are all
   // outside the algebra; each becomes an input, and what surrounds it is still
   // simplified.
-  SymParseResult P = parseSymExpr(Ctx, "((x / y) ^ z) + 2 * ((x / y) & z)", W32);
+  SymParseResult P =
+      parseSymExpr(Ctx, "((x / y) ^ z) + 2 * ((x / y) & z)", W32);
   ASSERT_TRUE(P.ok());
   MBAResult R = simplifyMBA(Ctx, P.Root);
   EXPECT_TRUE(R.Changed);
@@ -435,10 +471,10 @@ private:
     SymRef Y = atom();
     switch (Rng() % 6) {
     case 0: // x  ->  (x ^ y) + 2*(x & y) - y
-      return Ctx.mkSub(Ctx.mkAdd(Ctx.mkXor(X, Y),
-                                 Ctx.mkMul(Ctx.mkConst(Width, 2),
-                                           Ctx.mkAnd(X, Y))),
-                       Y);
+      return Ctx.mkSub(
+          Ctx.mkAdd(Ctx.mkXor(X, Y),
+                    Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(X, Y))),
+          Y);
     case 1: // x  ->  (x | y) + (x & y) - y
       return Ctx.mkSub(Ctx.mkAdd(Ctx.mkOr(X, Y), Ctx.mkAnd(X, Y)), Y);
     case 2: // x  ->  (x ^ y) + (x & y) - (~x & y)
@@ -485,10 +521,9 @@ TEST(SymMBA, BringsBackWhateverTheIdentitiesWereUsedToHide) {
       // past the first: each identity buries the previous one inside a bitwise
       // operator, where a single measurement can only treat it as an input.
       MBAResult R = simplifyMBADeep(Ctx, Hidden);
-      EXPECT_EQ(R.Expr, Original)
-          << "width " << Width << ", trial " << Trial
-          << "\n  hidden: " << Ctx.toString(Hidden)
-          << "\n   found: " << Ctx.toString(R.Expr);
+      EXPECT_EQ(R.Expr, Original) << "width " << Width << ", trial " << Trial
+                                  << "\n  hidden: " << Ctx.toString(Hidden)
+                                  << "\n   found: " << Ctx.toString(R.Expr);
     }
   }
 }
@@ -498,9 +533,8 @@ TEST(SymMBA, NeverChangesWhatAnExpressionComputes) {
   // point here is not the rewriting rate but that no rewrite is ever wrong.
   constexpr uint32_t Width = 32;
   SymContext Ctx;
-  llvm::SmallVector<SymRef, 3> Vars{Ctx.mkVar("a", Width),
-                                    Ctx.mkVar("b", Width),
-                                    Ctx.mkVar("c", Width)};
+  llvm::SmallVector<SymRef, 3> Vars{
+      Ctx.mkVar("a", Width), Ctx.mkVar("b", Width), Ctx.mkVar("c", Width)};
   std::mt19937_64 Rng(0xC0FFEE);
 
   auto build = [&](auto &&Self, unsigned Depth) -> SymRef {
@@ -603,7 +637,8 @@ TEST(SymMBA, RecoversAMaskedTermWidenedIntoAWiderSum) {
   SymRef X = Ctx.mkVar("x", 8);
   SymRef Y = Ctx.mkVar("y", 8);
   SymRef Carry = Ctx.mkMul(Ctx.mkAnd(X, Y), Ctx.mkConst(8, 2));
-  SymRef Mba = Ctx.mkAnd(Ctx.mkAdd(Ctx.mkXor(X, Y), Carry), Ctx.mkConst(8, 0x7f));
+  SymRef Mba =
+      Ctx.mkAnd(Ctx.mkAdd(Ctx.mkXor(X, Y), Carry), Ctx.mkConst(8, 0x7f));
   SymRef Root = Ctx.mkAdd(Ctx.mkZExt(Mba, 32), Ctx.mkVar("z", 32));
 
   MBAResult R = simplifyMBADeep(Ctx, Root);
@@ -635,7 +670,8 @@ TEST(SymMBA, RecoversAMaskedTermWidenedIntoAWiderSum) {
 SymRef randomExpr(SymContext &Ctx, llvm::ArrayRef<SymRef> Vars, uint32_t Width,
                   unsigned Depth, std::mt19937_64 &Rng) {
   if (Depth == 0)
-    return Rng() % 4 == 0 ? Ctx.mkConst(Width, Rng()) : Vars[Rng() % Vars.size()];
+    return Rng() % 4 == 0 ? Ctx.mkConst(Width, Rng())
+                          : Vars[Rng() % Vars.size()];
   SymRef L = randomExpr(Ctx, Vars, Width, Depth - 1, Rng);
   SymRef R = randomExpr(Ctx, Vars, Width, Depth - 1, Rng);
   switch (Rng() % 9) {
@@ -672,9 +708,8 @@ TEST(SymMBA, IsExhaustivelyEquivalentAtASmallWidth) {
   // This is the equivalence gate: it has to find nothing, every time.
   constexpr uint32_t Width = 4;
   SymContext Ctx;
-  llvm::SmallVector<SymRef, 3> Vars{Ctx.mkVar("p", Width),
-                                    Ctx.mkVar("q", Width),
-                                    Ctx.mkVar("r", Width)};
+  llvm::SmallVector<SymRef, 3> Vars{
+      Ctx.mkVar("p", Width), Ctx.mkVar("q", Width), Ctx.mkVar("r", Width)};
   std::mt19937_64 Rng(0x5EED);
 
   unsigned Rewrites = 0;
@@ -723,6 +758,39 @@ TEST(SymMBA, ReachesThroughDeeplyNestedObfuscation) {
   MBAResult R = simplifyMBADeep(Ctx, E);
   EXPECT_TRUE(R.Changed);
   EXPECT_EQ(R.Expr, X) << "left " << Ctx.toString(R.Expr);
+}
+
+TEST(SymMBA, ExpandsPolynomialTermsWithoutANestingLimit) {
+  // Term collection used to recurse through at most 32 alternating sums and
+  // scaled products.  That was a shape limit rather than a resource budget:
+  // adding one harmless layer could make a polynomial identity unreachable.
+  // The explicit worklist must reach the product at the bottom regardless of
+  // nesting.
+  constexpr unsigned kLayers = 64;
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", W32);
+  SymRef Y = Ctx.mkVar("y", W32);
+  SymRef Product = Ctx.mkAdd(
+      Ctx.mkMul(Ctx.mkAnd(X, Y), Ctx.mkOr(X, Y)),
+      Ctx.mkMul(Ctx.mkAnd(X, Ctx.mkNot(Y)), Ctx.mkAnd(Ctx.mkNot(X), Y)));
+  SymRef E = Product;
+  for (unsigned I = 0; I < kLayers; ++I)
+    E = Ctx.mkMul(Ctx.mkConst(W32, 3), Ctx.mkAdd(E, Ctx.mkConst(W32, I + 1)));
+
+  MBAResult R = simplifyMBA(Ctx, E);
+  ASSERT_TRUE(R.Changed) << "left " << Ctx.toString(R.Expr);
+  EXPECT_NE(Ctx.toString(R.Expr).find("x * y"), std::string::npos);
+
+  SymEvalPlan Before(Ctx, E);
+  SymEvalPlan After(Ctx, R.Expr);
+  std::vector<llvm::APInt> Assignment(Ctx.numVars(), llvm::APInt(W32, 0));
+  std::mt19937_64 Rng(0xD33F);
+  for (unsigned Sample = 0; Sample < 16; ++Sample) {
+    for (llvm::APInt &V : Assignment)
+      V = llvm::APInt(W32, Rng(), /*isSigned=*/false,
+                      /*implicitTrunc=*/true);
+    EXPECT_EQ(Before.eval(Assignment), After.eval(Assignment));
+  }
 }
 
 TEST(SymMBA, TerminatesOnNestingFarPastAnyBudget) {

@@ -27,8 +27,8 @@
 #include "neverd/pass/ir/ValueLaunderingPass.h"
 #include "neverd/pipeline/Pipeline.h"
 
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/IR/Constants.h"
@@ -43,6 +43,9 @@
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Mem2Reg.h"
+
+#include <string>
+#include <utility>
 
 #define DEBUG_TYPE "neverd-pipeline"
 
@@ -66,9 +69,8 @@ namespace {
 /// every productive round strictly shrinks the function and there can only be
 /// finitely many.  The structural fingerprint below stops the one case that
 /// argument does not cover -- the two transforms trading the same edit back and
-/// forth -- and the cap is the backstop behind both, not a limit on how deeply
-/// nested an obfuscation may be: a single measurement already reaches every
-/// layer of one.
+/// forth.  There is no round limit to make an otherwise reachable fixed point
+/// depend on how many layers happened to expose one another.
 class SemanticFixedPointPass
     : public llvm::PassInfoMixin<SemanticFixedPointPass> {
 public:
@@ -76,26 +78,17 @@ public:
                               llvm::FunctionAnalysisManager &FAM);
 
 private:
-  /// Enough rounds that no input reaches it before the fingerprint or the
-  /// shrinking argument does.
-  static constexpr unsigned kMaxRounds = 32;
-
-  /// A shape summary of \p F, cheap enough to take every round.  It only has to
-  /// separate two states well enough to notice a repeat; a collision costs one
-  /// round of progress, never correctness.
-  static uint64_t fingerprint(const llvm::Function &F);
+  /// An exact snapshot used only after a productive round.  Stopping on a hash
+  /// collision would make reachability of the fixed point probabilistic; text
+  /// equality costs more, but a repeated state is then an actual cycle.
+  static std::string snapshot(const llvm::Function &F);
 };
 
-uint64_t SemanticFixedPointPass::fingerprint(const llvm::Function &F) {
-  uint64_t H = F.size();
-  for (const llvm::BasicBlock &BB : F)
-    for (const llvm::Instruction &I : BB) {
-      H = static_cast<uint64_t>(llvm::hash_combine(
-          H, I.getOpcode(), I.getType(), I.getNumOperands()));
-      for (const llvm::Value *Op : I.operand_values())
-        H = static_cast<uint64_t>(llvm::hash_combine(H, Op->getType()));
-    }
-  return H;
+std::string SemanticFixedPointPass::snapshot(const llvm::Function &F) {
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  F.print(OS);
+  return Text;
 }
 
 llvm::PreservedAnalyses
@@ -107,11 +100,11 @@ SemanticFixedPointPass::run(llvm::Function &F,
   llvm::FunctionPassManager Canonicalize;
   Canonicalize.addPass(llvm::InstCombinePass());
 
-  llvm::SmallDenseSet<uint64_t, 8> Seen;
+  llvm::SmallVector<std::string, 8> Seen;
   bool Changed = false;
   bool ResidueUnfolded = false;
 
-  for (unsigned Round = 0; Round < kMaxRounds; ++Round) {
+  for (;;) {
     Canonicalize.run(F, FAM);
     ResidueUnfolded = false;
 
@@ -128,8 +121,10 @@ SemanticFixedPointPass::run(llvm::Function &F,
     // cached about it is stale before the next InstCombine reads it.
     FAM.invalidate(F, llvm::PreservedAnalyses::none());
 
-    if (!Seen.insert(fingerprint(F)).second)
+    std::string State = snapshot(F);
+    if (llvm::is_contained(Seen, State))
       break;
+    Seen.push_back(std::move(State));
   }
 
   if (ResidueUnfolded)

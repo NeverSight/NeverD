@@ -597,7 +597,7 @@ typedef enum neverd_simplify_outcome {
   /// independent parts or mask-uniform columns was available.  A larger
   /// `max_atoms` reaches it, at twice the cost per input added.
   NEVERD_SIMPLIFY_TOO_MANY_INPUTS = 2,
-  /// The layered walk stopped at `max_work` with regions left unvisited.
+  /// The layered walk or polynomial search stopped at `max_work`.
   NEVERD_SIMPLIFY_BUDGET_EXHAUSTED = 3,
   /// A shorter form was found, and is in `output`.
   NEVERD_SIMPLIFY_REWRITTEN = 4
@@ -607,14 +607,12 @@ typedef enum neverd_simplify_outcome {
 typedef enum neverd_simplify_evidence {
   /// Nothing was rewritten.
   NEVERD_SIMPLIFY_EVIDENCE_NONE = 0,
-  /// The derivation is exact by construction.  A sample check still ran, but as
-  /// a net for a mistake in the derivation rather than as the reason to trust
-  /// the result.
+  /// The derivation is exact by construction and a separate deterministic
+  /// coefficient verifier accepted it.  Sampling, when enabled, is only a
+  /// defect net.
   NEVERD_SIMPLIFY_EVIDENCE_DERIVATION = 1,
-  /// The rewrite holds only under a condition the derivation cannot establish
-  /// on its own, and the sample check is what decided it.  Cutting a word into
-  /// mask-uniform columns is the case that arises: the reassembly is exact
-  /// unless an arithmetic carry crosses a column boundary.
+  /// Reserved for callers or optional backends that explicitly accept a
+  /// heuristic result.  The built-in production solvers never return this.
   NEVERD_SIMPLIFY_EVIDENCE_SAMPLES = 2
 } neverd_simplify_evidence_t;
 
@@ -636,8 +634,8 @@ typedef struct neverd_simplify_options {
   /// Most distinct inputs one measurement may span.  The cost is 2^this, so it
   /// is the dial between reach and time.  Zero takes the default.
   unsigned max_atoms;
-  /// Graph nodes the layered walk may measure over before it stops starting new
-  /// measurements.  Zero takes the default; (size_t)-1 removes the limit.
+  /// Work budget for the layered walk and combinatorial polynomial search.
+  /// Zero takes the default; (size_t)-1 removes the resource budget.
   size_t max_work;
   /// Random assignments a rewrite is checked against before it is returned.
   /// Zero takes the default.
@@ -667,9 +665,8 @@ typedef struct neverd_simplify_result {
   size_t cost_after;
   /// Distinct inputs the winning measurement spanned.
   unsigned inputs;
-  /// Graph nodes the search measured over: what the answer cost to find, as
-  /// opposed to how large the answer is.  This is the number to watch when
-  /// `max_work` has to be chosen.
+  /// Work units consumed by graph traversal, corner measurements, coefficient
+  /// verification, and polynomial expansion/search.
   size_t work;
   neverd_simplify_outcome_t outcome;
   neverd_simplify_evidence_t evidence;

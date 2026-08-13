@@ -948,8 +948,9 @@ def simplify_expression(
     ``deep`` walks into the subterms a single measurement has to treat as
     opaque, which is what layered obfuscation needs.  Every other argument left
     at its default keeps the engine's own: ``max_atoms`` bounds how many inputs
-    one measurement spans (the cost is 2^n), ``max_work`` bounds how much of a
-    large expression the walk covers, and ``exhaustive`` removes that bound.
+    one measurement spans (the cost is 2^n), ``max_work`` bounds the layered
+    walk and combinatorial polynomial search, and ``exhaustive`` removes that
+    resource budget.
 
     ``host`` names the library to work through.  It defaults to the NeverD this
     is running inside, but simplification needs no session and no loaded binary,

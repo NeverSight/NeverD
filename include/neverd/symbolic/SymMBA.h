@@ -79,11 +79,13 @@ struct MBAOptions {
   /// measuring the solver, not for using it.
   bool AllowGrowth = false;
 
-  /// Roughly how many graph nodes \c simplifyMBADeep will visit while looking
-  /// for regions to measure.  Walking a large expression region by region is
-  /// quadratic in its size; past this budget the remaining nodes are still
-  /// rebuilt around whatever was simplified underneath them, but no new
-  /// measurement is started.
+  /// Work units available to the deep region walk and to combinatorial product
+  /// expansion and factor recovery.  Walking a large expression region by
+  /// region is quadratic in its size, while polynomial search is exponential
+  /// in its factors; past this budget the remaining expression stays intact
+  /// and the result reports \c MBAOutcome::BudgetExhausted.  Setting this to
+  /// the largest size_t removes the resource budget without changing semantic
+  /// coverage.
   size_t MaxWork = size_t(1) << 22;
 };
 
@@ -103,8 +105,8 @@ enum class MBAOutcome : uint8_t {
   /// independent parts or mask-uniform columns was available.  A larger
   /// \c MBAOptions::MaxAtoms would reach it, at 2^t the cost.
   TooManyInputs,
-  /// The layered walk stopped at its work budget with regions left unvisited.
-  /// A larger \c MBAOptions::MaxWork would reach them.
+  /// The layered walk or polynomial search stopped at its work budget.  A
+  /// larger \c MBAOptions::MaxWork would reach the remaining work.
   BudgetExhausted,
   /// A shorter form was found and is in \c MBAResult::Expr.
   Rewritten,
@@ -114,13 +116,14 @@ enum class MBAOutcome : uint8_t {
 enum class MBAEvidence : uint8_t {
   /// Nothing was rewritten.
   None,
-  /// The derivation is exact by construction.  A sample check still ran, but as
-  /// a net for a mistake in the derivation rather than as the reason to trust
-  /// the result.
+  /// The derivation is exact by construction and a separate deterministic
+  /// coefficient verifier accepted it.  A sample check may also run, but only
+  /// as a defect net rather than as the reason to trust the result.
   Derivation,
-  /// The rewrite holds only under a condition the derivation cannot establish
-  /// on its own — a mask column split is invalid if an arithmetic carry crosses
-  /// a boundary — and the sample check is what decided it.
+  /// Reserved for callers or optional backends that explicitly choose a
+  /// heuristic result.  The built-in production solvers do not return sampled
+  /// rewrites: random checks can expose a defect but cannot prove equivalence.
+  /// Kept in the public enum so the versioned C ABI remains stable.
   Samples,
 };
 
@@ -141,9 +144,9 @@ struct MBAResult {
   unsigned NumAtoms = 0;
   MBAOutcome Outcome = MBAOutcome::NotApplicable;
   MBAEvidence Evidence = MBAEvidence::None;
-  /// Graph nodes the search measured over.  This is what the answer cost to
-  /// find rather than how large the answer is, and it is the number to watch
-  /// when a work budget has to be chosen.
+  /// Work units consumed by graph traversal, corner measurements, coefficient
+  /// verification, and polynomial expansion/search.  This is what the answer
+  /// cost to find rather than how large the answer is.
   size_t Work = 0;
 };
 

@@ -61,16 +61,6 @@ namespace neverd::symbolic {
 
 namespace {
 
-/// Highest degree of product the symbolic expansion carries.
-///
-/// This bounds the *shape* the expansion is written for, not how deeply an
-/// obfuscation may be nested: a product of this many bitwise terms is expanded
-/// exactly, and the walk that reaches nested layers is separate and unbounded.
-/// Eight is where the packed monomial key below runs out of bytes; the useful
-/// limit is far lower, because the search for a matching product grows with the
-/// degree and obfuscators build from products of two or three terms.
-constexpr unsigned kMaxProductDegree = 4;
-
 //===----------------------------------------------------------------------===//
 // Deciding what the measurement can see
 //===----------------------------------------------------------------------===//
@@ -176,14 +166,14 @@ void classify(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Order,
           Ctx.isConst(Ops[0]) ? Ops.drop_front() : Ops;
       if (Unknown.size() == 1) {
         Result = Role::Linear;
-      } else if (AllowProducts && Unknown.size() <= kMaxProductDegree &&
-                 llvm::all_of(Unknown, [&](SymRef C) {
+      } else if (AllowProducts && llvm::all_of(Unknown, [&](SymRef C) {
                    return isBitwiseOrAtom(roleOf(C));
                  })) {
         Result = Role::Product;
       } else {
-        // Past the degree the expansion carries, or a factor that is itself a
-        // sum.  Neither is something it covers.
+        // A factor that is itself a sum is not a bitwise function.  Its product
+        // remains opaque here; product arity itself is controlled later by a
+        // resource budget rather than by a semantic cutoff.
         Result = Role::Atom;
       }
       break;
@@ -259,8 +249,8 @@ public:
       : Ctx(Ctx), Reserved(Reserved) {}
 
   /// A fresh input of \p Width bits.  The width is the subterm's own, not the
-  /// region's: a placeholder stands in an operand slot, and an operand keeps the
-  /// width its operator was built with, so minting at any other width would
+  /// region's: a placeholder stands in an operand slot, and an operand keeps
+  /// the width its operator was built with, so minting at any other width would
   /// hand a rebuilt node operands that disagree.
   SymRef take(uint32_t Width) {
     for (;;) {
@@ -357,22 +347,29 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
 // Measurement
 //===----------------------------------------------------------------------===//
 
+std::optional<size_t> cornerCount(size_t NumAtoms) {
+  if (NumAtoms >= std::numeric_limits<size_t>::digits)
+    return std::nullopt;
+  return size_t(1) << NumAtoms;
+}
+
 /// Evaluate \p Body at every assignment of its inputs to all-zeros or
 /// all-ones, and return the weights of its minterm decomposition.
 std::vector<llvm::APInt> measure(const SymContext &Ctx, SymRef Body,
                                  llvm::ArrayRef<uint32_t> Atoms) {
   const uint32_t Width = Ctx.width(Body);
   const auto NumAtoms = static_cast<unsigned>(Atoms.size());
-  const size_t Corners = size_t(1) << NumAtoms;
+  const std::optional<size_t> Corners = cornerCount(NumAtoms);
+  assert(Corners && "corner table does not fit the host address space");
 
   SymEvalPlan Plan(Ctx, Body);
-  std::vector<llvm::APInt> Weights(Corners);
+  std::vector<llvm::APInt> Weights(*Corners);
 
   if (Plan.fitsU64()) {
     const uint64_t Ones =
         Width == 64 ? ~uint64_t(0) : (uint64_t(1) << Width) - 1;
     std::vector<uint64_t> Assignment(Ctx.numVars(), 0);
-    for (size_t K = 0; K < Corners; ++K) {
+    for (size_t K = 0; K < *Corners; ++K) {
       for (unsigned J = 0; J < NumAtoms; ++J)
         Assignment[Atoms[J]] = (K >> J) & 1 ? Ones : 0;
       // The corner value is the negated weight, so negating is what turns a
@@ -386,7 +383,7 @@ std::vector<llvm::APInt> measure(const SymContext &Ctx, SymRef Body,
   const llvm::APInt Zero(Width, 0);
   const llvm::APInt Ones = llvm::APInt::getAllOnes(Width);
   std::vector<llvm::APInt> Assignment(Ctx.numVars(), Zero);
-  for (size_t K = 0; K < Corners; ++K) {
+  for (size_t K = 0; K < *Corners; ++K) {
     for (unsigned J = 0; J < NumAtoms; ++J)
       Assignment[Atoms[J]] = (K >> J) & 1 ? Ones : Zero;
     Weights[K] = -Plan.eval(Assignment);
@@ -634,11 +631,14 @@ SymRef cheapestOf(const SymContext &Ctx, llvm::ArrayRef<SymRef> Candidates) {
 /// A rewrite, and how many inputs the reading that produced it was over.  The
 /// count travels with the candidate because the two readings disagree about
 /// it: the linear one counts a product of unknowns as one opaque input, the
-/// degree-two one looks inside and counts its factors.  Reporting the larger
-/// of the two would describe a reading that lost.
+/// polynomial one looks inside and counts its factors.  Reporting the larger of
+/// the two would describe a reading that lost.
 struct Candidate {
   SymRef Expr;
   unsigned NumAtoms = 0;
+  /// True only after an exact verifier, separate from candidate synthesis, has
+  /// established that \c Expr equals the region it may replace.
+  bool Proven = false;
 };
 
 //===----------------------------------------------------------------------===//
@@ -654,7 +654,8 @@ struct Candidate {
 // selects and multiplying out gives, for any polynomial in bitwise terms of t
 // inputs,
 //
-//     e  =  sum_m w_m M_m  +  sum over monomials M_{m1} * ... * M_{md} of c * ..
+//     e  =  sum_m w_m M_m  +  sum over monomials M_{m1} * ... * M_{md} of c *
+//     ..
 //
 // and every coefficient can be computed *symbolically* — each factor's truth
 // table is one corner sweep of that factor alone, and the rest is bookkeeping.
@@ -677,52 +678,59 @@ struct Candidate {
 /// working and the expansion takes over.
 struct PolyTerm {
   llvm::APInt Coeff;
-  llvm::SmallVector<SymRef, kMaxProductDegree> Factors;
+  llvm::SmallVector<SymRef, 4> Factors;
 };
 
 /// Accumulate the terms of `Scale * Node` into \p Out, or fail when some term
 /// is of a higher degree than the expansion covers.
 bool collectTerms(const SymContext &Ctx, SymRef Node, const llvm::APInt &Scale,
-                  unsigned Depth, llvm::SmallVectorImpl<PolyTerm> &Out) {
-  // Sums and products are both flattened, so a chain of them alternates and
-  // stays shallow.  The bound is only there so that no input can turn this
-  // into an unbounded descent.
-  if (Depth == 0)
-    return false;
+                  llvm::SmallVectorImpl<PolyTerm> &Out) {
+  struct WorkItem {
+    SymRef Node;
+    llvm::APInt Scale;
+  };
+  llvm::SmallVector<WorkItem, 32> Work{{Node, Scale}};
 
-  if (Ctx.op(Node) == SymOp::Add) {
-    for (SymRef Summand : Ctx.operands(Node))
-      if (!collectTerms(Ctx, Summand, Scale, Depth - 1, Out))
-        return false;
-    return true;
-  }
+  while (!Work.empty()) {
+    WorkItem Item = Work.pop_back_val();
+    SymRef Current = Item.Node;
 
-  if (Ctx.isConst(Node)) {
-    Out.push_back(PolyTerm{Scale * Ctx.constValue(Node), {}});
-    return true;
-  }
-
-  if (Ctx.op(Node) == SymOp::Mul) {
-    llvm::ArrayRef<SymRef> Ops = Ctx.operands(Node);
-    llvm::APInt Coeff = Scale;
-    unsigned First = 0;
-    if (Ctx.isConst(Ops[0])) {
-      Coeff *= Ctx.constValue(Ops[0]);
-      First = 1;
+    if (Ctx.op(Current) == SymOp::Add) {
+      llvm::ArrayRef<SymRef> Summands = Ctx.operands(Current);
+      // Preserve the recursive walk's stable left-to-right term order.
+      for (auto It = Summands.rbegin(); It != Summands.rend(); ++It)
+        Work.push_back({*It, Item.Scale});
+      continue;
     }
-    llvm::ArrayRef<SymRef> Factors = Ops.drop_front(First);
-    if (Factors.size() > kMaxProductDegree)
-      return false;
-    // A scaled sum has to be distributed rather than treated as one factor:
-    // `3 * (a + b)` is two terms, and reading it as a single factor would hand
-    // the expansion something that is not a bitwise function at all.
-    if (Factors.size() == 1)
-      return collectTerms(Ctx, Factors[0], Coeff, Depth - 1, Out);
-    Out.push_back(PolyTerm{Coeff, {Factors.begin(), Factors.end()}});
-    return true;
-  }
 
-  Out.push_back(PolyTerm{Scale, {Node}});
+    if (Ctx.isConst(Current)) {
+      Out.push_back(PolyTerm{Item.Scale * Ctx.constValue(Current), {}});
+      continue;
+    }
+
+    if (Ctx.op(Current) == SymOp::Mul) {
+      llvm::ArrayRef<SymRef> Ops = Ctx.operands(Current);
+      llvm::APInt Coeff = Item.Scale;
+      unsigned First = 0;
+      if (Ctx.isConst(Ops[0])) {
+        Coeff *= Ctx.constValue(Ops[0]);
+        First = 1;
+      }
+      llvm::ArrayRef<SymRef> Factors = Ops.drop_front(First);
+      // A scaled sum has to be distributed rather than treated as one factor:
+      // `3 * (a + b)` is two terms, and reading it as a single factor would
+      // hand the expansion something that is not a bitwise function at all.
+      if (Factors.size() == 1) {
+        Work.push_back({Factors[0], std::move(Coeff)});
+        continue;
+      }
+      Out.push_back(
+          PolyTerm{std::move(Coeff), {Factors.begin(), Factors.end()}});
+      continue;
+    }
+
+    Out.push_back(PolyTerm{std::move(Item.Scale), {Current}});
+  }
   return true;
 }
 
@@ -731,8 +739,7 @@ bool collectTerms(const SymContext &Ctx, SymRef Node, const llvm::APInt &Scale,
 std::optional<llvm::SmallVector<PolyTerm, 8>>
 splitIntoTerms(const SymContext &Ctx, SymRef Body) {
   llvm::SmallVector<PolyTerm, 8> Terms;
-  if (!collectTerms(Ctx, Body, llvm::APInt(Ctx.width(Body), 1), /*Depth=*/32,
-                    Terms))
+  if (!collectTerms(Ctx, Body, llvm::APInt(Ctx.width(Body), 1), Terms))
     return std::nullopt;
   return Terms;
 }
@@ -782,35 +789,69 @@ std::optional<TruthTable> bitwiseTable(const SymContext &Ctx, SymRef F,
   return Table;
 }
 
-/// A monomial of the expansion: the minterms whose product it is, sorted and
-/// packed one to a byte.
+/// A bounded amount of semantic-simplification work.
 ///
-/// Packing keeps the coefficient table an ordinary integer map, which matters
-/// because the product search builds one per candidate.  A minterm index is
-/// below 2^t and the degree is bounded, so the bytes never run out; storing
-/// each index one above its value is what stops a shorter monomial from packing
-/// to the same number as a longer one.
-using Monomial = uint64_t;
+/// The same counter covers graph traversal, corner measurements, proof
+/// recomputation, product expansion, and factor recovery.  The latter two are
+/// exponential in the expression, which is an algorithmic fact rather than a
+/// reason to reject a particular degree.  Exhaustive mode passes the largest
+/// size_t and therefore removes the budget without changing the representation
+/// or the set of degrees it can express.
+class WorkBudget {
+public:
+  explicit WorkBudget(size_t Limit)
+      : Remaining(Limit),
+        Unlimited(Limit == std::numeric_limits<size_t>::max()) {}
 
-Monomial packMonomial(llvm::ArrayRef<uint16_t> Sorted) {
-  Monomial Key = 0;
-  for (uint16_t Index : Sorted)
-    Key = (Key << 8) | (Index + 1);
-  return Key;
+  bool consume(size_t Units = 1) {
+    if (Unlimited) {
+      Used = Units > std::numeric_limits<size_t>::max() - Used
+                 ? std::numeric_limits<size_t>::max()
+                 : Used + Units;
+      return true;
+    }
+    if (Units > Remaining) {
+      Used += Remaining;
+      Remaining = 0;
+      Exhausted = true;
+      return false;
+    }
+    Remaining -= Units;
+    Used += Units;
+    return true;
+  }
+
+  bool exhausted() const { return Exhausted; }
+  size_t used() const { return Used; }
+
+private:
+  size_t Remaining;
+  size_t Used = 0;
+  bool Unlimited;
+  bool Exhausted = false;
+};
+
+/// A monomial of arbitrary degree: the minterms whose product it is, sorted.
+///
+/// The old packed integer key made degree a property of storage width.  A
+/// vector key costs a small allocation only for higher-degree terms and lets
+/// the resource budget, rather than an eight-byte container, decide how far a
+/// search goes.
+using Monomial = std::vector<uint16_t>;
+
+Monomial makeMonomial(llvm::ArrayRef<uint16_t> Sorted) {
+  return Monomial(Sorted.begin(), Sorted.end());
 }
 
-unsigned monomialDegree(Monomial Key) {
-  unsigned Degree = 0;
-  for (; Key; Key >>= 8)
-    ++Degree;
-  return Degree;
+unsigned monomialDegree(const Monomial &Key) {
+  return static_cast<unsigned>(Key.size());
 }
 
 /// The minterms a monomial names, as a set.
-TruthTable monomialSupport(Monomial Key) {
+TruthTable monomialSupport(const Monomial &Key) {
   TruthTable Support = 0;
-  for (; Key; Key >>= 8)
-    Support |= TruthTable(1) << ((Key & 0xff) - 1);
+  for (uint16_t Index : Key)
+    Support |= TruthTable(1) << Index;
   return Support;
 }
 
@@ -845,16 +886,21 @@ llvm::SmallVector<uint16_t, 8> selectedMinterms(TruthTable Table,
 /// sum over one choice per factor, and the minterms chosen name the monomial
 /// however they were ordered.
 template <typename FnT>
-void forEachMonomial(
-    llvm::ArrayRef<llvm::SmallVector<uint16_t, 8>> Selected, FnT Visit) {
-  llvm::SmallVector<size_t, kMaxProductDegree> Pick(Selected.size(), 0);
+void forEachMonomial(llvm::ArrayRef<llvm::SmallVector<uint16_t, 8>> Selected,
+                     WorkBudget &Budget, FnT Visit) {
+  if (Selected.empty())
+    return;
+  llvm::SmallVector<size_t, 4> Pick(Selected.size(), 0);
   for (;;) {
-    llvm::SmallVector<uint16_t, kMaxProductDegree> Key;
+    if (!Budget.consume())
+      return;
+
+    Monomial Key;
     Key.reserve(Selected.size());
     for (size_t J = 0; J < Selected.size(); ++J)
       Key.push_back(Selected[J][Pick[J]]);
     llvm::sort(Key);
-    if (!Visit(packMonomial(Key)))
+    if (!Visit(Key))
       return;
 
     size_t J = Selected.size();
@@ -872,7 +918,7 @@ void forEachMonomial(
 std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
                                            llvm::ArrayRef<PolyTerm> Terms,
                                            llvm::ArrayRef<uint32_t> AtomIds,
-                                           uint32_t Width) {
+                                           uint32_t Width, WorkBudget &Budget) {
   const size_t Corners = size_t(1) << AtomIds.size();
   PolyForm Form;
   Form.Linear.assign(Corners, llvm::APInt(Width, 0));
@@ -888,7 +934,7 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
     return Table;
   };
 
-  llvm::SmallVector<llvm::SmallVector<uint16_t, 8>, kMaxProductDegree> Selected;
+  llvm::SmallVector<llvm::SmallVector<uint16_t, 8>, 4> Selected;
   for (const PolyTerm &Term : Terms) {
     if (Term.Factors.empty()) {
       // The minterms sum to the all-ones word, so the constant c is the linear
@@ -918,11 +964,13 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
                      [](llvm::ArrayRef<uint16_t> S) { return S.empty(); }))
       continue;
 
-    forEachMonomial(Selected, [&](Monomial Key) {
+    forEachMonomial(Selected, Budget, [&](const Monomial &Key) {
       auto It = Form.Higher.try_emplace(Key, llvm::APInt(Width, 0)).first;
       It->second += Term.Coeff;
       return true;
     });
+    if (Budget.exhausted())
+      return std::nullopt;
   }
 
   // Cancellation can leave a monomial at zero, and a zero is not part of the
@@ -934,11 +982,76 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
   return Form;
 }
 
-/// One product that explains a set of monomial coefficients.
-struct ProductMatch {
-  llvm::APInt Coeff;
-  llvm::SmallVector<TruthTable, kMaxProductDegree> Factors;
-};
+/// Prove \p Before and \p After equal as linear MBA expressions.
+///
+/// This is deliberately separate from candidate synthesis.  The synthesizer
+/// measures \p Before and invents a compact spelling from the weights; the
+/// verifier instead abstracts their difference and accepts only when every
+/// coefficient of that difference is zero.  It never asks which spelling was
+/// chosen and therefore cannot bless a candidate merely because the code that
+/// produced it says so.
+bool proveLinearIdentity(SymContext &Ctx, SymRef Before, SymRef After,
+                         unsigned MaxAtoms, WorkBudget &Budget) {
+  SymRef Delta = Ctx.mkSub(Before, After);
+  if (Ctx.isConstZero(Delta))
+    return true;
+
+  std::optional<Abstraction> Abstract =
+      abstractToMBA(Ctx, Delta, /*AllowProducts=*/false);
+  if (!Abstract)
+    return false;
+
+  llvm::SmallVector<uint32_t, 16> AtomIds;
+  Ctx.collectVars(Abstract->Body, AtomIds);
+  if (AtomIds.empty())
+    return Ctx.isConstZero(Abstract->Body);
+  if (AtomIds.size() > MaxAtoms)
+    return false;
+  std::optional<size_t> Corners = cornerCount(AtomIds.size());
+  if (!Corners || !Budget.consume(*Corners))
+    return false;
+
+  std::vector<llvm::APInt> Coefficients = measure(Ctx, Abstract->Body, AtomIds);
+  return llvm::all_of(Coefficients,
+                      [](const llvm::APInt &C) { return C.isZero(); });
+}
+
+/// Prove \p Before and \p After equal as sparse polynomials over bitwise
+/// minterms.
+///
+/// Product matching is intentionally absent here.  Both sides are subtracted,
+/// expanded independently of whatever factor search produced \p After, and the
+/// rewrite is accepted only when no linear or higher-degree coefficient
+/// remains.
+bool provePolynomialIdentity(SymContext &Ctx, SymRef Before, SymRef After,
+                             unsigned MaxAtoms, WorkBudget &Budget) {
+  SymRef Delta = Ctx.mkSub(Before, After);
+  if (Ctx.isConstZero(Delta))
+    return true;
+
+  std::optional<Abstraction> Abstract =
+      abstractToMBA(Ctx, Delta, /*AllowProducts=*/true);
+  if (!Abstract)
+    return false;
+
+  llvm::SmallVector<uint32_t, 16> AtomIds;
+  Ctx.collectVars(Abstract->Body, AtomIds);
+  if (AtomIds.size() > MaxAtoms)
+    return false;
+
+  std::optional<llvm::SmallVector<PolyTerm, 8>> Terms =
+      splitIntoTerms(Ctx, Abstract->Body);
+  if (!Terms)
+    return false;
+  std::optional<PolyForm> Form = expandOverMinterms(
+      Ctx, *Terms, AtomIds, Ctx.width(Abstract->Body), Budget);
+  if (!Form)
+    return false;
+
+  return llvm::all_of(Form->Linear,
+                      [](const llvm::APInt &C) { return C.isZero(); }) &&
+         Form->Higher.empty();
+}
 
 /// Multiply \p Factors out and count how often each monomial is reached, or
 /// report that they cannot be the product being looked for.
@@ -948,9 +1061,9 @@ struct ProductMatch {
 /// almost every wrong one is wrong on its first monomial.
 bool expandProduct(llvm::ArrayRef<TruthTable> Factors, size_t Corners,
                    const std::map<Monomial, llvm::APInt> &Higher,
-                   std::map<Monomial, unsigned> &Counts) {
+                   std::map<Monomial, unsigned> &Counts, WorkBudget &Budget) {
   Counts.clear();
-  llvm::SmallVector<llvm::SmallVector<uint16_t, 8>, kMaxProductDegree> Selected;
+  llvm::SmallVector<llvm::SmallVector<uint16_t, 8>, 4> Selected;
   for (TruthTable Table : Factors) {
     Selected.push_back(selectedMinterms(Table, Corners));
     if (Selected.back().empty())
@@ -958,7 +1071,7 @@ bool expandProduct(llvm::ArrayRef<TruthTable> Factors, size_t Corners,
   }
 
   bool Explains = true;
-  forEachMonomial(Selected, [&](Monomial Key) {
+  forEachMonomial(Selected, Budget, [&](const Monomial &Key) {
     if (!Higher.count(Key)) {
       Explains = false;
       return false;
@@ -968,11 +1081,11 @@ bool expandProduct(llvm::ArrayRef<TruthTable> Factors, size_t Corners,
   });
   // Reaching only monomials the target names is not enough; it has to reach all
   // of them, or the target holds something this product does not account for.
-  return Explains && Counts.size() == Higher.size();
+  return !Budget.exhausted() && Explains && Counts.size() == Higher.size();
 }
 
-/// Every single product of \p Degree bitwise factors whose expansion is exactly
-/// \p Higher.
+/// Visit every product of \p Degree bitwise factors whose expansion is exactly
+/// \p Higher, until \p Budget is spent.
 ///
 /// The search is over factors rather than over all functions of the inputs,
 /// because the target says a great deal about what the factors must be.  A
@@ -985,21 +1098,16 @@ bool expandProduct(llvm::ArrayRef<TruthTable> Factors, size_t Corners,
 /// to a few tens of thousands of candidates.
 ///
 /// More than one product can match, and which reads best is not the order they
-/// are found in, so they are all collected and ranked by the caller.
-llvm::SmallVector<ProductMatch, 4>
-matchProducts(const std::map<Monomial, llvm::APInt> &Higher, unsigned Degree,
-              unsigned NumAtoms, uint32_t Width) {
-  constexpr unsigned kMaxMatches = 8;
-  /// Enumerations past this are declined rather than run.  It bounds the search
-  /// for one product's shape and nothing else: an expression too tangled for it
-  /// still goes through every other path, and nesting is reached by the walk
-  /// above rather than by this degree.
-  constexpr uint64_t kMaxTuples = uint64_t(1) << 20;
-
+/// are found in, so the caller ranks every match reached within the budget.
+/// Combination generation is iterative: product degree changes memory use, not
+/// call-stack depth.
+template <typename FnT>
+void forEachProductMatch(const std::map<Monomial, llvm::APInt> &Higher,
+                         unsigned Degree, unsigned NumAtoms, uint32_t Width,
+                         WorkBudget &Budget, FnT Visit) {
   const size_t Corners = size_t(1) << NumAtoms;
-  llvm::SmallVector<ProductMatch, 4> Matches;
-  if (Degree < 2 || Degree > kMaxProductDegree)
-    return Matches;
+  if (Degree < 2)
+    return;
 
   TruthTable Active = 0;
   for (const auto &[Key, Coeff] : Higher)
@@ -1007,42 +1115,41 @@ matchProducts(const std::map<Monomial, llvm::APInt> &Higher, unsigned Degree,
 
   TruthTable Shared = 0;
   for (size_t M = 0; M < Corners; ++M) {
-    llvm::SmallVector<uint16_t, kMaxProductDegree> Repeat(
-        Degree, static_cast<uint16_t>(M));
-    if (Higher.count(packMonomial(Repeat)))
+    Monomial Repeat(Degree, static_cast<uint16_t>(M));
+    if (Higher.count(Repeat))
       Shared |= TruthTable(1) << M;
   }
 
   llvm::SmallVector<TruthTable, 64> Candidates;
   const TruthTable Free = Active & ~Shared;
   for (TruthTable Sub = Free;; Sub = (Sub - 1) & Free) {
-    if (TruthTable Table = Shared | Sub)
+    if (TruthTable Table = Shared | Sub) {
+      if (!Budget.consume())
+        return;
       Candidates.push_back(Table);
+    }
     if (Sub == 0)
       break;
   }
   if (Candidates.empty())
-    return Matches;
+    return;
 
-  uint64_t Tuples = 1;
-  for (unsigned J = 0; J < Degree; ++J) {
-    Tuples = Tuples * (Candidates.size() + J) / (J + 1);
-    if (Tuples > kMaxTuples)
-      return Matches;
-  }
-
-  llvm::SmallVector<TruthTable, kMaxProductDegree> Factors;
+  llvm::SmallVector<size_t, 4> Choice(Degree, 0);
+  llvm::SmallVector<TruthTable, 4> Factors(Degree);
   std::map<Monomial, unsigned> Counts;
   // Nondecreasing tuples, because a product does not care what order its
   // factors are written in.
-  auto walk = [&](auto &Self, size_t Start) -> void {
-    if (Factors.size() == Degree) {
-      TruthTable Union = 0;
-      for (TruthTable Table : Factors)
-        Union |= Table;
-      if (Union != Active || !expandProduct(Factors, Corners, Higher, Counts))
-        return;
+  for (;;) {
+    if (!Budget.consume())
+      return;
+    TruthTable Union = 0;
+    for (size_t I = 0; I < Degree; ++I) {
+      Factors[I] = Candidates[Choice[I]];
+      Union |= Factors[I];
+    }
 
+    if (Union == Active &&
+        expandProduct(Factors, Corners, Higher, Counts, Budget)) {
       // Pin the coefficient on a monomial the product reaches exactly once.
       // Where every monomial is reached more than once no single coefficient
       // can be read off, and the shape is refused rather than guessed at.
@@ -1052,29 +1159,35 @@ matchProducts(const std::map<Monomial, llvm::APInt> &Higher, unsigned Degree,
           Coeff = &Higher.find(Key)->second;
           break;
         }
-      if (!Coeff || Coeff->isZero())
-        return;
-
-      for (const auto &[Key, Count] : Counts) {
-        llvm::APInt Predicted =
-            *Coeff * llvm::APInt(Width, Count, /*isSigned=*/false,
-                                 /*implicitTrunc=*/true);
-        if (Predicted != Higher.find(Key)->second)
-          return;
+      bool Matches = Coeff && !Coeff->isZero();
+      if (Matches) {
+        for (const auto &[Key, Count] : Counts) {
+          llvm::APInt Predicted =
+              *Coeff * llvm::APInt(Width, Count, /*isSigned=*/false,
+                                   /*implicitTrunc=*/true);
+          if (Predicted != Higher.find(Key)->second) {
+            Matches = false;
+            break;
+          }
+        }
       }
-      Matches.push_back(ProductMatch{*Coeff, Factors});
-      return;
-    }
-    for (size_t I = Start; I < Candidates.size(); ++I) {
-      if (Matches.size() >= kMaxMatches)
+      if (Matches && !Visit(*Coeff, Factors))
         return;
-      Factors.push_back(Candidates[I]);
-      Self(Self, I);
-      Factors.pop_back();
     }
-  };
-  walk(walk, 0);
-  return Matches;
+
+    if (Budget.exhausted())
+      return;
+
+    size_t Pos = Degree;
+    while (Pos > 0 && Choice[Pos - 1] + 1 == Candidates.size())
+      --Pos;
+    if (Pos == 0)
+      return;
+    const size_t Next = Choice[Pos - 1] + 1;
+    for (size_t I = Pos - 1; I < Degree; ++I) {
+      Choice[I] = Next;
+    }
+  }
 }
 
 /// Rewrite \p Body as one product plus a linear remainder, when it is of that
@@ -1082,12 +1195,13 @@ matchProducts(const std::map<Monomial, llvm::APInt> &Higher, unsigned Degree,
 std::optional<SymRef> solvePolynomial(SymContext &Ctx, SymRef Body,
                                       llvm::ArrayRef<uint32_t> AtomIds,
                                       llvm::ArrayRef<SymRef> Atoms,
-                                      const MBAOptions &Opts) {
-  // Synthesis is only guaranteed to return the shortest expression up to this
-  // many inputs, and a product written out of longer factors than that reads
-  // worse than what it replaces.
+                                      const MBAOptions &Opts,
+                                      WorkBudget &Budget) {
+  // Up to three inputs, bitwise synthesis is globally minimal.  Above that its
+  // prime-implicant cover is still exact; candidate ranking and the final size
+  // gate decide whether the resulting product is worth returning.
   const auto NumAtoms = static_cast<unsigned>(AtomIds.size());
-  if (NumAtoms > kMaxOptimalTruthTableVars)
+  if (NumAtoms > kMaxTruthTableVars)
     return std::nullopt;
 
   std::optional<llvm::SmallVector<PolyTerm, 8>> Terms =
@@ -1097,7 +1211,7 @@ std::optional<SymRef> solvePolynomial(SymContext &Ctx, SymRef Body,
 
   const uint32_t Width = Ctx.width(Body);
   std::optional<PolyForm> Form =
-      expandOverMinterms(Ctx, *Terms, AtomIds, Width);
+      expandOverMinterms(Ctx, *Terms, AtomIds, Width, Budget);
   // Without a product there is nothing here the linear measurement did not
   // already see.
   if (!Form || !Form->SawProduct)
@@ -1123,17 +1237,24 @@ std::optional<SymRef> solvePolynomial(SymContext &Ctx, SymRef Body,
     if (monomialDegree(Key) != Form->Degree)
       return std::nullopt;
 
-  llvm::SmallVector<SymRef, 4> Candidates;
-  for (const ProductMatch &Match :
-       matchProducts(Form->Higher, Form->Degree, NumAtoms, Width)) {
-    llvm::SmallVector<SymRef, kMaxProductDegree + 1> Factors;
-    Factors.push_back(Ctx.mkConst(Match.Coeff));
-    for (TruthTable Table : Match.Factors)
-      Factors.push_back(synthesizeBitwise(Ctx, Table, Atoms));
-    Candidates.push_back(Ctx.mkAdd(Ctx.mkMul(Factors), Remainder));
-  }
-
-  SymRef Best = cheapestOf(Ctx, Candidates);
+  SymRef Best;
+  size_t BestCost = 0;
+  forEachProductMatch(
+      Form->Higher, Form->Degree, NumAtoms, Width, Budget,
+      [&](const llvm::APInt &Coeff, llvm::ArrayRef<TruthTable> Match) {
+        llvm::SmallVector<SymRef, 8> Factors;
+        Factors.reserve(Match.size() + 1);
+        Factors.push_back(Ctx.mkConst(Coeff));
+        for (TruthTable Table : Match)
+          Factors.push_back(synthesizeBitwise(Ctx, Table, Atoms));
+        SymRef Candidate = Ctx.mkAdd(Ctx.mkMul(Factors), Remainder);
+        const size_t Cost = readingCost(Ctx, Candidate);
+        if (!Best.isValid() || Cost < BestCost) {
+          Best = Candidate;
+          BestCost = Cost;
+        }
+        return true;
+      });
   if (!Best.isValid())
     return std::nullopt;
   return Best;
@@ -1160,6 +1281,10 @@ struct SolveReport {
   /// allows.  That is the one refusal a larger budget would undo, so it is
   /// worth telling apart from having nothing to measure at all.
   bool TooWide = false;
+  /// Set when any traversal, measurement, proof, or product search stopped at
+  /// MaxWork.  Unlike an unsupported shape, a larger budget can change this
+  /// answer.
+  bool BudgetExhausted = false;
 };
 
 std::optional<Region> readRegion(SymContext &Ctx, SymRef E, unsigned MaxAtoms,
@@ -1171,9 +1296,11 @@ std::optional<Region> readRegion(SymContext &Ctx, SymRef E, unsigned MaxAtoms,
   Region Out;
   Out.Abstract = std::move(*Abstract);
   Ctx.collectVars(Out.Abstract.Body, Out.AtomIds);
-  if (Out.AtomIds.size() > MaxAtoms)
+  const bool TooWide =
+      Out.AtomIds.size() > MaxAtoms || !cornerCount(Out.AtomIds.size());
+  if (TooWide)
     Rep.TooWide = true;
-  if (Out.AtomIds.empty() || Out.AtomIds.size() > MaxAtoms)
+  if (Out.AtomIds.empty() || TooWide)
     return std::nullopt;
   for (uint32_t Id : Out.AtomIds) {
     const SymVarInfo &Info = Ctx.varInfo(Id);
@@ -1191,7 +1318,7 @@ std::optional<Region> readRegion(SymContext &Ctx, SymRef E, unsigned MaxAtoms,
 /// of, and the expansion handles products the measurement cannot read — so
 /// both run and the shorter answer wins.
 SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
-                   SolveReport &Rep) {
+                   WorkBudget &Budget, SolveReport &Rep) {
   llvm::SmallVector<Candidate, 6> Candidates;
   bool Measured = false;
 
@@ -1199,34 +1326,48 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
           readRegion(Ctx, E, Opts.MaxAtoms, /*AllowProducts=*/false, Rep)) {
     Measured = true;
     auto NumAtoms = static_cast<unsigned>(Linear->AtomIds.size());
-    llvm::SmallVector<SymRef, 4> Forms;
-    linearCandidates(Ctx, measure(Ctx, Linear->Abstract.Body, Linear->AtomIds),
-                     Linear->Atoms, termBudget(Ctx, E, Opts), Forms);
-    for (SymRef Form : Forms)
-      Candidates.push_back(
-          {Linear->Abstract.Hidden.empty()
-               ? Form
-               : Ctx.substitute(Form, Linear->Abstract.Hidden),
-           NumAtoms});
+    std::optional<size_t> Corners = cornerCount(Linear->AtomIds.size());
+    if (!Corners || !Budget.consume(*Corners)) {
+      Rep.BudgetExhausted = true;
+    } else {
+      llvm::SmallVector<SymRef, 4> Forms;
+      linearCandidates(Ctx,
+                       measure(Ctx, Linear->Abstract.Body, Linear->AtomIds),
+                       Linear->Atoms, termBudget(Ctx, E, Opts), Forms);
+      for (SymRef Form : Forms) {
+        SymRef Rewritten = Linear->Abstract.Hidden.empty()
+                               ? Form
+                               : Ctx.substitute(Form, Linear->Abstract.Hidden);
+        if (proveLinearIdentity(Ctx, E, Rewritten, Opts.MaxAtoms, Budget))
+          Candidates.push_back({Rewritten, NumAtoms, true});
+      }
+    }
   }
 
   if (std::optional<Region> Poly =
           readRegion(Ctx, E, Opts.MaxAtoms, /*AllowProducts=*/true, Rep)) {
     Measured = true;
-    if (std::optional<SymRef> Form = solvePolynomial(
-            Ctx, Poly->Abstract.Body, Poly->AtomIds, Poly->Atoms, Opts))
-      Candidates.push_back({Poly->Abstract.Hidden.empty()
-                                ? *Form
-                                : Ctx.substitute(*Form, Poly->Abstract.Hidden),
-                            static_cast<unsigned>(Poly->AtomIds.size())});
+    if (std::optional<SymRef> Form =
+            solvePolynomial(Ctx, Poly->Abstract.Body, Poly->AtomIds,
+                            Poly->Atoms, Opts, Budget)) {
+      SymRef Rewritten = Poly->Abstract.Hidden.empty()
+                             ? *Form
+                             : Ctx.substitute(*Form, Poly->Abstract.Hidden);
+      if (provePolynomialIdentity(Ctx, E, Rewritten, Opts.MaxAtoms, Budget))
+        Candidates.push_back(
+            {Rewritten, static_cast<unsigned>(Poly->AtomIds.size()), true});
+    }
   }
+  Rep.BudgetExhausted |= Budget.exhausted();
 
   // Reaching a measurement at all is the difference between "there is nothing
   // here of the kind I read" and "I read it and it is already as short as it
   // gets".  Being refused for width is a third answer again, and the only one a
   // larger budget would change.
   if (Rep.Outcome == MBAOutcome::NotApplicable) {
-    if (Measured)
+    if (Rep.BudgetExhausted)
+      Rep.Outcome = MBAOutcome::BudgetExhausted;
+    else if (Measured)
       Rep.Outcome = MBAOutcome::AlreadyShortest;
     else if (Rep.TooWide)
       Rep.Outcome = MBAOutcome::TooManyInputs;
@@ -1235,6 +1376,8 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
   const Candidate *Best = nullptr;
   size_t BestCost = 0;
   for (const Candidate &C : Candidates) {
+    if (!C.Proven)
+      continue;
     size_t Cost = readingCost(Ctx, C.Expr);
     if (!Best || Cost < BestCost) {
       Best = &C;
@@ -1244,8 +1387,10 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
   if (!Best || Best->Expr == E)
     return E;
 
+  assert(Best->Proven && "an unproved MBA candidate reached selection");
   bool Verified = agreeOnSamples(Ctx, E, Best->Expr, Opts.VerifySamples);
-  assert(Verified && "an MBA rewrite disagreed with the expression it replaces");
+  assert(Verified &&
+         "an MBA rewrite disagreed with the expression it replaces");
   if (!Verified)
     return E;
 
@@ -1280,7 +1425,7 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
 /// check at the end guards against a slip in that reasoning rather than being
 /// the reason to believe it.
 SymRef solveWide(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
-                 SolveReport &Rep) {
+                 WorkBudget &Budget, SolveReport &Rep) {
   // An expression cannot abstract to more inputs than it has nodes, so this
   // rejects everything narrow without paying for an abstraction first.
   if (Ctx.dagSize(E) <= Opts.MaxAtoms)
@@ -1351,7 +1496,8 @@ SymRef solveWide(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
     SymRef Part =
         GroupTerms.size() == 1 ? GroupTerms[0] : Ctx.mkAdd(GroupTerms);
     SolveReport PartRep;
-    SymRef Solved = solveRegion(Ctx, Part, Opts, PartRep);
+    SymRef Solved = solveRegion(Ctx, Part, Opts, Budget, PartRep);
+    Rep.BudgetExhausted |= PartRep.BudgetExhausted;
     if (Solved != Part) {
       AnySolved = true;
       Widest = std::max(Widest, PartRep.NumAtoms);
@@ -1387,9 +1533,9 @@ SymRef solveWide(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
 /// it once it has split a masked expression into mask-free columns, so keeping
 /// it separate is what stops the mask split from recursing into itself.
 SymRef solveOneRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
-                      SolveReport &Rep) {
-  SymRef Solved = solveRegion(Ctx, E, Opts, Rep);
-  return Solved == E ? solveWide(Ctx, E, Opts, Rep) : Solved;
+                      WorkBudget &Budget, SolveReport &Rep) {
+  SymRef Solved = solveRegion(Ctx, E, Opts, Budget, Rep);
+  return Solved == E ? solveWide(Ctx, E, Opts, Budget, Rep) : Solved;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1501,6 +1647,49 @@ SymRef restrictToColumn(SymContext &Ctx, SymRef E, const llvm::APInt &ColMask,
   return Done.lookup(E.index());
 }
 
+/// Prove that changing bits outside one mask column cannot affect bits inside
+/// it before the root is reached.
+///
+/// Replacing a constant mask by zero or all-ones is exact at the positions of
+/// one column.  The replacement may differ elsewhere, though, and arithmetic
+/// above that mask could carry the difference back into the column.  A path
+/// made only of whole-word bitwise operators cannot: each output bit depends
+/// only on the input bits at the same position.  Requiring every path from a
+/// collected mask to the root to have that form makes column reassembly a
+/// derivation rather than a sample-backed guess.
+bool maskColumnsAreIndependent(const SymContext &Ctx, SymRef E, uint32_t Width,
+                               llvm::ArrayRef<llvm::APInt> Masks) {
+  std::vector<uint32_t> Order = reachableInOrder(Ctx, E);
+  llvm::DenseMap<uint32_t, bool> SafeToRoot;
+  SafeToRoot[E.index()] = true;
+
+  for (auto It = Order.rbegin(); It != Order.rend(); ++It) {
+    SymRef R(*It);
+    const bool Safe = SafeToRoot.lookup(R.index());
+    const SymOp Op = Ctx.op(R);
+
+    bool HoldsMask = false;
+    if (Ctx.width(R) == Width && isBitwise(Op))
+      for (SymRef C : Ctx.operands(R))
+        if (Ctx.isConst(C) && llvm::any_of(Masks, [&](const llvm::APInt &M) {
+              return M == Ctx.constValue(C);
+            })) {
+          HoldsMask = true;
+          break;
+        }
+    if (HoldsMask && !Safe)
+      return false;
+
+    const bool ChildSafe = Safe && Ctx.width(R) == Width && isBitwise(Op);
+    for (SymRef C : Ctx.operands(R)) {
+      auto [Pos, Inserted] = SafeToRoot.try_emplace(C.index(), ChildSafe);
+      if (!Inserted)
+        Pos->second &= ChildSafe;
+    }
+  }
+  return true;
+}
+
 /// Solve a region a constant mask has made unmeasurable, by measuring each
 /// mask-uniform column of the word on its own.
 ///
@@ -1513,16 +1702,17 @@ SymRef restrictToColumn(SymContext &Ctx, SymRef E, const llvm::APInt &ColMask,
 /// The split is exact only when no arithmetic carry crosses a column boundary.
 /// A low mask over a sum discards the carry it would have produced, so the
 /// common case holds, but two summands masked to the same nibble do not: the
-/// carry between them lands in a position the split has already decided.  Unlike
-/// the linear and product derivations, whose exactness is structural, this one
-/// is conditional, so the sample check is a filter that declines a bad split
-/// rather than an assertion that no split is ever bad.
+/// carry between them lands in a position the split has already decided.  The
+/// path from every mask to the root is therefore proved to contain only
+/// position-wise bitwise operators before any column is measured.
 SymRef solveMasked(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
-                   SolveReport &Rep) {
+                   WorkBudget &Budget, SolveReport &Rep) {
   const uint32_t Width = Ctx.width(E);
   llvm::SmallVector<llvm::APInt, 8> Masks;
   collectBitwiseMasks(Ctx, E, Width, Masks);
   if (Masks.empty())
+    return E;
+  if (!maskColumnsAreIndependent(Ctx, E, Width, Masks))
     return E;
 
   llvm::SmallVector<llvm::APInt, 8> Cols = maskColumns(Width, Masks);
@@ -1536,7 +1726,8 @@ SymRef solveMasked(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
   for (const llvm::APInt &Col : Cols) {
     SymRef Ecol = restrictToColumn(Ctx, E, Col, Masks);
     SolveReport ColRep;
-    SymRef Scol = solveOneRegion(Ctx, Ecol, Opts, ColRep);
+    SymRef Scol = solveOneRegion(Ctx, Ecol, Opts, Budget, ColRep);
+    Rep.BudgetExhausted |= ColRep.BudgetExhausted;
     if (Scol != Ecol) {
       AnySolved = true;
       Widest = std::max(Widest, ColRep.NumAtoms);
@@ -1552,27 +1743,27 @@ SymRef solveMasked(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
   if (Rebuilt == E)
     return E;
 
-  // A carry that crossed a column makes the reassembly wrong; the check catches
-  // that and leaves the expression as it was.
-  if (!agreeOnSamples(Ctx, E, Rebuilt, Opts.VerifySamples))
+  // Independence above made the split exact.  Sampling remains a defect net
+  // for the implementation of the derivation, never the reason to accept it.
+  bool Verified = agreeOnSamples(Ctx, E, Rebuilt, Opts.VerifySamples);
+  assert(Verified && "a proved mask split disagreed with what it replaces");
+  if (!Verified)
     return E;
   if (!Opts.AllowGrowth && readingCost(Ctx, Rebuilt) > readingCost(Ctx, E))
     return E;
 
   Rep.NumAtoms = Widest;
   Rep.Outcome = MBAOutcome::Rewritten;
-  // The sample check is what decided this one, so say so rather than claim the
-  // derivation carried it.
-  Rep.Evidence = MBAEvidence::Samples;
+  Rep.Evidence = MBAEvidence::Derivation;
   return Rebuilt;
 }
 
 /// Measure \p E as one region, splitting a wide one into independent parts and
 /// a masked one into mask-uniform columns.
 SymRef solveRegionOrSplit(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
-                          SolveReport &Rep) {
-  SymRef Solved = solveOneRegion(Ctx, E, Opts, Rep);
-  return Solved == E ? solveMasked(Ctx, E, Opts, Rep) : Solved;
+                          WorkBudget &Budget, SolveReport &Rep) {
+  SymRef Solved = solveOneRegion(Ctx, E, Opts, Budget, Rep);
+  return Solved == E ? solveMasked(Ctx, E, Opts, Budget, Rep) : Solved;
 }
 
 } // namespace
@@ -1613,10 +1804,16 @@ MBAResult simplifyMBA(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
 
   Result.SizeBefore = readingCost(Ctx, E);
   Result.SizeAfter = Result.SizeBefore;
-  Result.Work = Ctx.dagSize(E);
+  WorkBudget Budget(Opts.MaxWork);
+  if (!Budget.consume(Ctx.dagSize(E))) {
+    Result.Work = Budget.used();
+    Result.Outcome = MBAOutcome::BudgetExhausted;
+    return Result;
+  }
 
   SolveReport Rep;
-  Result.Expr = solveRegionOrSplit(Ctx, E, Opts, Rep);
+  Result.Expr = solveRegionOrSplit(Ctx, E, Opts, Budget, Rep);
+  Result.Work = Budget.used();
   Result.NumAtoms = Rep.NumAtoms;
   Result.Outcome = Rep.Outcome;
   Result.Evidence = Rep.Evidence;
@@ -1643,7 +1840,7 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
   // expressions nest deeply enough that recursion is a real hazard.
   const std::vector<uint32_t> Order = reachableInOrder(Ctx, E);
   llvm::DenseMap<uint32_t, SymRef> Solved;
-  size_t Work = 0;
+  WorkBudget Budget(Opts.MaxWork);
   bool Skipped = false;
   // The weakest evidence any layer rested on is what the whole answer rests on,
   // because the layers above were measured over what it produced.
@@ -1667,14 +1864,15 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
         Rebuilt = Ctx.rebuild(R, NewOps);
     }
 
-    if (Work < Opts.MaxWork) {
-      Work += Ctx.dagSize(Rebuilt);
+    if (Budget.consume(Ctx.dagSize(Rebuilt))) {
       SolveReport Rep;
-      SymRef Measured = solveRegionOrSplit(Ctx, Rebuilt, Opts, Rep);
+      SymRef Measured = solveRegionOrSplit(Ctx, Rebuilt, Opts, Budget, Rep);
       if (Measured != Rebuilt) {
         Rebuilt = Measured;
         Result.NumAtoms = std::max(Result.NumAtoms, Rep.NumAtoms);
         AnySampled |= Rep.Evidence == MBAEvidence::Samples;
+      } else if (Rep.Outcome == MBAOutcome::BudgetExhausted) {
+        Skipped = true;
       } else if (Rep.Outcome == MBAOutcome::TooManyInputs &&
                  Result.Outcome == MBAOutcome::NotApplicable) {
         Result.Outcome = MBAOutcome::TooManyInputs;
@@ -1688,7 +1886,7 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
     Solved[Index] = Rebuilt;
   }
 
-  Result.Work = Work;
+  Result.Work = Budget.used();
   SymRef Out = Solved.lookup(E.index());
   if (Out == E) {
     // Running out of budget with regions left unvisited is the one refusal that
@@ -1702,8 +1900,7 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
   Result.SizeAfter = readingCost(Ctx, Out);
   Result.Changed = true;
   Result.Outcome = MBAOutcome::Rewritten;
-  Result.Evidence =
-      AnySampled ? MBAEvidence::Samples : MBAEvidence::Derivation;
+  Result.Evidence = AnySampled ? MBAEvidence::Samples : MBAEvidence::Derivation;
   return Result;
 }
 
