@@ -78,7 +78,9 @@ public:
   /// After an unknown store, concrete loads read stable unknown bytes except
   /// where a later concrete store has established a value again.
   SymRef load(SymRef Addr, uint16_t Bytes);
-  void store(SymRef Addr, SymRef Value);
+  /// Store \p Value and return whether its address was concrete.  A false
+  /// result means memory was conservatively clobbered instead.
+  bool store(SymRef Addr, SymRef Value);
 
   /// What a load that could not be resolved was reading.
   struct LoadOrigin {

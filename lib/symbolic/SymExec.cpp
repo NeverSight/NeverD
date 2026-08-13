@@ -17,11 +17,11 @@
 /// comparison, a division or a shift, so the width is never widened for
 /// convenience.
 ///
-/// An operation the engine does not model writes a fresh input to its
+/// An operation the engine cannot model exactly writes a fresh input to its
 /// destination rather than stopping.  A call, a square root, a population
-/// count: the value becomes an unknown with a name, execution continues, and
-/// whatever comes out further along remains exactly true — it simply mentions
-/// the unknown.
+/// count: the value becomes an unknown with a name and execution continues.
+/// The explorer records that abstraction so callers can distinguish a complete
+/// walk from an exact one.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -323,7 +323,8 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
   const bool HasSpace = Op.NumInputs >= 3;
   SymRef Addr = read(Op.Inputs[HasSpace ? 1 : 0]);
   SymRef Value = read(Op.Inputs[HasSpace ? 2 : 1]);
-  State.store(Addr, Value);
+  if (!State.store(Addr, Value))
+    ++Unmodelled;
   return StepResult::Continue;
 }
 
@@ -357,8 +358,9 @@ StepResult SymExec::stepControl(const LowOp &Op) {
   case NdOp::INDIR_CALL:
     // Stepping over a call rather than stopping at one: what it returns is an
     // unknown, and what it leaves in the registers it is allowed to overwrite
-    // is another.  Both are named, so the code after the call is still
-    // executed exactly.
+    // is another.  Both are named so execution can continue, but without a
+    // callee summary this operation is necessarily an approximation.
+    ++Unmodelled;
     State.clobberRegistersExcept(CallPreserved);
     // With no function summary, the callee may write through any pointer it
     // can reach.  Keeping a pre-call memory byte would turn that uncertainty

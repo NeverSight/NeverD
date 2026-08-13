@@ -83,6 +83,26 @@ version = session.raw.owned_string("neverd_version")
 object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
 ```
 
+### 境界付きシンボリックパス探索
+
+ネイティブ LowIR 関数に対して、`session.symbolic_explore` は型付きのパス結果、基本ブロックのトレース、リソース使用量、および任意のパス述語を返します。
+
+```python
+result = session.symbolic_explore(
+    0x401000,
+    max_paths=64,
+    max_steps=1 << 16,
+    max_block_visits=3,
+    include_expressions=True,
+)
+if not result.exact:
+    print(result.unmodelled_ops)
+for path in result.paths:
+    print(path.outcome, path.blocks, path.predicate)
+```
+
+パス数、ステップ数、ループ訪問回数、または未解決分岐の上限によって探索が停止した場合、`complete` は false です。さらに `exact` が true になるには、未知状態による保守的な置換が一度も行われていない必要があります。未対応の LowIR 操作、要約のない呼び出し、未解決アドレスへのストアは `unmodelled_ops` に数えられます。EVM および SBF セッションではネイティブ LowIR 探索を利用できません。
+
 6 種類の不変イベントは `BINARY_LOADED`、`BINARY_CLOSING`、`FUNCTION_SELECTED`、`ADDRESS_CHANGED`、`ANALYSIS_DONE`、`PATCH_APPLIED` です。コールバック中に payload 文字列がコピーされ、イベント種別に無関係なフィールドは `None` になります。
 
 終了後に使う目的で `Session` を保存しないでください。ネイティブ capsule は `on_term` の開始前、かつネイティブセッションを解放できるようになる前に無効化されます。それ以降の呼び出しは古いメモリを参照せず、`RuntimeError` で失敗します。

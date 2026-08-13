@@ -83,6 +83,26 @@ version = session.raw.owned_string("neverd_version")
 object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
 ```
 
+### Exploration symbolique bornée des chemins
+
+Pour les fonctions LowIR natives, `session.symbolic_explore` renvoie des résultats de chemin typés, la trace des blocs de base, l’utilisation des ressources et, facultativement, les prédicats de chemin :
+
+```python
+result = session.symbolic_explore(
+    0x401000,
+    max_paths=64,
+    max_steps=1 << 16,
+    max_block_visits=3,
+    include_expressions=True,
+)
+if not result.exact:
+    print(result.unmodelled_ops)
+for path in result.paths:
+    print(path.outcome, path.blocks, path.predicate)
+```
+
+`complete` vaut false lorsqu’une limite de chemins, d’étapes, de visites de boucle ou de branche non résolue arrête le parcours. `exact` exige en outre qu’aucune opération n’ait été remplacée de façon conservatrice par un état inconnu ; les opérations LowIR non prises en charge, les appels sans résumé et les écritures via une adresse non résolue sont comptés dans `unmodelled_ops`. Les sessions EVM et SBF n’exposent pas l’exploration LowIR native.
+
 Les six variantes d’événement immuables sont `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` et `PATCH_APPLIED`. Les chaînes du payload sont copiées pendant le callback ; les champs sans rapport avec la variante valent `None`.
 
 Ne conservez jamais une `Session` pour l’utiliser après la terminaison. La capsule native est invalidée avant le début de `on_term` et avant que la session native puisse être libérée. Un appel ultérieur échoue avec `RuntimeError` au lieu de déréférencer une mémoire périmée.

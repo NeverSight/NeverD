@@ -122,6 +122,7 @@ cmake --build build
 # 分析
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
+./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -248,6 +249,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `info` / `dashboard` / `headers` | 元数据与概览 |
 | `funcs` | 发现的函数 |
 | `disasm` | 反汇编（`--func` 名称或十六进制） |
+| `sym-explore` | 有界原生 LowIR 路径探索（`--func`；JSON 输出） |
 | `hex` | 按地址十六进制转储 |
 | `cfg` / `callgraph` | CFG / 调用图（JSON；可选 DOT/SVG） |
 | `xrefs` | 交叉引用 |

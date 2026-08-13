@@ -540,8 +540,22 @@ TEST(SymExec, ACallInvalidatesMemoryTheCalleeMayHaveWritten) {
   ASSERT_EQ(Exec.step(op(NdOp::CALL, NdVar{}, {NdVar::cst(0x401500, 8)})),
             StepResult::Continue);
 
+  EXPECT_EQ(Exec.unmodelledCount(), 1u);
   EXPECT_TRUE(State.memoryIsUnknown());
   EXPECT_FALSE(Ctx.isConst(State.load(Addr, 4)));
+}
+
+TEST(SymExec, AStoreThroughAnUnknownAddressIsReportedAsAnApproximation) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymExec Exec(Ctx, State);
+
+  ASSERT_EQ(Exec.step(op(NdOp::STORE, NdVar{},
+                         {NdVar::reg(kRax, 8), NdVar::cst(0x12345678, 4)})),
+            StepResult::Continue);
+
+  EXPECT_EQ(Exec.unmodelledCount(), 1u);
+  EXPECT_TRUE(State.memoryIsUnknown());
 }
 
 } // namespace

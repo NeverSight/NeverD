@@ -116,8 +116,11 @@ TEST(SymExplore, TargetCallingConventionPreservesDeclaredRegisterBytes) {
   ExploreOptions Opts;
   Opts.CallPreservedRegisters.push_back({kRbx, 8});
 
-  std::vector<SymPath> Paths = explorePaths(Ctx, B.function(), Opts);
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  std::vector<SymPath> &Paths = Exploration.Paths;
   ASSERT_EQ(Paths.size(), 1u);
+  EXPECT_EQ(Exploration.UnmodelledOps, 1u);
+  EXPECT_EQ(Paths[0].UnmodelledOps, 1u);
   SymRef Preserved = Paths[0].State.read(SymSpace::Register, kRbx, 8);
   ASSERT_TRUE(Ctx.isConst(Preserved));
   EXPECT_EQ(Ctx.constValue(Preserved).getZExtValue(), 2u);

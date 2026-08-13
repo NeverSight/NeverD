@@ -83,6 +83,26 @@ version = session.raw.owned_string("neverd_version")
 object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
 ```
 
+### 제한된 기호 경로 탐색
+
+네이티브 LowIR 함수에서 `session.symbolic_explore`는 형식화된 경로 결과, 기본 블록 추적, 리소스 사용량 및 선택적 경로 조건식을 반환합니다.
+
+```python
+result = session.symbolic_explore(
+    0x401000,
+    max_paths=64,
+    max_steps=1 << 16,
+    max_block_visits=3,
+    include_expressions=True,
+)
+if not result.exact:
+    print(result.unmodelled_ops)
+for path in result.paths:
+    print(path.outcome, path.blocks, path.predicate)
+```
+
+경로, 단계, 루프 방문 또는 확인되지 않은 분기 제한 때문에 탐색이 중단되면 `complete`는 false입니다. `exact`가 true이려면 어떤 연산도 보수적으로 미지 상태로 대체되지 않아야 합니다. 지원되지 않는 LowIR 연산, 요약이 없는 호출 및 확인되지 않은 주소를 통한 저장은 `unmodelled_ops`에 포함됩니다. EVM 및 SBF 세션에서는 네이티브 LowIR 탐색을 사용할 수 없습니다.
+
 변경 불가능한 여섯 이벤트는 `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE`, `PATCH_APPLIED`입니다. 콜백 중 payload 문자열이 복사되며 해당 이벤트 종류와 관계없는 필드는 `None`입니다.
 
 종료 후 사용하기 위해 `Session`을 저장하지 마십시오. 네이티브 capsule은 `on_term`이 시작되기 전과 네이티브 세션을 해제할 수 있기 전에 무효화됩니다. 이후 호출은 오래된 메모리를 역참조하지 않고 `RuntimeError`로 실패합니다.

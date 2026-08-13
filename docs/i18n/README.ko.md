@@ -122,6 +122,7 @@ cmake --build build
 # 분석
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
+./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -248,6 +249,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `info` / `dashboard` / `headers` | 메타데이터와 개요 |
 | `funcs` | 발견된 함수 |
 | `disasm` | 디스어셈블(`--func` 이름 또는 hex) |
+| `sym-explore` | 제한된 네이티브 LowIR 경로 탐색(`--func`, JSON 출력) |
 | `hex` | 주소의 hex dump |
 | `cfg` / `callgraph` | CFG / 호출 그래프(JSON; DOT/SVG 선택) |
 | `xrefs` | 교차 참조 |

@@ -222,17 +222,18 @@ SymRef SymState::load(SymRef Addr, uint16_t Bytes) {
   return read(SymSpace::Memory, *Concrete, Bytes);
 }
 
-void SymState::store(SymRef Addr, SymRef Value) {
+bool SymState::store(SymRef Addr, SymRef Value) {
   std::optional<uint64_t> Concrete = concreteAddress(*Ctx, Addr);
   if (!Concrete) {
     clobberMemory();
-    return;
+    return false;
   }
   // A known write establishes these bytes even when an earlier unknown write
   // forced the rest of memory into an unknown epoch.  It may alias any
   // unresolved address, so those cached reads belong to the previous epoch.
   SymbolicLoads = std::make_shared<SymbolicLoadValues>();
   write(SymSpace::Memory, *Concrete, Value);
+  return true;
 }
 
 void SymState::clobberRegistersExcept(

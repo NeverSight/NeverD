@@ -83,6 +83,26 @@ version = session.raw.owned_string("neverd_version")
 object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
 ```
 
+### 有界符號路徑探索
+
+對於原生 LowIR 函式，`session.symbolic_explore` 會傳回具型別的路徑結果、基本區塊軌跡、資源使用量及可選的路徑述詞：
+
+```python
+result = session.symbolic_explore(
+    0x401000,
+    max_paths=64,
+    max_steps=1 << 16,
+    max_block_visits=3,
+    include_expressions=True,
+)
+if not result.exact:
+    print(result.unmodelled_ops)
+for path in result.paths:
+    print(path.outcome, path.blocks, path.predicate)
+```
+
+若路徑數、步數、迴圈造訪次數或未解析分支達到上限並終止遍歷，`complete` 為 false。`exact` 還要求沒有任何操作被保守地替換為未知狀態；不受支援的 LowIR 操作、沒有摘要的呼叫，以及透過未解析位址進行的儲存都會計入 `unmodelled_ops`。EVM 與 SBF 工作階段不提供原生 LowIR 探索。
+
 六種不可變事件分別是 `BINARY_LOADED`、`BINARY_CLOSING`、`FUNCTION_SELECTED`、`ADDRESS_CHANGED`、`ANALYSIS_DONE` 與 `PATCH_APPLIED`。回呼期間會複製承載字串；與目前事件類型無關的欄位為 `None`。
 
 切勿儲存 `Session` 並在終止後繼續使用。原生 capsule 會在 `on_term` 開始前及原生工作階段釋放前失效。後續呼叫會擲出 `RuntimeError`，而不會取消參照過期記憶體。

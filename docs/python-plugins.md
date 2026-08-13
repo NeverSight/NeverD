@@ -102,6 +102,31 @@ version = session.raw.owned_string("neverd_version")
 object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
 ```
 
+### Bounded symbolic path exploration
+
+For native LowIR functions, `session.symbolic_explore` returns typed path
+outcomes, block traces, resource use, and optional predicates:
+
+```python
+result = session.symbolic_explore(
+    0x401000,
+    max_paths=64,
+    max_steps=1 << 16,
+    max_block_visits=3,
+    include_expressions=True,
+)
+if not result.exact:
+    print(result.unmodelled_ops)
+for path in result.paths:
+    print(path.outcome, path.blocks, path.predicate)
+```
+
+`complete` is false when a path, step, loop, or unresolved-branch bound stops
+the walk. `exact` additionally requires that no operation was conservatively
+replaced by unknown state; unsupported LowIR operations, calls without
+summaries, and stores through unresolved addresses are counted in
+`unmodelled_ops`. EVM and SBF sessions do not expose native LowIR exploration.
+
 The six immutable event variants are `BINARY_LOADED`, `BINARY_CLOSING`,
 `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE`, and `PATCH_APPLIED`.
 Payload strings are copied during the callback; fields unrelated to a variant

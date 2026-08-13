@@ -18,7 +18,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/JSON.h"
 
-#include <algorithm>
 #include <cstddef>
 
 using namespace neverd;
@@ -58,29 +57,13 @@ bool includeExpressions(const neverd_symbolic_explore_options *Input) {
          Input->include_expressions != 0;
 }
 
-void addPreservedRange(
-    llvm::SmallVectorImpl<symbolic::SymRegisterRange> &Ranges, uint64_t Offset,
-    uint16_t Bytes) {
-  if (Offset == InvalidVA || Bytes == 0)
-    return;
-  auto It =
-      std::find_if(Ranges.begin(), Ranges.end(), [Offset](const auto &Range) {
-        return Range.Offset == Offset;
-      });
-  if (It == Ranges.end())
-    Ranges.push_back({Offset, Bytes});
-  else
-    It->Bytes = std::max(It->Bytes, Bytes);
-}
-
 llvm::SmallVector<symbolic::SymRegisterRange, 16>
 callPreservedRanges(const BinaryImage &Image) {
   const TargetRegInfo &TRI = getTargetRegInfo(Image.Arch);
   llvm::SmallVector<symbolic::SymRegisterRange, 16> Ranges;
-  addPreservedRange(Ranges, TRI.StackPointer, TRI.PointerSize);
-  addPreservedRange(Ranges, TRI.FramePointer, TRI.PointerSize);
-  for (uint64_t Reg : TRI.CalleeSaveRegs)
-    addPreservedRange(Ranges, Reg, TRI.FullRegWidth);
+  for (const TargetRegisterRange &Range :
+       TRI.callPreservedRanges(Image.Format))
+    Ranges.push_back({Range.Offset, Range.Bytes});
   return Ranges;
 }
 

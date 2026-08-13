@@ -122,6 +122,7 @@ cmake --build build
 # Análisis
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
+./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -248,6 +249,7 @@ neverd patch --subst --flatten --mba -o patched binary
 | `info` / `dashboard` / `headers` | Metadatos y resumen |
 | `funcs` | Funciones descubiertas |
 | `disasm` | Desensamblar (`--func` nombre o hex) |
+| `sym-explore` | Exploración acotada de rutas LowIR nativas (`--func`; salida JSON) |
 | `hex` | Volcado hex en una dirección |
 | `cfg` / `callgraph` | CFG / grafo de llamadas (JSON; DOT/SVG opcional) |
 | `xrefs` | Referencias cruzadas |

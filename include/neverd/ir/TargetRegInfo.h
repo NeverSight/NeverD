@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace neverd {
 
@@ -65,6 +66,11 @@ struct SubRegEntry {
 
 /// Function pointer type for architecture-specific register name lookup.
 using RegNameFn = const char *(*)(uint64_t RegOff, uint16_t Size);
+
+struct TargetRegisterRange {
+  uint64_t Offset = 0;
+  uint16_t Bytes = 0;
+};
 
 struct TargetRegInfo {
   Arch TheArch = Arch::Unknown;
@@ -194,6 +200,12 @@ struct TargetRegInfo {
   /// caller-saved view.  AAPCS64 v8-v15 are the only partial case: their low
   /// 8 bytes are preserved even when a wider Q-register view is used.
   uint16_t callPreservedPrefixSize(uint64_t RegOff, uint16_t Size) const;
+
+  /// Every register byte range preserved by the platform calling convention.
+  /// Includes the stack/frame pointers, partially preserved vector banks, and
+  /// Win64's additional nonvolatile GPR/SIMD registers.
+  std::vector<TargetRegisterRange>
+  callPreservedRanges(BinaryFormat Format) const;
 
   bool isVectorReg(uint64_t RegOff) const {
     if (VecRegCount == 0)

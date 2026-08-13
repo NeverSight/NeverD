@@ -11,6 +11,9 @@
 #include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/X86Regs.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace neverd {
 
 //===----------------------------------------------------------------------===//
@@ -624,6 +627,45 @@ uint16_t TargetRegInfo::callPreservedPrefixSize(uint64_t RegOff,
     return 0;
   unsigned VecIdx = static_cast<unsigned>((RegOff - VecRegBase) / VecRegStride);
   return VecIdx >= 8 && VecIdx <= 15 ? 8 : 0;
+}
+
+std::vector<TargetRegisterRange>
+TargetRegInfo::callPreservedRanges(BinaryFormat Format) const {
+  std::vector<TargetRegisterRange> Ranges;
+  auto Add = [&](uint64_t Offset, uint16_t Bytes) {
+    if (Bytes == 0)
+      return;
+    auto It = std::find_if(Ranges.begin(), Ranges.end(),
+                           [Offset](const TargetRegisterRange &Range) {
+                             return Range.Offset == Offset;
+                           });
+    if (It == Ranges.end())
+      Ranges.push_back({Offset, Bytes});
+    else
+      It->Bytes = std::max(It->Bytes, Bytes);
+  };
+
+  Add(StackPointer, PointerSize);
+  Add(FramePointer, PointerSize);
+  for (uint64_t Reg : CalleeSaveRegs)
+    Add(Reg, FullRegWidth);
+
+  if (VecRegStride <= std::numeric_limits<uint16_t>::max()) {
+    const auto VecBytes = static_cast<uint16_t>(VecRegStride);
+    for (unsigned I = 0; I < VecRegCount; ++I) {
+      const uint64_t Reg = VecRegBase + uint64_t(I) * VecRegStride;
+      Add(Reg, callPreservedPrefixSize(Reg, VecBytes));
+    }
+  }
+
+  if (TheArch == Arch::X64 && Format == BinaryFormat::COFF) {
+    Add(x86reg::RSI, FullRegWidth);
+    Add(x86reg::RDI, FullRegWidth);
+    for (unsigned I = 6; I <= 15 && I < VecRegCount; ++I)
+      Add(VecRegBase + uint64_t(I) * VecRegStride, 16);
+  }
+
+  return Ranges;
 }
 
 uint64_t TargetRegInfo::indirectResultReg() const {

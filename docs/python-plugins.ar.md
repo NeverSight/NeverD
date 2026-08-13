@@ -83,6 +83,26 @@ version = session.raw.owned_string("neverd_version")
 object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
 ```
 
+### استكشاف رمزي محدود للمسارات
+
+تعيد `session.symbolic_explore` للدوال الأصلية في LowIR نتائج مسارات محددة الأنواع، وآثار الكتل الأساسية، واستخدام الموارد، ومسندات المسارات الاختيارية:
+
+```python
+result = session.symbolic_explore(
+    0x401000,
+    max_paths=64,
+    max_steps=1 << 16,
+    max_block_visits=3,
+    include_expressions=True,
+)
+if not result.exact:
+    print(result.unmodelled_ops)
+for path in result.paths:
+    print(path.outcome, path.blocks, path.predicate)
+```
+
+تكون `complete` بقيمة false عندما يوقف الاستكشاف حد للمسارات أو الخطوات أو زيارات الحلقات أو الفروع غير المحلولة. وتتطلب `exact` أيضاً ألا تكون أي عملية قد استُبدلت بصورة محافظة بحالة مجهولة؛ إذ تُحتسب عمليات LowIR غير المدعومة، والاستدعاءات التي بلا ملخص، وعمليات التخزين عبر عناوين غير محلولة ضمن `unmodelled_ops`. لا تتيح جلسات EVM وSBF استكشاف LowIR الأصلي.
+
 متغيرات الأحداث الستة غير القابلة للتغيير هي `BINARY_LOADED` و`BINARY_CLOSING` و`FUNCTION_SELECTED` و`ADDRESS_CHANGED` و`ANALYSIS_DONE` و`PATCH_APPLIED`. تُنسخ سلاسل الحمولة أثناء callback؛ وتكون الحقول غير المتعلقة بنوع الحدث `None`.
 
 لا تحتفظ أبداً بكائن `Session` لاستخدامه بعد الإنهاء. تُبطل capsule الأصلية قبل بدء `on_term` وقبل إمكان تحرير الجلسة الأصلية. يفشل أي استدعاء لاحق بـ `RuntimeError` بدلاً من إلغاء مرجع ذاكرة قديمة.

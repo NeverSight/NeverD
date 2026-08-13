@@ -83,6 +83,26 @@ version = session.raw.owned_string("neverd_version")
 object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
 ```
 
+### Begrenzte symbolische Pfaderkundung
+
+Für native LowIR-Funktionen liefert `session.symbolic_explore` typisierte Pfadergebnisse, Basic-Block-Verläufe, den Ressourcenverbrauch und optional Pfadprädikate:
+
+```python
+result = session.symbolic_explore(
+    0x401000,
+    max_paths=64,
+    max_steps=1 << 16,
+    max_block_visits=3,
+    include_expressions=True,
+)
+if not result.exact:
+    print(result.unmodelled_ops)
+for path in result.paths:
+    print(path.outcome, path.blocks, path.predicate)
+```
+
+`complete` ist false, wenn eine Grenze für Pfade, Schritte, Schleifenbesuche oder nicht aufgelöste Verzweigungen die Erkundung beendet. `exact` setzt zusätzlich voraus, dass keine Operation konservativ durch einen unbekannten Zustand ersetzt wurde; nicht unterstützte LowIR-Operationen, Aufrufe ohne Zusammenfassung und Speicherzugriffe über nicht aufgelöste Adressen werden in `unmodelled_ops` gezählt. EVM- und SBF-Sessions bieten keine native LowIR-Erkundung.
+
 Die sechs unveränderlichen Event-Varianten heißen `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` und `PATCH_APPLIED`. Payload-Zeichenketten werden während des Callbacks kopiert; für die jeweilige Variante irrelevante Felder sind `None`.
 
 Speichern Sie niemals eine `Session`, um sie nach der Terminierung weiterzuverwenden. Die native Capsule wird vor Beginn von `on_term` und vor einer möglichen Freigabe der nativen Session ungültig gemacht. Ein späterer Aufruf schlägt mit `RuntimeError` fehl, statt veralteten Speicher zu dereferenzieren.

@@ -218,6 +218,48 @@ TEST(TargetRegInfo, ARM32PreservesD8ThroughD15Views) {
   EXPECT_FALSE(TRI.isCallPreserved(TRI.VecRegBase + 15 * TRI.VecRegStride, 16));
 }
 
+TEST(TargetRegInfo, EnumeratesPartialVectorCallPreservation) {
+  auto HasRange = [](llvm::ArrayRef<TargetRegisterRange> Ranges,
+                     uint64_t Offset, uint16_t Bytes) {
+    return llvm::any_of(Ranges, [&](const TargetRegisterRange &Range) {
+      return Range.Offset == Offset && Range.Bytes == Bytes;
+    });
+  };
+
+  const TargetRegInfo &A64 = getTargetRegInfo(Arch::AArch64);
+  std::vector<TargetRegisterRange> A64Ranges =
+      A64.callPreservedRanges(BinaryFormat::ELF);
+  EXPECT_TRUE(HasRange(A64Ranges, A64.VecRegBase + 8 * A64.VecRegStride, 8));
+  EXPECT_TRUE(HasRange(A64Ranges, A64.VecRegBase + 15 * A64.VecRegStride, 8));
+  EXPECT_FALSE(HasRange(A64Ranges, A64.VecRegBase + 7 * A64.VecRegStride, 8));
+
+  const TargetRegInfo &ARM = getTargetRegInfo(Arch::ARM);
+  std::vector<TargetRegisterRange> ARMRanges =
+      ARM.callPreservedRanges(BinaryFormat::ELF);
+  EXPECT_TRUE(
+      HasRange(ARMRanges, ARM.VecRegBase + 8 * ARM.VecRegStride, 8));
+  EXPECT_TRUE(
+      HasRange(ARMRanges, ARM.VecRegBase + 15 * ARM.VecRegStride, 8));
+}
+
+TEST(TargetRegInfo, EnumeratesWin64CallPreservation) {
+  auto HasRange = [](llvm::ArrayRef<TargetRegisterRange> Ranges,
+                     uint64_t Offset, uint16_t Bytes) {
+    return llvm::any_of(Ranges, [&](const TargetRegisterRange &Range) {
+      return Range.Offset == Offset && Range.Bytes == Bytes;
+    });
+  };
+
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  std::vector<TargetRegisterRange> Ranges =
+      TRI.callPreservedRanges(BinaryFormat::COFF);
+  EXPECT_TRUE(HasRange(Ranges, x86reg::RSI, 8));
+  EXPECT_TRUE(HasRange(Ranges, x86reg::RDI, 8));
+  EXPECT_TRUE(HasRange(Ranges, x86reg::XMM6, 16));
+  EXPECT_TRUE(HasRange(Ranges, x86reg::XMM15, 16));
+  EXPECT_FALSE(HasRange(Ranges, x86reg::XMM5, 16));
+}
+
 TEST(TargetRegInfo, X86UsesSysVCalleeSavedRegisters) {
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::X86);
 

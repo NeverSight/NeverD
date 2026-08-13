@@ -157,8 +157,10 @@ typedef struct neverd_symbolic_explore_options {
 /// Explore one native LowIR function and return an owned JSON report.
 ///
 /// The report distinguishes a complete walk from one stopped by a loop, step,
-/// path, or unresolved-indirect-branch bound, and reports every unmodelled
-/// operation.  Caller frees the returned string with neverd_free_string().
+/// path, or unresolved-indirect-branch bound, and reports every operation
+/// conservatively replaced by unknown state, including unsummarised calls and
+/// stores through unresolved addresses.  Caller frees the returned string with
+/// neverd_free_string().
 NEVERD_API const char *neverd_symbolic_explore_json(
     neverd_session_t Sess, neverd_va_t FuncEntry,
     const neverd_symbolic_explore_options *Options);

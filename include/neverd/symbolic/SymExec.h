@@ -100,8 +100,8 @@ public:
     CallPreserved = std::move(Ranges);
   }
 
-  /// How many operations were replaced by a named unknown rather than
-  /// executed.
+  /// How many operations required unknown values or conservative havoc rather
+  /// than exact execution.
   ///
   /// Worth asking before believing an absence.  That a value came out not
   /// mentioning something is only evidence it does not depend on it if
