@@ -1,5 +1,9 @@
 add_neverd_component_library(NeverDBackendLLVM
   MedLLVMEmitter.cpp
+  MedLLVMExceptionMetadata.cpp
+  MedLLVMNativeSEH.cpp
+  MedLLVMNativeCxxEH.cpp
+  MedLLVMNativeItaniumEH.cpp
   MedLLVMOpEmitter.cpp
   MedLLVMFloatEmitter.cpp
   MedLLVMCall.cpp

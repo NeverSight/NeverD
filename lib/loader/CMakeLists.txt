@@ -15,6 +15,13 @@ add_neverd_component_library(NeverDLoader
   Rust/RustEH.cpp
   COFF/COFFLoader.cpp
   COFF/COFFException.cpp
+  COFF/COFFExceptionCommon.cpp
+  COFF/COFFExceptionX64.cpp
+  COFF/COFFExceptionPersonality.cpp
+  COFF/COFFExceptionSEH.cpp
+  COFF/COFFExceptionFH3.cpp
+  COFF/COFFExceptionFH4.cpp
+  COFF/COFFExceptionGS.cpp
   COFF/COFFDelphiEH.cpp
   COFF/COFFRegistrationEH.cpp
   COFF/COFFUnwind.cpp
