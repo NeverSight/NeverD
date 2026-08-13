@@ -52,7 +52,7 @@ discovered case a CTest label equal to that executable's target name.
 | `unittests/plugin` | `NeverDPluginRuntimeTests`, `NeverDPythonRuntimeTests`, `NeverDPluginTests`, `NeverDPythonPluginTests` | Native/Python loading, metadata, duplicates, lifecycle, GIL handoff, stale sessions, tracebacks, mixed discovery, and public C routing |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Rewrite/obfuscation equivalence across four ISAs and three object formats |
 | Focused transform files in `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Small, fast-to-relink probes split out of the large semantic binary |
-| `unittests/corpus` (submodule) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests` | Exception and runtime metadata read out of 305 pinned real binaries, each declared in a manifest with the floors its recovery must clear |
+| `unittests/corpus` (submodule) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests` | Exception and runtime metadata read out of 317 pinned real binaries, each declared in a manifest with the floors its recovery must clear |
 
 The source of truth for registration is
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
@@ -83,13 +83,14 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 ```
 
 `check-neverd-corpus` runs every line; `check-neverd-windows-eh-corpus`,
-`check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus`, and
-`check-neverd-cxx-itanium-eh-corpus` run one each. All three CI hosts configure
-with the flag and run all four lines: the bytes are identical everywhere, but
-what reads them is not, and a corpus run on one host proves nothing about the
-other two. `scripts/audit_ci_test_inventory.py` refuses an inventory that is
-missing any of the four labels, because a build that quietly stopped reading
-the corpus is a regression no test can catch — the test is what went missing.
+`check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus`,
+`check-neverd-cxx-itanium-eh-corpus`, and `check-neverd-objc-eh-corpus` run one
+each. All three CI hosts configure with the flag and run all five lines: the
+bytes are identical everywhere, but what reads them is not, and a corpus run on
+one host proves nothing about the other two.
+`scripts/audit_ci_test_inventory.py` refuses an inventory that is missing any of
+the five labels, because a build that quietly stopped reading the corpus is a
+regression no test can catch — the test is what went missing.
 
 The EVM opcode audit performs a shallow `git fetch` of the official
 [go-ethereum repository](https://github.com/ethereum/go-ethereum) remote `HEAD`

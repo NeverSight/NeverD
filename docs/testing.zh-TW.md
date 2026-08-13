@@ -43,7 +43,7 @@ cmake --build build-release --parallel 4
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFSemanticTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFEmitterTests`、`NeverDSBFIntegrationTests` | v0-v4 中繼資料與 ELF 配置、嚴格驗證、CFG/還原、獨立原始執行、LLVM 驗證、C/Rust 編譯及公共 API 路由 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 四 ISA×三物件格式的重寫/混淆等價性 |
 | `unittests/semantic` 中的聚焦轉換檔案 | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 從大型語意二進位拆出的快速重新連結探針 |
-| `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests` | 從 305 個釘住的真實二進位讀出的例外與執行期 metadata，每一個都在 manifest 裡宣告了其復原必須達到的下限 |
+| `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests`、`NeverDObjCEHCorpusTests` | 從 317 個釘住的真實二進位讀出的例外與執行期 metadata，每一個都在 manifest 裡宣告了其復原必須達到的下限 |
 
 註冊的事實來源是
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt)、
@@ -71,11 +71,12 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 ```
 
 `check-neverd-corpus` 跑全部產線；`check-neverd-windows-eh-corpus`、
-`check-neverd-rust-eh-corpus`、`check-neverd-go-eh-corpus` 與
-`check-neverd-cxx-itanium-eh-corpus` 各跑一條。三個 CI 主機都帶著這個開關配置並跑
-全部四條產線：位元組到處都一樣，但讀位元組的東西不一樣，在一台主機上跑通不能說明
-另外兩台。`scripts/audit_ci_test_inventory.py` 會拒絕缺少四個標籤中任何一個的清
-單——建置悄悄不再讀 corpus 是一種沒有任何測試能捕捉的迴歸，因為消失的正是那個測試。
+`check-neverd-rust-eh-corpus`、`check-neverd-go-eh-corpus`、
+`check-neverd-cxx-itanium-eh-corpus` 與 `check-neverd-objc-eh-corpus` 各跑一條。三個
+CI 主機都帶著這個開關配置並跑全部五條產線：位元組到處都一樣，但讀位元組的東西不一
+樣，在一台主機上跑通不能說明另外兩台。`scripts/audit_ci_test_inventory.py` 會拒絕缺
+少五個標籤中任何一個的清單——建置悄悄不再讀 corpus 是一種沒有任何測試能捕捉的迴歸，
+因為消失的正是那個測試。
 
 EVM 操作碼稽核每次執行都會對官方
 [go-ethereum repository](https://github.com/ethereum/go-ethereum)的 remote `HEAD` 執行

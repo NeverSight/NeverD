@@ -22,6 +22,7 @@ PATCH_LABEL = "NeverDPatchFullTests"
 CORPUS_LABELS = (
     "NeverDCxxItaniumEHCorpusTests",
     "NeverDGoEHCorpusTests",
+    "NeverDObjCEHCorpusTests",
     "NeverDRustEHCorpusTests",
     "NeverDWindowsEHCorpusTests",
 )

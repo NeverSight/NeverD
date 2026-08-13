@@ -45,7 +45,7 @@ target 이름과 같은 CTest label을 지정합니다.
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | v0-v4 메타데이터와 ELF 레이아웃, 엄격한 검증, CFG/복원, 독립 raw 실행, LLVM 검증, C/Rust 컴파일, 공개 API 라우팅 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 네 ISA×세 object 포맷 재작성/난독화 동등성 |
 | `unittests/semantic`의 집중 변환 파일 | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | 큰 의미론 바이너리에서 분리한 빠른 재링크 probe |
-| `unittests/corpus`(submodule) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests` | pin 된 실제 바이너리 305개에서 읽어내는 예외 및 런타임 metadata. 각 바이너리는 manifest에 복원이 넘어야 할 하한을 선언한다 |
+| `unittests/corpus`(submodule) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests` | pin 된 실제 바이너리 317개에서 읽어내는 예외 및 런타임 metadata. 각 바이너리는 manifest에 복원이 넘어야 할 하한을 선언한다 |
 
 등록의 기준은
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
@@ -76,12 +76,13 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 
 `check-neverd-corpus`는 모든 라인을, `check-neverd-windows-eh-corpus`,
 `check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus`,
-`check-neverd-cxx-itanium-eh-corpus`는 각각 한 라인을 실행합니다. CI의 세 호스트
-모두 이 플래그로 configure 하고 네 라인을 전부 실행합니다. 바이트는 어디서나 같지만
-그것을 읽는 쪽은 같지 않으며, 한 호스트에서의 corpus 실행은 나머지 두 호스트에
-대해 아무것도 증명하지 않습니다. `scripts/audit_ci_test_inventory.py`는 네 label 중
-하나라도 빠진 inventory를 거부합니다. corpus를 조용히 읽지 않게 된 빌드는 어떤
-테스트도 잡을 수 없는 회귀이기 때문입니다. 사라진 것이 바로 그 테스트입니다.
+`check-neverd-cxx-itanium-eh-corpus`, `check-neverd-objc-eh-corpus`는 각각 한 라인을
+실행합니다. CI의 세 호스트 모두 이 플래그로 configure 하고 다섯 라인을 전부
+실행합니다. 바이트는 어디서나 같지만 그것을 읽는 쪽은 같지 않으며, 한 호스트에서의
+corpus 실행은 나머지 두 호스트에 대해 아무것도 증명하지 않습니다.
+`scripts/audit_ci_test_inventory.py`는 다섯 label 중 하나라도 빠진 inventory를
+거부합니다. corpus를 조용히 읽지 않게 된 빌드는 어떤 테스트도 잡을 수 없는
+회귀이기 때문입니다. 사라진 것이 바로 그 테스트입니다.
 
 EVM opcode audit는 실행할 때마다 공식
 [go-ethereum repository](https://github.com/ethereum/go-ethereum)의 remote `HEAD`를 shallow

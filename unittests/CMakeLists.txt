@@ -124,10 +124,20 @@ if(TARGET NeverDCxxItaniumEHCorpusTests)
     COMMENT "Running the pinned C++ Itanium and ARM EHABI corpus")
 endif()
 
+if(TARGET NeverDObjCEHCorpusTests)
+  add_custom_target(check-neverd-objc-eh-corpus
+    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR}
+            -L ^NeverDObjCEHCorpusTests$
+            --output-on-failure --progress -j ${_neverd_ncpu} -C $<CONFIG>
+    DEPENDS NeverDObjCEHCorpusTests
+    USES_TERMINAL
+    COMMENT "Running the pinned Objective-C runtime exception corpus")
+endif()
+
 # One target for every line at once, because what the corpus is for is the
 # claim that no line regressed while another was being worked on.
 set(_neverd_corpus_targets)
-foreach(_line windows-eh rust-eh go-eh cxx-itanium-eh)
+foreach(_line windows-eh rust-eh go-eh cxx-itanium-eh objc-eh)
   if(TARGET check-neverd-${_line}-corpus)
     list(APPEND _neverd_corpus_targets check-neverd-${_line}-corpus)
   endif()

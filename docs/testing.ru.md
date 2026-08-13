@@ -46,7 +46,7 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFSemanticTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFEmitterTests`, `NeverDSBFIntegrationTests` | Метаданные v0-v4 и компоновки ELF, строгая верификация, CFG/восстановление, независимое исполнение raw-кода, проверка LLVM, компиляция C/Rust и маршрутизация публичного API |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Эквивалентность переписывания/обфускации для четырёх ISA и трёх объектных форматов |
 | Целевые файлы преобразований в `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Быстро перелинковываемые проверки отдельно от большого семантического бинарника |
-| `unittests/corpus` (подмодуль) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests` | Метаданные исключений и рантайма, прочитанные из 305 зафиксированных настоящих бинарников; для каждого манифест объявляет нижние границы, которые восстановление обязано преодолеть |
+| `unittests/corpus` (подмодуль) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests` | Метаданные исключений и рантайма, прочитанные из 317 зафиксированных настоящих бинарников; для каждого манифест объявляет нижние границы, которые восстановление обязано преодолеть |
 
 Источники регистрации:
 [`unittests/CMakeLists.txt`](../unittests/CMakeLists.txt),
@@ -76,14 +76,15 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 ```
 
 `check-neverd-corpus` запускает все линии; `check-neverd-windows-eh-corpus`,
-`check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus` и
-`check-neverd-cxx-itanium-eh-corpus` — по одной. Все три хоста CI выполняют
-configure с этим флагом и прогоняют все четыре линии: байты везде одинаковы, а
-то, что их читает, — нет, и прогон corpus на одном хосте ничего не доказывает
-про два других. `scripts/audit_ci_test_inventory.py` отклоняет инвентарь, в
-котором не хватает хотя бы одной из четырёх меток, потому что сборка, тихо
-переставшая читать corpus, — это регрессия, которую не поймает ни один тест:
-пропало как раз то, что проверяло.
+`check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus`,
+`check-neverd-cxx-itanium-eh-corpus` и `check-neverd-objc-eh-corpus` — по одной.
+Все три хоста CI выполняют configure с этим флагом и прогоняют все пять линий:
+байты везде одинаковы, а то, что их читает, — нет, и прогон corpus на одном
+хосте ничего не доказывает про два других.
+`scripts/audit_ci_test_inventory.py` отклоняет инвентарь, в котором не хватает
+хотя бы одной из пяти меток, потому что сборка, тихо переставшая читать
+corpus, — это регрессия, которую не поймает ни один тест: пропало как раз то,
+что проверяло.
 
 При каждом запуске аудит opcodes EVM выполняет неглубокий `git fetch` удалённого
 `HEAD` из [официального репозитория

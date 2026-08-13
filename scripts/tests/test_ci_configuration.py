@@ -141,7 +141,7 @@ class CiConfigurationTests(unittest.TestCase):
         verify_step = source.split(verify_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        for line in ("windows-eh", "rust-eh", "go-eh", "cxx-itanium-eh"):
+        for line in ("windows-eh", "rust-eh", "go-eh", "cxx-itanium-eh", "objc-eh"):
             with self.subTest(line=line):
                 self.assertIn(line, verify_step)
         self.assertIn("exit 1", verify_step)
