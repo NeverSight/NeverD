@@ -462,7 +462,8 @@ TEST(SymExec, AnIndirectBranchHandsBackTheComputedAddress) {
     EXPECT_FALSE(Ctx.isConst(Target));
     llvm::SmallVector<uint32_t, 8> Vars;
     Ctx.collectVars(Target, Vars);
-    EXPECT_EQ(Vars.size(), 8u) << "one unknown per byte of the index register";
+    ASSERT_EQ(Vars.size(), 1u) << "one unknown for the whole index register";
+    EXPECT_EQ(Ctx.varInfo(Vars.front()).Width, 64u);
   }
   {
     SymContext Ctx;

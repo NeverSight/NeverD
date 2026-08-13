@@ -94,6 +94,14 @@ enum class Role : uint8_t {
 /// result a bitwise function of the inputs.
 bool isBitwiseOrAtom(Role R) { return R == Role::Bitwise || R == Role::Atom; }
 
+/// A surviving literal in a bitwise operator is a mask.  It is not uniform
+/// enough to measure as a fixed coefficient, but it can safely become an
+/// opaque input for that use: proving an identity for every mask value is
+/// stronger than proving it only for the literal at hand.
+bool isBitwiseOperand(Role R) {
+  return isBitwiseOrAtom(R) || R == Role::Literal;
+}
+
 /// Whether measuring at \p R can do more than rebuilding its children.
 ///
 /// Operators outside this set are opaque boundaries in both linear and
@@ -156,12 +164,11 @@ void classify(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Order,
     case SymOp::And:
     case SymOp::Or:
     case SymOp::Xor:
-      // A surviving literal operand here is a mask: the builders already
-      // folded away the all-zeros and all-ones cases, so whatever is left
-      // tells bit positions apart, and a term that does that is not something
-      // the measurement can read.
+      // A surviving literal operand here is a mask.  The abstraction rewrites
+      // that occurrence to an opaque input, while ordinary bitwise inputs can
+      // pass through unchanged.
       Result = llvm::all_of(
-                   Ops, [&](SymRef C) { return isBitwiseOrAtom(roleOf(C)); })
+                   Ops, [&](SymRef C) { return isBitwiseOperand(roleOf(C)); })
                    ? Role::Bitwise
                    : Role::Atom;
       break;
@@ -323,6 +330,7 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
   Placeholders Pool(Ctx, Reserved);
   Abstraction Out;
   llvm::DenseMap<uint32_t, SymRef> Rewritten;
+  llvm::DenseMap<uint32_t, SymRef> MaskInputs;
 
   for (uint32_t Index : Order) {
     SymRef R(Index);
@@ -346,8 +354,23 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
     }
     llvm::SmallVector<SymRef, 8> NewOps;
     NewOps.reserve(Ops.size());
-    for (SymRef C : Ops)
-      NewOps.push_back(Rewritten.lookup(C.index()));
+    const SymOp Op = Ctx.op(R);
+    const bool IsBitwise =
+        Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor;
+    for (SymRef C : Ops) {
+      if (!IsBitwise || Roles.lookup(C.index()) != Role::Literal) {
+        NewOps.push_back(Rewritten.lookup(C.index()));
+        continue;
+      }
+
+      auto It = MaskInputs.find(C.index());
+      if (It == MaskInputs.end()) {
+        SymRef V = Pool.take(Ctx.width(C));
+        It = MaskInputs.insert({C.index(), V}).first;
+        Out.Hidden.emplace(V.index(), C);
+      }
+      NewOps.push_back(It->second);
+    }
 
     // Spend the complement identity where it buys linearity and nowhere else:
     // over a bitwise operand `~z` is already something the measurement reads,
