@@ -146,6 +146,19 @@ target_include_directories(NeverDSymSimplifyGuardTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+# Pins the recovery against the flattening it undoes.  Both passes reach it
+# through the same prebuilt NeverDPipeline archive, so the closed loop costs a
+# single small TU rather than a relink of the large lift test binary.
+add_neverd_unittest(NeverDControlFlowRecoveryTests
+  ControlFlowRecoveryTests.cpp
+  LINK_COMPONENTS
+  Pipeline
+)
+target_include_directories(NeverDControlFlowRecoveryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 set(NEVERD_SYNTHETIC_WINDOWS_EH_ROOT
   "${CMAKE_CURRENT_BINARY_DIR}/windows-eh-synthetic")

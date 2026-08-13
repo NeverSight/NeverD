@@ -13,6 +13,7 @@ add_neverd_component_library(NeverDPassIR
   ConstantPoolingPass.cpp
   BitMaskingPass.cpp
   SymSimplifyPass.cpp
+  ControlFlowRecoveryPass.cpp
 
   LINK_COMPONENTS
   IR

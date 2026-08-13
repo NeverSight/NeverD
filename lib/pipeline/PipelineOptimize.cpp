@@ -22,6 +22,7 @@
 #include "neverd/pass/ir/InstSubstitutionPass.h"
 #include "neverd/pass/ir/MBAPass.h"
 #include "neverd/pass/ir/OpaquePredicatePass.h"
+#include "neverd/pass/ir/ControlFlowRecoveryPass.h"
 #include "neverd/pass/ir/SymSimplifyPass.h"
 #include "neverd/pass/ir/ValueLaunderingPass.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -246,6 +247,15 @@ void Pipeline::optimizeModule(llvm::Module &Mod, bool Conservative) {
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
   llvm::FunctionPassManager FPM;
+  if (!Conservative) {
+    // Before promotion, because that is where a dispatcher's state lives: both
+    // a lifted function and a flattened one keep everything in stack slots, the
+    // second because no block dominates another once every one of them is
+    // reached through the switch.  Recovering the graph first is what lets the
+    // promotion below put those values back in registers with the phis the real
+    // control flow calls for, instead of phis at the dispatcher.
+    FPM.addPass(ControlFlowRecoveryPass());
+  }
   FPM.addPass(llvm::PromotePass());
   FPM.addPass(llvm::SROAPass(llvm::SROAOptions::PreserveCFG));
   if (!Conservative) {
