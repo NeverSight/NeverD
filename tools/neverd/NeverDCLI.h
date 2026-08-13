@@ -255,6 +255,12 @@ extern llvm::cl::opt<std::string> SimplifyExpr;
 extern llvm::cl::opt<std::string> SimplifyFile;
 extern llvm::cl::opt<unsigned> SimplifyWidth;
 extern llvm::cl::opt<bool> SimplifyShallow;
+extern llvm::cl::opt<unsigned> SimplifyMaxAtoms;
+extern llvm::cl::opt<unsigned long long> SimplifyMaxWork;
+extern llvm::cl::opt<bool> SimplifyExhaustive;
+extern llvm::cl::opt<unsigned> SimplifyVerifySamples;
+extern llvm::cl::opt<bool> SimplifyAllowGrowth;
+extern llvm::cl::opt<bool> SimplifyStats;
 extern llvm::cl::opt<bool> SimplifyJson;
 
 //===----------------------------------------------------------------------===//
