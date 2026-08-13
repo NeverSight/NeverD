@@ -36,6 +36,10 @@ set(_neverd_plugin_runtime_test_sources
 set(_neverd_plugin_runtime_test_libs ${CMAKE_DL_LIBS})
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
   list(APPEND _neverd_plugin_runtime_test_sources
+    ${CMAKE_SOURCE_DIR}/lib/sdk/plugin/PythonPluginBridge.cpp
+    ${CMAKE_SOURCE_DIR}/lib/sdk/plugin/PythonPluginError.cpp
+    ${CMAKE_SOURCE_DIR}/lib/sdk/plugin/PythonPluginInterpreter.cpp
+    ${CMAKE_SOURCE_DIR}/lib/sdk/plugin/PythonPluginMarshal.cpp
     ${CMAKE_SOURCE_DIR}/lib/sdk/plugin/PythonPluginRuntime.cpp)
   list(APPEND _neverd_plugin_runtime_test_libs Python3::Python)
 endif()
@@ -44,7 +48,7 @@ add_library(neverd-plugin-runtime-test-support STATIC
   ${_neverd_plugin_runtime_test_sources})
 target_include_directories(neverd-plugin-runtime-test-support PUBLIC
   ${CMAKE_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/lib/sdk)
+  ${CMAKE_SOURCE_DIR}/lib/sdk/plugin)
 target_compile_features(neverd-plugin-runtime-test-support PUBLIC cxx_std_20)
 target_link_libraries(neverd-plugin-runtime-test-support PUBLIC
   ${_neverd_plugin_runtime_test_libs})

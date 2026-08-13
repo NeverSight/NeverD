@@ -39,11 +39,12 @@
 
 namespace neverd::cxx_corpus_test {
 
-inline Expected<std::vector<CxxItaniumEHArtifactExpectation>> loadExpectations() {
+inline llvm::Expected<std::vector<test::CxxItaniumEHArtifactExpectation>>
+loadExpectations() {
   const std::filesystem::path ManifestPath =
       std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) / "manifests" /
       "cxx-itanium-eh.json";
-  return loadCxxItaniumEHCorpusManifest(ManifestPath.string(), true);
+  return test::loadCxxItaniumEHCorpusManifest(ManifestPath.string(), true);
 }
 
 inline std::string diagnosticsFor(const ExceptionInfo &Info) {
@@ -74,7 +75,7 @@ inline std::optional<BinaryImage> loadArtifact(const std::filesystem::path &Path
   auto ImageOrErr = ImageLoader->load(Path);
   if (!ImageOrErr) {
     ADD_FAILURE() << "cannot load " << Path.string() << ": "
-                  << toString(ImageOrErr.takeError());
+                  << llvm::toString(ImageOrErr.takeError());
     return std::nullopt;
   }
   return std::move(*ImageOrErr);
@@ -87,7 +88,8 @@ inline std::optional<BinaryImage> loadArtifact(const std::filesystem::path &Path
 /// apart, so the pair has to be matched as a pair: `__text` alone appears in
 /// more than one segment, and asking for it by section name would accept a
 /// section that is not the one the manifest meant.
-inline bool hasDeclaredSection(const BinaryImage &Image, StringRef Name) {
+inline bool hasDeclaredSection(const BinaryImage &Image,
+                               llvm::StringRef Name) {
   const auto [Segment, Section] = Name.split(',');
   if (Section.empty())
     return Image.hasSection(Name);
