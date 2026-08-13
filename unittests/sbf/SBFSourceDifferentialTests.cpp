@@ -560,6 +560,9 @@ void compileAndRun(SourceBackend Backend, llvm::StringRef Source) {
     Output << Source.str();
   }
 
+#ifdef _WIN32
+  std::string LinkerArgument;
+#endif
   llvm::SmallVector<llvm::StringRef, 16> Arguments;
   Arguments.push_back(*Compiler);
   if (Backend == SourceBackend::C) {
@@ -568,6 +571,16 @@ void compileAndRun(SourceBackend Backend, llvm::StringRef Source) {
     Arguments.append({"--edition=2021",
                       "--crate-name=neverd_sbf_source_differential", "-D",
                       "warnings"});
+#ifdef _WIN32
+    // Git for Windows puts its POSIX link.exe ahead of the MSVC linker.
+    // Select the unambiguous COFF linker explicitly when invoking rustc.
+    auto Linker = llvm::sys::findProgramByName("lld-link");
+    ASSERT_TRUE(static_cast<bool>(Linker)) << "lld-link is not available";
+    if (!Linker)
+      return;
+    LinkerArgument = "linker=" + *Linker;
+    Arguments.append({"-C", LinkerArgument});
+#endif
   }
   Arguments.append({SourceFile.str(), "-o", Executable.str()});
   std::string Error;
