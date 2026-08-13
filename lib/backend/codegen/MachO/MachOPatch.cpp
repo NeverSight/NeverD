@@ -18,6 +18,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
@@ -44,6 +45,21 @@ struct EHFrameAppendRegion {
   uint64_t LimitFileOff = 0;
   uint64_t SectionHeaderOff = 0;
 };
+
+bool requiresRegisteredEHFrame(const llvm::Module &Mod) {
+  for (const llvm::Function &Function : Mod) {
+    if (Function.isDeclaration())
+      continue;
+    if (Function.hasPersonalityFn())
+      return true;
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (llvm::isa<llvm::InvokeInst, llvm::LandingPadInst, llvm::ResumeInst>(
+                Instruction))
+          return true;
+  }
+  return false;
+}
 
 /// Return the byte offset at which another .eh_frame sequence can be appended.
 /// A zero-length record is a terminator, so it is replaced rather than left
@@ -542,12 +558,20 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         // When the input has no __eh_frame section, the compiler leaves the
         // generated section in Img.Bytes as before.  Only externally placed
         // bytes need to be appended to an existing section.
-        if (GeneratedEHFrame && !GeneratedEHFrame->IsInImage &&
-            (!HasEHFrameRegion ||
-             !appendGeneratedEHFrame(Binary, EHRegion, *GeneratedEHFrame))) {
-          llvm::WithColor::error()
-              << "macho_patch: cannot register regenerated __eh_frame\n";
-          return false;
+        if (GeneratedEHFrame && !GeneratedEHFrame->IsInImage) {
+          const bool Registered =
+              HasEHFrameRegion &&
+              appendGeneratedEHFrame(Binary, EHRegion, *GeneratedEHFrame);
+          if (!Registered && requiresRegisteredEHFrame(Mod)) {
+            llvm::WithColor::error()
+                << "macho_patch: cannot register regenerated __eh_frame\n";
+            return false;
+          }
+          LLVM_DEBUG({
+            if (!Registered)
+              llvm::dbgs() << "macho_patch: omitting unregistered CFI-only "
+                              "__eh_frame records\n";
+          });
         }
 
         uint64_t TextSize = Img.Bytes.size();

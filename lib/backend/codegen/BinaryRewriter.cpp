@@ -564,8 +564,15 @@ size_t BinaryPatcher::installTrampolines(
     bool HasOrig = false;
 
     llvm::StringRef NameRef(Name);
-    if (NameRef.starts_with(kAutoFuncPrefix)) {
-      llvm::StringRef HexPart = NameRef.drop_front(kAutoFuncPrefix.size());
+    // Mach-O's object symbol table adds one global-prefix underscore to the
+    // LLVM function name.  Auto-generated names encode their original VA, so
+    // accept both `sub_<VA>` and the object spelling `_sub_<VA>`.
+    llvm::StringRef AutoName = NameRef;
+    if (AutoName.starts_with("_") &&
+        AutoName.drop_front().starts_with(kAutoFuncPrefix))
+      AutoName = AutoName.drop_front();
+    if (AutoName.starts_with(kAutoFuncPrefix)) {
+      llvm::StringRef HexPart = AutoName.drop_front(kAutoFuncPrefix.size());
       if (!HexPart.empty() && !HexPart.getAsInteger(16, OrigVA))
         HasOrig = true;
     }

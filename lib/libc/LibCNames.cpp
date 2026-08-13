@@ -239,6 +239,24 @@ std::optional<LibCArity> libcArity(std::string_view Name) {
 }
 
 unsigned varArgFixedCount(std::string_view Name) {
+  // Modern Darwin linkers specialize Objective-C dispatch through local
+  // `_objc_msgSend$<selector>` stubs.  The stub materializes `_cmd` in x1,
+  // while the caller supplies the receiver in x0 and one argument per colon
+  // starting at x2.  Model the colon-counted prefix as fixed and leave an
+  // ellipsis after it: ordinary methods simply pass no tail, while methods
+  // such as stringWithFormat: preserve their true stack-passed varargs.
+  constexpr std::string_view ObjCMsgSendPrefix = "objc_msgSend$";
+  if (Name.starts_with(ObjCMsgSendPrefix)) {
+    std::string_view Selector = Name.substr(ObjCMsgSendPrefix.size());
+    if (Selector.empty())
+      return 0;
+    unsigned Fixed = 2; // receiver and linker-supplied _cmd
+    for (char C : Selector)
+      if (C == ':')
+        ++Fixed;
+    return Fixed;
+  }
+
   // Fortified _FORTIFY_SOURCE variants: __<core>_chk.  clang emits these for
   // the buffer-bounded printf family when the destination size is known
   // (default on macOS / glibc).  The caller has stripped at most one leading

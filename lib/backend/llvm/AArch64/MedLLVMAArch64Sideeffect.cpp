@@ -92,9 +92,12 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
   switch (IC) {
   case I::Brk:
   case I::Hlt_A64: {
-    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
-        Mod, llvm::Intrinsic::debugtrap);
-    Builder.CreateCall(Fn, {});
+    // These instructions raise a synchronous exception and do not have an
+    // architectural fallthrough path.  Use the noreturn trap intrinsic rather
+    // than debugtrap; EH lowering removes the CFG's conservative fallthrough
+    // edge after block emission, once any edge-copy bookkeeping is complete.
+    Builder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx), llvm::Intrinsic::trap,
+                            {});
     return true;
   }
   case I::Svc:

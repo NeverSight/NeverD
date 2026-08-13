@@ -86,6 +86,18 @@ TEST(VarArgFixedCount, PosixWhitelist) {
   EXPECT_EQ(varArgFixedCount("sem_open"), 1u);
 }
 
+TEST(VarArgFixedCount, DarwinObjectiveCMessageStubs) {
+  // The linker-specialized stub supplies _cmd in x1.  The external call still
+  // models that register as part of the fixed prefix so method arguments start
+  // at x2 and any true varargs follow the selector's colon-counted arguments.
+  EXPECT_EQ(varArgFixedCount("objc_msgSend$length"), 2u);
+  EXPECT_EQ(varArgFixedCount("objc_msgSend$stringWithFormat:"), 3u);
+  EXPECT_EQ(
+      varArgFixedCount("objc_msgSend$exceptionWithName:reason:userInfo:"),
+      5u);
+  EXPECT_EQ(varArgFixedCount("objc_msgSend$"), 0u);
+}
+
 // =====================================================================
 // varArgFixedCount — non-variadic functions should return 0
 // =====================================================================

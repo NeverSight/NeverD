@@ -27,12 +27,30 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <optional>
 #include <vector>
 
 using namespace neverd;
 
 namespace {
+
+TEST(BinaryPatcherTrampolines,
+     AcceptsMachOObjectPrefixForAutoNamedFunctions) {
+  std::vector<uint8_t> Binary(64, 0);
+  const std::map<std::string, uint64_t> CompiledSymbols{
+      {"_sub_1004", 0x2000}};
+  std::vector<std::pair<va_t, va_t>> Mappings;
+
+  EXPECT_EQ(BinaryPatcher::installTrampolines(
+                Binary, CompiledSymbols, /*OrigTextVA=*/0x1000,
+                /*OrigTextSize=*/Binary.size(), /*OrigTextFileOff=*/0,
+                /*ImageBase=*/0, Arch::AArch64, InstructionMode::Default,
+                nullptr, nullptr, nullptr, nullptr, &Mappings),
+            1u);
+  EXPECT_EQ(Mappings,
+            (std::vector<std::pair<va_t, va_t>>{{0x1004, 0x2000}}));
+}
 
 testing::AssertionResult zeroFirstExceptionRecord(const fs::path &InputPath,
                                                   const fs::path &OutputPath,

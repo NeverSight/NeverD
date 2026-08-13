@@ -341,6 +341,108 @@ static int countEntryLiveInFPArgs(const MedFunc &MF, const TargetRegInfo &TRI) {
   return Count;
 }
 
+/// Reach a fixed point for parameters forwarded only through direct calls.
+///
+/// Optimized wrappers can consume an incoming argument solely by passing the
+/// register on to another function.  Their initial parameter scan therefore
+/// reports arity zero; recoverCallAbi surfaces the live-in only after the
+/// callee's arity is known.  A single global pass is order-dependent for a
+/// chain such as `outer -> middle -> leaf`: leaf seeds x0, then middle and
+/// outer each need a later visit.  Probe copies let us propagate those arities
+/// without repeatedly mutating real CallInfos or inserting call-lane helper
+/// ops.  The worklist revisits only direct callers of a function whose
+/// signature grew.
+static void propagateForwardedCallArities(
+    const std::vector<MedFunc> &Funcs, Arch TheArch,
+    const std::map<va_t, std::string> &FuncNames, const BinaryImage &Img,
+    std::map<va_t, int> &CalleeRegArity,
+    std::map<va_t, int> &CalleeTotalArity,
+    std::map<va_t, int> &CalleeFPArity,
+    const std::map<va_t, bool> &CalleeReturnsVec,
+    std::map<va_t, std::vector<uint64_t>> &CalleeFPRegs,
+    const std::map<va_t, bool> &CalleeHasSret,
+    const std::map<va_t, bool> &CalleeIsVariadic) {
+  if (Funcs.empty())
+    return;
+
+  std::map<va_t, std::vector<size_t>> DirectCallers;
+  std::set<va_t> Entries;
+  for (const auto &MF : Funcs)
+    Entries.insert(MF.Entry);
+  for (size_t I = 0; I < Funcs.size(); ++I)
+    for (const auto &Blk : Funcs[I].Blocks)
+      for (const auto &Op : Blk.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst() &&
+            Entries.count(Op.Inputs[0].ConstVal) != 0)
+          DirectCallers[Op.Inputs[0].ConstVal].push_back(I);
+
+  std::queue<size_t> Work;
+  std::vector<bool> Queued(Funcs.size(), true);
+  for (size_t I = 0; I < Funcs.size(); ++I)
+    Work.push(I);
+
+  const auto &TRI = getTargetRegInfo(TheArch);
+  while (!Work.empty()) {
+    const size_t I = Work.front();
+    Work.pop();
+    Queued[I] = false;
+
+    MedFunc Probe = Funcs[I];
+    recoverCallAbi(Probe, TheArch, FuncNames, &Img, &CalleeRegArity,
+                   &CalleeTotalArity, &CalleeFPArity, &CalleeReturnsVec,
+                   &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic);
+
+    int MaxRegIdx = -1;
+    int MaxIdx = -1;
+    std::vector<uint64_t> FPRegs;
+    const uint64_t IRR = TRI.indirectResultReg();
+    for (const auto &P : Probe.Params) {
+      if (IRR != 0 && P.RegOff == IRR)
+        continue;
+      if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff)) {
+        FPRegs.push_back(P.RegOff);
+      } else if (P.RegOff != kNoParamReg) {
+        const int ArgIdx = TRI.regToArgIdx(P.RegOff);
+        MaxRegIdx = std::max(MaxRegIdx, ArgIdx);
+        MaxIdx = std::max(MaxIdx, ArgIdx);
+      } else if (P.Kind == MedVar::Param) {
+        MaxIdx = std::max(MaxIdx, P.Id);
+      }
+    }
+    std::sort(FPRegs.begin(), FPRegs.end());
+
+    const int RegArity = MaxRegIdx + 1;
+    const int TotalArity = callRecoveryTotalArity(Probe, MaxIdx);
+    const int FPArity = static_cast<int>(FPRegs.size());
+    bool Grew = false;
+    if (RegArity > CalleeRegArity[Probe.Entry]) {
+      CalleeRegArity[Probe.Entry] = RegArity;
+      Grew = true;
+    }
+    if (TotalArity > CalleeTotalArity[Probe.Entry]) {
+      CalleeTotalArity[Probe.Entry] = TotalArity;
+      Grew = true;
+    }
+    if (FPArity > CalleeFPArity[Probe.Entry]) {
+      CalleeFPArity[Probe.Entry] = FPArity;
+      CalleeFPRegs[Probe.Entry] = std::move(FPRegs);
+      Grew = true;
+    }
+    if (!Grew)
+      continue;
+
+    auto CallerIt = DirectCallers.find(Probe.Entry);
+    if (CallerIt == DirectCallers.end())
+      continue;
+    for (size_t Caller : CallerIt->second)
+      if (!Queued[Caller]) {
+        Queued[Caller] = true;
+        Work.push(Caller);
+      }
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Parallel LLVM emission + optimization
 //===----------------------------------------------------------------------===//
@@ -758,6 +860,11 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         }
       }
   }
+
+  propagateForwardedCallArities(
+      Result.MedFuncs, Img.Arch, AllFuncNames, Img, CalleeRegArity,
+      CalleeTotalArity, CalleeFPArity, CalleeReturnsVec, CalleeFPRegs,
+      CalleeHasSret, CalleeIsVariadic);
 
   for (auto &MF : Result.MedFuncs)
     recoverCallAbi(MF, Img.Arch, AllFuncNames, &Img, &CalleeRegArity,

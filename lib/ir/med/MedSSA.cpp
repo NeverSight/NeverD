@@ -200,6 +200,13 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       Input.Kind = Kind;
       Input.Id = -1;
       Input.SSAVer = 0;
+      // The Itanium landing-pad pair has ABI-defined widths independent of
+      // whichever register alias the recovered body reads.  In particular,
+      // an AArch64 W0 live-in is the low view of the pointer in X0, not a
+      // 32-bit exception object.  Keeping the pseudo-value pointer-sized lets
+      // call-ABI recovery pass the full object to __cxa_begin_catch while the
+      // COPY into W0 still truncates naturally.
+      Input.Size = Kind == MedVar::EHException ? TRI.PointerSize : 4;
       Def.addInput(Input);
       Def.Addr = Block.StartAddr;
       Defs.push_back(Def);
@@ -331,12 +338,14 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
           Input.Kind = MedVar::EHException;
           Input.Id = -1;
           Input.SSAVer = 0;
+          Input.Size = TRI.PointerSize;
         } else if (IsItaniumEHRoot && EHSelectorReg != 0 &&
                    Input.Kind == MedVar::Reg &&
                    Input.RegOff == EHSelectorReg) {
           Input.Kind = MedVar::EHSelector;
           Input.Id = -1;
           Input.SSAVer = 0;
+          Input.Size = 4;
         }
         Init.addInput(Input);
         Init.Addr = Func.Blocks[Root].StartAddr;

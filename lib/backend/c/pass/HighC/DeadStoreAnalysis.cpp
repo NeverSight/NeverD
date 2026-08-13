@@ -32,6 +32,22 @@ struct ExprDef {
   const HighExpr *Value = nullptr;
 };
 
+template <typename Visitor>
+void walkExprNodes(const HighExpr &Root, Visitor &&Visit) {
+  std::set<const HighExpr *> Seen;
+  std::vector<const HighExpr *> Work{&Root};
+  while (!Work.empty()) {
+    const HighExpr *Expr = Work.back();
+    Work.pop_back();
+    if (!Seen.insert(Expr).second)
+      continue;
+    Visit(*Expr);
+    for (auto It = Expr->Operands.rbegin(); It != Expr->Operands.rend(); ++It)
+      if (*It)
+        Work.push_back(It->get());
+  }
+}
+
 bool sameMedVar(const MedVar &A, const MedVar &B) {
   return A.Kind == B.Kind && A.Id == B.Id && A.SSAVer == B.SSAVer &&
          A.RegOff == B.RegOff;
@@ -138,37 +154,18 @@ bool matchesReducedAddr(const HighExpr &Expr,
 
 void collectExprVars(const HighExpr &E, std::set<std::string> &Out,
                      VarNameFn VarFn) {
-  std::set<const HighExpr *> Seen;
-  std::function<void(const HighExpr &)> Visit = [&](const HighExpr &Ex) {
-    if (!Seen.insert(&Ex).second)
-      return;
+  walkExprNodes(E, [&](const HighExpr &Ex) {
     if (Ex.Kind == ExprKind::Var)
       Out.insert(VarFn(Ex.Var));
-    for (auto &Op : Ex.Operands)
-      if (Op)
-        Visit(*Op);
-  };
-  Visit(E);
+  });
 }
 
 void collectLoadAddrVars(const HighExpr &E, std::set<std::string> &Out,
                          VarNameFn VarFn) {
-  std::set<const HighExpr *> Seen;
-  std::function<void(const HighExpr &, bool)> Visit;
-  Visit = [&](const HighExpr &Ex, bool InAddr) {
-    if (!Seen.insert(&Ex).second)
-      return;
-    if (Ex.Kind == ExprKind::Load && !Ex.Operands.empty()) {
-      Visit(*Ex.Operands[0], true);
-      return;
-    }
-    if (InAddr && Ex.Kind == ExprKind::Var)
-      Out.insert(VarFn(Ex.Var));
-    for (auto &Op : Ex.Operands)
-      if (Op)
-        Visit(*Op, InAddr);
-  };
-  Visit(E, false);
+  walkExprNodes(E, [&](const HighExpr &Ex) {
+    if (Ex.Kind == ExprKind::Load && !Ex.Operands.empty())
+      collectExprVars(*Ex.Operands[0], Out, VarFn);
+  });
 }
 
 } // anonymous namespace
@@ -176,10 +173,7 @@ void collectLoadAddrVars(const HighExpr &E, std::set<std::string> &Out,
 void collectUsedVarsExpr(const HighExpr &Expr,
                          std::map<std::string, TypeRef> &Vars,
                          VarNameFn VarFn) {
-  std::set<const HighExpr *> Seen;
-  std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
-    if (!Seen.insert(&E).second)
-      return;
+  walkExprNodes(Expr, [&](const HighExpr &E) {
     if (E.Kind == ExprKind::Var) {
       std::string Name = VarFn(E.Var);
       if (Vars.find(Name) == Vars.end())
@@ -191,11 +185,7 @@ void collectUsedVarsExpr(const HighExpr &Expr,
       if (Vars.find(Name) == Vars.end())
         Vars[Name] = Ty;
     }
-    for (auto &Op : E.Operands)
-      if (Op)
-        Visit(*Op);
-  };
-  Visit(Expr);
+  });
 }
 
 void collectUsedVars(const std::vector<HighStmt> &Stmts,
@@ -234,20 +224,14 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (S.Kind == StmtKind::Store && S.StoreAddr)
       RecordAddress(*S.StoreAddr);
-    std::set<const HighExpr *> Seen;
-    std::function<void(const HighExpr &)> Scan = [&](const HighExpr &Expr) {
-      if (!Seen.insert(&Expr).second)
-        return;
-      if ((Expr.Kind == ExprKind::Load || Expr.Kind == ExprKind::Store) &&
-          !Expr.Operands.empty())
-        RecordAddress(*Expr.Operands[0]);
-      for (const ExprPtr &Operand : Expr.Operands)
-        if (Operand)
-          Scan(*Operand);
-    };
     forEachExpr(S, [&](const ExprPtr &Expr) {
-      if (Expr)
-        Scan(*Expr);
+      if (!Expr)
+        return;
+      walkExprNodes(*Expr, [&](const HighExpr &Node) {
+        if ((Node.Kind == ExprKind::Load || Node.Kind == ExprKind::Store) &&
+            !Node.Operands.empty())
+          RecordAddress(*Node.Operands[0]);
+      });
     });
   });
 
@@ -256,15 +240,11 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
     forEachExpr(S, [&](const ExprPtr &E) {
       if (!E)
         return;
-      std::function<void(const HighExpr &)> Scan = [&](const HighExpr &Expr) {
+      walkExprNodes(*E, [&](const HighExpr &Expr) {
         if (Expr.Kind == ExprKind::Load && !Expr.Operands.empty())
           if (auto Addr = reduceAddr(*Expr.Operands[0], Defs))
             ReducedLoads.push_back(*Addr);
-        for (const ExprPtr &Operand : Expr.Operands)
-          if (Operand)
-            Scan(*Operand);
-      };
-      Scan(*E);
+      });
     });
   });
 
@@ -297,16 +277,12 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (State.DeadStmts.count(&S))
       return;
-    std::function<void(const HighExpr &)> Scan = [&](const HighExpr &E) {
-      if (E.Kind == ExprKind::Load && !E.Operands.empty())
-        LoadedAddrs.insert(ExprFn(*E.Operands[0]));
-      for (auto &Op : E.Operands)
-        if (Op)
-          Scan(*Op);
-    };
     forEachExpr(S, [&](const ExprPtr &E) {
       if (E)
-        Scan(*E);
+        walkExprNodes(*E, [&](const HighExpr &Expr) {
+          if (Expr.Kind == ExprKind::Load && !Expr.Operands.empty())
+            LoadedAddrs.insert(ExprFn(*Expr.Operands[0]));
+        });
     });
   });
   walkStmts(Func.Body, [&](const HighStmt &S) {

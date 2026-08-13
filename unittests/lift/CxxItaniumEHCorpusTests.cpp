@@ -281,7 +281,7 @@ TEST(CxxItaniumEHCorpus, ResolvesMachOPersonalityPointerSlots) {
   EXPECT_GT(VirtualTableTables, 0u);
 }
 
-TEST(CxxItaniumEHCorpus, RewritesAndRunsTheHostMachOProbe) {
+TEST(CxxItaniumEHCorpus, RewritesAndRunsEveryHostMachOProbeVariant) {
 #if !defined(__APPLE__) ||                                                   \
     (!defined(__aarch64__) && !defined(__x86_64__))
   GTEST_SKIP() << "the committed Mach-O probes only run on their host ISA";
@@ -295,39 +295,44 @@ TEST(CxxItaniumEHCorpus, RewritesAndRunsTheHostMachOProbe) {
   auto ExpectationsOrErr = loadExpectations();
   ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
       << toString(ExpectationsOrErr.takeError());
-  auto Artifact = llvm::find_if(
-      *ExpectationsOrErr, [&](const CxxItaniumEHArtifactExpectation &E) {
-        return E.Toolchain == "clang" && StringRef(E.Target) == HostTarget &&
-               E.Program == "cxx_eh_probe" && E.ArtifactKind == "exe" &&
-               E.Exceptions == "on" && E.Optimization == "o0" && !E.Stripped;
-      });
-  ASSERT_NE(Artifact, ExpectationsOrErr->end());
+  unsigned Rewritten = 0;
+  for (const CxxItaniumEHArtifactExpectation &Artifact : *ExpectationsOrErr) {
+    if (Artifact.Toolchain != "clang" ||
+        StringRef(Artifact.Target) != HostTarget ||
+        Artifact.Program != "cxx_eh_probe" ||
+        Artifact.ArtifactKind != "exe" || Artifact.Exceptions != "on" ||
+        Artifact.Execution != "passed")
+      continue;
 
-  const std::filesystem::path Input =
-      std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) / Artifact->Path;
-  ASSERT_TRUE(std::filesystem::exists(Input));
+    ++Rewritten;
+    SCOPED_TRACE(Artifact.Path);
+    const std::filesystem::path Input =
+        std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) / Artifact.Path;
+    ASSERT_TRUE(std::filesystem::exists(Input));
 
-  SmallString<128> Output;
-  ASSERT_FALSE(
-      sys::fs::createTemporaryFile("neverd-cxx-itanium-eh", "patched", Output));
-  FileRemover RemoveOutput(Output);
-  ASSERT_FALSE(sys::fs::remove(Output));
+    SmallString<128> Output;
+    ASSERT_FALSE(sys::fs::createTemporaryFile("neverd-cxx-itanium-eh",
+                                               "patched", Output));
+    FileRemover RemoveOutput(Output);
+    ASSERT_FALSE(sys::fs::remove(Output));
 
-  const std::string InputString = Input.string();
-  const std::string OutputString = Output.str().str();
-  SmallVector<StringRef, 6> PatchArgs{
-      NEVERD_BINARY, "patch", InputString, "-o", OutputString};
-  std::string Error;
-  ASSERT_EQ(sys::ExecuteAndWait(NEVERD_BINARY, PatchArgs, std::nullopt, {}, 0, 0,
-                                &Error),
-            0)
-      << Error;
+    const std::string InputString = Input.string();
+    const std::string OutputString = Output.str().str();
+    SmallVector<StringRef, 6> PatchArgs{
+        NEVERD_BINARY, "patch", InputString, "-o", OutputString};
+    std::string Error;
+    ASSERT_EQ(sys::ExecuteAndWait(NEVERD_BINARY, PatchArgs, std::nullopt, {}, 0,
+                                  0, &Error),
+              0)
+        << Error;
 
-  SmallVector<StringRef, 1> RunArgs{OutputString};
-  EXPECT_EQ(sys::ExecuteAndWait(OutputString, RunArgs, std::nullopt, {}, 0, 0,
-                                &Error),
-            0)
-      << Error;
+    SmallVector<StringRef, 1> RunArgs{OutputString};
+    EXPECT_EQ(sys::ExecuteAndWait(OutputString, RunArgs, std::nullopt, {}, 0, 0,
+                                  &Error),
+              0)
+        << Error;
+  }
+  EXPECT_EQ(Rewritten, 4u);
 #endif
 }
 

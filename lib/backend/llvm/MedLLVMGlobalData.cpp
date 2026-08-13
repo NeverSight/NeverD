@@ -1348,6 +1348,32 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
   if (!Seg || !Seg->isReadable())
     return nullptr;
 
+  // Objective-C metadata is live runtime state, not ordinary image data.
+  // dyld fixes its class/selector/CFString pointers in place and libobjc keeps
+  // referring to those original objects.  Copying an __objc_* object into the
+  // generated segment (or, worse, classifying its pointer-looking bytes as a
+  // compact string) creates a second identity whose isa/descriptor fields are
+  // still encoded for the on-disk image.  Keep every direct reference into
+  // these sections anchored at its original VA; the patch resolver turns the
+  // synthetic symbol back into that slid address.
+  if (Img->isMachO()) {
+    const Section *Sec = Img->getSectionFor(Addr);
+    if (Sec &&
+        (llvm::StringRef(Sec->Name).starts_with(
+             section_names::macho::ObjCMetadataPrefix) ||
+         Sec->Name == section_names::macho::CfString)) {
+      std::string Name = makeNdDataSymbol(Addr);
+      llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
+      if (!GV)
+        GV = new llvm::GlobalVariable(
+            *Mod, llvm::Type::getInt8Ty(*Ctx), /*isConstant=*/false,
+            llvm::GlobalValue::ExternalLinkage, /*Initializer=*/nullptr, Name);
+      GV->setDSOLocal(true);
+      GlobalDataCache[Addr] = GV;
+      return GV;
+    }
+  }
+
   // Writable data (.data / .bss): recreate the WHOLE segment as one cohesive
   // mutable global and GEP into it, so this direct access aliases every other
   // access into the segment — crucially the runtime-indexed loads/stores routed

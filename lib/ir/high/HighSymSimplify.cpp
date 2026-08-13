@@ -28,11 +28,13 @@
 
 #include "neverd/symbolic/SymMBA.h"
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace neverd {
 
@@ -67,19 +69,25 @@ constexpr size_t kMinGain = 3;
 /// indistinguishable here from an eight-bit integer, which is why a comparison
 /// never reaches the translation below.
 uint32_t bitWidthOf(const ExprPtr &E) {
-  if (!E)
-    return 0;
+  llvm::SmallPtrSet<const HighExpr *, 8> Seen;
+  const HighExpr *Current = E.get();
+  while (Current) {
+    if (!Seen.insert(Current).second)
+      return 0;
 
-  uint16_t Bytes = E->Type ? E->Type->Size : 0;
-  if (Bytes == 0 && E->Kind == ExprKind::Var)
-    Bytes = E->Var.Size;
-  if (Bytes == 0 && !E->Operands.empty() &&
-      (E->Kind == ExprKind::BinOp || E->Kind == ExprKind::UnaryOp))
-    return bitWidthOf(E->Operands[0]);
+    uint16_t Bytes = Current->Type ? Current->Type->Size : 0;
+    if (Bytes == 0 && Current->Kind == ExprKind::Var)
+      Bytes = Current->Var.Size;
+    if (Bytes != 0)
+      return Bytes <= 8 ? static_cast<uint32_t>(Bytes) * 8 : 0;
 
-  if (Bytes == 0 || Bytes > 8)
-    return 0;
-  return static_cast<uint32_t>(Bytes) * 8;
+    if (Current->Operands.empty() ||
+        (Current->Kind != ExprKind::BinOp &&
+         Current->Kind != ExprKind::UnaryOp))
+      return 0;
+    Current = Current->Operands[0].get();
+  }
+  return 0;
 }
 
 /// The engine operator a binary HighIR operator stands for, if any.
@@ -178,17 +186,55 @@ private:
   /// and picking one of its meanings is how a rewrite silently becomes wrong.
   std::optional<sym::SymRef> operandAt(const ExprPtr &E, uint32_t Width);
 
+  uint32_t widthOf(const ExprPtr &E) {
+    auto Cached = Widths.find(E.get());
+    if (Cached != Widths.end())
+      return Cached->second;
+
+    llvm::SmallVector<const HighExpr *, 8> Path;
+    llvm::SmallPtrSet<const HighExpr *, 8> Seen;
+    const HighExpr *Current = E.get();
+    uint32_t Width = 0;
+    while (Current) {
+      Cached = Widths.find(Current);
+      if (Cached != Widths.end()) {
+        Width = Cached->second;
+        break;
+      }
+      if (!Seen.insert(Current).second)
+        break;
+      Path.push_back(Current);
+
+      uint16_t Bytes = Current->Type ? Current->Type->Size : 0;
+      if (Bytes == 0 && Current->Kind == ExprKind::Var)
+        Bytes = Current->Var.Size;
+      if (Bytes != 0) {
+        Width = Bytes <= 8 ? static_cast<uint32_t>(Bytes) * 8 : 0;
+        break;
+      }
+      if (Current->Operands.empty() ||
+          (Current->Kind != ExprKind::BinOp &&
+           Current->Kind != ExprKind::UnaryOp))
+        break;
+      Current = Current->Operands[0].get();
+    }
+    for (const HighExpr *Node : Path)
+      Widths.emplace(Node, Width);
+    return Width;
+  }
+
   sym::SymRef applyBinary(BinKind Kind, sym::SymRef A, sym::SymRef B);
 
   sym::SymContext &Ctx;
   std::unordered_map<const HighExpr *, sym::SymRef> Memo;
+  std::unordered_map<const HighExpr *, uint32_t> Widths;
   /// Engine variable node to the HighIR it stands for, for the way back.
   std::unordered_map<uint32_t, ExprPtr> Sources;
 };
 
 std::optional<sym::SymRef> Translator::operandAt(const ExprPtr &E,
                                                  uint32_t Width) {
-  const uint32_t Have = bitWidthOf(E);
+  const uint32_t Have = widthOf(E);
   if (Have == Width)
     return in(E);
   if (E->Kind != ExprKind::Const || Have == 0 || Have >= Width)
@@ -238,186 +284,313 @@ sym::SymRef Translator::in(const ExprPtr &E) {
   if (Cached != Memo.end())
     return Cached->second;
 
-  const uint32_t Width = bitWidthOf(E);
-  sym::SymRef Result;
+  // HighIR copy propagation can turn thousands of straight-line assignments
+  // into one expression.  Walk that DAG explicitly: a fixed recursion cutoff
+  // avoids a stack overflow but arbitrarily hides every identity below it.
+  // The symbolic engine's own deep simplifier is iterative for the same reason.
+  struct WorkItem {
+    ExprPtr Expr;
+    bool ChildrenReady = false;
+  };
+  llvm::SmallVector<WorkItem, 64> Work{{E, false}};
+  std::unordered_set<const HighExpr *> Active;
 
-  // A node with no usable width cannot even be an input, because the engine
-  // has nothing to give the placeholder.  Fall back to the widest word, which
-  // keeps it opaque and keeps its identity.
-  if (Width == 0) {
-    Result = opaque(E, 64);
-    Memo.emplace(E.get(), Result);
-    return Result;
-  }
+  while (!Work.empty()) {
+    WorkItem Item = std::move(Work.back());
+    Work.pop_back();
+    const ExprPtr &Current = Item.Expr;
 
-  switch (E->Kind) {
-  case ExprKind::Const:
-    Result = Ctx.mkConst(Width, E->ConstVal);
-    break;
+    Cached = Memo.find(Current.get());
+    if (Cached != Memo.end()) {
+      if (Item.ChildrenReady)
+        Active.erase(Current.get());
+      continue;
+    }
 
-  case ExprKind::Var:
-    // Named by SSA identity, so every mention of one value is one input.
-    Result = Ctx.mkVar("v" + std::to_string(E->Var.Id) + "_" +
-                           std::to_string(E->Var.SSAVer),
-                       Width);
-    // Recorded like an opaque input, because the way back cannot tell the two
-    // apart: both are engine variables that have to become HighIR again.
-    Sources.emplace(Result.index(), E);
-    break;
+    const uint32_t Width = widthOf(Current);
+    if (!Item.ChildrenReady) {
+      // HighIR is a DAG.  If malformed input nevertheless closes a cycle,
+      // preserve that node opaquely rather than spinning the worklist forever.
+      if (!Active.insert(Current.get()).second) {
+        Memo.emplace(Current.get(), opaque(Current, Width ? Width : 64));
+        continue;
+      }
 
-  case ExprKind::BinOp: {
-    BinKind Kind = binKindOf(E->Op);
-    if (Kind == BinKind::None || E->Operands.size() != 2) {
-      Result = opaque(E, Width);
+      Work.push_back({Current, true});
+      llvm::SmallVector<ExprPtr, 2> Dependencies;
+      if (Width != 0 && Current->Kind == ExprKind::BinOp &&
+          binKindOf(Current->Op) != BinKind::None &&
+          Current->Operands.size() == 2) {
+        for (const ExprPtr &Operand : Current->Operands)
+          if (widthOf(Operand) == Width)
+            Dependencies.push_back(Operand);
+      } else if (Width != 0 && Current->Kind == ExprKind::UnaryOp &&
+                 (Current->Op == NdOp::INT_NOT ||
+                  Current->Op == NdOp::INT_NEGATE ||
+                  Current->Op == NdOp::INT_NEG2) &&
+                 Current->Operands.size() == 1 &&
+                 widthOf(Current->Operands[0]) == Width) {
+        Dependencies.push_back(Current->Operands[0]);
+      }
+      for (auto It = Dependencies.rbegin(); It != Dependencies.rend(); ++It)
+        if (Memo.find(It->get()) == Memo.end())
+          Work.push_back({*It, false});
+      continue;
+    }
+
+    Active.erase(Current.get());
+    sym::SymRef Result;
+    // A node with no usable width cannot even be an input, because the engine
+    // has nothing to give the placeholder.  Fall back to the widest word,
+    // which keeps it opaque and keeps its identity.
+    if (Width == 0) {
+      Result = opaque(Current, 64);
+      Memo.emplace(Current.get(), Result);
+      continue;
+    }
+
+    switch (Current->Kind) {
+    case ExprKind::Const:
+      Result = Ctx.mkConst(Width, Current->ConstVal);
+      break;
+
+    case ExprKind::Var:
+      // Named by SSA identity, so every mention of one value is one input.
+      Result = Ctx.mkVar("v" + std::to_string(Current->Var.Id) + "_" +
+                             std::to_string(Current->Var.SSAVer),
+                         Width);
+      // Recorded like an opaque input, because the way back cannot tell the two
+      // apart: both are engine variables that have to become HighIR again.
+      Sources.emplace(Result.index(), Current);
+      break;
+
+    case ExprKind::BinOp: {
+      BinKind Kind = binKindOf(Current->Op);
+      if (Kind == BinKind::None || Current->Operands.size() != 2) {
+        Result = opaque(Current, Width);
+        break;
+      }
+      std::optional<sym::SymRef> Lhs =
+          operandAt(Current->Operands[0], Width);
+      std::optional<sym::SymRef> Rhs =
+          operandAt(Current->Operands[1], Width);
+      if (!Lhs || !Rhs) {
+        Result = opaque(Current, Width);
+        break;
+      }
+      Result = applyBinary(Kind, *Lhs, *Rhs);
       break;
     }
-    std::optional<sym::SymRef> Lhs = operandAt(E->Operands[0], Width);
-    std::optional<sym::SymRef> Rhs = operandAt(E->Operands[1], Width);
-    if (!Lhs || !Rhs) {
-      Result = opaque(E, Width);
+
+    case ExprKind::Cast:
+      // A literal wearing a cast is still a literal, and a very common one:
+      // leaving `(int32_t)0` opaque costs the engine every fold that depends on
+      // knowing a term is zero.  Anything else a cast wraps stays opaque, since
+      // what a narrowing or widening means is exactly what this pass declines
+      // to guess at.
+      if (Current->Operands.size() == 1 &&
+          Current->Operands[0]->Kind == ExprKind::Const) {
+        Result = Ctx.mkConst(Width, Current->Operands[0]->ConstVal);
+        break;
+      }
+      Result = opaque(Current, Width);
+      break;
+
+    case ExprKind::UnaryOp: {
+      bool Complement =
+          Current->Op == NdOp::INT_NOT || Current->Op == NdOp::INT_NEGATE;
+      bool Negate = Current->Op == NdOp::INT_NEG2;
+      if ((!Complement && !Negate) || Current->Operands.size() != 1 ||
+          widthOf(Current->Operands[0]) != Width) {
+        Result = opaque(Current, Width);
+        break;
+      }
+      sym::SymRef Operand = in(Current->Operands[0]);
+      Result = Complement ? Ctx.mkNot(Operand) : Ctx.mkNeg(Operand);
       break;
     }
-    Result = applyBinary(Kind, *Lhs, *Rhs);
-    break;
-  }
 
-  case ExprKind::Cast:
-    // A literal wearing a cast is still a literal, and a very common one:
-    // leaving `(int32_t)0` opaque costs the engine every fold that depends on
-    // knowing a term is zero.  Anything else a cast wraps stays opaque, since
-    // what a narrowing or widening means is exactly what this pass declines to
-    // guess at.
-    if (E->Operands.size() == 1 && E->Operands[0]->Kind == ExprKind::Const) {
-      Result = Ctx.mkConst(Width, E->Operands[0]->ConstVal);
+    default:
+      Result = opaque(Current, Width);
       break;
     }
-    Result = opaque(E, Width);
-    break;
 
-  case ExprKind::UnaryOp: {
-    bool Complement = E->Op == NdOp::INT_NOT || E->Op == NdOp::INT_NEGATE;
-    bool Negate = E->Op == NdOp::INT_NEG2;
-    if ((!Complement && !Negate) || E->Operands.size() != 1 ||
-        bitWidthOf(E->Operands[0]) != Width) {
-      Result = opaque(E, Width);
-      break;
-    }
-    sym::SymRef Operand = in(E->Operands[0]);
-    Result = Complement ? Ctx.mkNot(Operand) : Ctx.mkNeg(Operand);
-    break;
+    Memo.emplace(Current.get(), Result);
   }
 
-  default:
-    Result = opaque(E, Width);
-    break;
-  }
-
-  Memo.emplace(E.get(), Result);
-  return Result;
+  Cached = Memo.find(E.get());
+  assert(Cached != Memo.end() && "iterative HighIR translation lost its root");
+  return Cached->second;
 }
 
 //===----------------------------------------------------------------------===//
 // The engine back to HighIR
 //===----------------------------------------------------------------------===//
 
-ExprPtr Translator::out(sym::SymRef R, uint32_t Width) {
-  const uint32_t NodeWidth = Ctx.width(R);
-  const auto ByteSize = static_cast<uint16_t>(NodeWidth / 8);
-  if (NodeWidth == 0 || NodeWidth % 8 != 0)
-    return nullptr;
-
-  auto binop = [&](NdOp Op, llvm::ArrayRef<sym::SymRef> Ops) -> ExprPtr {
-    ExprPtr Acc = out(Ops[0], NodeWidth);
-    for (size_t I = 1; I < Ops.size() && Acc; ++I) {
-      ExprPtr Rhs = out(Ops[I], NodeWidth);
-      Acc = Rhs ? HighExpr::makeBinop(Op, Acc, Rhs) : nullptr;
-    }
-    return Acc;
+ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/) {
+  struct WorkItem {
+    sym::SymRef Ref;
+    bool ChildrenReady = false;
   };
+  llvm::SmallVector<WorkItem, 64> Work{{R, false}};
+  std::unordered_map<uint32_t, ExprPtr> Built;
+  std::unordered_set<uint32_t> Active;
 
-  switch (Ctx.op(R)) {
-  case sym::SymOp::Const:
-    return HighExpr::makeConst(Ctx.constValue(R).getZExtValue(), ByteSize);
+  while (!Work.empty()) {
+    WorkItem Item = Work.pop_back_val();
+    const uint32_t Index = Item.Ref.index();
+    if (Built.find(Index) != Built.end()) {
+      if (Item.ChildrenReady)
+        Active.erase(Index);
+      continue;
+    }
 
-  case sym::SymOp::Var: {
-    auto It = Sources.find(R.index());
-    // Every variable in the result came from the way in, so a miss would mean
-    // the solver invented one — which only its placeholders are, and those are
-    // substituted away before it returns.
-    return It == Sources.end() ? nullptr : It->second;
-  }
-
-  case sym::SymOp::Add: {
-    // A sum whose term carries a negative coefficient reads far better as a
-    // subtraction, and the C backend has no other way to be told so.
-    llvm::SmallVector<sym::SymRef, 8> Plus, Minus;
-    for (sym::SymRef Term : Ctx.operands(R)) {
-      if (Ctx.op(Term) == sym::SymOp::Mul) {
-        llvm::ArrayRef<sym::SymRef> Factors = Ctx.operands(Term);
-        if (Factors.size() == 2 && Ctx.isConst(Factors[0]) &&
-            Ctx.constValue(Factors[0]).isAllOnes()) {
-          Minus.push_back(Factors[1]);
-          continue;
-        }
+    if (!Item.ChildrenReady) {
+      if (!Active.insert(Index).second) {
+        Built.emplace(Index, nullptr);
+        continue;
       }
-      Plus.push_back(Term);
+      Work.push_back({Item.Ref, true});
+      llvm::ArrayRef<sym::SymRef> Operands = Ctx.operands(Item.Ref);
+      for (auto It = Operands.rbegin(); It != Operands.rend(); ++It)
+        if (Built.find(It->index()) == Built.end())
+          Work.push_back({*It, false});
+      continue;
     }
-    if (Plus.empty())
-      Plus.push_back(Ctx.mkZero(NodeWidth));
 
-    ExprPtr Acc = binop(NdOp::INT_ADD, Plus);
-    for (sym::SymRef Term : Minus) {
-      if (!Acc)
-        break;
-      ExprPtr Rhs = out(Term, NodeWidth);
-      Acc = Rhs ? HighExpr::makeBinop(NdOp::INT_SUB, Acc, Rhs) : nullptr;
+    Active.erase(Index);
+    const uint32_t NodeWidth = Ctx.width(Item.Ref);
+    if (NodeWidth == 0 || NodeWidth % 8 != 0) {
+      Built.emplace(Index, nullptr);
+      continue;
     }
-    return Acc;
-  }
+    const auto ByteSize = static_cast<uint16_t>(NodeWidth / 8);
 
-  case sym::SymOp::Mul: {
-    // The engine stores negation as a product with all-ones.  Emitting that
-    // literally gives `-1 * x`, where every reader wants `-x`.
-    llvm::ArrayRef<sym::SymRef> Factors = Ctx.operands(R);
-    if (Factors.size() == 2 && Ctx.isConst(Factors[0]) &&
-        Ctx.constValue(Factors[0]).isAllOnes()) {
-      ExprPtr Operand = out(Factors[1], NodeWidth);
-      return Operand ? HighExpr::makeUnary(NdOp::INT_NEG2, Operand) : nullptr;
+    auto get = [&](sym::SymRef Child) -> ExprPtr {
+      auto It = Built.find(Child.index());
+      assert(It != Built.end() && "iterative HighIR rebuild lost an operand");
+      return It->second;
+    };
+    auto binop = [&](NdOp Op,
+                     llvm::ArrayRef<sym::SymRef> Operands) -> ExprPtr {
+      if (Operands.empty())
+        return nullptr;
+      ExprPtr Acc = get(Operands[0]);
+      for (size_t I = 1; I < Operands.size() && Acc; ++I) {
+        ExprPtr Rhs = get(Operands[I]);
+        Acc = Rhs ? HighExpr::makeBinop(Op, Acc, Rhs) : nullptr;
+      }
+      return Acc;
+    };
+
+    ExprPtr Result;
+    switch (Ctx.op(Item.Ref)) {
+    case sym::SymOp::Const:
+      Result =
+          HighExpr::makeConst(Ctx.constValue(Item.Ref).getZExtValue(), ByteSize);
+      break;
+
+    case sym::SymOp::Var: {
+      auto It = Sources.find(Index);
+      // Every variable in the result came from the way in, so a miss would mean
+      // the solver invented one — which only its placeholders are, and those
+      // are substituted away before it returns.
+      Result = It == Sources.end() ? nullptr : It->second;
+      break;
     }
-    return binop(NdOp::INT_MULT, Factors);
-  }
-  case sym::SymOp::And:
-    return binop(NdOp::INT_AND, Ctx.operands(R));
-  case sym::SymOp::Or:
-    return binop(NdOp::INT_OR, Ctx.operands(R));
-  case sym::SymOp::Xor:
-    return binop(NdOp::INT_XOR, Ctx.operands(R));
 
-  case sym::SymOp::Not: {
-    ExprPtr Operand = out(Ctx.operand(R, 0), NodeWidth);
-    return Operand ? HighExpr::makeUnary(NdOp::INT_NOT, Operand) : nullptr;
+    case sym::SymOp::Add: {
+      // A sum whose term carries a negative coefficient reads far better as a
+      // subtraction, and the C backend has no other way to be told so.
+      llvm::SmallVector<sym::SymRef, 8> Plus, Minus;
+      for (sym::SymRef Term : Ctx.operands(Item.Ref)) {
+        if (Ctx.op(Term) == sym::SymOp::Mul) {
+          llvm::ArrayRef<sym::SymRef> Factors = Ctx.operands(Term);
+          if (Factors.size() == 2 && Ctx.isConst(Factors[0]) &&
+              Ctx.constValue(Factors[0]).isAllOnes()) {
+            Minus.push_back(Factors[1]);
+            continue;
+          }
+        }
+        Plus.push_back(Term);
+      }
+
+      ExprPtr Acc = Plus.empty() ? HighExpr::makeConst(0, ByteSize)
+                                 : binop(NdOp::INT_ADD, Plus);
+      for (sym::SymRef Term : Minus) {
+        if (!Acc)
+          break;
+        ExprPtr Rhs = get(Term);
+        Acc = Rhs ? HighExpr::makeBinop(NdOp::INT_SUB, Acc, Rhs) : nullptr;
+      }
+      Result = Acc;
+      break;
+    }
+
+    case sym::SymOp::Mul: {
+      // The engine stores negation as a product with all-ones.  Emitting that
+      // literally gives `-1 * x`, where every reader wants `-x`.
+      llvm::ArrayRef<sym::SymRef> Factors = Ctx.operands(Item.Ref);
+      if (Factors.size() == 2 && Ctx.isConst(Factors[0]) &&
+          Ctx.constValue(Factors[0]).isAllOnes()) {
+        ExprPtr Operand = get(Factors[1]);
+        Result =
+            Operand ? HighExpr::makeUnary(NdOp::INT_NEG2, Operand) : nullptr;
+      } else {
+        Result = binop(NdOp::INT_MULT, Factors);
+      }
+      break;
+    }
+    case sym::SymOp::And:
+      Result = binop(NdOp::INT_AND, Ctx.operands(Item.Ref));
+      break;
+    case sym::SymOp::Or:
+      Result = binop(NdOp::INT_OR, Ctx.operands(Item.Ref));
+      break;
+    case sym::SymOp::Xor:
+      Result = binop(NdOp::INT_XOR, Ctx.operands(Item.Ref));
+      break;
+
+    case sym::SymOp::Not: {
+      ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
+      Result = Operand ? HighExpr::makeUnary(NdOp::INT_NOT, Operand) : nullptr;
+      break;
+    }
+
+    case sym::SymOp::Shl:
+      Result = binop(NdOp::INT_LEFT, Ctx.operands(Item.Ref));
+      break;
+    case sym::SymOp::LShr:
+      Result = binop(NdOp::INT_RIGHT, Ctx.operands(Item.Ref));
+      break;
+    case sym::SymOp::AShr:
+      Result = binop(NdOp::INT_ASHR, Ctx.operands(Item.Ref));
+      break;
+    case sym::SymOp::UDiv:
+      Result = binop(NdOp::INT_DIV, Ctx.operands(Item.Ref));
+      break;
+    case sym::SymOp::SDiv:
+      Result = binop(NdOp::INT_SDIV, Ctx.operands(Item.Ref));
+      break;
+    case sym::SymOp::URem:
+      Result = binop(NdOp::INT_REM, Ctx.operands(Item.Ref));
+      break;
+    case sym::SymOp::SRem:
+      Result = binop(NdOp::INT_SREM, Ctx.operands(Item.Ref));
+      break;
+
+    default:
+      // Extract, Concat, the casts, the select and the predicates never come
+      // back out, because nothing on the way in ever puts one in.
+      Result = nullptr;
+      break;
+    }
+    Built.emplace(Index, std::move(Result));
   }
 
-  case sym::SymOp::Shl:
-    return binop(NdOp::INT_LEFT, Ctx.operands(R));
-  case sym::SymOp::LShr:
-    return binop(NdOp::INT_RIGHT, Ctx.operands(R));
-  case sym::SymOp::AShr:
-    return binop(NdOp::INT_ASHR, Ctx.operands(R));
-  case sym::SymOp::UDiv:
-    return binop(NdOp::INT_DIV, Ctx.operands(R));
-  case sym::SymOp::SDiv:
-    return binop(NdOp::INT_SDIV, Ctx.operands(R));
-  case sym::SymOp::URem:
-    return binop(NdOp::INT_REM, Ctx.operands(R));
-  case sym::SymOp::SRem:
-    return binop(NdOp::INT_SREM, Ctx.operands(R));
-
-  default:
-    // Extract, Concat, the casts, the select and the predicates never come
-    // back out, because nothing on the way in ever puts one in.
-    return nullptr;
-  }
+  auto It = Built.find(R.index());
+  assert(It != Built.end() && "iterative HighIR rebuild lost its root");
+  return It->second;
 }
 
 /// Simplify one expression, in place, if there is anything to gain.

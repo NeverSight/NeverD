@@ -14,6 +14,7 @@
 #include "MedABIPassDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/Object/SectionNames.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
 
@@ -175,6 +176,11 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
 
       const bool IsDirectImport =
           !CI.IsIndirect && Img && Img->findImportAt(CI.TargetAddr);
+      const Section *TargetSection =
+          !CI.IsIndirect && Img ? Img->getSectionFor(CI.TargetAddr) : nullptr;
+      const bool IsObjCMessageStub =
+          TargetSection && Img->isMachO() &&
+          TargetSection->Name == section_names::macho::ObjCStubs;
       std::optional<libc::LibCArity> ExternalArity;
       if (!CI.IsIndirect)
         ExternalArity =
@@ -472,6 +478,32 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           if (FromLiveIn)
             PromoteParams.emplace(K, *V);
         }
+
+      // A stripped Mach-O no longer names its linker-specialized
+      // `_objc_msgSend$selector` entries, so varArgFixedCount cannot derive
+      // the fixed prefix from the symbol.  The call still identifies itself by
+      // landing in __objc_stubs.  Its contiguous register setup is exactly the
+      // fixed Objective-C prefix (receiver, _cmd, colon-counted arguments);
+      // any outgoing stack run starts the variadic tail.  Preserve that split
+      // so Darwin AArch64 does not misplace the tail after all eight registers.
+      if (IsObjCMessageStub && DarwinVarArgBase < 0) {
+        // The specialized stub itself materializes `_cmd` in x1, so callers
+        // commonly leave that register unset.  Keep a placeholder slot in the
+        // reconstructed signature: x2 must remain the first method argument,
+        // and the placeholder is never observed because the original stub
+        // overwrites it before tail-branching to objc_msgSend.
+        if (NumIntParamRegs >= 2 && FoundMask[0] && !FoundMask[1]) {
+          Found[1] =
+              MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));
+          FoundMask[1] = true;
+        }
+        int Prefix = 0;
+        while (Prefix < NumIntParamRegs && Prefix < MaxArgs &&
+               FoundMask[Prefix])
+          ++Prefix;
+        if (Prefix >= 2)
+          DarwinVarArgBase = Prefix;
+      }
 
       // The same cross-block materialisation for an INDIRECT call: its arity is
       // unknown, but a found argN proves arg0..argN are all real, so fill any
@@ -1323,6 +1355,9 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           }
         }
       }
+
+      if (IsObjCMessageStub && DarwinVarArgBase >= 0)
+        CI.VarArgFixedCount = DarwinVarArgBase;
 
       Func.CallInfos.push_back(std::move(CI));
       if (!CallLaneOps.empty())

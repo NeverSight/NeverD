@@ -19,9 +19,11 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/pass/HighC/HighCPasses.h"
 #include "neverd/ir/high/MedToHigh.h"
 
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -198,6 +200,68 @@ TEST(HighSymSimplify, KeepsWhatItCannotSeeInsideOf) {
   EXPECT_EQ(Expr.find('^'), std::string::npos) << Expr;
   EXPECT_EQ(Expr.find('&'), std::string::npos) << Expr;
   EXPECT_NE(Expr.find('*'), std::string::npos) << Expr;
+}
+
+TEST(HighSymSimplify, ReachesAnIdentityBelowSixtyFourExpressionLevels) {
+  FunctionBuilder B;
+  MedVar X = B.param(0, 0x38);
+  MedVar Y = B.param(1, 0x30);
+  MedVar Xor = B.emit(NdOp::INT_XOR, {X, Y});
+  MedVar And = B.emit(NdOp::INT_AND, {X, Y});
+  MedVar Scaled = B.emit(NdOp::INT_MULT, {And, FunctionBuilder::constant(2)});
+  MedVar Wrapped = B.emit(NdOp::INT_ADD, {Xor, Scaled});
+
+  // A hard recursion limit must not decide which parts of a real expression
+  // the semantic pass can see.  The symbolic engine itself walks iteratively,
+  // so this translator should be able to feed it a deep HighIR tree too.
+  for (unsigned I = 0; I < 96; ++I)
+    Wrapped =
+        B.emit(NdOp::INT_ADD, {Wrapped, FunctionBuilder::constant(I + 1)});
+
+  std::string Expr = returnedExpr(
+      B.finish(NdOp::INT_ADD, {Wrapped, FunctionBuilder::constant(97)}));
+  EXPECT_EQ(Expr.find('^'), std::string::npos) << Expr;
+  EXPECT_EQ(Expr.find('&'), std::string::npos) << Expr;
+}
+
+TEST(HighCDeadStoreAnalysis, WalksDeepExpressionGraphsOnAWorkerStack) {
+  MedVar Input;
+  Input.Kind = MedVar::Param;
+  Input.TheArch = Arch::X64;
+  Input.Id = 1;
+  Input.SSAVer = 1;
+  Input.Size = kWordBytes;
+
+  ExprPtr Deep = HighExpr::makeVar(Input);
+  for (unsigned I = 0; I < 8192; ++I)
+    Deep = HighExpr::makeBinop(NdOp::INT_ADD, std::move(Deep),
+                               HighExpr::makeConst(I, kWordBytes));
+
+  HighFunc Func;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = std::move(Deep);
+  Func.Body.push_back(std::move(Return));
+
+  HighCAnalysisState State;
+  std::thread Worker([&] {
+    analyzeDeadStores(
+        State, Func, [](const MedVar &V) { return V.display(); },
+        [](const HighExpr &) { return std::string("expression"); });
+  });
+  Worker.join();
+  EXPECT_TRUE(State.DeadStmts.empty());
+
+  // Shared-pointer destruction follows the same chain recursively.  Dismantle
+  // this synthetic stress tree iteratively so the test measures the analysis,
+  // not the standard library's control-block teardown.
+  ExprPtr Current = std::move(Func.Body.front().RetVal);
+  while (Current && Current->Kind == ExprKind::BinOp &&
+         !Current->Operands.empty()) {
+    ExprPtr Next = std::move(Current->Operands[0]);
+    Current->Operands.clear();
+    Current = std::move(Next);
+  }
 }
 
 } // namespace

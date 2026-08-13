@@ -19,8 +19,30 @@ TEST_F(AArch64_Intrinsics, AllStages) {
     verifyAllModesSucceed(obj("test_intrinsics_a64.o"));
 }
 
-TEST_F(AArch64_Intrinsics, NoUnreachable) {
-    verifyLLVMIRNoUnreachable(obj("test_intrinsics_a64.o"));
+TEST_F(AArch64_Intrinsics, OnlyBrkIsUnreachable) {
+    auto r = liftToLLVMIR(obj("test_intrinsics_a64.o"));
+    ASSERT_EQ(r.exitCode, 0) << "LLVM IR lift failed: " << r.err;
+
+    auto functionStart = r.out.find("@test_brk_intrinsic");
+    ASSERT_NE(functionStart, std::string::npos) << r.out.substr(0, 3000);
+    functionStart = r.out.rfind("define ", functionStart);
+    ASSERT_NE(functionStart, std::string::npos);
+    auto functionEnd = r.out.find("\n}", functionStart);
+    ASSERT_NE(functionEnd, std::string::npos);
+    functionEnd += 2;
+
+    const std::string brkFunction =
+        r.out.substr(functionStart, functionEnd - functionStart);
+    EXPECT_NE(brkFunction.find("call void @llvm.trap()"), std::string::npos)
+        << brkFunction;
+    EXPECT_NE(brkFunction.find("unreachable"), std::string::npos)
+        << brkFunction;
+
+    std::string otherFunctions = r.out;
+    otherFunctions.erase(functionStart, functionEnd - functionStart);
+    EXPECT_EQ(otherFunctions.find("unreachable"), std::string::npos)
+        << "Only architectural traps may be unreachable:\n"
+        << otherFunctions.substr(0, 3000);
 }
 
 TEST_F(AArch64_Intrinsics, LLVM_NoNdStubs) {

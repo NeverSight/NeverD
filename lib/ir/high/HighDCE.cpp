@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <functional>
 #include <unordered_set>
+#include <vector>
 
 #define DEBUG_TYPE "neverd-high-dce"
 
@@ -35,47 +36,60 @@ namespace neverd {
 // Expression cycle detection and breaking
 //===----------------------------------------------------------------------===//
 
-static bool exprHasCycle(const ExprPtr &E,
-                         std::unordered_set<const HighExpr *> &Path,
-                         std::unordered_set<const HighExpr *> &Safe) {
-  if (!E)
-    return false;
-  auto *P = E.get();
-  if (Safe.count(P))
-    return false;
-  if (!Path.insert(P).second)
-    return true;
-  for (auto &Op : E->Operands)
-    if (exprHasCycle(Op, Path, Safe))
-      return true;
-  Path.erase(P);
-  Safe.insert(P);
-  return false;
-}
+static void
+breakExprCycles(ExprPtr &Root,
+                std::unordered_set<const HighExpr *> &KnownAcyclic) {
+  struct Frame {
+    ExprPtr *Slot = nullptr;
+    size_t NextOperand = 0;
+    bool Entered = false;
+  };
 
-static void breakExprCycles(ExprPtr &E,
-                            std::unordered_set<const HighExpr *> &Path) {
-  if (!E)
-    return;
-  if (!Path.insert(E.get()).second) {
-    E = HighExpr::makeConst(0, 8);
-    return;
+  std::vector<Frame> Work{{&Root, 0, false}};
+  std::unordered_set<const HighExpr *> Path;
+  while (!Work.empty()) {
+    Frame &Current = Work.back();
+    if (!*Current.Slot) {
+      Work.pop_back();
+      continue;
+    }
+
+    HighExpr *Expr = Current.Slot->get();
+    if (!Current.Entered) {
+      if (KnownAcyclic.count(Expr)) {
+        Work.pop_back();
+        continue;
+      }
+      if (!Path.insert(Expr).second) {
+        *Current.Slot = HighExpr::makeConst(0, 8);
+        Work.pop_back();
+        continue;
+      }
+      Current.Entered = true;
+    }
+
+    if (Current.NextOperand < Expr->Operands.size()) {
+      ExprPtr &Operand = Expr->Operands[Current.NextOperand++];
+      if (!Operand || KnownAcyclic.count(Operand.get()))
+        continue;
+      if (Path.count(Operand.get())) {
+        Operand = HighExpr::makeConst(0, 8);
+        continue;
+      }
+      Work.push_back({&Operand, 0, false});
+      continue;
+    }
+
+    Path.erase(Expr);
+    KnownAcyclic.insert(Expr);
+    Work.pop_back();
   }
-  for (auto &Op : E->Operands)
-    breakExprCycles(Op, Path);
-  Path.erase(E.get());
 }
 
 static void breakStmtCycles(std::vector<HighStmt> &Stmts) {
   std::unordered_set<const HighExpr *> Safe;
   walkStmts(Stmts, [&Safe](HighStmt &S) {
-    forEachExpr(S, [&Safe](ExprPtr &EP) {
-      std::unordered_set<const HighExpr *> Path;
-      if (exprHasCycle(EP, Path, Safe)) {
-        Path.clear();
-        breakExprCycles(EP, Path);
-      }
-    });
+    forEachExpr(S, [&Safe](ExprPtr &EP) { breakExprCycles(EP, Safe); });
   });
 }
 
@@ -427,13 +441,6 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
                           << ", " << Func.Body.size() << " stmts)\n");
   simplifyAllExprs(Func.Body);
 
-  // Only now is there anything to measure: the expressions have been assembled
-  // out of their separate assignments, and their easy shapes already rewritten.
-  LLVM_DEBUG(llvm::dbgs() << "    dce phase 8b: semantic simplify ("
-                          << Func.Name << ", " << Func.Body.size()
-                          << " stmts)\n");
-  simplifyExprSemantics(Func.Body);
-
   eliminateDeadConditions(Func.Body);
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 9: redundant stack store ("
@@ -464,6 +471,18 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   renameVars(Func.Body);
 
   postRenameCleanup(Func.Body);
+
+  // Run semantic rewriting after every pass that substitutes expressions.
+  // Its result is a shared DAG; feeding it back through alias propagation can
+  // replace one of its own leaves with the DAG that contains it and create a
+  // cycle.  At this point expressions are fully assembled.  Normalize any
+  // cycle exposed by sharing before the C analyses traverse the result.
+  LLVM_DEBUG(llvm::dbgs() << "    dce phase 15: semantic simplify ("
+                          << Func.Name << ", " << Func.Body.size()
+                          << " stmts)\n");
+  simplifyExprSemantics(Func.Body);
+  breakStmtCycles(Func.Body);
+  eliminateDeadConditions(Func.Body);
 }
 
 } // namespace neverd

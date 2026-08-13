@@ -18,6 +18,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/Object/SectionNames.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/libc/LibCNames.h"
 
@@ -100,6 +101,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   }
   auto *Target = GetInput(0);
   uint64_t CallAddr = Op.Inputs[0].isConst() ? Op.Inputs[0].ConstVal : 0;
+  const Section *TargetSection =
+      Img && CallAddr != 0 ? Img->getSectionFor(CallAddr) : nullptr;
+  const bool IsObjCMessageStub =
+      TargetSection && Img->isMachO() &&
+      TargetSection->Name == section_names::macho::ObjCStubs;
 
   const MedCallInfo *CI =
       CurMedFunc ? CurMedFunc->findCall(BlockId, OpIdx) : nullptr;
@@ -171,7 +177,18 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // it as variadic (all actual args as fixed + "...") so the
       // backend never puts arguments in the wrong location.
       unsigned NumFixed = 0;
-      if (!CalleeName.empty()) {
+      if (CI && CI->VarArgFixedCount >= 0) {
+        NumFixed = static_cast<unsigned>(CI->VarArgFixedCount);
+        // A stripped Mach-O has no local `_objc_msgSend$selector` symbol, but
+        // the preserved __objc_stubs entry still has a concrete address.
+        // Encode that address in the backend's resolvable code-pointer symbol
+        // instead of falling through to a non-variadic anonymous stub.
+        if (CalleeName.empty())
+          CalleeName =
+              IsObjCMessageStub
+                  ? (kNdCodePtrPrefix + llvm::utohexstr(CallAddr)).str()
+                  : (kAutoFuncPrefix + llvm::utohexstr(CallAddr)).str();
+      } else if (!CalleeName.empty()) {
         llvm::StringRef Bare = stripLeadingUnderscores(CalleeName);
         NumFixed = libc::varArgFixedCount(Bare);
       }
@@ -184,7 +201,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           std::vector<llvm::Type *> FixedTypes;
           for (unsigned I = 0; I < NumFixed && I < Args.size(); ++I)
             FixedTypes.push_back(PtrTy);
-          auto *VarFT = llvm::FunctionType::get(I32Ty, FixedTypes, true);
+          auto *VarFT = llvm::FunctionType::get(
+              IsObjCMessageStub ? RetTy : I32Ty, FixedTypes, true);
           Callee = llvm::Function::Create(
               VarFT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
           Callee->setCallingConv(llvm::CallingConv::C);

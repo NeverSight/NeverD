@@ -360,6 +360,13 @@ TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {
   FromCall.TargetVA = 0x1100;
   FromCall.Kind = ExceptionalEdgeKind::ItaniumCatchPad;
   Low.Blocks[2].ExceptionalPreds.push_back(FromCall);
+  NdVar NarrowException = NdVar::tmp(0x7FF0, 4);
+  LowOp ReadNarrowException;
+  ReadNarrowException.Opcode = NdOp::COPY;
+  ReadNarrowException.Addr = 0x1100;
+  ReadNarrowException.Output = NarrowException;
+  ReadNarrowException.addInput(NdVar::reg(TRI.IntReturnReg, 4));
+  Low.Blocks[2].Ops.push_back(ReadNarrowException);
   NdVar Pair = NdVar::tmp(0x8000, TRI.PointerSize);
   LowOp Combine;
   Combine.Opcode = NdOp::INT_ADD;
@@ -401,8 +408,14 @@ TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {
           Op.Inputs[0].Kind == MedVar::Reg &&
           Op.Inputs[0].RegOff == TRI.FramePointer;
       for (unsigned I = 0; I < Op.NumInputs; ++I) {
-        SawException |= Op.Inputs[I].Kind == MedVar::EHException;
-        SawSelector |= Op.Inputs[I].Kind == MedVar::EHSelector;
+        if (Op.Inputs[I].Kind == MedVar::EHException) {
+          SawException = true;
+          EXPECT_EQ(Op.Inputs[I].Size, TRI.PointerSize);
+        }
+        if (Op.Inputs[I].Kind == MedVar::EHSelector) {
+          SawSelector = true;
+          EXPECT_EQ(Op.Inputs[I].Size, 4u);
+        }
         SawFlowingFramePointer |=
             Block.Id == 1 && Op.Inputs[I].Kind == MedVar::Reg &&
             Op.Inputs[I].RegOff == TRI.FramePointer;

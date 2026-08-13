@@ -1261,6 +1261,8 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
 
   struct Pad {
     llvm::BasicBlock *Block = nullptr;
+    llvm::BasicBlock *UnwindBlock = nullptr;
+    va_t Address = 0;
     int BlockId = -1;
     bool Cleanup = false;
     std::vector<llvm::Constant *> Clauses;
@@ -1297,6 +1299,7 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
     if (Site.LandingPadVA == 0)
       continue;
     Pad &P = Pads[Site.LandingPadVA];
+    P.Address = Site.LandingPadVA;
     if (!Site.FirstActionOffset) {
       // The ABI defines a pad with no action record as an unconditional
       // cleanup, which is the shape of every destructor-only frame and of
@@ -1359,10 +1362,47 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
   if (Pads.empty() || !TableFullyRead)
     return false;
 
-  // A pad is lowerable only where LLVM's landing-pad model holds: the block
-  // must start exactly at the pad, must not be the entry, and must be reached
-  // by nothing but an unwind edge.  A pad that fails any of these keeps its
-  // calls as plain calls rather than producing IR the verifier would reject.
+  // A native landing address may also have an ordinary predecessor.  Clang
+  // uses this shape when one LSDA pad is a short branch into another pad's
+  // shared handler.  LLVM requires the landingpad instruction itself to live
+  // in an unwind-only block, so each used native pad gets a synthetic unwind
+  // entry below; that entry stores the exception pair and then branches to the
+  // recovered native handler block.
+  //
+  // Native CFG recovery conservatively gives a trap instruction a fallthrough
+  // edge.  Clang emits exactly that shape after noreturn EH runtime calls
+  // (`objc_exception_rethrow(); brk #1; <landing pad>`).  Once the trap has
+  // become an LLVM noreturn call, remove its impossible unconditional edge so
+  // the following block can correctly become an unwind-only landing pad.
+  auto RemoveNoreturnFallthroughs = [](llvm::BasicBlock *PadBlock) {
+    llvm::SmallVector<llvm::BasicBlock *, 2> Preds(
+        llvm::pred_begin(PadBlock), llvm::pred_end(PadBlock));
+    for (llvm::BasicBlock *Pred : Preds) {
+      auto *Branch =
+          llvm::dyn_cast_or_null<llvm::UncondBrInst>(Pred->getTerminator());
+      if (!Branch ||
+          Branch->getSuccessor(0) != PadBlock)
+        continue;
+
+      bool HasNoreturnCall = false;
+      for (llvm::Instruction &Inst : *Pred) {
+        if (&Inst == Branch)
+          break;
+        if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst);
+            Call && Call->doesNotReturn()) {
+          HasNoreturnCall = true;
+          break;
+        }
+      }
+      if (!HasNoreturnCall)
+        continue;
+
+      Branch->eraseFromParent();
+      llvm::IRBuilder<> B(Pred);
+      B.CreateUnreachable();
+    }
+  };
+
   size_t UsablePads = 0;
   for (auto &[PadVA, P] : Pads) {
     P.Block = BlockAt(PadVA);
@@ -1371,8 +1411,10 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
         P.BlockId = Block.Id;
         break;
       }
+    if (P.Block)
+      RemoveNoreturnFallthroughs(P.Block);
     if (!P.Block || P.Block == &LLVMFunc.getEntryBlock() ||
-        !llvm::pred_empty(P.Block) || P.Block->isLandingPad())
+        P.Block->isLandingPad())
       continue;
     // Every pad the ABI can enter runs at least cleanup; a pad that named no
     // clause and no cleanup would be a `landingpad` LLVM rejects.
@@ -1383,6 +1425,16 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
   }
   if (UsablePads == 0)
     return false;
+
+  auto EnsureUnwindBlock = [&](Pad &P) {
+    if (P.UnwindBlock)
+      return P.UnwindBlock;
+    P.UnwindBlock = llvm::BasicBlock::Create(
+        *Ctx, "eh.pad." + llvm::utohexstr(P.Address), &LLVMFunc, P.Block);
+    llvm::IRBuilder<> B(P.UnwindBlock);
+    B.CreateBr(P.Block);
+    return P.UnwindBlock;
+  };
 
   // Match each emitted call to the innermost call-site range that covers the
   // address it came from.  The ranges a compiler emits do not overlap, so the
@@ -1445,6 +1497,7 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
       Pad *Target = PadForCall(AddrIt->second);
       if (!Target)
         continue;
+      llvm::BasicBlock *UnwindBlock = EnsureUnwindBlock(*Target);
       EmitExceptionalPhiCopies(MedBB.Id, Target->BlockId, Call);
       llvm::Instruction *Next = Call->getNextNode();
       if (!Next)
@@ -1460,7 +1513,7 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
       Call->getOperandBundlesAsDefs(Bundles);
       auto *Invoke = llvm::InvokeInst::Create(
           Call->getFunctionType(), Call->getCalledOperand(), Cont,
-          Target->Block, Args, Bundles, Call->getName(),
+          UnwindBlock, Args, Bundles, Call->getName(),
           OldBranch->getIterator());
       Invoke->setCallingConv(Call->getCallingConv());
       Invoke->setAttributes(Call->getAttributes());
@@ -1488,9 +1541,9 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
   auto *ResultTy = llvm::StructType::get(PtrTy, I32Ty);
   size_t LoweredPads = 0;
   for (auto &[PadVA, P] : Pads) {
-    if (!P.Usable || llvm::pred_empty(P.Block))
+    if (!P.Usable || !P.UnwindBlock || llvm::pred_empty(P.UnwindBlock))
       continue;
-    llvm::IRBuilder<> B(P.Block, P.Block->begin());
+    llvm::IRBuilder<> B(P.UnwindBlock, P.UnwindBlock->begin());
     auto *LP = B.CreateLandingPad(ResultTy, P.Clauses.size(), "eh.lpad");
     LP->setCleanup(P.Cleanup);
     for (llvm::Constant *Clause : P.Clauses)
@@ -1930,6 +1983,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         break;
       }
       emitOp(Op, Builder, Blk.Id, static_cast<int>(OI));
+      // Architecture side-effect emitters may terminate the block themselves
+      // (for example AArch64 BRK/HLT).  Do not append later lifted operations
+      // or the CFG's conservative fallthrough branch after an LLVM terminator.
+      if (!BB->empty() && BB->back().isTerminator())
+        break;
     }
 
     if (BB->empty() || !BB->back().isTerminator()) {

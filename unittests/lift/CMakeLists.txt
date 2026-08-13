@@ -322,6 +322,29 @@ if(NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS)
   add_dependencies(NeverDCxxItaniumEHCorpusTests neverd)
 endif()
 
+if(NEVERD_HAVE_OBJC_EH_CORPUS)
+  add_neverd_unittest(NeverDObjCEHCorpusTests
+    ObjCEHCorpusTests.cpp
+    TIMEOUT 600
+  )
+
+  target_compile_definitions(NeverDObjCEHCorpusTests PRIVATE
+    NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}"
+    NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  )
+
+  target_include_directories(NeverDObjCEHCorpusTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(NeverDObjCEHCorpusTests PRIVATE
+    NeverDLoader
+    NeverDSupport
+  )
+  add_dependencies(NeverDObjCEHCorpusTests neverd)
+endif()
+
 # This one exercises the C API through the shared library, so it exists only
 # where that library does.  Naming a missing target in add_dependencies is a
 # configure-time error rather than a link-time one, so an unguarded reference

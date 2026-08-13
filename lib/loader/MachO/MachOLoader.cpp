@@ -327,6 +327,7 @@ MachOLoader::load(const std::filesystem::path &Path) {
 
   for (const macho_loader::SectionInfo &Sec : Sections)
     if (Sec.Flags == llvm::MachO::S_SYMBOL_STUBS ||
+        Sec.Name == section_names::macho::ObjCStubs ||
         Sec.Name == section_names::macho::StubHelper)
       Img.recordImportStubRange(Sec.Addr, Sec.Size);
 
