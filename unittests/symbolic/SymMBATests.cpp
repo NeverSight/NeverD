@@ -555,6 +555,79 @@ TEST(SymMBA, NeverChangesWhatAnExpressionComputes) {
 }
 
 //===----------------------------------------------------------------------===//
+// Mixed widths, which real code is full of
+//===----------------------------------------------------------------------===//
+
+TEST(SymMBA, SurvivesAnExpressionThatMixesWidths) {
+  // Real lifted code puts bytes, words and vector lanes in one function, so the
+  // deep walk measures a wide region whose subterms are narrower.  Two things
+  // used to fault there: a mask collected from a narrow subterm was intersected
+  // with a column bitmask at the region's width, and a narrow subterm was given
+  // a placeholder at the region's width and then rebuilt into its narrower
+  // parent.  Neither may crash, and whatever comes back must still compute what
+  // it replaced.
+  SymContext Ctx;
+  SymRef A = Ctx.mkVar("a", 32);
+  SymRef B = Ctx.mkVar("b", 64);
+  SymRef C = Ctx.mkVar("c", 64);
+
+  // A narrow masked term widened into a wide sum, sitting next to a wide
+  // product -- the two shapes the two faults needed.
+  SymRef Narrow = Ctx.mkAnd(A, Ctx.mkConst(32, 0xff));
+  SymRef Root = Ctx.mkAdd(Ctx.mkZExt(Narrow, 64), Ctx.mkMul(B, C));
+
+  MBAResult R = simplifyMBADeep(Ctx, Root);
+
+  SymEvalPlan Before(Ctx, Root);
+  SymEvalPlan After(Ctx, R.Expr);
+  std::vector<llvm::APInt> Assignment;
+  for (size_t I = 0; I < Ctx.numVars(); ++I)
+    Assignment.emplace_back(Ctx.varInfo(uint32_t(I)).Width, 0);
+  std::mt19937_64 Rng(0xA11CE);
+  for (unsigned S = 0; S < 16; ++S) {
+    for (size_t I = 0; I < Assignment.size(); ++I) {
+      uint32_t W = Ctx.varInfo(uint32_t(I)).Width;
+      llvm::SmallVector<uint64_t, 4> Words((W + 63) / 64);
+      for (uint64_t &Word : Words)
+        Word = Rng();
+      Assignment[I] = llvm::APInt(W, Words);
+    }
+    EXPECT_EQ(Before.eval(Assignment), After.eval(Assignment));
+  }
+}
+
+TEST(SymMBA, RecoversAMaskedTermWidenedIntoAWiderSum) {
+  // The narrow masked carry-save addition still collapses on its own, even
+  // when it reaches the solver only as a subterm of something wider.
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", 8);
+  SymRef Y = Ctx.mkVar("y", 8);
+  SymRef Carry = Ctx.mkMul(Ctx.mkAnd(X, Y), Ctx.mkConst(8, 2));
+  SymRef Mba = Ctx.mkAnd(Ctx.mkAdd(Ctx.mkXor(X, Y), Carry), Ctx.mkConst(8, 0x7f));
+  SymRef Root = Ctx.mkAdd(Ctx.mkZExt(Mba, 32), Ctx.mkVar("z", 32));
+
+  MBAResult R = simplifyMBADeep(Ctx, Root);
+  // The narrow `((x ^ y) + 2*(x & y)) & 0x7f` inside is `(x + y) & 0x7f`; the
+  // whole thing gets shorter without the wide sum having to be understood.
+  EXPECT_TRUE(R.Changed);
+
+  SymEvalPlan Before(Ctx, Root);
+  SymEvalPlan After(Ctx, R.Expr);
+  std::vector<llvm::APInt> Assignment;
+  for (size_t I = 0; I < Ctx.numVars(); ++I)
+    Assignment.emplace_back(Ctx.varInfo(uint32_t(I)).Width, 0);
+  std::mt19937_64 Rng(0xBEEF);
+  for (unsigned S = 0; S < 16; ++S) {
+    for (size_t I = 0; I < Assignment.size(); ++I) {
+      uint32_t W = Ctx.varInfo(uint32_t(I)).Width;
+      Assignment[I] = llvm::APInt(W, Rng(), /*isSigned=*/false,
+                                  /*implicitTrunc=*/true);
+    }
+    EXPECT_EQ(Before.eval(Assignment), After.eval(Assignment));
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // The gates a release has to clear
 //===----------------------------------------------------------------------===//
 

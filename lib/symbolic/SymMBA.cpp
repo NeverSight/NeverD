@@ -255,11 +255,14 @@ void demoteArithmeticUnderBitwise(const SymContext &Ctx,
 /// result is returned.
 class Placeholders {
 public:
-  Placeholders(SymContext &Ctx, uint32_t Width,
-               const llvm::DenseSet<uint32_t> &Reserved)
-      : Ctx(Ctx), Width(Width), Reserved(Reserved) {}
+  Placeholders(SymContext &Ctx, const llvm::DenseSet<uint32_t> &Reserved)
+      : Ctx(Ctx), Reserved(Reserved) {}
 
-  SymRef take() {
+  /// A fresh input of \p Width bits.  The width is the subterm's own, not the
+  /// region's: a placeholder stands in an operand slot, and an operand keeps the
+  /// width its operator was built with, so minting at any other width would
+  /// hand a rebuilt node operands that disagree.
+  SymRef take(uint32_t Width) {
     for (;;) {
       std::string Name =
           ("mba$" + llvm::Twine(Width) + "." + llvm::Twine(Next++)).str();
@@ -273,7 +276,6 @@ public:
 
 private:
   SymContext &Ctx;
-  uint32_t Width;
   const llvm::DenseSet<uint32_t> &Reserved;
   unsigned Next = 0;
 };
@@ -307,7 +309,7 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
     if (Ctx.isVar(SymRef(Index)))
       Reserved.insert(Index);
 
-  Placeholders Pool(Ctx, Ctx.width(Root), Reserved);
+  Placeholders Pool(Ctx, Reserved);
   Abstraction Out;
   llvm::DenseMap<uint32_t, SymRef> Rewritten;
 
@@ -320,7 +322,7 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
       }
       // One placeholder per distinct subterm, so a term the obfuscator
       // repeated stays recognisably the same term.
-      SymRef V = Pool.take();
+      SymRef V = Pool.take(Ctx.width(R));
       Rewritten[Index] = V;
       Out.Hidden.emplace(V.index(), R);
       continue;
@@ -1394,7 +1396,8 @@ SymRef solveOneRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
 // Regions guarded by constant masks
 //===----------------------------------------------------------------------===//
 
-/// The distinct constants that appear as an operand of an `&`, `|` or `^`.
+/// The distinct constants that appear as an operand of an `&`, `|` or `^` at
+/// \p Width.
 ///
 /// These are exactly the constants a corner measurement cannot see past.  A
 /// bitwise term is uniform at a corner — all-zeros or all-ones — which is what
@@ -1404,12 +1407,20 @@ SymRef solveOneRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
 /// genuine mask.  A constant used as a summand or a coefficient is not
 /// collected: it does not defeat the measurement and does not partition the
 /// word.
-void collectBitwiseMasks(const SymContext &Ctx, SymRef E,
+///
+/// Only masks at \p Width are collected, because they are the ones that
+/// partition this region's bits: a mask inside a narrower or wider subterm
+/// belongs to that subterm's own region, which the layered walk visits on its
+/// own.  Mixing widths would also be a plain type error -- the column bitmasks
+/// are built at \p Width and an `APInt` operation across two widths asserts.
+void collectBitwiseMasks(const SymContext &Ctx, SymRef E, uint32_t Width,
                          llvm::SmallVectorImpl<llvm::APInt> &Out) {
   for (uint32_t Index : reachableInOrder(Ctx, E)) {
     SymRef R(Index);
     SymOp Op = Ctx.op(R);
     if (Op != SymOp::And && Op != SymOp::Or && Op != SymOp::Xor)
+      continue;
+    if (Ctx.width(R) != Width)
       continue;
     for (SymRef C : Ctx.operands(R))
       if (Ctx.isConst(C)) {
@@ -1467,9 +1478,13 @@ SymRef restrictToColumn(SymContext &Ctx, SymRef E, const llvm::APInt &ColMask,
         Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor;
     llvm::SmallVector<SymRef, 8> NewOps;
     NewOps.reserve(Ops.size());
+    // Masks were collected at the column's width, so a bitwise node at another
+    // width holds none of them; leaving it alone also keeps the width-matched
+    // APInt comparisons below from asserting.
+    const bool SameWidth = Ctx.width(R) == ColMask.getBitWidth();
     for (SymRef C : Ops) {
       SymRef NC = Done.lookup(C.index());
-      if (Bitwise && Ctx.isConst(C) &&
+      if (Bitwise && SameWidth && Ctx.isConst(C) &&
           llvm::any_of(Masks, [&](const llvm::APInt &M) {
             return M == Ctx.constValue(C);
           })) {
@@ -1504,12 +1519,12 @@ SymRef restrictToColumn(SymContext &Ctx, SymRef E, const llvm::APInt &ColMask,
 /// rather than an assertion that no split is ever bad.
 SymRef solveMasked(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
                    SolveReport &Rep) {
+  const uint32_t Width = Ctx.width(E);
   llvm::SmallVector<llvm::APInt, 8> Masks;
-  collectBitwiseMasks(Ctx, E, Masks);
+  collectBitwiseMasks(Ctx, E, Width, Masks);
   if (Masks.empty())
     return E;
 
-  const uint32_t Width = Ctx.width(E);
   llvm::SmallVector<llvm::APInt, 8> Cols = maskColumns(Width, Masks);
   if (Cols.size() < 2)
     return E;
