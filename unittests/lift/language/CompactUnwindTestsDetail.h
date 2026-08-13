@@ -125,7 +125,7 @@ inline uint32_t frameRegisters(std::initializer_list<uint32_t> Slots) {
 
 inline uint32_t x86_64FrameEncoding(uint32_t SavedRegisterCount,
                              std::initializer_list<uint32_t> Slots) {
-  return kX86_64ModeRBPFrame | (SavedRegisterCount << 16) |
+  return macho_unwind::kX86_64ModeRBPFrame | (SavedRegisterCount << 16) |
          frameRegisters(Slots);
 }
 
