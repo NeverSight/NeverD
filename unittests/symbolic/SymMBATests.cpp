@@ -189,7 +189,7 @@ TEST(SymMBA, DeclinesAMaskSplitThatACarryWouldCross) {
 }
 
 //===----------------------------------------------------------------------===//
-// Degree two
+// Products of bitwise terms
 //===----------------------------------------------------------------------===//
 
 TEST(SymMBA, RecoversAProductFromItsBitwiseRewriting) {
@@ -223,9 +223,10 @@ TEST(SymMBA, LeavesAProductAloneWhenItIsAlreadyShortest) {
   }
 }
 
-TEST(SymMBA, StopsAtDegreeThree) {
-  // The expansion only covers products of two, so a cube stays an input and
-  // whatever surrounds it is still measured.
+TEST(SymMBA, TreatsAProductInsideABitwiseOperatorAsOpaque) {
+  // A product is not a bitwise function of the inputs, so one sitting under `^`
+  // or `&` has to become an input whatever its degree.  What surrounds it is
+  // still measured, and the product comes back untouched.
   SymContext Ctx;
   SymParseResult P =
       parseSymExpr(Ctx, "((x * y * z) ^ w) + 2 * ((x * y * z) & w)", W32);
@@ -233,6 +234,76 @@ TEST(SymMBA, StopsAtDegreeThree) {
   MBAResult R = simplifyMBA(Ctx, P.Root);
   EXPECT_TRUE(R.Changed);
   EXPECT_EQ(Ctx.toString(R.Expr), "x * y * z + w");
+}
+
+TEST(SymMBA, RecoversAProductOfThreeTerms) {
+  // Obfuscating one factor of `x * y * z` leaves a sum of two degree-three
+  // products.  Reading it back is the same argument the degree-two case rests
+  // on, run at one higher arity: expand every factor over the minterms it
+  // selects, then find the single product whose expansion is what is there.
+  simplifiesTo("x * (y & z) * (y | z) + x * (y & ~z) * (~y & z)", "x * y * z");
+  simplifiesTo("2 * x * (y & z) * (y | z) + 2 * x * (y & ~z) * (~y & z)",
+               "2 * x * y * z");
+}
+
+TEST(SymMBA, KeepsALinearPartAlongsideADegreeThreeProduct) {
+  simplifiesTo("x * (y & z) * (y | z) + x * (y & ~z) * (~y & z) + "
+               "(x ^ y) + 2 * (x & y)",
+               "x * y * z + x + y");
+}
+
+TEST(SymMBA, NoticesWhenDegreeThreeProductsCancel) {
+  // The shape an obfuscator leaves when it multiplies a cube out and adds the
+  // pieces back: it looks cubic, and the cubic part is zero.
+  simplifiesTo("x * (y & z) * (y | z) + x * (y & ~z) * (~y & z) - x * y * z + "
+               "(x | y) - (x & y)",
+               "x ^ y");
+}
+
+//===----------------------------------------------------------------------===//
+// What the solver reports about what it did
+//===----------------------------------------------------------------------===//
+
+TEST(SymMBA, TellsTheReasonsForLeavingAnExpressionAlone) {
+  // "Unchanged" covers three different answers, and a caller deciding whether
+  // to spend more has to be able to tell them apart.
+  SymContext Ctx;
+  auto outcomeOf = [&](llvm::StringRef Text, const MBAOptions &Opts = {}) {
+    SymParseResult P = parseSymExpr(Ctx, Text, W32);
+    EXPECT_TRUE(P.ok()) << Text.str() << ": " << P.Error;
+    return simplifyMBA(Ctx, P.Root, Opts).Outcome;
+  };
+
+  // Nothing to measure: no input the algebra can drive.
+  EXPECT_EQ(outcomeOf("42"), MBAOutcome::NotApplicable);
+  // Measured, and nothing shorter exists.
+  EXPECT_EQ(outcomeOf("x + y"), MBAOutcome::AlreadyShortest);
+  // Refused for width, which is the one refusal a larger budget would undo.
+  MBAOptions Tight;
+  Tight.MaxAtoms = 2;
+  EXPECT_EQ(outcomeOf("x + y + z", Tight), MBAOutcome::TooManyInputs);
+}
+
+TEST(SymMBA, SaysWhatStandsBehindARewrite) {
+  SymContext Ctx;
+  auto resultOf = [&](llvm::StringRef Text) {
+    SymParseResult P = parseSymExpr(Ctx, Text, W32);
+    EXPECT_TRUE(P.ok()) << Text.str() << ": " << P.Error;
+    return simplifyMBA(Ctx, P.Root);
+  };
+
+  // The measurement derivation is exact, so the rewrite stands on it.
+  MBAResult Measured = resultOf("(x ^ y) + 2 * (x & y)");
+  EXPECT_EQ(Measured.Outcome, MBAOutcome::Rewritten);
+  EXPECT_EQ(Measured.Evidence, MBAEvidence::Derivation);
+  EXPECT_GT(Measured.Work, 0u);
+
+  // A mask column split is valid only while no carry crosses a boundary, which
+  // the derivation cannot establish and the sample check decides.  Saying so is
+  // the difference between a proof and a check that passed.
+  MBAResult Masked = resultOf("((x ^ y) + 2 * (x & y)) & 0xff");
+  EXPECT_EQ(Masked.Outcome, MBAOutcome::Rewritten);
+  EXPECT_EQ(Masked.Evidence, MBAEvidence::Samples);
 }
 
 //===----------------------------------------------------------------------===//
@@ -481,6 +552,162 @@ TEST(SymMBA, NeverChangesWhatAnExpressionComputes) {
           << "\n   after: " << Ctx.toString(R.Expr);
     }
   }
+}
+
+//===----------------------------------------------------------------------===//
+// The gates a release has to clear
+//===----------------------------------------------------------------------===//
+
+/// A random expression over \p Vars, built from the operators obfuscation uses.
+SymRef randomExpr(SymContext &Ctx, llvm::ArrayRef<SymRef> Vars, uint32_t Width,
+                  unsigned Depth, std::mt19937_64 &Rng) {
+  if (Depth == 0)
+    return Rng() % 4 == 0 ? Ctx.mkConst(Width, Rng()) : Vars[Rng() % Vars.size()];
+  SymRef L = randomExpr(Ctx, Vars, Width, Depth - 1, Rng);
+  SymRef R = randomExpr(Ctx, Vars, Width, Depth - 1, Rng);
+  switch (Rng() % 9) {
+  case 0:
+    return Ctx.mkAdd(L, R);
+  case 1:
+    return Ctx.mkSub(L, R);
+  case 2:
+    return Ctx.mkAnd(L, R);
+  case 3:
+    return Ctx.mkOr(L, R);
+  case 4:
+    return Ctx.mkXor(L, R);
+  case 5:
+    return Ctx.mkNot(L);
+  case 6:
+    return Ctx.mkMul(L, R);
+  case 7:
+    // A constant mask, so the column split is exercised alongside everything
+    // else rather than only where a test names it.
+    return Ctx.mkAnd(L, Ctx.mkConst(Width, Rng()));
+  default:
+    return Ctx.mkMul(Ctx.mkConst(Width, Rng() % 8), L);
+  }
+}
+
+TEST(SymMBA, IsExhaustivelyEquivalentAtASmallWidth) {
+  // Sampling says a rewrite is probably right.  Enumerating every input says it
+  // is right, and a narrow word makes that affordable: three four-bit inputs is
+  // 4096 points, checked in full.  It is worth doing at a narrow width because
+  // none of the algebra depends on the width -- the same derivation runs at 4
+  // bits and at 256 -- so a fault in it has nowhere to hide here.
+  //
+  // This is the equivalence gate: it has to find nothing, every time.
+  constexpr uint32_t Width = 4;
+  SymContext Ctx;
+  llvm::SmallVector<SymRef, 3> Vars{Ctx.mkVar("p", Width),
+                                    Ctx.mkVar("q", Width),
+                                    Ctx.mkVar("r", Width)};
+  std::mt19937_64 Rng(0x5EED);
+
+  unsigned Rewrites = 0;
+  for (unsigned Trial = 0; Trial < 400; ++Trial) {
+    SymRef E = randomExpr(Ctx, Vars, Width, 3, Rng);
+    MBAResult R = simplifyMBADeep(Ctx, E);
+    if (!R.Changed)
+      continue;
+    ++Rewrites;
+
+    SymEvalPlan Before(Ctx, E);
+    SymEvalPlan After(Ctx, R.Expr);
+    std::vector<llvm::APInt> Assignment(Ctx.numVars(), llvm::APInt(Width, 0));
+    const unsigned Points = 1u << Width;
+    for (unsigned A = 0; A < Points; ++A)
+      for (unsigned B = 0; B < Points; ++B)
+        for (unsigned C = 0; C < Points; ++C) {
+          Assignment[Ctx.varId(Vars[0])] = llvm::APInt(Width, A);
+          Assignment[Ctx.varId(Vars[1])] = llvm::APInt(Width, B);
+          Assignment[Ctx.varId(Vars[2])] = llvm::APInt(Width, C);
+          ASSERT_EQ(Before.eval(Assignment), After.eval(Assignment))
+              << "trial " << Trial << " at (" << A << "," << B << "," << C
+              << ")\n  before: " << Ctx.toString(E)
+              << "\n   after: " << Ctx.toString(R.Expr);
+        }
+  }
+  // A run that rewrote nothing would pass the loop above without checking
+  // anything, so the gate has to know work was done.
+  EXPECT_GT(Rewrites, 50u) << "the corpus stopped exercising the solver";
+}
+
+TEST(SymMBA, ReachesThroughDeeplyNestedObfuscation) {
+  // Depth is not a budget.  An obfuscator can always wrap one more layer, so a
+  // walk that gives up at some nesting gives up on exactly the input it exists
+  // for.  Each layer here is `-(~e) - 1`, which is `e` and which the builders
+  // cannot fold, because complement is primitive to them.
+  constexpr unsigned kLayers = 256;
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", W32);
+  SymRef E = X;
+  for (unsigned I = 0; I < kLayers; ++I)
+    E = Ctx.mkSub(Ctx.mkNeg(Ctx.mkNot(E)), Ctx.mkOne(W32));
+  ASSERT_NE(E, X) << "the builders folded the layers away before the solver saw"
+                     " them";
+
+  MBAResult R = simplifyMBADeep(Ctx, E);
+  EXPECT_TRUE(R.Changed);
+  EXPECT_EQ(R.Expr, X) << "left " << Ctx.toString(R.Expr);
+}
+
+TEST(SymMBA, TerminatesOnNestingFarPastAnyBudget) {
+  // Eight thousand layers is past what the default work budget covers, so the
+  // answer here is not that everything collapses but that the walk comes back
+  // at all -- iteratively, without running the stack out -- and that whatever
+  // it returns still computes what it replaced.
+  constexpr unsigned kLayers = 8192;
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", W32);
+  SymRef E = X;
+  for (unsigned I = 0; I < kLayers; ++I)
+    E = Ctx.mkSub(Ctx.mkNeg(Ctx.mkNot(E)), Ctx.mkOne(W32));
+
+  MBAResult R = simplifyMBADeep(Ctx, E);
+  SymEvalPlan Before(Ctx, E);
+  SymEvalPlan After(Ctx, R.Expr);
+  std::vector<llvm::APInt> Assignment(Ctx.numVars(), llvm::APInt(W32, 0));
+  std::mt19937_64 Rng(0xD00D);
+  for (unsigned Sample = 0; Sample < 8; ++Sample) {
+    for (llvm::APInt &V : Assignment)
+      V = llvm::APInt(W32, Rng(), /*isSigned=*/false, /*implicitTrunc=*/true);
+    EXPECT_EQ(Before.eval(Assignment), After.eval(Assignment));
+  }
+}
+
+TEST(SymMBA, HandlesAGraphWhoseTreeIsExponentiallyLarger) {
+  // Every layer names the one below it twice, so twenty layers is a graph of a
+  // few dozen nodes denoting a tree of a million.  Anything that walks the tree
+  // rather than the graph -- including the cost model, which reports a tree
+  // size -- has to stay finite here.
+  SymContext Ctx;
+  SymRef Y = Ctx.mkVar("y", W32);
+  SymRef Z = Ctx.mkVar("z", W32);
+  SymRef E = Ctx.mkVar("w", W32);
+  for (unsigned I = 0; I < 20; ++I)
+    E = Ctx.mkXor(Ctx.mkAnd(E, Y), Ctx.mkOr(E, Z));
+
+  MBAResult R = simplifyMBADeep(Ctx, E);
+  SymEvalPlan Before(Ctx, E);
+  SymEvalPlan After(Ctx, R.Expr);
+  std::vector<llvm::APInt> Assignment(Ctx.numVars(), llvm::APInt(W32, 0));
+  std::mt19937_64 Rng(0xFEED);
+  for (unsigned Sample = 0; Sample < 16; ++Sample) {
+    for (llvm::APInt &V : Assignment)
+      V = llvm::APInt(W32, Rng(), /*isSigned=*/false, /*implicitTrunc=*/true);
+    EXPECT_EQ(Before.eval(Assignment), After.eval(Assignment));
+  }
+}
+
+TEST(SymMBA, MeasuresAWideWordTheSameWay) {
+  // Nothing in the derivation mentions a width, and an EVM word is where that
+  // stops being a claim and starts being load-bearing.
+  simplifiesTo("(x ^ y) + 2 * (x & y)", "x + y", /*Width=*/256);
+  simplifiesTo("(x & y) * (x | y) + (x & ~y) * (~x & y)", "x * y",
+               /*Width=*/256);
+  simplifiesTo("((x | y) - (x & y)) & 0xffffffffffffffff",
+               "(x ^ y) & 0xffffffffffffffff", /*Width=*/256);
 }
 
 } // namespace

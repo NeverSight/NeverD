@@ -30,15 +30,26 @@
 /// rather than by hope, so the rewrite is exact rather than a guess that
 /// happens to check out.
 ///
-/// A *product* of two bitwise terms is the one thing that gets more than a
+/// A *product* of bitwise terms is the one thing that gets more than a
 /// placeholder.  Measurement cannot read one — at a corner every bitwise term
 /// is all-zeros or all-ones, so `B * B` and `-B` agree at all 2^t of them and
 /// disagree everywhere else — but it does not have to.  Writing each factor as
 /// the sum of the parts of the word it selects and multiplying out gives the
 /// coefficients symbolically, and that is what recognises
-/// `(x & y) * (x | y) + (x & ~y) * (~x & y)` as `x * y` however it was
-/// dressed up.  Beyond degree two the term becomes a placeholder like anything
-/// else.
+/// `(x & y) * (x | y) + (x & ~y) * (~x & y)` as `x * y` however it was dressed
+/// up.  The same argument runs at any arity, so `x * y * z` and the degrees
+/// above it come back the same way; only the size of the search for a matching
+/// product sets where it stops being worth doing.
+///
+/// A *constant mask* is the other thing measurement cannot read, and for the
+/// opposite reason: it is the one operand that tells one bit position from
+/// another, which is exactly the uniformity a corner reading depends on.  It
+/// does not have to be read as a whole.  Cutting the word into the groups of
+/// positions that every mask treats alike leaves, on each group, an ordinary
+/// linear MBA — so each is measured on its own and the answer is reassembled
+/// from the bits each group owns.  That is what gets inside
+/// `((x ^ y) + 2 * (x & y)) & 0xff`.  The cut is only valid while no arithmetic
+/// carry crosses between groups, which is checked rather than assumed.
 ///
 /// Every width is handled the same way, because constants are \c llvm::APInt.
 /// A 256-bit EVM word is measured exactly like a 32-bit one.
@@ -59,11 +70,6 @@ struct MBAOptions {
   /// three variables, so the default leaves a wide margin.
   unsigned MaxAtoms = 16;
 
-  /// Give up on the conjunction-basis form once it needs more terms than this.
-  /// It always exists but can have 2^t of them, and building a result the size
-  /// guard will only reject is wasted work.
-  unsigned MaxTerms = 64;
-
   /// Random assignments the rewrite is checked against before it is returned.
   /// The derivation is exact, so this is a guard against a mistake in it
   /// rather than part of the argument.
@@ -81,6 +87,46 @@ struct MBAOptions {
   size_t MaxWork = size_t(1) << 22;
 };
 
+/// What became of an attempt to simplify, and why nothing did when nothing did.
+///
+/// "Unchanged" is three different answers wearing one face.  A caller deciding
+/// whether to spend more — a wider measurement, a longer walk — and a user
+/// reading a report both need to tell "there is nothing here" from "there is
+/// something here I could not afford", and neither can from a bare flag.
+enum class MBAOutcome : uint8_t {
+  /// Nothing in the expression belongs to the algebra the solver works in, so
+  /// there was nothing to measure.  Spending more would not help.
+  NotApplicable,
+  /// Measured, and no form shorter than what is already there exists.
+  AlreadyShortest,
+  /// More inputs than one measurement can afford, and no split into
+  /// independent parts or mask-uniform columns was available.  A larger
+  /// \c MBAOptions::MaxAtoms would reach it, at 2^t the cost.
+  TooManyInputs,
+  /// The layered walk stopped at its work budget with regions left unvisited.
+  /// A larger \c MBAOptions::MaxWork would reach them.
+  BudgetExhausted,
+  /// A shorter form was found and is in \c MBAResult::Expr.
+  Rewritten,
+};
+
+/// What stands behind a rewrite that was made.
+enum class MBAEvidence : uint8_t {
+  /// Nothing was rewritten.
+  None,
+  /// The derivation is exact by construction.  A sample check still ran, but as
+  /// a net for a mistake in the derivation rather than as the reason to trust
+  /// the result.
+  Derivation,
+  /// The rewrite holds only under a condition the derivation cannot establish
+  /// on its own — a mask column split is invalid if an arithmetic carry crosses
+  /// a boundary — and the sample check is what decided it.
+  Samples,
+};
+
+const char *mbaOutcomeName(MBAOutcome Outcome);
+const char *mbaEvidenceName(MBAEvidence Evidence);
+
 struct MBAResult {
   /// The simplified expression, or the input unchanged.
   SymRef Expr;
@@ -93,6 +139,12 @@ struct MBAResult {
   /// How many distinct inputs the expression was measured over.  Zero when the
   /// solver declined to work on it at all.
   unsigned NumAtoms = 0;
+  MBAOutcome Outcome = MBAOutcome::NotApplicable;
+  MBAEvidence Evidence = MBAEvidence::None;
+  /// Graph nodes the search measured over.  This is what the answer cost to
+  /// find rather than how large the answer is, and it is the number to watch
+  /// when a work budget has to be chosen.
+  size_t Work = 0;
 };
 
 /// Measure \p E as one region and rewrite it into the best form that admits.
