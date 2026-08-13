@@ -230,4 +230,135 @@ TEST(SymSimplifyGuard, ObfuscationStampsSoSimplifyLeavesItsPayload) {
   EXPECT_EQ(SymSimplifyPass::simplify(*F), 0u);
 }
 
+//===----------------------------------------------------------------------===//
+// Branches that were never a choice
+//===----------------------------------------------------------------------===//
+
+// `@name(i32 %x, i32 %y)` branching on a caller-supplied predicate.  The side
+// not taken computes something recognisable, so a test can say whether the
+// block survived rather than only how many blocks are left.
+llvm::Function *buildGuardedFunction(
+    llvm::Module &M, llvm::StringRef Name,
+    llvm::function_ref<llvm::Value *(llvm::IRBuilder<> &, llvm::Value *,
+                                     llvm::Value *)>
+        Condition) {
+  llvm::LLVMContext &C = M.getContext();
+  auto *I32 = llvm::Type::getInt32Ty(C);
+  auto *FT = llvm::FunctionType::get(I32, {I32, I32}, /*isVarArg=*/false);
+  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
+
+  auto *Entry = llvm::BasicBlock::Create(C, "entry", F);
+  auto *Taken = llvm::BasicBlock::Create(C, "taken", F);
+  auto *Guarded = llvm::BasicBlock::Create(C, "guarded", F);
+
+  llvm::IRBuilder<> B(Entry);
+  llvm::Value *X = F->getArg(0);
+  llvm::Value *Y = F->getArg(1);
+  B.CreateCondBr(Condition(B, X, Y), Taken, Guarded);
+
+  B.SetInsertPoint(Taken);
+  B.CreateRet(B.CreateAdd(X, Y));
+
+  B.SetInsertPoint(Guarded);
+  B.CreateRet(B.CreateMul(X, llvm::ConstantInt::get(I32, 0x1234)));
+  return F;
+}
+
+// The condition of the one conditional branch, or null once there is none.
+const llvm::Value *branchCondition(const llvm::Function &F) {
+  for (const llvm::BasicBlock &BB : F)
+    if (const auto *Br = llvm::dyn_cast<llvm::CondBrInst>(BB.getTerminator()))
+      return Br->getCondition();
+  return nullptr;
+}
+
+bool mentionsGuardedConstant(const llvm::Function &F) {
+  for (const llvm::Instruction &I : llvm::instructions(F))
+    for (const llvm::Value *Op : I.operand_values())
+      if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(Op))
+        if (CI->equalsInt(0x1234))
+          return true;
+  return false;
+}
+
+// `(x | ~x) != 0` holds for every x.  That is what an opaque predicate is: a
+// branch with one reachable side, written so nothing reading the shape of the
+// condition can tell.
+TEST(SymSimplifyGuard, FoldsAPredicateThatCannotVary) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F = buildGuardedFunction(
+      M, "opaque", [](llvm::IRBuilder<> &B, llvm::Value *X, llvm::Value *) {
+        llvm::Value *Or = B.CreateOr(X, B.CreateNot(X));
+        return B.CreateICmpNE(Or, llvm::ConstantInt::get(X->getType(), 0));
+      });
+
+  EXPECT_GT(SymSimplifyPass::simplify(*F), 0u);
+  EXPECT_EQ(branchCondition(*F), llvm::ConstantInt::getTrue(C))
+      << printFunction(*F);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+// The harder shape, and the one a rule set cannot reach: both sides compute the
+// same value, one of them spelled as mixed boolean-arithmetic.  Measuring the
+// operands makes them the same expression, and a comparison of an expression
+// with itself folds by construction rather than by a rule about comparisons.
+TEST(SymSimplifyGuard, FoldsAPredicateComparingTwoSpellingsOfOneValue) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F = buildGuardedFunction(
+      M, "opaque_mba",
+      [](llvm::IRBuilder<> &B, llvm::Value *X, llvm::Value *Y) {
+        llvm::Value *Carry =
+            B.CreateMul(B.CreateAnd(X, Y),
+                        llvm::ConstantInt::get(X->getType(), 2));
+        llvm::Value *Mba = B.CreateAdd(B.CreateXor(X, Y), Carry);
+        return B.CreateICmpEQ(Mba, B.CreateAdd(X, Y));
+      });
+
+  EXPECT_GT(SymSimplifyPass::simplify(*F), 0u);
+  EXPECT_EQ(branchCondition(*F), llvm::ConstantInt::getTrue(C))
+      << printFunction(*F);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+// A branch that is a real choice has to stay one.  Folding this would not be an
+// optimisation, it would be wrong.
+TEST(SymSimplifyGuard, LeavesABranchThatIsAGenuineChoice) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F = buildGuardedFunction(
+      M, "genuine",
+      [](llvm::IRBuilder<> &B, llvm::Value *X, llvm::Value *Y) {
+        return B.CreateICmpULT(X, Y);
+      });
+
+  SymSimplifyPass::simplify(*F);
+  const llvm::Value *Cond = branchCondition(*F);
+  ASSERT_NE(Cond, nullptr) << printFunction(*F);
+  EXPECT_FALSE(llvm::isa<llvm::Constant>(Cond)) << printFunction(*F);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+// End to end through the real pipeline: this pass makes the condition a
+// constant and stops there, and the SimplifyCFG already in that pipeline is
+// what removes the side the constant made unreachable.  Deleting blocks is not
+// this pass's job, so the two halves are only worth checking together.
+TEST(SymSimplifyGuard, TheRealPipelineDropsWhatAnOpaquePredicateGuarded) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F = buildGuardedFunction(
+      M, "opaque", [](llvm::IRBuilder<> &B, llvm::Value *X, llvm::Value *) {
+        llvm::Value *Or = B.CreateOr(X, B.CreateNot(X));
+        return B.CreateICmpNE(Or, llvm::ConstantInt::get(X->getType(), 0));
+      });
+  ASSERT_TRUE(mentionsGuardedConstant(*F));
+
+  Pipeline::optimizeModule(M);
+
+  ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+  EXPECT_EQ(branchCondition(*F), nullptr) << printFunction(*F);
+  EXPECT_FALSE(mentionsGuardedConstant(*F)) << printFunction(*F);
+}
+
 } // namespace

@@ -10,10 +10,17 @@
 ///
 /// This is the counterpart to the HighIR simplifier: the same engine, run one
 /// layer earlier, so the recovered form is what the rest of the optimizer and
-/// every downstream IR sees.  It is a leaf transform over integer expression
-/// trees; it does not touch control flow, memory, or anything it cannot read
-/// exactly, so it composes with the ordinary optimization pipeline instead of
-/// standing apart from it.
+/// every downstream IR sees.  It works over integer expression trees and the
+/// branch conditions built from them; it does not touch memory or anything it
+/// cannot read exactly, so it composes with the ordinary optimization pipeline
+/// instead of standing apart from it.
+///
+/// A branch condition is worth measuring for one reason: an opaque predicate is
+/// a branch built so that one side is unreachable, with the condition dressed
+/// up as arithmetic so that nothing reading its shape can tell.  Measuring the
+/// condition turns it into the constant it always was.  Removing the side that
+/// constant makes unreachable is left to the SimplifyCFG that follows in the
+/// pipeline, which already does exactly that and does it better.
 ///
 //===----------------------------------------------------------------------===//
 

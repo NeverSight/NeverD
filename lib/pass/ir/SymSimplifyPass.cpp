@@ -63,7 +63,7 @@ constexpr size_t kMinInterestingNodes = 6;
 constexpr size_t kMinGain = 1;
 
 /// The integer operators this pass carries into the engine.  Everything else
-/// -- comparisons, selects, loads, calls -- becomes an opaque input.
+/// -- selects, loads, calls -- becomes an opaque input.
 enum class OpTag {
   None,
   Add,
@@ -82,6 +82,7 @@ enum class OpTag {
   Trunc,
   ZExt,
   SExt,
+  ICmp,
 };
 
 OpTag tagOf(const llvm::Instruction &I) {
@@ -91,6 +92,8 @@ OpTag tagOf(const llvm::Instruction &I) {
     return OpTag::ZExt;
   if (llvm::isa<llvm::SExtInst>(I))
     return OpTag::SExt;
+  if (llvm::isa<llvm::ICmpInst>(I))
+    return OpTag::ICmp;
   switch (I.getOpcode()) {
   case llvm::Instruction::Add:
     return OpTag::Add;
@@ -124,9 +127,18 @@ OpTag tagOf(const llvm::Instruction &I) {
 }
 
 /// True for an integer instruction the engine has an operator for.
-bool isTranslatable(const llvm::Value *V) {
+///
+/// A comparison is carried only when the caller asks for it, and only one
+/// caller does.  Rebuilding an expression is what the ordinary path is for, and
+/// a comparison has no place in one: it would have to come back out as an
+/// instruction, and the engine's answer for a comparison is worth having only
+/// when it is a constant.  Deciding a branch is that one case.
+bool isTranslatable(const llvm::Value *V, bool WithComparisons) {
   const auto *I = llvm::dyn_cast<llvm::Instruction>(V);
-  return I && I->getType()->isIntegerTy() && tagOf(*I) != OpTag::None;
+  if (!I || !I->getType()->isIntegerTy())
+    return false;
+  OpTag Tag = tagOf(*I);
+  return Tag != OpTag::None && (WithComparisons || Tag != OpTag::ICmp);
 }
 
 //===----------------------------------------------------------------------===//
@@ -135,7 +147,8 @@ bool isTranslatable(const llvm::Value *V) {
 
 class Translator {
 public:
-  explicit Translator(sym::SymContext &Ctx) : Ctx(Ctx) {}
+  explicit Translator(sym::SymContext &Ctx, bool CarryComparisons = false)
+      : Ctx(Ctx), CarryComparisons(CarryComparisons) {}
 
   /// Translate the tree rooted at \p Root, descending through single-use
   /// integer operators and standing an opaque input in front of everything
@@ -162,7 +175,7 @@ private:
   /// always descended; anything below it only when it is a single-use integer
   /// operator, so shared computation stays one opaque input.
   bool descend(const llvm::Value *V, bool IsRoot) const {
-    return isTranslatable(V) &&
+    return isTranslatable(V, CarryComparisons) &&
            (IsRoot || llvm::cast<llvm::Instruction>(V)->hasOneUse());
   }
 
@@ -192,6 +205,7 @@ private:
   sym::SymRef build(const llvm::Instruction &I);
 
   sym::SymContext &Ctx;
+  bool CarryComparisons = false;
   llvm::DenseMap<const llvm::Value *, sym::SymRef> Memo;
   /// Engine node index to the LLVM value it stands for, for the way back.
   llvm::DenseMap<uint32_t, llvm::Value *> Sources;
@@ -246,6 +260,32 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
     return Ctx.mkZExt(M(A), Width);
   case OpTag::SExt:
     return Ctx.mkSExt(M(A), Width);
+  case OpTag::ICmp:
+    switch (llvm::cast<llvm::ICmpInst>(I).getPredicate()) {
+    case llvm::CmpInst::ICMP_EQ:
+      return Ctx.mkEq(M(A), M(B));
+    case llvm::CmpInst::ICMP_NE:
+      return Ctx.mkNe(M(A), M(B));
+    case llvm::CmpInst::ICMP_ULT:
+      return Ctx.mkUlt(M(A), M(B));
+    case llvm::CmpInst::ICMP_ULE:
+      return Ctx.mkUle(M(A), M(B));
+    case llvm::CmpInst::ICMP_UGT:
+      return Ctx.mkUgt(M(A), M(B));
+    case llvm::CmpInst::ICMP_UGE:
+      return Ctx.mkUge(M(A), M(B));
+    case llvm::CmpInst::ICMP_SLT:
+      return Ctx.mkSlt(M(A), M(B));
+    case llvm::CmpInst::ICMP_SLE:
+      return Ctx.mkSle(M(A), M(B));
+    case llvm::CmpInst::ICMP_SGT:
+      return Ctx.mkSgt(M(A), M(B));
+    case llvm::CmpInst::ICMP_SGE:
+      return Ctx.mkSge(M(A), M(B));
+    default:
+      break;
+    }
+    break;
   case OpTag::None:
     break;
   }
@@ -500,11 +540,11 @@ llvm::Value *Translator::out(sym::SymRef R, llvm::Instruction *At,
 /// An instruction is a root when it is a translatable integer operator that is
 /// not already going to be absorbed into a larger tree above it.
 bool isRoot(const llvm::Instruction &I) {
-  if (!isTranslatable(&I) || I.use_empty())
+  if (!isTranslatable(&I, /*WithComparisons=*/false) || I.use_empty())
     return false;
   if (I.hasOneUse()) {
     const auto *U = llvm::dyn_cast<llvm::Instruction>(*I.user_begin());
-    if (U && isTranslatable(U))
+    if (U && isTranslatable(U, /*WithComparisons=*/false))
       return false;
   }
   return true;
@@ -562,6 +602,56 @@ bool rewriteRoot(llvm::Instruction *Root,
   return true;
 }
 
+//===----------------------------------------------------------------------===//
+// Branches that were never a choice
+//===----------------------------------------------------------------------===//
+
+/// Replace \p Br's condition with the constant it always was, if it is one.
+///
+/// An opaque predicate is a branch built so that one side is unreachable, put
+/// there to carry code that never runs and to make the graph too large to read.
+/// What makes it hard is that the condition is an identity dressed up as
+/// arithmetic -- `(x | ~x) != 0`, or one MBA form of a value compared against
+/// another -- so nothing that reasons about the *shape* of the condition sees
+/// anything unusual, and constant propagation has no constant to propagate.
+///
+/// Measuring it needs no new machinery.  Carrying the comparison and its
+/// operands into the engine simplifies each side, and two sides that turn out
+/// to be the same expression intern to the same node, at which point the
+/// comparison folds by construction rather than by a rule about comparisons.
+/// Nothing here removes a block: making the condition a constant is what lets
+/// the SimplifyCFG already in the pipeline see that a side is unreachable, and
+/// deleting blocks is its job rather than this pass's.
+bool foldOpaqueBranch(llvm::CondBrInst *Br,
+                      llvm::SmallVectorImpl<llvm::WeakTrackingVH> &Dead) {
+  auto *Cond = llvm::dyn_cast<llvm::Instruction>(Br->getCondition());
+  if (!Cond)
+    return false;
+
+  sym::SymContext Ctx;
+  Translator Xlat(Ctx, /*CarryComparisons=*/true);
+  sym::SymRef Before = Xlat.in(Cond);
+  if (!Before.isValid())
+    return false;
+
+  sym::MBAOptions Opts;
+  Opts.MaxWork = std::numeric_limits<size_t>::max();
+  sym::MBAResult Res = sym::simplifyMBADeep(Ctx, Before, Opts);
+  sym::SymRef Folded = Res.Changed ? Res.Expr : Before;
+
+  // Only a constant is worth taking.  A condition that merely got shorter is
+  // still a branch, and rewriting it would mean materializing a comparison for
+  // no gain the ordinary path has not already had a chance at.
+  std::optional<llvm::APInt> Value = Ctx.asConst(Folded);
+  if (!Value || Ctx.width(Folded) != 1)
+    return false;
+
+  Br->setCondition(llvm::ConstantInt::get(
+      llvm::Type::getInt1Ty(Br->getContext()), Value->getBoolValue()));
+  Dead.push_back(Cond);
+  return true;
+}
+
 } // namespace
 
 unsigned SymSimplifyPass::simplify(llvm::Function &F) {
@@ -584,6 +674,14 @@ unsigned SymSimplifyPass::simplify(llvm::Function &F) {
   for (llvm::Instruction *Root : Roots)
     if (rewriteRoot(Root, Dead))
       ++Rewritten;
+
+  // Branch conditions after the expressions, so a condition is decided over
+  // operands the measurement has already shortened rather than over the
+  // obfuscation that was wrapped around them.
+  for (llvm::BasicBlock &BB : F)
+    if (auto *Br = llvm::dyn_cast<llvm::CondBrInst>(BB.getTerminator()))
+      if (foldOpaqueBranch(Br, Dead))
+        ++Rewritten;
 
   // Sweep the expression trees the rewrites made unreachable.  Doing it here
   // rather than leaving it to the InstCombine that follows in the pipeline is
