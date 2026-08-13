@@ -154,6 +154,32 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build
 ```
 
+La CI ordinaria di NeverD, su push e pull request, compila deliberatamente il sottomodulo LLVM dai sorgenti. Avviando manualmente il workflow `CI`, selezionare `use_prebuilt_llvm` per validare i pacchetti pubblicati; solo un `true` scelto a mano abilita l'LLVM prebuilt. Lasciandolo deselezionato resta lo stesso percorso di build dai sorgenti della CI automatica.
+
+Il pacchetto pubblicato viene scelto in base all'host che esegue CMake:
+
+| Host | Artefatto di release |
+|------|----------------------|
+| macOS arm64 | `neverd-llvm-macos-arm64.tar.xz` |
+| Linux x86_64 | `neverd-llvm-linux-x86_64.tar.xz` |
+| Windows x64 | `neverd-llvm-windows-x64.zip` |
+
+Ogni archivio viene confrontato con il digest fissato in `cmake/NeverDLLVMPrebuilt.cmake` — oppure con il `.sha256` pubblicato accanto ad esso, per un tag che quei pin non descrivono — prima di essere estratto in `~/.cache/neverd-llvm/<tag>/<arch>/` (o nel percorso indicato da `NEVERD_LLVM_PREBUILT_CACHE_DIR`). La build di release usa ccache su macOS e Linux; le build clang-cl su Windows usano sccache con la cache di GitHub Actions come backend. Le cache del compilatore accelerano solo le ricompilazioni e non vengono mai pubblicate come artefatti.
+
+Il tag di release versiona il pacchetto NeverD, mentre `BUILDINFO.txt` registra l'esatto commit del fork LLVM. Se LLVM continua a riportare `23.0.0` ma i sorgenti del fork sono cambiati, la scelta immutabile consueta è una revisione di pacchetto come `neverd-llvm-v23.0.0-r1` (poi `-r2`), non `23.0.1`, a meno che non sia cambiata la patch version di LLVM stesso. Puntare `NEVERD_LLVM_PREBUILT_TAG` a quella nuova revisione.
+
+Per riparare sul posto la release mutabile `neverd-llvm-v23.0.0`, eseguire il workflow `NeverD LLVM Release` dal branch `main` di llvm-project abilitando `overwrite_existing_assets`:
+
+```bash
+gh workflow run neverd-release.yml \
+  --repo NeverSight/llvm-project \
+  --ref main \
+  -f release_tag=neverd-llvm-v23.0.0 \
+  -f overwrite_existing_assets=true
+```
+
+Questo sostituisce gli artefatti omonimi ma deliberatamente non sposta il tag Git esistente. Aggiornare nello stesso cambiamento i digest fissati in `cmake/NeverDLLVMPrebuilt.cmake`: sono quei digest, non il tag, a nominare la build che una revisione di NeverD si aspetta, così una `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` obsoleta viene sostituita alla configurazione successiva e un archivio che non corrisponde ad alcun digest fissato ferma quella configurazione con una discrepanza di checksum, invece di riaffiorare più tardi come un header che il pacchetto precedente non conteneva. Un nuovo tag `-rN` evita del tutto la riscrittura sul posto. Il workflow rifiuta una sostituzione accidentale finché la casella non è attiva e la rifiuta del tutto se GitHub marca la release come immutabile.
+
 **Artefatti**
 
 | Percorso | Descrizione |

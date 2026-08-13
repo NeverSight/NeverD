@@ -153,6 +153,32 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build
 ```
 
+تبني الـCI المعتادة لـNeverD، عند الـpush والـpull request، وحدة LLVM الفرعية من المصدر عن قصد. وعند تشغيل سير عمل `CI` يدويًا، اختر `use_prebuilt_llvm` للتحقق من الحزم المنشورة؛ ولا يُفعَّل الـLLVM الجاهز إلا باختيار `true` يدويًا. وتركه دون اختيار يُبقي المسار نفسه: البناء من المصدر كما في الـCI التلقائية.
+
+تُختار الحزمة المنشورة حسب المضيف الذي يشغّل CMake:
+
+| المضيف | مخرَج الإصدار |
+|--------|----------------|
+| macOS arm64 | `neverd-llvm-macos-arm64.tar.xz` |
+| Linux x86_64 | `neverd-llvm-linux-x86_64.tar.xz` |
+| Windows x64 | `neverd-llvm-windows-x64.zip` |
+
+يُطابَق كل أرشيف مع البصمة المثبَّتة في `cmake/NeverDLLVMPrebuilt.cmake` — أو مع ملف `.sha256` المنشور بجانبه، إن كان الـtag خارج ما تصفه تلك التثبيتات — قبل فكّه تحت `~/.cache/neverd-llvm/<tag>/<arch>/` (أو المسار الذي يحدده `NEVERD_LLVM_PREBUILT_CACHE_DIR`). ويستخدم بناء الإصدار ccache على macOS وLinux، بينما تستخدم بناءات clang-cl على Windows أداة sccache مع ذاكرة GitHub Actions المؤقتة كـbackend؛ وذاكرات المترجم المؤقتة تُسرّع إعادة البناء فقط ولا تُنشر أبدًا كمخرجات إصدار.
+
+يحدد tag الإصدار نسخة حزمة NeverD، بينما يسجّل `BUILDINFO.txt` الـcommit الدقيق لفرع LLVM. وإذا ظل LLVM يبلّغ عن `23.0.0` بينما تغيّر مصدر الفرع، فالخيار الثابت المعتاد هو مراجعة حزمة مثل `neverd-llvm-v23.0.0-r1` (ثم `-r2`) لا `23.0.1`، ما لم تتغير نسخة الترقيع الخاصة بـLLVM نفسه. وجّه `NEVERD_LLVM_PREBUILT_TAG` إلى تلك المراجعة الجديدة.
+
+ولإصلاح الإصدار المتغيّر `neverd-llvm-v23.0.0` في مكانه، شغّل سير عمل `NeverD LLVM Release` من فرع `main` في llvm-project مع تفعيل `overwrite_existing_assets`:
+
+```bash
+gh workflow run neverd-release.yml \
+  --repo NeverSight/llvm-project \
+  --ref main \
+  -f release_tag=neverd-llvm-v23.0.0 \
+  -f overwrite_existing_assets=true
+```
+
+يستبدل هذا المخرجات المتطابقة الاسم لكنه لا يحرّك tag الـGit القائم عمدًا. حدِّث ضمن التغيير نفسه البصمات المثبَّتة في `cmake/NeverDLLVMPrebuilt.cmake`: فهذه البصمات، لا الـtag، هي ما يسمّي البناء الذي تتوقعه مراجعة معينة من NeverD، ولذلك يُستبدل أي `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` قديم عند التكوين التالي، ويوقف أي أرشيف لا يطابق أي بصمة مثبَّتة ذلك التكوين باختلاف في المجموع الاختباري بدل أن يظهر لاحقًا على هيئة ترويسة لم تكن الحزمة الأقدم تحملها. أما tag جديد بالصيغة `-rN` فيتفادى الكتابة في المكان تمامًا. ويرفض سير العمل الاستبدال العَرَضي ما لم يُفعَّل الخيار، ويرفضه كليًا إن وسم GitHub الإصدار بأنه غير قابل للتغيير.
+
 **المخرجات**
 
 | المسار | الوصف |

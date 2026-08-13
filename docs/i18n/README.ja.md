@@ -153,6 +153,32 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build
 ```
 
+NeverD の通常の push および pull request CI は、意図的に LLVM submodule をソースからビルドします。`CI` ワークフローを手動実行する際に `use_prebuilt_llvm` を選ぶと公開パッケージを検証できます。プリビルド LLVM が有効になるのは手動で `true` を選んだときだけで、未選択なら自動 CI と同じソースビルド経路のままです。
+
+公開パッケージは CMake を実行するホストに応じて選ばれます:
+
+| ホスト | リリース資産 |
+|--------|--------------|
+| macOS arm64 | `neverd-llvm-macos-arm64.tar.xz` |
+| Linux x86_64 | `neverd-llvm-linux-x86_64.tar.xz` |
+| Windows x64 | `neverd-llvm-windows-x64.zip` |
+
+各アーカイブは `~/.cache/neverd-llvm/<tag>/<arch>/`（または `NEVERD_LLVM_PREBUILT_CACHE_DIR` が指すパス）へ展開される前に、`cmake/NeverDLLVMPrebuilt.cmake` に固定されたダイジェストと照合されます。その pin が記述していない tag の場合は、アーカイブと共に公開された `.sha256` と照合します。リリースビルドは macOS と Linux で ccache を、Windows の clang-cl では GitHub Actions キャッシュを backend にした sccache を使います。コンパイラキャッシュは再ビルドを速くするだけで、リリース資産として公開されることはありません。
+
+リリース tag は NeverD パッケージのバージョンを表し、`BUILDINFO.txt` が正確な LLVM fork commit を記録します。LLVM が `23.0.0` を報告し続けていても fork のソースが変わった場合、通常の不変な選択は `neverd-llvm-v23.0.0-r1`（次は `-r2`）のようなパッケージリビジョンであり、LLVM 自身の patch バージョンが変わらない限り `23.0.1` ではありません。`NEVERD_LLVM_PREBUILT_TAG` をその新しいリビジョンに向けてください。
+
+既存の可変な `neverd-llvm-v23.0.0` リリースをその場で修復するには、llvm-project の `main` ブランチから `NeverD LLVM Release` ワークフローを実行し、`overwrite_existing_assets` を有効にします:
+
+```bash
+gh workflow run neverd-release.yml \
+  --repo NeverSight/llvm-project \
+  --ref main \
+  -f release_tag=neverd-llvm-v23.0.0 \
+  -f overwrite_existing_assets=true
+```
+
+これは同名の資産を置き換えますが、既存の Git tag は意図的に強制移動しません。同じ変更で `cmake/NeverDLLVMPrebuilt.cmake` に固定されたダイジェストを更新してください。ある NeverD リビジョンが期待するビルドを名指すのは tag ではなくそれらのダイジェストであり、そのおかげで古い `~/.cache/neverd-llvm/neverd-llvm-v23.0.0/` は次の configure で置き換えられ、どの pin とも一致しないアーカイブはその configure をチェックサム不一致で止めます。古いパッケージに無かったヘッダとして後から表面化することはありません。新しい `-rN` tag を使えば、その場での書き換え自体が不要になります。ワークフローはチェックボックスが有効でない限り誤った置き換えを拒否し、GitHub がリリースを immutable と印付けている場合は置き換えを完全に拒否します。
+
 **成果物**
 
 | パス | 説明 |
