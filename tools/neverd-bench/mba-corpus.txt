@@ -1,0 +1,98 @@
+# A fixed body of expressions for measuring the semantic optimiser.
+#
+# Every line is written from an identity NeverD can derive on its own, so this
+# corpus carries no licence and no provenance: it is the obfuscation NeverD's
+# own L1 passes emit, plus the shapes those passes compose into, and nothing
+# taken from anywhere else.  That matters for a benchmark that is meant to be
+# published alongside the numbers it produces.
+#
+# Run it with:
+#   neverd simplify -f tools/neverd-bench/mba-corpus.txt --json --stats
+#
+# The summary reports how many collapsed, what stopped the rest, the total
+# reading cost before and after, the work spent, and the latency distribution.
+# Lines are grouped by the capability they exercise so a regression says which
+# one broke rather than only that the rate moved.
+
+# --- linear MBA: addition and subtraction ---------------------------------
+(x ^ y) + 2 * (x & y)
+(x | y) + (x & y)
+(x | y) + y - (~x & y)
+2 * (x | y) - (x ^ y)
+(x ^ ~y) + 2 * (x | y) - 2 * y + 1
+~(~x + y)
+~(x - 1)
+~x + 1
+-x - 1
+
+# --- linear MBA: recovering the bitwise operators --------------------------
+(x | y) - (x & y)
+x + y - 2 * (x & y)
+(x + y) - (x | y)
+(x + y) - (x ^ y) - (x & y)
+x + y - (x & y)
+(x ^ y) + (x & y)
+
+# --- coefficients ----------------------------------------------------------
+3 * (x ^ y) + 6 * (x & y)
+(x ^ y) * 2 + (x & y) * 4
+7 * (x | y) - 7 * (x & y)
+
+# --- expressions that are secretly constant --------------------------------
+(x | ~x) + 1
+(x & y) + (x | y) - x - y
+(x ^ y) - (x | y) + (x & y)
+x - x + 7
+
+# --- three inputs ----------------------------------------------------------
+(x ^ y ^ z) + 2 * ((x & y) ^ (x & z) ^ (y & z))
+(x | y | z) - (x & y & z) - ((x ^ y) & (y ^ z))
+
+# --- products of two bitwise terms -----------------------------------------
+(x & y) * (x | y) + (x & ~y) * (~x & y)
+3 * ((x & y) * (x | y) + (x & ~y) * (~x & y))
+(x & y) * (x | y) + (x & ~y) * (~x & y) + (x ^ y) + 2 * (x & y)
+(x | y) * (x & y) - (x & y) * (x | y) + (x ^ y)
+x * y - (x & y) * (x | y) - (x & ~y) * (~x & y)
+
+# --- products of three bitwise terms ---------------------------------------
+x * (y & z) * (y | z) + x * (y & ~z) * (~y & z)
+2 * x * (y & z) * (y | z) + 2 * x * (y & ~z) * (~y & z)
+x * (y & z) * (y | z) + x * (y & ~z) * (~y & z) + (x ^ y) + 2 * (x & y)
+x * (y & z) * (y | z) + x * (y & ~z) * (~y & z) - x * y * z + (x | y) - (x & y)
+
+# --- guarded by a constant mask --------------------------------------------
+((x ^ y) + 2 * (x & y)) & 0xff
+((x | y) - (x & y)) & 0xffff
+(((x ^ y) + 2 * (x & y)) & 0xff) | (((a | b) - (a & b)) & 0xff0000)
+((x & y) + (x | y) - x - y) & 0xff
+# Under --shallow this is the case a carry crosses a mask column, which has to
+# be declined; the layered walk reaches it by another road and simplifies it.
+(((x ^ y) + 2 * (x & y)) & 15) + z
+
+# --- an opaque subterm the algebra must step around ------------------------
+((x / y) ^ z) + 2 * ((x / y) & z)
+((x * y) | z) - ((x * y) & z)
+((x & 0xff) ^ y) + 2 * ((x & 0xff) & y)
+((load ^ y) + 2 * (load & y)) - load
+
+# --- layered, which is what the walk exists for ----------------------------
+((x ^ y) + 2 * (x & y)) ^ z
+(((x ^ y) + 2 * (x & y)) | z) - (((x ^ y) + 2 * (x & y)) & z)
+((((x | y) - (x & y)) ^ z) + 2 * (((x | y) - (x & y)) & z))
+
+# --- independent groups, too wide to measure in one piece ------------------
+(a ^ b) + 2 * (a & b) + (c ^ d) + 2 * (c & d) + (e ^ f) + 2 * (e & f) + (g ^ h) + 2 * (g & h) + (i ^ j) + 2 * (i & j) + (k ^ l) + 2 * (k & l) + (m ^ n) + 2 * (m & n) + (o ^ p) + 2 * (o & p) + (q ^ r) + 2 * (q & r)
+
+# --- already shortest: these must not be churned ---------------------------
+x + y
+x ^ y
+x * y
+x * y + z
+2 * (x * y)
+42
+
+# --- genuinely out of reach: this must be declined, not guessed ------------
+# Every input reaches every other, so the width belongs to the expression
+# rather than to how it was written and there is no honest answer to give.
+(a & b & c & d & e & f & g & h & i & j & k & l & m & n & o & p & q & r) + (a | b | c | d | e | f | g | h | i | j | k | l | m | n | o | p | q | r)

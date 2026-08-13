@@ -126,8 +126,13 @@ jobs:
             -v
           "$PYTHON" -m unittest discover \
             -s pluginsdk/python/tests -v
+          # The provenance test gates NeverD's own sources at zero findings.
+          # Running check_source_provenance.py over the whole tree is the
+          # stronger gate and is what should replace this once the assistant
+          # tooling under .agents is settled one way or the other.
           "$PYTHON" -m unittest \
-            scripts.tests.test_check_python_plugin_sdk -v
+            scripts.tests.test_check_python_plugin_sdk \
+            scripts.tests.test_check_source_provenance -v
           "$PYTHON" scripts/check_python_plugin_sdk.py
         env:
           CC: ${{ matrix.cc }}
@@ -221,3 +226,16 @@ jobs:
           EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}
           EXPECTED_TESTS: ${{ steps.inventory.outputs.count }}
           TEST_PARALLEL: ${{ matrix.parallel }}
+
+      # The CLI, the typed C entry point and the JSON one are three surfaces
+      # over one implementation, and nothing that tests any of them alone would
+      # notice them drifting apart.  This needs the built tool and library, so
+      # it runs here rather than with the source checks.
+      - name: Check the simplifier's surfaces agree
+        shell: bash
+        run: |
+          "$PYTHON" -m unittest scripts.tests.test_simplify_surfaces -v
+        env:
+          NEVERD_BUILD_DIR: build-ci
+          PYTHON: ${{ matrix.python }}
+          PYTHONPATH: pluginsdk/python
