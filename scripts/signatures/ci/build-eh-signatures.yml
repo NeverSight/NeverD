@@ -1,0 +1,288 @@
+# Exception-runtime signature database producer/publisher.
+#
+# STAGED FILE. This workflow is written for the external signatures
+# repository, not for NeverD's own CI. It lives here so it can be reviewed
+# beside the loader code that consumes what it produces; installing it means
+# copying it to `.github/workflows/build-eh-signatures.yml` over there. See
+# scripts/signatures/README.md for the rest of the installation steps.
+#
+# Shape: one job builds the generator, a matrix of jobs builds each
+# toolchain's unwinder from source and turns it into .pat trees, and a final
+# job merges those trees and commits them. Only a push to main commits; every
+# other trigger stops at the artifacts, so a pull request shows what would
+# change without changing it.
+
+name: Build EH signatures
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Monthly. The unwinders move slowly, and a database regenerated more
+    # often than its inputs change is a stream of empty commits to review.
+    - cron: '0 4 1 * *'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-eh-signatures.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-eh-signatures-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The NeverD revision whose signature maker and generation scripts produce
+  # this database. Pinning it is what makes a regenerated database
+  # attributable to a known generator rather than to whatever was on main.
+  NEVERD_REPO: NeverSight/NeverD
+  NEVERD_REF: dev
+
+jobs:
+  # --- generator -----------------------------------------------------------
+  # Built once and shared. Configuring with the published prebuilt LLVM
+  # package is what keeps this to minutes: a signature run has no reason to
+  # rebuild the compiler fork.
+  sigmaker:
+    name: Build neverd-sigmaker
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out NeverD
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.NEVERD_REPO }}
+          ref: ${{ env.NEVERD_REF }}
+          path: neverd
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang cmake lld ninja-build
+
+      - name: Configure against the prebuilt LLVM package
+        working-directory: neverd
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DBUILD_TESTING=OFF \
+            -DNEVERD_LLVM_PREBUILT=ON
+
+      - name: Build the signature maker
+        working-directory: neverd
+        run: cmake --build build --target neverd-sigmaker --parallel 4
+
+      - name: Upload the signature maker
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: neverd-sigmaker
+          path: neverd/build/bin/neverd-sigmaker
+          if-no-files-found: error
+          retention-days: 7
+
+  # --- producers -----------------------------------------------------------
+  # One leg per toolchain. Each installs or builds the unwinder it is named
+  # for, runs the generation driver, and uploads a .pat tree already laid out
+  # as <format>/<arch>/<bitness>/. Legs are independent: a toolchain that
+  # stops publishing a package fails its own leg and leaves the rest standing.
+  produce:
+    name: Signatures (${{ matrix.name }})
+    needs: sigmaker
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # GNU: libgcc_eh carries the unwinder and the ARM EHABI routines,
+          # libsupc++ the Itanium C++ ABI, libgnat the Ada personality,
+          # libgphobos the D one.
+          - name: gnu-linux-x64
+            packages: g++ gobjc gnat gdc
+            set_name: gnu-linux-x64
+            toolchains: gcc
+          # Cross legs. The unwinder differs per target, and a database filed
+          # under arm/32 has to have been built for it.
+          - name: gnu-linux-arm64
+            packages: g++-aarch64-linux-gnu
+            set_name: gnu-linux-arm64
+            toolchains: aarch64-linux-gnu-gcc
+          - name: gnu-linux-arm32
+            packages: g++-arm-linux-gnueabihf
+            set_name: gnu-linux-arm32
+            toolchains: arm-linux-gnueabihf-gcc
+          # mingw is where __gxx_personality_seh0 and _GCC_specific_handler
+          # come from, and a stripped mingw PE is the case the structural
+          # LSDA-shape proof in the loader exists to cover. A signature makes
+          # that case answerable without the proof.
+          - name: mingw-pe-x64
+            packages: g++-mingw-w64-x86-64
+            set_name: mingw-pe-x64
+            toolchains: x86_64-w64-mingw32-gcc
+          - name: mingw-pe-x86
+            packages: g++-mingw-w64-i686
+            set_name: mingw-pe-x86
+            toolchains: i686-w64-mingw32-gcc
+          # LLVM's own unwinder and C++ ABI, which is what a libc++ image
+          # links instead of libgcc_eh and libsupc++.
+          - name: llvm-linux-x64
+            packages: clang libc++-dev libc++abi-dev libunwind-dev
+            set_name: llvm-linux-x64
+            toolchains: clang
+
+    steps:
+      - name: Check out NeverD
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.NEVERD_REPO }}
+          ref: ${{ env.NEVERD_REF }}
+          path: neverd
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ${{ matrix.packages }}
+
+      - name: Download the signature maker
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v4.1.7
+        with:
+          name: neverd-sigmaker
+          path: bin
+
+      - name: Make the signature maker executable
+        run: chmod +x bin/neverd-sigmaker
+
+      - name: Report what will be read
+        run: |
+          for driver in ${{ matrix.toolchains }}; do
+            python3 neverd/scripts/signatures/eh_signature_inputs.py \
+              --compiler "$driver" --no-rust || true
+          done
+
+      - name: Generate signatures
+        run: |
+          args=""
+          for driver in ${{ matrix.toolchains }}; do
+            args="$args --from-toolchain $driver"
+          done
+          python3 neverd/scripts/signatures/build_eh_signatures.py \
+            --sigmaker bin/neverd-sigmaker \
+            --no-rust \
+            $args \
+            --name "${{ matrix.set_name }}" \
+            --output staged
+
+      - name: Upload this leg's tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: eh-signatures-${{ matrix.name }}
+          path: staged
+          if-no-files-found: error
+          retention-days: 7
+
+  # --- rust producer -------------------------------------------------------
+  # Split out because its inputs come from a sysroot rather than from apt, and
+  # because rustup can install the cross targets in one step where apt needs a
+  # cross compiler per architecture.
+  produce-rust:
+    name: Signatures (rust)
+    needs: sigmaker
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out NeverD
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.NEVERD_REPO }}
+          ref: ${{ env.NEVERD_REF }}
+          path: neverd
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Add the cross targets
+        run: |
+          rustup target add \
+            aarch64-unknown-linux-gnu \
+            i686-unknown-linux-gnu \
+            x86_64-pc-windows-gnu
+
+      - name: Download the signature maker
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v4.1.7
+        with:
+          name: neverd-sigmaker
+          path: bin
+
+      - name: Generate signatures
+        run: |
+          chmod +x bin/neverd-sigmaker
+          python3 neverd/scripts/signatures/build_eh_signatures.py \
+            --sigmaker bin/neverd-sigmaker \
+            --from-toolchain rustc \
+            --name rust-eh \
+            --output staged
+
+      - name: Upload this leg's tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: eh-signatures-rust
+          path: staged
+          if-no-files-found: error
+          retention-days: 7
+
+  # --- publisher -----------------------------------------------------------
+  publish:
+    name: Publish
+    needs:
+      - produce
+      - produce-rust
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the signature database
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download every leg
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v4.1.7
+        with:
+          pattern: eh-signatures-*
+          path: staged
+          merge-multiple: true
+
+      - name: Merge the trees into the database
+        run: |
+          if [ ! -d staged ]; then
+            echo "no signature trees were produced" >&2
+            exit 1
+          fi
+          # Each leg names its own file, so the trees overlay without
+          # colliding and a leg that did not run leaves its previous file in
+          # place rather than deleting it.
+          cp -R staged/. .
+          rm -rf staged
+          git status --porcelain -- '*.pat'
+
+      - name: Commit the regenerated database
+        run: |
+          if [ -z "$(git status --porcelain -- '*.pat')" ]; then
+            echo "the database is unchanged"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- '*.pat'
+          git commit \
+            -m 'signatures: regenerate the exception-runtime database' \
+            -m "Produced by scripts/signatures/build_eh_signatures.py at ${NEVERD_REPO}@${NEVERD_REF}, run ${GITHUB_RUN_ID}."
+          git push
