@@ -6,9 +6,14 @@ add_neverd_component_library(NeverDTranslate
   RuntimeCodeMemory.cpp
   RuntimeGuestState.cpp
   RuntimeHelpers.cpp
+  RuntimeSymbolRegistry.cpp
   TranslationOptions.cpp
   TranslationResult.cpp
   TranslationSession.cpp
   TranslationIRVerifier.cpp
   TranslationArtifactVerifier.cpp
+  TranslationObjectCompiler.cpp
+
+  LINK_COMPONENTS
+  PassIR
 )

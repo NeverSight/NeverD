@@ -171,7 +171,7 @@ splitIntoTerms(const SymContext &Ctx, SymRef Body) {
   return Terms;
 }
 
-Monomial makeMonomial(llvm::ArrayRef<uint16_t> Sorted) {
+Monomial makeMonomial(llvm::ArrayRef<MintermIndex> Sorted) {
   return Monomial(Sorted.begin(), Sorted.end());
 }
 
@@ -181,18 +181,16 @@ unsigned monomialDegree(const Monomial &Key) {
 
 TruthTable monomialSupport(const Monomial &Key, unsigned NumVars) {
   TruthTable Support = TruthTable::zero(NumVars);
-  for (uint16_t Index : Key)
+  for (MintermIndex Index : Key)
     Support.set(Index);
   return Support;
 }
 
-llvm::SmallVector<uint16_t, 8> selectedMinterms(const TruthTable &Table) {
-  assert(Table.numVars() <= kMaxPolynomialAtoms &&
-         "a minterm index has to fit the key a monomial is built from");
-  llvm::SmallVector<uint16_t, 8> Out;
+llvm::SmallVector<MintermIndex, 8> selectedMinterms(const TruthTable &Table) {
+  llvm::SmallVector<MintermIndex, 8> Out;
   for (size_t M = 0, E = Table.entries(); M < E; ++M)
     if (Table.at(M))
-      Out.push_back(static_cast<uint16_t>(M));
+      Out.push_back(static_cast<MintermIndex>(M));
   return Out;
 }
 
@@ -200,13 +198,10 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
                                            llvm::ArrayRef<PolyTerm> Terms,
                                            llvm::ArrayRef<uint32_t> AtomIds,
                                            uint32_t Width, WorkBudget &Budget) {
-  // Past this arity a corner no longer has an index a monomial key can hold,
-  // so the expansion would name a different minterm rather than fail.  The
-  // linear reading has no such key and is unaffected, which is why declining
-  // here narrows the answer instead of losing it.
-  if (AtomIds.size() > kMaxPolynomialAtoms)
+  const std::optional<size_t> CornerCount = cornerCount(AtomIds.size());
+  if (!CornerCount)
     return std::nullopt;
-  const size_t Corners = size_t(1) << AtomIds.size();
+  const size_t Corners = *CornerCount;
   PolyForm Form;
   Form.Linear.assign(Corners, llvm::APInt(Width, 0));
 
@@ -221,7 +216,7 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
     return Table;
   };
 
-  llvm::SmallVector<llvm::SmallVector<uint16_t, 8>, 4> Selected;
+  llvm::SmallVector<llvm::SmallVector<MintermIndex, 8>, 4> Selected;
   for (const PolyTerm &Term : Terms) {
     if (Term.Factors.empty()) {
       // The minterms sum to the all-ones word, so the constant c is the linear
@@ -240,7 +235,7 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
     }
 
     if (Term.Factors.size() == 1) {
-      for (uint16_t M : Selected[0])
+      for (MintermIndex M : Selected[0])
         Form.Linear[M] += Term.Coeff;
       continue;
     }
@@ -248,7 +243,7 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
     Form.SawProduct = true;
     // A factor selecting no minterm is the zero function, and so is the term.
     if (llvm::any_of(Selected,
-                     [](llvm::ArrayRef<uint16_t> S) { return S.empty(); }))
+                     [](llvm::ArrayRef<MintermIndex> S) { return S.empty(); }))
       continue;
 
     forEachMonomial(Selected, Budget, [&](const Monomial &Key) {

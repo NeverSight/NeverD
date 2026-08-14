@@ -114,6 +114,21 @@ struct SolverOptions {
   /// Read a model back when the answer is satisfiable.  A caller that only
   /// wants the answer turns it off and skips a walk of the variable table.
   bool BuildModel = true;
+
+  /// Remove caller-imposed SAT search and bit-blasting ceilings.
+  ///
+  /// Zero has that meaning for both constituent policies.  This does not
+  /// promise infinite physical resources: expression widths and SAT literals
+  /// retain their representational bounds, and allocation failure remains a
+  /// host resource failure.
+  static SolverOptions unlimited() {
+    SolverOptions Options;
+    Options.Sat.MaxConflicts = 0;
+    Options.Sat.MaxPropagations = 0;
+    Options.Sat.MaxWatchVisits = 0;
+    Options.Blast = BlastLimits::unlimited();
+    return Options;
+  }
 };
 
 /// The answer to "are these two expressions the same value everywhere".

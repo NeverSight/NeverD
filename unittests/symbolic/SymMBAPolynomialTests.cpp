@@ -17,6 +17,9 @@
 #include "neverd/symbolic/SymMBA.h"
 #include "neverd/symbolic/SymParse.h"
 
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
+
 using namespace neverd::symbolic;
 
 namespace {
@@ -127,5 +130,42 @@ TEST(SymMBA, NoticesWhenDegreeThreeProductsCancel) {
   simplifiesTo("x * (y & z) * (y | z) + x * (y & ~z) * (~y & z) - x * y * z + "
                "(x | y) - (x & y)",
                "x ^ y");
+}
+
+TEST(SymMBA, PolynomialReadingHasNoSixteenInputIndexCeiling) {
+  // The polynomial key used to store a minterm index in sixteen bits.  A
+  // seventeen-input table has 131072 entries, so that representation could
+  // not name every entry and the whole polynomial reading was skipped.  Two
+  // one-minterm functions keep the regression affordable while making every
+  // one of the seventeen inputs semantically relevant to the reading.
+  constexpr unsigned NumAtoms = 17;
+  SymContext Ctx;
+  llvm::SmallVector<SymRef, NumAtoms> Positive;
+  llvm::SmallVector<SymRef, NumAtoms> Negative;
+  for (unsigned I = 0; I < NumAtoms; ++I) {
+    llvm::SmallString<8> Name;
+    Name += "x";
+    Name += llvm::utostr(I);
+    SymRef Var = Ctx.mkVar(Name, W32);
+    Positive.push_back(Var);
+    Negative.push_back(Ctx.mkNot(Var));
+  }
+
+  SymRef X = Ctx.mkAnd(Positive);
+  SymRef Y = Ctx.mkAnd(Negative);
+  SymRef Hidden = Ctx.mkAdd(
+      Ctx.mkMul(Ctx.mkAnd(X, Y), Ctx.mkOr(X, Y)),
+      Ctx.mkMul(Ctx.mkAnd(X, Ctx.mkNot(Y)), Ctx.mkAnd(Ctx.mkNot(X), Y)));
+  SymRef Expected = Ctx.mkMul(X, Y);
+  ASSERT_NE(Hidden, Expected);
+
+  const MBAOptions Unlimited = MBAOptions::unlimited();
+  EXPECT_EQ(Unlimited.MaxAtoms, MBAOptions::Unlimited);
+  EXPECT_EQ(Unlimited.MaxSynthesisAtoms, MBAOptions::Unlimited);
+
+  MBAResult Result = simplifyMBA(Ctx, Hidden, Unlimited);
+  EXPECT_EQ(Result.Outcome, MBAOutcome::Rewritten);
+  EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+  EXPECT_EQ(Result.Expr, Expected) << Ctx.toString(Result.Expr);
 }
 } // namespace

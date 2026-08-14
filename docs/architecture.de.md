@@ -97,6 +97,14 @@ Prozesses; die AOT-Richtlinie verlangt eine explizite Hostarchitektur, ein
 explizites Target-Triple und, falls gewählt, auch eine explizite CPU oder
 Feature-Menge.
 
+`ResolvedHostTarget` löst diese Auswahl in ein konkretes Ergebnis auf. Die
+`Native`-Auflösung ermittelt Triple, CPU und die aktivierte/deaktivierte
+Feature-Menge des Prozesses. Die `Explicit`-Auflösung validiert und normalisiert
+die vom Aufrufer angegebene Architektur, das Triple, die CPU und die Features
+und lehnt Widersprüche ab. Ihre versionierte Cache-Identität wird in
+deterministischer Byte-Reihenfolge aus den normalisierten Zielangaben gebildet
+und enthält weder Prozessadressen noch locale-abhängigen Text.
+
 Ein versionierter `TranslationExit` hält einen stabilen Stoppgrund und die dazu
 passende typisierte Nutzlast für Syscalls, Ausnahmen oder Signale, Breakpoints,
 nicht unterstützte Instruktionen, Selbstmodifikation, Ressourcenbudgets, externe
@@ -131,6 +139,24 @@ Blockauswahl und kann nicht von erzeugter IR aufgerufen werden; translated
 blocks geben stattdessen einen typisierten Exit-Code zurück. Erzeugte IR darf
 direkt nur den deklarierten Scalar-Result-Runtime-Slot lesen.
 
+`RuntimeSymbolRegistryV1` setzt diese Helper-Tabelle als geschlossene
+Host-Registry um. Beim Aufbau werden die vollständige ABI-v1-Menge, exakte
+kanonische Namen, Helper-Klassen und Signaturen sowie pro Eintrag genau ein
+nicht-null Funktionszeiger der passenden Klasse geprüft. Die Suche akzeptiert
+nur exakte Namen, fragt niemals Symbole des umgebenden Prozesses oder dynamischen
+Loaders ab und liefert dem Objekt-Verifier dieselben sortierten Namen als
+Allowlist. Die versionierte Identität umfasst Namen, Helper-Klassen und
+ABI-Form, schließt native Adressen jedoch bewusst aus und bleibt daher unter
+ASLR stabil.
+
+`RuntimeCodeMemory` besitzt seitenisolierten Speicher für erzeugten Code und
+erlaubt nur die unidirektionale Veröffentlichung `RW -> RX`. Der Speicher ist
+nie gleichzeitig schreibbar und ausführbar, kann nach der Veröffentlichung
+nicht erneut zum Schreiben geöffnet werden, prüft Schreib- und Entry-Offsets auf
+Grenzen und invalidiert dabei den Instruktionscache des Hosts. Der native
+Smoke-Test führt erst danach eine kurze Host-Instruktionsfolge aus. Er belegt
+nur diese W^X-Speichergrenze, nicht eine Übersetzungs-Engine.
+
 `GuestMemoryRuntime` ist vom logischen `GuestState` isoliert: Bei der Erzeugung
 wird der Zustand zuerst validiert, danach werden Bytes und Metadaten der
 Regionen in einen sortierten privaten Index kopiert. Virtuelle Guest-Adressen
@@ -159,13 +185,17 @@ eine Symboltabelle, dynamische Symboltabelle, Plattformversion und
 Data-in-Code-Anweisung; ihre Abhängigkeiten werden geprüft. Linker-Optionen und
 alle übrigen Commands werden abgelehnt.
 
-Die Implementierungen für Runtime, Speicher, IR und Objektprüfung definieren
-und validieren diese Grenzen. Sie bilden weder ein vollständiges ausführbares
+Die Implementierungen für Runtime, Zielauflösung, W^X-Veröffentlichung,
+Speicher, IR, Symbol-Registry und Objektprüfung definieren und validieren diese
+Grenzen. Es fehlen weiterhin ein verifizierter Objekt-Compiler, ein Pfad für
+JITLink-Graphprüfung/Linken/Laden, ein vertrauenswürdiger Dispatcher oder eine
+Dispatcher-Factory und ein vollständiges Guest-zu-Host-Lowering. Die
+vorhandenen Grenzen bilden daher weder ein vollständiges ausführbares
 Übersetzungs-Backend noch eine vollständige architekturübergreifende
 Übersetzungspipeline oder vollständige End-to-End-Ausnahmeumschreibung. Dieser
 Abschnitt beschreibt den Umfang von Vertrag und Verifier; er behauptet keine
-End-to-End-Verfügbarkeit von Erzeugung, Linken, Laden, Ausführung, JIT, AOT oder
-Ausnahmeumschreibung.
+End-to-End-Verfügbarkeit von Erzeugung, Linken, Laden, Dispatch, Ausführung,
+JIT, AOT oder Ausnahmeumschreibung.
 
 Der Vertrag für erzeugte IR verlangt, dass jeder ihm unterliegende translated
 block hidden und non-preemptible ist und das C ABI

@@ -5,8 +5,10 @@ add_neverd_unittest(NeverDTranslationContractTests
   RuntimeCodeMemoryTests.cpp
   RuntimeGuestStateTests.cpp
   RuntimeHelpersTests.cpp
+  RuntimeSymbolRegistryTests.cpp
   TranslationIRVerifierTests.cpp
   TranslationArtifactVerifierTests.cpp
+  TranslationObjectCompilerTests.cpp
 
   LINK_COMPONENTS
   Translate

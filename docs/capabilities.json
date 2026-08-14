@@ -45,11 +45,18 @@
       ],
       "limitations": [
         "the fixed runtime state covers the x86-64 integer core and preserves unmodeled logical state outside generated code",
-        "verification and helper contracts do not by themselves provide an executable code-generation or linking engine"
+        "deterministic target resolution, verification, exact runtime-symbol binding, and one-way W^X publication do not by themselves provide an executable translation engine",
+        "the native publication smoke test proves only the generated-code memory boundary, not guest lowering, object linking, dispatch, or cross-architecture execution"
       ],
       "tests": [
         "RuntimeGuestState.X86_64LogicalStateRoundTripsWithoutLosingRFlags",
         "RuntimeHelpers.AcceptsCheckedLoadAndStoreControlFlow",
+        "ResolvedHostTarget.FeatureOrderDoesNotChangeCacheIdentity",
+        "ResolvedHostTarget.ResolvesTheNativeProcessIdentity",
+        "RuntimeCodeMemory.PublishesExactlyOnceFromWritableToExecutable",
+        "RuntimeCodeMemory.ExecutesOnlyAfterHostInstructionsArePublished",
+        "RuntimeSymbolRegistry.ResolvesOnlyExactRegisteredNames",
+        "RuntimeSymbolRegistry.IdentityIsVersionedAddressFreeAndOrderStable",
         "TranslationArtifactVerifier.AcceptsCanonicalMachOObject"
       ],
       "public_surfaces": {
@@ -74,7 +81,7 @@
         "docs/architecture.md"
       ],
       "limitations": [
-        "no verified code-generation, post-link graph audit, executable memory manager, or dispatcher factory is published"
+        "page-isolated one-way RW-to-RX publication exists, but no verified object compiler, JITLink graph audit/link/loading path, dispatcher factory, or complete guest-to-host lowering is published"
       ],
       "tests": [],
       "public_surfaces": {

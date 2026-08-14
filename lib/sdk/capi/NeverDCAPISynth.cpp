@@ -161,10 +161,7 @@ SynthesisConfig readOptions(const neverd_synthesize_options *In) {
     Config.Search.StochasticRestarts = std::numeric_limits<unsigned>::max();
     Config.Search.StochasticIterations = std::numeric_limits<size_t>::max();
     Config.Parse = symbolic::SymParseOptions::unlimited();
-    // Zero is Solver's explicit spelling for no resource ceiling.
-    Config.Solver.Sat.MaxConflicts = 0;
-    Config.Solver.Sat.MaxPropagations = 0;
-    Config.Solver.Sat.MaxWatchVisits = 0;
+    Config.Solver = solver::SolverOptions::unlimited();
   }
   return Config;
 }

@@ -95,6 +95,14 @@ política JIT solo acepta el host nativo del proceso; la política AOT requiere
 una arquitectura host y un target triple explícitos; una CPU o un conjunto de
 features seleccionados también deben ser explícitos.
 
+`ResolvedHostTarget` convierte esa selección en un resultado concreto. La
+resolución `Native` obtiene del proceso el triple, la CPU y el conjunto de
+features habilitadas o deshabilitadas. La resolución `Explicit` valida y
+normaliza la arquitectura, el triple, la CPU y las features proporcionados por
+el llamador, y rechaza conflictos. Su identidad de caché versionada se construye
+en un orden de bytes determinista a partir del target normalizado, sin
+direcciones del proceso ni texto dependiente de la locale.
+
 Un `TranslationExit` versionado registra una causa de parada estable y el
 payload tipado correspondiente para syscalls, excepciones o señales, puntos de
 interrupción, instrucciones no admitidas, automodificación, presupuestos de
@@ -129,6 +137,24 @@ selección de blocks y no es invocable desde el IR generado; los translated
 blocks devuelven en su lugar un código de exit tipado. El IR generado solo puede
 leer directamente el slot runtime scalar-result declarado.
 
+`RuntimeSymbolRegistryV1` materializa esa tabla de helpers como un registro
+cerrado del host. Su construcción valida el conjunto ABI-v1 completo, los
+nombres canónicos exactos, las clases de helper, las firmas y, para cada
+entrada, exactamente un puntero de función no nulo acorde con su clase. La
+búsqueda solo acepta el nombre exacto, nunca consulta símbolos ambientales del
+proceso ni del cargador dinámico y proporciona al verifier de objetos los mismos
+nombres ordenados como allowlist. Su identidad versionada cubre nombres, clases
+de helper y forma de ABI, pero excluye deliberadamente las direcciones nativas,
+por lo que es estable bajo ASLR.
+
+`RuntimeCodeMemory` posee almacenamiento de código generado aislado por páginas
+y solo permite la publicación unidireccional `RW -> RX`. La memoria nunca es
+escribible y ejecutable a la vez, no se puede reabrir para escritura, comprueba
+los límites de escrituras y puntos de entrada e invalida la caché de
+instrucciones del host al publicarse. El smoke test nativo solo ejecuta una
+pequeña secuencia de instrucciones host después de la publicación; demuestra
+esta frontera de memoria W^X, no un motor de traducción.
+
 `GuestMemoryRuntime` está aislado del `GuestState` lógico: su construcción
 primero valida el estado y después copia los bytes y metadatos de las regiones
 a un índice privado ordenado. Las direcciones virtuales guest son solo claves
@@ -158,12 +184,16 @@ table, dynamic-symbol table, platform-version y orden data-in-code, con
 comprobación de sus dependencias. Las opciones del linker y cualquier otro
 command se rechazan.
 
-Las implementaciones de runtime, memoria, IR y auditoría de objetos definen y
-validan estas fronteras. No constituyen un backend de traducción ejecutable
-completo, una pipeline completa de traducción entre arquitecturas ni una
-reescritura de excepciones completa de extremo a extremo. Esta sección describe
-el alcance del contrato y del verifier; no afirma la disponibilidad integral de
-generación, enlace, carga, ejecución, JIT, AOT ni reescritura de excepciones.
+Las implementaciones de runtime, resolución de target, publicación W^X,
+memoria, IR, registro de símbolos y auditoría de objetos definen y validan estas
+fronteras. Aún faltan un compilador de objetos verificado, una ruta de
+auditoría/link/carga del grafo JITLink, un dispatcher de confianza o su factory
+y un lowering guest-a-host completo. Por tanto, las fronteras disponibles no
+constituyen un backend de traducción ejecutable completo, una pipeline completa
+de traducción entre arquitecturas ni una reescritura de excepciones completa de
+extremo a extremo. Esta sección describe el alcance del contrato y del verifier;
+no afirma la disponibilidad integral de generación, enlace, carga, dispatch,
+ejecución, JIT, AOT ni reescritura de excepciones.
 
 El contrato del IR generado exige que todo translated block sujeto a él sea
 hidden y non-preemptible y use el C ABI `i32 (ptr state, ptr runtime)`. Los

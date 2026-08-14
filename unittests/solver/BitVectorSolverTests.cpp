@@ -307,6 +307,40 @@ TEST(BitVectorSolver, EncodingLimitsRemainRetryableUnknownResults) {
   EXPECT_EQ(Solver.check(), SatResult::Unknown);
 }
 
+TEST(BitVectorSolver, ZeroBlastLimitsRemoveCallerPolicyCeilings) {
+  // 257 is one bit beyond the bounded production default.  The expression is
+  // intentionally cheap to encode: this tests removal of a caller policy, not
+  // an attempt to claim that arbitrary-width circuits need no physical
+  // memory.
+  constexpr uint32_t Width = 257;
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", Width);
+  SymRef IsZero = Ctx.mkEq(X, Ctx.mkZero(Width));
+
+  EXPECT_EQ(checkSat(Ctx, IsZero), SatResult::Unknown);
+
+  const SolverOptions Unlimited = SolverOptions::unlimited();
+  EXPECT_EQ(Unlimited.Blast.MaxWidth, 0u);
+  EXPECT_EQ(Unlimited.Blast.MaxGates, 0u);
+  EXPECT_EQ(Unlimited.Sat.MaxConflicts, 0u);
+  EXPECT_EQ(Unlimited.Sat.MaxPropagations, 0u);
+  EXPECT_EQ(Unlimited.Sat.MaxWatchVisits, 0u);
+  EXPECT_EQ(checkSat(Ctx, IsZero, nullptr, Unlimited), SatResult::Sat);
+
+  SolverOptions GateLimited = Unlimited;
+  GateLimited.Blast.MaxGates = 1;
+  BitVectorSolver Budgeted(Ctx, GateLimited);
+  SymRef CarryHeavy =
+      Ctx.mkEq(Ctx.mkAdd(X, Ctx.mkOne(Width)), Ctx.mkZero(Width));
+  EXPECT_FALSE(Budgeted.assertTrue(CarryHeavy));
+  EXPECT_EQ(Budgeted.encodeError(), BlastError::TooManyGates);
+  EXPECT_EQ(Budgeted.check(), SatResult::Unknown);
+
+  // Removing a resource policy must not turn a malformed request into a
+  // retryable resource answer.
+  EXPECT_EQ(checkSat(Ctx, SymRef(), nullptr, Unlimited), SatResult::Invalid);
+}
+
 TEST(BitVectorSolver, NoAnswerIsNotAProof) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", W32);

@@ -48,16 +48,6 @@ namespace neverd::symbolic::detail {
 // Resolving the public dials
 //===----------------------------------------------------------------------===//
 
-/// The most inputs the polynomial reading names minterms over.
-///
-/// A monomial is a list of minterm indices held in sixteen bits apiece, so a
-/// product over seventeen inputs would name a minterm the key cannot hold and
-/// would quietly name a different one instead.  That is a property of the key
-/// rather than of the algebra: past it the polynomial reading declines and the
-/// linear one still applies, which is a narrower answer rather than a wrong
-/// one.
-constexpr unsigned kMaxPolynomialAtoms = 16;
-
 /// What the public option set means once the sentinels are resolved.
 ///
 /// \c MBAOptions::Unlimited says "as far as the resources allow", and every
@@ -275,9 +265,12 @@ splitIntoTerms(const SymContext &Ctx, SymRef Body);
 /// vector key costs a small allocation only for higher-degree terms and lets
 /// the resource budget, rather than an eight-byte container, decide how far a
 /// search goes.
-using Monomial = std::vector<uint16_t>;
+using MintermIndex = uint32_t;
+static_assert(kMaxTruthTableAtoms <= std::numeric_limits<MintermIndex>::digits,
+              "a minterm index must address every truth-table entry");
+using Monomial = std::vector<MintermIndex>;
 
-Monomial makeMonomial(llvm::ArrayRef<uint16_t> Sorted);
+Monomial makeMonomial(llvm::ArrayRef<MintermIndex> Sorted);
 
 unsigned monomialDegree(const Monomial &Key);
 
@@ -299,7 +292,7 @@ struct PolyForm {
 };
 
 /// The minterms \p Table selects, as indices.
-llvm::SmallVector<uint16_t, 8> selectedMinterms(const TruthTable &Table);
+llvm::SmallVector<MintermIndex, 8> selectedMinterms(const TruthTable &Table);
 
 std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
                                            llvm::ArrayRef<PolyTerm> Terms,
@@ -313,8 +306,9 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
 /// sum over one choice per factor, and the minterms chosen name the monomial
 /// however they were ordered.
 template <typename FnT>
-void forEachMonomial(llvm::ArrayRef<llvm::SmallVector<uint16_t, 8>> Selected,
-                     WorkBudget &Budget, FnT Visit) {
+void forEachMonomial(
+    llvm::ArrayRef<llvm::SmallVector<MintermIndex, 8>> Selected,
+    WorkBudget &Budget, FnT Visit) {
   if (Selected.empty())
     return;
   llvm::SmallVector<size_t, 4> Pick(Selected.size(), 0);

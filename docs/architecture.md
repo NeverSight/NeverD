@@ -91,6 +91,13 @@ executed. JIT policy accepts only the native process host, while AOT policy
 requires an explicit host architecture and target triple; a selected CPU or
 feature set is explicit as well.
 
+`ResolvedHostTarget` makes that selection concrete. `Native` resolution derives
+the process triple, CPU, and enabled/disabled feature set; `Explicit` resolution
+validates and normalizes the caller-provided architecture, triple, CPU, and
+features and rejects conflicts. Its versioned cache identity is built from the
+normalized target inputs in deterministic byte order and contains no process
+addresses or locale-dependent text.
+
 A versioned `TranslationExit` records a stable stop reason and the matching
 typed payload for syscalls, exceptions or signals, breakpoints, unsupported
 instructions, self-modification, resource budgets, external calls, memory
@@ -122,6 +129,22 @@ and is not callable from generated IR; translated blocks return a typed exit
 code instead. Generated IR may directly read only the declared scalar-result
 runtime slot.
 
+`RuntimeSymbolRegistryV1` turns that helper table into a closed host-side
+registry. Construction validates the complete ABI-v1 set, exact canonical
+names, helper classes, signatures, and one non-null class-matching function
+pointer per entry. Lookup is exact-name only, never consults ambient process or
+dynamic-loader symbols, and supplies the same sorted names as the artifact
+verifier allowlist. Its versioned identity covers names, helper classes, and ABI
+shape but deliberately excludes native addresses, making it stable across
+ASLR.
+
+`RuntimeCodeMemory` owns page-isolated generated-code storage with a one-way
+`RW -> RX` publication transition. It is never writable and executable at the
+same time, cannot be reopened for writes, bounds-checks writes and entry
+offsets, and invalidates the host instruction cache when published. The native
+smoke test executes only a tiny host instruction sequence after publication;
+that proves this W^X memory boundary, not a translation engine.
+
 `GuestMemoryRuntime` is isolated from logical `GuestState`: construction first
 validates the state and copies region bytes and metadata into a sorted private
 index. Guest virtual addresses are lookup keys and are never converted to host
@@ -146,12 +169,15 @@ list: exactly one width-matching segment and at most one symbol table,
 dynamic-symbol table, platform-version, and data-in-code command, with their
 dependencies checked; linker options and every other command are rejected.
 
-The runtime, memory, IR, and object-audit implementations define and validate
-these boundaries. They do not constitute a complete executable translation
-backend, a complete cross-architecture translation pipeline, or complete
-end-to-end exception rewriting. This section specifies contract and verifier
-scope; it does not claim end-to-end generation, linking, loading, execution,
-JIT, AOT, or exception rewriting.
+The runtime, target-resolution, W^X publication, memory, IR, symbol-registry,
+and object-audit implementations define and validate these boundaries. A
+verified object compiler, JITLink graph audit/link/loading path, trusted
+dispatcher or dispatcher factory, and complete guest-to-host lowering are still
+absent. The available boundaries therefore do not constitute a complete
+executable translation backend, a complete cross-architecture translation
+pipeline, or complete end-to-end exception rewriting. This section specifies
+contract and verifier scope; it does not claim end-to-end generation, linking,
+loading, dispatch, execution, JIT, AOT, or exception rewriting.
 
 The generated-IR contract requires every translated block governed by it to be
 hidden and non-preemptible with the C ABI `i32 (ptr state, ptr runtime)`.

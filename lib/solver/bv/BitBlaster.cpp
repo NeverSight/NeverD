@@ -66,7 +66,7 @@ BitBlaster::BitBlaster(const symbolic::SymContext &Ctx, CnfEncoder &Enc,
     : Ctx(Ctx), Enc(Enc), Limits(Limits), GateBase(Enc.numGates()) {}
 
 bool BitBlaster::withinGateBudget() const {
-  return Enc.numGates() - GateBase <= Limits.MaxGates;
+  return Limits.MaxGates == 0 || Enc.numGates() - GateBase <= Limits.MaxGates;
 }
 
 bool BitBlaster::fail(BlastError E) {
@@ -77,7 +77,7 @@ bool BitBlaster::fail(BlastError E) {
 
 void BitBlaster::store(SymRef R, llvm::ArrayRef<SatLit> Bits) {
   Slice S;
-  S.First = static_cast<uint32_t>(BitPool.size());
+  S.First = BitPool.size();
   S.Width = static_cast<uint32_t>(Bits.size());
   BitPool.insert(BitPool.end(), Bits.begin(), Bits.end());
 
@@ -181,7 +181,7 @@ bool BitBlaster::encodeNode(SymRef R) {
 
   if (Width == 0)
     return fail(BlastError::Malformed);
-  if (Width > Limits.MaxWidth)
+  if (Limits.MaxWidth != 0 && Width > Limits.MaxWidth)
     return fail(BlastError::WidthTooLarge);
 
   detail::LitVec Result;

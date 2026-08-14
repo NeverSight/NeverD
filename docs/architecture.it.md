@@ -96,6 +96,14 @@ La policy JIT accetta solo l’host nativo del processo; la policy AOT richiede
 un’architettura host e un target triple espliciti; anche una CPU o un insieme di
 feature selezionati devono essere espliciti.
 
+`ResolvedHostTarget` trasforma questa selezione in un risultato concreto. La
+risoluzione `Native` ricava dal processo triple, CPU e insieme di feature
+abilitate o disabilitate. La risoluzione `Explicit` valida e normalizza
+architettura, triple, CPU e feature forniti dal chiamante e rifiuta i conflitti.
+La sua identità di cache versionata è costruita in ordine di byte deterministico
+dagli input target normalizzati e non contiene indirizzi di processo né testo
+dipendente dalla locale.
+
 Un `TranslationExit` versionato registra una causa di arresto stabile e il
 payload tipizzato corrispondente per syscall, eccezioni o segnali, breakpoint,
 istruzioni non supportate, automodifica, budget di risorse, chiamate esterne,
@@ -128,6 +136,23 @@ possiede anche la selezione dei blocks e non è invocabile dall’IR generato; i
 translated blocks restituiscono invece un codice di exit tipizzato. L’IR
 generato può leggere direttamente solo lo slot runtime scalar-result dichiarato.
 
+`RuntimeSymbolRegistryV1` realizza questa tabella di helper come registro host
+chiuso. La costruzione valida l’intero insieme ABI-v1, i nomi canonici esatti, le
+classi degli helper, le firme e, per ogni voce, esattamente un puntatore a
+funzione non nullo coerente con la classe. La ricerca accetta solo il nome
+esatto, non consulta mai simboli ambientali del processo o del loader dinamico e
+fornisce al verifier degli oggetti gli stessi nomi ordinati come allowlist. La
+sua identità versionata copre nomi, classi degli helper e forma dell’ABI, ma
+esclude deliberatamente gli indirizzi nativi ed è quindi stabile con ASLR.
+
+`RuntimeCodeMemory` possiede storage per codice generato isolato per pagina e
+consente solo la pubblicazione unidirezionale `RW -> RX`. La memoria non è mai
+scrivibile ed eseguibile allo stesso tempo, non può essere riaperta in scrittura,
+controlla i limiti di scritture ed entry point e invalida la cache delle
+istruzioni host al momento della pubblicazione. Lo smoke test nativo esegue solo
+una breve sequenza di istruzioni host dopo la pubblicazione: dimostra questo
+confine di memoria W^X, non un motore di traduzione.
+
 `GuestMemoryRuntime` è isolato dal `GuestState` logico: la costruzione prima
 valida lo stato, quindi copia byte e metadati delle regioni in un indice privato
 ordinato. Gli indirizzi virtuali guest sono soltanto chiavi di ricerca e non
@@ -156,12 +181,16 @@ massimo una symbol table, dynamic-symbol table, platform-version e un comando
 data-in-code, con verifica delle dipendenze. Le opzioni del linker e ogni altro
 command vengono rifiutati.
 
-Le implementazioni di runtime, memoria, IR e audit degli oggetti definiscono e
-convalidano questi confini. Non costituiscono un backend di traduzione eseguibile
-completo, una pipeline completa di traduzione tra architetture né una riscrittura
-completa end-to-end delle eccezioni. Questa sezione descrive l’ambito del
-contratto e del verifier; non dichiara la disponibilità end-to-end di generazione,
-collegamento, caricamento, esecuzione, JIT, AOT o riscrittura delle eccezioni.
+Le implementazioni di runtime, risoluzione del target, pubblicazione W^X,
+memoria, IR, registro dei simboli e audit degli oggetti definiscono e convalidano
+questi confini. Mancano ancora un compilatore di oggetti verificato, un percorso
+di audit/link/caricamento del grafo JITLink, un dispatcher fidato o la relativa
+factory e un lowering guest-to-host completo. I confini disponibili non
+costituiscono quindi un backend di traduzione eseguibile completo, una pipeline
+completa di traduzione tra architetture né una riscrittura completa end-to-end
+delle eccezioni. Questa sezione descrive l’ambito del contratto e del verifier;
+non dichiara la disponibilità end-to-end di generazione, collegamento,
+caricamento, dispatch, esecuzione, JIT, AOT o riscrittura delle eccezioni.
 
 Il contratto dell’IR generato richiede che ogni translated block soggetto ad
 esso sia hidden e non-preemptible e usi il C ABI

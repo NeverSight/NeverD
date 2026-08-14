@@ -88,6 +88,12 @@ mode에서는 추가로 word alignment를 만족해야 합니다.
 허용하고, AOT 정책은 호스트 아키텍처와 target triple을 명시하도록 요구합니다.
 CPU 또는 feature set을 선택하는 경우에도 명시해야 합니다.
 
+`ResolvedHostTarget`은 이 선택을 구체적인 결과로 해석합니다. `Native` 해석은 현재
+process에서 triple, CPU, 활성/비활성 feature set을 가져옵니다. `Explicit` 해석은
+호출자가 제공한 architecture, triple, CPU, feature를 검증하고 정규화하며 충돌하는
+입력을 거부합니다. version이 있는 cache identity는 정규화된 target input을 결정적인
+byte 순서로 구성하며 process address나 locale 의존 text를 포함하지 않습니다.
+
 version이 있는 `TranslationExit`는 안정적인 중지 이유와 그에 대응하는 typed payload를
 기록합니다. syscall, 예외 또는 signal, breakpoint, 미지원 명령어, self-modification,
 리소스 budget, 외부 호출, memory fault 및 그 밖의 종료 조건을 다룹니다. 따라서
@@ -115,6 +121,21 @@ budget/cancellation polling은 신뢰된 dispatcher만 수행하는 작업입니
 translated block은 대신 typed exit code를 반환합니다. 생성 IR은 선언된
 scalar-result runtime slot만 직접 읽을 수 있습니다.
 
+`RuntimeSymbolRegistryV1`은 이 helper table을 닫힌 host-side registry로 구현합니다.
+생성 시 완전한 ABI-v1 집합, 정확한 canonical name, helper class, signature, 그리고 각
+entry에 class와 일치하는 non-null function pointer가 정확히 하나 있는지 검증합니다.
+lookup은 완전 일치하는 이름만 허용하고 process 환경이나 dynamic loader의 symbol을
+조회하지 않으며 object verifier allowlist에 동일한 정렬된 이름을 제공합니다. version이
+있는 identity는 이름, helper class, ABI shape를 포함하지만 native address는 의도적으로
+제외하므로 ASLR과 무관합니다.
+
+`RuntimeCodeMemory`는 page 단위로 격리된 generated-code storage를 소유하며 단방향
+`RW -> RX` publication만 허용합니다. memory는 동시에 writable 및 executable이 될 수
+없고 publication 뒤에 write 가능 상태로 되돌릴 수도 없습니다. write와 entry offset은
+bounds-check되며 publication 시 host instruction cache를 invalidation합니다. native
+smoke test는 publication 이후 작은 host instruction sequence만 실행합니다. 이는 W^X
+memory boundary만 증명할 뿐 translation engine을 증명하지 않습니다.
+
 `GuestMemoryRuntime`는 논리적 `GuestState`와 격리됩니다. 생성 시 state를 검증하고
 region byte와 metadata를 정렬된 private index로 복사합니다. guest virtual address는
 lookup key일 뿐이며 host pointer로 변환되지 않습니다. 검사된 scalar access는 width,
@@ -138,11 +159,13 @@ Mach-O load command는 positive list로 제한되며 bit 폭이 일치하는 seg
 각각 최대 하나만 허용하고 의존 관계도 검사합니다. linker option과 그 밖의 모든
 command는 거부됩니다.
 
-runtime, memory, IR, object audit 구현은 이러한 경계를 정의하고 검증합니다. 이들은
-완전한 실행 가능 translation backend, 완전한 교차 아키텍처 translation pipeline,
-완전한 end-to-end 예외 재작성을 구성하지 않습니다. 이 절은 계약과 verifier 범위를
-규정하며 생성, link, load, 실행, JIT, AOT, 예외 재작성에 대한 end-to-end 제공을
-주장하지 않습니다.
+runtime, target resolution, W^X publication, memory, IR, symbol registry, object audit
+구현은 이러한 경계를 정의하고 검증합니다. verified object compiler, JITLink graph
+audit/link/load 경로, trusted dispatcher 또는 dispatcher factory, 완전한 guest-to-host
+lowering은 아직 없습니다. 따라서 현재 경계는 완전한 실행 가능 translation backend,
+완전한 교차 아키텍처 translation pipeline, 완전한 end-to-end 예외 재작성을 구성하지
+않습니다. 이 절은 계약과 verifier 범위를 규정하며 생성, link, load, dispatch, 실행,
+JIT, AOT, 예외 재작성에 대한 end-to-end 제공을 주장하지 않습니다.
 
 생성 IR 계약은 이 계약의 적용을 받는 모든 translated block이 hidden 및
 non-preemptible이고 C ABI `i32 (ptr state, ptr runtime)`를 사용하도록 요구합니다.

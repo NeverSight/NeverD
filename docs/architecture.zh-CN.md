@@ -81,6 +81,11 @@ extension-register ID，并配套规范的小写名称；否则必须采用新�
 JIT 策略只接受运行中进程的本机宿主；AOT 策略则要求显式给出宿主架构、目标
 triple；若选择了 CPU 或特性集合，也必须显式给出。
 
+`ResolvedHostTarget` 将该选择解析为具体结果。`Native` 解析从当前进程取得 triple、
+CPU 以及启用/禁用的特性集合；`Explicit` 解析验证并规范化调用方提供的架构、triple、
+CPU 和特性，并拒绝互相冲突的输入。其带版本的缓存标识按确定的字节顺序从规范化目标
+输入构造，不包含进程地址或依赖 locale 的文本。
+
 带版本的 `TranslationExit` 记录稳定的停止原因及其匹配的类型化载荷，覆盖系统
 调用、异常或信号、断点、不支持的指令、自修改、资源预算、外部调用、内存故障
 以及其他终止条件。使用方无需再根据停止原因重新解释一个无类型整数。
@@ -104,6 +109,17 @@ generation 验证和预算/取消轮询只由受信任 dispatcher 执行；
 受信任宿主 dispatcher 还负责选择 block，生成 IR 不能调用它；translated block
 只返回类型化退出码。生成 IR 只能直接读取声明过的 scalar-result runtime slot。
 
+`RuntimeSymbolRegistryV1` 将该 helper 表实现为封闭的宿主侧注册表。构造过程验证完整的
+ABI-v1 集合、精确的规范名称、helper class、签名，以及每项唯一一个非空且与 class
+匹配的函数指针。查找只接受精确名称，绝不查询进程环境或动态加载器的符号，并向目标
+文件 verifier 提供同一组有序名称作为 allowlist。其带版本的标识覆盖名称、helper
+class 和 ABI 形状，但有意排除本机地址，因此不受 ASLR 影响。
+
+`RuntimeCodeMemory` 管理按页隔离的生成代码存储，只允许单向 `RW -> RX` 发布转换。
+内存不会同时可写和可执行，发布后不能重新开放写入；写入和入口偏移均经过边界检查，
+发布时还会刷新宿主指令缓存。本机 smoke test 只在发布后执行一小段宿主指令；它证明的
+仅是这个 W^X 内存边界，而不是翻译引擎。
+
 `GuestMemoryRuntime` 与逻辑 `GuestState` 隔离：构造时先验证状态，再把内存区域的
 字节和元数据复制到有序的私有索引。guest 虚拟地址只作为查找键，绝不会转换为
 宿主指针。受检标量访问会以类型化形式报告宽度、对齐、溢出、未映射、跨区域、
@@ -124,10 +140,12 @@ non-preemptible 定义或精确获准的 helper。verifier 拒绝 W+X、异常/�
 data-in-code command 各至多一个，并检查相互依赖；linker option 和其他所有 command
 均拒绝。
 
-runtime、memory、IR 和目标文件审计实现定义并验证这些边界。它们不构成完整的
-可执行翻译后端、完整的跨架构翻译流水线或完整的端到端异常重写。本节描述契约与
-verifier 的作用范围，不宣称具备生成、链接、加载、执行、JIT、AOT 或异常重写的
-端到端能力。
+runtime、目标解析、W^X 发布、memory、IR、符号注册表和目标文件审计实现定义并验证
+这些边界。目前仍缺少经过验证的目标文件编译器、JITLink graph 审计/链接/加载路径、
+受信任 dispatcher 或 dispatcher factory，以及完整的 guest-to-host lowering。因此，
+已有边界不构成完整的可执行翻译后端、完整的跨架构翻译流水线或完整的端到端异常
+重写。本节描述契约与 verifier 的作用范围，不宣称具备生成、链接、加载、分派、执行、
+JIT、AOT 或异常重写的端到端能力。
 
 生成 IR 契约要求受该契约约束的每个 translated block 都是 hidden、non-preemptible，
 并采用 C ABI `i32 (ptr state, ptr runtime)`。runtime 只能通过私有注册表发现 block，

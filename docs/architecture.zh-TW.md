@@ -81,6 +81,11 @@ extension-register ID，並搭配規範的小寫名稱；否則必須採用新�
 JIT 策略只接受執行中程序的原生主機；AOT 策略則要求明確提供主機架構、目標
 triple；若選擇了 CPU 或特性集合，也必須明確提供。
 
+`ResolvedHostTarget` 將此選擇解析為具體結果。`Native` 解析從目前程序取得 triple、
+CPU 以及啟用/停用的特性集合；`Explicit` 解析會驗證並正規化呼叫端提供的架構、
+triple、CPU 與特性，並拒絕互相衝突的輸入。其帶版本的快取識別按確定的位元組順序
+由正規化目標輸入建構，不包含程序位址或依賴 locale 的文字。
+
 帶版本的 `TranslationExit` 記錄穩定的停止原因及其對應的型別化承載資料，涵蓋
 系統呼叫、例外或訊號、斷點、不支援的指令、自我修改、資源預算、外部呼叫、
 記憶體錯誤及其他終止條件。使用者不必再依停止原因重新解讀無型別整數。
@@ -104,6 +109,17 @@ generation 驗證與預算/取消輪詢只由受信任 dispatcher 執行；
 受信任主機 dispatcher 也負責選擇 block，產生 IR 不能呼叫它；translated block
 只回傳型別化退出碼。產生 IR 只能直接讀取已宣告的 scalar-result runtime slot。
 
+`RuntimeSymbolRegistryV1` 將此 helper 表實作為封閉的主機端登錄表。建構過程會驗證
+完整的 ABI-v1 集合、精確的正規名稱、helper class、簽章，以及每一項唯一一個非空且
+與 class 相符的函式指標。查找只接受精確名稱，絕不查詢程序環境或動態載入器的符號，
+並向目標檔 verifier 提供同一組已排序名稱作為 allowlist。其帶版本的識別涵蓋名稱、
+helper class 與 ABI 形狀，但刻意排除原生位址，因此不受 ASLR 影響。
+
+`RuntimeCodeMemory` 管理逐頁隔離的產生程式碼儲存空間，只允許單向 `RW -> RX` 發布
+轉換。記憶體不會同時可寫與可執行，發布後也不能重新開放寫入；寫入與進入點偏移都
+經過邊界檢查，發布時還會清除主機指令快取。本機 smoke test 只在發布後執行一小段
+主機指令；它證明的僅是此 W^X 記憶體邊界，而不是翻譯引擎。
+
 `GuestMemoryRuntime` 與邏輯 `GuestState` 隔離：建構時先驗證狀態，再將記憶體區域
 的位元組與中繼資料複製到排序的私有索引。guest 虛擬位址只作為查找鍵，絕不轉換
 為主機指標。受檢純量存取會以型別化形式回報寬度、對齊、溢位、未映射、跨區域、
@@ -124,10 +140,12 @@ weak/preemptible 或可選擇定義、未知 allocated section 與 linker direct
 platform-version 與 data-in-code command 各至多一個，並檢查相依關係；linker option
 與其他所有 command 均拒絕。
 
-runtime、memory、IR 與目標檔稽核實作定義並驗證這些邊界。它們不構成完整的
-可執行翻譯後端、完整的跨架構翻譯流水線或完整的端到端例外重寫。本節描述契約與
-verifier 的作用範圍，不宣稱具備產生、連結、載入、執行、JIT、AOT 或例外重寫的
-端到端能力。
+runtime、目標解析、W^X 發布、memory、IR、符號登錄表與目標檔稽核實作定義並驗證
+這些邊界。目前仍缺少經過驗證的目標檔編譯器、JITLink graph 稽核/連結/載入路徑、
+受信任 dispatcher 或 dispatcher factory，以及完整的 guest-to-host lowering。因此，
+現有邊界不構成完整的可執行翻譯後端、完整的跨架構翻譯流水線或完整的端到端例外
+重寫。本節描述契約與 verifier 的作用範圍，不宣稱具備產生、連結、載入、分派、執行、
+JIT、AOT 或例外重寫的端到端能力。
 
 產生 IR 的契約要求受該契約約束的每個 translated block 都是 hidden、non-preemptible，
 並採用 C ABI `i32 (ptr state, ptr runtime)`。runtime 只能透過私有登錄表發現 block，

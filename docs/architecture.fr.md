@@ -96,6 +96,14 @@ JIT n’accepte que l’hôte natif du processus ; la politique AOT exige une
 architecture hôte et un target triple explicites ; un CPU ou un ensemble de
 fonctionnalités sélectionné doit lui aussi être explicite.
 
+`ResolvedHostTarget` concrétise cette sélection. La résolution `Native` obtient
+du processus le triple, le CPU et l’ensemble des fonctionnalités activées ou
+désactivées. La résolution `Explicit` valide et normalise l’architecture, le
+triple, le CPU et les fonctionnalités fournis par l’appelant, puis rejette les
+contradictions. Son identité de cache versionnée est construite dans un ordre
+d’octets déterministe à partir de la cible normalisée, sans adresse de processus
+ni texte dépendant de la locale.
+
 Un `TranslationExit` versionné enregistre une cause d’arrêt stable et la charge
 utile typée correspondante pour les syscalls, exceptions ou signaux, points
 d’arrêt, instructions non prises en charge, auto-modification, budgets de
@@ -130,6 +138,24 @@ blocks et n’est pas appelable depuis l’IR produit ; les translated blocks
 renvoient plutôt un code de sortie typé. L’IR produit ne peut lire directement
 que le slot runtime scalar-result déclaré.
 
+`RuntimeSymbolRegistryV1` matérialise cette table de helpers sous forme d’un
+registre hôte fermé. Sa construction vérifie l’ensemble ABI-v1 complet, les noms
+canoniques exacts, les classes de helpers, les signatures et, pour chaque entrée,
+un unique pointeur de fonction non nul correspondant à sa classe. La recherche
+n’accepte que le nom exact, ne consulte jamais les symboles ambiants du processus
+ou du chargeur dynamique et fournit au verifier d’objets la même liste triée de
+noms autorisés. Son identité versionnée couvre les noms, les classes et la forme
+de l’ABI, mais exclut volontairement les adresses natives ; elle reste donc
+stable sous ASLR.
+
+`RuntimeCodeMemory` possède un stockage de code produit isolé par pages et
+n’autorise qu’une publication unidirectionnelle `RW -> RX`. La mémoire n’est
+jamais simultanément inscriptible et exécutable, ne peut pas être rouverte en
+écriture, vérifie les limites des écritures et des points d’entrée, et invalide
+le cache d’instructions de l’hôte lors de la publication. Le smoke test natif
+n’exécute qu’une courte séquence d’instructions hôte après publication : il
+prouve cette frontière mémoire W^X, pas un moteur de traduction.
+
 `GuestMemoryRuntime` est isolé du `GuestState` logique : sa construction valide
 d’abord l’état, puis copie les octets et métadonnées des régions dans un index
 privé trié. Les adresses virtuelles guest ne sont que des clés de recherche et
@@ -159,13 +185,17 @@ correspondante et au plus une symbol table, dynamic-symbol table,
 platform-version et commande data-in-code, avec contrôle de leurs dépendances.
 Les options de linker et toute autre commande sont rejetées.
 
-Les implémentations du runtime, de la mémoire, de l’IR et de l’audit d’objet
-définissent et valident ces frontières. Elles ne constituent ni un backend de
-traduction exécutable complet, ni une pipeline complète de traduction
-inter-architectures, ni une réécriture complète des exceptions de bout en bout.
-Cette section décrit la portée du contrat et du verifier ; elle n’affirme pas la
-disponibilité intégrale de la production, de l’édition de liens, du chargement,
-de l’exécution, du JIT, de l’AOT ou de la réécriture d’exceptions.
+Les implémentations du runtime, de la résolution de cible, de la publication
+W^X, de la mémoire, de l’IR, du registre de symboles et de l’audit d’objet
+définissent et valident ces frontières. Il manque encore un compilateur d’objet
+vérifié, un chemin d’audit/link/chargement du graphe JITLink, un dispatcher de
+confiance ou sa factory, et un lowering guest-vers-hôte complet. Les frontières
+disponibles ne constituent donc ni un backend de traduction exécutable complet,
+ni une pipeline complète de traduction inter-architectures, ni une réécriture
+complète des exceptions de bout en bout. Cette section décrit la portée du
+contrat et du verifier ; elle n’affirme pas la disponibilité intégrale de la
+production, de l’édition de liens, du chargement, du dispatch, de l’exécution,
+du JIT, de l’AOT ou de la réécriture d’exceptions.
 
 Le contrat de l’IR produit impose que tout translated block qui lui est soumis
 soit hidden et non-preemptible et utilise le C ABI

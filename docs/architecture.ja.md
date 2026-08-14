@@ -91,6 +91,12 @@ baseline をその場で変更することは禁止されています。
 ポリシーはホストアーキテクチャと target triple の明示を要求します。CPU または
 feature set を選ぶ場合も明示が必要です。
 
+`ResolvedHostTarget` は、この選択を具体的な結果へ解決します。`Native` 解決は現在の
+process から triple、CPU、有効/無効の feature set を取得します。`Explicit` 解決は
+呼出し側が指定した architecture、triple、CPU、feature を検証して正規化し、競合を
+拒否します。version 付き cache identity は、正規化済み target input から決定的な
+byte 順で構築され、process address や locale 依存の text を含みません。
+
 version 付き `TranslationExit` は安定した停止理由と、それに対応する型付き payload
 を記録します。対象は syscall、例外または signal、breakpoint、未対応命令、自己書換え、
 リソース budget、外部呼出し、memory fault、その他の終了条件です。利用側が停止理由に
@@ -120,6 +126,22 @@ budget/cancellation polling は trusted dispatcher 専用の操作です。
 ません。translated block は代わりに typed exit code を返します。生成 IR が直接
 読めるのは、宣言済みの scalar-result runtime slot だけです。
 
+`RuntimeSymbolRegistryV1` は、その helper table を閉じた host-side registry として
+実装します。構築時に ABI-v1 の完全な集合、正確な canonical name、helper class、
+signature、および各 entry に class と一致する非 null の function pointer が正確に
+1 個あることを検証します。lookup は完全一致名だけを受け入れ、process 環境や
+dynamic loader の symbol を参照せず、object verifier の allowlist に同じソート済み
+名前を提供します。version 付き identity は名前、helper class、ABI shape を含みます
+が、native address は意図的に除外するため ASLR に左右されません。
+
+`RuntimeCodeMemory` は page 単位で分離された generated-code storage を所有し、
+一方向の `RW -> RX` publication だけを許可します。memory が同時に writable かつ
+executable になることはなく、publication 後に write 可能へ戻すこともできません。
+write と entry offset は bounds-check され、publication 時には host instruction cache
+が invalidation されます。native smoke test が publication 後に実行するのは小さな
+host instruction sequence だけであり、証明するのはこの W^X memory boundary であって
+translation engine ではありません。
+
 `GuestMemoryRuntime` は論理的な `GuestState` から分離されています。生成時に state
 を検証し、region の byte と metadata をソート済み private index へコピーします。
 guest virtual address は lookup key にすぎず、host pointer へ変換されません。検査
@@ -144,11 +166,14 @@ directive は拒否されます。ELF `ET_REL` artifact は program header や s
 platform-version、data-in-code command をそれぞれ最大 1 個だけ許可し、依存関係も
 検査します。linker option とその他の command はすべて拒否されます。
 
-runtime、memory、IR、object audit の各実装は、これらの境界を定義して検証します。
-これらは、完全な実行可能 translation backend、完全なクロスアーキテクチャ
-translation pipeline、完全な end-to-end exception rewriting を構成しません。本節は
-契約と verifier の範囲を規定するものであり、生成、link、load、実行、JIT、AOT、
-exception rewriting の end-to-end 提供を主張するものではありません。
+runtime、target resolution、W^X publication、memory、IR、symbol registry、object
+audit の各実装は、これらの境界を定義して検証します。verified object compiler、
+JITLink graph の audit/link/load path、trusted dispatcher または dispatcher factory、
+完全な guest-to-host lowering はまだ存在しません。したがって、現在の境界は完全な
+実行可能 translation backend、完全なクロスアーキテクチャ translation pipeline、
+完全な end-to-end exception rewriting を構成しません。本節は契約と verifier の
+範囲を規定するものであり、生成、link、load、dispatch、実行、JIT、AOT、exception
+rewriting の end-to-end 提供を主張するものではありません。
 
 生成 IR の契約では、この契約に従うすべての translated block を hidden かつ
 non-preemptible とし、C ABI `i32 (ptr state, ptr runtime)` を使うことを要求します。

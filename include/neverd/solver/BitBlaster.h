@@ -61,11 +61,22 @@ using BitLits = llvm::SmallVector<SatLit, 16>;
 struct BlastLimits {
   /// Widest value that will be encoded.  A multiplication at width \c w costs
   /// on the order of `w^2` adder cells, so the default admits a 256-bit word
-  /// while still refusing a width that could only have come from a bug.
+  /// while still refusing a width that could only have come from a bug.  Zero
+  /// removes the caller-imposed width policy; the symbolic IR's 32-bit width
+  /// representation and host allocation capacity still apply.
   uint32_t MaxWidth = 256;
 
-  /// Gates one blaster may create before it gives up.
+  /// Gates one blaster may create before it gives up.  Zero removes the
+  /// caller-imposed gate budget; it does not remove the SAT literal packing or
+  /// host allocation limits.
   size_t MaxGates = size_t(1) << 22;
+
+  static BlastLimits unlimited() {
+    BlastLimits Limits;
+    Limits.MaxWidth = 0;
+    Limits.MaxGates = 0;
+    return Limits;
+  }
 };
 
 /// Why an encoding stopped.
@@ -128,7 +139,7 @@ public:
 private:
   /// Where one node's bits live in \c BitPool.
   struct Slice {
-    uint32_t First = 0;
+    size_t First = 0;
     uint32_t Width = 0;
   };
 

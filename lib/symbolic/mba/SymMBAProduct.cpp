@@ -37,7 +37,7 @@ bool expandProduct(llvm::ArrayRef<TruthTable> Factors,
                    const std::map<Monomial, llvm::APInt> &Higher,
                    std::map<Monomial, unsigned> &Counts, WorkBudget &Budget) {
   Counts.clear();
-  llvm::SmallVector<llvm::SmallVector<uint16_t, 8>, 4> Selected;
+  llvm::SmallVector<llvm::SmallVector<MintermIndex, 8>, 4> Selected;
   for (const TruthTable &Table : Factors) {
     Selected.push_back(selectedMinterms(Table));
     if (Selected.back().empty())
@@ -89,7 +89,7 @@ void forEachProductMatch(const std::map<Monomial, llvm::APInt> &Higher,
 
   TruthTable Shared = TruthTable::zero(NumAtoms);
   for (size_t M = 0; M < *Corners; ++M) {
-    Monomial Repeat(Degree, static_cast<uint16_t>(M));
+    Monomial Repeat(Degree, static_cast<MintermIndex>(M));
     if (Higher.count(Repeat))
       Shared.set(M);
   }
@@ -176,13 +176,13 @@ std::optional<SymRef> solvePolynomial(SymContext &Ctx, SymRef Body,
                                       llvm::ArrayRef<SymRef> Atoms,
                                       const MBAOptions &Opts,
                                       WorkBudget &Budget) {
-  // Two ceilings meet here and they mean different things.  The caller's is a
-  // budget: tabulating a factor over this many inputs is what it agreed to
-  // pay for.  The other belongs to the monomial key, which names corners in
-  // sixteen bits and would name the wrong one past that rather than fail.
+  // The caller's synthesis arity is a budget: tabulating a factor over this
+  // many inputs is what it agreed to pay for.  Minterm indices use the same
+  // 32-bit range as the truth-table container, so no narrower storage ceiling
+  // silently removes the polynomial reading.
   const SolverLimits Limits = resolveLimits(Opts);
   const auto NumAtoms = static_cast<unsigned>(AtomIds.size());
-  if (NumAtoms > Limits.MaxSynthesisAtoms || NumAtoms > kMaxPolynomialAtoms)
+  if (NumAtoms > Limits.MaxSynthesisAtoms)
     return std::nullopt;
   const std::optional<size_t> Corners = cornerCount(NumAtoms);
   if (!Corners)

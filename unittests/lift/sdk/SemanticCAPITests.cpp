@@ -239,6 +239,31 @@ TEST(NeverDSemanticCAPI, ExhaustiveSynthesisRemovesParserPolicyCeilings) {
   neverd_synthesize_result_dispose(&Result);
 }
 
+TEST(NeverDSemanticCAPI, ExhaustiveSynthesisRemovesBitBlastPolicyCeilings) {
+  constexpr const char *Expression = "(x >> 4) + ((x >> 2) >> 2)";
+  neverd_synthesize_options Options = quickSynthesisOptions();
+  Options.width = 257;
+  neverd_synthesize_result Result{};
+  Result.struct_size = sizeof(Result);
+
+  ASSERT_EQ(neverd_synthesize_expr(Expression, &Options, &Result), 0);
+  ASSERT_EQ(Result.ok, 1) << (Result.error ? Result.error : "");
+  EXPECT_EQ(Result.changed, 0);
+  EXPECT_EQ(Result.outcome, NEVERD_SYNTHESIS_PROOF_INCOMPLETE);
+  EXPECT_EQ(Result.proof_status, NEVERD_PROOF_UNKNOWN);
+  neverd_synthesize_result_dispose(&Result);
+
+  Options.exhaustive = 1;
+  Result = {};
+  Result.struct_size = sizeof(Result);
+  ASSERT_EQ(neverd_synthesize_expr(Expression, &Options, &Result), 0);
+  ASSERT_EQ(Result.ok, 1) << (Result.error ? Result.error : "");
+  EXPECT_EQ(Result.changed, 1);
+  EXPECT_EQ(Result.outcome, NEVERD_SYNTHESIS_REWRITTEN);
+  EXPECT_EQ(Result.proof_status, NEVERD_PROOF_EQUIVALENT);
+  neverd_synthesize_result_dispose(&Result);
+}
+
 TEST(NeverDSemanticCAPI, SynthesisRewriteRequiresAnEquivalentProof) {
   constexpr const char *Expression = "(x >> 4) + ((x >> 2) >> 2)";
   neverd_synthesize_options Options = quickSynthesisOptions();

@@ -212,9 +212,7 @@ OptimizationConfig readOptions(const neverd_optimize_llvm_ir_options *In) {
     Search.MaxWork = std::numeric_limits<size_t>::max();
     Search.StochasticRestarts = std::numeric_limits<unsigned>::max();
     Search.StochasticIterations = std::numeric_limits<size_t>::max();
-    Sat.MaxConflicts = 0;
-    Sat.MaxPropagations = 0;
-    Sat.MaxWatchVisits = 0;
+    Config.Options.Semantic.Solver = solver::SolverOptions::unlimited();
   }
   return Config;
 }
