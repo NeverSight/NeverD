@@ -40,6 +40,7 @@ class PythonPluginSDKAuditTests(unittest.TestCase):
             "py.typed",
             "analysis_report.py",
             "minimal.py",
+            "semantic_optimizer.py",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, source)
@@ -95,6 +96,20 @@ typedef enum {
         self.assertEqual(
             entries,
             {"NEVERD_SAMPLE_ZERO": 0, "NEVERD_SAMPLE_NINE": 9},
+        )
+
+    def test_static_name_functions_are_explicitly_borrowed(self) -> None:
+        from neverd_plugin.abi import Ownership
+
+        self.assertIs(
+            audit.expected_ownership(
+                "neverd_proof_status_name", "const char *"
+            ),
+            Ownership.BORROWED_STRING,
+        )
+        self.assertIs(
+            audit.expected_ownership("neverd_version", "const char *"),
+            Ownership.OWNED_STRING,
         )
 
     def test_repository_abi_enum_and_versions_do_not_drift(self) -> None:
