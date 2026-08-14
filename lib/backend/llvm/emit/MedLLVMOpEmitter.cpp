@@ -107,33 +107,6 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return Builder.CreateSelect(IsZero, Zero, Raw(SafeR), "divres");
   };
 
-  auto GetPredicatedMemorySelect = [&](const MedVar &AddrVar) -> const MedOp * {
-    const MedOp *SafeSel = lookupDef(AddrVar);
-    const auto &TRI = getTargetRegInfo(TargetArch);
-    if (TargetArch != Arch::ARM || !SafeSel ||
-        SafeSel->Opcode != NdOp::SELECT || SafeSel->NumInputs < 3 ||
-        SafeSel->Inputs[2].Kind != MedVar::Reg ||
-        !TRI.isStackPointer(SafeSel->Inputs[2].RegOff))
-      return nullptr;
-    return SafeSel;
-  };
-
-  // Predicated ARM memory ops use SELECT(Cond, architectural-EA, SP) so an
-  // untaken instruction never speculatively touches an invalid EA.  When the
-  // true arm is relocated to a data global, select between the final pointers;
-  // rebasing the SELECT as a whole would also rebase SP and make it unmapped.
-  auto GuardPredicatedMemoryPtr = [&](const MedOp *SafeSel,
-                                      llvm::Value *ArchPtr,
-                                      llvm::Type *ValTy) -> llvm::Value * {
-    llvm::Value *Cond = getVar(SafeSel->Inputs[0], Builder);
-    if (!Cond->getType()->isIntegerTy(1))
-      Cond = Builder.CreateICmpNE(Cond,
-                                  llvm::ConstantInt::get(Cond->getType(), 0));
-    llvm::Value *SafeAddr = getVar(SafeSel->Inputs[2], Builder);
-    llvm::Value *SafePtr = getMemoryPtr(SafeAddr, ValTy, Builder);
-    return Builder.CreateSelect(Cond, ArchPtr, SafePtr, "predmem");
-  };
-
   llvm::Value *Result = nullptr;
 
   switch (Op.Opcode) {
@@ -597,9 +570,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   case NdOp::LOAD: {
     auto *ValTy = sizeToType(Op.Output.Size);
     llvm::Value *Ptr = nullptr;
-    const MedOp *PredSel =
-        Op.NumInputs >= 1 ? GetPredicatedMemorySelect(Op.Inputs[0]) : nullptr;
-    const MedVar &AddrVar = PredSel ? PredSel->Inputs[1] : Op.Inputs[0];
+    const MedVar &AddrVar = Op.Inputs[0];
     uint64_t ResolvedAddr = 0;
     if (Op.NumInputs >= 1 && Img) {
       if (AddrVar.isConst()) {
@@ -648,8 +619,6 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (Ptr)
         IsGlobalData = true;
     }
-    if (Ptr && PredSel)
-      Ptr = GuardPredicatedMemoryPtr(PredSel, Ptr, ValTy);
     if (!Ptr) {
       auto *Addr = GetInput(0);
       Ptr = getMemoryPtr(Addr, ValTy, Builder);
@@ -663,9 +632,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   case NdOp::STORE: {
     auto *Val = GetInput(1);
     llvm::Value *Ptr = nullptr;
-    const MedOp *PredSel =
-        Op.NumInputs >= 1 ? GetPredicatedMemorySelect(Op.Inputs[0]) : nullptr;
-    const MedVar &AddrVar = PredSel ? PredSel->Inputs[1] : Op.Inputs[0];
+    const MedVar &AddrVar = Op.Inputs[0];
     uint64_t ResolvedAddr = 0;
     if (Op.NumInputs >= 1 && Img) {
       if (AddrVar.isConst()) {
@@ -709,8 +676,6 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (Ptr)
         IsGlobalData = true;
     }
-    if (Ptr && PredSel)
-      Ptr = GuardPredicatedMemoryPtr(PredSel, Ptr, Val->getType());
     if (!Ptr) {
       auto *Addr = GetInput(0);
       Ptr = getMemoryPtr(Addr, Val->getType(), Builder);

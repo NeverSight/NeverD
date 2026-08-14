@@ -14,6 +14,12 @@
 /// common case by far.  What it buys is that partial overwrites, sub-register
 /// writes and unaligned memory all work without any of them being a case.
 ///
+/// Memory adds one step in front of that: deciding which store a given address
+/// belongs to.  The builders have already put an address into a canonical sum
+/// with its constant term first, so `sp - 8` arrives as a base and a
+/// displacement without this file having to walk address arithmetic, and every
+/// frame slot lands in the same bank at a different offset.
+///
 //===----------------------------------------------------------------------===//
 
 #include "neverd/symbolic/SymState.h"
@@ -29,51 +35,24 @@ namespace neverd::symbolic {
 namespace {
 constexpr uint32_t kByteBits = 8;
 
-std::optional<uint64_t> concreteAddress(const SymContext &Ctx, SymRef Addr) {
-  std::optional<llvm::APInt> Value = Ctx.asConst(Addr);
-  if (!Value || Value->getActiveBits() > 64)
-    return std::nullopt;
-  return Value->getZExtValue();
+/// Widest address the region split works on.  A displacement is kept as a
+/// 64-bit key, so a wider address space cannot be indexed that way and each of
+/// its addresses becomes a region of its own instead.
+constexpr uint32_t kMaxAddressBits = 64;
+
+std::string byteName(llvm::StringRef Prefix, uint64_t Offset) {
+  return (llvm::Twine(Prefix) + "$" + llvm::Twine(Offset)).str();
 }
 } // namespace
 
-std::map<uint64_t, SymRef> &SymState::spaceMap(SymSpace Space) {
+SymState::Bank &SymState::bank(SymSpace Space) {
   switch (Space) {
   case SymSpace::Register:
     return Registers;
   case SymSpace::Temporary:
     return Temporaries;
   case SymSpace::Memory:
-    return Memory;
-  }
-  llvm_unreachable("unhandled symbolic space");
-}
-
-const std::map<uint64_t, SymRef> &SymState::spaceMap(SymSpace Space) const {
-  return const_cast<SymState *>(this)->spaceMap(Space);
-}
-
-std::shared_ptr<SymState::UnknownBytes> &
-SymState::unknownBytes(SymSpace Space) {
-  switch (Space) {
-  case SymSpace::Register:
-    return RegisterUnknowns;
-  case SymSpace::Temporary:
-    return TemporaryUnknowns;
-  case SymSpace::Memory:
-    return MemoryUnknowns;
-  }
-  llvm_unreachable("unhandled symbolic space");
-}
-
-const char *SymState::spaceName(SymSpace Space) {
-  switch (Space) {
-  case SymSpace::Register:
-    return "reg";
-  case SymSpace::Temporary:
-    return "tmp";
-  case SymSpace::Memory:
-    return "mem";
+    return AbsoluteMemory;
   }
   llvm_unreachable("unhandled symbolic space");
 }
@@ -83,34 +62,31 @@ SymRef SymState::freshInput(llvm::StringRef Prefix, uint32_t Width) {
   return Ctx->mkFreshVar(Width, NamedPrefix);
 }
 
-SymRef SymState::byteAt(SymSpace Space, uint64_t Offset) {
-  std::map<uint64_t, SymRef> &Bytes = spaceMap(Space);
-  auto It = Bytes.find(Offset);
-  if (It != Bytes.end())
+//===----------------------------------------------------------------------===//
+// Byte-addressed banks
+//===----------------------------------------------------------------------===//
+
+SymRef SymState::byteAt(Bank &B, uint64_t Offset) {
+  auto It = B.Bytes.find(Offset);
+  if (It != B.Bytes.end())
     return It->second;
 
   SymRef Input;
-  std::shared_ptr<UnknownBytes> &Unknowns = unknownBytes(Space);
-  if (Unknowns) {
-    auto Unknown = Unknowns->Values.find(Offset);
-    if (Unknown == Unknowns->Values.end()) {
-      const std::string Prefix =
-          (llvm::Twine(spaceName(Space)) + "$" + llvm::Twine(Offset) + "$")
-              .str();
-      Input = Ctx->mkFreshVar(kByteBits, Prefix);
-      Unknowns->Values.emplace(Offset, Input);
+  if (B.Unknowns) {
+    auto Unknown = B.Unknowns->Values.find(Offset);
+    if (Unknown == B.Unknowns->Values.end()) {
+      Input = Ctx->mkFreshVar(kByteBits, byteName(B.Name, Offset) + "$");
+      B.Unknowns->Values.emplace(Offset, Input);
     } else {
       Input = Unknown->second;
     }
   } else {
-    // Before any clobber, name an untouched location for where it is.  Once a
-    // clobber has happened, the shared event above keeps copied states equal
-    // while independently clobbered forks receive different values.
-    Input = Ctx->mkVar(
-        (llvm::Twine(spaceName(Space)) + "$" + llvm::Twine(Offset)).str(),
-        kByteBits);
+    // Before anything was forgotten, name an untouched location for where it
+    // is.  Once it has been, the shared epoch above keeps copied states equal
+    // while independently forgetful forks receive different values.
+    Input = Ctx->mkVar(byteName(B.Name, Offset), kByteBits);
   }
-  Bytes.emplace(Offset, Input);
+  B.Bytes.emplace(Offset, Input);
   return Input;
 }
 
@@ -127,112 +103,227 @@ SymRef SymState::joinBytes(llvm::ArrayRef<SymRef> Bytes) const {
   return Ctx->mkConcat(Ordered);
 }
 
-SymRef SymState::read(SymSpace Space, uint64_t Offset, uint16_t Bytes) {
+SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
   assert(Bytes > 0 && "a read of no bytes has no value");
 
   // Keep an untouched word as one input rather than eagerly turning it into a
   // concatenation of unrelated byte variables.  The write records its byte
   // views, so every later overlapping read still observes exact aliasing.
-  std::map<uint64_t, SymRef> &Known = spaceMap(Space);
-  std::shared_ptr<UnknownBytes> &Unknowns = unknownBytes(Space);
   bool HasMaterialisedByte = false;
   for (uint16_t I = 0; I < Bytes; ++I)
     HasMaterialisedByte |=
-        Known.count(Offset + I) != 0 ||
-        (Unknowns && Unknowns->Values.count(Offset + I) != 0);
+        B.Bytes.count(Offset + I) != 0 ||
+        (B.Unknowns && B.Unknowns->Values.count(Offset + I) != 0);
   if (!HasMaterialisedByte) {
-    const std::string Name =
-        (llvm::Twine(spaceName(Space)) + "$" + llvm::Twine(Offset)).str();
-    SymRef Input =
-        Unknowns ? Ctx->mkFreshVar(uint32_t(Bytes) * kByteBits, Name + "$")
-                 : Ctx->mkVar(Name, uint32_t(Bytes) * kByteBits);
-    write(Space, Offset, Input);
-    if (Unknowns)
+    const std::string Name = byteName(B.Name, Offset);
+    const uint32_t Width = uint32_t(Bytes) * kByteBits;
+    SymRef Input = B.Unknowns ? Ctx->mkFreshVar(Width, Name + "$")
+                              : Ctx->mkVar(Name, Width);
+    writeBank(B, Offset, Input);
+    if (B.Unknowns)
       for (uint16_t I = 0; I < Bytes; ++I)
-        Unknowns->Values.emplace(Offset + I, Known.at(Offset + I));
+        B.Unknowns->Values.emplace(Offset + I, B.Bytes.at(Offset + I));
     return Input;
   }
 
   llvm::SmallVector<SymRef, 8> Parts;
   Parts.reserve(Bytes);
   for (uint16_t I = 0; I < Bytes; ++I)
-    Parts.push_back(byteAt(Space, Offset + I));
+    Parts.push_back(byteAt(B, Offset + I));
   return joinBytes(Parts);
 }
 
-void SymState::write(SymSpace Space, uint64_t Offset, SymRef Value) {
+void SymState::writeBank(Bank &B, uint64_t Offset, SymRef Value) {
   const uint32_t Width = Ctx->width(Value);
   assert(Width % kByteBits == 0 && "a stored value must be whole bytes");
   const uint16_t Bytes = static_cast<uint16_t>(Width / kByteBits);
 
-  std::map<uint64_t, SymRef> &Store = spaceMap(Space);
   for (uint16_t I = 0; I < Bytes; ++I) {
     // Bit position of byte I of the address range, which is the low end of the
     // word on a little-endian target and the high end on a big-endian one.
     const uint32_t Low = Order == llvm::endianness::little
                              ? uint32_t(I) * kByteBits
                              : Width - (uint32_t(I) + 1) * kByteBits;
-    Store[Offset + I] = Ctx->mkExtract(Value, Low, kByteBits);
+    B.Bytes[Offset + I] = Ctx->mkExtract(Value, Low, kByteBits);
   }
 }
 
+void SymState::forget(Bank &B) {
+  B.Bytes.clear();
+  B.Unknowns = std::make_shared<UnknownBytes>();
+}
+
+SymRef SymState::read(SymSpace Space, uint64_t Offset, uint16_t Bytes) {
+  return readBank(bank(Space), Offset, Bytes);
+}
+
+void SymState::write(SymSpace Space, uint64_t Offset, SymRef Value) {
+  writeBank(bank(Space), Offset, Value);
+}
+
+size_t SymState::numLiveBytes() const {
+  size_t Total = Registers.Bytes.size() + Temporaries.Bytes.size() +
+                 AbsoluteMemory.Bytes.size();
+  for (const auto &Entry : Regions)
+    Total += Entry.second.Bytes.size();
+  return Total;
+}
+
+//===----------------------------------------------------------------------===//
+// Memory regions
+//===----------------------------------------------------------------------===//
+
+SymState::Location SymState::locate(SymRef Addr) {
+  Location Where;
+
+  if (std::optional<llvm::APInt> Value = Ctx->asConst(Addr)) {
+    if (Value->getActiveBits() <= kMaxAddressBits) {
+      Where.Offset = Value->getZExtValue();
+      return Where;
+    }
+    Where.Base = Addr;
+    return Where;
+  }
+
+  // The builders put a sum's constant term first and leave at most one of
+  // them, so every displacement off a pointer already looks the same here
+  // whether the code wrote an addition, a subtraction or an indexed address.
+  if (Ctx->op(Addr) == SymOp::Add && Ctx->width(Addr) <= kMaxAddressBits) {
+    // Copied out because building the residual base appends to the operand
+    // pool the operands are a view of.
+    llvm::SmallVector<SymRef, 4> Terms(Ctx->operands(Addr).begin(),
+                                       Ctx->operands(Addr).end());
+    if (Terms.size() >= 2 && Ctx->isConst(Terms[0])) {
+      Where.Offset = Ctx->constValue(Terms[0]).getZExtValue();
+      Where.Base = Terms.size() == 2
+                       ? Terms[1]
+                       : Ctx->mkAdd(llvm::ArrayRef<SymRef>(Terms).drop_front());
+      return Where;
+    }
+  }
+
+  Where.Base = Addr;
+  return Where;
+}
+
+SymState::Bank &SymState::bankFor(const Location &Where) {
+  if (!Where.Base.isValid())
+    return AbsoluteMemory;
+
+  auto It = Regions.find(Where.Base.index());
+  if (It != Regions.end())
+    return It->second;
+
+  Bank Fresh;
+  // Named after the base it hangs off rather than after an address, because
+  // that is all this region has: what it holds is `*(base + n)` for the
+  // displacements the code used, and nothing says what base is.
+  Fresh.Name = ("ptr$" + llvm::Twine(Where.Base.index())).str();
+  return Regions.emplace(Where.Base.index(), std::move(Fresh)).first->second;
+}
+
+void SymState::forgetRegions(SymRef Except) {
+  for (auto &Entry : Regions)
+    if (!Except.isValid() || Entry.first != Except.index())
+      forget(Entry.second);
+}
+
 void SymState::clobberMemory() {
-  Memory.clear();
-  MemoryUnknowns = std::make_shared<UnknownBytes>();
-  SymbolicLoads = std::make_shared<SymbolicLoadValues>();
+  forget(AbsoluteMemory);
+  forgetRegions(SymRef());
   MemoryClobbered = true;
 }
 
-const SymState::LoadOrigin *SymState::loadOrigin(SymRef Value) const {
+llvm::ArrayRef<SymState::LoadOrigin> SymState::loadOrigins(SymRef Value) const {
   auto It = LoadOrigins.find(Value.index());
-  return It == LoadOrigins.end() ? nullptr : &It->second;
+  return It == LoadOrigins.end() ? llvm::ArrayRef<LoadOrigin>()
+                                 : llvm::ArrayRef<LoadOrigin>(It->second);
+}
+
+const SymState::LoadOrigin *SymState::loadOrigin(SymRef Value) const {
+  llvm::ArrayRef<LoadOrigin> Origins = loadOrigins(Value);
+  return Origins.size() == 1 ? &Origins.front() : nullptr;
+}
+
+void SymState::recordLoadOrigin(SymRef Value, LoadOrigin Origin) {
+  llvm::SmallVector<LoadOrigin, 1> &Origins = LoadOrigins[Value.index()];
+  auto Less = [](const LoadOrigin &Left, const LoadOrigin &Right) {
+    return Left.Address != Right.Address ? Left.Address < Right.Address
+                                         : Left.Bytes < Right.Bytes;
+  };
+  auto It = std::lower_bound(Origins.begin(), Origins.end(), Origin, Less);
+  if (It == Origins.end() || *It != Origin)
+    Origins.insert(It, Origin);
 }
 
 SymRef SymState::load(SymRef Addr, uint16_t Bytes) {
   assert(Bytes > 0);
-  const uint32_t Width = uint32_t(Bytes) * kByteBits;
 
-  // An address the engine cannot represent in its 64-bit byte map names no
-  // particular byte.  Keep the complete expression as provenance.
-  std::optional<uint64_t> Concrete = concreteAddress(*Ctx, Addr);
-  if (!Concrete) {
-    llvm::SmallVector<SymRef, 8> Parts;
-    Parts.reserve(Bytes);
-    const uint32_t AddressWidth = Ctx->width(Addr);
-    for (uint16_t I = 0; I < Bytes; ++I) {
-      SymRef ByteAddr =
-          I == 0 ? Addr
-                 : Ctx->mkAdd(Addr, Ctx->mkConst(AddressWidth, uint64_t(I)));
-      auto It = SymbolicLoads->Bytes.find(ByteAddr.index());
-      if (It == SymbolicLoads->Bytes.end()) {
-        SymRef Byte = freshInput("load", kByteBits);
-        SymbolicLoads->Bytes.emplace(ByteAddr.index(), Byte);
-        Parts.push_back(Byte);
-      } else {
-        Parts.push_back(It->second);
-      }
-    }
-    SymRef Value = joinBytes(Parts);
-    // Keep what it was reading.  The value is only a name, so without this the
-    // address is lost exactly when it becomes the interesting part.
-    LoadOrigins.emplace(Value.index(), LoadOrigin{Addr, Bytes});
-    return Value;
-  }
+  Location Where = locate(Addr);
+  if (!Where.Base.isValid())
+    return readBank(AbsoluteMemory, Where.Offset, Bytes);
 
-  return read(SymSpace::Memory, *Concrete, Bytes);
+  SymRef Value = readBank(bankFor(Where), Where.Offset, Bytes);
+  // Keep what it was reading.  The value is only a name, so without this the
+  // address is lost exactly when it becomes the interesting part.
+  recordLoadOrigin(Value, LoadOrigin{Addr, Bytes});
+  return Value;
 }
 
 bool SymState::store(SymRef Addr, SymRef Value) {
-  std::optional<uint64_t> Concrete = concreteAddress(*Ctx, Addr);
-  if (!Concrete) {
-    clobberMemory();
-    return false;
+  Location Where = locate(Addr);
+  if (!Where.Base.isValid()) {
+    // One number cannot be another, so absolute memory keeps everything it
+    // held; but nothing rules out this address being where some pointer
+    // pointed, so what was reached through a pointer is given up.
+    forgetRegions(SymRef());
+    writeBank(AbsoluteMemory, Where.Offset, Value);
+    return true;
   }
-  // A known write establishes these bytes even when an earlier unknown write
-  // forced the rest of memory into an unknown epoch.  It may alias any
-  // unresolved address, so those cached reads belong to the previous epoch.
-  SymbolicLoads = std::make_shared<SymbolicLoadValues>();
-  write(SymSpace::Memory, *Concrete, Value);
+
+  // Within the region the displacement says exactly which bytes changed, which
+  // is what keeps two frame slots two frame slots.  Across regions nothing
+  // says anything, so the rest is given up.
+  writeBank(bankFor(Where), Where.Offset, Value);
+  forget(AbsoluteMemory);
+  forgetRegions(Where.Base);
+  MemoryClobbered = true;
+  return false;
+}
+
+//===----------------------------------------------------------------------===//
+// Whole-state operations
+//===----------------------------------------------------------------------===//
+
+bool SymState::holdsSameBytes(const Bank &A, const Bank &B) {
+  // Two banks that agree byte for byte still differ if they are in different
+  // epochs, because the next read of an untouched byte would name a different
+  // unknown in each.
+  return A.Unknowns == B.Unknowns && A.Bytes == B.Bytes;
+}
+
+bool SymState::mergeIdentical(const SymState &Other) {
+  if (Order != Other.Order || MemoryClobbered != Other.MemoryClobbered)
+    return false;
+  if (!holdsSameBytes(Registers, Other.Registers) ||
+      !holdsSameBytes(Temporaries, Other.Temporaries) ||
+      !holdsSameBytes(AbsoluteMemory, Other.AbsoluteMemory))
+    return false;
+  if (Regions.size() != Other.Regions.size())
+    return false;
+  for (const auto &Entry : Regions) {
+    auto It = Other.Regions.find(Entry.first);
+    if (It == Other.Regions.end() || !holdsSameBytes(Entry.second, It->second))
+      return false;
+  }
+
+  // Provenance is the one thing the two may legitimately differ on: the same
+  // value can have been read through addresses spelled differently.  Preserve
+  // every possibility; exact consumers reject a conflict, while may-dependence
+  // consumers follow all of them.
+  for (const auto &Entry : Other.LoadOrigins)
+    for (const LoadOrigin &Origin : Entry.second)
+      recordLoadOrigin(SymRef(Entry.first), Origin);
   return true;
 }
 
@@ -240,23 +331,22 @@ void SymState::clobberRegistersExcept(
     llvm::ArrayRef<SymRegisterRange> PreservedRanges) {
   // A lifter's temporaries never live across an instruction, let alone a call,
   // so there is nothing there worth keeping either way.
-  Temporaries.clear();
-  TemporaryUnknowns = std::make_shared<UnknownBytes>();
+  forget(Temporaries);
 
   // Materialise untouched bytes before replacing the default unknown set.  A
   // preserved register that had not been read yet still denotes its entry (or
   // previous-call) value after this call.
   for (const SymRegisterRange &Range : PreservedRanges)
     if (Range.Bytes != 0)
-      read(SymSpace::Register, Range.Offset, Range.Bytes);
-
-  RegisterUnknowns = std::make_shared<UnknownBytes>();
+      readBank(Registers, Range.Offset, Range.Bytes);
 
   if (PreservedRanges.empty()) {
-    Registers.clear();
+    forget(Registers);
     return;
   }
-  for (auto It = Registers.begin(); It != Registers.end();) {
+
+  Registers.Unknowns = std::make_shared<UnknownBytes>();
+  for (auto It = Registers.Bytes.begin(); It != Registers.Bytes.end();) {
     bool Preserved = false;
     for (const SymRegisterRange &Range : PreservedRanges) {
       if (It->first >= Range.Offset && It->first - Range.Offset < Range.Bytes) {
@@ -264,7 +354,7 @@ void SymState::clobberRegistersExcept(
         break;
       }
     }
-    It = Preserved ? std::next(It) : Registers.erase(It);
+    It = Preserved ? std::next(It) : Registers.Bytes.erase(It);
   }
 }
 

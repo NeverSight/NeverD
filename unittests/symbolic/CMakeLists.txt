@@ -8,6 +8,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymMBAStressTests.cpp
   SymMBATests.cpp
   SymParseTests.cpp
+  SymSynthTests.cpp
 
   LINK_COMPONENTS Symbolic
 )

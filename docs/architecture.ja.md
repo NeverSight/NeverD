@@ -65,6 +65,113 @@ Support を使いますが、エンジンを駆動する際に C API を迂回�
 ロジックは所有する IR または backend ライブラリに置き、pipeline はアルゴリズムを
 取り込むのではなく、それらのコンポーネントを調整してください。
 
+## クロスアーキテクチャ変換の契約
+
+`include/neverd/translate` が定義しているのは契約層であり、実行 backend
+ではありません。`GuestState` は `x86_32`、`x86_64`、`AArch64`、`ARM32`
+について、アーキテクチャ非依存のマシン可視状態をモデル化します。正規な
+version 1 シリアライズは固定幅のリトルエンディアンフィールド、安定したレジスタ
+ID、ソート済みコレクション、fail-closed 検証を使うため、永続化状態はホストの
+C++ レイアウトに依存しません。
+
+`GuestState` の wire v1 baseline は恒久的に凍結されています。この baseline 外の
+状態は、拡張範囲の extension-register ID と正規の小文字名を組み合わせて表現するか、
+明示的な upgrader を備えた新しい wire version に移行しなければなりません。v1
+baseline をその場で変更することは禁止されています。
+
+`ARM32` guest では `ExecutionMode` が権威ある decode mode であり、`CPSR.T` と
+一致しなければなりません。保存される PC は常に bit 0 をクリアした正規の命令
+アドレスであり、ARM mode ではさらに word alignment が必要です。
+
+アーキテクチャ対のポリシーは `x86_64 -> AArch64`、
+`AArch64 -> x86_64`、`x86_32 -> AArch64/ARM32`、
+`ARM32 -> x86_32/x86_64` を定義しています。`ContractDefined` は要求を検証して
+永続化できるという意味であり、コードを変換または実行できるという意味では
+ありません。JIT ポリシーは実行中プロセスの native host だけを受け入れ、AOT
+ポリシーはホストアーキテクチャと target triple の明示を要求します。CPU または
+feature set を選ぶ場合も明示が必要です。
+
+version 付き `TranslationExit` は安定した停止理由と、それに対応する型付き payload
+を記録します。対象は syscall、例外または signal、breakpoint、未対応命令、自己書換え、
+リソース budget、外部呼出し、memory fault、その他の終了条件です。利用側が停止理由に
+応じて型のない整数を読み替える必要はありません。
+
+停止理由にかかわらず、結果が報告する instruction、block、generated-code の各
+count は、要求で指定された対応する非ゼロ budget を超えてはなりません。
+`BudgetExhausted` payload はさらに、その要求された limit を正確に示す必要があり、
+導出値や実装固有のしきい値を報告してはなりません。
+
+backend-private `RuntimeControlBlockV1` の契約は、正確に 128 byte、
+8 byte alignment であり、固定された v1 magic、version、size、field offset、ゼロの
+reserved field、整合した typed exit によって制約されます。C++ container、host
+pointer、guest address alias は含みません。また `GuestState` の C++ layout や wire
+format ではなく、この契約を実装する backend が状態をこの record へ明示的に変換
+する必要があります。
+
+固定 v1 generated-code call surface に含まれる helper は正確に 8 個です：
+`nvd_rt_v1_load8_le`、`nvd_rt_v1_load16_le`、`nvd_rt_v1_load32_le`、
+`nvd_rt_v1_load64_le`、`nvd_rt_v1_store8_le`、`nvd_rt_v1_store16_le`、
+`nvd_rt_v1_store32_le`、`nvd_rt_v1_store64_le`。名前、signature、pointer provenance
+は完全一致しなければならず、backend はこの有限 table を明示的に bind して ambient
+symbol resolution へ fallback してはなりません。executable generation 検証と
+budget/cancellation polling は trusted dispatcher 専用の操作です。
+`nvd_rt_v1_validate_generation` と `nvd_rt_v1_poll` は generated-code helper では
+ありません。trusted host dispatcher は block 選択も所有し、生成 IR からは呼び出せ
+ません。translated block は代わりに typed exit code を返します。生成 IR が直接
+読めるのは、宣言済みの scalar-result runtime slot だけです。
+
+`GuestMemoryRuntime` は論理的な `GuestState` から分離されています。生成時に state
+を検証し、region の byte と metadata をソート済み private index へコピーします。
+guest virtual address は lookup key にすぎず、host pointer へ変換されません。検査
+付き scalar access は、width、alignment、overflow、unmapped、cross-region、
+permission、executable write、generation overflow/mismatch、policy fault を型付きで
+報告します。instruction/block budget、cancellation、generation tracking、および
+`RejectExecutableWrites`、`InvalidateOnExecutableWrite`、
+`ValidateBeforeDispatch` の code-write policy も、暗黙の host 動作ではなく整合した
+typed record を生成します。
+
+post-codegen verifier は relocatable ELF、COFF、Mach-O object を
+閉集合として監査します。format と architecture は選択された host と正確に一致し、
+undefined symbol は有限 helper allowlist に完全一致しなければならず、dynamic symbol
+は禁止されます。relocation は明示的な direct whitelist であり、encoding、width、
+alignment、offset、loadable destination、object-local non-preemptible definition または
+完全一致で許可された helper target を検査します。W+X、unwind/exception と
+initializer metadata、TLS、IFUNC、GOT/PLT その他の indirection、dynamic relocation、
+weak/preemptible または選択可能な definition、未知の allocated section、linker
+directive は拒否されます。ELF `ET_REL` artifact は program header や segment を
+含んではなりません。Mach-O load command は positive list で制限され、bit 幅が
+一致する segment を正確に 1 個、symbol table、dynamic-symbol table、
+platform-version、data-in-code command をそれぞれ最大 1 個だけ許可し、依存関係も
+検査します。linker option とその他の command はすべて拒否されます。
+
+runtime、memory、IR、object audit の各実装は、これらの境界を定義して検証します。
+これらは、完全な実行可能 translation backend、完全なクロスアーキテクチャ
+translation pipeline、完全な end-to-end exception rewriting を構成しません。本節は
+契約と verifier の範囲を規定するものであり、生成、link、load、実行、JIT、AOT、
+exception rewriting の end-to-end 提供を主張するものではありません。
+
+生成 IR の契約では、この契約に従うすべての translated block を hidden かつ
+non-preemptible とし、C ABI `i32 (ptr state, ptr runtime)` を使うことを要求します。
+block は private registry だけから発見され、プロセス環境の symbol lookup には
+依存しません。block 間の直接呼出しも禁止されます。
+
+IR verifier は、legalization が既知の compiler-runtime libcall を導入することを
+避けるため、整数幅をホストの scalar register 幅以下に制限します。ただし、これは
+必要条件にすぎません。この契約を実装する実行 backend は、post-codegen control
+transfer、`MachineIR`、target object の relocation を、同じ有限の runtime-symbol
+allowlist に対して厳密に監査する必要があります。
+
+TranslationIR の直接 load/store と private constant が保持する値に許されるのは、
+ホストの scalar-register 幅以下の単一 scalar integer だけです。aggregate は verifier
+境界より前に scalarize し、コンパクトな IR が backend の無制限な展開を引き起こさ
+ないようにしなければなりません。
+
+generated-code ABI は scalar integer についてのみ定義されています。浮動小数点、
+SIMD、x87、atomic、system instruction はこの契約の範囲外です。
+`ProvenSemanticAndLLVM` を選択する実装は、NeverD の proof-gated semantic
+simplification を LLVM 最適化との共同 fixed point まで実行しなければなりません。
+このポリシー自体は実行可能な translation backend を提供しません。
+
 ## コンポーネントマップ
 
 各コンポーネントは `add_neverd_component_library` が作成する静的アーカイブです。
@@ -87,6 +194,7 @@ Capstone ライブラリは網羅しません。
 | `lib/sigs` | シグネチャ解析、データベース、マッチング | Loader |
 | `lib/libc` | 既知の libc 名と呼出モデルのサポート | 独立コンポーネント |
 | `lib/support` | 共通のバイナリ読込み helper | Loader |
+| `lib/translate` | version 付き guest state/policy/exit、固定 runtime ABI、検査付き guest memory、生成 IR/object audit の契約。実行 backend の実装はこのコンポーネントの範囲外 | IR、LLVM、LLVM Object の契約 |
 
 公開ヘッダーは `include/neverd` 以下で各領域に対応します。内部 C++ クラスを
 誤って SDK の一部にしないでください。安定した外部操作は純粋 C ヘッダーと、
@@ -132,7 +240,8 @@ pipeline を続行するためだけに `UnliftedInstruction` を捕捉しない
 
 ルートのサポート表は各セルが実装済みであることを意味します。すべての opcode、
 ABI 境界ケース、バイナリ生成元、OS バージョンを網羅的にテストしたという意味では
-ありません。strict モードが未追加の命令カバレッジに対する防護になります。
+ありません。命令セマンティクスが lifter の実装済みカバレッジ外にある場合、strict
+モードは fail-closed で停止します。
 
 形式×アーキテクチャの全 12 セルには
 `unittests/semantic/PatchFullSubstRTTests.cpp` のセマンティックな書き換え backend
@@ -151,25 +260,26 @@ ABI 境界ケース、バイナリ生成元、OS バージョンを網羅的に�
 - **backend グリッド** は正確な書き換えコード生成経路で代表的 IR をコンパイルし、
   Unicorn で動作を比較します。その形式の loader をリンク済み実行形式には適用しません。
 - `*` Mach-O のリンク済み fixture は、要求するターゲットを生成できるホスト
-  ツールチェーンに依存します。現在の macOS は旧 i386 実行形式をリンクできないため、
+  ツールチェーンに依存します。サポート対象の macOS ツールチェーンは旧 i386
+  実行形式をリンクできないため、
   i386 は PIC/no-PIC thin オブジェクトと書き換えグリッドを使用します。
 
-リンク済み fixture のセルは、その代表的プログラムに対する現時点で最も強い形式統合の
+リンク済み fixture のセルは、その代表的プログラムに対する最も強い形式統合の
 証拠です。オブジェクト pipeline と backend グリッドのセルは部分的な形式統合
 カバレッジです。限定なしに「完全にテスト済み」と呼べるセルはなく、ISA を網羅したと
 主張するセルもありません。
 
 主な根拠は、リンク済み ELF/PE fixture の
-[`PatchFormatTests.cpp`](../unittests/lift/PatchFormatTests.cpp)、Windows ARM の
+[`PatchFormatTests.cpp`](../unittests/lift/format/PatchFormatTests.cpp)、Windows ARM の
 読込み/デコンパイルを扱う
-[`COFFARMFormatTests.cpp`](../unittests/lift/COFFARMFormatTests.cpp)、i386 thin
+[`COFFARMFormatTests.cpp`](../unittests/lift/format/COFFARMFormatTests.cpp)、i386 thin
 オブジェクトを扱う
-[`MachOI386RelocationTests.cpp`](../unittests/lift/MachOI386RelocationTests.cpp)、
+[`MachOI386RelocationTests.cpp`](../unittests/lift/format/MachOI386RelocationTests.cpp)、
 リンク済み Mach-O の
-[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/X86_64_PipelineE2ETests.cpp) と
-[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/AArch64_PipelineE2ETests.cpp)、
+[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/x86_64/X86_64_PipelineE2ETests.cpp) と
+[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/aarch64/AArch64_PipelineE2ETests.cpp)、
 12 セルの backend グリッドを扱う
-[`PatchFullSubstRTTests.cpp`](../unittests/semantic/PatchFullSubstRTTests.cpp) です。
+[`PatchFullSubstRTTests.cpp`](../unittests/semantic/probe/patchfull/PatchFullSubstRTTests.cpp) です。
 実行方法は[テストガイド](testing.ja.md)を参照してください。
 
 ## 変更箇所の案内

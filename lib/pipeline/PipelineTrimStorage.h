@@ -24,6 +24,8 @@ namespace {
 template <typename Func> inline void trimFuncStorage(Func &F) {
   for (auto &B : F.Blocks) {
     B.Ops.shrink_to_fit();
+    if constexpr (requires { B.InstructionBoundaries; })
+      B.InstructionBoundaries.shrink_to_fit();
     B.Succs.shrink_to_fit();
     B.Preds.shrink_to_fit();
     if constexpr (requires { B.Phis; })

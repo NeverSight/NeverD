@@ -15,13 +15,22 @@ from typing import Any, Callable, Iterator, Mapping, Protocol, TypeVar, cast
 
 from .abi import (
     EventType,
+    LLVMOptimizationLevel,
+    NeverDOptimizeLLVMOptions,
+    NeverDOptimizeLLVMResult,
     NeverDSimplifyOptions,
     NeverDSimplifyResult,
+    NeverDSynthesizeOptions,
+    NeverDSynthesizeResult,
     NeverDSymbolicExploreOptions,
+    OptimizationMode,
+    OptimizationStop,
     OutputLanguage,
     PluginType,
+    ProofStatus,
     SimplifyEvidence,
     SimplifyOutcome,
+    SynthesisOutcome,
 )
 from .ffi import HostAPI
 
@@ -970,6 +979,19 @@ def _boolean(name: str, value: object) -> bool:
     return value
 
 
+def _enum_value(name: str, value: object, enum_type: type[Any]) -> int:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must not be a boolean")
+    try:
+        return int(enum_type(value))
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"unknown {name}: {value!r}") from error
+
+
+def _size_t(name: str, value: object) -> int:
+    return _unsigned(name, value, ctypes.sizeof(ctypes.c_size_t) * 8)
+
+
 def _decode_json(operation: str, value: str | None) -> object:
     if value is None:
         raise NeverDError(f"NeverD returned no {operation} result")
@@ -989,6 +1011,15 @@ class ExpressionSyntaxError(NeverDError):
     def __init__(self, message: str, offset: int) -> None:
         super().__init__(message)
         self.offset = offset
+
+
+class LLVMIRSyntaxError(NeverDError):
+    """Textual LLVM IR could not be parsed at ``line`` and ``column``."""
+
+    def __init__(self, message: str, line: int, column: int) -> None:
+        super().__init__(message)
+        self.line = line
+        self.column = column
 
 
 @dataclass(frozen=True, slots=True)
@@ -1016,6 +1047,48 @@ class SimplifyResult:
         """Reading cost the rewrite removed.  Zero when nothing was rewritten."""
 
         return self.cost_before - self.cost_after
+
+
+@dataclass(frozen=True, slots=True)
+class SynthesisResult:
+    """A candidate, the proof decision behind it, and both work ledgers."""
+
+    input: str
+    output: str
+    changed: bool
+    cost_before: int
+    cost_after: int
+    inputs: int
+    candidate_cost: int
+    outcome: SynthesisOutcome
+    proof_status: ProofStatus
+    search_work: int
+    proof_queries: int
+    proof_conflicts: int
+    proof_propagations: int
+    proof_watch_visits: int
+    counterexample: object | None
+
+    @property
+    def saved(self) -> int:
+        return self.cost_before - self.cost_after
+
+
+@dataclass(frozen=True, slots=True)
+class LLVMOptimizationResult:
+    """Committed LLVM module and convergence/proof telemetry."""
+
+    output_ir: str
+    changed: bool
+    stop: OptimizationStop
+    functions_visited: int
+    rounds: int
+    semantic_rewrites: int
+    search_work: int
+    proof_queries: int
+    proof_conflicts: int
+    proof_propagations: int
+    proof_watch_visits: int
 
 
 _HOST: HostAPI | None = None
@@ -1054,8 +1127,10 @@ def simplify_expression(
     opaque, which is what layered obfuscation needs.  Every other argument left
     at its default keeps the engine's own: ``max_atoms`` bounds how many inputs
     one measurement spans (the cost is 2^n), ``max_work`` bounds the layered
-    walk and combinatorial polynomial search, and ``exhaustive`` removes that
-    resource budget.
+    walk and combinatorial polynomial search.  ``exhaustive`` selects the
+    native unlimited MBA policy and removes the native parser's nesting and
+    width policy ceilings; physical memory and IR representation limits still
+    apply.
 
     ``host`` names the library to work through.  It defaults to the NeverD this
     is running inside, but simplification needs no session and no loaded binary,
@@ -1066,6 +1141,7 @@ def simplify_expression(
     """
 
     text = _utf8_argument("expression", expression, allow_empty=False)
+    use_exhaustive = _boolean("exhaustive", exhaustive)
 
     options = NeverDSimplifyOptions()
     options.struct_size = ctypes.sizeof(NeverDSimplifyOptions)
@@ -1074,11 +1150,12 @@ def simplify_expression(
     options.max_atoms = _unsigned("max_atoms", max_atoms, 32)
     options.max_work = (
         ctypes.c_size_t(-1).value
-        if _boolean("exhaustive", exhaustive)
+        if use_exhaustive
         else _unsigned("max_work", max_work, 64)
     )
     options.verify_samples = _unsigned("verify_samples", verify_samples, 32)
     options.allow_growth = 1 if _boolean("allow_growth", allow_growth) else 0
+    options.exhaustive = 1 if use_exhaustive else 0
 
     result = NeverDSimplifyResult()
     result.struct_size = ctypes.sizeof(NeverDSimplifyResult)
@@ -1115,23 +1192,269 @@ def simplify_expression(
         library.call("neverd_simplify_result_dispose", ctypes.byref(result))
 
 
+def synthesize_expression(
+    expression: str,
+    *,
+    width: int = 32,
+    max_cost: int = 0,
+    max_samples: int = 0,
+    verify_samples: int = 0,
+    max_work: int = 0,
+    max_leaves: int = 0,
+    max_constants: int = 0,
+    stochastic_slots: int = 0,
+    stochastic_restarts: int = 0,
+    stochastic_iterations: int = 0,
+    solver_max_conflicts: int = 0,
+    solver_max_propagations: int = 0,
+    solver_max_watch_visits: int = 0,
+    exhaustive: bool = False,
+    host: HostAPI | None = None,
+) -> SynthesisResult:
+    """Search for a shorter expression and commit only a proven equivalent.
+
+    Search and proof budgets remain separate.  ``exhaustive=True`` is the
+    explicit opt-in that removes their engine-side ceilings together with the
+    native parser's nesting and width policy ceilings.  No additional Python
+    limit is added; physical memory and IR representation limits still apply.
+    """
+
+    text = _utf8_argument("expression", expression, allow_empty=False)
+    options = NeverDSynthesizeOptions()
+    options.struct_size = ctypes.sizeof(NeverDSynthesizeOptions)
+    options.width = _unsigned("width", width, 32)
+    options.max_cost = _size_t("max_cost", max_cost)
+    options.max_samples = _size_t("max_samples", max_samples)
+    options.verify_samples = _unsigned("verify_samples", verify_samples, 32)
+    options.max_work = _size_t("max_work", max_work)
+    options.max_leaves = _unsigned("max_leaves", max_leaves, 32)
+    options.max_constants = _unsigned("max_constants", max_constants, 32)
+    options.stochastic_slots = _unsigned("stochastic_slots", stochastic_slots, 32)
+    options.stochastic_restarts = _unsigned(
+        "stochastic_restarts", stochastic_restarts, 32
+    )
+    options.stochastic_iterations = _size_t(
+        "stochastic_iterations", stochastic_iterations
+    )
+    options.solver_max_conflicts = _unsigned(
+        "solver_max_conflicts", solver_max_conflicts, 64
+    )
+    options.solver_max_propagations = _unsigned(
+        "solver_max_propagations", solver_max_propagations, 64
+    )
+    options.solver_max_watch_visits = _unsigned(
+        "solver_max_watch_visits", solver_max_watch_visits, 64
+    )
+    options.exhaustive = 1 if _boolean("exhaustive", exhaustive) else 0
+
+    result = NeverDSynthesizeResult()
+    result.struct_size = ctypes.sizeof(NeverDSynthesizeResult)
+    library = host if host is not None else _simplify_host()
+    status = library.call(
+        "neverd_synthesize_expr", text, ctypes.byref(options), ctypes.byref(result)
+    )
+    try:
+        if int(status) != 0:
+            raise NeverDError("NeverD refused the synthesis request")
+        if not result.ok:
+            raise ExpressionSyntaxError(
+                (result.error or b"").decode("utf-8", errors="replace"),
+                int(result.error_offset),
+            )
+        counterexample = None
+        if result.counterexample_json:
+            try:
+                counterexample = json.loads(
+                    result.counterexample_json.decode("utf-8", errors="strict")
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise NeverDError(
+                    "NeverD returned an invalid synthesis counterexample"
+                ) from error
+        return SynthesisResult(
+            input=(result.input or b"").decode("utf-8", errors="strict"),
+            output=(result.output or b"").decode("utf-8", errors="strict"),
+            changed=bool(result.changed),
+            cost_before=int(result.cost_before),
+            cost_after=int(result.cost_after),
+            inputs=int(result.inputs),
+            candidate_cost=int(result.candidate_cost),
+            outcome=SynthesisOutcome(int(result.outcome)),
+            proof_status=ProofStatus(int(result.proof_status)),
+            search_work=int(result.search_work),
+            proof_queries=int(result.proof_queries),
+            proof_conflicts=int(result.proof_conflicts),
+            proof_propagations=int(result.proof_propagations),
+            proof_watch_visits=int(result.proof_watch_visits),
+            counterexample=counterexample,
+        )
+    finally:
+        library.call("neverd_synthesize_result_dispose", ctypes.byref(result))
+
+
+def optimize_llvm_ir(
+    ir: str,
+    *,
+    mode: OptimizationMode | int = OptimizationMode.DEFAULT,
+    llvm_level: LLVMOptimizationLevel | int = LLVMOptimizationLevel.DEFAULT,
+    max_rounds: int = 0,
+    enable_synthesis: bool = False,
+    synthesis_max_cost: int = 0,
+    synthesis_max_samples: int = 0,
+    synthesis_verify_samples: int = 0,
+    synthesis_max_work: int = 0,
+    synthesis_max_leaves: int = 0,
+    synthesis_max_constants: int = 0,
+    synthesis_stochastic_slots: int = 0,
+    synthesis_stochastic_restarts: int = 0,
+    synthesis_stochastic_iterations: int = 0,
+    solver_max_conflicts: int = 0,
+    solver_max_propagations: int = 0,
+    solver_max_watch_visits: int = 0,
+    exhaustive: bool = False,
+    host: HostAPI | None = None,
+) -> LLVMOptimizationResult:
+    """Run NeverD's transactional semantic and standard LLVM pipeline.
+
+    Synthesis policy requires ``enable_synthesis=True`` and is unavailable in
+    conservative mode, whose contract excludes semantic value rewriting.
+    """
+
+    text = _utf8_argument("LLVM IR", ir, allow_empty=False)
+    options = NeverDOptimizeLLVMOptions()
+    options.struct_size = ctypes.sizeof(NeverDOptimizeLLVMOptions)
+    mode_value = _enum_value("optimization mode", mode, OptimizationMode)
+    options.mode = mode_value
+    options.llvm_level = _enum_value(
+        "LLVM optimization level", llvm_level, LLVMOptimizationLevel
+    )
+    options.max_rounds = _unsigned("max_rounds", max_rounds, 32)
+    synthesis_enabled = _boolean("enable_synthesis", enable_synthesis)
+    options.enable_synthesis = 1 if synthesis_enabled else 0
+    options.synthesis_max_cost = _size_t(
+        "synthesis_max_cost", synthesis_max_cost
+    )
+    options.synthesis_max_samples = _size_t(
+        "synthesis_max_samples", synthesis_max_samples
+    )
+    options.synthesis_verify_samples = _unsigned(
+        "synthesis_verify_samples", synthesis_verify_samples, 32
+    )
+    options.synthesis_max_work = _size_t(
+        "synthesis_max_work", synthesis_max_work
+    )
+    options.synthesis_max_leaves = _unsigned(
+        "synthesis_max_leaves", synthesis_max_leaves, 32
+    )
+    options.synthesis_max_constants = _unsigned(
+        "synthesis_max_constants", synthesis_max_constants, 32
+    )
+    options.synthesis_stochastic_slots = _unsigned(
+        "synthesis_stochastic_slots", synthesis_stochastic_slots, 32
+    )
+    options.synthesis_stochastic_restarts = _unsigned(
+        "synthesis_stochastic_restarts", synthesis_stochastic_restarts, 32
+    )
+    options.synthesis_stochastic_iterations = _size_t(
+        "synthesis_stochastic_iterations", synthesis_stochastic_iterations
+    )
+    options.solver_max_conflicts = _unsigned(
+        "solver_max_conflicts", solver_max_conflicts, 64
+    )
+    options.solver_max_propagations = _unsigned(
+        "solver_max_propagations", solver_max_propagations, 64
+    )
+    options.solver_max_watch_visits = _unsigned(
+        "solver_max_watch_visits", solver_max_watch_visits, 64
+    )
+    options.exhaustive = 1 if _boolean("exhaustive", exhaustive) else 0
+    if synthesis_enabled and mode_value == int(OptimizationMode.CONSERVATIVE):
+        raise ValueError("enable_synthesis is incompatible with conservative mode")
+    if not synthesis_enabled and any(
+        (
+            options.synthesis_max_cost,
+            options.synthesis_max_samples,
+            options.synthesis_verify_samples,
+            options.synthesis_max_work,
+            options.synthesis_max_leaves,
+            options.synthesis_max_constants,
+            options.synthesis_stochastic_slots,
+            options.synthesis_stochastic_restarts,
+            options.synthesis_stochastic_iterations,
+            options.solver_max_conflicts,
+            options.solver_max_propagations,
+            options.solver_max_watch_visits,
+        )
+    ):
+        raise ValueError("synthesis and solver options require enable_synthesis")
+
+    result = NeverDOptimizeLLVMResult()
+    result.struct_size = ctypes.sizeof(NeverDOptimizeLLVMResult)
+    library = host if host is not None else _simplify_host()
+    status = library.call(
+        "neverd_optimize_llvm_ir", text, ctypes.byref(options), ctypes.byref(result)
+    )
+    try:
+        if int(status) != 0:
+            raise NeverDError("NeverD refused the LLVM optimization request")
+        if not result.ok:
+            message = (result.error or b"").decode("utf-8", errors="replace")
+            stop = OptimizationStop(int(result.stop))
+            if stop is OptimizationStop.INPUT_INVALID and result.error_line:
+                raise LLVMIRSyntaxError(
+                    message or "invalid LLVM IR",
+                    int(result.error_line),
+                    int(result.error_column),
+                )
+            raise NeverDError(message or f"LLVM optimization stopped: {stop.name}")
+        if not result.output_ir:
+            raise NeverDError("NeverD returned no committed LLVM IR")
+        return LLVMOptimizationResult(
+            output_ir=result.output_ir.decode("utf-8", errors="strict"),
+            changed=bool(result.changed),
+            stop=OptimizationStop(int(result.stop)),
+            functions_visited=int(result.functions_visited),
+            rounds=int(result.rounds),
+            semantic_rewrites=int(result.semantic_rewrites),
+            search_work=int(result.search_work),
+            proof_queries=int(result.proof_queries),
+            proof_conflicts=int(result.proof_conflicts),
+            proof_propagations=int(result.proof_propagations),
+            proof_watch_visits=int(result.proof_watch_visits),
+        )
+    finally:
+        library.call(
+            "neverd_optimize_llvm_ir_result_dispose", ctypes.byref(result)
+        )
+
+
 __all__ = [
     "Event",
     "EventType",
     "ExpressionSyntaxError",
     "Function",
     "NeverDError",
+    "LLVMIRSyntaxError",
+    "LLVMOptimizationLevel",
+    "LLVMOptimizationResult",
+    "OptimizationMode",
+    "OptimizationStop",
     "OutputLanguage",
     "PatchResult",
     "Plugin",
     "PluginSpec",
     "PluginType",
+    "ProofStatus",
     "RawSessionAPI",
     "Session",
     "SimplifyEvidence",
     "SimplifyOutcome",
     "SimplifyResult",
+    "SynthesisOutcome",
+    "SynthesisResult",
     "SymbolicExploration",
     "SymbolicPath",
     "simplify_expression",
+    "synthesize_expression",
+    "optimize_llvm_ir",
 ]

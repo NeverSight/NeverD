@@ -181,17 +181,16 @@ bool ARMLifter::liftControl(LiftState &S, const cs_insn *Insn,
   case ARM_INS_PAC:
   case ARM_INS_PACBTI:
   case ARM_INS_PACG:
-    S.emitIntrinsic(Intrinsic::ArmAut);
-    break;
   case ARM_INS_AUT:
-    S.emitIntrinsic(Intrinsic::ArmAut);
-    break;
   case ARM_INS_AUTG:
-    S.emitIntrinsic(Intrinsic::ArmAutg);
-    break;
   case ARM_INS_BXAUT:
-    S.emitIntrinsic(Intrinsic::ArmBxaut);
-    break;
+    // These instructions do not share authentication semantics.  Several
+    // restore privileged state, change execution mode, access the security
+    // extension, or authenticate a destination with distinct operands.  A
+    // placeholder intrinsic would turn unsupported instructions into valid
+    // but incorrect IR, so strict lifting must fail closed until each has a
+    // typed state-transition contract.
+    return false;
 
   // Coprocessor (traditional CP14/CP15 access — system side effects)
   case ARM_INS_MCR:
@@ -212,70 +211,48 @@ bool ARMLifter::liftControl(LiftState &S, const cs_insn *Insn,
   case ARM_INS_STC2:
   case ARM_INS_STC2L:
   case ARM_INS_STCL:
-    S.emitIntrinsic(Intrinsic::ArmMsr);
-    break;
-  // CDE (Custom Datapath Extension)
+    // Coprocessor forms differ in register direction, width, addressing, and
+    // device side effects.  Treating all of them as MSR loses both data flow
+    // and architectural state.
+    return false;
+  // CDE (Custom Datapath Extension).  These encodings carry
+  // implementation-defined coprocessor operands.  Operand-free placeholders
+  // invented an R0 definition and are therefore less truthful than rejecting
+  // the instruction.
   case ARM_INS_CX1:
-    S.emitIntrinsic(Intrinsic::ArmCx1);
-    break;
   case ARM_INS_CX1A:
-    S.emitIntrinsic(Intrinsic::ArmCx1a);
-    break;
   case ARM_INS_CX1D:
-    S.emitIntrinsic(Intrinsic::ArmCx1d);
-    break;
   case ARM_INS_CX1DA:
-    S.emitIntrinsic(Intrinsic::ArmCx1da);
-    break;
   case ARM_INS_CX2:
-    S.emitIntrinsic(Intrinsic::ArmCx2);
-    break;
   case ARM_INS_CX2A:
-    S.emitIntrinsic(Intrinsic::ArmCx2a);
-    break;
   case ARM_INS_CX2D:
-    S.emitIntrinsic(Intrinsic::ArmCx2d);
-    break;
   case ARM_INS_CX2DA:
-    S.emitIntrinsic(Intrinsic::ArmCx2da);
-    break;
   case ARM_INS_CX3:
-    S.emitIntrinsic(Intrinsic::ArmCx3);
-    break;
   case ARM_INS_CX3A:
-    S.emitIntrinsic(Intrinsic::ArmCx3a);
-    break;
   case ARM_INS_CX3D:
-    S.emitIntrinsic(Intrinsic::ArmCx3d);
-    break;
   case ARM_INS_CX3DA:
-    S.emitIntrinsic(Intrinsic::ArmCx3da);
-    break;
+    return false;
 
   // MVE loops
   case ARM_INS_DLS:
   case ARM_INS_DLSTP:
   case ARM_INS_WLS:
   case ARM_INS_WLSTP:
-    S.emitIntrinsic(Intrinsic::ArmLe);
-    break;
   case ARM_INS_LE:
-    S.emitIntrinsic(Intrinsic::ArmLe);
-    break;
   case ARM_INS_LETP:
-    S.emitIntrinsic(Intrinsic::ArmLetp);
-    break;
+    // Loop instructions update hidden architectural loop state; substituting
+    // LE for every form discards that transition.
+    return false;
 
   // Branch future (M-profile)
   case ARM_INS_BF:
   case ARM_INS_BFL:
   case ARM_INS_BFLX:
   case ARM_INS_BFX:
-    S.emitIntrinsic(Intrinsic::ArmBfcsel);
-    break;
   case ARM_INS_BFCSEL:
-    S.emitIntrinsic(Intrinsic::ArmBfcsel);
-    break;
+    // Branch-future instructions have distinct control-flow and state
+    // contracts.  They cannot be represented by an operand-free BFCSEL.
+    return false;
 
   // AES — AESE/AESD are destructive (Vd = op(Vd, Vm)); AESMC/AESIMC mix only
   // the source.  Map to the specific ARM NEON crypto intrinsic so codegen emits

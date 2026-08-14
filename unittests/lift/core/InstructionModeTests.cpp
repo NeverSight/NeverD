@@ -1,10 +1,84 @@
-#include "neverd/support/BinaryEncoding.h"
-#include "neverd/support/TargetCodegenInfo.h"
-#include "neverd/decode/Decoder.h"
-
 #include "gtest/gtest.h"
 
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/LowIR.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/TargetCodegenInfo.h"
+
 using namespace neverd;
+
+TEST(LowControlTarget, CanonicalizesARMInterworkingTargets) {
+  auto Zero = canonicalizeLowControlTarget(
+      0, InstructionMode::ARM, LowInstructionTargetMode::FromTargetBit0);
+  ASSERT_TRUE(static_cast<bool>(Zero));
+  EXPECT_EQ(Zero->Address, 0u);
+  EXPECT_EQ(Zero->Mode, InstructionMode::ARM);
+
+  auto ThumbZero = canonicalizeLowControlTarget(
+      1, InstructionMode::ARM, LowInstructionTargetMode::FromTargetBit0);
+  ASSERT_TRUE(static_cast<bool>(ThumbZero));
+  EXPECT_EQ(ThumbZero->Address, 0u);
+  EXPECT_EQ(ThumbZero->Mode, InstructionMode::Thumb);
+
+  auto Thumb = canonicalizeLowControlTarget(
+      0x1001, InstructionMode::ARM, LowInstructionTargetMode::FromTargetBit0);
+  ASSERT_TRUE(static_cast<bool>(Thumb));
+  EXPECT_EQ(Thumb->Address, 0x1000u);
+  EXPECT_EQ(Thumb->Mode, InstructionMode::Thumb);
+
+  auto FixedARM = canonicalizeLowControlTarget(0x2000, InstructionMode::Thumb,
+                                               LowInstructionTargetMode::ARM);
+  ASSERT_TRUE(static_cast<bool>(FixedARM));
+  EXPECT_EQ(FixedARM->Address, 0x2000u);
+  EXPECT_EQ(FixedARM->Mode, InstructionMode::ARM);
+
+  auto FixedThumb = canonicalizeLowControlTarget(
+      0x2002, InstructionMode::ARM, LowInstructionTargetMode::Thumb);
+  ASSERT_TRUE(static_cast<bool>(FixedThumb));
+  EXPECT_EQ(FixedThumb->Address, 0x2002u);
+  EXPECT_EQ(FixedThumb->Mode, InstructionMode::Thumb);
+
+  auto Preserved = canonicalizeLowControlTarget(
+      0x3000, InstructionMode::Thumb, LowInstructionTargetMode::Preserve);
+  ASSERT_TRUE(static_cast<bool>(Preserved));
+  EXPECT_EQ(Preserved->Address, 0x3000u);
+  EXPECT_EQ(Preserved->Mode, InstructionMode::Thumb);
+
+  auto WideDefault =
+      canonicalizeLowControlTarget(uint64_t{1} << 40, InstructionMode::Default,
+                                   LowInstructionTargetMode::Preserve);
+  ASSERT_TRUE(static_cast<bool>(WideDefault));
+  EXPECT_EQ(WideDefault->Address, uint64_t{1} << 40);
+  EXPECT_EQ(WideDefault->Mode, InstructionMode::Default);
+}
+
+TEST(LowControlTarget, RejectsInvalidModesAlignmentAndAddressOverflow) {
+  auto ExpectInvalid = [](uint64_t RawTarget, InstructionMode SourceMode,
+                          LowInstructionTargetMode TargetMode) {
+    auto Target =
+        canonicalizeLowControlTarget(RawTarget, SourceMode, TargetMode);
+    EXPECT_FALSE(Target);
+    if (!Target)
+      llvm::consumeError(Target.takeError());
+  };
+
+  ExpectInvalid(InvalidVA, InstructionMode::Default,
+                LowInstructionTargetMode::Preserve);
+  ExpectInvalid(uint64_t{1} << 32, InstructionMode::ARM,
+                LowInstructionTargetMode::Preserve);
+  ExpectInvalid(0x1002, InstructionMode::ARM,
+                LowInstructionTargetMode::Preserve);
+  ExpectInvalid(0x1001, InstructionMode::Thumb,
+                LowInstructionTargetMode::Preserve);
+  ExpectInvalid(0x1002, InstructionMode::Thumb,
+                LowInstructionTargetMode::FromTargetBit0);
+  ExpectInvalid(0x1000, InstructionMode::Default,
+                LowInstructionTargetMode::FromTargetBit0);
+  ExpectInvalid(0x1000, static_cast<InstructionMode>(0xff),
+                LowInstructionTargetMode::Preserve);
+  ExpectInvalid(0x1000, InstructionMode::ARM,
+                static_cast<LowInstructionTargetMode>(0xff));
+}
 
 TEST(InstructionMode, NormalizesAndSerializesThumbCodeAddresses) {
   EXPECT_EQ(normalizeCodeAddress(0x1001, Arch::ARM, InstructionMode::Thumb),
@@ -13,9 +87,9 @@ TEST(InstructionMode, NormalizesAndSerializesThumbCodeAddresses) {
             0x1001u);
   EXPECT_EQ(normalizeCodeAddress(0x1001, Arch::ARM, InstructionMode::ARM),
             0x1001u);
-  EXPECT_EQ(serializeCodePointer(0x1000, Arch::AArch64,
-                                 InstructionMode::Default),
-            0x1000u);
+  EXPECT_EQ(
+      serializeCodePointer(0x1000, Arch::AArch64, InstructionMode::Default),
+      0x1000u);
 }
 
 TEST(InstructionMode, DecoderSelectsThumb2WithoutChangingARMDefault) {
@@ -36,13 +110,13 @@ TEST(InstructionMode, DecoderSelectsThumb2WithoutChangingARMDefault) {
 
 TEST(InstructionMode, ThumbUsesHalfwordNopsAndARMUsesWordNops) {
   std::vector<uint8_t> Thumb;
-  ASSERT_TRUE(getTargetCodegenInfo(Arch::ARM, InstructionMode::Thumb)
-                  .appendNop(Thumb));
+  ASSERT_TRUE(
+      getTargetCodegenInfo(Arch::ARM, InstructionMode::Thumb).appendNop(Thumb));
   EXPECT_EQ(Thumb, (std::vector<uint8_t>{0x00, 0xbf}));
 
   std::vector<uint8_t> Arm;
-  ASSERT_TRUE(getTargetCodegenInfo(Arch::ARM, InstructionMode::ARM)
-                  .appendNop(Arm));
+  ASSERT_TRUE(
+      getTargetCodegenInfo(Arch::ARM, InstructionMode::ARM).appendNop(Arm));
   EXPECT_EQ(Arm.size(), 4u);
 }
 
@@ -57,16 +131,15 @@ TEST(InstructionMode, ThumbBWChecksSignedRangeAndSafeSpan) {
   auto TCI = getTargetCodegenInfo(Arch::ARM, InstructionMode::Thumb);
   for (int64_t Diff : {-(int64_t(1) << 24), (int64_t(1) << 24) - 2}) {
     std::vector<uint8_t> Code(6, 0xaa);
-    EXPECT_TRUE(TCI.writeTrampoline(Code, 0, uint64_t(0x2000004 + Diff),
-                                    0x2000000, 4));
+    EXPECT_TRUE(
+        TCI.writeTrampoline(Code, 0, uint64_t(0x2000004 + Diff), 0x2000000, 4));
     EXPECT_EQ(Code[4], 0xaa);
     EXPECT_EQ(Code[5], 0xaa);
   }
-  for (int64_t Diff : {-(int64_t(1) << 24) - 2,
-                       (int64_t(1) << 24)}) {
+  for (int64_t Diff : {-(int64_t(1) << 24) - 2, (int64_t(1) << 24)}) {
     std::vector<uint8_t> Code(6, 0xaa);
-    EXPECT_FALSE(TCI.writeTrampoline(Code, 0, uint64_t(0x2000004 + Diff),
-                                     0x2000000, 4));
+    EXPECT_FALSE(
+        TCI.writeTrampoline(Code, 0, uint64_t(0x2000004 + Diff), 0x2000000, 4));
     EXPECT_EQ(Code, (std::vector<uint8_t>(6, 0xaa)));
   }
   std::vector<uint8_t> Short(6, 0xaa);
@@ -76,8 +149,8 @@ TEST(InstructionMode, ThumbBWChecksSignedRangeAndSafeSpan) {
 
 TEST(InstructionMode, ThumbBWMatchesClangForwardAndBackwardEncodings) {
   // Generated with:
-  // clang -target thumbv7-pc-windows-msvc -c /tmp/thumb-bw.s -o /tmp/thumb-bw.obj
-  // /usr/bin/objdump -d /tmp/thumb-bw.obj
+  // clang -target thumbv7-pc-windows-msvc -c /tmp/thumb-bw.s -o
+  // /tmp/thumb-bw.obj /usr/bin/objdump -d /tmp/thumb-bw.obj
   auto TCI = getTargetCodegenInfo(Arch::ARM, InstructionMode::Thumb);
   std::vector<uint8_t> Forward(4);
   ASSERT_TRUE(TCI.writeTrampoline(Forward, 0, 0x1008, 0x1000, 4));
@@ -99,7 +172,7 @@ TEST(InstructionMode, LegacyTrampolinesHonorExactOverwriteLimits) {
     EXPECT_EQ(TooShort, (std::vector<uint8_t>(16, 0xaa)));
 
     std::vector<uint8_t> Exact(16, 0xaa);
-    EXPECT_TRUE(TCI.writeTrampoline(Exact, 0, 0x1100, 0x1000,
-                                    TCI.trampolineSize()));
+    EXPECT_TRUE(
+        TCI.writeTrampoline(Exact, 0, 0x1100, 0x1000, TCI.trampolineSize()));
   }
 }

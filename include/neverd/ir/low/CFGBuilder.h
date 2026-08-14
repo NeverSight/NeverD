@@ -44,18 +44,23 @@ private:
   struct InsnRecord {
     va_t Addr;
     uint16_t Size;
+    InstructionMode Mode = InstructionMode::Default;
     std::vector<LowOp> Ops;
     bool IsBranch = false;
     bool IsCond = false;
     bool IsCall = false;
     bool IsRet = false;
     bool IsIndirect = false;
+    bool IsOpaqueTerminator = false;
+    bool IsResumableTerminator = false;
+    bool IsInstructionGuard = false;
     /// A direct CALL to a known no-return libc function
-    /// (longjmp/abort/exit/...). Such a call terminates control flow, so
-    /// exploration stops after it and no fall-through successor edge is wired
-    /// to the following block.
+    /// (longjmp/abort/exit/...). An unconditional call terminates control flow;
+    /// a predicated call retains its false-path fall-through.
     bool IsNoReturnCall = false;
     va_t BranchTarget = InvalidVA;
+    std::optional<uint64_t> Immediate;
+    LowInstructionTargetMode TargetMode = LowInstructionTargetMode::Preserve;
     std::vector<va_t> JumpTableTargets;
 
     /// x87 stack-top (TOP) at this instruction's entry/exit in lift (worklist)
@@ -71,6 +76,8 @@ private:
   void linkSuccessors(LowFunc &Func, const std::map<va_t, int> &AddrToBlock);
   void linkExceptionalSuccessors(LowFunc &Func);
   void classifyInsn(InsnRecord &Rec);
+  LowInstructionBoundary makeInstructionBoundary(const InsnRecord &Rec,
+                                                 uint64_t FirstOp) const;
 
   /// Re-base x87 ST(i) register references so each block's TOP matches its CFG
   /// predecessor's exit TOP rather than the worklist lift order.  The lifter

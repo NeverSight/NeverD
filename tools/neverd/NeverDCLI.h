@@ -22,8 +22,8 @@
 #define NEVERD_TOOLS_NEVERDCLI_H
 
 #include "neverd/evm/bytecode/EVMOpcodes.h"
-#include "neverd/sbf/runtime/SBFRuntimeProfile.h"
 #include "neverd/sbf/image/SBFVersion.h"
+#include "neverd/sbf/runtime/SBFRuntimeProfile.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -130,6 +130,7 @@ extern llvm::cl::SubCommand DashboardCmd;
 extern llvm::cl::SubCommand SigsCmd;
 extern llvm::cl::SubCommand SimplifyCmd;
 extern llvm::cl::SubCommand SymbolicCmd;
+extern llvm::cl::SubCommand OptimizeIRCmd;
 
 //===----------------------------------------------------------------------===//
 // Options (defined in NeverDCLIOptions.cpp)
@@ -267,6 +268,40 @@ extern llvm::cl::opt<unsigned> SimplifyVerifySamples;
 extern llvm::cl::opt<bool> SimplifyAllowGrowth;
 extern llvm::cl::opt<bool> SimplifyStats;
 extern llvm::cl::opt<bool> SimplifyJson;
+extern llvm::cl::opt<bool> SimplifySynthesize;
+extern llvm::cl::opt<unsigned long long> SimplifyMaxCost;
+extern llvm::cl::opt<unsigned long long> SimplifyMaxSamples;
+extern llvm::cl::opt<unsigned> SimplifyMaxLeaves;
+extern llvm::cl::opt<unsigned> SimplifyMaxConstants;
+extern llvm::cl::opt<unsigned> SimplifyStochasticSlots;
+extern llvm::cl::opt<unsigned> SimplifyStochasticRestarts;
+extern llvm::cl::opt<unsigned long long> SimplifyStochasticIterations;
+extern llvm::cl::opt<unsigned long long> SimplifySolverMaxConflicts;
+extern llvm::cl::opt<unsigned long long> SimplifySolverMaxPropagations;
+extern llvm::cl::opt<unsigned long long> SimplifySolverMaxWatchVisits;
+
+// Optimize textual LLVM IR.
+extern llvm::cl::opt<std::string> OptimizeIRInput;
+extern llvm::cl::opt<std::string> OptimizeIROutput;
+extern llvm::cl::opt<neverd_optimization_mode_t> OptimizeIRMode;
+extern llvm::cl::opt<neverd_llvm_optimization_level_t> OptimizeIRLevel;
+extern llvm::cl::opt<unsigned> OptimizeIRMaxRounds;
+extern llvm::cl::opt<bool> OptimizeIRSynthesize;
+extern llvm::cl::opt<unsigned long long> OptimizeIRSynthesisMaxCost;
+extern llvm::cl::opt<unsigned long long> OptimizeIRSynthesisMaxSamples;
+extern llvm::cl::opt<unsigned> OptimizeIRSynthesisVerifySamples;
+extern llvm::cl::opt<unsigned long long> OptimizeIRSynthesisMaxWork;
+extern llvm::cl::opt<unsigned> OptimizeIRSynthesisMaxLeaves;
+extern llvm::cl::opt<unsigned> OptimizeIRSynthesisMaxConstants;
+extern llvm::cl::opt<unsigned> OptimizeIRSynthesisStochasticSlots;
+extern llvm::cl::opt<unsigned> OptimizeIRSynthesisStochasticRestarts;
+extern llvm::cl::opt<unsigned long long>
+    OptimizeIRSynthesisStochasticIterations;
+extern llvm::cl::opt<unsigned long long> OptimizeIRSolverMaxConflicts;
+extern llvm::cl::opt<unsigned long long> OptimizeIRSolverMaxPropagations;
+extern llvm::cl::opt<unsigned long long> OptimizeIRSolverMaxWatchVisits;
+extern llvm::cl::opt<bool> OptimizeIRExhaustive;
+extern llvm::cl::opt<bool> OptimizeIRJson;
 
 //===----------------------------------------------------------------------===//
 // Command handlers
@@ -316,6 +351,10 @@ int runDiff();
 // NeverDCmdSimplify.cpp — semantic optimisation of a written expression.
 // Takes no session: its input is text, not a binary.
 int runSimplify();
+
+// NeverDCmdOptimizeIR.cpp — transactional semantic + LLVM optimization.
+// Takes textual IR rather than a binary session.
+int runOptimizeIR();
 
 // NeverDCmdPipeline.cpp — engine-driven operations.
 bool configureAnalysisSession(neverd_session_t Sess);

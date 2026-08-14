@@ -18,10 +18,10 @@
 /// convenience.
 ///
 /// An operation the engine cannot model exactly writes a fresh input to its
-/// destination rather than stopping.  A call, a square root, a population
-/// count: the value becomes an unknown with a name and execution continues.
-/// The explorer records that abstraction so callers can distinguish a complete
-/// walk from an exact one.
+/// destination rather than stopping.  A call, a square root, a vector
+/// intrinsic: the value becomes an unknown with a name and execution
+/// continues.  The explorer records that abstraction so callers can
+/// distinguish a complete walk from an exact one.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -36,6 +36,13 @@ namespace neverd::symbolic {
 namespace {
 
 constexpr uint32_t kByteBits = 8;
+
+/// Widest operand the bit-count models are expanded over.  Each of them costs
+/// a node per bit, so letting a 256-bit word through would turn one operation
+/// into several hundred nodes and charge every later pass for it.  Above this
+/// the operation is named instead, which is the same answer the engine gives
+/// anything else it declines to write out.
+constexpr uint32_t kMaxBitCountWidth = 64;
 
 /// Width of an operand in bits, or zero when it does not declare one.
 uint32_t widthOf(const NdVar &V) { return uint32_t(V.Size) * kByteBits; }
@@ -307,6 +314,100 @@ StepResult SymExec::stepBoolean(const LowOp &Op) {
   return StepResult::Continue;
 }
 
+//===----------------------------------------------------------------------===//
+// Bit counts and bit fields
+//===----------------------------------------------------------------------===//
+
+// Counting bits, and moving a field of them.
+//
+// Every one of these is exact, and each is here because the concrete emulator
+// computes it.  An opcode one engine executes and the other replaces with an
+// unknown is a disagreement that shows up as a lost jump table or as a value
+// that looks independent of something it depends on, somewhere else entirely.
+//
+// The counts are taken at the width the operand declares, in keeping with the
+// rest of this file: the leading zeros of a byte are not the leading zeros of
+// the machine word it was loaded into.
+StepResult SymExec::stepBits(const LowOp &Op) {
+  if (Op.NumInputs < 1)
+    return unmodelled(Op);
+
+  SymRef A = read(Op.Inputs[0]);
+  const uint32_t Width = Ctx.width(A);
+
+  // A constant operand of a bit-field operation, as a bit index.  A variable
+  // one has no model: the field it names is a different mask per assignment
+  // and the expression language has no way to write that.
+  auto bitIndex = [&](const NdVar &V) -> std::optional<uint32_t> {
+    std::optional<llvm::APInt> Value = Ctx.asConst(read(V));
+    if (!Value || Value->getActiveBits() > 32)
+      return std::nullopt;
+    return uint32_t(Value->getZExtValue());
+  };
+
+  switch (Op.Opcode) {
+  case NdOp::POPCOUNT: {
+    if (Width > kMaxBitCountWidth)
+      return unmodelled(Op);
+    // A bit at a time, because the expression language has no population
+    // count and nothing shorter is exact.  The sum cannot overflow the width
+    // it is taken at: a W-bit word holds at most W ones, and W < 2^W.
+    llvm::SmallVector<SymRef, 64> Bits;
+    Bits.reserve(Width);
+    for (uint32_t I = 0; I < Width; ++I)
+      Bits.push_back(Ctx.mkZExtOrTrunc(Ctx.mkExtract(A, I, 1), Width));
+    writeResult(Op.Output, Ctx.mkAdd(Bits));
+    return StepResult::Continue;
+  }
+
+  case NdOp::LZCOUNT: {
+    if (Width > kMaxBitCountWidth)
+      return unmodelled(Op);
+    // Built from the bottom bit up so that the test of the most significant
+    // one ends up outermost, which is what makes the highest set bit the one
+    // that decides.  A word with no bits set falls through to the width.
+    SymRef Result = Ctx.mkConst(Width, Width);
+    for (uint32_t I = 0; I < Width; ++I)
+      Result = Ctx.mkIte(Ctx.mkExtract(A, I, 1),
+                         Ctx.mkConst(Width, Width - 1 - I), Result);
+    writeResult(Op.Output, Result);
+    return StepResult::Continue;
+  }
+
+  case NdOp::INSERT: {
+    // Base, value, position and length, the last two in bits.
+    if (Op.NumInputs < 4)
+      return unmodelled(Op);
+    std::optional<uint32_t> Low = bitIndex(Op.Inputs[2]);
+    std::optional<uint32_t> Bits = bitIndex(Op.Inputs[3]);
+    if (!Low || !Bits || *Bits == 0 || *Low >= Width || *Bits > Width - *Low)
+      return unmodelled(Op);
+    const llvm::APInt Mask = llvm::APInt::getBitsSet(Width, *Low, *Low + *Bits);
+    SymRef Field = fit(read(Op.Inputs[1]), Width);
+    writeResult(Op.Output,
+                Ctx.mkOr(Ctx.mkAnd(A, Ctx.mkConst(~Mask)),
+                         Ctx.mkAnd(Ctx.mkShl(Field, Ctx.mkConst(Width, *Low)),
+                                   Ctx.mkConst(Mask))));
+    return StepResult::Continue;
+  }
+
+  case NdOp::EXTRACT: {
+    // Base, position and length, the last two in bits.
+    if (Op.NumInputs < 3)
+      return unmodelled(Op);
+    std::optional<uint32_t> Low = bitIndex(Op.Inputs[1]);
+    std::optional<uint32_t> Bits = bitIndex(Op.Inputs[2]);
+    if (!Low || !Bits || *Bits == 0 || *Low >= Width || *Bits > Width - *Low)
+      return unmodelled(Op);
+    writeResult(Op.Output, Ctx.mkExtract(A, *Low, *Bits));
+    return StepResult::Continue;
+  }
+
+  default:
+    return unmodelled(Op);
+  }
+}
+
 StepResult SymExec::stepMemory(const LowOp &Op) {
   if (Op.Opcode == NdOp::LOAD) {
     if (Op.NumInputs < 1 || widthOf(Op.Output) == 0)
@@ -352,6 +453,10 @@ StepResult SymExec::stepControl(const LowOp &Op) {
     return StepResult::IndirectBranch;
 
   case NdOp::RETURN:
+    // Some ISAs make the architectural return address explicit in LowIR.
+    // SymExplore uses instruction-boundary metadata to distinguish that
+    // control target from a legacy RETURN operand carrying a semantic value.
+    Target = Op.NumInputs >= 1 ? read(Op.Inputs[0]) : SymRef();
     return StepResult::Return;
 
   case NdOp::CALL:
@@ -360,6 +465,10 @@ StepResult SymExec::stepControl(const LowOp &Op) {
     // unknown, and what it leaves in the registers it is allowed to overwrite
     // is another.  Both are named so execution can continue, but without a
     // callee summary this operation is necessarily an approximation.
+    // Capture the call destination before caller-saved registers are clobbered.
+    // SymExplore consumes it when instruction-boundary metadata proves that the
+    // call does not return.
+    Target = Op.NumInputs >= 1 ? read(Op.Inputs[0]) : SymRef();
     ++Unmodelled;
     State.clobberRegistersExcept(CallPreserved);
     // With no function summary, the callee may write through any pointer it
@@ -423,6 +532,12 @@ StepResult SymExec::step(const LowOp &Op) {
   case NdOp::BOOL_XOR:
     return stepBoolean(Op);
 
+  case NdOp::POPCOUNT:
+  case NdOp::LZCOUNT:
+  case NdOp::INSERT:
+  case NdOp::EXTRACT:
+    return stepBits(Op);
+
   case NdOp::SELECT: {
     if (Op.NumInputs < 3)
       return unmodelled(Op);
@@ -452,9 +567,13 @@ StepResult SymExec::step(const LowOp &Op) {
     return StepResult::Continue;
 
   default:
-    // Everything floating-point, the bit counts, the insert and extract forms,
-    // and whatever a lifter routed through an intrinsic.  Each has a value the
-    // engine cannot express, so each gets one it can name.
+    // Everything floating-point, and whatever a lifter routed through an
+    // intrinsic — a vector operation, a system instruction.  Each has a value
+    // this expression language cannot express at all, rather than one it would
+    // merely be expensive to write out, so each gets a name instead.  The
+    // concrete emulator reaches the same position from the other side: it
+    // invalidates the destination of an intrinsic rather than folding a stale
+    // value into it.
     return unmodelled(Op);
   }
 }

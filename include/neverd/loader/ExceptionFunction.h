@@ -108,7 +108,40 @@ struct ExceptionFunction {
   uint32_t ChainedUnwindInfoRVA = 0;
   std::vector<std::string> Diagnostics;
 
+  /// Replaceable structural and language contributions to the compatibility
+  /// parse summary below.  Appended after the original data fields so existing
+  /// positional aggregate initializers retain their field mapping.  Records
+  /// produced by older decoders may leave this empty; their existing status
+  /// and diagnostics then remain authoritative.
+  std::optional<ExceptionFunctionDecodeProvenance> DecodeProvenance;
+
   ExceptionModel model() const { return getExceptionEncodingModel(Encoding); }
+
+  /// Start tracking independently replaceable parse contributions.
+  ///
+  /// Existing compatibility state becomes the structural baseline so opting
+  /// an older record into provenance cannot silently improve or erase it.
+  ExceptionFunctionDecodeProvenance &establishDecodeProvenance() {
+    if (!DecodeProvenance) {
+      DecodeProvenance.emplace();
+      DecodeProvenance->Structural.ParseStatus = ParseStatus;
+      DecodeProvenance->Structural.Diagnostics = Diagnostics;
+    }
+    return *DecodeProvenance;
+  }
+
+  /// Rebuild the legacy summary fields in a stable, source-defined order.
+  void rebuildParseSummary() {
+    if (!DecodeProvenance)
+      return;
+    ParseStatus =
+        mergeExceptionParseStatus(DecodeProvenance->Structural.ParseStatus,
+                                  DecodeProvenance->Language.ParseStatus);
+    Diagnostics = DecodeProvenance->Structural.Diagnostics;
+    Diagnostics.insert(Diagnostics.end(),
+                       DecodeProvenance->Language.Diagnostics.begin(),
+                       DecodeProvenance->Language.Diagnostics.end());
+  }
 
   /// True when this record carries a decoded language table of any model.
   bool hasLanguageTable() const {

@@ -53,6 +53,47 @@ std::string resolveRoutineName(const BinaryImage &Img, va_t Address,
 /// Determine which runtime produced \p Img.
 LanguageRuntimeInfo detectLanguageRuntime(const BinaryImage &Img);
 
+/// The addresses \p Img installs as personality routines and cannot name.
+///
+/// Every path into \ref classifyPersonalityName starts from a name the image
+/// spells somewhere -- a symbol, an import, an export, a relocation, a
+/// `DW.ref.` slot.  A stripped, statically linked image spells none of them,
+/// so its personality routine is an address and nothing else, and every frame
+/// that installs it lacks a trusted personality-specific schema.  These are
+/// the addresses for which an outside identification is worth attempting, and
+/// only those: a frame whose
+/// personality is already classified -- by name or by a structural proof such
+/// as the one that recognizes mingw's routine from the shape of its language
+/// data -- is left alone.
+///
+/// The result is deduplicated, because one routine serves every frame in the
+/// image that installs it.
+std::vector<va_t> collectUnnamedPersonalityRoutines(const BinaryImage &Img);
+
+/// Adopt \p Name as the routine at \p Address, if the image has nothing to
+/// say about it and the name is one the personality table knows.
+///
+/// This is the one way an identification made outside the loader -- from a
+/// signature match, say -- reaches exception classification.  It is
+/// deliberately narrow, because a wrong personality is worse than an unknown
+/// one: it hands the LSDA decoder a schema the bytes do not follow.  So the
+/// name is refused unless \ref classifyPersonalityName recognizes it, refused
+/// when the image already names the address, and refused when no frame
+/// installs the address as its personality.  Nothing an image says is
+/// overwritten; what was empty is filled in.
+///
+/// On success \p Name is recorded in \ref BinaryImage::Symbols, so the
+/// image-wide passes that read the symbol table see the routine too, and
+/// every frame that installed \p Address is reclassified.  Language data is
+/// decoded again from its retained native provenance under the new schema,
+/// and each frame carries a diagnostic saying the name was inferred rather
+/// than read.  All matching frames and the symbol are committed together;
+/// an unavailable or incomplete language record leaves the image unchanged.
+///
+/// \returns true when the name was adopted.
+bool adoptPersonalityRoutineName(BinaryImage &Img, va_t Address,
+                                 llvm::StringRef Name);
+
 /// True when \p Name is a Rust symbol in either the legacy (`_ZN..17h<hash>E`)
 /// or the v0 (`_R...`) mangling.
 bool isRustMangledName(llvm::StringRef Name);

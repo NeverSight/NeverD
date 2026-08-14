@@ -63,6 +63,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 32
           submodules: recursive
 
       - name: Set up Python
@@ -123,19 +124,35 @@ jobs:
           "$PYTHON" -m unittest \
             scripts.tests.test_debug_build_configuration \
             scripts.tests.test_audit_evm_opcode_metadata \
+            scripts.tests.test_eh_signature_generation \
             -v
           "$PYTHON" -m unittest discover \
             -s pluginsdk/python/tests -v
           "$PYTHON" -m unittest \
+            scripts.tests.test_check_capabilities \
+            scripts.tests.test_check_docs_i18n \
             scripts.tests.test_check_python_plugin_sdk \
             scripts.tests.test_check_source_provenance -v
+          "$PYTHON" scripts/check_capabilities.py
           "$PYTHON" scripts/check_python_plugin_sdk.py
-          "$PYTHON" scripts/check_source_provenance.py
+          "$PYTHON" scripts/check_source_provenance.py --history-commits 16
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
           PYTHON: ${{ matrix.python }}
           PYTHONPATH: pluginsdk/python
+
+      # Ten locales plus the English source is one shared set of files, and
+      # which host reads them cannot change the answer, so one leg settles it
+      # for all three.  It runs before the configure below because a broken
+      # link is worth hearing about in seconds rather than after a build.
+      - name: Check the localized documentation matrix
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          "$PYTHON" scripts/check_docs_i18n.py
+        env:
+          PYTHON: ${{ matrix.python }}
 
       # The corpus is a submodule of pinned real binaries, and the configure
       # below turns its tests on unconditionally so that a checkout which did
@@ -172,6 +189,7 @@ jobs:
             -DCMAKE_C_COMPILER="$CC" \
             -DCMAKE_CXX_COMPILER="$CXX" \
             -DBUILD_TESTING=ON \
+            -DNEVERD_BUILD_PLUGINS=ON \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
             -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON \
             -DPython3_EXECUTABLE="$PYTHON_EXECUTABLE" \
@@ -186,6 +204,16 @@ jobs:
         run: cmake --build build-ci --config Release --parallel "$BUILD_PARALLEL"
         env:
           BUILD_PARALLEL: ${{ matrix.parallel }}
+
+      - name: Run native and Python semantic plugin examples
+        shell: bash
+        run: |
+          build-ci/bin/neverd plugins \
+            --plugin-dir build-ci/bin/plugins \
+            --run "Semantic Optimizer"
+          build-ci/bin/neverd plugins \
+            --plugin-dir build-ci/bin/sdk/python/examples \
+            --run "Python Semantic Optimizer"
 
       - name: Audit and select test profile
         id: inventory

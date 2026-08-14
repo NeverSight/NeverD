@@ -28,8 +28,10 @@ struct BinaryImage;
 struct CompiledImage;
 
 /// Return an executable personality thunk already validated in \p Image.
-/// Language-handler RVAs must name code, whereas an ordinary COFF import
-/// resolver commonly returns the non-executable IAT data slot.
+/// \p SymbolName may be either the canonical runtime name or the stable
+/// `sub_<VA>` alias used for an address-backed lifted body. Language-handler
+/// RVAs must name code, whereas an ordinary COFF import resolver commonly
+/// returns the non-executable IAT data slot.
 std::optional<va_t> findCOFFExceptionPersonalityVA(const BinaryImage &Image,
                                                    llvm::StringRef SymbolName);
 

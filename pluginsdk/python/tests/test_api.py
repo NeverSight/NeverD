@@ -434,6 +434,7 @@ class SimplifyExpressionTests(unittest.TestCase):
         # negation: a zeroed struct has to mean the layered walk.
         self.assertEqual(options.shallow, 1)
         self.assertEqual(options.max_work, ctypes.c_size_t(-1).value)
+        self.assertEqual(options.exhaustive, 1)
 
     def test_raises_with_the_offset_when_the_expression_will_not_read(self) -> None:
         from neverd_plugin import ExpressionSyntaxError, simplify_expression
@@ -455,6 +456,302 @@ class SimplifyExpressionTests(unittest.TestCase):
             simplify_expression("x", host=host)
         self.assertEqual(host.disposals, 1)
 
+
+class _RecordingSynthesisHost:
+    def __init__(self, status: int = 0, **fields: object) -> None:
+        self.status = status
+        self.fields = fields
+        self.options: object | None = None
+        self.expression: bytes | None = None
+        self.disposals = 0
+
+    def call(self, name: str, *arguments: object) -> object:
+        if name == "neverd_synthesize_expr":
+            self.expression = arguments[0]
+            self.options = arguments[1]._obj
+            result = arguments[2]._obj
+            for key, value in self.fields.items():
+                setattr(result, key, value)
+            return self.status
+        if name == "neverd_synthesize_result_dispose":
+            self.disposals += 1
+            return None
+        raise AssertionError(f"unexpected call {name}")
+
+
+class SynthesizeExpressionTests(unittest.TestCase):
+    def test_reports_proof_and_search_telemetry(self) -> None:
+        from neverd_plugin import ProofStatus, SynthesisOutcome
+        from neverd_plugin import synthesize_expression
+
+        host = _RecordingSynthesisHost(
+            ok=1,
+            input=b"(x >> 4) + ((x >> 2) >> 2)",
+            output=b"x >> 3",
+            changed=1,
+            cost_before=9,
+            cost_after=3,
+            inputs=1,
+            candidate_cost=3,
+            outcome=int(SynthesisOutcome.REWRITTEN),
+            proof_status=int(ProofStatus.EQUIVALENT),
+            search_work=80,
+            proof_queries=1,
+            proof_conflicts=7,
+            proof_propagations=11,
+            proof_watch_visits=19,
+        )
+        result = synthesize_expression(
+            "(x >> 4) + ((x >> 2) >> 2)",
+            host=host,
+            width=64,
+            exhaustive=True,
+            solver_max_conflicts=123,
+        )
+
+        self.assertEqual(result.output, "x >> 3")
+        self.assertEqual(result.saved, 6)
+        self.assertIs(result.outcome, SynthesisOutcome.REWRITTEN)
+        self.assertIs(result.proof_status, ProofStatus.EQUIVALENT)
+        self.assertEqual(result.proof_watch_visits, 19)
+        self.assertEqual(host.options.width, 64)
+        self.assertEqual(host.options.exhaustive, 1)
+        self.assertEqual(host.options.solver_max_conflicts, 123)
+        self.assertEqual(host.disposals, 1)
+
+    def test_decodes_a_solver_counterexample(self) -> None:
+        from neverd_plugin import ProofStatus, SynthesisOutcome
+        from neverd_plugin import synthesize_expression
+
+        host = _RecordingSynthesisHost(
+            ok=1,
+            input=b"x",
+            output=b"x",
+            outcome=int(SynthesisOutcome.COUNTEREXAMPLE),
+            proof_status=int(ProofStatus.DIFFERENT),
+            counterexample_json=b'{"x":"0x2a"}',
+        )
+        result = synthesize_expression("x", host=host)
+
+        self.assertEqual(result.counterexample, {"x": "0x2a"})
+        self.assertEqual(host.disposals, 1)
+
+    def test_preserves_an_invalid_proof_disposition(self) -> None:
+        from neverd_plugin import ProofStatus, SynthesisOutcome
+        from neverd_plugin import synthesize_expression
+
+        host = _RecordingSynthesisHost(
+            ok=1,
+            input=b"x + 0",
+            output=b"x + 0",
+            changed=0,
+            outcome=int(SynthesisOutcome.PROOF_INCOMPLETE),
+            proof_status=int(ProofStatus.INVALID),
+        )
+        result = synthesize_expression("x + 0", host=host)
+
+        self.assertFalse(result.changed)
+        self.assertIs(result.outcome, SynthesisOutcome.PROOF_INCOMPLETE)
+        self.assertIs(result.proof_status, ProofStatus.INVALID)
+        self.assertEqual(host.disposals, 1)
+
+    def test_parse_errors_and_refusals_still_dispose(self) -> None:
+        from neverd_plugin import ExpressionSyntaxError, NeverDError
+        from neverd_plugin import synthesize_expression
+
+        parse_host = _RecordingSynthesisHost(
+            ok=0, error=b"expected expression", error_offset=4
+        )
+        with self.assertRaises(ExpressionSyntaxError) as raised:
+            synthesize_expression("(x +", host=parse_host)
+        self.assertEqual(raised.exception.offset, 4)
+        self.assertEqual(parse_host.disposals, 1)
+
+        refused_host = _RecordingSynthesisHost(status=1)
+        with self.assertRaises(NeverDError):
+            synthesize_expression("x", host=refused_host)
+        self.assertEqual(refused_host.disposals, 1)
+
+
+class _RecordingOptimizeHost:
+    def __init__(self, status: int = 0, **fields: object) -> None:
+        self.status = status
+        self.fields = fields
+        self.options: object | None = None
+        self.ir: bytes | None = None
+        self.disposals = 0
+
+    def call(self, name: str, *arguments: object) -> object:
+        if name == "neverd_optimize_llvm_ir":
+            self.ir = arguments[0]
+            self.options = arguments[1]._obj
+            result = arguments[2]._obj
+            for key, value in self.fields.items():
+                setattr(result, key, value)
+            return self.status
+        if name == "neverd_optimize_llvm_ir_result_dispose":
+            self.disposals += 1
+            return None
+        raise AssertionError(f"unexpected call {name}")
+
+
+class OptimizeLLVMIRTests(unittest.TestCase):
+    def test_rejects_conservative_synthesis_before_native_call(self) -> None:
+        from neverd_plugin import OptimizationMode, optimize_llvm_ir
+
+        host = _RecordingOptimizeHost()
+        with self.assertRaisesRegex(ValueError, "conservative"):
+            optimize_llvm_ir(
+                "define void @f() { ret void }",
+                host=host,
+                mode=OptimizationMode.CONSERVATIVE,
+                enable_synthesis=True,
+            )
+        self.assertIsNone(host.options)
+        self.assertEqual(host.disposals, 0)
+
+    def test_rejects_synthesis_policy_without_synthesis(self) -> None:
+        from neverd_plugin import optimize_llvm_ir
+
+        host = _RecordingOptimizeHost()
+        with self.assertRaisesRegex(ValueError, "enable_synthesis"):
+            optimize_llvm_ir(
+                "define void @f() { ret void }",
+                host=host,
+                solver_max_conflicts=1,
+            )
+        self.assertIsNone(host.options)
+        self.assertEqual(host.disposals, 0)
+
+    def test_reports_transaction_and_semantic_telemetry(self) -> None:
+        from neverd_plugin import LLVMOptimizationLevel, OptimizationMode
+        from neverd_plugin import OptimizationStop, optimize_llvm_ir
+
+        host = _RecordingOptimizeHost(
+            ok=1,
+            output_ir=b"define i32 @f() { ret i32 42 }\n",
+            changed=1,
+            stop=int(OptimizationStop.STABLE),
+            functions_visited=2,
+            rounds=4,
+            semantic_rewrites=3,
+            search_work=101,
+            proof_queries=2,
+            proof_conflicts=5,
+            proof_propagations=8,
+            proof_watch_visits=13,
+        )
+        result = optimize_llvm_ir(
+            "define i32 @f() { ret i32 40 }",
+            host=host,
+            mode=OptimizationMode.DEEP,
+            llvm_level=LLVMOptimizationLevel.O3,
+            max_rounds=9,
+            enable_synthesis=True,
+            exhaustive=True,
+        )
+
+        self.assertIn("ret i32 42", result.output_ir)
+        self.assertIs(result.stop, OptimizationStop.STABLE)
+        self.assertEqual(result.semantic_rewrites, 3)
+        self.assertEqual(result.proof_watch_visits, 13)
+        self.assertEqual(host.options.mode, int(OptimizationMode.DEEP))
+        self.assertEqual(host.options.llvm_level, int(LLVMOptimizationLevel.O3))
+        self.assertEqual(host.options.max_rounds, 9)
+        self.assertEqual(host.options.enable_synthesis, 1)
+        self.assertEqual(host.options.exhaustive, 1)
+        self.assertEqual(host.disposals, 1)
+
+    def test_preserves_unsigned_64_bit_telemetry(self) -> None:
+        from neverd_plugin import OptimizationStop, optimize_llvm_ir
+
+        maximum = (1 << 64) - 1
+        host = _RecordingOptimizeHost(
+            ok=1,
+            output_ir=b"define void @f() { ret void }\n",
+            stop=int(OptimizationStop.STABLE),
+            functions_visited=maximum,
+            semantic_rewrites=maximum,
+            search_work=maximum,
+            proof_queries=maximum,
+            proof_conflicts=maximum,
+            proof_propagations=maximum,
+            proof_watch_visits=maximum,
+        )
+        result = optimize_llvm_ir("define void @f() { ret void }", host=host)
+
+        self.assertEqual(result.functions_visited, maximum)
+        self.assertEqual(result.semantic_rewrites, maximum)
+        self.assertEqual(result.search_work, maximum)
+        self.assertEqual(result.proof_queries, maximum)
+        self.assertEqual(result.proof_conflicts, maximum)
+        self.assertEqual(result.proof_propagations, maximum)
+        self.assertEqual(result.proof_watch_visits, maximum)
+        self.assertEqual(host.disposals, 1)
+
+    def test_parse_error_preserves_line_and_column(self) -> None:
+        from neverd_plugin import LLVMIRSyntaxError, OptimizationStop
+        from neverd_plugin import optimize_llvm_ir
+
+        host = _RecordingOptimizeHost(
+            ok=0,
+            error=b"expected type",
+            error_line=7,
+            error_column=13,
+            stop=int(OptimizationStop.INPUT_INVALID),
+        )
+        with self.assertRaises(LLVMIRSyntaxError) as raised:
+            optimize_llvm_ir("broken", host=host)
+
+        self.assertEqual(raised.exception.line, 7)
+        self.assertEqual(raised.exception.column, 13)
+        self.assertEqual(host.disposals, 1)
+
+    def test_input_validation_is_not_misclassified_as_syntax(self) -> None:
+        from neverd_plugin import LLVMIRSyntaxError, NeverDError
+        from neverd_plugin import OptimizationStop, optimize_llvm_ir
+
+        host = _RecordingOptimizeHost(
+            ok=0,
+            error=b"input module failed optimization validation",
+            stop=int(OptimizationStop.INPUT_INVALID),
+        )
+        with self.assertRaises(NeverDError) as raised:
+            optimize_llvm_ir("define void @f() { ret void }", host=host)
+
+        self.assertNotIsInstance(raised.exception, LLVMIRSyntaxError)
+        self.assertIn("validation", str(raised.exception))
+        self.assertEqual(host.disposals, 1)
+
+    def test_success_without_committed_ir_fails_closed(self) -> None:
+        from neverd_plugin import NeverDError, OptimizationStop, optimize_llvm_ir
+
+        host = _RecordingOptimizeHost(
+            ok=1,
+            stop=int(OptimizationStop.STABLE),
+            output_ir=None,
+        )
+        with self.assertRaisesRegex(NeverDError, "committed LLVM IR"):
+            optimize_llvm_ir("define void @f() { ret void }", host=host)
+        self.assertEqual(host.disposals, 1)
+
+    def test_rejected_transaction_and_call_refusal_still_dispose(self) -> None:
+        from neverd_plugin import NeverDError, OptimizationStop
+        from neverd_plugin import optimize_llvm_ir
+
+        rejected = _RecordingOptimizeHost(
+            ok=0,
+            error=b"verification failed",
+            stop=int(OptimizationStop.VERIFICATION_FAILED),
+        )
+        with self.assertRaisesRegex(NeverDError, "verification failed"):
+            optimize_llvm_ir("define void @f() { ret void }", host=rejected)
+        self.assertEqual(rejected.disposals, 1)
+
+        refused = _RecordingOptimizeHost(status=1)
+        with self.assertRaises(NeverDError):
+            optimize_llvm_ir("define void @f() { ret void }", host=refused)
+        self.assertEqual(refused.disposals, 1)
 
 if __name__ == "__main__":
     unittest.main()

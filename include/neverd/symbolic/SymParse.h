@@ -52,6 +52,8 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace neverd::symbolic {
@@ -68,12 +70,39 @@ struct SymParseResult {
   explicit operator bool() const { return ok(); }
 };
 
+/// Resource policy for parsing untrusted expression text.
+///
+/// These are caller-owned safeguards, not language or simplifier limits.
+/// Zero removes the corresponding parser policy ceiling; the expression is
+/// then limited only by the host resources and by the 32-bit width carried by
+/// the symbolic IR.  The bounded defaults keep the compatibility overload
+/// suitable for untrusted interactive input.
+struct SymParseOptions {
+  /// Parenthesis, unary, ternary, and call nesting accepted by the recursive
+  /// grammar.  Flat operator chains do not consume this counter.
+  size_t MaxNesting = 512;
+  /// Largest bit width accepted from the ambient width or a textual suffix.
+  /// Zero permits every nonzero width representable by the symbolic IR.
+  uint64_t MaxWidth = uint64_t(1) << 16;
+
+  static SymParseOptions unlimited() {
+    SymParseOptions Options;
+    Options.MaxNesting = 0;
+    Options.MaxWidth = 0;
+    return Options;
+  }
+};
+
 /// Parse \p Text into \p Ctx, creating every identifier as a \p Width-bit
 /// variable.  Identifiers already declared in \p Ctx at that width are reused,
 /// so several expressions can be parsed into a shared variable space and then
 /// compared.
 SymParseResult parseSymExpr(SymContext &Ctx, llvm::StringRef Text,
                             uint32_t Width);
+
+/// Parse with an explicit, caller-owned resource policy.
+SymParseResult parseSymExpr(SymContext &Ctx, llvm::StringRef Text,
+                            uint32_t Width, const SymParseOptions &Options);
 
 } // namespace neverd::symbolic
 

@@ -64,6 +64,107 @@ UI에 LLVM Support를 사용하지만 엔진을 구동할 때 C API를 우회하
 backend 라이브러리에 두고, pipeline은 알고리즘을 흡수하지 말고 해당 구성 요소를
 조정해야 합니다.
 
+## 교차 아키텍처 변환 계약
+
+`include/neverd/translate`는 실행 backend가 아닌 계약 계층을 정의합니다.
+`GuestState`는 `x86_32`, `x86_64`, `AArch64`, `ARM32`의 아키텍처 독립적이고
+머신에서 관찰 가능한 상태를 모델링합니다. 정규 version 1 직렬화는 고정 폭
+little-endian 필드, 안정적인 레지스터 ID, 정렬된 컬렉션, fail-closed 검증을 사용하므로
+지속된 상태가 호스트 C++ 레이아웃에 의존하지 않습니다.
+
+`GuestState`의 wire v1 baseline은 영구히 동결됩니다. 이 baseline 밖의 상태는 확장
+범위의 extension-register ID와 정규 소문자 이름을 함께 사용하거나, 명시적 upgrader를
+갖춘 새 wire version으로 옮겨야 합니다. v1 baseline을 제자리에서 변경하는 것은
+금지됩니다.
+
+`ARM32` guest에서는 `ExecutionMode`가 권위 있는 decode mode이며 `CPSR.T`와
+일치해야 합니다. 저장되는 PC는 항상 bit 0을 지운 정규 명령어 주소이고, ARM
+mode에서는 추가로 word alignment를 만족해야 합니다.
+
+아키텍처 쌍 정책은 `x86_64 -> AArch64`, `AArch64 -> x86_64`,
+`x86_32 -> AArch64/ARM32`, `ARM32 -> x86_32/x86_64`를 정의합니다.
+`ContractDefined`는 요청을 검증하고 지속할 수 있다는 뜻이며 코드를 변환하거나
+실행할 수 있다는 뜻은 아닙니다. JIT 정책은 실행 중인 프로세스의 native host만
+허용하고, AOT 정책은 호스트 아키텍처와 target triple을 명시하도록 요구합니다.
+CPU 또는 feature set을 선택하는 경우에도 명시해야 합니다.
+
+version이 있는 `TranslationExit`는 안정적인 중지 이유와 그에 대응하는 typed payload를
+기록합니다. syscall, 예외 또는 signal, breakpoint, 미지원 명령어, self-modification,
+리소스 budget, 외부 호출, memory fault 및 그 밖의 종료 조건을 다룹니다. 따라서
+소비자는 중지 이유에 따라 타입 없는 정수를 다시 해석할 필요가 없습니다.
+
+중지 이유와 관계없이 결과가 보고하는 instruction, block, generated-code count는
+요청의 대응하는 0이 아닌 budget을 초과할 수 없습니다. `BudgetExhausted` payload는
+그 요청 limit을 정확히 식별해야 하며 파생 값이나 구현 전용 임계값을 보고할 수 없습니다.
+
+backend-private `RuntimeControlBlockV1` 계약은 정확히 128 byte이고
+8 byte alignment를 사용하며 고정된 v1 magic, version, size, field offset, 0인 reserved
+field, 일관된 typed exit로 제약됩니다. C++ container, host pointer, guest address alias를
+포함하지 않으며 `GuestState`의 C++ layout이나 wire format도 아닙니다. 이 계약을 구현하는
+backend는 상태를 이 record로 명시적으로 변환해야 합니다.
+
+고정 v1 generated-code 호출 표면에는 정확히 8개의 helper만 있습니다:
+`nvd_rt_v1_load8_le`, `nvd_rt_v1_load16_le`, `nvd_rt_v1_load32_le`,
+`nvd_rt_v1_load64_le`, `nvd_rt_v1_store8_le`, `nvd_rt_v1_store16_le`,
+`nvd_rt_v1_store32_le`, `nvd_rt_v1_store64_le`. 이름, signature, pointer provenance는
+정확히 일치해야 하며 backend는 이 유한 table을 명시적으로 bind하고 ambient symbol
+resolution으로 fallback해서는 안 됩니다. executable generation 검증과
+budget/cancellation polling은 신뢰된 dispatcher만 수행하는 작업입니다.
+`nvd_rt_v1_validate_generation`과 `nvd_rt_v1_poll`은 generated-code helper가 아닙니다.
+신뢰된 host dispatcher는 block 선택도 소유하며 생성 IR에서 호출할 수 없습니다.
+translated block은 대신 typed exit code를 반환합니다. 생성 IR은 선언된
+scalar-result runtime slot만 직접 읽을 수 있습니다.
+
+`GuestMemoryRuntime`는 논리적 `GuestState`와 격리됩니다. 생성 시 state를 검증하고
+region byte와 metadata를 정렬된 private index로 복사합니다. guest virtual address는
+lookup key일 뿐이며 host pointer로 변환되지 않습니다. 검사된 scalar access는 width,
+alignment, overflow, unmapped, cross-region, permission, executable-write, generation
+overflow/mismatch, policy fault를 typed 결과로 보고합니다. instruction/block budget,
+cancellation, generation tracking과 `RejectExecutableWrites`,
+`InvalidateOnExecutableWrite`, `ValidateBeforeDispatch` code-write policy도 암묵적인 host
+동작 대신 일관된 typed record를 생성합니다.
+
+post-codegen verifier는 relocatable ELF, COFF, Mach-O object를 닫힌
+집합으로 감사합니다. format과 architecture는 선택한 host와 정확히 일치해야 하고,
+undefined symbol은 유한 helper allowlist에 정확히 포함되어야 하며 dynamic symbol은
+금지됩니다. relocation은 명시적인 direct whitelist로 제한되고 encoding, width,
+alignment, offset, loadable destination, object-local non-preemptible definition 또는
+정확히 허용된 helper target을 검사합니다. W+X, unwind/exception 및 initializer
+metadata, TLS, IFUNC, GOT/PLT와 기타 indirection, dynamic relocation, weak/preemptible
+또는 선택 가능한 definition, 알 수 없는 allocated section, linker directive를
+거부합니다. ELF `ET_REL` artifact에는 program header나 segment가 없어야 합니다.
+Mach-O load command는 positive list로 제한되며 bit 폭이 일치하는 segment는 정확히
+하나, symbol table, dynamic-symbol table, platform-version, data-in-code command는
+각각 최대 하나만 허용하고 의존 관계도 검사합니다. linker option과 그 밖의 모든
+command는 거부됩니다.
+
+runtime, memory, IR, object audit 구현은 이러한 경계를 정의하고 검증합니다. 이들은
+완전한 실행 가능 translation backend, 완전한 교차 아키텍처 translation pipeline,
+완전한 end-to-end 예외 재작성을 구성하지 않습니다. 이 절은 계약과 verifier 범위를
+규정하며 생성, link, load, 실행, JIT, AOT, 예외 재작성에 대한 end-to-end 제공을
+주장하지 않습니다.
+
+생성 IR 계약은 이 계약의 적용을 받는 모든 translated block이 hidden 및
+non-preemptible이고 C ABI `i32 (ptr state, ptr runtime)`를 사용하도록 요구합니다.
+block은 private registry로만 발견되며 프로세스 환경의 symbol lookup에 의존하지
+않습니다. block 간 직접 호출도 금지됩니다.
+
+IR verifier는 legalization이 알려진 compiler-runtime libcall을 도입하지 않도록 정수
+폭을 호스트 scalar register 폭 이하로 제한합니다. 다만 이는 필요조건일 뿐입니다.
+이 계약을 구현하는 모든 실행 backend는 post-codegen control transfer, `MachineIR`,
+target object의 relocation을 동일한 유한 runtime-symbol allowlist에 대해 정확히
+감사해야 합니다.
+
+TranslationIR의 직접 load/store와 private constant가 보관하는 값에는 호스트
+scalar-register 폭 이하인 단일 scalar integer만 허용됩니다. aggregate는 verifier
+경계 전에 scalarize하여 압축된 IR이 backend에서 무제한 확장을 유발하지 않게 해야 합니다.
+
+generated-code ABI는 scalar integer에 대해서만 정의됩니다. 부동소수점, SIMD, x87,
+atomic 및 system instruction은 이 계약의 범위 밖입니다. `ProvenSemanticAndLLVM`을
+선택하는 구현은 NeverD의 proof-gated semantic simplification을 LLVM 최적화와의 공동
+fixed point까지 실행해야 합니다. 이 정책 자체는 실행 가능한 translation backend를
+제공하지 않습니다.
+
 ## 구성 요소 맵
 
 각 구성 요소는 `add_neverd_component_library`가 만드는 정적 archive입니다. 표에는
@@ -86,6 +187,7 @@ backend 라이브러리에 두고, pipeline은 알고리즘을 흡수하지 말�
 | `lib/sigs` | 시그니처 파싱, 데이터베이스, 매칭 | Loader |
 | `lib/libc` | 알려진 libc 이름과 호출 모델 지원 | 독립 구성 요소 |
 | `lib/support` | 공유 바이너리 로드 helper | Loader |
+| `lib/translate` | version이 있는 guest state/policy/exit, 고정 runtime ABI, 검사된 guest memory, 생성 IR/object audit 계약. 실행 backend 구현은 이 구성 요소의 범위 밖 | IR, LLVM 및 LLVM Object 계약 |
 
 공개 헤더는 `include/neverd` 아래에서 이 영역들을 반영합니다. 내부 C++ 클래스가
 실수로 SDK의 일부가 되지 않게 하세요. 안정적인 외부 작업은 순수 C 헤더와 책임이
@@ -130,8 +232,8 @@ pipeline을 계속 진행하려고 `UnliftedInstruction`을 잡지 마세요. �
 ### 지원 및 테스트 깊이
 
 루트 지원 매트릭스는 각 셀이 구현되었다는 뜻입니다. 모든 opcode, ABI 경계 사례,
-바이너리 제작 도구 또는 운영체제 버전을 빠짐없이 테스트했다는 뜻은 아닙니다. strict
-모드는 아직 추가되지 않은 명령어 coverage를 위한 guardrail입니다.
+바이너리 제작 도구 또는 운영체제 버전을 빠짐없이 테스트했다는 뜻은 아닙니다. 명령어
+의미론이 lifter의 구현된 coverage 밖에 있으면 strict 모드는 fail-closed로 중지합니다.
 
 12개 포맷×아키텍처 셀 모두
 `unittests/semantic/PatchFullSubstRTTests.cpp`에서 의미론적 재작성 backend
@@ -153,21 +255,21 @@ coverage를 갖습니다. 통합 깊이는 다음과 같습니다.
   현대 macOS는 과거 i386 실행 파일을 링크할 수 없으므로 i386은 PIC/no-PIC thin
   object와 재작성 grid를 사용합니다.
 
-링크된 fixture 셀은 해당 대표 프로그램에 대해 현재 가장 강한 포맷 통합 증거입니다.
+링크된 fixture 셀은 해당 대표 프로그램에 대해 가장 강한 포맷 통합 증거입니다.
 object pipeline과 backend grid 셀은 부분적인 포맷 통합 coverage입니다. 아무 셀도
 제한 없이 “완전히 테스트됨”이라 할 수 없으며 ISA coverage의 완전성을 주장하지 않습니다.
 
 주요 근거는 링크된 ELF/PE fixture를 위한
-[`PatchFormatTests.cpp`](../unittests/lift/PatchFormatTests.cpp), Windows ARM 로드/
+[`PatchFormatTests.cpp`](../unittests/lift/format/PatchFormatTests.cpp), Windows ARM 로드/
 디컴파일을 위한
-[`COFFARMFormatTests.cpp`](../unittests/lift/COFFARMFormatTests.cpp), i386 thin
+[`COFFARMFormatTests.cpp`](../unittests/lift/format/COFFARMFormatTests.cpp), i386 thin
 object를 위한
-[`MachOI386RelocationTests.cpp`](../unittests/lift/MachOI386RelocationTests.cpp),
+[`MachOI386RelocationTests.cpp`](../unittests/lift/format/MachOI386RelocationTests.cpp),
 링크된 Mach-O를 위한
-[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/X86_64_PipelineE2ETests.cpp)와
-[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/AArch64_PipelineE2ETests.cpp),
+[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/x86_64/X86_64_PipelineE2ETests.cpp)와
+[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/aarch64/AArch64_PipelineE2ETests.cpp),
 12셀 backend grid를 위한
-[`PatchFullSubstRTTests.cpp`](../unittests/semantic/PatchFullSubstRTTests.cpp)입니다.
+[`PatchFullSubstRTTests.cpp`](../unittests/semantic/probe/patchfull/PatchFullSubstRTTests.cpp)입니다.
 명령은 [테스트 가이드](testing.ko.md)를 참고하세요.
 
 ## 수정 위치

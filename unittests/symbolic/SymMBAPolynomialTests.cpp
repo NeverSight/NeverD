@@ -107,6 +107,20 @@ TEST(SymMBA, KeepsALinearPartAlongsideADegreeThreeProduct) {
                "x * y * z + x + y");
 }
 
+TEST(SymMBA, RecoversTwoProductsOfDifferentDegreesFromOneSum) {
+  // A product contributes monomials of exactly its own degree.  That was the
+  // reason a target mixing degrees used to be refused, and read the other way
+  // round it is the reason it need not be: the degrees cannot interact, so the
+  // cubic monomials can only have come from a cubic product and the quadratic
+  // ones from a quadratic product.  Matching each degree against its own part
+  // of the target is a decomposition rather than a guess, and it is what
+  // reaches the shape an obfuscator leaves when it expands a square and a cube
+  // into the same sum.
+  simplifiesTo("(x & y) * (x | y) + (x & ~y) * (~x & y) + "
+               "x * (y & z) * (y | z) + x * (y & ~z) * (~y & z)",
+               "x * y + x * y * z");
+}
+
 TEST(SymMBA, NoticesWhenDegreeThreeProductsCancel) {
   // The shape an obfuscator leaves when it multiplies a cube out and adds the
   // pieces back: it looks cubic, and the cubic part is zero.

@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #include "neverd/Common.h"
+#include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
@@ -30,6 +31,7 @@
 #include "neverd/Limits.h"
 #include "neverd/support/Diagnostic.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -46,6 +48,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <set>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -181,7 +184,10 @@ llvm::Value *MedLLVMEmitter::getMemoryPtr(llvm::Value *Addr,
 //===----------------------------------------------------------------------===//
 
 llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
-  if (auto *Existing = Mod->getFunction(Func.Name))
+  llvm::StringRef EmittedName = Func.Name;
+  if (auto It = EmittedFuncNames.find(Func.Entry); It != EmittedFuncNames.end())
+    EmittedName = It->second;
+  if (auto *Existing = Mod->getFunction(EmittedName))
     return Existing;
 
   const auto &TRI = getTargetRegInfo(TargetArch);
@@ -278,7 +284,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
 
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
-      FuncTy, llvm::GlobalValue::ExternalLinkage, Func.Name, Mod);
+      FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
   // A lifted function is defined in this same module, so its address is fixed
   // at link time — mark it dso_local so a `ptrtoint @func` reference (a
   // function pointer) under the PIC relocation model is materialized by direct
@@ -330,9 +336,45 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       Mod_->addModuleFlag(llvm::Module::Warning, "ehcontguard", 1);
   }
 
+  // A PE may carry its exception personality as executable code in the image,
+  // so discovery legitimately lifts that address as an ordinary function.
+  // Native WinEH, however, requires the canonical personality symbol to have
+  // LLVM's exact variadic i32 ABI. Keep the address-backed body under its
+  // stable auto name so the canonical name remains available for an external
+  // ABI declaration. The COFF patcher recognizes the address alias, keeps the
+  // original runtime thunk authoritative, and resolves both spellings to it.
+  std::map<va_t, std::string> NativePersonalityNames;
+  std::set<va_t> ConflictingPersonalityAddresses;
+  if (TheArch == Arch::X64 && Fmt == BinaryFormat::COFF) {
+    for (const MedFunc &F : Funcs) {
+      if (!F.ExceptionMetadata || F.ExceptionMetadata->PersonalityVA == 0)
+        continue;
+      const ExceptionPersonality Personality = F.ExceptionMetadata->Personality;
+      if (Personality != ExceptionPersonality::CSpecificHandler &&
+          Personality != ExceptionPersonality::CxxFrameHandler3)
+        continue;
+      const va_t Address = F.ExceptionMetadata->PersonalityVA;
+      const std::string Name = getExceptionPersonalityName(Personality);
+      auto [It, Inserted] = NativePersonalityNames.emplace(Address, Name);
+      if (!Inserted && It->second != Name)
+        ConflictingPersonalityAddresses.insert(Address);
+    }
+  }
+
+  EmittedFuncNames.clear();
   FuncNames.clear();
-  for (auto &F : Funcs)
-    FuncNames[F.Entry] = F.Name;
+  for (const MedFunc &F : Funcs) {
+    std::string EmittedName = F.Name;
+    auto Personality = NativePersonalityNames.find(F.Entry);
+    llvm::StringRef SourceName(F.Name);
+    SourceName.consume_front("\01");
+    if (Personality != NativePersonalityNames.end() &&
+        !ConflictingPersonalityAddresses.count(F.Entry) &&
+        SourceName == Personality->second)
+      EmittedName = (kAutoFuncPrefix + llvm::utohexstr(F.Entry)).str();
+    EmittedFuncNames[F.Entry] = EmittedName;
+    FuncNames[F.Entry] = std::move(EmittedName);
+  }
   for (auto &[Addr, Name] : Imports)
     FuncNames[Addr] = Name;
 
@@ -360,6 +402,17 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       continue;
     emitFunc(Func);
   }
+
+  // Mark the producer schema independently of per-function attachments.  A
+  // later pass that drops one attachment must be distinguishable from a
+  // genuinely external LLVM module that never carried source EH state.
+  exception_rewrite::markModule(*Mod_);
+  for (llvm::Function &Function : *Mod_)
+    if (!Function.isDeclaration() &&
+        !Function.getMetadata(exception_rewrite::FunctionAttachment))
+      exception_rewrite::setContract(
+          Function, exception_rewrite::SourceState::Absent,
+          exception_rewrite::LoweringState::NotRequired);
 
   for (auto &F : *Mod_) {
     if (F.isDeclaration())

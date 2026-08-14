@@ -235,12 +235,12 @@ namespace neverd::symbolic {
 
 SymParseResult parseSymExpr(SymContext &Ctx, llvm::StringRef Text,
                             uint32_t Width) {
-  if (Width == 0 || Width > detail::kMaxWidth) {
-    SymParseResult R;
-    R.Error = ("a width of " + llvm::Twine(Width) + " is out of range").str();
-    return R;
-  }
-  return detail::Parser(Ctx, Text, Width).run();
+  return parseSymExpr(Ctx, Text, Width, SymParseOptions{});
+}
+
+SymParseResult parseSymExpr(SymContext &Ctx, llvm::StringRef Text,
+                            uint32_t Width, const SymParseOptions &Options) {
+  return detail::Parser(Ctx, Text, Width, Options).run();
 }
 
 } // namespace neverd::symbolic

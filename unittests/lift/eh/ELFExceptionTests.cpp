@@ -19,7 +19,9 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -83,8 +85,8 @@ uint64_t getU64(const std::vector<uint8_t> &B, size_t Off) {
 
 // One CIE (augmentation "zR" with an absolute FDE pointer encoding) and one FDE
 // naming \p InitLocVA, terminated by a zero-length record.  The absolute
-// encoding keeps the FDE's initial_location a plain 8-byte address, which is all
-// the search-table rebuild has to read back out.
+// encoding keeps the FDE's initial_location a plain 8-byte address, which is
+// all the search-table rebuild has to read back out.
 std::vector<uint8_t> makeEhFrameFragment(uint64_t InitLocVA) {
   std::vector<uint8_t> F;
   auto PushU32 = [&](uint32_t V) {
@@ -96,17 +98,18 @@ std::vector<uint8_t> makeEhFrameFragment(uint64_t InitLocVA) {
       F.push_back((V >> (8 * I)) & 0xff);
   };
 
-  const std::vector<uint8_t> CIE = {0,    0,    0, 0,   1,   'z', 'R',
-                                    0x00, 0x01, /*data align -8*/ 0x78,
-                                    0x10, 0x01, 0x00};
+  const std::vector<uint8_t> CIE = {
+      0,    0,    0,   0, 1, 'z', 'R', 0x00, 0x01, /*data align -8*/ 0x78,
+      0x10, 0x01, 0x00};
   PushU32(static_cast<uint32_t>(CIE.size()));
   F.insert(F.end(), CIE.begin(), CIE.end());
 
-  PushU32(20);         // FDE length
-  PushU32(21);         // CIE pointer: back to the CIE at fragment offset 0
-  PushU64(InitLocVA);  // initial_location (absolute)
-  PushU64(0x10);       // address_range
-  PushU32(0);          // terminator
+  PushU32(21);        // FDE length
+  PushU32(21);        // CIE pointer: back to the CIE at fragment offset 0
+  PushU64(InitLocVA); // initial_location (absolute)
+  PushU64(0x10);      // address_range
+  F.push_back(0);     // empty FDE augmentation data
+  PushU32(0);         // terminator
   return F;
 }
 
@@ -114,8 +117,9 @@ std::vector<uint8_t> makeELF64WithEH() {
   std::vector<uint8_t> B(kFileEnd, 0);
 
   // ELF header.
-  std::memcpy(B.data(), "\x7f"
-                        "ELF",
+  std::memcpy(B.data(),
+              "\x7f"
+              "ELF",
               4);
   B[llvm::ELF::EI_CLASS] = llvm::ELF::ELFCLASS64;
   B[llvm::ELF::EI_DATA] = llvm::ELF::ELFDATA2LSB;
@@ -214,8 +218,8 @@ std::unique_ptr<llvm::Module> makeModule(llvm::LLVMContext &C, bool WithEH) {
   B.CreateRetVoid();
   if (WithEH) {
     auto *PT = llvm::FunctionType::get(llvm::Type::getInt32Ty(C), true);
-    auto *P = llvm::Function::Create(
-        PT, llvm::GlobalValue::ExternalLinkage, "__gxx_personality_v0", M.get());
+    auto *P = llvm::Function::Create(PT, llvm::GlobalValue::ExternalLinkage,
+                                     "__gxx_personality_v0", M.get());
     F->setPersonalityFn(P);
   }
   return M;
@@ -225,6 +229,21 @@ bool hadError(llvm::Error E) {
   bool B = static_cast<bool>(E);
   llvm::consumeError(std::move(E));
   return B;
+}
+
+CompiledImage makeGeneratedEHFrame(const ELFEHFrameRegion &Region) {
+  CompiledImage Image;
+  Image.Success = true;
+  CompiledSection Section;
+  Section.Name = ".eh_frame";
+  Section.IsAllocated = true;
+  Section.IsInImage = false;
+  Section.VA = Region.AppendVA;
+  Section.ExternalBytes = makeEhFrameFragment(kFunc1VA);
+  Section.Size = Section.ExternalBytes.size();
+  Image.Sections.push_back(std::move(Section));
+  Image.SymbolAddrs["f"] = kFunc1VA;
+  return Image;
 }
 
 TEST(ELFExceptionPatch, RequiresRegisteredDetectsPersonality) {
@@ -240,11 +259,59 @@ TEST(ELFExceptionPatch, FindsRegionAndHeader) {
   EXPECT_EQ(Region->SectionVA, kEhFrameVA);
   // The append point sits at the logical end of the CIE + FDE, before the
   // zero-length terminator.
-  EXPECT_EQ(Region->AppendVA, kEhFrameVA + 41);
-  EXPECT_EQ(Region->AppendFileOff, kEhFrameOff + 41);
+  EXPECT_EQ(Region->AppendVA, kEhFrameVA + 42);
+  EXPECT_EQ(Region->AppendFileOff, kEhFrameOff + 42);
   EXPECT_TRUE(Region->HasHdr);
   EXPECT_EQ(Region->HdrVA, kEhFrameHdrVA);
   EXPECT_EQ(Region->GnuEhFramePhdrOff, kPhOff + kPhEnt);
+}
+
+TEST(ELFExceptionPatch, RejectsMalformedSectionStringTables) {
+  std::vector<uint8_t> WrongType = makeELF64WithEH();
+  putU32(WrongType, kShOff + 4 * kShEnt + 4, llvm::ELF::SHT_PROGBITS);
+  EXPECT_FALSE(findELFEHFrameRegion(WrongType).has_value());
+
+  std::vector<uint8_t> Unterminated = makeELF64WithEH();
+  Unterminated[kShStrTabOff + kShStrTabSize - 1] = 'x';
+  EXPECT_FALSE(findELFEHFrameRegion(Unterminated).has_value());
+}
+
+TEST(ELFExceptionPatch, RejectsMalformedHeaderTables) {
+  auto Rejected = [](std::vector<uint8_t> Binary) {
+    EXPECT_FALSE(findELFEHFrameRegion(Binary).has_value());
+  };
+
+  std::vector<uint8_t> WrongVersion = makeELF64WithEH();
+  WrongVersion[llvm::ELF::EI_VERSION] = 0;
+  Rejected(std::move(WrongVersion));
+
+  std::vector<uint8_t> WrongHeaderSize = makeELF64WithEH();
+  putU16(WrongHeaderSize, 52, 63);
+  Rejected(std::move(WrongHeaderSize));
+
+  std::vector<uint8_t> WrongProgramEntrySize = makeELF64WithEH();
+  putU16(WrongProgramEntrySize, 54, 8);
+  Rejected(std::move(WrongProgramEntrySize));
+
+  std::vector<uint8_t> WrongSectionEntrySize = makeELF64WithEH();
+  putU16(WrongSectionEntrySize, 58, 8);
+  Rejected(std::move(WrongSectionEntrySize));
+
+  std::vector<uint8_t> NoProgramHeaders = makeELF64WithEH();
+  putU16(NoProgramHeaders, 56, 0);
+  Rejected(std::move(NoProgramHeaders));
+
+  std::vector<uint8_t> NoSectionHeaders = makeELF64WithEH();
+  putU16(NoSectionHeaders, 60, 0);
+  Rejected(std::move(NoSectionHeaders));
+
+  std::vector<uint8_t> BadStringIndex = makeELF64WithEH();
+  putU16(BadStringIndex, 62, 5);
+  Rejected(std::move(BadStringIndex));
+
+  std::vector<uint8_t> ProgramTableOverflow = makeELF64WithEH();
+  putU64(ProgramTableOverflow, 32, std::numeric_limits<uint64_t>::max() - 8);
+  Rejected(std::move(ProgramTableOverflow));
 }
 
 TEST(ELFExceptionPatch, FailsClosedWhenRegistrationImpossible) {
@@ -268,15 +335,8 @@ TEST(ELFExceptionPatch, InstallsRecordsAndGrowsSearchTable) {
   ASSERT_TRUE(Region.has_value());
 
   CompiledImage Img;
-  Img.Success = true;
-  CompiledSection Sec;
-  Sec.Name = ".eh_frame";
-  Sec.IsAllocated = true;
-  Sec.IsInImage = false;
-  Sec.VA = Region->AppendVA;
-  Sec.ExternalBytes = makeEhFrameFragment(kFunc1VA);
-  Sec.Size = Sec.ExternalBytes.size();
-  Img.Sections.push_back(Sec);
+  Img = makeGeneratedEHFrame(*Region);
+  const CompiledSection &Sec = Img.Sections.front();
 
   ASSERT_FALSE(hadError(
       installELFEHFrame(Bin, Region, Img, *makeModule(C, /*WithEH=*/true))));
@@ -295,7 +355,74 @@ TEST(ELFExceptionPatch, InstallsRecordsAndGrowsSearchTable) {
   EXPECT_EQ(getU64(Bin, kPhOff + kPhEnt + 32), NewHdrSize);
   // `.eh_frame` grew by the appended fragment.
   EXPECT_EQ(getU64(Bin, kShOff + 2 * kShEnt + 32),
-            41 + Sec.ExternalBytes.size());
+            42 + Sec.ExternalBytes.size());
+}
+
+TEST(ELFExceptionPatch, RejectsOldHeaderEntriesThatDoNotNameExactFDEs) {
+  enum class Corruption { OutsideSection, CIE, FDEInterior, WrongInitial };
+  for (Corruption Kind : {Corruption::OutsideSection, Corruption::CIE,
+                          Corruption::FDEInterior, Corruption::WrongInitial}) {
+    std::vector<uint8_t> Bin = makeELF64WithEH();
+    auto Region = findELFEHFrameRegion(Bin);
+    ASSERT_TRUE(Region.has_value());
+    switch (Kind) {
+    case Corruption::OutsideSection:
+      putS32(Bin, kEhFrameHdrOff + 16,
+             static_cast<int64_t>(kBase) - static_cast<int64_t>(kEhFrameHdrVA));
+      break;
+    case Corruption::CIE:
+      putS32(Bin, kEhFrameHdrOff + 16,
+             static_cast<int64_t>(kEhFrameVA) -
+                 static_cast<int64_t>(kEhFrameHdrVA));
+      break;
+    case Corruption::FDEInterior:
+      putS32(Bin, kEhFrameHdrOff + 16,
+             static_cast<int64_t>(kEhFrameVA + 18) -
+                 static_cast<int64_t>(kEhFrameHdrVA));
+      break;
+    case Corruption::WrongInitial:
+      putS32(Bin, kEhFrameHdrOff + 12,
+             static_cast<int64_t>(kFunc0VA + 1) -
+                 static_cast<int64_t>(kEhFrameHdrVA));
+      break;
+    }
+    const std::vector<uint8_t> Before = Bin;
+    llvm::LLVMContext Context;
+    CompiledImage Image = makeGeneratedEHFrame(*Region);
+    EXPECT_TRUE(hadError(installELFEHFrame(
+        Bin, Region, Image, *makeModule(Context, /*WithEH=*/true))));
+    EXPECT_EQ(Bin, Before);
+  }
+}
+
+TEST(ELFExceptionPatch, RejectsForgedRegionWithoutChangingBytes) {
+  std::vector<uint8_t> Bin = makeELF64WithEH();
+  auto Region = findELFEHFrameRegion(Bin);
+  ASSERT_TRUE(Region.has_value());
+  ++Region->LimitFileOff;
+  const std::vector<uint8_t> Before = Bin;
+  llvm::LLVMContext Context;
+  CompiledImage Image = makeGeneratedEHFrame(*Region);
+  EXPECT_TRUE(hadError(installELFEHFrame(
+      Bin, Region, Image, *makeModule(Context, /*WithEH=*/true))));
+  EXPECT_EQ(Bin, Before);
+}
+
+TEST(ELFExceptionPatch, RejectsInsufficientTailCapacityWithoutChangingBytes) {
+  std::vector<uint8_t> Bin = makeELF64WithEH();
+  auto Region = findELFEHFrameRegion(Bin);
+  ASSERT_TRUE(Region.has_value());
+  const std::vector<uint8_t> Before = Bin;
+  llvm::LLVMContext Context;
+  CompiledImage Image = makeGeneratedEHFrame(*Region);
+  CompiledSection &Generated = Image.Sections.front();
+  Generated.ExternalBytes.resize(
+      static_cast<size_t>(Region->LimitFileOff - Region->AppendFileOff + 1), 0);
+  Generated.Size = Generated.ExternalBytes.size();
+
+  EXPECT_TRUE(hadError(installELFEHFrame(
+      Bin, Region, Image, *makeModule(Context, /*WithEH=*/true))));
+  EXPECT_EQ(Bin, Before);
 }
 
 } // namespace

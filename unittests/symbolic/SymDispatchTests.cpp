@@ -202,6 +202,29 @@ TEST(SymDispatch, RefusesAnAddressThatTwoUnknownsReach) {
   EXPECT_FALSE(analyzeDispatch(Ctx, Ops, kIndexReg).has_value());
 }
 
+TEST(SymDispatch, RefusesAValueLoadedFromTwoCandidateTables) {
+  // Expression interning makes the two loads equal because both tables were
+  // given the same symbolic entry.  Picking whichever address was recorded
+  // first would make the reported table depend on instruction order.
+  SymContext Ctx;
+  constexpr uint64_t OtherTable = kTable + 0x1000;
+  std::vector<LowOp> Ops = {
+      op(NdOp::INT_MULT, NdVar::tmp(0, 8),
+         {NdVar::reg(kIndexReg, 8), NdVar::cst(8, 8)}),
+      op(NdOp::INT_ADD, NdVar::tmp(8, 8),
+         {NdVar::tmp(0, 8), NdVar::cst(kTable, 8)}),
+      op(NdOp::INT_ADD, NdVar::tmp(16, 8),
+         {NdVar::tmp(0, 8), NdVar::cst(OtherTable, 8)}),
+      op(NdOp::STORE, NdVar{}, {NdVar::tmp(8, 8), NdVar::reg(kScratch, 8)}),
+      op(NdOp::STORE, NdVar{}, {NdVar::tmp(16, 8), NdVar::reg(kScratch, 8)}),
+      op(NdOp::LOAD, NdVar::tmp(24, 8), {NdVar::tmp(8, 8)}),
+      op(NdOp::LOAD, NdVar::tmp(32, 8), {NdVar::tmp(16, 8)}),
+      op(NdOp::INDIR_BR, NdVar{}, {NdVar::tmp(32, 8)})};
+
+  EXPECT_FALSE(analyzeDispatch(Ctx, Ops, kIndexReg).has_value());
+  EXPECT_TRUE(dispatchVariesWithIndex(Ctx, Ops, kIndexReg));
+}
+
 TEST(SymDispatch, RefusesABranchThatIsNotComputedAtAll) {
   SymContext Ctx;
   std::vector<LowOp> Ops = {

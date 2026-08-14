@@ -75,13 +75,16 @@ static int realMain(int Argc, char *Argv[]) {
 
   // These are handled before the shared session load, because none of them
   // works from one binary at a path: plugins needs no input at all, diff takes
-  // its own -a/-b operands, and simplify's input is an expression.
+  // its own -a/-b operands, simplify's input is an expression, and optimize-ir
+  // reads textual LLVM IR.
   if (PluginsCmd)
     return runPlugins(Argv[0]);
   if (DiffCmd)
     return runDiff();
   if (SimplifyCmd)
     return runSimplify();
+  if (OptimizeIRCmd)
+    return runOptimizeIR();
 
   // The active subcommand's registered name feeds the banner below.  Plugins
   // and diff returned already, so exactly one of the remaining named

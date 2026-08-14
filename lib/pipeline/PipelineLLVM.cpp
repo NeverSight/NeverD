@@ -44,6 +44,15 @@
 
 namespace neverd {
 
+namespace {
+
+bool isFatalOptimizationStop(OptimizationStopReason Stop) {
+  return Stop == OptimizationStopReason::InputInvalid ||
+         Stop == OptimizationStopReason::VerificationFailed;
+}
+
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // Parallel LLVM emission + optimization
 //===----------------------------------------------------------------------===//
@@ -52,8 +61,9 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
     const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
     const std::vector<std::pair<va_t, std::string>> &Imports,
     const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumThreads,
-    uint64_t &UnhandledValueIntrinsics) {
+    uint64_t &UnhandledValueIntrinsics, bool &LLVMVerifierFailed) {
   UnhandledValueIntrinsics = 0;
+  LLVMVerifierFailed = false;
   const size_t N = Funcs.size();
   NumThreads = std::max(
       1u, std::min<unsigned>(NumThreads, static_cast<unsigned>(N ? N : 1)));
@@ -127,7 +137,12 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
   std::call_once(WarmupOnce, [] {
     llvm::LLVMContext WarmCtx;
     llvm::Module Warm("neverd_warmup", WarmCtx);
-    optimizeModule(Warm, /*Conservative=*/false);
+    OptimizationOptions Options;
+    OptimizationResult Result = optimizeModule(Warm, Options);
+    if (isFatalOptimizationStop(Result.Stop))
+      llvm::WithColor::warning()
+          << "pipeline: LLVM optimizer warmup failed: "
+          << optimizationStopReasonName(Result.Stop) << "\n";
     promoteScaffoldingAllocas(Warm);
   });
 
@@ -138,6 +153,7 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
   // shard modules exist at any instant.
   std::vector<std::string> BC(NumShards);
   std::vector<uint64_t> ShardUnhandled(NumShards, 0);
+  std::atomic<bool> HadLLVMVerifierFailure{false};
   auto runShard = [&](unsigned S) {
     std::vector<char> Mask(N, 0);
     for (size_t I = 0; I < N; ++I)
@@ -151,12 +167,19 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
       return;
     std::string VErr;
     llvm::raw_string_ostream VOS(VErr);
-    if (!llvm::verifyModule(*M, &VOS)) {
-      if (!NoOpt)
-        optimizeModule(*M, /*Conservative=*/false);
-      else
-        promoteScaffoldingAllocas(*M);
+    if (llvm::verifyModule(*M, &VOS)) {
+      HadLLVMVerifierFailure.store(true, std::memory_order_relaxed);
+      return;
     }
+    if (!NoOpt) {
+      OptimizationOptions Options;
+      OptimizationResult Result = optimizeModule(*M, Options);
+      if (isFatalOptimizationStop(Result.Stop)) {
+        HadLLVMVerifierFailure.store(true, std::memory_order_relaxed);
+        return;
+      }
+    } else
+      promoteScaffoldingAllocas(*M);
     llvm::raw_string_ostream OS(BC[S]);
     llvm::WriteBitcodeToFile(*M, OS);
   };
@@ -179,6 +202,7 @@ std::unique_ptr<llvm::Module> Pipeline::emitLLVMSharded(
 
   for (uint64_t Count : ShardUnhandled)
     UnhandledValueIntrinsics += Count;
+  LLVMVerifierFailed = HadLLVMVerifierFailure.load(std::memory_order_relaxed);
 
   bool HadShardFailure = false;
   for (unsigned S = 0; S < NumShards; ++S)

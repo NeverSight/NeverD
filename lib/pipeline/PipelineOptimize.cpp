@@ -9,26 +9,27 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "SemanticConvergence.h"
+
 #include "neverd/Common.h"
+#include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/pass/ir/HelloWorldPass.h"
 #include "neverd/pass/ir/obf/BitMaskingPass.h"
 #include "neverd/pass/ir/obf/BogusControlFlowPass.h"
 #include "neverd/pass/ir/obf/ConstantEncryptionPass.h"
 #include "neverd/pass/ir/obf/ConstantPoolingPass.h"
 #include "neverd/pass/ir/obf/ControlFlowFlatteningPass.h"
-#include "neverd/pass/ir/HelloWorldPass.h"
 #include "neverd/pass/ir/obf/IndirectBranchPass.h"
 #include "neverd/pass/ir/obf/IndirectCallPass.h"
 #include "neverd/pass/ir/obf/IndirectGlobalPass.h"
 #include "neverd/pass/ir/obf/InstSubstitutionPass.h"
 #include "neverd/pass/ir/obf/MBAPass.h"
 #include "neverd/pass/ir/obf/OpaquePredicatePass.h"
+#include "neverd/pass/ir/obf/ValueLaunderingPass.h"
 #include "neverd/pass/ir/simplify/ControlFlowRecoveryPass.h"
 #include "neverd/pass/ir/simplify/SymSimplifyPass.h"
-#include "neverd/pass/ir/obf/ValueLaunderingPass.h"
 #include "neverd/pipeline/Pipeline.h"
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/IR/Constants.h"
@@ -36,14 +37,20 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/StructuralHash.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Mem2Reg.h"
 
+#include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -53,89 +60,76 @@ namespace neverd {
 
 namespace {
 
-/// Runs canonicalization and semantic measurement to their joint fixed point.
-///
-/// Neither transform reaches that point alone.  An expression mixing `+ - *`
-/// with `& | ^ ~` is a fixed point for every rule-driven simplifier -- being
-/// immune to peephole rewriting is what the obfuscation is for -- so
-/// InstCombine stops in front of it.  The measurement walks straight through
-/// it, but what it leaves behind is ordinary arithmetic that wants folding, and
-/// folding it can expose a further region in measurable shape.  Running the
-/// pair once therefore reaches neither transform's fixed point; running them in
-/// alternation until a measurement finds nothing left to shorten reaches both.
-///
-/// Termination does not rest on the round cap.  A measurement is only written
-/// back when it materializes strictly fewer instructions than it replaces, so
-/// every productive round strictly shrinks the function and there can only be
-/// finitely many.  The structural fingerprint below stops the one case that
-/// argument does not cover -- the two transforms trading the same edit back and
-/// forth.  There is no round limit to make an otherwise reachable fixed point
-/// depend on how many layers happened to expose one another.
-class SemanticFixedPointPass
-    : public llvm::PassInfoMixin<SemanticFixedPointPass> {
-public:
-  llvm::PreservedAnalyses run(llvm::Function &F,
-                              llvm::FunctionAnalysisManager &FAM);
+void addSaturating(uint64_t &Total, uint64_t Delta) {
+  constexpr uint64_t Max = std::numeric_limits<uint64_t>::max();
+  Total = Delta > Max - Total ? Max : Total + Delta;
+}
 
-private:
-  /// An exact snapshot used only after a productive round.  Stopping on a hash
-  /// collision would make reachability of the fixed point probabilistic; text
-  /// equality costs more, but a repeated state is then an actual cycle.
-  static std::string snapshot(const llvm::Function &F);
-};
-
-std::string SemanticFixedPointPass::snapshot(const llvm::Function &F) {
+std::string snapshotFunction(const llvm::Function &F) {
   std::string Text;
   llvm::raw_string_ostream OS(Text);
   F.print(OS);
   return Text;
 }
 
+std::string snapshotModule(const llvm::Module &M) {
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  M.print(OS, nullptr);
+  return Text;
+}
+
+/// Alternates LLVM canonicalization with semantic simplification until their
+/// joint state is stable or repeats exactly.  A finite budget is supplied by
+/// the caller; zero leaves capability limited only by actual convergence.
+class SemanticFixedPointPass
+    : public llvm::PassInfoMixin<SemanticFixedPointPass> {
+public:
+  explicit SemanticFixedPointPass(
+      unsigned MaxRounds = 0, SymSimplifyOptions Options = {},
+      std::shared_ptr<OptimizationResult> ModuleSink = {})
+      : MaxRounds(MaxRounds), Options(std::move(Options)),
+        ModuleSink(std::move(ModuleSink)) {}
+
+  llvm::PreservedAnalyses run(llvm::Function &F,
+                              llvm::FunctionAnalysisManager &FAM);
+
+private:
+  unsigned MaxRounds;
+  SymSimplifyOptions Options;
+  std::shared_ptr<OptimizationResult> ModuleSink;
+};
+
 llvm::PreservedAnalyses
 SemanticFixedPointPass::run(llvm::Function &F,
                             llvm::FunctionAnalysisManager &FAM) {
-  // One manager, run repeatedly: InstCombine carries no state across runs, and
-  // rebuilding it every round would be the only cost this loop adds to a
-  // function that has nothing to measure.
   llvm::FunctionPassManager Canonicalize;
   Canonicalize.addPass(llvm::InstCombinePass());
 
-  llvm::SmallVector<std::string, 8> Seen;
-  bool Changed = false;
-  bool ResidueUnfolded = false;
+  FunctionOptimizationResult Result = driveSemanticConvergence(
+      MaxRounds,
+      [&] {
+        const bool Canonicalized = !Canonicalize.run(F, FAM).areAllPreserved();
+        SymSimplifyResult Semantic =
+            SymSimplifyPass::simplifyWithResult(F, Options);
+        const bool Changed = Canonicalized || Semantic.Rewrites != 0;
 
-  for (;;) {
-    // This wrapper is itself a pass and must report changes made by the nested
-    // canonicalizer even when semantic measurement finds nothing afterwards.
-    // Returning `all()` after InstCombine changed the function would let a
-    // caller keep analyses computed for the old IR.
-    Changed |= !Canonicalize.run(F, FAM).areAllPreserved();
-    ResidueUnfolded = false;
+        // simplifyWithResult mutates outside the pass manager.  Invalidate
+        // before a subsequent round can read analyses describing the old IR.
+        if (Semantic.Rewrites != 0)
+          FAM.invalidate(F, llvm::PreservedAnalyses::none());
 
-    unsigned Rewritten = SymSimplifyPass::simplify(F);
-    if (Rewritten == 0)
-      break;
-    Changed = true;
-    // The canonicalization that just ran folded the previous round's result;
-    // this round's has not been folded yet, so a loop that stops here owes one
-    // more run of InstCombine.
-    ResidueUnfolded = true;
+        return ConvergenceRound{
+            Changed, std::move(Semantic),
+            Changed ? llvm::StructuralHash(F, /*DetailedHash=*/true) : 0};
+      },
+      [&] { return snapshotFunction(F); });
 
-    // simplify() rewrote the function outside any pass manager, so everything
-    // cached about it is stale before the next InstCombine reads it.
-    FAM.invalidate(F, llvm::PreservedAnalyses::none());
+  if (ModuleSink)
+    mergeFunctionOptimizationResult(*ModuleSink, Result);
 
-    std::string State = snapshot(F);
-    if (llvm::is_contained(Seen, State))
-      break;
-    Seen.push_back(std::move(State));
-  }
-
-  if (ResidueUnfolded)
-    Changed |= !Canonicalize.run(F, FAM).areAllPreserved();
-
-  return Changed ? llvm::PreservedAnalyses::none()
-                 : llvm::PreservedAnalyses::all();
+  return Result.Changed ? llvm::PreservedAnalyses::none()
+                        : llvm::PreservedAnalyses::all();
 }
 
 } // namespace
@@ -143,7 +137,8 @@ SemanticFixedPointPass::run(llvm::Function &F,
 /// After SROA, bare negative inttoptr addresses (e.g.
 /// `inttoptr (i32 -4 to ptr)`) can appear for stack slots that were
 /// previously frame-relative.  Rewrite them to `frame_base + disp`.
-static void fixLiftedStackPointers(llvm::Module &Mod) {
+static bool fixLiftedStackPointers(llvm::Module &Mod) {
+  bool Changed = false;
   for (llvm::Function &F : Mod) {
     if (F.isDeclaration())
       continue;
@@ -201,12 +196,13 @@ static void fixLiftedStackPointers(llvm::Module &Mod) {
         };
 
         if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&I))
-          FixIntToPtr(LI, llvm::LoadInst::getPointerOperandIndex());
+          Changed |= FixIntToPtr(LI, llvm::LoadInst::getPointerOperandIndex());
         else if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&I))
-          FixIntToPtr(SI, llvm::StoreInst::getPointerOperandIndex());
+          Changed |= FixIntToPtr(SI, llvm::StoreInst::getPointerOperandIndex());
       }
     }
   }
+  return Changed;
 }
 
 void Pipeline::promoteScaffoldingAllocas(llvm::Module &Mod) {
@@ -233,53 +229,178 @@ void Pipeline::promoteScaffoldingAllocas(llvm::Module &Mod) {
   MPM.run(Mod, MAM);
 }
 
-void Pipeline::optimizeModule(llvm::Module &Mod, bool Conservative) {
+static OptimizationResult
+runOptimizationPipeline(llvm::Module &Mod,
+                        const Pipeline::OptimizationOptions &Options) {
+  uint64_t DefinitionCount = 0;
+  for (const llvm::Function &F : Mod)
+    if (!F.isDeclaration())
+      addSaturating(DefinitionCount, 1);
+
+  auto Result = std::make_shared<OptimizationResult>();
   llvm::LoopAnalysisManager LAM;
   llvm::FunctionAnalysisManager FAM;
   llvm::CGSCCAnalysisManager CGAM;
   llvm::ModuleAnalysisManager MAM;
   llvm::PassBuilder PB;
+
+  if (!Options.Conservative &&
+      Options.Strength == Pipeline::OptStrength::Deep) {
+    PB.registerPipelineEarlySimplificationEPCallback(
+        [MaxRounds = Options.MaxRounds, Semantic = Options.Semantic,
+         Result](llvm::ModulePassManager &MPM, llvm::OptimizationLevel,
+                 llvm::ThinOrFullLTOPhase) {
+          llvm::FunctionPassManager FPM;
+          FPM.addPass(SemanticFixedPointPass(MaxRounds, Semantic, Result));
+          MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
+        });
+    PB.registerScalarOptimizerLateEPCallback(
+        [MaxRounds = Options.MaxRounds, Semantic = Options.Semantic,
+         Result](llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
+          FPM.addPass(SemanticFixedPointPass(MaxRounds, Semantic, Result));
+        });
+  }
+
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  llvm::FunctionPassManager FPM;
-  if (!Conservative) {
+  llvm::FunctionPassManager Prefix;
+  if (!Options.Conservative) {
     // Before promotion, because that is where a dispatcher's state lives: both
     // a lifted function and a flattened one keep everything in stack slots, the
     // second because no block dominates another once every one of them is
     // reached through the switch.  Recovering the graph first is what lets the
     // promotion below put those values back in registers with the phis the real
     // control flow calls for, instead of phis at the dispatcher.
-    FPM.addPass(ControlFlowRecoveryPass());
+    Prefix.addPass(ControlFlowRecoveryPass());
   }
-  FPM.addPass(llvm::PromotePass());
-  FPM.addPass(llvm::SROAPass(llvm::SROAOptions::PreserveCFG));
-  if (!Conservative) {
-    // InstCombine canonicalizes by shape, which is what a measurement reads
-    // best; the measurement collapses the mixed boolean-arithmetic InstCombine
-    // cannot touch; the arithmetic that leaves is what InstCombine folds best.
-    // They are driven in alternation rather than paired once, because each
-    // shortened layer can put a further one into measurable shape.
-    FPM.addPass(SemanticFixedPointPass());
-    FPM.addPass(llvm::SimplifyCFGPass());
+  Prefix.addPass(llvm::PromotePass());
+  Prefix.addPass(llvm::SROAPass(llvm::SROAOptions::PreserveCFG));
+  llvm::ModulePassManager PrefixPipeline;
+  PrefixPipeline.addPass(
+      llvm::createModuleToFunctionPassAdaptor(std::move(Prefix)));
+  llvm::PreservedAnalyses PrefixPA = PrefixPipeline.run(Mod, MAM);
+  Result->Changed |= !PrefixPA.areAllPreserved();
+
+  if (!Options.Conservative) {
+    if (Options.Strength == Pipeline::OptStrength::Thin) {
+      llvm::FunctionPassManager Thin;
+      Thin.addPass(
+          SemanticFixedPointPass(Options.MaxRounds, Options.Semantic, Result));
+      Thin.addPass(llvm::SimplifyCFGPass());
+      llvm::ModulePassManager ThinPipeline;
+      ThinPipeline.addPass(
+          llvm::createModuleToFunctionPassAdaptor(std::move(Thin)));
+      llvm::PreservedAnalyses ThinPA = ThinPipeline.run(Mod, MAM);
+      Result->Changed |= !ThinPA.areAllPreserved();
+    } else {
+      llvm::ModulePassManager DefaultPipeline =
+          Options.LLVMLevel == llvm::OptimizationLevel::O0
+              ? PB.buildO0DefaultPipeline(Options.LLVMLevel)
+              : PB.buildPerModuleDefaultPipeline(Options.LLVMLevel);
+      llvm::PreservedAnalyses DefaultPA = DefaultPipeline.run(Mod, MAM);
+      Result->Changed |= !DefaultPA.areAllPreserved();
+    }
   }
-  llvm::ModulePassManager MPM;
-  MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
-  MPM.run(Mod, MAM);
 
-  fixLiftedStackPointers(Mod);
+  Result->Changed |= fixLiftedStackPointers(Mod);
+  // Both Deep extension points intentionally contribute semantic work to the
+  // same sink.  A function definition is nevertheless one visited function,
+  // independent of how many extension points observe it.
+  Result->FunctionsVisited = DefinitionCount;
 
-  [[maybe_unused]] size_t Count = 0;
-  for (auto &F : Mod)
-    if (!F.isDeclaration())
-      ++Count;
+  LLVM_DEBUG(llvm::dbgs() << "pipeline: LLVM optimization applied ("
+                          << Result->FunctionsVisited
+                          << " functions, conservative=" << Options.Conservative
+                          << ", deep="
+                          << (Options.Strength == Pipeline::OptStrength::Deep)
+                          << ", stop="
+                          << optimizationStopReasonName(Result->Stop) << ")\n");
+  return *Result;
+}
 
-  LLVM_DEBUG(llvm::dbgs() << "pipeline: LLVM optimization applied (" << Count
-                          << " functions, conservative=" << Conservative
-                          << ")\n");
+void Pipeline::optimizeModule(llvm::Module &Mod, bool Conservative,
+                              OptStrength Strength) {
+  OptimizationOptions Options;
+  Options.Conservative = Conservative;
+  Options.Strength = Strength;
+  (void)optimizeModule(Mod, Options);
+}
+
+OptimizationResult
+Pipeline::optimizeModule(llvm::Module &Mod,
+                         const OptimizationOptions &Options) {
+  OptimizationResult Result;
+  if (!Options.Conservative && Options.Strength != OptStrength::Thin &&
+      Options.Strength != OptStrength::Deep) {
+    Result.Stop = OptimizationStopReason::InputInvalid;
+    return Result;
+  }
+
+  if (llvm::verifyModule(Mod)) {
+    Result.Stop = OptimizationStopReason::InputInvalid;
+    return Result;
+  }
+
+  auto Contracts = exception_rewrite::validateExceptionRewriteContracts(Mod);
+  if (!Contracts) {
+    llvm::consumeError(Contracts.takeError());
+    Result.Stop = OptimizationStopReason::InputInvalid;
+    return Result;
+  }
+
+  const auto InputHash = llvm::StructuralHash(Mod, /*DetailedHash=*/true);
+  std::unique_ptr<llvm::Module> Candidate = llvm::CloneModule(Mod);
+  Result = runOptimizationPipeline(*Candidate, Options);
+  if (llvm::verifyModule(*Candidate)) {
+    Result.Changed = false;
+    Result.Stop = OptimizationStopReason::VerificationFailed;
+    return Result;
+  }
+
+  auto CandidateContracts =
+      exception_rewrite::validateExceptionRewriteContracts(*Candidate);
+  if (!CandidateContracts) {
+    llvm::consumeError(CandidateContracts.takeError());
+    Result.Changed = false;
+    Result.Stop = OptimizationStopReason::VerificationFailed;
+    return Result;
+  }
+
+  if (Options.PostTransformVerifier &&
+      !Options.PostTransformVerifier(*Candidate)) {
+    Result.Changed = false;
+    Result.Stop = OptimizationStopReason::VerificationFailed;
+    return Result;
+  }
+
+  // A pass manager's PreservedAnalyses is an invalidation contract, not an
+  // exact change report.  Confirm the final candidate itself before replacing
+  // Mod: this both catches metadata-only edits that StructuralHash omits and
+  // preserves every caller-held IR handle when the transaction is a no-op.
+  if (llvm::StructuralHash(*Candidate, /*DetailedHash=*/true) == InputHash &&
+      snapshotModule(*Candidate) == snapshotModule(Mod)) {
+    Result.Changed = false;
+    return Result;
+  }
+
+  Result.Changed = true;
+  Mod = std::move(*Candidate);
+  return Result;
+}
+
+OptimizationResult Pipeline::optimizeModule(llvm::Module &Mod,
+                                            bool Conservative,
+                                            OptStrength Strength,
+                                            unsigned MaxRounds) {
+  OptimizationOptions Options;
+  Options.Conservative = Conservative;
+  Options.Strength = Strength;
+  Options.MaxRounds = MaxRounds;
+  return optimizeModule(Mod, Options);
 }
 
 void Pipeline::runHelloWorldPass(llvm::Module &Mod) {

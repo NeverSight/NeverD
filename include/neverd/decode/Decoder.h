@@ -91,9 +91,9 @@ public:
   /// verification, size stepping): fills Addr/Size/Id/Raw but skips the
   /// capstone id fixups that decodeOne performs for the lift path.  Combined
   /// with setDetail(false) it also skips the expensive per-instruction
-  /// operand-detail fill.  Only Size and Id (and the terminator classification
-  /// keyed on Id) are meaningful; operand detail must not be read from the
-  /// result when detail is disabled.  Returns size or 0.
+  /// operand-detail fill.  Only Size and Id are meaningful when detail is
+  /// disabled; targets with operand-aware terminators must leave it enabled.
+  /// Returns size or 0.
   int decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
                      DecodedInsn &Out);
 
@@ -119,6 +119,15 @@ public:
   /// Direct (immediate) call target of \p Insn, or InvalidVA if \p Insn is
   /// not a direct call.  Dispatches to the active architecture lifter.
   va_t directCallTarget(const DecodedInsn &Insn) const;
+
+  /// Encoded return-pop immediate, including an explicitly encoded zero.
+  /// Empty for ordinary returns and non-x86 instructions.
+  std::optional<uint64_t> returnImmediate(const DecodedInsn &Insn) const;
+
+  /// Destination execution-mode contract of a control transfer.  The source
+  /// mode must be the effective decode mode (never ARM's Default alias).
+  LowInstructionTargetMode controlTargetMode(const DecodedInsn &Insn,
+                                             InstructionMode SourceMode) const;
 
   /// Target VA of a relocation-free PC-relative address-of (x86 `lea rip`), or
   /// InvalidVA.  Used to record a same-section function pointer the assembler

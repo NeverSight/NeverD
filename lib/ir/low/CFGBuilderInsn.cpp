@@ -21,6 +21,44 @@
 
 namespace neverd {
 
+namespace {
+
+bool isObservableInstructionEffect(NdOp Opcode) {
+  switch (Opcode) {
+  case NdOp::LOAD:
+  case NdOp::STORE:
+  case NdOp::INTRINSIC:
+  case NdOp::BRANCH:
+  case NdOp::INDIR_BR:
+  case NdOp::CALL:
+  case NdOp::INDIR_CALL:
+  case NdOp::RETURN:
+    return true;
+  default:
+    return false;
+  }
+}
+
+template <typename InstructionRecordT>
+bool hasInstructionLocalGuard(const InstructionRecordT &Rec) {
+  if (Rec.Mode != InstructionMode::ARM && Rec.Mode != InstructionMode::Thumb)
+    return false;
+  const va_t NextAddress = Rec.Addr + Rec.Size;
+  for (size_t GuardIndex = 0; GuardIndex < Rec.Ops.size(); ++GuardIndex) {
+    const LowOp &Guard = Rec.Ops[GuardIndex];
+    if (Guard.Opcode != NdOp::COND_BR || Guard.NumInputs < 1 ||
+        !Guard.Inputs[0].isConst() || Guard.Inputs[0].Offset != NextAddress)
+      continue;
+    for (size_t I = GuardIndex + 1;
+         I < Rec.Ops.size() && Rec.Ops[I].Addr == Guard.Addr; ++I)
+      if (isObservableInstructionEffect(Rec.Ops[I].Opcode))
+        return true;
+  }
+  return false;
+}
+
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // convertIndirectTailCalls — model `bx reg`/`br reg`/`jmp *reg` (function
 // pointer, not a jump table) as an indirect call + return.
@@ -48,18 +86,25 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
 //===----------------------------------------------------------------------===//
 
 void CFGBuilder::classifyInsn(InsnRecord &Rec) {
+  const std::optional<uint64_t> ReturnImmediate = Rec.Immediate;
+  std::optional<uint64_t> BranchImmediate;
+  std::optional<uint64_t> CallImmediate;
   for (auto &Op : Rec.Ops) {
     switch (Op.Opcode) {
     case NdOp::BRANCH:
       Rec.IsBranch = true;
-      if (Op.Inputs[0].isConst())
+      if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
         Rec.BranchTarget = Op.Inputs[0].Offset;
+        BranchImmediate = Op.Inputs[0].Offset;
+      }
       break;
     case NdOp::COND_BR:
       Rec.IsBranch = true;
       Rec.IsCond = true;
-      if (Op.Inputs[0].isConst())
+      if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
         Rec.BranchTarget = Op.Inputs[0].Offset;
+        BranchImmediate = Op.Inputs[0].Offset;
+      }
       break;
     case NdOp::INDIR_BR:
       Rec.IsBranch = true;
@@ -67,8 +112,10 @@ void CFGBuilder::classifyInsn(InsnRecord &Rec) {
       break;
     case NdOp::CALL:
       Rec.IsCall = true;
-      if (Op.Inputs[0].isConst())
+      if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
         CallTargets.insert(Op.Inputs[0].Offset);
+        CallImmediate = Op.Inputs[0].Offset;
+      }
       break;
     case NdOp::INDIR_CALL:
       Rec.IsCall = true;
@@ -81,6 +128,66 @@ void CFGBuilder::classifyInsn(InsnRecord &Rec) {
       break;
     }
   }
+
+  Rec.IsInstructionGuard = hasInstructionLocalGuard(Rec);
+
+  // Preserve the immediate encoded by the guest instruction, not a synthetic
+  // conditional guard the ARM lifter emitted around a register call/return.
+  if (Rec.IsCall)
+    Rec.Immediate = Rec.IsIndirect ? std::nullopt : CallImmediate;
+  else if (Rec.IsRet)
+    Rec.Immediate = ReturnImmediate;
+  else if (Rec.IsBranch)
+    Rec.Immediate = Rec.IsIndirect ? std::nullopt : BranchImmediate;
+  else
+    Rec.Immediate.reset();
+}
+
+LowInstructionBoundary
+CFGBuilder::makeInstructionBoundary(const InsnRecord &Rec,
+                                    uint64_t FirstOp) const {
+  LowInstructionBoundary Boundary;
+  Boundary.Address = Rec.Addr;
+  Boundary.Size = Rec.Size;
+  Boundary.FirstOp = FirstOp;
+  Boundary.OpCount = static_cast<uint64_t>(Rec.Ops.size());
+  Boundary.Mode = Rec.Mode;
+  Boundary.Immediate = Rec.Immediate;
+  Boundary.TargetMode = Rec.TargetMode;
+
+  auto AddFlag = [&](bool Set, LowInstructionControlFlag Flag) {
+    if (Set)
+      Boundary.ControlFlags |= Flag;
+  };
+
+  if (Rec.IsOpaqueTerminator) {
+    Boundary.Control = LowInstructionControl::Terminator;
+    Boundary.ControlFlags = LowInstructionControlFlag::Terminator;
+    AddFlag(Rec.IsResumableTerminator, LowInstructionControlFlag::Resumable);
+    return Boundary;
+  }
+
+  AddFlag(Rec.IsBranch, LowInstructionControlFlag::Branch);
+  AddFlag(Rec.IsCond, LowInstructionControlFlag::Conditional);
+  AddFlag(Rec.IsCall, LowInstructionControlFlag::Call);
+  AddFlag(Rec.IsRet, LowInstructionControlFlag::Return);
+  AddFlag(Rec.IsIndirect, LowInstructionControlFlag::Indirect);
+  AddFlag(Rec.IsNoReturnCall, LowInstructionControlFlag::NoReturn);
+  AddFlag(Rec.IsInstructionGuard, LowInstructionControlFlag::InstructionGuard);
+
+  if (Rec.IsCall && Rec.IsRet)
+    Boundary.Control = LowInstructionControl::TailCall;
+  else if (Rec.IsBranch && Rec.IsCond && Rec.IsRet)
+    Boundary.Control = LowInstructionControl::ConditionalReturn;
+  else if (Rec.IsBranch && Rec.IsCond && Rec.IsCall)
+    Boundary.Control = LowInstructionControl::ConditionalCall;
+  else if (Rec.IsBranch)
+    Boundary.Control = LowInstructionControl::Branch;
+  else if (Rec.IsCall)
+    Boundary.Control = LowInstructionControl::Call;
+  else if (Rec.IsRet)
+    Boundary.Control = LowInstructionControl::Return;
+  return Boundary;
 }
 
 //===----------------------------------------------------------------------===//

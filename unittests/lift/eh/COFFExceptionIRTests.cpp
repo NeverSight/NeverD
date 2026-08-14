@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
@@ -13,6 +14,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/ExceptionInfo.h"
+#include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
@@ -114,6 +116,33 @@ TEST(COFFExceptionIR, EmitsLosslessNamedMetadata) {
   EXPECT_EQ(UIntAt(*PrimaryRange, 0), Func.Entry);
   EXPECT_EQ(UIntAt(*PrimaryRange, 1), Func.Entry + 0x20);
   EXPECT_EQ(UIntAt(*Payload, windows_eh_md::ChainedUnwindInfoRVA), 0x3010u);
+
+  // This fixture carries source metadata but deliberately contains no call in
+  // its protected range.  Close that zero-call contract explicitly so the
+  // optimization portion isolates metadata preservation rather than native-EH
+  // call-site lowering, which has dedicated tests below.
+  exception_rewrite::setContract(
+      *IRFunc, exception_rewrite::SourceState::Complete,
+      exception_rewrite::LoweringState::Complete,
+      /*RequiredCalls=*/0, /*LoweredCalls=*/0, /*SkippedPads=*/0);
+  Pipeline::OptimizationOptions Options;
+  Options.Strength = Pipeline::OptStrength::Deep;
+  Options.LLVMLevel = llvm::OptimizationLevel::O2;
+  OptimizationResult Result = Pipeline::optimizeModule(*Module, Options);
+  EXPECT_NE(Result.Stop, OptimizationStopReason::InputInvalid);
+  EXPECT_NE(Result.Stop, OptimizationStopReason::VerificationFailed);
+  EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+
+  Table = Module->getNamedMetadata("neverd.windows.eh.functions");
+  ASSERT_NE(Table, nullptr);
+  EXPECT_EQ(Table->getNumOperands(), 1u);
+  IRFunc = Module->getFunction("eh_metadata_test");
+  ASSERT_NE(IRFunc, nullptr);
+  Payload = IRFunc->getMetadata("neverd.windows.eh");
+  ASSERT_NE(Payload, nullptr);
+  EXPECT_EQ(Payload->getNumOperands(), windows_eh_md::OperandCount);
+  EXPECT_NE(IRFunc->getMetadata(exception_rewrite::FunctionAttachment),
+            nullptr);
 }
 TEST(COFFExceptionIR, StructuresReducibleSEHAndCxxRegionsInHighIR) {
   auto MakeFunction = [] {

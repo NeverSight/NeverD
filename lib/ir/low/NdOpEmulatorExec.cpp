@@ -141,7 +141,8 @@ bool NdOpEmulator::executeStore(const LowOp &Op) {
     Size = 8;
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
     return false;
-  storeMemory(Addr, Size, Val);
+  if (!storeMemory(Addr, Size, Val))
+    return !strictMode();
   return true;
 }
 
@@ -309,6 +310,14 @@ bool NdOpEmulator::executeMisc(const LowOp &Op) {
     if (Op.NumInputs < 1)
       return false;
     uint64_t Val = readOperand(Op.Inputs[0]);
+    // Counted at the width the operand declares, as LZCOUNT below already is.
+    // A register slot holds whatever the widest write to it left behind, so
+    // counting all sixty-four bits answers for bits this operand does not
+    // name — and disagrees with the symbolic model of the same opcode, which
+    // is a divergence neither engine can notice from its own side.
+    const uint16_t ByteWidth = Op.Inputs[0].Size;
+    if (ByteWidth > 0 && ByteWidth < 8)
+      Val &= (1ULL << (ByteWidth * 8)) - 1;
     writeOutput(Op.Output, std::popcount(Val));
     return true;
   }

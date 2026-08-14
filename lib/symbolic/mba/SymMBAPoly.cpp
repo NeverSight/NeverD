@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
+#include <cassert>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -123,20 +124,22 @@ std::optional<TruthTable> bitwiseTable(const SymContext &Ctx, SymRef F,
                                        llvm::ArrayRef<uint32_t> AtomIds) {
   const uint32_t Width = Ctx.width(F);
   const auto NumAtoms = static_cast<unsigned>(AtomIds.size());
-  const size_t Corners = size_t(1) << NumAtoms;
+  const std::optional<size_t> Corners = cornerCount(NumAtoms);
+  if (!Corners)
+    return std::nullopt;
   SymEvalPlan Plan(Ctx, F);
-  TruthTable Table = 0;
+  TruthTable Table = TruthTable::zero(NumAtoms);
 
   if (Plan.fitsU64()) {
     const uint64_t Ones =
         Width == 64 ? ~uint64_t(0) : (uint64_t(1) << Width) - 1;
     std::vector<uint64_t> Assignment(Ctx.numVars(), 0);
-    for (size_t K = 0; K < Corners; ++K) {
+    for (size_t K = 0; K < *Corners; ++K) {
       for (unsigned J = 0; J < NumAtoms; ++J)
         Assignment[AtomIds[J]] = (K >> J) & 1 ? Ones : 0;
       uint64_t Value = Plan.evalU64(Assignment);
       if (Value == Ones)
-        Table |= TruthTable(1) << K;
+        Table.set(K);
       else if (Value != 0)
         return std::nullopt;
     }
@@ -146,12 +149,12 @@ std::optional<TruthTable> bitwiseTable(const SymContext &Ctx, SymRef F,
   const llvm::APInt Zero(Width, 0);
   const llvm::APInt Ones = llvm::APInt::getAllOnes(Width);
   std::vector<llvm::APInt> Assignment(Ctx.numVars(), Zero);
-  for (size_t K = 0; K < Corners; ++K) {
+  for (size_t K = 0; K < *Corners; ++K) {
     for (unsigned J = 0; J < NumAtoms; ++J)
       Assignment[AtomIds[J]] = (K >> J) & 1 ? Ones : Zero;
     llvm::APInt Value = Plan.eval(Assignment);
     if (Value == Ones)
-      Table |= TruthTable(1) << K;
+      Table.set(K);
     else if (!Value.isZero())
       return std::nullopt;
   }
@@ -176,18 +179,19 @@ unsigned monomialDegree(const Monomial &Key) {
   return static_cast<unsigned>(Key.size());
 }
 
-TruthTable monomialSupport(const Monomial &Key) {
-  TruthTable Support = 0;
+TruthTable monomialSupport(const Monomial &Key, unsigned NumVars) {
+  TruthTable Support = TruthTable::zero(NumVars);
   for (uint16_t Index : Key)
-    Support |= TruthTable(1) << Index;
+    Support.set(Index);
   return Support;
 }
 
-llvm::SmallVector<uint16_t, 8> selectedMinterms(TruthTable Table,
-                                                size_t Corners) {
+llvm::SmallVector<uint16_t, 8> selectedMinterms(const TruthTable &Table) {
+  assert(Table.numVars() <= kMaxPolynomialAtoms &&
+         "a minterm index has to fit the key a monomial is built from");
   llvm::SmallVector<uint16_t, 8> Out;
-  for (size_t M = 0; M < Corners; ++M)
-    if (truthTableAt(Table, M))
+  for (size_t M = 0, E = Table.entries(); M < E; ++M)
+    if (Table.at(M))
       Out.push_back(static_cast<uint16_t>(M));
   return Out;
 }
@@ -196,6 +200,12 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
                                            llvm::ArrayRef<PolyTerm> Terms,
                                            llvm::ArrayRef<uint32_t> AtomIds,
                                            uint32_t Width, WorkBudget &Budget) {
+  // Past this arity a corner no longer has an index a monomial key can hold,
+  // so the expansion would name a different minterm rather than fail.  The
+  // linear reading has no such key and is unaffected, which is why declining
+  // here narrows the answer instead of losing it.
+  if (AtomIds.size() > kMaxPolynomialAtoms)
+    return std::nullopt;
   const size_t Corners = size_t(1) << AtomIds.size();
   PolyForm Form;
   Form.Linear.assign(Corners, llvm::APInt(Width, 0));
@@ -226,7 +236,7 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       std::optional<TruthTable> Table = tableOf(Factor);
       if (!Table)
         return std::nullopt;
-      Selected.push_back(selectedMinterms(*Table, Corners));
+      Selected.push_back(selectedMinterms(*Table));
     }
 
     if (Term.Factors.size() == 1) {

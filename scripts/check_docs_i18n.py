@@ -129,9 +129,13 @@ TESTING_REQUIRED_TOKENS = (
 )
 ENGLISH_DOCS = (
     Path("README.md"),
+    Path("CONTRIBUTING.md"),
     Path("docs/README.md"),
+    Path("docs/architecture.md"),
+    Path("docs/python-plugins.md"),
     Path("docs/roadmap/README.md"),
     Path("docs/testing.md"),
+    Path("docs/windows-exception-reconstruction.md"),
     *(Path(f"docs/{stem}.md") for stem in GUIDE_STEMS),
 )
 
@@ -139,9 +143,13 @@ ENGLISH_DOCS = (
 def localized_paths(locale: str) -> tuple[Path, ...]:
     return (
         Path(f"docs/i18n/README.{locale}.md"),
+        Path(f"docs/i18n/CONTRIBUTING.{locale}.md"),
         Path(f"docs/README.{locale}.md"),
+        Path(f"docs/architecture.{locale}.md"),
+        Path(f"docs/python-plugins.{locale}.md"),
         Path(f"docs/roadmap/README.{locale}.md"),
         Path(f"docs/testing.{locale}.md"),
+        Path(f"docs/windows-exception-reconstruction.{locale}.md"),
         Path(f"docs/evm.{locale}.md"),
         Path(f"docs/sbf.{locale}.md"),
     )
@@ -391,9 +399,18 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
         )
 
     for locale in LOCALES:
-        project_readme, index, roadmap, testing, evm_guide, sbf_guide = (
-            localized_paths(locale)
-        )
+        (
+            project_readme,
+            _contributing,
+            index,
+            _architecture,
+            _python_plugins,
+            roadmap,
+            testing,
+            _windows_exception,
+            evm_guide,
+            sbf_guide,
+        ) = localized_paths(locale)
         require_tokens(
             project_readme,
             (

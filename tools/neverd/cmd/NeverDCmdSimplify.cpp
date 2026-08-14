@@ -13,14 +13,16 @@
 /// Reading a file of them turns that into a measurement: how many of a corpus
 /// collapse, by how much, and what the ones that did not have in common.
 ///
-/// It goes through the same C entry point the plugins do, so what a user sees
-/// here is what a caller gets.
+/// It goes through the same C entry points the plugins do, so what a user sees
+/// here is what a caller gets.  Proof-gated synthesis is an explicit mode and
+/// the legacy MBA-only result contract remains unchanged otherwise.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "../NeverDCLI.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/WithColor.h"
@@ -29,7 +31,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,22 +43,51 @@ namespace neverd::cli {
 
 namespace {
 
+enum ExitStatus : int {
+  ExitSuccess = 0,
+  ExitInvalidInput = 2,
+  ExitIncomplete = 3,
+  ExitEngineFailure = 4,
+};
+
 /// What the engine made of one expression, copied out of the C result so the
 /// result itself can be released straight away.
 struct Outcome {
   bool Ok = false;
+  ExitStatus Status = ExitSuccess;
   std::string Error;
   size_t ErrorOffset = 0;
   std::string Input;
   std::string Output;
   bool Changed = false;
-  int64_t CostBefore = 0;
-  int64_t CostAfter = 0;
-  int64_t Inputs = 0;
-  int64_t Work = 0;
+  uint64_t CostBefore = 0;
+  uint64_t CostAfter = 0;
+  uint64_t Inputs = 0;
+  uint64_t Work = 0;
+  uint64_t CandidateCost = 0;
   std::string Reason;
   std::string Evidence;
+  bool ProofGated = false;
+  std::string ProofStatus;
+  uint64_t ProofQueries = 0;
+  uint64_t ProofConflicts = 0;
+  uint64_t ProofPropagations = 0;
+  uint64_t ProofWatchVisits = 0;
+  std::string CounterexampleJSON;
 };
+
+uint64_t counterValue(size_t Value) {
+  if constexpr (sizeof(size_t) > sizeof(uint64_t)) {
+    if (Value > std::numeric_limits<uint64_t>::max())
+      return std::numeric_limits<uint64_t>::max();
+  }
+  return static_cast<uint64_t>(Value);
+}
+
+void addSaturating(uint64_t &Total, uint64_t Value) {
+  const uint64_t Max = std::numeric_limits<uint64_t>::max();
+  Total = Value > Max - Total ? Max : Total + Value;
+}
 
 /// Translate the command line into the engine's policy.  Zero means "keep the
 /// default" throughout, which is why the flags that take a number all start
@@ -70,6 +103,28 @@ neverd_simplify_options buildOptions() {
                          : static_cast<size_t>(SimplifyMaxWork.getValue());
   Options.verify_samples = SimplifyVerifySamples;
   Options.allow_growth = SimplifyAllowGrowth ? 1 : 0;
+  Options.exhaustive = SimplifyExhaustive ? 1 : 0;
+  return Options;
+}
+
+neverd_synthesize_options buildSynthesisOptions() {
+  neverd_synthesize_options Options{};
+  Options.struct_size = sizeof(Options);
+  Options.width = SimplifyWidth;
+  Options.max_cost = static_cast<size_t>(SimplifyMaxCost.getValue());
+  Options.max_samples = static_cast<size_t>(SimplifyMaxSamples.getValue());
+  Options.verify_samples = SimplifyVerifySamples;
+  Options.max_work = static_cast<size_t>(SimplifyMaxWork.getValue());
+  Options.max_leaves = SimplifyMaxLeaves;
+  Options.max_constants = SimplifyMaxConstants;
+  Options.stochastic_slots = SimplifyStochasticSlots;
+  Options.stochastic_restarts = SimplifyStochasticRestarts;
+  Options.stochastic_iterations =
+      static_cast<size_t>(SimplifyStochasticIterations.getValue());
+  Options.solver_max_conflicts = SimplifySolverMaxConflicts;
+  Options.solver_max_propagations = SimplifySolverMaxPropagations;
+  Options.solver_max_watch_visits = SimplifySolverMaxWatchVisits;
+  Options.exhaustive = SimplifyExhaustive ? 1 : 0;
   return Options;
 }
 
@@ -80,6 +135,8 @@ Outcome simplifyOne(StringRef Expr, const neverd_simplify_options &Options) {
   Outcome Result;
   if (neverd_simplify_expr(Expr.str().c_str(), &Options, &Raw) != 0) {
     Result.Error = "the engine refused the request";
+    Result.Status = ExitEngineFailure;
+    neverd_simplify_result_dispose(&Raw);
     return Result;
   }
 
@@ -89,24 +146,70 @@ Outcome simplifyOne(StringRef Expr, const neverd_simplify_options &Options) {
     Result.Input = copy(Raw.input);
     Result.Output = copy(Raw.output);
     Result.Changed = Raw.changed != 0;
-    Result.CostBefore = static_cast<int64_t>(Raw.cost_before);
-    Result.CostAfter = static_cast<int64_t>(Raw.cost_after);
+    Result.CostBefore = counterValue(Raw.cost_before);
+    Result.CostAfter = counterValue(Raw.cost_after);
     Result.Inputs = Raw.inputs;
-    Result.Work = static_cast<int64_t>(Raw.work);
+    Result.Work = counterValue(Raw.work);
     Result.Reason = copy(Raw.outcome_name);
     Result.Evidence = copy(Raw.evidence_name);
   } else {
     Result.Error = copy(Raw.error);
     Result.ErrorOffset = Raw.error_offset;
+    Result.Status = ExitInvalidInput;
   }
+  if (Raw.ok && Raw.outcome == NEVERD_SIMPLIFY_BUDGET_EXHAUSTED)
+    Result.Status = ExitIncomplete;
   neverd_simplify_result_dispose(&Raw);
+  return Result;
+}
+
+Outcome synthesizeOne(StringRef Expr,
+                      const neverd_synthesize_options &Options) {
+  neverd_synthesize_result Raw{};
+  Raw.struct_size = sizeof(Raw);
+
+  Outcome Result;
+  Result.ProofGated = true;
+  const int Status = neverd_synthesize_expr(Expr.str().c_str(), &Options, &Raw);
+  auto copy = [](const char *S) { return std::string(S ? S : ""); };
+  if (Status != 0) {
+    Result.Error = "the engine refused the request";
+    Result.Status = ExitEngineFailure;
+  } else if (!Raw.ok) {
+    Result.Error = copy(Raw.error);
+    Result.ErrorOffset = Raw.error_offset;
+    Result.Status = ExitInvalidInput;
+  } else {
+    Result.Ok = true;
+    Result.Input = copy(Raw.input);
+    Result.Output = copy(Raw.output);
+    Result.Changed = Raw.changed != 0;
+    Result.CostBefore = counterValue(Raw.cost_before);
+    Result.CostAfter = counterValue(Raw.cost_after);
+    Result.Inputs = Raw.inputs;
+    Result.Work = Raw.search_work;
+    Result.CandidateCost = counterValue(Raw.candidate_cost);
+    Result.Reason = neverd_synthesis_outcome_name(Raw.outcome);
+    Result.ProofStatus = neverd_proof_status_name(Raw.proof_status);
+    Result.ProofQueries = Raw.proof_queries;
+    Result.ProofConflicts = Raw.proof_conflicts;
+    Result.ProofPropagations = Raw.proof_propagations;
+    Result.ProofWatchVisits = Raw.proof_watch_visits;
+    Result.CounterexampleJSON = copy(Raw.counterexample_json);
+    if (Raw.outcome == NEVERD_SYNTHESIS_SEARCH_BUDGET_EXHAUSTED ||
+        Raw.outcome == NEVERD_SYNTHESIS_PROOF_INCOMPLETE)
+      Result.Status = ExitIncomplete;
+  }
+  neverd_synthesize_result_dispose(&Raw);
   return Result;
 }
 
 /// Point at the offending column, the way a compiler does, so a typo in a long
 /// expression does not have to be counted out by hand.
-void reportSyntaxError(StringRef Expr, const Outcome &Result) {
+void reportOutcomeError(StringRef Expr, const Outcome &Result) {
   WithColor::error() << Result.Error << "\n";
+  if (Result.Status == ExitEngineFailure)
+    return;
   errs() << "  " << Expr << "\n  " << std::string(Result.ErrorOffset, ' ')
          << "^\n";
 }
@@ -125,18 +228,26 @@ void printOutcome(const Outcome &Result) {
     // user retrying with a wider budget and giving up on the expression.
     outs() << "  out   unchanged (" << Result.Reason << ")\n";
   }
-  if (SimplifyStats)
+  if (SimplifyStats && !Result.ProofGated)
     outs() << "  work  " << Result.Work << "   evidence " << Result.Evidence
            << "\n";
+  if (Result.ProofGated && SimplifyStats)
+    outs() << "  work  " << Result.Work << "   proof " << Result.ProofStatus
+           << "   queries " << Result.ProofQueries << "   conflicts "
+           << Result.ProofConflicts << "   propagations "
+           << Result.ProofPropagations << "   watch-visits "
+           << Result.ProofWatchVisits << "\n";
 }
 
 json::Object toJson(StringRef Expr, const Outcome &Result) {
   if (!Result.Ok)
-    return json::Object{{"expr", Expr},
+    return json::Object{{"schemaVersion", 1},
+                        {"expr", Expr},
                         {"ok", false},
                         {"error", Result.Error},
                         {"offset", static_cast<int64_t>(Result.ErrorOffset)}};
-  return json::Object{{"expr", Expr},
+  json::Object Object{{"schemaVersion", 1},
+                      {"expr", Expr},
                       {"ok", true},
                       {"input", Result.Input},
                       {"output", Result.Output},
@@ -144,9 +255,28 @@ json::Object toJson(StringRef Expr, const Outcome &Result) {
                       {"costBefore", Result.CostBefore},
                       {"costAfter", Result.CostAfter},
                       {"inputs", Result.Inputs},
-                      {"work", Result.Work},
-                      {"outcome", Result.Reason},
-                      {"evidence", Result.Evidence}};
+                      {"outcome", Result.Reason}};
+  if (!Result.ProofGated) {
+    Object["work"] = Result.Work;
+    Object["evidence"] = Result.Evidence;
+    return Object;
+  }
+  Object["candidateCost"] = Result.CandidateCost;
+  Object["searchWork"] = Result.Work;
+  Object["proofStatus"] = Result.ProofStatus;
+  Object["proofQueries"] = Result.ProofQueries;
+  Object["proofConflicts"] = Result.ProofConflicts;
+  Object["proofPropagations"] = Result.ProofPropagations;
+  Object["proofWatchVisits"] = Result.ProofWatchVisits;
+  if (!Result.CounterexampleJSON.empty()) {
+    Expected<json::Value> Counterexample =
+        json::parse(Result.CounterexampleJSON);
+    if (Counterexample)
+      Object["counterexample"] = std::move(*Counterexample);
+    else
+      consumeError(Counterexample.takeError());
+  }
+  return Object;
 }
 
 /// Read the expressions to work on: one per line, blank lines and `#` comments
@@ -173,12 +303,13 @@ bool readExpressions(StringRef Path, std::vector<std::string> &Out) {
 /// Running totals over a corpus.  Keyed by reason so a run over a body of
 /// expressions says not only how many collapsed but what stopped the rest.
 struct Tally {
-  unsigned Simplified = 0;
-  unsigned Failed = 0;
-  int64_t CostBefore = 0;
-  int64_t CostAfter = 0;
-  int64_t Work = 0;
-  std::map<std::string, unsigned> Reasons;
+  uint64_t Simplified = 0;
+  uint64_t Failed = 0;
+  uint64_t CostBefore = 0;
+  uint64_t CostAfter = 0;
+  uint64_t Work = 0;
+  ExitStatus Status = ExitSuccess;
+  std::map<std::string, uint64_t> Reasons;
   /// One entry per expression, in microseconds.
   std::vector<int64_t> Times;
 };
@@ -200,11 +331,11 @@ json::Object summaryJson(size_t Count, Tally &Totals) {
   llvm::sort(Totals.Times);
   json::Object Reasons;
   for (const auto &[Reason, Times] : Totals.Reasons)
-    Reasons[Reason] = static_cast<int64_t>(Times);
+    Reasons[Reason] = Times;
   return json::Object{
-      {"expressions", static_cast<int64_t>(Count)},
-      {"simplified", static_cast<int64_t>(Totals.Simplified)},
-      {"rejected", static_cast<int64_t>(Totals.Failed)},
+      {"expressions", counterValue(Count)},
+      {"simplified", Totals.Simplified},
+      {"rejected", Totals.Failed},
       {"costBefore", Totals.CostBefore},
       {"costAfter", Totals.CostAfter},
       {"work", Totals.Work},
@@ -215,8 +346,8 @@ json::Object summaryJson(size_t Count, Tally &Totals) {
 }
 
 void printSummary(size_t Count, Tally &Totals) {
-  outs() << "\n" << Count << " expressions, " << Totals.Simplified
-         << " simplified";
+  outs() << "\n"
+         << Count << " expressions, " << Totals.Simplified << " simplified";
   if (Totals.Failed)
     outs() << ", " << Totals.Failed << " rejected";
   outs() << "\ntotal cost " << Totals.CostBefore << " -> " << Totals.CostAfter
@@ -237,37 +368,77 @@ void printSummary(size_t Count, Tally &Totals) {
 int runSimplify() {
   if (SimplifyWidth == 0) {
     WithColor::error() << "--width must be at least 1\n";
-    return 1;
+    return ExitInvalidInput;
+  }
+  auto FitsSize = [](unsigned long long Value) {
+    if constexpr (sizeof(size_t) >= sizeof(unsigned long long))
+      return true;
+    return Value <= std::numeric_limits<size_t>::max();
+  };
+  if (!FitsSize(SimplifyMaxWork) || !FitsSize(SimplifyMaxCost) ||
+      !FitsSize(SimplifyMaxSamples) ||
+      !FitsSize(SimplifyStochasticIterations)) {
+    WithColor::error()
+        << "a synthesis size option exceeds this build's size_t\n";
+    return ExitInvalidInput;
+  }
+  if (SimplifySynthesize &&
+      (SimplifyShallow || SimplifyMaxAtoms.getNumOccurrences() != 0 ||
+       SimplifyAllowGrowth)) {
+    WithColor::error()
+        << "--shallow, --max-atoms, and --allow-growth belong to the "
+           "legacy MBA simplifier and cannot be combined with --synthesize\n";
+    return ExitInvalidInput;
+  }
+  const bool HasSynthesisOnlyOption =
+      SimplifyMaxCost.getNumOccurrences() != 0 ||
+      SimplifyMaxSamples.getNumOccurrences() != 0 ||
+      SimplifyMaxLeaves.getNumOccurrences() != 0 ||
+      SimplifyMaxConstants.getNumOccurrences() != 0 ||
+      SimplifyStochasticSlots.getNumOccurrences() != 0 ||
+      SimplifyStochasticRestarts.getNumOccurrences() != 0 ||
+      SimplifyStochasticIterations.getNumOccurrences() != 0 ||
+      SimplifySolverMaxConflicts.getNumOccurrences() != 0 ||
+      SimplifySolverMaxPropagations.getNumOccurrences() != 0 ||
+      SimplifySolverMaxWatchVisits.getNumOccurrences() != 0;
+  if (!SimplifySynthesize && HasSynthesisOnlyOption) {
+    WithColor::error()
+        << "synthesis grammar and solver options require --synthesize\n";
+    return ExitInvalidInput;
   }
 
   std::vector<std::string> Expressions;
   if (!SimplifyFile.empty()) {
     if (!readExpressions(SimplifyFile, Expressions))
-      return 1;
+      return ExitInvalidInput;
   } else if (!SimplifyExpr.empty()) {
     Expressions.push_back(SimplifyExpr);
   } else {
     WithColor::error() << "give an expression, or -f to read a file of them\n";
     errs() << "  neverd simplify \"(x ^ y) + 2 * (x & y)\"\n";
-    return 1;
+    return ExitInvalidInput;
   }
 
   const neverd_simplify_options Options = buildOptions();
+  const neverd_synthesize_options SynthesisOptions = buildSynthesisOptions();
   json::Array Report;
   Tally Totals;
 
   for (const std::string &Expr : Expressions) {
     const auto Started = std::chrono::steady_clock::now();
-    Outcome Result = simplifyOne(Expr, Options);
+    Outcome Result = SimplifySynthesize ? synthesizeOne(Expr, SynthesisOptions)
+                                        : simplifyOne(Expr, Options);
     Totals.Times.push_back(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - Started)
             .count());
+    if (Result.Status > Totals.Status)
+      Totals.Status = Result.Status;
 
     if (SimplifyJson) {
       Report.push_back(toJson(Expr, Result));
     } else if (!Result.Ok) {
-      reportSyntaxError(Expr, Result);
+      reportOutcomeError(Expr, Result);
     } else {
       printOutcome(Result);
     }
@@ -277,9 +448,9 @@ int runSimplify() {
       continue;
     }
     Totals.Simplified += Result.Changed;
-    Totals.CostBefore += Result.CostBefore;
-    Totals.CostAfter += Result.CostAfter;
-    Totals.Work += Result.Work;
+    addSaturating(Totals.CostBefore, Result.CostBefore);
+    addSaturating(Totals.CostAfter, Result.CostAfter);
+    addSaturating(Totals.Work, Result.Work);
     ++Totals.Reasons[Result.Reason];
   }
 
@@ -294,13 +465,13 @@ int runSimplify() {
              << "\n";
     else
       outs() << json::Value(std::move(Report)) << "\n";
-    return Totals.Failed ? 1 : 0;
+    return Totals.Status;
   }
 
   // One expression already printed everything a summary would repeat.
   if (Expressions.size() > 1)
     printSummary(Expressions.size(), Totals);
-  return Totals.Failed ? 1 : 0;
+  return Totals.Status;
 }
 
 } // namespace neverd::cli

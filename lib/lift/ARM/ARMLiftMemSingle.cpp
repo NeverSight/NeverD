@@ -42,8 +42,6 @@ bool liftMemSingle(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar Sp = NdVar::reg(armreg::SP, 4);
       S.emit(NdOp::LOAD, Dst, {Sp});
       S.emit(NdOp::INT_ADD, Sp, {Sp, NdVar::cst(4, 4)});
-      if (Dst.Offset == armreg::PC)
-        S.emit(NdOp::RETURN, {}, {NdVar::reg(armreg::PC, 4)});
       break;
     }
     if (ARM.op_count < 2)

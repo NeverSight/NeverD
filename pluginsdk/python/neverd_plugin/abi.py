@@ -109,6 +109,57 @@ class SimplifyEvidence(IntEnum):
     SAMPLES = 2
 
 
+class ProofStatus(IntEnum):
+    """Disposition of the last equivalence query.
+
+    ``UNKNOWN`` is budget-driven; ``INVALID`` means the proof question itself
+    was malformed.  Neither permits a rewrite.
+    """
+
+    NOT_RUN = 0
+    EQUIVALENT = 1
+    DIFFERENT = 2
+    UNKNOWN = 3
+    INVALID = 4
+
+
+class SynthesisOutcome(IntEnum):
+    """Why proof-gated synthesis did or did not commit a rewrite."""
+
+    NOT_APPLICABLE = 0
+    ALREADY_SHORTEST = 1
+    TOO_MANY_INPUTS = 2
+    SEARCH_BUDGET_EXHAUSTED = 3
+    COUNTEREXAMPLE = 4
+    PROOF_INCOMPLETE = 5
+    REWRITTEN = 6
+
+
+class OptimizationStop(IntEnum):
+    """Observable reason a transactional module optimization stopped."""
+
+    STABLE = 0
+    CYCLE_DETECTED = 1
+    BUDGET_EXHAUSTED = 2
+    VERIFICATION_FAILED = 3
+    INPUT_INVALID = 4
+
+
+class OptimizationMode(IntEnum):
+    DEFAULT = 0
+    CONSERVATIVE = 1
+    THIN = 2
+    DEEP = 3
+
+
+class LLVMOptimizationLevel(IntEnum):
+    DEFAULT = 0
+    O0 = 1
+    O1 = 2
+    O2 = 3
+    O3 = 4
+
+
 class NeverDSimplifyOptions(ctypes.Structure):
     """Layout of ``neverd_simplify_options``.
 
@@ -126,6 +177,7 @@ class NeverDSimplifyOptions(ctypes.Structure):
         ("max_work", ctypes.c_size_t),
         ("verify_samples", ctypes.c_uint),
         ("allow_growth", ctypes.c_int),
+        ("exhaustive", ctypes.c_int),
     ]
 
 
@@ -156,6 +208,102 @@ class NeverDSimplifyResult(ctypes.Structure):
     ]
 
 
+class NeverDSynthesizeOptions(ctypes.Structure):
+    """Append-only layout of ``neverd_synthesize_options``."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("width", ctypes.c_uint),
+        ("max_cost", ctypes.c_size_t),
+        ("max_samples", ctypes.c_size_t),
+        ("verify_samples", ctypes.c_uint),
+        ("max_work", ctypes.c_size_t),
+        ("max_leaves", ctypes.c_uint),
+        ("max_constants", ctypes.c_uint),
+        ("stochastic_slots", ctypes.c_uint),
+        ("stochastic_restarts", ctypes.c_uint),
+        ("stochastic_iterations", ctypes.c_size_t),
+        ("solver_max_conflicts", ctypes.c_uint64),
+        ("solver_max_propagations", ctypes.c_uint64),
+        ("solver_max_watch_visits", ctypes.c_uint64),
+        ("exhaustive", ctypes.c_int),
+    ]
+
+
+class NeverDSynthesizeResult(ctypes.Structure):
+    """Owned typed result from proof-gated synthesis."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("ok", ctypes.c_int),
+        ("error", ctypes.c_char_p),
+        ("error_offset", ctypes.c_size_t),
+        ("input", ctypes.c_char_p),
+        ("output", ctypes.c_char_p),
+        ("changed", ctypes.c_int),
+        ("cost_before", ctypes.c_size_t),
+        ("cost_after", ctypes.c_size_t),
+        ("inputs", ctypes.c_uint),
+        ("candidate_cost", ctypes.c_size_t),
+        ("outcome", ctypes.c_int),
+        ("proof_status", ctypes.c_int),
+        ("search_work", ctypes.c_uint64),
+        ("proof_queries", ctypes.c_uint64),
+        ("proof_conflicts", ctypes.c_uint64),
+        ("proof_propagations", ctypes.c_uint64),
+        ("proof_watch_visits", ctypes.c_uint64),
+        ("counterexample_json", ctypes.c_char_p),
+    ]
+
+
+class NeverDOptimizeLLVMOptions(ctypes.Structure):
+    """Append-only layout of ``neverd_optimize_llvm_ir_options``."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("mode", ctypes.c_int),
+        ("llvm_level", ctypes.c_int),
+        ("max_rounds", ctypes.c_uint),
+        ("enable_synthesis", ctypes.c_int),
+        ("synthesis_max_cost", ctypes.c_size_t),
+        ("synthesis_max_samples", ctypes.c_size_t),
+        ("synthesis_verify_samples", ctypes.c_uint),
+        ("synthesis_max_work", ctypes.c_size_t),
+        ("synthesis_max_leaves", ctypes.c_uint),
+        ("synthesis_max_constants", ctypes.c_uint),
+        ("synthesis_stochastic_slots", ctypes.c_uint),
+        ("synthesis_stochastic_restarts", ctypes.c_uint),
+        ("synthesis_stochastic_iterations", ctypes.c_size_t),
+        ("solver_max_conflicts", ctypes.c_uint64),
+        ("solver_max_propagations", ctypes.c_uint64),
+        ("solver_max_watch_visits", ctypes.c_uint64),
+        ("exhaustive", ctypes.c_int),
+    ]
+
+
+class NeverDOptimizeLLVMResult(ctypes.Structure):
+    """Owned result and telemetry from a transactional LLVM pipeline."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("ok", ctypes.c_int),
+        ("error", ctypes.c_char_p),
+        ("error_line", ctypes.c_size_t),
+        ("error_column", ctypes.c_size_t),
+        ("output_ir", ctypes.c_char_p),
+        ("changed", ctypes.c_int),
+        ("stop", ctypes.c_int),
+        ("functions_visited", ctypes.c_uint64),
+        ("rounds", ctypes.c_uint),
+        ("semantic_rewrites", ctypes.c_uint64),
+        ("search_work", ctypes.c_uint64),
+        ("proof_queries", ctypes.c_uint64),
+        ("proof_conflicts", ctypes.c_uint64),
+        ("proof_propagations", ctypes.c_uint64),
+        ("proof_watch_visits", ctypes.c_uint64),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -172,6 +320,7 @@ class Ownership(Enum):
     """Memory/lifetime contract for a native result."""
 
     VALUE = "value"
+    BORROWED_STRING = "borrowed_string"
     OWNED_STRING = "owned_string"
     BORROWED_BUFFER = "borrowed_buffer"
 
@@ -186,6 +335,9 @@ _C_TYPES: dict[str, object] = {
     "neverd_va_t": VirtualAddress,
     "neverd_slot_t": ctypes.c_ulonglong,
     "neverd_output_language_t": ctypes.c_int,
+    "neverd_proof_status_t": ctypes.c_int,
+    "neverd_synthesis_outcome_t": ctypes.c_int,
+    "neverd_optimization_stop_t": ctypes.c_int,
     "const char *": ctypes.c_char_p,
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -193,6 +345,16 @@ _C_TYPES: dict[str, object] = {
     "const void *": ctypes.c_void_p,
     "const neverd_simplify_options *": ctypes.POINTER(NeverDSimplifyOptions),
     "neverd_simplify_result *": ctypes.POINTER(NeverDSimplifyResult),
+    "const neverd_synthesize_options *": ctypes.POINTER(
+        NeverDSynthesizeOptions
+    ),
+    "neverd_synthesize_result *": ctypes.POINTER(NeverDSynthesizeResult),
+    "const neverd_optimize_llvm_ir_options *": ctypes.POINTER(
+        NeverDOptimizeLLVMOptions
+    ),
+    "neverd_optimize_llvm_ir_result *": ctypes.POINTER(
+        NeverDOptimizeLLVMResult
+    ),
     "const neverd_symbolic_explore_options *": ctypes.POINTER(
         NeverDSymbolicExploreOptions
     ),
@@ -690,6 +852,62 @@ _declare(
     ["const char *", "unsigned", "int"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_proof_status_name",
+    "const char *",
+    ["neverd_proof_status_t"],
+    ownership=Ownership.BORROWED_STRING,
+)
+_declare(
+    "neverd_synthesis_outcome_name",
+    "const char *",
+    ["neverd_synthesis_outcome_t"],
+    ownership=Ownership.BORROWED_STRING,
+)
+_declare(
+    "neverd_synthesize_expr",
+    "int",
+    [
+        "const char *",
+        "const neverd_synthesize_options *",
+        "neverd_synthesize_result *",
+    ],
+)
+_declare(
+    "neverd_synthesize_result_dispose", "void", ["neverd_synthesize_result *"]
+)
+_declare(
+    "neverd_synthesize_expr_json_v1",
+    "const char *",
+    ["const char *", "const neverd_synthesize_options *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_optimization_stop_name",
+    "const char *",
+    ["neverd_optimization_stop_t"],
+    ownership=Ownership.BORROWED_STRING,
+)
+_declare(
+    "neverd_optimize_llvm_ir",
+    "int",
+    [
+        "const char *",
+        "const neverd_optimize_llvm_ir_options *",
+        "neverd_optimize_llvm_ir_result *",
+    ],
+)
+_declare(
+    "neverd_optimize_llvm_ir_result_dispose",
+    "void",
+    ["neverd_optimize_llvm_ir_result *"],
+)
+_declare(
+    "neverd_optimize_llvm_ir_json_v1",
+    "const char *",
+    ["const char *", "const neverd_optimize_llvm_ir_options *"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_version", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_project_name", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_version_number", "const char *", [], ownership=Ownership.OWNED_STRING)
@@ -705,10 +923,17 @@ __all__ = [
     "FunctionSpec",
     "NeverDEvent",
     "NeverDPlugin",
+    "NeverDOptimizeLLVMOptions",
+    "NeverDOptimizeLLVMResult",
     "NeverDSimplifyOptions",
     "NeverDSimplifyResult",
+    "NeverDSynthesizeOptions",
+    "NeverDSynthesizeResult",
     "NeverDSymbolicExploreOptions",
     "OutputLanguage",
+    "LLVMOptimizationLevel",
+    "OptimizationMode",
+    "OptimizationStop",
     "Ownership",
     "PatchAppliedData",
     "PluginEventCallback",
@@ -716,8 +941,10 @@ __all__ = [
     "PluginRunCallback",
     "PluginTermCallback",
     "PluginType",
+    "ProofStatus",
     "SessionHandle",
     "SimplifyEvidence",
     "SimplifyOutcome",
+    "SynthesisOutcome",
     "VirtualAddress",
 ]

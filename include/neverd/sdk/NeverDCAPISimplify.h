@@ -72,6 +72,9 @@ typedef enum neverd_simplify_evidence {
 
 /// How to simplify.  Zero the whole struct, set `struct_size`, then set only
 /// what you mean to change: every field left zero takes the engine's default.
+/// `exhaustive != 0` selects the unlimited MBA work/arity policy and removes
+/// the expression parser's nesting and width policy ceilings.  Memory-safety
+/// bounds and the symbolic IR's representational limits still apply.
 ///
 /// `struct_size` is what lets this grow.  A library newer than its caller reads
 /// only the fields the caller's struct actually has, so a plugin compiled
@@ -97,6 +100,9 @@ typedef struct neverd_simplify_options {
   /// Return a rewrite even when it reads worse than what it replaces.  For
   /// measuring the engine, not for using it.
   int allow_growth;
+  /// Remove parser, MBA arity, and MBA work policy ceilings explicitly.  This
+  /// takes precedence over `max_atoms` and `max_work`.
+  int exhaustive;
 } neverd_simplify_options;
 
 /// What became of one expression.  Zero the struct and set `struct_size` before

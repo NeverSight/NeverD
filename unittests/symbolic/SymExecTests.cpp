@@ -138,8 +138,9 @@ TEST(SymState, MemoryRemembersWhatWasStoredAtAKnownAddress) {
 }
 
 TEST(SymState, AStoreThroughAnUnknownAddressForgetsEverything) {
-  // There is no aliasing model, so a store nothing pins down may have landed
-  // anywhere.  Forgetting is the only answer that is never wrong.
+  // A store through a pointer may have landed on this number, and nothing here
+  // can say it did not.  Giving up the numbers is the only answer that is
+  // never wrong.
   SymContext Ctx;
   SymState State(Ctx);
   SymRef Addr = Ctx.mkConst(64, 0x401000);
@@ -149,6 +150,64 @@ TEST(SymState, AStoreThroughAnUnknownAddressForgetsEverything) {
   State.store(Ctx.mkVar("p", 64), Ctx.mkConst(32, 1));
   EXPECT_TRUE(State.memoryIsUnknown());
   EXPECT_FALSE(Ctx.isConst(State.load(Addr, 4)));
+}
+
+TEST(SymState, TwoSlotsOffOneBaseStayIndependent) {
+  // What a region is for.  `sp - 8` and `sp - 16` cannot be the same byte
+  // whatever `sp` turns out to be, so a write to one is known not to be a
+  // write to the other and a frame survives its own spills — where forgetting
+  // memory at the first one would have lost every local the function has.
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymRef Frame = Ctx.mkVar("sp", 64);
+  SymRef First = Ctx.mkSub(Frame, Ctx.mkConst(64, 8));
+  SymRef Second = Ctx.mkSub(Frame, Ctx.mkConst(64, 16));
+
+  State.store(First, Ctx.mkConst(32, 0xAAAABBBB));
+  State.store(Second, Ctx.mkConst(32, 0xCCCCDDDD));
+
+  SymRef BackFirst = State.load(First, 4);
+  ASSERT_TRUE(Ctx.isConst(BackFirst));
+  EXPECT_EQ(Ctx.constValue(BackFirst).getZExtValue(), 0xAAAABBBBu);
+  SymRef BackSecond = State.load(Second, 4);
+  ASSERT_TRUE(Ctx.isConst(BackSecond));
+  EXPECT_EQ(Ctx.constValue(BackSecond).getZExtValue(), 0xCCCCDDDDu);
+
+  // Both slots hang off one base, so they are one region and there was never
+  // an aliasing question to answer.
+  EXPECT_EQ(State.numMemoryRegions(), 1u);
+}
+
+TEST(SymState, OneSlotIsStillVisibleThroughAWiderReadOfItsNeighbour) {
+  // Separation is by the byte inside a region as much as between registers: a
+  // read spanning two slots sees both of them, and a read of one sees one.
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymRef Frame = Ctx.mkVar("sp", 64);
+  State.store(Ctx.mkSub(Frame, Ctx.mkConst(64, 8)),
+              Ctx.mkConst(32, 0x11223344));
+  State.store(Ctx.mkSub(Frame, Ctx.mkConst(64, 4)),
+              Ctx.mkConst(32, 0x55667788));
+
+  SymRef Both = State.load(Ctx.mkSub(Frame, Ctx.mkConst(64, 8)), 8);
+  ASSERT_TRUE(Ctx.isConst(Both));
+  EXPECT_EQ(Ctx.constValue(Both).getZExtValue(), 0x5566778811223344ull);
+}
+
+TEST(SymState, AStoreThroughAnUnrelatedBaseIsTreatedAsPossiblyAliasing) {
+  // The other half of the bargain.  Two bases can be the same pointer and
+  // nothing here can prove otherwise, so a write through one gives up
+  // everything reached through the other.  Precision between regions would be
+  // a guess; precision within one is a fact.
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymRef Slot = Ctx.mkSub(Ctx.mkVar("sp", 64), Ctx.mkConst(64, 8));
+  State.store(Slot, Ctx.mkConst(32, 0xAAAABBBB));
+  ASSERT_TRUE(Ctx.isConst(State.load(Slot, 4)));
+
+  State.store(Ctx.mkVar("p", 64), Ctx.mkConst(32, 1));
+  EXPECT_FALSE(Ctx.isConst(State.load(Slot, 4)));
+  EXPECT_TRUE(State.memoryIsUnknown());
 }
 
 TEST(SymState, AKnownStoreReestablishesBytesAfterMemoryWasClobbered) {
@@ -180,6 +239,50 @@ TEST(SymState, AnAddressThatDoesNotFitTheAddressSpaceStaysSymbolic) {
 
   State.store(Addr, Ctx.mkConst(32, 1));
   EXPECT_TRUE(State.memoryIsUnknown());
+}
+
+TEST(SymState, OneValueLoadedFromTwoAddressesHasConflictingOrigins) {
+  SymContext Ctx;
+  SymRef Base = Ctx.mkVar("base", 64);
+  SymRef FirstAddress = Ctx.mkAdd(Base, Ctx.mkConst(64, 0x10));
+  SymRef SecondAddress = Ctx.mkAdd(Base, Ctx.mkConst(64, 0x20));
+  SymRef Value = Ctx.mkVar("value", 32);
+
+  auto LoadInOrder = [&](SymRef First, SymRef Second) {
+    SymState State(Ctx);
+    State.store(FirstAddress, Value);
+    State.store(SecondAddress, Value);
+    EXPECT_EQ(State.load(First, 4), Value);
+    EXPECT_EQ(State.load(Second, 4), Value);
+    return State;
+  };
+
+  SymState Forward = LoadInOrder(FirstAddress, SecondAddress);
+  SymState Reverse = LoadInOrder(SecondAddress, FirstAddress);
+
+  EXPECT_EQ(Forward.loadOrigins(Value), Reverse.loadOrigins(Value));
+  EXPECT_EQ(Forward.loadOrigins(Value).size(), 2u);
+  EXPECT_EQ(Forward.loadOrigin(Value), nullptr);
+  EXPECT_EQ(Reverse.loadOrigin(Value), nullptr);
+}
+
+TEST(SymState, IdenticalStateMergeUnionsLoadOriginConflicts) {
+  SymContext Ctx;
+  SymRef Base = Ctx.mkVar("base", 64);
+  SymRef FirstAddress = Ctx.mkAdd(Base, Ctx.mkConst(64, 0x10));
+  SymRef SecondAddress = Ctx.mkAdd(Base, Ctx.mkConst(64, 0x20));
+  SymRef Value = Ctx.mkVar("value", 32);
+
+  SymState Left(Ctx);
+  Left.store(FirstAddress, Value);
+  Left.store(SecondAddress, Value);
+  SymState Right = Left;
+
+  EXPECT_EQ(Left.load(FirstAddress, 4), Value);
+  EXPECT_EQ(Right.load(SecondAddress, 4), Value);
+  ASSERT_TRUE(Left.mergeIdentical(Right));
+  EXPECT_EQ(Left.loadOrigins(Value).size(), 2u);
+  EXPECT_EQ(Left.loadOrigin(Value), nullptr);
 }
 
 TEST(SymState, RepeatedSymbolicLoadsObserveOneMemoryValue) {
@@ -403,6 +506,71 @@ TEST(SymExec, MemoryRoundTripsThroughLoadAndStore) {
       kRcx, 4);
   ASSERT_TRUE(Ctx.isConst(Result));
   EXPECT_EQ(Ctx.constValue(Result).getZExtValue(), 0x12345678u);
+}
+
+TEST(SymExec, TheBitCountsAndBitFieldsAreModelledRatherThanNamed) {
+  // The concrete emulator computes all four of these.  Two engines over one
+  // operator set that disagree about an opcode is the worst kind of bug: the
+  // symbolic side quietly loses the dependence and what comes out looks like
+  // independence, somewhere else entirely.
+  SymContext Ctx;
+  SymState State(Ctx);
+
+  SymRef Ones =
+      execute(Ctx, State,
+              {op(NdOp::COPY, NdVar::reg(kRax, 1), {NdVar::cst(0xF0, 1)}),
+               op(NdOp::POPCOUNT, NdVar::reg(kRbx, 1), {NdVar::reg(kRax, 1)})},
+              kRbx, 1);
+  ASSERT_TRUE(Ctx.isConst(Ones));
+  EXPECT_EQ(Ctx.constValue(Ones).getZExtValue(), 4u);
+
+  // Counted at the width the operand declares, not at the width of the machine
+  // word it happens to sit in: the leading zeros of a byte are not the leading
+  // zeros of the register holding it.
+  SymRef Leading =
+      execute(Ctx, State,
+              {op(NdOp::COPY, NdVar::reg(kRax, 1), {NdVar::cst(0x0F, 1)}),
+               op(NdOp::LZCOUNT, NdVar::reg(kRbx, 1), {NdVar::reg(kRax, 1)})},
+              kRbx, 1);
+  ASSERT_TRUE(Ctx.isConst(Leading));
+  EXPECT_EQ(Ctx.constValue(Leading).getZExtValue(), 4u);
+
+  SymRef Field =
+      execute(Ctx, State,
+              {op(NdOp::EXTRACT, NdVar::reg(kRcx, 2),
+                  {NdVar::cst(0xDEAD, 2), NdVar::cst(4, 1), NdVar::cst(8, 1)})},
+              kRcx, 2);
+  ASSERT_TRUE(Ctx.isConst(Field));
+  EXPECT_EQ(Ctx.constValue(Field).getZExtValue(), 0xEAu);
+
+  SymRef Inserted = execute(Ctx, State,
+                            {op(NdOp::INSERT, NdVar::reg(kRcx, 2),
+                                {NdVar::cst(0xFF00, 2), NdVar::cst(0xAB, 1),
+                                 NdVar::cst(0, 1), NdVar::cst(8, 1)})},
+                            kRcx, 2);
+  ASSERT_TRUE(Ctx.isConst(Inserted));
+  EXPECT_EQ(Ctx.constValue(Inserted).getZExtValue(), 0xFFABu);
+}
+
+TEST(SymExec, ABitCountOfSomethingUnknownStaysExactInIt) {
+  // The model is not a folding trick.  With the operand unknown the count is
+  // an expression in it, and it still says the one thing that matters here:
+  // that the result depends on the operand at all.
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymExec Exec(Ctx, State);
+
+  ASSERT_EQ(
+      Exec.step(op(NdOp::POPCOUNT, NdVar::reg(kRbx, 1), {NdVar::reg(kRax, 1)})),
+      StepResult::Continue);
+  EXPECT_EQ(Exec.unmodelledCount(), 0u);
+
+  SymRef Count = State.read(SymSpace::Register, kRbx, 1);
+  EXPECT_FALSE(Ctx.isConst(Count));
+  llvm::SmallVector<uint32_t, 4> Vars;
+  Ctx.collectVars(Count, Vars);
+  ASSERT_EQ(Vars.size(), 1u);
+  EXPECT_EQ(Ctx.varInfo(Vars.front()).Name, "reg$0");
 }
 
 //===----------------------------------------------------------------------===//

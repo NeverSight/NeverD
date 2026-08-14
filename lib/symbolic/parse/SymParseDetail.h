@@ -24,6 +24,8 @@
 #include "llvm/ADT/Twine.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string>
 
 namespace neverd::symbolic::detail {
@@ -44,11 +46,6 @@ enum Prec : int {
   PrecUnary,
   PrecPrimary,
 };
-
-/// Upper bound on a width written in the text.  Real targets top out at the
-/// 256 bits of an EVM word; the bound only exists so that a typo cannot ask
-/// for an \c APInt of a few hundred megabytes.
-constexpr uint64_t kMaxWidth = 1u << 16;
 
 //===----------------------------------------------------------------------===//
 // Lexing
@@ -90,21 +87,20 @@ private:
 
 class Parser {
 public:
-  Parser(SymContext &Ctx, llvm::StringRef Text, uint32_t Width)
-      : Ctx(Ctx), Lex(Text), Width(Width) {}
+  Parser(SymContext &Ctx, llvm::StringRef Text, uint32_t Width,
+         const SymParseOptions &Options)
+      : Ctx(Ctx), Lex(Text), Width(Width), Options(Options) {
+    validateWidth(Width, 0);
+  }
 
   SymParseResult run();
 
 private:
-  /// Recursion is bounded so that pathologically nested text is a diagnostic
-  /// rather than a crash.  Precedence climbing keeps a flat chain like
-  /// `a+b+c+...` in one frame, so only bracket and unary nesting counts here.
-  static constexpr unsigned kMaxDepth = 512;
-
   class DepthGuard {
   public:
     DepthGuard(Parser &P, size_t Offset) : P(P) {
-      if (++P.Depth > kMaxDepth)
+      ++P.Depth;
+      if (P.Options.MaxNesting != 0 && P.Depth > P.Options.MaxNesting)
         P.fail(Offset, "expression nests too deeply");
     }
     ~DepthGuard() { --P.Depth; }
@@ -125,6 +121,19 @@ private:
 
   bool parsePlainInt(uint64_t &Out);
   uint32_t parseWidthSuffix(uint32_t Default);
+  bool validateWidth(uint64_t Candidate, size_t Offset) {
+    const uint64_t RepresentationLimit = std::numeric_limits<uint32_t>::max();
+    if (Candidate != 0 && Candidate <= RepresentationLimit &&
+        (Options.MaxWidth == 0 || Candidate <= Options.MaxWidth))
+      return true;
+
+    if (Options.MaxWidth != 0)
+      fail(Offset,
+           "a width must be between 1 and " + llvm::Twine(Options.MaxWidth));
+    else
+      fail(Offset, "a width must fit the symbolic IR width field");
+    return false;
+  }
 
   SymRef applyBinary(llvm::StringRef Spelling, SymRef A, SymRef B);
   SymRef applyVariadic(const Token &Name, llvm::MutableArrayRef<SymRef> Args);
@@ -178,7 +187,8 @@ private:
   SymContext &Ctx;
   Lexer Lex;
   uint32_t Width;
-  unsigned Depth = 0;
+  SymParseOptions Options;
+  size_t Depth = 0;
   bool Failed = false;
   std::string Error;
   size_t ErrorOffset = 0;

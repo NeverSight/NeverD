@@ -118,9 +118,20 @@ def parse_c_enum(source: str, typedef_name: str) -> dict[str, int]:
     return entries
 
 
-def expected_ownership(result: str):
+BORROWED_STRING_FUNCTIONS = frozenset(
+    {
+        "neverd_optimization_stop_name",
+        "neverd_proof_status_name",
+        "neverd_synthesis_outcome_name",
+    }
+)
+
+
+def expected_ownership(name: str, result: str):
     from neverd_plugin.abi import Ownership
 
+    if name in BORROWED_STRING_FUNCTIONS:
+        return Ownership.BORROWED_STRING
     if result == "const char *":
         return Ownership.OWNED_STRING
     if result == "const unsigned char *":
@@ -151,7 +162,7 @@ def check_abi(errors: list[str]) -> None:
                 f"{name} argument mismatch: header={arguments!r}, "
                 f"Python={spec.c_arguments!r}"
             )
-        ownership = expected_ownership(result)
+        ownership = expected_ownership(name, result)
         if spec.ownership is not ownership:
             errors.append(
                 f"{name} ownership mismatch: expected={ownership.value}, "

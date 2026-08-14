@@ -8,22 +8,29 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIDisasm.cpp
     capi/NeverDCAPIGraph.cpp
     capi/NeverDCAPIInfo.cpp
+    capi/NeverDCAPIOptimize.cpp
     capi/NeverDCAPIPatch.cpp
     capi/NeverDCAPIPersist.cpp
     capi/NeverDCAPIRoundtrip.cpp
     capi/NeverDCAPISearch.cpp
     capi/NeverDCAPISigs.cpp
     capi/NeverDCAPISimplify.cpp
+    capi/NeverDCAPISynth.cpp
     capi/NeverDCAPISymbolic.cpp
     capi/NeverDCAPITargetConfig.cpp
-    plugin/PluginManager.cpp
-    plugin/PythonPluginBridge.cpp
-    plugin/PythonPluginError.cpp
-    plugin/PythonPluginInterpreter.cpp
-    plugin/PythonPluginMarshal.cpp)
+    plugin/PluginManager.cpp)
 
+# The Python host translation units include <Python.h> unconditionally, so they
+# only compile when the CPython development headers are available.  PluginManager
+# guards its Python usage with NEVERD_ENABLE_PYTHON_PLUGINS and stays in the base
+# set so the manager builds without a Python toolchain.
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
-    list(APPEND NEVERD_SDK_SOURCES plugin/PythonPluginRuntime.cpp)
+    list(APPEND NEVERD_SDK_SOURCES
+        plugin/PythonPluginBridge.cpp
+        plugin/PythonPluginError.cpp
+        plugin/PythonPluginInterpreter.cpp
+        plugin/PythonPluginMarshal.cpp
+        plugin/PythonPluginRuntime.cpp)
 endif()
 
 add_library(neverd_shared SHARED ${NEVERD_SDK_SOURCES})
@@ -57,6 +64,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDPassMIR
     NeverDLibC
     NeverDDebugInfo
+    NeverDSolver
     NeverDSymbolic
     NeverDSigs
     NeverDSBF
@@ -121,7 +129,9 @@ set(NEVERD_SDK_HEADERS
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIPersist.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISigs.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIPlugin.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIOptimize.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISimplify.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISynth.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDPlugin.h)
 
 add_custom_command(TARGET neverd_shared POST_BUILD
@@ -146,7 +156,8 @@ if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
     "${CMAKE_SOURCE_DIR}/pluginsdk/python/neverd_plugin/py.typed")
   set(NEVERD_PYTHON_SDK_EXAMPLE_FILES
     "${CMAKE_SOURCE_DIR}/pluginsdk/python/examples/analysis_report.py"
-    "${CMAKE_SOURCE_DIR}/pluginsdk/python/examples/minimal.py")
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/examples/minimal.py"
+    "${CMAKE_SOURCE_DIR}/pluginsdk/python/examples/semantic_optimizer.py")
   add_custom_command(TARGET neverd_shared POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/neverd_plugin"

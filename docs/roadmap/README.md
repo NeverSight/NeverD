@@ -19,10 +19,10 @@ Finish container-level support for targets the loaders already partially recogni
 | Mach-O i386 | Apply common clang relocations; thin objects first |
 
 **Status:** Complete. Format-level coverage is locked by
-[`COFFARMFormatTests.cpp`](../../unittests/lift/COFFARMFormatTests.cpp),
-[`MachOI386RelocationTests.cpp`](../../unittests/lift/MachOI386RelocationTests.cpp),
+[`COFFARMFormatTests.cpp`](../../unittests/lift/format/COFFARMFormatTests.cpp),
+[`MachOI386RelocationTests.cpp`](../../unittests/lift/format/MachOI386RelocationTests.cpp),
 and the PE/Mach-O cases in
-[`PatchFormatTests.cpp`](../../unittests/lift/PatchFormatTests.cpp). Mach-O i386
+[`PatchFormatTests.cpp`](../../unittests/lift/format/PatchFormatTests.cpp). Mach-O i386
 uses PIC and no-PIC thin objects because modern macOS hosts cannot link
 historical i386 executables.
 

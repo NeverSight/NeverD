@@ -10,10 +10,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/support/TargetCodegenInfo.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
+#include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Module.h"
@@ -254,8 +254,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
         return serializeExportAddress(Image, VA);
       }
       if (auto Parsed = parseNdDataSymbol(Name))
-        return SerializeResolvedCode(*Parsed,
-                                     IsProvenCodeDataSymbol(*Parsed));
+        return SerializeResolvedCode(*Parsed, IsProvenCodeDataSymbol(*Parsed));
       if (auto Parsed = parseNdCodePtrSymbol(Name))
         return SerializeResolvedCode(*Parsed, false);
       std::string AliasKey = resolveSymbolAlias(Name, SymByName);
@@ -309,6 +308,23 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
 
   if (!GrowNames.empty()) {
     auto Patcher = createBinaryPatcher();
+
+    const bool NeedsFormatAwareExceptionPatch =
+        Fmt != BinaryFormat::COFF &&
+        std::any_of(Plans.begin(), Plans.end(), [&](const FuncPlan &Plan) {
+          return Plan.HasExceptionMetadata && GrowNames.count(Plan.IRName);
+        });
+    if (NeedsFormatAwareExceptionPatch) {
+      if (!Patcher) {
+        llvm::WithColor::error()
+            << "inplace: exception-aware patching is unsupported for this "
+               "format\n";
+        return PatchResult{};
+      }
+      Patcher->setImageContext(&Image);
+      return Patcher->patch(InputPath, OutputPath, Mod, TargetArch);
+    }
+
     uint64_t NewSegVA =
         Patcher ? Patcher->plannedExecSegmentVA(State.Binary, TargetArch) : 0;
 
@@ -349,8 +365,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
         return SerializeResolvedCode(VA, IsExecutable(VA));
       }
       if (auto Parsed = parseNdDataSymbol(Name))
-        return SerializeResolvedCode(*Parsed,
-                                     IsProvenCodeDataSymbol(*Parsed));
+        return SerializeResolvedCode(*Parsed, IsProvenCodeDataSymbol(*Parsed));
       if (auto Parsed = parseNdCodePtrSymbol(Name))
         return SerializeResolvedCode(*Parsed, false);
       std::string AliasKey = resolveSymbolAlias(Name, SymByName);
@@ -441,9 +456,8 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
       }
       uint64_t TextDelta = Plan.OrigVA - State.TL.SectionVA;
       if (State.TL.SectionFileoff > InvalidVA - TextDelta) {
-        llvm::WithColor::error()
-            << "inplace: file offset overflow for grower '" << Plan.Name
-            << "'\n";
+        llvm::WithColor::error() << "inplace: file offset overflow for grower '"
+                                 << Plan.Name << "'\n";
         return PatchResult{};
       }
       uint64_t FileOff = State.TL.SectionFileoff + TextDelta;

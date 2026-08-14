@@ -92,6 +92,9 @@ struct MedOp {
   uint32_t CallSiteId = 0;
   bool Dead = false;
   bool PreservesCallerSaved = false;
+  /// The source instruction is a proven no-return call.  This is explicit MedIR
+  /// control provenance: consumers must not infer it again from a mutable name.
+  bool DoesNotReturn = false;
 
   void addInput(MedVar V) {
     if (NumInputs < 6)

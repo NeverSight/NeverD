@@ -83,7 +83,8 @@ llvm::Function *buildBranchingFunction(llvm::Module &M) {
   llvm::LLVMContext &C = M.getContext();
   auto *I32 = llvm::Type::getInt32Ty(C);
   auto *FT = llvm::FunctionType::get(I32, {I32, I32}, /*isVarArg=*/false);
-  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "f", &M);
+  auto *F =
+      llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "f", &M);
 
   auto *Entry = llvm::BasicBlock::Create(C, "entry", F);
   auto *Less = llvm::BasicBlock::Create(C, "less", F);
@@ -131,12 +132,11 @@ TEST(ControlFlowRecovery, RecoversTheGraphItsOwnFlatteningHid) {
   // sent it, so nothing reaches the switch any more.
   for (llvm::Instruction &I : llvm::instructions(*F))
     if (auto *Switch = llvm::dyn_cast<llvm::SwitchInst>(&I))
-      EXPECT_TRUE(llvm::pred_empty(Switch->getParent()))
-          << printFunction(*F);
+      EXPECT_TRUE(llvm::pred_empty(Switch->getParent())) << printFunction(*F);
   EXPECT_GT(countOf<llvm::CondBrInst>(*F), 0u) << printFunction(*F);
 }
 
-TEST(ControlFlowRecovery, FlattenAndRecoverReachesWhatWasNeverFlattened) {
+TEST(ControlFlowRecovery, DeepRunsRecoveryBeforePromotionAndSROA) {
   // The comparison that matters.  One module is flattened and put back, the
   // other is left alone; both then go through the real optimizer. If recovery
   // works, the pipeline cannot tell them apart at the end -- the dispatcher,
@@ -146,22 +146,38 @@ TEST(ControlFlowRecovery, FlattenAndRecoverReachesWhatWasNeverFlattened) {
   llvm::Module Flattened("flattened", C);
   llvm::Module Untouched("untouched", C);
   llvm::Function *WasFlattened = buildBranchingFunction(Flattened);
-  llvm::Function *Never = buildBranchingFunction(Untouched);
+  buildBranchingFunction(Untouched);
 
   ASSERT_GT(ControlFlowFlatteningPass::inject(Flattened), 0u);
 
-  Pipeline::optimizeModule(Flattened);
-  Pipeline::optimizeModule(Untouched);
+  Pipeline::OptimizationOptions Options;
+  Options.Strength = Pipeline::OptStrength::Deep;
+  Options.LLVMLevel = llvm::OptimizationLevel::O2;
+  OptimizationResult FlattenedResult =
+      Pipeline::optimizeModule(Flattened, Options);
+  OptimizationResult UntouchedResult =
+      Pipeline::optimizeModule(Untouched, Options);
+  EXPECT_NE(FlattenedResult.Stop, OptimizationStopReason::InputInvalid);
+  EXPECT_NE(FlattenedResult.Stop, OptimizationStopReason::VerificationFailed);
+  EXPECT_NE(UntouchedResult.Stop, OptimizationStopReason::InputInvalid);
+  EXPECT_NE(UntouchedResult.Stop, OptimizationStopReason::VerificationFailed);
   ASSERT_FALSE(llvm::verifyModule(Flattened, &llvm::errs()));
+
+  WasFlattened = Flattened.getFunction("f");
+  llvm::Function *Never = Untouched.getFunction("f");
+  ASSERT_NE(WasFlattened, nullptr);
+  ASSERT_NE(Never, nullptr);
 
   EXPECT_EQ(countOf<llvm::SwitchInst>(*WasFlattened), 0u)
       << printFunction(*WasFlattened);
   EXPECT_EQ(countOf<llvm::AllocaInst>(*WasFlattened), 0u)
       << printFunction(*WasFlattened);
   EXPECT_EQ(WasFlattened->size(), Never->size())
-      << printFunction(*WasFlattened) << "\nvs\n" << printFunction(*Never);
+      << printFunction(*WasFlattened) << "\nvs\n"
+      << printFunction(*Never);
   EXPECT_EQ(opcodeSketch(*WasFlattened), opcodeSketch(*Never))
-      << printFunction(*WasFlattened) << "\nvs\n" << printFunction(*Never);
+      << printFunction(*WasFlattened) << "\nvs\n"
+      << printFunction(*Never);
 }
 
 // `@g(i32 %x)` switching on a value the caller supplies rather than on one its
@@ -171,7 +187,8 @@ TEST(ControlFlowRecovery, LeavesASwitchNoPredecessorDecides) {
   llvm::Module M("m", C);
   auto *I32 = llvm::Type::getInt32Ty(C);
   auto *FT = llvm::FunctionType::get(I32, {I32}, /*isVarArg=*/false);
-  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "g", &M);
+  auto *F =
+      llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "g", &M);
 
   auto *Entry = llvm::BasicBlock::Create(C, "entry", F);
   auto *One = llvm::BasicBlock::Create(C, "one", F);
@@ -208,7 +225,8 @@ llvm::Function *buildComputedDispatch(llvm::Module &M, llvm::StringRef Name,
   llvm::LLVMContext &C = M.getContext();
   auto *I32 = llvm::Type::getInt32Ty(C);
   auto *FT = llvm::FunctionType::get(I32, {I32, I32}, /*isVarArg=*/false);
-  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
+  auto *F =
+      llvm::Function::Create(FT, llvm::Function::ExternalLinkage, Name, &M);
 
   auto *Entry = llvm::BasicBlock::Create(C, "entry", F);
   auto *Dispatch = llvm::BasicBlock::Create(C, "dispatch", F);
@@ -223,9 +241,9 @@ llvm::Function *buildComputedDispatch(llvm::Module &M, llvm::StringRef Name,
   // `(x ^ y) + 2 * (x & y)` is `x + y`, so subtracting `x + y` leaves zero --
   // an identity no amount of constant folding sees through, which is exactly
   // why an obfuscator writes one.
-  llvm::Value *Mba =
-      B.CreateAdd(B.CreateXor(X, Y),
-                  B.CreateMul(B.CreateAnd(X, Y), llvm::ConstantInt::get(I32, 2)));
+  llvm::Value *Mba = B.CreateAdd(
+      B.CreateXor(X, Y),
+      B.CreateMul(B.CreateAnd(X, Y), llvm::ConstantInt::get(I32, 2)));
   llvm::Value *Hidden = B.CreateSub(Mba, B.CreateAdd(X, Y));
   if (Vary)
     Hidden = B.CreateAdd(Hidden, X);
@@ -253,7 +271,8 @@ TEST(ControlFlowRecovery, ThreadsANumberTheObfuscatorComputedRatherThanWrote) {
   ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 
   // The entry now names the case directly, and nothing reaches the switch.
-  auto *Br = llvm::dyn_cast<llvm::UncondBrInst>(F->getEntryBlock().getTerminator());
+  auto *Br =
+      llvm::dyn_cast<llvm::UncondBrInst>(F->getEntryBlock().getTerminator());
   ASSERT_NE(Br, nullptr) << printFunction(*F);
   EXPECT_EQ(Br->getSuccessor(0)->getName(), "one") << printFunction(*F);
 }
@@ -282,9 +301,8 @@ TEST(ControlFlowRecovery, LeavesASlotWhoseAddressEscapes) {
   auto *Callee = llvm::Function::Create(
       llvm::FunctionType::get(llvm::Type::getVoidTy(C), {Ptr}, false),
       llvm::Function::ExternalLinkage, "meddle", &M);
-  auto *F = llvm::Function::Create(
-      llvm::FunctionType::get(I32, {}, false), llvm::Function::ExternalLinkage,
-      "h", &M);
+  auto *F = llvm::Function::Create(llvm::FunctionType::get(I32, {}, false),
+                                   llvm::Function::ExternalLinkage, "h", &M);
 
   auto *Entry = llvm::BasicBlock::Create(C, "entry", F);
   auto *Dispatch = llvm::BasicBlock::Create(C, "dispatch", F);

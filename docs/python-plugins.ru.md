@@ -53,7 +53,7 @@ class AnalysisReport:
 
 Все hooks необязательны. `None` означает успех; целочисленный результат должен помещаться в C `int`. Версии метаданных используют строгий SemVer. Имя должно быть непустой строкой UTF-8, а любые метаданные со встроенным NUL отклоняются.
 
-Примеры в репозитории: [`minimal.py`](../pluginsdk/python/examples/minimal.py) и [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py).
+Примеры в репозитории: [`minimal.py`](../pluginsdk/python/examples/minimal.py), [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py) и [`semantic_optimizer.py`](../pluginsdk/python/examples/semantic_optimizer.py) для API оптимизации с обязательным доказательством.
 
 ## Загрузка и просмотр плагинов
 
@@ -106,6 +106,58 @@ for path in result.paths:
 Шесть неизменяемых вариантов событий: `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` и `PATCH_APPLIED`. Строки payload копируются во время callback; поля, не относящиеся к варианту события, равны `None`.
 
 Никогда не сохраняйте `Session` для использования после завершения. Нативная capsule становится недействительной до начала `on_term` и до того, как нативную сессию можно освободить. Последующий вызов завершается с `RuntimeError`, а не разыменовывает устаревшую память.
+
+### Синтез под контролем доказательства и оптимизация LLVM
+
+`synthesize_expression` отделён от сохранённого ради совместимости ABI
+`simplify_expression`, который работает только с MBA. Переписывание принимается
+лишь при ответе решателя `ProofStatus.EQUIVALENT`. Контрпример, незавершённое
+доказательство или исчерпанный бюджет сохраняют исходное выражение и отдельно
+сообщают исход, объём поиска и объём доказательства.
+`ProofStatus.INVALID` означает некорректную постановку задачи доказательства и
+не смешивается с вызванным бюджетом `ProofStatus.UNKNOWN`; оба результата
+безопасно запрещают переписывание.
+
+`optimize_llvm_ir` объединяет семантическую неподвижную точку NeverD и выбранный
+стандартный конвейер LLVM на транзакционной копии и возвращает только
+проверенный, принятый модуль:
+
+```python
+from neverd_plugin import (
+    LLVMOptimizationLevel,
+    OptimizationMode,
+    ProofStatus,
+    optimize_llvm_ir,
+    synthesize_expression,
+)
+
+rewrite = synthesize_expression(
+    "(x >> 4) + ((x >> 2) >> 2)", exhaustive=True
+)
+if rewrite.changed:
+    assert rewrite.proof_status is ProofStatus.EQUIVALENT
+
+module = optimize_llvm_ir(
+    llvm_ir,
+    mode=OptimizationMode.DEEP,
+    llvm_level=LLVMOptimizationLevel.O2,
+    enable_synthesis=True,
+    exhaustive=True,
+)
+print(module.output_ir, module.semantic_rewrites, module.proof_queries)
+```
+
+В рабочей среде можно раздельно ограничивать работу и арность MBA, поиск и
+SAT-работу синтеза, а также сходимость LLVM. Для `simplify_expression` явный
+режим `exhaustive=True` выбирает политику MBA без ограничений арности и работы
+и снимает ограничения политики вложенности и разрядности нативного парсера.
+Для `synthesize_expression` он снимает ограничения парсера, поисковой работы и
+SAT, сохраняя заданную вызывающей стороной грамматику; для `optimize_llvm_ir` —
+ограничения сходимости, поиска и SAT. Слой Python не добавляет иных ограничений
+выражения; границы безопасности памяти и представления IR продолжают
+действовать. Соответствующие точки входа C — `neverd_simplify_expr`,
+`neverd_synthesize_expr` и `neverd_optimize_llvm_ir`; предусмотрены
+типизированные функции освобождения и версионированные JSON-адаптеры.
 
 ## Ошибки, изоляция и доверие
 

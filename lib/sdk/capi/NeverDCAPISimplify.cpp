@@ -19,10 +19,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/sdk/NeverDCAPI.h"
-
 #include "SessionImpl.h"
 
+#include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/symbolic/SymMBA.h"
 #include "neverd/symbolic/SymParse.h"
 
@@ -92,8 +91,14 @@ struct Simplified {
   symbolic::MBAResult Result;
 };
 
-Simplified simplify(const char *Expr, unsigned Width, bool Deep,
-                    const symbolic::MBAOptions &Opts) {
+struct SimplifyConfig {
+  unsigned Width = kDefaultWidth;
+  bool Deep = true;
+  symbolic::MBAOptions MBA;
+  symbolic::SymParseOptions Parse;
+};
+
+Simplified simplify(const char *Expr, const SimplifyConfig &Config) {
   Simplified Out;
   if (!Expr) {
     Out.Error = "no expression given";
@@ -101,7 +106,8 @@ Simplified simplify(const char *Expr, unsigned Width, bool Deep,
   }
 
   symbolic::SymContext Ctx;
-  symbolic::SymParseResult Parsed = symbolic::parseSymExpr(Ctx, Expr, Width);
+  symbolic::SymParseResult Parsed =
+      symbolic::parseSymExpr(Ctx, Expr, Config.Width, Config.Parse);
   if (!Parsed.ok()) {
     Out.Error = Parsed.Error;
     Out.ErrorOffset = Parsed.ErrorOffset;
@@ -109,8 +115,9 @@ Simplified simplify(const char *Expr, unsigned Width, bool Deep,
   }
 
   Out.Ok = true;
-  Out.Result = Deep ? symbolic::simplifyMBADeep(Ctx, Parsed.Root, Opts)
-                    : symbolic::simplifyMBA(Ctx, Parsed.Root, Opts);
+  Out.Result = Config.Deep
+                   ? symbolic::simplifyMBADeep(Ctx, Parsed.Root, Config.MBA)
+                   : symbolic::simplifyMBA(Ctx, Parsed.Root, Config.MBA);
   // Rendered here because the context that gives these references meaning does
   // not outlive this function; nothing downstream holds a SymRef.
   Out.Input = Ctx.toString(Parsed.Root);
@@ -118,31 +125,36 @@ Simplified simplify(const char *Expr, unsigned Width, bool Deep,
   return Out;
 }
 
-symbolic::MBAOptions readOptions(const neverd_simplify_options *In,
-                                 unsigned &Width, bool &Deep) {
-  symbolic::MBAOptions Opts;
-  Width = kDefaultWidth;
-  Deep = true;
+SimplifyConfig readOptions(const neverd_simplify_options *In) {
+  SimplifyConfig Config;
   if (!In)
-    return Opts;
+    return Config;
 
   const size_t Size = In->struct_size;
+  const bool Exhaustive =
+      reaches(Size, FIELD_END(neverd_simplify_options, exhaustive)) &&
+      In->exhaustive != 0;
+  if (Exhaustive) {
+    Config.MBA = symbolic::MBAOptions::unlimited();
+    Config.Parse = symbolic::SymParseOptions::unlimited();
+  }
+
   if (reaches(Size, FIELD_END(neverd_simplify_options, width)) && In->width)
-    Width = In->width;
+    Config.Width = In->width;
   if (reaches(Size, FIELD_END(neverd_simplify_options, shallow)))
-    Deep = In->shallow == 0;
+    Config.Deep = In->shallow == 0;
   if (reaches(Size, FIELD_END(neverd_simplify_options, max_atoms)) &&
-      In->max_atoms)
-    Opts.MaxAtoms = In->max_atoms;
+      In->max_atoms && !Exhaustive)
+    Config.MBA.MaxAtoms = In->max_atoms;
   if (reaches(Size, FIELD_END(neverd_simplify_options, max_work)) &&
-      In->max_work)
-    Opts.MaxWork = In->max_work;
+      In->max_work && !Exhaustive)
+    Config.MBA.MaxWork = In->max_work;
   if (reaches(Size, FIELD_END(neverd_simplify_options, verify_samples)) &&
       In->verify_samples)
-    Opts.VerifySamples = In->verify_samples;
+    Config.MBA.VerifySamples = In->verify_samples;
   if (reaches(Size, FIELD_END(neverd_simplify_options, allow_growth)))
-    Opts.AllowGrowth = In->allow_growth != 0;
-  return Opts;
+    Config.MBA.AllowGrowth = In->allow_growth != 0;
+  return Config;
 }
 
 void writeResult(const Simplified &From, neverd_simplify_result *To) {
@@ -183,14 +195,11 @@ int neverd_simplify_expr(const char *Expr,
                          neverd_simplify_result *Result) {
   // Without room for `ok` there is nowhere to put an answer, which is the one
   // thing this cannot report through the result.
-  if (!Result || !reaches(Result->struct_size,
-                          FIELD_END(neverd_simplify_result, ok)))
+  if (!Result ||
+      !reaches(Result->struct_size, FIELD_END(neverd_simplify_result, ok)))
     return 1;
 
-  unsigned Width = kDefaultWidth;
-  bool Deep = true;
-  symbolic::MBAOptions Opts = readOptions(Options, Width, Deep);
-  writeResult(simplify(Expr, Width, Deep, Opts), Result);
+  writeResult(simplify(Expr, readOptions(Options)), Result);
   return 0;
 }
 
@@ -216,9 +225,10 @@ void neverd_simplify_result_dispose(neverd_simplify_result *Result) {
 
 const char *neverd_simplify_expr_json(const char *Expr, unsigned Width,
                                       int Deep) {
-  symbolic::MBAOptions Opts;
-  Simplified S =
-      simplify(Expr, Width ? Width : kDefaultWidth, Deep != 0, Opts);
+  SimplifyConfig Config;
+  Config.Width = Width ? Width : kDefaultWidth;
+  Config.Deep = Deep != 0;
+  Simplified S = simplify(Expr, Config);
   if (!S.Ok)
     return dupStr(jsonToString(
         llvm::json::Object{{"ok", false},

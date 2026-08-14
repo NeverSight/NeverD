@@ -6,12 +6,12 @@
 
 #include "neverd/loader/DWARF/ItaniumEH.h"
 
-#include "neverd/object/SectionNames.h"
-#include "neverd/support/BinaryEncoding.h"
-#include "neverd/support/DwarfEH.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/LanguageRuntime.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/DwarfEH.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Debug.h"
@@ -86,15 +86,13 @@ PointerBases computeBases(const BinaryImage &Img) {
 
 /// Classify the exceptional shape of a decoded LSDA so the IR layers do not
 /// each have to re-derive it from the action chain.
-void summarizeItanium(ExceptionFunction &F) {
-  if (!F.Itanium)
-    return;
-  const ItaniumEHInfo &Info = *F.Itanium;
+void summarizeItanium(const ItaniumEHInfo &Info,
+                      ExceptionDecodeState &LanguageDecode) {
   bool AnyLandingPad = false;
   for (const ItaniumCallSite &Site : Info.CallSites)
     AnyLandingPad = AnyLandingPad || Site.LandingPadVA != 0;
   if (!AnyLandingPad && Info.Actions.empty())
-    F.Diagnostics.emplace_back(
+    LanguageDecode.Diagnostics.emplace_back(
         "Itanium record declares no landing pad: the frame only forwards");
 }
 
@@ -112,10 +110,9 @@ void parseItaniumExceptions(BinaryImage &Img) {
 
   ExceptionInfo &Out = Img.ExceptionMetadata;
   Out.addModel(ExceptionModel::Itanium);
-  Out.ParseStatus =
-      mergeExceptionParseStatus(Out.ParseStatus, Frames.ParseStatus);
-  for (std::string &Diag : Frames.Diagnostics)
-    Out.Diagnostics.push_back(std::move(Diag));
+  ExceptionDecodeState &ImageStructural = Out.structuralDecodeState();
+  ImageStructural.mergeStatus(Frames.ParseStatus);
+  ImageStructural.appendDiagnostics(Frames.Diagnostics);
 
   // CIEs are shared; keep one copy per section offset in the image record.
   const size_t CIEBase = Out.CIEs.size();
@@ -160,6 +157,7 @@ void parseItaniumExceptions(BinaryImage &Img) {
     F.Encoding = ExceptionEncoding::DwarfFDE;
     F.Kind = RuntimeFunctionKind::Primary;
     F.UnwindInfoVA = Sec.VA + FDE.SectionOffset;
+    ExceptionFunctionDecodeProvenance &Decode = F.establishDecodeProvenance();
 
     if (RelocatedOffsets.contains(FDE.InitialLocationOffset)) {
       // A record that cannot say which function it describes is not a record
@@ -177,15 +175,15 @@ void parseItaniumExceptions(BinaryImage &Img) {
             ExceptionAddressRange::fromStartAndSize(Begin, FDE.AddressRange)) {
       F.CodeRange = *Range;
     } else {
-      F.ParseStatus = ExceptionParseStatus::Malformed;
-      F.Diagnostics.emplace_back("DWARF FDE describes an invalid code range");
+      Decode.Structural.ParseStatus = ExceptionParseStatus::Malformed;
+      Decode.Structural.Diagnostics.emplace_back(
+          "DWARF FDE describes an invalid code range");
     }
 
     const Segment *Seg = Img.getSegmentFor(F.CodeRange.Begin);
     if (F.CodeRange.isValid() && (!Seg || !Seg->isExecutable())) {
-      F.ParseStatus = mergeExceptionParseStatus(F.ParseStatus,
-                                                ExceptionParseStatus::Partial);
-      F.Diagnostics.emplace_back(
+      Decode.Structural.mergeStatus(ExceptionParseStatus::Partial);
+      Decode.Structural.Diagnostics.emplace_back(
           "DWARF FDE range does not start in executable data");
     }
 
@@ -193,11 +191,13 @@ void parseItaniumExceptions(BinaryImage &Img) {
     if (CIE->PersonalityVA != 0 || CIE->PersonalitySlotVA != 0) {
       F.PersonalityName =
           resolveRoutineName(Img, CIE->PersonalityVA, CIE->PersonalitySlotVA);
-      F.Personality = classifyPersonalityName(F.PersonalityName);
+      F.Personality = F.PersonalityName.empty()
+                          ? ExceptionPersonality::Unknown
+                          : classifyPersonalityName(F.PersonalityName);
       if (F.Personality == ExceptionPersonality::Unknown) {
-        F.ParseStatus = mergeExceptionParseStatus(
-            F.ParseStatus, ExceptionParseStatus::Partial);
-        F.Diagnostics.emplace_back("unknown Itanium personality routine");
+        Decode.Language.mergeStatus(ExceptionParseStatus::Partial);
+        Decode.Language.Diagnostics.emplace_back(
+            "unknown Itanium personality routine");
       }
     }
 
@@ -211,17 +211,16 @@ void parseItaniumExceptions(BinaryImage &Img) {
       PointerBases LSDABases = Bases;
       LSDABases.Func = F.CodeRange.Begin;
       LSDAParseResult LSDA = parseLSDA(Img, Req, LSDABases);
-      F.ParseStatus =
-          mergeExceptionParseStatus(F.ParseStatus, LSDA.ParseStatus);
-      for (std::string &Diag : LSDA.Diagnostics)
-        F.Diagnostics.push_back(std::move(Diag));
+      Decode.Language.mergeStatus(LSDA.ParseStatus);
+      Decode.Language.appendDiagnostics(LSDA.Diagnostics);
       if (LSDA.Info)
         F.Itanium = std::move(*LSDA.Info);
-      summarizeItanium(F);
+      if (F.Itanium)
+        summarizeItanium(*F.Itanium, Decode.Language);
     }
 
     F.Dwarf = std::move(FDE);
-    Out.ParseStatus = mergeExceptionParseStatus(Out.ParseStatus, F.ParseStatus);
+    F.rebuildParseSummary();
 
     if (F.CodeRange.isValid()) {
       Img.KnownCodeRanges.emplace_back(F.CodeRange.Begin, F.CodeRange.End);
@@ -240,9 +239,8 @@ void parseItaniumExceptions(BinaryImage &Img) {
   }
 
   if (Unrelocated != 0) {
-    Out.ParseStatus =
-        mergeExceptionParseStatus(Out.ParseStatus, ExceptionParseStatus::Partial);
-    Out.Diagnostics.push_back(
+    ImageStructural.mergeStatus(ExceptionParseStatus::Partial);
+    ImageStructural.Diagnostics.push_back(
         std::to_string(Unrelocated) +
         " DWARF FDEs name their functions through relocations the object has "
         "not had applied, so the frames they describe were left unattributed");
@@ -253,9 +251,41 @@ void parseItaniumExceptions(BinaryImage &Img) {
       std::unique(Img.KnownCodeRanges.begin(), Img.KnownCodeRanges.end()),
       Img.KnownCodeRanges.end());
   Out.rebuildIndex();
+  Out.rebuildParseSummary();
 
   LLVM_DEBUG(llvm::dbgs() << "dwarf-eh: normalized " << Frames.FDEs.size()
                           << " FDEs (" << Added << " new funcs)\n");
+}
+
+bool refreshItaniumLanguageData(const BinaryImage &Img,
+                                ExceptionFunction &Function) {
+  if (Function.Encoding != ExceptionEncoding::DwarfFDE || !Function.Dwarf ||
+      !Function.DecodeProvenance || Function.HandlerDataVA == 0 ||
+      !Function.CodeRange.isValid() || !Img.readVA(Function.HandlerDataVA, 1))
+    return false;
+
+  LSDAParseRequest Req;
+  Req.LSDAVA = Function.HandlerDataVA;
+  Req.FunctionStart = Function.CodeRange.Begin;
+  Req.FunctionEnd = Function.CodeRange.End;
+  Req.IsSJLJ = isSJLJPersonality(Function.Personality);
+
+  PointerBases Bases = computeBases(Img);
+  Bases.Func = Function.CodeRange.Begin;
+  LSDAParseResult LSDA = parseLSDA(Img, Req, Bases);
+  if (LSDA.ParseStatus != ExceptionParseStatus::Complete || !LSDA.Info)
+    return false;
+
+  ExceptionDecodeState LanguageDecode;
+  LanguageDecode.appendDiagnostics(LSDA.Diagnostics);
+  summarizeItanium(*LSDA.Info, LanguageDecode);
+
+  Function.Itanium = std::move(*LSDA.Info);
+  Function.DecodeProvenance->Language = std::move(LanguageDecode);
+  Function.Rust.reset();
+  Function.ObjC.reset();
+  Function.rebuildParseSummary();
+  return true;
 }
 
 } // namespace neverd::dwarf_eh

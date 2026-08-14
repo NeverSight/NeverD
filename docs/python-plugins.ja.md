@@ -53,7 +53,7 @@ class AnalysisReport:
 
 すべての hook は省略可能です。`None` は成功を意味し、整数の戻り値は C の `int` に収まる必要があります。メタデータのバージョンには厳密な SemVer を使用します。名前は空でない UTF-8 でなければならず、埋め込み NUL を含むメタデータはすべて拒否されます。
 
-リポジトリには [`minimal.py`](../pluginsdk/python/examples/minimal.py) と [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py) のサンプルがあります。
+リポジトリには [`minimal.py`](../pluginsdk/python/examples/minimal.py)、[`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py)、証明ゲート付き最適化 API を示す [`semantic_optimizer.py`](../pluginsdk/python/examples/semantic_optimizer.py) のサンプルがあります。
 
 ## プラグインの読み込みと確認
 
@@ -106,6 +106,55 @@ for path in result.paths:
 6 種類の不変イベントは `BINARY_LOADED`、`BINARY_CLOSING`、`FUNCTION_SELECTED`、`ADDRESS_CHANGED`、`ANALYSIS_DONE`、`PATCH_APPLIED` です。コールバック中に payload 文字列がコピーされ、イベント種別に無関係なフィールドは `None` になります。
 
 終了後に使う目的で `Session` を保存しないでください。ネイティブ capsule は `on_term` の開始前、かつネイティブセッションを解放できるようになる前に無効化されます。それ以降の呼び出しは古いメモリを参照せず、`RuntimeError` で失敗します。
+
+### 証明ゲート付き合成と LLVM 最適化
+
+`synthesize_expression` は、ABI 互換性のために残された MBA 専用の
+`simplify_expression` とは独立しています。ソルバーが
+`ProofStatus.EQUIVALENT` を返した場合だけ書き換えを確定します。反例、
+未完了の証明、検索予算切れでは元の式を保持し、それぞれの結果理由と
+検索・証明作業量を返します。
+`ProofStatus.INVALID` は証明問題そのものが不正であることを示し、予算による
+`ProofStatus.UNKNOWN` と区別されます。どちらも書き換えを安全側で拒否します。
+
+`optimize_llvm_ir` はトランザクション複製上で NeverD の意味論的固定点と
+標準 LLVM パイプラインを組み合わせ、検証済みの確定モジュールだけを返します：
+
+```python
+from neverd_plugin import (
+    LLVMOptimizationLevel,
+    OptimizationMode,
+    ProofStatus,
+    optimize_llvm_ir,
+    synthesize_expression,
+)
+
+rewrite = synthesize_expression(
+    "(x >> 4) + ((x >> 2) >> 2)", exhaustive=True
+)
+if rewrite.changed:
+    assert rewrite.proof_status is ProofStatus.EQUIVALENT
+
+module = optimize_llvm_ir(
+    llvm_ir,
+    mode=OptimizationMode.DEEP,
+    llvm_level=LLVMOptimizationLevel.O2,
+    enable_synthesis=True,
+    exhaustive=True,
+)
+print(module.output_ir, module.semantic_rewrites, module.proof_queries)
+```
+
+本番環境では MBA の作業量と項数、合成の探索と SAT 作業量、LLVM の収束を
+個別に制限できます。`simplify_expression` で明示的に `exhaustive=True` を
+指定すると、項数と作業量が無制限の MBA ポリシーが選ばれ、ネイティブ
+パーサーの入れ子とビット幅に関するポリシー上限も外れます。
+`synthesize_expression` では呼び出し側が指定した文法を維持したまま、
+パーサー、探索作業量、SAT の上限を外します。`optimize_llvm_ir` では収束、
+探索作業量、SAT の上限を外します。Python 層は式に追加制限を設けませんが、
+メモリ安全性と IR 表現の境界は引き続き適用されます。対応する C API は
+`neverd_simplify_expr`、`neverd_synthesize_expr`、`neverd_optimize_llvm_ir` で、
+型付き解放関数と版付き JSON API もあります。
 
 ## エラー、分離、信頼
 

@@ -61,6 +61,8 @@
 
 namespace neverd {
 
+class MedLLVMEmitterTestPeer;
+
 class MedLLVMEmitter {
 public:
   /// Emit \p Funcs into a fresh module in \p LCtx.
@@ -96,6 +98,8 @@ public:
   }
 
 private:
+  friend class MedLLVMEmitterTestPeer;
+
   /// Linkage for a synthesized data/table global: linkonce_odr in mergeable
   /// (sharded) mode so identical per-address globals from sibling shards merge;
   /// internal otherwise (the original standalone-module form).
@@ -1081,6 +1085,10 @@ private:
   /// Itanium call-site range be matched to the calls it protects.  Cleared per
   /// function alongside the other per-function emitter state.
   std::map<const llvm::CallInst *, va_t> CallSiteAddrs;
+  /// LLVM symbol chosen for each lifted function body. Usually identical to
+  /// MedFunc::Name; an address-backed native personality body uses its stable
+  /// auto name so the canonical ABI name remains an external declaration.
+  std::map<va_t, std::string> EmittedFuncNames;
   std::map<va_t, std::string> FuncNames;
   std::map<uint64_t, llvm::Constant *> GlobalDataCache;
   // One synthesized code-pointer mirror global per data segment base VA (see

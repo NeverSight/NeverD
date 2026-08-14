@@ -177,6 +177,11 @@ static void propagateForwardedCallArities(
   }
 }
 
+bool isFatalOptimizationStop(OptimizationStopReason Stop) {
+  return Stop == OptimizationStopReason::InputInvalid ||
+         Stop == OptimizationStopReason::VerificationFailed;
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -480,11 +485,15 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   bool UseShards = !Opts.PatchMode && Result.MedFuncs.size() >= 8;
 
   if (UseShards) {
+    bool LLVMVerifierFailed = false;
     Result.LlvmModule = emitLLVMSharded(
         Result.MedFuncs, Ctx, Img.Arch, ImportMap, Img, Img.Format, Opts.NoOpt,
-        Workers, Result.BackendUnhandledValueIntrinsics);
+        Workers, Result.BackendUnhandledValueIntrinsics, LLVMVerifierFailed);
     if (!Result.LlvmModule) {
-      Result.Error = "LLVM shard emission or linking failed";
+      Result.LLVMVerifierFailed = LLVMVerifierFailed;
+      Result.Error = LLVMVerifierFailed
+                         ? "LLVM shard verification or optimization failed"
+                         : "LLVM shard emission or linking failed";
       return false;
     }
   } else {
@@ -499,20 +508,34 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
     std::string VerifyErr;
     llvm::raw_string_ostream VES(VerifyErr);
-    if (!llvm::verifyModule(*Result.LlvmModule, &VES)) {
-      if (!Opts.NoOpt)
-        optimizeModule(*Result.LlvmModule, Opts.PatchMode);
-      else
-        // Even with the NeverD optimizer disabled, promote the emitter's
-        // memory-SSA scaffolding to registers.  This is semantics-preserving
-        // canonicalization (not optimization): it strips the per-temp
-        // load/store bloat so a heavily-unrolled -O2 SSE kernel does not lift
-        // to an ~80K-instruction single block that is pathological for LLVM
-        // codegen and times out under parallel test load.
-        promoteScaffoldingAllocas(*Result.LlvmModule);
-    } else {
+    if (llvm::verifyModule(*Result.LlvmModule, &VES)) {
+      Result.LLVMVerifierFailed = true;
+      Result.Error =
+          "LLVM verification failed before optimization: " + VerifyErr;
       llvm::WithColor::warning()
-          << "skipping optimization: " << VerifyErr << "\n";
+          << "pipeline: LLVM verification failed before optimization: "
+          << VerifyErr << "\n";
+      return false;
+    }
+    if (!Opts.NoOpt) {
+      OptimizationOptions Options;
+      Options.Conservative = Opts.PatchMode;
+      OptimizationResult Optimization =
+          optimizeModule(*Result.LlvmModule, Options);
+      if (isFatalOptimizationStop(Optimization.Stop)) {
+        Result.LLVMVerifierFailed = true;
+        Result.Error = std::string("LLVM optimization failed: ") +
+                       optimizationStopReasonName(Optimization.Stop);
+        return false;
+      }
+    } else {
+      // Even with the NeverD optimizer disabled, promote the emitter's
+      // memory-SSA scaffolding to registers.  This is semantics-preserving
+      // canonicalization (not optimization): it strips the per-temp load/store
+      // bloat so a heavily-unrolled -O2 SSE kernel does not lift to an
+      // ~80K-instruction single block that is pathological for LLVM codegen and
+      // times out under parallel test load.
+      promoteScaffoldingAllocas(*Result.LlvmModule);
     }
   }
 

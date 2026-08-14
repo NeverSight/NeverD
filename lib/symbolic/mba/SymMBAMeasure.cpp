@@ -35,6 +35,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <algorithm>
 #include <cassert>
 #include <limits>
 #include <map>
@@ -76,28 +77,51 @@ struct APIntLess {
 std::optional<SymRef> groupedForm(SymContext &Ctx,
                                   llvm::ArrayRef<llvm::APInt> Weights,
                                   llvm::ArrayRef<SymRef> Atoms,
-                                  size_t TermBudget) {
+                                  size_t TermBudget,
+                                  const SolverLimits &Limits) {
   const auto NumAtoms = static_cast<unsigned>(Atoms.size());
-  if (NumAtoms > kMaxTruthTableVars)
+  if (NumAtoms > Limits.MaxSynthesisAtoms)
     return std::nullopt;
+
+  // Each group carries a table of one bit per corner, so how many groups may
+  // be held at once is not only the term budget: at twenty inputs a table is
+  // a hundred kilobytes, and a measurement whose every corner has a weight of
+  // its own would otherwise build a million of them before anybody counted.
+  const size_t Entries = Weights.size();
+  const size_t Holdable = std::max<size_t>(1, Limits.SynthesisWork / Entries);
+  const size_t GroupBudget = std::min(TermBudget, Holdable);
 
   // Ordered rather than hashed, so the terms come out the same way on every
   // run and a difference in output is a real change instead of a reshuffle.
   std::map<llvm::APInt, TruthTable, APIntLess> Groups;
-  for (size_t K = 0; K < Weights.size(); ++K) {
+  for (size_t K = 0; K < Entries; ++K) {
     if (Weights[K].isZero())
       continue;
-    Groups[Weights[K]] |= TruthTable(1) << K;
+    auto It = Groups.find(Weights[K]);
+    if (It == Groups.end()) {
+      // Stopping at the budget rather than after it is the difference between
+      // rejecting a form and allocating one first.
+      if (Groups.size() >= GroupBudget)
+        return std::nullopt;
+      It = Groups.emplace(Weights[K], TruthTable::zero(NumAtoms)).first;
+    }
+    It->second.set(K);
   }
   if (Groups.empty())
     return Ctx.mkZero(Ctx.width(Atoms[0]));
-  if (Groups.size() > TermBudget)
-    return std::nullopt;
 
+  const BitwiseSynthesisLimits Synthesis = Limits.synthesis(TermBudget);
   llvm::SmallVector<SymRef, 8> Terms;
-  for (const auto &[Value, Table] : Groups)
-    Terms.push_back(
-        Ctx.mkMul(Ctx.mkConst(Value), synthesizeBitwise(Ctx, Table, Atoms)));
+  for (const auto &[Value, Table] : Groups) {
+    // Synthesis declines when no spelling of the selector fits the budget.
+    // That is one candidate form lost, not a failure: the conjunction basis
+    // below is offered from the same weights and has no table to build.
+    std::optional<SymRef> Selector =
+        synthesizeBitwise(Ctx, Table, Atoms, Synthesis);
+    if (!Selector)
+      return std::nullopt;
+    Terms.push_back(Ctx.mkMul(Ctx.mkConst(Value), *Selector));
+  }
   return Ctx.mkAdd(Terms);
 }
 
@@ -108,9 +132,21 @@ std::optional<SymRef> groupedForm(SymContext &Ctx,
 std::optional<SymRef> conjunctionForm(SymContext &Ctx,
                                       std::vector<llvm::APInt> Coefficients,
                                       llvm::ArrayRef<SymRef> Atoms,
-                                      size_t TermBudget) {
+                                      size_t TermBudget,
+                                      const SolverLimits &Limits) {
   const auto NumAtoms = static_cast<unsigned>(Atoms.size());
   const uint32_t Width = Ctx.width(Atoms[0]);
+
+  // The inversion touches every entry once per input, so it costs t * 2^t wide
+  // subtractions before anything can be said about how many terms come out of
+  // it.  That was invisible while the arity dial was a fixed sixteen and it is
+  // tens of millions of operations at the arities the dial now reaches, which
+  // makes it the one step of the linear reading large enough to be worth
+  // costing.  Dividing rather than multiplying, because the product is exactly
+  // the quantity that would not fit.
+  if (NumAtoms != 0 && Coefficients.size() > Limits.SynthesisWork / NumAtoms)
+    return std::nullopt;
+
   invertOverSubsets(Coefficients, NumAtoms);
 
   size_t NumTerms = 0;
@@ -146,12 +182,53 @@ llvm::APInt randomWord(std::mt19937_64 &Rng, uint32_t Width) {
   return llvm::APInt(Width, Words);
 }
 
+/// The largest t with 2^t entries or fewer.
+unsigned atomsFittingEntries(size_t Entries) {
+  unsigned Atoms = 0;
+  while (Atoms < kMaxTruthTableAtoms && (size_t(1) << (Atoms + 1)) <= Entries)
+    ++Atoms;
+  return Atoms;
+}
+
 } // namespace
 
 std::optional<size_t> cornerCount(size_t NumAtoms) {
-  if (NumAtoms >= std::numeric_limits<size_t>::digits)
+  if (NumAtoms > kMaxTruthTableAtoms)
     return std::nullopt;
-  return size_t(1) << NumAtoms;
+  return patternCount(static_cast<unsigned>(NumAtoms));
+}
+
+SolverLimits resolveLimits(const MBAOptions &Opts) {
+  // A corner table holds one weight per corner.  Charging each at the inline
+  // size of a weight is an order of magnitude rather than an allocator's
+  // ledger — a word wider than sixty-four bits adds a heap allocation on top —
+  // and an order of magnitude is what the dial is for: it decides whether a
+  // measurement is attempted at all, not how the memory is laid out.
+  const unsigned Affordable =
+      atomsFittingEntries(Opts.MaxTableBytes / sizeof(llvm::APInt));
+
+  SolverLimits Out;
+  Out.MaxAtoms =
+      std::min(Opts.MaxAtoms == MBAOptions::Unlimited ? kMaxTruthTableAtoms
+                                                      : Opts.MaxAtoms,
+               Affordable);
+  // Never wider than the measurement that produced the weights: a truth table
+  // over more inputs than were measured describes nothing the solver holds.
+  Out.MaxSynthesisAtoms = std::min(
+      Opts.MaxSynthesisAtoms == MBAOptions::Unlimited ? kMaxTruthTableAtoms
+                                                      : Opts.MaxSynthesisAtoms,
+      Out.MaxAtoms);
+  Out.MaxOptimalSynthesisAtoms = Opts.MaxOptimalSynthesisAtoms;
+
+  // A truth table is a bit an entry, so the same byte ceiling buys eight times
+  // what a corner table does.  Synthesis charges itself a unit per bit it
+  // touches and per bit it keeps, so this one number bounds both its time and
+  // what it holds while spending it.
+  constexpr size_t Ceiling = std::numeric_limits<size_t>::max();
+  const size_t ByBytes =
+      Opts.MaxTableBytes > Ceiling / 8 ? Ceiling : Opts.MaxTableBytes * 8;
+  Out.SynthesisWork = std::min(Opts.MaxWork, ByBytes);
+  return Out;
 }
 
 std::vector<llvm::APInt> measure(const SymContext &Ctx, SymRef Body,
@@ -239,17 +316,18 @@ size_t termBudget(const SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
 
 void linearCandidates(SymContext &Ctx, std::vector<llvm::APInt> Weights,
                       llvm::ArrayRef<SymRef> Atoms, size_t TermBudget,
+                      const SolverLimits &Limits,
                       llvm::SmallVectorImpl<SymRef> &Out) {
   if (llvm::all_of(Weights,
                    [&](const llvm::APInt &W) { return W == Weights[0]; }))
     Out.push_back(Ctx.mkConst(-Weights[0]));
   if (std::optional<SymRef> Grouped =
-          groupedForm(Ctx, Weights, Atoms, TermBudget))
+          groupedForm(Ctx, Weights, Atoms, TermBudget, Limits))
     Out.push_back(*Grouped);
   // Handing the weights over rather than copying: at the widths and arity this
   // reaches, a copy would be tens of thousands of allocations.
   if (std::optional<SymRef> Conjunctions =
-          conjunctionForm(Ctx, std::move(Weights), Atoms, TermBudget))
+          conjunctionForm(Ctx, std::move(Weights), Atoms, TermBudget, Limits))
     Out.push_back(*Conjunctions);
 }
 

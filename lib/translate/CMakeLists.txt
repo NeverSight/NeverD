@@ -1,0 +1,14 @@
+add_neverd_component_library(NeverDTranslate
+  GuestMemoryRuntime.cpp
+  GuestState.cpp
+  ResolvedHostTarget.cpp
+  RuntimeABI.cpp
+  RuntimeCodeMemory.cpp
+  RuntimeGuestState.cpp
+  RuntimeHelpers.cpp
+  TranslationOptions.cpp
+  TranslationResult.cpp
+  TranslationSession.cpp
+  TranslationIRVerifier.cpp
+  TranslationArtifactVerifier.cpp
+)

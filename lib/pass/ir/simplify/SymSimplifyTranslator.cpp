@@ -10,6 +10,11 @@
 /// bitvector arithmetic on a whole word are translated; everything else becomes
 /// one opaque input and comes back untouched.  SymSimplifyPass.cpp drives this.
 ///
+/// Width is not one of the limits.  A literal crosses as an \c llvm::APInt and
+/// an input as its declared bit width, so an i128 or i512 expression is
+/// carried, measured and rebuilt exactly as an i32 one is -- which is what
+/// lets the pass reach obfuscation written in a wide word.
+///
 //===----------------------------------------------------------------------===//
 
 #include "SymSimplifyDetail.h"
@@ -17,7 +22,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/ConstantFolder.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -43,7 +47,66 @@ namespace {
 /// candidate opaque instead; a future translation can carry the precondition
 /// explicitly rather than silently dropping it.
 bool hasCompatibleSemantics(const llvm::Instruction &I) {
-  return !llvm::canCreatePoison(llvm::cast<llvm::Operator>(&I));
+  // This catches poison-generating flags added to LLVM after this switch was
+  // written.  The per-opcode checks below remain deliberate documentation of
+  // the exact language subset accepted today.
+  if (I.hasPoisonGeneratingFlags() || I.hasPoisonGeneratingAttributes() ||
+      I.hasPoisonGeneratingMetadata())
+    return false;
+
+  auto HasNoWrap = [&] {
+    const auto &Op = llvm::cast<llvm::OverflowingBinaryOperator>(I);
+    return Op.hasNoUnsignedWrap() || Op.hasNoSignedWrap();
+  };
+  auto HasInRangeConstantShift = [&] {
+    const auto *Amount = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1));
+    return Amount && Amount->getValue().ult(I.getType()->getIntegerBitWidth());
+  };
+
+  switch (tagOf(I)) {
+  case OpTag::Add:
+  case OpTag::Sub:
+  case OpTag::Mul:
+    return !HasNoWrap();
+  case OpTag::And:
+  case OpTag::Xor:
+    return true;
+  case OpTag::Or:
+    return !llvm::cast<llvm::PossiblyDisjointInst>(I).isDisjoint();
+  case OpTag::Shl:
+    return !HasNoWrap() && HasInRangeConstantShift();
+  case OpTag::LShr:
+  case OpTag::AShr:
+    return !llvm::cast<llvm::PossiblyExactOperator>(I).isExact() &&
+           HasInRangeConstantShift();
+  case OpTag::UDiv:
+  case OpTag::SDiv:
+  case OpTag::URem:
+  case OpTag::SRem:
+    return false;
+  case OpTag::Trunc: {
+    const auto &Trunc = llvm::cast<llvm::TruncInst>(I);
+    return !Trunc.hasNoUnsignedWrap() && !Trunc.hasNoSignedWrap();
+  }
+  case OpTag::ZExt:
+    return !I.hasNonNeg();
+  case OpTag::SExt:
+    return true;
+  case OpTag::ICmp:
+    return !llvm::cast<llvm::ICmpInst>(I).hasSameSign();
+  case OpTag::None:
+    return false;
+  }
+  llvm_unreachable("unhandled symbolic operator tag");
+}
+
+/// Whether traversing \p I would cross semantics outside the engine's total
+/// scalar bitvector algebra.
+bool hasIncompatibleSemantics(const llvm::Instruction &I,
+                              bool WithComparisons) {
+  if (llvm::isa<llvm::FreezeInst>(I) || I.hasPoisonGeneratingAnnotations())
+    return true;
+  return isTranslatable(&I, WithComparisons) && !hasCompatibleSemantics(I);
 }
 
 /// Whether a translatable value hidden behind an opaque shared leaf contains
@@ -57,9 +120,7 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
 /// translatable.
 bool hasHiddenIncompatibleSemantics(const llvm::Instruction &Root,
                                     bool WithComparisons) {
-  llvm::SmallVector<const llvm::Value *, 8> Work;
-  for (const llvm::Use &Op : Root.operands())
-    Work.push_back(Op.get());
+  llvm::SmallVector<const llvm::Value *, 8> Work{&Root};
 
   llvm::DenseSet<const llvm::Value *> Seen;
   while (!Work.empty()) {
@@ -72,7 +133,7 @@ bool hasHiddenIncompatibleSemantics(const llvm::Instruction &Root,
     const auto *I = llvm::dyn_cast<llvm::Instruction>(V);
     if (!I)
       continue;
-    if (isTranslatable(I, WithComparisons) && !hasCompatibleSemantics(*I))
+    if (hasIncompatibleSemantics(*I, WithComparisons))
       return true;
     for (const llvm::Use &Op : I->operands())
       Work.push_back(Op.get());
@@ -236,14 +297,19 @@ sym::SymRef Translator::in(llvm::Value *Root) {
     if (llvm::isa<llvm::UndefValue, llvm::PoisonValue>(V))
       return {};
     if (const auto *I = llvm::dyn_cast<llvm::Instruction>(V);
-        I && isTranslatable(I, CarryComparisons) && !hasCompatibleSemantics(*I))
+        I && hasIncompatibleSemantics(*I, CarryComparisons))
       return {};
 
     if (!descend(V, V == Root)) {
       if (const auto *I = llvm::dyn_cast<llvm::Instruction>(V);
           I && hasHiddenIncompatibleSemantics(*I, CarryComparisons))
         return {};
-      Memo[V] = leaf(V);
+      sym::SymRef Leaf = leaf(V);
+      // A leaf with no bitvector reading cannot even be an opaque input, so
+      // the candidate goes no further.
+      if (!Leaf.isValid())
+        return {};
+      Memo[V] = Leaf;
       continue;
     }
 
@@ -268,6 +334,26 @@ sym::SymRef Translator::in(llvm::Value *Root) {
     ++NumDescended;
   }
   return Memo.lookup(Root);
+}
+
+bool Translator::retainsOpaqueInstructionLeaves(sym::SymRef R) const {
+  if (!R.isValid())
+    return false;
+  if (OpaqueInstructionLeaves.empty())
+    return true;
+
+  llvm::SmallVector<sym::SymRef, 32> Work{R};
+  llvm::DenseSet<uint32_t> Seen;
+  unsigned Retained = 0;
+  while (!Work.empty()) {
+    sym::SymRef Current = Work.pop_back_val();
+    if (!Seen.insert(Current.index()).second)
+      continue;
+    Retained += OpaqueInstructionLeaves.contains(Current.index());
+    llvm::ArrayRef<sym::SymRef> Ops = Ctx.operands(Current);
+    Work.append(Ops.begin(), Ops.end());
+  }
+  return Retained == OpaqueInstructionLeaves.size();
 }
 
 llvm::Value *

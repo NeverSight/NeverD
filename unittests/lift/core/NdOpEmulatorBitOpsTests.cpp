@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "NdOpEmulatorTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -105,6 +104,21 @@ TEST_F(NdOpEmulatorTest, PopcountOp) {
   Emu.setRegister(0, 0);
   ASSERT_TRUE(Emu.step(Pop));
   EXPECT_EQ(Emu.getRegister(8).value_or(~0ULL), 0u);
+}
+
+TEST_F(NdOpEmulatorTest, PopcountCountsOnlyTheBytesTheOperandNames) {
+  // A register slot holds whatever the widest write to it left behind, and a
+  // narrow operand names part of that.  Counting the whole slot answers for
+  // bits this operation cannot see.
+  NdOpEmulator Emu(Img);
+  Emu.setRegister(0, 0xFFFFFFFFFFFFFF0FULL);
+
+  LowOp Pop;
+  Pop.Opcode = NdOp::POPCOUNT;
+  Pop.Output = NdVar::reg(8, 1);
+  Pop.addInput(NdVar::reg(0, 1));
+  ASSERT_TRUE(Emu.step(Pop));
+  EXPECT_EQ(Emu.getRegister(8).value_or(0), 4u);
 }
 
 TEST_F(NdOpEmulatorTest, LzcountOp) {

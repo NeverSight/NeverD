@@ -89,6 +89,7 @@ add_neverd_unittest(NeverDLiftTests
   arm32/ARM32_SwitchTests.cpp
   arm32/ARM32_RoundTripTests.cpp
   core/InstructionModeTests.cpp
+  core/LowInstructionBoundaryTests.cpp
   core/LiftCommonTests.cpp
   format/MachOI386RelocationTests.cpp
   format/MachOI386RelocationExternalTests.cpp
@@ -107,10 +108,12 @@ add_neverd_unittest(NeverDLiftTests
   eh/COFFExceptionNativeIRTests.cpp
   eh/COFFExceptionPatchTests.cpp
   eh/COFFExceptionSEHTests.cpp
+  eh/ELFARMEHABIPatchTests.cpp
   eh/ELFExceptionTests.cpp
   eh/ExceptionCFGSeedTests.cpp
   eh/ItaniumEHEmitterTests.cpp
   eh/ItaniumEHStructurerTests.cpp
+  eh/MachOExceptionPatchTests.cpp
   core/HighSymSimplifyTests.cpp
   eh/RegistrationTryLevelTests.cpp
   format/COFFARMFormatTests.cpp
@@ -143,6 +146,7 @@ target_compile_definitions(NeverDLiftTests PRIVATE
 target_include_directories(NeverDLiftTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/lib/loader/COFF/unwind
   ${LLVM_INCLUDE_DIRS}
 )
 
@@ -155,12 +159,48 @@ target_link_libraries(NeverDLiftTests PRIVATE
   NeverDLibC
   NeverDLoader
   NeverDLift
+  NeverDPipeline
   NeverDSupport
 )
 
 if(TARGET neverd)
   add_dependencies(NeverDLiftTests neverd)
 endif()
+
+# Pins the format-neutral distinction between an explicitly returned semantic
+# value producer and an incidental call result left in the native return
+# register.  Keeping this focused avoids relinking the full lift suite.
+add_neverd_unittest(NeverDLLVMCVoidAnalysisTests
+  core/LLVMCVoidAnalysisTests.cpp
+
+  LINK_COMPONENTS
+  BackendC
+)
+
+target_include_directories(NeverDLLVMCVoidAnalysisTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Pins the source-EH-to-native-rewrite contract without relinking the large
+# lift suite. The emitter creates the deliberately unlowerable source contract,
+# and the two format installers are the public fail-closed boundary under test.
+add_neverd_unittest(NeverDNativeExceptionRewriteContractTests
+  eh/DwarfEHFrameTests.cpp
+  eh/MachOExceptionPatchTests.cpp
+  eh/NativeExceptionRewriteContractTests.cpp
+
+  LINK_COMPONENTS
+  BackendLLVM
+  CodeGen
+  LibC
+  Lift
+)
+
+target_include_directories(NeverDNativeExceptionRewriteContractTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
 
 # Guards the obfuscate-then-patch barrier in isolation.  A tiny TU that links
 # the prebuilt NeverDPipeline archive (which carries SymSimplifyPass through its
@@ -174,6 +214,7 @@ add_neverd_unittest(NeverDSymSimplifyGuardTests
 target_include_directories(NeverDSymSimplifyGuardTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/lib/pipeline
   ${LLVM_INCLUDE_DIRS}
 )
 
@@ -240,6 +281,7 @@ target_include_directories(NeverDLanguageEHTests PRIVATE
 )
 target_link_libraries(NeverDLanguageEHTests PRIVATE
   NeverDLoader
+  NeverDSigs
   NeverDSupport
 )
 
@@ -454,6 +496,24 @@ if(TARGET neverd_shared)
   )
 
   add_dependencies(NeverDMetadataJSONTests neverd_shared)
+
+  add_neverd_unittest(NeverDSemanticCAPITests
+    sdk/SemanticCAPIHeaderC.c
+    sdk/SemanticCAPITests.cpp
+  )
+
+  target_include_directories(NeverDSemanticCAPITests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(NeverDSemanticCAPITests PRIVATE
+    neverd_shared
+    LLVMSupport
+  )
+
+  add_dependencies(NeverDSemanticCAPITests neverd_shared)
 endif()
 
 # --- Cross-compile test .c sources into .o objects at build time ---
@@ -833,14 +893,54 @@ endif()
 find_program(LLD_EXEC ld.lld)
 set(ELF_EXECUTABLES "")
 if(LLD_EXEC)
+  # Patch-success fixtures publish the native unwind index and leave a
+  # deterministic file-backed gap after each growable unwind section.  The
+  # low-level tests separately require byte-identical failure when a real image
+  # has no such capacity.
+  set(unwind_slack_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/eh/unwind_patch_slack.c")
+  set(dwarf_unwind_slack_x64
+      "${CMAKE_CURRENT_BINARY_DIR}/unwind_patch_slack_x64.o")
+  set(dwarf_unwind_slack_a64
+      "${CMAKE_CURRENT_BINARY_DIR}/unwind_patch_slack_a64.o")
+  set(arm_unwind_slack
+      "${CMAKE_CURRENT_BINARY_DIR}/unwind_patch_slack_arm.o")
+  add_custom_command(
+    OUTPUT ${dwarf_unwind_slack_x64}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -nostdlib -static
+            -DNEVERD_DWARF_EH_SLACK=1 -c ${unwind_slack_src}
+            -o ${dwarf_unwind_slack_x64}
+    DEPENDS ${unwind_slack_src}
+    COMMENT "Compiling x86_64 unwind patch capacity fixture")
+  add_custom_command(
+    OUTPUT ${dwarf_unwind_slack_a64}
+    COMMAND ${CLANG_EXEC} -target aarch64-linux-gnu -nostdlib -static
+            -DNEVERD_DWARF_EH_SLACK=1 -c ${unwind_slack_src}
+            -o ${dwarf_unwind_slack_a64}
+    DEPENDS ${unwind_slack_src}
+    COMMENT "Compiling AArch64 unwind patch capacity fixture")
+  add_custom_command(
+    OUTPUT ${arm_unwind_slack}
+    COMMAND ${CLANG_EXEC} -target arm-linux-gnueabi -march=armv7-a
+            -nostdlib -static -marm -DNEVERD_ARM_EHABI_SLACK=1
+            -c ${unwind_slack_src} -o ${arm_unwind_slack}
+    DEPENDS ${unwind_slack_src}
+    COMMENT "Compiling ARM EHABI patch capacity fixture")
+
   # x86_64 ELF executables
   foreach(base_name test_switch test_jumptable_enhanced test_patch_switch test_patch_xcall test_roundtrip)
     set(obj_file "${CMAKE_CURRENT_BINARY_DIR}/${base_name}.o")
     set(elf_file "${CMAKE_CURRENT_BINARY_DIR}/${base_name}_elf")
     add_custom_command(
       OUTPUT ${elf_file}
-      COMMAND ${LLD_EXEC} -o ${elf_file} --image-base=0x400000 -e _start ${obj_file}
-      DEPENDS ${obj_file}
+      COMMAND ${LLD_EXEC} -o ${elf_file} --image-base=0x400000
+              --eh-frame-hdr --section-start=.eh_frame=0x400800
+              --section-start=.neverd.eh_frame.limit=0x401000
+              --section-start=.eh_frame_hdr=0x401800
+              --section-start=.neverd.eh_frame_hdr.limit=0x401c00
+              --section-start=.text=0x402000 -e _start ${obj_file}
+              ${dwarf_unwind_slack_x64}
+      DEPENDS ${obj_file} ${dwarf_unwind_slack_x64}
       COMMENT "Linking ${base_name} -> x86_64 ELF executable")
     list(APPEND ELF_EXECUTABLES ${elf_file})
   endforeach()
@@ -851,8 +951,15 @@ if(LLD_EXEC)
     set(a64_elf "${CMAKE_CURRENT_BINARY_DIR}/${a64_base}_elf")
     add_custom_command(
       OUTPUT ${a64_elf}
-      COMMAND ${LLD_EXEC} -m aarch64linux -o ${a64_elf} --image-base=0x400000 -e _start ${a64_obj}
-      DEPENDS ${a64_obj}
+      COMMAND ${LLD_EXEC} -m aarch64linux -o ${a64_elf}
+              --image-base=0x400000 --eh-frame-hdr
+              --section-start=.eh_frame=0x400800
+              --section-start=.neverd.eh_frame.limit=0x401000
+              --section-start=.eh_frame_hdr=0x402000
+              --section-start=.neverd.eh_frame_hdr.limit=0x403000
+              --section-start=.text=0x410000 -e _start ${a64_obj}
+              ${dwarf_unwind_slack_a64}
+      DEPENDS ${a64_obj} ${dwarf_unwind_slack_a64}
       COMMENT "Linking ${a64_base} -> AArch64 ELF executable")
     list(APPEND ELF_EXECUTABLES ${a64_elf})
   endforeach()
@@ -863,8 +970,12 @@ if(LLD_EXEC)
     set(arm_elf "${CMAKE_CURRENT_BINARY_DIR}/${arm_base}_elf")
     add_custom_command(
       OUTPUT ${arm_elf}
-      COMMAND ${LLD_EXEC} -m armelf -o ${arm_elf} --image-base=0x400000 -e _start ${arm_obj}
-      DEPENDS ${arm_obj}
+      COMMAND ${LLD_EXEC} -m armelf -o ${arm_elf} --image-base=0x400000
+              --section-start=.ARM.exidx=0x400800
+              --section-start=.neverd.arm_exidx.limit=0x401800
+              --section-start=.text=0x410000 -e _start ${arm_obj}
+              ${arm_unwind_slack}
+      DEPENDS ${arm_obj} ${arm_unwind_slack}
       COMMENT "Linking ${arm_base} -> ARM32 ELF executable")
     list(APPEND ELF_EXECUTABLES ${arm_elf})
   endforeach()

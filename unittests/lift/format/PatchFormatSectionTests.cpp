@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "PatchFormatTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -24,8 +23,8 @@ TEST_F(PatchTextSectionOverride, ExplicitCanonicalNameInplaceSucceeds) {
   auto Out = tmpFile("patched_override");
   auto R = exec(ndBin(), {"patch", "-mode=inplace", "-text-section=.text", "-o",
                           Out.string(), Elf.string()});
-  ASSERT_EQ(R.exitCode, 0)
-      << "inplace patch with -text-section=.text failed: " << R.err;
+  ASSERT_EQ(R.exitCode, 0) << "inplace patch with -text-section=.text failed: "
+                           << R.err;
   EXPECT_TRUE(fs::exists(Out)) << "Patched binary not created";
   EXPECT_GT(fs::file_size(Out), 0u);
   EXPECT_TRUE(R.contains("trampoline")) << "Expected trampolines to be written";
@@ -40,9 +39,9 @@ TEST_F(PatchTextSectionOverride, UnknownNameFallsBackAndSucceeds) {
   if (!fs::exists(Elf))
     GTEST_SKIP() << "ELF executable not built";
   auto Out = tmpFile("patched_override_bogus");
-  auto R = exec(ndBin(), {"patch", "-mode=inplace",
-                          "-text-section=.nd_no_such_section", "-o",
-                          Out.string(), Elf.string()});
+  auto R = exec(ndBin(),
+                {"patch", "-mode=inplace", "-text-section=.nd_no_such_section",
+                 "-o", Out.string(), Elf.string()});
   ASSERT_EQ(R.exitCode, 0)
       << "inplace patch should fall back when override is absent: " << R.err;
   EXPECT_TRUE(fs::exists(Out)) << "Patched binary not created";
@@ -100,8 +99,8 @@ bool renameAllOccurrences(const fs::path &Src, const fs::path &Dst,
   std::string Needle = OldName;
   Needle.push_back('\0');
   bool Any = false;
-  for (auto It = std::search(Buf.begin(), Buf.end(), Needle.begin(),
-                             Needle.end());
+  for (auto It =
+           std::search(Buf.begin(), Buf.end(), Needle.begin(), Needle.end());
        It != Buf.end();
        It = std::search(It + 1, Buf.end(), Needle.begin(), Needle.end())) {
     std::copy(NewName.begin(), NewName.end(), It);
@@ -126,11 +125,12 @@ TEST_F(RenamedSectionPatch, ElfInplaceAutoRecovers) {
   if (!fs::exists(Elf))
     GTEST_SKIP() << "ELF executable not built";
   auto Renamed = tmpFile("renamed.elf");
-  ASSERT_TRUE(renameCodeSection(Elf, Renamed, section_names::elf::Text, ".vmp0"))
+  ASSERT_TRUE(
+      renameCodeSection(Elf, Renamed, section_names::elf::Text, ".vmp0"))
       << "could not rename .text in test ELF";
   auto Out = tmpFile("patched_ip");
-  auto R = exec(ndBin(),
-                {"patch", "-mode=inplace", "-o", Out.string(), Renamed.string()});
+  auto R = exec(ndBin(), {"patch", "-mode=inplace", "-o", Out.string(),
+                          Renamed.string()});
   ASSERT_EQ(R.exitCode, 0)
       << "inplace patch must auto-recover the renamed code section: " << R.err;
   EXPECT_TRUE(fs::exists(Out));
@@ -142,7 +142,8 @@ TEST_F(RenamedSectionPatch, ElfInplaceExplicitOverride) {
   if (!fs::exists(Elf))
     GTEST_SKIP() << "ELF executable not built";
   auto Renamed = tmpFile("renamed.elf");
-  ASSERT_TRUE(renameCodeSection(Elf, Renamed, section_names::elf::Text, ".vmp0"));
+  ASSERT_TRUE(
+      renameCodeSection(Elf, Renamed, section_names::elf::Text, ".vmp0"));
   auto Out = tmpFile("patched_ovr");
   auto R = exec(ndBin(), {"patch", "-mode=inplace", "-text-section=.vmp0", "-o",
                           Out.string(), Renamed.string()});
@@ -152,6 +153,8 @@ TEST_F(RenamedSectionPatch, ElfInplaceExplicitOverride) {
 }
 
 #ifdef __APPLE__
+// These smoke fixtures select the implemented DWARF registration path.
+// Compact-unwind regeneration remains a separately tracked capability.
 // Section-mode patching of a host Mach-O whose "__text" was renamed must still
 // install trampolines, exercising the executable-segment fallback added to
 // MachOPatcher::parseLayout.  Without it the patch "succeeds" but writes zero
@@ -166,12 +169,14 @@ TEST_F(RenamedSectionPatch, MachOSectionModeAutoRecovers) {
          "int main(){return a(b(c(7)));}\n";
   }
   auto Bin = tmpFile("m");
-  auto CR = exec("clang", {"-O1", "-o", Bin.string(), Src.string()});
+  auto CR = exec("clang", {"-O1", "-Wl,-no_compact_unwind", "-o", Bin.string(),
+                           Src.string()});
   if (CR.exitCode != 0)
     GTEST_SKIP() << "host clang could not build Mach-O test: " << CR.err;
 
   auto Renamed = tmpFile("m_renamed");
-  ASSERT_TRUE(renameCodeSection(Bin, Renamed, section_names::macho::Text, "__vmp0"))
+  ASSERT_TRUE(
+      renameCodeSection(Bin, Renamed, section_names::macho::Text, "__vmp0"))
       << "could not rename __text in host Mach-O";
   auto Out = tmpFile("m_patched");
   auto R = exec(ndBin(), {"patch", "-o", Out.string(), Renamed.string()});
@@ -182,10 +187,11 @@ TEST_F(RenamedSectionPatch, MachOSectionModeAutoRecovers) {
 }
 
 // Explicit --text-section override on a host Mach-O whose "__text" was renamed:
-// MachOPatcher::parseLayout must honour the forced name and install trampolines.
-// (The override-matching branch; the renamed section stays inside __TEXT, which
-// is the only place the loader can recover correct symbol VAs from — its entry
-// point and LC_FUNCTION_STARTS bases are both keyed off the __TEXT segment.)
+// MachOPatcher::parseLayout must honour the forced name and install
+// trampolines. (The override-matching branch; the renamed section stays inside
+// __TEXT, which is the only place the loader can recover correct symbol VAs
+// from — its entry point and LC_FUNCTION_STARTS bases are both keyed off the
+// __TEXT segment.)
 TEST_F(RenamedSectionPatch, MachOSectionModeExplicitOverride) {
   auto Src = tmpFile("mo.c");
   {
@@ -196,17 +202,18 @@ TEST_F(RenamedSectionPatch, MachOSectionModeExplicitOverride) {
          "int main(){return a(b(c(7)));}\n";
   }
   auto Bin = tmpFile("mo");
-  auto CR = exec("clang", {"-O1", "-o", Bin.string(), Src.string()});
+  auto CR = exec("clang", {"-O1", "-Wl,-no_compact_unwind", "-o", Bin.string(),
+                           Src.string()});
   if (CR.exitCode != 0)
     GTEST_SKIP() << "host clang could not build Mach-O test: " << CR.err;
 
   auto Renamed = tmpFile("mo_renamed");
-  ASSERT_TRUE(renameCodeSection(Bin, Renamed, section_names::macho::Text, "__vmp0"))
+  ASSERT_TRUE(
+      renameCodeSection(Bin, Renamed, section_names::macho::Text, "__vmp0"))
       << "could not rename __text in host Mach-O";
   auto Out = tmpFile("mo_patched");
-  auto R = exec(ndBin(),
-                {"patch", "-text-section=__vmp0", "-o", Out.string(),
-                 Renamed.string()});
+  auto R = exec(ndBin(), {"patch", "-text-section=__vmp0", "-o", Out.string(),
+                          Renamed.string()});
   ASSERT_EQ(R.exitCode, 0)
       << "MachO section patch with -text-section=__vmp0 failed: " << R.err;
   EXPECT_FALSE(R.contains(", 0 trampolines"))
@@ -232,7 +239,8 @@ TEST_F(RenamedSectionPatch, MachORenamedTextSegmentExplicitOverride) {
          "int main(){return a(b(c(7)));}\n";
   }
   auto Bin = tmpFile("ms");
-  auto CR = exec("clang", {"-O1", "-o", Bin.string(), Src.string()});
+  auto CR = exec("clang", {"-O1", "-Wl,-no_compact_unwind", "-o", Bin.string(),
+                           Src.string()});
   if (CR.exitCode != 0)
     GTEST_SKIP() << "host clang could not build Mach-O test: " << CR.err;
 
@@ -262,7 +270,8 @@ TEST_F(RenamedSectionPatch, MachORenamedTextSegmentAutoRecovers) {
          "int main(){return a(b(c(7)));}\n";
   }
   auto Bin = tmpFile("ma");
-  auto CR = exec("clang", {"-O1", "-o", Bin.string(), Src.string()});
+  auto CR = exec("clang", {"-O1", "-Wl,-no_compact_unwind", "-o", Bin.string(),
+                           Src.string()});
   if (CR.exitCode != 0)
     GTEST_SKIP() << "host clang could not build Mach-O test: " << CR.err;
 
@@ -271,8 +280,8 @@ TEST_F(RenamedSectionPatch, MachORenamedTextSegmentAutoRecovers) {
       << "could not rename __TEXT segment in host Mach-O";
   auto Out = tmpFile("ma_patched");
   auto R = exec(ndBin(), {"patch", "-o", Out.string(), Renamed.string()});
-  ASSERT_EQ(R.exitCode, 0)
-      << "patch of renamed __TEXT segment (auto) failed: " << R.err;
+  ASSERT_EQ(R.exitCode, 0) << "patch of renamed __TEXT segment (auto) failed: "
+                           << R.err;
   EXPECT_FALSE(R.contains(", 0 trampolines"))
       << "exec-segment fallback should have located the code section:\n"
       << R.out;

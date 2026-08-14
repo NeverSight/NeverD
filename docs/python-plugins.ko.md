@@ -53,7 +53,7 @@ class AnalysisReport:
 
 모든 hook은 선택 사항입니다. `None`은 성공을 의미하며 정수 결과는 C `int` 범위에 들어가야 합니다. 메타데이터 버전은 엄격한 SemVer를 사용합니다. 이름은 비어 있지 않은 UTF-8이어야 하며 내장 NUL이 포함된 모든 메타데이터는 거부됩니다.
 
-저장소 예제는 [`minimal.py`](../pluginsdk/python/examples/minimal.py)와 [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py)입니다.
+저장소 예제는 [`minimal.py`](../pluginsdk/python/examples/minimal.py), [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py), 증명 게이트 최적화 API를 보여 주는 [`semantic_optimizer.py`](../pluginsdk/python/examples/semantic_optimizer.py)입니다.
 
 ## 플러그인 로드 및 검사
 
@@ -106,6 +106,55 @@ for path in result.paths:
 변경 불가능한 여섯 이벤트는 `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE`, `PATCH_APPLIED`입니다. 콜백 중 payload 문자열이 복사되며 해당 이벤트 종류와 관계없는 필드는 `None`입니다.
 
 종료 후 사용하기 위해 `Session`을 저장하지 마십시오. 네이티브 capsule은 `on_term`이 시작되기 전과 네이티브 세션을 해제할 수 있기 전에 무효화됩니다. 이후 호출은 오래된 메모리를 역참조하지 않고 `RuntimeError`로 실패합니다.
+
+### 증명 게이트 합성과 LLVM 최적화
+
+`synthesize_expression`은 ABI 호환성을 위해 유지되는 MBA 전용
+`simplify_expression`과 분리되어 있습니다. 솔버가
+`ProofStatus.EQUIVALENT`를 반환한 경우에만 재작성을 커밋합니다. 반례,
+불완전한 증명, 검색 예산 소진 시에는 원래 식을 유지하면서 각각의 결과와
+검색/증명 작업량을 보고합니다.
+`ProofStatus.INVALID`는 증명 질의 자체가 잘못되었음을 나타내며 예산으로 인한
+`ProofStatus.UNKNOWN`과 구분됩니다. 두 경우 모두 재작성을 안전하게 거부합니다.
+
+`optimize_llvm_ir`은 트랜잭션 복제본에서 NeverD 의미 고정점과 표준 LLVM
+파이프라인을 결합하고, 검증된 커밋 모듈만 반환합니다.
+
+```python
+from neverd_plugin import (
+    LLVMOptimizationLevel,
+    OptimizationMode,
+    ProofStatus,
+    optimize_llvm_ir,
+    synthesize_expression,
+)
+
+rewrite = synthesize_expression(
+    "(x >> 4) + ((x >> 2) >> 2)", exhaustive=True
+)
+if rewrite.changed:
+    assert rewrite.proof_status is ProofStatus.EQUIVALENT
+
+module = optimize_llvm_ir(
+    llvm_ir,
+    mode=OptimizationMode.DEEP,
+    llvm_level=LLVMOptimizationLevel.O2,
+    enable_synthesis=True,
+    exhaustive=True,
+)
+print(module.output_ir, module.semantic_rewrites, module.proof_queries)
+```
+
+운영 호출자는 MBA 작업량과 항 수, 합성 검색과 SAT 작업량, LLVM 수렴을 각각
+제한할 수 있습니다. `simplify_expression`에서 명시적인 `exhaustive=True`는
+항 수와 작업량이 무제한인 MBA 정책을 선택하고 네이티브 파서의 중첩 및 비트
+너비 정책 상한을 제거합니다. `synthesize_expression`에서는 호출자가 지정한
+문법을 유지하면서 파서, 검색 작업량, SAT 상한을 제거하고,
+`optimize_llvm_ir`에서는 수렴, 검색 작업량, SAT 상한을 제거합니다. Python
+계층은 식에 별도 제한을 추가하지 않지만 메모리 안전 및 IR 표현 경계는 계속
+적용됩니다. 대응하는 C 진입점은 `neverd_simplify_expr`,
+`neverd_synthesize_expr`, `neverd_optimize_llvm_ir`이며 형식화된 해제 함수와
+버전 JSON 어댑터도 제공합니다.
 
 ## 오류, 격리 및 신뢰
 

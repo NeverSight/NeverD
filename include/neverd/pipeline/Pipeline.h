@@ -20,11 +20,16 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/pass/ir/simplify/SymSimplifyPass.h"
 #include "neverd/sbf/SBFIR.h"
+#include "neverd/solver/SymSynthVerifier.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Passes/OptimizationLevel.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -104,6 +109,40 @@ struct PipelineResult {
   std::vector<std::string> LLVMDefinitionNames;
   std::string Error;
   bool Success = false;
+};
+
+/// Why observable function optimization stopped.  Values are stable for the
+/// public result adapters built on this contract.
+enum class OptimizationStopReason : uint8_t {
+  Stable = 0,
+  CycleDetected = 1,
+  BudgetExhausted = 2,
+  VerificationFailed = 3,
+  InputInvalid = 4,
+};
+static_assert(
+    static_cast<uint8_t>(OptimizationStopReason::Stable) == 0 &&
+    static_cast<uint8_t>(OptimizationStopReason::CycleDetected) == 1 &&
+    static_cast<uint8_t>(OptimizationStopReason::BudgetExhausted) == 2 &&
+    static_cast<uint8_t>(OptimizationStopReason::VerificationFailed) == 3 &&
+    static_cast<uint8_t>(OptimizationStopReason::InputInvalid) == 4);
+
+const char *optimizationStopReasonName(OptimizationStopReason Stop);
+
+/// Observable work and stop state for one optimized function.
+struct FunctionOptimizationResult {
+  bool Changed = false;
+  uint64_t SemanticRewrites = 0;
+  uint64_t SearchWork = 0;
+  solver::ProofStats ProofWork;
+  unsigned Rounds = 0;
+  OptimizationStopReason Stop = OptimizationStopReason::Stable;
+};
+
+/// Module aggregate.  Counters are saturating sums, Rounds is the maximum
+/// reached by any definition, and Stop uses the documented severity order.
+struct OptimizationResult : FunctionOptimizationResult {
+  uint64_t FunctionsVisited = 0;
 };
 
 class Pipeline {
@@ -247,17 +286,75 @@ public:
   static ObfuscationCounts runObfuscationPasses(llvm::Module &Mod,
                                                 const ObfuscationConfig &Cfg);
 
+  /// How much value rewriting the lift path's optimizer is allowed to do.
+  ///
+  /// Only lift reads this.  The conservative patch order runs no value-changing
+  /// transform at any strength, so which one a caller names cannot affect a
+  /// patch.
+  enum class OptStrength {
+    /// Promotion, SROA, the semantic simplifier's joint fixed point with
+    /// InstCombine, and one SimplifyCFG: the smallest order that recovers
+    /// obfuscated arithmetic.  Kept nameable so a caller that needs the
+    /// optimizer's footprint on the emitted IR held to that minimum -- and the
+    /// tests that pin what the deeper order adds -- can still ask for it.
+    Thin,
+    /// The selected LLVM default module pipeline, with the semantic fixed point
+    /// injected at its early-simplification and late-scalar extension points.
+    /// This is the default because interprocedural and global optimization can
+    /// remove redundancy that no function-only pass order can observe.
+    Deep,
+  };
+
+  /// Controls one transactional module-optimization request.  Deep mode uses
+  /// LLVMLevel exactly and injects Semantic at the pipeline's early and late
+  /// scalar extension points.  Conservative mode ignores both fields.
+  struct OptimizationOptions {
+    bool Conservative = false;
+    OptStrength Strength = OptStrength::Deep;
+    llvm::OptimizationLevel LLVMLevel = llvm::OptimizationLevel::O2;
+    SymSimplifyOptions Semantic;
+    /// Per SemanticFixedPointPass invocation.  Deep has independent early and
+    /// late invocations, so each receives this complete budget.  Zero means
+    /// unlimited and still stops on a stable state or exact cycle.
+    unsigned MaxRounds = 0;
+    /// Optional synchronous policy check after LLVM and exception-contract
+    /// verification.  The callable is not owned and must outlive this request.
+    llvm::function_ref<bool(const llvm::Module &)> PostTransformVerifier;
+  };
+
   /// Apply the optimization pass order lift uses on every emitted module.  This
   /// is the counterpart to runObfuscationPasses and public for the same reason:
   /// it is the single source of truth for that order, so anything that needs to
   /// reason about what the optimizer does -- above all the tests that pin the
-  /// semantic simplifier's joint fixed point with InstCombine -- goes through it
-  /// rather than assembling a pass list of its own that could drift.
+  /// semantic simplifier's joint fixed point with InstCombine -- goes through
+  /// it rather than assembling a pass list of its own that could drift.
   ///
   /// \p Conservative selects the patch pipeline's order, which stops after
   /// promotion and SROA and runs no value-changing transform, so a module it
   /// touches keeps the decompiled program's semantics byte for byte.
-  static void optimizeModule(llvm::Module &Mod, bool Conservative = false);
+  ///
+  /// \p Strength selects among the lift orders and is ignored when
+  /// \p Conservative is set.  It defaults to the deeper one so that lift and
+  /// decompile get it without naming it, which is also what keeps a patch
+  /// unaffected: the patch entry point passes Conservative and never reaches
+  /// the value rewriters this selects between.
+  static void optimizeModule(llvm::Module &Mod, bool Conservative = false,
+                             OptStrength Strength = OptStrength::Deep);
+
+  /// Apply Options to a same-context clone and commit only after LLVM's
+  /// verifier and the optional caller verifier accept the result.  Invalid
+  /// input and rejected output leave Mod byte-for-byte unchanged.  An exactly
+  /// unchanged candidate is not committed and preserves caller-held IR handles.
+  /// A changed successful candidate replaces the module contents, so callers
+  /// must reacquire IR handles.
+  static OptimizationResult optimizeModule(llvm::Module &Mod,
+                                           const OptimizationOptions &Options);
+
+  /// Typed counterpart to the compatibility overload above.  MaxRounds has the
+  /// same per-semantic-invocation meaning as OptimizationOptions::MaxRounds.
+  static OptimizationResult optimizeModule(llvm::Module &Mod, bool Conservative,
+                                           OptStrength Strength,
+                                           unsigned MaxRounds);
 
   /// Serialize the canonical textual IR dumps without writing to global
   /// stdout. High-level APIs use these overloads to return one stable dump
@@ -302,17 +399,18 @@ private:
   /// writable .data/.bss segment globals) merge to one shared object at link
   /// time.  Returns null if any shard cannot be emitted, parsed, or linked, so
   /// callers never mistake an incomplete module for a complete lift.
+  /// LLVMVerifierFailed distinguishes invalid shard IR or a transactional
+  /// optimizer rejection from the other null-return paths.
   ///
   /// The shard count is derived from the total MedIR work rather than pinned to
   /// \p NumThreads: peak memory is (in-flight shards) x (slice size), so
   /// slicing finely keeps a large binary's unoptimized IR from all being
   /// resident at once while still saturating every worker.
-  static std::unique_ptr<llvm::Module>
-  emitLLVMSharded(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
-                  Arch TheArch,
-                  const std::vector<std::pair<va_t, std::string>> &Imports,
-                  const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt,
-                  unsigned NumThreads, uint64_t &UnhandledValueIntrinsics);
+  static std::unique_ptr<llvm::Module> emitLLVMSharded(
+      const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
+      const std::vector<std::pair<va_t, std::string>> &Imports,
+      const BinaryImage &Img, BinaryFormat Fmt, bool NoOpt, unsigned NumThreads,
+      uint64_t &UnhandledValueIntrinsics, bool &LLVMVerifierFailed);
 
   /// Phase 3: convert MedIR -> HighIR in parallel.
   void buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,

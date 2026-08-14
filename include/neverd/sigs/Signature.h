@@ -12,7 +12,7 @@
 ///   - CRC16 checksum over trailing bytes for verification
 ///   - One or more function name associations with offsets
 ///
-/// Supports both .pat (text) and .sig (binary IDASGN) formats.
+/// The current loader accepts the text representation of these records.
 ///
 //===----------------------------------------------------------------------===//
 

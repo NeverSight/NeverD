@@ -42,7 +42,6 @@ bool liftMemMultiple(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
   case ARM_INS_POP: {
     int NumRegs = ARM.op_count;
     NdVar Sp = NdVar::reg(armreg::SP, 4);
-    bool PopsPC = false;
     for (int I = 0; I < NumRegs; I++) {
       NdVar Slot = S.makeTemp(4);
       S.emit(NdOp::INT_ADD, Slot, {Sp, NdVar::cst(4 * I, 4)});
@@ -50,13 +49,8 @@ bool liftMemMultiple(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::LOAD, Val, {Slot});
       NdVar Dst = L.operandWrite(ARM.operands[I]);
       S.emit(NdOp::COPY, Dst, {Val});
-      if (Dst.Offset == armreg::PC)
-        PopsPC = true;
     }
     S.emit(NdOp::INT_ADD, Sp, {Sp, NdVar::cst(4 * NumRegs, 4)});
-    if (PopsPC) {
-      S.emit(NdOp::RETURN, {}, {NdVar::reg(armreg::PC, 4)});
-    }
     break;
   }
 
@@ -73,7 +67,6 @@ bool liftMemMultiple(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     if (isAliasMnemonic(Insn, "pop")) {
       int NumRegs = ARM.op_count;
       NdVar Sp = NdVar::reg(armreg::SP, 4);
-      bool PopsPC = false;
       for (int I = 0; I < NumRegs; I++) {
         NdVar Slot = S.makeTemp(4);
         S.emit(NdOp::INT_ADD, Slot, {Sp, NdVar::cst(4 * I, 4)});
@@ -81,12 +74,8 @@ bool liftMemMultiple(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
         S.emit(NdOp::LOAD, Val, {Slot});
         NdVar Dst = L.operandWrite(ARM.operands[I]);
         S.emit(NdOp::COPY, Dst, {Val});
-        if (Dst.Offset == armreg::PC)
-          PopsPC = true;
       }
       S.emit(NdOp::INT_ADD, Sp, {Sp, NdVar::cst(4 * NumRegs, 4)});
-      if (PopsPC)
-        S.emit(NdOp::RETURN, {}, {NdVar::reg(armreg::PC, 4)});
       break;
     }
     if (ARM.op_count < 2)
@@ -106,21 +95,19 @@ bool liftMemMultiple(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       OffsetStart = -4 * (ARM.op_count - 1);
     }
 
-    bool LoadsPC = false;
     std::vector<std::pair<NdVar, NdVar>> LoadedRegs;
     LoadedRegs.reserve(ARM.op_count - 1);
     for (int I = 1; I < ARM.op_count; I++) {
       int Off = OffsetStart + (I - 1) * Delta;
       NdVar EA = S.makeTemp(4);
-      S.emit(NdOp::INT_ADD, EA,
-             {BaseAddr, NdVar::cst(
-                        static_cast<uint64_t>(static_cast<uint32_t>(Off)), 4)});
+      S.emit(
+          NdOp::INT_ADD, EA,
+          {BaseAddr,
+           NdVar::cst(static_cast<uint64_t>(static_cast<uint32_t>(Off)), 4)});
       NdVar Val = S.makeTemp(4);
       S.emit(NdOp::LOAD, Val, {EA});
       NdVar Dst = L.operandWrite(ARM.operands[I]);
       LoadedRegs.emplace_back(Dst, Val);
-      if (Dst.Offset == armreg::PC)
-        LoadsPC = true;
     }
     // LDM reads every word using the pre-instruction base value.  Delay all
     // architectural register writes until the complete register list has
@@ -134,9 +121,6 @@ bool liftMemMultiple(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
         S.emit(NdOp::INT_ADD, Base, {BaseAddr, NdVar::cst(Total, 4)});
       else
         S.emit(NdOp::INT_SUB, Base, {BaseAddr, NdVar::cst(Total, 4)});
-    }
-    if (LoadsPC) {
-      S.emit(NdOp::RETURN, {}, {NdVar::reg(armreg::PC, 4)});
     }
     break;
   }

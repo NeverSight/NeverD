@@ -65,7 +65,9 @@ all metadata is rejected if it contains an embedded NUL.
 
 The repository examples are
 [`minimal.py`](../pluginsdk/python/examples/minimal.py) and
-[`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py).
+[`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py), plus
+[`semantic_optimizer.py`](../pluginsdk/python/examples/semantic_optimizer.py)
+for the proof-gated optimization APIs.
 
 ## Load and inspect plugins
 
@@ -126,6 +128,56 @@ the walk. `exact` additionally requires that no operation was conservatively
 replaced by unknown state; unsupported LowIR operations, calls without
 summaries, and stores through unresolved addresses are counted in
 `unmodelled_ops`. EVM and SBF sessions do not expose native LowIR exploration.
+
+### Proof-gated synthesis and LLVM optimization
+
+`synthesize_expression` is deliberately separate from the legacy MBA-only
+`simplify_expression`. A changed result is exposed only after the solver reports
+`ProofStatus.EQUIVALENT`; counterexamples, incomplete proofs, and exhausted
+search budgets leave the original expression unchanged while preserving their
+distinct outcomes and work counters. `ProofStatus.INVALID` identifies a
+malformed proof question and remains distinct from budget-driven
+`ProofStatus.UNKNOWN`; both fail closed.
+
+`optimize_llvm_ir` parses textual LLVM IR, optimizes a transaction clone with
+NeverD's semantic fixed point and the selected standard LLVM pipeline, verifies
+the result, and returns only the committed module:
+
+```python
+from neverd_plugin import (
+    LLVMOptimizationLevel,
+    OptimizationMode,
+    ProofStatus,
+    optimize_llvm_ir,
+    synthesize_expression,
+)
+
+rewrite = synthesize_expression(
+    "(x >> 4) + ((x >> 2) >> 2)", exhaustive=True
+)
+if rewrite.changed:
+    assert rewrite.proof_status is ProofStatus.EQUIVALENT
+
+module = optimize_llvm_ir(
+    llvm_ir,
+    mode=OptimizationMode.DEEP,
+    llvm_level=LLVMOptimizationLevel.O2,
+    enable_synthesis=True,
+    exhaustive=True,
+)
+print(module.output_ir, module.semantic_rewrites, module.proof_queries)
+```
+
+Budget fields let production callers bound MBA work and arity, synthesis search
+and SAT work, and LLVM convergence. For `simplify_expression`, explicit
+`exhaustive=True` selects the unlimited MBA arity/work policy and removes the
+native parser's nesting and width policy ceilings. For `synthesize_expression`,
+it removes parser, search-work, and SAT ceilings while preserving the caller's
+grammar. For `optimize_llvm_ir`, it removes convergence, search-work, and SAT
+ceilings. Python adds no further expression limit; memory-safety and IR
+representation bounds still apply. The equivalent C entry points are
+`neverd_simplify_expr`, `neverd_synthesize_expr`, and `neverd_optimize_llvm_ir`,
+with typed result disposers and versioned JSON adapters.
 
 The six immutable event variants are `BINARY_LOADED`, `BINARY_CLOSING`,
 `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE`, and `PATCH_APPLIED`.

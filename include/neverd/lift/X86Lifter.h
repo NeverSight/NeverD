@@ -17,6 +17,7 @@
 
 #include <capstone/capstone.h>
 #include <initializer_list>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -70,6 +71,10 @@ public:
   /// Direct (immediate) call target of \p I, or InvalidVA if \p I is not a
   /// direct call.
   static va_t directCallTarget(const cs_insn *I);
+
+  /// Encoded RET/RETF stack-pop immediate.  The optional preserves the
+  /// distinction between no immediate and an explicitly encoded zero.
+  static std::optional<uint64_t> returnImmediate(const cs_insn *I);
 
   /// Target VA of a pure RIP/EIP-relative `lea` (`lea reg, [rip+disp]`), the
   /// x86 address-of idiom that materializes a fixed code address into a

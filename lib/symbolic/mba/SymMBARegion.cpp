@@ -83,11 +83,12 @@ std::optional<Region> readRegion(SymContext &Ctx, SymRef E, unsigned MaxAtoms,
 /// both run and the shorter answer wins.
 SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
                    WorkBudget &Budget, SolveReport &Rep) {
+  const SolverLimits Limits = resolveLimits(Opts);
   llvm::SmallVector<Candidate, 6> Candidates;
   bool Measured = false;
 
   if (std::optional<Region> Linear =
-          readRegion(Ctx, E, Opts.MaxAtoms, /*AllowProducts=*/false, Rep)) {
+          readRegion(Ctx, E, Limits.MaxAtoms, /*AllowProducts=*/false, Rep)) {
     Measured = true;
     auto NumAtoms = static_cast<unsigned>(Linear->AtomIds.size());
     std::optional<size_t> Corners = cornerCount(Linear->AtomIds.size());
@@ -97,19 +98,19 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
       llvm::SmallVector<SymRef, 4> Forms;
       linearCandidates(Ctx,
                        measure(Ctx, Linear->Abstract.Body, Linear->AtomIds),
-                       Linear->Atoms, termBudget(Ctx, E, Opts), Forms);
+                       Linear->Atoms, termBudget(Ctx, E, Opts), Limits, Forms);
       for (SymRef Form : Forms) {
         SymRef Rewritten = Linear->Abstract.Hidden.empty()
                                ? Form
                                : Ctx.substitute(Form, Linear->Abstract.Hidden);
-        if (proveLinearIdentity(Ctx, E, Rewritten, Opts.MaxAtoms, Budget))
+        if (proveLinearIdentity(Ctx, E, Rewritten, Limits.MaxAtoms, Budget))
           Candidates.push_back({Rewritten, NumAtoms, true});
       }
     }
   }
 
   if (std::optional<Region> Poly =
-          readRegion(Ctx, E, Opts.MaxAtoms, /*AllowProducts=*/true, Rep)) {
+          readRegion(Ctx, E, Limits.MaxAtoms, /*AllowProducts=*/true, Rep)) {
     Measured = true;
     if (std::optional<SymRef> Form =
             solvePolynomial(Ctx, Poly->Abstract.Body, Poly->AtomIds,
@@ -117,7 +118,7 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
       SymRef Rewritten = Poly->Abstract.Hidden.empty()
                              ? *Form
                              : Ctx.substitute(*Form, Poly->Abstract.Hidden);
-      if (provePolynomialIdentity(Ctx, E, Rewritten, Opts.MaxAtoms, Budget))
+      if (provePolynomialIdentity(Ctx, E, Rewritten, Limits.MaxAtoms, Budget))
         Candidates.push_back(
             {Rewritten, static_cast<unsigned>(Poly->AtomIds.size()), true});
     }
@@ -190,9 +191,16 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
 /// the reason to believe it.
 SymRef solveWide(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
                  WorkBudget &Budget, SolveReport &Rep) {
+  // Against the resolved ceiling rather than the requested one.  A caller that
+  // asks for an unlimited arity is asking to measure as wide as the resources
+  // allow, not to switch the split off — and comparing a node count against
+  // the sentinel would do exactly that, silently, at the one input size the
+  // split exists for.
+  const SolverLimits Limits = resolveLimits(Opts);
+
   // An expression cannot abstract to more inputs than it has nodes, so this
   // rejects everything narrow without paying for an abstraction first.
-  if (Ctx.dagSize(E) <= Opts.MaxAtoms)
+  if (Ctx.dagSize(E) <= Limits.MaxAtoms)
     return E;
 
   std::optional<Abstraction> Abstract =
@@ -204,7 +212,7 @@ SymRef solveWide(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
   Ctx.collectVars(Abstract->Body, AllAtoms);
   // Measurable in one piece, which the ordinary solver has already tried;
   // splitting it could only reach the same answer by a longer road.
-  if (AllAtoms.size() <= Opts.MaxAtoms)
+  if (AllAtoms.size() <= Limits.MaxAtoms)
     return E;
 
   // The cut is between summands, so there has to be a sum to cut.

@@ -59,6 +59,11 @@ else()
     set(BUILD_SHARED_LIBS       OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/llvm-project/llvm EXCLUDE_FROM_ALL)
 
+    # DXContainerInfo.cpp consumes the generated revision header.  Keep this
+    # ordering edge in the integrating project so a clean Ninja build cannot
+    # compile LLVMMC before the header exists.
+    add_dependencies(LLVMMC llvm_vcsrevision_h)
+
     set(LLVM_LIBS
         LLVMCore LLVMSupport LLVMDemangle LLVMIRReader LLVMBitWriter
         LLVMBitReader LLVMLinker
@@ -118,6 +123,18 @@ endif()
 # --- NeverD CMake helpers (mirrors LLVM's AddLLVM.cmake) ---
 include(${CMAKE_SOURCE_DIR}/cmake/AddNeverD.cmake)
 
+# Capability claims are executable source policy, independent of whether the
+# embedded Python plugin host is enabled.  Find only the interpreter here; the
+# host's development library remains conditional below.
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+add_custom_target(check-neverd-capabilities
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/check_capabilities.py
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Validating NeverD capability claims"
+    VERBATIM
+)
+
 # --- NeverD component libraries ---
 add_subdirectory(lib)
 
@@ -129,7 +146,7 @@ option(NEVERD_ENABLE_PYTHON_PLUGINS
 
 set(NEVERD_PYTHON_PLUGIN_HOST_ENABLED OFF)
 if(NEVERD_ENABLE_PYTHON_PLUGINS AND NEVERD_BUILD_SHARED)
-    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter Development.Embed)
+    find_package(Python3 3.10 REQUIRED COMPONENTS Development.Embed)
     set(NEVERD_PYTHON_PLUGIN_HOST_ENABLED ON)
 elseif(NEVERD_ENABLE_PYTHON_PLUGINS)
     message(STATUS
@@ -148,6 +165,7 @@ add_subdirectory(tools)
 option(NEVERD_BUILD_PLUGINS "Build NeverD example plugins" OFF)
 if(NEVERD_BUILD_PLUGINS)
   add_subdirectory(plugins/example)
+  add_subdirectory(plugins/semantic)
 endif()
 
 # --- Copy signature files to build/bin/sig/ ---

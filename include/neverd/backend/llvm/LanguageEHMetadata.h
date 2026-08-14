@@ -24,19 +24,28 @@ namespace neverd::language_eh_md {
 /// Attached to a function whose Itanium LSDA became `invoke`/`landingpad`.
 inline constexpr llvm::StringLiteral ItaniumAttachment("neverd.itanium.eh");
 
+/// Transient marker used only while an emitted source CALL is matched back to
+/// its native address.  emitFunc removes it before returning the module.
+inline constexpr llvm::StringLiteral
+    InternalSourceCallAttachment("neverd.internal.source-call");
+
 enum ItaniumOperand : unsigned {
   /// Personality symbol the function was given.
   Personality = 0,
   /// Landing pads the LSDA named that became a `landingpad`.
-  LoweredPads,
+  LoweredPads = 1,
   /// Landing pads the LSDA named that could not be lowered, and so are
   /// reachable only through the decoded table.  Nonzero means this function's
   /// IR describes less than its table does.
-  SkippedPads,
+  SkippedPads = 2,
   /// Calls the call-site table protected that became an `invoke`.
-  LoweredCalls,
-  ItaniumOperandCount,
+  LoweredCalls = 3,
+  /// Emitted may-unwind calls covered by a nonzero landing-pad range.  A
+  /// complete lowering has exactly this many invokes.
+  RequiredProtectedCalls = 4,
+  ItaniumOperandCount = 5,
 };
+static_assert(ItaniumOperandCount == 5);
 
 } // namespace neverd::language_eh_md
 

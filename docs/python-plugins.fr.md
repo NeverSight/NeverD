@@ -53,7 +53,7 @@ class AnalysisReport:
 
 Tous les hooks sont facultatifs. `None` signifie que l’opération a réussi ; un résultat entier doit tenir dans un `int` C. Les versions des métadonnées suivent strictement SemVer. Les noms doivent être des chaînes UTF-8 non vides et toute métadonnée contenant un caractère NUL interne est rejetée.
 
-Le dépôt fournit les exemples [`minimal.py`](../pluginsdk/python/examples/minimal.py) et [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py).
+Le dépôt fournit les exemples [`minimal.py`](../pluginsdk/python/examples/minimal.py), [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py) et [`semantic_optimizer.py`](../pluginsdk/python/examples/semantic_optimizer.py), qui illustre les API d’optimisation soumises à preuve.
 
 ## Charger et inspecter les plugins
 
@@ -106,6 +106,59 @@ for path in result.paths:
 Les six variantes d’événement immuables sont `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` et `PATCH_APPLIED`. Les chaînes du payload sont copiées pendant le callback ; les champs sans rapport avec la variante valent `None`.
 
 Ne conservez jamais une `Session` pour l’utiliser après la terminaison. La capsule native est invalidée avant le début de `on_term` et avant que la session native puisse être libérée. Un appel ultérieur échoue avec `RuntimeError` au lieu de déréférencer une mémoire périmée.
+
+### Synthèse contrôlée par preuve et optimisation LLVM
+
+`synthesize_expression` est distinct de `simplify_expression`, conservé pour
+la compatibilité ABI et limité au MBA. Une réécriture n’est validée que si le
+solveur renvoie `ProofStatus.EQUIVALENT`. Un contre-exemple, une preuve
+incomplète ou un budget de recherche épuisé conserve l’expression d’origine et
+rapporte séparément le résultat ainsi que le travail de recherche et de preuve.
+`ProofStatus.INVALID` signale une question de preuve mal formée et reste
+distinct de `ProofStatus.UNKNOWN`, dû au budget ; tous deux refusent la
+réécriture de façon sûre.
+
+`optimize_llvm_ir` combine le point fixe sémantique de NeverD et le pipeline
+LLVM standard choisi sur une copie transactionnelle, puis ne renvoie que le
+module validé et engagé :
+
+```python
+from neverd_plugin import (
+    LLVMOptimizationLevel,
+    OptimizationMode,
+    ProofStatus,
+    optimize_llvm_ir,
+    synthesize_expression,
+)
+
+rewrite = synthesize_expression(
+    "(x >> 4) + ((x >> 2) >> 2)", exhaustive=True
+)
+if rewrite.changed:
+    assert rewrite.proof_status is ProofStatus.EQUIVALENT
+
+module = optimize_llvm_ir(
+    llvm_ir,
+    mode=OptimizationMode.DEEP,
+    llvm_level=LLVMOptimizationLevel.O2,
+    enable_synthesis=True,
+    exhaustive=True,
+)
+print(module.output_ir, module.semantic_rewrites, module.proof_queries)
+```
+
+Les appels de production peuvent borner séparément le travail et l’arité MBA,
+la recherche de synthèse et le travail SAT, ainsi que la convergence LLVM. Pour
+`simplify_expression`, `exhaustive=True` sélectionne la politique MBA sans
+plafond d’arité ni de travail et retire les plafonds d’imbrication et de largeur
+du parseur natif. Pour `synthesize_expression`, il retire les plafonds du
+parseur, du travail de recherche et de SAT tout en conservant la grammaire
+définie par l’appelant ; pour `optimize_llvm_ir`, il retire les plafonds de
+convergence, de recherche et de SAT. Python n’ajoute aucune autre limite
+d’expression ; les bornes de sûreté mémoire et de représentation IR restent
+applicables. Les points d’entrée C sont `neverd_simplify_expr`,
+`neverd_synthesize_expr` et `neverd_optimize_llvm_ir`, avec des fonctions de
+libération typées et des adaptateurs JSON versionnés.
 
 ## Erreurs, isolation et confiance
 

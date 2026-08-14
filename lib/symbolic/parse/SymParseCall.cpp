@@ -54,8 +54,7 @@ uint32_t Parser::parseWidthSuffix(uint32_t Default) {
   uint64_t W = 0;
   if (!parsePlainInt(W))
     return Default;
-  if (W == 0 || W > kMaxWidth) {
-    fail(Offset, "a width must be between 1 and " + llvm::Twine(kMaxWidth));
+  if (!validateWidth(W, Offset)) {
     return Default;
   }
   return static_cast<uint32_t>(W);
@@ -106,7 +105,9 @@ SymRef Parser::parseWidthCall(const Token &Name) {
   uint32_t AW = Ctx.width(A);
   if (F == "extract") {
     uint64_t Low = Counts[0], W = Counts[1];
-    if (W == 0 || W > kMaxWidth || Low > kMaxWidth || Low + W > AW) {
+    if (!validateWidth(W, Offsets[1]))
+      return {};
+    if (Low > AW || W > uint64_t(AW) - Low) {
       fail(Offsets[0], "extract window does not fit in a " + llvm::Twine(AW) +
                            "-bit operand");
       return {};
@@ -116,8 +117,7 @@ SymRef Parser::parseWidthCall(const Token &Name) {
   }
 
   uint64_t W = Counts[0];
-  if (W == 0 || W > kMaxWidth) {
-    fail(Offsets[0], "a width must be between 1 and " + llvm::Twine(kMaxWidth));
+  if (!validateWidth(W, Offsets[0])) {
     return {};
   }
   if (F == "trunc") {

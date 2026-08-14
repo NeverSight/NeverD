@@ -4,14 +4,17 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "COFFExceptionTestsDetail.h"
+#include "COFFUnwindDetail.h"
 #include "gtest/gtest.h"
 
-#include "COFFExceptionTestsDetail.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include <algorithm>
 #include <limits>
+#include <string>
 
 namespace {
 
@@ -88,6 +91,64 @@ TEST(COFFExceptionModel, QueriesOwningRuntimeFunction) {
             ExceptionParseStatus::Partial);
   EXPECT_EQ(EI.findFunction(0x1040), nullptr);
   EXPECT_EQ(EI.findFunction(0x3000), nullptr);
+}
+
+TEST(COFFExceptionParser, AcceptsAcyclicX64UnwindChainBeyondLegacyDepth) {
+  constexpr size_t ChainedRecordCount = 40;
+  ExceptionInfo Info;
+  Info.Functions.reserve(ChainedRecordCount + 1);
+  for (size_t I = 0; I <= ChainedRecordCount; ++I) {
+    ExceptionFunction Function;
+    Function.CodeRange = {0x140001000 + I * 0x20, 0x140001010 + I * 0x20};
+    Function.UnwindInfoRVA = static_cast<uint32_t>(0x3000 + I * 0x20);
+    Function.Kind = I == ChainedRecordCount ? RuntimeFunctionKind::Primary
+                                            : RuntimeFunctionKind::Chained;
+    Info.Functions.push_back(std::move(Function));
+  }
+  for (size_t I = 0; I < ChainedRecordCount; ++I) {
+    Info.Functions[I].ChainedPrimaryRange = Info.Functions[I + 1].CodeRange;
+    Info.Functions[I].ChainedUnwindInfoRVA =
+        Info.Functions[I + 1].UnwindInfoRVA;
+  }
+
+  coff_loader::unwind_detail::resolveX64UnwindChains(Info);
+
+  EXPECT_EQ(Info.ParseStatus, ExceptionParseStatus::Complete);
+  for (size_t I = 0; I < ChainedRecordCount; ++I) {
+    SCOPED_TRACE(I);
+    ASSERT_TRUE(Info.Functions[I].PrimaryFunctionIndex.has_value());
+    EXPECT_EQ(*Info.Functions[I].PrimaryFunctionIndex, I + 1);
+    EXPECT_EQ(Info.Functions[I].ParseStatus, ExceptionParseStatus::Complete);
+    EXPECT_TRUE(Info.Functions[I].Diagnostics.empty());
+  }
+}
+
+TEST(COFFExceptionParser, RejectsCyclicX64UnwindChainExplicitly) {
+  ExceptionInfo Info;
+  for (size_t I = 0; I < 3; ++I) {
+    ExceptionFunction Function;
+    Function.CodeRange = {0x140001000 + I * 0x20, 0x140001010 + I * 0x20};
+    Function.UnwindInfoRVA = static_cast<uint32_t>(0x3000 + I * 0x20);
+    Function.Kind = RuntimeFunctionKind::Chained;
+    Info.Functions.push_back(std::move(Function));
+  }
+  for (size_t I = 0; I < Info.Functions.size(); ++I) {
+    const size_t Next = (I + 1) % Info.Functions.size();
+    Info.Functions[I].ChainedPrimaryRange = Info.Functions[Next].CodeRange;
+    Info.Functions[I].ChainedUnwindInfoRVA = Info.Functions[Next].UnwindInfoRVA;
+  }
+
+  coff_loader::unwind_detail::resolveX64UnwindChains(Info);
+
+  EXPECT_EQ(Info.ParseStatus, ExceptionParseStatus::Malformed);
+  for (const ExceptionFunction &Function : Info.Functions) {
+    EXPECT_EQ(Function.ParseStatus, ExceptionParseStatus::Malformed);
+    EXPECT_TRUE(
+        std::any_of(Function.Diagnostics.begin(), Function.Diagnostics.end(),
+                    [](const std::string &Message) {
+                      return Message.find("cyclic") != std::string::npos;
+                    }));
+  }
 }
 
 TEST(COFFExceptionParser, DecodesX64V1OperationsAndHandlerLocation) {

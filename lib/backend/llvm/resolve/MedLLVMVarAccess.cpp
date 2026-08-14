@@ -18,6 +18,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 
@@ -95,18 +96,16 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     auto &Entry = CurFunc->getEntryBlock();
     llvm::IRBuilder<> AllocBuilder(&Entry, Entry.begin());
     const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
-    llvm::Type *StorageTy =
-        V.Kind == MedVar::EHException
-            ? sizeToType(static_cast<uint16_t>(PointerSize))
-            : llvm::Type::getInt32Ty(*Ctx);
-    llvm::AllocaInst *&Slot = V.Kind == MedVar::EHException
-                                 ? EHExceptionAlloca
-                                 : EHSelectorAlloca;
+    llvm::Type *StorageTy = V.Kind == MedVar::EHException
+                                ? sizeToType(static_cast<uint16_t>(PointerSize))
+                                : llvm::Type::getInt32Ty(*Ctx);
+    llvm::AllocaInst *&Slot =
+        V.Kind == MedVar::EHException ? EHExceptionAlloca : EHSelectorAlloca;
     if (!Slot)
-      Slot = AllocBuilder.CreateAlloca(
-          StorageTy, nullptr,
-          V.Kind == MedVar::EHException ? "eh.exception.slot"
-                                        : "eh.selector.slot");
+      Slot = AllocBuilder.CreateAlloca(StorageTy, nullptr,
+                                       V.Kind == MedVar::EHException
+                                           ? "eh.exception.slot"
+                                           : "eh.selector.slot");
     llvm::Value *Value = Builder.CreateLoad(
         StorageTy, Slot,
         V.Kind == MedVar::EHException ? "eh_exception" : "eh_selector");
@@ -264,8 +263,8 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     assert(Alloc != VarAllocs.end() &&
            "call-clobber storage must be pre-created");
     auto *BaseTy = sizeToType(ClobberIt->Value.Size);
-    llvm::Value *Base = Builder.CreateLoad(
-        BaseTy, Alloc->second, V.display() + "_call_clobber_v");
+    llvm::Value *Base = Builder.CreateLoad(BaseTy, Alloc->second,
+                                           V.display() + "_call_clobber_v");
     auto *WantTy = sizeToType(V.Size);
     if (Base->getType() != WantTy)
       Base = Builder.CreateZExtOrTrunc(Base, WantTy,
@@ -488,9 +487,10 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       // pointer type, matching upstream LLVM), so the concrete `ptr` must be
       // supplied as the overload type — `@llvm.returnaddress.p0(i32 0)`.
       auto *PtrTy = llvm::PointerType::getUnqual(*Ctx);
-      llvm::Value *RA = Builder.CreateIntrinsic(
+      auto *RA = Builder.CreateIntrinsic(
           llvm::Intrinsic::returnaddress, {PtrTy},
           {llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 0)});
+      llvm_value_provenance::markSemanticProducer(*RA);
       return Builder.CreatePtrToInt(RA, sizeToType(V.Size), "retaddr");
     }
   }

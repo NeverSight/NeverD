@@ -18,6 +18,7 @@
 #include "neverd/symbolic/SymParse.h"
 
 #include <random>
+#include <utility>
 
 using namespace neverd::symbolic;
 
@@ -468,6 +469,121 @@ TEST(SymMBA, HandlesAGraphWhoseTreeIsExponentiallyLarger) {
       V = llvm::APInt(W32, Rng(), /*isSigned=*/false, /*implicitTrunc=*/true);
     EXPECT_EQ(Before.eval(Assignment), After.eval(Assignment));
   }
+}
+
+//===----------------------------------------------------------------------===//
+// What "as far as the resources allow" has to mean
+//===----------------------------------------------------------------------===//
+
+/// Twenty-four inputs with no independent part to split off: every term names
+/// every input, so the width belongs to the expression rather than to how it
+/// was written.  There is no answer here at any budget, which is exactly what
+/// makes it the right shape for asking what the solver does when told to try
+/// as hard as it can.
+llvm::StringRef tangledOverTwentyFourInputs() {
+  return "(a & b & c & d & e & f & g & h & i & j & k & l & m & n & o & p & q "
+         "& r & s & t & u & v & w & aa) + (a | b | c | d | e | f | g | h | i "
+         "| j | k | l | m | n | o | p | q | r | s | t | u | v | w | aa)";
+}
+
+/// Simplify \p Text under \p Opts and report both what came back and whether
+/// it still computes what it replaced.
+std::pair<MBAOutcome, bool> outcomeAndEquivalence(llvm::StringRef Text,
+                                                  const MBAOptions &Opts,
+                                                  bool Deep = false) {
+  SymContext Ctx;
+  SymParseResult P = parseSymExpr(Ctx, Text, W32);
+  EXPECT_TRUE(P.ok()) << P.Error;
+  if (!P.ok())
+    return {MBAOutcome::NotApplicable, false};
+  MBAResult R = Deep ? simplifyMBADeep(Ctx, P.Root, Opts)
+                     : simplifyMBA(Ctx, P.Root, Opts);
+  return {R.Outcome, sameValue(Ctx, P.Root, R.Expr, W32)};
+}
+
+TEST(SymMBA, TreatsAnUnlimitedArityAsAResourceQuestionNotAShiftCount) {
+  // "As many inputs as it takes" has to resolve to a number before anything
+  // downstream can use it, and the two ways of getting that wrong are a shift
+  // by a count the type cannot hold and a table larger than there is memory
+  // for.  Neither is a longer wait; both are a crash.  So the sentinel is
+  // resolved against what the caller said it would hold, and a request that
+  // does not fit comes back with an answer -- the expression, unmeasured --
+  // rather than with an allocation.
+  MBAOptions Unbounded;
+  Unbounded.MaxAtoms = MBAOptions::Unlimited;
+  Unbounded.MaxSynthesisAtoms = MBAOptions::Unlimited;
+  // Enough for a twelve-input sweep and not a twenty-four-input one, so the
+  // resolution is what decides rather than the arity dial.
+  Unbounded.MaxTableBytes = size_t(1) << 16;
+
+  auto [Outcome, Equivalent] =
+      outcomeAndEquivalence(tangledOverTwentyFourInputs(), Unbounded);
+  EXPECT_EQ(Outcome, MBAOutcome::TooManyInputs);
+  EXPECT_TRUE(Equivalent);
+
+  // The same request with no work to spend is a different refusal for a
+  // different reason, and must be just as survivable.
+  MBAOptions Broke;
+  Broke.MaxAtoms = MBAOptions::Unlimited;
+  Broke.MaxWork = 1;
+  auto [BrokeOutcome, BrokeEquivalent] =
+      outcomeAndEquivalence(tangledOverTwentyFourInputs(), Broke);
+  EXPECT_EQ(BrokeOutcome, MBAOutcome::BudgetExhausted);
+  EXPECT_TRUE(BrokeEquivalent);
+}
+
+TEST(SymMBA, SurvivesTwentyFourTangledInputsOnTheDefaultPath) {
+  // The same expression with nothing configured.  A wide reading that cannot
+  // be afforded is refused, not attempted and abandoned partway, so this has
+  // to be quick as well as correct.
+  auto [Outcome, Equivalent] =
+      outcomeAndEquivalence(tangledOverTwentyFourInputs(), MBAOptions{});
+  EXPECT_EQ(Outcome, MBAOutcome::TooManyInputs);
+  EXPECT_TRUE(Equivalent);
+}
+
+TEST(SymMBA, ExhaustiveModeReachesWhatTheDefaultReaches) {
+  // Removing every budget must not change an answer, only how long the solver
+  // is willing to look for one.  A mode that returned something different from
+  // the default would mean one of the two was not deriving its answer.
+  const MBAOptions Unlimited = MBAOptions::unlimited();
+  EXPECT_EQ(Unlimited.MaxWork, MBAOptions::UnlimitedWork);
+  EXPECT_EQ(Unlimited.MaxAtoms, MBAOptions::Unlimited);
+
+  for (const char *Text : {"(x ^ y) + 2 * (x & y)", "(x | y) - (x & y)",
+                           "(x & y) * (x | y) + (x & ~y) * (~x & y)",
+                           "((x ^ y) + 2 * (x & y)) & 0xff"}) {
+    SymContext Ctx;
+    SymParseResult P = parseSymExpr(Ctx, Text, W32);
+    ASSERT_TRUE(P.ok()) << P.Error;
+    EXPECT_EQ(simplifyMBADeep(Ctx, P.Root, Unlimited).Expr,
+              simplifyMBADeep(Ctx, P.Root).Expr)
+        << Text;
+  }
+}
+
+TEST(SymMBA, LetsTheCallerTurnTheSampleNetAndTheSizeGuardOff) {
+  // Both are the caller's to set and the layered walk is where that used to be
+  // easy to lose, because it applies its options once per layer and returns
+  // the composition of all of them.
+  MBAOptions ProofOnly;
+  ProofOnly.VerifySamples = 0;
+  SymContext Ctx;
+  SymParseResult P = parseSymExpr(
+      Ctx, "(((x ^ y) + 2 * (x & y)) ^ z) + 2 * (((x ^ y) + 2 * (x & y)) & z)",
+      W32);
+  ASSERT_TRUE(P.ok()) << P.Error;
+  MBAResult Proved = simplifyMBADeep(Ctx, P.Root, ProofOnly);
+  EXPECT_TRUE(Proved.Changed);
+  EXPECT_EQ(Proved.Evidence, MBAEvidence::Derivation);
+  EXPECT_LE(Proved.SizeAfter, Proved.SizeBefore);
+
+  // Growth mode is for measuring the solver, so it must not be able to make a
+  // wrong answer -- only a longer one.
+  MBAOptions Grow;
+  Grow.AllowGrowth = true;
+  MBAResult Grown = simplifyMBADeep(Ctx, P.Root, Grow);
+  EXPECT_TRUE(sameValue(Ctx, P.Root, Grown.Expr, W32));
 }
 
 TEST(SymMBA, MeasuresAWideWordTheSameWay) {

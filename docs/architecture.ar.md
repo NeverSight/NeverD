@@ -38,8 +38,8 @@ flowchart LR
 في `include/neverd/sdk/NeverDCAPI.h`. توجد حالة المحرك في
 `lib/sdk/SessionImpl.h`؛ ويختار `neverd_session_load` loader ويبني
 `BinaryImage`، بينما تشغّل العمليات المبنية على IR ‏`lib/pipeline/Pipeline.cpp`
-عند الحاجة. يرتبط الملف التنفيذي `neverd` مع `neverd_shared`؛ وتبقى أرشيفات
-المكونات وتبعيات LLVM/Capstone تفاصيل خاصة بالمكتبة المشتركة. تستخدم CLI ‏LLVM
+عند الحاجة. يرتبط الملف التنفيذي `neverd` مع `neverd_shared`؛ وأرشيفات
+المكونات وتبعيات LLVM/Capstone هي تفاصيل خاصة بالمكتبة المشتركة. تستخدم CLI ‏LLVM
 Support لواجهة سطر الأوامر، لكنها لا تتجاوز C API لقيادة المحرك.
 
 ## تمثيلات IR ومساراتها
@@ -63,6 +63,111 @@ Support لواجهة سطر الأوامر، لكنها لا تتجاوز C API 
 بالتمثيل في مكتبة IR أو backend المالكة له؛ وعلى pipeline تنسيق المكونات لا
 ابتلاع خوارزمياتها.
 
+## عقد الترجمة بين المعماريات
+
+يعرّف `include/neverd/translate` طبقة عقد، لا backend للتنفيذ.
+يمثل `GuestState` الحالة المرئية للآلة بصورة مستقلة عن العمارة لكل من
+`x86_32` و`x86_64` و`AArch64` و`ARM32`. يستخدم تسلسله القانوني ذي الإصدار 1
+حقول little-endian ثابتة العرض، ومعرّفات سجلات مستقرة، ومجموعات مرتبة، وتحققًا
+fail-closed؛ لذلك لا تعتمد الحالة المستمرة على تخطيط C++ في المضيف.
+
+خط الأساس wire v1 لـ`GuestState` مجمّد بصورة دائمة. يجب أن تستخدم أي حالة خارجه
+معرّف extension-register من نطاق الامتدادات مع اسم قانوني بأحرف صغيرة، أو أن
+تنتقل إلى إصدار wire جديد مع upgrader صريح؛ ويحظر تغيير خط أساس v1 في مكانه.
+
+بالنسبة إلى ضيف `ARM32`، يكون `ExecutionMode` هو نمط فك الترميز المرجعي ويجب أن
+يتوافق مع `CPSR.T`. ويكون PC المخزّن دائمًا عنوان التعليمة القانوني بعد تصفير
+البت 0؛ كما يتطلب نمط ARM محاذاة على حدود الكلمة.
+
+يعرّف عقد أزواج المعماريات `x86_64 -> AArch64` و
+`AArch64 -> x86_64` و`x86_32 -> AArch64/ARM32` و
+`ARM32 -> x86_32/x86_64`. تعني `ContractDefined` إمكان التحقق من الطلب وحفظه،
+لا إمكان ترجمة الشفرة أو تنفيذها. تقبل سياسة JIT المضيف الأصلي للعملية الجارية
+فقط، بينما تتطلب سياسة AOT تحديد عمارة المضيف وtarget triple صراحة؛ ويجب أيضًا
+تحديد CPU أو مجموعة الميزات صراحة عند اختيارهما.
+
+يسجل `TranslationExit` ذو الإصدار سبب توقف مستقرًا والحمولة المنمطة الموافقة
+لاستدعاءات النظام، والاستثناءات أو الإشارات، ونقاط التوقف، والتعليمات غير
+المدعومة، والتعديل الذاتي، وميزانيات الموارد، والاستدعاءات الخارجية، وأعطال
+الذاكرة، وشروط الانتهاء الأخرى. لذلك لا يحتاج المستهلك إلى إعادة تفسير عدد
+صحيح غير منمط وفقًا لسبب التوقف.
+
+مهما كان سبب التوقف، يجب ألا تتجاوز عدادات التعليمات وblocks والشفرة المولّدة
+المبلّغ عنها في النتيجة الميزانية غير الصفرية المقابلة في الطلب. ويجب أيضًا أن
+تحدد حمولة `BudgetExhausted` ذلك الـlimit المطلوب بدقة، لا عتبة مشتقة أو خاصة
+بالتنفيذ.
+
+يبلغ عقد `RuntimeControlBlockV1` الداخلي للـbackend مقدار 128 بايت
+بالضبط، بمحاذاة 8 بايت، وتضبطه قيم magic وversion وsize وإزاحات حقول ثابتة
+للإصدار v1، وحقول محجوزة صفرية، ومخارج منمطة متسقة. لا يحتوي حاويات C++ ولا
+مؤشرات للمضيف ولا أسماء بديلة لعناوين guest. وهو ليس تخطيط C++ ولا صيغة wire
+الخاصة بـ`GuestState`؛ ويجب على backend يطبق هذا العقد تحويل الحالة إليه صراحة.
+
+لا يحتوي سطح الاستدعاء الثابت للإصدار v1 للشفرة المولدة إلا ثمانية helpers:
+`nvd_rt_v1_load8_le` و`nvd_rt_v1_load16_le` و`nvd_rt_v1_load32_le` و
+`nvd_rt_v1_load64_le` و`nvd_rt_v1_store8_le` و`nvd_rt_v1_store16_le` و
+`nvd_rt_v1_store32_le` و`nvd_rt_v1_store64_le`. يجب أن تتطابق الأسماء والتواقيع
+ومصدر المؤشرات تمامًا؛ وعلى backend ربط هذا الجدول المحدود صراحة من دون الرجوع
+إلى تحليل رموز البيئة المحيطة. التحقق من generation للذاكرة القابلة للتنفيذ
+واستطلاع الميزانية/الإلغاء عمليتان خاصتان بالـdispatcher الموثوق؛ ولا يعد
+`nvd_rt_v1_validate_generation` ولا `nvd_rt_v1_poll` helper للشفرة المولدة.
+ويملك host dispatcher الموثوق أيضًا اختيار blocks ولا يمكن للـIR المولد استدعاؤه؛
+بل تعيد translated blocks رمز خروج منمطًا. ولا يجوز للـIR المولد أن يقرأ مباشرة
+إلا runtime slot المعلن للـscalar-result.
+
+يُعزل `GuestMemoryRuntime` عن `GuestState` المنطقي: يتحقق من الحالة عند الإنشاء
+ثم ينسخ بايتات المناطق وبياناتها الوصفية إلى فهرس خاص مرتب. لا تعدو عناوين
+guest الافتراضية كونها مفاتيح بحث، ولا تتحول أبدًا إلى مؤشرات للمضيف. تبلغ
+عمليات الوصول القياسية المفحوصة عن أعطال منمطة للعرض والمحاذاة والفيض وعدم
+التعيين وعبور المناطق والصلاحيات والكتابة إلى شفرة قابلة للتنفيذ وفيض أو عدم
+تطابق generation ومخالفة policy. كما تنتج ميزانيات التعليمات/blocks والإلغاء
+وتتبع generation وسياسات كتابة الشفرة `RejectExecutableWrites` و
+`InvalidateOnExecutableWrite` و`ValidateBeforeDispatch` سجلات منمطة متسقة بدل
+سلوك ضمني في المضيف.
+
+يدقق post-codegen verifier ملفات relocatable من ELF وCOFF وMach-O
+بوصفها مجموعة مغلقة. يجب أن تتطابق الصيغة والعمارة تمامًا مع المضيف المختار؛
+ويجب أن تنتمي الرموز غير المعرفة إلى helper allowlist المحدودة بالمطابقة
+الدقيقة، بينما تحظر الرموز الديناميكية. تقتصر relocations على whitelists مباشرة
+وصريحة مع التحقق من encoding والعرض والمحاذاة وoffset وقابلية تحميل قسم الوجهة
+ومن أن الهدف تعريف non-preemptible محلي للملف أو helper مسموح به تمامًا. ويرفض
+المدقق W+X وبيانات unwind/exception/initializer الوصفية وTLS وIFUNC وGOT/PLT
+وغيرها من أشكال indirection وrelocations الديناميكية والتعريفات
+weak/preemptible أو القابلة للاختيار والأقسام المحجوزة غير المعروفة وتوجيهات
+linker. يجب ألا تحتوي آثار ELF من نوع `ET_REL` أي program headers أو segments.
+وتخضع load commands في Mach-O لقائمة سماح موجبة: segment واحد بالضبط يطابق عرض
+الملف، وبحد أقصى symbol table وdynamic-symbol table وplatform-version وأمر
+data-in-code واحد لكل منها، مع التحقق من علاقات الاعتماد. وترفض خيارات linker
+وكل command آخر.
+
+تعرّف تطبيقات runtime والذاكرة وIR وتدقيق ملفات الهدف هذه الحدود وتتحقق منها.
+ولا تشكل backend ترجمة قابلًا للتنفيذ ومتكاملًا، ولا pipeline متكاملًا للترجمة
+بين المعماريات، ولا إعادة كتابة متكاملة للاستثناءات من طرف إلى طرف. يحدد هذا
+القسم نطاق العقد وverifier؛ ولا يدعي إتاحة التوليد أو الربط أو التحميل أو التنفيذ
+أو JIT أو AOT أو إعادة كتابة الاستثناءات من طرف إلى طرف.
+
+يشترط عقد IR المولّد أن يكون كل translated block خاضع له hidden وnon-preemptible
+وأن يستخدم C ABI `i32 (ptr state, ptr runtime)`. لا تُكتشف blocks إلا عبر سجل
+خاص، ولا عبر بحث رموز العملية المحيطة؛ كما تُحظر الاستدعاءات المباشرة بين
+blocks.
+
+يقيّد IR verifier أيضًا عروض الأعداد الصحيحة بعرض السجل القياسي للمضيف لتجنب
+compiler-runtime libcalls المعروفة التي قد تضيفها legalization. هذا شرط ضروري
+لكنه غير كافٍ: يجب على أي backend تنفيذ يطبق هذا العقد تدقيق انتقالات التحكم
+post-codegen و`MachineIR` وrelocations في ملف الهدف تدقيقًا دقيقًا مقابل قائمة
+runtime-symbol allowlist المحدودة نفسها.
+
+لا يجوز أن تحتوي عمليات load/store المباشرة في TranslationIR ولا قيم private
+constants إلا على عدد صحيح قياسي واحد لا يتجاوز عرض السجل القياسي للمضيف. ويجب
+تفكيك القيم المجمعة إلى قيم قياسية قبل حد verifier، حتى لا يتسبب IR مضغوط في
+توسعة غير محدودة داخل backend.
+
+يُعرّف generated-code ABI للأعداد الصحيحة القياسية فقط. أما floating point
+وSIMD وx87 والعمليات الذرية وتعليمات النظام فهي خارج هذا العقد. يجب على أي
+تنفيذ يختار `ProvenSemanticAndLLVM` تشغيل تبسيط NeverD الدلالي المحكوم بالإثبات
+حتى نقطة ثبات مشتركة مع تحسين LLVM؛ ولا توفر السياسة نفسها backend ترجمة قابلًا
+للتنفيذ.
+
 ## خريطة المكونات
 
 كل مكوّن أرشيف ثابت ينشئه `add_neverd_component_library`. يسرد الجدول تبعيات
@@ -85,6 +190,7 @@ CMake.
 | `lib/sigs` | تحليل التواقيع وقواعدها ومطابقتها | Loader |
 | `lib/libc` | أسماء libc المعروفة ودعم نموذج الاستدعاء | مكوّن مستقل |
 | `lib/support` | أدوات مشتركة لتحميل الثنائيات | Loader |
+| `lib/translate` | عقود ذات إصدار لحالة guest/policy/exit وruntime ABI ثابت وguest memory مفحوصة وتدقيق IR/ملفات الهدف المولدة؛ يقع تنفيذ backend التنفيذ خارج هذا المكوّن | عقود IR وLLVM وLLVM Object |
 
 تعكس الرؤوس العامة هذه المناطق تحت `include/neverd`. تجنب جعل فئة C++ داخلية
 جزءًا من SDK بالخطأ: تنتمي العمليات الخارجية المستقرة إلى رأس C الخالص وإلى
@@ -128,8 +234,8 @@ CMake.
 ### الدعم وعمق الاختبار
 
 تعني مصفوفة الدعم الرئيسية أن كل خلية منفذة. ولا تعني أن كل opcode أو حالة ABI
-حدّية أو منتج ثنائي أو إصدار نظام اختُبر باستقصاء. يمثل الوضع الصارم حاجزًا
-لتغطية التعليمات التي لم تُضف بعد.
+حدّية أو منتج ثنائي أو إصدار نظام اختُبر باستقصاء. يتوقف الوضع الصارم وفق
+fail-closed عندما تكون دلالة التعليمة خارج التغطية المنفذة في lifter.
 
 تملك الخلايا الاثنتا عشرة للصيغة×العمارة تغطية دلالية لـ backend إعادة الكتابة
 في `unittests/semantic/PatchFullSubstRTTests.cpp`. وعمق التكامل أدق:
@@ -150,22 +256,22 @@ CMake.
   لا يستطيع macOS الحديث ربط ملفات i386 التنفيذية التاريخية؛ لذلك تُستخدم
   كائنات thin ‏PIC/no-PIC وشبكة إعادة الكتابة.
 
-تمثل خلايا fixture المرتبطة أقوى دليل حالي على تكامل الصيغة لهذه البرامج.
+تمثل خلايا fixture المرتبطة أقوى دليل على تكامل الصيغة لهذه البرامج.
 وتملك خلايا pipeline الكائن وشبكة backend تغطية تكامل جزئية فقط. لا توجد خلية
 «مختبرة بالكامل» دون هذا التقييد، ولا تدّعي أي خلية تغطية ISA شاملة.
 
 الأدلة الأساسية هي
-[`PatchFormatTests.cpp`](../unittests/lift/PatchFormatTests.cpp) لـ fixtures ‏ELF
+[`PatchFormatTests.cpp`](../unittests/lift/format/PatchFormatTests.cpp) لـ fixtures ‏ELF
 وPE المرتبطة، و
-[`COFFARMFormatTests.cpp`](../unittests/lift/COFFARMFormatTests.cpp) لتحميل/
+[`COFFARMFormatTests.cpp`](../unittests/lift/format/COFFARMFormatTests.cpp) لتحميل/
 إعادة تجميع Windows ARM، و
-[`MachOI386RelocationTests.cpp`](../unittests/lift/MachOI386RelocationTests.cpp)
+[`MachOI386RelocationTests.cpp`](../unittests/lift/format/MachOI386RelocationTests.cpp)
 لكائنات i386 thin، و
-[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/X86_64_PipelineE2ETests.cpp)
+[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/x86_64/X86_64_PipelineE2ETests.cpp)
 و
-[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/AArch64_PipelineE2ETests.cpp)
+[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/aarch64/AArch64_PipelineE2ETests.cpp)
 لـ Mach-O المرتبط، و
-[`PatchFullSubstRTTests.cpp`](../unittests/semantic/PatchFullSubstRTTests.cpp)
+[`PatchFullSubstRTTests.cpp`](../unittests/semantic/probe/patchfull/PatchFullSubstRTTests.cpp)
 لشبكة الخلايا الاثنتي عشرة. راجع [دليل الاختبارات](testing.ar.md) للأوامر.
 
 ## أين تعدّل

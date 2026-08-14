@@ -45,6 +45,57 @@
 namespace neverd::symbolic::detail {
 
 //===----------------------------------------------------------------------===//
+// Resolving the public dials
+//===----------------------------------------------------------------------===//
+
+/// The most inputs the polynomial reading names minterms over.
+///
+/// A monomial is a list of minterm indices held in sixteen bits apiece, so a
+/// product over seventeen inputs would name a minterm the key cannot hold and
+/// would quietly name a different one instead.  That is a property of the key
+/// rather than of the algebra: past it the polynomial reading declines and the
+/// linear one still applies, which is a narrower answer rather than a wrong
+/// one.
+constexpr unsigned kMaxPolynomialAtoms = 16;
+
+/// What the public option set means once the sentinels are resolved.
+///
+/// \c MBAOptions::Unlimited says "as far as the resources allow", and every
+/// stage below needs a number instead — one that cannot overflow a shift count
+/// and cannot ask for a table larger than the caller said it would hold.
+/// Doing that resolution in one place is what keeps "unlimited" from meaning
+/// something slightly different at each of the half-dozen sites that consult
+/// it.
+struct SolverLimits {
+  /// Inputs one corner measurement may span.
+  unsigned MaxAtoms = 0;
+  /// Inputs a truth table may be built over.
+  unsigned MaxSynthesisAtoms = 0;
+  /// Inputs at which synthesis still returns the shortest form that exists.
+  unsigned MaxOptimalSynthesisAtoms = 0;
+  /// Operations one sweep of a 2^t table may spend, which also bounds what it
+  /// holds: every table it keeps is charged at a bit an entry as it is built.
+  ///
+  /// Synthesis is the largest such sweep and names it, but the subset
+  /// inversion behind the conjunction basis is the same size on the same
+  /// table, and answering to the same ceiling is what stops raising the arity
+  /// dial from raising the price of a reading nobody asked to be exhaustive.
+  size_t SynthesisWork = 0;
+
+  /// The limits to hand \c synthesizeBitwise, refusing anything that would
+  /// read worse than \p MaxCost.
+  BitwiseSynthesisLimits synthesis(size_t MaxCost) const {
+    BitwiseSynthesisLimits Out;
+    Out.MaxOptimalAtoms = MaxOptimalSynthesisAtoms;
+    Out.MaxWork = SynthesisWork;
+    Out.MaxCost = MaxCost;
+    return Out;
+  }
+};
+
+SolverLimits resolveLimits(const MBAOptions &Opts);
+
+//===----------------------------------------------------------------------===//
 // Traversal and classification
 //===----------------------------------------------------------------------===//
 
@@ -82,6 +133,14 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
 // Measurement
 //===----------------------------------------------------------------------===//
 
+/// The 2^t corners a region of \p NumAtoms inputs is measured at, or nothing
+/// when a table of that many is not built.
+///
+/// Every corner count in the solver comes from here rather than from a local
+/// `1 << t`.  A shift by a count the type cannot hold is undefined behaviour,
+/// and the arity dials are precisely the thing a caller is now encouraged to
+/// raise, so the one place that turns an arity into a size is the one place
+/// that has to be right.
 std::optional<size_t> cornerCount(size_t NumAtoms);
 
 /// Evaluate \p Body at every assignment of its inputs to all-zeros or
@@ -142,6 +201,7 @@ size_t termBudget(const SymContext &Ctx, SymRef E, const MBAOptions &Opts);
 /// order and the caller keeps the cheapest, so on a tie the earlier form wins.
 void linearCandidates(SymContext &Ctx, std::vector<llvm::APInt> Weights,
                       llvm::ArrayRef<SymRef> Atoms, size_t TermBudget,
+                      const SolverLimits &Limits,
                       llvm::SmallVectorImpl<SymRef> &Out);
 
 SymRef cheapestOf(const SymContext &Ctx, llvm::ArrayRef<SymRef> Candidates);
@@ -221,8 +281,8 @@ Monomial makeMonomial(llvm::ArrayRef<uint16_t> Sorted);
 
 unsigned monomialDegree(const Monomial &Key);
 
-/// The minterms a monomial names, as a set.
-TruthTable monomialSupport(const Monomial &Key);
+/// The minterms a monomial names, as a set over the 2^\p NumVars corners.
+TruthTable monomialSupport(const Monomial &Key, unsigned NumVars);
 
 /// An expression's coefficients over the minterm basis: the degree-one part
 /// indexed by minterm, and every higher monomial keyed by its packing.
@@ -239,8 +299,7 @@ struct PolyForm {
 };
 
 /// The minterms \p Table selects, as indices.
-llvm::SmallVector<uint16_t, 8> selectedMinterms(TruthTable Table,
-                                                size_t Corners);
+llvm::SmallVector<uint16_t, 8> selectedMinterms(const TruthTable &Table);
 
 std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
                                            llvm::ArrayRef<PolyTerm> Terms,

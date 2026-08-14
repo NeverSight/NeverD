@@ -31,6 +31,15 @@ namespace neverd::dwarf_eh {
 /// of the same image.
 void parseItaniumExceptions(BinaryImage &Img);
 
+/// Re-decode one function's LSDA after its personality has changed.
+///
+/// \p Function is a staging copy whose personality already carries the new
+/// classification.  The replacement is accepted only when the original FDE
+/// and LSDA provenance are present and the new decode is complete; otherwise
+/// the function is left untouched and false is returned.
+bool refreshItaniumLanguageData(const BinaryImage &Img,
+                                ExceptionFunction &Function);
+
 } // namespace neverd::dwarf_eh
 
 #endif // NEVERD_LOADER_DWARF_ITANIUMEH_H

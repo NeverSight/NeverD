@@ -53,7 +53,7 @@ class AnalysisReport:
 
 所有钩子均可选。`None` 表示成功；整数返回值必须能放入 C `int`。元数据版本必须是严格的 SemVer。名称必须是非空 UTF-8 字符串，任何包含内嵌 NUL 的元数据都会被拒绝。
 
-仓库提供了 [`minimal.py`](../pluginsdk/python/examples/minimal.py) 和 [`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py) 两个示例。
+仓库提供了 [`minimal.py`](../pluginsdk/python/examples/minimal.py)、[`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py) 和演示证明门控优化 API 的 [`semantic_optimizer.py`](../pluginsdk/python/examples/semantic_optimizer.py) 三个示例。
 
 ## 加载与检查插件
 
@@ -106,6 +106,52 @@ for path in result.paths:
 六种不可变事件分别是 `BINARY_LOADED`、`BINARY_CLOSING`、`FUNCTION_SELECTED`、`ADDRESS_CHANGED`、`ANALYSIS_DONE` 和 `PATCH_APPLIED`。回调期间会复制载荷字符串；与当前事件类型无关的字段为 `None`。
 
 切勿保存 `Session` 并在终止后继续使用。原生 capsule 会在 `on_term` 开始前以及原生会话释放前失效。后续调用会抛出 `RuntimeError`，而不会解引用过期内存。
+
+### 证明门控的合成与 LLVM 优化
+
+`synthesize_expression` 与为 ABI 兼容而保留的、仅处理 MBA 的
+`simplify_expression` 相互独立。只有求解器返回
+`ProofStatus.EQUIVALENT` 时，改写结果才会被提交；反例、证明不完整和搜索
+预算耗尽都会保留原表达式，并分别报告结果原因与搜索/证明工作量。
+`ProofStatus.INVALID` 表示证明问题本身无效，与预算导致的
+`ProofStatus.UNKNOWN` 严格区分；两者都会以拒绝改写的方式关闭。
+
+`optimize_llvm_ir` 在事务副本上组合 NeverD 的语义不动点与标准 LLVM
+优化管线，验证成功后才返回提交的模块：
+
+```python
+from neverd_plugin import (
+    LLVMOptimizationLevel,
+    OptimizationMode,
+    ProofStatus,
+    optimize_llvm_ir,
+    synthesize_expression,
+)
+
+rewrite = synthesize_expression(
+    "(x >> 4) + ((x >> 2) >> 2)", exhaustive=True
+)
+if rewrite.changed:
+    assert rewrite.proof_status is ProofStatus.EQUIVALENT
+
+module = optimize_llvm_ir(
+    llvm_ir,
+    mode=OptimizationMode.DEEP,
+    llvm_level=LLVMOptimizationLevel.O2,
+    enable_synthesis=True,
+    exhaustive=True,
+)
+print(module.output_ir, module.semantic_rewrites, module.proof_queries)
+```
+
+生产调用方可以分别限制 MBA 的工作量与元数、合成搜索与 SAT 工作量以及
+LLVM 收敛。对 `simplify_expression` 显式使用 `exhaustive=True` 会选择无上限
+的 MBA 元数/工作策略，并移除原生解析器的嵌套与位宽策略上限；对
+`synthesize_expression`，它会移除解析、搜索工作量和 SAT 上限，但保留调用方
+指定的语法范围；对 `optimize_llvm_ir`，它会移除收敛、搜索工作量和 SAT 上限。
+Python 层不会另加表达式限制，内存安全和 IR 表示边界仍然适用。对应的 C 入口为
+`neverd_simplify_expr`、`neverd_synthesize_expr` 和
+`neverd_optimize_llvm_ir`，并提供类型化释放函数和版本化 JSON 适配器。
 
 ## 错误、隔离与信任
 

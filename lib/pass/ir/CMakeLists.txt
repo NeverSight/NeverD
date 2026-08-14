@@ -18,5 +18,6 @@ add_neverd_component_library(NeverDPassIR
 
   LINK_COMPONENTS
   IR
+  Solver
   Symbolic
 )

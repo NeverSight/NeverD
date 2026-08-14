@@ -149,8 +149,8 @@ TEST(HighSymSimplify, ReachesTheSmallestNontrivialIdentity) {
   MedVar X = B.param(0, 0x38);
   MedVar NotX = B.emit(NdOp::INT_NOT, {X});
 
-  std::string Expr =
-      returnedExpr(B.finish(NdOp::INT_ADD, {NotX, FunctionBuilder::constant(1)}));
+  std::string Expr = returnedExpr(
+      B.finish(NdOp::INT_ADD, {NotX, FunctionBuilder::constant(1)}));
   EXPECT_EQ(Expr.find('~'), std::string::npos) << Expr;
   EXPECT_EQ(Expr.find('+'), std::string::npos) << Expr;
   EXPECT_NE(Expr.find('-'), std::string::npos) << Expr;
@@ -189,8 +189,8 @@ TEST(HighSymSimplify, LeavesAnOrdinaryExpressionAlone) {
   MedVar Y = B.param(1, 0x30);
   MedVar Sum = B.emit(NdOp::INT_ADD, {X, Y});
 
-  std::string Expr =
-      returnedExpr(B.finish(NdOp::INT_LEFT, {Sum, FunctionBuilder::constant(3)}));
+  std::string Expr = returnedExpr(
+      B.finish(NdOp::INT_LEFT, {Sum, FunctionBuilder::constant(3)}));
   EXPECT_NE(Expr.find('+'), std::string::npos) << Expr;
 }
 
@@ -235,6 +235,127 @@ TEST(HighSymSimplify, ReachesAnIdentityBelowSixtyFourExpressionLevels) {
       B.finish(NdOp::INT_ADD, {Wrapped, FunctionBuilder::constant(97)}));
   EXPECT_EQ(Expr.find('^'), std::string::npos) << Expr;
   EXPECT_EQ(Expr.find('&'), std::string::npos) << Expr;
+}
+
+//===----------------------------------------------------------------------===//
+// Words wider than the machine's
+//===----------------------------------------------------------------------===//
+
+/// A temporary of \p Bytes bytes.  Building HighIR directly is what lets these
+/// reach a width no x86 register has.
+MedVar tempOfSize(int Id, uint16_t Bytes) {
+  MedVar V;
+  V.Kind = MedVar::Temp;
+  V.TheArch = Arch::X64;
+  V.Id = Id;
+  V.SSAVer = 1;
+  V.Size = Bytes;
+  return V;
+}
+
+/// \p E after the production semantic pass has had it.
+ExprPtr simplified(ExprPtr E) {
+  std::vector<HighStmt> Body;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = std::move(E);
+  Body.push_back(std::move(Return));
+  simplifyExprSemantics(Body);
+  return Body.front().RetVal;
+}
+
+// The carry-save identity again, at a width no machine register has.  Nothing
+// in the engine cares: its literals are arbitrary precision and a 128-bit word
+// is measured exactly as a 32-bit one.  The only thing that ever left a
+// `__int128` obfuscation standing was this bridge declining to carry one
+// across.
+TEST(HighSymSimplify, RecoversAdditionAtAWidthWiderThanAMachineWord) {
+  constexpr uint16_t kWideBytes = 16;
+  ExprPtr X = HighExpr::makeVar(tempOfSize(1, kWideBytes));
+  ExprPtr Y = HighExpr::makeVar(tempOfSize(2, kWideBytes));
+  ExprPtr Carry = HighExpr::makeBinop(NdOp::INT_MULT,
+                                      HighExpr::makeBinop(NdOp::INT_AND, X, Y),
+                                      HighExpr::makeConst(2, kWideBytes));
+  ExprPtr Result = simplified(HighExpr::makeBinop(
+      NdOp::INT_ADD, HighExpr::makeBinop(NdOp::INT_XOR, X, Y), Carry));
+
+  const std::string Expr = Result->str();
+  EXPECT_EQ(Expr.find('^'), std::string::npos) << Expr;
+  EXPECT_EQ(Expr.find('&'), std::string::npos) << Expr;
+  EXPECT_NE(Expr.find('+'), std::string::npos) << Expr;
+  // What comes back has to be the width that went in, or the backend would
+  // print a 128-bit value through a narrower type.
+  ASSERT_TRUE(Result->Type);
+  EXPECT_EQ(Result->Type->Size, kWideBytes);
+}
+
+// The value has to survive the round trip as well as the width.  This is zero
+// at every input, and only a measurement carried out in arbitrary precision
+// can say so at 256 bits.
+TEST(HighSymSimplify, CollapsesAWideExpressionThatIsSecretlyConstant) {
+  constexpr uint16_t kWideBytes = 32;
+  ExprPtr X = HighExpr::makeVar(tempOfSize(1, kWideBytes));
+  ExprPtr Y = HighExpr::makeVar(tempOfSize(2, kWideBytes));
+  ExprPtr Sum = HighExpr::makeBinop(NdOp::INT_ADD,
+                                    HighExpr::makeBinop(NdOp::INT_AND, X, Y),
+                                    HighExpr::makeBinop(NdOp::INT_OR, X, Y));
+  ExprPtr Result = simplified(HighExpr::makeBinop(
+      NdOp::INT_SUB, HighExpr::makeBinop(NdOp::INT_SUB, Sum, X), Y));
+
+  EXPECT_EQ(Result->str(), "0");
+}
+
+/// The carry-save spelling of `x + y`, less both of its inputs again, so what
+/// the engine is left holding is whatever constant tail was folded in.
+ExprPtr wideConstantTail(const ExprPtr &X, const ExprPtr &Y, ExprPtr Tail,
+                         uint16_t Bytes) {
+  ExprPtr Carry = HighExpr::makeBinop(NdOp::INT_MULT,
+                                      HighExpr::makeBinop(NdOp::INT_AND, X, Y),
+                                      HighExpr::makeConst(2, Bytes));
+  ExprPtr Sum = HighExpr::makeBinop(
+      NdOp::INT_ADD, HighExpr::makeBinop(NdOp::INT_XOR, X, Y), Carry);
+  ExprPtr Whole =
+      HighExpr::makeBinop(NdOp::INT_ADD, std::move(Sum), std::move(Tail));
+  return HighExpr::makeBinop(NdOp::INT_SUB,
+                             HighExpr::makeBinop(NdOp::INT_SUB, Whole, X), Y);
+}
+
+// Measuring derives values HighIR has no room to write down: a literal is kept
+// in sixty-four bits whatever size stands beside it, and a 128-bit all-ones
+// needs all of them.  Keeping the low half would be a smaller expression
+// computing something else, so the value is spelled as the negation it is
+// instead -- which is exact, and is what a reader wanted to see anyway.
+TEST(HighSymSimplify, SpellsAWideConstantTooLargeToStoreAsANegation) {
+  // `(x ^ y) + 2 * (x & y) + (-1) - x - y` is -1 for every input.
+  constexpr uint16_t kWideBytes = 16;
+  ExprPtr X = HighExpr::makeVar(tempOfSize(1, kWideBytes));
+  ExprPtr Y = HighExpr::makeVar(tempOfSize(2, kWideBytes));
+  ExprPtr MinusOne =
+      HighExpr::makeUnary(NdOp::INT_NEG2, HighExpr::makeConst(1, kWideBytes));
+  ExprPtr Result =
+      simplified(wideConstantTail(X, Y, std::move(MinusOne), kWideBytes));
+
+  EXPECT_EQ(Result->str(), "-1");
+  ASSERT_TRUE(Result->Type);
+  EXPECT_EQ(Result->Type->Size, kWideBytes);
+}
+
+// A value with no exact spelling at all is the case that has to be refused.
+// `1 << 100` is not a literal HighIR can hold, and neither its negation nor its
+// complement is one either, so there is nothing to write down -- and writing
+// its low sixty-four bits would be a shorter expression computing something
+// else, which is the one thing this pass may never hand back.  What comes out
+// is therefore the very object that went in.
+TEST(HighSymSimplify, DeclinesARewriteWhoseConstantHasNoSpelling) {
+  constexpr uint16_t kWideBytes = 16;
+  ExprPtr X = HighExpr::makeVar(tempOfSize(1, kWideBytes));
+  ExprPtr Y = HighExpr::makeVar(tempOfSize(2, kWideBytes));
+  ExprPtr Shifted =
+      HighExpr::makeBinop(NdOp::INT_LEFT, HighExpr::makeConst(1, kWideBytes),
+                          HighExpr::makeConst(100, kWideBytes));
+  ExprPtr Before = wideConstantTail(X, Y, std::move(Shifted), kWideBytes);
+
+  EXPECT_EQ(simplified(Before).get(), Before.get()) << Before->str();
 }
 
 TEST(HighCDeadStoreAnalysis, WalksDeepExpressionGraphsOnAWorkerStack) {

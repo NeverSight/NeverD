@@ -107,8 +107,11 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
     for (auto It = Insns.lower_bound(Starts[I]); It != Insns.end(); ++It) {
       if (It->first >= End)
         break;
+      const uint64_t FirstOp = static_cast<uint64_t>(Blk.Ops.size());
       for (auto &Op : It->second.Ops)
         Blk.Ops.push_back(Op);
+      Blk.InstructionBoundaries.push_back(
+          makeInstructionBoundary(It->second, FirstOp));
       Blk.EndAddr = It->first + It->second.Size;
     }
 
@@ -137,10 +140,12 @@ void CFGBuilder::linkSuccessors(LowFunc &Func,
                                 const std::map<va_t, int> &AddrToBlock) {
   for (size_t I = 0; I < Func.Blocks.size(); ++I) {
     auto &Blk = Func.Blocks[I];
-    if (Blk.Ops.empty())
+    if (Blk.Ops.empty() && Blk.InstructionBoundaries.empty())
       continue;
 
-    va_t LastAddr = Blk.Ops.back().Addr;
+    va_t LastAddr = !Blk.InstructionBoundaries.empty()
+                        ? Blk.InstructionBoundaries.back().Address
+                        : Blk.Ops.back().Addr;
     auto It = Insns.find(LastAddr);
     if (It == Insns.end())
       continue;
@@ -152,8 +157,13 @@ void CFGBuilder::linkSuccessors(LowFunc &Func,
         Blk.Succs.push_back(BIt->second);
     } else if (Rec.IsRet) {
       // Terminal — no successors.
-    } else if (Rec.IsBranch && Rec.IsIndirect &&
-               !Rec.JumpTableTargets.empty()) {
+    } else if (Rec.IsBranch && Rec.IsIndirect) {
+      if (Rec.IsCond) {
+        const va_t Fall = Rec.Addr + Rec.Size;
+        auto FIt = AddrToBlock.find(Fall);
+        if (FIt != AddrToBlock.end())
+          Blk.Succs.push_back(FIt->second);
+      }
       for (va_t T : Rec.JumpTableTargets) {
         auto TIt = AddrToBlock.find(T);
         if (TIt != AddrToBlock.end())
@@ -170,13 +180,25 @@ void CFGBuilder::linkSuccessors(LowFunc &Func,
       if (Rec.BranchTarget != InvalidVA && BIt != AddrToBlock.end())
         Blk.Succs.push_back(BIt->second);
     } else if (!Rec.IsBranch || Rec.IsCall) {
-      // A no-return call (longjmp/abort/exit/...) ends control flow: do not
-      // wire a fall-through edge to the next block (the emitter then terminates
-      // the block with a dead `ret`, which the noreturn-marked callee folds
-      // away).
-      if (!Rec.IsNoReturnCall && I + 1 < Func.Blocks.size())
+      // An unconditional no-return call ends control flow.  A conditional
+      // call still reaches the next block when its predicate is false.
+      if ((!Rec.IsNoReturnCall || Rec.IsCond) && I + 1 < Func.Blocks.size())
         Blk.Succs.push_back(static_cast<int>(I + 1));
     }
+
+    // A predicated non-control ARM instruction uses an instruction-local
+    // `COND_BR next, !predicate`: its encoded target and architectural
+    // fallthrough are intentionally the same block.  Keep one logical CFG
+    // edge while the flattened LowOps retain both micro-CFG paths.  Stable
+    // deduplication also prevents duplicate jump-table destinations from
+    // manufacturing duplicate phi inputs.
+    std::vector<int> UniqueSuccs;
+    UniqueSuccs.reserve(Blk.Succs.size());
+    for (int Succ : Blk.Succs)
+      if (std::find(UniqueSuccs.begin(), UniqueSuccs.end(), Succ) ==
+          UniqueSuccs.end())
+        UniqueSuccs.push_back(Succ);
+    Blk.Succs = std::move(UniqueSuccs);
 
     for (int S : Blk.Succs) {
       if (S >= 0 && S < static_cast<int>(Func.Blocks.size()))

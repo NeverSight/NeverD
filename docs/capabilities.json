@@ -1,0 +1,333 @@
+{
+  "schema": 1,
+  "capabilities": [
+    {
+      "id": "symbolic.execution.path-exploration",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "symbolic",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/architecture.md"
+      ],
+      "limitations": [
+        "mixed decode-mode boundaries fail closed when block identity cannot prove the execution mode",
+        "unresolved indirect control flow is reported as a typed path termination"
+      ],
+      "tests": [
+        "SymExplore.InterworkingDoesNotEnterABlockDecodedInTheWrongMode",
+        "SymExplore.ContradictoryPathConditionsAreNotExecuted"
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [
+          "neverd sym-explore"
+        ],
+        "json": []
+      }
+    },
+    {
+      "id": "translation.runtime-contract",
+      "kind": "translation",
+      "status": "experimental",
+      "owner": "translate",
+      "targets": [
+        "x86_64"
+      ],
+      "docs": [
+        "docs/architecture.md"
+      ],
+      "limitations": [
+        "the fixed runtime state covers the x86-64 integer core and preserves unmodeled logical state outside generated code",
+        "verification and helper contracts do not by themselves provide an executable code-generation or linking engine"
+      ],
+      "tests": [
+        "RuntimeGuestState.X86_64LogicalStateRoundTripsWithoutLosingRFlags",
+        "RuntimeHelpers.AcceptsCheckedLoadAndStoreControlFlow",
+        "TranslationArtifactVerifier.AcceptsCanonicalMachOObject"
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
+      "id": "translation.executable-engine",
+      "kind": "translation",
+      "status": "unsupported",
+      "owner": "translate",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/architecture.md"
+      ],
+      "limitations": [
+        "no verified code-generation, post-link graph audit, executable memory manager, or dispatcher factory is published"
+      ],
+      "tests": [],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
+      "id": "debug.local",
+      "kind": "debugging",
+      "status": "unsupported",
+      "owner": "debug",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/architecture.md"
+      ],
+      "limitations": [
+        "no debugger session factory, breakpoint coordinator, register synchronizer, or single-step backend is published"
+      ],
+      "tests": [],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
+      "id": "debug.remote",
+      "kind": "debugging",
+      "status": "unsupported",
+      "owner": "debug",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/architecture.md"
+      ],
+      "limitations": [
+        "no authenticated remote transport, protocol adapter, or remote target lifecycle is published"
+      ],
+      "tests": [],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
+      "id": "debug.hardware",
+      "kind": "debugging",
+      "status": "unsupported",
+      "owner": "debug",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/architecture.md"
+      ],
+      "limitations": [
+        "no hardware breakpoint, watchpoint, trace, or native target-control backend is published"
+      ],
+      "tests": [],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
+      "id": "exception.rewrite.end-to-end",
+      "kind": "rewrite",
+      "status": "unsupported",
+      "owner": "exception-rewrite",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/architecture.md"
+      ],
+      "limitations": [
+        "format-specific components exist, but an all-formats and all-exception end-to-end rewrite pipeline is not established",
+        "unsupported exception encodings and registration states fail closed without mutating output"
+      ],
+      "tests": [
+        "ExceptionRewriteContract.RequiredUnresolvedOutputIsByteIdenticalOnError"
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
+      "id": "llvm.semantic.synthesis-rewrite",
+      "kind": "rewrite",
+      "status": "supported",
+      "owner": "pass-ir",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/python-plugins.md"
+      ],
+      "limitations": [
+        "eligible integer SSA expressions only; poison, undef, and unmodelled operations remain opaque",
+        "synthesis is opt-in and conservative mode deliberately performs no semantic rewrite"
+      ],
+      "proof_test": {
+        "target": "NeverDSymSimplifyGuardTests",
+        "source": "unittests/lift/pipeline/SymSimplifyGuardTests.cpp",
+        "filter": "SymSimplifyGuard.SynthesisEquivalent"
+      },
+      "unknown_test": {
+        "target": "NeverDSymSimplifyGuardTests",
+        "source": "unittests/lift/pipeline/SymSimplifyGuardTests.cpp",
+        "filter": "SymSimplifyGuard.SynthesisUnknownLeavesIRUnchanged"
+      },
+      "poison_test": {
+        "target": "NeverDSymSimplifyGuardTests",
+        "source": "unittests/lift/pipeline/SymSimplifyGuardTests.cpp",
+        "filter": "SymSimplifyGuard.LeavesPoisonGeneratingOperationsOpaque"
+      },
+      "tests": [
+        "NeverDSemanticCAPI.SynthesisRewriteRequiresAnEquivalentProof",
+        "NeverDSemanticCAPI.LLVMOptimizationUsesTheTransactionalDeepPipeline"
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_synthesize_expr",
+          "neverd_optimize_llvm_ir"
+        ],
+        "python": [
+          "synthesize_expression",
+          "optimize_llvm_ir"
+        ],
+        "cli": [
+          "neverd simplify --synthesize",
+          "neverd optimize-ir"
+        ],
+        "json": [
+          "neverd_synthesize_expr_json_v1",
+          "neverd_optimize_llvm_ir_json_v1"
+        ]
+      }
+    },
+    {
+      "id": "semantic.mba.derivation",
+      "kind": "derivation",
+      "status": "supported",
+      "owner": "symbolic",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/python-plugins.md"
+      ],
+      "limitations": [
+        "integer bit-vector expressions in modeled semantic domains"
+      ],
+      "proof_test": {
+        "target": "NeverDSymbolicTests",
+        "source": "unittests/symbolic/SymMBAStressTests.cpp",
+        "filter": "SymMBA.IsExhaustivelyEquivalentAtASmallWidth"
+      },
+      "tests": [
+        "SimplifySurfaceAgreementTests.test_the_three_surfaces_agree"
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_simplify_expr"
+        ],
+        "python": [
+          "simplify_expression"
+        ],
+        "cli": [
+          "neverd simplify"
+        ],
+        "json": [
+          "neverd_simplify_expr_json"
+        ]
+      }
+    },
+    {
+      "id": "semantic.synthesis.candidate",
+      "kind": "synthesis",
+      "status": "supported",
+      "owner": "symbolic",
+      "targets": [
+        "x86",
+        "x86_64",
+        "arm",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/python-plugins.md"
+      ],
+      "limitations": [
+        "candidate discovery never authorizes a rewrite without an equivalent proof",
+        "grammar coverage is explicit; exhaustive mode removes work and solver ceilings but cannot remove physical resource limits"
+      ],
+      "proof_test": {
+        "target": "NeverDSymbolicTests",
+        "source": "unittests/symbolic/SymSynthTests.cpp",
+        "filter": "SymSynth.ProductionRewriteAcceptsOnlyAProvedEquivalent"
+      },
+      "unknown_test": {
+        "target": "NeverDSymbolicTests",
+        "source": "unittests/symbolic/SymSynthTests.cpp",
+        "filter": "SymSynth.ReportsWhenProofIsIncomplete"
+      },
+      "tests": [
+        "NeverDSemanticCAPI.SolverUnknownAndSearchBudgetAreDistinct"
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_synthesize_expr"
+        ],
+        "python": [
+          "synthesize_expression"
+        ],
+        "cli": [
+          "neverd simplify --synthesize"
+        ],
+        "json": [
+          "neverd_synthesize_expr_json_v1"
+        ]
+      }
+    }
+  ]
+}

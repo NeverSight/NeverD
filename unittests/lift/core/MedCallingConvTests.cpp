@@ -6,10 +6,17 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/X86Regs.h"
+
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace {
 
@@ -236,10 +243,8 @@ TEST(TargetRegInfo, EnumeratesPartialVectorCallPreservation) {
   const TargetRegInfo &ARM = getTargetRegInfo(Arch::ARM);
   std::vector<TargetRegisterRange> ARMRanges =
       ARM.callPreservedRanges(BinaryFormat::ELF);
-  EXPECT_TRUE(
-      HasRange(ARMRanges, ARM.VecRegBase + 8 * ARM.VecRegStride, 8));
-  EXPECT_TRUE(
-      HasRange(ARMRanges, ARM.VecRegBase + 15 * ARM.VecRegStride, 8));
+  EXPECT_TRUE(HasRange(ARMRanges, ARM.VecRegBase + 8 * ARM.VecRegStride, 8));
+  EXPECT_TRUE(HasRange(ARMRanges, ARM.VecRegBase + 15 * ARM.VecRegStride, 8));
 }
 
 TEST(TargetRegInfo, EnumeratesWin64CallPreservation) {
@@ -443,12 +448,12 @@ TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {
   bool SawHandlerFrameLiveIn = false;
   for (const MedBlock &Block : Med.Blocks) {
     for (const MedOp &Op : Block.Ops) {
-      SawHandlerFrameLiveIn |=
-          Block.Id == 1 && Op.Opcode == NdOp::COPY &&
-          Op.Output.Kind == MedVar::Reg &&
-          Op.Output.RegOff == TRI.FramePointer && Op.NumInputs == 1 &&
-          Op.Inputs[0].Kind == MedVar::Reg &&
-          Op.Inputs[0].RegOff == TRI.FramePointer;
+      SawHandlerFrameLiveIn |= Block.Id == 1 && Op.Opcode == NdOp::COPY &&
+                               Op.Output.Kind == MedVar::Reg &&
+                               Op.Output.RegOff == TRI.FramePointer &&
+                               Op.NumInputs == 1 &&
+                               Op.Inputs[0].Kind == MedVar::Reg &&
+                               Op.Inputs[0].RegOff == TRI.FramePointer;
       for (unsigned I = 0; I < Op.NumInputs; ++I) {
         if (Op.Inputs[I].Kind == MedVar::EHException) {
           SawException = true;
@@ -458,9 +463,9 @@ TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {
           SawSelector = true;
           EXPECT_EQ(Op.Inputs[I].Size, 4u);
         }
-        SawFlowingFramePointer |=
-            Block.Id == 1 && Op.Inputs[I].Kind == MedVar::Reg &&
-            Op.Inputs[I].RegOff == TRI.FramePointer;
+        SawFlowingFramePointer |= Block.Id == 1 &&
+                                  Op.Inputs[I].Kind == MedVar::Reg &&
+                                  Op.Inputs[I].RegOff == TRI.FramePointer;
       }
     }
   }
@@ -490,6 +495,276 @@ TEST(MedVerifier, RejectsCallClobberExplicitDefinitionCollision) {
   Func.CallClobbers.push_back({Clobber, 1});
 
   EXPECT_FALSE(verifyMedFunc(Func, "test-call-clobber-collision"));
+}
+
+MedFunc predicatedControlFunction(llvm::StringRef Name, NdOp EffectOpcode,
+                                  va_t EntryAddress = 0x1000) {
+  const va_t ContinueAddress = EntryAddress + 4;
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::ARM);
+
+  MedFunc Func;
+  Func.Entry = EntryAddress;
+  Func.Name = Name.str();
+  Func.CC = CallingConv::ARM_AAPCS;
+  Func.ReturnType = NdType::makeVoid();
+
+  MedVar GuardValue = reg(1, 0, 1, TRI.IntParamRegs[0], Arch::ARM);
+  Func.Params.push_back(GuardValue);
+  MedVar IndirectTarget;
+  if (EffectOpcode == NdOp::INDIR_CALL || EffectOpcode == NdOp::INDIR_BR) {
+    IndirectTarget = reg(2, 0, TRI.PointerSize, TRI.IntParamRegs[1], Arch::ARM);
+    Func.Params.push_back(IndirectTarget);
+  }
+  MedVar MemoryAddress;
+  MedVar StoredValue;
+  if (EffectOpcode == NdOp::LOAD || EffectOpcode == NdOp::STORE) {
+    MemoryAddress = reg(2, 0, TRI.PointerSize, TRI.IntParamRegs[1], Arch::ARM);
+    Func.Params.push_back(MemoryAddress);
+    if (EffectOpcode == NdOp::STORE) {
+      StoredValue = reg(3, 0, 4, TRI.IntParamRegs[2], Arch::ARM);
+      Func.Params.push_back(StoredValue);
+    }
+  }
+
+  MedBlock Guarded;
+  Guarded.Id = 0;
+  Guarded.StartAddr = EntryAddress;
+  Guarded.EndAddr = ContinueAddress;
+  Guarded.Succs = {1};
+
+  MedOp Guard;
+  Guard.Opcode = NdOp::COND_BR;
+  Guard.Addr = EntryAddress;
+  Guard.addInput(MedVar::makeConst(ContinueAddress, TRI.PointerSize));
+  Guard.addInput(GuardValue);
+  Guarded.Ops.push_back(Guard);
+
+  MedOp Effect;
+  Effect.Opcode = EffectOpcode;
+  Effect.Addr = EntryAddress;
+  if (EffectOpcode == NdOp::CALL)
+    Effect.addInput(MedVar::makeConst(0x2000, TRI.PointerSize));
+  else if (EffectOpcode == NdOp::INDIR_CALL || EffectOpcode == NdOp::INDIR_BR)
+    Effect.addInput(IndirectTarget);
+  else if (EffectOpcode == NdOp::LOAD) {
+    Effect.Output = temp(4, 0, 4, Arch::ARM);
+    Effect.addInput(MemoryAddress);
+  } else if (EffectOpcode == NdOp::STORE) {
+    Effect.addInput(MemoryAddress);
+    Effect.addInput(StoredValue);
+  }
+  Guarded.Ops.push_back(Effect);
+
+  MedBlock Continued;
+  Continued.Id = 1;
+  Continued.StartAddr = ContinueAddress;
+  Continued.EndAddr = ContinueAddress + 4;
+  Continued.Preds = {0};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = ContinueAddress;
+  Continued.Ops.push_back(Return);
+
+  Func.Blocks.push_back(std::move(Guarded));
+  Func.Blocks.push_back(std::move(Continued));
+  return Func;
+}
+
+llvm::Function *verifiedFunction(llvm::Module &Module, llvm::StringRef Name) {
+  std::string Verification;
+  llvm::raw_string_ostream VerificationOS(Verification);
+  EXPECT_FALSE(llvm::verifyModule(Module, &VerificationOS)) << Verification;
+  llvm::Function *Function = Module.getFunction(Name);
+  EXPECT_NE(Function, nullptr);
+  return Function;
+}
+
+TEST(MedLLVMEmitterPredicatedControl,
+     DirectAndIndirectCallsExecuteOnlyOnTheFalseGuardEdge) {
+  for (NdOp Opcode : {NdOp::CALL, NdOp::INDIR_CALL}) {
+    SCOPED_TRACE(ndOpName(Opcode));
+    const std::string Name =
+        Opcode == NdOp::CALL ? "predicated_bl" : "predicated_blx";
+    MedFunc Func = predicatedControlFunction(Name, Opcode);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Func}, Context, Name, Arch::ARM,
+        Opcode == NdOp::CALL
+            ? std::vector<std::pair<va_t, std::string>>{{0x2000, "callee"}}
+            : std::vector<std::pair<va_t, std::string>>{});
+    ASSERT_NE(Module, nullptr);
+    llvm::Function *Function = verifiedFunction(*Module, Name);
+    ASSERT_NE(Function, nullptr);
+
+    auto *Guard = llvm::dyn_cast<llvm::CondBrInst>(
+        Function->getEntryBlock().getTerminator());
+    ASSERT_NE(Guard, nullptr);
+    EXPECT_EQ(Guard->getSuccessor(0)->getName(), "bb_1")
+        << "a true ARM skip guard reaches the next guest instruction";
+    llvm::BasicBlock *EffectBlock = Guard->getSuccessor(1);
+    EXPECT_TRUE(EffectBlock->getName().starts_with("predeffect_"));
+
+    llvm::CallInst *Call = nullptr;
+    for (llvm::Instruction &Instruction : *EffectBlock)
+      if (auto *Candidate = llvm::dyn_cast<llvm::CallInst>(&Instruction))
+        Call = Candidate;
+    ASSERT_NE(Call, nullptr) << "the call must survive lowering";
+    EXPECT_EQ(Call->getCalledFunction() != nullptr, Opcode == NdOp::CALL);
+    auto *Rejoin =
+        llvm::dyn_cast<llvm::UncondBrInst>(EffectBlock->getTerminator());
+    ASSERT_NE(Rejoin, nullptr);
+    EXPECT_EQ(Rejoin->getSuccessor(0), Guard->getSuccessor(0));
+  }
+}
+
+TEST(MedLLVMEmitterPredicatedControl,
+     ConditionalReturnKeepsTheContinuationAndReturnEdgesDistinct) {
+  MedFunc Func = predicatedControlFunction("predicated_bx_lr", NdOp::RETURN);
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::ARM);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  auto *Guard = llvm::dyn_cast<llvm::CondBrInst>(
+      Function->getEntryBlock().getTerminator());
+  ASSERT_NE(Guard, nullptr);
+  EXPECT_EQ(Guard->getSuccessor(0)->getName(), "bb_1");
+  EXPECT_TRUE(Guard->getSuccessor(1)->getName().starts_with("predeffect_"));
+  EXPECT_TRUE(
+      llvm::isa<llvm::ReturnInst>(Guard->getSuccessor(1)->getTerminator()));
+}
+
+TEST(MedLLVMEmitterPredicatedControl,
+     ZeroGuestAddressDoesNotEraseInstructionProvenance) {
+  MedFunc Func =
+      predicatedControlFunction("predicated_zero_address", NdOp::RETURN, 0);
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::ARM);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  auto *Guard = llvm::dyn_cast<llvm::CondBrInst>(
+      Function->getEntryBlock().getTerminator());
+  ASSERT_NE(Guard, nullptr);
+  EXPECT_EQ(Guard->getSuccessor(0)->getName(), "bb_1");
+  EXPECT_TRUE(Guard->getSuccessor(1)->getName().starts_with("predeffect_"));
+  EXPECT_TRUE(
+      llvm::isa<llvm::ReturnInst>(Guard->getSuccessor(1)->getTerminator()));
+}
+
+TEST(MedLLVMEmitterPredicatedControl,
+     UnresolvedConditionalIndirectBranchFailsLoudlyOnlyWhenSelected) {
+  MedFunc Func =
+      predicatedControlFunction("predicated_bx_unresolved", NdOp::INDIR_BR);
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::ARM);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  auto *Guard = llvm::dyn_cast<llvm::CondBrInst>(
+      Function->getEntryBlock().getTerminator());
+  ASSERT_NE(Guard, nullptr);
+  EXPECT_EQ(Guard->getSuccessor(0)->getName(), "bb_1");
+  llvm::BasicBlock *Failure = Guard->getSuccessor(1);
+  EXPECT_TRUE(llvm::isa<llvm::UnreachableInst>(Failure->getTerminator()));
+  bool HasTrap = false;
+  for (llvm::Instruction &Instruction : *Failure)
+    if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction)) {
+      llvm::Function *Callee = Call->getCalledFunction();
+      HasTrap |= Callee && Callee->getIntrinsicID() == llvm::Intrinsic::trap;
+    }
+  EXPECT_TRUE(HasTrap);
+}
+
+TEST(MedLLVMEmitterPredicatedControl,
+     UntakenMemoryEffectsDoNotAccessAnySubstituteAddress) {
+  for (NdOp Opcode : {NdOp::LOAD, NdOp::STORE}) {
+    SCOPED_TRACE(ndOpName(Opcode));
+    const std::string Name =
+        Opcode == NdOp::LOAD ? "predicated_load" : "predicated_store";
+    MedFunc Func = predicatedControlFunction(Name, Opcode);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit({Func}, Context, Name, Arch::ARM);
+    ASSERT_NE(Module, nullptr);
+    llvm::Function *Function = verifiedFunction(*Module, Name);
+    ASSERT_NE(Function, nullptr);
+
+    auto *Guard = llvm::dyn_cast<llvm::CondBrInst>(
+        Function->getEntryBlock().getTerminator());
+    ASSERT_NE(Guard, nullptr);
+    llvm::BasicBlock *SkipBlock = Guard->getSuccessor(0);
+    llvm::BasicBlock *EffectBlock = Guard->getSuccessor(1);
+    EXPECT_EQ(SkipBlock->getName(), "bb_1");
+    EXPECT_TRUE(EffectBlock->getName().starts_with("predeffect_"));
+
+    bool SawGuestLoad = false;
+    bool SawGuestStore = false;
+    for (llvm::Instruction &Instruction : *EffectBlock) {
+      SawGuestLoad |= llvm::isa<llvm::LoadInst>(Instruction);
+      SawGuestStore |= llvm::isa<llvm::StoreInst>(Instruction);
+    }
+    EXPECT_EQ(SawGuestLoad, Opcode == NdOp::LOAD);
+    EXPECT_TRUE(SawGuestStore)
+        << "a load result is materialized and a store performs its effect";
+
+    for (llvm::Instruction &Instruction : *SkipBlock)
+      EXPECT_FALSE((llvm::isa<llvm::LoadInst, llvm::StoreInst>(Instruction)))
+          << "the untaken instruction must not touch fallback memory";
+  }
+}
+
+TEST(MedLLVMEmitterPredicatedControl,
+     ResolvedConditionalIndirectBranchKeepsAllTargetsAndItsSkipEdge) {
+  constexpr va_t EntryAddress = 0x1000;
+  constexpr va_t ContinueAddress = EntryAddress + 4;
+  MedFunc Func =
+      predicatedControlFunction("predicated_bx_resolved", NdOp::INDIR_BR);
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::ARM);
+  MedVar Index = Func.Params[1];
+  Func.Blocks[0].Succs = {1, 2, 3, 4};
+
+  for (int Id = 2; Id <= 4; ++Id) {
+    MedBlock Target;
+    Target.Id = Id;
+    Target.StartAddr = EntryAddress + va_t(Id) * 0x10;
+    Target.EndAddr = Target.StartAddr + 4;
+    Target.Preds = {0};
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Target.StartAddr;
+    Target.Ops.push_back(Return);
+    Func.Blocks.push_back(std::move(Target));
+  }
+
+  JumpTable Table;
+  Table.InsnAddr = EntryAddress;
+  Table.EntrySize = TRI.PointerSize;
+  Table.IndexRegOff = static_cast<int>(Index.RegOff);
+  Table.Targets = {Func.Blocks[2].StartAddr, Func.Blocks[3].StartAddr,
+                   Func.Blocks[4].StartAddr};
+  Table.CaseLabels = {0, 1, 2};
+  Func.JumpTables.push_back(std::move(Table));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::ARM);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  auto *Guard = llvm::dyn_cast<llvm::CondBrInst>(
+      Function->getEntryBlock().getTerminator());
+  ASSERT_NE(Guard, nullptr);
+  EXPECT_EQ(Guard->getSuccessor(0)->getName(), "bb_1")
+      << "the skip edge is not a jump-table case";
+  auto *Switch =
+      llvm::dyn_cast<llvm::SwitchInst>(Guard->getSuccessor(1)->getTerminator());
+  ASSERT_NE(Switch, nullptr);
+  EXPECT_EQ(Switch->getNumCases(), 3u);
+  for (const auto &Case : Switch->cases())
+    EXPECT_NE(Case.getCaseSuccessor(), Guard->getSuccessor(0));
 }
 
 } // namespace

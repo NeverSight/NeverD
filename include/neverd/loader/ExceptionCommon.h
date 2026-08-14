@@ -52,6 +52,30 @@ inline ExceptionParseStatus mergeExceptionParseStatus(ExceptionParseStatus A,
       std::max(static_cast<unsigned>(A), static_cast<unsigned>(B)));
 }
 
+/// One independently replaceable contribution to a parse result.
+///
+/// Keeping the status beside the diagnostics that produced it lets a decoder
+/// refresh language data without guessing which messages came from that data
+/// or erasing structural faults discovered while reading the native record.
+struct ExceptionDecodeState {
+  ExceptionParseStatus ParseStatus = ExceptionParseStatus::Complete;
+  std::vector<std::string> Diagnostics;
+
+  void mergeStatus(ExceptionParseStatus Status) {
+    ParseStatus = mergeExceptionParseStatus(ParseStatus, Status);
+  }
+
+  void appendDiagnostics(const std::vector<std::string> &Messages) {
+    Diagnostics.insert(Diagnostics.end(), Messages.begin(), Messages.end());
+  }
+};
+
+/// Parse contributions owned by a function's native and language decoders.
+struct ExceptionFunctionDecodeProvenance {
+  ExceptionDecodeState Structural;
+  ExceptionDecodeState Language;
+};
+
 /// Checked half-open virtual-address range [Begin, End).
 struct ExceptionAddressRange {
   va_t Begin = 0;

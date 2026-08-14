@@ -12,11 +12,19 @@
 #ifndef NEVERD_LIB_BACKEND_LLVM_MEDLLVMEHHELPERS_H
 #define NEVERD_LIB_BACKEND_LLVM_MEDLLVMEHHELPERS_H
 
+#include "neverd/Common.h"
+#include "neverd/backend/llvm/LanguageEHMetadata.h"
+
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/IR/Module.h"
 
 #include <cstdint>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -43,6 +51,125 @@ inline std::string hexBytes(const std::vector<uint8_t> &Bytes) {
     Result.push_back(Digits[Byte & 0x0f]);
   }
   return Result;
+}
+
+using SourceCallAddressMap = std::map<const llvm::CallInst *, va_t>;
+
+/// Read every transient source-call marker in \p Function and require it to
+/// equal \p TrackedCalls exactly.  Pointer identity, address values, missing
+/// entries, and entries owned by another function all participate in the
+/// comparison.
+inline std::optional<SourceCallAddressMap>
+collectExactSourceCallAddresses(const llvm::Function &Function,
+                                const SourceCallAddressMap &TrackedCalls) {
+  SourceCallAddressMap MarkedCalls;
+  for (const llvm::BasicBlock &Block : Function) {
+    for (const llvm::Instruction &Instruction : Block) {
+      const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+      if (!Call)
+        continue;
+      const llvm::MDNode *Marker =
+          Call->getMetadata(language_eh_md::InternalSourceCallAttachment);
+      if (!Marker)
+        continue;
+      if (Marker->getNumOperands() != 1)
+        return std::nullopt;
+      const auto *Metadata = llvm::dyn_cast_or_null<llvm::ConstantAsMetadata>(
+          Marker->getOperand(0).get());
+      const auto *Address =
+          Metadata ? llvm::dyn_cast<llvm::ConstantInt>(Metadata->getValue())
+                   : nullptr;
+      if (!Address || Address->getBitWidth() != 64 ||
+          !MarkedCalls.emplace(Call, Address->getZExtValue()).second)
+        return std::nullopt;
+    }
+  }
+  if (MarkedCalls != TrackedCalls)
+    return std::nullopt;
+  return MarkedCalls;
+}
+
+enum class I32ModuleFlagState { Absent, Compatible, Conflict };
+
+/// Classify a scalar i32 module flag without using Module's unchecked flag
+/// accessors.  Native lowering runs before final module verification, so a
+/// malformed or duplicate flag must fail closed instead of reaching the
+/// accessor casts or silently keeping an incompatible value.
+inline I32ModuleFlagState
+classifyI32ModuleFlag(const llvm::Module &Module, llvm::StringRef Name,
+                      llvm::Module::ModFlagBehavior ExpectedBehavior,
+                      uint32_t ExpectedValue) {
+  const llvm::NamedMDNode *Flags = Module.getModuleFlagsMetadata();
+  if (!Flags)
+    return I32ModuleFlagState::Absent;
+
+  bool Found = false;
+  for (const llvm::MDNode *Flag : Flags->operands()) {
+    if (!Flag || Flag->getNumOperands() != 3)
+      return I32ModuleFlagState::Conflict;
+
+    llvm::Module::ModFlagBehavior Behavior;
+    if (!llvm::Module::isValidModFlagBehavior(Flag->getOperand(0), Behavior))
+      return I32ModuleFlagState::Conflict;
+    const auto *Key =
+        llvm::dyn_cast_or_null<llvm::MDString>(Flag->getOperand(1).get());
+    if (!Key)
+      return I32ModuleFlagState::Conflict;
+    if (Key->getString() != Name)
+      continue;
+    if (Found || Behavior != ExpectedBehavior)
+      return I32ModuleFlagState::Conflict;
+    Found = true;
+
+    const auto *ValueMetadata =
+        llvm::dyn_cast_or_null<llvm::ConstantAsMetadata>(
+            Flag->getOperand(2).get());
+    const auto *Value =
+        ValueMetadata
+            ? llvm::dyn_cast<llvm::ConstantInt>(ValueMetadata->getValue())
+            : nullptr;
+    if (!Value || Value->getBitWidth() != 32 ||
+        Value->getZExtValue() != ExpectedValue)
+      return I32ModuleFlagState::Conflict;
+  }
+  return Found ? I32ModuleFlagState::Compatible : I32ModuleFlagState::Absent;
+}
+
+/// True when \p Name is unused or already denotes the declaration that
+/// getOrInsertFunction would otherwise create.  An alias, definition, local
+/// symbol, or differently typed function cannot stand in for an external ABI
+/// entry point.
+inline bool
+canMaterializeExternalFunctionDeclaration(const llvm::Module &Module,
+                                          llvm::StringRef Name,
+                                          const llvm::FunctionType *Type) {
+  const llvm::GlobalValue *Named = Module.getNamedValue(Name);
+  if (!Named)
+    return true;
+  const auto *Function = llvm::dyn_cast<llvm::Function>(Named);
+  return Function && Function->isDeclaration() &&
+         Function->getLinkage() == llvm::GlobalValue::ExternalLinkage &&
+         Function->getVisibility() == llvm::GlobalValue::DefaultVisibility &&
+         Function->getCallingConv() == llvm::CallingConv::C &&
+         Function->getFunctionType() == Type;
+}
+
+/// True when \p Name is unused or already denotes the exact external data
+/// declaration that native EH lowering needs.
+inline bool canMaterializeExternalDataDeclaration(const llvm::Module &Module,
+                                                  llvm::StringRef Name,
+                                                  const llvm::Type *Type,
+                                                  bool IsConstant) {
+  const llvm::GlobalValue *Named = Module.getNamedValue(Name);
+  if (!Named)
+    return true;
+  const auto *Variable = llvm::dyn_cast<llvm::GlobalVariable>(Named);
+  return Variable && Variable->isDeclaration() &&
+         Variable->getLinkage() == llvm::GlobalValue::ExternalLinkage &&
+         Variable->getVisibility() == llvm::GlobalValue::DefaultVisibility &&
+         Variable->getValueType() == Type &&
+         Variable->isConstant() == IsConstant &&
+         Variable->getAddressSpace() == 0 && !Variable->isThreadLocal();
 }
 
 } // namespace neverd::med_llvm_eh

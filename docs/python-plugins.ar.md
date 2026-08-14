@@ -53,7 +53,7 @@ class AnalysisReport:
 
 جميع نقاط الربط اختيارية. تعني `None` النجاح؛ ويجب أن تتسع نتيجة العدد الصحيح داخل `int` في C. تستخدم إصدارات البيانات الوصفية SemVer الصارم. يجب أن تكون الأسماء سلاسل UTF-8 غير فارغة، وتُرفض أي بيانات وصفية تحتوي على NUL مضمّن.
 
-أمثلة المستودع هي [`minimal.py`](../pluginsdk/python/examples/minimal.py) و[`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py).
+أمثلة المستودع هي [`minimal.py`](../pluginsdk/python/examples/minimal.py) و[`analysis_report.py`](../pluginsdk/python/examples/analysis_report.py) و[`semantic_optimizer.py`](../pluginsdk/python/examples/semantic_optimizer.py) لواجهات التحسين المقيّدة بالإثبات.
 
 ## تحميل الإضافات وفحصها
 
@@ -106,6 +106,54 @@ for path in result.paths:
 متغيرات الأحداث الستة غير القابلة للتغيير هي `BINARY_LOADED` و`BINARY_CLOSING` و`FUNCTION_SELECTED` و`ADDRESS_CHANGED` و`ANALYSIS_DONE` و`PATCH_APPLIED`. تُنسخ سلاسل الحمولة أثناء callback؛ وتكون الحقول غير المتعلقة بنوع الحدث `None`.
 
 لا تحتفظ أبداً بكائن `Session` لاستخدامه بعد الإنهاء. تُبطل capsule الأصلية قبل بدء `on_term` وقبل إمكان تحرير الجلسة الأصلية. يفشل أي استدعاء لاحق بـ `RuntimeError` بدلاً من إلغاء مرجع ذاكرة قديمة.
+
+### التركيب المحكوم بالبرهان وتحسين LLVM
+
+الدالة `synthesize_expression` منفصلة عن `simplify_expression` التي أُبقيت
+لتوافق ABI وتعمل على MBA فقط. لا يُعتمد أي تحويل إلا إذا أعاد المحلّل
+`ProofStatus.EQUIVALENT`. أمّا المثال المضاد أو البرهان غير المكتمل أو نفاد
+ميزانية البحث فيُبقي التعبير الأصلي ويعرض النتيجة وكلفة البحث والبرهان كلًّا
+على حدة.
+تشير `ProofStatus.INVALID` إلى أن مسألة البرهان نفسها غير صالحة، وتبقى مميزة عن
+`ProofStatus.UNKNOWN` الناتجة من الميزانية؛ وكلتاهما ترفضان التحويل بصورة آمنة.
+
+تجمع `optimize_llvm_ir` بين نقطة الثبات الدلالية في NeverD ومسار LLVM القياسي
+المختار على نسخة معاملية، ولا تعيد إلا الوحدة التي تم التحقق منها واعتمادها:
+
+```python
+from neverd_plugin import (
+    LLVMOptimizationLevel,
+    OptimizationMode,
+    ProofStatus,
+    optimize_llvm_ir,
+    synthesize_expression,
+)
+
+rewrite = synthesize_expression(
+    "(x >> 4) + ((x >> 2) >> 2)", exhaustive=True
+)
+if rewrite.changed:
+    assert rewrite.proof_status is ProofStatus.EQUIVALENT
+
+module = optimize_llvm_ir(
+    llvm_ir,
+    mode=OptimizationMode.DEEP,
+    llvm_level=LLVMOptimizationLevel.O2,
+    enable_synthesis=True,
+    exhaustive=True,
+)
+print(module.output_ir, module.semantic_rewrites, module.proof_queries)
+```
+
+يمكن لبرامج الإنتاج تقييد عمل وعدد مدخلات MBA، وبحث التركيب وعمل SAT، وتقارب LLVM
+كلٌّ على حدة. في `simplify_expression` يختار الخيار الصريح `exhaustive=True`
+سياسة MBA بلا سقف للعدد أو العمل، ويزيل سقفي سياسة التداخل وعرض البت في المحلل
+الأصلي. وفي `synthesize_expression` يزيل سقوف المحلل وعمل البحث وSAT مع الإبقاء
+على القواعد التي يحددها المستدعي؛ أما في `optimize_llvm_ir` فيزيل سقوف التقارب
+والبحث وSAT. لا تضيف طبقة Python قيدًا آخر على التعبير، وتظل حدود سلامة الذاكرة
+وتمثيل IR سارية. نقاط الدخول المكافئة في C هي `neverd_simplify_expr` و
+`neverd_synthesize_expr` و`neverd_optimize_llvm_ir`، مع دوال تحرير مكتوبة النوع
+ومهايئات JSON ذات إصدارات.
 
 ## الأخطاء والعزل والثقة
 

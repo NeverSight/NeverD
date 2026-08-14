@@ -466,6 +466,17 @@ va_t X86Lifter::directCallTarget(const cs_insn *I) {
   return InvalidVA;
 }
 
+std::optional<uint64_t> X86Lifter::returnImmediate(const cs_insn *I) {
+  if (!I->detail)
+    return std::nullopt;
+  if (I->id != X86_INS_RET && I->id != X86_INS_RETF && I->id != X86_INS_RETFQ)
+    return std::nullopt;
+  const cs_x86 &X = I->detail->x86;
+  if (X.op_count < 1 || X.operands[0].type != X86_OP_IMM)
+    return std::nullopt;
+  return static_cast<uint64_t>(X.operands[0].imm);
+}
+
 va_t X86Lifter::pcRelCodeRefTarget(const cs_insn *I) {
   if (!I->detail || I->id != X86_INS_LEA)
     return InvalidVA;

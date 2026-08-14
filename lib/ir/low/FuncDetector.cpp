@@ -157,11 +157,12 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
                     : 0;
     };
     if (NeedVerify.size() < limits::kMinParallelVerify) {
-      // The initial classification pass reads only instruction size and
-      // terminator id.  Start detail-free; verifyFunctionDecode enables detail
-      // only for its bounded reachable-arm probe, then restores this state.
+      // Most targets classify the initial linear probe from the instruction id
+      // alone.  ARM PC-writing loads, register lists, and data-processing
+      // instructions require operand detail to distinguish a real terminator
+      // from (for example) `pop {r4}`.
       const bool PrevDetail = Dec.detailEnabled();
-      Dec.setDetail(false);
+      Dec.setDetail(Img.Arch == Arch::ARM);
       for (size_t I : NeedVerify)
         verifyIdx(Dec, I);
       Dec.setDetail(PrevDetail);
@@ -170,7 +171,7 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
         Decoder LocalDec;
         if (!LocalDec.init(Img.Arch, Img.Mode))
           return;
-        LocalDec.setDetail(false);
+        LocalDec.setDetail(Img.Arch == Arch::ARM);
         for (size_t P; (P = Claim()) < Count;)
           verifyIdx(LocalDec, NeedVerify[P]);
       });
@@ -279,9 +280,9 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
     size_t Remain = Seg->Data.size() - Off;
 
     // Classification only: this walk needs the instruction size and whether it
-    // is a function terminator (a check keyed on the capstone id).  Neither
-    // reads operand detail, so the lightweight, detail-free decode is used —
-    // the caller disables detail on the decoder before this loop.
+    // is a function terminator.  The lightweight decode avoids lift-path
+    // fixups; ARM callers nevertheless leave detail enabled because writes to
+    // PC and POP/LDM register lists are operand-dependent.
     DecodedInsn DI;
     int Sz = Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
     if (Sz <= 0)

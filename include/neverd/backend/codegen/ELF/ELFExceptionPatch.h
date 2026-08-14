@@ -55,14 +55,14 @@ struct ELFEHFrameRegion {
 
 /// Locate where another `.eh_frame` sequence fits after the records \p Binary
 /// already carries, together with the `.eh_frame_hdr` table that must name it.
-/// Returns nullopt when the image declares no usable `.eh_frame`, in which case
-/// the caller keeps codegen's in-image placement.
+/// Returns nullopt when the image declares no usable `.eh_frame`.  In-image
+/// placement is only optional for a module with no registered-unwind contract.
 std::optional<ELFEHFrameRegion>
 findELFEHFrameRegion(llvm::ArrayRef<uint8_t> Binary);
 
-/// True when \p Mod carries an exception contract that cannot run without
-/// registered unwind records -- a personality, an invoke, a landing pad, or a
-/// resume.  Purely descriptive CFI records may be dropped; these may not.
+/// True when \p Mod carries source frame metadata, requests an unwind table, or
+/// contains native EH IR.  Every such frame requires registered target-format
+/// unwind records, including a source frame with no language personality.
 bool requiresRegisteredELFEHFrame(const llvm::Module &Mod);
 
 /// Copy the regenerated `.eh_frame` in \p Compiled into \p Region, add its

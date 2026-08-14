@@ -8,17 +8,23 @@
 /// Runs a whole function symbolically instead of one straight line of it, by
 /// forking at every branch whose outcome the code does not already decide.
 ///
-/// Two things make that finite.  A budget, because a loop whose trip count is
-/// unknown has no last iteration and something has to say when to stop
-/// unrolling it.  And, before any budget is reached, the fact that a great
-/// many branches are not branches at all: a predicate that folds to a constant
-/// has one reachable side, and the walk takes it without forking.
+/// Three things make that finite.  A budget, for callers who want one.  Loop
+/// headers, because every cycle in a graph passes through one, so bounding how
+/// often a path may re-enter a header bounds how long a path can be — which is
+/// what lets the other budgets be lifted entirely without the walk running
+/// away.  And, before any of that, the fact that a great many branches are not
+/// branches at all: a predicate that folds to a constant has one reachable
+/// side, and the walk takes it without forking.
 ///
-/// That second point is not a detail.  Opaque predicates — a condition
-/// contrived to always hold, guarding code that never runs — are the standard
-/// way to bloat a control-flow graph, and they disappear here as a consequence
-/// of the expression builders folding, without a rule that mentions them and
-/// without asking a solver anything.
+/// That last point is not a detail.  Opaque predicates — a condition contrived
+/// to always hold, guarding code that never runs — are the standard way to
+/// bloat a control-flow graph, and they disappear here as a consequence of the
+/// expression builders folding, without a rule that mentions them and without
+/// asking a solver anything.
+///
+/// A budget that is reached is reported, never absorbed.  A caller can tell a
+/// walk that finished from one that stopped, which matters because the two
+/// look identical in the results and mean opposite things.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -29,6 +35,7 @@
 #include "neverd/symbolic/SymState.h"
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace neverd::symbolic {
@@ -43,6 +50,9 @@ enum class PathOutcome : uint8_t {
   LeftFunction,
   /// Reached a branch through an address that did not come out constant.
   UnresolvedBranch,
+  /// A concrete branch or return target contradicted its instruction-mode
+  /// contract, address width, or architectural alignment.
+  InvalidControlTarget,
   /// Ran out of the allowance for re-entering one block, which is what bounds
   /// a loop nothing else bounds.
   LoopBudget,
@@ -54,20 +64,96 @@ enum class PathOutcome : uint8_t {
 
 const char *pathOutcomeName(PathOutcome Outcome);
 
+/// A bound that is not applied.
+///
+/// What stops the walk is then structural — a return, an edge out of the
+/// function, or the loop-header bound — rather than an allowance running out,
+/// so a result cannot quietly be a prefix of the real one.  Termination still
+/// has to come from somewhere: leaving \c MaxSteps, \c MaxBlockVisits and
+/// \c MaxLoopIterations all unbounded leaves it to the program being walked.
+inline constexpr unsigned kUnbounded = 0;
+
+/// One register of a concolic seed.
+struct SymConcreteRegister {
+  uint64_t Offset = 0;
+  uint64_t Value = 0;
+};
+
+/// The concrete half of a concolic walk.
+///
+/// Declared as an interface rather than as the emulator it will be, because
+/// the concrete engine reads the loaded image and the symbolic engine must not
+/// depend on the loader to keep the dependency running one way.  The adapter
+/// that drives that emulator therefore ships with the emulator.
+///
+/// A shadow only ever has to answer two questions: carry this operation out,
+/// and what does this operand hold.  The second is the whole point — it is
+/// what turns "both sides of this branch are possible" into "this run went
+/// left", and so what replaces a fork with a decision.
+class ConcreteShadow {
+public:
+  virtual ~ConcreteShadow() = default;
+
+  /// Start from nothing.  Called once, before the walk.
+  virtual void reset() = 0;
+
+  /// Give the register at \p Offset the value \p Value.
+  virtual void setRegister(uint64_t Offset, uint64_t Value) = 0;
+
+  /// Carry \p Op out concretely.  A false result means the shadow could not,
+  /// and the walk stops consulting it from there on rather than following a
+  /// concrete state that has drifted from the code.
+  virtual bool step(const LowOp &Op) = 0;
+
+  /// What \p V concretely holds, or nothing when the shadow has no value for
+  /// it — which likewise ends the concrete half of the walk.
+  virtual std::optional<uint64_t> value(const NdVar &V) const = 0;
+};
+
 struct ExploreOptions {
   /// How many reachable paths to finish before giving up on the rest.
   /// Infeasible diagnostics do not consume this allowance.
   unsigned MaxPaths = 64;
   /// Operations allowed along one path.
   unsigned MaxSteps = 1u << 16;
-  /// How often one path may enter the same block.  This is the loop bound:
-  /// two visits is one iteration plus the exit, so the default unrolls a
-  /// couple of times before conceding.
+  /// How often one path may enter the same block, whichever block it is.
   unsigned MaxBlockVisits = 3;
+  /// How often one path may enter a *loop header* — a block some edge returns
+  /// to.  A block is bounded by whichever of this and \c MaxBlockVisits is
+  /// tighter, so the two agree at their defaults and part company when the
+  /// general bound is lifted: unrolling a loop a set number of times while
+  /// leaving straight-line depth alone is what a deeper walk usually wants.
+  unsigned MaxLoopIterations = 3;
+  /// Continue two paths that arrive at one block holding the same values in
+  /// every location as a single path whose condition is their disjunction.
+  ///
+  /// Re-convergent control flow is what makes path counts exponential: a
+  /// function with n independent two-way choices in a row has 2^n paths and
+  /// frequently far fewer distinct outcomes.  Off by default because it costs
+  /// a comparison at every join and because a merged path reports one of the
+  /// routes it stands for rather than all of them.
+  bool MergeEquivalentPaths = false;
   /// Target byte order used for register and memory split/join operations.
   llvm::endianness ByteOrder = llvm::endianness::little;
   /// Register byte ranges preserved by the target's calling convention.
   std::vector<SymRegisterRange> CallPreservedRegisters;
+  /// The concrete engine of a concolic walk, or null for a purely symbolic
+  /// one.
+  ///
+  /// With one set, the walk stops forking: at a branch both of whose sides are
+  /// live it asks the shadow which way this concrete run goes, takes that side
+  /// and records the symbolic condition for having gone that way.  What comes
+  /// back is one path and the predicate every input that follows it satisfies
+  /// — the question a fuzzer's next input is the answer to, and one no amount
+  /// of forking answers as directly.
+  ///
+  /// Not owned, and not reset between calls beyond the one reset the walk
+  /// performs at its start.
+  ConcreteShadow *Concolic = nullptr;
+  /// Register values handed to \c Concolic once the walk has reset it.  This
+  /// is the concrete input the walk follows; the symbolic side is left free,
+  /// which is what makes the recorded condition worth having.
+  std::vector<SymConcreteRegister> ConcolicSeed;
 };
 
 /// One finished path.
@@ -79,14 +165,31 @@ struct SymPath {
   /// the code already decided contributes nothing, so this lists the genuine
   /// choices and only those.
   std::vector<SymRef> Constraints;
-  /// The blocks entered, in order.  What the path *is*.
+  /// The blocks entered, in order.  What the path *is* — or, when
+  /// \c MergedPaths is not zero, one of the routes it stands for.
   std::vector<int> Blocks;
   /// The machine state where it stopped.
   SymState State;
-  /// For \c UnresolvedBranch and \c LeftFunction, where it was trying to go.
+  /// For a branch that left the function or could not be resolved, its target;
+  /// for an explicitly targeted return, the canonical return address.  A
+  /// concrete interworking target is stored after pointer tag removal.
   SymRef Target;
+  /// Decode mode of the instruction where this path stopped, when boundary
+  /// metadata identifies it.
+  std::optional<InstructionMode> SourceMode;
+  /// Mode selected for the stopping control transfer's destination.  This is
+  /// absent when the target expression itself selects the mode and remained
+  /// symbolic, or when legacy LowIR carried no boundary metadata.
+  std::optional<InstructionMode> DestinationMode;
   /// Operations conservatively replaced by unknown values along this path.
   unsigned UnmodelledOps = 0;
+  /// Branches a concrete shadow decided rather than the walk forking at.  Zero
+  /// for a purely symbolic walk.
+  unsigned ConcreteBranches = 0;
+  /// Routes continued as this one because they reached a join holding the same
+  /// values.  This path's condition is the disjunction over all of them, and
+  /// \c Blocks is whichever of them arrived first.
+  unsigned MergedPaths = 0;
 
   /// The conjunction of the constraints, or true when there are none.
   SymRef predicate(SymContext &Ctx) const;
@@ -96,11 +199,15 @@ struct SymPath {
 struct SymExploration {
   std::vector<SymPath> Paths;
   /// True only when every reachable frontier ended without a path or loop
-  /// budget and without an unresolved indirect branch.
+  /// budget and without an unresolved or invalid control target.
   bool Complete = false;
   unsigned ReachablePaths = 0;
   size_t ExecutedSteps = 0;
   unsigned UnmodelledOps = 0;
+  /// Routes that were continued as some other path rather than reported on
+  /// their own.  Reported paths plus this is what an unmerged walk would have
+  /// come back with.
+  unsigned MergedPaths = 0;
 };
 
 SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,

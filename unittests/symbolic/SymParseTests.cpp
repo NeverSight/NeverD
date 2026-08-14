@@ -17,9 +17,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/symbolic/SymParse.h"
-
 #include "gtest/gtest.h"
+
+#include "neverd/symbolic/SymParse.h"
 
 #include <random>
 
@@ -136,8 +136,8 @@ TEST(SymParse, MixedWidthOperandsAreWidenedLikeC) {
   SymContext Ctx;
   SymRef E = parse(Ctx, "x#8 + y#32");
   EXPECT_EQ(Ctx.width(E), 32u);
-  EXPECT_EQ(E, Ctx.mkAdd(Ctx.mkZExt(Ctx.mkVar("x", 8), W32),
-                         Ctx.mkVar("y", W32)));
+  EXPECT_EQ(E,
+            Ctx.mkAdd(Ctx.mkZExt(Ctx.mkVar("x", 8), W32), Ctx.mkVar("y", W32)));
 }
 
 TEST(SymParse, AConditionThatIsNotOneBitIsComparedAgainstZero) {
@@ -205,8 +205,10 @@ TEST(SymParse, MalformedInputIsADiagnosticRatherThanACrash) {
   EXPECT_NE(errorOf("bogus(a)").find("unknown function"), std::string::npos);
   EXPECT_NE(errorOf("not(a, b)").find("takes 1 argument"), std::string::npos);
   EXPECT_NE(errorOf("zext(x, 0)").find("width"), std::string::npos);
-  EXPECT_NE(errorOf("zext(x#32, 8)").find("must not narrow"), std::string::npos);
-  EXPECT_NE(errorOf("extract(x, 30, 8)").find("does not fit"), std::string::npos);
+  EXPECT_NE(errorOf("zext(x#32, 8)").find("must not narrow"),
+            std::string::npos);
+  EXPECT_NE(errorOf("extract(x, 30, 8)").find("does not fit"),
+            std::string::npos);
   EXPECT_NE(errorOf("a @ b").find("unexpected"), std::string::npos);
 
   // A name reused at a second width would trip mkVar's assertion, so the
@@ -217,6 +219,28 @@ TEST(SymParse, MalformedInputIsADiagnosticRatherThanACrash) {
   std::string Deep(4096, '(');
   Deep += "a";
   EXPECT_NE(errorOf(Deep).find("nests too deeply"), std::string::npos);
+}
+
+TEST(SymParse, CallerOwnsTheNestingAndWidthPolicy) {
+  SymContext Ctx;
+
+  SymParseOptions Tight;
+  Tight.MaxNesting = 2;
+  Tight.MaxWidth = 64;
+  EXPECT_FALSE(parseSymExpr(Ctx, "(((a)))", W32, Tight).ok());
+  EXPECT_FALSE(parseSymExpr(Ctx, "a#65", W32, Tight).ok());
+
+  SymParseOptions Unbounded = SymParseOptions::unlimited();
+  std::string Deep(1024, '(');
+  Deep += "a";
+  Deep.append(1024, ')');
+  SymParseResult DeepResult = parseSymExpr(Ctx, Deep, W32, Unbounded);
+  ASSERT_TRUE(DeepResult.ok()) << DeepResult.Error;
+  EXPECT_EQ(DeepResult.Root, Ctx.mkVar("a", W32));
+
+  SymParseResult Wide = parseSymExpr(Ctx, "wide#65537", W32, Unbounded);
+  ASSERT_TRUE(Wide.ok()) << Wide.Error;
+  EXPECT_EQ(Ctx.width(Wide.Root), 65537u);
 }
 
 TEST(SymParse, ErrorOffsetPointsAtTheOffendingToken) {

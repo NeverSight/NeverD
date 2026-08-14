@@ -8,6 +8,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineMedIR.cpp
   PipelineOptimize.cpp
   PipelinePatchLift.cpp
+  SemanticConvergence.cpp
   PipelineStructReturn.cpp
   PipelineStructReturnCallSites.cpp
   PipelineWideIntReturn.cpp
@@ -18,6 +19,7 @@ add_neverd_component_library(NeverDPipeline
   Decode
   Lift
   BackendLLVM
+  CodeGen
   DebugInfo
   EVM
   SBF

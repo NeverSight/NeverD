@@ -21,9 +21,11 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
@@ -33,6 +35,7 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -63,6 +66,44 @@ uint64_t positiveRangeEnd(int64_t Start, uint64_t Size) {
     return checkedSyntheticStackAdd(static_cast<uint64_t>(Start), Size);
   uint64_t Distance = static_cast<uint64_t>(-(Start + 1)) + 1;
   return Size > Distance ? Size - Distance : 0;
+}
+
+bool isPredicatedObservableEffect(NdOp Opcode) {
+  switch (Opcode) {
+  case NdOp::LOAD:
+  case NdOp::STORE:
+  case NdOp::INTRINSIC:
+  case NdOp::INDIR_BR:
+  case NdOp::CALL:
+  case NdOp::INDIR_CALL:
+  case NdOp::RETURN:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Find the end of a flattened predicated instruction with an observable
+/// effect.  LowToMed keeps every operation's source address, so an internal
+/// guard and the effects it skips remain one same-address slice after SSA
+/// construction.  Loads are observable here as well as stores and controls:
+/// even a discarded load may fault or touch MMIO.  Ordinary conditional
+/// branches have no later observable effect at that address and are not
+/// matched.
+std::optional<size_t> predicatedEffectEnd(const MedBlock &Block,
+                                          size_t GuardIndex) {
+  if (GuardIndex >= Block.Ops.size() ||
+      Block.Ops[GuardIndex].Opcode != NdOp::COND_BR)
+    return std::nullopt;
+
+  size_t End = GuardIndex + 1;
+  while (End < Block.Ops.size() &&
+         Block.Ops[End].Addr == Block.Ops[GuardIndex].Addr)
+    ++End;
+  for (size_t I = GuardIndex + 1; I < End; ++I)
+    if (isPredicatedObservableEffect(Block.Ops[I].Opcode))
+      return End;
+  return std::nullopt;
 }
 
 } // anonymous namespace
@@ -267,11 +308,25 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   }
 
   std::map<int, llvm::BasicBlock *> BBMap;
+  std::map<int, std::vector<llvm::BasicBlock *>> ConceptualExits;
+  llvm::DenseMap<va_t, llvm::BasicBlock *> AddressToBlock;
+  llvm::DenseMap<int, va_t> BlockToAddress;
   for (auto &Blk : Func.Blocks) {
     auto *BB = llvm::BasicBlock::Create(*Ctx, "bb_" + std::to_string(Blk.Id),
                                         LLVMFunc);
     BBMap[Blk.Id] = BB;
+    ConceptualExits[Blk.Id].push_back(BB);
+    const va_t Address = Blk.StartAddr != 0 || Blk.Ops.empty()
+                             ? Blk.StartAddr
+                             : Blk.Ops.front().Addr;
+    AddressToBlock.try_emplace(Address, BB);
+    BlockToAddress.try_emplace(Blk.Id, Address);
   }
+
+  auto blockAtAddress = [&](va_t Address) -> llvm::BasicBlock * {
+    auto It = AddressToBlock.find(Address);
+    return It != AddressToBlock.end() ? It->second : nullptr;
+  };
 
   if (!Func.Blocks.empty()) {
     int EntryId = Func.Blocks.front().Id;
@@ -384,6 +439,61 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
             auto *Zero = llvm::ConstantInt::get(Cond->getType(), 0);
             Cond = Builder.CreateICmpNE(Cond, Zero, "cond");
           }
+
+          // ARM predication is one decoded instruction represented by a
+          // `COND_BR next, !predicate` followed by the same-address effects it
+          // skips.  Lower it to a real LLVM micro-CFG.  This is required not
+          // only for calls and returns: executing a discarded load or a
+          // read-modify-write store on a substitute address can still fault,
+          // touch MMIO, fire a watchpoint, or dirty a page.
+          if (std::optional<size_t> EffectEnd = predicatedEffectEnd(Blk, OI)) {
+            llvm::BasicBlock *SkipBB = nullptr;
+            if (Op.Inputs[0].isConst())
+              SkipBB = blockAtAddress(Op.Inputs[0].ConstVal);
+            if (!SkipBB && Blk.Succs.size() == 1) {
+              auto SkipIt = BBMap.find(Blk.Succs.front());
+              if (SkipIt != BBMap.end())
+                SkipBB = SkipIt->second;
+            }
+
+            if (SkipBB) {
+              auto *EffectBB = llvm::BasicBlock::Create(
+                  *Ctx,
+                  "predeffect_" + std::to_string(Blk.Id) + "_" +
+                      std::to_string(OI),
+                  CurFunc, SkipBB);
+              ConceptualExits[Blk.Id].push_back(EffectBB);
+              Builder.CreateCondBr(Cond, SkipBB, EffectBB);
+
+              llvm::IRBuilder<> EffectBuilder(EffectBB);
+              for (size_t EI = OI + 1; EI < *EffectEnd; ++EI) {
+                const MedOp &Effect = Blk.Ops[EI];
+                if (Effect.Opcode == NdOp::INDIR_BR) {
+                  if (!emitJumpTableSwitch(Blk, Effect, BBMap, EffectBuilder)) {
+                    // A guest virtual address cannot be used as an LLVM
+                    // blockaddress.  When recovery did not prove its finite
+                    // destination set, fail loudly on the selected path; the
+                    // guard-taken continuation remains executable.
+                    EffectBuilder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
+                                                  llvm::Intrinsic::trap, {});
+                    EffectBuilder.CreateUnreachable();
+                  }
+                  break;
+                }
+                if (Effect.Opcode == NdOp::RETURN) {
+                  emitOp(Effect, EffectBuilder, Blk.Id, static_cast<int>(EI));
+                  break;
+                }
+                emitOp(Effect, EffectBuilder, Blk.Id, static_cast<int>(EI));
+                if (!EffectBB->empty() && EffectBB->back().isTerminator())
+                  break;
+              }
+              if (EffectBB->empty() || !EffectBB->back().isTerminator())
+                EffectBuilder.CreateBr(SkipBB);
+              break;
+            }
+          }
+
           llvm::BasicBlock *TakenBB = nullptr;
           llvm::BasicBlock *FallthroughBB = nullptr;
           if (Blk.Succs.size() >= 2) {
@@ -396,13 +506,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
                 Op.Inputs[0].isConst() ? Op.Inputs[0].ConstVal : 0;
             int TakenId = Blk.Succs[1], FallId = Blk.Succs[0];
             if (CbrTarget != 0) {
-              for (auto &B : CurMedFunc->Blocks) {
-                if (B.Id == Blk.Succs[0] && B.Ops.size() > 0 &&
-                    B.Ops[0].Addr == CbrTarget) {
-                  TakenId = Blk.Succs[0];
-                  FallId = Blk.Succs[1];
-                  break;
-                }
+              auto AddressIt = BlockToAddress.find(Blk.Succs[0]);
+              if (AddressIt != BlockToAddress.end() &&
+                  AddressIt->second == CbrTarget) {
+                TakenId = Blk.Succs[0];
+                FallId = Blk.Succs[1];
               }
             }
             auto ItFall = BBMap.find(FallId);
@@ -444,14 +552,12 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         break;
       }
       if (Op.Opcode == NdOp::INDIR_BR) {
-        if (!emitJumpTableSwitch(Blk, Op, BBMap, Builder) &&
-            Blk.Succs.size() > 1) {
-          // A INDIR_BR that survived convertIndirectTailCalls has a resolved
-          // jump table.  If its switch could not be rebuilt (e.g. a shared
-          // multi-site -O0 computed-goto dispatch whose per-predecessor index
-          // could not be recovered), trap loudly instead of silently falling
-          // through to the first successor (the always-first-target
-          // miscompile).
+        if (!emitJumpTableSwitch(Blk, Op, BBMap, Builder)) {
+          // Every INDIR_BR that survives tail-call conversion must have a
+          // proved finite destination set.  This includes the selected half of
+          // a predicated PC write: it may legitimately have zero recovered
+          // successors.  Falling through or returning in either case invents
+          // control flow, so fail loudly whenever switch reconstruction fails.
           Builder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
                                   llvm::Intrinsic::trap, {});
           Builder.CreateUnreachable();
@@ -582,82 +688,86 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
 
     for (auto &[Edge, Copies] : EdgePhis) {
       auto [PredId, TargetId] = Edge;
-      auto PredIt = BBMap.find(PredId);
       auto TargetIt = BBMap.find(TargetId);
-      if (PredIt == BBMap.end() || TargetIt == BBMap.end())
+      auto ExitsIt = ConceptualExits.find(PredId);
+      if (ExitsIt == ConceptualExits.end() || TargetIt == BBMap.end())
         continue;
-      auto *PredBB = PredIt->second;
       auto *TargetBB = TargetIt->second;
-      auto *Term = PredBB->getTerminator();
-      if (!Term)
-        continue;
+      for (llvm::BasicBlock *PredBB : ExitsIt->second) {
+        auto *Term = PredBB->getTerminator();
+        if (!Term)
+          continue;
 
-      if (!llvm::isa<llvm::UncondBrInst, llvm::CondBrInst>(Term) &&
-          !llvm::isa<llvm::SwitchInst>(Term) &&
-          !llvm::isa<llvm::IndirectBrInst>(Term))
-        continue;
+        if (!llvm::isa<llvm::UncondBrInst, llvm::CondBrInst>(Term) &&
+            !llvm::isa<llvm::SwitchInst>(Term) &&
+            !llvm::isa<llvm::IndirectBrInst>(Term))
+          continue;
 
-      bool NeedSplit = Term->getNumSuccessors() > 1;
+        bool ReachesTarget = false;
+        for (unsigned I = 0; I < Term->getNumSuccessors(); ++I)
+          ReachesTarget |= Term->getSuccessor(I) == TargetBB;
+        if (!ReachesTarget)
+          continue;
 
-      llvm::BasicBlock *InsertBB = PredBB;
-      if (NeedSplit) {
-        auto *SplitBB = llvm::BasicBlock::Create(PredBB->getContext(),
-                                                 PredBB->getName() + ".phi." +
-                                                     TargetBB->getName(),
-                                                 CurFunc, TargetBB);
+        const bool NeedSplit = Term->getNumSuccessors() > 1;
+        llvm::BasicBlock *InsertBB = PredBB;
+        if (NeedSplit) {
+          auto *SplitBB = llvm::BasicBlock::Create(PredBB->getContext(),
+                                                   PredBB->getName() + ".phi." +
+                                                       TargetBB->getName(),
+                                                   CurFunc, TargetBB);
 
-        for (unsigned I = 0; I < Term->getNumSuccessors(); ++I) {
-          if (Term->getSuccessor(I) == TargetBB) {
-            Term->setSuccessor(I, SplitBB);
-          }
+          for (unsigned I = 0; I < Term->getNumSuccessors(); ++I)
+            if (Term->getSuccessor(I) == TargetBB)
+              Term->setSuccessor(I, SplitBB);
+
+          llvm::UncondBrInst::Create(TargetBB, SplitBB);
+          InsertBB = SplitBB;
         }
 
-        llvm::UncondBrInst::Create(TargetBB, SplitBB);
-        InsertBB = SplitBB;
-      }
+        auto *InsTerm = InsertBB->getTerminator();
+        if (!InsTerm)
+          continue;
+        llvm::IRBuilder<> InsBuilder(InsTerm);
 
-      auto *InsTerm = InsertBB->getTerminator();
-      if (!InsTerm)
-        continue;
-      llvm::IRBuilder<> InsBuilder(InsTerm);
-
-      std::vector<std::pair<MedVar, llvm::Value *>> Pending;
-      Pending.reserve(Copies.size());
-      for (auto &[Dst, Src] : Copies) {
-        llvm::Value *Val;
-        if (Src.isConst()) {
-          Val = llvm::ConstantInt::get(sizeToType(Dst.Size),
-                                       static_cast<int64_t>(Src.ConstVal),
-                                       /*isSigned=*/true);
-        } else {
-          auto SrcKey = std::make_pair(Src.Id, Src.SSAVer);
-          auto DstKey = std::make_pair(Dst.Id, Dst.SSAVer);
-          llvm::AllocaInst *HiddenAlloca = nullptr;
-          // A self-edge X=X normally means X is loop-invariant on this edge, so
-          // the copy is a no-op self-reference.  Only when a *wider*
-          // overlapping register is written in this predecessor block must the
-          // narrow view re-resolve through it (hide the alloca so getVar
-          // reaches the wide register).  Hiding unconditionally would, for a
-          // register that is genuinely loop-invariant in an inner loop, force
-          // getVar's wide fallback to pull a different (outer-loop) wide
-          // version and corrupt the value.
-          if (SrcKey == DstKey && Src.Kind == MedVar::Reg &&
-              widerRegWrittenInBlock(PredId, Src)) {
-            auto It = VarAllocs.find(SrcKey);
-            if (It != VarAllocs.end()) {
-              HiddenAlloca = It->second;
-              VarAllocs.erase(It);
+        std::vector<std::pair<MedVar, llvm::Value *>> Pending;
+        Pending.reserve(Copies.size());
+        for (auto &[Dst, Src] : Copies) {
+          llvm::Value *Val;
+          if (Src.isConst()) {
+            Val = llvm::ConstantInt::get(sizeToType(Dst.Size),
+                                         static_cast<int64_t>(Src.ConstVal),
+                                         /*isSigned=*/true);
+          } else {
+            auto SrcKey = std::make_pair(Src.Id, Src.SSAVer);
+            auto DstKey = std::make_pair(Dst.Id, Dst.SSAVer);
+            llvm::AllocaInst *HiddenAlloca = nullptr;
+            // A self-edge X=X normally means X is loop-invariant on this edge,
+            // so the copy is a no-op self-reference.  Only when a *wider*
+            // overlapping register is written in this predecessor block must
+            // the narrow view re-resolve through it (hide the alloca so getVar
+            // reaches the wide register).  Hiding unconditionally would, for a
+            // register that is genuinely loop-invariant in an inner loop, force
+            // getVar's wide fallback to pull a different (outer-loop) wide
+            // version and corrupt the value.
+            if (SrcKey == DstKey && Src.Kind == MedVar::Reg &&
+                widerRegWrittenInBlock(PredId, Src)) {
+              auto It = VarAllocs.find(SrcKey);
+              if (It != VarAllocs.end()) {
+                HiddenAlloca = It->second;
+                VarAllocs.erase(It);
+              }
             }
+            Val = getVar(Src, InsBuilder);
+            if (HiddenAlloca)
+              VarAllocs[SrcKey] = HiddenAlloca;
           }
-          Val = getVar(Src, InsBuilder);
-          if (HiddenAlloca)
-            VarAllocs[SrcKey] = HiddenAlloca;
+          Pending.emplace_back(Dst, Val);
         }
-        Pending.emplace_back(Dst, Val);
-      }
 
-      for (auto &[Dst, Val] : Pending)
-        setVar(Dst, Val, InsBuilder);
+        for (auto &[Dst, Val] : Pending)
+          setVar(Dst, Val, InsBuilder);
+      }
     }
   }
 
@@ -668,6 +778,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   if (!emitNativeSEH(Func, *LLVMFunc, BBMap) &&
       !emitNativeCxxEH(Func, *LLVMFunc, BBMap))
     emitNativeItaniumEH(Func, *LLVMFunc, BBMap);
+
+  for (llvm::BasicBlock &Block : *LLVMFunc)
+    for (llvm::Instruction &Instruction : Block)
+      Instruction.setMetadata(language_eh_md::InternalSourceCallAttachment,
+                              nullptr);
 
   for (auto &BB : *CurFunc) {
     if (BB.empty() || !BB.back().isTerminator()) {

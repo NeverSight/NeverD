@@ -10,9 +10,20 @@
 /// computes CRC16 over trailing bytes, and outputs FLIRT-compatible .pat
 /// format.
 ///
+/// A relocation bounds what a signature may assert: the byte holds a
+/// placeholder here and an address in the linked image.  Wildcards cover the
+/// ones inside the leading pattern and the tail, and the CRC stops at the
+/// first one it meets, because a checksum cannot express a wildcard.
+///
 /// Usage:
-///   neverd-sigmaker --input /path/to/libfoo.a --output foo.pat
-///   neverd-sigmaker --input /usr/lib/libc.a --output libc.pat --name "libc"
+///   neverd-sigmaker /path/to/libfoo.a -o foo.pat
+///   neverd-sigmaker /usr/lib/libc.a -o libc.pat --name "libc"
+///   neverd-sigmaker libgcc_eh.a -o eh.pat --tail 65535
+///
+/// The last form states every byte of every function, so a match is agreement
+/// over the whole routine rather than over its opening run.  A consumer that
+/// acts on the name it gets -- naming an exception personality, say -- asks
+/// for that; see SignatureMatcher::isFullyVerified.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -44,6 +55,39 @@ static cl::opt<unsigned>
     LeadingLen("leading", cl::desc("Leading pattern bytes"), cl::init(32));
 static cl::opt<unsigned>
     MinFuncSize("min-size", cl::desc("Minimum function size"), cl::init(4));
+static cl::opt<unsigned>
+    TailLen("tail",
+            cl::desc("Trailing pattern bytes to emit after the CRC span; "
+                     "0 emits none, a value at least as large as the function "
+                     "covers it to its end"),
+            cl::init(0));
+
+/// The CRC span may not cross a relocation.
+///
+/// A relocated byte holds a link-time placeholder in the object file and a
+/// resolved address in the image the signature is meant to match, so a
+/// checksum spanning one can never agree with the very binaries it is for.
+/// The pattern bytes state a wildcard there instead; the CRC has no way to
+/// express one, so it stops.
+static size_t crcSpan(size_t Start, size_t Size,
+                      const std::set<uint64_t> &RelocOffsets) {
+  size_t End = std::min(Size, Start + 255);
+  for (size_t I = Start; I < End; ++I)
+    if (RelocOffsets.count(I))
+      return I - Start;
+  return End - Start;
+}
+
+static void emitPatternBytes(raw_ostream &OS, const uint8_t *Data, size_t Begin,
+                             size_t End,
+                             const std::set<uint64_t> &RelocOffsets) {
+  for (size_t I = Begin; I < End; ++I) {
+    if (RelocOffsets.count(I))
+      OS << "..";
+    else
+      OS << format("%02X", Data[I]);
+  }
+}
 
 static bool emitPatLine(raw_ostream &OS, StringRef FuncName,
                         const uint8_t *Data, size_t Size,
@@ -60,24 +104,30 @@ static bool emitPatLine(raw_ostream &OS, StringRef FuncName,
       RelocOffsets.insert(I);
   }
 
-  // Emit leading bytes with wildcards at relocation positions.
-  for (size_t I = 0; I < LeadBytes; ++I) {
-    if (RelocOffsets.count(I))
-      OS << "..";
-    else
-      OS << format("%02X", Data[I]);
-  }
+  emitPatternBytes(OS, Data, 0, LeadBytes, RelocOffsets);
 
-  // CRC16 over bytes after leading pattern.
   size_t CRCStart = LeadBytes;
-  size_t CRCLen = std::min(Size - CRCStart, static_cast<size_t>(255));
+  size_t CRCLen = crcSpan(CRCStart, Size, RelocOffsets);
   uint16_t CRC = 0;
   if (CRCLen > 0)
     CRC = neverd::sigs::SignatureMatcher::computeCRC16(Data + CRCStart, CRCLen);
 
   OS << format(" %02X %04X %04X", static_cast<unsigned>(CRCLen), CRC,
                static_cast<unsigned>(Size));
-  OS << " :0000 " << FuncName << "\n";
+  OS << " :0000 " << FuncName;
+
+  // Everything the CRC had to stop short of, stated byte by byte so that a
+  // wildcard can stand where a relocation does.  This is what lets a match
+  // cover a whole function rather than its first invariant run, which is the
+  // difference between a name worth displaying and a name worth acting on.
+  size_t TailStart = CRCStart + CRCLen;
+  size_t TailEnd = std::min(Size, TailStart + static_cast<size_t>(TailLen));
+  if (TailEnd > TailStart) {
+    OS << " ";
+    emitPatternBytes(OS, Data, TailStart, TailEnd, RelocOffsets);
+  }
+
+  OS << "\n";
   return true;
 }
 

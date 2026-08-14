@@ -37,12 +37,44 @@ public:
   /// for ARM (no known capstone decode-id collisions requiring fixup).
   static void fixupDecodedInsn(cs_insn *I);
 
-  /// Whether \p I ends a function's straight-line decode (bx/b/pop).
+  /// Whether \p I ends a function's straight-line decode.  Operand-dependent
+  /// PC writes require capstone detail to be enabled.
   static bool isFunctionTerminator(const cs_insn *I);
 
   /// Direct (immediate) call target of \p I, or InvalidVA if \p I is not a
   /// direct call.
   static va_t directCallTarget(const cs_insn *I);
+
+  enum class ControlKind : uint8_t {
+    None,
+    DirectBranch,
+    DirectCall,
+    IndirectBranch,
+    IndirectCall,
+    Return,
+    ExceptionReturn,
+  };
+
+  /// Operand-aware control description shared by lifting, recursive decode,
+  /// and instruction-boundary provenance.  ExceptionReturn is deliberately a
+  /// distinct kind because its destination mode comes from restored processor
+  /// state rather than the branch target.
+  struct ControlInfo {
+    ControlKind Kind = ControlKind::None;
+    LowInstructionTargetMode TargetMode = LowInstructionTargetMode::Preserve;
+    bool IsConditional = false;
+
+    bool isControl() const { return Kind != ControlKind::None; }
+  };
+
+  static ControlInfo classifyControl(const cs_insn *I,
+                                     InstructionMode SourceMode);
+
+  /// Describe ARM/Thumb interworking without interpreting target values in a
+  /// later IR consumer.  This is a projection of classifyControl(), not an
+  /// independent instruction-id table.
+  static LowInstructionTargetMode controlTargetMode(const cs_insn *I,
+                                                    InstructionMode SourceMode);
 
   struct LiftState : LiftStateBase {
     using LiftStateBase::LiftStateBase;
@@ -64,7 +96,7 @@ public:
   /// through carry by one) was silently dropped everywhere.  Returns \p Val
   /// unchanged for a zero-amount non-RRX shift or an unrecognised type.
   static NdVar emitImmShift(LiftState &S, NdVar Val, unsigned ShType,
-                              unsigned ShVal);
+                            unsigned ShVal);
 
   /// Compute the LDRD/STRD access effective address from a memory operand,
   /// mirroring the single-register LDR/STR path: base + (optionally
@@ -73,7 +105,7 @@ public:
   /// base afterward) and is NOT part of the access address, so pass
   /// \p PostIndex=true to exclude it.
   static NdVar emitLdrdStrdEA(LiftState &S, const cs_arm_op &MemOp,
-                                bool PostIndex);
+                              bool PostIndex);
 
   /// Apply LDRD/STRD base-register writeback (pre-/post-indexed).  \p EA is the
   /// access address (used as the new base for the pre-indexed form).
@@ -87,7 +119,7 @@ public:
   /// post-indexed form accesses the UNMODIFIED base and folds the whole offset
   /// into the writeback.  Returns the access address (a fresh temp).
   static NdVar emitSingleMemAddr(LiftState &S, const cs_insn *Insn,
-                                   const cs_arm &ARM, const cs_arm_op &MemOp);
+                                 const cs_arm &ARM, const cs_arm_op &MemOp);
 
   static NdVar buildCondCode(ARMCC_CondCodes CC, LiftState &S);
   static void emitNZCV(LiftState &S, NdVar Result, NdVar A, NdVar B,
@@ -101,8 +133,7 @@ public:
   // Snapshot a source operand into a temp when it aliases the destination
   // register, so flag computation reads the pre-write value (e.g. `adds
   // rd, rd, rm`).  Returns the operand unchanged when there is no aliasing.
-  static NdVar snapForFlags(LiftState &S, const NdVar &Dst,
-                              const NdVar &Op);
+  static NdVar snapForFlags(LiftState &S, const NdVar &Dst, const NdVar &Op);
 
   // ARM shifter carry-out for a register (Rs[7:0]) or immediate shift amount.
   // Sets CFLAG for flag-setting LSLS/LSRS/ASRS/RORS.  ShType: 0=LSL 1=LSR

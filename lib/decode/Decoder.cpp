@@ -11,12 +11,12 @@
 
 #include "neverd/decode/Decoder.h"
 
-#include "neverd/support/Diagnostic.h"
 #include "neverd/decode/AArch64NativeDecode.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64Lifter.h"
 #include "neverd/lift/ARMLifter.h"
 #include "neverd/lift/X86Lifter.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -187,8 +187,8 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
 
   // No fixupDecodedInsn here: the id fixups (x86 cmp/vex-cmp) read cs_detail,
   // which is absent when detail is disabled, and they only matter for lifting,
-  // never for size stepping or terminator classification.  The mnemonic string
-  // is likewise skipped — classification reads Id, not the text.
+  // never for size stepping.  Operand-aware classification is valid when the
+  // caller deliberately leaves detail enabled (ARM function verification).
   Out.Addr = InsnBuf->address;
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
@@ -303,6 +303,21 @@ va_t Decoder::directCallTarget(const DecodedInsn &Insn) const {
   if (ARM)
     return ARMLifter::directCallTarget(Insn.Raw);
   return InvalidVA;
+}
+
+std::optional<uint64_t>
+Decoder::returnImmediate(const DecodedInsn &Insn) const {
+  if (!Insn.Raw || !X86)
+    return std::nullopt;
+  return X86Lifter::returnImmediate(Insn.Raw);
+}
+
+LowInstructionTargetMode
+Decoder::controlTargetMode(const DecodedInsn &Insn,
+                           InstructionMode SourceMode) const {
+  if (!Insn.Raw || !ARM)
+    return LowInstructionTargetMode::Preserve;
+  return ARMLifter::controlTargetMode(Insn.Raw, SourceMode);
 }
 
 va_t Decoder::pcRelCodeRefTarget(const DecodedInsn &Insn) const {

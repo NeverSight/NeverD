@@ -44,6 +44,10 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
   // 1. Check operand size consistency
   for (const auto &Blk : Func.Blocks) {
     for (const auto &Op : Blk.Ops) {
+      if (Op.DoesNotReturn && Op.Opcode != NdOp::CALL &&
+          Op.Opcode != NdOp::INDIR_CALL)
+        Err("no-return marker is attached to a non-call operation", Blk.Id,
+            Op.Addr);
       // SUBBYTES: input must be wider than output
       if (Op.Opcode == NdOp::SUBBYTES) {
         if (Op.NumInputs >= 1 && Op.Inputs[0].Size > 0 && Op.Output.Size > 0 &&

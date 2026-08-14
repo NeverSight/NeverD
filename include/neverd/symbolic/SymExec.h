@@ -23,10 +23,16 @@
 /// for a signed comparison of narrow operands.
 ///
 /// What the engine cannot model it names rather than guesses at: a call's
-/// result, a floating-point operation, a population count all become fresh
-/// inputs, and execution carries on around them.  That is the same bargain the
-/// simplifier makes, and it is what keeps a result that mentions an unknown
-/// still exactly true.
+/// result or a floating-point operation becomes a fresh input, and execution
+/// carries on around it.  That is the same bargain the simplifier makes, and
+/// it is what keeps a result that mentions an unknown still exactly true.
+///
+/// The bar for naming rather than modelling is what the expression language
+/// can say exactly, not what is convenient.  A population count, a leading
+/// zero count and a bit-field insert or extract all have exact models here —
+/// costing a node per bit for the first two — because the concrete emulator
+/// that shadows this one computes them, and two engines over one operator set
+/// that disagree about an opcode are worse than either alone.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -72,8 +78,9 @@ public:
   /// the last of them included.
   size_t run(llvm::ArrayRef<LowOp> Ops);
 
-  /// Where the last branch went, as an expression.  Constant for a direct
-  /// branch; whatever the code computed for an indirect one.
+  /// Where the last control transfer went, as an expression.  Constant for a
+  /// direct branch; whatever the code computed for an indirect branch or an
+  /// explicitly targeted return.
   SymRef branchTarget() const { return Target; }
 
   /// The predicate of the last conditional branch, one bit wide.
@@ -120,6 +127,7 @@ private:
   StepResult stepCompare(const LowOp &Op);
   StepResult stepUnary(const LowOp &Op);
   StepResult stepBoolean(const LowOp &Op);
+  StepResult stepBits(const LowOp &Op);
   StepResult stepMemory(const LowOp &Op);
   StepResult stepControl(const LowOp &Op);
   StepResult unmodelled(const LowOp &Op);

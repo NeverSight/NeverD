@@ -1,3 +1,7 @@
+add_neverd_component_library(NeverDIRLowValidation
+  LowIR.cpp
+)
+
 add_neverd_component_library(NeverDIRLow
   CFGBuilder.cpp
   CFGBuilderBlocks.cpp
@@ -27,5 +31,6 @@ add_neverd_component_library(NeverDIRLow
   jumptable/JumpTableResolverTwoLevel.cpp
 
   LINK_COMPONENTS
+  IRLowValidation
   Symbolic
 )

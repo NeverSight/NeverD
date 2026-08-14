@@ -61,13 +61,56 @@
 
 #include "neverd/symbolic/SymExpr.h"
 
+#include <cstddef>
+#include <limits>
+
 namespace neverd::symbolic {
 
+/// What the solver may spend, and how far it may reach.
+///
+/// Every dial here is a resource, not a shape.  Nothing in the algebra stops
+/// at a particular number of inputs or a particular degree, so a limit that
+/// says "this expression is too complicated" is always really saying "this
+/// would cost more than you said you would pay".  Keeping that distinction in
+/// the names is what makes it obvious which refusals a larger budget undoes —
+/// all of them — and which describe the expression, which is none.
+///
+/// The arity dials accept \c Unlimited, meaning "as far as the work budget and
+/// \c MaxTableBytes allow".  That never means an unchecked shift or an
+/// unbounded allocation: the solver resolves the sentinel to the largest arity
+/// whose tables it can actually hold, and switches to a reading that does not
+/// tabulate rather than trying to build one it cannot.
 struct MBAOptions {
+  /// Stands in for a number in the arity dials below: go as far as the other
+  /// resources allow rather than stopping at a figure fixed here.
+  static constexpr unsigned Unlimited = ~0u;
+  /// The same for \c MaxWork, which was already spelled this way.
+  static constexpr size_t UnlimitedWork = std::numeric_limits<size_t>::max();
+
   /// Largest number of mutually dependent inputs measured in one region.  The
   /// cost is 2^MaxAtoms evaluations, so independent dependency components and
   /// mask-uniform columns are split before this bound is considered.
-  unsigned MaxAtoms = 16;
+  unsigned MaxAtoms = 20;
+
+  /// Largest number of inputs whose truth tables the solver will build.
+  ///
+  /// This is what gates the grouped linear form, the bitwise synthesis behind
+  /// it, and the polynomial factor search.  It used to be a compile-time six,
+  /// because a table was a machine word; tables are bitvectors now, so the
+  /// number is a budget like the others and a seven-input identity is reached
+  /// rather than abandoned.
+  unsigned MaxSynthesisAtoms = 20;
+
+  /// Largest number of inputs at which bitwise synthesis returns the shortest
+  /// expression that exists rather than merely a correct one.
+  ///
+  /// Unlike every other dial this one is doubly exponential — 2^(2^t)
+  /// functions, relaxed pairwise — so three is microseconds, four is minutes,
+  /// and five is a table that is not built.  Raising it is a deliberate trade
+  /// a caller makes with its own clock, which is why exhaustive mode leaves it
+  /// alone.  Above the ceiling the answer is still exact, just not provably
+  /// the shortest.
+  unsigned MaxOptimalSynthesisAtoms = 3;
 
   /// Random assignments the rewrite is checked against before it is returned.
   /// The derivation is exact, so this is a guard against a mistake in it
@@ -83,8 +126,47 @@ struct MBAOptions {
   /// expression-shape cutoff: the iterative deep walk still visits every node,
   /// and opaque boundaries do not spend it.  Once exhausted, remaining regions
   /// stay intact and the result reports \c MBAOutcome::BudgetExhausted.
-  /// Setting this to the largest size_t removes the resource budget.
+  /// Setting this to \c UnlimitedWork removes the resource budget.
+  ///
+  /// The default here is deliberately left where it was, because of where the
+  /// cost of raising it falls.  An arity ceiling is only paid by an expression
+  /// that has something at that size to find, so raising one is free for
+  /// everything else.  The factor search instead runs until it succeeds *or
+  /// the budget stops it*, which means a larger budget is paid in full by
+  /// exactly the expressions where there is nothing to find: quadrupling it
+  /// measures four times slower on a corpus of random expressions and recovers
+  /// nothing more from any of them.  Callers that know their input is worth
+  /// the wait raise it, and \c unlimited() removes it.
   size_t MaxWork = size_t(1) << 22;
+
+  /// Bytes one tabulation — a corner table, a truth table, a candidate list —
+  /// may occupy before the solver measures something narrower instead.
+  ///
+  /// Alone among these, this one has no unlimited setting, and deliberately
+  /// so.  Every other refusal costs the caller an answer it might have had;
+  /// running out of memory costs it the process, and "try harder" can never
+  /// sensibly mean that.  It is what makes an unlimited arity safe to ask for:
+  /// the sentinel resolves against this, so what runs is the strongest
+  /// algorithm that fits.
+  size_t MaxTableBytes = size_t(1) << 28;
+
+  /// Every reach dial at its maximum: measure as wide as memory allows,
+  /// tabulate as far as that reaches, and never stop for a work budget.
+  ///
+  /// Two things stay where they are.  \c MaxTableBytes does not move, for the
+  /// reason given above.  \c MaxOptimalSynthesisAtoms does not move either,
+  /// because its cost is doubly exponential rather than exponential: raising
+  /// it does not buy a longer search, it buys a different order of magnitude
+  /// of search, and a mode meaning "spend what it takes" should not quietly
+  /// decide that minutes per truth table is what it takes.
+  static MBAOptions unlimited() {
+    MBAOptions Opts;
+    Opts.MaxAtoms = Unlimited;
+    Opts.MaxSynthesisAtoms = Unlimited;
+    Opts.VerifySamples = 256;
+    Opts.MaxWork = UnlimitedWork;
+    return Opts;
+  }
 };
 
 /// What became of an attempt to simplify, and why nothing did when nothing did.
@@ -101,7 +183,9 @@ enum class MBAOutcome : uint8_t {
   AlreadyShortest,
   /// More inputs than one measurement can afford, and no split into
   /// independent parts or mask-uniform columns was available.  A larger
-  /// \c MBAOptions::MaxAtoms would reach it, at 2^t the cost.
+  /// \c MBAOptions::MaxAtoms reaches it, at 2^t the cost — and, once the arity
+  /// dial is out of the way, a larger \c MBAOptions::MaxTableBytes, since the
+  /// table of that measurement has to be held as well as filled.
   TooManyInputs,
   /// The layered walk or polynomial search stopped at its work budget.  A
   /// larger \c MBAOptions::MaxWork would reach the remaining work.

@@ -20,4 +20,11 @@ add_neverd_component_library(NeverDSymbolic
   parse/SymParseCall.cpp
   parse/SymParseLex.cpp
   parse/SymPrint.cpp
+  synth/SymSynth.cpp
+  synth/SymSynthEnumerate.cpp
+  synth/SymSynthOracle.cpp
+  synth/SymSynthStochastic.cpp
+
+  LINK_COMPONENTS
+  IRLowValidation
 )

@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/c/pass/LLVMC/LLVMCPasses.h"
 
 #include "llvm/IR/Constants.h"
@@ -44,12 +45,17 @@ bool analyzeVoidReturn(const LLVMCAnalysisState &State, llvm::Function &Fn) {
         const llvm::Value *Source = RV;
         while (auto *Cast = llvm::dyn_cast<llvm::CastInst>(Source))
           Source = Cast->getOperand(0);
-        if (auto *EV = llvm::dyn_cast<llvm::ExtractValueInst>(Source)) {
-          if (llvm::isa<llvm::CallInst>(EV->getAggregateOperand()))
-            continue;
-        }
-        if (llvm::isa<llvm::CallInst>(Source))
+        const auto *CallProducer = llvm::dyn_cast<llvm::CallInst>(Source);
+        if (!CallProducer)
+          if (const auto *Extract =
+                  llvm::dyn_cast<llvm::ExtractValueInst>(Source))
+            CallProducer =
+                llvm::dyn_cast<llvm::CallInst>(Extract->getAggregateOperand());
+        if (CallProducer) {
+          if (llvm_value_provenance::isSemanticProducer(*CallProducer))
+            AllRetResidual = false;
           continue;
+        }
         AllRetResidual = false;
       }
       if (Inst.isBinaryOp() || llvm::isa<llvm::ICmpInst>(&Inst) ||

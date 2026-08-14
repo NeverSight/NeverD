@@ -164,12 +164,32 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     MB.ExceptionalSuccs = LB.ExceptionalSuccs;
     MB.ExceptionalPreds = LB.ExceptionalPreds;
 
-    for (const auto &LOp : LB.Ops) {
+    size_t BoundaryIndex = 0;
+    for (size_t LowOpIndex = 0; LowOpIndex < LB.Ops.size(); ++LowOpIndex) {
+      const LowOp &LOp = LB.Ops[LowOpIndex];
+      while (BoundaryIndex < LB.InstructionBoundaries.size()) {
+        const LowInstructionBoundary &Boundary =
+            LB.InstructionBoundaries[BoundaryIndex];
+        if (Boundary.FirstOp > LowOpIndex ||
+            LowOpIndex - Boundary.FirstOp < Boundary.OpCount)
+          break;
+        ++BoundaryIndex;
+      }
+
       MedOp MOp;
       MOp.Opcode = LOp.Opcode;
       MOp.Addr = LOp.Addr;
-      if (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL)
+      if (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL) {
         MOp.CallSiteId = NextCallSiteId++;
+        if (BoundaryIndex < LB.InstructionBoundaries.size()) {
+          const LowInstructionBoundary &Boundary =
+              LB.InstructionBoundaries[BoundaryIndex];
+          if (Boundary.FirstOp <= LowOpIndex &&
+              LowOpIndex - Boundary.FirstOp < Boundary.OpCount)
+            MOp.DoesNotReturn = hasLowInstructionControlFlag(
+                Boundary.ControlFlags, LowInstructionControlFlag::NoReturn);
+        }
+      }
 
       if (LOp.Output.Size > 0)
         MOp.Output = ndVarToMedVar(LOp.Output);
@@ -242,6 +262,14 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
 
   simplifyCfg(Func);
   debugVerifyMedFunc(Func, "simplifyCfg");
+
+  // ARM predication is flattened in LowIR as an instruction-local guard plus
+  // its same-address effects.  Materialize that micro-CFG before SSA so the
+  // skip path keeps the incoming architectural registers while the effect path
+  // receives the new definitions.  Doing this in the LLVM emitter would be too
+  // late: SSA would already have treated every effect as unconditional.
+  materializePredicatedEffects(Func);
+  debugVerifyMedFunc(Func, "materializePredicatedEffects");
 
   // Apple clang's prologue stack-probe (____chkstk_darwin) is modeled as an
   // ordinary call returning in x0; clear that spurious output before SSA so its

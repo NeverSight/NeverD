@@ -72,6 +72,76 @@ struct ExceptionInfo {
   /// Objective-C runtimes.
   std::optional<ObjCRuntimeInfo> ObjCRuntime;
 
+  /// Image-owned parse state (frame sections, directories, and other records
+  /// that are not attributable to one function).  Function contributions are
+  /// folded in by \ref rebuildParseSummary instead of being irreversibly
+  /// merged here.  This and the summary bookkeeping are appended after the
+  /// original data fields so positional aggregate initializers stay valid.
+  std::optional<ExceptionDecodeState> StructuralDecode;
+
+  /// Compatibility-summary boundary used to absorb contributions from older
+  /// decoders.  Consumers should treat these fields as rebuild bookkeeping.
+  size_t AggregatedDiagnosticCount = 0;
+  ExceptionParseStatus AggregatedParseStatus = ExceptionParseStatus::Complete;
+  bool HasAggregatedSummary = false;
+
+  /// Preserve the compatibility state of decoders that have not adopted
+  /// structured provenance yet.
+  ///
+  /// Once a summary has been rebuilt, later legacy decoders can still append
+  /// image diagnostics and raise its status.  The recorded boundary captures
+  /// exactly that appended suffix before the next rebuild, without inspecting
+  /// or deleting diagnostic text.  Function-owned status remains represented
+  /// by the functions themselves.
+  void captureUnstructuredParseContributions() {
+    if (!StructuralDecode) {
+      StructuralDecode.emplace();
+      StructuralDecode->ParseStatus = ParseStatus;
+      StructuralDecode->Diagnostics = Diagnostics;
+      AggregatedDiagnosticCount = Diagnostics.size();
+      AggregatedParseStatus = ParseStatus;
+      HasAggregatedSummary = true;
+      return;
+    }
+
+    if (HasAggregatedSummary &&
+        Diagnostics.size() > AggregatedDiagnosticCount) {
+      StructuralDecode->Diagnostics.insert(
+          StructuralDecode->Diagnostics.end(),
+          Diagnostics.begin() + AggregatedDiagnosticCount, Diagnostics.end());
+    }
+
+    ExceptionParseStatus FunctionStatus = ExceptionParseStatus::Complete;
+    for (const ExceptionFunction &F : Functions)
+      FunctionStatus = mergeExceptionParseStatus(FunctionStatus, F.ParseStatus);
+    const ExceptionParseStatus ExplainedStatus =
+        mergeExceptionParseStatus(AggregatedParseStatus, FunctionStatus);
+    if (static_cast<unsigned>(ParseStatus) >
+        static_cast<unsigned>(ExplainedStatus))
+      StructuralDecode->mergeStatus(ParseStatus);
+  }
+
+  ExceptionDecodeState &structuralDecodeState() {
+    captureUnstructuredParseContributions();
+    return *StructuralDecode;
+  }
+
+  /// Recompute compatibility status and diagnostics from their owners.
+  void rebuildParseSummary() {
+    if (!StructuralDecode)
+      return;
+    ParseStatus = StructuralDecode->ParseStatus;
+    Diagnostics = StructuralDecode->Diagnostics;
+    for (const ExceptionFunction &F : Functions) {
+      ParseStatus = mergeExceptionParseStatus(ParseStatus, F.ParseStatus);
+      Diagnostics.insert(Diagnostics.end(), F.Diagnostics.begin(),
+                         F.Diagnostics.end());
+    }
+    AggregatedDiagnosticCount = Diagnostics.size();
+    AggregatedParseStatus = ParseStatus;
+    HasAggregatedSummary = true;
+  }
+
   /// Section offset -> index into \ref CIEs.
   const DwarfCIE *findCIE(uint64_t SectionOffset) const {
     for (const DwarfCIE &CIE : CIEs)

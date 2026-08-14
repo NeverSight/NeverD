@@ -37,8 +37,8 @@ CLI 在 `tools/neverd` 解析命令、建立 `neverd_session_t`，並呼叫
 `include/neverd/sdk/NeverDCAPI.h` 中的公開 API。引擎狀態位於
 `lib/sdk/SessionImpl.h`；`neverd_session_load` 選擇 loader 並建立
 `BinaryImage`，以 IR 為基礎的操作則按需執行 `lib/pipeline/Pipeline.cpp`。
-`neverd` 可執行檔連結 `neverd_shared`；元件歸檔及其 LLVM/Capstone 相依仍是
-該共享程式庫的私有實作細節。CLI 仍使用 LLVM Support 建立命令列介面，
+`neverd` 可執行檔連結 `neverd_shared`；元件歸檔及其 LLVM/Capstone 相依是
+該共享程式庫的私有實作細節。CLI 使用 LLVM Support 建立命令列介面，
 但不會繞過 C API 驅動引擎。
 
 ## IR 表示與路徑
@@ -61,6 +61,91 @@ CLI 在 `tools/neverd` 解析命令、建立 `neverd_session_t`，並呼叫
 `lib/pipeline/Pipeline.cpp` 是路徑選擇的事實來源。特定表示的邏輯應留在其
 所屬 IR 或 backend 程式庫；pipeline 應編排元件，而不是吸收其演算法。
 
+## 跨架構翻譯契約
+
+`include/neverd/translate` 定義的是契約層，而不是執行後端。`GuestState`
+為 `x86_32`、`x86_64`、`AArch64` 與 `ARM32` 建模架構無關的機器可見狀態。
+其規範的版本 1 序列化採用固定寬度的小端欄位、穩定的暫存器 ID、排序集合與
+失敗即關閉的驗證，因此持久化狀態不依賴主機 C++ 配置。
+
+`GuestState` 的 wire v1 基線永久凍結。基線以外的機器狀態只能使用擴充區間內的
+extension-register ID，並搭配規範的小寫名稱；否則必須採用新的 wire 版本並提供
+明確的 upgrader，禁止就地變更 v1 基線。
+
+對於 `ARM32` guest，`ExecutionMode` 是權威解碼模式，且必須與 `CPSR.T` 一致。
+儲存的 PC 一律是清除 bit 0 後的規範指令位址；ARM 模式還要求按字對齊。
+
+架構對策略定義 `x86_64 -> AArch64`、`AArch64 -> x86_64`、
+`x86_32 -> AArch64/ARM32` 與 `ARM32 -> x86_32/x86_64`。
+`ContractDefined` 表示請求可以驗證並持久化，不表示程式碼已能翻譯或執行。
+JIT 策略只接受執行中程序的原生主機；AOT 策略則要求明確提供主機架構、目標
+triple；若選擇了 CPU 或特性集合，也必須明確提供。
+
+帶版本的 `TranslationExit` 記錄穩定的停止原因及其對應的型別化承載資料，涵蓋
+系統呼叫、例外或訊號、斷點、不支援的指令、自我修改、資源預算、外部呼叫、
+記憶體錯誤及其他終止條件。使用者不必再依停止原因重新解讀無型別整數。
+
+無論停止原因為何，結果回報的指令數、block 數與產生程式碼量都不得超過請求中
+對應的非零預算。`BudgetExhausted` 承載資料還必須精確識別該請求預算的 limit，
+不得回報推導值或實作私有門檻。
+
+backend-private `RuntimeControlBlockV1` 契約固定為 128 位元組、8 位元組
+對齊，並以固定的 v1 magic、version、size、欄位偏移、全零保留欄位與自洽的型別化
+退出記錄加以約束。它不包含 C++ 容器、主機指標或 guest 位址別名，也不是
+`GuestState` 的 C++ 配置或 wire 格式；實作該契約的後端必須明確將狀態轉換到此記錄。
+
+固定的 v1 generated-code 呼叫面只包含八個 helper：
+`nvd_rt_v1_load8_le`、`nvd_rt_v1_load16_le`、`nvd_rt_v1_load32_le`、
+`nvd_rt_v1_load64_le`、`nvd_rt_v1_store8_le`、`nvd_rt_v1_store16_le`、
+`nvd_rt_v1_store32_le` 與 `nvd_rt_v1_store64_le`。名稱、簽章與指標 provenance
+必須精確相符；後端必須明確綁定此有限表，絕不能退回環境符號解析。可執行記憶體
+generation 驗證與預算/取消輪詢只由受信任 dispatcher 執行；
+`nvd_rt_v1_validate_generation` 與 `nvd_rt_v1_poll` 均不是 generated-code helper。
+受信任主機 dispatcher 也負責選擇 block，產生 IR 不能呼叫它；translated block
+只回傳型別化退出碼。產生 IR 只能直接讀取已宣告的 scalar-result runtime slot。
+
+`GuestMemoryRuntime` 與邏輯 `GuestState` 隔離：建構時先驗證狀態，再將記憶體區域
+的位元組與中繼資料複製到排序的私有索引。guest 虛擬位址只作為查找鍵，絕不轉換
+為主機指標。受檢純量存取會以型別化形式回報寬度、對齊、溢位、未映射、跨區域、
+權限、可執行寫入、generation 溢位、generation 不符與策略錯誤。指令/block 預算、
+取消、generation 追蹤，以及 `RejectExecutableWrites`、
+`InvalidateOnExecutableWrite`、`ValidateBeforeDispatch` 三種程式碼寫入策略同樣產生
+自洽的型別化記錄，而非隱式主機行為。
+
+post-codegen verifier 將 relocatable ELF、COFF、Mach-O 目標檔視為
+閉集合稽核。格式與架構必須和選定主機精確相符；未定義符號必須精確屬於有限
+helper allowlist，動態符號一律禁止。relocation 採用明確直接白名單，並檢查
+encoding、width、alignment、offset、可載入目的區段，以及目標是否為目標檔內
+non-preemptible 定義或精確獲准的 helper。verifier 拒絕 W+X、例外/展開與初始化
+中繼資料、TLS、IFUNC、GOT/PLT 與其他間接機制、動態 relocation、
+weak/preemptible 或可選擇定義、未知 allocated section 與 linker directive。ELF
+`ET_REL` 成品不得包含 program header 或 segment。Mach-O load command 採用正向
+白名單：必須且只能有一個位寬相符的 segment，symbol table、dynamic-symbol table、
+platform-version 與 data-in-code command 各至多一個，並檢查相依關係；linker option
+與其他所有 command 均拒絕。
+
+runtime、memory、IR 與目標檔稽核實作定義並驗證這些邊界。它們不構成完整的
+可執行翻譯後端、完整的跨架構翻譯流水線或完整的端到端例外重寫。本節描述契約與
+verifier 的作用範圍，不宣稱具備產生、連結、載入、執行、JIT、AOT 或例外重寫的
+端到端能力。
+
+產生 IR 的契約要求受該契約約束的每個 translated block 都是 hidden、non-preemptible，
+並採用 C ABI `i32 (ptr state, ptr runtime)`。runtime 只能透過私有登錄表發現 block，
+不得依賴程序環境的符號查找；禁止 block 之間直接呼叫。
+
+IR verifier 也會把整數寬度限制在主機純量暫存器寬度以內，以避免 legalization
+引入已知的 compiler-runtime libcall。這項檢查只是必要條件：任何實作該契約的執行
+後端都必須依同一個有限的 runtime-symbol allowlist，精確稽核 post-codegen 控制轉移、
+`MachineIR` 與目標檔 relocation。
+
+TranslationIR 的直接 load/store，以及 private constant 儲存的值，只能包含單一、
+不寬於主機純量暫存器寬度的純量整數。聚合值必須在 verifier 邊界前完成純量化，
+避免緊湊 IR 觸發後端無界展開。
+
+generated-code ABI 只為純量整數定義。浮點、SIMD、x87、原子操作與系統指令均在
+該契約之外。選擇 `ProvenSemanticAndLLVM` 策略的實作必須執行 NeverD 現有的證明
+閘控語意簡化，並與 LLVM 最佳化共同達到不動點；該策略本身不提供可執行翻譯後端。
+
 ## 元件對照
 
 每個元件都是由 `add_neverd_component_library` 建立的靜態歸檔。下表列出重要的
@@ -82,6 +167,7 @@ NeverD 相依，不窮舉 CMake helper 統一提供的 LLVM 與 Capstone 程式�
 | `lib/sigs` | 簽章解析、資料庫與比對 | Loader |
 | `lib/libc` | 已知 libc 名稱與呼叫模型支援 | 獨立元件 |
 | `lib/support` | 共用二進位載入 helper | Loader |
+| `lib/translate` | 帶版本的 guest state/策略/退出、固定 runtime ABI、受檢 guest memory，以及產生 IR/目標檔稽核契約；執行後端實作不屬於此元件 | IR、LLVM 與 LLVM Object 契約 |
 
 公開標頭在 `include/neverd` 下對應這些區域。不要意外讓內部 C++ 類別成為 SDK
 的一部分：穩定的外部操作應放在純 C 標頭及職責明確的
@@ -124,7 +210,8 @@ NeverD 相依，不窮舉 CMake helper 統一提供的 LLVM 與 Capstone 程式�
 ### 支援範圍與測試深度
 
 根目錄支援矩陣表示每個單元格皆已實作；這不代表每個 opcode、ABI 邊界案例、
-二進位產生器或作業系統版本都已窮盡測試。嚴格模式是尚未涵蓋指令的護欄。
+二進位產生器或作業系統版本都已窮盡測試。指令語意超出 lifter 已實作涵蓋範圍時，
+嚴格模式會以失敗即關閉方式停止。
 
 所有 12 個格式×架構單元格都在
 `unittests/semantic/PatchFullSubstRTTests.cpp` 中具有語意重寫後端覆蓋。
@@ -145,21 +232,21 @@ NeverD 相依，不窮舉 CMake helper 統一提供的 LLVM 與 Capstone 程式�
 - `*` Mach-O 已連結 fixture 依賴能產生所需目標的主機工具鏈。現代 macOS 無法
   連結歷史 i386 可執行檔，因此 i386 使用 PIC 與 no-PIC thin 物件加重寫網格。
 
-對這些代表性程式，應將已連結 fixture 單元格視為目前最強的格式整合證據。
+對這些代表性程式，應將已連結 fixture 單元格視為最強的格式整合證據。
 物件流水線與後端網格單元格只有部分格式整合覆蓋。沒有任何單元格能在不加限定時
 稱為「完全測試」，也沒有單元格宣稱窮盡 ISA 覆蓋。
 
 主要證據包括：用於已連結 ELF 與 PE fixture 的
-[`PatchFormatTests.cpp`](../unittests/lift/PatchFormatTests.cpp)，用於 Windows ARM
+[`PatchFormatTests.cpp`](../unittests/lift/format/PatchFormatTests.cpp)，用於 Windows ARM
 載入/反編譯的
-[`COFFARMFormatTests.cpp`](../unittests/lift/COFFARMFormatTests.cpp)，用於 i386 thin
+[`COFFARMFormatTests.cpp`](../unittests/lift/format/COFFARMFormatTests.cpp)，用於 i386 thin
 物件的
-[`MachOI386RelocationTests.cpp`](../unittests/lift/MachOI386RelocationTests.cpp)，
+[`MachOI386RelocationTests.cpp`](../unittests/lift/format/MachOI386RelocationTests.cpp)，
 用於已連結 Mach-O 的
-[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/X86_64_PipelineE2ETests.cpp) 與
-[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/AArch64_PipelineE2ETests.cpp)，
+[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/x86_64/X86_64_PipelineE2ETests.cpp) 與
+[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/aarch64/AArch64_PipelineE2ETests.cpp)，
 以及涵蓋 12 單元後端網格的
-[`PatchFullSubstRTTests.cpp`](../unittests/semantic/PatchFullSubstRTTests.cpp)。
+[`PatchFullSubstRTTests.cpp`](../unittests/semantic/probe/patchfull/PatchFullSubstRTTests.cpp)。
 命令見[測試指南](testing.zh-TW.md)。
 
 ## 在哪裡修改

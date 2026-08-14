@@ -9,6 +9,10 @@ add_neverd_component_library(NeverDCodeGen
   CodeGenSymbolize.cpp
   CodeGenX86.cpp
   CompiledImage.cpp
+  DwarfEHFrame.cpp
+  ExceptionRewriteContract.cpp
+  ELF/ELFARMEHABIEncode.cpp
+  ELF/ELFARMEHABIPatch.cpp
   ELF/ELFExceptionPatch.cpp
   ELF/ELFInplace.cpp
   ELF/ELFPatch.cpp

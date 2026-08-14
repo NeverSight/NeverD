@@ -15,11 +15,13 @@
 
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"
 
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 namespace neverd {
 
@@ -75,6 +77,51 @@ inline ELFHeaderInfo parseELFHeader(const uint8_t *Data, size_t Size) {
     Info.ShStrNdx = EH->e_shstrndx;
   }
   return Info;
+}
+
+/// Parse an ELF image only when both header tables can be traversed as whole
+/// native entries.  The lightweight helpers below intentionally stop at a
+/// truncated entry; format patchers need the stronger guarantee that a
+/// partial traversal cannot be mistaken for the complete image layout.
+inline bool validateELFHeaderTables(const uint8_t *Data, size_t Size,
+                                    ELFHeaderInfo &Info) {
+  if (Size < llvm::ELF::EI_NIDENT ||
+      (Data[llvm::ELF::EI_CLASS] != llvm::ELF::ELFCLASS32 &&
+       Data[llvm::ELF::EI_CLASS] != llvm::ELF::ELFCLASS64) ||
+      Data[llvm::ELF::EI_DATA] != llvm::ELF::ELFDATA2LSB ||
+      Data[llvm::ELF::EI_VERSION] != llvm::ELF::EV_CURRENT)
+    return false;
+
+  Info = parseELFHeader(Data, Size);
+  const uint64_t ExpectedHeaderSize = Info.Is64
+                                          ? sizeof(llvm::object::ELF64LE::Ehdr)
+                                          : sizeof(llvm::object::ELF32LE::Ehdr);
+  const uint64_t ExpectedPhdrSize = Info.Is64
+                                        ? sizeof(llvm::object::ELF64LE::Phdr)
+                                        : sizeof(llvm::object::ELF32LE::Phdr);
+  const uint64_t ExpectedShdrSize = Info.Is64
+                                        ? sizeof(llvm::object::ELF64LE::Shdr)
+                                        : sizeof(llvm::object::ELF32LE::Shdr);
+  if (Info.HeaderSize != ExpectedHeaderSize || Info.PhNum == 0 ||
+      Info.ShNum == 0 || Info.ShStrNdx == 0 || Info.ShStrNdx >= Info.ShNum ||
+      Info.PhEntSize != ExpectedPhdrSize || Info.ShEntSize != ExpectedShdrSize)
+    return false;
+
+  const uint16_t DeclaredHeaderSize =
+      Info.Is64
+          ? static_cast<uint16_t>(
+                reinterpret_cast<const llvm::object::ELF64LE::Ehdr *>(Data)
+                    ->e_ehsize)
+          : static_cast<uint16_t>(
+                reinterpret_cast<const llvm::object::ELF32LE::Ehdr *>(Data)
+                    ->e_ehsize);
+  if (DeclaredHeaderSize != ExpectedHeaderSize)
+    return false;
+
+  const uint64_t PhdrBytes = static_cast<uint64_t>(Info.PhNum) * Info.PhEntSize;
+  const uint64_t ShdrBytes = static_cast<uint64_t>(Info.ShNum) * Info.ShEntSize;
+  return rangeInBounds(Info.PhOff, PhdrBytes, Size) &&
+         rangeInBounds(Info.ShOff, ShdrBytes, Size);
 }
 
 struct ELFPhdrFields {
@@ -168,6 +215,26 @@ struct ELFShdrFields {
   uint64_t EntSize = 0;
 };
 
+/// Read one exact NUL-terminated name from an ELF string-table section.
+/// A suffix that merely reaches the end of the section is not a string: ELF
+/// section names are offsets into a table of terminated byte strings.
+inline std::optional<llvm::StringRef>
+readELFSectionName(const uint8_t *Data, size_t Size,
+                   const ELFShdrFields &StringTable, uint32_t NameOffset) {
+  if (StringTable.Type != llvm::ELF::SHT_STRTAB ||
+      !rangeInBounds(StringTable.Offset, StringTable.Size, Size) ||
+      NameOffset >= StringTable.Size)
+    return std::nullopt;
+  const char *Begin =
+      reinterpret_cast<const char *>(Data + StringTable.Offset + NameOffset);
+  const size_t Remaining = static_cast<size_t>(StringTable.Size - NameOffset);
+  const void *Terminator = std::memchr(Begin, 0, Remaining);
+  if (!Terminator)
+    return std::nullopt;
+  const char *End = static_cast<const char *>(Terminator);
+  return llvm::StringRef(Begin, static_cast<size_t>(End - Begin));
+}
+
 inline ELFShdrFields readELFShdr(const uint8_t *SH, bool Is64) {
   ELFShdrFields F;
   if (Is64) {
@@ -245,21 +312,18 @@ inline bool findELFSection(const uint8_t *Data, size_t Size,
   if (!rangeInBounds(ShStrOff, Hdr.ShEntSize, Size))
     return false;
   auto ShStr = readELFShdr(Data + ShStrOff, Hdr.Is64);
-  if (!rangeInBounds(ShStr.Offset, ShStr.Size, Size))
+  if (ShStr.Type != llvm::ELF::SHT_STRTAB ||
+      !rangeInBounds(ShStr.Offset, ShStr.Size, Size))
     return false;
-
-  const char *StrTab = reinterpret_cast<const char *>(Data + ShStr.Offset);
 
   bool Found = false;
   forEachELFShdr(Data, Size, [&](const ELFShdrFields &F, uint16_t) {
     if (Found)
       return;
-    if (F.Name >= ShStr.Size)
+    auto Name = readELFSectionName(Data, Size, ShStr, F.Name);
+    if (!Name)
       return;
-    llvm::StringRef Name(StrTab + F.Name,
-                         static_cast<size_t>(ShStr.Size - F.Name));
-    Name = Name.split('\0').first;
-    if (Name == SectionName) {
+    if (*Name == SectionName) {
       Out = F;
       Found = true;
     }

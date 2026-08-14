@@ -35,5 +35,31 @@ operations; pass `include_expressions=True` to include path predicates. Calls
 without summaries and stores through unresolved addresses are conservative
 approximations, so they make `exact` false and contribute to `unmodelled_ops`.
 
+Proof-gated synthesis and transactional LLVM optimization are also available
+without a session:
+
+```python
+from neverd_plugin import optimize_llvm_ir, synthesize_expression
+
+rewrite = synthesize_expression("(x >> 4) + ((x >> 2) >> 2)")
+optimized = optimize_llvm_ir(llvm_ir, enable_synthesis=True)
+```
+
+Every committed synthesis rewrite has an equivalent solver proof. Distinct
+search and proof counters explain refusals; malformed proof questions report
+`ProofStatus.INVALID` instead of the budget-driven `ProofStatus.UNKNOWN`, and
+both fail closed. On the expression APIs,
+`exhaustive=True` also removes the native parser's nesting and width policy
+ceilings; simplification selects the unlimited MBA work/arity policy, while
+synthesis removes search and solver ceilings without changing its grammar.
+Physical resources and IR representation bounds still apply. LLVM optimization
+runs on a transaction clone and exposes only a verified, committed module. The
+older `simplify_expression` API remains MBA-only for ABI compatibility.
+
+Runnable host examples live under `examples/`: `minimal.py`,
+`analysis_report.py`, and `semantic_optimizer.py`. The last one exercises both
+proof-gated synthesis and the transactional LLVM pipeline through the same API
+available to third-party plugins.
+
 Python 3.10 or newer is supported. This package and NeverD are licensed under
 the GNU Affero General Public License, version 3 only.

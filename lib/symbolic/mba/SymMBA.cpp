@@ -410,7 +410,22 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
 
   Result.Work = Budget.used();
   SymRef Out = Solved.lookup(E.index());
-  if (Out == E) {
+
+  // Every layer refused to grow and every layer was checked on its own, but
+  // what the caller receives is the composition of all of them, and that is
+  // what its options were about.  Applying both gates once more over the whole
+  // rewrite costs a cached cost lookup and the sample count that was asked
+  // for, and it is the only place either gate sees the expression the caller
+  // actually handed over rather than a layer of it.
+  bool Kept = Out != E;
+  if (Kept && !Opts.AllowGrowth && readingCost(Ctx, Out) > Result.SizeBefore)
+    Kept = false;
+  if (Kept) {
+    const bool Verified = agreeOnSamples(Ctx, E, Out, Opts.VerifySamples);
+    assert(Verified && "a layered MBA rewrite disagreed with what it replaces");
+    Kept = Verified;
+  }
+  if (!Kept) {
     // Running out of budget with regions left unvisited is the one refusal that
     // says nothing about the expression, so it outranks the others.
     if (Skipped)

@@ -6,13 +6,42 @@
 
 #include "neverd/sigs/PatternParser.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/raw_ostream.h"
 
-#include <cctype>
-#include <fstream>
+#include <string>
 
 using namespace neverd::sigs;
+
+namespace {
+
+bool isIgnorablePatternLine(llvm::StringRef Line) {
+  Line = Line.trim();
+  return Line.empty() || Line.starts_with(";") || Line.starts_with("#") ||
+         Line == "---";
+}
+
+llvm::Expected<std::vector<PatternModule>>
+parsePatternTextStrict(llvm::StringRef Text) {
+  std::vector<PatternModule> Modules;
+  llvm::SmallVector<llvm::StringRef, 0> Lines;
+  Text.split(Lines, '\n');
+
+  for (size_t I = 0; I < Lines.size(); ++I) {
+    if (isIgnorablePatternLine(Lines[I]))
+      continue;
+    auto ModOrErr = PatternParser::parseLine(Lines[I]);
+    if (!ModOrErr)
+      return llvm::make_error<llvm::StringError>(
+          "pattern line " + std::to_string(I + 1) + ": " +
+              llvm::toString(ModOrErr.takeError()),
+          llvm::inconvertibleErrorCode());
+    Modules.push_back(std::move(*ModOrErr));
+  }
+  return Modules;
+}
+
+} // namespace
 
 bool PatternParser::parseHexByte(llvm::StringRef Hex, uint8_t &Out) {
   if (Hex.size() != 2)
@@ -59,7 +88,7 @@ llvm::Expected<PatternModule> PatternParser::parseLine(llvm::StringRef Line) {
 
   // Split into tokens by whitespace.
   llvm::SmallVector<llvm::StringRef, 16> Tokens;
-  Line.split(Tokens, ' ', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  llvm::SplitString(Line, Tokens);
 
   if (Tokens.size() < 4)
     return llvm::make_error<llvm::StringError>("too few fields in pattern line",
@@ -93,34 +122,60 @@ llvm::Expected<PatternModule> PatternParser::parseLine(llvm::StringRef Line) {
                                                    Tokens[3].str(),
                                                llvm::inconvertibleErrorCode());
   Mod.TotalLen = TotalLen;
+  if (Mod.TotalLen == 0)
+    return llvm::make_error<llvm::StringError>("total length must be non-zero",
+                                               llvm::inconvertibleErrorCode());
+  if (Mod.CRCLen != 0 && (Mod.LeadingBytes.size() > Mod.TotalLen ||
+                          Mod.CRCLen > Mod.TotalLen - Mod.LeadingBytes.size()))
+    return llvm::make_error<llvm::StringError>(
+        "CRC range is outside total length", llvm::inconvertibleErrorCode());
 
-  // Remaining tokens: :offset name pairs and optional tail bytes.
+  // Remaining tokens form :offset/name pairs followed by at most one tail.
+  bool SawTail = false;
   for (size_t I = 4; I < Tokens.size(); ++I) {
+    if (Tokens[I].starts_with("^"))
+      return llvm::make_error<llvm::StringError>(
+          "reference constraint is not supported: " + Tokens[I].str(),
+          llvm::inconvertibleErrorCode());
     if (Tokens[I].starts_with(":")) {
-      // :XXXX name
+      if (SawTail)
+        return llvm::make_error<llvm::StringError>(
+            "public name follows the tail pattern",
+            llvm::inconvertibleErrorCode());
       auto OffStr = Tokens[I].drop_front(1);
       unsigned Off;
-      if (OffStr.getAsInteger(16, Off))
-        continue;
-      if (I + 1 < Tokens.size() && !Tokens[I + 1].starts_with(":") &&
-          !Tokens[I + 1].starts_with("..")) {
-        FuncRef Ref;
-        Ref.Offset = Off;
-        Ref.Name = Tokens[I + 1].str();
-        Mod.PublicNames.push_back(std::move(Ref));
-        ++I;
-      }
-    } else if (Tokens[I].starts_with("..") ||
-               (Tokens[I].size() >= 2 &&
-                std::isxdigit(
-                    static_cast<unsigned char>(Tokens[I][0])) &&
-                std::isxdigit(
-                    static_cast<unsigned char>(Tokens[I][1])))) {
-      // Tail bytes pattern (after the public names).
-      auto TailOrErr = parseHexPattern(Tokens[I]);
-      if (TailOrErr)
-        Mod.TailBytes = std::move(*TailOrErr);
+      if (OffStr.empty() || OffStr.getAsInteger(16, Off))
+        return llvm::make_error<llvm::StringError>(
+            "invalid public name offset: " + Tokens[I].str(),
+            llvm::inconvertibleErrorCode());
+      if (Off >= Mod.TotalLen)
+        return llvm::make_error<llvm::StringError>(
+            "public name offset is outside total length",
+            llvm::inconvertibleErrorCode());
+      if (I + 1 >= Tokens.size() || Tokens[I + 1].starts_with(":") ||
+          Tokens[I + 1].starts_with("^") || Tokens[I + 1].starts_with(".."))
+        return llvm::make_error<llvm::StringError>(
+            "public name is missing after offset: " + Tokens[I].str(),
+            llvm::inconvertibleErrorCode());
+
+      FuncRef Ref;
+      Ref.Offset = Off;
+      Ref.Name = Tokens[++I].str();
+      Mod.PublicNames.push_back(std::move(Ref));
+      continue;
     }
+
+    if (SawTail)
+      return llvm::make_error<llvm::StringError>(
+          "unexpected field after the tail pattern: " + Tokens[I].str(),
+          llvm::inconvertibleErrorCode());
+    auto TailOrErr = parseHexPattern(Tokens[I]);
+    if (!TailOrErr)
+      return llvm::make_error<llvm::StringError>(
+          "invalid tail pattern: " + llvm::toString(TailOrErr.takeError()),
+          llvm::inconvertibleErrorCode());
+    Mod.TailBytes = std::move(*TailOrErr);
+    SawTail = true;
   }
 
   if (Mod.PublicNames.empty())
@@ -131,6 +186,11 @@ llvm::Expected<PatternModule> PatternParser::parseLine(llvm::StringRef Line) {
 }
 
 llvm::Expected<std::vector<PatternModule>>
+PatternParser::parseText(llvm::StringRef Text) {
+  return parsePatternTextStrict(Text);
+}
+
+llvm::Expected<std::vector<PatternModule>>
 PatternParser::parseFile(const std::filesystem::path &Path) {
   auto BufOrErr = llvm::MemoryBuffer::getFile(Path.string());
   if (!BufOrErr)
@@ -138,20 +198,5 @@ PatternParser::parseFile(const std::filesystem::path &Path) {
                                                    Path.string(),
                                                llvm::inconvertibleErrorCode());
 
-  std::vector<PatternModule> Modules;
-  llvm::StringRef Content = (*BufOrErr)->getBuffer();
-
-  llvm::SmallVector<llvm::StringRef, 0> Lines;
-  Content.split(Lines, '\n');
-
-  for (const auto &Line : Lines) {
-    auto ModOrErr = parseLine(Line);
-    if (!ModOrErr) {
-      llvm::consumeError(ModOrErr.takeError());
-      continue;
-    }
-    Modules.push_back(std::move(*ModOrErr));
-  }
-
-  return Modules;
+  return parseText((*BufOrErr)->getBuffer());
 }

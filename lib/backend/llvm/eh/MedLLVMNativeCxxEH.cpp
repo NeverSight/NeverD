@@ -12,6 +12,7 @@
 #include "MedLLVMEHHelpers.h"
 
 #include "neverd/Common.h"
+#include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -27,6 +28,7 @@
 #include "llvm/IR/Metadata.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -52,6 +54,16 @@ bool MedLLVMEmitter::emitNativeCxxEH(
        EH.Encoding != ExceptionEncoding::X64UnwindV2))
     return false;
   const CxxExceptionInfo &Cxx = *EH.Cxx;
+
+  if (!med_llvm_eh::collectExactSourceCallAddresses(LLVMFunc, CallSiteAddrs))
+    return false;
+  auto *I8Ty = llvm::Type::getInt8Ty(*Ctx);
+  auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
+  auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
+  auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
+  if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+          *Mod, "__CxxFrameHandler3", PersonalityTy))
+    return false;
 
   // This native closure is intentionally exact and narrow.  Destructors,
   // catch-object frame homes, noexcept, asynchronous /EHa, and out-of-line
@@ -102,7 +114,10 @@ bool MedLLVMEmitter::emitNativeCxxEH(
       if (Block.StartAddr != Address)
         continue;
       auto It = OriginalBlockMap.find(Block.Id);
-      return It == OriginalBlockMap.end() ? nullptr : It->second;
+      if (It == OriginalBlockMap.end() || !It->second ||
+          It->second->getParent() != &LLVMFunc)
+        return nullptr;
+      return It->second;
     }
     return nullptr;
   };
@@ -133,7 +148,8 @@ bool MedLLVMEmitter::emitNativeCxxEH(
       if (State < Try.TryLow || State > Try.TryHigh)
         continue;
       auto It = OriginalBlockMap.find(Block.Id);
-      if (It == OriginalBlockMap.end())
+      if (It == OriginalBlockMap.end() || !It->second ||
+          It->second->getParent() != &LLVMFunc)
         return false;
       R.Blocks.insert(It->second);
     }
@@ -214,10 +230,65 @@ bool MedLLVMEmitter::emitNativeCxxEH(
   if (MayUnwindCalls == 0)
     return false;
 
-  auto *I8Ty = llvm::Type::getInt8Ty(*Ctx);
-  auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
-  auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
-  auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
+  // Finish the complete rejection plan before creating type globals,
+  // personality declarations, funclets, or CFG edges. The commit phase below
+  // has no failure exits and consumes only these preflighted call pointers.
+  struct CallPlan {
+    llvm::CallInst *Call = nullptr;
+    size_t RegionIndex = 0;
+  };
+  llvm::SmallVector<CallPlan, 16> CallPlans;
+  std::set<const llvm::CallInst *> PlannedCalls;
+  for (const MedBlock &MedBB : Func.Blocks) {
+    auto BBIt = OriginalBlockMap.find(MedBB.Id);
+    if (BBIt == OriginalBlockMap.end())
+      continue;
+    llvm::BasicBlock *InitialBB = BBIt->second;
+    if (!InitialBB || InitialBB->getParent() != &LLVMFunc)
+      return false;
+
+    int Innermost = -1;
+    size_t InnermostSize = std::numeric_limits<size_t>::max();
+    for (size_t I = 0; I < Regions.size(); ++I) {
+      if (!Regions[I].Blocks.count(InitialBB) ||
+          Regions[I].Blocks.size() >= InnermostSize)
+        continue;
+      Innermost = static_cast<int>(I);
+      InnermostSize = Regions[I].Blocks.size();
+    }
+    if (Innermost < 0)
+      continue;
+
+    for (llvm::Instruction &Inst : *InitialBB) {
+      auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+      if (!Call || !IsMayUnwindCall(*Call))
+        continue;
+      if (Call->getParent() != InitialBB || !Call->getNextNode() ||
+          CallSiteAddrs.find(Call) == CallSiteAddrs.end() ||
+          !PlannedCalls.insert(Call).second)
+        return false;
+      CallPlans.push_back({Call, static_cast<size_t>(Innermost)});
+    }
+  }
+  if (PlannedCalls != MayUnwindCallSet)
+    return false;
+  const uint64_t ProtectedCallCount = static_cast<uint64_t>(CallPlans.size());
+
+  for (const Region &R : Regions)
+    for (llvm::BasicBlock *Block : R.Blocks)
+      if (!Block || Block->getParent() != &LLVMFunc || !Block->getTerminator())
+        return false;
+
+  std::set<va_t> TypeDescriptors;
+  for (const Region &R : Regions)
+    for (const Handler &H : R.Handlers)
+      if (H.Catch->TypeDescriptorVA != 0)
+        TypeDescriptors.insert(H.Catch->TypeDescriptorVA);
+  for (va_t Address : TypeDescriptors)
+    if (!med_llvm_eh::canMaterializeExternalDataDeclaration(
+            *Mod, makeNdDataSymbol(Address), I8Ty, /*IsConstant=*/true))
+      return false;
+
   llvm::FunctionCallee Personality =
       Mod->getOrInsertFunction("__CxxFrameHandler3", PersonalityTy);
   LLVMFunc.setPersonalityFn(
@@ -263,66 +334,45 @@ bool MedLLVMEmitter::emitNativeCxxEH(
     R.UnwindDest = Dispatch;
   }
 
-  size_t ConvertedCalls = 0;
-  for (const MedBlock &MedBB : Func.Blocks) {
-    auto BBIt = OriginalBlockMap.find(MedBB.Id);
-    if (BBIt == OriginalBlockMap.end())
-      continue;
-    llvm::BasicBlock *InitialBB = BBIt->second;
-    int Innermost = -1;
-    size_t InnermostSize = std::numeric_limits<size_t>::max();
-    for (size_t I = 0; I < Regions.size(); ++I) {
-      if (!Regions[I].Blocks.count(InitialBB) ||
-          Regions[I].Blocks.size() >= InnermostSize)
-        continue;
-      Innermost = static_cast<int>(I);
-      InnermostSize = Regions[I].Blocks.size();
-    }
-    if (Innermost < 0)
-      continue;
-
-    llvm::SmallVector<llvm::CallInst *, 8> Calls;
-    for (llvm::Instruction &Inst : *InitialBB)
-      if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
-          Call && IsMayUnwindCall(*Call))
-        Calls.push_back(Call);
-    for (llvm::CallInst *Call : Calls) {
-      llvm::BasicBlock *CallBB = Call->getParent();
-      llvm::Instruction *Next = Call->getNextNode();
-      if (!Next)
-        return false;
-      llvm::BasicBlock *Cont =
-          CallBB->splitBasicBlock(Next, CallBB->getName() + ".cxx.cont");
-      llvm::Instruction *OldBranch = CallBB->getTerminator();
-      llvm::SmallVector<llvm::Value *, 8> Args;
-      for (llvm::Use &Arg : Call->args())
-        Args.push_back(Arg.get());
-      llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
-      Call->getOperandBundlesAsDefs(Bundles);
-      auto *Invoke = llvm::InvokeInst::Create(
-          Call->getFunctionType(), Call->getCalledOperand(), Cont,
-          Regions[static_cast<size_t>(Innermost)].UnwindDest, Args, Bundles,
-          Call->getName(), OldBranch->getIterator());
-      Invoke->setCallingConv(Call->getCallingConv());
-      Invoke->setAttributes(Call->getAttributes());
-      Invoke->setDebugLoc(Call->getDebugLoc());
-      Invoke->copyMetadata(*Call);
-      Call->replaceAllUsesWith(Invoke);
-      Call->eraseFromParent();
-      OldBranch->eraseFromParent();
-      for (Region &Protected : Regions)
-        if (Protected.Blocks.count(InitialBB))
-          Protected.Blocks.insert(Cont);
-      ++ConvertedCalls;
-    }
+  for (const CallPlan &Plan : CallPlans) {
+    llvm::CallInst *Call = Plan.Call;
+    llvm::BasicBlock *CallBB = Call->getParent();
+    llvm::Instruction *Next = Call->getNextNode();
+    assert(CallBB && Next && "preflighted C++ EH call changed before commit");
+    llvm::BasicBlock *Cont =
+        CallBB->splitBasicBlock(Next, CallBB->getName() + ".cxx.cont");
+    llvm::Instruction *OldBranch = CallBB->getTerminator();
+    assert(OldBranch && "split block must have a branch");
+    llvm::SmallVector<llvm::Value *, 8> Args;
+    for (llvm::Use &Arg : Call->args())
+      Args.push_back(Arg.get());
+    llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
+    Call->getOperandBundlesAsDefs(Bundles);
+    auto *Invoke = llvm::InvokeInst::Create(
+        Call->getFunctionType(), Call->getCalledOperand(), Cont,
+        Regions[Plan.RegionIndex].UnwindDest, Args, Bundles, Call->getName(),
+        OldBranch->getIterator());
+    Invoke->setCallingConv(Call->getCallingConv());
+    Invoke->setAttributes(Call->getAttributes());
+    Invoke->setDebugLoc(Call->getDebugLoc());
+    Invoke->copyMetadata(*Call);
+    Call->replaceAllUsesWith(Invoke);
+    CallSiteAddrs.erase(Call);
+    Call->eraseFromParent();
+    OldBranch->eraseFromParent();
+    for (Region &Protected : Regions)
+      if (Protected.Blocks.count(CallBB))
+        Protected.Blocks.insert(Cont);
   }
-  if (ConvertedCalls != MayUnwindCalls)
-    return false;
 
   LLVMFunc.setMetadata(
       windows_eh_md::NativeAttachment,
       llvm::MDNode::get(*Ctx, {mdUInt(*Ctx, 1, 1),
                                llvm::MDString::get(*Ctx, "cxx-fh3-native")}));
+  exception_rewrite::setContract(
+      LLVMFunc, exception_rewrite::SourceState::Complete,
+      exception_rewrite::LoweringState::Complete, ProtectedCallCount,
+      ProtectedCallCount, /*SkippedPads=*/0);
   return true;
 }
 

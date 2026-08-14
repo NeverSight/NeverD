@@ -11,6 +11,7 @@
 
 #include "MedLLVMEHHelpers.h"
 
+#include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -31,9 +32,35 @@ using med_llvm_eh::mdUInt;
 
 void MedLLVMEmitter::emitExceptionMetadata(const MedFunc &Func,
                                            llvm::Function &LLVMFunc) {
-  if (!Func.ExceptionMetadata)
+  if (!Func.ExceptionMetadata) {
+    exception_rewrite::setContract(
+        LLVMFunc, exception_rewrite::SourceState::Absent,
+        exception_rewrite::LoweringState::NotRequired);
     return;
+  }
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
+
+  exception_rewrite::SourceState Source =
+      exception_rewrite::SourceState::Complete;
+  switch (EH.ParseStatus) {
+  case ExceptionParseStatus::Complete:
+    break;
+  case ExceptionParseStatus::Partial:
+    Source = exception_rewrite::SourceState::Partial;
+    break;
+  case ExceptionParseStatus::Malformed:
+    Source = exception_rewrite::SourceState::Malformed;
+    break;
+  }
+  exception_rewrite::setContract(
+      LLVMFunc, Source,
+      EH.hasLanguageTable() ? exception_rewrite::LoweringState::Missing
+                            : exception_rewrite::LoweringState::NotRequired);
+  // The source described a native frame even when it carried no language
+  // table.  Ask the target backend for its native CFI so the object-format
+  // installer has something target-correct to register for the new frame.
+  LLVMFunc.setUWTableKind(llvm::UWTableKind::Default);
+
   auto Str = [&](llvm::StringRef Value) -> llvm::Metadata * {
     return llvm::MDString::get(*Ctx, Value);
   };

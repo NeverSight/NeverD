@@ -11,9 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
-#include "neverd/object/SectionNames.h"
+#include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/object/SectionNames.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-call"
 #include "neverd/ir/TargetRegInfo.h"
@@ -587,8 +588,20 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   // Itanium call-site ranges are tight around individual calls rather than
   // aligned to machine blocks, so the address this call came from has to
   // survive lowering for the LSDA to be able to name it.
-  if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallInst>(Result))
+  if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallInst>(Result)) {
+    llvm::Metadata *Address = llvm::ConstantAsMetadata::get(
+        llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Op.Addr));
+    Emitted->setMetadata(language_eh_md::InternalSourceCallAttachment,
+                         llvm::MDNode::get(*Ctx, {Address}));
     CallSiteAddrs[Emitted] = Op.Addr;
+  }
+
+  if (Op.DoesNotReturn) {
+    if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallBase>(Result))
+      Emitted->addFnAttr(llvm::Attribute::NoReturn);
+    Builder.CreateUnreachable();
+    return;
+  }
 
   // A direct call returning a small struct by value across multiple registers
   // (modelCallStructReturn rewrote it to a flat aggregate temp): the callee's

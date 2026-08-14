@@ -23,6 +23,8 @@
 ///   - NeverDCAPISigs.h     -- FLIRT signature matching and CRC16
 ///   - NeverDCAPIPlugin.h   -- plugin discovery, lifecycle, events
 ///   - NeverDCAPISimplify.h -- bitvector expression simplification
+///   - NeverDCAPISynth.h    -- proof-gated expression synthesis
+///   - NeverDCAPIOptimize.h -- transactional textual LLVM IR optimization
 ///
 //===----------------------------------------------------------------------===//
 
@@ -30,6 +32,7 @@
 #define NEVERD_SDK_CAPI_H
 
 #include "neverd/sdk/NeverDCAPIDisasm.h"
+#include "neverd/sdk/NeverDCAPIOptimize.h"
 #include "neverd/sdk/NeverDCAPIPatch.h"
 #include "neverd/sdk/NeverDCAPIPersist.h"
 #include "neverd/sdk/NeverDCAPIPlugin.h"
@@ -38,6 +41,7 @@
 #include "neverd/sdk/NeverDCAPISigs.h"
 #include "neverd/sdk/NeverDCAPISimplify.h"
 #include "neverd/sdk/NeverDCAPISymbolic.h"
+#include "neverd/sdk/NeverDCAPISynth.h"
 #include "neverd/sdk/NeverDCAPITypes.h"
 
 #endif // NEVERD_SDK_CAPI_H

@@ -14,10 +14,11 @@
 #include "neverd/backend/codegen/ELF/ELFPatch.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/backend/codegen/ELF/ELFARMEHABIPatch.h"
+#include "neverd/backend/codegen/ELF/ELFExceptionPatch.h"
 #include "neverd/object/ELFLayout.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
-#include "neverd/backend/codegen/ELF/ELFExceptionPatch.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -108,8 +109,8 @@ uint64_t ELFPatcher::appendExecSegment(std::vector<uint8_t> &Binary,
   uint64_t NewSegVA = alignUp(Layout.MaxVA, PageSize);
 
   // e_phnum is a uint16 field; if it is already at the maximum, adding our new
-  // PT_LOAD would wrap NewPhNum to 0, collapse PhdrTableSz, and later memcpy the
-  // old program-header table (sized from OldPhNum) past the resized buffer.
+  // PT_LOAD would wrap NewPhNum to 0, collapse PhdrTableSz, and later memcpy
+  // the old program-header table (sized from OldPhNum) past the resized buffer.
   if (OldPhNum >= 0xFFFF)
     return 0;
   uint16_t NewPhNum = OldPhNum + 1;
@@ -193,8 +194,8 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
                         : VA;
         };
         auto IsExecutable = [&](uint64_t VA) {
-          const Segment *Seg = CachedImage ? CachedImage->getSegmentFor(VA)
-                                           : nullptr;
+          const Segment *Seg =
+              CachedImage ? CachedImage->getSegmentFor(VA) : nullptr;
           return Seg && Seg->isExecutable();
         };
         auto Resolve = [&](llvm::StringRef Sym,
@@ -227,11 +228,11 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
         };
 
         // The ELF unwinder reaches a function's FDE only through the sorted
-        // table in `.eh_frame_hdr`, so regenerated records are compiled into the
-        // file-backed tail of the existing `.eh_frame` -- pinning that section's
-        // VA there makes their PC-relative fields resolve against the address
-        // they will be registered at -- and their functions are then added to
-        // the search table below.
+        // table in `.eh_frame_hdr`, so regenerated records are compiled into
+        // the file-backed tail of the existing `.eh_frame` -- pinning that
+        // section's VA there makes their PC-relative fields resolve against the
+        // address they will be registered at -- and their functions are then
+        // added to the search table below.
         std::optional<ELFEHFrameRegion> EHRegion = findELFEHFrameRegion(Binary);
         auto FixedSectionVA =
             [&](llvm::StringRef Name) -> std::optional<uint64_t> {
@@ -239,6 +240,15 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
             return EHRegion->AppendVA;
           return std::nullopt;
         };
+
+        // A 32-bit ARM runtime reaches a frame through `.ARM.exidx` rather
+        // than through the DWARF records `.eh_frame_hdr` indexes, so an EHABI
+        // image's regenerated unwind information goes into its index instead.
+        // The descriptors that index names need no fixed VA of their own: they
+        // ride along in the appended segment, and only the eight-byte entries
+        // that reach them have to fit in the image's own sorted table.
+        std::optional<ELFARMEHABIRegion> EHABIRegion =
+            findELFARMEHABIRegion(Binary);
 
         CompiledImage Img = compileImageForPatchWithFixedSectionVAs(
             Mod, TargetArch, BinaryFormat::ELF, CodeStartVA, Resolve,
@@ -249,7 +259,16 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
           return false;
         }
 
-        if (llvm::Error Err = installELFEHFrame(Binary, EHRegion, Img, Mod)) {
+        // The two models are alternatives, and which one applies is settled by
+        // what codegen produced: registering the DWARF records of an EHABI
+        // image would fail closed over a table its unwinder never reads, and
+        // registering an index the compile never emitted would fail closed
+        // over records that are perfectly good.
+        llvm::Error Err =
+            hasGeneratedELFARMEHABI(Img)
+                ? installELFARMEHABI(Binary, EHABIRegion, Img, Mod)
+                : installELFEHFrame(Binary, EHRegion, Img, Mod);
+        if (Err) {
           llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
           return false;
         }

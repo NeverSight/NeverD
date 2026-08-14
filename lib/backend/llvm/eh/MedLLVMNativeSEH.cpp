@@ -11,6 +11,7 @@
 
 #include "MedLLVMEHHelpers.h"
 
+#include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -27,6 +28,7 @@
 #include "llvm/IR/Metadata.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -38,6 +40,24 @@
 namespace neverd {
 
 using med_llvm_eh::mdUInt;
+
+namespace {
+
+bool hasSupportedX64SEHCallbackABI(const llvm::Function &Callback,
+                                   const llvm::FunctionType *ExpectedType) {
+  if (Callback.getFunctionType() != ExpectedType ||
+      Callback.getCallingConv() != llvm::CallingConv::C)
+    return false;
+
+  // Lifted image functions use ordinary external linkage.  Source-produced
+  // outlined helpers commonly use local definitions.  Discardable, weak, and
+  // available-externally bodies cannot represent an address-backed callback
+  // with stable identity.
+  return Callback.hasExternalLinkage() ||
+         (Callback.hasLocalLinkage() && !Callback.isDeclaration());
+}
+
+} // namespace
 
 bool MedLLVMEmitter::emitNativeSEH(
     const MedFunc &Func, llvm::Function &LLVMFunc,
@@ -52,6 +72,25 @@ bool MedLLVMEmitter::emitNativeSEH(
       (EH.Encoding != ExceptionEncoding::X64UnwindV1 &&
        EH.Encoding != ExceptionEncoding::X64UnwindV2))
     return false;
+
+  if (!med_llvm_eh::collectExactSourceCallAddresses(LLVMFunc, CallSiteAddrs))
+    return false;
+  auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
+  auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
+  if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+          *Mod, "__C_specific_handler", PersonalityTy))
+    return false;
+  const med_llvm_eh::I32ModuleFlagState AsyncFlagState =
+      med_llvm_eh::classifyI32ModuleFlag(*Mod, "eh-asynch",
+                                         llvm::Module::Warning, 1);
+  if (AsyncFlagState == med_llvm_eh::I32ModuleFlagState::Conflict)
+    return false;
+
+  auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
+  auto *FilterCallbackTy =
+      llvm::FunctionType::get(I32Ty, {PtrTy, PtrTy}, false);
+  auto *FinallyCallbackTy = llvm::FunctionType::get(
+      llvm::Type::getVoidTy(*Ctx), {llvm::Type::getInt8Ty(*Ctx), PtrTy}, false);
 
   struct Region {
     const SEHScopeRecord *Scope = nullptr;
@@ -72,7 +111,10 @@ bool MedLLVMEmitter::emitNativeSEH(
       if (Block.StartAddr != Address)
         continue;
       auto It = OriginalBlockMap.find(Block.Id);
-      return It == OriginalBlockMap.end() ? nullptr : It->second;
+      if (It == OriginalBlockMap.end() || !It->second ||
+          It->second->getParent() != &LLVMFunc)
+        return nullptr;
+      return It->second;
     }
     return nullptr;
   };
@@ -89,7 +131,8 @@ bool MedLLVMEmitter::emitNativeSEH(
     R.Scope = &Scope;
     if (Scope.Kind == SEHScopeKind::Finally) {
       R.Callback = FunctionAt(Scope.FilterOrFinallyVA);
-      if (!R.Callback || R.Callback == &LLVMFunc)
+      if (!R.Callback || R.Callback == &LLVMFunc ||
+          !hasSupportedX64SEHCallbackABI(*R.Callback, FinallyCallbackTy))
         return false;
     } else {
       R.Handler = BlockAt(Scope.HandlerVA);
@@ -97,7 +140,8 @@ bool MedLLVMEmitter::emitNativeSEH(
         return false;
       if (Scope.Kind == SEHScopeKind::Filter) {
         R.Callback = FunctionAt(Scope.FilterOrFinallyVA);
-        if (!R.Callback || R.Callback == &LLVMFunc)
+        if (!R.Callback || R.Callback == &LLVMFunc ||
+            !hasSupportedX64SEHCallbackABI(*R.Callback, FilterCallbackTy))
           return false;
       }
     }
@@ -114,7 +158,8 @@ bool MedLLVMEmitter::emitNativeSEH(
       if (!Scope.GuardedRange.contains(BlockRange))
         continue;
       auto It = OriginalBlockMap.find(Block.Id);
-      if (It == OriginalBlockMap.end())
+      if (It == OriginalBlockMap.end() || !It->second ||
+          It->second->getParent() != &LLVMFunc)
         return false;
       R.Blocks.insert(It->second);
       HasBegin |= Block.StartAddr == Scope.GuardedRange.Begin;
@@ -158,15 +203,79 @@ bool MedLLVMEmitter::emitNativeSEH(
     }
   }
 
-  auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
-  auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
+  // Complete every check that can reject the lowering before creating the
+  // personality, declarations, funclets, or CFG edges. The commit phase below
+  // consumes only this immutable plan and has no failure exits.
+  auto IsMayUnwindCall = [](const llvm::CallInst &Call) {
+    return !Call.doesNotThrow() && !Call.isMustTailCall() &&
+           !llvm::isa<llvm::IntrinsicInst>(Call);
+  };
+  struct CallPlan {
+    llvm::CallInst *Call = nullptr;
+    size_t RegionIndex = 0;
+  };
+
+  std::set<const llvm::CallInst *> ProtectedCalls;
+  for (const Region &R : Regions)
+    for (llvm::BasicBlock *Block : R.Blocks) {
+      if (!Block || Block->getParent() != &LLVMFunc)
+        return false;
+      for (const llvm::Instruction &Inst : *Block)
+        if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+            Call && IsMayUnwindCall(*Call))
+          ProtectedCalls.insert(Call);
+    }
+
+  llvm::SmallVector<CallPlan, 16> CallPlans;
+  std::set<const llvm::CallInst *> PlannedCalls;
+  for (const MedBlock &MedBB : Func.Blocks) {
+    auto BBIt = OriginalBlockMap.find(MedBB.Id);
+    if (BBIt == OriginalBlockMap.end())
+      continue;
+    llvm::BasicBlock *InitialBB = BBIt->second;
+    if (!InitialBB || InitialBB->getParent() != &LLVMFunc)
+      return false;
+
+    int Innermost = -1;
+    uint64_t InnermostSize = std::numeric_limits<uint64_t>::max();
+    for (size_t I = 0; I < Regions.size(); ++I) {
+      if (!Regions[I].Blocks.count(InitialBB) ||
+          Regions[I].Scope->GuardedRange.size() >= InnermostSize)
+        continue;
+      Innermost = static_cast<int>(I);
+      InnermostSize = Regions[I].Scope->GuardedRange.size();
+    }
+    if (Innermost < 0)
+      continue;
+
+    for (llvm::Instruction &Inst : *InitialBB) {
+      auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+      if (!Call || !IsMayUnwindCall(*Call))
+        continue;
+      if (Call->getParent() != InitialBB || !Call->getNextNode() ||
+          CallSiteAddrs.find(Call) == CallSiteAddrs.end() ||
+          !PlannedCalls.insert(Call).second)
+        return false;
+      CallPlans.push_back({Call, static_cast<size_t>(Innermost)});
+    }
+  }
+  if (PlannedCalls != ProtectedCalls)
+    return false;
+  const uint64_t ProtectedCallCount = static_cast<uint64_t>(CallPlans.size());
+
+  // The asynchronous marker pass walks every protected terminator and its
+  // successors. Unterminated emitter intermediates are rejected atomically.
+  for (const Region &R : Regions)
+    for (llvm::BasicBlock *Block : R.Blocks)
+      if (!Block->getTerminator())
+        return false;
+
   llvm::FunctionCallee Personality =
       Mod->getOrInsertFunction("__C_specific_handler", PersonalityTy);
   LLVMFunc.setPersonalityFn(
       llvm::cast<llvm::Constant>(Personality.getCallee()));
 
   auto *TokenNone = llvm::ConstantTokenNone::get(*Ctx);
-  auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
   for (size_t I = 0; I < Regions.size(); ++I) {
     Region &R = Regions[I];
     llvm::BasicBlock *ParentDest =
@@ -181,14 +290,11 @@ bool MedLLVMEmitter::emitNativeSEH(
       llvm::Function *LocalAddress = llvm::Intrinsic::getOrInsertDeclaration(
           Mod, llvm::Intrinsic::localaddress);
       llvm::Value *Frame = B.CreateCall(LocalAddress);
-      auto *CallbackTy =
-          llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx),
-                                  {llvm::Type::getInt8Ty(*Ctx), PtrTy}, false);
       llvm::SmallVector<llvm::Value *, 2> Args{
           llvm::ConstantInt::get(llvm::Type::getInt8Ty(*Ctx), 1), Frame};
       llvm::SmallVector<llvm::Value *, 1> BundleInputs{Pad};
       llvm::OperandBundleDef Funclet("funclet", BundleInputs);
-      B.CreateCall(CallbackTy, R.Callback, Args, {Funclet});
+      B.CreateCall(FinallyCallbackTy, R.Callback, Args, {Funclet});
       B.CreateCleanupRet(Pad, ParentDest);
       R.UnwindDest = PadBB;
       continue;
@@ -213,61 +319,37 @@ bool MedLLVMEmitter::emitNativeSEH(
     R.UnwindDest = Dispatch;
   }
 
-  // Replace may-unwind calls in each protected machine block with invokes to
-  // the innermost active region.  Non-call hardware faults are covered by the
-  // asynchronous try markers installed below.
-  for (const MedBlock &MedBB : Func.Blocks) {
-    auto BBIt = OriginalBlockMap.find(MedBB.Id);
-    if (BBIt == OriginalBlockMap.end())
-      continue;
-    llvm::BasicBlock *InitialBB = BBIt->second;
-    int Innermost = -1;
-    uint64_t InnermostSize = std::numeric_limits<uint64_t>::max();
-    for (size_t I = 0; I < Regions.size(); ++I) {
-      if (!Regions[I].Blocks.count(InitialBB) ||
-          Regions[I].Scope->GuardedRange.size() >= InnermostSize)
-        continue;
-      Innermost = static_cast<int>(I);
-      InnermostSize = Regions[I].Scope->GuardedRange.size();
-    }
-    if (Innermost < 0)
-      continue;
-
-    llvm::SmallVector<llvm::CallInst *, 8> Calls;
-    for (llvm::Instruction &Inst : *InitialBB)
-      if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst))
-        if (!Call->doesNotThrow() && !Call->isMustTailCall() &&
-            !llvm::isa<llvm::IntrinsicInst>(Call))
-          Calls.push_back(Call);
-
-    for (llvm::CallInst *Call : Calls) {
-      llvm::BasicBlock *CallBB = Call->getParent();
-      llvm::Instruction *Next = Call->getNextNode();
-      if (!Next)
-        return false;
-      llvm::BasicBlock *Cont =
-          CallBB->splitBasicBlock(Next, CallBB->getName() + ".seh.cont");
-      auto *OldBranch = CallBB->getTerminator();
-      llvm::SmallVector<llvm::Value *, 8> Args;
-      for (llvm::Use &Arg : Call->args())
-        Args.push_back(Arg.get());
-      llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
-      Call->getOperandBundlesAsDefs(Bundles);
-      auto *Invoke = llvm::InvokeInst::Create(
-          Call->getFunctionType(), Call->getCalledOperand(), Cont,
-          Regions[static_cast<size_t>(Innermost)].UnwindDest, Args, Bundles,
-          Call->getName(), OldBranch->getIterator());
-      Invoke->setCallingConv(Call->getCallingConv());
-      Invoke->setAttributes(Call->getAttributes());
-      Invoke->setDebugLoc(Call->getDebugLoc());
-      Invoke->copyMetadata(*Call);
-      Call->replaceAllUsesWith(Invoke);
-      Call->eraseFromParent();
-      OldBranch->eraseFromParent();
-      for (Region &R : Regions)
-        if (R.Blocks.count(CallBB))
-          R.Blocks.insert(Cont);
-    }
+  // Replace each planned call with an invoke to its innermost active region.
+  // Non-call hardware faults are covered by the asynchronous markers below.
+  for (const CallPlan &Plan : CallPlans) {
+    llvm::CallInst *Call = Plan.Call;
+    llvm::BasicBlock *CallBB = Call->getParent();
+    llvm::Instruction *Next = Call->getNextNode();
+    assert(CallBB && Next && "preflighted SEH call changed before commit");
+    llvm::BasicBlock *Cont =
+        CallBB->splitBasicBlock(Next, CallBB->getName() + ".seh.cont");
+    auto *OldBranch = CallBB->getTerminator();
+    assert(OldBranch && "split block must have a branch");
+    llvm::SmallVector<llvm::Value *, 8> Args;
+    for (llvm::Use &Arg : Call->args())
+      Args.push_back(Arg.get());
+    llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
+    Call->getOperandBundlesAsDefs(Bundles);
+    auto *Invoke = llvm::InvokeInst::Create(
+        Call->getFunctionType(), Call->getCalledOperand(), Cont,
+        Regions[Plan.RegionIndex].UnwindDest, Args, Bundles, Call->getName(),
+        OldBranch->getIterator());
+    Invoke->setCallingConv(Call->getCallingConv());
+    Invoke->setAttributes(Call->getAttributes());
+    Invoke->setDebugLoc(Call->getDebugLoc());
+    Invoke->copyMetadata(*Call);
+    Call->replaceAllUsesWith(Invoke);
+    CallSiteAddrs.erase(Call);
+    Call->eraseFromParent();
+    OldBranch->eraseFromParent();
+    for (Region &R : Regions)
+      if (R.Blocks.count(CallBB))
+        R.Blocks.insert(Cont);
   }
 
   llvm::Function *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
@@ -395,12 +477,16 @@ bool MedLLVMEmitter::emitNativeSEH(
     }
   }
 
-  if (!Mod->getModuleFlag("eh-asynch"))
+  if (AsyncFlagState == med_llvm_eh::I32ModuleFlagState::Absent)
     Mod->addModuleFlag(llvm::Module::Warning, "eh-asynch", 1);
   LLVMFunc.setMetadata(
       windows_eh_md::NativeAttachment,
       llvm::MDNode::get(*Ctx, {mdUInt(*Ctx, 1, 1),
                                llvm::MDString::get(*Ctx, "seh-x64-native")}));
+  exception_rewrite::setContract(
+      LLVMFunc, exception_rewrite::SourceState::Complete,
+      exception_rewrite::LoweringState::Complete, ProtectedCallCount,
+      ProtectedCallCount, /*SkippedPads=*/0);
   return true;
 }
 

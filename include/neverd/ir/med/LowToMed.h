@@ -64,14 +64,14 @@ public:
   /// still runs).
   void setI64Callees(const std::set<va_t> *S) { I64Callees = S; }
 
-  /// Provide the set of INDIRECT call-site addresses (INDIR_CALL) proven to return
-  /// a register-pair i64 whose result is threaded as a loop accumulator.  An
-  /// indirect call has no constant target to look up in setI64Callees, so the
-  /// pipeline identifies the threaded site post-SSA (its low result is carried
-  /// on a back-edge while an address-taken i64 callee is the plausible target)
-  /// and re-converts the caller with the site addresses set, so the same
-  /// pre-SSA register-pair modeling runs and buildSsa places the high-half loop
-  /// PHI. Optional; null = no-op.
+  /// Provide the set of INDIRECT call-site addresses (INDIR_CALL) proven to
+  /// return a register-pair i64 whose result is threaded as a loop accumulator.
+  /// An indirect call has no constant target to look up in setI64Callees, so
+  /// the pipeline identifies the threaded site post-SSA (its low result is
+  /// carried on a back-edge while an address-taken i64 callee is the plausible
+  /// target) and re-converts the caller with the site addresses set, so the
+  /// same pre-SSA register-pair modeling runs and buildSsa places the high-half
+  /// loop PHI. Optional; null = no-op.
   void setI64IndirectSites(const std::set<va_t> *S) { I64IndirectSites = S; }
 
   struct StackSlot {
@@ -166,6 +166,11 @@ private:
   void propagate(MedFunc &Func);
   void detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt);
   void simplifyCfg(MedFunc &Func);
+  /// Split an ARM instruction-local predicate guard from the effects it
+  /// controls before SSA construction.  The skip and effect edges then receive
+  /// ordinary phi placement, so an untaken load/store/control neither performs
+  /// the effect nor exposes an uninitialized post-instruction register value.
+  void materializePredicatedEffects(MedFunc &Func);
 
   int allocVarId() { return NextVarId++; }
   int allocTempId() { return NextTempId++; }

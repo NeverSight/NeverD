@@ -4,12 +4,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/support/BinaryEncoding.h"
-#include "neverd/support/ISAEncoding.h"
+#include "COFFUnwindDetail.h"
+
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/COFF/COFFUnwindARM.h"
 #include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -128,78 +130,7 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     ++Added;
   }
 
-  for (size_t I = 0; I < Img.ExceptionMetadata.Functions.size(); ++I) {
-    ExceptionFunction &F = Img.ExceptionMetadata.Functions[I];
-    if (F.Kind != RuntimeFunctionKind::Chained || !F.ChainedPrimaryRange)
-      continue;
-    for (size_t J = 0; J < Img.ExceptionMetadata.Functions.size(); ++J) {
-      if (I == J)
-        continue;
-      const ExceptionFunction &Candidate = Img.ExceptionMetadata.Functions[J];
-      if (Candidate.CodeRange.Begin == F.ChainedPrimaryRange->Begin &&
-          Candidate.CodeRange.End == F.ChainedPrimaryRange->End &&
-          (F.ChainedUnwindInfoRVA == 0 ||
-           Candidate.UnwindInfoRVA == F.ChainedUnwindInfoRVA)) {
-        F.PrimaryFunctionIndex = J;
-        break;
-      }
-    }
-    if (!F.PrimaryFunctionIndex) {
-      F.ParseStatus = mergeExceptionParseStatus(F.ParseStatus,
-                                                ExceptionParseStatus::Partial);
-      F.Diagnostics.push_back("chained x64 primary record is not in directory");
-      Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
-          Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
-    }
-  }
-
-  constexpr unsigned MaxChainDepth = 32;
-  for (size_t I = 0; I < Img.ExceptionMetadata.Functions.size(); ++I) {
-    ExceptionFunction &Root = Img.ExceptionMetadata.Functions[I];
-    if (Root.Kind != RuntimeFunctionKind::Chained || !Root.PrimaryFunctionIndex)
-      continue;
-    std::set<size_t> Visited;
-    size_t Current = I;
-    bool ReachedTerminal = false;
-    for (unsigned Depth = 0; Depth < MaxChainDepth; ++Depth) {
-      if (!Visited.insert(Current).second) {
-        Root.ParseStatus = mergeExceptionParseStatus(
-            Root.ParseStatus, ExceptionParseStatus::Malformed);
-        Root.Diagnostics.push_back("chained x64 unwind graph is cyclic");
-        break;
-      }
-      if (Current >= Img.ExceptionMetadata.Functions.size()) {
-        Root.ParseStatus = mergeExceptionParseStatus(
-            Root.ParseStatus, ExceptionParseStatus::Malformed);
-        Root.Diagnostics.push_back("chained x64 unwind index is out of range");
-        break;
-      }
-      const ExceptionFunction &CurrentFunction =
-          Img.ExceptionMetadata.Functions[Current];
-      if (CurrentFunction.Kind != RuntimeFunctionKind::Chained) {
-        ReachedTerminal = true;
-        break;
-      }
-      if (!CurrentFunction.PrimaryFunctionIndex)
-        break;
-      Current = *CurrentFunction.PrimaryFunctionIndex;
-    }
-    if (!ReachedTerminal &&
-        Root.ParseStatus != ExceptionParseStatus::Malformed) {
-      if (Visited.size() == MaxChainDepth) {
-        Root.ParseStatus = ExceptionParseStatus::Malformed;
-        Root.Diagnostics.push_back(
-            "chained x64 unwind graph exceeds depth limit");
-      } else {
-        Root.ParseStatus = mergeExceptionParseStatus(
-            Root.ParseStatus, ExceptionParseStatus::Partial);
-        Root.Diagnostics.push_back(
-            "chained x64 unwind graph does not reach a primary record");
-      }
-    }
-    Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
-        Img.ExceptionMetadata.ParseStatus, Root.ParseStatus);
-  }
+  unwind_detail::resolveX64UnwindChains(Img.ExceptionMetadata);
 
   std::sort(Img.KnownCodeRanges.begin(), Img.KnownCodeRanges.end());
   Img.KnownCodeRanges.erase(
@@ -470,7 +401,8 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
       }
       if (HasValidBody) {
         NativeUnwindBytes.assign(XData, XData + StructuralBytes);
-        UnwindCodeOffset = static_cast<size_t>((HeaderWords + EpilogueWords) * 4);
+        UnwindCodeOffset =
+            static_cast<size_t>((HeaderWords + EpilogueWords) * 4);
         UnwindCodeLength = static_cast<size_t>(CodeWords * 4);
         EpilogueScopeOffset = static_cast<size_t>(HeaderWords * 4);
         EpilogueScopeCount = static_cast<size_t>(EpilogueWords);
@@ -556,8 +488,8 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
         llvm::ArrayRef<uint8_t> Structural(EF.NativeUnwindBytes);
         std::vector<llvm::support::ulittle32_t> Scopes(EpilogueScopeCount);
         for (size_t S = 0; S < EpilogueScopeCount; ++S)
-          Scopes[S] = llvm::support::ulittle32_t(
-              readLE<uint32_t>(Structural.data() + EpilogueScopeOffset + S * 4));
+          Scopes[S] = llvm::support::ulittle32_t(readLE<uint32_t>(
+              Structural.data() + EpilogueScopeOffset + S * 4));
         applyUnwindCodes(EF, IsAArch64,
                          Structural.slice(UnwindCodeOffset, UnwindCodeLength),
                          Scopes, SingleEpilogueIndex);
@@ -609,6 +541,73 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
 }
 
 } // namespace
+
+void unwind_detail::resolveX64UnwindChains(ExceptionInfo &Info) {
+  for (size_t I = 0; I < Info.Functions.size(); ++I) {
+    ExceptionFunction &F = Info.Functions[I];
+    if (F.Kind != RuntimeFunctionKind::Chained || !F.ChainedPrimaryRange)
+      continue;
+    for (size_t J = 0; J < Info.Functions.size(); ++J) {
+      if (I == J)
+        continue;
+      const ExceptionFunction &Candidate = Info.Functions[J];
+      if (Candidate.CodeRange.Begin == F.ChainedPrimaryRange->Begin &&
+          Candidate.CodeRange.End == F.ChainedPrimaryRange->End &&
+          (F.ChainedUnwindInfoRVA == 0 ||
+           Candidate.UnwindInfoRVA == F.ChainedUnwindInfoRVA)) {
+        F.PrimaryFunctionIndex = J;
+        break;
+      }
+    }
+    if (!F.PrimaryFunctionIndex) {
+      F.ParseStatus = mergeExceptionParseStatus(F.ParseStatus,
+                                                ExceptionParseStatus::Partial);
+      F.Diagnostics.push_back("chained x64 primary record is not in directory");
+      Info.ParseStatus =
+          mergeExceptionParseStatus(Info.ParseStatus, F.ParseStatus);
+    }
+  }
+
+  for (size_t I = 0; I < Info.Functions.size(); ++I) {
+    ExceptionFunction &Root = Info.Functions[I];
+    if (Root.Kind != RuntimeFunctionKind::Chained || !Root.PrimaryFunctionIndex)
+      continue;
+    std::set<size_t> Visited;
+    size_t Current = I;
+    bool ReachedTerminal = false;
+    while (true) {
+      if (Current >= Info.Functions.size()) {
+        Root.ParseStatus = mergeExceptionParseStatus(
+            Root.ParseStatus, ExceptionParseStatus::Malformed);
+        Root.Diagnostics.push_back("chained x64 unwind index is out of range");
+        break;
+      }
+      if (!Visited.insert(Current).second) {
+        Root.ParseStatus = mergeExceptionParseStatus(
+            Root.ParseStatus, ExceptionParseStatus::Malformed);
+        Root.Diagnostics.push_back("chained x64 unwind graph is cyclic");
+        break;
+      }
+      const ExceptionFunction &CurrentFunction = Info.Functions[Current];
+      if (CurrentFunction.Kind != RuntimeFunctionKind::Chained) {
+        ReachedTerminal = true;
+        break;
+      }
+      if (!CurrentFunction.PrimaryFunctionIndex)
+        break;
+      Current = *CurrentFunction.PrimaryFunctionIndex;
+    }
+    if (!ReachedTerminal &&
+        Root.ParseStatus != ExceptionParseStatus::Malformed) {
+      Root.ParseStatus = mergeExceptionParseStatus(
+          Root.ParseStatus, ExceptionParseStatus::Partial);
+      Root.Diagnostics.push_back(
+          "chained x64 unwind graph does not reach a primary record");
+    }
+    Info.ParseStatus =
+        mergeExceptionParseStatus(Info.ParseStatus, Root.ParseStatus);
+  }
+}
 
 void parseExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                      uint64_t ImageBase) {

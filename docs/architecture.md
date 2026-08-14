@@ -40,8 +40,8 @@ calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
 `lib/sdk/SessionImpl.h`; `neverd_session_load` selects a loader and builds a
 `BinaryImage`, while IR-backed operations run `lib/pipeline/Pipeline.cpp`
 lazily. The `neverd` executable links `neverd_shared`; the component archives
-and their LLVM/Capstone dependencies remain private implementation details of
-that shared library. The CLI still uses LLVM Support for its command-line UI,
+and their LLVM/Capstone dependencies are private implementation details of
+that shared library. The CLI uses LLVM Support for its command-line UI,
 but it does not bypass the C API to drive the engine.
 
 ## IR representations and routes
@@ -65,6 +65,118 @@ but it does not bypass the C API to drive the engine.
 representation-specific logic in its owning IR or backend library; the pipeline
 should orchestrate those components rather than absorb their algorithms.
 
+## Cross-architecture translation contract
+
+`include/neverd/translate` defines a contract layer, not an
+execution backend. `GuestState` models architecture-neutral, machine-visible
+state for `x86_32`, `x86_64`, `AArch64`, and `ARM32`. Its canonical version-1
+serialization uses fixed-width little-endian fields, stable register IDs,
+sorted collections, and fail-closed validation, so persisted state never
+depends on the host C++ layout.
+
+The `GuestState` wire-v1 baseline is permanently frozen. Modeled state outside
+that baseline must use an extension-register ID in the extension range with a
+canonical lower-case name, or move to a new wire version with an explicit
+upgrader; changing the v1 baseline in place is forbidden.
+
+For an `ARM32` guest, `ExecutionMode` is the authoritative decode mode and must
+agree with `CPSR.T`. The stored PC is always the canonical instruction address
+with bit 0 cleared; ARM mode additionally requires word alignment.
+
+The pair-policy contract defines `x86_64 -> AArch64`,
+`AArch64 -> x86_64`, `x86_32 -> AArch64/ARM32`, and
+`ARM32 -> x86_32/x86_64`. `ContractDefined` means that a request can be
+validated and persisted; it does not mean that code can be translated or
+executed. JIT policy accepts only the native process host, while AOT policy
+requires an explicit host architecture and target triple; a selected CPU or
+feature set is explicit as well.
+
+A versioned `TranslationExit` records a stable stop reason and the matching
+typed payload for syscalls, exceptions or signals, breakpoints, unsupported
+instructions, self-modification, resource budgets, external calls, memory
+faults, and other terminal conditions. Consumers therefore do not have to
+reinterpret an untyped integer according to the stop reason.
+
+For every stop reason, the reported instruction, block, and generated-code
+counts must not exceed the corresponding non-zero budget in the request. A
+`BudgetExhausted` payload must additionally identify that requested limit
+exactly; it cannot report a derived or implementation-private threshold.
+
+The backend-private `RuntimeControlBlockV1` contract is exactly
+128 bytes, aligned to 8 bytes, and guarded by fixed v1 magic, version, size,
+field offsets, zeroed reserved fields, and coherent typed exits. It contains no
+C++ containers, host pointers, or guest-address aliases. It is neither the C++
+layout nor the wire format of `GuestState`; a backend implementing this contract
+must convert state into this record explicitly.
+
+The fixed v1 generated-code call surface contains exactly eight helpers:
+`nvd_rt_v1_load8_le`, `nvd_rt_v1_load16_le`, `nvd_rt_v1_load32_le`,
+`nvd_rt_v1_load64_le`, `nvd_rt_v1_store8_le`, `nvd_rt_v1_store16_le`,
+`nvd_rt_v1_store32_le`, and `nvd_rt_v1_store64_le`. Their names, signatures,
+and pointer provenance must match exactly; a backend binds this finite table
+explicitly and never falls back to ambient symbol resolution. Executable-
+generation validation and budget/cancellation polling are trusted-dispatcher-
+only operations: `nvd_rt_v1_validate_generation` and `nvd_rt_v1_poll` are not
+generated-code helpers. The trusted host dispatcher also owns block selection
+and is not callable from generated IR; translated blocks return a typed exit
+code instead. Generated IR may directly read only the declared scalar-result
+runtime slot.
+
+`GuestMemoryRuntime` is isolated from logical `GuestState`: construction first
+validates the state and copies region bytes and metadata into a sorted private
+index. Guest virtual addresses are lookup keys and are never converted to host
+pointers. Checked scalar access reports typed width, alignment, overflow,
+mapping, cross-region, permission, executable-write, generation-overflow,
+generation-mismatch, and policy faults. Instruction/block budgets,
+cancellation, generation tracking, and the `RejectExecutableWrites`,
+`InvalidateOnExecutableWrite`, and `ValidateBeforeDispatch` code-write policies
+also produce coherent typed records rather than implicit host-side behavior.
+
+The post-codegen verifier audits relocatable ELF, COFF, and Mach-O
+objects as a closed set. Format and architecture must match the selected host;
+undefined symbols require exact membership in the finite helper allowlist and
+dynamic symbols are forbidden. Relocations are explicit direct whitelists with
+checked encoding, width, alignment, offset, loadable destination, and an
+object-local non-preemptible or exactly allowlisted target. The verifier rejects
+W+X, unwind/exception and initializer metadata, TLS, IFUNC, GOT/PLT and other
+indirection, dynamic relocations, weak/preemptible or selectable definitions,
+unknown allocated sections, and linker directives. ELF `ET_REL` artifacts must
+contain no program headers or segments. Mach-O load commands use a positive
+list: exactly one width-matching segment and at most one symbol table,
+dynamic-symbol table, platform-version, and data-in-code command, with their
+dependencies checked; linker options and every other command are rejected.
+
+The runtime, memory, IR, and object-audit implementations define and validate
+these boundaries. They do not constitute a complete executable translation
+backend, a complete cross-architecture translation pipeline, or complete
+end-to-end exception rewriting. This section specifies contract and verifier
+scope; it does not claim end-to-end generation, linking, loading, execution,
+JIT, AOT, or exception rewriting.
+
+The generated-IR contract requires every translated block governed by it to be
+hidden and non-preemptible with the C ABI `i32 (ptr state, ptr runtime)`.
+Blocks are discoverable only through a private registry, never through ambient
+process symbol lookup; direct block-to-block calls are forbidden.
+
+The IR verifier also caps integer widths at the host scalar-register width to
+avoid known compiler-runtime libcalls introduced during legalization. That
+check is necessary, not sufficient: any execution backend implementing this
+contract must perform an exact audit of post-codegen control transfers,
+`MachineIR`, and target-object relocations against the same finite
+runtime-symbol allowlist.
+
+Direct TranslationIR loads and stores, and values held by private constants,
+may contain only one scalar integer no wider than the host scalar-register
+width. Aggregates must be scalarized before the verifier boundary so compact IR
+cannot trigger unbounded backend expansion.
+
+The generated-code ABI is defined only for scalar integers. Floating-point,
+SIMD, x87, atomics, and system instructions are outside this contract. The
+`ProvenSemanticAndLLVM` policy requires any implementation that selects it to
+run NeverD's proof-gated semantic simplification to a joint fixed point with
+LLVM optimization; the policy does not supply an executable translation
+backend.
+
 ## Component map
 
 Every component is a static archive created by `add_neverd_component_library`.
@@ -87,6 +199,7 @@ libraries supplied by the CMake helper.
 | `lib/sigs` | Signature parsing, databases, and matching | Loader |
 | `lib/libc` | Known libc names and call-model support | Standalone component |
 | `lib/support` | Shared binary-loading helpers | Loader |
+| `lib/translate` | Versioned guest state/policy/exits, fixed runtime ABI, checked guest memory, and generated-IR/object audit contracts; execution-backend implementation is outside this component | IR, LLVM, and LLVM Object contracts |
 
 Public headers mirror these areas under `include/neverd`. Avoid making an
 internal C++ class part of the SDK by accident: stable external operations
@@ -136,8 +249,8 @@ under `lib/backend/llvm/<ISA>` and `lib/backend/codegen/CodeGen<ISA>.cpp`.
 
 The root support matrix means that each cell is implemented. It does not mean
 that every opcode, ABI edge case, binary producer, or operating-system version
-has been exhaustively tested. Strict mode is the guardrail for instruction
-coverage that has not yet landed.
+has been exhaustively tested. Strict mode fails closed when instruction
+semantics are outside the implemented lifter coverage.
 
 All 12 format-by-architecture cells have semantic rewrite-backend coverage in
 `unittests/semantic/PatchFullSubstRTTests.cpp`. Integration depth is more
@@ -160,23 +273,23 @@ specific:
   requested target. Modern macOS cannot link historical i386 executables, so
   i386 coverage uses both PIC and no-PIC thin objects plus the rewrite grid.
 
-Treat linked-fixture cells as the strongest current format-integration
+Treat linked-fixture cells as the strongest format-integration
 evidence for those representative programs. Object-pipeline and backend-grid
 cells have partial format-integration coverage. No cell is “fully tested”
 without that qualification, and none claims exhaustive ISA coverage.
 
 The principal evidence is
-[`PatchFormatTests.cpp`](../unittests/lift/PatchFormatTests.cpp) for linked ELF
+[`PatchFormatTests.cpp`](../unittests/lift/format/PatchFormatTests.cpp) for linked ELF
 and PE fixtures,
-[`COFFARMFormatTests.cpp`](../unittests/lift/COFFARMFormatTests.cpp) for Windows
+[`COFFARMFormatTests.cpp`](../unittests/lift/format/COFFARMFormatTests.cpp) for Windows
 ARM loading/decompilation,
-[`MachOI386RelocationTests.cpp`](../unittests/lift/MachOI386RelocationTests.cpp)
+[`MachOI386RelocationTests.cpp`](../unittests/lift/format/MachOI386RelocationTests.cpp)
 for i386 thin objects,
-[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/X86_64_PipelineE2ETests.cpp)
+[`X86_64_PipelineE2ETests.cpp`](../unittests/lift/x86_64/X86_64_PipelineE2ETests.cpp)
 and
-[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/AArch64_PipelineE2ETests.cpp)
+[`AArch64_PipelineE2ETests.cpp`](../unittests/lift/aarch64/AArch64_PipelineE2ETests.cpp)
 for linked Mach-O, and
-[`PatchFullSubstRTTests.cpp`](../unittests/semantic/PatchFullSubstRTTests.cpp)
+[`PatchFullSubstRTTests.cpp`](../unittests/semantic/probe/patchfull/PatchFullSubstRTTests.cpp)
 for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
 ## Where to edit

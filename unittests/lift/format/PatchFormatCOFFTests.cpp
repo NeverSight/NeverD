@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "PatchFormatTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -132,6 +131,10 @@ TEST_F(PatchCOFF_X64, ReconstructsGuardedSEHAndContinuationTable) {
   EXPECT_EQ(OriginalSEH->ParseStatus, ExceptionParseStatus::Complete);
   ASSERT_TRUE(OriginalSEH->SEH.has_value());
   ASSERT_EQ(OriginalSEH->SEH->Scopes.size(), 1u);
+  const uint8_t *OriginalPersonality =
+      Original.readVA(OriginalSEH->PersonalityVA, 1);
+  ASSERT_NE(OriginalPersonality, nullptr);
+  const uint8_t OriginalPersonalityOpcode = *OriginalPersonality;
 
   auto Decompile = decompileToHighC(PE);
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
@@ -148,6 +151,13 @@ TEST_F(PatchCOFF_X64, ReconstructsGuardedSEHAndContinuationTable) {
   ASSERT_TRUE(static_cast<bool>(PatchedOrErr))
       << llvm::toString(PatchedOrErr.takeError());
   const BinaryImage &Patched = *PatchedOrErr;
+  const uint8_t *PatchedPersonality =
+      Patched.readVA(OriginalSEH->PersonalityVA, 1);
+  ASSERT_NE(PatchedPersonality, nullptr);
+  // The local runtime handler owns this address. Native EH references resolve
+  // to it, but it must not be replaced by a trampoline to a generically typed
+  // lifted body.
+  EXPECT_EQ(*PatchedPersonality, OriginalPersonalityOpcode);
   EXPECT_NE(Patched.DynInfo.GuardFlags & EHContPresent, 0u);
   EXPECT_NE(Patched.DynInfo.GuardFlags & CFPresent, 0u);
   EXPECT_GT(Patched.DynInfo.GuardCFFunctionCount,
@@ -225,6 +235,10 @@ TEST_F(PatchCOFF_X64, ReconstructsNativeFH3StateGraph) {
   EXPECT_TRUE(OriginalCxx->Cxx->hasValidStateGraph());
   ASSERT_EQ(OriginalCxx->Cxx->TryBlocks.size(), 1u);
   ASSERT_EQ(OriginalCxx->Cxx->TryBlocks.front().Handlers.size(), 1u);
+  const uint8_t *OriginalPersonality =
+      Original.readVA(OriginalCxx->PersonalityVA, 1);
+  ASSERT_NE(OriginalPersonality, nullptr);
+  const uint8_t OriginalPersonalityOpcode = *OriginalPersonality;
 
   auto Decompile = decompileToHighC(PE);
   ASSERT_EQ(Decompile.exitCode, 0) << Decompile.err;
@@ -241,6 +255,10 @@ TEST_F(PatchCOFF_X64, ReconstructsNativeFH3StateGraph) {
   ASSERT_TRUE(static_cast<bool>(PatchedOrErr))
       << llvm::toString(PatchedOrErr.takeError());
   const BinaryImage &Patched = *PatchedOrErr;
+  const uint8_t *PatchedPersonality =
+      Patched.readVA(OriginalCxx->PersonalityVA, 1);
+  ASSERT_NE(PatchedPersonality, nullptr);
+  EXPECT_EQ(*PatchedPersonality, OriginalPersonalityOpcode);
 
   const Section *Injected = nullptr;
   for (const Section &S : Patched.Sections)

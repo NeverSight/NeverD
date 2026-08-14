@@ -17,6 +17,10 @@
 #include "neverd/ir/NdOps.h"
 #include "neverd/loader/ExceptionInfo.h"
 
+#include "llvm/Support/Errc.h"
+#include "llvm/Support/Error.h"
+
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -80,11 +84,163 @@ struct LowOp {
   }
 };
 
+/// Instruction-level control classification retained beside flattened LowOps.
+/// Modifiers such as conditional and indirect remain flags so combinations
+/// produced by predicated ISAs do not need lossy enum cases.
+enum class LowInstructionControl : uint8_t {
+  None = 0,
+  Branch = 1,
+  Call = 2,
+  Return = 3,
+  TailCall = 4,
+  ConditionalReturn = 5,
+  ConditionalCall = 6,
+  Terminator = 7,
+};
+
+enum class LowInstructionControlFlag : uint16_t {
+  None = 0,
+  Branch = 1u << 0,
+  Conditional = 1u << 1,
+  Call = 1u << 2,
+  Return = 1u << 3,
+  Indirect = 1u << 4,
+  NoReturn = 1u << 5,
+  Terminator = 1u << 6,
+  Resumable = 1u << 7,
+  /// The flattened COND_BR is an instruction-local predicate guard, not an
+  /// independently encoded guest branch.  Its selected effect remains in the
+  /// same LowInstructionBoundary.
+  InstructionGuard = 1u << 8,
+};
+
+/// How a control transfer determines the execution mode at its destination.
+/// This is separate from InstructionMode, which records the mode used to
+/// decode the source instruction.  ARM B/BL preserve it, immediate BLX names a
+/// fixed opposite mode, and register BX/BLX select it from target bit zero.
+enum class LowInstructionTargetMode : uint8_t {
+  Preserve = 0,
+  ARM = 1,
+  Thumb = 2,
+  FromTargetBit0 = 3,
+};
+
+/// Canonical destination of one LowIR control transfer.
+struct LowControlTarget {
+  va_t Address = 0;
+  InstructionMode Mode = InstructionMode::Default;
+};
+
+/// Resolve a raw control target according to its instruction boundary.
+///
+/// ARM and Thumb destinations are checked for their architectural alignment,
+/// AArch32 targets must fit its address width, and InvalidVA is never a valid
+/// result.  FromTargetBit0 consumes and clears bit zero.  Address zero remains
+/// valid.  An error is returned instead of guessing whenever the source mode,
+/// target-mode contract, address width, or alignment is inconsistent.
+inline llvm::Expected<LowControlTarget>
+canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
+                             LowInstructionTargetMode TargetMode) {
+  const auto Invalid =
+      [](const char *Message) -> llvm::Expected<LowControlTarget> {
+    return llvm::createStringError(llvm::errc::invalid_argument, "%s", Message);
+  };
+
+  switch (SourceMode) {
+  case InstructionMode::Default:
+  case InstructionMode::ARM:
+  case InstructionMode::Thumb:
+    break;
+  default:
+    return Invalid("control target has an unknown source instruction mode");
+  }
+
+  const bool IsAArch32 = SourceMode == InstructionMode::ARM ||
+                         SourceMode == InstructionMode::Thumb;
+  if (RawTarget == InvalidVA)
+    return Invalid("control target uses the invalid address");
+  if (IsAArch32 && RawTarget > std::numeric_limits<uint32_t>::max())
+    return Invalid("AArch32 control target exceeds its address width");
+
+  LowControlTarget Result{RawTarget, SourceMode};
+  switch (TargetMode) {
+  case LowInstructionTargetMode::Preserve:
+    break;
+  case LowInstructionTargetMode::ARM:
+    if (!IsAArch32)
+      return Invalid("fixed ARM target has a non-ARM source mode");
+    Result.Mode = InstructionMode::ARM;
+    break;
+  case LowInstructionTargetMode::Thumb:
+    if (!IsAArch32)
+      return Invalid("fixed Thumb target has a non-ARM source mode");
+    Result.Mode = InstructionMode::Thumb;
+    break;
+  case LowInstructionTargetMode::FromTargetBit0:
+    if (!IsAArch32)
+      return Invalid("target-bit mode exchange has a non-ARM source mode");
+    Result.Mode =
+        (RawTarget & 1) != 0 ? InstructionMode::Thumb : InstructionMode::ARM;
+    Result.Address = RawTarget & ~uint64_t{1};
+    break;
+  default:
+    return Invalid("control target has an unknown destination-mode contract");
+  }
+
+  const uint64_t Alignment = Result.Mode == InstructionMode::ARM     ? 4
+                             : Result.Mode == InstructionMode::Thumb ? 2
+                                                                     : 1;
+  if ((Result.Address & (Alignment - 1)) != 0)
+    return Invalid("control target is not aligned for its destination mode");
+  return Result;
+}
+
+constexpr LowInstructionControlFlag operator|(LowInstructionControlFlag Left,
+                                              LowInstructionControlFlag Right) {
+  return static_cast<LowInstructionControlFlag>(static_cast<uint16_t>(Left) |
+                                                static_cast<uint16_t>(Right));
+}
+
+constexpr LowInstructionControlFlag &
+operator|=(LowInstructionControlFlag &Left, LowInstructionControlFlag Right) {
+  Left = Left | Right;
+  return Left;
+}
+
+constexpr bool hasLowInstructionControlFlag(LowInstructionControlFlag Set,
+                                            LowInstructionControlFlag Flag) {
+  return (static_cast<uint16_t>(Set) & static_cast<uint16_t>(Flag)) != 0;
+}
+
+/// Exact provenance of one decoded guest instruction inside a LowBlock.
+/// FirstOp and OpCount name a canonical, block-relative half-open slice in
+/// LowBlock::Ops.  OpCount may be zero: a decoded instruction remains visible
+/// even when lifting produces no LowOps.
+struct LowInstructionBoundary {
+  va_t Address = 0;
+  uint16_t Size = 0;
+  uint64_t FirstOp = 0;
+  uint64_t OpCount = 0;
+  InstructionMode Mode = InstructionMode::Default;
+  LowInstructionControl Control = LowInstructionControl::None;
+  LowInstructionControlFlag ControlFlags = LowInstructionControlFlag::None;
+
+  /// Destination-mode contract for this instruction's control transfer.  Keep
+  /// compact scalar provenance ahead of Immediate to avoid per-boundary tail
+  /// padding across large functions.
+  LowInstructionTargetMode TargetMode = LowInstructionTargetMode::Preserve;
+
+  /// Direct branch/call target or an encoded return-pop immediate.  Absence is
+  /// distinct from an explicitly encoded zero (for example `ret 0`).
+  std::optional<uint64_t> Immediate;
+};
+
 struct LowBlock {
   int Id = -1;
   va_t StartAddr = 0;
   va_t EndAddr = 0;
   std::vector<LowOp> Ops;
+  std::vector<LowInstructionBoundary> InstructionBoundaries;
   std::vector<int> Succs;
   std::vector<int> Preds;
   std::vector<ExceptionalEdge> ExceptionalSuccs;
@@ -95,6 +251,10 @@ struct LowBlock {
       if (X == S)
         return true;
     return false;
+  }
+
+  bool hasInstructionBoundaries() const {
+    return !InstructionBoundaries.empty();
   }
 };
 
@@ -243,6 +403,23 @@ struct LowFunc {
     return MaxEnd > Entry ? MaxEnd - Entry : 0;
   }
 };
+
+/// Optional validation keeps manually constructed legacy LowIR valid when it
+/// carries no instruction metadata.  Once any boundary is present, validation
+/// is strict; Required additionally rejects wholly missing or partially
+/// populated metadata.
+enum class LowInstructionBoundaryRequirement : uint8_t {
+  Optional,
+  Required,
+};
+
+llvm::Error validateLowInstructionBoundaries(
+    const LowBlock &Block, LowInstructionBoundaryRequirement Requirement =
+                               LowInstructionBoundaryRequirement::Optional);
+
+llvm::Error validateLowInstructionBoundaries(
+    const LowFunc &Function, LowInstructionBoundaryRequirement Requirement =
+                                 LowInstructionBoundaryRequirement::Optional);
 
 } // namespace neverd
 

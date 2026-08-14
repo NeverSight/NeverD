@@ -36,6 +36,11 @@ public:
   /// Parse a single .pat line into a PatternModule.
   static llvm::Expected<PatternModule> parseLine(llvm::StringRef Line);
 
+  /// Parse pattern text as one transaction. Comments, blank lines, and
+  /// separators are ignored; every other line must be a valid module.
+  static llvm::Expected<std::vector<PatternModule>>
+  parseText(llvm::StringRef Text);
+
   /// Parse a .pat file, returning all valid modules.
   static llvm::Expected<std::vector<PatternModule>>
   parseFile(const std::filesystem::path &Path);

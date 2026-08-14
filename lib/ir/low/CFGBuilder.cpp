@@ -24,6 +24,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <limits>
 #include <queue>
 #include <vector>
 
@@ -59,6 +60,13 @@ bool codeFollowsTrap(const BinaryImage &Img, Decoder &Dec, va_t Next) {
   const bool IsTrap = Size > 0 && Dec.isResumableTrap(Peek);
   Dec.setDetail(PreviousDetail);
   return Size > 0 && !IsTrap;
+}
+
+InstructionMode effectiveInstructionMode(Arch Architecture,
+                                         InstructionMode Mode) {
+  if (Architecture == Arch::ARM && Mode == InstructionMode::Default)
+    return InstructionMode::ARM;
+  return Mode;
 }
 
 } // namespace
@@ -273,9 +281,19 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       }
       ++DecodedInstructionCount;
 
+      const va_t InsnSize = static_cast<va_t>(Sz);
+      if (InsnSize > std::numeric_limits<va_t>::max() - Cur) {
+        DecodeFailureAddresses.insert(Cur);
+        break;
+      }
+      const va_t Next = Cur + InsnSize;
+
       InsnRecord Rec;
       Rec.Addr = Cur;
       Rec.Size = static_cast<uint16_t>(Sz);
+      Rec.Mode = effectiveInstructionMode(Img.Arch, Img.Mode);
+      Rec.Immediate = Dec.returnImmediate(DI);
+      Rec.TargetMode = Dec.controlTargetMode(DI, Rec.Mode);
       Rec.FpuTopIn = Dec.getX86FpuTop();
       try {
         Dec.liftToLow(DI, Rec.Ops);
@@ -311,9 +329,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // Whether it ends the block is therefore decided by what follows, which
       // separates that case from the run of `int3` a linker pads with and from
       // the embedded data a trap is often planted in front of.
-      if (!Rec.IsBranch && !Rec.IsRet && Dec.isFunctionTerminator(DI))
-        Rec.IsRet = !Dec.isResumableTrap(DI) ||
-                    !codeFollowsTrap(Img, Dec, Cur + static_cast<va_t>(Sz));
+      if (!Rec.IsBranch && !Rec.IsRet && Dec.isFunctionTerminator(DI)) {
+        Rec.IsOpaqueTerminator = true;
+        Rec.IsResumableTerminator = Dec.isResumableTrap(DI);
+        Rec.IsRet =
+            !Rec.IsResumableTerminator || !codeFollowsTrap(Img, Dec, Next);
+      }
 
       // operator[]= returns the stored element, so bind to it directly rather
       // than doing a second tree lookup for the same key on the decode hot
@@ -362,7 +383,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
             Worklist.push(Saved.BranchTarget);
         }
         if (Saved.IsCond) {
-          va_t Fall = Cur + Sz;
+          va_t Fall = Next;
           BlockStarts.insert(Fall);
           if (!ExploredAddrs.count(Fall))
             Worklist.push(Fall);
@@ -370,20 +391,19 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         break;
       }
 
-      // A direct call to a no-return libc function (longjmp / abort / exit /
-      // ...) is a control-flow terminator.  At -O2 the compiler emits nothing
-      // after such a call, so the bytes that follow belong to the NEXT
-      // function; continuing the fall-through would absorb them into this CFG —
-      // a leaf `bl _longjmp` would otherwise swallow the entire caller laid out
-      // after it (the cause of the setjmp/longjmp patch SIGSEGV).  Stop
-      // exploring and suppress the fall-through successor edge in
-      // linkSuccessors.
+      // An unconditional direct call to a no-return libc function (longjmp /
+      // abort / exit / ...) is a control-flow terminator.  At -O2 the compiler
+      // emits nothing after it, so continuing would absorb the next function
+      // into this CFG.  A predicated ARM call is different: its false path must
+      // continue at the following instruction even though its taken path never
+      // returns.
       if (Saved.IsCall && !Saved.IsIndirect && isNoReturnCall(Saved)) {
         Saved.IsNoReturnCall = true;
-        break;
+        if (!Saved.IsCond)
+          break;
       }
 
-      Cur += Sz;
+      Cur = Next;
     }
   }
 }

@@ -12,6 +12,7 @@
 #include "MedLLVMEHHelpers.h"
 
 #include "neverd/Common.h"
+#include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -30,11 +31,15 @@
 #include "llvm/IR/Metadata.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
+#include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -81,33 +86,404 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
     return false;
   const ItaniumEHInfo &Itanium = *EH.Itanium;
 
+  // Preflight is deliberately data-only.  In particular it does not resolve
+  // type-info globals, edit noreturn edges, create unwind blocks, or
+  // materialize exceptional phi copies.  A false return therefore leaves the
+  // ordinary CFG exactly as the emitter built it.
+  if (!EH.CodeRange.isValid())
+    return false;
+
+  // The native addresses below are related to LLVM blocks through this map.
+  // Treat it as a bijection over the recovered source blocks: silently
+  // skipping a duplicate id, a missing entry, or two ids naming one LLVM block
+  // can otherwise attach an invoke to the wrong predecessor.
+  if (OriginalBlockMap.size() != Func.Blocks.size())
+    return false;
+  std::set<int> SourceBlockIDs;
+  std::set<const llvm::BasicBlock *> MappedBlocks;
+  for (const MedBlock &Block : Func.Blocks) {
+    if (!SourceBlockIDs.insert(Block.Id).second)
+      return false;
+    auto Mapped = OriginalBlockMap.find(Block.Id);
+    if (Mapped == OriginalBlockMap.end() || !Mapped->second ||
+        Mapped->second->getParent() != &LLVMFunc ||
+        !MappedBlocks.insert(Mapped->second).second)
+      return false;
+  }
+
+  for (const ItaniumCallSite &Site : Itanium.CallSites)
+    if (!Site.GuardedRange.isValid() ||
+        !EH.CodeRange.contains(Site.GuardedRange))
+      return false;
+
+  // Address-form LSDA call-site rows partition code.  Overlapping rows do not
+  // have a defined priority in the ABI, so choosing an "innermost" row would
+  // invent semantics.  Equal endpoints are valid adjacent ranges.
+  std::vector<const ItaniumCallSite *> OrderedSites;
+  OrderedSites.reserve(Itanium.CallSites.size());
+  for (const ItaniumCallSite &Site : Itanium.CallSites)
+    OrderedSites.push_back(&Site);
+  std::sort(
+      OrderedSites.begin(), OrderedSites.end(),
+      [](const ItaniumCallSite *Left, const ItaniumCallSite *Right) {
+        return std::tie(Left->GuardedRange.Begin, Left->GuardedRange.End) <
+               std::tie(Right->GuardedRange.Begin, Right->GuardedRange.End);
+      });
+  for (size_t I = 1; I < OrderedSites.size(); ++I)
+    if (OrderedSites[I - 1]->GuardedRange.End >
+        OrderedSites[I]->GuardedRange.Begin)
+      return false;
+
+  std::map<uint64_t, const ItaniumAction *> Actions;
+  for (const ItaniumAction &Action : Itanium.Actions)
+    if (!Actions.emplace(Action.TableOffset, &Action).second)
+      return false;
+  std::map<uint64_t, const ItaniumTypeEntry *> Types;
+  for (const ItaniumTypeEntry &Type : Itanium.TypeTable)
+    if (!Types.emplace(Type.Index, &Type).second)
+      return false;
+  std::map<uint64_t, const ItaniumExceptionSpec *> Specs;
+  for (const ItaniumExceptionSpec &Spec : Itanium.ExceptionSpecs)
+    if (!Specs.emplace(Spec.Index, &Spec).second)
+      return false;
+
+  enum class ClauseKind : uint8_t { Catch, Filter };
+  struct ClausePlan {
+    ClauseKind Kind = ClauseKind::Catch;
+    std::vector<const ItaniumTypeEntry *> Types;
+  };
+  struct PadSemantics {
+    bool Cleanup = false;
+    std::vector<ClausePlan> Clauses;
+  };
+  auto SameSemantics = [](const PadSemantics &Left, const PadSemantics &Right) {
+    if (Left.Cleanup != Right.Cleanup ||
+        Left.Clauses.size() != Right.Clauses.size())
+      return false;
+    for (size_t I = 0; I < Left.Clauses.size(); ++I) {
+      const ClausePlan &A = Left.Clauses[I];
+      const ClausePlan &B = Right.Clauses[I];
+      if (A.Kind != B.Kind || A.Types != B.Types)
+        return false;
+    }
+    return true;
+  };
+  auto ResolveType = [&](uint64_t Index) -> const ItaniumTypeEntry * {
+    auto It = Types.find(Index);
+    if (It == Types.end())
+      return nullptr;
+    const ItaniumTypeEntry *Type = It->second;
+    if (!Type->IsCatchAll && Type->TypeInfoSlotVA == 0 && Type->TypeInfoVA == 0)
+      return nullptr;
+    return Type;
+  };
+  auto PlanSemantics = [&](const ItaniumCallSite &Site, PadSemantics &Out) {
+    if (!Site.FirstActionOffset) {
+      Out.Cleanup = true;
+      return true;
+    }
+    std::set<uint64_t> Visited;
+    std::optional<uint64_t> Offset = Site.FirstActionOffset;
+    while (Offset) {
+      if (!Visited.insert(*Offset).second)
+        return false;
+      auto ActionIt = Actions.find(*Offset);
+      if (ActionIt == Actions.end())
+        return false;
+      const ItaniumAction &Action = *ActionIt->second;
+      if (Action.isCleanup()) {
+        Out.Cleanup = true;
+      } else if (Action.isCatch()) {
+        const ItaniumTypeEntry *Type =
+            ResolveType(static_cast<uint64_t>(Action.TypeFilter));
+        if (!Type)
+          return false;
+        Out.Clauses.push_back({ClauseKind::Catch, {Type}});
+      } else {
+        if (Action.TypeFilter == std::numeric_limits<int64_t>::min())
+          return false;
+        const uint64_t SpecIndex = static_cast<uint64_t>(-Action.TypeFilter);
+        auto SpecIt = Specs.find(SpecIndex);
+        if (SpecIt == Specs.end())
+          return false;
+        ClausePlan Clause;
+        Clause.Kind = ClauseKind::Filter;
+        for (uint64_t Index : SpecIt->second->TypeIndices) {
+          const ItaniumTypeEntry *Type = ResolveType(Index);
+          if (!Type)
+            return false;
+          Clause.Types.push_back(Type);
+        }
+        Out.Clauses.push_back(std::move(Clause));
+      }
+      Offset = Action.NextActionOffset;
+    }
+    if (Out.Clauses.empty())
+      Out.Cleanup = true;
+    return true;
+  };
+
+  // Parse every source call-site action chain, including sites not selected by
+  // emitted calls.  Unused handlers need no IR block, but malformed source
+  // metadata must never be reported as completely lowered.
+  std::map<const ItaniumCallSite *, PadSemantics> SiteSemantics;
+  for (const ItaniumCallSite &Site : Itanium.CallSites) {
+    if (Site.LandingPadVA == 0) {
+      if (Site.FirstActionOffset)
+        return false;
+      continue;
+    }
+    if (!EH.CodeRange.contains(Site.LandingPadVA))
+      return false;
+    PadSemantics Semantics;
+    if (!PlanSemantics(Site, Semantics))
+      return false;
+    SiteSemantics.emplace(&Site, std::move(Semantics));
+  }
+
+  // Every source CALL that became an LLVM CallInst carries an independent,
+  // transient address marker. Validate the complete map before either copy
+  // can influence protected-call selection.
+  auto MarkedSourceCalls =
+      med_llvm_eh::collectExactSourceCallAddresses(LLVMFunc, CallSiteAddrs);
+  if (!MarkedSourceCalls)
+    return false;
+
+  struct ProtectedCall {
+    llvm::CallInst *Call = nullptr;
+    int PredId = -1;
+    const ItaniumCallSite *Site = nullptr;
+  };
+  std::vector<ProtectedCall> ProtectedCalls;
+  std::set<const llvm::CallInst *> SeenProtectedCalls;
+
+  // A predicated ARM call is emitted in a synthetic effect block rather than
+  // in OriginalBlockMap's entry for its source MedBlock.  Recover ownership
+  // from the source identity carried by MedIR and the transient LLVM marker,
+  // not from the LLVM block that happens to contain the call.  Requiring a
+  // one-to-one source address keeps exceptional phi selection exact: two
+  // source calls at one address, or two markers claiming one source call,
+  // cannot be assigned a predecessor without inventing semantics.
+  std::map<va_t, int> SourceCallOwners;
+  for (const MedBlock &MedBB : Func.Blocks)
+    for (const MedOp &Op : MedBB.Ops) {
+      if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+        continue;
+      if (!SourceCallOwners.emplace(Op.Addr, MedBB.Id).second)
+        return false;
+    }
+  std::set<va_t> SeenSourceAddresses;
+
+  auto InnermostSite = [&](va_t Address,
+                           bool &Ambiguous) -> const ItaniumCallSite * {
+    const ItaniumCallSite *Best = nullptr;
+    uint64_t BestSize = std::numeric_limits<uint64_t>::max();
+    Ambiguous = false;
+    for (const ItaniumCallSite &Site : Itanium.CallSites) {
+      if (!Site.GuardedRange.contains(Address))
+        continue;
+      const uint64_t Size = Site.GuardedRange.size();
+      if (Size < BestSize) {
+        Best = &Site;
+        BestSize = Size;
+        Ambiguous = false;
+      } else if (Size == BestSize) {
+        Ambiguous = true;
+      }
+    }
+    return Best;
+  };
+
+  for (const auto &[MarkedCall, Address] : *MarkedSourceCalls) {
+    auto Owner = SourceCallOwners.find(Address);
+    if (Owner == SourceCallOwners.end() ||
+        !SeenSourceAddresses.insert(Address).second)
+      return false;
+    auto *Call = const_cast<llvm::CallInst *>(MarkedCall);
+    if (!Call->getParent() || Call->getFunction() != &LLVMFunc)
+      return false;
+    if (Call->doesNotThrow() || Call->isMustTailCall() ||
+        llvm::isa<llvm::IntrinsicInst>(Call))
+      continue;
+    bool Ambiguous = false;
+    const ItaniumCallSite *Site = InnermostSite(Address, Ambiguous);
+    if (Ambiguous)
+      return false;
+    if (Site && Site->LandingPadVA != 0) {
+      if (!SeenProtectedCalls.insert(Call).second)
+        return false;
+      ProtectedCalls.push_back({Call, Owner->second, Site});
+    }
+  }
+
+  const uint64_t RequiredCalls = ProtectedCalls.size();
+  if (RequiredCalls == 0) {
+    LLVMFunc.setMetadata(
+        language_eh_md::ItaniumAttachment,
+        llvm::MDNode::get(*Ctx, {llvm::MDString::get(*Ctx, PersonalitySymbol),
+                                 mdUInt(*Ctx, 0, 32), mdUInt(*Ctx, 0, 32),
+                                 mdUInt(*Ctx, 0, 32), mdUInt(*Ctx, 0, 32)}));
+    exception_rewrite::setContract(LLVMFunc,
+                                   exception_rewrite::SourceState::Complete,
+                                   exception_rewrite::LoweringState::Complete);
+    return true;
+  }
+
+  struct PadPlan {
+    va_t Address = 0;
+    llvm::BasicBlock *Block = nullptr;
+    int BlockId = -1;
+    PadSemantics Semantics;
+    llvm::BasicBlock *UnwindBlock = nullptr;
+    std::vector<llvm::Constant *> Clauses;
+  };
+  struct CallPlan {
+    llvm::CallInst *Call = nullptr;
+    int PredId = -1;
+    PadPlan *Pad = nullptr;
+  };
+  std::vector<std::unique_ptr<PadPlan>> Pads;
+  std::map<const ItaniumCallSite *, PadPlan *> SitePads;
+  std::vector<CallPlan> Calls;
+  Calls.reserve(ProtectedCalls.size());
+
+  auto ResolveHandler = [&](va_t Address, llvm::BasicBlock *&Block,
+                            int &BlockId) {
+    const MedBlock *Match = nullptr;
+    for (const MedBlock &Candidate : Func.Blocks) {
+      if (Candidate.StartAddr != Address)
+        continue;
+      if (Match)
+        return false;
+      Match = &Candidate;
+    }
+    if (!Match)
+      return false;
+    auto It = OriginalBlockMap.find(Match->Id);
+    if (It == OriginalBlockMap.end() ||
+        It->second == &LLVMFunc.getEntryBlock() || It->second->isLandingPad())
+      return false;
+    Block = It->second;
+    BlockId = Match->Id;
+    return true;
+  };
+
+  for (const ProtectedCall &Protected : ProtectedCalls) {
+    PadPlan *Pad = nullptr;
+    auto Known = SitePads.find(Protected.Site);
+    if (Known != SitePads.end()) {
+      Pad = Known->second;
+    } else {
+      auto PlannedSemantics = SiteSemantics.find(Protected.Site);
+      if (PlannedSemantics == SiteSemantics.end())
+        return false;
+      PadSemantics Semantics = PlannedSemantics->second;
+      for (const std::unique_ptr<PadPlan> &Candidate : Pads)
+        if (Candidate->Address == Protected.Site->LandingPadVA &&
+            SameSemantics(Candidate->Semantics, Semantics)) {
+          Pad = Candidate.get();
+          break;
+        }
+      if (!Pad) {
+        auto NewPad = std::make_unique<PadPlan>();
+        NewPad->Address = Protected.Site->LandingPadVA;
+        NewPad->Semantics = std::move(Semantics);
+        if (!ResolveHandler(NewPad->Address, NewPad->Block, NewPad->BlockId))
+          return false;
+        Pad = NewPad.get();
+        Pads.push_back(std::move(NewPad));
+      }
+      SitePads.emplace(Protected.Site, Pad);
+    }
+
+    if (!Protected.Call->getParent() || !Protected.Call->getNextNode() ||
+        !Protected.Call->getParent()->getTerminator())
+      return false;
+    const MedBlock *Target = nullptr;
+    for (const MedBlock &Block : Func.Blocks)
+      if (Block.Id == Pad->BlockId) {
+        Target = &Block;
+        break;
+      }
+    if (!Target)
+      return false;
+    for (const PhiNode &Phi : Target->Phis)
+      for (const auto &[IncomingPred, Incoming] : Phi.Args)
+        if (IncomingPred == Protected.PredId &&
+            (Phi.Output.isConst() || Phi.Output.Size == 0 ||
+             Incoming.Size == 0))
+          return false;
+    Calls.push_back({Protected.Call, Protected.PredId, Pad});
+  }
+  if (Calls.size() != RequiredCalls)
+    return false;
+
   auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
   auto *I8Ty = llvm::Type::getInt8Ty(*Ctx);
   auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
+  auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
 
-  // A type-table slot resolves to the exact RTTI object the catch matches.
-  // Prefer the mapped object over TypeName: for stripped local types the latter
-  // is often only std::type_info::__type_name ("15CxxEhProbeError"), not a
-  // linkage symbol.  Declaring that byte string as an external global creates
-  // a different/invalid pointer in the regenerated LSDA.
-  auto TypeInfoConstant = [&](uint64_t Index) -> llvm::Constant * {
-    const ItaniumTypeEntry *Entry = nullptr;
-    for (const ItaniumTypeEntry &Candidate : Itanium.TypeTable)
-      if (Candidate.Index == Index) {
-        Entry = &Candidate;
-        break;
-      }
-    if (!Entry)
-      return nullptr;
+  // getOrInsertFunction and GlobalVariable construction can otherwise create
+  // bitcasted or auto-renamed symbols after the CFG has already been edited.
+  // Check every name and the source identity behind it while preflight is
+  // still side-effect free.
+  if (llvm::GlobalValue *Existing = Mod->getNamedValue(PersonalitySymbol)) {
+    const auto *Function = llvm::dyn_cast<llvm::Function>(Existing);
+    if (!Function || Function->getFunctionType() != PersonalityTy)
+      return false;
+  }
+
+  struct TypeInfoIdentity {
+    bool IsSlot = false;
+    va_t Address = 0;
+
+    bool operator<(const TypeInfoIdentity &Other) const {
+      return std::tie(IsSlot, Address) < std::tie(Other.IsSlot, Other.Address);
+    }
+    bool operator==(const TypeInfoIdentity &Other) const {
+      return IsSlot == Other.IsSlot && Address == Other.Address;
+    }
+  };
+  std::map<std::string, TypeInfoIdentity> IdentityByName;
+  std::map<TypeInfoIdentity, std::string> NameByIdentity;
+  std::set<const ItaniumTypeEntry *> ReferencedTypes;
+  for (const std::unique_ptr<PadPlan> &Pad : Pads)
+    for (const ClausePlan &Clause : Pad->Semantics.Clauses)
+      ReferencedTypes.insert(Clause.Types.begin(), Clause.Types.end());
+  for (const ItaniumTypeEntry *Entry : ReferencedTypes) {
     if (Entry->IsCatchAll)
-      return llvm::ConstantPointerNull::get(PtrTy);
+      continue;
+    const TypeInfoIdentity Identity{
+        Entry->TypeInfoSlotVA != 0,
+        Entry->TypeInfoSlotVA != 0 ? Entry->TypeInfoSlotVA : Entry->TypeInfoVA};
+    llvm::StringRef DecodedName(Entry->TypeName);
+    const bool IsRTTISymbol =
+        DecodedName.starts_with("_ZTI") || DecodedName.starts_with("__ZTI");
+    const std::string Name =
+        Identity.IsSlot ? makeNdDataSymbol(Identity.Address)
+                        : (IsRTTISymbol ? Entry->TypeName
+                                        : makeNdDataSymbol(Identity.Address));
+    auto [NameIt, NewName] = IdentityByName.emplace(Name, Identity);
+    if (!NewName && !(NameIt->second == Identity))
+      return false;
+    auto [IdentityIt, NewIdentity] = NameByIdentity.emplace(Identity, Name);
+    if (!NewIdentity && IdentityIt->second != Name)
+      return false;
+    if (llvm::GlobalValue *Existing = Mod->getNamedValue(Name)) {
+      const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Existing);
+      if (!Global || Global->getValueType() != I8Ty)
+        return false;
+    }
+  }
 
-    // LLVM emits PIC type tables with DW_EH_PE_indirect.  The encoded value
-    // must therefore name the pointer cell, not the RTTI object loaded from
-    // it.  Reusing the original cell also preserves dyld/ld.so rebasing (and
-    // arm64e pointer authentication) in the patched image.
-    if (Entry->TypeInfoSlotVA != 0) {
-      std::string Name = makeNdDataSymbol(Entry->TypeInfoSlotVA);
+  // Commit begins here.  Every operation below is total for the preflighted
+  // plan, so there is no rollback path and no partially lowered false return.
+  auto TypeInfoConstant =
+      [&](const ItaniumTypeEntry &Entry) -> llvm::Constant * {
+    if (Entry.IsCatchAll)
+      return llvm::ConstantPointerNull::get(PtrTy);
+    if (Entry.TypeInfoSlotVA != 0) {
+      std::string Name = makeNdDataSymbol(Entry.TypeInfoSlotVA);
       llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
       if (!GV)
         GV = new llvm::GlobalVariable(*Mod, I8Ty, /*isConstant=*/true,
@@ -115,19 +491,13 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
                                       /*Initializer=*/nullptr, Name);
       return GV;
     }
-
-    if (Entry->TypeInfoVA == 0)
-      return nullptr;
-    if (llvm::Constant *Mapped = tryResolveGlobalData(Entry->TypeInfoVA, 1))
+    if (llvm::Constant *Mapped = tryResolveGlobalData(Entry.TypeInfoVA, 1))
       return Mapped;
-
-    // A real Itanium RTTI linkage name is still useful for an unmapped
-    // externally supplied type.  A bare encoded type-name string is not.
-    llvm::StringRef DecodedName(Entry->TypeName);
-    bool IsRTTISymbol =
+    llvm::StringRef DecodedName(Entry.TypeName);
+    const bool IsRTTISymbol =
         DecodedName.starts_with("_ZTI") || DecodedName.starts_with("__ZTI");
     std::string Name =
-        IsRTTISymbol ? Entry->TypeName : makeNdDataSymbol(Entry->TypeInfoVA);
+        IsRTTISymbol ? Entry.TypeName : makeNdDataSymbol(Entry.TypeInfoVA);
     llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
     if (!GV)
       GV = new llvm::GlobalVariable(*Mod, I8Ty, /*isConstant=*/true,
@@ -136,121 +506,22 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
     return GV;
   };
 
-  struct Pad {
-    llvm::BasicBlock *Block = nullptr;
-    llvm::BasicBlock *UnwindBlock = nullptr;
-    va_t Address = 0;
-    int BlockId = -1;
-    bool Cleanup = false;
-    std::vector<llvm::Constant *> Clauses;
-    bool Usable = false;
-  };
-  std::map<va_t, Pad> Pads;
-
-  auto BlockAt = [&](va_t Address) -> llvm::BasicBlock * {
-    for (const MedBlock &Block : Func.Blocks) {
-      if (Block.StartAddr != Address)
+  for (const std::unique_ptr<PadPlan> &Pad : Pads) {
+    for (const ClausePlan &Clause : Pad->Semantics.Clauses) {
+      if (Clause.Kind == ClauseKind::Catch) {
+        assert(Clause.Types.size() == 1);
+        Pad->Clauses.push_back(TypeInfoConstant(*Clause.Types.front()));
         continue;
-      auto It = OriginalBlockMap.find(Block.Id);
-      return It == OriginalBlockMap.end() ? nullptr : It->second;
-    }
-    return nullptr;
-  };
-  auto FindAction = [&](uint64_t Offset) -> const ItaniumAction * {
-    for (const ItaniumAction &Action : Itanium.Actions)
-      if (Action.TableOffset == Offset)
-        return &Action;
-    return nullptr;
-  };
-  auto AddClause = [](Pad &P, llvm::Constant *Clause) {
-    if (std::find(P.Clauses.begin(), P.Clauses.end(), Clause) ==
-        P.Clauses.end())
-      P.Clauses.push_back(Clause);
-  };
-
-  // Collect what each pad has to select on.  Several call sites can share a
-  // pad, and the clauses they name accumulate on the one `landingpad` the pad
-  // block gets.
-  bool TableFullyRead = true;
-  for (const ItaniumCallSite &Site : Itanium.CallSites) {
-    if (Site.LandingPadVA == 0)
-      continue;
-    Pad &P = Pads[Site.LandingPadVA];
-    P.Address = Site.LandingPadVA;
-    if (!Site.FirstActionOffset) {
-      // The ABI defines a pad with no action record as an unconditional
-      // cleanup, which is the shape of every destructor-only frame and of
-      // every Rust drop-glue pad.
-      P.Cleanup = true;
-      continue;
-    }
-    std::optional<uint64_t> Offset = Site.FirstActionOffset;
-    // A step budget of the action count terminates a cycle without being able
-    // to cut a well-formed chain short.
-    for (size_t Step = 0; Offset && Step <= Itanium.Actions.size(); ++Step) {
-      const ItaniumAction *Action = FindAction(*Offset);
-      if (!Action) {
-        TableFullyRead = false;
-        break;
       }
-      if (Action->isCleanup()) {
-        P.Cleanup = true;
-      } else if (Action->isCatch()) {
-        llvm::Constant *Info =
-            TypeInfoConstant(static_cast<uint64_t>(Action->TypeFilter));
-        if (!Info)
-          TableFullyRead = false;
-        else
-          AddClause(P, Info);
-      } else {
-        const ItaniumExceptionSpec *Spec = nullptr;
-        for (const ItaniumExceptionSpec &Candidate : Itanium.ExceptionSpecs)
-          if (Candidate.Index == static_cast<uint64_t>(-Action->TypeFilter)) {
-            Spec = &Candidate;
-            break;
-          }
-        if (!Spec) {
-          TableFullyRead = false;
-        } else {
-          // A filter clause is an array of the types the specification
-          // permits; the empty array is `noexcept`, which permits none.
-          std::vector<llvm::Constant *> Permitted;
-          for (uint64_t Index : Spec->TypeIndices) {
-            llvm::Constant *Info = TypeInfoConstant(Index);
-            if (!Info) {
-              TableFullyRead = false;
-              break;
-            }
-            Permitted.push_back(Info);
-          }
-          if (Permitted.size() == Spec->TypeIndices.size())
-            AddClause(P, llvm::ConstantArray::get(
-                             llvm::ArrayType::get(PtrTy, Permitted.size()),
-                             Permitted));
-        }
-      }
-      Offset = Action->NextActionOffset;
+      std::vector<llvm::Constant *> Permitted;
+      Permitted.reserve(Clause.Types.size());
+      for (const ItaniumTypeEntry *Type : Clause.Types)
+        Permitted.push_back(TypeInfoConstant(*Type));
+      Pad->Clauses.push_back(llvm::ConstantArray::get(
+          llvm::ArrayType::get(PtrTy, Permitted.size()), Permitted));
     }
   }
-  // An action this decoder could not resolve leaves the pad's clause list
-  // short, and a short clause list does not merely describe less — it says the
-  // pad selects on fewer types than it does.  Nothing here is emitted from a
-  // table that could not be read through.
-  if (Pads.empty() || !TableFullyRead)
-    return false;
 
-  // A native landing address may also have an ordinary predecessor.  Clang
-  // uses this shape when one LSDA pad is a short branch into another pad's
-  // shared handler.  LLVM requires the landingpad instruction itself to live
-  // in an unwind-only block, so each used native pad gets a synthetic unwind
-  // entry below; that entry stores the exception pair and then branches to the
-  // recovered native handler block.
-  //
-  // Native CFG recovery conservatively gives a trap instruction a fallthrough
-  // edge.  Clang emits exactly that shape after noreturn EH runtime calls
-  // (`objc_exception_rethrow(); brk #1; <landing pad>`).  Once the trap has
-  // become an LLVM noreturn call, remove its impossible unconditional edge so
-  // the following block can correctly become an unwind-only landing pad.
   auto RemoveNoreturnFallthroughs = [](llvm::BasicBlock *PadBlock) {
     llvm::SmallVector<llvm::BasicBlock *, 2> Preds(llvm::pred_begin(PadBlock),
                                                    llvm::pred_end(PadBlock));
@@ -259,7 +530,6 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
           llvm::dyn_cast_or_null<llvm::UncondBrInst>(Pred->getTerminator());
       if (!Branch || Branch->getSuccessor(0) != PadBlock)
         continue;
-
       bool HasNoreturnCall = false;
       for (llvm::Instruction &Inst : *Pred) {
         if (&Inst == Branch)
@@ -272,192 +542,106 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
       }
       if (!HasNoreturnCall)
         continue;
-
       Branch->eraseFromParent();
-      llvm::IRBuilder<> B(Pred);
-      B.CreateUnreachable();
+      llvm::IRBuilder<> Builder(Pred);
+      Builder.CreateUnreachable();
     }
   };
 
-  size_t UsablePads = 0;
-  for (auto &[PadVA, P] : Pads) {
-    P.Block = BlockAt(PadVA);
-    for (const MedBlock &Block : Func.Blocks)
-      if (Block.StartAddr == PadVA) {
-        P.BlockId = Block.Id;
-        break;
-      }
-    if (P.Block)
-      RemoveNoreturnFallthroughs(P.Block);
-    if (!P.Block || P.Block == &LLVMFunc.getEntryBlock() ||
-        P.Block->isLandingPad())
-      continue;
-    // Every pad the ABI can enter runs at least cleanup; a pad that named no
-    // clause and no cleanup would be a `landingpad` LLVM rejects.
-    if (P.Clauses.empty())
-      P.Cleanup = true;
-    P.Usable = true;
-    ++UsablePads;
+  std::set<llvm::BasicBlock *> CleanedHandlers;
+  for (const std::unique_ptr<PadPlan> &Pad : Pads) {
+    if (CleanedHandlers.insert(Pad->Block).second)
+      RemoveNoreturnFallthroughs(Pad->Block);
+    Pad->UnwindBlock = llvm::BasicBlock::Create(
+        *Ctx, "eh.pad." + llvm::utohexstr(Pad->Address), &LLVMFunc, Pad->Block);
+    llvm::IRBuilder<> Builder(Pad->UnwindBlock);
+    Builder.CreateBr(Pad->Block);
   }
-  if (UsablePads == 0)
-    return false;
 
-  auto EnsureUnwindBlock = [&](Pad &P) {
-    if (P.UnwindBlock)
-      return P.UnwindBlock;
-    P.UnwindBlock = llvm::BasicBlock::Create(
-        *Ctx, "eh.pad." + llvm::utohexstr(P.Address), &LLVMFunc, P.Block);
-    llvm::IRBuilder<> B(P.UnwindBlock);
-    B.CreateBr(P.Block);
-    return P.UnwindBlock;
-  };
-
-  // Match each emitted call to the innermost call-site range that covers the
-  // address it came from.  The ranges a compiler emits do not overlap, so the
-  // innermost test only ever disambiguates a table this decoder read loosely.
-  auto PadForCall = [&](va_t Address) -> Pad * {
-    Pad *Best = nullptr;
-    uint64_t BestSize = std::numeric_limits<uint64_t>::max();
-    for (const ItaniumCallSite &Site : Itanium.CallSites) {
-      if (Site.LandingPadVA == 0 || !Site.GuardedRange.contains(Address) ||
-          Site.GuardedRange.size() >= BestSize)
-        continue;
-      auto It = Pads.find(Site.LandingPadVA);
-      if (It == Pads.end() || !It->second.Usable)
-        continue;
-      Best = &It->second;
-      BestSize = Site.GuardedRange.size();
-    }
-    return Best;
-  };
-
-  auto EmitExceptionalPhiCopies = [&](int PredId, int TargetId,
-                                      llvm::Instruction *Before) {
-    const MedBlock *TargetBlock = nullptr;
+  auto EmitExceptionalPhiCopies = [&](const CallPlan &Plan) {
+    const MedBlock *Target = nullptr;
     for (const MedBlock &Block : Func.Blocks)
-      if (Block.Id == TargetId) {
-        TargetBlock = &Block;
+      if (Block.Id == Plan.Pad->BlockId) {
+        Target = &Block;
         break;
       }
-    if (!TargetBlock)
-      return;
-
-    llvm::IRBuilder<> CopyBuilder(Before);
+    assert(Target && "preflight lost the exceptional phi target");
+    llvm::IRBuilder<> Builder(Plan.Call);
     std::vector<std::pair<MedVar, llvm::Value *>> Pending;
-    for (const PhiNode &Phi : TargetBlock->Phis)
+    for (const PhiNode &Phi : Target->Phis)
       for (const auto &[IncomingPred, Incoming] : Phi.Args)
-        if (IncomingPred == PredId)
-          Pending.emplace_back(Phi.Output, getVar(Incoming, CopyBuilder));
-    // Parallel-copy semantics: read every incoming value before any phi output
-    // is overwritten.
+        if (IncomingPred == Plan.PredId)
+          Pending.emplace_back(Phi.Output, getVar(Incoming, Builder));
     for (auto &[Output, Value] : Pending)
-      setVar(Output, Value, CopyBuilder);
+      setVar(Output, Value, Builder);
   };
 
-  size_t LoweredCalls = 0;
-  for (const MedBlock &MedBB : Func.Blocks) {
-    auto BBIt = OriginalBlockMap.find(MedBB.Id);
-    if (BBIt == OriginalBlockMap.end())
-      continue;
-    llvm::SmallVector<llvm::CallInst *, 8> Calls;
-    for (llvm::Instruction &Inst : *BBIt->second)
-      if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst))
-        if (!Call->doesNotThrow() && !Call->isMustTailCall() &&
-            !llvm::isa<llvm::IntrinsicInst>(Call))
-          Calls.push_back(Call);
-
-    for (llvm::CallInst *Call : Calls) {
-      auto AddrIt = CallSiteAddrs.find(Call);
-      if (AddrIt == CallSiteAddrs.end())
-        continue;
-      Pad *Target = PadForCall(AddrIt->second);
-      if (!Target)
-        continue;
-      llvm::BasicBlock *UnwindBlock = EnsureUnwindBlock(*Target);
-      EmitExceptionalPhiCopies(MedBB.Id, Target->BlockId, Call);
-      llvm::Instruction *Next = Call->getNextNode();
-      if (!Next)
-        continue;
-      llvm::BasicBlock *CallBB = Call->getParent();
-      llvm::BasicBlock *Cont =
-          CallBB->splitBasicBlock(Next, CallBB->getName() + ".eh.cont");
-      llvm::Instruction *OldBranch = CallBB->getTerminator();
-      llvm::SmallVector<llvm::Value *, 8> Args;
-      for (llvm::Use &Arg : Call->args())
-        Args.push_back(Arg.get());
-      llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
-      Call->getOperandBundlesAsDefs(Bundles);
-      auto *Invoke = llvm::InvokeInst::Create(
-          Call->getFunctionType(), Call->getCalledOperand(), Cont, UnwindBlock,
-          Args, Bundles, Call->getName(), OldBranch->getIterator());
-      Invoke->setCallingConv(Call->getCallingConv());
-      Invoke->setAttributes(Call->getAttributes());
-      Invoke->setDebugLoc(Call->getDebugLoc());
-      Invoke->copyMetadata(*Call);
-      Call->replaceAllUsesWith(Invoke);
-      CallSiteAddrs.erase(Call);
-      Call->eraseFromParent();
-      OldBranch->eraseFromParent();
-      ++LoweredCalls;
-    }
+  for (const CallPlan &Plan : Calls) {
+    EmitExceptionalPhiCopies(Plan);
+    llvm::Instruction *Next = Plan.Call->getNextNode();
+    assert(Next && "preflighted call lost its continuation");
+    llvm::BasicBlock *CallBlock = Plan.Call->getParent();
+    llvm::BasicBlock *Continuation =
+        CallBlock->splitBasicBlock(Next, CallBlock->getName() + ".eh.cont");
+    llvm::Instruction *OldBranch = CallBlock->getTerminator();
+    llvm::SmallVector<llvm::Value *, 8> Args;
+    for (llvm::Use &Arg : Plan.Call->args())
+      Args.push_back(Arg.get());
+    llvm::SmallVector<llvm::OperandBundleDef, 2> Bundles;
+    Plan.Call->getOperandBundlesAsDefs(Bundles);
+    auto *Invoke = llvm::InvokeInst::Create(
+        Plan.Call->getFunctionType(), Plan.Call->getCalledOperand(),
+        Continuation, Plan.Pad->UnwindBlock, Args, Bundles,
+        Plan.Call->getName(), OldBranch->getIterator());
+    Invoke->setCallingConv(Plan.Call->getCallingConv());
+    Invoke->setAttributes(Plan.Call->getAttributes());
+    Invoke->setDebugLoc(Plan.Call->getDebugLoc());
+    Invoke->copyMetadata(*Plan.Call);
+    Plan.Call->replaceAllUsesWith(Invoke);
+    CallSiteAddrs.erase(Plan.Call);
+    Plan.Call->eraseFromParent();
+    OldBranch->eraseFromParent();
   }
-  if (LoweredCalls == 0)
-    return false;
 
-  auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
   llvm::FunctionCallee Personality =
       Mod->getOrInsertFunction(PersonalitySymbol, PersonalityTy);
   LLVMFunc.setPersonalityFn(
       llvm::cast<llvm::Constant>(Personality.getCallee()));
 
-  // The pad's `landingpad` has to precede the recovered body, because LLVM
-  // requires it to be the block's first non-PHI instruction and because the
-  // unwinder has already run by the time that body executes.
   auto *ResultTy = llvm::StructType::get(PtrTy, I32Ty);
-  size_t LoweredPads = 0;
-  for (auto &[PadVA, P] : Pads) {
-    if (!P.Usable || !P.UnwindBlock || llvm::pred_empty(P.UnwindBlock))
-      continue;
-    llvm::IRBuilder<> B(P.UnwindBlock, P.UnwindBlock->begin());
-    auto *LP = B.CreateLandingPad(ResultTy, P.Clauses.size(), "eh.lpad");
-    LP->setCleanup(P.Cleanup);
-    for (llvm::Constant *Clause : P.Clauses)
-      LP->addClause(Clause);
-
-    // Preserve the Itanium landing-pad pair for the recovered handler body.
-    // LowToMed represents the native exceptional live-ins (the first two
-    // integer return registers) as EHException/EHSelector rather than ordinary
-    // function parameters; getVar() loads those values from these slots.
-    auto &Entry = CurFunc->getEntryBlock();
-    llvm::IRBuilder<> AllocBuilder(&Entry, Entry.begin());
-    const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
-    auto *ExceptionTy = sizeToType(static_cast<uint16_t>(PointerSize));
-    if (!EHExceptionAlloca)
-      EHExceptionAlloca =
-          AllocBuilder.CreateAlloca(ExceptionTy, nullptr, "eh.exception.slot");
-    if (!EHSelectorAlloca)
-      EHSelectorAlloca =
-          AllocBuilder.CreateAlloca(I32Ty, nullptr, "eh.selector.slot");
-    auto *LPEx = B.CreateExtractValue(LP, 0, "lp.ex");
-    auto *LPSel = B.CreateExtractValue(LP, 1, "lp.sel");
-    B.CreateStore(B.CreatePtrToInt(LPEx, ExceptionTy), EHExceptionAlloca);
-    B.CreateStore(LPSel, EHSelectorAlloca);
-    ++LoweredPads;
-  }
-  if (LoweredPads == 0) {
-    // No invoke reached a pad after all, which leaves a personality on a
-    // function that has no landing pad.  Undo it rather than describe a
-    // dispatch that is not there.
-    LLVMFunc.setPersonalityFn(nullptr);
-    return false;
+  auto &Entry = CurFunc->getEntryBlock();
+  llvm::IRBuilder<> AllocBuilder(&Entry, Entry.begin());
+  const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+  auto *ExceptionTy = sizeToType(static_cast<uint16_t>(PointerSize));
+  EHExceptionAlloca =
+      AllocBuilder.CreateAlloca(ExceptionTy, nullptr, "eh.exception.slot");
+  EHSelectorAlloca =
+      AllocBuilder.CreateAlloca(I32Ty, nullptr, "eh.selector.slot");
+  for (const std::unique_ptr<PadPlan> &Pad : Pads) {
+    llvm::IRBuilder<> Builder(Pad->UnwindBlock, Pad->UnwindBlock->begin());
+    auto *LandingPad =
+        Builder.CreateLandingPad(ResultTy, Pad->Clauses.size(), "eh.lpad");
+    LandingPad->setCleanup(Pad->Semantics.Cleanup);
+    for (llvm::Constant *Clause : Pad->Clauses)
+      LandingPad->addClause(Clause);
+    auto *Exception = Builder.CreateExtractValue(LandingPad, 0, "lp.ex");
+    auto *Selector = Builder.CreateExtractValue(LandingPad, 1, "lp.sel");
+    Builder.CreateStore(Builder.CreatePtrToInt(Exception, ExceptionTy),
+                        EHExceptionAlloca);
+    Builder.CreateStore(Selector, EHSelectorAlloca);
   }
 
   LLVMFunc.setMetadata(
       language_eh_md::ItaniumAttachment,
-      llvm::MDNode::get(*Ctx, {llvm::MDString::get(*Ctx, PersonalitySymbol),
-                               mdUInt(*Ctx, LoweredPads, 32),
-                               mdUInt(*Ctx, Pads.size() - LoweredPads, 32),
-                               mdUInt(*Ctx, LoweredCalls, 32)}));
+      llvm::MDNode::get(*Ctx,
+                        {llvm::MDString::get(*Ctx, PersonalitySymbol),
+                         mdUInt(*Ctx, Pads.size(), 32), mdUInt(*Ctx, 0, 32),
+                         mdUInt(*Ctx, Calls.size(), 32),
+                         mdUInt(*Ctx, RequiredCalls, 32)}));
+  exception_rewrite::setContract(LLVMFunc,
+                                 exception_rewrite::SourceState::Complete,
+                                 exception_rewrite::LoweringState::Complete,
+                                 RequiredCalls, Calls.size(), 0);
   return true;
 }
 

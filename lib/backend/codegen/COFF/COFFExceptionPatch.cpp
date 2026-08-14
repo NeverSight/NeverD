@@ -6,14 +6,15 @@
 
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 
-#include "neverd/object/PELayout.h"
-#include "neverd/support/BinaryEncoding.h"
-#include "neverd/support/ISAEncoding.h"
+#include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
+#include "neverd/object/PELayout.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -473,11 +474,15 @@ llvm::Error validateRuntimeEntries(llvm::ArrayRef<RuntimeEntry> Entries,
 std::optional<va_t> findCOFFExceptionPersonalityVA(const BinaryImage &Image,
                                                    llvm::StringRef SymbolName) {
   SymbolName.consume_front("\01");
+  const std::optional<va_t> AddressAlias = autoFunctionAddress(SymbolName);
   for (const ExceptionFunction &EH : Image.ExceptionMetadata.Functions) {
     if (EH.Personality == ExceptionPersonality::None ||
         EH.Personality == ExceptionPersonality::Unknown ||
-        EH.PersonalityVA == 0 ||
-        SymbolName != getExceptionPersonalityName(EH.Personality))
+        EH.PersonalityVA == 0)
+      continue;
+    if (AddressAlias
+            ? *AddressAlias != EH.PersonalityVA
+            : SymbolName != getExceptionPersonalityName(EH.Personality))
       continue;
     const Segment *Target = Image.getSegmentFor(EH.PersonalityVA);
     if (Target && Target->isExecutable() && Image.readVA(EH.PersonalityVA, 1))
@@ -489,6 +494,10 @@ std::optional<va_t> findCOFFExceptionPersonalityVA(const BinaryImage &Image,
 llvm::Expected<COFFExceptionPatchPlan>
 planCOFFExceptionPatch(const llvm::Module &Mod, const BinaryImage &Image,
                        Arch TargetArch) {
+  auto Contracts = exception_rewrite::validateExceptionRewriteContracts(Mod);
+  if (!Contracts)
+    return Contracts.takeError();
+
   COFFExceptionPatchPlan Plan;
   if (hasUnsupportedGeneratedGuardMode(Image.DynInfo.GuardFlags))
     return patchError(
@@ -1282,8 +1291,7 @@ llvm::Error validatePatchedCOFFImage(llvm::ArrayRef<uint8_t> Binary,
       }
       RuntimeEntry Current = *EntryOrErr;
       std::set<uint32_t> SeenUnwind;
-      bool ReachedTerminal = false;
-      for (unsigned Depth = 0; Depth < 32; ++Depth) {
+      while (true) {
         if (Current.Begin >= Current.End || Current.End > SizeOfImage ||
             !IsExecutableRVA(Current.Begin) ||
             !IsExecutableRVA(Current.End - 1))
@@ -1320,11 +1328,8 @@ llvm::Error validatePatchedCOFFImage(llvm::ArrayRef<uint8_t> Binary,
           Current.Unwind = Decoded.ChainedUnwindInfoRVA;
           continue;
         }
-        ReachedTerminal = true;
         break;
       }
-      if (!ReachedTerminal)
-        return patchError("final x64 unwind chain exceeds depth limit");
     }
     if (!std::is_sorted(Entries.begin(), Entries.end(),
                         [](const RuntimeEntry &A, const RuntimeEntry &B) {

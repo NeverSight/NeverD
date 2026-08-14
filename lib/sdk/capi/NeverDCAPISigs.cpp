@@ -18,6 +18,36 @@
 using namespace neverd;
 using namespace neverd::sdk;
 
+/// Match the loaded signature set against \p S and report how many hits it
+/// produced.
+///
+/// The personality pass runs after the general one because the general one
+/// starts by clearing the match list, and running second is also what puts an
+/// adopted name in front of the rename loop below.  It is safe to run
+/// unconditionally: it only speaks for an address a frame installs as its
+/// personality and the image itself cannot name, so a binary that carries its
+/// own symbols is left exactly as it was.
+static int matchLoadedSignatures(Session &S) {
+  std::vector<uint64_t> Entries;
+  Entries.reserve(S.Functions.size());
+  for (const auto &F : S.Functions)
+    Entries.push_back(F.Entry);
+
+  S.SigDB.apply(S.Img, Entries);
+  S.SigDB.identifyPersonalityRoutines(S.Img);
+
+  auto NameMap = S.SigDB.buildNameMap();
+  for (auto &F : S.Functions) {
+    auto It = NameMap.find(F.Entry);
+    if (It == NameMap.end() || It->second.empty())
+      continue;
+    if (S.Renames.find(F.Entry) == S.Renames.end())
+      F.Name = It->second;
+  }
+
+  return static_cast<int>(S.SigDB.matches().size());
+}
+
 int neverd_apply_signatures(neverd_session_t Sess, const char *SigDir) {
   auto *S = static_cast<Session *>(Sess);
   if (!S || !S->Loaded || !SigDir)
@@ -30,23 +60,7 @@ int neverd_apply_signatures(neverd_session_t Sess, const char *SigDir) {
     return -1;
   }
 
-  std::vector<uint64_t> Entries;
-  Entries.reserve(S->Functions.size());
-  for (const auto &F : S->Functions)
-    Entries.push_back(F.Entry);
-
-  S->SigDB.apply(S->Img, Entries);
-
-  auto NameMap = S->SigDB.buildNameMap();
-  for (auto &F : S->Functions) {
-    auto It = NameMap.find(F.Entry);
-    if (It != NameMap.end() && !It->second.empty()) {
-      if (S->Renames.find(F.Entry) == S->Renames.end())
-        F.Name = It->second;
-    }
-  }
-
-  return static_cast<int>(S->SigDB.matches().size());
+  return matchLoadedSignatures(*S);
 }
 
 int neverd_apply_signature_file(neverd_session_t Sess, const char *SigPath) {
@@ -61,23 +75,7 @@ int neverd_apply_signature_file(neverd_session_t Sess, const char *SigPath) {
     return -1;
   }
 
-  std::vector<uint64_t> Entries;
-  Entries.reserve(S->Functions.size());
-  for (const auto &F : S->Functions)
-    Entries.push_back(F.Entry);
-
-  S->SigDB.apply(S->Img, Entries);
-
-  auto NameMap = S->SigDB.buildNameMap();
-  for (auto &F : S->Functions) {
-    auto It = NameMap.find(F.Entry);
-    if (It != NameMap.end() && !It->second.empty()) {
-      if (S->Renames.find(F.Entry) == S->Renames.end())
-        F.Name = It->second;
-    }
-  }
-
-  return static_cast<int>(S->SigDB.matches().size());
+  return matchLoadedSignatures(*S);
 }
 
 int neverd_auto_apply_signatures(neverd_session_t Sess,
@@ -130,23 +128,7 @@ int neverd_auto_apply_signatures(neverd_session_t Sess,
     return -1;
   }
 
-  std::vector<uint64_t> Entries;
-  Entries.reserve(S->Functions.size());
-  for (const auto &F : S->Functions)
-    Entries.push_back(F.Entry);
-
-  S->SigDB.apply(S->Img, Entries);
-
-  auto NameMap = S->SigDB.buildNameMap();
-  for (auto &F : S->Functions) {
-    auto It = NameMap.find(F.Entry);
-    if (It != NameMap.end() && !It->second.empty()) {
-      if (S->Renames.find(F.Entry) == S->Renames.end())
-        F.Name = It->second;
-    }
-  }
-
-  return static_cast<int>(S->SigDB.matches().size());
+  return matchLoadedSignatures(*S);
 }
 
 // ===--------------------------------------------------------------------===//

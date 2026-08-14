@@ -10,12 +10,19 @@
 /// apart from the image-wide runtime detection in LanguageRuntime.cpp: that
 /// pass asks what produced an image, this one asks what a single address is.
 ///
+/// A stripped, statically linked image spells no name at all, so the two
+/// routines at the end of this file open a way in for an identification made
+/// elsewhere -- they say which addresses are worth identifying, and they take
+/// a name back on terms strict enough that a wrong one cannot get in.
+///
 //===----------------------------------------------------------------------===//
 
 #include "LanguageRuntimeDetail.h"
 
+#include "neverd/loader/DWARF/ItaniumEH.h"
 #include "neverd/loader/LanguageRuntime.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Demangle/Demangle.h"
 
@@ -386,6 +393,104 @@ std::string resolveRoutineName(const BinaryImage &Img, va_t Address,
       if (Sym.Addr == SlotVA && namesARoutine(Sym.Name))
         return Sym.Name;
   return {};
+}
+
+/// True when a frame's personality is still open to identification.
+///
+/// `None` and `Unknown` are both unclassified, and which of the two a decoder
+/// left behind says only whether it got as far as reading a name.  Neither
+/// says the routine has been identified, which is the question here.
+static bool personalityIsUnresolved(ExceptionPersonality P) {
+  return P == ExceptionPersonality::None || P == ExceptionPersonality::Unknown;
+}
+
+std::vector<va_t> collectUnnamedPersonalityRoutines(const BinaryImage &Img) {
+  std::vector<va_t> Candidates;
+  for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
+    if (F.PersonalityVA == 0 || !personalityIsUnresolved(F.Personality))
+      continue;
+    // A name the image spells but the table does not know is still the
+    // image's answer, and it is a better one than a guess: it says the
+    // routine is something other than the personalities NeverD models.
+    if (!resolveRoutineName(Img, F.PersonalityVA).empty())
+      continue;
+    if (!llvm::is_contained(Candidates, F.PersonalityVA))
+      Candidates.push_back(F.PersonalityVA);
+  }
+  return Candidates;
+}
+
+bool adoptPersonalityRoutineName(BinaryImage &Img, va_t Address,
+                                 llvm::StringRef Name) {
+  if (Address == 0 || Name.empty())
+    return false;
+  const ExceptionPersonality Adopted = classifyPersonalityName(Name);
+  if (personalityIsUnresolved(Adopted))
+    return false;
+  if (!resolveRoutineName(Img, Address).empty())
+    return false;
+
+  struct StagedFunction {
+    size_t Index;
+    ExceptionFunction Function;
+  };
+  std::vector<StagedFunction> Staged;
+
+  for (size_t I = 0; I < Img.ExceptionMetadata.Functions.size(); ++I) {
+    const ExceptionFunction &F = Img.ExceptionMetadata.Functions[I];
+    if (F.PersonalityVA != Address || !personalityIsUnresolved(F.Personality))
+      continue;
+
+    ExceptionFunction Next = F;
+    Next.PersonalityName = Name.str();
+    Next.Personality = Adopted;
+
+    const bool HasItaniumLanguageData =
+        Next.HandlerDataVA != 0 || Next.Itanium.has_value();
+    if (HasItaniumLanguageData) {
+      if (!dwarf_eh::refreshItaniumLanguageData(Img, Next))
+        return false;
+    } else {
+      ExceptionFunctionDecodeProvenance &Decode =
+          Next.establishDecodeProvenance();
+      // The only language contribution a frame without handler data can have
+      // here is the provisional personality classification.  Replace it as a
+      // unit; structural state remains independently owned.
+      if (F.DecodeProvenance)
+        Decode.Language = ExceptionDecodeState{};
+      Next.Rust.reset();
+      Next.ObjC.reset();
+      Next.rebuildParseSummary();
+    }
+
+    // The name did not come from the file, so a reader comparing this record
+    // against the bytes will not find it there.  Saying so is what keeps the
+    // classification auditable rather than merely asserted.
+    Next.DecodeProvenance->Language.Diagnostics.push_back(
+        ("personality routine name inferred rather than read from the image: " +
+         Name)
+            .str());
+    Next.rebuildParseSummary();
+    Staged.push_back({I, std::move(Next)});
+  }
+  if (Staged.empty())
+    return false;
+
+  // From this point every operation is non-failing.  Capture any image-level
+  // compatibility contributions made since the previous summary, then commit
+  // every replacement and the inferred symbol as one transaction.
+  Img.ExceptionMetadata.captureUnstructuredParseContributions();
+  for (StagedFunction &Replacement : Staged)
+    Img.ExceptionMetadata.Functions[Replacement.Index] =
+        std::move(Replacement.Function);
+
+  Symbol Sym;
+  Sym.Name = Name.str();
+  Sym.Addr = Address;
+  Sym.IsFunc = true;
+  Img.Symbols.push_back(std::move(Sym));
+  Img.ExceptionMetadata.rebuildParseSummary();
+  return true;
 }
 
 } // namespace neverd

@@ -1,16 +1,17 @@
-//===- RewriteCodegenInplaceRTTests.cpp - rewrite codegen + Unicorn verify -*- C++ -*-===//
+//===- RewriteCodegenInplaceRTTests.cpp -----------------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 //
-// In-place rewriter and binary-patcher plumbing: Thumb tail-patch safety and the trampoline/mapping accounting reported back to callers.  Uses stub RelocResolver / BinaryPatcher / InplaceRewriter implementations rather than real binaries.
+// In-place rewriter and binary-patcher plumbing: Thumb tail-patch safety and
+// the trampoline/mapping accounting reported back to callers.  Uses stub
+// RelocResolver / BinaryPatcher / InplaceRewriter implementations rather than
+// real binaries.
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "RewriteCodegenHarness.h"
-
 #include "UnicornSemanticFixture.h"
 
 using namespace neverd;
@@ -23,8 +24,32 @@ public:
   bool parse(const std::vector<uint8_t> &, Arch) override { return true; }
 };
 
+struct TestPatcherStats {
+  size_t PatchCalls = 0;
+  size_t AppendCalls = 0;
+  bool PatchHadImageContext = false;
+};
+
 class TestBinaryPatcher final : public BinaryPatcher {
 public:
+  static constexpr size_t FormatPatchCodeSize = 0x4558;
+
+  explicit TestBinaryPatcher(TestPatcherStats *Stats = nullptr)
+      : Stats(Stats) {}
+
+  PatchResult patch(const std::filesystem::path &,
+                    const std::filesystem::path &, llvm::Module &,
+                    Arch) override {
+    if (Stats) {
+      ++Stats->PatchCalls;
+      Stats->PatchHadImageContext = CachedImage != nullptr;
+    }
+    PatchResult Result;
+    Result.Success = true;
+    Result.CodeSize = FormatPatchCodeSize;
+    return Result;
+  }
+
   uint64_t plannedExecSegmentVA(const std::vector<uint8_t> &, Arch) override {
     return 0x2000;
   }
@@ -32,16 +57,24 @@ public:
   uint64_t appendExecSegment(std::vector<uint8_t> &Binary,
                              llvm::ArrayRef<uint8_t> Code, llvm::StringRef,
                              Arch) override {
+    if (Stats)
+      ++Stats->AppendCalls;
     Binary.insert(Binary.end(), Code.begin(), Code.end());
     return 0x2000;
   }
+
+private:
+  TestPatcherStats *Stats = nullptr;
 };
 
 class TestInplaceRewriter final : public InplaceRewriter {
 public:
-  static PatchResult writeSyntheticResult(
-      const std::filesystem::path &OutputPath, size_t MappingCount,
-      size_t TrampolineCount) {
+  explicit TestInplaceRewriter(TestPatcherStats *Stats = nullptr)
+      : Stats(Stats) {}
+
+  static PatchResult
+  writeSyntheticResult(const std::filesystem::path &OutputPath,
+                       size_t MappingCount, size_t TrampolineCount) {
     RewriteState State;
     State.Binary.assign(4, 0xaa);
     State.Mappings.resize(MappingCount);
@@ -65,8 +98,11 @@ protected:
   }
 
   std::unique_ptr<BinaryPatcher> createBinaryPatcher() const override {
-    return std::make_unique<TestBinaryPatcher>();
+    return std::make_unique<TestBinaryPatcher>(Stats);
   }
+
+private:
+  TestPatcherStats *Stats = nullptr;
 };
 
 struct InplaceRunResult {
@@ -76,12 +112,14 @@ struct InplaceRunResult {
 
 static InplaceRunResult runInplaceWithSpan(uint64_t OrigSize, Arch TargetArch,
                                            InstructionMode Mode,
-                                           const char *Triple) {
+                                           const char *Triple,
+                                           TestPatcherStats *Stats = nullptr,
+                                           bool HasExceptionMetadata = false) {
   ensureLLVMTargets();
 
   llvm::SmallString<128> InputPath;
-  if (auto EC = llvm::sys::fs::createTemporaryFile(
-          "neverd-inplace", "bin", InputPath)) {
+  if (auto EC = llvm::sys::fs::createTemporaryFile("neverd-inplace", "bin",
+                                                   InputPath)) {
     ADD_FAILURE() << "cannot create temporary input: " << EC.message();
     return {};
   }
@@ -113,8 +151,14 @@ static InplaceRunResult runInplaceWithSpan(uint64_t OrigSize, Arch TargetArch,
   Sym.Size = OrigSize;
   Sym.IsFunc = true;
   Image.Symbols.push_back(std::move(Sym));
+  if (HasExceptionMetadata) {
+    ExceptionFunction EH;
+    EH.CodeRange = {0x1000, 0x1000 + OrigSize};
+    Image.ExceptionMetadata.Functions.push_back(std::move(EH));
+    Image.ExceptionMetadata.rebuildIndex();
+  }
 
-  TestInplaceRewriter Rewriter;
+  TestInplaceRewriter Rewriter(Stats);
   PatchResult Result = Rewriter.rewrite(InputPath.str().str(), OutputPath, *Mod,
                                         Image, TargetArch);
   return {std::move(Result), llvm::sys::fs::exists(OutputPath)};
@@ -128,9 +172,9 @@ TEST(BinaryPatcher_ThumbSafety, ZeroSizeTailWithoutSuccessorIsSkipped) {
   std::map<std::string, uint64_t> NewSymbols{{"sub_1000", 0x1100}};
   std::vector<Symbol> Symbols{Symbol::makeFunc(0x1000)};
 
-  EXPECT_EQ(BinaryPatcher::installTrampolines(
-                Binary, NewSymbols, 0x1000, 16, 0, 0, Arch::ARM,
-                InstructionMode::Thumb, &Symbols),
+  EXPECT_EQ(BinaryPatcher::installTrampolines(Binary, NewSymbols, 0x1000, 16, 0,
+                                              0, Arch::ARM,
+                                              InstructionMode::Thumb, &Symbols),
             0u);
   EXPECT_EQ(Binary, Original);
 }
@@ -142,17 +186,16 @@ TEST(BinaryPatcher_ThumbSafety, ShortTailBeforeSentinelIsSkipped) {
   std::vector<Symbol> Symbols{Symbol::makeFunc(0x1000),
                               Symbol::makeFunc(0x1002)};
 
-  EXPECT_EQ(BinaryPatcher::installTrampolines(
-                Binary, NewSymbols, 0x1000, 16, 0, 0, Arch::ARM,
-                InstructionMode::Thumb, &Symbols),
+  EXPECT_EQ(BinaryPatcher::installTrampolines(Binary, NewSymbols, 0x1000, 16, 0,
+                                              0, Arch::ARM,
+                                              InstructionMode::Thumb, &Symbols),
             0u);
   EXPECT_EQ(Binary, Original);
 }
 
 TEST(InplaceRewriter_ThumbSafety, ShortGrowerSpanFailsWithoutOutput) {
   InplaceRunResult Run = runInplaceWithSpan(
-      2, Arch::ARM, InstructionMode::Thumb,
-      "thumbv7-unknown-linux-gnueabihf");
+      2, Arch::ARM, InstructionMode::Thumb, "thumbv7-unknown-linux-gnueabihf");
   EXPECT_FALSE(Run.Result.Success);
   EXPECT_EQ(Run.Result.TrampolineCount, 0u);
   EXPECT_FALSE(Run.OutputExists);
@@ -160,8 +203,7 @@ TEST(InplaceRewriter_ThumbSafety, ShortGrowerSpanFailsWithoutOutput) {
 
 TEST(InplaceRewriter_ThumbSafety, InstalledGrowerReportsOneTrampoline) {
   InplaceRunResult Run = runInplaceWithSpan(
-      4, Arch::ARM, InstructionMode::Thumb,
-      "thumbv7-unknown-linux-gnueabihf");
+      4, Arch::ARM, InstructionMode::Thumb, "thumbv7-unknown-linux-gnueabihf");
   ASSERT_TRUE(Run.Result.Success);
   EXPECT_EQ(Run.Result.TrampolineCount, 1u);
   EXPECT_TRUE(Run.OutputExists);
@@ -169,12 +211,26 @@ TEST(InplaceRewriter_ThumbSafety, InstalledGrowerReportsOneTrampoline) {
 
 TEST(InplaceRewriter_ResultAccuracy, TrampolineCountIsNotMappingCount) {
   llvm::SmallString<128> OutputPath;
-  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
-      "neverd-inplace-result", "bin", OutputPath));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-inplace-result",
+                                                  "bin", OutputPath));
   llvm::FileRemover RemoveOutput(OutputPath);
 
   PatchResult Result =
       TestInplaceRewriter::writeSyntheticResult(OutputPath.str().str(), 2, 1);
   ASSERT_TRUE(Result.Success);
   EXPECT_EQ(Result.TrampolineCount, 1u);
+}
+
+TEST(InplaceRewriter_ExceptionSafety,
+     RoutesELFExceptionFunctionsThroughFormatPatcher) {
+  TestPatcherStats Stats;
+  InplaceRunResult Run =
+      runInplaceWithSpan(64, Arch::X64, InstructionMode::Default,
+                         "x86_64-unknown-linux-gnu", &Stats, true);
+
+  ASSERT_TRUE(Run.Result.Success);
+  EXPECT_EQ(Stats.PatchCalls, 1u);
+  EXPECT_EQ(Stats.AppendCalls, 0u);
+  EXPECT_TRUE(Stats.PatchHadImageContext);
+  EXPECT_EQ(Run.Result.CodeSize, TestBinaryPatcher::FormatPatchCodeSize);
 }

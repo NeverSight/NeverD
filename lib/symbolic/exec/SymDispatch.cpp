@@ -173,8 +173,8 @@ bool dispatchVariesWithIndex(SymContext &Ctx, llvm::ArrayRef<LowOp> Ops,
     // whole of this.  A table dispatch ends in a value that mentions nothing,
     // because it is the contents of somewhere; everything that makes it a
     // dispatch is in the address.
-    if (const SymState::LoadOrigin *From = State.loadOrigin(E))
-      Worklist.push_back(From->Address);
+    for (const SymState::LoadOrigin &From : State.loadOrigins(E))
+      Worklist.push_back(From.Address);
     for (SymRef Operand : Ctx.operands(E))
       Worklist.push_back(Operand);
   }

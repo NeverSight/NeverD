@@ -70,6 +70,8 @@ cl::SubCommand SymbolicCmd("sym-explore",
 // Takes text rather than a binary, so it is not among the subcommands that
 // register the positional input file below.
 cl::SubCommand SimplifyCmd("simplify", "Simplify a bitvector expression");
+cl::SubCommand OptimizeIRCmd("optimize-ir",
+                             "Optimize textual LLVM IR transactionally");
 
 //===----------------------------------------------------------------------===//
 // Common options (registered with all subcommands)
@@ -557,11 +559,10 @@ cl::opt<std::string> TextSection(
 //===----------------------------------------------------------------------===//
 
 cl::opt<std::string> SigDir("sig-dir",
-                            cl::desc("Directory containing .sig/.pat files"),
+                            cl::desc("Directory containing .pat files"),
                             cl::init(""), cl::sub(SigsCmd));
 
-cl::opt<std::string> SigFile("sig-file",
-                             cl::desc("Single .sig or .pat file to load"),
+cl::opt<std::string> SigFile("sig-file", cl::desc("Single .pat file to load"),
                              cl::init(""), cl::sub(SigsCmd));
 
 cl::opt<bool>
@@ -605,7 +606,9 @@ cl::opt<unsigned long long> SimplifyMaxWork(
     cl::init(0), cl::sub(SimplifyCmd));
 
 cl::opt<bool> SimplifyExhaustive(
-    "exhaustive", cl::desc("Remove the walk and polynomial-search work budget"),
+    "exhaustive",
+    cl::desc(
+        "Remove parser and active simplification/search resource ceilings"),
     cl::sub(SimplifyCmd));
 
 cl::opt<unsigned> SimplifyVerifySamples(
@@ -627,5 +630,149 @@ cl::opt<bool> SimplifyStats(
 
 cl::opt<bool> SimplifyJson("json", cl::desc("Output as JSON"),
                            cl::sub(SimplifyCmd));
+
+cl::opt<bool> SimplifySynthesize(
+    "synthesize",
+    cl::desc(
+        "Search for a shorter expression and require an equivalence proof"),
+    cl::sub(SimplifyCmd));
+
+cl::opt<unsigned long long>
+    SimplifyMaxCost("max-cost",
+                    cl::desc("Largest synthesis candidate in grammar nodes"),
+                    cl::init(0), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned long long> SimplifyMaxSamples(
+    "max-samples", cl::desc("Discovery samples used to distinguish candidates"),
+    cl::init(0), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned>
+    SimplifyMaxLeaves("max-leaves",
+                      cl::desc("Maximum independent synthesis leaves"),
+                      cl::init(0), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned> SimplifyMaxConstants("max-constants",
+                                       cl::desc("Maximum synthesis literals"),
+                                       cl::init(0), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned>
+    SimplifyStochasticSlots("stochastic-slots",
+                            cl::desc("Straight-line stochastic search slots"),
+                            cl::init(0), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned> SimplifyStochasticRestarts(
+    "stochastic-restarts", cl::desc("Independent stochastic search attempts"),
+    cl::init(0), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned long long>
+    SimplifyStochasticIterations("stochastic-iterations",
+                                 cl::desc("Mutations per stochastic restart"),
+                                 cl::init(0), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned long long>
+    SimplifySolverMaxConflicts("solver-max-conflicts",
+                               cl::desc("SAT conflict budget"), cl::init(0),
+                               cl::sub(SimplifyCmd));
+
+cl::opt<unsigned long long>
+    SimplifySolverMaxPropagations("solver-max-propagations",
+                                  cl::desc("SAT propagation budget"),
+                                  cl::init(0), cl::sub(SimplifyCmd));
+
+cl::opt<unsigned long long>
+    SimplifySolverMaxWatchVisits("solver-max-watch-visits",
+                                 cl::desc("SAT watched-clause visit budget"),
+                                 cl::init(0), cl::sub(SimplifyCmd));
+
+//===----------------------------------------------------------------------===//
+// Optimize-IR-specific options
+//===----------------------------------------------------------------------===//
+
+cl::opt<std::string> OptimizeIRInput(cl::Positional, cl::desc("<llvm-ir>"),
+                                     cl::Required, cl::sub(OptimizeIRCmd));
+
+cl::opt<std::string>
+    OptimizeIROutput("o", cl::desc("Write committed LLVM IR to this file"),
+                     cl::init(""), cl::sub(OptimizeIRCmd));
+
+cl::opt<neverd_optimization_mode_t> OptimizeIRMode(
+    "mode", cl::desc("Optimization pipeline mode"),
+    cl::values(
+        clEnumValN(NEVERD_OPTIMIZATION_MODE_CONSERVATIVE, "conservative",
+                   "Standard LLVM optimization without semantic rewriting"),
+        clEnumValN(NEVERD_OPTIMIZATION_MODE_THIN, "thin",
+                   "Thin standard LLVM pipeline with semantic convergence"),
+        clEnumValN(NEVERD_OPTIMIZATION_MODE_DEEP, "deep",
+                   "Deep standard LLVM pipeline with semantic convergence")),
+    cl::init(NEVERD_OPTIMIZATION_MODE_DEEP), cl::sub(OptimizeIRCmd));
+
+cl::opt<neverd_llvm_optimization_level_t> OptimizeIRLevel(
+    "llvm-level", cl::desc("Standard LLVM optimization level"),
+    cl::values(clEnumValN(NEVERD_LLVM_OPTIMIZATION_O0, "O0", "LLVM O0"),
+               clEnumValN(NEVERD_LLVM_OPTIMIZATION_O1, "O1", "LLVM O1"),
+               clEnumValN(NEVERD_LLVM_OPTIMIZATION_O2, "O2", "LLVM O2"),
+               clEnumValN(NEVERD_LLVM_OPTIMIZATION_O3, "O3", "LLVM O3")),
+    cl::init(NEVERD_LLVM_OPTIMIZATION_O2), cl::sub(OptimizeIRCmd));
+
+cl::opt<unsigned>
+    OptimizeIRMaxRounds("max-rounds",
+                        cl::desc("Semantic rounds per pass invocation"),
+                        cl::init(0), cl::sub(OptimizeIRCmd));
+
+cl::opt<bool>
+    OptimizeIRSynthesize("synthesize",
+                         cl::desc("Enable proof-gated expression synthesis"),
+                         cl::sub(OptimizeIRCmd));
+
+cl::opt<unsigned long long> OptimizeIRSynthesisMaxCost(
+    "synthesis-max-cost",
+    cl::desc("Largest synthesis candidate in grammar nodes"), cl::init(0),
+    cl::sub(OptimizeIRCmd));
+cl::opt<unsigned long long>
+    OptimizeIRSynthesisMaxSamples("synthesis-max-samples",
+                                  cl::desc("Synthesis discovery sample count"),
+                                  cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned> OptimizeIRSynthesisVerifySamples(
+    "synthesis-verify-samples", cl::desc("Synthesis pre-proof sample count"),
+    cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned long long>
+    OptimizeIRSynthesisMaxWork("synthesis-max-work",
+                               cl::desc("Synthesis search-work budget"),
+                               cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned> OptimizeIRSynthesisMaxLeaves(
+    "synthesis-max-leaves", cl::desc("Maximum independent synthesis leaves"),
+    cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned>
+    OptimizeIRSynthesisMaxConstants("synthesis-max-constants",
+                                    cl::desc("Maximum synthesis literals"),
+                                    cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned>
+    OptimizeIRSynthesisStochasticSlots("synthesis-stochastic-slots",
+                                       cl::desc("Stochastic search slots"),
+                                       cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned> OptimizeIRSynthesisStochasticRestarts(
+    "synthesis-stochastic-restarts", cl::desc("Stochastic search restarts"),
+    cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned long long> OptimizeIRSynthesisStochasticIterations(
+    "synthesis-stochastic-iterations", cl::desc("Mutations per restart"),
+    cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned long long>
+    OptimizeIRSolverMaxConflicts("solver-max-conflicts",
+                                 cl::desc("SAT conflict budget"), cl::init(0),
+                                 cl::sub(OptimizeIRCmd));
+cl::opt<unsigned long long>
+    OptimizeIRSolverMaxPropagations("solver-max-propagations",
+                                    cl::desc("SAT propagation budget"),
+                                    cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<unsigned long long>
+    OptimizeIRSolverMaxWatchVisits("solver-max-watch-visits",
+                                   cl::desc("SAT watched-clause visit budget"),
+                                   cl::init(0), cl::sub(OptimizeIRCmd));
+cl::opt<bool> OptimizeIRExhaustive(
+    "exhaustive", cl::desc("Remove convergence, search, and solver budgets"),
+    cl::sub(OptimizeIRCmd));
+cl::opt<bool> OptimizeIRJson("json",
+                             cl::desc("Output result and telemetry as JSON"),
+                             cl::sub(OptimizeIRCmd));
 
 } // namespace neverd::cli
