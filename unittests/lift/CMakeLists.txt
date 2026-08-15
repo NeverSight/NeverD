@@ -342,6 +342,20 @@ target_link_libraries(NeverDGoEHCorpusManifestTests PRIVATE
   NeverDSupport
 )
 
+add_neverd_unittest(NeverDAdaDEHCorpusManifestTests
+  corpus/ada-d-eh/AdaDEHCorpusManifestTests.cpp
+  corpus/ada-d-eh/AdaDEHCorpusManifest.cpp
+)
+target_include_directories(NeverDAdaDEHCorpusManifestTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+target_link_libraries(NeverDAdaDEHCorpusManifestTests PRIVATE
+  NeverDLoader
+  NeverDSupport
+)
+
 add_neverd_unittest(NeverDCxxItaniumEHCorpusManifestTests
   corpus/cxx/CxxItaniumEHCorpusManifestTests.cpp
   corpus/cxx/CxxItaniumEHCorpusManifest.cpp
@@ -459,6 +473,29 @@ if(NEVERD_HAVE_CXX_ITANIUM_EH_CORPUS)
     NeverDSupport
   )
   add_dependencies(NeverDCxxItaniumEHCorpusTests neverd)
+endif()
+
+if(NEVERD_HAVE_ADA_D_EH_CORPUS)
+  add_neverd_unittest(NeverDAdaDEHCorpusTests
+    corpus/ada-d-eh/AdaDEHCorpusTests.cpp
+    corpus/ada-d-eh/AdaDEHCorpusManifest.cpp
+    TIMEOUT 600
+  )
+
+  target_compile_definitions(NeverDAdaDEHCorpusTests PRIVATE
+    NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}"
+  )
+
+  target_include_directories(NeverDAdaDEHCorpusTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(NeverDAdaDEHCorpusTests PRIVATE
+    NeverDLoader
+    NeverDSupport
+  )
 endif()
 
 if(NEVERD_HAVE_OBJC_EH_CORPUS)

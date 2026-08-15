@@ -163,7 +163,7 @@ jobs:
         shell: bash
         run: |
           missing=0
-          for line in windows-eh rust-eh go-eh cxx-itanium-eh objc-eh; do
+          for line in windows-eh rust-eh go-eh cxx-itanium-eh objc-eh ada-d-eh; do
             manifest="unittests/corpus/manifests/$line.json"
             if [[ ! -f "$manifest" ]]; then
               echo "missing $manifest" >&2
