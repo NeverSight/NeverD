@@ -20,6 +20,7 @@ PATCH_LABEL = "NeverDPatchFullTests"
 # when the configure step was told to look for the corpus, and each reads
 # several hundred real binaries that nothing else in the tree covers.
 CORPUS_LABELS = (
+    "NeverDAdaDEHCorpusTests",
     "NeverDCxxItaniumEHCorpusTests",
     "NeverDGoEHCorpusTests",
     "NeverDObjCEHCorpusTests",
@@ -122,8 +123,14 @@ def audit_inventory(
 
     records = parse_inventory(document)
     names = [record.name for record in records]
+    # Focused binaries deliberately compile the same TU as a large suite so
+    # one host can skip the suite and still run the cases.  Identity is
+    # therefore (name, labels), not the gtest name alone.
+    identities = [(record.name, record.labels) for record in records]
     duplicates = sorted(
-        name for name, count in Counter(names).items() if count > 1
+        name
+        for (name, _labels), count in Counter(identities).items()
+        if count > 1
     )
     if duplicates:
         preview = ", ".join(repr(name) for name in duplicates[:10])
@@ -178,8 +185,7 @@ def audit_inventory(
         if not any(excluded_pattern.search(label) for label in record.labels)
     )
     selected_names = tuple(sorted(record.name for record in selected))
-    selected_name_set = set(selected_names)
-    if not selected_name_set:
+    if not selected:
         raise InventoryError(f"profile {profile!r} selected zero tests")
 
     heavy_sets = {
@@ -188,19 +194,20 @@ def audit_inventory(
     }
     expected_owners = PROFILE_HEAVY_OWNERS[profile]
     for label, owned_names in heavy_sets.items():
-        selected_owned = selected_name_set & owned_names
+        selected_owned = {record.name for record in selected if label in record.labels}
         if label in expected_owners and selected_owned != owned_names:
             raise InventoryError(f"profile {profile!r} does not select all of {label}")
         if label not in expected_owners and selected_owned:
             raise InventoryError(f"profile {profile!r} unexpectedly selects {label}")
 
-    excluded_names = set(names) - selected_name_set
+    selected_set = set(selected)
+    excluded = {record for record in records if record not in selected_set}
     expression_excluded = {
-        record.name
+        record
         for record in records
         if any(excluded_pattern.search(label) for label in record.labels)
     }
-    if excluded_names != expression_excluded:
+    if excluded != expression_excluded:
         raise InventoryError("selected inventory is not the exact label set difference")
 
     return AuditResult(
@@ -210,7 +217,7 @@ def audit_inventory(
         semantic_count=len(semantic_names),
         patch_count=len(patch_names),
         selected_count=len(selected),
-        excluded_count=len(excluded_names),
+        excluded_count=len(excluded),
         selected_names=selected_names,
     )
 

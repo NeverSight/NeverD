@@ -211,6 +211,13 @@ target_include_directories(NeverDNativeExceptionRewriteContractTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+# NeverDIR holds function pointers into the register-name tables.  GNU ld
+# does not rescan NeverDLift after that archive, so the focused binary has
+# to name Lift again after the IR dependency is already on the line.
+target_link_libraries(NeverDNativeExceptionRewriteContractTests PRIVATE
+  NeverDLift
+)
+
 # Guards the obfuscate-then-patch barrier in isolation.  A tiny TU that links
 # the prebuilt NeverDPipeline archive (which carries SymSimplifyPass through its
 # PassIR component), so the stamp/skip contract can be pinned without rebuilding
@@ -548,6 +555,11 @@ if(TARGET neverd_shared)
     sdk/SemanticCAPIHeaderC.c
     sdk/SemanticCAPITests.cpp
   )
+  if(MSVC)
+    # File-scope _Static_assert is C11.  MSVC compiles .c as C89 unless told.
+    set_source_files_properties(sdk/SemanticCAPIHeaderC.c PROPERTIES
+      COMPILE_OPTIONS /std:c11)
+  endif()
 
   target_include_directories(NeverDSemanticCAPITests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
