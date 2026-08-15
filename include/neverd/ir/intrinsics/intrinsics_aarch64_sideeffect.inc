@@ -28,3 +28,9 @@ SIDEEFFECT(Intrinsic::Dc);
 SIDEEFFECT(Intrinsic::Ic);
 SIDEEFFECT(Intrinsic::Tlbi);
 SIDEEFFECT(Intrinsic::At);
+
+// FEAT_MOPS mutates memory and carries implementation-defined progress state.
+SIDEEFFECT(Intrinsic::A64_MopsSetP);
+SIDEEFFECT(Intrinsic::A64_MopsSetPN);
+SIDEEFFECT(Intrinsic::A64_MopsSetPT);
+SIDEEFFECT(Intrinsic::A64_MopsSetPTN);

@@ -127,3 +127,7 @@ A64_ScvtfFixed, A64_UcvtfFixed, A64_FcvtzsFixed, A64_FcvtzuFixed,
 // FPSR get/set intrinsics so reads, explicit writes, and cumulative QC state
 // survive recompilation.
 A64_GetFPSR, A64_SetFPSR,
+
+// FEAT_MOPS memory-set prologue.  The operation has implementation-defined
+// progress, so preserve the architectural instruction and all writebacks.
+A64_MopsSetP, A64_MopsSetPN, A64_MopsSetPT, A64_MopsSetPTN,

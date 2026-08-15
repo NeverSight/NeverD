@@ -22,6 +22,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -86,9 +87,13 @@ static std::set<std::string> scanIntrinsicPatterns(llvm::Module &Mod) {
   for (auto &Fn : Mod)
     for (auto &BB : Fn)
       for (auto &Inst : BB) {
-        if (auto *CI = llvm::dyn_cast<llvm::CallInst>(&Inst))
+        if (auto *CI = llvm::dyn_cast<llvm::CallInst>(&Inst)) {
           if (auto *Callee = CI->getCalledFunction())
             Seen.insert(Callee->getName().str());
+          else if (auto *IA =
+                       llvm::dyn_cast<llvm::InlineAsm>(CI->getCalledOperand()))
+            Seen.insert(IA->getAsmString().str());
+        }
         // Half-precision arithmetic is emitted as native `half` ops (not
         // intrinsics), so flag it by scanning instruction/operand types.
         if (typeUsesHalf(Inst.getType()))

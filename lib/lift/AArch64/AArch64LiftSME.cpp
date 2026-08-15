@@ -13,6 +13,7 @@
 
 #include "AArch64LiftDetail.h"
 
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64Lifter.h"
 
 namespace neverd {
@@ -107,6 +108,64 @@ bool liftSME(AArch64Lifter &L, AArch64Lifter::LiftState &S, const cs_insn *Insn,
   // Memory Copy / Set (ARMv8.8 FEAT_MOPS) — ~96+32 variants
   // All CPY* are memory copy, all SET* are memory set.
   // ========================================================================
+  case AARCH64_INS_SETP:
+  case AARCH64_INS_SETPN:
+  case AARCH64_INS_SETPT:
+  case AARCH64_INS_SETPTN: {
+    // SETP is the prologue of a FEAT_MOPS memory-set sequence.  Its progress
+    // amount is implementation-defined, so a scalar STORE cannot represent
+    // it.  Capstone exposes the printed operands here: [Rd]!, Rn!, Rm.  Keep
+    // the address value (rather than loading through [Rd]), the full count and
+    // the fill register, then collect both writebacks plus NZCV from the real
+    // architectural instruction.
+    if (ARM64.op_count < 3 || ARM64.operands[0].type != AARCH64_OP_MEM ||
+        ARM64.operands[0].mem.base == AARCH64_REG_INVALID ||
+        ARM64.operands[1].type != AARCH64_OP_REG)
+      break;
+
+    Intrinsic Id = Intrinsic::A64_MopsSetP;
+    switch (Insn->id) {
+    case AARCH64_INS_SETPN:
+      Id = Intrinsic::A64_MopsSetPN;
+      break;
+    case AARCH64_INS_SETPT:
+      Id = Intrinsic::A64_MopsSetPT;
+      break;
+    case AARCH64_INS_SETPTN:
+      Id = Intrinsic::A64_MopsSetPTN;
+      break;
+    default:
+      break;
+    }
+
+    auto DstRI =
+        mapCapstoneReg(static_cast<aarch64_reg>(ARM64.operands[0].mem.base));
+    auto CountRI =
+        mapCapstoneReg(static_cast<aarch64_reg>(ARM64.operands[1].reg));
+    if (DstRI.Size == 0 || CountRI.Size == 0)
+      break;
+
+    NdVar DstReg = NdVar::reg(DstRI.Offset, 8);
+    NdVar CountReg = NdVar::reg(CountRI.Offset, 8);
+    NdVar DstIn = L.operandEffAddr(S, ARM64.operands[0]);
+    NdVar CountIn = L.operandRead(S, ARM64.operands[1]);
+    NdVar FillIn = L.operandRead(S, ARM64.operands[2]);
+    S.emitIntrinsic(Id, DstReg, {DstIn, CountIn, FillIn});
+
+    // Multi-output intrinsics bind their returned values through the COPY
+    // inputs immediately following the intrinsic (the same convention used
+    // by CPUID/RDTSC).  Keep all three together before unpacking NZCV.
+    NdVar DstResult = S.makeTemp(8);
+    S.emit(NdOp::COPY, DstReg, {DstResult});
+    NdVar CountResult = S.makeTemp(8);
+    S.emit(NdOp::COPY, CountReg, {CountResult});
+    NdVar NzcvResult = S.makeTemp(8);
+    NdVar PackedNzcv = S.makeTemp(8);
+    S.emit(NdOp::COPY, PackedNzcv, {NzcvResult});
+    AArch64Lifter::emitMsrNzcv(S, PackedNzcv);
+    break;
+  }
+
   case AARCH64_INS_CPYE:
   case AARCH64_INS_CPYEN:
   case AARCH64_INS_CPYERN:
@@ -223,11 +282,7 @@ bool liftSME(AArch64Lifter &L, AArch64Lifter::LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_SETM:
   case AARCH64_INS_SETMN:
   case AARCH64_INS_SETMT:
-  case AARCH64_INS_SETMTN:
-  case AARCH64_INS_SETP:
-  case AARCH64_INS_SETPN:
-  case AARCH64_INS_SETPT:
-  case AARCH64_INS_SETPTN: {
+  case AARCH64_INS_SETMTN: {
     if (ARM64.op_count >= 3) {
       NdVar DstAddr = L.operandRead(S, ARM64.operands[0]);
       NdVar SrcVal = L.operandRead(S, ARM64.operands[1]);

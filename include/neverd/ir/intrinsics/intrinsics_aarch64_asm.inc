@@ -50,3 +50,9 @@ A(Intrinsic::A64_Rmif,     "rmif");
 A(Intrinsic::A64_Clrex,    "clrex");
 A(Intrinsic::A64_Wfet,     "wfet");
 A(Intrinsic::A64_Wfit,     "wfit");
+
+// FEAT_MOPS memory-set prologues (multi-output; rendered specially).
+A(Intrinsic::A64_MopsSetP,   "setp");
+A(Intrinsic::A64_MopsSetPN,  "setpn");
+A(Intrinsic::A64_MopsSetPT,  "setpt");
+A(Intrinsic::A64_MopsSetPTN, "setptn");

@@ -38,7 +38,17 @@ struct VarKeyHash {
   }
 };
 
-inline VarKey varKey(const MedVar &V) { return {V.Id, V.SSAVer}; }
+inline VarKey varKey(const MedVar &V) {
+  // Ids are unique inside MedIR SSA, but MedToHigh deliberately remaps an
+  // entry register to a zero-based Param id for source-level names (arg0,
+  // arg1, ...).  Put only those synthetic parameter versions in a disjoint
+  // (negative) namespace so Param id 1 cannot alias Reg id 1.  Other kinds
+  // retain the historic {Id, SSAVer} identity: some stack/register forwarding
+  // deliberately relies on that shared SSA numbering.
+  if (V.Kind == MedVar::Param)
+    return {V.Id, -V.SSAVer - 1};
+  return {V.Id, V.SSAVer};
+}
 
 using VarKeySet = std::unordered_set<VarKey, VarKeyHash>;
 template <typename V>

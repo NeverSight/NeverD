@@ -54,6 +54,12 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names) {
     F += ",+pauth";
   if (Has("aarch64.mte") || Has("irg") || Has("gmi"))
     F += ",+mte";
+  // MOPS phase instructions currently survive lifting as target inline asm.
+  // Seeing one proves the input binary requires FEAT_MOPS; enable the feature
+  // so patch-mode code generation accepts and preserves the instruction.
+  if (Has("setp") || Has("setm") || Has("sete") || Has("cpyp") || Has("cpym") ||
+      Has("cpye"))
+    F += ",+mops";
   return {"generic", F};
 }
 

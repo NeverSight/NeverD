@@ -10,3 +10,9 @@ MULTI_OUT(Intrinsic::Cpuid,   4);  // eax, ebx, ecx, edx
 MULTI_OUT(Intrinsic::Rdtsc,   2);  // eax(lo), edx(hi)
 MULTI_OUT(Intrinsic::Rdtscp,  3);  // eax(lo), edx(hi), ecx(aux)
 MULTI_OUT(Intrinsic::Xgetbv,  2);  // eax(lo), edx(hi)
+
+// AArch64 FEAT_MOPS set prologue: destination, remaining count, NZCV.
+MULTI_OUT(Intrinsic::A64_MopsSetP,   3);
+MULTI_OUT(Intrinsic::A64_MopsSetPN,  3);
+MULTI_OUT(Intrinsic::A64_MopsSetPT,  3);
+MULTI_OUT(Intrinsic::A64_MopsSetPTN, 3);

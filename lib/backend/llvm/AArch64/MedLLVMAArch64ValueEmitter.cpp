@@ -18,6 +18,7 @@
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
 
 namespace neverd {
@@ -30,6 +31,45 @@ llvm::Value *
 MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
+
+  if ((IC == I::A64_MopsSetP || IC == I::A64_MopsSetPN ||
+       IC == I::A64_MopsSetPT || IC == I::A64_MopsSetPTN) &&
+      Op.Output.Size > 0 && Op.NumInputs >= 4) {
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    auto coerceI64 = [&](llvm::Value *V) -> llvm::Value * {
+      if (V->getType()->isPointerTy())
+        return Builder.CreatePtrToInt(V, I64Ty);
+      if (V->getType() == I64Ty)
+        return V;
+      return Builder.CreateZExtOrTrunc(V, I64Ty);
+    };
+
+    llvm::Value *Dst = coerceI64(getVar(Op.Inputs[1], Builder));
+    llvm::Value *Count = coerceI64(getVar(Op.Inputs[2], Builder));
+    llvm::Value *Fill = coerceI64(getVar(Op.Inputs[3], Builder));
+    auto *ResultTy = llvm::StructType::get(*Ctx, {I64Ty, I64Ty, I64Ty});
+    auto *AsmTy =
+        llvm::FunctionType::get(ResultTy, {I64Ty, I64Ty, I64Ty}, false);
+    std::string Asm = std::string(intrinsicAsmMnemonic(IC)) +
+                      " [$0]!, $1!, $3\n\tmrs $2, nzcv";
+    auto *IA = llvm::InlineAsm::get(AsmTy, Asm,
+                                    "=r,=r,=r,r,0,1,~{memory},~{cc}", true);
+    // Clang's +r lowering places untied inputs before the tied destination and
+    // count inputs: fill, old destination, old count.
+    auto *Result = Builder.CreateCall(IA, {Fill, Dst, Count}, "mops.setp");
+    auto *DstOut = Builder.CreateExtractValue(Result, {0}, "mops.dst");
+    auto *CountOut = Builder.CreateExtractValue(Result, {1}, "mops.count");
+    auto *NzcvOut = Builder.CreateExtractValue(Result, {2}, "mops.nzcv");
+    PendingIntrinsicOutputs[0] = DstOut;
+    PendingIntrinsicOutputs[1] = CountOut;
+    PendingIntrinsicOutputs[2] = NzcvOut;
+    PendingIntrinsicCount = 3;
+
+    auto *OutTy = sizeToType(Op.Output.Size);
+    return DstOut->getType() == OutTy
+               ? DstOut
+               : Builder.CreateZExtOrTrunc(DstOut, OutTy);
+  }
 
   if (IC == I::A64_GetFPSR && Op.Output.Size > 0) {
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
