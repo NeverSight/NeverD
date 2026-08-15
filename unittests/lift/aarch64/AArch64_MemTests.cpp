@@ -1,6 +1,7 @@
 #include "NeverDLiftFixture.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/lift/AArch64Regs.h"
 
 #include <algorithm>
 #include <array>
@@ -75,4 +76,43 @@ TEST_F(AArch64_Mem, LdrLiteralKeepsTheFullVirtualAddress) {
         });
     ASSERT_NE(Address, Load);
     EXPECT_EQ(Address->Inputs[0].Offset, LiteralVA);
+}
+
+TEST_F(AArch64_Mem, Ld64bLoadsEightConsecutiveGPRs) {
+  // ld64b x0, [x8]
+  constexpr std::array<uint8_t, 4> Bytes = {0x00, 0xD1, 0x3F, 0xF8};
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  DecodedInsn Insn{};
+  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn), 4);
+
+  std::vector<LowOp> Ops;
+  Dec.liftToLow(Insn, Ops);
+
+  std::vector<const LowOp *> Loads;
+  for (const auto &Op : Ops)
+    if (Op.Opcode == NdOp::LOAD)
+      Loads.push_back(&Op);
+
+  ASSERT_EQ(Loads.size(), 8u);
+  const NdVar BaseEA = Loads.front()->Inputs[0];
+  for (unsigned I = 0; I < Loads.size(); ++I) {
+    const LowOp &Load = *Loads[I];
+    EXPECT_EQ(Load.Output, NdVar::reg(a64reg::X0 + I * 8, 8));
+    ASSERT_EQ(Load.NumInputs, 1);
+    if (I == 0) {
+      EXPECT_EQ(Load.Inputs[0], BaseEA);
+      continue;
+    }
+
+    const auto Address =
+        std::find_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+          return Op.Opcode == NdOp::INT_ADD && Op.Output == Load.Inputs[0] &&
+                 Op.NumInputs == 2 && Op.Inputs[0] == BaseEA &&
+                 Op.Inputs[1].isConst();
+        });
+    ASSERT_NE(Address, Ops.end());
+    EXPECT_EQ(Address->Inputs[1].Offset, I * 8);
+  }
 }

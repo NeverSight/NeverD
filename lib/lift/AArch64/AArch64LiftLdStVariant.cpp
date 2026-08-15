@@ -255,9 +255,20 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_LD64B: {
     if (ARM64.op_count < 2)
       break;
-    NdVar Dst = L.operandWrite(ARM64.operands[0]);
+    NdVar FirstDst = L.operandWrite(ARM64.operands[0]);
+    if (!FirstDst.isReg() || FirstDst.Size != 8)
+      break;
     NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    S.emit(NdOp::LOAD, Dst, {EA});
+    for (unsigned I = 0; I < 8; ++I) {
+      NdVar WordEA = EA;
+      if (I != 0) {
+        WordEA = S.makeTemp(8);
+        S.emit(NdOp::INT_ADD, WordEA,
+               {EA, NdVar::cst(static_cast<uint64_t>(I * 8), 8)});
+      }
+      NdVar Dst = NdVar::reg(FirstDst.Offset + I * 8, 8);
+      S.emit(NdOp::LOAD, Dst, {WordEA});
+    }
     break;
   }
 
