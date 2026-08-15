@@ -474,12 +474,12 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
   }
 
   llvm::TargetOptions TOpt;
-  // Darwin AArch64 normally omits DWARF CFI when a frame has a compact-unwind
-  // encoding.  The rewrite path cannot register compact-unwind records from
-  // its appended executable segment, while an existing __TEXT,__eh_frame can
-  // safely host regenerated DWARF records.  Keep those records in every
-  // Mach-O rewrite object so the format installer can validate and register
-  // them, or fail closed when the input exposes no such region.
+  // Darwin targets may omit DWARF CFI when a frame has a compact-unwind
+  // encoding.  A Mach-O rewrite transaction needs an explicit unwind payload
+  // that it can authenticate and install, including as the validated fallback
+  // for frames that cannot retain a compact encoding.  Request DWARF emission
+  // from the target backend; targets whose exception ABI uses another model
+  // still decide whether an actual CFI section is produced.
   if (ObjectFormat == BinaryFormat::MachO)
     TOpt.MCOptions.EmitDwarfUnwind = llvm::EmitDwarfUnwindType::Always;
   // The rewrite backend outputs final image bytes; alignment padding in text

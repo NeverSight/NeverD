@@ -72,14 +72,11 @@ struct MachOSymbolTarget {
 enum class MachOSymbolNameMatch : uint8_t { Exact, UnderscoreAlias };
 
 std::optional<MachOSymbolNameMatch>
-classifyMachOSymbolName(llvm::StringRef Requested,
-                        llvm::StringRef Candidate) {
+classifyMachOSymbolName(llvm::StringRef Requested, llvm::StringRef Candidate) {
   if (Candidate == Requested)
     return MachOSymbolNameMatch::Exact;
-  if ((Requested.starts_with("_") &&
-       Candidate == Requested.drop_front()) ||
-      (Candidate.starts_with("_") &&
-       Candidate.drop_front() == Requested))
+  if ((Requested.starts_with("_") && Candidate == Requested.drop_front()) ||
+      (Candidate.starts_with("_") && Candidate.drop_front() == Requested))
     return MachOSymbolNameMatch::UnderscoreAlias;
   return std::nullopt;
 }
@@ -97,9 +94,8 @@ resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested) {
         classifyMachOSymbolName(Requested, Name);
     if (!Match)
       return;
-    auto &Candidates = *Match == MachOSymbolNameMatch::Exact
-                           ? ExactCandidates
-                           : AliasCandidates;
+    auto &Candidates = *Match == MachOSymbolNameMatch::Exact ? ExactCandidates
+                                                             : AliasCandidates;
     Candidates.emplace(Address, IsCode);
   };
   auto RecordInvalid = [&](llvm::StringRef Name) {
@@ -125,9 +121,9 @@ resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested) {
       RecordInvalid(ImportedName);
       continue;
     }
-    const uint64_t Target =
-        Image.is64Bit() ? llvm::support::endian::read64le(Pointer)
-                        : llvm::support::endian::read32le(Pointer);
+    const uint64_t Target = Image.is64Bit()
+                                ? llvm::support::endian::read64le(Pointer)
+                                : llvm::support::endian::read32le(Pointer);
     Record(ImportedName, Target, /*IsCode=*/true);
   }
   for (const Export &Item : Image.Exports)
@@ -151,16 +147,15 @@ resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested) {
          "' has an unreadable pointer-slot candidate")
             .str());
   if (Candidates.size() > 1)
-    return llvm::createStringError(
-        llvm::errc::invalid_argument,
-        (llvm::Twine("ambiguous Mach-O symbol '") + Requested +
-         "' resolves to multiple addresses or kinds")
-            .str());
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   (llvm::Twine("ambiguous Mach-O symbol '") +
+                                    Requested +
+                                    "' resolves to multiple addresses or kinds")
+                                       .str());
   if (Candidates.empty())
     return std::optional<MachOSymbolTarget>();
   const auto &[Address, IsCode] = *Candidates.begin();
-  return std::optional<MachOSymbolTarget>(
-      MachOSymbolTarget{Address, IsCode});
+  return std::optional<MachOSymbolTarget>(MachOSymbolTarget{Address, IsCode});
 }
 
 llvm::Expected<MachORewriteTarget>
@@ -1247,8 +1242,7 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
             return std::nullopt;
           }
           if (*Target)
-            return SerializeResolvedCode((*Target)->Address,
-                                         (*Target)->IsCode);
+            return SerializeResolvedCode((*Target)->Address, (*Target)->IsCode);
           if (auto VA = parseNdDataSymbol(Name)) {
             bool IsCode = IsExecutable(*VA) &&
                           AuthenticatedImage.CodeRefTargets.count(*VA) != 0;

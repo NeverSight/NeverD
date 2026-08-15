@@ -766,13 +766,13 @@ TEST(MachOARM32Transaction,
   ASSERT_EQ(Symtab->nsyms, 5u);
   auto *Symbols =
       reinterpret_cast<nlist *>(Fixture.Binary.data() + Symtab->symoff);
-  nlist &ConflictingPersonality = Symbols[5];
-  ConflictingPersonality.n_strx = Symbols[0].n_strx;
-  ConflictingPersonality.n_type =
+  nlist &ConflictingCallee = Symbols[5];
+  ConflictingCallee.n_strx = Symbols[2].n_strx;
+  ConflictingCallee.n_type =
       static_cast<uint8_t>(static_cast<uint8_t>(N_SECT) | N_EXT);
-  ConflictingPersonality.n_sect = 1;
-  ConflictingPersonality.n_desc = N_ARM_THUMB_DEF;
-  ConflictingPersonality.n_value = kARM32UnwindResumeVA;
+  ConflictingCallee.n_sect = 1;
+  ConflictingCallee.n_desc = N_ARM_THUMB_DEF;
+  ConflictingCallee.n_value = kARM32PersonalityVA;
   Symtab->nsyms = 6;
 
   llvm::SmallString<128> InputPath;
@@ -800,6 +800,54 @@ TEST(MachOARM32Transaction,
       << Diagnostic;
   EXPECT_EQ(readFile(InputPath), Fixture.Binary);
   EXPECT_EQ(readFile(OutputPath), OutputSentinel);
+}
+
+TEST(MachOARM32Transaction, UniqueExactNameOutranksUnderscoreAlias) {
+  ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
+      macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
+      /*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+
+  symtab_command *Symtab = nullptr;
+  forEachMachOLoadCommand(
+      Fixture.Binary.data(), Fixture.Binary.size(),
+      [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
+        if (ID == LC_SYMTAB)
+          Symtab = reinterpret_cast<symtab_command *>(
+              const_cast<uint8_t *>(Command));
+      });
+  ASSERT_NE(Symtab, nullptr);
+  ASSERT_EQ(Symtab->nsyms, 5u);
+  auto *Symbols =
+      reinterpret_cast<nlist *>(Fixture.Binary.data() + Symtab->symoff);
+  nlist &AliasCallee = Symbols[5];
+  AliasCallee.n_strx = Symbols[2].n_strx + 1;
+  AliasCallee.n_type =
+      static_cast<uint8_t>(static_cast<uint8_t>(N_SECT) | N_EXT);
+  AliasCallee.n_sect = 1;
+  AliasCallee.n_desc = N_ARM_THUMB_DEF;
+  AliasCallee.n_value = kARM32PersonalityVA;
+  Symtab->nsyms = 6;
+
+  llvm::SmallString<128> InputPath;
+  llvm::SmallString<128> OutputPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-arm32-macho-exact-symbol-input", "macho", InputPath));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-arm32-macho-exact-symbol-output", "macho", OutputPath));
+  llvm::FileRemover RemoveInput(InputPath);
+  llvm::FileRemover RemoveOutput(OutputPath);
+  ASSERT_TRUE(writeFile(InputPath, Fixture.Binary));
+
+  llvm::LLVMContext Context;
+  auto Module = makeARM32TransactionModule(Context);
+  MachOPatcher Patcher;
+  PatchResult Result = Patcher.patch(
+      InputPath.str().str(), OutputPath.str().str(), *Module, Arch::ARM);
+
+  EXPECT_TRUE(Result.Success);
+  EXPECT_EQ(readFile(InputPath), Fixture.Binary);
+  EXPECT_GT(readFile(OutputPath).size(), Fixture.Binary.size());
 }
 
 TEST(MachOARM32Transaction, PartialFrameDFailureLeavesInputAndOutputUnchanged) {

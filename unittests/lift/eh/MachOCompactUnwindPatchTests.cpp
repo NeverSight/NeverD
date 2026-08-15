@@ -991,9 +991,9 @@ constexpr uint32_t kTransactionDataSegmentSize = 0x4000;
 constexpr uint32_t kTransactionLinkeditOff = 0xc000;
 constexpr uint32_t kTransactionLinkeditSize = 0x100;
 constexpr uint32_t kTransactionSymtabOff = kTransactionLinkeditOff;
-constexpr uint32_t kTransactionStringTableOff = kTransactionLinkeditOff + 0x20;
+constexpr uint32_t kTransactionStringTableOff = kTransactionLinkeditOff + 0x40;
 constexpr uint32_t kTransactionIndirectTableOff =
-    kTransactionLinkeditOff + 0x40;
+    kTransactionLinkeditOff + 0x80;
 constexpr uint64_t kTransactionFunctionVA = kImageBase + kTransactionTextOff;
 constexpr uint64_t kTransactionPersonalityVA = kTransactionFunctionVA + 0x10;
 constexpr uint64_t kTransactionMayThrowVA = kTransactionFunctionVA + 0x20;
@@ -1122,10 +1122,15 @@ makeMachOPatchTransactionFixture(size_t CompactCapacity) {
   Symtab->cmd = LC_SYMTAB;
   Symtab->cmdsize = SymtabCommandSize;
   Symtab->symoff = kTransactionSymtabOff;
-  Symtab->nsyms = 1;
+  Symtab->nsyms = 3;
   Symtab->stroff = kTransactionStringTableOff;
-  constexpr char PersonalityStringTable[] = "\0_test_personality";
-  Symtab->strsize = sizeof(PersonalityStringTable);
+  constexpr char SymbolStringTable[] =
+      "\0_test_personality\0may_throw\0_Unwind_Resume";
+  constexpr uint32_t MayThrowStringOffset = 19;
+  constexpr uint32_t UnwindResumeStringOffset = 29;
+  static_assert(SymbolStringTable[MayThrowStringOffset] == 'm');
+  static_assert(SymbolStringTable[UnwindResumeStringOffset] == '_');
+  Symtab->strsize = sizeof(SymbolStringTable);
 
   Command += SymtabCommandSize;
   auto *Dysymtab = reinterpret_cast<dysymtab_command *>(Command);
@@ -1155,8 +1160,22 @@ makeMachOPatchTransactionFixture(size_t CompactCapacity) {
   PersonalitySymbol->n_sect = NO_SECT;
   PersonalitySymbol->n_desc = 0;
   PersonalitySymbol->n_value = 0;
+  auto *MayThrowSymbol = PersonalitySymbol + 1;
+  MayThrowSymbol->n_strx = MayThrowStringOffset;
+  MayThrowSymbol->n_type =
+      static_cast<uint8_t>(static_cast<uint8_t>(N_SECT) | N_EXT);
+  MayThrowSymbol->n_sect = 1;
+  MayThrowSymbol->n_desc = 0;
+  MayThrowSymbol->n_value = kTransactionMayThrowVA;
+  auto *UnwindResumeSymbol = PersonalitySymbol + 2;
+  UnwindResumeSymbol->n_strx = UnwindResumeStringOffset;
+  UnwindResumeSymbol->n_type =
+      static_cast<uint8_t>(static_cast<uint8_t>(N_SECT) | N_EXT);
+  UnwindResumeSymbol->n_sect = 1;
+  UnwindResumeSymbol->n_desc = 0;
+  UnwindResumeSymbol->n_value = kTransactionUnwindResumeVA;
   std::memcpy(Fixture.Binary.data() + kTransactionStringTableOff,
-              PersonalityStringTable, sizeof(PersonalityStringTable));
+              SymbolStringTable, sizeof(SymbolStringTable));
   llvm::support::endian::write32le(
       Fixture.Binary.data() + kTransactionIndirectTableOff, 0);
   llvm::support::endian::write32le(
