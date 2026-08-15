@@ -154,8 +154,12 @@ private:
 /// Direct memory operations and private constants are single scalar integers;
 /// aggregate storage must be decomposed before reaching this boundary so a
 /// compact IR object cannot trigger unbounded backend expansion.
-/// Integer widths are limited to the host's scalar register width because
-/// wider legal LLVM IR can introduce unregistered compiler-runtime calls.
+/// Instructions are limited to the host's scalar register width because wider
+/// legal LLVM IR can introduce unregistered compiler-runtime calls.  Exact
+/// helper declarations may use the v1 ABI's i64 guest-address and payload
+/// fields on a 32-bit host; declaring that ABI performs no wide computation,
+/// while instructions that construct its operands remain subject to the host
+/// width rule.
 /// Passing this verifier is necessary but not sufficient for execution: an
 /// executable backend must also audit post-codegen control transfers and
 /// relocations against the same finite runtime-symbol registry.

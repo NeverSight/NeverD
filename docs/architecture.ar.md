@@ -145,25 +145,37 @@ guest الافتراضية كونها مفاتيح بحث، ولا تتحول أ
 `InvalidateOnExecutableWrite` و`ValidateBeforeDispatch` سجلات منمطة متسقة بدل
 سلوك ضمني في المضيف.
 
+يمثل `TranslationObjectCompilerV1` الحد المتحقق منه بين LLVM IR وملف الهدف. يتحقق
+من input module من نوع const، ويستنسخه قبل أي تحويل، ويدمج التبسيط الدلالي المحكوم
+بالإثبات مع تحسين LLVM من `O0` إلى `O3`، ثم يتحقق من IR النهائي مجددًا ويصدر ملفات
+relocatable من ELF أو COFF أو Mach-O لمعماريات المضيف الأربع التي يغطيها العقد.
+ويطبّع manifests الدقيقة ذات target mangling لرموز blocks وruntime، ويدقق كل ملف
+ناتج، ويعيد identity لسجل runtime ومفاتيح cache ذات إصدار للطلب والأثر. تقيد ميزانية
+البايتات المولدة حجم الملف عندما تكون غير صفرية؛ ويعني الصفر عدم وجود حد من سياسة
+المستدعي. يتوقف compiler عند بايتات relocatable المدققة: فلا يربطها أو ينشرها أو
+يمررها إلى dispatcher أو ينفذها، ولا يوفر lowering لتعليمات guest.
+
 يدقق post-codegen verifier ملفات relocatable من ELF وCOFF وMach-O
 بوصفها مجموعة مغلقة. يجب أن تتطابق الصيغة والعمارة تمامًا مع المضيف المختار؛
 ويجب أن تنتمي الرموز غير المعرفة إلى helper allowlist المحدودة بالمطابقة
 الدقيقة، بينما تحظر الرموز الديناميكية. تقتصر relocations على whitelists مباشرة
 وصريحة مع التحقق من encoding والعرض والمحاذاة وoffset وقابلية تحميل قسم الوجهة
 ومن أن الهدف تعريف non-preemptible محلي للملف أو helper مسموح به تمامًا. ويرفض
-المدقق W+X وبيانات unwind/exception/initializer الوصفية وTLS وIFUNC وGOT/PLT
-وغيرها من أشكال indirection وrelocations الديناميكية والتعريفات
-weak/preemptible أو القابلة للاختيار والأقسام المحجوزة غير المعروفة وتوجيهات
-linker. يجب ألا تحتوي آثار ELF من نوع `ET_REL` أي program headers أو segments.
-وتخضع load commands في Mach-O لقائمة سماح موجبة: segment واحد بالضبط يطابق عرض
-الملف، وبحد أقصى symbol table وdynamic-symbol table وplatform-version وأمر
-data-in-code واحد لكل منها، مع التحقق من علاقات الاعتماد. وترفض خيارات linker
-وكل command آخر.
+المدقق W+X وبيانات unwind/exception/initializer الوصفية وTLS وIFUNC وGOT
+وindirection العادي عبر PLT وrelocations الديناميكية والتعريفات weak/preemptible
+أو القابلة للاختيار والأقسام المحجوزة غير المعروفة وتوجيهات linker. لا تُقبل صيغة
+`R_X86_64_PLT32` التي يستخدمها LLVM لاستدعاء x86-64 ELF من نوع hidden إلا إذا
+أثبتت policy v1 أنها sealed direct branch إلى runtime helper المطابق؛ ولا تسمح
+بمسار PLT أو GOT. يجب ألا تحتوي آثار ELF من نوع `ET_REL` أي program headers أو
+segments. وتخضع load commands في Mach-O لقائمة سماح موجبة: segment واحد بالضبط
+يطابق عرض الملف، وبحد أقصى symbol table وdynamic-symbol table وplatform-version
+وأمر data-in-code واحد لكل منها، مع التحقق من علاقات الاعتماد. وترفض خيارات
+linker وكل command آخر.
 
-تعرّف تطبيقات runtime وتحليل الهدف ونشر W^X والذاكرة وIR وسجل الرموز وتدقيق ملفات
-الهدف هذه الحدود وتتحقق منها. وما زال ينقصها compiler متحقق منه لملفات الهدف،
-ومسار تدقيق/link/تحميل لـJITLink graph، وdispatcher موثوق أو dispatcher factory،
-وlowering كامل من guest إلى host. لذلك لا تشكل الحدود المتاحة backend ترجمة
+تعرّف تطبيقات runtime وتحليل الهدف ونشر W^X والذاكرة وIR وسجل الرموز وcompiler
+ملفات الهدف المتحقق منه وتدقيق الملفات هذه الحدود وتتحقق منها. وما زال ينقصها
+lowering كامل لتعليمات guest، ومسار تدقيق/link/تحميل لـJITLink graph، وdispatcher
+موثوق أو dispatcher factory، والتنفيذ. لذلك لا تشكل الحدود المتاحة backend ترجمة
 قابلًا للتنفيذ ومتكاملًا، ولا pipeline متكاملًا للترجمة بين المعماريات، ولا إعادة
 كتابة متكاملة للاستثناءات من طرف إلى طرف. يحدد هذا القسم نطاق العقد وverifier؛
 ولا يدعي إتاحة التوليد أو الربط أو التحميل أو dispatch أو التنفيذ أو JIT أو AOT

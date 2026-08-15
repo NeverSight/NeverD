@@ -165,6 +165,19 @@ codice `RejectExecutableWrites`, `InvalidateOnExecutableWrite` e
 `ValidateBeforeDispatch` producono anch’essi record tipizzati coerenti invece
 di comportamento host implicito.
 
+`TranslationObjectCompilerV1` è il confine verificato da LLVM IR a oggetto.
+Valida un modulo di input const, lo clona prima di ogni trasformazione, compone
+la semplificazione semantica proof-gated con l’ottimizzazione LLVM da `O0` a
+`O3`, convalida di nuovo l’IR finale ed emette oggetti relocatable ELF, COFF o
+Mach-O per le quattro architetture host del contratto. Canonicalizza i manifest
+esatti dei blocks e dei simboli runtime dopo il mangling del target, controlla
+ogni oggetto emesso e restituisce l’identità del registro runtime insieme a
+chiavi di cache versionate per richiesta e artefatto. Un budget di byte generati
+diverso da zero limita la dimensione dell’oggetto; zero significa nessun limite
+imposto dal chiamante. Il compilatore si ferma ai byte relocatable controllati:
+non li collega, pubblica, invia al dispatcher o esegue e non fornisce il lowering
+delle istruzioni guest.
+
 Il verifier post-codegen controlla gli oggetti relocatable ELF,
 COFF e Mach-O come insieme chiuso. Formato e architettura devono corrispondere
 esattamente all’host selezionato; i simboli non definiti devono appartenere
@@ -172,22 +185,26 @@ esattamente alla allowlist finita degli helper e i simboli dinamici sono vietati
 Le relocations seguono whitelist dirette esplicite con controlli di encoding,
 larghezza, allineamento, offset, destinazione caricabile e target definito
 nell’oggetto come non-preemptible o helper autorizzato esattamente. Sono
-rifiutati W+X, metadati unwind/exception/initializer, TLS, IFUNC, GOT/PLT e altre
-indirezioni, relocations dinamiche, definizioni weak/preemptible o selezionabili,
-sezioni allocate sconosciute e direttive del linker. Gli artefatti ELF `ET_REL`
-non possono contenere program header o segmenti. I load command Mach-O seguono
-una lista positiva: esattamente un segmento della larghezza corretta e al
-massimo una symbol table, dynamic-symbol table, platform-version e un comando
+rifiutati W+X, metadati unwind/exception/initializer, TLS, IFUNC, GOT e
+l’indirezione PLT ordinaria, relocations dinamiche, definizioni weak/preemptible
+o selezionabili, sezioni allocate sconosciute e direttive del linker. La forma
+`R_X86_64_PLT32` usata da LLVM per una chiamata ELF x86-64 hidden è ammessa solo
+quando la policy v1 dimostra un branch diretto sealed verso l’helper runtime
+esatto; non autorizza un percorso PLT o GOT. Gli artefatti ELF `ET_REL` non
+possono contenere program header o segmenti. I load command Mach-O seguono una
+lista positiva: esattamente un segmento della larghezza corretta e al massimo
+una symbol table, dynamic-symbol table, platform-version e un comando
 data-in-code, con verifica delle dipendenze. Le opzioni del linker e ogni altro
 command vengono rifiutati.
 
 Le implementazioni di runtime, risoluzione del target, pubblicazione W^X,
-memoria, IR, registro dei simboli e audit degli oggetti definiscono e convalidano
-questi confini. Mancano ancora un compilatore di oggetti verificato, un percorso
-di audit/link/caricamento del grafo JITLink, un dispatcher fidato o la relativa
-factory e un lowering guest-to-host completo. I confini disponibili non
-costituiscono quindi un backend di traduzione eseguibile completo, una pipeline
-completa di traduzione tra architetture né una riscrittura completa end-to-end
+memoria, IR, registro dei simboli, compilatore di oggetti verificato e audit
+degli oggetti definiscono e convalidano questi confini. Mancano ancora il
+lowering completo delle istruzioni guest, un percorso di audit/link/caricamento
+del grafo JITLink, un dispatcher fidato o la relativa factory e l’esecuzione. I
+confini disponibili non costituiscono quindi un backend di traduzione eseguibile
+completo, una pipeline completa di traduzione tra architetture né una
+riscrittura completa end-to-end
 delle eccezioni. Questa sezione descrive l’ambito del contratto e del verifier;
 non dichiara la disponibilità end-to-end di generazione, collegamento,
 caricamento, dispatch, esecuzione, JIT, AOT o riscrittura delle eccezioni.

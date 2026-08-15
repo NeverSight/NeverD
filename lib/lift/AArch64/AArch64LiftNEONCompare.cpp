@@ -120,23 +120,32 @@ bool liftNEONCompare(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     }
     {
       auto Vas = ARM64.operands[0].vas;
-      unsigned LaneSz = 0;
-      if (Vas == AARCH64LAYOUT_VL_4S || Vas == AARCH64LAYOUT_VL_2S)
-        LaneSz = 4;
-      else if (Vas == AARCH64LAYOUT_VL_8H || Vas == AARCH64LAYOUT_VL_4H)
-        LaneSz = 2;
-      else if (Vas == AARCH64LAYOUT_VL_16B || Vas == AARCH64LAYOUT_VL_8B)
-        LaneSz = 1;
-      else if (Vas == AARCH64LAYOUT_VL_2D)
-        LaneSz = 8;
-      if (LaneSz > 0 && Dst.Size > LaneSz) {
+      unsigned LaneSz = neonElemSize(Vas);
+      // Capstone leaves the arrangement unset on Advanced SIMD scalar compare
+      // forms (for example, `cmeq d0, d0, #0`).  The destination register then
+      // names the single lane and supplies its width.
+      bool InputsFitScalar = A.Size > 0 && B.Size > 0 &&
+                             (A.isConst() || A.Size == Dst.Size) &&
+                             (B.isConst() || B.Size == Dst.Size);
+      if (LaneSz == 0 && Dst.Size > 0 && Dst.Size <= 8 && InputsFitScalar)
+        LaneSz = Dst.Size;
+      if (LaneSz > 0 && LaneSz <= 8 && Dst.Size >= LaneSz &&
+          Dst.Size % LaneSz == 0) {
         unsigned NLanes = Dst.Size / LaneSz;
         NdVar Acc = S.makeTemp(0);
+        auto ReadLane = [&](NdVar V, unsigned I) {
+          // An immediate compare operand is broadcast to every lane.  Keep a
+          // constant as a lane-sized value instead of trying to slice the
+          // scalar encoding as though it were a packed vector.
+          if (V.isConst())
+            return NdVar::cst(V.Offset, LaneSz);
+          NdVar Lane = S.makeTemp(LaneSz);
+          S.emit(NdOp::SUBBYTES, Lane, {V, NdVar::cst(I * LaneSz, 4)});
+          return Lane;
+        };
         for (unsigned I = 0; I < NLanes; ++I) {
-          NdVar La = S.makeTemp(LaneSz);
-          NdVar Lb = S.makeTemp(LaneSz);
-          S.emit(NdOp::SUBBYTES, La, {A, NdVar::cst(I * LaneSz, 4)});
-          S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * LaneSz, 4)});
+          NdVar La = ReadLane(A, I);
+          NdVar Lb = ReadLane(B, I);
           if (IsAbs) {
             NdVar AbsA = S.makeTemp(LaneSz), AbsB = S.makeTemp(LaneSz);
             S.emit(NdOp::FLOAT_ABS, AbsA, {La});
@@ -163,6 +172,13 @@ bool liftNEONCompare(AArch64Lifter &L, AArch64Lifter::LiftState &S,
         }
         S.emit(NdOp::COPY, Dst, {Acc});
       } else {
+        // Unknown layouts retain the whole-value fallback.  Match a scalar
+        // immediate to the other operand so comparisons never depend on the
+        // generic immediate-width heuristic.
+        if (A.isConst() && !B.isConst())
+          A = NdVar::cst(A.Offset, B.Size);
+        else if (B.isConst() && !A.isConst())
+          B = NdVar::cst(B.Offset, A.Size);
         if (IsAbs) {
           NdVar AbsA = S.makeTemp(A.Size), AbsB = S.makeTemp(B.Size);
           S.emit(NdOp::FLOAT_ABS, AbsA, {A});

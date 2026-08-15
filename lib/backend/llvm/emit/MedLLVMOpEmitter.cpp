@@ -501,9 +501,30 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     uint64_t ByteOff = 0;
     if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(OffVal))
       ByteOff = CI->getZExtValue();
+
+    // Keep aligned x86 SIMD subpieces in their exact element type.  Expressing
+    // the operation as an integer shift and truncate allows combines to widen
+    // the extract across adjacent lanes before it reaches instruction
+    // selection.  A vector extract preserves the byte-slice boundary while
+    // remaining a bit-identical operation on the supported little-endian x86
+    // targets.
+    unsigned SrcBits = Src->getType()->getIntegerBitWidth();
+    unsigned OutBits = Op.Output.Size * 8;
+    bool IsX86 = TargetArch == Arch::X86 || TargetArch == Arch::X64;
+    uint64_t SrcBytes = SrcBits / 8;
+    if (IsX86 && SrcBits >= 128 && OutBits != 0 && OutBits <= 64 &&
+        SrcBits % OutBits == 0 && ByteOff % Op.Output.Size == 0 &&
+        ByteOff <= SrcBytes && Op.Output.Size <= SrcBytes - ByteOff) {
+      auto *ElemTy = llvm::IntegerType::get(*Ctx, OutBits);
+      auto *VecTy = llvm::FixedVectorType::get(ElemTy, SrcBits / OutBits);
+      auto *Vec = Builder.CreateBitCast(Src, VecTy, "subbytes.vec");
+      Result = Builder.CreateExtractElement(
+          Vec, Builder.getInt64(ByteOff / Op.Output.Size), "subbytes.lane");
+      break;
+    }
+
     if (ByteOff != 0) {
       unsigned ShiftBits = static_cast<unsigned>(ByteOff * 8);
-      unsigned SrcBits = Src->getType()->getIntegerBitWidth();
       if (ShiftBits >= SrcBits) {
         Src = llvm::ConstantInt::get(Src->getType(), 0);
       } else {
@@ -511,7 +532,6 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             Src, llvm::ConstantInt::get(Src->getType(), ShiftBits));
       }
     }
-    unsigned OutBits = Op.Output.Size * 8;
     if (OutBits < Src->getType()->getIntegerBitWidth())
       Src = Builder.CreateTrunc(Src, llvm::IntegerType::get(*Ctx, OutBits));
     Result = Src;

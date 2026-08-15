@@ -475,8 +475,17 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             break;
           Found[K] = *V;
           FoundMask[K] = true;
-          if (FromLiveIn)
+          if (FromLiveIn) {
             PromoteParams.emplace(K, *V);
+            // This value is the caller's incoming parameter, not the CALL's
+            // result register.  A tail forwarder commonly uses R0 for both;
+            // leaving the argument as Reg R0 gives it the same SSA key as the
+            // CALL output and lets the emitter's local definition shadow the
+            // incoming value.  Preserve the register location, but make the
+            // parameter provenance explicit for argument emission.
+            Found[K].Kind = MedVar::Param;
+            Found[K].Id = -1;
+          }
         }
 
       // A stripped Mach-O no longer names its linker-specialized

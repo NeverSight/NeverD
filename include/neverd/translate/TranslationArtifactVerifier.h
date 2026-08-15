@@ -91,7 +91,10 @@ private:
 /// AllowedRuntimeSymbols identifies the only undefined runtime symbols that
 /// generated code may reference. Such references must use a format- and
 /// architecture-proven direct PC-relative call or branch. Absolute, data,
-/// GOT/PLT, stub, and section-relative materializations are rejected.
+/// GOT, stub, and section-relative materializations are rejected. LLVM's
+/// x86-64 ELF PLT32 spelling is admitted only for a hidden undefined helper in
+/// this exact-manifest path when the relocated instruction is itself a direct
+/// control transfer; this does not authorize a PLT section or linker stub.
 struct TranslationArtifactPolicyV1 {
   explicit TranslationArtifactPolicyV1(
       llvm::ArrayRef<llvm::StringRef> RequiredBlocks,
@@ -131,8 +134,9 @@ verifyTranslationArtifact(llvm::ArrayRef<uint8_t> ArtifactBytes,
 ///
 /// The verifier rejects executable-and-writable sections, exception/unwind
 /// metadata, static constructors, TLS, indirect symbols, IFUNCs, dynamic
-/// relocations, preemptible definitions, GOT/PLT indirection, and object
-/// encodings or Mach-O load commands that LLVM cannot classify precisely.
+/// relocations, preemptible definitions, GOT/PLT indirection (apart from the
+/// sealed direct-branch spelling described above), and object encodings or
+/// Mach-O load commands that LLVM cannot classify precisely.
 llvm::Error verifyTranslationArtifact(
     llvm::MemoryBufferRef Artifact, const llvm::Triple &ExpectedHostTriple,
     llvm::ArrayRef<llvm::StringRef> AllowedRuntimeSymbols = {});

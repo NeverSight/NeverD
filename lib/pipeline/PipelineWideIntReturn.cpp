@@ -274,29 +274,50 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
     // carried to a successor PHI on a loop back-edge, which rejects an i32
     // callee merely leaving scratch in the high register (e.g. an idiv
     // remainder) at its epilogue.
-    std::map<va_t, std::set<va_t>> IndirectThreadSitesByFunc;
+    std::map<va_t, std::set<va_t>> IndirectI64SitesByFunc;
     {
       auto lowResultLoopCarried = [&](const MedFunc &MF, const MedBlock &B,
                                       const MedOp &Call) -> bool {
         if (Call.Output.Kind != MedVar::Reg ||
             Call.Output.RegOff != TRI.IntReturnReg)
           return false;
-        for (const auto &Succ : MF.Blocks) {
-          bool IsSucc = false;
-          for (int S : B.Succs)
-            if (S == Succ.Id) {
-              IsSucc = true;
-              break;
-            }
-          if (!IsSucc)
+
+        std::map<int, const MedBlock *> ById;
+        for (const auto &Block : MF.Blocks)
+          ById[Block.Id] = &Block;
+
+        // A loop header need not be an immediate successor of the call block:
+        // size-oriented ARM code commonly branches through a separate latch.
+        // Conversely, an ordinary post-call merge can have the same register
+        // PHI shape without being a loop.  Collect every block that can reach
+        // the call by walking predecessor edges once, then require the exact
+        // call result as an incoming value of a PHI in that set.  This accepts
+        // transparent latches while rejecting return-only joins.
+        std::set<int> CanReachCall;
+        std::vector<int> Work{B.Id};
+        while (!Work.empty()) {
+          int Id = Work.back();
+          Work.pop_back();
+          if (!CanReachCall.insert(Id).second)
             continue;
-          for (const auto &Phi : Succ.Phis)
-            if (Phi.Output.Kind == MedVar::Reg &&
-                Phi.Output.RegOff == TRI.IntReturnReg)
-              for (const auto &A : Phi.Args)
-                if (A.first == B.Id && A.second.Kind == MedVar::Reg &&
-                    A.second.RegOff == TRI.IntReturnReg)
-                  return true;
+          auto It = ById.find(Id);
+          if (It == ById.end())
+            continue;
+          Work.insert(Work.end(), It->second->Preds.begin(),
+                      It->second->Preds.end());
+        }
+
+        for (const auto &PhiBlock : MF.Blocks) {
+          if (!CanReachCall.count(PhiBlock.Id))
+            continue;
+          for (const auto &Phi : PhiBlock.Phis) {
+            if (Phi.Output.Kind != MedVar::Reg ||
+                Phi.Output.RegOff != TRI.IntReturnReg)
+              continue;
+            for (const auto &A : Phi.Args)
+              if (A.second == Call.Output)
+                return true;
+          }
         }
         return false;
       };
@@ -374,10 +395,28 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
               if (TargetI64)
                 WideRetCallees.insert(*Tgt);
               if (TargetI64 || HasAddrTakenI64)
-                IndirectThreadSitesByFunc[MF.Entry].insert(Op.Addr);
+                IndirectI64SitesByFunc[MF.Entry].insert(Op.Addr);
             }
       }
     }
+
+    // Once any call proves that an indirectly reached callee returns i64,
+    // apply that signature to every resolvable call of the same callee.  In a
+    // back-to-back `acc = fp(fp(acc))` chain only the final call reaches the
+    // loop PHI; the first result is consumed solely as the next call's
+    // argument, which is still implicit in the register file at this stage.
+    // Re-converting both sites pre-SSA is what carries both return halves into
+    // that argument.
+    if (!WideRetCallees.empty())
+      for (const auto &MF : Result.MedFuncs)
+        for (const auto &Blk : MF.Blocks)
+          for (const auto &Op : Blk.Ops) {
+            if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs < 1)
+              continue;
+            auto Tgt = resolveCallTargetVA(MF, Img, Op.Inputs[0]);
+            if (Tgt && WideRetCallees.count(*Tgt))
+              IndirectI64SitesByFunc[MF.Entry].insert(Op.Addr);
+          }
 
     if (!WideRetCallees.empty())
       for (auto &MF : Result.MedFuncs)
@@ -433,9 +472,9 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
         }
         // A caller threading an i64 accumulator through an INDIRECT call also
         // needs re-lifting so the flagged INDIR_CALL sites are modeled pre-SSA.
-        auto IndIt = IndirectThreadSitesByFunc.find(Result.MedFuncs[I].Entry);
-        bool HasIndThread = IndIt != IndirectThreadSitesByFunc.end();
-        if (!CallsI64 && !HasIndThread)
+        auto IndIt = IndirectI64SitesByFunc.find(Result.MedFuncs[I].Entry);
+        bool HasIndI64 = IndIt != IndirectI64SitesByFunc.end();
+        if (!CallsI64 && !HasIndI64)
           continue;
         // Re-conversion re-infers this function's own return type from
         // scratch, so a function that is ITSELF an i64 callee must have its
@@ -445,7 +484,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
         Reconv.setCalleePopMap(&CalleePop);
         Reconv.setStackProbeSlots(&StackProbeSlots);
         Reconv.setI64Callees(&I64RetCallees);
-        if (HasIndThread)
+        if (HasIndI64)
           Reconv.setI64IndirectSites(&IndIt->second);
         MedFunc NewMF =
             Reconv.convert(Result.LowFuncs[I], Img.Arch, Img.Format);

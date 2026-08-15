@@ -128,24 +128,34 @@ class 和 ABI 形状，但有意排除本机地址，因此不受 ASLR 影响。
 `InvalidateOnExecutableWrite`、`ValidateBeforeDispatch` 三种代码写入策略同样生成
 自洽的类型化记录，而不是隐式宿主行为。
 
+`TranslationObjectCompilerV1` 是经过验证的 LLVM IR 到目标文件边界。它先验证 const
+输入 module，在任何变换前完成 clone，将证明门控的语义化简与 LLVM `O0` 至 `O3`
+优化组合，再次验证最终 IR，并为四种契约宿主架构发射 relocatable ELF、COFF 或
+Mach-O 目标文件。它规范化精确的 target-mangled block/runtime 符号 manifest，审计
+每个发射结果，并返回 runtime registry identity 以及带版本的请求和制品 cache key。
+生成字节预算非零时限制目标文件大小；零表示调用方策略不设上限。编译器止步于已审计
+的 relocatable 字节：它不负责链接、发布、分派或执行，也不提供 guest 指令 lowering。
+
 post-codegen verifier 把 relocatable ELF、COFF、Mach-O 目标文件作为
 闭集审计。格式和架构必须与选定宿主精确匹配；未定义符号必须精确属于有限 helper
 allowlist，动态符号一律禁止。relocation 采用显式直接白名单，并检查 encoding、
 width、alignment、offset、可加载目的节，以及目标是否为目标文件内
 non-preemptible 定义或精确获准的 helper。verifier 拒绝 W+X、异常/展开与初始化
-元数据、TLS、IFUNC、GOT/PLT 及其他间接机制、动态 relocation、weak/preemptible
-或可选择定义、未知 allocated section 和 linker directive。ELF `ET_REL` 制品不得
-包含 program header 或 segment。Mach-O load command 采用正向白名单：必须且只能有
-一个位宽匹配的 segment，symbol table、dynamic-symbol table、platform-version 和
+元数据、TLS、IFUNC、GOT 与普通 PLT 间接机制、动态 relocation、weak/preemptible
+或可选择定义、未知 allocated section 和 linker directive。只有当 v1 policy 证明
+LLVM 隐藏的 x86-64 ELF `R_X86_64_PLT32` 是指向精确 runtime helper 的 sealed direct
+branch 时才允许该拼写；它不会放行 PLT 或 GOT 路径。ELF `ET_REL` 制品不得包含
+program header 或 segment。Mach-O load command 采用正向白名单：必须且只能有一个
+位宽匹配的 segment，symbol table、dynamic-symbol table、platform-version 和
 data-in-code command 各至多一个，并检查相互依赖；linker option 和其他所有 command
 均拒绝。
 
-runtime、目标解析、W^X 发布、memory、IR、符号注册表和目标文件审计实现定义并验证
-这些边界。目前仍缺少经过验证的目标文件编译器、JITLink graph 审计/链接/加载路径、
-受信任 dispatcher 或 dispatcher factory，以及完整的 guest-to-host lowering。因此，
-已有边界不构成完整的可执行翻译后端、完整的跨架构翻译流水线或完整的端到端异常
-重写。本节描述契约与 verifier 的作用范围，不宣称具备生成、链接、加载、分派、执行、
-JIT、AOT 或异常重写的端到端能力。
+runtime、目标解析、W^X 发布、memory、IR、符号注册表、经过验证的目标文件编译器和
+目标文件审计实现定义并验证这些边界。目前仍缺少完整的 guest 指令 lowering、
+JITLink graph 审计/链接/加载路径、受信任 dispatcher 或 dispatcher factory，以及
+执行能力。因此，已有边界不构成完整的可执行翻译后端、完整的跨架构翻译流水线或
+完整的端到端异常重写。本节描述契约与 verifier 的作用范围，不宣称具备生成、链接、
+加载、分派、执行、JIT、AOT 或异常重写的端到端能力。
 
 生成 IR 契约要求受该契约约束的每个 translated block 都是 hidden、non-preemptible，
 并采用 C ABI `i32 (ptr state, ptr runtime)`。runtime 只能通过私有注册表发现 block，

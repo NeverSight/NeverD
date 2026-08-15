@@ -152,28 +152,42 @@ permission、executable write、generation overflow/mismatch、policy fault を�
 `ValidateBeforeDispatch` の code-write policy も、暗黙の host 動作ではなく整合した
 typed record を生成します。
 
+`TranslationObjectCompilerV1` は、検証済みの LLVM IR-to-object 境界です。const
+input module を検証し、すべての変換前に clone し、proof-gated semantic
+simplification と LLVM `O0`〜`O3` optimization を組み合わせ、final IR を再検証して、
+4 つの contract host architecture 向けに relocatable ELF、COFF、Mach-O object を
+emit します。正確な target-mangled block/runtime symbol manifest を canonicalize し、
+emit 後の各 object を audit して、runtime registry identity と version 付き request /
+artifact cache key を返します。generated-byte budget は非ゼロの場合だけ object size
+を制限し、ゼロは caller policy 上 unlimited です。compiler の出力は audit 済み
+relocatable byte までであり、link、publish、dispatch、execute、および guest
+instruction lowering は行いません。
+
 post-codegen verifier は relocatable ELF、COFF、Mach-O object を
 閉集合として監査します。format と architecture は選択された host と正確に一致し、
 undefined symbol は有限 helper allowlist に完全一致しなければならず、dynamic symbol
 は禁止されます。relocation は明示的な direct whitelist であり、encoding、width、
 alignment、offset、loadable destination、object-local non-preemptible definition または
 完全一致で許可された helper target を検査します。W+X、unwind/exception と
-initializer metadata、TLS、IFUNC、GOT/PLT その他の indirection、dynamic relocation、
+initializer metadata、TLS、IFUNC、GOT と通常の PLT indirection、dynamic relocation、
 weak/preemptible または選択可能な definition、未知の allocated section、linker
-directive は拒否されます。ELF `ET_REL` artifact は program header や segment を
-含んではなりません。Mach-O load command は positive list で制限され、bit 幅が
-一致する segment を正確に 1 個、symbol table、dynamic-symbol table、
-platform-version、data-in-code command をそれぞれ最大 1 個だけ許可し、依存関係も
-検査します。linker option とその他の command はすべて拒否されます。
+directive は拒否されます。LLVM が hidden x86-64 ELF call に使う
+`R_X86_64_PLT32` は、v1 policy が exact runtime helper への sealed direct branch と
+証明した場合だけ許可され、PLT や GOT path を許可するものではありません。ELF
+`ET_REL` artifact は program header や segment を含んではなりません。Mach-O load
+command は positive list で制限され、bit 幅が一致する segment を正確に 1 個、
+symbol table、dynamic-symbol table、platform-version、data-in-code command を
+それぞれ最大 1 個だけ許可し、依存関係も検査します。linker option とその他の
+command はすべて拒否されます。
 
-runtime、target resolution、W^X publication、memory、IR、symbol registry、object
-audit の各実装は、これらの境界を定義して検証します。verified object compiler、
-JITLink graph の audit/link/load path、trusted dispatcher または dispatcher factory、
-完全な guest-to-host lowering はまだ存在しません。したがって、現在の境界は完全な
-実行可能 translation backend、完全なクロスアーキテクチャ translation pipeline、
-完全な end-to-end exception rewriting を構成しません。本節は契約と verifier の
-範囲を規定するものであり、生成、link、load、dispatch、実行、JIT、AOT、exception
-rewriting の end-to-end 提供を主張するものではありません。
+runtime、target resolution、W^X publication、memory、IR、symbol registry、verified
+object compiler、object audit の各実装は、これらの境界を定義して検証します。完全な
+guest instruction lowering、JITLink graph の audit/link/load path、trusted
+dispatcher または dispatcher factory、execution はまだ存在しません。したがって、
+現在の境界は完全な実行可能 translation backend、完全なクロスアーキテクチャ
+translation pipeline、完全な end-to-end exception rewriting を構成しません。本節は
+契約と verifier の範囲を規定するものであり、生成、link、load、dispatch、実行、JIT、
+AOT、exception rewriting の end-to-end 提供を主張するものではありません。
 
 生成 IR の契約では、この契約に従うすべての translated block を hidden かつ
 non-preemptible とし、C ABI `i32 (ptr state, ptr runtime)` を使うことを要求します。

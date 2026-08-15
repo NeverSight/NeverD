@@ -99,6 +99,19 @@ static std::vector<RoundTripTC> makeGatherTC() {
      "  return (unsigned long)((unsigned long long)g[0]+(unsigned long long)g[1]); }\n"),
      {0x55AAULL}, "AVX2Gather", 2, "-mavx2"},
 
+    // VPGATHERDQ with negative dword indices.  This also verifies that each
+    // index is extracted independently before signed extension to an address.
+    {p+"_dq128_signed",
+     src("unsigned long "+p+"_dq128_signed(unsigned long a){\n"
+     "  unsigned long long t[64]; unsigned long long x=a|1ull;\n"
+     "  for(int i=0;i<64;i++){ x=x*6364136223846793005ull+1442695040888963407ull; t[i]=x; }\n"
+     "  __v4si vi={(int)(a&31)-16,(int)((a>>5)&31)-16,0,0};\n"
+     "  __v2di m={-1,-1}; __v2di s={0,0};\n"
+     "  const long long *base=(const long long*)t+16;\n"
+     "  __v2di g=__builtin_ia32_gatherd_q(s,base,vi,m,8);\n"
+     "  return (unsigned long)((unsigned long long)g[0]+(unsigned long long)g[1]); }\n"),
+     {0x55AAULL}, "AVX2Gather", 2, "-mavx2"},
+
     // VPGATHERDQ ymm — 4 qword gather, dword indices (256-bit dst, xmm index).
     {p+"_dq256",
      src("unsigned long "+p+"_dq256(unsigned long a){\n"

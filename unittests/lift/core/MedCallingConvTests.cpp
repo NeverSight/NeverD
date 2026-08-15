@@ -9,6 +9,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/X86Regs.h"
@@ -275,6 +276,46 @@ TEST(TargetRegInfo, X86UsesSysVCalleeSavedRegisters) {
   EXPECT_FALSE(TRI.isCallPreserved(x86reg::RAX, 4));
   EXPECT_FALSE(TRI.isCallPreserved(x86reg::RCX, 4));
   EXPECT_FALSE(TRI.isCallPreserved(x86reg::RDX, 4));
+}
+
+TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
+  constexpr Arch TheArch = Arch::ARM;
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "forwarded_live_in";
+  Func.Blocks.resize(1);
+  Func.Blocks[0].Id = 0;
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Output = reg(1, 0, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  Func.Blocks[0].Ops.push_back(Call);
+
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Call.Output);
+  Func.Blocks[0].Ops.push_back(Return);
+
+  const std::map<va_t, std::string> Names{{Callee, "callee"}};
+  const std::map<va_t, int> RegArity{{Callee, 2}};
+  const std::map<va_t, int> TotalArity{{Callee, 2}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
+
+  ASSERT_EQ(Func.Params.size(), 2u);
+  EXPECT_EQ(Func.Params[0].Kind, MedVar::Param);
+  EXPECT_EQ(Func.Params[0].RegOff, TRI.IntParamRegs[0]);
+  EXPECT_EQ(Func.Params[1].Kind, MedVar::Param);
+  EXPECT_EQ(Func.Params[1].RegOff, TRI.IntParamRegs[1]);
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 2u);
+  EXPECT_EQ(Func.CallInfos[0].Args[0].Kind, MedVar::Param);
+  EXPECT_EQ(Func.CallInfos[0].Args[0].RegOff, TRI.IntParamRegs[0]);
+  EXPECT_EQ(Func.CallInfos[0].Args[1].Kind, MedVar::Param);
+  EXPECT_EQ(Func.CallInfos[0].Args[1].RegOff, TRI.IntParamRegs[1]);
 }
 
 TEST(MedVerifier, AcceptsImplicitCallClobberDefinition) {

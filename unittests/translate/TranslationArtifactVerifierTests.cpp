@@ -572,6 +572,81 @@ Symbols:
 }
 
 TEST(TranslationArtifactVerifier,
+     AcceptsOnlySealedLLVMPLT32RuntimeCallsInV1Policy) {
+  const std::vector<uint8_t> Hidden = yamlArtifact(R"(
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:    .text
+    Type:    SHT_PROGBITS
+    Flags:   [ SHF_ALLOC, SHF_EXECINSTR ]
+    Content: "E800000000C3"
+  - Name: .rela.text
+    Type: SHT_RELA
+    Info: .text
+    Link: .symtab
+    Relocations:
+      - Offset: 1
+        Type:   R_X86_64_PLT32
+        Symbol: nvd_rt_helper
+Symbols:
+  - Name:    translated_block
+    Type:    STT_FUNC
+    Section: .text
+    Size:    6
+  - Name:    nvd_rt_helper
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+    Other:   [ STV_HIDDEN ]
+)");
+  const llvm::StringRef RequiredBlocks[] = {"translated_block"};
+  const llvm::StringRef Allowed[] = {"nvd_rt_helper"};
+  const TranslationArtifactPolicyV1 Policy{RequiredBlocks, Allowed};
+  EXPECT_FALSE(static_cast<bool>(neverd::translate::verifyTranslationArtifact(
+      Hidden, HostTriple, Policy)));
+  expectViolation(
+      neverd::translate::verifyTranslationArtifact(Hidden, HostTriple, Allowed),
+      TranslationArtifactViolation::RelocationTypeNotAllowed);
+
+  const std::vector<uint8_t> Preemptible = yamlArtifact(R"(
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:    .text
+    Type:    SHT_PROGBITS
+    Flags:   [ SHF_ALLOC, SHF_EXECINSTR ]
+    Content: "E800000000C3"
+  - Name: .rela.text
+    Type: SHT_RELA
+    Info: .text
+    Link: .symtab
+    Relocations:
+      - Offset: 1
+        Type:   R_X86_64_PLT32
+        Symbol: nvd_rt_helper
+Symbols:
+  - Name:    translated_block
+    Type:    STT_FUNC
+    Section: .text
+    Size:    6
+  - Name:    nvd_rt_helper
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+)");
+  expectViolation(neverd::translate::verifyTranslationArtifact(
+                      Preemptible, HostTriple, Policy),
+                  TranslationArtifactViolation::RelocationTypeNotAllowed);
+}
+
+TEST(TranslationArtifactVerifier,
      RejectsELFPCRelativeRuntimeHelperMaterializationInV1Policy) {
   const std::vector<uint8_t> Bytes = yamlArtifact(R"(
 --- !ELF

@@ -323,16 +323,21 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   // incoming LLVM argument before any local-alloca lookup.  A stack parameter's
   // synthetic Id (its argument index) can collide with an unrelated SSA
   // variable's Id, and the alloca for that variable must not shadow the param.
+  // Register-backed parameters are keyed by their architectural register:
+  // promoted forwarders deliberately share the synthetic Id -1, so their
+  // display names are not unique.
   if (V.Kind == MedVar::Param || (!HasLocalDef && V.SSAVer == 0)) {
     llvm::Value *ArgVal = nullptr;
-    std::string DName = V.display();
-    auto PIt = ParamArgs.find(DName);
-    if (PIt != ParamArgs.end()) {
-      ArgVal = PIt->second;
-    } else if (V.Kind == MedVar::Reg) {
+    if ((V.Kind == MedVar::Param || V.Kind == MedVar::Reg) &&
+        V.RegOff != kNoParamReg) {
       auto RIt = ParamRegoffMap.find(V.RegOff);
       if (RIt != ParamRegoffMap.end())
         ArgVal = RIt->second;
+    }
+    if (!ArgVal) {
+      auto PIt = ParamArgs.find(V.display());
+      if (PIt != ParamArgs.end())
+        ArgVal = PIt->second;
     }
     if (ArgVal) {
       unsigned WantBits = V.Size > 0 ? V.Size * 8 : 64;

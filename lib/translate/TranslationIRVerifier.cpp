@@ -586,6 +586,12 @@ llvm::Error
 buildRuntimeHelperMap(const llvm::Module &Module,
                       llvm::ArrayRef<TranslationRuntimeHelper> RuntimeHelpers,
                       unsigned MaxIntegerWidth, RuntimeHelperMap &Map) {
+  // The sealed v1 helper ABI transports guest addresses and scalar payloads
+  // as i64 even when the host itself is 32-bit.  That declaration shape does
+  // not perform a wide arithmetic operation and therefore cannot introduce a
+  // backend libcall by itself.  Instructions which produce call operands are
+  // still checked against the host's legal scalar width below.
+  const unsigned MaxHelperIntegerWidth = std::max(MaxIntegerWidth, 64u);
   for (const TranslationRuntimeHelper &Helper : RuntimeHelpers) {
     if (Helper.Name.empty() || !Helper.Type)
       return failure(TranslationIRViolation::InvalidPolicy, nullptr,
@@ -602,7 +608,7 @@ buildRuntimeHelperMap(const llvm::Module &Module,
         (!Helper.Type->getReturnType()->isVoidTy() &&
          (!Helper.Type->getReturnType()->isIntegerTy() ||
           Helper.Type->getReturnType()->getIntegerBitWidth() >
-              MaxIntegerWidth)))
+              MaxHelperIntegerWidth)))
       return failure(TranslationIRViolation::InvalidPolicy, nullptr,
                      "runtime helper has a non-scalar ABI");
 
@@ -611,7 +617,7 @@ buildRuntimeHelperMap(const llvm::Module &Module,
       switch (Helper.Parameters[Index]) {
       case TranslationRuntimeParameterKind::ScalarInteger:
         if (!Parameter->isIntegerTy() ||
-            Parameter->getIntegerBitWidth() > MaxIntegerWidth)
+            Parameter->getIntegerBitWidth() > MaxHelperIntegerWidth)
           return failure(TranslationIRViolation::InvalidPolicy, nullptr,
                          "scalar helper parameter is not an integer");
         break;
@@ -638,10 +644,12 @@ verifyRuntimeHelperDeclaration(const llvm::Function &Function,
   if (It == RuntimeHelpers.end())
     return failure(TranslationIRViolation::ExternalSymbolNotAllowed, &Function);
   const TranslationRuntimeHelper &Helper = *It->second;
+  const bool HasSealedVisibility =
+      Function.hasDefaultVisibility() || Function.hasHiddenVisibility();
   if (Function.getFunctionType() != Helper.Type ||
       Function.getCallingConv() != llvm::CallingConv::C ||
       Function.getLinkage() != llvm::GlobalValue::ExternalLinkage ||
-      !Function.hasDefaultVisibility() || !Function.doesNotThrow() ||
+      !HasSealedVisibility || !Function.doesNotThrow() ||
       Function.hasFnAttribute(llvm::Attribute::NoReturn) ||
       !hasOnlyNoUnwindAttributes(Function.getAttributes(),
                                  Function.arg_size()) ||

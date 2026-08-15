@@ -128,24 +128,34 @@ helper class 與 ABI 形狀，但刻意排除原生位址，因此不受 ASLR �
 `InvalidateOnExecutableWrite`、`ValidateBeforeDispatch` 三種程式碼寫入策略同樣產生
 自洽的型別化記錄，而非隱式主機行為。
 
+`TranslationObjectCompilerV1` 是經過驗證的 LLVM IR 到目標檔邊界。它先驗證 const
+輸入 module，在任何轉換前完成 clone，將證明閘控的語意簡化與 LLVM `O0` 至 `O3`
+最佳化組合，再次驗證最終 IR，並為四種契約主機架構發射 relocatable ELF、COFF 或
+Mach-O 目標檔。它正規化精確的 target-mangled block/runtime 符號 manifest，稽核每個
+發射結果，並回傳 runtime registry identity 以及帶版本的請求與成品 cache key。產生
+位元組預算非零時會限制目標檔大小；零表示呼叫端政策不設上限。編譯器止於已稽核的
+relocatable 位元組：不負責連結、發布、分派或執行，也不提供 guest 指令 lowering。
+
 post-codegen verifier 將 relocatable ELF、COFF、Mach-O 目標檔視為
 閉集合稽核。格式與架構必須和選定主機精確相符；未定義符號必須精確屬於有限
 helper allowlist，動態符號一律禁止。relocation 採用明確直接白名單，並檢查
 encoding、width、alignment、offset、可載入目的區段，以及目標是否為目標檔內
 non-preemptible 定義或精確獲准的 helper。verifier 拒絕 W+X、例外/展開與初始化
-中繼資料、TLS、IFUNC、GOT/PLT 與其他間接機制、動態 relocation、
-weak/preemptible 或可選擇定義、未知 allocated section 與 linker directive。ELF
-`ET_REL` 成品不得包含 program header 或 segment。Mach-O load command 採用正向
-白名單：必須且只能有一個位寬相符的 segment，symbol table、dynamic-symbol table、
-platform-version 與 data-in-code command 各至多一個，並檢查相依關係；linker option
-與其他所有 command 均拒絕。
+中繼資料、TLS、IFUNC、GOT 與一般 PLT 間接機制、動態 relocation、weak/preemptible
+或可選擇定義、未知 allocated section 與 linker directive。只有當 v1 policy 證明
+LLVM 隱藏的 x86-64 ELF `R_X86_64_PLT32` 是指向精確 runtime helper 的 sealed direct
+branch 時才允許此拼寫；它不會放行 PLT 或 GOT 路徑。ELF `ET_REL` 成品不得包含
+program header 或 segment。Mach-O load command 採用正向白名單：必須且只能有一個
+位寬相符的 segment，symbol table、dynamic-symbol table、platform-version 與
+data-in-code command 各至多一個，並檢查相依關係；linker option 與其他所有 command
+均拒絕。
 
-runtime、目標解析、W^X 發布、memory、IR、符號登錄表與目標檔稽核實作定義並驗證
-這些邊界。目前仍缺少經過驗證的目標檔編譯器、JITLink graph 稽核/連結/載入路徑、
-受信任 dispatcher 或 dispatcher factory，以及完整的 guest-to-host lowering。因此，
-現有邊界不構成完整的可執行翻譯後端、完整的跨架構翻譯流水線或完整的端到端例外
-重寫。本節描述契約與 verifier 的作用範圍，不宣稱具備產生、連結、載入、分派、執行、
-JIT、AOT 或例外重寫的端到端能力。
+runtime、目標解析、W^X 發布、memory、IR、符號登錄表、經過驗證的目標檔編譯器與
+目標檔稽核實作定義並驗證這些邊界。目前仍缺少完整的 guest 指令 lowering、JITLink
+graph 稽核/連結/載入路徑、受信任 dispatcher 或 dispatcher factory，以及執行能力。
+因此，現有邊界不構成完整的可執行翻譯後端、完整的跨架構翻譯流水線或完整的端到端
+例外重寫。本節描述契約與 verifier 的作用範圍，不宣稱具備產生、連結、載入、分派、
+執行、JIT、AOT 或例外重寫的端到端能力。
 
 產生 IR 的契約要求受該契約約束的每個 translated block 都是 hidden、non-preemptible，
 並採用 C ABI `i32 (ptr state, ptr runtime)`。runtime 只能透過私有登錄表發現 block，

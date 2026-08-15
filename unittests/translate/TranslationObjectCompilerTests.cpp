@@ -3,6 +3,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/translate/RuntimeHelpers.h"
+#include "neverd/translate/RuntimeSymbolRegistry.h"
 #include "neverd/translate/TranslationArtifactVerifier.h"
 #include "neverd/translate/TranslationObjectCompiler.h"
 
@@ -163,6 +164,47 @@ makeSemanticModule(llvm::LLVMContext &Context,
   return Module;
 }
 
+std::unique_ptr<llvm::Module>
+makeRuntimeCallModule(llvm::LLVMContext &Context,
+                      const TranslationOptions &Options) {
+  constexpr llvm::StringLiteral BlockName("translated_block");
+  std::unique_ptr<llvm::Module> Module =
+      makeCanonicalModule(Context, Options, {BlockName});
+  if (!Module)
+    return nullptr;
+
+  llvm::Function *Function = Module->getFunction(BlockName);
+  Function->deleteBody();
+  llvm::Type *Pointer = llvm::PointerType::getUnqual(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
+  llvm::FunctionType *HelperType =
+      llvm::FunctionType::get(I32, {Pointer, I64, I64, I32}, false);
+  llvm::Function *Helper =
+      llvm::Function::Create(HelperType, llvm::GlobalValue::ExternalLinkage,
+                             "nvd_rt_v1_store32_le", Module.get());
+  Helper->addFnAttr(llvm::Attribute::NoUnwind);
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Success =
+      llvm::BasicBlock::Create(Context, "success", Function);
+  llvm::BasicBlock *Failure =
+      llvm::BasicBlock::Create(Context, "failure", Function);
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::CallInst *Status =
+      Builder.CreateCall(Helper, {Function->getArg(1), Builder.getInt64(0x1000),
+                                  Builder.getInt64(7), Builder.getInt32(4)});
+  Status->addFnAttr(llvm::Attribute::NoUnwind);
+  Builder.CreateCondBr(Builder.CreateICmpEQ(Status, Builder.getInt32(0)),
+                       Success, Failure);
+  Builder.SetInsertPoint(Success);
+  Builder.CreateRet(Builder.getInt32(0));
+  Builder.SetInsertPoint(Failure);
+  Builder.CreateRet(Status);
+  return Module;
+}
+
 TranslationObjectPolicyV1
 objectPolicy(llvm::ArrayRef<llvm::StringRef> BlockNames,
              llvm::ArrayRef<TranslationIRMemorySlot> StateSlots = {},
@@ -309,6 +351,13 @@ TEST(TranslationObjectCompiler, RequiresTheExactDefinitionManifest) {
   EXPECT_EQ(Artifact->blockSymbols()[1].IRName, "block_b");
   EXPECT_EQ(Artifact->runtimeSymbols().size(),
             runtimeABIHelperBindingsV1().size());
+  RuntimeSymbolRegistryV1 Registry =
+      llvm::cantFail(RuntimeSymbolRegistryV1::create());
+  EXPECT_EQ(Artifact->runtimeRegistryIdentity(), Registry.identity());
+  ASSERT_EQ(Artifact->runtimeSymbols().size(), Registry.entries().size());
+  for (size_t Index = 0; Index != Registry.entries().size(); ++Index)
+    EXPECT_EQ(Artifact->runtimeSymbols()[Index].IRName,
+              Registry.entries()[Index].name());
   expectObjectVerifies(*Artifact);
 }
 
@@ -408,7 +457,7 @@ TEST(TranslationObjectCompiler, ProducesDeterministicBytesAndVersionedKeys) {
   EXPECT_TRUE(First->artifactCacheKey().starts_with(
       "neverd.translation-object-artifact.v1.sha256:"));
   static_assert(TranslationObjectArtifactV1::CacheIdentityVersion == 1);
-  static_assert(TranslationObjectArtifactV1::PipelineSchemaVersion == 1);
+  static_assert(TranslationObjectArtifactV1::PipelineSchemaVersion == 2);
 }
 
 TEST(TranslationObjectCompiler, EmitsEveryContractHostArchitecture) {
@@ -462,6 +511,36 @@ TEST(TranslationObjectCompiler, UsesLLVMsMachOSymbolPrefixAtTheBoundary) {
     EXPECT_EQ(Symbol.ObjectName, "_" + Symbol.IRName);
   expectObjectParses(*Artifact);
   expectObjectVerifies(*Artifact);
+}
+
+TEST(TranslationObjectCompiler,
+     EmitsAuditedDirectRuntimeCallsAcrossObjectFormats) {
+  constexpr llvm::StringLiteral BlockName("translated_block");
+  struct TestCase {
+    GuestArchitecture Architecture;
+    const char *Triple;
+  };
+  constexpr TestCase Cases[] = {
+      {GuestArchitecture::X86_64, "x86_64-pc-linux-gnu"},
+      {GuestArchitecture::X86_64, "x86_64-pc-windows-msvc"},
+      {GuestArchitecture::X86_64, "x86_64-apple-macosx"},
+  };
+
+  for (const TestCase &Case : Cases) {
+    SCOPED_TRACE(Case.Triple);
+    llvm::LLVMContext Context;
+    TranslationOptions Options =
+        explicitOptions(Case.Architecture, Case.Triple);
+    std::unique_ptr<llvm::Module> Module =
+        makeRuntimeCallModule(Context, Options);
+    ASSERT_NE(Module, nullptr);
+    llvm::Expected<TranslationObjectArtifactV1> Artifact =
+        compileTranslationObjectV1(*Module, Options, objectPolicy({BlockName}));
+    if (!Artifact)
+      FAIL() << llvm::toString(Artifact.takeError());
+    expectObjectParses(*Artifact);
+    expectObjectVerifies(*Artifact);
+  }
 }
 
 TEST(TranslationObjectCompiler, ComposesSemanticAndLLVMOptimization) {

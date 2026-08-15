@@ -169,6 +169,19 @@ die Code-Write-Policies `RejectExecutableWrites`,
 `InvalidateOnExecutableWrite` und `ValidateBeforeDispatch` erzeugen ebenfalls
 kohärente typisierte Datensätze statt impliziten Host-Verhaltens.
 
+`TranslationObjectCompilerV1` ist die verifizierte Grenze von LLVM-IR zum
+Objekt. Er validiert ein konstantes Eingabemodul, klont es vor allen
+Transformationen, verbindet beweisgesicherte semantische Vereinfachung mit
+LLVM-Optimierung von `O0` bis `O3`, validiert die finale IR erneut und erzeugt
+relocatable ELF-, COFF- oder Mach-O-Objekte für die vier Hostarchitekturen des
+Vertrags. Er kanonisiert die exakten, zielgemangelten Block- und
+Runtime-Symbol-Manifeste, prüft jedes erzeugte Objekt und liefert die Identität
+der Runtime-Registry sowie versionierte Request- und Artefakt-Cache-Keys. Ein
+von null verschiedenes Generated-Byte-Budget begrenzt die Objektgröße; null
+bedeutet ohne aufruferseitige Begrenzung. Der Compiler endet bei geprüften
+relocatable Bytes: Er linkt, veröffentlicht, verteilt oder führt sie nicht aus
+und stellt kein Guest-Instruktions-Lowering bereit.
+
 Der Post-Codegen-Verifier prüft relocatable ELF-, COFF- und
 Mach-O-Objekte als geschlossene Menge. Format und Architektur müssen exakt zum
 gewählten Host passen; undefinierte Symbole müssen exakt in der endlichen
@@ -176,21 +189,24 @@ Helper-Allowlist stehen, dynamische Symbole sind verboten. Relocations folgen
 expliziten direkten Whitelists mit Prüfungen von Encoding, Breite, Ausrichtung,
 Offset, ladbarem Zielabschnitt und einem objektlokalen non-preemptible oder exakt
 erlaubten Helper-Ziel. Abgelehnt werden W+X, Unwind-/Exception- und
-Initializer-Metadaten, TLS, IFUNC, GOT/PLT und andere Indirektion, dynamische
-Relocations, weak/preemptible oder auswählbare Definitionen, unbekannte
-allozierte Abschnitte und Linker-Direktiven. ELF-`ET_REL`-Artefakte dürfen keine
-Program Header oder Segmente enthalten. Mach-O Load Commands folgen einer
-Positivliste: genau ein zur Bitbreite passendes Segment und jeweils höchstens
-eine Symboltabelle, dynamische Symboltabelle, Plattformversion und
-Data-in-Code-Anweisung; ihre Abhängigkeiten werden geprüft. Linker-Optionen und
-alle übrigen Commands werden abgelehnt.
+Initializer-Metadaten, TLS, IFUNC, GOT und gewöhnliche PLT-Indirektion,
+dynamische Relocations, weak/preemptible oder auswählbare Definitionen,
+unbekannte allozierte Abschnitte und Linker-Direktiven. Die von LLVM für einen
+hidden x86-64-ELF-Aufruf verwendete Schreibweise `R_X86_64_PLT32` ist nur
+zulässig, wenn die v1-Policy einen sealed direkten Branch zum exakten
+Runtime-Helper beweist; sie erlaubt keinen PLT- oder GOT-Pfad. ELF-`ET_REL`-
+Artefakte dürfen keine Program Header oder Segmente enthalten. Mach-O Load
+Commands folgen einer Positivliste: genau ein zur Bitbreite passendes Segment
+und jeweils höchstens eine Symboltabelle, dynamische Symboltabelle,
+Plattformversion und Data-in-Code-Anweisung; ihre Abhängigkeiten werden geprüft.
+Linker-Optionen und alle übrigen Commands werden abgelehnt.
 
 Die Implementierungen für Runtime, Zielauflösung, W^X-Veröffentlichung,
-Speicher, IR, Symbol-Registry und Objektprüfung definieren und validieren diese
-Grenzen. Es fehlen weiterhin ein verifizierter Objekt-Compiler, ein Pfad für
-JITLink-Graphprüfung/Linken/Laden, ein vertrauenswürdiger Dispatcher oder eine
-Dispatcher-Factory und ein vollständiges Guest-zu-Host-Lowering. Die
-vorhandenen Grenzen bilden daher weder ein vollständiges ausführbares
+Speicher, IR, Symbol-Registry, den verifizierten Objekt-Compiler und Objektprüfung
+definieren und validieren diese Grenzen. Es fehlen weiterhin das vollständige
+Guest-Instruktions-Lowering, ein Pfad für JITLink-Graphprüfung/Linken/Laden, ein
+vertrauenswürdiger Dispatcher oder eine Dispatcher-Factory und die Ausführung.
+Die vorhandenen Grenzen bilden daher weder ein vollständiges ausführbares
 Übersetzungs-Backend noch eine vollständige architekturübergreifende
 Übersetzungspipeline oder vollständige End-to-End-Ausnahmeumschreibung. Dieser
 Abschnitt beschreibt den Umfang von Vertrag und Verifier; er behauptet keine

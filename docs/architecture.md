@@ -155,28 +155,44 @@ cancellation, generation tracking, and the `RejectExecutableWrites`,
 `InvalidateOnExecutableWrite`, and `ValidateBeforeDispatch` code-write policies
 also produce coherent typed records rather than implicit host-side behavior.
 
+`TranslationObjectCompilerV1` is the verified LLVM-IR-to-object boundary. It
+validates a const input module, clones it before applying any transformation,
+composes proof-gated semantic simplification with LLVM optimization at `O0`
+through `O3`, validates the final IR again, and emits relocatable ELF, COFF, or
+Mach-O objects for the four contract host architectures. It canonicalizes the exact
+target-mangled block and runtime-symbol manifests, audits every emitted object,
+and returns the runtime-registry identity plus versioned request and artifact
+cache keys. A non-zero generated-byte budget caps the emitted object; zero means
+unlimited by caller policy. The compiler stops at audited relocatable bytes: it
+does not link, publish, dispatch, or execute them, and it does not supply guest
+instruction lowering.
+
 The post-codegen verifier audits relocatable ELF, COFF, and Mach-O
 objects as a closed set. Format and architecture must match the selected host;
 undefined symbols require exact membership in the finite helper allowlist and
 dynamic symbols are forbidden. Relocations are explicit direct whitelists with
 checked encoding, width, alignment, offset, loadable destination, and an
 object-local non-preemptible or exactly allowlisted target. The verifier rejects
-W+X, unwind/exception and initializer metadata, TLS, IFUNC, GOT/PLT and other
-indirection, dynamic relocations, weak/preemptible or selectable definitions,
-unknown allocated sections, and linker directives. ELF `ET_REL` artifacts must
-contain no program headers or segments. Mach-O load commands use a positive
-list: exactly one width-matching segment and at most one symbol table,
-dynamic-symbol table, platform-version, and data-in-code command, with their
-dependencies checked; linker options and every other command are rejected.
+W+X, unwind/exception and initializer metadata, TLS, IFUNC, GOT and ordinary
+PLT indirection, dynamic relocations, weak/preemptible or selectable
+definitions, unknown allocated sections, and linker directives. LLVM's hidden
+x86-64 ELF `R_X86_64_PLT32` spelling is accepted only when the v1 policy proves
+it is a sealed direct branch to an exact runtime helper; it does not authorize a
+PLT or GOT path. ELF `ET_REL` artifacts must contain no program headers or
+segments. Mach-O load commands use a positive list: exactly one width-matching
+segment and at most one symbol table, dynamic-symbol table, platform-version,
+and data-in-code command, with their dependencies checked; linker options and
+every other command are rejected.
 
 The runtime, target-resolution, W^X publication, memory, IR, symbol-registry,
-and object-audit implementations define and validate these boundaries. A
-verified object compiler, JITLink graph audit/link/loading path, trusted
-dispatcher or dispatcher factory, and complete guest-to-host lowering are still
-absent. The available boundaries therefore do not constitute a complete
-executable translation backend, a complete cross-architecture translation
-pipeline, or complete end-to-end exception rewriting. This section specifies
-contract and verifier scope; it does not claim end-to-end generation, linking,
+verified object compiler, and object-audit implementations define and validate
+these boundaries. Complete guest-instruction lowering, a JITLink graph
+audit/link/loading path, a trusted dispatcher or dispatcher factory, and
+execution are still absent. The available boundaries therefore do not
+constitute a complete executable translation backend, a complete
+cross-architecture translation pipeline, or complete end-to-end exception
+rewriting. This section specifies contract and verifier scope; it does not claim
+end-to-end generation, linking,
 loading, dispatch, execution, JIT, AOT, or exception rewriting.
 
 The generated-IR contract requires every translated block governed by it to be

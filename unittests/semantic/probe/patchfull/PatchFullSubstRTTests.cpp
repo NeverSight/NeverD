@@ -34266,6 +34266,75 @@ int runExit(const std::string &Cmd) {
   return neverd::test::systemExitCode(RC);
 }
 
+// Build a host sample in the exception format the Mach-O patcher currently
+// supports.  Darwin AArch64 normally emits compact unwind alone, but the
+// patcher can register regenerated records only through an existing
+// __TEXT,__eh_frame.  The extra assembly function uses valid, deliberately
+// non-compact CFI so the linker retains that section.  A separate negative E2E
+// test below keeps the compact-only fail-closed boundary observable.
+bool compileHostProgram(const fs::path &Dir, const char *Program,
+                        const std::string &Executable, const char *OptFlag,
+                        bool AddMachODwarfAnchor = true) {
+  const std::string CSource = (Dir / "m.c").string();
+  {
+    std::ofstream OS(CSource);
+    OS << Program;
+    if (!OS)
+      return false;
+  }
+
+  std::string Inputs = neverd::test::shellQuote(CSource);
+#if defined(__APPLE__) &&                                                      \
+    (defined(__aarch64__) || defined(__arm64__) || defined(__x86_64__))
+  if (AddMachODwarfAnchor) {
+    const std::string Anchor = (Dir / "dwarf_anchor.s").string();
+    std::ofstream OS(Anchor);
+#if defined(__aarch64__) || defined(__arm64__)
+    OS << R"ASM(.section __TEXT,__text,regular,pure_instructions
+.private_extern _neverd_test_eh_frame_anchor
+.no_dead_strip _neverd_test_eh_frame_anchor
+.p2align 2
+_neverd_test_eh_frame_anchor:
+.cfi_startproc
+sub sp, sp, #16
+.cfi_def_cfa_offset 16
+str x19, [sp]
+.cfi_offset x19, -16
+ldr x19, [sp]
+add sp, sp, #16
+ret
+.cfi_endproc
+.subsections_via_symbols
+)ASM";
+#else
+    OS << R"ASM(.section __TEXT,__text,regular,pure_instructions
+.private_extern _neverd_test_eh_frame_anchor
+.no_dead_strip _neverd_test_eh_frame_anchor
+.p2align 4, 0x90
+_neverd_test_eh_frame_anchor:
+.cfi_startproc
+movq %rsp, %r10
+.cfi_def_cfa %r10, 8
+retq
+.cfi_endproc
+.subsections_via_symbols
+)ASM";
+#endif
+    if (!OS)
+      return false;
+    OS.close();
+    if (!OS)
+      return false;
+    Inputs += " " + neverd::test::shellQuote(Anchor);
+  }
+#else
+  (void)AddMachODwarfAnchor;
+#endif
+
+  return runExit("clang " + std::string(OptFlag) + " -fno-stack-protector -o " +
+                 neverd::test::shellQuote(Executable) + " " + Inputs) == 0;
+}
+
 // Self-contained program (no libc) exercising all five substituted operators;
 // main returns compute(40,9) & 0xff so the exit code carries the result.
 const char *kHostProgram = R"C(
@@ -34324,20 +34393,12 @@ void runHostE2E(const char *Mode, const char *Flag, const char *Program,
            ::testing::UnitTest::GetInstance()->current_test_info()->line())));
   std::error_code EC;
   fs::create_directories(Dir, EC);
-  auto CSrc = (Dir / "m.c").string();
   auto Exe =
       (Dir / (std::string("m") + neverd::test::executableSuffix())).string();
   auto Patched =
       (Dir / (std::string("m.patched") + neverd::test::executableSuffix()))
           .string();
-  {
-    std::ofstream OS(CSrc);
-    OS << Program;
-  }
-
-  if (runExit("clang -O0 -fno-stack-protector -o " +
-              neverd::test::shellQuote(Exe) + " " +
-              neverd::test::shellQuote(CSrc)) != 0)
+  if (!compileHostProgram(Dir, Program, Exe, "-O0"))
     GTEST_SKIP() << "host clang could not build the sample";
 
   int Base = runExit(neverd::test::shellQuote(Exe));
@@ -35994,7 +36055,6 @@ void runHostE2EStringOutput(const char *Mode, const char *Program,
            ::testing::UnitTest::GetInstance()->current_test_info()->line())));
   std::error_code EC;
   fs::create_directories(Dir, EC);
-  auto CSrc = (Dir / "m.c").string();
   auto Exe =
       (Dir / (std::string("m") + neverd::test::executableSuffix())).string();
   auto Patched =
@@ -36002,14 +36062,7 @@ void runHostE2EStringOutput(const char *Mode, const char *Program,
           .string();
   auto NatOut = (Dir / "native.out").string();
   auto PatOut = (Dir / "patched.out").string();
-  {
-    std::ofstream OS(CSrc);
-    OS << Program;
-  }
-
-  if (runExit("clang " + std::string(OptFlag) + " -fno-stack-protector -o " +
-              neverd::test::shellQuote(Exe) + " " +
-              neverd::test::shellQuote(CSrc)) != 0)
+  if (!compileHostProgram(Dir, Program, Exe, OptFlag))
     GTEST_SKIP() << "host clang could not build the sample";
 
   int Base = runExit(neverd::test::shellQuote(Exe) +
@@ -36066,7 +36119,6 @@ void runHostE2ENoSilentMiscompile(const char *Mode, const char *Program,
            ::testing::UnitTest::GetInstance()->current_test_info()->line())));
   std::error_code EC;
   fs::create_directories(Dir, EC);
-  auto CSrc = (Dir / "m.c").string();
   auto Exe =
       (Dir / (std::string("m") + neverd::test::executableSuffix())).string();
   auto Patched =
@@ -36074,14 +36126,7 @@ void runHostE2ENoSilentMiscompile(const char *Mode, const char *Program,
           .string();
   auto NatOut = (Dir / "native.out").string();
   auto PatOut = (Dir / "patched.out").string();
-  {
-    std::ofstream OS(CSrc);
-    OS << Program;
-  }
-
-  if (runExit("clang " + std::string(OptFlag) + " -fno-stack-protector -o " +
-              neverd::test::shellQuote(Exe) + " " +
-              neverd::test::shellQuote(CSrc)) != 0)
+  if (!compileHostProgram(Dir, Program, Exe, OptFlag))
     GTEST_SKIP() << "host clang could not build the sample";
 
   int Base = runExit(neverd::test::shellQuote(Exe) +
@@ -36123,6 +36168,46 @@ void runHostE2ENoSilentMiscompile(const char *Mode, const char *Program,
 }
 
 } // namespace
+
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+TEST(PatchFullMachOUnwind_HostE2E, CompactUnwindOnlyInputFailsClosed) {
+  if (!haveClang())
+    GTEST_SKIP() << "host clang unavailable";
+
+  auto Dir =
+      fs::temp_directory_path() /
+      ("nd_pf_compact_unwind_" +
+       std::to_string(static_cast<unsigned long long>(
+           ::testing::UnitTest::GetInstance()->current_test_info()->line())));
+  std::error_code EC;
+  fs::create_directories(Dir, EC);
+  ASSERT_FALSE(EC) << "cannot create host test directory";
+  const std::string Exe = (Dir / "m").string();
+  const std::string Patched = (Dir / "m.patched").string();
+  const std::string Stdout = (Dir / "patch.out").string();
+  const std::string Stderr = (Dir / "patch.err").string();
+  fs::remove(Patched, EC);
+  ASSERT_FALSE(EC) << "cannot clear stale host-test output";
+
+  ASSERT_TRUE(compileHostProgram(Dir, kHostProgram, Exe, "-O0",
+                                 /*AddMachODwarfAnchor=*/false));
+  const std::string Command = neverd::test::shellQuote(ndBinary()) + " patch " +
+                              neverd::test::shellQuote(Exe) + " --subst -o " +
+                              neverd::test::shellQuote(Patched) +
+                              neverd::test::redirectOutput(Stdout, Stderr);
+  EXPECT_NE(runExit(Command), 0);
+  EXPECT_FALSE(fs::exists(Patched))
+      << "failed compact-unwind rewrite left an output file";
+  const std::string ErrorText = readFile(Stderr);
+  EXPECT_NE(ErrorText.find(
+                "macho exception patch: no registrable __eh_frame produced"),
+            std::string::npos)
+      << ErrorText;
+
+  if (!::testing::Test::HasFailure())
+    fs::remove_all(Dir, EC);
+}
+#endif
 
 TEST(PatchFullSubst_HostE2E, SubstSectionPreservesExitCode) {
   runHostE2E("section", "--subst", kHostProgram, "subst");

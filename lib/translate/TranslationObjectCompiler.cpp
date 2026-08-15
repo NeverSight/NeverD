@@ -4,6 +4,7 @@
 
 #include "neverd/translate/RuntimeABI.h"
 #include "neverd/translate/RuntimeHelpers.h"
+#include "neverd/translate/RuntimeSymbolRegistry.h"
 #include "neverd/translate/TranslationArtifactVerifier.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -90,6 +91,8 @@ llvm::StringLiteral errorCodeName(TranslationObjectCompilerErrorCode Code) {
     return "generated-code-budget-exceeded";
   case TranslationObjectCompilerErrorCode::ArtifactVerificationFailed:
     return "artifact-verification-failed";
+  case TranslationObjectCompilerErrorCode::RuntimeRegistryUnavailable:
+    return "runtime-registry-unavailable";
   }
   return "unknown";
 }
@@ -386,7 +389,11 @@ createCompilerTarget(const TranslationOptions &Options) {
 
   const std::string Features = llvm::join(Resolved->features(), ",");
   llvm::TargetOptions TargetOptions;
-  TargetOptions.ExceptionModel = llvm::ExceptionHandling::None;
+  // In TargetOptions, None means "use the target default".  ARM ELF's
+  // default is EHABI and emits a .ARM.exidx cantunwind record even for this
+  // boundary's nounwind functions.  Selecting DwarfCFI while retaining no
+  // uwtable attributes makes every supported backend emit no unwind metadata.
+  TargetOptions.ExceptionModel = llvm::ExceptionHandling::DwarfCFI;
   TargetOptions.EnableFastISel = false;
   TargetOptions.EnableGlobalISel = false;
   TargetOptions.GuaranteedTailCallOpt = false;
@@ -424,7 +431,8 @@ auto memorySlotKey(const TranslationIRMemorySlot &Slot) {
 
 llvm::Expected<CanonicalPolicy>
 canonicalizePolicy(const llvm::Module &Module,
-                   const TranslationObjectPolicyV1 &Policy) {
+                   const TranslationObjectPolicyV1 &Policy,
+                   const RuntimeSymbolRegistryV1 &RuntimeRegistry) {
   if (Policy.StateSize == 0)
     return failure(TranslationObjectCompilerErrorCode::InvalidRequest,
                    "state extent must be nonzero");
@@ -464,8 +472,8 @@ canonicalizePolicy(const llvm::Module &Module,
   llvm::sort(Result.RequiredBlockSymbols);
 
   llvm::StringSet<> RuntimeNames;
-  for (const RuntimeABIHelperBindingV1 &Binding : runtimeABIHelperBindingsV1())
-    RuntimeNames.insert(Binding.Name);
+  for (const RuntimeSymbolEntryV1 &Entry : RuntimeRegistry.entries())
+    RuntimeNames.insert(Entry.name());
   for (const std::string &Name : Result.RequiredBlockSymbols)
     if (RuntimeNames.contains(Name))
       return failure(
@@ -617,11 +625,12 @@ void hashSymbolNames(StableHashWriter &Hash,
     Hash.addString(Name);
 }
 
-std::vector<std::string> runtimeIRSymbolNames() {
+std::vector<std::string>
+runtimeIRSymbolNames(const RuntimeSymbolRegistryV1 &Registry) {
   std::vector<std::string> Names;
-  for (const RuntimeABIHelperBindingV1 &Binding : runtimeABIHelperBindingsV1())
-    Names.push_back(Binding.Name.str());
-  llvm::sort(Names);
+  Names.reserve(Registry.entries().size());
+  for (const RuntimeSymbolEntryV1 &Entry : Registry.entries())
+    Names.push_back(Entry.name().str());
   return Names;
 }
 
@@ -629,7 +638,8 @@ std::string createRequestCacheKey(llvm::ArrayRef<uint8_t> InputBitcode,
                                   const TranslationOptions &Options,
                                   const CanonicalPolicy &Policy,
                                   const ResolvedHostTarget &Target,
-                                  const llvm::DataLayout &DataLayout) {
+                                  const llvm::DataLayout &DataLayout,
+                                  const RuntimeSymbolRegistryV1 &Registry) {
   StableHashWriter Hash;
   Hash.addString("neverd.translation-object-request.v1");
   Hash.addU32(TranslationObjectArtifactV1::PipelineSchemaVersion);
@@ -641,15 +651,17 @@ std::string createRequestCacheKey(llvm::ArrayRef<uint8_t> InputBitcode,
   Hash.addU32(kRuntimeABIMagicV1);
   Hash.addU32(kRuntimeABIVersionV1);
   Hash.addU32(kRuntimeControlBlockSizeV1);
+  Hash.addString(Registry.identity());
   Hash.addString("artifact-policy-v1");
   Hash.addString("reloc-static");
   Hash.addString("code-model-small");
+  Hash.addString("exception-model-dwarf-cfi-no-uwtable");
   Hash.addString(DataLayout.getStringRepresentation());
   hashTranslationOptions(Hash, Options, Target);
   Hash.addU64(Policy.StateSize);
   hashMemorySlots(Hash, Policy.StateSlots);
   hashSymbolNames(Hash, Policy.RequiredBlockSymbols);
-  const std::vector<std::string> RuntimeNames = runtimeIRSymbolNames();
+  const std::vector<std::string> RuntimeNames = runtimeIRSymbolNames(Registry);
   hashSymbolNames(Hash, RuntimeNames);
   hashSemanticPolicy(Hash, Policy.Semantic);
   Hash.addBytes(InputBitcode);
@@ -688,9 +700,10 @@ createBlockSymbolMappings(llvm::Module &Module,
 }
 
 std::vector<TranslationObjectSymbolV1>
-createRuntimeSymbolMappings(const llvm::Module &Module) {
+createRuntimeSymbolMappings(const llvm::Module &Module,
+                            const RuntimeSymbolRegistryV1 &Registry) {
   std::vector<TranslationObjectSymbolV1> Result;
-  const std::vector<std::string> IRNames = runtimeIRSymbolNames();
+  const std::vector<std::string> IRNames = runtimeIRSymbolNames(Registry);
   Result.reserve(IRNames.size());
   for (const std::string &IRName : IRNames) {
     if (const llvm::Function *Function = Module.getFunction(IRName))
@@ -828,6 +841,9 @@ void sealCodeGenerationIR(llvm::Module &Module) {
       Function.addFnAttr(llvm::Attribute::NoUnwind);
       Function.setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::None);
       Function.setDSOLocal(true);
+      if (Function.isDeclaration() &&
+          findRuntimeABIHelperSignatureV1(Function.getName()))
+        Function.setVisibility(llvm::GlobalValue::HiddenVisibility);
     }
     if (Function.isDeclaration())
       continue;
@@ -928,11 +944,7 @@ TranslationSemanticPolicyV1 TranslationSemanticPolicyV1::unlimited() {
       std::numeric_limits<unsigned>::max();
   Policy.Simplify.Synthesis.StochasticIterations =
       std::numeric_limits<size_t>::max();
-  Policy.Simplify.Solver.Sat.MaxConflicts = 0;
-  Policy.Simplify.Solver.Sat.MaxPropagations = 0;
-  Policy.Simplify.Solver.Sat.MaxWatchVisits = 0;
-  Policy.Simplify.Solver.Blast.MaxWidth = std::numeric_limits<uint32_t>::max();
-  Policy.Simplify.Solver.Blast.MaxGates = std::numeric_limits<size_t>::max();
+  Policy.Simplify.Solver = solver::SolverOptions::unlimited();
   Policy.MaxRounds = 0;
   return Policy;
 }
@@ -941,8 +953,15 @@ llvm::Expected<TranslationObjectArtifactV1>
 compileTranslationObjectV1(const llvm::Module &Module,
                            const TranslationOptions &Options,
                            const TranslationObjectPolicyV1 &Policy) {
+  llvm::Expected<RuntimeSymbolRegistryV1> RuntimeRegistry =
+      RuntimeSymbolRegistryV1::create();
+  if (!RuntimeRegistry)
+    return failure(
+        TranslationObjectCompilerErrorCode::RuntimeRegistryUnavailable,
+        RuntimeRegistry.takeError());
+
   llvm::Expected<CanonicalPolicy> Canonical =
-      canonicalizePolicy(Module, Policy);
+      canonicalizePolicy(Module, Policy, *RuntimeRegistry);
   if (!Canonical)
     return Canonical.takeError();
 
@@ -960,8 +979,9 @@ compileTranslationObjectV1(const llvm::Module &Module,
         std::move(Error));
 
   const std::vector<uint8_t> InputBitcode = serializeBitcode(Module);
-  const std::string RequestCacheKey = createRequestCacheKey(
-      InputBitcode, Options, *Canonical, Target->Resolved, HostDataLayout);
+  const std::string RequestCacheKey =
+      createRequestCacheKey(InputBitcode, Options, *Canonical, Target->Resolved,
+                            HostDataLayout, *RuntimeRegistry);
 
   // Every transform and every backend preparation step owns this clone.  The
   // const input remains byte-for-byte unchanged on all exits below.
@@ -992,7 +1012,7 @@ compileTranslationObjectV1(const llvm::Module &Module,
   if (!BlockSymbols)
     return BlockSymbols.takeError();
   std::vector<TranslationObjectSymbolV1> RuntimeSymbols =
-      createRuntimeSymbolMappings(*Working);
+      createRuntimeSymbolMappings(*Working, *RuntimeRegistry);
   if (llvm::Error Error =
           validateObjectSymbolMappings(*BlockSymbols, RuntimeSymbols))
     return std::move(Error);
@@ -1021,8 +1041,8 @@ compileTranslationObjectV1(const llvm::Module &Module,
       RequestCacheKey, FinalIR, *Object, *BlockSymbols, RuntimeSymbols);
   return TranslationObjectArtifactV1(
       std::move(*Object), std::move(Target->Resolved), SemanticReport,
-      std::move(*BlockSymbols), std::move(RuntimeSymbols), RequestCacheKey,
-      ArtifactCacheKey);
+      std::move(*BlockSymbols), std::move(RuntimeSymbols),
+      RuntimeRegistry->identity().str(), RequestCacheKey, ArtifactCacheKey);
 }
 
 } // namespace neverd::translate

@@ -27,6 +27,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/BinaryRewrite.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/CodeGen.h"
@@ -388,6 +389,14 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
   }
 
   llvm::TargetOptions TOpt;
+  // Darwin AArch64 normally omits DWARF CFI when a frame has a compact-unwind
+  // encoding.  The rewrite path cannot register compact-unwind records from
+  // its appended executable segment, while an existing __TEXT,__eh_frame can
+  // safely host regenerated DWARF records.  Keep those records in every
+  // Mach-O rewrite object so the format installer can validate and register
+  // them, or fail closed when the input exposes no such region.
+  if (ObjectFormat == BinaryFormat::MachO)
+    TOpt.MCOptions.EmitDwarfUnwind = llvm::EmitDwarfUnwindType::Always;
   // The rewrite backend outputs final image bytes; alignment padding in text
   // sections must be NOPs, not zeros. Rather than post-processing alignment
   // fragments (which may or may not be FT_Align), disable loop/block alignment

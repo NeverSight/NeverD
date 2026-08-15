@@ -540,13 +540,23 @@ bool hasForbiddenDefinitionLinkage(const llvm::object::ObjectFile &Object,
     return true;
   if (!(Flags & llvm::object::SymbolRef::SF_Global))
     return false;
-  if (!Object.isELF())
-    return true;
-  constexpr uint8_t ELFSymbolVisibilityMask = 0x3;
-  const uint8_t Visibility =
-      llvm::object::ELFSymbolRef(Symbol).getOther() & ELFSymbolVisibilityMask;
-  return Visibility != llvm::ELF::STV_HIDDEN &&
-         Visibility != llvm::ELF::STV_INTERNAL;
+  if (Object.isELF()) {
+    constexpr uint8_t ELFSymbolVisibilityMask = 0x3;
+    const uint8_t Visibility =
+        llvm::object::ELFSymbolRef(Symbol).getOther() & ELFSymbolVisibilityMask;
+    return Visibility != llvm::ELF::STV_HIDDEN &&
+           Visibility != llvm::ELF::STV_INTERNAL;
+  }
+  // Mach-O represents a hidden external definition as N_PEXT | N_EXT.  LLVM
+  // exposes that exact, non-interposable spelling as SF_Global | SF_Hidden;
+  // rejecting every global symbol would incorrectly reject the codegen form
+  // of an LLVM hidden definition.  Plain N_EXT remains forbidden.
+  if (Object.isMachO())
+    return !(Flags & llvm::object::SymbolRef::SF_Hidden);
+  // A non-weak, non-COMDAT COFF external is a strong definition: duplicate
+  // providers are a link error rather than a selectable or interposable
+  // definition.  COMDAT sections and weak externals are rejected elsewhere.
+  return false;
 }
 
 bool isLoadableSection(const llvm::object::ObjectFile &Object,
@@ -750,6 +760,7 @@ RelocationShape elfRelocationShape(llvm::Triple::ArchType Arch, uint64_t Type) {
     case llvm::ELF::R_X86_64_PC64:
       return {8, 1};
     case llvm::ELF::R_X86_64_PC32:
+    case llvm::ELF::R_X86_64_PLT32:
     case llvm::ELF::R_X86_64_32:
     case llvm::ELF::R_X86_64_32S:
       return {4, 1};
@@ -1194,6 +1205,26 @@ bool isThumbBranch(llvm::StringRef Contents, uint64_t Offset) {
          ((Second & 0xd000u) == 0x9000u || (Second & 0xc000u) == 0xc000u);
 }
 
+bool isHiddenUndefinedELFSymbol(const llvm::object::ObjectFile &Object,
+                                const llvm::object::RelocationRef &Relocation) {
+  const llvm::object::symbol_iterator Symbol = Relocation.getSymbol();
+  if (Symbol == Object.symbol_end())
+    return false;
+  llvm::Expected<uint32_t> FlagsOrErr = Symbol->getFlags();
+  if (!FlagsOrErr) {
+    llvm::consumeError(FlagsOrErr.takeError());
+    return false;
+  }
+  if (!(*FlagsOrErr & llvm::object::SymbolRef::SF_Undefined) ||
+      !(*FlagsOrErr & llvm::object::SymbolRef::SF_Hidden))
+    return false;
+  constexpr uint8_t ELFSymbolVisibilityMask = 0x3;
+  const uint8_t Visibility =
+      llvm::object::ELFSymbolRef(*Symbol).getOther() & ELFSymbolVisibilityMask;
+  return Visibility == llvm::ELF::STV_HIDDEN ||
+         Visibility == llvm::ELF::STV_INTERNAL;
+}
+
 bool isDirectELFRuntimeHelperRelocation(
     const llvm::object::ObjectFile &Object,
     const llvm::object::RelocationRef &Relocation,
@@ -1202,7 +1233,14 @@ bool isDirectELFRuntimeHelperRelocation(
   const uint64_t Offset = Relocation.getOffset();
   switch (canonicalArchitecture(Object.getArch())) {
   case llvm::Triple::x86_64:
-    return Type == llvm::ELF::R_X86_64_PC32 &&
+    if (Type == llvm::ELF::R_X86_64_PC32)
+      return isX86DirectControlTransfer(RelocatedContents, Offset);
+    // LLVM spells an external x86-64 call as PLT32 even under the static
+    // relocation model.  A hidden undefined target cannot be interposed and
+    // must resolve inside the sealed link graph, so this is still a direct
+    // branch relocation rather than permission to create or use a PLT.
+    return Type == llvm::ELF::R_X86_64_PLT32 &&
+           isHiddenUndefinedELFSymbol(Object, Relocation) &&
            isX86DirectControlTransfer(RelocatedContents, Offset);
   case llvm::Triple::x86:
     return Type == llvm::ELF::R_386_PC32 &&
@@ -1381,6 +1419,14 @@ llvm::Error verifyRelocations(const llvm::object::ObjectFile &Object,
           verifyRelocationTarget(Object, Relocation, AllowedSymbols);
       if (!RuntimeTargetOrErr)
         return RuntimeTargetOrErr.takeError();
+      const bool IsX86ELFPLT32 =
+          Object.isELF() &&
+          canonicalArchitecture(Object.getArch()) == llvm::Triple::x86_64 &&
+          Type == llvm::ELF::R_X86_64_PLT32;
+      if (IsX86ELFPLT32 && (!*RuntimeTargetOrErr || !RequireDirectRuntimeCalls))
+        return failure(TranslationArtifactViolation::RelocationTypeNotAllowed,
+                       *NameOrErr,
+                       "PLT32 is admitted only for a sealed runtime branch");
       if (*RuntimeTargetOrErr && RequireDirectRuntimeCalls &&
           !isDirectRuntimeHelperRelocation(Object, Relocation, RelocatedSection,
                                            *RelocatedContentsOrErr))

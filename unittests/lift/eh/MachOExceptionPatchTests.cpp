@@ -218,6 +218,50 @@ TEST(MachOExceptionPatch,
   EXPECT_EQ((*Records)[1].BeginVA, SecondFunction->second);
 }
 
+TEST(MachOExceptionPatch, AArch64FixedEHFrameCoversEveryGeneratedFunction) {
+  constexpr uint64_t TextVA = kBaseVA + 0x1000;
+  constexpr uint64_t EHFrameVA = kBaseVA + 0x3000;
+  llvm::LLVMContext Context;
+  auto Module = makeRequiredModule(Context);
+  auto *Type = llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  auto *Second = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "g", Module.get());
+  llvm::IRBuilder<> Builder(llvm::BasicBlock::Create(Context, "entry", Second));
+  Builder.CreateRetVoid();
+  Second->setUWTableKind(llvm::UWTableKind::Default);
+  CompiledImage Image = compileImageForPatchWithFixedSectionVAs(
+      *Module, Arch::AArch64, BinaryFormat::MachO, TextVA,
+      [](llvm::StringRef, uint32_t) -> std::optional<uint64_t> {
+        return std::nullopt;
+      },
+      [=](llvm::StringRef Name) -> std::optional<uint64_t> {
+        if (Name == "__eh_frame")
+          return EHFrameVA;
+        return std::nullopt;
+      });
+  ASSERT_TRUE(Image.Success);
+
+  const CompiledSection *EHFrame = nullptr;
+  for (const CompiledSection &Section : Image.Sections)
+    if (Section.Name == "__eh_frame")
+      EHFrame = &Section;
+  ASSERT_NE(EHFrame, nullptr);
+  ASSERT_FALSE(EHFrame->IsInImage);
+
+  auto FirstFunction = Image.SymbolAddrs.find("_f");
+  auto SecondFunction = Image.SymbolAddrs.find("_g");
+  ASSERT_NE(FirstFunction, Image.SymbolAddrs.end());
+  ASSERT_NE(SecondFunction, Image.SymbolAddrs.end());
+  ASSERT_GT(SecondFunction->second, FirstFunction->second);
+  auto Records =
+      decodeDwarfEHFrameRecords(EHFrame->ExternalBytes, EHFrame->VA, true);
+  ASSERT_TRUE(static_cast<bool>(Records))
+      << llvm::toString(Records.takeError());
+  ASSERT_EQ(Records->size(), 2u);
+  EXPECT_EQ((*Records)[0].BeginVA, FirstFunction->second);
+  EXPECT_EQ((*Records)[1].BeginVA, SecondFunction->second);
+}
+
 TEST(MachOExceptionPatch, RejectsOverlappingFileBackedSections) {
   // __text starts in the declared __eh_frame range.  Even though the logical
   // append point is its leading zero terminator, those bytes have two owners

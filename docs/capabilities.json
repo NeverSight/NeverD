@@ -45,7 +45,7 @@
       ],
       "limitations": [
         "the fixed runtime state covers the x86-64 integer core and preserves unmodeled logical state outside generated code",
-        "deterministic target resolution, verification, exact runtime-symbol binding, and one-way W^X publication do not by themselves provide an executable translation engine",
+        "verified object compilation emits audited relocatable bytes but does not provide complete guest instruction lowering, JITLink graph audit/link/loading, dispatch, or execution",
         "the native publication smoke test proves only the generated-code memory boundary, not guest lowering, object linking, dispatch, or cross-architecture execution"
       ],
       "tests": [
@@ -57,6 +57,19 @@
         "RuntimeCodeMemory.ExecutesOnlyAfterHostInstructionsArePublished",
         "RuntimeSymbolRegistry.ResolvesOnlyExactRegisteredNames",
         "RuntimeSymbolRegistry.IdentityIsVersionedAddressFreeAndOrderStable",
+        "TranslationObjectCompiler.EmitsParsableAuditedObjectsAtO0AndO2",
+        "TranslationObjectCompiler.NeverMutatesTheInputOnSuccessOrFailure",
+        "TranslationObjectCompiler.RequiresTheExactDefinitionManifest",
+        "TranslationObjectCompiler.EnforcesOnlyANonzeroGeneratedByteBudget",
+        "TranslationObjectCompiler.RejectsWrongTripleAndDataLayout",
+        "TranslationObjectCompiler.RejectsMalformedLLVMIRBeforeCloning",
+        "TranslationObjectCompiler.ProducesDeterministicBytesAndVersionedKeys",
+        "TranslationObjectCompiler.EmitsEveryContractHostArchitecture",
+        "TranslationObjectCompiler.UsesLLVMsMachOSymbolPrefixAtTheBoundary",
+        "TranslationObjectCompiler.EmitsAuditedDirectRuntimeCallsAcrossObjectFormats",
+        "TranslationObjectCompiler.ComposesSemanticAndLLVMOptimization",
+        "TranslationObjectCompiler.RejectsNonDeterministicProofProviders",
+        "TranslationArtifactVerifier.AcceptsOnlySealedLLVMPLT32RuntimeCallsInV1Policy",
         "TranslationArtifactVerifier.AcceptsCanonicalMachOObject"
       ],
       "public_surfaces": {
@@ -81,7 +94,7 @@
         "docs/architecture.md"
       ],
       "limitations": [
-        "page-isolated one-way RW-to-RX publication exists, but no verified object compiler, JITLink graph audit/link/loading path, dispatcher factory, or complete guest-to-host lowering is published"
+        "verified relocatable-object compilation and page-isolated one-way RW-to-RX publication exist, but no complete guest instruction lowering, JITLink graph audit/link/loading path, dispatcher factory, or execution engine is published"
       ],
       "tests": [],
       "public_surfaces": {

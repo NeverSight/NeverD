@@ -168,6 +168,20 @@ d’écriture de code `RejectExecutableWrites`, `InvalidateOnExecutableWrite` et
 `ValidateBeforeDispatch` produisent eux aussi des enregistrements typés
 cohérents plutôt qu’un comportement hôte implicite.
 
+`TranslationObjectCompilerV1` constitue la frontière vérifiée entre LLVM IR et
+objet. Il valide un module d’entrée const, le clone avant toute transformation,
+compose la simplification sémantique contrôlée par preuve avec l’optimisation
+LLVM de `O0` à `O3`, puis valide à nouveau l’IR final et produit des objets
+relocatable ELF, COFF ou Mach-O pour les quatre architectures hôtes du contrat.
+Il canonicalise les manifests exacts des blocks et symboles runtime après
+mangling de la cible, audite chaque objet produit et renvoie l’identité du
+registre runtime ainsi que des clés de cache versionnées pour la requête et
+l’artefact. Un budget d’octets produits non nul limite la taille de l’objet ;
+zéro signifie aucune limite imposée par l’appelant. Le compilateur s’arrête aux
+octets relocatable audités : il ne les lie ni ne les publie, ne les transmet à
+aucun dispatcher, ne les exécute pas et ne fournit pas le lowering des
+instructions guest.
+
 Le verifier post-codegen audite les objets relocatable ELF,
 COFF et Mach-O comme un ensemble fermé. Le format et l’architecture doivent
 correspondre exactement à l’hôte choisi ; les symboles non définis doivent
@@ -176,21 +190,25 @@ sont interdits. Les relocations suivent des whitelists directes explicites avec
 contrôle de l’encoding, de la largeur, de l’alignement, de l’offset, de la
 destination chargeable et d’une cible non-preemptible locale à l’objet ou d’un
 helper exactement autorisé. Sont rejetés W+X, les métadonnées
-unwind/exception/initializer, TLS, IFUNC, GOT/PLT et autres indirections, les
+unwind/exception/initializer, TLS, IFUNC, GOT et l’indirection PLT ordinaire, les
 relocations dynamiques, les définitions weak/preemptible ou sélectionnables,
-les sections allouées inconnues et les directives de linker. Les artefacts ELF
-`ET_REL` ne doivent contenir aucun program header ni segment. Les load commands
-Mach-O suivent une liste positive : exactement un segment de largeur
-correspondante et au plus une symbol table, dynamic-symbol table,
-platform-version et commande data-in-code, avec contrôle de leurs dépendances.
-Les options de linker et toute autre commande sont rejetées.
+les sections allouées inconnues et les directives de linker. L’écriture
+`R_X86_64_PLT32` employée par LLVM pour un appel ELF x86-64 hidden n’est admise
+que si la policy v1 prouve une branche directe sealed vers le helper runtime
+exact ; elle n’autorise aucun chemin PLT ou GOT. Les artefacts ELF `ET_REL` ne
+doivent contenir aucun program header ni segment. Les load commands Mach-O
+suivent une liste positive : exactement un segment de largeur correspondante et
+au plus une symbol table, dynamic-symbol table, platform-version et commande
+data-in-code, avec contrôle de leurs dépendances. Les options de linker et toute
+autre commande sont rejetées.
 
 Les implémentations du runtime, de la résolution de cible, de la publication
-W^X, de la mémoire, de l’IR, du registre de symboles et de l’audit d’objet
-définissent et valident ces frontières. Il manque encore un compilateur d’objet
-vérifié, un chemin d’audit/link/chargement du graphe JITLink, un dispatcher de
-confiance ou sa factory, et un lowering guest-vers-hôte complet. Les frontières
-disponibles ne constituent donc ni un backend de traduction exécutable complet,
+W^X, de la mémoire, de l’IR, du registre de symboles, du compilateur d’objet
+vérifié et de l’audit d’objet définissent et valident ces frontières. Il manque
+encore le lowering complet des instructions guest, un chemin
+d’audit/link/chargement du graphe JITLink, un dispatcher de confiance ou sa
+factory et l’exécution. Les frontières disponibles ne constituent donc ni un
+backend de traduction exécutable complet,
 ni une pipeline complète de traduction inter-architectures, ni une réécriture
 complète des exceptions de bout en bout. Cette section décrit la portée du
 contrat et du verifier ; elle n’affirme pas la disponibilité intégrale de la

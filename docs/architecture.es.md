@@ -167,6 +167,19 @@ código `RejectExecutableWrites`, `InvalidateOnExecutableWrite` y
 `ValidateBeforeDispatch` también producen registros tipados coherentes en vez
 de comportamiento implícito del host.
 
+`TranslationObjectCompilerV1` es la frontera verificada entre LLVM IR y objeto.
+Valida un módulo de entrada const, lo clona antes de cualquier transformación,
+compone la simplificación semántica controlada por pruebas con la optimización
+LLVM de `O0` a `O3`, vuelve a validar el IR final y emite objetos relocatable
+ELF, COFF o Mach-O para las cuatro arquitecturas host del contrato. Canonicaliza
+los manifests exactos de blocks y símbolos runtime con el mangling del target,
+audita cada objeto emitido y devuelve la identidad del registro runtime junto
+con claves de caché versionadas para la solicitud y el artefacto. Un presupuesto
+de bytes generados distinto de cero limita el tamaño del objeto; cero significa
+sin límite de la política del llamador. El compilador termina en bytes
+relocatable auditados: no los enlaza, publica, despacha ni ejecuta, y no
+proporciona lowering de instrucciones guest.
+
 El verifier post-codegen audita objetos relocatable ELF,
 COFF y Mach-O como un conjunto cerrado. El formato y la arquitectura deben
 coincidir exactamente con el host elegido; los símbolos indefinidos deben
@@ -175,22 +188,25 @@ dinámicos están prohibidos. Las relocations usan whitelists directas explícit
 con comprobaciones de encoding, ancho, alineación, offset, destino cargable y
 una definición non-preemptible local al objeto o un helper autorizado
 exactamente. Se rechazan W+X, metadatos unwind/exception/initializer, TLS,
-IFUNC, GOT/PLT y otras indirecciones, relocations dinámicas, definiciones
+IFUNC, GOT y la indirección PLT ordinaria, relocations dinámicas, definiciones
 weak/preemptible o seleccionables, secciones asignadas desconocidas y
-directivas del linker. Los artefactos ELF `ET_REL` no pueden contener program
-headers ni segmentos. Los load commands de Mach-O siguen una lista positiva:
-exactamente un segmento del ancho correspondiente y como máximo una symbol
-table, dynamic-symbol table, platform-version y orden data-in-code, con
-comprobación de sus dependencias. Las opciones del linker y cualquier otro
-command se rechazan.
+directivas del linker. La forma `R_X86_64_PLT32` que LLVM usa para una llamada
+ELF x86-64 hidden solo se admite cuando la policy v1 demuestra un branch directo
+sealed al helper runtime exacto; no autoriza una ruta PLT ni GOT. Los artefactos
+ELF `ET_REL` no pueden contener program headers ni segmentos. Los load commands
+de Mach-O siguen una lista positiva: exactamente un segmento del ancho
+correspondiente y como máximo una symbol table, dynamic-symbol table,
+platform-version y orden data-in-code, con comprobación de sus dependencias. Las
+opciones del linker y cualquier otro command se rechazan.
 
 Las implementaciones de runtime, resolución de target, publicación W^X,
-memoria, IR, registro de símbolos y auditoría de objetos definen y validan estas
-fronteras. Aún faltan un compilador de objetos verificado, una ruta de
-auditoría/link/carga del grafo JITLink, un dispatcher de confianza o su factory
-y un lowering guest-a-host completo. Por tanto, las fronteras disponibles no
-constituyen un backend de traducción ejecutable completo, una pipeline completa
-de traducción entre arquitecturas ni una reescritura de excepciones completa de
+memoria, IR, registro de símbolos, compilador de objetos verificado y auditoría
+de objetos definen y validan estas fronteras. Aún faltan el lowering completo de
+instrucciones guest, una ruta de auditoría/link/carga del grafo JITLink, un
+dispatcher de confianza o su factory y la ejecución. Por tanto, las fronteras
+disponibles no constituyen un backend de traducción ejecutable completo, una
+pipeline completa de traducción entre arquitecturas ni una reescritura de
+excepciones completa de
 extremo a extremo. Esta sección describe el alcance del contrato y del verifier;
 no afirma la disponibilidad integral de generación, enlace, carga, dispatch,
 ejecución, JIT, AOT ni reescritura de excepciones.

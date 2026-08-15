@@ -145,27 +145,39 @@ cancellation, generation tracking과 `RejectExecutableWrites`,
 `InvalidateOnExecutableWrite`, `ValidateBeforeDispatch` code-write policy도 암묵적인 host
 동작 대신 일관된 typed record를 생성합니다.
 
+`TranslationObjectCompilerV1`은 검증된 LLVM IR-to-object 경계입니다. const input
+module을 검증하고 모든 변환 전에 clone하며, proof-gated semantic simplification과
+LLVM `O0`~`O3` optimization을 결합한 뒤 final IR을 다시 검증하고 4개의 contract host
+architecture용 relocatable ELF, COFF, Mach-O object를 emit합니다. 정확한
+target-mangled block/runtime symbol manifest를 canonicalize하고 emit된 모든 object를
+audit하며 runtime registry identity와 version이 있는 request/artifact cache key를
+반환합니다. generated-byte budget은 0이 아닐 때만 object size를 제한하고 0은 caller
+policy에서 unlimited를 뜻합니다. compiler는 audit된 relocatable byte까지만 만들며
+link, publish, dispatch, execute 또는 guest instruction lowering을 수행하지 않습니다.
+
 post-codegen verifier는 relocatable ELF, COFF, Mach-O object를 닫힌
 집합으로 감사합니다. format과 architecture는 선택한 host와 정확히 일치해야 하고,
 undefined symbol은 유한 helper allowlist에 정확히 포함되어야 하며 dynamic symbol은
 금지됩니다. relocation은 명시적인 direct whitelist로 제한되고 encoding, width,
 alignment, offset, loadable destination, object-local non-preemptible definition 또는
 정확히 허용된 helper target을 검사합니다. W+X, unwind/exception 및 initializer
-metadata, TLS, IFUNC, GOT/PLT와 기타 indirection, dynamic relocation, weak/preemptible
+metadata, TLS, IFUNC, GOT와 일반 PLT indirection, dynamic relocation, weak/preemptible
 또는 선택 가능한 definition, 알 수 없는 allocated section, linker directive를
-거부합니다. ELF `ET_REL` artifact에는 program header나 segment가 없어야 합니다.
-Mach-O load command는 positive list로 제한되며 bit 폭이 일치하는 segment는 정확히
-하나, symbol table, dynamic-symbol table, platform-version, data-in-code command는
-각각 최대 하나만 허용하고 의존 관계도 검사합니다. linker option과 그 밖의 모든
-command는 거부됩니다.
+거부합니다. LLVM이 hidden x86-64 ELF call에 사용하는 `R_X86_64_PLT32` 표기는 v1
+policy가 exact runtime helper로 향하는 sealed direct branch임을 증명할 때만 허용되며,
+PLT나 GOT path를 허용하지 않습니다. ELF `ET_REL` artifact에는 program header나
+segment가 없어야 합니다. Mach-O load command는 positive list로 제한되며 bit 폭이
+일치하는 segment는 정확히 하나, symbol table, dynamic-symbol table, platform-version,
+data-in-code command는 각각 최대 하나만 허용하고 의존 관계도 검사합니다. linker
+option과 그 밖의 모든 command는 거부됩니다.
 
-runtime, target resolution, W^X publication, memory, IR, symbol registry, object audit
-구현은 이러한 경계를 정의하고 검증합니다. verified object compiler, JITLink graph
-audit/link/load 경로, trusted dispatcher 또는 dispatcher factory, 완전한 guest-to-host
-lowering은 아직 없습니다. 따라서 현재 경계는 완전한 실행 가능 translation backend,
-완전한 교차 아키텍처 translation pipeline, 완전한 end-to-end 예외 재작성을 구성하지
-않습니다. 이 절은 계약과 verifier 범위를 규정하며 생성, link, load, dispatch, 실행,
-JIT, AOT, 예외 재작성에 대한 end-to-end 제공을 주장하지 않습니다.
+runtime, target resolution, W^X publication, memory, IR, symbol registry, verified
+object compiler, object audit 구현은 이러한 경계를 정의하고 검증합니다. 완전한 guest
+instruction lowering, JITLink graph audit/link/load 경로, trusted dispatcher 또는
+dispatcher factory, execution은 아직 없습니다. 따라서 현재 경계는 완전한 실행 가능
+translation backend, 완전한 교차 아키텍처 translation pipeline, 완전한 end-to-end
+예외 재작성을 구성하지 않습니다. 이 절은 계약과 verifier 범위를 규정하며 생성, link,
+load, dispatch, 실행, JIT, AOT, 예외 재작성에 대한 end-to-end 제공을 주장하지 않습니다.
 
 생성 IR 계약은 이 계약의 적용을 받는 모든 translated block이 hidden 및
 non-preemptible이고 C ABI `i32 (ptr state, ptr runtime)`를 사용하도록 요구합니다.

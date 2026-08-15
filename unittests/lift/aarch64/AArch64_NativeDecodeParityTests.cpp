@@ -314,4 +314,55 @@ TEST_F(A64NativeParity, DataProc1SourceSweep) {
           }
 }
 
+TEST_F(A64NativeParity, NeonCompareZeroUsesLaneWidthConstants) {
+  struct CompareCase {
+    uint32_t Word;
+    unsigned Lanes;
+  };
+  const CompareCase Cases[] = {
+      {0x4EE098C6u, 2}, // cmeq v6.2d, v6.2d, #0
+      {0x4EE0A8E7u, 2}, // cmlt v7.2d, v7.2d, #0
+      {0x6EE08908u, 2}, // cmge v8.2d, v8.2d, #0
+      {0x4EE08929u, 2}, // cmgt v9.2d, v9.2d, #0
+      {0x5EE0994Au, 1}, // cmeq d10, d10, #0
+      {0x5EE0A96Bu, 1}, // cmlt d11, d11, #0
+      {0x7EE0898Cu, 1}, // cmge d12, d12, #0
+      {0x5EE089ADu, 1}, // cmgt d13, d13, #0
+  };
+
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(::testing::Message()
+                 << "instruction word 0x" << std::hex << C.Word);
+    std::vector<LowOp> Ops;
+    ASSERT_TRUE(O.lift(C.Word, 0x100000, Ops));
+
+    unsigned Compares = 0;
+    unsigned Masks = 0;
+    for (const auto &Op : Ops) {
+      if (Op.Opcode == NdOp::SUBBYTES) {
+        ASSERT_GE(Op.NumInputs, 1);
+        EXPECT_GE(Op.Inputs[0].Size, Op.Output.Size)
+            << "invalid lane extract:\n"
+            << opsStr(Ops);
+      }
+      if (Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_SLESS ||
+          Op.Opcode == NdOp::INT_SLESSEQUAL) {
+        ASSERT_EQ(Op.NumInputs, 2);
+        EXPECT_EQ(Op.Inputs[0].Size, 8);
+        EXPECT_EQ(Op.Inputs[1].Size, 8);
+        const bool FirstIsZero =
+            Op.Inputs[0].isConst() && Op.Inputs[0].Offset == 0;
+        const bool SecondIsZero =
+            Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 0;
+        EXPECT_NE(FirstIsZero, SecondIsZero);
+        ++Compares;
+      }
+      if (Op.Opcode == NdOp::SELECT && Op.Output.Size == 8)
+        ++Masks;
+    }
+    EXPECT_EQ(Compares, C.Lanes);
+    EXPECT_EQ(Masks, C.Lanes);
+  }
+}
+
 } // namespace

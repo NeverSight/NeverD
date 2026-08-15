@@ -53,6 +53,7 @@ enum class TranslationObjectCompilerErrorCode : uint8_t {
   ObjectEmissionFailed = 11,
   GeneratedCodeBudgetExceeded = 12,
   ArtifactVerificationFailed = 13,
+  RuntimeRegistryUnavailable = 14,
 };
 
 static_assert(
@@ -84,7 +85,9 @@ static_assert(
         TranslationObjectCompilerErrorCode::GeneratedCodeBudgetExceeded) ==
         12 &&
     static_cast<uint8_t>(
-        TranslationObjectCompilerErrorCode::ArtifactVerificationFailed) == 13);
+        TranslationObjectCompilerErrorCode::ArtifactVerificationFailed) == 13 &&
+    static_cast<uint8_t>(
+        TranslationObjectCompilerErrorCode::RuntimeRegistryUnavailable) == 14);
 
 /// Typed compiler failure.  Detail is diagnostic and is never a substitute
 /// for inspecting code().
@@ -188,7 +191,7 @@ public:
   static constexpr uint32_t CacheIdentityVersion = 1;
   /// Manual schema for the exact IR optimization and object-emission recipe.
   /// Bump whenever pass ordering, sealing, or target-machine policy changes.
-  static constexpr uint32_t PipelineSchemaVersion = 1;
+  static constexpr uint32_t PipelineSchemaVersion = 2;
 
   llvm::ArrayRef<uint8_t> bytes() const { return Bytes; }
   const ResolvedHostTarget &hostTarget() const { return HostTarget; }
@@ -200,6 +203,13 @@ public:
   }
   llvm::ArrayRef<TranslationObjectSymbolV1> runtimeSymbols() const {
     return RuntimeSymbols;
+  }
+
+  /// Address-free ABI-shape identity of the sole registry admitted while
+  /// compiling this object.  A future linker must require an exact match
+  /// before binding any runtime symbol.
+  llvm::StringRef runtimeRegistryIdentity() const {
+    return RuntimeRegistryIdentity;
   }
 
   /// Key available before optimization/code generation.  It covers the input
@@ -221,11 +231,13 @@ private:
       TranslationSemanticReportV1 SemanticReport,
       std::vector<TranslationObjectSymbolV1> BlockSymbols,
       std::vector<TranslationObjectSymbolV1> RuntimeSymbols,
-      std::string RequestCacheKey, std::string ArtifactCacheKey)
+      std::string RuntimeRegistryIdentity, std::string RequestCacheKey,
+      std::string ArtifactCacheKey)
       : Bytes(std::move(Bytes)), HostTarget(std::move(HostTarget)),
         SemanticReport(std::move(SemanticReport)),
         BlockSymbols(std::move(BlockSymbols)),
         RuntimeSymbols(std::move(RuntimeSymbols)),
+        RuntimeRegistryIdentity(std::move(RuntimeRegistryIdentity)),
         RequestCacheKey(std::move(RequestCacheKey)),
         ArtifactCacheKey(std::move(ArtifactCacheKey)) {}
 
@@ -234,6 +246,7 @@ private:
   TranslationSemanticReportV1 SemanticReport;
   std::vector<TranslationObjectSymbolV1> BlockSymbols;
   std::vector<TranslationObjectSymbolV1> RuntimeSymbols;
+  std::string RuntimeRegistryIdentity;
   std::string RequestCacheKey;
   std::string ArtifactCacheKey;
 };
