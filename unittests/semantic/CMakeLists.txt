@@ -52,6 +52,7 @@ add_neverd_unittest(NeverDSemanticTests
   aarch64/AArch64_FP16FusedRTTests.cpp
   aarch64/AArch64_FP16PairwiseRTTests.cpp
   aarch64/AArch64_FP16RecipRTTests.cpp
+  aarch64/AArch64_FP16ReduceRTTests.cpp
   aarch64/AArch64_FP16WidenFMARTTests.cpp
   aarch64/AArch64_FPConvRoundRTTests.cpp
   aarch64/AArch64_FPRoundTripTests.cpp
@@ -1210,8 +1211,9 @@ if(WIN32)
   target_link_libraries(PatchFullRepro PRIVATE NeverDPipeline)
 endif()
 
-# Standalone FP16 FADDP / FMAXV probes — one TU, so a whitelist fix can be
-# rebuilt and run without relinking the 800-TU NeverDSemanticTests binary.
+# Same TU is also listed in NeverDSemanticTests so Linux CI
+# (linux-semantic) picks the cases up.  This one-TU binary is only a
+# local fast path: rebuild and run without relinking the 800-TU suite.
 add_neverd_unittest(NeverDFP16ReduceTests
   aarch64/AArch64_FP16ReduceRTTests.cpp
   TIMEOUT 120
