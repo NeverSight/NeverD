@@ -185,6 +185,8 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
       Args.push_back(medvarToExpr(Op.Inputs[I]));
     auto Expr = HighExpr::makeCall(intrinsicName(IID), 0, std::move(Args));
     Expr->IntrinsicId = IID;
+    if (Op.Output.Size > 0)
+      Expr->Type = NdType::makeInt(Op.Output.Size, false);
     return Expr;
   }
 

@@ -1,5 +1,10 @@
 #include "NeverDLiftFixture.h"
 
+#include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
+
+#include "llvm/Support/raw_ostream.h"
+
 class AArch64_Intrinsics : public NeverDLiftTest {
 protected:
     std::string readDecompiledFile(const std::string& fname) {
@@ -13,6 +18,64 @@ protected:
 
 static fs::path obj(const char* name) {
     return fs::path(TEST_OBJ_DIR) / name;
+}
+
+static neverd::HighFunc fixedConvertHighFunc(const char* name,
+                                             neverd::Intrinsic iid,
+                                             uint16_t inputBytes,
+                                             uint16_t outputBytes,
+                                             uint64_t fbits) {
+    using namespace neverd;
+    HighFunc func;
+    func.Name = name;
+    func.ReturnType = NdType::makeInt(outputBytes, false);
+    func.Params.push_back({"arg0", NdType::makeInt(inputBytes, false)});
+
+    MedVar input;
+    input.Kind = MedVar::Param;
+    input.Id = 0;
+    input.Size = inputBytes;
+    input.TheArch = Arch::AArch64;
+
+    auto call = HighExpr::makeCall(
+        "", 0, {HighExpr::makeVar(input), HighExpr::makeConst(fbits, 4)});
+    call->IntrinsicId = iid;
+    call->Type = func.ReturnType;
+
+    HighStmt ret;
+    ret.Kind = StmtKind::Return;
+    ret.RetVal = std::move(call);
+    func.Body.push_back(std::move(ret));
+    return func;
+}
+
+TEST(AArch64_HighCIntrinsics, FixedFP16ConversionsUseNeverCBuiltins) {
+    using namespace neverd;
+    std::vector<HighFunc> funcs;
+    funcs.push_back(fixedConvertHighFunc("scvtf_w", Intrinsic::A64_ScvtfFixed,
+                                         4, 2, 16));
+    funcs.push_back(fixedConvertHighFunc("ucvtf_x", Intrinsic::A64_UcvtfFixed,
+                                         8, 2, 64));
+    funcs.push_back(fixedConvertHighFunc("fcvtzs_w", Intrinsic::A64_FcvtzsFixed,
+                                         2, 4, 16));
+    funcs.push_back(fixedConvertHighFunc("fcvtzu_x", Intrinsic::A64_FcvtzuFixed,
+                                         2, 8, 64));
+
+    std::string c;
+    llvm::raw_string_ostream os(c);
+    CEmitterOptions opts;
+    opts.TheArch = Arch::AArch64;
+    ASSERT_TRUE(HighCEmitter().emit(funcs, os, opts));
+    os.flush();
+
+    EXPECT_NE(c.find("__neverd_a64_scvtf_fixed(arg0, 16, 0)"),
+              std::string::npos) << c;
+    EXPECT_NE(c.find("__neverd_a64_ucvtf_fixed(arg0, 64, 1)"),
+              std::string::npos) << c;
+    EXPECT_NE(c.find("__neverd_a64_fcvtzs_fixed(arg0, 16, 0)"),
+              std::string::npos) << c;
+    EXPECT_NE(c.find("__neverd_a64_fcvtzu_fixed(arg0, 64, 1)"),
+              std::string::npos) << c;
 }
 
 TEST_F(AArch64_Intrinsics, AllStages) {

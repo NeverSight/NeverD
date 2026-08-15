@@ -142,6 +142,24 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     for (auto &Op : E.Operands)
       if (Op)
         OpStrs.push_back(exprStr(*Op));
+
+    using I = Intrinsic;
+    bool IsFixedIntToFP = E.IntrinsicId == I::A64_ScvtfFixed ||
+                          E.IntrinsicId == I::A64_UcvtfFixed;
+    bool IsFixedFPToInt = E.IntrinsicId == I::A64_FcvtzsFixed ||
+                          E.IntrinsicId == I::A64_FcvtzuFixed;
+    if ((IsFixedIntToFP || IsFixedFPToInt) && OpStrs.size() == 2) {
+      uint16_t GPRBytes = 0;
+      if (IsFixedIntToFP && !E.Operands.empty() && E.Operands[0] &&
+          E.Operands[0]->Type)
+        GPRBytes = E.Operands[0]->Type->Size;
+      else if (IsFixedFPToInt && E.Type)
+        GPRBytes = E.Type->Size;
+
+      if (GPRBytes == 4 || GPRBytes == 8)
+        OpStrs.push_back(GPRBytes == 8 ? "1" : "0");
+    }
+
     auto Rendered = renderIntrinsicCall(E.IntrinsicId, Opts.TheArch, OpStrs,
                                         HasCIntrinsics);
     if (!Rendered.empty())

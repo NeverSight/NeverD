@@ -18,10 +18,7 @@
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
-
-#include <string>
 
 namespace neverd {
 
@@ -70,36 +67,27 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       return (V->getType() == Ty) ? V : Builder.CreateZExtOrTrunc(V, Ty);
     };
 
-    std::string Asm;
-    std::string Name;
+    auto *Scale = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), FBits);
     if (IntToFP) {
-      Asm = IsUnsigned ? "ucvtf " : "scvtf ";
-      Asm += "${0:h}, ${1:";
-      Asm += (GprBytes == 8) ? "x" : "w";
-      Asm += "}, #" + std::to_string(FBits);
-      Name = IsUnsigned ? "ucvtf.fixed" : "scvtf.fixed";
-
-      auto *FnTy = llvm::FunctionType::get(HalfTy, {GprTy}, false);
-      auto *IA = llvm::InlineAsm::get(FnTy, Asm, "=w,r,~{fpsr}",
-                                      /*hasSideEffects=*/true);
+      llvm::Intrinsic::ID IID =
+          IsUnsigned ? llvm::Intrinsic::aarch64_neverd_ucvtf_fixed
+                     : llvm::Intrinsic::aarch64_neverd_scvtf_fixed;
+      auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {GprTy});
       llvm::Value *Src = coerceInteger(getVar(Op.Inputs[1], Builder), GprTy);
-      llvm::Value *R = Builder.CreateCall(IA, {Src}, Name);
+      llvm::Value *R = Builder.CreateCall(
+          Fn, {Src, Scale}, IsUnsigned ? "ucvtf.fixed" : "scvtf.fixed");
       R = Builder.CreateBitCast(R, I16Ty);
       return (R->getType() == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
     }
 
-    Asm = IsUnsigned ? "fcvtzu " : "fcvtzs ";
-    Asm += "${0:";
-    Asm += (GprBytes == 8) ? "x" : "w";
-    Asm += "}, ${1:h}, #" + std::to_string(FBits);
-    Name = IsUnsigned ? "fcvtzu.fixed" : "fcvtzs.fixed";
-
-    auto *FnTy = llvm::FunctionType::get(GprTy, {HalfTy}, false);
-    auto *IA = llvm::InlineAsm::get(FnTy, Asm, "=r,w,~{fpsr}",
-                                    /*hasSideEffects=*/true);
+    llvm::Intrinsic::ID IID =
+        IsUnsigned ? llvm::Intrinsic::aarch64_neverd_fcvtzu_fixed
+                   : llvm::Intrinsic::aarch64_neverd_fcvtzs_fixed;
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {GprTy});
     llvm::Value *Bits = coerceInteger(getVar(Op.Inputs[1], Builder), I16Ty);
     llvm::Value *Src = Builder.CreateBitCast(Bits, HalfTy);
-    llvm::Value *R = Builder.CreateCall(IA, {Src}, Name);
+    llvm::Value *R = Builder.CreateCall(
+        Fn, {Src, Scale}, IsUnsigned ? "fcvtzu.fixed" : "fcvtzs.fixed");
     return (R->getType() == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
   }
 

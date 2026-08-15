@@ -167,6 +167,8 @@ void MedToHighConverter::lowerIntrinsic(HighFunc &Func,
     CoArgs.push_back(medvarToExpr(CurOp.Inputs[AI]));
   auto CallExpr = HighExpr::makeCall(Name, 0, std::move(CoArgs));
   CallExpr->IntrinsicId = IID;
+  if (CurOp.Output.Size > 0)
+    CallExpr->Type = NdType::makeInt(CurOp.Output.Size, false);
 
   uint8_t NumOut = intrinsicOutputCount(IID);
   if (NumOut > 0) {
