@@ -387,6 +387,15 @@ Registrierungs-/Layoutanforderungen müssen vor jeder Ausgabemutation scheitern;
 die vorhandene Teilunterstützung darf nicht als vollständiger Ausnahmeabschluss
 bezeichnet werden.
 
+Eine erkannte Ada- oder D-Itanium-Personality ist noch keine Ada- oder
+D-Ausnahmeunterstützung. Address-Form-LSDAs von GNAT, GDC, DMD und LDC sind
+parsebar; Type-Table-Slots bleiben undurchsichtig (`Exception_Id` /
+`Exception_Data` bei GNAT, `ClassInfo` bei D) und werden niemals als
+`std::type_info` verfolgt. Die native Rekonstruktion emittiert LLVM
+`personality` sowie Address-Form-`invoke`/`landingpad`-Klauseln. Der Status
+corpus-proven ist eine eigene Aussage und folgt weder aus der
+Personality-Erkennung noch aus dem nativen Lowering.
+
 ## Komponentenübersicht
 
 Jede Komponente ist ein von `add_neverd_component_library` erzeugtes statisches

@@ -16,6 +16,7 @@
 #define NEVERD_LOADER_LANGUAGEEHITANIUM_H
 
 #include "neverd/loader/ExceptionCommon.h"
+#include "neverd/loader/ExceptionPersonality.h"
 
 #include <cstdint>
 #include <optional>
@@ -78,18 +79,23 @@ struct ItaniumCallSite {
   uint64_t NativeActionRecord = 0;
 };
 
-/// One type-table slot.  `TypeInfoVA` is zero for the catch-all slot, which
-/// the ABI spells as a null `std::type_info*`.
+/// One type-table slot.  `TypeInfoVA` is zero for the catch-all slot.
+///
+/// The field names retain their established ABI-neutral shape, but the object
+/// they identify is defined by \ref ItaniumEHInfo::TypeTableEntryKind: C++
+/// uses `std::type_info`, Ada uses an `Exception_Id`, D uses `ClassInfo`, and
+/// GNU Objective-C stores a class-name string directly.
 struct ItaniumTypeEntry {
   /// 1-based index as named by a positive action filter.
   uint64_t Index = 0;
   va_t TypeInfoVA = 0;
-  /// For an indirect encoding, the address of the cell the `std::type_info*`
+  /// For an indirect encoding, the address of the cell the descriptor pointer
   /// was loaded through.  A cell bound at load time holds a placeholder in the
-  /// file image, so this is what lets the RTTI be named from the binding.
+  /// file image, so this is what preserves its identity from the binding.
   va_t TypeInfoSlotVA = 0;
-  /// Mangled RTTI symbol (`_ZTI...`) or the `std::type_info::__type_name`
-  /// string, whichever could be proven; empty when neither could be.
+  /// Proven symbol or language-defined name.  Only `CxxRTTI` entries are
+  /// followed to a `std::type_info::__type_name`; opaque descriptors are never
+  /// dereferenced to manufacture one.
   std::string TypeName;
   bool IsCatchAll = false;
 };
@@ -106,6 +112,9 @@ struct ItaniumExceptionSpec {
 /// A fully decoded `.gcc_except_table` record.
 struct ItaniumEHInfo {
   va_t LSDAVA = 0;
+  /// How this personality interprets each positive type-table entry.
+  ItaniumTypeTableEntryKind TypeTableEntryKind =
+      ItaniumTypeTableEntryKind::OpaqueDescriptor;
   /// Encoding and resolved base for landing-pad addresses.
   uint8_t LandingPadBaseEncoding = 0xFF;
   va_t LandingPadBase = 0;

@@ -83,6 +83,63 @@ MedFunc makeSingleCallCleanupFunction(llvm::StringRef Name, va_t FunctionVA,
   return Func;
 }
 
+TEST(ItaniumEHEmitter, PreservesAdaAndDAddressFormPersonalities) {
+  struct PersonalityCase {
+    ExceptionPersonality Personality;
+    const char *Symbol;
+  };
+  constexpr PersonalityCase Cases[] = {
+      {ExceptionPersonality::GnatPersonalityV0, "__gnat_personality_v0"},
+      {ExceptionPersonality::GnatPersonalitySEH0, "__gnat_personality_seh0"},
+      {ExceptionPersonality::DmdPersonalityV0, "__dmd_personality_v0"},
+      {ExceptionPersonality::DRuntimeEhPersonality, "_d_eh_personality"},
+      {ExceptionPersonality::GdcPersonalityV0, "__gdc_personality_v0"},
+      {ExceptionPersonality::GdcPersonalitySEH0, "__gdc_personality_seh0"},
+  };
+
+  for (size_t I = 0; I < std::size(Cases); ++I) {
+    const PersonalityCase &Case = Cases[I];
+    SCOPED_TRACE(Case.Symbol);
+    const va_t FunctionVA = 0x100001000 + I * 0x1000;
+    const va_t MayThrowVA = 0x100010000 + I * 0x1000;
+    MedFunc Func = makeSingleCallCleanupFunction(
+        "native_language_personality_" + std::to_string(I), FunctionVA,
+        MayThrowVA);
+    Func.ExceptionMetadata->Personality = Case.Personality;
+
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Func}, Context, "native-language-personality", Arch::AArch64,
+        {{MayThrowVA, "may_throw"}}, nullptr, BinaryFormat::ELF);
+    ASSERT_NE(Module, nullptr);
+    llvm::Function *Emitted = Module->getFunction(Func.Name);
+    ASSERT_NE(Emitted, nullptr);
+    ASSERT_TRUE(Emitted->hasPersonalityFn());
+    const auto *Personality = llvm::dyn_cast<llvm::Function>(
+        Emitted->getPersonalityFn()->stripPointerCasts());
+    ASSERT_NE(Personality, nullptr);
+    EXPECT_EQ(Personality->getName(), Case.Symbol);
+
+    const llvm::MDNode *Native =
+        Emitted->getMetadata(language_eh_md::ItaniumAttachment);
+    ASSERT_NE(Native, nullptr);
+    const auto *RecordedSymbol =
+        llvm::dyn_cast<llvm::MDString>(Native->getOperand(0).get());
+    ASSERT_NE(RecordedSymbol, nullptr);
+    EXPECT_EQ(RecordedSymbol->getString(), Case.Symbol);
+
+    unsigned Invokes = 0;
+    unsigned LandingPads = 0;
+    for (llvm::BasicBlock &Block : *Emitted)
+      for (llvm::Instruction &Instruction : Block) {
+        Invokes += llvm::isa<llvm::InvokeInst>(Instruction);
+        LandingPads += llvm::isa<llvm::LandingPadInst>(Instruction);
+      }
+    EXPECT_EQ(Invokes, 1u);
+    EXPECT_EQ(LandingPads, 1u);
+  }
+}
+
 TEST(ItaniumEHEmitter, UsesTheOriginalIndirectTypeInfoSlotForCatchClauses) {
   constexpr va_t FunctionVA = 0x100001000;
   constexpr va_t MayThrowVA = 0x100001100;

@@ -22,6 +22,22 @@
 
 namespace neverd {
 
+/// What a positive Itanium action filter points at for one personality.
+///
+/// The LSDA byte layout is shared by several language runtimes, but the object
+/// named by a type-table slot is not.  Following every non-null entry as
+/// `std::type_info` is therefore unsafe: an Ada `Exception_Id` and a D
+/// `ClassInfo` can both contain a pointer-looking second word that would yield
+/// a convincing name from unrelated data.
+enum class ItaniumTypeTableEntryKind : uint8_t {
+  /// A `std::type_info` object or a layout-compatible Objective-C descriptor.
+  CxxRTTI,
+  /// A class-name string stored directly in the slot.
+  DirectCString,
+  /// A runtime-owned descriptor whose identity is preserved but not decoded.
+  OpaqueDescriptor,
+};
+
 /// The exact personality identity.  Two personalities that share a table
 /// schema still remain distinct enumerators whenever their run-time contract
 /// differs, because a rewriter must reproduce the contract and not merely the
@@ -267,6 +283,30 @@ inline bool isItaniumPersonality(ExceptionPersonality P) {
     return true;
   default:
     return false;
+  }
+}
+
+/// Return the language-defined interpretation of an Itanium type-table slot.
+///
+/// Unknown personalities are deliberately opaque.  The personality routine is
+/// the version tag for an LSDA; without its identity there is no evidence that
+/// a pointer in the table follows the C++ RTTI layout.
+inline ItaniumTypeTableEntryKind
+getItaniumTypeTableEntryKind(ExceptionPersonality P) {
+  switch (P) {
+  case ExceptionPersonality::GxxPersonalityV0:
+  case ExceptionPersonality::GxxPersonalitySEH0:
+  case ExceptionPersonality::GxxPersonalitySJ0:
+  case ExceptionPersonality::ObjCPersonalityV0:
+  case ExceptionPersonality::GNUstepObjCXXPersonalityV0:
+    return ItaniumTypeTableEntryKind::CxxRTTI;
+  case ExceptionPersonality::GnuObjCPersonalityV0:
+  case ExceptionPersonality::GnuObjCPersonalitySEH0:
+  case ExceptionPersonality::GnuObjCPersonalitySJ0:
+  case ExceptionPersonality::GNUstepObjCPersonalityV0:
+    return ItaniumTypeTableEntryKind::DirectCString;
+  default:
+    return ItaniumTypeTableEntryKind::OpaqueDescriptor;
   }
 }
 

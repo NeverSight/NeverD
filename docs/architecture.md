@@ -351,6 +351,14 @@ pipeline. Unsupported encodings or unresolved registration/layout requirements
 must fail before output mutation; existing partial format support must not be
 described as full exception closure.
 
+Recognizing an Ada or D Itanium personality is not Ada or D exception support.
+GNAT, GDC, DMD, and LDC address-form LSDAs are parseable; type-table slots stay
+opaque (`Exception_Id` / `Exception_Data` for GNAT, `ClassInfo` for D) and are
+never followed as `std::type_info`. Native reconstruction emits LLVM
+`personality` plus address-form `invoke`/`landingpad` clauses. Corpus-proven
+status is a separate claim and is not implied by personality recognition or
+native lowering.
+
 ## Component map
 
 Every component is a static archive created by `add_neverd_component_library`.

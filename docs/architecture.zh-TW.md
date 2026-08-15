@@ -272,6 +272,13 @@ PE、ELF 與 Mach-O 各自具備格式特定的例外元件，但 NeverD 尚未�
 所有例外類型的端到端重寫流水線。不支援的 encoding 或未解析的註冊/layout 要求必須
 在修改輸出前失敗；現有的局部格式能力不能描述為例外重寫已完全閉環。
 
+辨識 Ada 或 D 的 Itanium personality 並不等於支援 Ada 或 D 例外。GNAT、GDC、DMD
+與 LDC 的 address-form LSDA 可解析；type-table 槽位保持不透明（GNAT 為
+`Exception_Id` / `Exception_Data`，D 為 `ClassInfo`），且絕不會依
+`std::type_info` 解參考。原生重建會發出 LLVM `personality` 以及 address-form 的
+`invoke`/`landingpad` 子句。corpus-proven 是另一層聲明，不能由 personality 辨識
+或原生 lowering 自行推出。
+
 ## 元件對照
 
 每個元件都是由 `add_neverd_component_library` 建立的靜態歸檔。下表列出重要的

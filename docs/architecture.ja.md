@@ -331,6 +331,14 @@ PE、ELF、Mach-O にはそれぞれ format 固有の例外 component があり�
 しなければなりません。既存の部分的な format 対応を完全な例外処理の閉路と表現しては
 なりません。
 
+Ada または D の Itanium personality を認識することは、Ada/D 例外のサポートではあり
+ません。GNAT、GDC、DMD、LDC の address-form LSDA は解析可能です。type-table の
+スロットは不透明なまま（GNAT は `Exception_Id` / `Exception_Data`、D は
+`ClassInfo`）であり、`std::type_info` として辿ることはありません。native
+reconstruction は LLVM の `personality` と address-form の `invoke`/`landingpad`
+節を出力します。corpus-proven は別の主張であり、personality 認識や native
+lowering から導いてはなりません。
+
 ## コンポーネントマップ
 
 各コンポーネントは `add_neverd_component_library` が作成する静的アーカイブです。

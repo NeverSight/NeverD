@@ -315,6 +315,13 @@ exception type을 포괄하는 end-to-end rewrite pipeline을 아직 공개하�
 않는 encoding 또는 해결되지 않은 registration/layout 요구 사항은 출력 변경 전에
 실패해야 하며, 현재의 부분적인 format 지원을 완전한 예외 재작성 폐쇄로 표현하면 안 됩니다.
 
+Ada 또는 D Itanium personality를 인식하는 것은 Ada/D 예외 지원이 아닙니다. GNAT,
+GDC, DMD, LDC의 address-form LSDA는 파싱할 수 있습니다. type-table 슬롯은 불투명하게
+유지되며(GNAT는 `Exception_Id` / `Exception_Data`, D는 `ClassInfo`)
+`std::type_info`로 따라가지 않습니다. native reconstruction은 LLVM `personality`와
+address-form `invoke`/`landingpad` 절을 방출합니다. corpus-proven은 별도의 주장이며
+personality 인식이나 native lowering에서 추론하면 안 됩니다.
+
 ## 구성 요소 맵
 
 각 구성 요소는 `add_neverd_component_library`가 만드는 정적 archive입니다. 표에는

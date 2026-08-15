@@ -381,6 +381,15 @@ requisitos de registro/layout no resueltos deben fallar antes de modificar la
 salida; el soporte parcial existente no debe presentarse como cierre completo
 de excepciones.
 
+Reconocer una personalidad Itanium de Ada o D no es soporte de excepciones Ada
+o D. Las LSDA en forma de dirección de GNAT, GDC, DMD y LDC son analizables; las
+entradas de type-table permanecen opacas (`Exception_Id` / `Exception_Data` en
+GNAT, `ClassInfo` en D) y nunca se siguen como `std::type_info`. La
+reconstrucción nativa emite `personality` de LLVM más cláusulas
+`invoke`/`landingpad` en forma de dirección. El estado corpus-proven es una
+afirmación distinta y no se deduce del reconocimiento de personalidad ni del
+lowering nativo.
+
 ## Mapa de componentes
 
 Cada componente es un archivo estático creado por

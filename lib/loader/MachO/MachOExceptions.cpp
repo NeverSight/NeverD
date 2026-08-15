@@ -64,6 +64,7 @@ void attachLSDA(const BinaryImage &Img, const dwarf_eh::PointerBases &Bases,
   Req.LSDAVA = LSDAVA;
   Req.FunctionStart = F.CodeRange.Begin;
   Req.FunctionEnd = F.CodeRange.End;
+  Req.Personality = F.Personality;
   Req.IsSJLJ = isSJLJPersonality(F.Personality);
   dwarf_eh::PointerBases LSDABases = Bases;
   LSDABases.Func = F.CodeRange.Begin;

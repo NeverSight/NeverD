@@ -35,6 +35,10 @@ struct LSDAParseRequest {
   /// End of that function, when the FDE proved one.  Zero disables the
   /// containment check rather than inventing a bound.
   va_t FunctionEnd = 0;
+  /// The routine that defines this LSDA's language contract, including what a
+  /// positive type-table entry points at.  `Unknown` and `None` keep entries
+  /// opaque rather than assuming C++ RTTI.
+  ExceptionPersonality Personality = ExceptionPersonality::None;
   /// True for the setjmp/longjmp call-site form, whose table holds call-site
   /// indices instead of addresses.
   bool IsSJLJ = false;
