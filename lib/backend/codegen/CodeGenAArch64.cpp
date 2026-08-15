@@ -58,7 +58,8 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names) {
     F += ",+crc";
   if (Has("aarch64.pauth") || Has("pacia") || Has("autia"))
     F += ",+pauth";
-  if (Has("aarch64.mte") || Has("irg") || Has("gmi"))
+  if (Has("aarch64.mte") || Has("aarch64.stg") || Has("aarch64.ldg") ||
+      Has("irg") || Has("gmi"))
     F += ",+mte";
   // MOPS phase instructions currently survive lifting as target inline asm.
   // Seeing one proves the input binary requires FEAT_MOPS; enable the feature

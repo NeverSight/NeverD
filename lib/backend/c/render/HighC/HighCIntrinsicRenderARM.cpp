@@ -118,6 +118,23 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::Stg: {
+    if (Ops.size() < 2)
+      return {};
+    HasCIntrinsics = true;
+    return "__arm_mte_set_tag((void *)(uintptr_t)(((uint64_t)(" + Ops[1] +
+           ") & 0xf0ffffffffffffffULL) | ((uint64_t)(" + Ops[0] +
+           ") & 0x0f00000000000000ULL)))";
+  }
+  case I::Ldg: {
+    if (Ops.size() < 2)
+      return {};
+    HasCIntrinsics = true;
+    return "(((uint64_t)(" + Ops[0] +
+           ") & 0xf0ffffffffffffffULL) | ((uint64_t)(uintptr_t)"
+           "__arm_mte_get_tag((void *)(uintptr_t)(" +
+           Ops[1] + ")) & 0x0f00000000000000ULL))";
+  }
   case I::A64_Bfmmla: {
     if (Ops.size() < 3)
       return {};

@@ -94,6 +94,13 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
   if (State.StoreFwd.empty())
     return;
 
+  std::set<std::string> CallResults;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+        S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Call)
+      CallResults.insert(VarFn(S.Dst->Var));
+  });
+
   std::set<std::string> UsedParams;
   for (auto &[Addr, Val] : State.StoreFwd) {
     auto ExprIt = AddrToValExpr.find(Addr);
@@ -101,6 +108,11 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
         ExprIt->second->Kind == ExprKind::Var &&
         ExprIt->second->Var.Kind != MedVar::Param) {
       std::string VName = VarFn(ExprIt->second->Var);
+      // A call/intrinsic result spilled to the stack is a newly produced
+      // value, not a recoverable incoming parameter.  Substituting a same-size
+      // parameter here silently discards the call result on reload.
+      if (CallResults.count(VName))
+        continue;
       for (auto &P : Func.Params) {
         if (UsedParams.count(P.Name))
           continue;

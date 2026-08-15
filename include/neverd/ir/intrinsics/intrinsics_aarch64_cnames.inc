@@ -126,6 +126,10 @@ C(Intrinsic::A64_Rcwscaspa,    "__builtin_arm_rcwscaspa");
 C(Intrinsic::A64_Rcwscaspal,   "__builtin_arm_rcwscaspal");
 C(Intrinsic::A64_Rcwscaspl,    "__builtin_arm_rcwscaspl");
 
+// Memory tagging
+C(Intrinsic::Stg,              "__arm_mte_set_tag");
+C(Intrinsic::Ldg,              "__arm_mte_get_tag");
+
 // System
 C(Intrinsic::Yield_A64,        "__yield");
 C(Intrinsic::Wfe,              "__wfe");

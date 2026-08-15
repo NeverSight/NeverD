@@ -46,6 +46,36 @@ TEST(RewriteCodegen_AArch64, BfmmlaEnablesBF16) {
   ASSERT_FALSE(Text->Bytes.empty());
 }
 
+TEST(RewriteCodegen_AArch64, MTEIntrinsicsEnableMTE) {
+  ensureLLVMTargets();
+
+  llvm::LLVMContext Ctx;
+  auto Mod = std::make_unique<llvm::Module>("mte", Ctx);
+  Mod->setTargetTriple(llvm::Triple("aarch64-unknown-linux-elf"));
+  auto *PtrTy = llvm::PointerType::getUnqual(Ctx);
+  auto *FnTy = llvm::FunctionType::get(PtrTy, {PtrTy, PtrTy}, false);
+  auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                    "mte_round_trip", *Mod);
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", Fn);
+  llvm::IRBuilder<> Builder(Entry);
+  auto Arg = Fn->arg_begin();
+  llvm::Value *TagSource = &*Arg++;
+  llvm::Value *Address = &*Arg;
+  auto *STG = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_stg);
+  auto *LDG = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_ldg);
+  Builder.CreateCall(STG, {TagSource, Address});
+  Builder.CreateRet(Builder.CreateCall(LDG, {Address, Address}));
+
+  auto RR = compileRewrite(*Mod, Arch::AArch64, BinaryFormat::ELF);
+  ASSERT_FALSE(RR.Sections.empty());
+  ASSERT_TRUE(RR.Unresolved.empty());
+  auto *Text = findTextSection(RR);
+  ASSERT_NE(Text, nullptr);
+  ASSERT_FALSE(Text->Bytes.empty());
+}
+
 TEST(RewriteCodegen_AArch64, AddFunction) {
   ensureLLVMTargets();
 

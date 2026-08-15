@@ -25,9 +25,14 @@ bool liftSysMisc(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   // ========================================================================
   // Memory tagging (MTE, ARMv8.5)
   // ========================================================================
-  case AARCH64_INS_STG:
-    S.emitIntrinsic(Intrinsic::Stg);
+  case AARCH64_INS_STG: {
+    if (ARM64.op_count < 2)
+      break;
+    NdVar TagSource = L.operandRead(S, ARM64.operands[0]);
+    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
+    S.emitIntrinsic(Intrinsic::Stg, {}, {TagSource, EA});
     break;
+  }
   case AARCH64_INS_STZG:
     S.emitIntrinsic(Intrinsic::Stzg);
     break;
@@ -54,7 +59,15 @@ bool liftSysMisc(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     S.emit(NdOp::STORE, {}, {EA2, Src2});
     break;
   }
-  case AARCH64_INS_LDG:
+  case AARCH64_INS_LDG: {
+    if (ARM64.op_count < 2)
+      break;
+    NdVar ResultAddress = L.operandRead(S, ARM64.operands[0]);
+    NdVar Dst = L.operandWrite(ARM64.operands[0]);
+    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
+    S.emitIntrinsic(Intrinsic::Ldg, Dst, {ResultAddress, EA});
+    break;
+  }
   case AARCH64_INS_LDGM: {
     if (ARM64.op_count < 2)
       break;

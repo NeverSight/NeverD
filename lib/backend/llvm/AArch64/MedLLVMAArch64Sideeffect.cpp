@@ -138,6 +138,23 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
 
 bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
                                            llvm::IRBuilder<> &Builder) {
+  if (IC == Intrinsic::Stg) {
+    if (Op.NumInputs < 3)
+      return true;
+    auto *PtrTy = llvm::PointerType::getUnqual(*Ctx);
+    auto asPointer = [&](const MedVar &Input) -> llvm::Value * {
+      llvm::Value *Value = getVar(Input, Builder);
+      if (Value->getType()->isPointerTy())
+        return Value;
+      return Builder.CreateIntToPtr(Value, PtrTy);
+    };
+    llvm::Value *TagSource = asPointer(Op.Inputs[1]);
+    llvm::Value *Address = asPointer(Op.Inputs[2]);
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_stg);
+    Builder.CreateCall(Fn, {TagSource, Address});
+    return true;
+  }
   if (IC == Intrinsic::A64_SetFPSR) {
     if (Op.NumInputs < 2)
       return true;

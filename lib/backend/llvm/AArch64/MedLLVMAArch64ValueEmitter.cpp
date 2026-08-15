@@ -32,6 +32,29 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  if (IC == I::Ldg && Op.Output.Size > 0 && Op.NumInputs >= 3) {
+    auto *PtrTy = llvm::PointerType::getUnqual(*Ctx);
+    auto asPointer = [&](const MedVar &Input) -> llvm::Value * {
+      llvm::Value *Value = getVar(Input, Builder);
+      if (Value->getType()->isPointerTy())
+        return Value;
+      return Builder.CreateIntToPtr(Value, PtrTy);
+    };
+    llvm::Value *ResultAddress = asPointer(Op.Inputs[1]);
+    llvm::Value *MemoryAddress = asPointer(Op.Inputs[2]);
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_ldg);
+    llvm::Value *Result =
+        Builder.CreateCall(Fn, {ResultAddress, MemoryAddress}, "mte.ldg");
+    auto *OutTy = sizeToType(Op.Output.Size);
+    if (OutTy->isPointerTy())
+      return Result;
+    Result = Builder.CreatePtrToInt(Result, llvm::Type::getInt64Ty(*Ctx));
+    return Result->getType() == OutTy
+               ? Result
+               : Builder.CreateZExtOrTrunc(Result, OutTy);
+  }
+
   if ((IC == I::A64_Rcwcasp || IC == I::A64_Rcwcaspa ||
        IC == I::A64_Rcwcaspal || IC == I::A64_Rcwcaspl ||
        IC == I::A64_Rcwscasp || IC == I::A64_Rcwscaspa ||
