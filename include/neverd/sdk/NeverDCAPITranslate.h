@@ -9,16 +9,20 @@
 /// scalar-register subset into an audited AArch64 relocatable object.  The
 /// subset accepts only canonical encodings without legacy prefixes: REX.W
 /// full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms over
-/// supported LowIR shapes.  Logical forms compute architecture-defined flags
-/// while preserving AF.  Canonical C3 RET or C2 iw RET imm16 terminates a
-/// return block, and direct-relative EB cb or E9 cd JMP terminates a
-/// direct-branch block.  The published lowering schema is 8.  Canonical,
+/// supported LowIR shapes; full-width register-only CMP 39/3B and
+/// register/immediate CMP 81/7, 83/7, and 3D; and full-width register-only TEST
+/// 85 and register/immediate TEST F7/0 and A9. Logical and TEST forms compute
+/// architecture-defined flags while preserving AF in the NeverD state model.
+/// Canonical C3 RET or C2 iw RET imm16 terminates a return block, and
+/// direct-relative EB cb or E9 cd JMP terminates a
+/// direct-branch block.  The published lowering schema is 9.  Canonical,
 /// legacy-prefix-free traditional Jcc comprises JO/JNO 70/71 or 0F 80/81,
 /// JB/JAE 72/73 or 0F 82/83, JE/JNE 74/75 or 0F 84/85, JBE/JA 76/77 or 0F
 /// 86/87, JS/JNS 78/79 or 0F 88/89, JP/JNP 7A/7B or 0F 8A/8B, JL/JGE 7C/7D or
 /// 0F 8C/8D, and JLE/JG 7E/7F or 0F 8E/8F, using cb short or cd near
 /// displacements respectively. JRCXZ/JECXZ/JCXZ and LOOP/LOOPE/LOOPNE remain
-/// unpublished and fail closed. Guest-memory operands, partial registers, and
+/// unpublished and fail closed. Reserved F7 /1, guest-memory operands, partial
+/// registers, legacy prefixes, semantically redundant REX extension bits, and
 /// any instruction or encoding outside that exact subset fail closed.
 ///
 /// This boundary compiles an object only.  It does not link, load, publish,
@@ -104,18 +108,23 @@ typedef uint32_t neverd_translate_proof_status_t;
 
 /// Borrowed synchronous input for one block in the published fail-closed
 /// x86-64 v1 scalar-register subset.  Only canonical, legacy-prefix-free REX.W
-/// full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms are
-/// accepted.  Logical forms compute architecture-defined flags while preserving
-/// AF.  Canonical C3 RET or C2 iw RET imm16 terminates a return block, and
+/// full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms;
+/// full-width register-only CMP 39/3B and register/immediate CMP 81/7, 83/7,
+/// and 3D; and full-width register-only TEST 85 and register/immediate TEST
+/// F7/0 and A9 are accepted.
+/// Logical and TEST forms compute architecture-defined flags while preserving
+/// AF in the NeverD state model. Canonical C3 RET or C2 iw RET imm16 terminates
+/// a return block, and
 /// direct-relative EB cb or E9 cd JMP terminates a direct-branch block.
-/// The published lowering schema is 8. Canonical, legacy-prefix-free
+/// The published lowering schema is 9. Canonical, legacy-prefix-free
 /// traditional Jcc comprises JO/JNO 70/71 or 0F 80/81, JB/JAE 72/73 or 0F
 /// 82/83, JE/JNE 74/75 or 0F 84/85, JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or
 /// 0F 88/89, JP/JNP 7A/7B or 0F 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG
 /// 7E/7F or 0F 8E/8F, using cb short or cd near displacements respectively.
 /// JRCXZ/JECXZ/JCXZ and LOOP/LOOPE/LOOPNE remain unpublished and fail closed.
-/// Ordinary guest-memory operations, partial-register forms, any instruction or
-/// encoding outside that exact subset, all other control flow, and
+/// Reserved F7 /1, ordinary guest-memory operations, partial-register forms,
+/// legacy prefixes, semantically redundant REX extension bits, any instruction
+/// or encoding outside that exact subset, all other control flow, and
 /// unimplemented LowIR fail before object emission.
 ///
 /// Zero the struct, set `struct_size = sizeof(request)`, and fill every other
@@ -203,19 +212,24 @@ neverd_translate_error_code_name(neverd_translate_error_code_t Code);
 
 /// Translate one block in the published x86-64 v1 scalar-register subset into
 /// an audited AArch64 relocatable object.  Only canonical, legacy-prefix-free
-/// REX.W full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms
-/// are accepted.  Logical forms compute architecture-defined flags while
-/// preserving AF.  Canonical C3 RET or C2 iw RET imm16 terminates a return
+/// REX.W full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms;
+/// full-width register-only CMP 39/3B and register/immediate CMP 81/7, 83/7,
+/// and 3D; and full-width register-only TEST 85 and register/immediate TEST
+/// F7/0 and A9 are accepted.
+/// Logical and TEST forms compute architecture-defined flags while preserving
+/// AF in the NeverD state model. Canonical C3 RET or C2 iw RET imm16 terminates
+/// a return
 /// block, and direct-relative EB cb or E9 cd JMP terminates a direct-branch
-/// block. The published lowering schema is 8. Canonical, legacy-prefix-free
+/// block. The published lowering schema is 9. Canonical, legacy-prefix-free
 /// traditional Jcc comprises JO/JNO 70/71 or 0F 80/81, JB/JAE 72/73 or 0F
 /// 82/83, JE/JNE 74/75 or 0F 84/85, JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or
 /// 0F 88/89, JP/JNP 7A/7B or 0F 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG
 /// 7E/7F or 0F 8E/8F, using cb short or cd near displacements respectively.
 /// JRCXZ/JECXZ/JCXZ and LOOP/LOOPE/LOOPNE remain unpublished and fail closed.
-/// Guest-memory operands, partial registers,
-/// unsupported encodings, instructions outside that exact subset, and
-/// unsupported LowIR shapes fail closed.
+/// Reserved F7 /1, guest-memory operands, partial registers, legacy prefixes,
+/// semantically redundant REX extension bits, unsupported encodings,
+/// instructions outside that exact subset, and unsupported LowIR shapes fail
+/// closed.
 /// `Request->guest_bytes` must contain exactly that one block.  Bytes after its
 /// terminator are rejected as an invalid argument.
 ///

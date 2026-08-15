@@ -215,20 +215,26 @@ fail-closed arbeitenden x86-64-v1-Teilmenge für Skalarregister akzeptiert sie n
 kanonische Codierungen ohne Legacy-Präfixe: REX.W-codierte `MOV`-,
 `ADD`/`SUB`- und `AND`/`OR`/`XOR`-Formen auf GPRs voller Breite, deren Operanden
 den unterstützten Register-/Immediate-LowIR-Formen entsprechen. Arithmetische
-Formen behalten ihre skalaren Flag-Berechnungen bei; logische Formen berechnen
-die von der Architektur definierten Flags und erhalten `AF`. Kanonisches `C3`
+Formen behalten ihre skalaren Flag-Berechnungen bei; logische Formen und `TEST`
+berechnen die von der Architektur definierten Flags und erhalten `AF` im
+NeverD-Zustandsmodell. Schema 9 akzeptiert außerdem `CMP` voller Breite als
+Register/Register mit `39/3B` und Register/Immediate mit `81/7`, `83/7` und
+`3D` sowie `TEST` voller Breite als Register/Register mit `85` und
+Register/Immediate mit `F7/0` und `A9`. Kanonisches `C3`
 `RET` und `C2 iw` `RET imm16` beenden Return-Blocks; kanonische direkt-relative
 `JMP`-Codierungen `EB cb` und `E9 cd` beenden Direct-Branch-Blocks. Das
-veröffentlichte Lowering-Schema ist 8. Kanonische traditionelle Jcc-Branches
+veröffentlichte Lowering-Schema ist 9. Kanonische traditionelle Jcc-Branches
 ohne Legacy-Präfix sind beschränkt auf: `JO`/`JNO` kurz `70/71 cb` oder nah
 `0F 80/81 cd`; `JB`/`JAE` mit `72/73 cb` oder `0F 82/83 cd`; `JE`/`JNE` mit
 `74/75 cb` oder `0F 84/85 cd`; `JBE`/`JA` mit `76/77 cb` oder `0F 86/87 cd`;
 `JS`/`JNS` mit `78/79 cb` oder `0F 88/89 cd`; `JP`/`JNP` mit `7A/7B cb` oder
 `0F 8A/8B cd`; `JL`/`JGE` mit `7C/7D cb` oder `0F 8C/8D cd`; und `JLE`/`JG`
 mit `7E/7F cb` oder `0F 8E/8F cd`. `JRCXZ`/`JECXZ`/`JCXZ` und
-`LOOP`/`LOOPE`/`LOOPNE` bleiben unveröffentlicht und scheitern fail-closed. Sie erzeugt
-ausschließlich ein geprüftes little-endian AArch64-ELF- oder
-Mach-O-Relocatable-Objekt. Gewöhnliche Guest-Speicheroperationen,
+`LOOP`/`LOOPE`/`LOOPNE` bleiben unveröffentlicht und scheitern fail-closed. Das
+reservierte `F7 /1`, Guest-Speicher- und Teilregisterformen, Legacy-Präfixe
+sowie semantisch redundante REX-Erweiterungsbits scheitern ebenfalls
+fail-closed. Sie erzeugt ausschließlich ein geprüftes little-endian
+AArch64-ELF- oder Mach-O-Relocatable-Objekt. Gewöhnliche Guest-Speicheroperationen,
 Teilregisterformen, jede Instruktion oder Codierung außerhalb dieser exakten
 Teilmenge, Kontrollfluss außer Returns, diesen direkten Sprüngen und den oben
 veröffentlichten Jcc-Branches sowie jede vom Lowerer nicht implementierte
@@ -290,7 +296,7 @@ diesem finalen Commit linearisiert.
 
 Dies ist ein ausführbarer vertikaler Ausschnitt, kein vollständiger Übersetzer.
 Nicht unterstützt werden gewöhnliche Guest-Memory-Instruktionen, Teilregister,
-bedingter Kontrollfluss außerhalb des obigen exakten Schema-8-Ausschnitts für
+bedingter Kontrollfluss außerhalb des obigen exakten Schema-9-Ausschnitts für
 traditionelle Jcc, einschließlich `JRCXZ`/`JECXZ`/`JCXZ` und
 `LOOP`/`LOOPE`/`LOOPNE`,
 indirekter Kontrollfluss, Calls, Fließkomma, SIMD, x87, atomare Operationen,

@@ -35,7 +35,7 @@ class raw_ostream;
 
 namespace neverd::translate {
 
-inline constexpr uint32_t kX86TranslationBlockLoweringSchemaV1 = 8;
+inline constexpr uint32_t kX86TranslationBlockLoweringSchemaV1 = 9;
 
 /// Stable failures from the version-1 x86-64 block lowerer.  Append values
 /// without renumbering existing entries.
@@ -111,13 +111,18 @@ private:
 };
 
 /// Lower the published version-1 x86-64 scalar-register subset into one
-/// canonical AArch64 module.  The current subset covers full-width GPR moves,
-/// add/subtract and AND/OR/XOR with their architecturally defined scalar flags,
-/// return/return-immediate, canonical rel8/rel32 direct jumps, and canonical
+/// canonical AArch64 module.  Lowering schema 9 covers full-width GPR moves,
+/// add/subtract and AND/OR/XOR with their architecturally defined scalar flags;
+/// full-width register-only CMP 39/3B and register/immediate CMP 81/7, 83/7,
+/// and 3D; full-width register-only TEST 85 and register/immediate TEST F7/0
+/// and A9; return/return-immediate; canonical rel8/rel32 direct jumps; and
+/// canonical
 /// legacy-prefix-free traditional Jcc in rel8/rel32 form: JO/JNO, JB/JAE,
-/// JE/JNE, JBE/JA, JS/JNS, JP/JNP, JL/JGE, and JLE/JG. JRCXZ/JECXZ/JCXZ and
-/// LOOP/LOOPE/LOOPNE remain unpublished. The boundary independently rebuilds
-/// canonical LowIR from Block.Bytes
+/// JE/JNE, JBE/JA, JS/JNS, JP/JNP, JL/JGE, and JLE/JG. TEST preserves AF in
+/// the NeverD state model. Reserved F7 /1, guest-memory and partial-register
+/// forms, legacy prefixes, semantically redundant REX bits,
+/// JRCXZ/JECXZ/JCXZ, and LOOP/LOOPE/LOOPNE remain unpublished. The boundary
+/// independently rebuilds canonical LowIR from Block.Bytes
 /// and rejects any caller-supplied semantic mismatch.  Published direct and
 /// conditional transfers return to the dispatcher after committing
 /// a manifest-authorized guest successor; they never link one translated block

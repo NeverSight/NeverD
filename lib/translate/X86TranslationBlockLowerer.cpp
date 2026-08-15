@@ -281,6 +281,99 @@ bool isCanonicalScalarTempOperation(const LowOp &Operation, NdOp Opcode,
          std::equal(Inputs.begin(), Inputs.end(), std::begin(Operation.Inputs));
 }
 
+bool isCanonicalOperation(const LowOp &Operation, NdOp Opcode,
+                          const NdVar &Output,
+                          std::initializer_list<NdVar> Inputs) {
+  return Operation.Opcode == Opcode && Operation.Output == Output &&
+         Operation.NumInputs == Inputs.size() &&
+         std::equal(Inputs.begin(), Inputs.end(), std::begin(Operation.Inputs));
+}
+
+bool isCanonicalTempOperation(const LowOp &Operation, NdOp Opcode,
+                              uint16_t OutputSize,
+                              std::initializer_list<NdVar> Inputs) {
+  return Operation.Output.isTemp() && Operation.Output.Size == OutputSize &&
+         isCanonicalOperation(Operation, Opcode, Operation.Output, Inputs);
+}
+
+bool hasCanonicalCompareShape(llvm::ArrayRef<LowOp> Operations,
+                              const NdVar &Left, const NdVar &Right) {
+  if (Operations.size() != 13 ||
+      !isCanonicalTempOperation(Operations[0], NdOp::INT_SUB,
+                                sizeof(uint64_t), {Left, Right}))
+    return false;
+
+  const NdVar Result = Operations[0].Output;
+  return isCanonicalOperation(
+             Operations[1], NdOp::INT_EQUAL, NdVar::reg(x86reg::ZF, 1),
+             {Result, NdVar::cst(0, sizeof(uint64_t))}) &&
+         isCanonicalOperation(
+             Operations[2], NdOp::INT_SLESS, NdVar::reg(x86reg::SF, 1),
+             {Result, NdVar::cst(0, sizeof(uint64_t))}) &&
+         isCanonicalTempOperation(Operations[3], NdOp::SUBBYTES,
+                                  sizeof(uint8_t),
+                                  {Result, NdVar::cst(0, sizeof(uint32_t))}) &&
+         isCanonicalTempOperation(Operations[4], NdOp::POPCOUNT,
+                                  sizeof(uint8_t),
+                                  {Operations[3].Output}) &&
+         isCanonicalTempOperation(
+             Operations[5], NdOp::INT_AND, sizeof(uint8_t),
+             {Operations[4].Output, NdVar::cst(1, sizeof(uint8_t))}) &&
+         isCanonicalOperation(
+             Operations[6], NdOp::INT_EQUAL, NdVar::reg(x86reg::PF, 1),
+             {Operations[5].Output, NdVar::cst(0, sizeof(uint8_t))}) &&
+         isCanonicalTempOperation(Operations[7], NdOp::INT_XOR,
+                                  sizeof(uint64_t), {Left, Right}) &&
+         isCanonicalTempOperation(
+             Operations[8], NdOp::INT_XOR, sizeof(uint64_t),
+             {Operations[7].Output, Result}) &&
+         isCanonicalTempOperation(
+             Operations[9], NdOp::INT_AND, sizeof(uint64_t),
+             {Operations[8].Output, NdVar::cst(0x10, sizeof(uint64_t))}) &&
+         isCanonicalOperation(
+             Operations[10], NdOp::INT_NOTEQUAL,
+             NdVar::reg(x86reg::AF, 1),
+             {Operations[9].Output, NdVar::cst(0, sizeof(uint64_t))}) &&
+         isCanonicalOperation(Operations[11], NdOp::INT_LESS,
+                              NdVar::reg(x86reg::CF, 1), {Left, Right}) &&
+         isCanonicalOperation(Operations[12], NdOp::INT_SBOR,
+                              NdVar::reg(x86reg::OF, 1), {Left, Right});
+}
+
+bool hasCanonicalTestShape(llvm::ArrayRef<LowOp> Operations,
+                           const NdVar &Left, const NdVar &Right) {
+  if (Operations.size() != 9 ||
+      !isCanonicalTempOperation(Operations[0], NdOp::INT_AND,
+                                sizeof(uint64_t), {Left, Right}))
+    return false;
+
+  const NdVar Result = Operations[0].Output;
+  return isCanonicalOperation(
+             Operations[1], NdOp::INT_EQUAL, NdVar::reg(x86reg::ZF, 1),
+             {Result, NdVar::cst(0, sizeof(uint64_t))}) &&
+         isCanonicalOperation(
+             Operations[2], NdOp::INT_SLESS, NdVar::reg(x86reg::SF, 1),
+             {Result, NdVar::cst(0, sizeof(uint64_t))}) &&
+         isCanonicalTempOperation(Operations[3], NdOp::SUBBYTES,
+                                  sizeof(uint8_t),
+                                  {Result, NdVar::cst(0, sizeof(uint32_t))}) &&
+         isCanonicalTempOperation(Operations[4], NdOp::POPCOUNT,
+                                  sizeof(uint8_t),
+                                  {Operations[3].Output}) &&
+         isCanonicalTempOperation(
+             Operations[5], NdOp::INT_AND, sizeof(uint8_t),
+             {Operations[4].Output, NdVar::cst(1, sizeof(uint8_t))}) &&
+         isCanonicalOperation(
+             Operations[6], NdOp::INT_EQUAL, NdVar::reg(x86reg::PF, 1),
+             {Operations[5].Output, NdVar::cst(0, sizeof(uint8_t))}) &&
+         isCanonicalOperation(Operations[7], NdOp::COPY,
+                              NdVar::reg(x86reg::CF, 1),
+                              {NdVar::cst(0, sizeof(uint8_t))}) &&
+         isCanonicalOperation(Operations[8], NdOp::COPY,
+                              NdVar::reg(x86reg::OF, 1),
+                              {NdVar::cst(0, sizeof(uint8_t))});
+}
+
 bool isCanonicalConditionalBranch(const LowOp &Operation,
                                   const NdVar &Predicate,
                                   uint64_t StaticTargetPC) {
@@ -1122,7 +1215,9 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
              Register.Offset <= x86reg::R15;
     };
     const auto IsFullWidthScalarInput = [&](const cs_x86_op &Operand) {
-      return IsFullWidthRegister(Operand) || Operand.type == X86_OP_IMM;
+      return IsFullWidthRegister(Operand) ||
+             (Operand.type == X86_OP_IMM &&
+              Operand.size == sizeof(uint64_t));
     };
     const auto ScalarInputVariable = [&](const cs_x86_op &Operand)
         -> std::optional<NdVar> {
@@ -1161,6 +1256,28 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
              X86.rex == InstructionBytes.front() &&
              (InstructionBytes[1] < 0x40u || InstructionBytes[1] > 0x4fu) &&
              (ExtensionBits & static_cast<uint8_t>(~MeaningfulBits)) == 0;
+    };
+    const auto HasRegisterDirectModRM =
+        [&](uint8_t Opcode, size_t EncodedSize,
+            std::optional<uint8_t> OpcodeExtension = std::nullopt) {
+          if (InstructionBytes.size() != EncodedSize ||
+              InstructionBytes.size() < 3 || InstructionBytes[1] != Opcode ||
+              (InstructionBytes[2] & 0xc0u) != 0xc0u)
+            return false;
+          return !OpcodeExtension ||
+                 ((InstructionBytes[2] >> 3) & 0x07u) == *OpcodeExtension;
+        };
+    const auto HasCanonicalCompareEncoding = [&]() {
+      return HasRegisterDirectModRM(0x39, 3) ||
+             HasRegisterDirectModRM(0x3b, 3) ||
+             HasRegisterDirectModRM(0x81, 7, 7) ||
+             HasRegisterDirectModRM(0x83, 4, 7) ||
+             (InstructionBytes.size() == 6 && InstructionBytes[1] == 0x3d);
+    };
+    const auto HasCanonicalTestEncoding = [&]() {
+      return HasRegisterDirectModRM(0x85, 3) ||
+             HasRegisterDirectModRM(0xf7, 7, 0) ||
+             (InstructionBytes.size() == 6 && InstructionBytes[1] == 0xa9);
     };
 
     switch (Instruction.Id) {
@@ -1280,7 +1397,8 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
       break;
     case X86_INS_CMP:
       if (BoundaryIndex + 1 == Block.InstructionBoundaries.size() ||
-          !HasCanonicalREXW() || X86.op_count != 2 ||
+          !HasCanonicalREXW() || !HasCanonicalCompareEncoding() ||
+          X86.op_count != 2 ||
           !IsFullWidthRegister(X86.operands[0]) ||
           !IsFullWidthScalarInput(X86.operands[1]))
         return Reject(
@@ -1290,38 +1408,15 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
             ScalarInputVariable(X86.operands[0]);
         const std::optional<NdVar> Right =
             ScalarInputVariable(X86.operands[1]);
-        const size_t SubtractOperations =
-            llvm::count_if(InstructionOps, [&](const LowOp &Operation) {
-              return Left && Right && Operation.Opcode == NdOp::INT_SUB &&
-                     Operation.Output.isTemp() &&
-                     Operation.Output.Size == sizeof(uint64_t) &&
-                     Operation.NumInputs == 2 &&
-                     Operation.Inputs[0] == *Left &&
-                     Operation.Inputs[1] == *Right;
-            });
-        constexpr std::array<uint64_t, 6> RequiredFlags = {
-            x86reg::CF, x86reg::PF, x86reg::AF,
-            x86reg::ZF, x86reg::SF, x86reg::OF};
-        const bool HasAllFlagWrites =
-            llvm::all_of(RequiredFlags, [&](uint64_t Flag) {
-              return llvm::count_if(
-                         InstructionOps, [&](const LowOp &Operation) {
-                           return Operation.Output == NdVar::reg(Flag, 1);
-                         }) == 1;
-            });
-        const bool HasNoGPRWrite =
-            llvm::none_of(InstructionOps, [](const LowOp &Operation) {
-              return Operation.Output.isReg() &&
-                     Operation.Output.Size == sizeof(uint64_t) &&
-                     Operation.Output.Offset <= x86reg::R15;
-            });
-        if (SubtractOperations != 1 || !HasAllFlagWrites || !HasNoGPRWrite)
+        if (!Left || !Right ||
+            !hasCanonicalCompareShape(InstructionOps, *Left, *Right))
           return Reject("v1 CMP LowIR shape is not canonical");
       }
       break;
     case X86_INS_TEST:
       if (BoundaryIndex + 1 == Block.InstructionBoundaries.size() ||
-          !HasCanonicalREXW() || X86.op_count != 2 ||
+          !HasCanonicalREXW() || !HasCanonicalTestEncoding() ||
+          X86.op_count != 2 ||
           !IsFullWidthRegister(X86.operands[0]) ||
           !IsFullWidthScalarInput(X86.operands[1]))
         return Reject(
@@ -1331,36 +1426,8 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
             ScalarInputVariable(X86.operands[0]);
         const std::optional<NdVar> Right =
             ScalarInputVariable(X86.operands[1]);
-        const size_t AndOperations =
-            llvm::count_if(InstructionOps, [&](const LowOp &Operation) {
-              return Left && Right && Operation.Opcode == NdOp::INT_AND &&
-                     Operation.Output.isTemp() &&
-                     Operation.Output.Size == sizeof(uint64_t) &&
-                     Operation.NumInputs == 2 &&
-                     Operation.Inputs[0] == *Left &&
-                     Operation.Inputs[1] == *Right;
-            });
-        constexpr std::array<uint64_t, 5> RequiredFlags = {
-            x86reg::CF, x86reg::PF, x86reg::ZF, x86reg::SF, x86reg::OF};
-        const bool HasAllFlagWrites =
-            llvm::all_of(RequiredFlags, [&](uint64_t Flag) {
-              return llvm::count_if(
-                         InstructionOps, [&](const LowOp &Operation) {
-                           return Operation.Output == NdVar::reg(Flag, 1);
-                         }) == 1;
-            });
-        const bool HasNoAFWrite =
-            llvm::none_of(InstructionOps, [](const LowOp &Operation) {
-              return Operation.Output == NdVar::reg(x86reg::AF, 1);
-            });
-        const bool HasNoGPRWrite =
-            llvm::none_of(InstructionOps, [](const LowOp &Operation) {
-              return Operation.Output.isReg() &&
-                     Operation.Output.Size == sizeof(uint64_t) &&
-                     Operation.Output.Offset <= x86reg::R15;
-            });
-        if (AndOperations != 1 || !HasAllFlagWrites || !HasNoAFWrite ||
-            !HasNoGPRWrite)
+        if (!Left || !Right ||
+            !hasCanonicalTestShape(InstructionOps, *Left, *Right))
           return Reject("v1 TEST LowIR shape is not canonical");
       }
       break;

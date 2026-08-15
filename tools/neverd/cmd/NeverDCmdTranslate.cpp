@@ -8,22 +8,26 @@
 /// `neverd translate-object` compiles the published fail-closed x86-64 v1
 /// scalar-register subset to an audited AArch64 relocatable object through the
 /// public C API.  It accepts only canonical encodings without legacy prefixes:
-/// REX.W full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms
-/// over supported LowIR shapes.  Arithmetic forms retain their scalar flag
-/// computations; logical forms compute architecture-defined flags while
-/// preserving AF.  Canonical C3 RET or C2 iw RET imm16 terminates a return
-/// block, and direct-relative EB cb or E9 cd JMP terminates a direct-branch
-/// block. The published lowering schema is 8. Canonical, legacy-prefix-free
-/// traditional Jcc comprises JO/JNO 70/71 or 0F 80/81, JB/JAE 72/73 or 0F
-/// 82/83, JE/JNE 74/75 or 0F 84/85, JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or
-/// 0F 88/89, JP/JNP 7A/7B or 0F 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG
-/// 7E/7F or 0F 8E/8F, with cb short or cd near displacements respectively.
-/// JRCXZ/JECXZ/JCXZ and LOOP/LOOPE/LOOPNE remain unpublished and fail closed.
-/// Ordinary guest memory, partial registers, any instruction or encoding
-/// outside that exact subset, all other control flow, unimplemented LowIR, and
-/// bytes after the block terminator are rejected. The command stops at the
-/// object boundary: no linker, loader, publisher, dispatcher, execution engine,
-/// or debugger is involved.
+/// REX.W full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms;
+/// full-width register-only CMP 39/3B and register/immediate CMP 81/7, 83/7,
+/// and 3D; and full-width register-only TEST 85 and register/immediate TEST
+/// F7/0 and A9 over supported LowIR shapes. Arithmetic forms retain their
+/// scalar flag computations; logical and TEST forms compute
+/// architecture-defined flags while preserving AF in the NeverD state model.
+/// Canonical C3 RET or C2 iw RET imm16 terminates a return block, and
+/// direct-relative EB cb or E9 cd JMP terminates a direct-branch block. The
+/// published lowering schema is 9. Canonical, legacy-prefix-free traditional
+/// Jcc comprises JO/JNO 70/71 or 0F 80/81, JB/JAE 72/73 or 0F 82/83, JE/JNE
+/// 74/75 or 0F 84/85, JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or 0F 88/89,
+/// JP/JNP 7A/7B or 0F 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG 7E/7F or 0F
+/// 8E/8F, with cb short or cd near displacements respectively. JRCXZ/JECXZ/JCXZ
+/// and LOOP/LOOPE/LOOPNE remain unpublished and fail closed. Reserved F7 /1,
+/// ordinary guest memory, partial registers, legacy prefixes, semantically
+/// redundant REX extension bits, any instruction or encoding outside that exact
+/// subset, all other control flow, unimplemented LowIR, and bytes after the
+/// block terminator are rejected. The command stops at the object boundary: no
+/// linker, loader, publisher, dispatcher, execution engine, or debugger is
+/// involved.
 ///
 //===----------------------------------------------------------------------===//
 

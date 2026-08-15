@@ -75,14 +75,22 @@ cl::SubCommand OptimizeIRCmd("optimize-ir",
 cl::SubCommand TranslateObjectCmd(
     "translate-object",
     "Compile canonical legacy-prefix-free x86-64 v1 REX.W full-width GPR MOV, "
-    "ADD/SUB, and register/immediate AND/OR/XOR forms (logical flags preserve "
-    "AF), terminated by C3 RET, C2 iw RET-imm16, direct-relative EB cb/E9 cd "
-    "JMP, or schema-8 legacy-prefix-free traditional Jcc: JO/JNO 70/71 cb or "
+    "ADD/SUB, register/immediate AND/OR/XOR, full-width register-only CMP "
+    "39/3B, "
+    "register/immediate CMP 81/7, 83/7, and 3D, full-width register-only TEST "
+    "85, and "
+    "register/immediate TEST F7/0 and A9 forms (logical and TEST flags "
+    "preserve AF in the NeverD state model), terminated by C3 RET, C2 iw "
+    "RET-imm16, direct-relative EB "
+    "cb/E9 cd JMP, or schema-9 legacy-prefix-free traditional Jcc: JO/JNO "
+    "70/71 cb or "
     "0F 80/81 cd, JB/JAE 72/73 cb or 0F 82/83 cd, JE/JNE 74/75 cb or 0F "
     "84/85 cd, JBE/JA 76/77 cb or 0F 86/87 cd, JS/JNS 78/79 cb or 0F 88/89 "
     "cd, JP/JNP 7A/7B cb or 0F 8A/8B cd, JL/JGE 7C/7D cb or 0F 8C/8D cd, "
-    "and JLE/JG 7E/7F cb or 0F 8E/8F cd. JRCXZ/JECXZ/JCXZ and "
-    "LOOP/LOOPE/LOOPNE remain unpublished and fail closed. Emits an audited "
+    "and JLE/JG 7E/7F cb or 0F 8E/8F cd. Reserved F7 /1, guest memory, "
+    "partial registers, legacy prefixes, redundant REX bits, "
+    "JRCXZ/JECXZ/JCXZ, and LOOP/LOOPE/LOOPNE remain unpublished and fail "
+    "closed. Emits an audited "
     "AArch64 relocatable object");
 
 //===----------------------------------------------------------------------===//

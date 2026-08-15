@@ -167,6 +167,34 @@ GuestState multiFlagConditionalBranchReturnState(uint8_t Opcode,
   return State;
 }
 
+GuestState compareTestConditionalBranchReturnState(bool UseTest,
+                                                   bool BranchTaken) {
+  GuestState State =
+      llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+  State.Memory.push_back({
+      EntryPC,
+      MemoryPermission::Read | MemoryPermission::Execute,
+      /*Generation=*/21,
+      {0x48, static_cast<uint8_t>(UseTest ? 0x85 : 0x39), 0xd8, // test/cmp
+       0x74, 0x05, 0x48, 0x83, 0xc1, 0x01, 0xc3,              // fallthrough
+       0x48, 0x83, 0xc1, 0x05, 0xc3}});                       // taken
+  std::vector<uint8_t> Stack(16, 0);
+  for (unsigned Byte = 0; Byte != 8; ++Byte)
+    Stack[Byte] = static_cast<uint8_t>(ReturnTarget >> (Byte * 8));
+  State.Memory.push_back({StackAddress,
+                          MemoryPermission::Read | MemoryPermission::Write,
+                          /*Generation=*/0, std::move(Stack)});
+  const uint64_t Left = UseTest ? 0xf0 : 0x123456789abcdef0ULL;
+  const uint64_t Right =
+      UseTest ? (BranchTaken ? 0x0f : 0xff)
+              : (BranchTaken ? Left : Left + 1);
+  setRegister(State, 0, Left);
+  setRegister(State, 3, Right);
+  setRegister(State, 4, StackAddress);
+  setRegister(State, 16, EntryPC);
+  return State;
+}
+
 GuestState selfLoopState() {
   GuestState State =
       llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
@@ -685,6 +713,44 @@ TEST(NativeTranslationSession,
     EXPECT_EQ(registerValue((*SessionOrErr)->state(), 16), ReturnTarget);
     EXPECT_FALSE(static_cast<bool>(
         validateTranslationResult(*ResultOrErr, (*SessionOrErr)->options())));
+  }
+}
+
+TEST(NativeTranslationSession,
+     ExecutesCompareAndTestBeforeDispatchingBothBranchSuccessors) {
+  if (!hasNativeAArch64Target())
+    GTEST_SKIP() << "native AArch64 execution is unavailable";
+
+  for (bool UseTest : {false, true}) {
+    for (bool BranchTaken : {false, true}) {
+      SCOPED_TRACE(UseTest ? "test" : "cmp");
+      SCOPED_TRACE(BranchTaken);
+      GuestState Initial =
+          compareTestConditionalBranchReturnState(UseTest, BranchTaken);
+      const uint64_t InitialRAX = registerValue(Initial, 0);
+      const uint64_t InitialRBX = registerValue(Initial, 3);
+      llvm::Expected<std::unique_ptr<NativeTranslationSessionV1>> SessionOrErr =
+          NativeTranslationSessionV1::create(nativeOptions(),
+                                             std::move(Initial));
+      ASSERT_TRUE(static_cast<bool>(SessionOrErr))
+          << llvm::toString(SessionOrErr.takeError());
+
+      llvm::Expected<TranslationResult> ResultOrErr = (*SessionOrErr)->run();
+      ASSERT_TRUE(static_cast<bool>(ResultOrErr))
+          << llvm::toString(ResultOrErr.takeError());
+      EXPECT_EQ(ResultOrErr->Exit.Reason, TranslationStopReason::Returned);
+      EXPECT_EQ(ResultOrErr->Exit.NextPC, ReturnTarget);
+      EXPECT_EQ(ResultOrErr->GuestInstructions, 4u);
+      EXPECT_EQ(ResultOrErr->BlocksTranslated, 2u);
+      EXPECT_EQ(registerValue((*SessionOrErr)->state(), 0), InitialRAX);
+      EXPECT_EQ(registerValue((*SessionOrErr)->state(), 3), InitialRBX);
+      EXPECT_EQ(registerValue((*SessionOrErr)->state(), 1),
+                BranchTaken ? 5u : 1u);
+      EXPECT_EQ(registerValue((*SessionOrErr)->state(), 4), StackAddress + 8);
+      EXPECT_EQ(registerValue((*SessionOrErr)->state(), 16), ReturnTarget);
+      EXPECT_FALSE(static_cast<bool>(validateTranslationResult(
+          *ResultOrErr, (*SessionOrErr)->options())));
+    }
   }
 }
 

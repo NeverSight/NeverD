@@ -621,6 +621,17 @@ TEST_F(TranslationCLIContract,
   expectControlTransferObject(NearGreater);
 }
 
+TEST_F(TranslationCLIContract,
+       EmitsObjectsForCompareAndTestGuardedConditionalBranches) {
+  constexpr std::array<uint8_t, 5> CompareThenEqual{
+      0x48, 0x39, 0xd8, 0x74, 0xfb}; // cmp rax, rbx; je block entry
+  constexpr std::array<uint8_t, 5> TestThenNotEqual{
+      0x48, 0x85, 0xc0, 0x75, 0xfb}; // test rax, rax; jne block entry
+
+  expectControlTransferObject(CompareThenEqual);
+  expectControlTransferObject(TestThenNotEqual);
+}
+
 TEST_F(TranslationCLIContract, HelpPublishesCanonicalControlEncodings) {
   const ProcessResult Result = run("translate-object --help");
 
@@ -634,7 +645,7 @@ TEST_F(TranslationCLIContract, HelpPublishesCanonicalControlEncodings) {
       << Help;
   EXPECT_NE(Help.find("JLE/JG 7E/7F cb or 0F 8E/8F cd"), std::string::npos)
       << Help;
-  EXPECT_NE(Help.find("JRCXZ/JECXZ/JCXZ and LOOP/LOOPE/LOOPNE remain "
+  EXPECT_NE(Help.find("JRCXZ/JECXZ/JCXZ, and LOOP/LOOPE/LOOPNE remain "
                       "unpublished and fail closed"),
             std::string::npos)
       << Help;

@@ -310,16 +310,21 @@ extern llvm::cl::opt<bool> OptimizeIRExhaustive;
 extern llvm::cl::opt<bool> OptimizeIRJson;
 
 // Translate only canonical, legacy-prefix-free x86-64 v1 REX.W full-width GPR
-// MOV, ADD/SUB, and register/immediate AND/OR/XOR forms; logical forms compute
-// architecture-defined flags while preserving AF. Canonical C3 RET, C2 iw
-// RET-imm16, or direct-relative EB cb/E9 cd JMP terminates the block. Lowering
-// schema 8 also accepts canonical, legacy-prefix-free traditional Jcc: JO/JNO
+// MOV, ADD/SUB, and register/immediate AND/OR/XOR forms; full-width
+// register-only CMP 39/3B and register/immediate CMP 81/7, 83/7, and 3D; and
+// full-width register-only TEST 85 plus register/immediate TEST F7/0 and A9.
+// Logical and TEST forms compute architecture-defined flags while preserving
+// AF in the NeverD state model. Canonical C3 RET, C2 iw RET-imm16, or
+// direct-relative EB cb/E9 cd JMP terminates the block. Lowering
+// schema 9 also accepts canonical, legacy-prefix-free traditional Jcc: JO/JNO
 // 70/71 or 0F 80/81, JB/JAE 72/73 or 0F 82/83, JE/JNE 74/75 or 0F 84/85,
 // JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or 0F 88/89, JP/JNP 7A/7B or 0F
 // 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG 7E/7F or 0F 8E/8F, with cb short
 // or cd near displacements respectively. JRCXZ/JECXZ/JCXZ and
-// LOOP/LOOPE/LOOPNE remain unpublished and fail closed. Memory operands, partial
-// registers, and any instruction outside that exact subset also fail closed.
+// LOOP/LOOPE/LOOPNE remain unpublished and fail closed. Reserved F7 /1, memory
+// operands, partial registers, legacy prefixes, semantically redundant REX
+// extension bits, and any instruction outside that exact subset also fail
+// closed.
 extern llvm::cl::opt<std::string> TranslateObjectInput;
 extern llvm::cl::opt<std::string> TranslateObjectOutput;
 extern llvm::cl::opt<TranslateObjectContainer> TranslateObjectFormat;
@@ -380,17 +385,21 @@ int runSimplify();
 int runOptimizeIR();
 
 // NeverDCmdTranslate.cpp — only canonical, legacy-prefix-free x86-64 v1 REX.W
-// full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms; logical
-// forms compute architecture-defined flags while preserving AF. Canonical C3
-// RET, C2 iw RET-imm16, or direct-relative EB cb/E9 cd JMP terminates the
-// block. Lowering schema 8 also accepts canonical, legacy-prefix-free
+// full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms;
+// full-width register-only CMP 39/3B and register/immediate CMP 81/7, 83/7,
+// and 3D; and full-width register-only TEST 85 plus register/immediate TEST
+// F7/0 and A9. Logical and TEST forms compute architecture-defined flags while
+// preserving AF in the NeverD state model. Canonical C3 RET, C2 iw RET-imm16,
+// or direct-relative EB cb/E9 cd JMP terminates the block. Lowering schema 9
+// also accepts canonical, legacy-prefix-free
 // traditional Jcc: JO/JNO 70/71 or 0F 80/81, JB/JAE 72/73 or 0F 82/83,
 // JE/JNE 74/75 or 0F 84/85, JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or 0F
 // 88/89, JP/JNP 7A/7B or 0F 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG 7E/7F
 // or 0F 8E/8F, with cb short or cd near displacements respectively.
 // JRCXZ/JECXZ/JCXZ and LOOP/LOOPE/LOOPNE remain unpublished and fail closed.
-// Memory operands, partial
-// registers, and any instruction outside that exact subset also fail closed.
+// Reserved F7 /1, memory operands, partial registers, legacy prefixes,
+// semantically redundant REX extension bits, and any instruction outside that
+// exact subset also fail closed.
 // Takes raw bytes rather than a binary session and does not link, load,
 // publish, dispatch, execute, or debug.
 int runTranslateObject();

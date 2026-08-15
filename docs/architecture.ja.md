@@ -190,18 +190,23 @@ command はすべて拒否されます。
 guest-byte-to-object slice であり、意図的に対象を絞っています。現在公開されている
 fail-closed な x86-64 v1 scalar-register subset では、legacy prefix のない canonical
 encoding、すなわち、対応する register/immediate LowIR 形状になる REX.W 全幅 GPR の
-`MOV`、`ADD`/`SUB`、および `AND`/`OR`/`XOR` だけを受け取ります。算術形式は従来の
-scalar flag 計算を維持し、論理形式はアーキテクチャで定義された flags を計算しつつ
-`AF` を保持します。canonical `C3` `RET` と `C2 iw` `RET imm16` は return block を
+`MOV`、`ADD`/`SUB`、および `AND`/`OR`/`XOR` だけを受け取ります。schema 9 はさらに、
+全幅 register/register `CMP` の `39/3B`、register/immediate `CMP` の `81/7`、`83/7`、
+`3D`、全幅 register/register `TEST` の `85`、register/immediate `TEST` の `F7/0` と `A9`
+を受理します。算術形式は従来の scalar flag 計算を維持し、論理形式と `TEST` は
+アーキテクチャで定義された flags を計算しつつ NeverD state model の `AF` を保持します。
+canonical `C3` `RET` と `C2 iw` `RET imm16` は return block を
 終了し、canonical `EB cb` と `E9 cd` の direct-relative `JMP` encoding は direct-branch
-block を終了します。公開 lowering schema は 8 です。canonical かつ legacy prefix のない
+block を終了します。公開 lowering schema は 9 です。canonical かつ legacy prefix のない
 traditional Jcc は、`JO`/`JNO` の short `70/71 cb` または near `0F 80/81 cd`、
 `JB`/`JAE` の `72/73 cb` または `0F 82/83 cd`、`JE`/`JNE` の `74/75 cb` または
 `0F 84/85 cd`、`JBE`/`JA` の `76/77 cb` または `0F 86/87 cd`、`JS`/`JNS` の
 `78/79 cb` または `0F 88/89 cd`、`JP`/`JNP` の `7A/7B cb` または `0F 8A/8B cd`、
 `JL`/`JGE` の `7C/7D cb` または `0F 8C/8D cd`、`JLE`/`JG` の `7E/7F cb` または
 `0F 8E/8F cd` に限られます。`JRCXZ`/`JECXZ`/`JCXZ` と
-`LOOP`/`LOOPE`/`LOOPNE` は未公開で fail closed します。出力は監査済み little-endian AArch64 ELF または Mach-O relocatable object
+`LOOP`/`LOOPE`/`LOOPNE` は未公開で fail closed します。予約済みの `F7 /1`、guest-memory
+operand、partial-register form、legacy prefix、および意味的に冗長な REX extension bit
+も fail closed します。出力は監査済み little-endian AArch64 ELF または Mach-O relocatable object
 に限られます。通常の guest memory operation、partial-register form、この厳密な subset
 外の任意の instruction/encoding、return、これらの direct jump、および上記の公開済み
 Jcc branch 以外の control flow、ならびに lowerer が未実装の LowIR
@@ -252,7 +257,7 @@ byte の budget は block をまたいで正確に維持され、guest が正常
 linearize されます。
 
 これは実行可能な vertical slice であって、完全な translator ではありません。通常の
-guest-memory instruction、partial register、上記の厳密な schema-8 traditional-Jcc slice 以外の
+guest-memory instruction、partial register、上記の厳密な schema-9 traditional-Jcc slice 以外の
 conditional control flow（`JRCXZ`/`JECXZ`/`JCXZ` と
 `LOOP`/`LOOPE`/`LOOPNE` を含む）、indirect control flow、call、floating-point、SIMD、x87、atomic、system instruction、
 汎用 exception propagation、block cache、他の guest/host pair、逆方向の

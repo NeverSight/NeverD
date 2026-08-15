@@ -45,7 +45,7 @@ namespace {
 
 constexpr llvm::StringLiteral HostTriple("aarch64-unknown-linux-gnu");
 constexpr uint64_t EntryPC = 0x401000;
-static_assert(kX86TranslationBlockLoweringSchemaV1 == 8);
+static_assert(kX86TranslationBlockLoweringSchemaV1 == 9);
 
 TranslationOptions aarch64AOTOptions() {
   TranslationOptions Options;
@@ -455,6 +455,76 @@ void expectLogicTruth(
   expectStateIntegerBefore(*ReturnLoad, State, Layout,
                            offsetof(RuntimeGuestStateX86_64V1, OF), 8, 0);
   expectValidRuntimeIR(LoweredOrErr->module());
+}
+
+void expectFlagOnlyTruth(llvm::ArrayRef<uint8_t> Bytes, uint64_t Left,
+                         uint64_t Right, const ArithmeticTruth &Truth,
+                         bool WritesAF) {
+  const std::vector<uint8_t> OwnedBytes(Bytes.begin(), Bytes.end());
+  TranslationBlockDescriptorV1 Block = blockFromBytes(OwnedBytes);
+  EXPECT_EQ(Block.Bytes, OwnedBytes);
+
+  llvm::LLVMContext Context;
+  llvm::Expected<LoweredTranslationBlockV1> LoweredOrErr =
+      lowerX86TranslationBlockV1(Block, resolvedAArch64(), aarch64DataLayout(),
+                                 Context);
+  ASSERT_TRUE(static_cast<bool>(LoweredOrErr))
+      << llvm::toString(LoweredOrErr.takeError());
+  llvm::Function *Function =
+      LoweredOrErr->module().getFunction(LoweredOrErr->blockSymbol());
+  ASSERT_NE(Function, nullptr);
+  llvm::CallInst *ReturnLoad = findCall(*Function, [](llvm::CallInst &Call) {
+    const llvm::Function *Callee = Call.getCalledFunction();
+    return Callee && Callee->getName() == "nvd_rt_v1_load64_le";
+  });
+  ASSERT_NE(ReturnLoad, nullptr);
+  const llvm::Argument *State = Function->getArg(0);
+  const llvm::DataLayout &Layout = LoweredOrErr->module().getDataLayout();
+
+  expectStateIntegerBefore(*ReturnLoad, State, Layout,
+                           gprOffset(RuntimeX86_64GPRV1::RAX), 64, Left);
+  expectStateIntegerBefore(*ReturnLoad, State, Layout,
+                           gprOffset(RuntimeX86_64GPRV1::RBX), 64, Right);
+  expectStateIntegerBefore(*ReturnLoad, State, Layout,
+                           offsetof(RuntimeGuestStateX86_64V1, CF), 8,
+                           Truth.CF);
+  expectStateIntegerBefore(*ReturnLoad, State, Layout,
+                           offsetof(RuntimeGuestStateX86_64V1, PF), 8,
+                           Truth.PF);
+  if (WritesAF)
+    expectStateIntegerBefore(*ReturnLoad, State, Layout,
+                             offsetof(RuntimeGuestStateX86_64V1, AF), 8,
+                             Truth.AF);
+  else
+    EXPECT_EQ(findStateStoreBefore(
+                  *ReturnLoad, State, Layout,
+                  offsetof(RuntimeGuestStateX86_64V1, AF)),
+              nullptr);
+  expectStateIntegerBefore(*ReturnLoad, State, Layout,
+                           offsetof(RuntimeGuestStateX86_64V1, ZF), 8,
+                           Truth.ZF);
+  expectStateIntegerBefore(*ReturnLoad, State, Layout,
+                           offsetof(RuntimeGuestStateX86_64V1, SF), 8,
+                           Truth.SF);
+  expectStateIntegerBefore(*ReturnLoad, State, Layout,
+                           offsetof(RuntimeGuestStateX86_64V1, OF), 8,
+                           Truth.OF);
+  expectValidRuntimeIR(LoweredOrErr->module());
+}
+
+void expectCompareTruth(llvm::ArrayRef<uint8_t> Bytes, uint64_t Left,
+                        uint64_t Right) {
+  expectFlagOnlyTruth(Bytes, Left, Right,
+                      referenceArithmetic(Left, Right,
+                                          ReferenceArithmetic::Sub),
+                      /*WritesAF=*/true);
+}
+
+void expectTestTruth(llvm::ArrayRef<uint8_t> Bytes, uint64_t Left,
+                     uint64_t Right) {
+  expectFlagOnlyTruth(Bytes, Left, Right,
+                      referenceLogic(Left, Right, ReferenceLogic::And),
+                      /*WritesAF=*/false);
 }
 
 const llvm::StoreInst *findStateStoreInBlock(const llvm::BasicBlock &Block,
@@ -1468,6 +1538,64 @@ TEST(X86TranslationBlockLowerer,
 }
 
 TEST(X86TranslationBlockLowerer,
+     MatchesCompareFlagsWithoutWritingEitherOperand) {
+  struct TruthVector {
+    const char *Name;
+    uint64_t Left;
+    uint64_t Right;
+    std::vector<uint8_t> Instruction;
+  };
+  const std::array<TruthVector, 5> Vectors = {{
+      {"equal", 0x123456789abcdef0ULL, 0x123456789abcdef0ULL,
+       {0x48, 0x39, 0xd8}},
+      {"unsigned-borrow", 0, 1, {0x48, 0x3b, 0xc3}},
+      {"signed-overflow", uint64_t{1} << 63, 1, {0x48, 0x39, 0xd8}},
+      {"negative-imm8", 0, std::numeric_limits<uint64_t>::max(),
+       {0x48, 0x83, 0xf8, 0xff}},
+      {"negative-imm32", std::numeric_limits<int64_t>::max(),
+       static_cast<uint64_t>(
+           static_cast<int64_t>(std::numeric_limits<int32_t>::min())),
+       {0x48, 0x3d, 0x00, 0x00, 0x00, 0x80}},
+  }};
+
+  for (const TruthVector &Vector : Vectors) {
+    SCOPED_TRACE(Vector.Name);
+    const std::vector<uint8_t> Bytes = registerArithmeticBlock(
+        Vector.Left, Vector.Right, Vector.Instruction);
+    expectCompareTruth(Bytes, Vector.Left, Vector.Right);
+  }
+}
+
+TEST(X86TranslationBlockLowerer,
+     MatchesTestFlagsWithoutWritingOperandsOrAuxiliaryFlag) {
+  struct TruthVector {
+    const char *Name;
+    uint64_t Left;
+    uint64_t Right;
+    std::vector<uint8_t> Instruction;
+  };
+  const std::array<TruthVector, 4> Vectors = {{
+      {"zero", 0xaaaaaaaaaaaaaaaaULL, 0x5555555555555555ULL,
+       {0x48, 0x85, 0xd8}},
+      {"negative", uint64_t{1} << 63, std::numeric_limits<uint64_t>::max(),
+       {0x48, 0x85, 0xd8}},
+      {"negative-group-imm32", 0x8040201008040201ULL,
+       std::numeric_limits<uint64_t>::max(),
+       {0x48, 0xf7, 0xc0, 0xff, 0xff, 0xff, 0xff}},
+      {"negative-accumulator-imm32", 0x8040201008040201ULL,
+       std::numeric_limits<uint64_t>::max(),
+       {0x48, 0xa9, 0xff, 0xff, 0xff, 0xff}},
+  }};
+
+  for (const TruthVector &Vector : Vectors) {
+    SCOPED_TRACE(Vector.Name);
+    const std::vector<uint8_t> Bytes = registerArithmeticBlock(
+        Vector.Left, Vector.Right, Vector.Instruction);
+    expectTestTruth(Bytes, Vector.Left, Vector.Right);
+  }
+}
+
+TEST(X86TranslationBlockLowerer,
      HandlesLogicalIdiomAndSignExtendedImmediateForms) {
   std::vector<uint8_t> ZeroExtendedRegister;
   appendMovImmediate(ZeroExtendedRegister, RuntimeX86_64GPRV1::R8,
@@ -1523,12 +1651,19 @@ TEST(X86TranslationBlockLowerer,
 }
 
 TEST(X86TranslationBlockLowerer, RejectsSemanticallyRedundantREXExtensionBits) {
-  const std::array<std::vector<uint8_t>, 3> Encodings = {{
+  const std::array<std::vector<uint8_t>, 7> Encodings = {{
       {0x4a, 0x89, 0xd8, 0xc3}, // REX.X is ignored by register-direct MOV.
       {0x4c, 0x83, 0xc0, 0x01,
        0xc3}, // REX.R is ignored by the ADD opcode-extension field.
       {0x49, 0x05, 0x01, 0x00, 0x00, 0x00,
        0xc3}, // REX.B is ignored by accumulator-immediate ADD.
+      {0x4c, 0x83, 0xf8, 0x01,
+       0xc3}, // REX.R is ignored by the CMP opcode-extension field.
+      {0x49, 0x3d, 0x01, 0x00, 0x00, 0x00,
+       0xc3}, // REX.B is ignored by accumulator-immediate CMP.
+      {0x4a, 0x85, 0xd8, 0xc3}, // REX.X is ignored by register-direct TEST.
+      {0x49, 0xa9, 0x01, 0x00, 0x00, 0x00,
+       0xc3}, // REX.B is ignored by accumulator-immediate TEST.
   }};
 
   for (const std::vector<uint8_t> &Bytes : Encodings) {
@@ -1546,11 +1681,16 @@ TEST(X86TranslationBlockLowerer, RejectsSemanticallyRedundantREXExtensionBits) {
 }
 
 TEST(X86TranslationBlockLowerer, AcceptsNecessaryREXExtensionBits) {
-  const std::array<std::vector<uint8_t>, 3> Encodings = {{
+  const std::array<std::vector<uint8_t>, 7> Encodings = {{
       {0x4d, 0x89, 0xc1, 0xc3}, // mov r9, r8: REX.R and REX.B are required.
       {0x49, 0x83, 0xc0, 0x01, 0xc3}, // add r8, 1: REX.B is required.
       {0x49, 0xb8, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
        0xc3}, // movabs r8, 1: REX.B extends the opcode register.
+      {0x4d, 0x39, 0xc8, 0xc3}, // cmp r8, r9: REX.R and REX.B are required.
+      {0x49, 0x83, 0xf8, 0x01, 0xc3}, // cmp r8, 1: REX.B is required.
+      {0x4d, 0x85, 0xc8, 0xc3}, // test r8, r9: REX.R and REX.B are required.
+      {0x49, 0xf7, 0xc0, 0x01, 0x00, 0x00, 0x00,
+       0xc3}, // test r8, 1: REX.B is required.
   }};
 
   for (const std::vector<uint8_t> &Bytes : Encodings) {
@@ -1563,6 +1703,26 @@ TEST(X86TranslationBlockLowerer, AcceptsNecessaryREXExtensionBits) {
     ASSERT_TRUE(static_cast<bool>(LoweredOrErr))
         << llvm::toString(LoweredOrErr.takeError());
     expectValidRuntimeIR(LoweredOrErr->module());
+  }
+}
+
+TEST(X86TranslationBlockLowerer,
+     RejectsCompareAndTestLowIRDataflowDriftBeforeLowering) {
+  for (const std::vector<uint8_t> &Bytes :
+       {std::vector<uint8_t>{0x48, 0x39, 0xd8, 0xc3},
+        std::vector<uint8_t>{0x48, 0x85, 0xd8, 0xc3}}) {
+    SCOPED_TRACE(::testing::PrintToString(Bytes));
+    TranslationBlockDescriptorV1 Block = blockFromBytes(Bytes);
+    ASSERT_FALSE(Block.Ops.empty());
+    ASSERT_EQ(Block.Ops[0].NumInputs, 2u);
+    std::swap(Block.Ops[0].Inputs[0], Block.Ops[0].Inputs[1]);
+    ASSERT_FALSE(static_cast<bool>(validateTranslationBlockDescriptorV1(Block)));
+
+    llvm::LLVMContext Context;
+    expectLoweringError(
+        lowerX86TranslationBlockV1(Block, resolvedAArch64(),
+                                   aarch64DataLayout(), Context),
+        TranslationBlockLoweringErrorCode::InvalidDescriptor);
   }
 }
 
@@ -1643,9 +1803,9 @@ TEST(X86TranslationBlockLowerer,
 TEST(X86TranslationBlockLowerer,
      RejectsUndeclaredGuestOpcodeEvenWhenItsLowIRIsLowerable) {
   TranslationBlockDescriptorV1 Block =
-      blockFromBytes({0x48, 0x85, 0xd8, 0xc3}); // test rax, rbx; ret
+      blockFromBytes({0x48, 0xff, 0xc0, 0xc3}); // inc rax; ret
   ASSERT_TRUE(llvm::any_of(Block.Ops, [](const LowOp &Operation) {
-    return Operation.Opcode == NdOp::INT_AND;
+    return Operation.Opcode == NdOp::INT_ADD;
   }));
 
   llvm::LLVMContext Context;

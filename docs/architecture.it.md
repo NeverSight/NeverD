@@ -210,18 +210,24 @@ fail-closed pubblicato per i registri scalari x86-64 accetta soltanto codifiche
 canoniche prive di prefissi legacy: forme `MOV`, `ADD`/`SUB` e
 `AND`/`OR`/`XOR` con REX.W su GPR a larghezza intera i cui operandi hanno le
 forme LowIR registro/immediato supportate. Le forme aritmetiche mantengono i
-relativi calcoli dei flag scalari; quelle logiche calcolano i flag definiti
-dall’architettura preservando `AF`. Le codifiche canoniche `C3` `RET` e `C2 iw`
+relativi calcoli dei flag scalari; quelle logiche e `TEST` calcolano i flag
+definiti dall’architettura preservando `AF` nel modello di stato NeverD. Lo
+schema 9 accetta anche `CMP` register/register a larghezza intera con `39/3B`,
+`CMP` register/immediate con `81/7`, `83/7` e `3D`, `TEST` a larghezza intera
+register/register con `85` e register/immediate con `F7/0` e `A9`. Le codifiche
+canoniche `C3` `RET` e `C2 iw`
 `RET imm16` terminano i block di ritorno; le codifiche `JMP` direct-relative
 canoniche `EB cb` ed `E9 cd` terminano i block di branch diretto. Lo schema di
-lowering pubblicato è 8. I branch Jcc tradizionali, canonici e senza prefisso
+lowering pubblicato è 9. I branch Jcc tradizionali, canonici e senza prefisso
 legacy sono limitati a: `JO`/`JNO` short `70/71 cb` o near `0F 80/81 cd`;
 `JB`/`JAE` con `72/73 cb` o `0F 82/83 cd`; `JE`/`JNE` con `74/75 cb` o
 `0F 84/85 cd`; `JBE`/`JA` con `76/77 cb` o `0F 86/87 cd`; `JS`/`JNS` con
 `78/79 cb` o `0F 88/89 cd`; `JP`/`JNP` con `7A/7B cb` o `0F 8A/8B cd`;
 `JL`/`JGE` con `7C/7D cb` o `0F 8C/8D cd`; e `JLE`/`JG` con `7E/7F cb` o
 `0F 8E/8F cd`. `JRCXZ`/`JECXZ`/`JCXZ` e `LOOP`/`LOOPE`/`LOOPNE` restano non
-pubblicati e falliscono fail-closed. Emette
+pubblicati e falliscono fail-closed. Anche `F7 /1` riservato, gli operandi di
+memoria guest, i registri parziali, i prefissi legacy e i bit di estensione REX
+semanticamente ridondanti falliscono fail-closed. Emette
 esclusivamente un oggetto relocatable ELF o Mach-O AArch64 little-endian
 sottoposto ad audit. Le normali operazioni sulla memoria guest, le forme a
 registro parziale, qualsiasi istruzione o codifica al di fuori di questo
@@ -287,7 +293,7 @@ a questo commit finale.
 
 Questa è una vertical slice eseguibile, non un traduttore completo. Non copre
 ancora normali istruzioni di memoria guest, registri parziali, flusso di
-controllo condizionale al di fuori dello slice esatto schema-8 dei Jcc
+controllo condizionale al di fuori dello slice esatto schema-9 dei Jcc
 tradizionali descritto sopra, inclusi `JRCXZ`/`JECXZ`/`JCXZ` e
 `LOOP`/`LOOPE`/`LOOPNE`, flusso
 di controllo indiretto, call, virgola mobile, SIMD, x87, operazioni atomiche,

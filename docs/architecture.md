@@ -195,11 +195,16 @@ guest-byte-to-object slice built on these contracts. Within the published
 version-1 fail-closed x86-64 scalar-register subset, it accepts only canonical
 encodings without legacy prefixes: REX.W full-width GPR `MOV`, `ADD`/`SUB`, and
 `AND`/`OR`/`XOR` forms over the supported register/immediate LowIR shapes.
-Arithmetic forms retain their scalar flag computations; logical forms compute
-their architecturally defined flags while preserving `AF`. Canonical `C3` `RET`
+Schema 9 also accepts full-width register-only `CMP` encodings `39/3B`,
+register/immediate `CMP` encodings `81/7`, `83/7`, and `3D`, full-width
+register-only `TEST` encoding `85`, and register/immediate `TEST` encodings
+`F7/0` and `A9`.
+Arithmetic forms retain their scalar flag computations; logical and `TEST`
+forms compute their architecturally defined flags while preserving `AF` in the
+NeverD state model. Canonical `C3` `RET`
 and `C2 iw` `RET imm16` terminate return blocks; canonical `EB cb` and `E9 cd`
 direct-relative `JMP` encodings terminate direct-branch blocks. The published
-lowering schema is 8. Canonical, legacy-prefix-free traditional Jcc branches
+lowering schema is 9. Canonical, legacy-prefix-free traditional Jcc branches
 terminate blocks only in these forms: `JO`/`JNO` short `70/71 cb` or near
 `0F 80/81 cd`; `JB`/`JAE` short `72/73 cb` or near `0F 82/83 cd`; `JE`/`JNE`
 short `74/75 cb` or near `0F 84/85 cd`; `JBE`/`JA` short `76/77 cb` or near
@@ -207,7 +212,8 @@ short `74/75 cb` or near `0F 84/85 cd`; `JBE`/`JA` short `76/77 cb` or near
 short `7A/7B cb` or near `0F 8A/8B cd`; `JL`/`JGE` short `7C/7D cb` or near
 `0F 8C/8D cd`; and `JLE`/`JG` short `7E/7F cb` or near `0F 8E/8F cd`.
 `JRCXZ`/`JECXZ`/`JCXZ` and `LOOP`/`LOOPE`/`LOOPNE` remain unpublished and
-fail closed.
+fail closed. Reserved `F7 /1`, guest-memory and partial-register forms, legacy
+prefixes, and semantically redundant REX extension bits also fail closed.
 It emits only an audited,
 little-endian AArch64 ELF or Mach-O relocatable object. Ordinary guest-memory
 operations, partial-register forms, any instruction or encoding outside that
@@ -266,7 +272,7 @@ final commit.
 
 This is an executable vertical slice, not a complete translator. It does not
 yet cover ordinary guest-memory instructions, partial registers, conditional
-control flow outside the exact schema-8 traditional-Jcc slice above—including
+control flow outside the exact schema-9 traditional-Jcc slice above—including
 `JRCXZ`/`JECXZ`/`JCXZ` and `LOOP`/`LOOPE`/`LOOPNE`—indirect control flow, calls,
 floating-point, SIMD, x87, atomics, system instructions, general exception
 propagation, block caching, other guest/host pairs, or the reverse
