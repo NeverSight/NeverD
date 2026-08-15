@@ -115,6 +115,23 @@ class AuditInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(InventoryError, "does not match profile"):
             self.audit("linux-semantic", r"^NeverDSemanticTests$")
 
+    def test_same_name_on_a_focused_binary_is_not_a_duplicate(self):
+        document = valid_inventory()
+        document["tests"].append(
+            {
+                "name": "semantic/a",
+                "properties": [{"name": "LABELS", "value": ["NeverDFP16ReduceTests"]}],
+            }
+        )
+        result = audit_inventory(
+            document,
+            "macos-patch",
+            r"^NeverDSemanticTests$",
+            semantic_minimum=2,
+            patch_minimum=2,
+        )
+        self.assertIn("semantic/a", result.selected_names)
+
     def test_duplicate_names_fail_with_a_bounded_diagnostic(self):
         document = valid_inventory()
         document["tests"].append(document["tests"][0])
