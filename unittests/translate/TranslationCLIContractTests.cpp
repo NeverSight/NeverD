@@ -632,11 +632,47 @@ TEST_F(TranslationCLIContract,
   expectControlTransferObject(TestThenNotEqual);
 }
 
-TEST_F(TranslationCLIContract, HelpPublishesCanonicalControlEncodings) {
+TEST_F(TranslationCLIContract, EmitsObjectsForNegativeImmediateCompareForms) {
+  constexpr std::array<uint8_t, 6> NegativeImmediate8ThenEqual{
+      0x48, 0x83, 0xf8, 0xfe, 0x74, 0xfa}; // cmp rax, -2; je block entry
+  constexpr std::array<uint8_t, 8> NegativeImmediate32ThenEqual{
+      0x48, 0x3d, 0xfe, 0xff,
+      0xff, 0xff, 0x74, 0xf8}; // cmp rax, -2; je block entry
+
+  expectControlTransferObject(NegativeImmediate8ThenEqual);
+  expectControlTransferObject(NegativeImmediate32ThenEqual);
+}
+
+TEST_F(TranslationCLIContract, RejectsReservedTestOpcodeExtension) {
+  constexpr std::array<uint8_t, 8> ReservedF7SlashOne{0x48, 0xf7, 0xc8, 0xff,
+                                                      0xff, 0xff, 0xff, 0xc3};
+  const fs::path Input = writeInput(ReservedF7SlashOne);
+  const fs::path Output = Directory / "must-not-exist.o";
+  const ProcessResult Result =
+      run("translate-object " + neverd::test::shellQuote(Input.string()) +
+          " --format=elf -o " + neverd::test::shellQuote(Output.string()));
+
+  EXPECT_EQ(Result.ExitCode, 4);
+  EXPECT_NE(Result.StandardError.find("[block-lowering-failed]"),
+            std::string::npos)
+      << Result.StandardError;
+  EXPECT_FALSE(fs::exists(Output));
+}
+
+TEST_F(TranslationCLIContract,
+       HelpPublishesSchemaNineCompareTestAndControlEncodings) {
   const ProcessResult Result = run("translate-object --help");
 
   ASSERT_EQ(Result.ExitCode, 0) << Result.StandardError;
   const std::string Help = Result.StandardOutput + Result.StandardError;
+  EXPECT_NE(Help.find("schema-9"), std::string::npos) << Help;
+  EXPECT_NE(Help.find("CMP 39/3B"), std::string::npos) << Help;
+  EXPECT_NE(Help.find("CMP 81/7, 83/7, and 3D"), std::string::npos) << Help;
+  EXPECT_NE(Help.find("TEST 85"), std::string::npos) << Help;
+  EXPECT_NE(Help.find("TEST F7/0 and A9"), std::string::npos) << Help;
+  EXPECT_NE(Help.find("Reserved F7 /1"), std::string::npos) << Help;
+  EXPECT_NE(Help.find("remain unpublished and fail closed"), std::string::npos)
+      << Help;
   EXPECT_NE(Help.find("direct-relative EB cb/E9 cd JMP"), std::string::npos)
       << Help;
   EXPECT_NE(Help.find("JE/JNE 74/75 cb or 0F 84/85 cd"), std::string::npos)

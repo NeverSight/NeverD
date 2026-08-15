@@ -311,6 +311,12 @@ commit されます。最終 section が存在しない場合、生成 compact r
 既存の最終 section が容量不足または malformed の場合は引き続き fail closed します。
 link 済み native throw/catch による実証はまだありません。
 
+外部参照は完全な MC fixup 契約から分類されます。call が選択できるのは認証済みの callable
+target だけであり、生成 compact-unwind の personality field が選択できるのは検証済みの
+non-lazy pointer slot だけです。そのファイル内容を dereference することはありません。
+TLS、authenticated pointer、subtractive、malformed compact field、未知の relocation は
+fail closed します。
+
 ARM32 compact unwind では、encoding に含まれる stack adjustment と GPR layout は `Complete`
 です。D-register pattern selector 0〜3 も `Complete` ですが、4〜7 は compact word だけでは
 runtime-aligned CFA-relative slot をすべて証明できないため `Partial` です。`Partial` entry は

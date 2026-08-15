@@ -218,6 +218,21 @@ target_link_libraries(NeverDNativeExceptionRewriteContractTests PRIVATE
   NeverDLift
 )
 
+# Keeps Mach-O patch symbol selection independent from the full lift suite.
+add_neverd_unittest(NeverDMachOSymbolResolutionTests
+  format/MachOSymbolResolutionTests.cpp
+
+  LINK_COMPONENTS
+  CodeGen
+  Loader
+)
+
+target_include_directories(NeverDMachOSymbolResolutionTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/lib/backend/codegen/MachO
+  ${LLVM_INCLUDE_DIRS}
+)
+
 # Guards the obfuscate-then-patch barrier in isolation.  A tiny TU that links
 # the prebuilt NeverDPipeline archive (which carries SymSimplifyPass through its
 # PassIR component), so the stamp/skip contract can be pinned without rebuilding

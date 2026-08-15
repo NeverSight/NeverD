@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 namespace {
 
@@ -241,15 +242,29 @@ TEST(NeverDTranslationCAPI,
 }
 
 TEST(NeverDTranslationCAPI,
-     EmitsOwnedObjectsForCompareAndTestGuardedConditionalBranches) {
-  constexpr std::array<unsigned char, 5> CompareThenEqual = {
-      0x48, 0x39, 0xd8, 0x74, 0xfb}; // cmp rax, rbx; je EntryPC
-  constexpr std::array<unsigned char, 5> TestThenNotEqual = {
-      0x48, 0x85, 0xc0, 0x75, 0xfb}; // test rax, rax; jne EntryPC
+     EmitsOwnedObjectsForEveryPublishedCompareAndTestEncoding) {
+  struct PublishedEncoding {
+    const char *Name;
+    std::vector<unsigned char> Bytes;
+  };
+  const std::array<PublishedEncoding, 8> Encodings = {{
+      {"cmp-39-register", {0x48, 0x39, 0xd8, 0x74, 0xfb}},
+      {"cmp-3b-register", {0x48, 0x3b, 0xc3, 0x74, 0xfb}},
+      {"cmp-81-negative-imm32",
+       {0x48, 0x81, 0xf8, 0xfe, 0xff, 0xff, 0xff, 0x74, 0xf7}},
+      {"cmp-83-negative-imm8", {0x48, 0x83, 0xf8, 0xfe, 0x74, 0xfa}},
+      {"cmp-3d-negative-imm32",
+       {0x48, 0x3d, 0xfe, 0xff, 0xff, 0xff, 0x74, 0xf8}},
+      {"test-85-register", {0x48, 0x85, 0xc0, 0x75, 0xfb}},
+      {"test-f7-negative-imm32",
+       {0x48, 0xf7, 0xc0, 0xfe, 0xff, 0xff, 0xff, 0x75, 0xf7}},
+      {"test-a9-negative-imm32",
+       {0x48, 0xa9, 0xfe, 0xff, 0xff, 0xff, 0x75, 0xf8}},
+  }};
 
-  for (llvm::ArrayRef<unsigned char> GuestBlock :
-       {llvm::ArrayRef<unsigned char>(CompareThenEqual),
-        llvm::ArrayRef<unsigned char>(TestThenNotEqual)}) {
+  for (const PublishedEncoding &Encoding : Encodings) {
+    SCOPED_TRACE(Encoding.Name);
+    const llvm::ArrayRef<unsigned char> GuestBlock(Encoding.Bytes);
     neverd_translate_object_request_v1 Request =
         request(NEVERD_TRANSLATE_OBJECT_FORMAT_ELF, GuestBlock);
     neverd_translate_object_result_v1 Result{};

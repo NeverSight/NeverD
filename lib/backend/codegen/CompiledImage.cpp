@@ -43,6 +43,30 @@ struct CapturedFixupReference {
   bool IsCompactFunctionField = false;
 };
 
+struct PatchSymbolResolvers {
+  PatchSymbolResolver Legacy;
+  ContextualPatchSymbolResolver Contextual;
+
+  void install(llvm::mc_rewrite::RewriteAddressModel &Model) const {
+    if (Contextual) {
+      ContextualPatchSymbolResolver Resolver = Contextual;
+      Model.resolveWithContext =
+          [Resolver](
+              const llvm::mc_rewrite::RewriteSymbolResolveRequest &Request) {
+            return Resolver(Request);
+          };
+      return;
+    }
+
+    if (Legacy) {
+      PatchSymbolResolver Resolver = Legacy;
+      Model.resolve = [Resolver](llvm::StringRef Symbol, uint32_t Specifier) {
+        return Resolver(Symbol, Specifier);
+      };
+    }
+  }
+};
+
 void captureFixupReference(std::vector<CapturedFixupReference> &Captured,
                            const llvm::mc_rewrite::FixupCtx &Context,
                            Arch TargetArch) {
@@ -170,8 +194,7 @@ bool attachSourceFunctionOriginalVAs(
 
 static CompiledImage compileImageForPatchImpl(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
+    PatchSymbolResolvers Resolvers,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
     uint64_t ImageBaseVA, llvm::StringRef TargetTriple) {
@@ -228,9 +251,7 @@ static CompiledImage compileImageForPatchImpl(
   Pass1.Model.TextVA = BaseVA;
   Pass1.Model.ImageBaseVA = ImageBaseVA;
   Pass1.Model.getSectionVA = [&](llvm::StringRef) { return BaseVA; };
-  Pass1.Model.resolve = [&](llvm::StringRef S, uint32_t Sp) {
-    return ResolveFn(S, Sp);
-  };
+  Resolvers.install(Pass1.Model);
   std::vector<CapturedFixupReference> Pass1Fixups;
   Pass1.onFixup = [&](const llvm::mc_rewrite::FixupCtx &Context,
                       uint64_t Value) {
@@ -406,9 +427,7 @@ static CompiledImage compileImageForPatchImpl(
       auto It = SectionVA.find(N.str());
       return It != SectionVA.end() ? It->second : BaseVA;
     };
-    PassN.Model.resolve = [&](llvm::StringRef S, uint32_t Sp) {
-      return ResolveFn(S, Sp);
-    };
+    Resolvers.install(PassN.Model);
     std::vector<CapturedFixupReference> IterationFixups;
     PassN.onFixup = [&](const llvm::mc_rewrite::FixupCtx &Context,
                         uint64_t Value) {
@@ -526,31 +545,51 @@ static CompiledImage compileImageForPatchImpl(
   return Out;
 }
 
-CompiledImage compileImageForPatch(
-    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
-    uint64_t ImageBaseVA) {
+CompiledImage compileImageForPatch(llvm::Module &Mod, Arch TargetArch,
+                                   BinaryFormat Fmt, uint64_t BaseVA,
+                                   PatchSymbolResolver ResolveFn,
+                                   uint64_t ImageBaseVA) {
   return compileImageForPatch(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
                               ImageBaseVA, llvm::StringRef());
 }
 
-CompiledImage compileImageForPatch(
-    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
-    uint64_t ImageBaseVA, llvm::StringRef TargetTriple) {
+CompiledImage compileImageForPatch(llvm::Module &Mod, Arch TargetArch,
+                                   BinaryFormat Fmt, uint64_t BaseVA,
+                                   PatchSymbolResolver ResolveFn,
+                                   uint64_t ImageBaseVA,
+                                   llvm::StringRef TargetTriple) {
   auto NoFixedSection = [](llvm::StringRef) -> std::optional<uint64_t> {
     return std::nullopt;
   };
-  return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
+  return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA,
+                                  PatchSymbolResolvers{ResolveFn, nullptr},
+                                  NoFixedSection, ImageBaseVA, TargetTriple);
+}
+
+CompiledImage compileImageForPatch(llvm::Module &Mod, Arch TargetArch,
+                                   BinaryFormat Fmt, uint64_t BaseVA,
+                                   ContextualPatchSymbolResolver ResolveFn,
+                                   uint64_t ImageBaseVA) {
+  return compileImageForPatch(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
+                              ImageBaseVA, llvm::StringRef());
+}
+
+CompiledImage compileImageForPatch(llvm::Module &Mod, Arch TargetArch,
+                                   BinaryFormat Fmt, uint64_t BaseVA,
+                                   ContextualPatchSymbolResolver ResolveFn,
+                                   uint64_t ImageBaseVA,
+                                   llvm::StringRef TargetTriple) {
+  auto NoFixedSection = [](llvm::StringRef) -> std::optional<uint64_t> {
+    return std::nullopt;
+  };
+  return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA,
+                                  PatchSymbolResolvers{nullptr, ResolveFn},
                                   NoFixedSection, ImageBaseVA, TargetTriple);
 }
 
 CompiledImage compileImageForPatchWithFixedSectionVAs(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
+    PatchSymbolResolver ResolveFn,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
     uint64_t ImageBaseVA) {
@@ -561,12 +600,34 @@ CompiledImage compileImageForPatchWithFixedSectionVAs(
 
 CompiledImage compileImageForPatchWithFixedSectionVAs(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
+    PatchSymbolResolver ResolveFn,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
     uint64_t ImageBaseVA, llvm::StringRef TargetTriple) {
-  return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
+  return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA,
+                                  PatchSymbolResolvers{ResolveFn, nullptr},
+                                  FixedSectionVAFn, ImageBaseVA, TargetTriple);
+}
+
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    ContextualPatchSymbolResolver ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA) {
+  return compileImageForPatchWithFixedSectionVAs(
+      Mod, TargetArch, Fmt, BaseVA, ResolveFn, FixedSectionVAFn, ImageBaseVA,
+      llvm::StringRef());
+}
+
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    ContextualPatchSymbolResolver ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple) {
+  return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA,
+                                  PatchSymbolResolvers{nullptr, ResolveFn},
                                   FixedSectionVAFn, ImageBaseVA, TargetTriple);
 }
 

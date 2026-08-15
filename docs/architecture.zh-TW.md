@@ -257,6 +257,11 @@ file/VM 末端、所有 offset relocation 均經過溢位檢查，並嚴格重�
 DWARF-FDE 閉環時才可繼續交易；既有最終 section 容量不足或格式錯誤時仍會 fail closed。
 已連結的原生 throw/catch 證明仍待完成。
 
+外部參照依完整的 MC fixup 契約分類。call 只能選擇已驗證的可呼叫目標；產生的
+compact-unwind personality 欄位只能選擇通過驗證的 non-lazy pointer slot，且絕不解參照
+其檔案內容。TLS、authenticated pointer、減項、格式錯誤的 compact 欄位與未知 relocation
+都會 fail closed。
+
 ARM32 compact unwind 的已編碼堆疊調整與 GPR 版面為 `Complete`；D 暫存器模式選擇值 0 至 3
 同樣為 `Complete`。選擇值 4 至 7 為 `Partial`，因為僅憑 compact word 無法證明每個經執行期
 對齊的 CFA 相對 slot。`Partial` 項目可為分析保留已證明的暫存器身分，但所有重寫路徑都會

@@ -747,8 +747,7 @@ TEST(MachOARM32Transaction, ARMv7kModeMismatchLeavesInputAndOutputUnchanged) {
   EXPECT_EQ(readFile(OutputPath), OutputSentinel);
 }
 
-TEST(MachOARM32Transaction,
-     AmbiguousUnderscoreAliasLeavesInputAndOutputUnchanged) {
+TEST(MachOARM32Transaction, AmbiguousExactNameLeavesInputAndOutputUnchanged) {
   ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
       macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
       /*CompactCapacity=*/0x2000);
@@ -845,9 +844,79 @@ TEST(MachOARM32Transaction, UniqueExactNameOutranksUnderscoreAlias) {
   PatchResult Result = Patcher.patch(
       InputPath.str().str(), OutputPath.str().str(), *Module, Arch::ARM);
 
-  EXPECT_TRUE(Result.Success);
+  ASSERT_TRUE(Result.Success);
   EXPECT_EQ(readFile(InputPath), Fixture.Binary);
-  EXPECT_GT(readFile(OutputPath).size(), Fixture.Binary.size());
+  const std::vector<uint8_t> Output = readFile(OutputPath);
+  ASSERT_GT(Output.size(), Fixture.Binary.size());
+  ASSERT_LE(kARM32LinkeditOff + Result.CodeSize, Output.size());
+
+  bool SawExactCallee = false;
+  bool SawAliasCallee = false;
+  forEachDirectBranch(Arch::ARM, InstructionMode::Thumb,
+                      Output.data() + kARM32LinkeditOff, Result.CodeSize,
+                      kARM32ImageBase + kARM32LinkeditOff,
+                      [&](va_t, va_t Target) {
+                        SawExactCallee |= Target == kARM32MayThrowVA;
+                        SawAliasCallee |= Target == kARM32PersonalityVA;
+                      });
+  EXPECT_TRUE(SawExactCallee);
+  EXPECT_FALSE(SawAliasCallee);
+}
+
+TEST(MachOARM32Transaction,
+     AmbiguousUnderscoreAliasesLeaveInputAndOutputUnchanged) {
+  ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
+      macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
+      /*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+
+  symtab_command *Symtab = nullptr;
+  forEachMachOLoadCommand(
+      Fixture.Binary.data(), Fixture.Binary.size(),
+      [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
+        if (ID == LC_SYMTAB)
+          Symtab = reinterpret_cast<symtab_command *>(
+              const_cast<uint8_t *>(Command));
+      });
+  ASSERT_NE(Symtab, nullptr);
+  ASSERT_EQ(Symtab->nsyms, 5u);
+  auto *Symbols =
+      reinterpret_cast<nlist *>(Fixture.Binary.data() + Symtab->symoff);
+  Symbols[2].n_strx += 1;
+  nlist &ConflictingAlias = Symbols[5];
+  ConflictingAlias.n_strx = Symbols[2].n_strx;
+  ConflictingAlias.n_type =
+      static_cast<uint8_t>(static_cast<uint8_t>(N_SECT) | N_EXT);
+  ConflictingAlias.n_sect = 1;
+  ConflictingAlias.n_desc = N_ARM_THUMB_DEF;
+  ConflictingAlias.n_value = kARM32PersonalityVA;
+  Symtab->nsyms = 6;
+
+  llvm::SmallString<128> InputPath;
+  llvm::SmallString<128> OutputPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-arm32-macho-ambiguous-alias-input", "macho", InputPath));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-arm32-macho-ambiguous-alias-output", "macho", OutputPath));
+  llvm::FileRemover RemoveInput(InputPath);
+  llvm::FileRemover RemoveOutput(OutputPath);
+  const std::vector<uint8_t> OutputSentinel = {0x41, 0x4c, 0x49, 0x41, 0x53};
+  ASSERT_TRUE(writeFile(InputPath, Fixture.Binary));
+  ASSERT_TRUE(writeFile(OutputPath, OutputSentinel));
+
+  llvm::LLVMContext Context;
+  auto Module = makeARM32TransactionModule(Context);
+  MachOPatcher Patcher;
+  testing::internal::CaptureStderr();
+  PatchResult Result = Patcher.patch(
+      InputPath.str().str(), OutputPath.str().str(), *Module, Arch::ARM);
+  const std::string Diagnostic = testing::internal::GetCapturedStderr();
+
+  EXPECT_FALSE(Result.Success);
+  EXPECT_NE(Diagnostic.find("ambiguous Mach-O symbol"), std::string::npos)
+      << Diagnostic;
+  EXPECT_EQ(readFile(InputPath), Fixture.Binary);
+  EXPECT_EQ(readFile(OutputPath), OutputSentinel);
 }
 
 TEST(MachOARM32Transaction, PartialFrameDFailureLeavesInputAndOutputUnchanged) {

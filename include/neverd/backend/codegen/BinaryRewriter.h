@@ -196,6 +196,12 @@ struct CompiledImage {
   bool Success = false;
 };
 
+using PatchSymbolResolver =
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>;
+using ContextualPatchSymbolResolver =
+    llvm::function_ref<std::optional<uint64_t>(
+        const llvm::mc_rewrite::RewriteSymbolResolveRequest &)>;
+
 /// Compile \p Mod to a placement-ready image rooted at \p BaseVA.
 ///
 /// The rewrite backend may emit more than one output section (e.g. an absolute
@@ -209,31 +215,50 @@ struct CompiledImage {
 /// patchers use Sections to preserve unwind/data identity and choose compatible
 /// physical permissions.
 ///
-/// \p ResolveFn is the address-model external-symbol resolver (PLT/IAT/stub
-/// VAs,
-/// `__nd_data_*`, exports). Returns CompiledImage::Success==false on failure.
-CompiledImage compileImageForPatch(
-    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
-    uint64_t ImageBaseVA = 0);
+/// The legacy \p ResolveFn maps an external symbol/specifier pair to a target
+/// VA (for example, a PLT/IAT/stub, an export, or `__nd_data_*`). Returns
+/// CompiledImage::Success==false on failure.
+CompiledImage compileImageForPatch(llvm::Module &Mod, Arch TargetArch,
+                                   BinaryFormat Fmt, uint64_t BaseVA,
+                                   PatchSymbolResolver ResolveFn,
+                                   uint64_t ImageBaseVA = 0);
+
+/// Context-aware variant.  The native MC backend supplies the exact fixup,
+/// section, specifier, and add/subtract role so format patchers can keep code,
+/// data, import-slot, TLS, and authenticated-pointer address spaces distinct.
+CompiledImage compileImageForPatch(llvm::Module &Mod, Arch TargetArch,
+                                   BinaryFormat Fmt, uint64_t BaseVA,
+                                   ContextualPatchSymbolResolver ResolveFn,
+                                   uint64_t ImageBaseVA = 0);
 
 /// Exact-platform variant.  \p TargetTriple is propagated through the probe
 /// compile and every layout-convergence compile; callers must authenticate it
 /// against the input container before invoking this overload.
-CompiledImage compileImageForPatch(
-    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
-    uint64_t ImageBaseVA, llvm::StringRef TargetTriple);
+CompiledImage compileImageForPatch(llvm::Module &Mod, Arch TargetArch,
+                                   BinaryFormat Fmt, uint64_t BaseVA,
+                                   PatchSymbolResolver ResolveFn,
+                                   uint64_t ImageBaseVA,
+                                   llvm::StringRef TargetTriple);
+
+CompiledImage compileImageForPatch(llvm::Module &Mod, Arch TargetArch,
+                                   BinaryFormat Fmt, uint64_t BaseVA,
+                                   ContextualPatchSymbolResolver ResolveFn,
+                                   uint64_t ImageBaseVA,
+                                   llvm::StringRef TargetTriple);
 
 /// Compile like compileImageForPatch, but allow selected allocated sections to
 /// be assigned format-owned VAs outside the contiguous patch image.  Such
 /// sections have IsInImage=false and carry their bytes in ExternalBytes.
 CompiledImage compileImageForPatchWithFixedSectionVAs(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
+    PatchSymbolResolver ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA = 0);
+
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    ContextualPatchSymbolResolver ResolveFn,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
     uint64_t ImageBaseVA = 0);
@@ -241,8 +266,14 @@ CompiledImage compileImageForPatchWithFixedSectionVAs(
 /// Exact-platform variant of compileImageForPatchWithFixedSectionVAs.
 CompiledImage compileImageForPatchWithFixedSectionVAs(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
-    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
-        ResolveFn,
+    PatchSymbolResolver ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple);
+
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    ContextualPatchSymbolResolver ResolveFn,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
     uint64_t ImageBaseVA, llvm::StringRef TargetTriple);

@@ -254,6 +254,11 @@ section 缺失时不安装生成 compact 记录，且仅在通过上述精确、
 才可继续事务；已有最终 section 容量不足或格式错误时仍会 fail closed。已链接的原生
 throw/catch 证明仍未完成。
 
+外部引用依据完整的 MC fixup 契约分类。call 只能选择经过认证的可调用目标；生成的
+compact-unwind personality 字段只能选择经过校验的 non-lazy pointer slot，且绝不解引用
+其文件内容。TLS、authenticated pointer、减项、格式错误的 compact 字段和未知 relocation
+都会 fail closed。
+
 ARM32 compact unwind 的已编码栈调整与 GPR 布局为 `Complete`；D 寄存器模式选择值 0 至 3
 同样为 `Complete`。选择值 4 至 7 为 `Partial`，因为仅凭 compact word 无法证明每个经运行时
 对齐的 CFA 相对 slot。`Partial` 条目可为分析保留已证明的寄存器身份，但所有重写路径都会

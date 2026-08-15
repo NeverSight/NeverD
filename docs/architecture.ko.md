@@ -297,6 +297,11 @@ compact record를 install하지 않고 아래의 정확하고 인증된 DWARF-FD
 transaction을 계속할 수 있습니다. 기존 최종 section의 용량이 부족하거나 malformed이면 계속
 fail closed하며, link된 native throw/catch 증명은 아직 남아 있습니다.
 
+외부 참조는 완전한 MC fixup 계약으로 분류합니다. call은 인증된 callable target만 선택할 수
+있고, 생성 compact-unwind의 personality field는 검증된 non-lazy pointer slot만 선택하며 그
+파일 내용을 dereference하지 않습니다. TLS, authenticated pointer, subtractive, malformed
+compact field 및 알 수 없는 relocation은 fail closed합니다.
+
 ARM32 compact unwind에서 encoding에 포함된 stack adjustment와 GPR layout은 `Complete`입니다.
 D-register pattern selector 0~3도 `Complete`이지만, 4~7은 compact word만으로 runtime-aligned
 CFA-relative slot을 모두 증명할 수 없어 `Partial`입니다. `Partial` entry는 분석을 위해 증명된

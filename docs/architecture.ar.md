@@ -304,6 +304,12 @@ in-place إلا إذا كان الجدول المرمّز يناسب سعتها 
 file/VM، وأن إزاحات offsets مفحوصة ضد overflow، وأن replay صارمًا للـlayout النهائي
 نجح.
 
+تُصنَّف المراجع الخارجية من عقد MC fixup الكامل. لا يجوز للـcall اختيار إلا target
+قابل للاستدعاء وموثّق، ولا يجوز لحقل personality في compact unwind المولّد اختيار إلا
+non-lazy pointer slot متحقق منه، من دون dereference لمحتواه في الملف. تفشل صيغ TLS
+وauthenticated pointer والحدود المطروحة وحقول compact المشوهة وصيغ relocation غير
+المعروفة بوضع fail-closed.
+
 في ARM32 compact unwind تكون stack adjustment المشفرة وGPR layout بحالة `Complete`.
 كما تكون محددات D-register pattern من 0 إلى 3 بحالة `Complete`؛ أما من 4 إلى 7 فهي
 `Partial` لأن compact word وحده لا يثبت كل CFA-relative slot محاذى في runtime. يجوز

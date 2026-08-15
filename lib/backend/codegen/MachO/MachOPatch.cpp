@@ -14,6 +14,7 @@
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 
 #include "MachOStrictLayout.h"
+#include "MachOSymbolResolution.h"
 
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
@@ -28,7 +29,6 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/WithColor.h"
@@ -64,10 +64,44 @@ struct MachORewriteTarget {
   std::optional<macho_arm32::ModeInfo> ARM32Modes;
 };
 
-struct MachOSymbolTarget {
-  uint64_t Address = 0;
-  bool IsCode = false;
-};
+} // namespace
+
+namespace macho_patch_detail {
+
+namespace {
+
+namespace symbol_specifier {
+
+constexpr uint32_t None = 0;
+
+namespace x86 {
+constexpr uint32_t GOT = 7;
+constexpr uint32_t GOTPCRel = 11;
+constexpr uint32_t GOTPCRelNoRelax = 12;
+constexpr uint32_t TLVP = 26;
+} // namespace x86
+
+namespace arm {
+constexpr uint32_t High16 = 4;
+constexpr uint32_t Low16 = 5;
+} // namespace arm
+
+namespace aarch64 {
+constexpr uint32_t Auth = 0x00a;
+constexpr uint32_t AuthAddress = 0x00b;
+constexpr uint32_t GOTAuth = 0x00c;
+constexpr uint32_t TLSDescriptorAuth = 0x00d;
+constexpr uint32_t MachOGOT = 0x403;
+constexpr uint32_t MachOGOTPage = 0x404;
+constexpr uint32_t MachOGOTPageOff = 0x405;
+constexpr uint32_t MachOPage = 0x406;
+constexpr uint32_t MachOPageOff = 0x407;
+constexpr uint32_t MachOTLVP = 0x408;
+constexpr uint32_t MachOTLVPPage = 0x409;
+constexpr uint32_t MachOTLVPPageOff = 0x40a;
+} // namespace aarch64
+
+} // namespace symbol_specifier
 
 enum class MachOSymbolNameMatch : uint8_t { Exact, UnderscoreAlias };
 
@@ -81,22 +115,269 @@ classifyMachOSymbolName(llvm::StringRef Requested, llvm::StringRef Candidate) {
   return std::nullopt;
 }
 
+bool isX86TLSSpecifier(uint32_t Specifier) {
+  switch (Specifier) {
+  case 5:  // DTPOFF
+  case 6:  // DTPREL
+  case 9:  // GOTNTPOFF
+  case 14: // GOTTPOFF
+  case 15: // INDNTPOFF
+  case 16: // NTPOFF
+  case 21: // TLSCALL
+  case 22: // TLSDESC
+  case 23: // TLSGD
+  case 24: // TLSLD
+  case 25: // TLSLDM
+  case symbol_specifier::x86::TLVP:
+  case 27: // TLVPPAGE
+  case 28: // TLVPPAGEOFF
+  case 29: // TPOFF
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isARMTLSSpecifier(uint32_t Specifier) {
+  switch (Specifier) {
+  case 16: // GOTTPOFF
+  case 17: // GOTTPOFF_FDPIC
+  case 24: // TLSCALL
+  case 25: // TLSDESC
+  case 26: // TLSDESCSEQ
+  case 27: // TLSGD
+  case 28: // TLSGD_FDPIC
+  case 29: // TLSLDM
+  case 30: // TLSLDM_FDPIC
+  case 31: // TLSLDO
+  case 32: // TPOFF
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isAArch64TLSSpecifier(uint32_t Specifier) {
+  if (Specifier >= 0x400)
+    return Specifier == symbol_specifier::aarch64::MachOTLVP ||
+           Specifier == symbol_specifier::aarch64::MachOTLVPPage ||
+           Specifier == symbol_specifier::aarch64::MachOTLVPPageOff;
+  constexpr uint32_t SymbolLocationMask = 0x00f;
+  switch (Specifier & SymbolLocationMask) {
+  case 5: // DTPREL
+  case 6: // GOTTPREL
+  case 7: // TPREL
+  case 8: // TLSDESC
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isAArch64AuthenticatedSpecifier(uint32_t Specifier) {
+  if (Specifier >= 0x400)
+    return false;
+  constexpr uint32_t SymbolLocationMask = 0x00f;
+  switch (Specifier & SymbolLocationMask) {
+  case symbol_specifier::aarch64::Auth:
+  case symbol_specifier::aarch64::AuthAddress:
+  case symbol_specifier::aarch64::GOTAuth:
+  case symbol_specifier::aarch64::TLSDescriptorAuth:
+    return true;
+  default:
+    return false;
+  }
+}
+
+std::optional<MachOSymbolTargetKind>
+classifyMappedMachOAddress(const BinaryImage &Image, uint64_t Address) {
+  const Segment *Segment = Image.getSegmentFor(Address);
+  if (!Segment || !Segment->isReadable())
+    return std::nullopt;
+  if (Image.isImportStubAt(Address))
+    return MachOSymbolTargetKind::Callable;
+
+  const Section *Section = Image.getSectionFor(Address);
+  if (!Section) {
+    if (!Segment->isExecutable())
+      return MachOSymbolTargetKind::Data;
+    return std::nullopt;
+  }
+
+  const uint32_t Type = Section->Type & SECTION_TYPE;
+  const uint32_t Attributes = Section->Type & SECTION_ATTRIBUTES;
+  if (Type == S_SYMBOL_STUBS ||
+      (Attributes & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)) != 0)
+    return MachOSymbolTargetKind::Callable;
+  return MachOSymbolTargetKind::Data;
+}
+
+bool isCallableFixup(llvm::StringRef Name) {
+  return Name.contains_insensitive("branch") ||
+         Name.contains_insensitive("call") ||
+         Name.ends_with_insensitive("_bl") ||
+         Name.contains_insensitive("_blx") ||
+         Name.contains_insensitive("_thumb_bl");
+}
+
+bool isTLSSpecifierName(llvm::StringRef Name) {
+  return Name.contains_insensitive("TLS") ||
+         Name.contains_insensitive("TLVP") ||
+         Name.contains_insensitive("TPOFF") ||
+         Name.contains_insensitive("DTPREL") ||
+         Name.contains_insensitive("DTPOFF") ||
+         Name.contains_insensitive("NTPOFF");
+}
+
+bool isAuthenticatedSpecifierName(llvm::StringRef Name) {
+  return Name.contains_insensitive("AUTH");
+}
+
+bool isGOTSpecifierName(llvm::StringRef Name) {
+  return Name == "GOT" || Name == "GOTPAGE" || Name == "GOTPAGEOFF" ||
+         Name == "GOTPCREL" || Name == "GOTPCREL_NORELAX" || Name == "GOT_PREL";
+}
+
+llvm::Expected<MachOSymbolUse> unsupportedMachOSymbolUse(
+    Arch TargetArch, llvm::StringRef Kind,
+    const llvm::mc_rewrite::RewriteSymbolResolveRequest &Request) {
+  return llvm::createStringError(
+      llvm::errc::not_supported,
+      (llvm::Twine("unsupported Mach-O ") + getArchName(TargetArch) + " " +
+       Kind + " symbol reference for '" + Request.Symbol + "' (specifier=" +
+       (Request.SpecifierName.empty()
+            ? llvm::Twine("0x") + llvm::utohexstr(Request.Specifier)
+            : llvm::Twine(Request.SpecifierName)) +
+       ", fixup=" + Request.FixupKindName + ", section=" + Request.SectionName +
+       ")")
+          .str());
+}
+
+llvm::Expected<MachOSymbolUse> classifyRawMachOSymbolSpecifier(
+    Arch TargetArch,
+    const llvm::mc_rewrite::RewriteSymbolResolveRequest &Request) {
+  const uint32_t Specifier = Request.Specifier;
+  auto Unsupported = [&](llvm::StringRef Kind) {
+    return unsupportedMachOSymbolUse(TargetArch, Kind, Request);
+  };
+
+  switch (TargetArch) {
+  case Arch::X64:
+  case Arch::X86:
+    if (Specifier == symbol_specifier::None)
+      return MachOSymbolUse::Direct;
+    if (Specifier == symbol_specifier::x86::GOT ||
+        Specifier == symbol_specifier::x86::GOTPCRel ||
+        Specifier == symbol_specifier::x86::GOTPCRelNoRelax)
+      return MachOSymbolUse::ImportSlot;
+    if (isX86TLSSpecifier(Specifier))
+      return Unsupported("TLS");
+    return Unsupported("unknown");
+  case Arch::AArch64:
+    if (Specifier == symbol_specifier::None ||
+        Specifier == symbol_specifier::aarch64::MachOPage ||
+        Specifier == symbol_specifier::aarch64::MachOPageOff)
+      return MachOSymbolUse::Direct;
+    if (Specifier == symbol_specifier::aarch64::MachOGOT ||
+        Specifier == symbol_specifier::aarch64::MachOGOTPage ||
+        Specifier == symbol_specifier::aarch64::MachOGOTPageOff)
+      return MachOSymbolUse::ImportSlot;
+    if (isAArch64TLSSpecifier(Specifier))
+      return Unsupported("TLS");
+    if (isAArch64AuthenticatedSpecifier(Specifier))
+      return Unsupported("authenticated-pointer");
+    return Unsupported("unknown");
+  case Arch::ARM:
+    if (Specifier == symbol_specifier::None ||
+        Specifier == symbol_specifier::arm::High16 ||
+        Specifier == symbol_specifier::arm::Low16)
+      return MachOSymbolUse::Direct;
+    if (isARMTLSSpecifier(Specifier))
+      return Unsupported("TLS");
+    return Unsupported("unknown");
+  case Arch::EVM:
+  case Arch::SBF:
+  case Arch::Unknown:
+    return Unsupported("target-incompatible");
+  }
+  llvm_unreachable("unhandled architecture");
+}
+
+} // namespace
+
+llvm::Expected<MachOSymbolUse> classifyMachOSymbolUse(
+    Arch TargetArch,
+    const llvm::mc_rewrite::RewriteSymbolResolveRequest &Request) {
+  if (TargetArch == Arch::EVM || TargetArch == Arch::SBF ||
+      TargetArch == Arch::Unknown)
+    return unsupportedMachOSymbolUse(TargetArch, "target-incompatible",
+                                     Request);
+  if (Request.Symbol.empty())
+    return unsupportedMachOSymbolUse(TargetArch, "unnamed", Request);
+  if (Request.IsSubtrahend)
+    return unsupportedMachOSymbolUse(TargetArch, "subtractive", Request);
+
+  if (isAuthenticatedSpecifierName(Request.SpecifierName) ||
+      (TargetArch == Arch::AArch64 &&
+       isAArch64AuthenticatedSpecifier(Request.Specifier)))
+    return unsupportedMachOSymbolUse(TargetArch, "authenticated-pointer",
+                                     Request);
+  if (isTLSSpecifierName(Request.SpecifierName))
+    return unsupportedMachOSymbolUse(TargetArch, "TLS", Request);
+
+  if (Request.SectionName == section_names::macho::CompactUnwind) {
+    const uint64_t PointerWidth =
+        TargetArch == Arch::X86 || TargetArch == Arch::ARM ? 4 : 8;
+    const uint64_t RecordSize = 3 * PointerWidth + 8;
+    const uint64_t PersonalityFieldOffset = PointerWidth + 8;
+    if (Request.Specifier == symbol_specifier::None && !Request.IsPCRel &&
+        Request.BitWidth == PointerWidth * 8 &&
+        Request.SectionOffset % RecordSize == PersonalityFieldOffset)
+      return MachOSymbolUse::ImportSlot;
+    return unsupportedMachOSymbolUse(
+        TargetArch, "invalid compact-unwind external", Request);
+  }
+
+  if (isGOTSpecifierName(Request.SpecifierName))
+    return MachOSymbolUse::ImportSlot;
+  if (Request.SpecifierName == "PLT")
+    return MachOSymbolUse::Callable;
+
+  auto ClassifySpecifier = [&]() -> llvm::Expected<MachOSymbolUse> {
+    if (Request.SpecifierName == "PAGE" || Request.SpecifierName == "PAGEOFF" ||
+        Request.SpecifierName == "PCREL" || Request.SpecifierName == "ABS8")
+      return MachOSymbolUse::Direct;
+    return classifyRawMachOSymbolSpecifier(TargetArch, Request);
+  };
+  auto Use = ClassifySpecifier();
+  if (!Use)
+    return Use.takeError();
+  if (*Use != MachOSymbolUse::Direct)
+    return *Use;
+
+  if (isCallableFixup(Request.FixupKindName))
+    return MachOSymbolUse::Callable;
+  return MachOSymbolUse::Direct;
+}
+
 llvm::Expected<std::optional<MachOSymbolTarget>>
-resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested) {
-  using CandidateKey = std::pair<uint64_t, bool>;
+resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested,
+                         MachOSymbolUse Use) {
+  using CandidateKey = std::pair<uint64_t, MachOSymbolTargetKind>;
   std::set<CandidateKey> ExactCandidates;
   std::set<CandidateKey> AliasCandidates;
   bool InvalidExactCandidate = false;
   bool InvalidAliasCandidate = false;
 
-  auto Record = [&](llvm::StringRef Name, uint64_t Address, bool IsCode) {
+  auto Record = [&](llvm::StringRef Name, uint64_t Address,
+                    MachOSymbolTargetKind Kind) {
     std::optional<MachOSymbolNameMatch> Match =
         classifyMachOSymbolName(Requested, Name);
     if (!Match)
       return;
     auto &Candidates = *Match == MachOSymbolNameMatch::Exact ? ExactCandidates
                                                              : AliasCandidates;
-    Candidates.emplace(Address, IsCode);
+    Candidates.emplace(Address, Kind);
   };
   auto RecordInvalid = [&](llvm::StringRef Name) {
     std::optional<MachOSymbolNameMatch> Match =
@@ -108,31 +389,69 @@ resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested) {
     else
       InvalidAliasCandidate = true;
   };
-  auto IsExecutable = [&](uint64_t Address) {
-    const Segment *Segment = Image.getSegmentFor(Address);
-    return Segment && Segment->isExecutable();
-  };
-
-  for (const auto &[SlotVA, ImportedName] : Image.ImportPtrSlots) {
-    if (!classifyMachOSymbolName(Requested, ImportedName))
-      continue;
-    const uint8_t *Pointer = Image.readVA(SlotVA, Image.getPointerSize());
-    if (!Pointer) {
-      RecordInvalid(ImportedName);
-      continue;
+  if (Use == MachOSymbolUse::ImportSlot) {
+    const uint32_t PointerSize = Image.getPointerSize();
+    for (const auto &[SlotVA, ImportedName] : Image.ImportPtrSlots) {
+      if (!classifyMachOSymbolName(Requested, ImportedName))
+        continue;
+      const Section *Section = Image.getSectionFor(SlotVA);
+      if (!Section ||
+          (Section->Type & SECTION_TYPE) != S_NON_LAZY_SYMBOL_POINTERS) {
+        RecordInvalid(ImportedName);
+        continue;
+      }
+      const Segment *Segment = Image.getSegmentFor(SlotVA);
+      if (!Segment || !Segment->isReadable()) {
+        RecordInvalid(ImportedName);
+        continue;
+      }
+      const uint64_t SectionOffset = SlotVA - Section->VA;
+      const uint64_t SegmentOffset = SlotVA - Segment->VA;
+      if (PointerSize == 0 || SectionOffset > Section->Size ||
+          PointerSize > Section->Size - SectionOffset ||
+          SegmentOffset > Segment->Size ||
+          PointerSize > Segment->Size - SegmentOffset) {
+        RecordInvalid(ImportedName);
+        continue;
+      }
+      Record(ImportedName, SlotVA, MachOSymbolTargetKind::ImportSlot);
     }
-    const uint64_t Target = Image.is64Bit()
-                                ? llvm::support::endian::read64le(Pointer)
-                                : llvm::support::endian::read32le(Pointer);
-    Record(ImportedName, Target, /*IsCode=*/true);
+  } else {
+    for (const auto &[StubVA, ImportIndex] : Image.ImportStubIndices) {
+      if (ImportIndex >= Image.Imports.size())
+        continue;
+      const Import &Item = Image.Imports[ImportIndex];
+      std::optional<MachOSymbolTargetKind> Kind =
+          classifyMappedMachOAddress(Image, StubVA);
+      if (!Kind || *Kind != MachOSymbolTargetKind::Callable) {
+        RecordInvalid(Item.Name);
+        continue;
+      }
+      Record(Item.Name, StubVA, *Kind);
+    }
+    for (const Export &Item : Image.Exports) {
+      std::optional<MachOSymbolTargetKind> Kind =
+          classifyMappedMachOAddress(Image, Item.Addr);
+      if (!Kind || (Use == MachOSymbolUse::Callable &&
+                    *Kind != MachOSymbolTargetKind::Callable)) {
+        RecordInvalid(Item.Name);
+        continue;
+      }
+      Record(Item.Name, Item.Addr, *Kind);
+    }
+    for (const Symbol &Item : Image.Symbols) {
+      std::optional<MachOSymbolTargetKind> Kind =
+          classifyMappedMachOAddress(Image, Item.Addr);
+      if (!Kind ||
+          (Item.IsFunc != (*Kind == MachOSymbolTargetKind::Callable)) ||
+          (Use == MachOSymbolUse::Callable &&
+           *Kind != MachOSymbolTargetKind::Callable)) {
+        RecordInvalid(Item.Name);
+        continue;
+      }
+      Record(Item.Name, Item.Addr, *Kind);
+    }
   }
-  for (const Export &Item : Image.Exports)
-    Record(Item.Name, Item.Addr, IsExecutable(Item.Addr));
-  for (const Import &Item : Image.Imports)
-    Record(Item.Name, Item.IATAddr, IsExecutable(Item.IATAddr));
-  for (const Symbol &Item : Image.Symbols)
-    if (Item.IsFunc)
-      Record(Item.Name, Item.Addr, /*IsCode=*/true);
 
   const bool HasExactEvidence =
       InvalidExactCandidate || !ExactCandidates.empty();
@@ -144,7 +463,7 @@ resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested) {
     return llvm::createStringError(
         llvm::errc::invalid_argument,
         (llvm::Twine("Mach-O symbol '") + Requested +
-         "' has an unreadable pointer-slot candidate")
+         "' has a candidate with invalid address or kind provenance")
             .str());
   if (Candidates.size() > 1)
     return llvm::createStringError(llvm::errc::invalid_argument,
@@ -154,9 +473,13 @@ resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested) {
                                        .str());
   if (Candidates.empty())
     return std::optional<MachOSymbolTarget>();
-  const auto &[Address, IsCode] = *Candidates.begin();
-  return std::optional<MachOSymbolTarget>(MachOSymbolTarget{Address, IsCode});
+  const auto &[Address, Kind] = *Candidates.begin();
+  return std::optional<MachOSymbolTarget>(MachOSymbolTarget{Address, Kind});
 }
+
+} // namespace macho_patch_detail
+
+namespace {
 
 llvm::Expected<MachORewriteTarget>
 resolveMachORewriteTarget(llvm::ArrayRef<uint8_t> Binary, Arch TargetArch,
@@ -1231,25 +1554,76 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
           return Seg && Seg->isExecutable();
         };
         std::optional<std::string> SymbolResolutionFailure;
-        auto Resolve = [&](llvm::StringRef Sym,
-                           uint32_t) -> std::optional<uint64_t> {
-          std::string Name = Sym.str();
+        auto Resolve =
+            [&](const llvm::mc_rewrite::RewriteSymbolResolveRequest &Request)
+            -> std::optional<uint64_t> {
+          std::string Name = Request.Symbol.str();
           if (SymbolResolutionFailure)
             return std::nullopt;
-          auto Target = resolveUniqueMachOSymbol(AuthenticatedImage, Name);
+          auto Use =
+              macho_patch_detail::classifyMachOSymbolUse(TargetArch, Request);
+          if (!Use) {
+            SymbolResolutionFailure = llvm::toString(Use.takeError());
+            return std::nullopt;
+          }
+          auto Target = macho_patch_detail::resolveUniqueMachOSymbol(
+              AuthenticatedImage, Name, *Use);
           if (!Target) {
             SymbolResolutionFailure = llvm::toString(Target.takeError());
             return std::nullopt;
           }
-          if (*Target)
-            return SerializeResolvedCode((*Target)->Address, (*Target)->IsCode);
+          if (*Target) {
+            const bool IsCode =
+                (*Target)->Kind ==
+                macho_patch_detail::MachOSymbolTargetKind::Callable;
+            return SerializeResolvedCode((*Target)->Address, IsCode);
+          }
           if (auto VA = parseNdDataSymbol(Name)) {
+            if (*Use == macho_patch_detail::MachOSymbolUse::ImportSlot) {
+              SymbolResolutionFailure =
+                  (llvm::Twine("Mach-O import-slot reference cannot target '") +
+                   Name + "'")
+                      .str();
+              return std::nullopt;
+            }
+            const Segment *Segment = AuthenticatedImage.getSegmentFor(*VA);
+            if (!Segment || !Segment->isReadable()) {
+              SymbolResolutionFailure =
+                  (llvm::Twine("Mach-O synthetic data symbol '") + Name +
+                   "' is outside authenticated readable memory")
+                      .str();
+              return std::nullopt;
+            }
             bool IsCode = IsExecutable(*VA) &&
                           AuthenticatedImage.CodeRefTargets.count(*VA) != 0;
+            if (*Use == macho_patch_detail::MachOSymbolUse::Callable &&
+                !IsCode) {
+              SymbolResolutionFailure =
+                  (llvm::Twine("Mach-O callable reference cannot target '") +
+                   Name + "' without authenticated code provenance")
+                      .str();
+              return std::nullopt;
+            }
             return SerializeResolvedCode(*VA, IsCode);
           }
-          if (auto VA = parseNdCodePtrSymbol(Name))
+          if (auto VA = parseNdCodePtrSymbol(Name)) {
+            if (*Use != macho_patch_detail::MachOSymbolUse::Direct) {
+              SymbolResolutionFailure =
+                  (llvm::Twine("Mach-O import-slot reference cannot target '") +
+                   Name + "'")
+                      .str();
+              return std::nullopt;
+            }
+            const Segment *Segment = AuthenticatedImage.getSegmentFor(*VA);
+            if (!Segment || !Segment->isReadable()) {
+              SymbolResolutionFailure =
+                  (llvm::Twine("Mach-O synthetic code-pointer table '") + Name +
+                   "' is outside authenticated readable memory")
+                      .str();
+              return std::nullopt;
+            }
             return SerializeResolvedCode(*VA, false);
+          }
           return std::nullopt;
         };
 
@@ -1287,18 +1661,22 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
               << "macho_patch: compileImageForPatch failed\n";
           return false;
         }
+        if (!Img.Unresolved.empty()) {
+          llvm::WithColor::error()
+              << "macho_patch: " << Img.Unresolved.size()
+              << " unresolved symbols; refusing partial patch\n";
+          LLVM_DEBUG({
+            for (const std::string &Unresolved : Img.Unresolved)
+              llvm::dbgs() << "  unresolved: " << Unresolved << "\n";
+          });
+          return false;
+        }
         if (!RewriteTarget->Triple.empty() &&
             (Img.TargetTriple != RewriteTarget->Triple ||
              Img.TargetMode != RewriteTarget->Mode)) {
           llvm::WithColor::error()
               << "macho_patch: compiled target identity does not match the "
                  "authenticated input ABI\n";
-          return false;
-        }
-        if (TargetArch == Arch::ARM && !Img.Unresolved.empty()) {
-          llvm::WithColor::error()
-              << "macho_patch: ARM code targets require exact nlist mode "
-                 "provenance\n";
           return false;
         }
         if (llvm::Error Error = validateSourceFunctionIdentities(
@@ -1409,15 +1787,6 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
           llvm::WithColor::error()
               << "macho_patch: final segment layout validation failed\n";
           return false;
-        }
-
-        if (!Img.Unresolved.empty()) {
-          llvm::WithColor::warning() << "macho_patch: " << Img.Unresolved.size()
-                                     << " unresolved symbols\n";
-          LLVM_DEBUG({
-            for (auto &U : Img.Unresolved)
-              llvm::dbgs() << "  unresolved: " << U << "\n";
-          });
         }
 
         Binary.swap(Candidate);

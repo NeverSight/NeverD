@@ -496,9 +496,8 @@ void expectFlagOnlyTruth(llvm::ArrayRef<uint8_t> Bytes, uint64_t Left,
                              offsetof(RuntimeGuestStateX86_64V1, AF), 8,
                              Truth.AF);
   else
-    EXPECT_EQ(findStateStoreBefore(
-                  *ReturnLoad, State, Layout,
-                  offsetof(RuntimeGuestStateX86_64V1, AF)),
+    EXPECT_EQ(findStateStoreBefore(*ReturnLoad, State, Layout,
+                                   offsetof(RuntimeGuestStateX86_64V1, AF)),
               nullptr);
   expectStateIntegerBefore(*ReturnLoad, State, Layout,
                            offsetof(RuntimeGuestStateX86_64V1, ZF), 8,
@@ -514,10 +513,10 @@ void expectFlagOnlyTruth(llvm::ArrayRef<uint8_t> Bytes, uint64_t Left,
 
 void expectCompareTruth(llvm::ArrayRef<uint8_t> Bytes, uint64_t Left,
                         uint64_t Right) {
-  expectFlagOnlyTruth(Bytes, Left, Right,
-                      referenceArithmetic(Left, Right,
-                                          ReferenceArithmetic::Sub),
-                      /*WritesAF=*/true);
+  expectFlagOnlyTruth(
+      Bytes, Left, Right,
+      referenceArithmetic(Left, Right, ReferenceArithmetic::Sub),
+      /*WritesAF=*/true);
 }
 
 void expectTestTruth(llvm::ArrayRef<uint8_t> Bytes, uint64_t Left,
@@ -1546,13 +1545,18 @@ TEST(X86TranslationBlockLowerer,
     std::vector<uint8_t> Instruction;
   };
   const std::array<TruthVector, 5> Vectors = {{
-      {"equal", 0x123456789abcdef0ULL, 0x123456789abcdef0ULL,
+      {"equal",
+       0x123456789abcdef0ULL,
+       0x123456789abcdef0ULL,
        {0x48, 0x39, 0xd8}},
       {"unsigned-borrow", 0, 1, {0x48, 0x3b, 0xc3}},
       {"signed-overflow", uint64_t{1} << 63, 1, {0x48, 0x39, 0xd8}},
-      {"negative-imm8", 0, std::numeric_limits<uint64_t>::max(),
+      {"negative-imm8",
+       0,
+       std::numeric_limits<uint64_t>::max(),
        {0x48, 0x83, 0xf8, 0xff}},
-      {"negative-imm32", std::numeric_limits<int64_t>::max(),
+      {"negative-imm32",
+       std::numeric_limits<int64_t>::max(),
        static_cast<uint64_t>(
            static_cast<int64_t>(std::numeric_limits<int32_t>::min())),
        {0x48, 0x3d, 0x00, 0x00, 0x00, 0x80}},
@@ -1560,8 +1564,8 @@ TEST(X86TranslationBlockLowerer,
 
   for (const TruthVector &Vector : Vectors) {
     SCOPED_TRACE(Vector.Name);
-    const std::vector<uint8_t> Bytes = registerArithmeticBlock(
-        Vector.Left, Vector.Right, Vector.Instruction);
+    const std::vector<uint8_t> Bytes =
+        registerArithmeticBlock(Vector.Left, Vector.Right, Vector.Instruction);
     expectCompareTruth(Bytes, Vector.Left, Vector.Right);
   }
 }
@@ -1575,22 +1579,28 @@ TEST(X86TranslationBlockLowerer,
     std::vector<uint8_t> Instruction;
   };
   const std::array<TruthVector, 4> Vectors = {{
-      {"zero", 0xaaaaaaaaaaaaaaaaULL, 0x5555555555555555ULL,
+      {"zero",
+       0xaaaaaaaaaaaaaaaaULL,
+       0x5555555555555555ULL,
        {0x48, 0x85, 0xd8}},
-      {"negative", uint64_t{1} << 63, std::numeric_limits<uint64_t>::max(),
+      {"negative",
+       uint64_t{1} << 63,
+       std::numeric_limits<uint64_t>::max(),
        {0x48, 0x85, 0xd8}},
-      {"negative-group-imm32", 0x8040201008040201ULL,
+      {"negative-group-imm32",
+       0x8040201008040201ULL,
        std::numeric_limits<uint64_t>::max(),
        {0x48, 0xf7, 0xc0, 0xff, 0xff, 0xff, 0xff}},
-      {"negative-accumulator-imm32", 0x8040201008040201ULL,
+      {"negative-accumulator-imm32",
+       0x8040201008040201ULL,
        std::numeric_limits<uint64_t>::max(),
        {0x48, 0xa9, 0xff, 0xff, 0xff, 0xff}},
   }};
 
   for (const TruthVector &Vector : Vectors) {
     SCOPED_TRACE(Vector.Name);
-    const std::vector<uint8_t> Bytes = registerArithmeticBlock(
-        Vector.Left, Vector.Right, Vector.Instruction);
+    const std::vector<uint8_t> Bytes =
+        registerArithmeticBlock(Vector.Left, Vector.Right, Vector.Instruction);
     expectTestTruth(Bytes, Vector.Left, Vector.Right);
   }
 }
@@ -1716,13 +1726,14 @@ TEST(X86TranslationBlockLowerer,
     ASSERT_FALSE(Block.Ops.empty());
     ASSERT_EQ(Block.Ops[0].NumInputs, 2u);
     std::swap(Block.Ops[0].Inputs[0], Block.Ops[0].Inputs[1]);
-    ASSERT_FALSE(static_cast<bool>(validateTranslationBlockDescriptorV1(Block)));
+    ASSERT_FALSE(
+        static_cast<bool>(validateTranslationBlockDescriptorV1(Block)));
 
     llvm::LLVMContext Context;
-    expectLoweringError(
-        lowerX86TranslationBlockV1(Block, resolvedAArch64(),
-                                   aarch64DataLayout(), Context),
-        TranslationBlockLoweringErrorCode::InvalidDescriptor);
+    expectLoweringError(lowerX86TranslationBlockV1(Block, resolvedAArch64(),
+                                                   aarch64DataLayout(),
+                                                   Context),
+                        TranslationBlockLoweringErrorCode::InvalidDescriptor);
   }
 }
 

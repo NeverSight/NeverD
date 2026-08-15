@@ -358,6 +358,13 @@ nuovo segmento RX viene confermato solo dopo aver provato un `__LINKEDIT` unico 
 terminale nel file e nello spazio VM, shift degli offset con aritmetica controllata
 e un replay rigoroso del layout finale.
 
+I riferimenti esterni vengono classificati dal contratto MC fixup completo. Le
+call possono selezionare solo target callable autenticati; i campi personality
+del compact unwind generato possono selezionare solo non-lazy pointer slot
+validati, senza mai dereferenziarne il contenuto nel file. TLS, authenticated
+pointer, termini sottratti, campi compact malformati e forme di relocation
+sconosciute falliscono in modalità fail-closed.
+
 Nel compact unwind ARM32, lo stack adjustment codificato e il layout GPR sono
 `Complete`. Anche i selettori di pattern dei registri D da 0 a 3 sono `Complete`;
 quelli da 4 a 7 sono `Partial` perché il compact word da solo non prova ogni slot

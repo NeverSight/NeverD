@@ -13,6 +13,7 @@
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/object/SectionNames.h"
@@ -1000,6 +1001,10 @@ constexpr uint64_t kTransactionMayThrowVA = kTransactionFunctionVA + 0x20;
 constexpr uint64_t kTransactionUnwindResumeVA = kTransactionFunctionVA + 0x30;
 constexpr uint64_t kTransactionPersonalitySlotVA =
     kImageBase + kTransactionGOTOff;
+constexpr uint32_t kClassicBindStubOff =
+    kTransactionTextOff + kTransactionTextSize;
+constexpr uint64_t kClassicBindStubVA = kImageBase + kClassicBindStubOff;
+constexpr uint32_t kClassicBindStreamOff = kTransactionLinkeditOff + 0x90;
 
 struct MachOPatchTransactionFixture {
   std::vector<uint8_t> Binary;
@@ -1265,6 +1270,134 @@ makeMachOPatchTransactionFixture(size_t CompactCapacity) {
   return Fixture;
 }
 
+std::vector<uint8_t>
+makeClassicDyldStubAndZeroGOTFixture(size_t CompactCapacity) {
+  using namespace llvm::MachO;
+
+  MachOPatchTransactionFixture Fixture =
+      makeMachOPatchTransactionFixture(CompactCapacity);
+  if (Fixture.Binary.empty())
+    return {};
+
+  auto *Header = reinterpret_cast<mach_header_64 *>(Fixture.Binary.data());
+  auto *TextSegment = reinterpret_cast<segment_command_64 *>(Header + 1);
+  const uint32_t OldTextCommandSize = TextSegment->cmdsize;
+  const uint32_t OldCommandSize = Header->sizeofcmds;
+  constexpr uint32_t StubSectionCommandSize = sizeof(section_64);
+  constexpr char DylibName[] = "/usr/lib/libSystem.B.dylib";
+  constexpr uint32_t DylibCommandSize = 56;
+  static_assert(sizeof(dylib_command) + sizeof(DylibName) <= DylibCommandSize);
+  constexpr uint32_t AddedLoadCommandSize =
+      sizeof(dyld_info_command) + DylibCommandSize;
+  const uint64_t NewCommandsEnd = sizeof(mach_header_64) + OldCommandSize +
+                                  StubSectionCommandSize + AddedLoadCommandSize;
+  if (OldTextCommandSize > OldCommandSize ||
+      NewCommandsEnd > kTransactionTextOff) {
+    ADD_FAILURE() << "classic-bind fixture load commands overlap __text";
+    return {};
+  }
+
+  uint8_t *FollowingCommands =
+      reinterpret_cast<uint8_t *>(TextSegment) + OldTextCommandSize;
+  std::memmove(FollowingCommands + StubSectionCommandSize, FollowingCommands,
+               OldCommandSize - OldTextCommandSize);
+  std::memset(FollowingCommands, 0, StubSectionCommandSize);
+  TextSegment->cmdsize += StubSectionCommandSize;
+  ++TextSegment->nsects;
+  Header->sizeofcmds += StubSectionCommandSize;
+
+  auto *TextSections = reinterpret_cast<section_64 *>(TextSegment + 1);
+  section_64 &StubSection = TextSections[TextSegment->nsects - 1];
+  setMachOName(StubSection.sectname, "__stubs");
+  setMachOName(StubSection.segname, section_names::macho::TextSeg);
+  StubSection.addr = kClassicBindStubVA;
+  StubSection.size = 12;
+  StubSection.offset = kClassicBindStubOff;
+  StubSection.align = 2;
+  StubSection.flags = static_cast<uint32_t>(S_SYMBOL_STUBS) |
+                      static_cast<uint32_t>(S_ATTR_PURE_INSTRUCTIONS) |
+                      static_cast<uint32_t>(S_ATTR_SOME_INSTRUCTIONS);
+  StubSection.reserved1 = 0;
+  StubSection.reserved2 = 12;
+
+  auto *DataSegment = reinterpret_cast<segment_command_64 *>(
+      reinterpret_cast<uint8_t *>(TextSegment) + TextSegment->cmdsize);
+  auto *GOTSection = reinterpret_cast<section_64 *>(DataSegment + 1);
+  GOTSection->size = sizeof(uint64_t);
+  GOTSection->reserved1 = 1;
+
+  uint8_t *AddedCommand =
+      Fixture.Binary.data() + sizeof(mach_header_64) + Header->sizeofcmds;
+  auto *Dylib = reinterpret_cast<dylib_command *>(AddedCommand);
+  std::memset(Dylib, 0, DylibCommandSize);
+  Dylib->cmd = LC_LOAD_DYLIB;
+  Dylib->cmdsize = DylibCommandSize;
+  Dylib->dylib.name = sizeof(dylib_command);
+  Dylib->dylib.current_version = 0x10000;
+  Dylib->dylib.compatibility_version = 0x10000;
+  std::memcpy(AddedCommand + sizeof(dylib_command), DylibName,
+              sizeof(DylibName));
+
+  AddedCommand += DylibCommandSize;
+  auto *DyldInfo = reinterpret_cast<dyld_info_command *>(AddedCommand);
+  std::memset(DyldInfo, 0, sizeof(*DyldInfo));
+  DyldInfo->cmd = LC_DYLD_INFO_ONLY;
+  DyldInfo->cmdsize = sizeof(*DyldInfo);
+
+  constexpr std::array<uint8_t, 25> BindStream = {
+      static_cast<uint8_t>(BIND_OPCODE_SET_DYLIB_ORDINAL_IMM | 1),
+      static_cast<uint8_t>(BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM),
+      '_',
+      't',
+      'e',
+      's',
+      't',
+      '_',
+      'p',
+      'e',
+      'r',
+      's',
+      'o',
+      'n',
+      'a',
+      'l',
+      'i',
+      't',
+      'y',
+      0,
+      static_cast<uint8_t>(BIND_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(BIND_TYPE_POINTER),
+      static_cast<uint8_t>(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+      0x80,
+      0x20,
+      static_cast<uint8_t>(BIND_OPCODE_DO_BIND)};
+  static_assert(kClassicBindStreamOff + BindStream.size() + 1 <=
+                kTransactionLinkeditOff + kTransactionLinkeditSize);
+  std::copy(BindStream.begin(), BindStream.end(),
+            Fixture.Binary.begin() + kClassicBindStreamOff);
+  Fixture.Binary[kClassicBindStreamOff + BindStream.size()] = BIND_OPCODE_DONE;
+  DyldInfo->bind_off = kClassicBindStreamOff;
+  DyldInfo->bind_size = BindStream.size() + 1;
+
+  Header->ncmds += 2;
+  Header->sizeofcmds += AddedLoadCommandSize;
+
+  llvm::support::endian::write32le(Fixture.Binary.data() + kClassicBindStubOff,
+                                   0x90000110);
+  llvm::support::endian::write32le(
+      Fixture.Binary.data() + kClassicBindStubOff + 4, 0xf9400210);
+  llvm::support::endian::write32le(
+      Fixture.Binary.data() + kClassicBindStubOff + 8, 0xd61f0200);
+  llvm::support::endian::write64le(Fixture.Binary.data() + kTransactionGOTOff,
+                                   0);
+  llvm::support::endian::write32le(
+      Fixture.Binary.data() + kTransactionIndirectTableOff, 0);
+  llvm::support::endian::write32le(
+      Fixture.Binary.data() + kTransactionIndirectTableOff + sizeof(uint32_t),
+      0);
+  return std::move(Fixture.Binary);
+}
+
 llvm::MachO::dysymtab_command *
 findMutableDysymtabCommand(std::vector<uint8_t> &Binary) {
   llvm::MachO::dysymtab_command *Result = nullptr;
@@ -1285,6 +1418,21 @@ TEST(MachOImportPtrSlots, ReconstructsExactRawSlotSymbolIdentity) {
   ASSERT_FALSE(Fixture.Binary.empty());
 
   auto Slots = macho_loader::parseImportPtrSlots(Fixture.Binary);
+  ASSERT_TRUE(static_cast<bool>(Slots)) << llvm::toString(Slots.takeError());
+  ASSERT_EQ(Slots->size(), 1u);
+  EXPECT_EQ(Slots->at(kTransactionPersonalitySlotVA), "_test_personality");
+}
+
+TEST(MachOImportPtrSlots,
+     ReconstructsZeroFilledClassicBindSlotSharedWithAStub) {
+  const std::vector<uint8_t> Binary =
+      makeClassicDyldStubAndZeroGOTFixture(/*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Binary.empty());
+  ASSERT_LE(kTransactionGOTOff + sizeof(uint64_t), Binary.size());
+  EXPECT_EQ(llvm::support::endian::read64le(Binary.data() + kTransactionGOTOff),
+            0u);
+
+  auto Slots = macho_loader::parseImportPtrSlots(Binary);
   ASSERT_TRUE(static_cast<bool>(Slots)) << llvm::toString(Slots.takeError());
   ASSERT_EQ(Slots->size(), 1u);
   EXPECT_EQ(Slots->at(kTransactionPersonalitySlotVA), "_test_personality");
@@ -3839,6 +3987,70 @@ TEST(MachOCompactUnwindInstall,
   expectInstallFailure(applyMachOCompactUnwindInstall(Binary, *Plan),
                        InstallFailure::ArchitectureMismatch);
   EXPECT_EQ(Binary, BeforeApply);
+}
+
+TEST(MachOPatchTransaction,
+     ResolvesSameClassicBindSymbolAsStubAndZeroFilledPersonalitySlot) {
+  const std::vector<uint8_t> Binary =
+      makeClassicDyldStubAndZeroGOTFixture(/*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Binary.empty());
+  ASSERT_LE(kTransactionGOTOff + sizeof(uint64_t), Binary.size());
+  EXPECT_EQ(llvm::support::endian::read64le(Binary.data() + kTransactionGOTOff),
+            0u);
+
+  llvm::SmallString<128> InputPath;
+  llvm::SmallString<128> OutputPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-macho-patch-classic-bind-input", "macho", InputPath));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-macho-patch-classic-bind-output", "macho", OutputPath));
+  llvm::FileRemover RemoveInput(InputPath);
+  llvm::FileRemover RemoveOutput(OutputPath);
+  ASSERT_TRUE(writeFixtureFile(InputPath, Binary));
+
+  MachOLoader Loader;
+  auto Loaded = Loader.load(InputPath.str().str());
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
+  ASSERT_EQ(Loaded->ImportPtrSlots.size(), 1u);
+  EXPECT_EQ(Loaded->ImportPtrSlots.at(kTransactionPersonalitySlotVA),
+            "_test_personality");
+  const auto StubImport =
+      llvm::find_if(Loaded->Imports, [](const Import &Item) {
+        return Item.Name == "_test_personality";
+      });
+  ASSERT_NE(StubImport, Loaded->Imports.end());
+  EXPECT_EQ(StubImport->IATAddr, kClassicBindStubVA);
+  EXPECT_EQ(StubImport->Module, "/usr/lib/libSystem.B.dylib");
+  EXPECT_EQ(llvm::count_if(Loaded->Imports,
+                           [](const Import &Item) {
+                             return Item.Name == "_test_personality";
+                           }),
+            1u);
+  const Segment *StubSegment = Loaded->getSegmentFor(kClassicBindStubVA);
+  ASSERT_NE(StubSegment, nullptr);
+  EXPECT_TRUE(StubSegment->isExecutable());
+
+  llvm::LLVMContext Context;
+  auto Module = makeMachOPatchTransactionModule(Context);
+  llvm::Function *Lifted = Module->getFunction("lifted_source_function");
+  llvm::Function *Personality = Module->getFunction("test_personality");
+  ASSERT_NE(Lifted, nullptr);
+  ASSERT_NE(Personality, nullptr);
+  llvm::IRBuilder<> Builder(&*Lifted->getEntryBlock().getFirstInsertionPt());
+  Builder.CreateCall(Personality);
+
+  MachOPatcher Patcher;
+  testing::internal::CaptureStderr();
+  PatchResult Result = Patcher.patch(
+      InputPath.str().str(), OutputPath.str().str(), *Module, Arch::AArch64);
+  const std::string Diagnostic = testing::internal::GetCapturedStderr();
+
+  ASSERT_TRUE(Result.Success) << Diagnostic;
+  EXPECT_EQ(readFixtureFile(InputPath), Binary);
+  const std::vector<uint8_t> Output = readFixtureFile(OutputPath);
+  ASSERT_GT(Output.size(), Binary.size());
+  expectStrictInjectedSegmentLayout(Output, kDefaultNdTextSegment,
+                                    Arch::AArch64);
 }
 
 TEST(MachOPatchTransaction,

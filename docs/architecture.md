@@ -330,6 +330,12 @@ installed and the transaction may proceed only through the exact authenticated
 DWARF-FDE closure above; an existing but undersized or malformed final section
 still fails closed. A linked native throw/catch proof is still pending.
 
+External references are classified from the complete MC fixup contract. Calls
+may select only authenticated callable targets; generated compact-unwind
+personality fields may select only validated non-lazy pointer slots, whose file
+contents are never dereferenced. TLS, authenticated-pointer, subtractive,
+malformed compact-field, and unknown relocation forms fail closed.
+
 For ARM32 compact unwind, encoded stack adjustment and GPR layout have
 `Complete` semantic status. D-register pattern selectors 0 through 3 are also
 `Complete`; selectors 4 through 7 are `Partial` because the compact word alone

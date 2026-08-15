@@ -372,6 +372,13 @@ exakte Zielarchitektur, Pointer-Breite und Byte-Reihenfolge; Compact-Unwind-
 DWARF-Binding lehnt jede abweichende Receipt-Target-Identity ab. Ein gelinkter
 nativer Throw/Catch-Nachweis fehlt weiterhin.
 
+Externe Referenzen werden anhand des vollständigen MC-Fixup-Vertrags
+klassifiziert. Aufrufe dürfen nur authentifizierte aufrufbare Ziele auswählen;
+Personality-Felder des erzeugten Compact Unwind dürfen nur validierte Non-Lazy-
+Pointer-Slots auswählen, ohne deren Dateiinhalt zu dereferenzieren. TLS,
+authentifizierte Pointer, subtraktive Referenzen, fehlerhafte Compact-Felder und
+unbekannte Relocation-Formen scheitern fail-closed.
+
 Die übergeordnete ARM32-Section-Transaktion ist enger gefasst als der
 Compact-Unwind-Decoder. Sie wird nur freigeschaltet, wenn der Mach-O-Header
 exakt `CPU_SUBTYPE_ARM_V7K` angibt und die `N_ARM_THUMB_DEF`-Bits der

@@ -349,6 +349,12 @@ recipe; отсутствующая, повторная, висячая, cross-ow
 точное аутентифицированное замыкание DWARF-FDE; существующая, но слишком малая
 или malformed итоговая секция по-прежнему приводит к fail-closed.
 
+Внешние ссылки классифицируются по полному контракту MC fixup. Вызовы могут
+выбирать только аутентифицированные callable-цели, а personality-поля созданного
+compact unwind — только проверенные non-lazy pointer slots без разыменования их
+содержимого в файле. TLS, authenticated pointer, вычитаемые, malformed compact
+fields и неизвестные формы relocation приводят к fail-closed.
+
 Для ARM32 compact unwind закодированные stack adjustment и GPR layout имеют
 статус `Complete`. Селекторы D-register pattern от 0 до 3 также `Complete`; от 4 до
 7 — `Partial`, поскольку один compact word не доказывает каждый выровненный во
