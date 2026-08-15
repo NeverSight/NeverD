@@ -46,6 +46,10 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names) {
   // +jsconv the backend cannot select the `fjcvtzs` instruction.
   if (Has("aarch64.fjcvtzs"))
     F += ",+jsconv";
+  // BFMMLA is a FEAT_BF16 instruction.  Its LLVM intrinsic is otherwise
+  // well-typed but cannot be selected by the generic AArch64 subtarget.
+  if (Has("aarch64.neon.bfmmla"))
+    F += ",+bf16";
   if (Has("aarch64.neon.famax") || Has("aarch64.neon.famin"))
     F += ",+faminmax";
   if (Has("aarch64.sve"))

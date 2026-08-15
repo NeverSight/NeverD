@@ -83,7 +83,6 @@ bool liftBF16(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_BFMLAL:
   case AARCH64_INS_BFMLALB:
   case AARCH64_INS_BFMLALT:
-  case AARCH64_INS_BFMMLA:
   case AARCH64_INS_BFMOPA:
   case AARCH64_INS_BFMOPS: {
     if (ARM64.op_count < 3)
@@ -94,6 +93,16 @@ bool liftBF16(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdVar Prod = S.makeTemp(Dst.Size);
     S.emit(NdOp::FLOAT_MULT, Prod, {A, B});
     S.emit(NdOp::FLOAT_ADD, Dst, {Dst, Prod});
+    break;
+  }
+  case AARCH64_INS_BFMMLA: {
+    if (ARM64.op_count < 3)
+      break;
+    NdVar Dst = L.operandWrite(ARM64.operands[0]);
+    NdVar Acc = L.operandRead(S, ARM64.operands[0]);
+    NdVar A = L.operandRead(S, ARM64.operands[1]);
+    NdVar B = L.operandRead(S, ARM64.operands[2]);
+    S.emitIntrinsic(Intrinsic::A64_Bfmmla, Dst, {Acc, A, B});
     break;
   }
   case AARCH64_INS_BFMLS:

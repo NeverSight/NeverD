@@ -118,6 +118,27 @@ float test_frecpx_a64(float input) {
   return result;
 }
 
+unsigned long test_bfmmla_a64(unsigned long acc_lo, unsigned long acc_hi,
+                              unsigned long lhs_lo, unsigned long lhs_hi,
+                              unsigned long rhs_lo, unsigned long rhs_hi) {
+  unsigned long result_lo;
+  unsigned long result_hi;
+  __asm__ volatile("fmov d0, %2\n\t"
+                   "mov v0.d[1], %3\n\t"
+                   "fmov d1, %4\n\t"
+                   "mov v1.d[1], %5\n\t"
+                   "fmov d2, %6\n\t"
+                   "mov v2.d[1], %7\n\t"
+                   "bfmmla v0.4s, v1.8h, v2.8h\n\t"
+                   "fmov %0, d0\n\t"
+                   "mov %1, v0.d[1]"
+                   : "=r"(result_lo), "=r"(result_hi)
+                   : "r"(acc_lo), "r"(acc_hi), "r"(lhs_lo), "r"(lhs_hi),
+                     "r"(rhs_lo), "r"(rhs_hi)
+                   : "v0", "v1", "v2");
+  return result_lo ^ result_hi;
+}
+
 double test_fmadd_a64(double a, double b, double c) {
     double result;
     __asm__ volatile (

@@ -12,7 +12,7 @@ protected:
 
     auto syntax = exec(NEVERD_TEST_CLANG,
                        {"-target", "aarch64-none-elf", "-ffreestanding",
-                        "-march=armv8.3-a+jscvt", "-std=gnu11", "-I",
+                        "-march=armv8.6-a+bf16", "-std=gnu11", "-I",
                         tmp().string(), "-fsyntax-only", CFile.string()});
     EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << Source;
   }
@@ -151,6 +151,35 @@ TEST_F(AArch64_FP, FrecpxHighCUsesACLEAndCompiles) {
   EXPECT_NE(F.find("vrecpxs_f32"), std::string::npos) << F;
   EXPECT_NE(F.find("__builtin_bit_cast(float"), std::string::npos) << F;
   EXPECT_EQ(F.find("vrecpe"), std::string::npos) << F;
+
+  expectPairedClangSyntax(cFile, source);
+}
+
+TEST_F(AArch64_FP, BfmmlaUsesDedicatedLLVMIntrinsic) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+  auto F = functionIR(r.out, "test_bfmmla_a64");
+  ASSERT_FALSE(F.empty()) << r.out;
+
+  EXPECT_NE(F.find("@llvm.aarch64.neon.bfmmla"), std::string::npos) << F;
+  EXPECT_EQ(F.find("fmul double"), std::string::npos) << F;
+}
+
+TEST_F(AArch64_FP, BfmmlaHighCUsesACLEAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  auto F = functionSource(source, "test_bfmmla_a64");
+  ASSERT_FALSE(F.empty()) << source;
+  EXPECT_NE(F.find("vbfmmlaq_f32"), std::string::npos) << F;
+  EXPECT_NE(F.find("bfloat16x8_t"), std::string::npos) << F;
+  EXPECT_EQ(F.find("__neverd"), std::string::npos) << F;
 
   expectPairedClangSyntax(cFile, source);
 }

@@ -149,3 +149,7 @@ A64_Rcwscasp, A64_Rcwscaspa, A64_Rcwscaspal, A64_Rcwscaspl,
 // Scalar FP reciprocal exponent.  LLVM and ACLE both provide dedicated
 // FRECPX intrinsics; keep it distinct from the reciprocal estimate family.
 A64_Frecpx,
+
+// BF16 matrix multiply-accumulate.  The destination is four f32 accumulators;
+// both multiplicands are eight packed bfloat16 lanes.
+A64_Bfmmla,

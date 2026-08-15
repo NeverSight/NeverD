@@ -514,6 +514,36 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     return (IntTy == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
   }
 
+  // BFMMLA treats its 128-bit operands as four f32 accumulators and two
+  // matrices of eight bfloat16 elements.  A scalar floating multiply-add loses
+  // three result lanes and interprets the source bits with the wrong format.
+  if (IC == I::A64_Bfmmla && Op.Output.Size == 16 && Op.NumInputs >= 4) {
+    auto *OutTy = sizeToType(Op.Output.Size);
+    auto *I128Ty = llvm::IntegerType::get(*Ctx, 128);
+    auto *V4F32Ty = llvm::FixedVectorType::get(llvm::Type::getFloatTy(*Ctx), 4);
+    auto *V8BF16Ty =
+        llvm::FixedVectorType::get(llvm::Type::getBFloatTy(*Ctx), 8);
+    auto toI128 = [&](const MedVar &In) -> llvm::Value * {
+      llvm::Value *V = getVar(In, Builder);
+      if (V->getType()->isPointerTy())
+        V = Builder.CreatePtrToInt(V, I128Ty);
+      if (V->getType() == I128Ty)
+        return V;
+      if (V->getType()->getPrimitiveSizeInBits() == 128)
+        return Builder.CreateBitCast(V, I128Ty);
+      return Builder.CreateZExtOrTrunc(V, I128Ty);
+    };
+
+    llvm::Value *Acc = Builder.CreateBitCast(toI128(Op.Inputs[1]), V4F32Ty);
+    llvm::Value *A = Builder.CreateBitCast(toI128(Op.Inputs[2]), V8BF16Ty);
+    llvm::Value *B = Builder.CreateBitCast(toI128(Op.Inputs[3]), V8BF16Ty);
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_neon_bfmmla);
+    llvm::Value *R = Builder.CreateCall(Fn, {Acc, A, B}, "bfmmla");
+    R = Builder.CreateBitCast(R, I128Ty);
+    return (I128Ty == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
+  }
+
   // NEON reciprocal / reciprocal-sqrt estimate & step and FEAT_FAMINMAX.
   // The estimates are
   // architecturally-defined approximations that cannot be expressed as plain FP

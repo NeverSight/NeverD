@@ -8,13 +8,43 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "RewriteCodegenHarness.h"
-
 #include "UnicornSemanticFixture.h"
+
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IntrinsicsAArch64.h"
 
 using namespace neverd;
 using namespace rwcg;
+
+TEST(RewriteCodegen_AArch64, BfmmlaEnablesBF16) {
+  ensureLLVMTargets();
+
+  llvm::LLVMContext Ctx;
+  auto Mod = std::make_unique<llvm::Module>("bfmmla", Ctx);
+  Mod->setTargetTriple(llvm::Triple("aarch64-unknown-linux-elf"));
+  auto *V4F32 = llvm::FixedVectorType::get(llvm::Type::getFloatTy(Ctx), 4);
+  auto *V8BF16 = llvm::FixedVectorType::get(llvm::Type::getBFloatTy(Ctx), 8);
+  auto *FnTy = llvm::FunctionType::get(V4F32, {V4F32, V8BF16, V8BF16}, false);
+  auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                    "bfmmla", *Mod);
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", Fn);
+  llvm::IRBuilder<> Builder(Entry);
+  auto Arg = Fn->arg_begin();
+  llvm::Value *Acc = &*Arg++;
+  llvm::Value *A = &*Arg++;
+  llvm::Value *B = &*Arg;
+  auto *BFMMLA = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_neon_bfmmla);
+  Builder.CreateRet(Builder.CreateCall(BFMMLA, {Acc, A, B}));
+
+  auto RR = compileRewrite(*Mod, Arch::AArch64, BinaryFormat::ELF);
+  ASSERT_FALSE(RR.Sections.empty());
+  ASSERT_TRUE(RR.Unresolved.empty());
+  auto *Text = findTextSection(RR);
+  ASSERT_NE(Text, nullptr);
+  ASSERT_FALSE(Text->Bytes.empty());
+}
 
 TEST(RewriteCodegen_AArch64, AddFunction) {
   ensureLLVMTargets();

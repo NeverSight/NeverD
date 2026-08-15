@@ -118,6 +118,19 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_Bfmmla: {
+    if (Ops.size() < 3)
+      return {};
+    auto BitCastArg = [&](const char *Type, const std::string &Arg) {
+      return std::string("__builtin_bit_cast(") + Type +
+             ", (unsigned __int128)(" + Arg + "))";
+    };
+    HasCIntrinsics = true;
+    return "__builtin_bit_cast(unsigned __int128, vbfmmlaq_f32(" +
+           BitCastArg("float32x4_t", Ops[0]) + ", " +
+           BitCastArg("bfloat16x8_t", Ops[1]) + ", " +
+           BitCastArg("bfloat16x8_t", Ops[2]) + "))";
+  }
   case I::A64_Frecpx: {
     if (Ops.size() < 2)
       return {};
