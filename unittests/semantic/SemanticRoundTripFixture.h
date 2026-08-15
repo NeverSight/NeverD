@@ -96,6 +96,11 @@ struct RoundTripTC {
   /// (External-mem* argument recovery — the VA-0 arity collision and the i386
   /// cdecl stack-arg order — is fixed in MedABIPass; see §15.2 arm32-memset-note.)
   bool LinkMemBuiltins = true;
+
+  /// Initial FPCR value for AArch64 emulation.  This lets a test exercise an
+  /// instruction under directed rounding without depending on FPCR system-
+  /// register lifting, which is a separate semantic concern.
+  uint64_t InitialAArch64FPCR = 0;
 };
 
 inline std::ostream &operator<<(std::ostream &OS, const RoundTripTC &TC) {
@@ -342,7 +347,7 @@ private:
     // ---- Step 4: Run original in Unicorn ----
     auto OrigState = emulateFunction(
         UcArch, UcMode, OrigSections.Text, TC.Args, ParamRegs, SPReg, RetReg,
-        IsARM32, {}, 0, TC.UcCpuModel);
+        IsARM32, {}, 0, TC.UcCpuModel, TC.InitialAArch64FPCR);
     ASSERT_TRUE(OrigState.OK)
         << "Original emulation failed: " << OrigState.Error
         << "\n  Test: " << TC.Name;
@@ -387,7 +392,7 @@ private:
     // ---- Step 7: Run recompiled in Unicorn (same ABI) ----
     auto RecompState = emulateFunction(
         UcArch, UcMode, RecompSections.Text, TC.Args, ParamRegs, SPReg, RetReg,
-        IsARM32, {}, 0, TC.UcCpuModel);
+        IsARM32, {}, 0, TC.UcCpuModel, TC.InitialAArch64FPCR);
     ASSERT_TRUE(RecompState.OK)
         << "Recompiled emulation failed: " << RecompState.Error
         << "\n  Test: " << TC.Name;
@@ -416,7 +421,8 @@ private:
                              bool IsARM32 = false,
                              const std::vector<uint8_t> &Rodata = {},
                              uint64_t RodataAddr = 0,
-                             int UcCpuModel = -1) {
+                             int UcCpuModel = -1,
+                             uint64_t InitialAArch64FPCR = 0) {
     FuncResult R;
     uc_engine *UC = nullptr;
     uc_err Err = uc_open(Arch, Mode, &UC);
@@ -485,6 +491,8 @@ private:
     }
 
     if (Arch == UC_ARCH_ARM64) {
+      uint64_t FPCR = InitialAArch64FPCR;
+      uc_reg_write(UC, UC_ARM64_REG_FPCR, &FPCR);
       uint64_t LR = CODE_BASE + RetLanding;
       uc_reg_write(UC, UC_ARM64_REG_X30, &LR);
     }

@@ -1283,3 +1283,39 @@ target_link_libraries(NeverDFP16ConvTests PRIVATE
 if(TARGET neverd)
   add_dependencies(NeverDFP16ConvTests neverd)
 endif()
+
+# Focused target for one-rounding FMA regressions.  The TU also remains in the
+# aggregate semantic suite used by Linux CI.
+add_neverd_unittest(NeverDFMARoundingTests
+  allplatform/fp/AllPlatform_FMARoundingRTTests.cpp
+  TIMEOUT 120
+)
+
+target_compile_definitions(NeverDFMARoundingTests PRIVATE
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_include_directories(NeverDFMARoundingTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+  ${CMAKE_SOURCE_DIR}/third_party/unicorn/include
+)
+
+target_link_libraries(NeverDFMARoundingTests PRIVATE
+  unicorn
+  neverd_shared
+  NeverDPassMIR
+  LLVMMC
+  LLVMMCParser
+  LLVMObject
+  LLVMX86AsmParser LLVMX86Desc LLVMX86Info
+  LLVMAArch64AsmParser LLVMAArch64Desc LLVMAArch64Info
+  LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
+  LLVMSupport
+)
+
+if(TARGET neverd)
+  add_dependencies(NeverDFMARoundingTests neverd)
+endif()

@@ -126,8 +126,22 @@ static const std::vector<RoundTripTC> kX64 =
     makeFMATC("x64fma", "long", "-mfma -fno-math-errno", "", -1);
 static const std::vector<RoundTripTC> kX86 =
     makeFMATC("x86fma", "int", "-mfma -fno-math-errno", "", -1);
-static const std::vector<RoundTripTC> kA64 =
-    makeFMATC("a64fma", "long", "-fno-math-errno", "", -1);
+static std::vector<RoundTripTC> makeA64FMATC() {
+  auto Cases = makeFMATC("a64fma", "long", "-fno-math-errno", "", -1);
+  RoundTripTC Directed{
+      "a64_fnmadd_upward",
+      "long a64_fnmadd_upward(long a){ double one=1.0,tail,r; unsigned long bits;\n"
+      "  __builtin_memcpy(&tail,&a,8);\n"
+      "  __asm__ volatile(\"fnmadd %d0,%d1,%d2,%d3\":\"=w\"(r):\"w\"(one),\"w\"(one),\"w\"(tail));\n"
+      "  __builtin_memcpy(&bits,&r,8); return (long)bits; }\n",
+      {0x3CA8000000000000ULL}, "FMARounding", 0, "-fno-math-errno"};
+  // FPCR.RMode = 01: round toward positive infinity.  The exact result is
+  // -(1.0 + 0.75 ulp), which FNMADD rounds to -1.0 in one step.
+  Directed.InitialAArch64FPCR = 1ULL << 22;
+  Cases.push_back(Directed);
+  return Cases;
+}
+static const std::vector<RoundTripTC> kA64 = makeA64FMATC();
 static const std::vector<RoundTripTC> kARM =
     makeFMATC("armfma", "int", "-mfpu=neon-vfpv4 -fno-math-errno", "",
               UC_CPU_ARM_MAX);

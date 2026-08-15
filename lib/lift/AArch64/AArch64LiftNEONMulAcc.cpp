@@ -219,10 +219,13 @@ bool liftNEONMulAcc(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdVar A = L.operandRead(S, ARM64.operands[1]);
     NdVar B = L.operandRead(S, ARM64.operands[2]);
     NdVar C = L.operandRead(S, ARM64.operands[3]);
-    // Fused: -(C + A*B) = -fma(A,B,C).
-    NdVar Sum = S.makeTemp(Dst.Size);
-    S.emit(NdOp::FLOAT_FMA, Sum, {A, B, C});
-    S.emit(NdOp::FLOAT_NEG, Dst, {Sum});
+    // Keep the negation inside the fused operation.  Negating an already
+    // rounded fma(A, B, C) gives the wrong result under directed rounding.
+    NdVar NA = S.makeTemp(Dst.Size);
+    NdVar NC = S.makeTemp(Dst.Size);
+    S.emit(NdOp::FLOAT_NEG, NA, {A});
+    S.emit(NdOp::FLOAT_NEG, NC, {C});
+    S.emit(NdOp::FLOAT_FMA, Dst, {NA, B, NC});
     break;
   }
   case AARCH64_INS_FNMSUB: {
