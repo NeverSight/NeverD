@@ -50,6 +50,7 @@ add_neverd_unittest(NeverDSemanticTests
   aarch64/AArch64_FP16ArithRTTests.cpp
   aarch64/AArch64_FP16ConvRTTests.cpp
   aarch64/AArch64_FP16FusedRTTests.cpp
+  aarch64/AArch64_FP16PairwiseRTTests.cpp
   aarch64/AArch64_FP16RecipRTTests.cpp
   aarch64/AArch64_FP16WidenFMARTTests.cpp
   aarch64/AArch64_FPConvRoundRTTests.cpp

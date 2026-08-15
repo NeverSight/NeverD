@@ -39,8 +39,12 @@ unsigned neonElemSize(AArch64Layout_VectorLayout VAS) {
   case AARCH64LAYOUT_VL_16B:
   case AARCH64LAYOUT_VL_8B:
     return 1;
+  // VL_2H is the source arrangement of the scalar pairwise FP16 forms
+  // (`fmaxp h0, v1.2h`); leaving it unrecognized makes those fall back to a
+  // whole-register copy that never performs the pairwise reduction.
   case AARCH64LAYOUT_VL_8H:
   case AARCH64LAYOUT_VL_4H:
+  case AARCH64LAYOUT_VL_2H:
     return 2;
   case AARCH64LAYOUT_VL_4S:
   case AARCH64LAYOUT_VL_2S:

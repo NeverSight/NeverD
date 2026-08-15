@@ -19,6 +19,18 @@
 
 namespace neverd {
 
+namespace {
+
+// Byte widths of the IEEE formats a NEON floating-point lane can hold: half
+// (FEAT_FP16), single and double.  Anything else came from an integer
+// arrangement or an arrangement specifier the decoder did not recognize, and
+// must not be reinterpreted as a float lane.
+bool isFPLaneSize(unsigned LaneSz) {
+  return LaneSz == 2 || LaneSz == 4 || LaneSz == 8;
+}
+
+} // namespace
+
 bool liftNEONFloat(AArch64Lifter &L, AArch64Lifter::LiftState &S,
                    const cs_insn *Insn, const cs_aarch64 &ARM64) {
   switch (Insn->id) {
@@ -116,7 +128,7 @@ bool liftNEONFloat(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdOp MM = (Insn->id == AARCH64_INS_FMINNM) ? NdOp::FLOAT_MINNUM
                                                : NdOp::FLOAT_MAXNUM;
     unsigned LaneSz = neonElemSize(ARM64.operands[0].vas);
-    if ((LaneSz == 4 || LaneSz == 8) && Dst.Size > LaneSz) {
+    if (isFPLaneSize(LaneSz) && Dst.Size > LaneSz) {
       unsigned NLanes = Dst.Size / LaneSz;
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
@@ -159,7 +171,7 @@ bool liftNEONFloat(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     if (ARM64.op_count == 2) {
       NdVar Src = L.operandRead(S, ARM64.operands[1]);
       unsigned LaneSz = neonElemSize(ARM64.operands[1].vas);
-      if ((LaneSz == 4 || LaneSz == 8) && Src.Size >= 2 * LaneSz) {
+      if (isFPLaneSize(LaneSz) && Src.Size >= 2 * LaneSz) {
         NdVar Lo = S.makeTemp(LaneSz), Hi = S.makeTemp(LaneSz);
         S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(0, 4)});
         S.emit(NdOp::SUBBYTES, Hi, {Src, NdVar::cst(LaneSz, 4)});
@@ -174,7 +186,7 @@ bool liftNEONFloat(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdVar A = L.operandRead(S, ARM64.operands[1]);
     NdVar B = L.operandRead(S, ARM64.operands[2]);
     unsigned LaneSz = neonElemSize(ARM64.operands[0].vas);
-    if ((LaneSz == 4 || LaneSz == 8) && A.Size >= 2 * LaneSz) {
+    if (isFPLaneSize(LaneSz) && A.Size >= 2 * LaneSz) {
       unsigned NPairs = A.Size / (LaneSz * 2);
       NdVar Acc = S.makeTemp(0);
       for (unsigned H = 0; H < 2; ++H) {
