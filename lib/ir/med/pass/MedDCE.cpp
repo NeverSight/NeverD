@@ -244,7 +244,8 @@ void LowToMedConverter::runDce(MedFunc &Func) {
 
       for (auto &Op : Blk.Ops) {
         bool IsEssential =
-            Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::CALL ||
+            Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
+            Op.Opcode == NdOp::CALL ||
             Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INTRINSIC ||
             Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
             Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR ||

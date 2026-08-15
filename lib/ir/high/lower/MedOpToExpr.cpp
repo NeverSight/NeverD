@@ -115,6 +115,17 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
     break;
   }
 
+  case NdOp::ATOMIC_XCHG:
+    if (Op.NumInputs >= 2) {
+      auto Expr = HighExpr::makeBinop(
+          Op.Opcode, medvarToExpr(Op.Inputs[0]),
+          medvarToExpr(Op.Inputs[1]));
+      Expr->Type = NdType::makeInt(Op.Output.Size, false);
+      Expr->MemoryOrdering = Op.MemoryOrdering;
+      return Expr;
+    }
+    break;
+
   case NdOp::SELECT:
     if (Op.NumInputs >= 3) {
       auto Expr = std::make_shared<HighExpr>();
@@ -149,7 +160,10 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
       Expr->Op = NdOp::CONCAT;
       Expr->Operands.push_back(medvarToExpr(Op.Inputs[0]));
       Expr->Operands.push_back(medvarToExpr(Op.Inputs[1]));
-      Expr->Type = NdType::makeInt(Op.Output.Size);
+      // CONCAT is a bit-pattern operation.  Keeping the widened temporary
+      // unsigned avoids undefined signed left-shift in emitted High-C when
+      // the high half has its sign bit set.
+      Expr->Type = NdType::makeInt(Op.Output.Size, false);
       return Expr;
     }
     break;

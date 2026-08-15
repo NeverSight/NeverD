@@ -67,6 +67,10 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   if (E.Operands.size() != 2)
     return "/* bad binop */";
 
+  if (E.Op == NdOp::ATOMIC_XCHG)
+    return atomicExchangeExpr(E.Type, exprStr(*E.Operands[0]),
+                              exprStr(*E.Operands[1]), E.MemoryOrdering);
+
   switch (E.Op) {
   case NdOp::SUBBYTES: {
     std::string Src = exprStr(*E.Operands[0], 99);

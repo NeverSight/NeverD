@@ -50,6 +50,26 @@ void test_stlr(unsigned long long *addr, unsigned long long value) {
                       : "memory");
 }
 
+struct pair64 {
+    unsigned long low;
+    unsigned long high;
+};
+
+#define DEFINE_SWPP_TEST(name, mnemonic)                                      \
+    struct pair64 name(struct pair64 *addr, unsigned long low,                \
+                       unsigned long high) {                                  \
+        __asm__ volatile(mnemonic " %0, %1, [%2]"                            \
+                         : "+r"(low), "+r"(high)                             \
+                         : "r"(addr)                                          \
+                         : "memory");                                         \
+        return (struct pair64){low, high};                                    \
+    }
+
+DEFINE_SWPP_TEST(test_swpp, "swpp")
+DEFINE_SWPP_TEST(test_swppa, "swppa")
+DEFINE_SWPP_TEST(test_swppal, "swppal")
+DEFINE_SWPP_TEST(test_swppl, "swppl")
+
 void test_dmb(void) {
     __asm__ volatile ("dmb ish" ::: "memory");
 }

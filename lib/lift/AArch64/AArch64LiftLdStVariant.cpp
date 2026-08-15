@@ -356,13 +356,27 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_SWPPL: {
     if (ARM64.op_count < 3)
       break;
-    NdVar Src = L.operandRead(S, ARM64.operands[0]);
-    NdVar Dst = L.operandWrite(ARM64.operands[1]);
+    NdVar LowSrc = L.operandRead(S, ARM64.operands[0]);
+    NdVar HighSrc = L.operandRead(S, ARM64.operands[1]);
+    NdVar LowDst = L.operandWrite(ARM64.operands[0]);
+    NdVar HighDst = L.operandWrite(ARM64.operands[1]);
     NdVar EA = L.operandEffAddr(S, ARM64.operands[2]);
-    NdVar OldVal = S.makeTemp(Dst.Size);
-    S.emit(NdOp::LOAD, OldVal, {EA});
-    S.emit(NdOp::COPY, Dst, {OldVal});
-    S.emit(NdOp::STORE, {}, {EA, Src});
+    NdVar NewPair = S.makeTemp(LowSrc.Size + HighSrc.Size);
+    NdVar OldPair = S.makeTemp(NewPair.Size);
+    S.emit(NdOp::CONCAT, NewPair, {HighSrc, LowSrc});
+
+    NdMemoryOrdering Ordering = NdMemoryOrdering::Relaxed;
+    if (Insn->id == AARCH64_INS_SWPPA)
+      Ordering = NdMemoryOrdering::Acquire;
+    else if (Insn->id == AARCH64_INS_SWPPL)
+      Ordering = NdMemoryOrdering::Release;
+    else if (Insn->id == AARCH64_INS_SWPPAL)
+      Ordering = NdMemoryOrdering::AcquireRelease;
+
+    S.emit(NdOp::ATOMIC_XCHG, OldPair, {EA, NewPair}, Ordering);
+    S.emit(NdOp::SUBBYTES, LowDst, {OldPair, NdVar::cst(0, 4)});
+    S.emit(NdOp::SUBBYTES, HighDst,
+           {OldPair, NdVar::cst(LowDst.Size, 4)});
     break;
   }
 

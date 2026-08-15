@@ -705,6 +705,8 @@ foreach(src ${AARCH64_TEST_SOURCES})
   set(a64_extra_flags)
   if(src MATCHES "test_switch|test_jumptable")
     set(a64_extra_flags -O1)
+  elseif(src MATCHES "test_atomic_a64")
+    set(a64_extra_flags -march=armv9.4-a+lse128)
   endif()
   add_custom_command(
     OUTPUT ${obj}

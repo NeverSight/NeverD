@@ -28,6 +28,7 @@ bool isObservableEffect(NdOp Opcode) {
   switch (Opcode) {
   case NdOp::LOAD:
   case NdOp::STORE:
+  case NdOp::ATOMIC_XCHG:
   case NdOp::INTRINSIC:
   case NdOp::BRANCH:
   case NdOp::INDIR_BR:

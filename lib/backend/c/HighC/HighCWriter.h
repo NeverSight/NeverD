@@ -53,6 +53,9 @@ public:
   std::string memoryStoreExpr(
       const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
       NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) const;
+  std::string atomicExchangeExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                                 llvm::StringRef Val,
+                                 NdMemoryOrdering MemoryOrdering) const;
   void writeForwardDecls(const std::vector<HighFunc> &Funcs);
   void collectCallTargets(const std::vector<HighStmt> &Stmts,
                           std::set<std::string> &Targets);

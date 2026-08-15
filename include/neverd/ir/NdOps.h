@@ -22,6 +22,7 @@ namespace neverd {
   X(COPY)                                                                      \
   X(LOAD)                                                                      \
   X(STORE)                                                                     \
+  X(ATOMIC_XCHG)                                                               \
   X(INT_ADD)                                                                   \
   X(INT_SUB)                                                                   \
   X(INT_AND)                                                                   \
@@ -104,9 +105,11 @@ enum class NdOp : uint8_t {
       _COUNT
 };
 
-/// Ordering attached to an atomic memory access.  None denotes an ordinary,
+/// Ordering attached to a memory access.  None denotes an ordinary,
 /// non-atomic LOAD/STORE; every other value keeps the access atomic while it
-/// moves through LowIR, MedIR, HighIR, and the backends.
+/// moves through LowIR, MedIR, HighIR, and the backends.  Operations whose
+/// opcode is intrinsically atomic (for example ATOMIC_XCHG) must use a
+/// non-None ordering.
 enum class NdMemoryOrdering : uint8_t {
   None,
   Relaxed,

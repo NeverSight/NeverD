@@ -65,3 +65,38 @@ TEST_F(AArch64_Atomic, HighCKeepsLdarStlrOrderingAndCompiles) {
         exec("clang", {"-std=c11", "-fsyntax-only", cFile.string()});
     EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << source;
 }
+
+TEST_F(AArch64_Atomic, HighCUsesStandardOrderedI128Exchange) {
+    auto r = decompileToHighC(testObj());
+    ASSERT_EQ(r.exitCode, 0) << r.err;
+
+    auto cFile = tmpFile("decompiled_high.c");
+    ASSERT_TRUE(fs::exists(cFile));
+    std::ifstream input(cFile);
+    ASSERT_TRUE(input.good());
+    std::string source((std::istreambuf_iterator<char>(input)),
+                       std::istreambuf_iterator<char>());
+    EXPECT_NE(source.find("__atomic_exchange_n"), std::string::npos) << source;
+    EXPECT_NE(source.find("unsigned __int128"), std::string::npos) << source;
+    EXPECT_NE(source.find("__ATOMIC_RELAXED"), std::string::npos) << source;
+    EXPECT_NE(source.find("__ATOMIC_ACQUIRE"), std::string::npos) << source;
+    EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
+    EXPECT_NE(source.find("__ATOMIC_ACQ_REL"), std::string::npos) << source;
+    EXPECT_EQ(source.find("neverd_a64_swpp"), std::string::npos) << source;
+
+    auto syntax =
+        exec("clang", {"-std=gnu11", "-fsyntax-only", cFile.string()});
+    EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << source;
+}
+
+TEST_F(AArch64_Atomic, SwppUsesOrderedAtomicI128Exchange) {
+    auto r = liftToLLVMIR(testObj());
+    ASSERT_EQ(r.exitCode, 0) << r.err;
+
+    EXPECT_NE(r.out.find("atomicrmw xchg ptr"), std::string::npos) << r.out;
+    EXPECT_NE(r.out.find("i128"), std::string::npos) << r.out;
+    EXPECT_NE(r.out.find("monotonic, align 16"), std::string::npos) << r.out;
+    EXPECT_NE(r.out.find("acquire, align 16"), std::string::npos) << r.out;
+    EXPECT_NE(r.out.find("release, align 16"), std::string::npos) << r.out;
+    EXPECT_NE(r.out.find("acq_rel, align 16"), std::string::npos) << r.out;
+}

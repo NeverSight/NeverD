@@ -419,6 +419,18 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
     return StepResult::Continue;
   }
 
+  if (Op.Opcode == NdOp::ATOMIC_XCHG) {
+    if (Op.NumInputs < 2 || widthOf(Op.Output) == 0)
+      return unmodelled(Op);
+    SymRef Addr = read(Op.Inputs[0]);
+    SymRef Old = State.load(Addr, Op.Output.Size);
+    SymRef Value = fit(read(Op.Inputs[1]), widthOf(Op.Output));
+    writeResult(Op.Output, Old);
+    if (!State.store(Addr, Value))
+      ++Unmodelled;
+    return StepResult::Continue;
+  }
+
   if (Op.NumInputs < 2)
     return unmodelled(Op);
   const bool HasSpace = Op.NumInputs >= 3;
@@ -553,6 +565,7 @@ StepResult SymExec::step(const LowOp &Op) {
 
   case NdOp::LOAD:
   case NdOp::STORE:
+  case NdOp::ATOMIC_XCHG:
     return stepMemory(Op);
 
   case NdOp::BRANCH:

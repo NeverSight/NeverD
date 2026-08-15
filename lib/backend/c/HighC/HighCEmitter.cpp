@@ -210,6 +210,17 @@ std::string HighCWriter::memoryStoreExpr(const TypeRef &Ty,
          Val.str() + ")";
 }
 
+std::string HighCWriter::atomicExchangeExpr(
+    const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
+    NdMemoryOrdering Ordering) const {
+  if (Ordering == NdMemoryOrdering::None)
+    llvm::report_fatal_error("atomic exchange requires memory ordering");
+  std::string Type = memoryTypeName(Ty);
+  return "__atomic_exchange_n((" + Type + " *)(uintptr_t)(" + Addr.str() +
+         "), (" + Type + ")(" + Val.str() + "), " +
+         atomicOrderingToken(Ordering) + ")";
+}
+
 void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                                          std::set<std::string> &Targets) {
   std::set<const HighExpr *> Seen;

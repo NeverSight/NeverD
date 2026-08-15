@@ -24,6 +24,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -838,6 +839,26 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (IsGlobalData)
       SI->setVolatile(true);
     return;
+  }
+  case NdOp::ATOMIC_XCHG: {
+    if (Op.NumInputs < 2 || Op.Output.Size == 0 ||
+        Op.Inputs[1].Size != Op.Output.Size)
+      llvm::report_fatal_error("atomic exchange has inconsistent operands");
+    if (Op.MemoryOrdering == NdMemoryOrdering::None)
+      llvm::report_fatal_error("atomic exchange requires memory ordering");
+    if (!llvm::isPowerOf2_64(Op.Output.Size))
+      llvm::report_fatal_error("atomic exchange size must be a power of two");
+
+    llvm::Value *Val = GetInput(1);
+    llvm::Type *ValTy = sizeToType(Op.Output.Size);
+    if (Val->getType() != ValTy)
+      Val = Builder.CreateIntCast(Val, ValTy, false, "atomic_xchg_val");
+    llvm::Value *Ptr = getMemoryPtr(GetInput(0), ValTy, Builder);
+    Result = Builder.CreateAtomicRMW(
+        llvm::AtomicRMWInst::Xchg, Ptr, Val,
+        llvm::MaybeAlign(Op.Output.Size),
+        toLLVMAtomicOrdering(Op.MemoryOrdering));
+    break;
   }
   case NdOp::BRANCH: {
     return;

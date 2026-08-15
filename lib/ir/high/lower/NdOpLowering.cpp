@@ -64,7 +64,8 @@ void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
   bool MultiUse = UIt != UseCount.end() && UIt->second > 1;
   bool IsCallResult = CallOutputs.count(Key) > 0;
   bool FeedsPhi = PhiArgVars.count(Key) > 0;
-  if (!MultiUse && !IsCallResult && !FeedsPhi)
+  bool HasMemoryEffect = CurOp.MemoryOrdering != NdMemoryOrdering::None;
+  if (!MultiUse && !IsCallResult && !FeedsPhi && !HasMemoryEffect)
     return;
   HighStmt S;
   S.Kind = StmtKind::Assign;

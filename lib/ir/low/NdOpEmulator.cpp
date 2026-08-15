@@ -317,6 +317,15 @@ bool NdOpEmulator::step(const LowOp &Op) {
   case NdOp::STORE:
     return executeStore(Op);
 
+  case NdOp::ATOMIC_XCHG:
+    // The constant-tracing emulator stores one host word per value and cannot
+    // represent the 128-bit exchanges this opcode exists for.  Stop instead
+    // of carrying stale memory or destination state past an observable RMW.
+    ++Skips.UnsupportedOps;
+    if (Op.Output.isReg() || Op.Output.isTemp())
+      Registers.erase(Op.Output.Offset);
+    return false;
+
   case NdOp::NOP:
     return true;
 
