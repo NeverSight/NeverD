@@ -203,6 +203,16 @@ static const std::vector<RoundTripTC> kScalarSat = {
 // values force saturation (e.g. INT_MIN*INT_MIN doubling, overflowing shifts).
 // ============================================================================
 static const std::vector<RoundTripTC> kSatShMul = {
+  {"sqdmull_scalar_h",
+   "long sqdmull_scalar_h(long a, long b) {\n"
+   "  int result;\n"
+   "  short x = (short)a, y = (short)b;\n"
+   "  __asm__ volatile(\"sqdmull %s0, %h1, %h2\"\n"
+   "                   : \"=&w\"(result) : \"w\"(x), \"w\"(y));\n"
+   "  return (long)(unsigned)result;\n"
+   "}\n",
+   {0x8000, 0x8000}, "SatShMul", 1, "-march=armv8-a+simd"},
+
   {"sqdmulh_4s",
    "#include <arm_neon.h>\n"
    "long sqdmulh_4s(long a, long b) {\n"

@@ -129,10 +129,34 @@ bool liftNEONMulLong(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       S.emit(NdOp::COPY, Dst, {Acc});
     } else {
       // Scalar / unknown-arrangement fallback: widen then multiply.
-      NdVar ExtA = S.makeTemp(8), ExtB = S.makeTemp(8);
+      NdVar ExtA = S.makeTemp(Dst.Size), ExtB = S.makeTemp(Dst.Size);
       S.emit(IsSigned ? NdOp::INT_SEXT : NdOp::INT_ZEXT, ExtA, {A});
       S.emit(IsSigned ? NdOp::INT_SEXT : NdOp::INT_ZEXT, ExtB, {B});
-      S.emit(NdOp::INT_MULT, Dst, {ExtA, ExtB});
+      NdVar Prod = S.makeTemp(Dst.Size);
+      S.emit(NdOp::INT_MULT, Prod, {ExtA, ExtB});
+      if (IsDoubling && Dst.Size <= 8 && A.Size == B.Size &&
+          Dst.Size == A.Size * 2) {
+        NdVar Dbl = S.makeTemp(Dst.Size);
+        S.emit(NdOp::INT_LEFT, Dbl, {Prod, NdVar::cst(1, Dst.Size)});
+
+        // The doubled signed widening product only overflows when both narrow
+        // inputs are INT_MIN.  In that case SQDMULL returns destination
+        // INT_MAX; every other product is representable after doubling.
+        unsigned NarrowBits = A.Size * 8;
+        uint64_t NarrowMin = 1ULL << (NarrowBits - 1);
+        NdVar AMin = S.makeTemp(1), BMin = S.makeTemp(1);
+        S.emit(NdOp::INT_EQUAL, AMin, {A, NdVar::cst(NarrowMin, A.Size)});
+        S.emit(NdOp::INT_EQUAL, BMin, {B, NdVar::cst(NarrowMin, B.Size)});
+        NdVar BothMin = S.makeTemp(1);
+        S.emit(NdOp::INT_AND, BothMin, {AMin, BMin});
+
+        unsigned DstBits = Dst.Size * 8;
+        uint64_t DstMax = DstBits == 64 ? 0x7FFFFFFFFFFFFFFFULL
+                                        : ((1ULL << (DstBits - 1)) - 1);
+        S.emit(NdOp::SELECT, Dst, {BothMin, NdVar::cst(DstMax, Dst.Size), Dbl});
+      } else {
+        S.emit(NdOp::COPY, Dst, {Prod});
+      }
     }
     break;
   }
