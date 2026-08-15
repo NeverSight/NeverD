@@ -57,3 +57,13 @@ A(Intrinsic::A64_MopsSetPN,  "setpn");
 A(Intrinsic::A64_MopsSetPT,  "setpt");
 A(Intrinsic::A64_MopsSetPTN, "setptn");
 A(Intrinsic::A64_MopsCpyFP,  "cpyfp");
+
+// FEAT_THE + FEAT_D128 read-check-write pair compare-and-swap.
+A(Intrinsic::A64_Rcwcasp,    "rcwcasp");
+A(Intrinsic::A64_Rcwcaspa,   "rcwcaspa");
+A(Intrinsic::A64_Rcwcaspal,  "rcwcaspal");
+A(Intrinsic::A64_Rcwcaspl,   "rcwcaspl");
+A(Intrinsic::A64_Rcwscasp,   "rcwscasp");
+A(Intrinsic::A64_Rcwscaspa,  "rcwscaspa");
+A(Intrinsic::A64_Rcwscaspal, "rcwscaspal");
+A(Intrinsic::A64_Rcwscaspl,  "rcwscaspl");

@@ -32,6 +32,50 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  if ((IC == I::A64_Rcwcasp || IC == I::A64_Rcwcaspa ||
+       IC == I::A64_Rcwcaspal || IC == I::A64_Rcwcaspl ||
+       IC == I::A64_Rcwscasp || IC == I::A64_Rcwscaspa ||
+       IC == I::A64_Rcwscaspal || IC == I::A64_Rcwscaspl) &&
+      Op.Output.Size == 16 && Op.NumInputs >= 4) {
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    auto *I128Ty = llvm::IntegerType::get(*Ctx, 128);
+    auto coerceI128 = [&](llvm::Value *V) -> llvm::Value * {
+      if (V->getType()->isPointerTy())
+        V = Builder.CreatePtrToInt(V, I64Ty);
+      return V->getType() == I128Ty ? V : Builder.CreateZExtOrTrunc(V, I128Ty);
+    };
+    auto lowHalf = [&](llvm::Value *V) {
+      return Builder.CreateTrunc(V, I64Ty);
+    };
+    auto highHalf = [&](llvm::Value *V) {
+      return Builder.CreateTrunc(Builder.CreateLShr(V, 64), I64Ty);
+    };
+
+    llvm::Value *Expected = coerceI128(getVar(Op.Inputs[1], Builder));
+    llvm::Value *Desired = coerceI128(getVar(Op.Inputs[2], Builder));
+    llvm::Value *Address = getVar(Op.Inputs[3], Builder);
+    Address = getMemoryPtr(Address, I128Ty, Builder);
+
+    auto *ResultTy = llvm::StructType::get(*Ctx, {I64Ty, I64Ty});
+    auto *AsmTy = llvm::FunctionType::get(
+        ResultTy, {I64Ty, I64Ty, Address->getType(), I64Ty, I64Ty}, false);
+    std::string Asm =
+        std::string(intrinsicAsmMnemonic(IC)) + " x0, x1, x2, x3, [x4]";
+    auto *IA = llvm::InlineAsm::get(
+        AsmTy, Asm, "={x0},={x1},{x2},{x3},{x4},0,1,~{memory},~{cc}", true);
+    llvm::Value *Pair =
+        Builder.CreateCall(IA,
+                           {lowHalf(Desired), highHalf(Desired), Address,
+                            lowHalf(Expected), highHalf(Expected)},
+                           "rcwcasp");
+    llvm::Value *OldLo = Builder.CreateExtractValue(Pair, {0}, "rcwcasp.lo");
+    llvm::Value *OldHi = Builder.CreateExtractValue(Pair, {1}, "rcwcasp.hi");
+    return Builder.CreateOr(
+        Builder.CreateZExt(OldLo, I128Ty),
+        Builder.CreateShl(Builder.CreateZExt(OldHi, I128Ty), 64),
+        "rcwcasp.old");
+  }
+
   if (IC == I::A64_MopsCpyFP && Op.Output.Size > 0 && Op.NumInputs >= 4) {
     auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
     auto coerceI64 = [&](llvm::Value *V) -> llvm::Value * {

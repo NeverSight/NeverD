@@ -70,6 +70,14 @@ DEFINE_SWPP_TEST(test_swppa, "swppa")
 DEFINE_SWPP_TEST(test_swppal, "swppal")
 DEFINE_SWPP_TEST(test_swppl, "swppl")
 
+__attribute__((naked, noinline)) void test_rcwcasp_pair(void) {
+  __asm__ volatile("rcwcasp x0, x1, x2, x3, [x4]\n\t"
+                   "ret"
+                   :
+                   :
+                   : "x0", "x1", "memory");
+}
+
 void test_dmb(void) {
     __asm__ volatile ("dmb ish" ::: "memory");
 }

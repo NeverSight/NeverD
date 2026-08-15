@@ -23,7 +23,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
   if (Analysis.DeadStmts.count(&Stmt))
     return;
   switch (Stmt.Kind) {
-  case StmtKind::Assign:
+  case StmtKind::Assign: {
     if (!Stmt.Dst || !Stmt.Val)
       return;
     if (Stmt.Val->Kind == ExprKind::Call &&
@@ -42,8 +42,10 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
         break;
       }
     }
+    bool DeadIntrinsicResult = Stmt.Dst->Kind == ExprKind::Var &&
+                               Analysis.DeadVars.count(varName(Stmt.Dst->Var));
     if (Stmt.Val->Kind == ExprKind::Call &&
-        Stmt.Val->IntrinsicId != Intrinsic::None &&
+        Stmt.Val->IntrinsicId != Intrinsic::None && DeadIntrinsicResult &&
         (isSideeffectIntrinsic(Stmt.Val->IntrinsicId) ||
          !intrinsicCName(Stmt.Val->IntrinsicId))) {
       emitIndent(Indent);
@@ -60,6 +62,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     emitIndent(Indent);
     OS << exprStr(*Stmt.Dst) << " = " << exprStr(*Stmt.Val) << ";\n";
     break;
+  }
 
   case StmtKind::Store:
     if (!Stmt.StoreAddr || !Stmt.StoreVal)

@@ -144,6 +144,7 @@ add_neverd_unittest(NeverDLiftTests
 
 target_compile_definitions(NeverDLiftTests PRIVATE
   NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  NEVERD_TEST_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
   TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
   TEST_OBJ_DIR="${CMAKE_CURRENT_BINARY_DIR}"
 )
@@ -741,7 +742,7 @@ foreach(src ${AARCH64_TEST_SOURCES})
   elseif(src MATCHES "test_faminmax_a64")
     set(a64_extra_flags -march=armv9.4-a+faminmax)
   elseif(src MATCHES "test_atomic_a64")
-    set(a64_extra_flags -march=armv9.4-a+lse128)
+    set(a64_extra_flags -march=armv9.4-a+lse128+the+d128)
   elseif(src MATCHES "test_mops_a64")
     set(a64_extra_flags -march=armv8.8-a+mops)
   endif()

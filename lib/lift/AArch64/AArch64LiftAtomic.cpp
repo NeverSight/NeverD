@@ -272,22 +272,78 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   // ========================================================================
   // RCW atomics (FEAT_LSE128 / FEAT_LRCPC3)
   // ========================================================================
-  case AARCH64_INS_RCWCAS:
-  case AARCH64_INS_RCWCASA:
-  case AARCH64_INS_RCWCASAL:
-  case AARCH64_INS_RCWCASL:
   case AARCH64_INS_RCWCASP:
   case AARCH64_INS_RCWCASPA:
   case AARCH64_INS_RCWCASPAL:
   case AARCH64_INS_RCWCASPL:
-  case AARCH64_INS_RCWSCAS:
-  case AARCH64_INS_RCWSCASA:
-  case AARCH64_INS_RCWSCASAL:
-  case AARCH64_INS_RCWSCASL:
   case AARCH64_INS_RCWSCASP:
   case AARCH64_INS_RCWSCASPA:
   case AARCH64_INS_RCWSCASPAL:
   case AARCH64_INS_RCWSCASPL: {
+    // Pair syntax expands to five Capstone operands:
+    //   expected-lo, expected-hi, desired-lo, desired-hi, [address].
+    if (ARM64.op_count < 5)
+      break;
+    NdVar ExpLo = operandRead(S, ARM64.operands[0]);
+    NdVar ExpHi = operandRead(S, ARM64.operands[1]);
+    NdVar DesLo = operandRead(S, ARM64.operands[2]);
+    NdVar DesHi = operandRead(S, ARM64.operands[3]);
+    NdVar EA = operandEffAddr(S, ARM64.operands[4]);
+    NdVar DstLo = operandWrite(ARM64.operands[0]);
+    NdVar DstHi = operandWrite(ARM64.operands[1]);
+    Intrinsic Id = Intrinsic::None;
+    switch (Insn->id) {
+    case AARCH64_INS_RCWCASP:
+      Id = Intrinsic::A64_Rcwcasp;
+      break;
+    case AARCH64_INS_RCWCASPA:
+      Id = Intrinsic::A64_Rcwcaspa;
+      break;
+    case AARCH64_INS_RCWCASPAL:
+      Id = Intrinsic::A64_Rcwcaspal;
+      break;
+    case AARCH64_INS_RCWCASPL:
+      Id = Intrinsic::A64_Rcwcaspl;
+      break;
+    case AARCH64_INS_RCWSCASP:
+      Id = Intrinsic::A64_Rcwscasp;
+      break;
+    case AARCH64_INS_RCWSCASPA:
+      Id = Intrinsic::A64_Rcwscaspa;
+      break;
+    case AARCH64_INS_RCWSCASPAL:
+      Id = Intrinsic::A64_Rcwscaspal;
+      break;
+    case AARCH64_INS_RCWSCASPL:
+      Id = Intrinsic::A64_Rcwscaspl;
+      break;
+    default:
+      break;
+    }
+
+    NdVar ExpectedPair = S.makeTemp(16);
+    S.emit(NdOp::CONCAT, ExpectedPair, {ExpHi, ExpLo});
+    NdVar DesiredPair = S.makeTemp(16);
+    S.emit(NdOp::CONCAT, DesiredPair, {DesHi, DesLo});
+    NdVar OldPair = S.makeTemp(16);
+    S.emitIntrinsic(Id, OldPair, {ExpectedPair, DesiredPair, EA});
+
+    NdVar OldLo = S.makeTemp(8);
+    S.emit(NdOp::SUBBYTES, OldLo, {OldPair, NdVar::cst(0, 4)});
+    NdVar OldHi = S.makeTemp(8);
+    S.emit(NdOp::SUBBYTES, OldHi, {OldPair, NdVar::cst(8, 4)});
+    S.emit(NdOp::COPY, DstLo, {OldLo});
+    S.emit(NdOp::COPY, DstHi, {OldHi});
+    break;
+  }
+  case AARCH64_INS_RCWCAS:
+  case AARCH64_INS_RCWCASA:
+  case AARCH64_INS_RCWCASAL:
+  case AARCH64_INS_RCWCASL:
+  case AARCH64_INS_RCWSCAS:
+  case AARCH64_INS_RCWSCASA:
+  case AARCH64_INS_RCWSCASAL:
+  case AARCH64_INS_RCWSCASL: {
     if (ARM64.op_count >= 3) {
       NdVar Expected = operandRead(S, ARM64.operands[0]);
       NdVar Desired = operandRead(S, ARM64.operands[1]);

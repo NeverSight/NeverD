@@ -113,6 +113,17 @@ C(Intrinsic::A64_Sm4ekey,      "vsm4ekeyq_u32");
 C(Intrinsic::A64_Famax,        "vamax");
 C(Intrinsic::A64_Famin,        "vamin");
 
+// FEAT_THE + FEAT_D128 pair compare-and-swap builtins provided by the paired
+// Clang toolchain.
+C(Intrinsic::A64_Rcwcasp,      "__builtin_arm_rcwcasp");
+C(Intrinsic::A64_Rcwcaspa,     "__builtin_arm_rcwcaspa");
+C(Intrinsic::A64_Rcwcaspal,    "__builtin_arm_rcwcaspal");
+C(Intrinsic::A64_Rcwcaspl,     "__builtin_arm_rcwcaspl");
+C(Intrinsic::A64_Rcwscasp,     "__builtin_arm_rcwscasp");
+C(Intrinsic::A64_Rcwscaspa,    "__builtin_arm_rcwscaspa");
+C(Intrinsic::A64_Rcwscaspal,   "__builtin_arm_rcwscaspal");
+C(Intrinsic::A64_Rcwscaspl,    "__builtin_arm_rcwscaspl");
+
 // System
 C(Intrinsic::Yield_A64,        "__yield");
 C(Intrinsic::Wfe,              "__wfe");

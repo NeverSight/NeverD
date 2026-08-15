@@ -35,3 +35,14 @@ SIDEEFFECT(Intrinsic::A64_MopsSetPN);
 SIDEEFFECT(Intrinsic::A64_MopsSetPT);
 SIDEEFFECT(Intrinsic::A64_MopsSetPTN);
 SIDEEFFECT(Intrinsic::A64_MopsCpyFP);
+
+// Atomic read-check-write operations mutate memory even when their returned
+// old pair is unused.
+SIDEEFFECT(Intrinsic::A64_Rcwcasp);
+SIDEEFFECT(Intrinsic::A64_Rcwcaspa);
+SIDEEFFECT(Intrinsic::A64_Rcwcaspal);
+SIDEEFFECT(Intrinsic::A64_Rcwcaspl);
+SIDEEFFECT(Intrinsic::A64_Rcwscasp);
+SIDEEFFECT(Intrinsic::A64_Rcwscaspa);
+SIDEEFFECT(Intrinsic::A64_Rcwscaspal);
+SIDEEFFECT(Intrinsic::A64_Rcwscaspl);

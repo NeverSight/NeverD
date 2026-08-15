@@ -139,3 +139,9 @@ A64_MopsCpyFP,
 // FEAT_FAMINMAX absolute floating-point vector min/max.  The trailing lifter
 // operands carry the active vector width and element width for typed emission.
 A64_Famax, A64_Famin,
+
+// FEAT_THE + FEAT_D128 read-check-write pair compare-and-swap.  Keep the
+// architectural ordering and checked/strong variant explicit so both LLVM
+// and High-C emission can reproduce the original instruction.
+A64_Rcwcasp, A64_Rcwcaspa, A64_Rcwcaspal, A64_Rcwcaspl,
+A64_Rcwscasp, A64_Rcwscaspa, A64_Rcwscaspal, A64_Rcwscaspl,

@@ -118,6 +118,23 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_Rcwcasp:
+  case I::A64_Rcwcaspa:
+  case I::A64_Rcwcaspal:
+  case I::A64_Rcwcaspl:
+  case I::A64_Rcwscasp:
+  case I::A64_Rcwscaspa:
+  case I::A64_Rcwscaspal:
+  case I::A64_Rcwscaspl: {
+    if (Ops.size() < 3)
+      return {};
+    const char *Builtin = intrinsicCName(Id);
+    if (!Builtin)
+      return {};
+    return std::string(Builtin) + "((unsigned __int128)(" + Ops[0] +
+           "), (unsigned __int128)(" + Ops[1] + "), (void *)(uintptr_t)(" +
+           Ops[2] + "))";
+  }
   case I::A64_Famax:
   case I::A64_Famin: {
     if (Ops.size() < 4)
