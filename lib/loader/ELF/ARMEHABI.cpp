@@ -273,6 +273,7 @@ void parseARMEHABIExceptions(BinaryImage &Img) {
           Req.LSDAVA = Table.HandlerDataVA;
           Req.FunctionStart = F.CodeRange.Begin;
           Req.FunctionEnd = F.CodeRange.End;
+          Req.Personality = F.Personality;
           dwarf_eh::PointerBases LSDABases = Bases;
           LSDABases.Func = F.CodeRange.Begin;
 

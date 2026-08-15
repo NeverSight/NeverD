@@ -52,6 +52,25 @@ size_t mappedBytesAt(const BinaryImage &Img, va_t Address, size_t Want) {
   return Lo;
 }
 
+std::string readMappedCString(const BinaryImage &Img, va_t Address) {
+  if (Address == 0)
+    return {};
+  const size_t Available = mappedBytesAt(Img, Address, kMaxTypeNameBytes);
+  if (Available == 0)
+    return {};
+  const uint8_t *Bytes = Img.readVA(Address, Available);
+  if (!Bytes)
+    return {};
+  size_t Length = 0;
+  while (Length < Available && Bytes[Length] != 0)
+    ++Length;
+  // An unterminated run is not a C string; refusing it keeps arbitrary
+  // descriptor bytes from becoming a reported language type name.
+  if (Length == 0 || Length == Available)
+    return {};
+  return std::string(reinterpret_cast<const char *>(Bytes), Length);
+}
+
 } // namespace
 
 std::string readItaniumTypeName(const BinaryImage &Img, va_t TypeInfoVA) {
@@ -68,23 +87,7 @@ std::string readItaniumTypeName(const BinaryImage &Img, va_t TypeInfoVA) {
     return {};
   const va_t NameVA = PtrSize == 4 ? va_t(readLE<uint32_t>(NameSlot))
                                    : va_t(readLE<uint64_t>(NameSlot));
-  if (NameVA == 0)
-    return {};
-
-  const size_t Available = mappedBytesAt(Img, NameVA, kMaxTypeNameBytes);
-  if (Available == 0)
-    return {};
-  const uint8_t *Bytes = Img.readVA(NameVA, Available);
-  if (!Bytes)
-    return {};
-  size_t Length = 0;
-  while (Length < Available && Bytes[Length] != 0)
-    ++Length;
-  // An unterminated run is not a C string; refusing it keeps a pointer into
-  // arbitrary data from being reported as a type name.
-  if (Length == 0 || Length == Available)
-    return {};
-  return std::string(reinterpret_cast<const char *>(Bytes), Length);
+  return readMappedCString(Img, NameVA);
 }
 
 LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
@@ -115,6 +118,8 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
 
   ItaniumEHInfo Info;
   Info.LSDAVA = Req.LSDAVA;
+  Info.TypeTableEntryKind =
+      getItaniumTypeTableEntryKind(Req.Personality);
   Info.IsCallSiteAddressForm = !Req.IsSJLJ;
 
   size_t Cursor = 0;
@@ -410,8 +415,13 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
         // load time is also null there, but it is a real type: the binding
         // names it, so only an unbound null is the ABI's `catch (...)`.
         Entry.IsCatchAll = TypeInfo == 0 && IndirectSlot == 0;
-        if (TypeInfo != 0)
+        if (TypeInfo != 0 &&
+            Info.TypeTableEntryKind == ItaniumTypeTableEntryKind::CxxRTTI)
           Entry.TypeName = readItaniumTypeName(Img, TypeInfo);
+        else if (TypeInfo != 0 &&
+                 Info.TypeTableEntryKind ==
+                     ItaniumTypeTableEntryKind::DirectCString)
+          Entry.TypeName = readMappedCString(Img, TypeInfo);
         if (Entry.TypeName.empty()) {
           Entry.TypeName = resolveRoutineName(Img, TypeInfo, IndirectSlot);
           Entry.IsCatchAll = Entry.IsCatchAll && Entry.TypeName.empty();

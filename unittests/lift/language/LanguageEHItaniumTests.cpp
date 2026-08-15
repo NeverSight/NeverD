@@ -115,11 +115,13 @@ TEST(ItaniumLSDA, DecodesCallSitesActionsAndTypes) {
   Req.LSDAVA = LSDAVA;
   Req.FunctionStart = FuncVA;
   Req.FunctionEnd = FuncVA + 0x100;
+  Req.Personality = ExceptionPersonality::GxxPersonalityV0;
   LSDAParseResult Result = parseLSDA(Img, Req, PointerBases{});
 
   ASSERT_TRUE(Result.Info.has_value());
   EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
   const ItaniumEHInfo &Info = *Result.Info;
+  EXPECT_EQ(Info.TypeTableEntryKind, ItaniumTypeTableEntryKind::CxxRTTI);
 
   EXPECT_EQ(Info.LandingPadBase, FuncVA);
   ASSERT_EQ(Info.CallSites.size(), 3u);
@@ -149,6 +151,53 @@ TEST(ItaniumLSDA, DecodesCallSitesActionsAndTypes) {
   EXPECT_EQ(Info.TypeTable[0].TypeName, "i");
   EXPECT_FALSE(Info.TypeTable[0].IsCatchAll);
   EXPECT_FALSE(Info.isCleanupOnly());
+}
+
+TEST(ItaniumLSDA, KeepsAdaAndDTypeDescriptorsOpaque) {
+  const va_t FuncVA = kTextVA + 0x100;
+  const va_t LSDAVA = kDataVA + 0x200;
+  const va_t DescriptorVA = kDataVA + 0x600;
+
+  for (ExceptionPersonality Personality :
+       {ExceptionPersonality::GnatPersonalityV0,
+        ExceptionPersonality::DmdPersonalityV0,
+        ExceptionPersonality::DRuntimeEhPersonality,
+        ExceptionPersonality::GdcPersonalityV0}) {
+    SCOPED_TRACE(getExceptionPersonalityName(Personality));
+    BinaryImage Img = makeImage();
+
+    // Both language runtimes put an opaque descriptor in this slot: GNAT uses
+    // an Exception_Id and D uses a ClassInfo.  Make its second word look like a
+    // valid std::type_info name pointer so an accidental RTTI interpretation
+    // produces a convincing but false answer instead of merely failing.
+    ByteBuilder Descriptor;
+    Descriptor.u64(kDataVA + 0x700);
+    Descriptor.u64(kDataVA + 0x680);
+    writeData(Img, DescriptorVA, Descriptor.data());
+    constexpr char ForgedRTTIName[] = "forged_rtti_name";
+    writeData(Img, kDataVA + 0x680,
+              std::vector<uint8_t>(ForgedRTTIName,
+                                   ForgedRTTIName + sizeof(ForgedRTTIName)));
+
+    LSDABytes Table = buildCatchLSDA(LSDAVA, FuncVA, DescriptorVA);
+    writeData(Img, LSDAVA, Table.Bytes);
+
+    LSDAParseRequest Req;
+    Req.LSDAVA = LSDAVA;
+    Req.FunctionStart = FuncVA;
+    Req.FunctionEnd = FuncVA + 0x100;
+    Req.Personality = Personality;
+    LSDAParseResult Result = parseLSDA(Img, Req, PointerBases{});
+
+    ASSERT_TRUE(Result.Info.has_value());
+    EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+    EXPECT_EQ(Result.Info->TypeTableEntryKind,
+              ItaniumTypeTableEntryKind::OpaqueDescriptor);
+    ASSERT_EQ(Result.Info->TypeTable.size(), 1u);
+    EXPECT_EQ(Result.Info->TypeTable[0].TypeInfoVA, DescriptorVA);
+    EXPECT_TRUE(Result.Info->TypeTable[0].TypeName.empty());
+    EXPECT_FALSE(Result.Info->TypeTable[0].IsCatchAll);
+  }
 }
 
 TEST(ItaniumLSDA, FollowsAnActionChainThatPointsBackwards) {

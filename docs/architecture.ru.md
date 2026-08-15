@@ -372,6 +372,14 @@ architecture, pointer width и byte order; compact-unwind DWARF binding откл
 registration/layout должны завершаться ошибкой до изменения вывода; имеющуюся
 частичную поддержку форматов нельзя описывать как полное замыкание исключений.
 
+Распознать Itanium-personality Ada или D — ещё не поддержка исключений Ada или
+D. Address-form LSDA от GNAT, GDC, DMD и LDC разбираемы; слоты type-table
+остаются непрозрачными (`Exception_Id` / `Exception_Data` у GNAT, `ClassInfo`
+у D) и никогда не интерпретируются как `std::type_info`. Нативная реконструкция
+выдаёт LLVM `personality` и address-form предложения `invoke`/`landingpad`.
+Статус corpus-proven — отдельное утверждение и не следует ни из распознавания
+personality, ни из нативного lowering.
+
 ## Карта компонентов
 
 Каждый компонент — статический архив, созданный

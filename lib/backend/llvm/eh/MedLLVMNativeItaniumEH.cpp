@@ -67,6 +67,18 @@ const char *itaniumPersonalitySymbol(ExceptionPersonality P) {
     return "__objc_personality_v0";
   case ExceptionPersonality::RustEhPersonality:
     return "rust_eh_personality";
+  case ExceptionPersonality::GnatPersonalityV0:
+    return "__gnat_personality_v0";
+  case ExceptionPersonality::GnatPersonalitySEH0:
+    return "__gnat_personality_seh0";
+  case ExceptionPersonality::DmdPersonalityV0:
+    return "__dmd_personality_v0";
+  case ExceptionPersonality::DRuntimeEhPersonality:
+    return "_d_eh_personality";
+  case ExceptionPersonality::GdcPersonalityV0:
+    return "__gdc_personality_v0";
+  case ExceptionPersonality::GdcPersonalitySEH0:
+    return "__gdc_personality_seh0";
   default:
     return nullptr;
   }
@@ -458,7 +470,9 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
         Entry->TypeInfoSlotVA != 0 ? Entry->TypeInfoSlotVA : Entry->TypeInfoVA};
     llvm::StringRef DecodedName(Entry->TypeName);
     const bool IsRTTISymbol =
-        DecodedName.starts_with("_ZTI") || DecodedName.starts_with("__ZTI");
+        getItaniumTypeTableEntryKind(EH.Personality) ==
+            ItaniumTypeTableEntryKind::CxxRTTI &&
+        (DecodedName.starts_with("_ZTI") || DecodedName.starts_with("__ZTI"));
     const std::string Name =
         Identity.IsSlot ? makeNdDataSymbol(Identity.Address)
                         : (IsRTTISymbol ? Entry->TypeName
@@ -495,7 +509,9 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
       return Mapped;
     llvm::StringRef DecodedName(Entry.TypeName);
     const bool IsRTTISymbol =
-        DecodedName.starts_with("_ZTI") || DecodedName.starts_with("__ZTI");
+        getItaniumTypeTableEntryKind(EH.Personality) ==
+            ItaniumTypeTableEntryKind::CxxRTTI &&
+        (DecodedName.starts_with("_ZTI") || DecodedName.starts_with("__ZTI"));
     std::string Name =
         IsRTTISymbol ? Entry.TypeName : makeNdDataSymbol(Entry.TypeInfoVA);
     llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);

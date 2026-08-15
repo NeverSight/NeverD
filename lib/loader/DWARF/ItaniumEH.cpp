@@ -207,6 +207,7 @@ void parseItaniumExceptions(BinaryImage &Img) {
       Req.LSDAVA = FDE.LSDAVA;
       Req.FunctionStart = F.CodeRange.Begin;
       Req.FunctionEnd = F.CodeRange.End;
+      Req.Personality = F.Personality;
       Req.IsSJLJ = isSJLJPersonality(F.Personality);
       PointerBases LSDABases = Bases;
       LSDABases.Func = F.CodeRange.Begin;
@@ -268,6 +269,7 @@ bool refreshItaniumLanguageData(const BinaryImage &Img,
   Req.LSDAVA = Function.HandlerDataVA;
   Req.FunctionStart = Function.CodeRange.Begin;
   Req.FunctionEnd = Function.CodeRange.End;
+  Req.Personality = Function.Personality;
   Req.IsSJLJ = isSJLJPersonality(Function.Personality);
 
   PointerBases Bases = computeBases(Img);

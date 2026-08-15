@@ -388,6 +388,15 @@ pris en charge ou des exigences de registration/layout non résolues doivent
 échouer avant toute mutation de la sortie ; les capacités partielles existantes
 ne doivent pas être présentées comme une couverture complète des exceptions.
 
+Reconnaître une personnalité Itanium Ada ou D n’est pas une prise en charge des
+exceptions Ada ou D. Les LSDA address-form de GNAT, GDC, DMD et LDC sont
+analysables ; les emplacements de type-table restent opaques (`Exception_Id` /
+`Exception_Data` pour GNAT, `ClassInfo` pour D) et ne sont jamais suivis comme
+`std::type_info`. La reconstruction native émet `personality` LLVM plus des
+clauses `invoke`/`landingpad` en forme d’adresse. Le statut corpus-proven est
+une affirmation distincte et ne découle ni de la reconnaissance de personnalité
+ni du lowering natif.
+
 ## Carte des composants
 
 Chaque composant est une archive statique créée par

@@ -325,6 +325,14 @@ pipeline لإعادة الكتابة من طرف إلى طرف تغطي كل ا�
 أن يفشل أي encoding غير مدعوم أو متطلبات registration/layout غير محلولة قبل
 تعديل الخرج؛ ولا يجوز وصف الدعم الجزئي الحالي بأنه إغلاق كامل لمسار الاستثناءات.
 
+التعرف على personality من نوع Itanium لـ Ada أو D ليس دعمًا لاستثناءات Ada أو
+D. سجلات LSDA ذات شكل العنوان من GNAT وGDC وDMD وLDC قابلة للتحليل؛ وتبقى خانات
+type-table غير شفافة (`Exception_Id` / `Exception_Data` في GNAT و`ClassInfo`
+في D) ولا تُتبع أبدًا على أنها `std::type_info`. تعيد البناء الأصلي إصدار
+`personality` في LLVM مع بنود `invoke`/`landingpad` ذات شكل العنوان. حالة
+corpus-proven ادعاء منفصل ولا تُستنتج من التعرف على personality أو من lowering
+الأصلي.
+
 ## خريطة المكونات
 
 كل مكوّن أرشيف ثابت ينشئه `add_neverd_component_library`. يسرد الجدول تبعيات

@@ -49,6 +49,7 @@ bool parseMinGWLSDA(ExceptionFunction &F, const BinaryImage &Img) {
   Req.LSDAVA = F.HandlerDataVA;
   Req.FunctionStart = F.CodeRange.Begin;
   Req.FunctionEnd = F.CodeRange.End;
+  Req.Personality = F.Personality;
   Req.MaxRecords = detail::MaxLanguageRecords;
 
   dwarf_eh::PointerBases Bases;
