@@ -56,3 +56,4 @@ A(Intrinsic::A64_MopsSetP,   "setp");
 A(Intrinsic::A64_MopsSetPN,  "setpn");
 A(Intrinsic::A64_MopsSetPT,  "setpt");
 A(Intrinsic::A64_MopsSetPTN, "setptn");
+A(Intrinsic::A64_MopsCpyFP,  "cpyfp");

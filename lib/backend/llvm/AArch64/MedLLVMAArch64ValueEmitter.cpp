@@ -32,6 +32,42 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  if (IC == I::A64_MopsCpyFP && Op.Output.Size > 0 && Op.NumInputs >= 4) {
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    auto coerceI64 = [&](llvm::Value *V) -> llvm::Value * {
+      if (V->getType()->isPointerTy())
+        return Builder.CreatePtrToInt(V, I64Ty);
+      if (V->getType() == I64Ty)
+        return V;
+      return Builder.CreateZExtOrTrunc(V, I64Ty);
+    };
+
+    llvm::Value *Dst = coerceI64(getVar(Op.Inputs[1], Builder));
+    llvm::Value *Src = coerceI64(getVar(Op.Inputs[2], Builder));
+    llvm::Value *Count = coerceI64(getVar(Op.Inputs[3], Builder));
+    auto *ResultTy = llvm::StructType::get(*Ctx, {I64Ty, I64Ty, I64Ty, I64Ty});
+    auto *AsmTy =
+        llvm::FunctionType::get(ResultTy, {I64Ty, I64Ty, I64Ty}, false);
+    auto *IA =
+        llvm::InlineAsm::get(AsmTy, "cpyfp [$0]!, [$1]!, $2!\n\tmrs $3, nzcv",
+                             "=r,=r,=r,=r,0,1,2,~{memory},~{cc}", true);
+    auto *Result = Builder.CreateCall(IA, {Dst, Src, Count}, "mops.cpyfp");
+    auto *DstOut = Builder.CreateExtractValue(Result, {0}, "mops.dst");
+    auto *SrcOut = Builder.CreateExtractValue(Result, {1}, "mops.src");
+    auto *CountOut = Builder.CreateExtractValue(Result, {2}, "mops.count");
+    auto *NzcvOut = Builder.CreateExtractValue(Result, {3}, "mops.nzcv");
+    PendingIntrinsicOutputs[0] = DstOut;
+    PendingIntrinsicOutputs[1] = SrcOut;
+    PendingIntrinsicOutputs[2] = CountOut;
+    PendingIntrinsicOutputs[3] = NzcvOut;
+    PendingIntrinsicCount = 4;
+
+    auto *OutTy = sizeToType(Op.Output.Size);
+    return DstOut->getType() == OutTy
+               ? DstOut
+               : Builder.CreateZExtOrTrunc(DstOut, OutTy);
+  }
+
   if ((IC == I::A64_MopsSetP || IC == I::A64_MopsSetPN ||
        IC == I::A64_MopsSetPT || IC == I::A64_MopsSetPTN) &&
       Op.Output.Size > 0 && Op.NumInputs >= 4) {

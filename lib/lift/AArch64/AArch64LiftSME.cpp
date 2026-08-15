@@ -16,6 +16,8 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64Lifter.h"
 
+#include <cstdint>
+
 namespace neverd {
 
 bool liftSME(AArch64Lifter &L, AArch64Lifter::LiftState &S, const cs_insn *Insn,
@@ -166,6 +168,41 @@ bool liftSME(AArch64Lifter &L, AArch64Lifter::LiftState &S, const cs_insn *Insn,
     break;
   }
 
+  case AARCH64_INS_CPYFP: {
+    // Capstone recognizes CPYFP but currently exposes no operands for it.
+    // Recover Xd, Xn (count), and Xs directly from the architectural encoding
+    // so the instruction and all of its writebacks cannot silently disappear.
+    if (Insn->size != 4)
+      break;
+    uint32_t Encoding = static_cast<uint32_t>(Insn->bytes[0]) |
+                        (static_cast<uint32_t>(Insn->bytes[1]) << 8) |
+                        (static_cast<uint32_t>(Insn->bytes[2]) << 16) |
+                        (static_cast<uint32_t>(Insn->bytes[3]) << 24);
+    unsigned DstIndex = Encoding & 0x1f;
+    unsigned CountIndex = (Encoding >> 5) & 0x1f;
+    unsigned SrcIndex = (Encoding >> 16) & 0x1f;
+    if (DstIndex == 31 || SrcIndex == 31 || CountIndex == 31)
+      break;
+
+    NdVar DstReg = NdVar::reg(a64reg::X0 + DstIndex * 8, 8);
+    NdVar SrcReg = NdVar::reg(a64reg::X0 + SrcIndex * 8, 8);
+    NdVar CountReg = NdVar::reg(a64reg::X0 + CountIndex * 8, 8);
+    S.emitIntrinsic(Intrinsic::A64_MopsCpyFP, DstReg,
+                    {DstReg, SrcReg, CountReg});
+
+    NdVar DstResult = S.makeTemp(8);
+    S.emit(NdOp::COPY, DstReg, {DstResult});
+    NdVar SrcResult = S.makeTemp(8);
+    S.emit(NdOp::COPY, SrcReg, {SrcResult});
+    NdVar CountResult = S.makeTemp(8);
+    S.emit(NdOp::COPY, CountReg, {CountResult});
+    NdVar NzcvResult = S.makeTemp(8);
+    NdVar PackedNzcv = S.makeTemp(8);
+    S.emit(NdOp::COPY, PackedNzcv, {NzcvResult});
+    AArch64Lifter::emitMsrNzcv(S, PackedNzcv);
+    break;
+  }
+
   case AARCH64_INS_CPYE:
   case AARCH64_INS_CPYEN:
   case AARCH64_INS_CPYERN:
@@ -214,7 +251,6 @@ bool liftSME(AArch64Lifter &L, AArch64Lifter::LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_CPYFMWTN:
   case AARCH64_INS_CPYFMWTRN:
   case AARCH64_INS_CPYFMWTWN:
-  case AARCH64_INS_CPYFP:
   case AARCH64_INS_CPYFPN:
   case AARCH64_INS_CPYFPRN:
   case AARCH64_INS_CPYFPRT:

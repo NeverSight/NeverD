@@ -57,8 +57,8 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names) {
   // MOPS phase instructions currently survive lifting as target inline asm.
   // Seeing one proves the input binary requires FEAT_MOPS; enable the feature
   // so patch-mode code generation accepts and preserves the instruction.
-  if (Has("setp") || Has("setm") || Has("sete") || Has("cpyp") || Has("cpym") ||
-      Has("cpye"))
+  if (Has("setp") || Has("setm") || Has("sete") || Has("cpyf") || Has("cpyp") ||
+      Has("cpym") || Has("cpye"))
     F += ",+mops";
   return {"generic", F};
 }

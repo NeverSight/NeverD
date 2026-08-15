@@ -52,6 +52,40 @@ renderMopsSetPrologue(Intrinsic IID, const std::vector<MedVar> &Outputs,
   return Result;
 }
 
+std::string
+renderMopsCopyPrologue(const std::vector<MedVar> &Outputs,
+                       const std::vector<ExprPtr> &Operands,
+                       std::function<std::string(const HighExpr &)> ExprFn,
+                       std::function<std::string(const MedVar &)> VarFn,
+                       const IsAliveFn &IsAlive) {
+  if (Outputs.size() < 4 || Operands.size() < 3)
+    return {};
+
+  std::string Result = "{\n";
+  Result += "        uint64_t _nd_mops_dst = (uint64_t)(uintptr_t)(" +
+            ExprFn(*Operands[0]) + ");\n";
+  Result += "        uint64_t _nd_mops_src = (uint64_t)(uintptr_t)(" +
+            ExprFn(*Operands[1]) + ");\n";
+  Result += "        uint64_t _nd_mops_count = (uint64_t)(" +
+            ExprFn(*Operands[2]) + ");\n";
+  Result += "        uint64_t _nd_mops_nzcv;\n";
+  Result += "        __asm__ volatile(\"cpyfp [%0]!, [%1]!, %2!\\n\\t"
+            "mrs %3, nzcv\"\n";
+  Result += "                         : \"+r\"(_nd_mops_dst), "
+            "\"+r\"(_nd_mops_src),\n";
+  Result += "                           \"+r\"(_nd_mops_count), "
+            "\"=r\"(_nd_mops_nzcv)\n";
+  Result += "                         :\n";
+  Result += "                         : \"memory\", \"cc\");\n";
+  const char *Names[] = {"_nd_mops_dst", "_nd_mops_src", "_nd_mops_count",
+                         "_nd_mops_nzcv"};
+  for (size_t I = 0; I < 4; ++I)
+    if (isAlive(Outputs[I], IsAlive))
+      Result += "        " + VarFn(Outputs[I]) + " = " + Names[I] + ";\n";
+  Result += "    }\n";
+  return Result;
+}
+
 } // anonymous namespace
 
 llvm::SmallVector<const char *, 3> getARMIntrinsicHeaders() {
@@ -72,6 +106,8 @@ renderARMMultiOutput(Intrinsic IID, const std::vector<MedVar> &Outputs,
   case I::A64_MopsSetPTN:
     return renderMopsSetPrologue(IID, Outputs, Operands, ExprFn, VarFn,
                                  IsAlive);
+  case I::A64_MopsCpyFP:
+    return renderMopsCopyPrologue(Outputs, Operands, ExprFn, VarFn, IsAlive);
   default:
     return {};
   }

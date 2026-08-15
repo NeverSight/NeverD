@@ -16,3 +16,6 @@ MULTI_OUT(Intrinsic::A64_MopsSetP,   3);
 MULTI_OUT(Intrinsic::A64_MopsSetPN,  3);
 MULTI_OUT(Intrinsic::A64_MopsSetPT,  3);
 MULTI_OUT(Intrinsic::A64_MopsSetPTN, 3);
+
+// AArch64 FEAT_MOPS copy prologue: destination, source, count, NZCV.
+MULTI_OUT(Intrinsic::A64_MopsCpyFP, 4);

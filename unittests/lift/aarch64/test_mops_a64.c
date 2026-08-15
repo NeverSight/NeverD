@@ -13,3 +13,11 @@ DEFINE_SET_PROBE(setp_probe, "setp")
 DEFINE_SET_PROBE(setpn_probe, "setpn")
 DEFINE_SET_PROBE(setpt_probe, "setpt")
 DEFINE_SET_PROBE(setptn_probe, "setptn")
+
+__attribute__((naked, noinline)) void cpyfp_probe(void) {
+  __asm__ volatile("cpyfp [x0]!, [x1]!, x2!\n\t"
+                   "ret"
+                   :
+                   :
+                   : "x0", "x1", "x2", "memory", "cc");
+}

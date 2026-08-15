@@ -131,3 +131,7 @@ A64_GetFPSR, A64_SetFPSR,
 // FEAT_MOPS memory-set prologue.  The operation has implementation-defined
 // progress, so preserve the architectural instruction and all writebacks.
 A64_MopsSetP, A64_MopsSetPN, A64_MopsSetPT, A64_MopsSetPTN,
+
+// FEAT_MOPS forward-copy prologue.  Like SETP, this instruction has
+// implementation-defined progress and updates all three operand registers.
+A64_MopsCpyFP,

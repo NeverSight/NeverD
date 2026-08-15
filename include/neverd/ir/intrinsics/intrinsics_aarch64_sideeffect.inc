@@ -34,3 +34,4 @@ SIDEEFFECT(Intrinsic::A64_MopsSetP);
 SIDEEFFECT(Intrinsic::A64_MopsSetPN);
 SIDEEFFECT(Intrinsic::A64_MopsSetPT);
 SIDEEFFECT(Intrinsic::A64_MopsSetPTN);
+SIDEEFFECT(Intrinsic::A64_MopsCpyFP);

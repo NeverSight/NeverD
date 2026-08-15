@@ -42,6 +42,39 @@ TEST_F(AArch64_Mops, SetpHighCUsesCompilableInlineAssembly) {
   EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << source;
 }
 
+TEST_F(AArch64_Mops, CpyfpPreservesArchitecturalInstructionAndState) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  EXPECT_NE(r.out.find("asm sideeffect \"cpyfp"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("mrs"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("%arg0"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("%arg1"), std::string::npos) << r.out;
+  EXPECT_NE(r.out.find("%arg2"), std::string::npos) << r.out;
+  EXPECT_EQ(r.out.find("memory(none)"), std::string::npos) << r.out;
+}
+
+TEST_F(AArch64_Mops, CpyfpHighCUsesCompilableInlineAssembly) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("cpyfp [%0]!, [%1]!, %2!"), std::string::npos)
+      << source;
+  EXPECT_NE(source.find("_nd_mops_dst"), std::string::npos) << source;
+  EXPECT_NE(source.find("_nd_mops_src"), std::string::npos) << source;
+  EXPECT_NE(source.find("_nd_mops_count"), std::string::npos) << source;
+  EXPECT_NE(source.find("_nd_mops_nzcv"), std::string::npos) << source;
+
+  auto syntax = exec("clang", {"-std=gnu11", "-fsyntax-only", cFile.string()});
+  EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << source;
+}
+
 TEST_F(AArch64_Mops, AllStagesPass) {
   ASSERT_TRUE(fs::exists(testObj())) << "test_mops_a64.o not built";
   verifyAllStages(testObj());
