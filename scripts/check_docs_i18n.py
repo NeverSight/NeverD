@@ -272,6 +272,10 @@ class RepositoryView:
         return (REPO_ROOT / relative_path).exists()
 
 
+def display_path(path: Path) -> str:
+    return path.as_posix()
+
+
 def report(errors: list[str], message: str) -> None:
     errors.append(message)
 
@@ -285,7 +289,7 @@ def require_tokens(
     text = view.read_text(path)
     for token in tokens:
         if token not in text:
-            report(errors, f"{path}: missing required token {token!r}")
+            report(errors, f"{display_path(path)}: missing required token {token!r}")
 
 
 def validate_architecture_semantics(errors: list[str], view: RepositoryView) -> None:
@@ -296,8 +300,8 @@ def validate_architecture_semantics(errors: list[str], view: RepositoryView) -> 
                 if token not in text:
                     report(
                         errors,
-                        f"{path}: architecture capability {capability_id!r} "
-                        f"missing required token {token!r}",
+                        f"{display_path(path)}: architecture capability "
+                        f"{capability_id!r} missing required token {token!r}",
                     )
 
 
@@ -380,10 +384,17 @@ def validate_links(
             try:
                 destination_relative = destination.relative_to(REPO_ROOT)
             except ValueError:
-                report(errors, f"{relative_path}: link escapes repository: {target}")
+                report(
+                    errors,
+                    f"{display_path(relative_path)}: link escapes repository: "
+                    f"{target}",
+                )
                 continue
             if not view.exists(destination_relative):
-                report(errors, f"{relative_path}: missing link target: {target}")
+                report(
+                    errors,
+                    f"{display_path(relative_path)}: missing link target: {target}",
+                )
                 continue
             if not separator or not fragment or destination.suffix.lower() != ".md":
                 continue
@@ -395,8 +406,9 @@ def validate_links(
             if decoded_fragment not in anchors:
                 report(
                     errors,
-                    f"{relative_path}: missing Markdown anchor {decoded_fragment!r} in "
-                    f"{destination.relative_to(REPO_ROOT)}",
+                    f"{display_path(relative_path)}: missing Markdown anchor "
+                    f"{decoded_fragment!r} in "
+                    f"{display_path(destination.relative_to(REPO_ROOT))}",
                 )
 
 
@@ -420,13 +432,20 @@ def validate_markdown_structure(
                 opening = None
         if opening is not None:
             _, _, line_number = opening
-            report(errors, f"{relative_path}:{line_number}: unclosed Markdown fence")
+            report(
+                errors,
+                f"{display_path(relative_path)}:{line_number}: "
+                "unclosed Markdown fence",
+            )
 
 
 def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     for path in MARKDOWN_DOCS:
         if not view.exists(path):
-            report(errors, f"missing localized documentation file: {path}")
+            report(
+                errors,
+                f"missing localized documentation file: {display_path(path)}",
+            )
     if errors:
         return
 
