@@ -143,7 +143,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                         self.assertEqual(
                             errors,
                             [
-                                f"{path}: architecture capability "
+                                f"{path.as_posix()}: architecture capability "
                                 f"{capability_id!r} missing required token "
                                 f"{missing_token!r}"
                             ],
@@ -161,7 +161,8 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         self.assertEqual(
             errors,
             [
-                f"{path}: architecture capability 'translation.runtime-contract' "
+                f"{path.as_posix()}: architecture capability "
+                f"'translation.runtime-contract' "
                 f"missing required token {token!r}"
             ],
         )
