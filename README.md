@@ -212,7 +212,7 @@ replacement entirely if GitHub marks the release immutable.
 | `build/bin/neverd-bench` | Benchmark harness (JSON timings) |
 | `build/bin/neverd-sigmaker` | `.pat` generator from static libraries |
 | `build/bin/libneverd.*` | Engine shared library |
-| `build/bin/sdk/` | `NeverDCAPI.h`, `NeverDPlugin.h` |
+| `build/bin/sdk/` | Canonical C SDK include root; use `<neverd/sdk/NeverDCAPI.h>` or `<neverd/sdk/NeverDPlugin.h>` with the `neverd/sdk/` hierarchy preserved |
 | `build/bin/sdk/python/` | Typed Python plugin package and examples |
 | `build/bin/signatures/` | Bundled signature libraries |
 
