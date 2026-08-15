@@ -105,6 +105,13 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 "`__TEXT,__unwind_info`",
                 "`__LINKEDIT`",
             ),
+            "exception.itanium.ada-d": (
+                "`Exception_Id`",
+                "`ClassInfo`",
+                "`std::type_info`",
+                "`invoke`",
+                "`landingpad`",
+            ),
         }
         architecture_paths = (
             Path("docs/architecture.md"),
