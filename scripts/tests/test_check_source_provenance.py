@@ -375,6 +375,45 @@ class ProvenanceOfThisRepositoryTests(unittest.TestCase):
             self.assertEqual(len(findings), 1)
             self.assertIn("source.cpp@", findings[0])
 
+    def test_recent_history_skips_a_merge_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(("git", "init", "-q", "-b", "main"), cwd=root, check=True)
+            (root / "base.cpp").write_text("int base;\n", encoding="utf-8")
+            subprocess.run(("git", "add", "base.cpp"), cwd=root, check=True)
+            self.commit(root, "base")
+            subprocess.run(("git", "checkout", "-q", "-b", "feature"), cwd=root, check=True)
+            (root / "feature.cpp").write_text("int feature;\n", encoding="utf-8")
+            subprocess.run(("git", "add", "feature.cpp"), cwd=root, check=True)
+            self.commit(root, "feature")
+            subprocess.run(("git", "checkout", "-q", "main"), cwd=root, check=True)
+            (root / "main.cpp").write_text("int mainline;\n", encoding="utf-8")
+            subprocess.run(("git", "add", "main.cpp"), cwd=root, check=True)
+            self.commit(root, "mainline")
+            subprocess.run(
+                (
+                    "git",
+                    "-c",
+                    "user.name=NeverD Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "merge",
+                    "-q",
+                    "--no-ff",
+                    "-m",
+                    "merge feature",
+                    "feature",
+                ),
+                cwd=root,
+                check=True,
+            )
+            rule = ProvenanceScanTests.term_rule("private-path", "private-token")
+
+            with mock.patch.object(provenance, "REPO_ROOT", root):
+                findings = provenance.scan_recent_history(1, (rule,))
+
+            self.assertEqual(findings, [])
+
     def test_ci_fetches_and_scans_recent_history(self) -> None:
         workflow = (provenance.REPO_ROOT / ".github/workflows/ci.yml").read_text(
             encoding="utf-8"
