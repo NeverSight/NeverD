@@ -22,6 +22,7 @@ SIDEEFFECT(Intrinsic::Hvc);
 SIDEEFFECT(Intrinsic::Smc);
 SIDEEFFECT(Intrinsic::Eret);
 SIDEEFFECT(Intrinsic::A64_Clrex);
+SIDEEFFECT(Intrinsic::A64_SetFPSR);
 // cache / TLB
 SIDEEFFECT(Intrinsic::Dc);
 SIDEEFFECT(Intrinsic::Ic);

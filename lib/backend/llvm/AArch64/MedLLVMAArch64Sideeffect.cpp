@@ -21,6 +21,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/IntrinsicsAArch64.h"
 
 namespace neverd {
 
@@ -137,6 +138,25 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
 
 bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
                                            llvm::IRBuilder<> &Builder) {
+  if (IC == Intrinsic::A64_SetFPSR) {
+    if (Op.NumInputs < 2)
+      return true;
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    llvm::Value *Value = getVar(Op.Inputs[1], Builder);
+    if (Value->getType()->isPointerTy())
+      Value = Builder.CreatePtrToInt(Value, I64Ty);
+    else if (Value->getType()->isFloatingPointTy()) {
+      auto *BitsTy = llvm::IntegerType::get(
+          *Ctx, Value->getType()->getPrimitiveSizeInBits());
+      Value = Builder.CreateBitCast(Value, BitsTy);
+    }
+    if (Value->getType() != I64Ty)
+      Value = Builder.CreateZExtOrTrunc(Value, I64Ty);
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_set_fpsr);
+    Builder.CreateCall(Fn, {Value});
+    return true;
+  }
   if (emitAArch64Barrier(Op, IC, Builder))
     return true;
   if (emitAArch64Hint(Op, IC, Builder))

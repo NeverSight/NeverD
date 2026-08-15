@@ -122,3 +122,8 @@ A64_Sm4e, A64_Sm4ekey,
 // rounding step; decomposing them into a half conversion plus a half multiply
 // overflows and can also double-round.
 A64_ScvtfFixed, A64_UcvtfFixed, A64_FcvtzsFixed, A64_FcvtzuFixed,
+
+// Floating-point status register access.  These map to LLVM's architectural
+// FPSR get/set intrinsics so reads, explicit writes, and cumulative QC state
+// survive recompilation.
+A64_GetFPSR, A64_SetFPSR,

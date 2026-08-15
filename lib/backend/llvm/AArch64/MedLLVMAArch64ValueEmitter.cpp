@@ -31,6 +31,14 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  if (IC == I::A64_GetFPSR && Op.Output.Size > 0) {
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_get_fpsr);
+    llvm::Value *R = Builder.CreateCall(Fn, {}, "fpsr");
+    auto *OutTy = sizeToType(Op.Output.Size);
+    return (R->getType() == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
+  }
+
   // Scalar FP16 fixed-point conversions have a single architectural rounding
   // step.  Expanding them into separate conversion and multiply operations can
   // overflow in half precision or double-round through a wider FP type.  Keep

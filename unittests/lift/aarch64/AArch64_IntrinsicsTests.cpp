@@ -78,6 +78,52 @@ TEST(AArch64_HighCIntrinsics, FixedFP16ConversionsUseNeverCBuiltins) {
               std::string::npos) << c;
 }
 
+TEST(AArch64_HighCIntrinsics, FPSRUsesClangSystemRegisterBuiltins) {
+    using namespace neverd;
+
+    HighFunc read;
+    read.Name = "read_fpsr";
+    read.ReturnType = NdType::makeInt(8, false);
+    auto get = HighExpr::makeCall(intrinsicCName(Intrinsic::A64_GetFPSR), 0,
+                                  {});
+    get->IntrinsicId = Intrinsic::A64_GetFPSR;
+    get->Type = read.ReturnType;
+    HighStmt readRet;
+    readRet.Kind = StmtKind::Return;
+    readRet.RetVal = std::move(get);
+    read.Body.push_back(std::move(readRet));
+
+    HighFunc write;
+    write.Name = "write_fpsr";
+    write.ReturnType = NdType::makeVoid();
+    write.Params.push_back({"arg0", NdType::makeInt(8, false)});
+    MedVar input;
+    input.Kind = MedVar::Param;
+    input.Id = 0;
+    input.Size = 8;
+    input.TheArch = Arch::AArch64;
+    auto set = HighExpr::makeCall(intrinsicCName(Intrinsic::A64_SetFPSR), 0,
+                                  {HighExpr::makeVar(input)});
+    set->IntrinsicId = Intrinsic::A64_SetFPSR;
+    HighStmt setStmt;
+    setStmt.Kind = StmtKind::Call;
+    setStmt.CallExpr = std::move(set);
+    write.Body.push_back(std::move(setStmt));
+
+    std::string c;
+    llvm::raw_string_ostream os(c);
+    CEmitterOptions opts;
+    opts.TheArch = Arch::AArch64;
+    ASSERT_TRUE(HighCEmitter().emit({read, write}, os, opts));
+    os.flush();
+
+    EXPECT_NE(c.find("__builtin_arm_rsr64(\"FPSR\")"), std::string::npos)
+        << c;
+    EXPECT_NE(c.find("__builtin_arm_wsr64(\"FPSR\", arg0)"),
+              std::string::npos)
+        << c;
+}
+
 TEST_F(AArch64_Intrinsics, AllStages) {
     verifyAllModesSucceed(obj("test_intrinsics_a64.o"));
 }

@@ -144,6 +144,10 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         OpStrs.push_back(exprStr(*Op));
 
     using I = Intrinsic;
+    if (E.IntrinsicId == I::A64_GetFPSR ||
+        E.IntrinsicId == I::A64_SetFPSR)
+      OpStrs.insert(OpStrs.begin(), "\"FPSR\"");
+
     bool IsFixedIntToFP = E.IntrinsicId == I::A64_ScvtfFixed ||
                           E.IntrinsicId == I::A64_UcvtfFixed;
     bool IsFixedFPToInt = E.IntrinsicId == I::A64_FcvtzsFixed ||

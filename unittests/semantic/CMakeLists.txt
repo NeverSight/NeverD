@@ -55,6 +55,7 @@ add_neverd_unittest(NeverDSemanticTests
   aarch64/AArch64_FP16ReduceRTTests.cpp
   aarch64/AArch64_FP16WidenFMARTTests.cpp
   aarch64/AArch64_FPConvRoundRTTests.cpp
+  aarch64/AArch64_FPSRRTTests.cpp
   aarch64/AArch64_FPRoundTripTests.cpp
   aarch64/AArch64_FPScalarChainRTTests.cpp
   aarch64/AArch64_FRIntTSRTTests.cpp
@@ -1318,4 +1319,40 @@ target_link_libraries(NeverDFMARoundingTests PRIVATE
 
 if(TARGET neverd)
   add_dependencies(NeverDFMARoundingTests neverd)
+endif()
+
+# Focused target for AArch64 FPSR/QC state regressions.  The TU also remains in
+# the aggregate semantic suite used by Linux CI.
+add_neverd_unittest(NeverDFPSRTests
+  aarch64/AArch64_FPSRRTTests.cpp
+  TIMEOUT 120
+)
+
+target_compile_definitions(NeverDFPSRTests PRIVATE
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_include_directories(NeverDFPSRTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+  ${CMAKE_SOURCE_DIR}/third_party/unicorn/include
+)
+
+target_link_libraries(NeverDFPSRTests PRIVATE
+  unicorn
+  neverd_shared
+  NeverDPassMIR
+  LLVMMC
+  LLVMMCParser
+  LLVMObject
+  LLVMX86AsmParser LLVMX86Desc LLVMX86Info
+  LLVMAArch64AsmParser LLVMAArch64Desc LLVMAArch64Info
+  LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
+  LLVMSupport
+)
+
+if(TARGET neverd)
+  add_dependencies(NeverDFPSRTests neverd)
 endif()

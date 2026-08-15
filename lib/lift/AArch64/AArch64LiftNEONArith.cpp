@@ -372,6 +372,25 @@ bool liftNEONArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
                           ? (IsSub ? Intrinsic::A64Sqsub : Intrinsic::A64Sqadd)
                           : (IsSub ? Intrinsic::A64Uqsub : Intrinsic::A64Uqadd);
 
+    NdVar AnySat = S.makeTemp(0);
+    auto AccumulateSaturation = [&](NdVar X, NdVar Y) {
+      NdOp FlagOp;
+      if (IsSigned)
+        FlagOp = IsSub ? NdOp::INT_SBOR : NdOp::INT_SOVF;
+      else
+        FlagOp = IsSub ? NdOp::INT_LESS : NdOp::INT_CARRY;
+
+      NdVar Saturated = S.makeTemp(1);
+      S.emit(FlagOp, Saturated, {X, Y});
+      if (AnySat.Size == 0) {
+        AnySat = Saturated;
+      } else {
+        NdVar Combined = S.makeTemp(1);
+        S.emit(NdOp::BOOL_OR, Combined, {AnySat, Saturated});
+        AnySat = Combined;
+      }
+    };
+
     if (LaneSz > 0 && LaneSz <= 4 && Dst.Size > LaneSz) {
       unsigned NLanes = Dst.Size / LaneSz;
       unsigned WideSz = LaneSz * 2;
@@ -381,6 +400,7 @@ bool liftNEONArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
         NdVar Lb = S.makeTemp(LaneSz);
         S.emit(NdOp::SUBBYTES, La, {A, NdVar::cst(I * LaneSz, 4)});
         S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * LaneSz, 4)});
+        AccumulateSaturation(La, Lb);
         NdVar Wa = S.makeTemp(WideSz);
         NdVar Wb = S.makeTemp(WideSz);
         if (IsSigned) {
@@ -449,6 +469,7 @@ bool liftNEONArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
         NdVar Lb = S.makeTemp(LaneSz);
         S.emit(NdOp::SUBBYTES, La, {A, NdVar::cst(I * LaneSz, 4)});
         S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * LaneSz, 4)});
+        AccumulateSaturation(La, Lb);
         NdVar R = S.makeTemp(LaneSz);
         S.emitIntrinsic(SatII, R, {La, Lb});
         if (I == 0) {
@@ -462,7 +483,23 @@ bool liftNEONArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       S.emit(NdOp::COPY, Dst, {Acc});
     } else {
       // Scalar form (b/h/s/d): single saturating intrinsic.
+      AccumulateSaturation(A, B);
       S.emitIntrinsic(SatII, Dst, {A, B});
+    }
+
+    // QC is cumulative: a saturating instruction sets FPSR.QC when any lane
+    // saturates and otherwise leaves the complete FPSR value unchanged.
+    if (AnySat.Size != 0) {
+      NdVar OldFPSR = S.makeTemp(8);
+      S.emitIntrinsic(Intrinsic::A64_GetFPSR, OldFPSR);
+      NdVar WideSat = S.makeTemp(8);
+      S.emit(NdOp::INT_ZEXT, WideSat, {AnySat});
+      NdVar QCMask = S.makeTemp(8);
+      S.emit(NdOp::INT_LEFT, QCMask,
+             {WideSat, NdVar::cst(a64reg::FpsrQCBit, 8)});
+      NdVar NewFPSR = S.makeTemp(8);
+      S.emit(NdOp::INT_OR, NewFPSR, {OldFPSR, QCMask});
+      S.emitVoidIntrinsic(Intrinsic::A64_SetFPSR, {NewFPSR});
     }
     break;
   }

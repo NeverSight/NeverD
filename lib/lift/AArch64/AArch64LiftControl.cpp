@@ -240,10 +240,16 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = operandWrite(ARM64.operands[0]);
     // `mrs Xn, NZCV` packs the condition flags; the compiler uses it to spill a
-    // live flag value.  Other system registers stay opaque (intrinsic).
+    // live flag value.  FPSR must remain architectural state so exception and
+    // cumulative-saturation flags survive recompilation.
     if (ARM64.operands[1].type == AARCH64_OP_SYSREG &&
         ARM64.operands[1].sysop.reg.sysreg == AARCH64_SYSREG_NZCV) {
       emitMrsNzcv(S, Dst);
+      break;
+    }
+    if (ARM64.operands[1].type == AARCH64_OP_SYSREG &&
+        ARM64.operands[1].sysop.reg.sysreg == AARCH64_SYSREG_FPSR) {
+      S.emitIntrinsic(Intrinsic::A64_GetFPSR, Dst);
       break;
     }
     S.emitIntrinsic(Intrinsic::Mrs, Dst);
@@ -256,6 +262,11 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     if (ARM64.operands[0].type == AARCH64_OP_SYSREG &&
         ARM64.operands[0].sysop.reg.sysreg == AARCH64_SYSREG_NZCV) {
       emitMsrNzcv(S, Src);
+      break;
+    }
+    if (ARM64.operands[0].type == AARCH64_OP_SYSREG &&
+        ARM64.operands[0].sysop.reg.sysreg == AARCH64_SYSREG_FPSR) {
+      S.emitVoidIntrinsic(Intrinsic::A64_SetFPSR, {Src});
       break;
     }
     S.emitIntrinsic(Intrinsic::Msr, NdVar::reg(a64reg::X0, 8), {Src});

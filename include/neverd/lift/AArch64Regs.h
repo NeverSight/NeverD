@@ -71,6 +71,9 @@ constexpr unsigned NzcvNBit = 31;
 constexpr unsigned NzcvZBit = 30;
 constexpr unsigned NzcvCBit = 29;
 constexpr unsigned NzcvVBit = 28;
+
+/// Cumulative saturation flag in FPSR.
+constexpr unsigned FpsrQCBit = 27;
 } // namespace a64reg
 
 RegInfo mapCapstoneReg(aarch64_reg Reg);
