@@ -42,20 +42,27 @@ bool liftFPConvert(AArch64Lifter &L, AArch64Lifter::LiftState &S,
         ARM64.operands[ARM64.op_count - 1].type == AARCH64_OP_IMM)
       FBits = static_cast<unsigned>(ARM64.operands[ARM64.op_count - 1].imm);
     // 2^-FBits as a float/double bit pattern of width `Sz` (bias - FBits).
+    // Fixed FP16 vectors use binary32 as an exact working format: every int16
+    // lane and every permitted power-of-two scale is exactly representable,
+    // then one final narrowing performs the architectural FP16 rounding.
     auto pow2neg = [&](unsigned Sz) -> NdVar {
       if (Sz == 8)
         return NdVar::cst(static_cast<uint64_t>(1023u - FBits) << 52, 8);
-      if (Sz == 2) // half: bias 15, 10 mantissa bits
-        return NdVar::cst(static_cast<uint64_t>((15u - FBits) << 10), 2);
       return NdVar::cst(static_cast<uint64_t>((127u - FBits) << 23), 4);
     };
     auto convertLane = [&](NdVar Lane, unsigned Sz) -> NdVar {
-      NdVar Cvt = S.makeTemp(Sz);
+      unsigned WorkSz = (FBits > 0 && Sz == 2) ? 4 : Sz;
+      NdVar Cvt = S.makeTemp(WorkSz);
       S.emit(CvtOp, Cvt, {Lane});
       if (FBits > 0) {
-        NdVar Scaled = S.makeTemp(Sz);
-        S.emit(NdOp::FLOAT_MULT, Scaled, {Cvt, pow2neg(Sz)});
-        return Scaled;
+        NdVar Scaled = S.makeTemp(WorkSz);
+        S.emit(NdOp::FLOAT_MULT, Scaled, {Cvt, pow2neg(WorkSz)});
+        Cvt = Scaled;
+      }
+      if (WorkSz != Sz) {
+        NdVar Narrowed = S.makeTemp(Sz);
+        S.emit(NdOp::FLOAT_FLOAT2FLOAT, Narrowed, {Cvt});
+        return Narrowed;
       }
       return Cvt;
     };
@@ -86,6 +93,14 @@ bool liftFPConvert(AArch64Lifter &L, AArch64Lifter::LiftState &S,
         }
       }
       S.emit(NdOp::COPY, Dst, {Acc});
+    } else if (FBits > 0 && Dst.Size == 2) {
+      // An integer -> binary16 fixed conversion is a single architectural
+      // rounding operation.  Widening through binary32/64 can double-round,
+      // while converting to half before scaling can overflow prematurely.
+      Intrinsic IC = (Insn->id == AARCH64_INS_UCVTF)
+                         ? Intrinsic::A64_UcvtfFixed
+                         : Intrinsic::A64_ScvtfFixed;
+      S.emitIntrinsic(IC, Dst, {Src, NdVar::cst(FBits, 4)});
     } else if (FBits > 0) {
       NdVar R = convertLane(Src, Dst.Size);
       S.emit(NdOp::COPY, Dst, {R});
@@ -118,18 +133,23 @@ bool liftFPConvert(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       LaneSz = 8;
     else if (DstVas == AARCH64LAYOUT_VL_8H || DstVas == AARCH64LAYOUT_VL_4H)
       LaneSz = 2; // half-precision (FEAT_FP16) per-lane conversion
-    // 2^FBits as a float/double bit pattern of width `Sz`.
+    // 2^FBits as a float/double bit pattern of width `Sz`.  Fixed FP16 vector
+    // lanes are first extended exactly to binary32 so the scale stays finite.
     auto pow2 = [&](unsigned Sz) -> NdVar {
       if (Sz == 8)
         return NdVar::cst(static_cast<uint64_t>(1023u + FBits) << 52, 8);
-      if (Sz == 2) // half: bias 15, 10 mantissa bits
-        return NdVar::cst(static_cast<uint64_t>((15u + FBits) << 10), 2);
       return NdVar::cst(static_cast<uint64_t>((127u + FBits) << 23), 4);
     };
     auto convertLane = [&](NdVar Lane, unsigned Sz) -> NdVar {
+      unsigned WorkSz = (FBits > 0 && Sz == 2) ? 4 : Sz;
+      if (WorkSz != Sz) {
+        NdVar Extended = S.makeTemp(WorkSz);
+        S.emit(NdOp::FLOAT_FLOAT2FLOAT, Extended, {Lane});
+        Lane = Extended;
+      }
       if (FBits > 0) {
-        NdVar Scaled = S.makeTemp(Sz);
-        S.emit(NdOp::FLOAT_MULT, Scaled, {Lane, pow2(Sz)});
+        NdVar Scaled = S.makeTemp(WorkSz);
+        S.emit(NdOp::FLOAT_MULT, Scaled, {Lane, pow2(WorkSz)});
         Lane = Scaled;
       }
       NdVar Cvt = S.makeTemp(Sz);
@@ -152,12 +172,16 @@ bool liftFPConvert(AArch64Lifter &L, AArch64Lifter::LiftState &S,
         }
       }
       S.emit(NdOp::COPY, Dst, {Acc});
+    } else if (FBits > 0 && Src.Size == 2) {
+      Intrinsic IC =
+          IsUnsigned ? Intrinsic::A64_FcvtzuFixed : Intrinsic::A64_FcvtzsFixed;
+      S.emitIntrinsic(IC, Dst, {Src, NdVar::cst(FBits, 4)});
     } else if (FBits > 0) {
       // Scalar fixed-point: scale by 2^fbits in the SOURCE fp width, then
       // convert straight to the integer dest width.  Using Dst.Size (the int
       // width) for the scale multiplied a double source by a single-precision
       // 2^fbits with a narrowed result (e.g. `fcvtzs w, d, #8`), corrupting it.
-      unsigned FpSz = (Src.Size == 8) ? 8 : (Src.Size == 2 ? 2 : 4);
+      unsigned FpSz = (Src.Size == 8) ? 8 : 4;
       NdVar Scaled = S.makeTemp(FpSz);
       S.emit(NdOp::FLOAT_MULT, Scaled, {Src, pow2(FpSz)});
       S.emit(CvtOp, Dst, {Scaled});

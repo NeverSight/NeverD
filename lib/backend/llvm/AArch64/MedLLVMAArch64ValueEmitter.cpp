@@ -18,7 +18,10 @@
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
+
+#include <string>
 
 namespace neverd {
 
@@ -30,6 +33,76 @@ llvm::Value *
 MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
+
+  // Scalar FP16 fixed-point conversions have a single architectural rounding
+  // step.  Expanding them into separate conversion and multiply operations can
+  // overflow in half precision or double-round through a wider FP type.  Keep
+  // the exact instruction in the generated AArch64 code instead.
+  if ((IC == I::A64_ScvtfFixed || IC == I::A64_UcvtfFixed ||
+       IC == I::A64_FcvtzsFixed || IC == I::A64_FcvtzuFixed) &&
+      Op.Output.Size > 0 && Op.NumInputs >= 3) {
+    bool IntToFP = (IC == I::A64_ScvtfFixed || IC == I::A64_UcvtfFixed);
+    bool IsUnsigned = (IC == I::A64_UcvtfFixed || IC == I::A64_FcvtzuFixed);
+    const MedVar &Imm = Op.Inputs[2];
+    if (!Imm.isConst())
+      return nullptr;
+
+    unsigned FBits = static_cast<unsigned>(Imm.ConstVal);
+    unsigned GprBytes = IntToFP ? Op.Inputs[1].Size : Op.Output.Size;
+    unsigned FpBytes = IntToFP ? Op.Output.Size : Op.Inputs[1].Size;
+    if (FpBytes != 2 || (GprBytes != 4 && GprBytes != 8) || FBits == 0 ||
+        FBits > GprBytes * 8)
+      return nullptr;
+
+    auto *OutTy = sizeToType(Op.Output.Size);
+    auto *GprTy = llvm::IntegerType::get(*Ctx, GprBytes * 8);
+    auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
+    auto *HalfTy = llvm::Type::getHalfTy(*Ctx);
+    auto coerceInteger = [&](llvm::Value *V,
+                             llvm::IntegerType *Ty) -> llvm::Value * {
+      if (V->getType()->isPointerTy())
+        V = Builder.CreatePtrToInt(V, Ty);
+      if (V->getType()->isFloatingPointTy()) {
+        auto *BitsTy = llvm::IntegerType::get(
+            *Ctx, V->getType()->getPrimitiveSizeInBits());
+        V = Builder.CreateBitCast(V, BitsTy);
+      }
+      return (V->getType() == Ty) ? V : Builder.CreateZExtOrTrunc(V, Ty);
+    };
+
+    std::string Asm;
+    std::string Name;
+    if (IntToFP) {
+      Asm = IsUnsigned ? "ucvtf " : "scvtf ";
+      Asm += "${0:h}, ${1:";
+      Asm += (GprBytes == 8) ? "x" : "w";
+      Asm += "}, #" + std::to_string(FBits);
+      Name = IsUnsigned ? "ucvtf.fixed" : "scvtf.fixed";
+
+      auto *FnTy = llvm::FunctionType::get(HalfTy, {GprTy}, false);
+      auto *IA = llvm::InlineAsm::get(FnTy, Asm, "=w,r,~{fpsr}",
+                                      /*hasSideEffects=*/true);
+      llvm::Value *Src = coerceInteger(getVar(Op.Inputs[1], Builder), GprTy);
+      llvm::Value *R = Builder.CreateCall(IA, {Src}, Name);
+      R = Builder.CreateBitCast(R, I16Ty);
+      return (R->getType() == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
+    }
+
+    Asm = IsUnsigned ? "fcvtzu " : "fcvtzs ";
+    Asm += "${0:";
+    Asm += (GprBytes == 8) ? "x" : "w";
+    Asm += "}, ${1:h}, #" + std::to_string(FBits);
+    Name = IsUnsigned ? "fcvtzu.fixed" : "fcvtzs.fixed";
+
+    auto *FnTy = llvm::FunctionType::get(GprTy, {HalfTy}, false);
+    auto *IA = llvm::InlineAsm::get(FnTy, Asm, "=r,w,~{fpsr}",
+                                    /*hasSideEffects=*/true);
+    llvm::Value *Bits = coerceInteger(getVar(Op.Inputs[1], Builder), I16Ty);
+    llvm::Value *Src = Builder.CreateBitCast(Bits, HalfTy);
+    llvm::Value *R = Builder.CreateCall(IA, {Src}, Name);
+    return (R->getType() == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
+  }
+
   if (IC == I::A64_Rbit && Op.Output.Size > 0) {
     auto *OutTy = sizeToType(Op.Output.Size);
     if (Op.NumInputs >= 2) {

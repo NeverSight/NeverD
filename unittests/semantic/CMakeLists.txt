@@ -1247,3 +1247,39 @@ target_link_libraries(NeverDFP16ReduceTests PRIVATE
 if(TARGET neverd)
   add_dependencies(NeverDFP16ReduceTests neverd)
 endif()
+
+# Same TU remains part of NeverDSemanticTests for CI ownership.  This focused
+# target keeps local FP16 conversion regressions fast to rebuild and run.
+add_neverd_unittest(NeverDFP16ConvTests
+  aarch64/AArch64_FP16ConvRTTests.cpp
+  TIMEOUT 120
+)
+
+target_compile_definitions(NeverDFP16ConvTests PRIVATE
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_include_directories(NeverDFP16ConvTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+  ${CMAKE_SOURCE_DIR}/third_party/unicorn/include
+)
+
+target_link_libraries(NeverDFP16ConvTests PRIVATE
+  unicorn
+  neverd_shared
+  NeverDPassMIR
+  LLVMMC
+  LLVMMCParser
+  LLVMObject
+  LLVMX86AsmParser LLVMX86Desc LLVMX86Info
+  LLVMAArch64AsmParser LLVMAArch64Desc LLVMAArch64Info
+  LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
+  LLVMSupport
+)
+
+if(TARGET neverd)
+  add_dependencies(NeverDFP16ConvTests neverd)
+endif()

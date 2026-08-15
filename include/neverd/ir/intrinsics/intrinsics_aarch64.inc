@@ -117,3 +117,8 @@ A64_Sha512h, A64_Sha512h2, A64_Sha512su0, A64_Sha512su1,
 A64_Sm3partw1, A64_Sm3partw2, A64_Sm3ss1,
 A64_Sm3tt1a, A64_Sm3tt1b, A64_Sm3tt2a, A64_Sm3tt2b,
 A64_Sm4e, A64_Sm4ekey,
+
+// Scalar FP16 fixed-point conversions.  These require one architectural
+// rounding step; decomposing them into a half conversion plus a half multiply
+// overflows and can also double-round.
+A64_ScvtfFixed, A64_UcvtfFixed, A64_FcvtzsFixed, A64_FcvtzuFixed,
