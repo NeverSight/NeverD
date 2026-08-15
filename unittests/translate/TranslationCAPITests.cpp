@@ -240,6 +240,35 @@ TEST(NeverDTranslationCAPI,
   expectControlTransferObject(NearGreater);
 }
 
+TEST(NeverDTranslationCAPI,
+     EmitsOwnedObjectsForCompareAndTestGuardedConditionalBranches) {
+  constexpr std::array<unsigned char, 5> CompareThenEqual = {
+      0x48, 0x39, 0xd8, 0x74, 0xfb}; // cmp rax, rbx; je EntryPC
+  constexpr std::array<unsigned char, 5> TestThenNotEqual = {
+      0x48, 0x85, 0xc0, 0x75, 0xfb}; // test rax, rax; jne EntryPC
+
+  for (llvm::ArrayRef<unsigned char> GuestBlock :
+       {llvm::ArrayRef<unsigned char>(CompareThenEqual),
+        llvm::ArrayRef<unsigned char>(TestThenNotEqual)}) {
+    neverd_translate_object_request_v1 Request =
+        request(NEVERD_TRANSLATE_OBJECT_FORMAT_ELF, GuestBlock);
+    neverd_translate_object_result_v1 Result{};
+    Result.struct_size = sizeof(Result);
+
+    ASSERT_EQ(
+        neverd_translate_x86_64_block_to_aarch64_object_v1(&Request, &Result),
+        0);
+    expectCommonSuccess(Result, /*ExpectedInstructionCount=*/2,
+                        /*ExpectedGuestByteCount=*/GuestBlock.size());
+    std::unique_ptr<llvm::object::ObjectFile> Object = parseObject(Result);
+    ASSERT_NE(Object, nullptr);
+    EXPECT_TRUE(Object->isRelocatableObject());
+    EXPECT_TRUE(Object->isELF());
+    EXPECT_EQ(Object->getArch(), llvm::Triple::aarch64);
+    neverd_translate_object_result_dispose(&Result);
+  }
+}
+
 TEST(NeverDTranslationCAPI, MapsTypedRequestFailuresAndOwnsTheDiagnostic) {
   constexpr std::array<unsigned char, 2> Unsupported = {0x90, 0xc3};
   neverd_translate_object_request_v1 Request =

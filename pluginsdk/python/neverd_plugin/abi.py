@@ -355,16 +355,21 @@ class NeverDTranslateObjectRequestV1(ctypes.Structure):
     """Borrowed request for one canonical x86-64 v1 scalar block.
 
     The native boundary accepts only canonical, legacy-prefix-free REX.W
-    full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms.
-    Logical forms compute architecture-defined flags while preserving AF;
+    full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms;
+    full-width register-only CMP 39/3B and register/immediate CMP 81/7, 83/7,
+    and 3D; and full-width register-only TEST 85 and register/immediate TEST
+    F7/0 and A9. Logical and
+    TEST forms compute architecture-defined flags while preserving AF in the
+    NeverD state model;
     canonical C3 RET or C2 iw RET imm16 terminates a return block, and
     direct-relative EB cb/E9 cd JMP terminates a direct-branch block.
-    Lowering schema 8 accepts canonical, legacy-prefix-free traditional Jcc:
+    Lowering schema 9 accepts canonical, legacy-prefix-free traditional Jcc:
     JO/JNO 70/71 or 0F 80/81, JB/JAE 72/73 or 0F 82/83, JE/JNE 74/75 or
     0F 84/85, JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or 0F 88/89, JP/JNP
     7A/7B or 0F 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG 7E/7F or
     0F 8E/8F, with short cb or near cd displacements respectively.
-    Guest-memory operands, partial registers, JRCXZ/JECXZ/JCXZ,
+    Reserved F7 /1, guest-memory operands, partial registers, legacy prefixes,
+    semantically redundant REX extension bits, JRCXZ/JECXZ/JCXZ,
     LOOP/LOOPE/LOOPNE, and instructions outside that exact subset fail closed.
     """
 

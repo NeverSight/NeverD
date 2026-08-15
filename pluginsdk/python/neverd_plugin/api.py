@@ -1515,12 +1515,16 @@ def translate_x86_64_block_to_aarch64_object(
 
     The published fail-closed subset accepts only canonical encodings without
     legacy prefixes: REX.W full-width GPR ``MOV``, ``ADD``/``SUB``, and
-    ``AND``/``OR``/``XOR`` forms over supported register/immediate LowIR shapes.
-    Arithmetic forms retain their scalar flag computations; logical forms
-    compute their architecturally defined flags while preserving ``AF``.
+    ``AND``/``OR``/``XOR`` forms over supported register/immediate LowIR shapes;
+    full-width register-only ``CMP`` ``39/3B`` and register/immediate ``CMP``
+    ``81/7``, ``83/7``, and ``3D``; and full-width register-only ``TEST`` ``85``
+    plus register/immediate ``TEST`` ``F7/0`` and ``A9``. Arithmetic forms retain
+    their scalar flag computations; logical and ``TEST`` forms compute their
+    architecturally defined flags while preserving ``AF`` in the NeverD state
+    model.
     Canonical ``C3`` ``RET`` or ``C2 iw`` ``RET imm16`` terminates a return
     block, and direct-relative ``EB cb`` or ``E9 cd`` ``JMP`` terminates a
-    direct-branch block.  The published lowering schema is 8.  Canonical,
+    direct-branch block.  The published lowering schema is 9.  Canonical,
     legacy-prefix-free traditional Jcc comprises ``JO``/``JNO`` short
     ``70/71 cb`` or near ``0F 80/81 cd``, ``JB``/``JAE`` ``72/73 cb`` or
     ``0F 82/83 cd``, ``JE``/``JNE`` ``74/75 cb`` or ``0F 84/85 cd``,
@@ -1529,9 +1533,10 @@ def translate_x86_64_block_to_aarch64_object(
     ``0F 8A/8B cd``, ``JL``/``JGE`` ``7C/7D cb`` or ``0F 8C/8D cd``, and
     ``JLE``/``JG`` ``7E/7F cb`` or ``0F 8E/8F cd``.
     ``JRCXZ``/``JECXZ``/``JCXZ`` and ``LOOP``/``LOOPE``/``LOOPNE`` remain
-    unpublished and fail closed.  Ordinary guest-memory operations,
-    partial-register forms, any instruction or encoding outside that exact
-    subset, all other control flow, and unimplemented LowIR are rejected.
+    unpublished and fail closed. Reserved ``F7 /1``, ordinary guest-memory
+    operations, partial-register forms, legacy prefixes, semantically redundant
+    REX extension bits, any instruction or encoding outside that exact subset,
+    all other control flow, and unimplemented LowIR are rejected.
     ``guest_bytes`` must contain exactly one block, including its terminating
     return, direct jump, or published Jcc branch; trailing
     bytes are rejected.

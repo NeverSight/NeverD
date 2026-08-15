@@ -157,17 +157,21 @@ data-in-code command 各至多一個，並檢查相依關係；linker option 與
 `TranslationObjectRequestV1` 是建立在上述契約上的第一個公開、且刻意收窄的
 guest 位元組到目標檔切片。在目前發布的失敗封閉 x86-64 v1 純量暫存器子集中，它只
 接受不含 legacy prefix 的 canonical 編碼：採用受支援暫存器/立即數 LowIR 形狀的
-REX.W 全寬 GPR `MOV`、`ADD`/`SUB` 與 `AND`/`OR`/`XOR`。算術形式保留相應的純量
-flags 計算；邏輯形式計算架構定義的 flags 並保留 `AF`。canonical `C3` `RET` 與
+REX.W 全寬 GPR `MOV`、`ADD`/`SUB` 與 `AND`/`OR`/`XOR`。schema 9 也接受全寬
+暫存器/暫存器 `CMP` 編碼 `39/3B`、暫存器/立即數 `CMP` 編碼 `81/7`、`83/7` 與
+`3D`、暫存器/暫存器 `TEST` 編碼 `85`，以及暫存器/立即數 `TEST` 編碼 `F7/0` 與
+`A9`。算術形式保留相應的純量 flags 計算；邏輯形式與 `TEST` 會計算架構定義的 flags，
+並在 NeverD 狀態模型中保留 `AF`。canonical `C3` `RET` 與
 `C2 iw` `RET imm16` 會終止返回 block；canonical `EB cb` 與 `E9 cd` 直接相對 `JMP`
-編碼會終止直接分支 block。目前公開 lowering schema 為 8。canonical、無 legacy prefix
+編碼會終止直接分支 block。目前公開 lowering schema 為 9。canonical、無 legacy prefix
 的傳統 Jcc 僅支援以下形式：`JO`/`JNO` 的短形式 `70/71 cb` 或近形式 `0F 80/81 cd`；
 `JB`/`JAE` 的 `72/73 cb` 或 `0F 82/83 cd`；`JE`/`JNE` 的 `74/75 cb` 或
 `0F 84/85 cd`；`JBE`/`JA` 的 `76/77 cb` 或 `0F 86/87 cd`；`JS`/`JNS` 的
 `78/79 cb` 或 `0F 88/89 cd`；`JP`/`JNP` 的 `7A/7B cb` 或 `0F 8A/8B cd`；
 `JL`/`JGE` 的 `7C/7D cb` 或 `0F 8C/8D cd`；`JLE`/`JG` 的 `7E/7F cb` 或
 `0F 8E/8F cd`。`JRCXZ`/`JECXZ`/`JCXZ` 與 `LOOP`/`LOOPE`/`LOOPNE` 仍未發布，
-並以 fail-closed 方式拒絕。輸出僅限經過稽核的
+並以 fail-closed 方式拒絕。保留的 `F7 /1`、guest-memory 運算元、部分暫存器形式、
+legacy prefix 與語意冗餘的 REX 擴充位元同樣以 fail-closed 方式拒絕。輸出僅限經過稽核的
 little-endian AArch64 ELF 或 Mach-O relocatable 目標檔。一般 guest 記憶體操作、部分
 暫存器形式、該精確子集外的任意指令或編碼、返回、這些直接跳轉與上述已發布 Jcc
 分支以外的控制流，以及 lowerer 尚未實作的任何 LowIR 操作，都會在目標檔產生前遭到
@@ -211,7 +215,7 @@ Jcc 分支只能在 block manifest 宣告的 taken 或 fallthrough successor 繼
 與最終提交線性化。
 
 這是一個可執行的縱向切片，而不是完整翻譯器。它尚不支援一般 guest-memory 指令、
-部分暫存器、上述精確 schema-8 傳統 Jcc 切片以外的條件控制流（包括
+部分暫存器、上述精確 schema-9 傳統 Jcc 切片以外的條件控制流（包括
 `JRCXZ`/`JECXZ`/`JCXZ` 與 `LOOP`/`LOOPE`/`LOOPNE`）、間接控制流、
 呼叫、浮點、SIMD、x87、原子操作、系統指令、
 通用例外傳播、block cache、其他 guest/host 架構組合或反向 AArch64 到 x86-64。執行

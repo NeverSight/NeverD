@@ -182,17 +182,22 @@ option과 그 밖의 모든 command는 거부됩니다.
 guest-byte-to-object slice이며 범위를 의도적으로 좁혔습니다. 현재 공개된 fail-closed
 x86-64 v1 scalar-register subset에서는 legacy prefix가 없는 canonical encoding만
 허용합니다. 즉, 지원되는 register/immediate LowIR 형태를 갖는 REX.W full-width GPR
-`MOV`, `ADD`/`SUB`, `AND`/`OR`/`XOR` 형식만 포함합니다. 산술 형식은 기존 scalar flag
-계산을 유지하고, 논리 형식은 아키텍처가 정의한 flags를 계산하면서 `AF`를 보존합니다.
+`MOV`, `ADD`/`SUB`, `AND`/`OR`/`XOR` 형식만 포함합니다. schema 9는 full-width
+register/register `CMP`의 `39/3B`, register/immediate `CMP`의 `81/7`, `83/7`, `3D`,
+full-width register/register `TEST`의 `85`, register/immediate `TEST`의 `F7/0`, `A9`도 허용합니다.
+산술 형식은 기존 scalar flag 계산을 유지하고, 논리 형식과 `TEST`는 아키텍처가 정의한
+flags를 계산하면서 NeverD state model의 `AF`를 보존합니다.
 canonical `C3` `RET`와 `C2 iw` `RET imm16`은 return block을 종료하고, canonical `EB cb`와
 `E9 cd` direct-relative `JMP` encoding은 direct-branch block을 종료합니다. 공개 lowering
-schema는 8입니다. canonical이며 legacy prefix가 없는 traditional Jcc는 `JO`/`JNO`의
+schema는 9입니다. canonical이며 legacy prefix가 없는 traditional Jcc는 `JO`/`JNO`의
 short `70/71 cb` 또는 near `0F 80/81 cd`, `JB`/`JAE`의 `72/73 cb` 또는
 `0F 82/83 cd`, `JE`/`JNE`의 `74/75 cb` 또는 `0F 84/85 cd`, `JBE`/`JA`의
 `76/77 cb` 또는 `0F 86/87 cd`, `JS`/`JNS`의 `78/79 cb` 또는 `0F 88/89 cd`,
 `JP`/`JNP`의 `7A/7B cb` 또는 `0F 8A/8B cd`, `JL`/`JGE`의 `7C/7D cb` 또는
 `0F 8C/8D cd`, `JLE`/`JG`의 `7E/7F cb` 또는 `0F 8E/8F cd`로 제한됩니다.
 `JRCXZ`/`JECXZ`/`JCXZ`와 `LOOP`/`LOOPE`/`LOOPNE`는 아직 공개되지 않았으며 fail closed합니다.
+예약된 `F7 /1`, guest-memory operand, partial-register form, legacy prefix, 의미적으로 중복된
+REX extension bit도 fail closed합니다.
 출력은 audit된 little-endian AArch64 ELF
 또는 Mach-O relocatable object로 제한됩니다. 일반 guest memory operation,
 partial-register form, 이 정확한 subset 밖의 모든 instruction/encoding, return, 이러한
@@ -241,7 +246,7 @@ block 전체에서 정확하게 유지되며 guest가 성공적으로 멈추면 
 memory를 함께 commit합니다. cancellation은 final commit에 대해 linearize됩니다.
 
 이는 실행 가능한 vertical slice이지 완전한 translator가 아닙니다. 일반 guest-memory
-instruction, partial register, 위의 정확한 schema-8 traditional-Jcc slice 밖의 conditional control
+instruction, partial register, 위의 정확한 schema-9 traditional-Jcc slice 밖의 conditional control
 flow(`JRCXZ`/`JECXZ`/`JCXZ`와 `LOOP`/`LOOPE`/`LOOPNE` 포함), indirect control flow,
 call, floating-point, SIMD, x87, atomic, system instruction, 일반 exception propagation,
 block cache, 다른 guest/host pair, 역방향 AArch64-to-x86-64는 아직 지원하지 않습니다.

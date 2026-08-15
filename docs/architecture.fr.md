@@ -216,10 +216,14 @@ elle n’accepte que les encodages canoniques sans préfixe legacy : les formes
 `MOV`, `ADD`/`SUB` et `AND`/`OR`/`XOR` avec REX.W sur des GPR pleine largeur dont
 les opérandes ont les formes LowIR registre/immédiat prises en charge. Les formes
 arithmétiques conservent leurs calculs de flags scalaires ; les formes logiques
-calculent les flags définis par l’architecture tout en préservant `AF`. Les
+et `TEST` calculent les flags définis par l’architecture tout en préservant `AF`
+dans le modèle d’état NeverD. Le schéma 9 accepte aussi le `CMP` pleine largeur
+registre/registre `39/3B`, le `CMP` registre/immédiat `81/7`, `83/7` et `3D`, le
+`TEST` pleine largeur registre/registre `85` et registre/immédiat `F7/0` et
+`A9`. Les
 encodages canoniques `C3` `RET` et `C2 iw` `RET imm16` terminent les blocks de
 retour ; les encodages `JMP` directs relatifs canoniques `EB cb` et `E9 cd`
-terminent les blocks de branchement direct. Le schéma de lowering publié est 8.
+terminent les blocks de branchement direct. Le schéma de lowering publié est 9.
 Les branches Jcc traditionnelles, canoniques et sans préfixe legacy se limitent
 à : `JO`/`JNO` court `70/71 cb` ou proche `0F 80/81 cd` ; `JB`/`JAE` avec
 `72/73 cb` ou `0F 82/83 cd` ; `JE`/`JNE` avec `74/75 cb` ou `0F 84/85 cd` ;
@@ -227,7 +231,9 @@ Les branches Jcc traditionnelles, canoniques et sans préfixe legacy se limitent
 `0F 88/89 cd` ; `JP`/`JNP` avec `7A/7B cb` ou `0F 8A/8B cd` ; `JL`/`JGE` avec
 `7C/7D cb` ou `0F 8C/8D cd` ; et `JLE`/`JG` avec `7E/7F cb` ou `0F 8E/8F cd`.
 `JRCXZ`/`JECXZ`/`JCXZ` et `LOOP`/`LOOPE`/`LOOPNE` restent non publiées et
-échouent en mode fail-closed. Elle produit
+échouent en mode fail-closed. Le `F7 /1` réservé, les opérandes de mémoire guest,
+les registres partiels, les préfixes legacy et les bits d’extension REX
+sémantiquement redondants échouent aussi en mode fail-closed. Elle produit
 uniquement un objet relocatable ELF ou Mach-O AArch64 little-endian audité. Les
 opérations ordinaires sur la mémoire guest, les formes de registres partiels,
 toute instruction ou tout encodage hors de ce sous-ensemble exact, les flux de
@@ -292,7 +298,7 @@ ce commit final.
 
 Il s’agit d’une tranche verticale exécutable, pas d’un traducteur complet. Elle
 ne couvre pas les instructions ordinaires de mémoire guest, les registres
-partiels, le flux conditionnel hors de la tranche exacte schema-8 des Jcc
+partiels, le flux conditionnel hors de la tranche exacte schema-9 des Jcc
 traditionnels ci-dessus — notamment `JRCXZ`/`JECXZ`/`JCXZ` et
 `LOOP`/`LOOPE`/`LOOPNE` —,
 le flux indirect, les appels, le calcul flottant, SIMD, x87, les opérations

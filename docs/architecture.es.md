@@ -212,19 +212,26 @@ subconjunto v1 fail-closed publicado de registros escalares x86-64 solo acepta
 codificaciones canónicas sin prefijos legacy: formas `MOV`, `ADD`/`SUB` y
 `AND`/`OR`/`XOR` con REX.W sobre GPR de ancho completo cuyos operandos tienen
 las formas LowIR admitidas de registro/inmediato. Las formas aritméticas
-conservan sus cálculos de flags escalares; las lógicas calculan los flags
-definidos por la arquitectura y conservan `AF`. Los encodings canónicos `C3`
+conservan sus cálculos de flags escalares; las lógicas y `TEST` calculan los
+flags definidos por la arquitectura y conservan `AF` en el modelo de estado de
+NeverD. El schema 9 también acepta `CMP` registro/registro de ancho completo con
+`39/3B`, `CMP` registro/inmediato con `81/7`, `83/7` y `3D`, `TEST` de ancho
+completo registro/registro con `85` y registro/inmediato con `F7/0` y `A9`. Los
+encodings canónicos `C3`
 `RET` y `C2 iw` `RET imm16` terminan blocks de retorno; los encodings de `JMP`
 relativo directo canónicos `EB cb` y `E9 cd` terminan blocks de branch directo.
-El schema de lowering publicado es 8. Los branches Jcc tradicionales,
+El schema de lowering publicado es 9. Los branches Jcc tradicionales,
 canónicos y sin prefijo legacy se limitan a: `JO`/`JNO` corto `70/71 cb` o
 cercano `0F 80/81 cd`; `JB`/`JAE` con `72/73 cb` o `0F 82/83 cd`; `JE`/`JNE`
 con `74/75 cb` o `0F 84/85 cd`; `JBE`/`JA` con `76/77 cb` o `0F 86/87 cd`;
 `JS`/`JNS` con `78/79 cb` o `0F 88/89 cd`; `JP`/`JNP` con `7A/7B cb` o
 `0F 8A/8B cd`; `JL`/`JGE` con `7C/7D cb` o `0F 8C/8D cd`; y `JLE`/`JG` con
 `7E/7F cb` o `0F 8E/8F cd`. `JRCXZ`/`JECXZ`/`JCXZ` y
-`LOOP`/`LOOPE`/`LOOPNE` siguen sin publicarse y fallan fail-closed. Solo emite un objeto relocatable ELF o Mach-O AArch64
-little-endian auditado. Las operaciones ordinarias de memoria guest, las formas
+`LOOP`/`LOOPE`/`LOOPNE` siguen sin publicarse y fallan fail-closed. El `F7 /1`
+reservado, los operandos de memoria guest, los registros parciales, los prefijos
+legacy y los bits de extensión REX semánticamente redundantes también fallan
+fail-closed. Solo emite un objeto relocatable ELF o Mach-O AArch64 little-endian
+auditado. Las operaciones ordinarias de memoria guest, las formas
 de registro parcial, toda instrucción o codificación fuera de ese subconjunto
 exacto, todo flujo de control salvo retornos, esos saltos directos y los branches
 Jcc publicados arriba, y toda operación LowIR no implementada
@@ -286,7 +293,7 @@ se linealiza respecto a ese commit final.
 
 Esta es una vertical slice ejecutable, no un traductor completo. Todavía no
 cubre instrucciones ordinarias de memoria guest, registros parciales, flujo de
-control condicional fuera del slice exacto schema-8 de Jcc tradicionales descrito
+control condicional fuera del slice exacto schema-9 de Jcc tradicionales descrito
 arriba —incluidos `JRCXZ`/`JECXZ`/`JCXZ` y `LOOP`/`LOOPE`/`LOOPNE`—, flujo de control
 indirecto, calls, punto flotante, SIMD, x87, operaciones atómicas, instrucciones
 de sistema, propagación general de excepciones, caché de blocks, otros pares
