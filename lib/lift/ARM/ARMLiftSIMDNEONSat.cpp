@@ -49,7 +49,7 @@ bool liftSIMDNEONSat(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar L = S.makeTemp(LaneSz);
-        S.emit(NdOp::SUBBYTES, L, {Src, NdVar::cst(I * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, L, {Src, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar Neg = S.makeTemp(LaneSz);
         S.emit(NdOp::INT_NEG2, Neg, {L});
         NdVar R = Neg;
