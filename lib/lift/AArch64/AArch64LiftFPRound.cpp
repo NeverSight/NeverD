@@ -73,14 +73,32 @@ bool liftFPRound(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   // (FPToSI) instead SATURATES out-of-range / Inf inputs, so the two diverge
   // outside [-2^31, 2^31).  Map to the real llvm.aarch64.fjcvtzs intrinsic so
   // codegen emits `fjcvtzs` and the recompiled code is bit-exact under Unicorn.
-  // (The PSTATE.Z "inexact" flag side effect is not modelled -- no roundtrip
-  // covers it, same as the previous lift.)
   case AARCH64_INS_FJCVTZS: {
     if (ARM64.op_count < 2)
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar Src = L.operandRead(S, ARM64.operands[1]);
     S.emitIntrinsic(Intrinsic::A64_Fjcvtzs, Dst, {Src});
+
+    // FJCVTZS sets Z when the source is exactly the signed integer represented
+    // by Wd.  Converting Wd back to double catches fractional inputs,
+    // NaN/Inf, denormals and modulo-2^32 overflow.  IEEE equality considers
+    // -0.0 equal to +0.0, but the JavaScript conversion defines -0.0 as
+    // inexact, so reject that bit pattern explicitly.  N, C and V are cleared.
+    NdVar RoundTrip = S.makeTemp(Src.Size);
+    S.emit(NdOp::FLOAT_INT2FLOAT, RoundTrip, {Dst});
+    NdVar SameValue = S.makeTemp(1);
+    S.emit(NdOp::FLOAT_EQUAL, SameValue, {Src, RoundTrip});
+    NdVar NegativeZero = S.makeTemp(1);
+    S.emit(NdOp::INT_EQUAL, NegativeZero,
+           {Src, NdVar::cst(uint64_t{1} << 63, Src.Size)});
+    NdVar NotNegativeZero = S.makeTemp(1);
+    S.emit(NdOp::BOOL_NOT, NotNegativeZero, {NegativeZero});
+    S.emit(NdOp::BOOL_AND, NdVar::reg(a64reg::ZFLAG, 1),
+           {SameValue, NotNegativeZero});
+    S.emit(NdOp::COPY, NdVar::reg(a64reg::NFLAG, 1), {NdVar::cst(0, 1)});
+    S.emit(NdOp::COPY, NdVar::reg(a64reg::CFLAG, 1), {NdVar::cst(0, 1)});
+    S.emit(NdOp::COPY, NdVar::reg(a64reg::VFLAG, 1), {NdVar::cst(0, 1)});
     break;
   }
   // FCVTXN/FCVTXN2: FP inexact narrowing f64->f32 with round-to-ODD (jamming),

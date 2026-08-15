@@ -100,6 +100,18 @@ int test_fcvtzs_a64(float a) {
     return result;
 }
 
+unsigned test_fjcvtzs_z_a64(double input) {
+  unsigned converted;
+  unsigned exact;
+  __asm__ volatile("cmp wzr, wzr\n\t"
+                   "fjcvtzs %w0, %d2\n\t"
+                   "cset %w1, eq"
+                   : "=&r"(converted), "=&r"(exact)
+                   : "w"(input)
+                   : "cc");
+  return exact;
+}
+
 double test_fmadd_a64(double a, double b, double c) {
     double result;
     __asm__ volatile (

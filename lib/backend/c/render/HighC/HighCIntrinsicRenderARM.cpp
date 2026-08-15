@@ -118,6 +118,10 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_Fjcvtzs:
+    if (Ops.empty())
+      return {};
+    return "__jcvt(__builtin_bit_cast(double, (uint64_t)(" + Ops[0] + ")))";
   case I::A64_Rcwcasp:
   case I::A64_Rcwcaspa:
   case I::A64_Rcwcaspal:

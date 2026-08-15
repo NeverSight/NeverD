@@ -71,6 +71,31 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
     return atomicExchangeExpr(E.Type, exprStr(*E.Operands[0]),
                               exprStr(*E.Operands[1]), E.MemoryOrdering);
 
+  // FJCVTZS exactness compares the original double bit pattern with the
+  // signed i32 result converted back to double.  High-C otherwise represents
+  // register values as integers, so preserve the bit-cast on the FP operand
+  // instead of rendering this particular FLOAT_EQUAL as an integer compare.
+  if (E.Op == NdOp::FLOAT_EQUAL) {
+    const HighExpr *Converted = nullptr;
+    const HighExpr *Raw = nullptr;
+    if (E.Operands[0]->Kind == ExprKind::UnaryOp &&
+        E.Operands[0]->Op == NdOp::FLOAT_INT2FLOAT) {
+      Converted = E.Operands[0].get();
+      Raw = E.Operands[1].get();
+    } else if (E.Operands[1]->Kind == ExprKind::UnaryOp &&
+               E.Operands[1]->Op == NdOp::FLOAT_INT2FLOAT) {
+      Converted = E.Operands[1].get();
+      Raw = E.Operands[0].get();
+    }
+    if (Converted && Raw && Converted->Operands.size() == 1 && Raw->Type &&
+        Raw->Type->Size == 8 && Converted->Operands[0]->Type &&
+        Converted->Operands[0]->Type->Size == 4) {
+      return "__builtin_bit_cast(double, (uint64_t)(" + exprStr(*Raw) +
+             ")) == (double)(int32_t)(" + exprStr(*Converted->Operands[0]) +
+             ")";
+    }
+  }
+
   switch (E.Op) {
   case NdOp::SUBBYTES: {
     std::string Src = exprStr(*E.Operands[0], 99);
