@@ -149,6 +149,68 @@ va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
   }
 }
 
+std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
+                                               const TargetRegInfo &TRI,
+                                               const MedVar &V, int Depth) {
+  if (Depth > 16 || V.isConst())
+    return std::nullopt;
+
+  int DefIdx = -1;
+  for (int J = FromIdx - 1; J >= 0; --J) {
+    const auto &O = Blk.Ops[J];
+    if (O.Output.Kind == V.Kind && O.Output.Id == V.Id &&
+        O.Output.SSAVer == V.SSAVer && O.Output.RegOff == V.RegOff) {
+      DefIdx = J;
+      break;
+    }
+  }
+  if (DefIdx < 0) {
+    if (V.Kind != MedVar::Reg && V.Kind != MedVar::Param)
+      return std::nullopt;
+    int ArgIdx = TRI.regToArgIdx(V.RegOff);
+    return ArgIdx >= 0 ? std::optional<int>(ArgIdx) : std::nullopt;
+  }
+
+  const MedOp &Def = Blk.Ops[DefIdx];
+  switch (Def.Opcode) {
+  case NdOp::COPY:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+    if (Def.NumInputs < 1)
+      return std::nullopt;
+    // Entry live-ins are represented by a self-copy.  Treat that as the
+    // provenance root instead of recursing through the identical SSA value.
+    if (Def.Inputs[0].Kind == V.Kind && Def.Inputs[0].Id == V.Id &&
+        Def.Inputs[0].SSAVer == V.SSAVer && Def.Inputs[0].RegOff == V.RegOff) {
+      int ArgIdx = TRI.regToArgIdx(V.RegOff);
+      return ArgIdx >= 0 ? std::optional<int>(ArgIdx) : std::nullopt;
+    }
+    return resolveIndirectTargetArgIdx(Blk, DefIdx, TRI, Def.Inputs[0],
+                                       Depth + 1);
+  case NdOp::SUBBYTES:
+    return (Def.NumInputs >= 2 && Def.Inputs[1].isConst() &&
+            Def.Inputs[1].ConstVal == 0)
+               ? resolveIndirectTargetArgIdx(Blk, DefIdx, TRI, Def.Inputs[0],
+                                             Depth + 1)
+               : std::nullopt;
+  case NdOp::LOAD: {
+    if (Def.NumInputs < 1)
+      return std::nullopt;
+    auto LoadAddr = reduceAddr(Blk, Def.Inputs[0], 0, 0);
+    for (int J = DefIdx - 1; J >= 0; --J) {
+      const auto &O = Blk.Ops[J];
+      if (O.Opcode != NdOp::STORE || O.NumInputs < 2)
+        continue;
+      if (sameReducedAddr(LoadAddr, reduceAddr(Blk, O.Inputs[0], 0, 0)))
+        return resolveIndirectTargetArgIdx(Blk, J, TRI, O.Inputs[1], Depth + 1);
+    }
+    return std::nullopt;
+  }
+  default:
+    return std::nullopt;
+  }
+}
+
 // Offset of \p V relative to the function-entry stack pointer, following the SP
 // definition chain through constant add/sub decrements (cdecl `push`/`sub esp`)
 // and width casts.  Lets the stack-argument scan place each pushed argument at
@@ -317,8 +379,8 @@ static const MedOp *findBlockDef(const MedBlock &Blk, const MedVar &V) {
 // where the chain round-trips ESP<->RSP and never reaches the entry SP as a
 // constant).
 void buildCallSpOffsets(const MedBlock &Blk, const TargetRegInfo &TRI,
-                               const MedVar &V, int64_t Off,
-                               std::map<SpOffsetKey, int64_t> &Map, int Depth) {
+                        const MedVar &V, int64_t Off,
+                        std::map<SpOffsetKey, int64_t> &Map, int Depth) {
   if (Depth > 128 || V.isConst())
     return;
   if (!Map.emplace(spOffsetKey(V), Off).second)
@@ -363,9 +425,10 @@ void buildCallSpOffsets(const MedBlock &Blk, const TargetRegInfo &TRI,
 // SP's offset map.  Follows \p V's definition chain (offset-preserving casts,
 // and constant add/sub) until it reaches a value on the call SP chain.  nullopt
 // when the address is not stack-pointer derived.
-std::optional<int64_t>
-relStackOff(const MedBlock &Blk, const TargetRegInfo &TRI, const MedVar &V,
-            const std::map<SpOffsetKey, int64_t> &Map, int Depth) {
+std::optional<int64_t> relStackOff(const MedBlock &Blk,
+                                   const TargetRegInfo &TRI, const MedVar &V,
+                                   const std::map<SpOffsetKey, int64_t> &Map,
+                                   int Depth) {
   if (Depth > 128 || V.isConst())
     return std::nullopt;
   if (auto It = Map.find(spOffsetKey(V)); It != Map.end())
@@ -494,10 +557,11 @@ MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
 // callee's arity, so a parameter register with no reaching definition is the
 // incoming argument of a forwarder and is recovered as a live-in even when it
 // is not yet a recorded parameter of the function.
-std::optional<MedVar>
-findReachingArgReg(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
-                   int BlockId, int ArgIdx, bool AllowUnknownLiveIn,
-                   bool *FromLiveIn) {
+std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
+                                         const TargetRegInfo &TRI, Arch TheArch,
+                                         int BlockId, int ArgIdx,
+                                         bool AllowUnknownLiveIn,
+                                         bool *FromLiveIn) {
   std::map<int, const MedBlock *> ById;
   for (const auto &B : Func.Blocks)
     ById[B.Id] = &B;

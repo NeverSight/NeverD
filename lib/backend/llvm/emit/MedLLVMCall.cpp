@@ -24,6 +24,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -119,6 +120,57 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   for (auto *A : Args)
     ArgTypes.push_back(A->getType());
 
+  // A multi-register return is represented in MedIR as one flat temporary
+  // followed by SUBBYTES extracts into its physical return registers.  Recover
+  // the corresponding LLVM aggregate type once, for both direct imports and
+  // indirect calls.  Direct unknown externs previously kept the default i64
+  // declaration even after call-site modeling had proven an X0:X1 result.
+  auto inferAggregateReturnType = [&]() -> llvm::Type * {
+    if (Op.Output.Kind != MedVar::Temp || Op.Output.Size == 0 || !CurMedFunc)
+      return nullptr;
+    const auto &TRI = getTargetRegInfo(TargetArch);
+    std::map<unsigned, llvm::Type *> FieldsByOffset;
+    for (const auto &Blk2 : CurMedFunc->Blocks) {
+      if (Blk2.Id != BlockId)
+        continue;
+      for (size_t J = static_cast<size_t>(OpIdx) + 1; J < Blk2.Ops.size();
+           ++J) {
+        const auto &Ex = Blk2.Ops[J];
+        if (Ex.Opcode != NdOp::SUBBYTES || Ex.NumInputs < 2 ||
+            Ex.Inputs[0].Kind != MedVar::Temp ||
+            Ex.Inputs[0].Id != Op.Output.Id ||
+            Ex.Inputs[0].SSAVer != Op.Output.SSAVer ||
+            !Ex.Inputs[1].isConst() || Ex.Output.Kind != MedVar::Reg)
+          continue;
+        unsigned Offset = static_cast<unsigned>(Ex.Inputs[1].ConstVal);
+        uint16_t Size = Ex.Output.Size ? Ex.Output.Size : 8;
+        if (Offset + Size > Op.Output.Size)
+          continue;
+        llvm::Type *FieldTy = TRI.isVectorReg(Ex.Output.RegOff)
+                                  ? (Size <= 4 ? llvm::Type::getFloatTy(*Ctx)
+                                               : llvm::Type::getDoubleTy(*Ctx))
+                                  : llvm::Type::getIntNTy(*Ctx, Size * 8);
+        FieldsByOffset.emplace(Offset, FieldTy);
+      }
+      break;
+    }
+    if (FieldsByOffset.size() < 2)
+      return nullptr;
+    std::vector<llvm::Type *> FieldTys;
+    unsigned ExpectedOffset = 0;
+    for (const auto &[Offset, FieldTy] : FieldsByOffset) {
+      if (Offset != ExpectedOffset)
+        return nullptr;
+      FieldTys.push_back(FieldTy);
+      ExpectedOffset += FieldTy->getPrimitiveSizeInBits() / 8;
+    }
+    if (ExpectedOffset != Op.Output.Size)
+      return nullptr;
+    return llvm::StructType::get(*Ctx, FieldTys);
+  };
+  llvm::Type *AggregateRetTy = inferAggregateReturnType();
+  llvm::Type *DefaultRetTy = AggregateRetTy ? AggregateRetTy : RetTy;
+
   auto resolveCalleeName = [&]() -> std::string {
     if (CI && !CI->TargetName.empty() &&
         !CI->TargetName.starts_with(kAutoFuncPrefix))
@@ -170,6 +222,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // it as variadic (all actual args as fixed + "...") so the
       // backend never puts arguments in the wrong location.
       unsigned NumFixed = 0;
+      unsigned NamedNumFixed = 0;
       if (CI && CI->VarArgFixedCount >= 0) {
         NumFixed = static_cast<unsigned>(CI->VarArgFixedCount);
         // A stripped Mach-O has no local `_objc_msgSend$selector` symbol, but
@@ -183,24 +236,38 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                   : (kAutoFuncPrefix + llvm::utohexstr(CallAddr)).str();
       } else if (!CalleeName.empty()) {
         llvm::StringRef Bare = stripLeadingUnderscores(CalleeName);
-        NumFixed = libc::varArgFixedCount(Bare);
+        NamedNumFixed = libc::varArgFixedCount(Bare);
+        NumFixed = NamedNumFixed;
       }
 
+      if (!CalleeName.empty() && NamedNumFixed == 0)
+        NamedNumFixed =
+            libc::varArgFixedCount(stripLeadingUnderscores(CalleeName));
+
       bool IsKnownVarArg = (NumFixed > 0);
+      const bool IsStructurallyRecoveredVarArg =
+          IsKnownVarArg && CI && CI->VarArgFixedCount >= 0 &&
+          NamedNumFixed == 0 && !IsObjCMessageStub;
 
       if (IsKnownVarArg && !CalleeName.empty()) {
         Callee = Mod->getFunction(CalleeName);
         if (!Callee) {
           std::vector<llvm::Type *> FixedTypes;
           for (unsigned I = 0; I < NumFixed && I < Args.size(); ++I)
-            FixedTypes.push_back(PtrTy);
-          auto *VarFT = llvm::FunctionType::get(
-              IsObjCMessageStub ? RetTy : I32Ty, FixedTypes, true);
+            FixedTypes.push_back(IsStructurallyRecoveredVarArg ? ArgTypes[I]
+                                                               : PtrTy);
+          llvm::Type *VarRetTy =
+              IsObjCMessageStub
+                  ? RetTy
+                  : (IsStructurallyRecoveredVarArg ? DefaultRetTy : I32Ty);
+          auto *VarFT = llvm::FunctionType::get(VarRetTy, FixedTypes, true);
           Callee = llvm::Function::Create(
               VarFT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
           Callee->setCallingConv(llvm::CallingConv::C);
         }
-        for (unsigned I = 0; I < NumFixed && I < Args.size(); ++I) {
+        for (unsigned I = 0;
+             !IsStructurallyRecoveredVarArg && I < NumFixed && I < Args.size();
+             ++I) {
           if (Args[I]->getType()->isIntegerTy()) {
             llvm::Value *Sym = (CI && I < CI->Args.size())
                                    ? tryResolvePointerArg(CI->Args[I], Builder)
@@ -311,8 +378,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
 
       if (!Callee && !CalleeName.empty()) {
-        bool UseVarArg = getTargetRegInfo(TargetArch).UnknownExternIsVarArg;
-        auto *FT = llvm::FunctionType::get(RetTy, ArgTypes, UseVarArg);
+        bool UseVarArg = getTargetRegInfo(TargetArch).UnknownExternIsVarArg &&
+                         AggregateRetTy == nullptr;
+        auto *FT = llvm::FunctionType::get(DefaultRetTy, ArgTypes, UseVarArg);
         Callee = llvm::Function::Create(FT, llvm::GlobalValue::ExternalLinkage,
                                         CalleeName, Mod);
         Callee->setCallingConv(llvm::CallingConv::C);
@@ -322,7 +390,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         auto StubName = (kAutoFuncPrefix + llvm::utohexstr(CallAddr)).str();
         Callee = Mod->getFunction(StubName);
         if (!Callee) {
-          auto *StubTy = llvm::FunctionType::get(RetTy, ArgTypes, false);
+          auto *StubTy = llvm::FunctionType::get(DefaultRetTy, ArgTypes, false);
           Callee = llvm::Function::Create(
               StubTy, llvm::GlobalValue::ExternalLinkage, StubName, Mod);
           Callee->addFnAttr(llvm::Attribute::NullPointerIsValid);
@@ -499,32 +567,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // double exactly, and the post-call FPExt below widens it to the
       // x86_fp80 the st0 output register models.
       IRetTy = llvm::Type::getDoubleTy(*Ctx);
-    } else if (Op.Output.Kind == MedVar::Temp && Op.Output.Size > 0 &&
-               CurMedFunc) {
-      // Reconstruct the aggregate from the SUBBYTES extracts that slice this
-      // call's flat output temp into the field return registers.
-      std::vector<llvm::Type *> FieldTys;
-      for (const auto &Blk2 : CurMedFunc->Blocks) {
-        if (Blk2.Id != BlockId)
-          continue;
-        for (size_t J = static_cast<size_t>(OpIdx) + 1; J < Blk2.Ops.size();
-             ++J) {
-          const auto &Ex = Blk2.Ops[J];
-          if (Ex.Opcode != NdOp::SUBBYTES || Ex.NumInputs < 1 ||
-              Ex.Inputs[0].Kind != MedVar::Temp ||
-              Ex.Inputs[0].Id != Op.Output.Id || Ex.Output.Kind != MedVar::Reg)
-            break;
-          uint16_t Sz = Ex.Output.Size ? Ex.Output.Size : 8;
-          if (ITRI.isVectorReg(Ex.Output.RegOff))
-            FieldTys.push_back(Sz <= 4 ? llvm::Type::getFloatTy(*Ctx)
-                                       : llvm::Type::getDoubleTy(*Ctx));
-          else
-            FieldTys.push_back(llvm::Type::getIntNTy(*Ctx, Sz * 8));
-        }
-        break;
-      }
-      if (FieldTys.size() >= 2)
-        IRetTy = llvm::StructType::get(*Ctx, FieldTys);
+    } else if (AggregateRetTy) {
+      IRetTy = AggregateRetTy;
     }
 
     // Coerce each argument to its reconstructed ABI parameter type.  An

@@ -14,9 +14,9 @@
 #include "MedABIPassDetail.h"
 
 #include "neverd/Limits.h"
-#include "neverd/object/SectionNames.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/object/SectionNames.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -183,8 +183,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           TargetSection->Name == section_names::macho::ObjCStubs;
       std::optional<libc::LibCArity> ExternalArity;
       if (!CI.IsIndirect)
-        ExternalArity =
-            libc::libcArity(stripLeadingUnderscores(CI.TargetName));
+        ExternalArity = libc::libcArity(stripLeadingUnderscores(CI.TargetName));
 
       // The callee's integer register-argument count, if it is a known direct
       // intra-module target; -1 when unknown (external / indirect).  Used to
@@ -323,6 +322,19 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             break;
         }
 
+      // A BLR target is not an ABI argument.  When the function pointer came
+      // from an incoming integer parameter (commonly x0 in a mixed
+      // `double, fnptr` signature), the ordinary backward register scan sees
+      // that still-live parameter and incorrectly appends it as callee arg0.
+      // Remember the target's proven incoming-register provenance and remove
+      // only a recovered slot carrying that exact same provenance after the
+      // cross-block register scans below.  If clang moved a real argument into
+      // x0 before BLR, its provenance differs and it is retained.
+      std::optional<int> IndirectTargetArgIdx;
+      if (CI.IsIndirect && Op.NumInputs >= 1)
+        IndirectTargetArgIdx = resolveIndirectTargetArgIdx(
+            Blk, static_cast<int>(OI), TRI, Op.Inputs[0]);
+
       // The stack-store scan is windowed to the outgoing-arg setup just before
       // the call; it stops at the previous call boundary and lets the closest
       // store to each slot win.
@@ -356,16 +368,20 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // in a parameter register, recovered only via its block PHI, still fills
       // its slot even though it sits "below" an already-found stack argument.
       bool HasStackArg = false;
-      for (int J = static_cast<int>(OI) - 1;
-           J >= StoreScanStart && !HasStackArg; --J) {
+      bool HasStackArgAtCallSP = false;
+      for (int J = static_cast<int>(OI) - 1; J >= StoreScanStart; --J) {
         auto &Prev = Blk.Ops[J];
         if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
             Prev.Opcode == NdOp::INTRINSIC)
           break;
         if (Prev.Opcode == NdOp::STORE && Prev.NumInputs >= 2)
           if (auto D = stackPtrDelta(Blk, TRI, Prev.Inputs[0]))
-            if (*D - CallSpDelta >= 0)
+            if (int64_t Rel = *D - CallSpDelta; Rel >= 0) {
               HasStackArg = true;
+              if (Rel == 0 && !(Prev.Inputs[1].Kind == MedVar::Reg &&
+                                TRI.isFrameOrLinkReg(Prev.Inputs[1].RegOff)))
+                HasStackArgAtCallSP = true;
+            }
       }
       const int NumIntParamRegs = static_cast<int>(TRI.IntParamRegs.size());
 
@@ -541,6 +557,16 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         }
       }
 
+      if (IndirectTargetArgIdx && *IndirectTargetArgIdx >= 0 &&
+          *IndirectTargetArgIdx < MaxArgs && FoundMask[*IndirectTargetArgIdx]) {
+        std::optional<int> ValueArgIdx = resolveIndirectTargetArgIdx(
+            Blk, static_cast<int>(OI), TRI, Found[*IndirectTargetArgIdx]);
+        if (ValueArgIdx == IndirectTargetArgIdx) {
+          FoundMask[*IndirectTargetArgIdx] = false;
+          Found[*IndirectTargetArgIdx] = MedVar();
+        }
+      }
+
       // i386 cdecl: a callee with 0 detected register arguments but >0 stack
       // arguments uses the cdecl convention (ALL arguments on the stack).  The
       // register scan may have placed scratch ECX/EDX values at slots 0-1;
@@ -563,6 +589,44 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             FoundMask[K] = false;
             Found[K] = MedVar();
           }
+      }
+
+      // A linked Darwin import has no type information.  A partial contiguous
+      // integer-register prefix followed by an outgoing stack run is the
+      // observable ABI shape of a variadic call: fixed arguments occupy
+      // x0..xN, while every unnamed argument starts at [sp].  Recover that
+      // split before the stack scan so its slots are numbered from the fixed
+      // prefix instead of after x7.  A non-variadic integer call only reaches
+      // the stack after all eight integer registers, and an FP setup is kept
+      // out of this integer-only inference.
+      if (DarwinVarArgBase < 0 && Img && Img->isMachO() &&
+          TheArch == Arch::AArch64 && !CI.IsIndirect &&
+          (IsDirectImport || IsRelocExtern) && !ExternalArity &&
+          HasStackArgAtCallSP) {
+        int Prefix = 0;
+        while (Prefix < NumIntParamRegs && Prefix < MaxArgs &&
+               FoundMask[Prefix])
+          ++Prefix;
+        bool HasFPSetup = false;
+        for (int J = static_cast<int>(OI) - 1; J >= 0; --J) {
+          const auto &Prev = Blk.Ops[J];
+          if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
+              Prev.Opcode == NdOp::INTRINSIC)
+            break;
+          if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
+              TRI.isFPArgReg(Prev.Output.RegOff)) {
+            if (Prev.Opcode == NdOp::COPY && Prev.NumInputs >= 1 &&
+                Prev.Inputs[0].Kind == MedVar::Reg &&
+                Prev.Inputs[0].RegOff == Prev.Output.RegOff &&
+                Prev.Inputs[0].Id == Prev.Output.Id &&
+                Prev.Inputs[0].SSAVer == Prev.Output.SSAVer)
+              continue; // entry live-in marker, not an outgoing FP argument
+            HasFPSetup = true;
+            break;
+          }
+        }
+        if (!HasFPSetup && Prefix > 0 && Prefix < NumIntParamRegs)
+          DarwinVarArgBase = Prefix;
       }
 
       // Darwin AArch64 variadic call: only the NumFixed fixed arguments travel
@@ -899,6 +963,28 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
                           Blk.Ops[OI + 1].Inputs[0].Kind == MedVar::Reg &&
                           Blk.Ops[OI + 1].Inputs[0].RegOff == Op.Output.RegOff;
 
+      // An ordinary (non-tail-branch) wrapper has its frame teardown between
+      // BLR and RET.  It still forwards the call result when no intervening op
+      // replaces either ABI return register.  Keep this broader predicate
+      // separate from IsTailReturn: only the FP-result repair needs it; stack
+      // and live-in argument promotion remain restricted to proven tail calls.
+      bool ForwardsCallResult = IsTailReturn;
+      if (!ForwardsCallResult)
+        for (size_t I = OI + 1; I < Blk.Ops.size(); ++I) {
+          const MedOp &After = Blk.Ops[I];
+          if (After.Opcode == NdOp::RETURN) {
+            ForwardsCallResult = true;
+            break;
+          }
+          if (After.Opcode == NdOp::CALL || After.Opcode == NdOp::INDIR_CALL ||
+              After.Opcode == NdOp::INTRINSIC)
+            break;
+          if (After.Output.Kind == MedVar::Reg &&
+              (After.Output.RegOff == TRI.IntReturnReg ||
+               After.Output.RegOff == TRI.FPReturnReg))
+            break;
+        }
+
       // A pure tail-call forwarder to a scalar-FP-returning callee returns that
       // callee's FP value; the rewritten tail-call CALL nominally writes the
       // integer return register, so record the forwarding CALL here and rewire
@@ -907,7 +993,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // the Pipeline forwarder pass (libc via libcArity, intra-module via the
       // callee's recovered ReturnType) -- inferReturnType ran before call
       // recovery and could not see it.
-      if (IsTailReturn && Func.ReturnType &&
+      if (ForwardsCallResult && Func.ReturnType &&
           Func.ReturnType->Kind == NdTypeKind::Float) {
         ForwarderFPRetSize = Func.ReturnType->Size ? Func.ReturnType->Size : 8;
         ForwarderFPRetBlk = Blk.Id;
@@ -1365,7 +1451,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         }
       }
 
-      if (IsObjCMessageStub && DarwinVarArgBase >= 0)
+      if (!CI.IsIndirect && DarwinVarArgBase >= 0)
         CI.VarArgFixedCount = DarwinVarArgBase;
 
       Func.CallInfos.push_back(std::move(CI));
@@ -1501,11 +1587,17 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         continue;
       for (size_t I = 0; I < Blk.Ops.size(); ++I) {
         auto &O = Blk.Ops[I];
-        if (O.Opcode != NdOp::CALL || O.Addr != ForwarderFPRetCallAddr ||
-            O.Output.Kind != MedVar::Reg)
+        if ((O.Opcode != NdOp::CALL && O.Opcode != NdOp::INDIR_CALL) ||
+            O.Addr != ForwarderFPRetCallAddr || O.Output.Kind != MedVar::Reg)
           continue;
         O.Output.RegOff = TRI.FPReturnReg;
-        O.Output.Size = ForwarderFPRetSize;
+        // The logical result is a scalar float/double, but AArch64 and x86-64
+        // model the physical FP return register as its full vector width.  Keep
+        // that canonical width so return-value selection does not prefer an
+        // older pre-call Q0/XMM0 write merely because it is wider.
+        O.Output.Size = TRI.isVectorReg(TRI.FPReturnReg)
+                            ? static_cast<uint16_t>(TRI.VecRegStride)
+                            : ForwarderFPRetSize;
         if (I + 1 < Blk.Ops.size() && Blk.Ops[I + 1].Opcode == NdOp::RETURN &&
             Blk.Ops[I + 1].NumInputs >= 1 &&
             Blk.Ops[I + 1].Inputs[0].Kind == MedVar::Reg) {

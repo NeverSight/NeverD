@@ -44,6 +44,14 @@ struct BinaryImage;
 va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
                                const MedVar &V, int Depth);
 
+/// Resolve an indirect-call target (or another value) back to the incoming
+/// integer argument register from which it originated.  Follows the same
+/// copy/cast and spill/reload chains as resolveIndirectTargetAddr.  nullopt
+/// when the provenance is not provable within the call's block.
+std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
+                                               const TargetRegInfo &TRI,
+                                               const MedVar &V, int Depth = 0);
+
 //===----------------------------------------------------------------------===//
 // Stack-pointer offset tracing
 //===----------------------------------------------------------------------===//
@@ -73,8 +81,8 @@ void buildCallSpOffsets(const MedBlock &Blk, const TargetRegInfo &TRI,
 
 /// Offset of store-address \p V above the call SP, resolved against the call
 /// SP's offset map.  nullopt when the address is not stack-pointer derived.
-std::optional<int64_t> relStackOff(const MedBlock &Blk, const TargetRegInfo &TRI,
-                                   const MedVar &V,
+std::optional<int64_t> relStackOff(const MedBlock &Blk,
+                                   const TargetRegInfo &TRI, const MedVar &V,
                                    const std::map<SpOffsetKey, int64_t> &Map,
                                    int Depth);
 

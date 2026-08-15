@@ -3,6 +3,7 @@ add_neverd_unittest(NeverDLiftTests
   aarch64/AArch64_AtomicTests.cpp
   aarch64/AArch64_BitShiftTests.cpp
   aarch64/AArch64_CarryTests.cpp
+  aarch64/AArch64_CallAbiTests.cpp
   aarch64/AArch64_CondTests.cpp
   aarch64/AArch64_CSelTests.cpp
   aarch64/AArch64_ExtendTests.cpp
@@ -651,6 +652,34 @@ add_custom_command(
   DEPENDS ${macho_i386_src}
   COMMENT "Compiling test_macho_i386.c -> .o (no-PIC i386 Mach-O)")
 list(APPEND TEST_OBJECTS ${macho_i386_obj} ${macho_i386_nopic_obj})
+
+if(APPLE)
+  set(call_abi_a64_macho_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_abi_a64_macho.c")
+  set(call_abi_a64_macho_provider_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_abi_provider_a64_macho.c")
+  set(call_abi_a64_macho_dylib
+      "${CMAKE_CURRENT_BINARY_DIR}/libtest_call_abi_a64_macho.dylib")
+  set(call_abi_a64_macho_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_call_abi_a64_macho")
+  add_custom_command(
+    OUTPUT ${call_abi_a64_macho_dylib}
+    COMMAND /usr/bin/clang -target arm64-apple-macos14 -dynamiclib
+            -fno-stack-protector ${call_abi_a64_macho_provider_src}
+            -Wl,-install_name,@rpath/libtest_call_abi_a64_macho.dylib
+            -o ${call_abi_a64_macho_dylib}
+    DEPENDS ${call_abi_a64_macho_provider_src}
+    COMMENT "Linking AArch64 Mach-O call-ABI provider dylib")
+  add_custom_command(
+    OUTPUT ${call_abi_a64_macho_exe}
+    COMMAND /usr/bin/clang -target arm64-apple-macos14
+            -fno-stack-protector ${call_abi_a64_macho_src}
+            ${call_abi_a64_macho_dylib} -Wl,-e,_indirect_double_call
+            -o ${call_abi_a64_macho_exe}
+    DEPENDS ${call_abi_a64_macho_src} ${call_abi_a64_macho_dylib}
+    COMMENT "Linking AArch64 Mach-O call-ABI fixture")
+  list(APPEND TEST_OBJECTS ${call_abi_a64_macho_exe})
+endif()
 
 foreach(src ${X86_64_TEST_SOURCES})
   get_filename_component(base ${src} NAME_WE)

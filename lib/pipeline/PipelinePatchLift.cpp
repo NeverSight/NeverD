@@ -208,6 +208,53 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   for (auto &MF : Result.MedFuncs)
     inferMedTypes(MF, Img.Arch);
 
+  // A callee that merely forwards an indirect scalar-FP call has no explicit
+  // post-call D0/V0 read: the native RET returns whatever BLR left in V0, so
+  // its own body alone looks like an integer-returning function.  A direct
+  // caller provides the missing ABI evidence when LowToMed routes that call's
+  // result through V0 and a scalar S0/D0 view is consumed downstream.  Feed
+  // that observed width back into the callee before call-ABI recovery; the
+  // forwarder's final indirect call can then be rewired from X0 to V0.
+  if (Img.Arch == Arch::AArch64) {
+    const auto &TRI = getTargetRegInfo(Img.Arch);
+    std::map<va_t, MedFunc *> ByEntry;
+    for (auto &MF : Result.MedFuncs)
+      ByEntry[MF.Entry] = &MF;
+    for (const auto &Caller : Result.MedFuncs) {
+      for (const auto &Blk : Caller.Blocks) {
+        for (size_t OI = 0; OI < Blk.Ops.size(); ++OI) {
+          const MedOp &Call = Blk.Ops[OI];
+          if (Call.Opcode != NdOp::CALL || Call.NumInputs < 1 ||
+              !Call.Inputs[0].isConst() || Call.Output.Kind != MedVar::Reg ||
+              Call.Output.RegOff != TRI.FPReturnReg)
+            continue;
+          auto CalleeIt = ByEntry.find(Call.Inputs[0].ConstVal);
+          if (CalleeIt == ByEntry.end())
+            continue;
+          uint16_t ScalarSize = 0;
+          for (size_t J = OI + 1; J < Blk.Ops.size(); ++J) {
+            const MedOp &Use = Blk.Ops[J];
+            for (uint8_t I = 0; I < Use.NumInputs; ++I) {
+              const MedVar &V = Use.Inputs[I];
+              if (V.Kind != MedVar::Reg || V.RegOff != Call.Output.RegOff ||
+                  V.Id != Call.Output.Id || V.SSAVer != Call.Output.SSAVer ||
+                  (V.Size != 4 && V.Size != 8))
+                continue;
+              if (ScalarSize == 0 || V.Size < ScalarSize)
+                ScalarSize = V.Size;
+            }
+            if (Use.Output.Kind == MedVar::Reg &&
+                Use.Output.RegOff == Call.Output.RegOff &&
+                Use.Output.SSAVer != Call.Output.SSAVer)
+              break;
+          }
+          if (ScalarSize != 0)
+            CalleeIt->second->ReturnType = NdType::makeFloat(ScalarSize);
+        }
+      }
+    }
+  }
+
   modelWideIntReturns(Img, Result);
 
   recoverStructReturnFromCallers(Img, Result);

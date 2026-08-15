@@ -136,13 +136,22 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
         const Import *Imp = Img.findImportAt(Call->Inputs[0].ConstVal);
         if (!Imp)
           continue;
-        auto Sig = libc::libcArity(llvm::StringRef(Imp->Name).ltrim('_').str());
-        if (!Sig || !Sig->FpRetComplex)
-          continue;
         std::vector<MedReturnReg> Shape = candidateShape(Candidate);
-        if (Shape.size() != 2 || !isCompleteShape(Shape) || !Shape[0].IsFP ||
-            !Shape[1].IsFP)
+        if (!isCompleteShape(Shape))
           continue;
+        // A complete contiguous X0:X1 use is sufficient caller-side evidence
+        // for an unresolved import's small integer aggregate return.  No
+        // symbol whitelist can describe arbitrary dylib APIs, and leaving X1
+        // as an unknown call clobber provably discards a field the caller
+        // consumes.  FP aggregate imports remain restricted to the curated
+        // complex-return signatures because incidental V-register reads are
+        // much easier to confuse with independent scalar state.
+        if (Shape.front().IsFP) {
+          auto Sig =
+              libc::libcArity(llvm::StringRef(Imp->Name).ltrim('_').str());
+          if (!Sig || !Sig->FpRetComplex || Shape.size() != 2)
+            continue;
+        }
         MRByEntry[Call->Inputs[0].ConstVal] = std::move(Shape);
       }
     }
