@@ -19,6 +19,18 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
   State.StoreFwdDeps.clear();
   State.ForwardedAddressDeps.clear();
 
+  bool HasOrderedMemory = false;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (S.MemoryOrdering != NdMemoryOrdering::None)
+      HasOrderedMemory = true;
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (E && E->hasOrderedMemoryAccess())
+        HasOrderedMemory = true;
+    });
+  });
+  if (HasOrderedMemory)
+    return;
+
   std::map<std::string, std::string> AddrToVal;
   std::map<std::string, const HighExpr *> AddrToValExpr;
   std::map<std::string, std::string> AddrToKey;
@@ -36,7 +48,8 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
           ScanValueLoads(*AddressOperand);
       return;
     }
-    if (E.Kind == ExprKind::Load && !E.Operands.empty())
+    if (E.Kind == ExprKind::Load && !E.Operands.empty() &&
+        E.MemoryOrdering == NdMemoryOrdering::None)
       LoadedAddrs.insert(ExprFn(*E.Operands[0]));
     for (const ExprPtr &Operand : E.Operands)
       if (Operand)
@@ -46,7 +59,8 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (State.DeadStmts.count(&S))
       return;
-    if (S.Kind == StmtKind::Store && S.StoreAddr && S.StoreVal) {
+    if (S.Kind == StmtKind::Store && S.StoreAddr && S.StoreVal &&
+        S.MemoryOrdering == NdMemoryOrdering::None) {
       std::string Addr = ExprFn(*S.StoreAddr);
       std::string Val = ExprFn(*S.StoreVal);
       AddrToVal[Addr] = Val;
@@ -114,7 +128,8 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (State.DeadStmts.count(&S))
         return;
-      if (S.Kind == StmtKind::Store && S.StoreAddr) {
+      if (S.Kind == StmtKind::Store && S.StoreAddr &&
+          S.MemoryOrdering == NdMemoryOrdering::None) {
         if (ExprFn(*S.StoreAddr) == Addr)
           State.DeadStmts.insert(&S);
       }
@@ -134,7 +149,8 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
             Visit(*AddressOperand);
         return;
       }
-      if (Ex.Kind == ExprKind::Load && !Ex.Operands.empty()) {
+      if (Ex.Kind == ExprKind::Load && !Ex.Operands.empty() &&
+          Ex.MemoryOrdering == NdMemoryOrdering::None) {
         std::string Addr = ExprFn(*Ex.Operands[0]);
         auto FwdIt = State.StoreFwd.find(Addr);
         if (FwdIt != State.StoreFwd.end()) {
@@ -173,7 +189,8 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
       if (State.DeadStmts.count(&S))
         return;
       if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var) {
-        if (S.Val && S.Val->Kind == ExprKind::Call)
+        if (S.Val &&
+            (S.Val->Kind == ExprKind::Call || S.Val->hasOrderedMemoryAccess()))
           return;
         std::string Name = VarFn(S.Dst->Var);
         if (!Alive.count(Name)) {

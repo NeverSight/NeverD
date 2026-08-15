@@ -821,6 +821,8 @@ void detectStackParams(MedFunc &Func, Arch TargetArch,
     for (auto &Op : Blk.Ops) {
       if (Op.Opcode != NdOp::LOAD || Op.NumInputs < 1)
         continue;
+      if (Op.MemoryOrdering != NdMemoryOrdering::None)
+        continue;
       auto Off = rawStackOff(Op.Inputs[0]);
       if (!Off)
         continue;

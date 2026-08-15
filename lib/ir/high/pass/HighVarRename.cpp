@@ -120,6 +120,7 @@ static bool eliminateDeadAssignsLocal(std::vector<HighStmt> &Stmts,
                                if (S.Kind == StmtKind::Assign && S.Dst &&
                                    S.Val && S.Dst->Kind == ExprKind::Var &&
                                    S.Val->Kind != ExprKind::Call &&
+                                   !S.Val->hasOrderedMemoryAccess() &&
                                    Refs.count(VK(S.Dst->Var)) == 0) {
                                  Changed = true;
                                  return true;
@@ -194,7 +195,7 @@ void postRenameCleanup(std::vector<HighStmt> &Stmts) {
           Prev.CallExpr = Prev.Val;
           Prev.Dst = nullptr;
           Prev.Val = nullptr;
-        } else {
+        } else if (!Prev.Val || !Prev.Val->hasOrderedMemoryAccess()) {
           Body.erase(Body.begin() + static_cast<long>(I));
           --I;
         }

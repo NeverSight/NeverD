@@ -109,7 +109,8 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
           AddrExpr = DefIt->second;
       }
       return HighExpr::makeLoad(AddrExpr ? AddrExpr : medvarToExpr(AddrVar),
-                                NdType::makeInt(Op.Output.Size));
+                                NdType::makeInt(Op.Output.Size),
+                                Op.MemoryOrdering);
     }
     break;
   }

@@ -30,6 +30,58 @@
 
 namespace neverd {
 
+namespace {
+
+const char *memoryOrderingName(NdMemoryOrdering Ordering) {
+  switch (Ordering) {
+  case NdMemoryOrdering::None:
+    return "plain";
+  case NdMemoryOrdering::Relaxed:
+    return "relaxed";
+  case NdMemoryOrdering::Acquire:
+    return "acquire";
+  case NdMemoryOrdering::Release:
+    return "release";
+  case NdMemoryOrdering::AcquireRelease:
+    return "acq_rel";
+  case NdMemoryOrdering::SequentiallyConsistent:
+    return "seq_cst";
+  }
+  llvm_unreachable("unknown NeverD memory ordering");
+}
+
+const char *atomicOrderingToken(NdMemoryOrdering Ordering) {
+  switch (Ordering) {
+  case NdMemoryOrdering::Relaxed:
+    return "__ATOMIC_RELAXED";
+  case NdMemoryOrdering::Acquire:
+    return "__ATOMIC_ACQUIRE";
+  case NdMemoryOrdering::Release:
+    return "__ATOMIC_RELEASE";
+  case NdMemoryOrdering::AcquireRelease:
+    return "__ATOMIC_ACQ_REL";
+  case NdMemoryOrdering::SequentiallyConsistent:
+    return "__ATOMIC_SEQ_CST";
+  case NdMemoryOrdering::None:
+    break;
+  }
+  llvm::report_fatal_error("plain memory access has no atomic order token");
+}
+
+void validateAtomicLoadOrdering(NdMemoryOrdering Ordering) {
+  if (Ordering == NdMemoryOrdering::Release ||
+      Ordering == NdMemoryOrdering::AcquireRelease)
+    llvm::report_fatal_error("release ordering is invalid on a load");
+}
+
+void validateAtomicStoreOrdering(NdMemoryOrdering Ordering) {
+  if (Ordering == NdMemoryOrdering::Acquire ||
+      Ordering == NdMemoryOrdering::AcquireRelease)
+    llvm::report_fatal_error("acquire ordering is invalid on a store");
+}
+
+} // anonymous namespace
+
 std::string HighCWriter::memoryTypeName(const TypeRef &Ty) const {
   std::string Name = typeToC(Ty);
   return Name == "void" ? "uint32_t" : Name;
@@ -37,14 +89,24 @@ std::string HighCWriter::memoryTypeName(const TypeRef &Ty) const {
 
 void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   std::set<std::string> Names;
+  AtomicLoadTypes.clear();
+  AtomicStoreTypes.clear();
   std::set<const HighExpr *> Seen;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
     if (!Seen.insert(&E).second)
       return;
-    if (E.Kind == ExprKind::Load)
-      Names.insert(memoryTypeName(E.Type));
-    if (E.Kind == ExprKind::Store && E.Operands.size() >= 2)
-      Names.insert(memoryTypeName(E.Operands[1]->Type));
+    if (E.Kind == ExprKind::Load) {
+      std::string Type = memoryTypeName(E.Type);
+      Names.insert(Type);
+      if (E.MemoryOrdering != NdMemoryOrdering::None)
+        AtomicLoadTypes.insert({Type, E.MemoryOrdering});
+    }
+    if (E.Kind == ExprKind::Store && E.Operands.size() >= 2) {
+      std::string Type = memoryTypeName(E.Operands[1]->Type);
+      Names.insert(Type);
+      if (E.MemoryOrdering != NdMemoryOrdering::None)
+        AtomicStoreTypes.insert({Type, E.MemoryOrdering});
+    }
     for (const ExprPtr &Operand : E.Operands)
       if (Operand)
         Visit(*Operand);
@@ -52,8 +114,17 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
 
   for (const HighFunc &Func : Funcs) {
     walkStmts(Func.Body, [&](const HighStmt &Stmt) {
-      if (Stmt.Kind == StmtKind::Store && Stmt.StoreVal)
-        Names.insert(memoryTypeName(Stmt.StoreVal->Type));
+      if (Stmt.Kind == StmtKind::Store && Stmt.StoreVal) {
+        std::string Type = memoryTypeName(Stmt.StoreVal->Type);
+        Names.insert(Type);
+        if (Stmt.MemoryOrdering != NdMemoryOrdering::None)
+          AtomicStoreTypes.insert({Type, Stmt.MemoryOrdering});
+      }
+      if (Stmt.Kind == StmtKind::Assign && Stmt.Dst &&
+          Stmt.Dst->Kind == ExprKind::Load &&
+          Stmt.Dst->MemoryOrdering != NdMemoryOrdering::None)
+        AtomicStoreTypes.insert(
+            {memoryTypeName(Stmt.Dst->Type), Stmt.Dst->MemoryOrdering});
       forEachExpr(Stmt, [&](const ExprPtr &E) {
         if (E)
           Visit(*E);
@@ -81,29 +152,62 @@ void HighCWriter::writeMemoryHelpers() {
        << "    return value;\n"
        << "}\n\n";
   }
+
+  for (const auto &[Type, Ordering] : AtomicLoadTypes) {
+    validateAtomicLoadOrdering(Ordering);
+    unsigned Index = MemoryTypes.at(Type);
+    OS << "static inline " << Type << " neverd_mem_load_"
+       << memoryOrderingName(Ordering) << "_" << Index
+       << "(uintptr_t address) {\n"
+       << "    return __atomic_load_n((const " << Type << " *)address, "
+       << atomicOrderingToken(Ordering) << ");\n"
+       << "}\n\n";
+  }
+
+  for (const auto &[Type, Ordering] : AtomicStoreTypes) {
+    validateAtomicStoreOrdering(Ordering);
+    unsigned Index = MemoryTypes.at(Type);
+    OS << "static inline " << Type << " neverd_mem_store_"
+       << memoryOrderingName(Ordering) << "_" << Index << "(uintptr_t address, "
+       << Type << " value) {\n"
+       << "    __atomic_store_n((" << Type << " *)address, value, "
+       << atomicOrderingToken(Ordering) << ");\n"
+       << "    return value;\n"
+       << "}\n\n";
+  }
 }
 
-std::string HighCWriter::memoryLoadExpr(const TypeRef &Ty,
-                                        llvm::StringRef Addr) const {
+std::string HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                                        NdMemoryOrdering Ordering) const {
   std::string Type = memoryTypeName(Ty);
   auto It = MemoryTypes.find(Type);
   if (It == MemoryTypes.end())
     llvm::report_fatal_error("HighC memory load type was not collected");
   unsigned Index = It->second;
-  return "neverd_mem_load_" + std::to_string(Index) + "((uintptr_t)(" +
-         Addr.str() + "))";
+  std::string Name = "neverd_mem_load_";
+  if (Ordering != NdMemoryOrdering::None) {
+    validateAtomicLoadOrdering(Ordering);
+    Name += std::string(memoryOrderingName(Ordering)) + "_";
+  }
+  return Name + std::to_string(Index) + "((uintptr_t)(" + Addr.str() + "))";
 }
 
 std::string HighCWriter::memoryStoreExpr(const TypeRef &Ty,
                                          llvm::StringRef Addr,
-                                         llvm::StringRef Val) const {
+                                         llvm::StringRef Val,
+                                         NdMemoryOrdering Ordering) const {
   std::string Type = memoryTypeName(Ty);
   auto It = MemoryTypes.find(Type);
   if (It == MemoryTypes.end())
     llvm::report_fatal_error("HighC memory store type was not collected");
   unsigned Index = It->second;
-  return "neverd_mem_store_" + std::to_string(Index) + "((uintptr_t)(" +
-         Addr.str() + "), " + Val.str() + ")";
+  std::string Name = "neverd_mem_store_";
+  if (Ordering != NdMemoryOrdering::None) {
+    validateAtomicStoreOrdering(Ordering);
+    Name += std::string(memoryOrderingName(Ordering)) + "_";
+  }
+  return Name + std::to_string(Index) + "((uintptr_t)(" + Addr.str() + "), " +
+         Val.str() + ")";
 }
 
 void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,

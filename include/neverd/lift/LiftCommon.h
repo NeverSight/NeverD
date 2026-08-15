@@ -48,7 +48,8 @@ struct LiftStateBase {
     return NdVar::tmp(TmpBase + (TmpId++) * TmpStride, Sz);
   }
 
-  void emit(NdOp Opc, NdVar Out, std::initializer_list<NdVar> Ins) {
+  void emit(NdOp Opc, NdVar Out, std::initializer_list<NdVar> Ins,
+            NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) {
     if ((Opc == NdOp::INT_ZEXT || Opc == NdOp::INT_SEXT) && Ins.size() == 1) {
       const NdVar &In = *Ins.begin();
       if (In.Size > Out.Size)
@@ -61,6 +62,7 @@ struct LiftStateBase {
 
     LowOp Op;
     Op.Opcode = Opc;
+    Op.MemoryOrdering = MemoryOrdering;
     Op.Addr = Addr;
     Op.Seq = Seq++;
     Op.Output = Out;

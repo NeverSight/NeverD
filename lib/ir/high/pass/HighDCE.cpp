@@ -135,6 +135,8 @@ static bool isDeadAssign(const HighStmt &S, const VarKeySet &Refs) {
     return false;
   if (S.Val->Kind == ExprKind::Call)
     return false;
+  if (S.Val->hasOrderedMemoryAccess())
+    return false;
   return Refs.count(VK(S.Dst->Var)) == 0;
 }
 
@@ -236,6 +238,7 @@ static void preDCE(std::vector<HighStmt> &Stmts) {
                                 if (S.Kind == StmtKind::Assign && S.Dst &&
                                     S.Val && S.Dst->Kind == ExprKind::Var &&
                                     S.Val->Kind != ExprKind::Call &&
+                                    !S.Val->hasOrderedMemoryAccess() &&
                                     Refs.count(VK(S.Dst->Var)) == 0) {
                                   Changed = true;
                                   return true;
@@ -373,7 +376,7 @@ static void iterativeDCE(HighFunc &Func) {
           S.Dst->Kind == ExprKind::Var) {
         auto Key = VK(S.Dst->Var);
         InlineDefCount[Key]++;
-        if (S.Val->Kind != ExprKind::Call)
+        if (S.Val->Kind != ExprKind::Call && !S.Val->hasOrderedMemoryAccess())
           InlineDefs[Key] = S.Val;
       }
       forEachRhsExpr(S, [&](const ExprPtr &E) {

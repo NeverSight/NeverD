@@ -185,7 +185,8 @@ void foldCopyChains(HighFunc &Func) {
     auto It = VarDefValue.find(SrcKey);
     if (It == VarDefValue.end() || !It->second)
       continue;
-    if (It->second->Kind == ExprKind::Call)
+    if (It->second->Kind == ExprKind::Call ||
+        It->second->hasOrderedMemoryAccess())
       continue;
     FoldMap[DstKey] = It->second;
     FoldSources.insert(SrcKey);
@@ -268,7 +269,7 @@ void foldMultiUseCopies(std::vector<HighStmt> &Stmts) {
     if (NumDefs != 1 || DefIsCall[Key])
       continue;
     auto Val = MultiDefValue[Key];
-    if (!Val)
+    if (!Val || Val->hasOrderedMemoryAccess())
       continue;
     auto TotalIt = TotalUseCount.find(Key);
     auto CopyIt = CopyUseCount.find(Key);
@@ -304,8 +305,10 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
         S.Dst->Kind == ExprKind::Var) {
       auto Key = VK(S.Dst->Var);
       SingleDefCount[Key]++;
-      if (S.Val->Kind == ExprKind::BinOp || S.Val->Kind == ExprKind::UnaryOp ||
-          S.Val->Kind == ExprKind::Var || S.Val->Kind == ExprKind::Const)
+      bool IsInlineable =
+          S.Val->Kind == ExprKind::BinOp || S.Val->Kind == ExprKind::UnaryOp ||
+          S.Val->Kind == ExprKind::Var || S.Val->Kind == ExprKind::Const;
+      if (IsInlineable && !S.Val->hasOrderedMemoryAccess())
         SingleUseDefs[Key] = S.Val;
     }
     forEachRhsExpr(S, [&](const ExprPtr &E) {

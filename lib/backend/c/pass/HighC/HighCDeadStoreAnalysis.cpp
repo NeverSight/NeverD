@@ -174,6 +174,16 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   State.DeadVars.clear();
   State.AddressKeys.clear();
 
+  bool HasOrderedMemory = false;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (S.MemoryOrdering != NdMemoryOrdering::None)
+      HasOrderedMemory = true;
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (E && E->hasOrderedMemoryAccess())
+        HasOrderedMemory = true;
+    });
+  });
+
   std::vector<ExprDef> Defs;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
@@ -224,6 +234,10 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (S.Kind != StmtKind::Store || !S.StoreAddr)
       return;
+    if (HasOrderedMemory)
+      return;
+    if (S.MemoryOrdering != NdMemoryOrdering::None)
+      return;
     std::set<std::string> AddrVars;
     collectExprVars(*S.StoreAddr, AddrVars, VarFn);
     bool AnyLoaded = false;
@@ -254,6 +268,10 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
     if (State.DeadStmts.count(&S))
       return;
     if (S.Kind != StmtKind::Store || !S.StoreAddr)
+      return;
+    if (HasOrderedMemory)
+      return;
+    if (S.MemoryOrdering != NdMemoryOrdering::None)
       return;
     std::string Addr = ExprFn(*S.StoreAddr);
     if (!LoadedAddrs.count(Addr) &&
@@ -299,7 +317,8 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
           }
           return;
         }
-        if (S.Val && S.Val->Kind == ExprKind::Call)
+        if (S.Val &&
+            (S.Val->Kind == ExprKind::Call || S.Val->hasOrderedMemoryAccess()))
           return;
         std::string Name = VarFn(S.Dst->Var);
         bool AnyAlive = AliveVars.count(Name);

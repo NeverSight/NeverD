@@ -210,17 +210,19 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     if (E.Operands.empty())
       return "/* bad load */";
     std::string Addr = exprStr(*E.Operands[0]);
-    auto Fwd = Analysis.StoreFwd.find(Addr);
-    if (Fwd != Analysis.StoreFwd.end())
-      return Fwd->second;
-    return memoryLoadExpr(E.Type, Addr);
+    if (E.MemoryOrdering == NdMemoryOrdering::None) {
+      auto Fwd = Analysis.StoreFwd.find(Addr);
+      if (Fwd != Analysis.StoreFwd.end())
+        return Fwd->second;
+    }
+    return memoryLoadExpr(E.Type, Addr, E.MemoryOrdering);
   }
   case ExprKind::Store: {
     if (E.Operands.size() < 2)
       return "/* bad store */";
     std::string Addr = exprStr(*E.Operands[0]);
     std::string Val = exprStr(*E.Operands[1]);
-    return memoryStoreExpr(E.Operands[1]->Type, Addr, Val);
+    return memoryStoreExpr(E.Operands[1]->Type, Addr, Val, E.MemoryOrdering);
   }
   case ExprKind::Call:
     return renderCallExpr(E);

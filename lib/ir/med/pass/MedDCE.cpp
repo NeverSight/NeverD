@@ -247,7 +247,8 @@ void LowToMedConverter::runDce(MedFunc &Func) {
             Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::CALL ||
             Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INTRINSIC ||
             Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
-            Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR;
+            Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR ||
+            Op.MemoryOrdering != NdMemoryOrdering::None;
 
         bool OutputLive = Op.Output.Id >= 0 &&
                           LiveDefs.count({Op.Output.Id, Op.Output.SSAVer});

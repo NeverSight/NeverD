@@ -30,6 +30,12 @@ static void simplifyExprRecursive(ExprPtr &E,
   for (auto &Op : E->Operands)
     simplifyExprRecursive(Op, Seen);
 
+  // Atomic accesses are observable even when the surrounding value appears
+  // algebraically redundant.  Keep the containing expression intact so a
+  // simplification cannot discard, duplicate, or move the access.
+  if (E->hasOrderedMemoryAccess())
+    return;
+
   if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT &&
       !E->Operands.empty() && E->Operands[0]->Kind == ExprKind::UnaryOp &&
       E->Operands[0]->Op == NdOp::BOOL_NOT &&

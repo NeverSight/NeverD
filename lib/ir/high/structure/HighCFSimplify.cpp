@@ -154,6 +154,8 @@ static void convertStoreGotoToReturn(std::vector<HighStmt> &Stmts,
     if (Body[Body.size() - 2].Kind != StmtKind::Store)
       return;
     auto &StoreStmt = Body[Body.size() - 2];
+    if (StoreStmt.MemoryOrdering != NdMemoryOrdering::None)
+      return;
     HighStmt RetStmt;
     RetStmt.Kind = StmtKind::Return;
     RetStmt.Addr = StoreStmt.Addr;
@@ -268,6 +270,8 @@ static void foldStoreGotoAfterIf(HighFunc &Func) {
     auto &Store = Func.Body[I + 1];
     auto &Go = Func.Body[I + 2];
     if (Store.Kind != StmtKind::Store || Go.Kind != StmtKind::Goto)
+      continue;
+    if (Store.MemoryOrdering != NdMemoryOrdering::None)
       continue;
     if (Stmt.Kind == StmtKind::If)
       Stmt.Kind = StmtKind::IfElse;

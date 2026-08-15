@@ -58,6 +58,10 @@ void MedToHighConverter::stripStackCanary(HighFunc &Func) {
                                  [](const HighStmt &S) {
                                    if (S.Kind != StmtKind::Store || !S.StoreVal)
                                      return false;
+                                   if (S.MemoryOrdering !=
+                                           NdMemoryOrdering::None ||
+                                       S.StoreVal->hasOrderedMemoryAccess())
+                                     return false;
                                    if (S.StoreVal->Kind != ExprKind::Load)
                                      return false;
                                    if (S.StoreVal->Operands.empty())
@@ -77,6 +81,8 @@ void MedToHighConverter::stripStackCanary(HighFunc &Func) {
       continue;
 
     auto &Cond = S.Cond;
+    if (Cond->hasOrderedMemoryAccess())
+      continue;
     if (Cond->Kind != ExprKind::BinOp || Cond->Op != NdOp::INT_EQUAL)
       continue;
     if (Cond->Operands.size() != 2)
@@ -110,6 +116,9 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
   };
   auto IsCalleeSaveStore = [&](const HighStmt &S) -> bool {
     if (S.Kind != StmtKind::Store || !S.StoreVal)
+      return false;
+    if (S.MemoryOrdering != NdMemoryOrdering::None ||
+        S.StoreVal->hasOrderedMemoryAccess())
       return false;
     if (S.StoreVal->Kind != ExprKind::Var)
       return false;
@@ -159,6 +168,8 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
 
   auto IsPrologueEpilogue = [&](const HighStmt &S) -> bool {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val) {
+      if (S.Val->hasOrderedMemoryAccess())
+        return false;
       if (S.Dst->Kind == ExprKind::Var && IsSPReg(S.Dst->Var) &&
           S.Val->Kind == ExprKind::BinOp &&
           (S.Val->Op == NdOp::INT_SUB || S.Val->Op == NdOp::INT_ADD) &&
@@ -183,6 +194,8 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
     }
     if (S.Kind == StmtKind::Store && S.StoreVal && S.StoreAddr &&
         S.StoreVal->Kind == ExprKind::Var) {
+      if (S.MemoryOrdering != NdMemoryOrdering::None)
+        return false;
       auto &V = S.StoreVal->Var;
       if (IsFPReg(V) || IsLRReg(V))
         return true;
@@ -196,6 +209,8 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
       return false;
     if (S.Dst->Kind != ExprKind::Var)
+      return false;
+    if (S.Val->hasOrderedMemoryAccess())
       return false;
     if (IsLRReg(S.Dst->Var))
       return true;

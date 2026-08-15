@@ -39,7 +39,8 @@ namespace neverd::a64_parity_test {
 
 inline bool lowOpEq(const LowOp &A, const LowOp &B) {
   if (A.Opcode != B.Opcode || A.NumInputs != B.NumInputs ||
-      A.Output != B.Output || A.Addr != B.Addr)
+      A.Output != B.Output || A.Addr != B.Addr ||
+      A.MemoryOrdering != B.MemoryOrdering)
     return false;
   for (unsigned I = 0; I < A.NumInputs; ++I)
     if (A.Inputs[I] != B.Inputs[I])

@@ -26,6 +26,30 @@ long long test_ldxr_stxr_64(long long* addr, long long newval) {
     return old;
 }
 
+unsigned long long test_ldar(const unsigned long long *addr) {
+    unsigned long long value;
+    __asm__ volatile ("ldar %0, [%1]"
+                      : "=r"(value)
+                      : "r"(addr)
+                      : "memory");
+    return value;
+}
+
+void test_ldar_discard(const unsigned long long *addr) {
+    unsigned long long value;
+    __asm__ volatile ("ldar %0, [%1]"
+                      : "=r"(value)
+                      : "r"(addr)
+                      : "memory");
+}
+
+void test_stlr(unsigned long long *addr, unsigned long long value) {
+    __asm__ volatile ("stlr %1, [%0]"
+                      :
+                      : "r"(addr), "r"(value)
+                      : "memory");
+}
+
 void test_dmb(void) {
     __asm__ volatile ("dmb ish" ::: "memory");
 }

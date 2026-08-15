@@ -40,6 +40,8 @@ void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts) {
     auto &NextStmt = Stmts[I + 1];
     if (CurrStmt.Kind != StmtKind::Assign || NextStmt.Kind != StmtKind::Assign)
       continue;
+    if (CurrStmt.Val && CurrStmt.Val->hasOrderedMemoryAccess())
+      continue;
     if (!CurrStmt.Dst || !NextStmt.Dst)
       continue;
     if (CurrStmt.Dst->Kind != ExprKind::Var ||
@@ -142,6 +144,8 @@ void eliminateRedundantStackStores(HighFunc &Func, Arch TargetArch) {
     auto &StoreStmt = Func.Body[I];
     auto &NextStmt = Func.Body[I + 1];
     if (StoreStmt.Kind != StmtKind::Store)
+      continue;
+    if (StoreStmt.MemoryOrdering != NdMemoryOrdering::None)
       continue;
     if (NextStmt.Kind != StmtKind::Assign && NextStmt.Kind != StmtKind::Call)
       continue;

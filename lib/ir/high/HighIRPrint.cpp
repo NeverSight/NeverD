@@ -143,6 +143,8 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
     return false;
   if (Op != Other.Op)
     return false;
+  if (MemoryOrdering != Other.MemoryOrdering)
+    return false;
   switch (Kind) {
   case ExprKind::Var:
     return Var == Other.Var;

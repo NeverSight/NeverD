@@ -53,7 +53,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     if (Stmt.Dst->Kind == ExprKind::Load && !Stmt.Dst->Operands.empty()) {
       emitIndent(Indent);
       OS << memoryStoreExpr(Stmt.Dst->Type, exprStr(*Stmt.Dst->Operands[0]),
-                            exprStr(*Stmt.Val))
+                            exprStr(*Stmt.Val), Stmt.Dst->MemoryOrdering)
          << ";\n";
       break;
     }
@@ -66,7 +66,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       return;
     emitIndent(Indent);
     OS << memoryStoreExpr(Stmt.StoreVal->Type, exprStr(*Stmt.StoreAddr),
-                          exprStr(*Stmt.StoreVal))
+                          exprStr(*Stmt.StoreVal), Stmt.MemoryOrdering)
        << ";\n";
     break;
 

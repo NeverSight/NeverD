@@ -47,9 +47,12 @@ public:
   std::string memoryTypeName(const TypeRef &Ty) const;
   void writeIncludes(const std::vector<HighFunc> &Funcs);
   void writeMemoryHelpers();
-  std::string memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr) const;
-  std::string memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr,
-                              llvm::StringRef Val) const;
+  std::string memoryLoadExpr(
+      const TypeRef &Ty, llvm::StringRef Addr,
+      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) const;
+  std::string memoryStoreExpr(
+      const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
+      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) const;
   void writeForwardDecls(const std::vector<HighFunc> &Funcs);
   void collectCallTargets(const std::vector<HighStmt> &Stmts,
                           std::set<std::string> &Targets);
@@ -93,6 +96,8 @@ public:
   bool HasCIntrinsics = false;
   std::set<std::string> CIntrinsicNames;
   std::map<std::string, unsigned> MemoryTypes;
+  std::set<std::pair<std::string, NdMemoryOrdering>> AtomicLoadTypes;
+  std::set<std::pair<std::string, NdMemoryOrdering>> AtomicStoreTypes;
 
   HighCAnalysisState Analysis;
   bool InferredVoid = false;

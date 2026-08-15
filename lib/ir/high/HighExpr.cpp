@@ -83,12 +83,30 @@ ExprPtr HighExpr::makeUnary(NdOp Op, ExprPtr Operand) {
   return E;
 }
 
-ExprPtr HighExpr::makeLoad(ExprPtr Addr, TypeRef Ty) {
+ExprPtr HighExpr::makeLoad(ExprPtr Addr, TypeRef Ty,
+                           NdMemoryOrdering MemoryOrdering) {
   auto E = std::make_shared<HighExpr>();
   E->Kind = ExprKind::Load;
+  E->MemoryOrdering = MemoryOrdering;
   E->Operands.push_back(Addr);
   E->Type = Ty;
   return E;
+}
+
+bool HighExpr::hasOrderedMemoryAccess() const {
+  std::unordered_set<const HighExpr *> Seen;
+  std::vector<const HighExpr *> Work{this};
+  while (!Work.empty()) {
+    const HighExpr *Expr = Work.back();
+    Work.pop_back();
+    if (!Expr || !Seen.insert(Expr).second)
+      continue;
+    if (Expr->MemoryOrdering != NdMemoryOrdering::None)
+      return true;
+    for (const ExprPtr &Operand : Expr->Operands)
+      Work.push_back(Operand.get());
+  }
+  return false;
 }
 
 ExprPtr HighExpr::makeCall(const std::string &Target, va_t Addr,

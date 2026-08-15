@@ -457,10 +457,10 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     uint16_t Asz = accessSize(Dst.Size);
     if (Asz < Dst.Size) {
       NdVar L = S.makeTemp(Asz);
-      S.emit(NdOp::LOAD, L, {EA});
+      S.emit(NdOp::LOAD, L, {EA}, NdMemoryOrdering::Acquire);
       S.emit(NdOp::INT_ZEXT, Dst, {L});
     } else {
-      S.emit(NdOp::LOAD, Dst, {EA});
+      S.emit(NdOp::LOAD, Dst, {EA}, NdMemoryOrdering::Acquire);
     }
     break;
   }
@@ -472,7 +472,7 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     NdVar Src = operandRead(S, ARM64.operands[0]);
     NdVar EA = operandEffAddr(S, ARM64.operands[1]);
     NdVar SrcN = narrowToWidth(S, Src, accessSize(Src.Size));
-    S.emit(NdOp::STORE, {}, {EA, SrcN});
+    S.emit(NdOp::STORE, {}, {EA, SrcN}, NdMemoryOrdering::Release);
     break;
   }
 

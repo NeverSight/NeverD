@@ -82,6 +82,7 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
   HighStmt S;
   S.Kind = StmtKind::Store;
   S.Addr = CurOp.Addr;
+  S.MemoryOrdering = CurOp.MemoryOrdering;
   if (CurOp.NumInputs >= 2) {
     auto &AddrVar = CurOp.Inputs[0];
     ExprPtr AddrExpr;

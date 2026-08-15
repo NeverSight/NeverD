@@ -178,6 +178,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
 
       MedOp MOp;
       MOp.Opcode = LOp.Opcode;
+      MOp.MemoryOrdering = LOp.MemoryOrdering;
       MOp.Addr = LOp.Addr;
       if (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL) {
         MOp.CallSiteId = NextCallSiteId++;

@@ -85,6 +85,7 @@ struct PhiNode {
 
 struct MedOp {
   NdOp Opcode = NdOp::NOP;
+  NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
   MedVar Output = {};
   MedVar Inputs[6] = {};
   uint8_t NumInputs = 0;

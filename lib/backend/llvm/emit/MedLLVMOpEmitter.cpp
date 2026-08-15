@@ -24,8 +24,32 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace neverd {
+
+namespace {
+
+llvm::AtomicOrdering toLLVMAtomicOrdering(NdMemoryOrdering Ordering) {
+  switch (Ordering) {
+  case NdMemoryOrdering::None:
+    return llvm::AtomicOrdering::NotAtomic;
+  case NdMemoryOrdering::Relaxed:
+    return llvm::AtomicOrdering::Monotonic;
+  case NdMemoryOrdering::Acquire:
+    return llvm::AtomicOrdering::Acquire;
+  case NdMemoryOrdering::Release:
+    return llvm::AtomicOrdering::Release;
+  case NdMemoryOrdering::AcquireRelease:
+    return llvm::AtomicOrdering::AcquireRelease;
+  case NdMemoryOrdering::SequentiallyConsistent:
+    return llvm::AtomicOrdering::SequentiallyConsistent;
+  }
+  llvm_unreachable("unknown NeverD memory ordering");
+}
+
+} // anonymous namespace
 
 void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                             int BlockId, int OpIdx) {
@@ -644,6 +668,15 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Ptr = getMemoryPtr(Addr, ValTy, Builder);
     }
     auto *LI = Builder.CreateLoad(ValTy, Ptr, "ld");
+    if (Op.MemoryOrdering != NdMemoryOrdering::None) {
+      if (Op.MemoryOrdering == NdMemoryOrdering::Release ||
+          Op.MemoryOrdering == NdMemoryOrdering::AcquireRelease)
+        llvm::report_fatal_error("release ordering is invalid on a load");
+      if (!llvm::isPowerOf2_64(Op.Output.Size))
+        llvm::report_fatal_error("atomic load size must be a power of two");
+      LI->setAlignment(llvm::Align(Op.Output.Size));
+      LI->setAtomic(toLLVMAtomicOrdering(Op.MemoryOrdering));
+    }
     if (IsGlobalData)
       LI->setVolatile(true);
     Result = LI;
@@ -793,6 +826,15 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Val = Builder.CreatePtrToInt(Sym, Val->getType());
     }
     auto *SI = Builder.CreateStore(Val, Ptr);
+    if (Op.MemoryOrdering != NdMemoryOrdering::None) {
+      if (Op.MemoryOrdering == NdMemoryOrdering::Acquire ||
+          Op.MemoryOrdering == NdMemoryOrdering::AcquireRelease)
+        llvm::report_fatal_error("acquire ordering is invalid on a store");
+      if (Op.NumInputs < 2 || !llvm::isPowerOf2_64(Op.Inputs[1].Size))
+        llvm::report_fatal_error("atomic store size must be a power of two");
+      SI->setAlignment(llvm::Align(Op.Inputs[1].Size));
+      SI->setAtomic(toLLVMAtomicOrdering(Op.MemoryOrdering));
+    }
     if (IsGlobalData)
       SI->setVolatile(true);
     return;

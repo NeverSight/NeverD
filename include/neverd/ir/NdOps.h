@@ -104,6 +104,18 @@ enum class NdOp : uint8_t {
       _COUNT
 };
 
+/// Ordering attached to an atomic memory access.  None denotes an ordinary,
+/// non-atomic LOAD/STORE; every other value keeps the access atomic while it
+/// moves through LowIR, MedIR, HighIR, and the backends.
+enum class NdMemoryOrdering : uint8_t {
+  None,
+  Relaxed,
+  Acquire,
+  Release,
+  AcquireRelease,
+  SequentiallyConsistent,
+};
+
 const char *ndOpName(NdOp Op);
 
 } // namespace neverd
