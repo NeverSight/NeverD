@@ -46,6 +46,8 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names) {
   // +jsconv the backend cannot select the `fjcvtzs` instruction.
   if (Has("aarch64.fjcvtzs"))
     F += ",+jsconv";
+  if (Has("aarch64.neon.famax") || Has("aarch64.neon.famin"))
+    F += ",+faminmax";
   if (Has("aarch64.sve"))
     F += ",+sve";
   if (Has("aarch64.crc32"))

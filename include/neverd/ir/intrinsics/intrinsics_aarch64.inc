@@ -135,3 +135,7 @@ A64_MopsSetP, A64_MopsSetPN, A64_MopsSetPT, A64_MopsSetPTN,
 // FEAT_MOPS forward-copy prologue.  Like SETP, this instruction has
 // implementation-defined progress and updates all three operand registers.
 A64_MopsCpyFP,
+
+// FEAT_FAMINMAX absolute floating-point vector min/max.  The trailing lifter
+// operands carry the active vector width and element width for typed emission.
+A64_Famax, A64_Famin,

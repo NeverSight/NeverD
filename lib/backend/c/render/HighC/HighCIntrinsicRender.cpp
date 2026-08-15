@@ -32,7 +32,7 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
                                 bool &HasCIntrinsics) {
   std::string Result;
   if (TheArch == Arch::ARM || TheArch == Arch::AArch64) {
-    Result = renderARMIntrinsicCall(Id);
+    Result = renderARMIntrinsicCall(Id, Ops, HasCIntrinsics);
     if (!Result.empty())
       return Result;
   } else {

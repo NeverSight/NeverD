@@ -162,7 +162,17 @@ bool liftSVEFloat(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     S.emit(NdOp::FLOAT_MULT, Dst, {A, B});
     break;
   }
-  case AARCH64_INS_FSCALE:
+  case AARCH64_INS_FSCALE: {
+    if (ARM64.op_count < 3)
+      break;
+    NdVar Dst = L.operandWrite(ARM64.operands[0]);
+    NdVar A = L.operandRead(S, ARM64.operands[1]);
+    NdVar B = L.operandRead(S, ARM64.operands[2]);
+    S.emit(NdOp::FLOAT_MULT, Dst, {A, B});
+    break;
+  }
+  // FAMIN/FAMAX are absolute min/max, not multiply: each result lane is the
+  // IEEE minimum/maximum of fabs(A[i]) and fabs(B[i]).
   case AARCH64_INS_FAMAX:
   case AARCH64_INS_FAMIN: {
     if (ARM64.op_count < 3)
@@ -170,7 +180,13 @@ bool liftSVEFloat(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar A = L.operandRead(S, ARM64.operands[1]);
     NdVar B = L.operandRead(S, ARM64.operands[2]);
-    S.emit(NdOp::FLOAT_MULT, Dst, {A, B});
+    unsigned LaneSz = neonElemSize(ARM64.operands[0].vas);
+    if (!isFPLaneSize(LaneSz) || Dst.Size < LaneSz || Dst.Size % LaneSz != 0)
+      break;
+    Intrinsic Id = (Insn->id == AARCH64_INS_FAMIN) ? Intrinsic::A64_Famin
+                                                   : Intrinsic::A64_Famax;
+    S.emitIntrinsic(Id, Dst,
+                    {A, B, NdVar::cst(Dst.Size, 4), NdVar::cst(LaneSz, 4)});
     break;
   }
   case AARCH64_INS_FCVTLT:

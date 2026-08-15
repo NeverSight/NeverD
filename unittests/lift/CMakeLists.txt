@@ -7,6 +7,7 @@ add_neverd_unittest(NeverDLiftTests
   aarch64/AArch64_CondTests.cpp
   aarch64/AArch64_CSelTests.cpp
   aarch64/AArch64_ExtendTests.cpp
+  aarch64/AArch64_FAMinMaxTests.cpp
   aarch64/AArch64_FPTests.cpp
   aarch64/AArch64_IntrinsicsTests.cpp
   aarch64/AArch64_LogicTests.cpp
@@ -604,6 +605,7 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_csel_a64.c
   aarch64/test_carry_a64.c
   aarch64/test_extend_a64.c
+  aarch64/test_faminmax_a64.c
   aarch64/test_atomic_a64.c
   aarch64/test_mops_a64.c
   aarch64/test_intrinsics_a64.c
@@ -736,6 +738,8 @@ foreach(src ${AARCH64_TEST_SOURCES})
   set(a64_extra_flags)
   if(src MATCHES "test_switch|test_jumptable")
     set(a64_extra_flags -O1)
+  elseif(src MATCHES "test_faminmax_a64")
+    set(a64_extra_flags -march=armv9.4-a+faminmax)
   elseif(src MATCHES "test_atomic_a64")
     set(a64_extra_flags -march=armv9.4-a+lse128)
   elseif(src MATCHES "test_mops_a64")

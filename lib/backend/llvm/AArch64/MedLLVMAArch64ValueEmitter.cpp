@@ -470,7 +470,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     return (IntTy == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
   }
 
-  // NEON reciprocal / reciprocal-sqrt estimate & step.  These are
+  // NEON reciprocal / reciprocal-sqrt estimate & step and FEAT_FAMINMAX.
+  // The estimates are
   // architecturally-defined approximations that cannot be expressed as plain FP
   // ops; lower to the matching AArch64 NEON intrinsic so codegen emits the real
   // frecpe/frecps/frsqrte/frsqrts (and urecpe/ursqrte) instruction and the
@@ -499,6 +500,14 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       break;
     case I::A64_Fmulx:
       IID = llvm::Intrinsic::aarch64_neon_fmulx;
+      Binary = true;
+      break;
+    case I::A64_Famax:
+      IID = llvm::Intrinsic::aarch64_neon_famax;
+      Binary = true;
+      break;
+    case I::A64_Famin:
+      IID = llvm::Intrinsic::aarch64_neon_famin;
       Binary = true;
       break;
     case I::A64_Urecpe:

@@ -113,9 +113,46 @@ renderARMMultiOutput(Intrinsic IID, const std::vector<MedVar> &Outputs,
   }
 }
 
-std::string renderARMIntrinsicCall(Intrinsic Id) {
+std::string renderARMIntrinsicCall(Intrinsic Id,
+                                   const std::vector<std::string> &Ops,
+                                   bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_Famax:
+  case I::A64_Famin: {
+    if (Ops.size() < 4)
+      return {};
+    const bool IsMax = Id == I::A64_Famax;
+    const bool IsQ = Ops[2] == "16";
+    const std::string &LaneBytes = Ops[3];
+    const char *VecTy = nullptr;
+    const char *Suffix = nullptr;
+    if (LaneBytes == "2") {
+      VecTy = IsQ ? "float16x8_t" : "float16x4_t";
+      Suffix = "f16";
+    } else if (LaneBytes == "4") {
+      VecTy = IsQ ? "float32x4_t" : "float32x2_t";
+      Suffix = "f32";
+    } else if (LaneBytes == "8" && IsQ) {
+      VecTy = "float64x2_t";
+      Suffix = "f64";
+    } else {
+      return {};
+    }
+    const char *RawTy = IsQ ? "unsigned __int128" : "uint64_t";
+    std::string Fn = IsMax ? "vamax" : "vamin";
+    if (IsQ)
+      Fn += "q";
+    Fn += "_";
+    Fn += Suffix;
+    HasCIntrinsics = true;
+    auto BitCastArg = [&](const std::string &Arg) {
+      return std::string("__builtin_bit_cast(") + VecTy + ", (" + RawTy + ")(" +
+             Arg + "))";
+    };
+    return std::string("__builtin_bit_cast(") + RawTy + ", " + Fn + "(" +
+           BitCastArg(Ops[0]) + ", " + BitCastArg(Ops[1]) + "))";
+  }
   case I::Dmb:
   case I::ArmDmb:
     return "__dmb(0xF)";

@@ -109,6 +109,10 @@ C(Intrinsic::A64_Sm3tt2b,      "vsm3tt2bq_u32");
 C(Intrinsic::A64_Sm4e,         "vsm4eq_u32");
 C(Intrinsic::A64_Sm4ekey,      "vsm4ekeyq_u32");
 
+// FEAT_FAMINMAX is rendered width-specifically by HighCIntrinsicRenderARM.
+C(Intrinsic::A64_Famax,        "vamax");
+C(Intrinsic::A64_Famin,        "vamin");
+
 // System
 C(Intrinsic::Yield_A64,        "__yield");
 C(Intrinsic::Wfe,              "__wfe");

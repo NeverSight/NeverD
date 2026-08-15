@@ -70,7 +70,9 @@ renderARMMultiOutput(Intrinsic IID, const std::vector<MedVar> &Outputs,
                      std::function<std::string(const MedVar &)> VarFn,
                      IsAliveFn IsAlive);
 
-std::string renderARMIntrinsicCall(Intrinsic Id);
+std::string renderARMIntrinsicCall(Intrinsic Id,
+                                   const std::vector<std::string> &Ops,
+                                   bool &HasCIntrinsics);
 
 /// Format a raw mnemonic + operands as a GCC-style `__asm__ volatile(...)`
 /// statement with register input constraints and a memory clobber.
