@@ -20,11 +20,14 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <string>
 #include <system_error>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 namespace neverd::translate {
 
@@ -683,6 +686,13 @@ llvm::Error verifyRequiredBlockManifest(
         !isExecutableSection(Object, **SectionOrErr))
       return failure(TranslationArtifactViolation::InvalidBlockDefinition,
                      *NameOrErr, "definition is not in executable memory");
+    if (canonicalArchitecture(Object.getArch()) == llvm::Triple::aarch64 &&
+        ((**SectionOrErr).getAlignment().value() < alignof(uint32_t) ||
+         (((**SectionOrErr).getAddress()) & 3U) != 0 ||
+         (((**SectionOrErr).getSize()) & 3U) != 0))
+      return failure(TranslationArtifactViolation::InvalidBlockDefinition,
+                     *NameOrErr,
+                     "AArch64 executable section is not four-byte aligned");
     llvm::Expected<uint64_t> ExtentOrErr =
         symbolExtent(Object, Symbol, **SectionOrErr);
     if (!ExtentOrErr)
@@ -690,6 +700,15 @@ llvm::Error verifyRequiredBlockManifest(
     if (*ExtentOrErr == 0)
       return failure(TranslationArtifactViolation::InvalidBlockDefinition,
                      *NameOrErr, "definition has zero size");
+    if (canonicalArchitecture(Object.getArch()) == llvm::Triple::aarch64) {
+      llvm::Expected<uint64_t> AddressOrErr = Symbol.getAddress();
+      if (!AddressOrErr)
+        return malformed(AddressOrErr.takeError(), *NameOrErr);
+      if ((*AddressOrErr & 3U) != 0 || (*ExtentOrErr & 3U) != 0)
+        return failure(TranslationArtifactViolation::InvalidBlockDefinition,
+                       *NameOrErr,
+                       "AArch64 block is not one four-byte instruction range");
+    }
   }
   for (llvm::StringRef Required : RequiredSymbolOrder)
     if (!DefinedSymbols.contains(Required))
@@ -1169,9 +1188,11 @@ uint32_t relocatedInstruction32(llvm::StringRef Contents, uint64_t Offset) {
 }
 
 bool isAArch64UnconditionalBranch(llvm::StringRef Contents, uint64_t Offset) {
-  return hasRelocatedBytes(Contents, Offset, 4) &&
-         (relocatedInstruction32(Contents, Offset) & 0x7c000000u) ==
-             0x14000000u;
+  if (!hasRelocatedBytes(Contents, Offset, 4))
+    return false;
+  const uint32_t Instruction = relocatedInstruction32(Contents, Offset);
+  return (Instruction & 0x7c000000u) == 0x14000000u &&
+         (Instruction & 0x03ffffffu) == 0;
 }
 
 bool isAArch64ConditionalBranch(llvm::StringRef Contents, uint64_t Offset) {
@@ -1351,11 +1372,47 @@ bool isDirectRuntimeHelperRelocation(
   return false;
 }
 
+bool isAArch64Branch26Relocation(
+    const llvm::object::ObjectFile &Object,
+    const llvm::object::RelocationRef &Relocation) {
+  if (canonicalArchitecture(Object.getArch()) != llvm::Triple::aarch64)
+    return false;
+  if (Object.isELF())
+    return Relocation.getType() == llvm::ELF::R_AARCH64_CALL26 ||
+           Relocation.getType() == llvm::ELF::R_AARCH64_JUMP26;
+  if (Object.isCOFF())
+    return Relocation.getType() == llvm::COFF::IMAGE_REL_ARM64_BRANCH26;
+  if (const auto *MachO =
+          llvm::dyn_cast<llvm::object::MachOObjectFile>(&Object)) {
+    const llvm::MachO::any_relocation_info Raw =
+        MachO->getRelocation(Relocation.getRawDataRefImpl());
+    return !MachO->isRelocationScattered(Raw) &&
+           MachO->getAnyRelocationType(Raw) ==
+               llvm::MachO::ARM64_RELOC_BRANCH26;
+  }
+  return false;
+}
+
 llvm::Error verifyRelocations(const llvm::object::ObjectFile &Object,
                               const llvm::StringSet<> &AllowedSymbols,
                               bool RequireDirectRuntimeCalls) {
   if (!Object.dynamic_relocation_sections().empty())
     return failure(TranslationArtifactViolation::DynamicRelocation);
+
+  struct PendingRelocation {
+    llvm::object::RelocationRef Relocation;
+    llvm::object::SectionRef RelocatedSection;
+    llvm::StringRef RelocatedContents;
+    std::string RelocationSectionName;
+  };
+  struct FixupRange {
+    uint64_t SectionIndex = 0;
+    uint64_t Begin = 0;
+    uint64_t End = 0;
+  };
+  std::vector<PendingRelocation> Pending;
+  std::vector<FixupRange> FixupRanges;
+
   for (const llvm::object::SectionRef &Section : Object.sections()) {
     llvm::Expected<llvm::StringRef> NameOrErr = Section.getName();
     if (!NameOrErr)
@@ -1415,25 +1472,74 @@ llvm::Error verifyRelocations(const llvm::object::ObjectFile &Object,
           Relocation.getOffset() % Shape.Alignment != 0)
         return failure(TranslationArtifactViolation::MalformedObject,
                        *NameOrErr, "relocation offset or alignment is invalid");
-      llvm::Expected<bool> RuntimeTargetOrErr =
-          verifyRelocationTarget(Object, Relocation, AllowedSymbols);
-      if (!RuntimeTargetOrErr)
-        return RuntimeTargetOrErr.takeError();
-      const bool IsX86ELFPLT32 =
-          Object.isELF() &&
-          canonicalArchitecture(Object.getArch()) == llvm::Triple::x86_64 &&
-          Type == llvm::ELF::R_X86_64_PLT32;
-      if (IsX86ELFPLT32 && (!*RuntimeTargetOrErr || !RequireDirectRuntimeCalls))
-        return failure(TranslationArtifactViolation::RelocationTypeNotAllowed,
-                       *NameOrErr,
-                       "PLT32 is admitted only for a sealed runtime branch");
-      if (*RuntimeTargetOrErr && RequireDirectRuntimeCalls &&
-          !isDirectRuntimeHelperRelocation(Object, Relocation, RelocatedSection,
-                                           *RelocatedContentsOrErr))
-        return failure(TranslationArtifactViolation::RelocationTypeNotAllowed,
-                       *NameOrErr,
-                       "runtime helper requires a direct control transfer");
+      if (RequireDirectRuntimeCalls &&
+          canonicalArchitecture(Object.getArch()) == llvm::Triple::aarch64 &&
+          isExecutableSection(Object, RelocatedSection)) {
+        const uint64_t SectionAddress = RelocatedSection.getAddress();
+        if (Shape.Width % sizeof(uint32_t) != 0 ||
+            (Relocation.getOffset() & 3U) != 0 ||
+            Relocation.getOffset() >
+                std::numeric_limits<uint64_t>::max() - SectionAddress ||
+            ((SectionAddress + Relocation.getOffset()) & 3U) != 0)
+          return failure(TranslationArtifactViolation::MalformedObject,
+                         *NameOrErr,
+                         "AArch64 executable fixup is not four-byte aligned");
+      }
+      FixupRanges.push_back({RelocatedSection.getIndex(),
+                             Relocation.getOffset(),
+                             Relocation.getOffset() + Shape.Width});
+      Pending.push_back({Relocation, RelocatedSection, *RelocatedContentsOrErr,
+                         NameOrErr->str()});
     }
+  }
+
+  llvm::sort(FixupRanges, [](const FixupRange &Left, const FixupRange &Right) {
+    return std::tie(Left.SectionIndex, Left.Begin, Left.End) <
+           std::tie(Right.SectionIndex, Right.Begin, Right.End);
+  });
+  uint64_t PreviousSection = 0;
+  uint64_t CoveredEnd = 0;
+  bool SawRange = false;
+  for (const FixupRange &Range : FixupRanges) {
+    if (!SawRange || Range.SectionIndex != PreviousSection) {
+      PreviousSection = Range.SectionIndex;
+      CoveredEnd = Range.End;
+      SawRange = true;
+      continue;
+    }
+    if (Range.Begin < CoveredEnd)
+      return failure(TranslationArtifactViolation::MalformedObject,
+                     "relocation fields", "relocation fixup ranges overlap");
+    CoveredEnd = std::max(CoveredEnd, Range.End);
+  }
+
+  for (const PendingRelocation &Entry : Pending) {
+    const uint64_t Type = Entry.Relocation.getType();
+    llvm::Expected<bool> RuntimeTargetOrErr =
+        verifyRelocationTarget(Object, Entry.Relocation, AllowedSymbols);
+    if (!RuntimeTargetOrErr)
+      return RuntimeTargetOrErr.takeError();
+    if (RequireDirectRuntimeCalls &&
+        isAArch64Branch26Relocation(Object, Entry.Relocation) &&
+        !*RuntimeTargetOrErr)
+      return failure(TranslationArtifactViolation::RelocationTargetNotAllowed,
+                     Entry.RelocationSectionName,
+                     "v1 Branch26 requires a sealed external runtime target");
+    const bool IsX86ELFPLT32 =
+        Object.isELF() &&
+        canonicalArchitecture(Object.getArch()) == llvm::Triple::x86_64 &&
+        Type == llvm::ELF::R_X86_64_PLT32;
+    if (IsX86ELFPLT32 && (!*RuntimeTargetOrErr || !RequireDirectRuntimeCalls))
+      return failure(TranslationArtifactViolation::RelocationTypeNotAllowed,
+                     Entry.RelocationSectionName,
+                     "PLT32 is admitted only for a sealed runtime branch");
+    if (*RuntimeTargetOrErr && RequireDirectRuntimeCalls &&
+        !isDirectRuntimeHelperRelocation(Object, Entry.Relocation,
+                                         Entry.RelocatedSection,
+                                         Entry.RelocatedContents))
+      return failure(TranslationArtifactViolation::RelocationTypeNotAllowed,
+                     Entry.RelocationSectionName,
+                     "runtime helper requires a direct control transfer");
   }
   return llvm::Error::success();
 }

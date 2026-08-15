@@ -189,7 +189,7 @@ Cela remplace les artefacts de même nom mais ne déplace délibérément pas le
 | `build/bin/neverd-bench` | Banc de mesure (JSON) |
 | `build/bin/neverd-sigmaker` | Générateur `.pat` depuis bibliothèques statiques |
 | `build/bin/libneverd.*` | Bibliothèque partagée du moteur |
-| `build/bin/sdk/` | `NeverDCAPI.h`, `NeverDPlugin.h` |
+| `build/bin/sdk/` | Racine d’inclusion canonique du SDK C ; utilisez `<neverd/sdk/NeverDCAPI.h>` ou `<neverd/sdk/NeverDPlugin.h>` en conservant la hiérarchie `neverd/sdk/` |
 | `build/bin/signatures/` | Bibliothèques de signatures |
 
 **Tests**

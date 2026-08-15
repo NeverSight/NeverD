@@ -8,15 +8,20 @@
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/ELF/ELFExceptionPatch.h"
+#include "neverd/backend/codegen/ELF/ELFPatch.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Object/ELF.h"
 #include "llvm/Support/Error.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -209,6 +214,38 @@ std::vector<uint8_t> makeELF64WithEH() {
   return B;
 }
 
+std::vector<uint8_t> makeELF32ForPatch(uint32_t LoadVA, uint32_t LoadMemSize) {
+  constexpr uint32_t HeaderSize = sizeof(llvm::object::ELF32LE::Ehdr);
+  constexpr uint32_t ProgramHeaderSize = sizeof(llvm::object::ELF32LE::Phdr);
+  std::vector<uint8_t> B(0x100, 0);
+
+  std::memcpy(B.data(),
+              "\x7f"
+              "ELF",
+              4);
+  B[llvm::ELF::EI_CLASS] = llvm::ELF::ELFCLASS32;
+  B[llvm::ELF::EI_DATA] = llvm::ELF::ELFDATA2LSB;
+  B[llvm::ELF::EI_VERSION] = llvm::ELF::EV_CURRENT;
+  putU16(B, 16, llvm::ELF::ET_EXEC);
+  putU16(B, 18, llvm::ELF::EM_386);
+  putU32(B, 20, llvm::ELF::EV_CURRENT);
+  putU32(B, 24, LoadVA);
+  putU32(B, 28, HeaderSize);
+  putU16(B, 40, HeaderSize);
+  putU16(B, 42, ProgramHeaderSize);
+  putU16(B, 44, 1);
+
+  putU32(B, HeaderSize + 0, llvm::ELF::PT_LOAD);
+  putU32(B, HeaderSize + 4, 0);
+  putU32(B, HeaderSize + 8, LoadVA);
+  putU32(B, HeaderSize + 12, LoadVA);
+  putU32(B, HeaderSize + 16, static_cast<uint32_t>(B.size()));
+  putU32(B, HeaderSize + 20, LoadMemSize);
+  putU32(B, HeaderSize + 24, llvm::ELF::PF_R | llvm::ELF::PF_X);
+  putU32(B, HeaderSize + 28, 0x1000);
+  return B;
+}
+
 std::unique_ptr<llvm::Module> makeModule(llvm::LLVMContext &C, bool WithEH) {
   auto M = std::make_unique<llvm::Module>("m", C);
   auto *FT = llvm::FunctionType::get(llvm::Type::getVoidTy(C), false);
@@ -242,7 +279,17 @@ CompiledImage makeGeneratedEHFrame(const ELFEHFrameRegion &Region) {
   Section.ExternalBytes = makeEhFrameFragment(kFunc1VA);
   Section.Size = Section.ExternalBytes.size();
   Image.Sections.push_back(std::move(Section));
+  CompiledSection Code;
+  Code.Name = ".text";
+  Code.IsAllocated = true;
+  Code.IsInImage = false;
+  Code.VA = kFunc1VA;
+  Code.Size = 0x20;
+  Code.Kind = llvm::mc_rewrite::RewriteSectionKind::Code;
+  Image.Sections.push_back(std::move(Code));
   Image.SymbolAddrs["f"] = kFunc1VA;
+  Image.FunctionOwnerAddrs["f"] = kFunc1VA;
+  Image.SourceFunctionOwners.push_back({"f", "f", kFunc1VA});
   return Image;
 }
 
@@ -289,6 +336,16 @@ TEST(ELFExceptionPatch, RejectsMalformedHeaderTables) {
   putU16(WrongHeaderSize, 52, 63);
   Rejected(std::move(WrongHeaderSize));
 
+  std::vector<uint8_t> TruncatedHeader(llvm::ELF::EI_NIDENT, 0);
+  std::memcpy(TruncatedHeader.data(),
+              "\x7f"
+              "ELF",
+              4);
+  TruncatedHeader[llvm::ELF::EI_CLASS] = llvm::ELF::ELFCLASS64;
+  TruncatedHeader[llvm::ELF::EI_DATA] = llvm::ELF::ELFDATA2LSB;
+  TruncatedHeader[llvm::ELF::EI_VERSION] = llvm::ELF::EV_CURRENT;
+  Rejected(std::move(TruncatedHeader));
+
   std::vector<uint8_t> WrongProgramEntrySize = makeELF64WithEH();
   putU16(WrongProgramEntrySize, 54, 8);
   Rejected(std::move(WrongProgramEntrySize));
@@ -312,6 +369,154 @@ TEST(ELFExceptionPatch, RejectsMalformedHeaderTables) {
   std::vector<uint8_t> ProgramTableOverflow = makeELF64WithEH();
   putU64(ProgramTableOverflow, 32, std::numeric_limits<uint64_t>::max() - 8);
   Rejected(std::move(ProgramTableOverflow));
+}
+
+TEST(ELFPatch, RejectsOutOfBoundsProgramHeaderTableWithoutMutation) {
+  std::vector<uint8_t> Binary(64, 0);
+  std::memcpy(Binary.data(),
+              "\x7f"
+              "ELF",
+              4);
+  Binary[llvm::ELF::EI_CLASS] = llvm::ELF::ELFCLASS64;
+  Binary[llvm::ELF::EI_DATA] = llvm::ELF::ELFDATA2LSB;
+  Binary[llvm::ELF::EI_VERSION] = llvm::ELF::EV_CURRENT;
+  putU16(Binary, 52, 64);                                       // e_ehsize
+  putU16(Binary, 54, kPhEnt);                                   // e_phentsize
+  putU16(Binary, 56, 1);                                        // e_phnum
+  putU64(Binary, 32, std::numeric_limits<uint64_t>::max() - 8); // e_phoff
+
+  const std::vector<uint8_t> Before = Binary;
+  const std::array<uint8_t, 4> Code{0x90, 0x90, 0x90, 0x90};
+  ELFPatcher Patcher;
+
+  EXPECT_EQ(Patcher.plannedExecSegmentVA(Binary, Arch::X64), 0u);
+  EXPECT_EQ(Patcher.appendExecSegment(Binary, Code, ".neverd.text", Arch::X64),
+            0u);
+  EXPECT_EQ(Binary, Before);
+}
+
+TEST(ELFPatch, RejectsMalformedLoadSegmentsWithoutMutation) {
+  const std::array<uint8_t, 4> Code{0x90, 0x90, 0x90, 0x90};
+  auto Rejected = [&](std::vector<uint8_t> Binary) {
+    const std::vector<uint8_t> Before = Binary;
+    ELFPatcher Patcher;
+    EXPECT_EQ(Patcher.plannedExecSegmentVA(Binary, Arch::X64), 0u);
+    EXPECT_EQ(
+        Patcher.appendExecSegment(Binary, Code, ".neverd.text", Arch::X64), 0u);
+    EXPECT_EQ(Binary, Before);
+  };
+
+  std::vector<uint8_t> WrongClass = makeELF64WithEH();
+  WrongClass[llvm::ELF::EI_CLASS] = 0;
+  Rejected(std::move(WrongClass));
+
+  std::vector<uint8_t> WrongByteOrder = makeELF64WithEH();
+  WrongByteOrder[llvm::ELF::EI_DATA] = llvm::ELF::ELFDATA2MSB;
+  Rejected(std::move(WrongByteOrder));
+
+  std::vector<uint8_t> WrongHeaderSize = makeELF64WithEH();
+  putU16(WrongHeaderSize, 52, 63);
+  Rejected(std::move(WrongHeaderSize));
+
+  std::vector<uint8_t> FileRangeLeavesImage = makeELF64WithEH();
+  putU64(FileRangeLeavesImage, kPhOff + 32, kFileEnd + 1);
+  putU64(FileRangeLeavesImage, kPhOff + 40, kFileEnd + 1);
+  Rejected(std::move(FileRangeLeavesImage));
+
+  std::vector<uint8_t> FileLargerThanMemory = makeELF64WithEH();
+  putU64(FileLargerThanMemory, kPhOff + 40, kFileEnd - 1);
+  Rejected(std::move(FileLargerThanMemory));
+
+  std::vector<uint8_t> VirtualRangeOverflows = makeELF64WithEH();
+  putU64(VirtualRangeOverflows, kPhOff + 16,
+         std::numeric_limits<uint64_t>::max() - 8);
+  putU64(VirtualRangeOverflows, kPhOff + 24,
+         std::numeric_limits<uint64_t>::max() - 8);
+  putU64(VirtualRangeOverflows, kPhOff + 48, 1);
+  Rejected(std::move(VirtualRangeOverflows));
+
+  std::vector<uint8_t> MisalignedLoad = makeELF64WithEH();
+  putU64(MisalignedLoad, kPhOff + 16, kBase + 1);
+  Rejected(std::move(MisalignedLoad));
+}
+
+TEST(ELFPatch, AppendsAValidatedExecutableSegmentAtThePlannedAddress) {
+  std::vector<uint8_t> Binary = makeELF64WithEH();
+  const std::array<uint8_t, 4> Code{0x90, 0x90, 0x90, 0xc3};
+  ELFPatcher Patcher;
+
+  const uint64_t Planned = Patcher.plannedExecSegmentVA(Binary, Arch::X64);
+  ASSERT_NE(Planned, 0u);
+  EXPECT_EQ(Patcher.appendExecSegment(Binary, Code, ".neverd.text", Arch::X64),
+            Planned);
+
+  const uint64_t NewPhOff = getU64(Binary, 32);
+  EXPECT_EQ(NewPhOff, 0x1000u);
+  EXPECT_EQ(Binary[56], 3u);
+  EXPECT_EQ(Binary[57], 0u);
+  const uint64_t NewLoadOff = NewPhOff + 2 * kPhEnt;
+  EXPECT_EQ(getU32(Binary, NewLoadOff), llvm::ELF::PT_LOAD);
+  EXPECT_EQ(getU32(Binary, NewLoadOff + 4), llvm::ELF::PF_R | llvm::ELF::PF_X);
+  EXPECT_EQ(getU64(Binary, NewLoadOff + 16) + 3 * kPhEnt, Planned);
+  ASSERT_LE(NewPhOff + 3 * kPhEnt + Code.size(), Binary.size());
+  EXPECT_TRUE(std::equal(Code.begin(), Code.end(),
+                         Binary.begin() + NewPhOff + 3 * kPhEnt));
+}
+
+TEST(ELFPatch, RejectsELF32SegmentBeyondAddressSpaceWithoutMutation) {
+  std::vector<uint8_t> Binary = makeELF32ForPatch(0xfffff000, 0x2000);
+  const std::vector<uint8_t> Before = Binary;
+  const std::array<uint8_t, 4> Code{0x90, 0x90, 0x90, 0xc3};
+  ELFPatcher Patcher;
+
+  EXPECT_EQ(Patcher.plannedExecSegmentVA(Binary, Arch::X86), 0u);
+  EXPECT_EQ(Patcher.appendExecSegment(Binary, Code, ".neverd.text", Arch::X86),
+            0u);
+  EXPECT_EQ(Binary, Before);
+}
+
+TEST(ELFPatch, RejectsELF32AppendAtAddressSpaceCeilingWithoutMutation) {
+  // The existing PT_LOAD occupies the highest valid half-open ELF32 range.
+  // A subsequent page-aligned segment would begin at 2^32 and cannot be
+  // represented by p_vaddr/p_paddr.
+  std::vector<uint8_t> Binary = makeELF32ForPatch(0xfffff000, 0x1000);
+  const std::vector<uint8_t> Before = Binary;
+  const std::array<uint8_t, 4> Code{0x90, 0x90, 0x90, 0xc3};
+  ELFPatcher Patcher;
+
+  EXPECT_EQ(Patcher.plannedExecSegmentVA(Binary, Arch::X86), 0u);
+  EXPECT_EQ(Patcher.appendExecSegment(Binary, Code, ".neverd.text", Arch::X86),
+            0u);
+  EXPECT_EQ(Binary, Before);
+}
+
+TEST(ELFPatch, PreservesCodeAliasedIntoBinaryAcrossReallocation) {
+  std::vector<uint8_t> Binary = makeELF64WithEH();
+  constexpr std::array<uint8_t, 8> ExpectedCode{0x48, 0x89, 0xf8, 0x48,
+                                                0x83, 0xc0, 0x01, 0xc3};
+  std::copy(ExpectedCode.begin(), ExpectedCode.end(),
+            Binary.begin() + kTextOff);
+
+  // The new segment grows this fixture to two pages.  Requiring the old
+  // capacity to be smaller proves resize() invalidates this ArrayRef.
+  const size_t OldCapacity = Binary.capacity();
+  ASSERT_LT(OldCapacity, size_t{0x2000});
+  llvm::ArrayRef<uint8_t> AliasedCode(Binary.data() + kTextOff,
+                                      ExpectedCode.size());
+  ELFPatcher Patcher;
+
+  const uint64_t Planned = Patcher.plannedExecSegmentVA(Binary, Arch::X64);
+  ASSERT_NE(Planned, 0u);
+  ASSERT_EQ(
+      Patcher.appendExecSegment(Binary, AliasedCode, ".neverd.text", Arch::X64),
+      Planned);
+  EXPECT_GT(Binary.size(), OldCapacity);
+
+  const uint64_t NewPhOff = getU64(Binary, 32);
+  const uint64_t CodeOff = NewPhOff + 3 * kPhEnt;
+  ASSERT_LE(CodeOff + ExpectedCode.size(), Binary.size());
+  EXPECT_TRUE(std::equal(ExpectedCode.begin(), ExpectedCode.end(),
+                         Binary.begin() + CodeOff));
 }
 
 TEST(ELFExceptionPatch, FailsClosedWhenRegistrationImpossible) {

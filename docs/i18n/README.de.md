@@ -190,7 +190,7 @@ Das ersetzt gleichnamige Assets, verschiebt den bestehenden Git-Tag aber bewusst
 | `build/bin/neverd-bench` | Benchmark-Harness (JSON) |
 | `build/bin/neverd-sigmaker` | `.pat`-Generator aus statischen Bibliotheken |
 | `build/bin/libneverd.*` | Shared Library der Engine |
-| `build/bin/sdk/` | `NeverDCAPI.h`, `NeverDPlugin.h` |
+| `build/bin/sdk/` | Kanonischer Include-Root des C SDK; `<neverd/sdk/NeverDCAPI.h>` oder `<neverd/sdk/NeverDPlugin.h>` unter Beibehaltung der Hierarchie `neverd/sdk/` verwenden |
 | `build/bin/signatures/` | Mitgelieferte Signaturbibliotheken |
 
 **Tests**

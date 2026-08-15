@@ -168,6 +168,13 @@ public:
   snapshotControlBlock(uint64_t CurrentPC = 0,
                        uint64_t ExpectedGeneration = 0) const noexcept;
 
+  /// Return an owned, address-sorted snapshot of the authoritative runtime
+  /// memory.  Successful stores and executable-generation changes are visible
+  /// in the result; failed stores leave subsequent snapshots unchanged.  The
+  /// returned regions share no byte storage with the runtime or the GuestState
+  /// from which it was created.
+  std::vector<GuestMemoryRegion> snapshotMemoryRegions() const;
+
   std::size_t regionCount() const noexcept { return Regions.size(); }
   uint64_t guestMemoryBytes() const noexcept { return GuestMemoryBytes; }
   CodeInvalidationPolicy codeInvalidationPolicy() const noexcept {

@@ -1550,6 +1550,458 @@ Symbols:
                   TranslationArtifactViolation::MalformedObject);
 }
 
+TEST(TranslationArtifactVerifier,
+     RejectsDuplicateAArch64ELFFixupRangesBeforeTargetAdmission) {
+  const std::vector<uint8_t> Bytes = yamlArtifact(R"(
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_AARCH64
+Sections:
+  - Name:         .text
+    Type:         SHT_PROGBITS
+    Flags:        [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign: 4
+    Content:      "00000094"
+  - Name: .rela.text
+    Type: SHT_RELA
+    Info: .text
+    Link: .symtab
+    Relocations:
+      - Offset: 0
+        Type:   R_AARCH64_CALL26
+        Symbol: nvd_rt_helper
+      - Offset: 0
+        Type:   R_AARCH64_CALL26
+        Symbol: translated_block
+Symbols:
+  - Name:    translated_block
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+    Other:   [ STV_HIDDEN ]
+    Size:    4
+  - Name:    nvd_rt_helper
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+)");
+  const llvm::StringRef RequiredBlocks[] = {"translated_block"};
+  const llvm::StringRef Allowed[] = {"nvd_rt_helper"};
+  const TranslationArtifactPolicyV1 Policy{RequiredBlocks, Allowed};
+  expectViolation(neverd::translate::verifyTranslationArtifact(
+                      Bytes, llvm::Triple("aarch64-unknown-linux-gnu"), Policy),
+                  TranslationArtifactViolation::MalformedObject);
+}
+
+TEST(TranslationArtifactVerifier,
+     RejectsNonzeroEncodedAArch64ELFBranch26Immediate) {
+  const std::vector<uint8_t> Bytes = yamlArtifact(R"(
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_AARCH64
+Sections:
+  - Name:         .text
+    Type:         SHT_PROGBITS
+    Flags:        [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign: 4
+    Content:      "01000094"
+  - Name: .rela.text
+    Type: SHT_RELA
+    Info: .text
+    Link: .symtab
+    Relocations:
+      - Offset: 0
+        Type:   R_AARCH64_CALL26
+        Symbol: nvd_rt_helper
+        Addend: 0
+Symbols:
+  - Name:    translated_block
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+    Other:   [ STV_HIDDEN ]
+    Size:    4
+  - Name:    nvd_rt_helper
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+)");
+  const llvm::StringRef RequiredBlocks[] = {"translated_block"};
+  const llvm::StringRef Allowed[] = {"nvd_rt_helper"};
+  const TranslationArtifactPolicyV1 Policy{RequiredBlocks, Allowed};
+  expectViolation(neverd::translate::verifyTranslationArtifact(
+                      Bytes, llvm::Triple("aarch64-unknown-linux-gnu"), Policy),
+                  TranslationArtifactViolation::RelocationTypeNotAllowed);
+}
+
+TEST(TranslationArtifactVerifier, RejectsPartiallyOverlappingRelocationFields) {
+  const std::vector<uint8_t> Bytes = yamlArtifact(R"(
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:    .text
+    Type:    SHT_PROGBITS
+    Flags:   [ SHF_ALLOC, SHF_EXECINSTR ]
+    Content: "0000000000000000"
+  - Name: .rela.text
+    Type: SHT_RELA
+    Info: .text
+    Link: .symtab
+    Relocations:
+      - Offset: 0
+        Type:   R_X86_64_64
+        Symbol: local_block
+      - Offset: 4
+        Type:   R_X86_64_PC32
+        Symbol: local_block
+Symbols:
+  - Name:    local_block
+    Type:    STT_FUNC
+    Section: .text
+    Size:    8
+)");
+  expectViolation(
+      neverd::translate::verifyTranslationArtifact(Bytes, HostTriple),
+      TranslationArtifactViolation::MalformedObject);
+}
+
+TEST(TranslationArtifactVerifier,
+     RejectsAArch64ELFBranch26ToDefinedBlockInV1Policy) {
+  const std::vector<uint8_t> Bytes = yamlArtifact(R"(
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_AARCH64
+Sections:
+  - Name:         .text
+    Type:         SHT_PROGBITS
+    Flags:        [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign: 4
+    Content:      "01000014C0035FD6"
+  - Name: .rela.text
+    Type: SHT_RELA
+    Info: .text
+    Link: .symtab
+    Relocations:
+      - Offset: 0
+        Type:   R_AARCH64_JUMP26
+        Symbol: target_block
+Symbols:
+  - Name:    translated_block
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+    Other:   [ STV_HIDDEN ]
+    Size:    4
+  - Name:    target_block
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+    Other:   [ STV_HIDDEN ]
+    Value:   4
+    Size:    4
+)");
+  const llvm::StringRef RequiredBlocks[] = {"translated_block", "target_block"};
+  const TranslationArtifactPolicyV1 Policy{RequiredBlocks, {}};
+  expectViolation(neverd::translate::verifyTranslationArtifact(
+                      Bytes, llvm::Triple("aarch64-unknown-linux-gnu"), Policy),
+                  TranslationArtifactViolation::RelocationTargetNotAllowed);
+}
+
+TEST(TranslationArtifactVerifier,
+     RejectsDuplicateAArch64MachOFixupRangesBeforeTargetAdmission) {
+  const std::vector<uint8_t> Bytes = yamlArtifact(R"(
+--- !mach-o
+FileHeader:
+  magic:      0xFEEDFACF
+  cputype:    0x0100000C
+  cpusubtype: 0x00000000
+  filetype:   0x00000001
+  ncmds:      2
+  sizeofcmds: 176
+  flags:      0x00002000
+  reserved:   0x00000000
+LoadCommands:
+  - cmd:      LC_SEGMENT_64
+    cmdsize:  152
+    segname:  ''
+    vmaddr:   0
+    vmsize:   4
+    fileoff:  208
+    filesize: 4
+    maxprot:  5
+    initprot: 5
+    nsects:   1
+    flags:    0
+    Sections:
+      - sectname:  __text
+        segname:   __TEXT
+        addr:      0
+        size:      4
+        offset:    208
+        align:     2
+        reloff:    212
+        nreloc:    2
+        flags:     0x80000400
+        reserved1: 0
+        reserved2: 0
+        reserved3: 0
+        content:   00000094
+        relocations:
+          - address:   0
+            symbolnum: 1
+            pcrel:     true
+            length:    2
+            extern:    true
+            type:      2
+            scattered: false
+            value:     0
+          - address:   0
+            symbolnum: 1
+            pcrel:     true
+            length:    2
+            extern:    true
+            type:      2
+            scattered: false
+            value:     0
+  - cmd:      LC_SYMTAB
+    cmdsize:  24
+    symoff:   228
+    nsyms:    2
+    stroff:   260
+    strsize:  34
+LinkEditData:
+  NameList:
+    - n_strx:  1
+      n_type:  0x1F
+      n_sect:  1
+      n_desc:  0
+      n_value: 0
+    - n_strx:  19
+      n_type:  0x01
+      n_sect:  0
+      n_desc:  0
+      n_value: 0
+  StringTable:
+    - ''
+    - _translated_block
+    - _nvd_rt_helper
+)");
+  const llvm::StringRef RequiredBlocks[] = {"_translated_block"};
+  const llvm::StringRef Allowed[] = {"_nvd_rt_helper"};
+  const TranslationArtifactPolicyV1 Policy{RequiredBlocks, Allowed};
+  expectViolation(neverd::translate::verifyTranslationArtifact(
+                      Bytes, llvm::Triple("aarch64-apple-macosx"), Policy),
+                  TranslationArtifactViolation::MalformedObject);
+}
+
+TEST(TranslationArtifactVerifier,
+     RejectsAArch64MachOBranch26ToDefinedBlockInV1Policy) {
+  const std::vector<uint8_t> Bytes = yamlArtifact(R"(
+--- !mach-o
+FileHeader:
+  magic:      0xFEEDFACF
+  cputype:    0x0100000C
+  cpusubtype: 0x00000000
+  filetype:   0x00000001
+  ncmds:      2
+  sizeofcmds: 176
+  flags:      0x00002000
+  reserved:   0x00000000
+LoadCommands:
+  - cmd:      LC_SEGMENT_64
+    cmdsize:  152
+    segname:  ''
+    vmaddr:   0
+    vmsize:   8
+    fileoff:  208
+    filesize: 8
+    maxprot:  5
+    initprot: 5
+    nsects:   1
+    flags:    0
+    Sections:
+      - sectname:  __text
+        segname:   __TEXT
+        addr:      0
+        size:      8
+        offset:    208
+        align:     2
+        reloff:    216
+        nreloc:    1
+        flags:     0x80000400
+        reserved1: 0
+        reserved2: 0
+        reserved3: 0
+        content:   01000014C0035FD6
+        relocations:
+          - address:   0
+            symbolnum: 1
+            pcrel:     true
+            length:    2
+            extern:    true
+            type:      2
+            scattered: false
+            value:     0
+  - cmd:      LC_SYMTAB
+    cmdsize:  24
+    symoff:   224
+    nsyms:    2
+    stroff:   256
+    strsize:  33
+LinkEditData:
+  NameList:
+    - n_strx:  1
+      n_type:  0x1F
+      n_sect:  1
+      n_desc:  0
+      n_value: 0
+    - n_strx:  19
+      n_type:  0x1F
+      n_sect:  1
+      n_desc:  0
+      n_value: 4
+  StringTable:
+    - ''
+    - _translated_block
+    - _target_block
+)");
+  const llvm::StringRef RequiredBlocks[] = {"_translated_block",
+                                            "_target_block"};
+  const TranslationArtifactPolicyV1 Policy{RequiredBlocks, {}};
+  expectViolation(neverd::translate::verifyTranslationArtifact(
+                      Bytes, llvm::Triple("aarch64-apple-macosx"), Policy),
+                  TranslationArtifactViolation::RelocationTargetNotAllowed);
+}
+
+TEST(TranslationArtifactVerifier,
+     RejectsMisalignedAArch64V1TextAndBlockRanges) {
+  const std::vector<uint8_t> ELFSection = yamlArtifact(R"(
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_AARCH64
+Sections:
+  - Name:         .text
+    Type:         SHT_PROGBITS
+    Flags:        [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign: 1
+    Content:      "C0035FD6"
+Symbols:
+  - Name:    translated_block
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+    Other:   [ STV_HIDDEN ]
+    Size:    4
+)");
+  const llvm::StringRef ELFRequired[] = {"translated_block"};
+  const TranslationArtifactPolicyV1 ELFPolicy{ELFRequired, {}};
+  expectViolation(
+      neverd::translate::verifyTranslationArtifact(
+          ELFSection, llvm::Triple("aarch64-unknown-linux-gnu"), ELFPolicy),
+      TranslationArtifactViolation::InvalidBlockDefinition);
+
+  const std::vector<uint8_t> ELFBlock = yamlArtifact(R"(
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_AARCH64
+Sections:
+  - Name:         .text
+    Type:         SHT_PROGBITS
+    Flags:        [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign: 4
+    Content:      "0000C0035FD60000"
+Symbols:
+  - Name:    translated_block
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+    Other:   [ STV_HIDDEN ]
+    Value:   2
+    Size:    4
+)");
+  expectViolation(
+      neverd::translate::verifyTranslationArtifact(
+          ELFBlock, llvm::Triple("aarch64-unknown-linux-gnu"), ELFPolicy),
+      TranslationArtifactViolation::InvalidBlockDefinition);
+
+  const std::vector<uint8_t> MachO = yamlArtifact(R"(
+--- !mach-o
+FileHeader:
+  magic:      0xFEEDFACF
+  cputype:    0x0100000C
+  cpusubtype: 0x00000000
+  filetype:   0x00000001
+  ncmds:      2
+  sizeofcmds: 176
+  flags:      0x00002000
+  reserved:   0x00000000
+LoadCommands:
+  - cmd:      LC_SEGMENT_64
+    cmdsize:  152
+    segname:  ''
+    vmaddr:   0
+    vmsize:   4
+    fileoff:  208
+    filesize: 4
+    maxprot:  5
+    initprot: 5
+    nsects:   1
+    flags:    0
+    Sections:
+      - sectname:  __text
+        segname:   __TEXT
+        addr:      0
+        size:      4
+        offset:    208
+        align:     1
+        reloff:    0
+        nreloc:    0
+        flags:     0x80000400
+        reserved1: 0
+        reserved2: 0
+        reserved3: 0
+        content:   C0035FD6
+  - cmd:      LC_SYMTAB
+    cmdsize:  24
+    symoff:   212
+    nsyms:    1
+    stroff:   228
+    strsize:  19
+LinkEditData:
+  NameList:
+    - n_strx:  1
+      n_type:  0x1F
+      n_sect:  1
+      n_desc:  0
+      n_value: 0
+  StringTable:
+    - ''
+    - _translated_block
+)");
+  const llvm::StringRef MachORequired[] = {"_translated_block"};
+  const TranslationArtifactPolicyV1 MachOPolicy{MachORequired, {}};
+  expectViolation(neverd::translate::verifyTranslationArtifact(
+                      MachO, llvm::Triple("aarch64-apple-macosx"), MachOPolicy),
+                  TranslationArtifactViolation::InvalidBlockDefinition);
+}
+
 TEST(TranslationArtifactVerifier, RejectsRelocationFieldOutsideDestination) {
   const std::vector<uint8_t> ELF = yamlArtifact(R"(
 --- !ELF

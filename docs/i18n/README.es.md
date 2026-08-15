@@ -188,7 +188,7 @@ Esto reemplaza los artefactos homónimos pero deliberadamente no mueve la etique
 | `build/bin/neverd-bench` | Banco de pruebas (JSON) |
 | `build/bin/neverd-sigmaker` | Generador `.pat` desde bibliotecas estáticas |
 | `build/bin/libneverd.*` | Biblioteca compartida del motor |
-| `build/bin/sdk/` | `NeverDCAPI.h`, `NeverDPlugin.h` |
+| `build/bin/sdk/` | Raíz de includes canónica del C SDK; use `<neverd/sdk/NeverDCAPI.h>` o `<neverd/sdk/NeverDPlugin.h>` conservando la jerarquía `neverd/sdk/` |
 | `build/bin/signatures/` | Bibliotecas de firmas |
 
 **Pruebas**

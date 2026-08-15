@@ -3,6 +3,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/translate/GuestMemoryRuntime.h"
+#include "neverd/translate/RuntimeGuestState.h"
 #include "neverd/translate/RuntimeHelpers.h"
 
 #include "llvm/ADT/Twine.h"
@@ -37,6 +38,16 @@ std::unique_ptr<GuestMemoryRuntime> makeMemory() {
                           0,
                           {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}});
   return llvm::cantFail(GuestMemoryRuntime::create(State));
+}
+
+std::unique_ptr<GuestMemoryRuntime> makeDispatchValidatedMemory() {
+  GuestState State =
+      llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+  State.Memory.push_back(
+      {0x4000, MemoryPermission::Read | MemoryPermission::Execute, 9, {0xc3}});
+  GuestMemoryRuntimeConfig Config;
+  Config.CodeInvalidation = CodeInvalidationPolicy::ValidateBeforeDispatch;
+  return llvm::cantFail(GuestMemoryRuntime::create(State, Config));
 }
 
 std::unique_ptr<llvm::Module> parseProtocolModule(llvm::LLVMContext &Context,
@@ -75,6 +86,27 @@ llvm::Error verifyCompleteRuntimeModule(const llvm::Module &Module) {
                                       Module.getDataLayout(), 1);
 }
 
+void expectError(llvm::Error Error) {
+  EXPECT_TRUE(static_cast<bool>(Error));
+  llvm::consumeError(std::move(Error));
+}
+
+void expectSuccess(llvm::Error Error) {
+  if (Error)
+    ADD_FAILURE() << llvm::toString(std::move(Error));
+}
+
+template <typename T> void expectExpectedFailure(llvm::Expected<T> Result) {
+  EXPECT_FALSE(static_cast<bool>(Result));
+  if (!Result)
+    llvm::consumeError(Result.takeError());
+}
+
+template <typename T> void expectExpectedSuccess(llvm::Expected<T> Result) {
+  if (!Result)
+    ADD_FAILURE() << llvm::toString(Result.takeError());
+}
+
 } // namespace
 
 TEST(RuntimeHelpers, CallFrameHasAClosedGeneratedPrefix) {
@@ -96,13 +128,96 @@ TEST(RuntimeHelpers, CallFrameHasAClosedGeneratedPrefix) {
 TEST(RuntimeHelpers, RejectsUnboundOrStaleCredentials) {
   std::unique_ptr<GuestMemoryRuntime> Memory = makeMemory();
   RuntimeCodeCredentialV1 Empty;
-  EXPECT_TRUE(static_cast<bool>(
-      createRuntimeCallFrameV1(*Memory, Empty, Empty).takeError()));
-  EXPECT_TRUE(static_cast<bool>(
-      createRuntimeCallFrameV1(*Memory, credential(7), credential(8))
-          .takeError()));
-  EXPECT_FALSE(static_cast<bool>(
-      validateRuntimeCodeCredentialV1(credential(), credential())));
+  expectExpectedFailure(createRuntimeCallFrameV1(*Memory, Empty, Empty));
+  expectExpectedFailure(
+      createRuntimeCallFrameV1(*Memory, credential(7), credential(8)));
+  RuntimeCodeCredentialV1 ZeroBlock = credential();
+  ZeroBlock.BlockID = 0;
+  expectExpectedFailure(
+      createRuntimeCallFrameV1(*Memory, ZeroBlock, ZeroBlock));
+  RuntimeCodeCredentialV1 ZeroEntry = credential();
+  ZeroEntry.EntryPC = 0;
+  expectExpectedSuccess(
+      createRuntimeCallFrameV1(*Memory, ZeroEntry, ZeroEntry));
+  expectExpectedFailure(createRuntimeCallFrameV1(
+      *Memory, credential(), credential(), /*CurrentPC=*/0x4000,
+      /*ExpectedGeneration=*/0));
+  expectSuccess(validateRuntimeCodeCredentialV1(credential(), credential()));
+}
+
+TEST(RuntimeHelpers, CallFrameBindsTheValidatedDispatchGeneration) {
+  std::unique_ptr<GuestMemoryRuntime> Memory = makeDispatchValidatedMemory();
+  ASSERT_EQ(Memory->validateExecutableGeneration(0x4000, 9).Status,
+            GuestMemoryAccessStatus::Completed);
+
+  expectExpectedFailure(
+      createRuntimeCallFrameV1(*Memory, credential(), credential()));
+  llvm::Expected<RuntimeCallFrameV1> Frame =
+      createRuntimeCallFrameV1(*Memory, credential(), credential(), 0x4000, 9);
+  ASSERT_TRUE(static_cast<bool>(Frame)) << llvm::toString(Frame.takeError());
+  EXPECT_EQ(Frame->Control.CurrentPC, 0x4000u);
+  EXPECT_EQ(Frame->Control.ExpectedGeneration, 9u);
+  EXPECT_EQ(Frame->Control.ObservedGeneration, 9u);
+  expectSuccess(validateRuntimeControlBlockV1(Frame->Control));
+}
+
+TEST(RuntimeHelpers,
+     PostInvocationValidationAcceptsOnlyConsumedDispatchProofShape) {
+  std::unique_ptr<GuestMemoryRuntime> Memory = makeDispatchValidatedMemory();
+  ASSERT_EQ(Memory->validateExecutableGeneration(0x4000, 9).Status,
+            GuestMemoryAccessStatus::Completed);
+  RuntimeCallFrameV1 Frame = llvm::cantFail(
+      createRuntimeCallFrameV1(*Memory, credential(), credential(), 0x4000, 9));
+
+  EXPECT_EQ(nvd_rt_v1_load8_le(&Frame, 0x4000, 1),
+            static_cast<uint32_t>(RuntimeABIExitKindV1::None));
+  EXPECT_EQ(Frame.Control.Flags, 0u);
+  EXPECT_EQ(Frame.Control.CurrentPC, 0u);
+  EXPECT_EQ(Frame.Control.ExpectedGeneration, 0u);
+  EXPECT_EQ(Frame.Control.ObservedGeneration, 0u);
+  EXPECT_EQ(Frame.Control.ScalarResult, 0xc3u);
+  expectError(validateRuntimeControlBlockV1(Frame.Control));
+  expectSuccess(validateRuntimeControlBlockAfterInvocationV1(
+      Frame.Control, static_cast<uint32_t>(BlockExitKindV1::Return)));
+
+  RuntimeControlBlockV1 Forged = Frame.Control;
+  Forged.CurrentPC = 0x4000;
+  expectError(validateRuntimeControlBlockAfterInvocationV1(
+      Forged, static_cast<uint32_t>(BlockExitKindV1::Return)));
+  Forged = Frame.Control;
+  Forged.Flags = static_cast<uint32_t>(RuntimeABIFlagV1::GenerationValidated);
+  expectError(validateRuntimeControlBlockAfterInvocationV1(
+      Forged, static_cast<uint32_t>(BlockExitKindV1::Return)));
+  Forged = Frame.Control;
+  Forged.Reserved1 = 1;
+  expectError(validateRuntimeControlBlockAfterInvocationV1(
+      Forged, static_cast<uint32_t>(BlockExitKindV1::Return)));
+  Forged = Frame.Control;
+  Forged.Exit.Detail0 = 1;
+  expectError(validateRuntimeControlBlockAfterInvocationV1(
+      Forged, static_cast<uint32_t>(BlockExitKindV1::Return)));
+  expectError(validateRuntimeControlBlockAfterInvocationV1(
+      Frame.Control, kBlockExitKindBaseV1 + 0x80));
+}
+
+TEST(RuntimeHelpers, PostInvocationRuntimeStatusMustMatchStrictExit) {
+  std::unique_ptr<GuestMemoryRuntime> Memory = makeMemory();
+  RuntimeCallFrameV1 Frame = llvm::cantFail(
+      createRuntimeCallFrameV1(*Memory, credential(), credential()));
+  ASSERT_EQ(nvd_rt_v1_load64_le(&Frame, 0x5000, 1),
+            static_cast<uint32_t>(RuntimeABIExitKindV1::MemoryFault));
+
+  expectSuccess(validateRuntimeControlBlockAfterInvocationV1(
+      Frame.Control, static_cast<uint32_t>(RuntimeABIExitKindV1::MemoryFault)));
+  expectError(validateRuntimeControlBlockAfterInvocationV1(
+      Frame.Control, static_cast<uint32_t>(RuntimeABIExitKindV1::Cancelled)));
+  expectError(validateRuntimeControlBlockAfterInvocationV1(
+      Frame.Control, static_cast<uint32_t>(BlockExitKindV1::Return)));
+
+  RuntimeControlBlockV1 Success = makeRuntimeControlBlockV1(
+      CodeInvalidationPolicy::InvalidateOnExecutableWrite);
+  expectError(validateRuntimeControlBlockAfterInvocationV1(
+      Success, static_cast<uint32_t>(RuntimeABIExitKindV1::None)));
 }
 
 TEST(RuntimeHelpers, RegistryAndVerifierPolicyShareOneExactSurface) {
@@ -164,12 +279,13 @@ TEST(RuntimeHelpers, InvalidHostFramesFailClosedWithoutAmbientFallback) {
   EXPECT_EQ(Frame.Control.Exit.Kind, RuntimeABIExitKindV1::MemoryFault);
   EXPECT_EQ(Frame.Control.Exit.Fault,
             RuntimeMemoryFaultKindV1::InvalidRuntimeFrame);
-  EXPECT_FALSE(static_cast<bool>(validateRuntimeControlBlockV1(Frame.Control)));
+  expectSuccess(validateRuntimeControlBlockV1(Frame.Control));
   llvm::Expected<RuntimeMemoryFaultDetailsV1> LoadDetails =
       unpackRuntimeMemoryFaultDetailsV1(
           Frame.Control.Exit.Fault,
           {Frame.Control.Exit.Detail0, Frame.Control.Exit.Detail1});
-  ASSERT_TRUE(static_cast<bool>(LoadDetails));
+  ASSERT_TRUE(static_cast<bool>(LoadDetails))
+      << llvm::toString(LoadDetails.takeError());
   EXPECT_EQ(LoadDetails->Access, RuntimeMemoryAccessKindV1::Read);
   EXPECT_EQ(LoadDetails->RequiredAlignment, 1u);
 
@@ -178,12 +294,13 @@ TEST(RuntimeHelpers, InvalidHostFramesFailClosedWithoutAmbientFallback) {
   EXPECT_EQ(Frame.Control.Exit.Fault,
             RuntimeMemoryFaultKindV1::InvalidRuntimeFrame);
   EXPECT_EQ(Frame.Control.Exit.Size, 4u);
-  EXPECT_FALSE(static_cast<bool>(validateRuntimeControlBlockV1(Frame.Control)));
+  expectSuccess(validateRuntimeControlBlockV1(Frame.Control));
   llvm::Expected<RuntimeMemoryFaultDetailsV1> StoreDetails =
       unpackRuntimeMemoryFaultDetailsV1(
           Frame.Control.Exit.Fault,
           {Frame.Control.Exit.Detail0, Frame.Control.Exit.Detail1});
-  ASSERT_TRUE(static_cast<bool>(StoreDetails));
+  ASSERT_TRUE(static_cast<bool>(StoreDetails))
+      << llvm::toString(StoreDetails.takeError());
   EXPECT_EQ(StoreDetails->Access, RuntimeMemoryAccessKindV1::Write);
   EXPECT_EQ(StoreDetails->RequiredAlignment, 4u);
 }
@@ -216,8 +333,54 @@ done:
 }
 )");
   ASSERT_NE(Module, nullptr);
-  EXPECT_FALSE(static_cast<bool>(verifyRuntimeABIHelperProtocolV1(*Module)));
-  EXPECT_FALSE(static_cast<bool>(verifyCompleteRuntimeModule(*Module)));
+  expectSuccess(verifyRuntimeABIHelperProtocolV1(*Module));
+  expectSuccess(verifyCompleteRuntimeModule(*Module));
+}
+
+TEST(RuntimeHelpers,
+     AcceptsOptimizedCommonReturnWithoutWeakeningFailureStatus) {
+  llvm::LLVMContext Context;
+  std::unique_ptr<llvm::Module> Module = parseProtocolModule(Context, R"(
+declare i32 @nvd_rt_v1_load64_le(ptr, i64, i32) nounwind
+
+define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
+entry:
+  %status = call i32 @nvd_rt_v1_load64_le(
+      ptr %runtime, i64 4096, i32 1) nounwind
+  %ok = icmp eq i32 %status, 0
+  br i1 %ok, label %loaded, label %common_return
+loaded:
+  %result_slot = getelementptr i8, ptr %runtime, i64 72
+  %value = load i64, ptr %result_slot, align 8
+  %result = trunc i64 %value to i32
+  br label %common_return
+common_return:
+  %return_value = phi i32 [ %status, %entry ], [ %result, %loaded ]
+  ret i32 %return_value
+}
+)");
+  ASSERT_NE(Module, nullptr);
+  expectSuccess(verifyRuntimeABIHelperProtocolV1(*Module));
+  expectSuccess(verifyCompleteRuntimeModule(*Module));
+
+  std::unique_ptr<llvm::Module> Forged = parseProtocolModule(Context, R"(
+declare i32 @nvd_rt_v1_store64_le(ptr, i64, i64, i32) nounwind
+
+define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
+entry:
+  %status = call i32 @nvd_rt_v1_store64_le(
+      ptr %runtime, i64 4096, i64 7, i32 1) nounwind
+  %ok = icmp eq i32 %status, 0
+  br i1 %ok, label %done, label %common_return
+done:
+  br label %common_return
+common_return:
+  %return_value = phi i32 [ 7, %entry ], [ 0, %done ]
+  ret i32 %return_value
+}
+)");
+  ASSERT_NE(Forged, nullptr);
+  expectProtocolViolation(verifyRuntimeABIHelperProtocolV1(*Forged));
 }
 
 TEST(RuntimeHelpers, RejectsIgnoredStatusAndStaleResultReads) {

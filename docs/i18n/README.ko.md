@@ -188,7 +188,7 @@ gh workflow run neverd-release.yml \
 | `build/bin/neverd-bench` | 벤치마크(JSON) |
 | `build/bin/neverd-sigmaker` | 정적 라이브러리에서 `.pat` 생성 |
 | `build/bin/libneverd.*` | 엔진 공유 라이브러리 |
-| `build/bin/sdk/` | `NeverDCAPI.h`, `NeverDPlugin.h` |
+| `build/bin/sdk/` | C SDK의 canonical include root. `neverd/sdk/` 계층을 유지한 `<neverd/sdk/NeverDCAPI.h>` 또는 `<neverd/sdk/NeverDPlugin.h>` 사용 |
 | `build/bin/signatures/` | 번들 시그니처 |
 
 **테스트**

@@ -26,9 +26,16 @@ from .api import (
     SynthesisResult,
     SymbolicExploration,
     SymbolicPath,
+    TranslationError,
+    TranslationErrorCode,
+    TranslationObjectFormat,
+    TranslationProofStatus,
+    TranslationSemanticStop,
+    X86_64ToAArch64ObjectResult,
     optimize_llvm_ir,
     simplify_expression,
     synthesize_expression,
+    translate_x86_64_block_to_aarch64_object,
 )
 from ._version import __version__
 
@@ -58,8 +65,15 @@ __all__ = [
     "SynthesisResult",
     "SymbolicExploration",
     "SymbolicPath",
+    "TranslationError",
+    "TranslationErrorCode",
+    "TranslationObjectFormat",
+    "TranslationProofStatus",
+    "TranslationSemanticStop",
+    "X86_64ToAArch64ObjectResult",
     "optimize_llvm_ir",
     "simplify_expression",
     "synthesize_expression",
+    "translate_x86_64_block_to_aarch64_object",
     "__version__",
 ]

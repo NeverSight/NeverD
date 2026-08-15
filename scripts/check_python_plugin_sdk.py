@@ -12,6 +12,7 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 C_API_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPI.h"
+TRANSLATE_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDCAPITranslate.h"
 PLUGIN_HEADER = ROOT / "include" / "neverd" / "sdk" / "NeverDPlugin.h"
 OUTPUT_LANGUAGES = ROOT / "include" / "neverd" / "OutputLanguages.def"
 PYTHON_PACKAGE = ROOT / "pluginsdk" / "python"
@@ -105,7 +106,19 @@ def parse_c_enum(source: str, typedef_name: str) -> dict[str, int]:
     )
     match = pattern.search(_without_comments(source))
     if match is None:
-        raise ValueError(f"cannot find C enum typedef {typedef_name}")
+        tag_name = typedef_name.removesuffix("_t")
+        fixed_width = re.search(
+            r"\btypedef\s+uint32_t\s+" + re.escape(typedef_name) + r"\s*;",
+            _without_comments(source),
+        )
+        tag = re.search(
+            r"\benum\s+" + re.escape(tag_name) + r"\s*\{([^}]*)\}\s*;",
+            _without_comments(source),
+            flags=re.DOTALL,
+        )
+        if fixed_width is None or tag is None:
+            raise ValueError(f"cannot find C enum contract {typedef_name}")
+        match = tag
     entries = {
         name: int(value)
         for name, value in re.findall(
@@ -118,11 +131,46 @@ def parse_c_enum(source: str, typedef_name: str) -> dict[str, int]:
     return entries
 
 
+def parse_c_struct_layout(
+    source: str, typedef_name: str
+) -> tuple[tuple[str, str], ...]:
+    pattern = re.compile(
+        r"\btypedef\s+struct(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*"
+        r"\{([^}]*)\}\s*" + re.escape(typedef_name) + r"\s*;",
+        flags=re.DOTALL,
+    )
+    match = pattern.search(_without_comments(source))
+    if match is None:
+        raise ValueError(f"cannot find C struct typedef {typedef_name}")
+    fields: list[tuple[str, str]] = []
+    for declaration in match.group(1).split(";"):
+        declaration = declaration.strip()
+        if not declaration:
+            continue
+        field = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*$", declaration)
+        if field is None:
+            raise ValueError(
+                f"cannot parse a field in C struct typedef {typedef_name}: "
+                f"{declaration!r}"
+            )
+        fields.append(
+            (field.group(1), normalize_c_type(declaration[: field.start()]))
+        )
+    if not fields:
+        raise ValueError(f"C struct typedef {typedef_name} has no fields")
+    return tuple(fields)
+
+
+def parse_c_struct_fields(source: str, typedef_name: str) -> tuple[str, ...]:
+    return tuple(name for name, _c_type in parse_c_struct_layout(source, typedef_name))
+
+
 BORROWED_STRING_FUNCTIONS = frozenset(
     {
         "neverd_optimization_stop_name",
         "neverd_proof_status_name",
         "neverd_synthesis_outcome_name",
+        "neverd_translate_error_code_name",
     }
 )
 
@@ -215,6 +263,101 @@ def check_output_languages(errors: list[str]) -> None:
         errors.append(
             f"output language mismatch: native={entries!r}, Python={python_entries!r}"
         )
+
+
+def check_translation_abi(errors: list[str]) -> None:
+    import ctypes
+
+    from neverd_plugin import abi
+
+    source = TRANSLATE_HEADER.read_text(encoding="utf-8")
+    enum_contracts = (
+        (
+            "neverd_translate_object_format_t",
+            "NEVERD_TRANSLATE_OBJECT_FORMAT_",
+            abi.TranslationObjectFormat,
+        ),
+        (
+            "neverd_translate_error_code_t",
+            "NEVERD_TRANSLATE_ERROR_",
+            abi.TranslationErrorCode,
+        ),
+        (
+            "neverd_translate_semantic_stop_t",
+            "NEVERD_TRANSLATE_SEMANTIC_",
+            abi.TranslationSemanticStop,
+        ),
+        (
+            "neverd_translate_proof_status_t",
+            "NEVERD_TRANSLATE_PROOF_",
+            abi.TranslationProofStatus,
+        ),
+    )
+    for typedef_name, prefix, python_enum in enum_contracts:
+        if not re.search(
+            r"\btypedef\s+uint32_t\s+" + re.escape(typedef_name) + r"\s*;",
+            _without_comments(source),
+        ):
+            errors.append(f"{typedef_name} must use fixed uint32_t storage")
+        native = {
+            name.removeprefix(prefix): value
+            for name, value in parse_c_enum(source, typedef_name).items()
+        }
+        python = {member.name: member.value for member in python_enum}
+        if native != python:
+            errors.append(
+                f"{typedef_name} mismatch: native={native!r}, Python={python!r}"
+            )
+
+    struct_contracts = (
+        (
+            "neverd_translate_object_request_v1",
+            abi.NeverDTranslateObjectRequestV1,
+        ),
+        (
+            "neverd_translate_object_result_v1",
+            abi.NeverDTranslateObjectResultV1,
+        ),
+    )
+    native_ctypes = {
+        "size_t": ctypes.c_size_t,
+        "int": ctypes.c_int,
+        "unsigned": ctypes.c_uint,
+        "uint32_t": ctypes.c_uint32,
+        "uint64_t": ctypes.c_uint64,
+        "const char *": ctypes.c_char_p,
+        "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
+        "neverd_translate_object_format_t": ctypes.c_uint32,
+        "neverd_translate_error_code_t": ctypes.c_uint32,
+        "neverd_translate_semantic_stop_t": ctypes.c_uint32,
+        "neverd_translate_proof_status_t": ctypes.c_uint32,
+    }
+    for typedef_name, python_struct in struct_contracts:
+        native_layout = parse_c_struct_layout(source, typedef_name)
+        python_layout = tuple(python_struct._fields_)
+        native_fields = tuple(name for name, _c_type in native_layout)
+        python_fields = tuple(name for name, _ctype in python_layout)
+        if native_fields != python_fields:
+            errors.append(
+                f"{typedef_name} field mismatch: native={native_fields!r}, "
+                f"Python={python_fields!r}"
+            )
+            continue
+        for (field_name, c_type), (_python_name, python_ctype) in zip(
+            native_layout, python_layout, strict=True
+        ):
+            expected_ctype = native_ctypes.get(c_type)
+            if expected_ctype is None:
+                errors.append(
+                    f"{typedef_name}.{field_name} has an unaudited C type "
+                    f"{c_type!r}"
+                )
+            elif python_ctype is not expected_ctype:
+                errors.append(
+                    f"{typedef_name}.{field_name} type mismatch: "
+                    f"header={c_type!r}, Python={python_ctype!r}, "
+                    f"expected={expected_ctype!r}"
+                )
 
 
 def _required_match(path: Path, pattern: str, label: str, errors: list[str]) -> None:
@@ -391,6 +534,7 @@ def audit_repository(*, include_workflows: bool = True) -> list[str]:
     check_abi(errors)
     check_plugin_enums(errors)
     check_output_languages(errors)
+    check_translation_abi(errors)
     check_versions(errors)
     check_documentation(errors)
     if include_workflows:

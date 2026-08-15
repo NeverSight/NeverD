@@ -16,10 +16,6 @@
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
 
-#include "neverd/object/ELFLayout.h"
-#include "neverd/object/MachOLayout.h"
-#include "neverd/object/PELayout.h"
-#include "neverd/support/TargetCodegenInfo.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFInplace.h"
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
@@ -27,7 +23,12 @@
 #include "neverd/backend/codegen/ELF/ELFPatch.h"
 #include "neverd/backend/codegen/MachO/MachOInplace.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/object/ELFLayout.h"
+#include "neverd/object/MachOLayout.h"
+#include "neverd/object/PELayout.h"
+#include "neverd/support/TargetCodegenInfo.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Support/Debug.h"
@@ -196,11 +197,11 @@ PatchResult BinaryPatcher::readPatchWrite(
   return Result;
 }
 
-static uint64_t provenFunctionSpan(
-    uint64_t OrigVA, uint64_t TextStartVA, uint64_t TextEndVA,
-    const std::vector<Symbol> *Symbols,
-    const std::vector<std::pair<va_t, va_t>> *KnownRanges,
-    const std::vector<Export> *Exports) {
+static uint64_t
+provenFunctionSpan(uint64_t OrigVA, uint64_t TextStartVA, uint64_t TextEndVA,
+                   const std::vector<Symbol> *Symbols,
+                   const std::vector<std::pair<va_t, va_t>> *KnownRanges,
+                   const std::vector<Export> *Exports) {
   uint64_t Best = 0;
   if (Symbols) {
     for (const auto &S : *Symbols)
@@ -254,7 +255,27 @@ size_t BinaryPatcher::installTrampolines(
     const std::vector<std::pair<va_t, va_t>> *KnownRanges,
     const std::vector<Export> *Exports,
     std::vector<va_t> *PatchedOriginalEntries,
-    std::vector<std::pair<va_t, va_t>> *PatchedEntryMappings) {
+    std::vector<std::pair<va_t, va_t>> *PatchedEntryMappings,
+    std::vector<PatchedFunctionEntry> *PatchedFunctions) {
+  return installTrampolines(
+      Binary, SymbolAddrs, OrigTextVA, OrigTextSize, OrigTextFileOff, ImageBase,
+      TargetArch, Mode, Symbols, KnownRanges, Exports, PatchedOriginalEntries,
+      PatchedEntryMappings, PatchedFunctions, {});
+}
+
+size_t BinaryPatcher::installTrampolines(
+    std::vector<uint8_t> &Binary,
+    const std::map<std::string, uint64_t> &SymbolAddrs, uint64_t OrigTextVA,
+    uint64_t OrigTextSize, uint64_t OrigTextFileOff, uint64_t ImageBase,
+    Arch TargetArch, InstructionMode Mode, const std::vector<Symbol> *Symbols,
+    const std::vector<std::pair<va_t, va_t>> *KnownRanges,
+    const std::vector<Export> *Exports,
+    std::vector<va_t> *PatchedOriginalEntries,
+    std::vector<std::pair<va_t, va_t>> *PatchedEntryMappings,
+    std::vector<PatchedFunctionEntry> *PatchedFunctions,
+    llvm::ArrayRef<llvm::mc_rewrite::RewriteSourceFunctionOwner>
+        SourceFunctionOwners,
+    const std::map<std::string, uint64_t> &SourceFunctionOriginalVAs) {
   if (OrigTextSize > InvalidVA - OrigTextVA ||
       OrigTextVA > InvalidVA - ImageBase)
     return 0;
@@ -269,27 +290,45 @@ size_t BinaryPatcher::installTrampolines(
       if (Exp.Addr != 0)
         ExpMap[Exp.Name] = Exp.Addr;
 
-  size_t Count = 0;
-  for (auto &[Name, FuncNewVA] : SymbolAddrs) {
-    uint64_t OrigVA = 0;
-    bool HasOrig = false;
+  if (!SourceFunctionOwners.empty() &&
+      !llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
+          SourceFunctionOwners))
+    return 0;
+  for (const auto &[SourceFunction, OriginalVA] : SourceFunctionOriginalVAs) {
+    if (OriginalVA == InvalidVA ||
+        llvm::count_if(SourceFunctionOwners, [&](const auto &Owner) {
+          return Owner.SourceFunction == SourceFunction;
+        }) != 1)
+      return 0;
+  }
 
-    llvm::StringRef NameRef(Name);
-    // Mach-O's object symbol table adds one global-prefix underscore to the
-    // LLVM function name.  Auto-generated names encode their original VA, so
-    // accept both `sub_<VA>` and the object spelling `_sub_<VA>`.
-    llvm::StringRef AutoName = NameRef;
-    if (AutoName.starts_with("_") &&
-        AutoName.drop_front().starts_with(kAutoFuncPrefix))
-      AutoName = AutoName.drop_front();
-    if (AutoName.starts_with(kAutoFuncPrefix)) {
-      llvm::StringRef HexPart = AutoName.drop_front(kAutoFuncPrefix.size());
-      if (!HexPart.empty() && !HexPart.getAsInteger(16, OrigVA))
-        HasOrig = true;
+  size_t Count = 0;
+  auto InstallOne = [&](llvm::StringRef SourceFunction,
+                        llvm::StringRef OwnerSymbol, uint64_t FuncNewVA,
+                        std::optional<uint64_t> AuthenticatedOriginalVA) {
+    uint64_t OrigVA = 0;
+    bool HasOrig = AuthenticatedOriginalVA.has_value();
+    if (HasOrig)
+      OrigVA = *AuthenticatedOriginalVA;
+
+    if (!HasOrig) {
+      llvm::StringRef NameRef(SourceFunction);
+      // Legacy object paths without source-owner provenance still recover
+      // automatically named entries.  Authenticated rewrite output never
+      // enters this spelling-based compatibility path.
+      llvm::StringRef AutoName = NameRef;
+      if (AutoName.starts_with("_") &&
+          AutoName.drop_front().starts_with(kAutoFuncPrefix))
+        AutoName = AutoName.drop_front();
+      if (AutoName.starts_with(kAutoFuncPrefix)) {
+        llvm::StringRef HexPart = AutoName.drop_front(kAutoFuncPrefix.size());
+        if (!HexPart.empty() && !HexPart.getAsInteger(16, OrigVA))
+          HasOrig = true;
+      }
     }
 
-    if (!HasOrig && !ExpMap.empty()) {
-      std::string Key = resolveSymbolAlias(Name, ExpMap);
+    if (!HasOrig && SourceFunctionOwners.empty() && !ExpMap.empty()) {
+      std::string Key = resolveSymbolAlias(SourceFunction.str(), ExpMap);
       if (!Key.empty()) {
         OrigVA = ExpMap[Key];
         HasOrig = true;
@@ -297,22 +336,22 @@ size_t BinaryPatcher::installTrampolines(
     }
 
     if (!HasOrig)
-      continue;
+      return;
 
     uint64_t OrigRVA = OrigVA >= ImageBase ? OrigVA - ImageBase : OrigVA;
     if (OrigRVA < OrigTextVA || OrigRVA >= OrigTextVA + OrigTextSize)
-      continue;
+      return;
 
     uint64_t TextDelta = OrigRVA - OrigTextVA;
     if (OrigTextFileOff > InvalidVA - TextDelta)
-      continue;
+      return;
     uint64_t OrigOff = OrigTextFileOff + TextDelta;
     uint64_t OrigAnalysisVA = ImageBase + OrigRVA;
     uint64_t MaxOverwriteBytes = TextEndVA - OrigAnalysisVA;
     if (TargetArch == Arch::ARM && Mode == InstructionMode::Thumb)
-      MaxOverwriteBytes = provenFunctionSpan(OrigAnalysisVA, TextStartVA,
-                                             TextEndVA, Symbols, KnownRanges,
-                                             Exports);
+      MaxOverwriteBytes =
+          provenFunctionSpan(OrigAnalysisVA, TextStartVA, TextEndVA, Symbols,
+                             KnownRanges, Exports);
     if (writeTrampoline(Binary, OrigOff, FuncNewVA, ImageBase + OrigRVA,
                         TargetArch, Mode, MaxOverwriteBytes)) {
       ++Count;
@@ -320,14 +359,34 @@ size_t BinaryPatcher::installTrampolines(
         PatchedOriginalEntries->push_back(OrigAnalysisVA);
       if (PatchedEntryMappings)
         PatchedEntryMappings->push_back({OrigAnalysisVA, FuncNewVA});
-      LLVM_DEBUG(llvm::dbgs() << "patch: trampoline " << Name << " @ VA 0x"
+      if (PatchedFunctions)
+        PatchedFunctions->push_back({OwnerSymbol.str(), OrigAnalysisVA,
+                                     FuncNewVA, SourceFunction.str()});
+      LLVM_DEBUG(llvm::dbgs() << "patch: trampoline " << SourceFunction
+                              << " (" << OwnerSymbol << ") @ VA 0x"
                               << llvm::utohexstr(OrigRVA) << " -> 0x"
                               << llvm::utohexstr(FuncNewVA) << "\n");
     } else {
       LLVM_DEBUG(llvm::dbgs()
-                 << "patch: skipped unsafe/unreachable trampoline " << Name
+                 << "patch: skipped unsafe/unreachable trampoline "
+                 << SourceFunction
                  << " @ VA 0x" << llvm::utohexstr(OrigAnalysisVA) << "\n");
     }
+  };
+
+  if (!SourceFunctionOwners.empty()) {
+    for (const llvm::mc_rewrite::RewriteSourceFunctionOwner &Owner :
+         SourceFunctionOwners) {
+      const auto Original =
+          SourceFunctionOriginalVAs.find(Owner.SourceFunction);
+      if (Original == SourceFunctionOriginalVAs.end())
+        continue;
+      InstallOne(Owner.SourceFunction, Owner.OwnerSymbol, Owner.OwnerVA,
+                 Original->second);
+    }
+  } else {
+    for (const auto &[Name, FuncNewVA] : SymbolAddrs)
+      InstallOne(Name, Name, FuncNewVA, std::nullopt);
   }
   return Count;
 }

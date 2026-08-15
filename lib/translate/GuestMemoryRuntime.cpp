@@ -483,6 +483,16 @@ RuntimeControlBlockV1 GuestMemoryRuntime::snapshotControlBlock(
   return Snapshot;
 }
 
+std::vector<GuestMemoryRegion>
+GuestMemoryRuntime::snapshotMemoryRegions() const {
+  std::vector<GuestMemoryRegion> Snapshot;
+  Snapshot.reserve(Regions.size());
+  for (const Region &Current : Regions)
+    Snapshot.push_back({Current.Address, Current.Permissions,
+                        Current.Generation, Current.Bytes});
+  return Snapshot;
+}
+
 void GuestMemoryRuntime::recordResult(const GuestMemoryAccessResult &Result) {
   Control.Flags = 0;
   Control.CurrentPC = 0;

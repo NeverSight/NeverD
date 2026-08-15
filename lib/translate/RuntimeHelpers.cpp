@@ -3,6 +3,7 @@
 #include "neverd/translate/RuntimeHelpers.h"
 
 #include "neverd/translate/GuestMemoryRuntime.h"
+#include "neverd/translate/RuntimeGuestState.h"
 #include "neverd/translate/TranslationIRVerifier.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -16,10 +17,12 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 
 namespace neverd::translate {
 namespace {
@@ -56,16 +59,50 @@ bool hasUniquePredecessor(const llvm::BasicBlock &Block,
   return Begin != End && *Begin == &Predecessor && ++Begin == End;
 }
 
-bool isExactFailureBlock(const llvm::BasicBlock &Block,
-                         const llvm::CallInst &Status) {
+struct ExactFailureEdge {
   const llvm::ReturnInst *Return = nullptr;
+  const llvm::Value *StatusUse = nullptr;
+};
+
+std::optional<ExactFailureEdge>
+matchExactFailureEdge(const llvm::BasicBlock &Block,
+                      const llvm::BasicBlock &Predecessor,
+                      const llvm::CallInst &Status) {
+  const llvm::ReturnInst *Return = nullptr;
+  const llvm::PHINode *ReturnPhi = nullptr;
   for (const llvm::Instruction &Instruction : Block) {
     if (isDebugInstruction(Instruction))
       continue;
+    if (const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Instruction)) {
+      if (Return || ReturnPhi)
+        return std::nullopt;
+      ReturnPhi = Phi;
+      continue;
+    }
     if (Return || !(Return = llvm::dyn_cast<llvm::ReturnInst>(&Instruction)))
-      return false;
+      return std::nullopt;
   }
-  return Return && Return->getReturnValue() == &Status;
+  if (!Return)
+    return std::nullopt;
+  if (!ReturnPhi)
+    return Return->getReturnValue() == &Status &&
+                   hasUniquePredecessor(Block, Predecessor)
+               ? std::optional<ExactFailureEdge>{{Return, Return}}
+               : std::nullopt;
+  if (Return->getReturnValue() != ReturnPhi || !ReturnPhi->hasOneUse() ||
+      ReturnPhi->user_back() != Return)
+    return std::nullopt;
+
+  unsigned MatchingEdges = 0;
+  for (unsigned Index = 0; Index != ReturnPhi->getNumIncomingValues(); ++Index)
+    if (ReturnPhi->getIncomingBlock(Index) == &Predecessor) {
+      ++MatchingEdges;
+      if (ReturnPhi->getIncomingValue(Index) != &Status)
+        return std::nullopt;
+    }
+  if (MatchingEdges != 1)
+    return std::nullopt;
+  return ExactFailureEdge{Return, ReturnPhi};
 }
 
 struct RuntimeLoadLocation {
@@ -208,22 +245,70 @@ const RuntimeABIHelperBindingV1 HelperBindings[] = {
 llvm::Error
 validateRuntimeCodeCredentialV1(const RuntimeCodeCredentialV1 &Published,
                                 const RuntimeCodeCredentialV1 &Validated) {
-  if (Published.SessionID == 0 || Published.CacheGeneration == 0 ||
-      Published.CodeEpoch == 0)
+  if (Published.SessionID == 0 || Published.BlockID == 0 ||
+      Published.CacheGeneration == 0 || Published.CodeEpoch == 0)
     return invalid("runtime code credential is not bound");
   if (Published != Validated)
     return invalid("runtime code credential is stale");
   return llvm::Error::success();
 }
 
+llvm::Error
+validateRuntimeControlBlockAfterInvocationV1(const RuntimeControlBlockV1 &Block,
+                                             uint32_t Status) {
+  if (Status < kBlockExitKindBaseV1) {
+    if (Status == static_cast<uint32_t>(RuntimeABIExitKindV1::None) ||
+        Status > static_cast<uint32_t>(RuntimeABIExitKindV1::Cancelled))
+      return invalid("translated block returned an unknown runtime status");
+    if (llvm::Error Error = validateRuntimeControlBlockV1(Block))
+      return Error;
+    if (Status != static_cast<uint32_t>(Block.Exit.Kind))
+      return invalid(
+          "translated runtime status disagrees with the control exit");
+    return llvm::Error::success();
+  }
+
+  if (Status > static_cast<uint32_t>(BlockExitKindV1::Trap))
+    return invalid("translated block returned an unknown block-exit status");
+  if (Block.Exit.Kind != RuntimeABIExitKindV1::None)
+    return invalid("block-exit status carries a runtime-service exit");
+
+  if (llvm::Error Strict = validateRuntimeControlBlockV1(Block)) {
+    llvm::consumeError(std::move(Strict));
+  } else {
+    return llvm::Error::success();
+  }
+
+  if (Block.CodeInvalidation !=
+          static_cast<uint32_t>(
+              CodeInvalidationPolicy::ValidateBeforeDispatch) ||
+      Block.Flags != 0 || Block.CurrentPC != 0 ||
+      Block.ExpectedGeneration != 0 || Block.ObservedGeneration != 0)
+    return invalid(
+        "block exit has neither a valid nor a consumed dispatch proof");
+
+  RuntimeControlBlockV1 ConsumedProof = Block;
+  ConsumedProof.CodeInvalidation = static_cast<uint32_t>(
+      CodeInvalidationPolicy::InvalidateOnExecutableWrite);
+  return validateRuntimeControlBlockV1(ConsumedProof);
+}
+
 llvm::Expected<RuntimeCallFrameV1>
 createRuntimeCallFrameV1(GuestMemoryRuntime &Memory,
                          const RuntimeCodeCredentialV1 &Published,
-                         const RuntimeCodeCredentialV1 &Validated) {
+                         const RuntimeCodeCredentialV1 &Validated,
+                         uint64_t CurrentPC, uint64_t ExpectedGeneration) {
   if (llvm::Error Error = validateRuntimeCodeCredentialV1(Published, Validated))
     return std::move(Error);
+  if (Memory.codeInvalidationPolicy() !=
+          CodeInvalidationPolicy::ValidateBeforeDispatch &&
+      (CurrentPC != 0 || ExpectedGeneration != 0))
+    return invalid("runtime call frame carries generation context for a "
+                   "non-validating policy");
   RuntimeCallFrameV1 Frame;
-  Frame.Control = Memory.snapshotControlBlock();
+  Frame.Control = Memory.snapshotControlBlock(CurrentPC, ExpectedGeneration);
+  if (llvm::Error Error = validateRuntimeControlBlockV1(Frame.Control))
+    return std::move(Error);
   Frame.Memory = &Memory;
   Frame.Published = Published;
   Frame.Validated = Validated;
@@ -308,17 +393,21 @@ llvm::Error verifyRuntimeABIHelperProtocolV1(const llvm::Module &Module) {
 
         const llvm::BasicBlock &Success = *Branch->getSuccessor(0);
         const llvm::BasicBlock &Failure = *Branch->getSuccessor(1);
-        if (!hasUniquePredecessor(Success, Block) ||
-            !hasUniquePredecessor(Failure, Block) ||
-            !isExactFailureBlock(Failure, *Call))
-          return protocolFailure(
-              &Function,
-              "runtime helper failure edge is not an exact status return");
+        const std::optional<ExactFailureEdge> FailureEdge =
+            matchExactFailureEdge(Failure, Block, *Call);
+        if (!hasUniquePredecessor(Success, Block) || !FailureEdge) {
+          std::string Detail;
+          llvm::raw_string_ostream Stream(Detail);
+          Stream << "runtime helper failure edge is not an exact status "
+                    "return; dispatch block: ";
+          Block.print(Stream);
+          Stream << "; failure block: ";
+          Failure.print(Stream);
+          return protocolFailure(&Function, Stream.str());
+        }
 
-        const auto *FailureReturn =
-            llvm::dyn_cast<llvm::ReturnInst>(Failure.getTerminator());
         for (const llvm::User *User : Call->users())
-          if (User != Compare && User != FailureReturn)
+          if (User != Compare && User != FailureEdge->StatusUse)
             return protocolFailure(
                 &Function, "runtime helper status has an additional consumer");
 

@@ -379,12 +379,18 @@ llvm::Error verifyMemoryAccess(const llvm::Value *Pointer, llvm::Type *Type,
                      "write to a private constant object");
     const auto *Global = llvm::cast<llvm::GlobalVariable>(Location.Base);
     const uint64_t BaseAlignment = Global->getAlign().valueOrOne().value();
-    if (RequestedAlignment >
-        effectiveAlignment(BaseAlignment,
-                           static_cast<uint64_t>(Location.Offset)))
+    const uint64_t ProvenAlignment = effectiveAlignment(
+        BaseAlignment, static_cast<uint64_t>(Location.Offset));
+    if (RequestedAlignment > ProvenAlignment) {
+      std::string Detail;
+      llvm::raw_string_ostream Stream(Detail);
+      Stream << "private-memory alignment is not proven: requested "
+             << RequestedAlignment << ", guaranteed " << ProvenAlignment
+             << " at offset " << Location.Offset << " in ";
+      Instruction.print(Stream);
       return failure(TranslationIRViolation::UnprovenUndefinedBehavior,
-                     Instruction.getFunction(),
-                     "private-memory alignment is not proven");
+                     Instruction.getFunction(), Stream.str());
+    }
     return llvm::Error::success();
   }
 
@@ -403,22 +409,47 @@ llvm::Error verifyMemoryAccess(const llvm::Value *Pointer, llvm::Type *Type,
             std::pair{static_cast<uint8_t>(Right.Region), Right.Offset};
         return Left < RightKey;
       });
+  const auto SlotFailure = [&]() -> llvm::Error {
+    std::string Detail;
+    llvm::raw_string_ostream Stream(Detail);
+    Stream << (Region == TranslationIRMemoryRegion::State ? "state" : "runtime")
+           << ' ' << (IsWrite ? "write" : "read") << " at offset " << Offset
+           << " with width " << Width << " is outside the declared slots: ";
+    Instruction.print(Stream);
+    return failure(TranslationIRViolation::MemorySlotNotAllowed,
+                   Instruction.getFunction(), Stream.str());
+  };
   if (Candidate == Slots.begin())
-    return failure(TranslationIRViolation::MemorySlotNotAllowed,
-                   Instruction.getFunction());
+    return SlotFailure();
   --Candidate;
-  const TranslationIRMemorySlot &Slot = *Candidate;
-  if (Slot.Region != Region ||
-      !hasTranslationIRMemoryAccess(Slot.Access, Required) ||
-      Offset < Slot.Offset || Width > Slot.Size ||
-      Offset - Slot.Offset > Slot.Size - Width)
-    return failure(TranslationIRViolation::MemorySlotNotAllowed,
-                   Instruction.getFunction());
-  if (RequestedAlignment >
-      effectiveAlignment(Slot.Alignment, Offset - Slot.Offset))
+  const TranslationIRMemorySlot &FirstSlot = *Candidate;
+  if (FirstSlot.Region != Region ||
+      !hasTranslationIRMemoryAccess(FirstSlot.Access, Required) ||
+      Offset < FirstSlot.Offset || Offset >= FirstSlot.Offset + FirstSlot.Size)
+    return SlotFailure();
+
+  const uint64_t AccessEnd = Offset + Width;
+  uint64_t CoveredEnd = FirstSlot.Offset + FirstSlot.Size;
+  while (CoveredEnd < AccessEnd) {
+    ++Candidate;
+    if (Candidate == Slots.end() || Candidate->Region != Region ||
+        Candidate->Offset != CoveredEnd ||
+        !hasTranslationIRMemoryAccess(Candidate->Access, Required))
+      return SlotFailure();
+    CoveredEnd = Candidate->Offset + Candidate->Size;
+  }
+  const uint64_t ProvenAlignment =
+      effectiveAlignment(FirstSlot.Alignment, Offset - FirstSlot.Offset);
+  if (RequestedAlignment > ProvenAlignment) {
+    std::string Detail;
+    llvm::raw_string_ostream Stream(Detail);
+    Stream << "state/runtime alignment is not proven: requested "
+           << RequestedAlignment << ", guaranteed " << ProvenAlignment
+           << " at offset " << Offset << " in ";
+    Instruction.print(Stream);
     return failure(TranslationIRViolation::UnprovenUndefinedBehavior,
-                   Instruction.getFunction(),
-                   "state/runtime alignment is not proven");
+                   Instruction.getFunction(), Stream.str());
+  }
   return llvm::Error::success();
 }
 
@@ -706,12 +737,25 @@ public:
     };
 
     for (const llvm::BasicBlock &Block : Function)
-      for (const llvm::Instruction &Instruction : Block)
-        for (const llvm::Use &Operand : Instruction.operands())
+      for (const llvm::Instruction &Instruction : Block) {
+        bool HasPoisonOperand = false;
+        for (const llvm::Use &Operand : Instruction.operands()) {
           Seed(Operand.get());
+          HasPoisonOperand |= PoisonDependent.contains(Operand.get());
+        }
+        // ConstantData values deliberately have no LLVM use-list. Seed their
+        // immediate instruction here, then propagate through ordinary SSA
+        // instruction use-lists below.
+        if (HasPoisonOperand &&
+            !llvm::isa<llvm::LoadInst, llvm::CallBase>(&Instruction) &&
+            PoisonDependent.insert(&Instruction).second)
+          Worklist.push_back(&Instruction);
+      }
 
     while (!Worklist.empty()) {
       const llvm::Value *Value = Worklist.pop_back_val();
+      if (!Value->hasUseList())
+        continue;
       for (const llvm::User *User : Value->users()) {
         const auto *Instruction = llvm::dyn_cast<llvm::Instruction>(User);
         if (!Instruction || Instruction->getFunction() != &Function ||
@@ -970,14 +1014,24 @@ llvm::Error verifyTranslationIR(
           llvm::Intrinsic::getAttributes(Module.getContext(),
                                          Function.getIntrinsicID(),
                                          Function.getFunctionType());
-      if (!Function.isDeclaration() ||
-          Function.getLinkage() != llvm::GlobalValue::ExternalLinkage ||
+      if (!Function.isDeclaration())
+        return failure(TranslationIRViolation::IntrinsicNotAllowed, &Function,
+                       "intrinsic has a definition");
+      if (Function.getLinkage() != llvm::GlobalValue::ExternalLinkage ||
           !Function.hasDefaultVisibility() ||
-          Function.getCallingConv() != llvm::CallingConv::C ||
-          Function.getAttributes() != CanonicalAttributes ||
-          hasForbiddenFunctionCodegenState(Function) ||
-          !isAllowedScalarIntrinsic(Function, *MaxIntegerWidth))
-        return failure(TranslationIRViolation::IntrinsicNotAllowed, &Function);
+          Function.getCallingConv() != llvm::CallingConv::C)
+        return failure(TranslationIRViolation::IntrinsicNotAllowed, &Function,
+                       "intrinsic linkage, visibility, or calling convention "
+                       "is not canonical");
+      if (Function.getAttributes() != CanonicalAttributes)
+        return failure(TranslationIRViolation::IntrinsicNotAllowed, &Function,
+                       "intrinsic declaration attributes are not canonical");
+      if (hasForbiddenFunctionCodegenState(Function))
+        return failure(TranslationIRViolation::IntrinsicNotAllowed, &Function,
+                       "intrinsic carries forbidden code-generation state");
+      if (!isAllowedScalarIntrinsic(Function, *MaxIntegerWidth))
+        return failure(TranslationIRViolation::IntrinsicNotAllowed, &Function,
+                       "intrinsic signature is outside the scalar allowlist");
       continue;
     }
     if (Function.isDeclaration()) {

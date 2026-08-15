@@ -26,6 +26,30 @@ LOCALES = (
     "zh-CN",
     "zh-TW",
 )
+ARCHITECTURE_DOCS = (
+    Path("docs/architecture.md"),
+    *(Path(f"docs/architecture.{locale}.md") for locale in LOCALES),
+)
+ARCHITECTURE_CAPABILITY_TOKENS = {
+    "translation.runtime-contract": (
+        "`TranslationObjectCompilerV1`",
+        "`TranslationObjectRequestV1`",
+        "`ProvenSemanticAndLLVM`",
+        "`neverd_translate_x86_64_block_to_aarch64_object_v1`",
+        "`translate_x86_64_block_to_aarch64_object`",
+        "`neverd translate-object`",
+    ),
+    "translation.executable-engine": (
+        "`verifyTranslationLinkGraphV1`",
+        "`linkTranslationObjectV1`",
+        "`NativeTranslationSessionV1`",
+    ),
+    "exception.rewrite.end-to-end": (
+        "`__unwind_info`",
+        "`__TEXT,__unwind_info`",
+        "`__LINKEDIT`",
+    ),
+}
 GUIDE_STEMS = ("evm", "sbf")
 GUIDE_REQUIRED_TOKENS = {
     "evm": (
@@ -257,6 +281,19 @@ def require_tokens(
             report(errors, f"{path}: missing required token {token!r}")
 
 
+def validate_architecture_semantics(errors: list[str], view: RepositoryView) -> None:
+    for path in ARCHITECTURE_DOCS:
+        text = view.read_text(path)
+        for capability_id, tokens in ARCHITECTURE_CAPABILITY_TOKENS.items():
+            for token in tokens:
+                if token not in text:
+                    report(
+                        errors,
+                        f"{path}: architecture capability {capability_id!r} "
+                        f"missing required token {token!r}",
+                    )
+
+
 def strip_heading_markup(text: str) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
@@ -385,6 +422,8 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
             report(errors, f"missing localized documentation file: {path}")
     if errors:
         return
+
+    validate_architecture_semantics(errors, view)
 
     selector_tokens = {
         stem: (f"{stem}.md", *(f"{stem}.{locale}.md" for locale in LOCALES))

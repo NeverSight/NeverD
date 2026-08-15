@@ -55,24 +55,87 @@ constexpr ARM64RegisterPair kARM64RegisterPairs[] = {
     {kARM64FrameD14D15Pair, UnwindRegisterClass::FloatingPoint, 14, 15},
 };
 
+struct ARMRegisterBit {
+  uint32_t Bit;
+  uint16_t Register;
+};
+
+/// ARM pushes grow down from the frame record.  Walking the bits in this order
+/// therefore records slots from the saved frame pointer toward lower
+/// addresses, matching the offsets used by Darwin's unwinder.
+constexpr ARMRegisterBit kARMFrameRegisters[] = {
+    {kARMFrameFirstPushR6, 6},    {kARMFrameFirstPushR5, 5},
+    {kARMFrameFirstPushR4, 4},    {kARMFrameSecondPushR12, 12},
+    {kARMFrameSecondPushR11, 11}, {kARMFrameSecondPushR10, 10},
+    {kARMFrameSecondPushR9, 9},   {kARMFrameSecondPushR8, 8},
+};
+
+struct ARMFrameDPattern {
+  uint32_t SavedMask;
+  uint8_t ExactSlotCount;
+  uint16_t ExactSlots[4];
+};
+
+constexpr uint32_t armRegisterMask(unsigned Register) {
+  return uint32_t{1} << Register;
+}
+
+/// The upper four patterns align SP dynamically before part or all of the VFP
+/// save.  Their register identities remain exact, while only the prefix before
+/// that alignment has a fixed CFA-relative slot in the encoding word alone.
+constexpr ARMFrameDPattern kARMFrameDPatterns[] = {
+    {armRegisterMask(8), 1, {8}},
+    {armRegisterMask(8) | armRegisterMask(10), 2, {10, 8}},
+    {armRegisterMask(8) | armRegisterMask(10) | armRegisterMask(12),
+     3,
+     {12, 10, 8}},
+    {armRegisterMask(8) | armRegisterMask(10) | armRegisterMask(12) |
+         armRegisterMask(14),
+     4,
+     {14, 12, 10, 8}},
+    {armRegisterMask(8) | armRegisterMask(9) | armRegisterMask(10) |
+         armRegisterMask(12) | armRegisterMask(14),
+     2,
+     {14, 12}},
+    {armRegisterMask(8) | armRegisterMask(9) | armRegisterMask(10) |
+         armRegisterMask(11) | armRegisterMask(12) | armRegisterMask(14),
+     1,
+     {14}},
+    {armRegisterMask(8) | armRegisterMask(9) | armRegisterMask(10) |
+         armRegisterMask(11) | armRegisterMask(12) | armRegisterMask(13) |
+         armRegisterMask(14),
+     0,
+     {}},
+    {armRegisterMask(8) | armRegisterMask(9) | armRegisterMask(10) |
+         armRegisterMask(11) | armRegisterMask(12) | armRegisterMask(13) |
+         armRegisterMask(14) | armRegisterMask(15),
+     0,
+     {}},
+};
+
 /// Append \p Register as the next slot and add it to its file's mask.
 ///
 /// A mask holds 32 registers, which every number the tables above produce fits
 /// inside; the bound is still checked so that widening one of them later
 /// cannot shift a bit off the end and leave the slot list and the mask
 /// disagreeing.
-void addSlot(CompactUnwindEntry &Entry, UnwindRegisterClass Class,
-             uint16_t Register) {
-  CompactUnwindRegisterSlot Slot;
-  Slot.RegisterClass = Class;
-  Slot.Register = Register;
-  Entry.SavedRegisterSlots.push_back(Slot);
+void addRegisterToMask(CompactUnwindEntry &Entry, UnwindRegisterClass Class,
+                       uint16_t Register) {
   if (Register >= 32)
     return;
   if (Class == UnwindRegisterClass::FloatingPoint)
     Entry.SavedFPRMask |= uint32_t(1) << Register;
   else
     Entry.SavedGPRMask |= uint32_t(1) << Register;
+}
+
+void addSlot(CompactUnwindEntry &Entry, UnwindRegisterClass Class,
+             uint16_t Register) {
+  CompactUnwindRegisterSlot Slot;
+  Slot.RegisterClass = Class;
+  Slot.Register = Register;
+  Entry.SavedRegisterSlots.push_back(Slot);
+  addRegisterToMask(Entry, Class, Register);
 }
 
 void addEmptySlot(CompactUnwindEntry &Entry) {
@@ -203,6 +266,31 @@ void decodeARM64Registers(uint32_t Encoding, CompactUnwindEntry &Entry) {
   }
 }
 
+void decodeARMFrameRegisters(uint32_t Encoding, CompactUnwindEntry &Entry) {
+  for (const ARMRegisterBit &Register : kARMFrameRegisters)
+    if ((Encoding & Register.Bit) != 0)
+      addSlot(Entry, UnwindRegisterClass::GeneralPurpose, Register.Register);
+}
+
+bool decodeARMFrameDRegisters(uint32_t Encoding, CompactUnwindEntry &Entry) {
+  const uint32_t Pattern =
+      (Encoding & kARMFrameDRegisterCountMask) >> kARMFrameDRegisterCountShift;
+  if (Pattern >= std::size(kARMFrameDPatterns))
+    return false;
+
+  const ARMFrameDPattern &Decoded = kARMFrameDPatterns[Pattern];
+  for (unsigned I = 0; I != Decoded.ExactSlotCount; ++I)
+    addSlot(Entry, UnwindRegisterClass::FloatingPoint, Decoded.ExactSlots[I]);
+  for (unsigned Register = 0; Register != 32; ++Register)
+    if ((Decoded.SavedMask & armRegisterMask(Register)) != 0)
+      addRegisterToMask(Entry, UnwindRegisterClass::FloatingPoint, Register);
+
+  if (Pattern < 4)
+    return true;
+  Entry.SemanticStatus = CompactUnwindSemanticStatus::Partial;
+  return false;
+}
+
 } // namespace
 
 bool decodeEncoding(neverd::Arch Arch, uint32_t Encoding,
@@ -212,6 +300,9 @@ bool decodeEncoding(neverd::Arch Arch, uint32_t Encoding,
   Entry.HasStackSize = false;
   Entry.DwarfFDEOffset = 0;
   Entry.FrameOffset = 0;
+  Entry.StackAdjustment = 0;
+  Entry.HasStackAdjustment = false;
+  Entry.SemanticStatus = CompactUnwindSemanticStatus::Complete;
   clearRegisters(Entry);
 
   const uint32_t Mode = Encoding & kModeMask;
@@ -292,14 +383,33 @@ bool decodeEncoding(neverd::Arch Arch, uint32_t Encoding,
     }
     break;
   case Arch::ARM:
-    // Apple's ARM32 compact encodings are not in the header this decoder is
-    // written against, so the frame shape is all that can be named for them
-    // without guessing at a register layout.
-    if (Mode == kARMModeFrame || Mode == kARMModeFrameD)
+    if (Mode == kARMModeFrame || Mode == kARMModeFrameD) {
+      const uint32_t Payload = Encoding & kDwarfSectionOffsetMask;
+      uint32_t AllowedPayload = kARMFrameStackAdjustMask |
+                                kARMFrameFirstPushMask |
+                                kARMFrameSecondPushMask;
+      if (Mode == kARMModeFrameD)
+        AllowedPayload |= kARMFrameDRegisterCountMask;
+      if ((Payload & ~AllowedPayload) != 0) {
+        Valid = false;
+        break;
+      }
+
       Entry.Kind = CompactUnwindKind::FramePointer;
-    else if (Mode == kARMModeDwarf) {
+      Entry.StackAdjustment =
+          ((Encoding & kARMFrameStackAdjustMask) >> kARMFrameStackAdjustShift) *
+          sizeof(uint32_t);
+      Entry.HasStackAdjustment = true;
+      decodeARMFrameRegisters(Encoding, Entry);
+      if (Mode == kARMModeFrameD)
+        Valid = decodeARMFrameDRegisters(Encoding, Entry);
+    } else if (Mode == kARMModeDwarf) {
       Entry.Kind = CompactUnwindKind::DwarfFDE;
       Entry.DwarfFDEOffset = Encoding & kDwarfSectionOffsetMask;
+    } else if (Mode == 0) {
+      Valid = (Encoding & kDwarfSectionOffsetMask) == 0;
+    } else {
+      Valid = false;
     }
     break;
   default:
@@ -309,11 +419,14 @@ bool decodeEncoding(neverd::Arch Arch, uint32_t Encoding,
   // Mode zero with no other bits set is how the linker spells "this range has
   // no unwind information", which is a fact about the range rather than a
   // decoding failure.
-  if (Entry.Kind == CompactUnwindKind::Unknown && Mode == 0)
+  if (Valid && Entry.Kind == CompactUnwindKind::Unknown && Mode == 0)
     Entry.Kind = CompactUnwindKind::None;
 
-  if (!Valid)
-    clearRegisters(Entry);
+  if (!Valid) {
+    if (Entry.SemanticStatus == CompactUnwindSemanticStatus::Complete)
+      clearRegisters(Entry);
+    Entry.SemanticStatus = CompactUnwindSemanticStatus::Partial;
+  }
   return Valid;
 }
 

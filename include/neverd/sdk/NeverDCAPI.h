@@ -25,6 +25,7 @@
 ///   - NeverDCAPISimplify.h -- bitvector expression simplification
 ///   - NeverDCAPISynth.h    -- proof-gated expression synthesis
 ///   - NeverDCAPIOptimize.h -- transactional textual LLVM IR optimization
+///   - NeverDCAPITranslate.h -- x86-64 to AArch64 relocatable objects
 ///
 //===----------------------------------------------------------------------===//
 
@@ -42,6 +43,7 @@
 #include "neverd/sdk/NeverDCAPISimplify.h"
 #include "neverd/sdk/NeverDCAPISymbolic.h"
 #include "neverd/sdk/NeverDCAPISynth.h"
+#include "neverd/sdk/NeverDCAPITranslate.h"
 #include "neverd/sdk/NeverDCAPITypes.h"
 
 #endif // NEVERD_SDK_CAPI_H

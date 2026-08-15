@@ -160,6 +160,53 @@ class LLVMOptimizationLevel(IntEnum):
     O3 = 4
 
 
+class TranslationObjectFormat(IntEnum):
+    """Relocatable object container emitted for the AArch64 target."""
+
+    INVALID = 0
+    ELF = 1
+    MACHO = 2
+
+
+class TranslationErrorCode(IntEnum):
+    """Stable failure category from the cross-architecture object boundary."""
+
+    NONE = 0
+    INVALID_ARGUMENT = 1
+    INVALID_REQUEST = 2
+    GUEST_STATE_REJECTED = 3
+    RUNTIME_CREATION_FAILED = 4
+    TARGET_MACHINE_CREATION_FAILED = 5
+    BLOCK_BUILDER_CREATION_FAILED = 6
+    BLOCK_CONSTRUCTION_FAILED = 7
+    INSTRUCTION_BUDGET_EXCEEDED = 8
+    BLOCK_LOWERING_FAILED = 9
+    OBJECT_COMPILATION_FAILED = 10
+    GENERATED_CODE_BUDGET_EXCEEDED = 11
+    ARTIFACT_VERIFICATION_FAILED = 12
+    ALLOCATION_FAILURE = 13
+    INTERNAL_FAILURE = 14
+
+
+class TranslationSemanticStop(IntEnum):
+    """Why proof-gated semantic simplification stopped during translation."""
+
+    NOT_RUN = 0
+    STABLE = 1
+    CYCLE_DETECTED = 2
+    ROUND_BUDGET_EXHAUSTED = 3
+
+
+class TranslationProofStatus(IntEnum):
+    """Most conservative synthesis-proof disposition seen in translation."""
+
+    NOT_RUN = 0
+    EQUIVALENT = 1
+    DIFFERENT = 2
+    UNKNOWN = 3
+    INVALID = 4
+
+
 class NeverDSimplifyOptions(ctypes.Structure):
     """Layout of ``neverd_simplify_options``.
 
@@ -304,6 +351,75 @@ class NeverDOptimizeLLVMResult(ctypes.Structure):
     ]
 
 
+class NeverDTranslateObjectRequestV1(ctypes.Structure):
+    """Borrowed request for one canonical x86-64 v1 scalar block.
+
+    The native boundary accepts only canonical, legacy-prefix-free REX.W
+    full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms.
+    Logical forms compute architecture-defined flags while preserving AF;
+    canonical C3 RET or C2 iw RET imm16 terminates a return block, and
+    direct-relative EB cb/E9 cd JMP terminates a direct-branch block.
+    Lowering schema 8 accepts canonical, legacy-prefix-free traditional Jcc:
+    JO/JNO 70/71 or 0F 80/81, JB/JAE 72/73 or 0F 82/83, JE/JNE 74/75 or
+    0F 84/85, JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or 0F 88/89, JP/JNP
+    7A/7B or 0F 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG 7E/7F or
+    0F 8E/8F, with short cb or near cd displacements respectively.
+    Guest-memory operands, partial registers, JRCXZ/JECXZ/JCXZ,
+    LOOP/LOOPE/LOOPNE, and instructions outside that exact subset fail closed.
+    """
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("guest_bytes", ctypes.POINTER(ctypes.c_ubyte)),
+        ("guest_bytes_size", ctypes.c_size_t),
+        ("entry_pc", ctypes.c_uint64),
+        ("executable_generation", ctypes.c_uint64),
+        ("object_format", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
+class NeverDTranslateObjectResultV1(ctypes.Structure):
+    """Owned object bytes, identities, and optimization telemetry."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("ok", ctypes.c_int),
+        ("error_code", ctypes.c_uint32),
+        ("error_message", ctypes.c_char_p),
+        ("object_bytes", ctypes.POINTER(ctypes.c_ubyte)),
+        ("object_size", ctypes.c_size_t),
+        ("object_format", ctypes.c_uint32),
+        ("guest_entry_pc", ctypes.c_uint64),
+        ("guest_instruction_count", ctypes.c_uint64),
+        ("guest_byte_count", ctypes.c_uint64),
+        ("executable_generation", ctypes.c_uint64),
+        ("block_ir_symbol", ctypes.c_char_p),
+        ("block_object_symbol", ctypes.c_char_p),
+        ("host_triple", ctypes.c_char_p),
+        ("host_cpu", ctypes.c_char_p),
+        ("host_target_identity", ctypes.c_char_p),
+        ("runtime_registry_identity", ctypes.c_char_p),
+        ("request_cache_key", ctypes.c_char_p),
+        ("artifact_cache_key", ctypes.c_char_p),
+        ("translation_cache_identity", ctypes.c_char_p),
+        ("semantic_changed", ctypes.c_int),
+        ("semantic_rewrites", ctypes.c_uint64),
+        ("semantic_search_work", ctypes.c_uint64),
+        ("semantic_proof_queries", ctypes.c_uint64),
+        ("semantic_proof_conflicts", ctypes.c_uint64),
+        ("semantic_proof_propagations", ctypes.c_uint64),
+        ("semantic_proof_watch_visits", ctypes.c_uint64),
+        ("semantic_function_pass_invocations", ctypes.c_uint64),
+        ("semantic_max_rounds", ctypes.c_uint),
+        ("semantic_stop", ctypes.c_uint32),
+        ("semantic_proof", ctypes.c_uint32),
+        ("llvm_optimization_pipeline_ran", ctypes.c_int),
+        ("object_cache_identity_version", ctypes.c_uint32),
+        ("object_pipeline_schema_version", ctypes.c_uint32),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -338,6 +454,10 @@ _C_TYPES: dict[str, object] = {
     "neverd_proof_status_t": ctypes.c_int,
     "neverd_synthesis_outcome_t": ctypes.c_int,
     "neverd_optimization_stop_t": ctypes.c_int,
+    "neverd_translate_object_format_t": ctypes.c_uint32,
+    "neverd_translate_error_code_t": ctypes.c_uint32,
+    "neverd_translate_semantic_stop_t": ctypes.c_uint32,
+    "neverd_translate_proof_status_t": ctypes.c_uint32,
     "const char *": ctypes.c_char_p,
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -345,15 +465,17 @@ _C_TYPES: dict[str, object] = {
     "const void *": ctypes.c_void_p,
     "const neverd_simplify_options *": ctypes.POINTER(NeverDSimplifyOptions),
     "neverd_simplify_result *": ctypes.POINTER(NeverDSimplifyResult),
-    "const neverd_synthesize_options *": ctypes.POINTER(
-        NeverDSynthesizeOptions
-    ),
+    "const neverd_synthesize_options *": ctypes.POINTER(NeverDSynthesizeOptions),
     "neverd_synthesize_result *": ctypes.POINTER(NeverDSynthesizeResult),
     "const neverd_optimize_llvm_ir_options *": ctypes.POINTER(
         NeverDOptimizeLLVMOptions
     ),
-    "neverd_optimize_llvm_ir_result *": ctypes.POINTER(
-        NeverDOptimizeLLVMResult
+    "neverd_optimize_llvm_ir_result *": ctypes.POINTER(NeverDOptimizeLLVMResult),
+    "const neverd_translate_object_request_v1 *": ctypes.POINTER(
+        NeverDTranslateObjectRequestV1
+    ),
+    "neverd_translate_object_result_v1 *": ctypes.POINTER(
+        NeverDTranslateObjectResultV1
     ),
     "const neverd_symbolic_explore_options *": ctypes.POINTER(
         NeverDSymbolicExploreOptions
@@ -843,9 +965,7 @@ _declare(
         "neverd_simplify_result *",
     ],
 )
-_declare(
-    "neverd_simplify_result_dispose", "void", ["neverd_simplify_result *"]
-)
+_declare("neverd_simplify_result_dispose", "void", ["neverd_simplify_result *"])
 _declare(
     "neverd_simplify_expr_json",
     "const char *",
@@ -873,9 +993,7 @@ _declare(
         "neverd_synthesize_result *",
     ],
 )
-_declare(
-    "neverd_synthesize_result_dispose", "void", ["neverd_synthesize_result *"]
-)
+_declare("neverd_synthesize_result_dispose", "void", ["neverd_synthesize_result *"])
 _declare(
     "neverd_synthesize_expr_json_v1",
     "const char *",
@@ -908,6 +1026,25 @@ _declare(
     ["const char *", "const neverd_optimize_llvm_ir_options *"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_translate_error_code_name",
+    "const char *",
+    ["neverd_translate_error_code_t"],
+    ownership=Ownership.BORROWED_STRING,
+)
+_declare(
+    "neverd_translate_x86_64_block_to_aarch64_object_v1",
+    "int",
+    [
+        "const neverd_translate_object_request_v1 *",
+        "neverd_translate_object_result_v1 *",
+    ],
+)
+_declare(
+    "neverd_translate_object_result_dispose",
+    "void",
+    ["neverd_translate_object_result_v1 *"],
+)
 _declare("neverd_version", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_project_name", "const char *", [], ownership=Ownership.OWNED_STRING)
 _declare("neverd_version_number", "const char *", [], ownership=Ownership.OWNED_STRING)
@@ -930,6 +1067,8 @@ __all__ = [
     "NeverDSynthesizeOptions",
     "NeverDSynthesizeResult",
     "NeverDSymbolicExploreOptions",
+    "NeverDTranslateObjectRequestV1",
+    "NeverDTranslateObjectResultV1",
     "OutputLanguage",
     "LLVMOptimizationLevel",
     "OptimizationMode",
@@ -946,5 +1085,9 @@ __all__ = [
     "SimplifyEvidence",
     "SimplifyOutcome",
     "SynthesisOutcome",
+    "TranslationErrorCode",
+    "TranslationObjectFormat",
+    "TranslationProofStatus",
+    "TranslationSemanticStop",
     "VirtualAddress",
 ]

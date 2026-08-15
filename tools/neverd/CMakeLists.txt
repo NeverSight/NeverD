@@ -1,6 +1,7 @@
 add_neverd_tool(neverd
   neverd.cpp
   NeverDCLIOptions.cpp
+  NeverDTranslateOutput.cpp
   cmd/NeverDCmdInfo.cpp
   cmd/NeverDCmdTables.cpp
   cmd/NeverDCmdDisasm.cpp
@@ -10,6 +11,7 @@ add_neverd_tool(neverd
   cmd/NeverDCmdPipeline.cpp
   cmd/NeverDCmdSimplify.cpp
   cmd/NeverDCmdOptimizeIR.cpp
+  cmd/NeverDCmdTranslate.cpp
 
   LINK_LIBS
   neverd_shared

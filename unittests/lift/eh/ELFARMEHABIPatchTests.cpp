@@ -744,6 +744,8 @@ TEST(ELFARMEHABIPatch, RegistersEntriesACompileAlreadyPlaced) {
   Img.Sections.push_back(Descriptor);
   Img.Sections.push_back(Code);
   Img.SymbolAddrs["f"] = kFunc1VA;
+  Img.FunctionOwnerAddrs["f"] = kFunc1VA;
+  Img.SourceFunctionOwners.push_back({"f", "f", kFunc1VA});
   EXPECT_TRUE(hasGeneratedELFARMEHABI(Img));
 
   ASSERT_FALSE(hadError(
@@ -947,6 +949,8 @@ TEST(ELFARMEHABIPatch, TerminatesEveryGeneratedExecutableRun) {
   Img.Success = true;
   Img.Sections = {Index, Code};
   Img.SymbolAddrs["f"] = FunctionVA;
+  Img.FunctionOwnerAddrs["f"] = FunctionVA;
+  Img.SourceFunctionOwners.push_back({"f", "f", FunctionVA});
   ASSERT_FALSE(hadError(
       installELFARMEHABI(Bin, Region, Img, *makeModule(C, /*WithEH=*/true))));
 
@@ -997,13 +1001,20 @@ TEST(ELFARMEHABIPatch, CodegenResolvesGeneratedIndexAsPrel31) {
 
   // The exemption is relocation-specific, not a blanket ARM undefined-symbol
   // escape hatch. A real call target must still reach the unresolved list so
-  // required-output policy can fail closed.
-  llvm::IRBuilder<> Builder(F->getEntryBlock().getTerminator());
-  llvm::FunctionCallee Missing =
-      M->getOrInsertFunction("missing_runtime", F->getFunctionType());
+  // required-output policy can fail closed. Compile this scenario from a
+  // fresh module: target code generation may mutate a module and is not a
+  // reusable analysis operation.
+  llvm::LLVMContext MissingContext;
+  auto MissingModule = makeModule(MissingContext, /*WithEH=*/true);
+  llvm::Function *MissingFunction = MissingModule->getFunction("f");
+  ASSERT_NE(MissingFunction, nullptr);
+  MissingFunction->setUWTableKind(llvm::UWTableKind::Default);
+  llvm::IRBuilder<> Builder(MissingFunction->getEntryBlock().getTerminator());
+  llvm::FunctionCallee Missing = MissingModule->getOrInsertFunction(
+      "missing_runtime", MissingFunction->getFunctionType());
   Builder.CreateCall(Missing);
   CompiledImage WithMissing = compileImageForPatchWithFixedSectionVAs(
-      *M, Arch::ARM, BinaryFormat::ELF, kAppendedSegmentVA, Resolve,
+      *MissingModule, Arch::ARM, BinaryFormat::ELF, kAppendedSegmentVA, Resolve,
       NoFixedSection);
   ASSERT_TRUE(WithMissing.Success);
   ASSERT_EQ(WithMissing.Unresolved.size(), 1u);

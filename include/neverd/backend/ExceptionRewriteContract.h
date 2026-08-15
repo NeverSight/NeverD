@@ -166,9 +166,20 @@ struct Requirements {
 llvm::Expected<Requirements>
 validateExceptionRewriteContracts(const llvm::Module &Module);
 
-/// Resolve the required IR function names through the object writer's target
-/// symbol spelling.  Multiple aliases are acceptable only when they name the
-/// same nonzero address.
+struct ResolvedFunctionOwner {
+  std::string SourceFunction;
+  std::string OwnerSymbol;
+  uint64_t OwnerVA = 0;
+};
+
+/// Resolve required IR definitions through compiler-authenticated source-owner
+/// provenance.  Source identities and target-selected MC symbols are compared
+/// exactly; no object-format spelling is inferred.
+llvm::Expected<std::vector<ResolvedFunctionOwner>>
+resolveRequiredFunctionOwners(const Requirements &Requirements,
+                              const CompiledImage &Compiled);
+
+/// Return the unique addresses from resolveRequiredFunctionOwners().
 llvm::Expected<std::vector<uint64_t>>
 resolveRequiredFunctionAddresses(const Requirements &Requirements,
                                  const CompiledImage &Compiled);

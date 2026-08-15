@@ -52,6 +52,11 @@ enum ExportFormat {
 /// How the `patch` subcommand rewrites the binary.
 enum PatchStrategy { SectionMode, InplaceMode };
 
+/// CLI-only spelling for the translation object container.  The public C ABI
+/// deliberately uses fixed-width integers, while llvm::cl literal options need
+/// an actual enum type for their parser.
+enum class TranslateObjectContainer { ELF, MachO };
+
 //===----------------------------------------------------------------------===//
 // Shared helpers
 //===----------------------------------------------------------------------===//
@@ -131,6 +136,7 @@ extern llvm::cl::SubCommand SigsCmd;
 extern llvm::cl::SubCommand SimplifyCmd;
 extern llvm::cl::SubCommand SymbolicCmd;
 extern llvm::cl::SubCommand OptimizeIRCmd;
+extern llvm::cl::SubCommand TranslateObjectCmd;
 
 //===----------------------------------------------------------------------===//
 // Options (defined in NeverDCLIOptions.cpp)
@@ -303,6 +309,23 @@ extern llvm::cl::opt<unsigned long long> OptimizeIRSolverMaxWatchVisits;
 extern llvm::cl::opt<bool> OptimizeIRExhaustive;
 extern llvm::cl::opt<bool> OptimizeIRJson;
 
+// Translate only canonical, legacy-prefix-free x86-64 v1 REX.W full-width GPR
+// MOV, ADD/SUB, and register/immediate AND/OR/XOR forms; logical forms compute
+// architecture-defined flags while preserving AF. Canonical C3 RET, C2 iw
+// RET-imm16, or direct-relative EB cb/E9 cd JMP terminates the block. Lowering
+// schema 8 also accepts canonical, legacy-prefix-free traditional Jcc: JO/JNO
+// 70/71 or 0F 80/81, JB/JAE 72/73 or 0F 82/83, JE/JNE 74/75 or 0F 84/85,
+// JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or 0F 88/89, JP/JNP 7A/7B or 0F
+// 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG 7E/7F or 0F 8E/8F, with cb short
+// or cd near displacements respectively. JRCXZ/JECXZ/JCXZ and
+// LOOP/LOOPE/LOOPNE remain unpublished and fail closed. Memory operands, partial
+// registers, and any instruction outside that exact subset also fail closed.
+extern llvm::cl::opt<std::string> TranslateObjectInput;
+extern llvm::cl::opt<std::string> TranslateObjectOutput;
+extern llvm::cl::opt<TranslateObjectContainer> TranslateObjectFormat;
+extern llvm::cl::opt<std::string> TranslateObjectEntry;
+extern llvm::cl::opt<unsigned long long> TranslateObjectGeneration;
+
 //===----------------------------------------------------------------------===//
 // Command handlers
 //
@@ -355,6 +378,22 @@ int runSimplify();
 // NeverDCmdOptimizeIR.cpp — transactional semantic + LLVM optimization.
 // Takes textual IR rather than a binary session.
 int runOptimizeIR();
+
+// NeverDCmdTranslate.cpp — only canonical, legacy-prefix-free x86-64 v1 REX.W
+// full-width GPR MOV, ADD/SUB, and register/immediate AND/OR/XOR forms; logical
+// forms compute architecture-defined flags while preserving AF. Canonical C3
+// RET, C2 iw RET-imm16, or direct-relative EB cb/E9 cd JMP terminates the
+// block. Lowering schema 8 also accepts canonical, legacy-prefix-free
+// traditional Jcc: JO/JNO 70/71 or 0F 80/81, JB/JAE 72/73 or 0F 82/83,
+// JE/JNE 74/75 or 0F 84/85, JBE/JA 76/77 or 0F 86/87, JS/JNS 78/79 or 0F
+// 88/89, JP/JNP 7A/7B or 0F 8A/8B, JL/JGE 7C/7D or 0F 8C/8D, and JLE/JG 7E/7F
+// or 0F 8E/8F, with cb short or cd near displacements respectively.
+// JRCXZ/JECXZ/JCXZ and LOOP/LOOPE/LOOPNE remain unpublished and fail closed.
+// Memory operands, partial
+// registers, and any instruction outside that exact subset also fail closed.
+// Takes raw bytes rather than a binary session and does not link, load,
+// publish, dispatch, execute, or debug.
+int runTranslateObject();
 
 // NeverDCmdPipeline.cpp — engine-driven operations.
 bool configureAnalysisSession(neverd_session_t Sess);

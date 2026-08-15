@@ -102,10 +102,13 @@ version 付き `TranslationExit` は安定した停止理由と、それに対�
 リソース budget、外部呼出し、memory fault、その他の終了条件です。利用側が停止理由に
 応じて型のない整数を読み替える必要はありません。
 
-停止理由にかかわらず、結果が報告する instruction、block、generated-code の各
-count は、要求で指定された対応する非ゼロ budget を超えてはなりません。
-`BudgetExhausted` payload はさらに、その要求された limit を正確に示す必要があり、
-導出値や実装固有のしきい値を報告してはなりません。
+対応する `BudgetExhausted` の場合を除き、結果が報告する instruction、block、
+generated-code の各 count は、要求の対応する非ゼロ budget を超えてはなりません。
+instruction と block の枯渇は limit で正確に停止します。生成 object のサイズは分割
+できない codegen の完了後にしか確定しないため、その枯渇結果は
+`Observed > Limit` を報告できます。拒否された object は link、publish、execute
+されません。各 `BudgetExhausted` payload は要求された limit を正確に示し、導出値や
+実装固有のしきい値を報告しません。
 
 backend-private `RuntimeControlBlockV1` の契約は、正確に 128 byte、
 8 byte alignment であり、固定された v1 magic、version、size、field offset、ゼロの
@@ -158,8 +161,11 @@ simplification と LLVM `O0`〜`O3` optimization を組み合わせ、final IR �
 4 つの contract host architecture 向けに relocatable ELF、COFF、Mach-O object を
 emit します。正確な target-mangled block/runtime symbol manifest を canonicalize し、
 emit 後の各 object を audit して、runtime registry identity と version 付き request /
-artifact cache key を返します。generated-byte budget は非ゼロの場合だけ object size
-を制限し、ゼロは caller policy 上 unlimited です。compiler の出力は audit 済み
+artifact cache key を返します。generated-byte budget が非ゼロなら、それを満たす
+object だけが artifact verification に進めます。LLVM はまず private buffer へ分割
+不能な emit を完了して正確なサイズを測定します。超過 object は publish と artifact
+audit の前に拒否され、typed telemetry が実測サイズと要求された正確な limit を保持
+します。ゼロは caller policy 上 unlimited です。compiler の出力は audit 済み
 relocatable byte までであり、link、publish、dispatch、execute、および guest
 instruction lowering は行いません。
 
@@ -180,14 +186,79 @@ symbol table、dynamic-symbol table、platform-version、data-in-code command �
 それぞれ最大 1 個だけ許可し、依存関係も検査します。linker option とその他の
 command はすべて拒否されます。
 
-runtime、target resolution、W^X publication、memory、IR、symbol registry、verified
-object compiler、object audit の各実装は、これらの境界を定義して検証します。完全な
-guest instruction lowering、JITLink graph の audit/link/load path、trusted
-dispatcher または dispatcher factory、execution はまだ存在しません。したがって、
-現在の境界は完全な実行可能 translation backend、完全なクロスアーキテクチャ
-translation pipeline、完全な end-to-end exception rewriting を構成しません。本節は
-契約と verifier の範囲を規定するものであり、生成、link、load、dispatch、実行、JIT、
-AOT、exception rewriting の end-to-end 提供を主張するものではありません。
+`TranslationObjectRequestV1` は、これらの契約上に構築された最初の公開
+guest-byte-to-object slice であり、意図的に対象を絞っています。現在公開されている
+fail-closed な x86-64 v1 scalar-register subset では、legacy prefix のない canonical
+encoding、すなわち、対応する register/immediate LowIR 形状になる REX.W 全幅 GPR の
+`MOV`、`ADD`/`SUB`、および `AND`/`OR`/`XOR` だけを受け取ります。算術形式は従来の
+scalar flag 計算を維持し、論理形式はアーキテクチャで定義された flags を計算しつつ
+`AF` を保持します。canonical `C3` `RET` と `C2 iw` `RET imm16` は return block を
+終了し、canonical `EB cb` と `E9 cd` の direct-relative `JMP` encoding は direct-branch
+block を終了します。公開 lowering schema は 8 です。canonical かつ legacy prefix のない
+traditional Jcc は、`JO`/`JNO` の short `70/71 cb` または near `0F 80/81 cd`、
+`JB`/`JAE` の `72/73 cb` または `0F 82/83 cd`、`JE`/`JNE` の `74/75 cb` または
+`0F 84/85 cd`、`JBE`/`JA` の `76/77 cb` または `0F 86/87 cd`、`JS`/`JNS` の
+`78/79 cb` または `0F 88/89 cd`、`JP`/`JNP` の `7A/7B cb` または `0F 8A/8B cd`、
+`JL`/`JGE` の `7C/7D cb` または `0F 8C/8D cd`、`JLE`/`JG` の `7E/7F cb` または
+`0F 8E/8F cd` に限られます。`JRCXZ`/`JECXZ`/`JCXZ` と
+`LOOP`/`LOOPE`/`LOOPNE` は未公開で fail closed します。出力は監査済み little-endian AArch64 ELF または Mach-O relocatable object
+に限られます。通常の guest memory operation、partial-register form、この厳密な subset
+外の任意の instruction/encoding、return、これらの direct jump、および上記の公開済み
+Jcc branch 以外の control flow、ならびに lowerer が未実装の LowIR
+operation は object emission 前に拒否されます。`RET` に必要な検査付き
+return-address read は terminator contract の内部処理であり、一般的な guest-memory
+lowering を公開するものではありません。request は block descriptor を再構築して
+検証し、lowering と object emission に同じ resolved target machine を使い、
+proof-gated semantic simplification と LLVM のデフォルト `O2` optimization pipeline
+を組み合わせます。この slice は、その他の x86-64 instruction、他の guest/host pair、
+または AArch64 から x86-64 への逆方向をサポートするものではありません。
+
+公開 C entry point `neverd_translate_x86_64_block_to_aarch64_object_v1`、Python ctypes
+wrapper `translate_x86_64_block_to_aarch64_object`、および
+`neverd translate-object` command は、同じ object-only 境界を公開します。Python は
+`TranslationObjectFormat.ELF` または `.MACHO` を使います。native translation の失敗時
+には `TranslationErrorCode` を保持する typed `TranslationError` を投げ、local argument
+validation は `TypeError` または `ValueError` を投げます。成功時には Python 所有の
+immutable result を返します。C result は object byte、安定した cache identity、
+optimization telemetry を所有し、CLI は選択された ELF または Mach-O object だけを
+書き出します。これらの C、Python、CLI object surface はいずれも link、load、dispatch、
+execute、debug より前で停止し、execution session interface ではありません。
+
+`verifyTranslationLinkGraphV1` は、独立した allocation 前の第 2 の監査を追加します。受理済み
+AArch64 ELF または Mach-O object から一時的な LLVM JITLink graph を構築し、target、
+section permission、block/runtime symbol manifest、external-symbol closure、および
+edge kind と target を検査します。address-free な監査結果を生成した後、graph は破棄
+されます。この監査に合格しても、code の link、allocate、resolve、load、publish、
+dispatch、execute は行われません。
+
+`linkTranslationObjectV1` は独立した native linking 境界です。pruning、allocation、
+symbol resolution、fixup の前後で trusted descriptor、raw object、JITLink graph を
+再監査します。runtime symbol は sealed registry だけから供給されます。dispatcher
+credential は唯一の manifest entry を session、block identity、guest entry PC、cache
+generation、code epoch に束縛し、invoke 時には runtime guest `RIP` もその entry と一致
+しなければなりません。finalization に成功すると最終 permission で executable memory を
+publish し、unload は新たな invoke を失効させ、実行中の 1 回の invoke を待ってから
+allocation を解放します。credential-free overload は audit-only のままで invoke できません。
+
+`NativeTranslationSessionV1` はこれらを experimental C++ x86-64-to-native-AArch64
+execution 境界として構成します。little-endian AArch64 ELF または Mach-O process 上で、
+compile-link-validate-invoke-unload dispatcher loop 全体にわたり、検査済み guest-memory
+runtime と固定 guest state を複数 block 間で維持します。canonical direct jump は正確な
+static target から継続します。公開済みの canonical Jcc branch は
+block manifest が宣言した taken または fallthrough successor からのみ継続でき、dispatcher はそれ以外の selected
+PC をすべて拒否します。return は終了します。global instruction、block、generated-object-
+byte の budget は block をまたいで正確に維持され、guest が正常停止すると実行済み state
+と authoritative memory が一緒に commit されます。cancellation は final commit に対して
+linearize されます。
+
+これは実行可能な vertical slice であって、完全な translator ではありません。通常の
+guest-memory instruction、partial register、上記の厳密な schema-8 traditional-Jcc slice 以外の
+conditional control flow（`JRCXZ`/`JECXZ`/`JCXZ` と
+`LOOP`/`LOOPE`/`LOOPNE` を含む）、indirect control flow、call、floating-point、SIMD、x87、atomic、system instruction、
+汎用 exception propagation、block cache、他の guest/host pair、逆方向の
+AArch64-to-x86-64 はまだ対象外です。
+execution session の C、Python、CLI、JSON surface はなく、debugging は独立した未対応
+機能です。上記 object API は native execution を使わずに引き続き利用できます。
 
 生成 IR の契約では、この契約に従うすべての translated block を hidden かつ
 non-preemptible とし、C ABI `i32 (ptr state, ptr runtime)` を使うことを要求します。
@@ -211,6 +282,43 @@ SIMD、x87、atomic、system instruction はこの契約の範囲外です。
 simplification を LLVM 最適化との共同 fixed point まで実行しなければなりません。
 このポリシー自体は実行可能な translation backend を提供しません。
 
+## 例外書き換えの境界
+
+Mach-O compact unwind には、元の `__unwind_info` 用 strict parser、生成された
+`__LD,__compact_unwind` record 用 fixup-aware parser、元データと生成データの range を
+正確に merge する処理、regular page 用 deterministic encoder、および transactional な
+最終 section installer があります。installer は既存の file-backed
+`__TEXT,__unwind_info` に encoded table が収まる場合だけ in-place で書き換えます。
+architecture、layout、byte preimage を再検証し、未使用の末尾をゼロ化し、Mach-O 外側
+transaction の単一 commit 前に結果を再 parse して semantic equivalence を確認します。
+生成 record は、compiler が正確に記録した IR source function から target MC owner
+symbol への対応（private definition を含み、object-format prefix や mangling を推測しない）、
+opaque な非ゼロの range ID、および厳密な半開 fragment range で認証されます。生成された
+各 FDE は唯一の認証済み fragment と厳密に一致し、必要な各 fragment も、その transaction
+が install した唯一の FDE と厳密に一致しなければなりません。ただし、厳密な encoding
+検証を通った正確な非 DWARF compact record が覆う場合を除きます。同じ function が所有する
+隣接または非連続 fragment は一つの source recipe を再利用できますが、identity の欠落、
+重複、dangling、owner の交差、または boundary 不一致は出力変更前に失敗します。新しい RX
+segment は、`__LINKEDIT` が一意で file/VM の末尾にあること、offset shift が overflow
+checked であること、最終 file/VM layout の strict replay が成功したことを証明してから
+commit されます。最終 section が存在しない場合、生成 compact record は install せず、
+以下の正確で認証済みの DWARF-FDE 閉路だけを通る場合に限り transaction を続行できます。
+既存の最終 section が容量不足または malformed の場合は引き続き fail closed します。
+link 済み native throw/catch による実証はまだありません。
+
+ARM32 compact unwind では、encoding に含まれる stack adjustment と GPR layout は `Complete`
+です。D-register pattern selector 0〜3 も `Complete` ですが、4〜7 は compact word だけでは
+runtime-aligned CFA-relative slot をすべて証明できないため `Partial` です。`Partial` entry は
+解析用に証明済み register identity を保持できますが、すべての rewrite path が fail closed
+で拒否します。各 EH-frame install receipt は target architecture、pointer width、byte order
+を厳密に束縛し、compact-unwind DWARF binding は receipt target identity の不一致を拒否します。
+
+PE、ELF、Mach-O にはそれぞれ format 固有の例外 component がありますが、NeverD は
+全 format・全 exception type を扱う end-to-end rewrite pipeline をまだ公開していません。
+未対応 encoding または未解決の registration/layout 要件は、出力を変更する前に失敗
+しなければなりません。既存の部分的な format 対応を完全な例外処理の閉路と表現しては
+なりません。
+
 ## コンポーネントマップ
 
 各コンポーネントは `add_neverd_component_library` が作成する静的アーカイブです。
@@ -233,7 +341,7 @@ Capstone ライブラリは網羅しません。
 | `lib/sigs` | シグネチャ解析、データベース、マッチング | Loader |
 | `lib/libc` | 既知の libc 名と呼出モデルのサポート | 独立コンポーネント |
 | `lib/support` | 共通のバイナリ読込み helper | Loader |
-| `lib/translate` | version 付き guest state/policy/exit、固定 runtime ABI、検査付き guest memory、生成 IR/object audit の契約。実行 backend の実装はこのコンポーネントの範囲外 | IR、LLVM、LLVM Object の契約 |
+| `lib/translate` | version 付き guest state/policy/exit、固定 runtime ABI、検査付き guest memory、生成 IR/object/LinkGraph audit、sealed native linking、experimental x86-64-to-AArch64 C++ dispatcher | IR、LLVM、LLVM Object、JITLink の契約 |
 
 公開ヘッダーは `include/neverd` 以下で各領域に対応します。内部 C++ クラスを
 誤って SDK の一部にしないでください。安定した外部操作は純粋 C ヘッダーと、

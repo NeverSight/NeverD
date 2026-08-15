@@ -127,6 +127,8 @@ applyRuntimeGuestStateX86_64V1(const RuntimeGuestStateX86_64V1 &RuntimeState,
 inline constexpr uint32_t kBlockExitKindBaseV1 = 0x100;
 enum class BlockExitKindV1 : uint32_t {
   Continue = kBlockExitKindBaseV1,
+  /// A manifest-authorized direct successor selected by translated code.  The
+  /// source terminator may be unconditional or conditional.
   DirectBranch = kBlockExitKindBaseV1 + 1,
   IndirectBranch = kBlockExitKindBaseV1 + 2,
   Call = kBlockExitKindBaseV1 + 3,

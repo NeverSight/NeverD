@@ -22,15 +22,16 @@
 #ifndef NEVERD_BACKEND_CODEGEN_BINARYREWRITER_H
 #define NEVERD_BACKEND_CODEGEN_BINARYREWRITER_H
 
-#include "neverd/support/BinaryEncoding.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/codegen/RelocResolver.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Endian.h"
 
 #include <filesystem>
 #include <map>
@@ -70,6 +71,17 @@ struct InplaceMapping {
   int64_t Shift = 0;
 };
 
+/// One trampoline that was actually written, retaining the exact object symbol
+/// whose generated address it targets.  Format metadata writers use this
+/// installed identity instead of inferring a range relationship from numeric
+/// addresses alone.
+struct PatchedFunctionEntry {
+  std::string OwnerSymbol;
+  va_t OriginalVA = 0;
+  va_t OwnerVA = 0;
+  std::string SourceFunction;
+};
+
 // ===--------------------------------------------------------------------===//
 // TextLayout — describes the location of the main code section
 // ===--------------------------------------------------------------------===//
@@ -106,9 +118,31 @@ struct PatchLayoutBase {
 // CompiledImage — multi-section rewrite-backend output ready for placement
 // ===--------------------------------------------------------------------===//
 
-/// Placement of one native section within CompiledImage::Bytes.  Section
-/// identity is retained even when a format patcher chooses to store several
-/// logical sections in one physical segment.
+/// One symbolic fixup owned by a CompiledSection.  Symbol strings are copied
+/// while LLVM's MC callback is live; no numeric address is used as a substitute
+/// for symbol identity.  SubtractSymbol is non-empty for an `Add - Sub`
+/// expression that has not been reduced to a single symbol.  These are the
+/// direct MCValue terms; consumers must fail closed when an expected identity
+/// was hidden by a variable-symbol alias or otherwise folded away.
+struct CompiledFixupReference {
+  uint64_t Offset = 0; ///< Byte offset within the owning section.
+  /// Opaque compiler-authenticated CFI fragment identity.  This is nonzero
+  /// only when Symbol is the exact private begin label of a retained function
+  /// range; consumers must not reconstruct it from an address or name.
+  uint64_t FunctionRangeId = 0;
+  unsigned Kind = 0;
+  std::string Symbol;
+  std::string SubtractSymbol;
+  int64_t Addend = 0;
+  uint32_t Specifier = 0;
+  bool IsPCRel = false;
+  bool IsResolved = false;
+  unsigned BitWidth = 0;
+};
+
+/// One native section produced for a CompiledImage.  Allocated in-image
+/// sections name a slice of CompiledImage::Bytes; externally placed sections
+/// and non-allocated linker metadata retain their bytes in ExternalBytes.
 struct CompiledSection {
   std::string Name;
   uint64_t Offset = 0;
@@ -120,21 +154,42 @@ struct CompiledSection {
   bool IsAllocated = true;
   std::vector<llvm::mc_rewrite::RewriteSymbolIndexReference>
       SymbolIndexReferences;
+  std::vector<CompiledFixupReference> FixupReferences;
   /// True when the section bytes live in CompiledImage::Bytes at Offset.
   bool IsInImage = true;
-  /// Bytes for an allocated section assigned to a format-owned external
-  /// placement rather than the contiguous patch image.
+  /// Exact bytes for a section that does not live in the contiguous patch
+  /// image: either non-allocated linker metadata or an allocated section with
+  /// a format-owned external placement.
   std::vector<uint8_t> ExternalBytes;
 };
 
-/// Result of compiling a module to a single placement image, with every
-/// emitted section (text, data, unwind tables, and related metadata) laid out
-/// contiguously from a chosen base VA.
+using CompiledFunctionRange = llvm::mc_rewrite::RewriteFunctionRange;
+
+/// Result of compiling a module to a single placement image.  Allocated
+/// in-image sections are laid out contiguously from a chosen base VA; every
+/// emitted section, including non-allocated linker metadata, retains its exact
+/// logical identity and contents in Sections.
 struct CompiledImage {
   std::vector<uint8_t> Bytes;                  ///< Combined image (text first).
   uint64_t BaseVA = 0;                         ///< VA of Bytes[0].
+  Arch TargetArch = Arch::Unknown;             ///< Exact code-generation ISA.
+  BinaryFormat Format = BinaryFormat::Unknown; ///< Exact object convention.
+  uint8_t PointerWidth = 0;                    ///< Target pointer bytes.
+  llvm::endianness ByteOrder = llvm::endianness::little;
   std::vector<CompiledSection> Sections;       ///< Exact logical placements.
   std::map<std::string, uint64_t> SymbolAddrs; ///< Defined symbol → final VA.
+  /// Provenance-only owner identities, including private compiler symbols.
+  std::map<std::string, uint64_t> FunctionOwnerAddrs;
+  /// Exact compiler-authenticated CFI fragment ownership.
+  std::vector<CompiledFunctionRange> FunctionRanges;
+  /// Exact rewrite-only source IR definition -> MC owner associations.
+  std::vector<llvm::mc_rewrite::RewriteSourceFunctionOwner>
+      SourceFunctionOwners;
+  /// Exact lifted source-function identity -> original image entry.  These
+  /// values come only from the validated IR attachment emitted by the lifter;
+  /// patchers join them to SourceFunctionOwners by exact source identity.
+  std::map<std::string, uint64_t> SourceFunctionOriginalVAs;
+  bool FunctionRangesValid = true;
   std::vector<std::string> Unresolved;         ///< Symbols left unresolved.
   bool Success = false;
 };
@@ -147,9 +202,10 @@ struct CompiledImage {
 /// performs a probe compile on a clone to learn each section's size, then lays
 /// the sections out contiguously from \p BaseVA (text first, each section
 /// honoring at least its native alignment) and recompiles with per-section VAs
-/// until the layout stabilizes. The converged sections are assembled into one
-/// blob. Format patchers use Sections to preserve unwind/data identity and
-/// choose compatible physical permissions.
+/// until the layout stabilizes. The converged allocated sections are assembled
+/// into one blob; non-allocated metadata remains external to that blob. Format
+/// patchers use Sections to preserve unwind/data identity and choose compatible
+/// physical permissions.
 ///
 /// \p ResolveFn is the address-model external-symbol resolver (PLT/IAT/stub
 /// VAs,
@@ -158,7 +214,7 @@ CompiledImage compileImageForPatch(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
         ResolveFn,
-    uint64_t ImageBaseVA = 0);
+    uint64_t ImageBaseVA = 0, llvm::StringRef TargetTriple = {});
 
 /// Compile like compileImageForPatch, but allow selected allocated sections to
 /// be assigned format-owned VAs outside the contiguous patch image.  Such
@@ -169,7 +225,7 @@ CompiledImage compileImageForPatchWithFixedSectionVAs(
         ResolveFn,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
-    uint64_t ImageBaseVA = 0);
+    uint64_t ImageBaseVA = 0, llvm::StringRef TargetTriple = {});
 
 // ===--------------------------------------------------------------------===//
 // BinaryPatcher — base class for new-section patching
@@ -274,7 +330,27 @@ public:
       const std::vector<std::pair<va_t, va_t>> *KnownRanges = nullptr,
       const std::vector<Export> *Exports = nullptr,
       std::vector<va_t> *PatchedOriginalEntries = nullptr,
-      std::vector<std::pair<va_t, va_t>> *PatchedEntryMappings = nullptr);
+      std::vector<std::pair<va_t, va_t>> *PatchedEntryMappings = nullptr,
+      std::vector<PatchedFunctionEntry> *PatchedFunctions = nullptr);
+
+  /// Provenance-aware variant used by binary rewrite output.  Original entries
+  /// come only from the validated source-identity map; the installed target
+  /// retains the exact private or public MC owner identity.  Source functions
+  /// absent from the map are generated helpers and receive no entry trampoline.
+  static size_t installTrampolines(
+      std::vector<uint8_t> &Binary,
+      const std::map<std::string, uint64_t> &SymbolAddrs, uint64_t OrigTextVA,
+      uint64_t OrigTextSize, uint64_t OrigTextFileOff, uint64_t ImageBase,
+      Arch TargetArch, InstructionMode Mode,
+      const std::vector<Symbol> *Symbols,
+      const std::vector<std::pair<va_t, va_t>> *KnownRanges,
+      const std::vector<Export> *Exports,
+      std::vector<va_t> *PatchedOriginalEntries,
+      std::vector<std::pair<va_t, va_t>> *PatchedEntryMappings,
+      std::vector<PatchedFunctionEntry> *PatchedFunctions,
+      llvm::ArrayRef<llvm::mc_rewrite::RewriteSourceFunctionOwner>
+          SourceFunctionOwners,
+      const std::map<std::string, uint64_t> &SourceFunctionOriginalVAs = {});
 
   /// Common file I/O skeleton shared by all patchers: reads the input
   /// binary, calls \p PatchFn to modify the in-memory buffer and fill

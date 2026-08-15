@@ -23,6 +23,8 @@ from .abi import (
     NeverDSynthesizeOptions,
     NeverDSynthesizeResult,
     NeverDSymbolicExploreOptions,
+    NeverDTranslateObjectRequestV1,
+    NeverDTranslateObjectResultV1,
     OptimizationMode,
     OptimizationStop,
     OutputLanguage,
@@ -31,6 +33,10 @@ from .abi import (
     SimplifyEvidence,
     SimplifyOutcome,
     SynthesisOutcome,
+    TranslationErrorCode,
+    TranslationObjectFormat,
+    TranslationProofStatus,
+    TranslationSemanticStop,
 )
 from .ffi import HostAPI
 
@@ -485,9 +491,7 @@ class Session:
         options.struct_size = ctypes.sizeof(NeverDSymbolicExploreOptions)
         options.max_paths = _unsigned("max_paths", max_paths, 32)
         options.max_steps = _unsigned("max_steps", max_steps, 32)
-        options.max_block_visits = _unsigned(
-            "max_block_visits", max_block_visits, 32
-        )
+        options.max_block_visits = _unsigned("max_block_visits", max_block_visits, 32)
         options.include_expressions = (
             1 if _boolean("include_expressions", include_expressions) else 0
         )
@@ -523,13 +527,9 @@ class Session:
                     constraints=int(raw_path.get("constraints", 0)),
                     unmodelled_ops=int(raw_path.get("unmodelledOps", 0)),
                     predicate=(
-                        str(raw_path["predicate"])
-                        if "predicate" in raw_path
-                        else None
+                        str(raw_path["predicate"]) if "predicate" in raw_path else None
                     ),
-                    target=(
-                        str(raw_path["target"]) if "target" in raw_path else None
-                    ),
+                    target=(str(raw_path["target"]) if "target" in raw_path else None),
                 )
             )
 
@@ -980,8 +980,8 @@ def _boolean(name: str, value: object) -> bool:
 
 
 def _enum_value(name: str, value: object, enum_type: type[Any]) -> int:
-    if isinstance(value, bool):
-        raise TypeError(f"{name} must not be a boolean")
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError(f"{name} must be an integer enum value")
     try:
         return int(enum_type(value))
     except (TypeError, ValueError) as error:
@@ -1089,6 +1089,55 @@ class LLVMOptimizationResult:
     proof_conflicts: int
     proof_propagations: int
     proof_watch_visits: int
+
+
+class TranslationError(NeverDError):
+    """A typed x86-64 to AArch64 object translation failure."""
+
+    def __init__(self, code: TranslationErrorCode, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        category = code.name.lower().replace("_", "-")
+        super().__init__(f"{category}: {detail}" if detail else category)
+
+
+@dataclass(frozen=True, slots=True)
+class X86_64ToAArch64ObjectResult:
+    """One audited relocatable object and its translation telemetry.
+
+    The API does not link, load, publish, dispatch, execute, or debug these
+    bytes.  Every byte and string is Python-owned before this value is returned.
+    """
+
+    object_bytes: bytes
+    object_format: TranslationObjectFormat
+    guest_entry_pc: int
+    guest_instruction_count: int
+    guest_byte_count: int
+    executable_generation: int
+    block_ir_symbol: str
+    block_object_symbol: str
+    host_triple: str
+    host_cpu: str
+    host_target_identity: str
+    runtime_registry_identity: str
+    request_cache_key: str
+    artifact_cache_key: str
+    translation_cache_identity: str
+    semantic_changed: bool
+    semantic_rewrites: int
+    semantic_search_work: int
+    semantic_proof_queries: int
+    semantic_proof_conflicts: int
+    semantic_proof_propagations: int
+    semantic_proof_watch_visits: int
+    semantic_function_pass_invocations: int
+    semantic_max_rounds: int
+    semantic_stop: TranslationSemanticStop
+    semantic_proof: TranslationProofStatus
+    llvm_optimization_pipeline_ran: bool
+    object_cache_identity_version: int
+    object_pipeline_schema_version: int
 
 
 _HOST: HostAPI | None = None
@@ -1254,7 +1303,7 @@ def synthesize_expression(
         "neverd_synthesize_expr", text, ctypes.byref(options), ctypes.byref(result)
     )
     try:
-        if int(status) != 0:
+        if status != 0:
             raise NeverDError("NeverD refused the synthesis request")
         if not result.ok:
             raise ExpressionSyntaxError(
@@ -1331,18 +1380,14 @@ def optimize_llvm_ir(
     options.max_rounds = _unsigned("max_rounds", max_rounds, 32)
     synthesis_enabled = _boolean("enable_synthesis", enable_synthesis)
     options.enable_synthesis = 1 if synthesis_enabled else 0
-    options.synthesis_max_cost = _size_t(
-        "synthesis_max_cost", synthesis_max_cost
-    )
+    options.synthesis_max_cost = _size_t("synthesis_max_cost", synthesis_max_cost)
     options.synthesis_max_samples = _size_t(
         "synthesis_max_samples", synthesis_max_samples
     )
     options.synthesis_verify_samples = _unsigned(
         "synthesis_verify_samples", synthesis_verify_samples, 32
     )
-    options.synthesis_max_work = _size_t(
-        "synthesis_max_work", synthesis_max_work
-    )
+    options.synthesis_max_work = _size_t("synthesis_max_work", synthesis_max_work)
     options.synthesis_max_leaves = _unsigned(
         "synthesis_max_leaves", synthesis_max_leaves, 32
     )
@@ -1395,7 +1440,7 @@ def optimize_llvm_ir(
         "neverd_optimize_llvm_ir", text, ctypes.byref(options), ctypes.byref(result)
     )
     try:
-        if int(status) != 0:
+        if status != 0:
             raise NeverDError("NeverD refused the LLVM optimization request")
         if not result.ok:
             message = (result.error or b"").decode("utf-8", errors="replace")
@@ -1423,9 +1468,241 @@ def optimize_llvm_ir(
             proof_watch_visits=int(result.proof_watch_visits),
         )
     finally:
-        library.call(
-            "neverd_optimize_llvm_ir_result_dispose", ctypes.byref(result)
+        library.call("neverd_optimize_llvm_ir_result_dispose", ctypes.byref(result))
+
+
+def _translation_failure(code_value: int, message: bytes | None) -> TranslationError:
+    try:
+        code = TranslationErrorCode(code_value)
+    except ValueError:
+        return TranslationError(
+            TranslationErrorCode.INTERNAL_FAILURE,
+            f"NeverD returned unknown translation error code {code_value}",
         )
+    if code is TranslationErrorCode.NONE:
+        return TranslationError(
+            TranslationErrorCode.INTERNAL_FAILURE,
+            "NeverD reported translation failure without an error category",
+        )
+    detail = (message or b"").decode("utf-8", errors="replace")
+    return TranslationError(code, detail or "translation failed")
+
+
+def _translation_owned_utf8(value: bytes | None, field: str) -> str:
+    if value is None:
+        raise TranslationError(
+            TranslationErrorCode.INTERNAL_FAILURE,
+            f"NeverD returned no {field}",
+        )
+    try:
+        return bytes(value).decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise TranslationError(
+            TranslationErrorCode.INTERNAL_FAILURE,
+            f"NeverD returned invalid UTF-8 in {field}",
+        ) from error
+
+
+def translate_x86_64_block_to_aarch64_object(
+    guest_bytes: bytes | bytearray | memoryview,
+    *,
+    entry_pc: int,
+    object_format: TranslationObjectFormat | int,
+    executable_generation: int = 0,
+    host: HostAPI | None = None,
+) -> X86_64ToAArch64ObjectResult:
+    """Compile one x86-64 v1 scalar-register block into an AArch64 object.
+
+    The published fail-closed subset accepts only canonical encodings without
+    legacy prefixes: REX.W full-width GPR ``MOV``, ``ADD``/``SUB``, and
+    ``AND``/``OR``/``XOR`` forms over supported register/immediate LowIR shapes.
+    Arithmetic forms retain their scalar flag computations; logical forms
+    compute their architecturally defined flags while preserving ``AF``.
+    Canonical ``C3`` ``RET`` or ``C2 iw`` ``RET imm16`` terminates a return
+    block, and direct-relative ``EB cb`` or ``E9 cd`` ``JMP`` terminates a
+    direct-branch block.  The published lowering schema is 8.  Canonical,
+    legacy-prefix-free traditional Jcc comprises ``JO``/``JNO`` short
+    ``70/71 cb`` or near ``0F 80/81 cd``, ``JB``/``JAE`` ``72/73 cb`` or
+    ``0F 82/83 cd``, ``JE``/``JNE`` ``74/75 cb`` or ``0F 84/85 cd``,
+    ``JBE``/``JA`` ``76/77 cb`` or ``0F 86/87 cd``, ``JS``/``JNS``
+    ``78/79 cb`` or ``0F 88/89 cd``, ``JP``/``JNP`` ``7A/7B cb`` or
+    ``0F 8A/8B cd``, ``JL``/``JGE`` ``7C/7D cb`` or ``0F 8C/8D cd``, and
+    ``JLE``/``JG`` ``7E/7F cb`` or ``0F 8E/8F cd``.
+    ``JRCXZ``/``JECXZ``/``JCXZ`` and ``LOOP``/``LOOPE``/``LOOPNE`` remain
+    unpublished and fail closed.  Ordinary guest-memory operations,
+    partial-register forms, any instruction or encoding outside that exact
+    subset, all other control flow, and unimplemented LowIR are rejected.
+    ``guest_bytes`` must contain exactly one block, including its terminating
+    return, direct jump, or published Jcc branch; trailing
+    bytes are rejected.
+    ``object_format`` must be ``ELF`` or ``MACHO``.  Local argument validation
+    raises ``TypeError`` or ``ValueError``; native translation failures raise
+    ``TranslationError`` carrying a ``TranslationErrorCode``.  The current v1
+    contract produces only audited relocatable objects: this function does not
+    link, load, publish, dispatch, execute, or debug the result.
+    """
+
+    if not isinstance(guest_bytes, (bytes, bytearray, memoryview)):
+        raise TypeError("guest_bytes must be a bytes-like object")
+    code = bytes(guest_bytes)
+    if not code:
+        raise ValueError("guest_bytes must not be empty")
+    if len(code) > ctypes.c_size_t(-1).value:
+        raise ValueError("guest_bytes does not fit size_t")
+
+    guest_entry = _unsigned("entry_pc", entry_pc, 64)
+    generation = _unsigned("executable_generation", executable_generation, 64)
+    format_value = _enum_value(
+        "AArch64 object format", object_format, TranslationObjectFormat
+    )
+    if format_value not in (
+        int(TranslationObjectFormat.ELF),
+        int(TranslationObjectFormat.MACHO),
+    ):
+        raise ValueError("AArch64 object format must be ELF or MACHO")
+    if guest_entry > (1 << 64) - 1 - len(code):
+        raise ValueError("guest byte address range must not wrap uint64")
+
+    native_code = (ctypes.c_ubyte * len(code)).from_buffer_copy(code)
+    request = NeverDTranslateObjectRequestV1()
+    request.struct_size = ctypes.sizeof(NeverDTranslateObjectRequestV1)
+    request.guest_bytes = ctypes.cast(native_code, ctypes.POINTER(ctypes.c_ubyte))
+    request.guest_bytes_size = len(code)
+    request.entry_pc = guest_entry
+    request.executable_generation = generation
+    request.object_format = format_value
+    request.reserved = 0
+
+    result = NeverDTranslateObjectResultV1()
+    result.struct_size = ctypes.sizeof(NeverDTranslateObjectResultV1)
+    library = host if host is not None else _simplify_host()
+    translate = library.function(
+        "neverd_translate_x86_64_block_to_aarch64_object_v1"
+    )
+    dispose = library.function("neverd_translate_object_result_dispose")
+    try:
+        status = translate(
+            ctypes.byref(request),
+            ctypes.byref(result),
+        )
+        if status != 0:
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD refused the translation ABI request",
+            )
+        if not result.ok:
+            raise _translation_failure(int(result.error_code), result.error_message)
+        if int(result.error_code) != int(TranslationErrorCode.NONE):
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD returned a successful object with a failure category",
+            )
+
+        try:
+            returned_format = TranslationObjectFormat(int(result.object_format))
+            semantic_stop = TranslationSemanticStop(int(result.semantic_stop))
+            semantic_proof = TranslationProofStatus(int(result.semantic_proof))
+        except ValueError as error:
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD returned an unknown translation result enum value",
+            ) from error
+        if returned_format is not TranslationObjectFormat(format_value):
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD returned an object in a format that was not requested",
+            )
+        if int(result.guest_entry_pc) != guest_entry:
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD returned an object for a guest entry that was not requested",
+            )
+        if int(result.executable_generation) != generation:
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD returned an object for an executable generation that was "
+                "not requested",
+            )
+        if int(result.guest_byte_count) != len(code):
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD returned a translation that did not consume the complete "
+                "guest block",
+            )
+
+        object_size = int(result.object_size)
+        if object_size == 0 or not result.object_bytes:
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD returned no relocatable object bytes",
+            )
+        if object_size > sys.maxsize:
+            raise TranslationError(
+                TranslationErrorCode.INTERNAL_FAILURE,
+                "NeverD returned an impossibly large relocatable object",
+            )
+
+        # Copy every owned native allocation before the result disposer runs.
+        object_bytes = bytes(ctypes.string_at(result.object_bytes, object_size))
+        block_ir_symbol = _translation_owned_utf8(
+            result.block_ir_symbol, "block IR symbol"
+        )
+        block_object_symbol = _translation_owned_utf8(
+            result.block_object_symbol, "block object symbol"
+        )
+        host_triple = _translation_owned_utf8(result.host_triple, "host triple")
+        host_cpu = _translation_owned_utf8(result.host_cpu, "host CPU")
+        host_target_identity = _translation_owned_utf8(
+            result.host_target_identity, "host target identity"
+        )
+        runtime_registry_identity = _translation_owned_utf8(
+            result.runtime_registry_identity, "runtime registry identity"
+        )
+        request_cache_key = _translation_owned_utf8(
+            result.request_cache_key, "request cache key"
+        )
+        artifact_cache_key = _translation_owned_utf8(
+            result.artifact_cache_key, "artifact cache key"
+        )
+        translation_cache_identity = _translation_owned_utf8(
+            result.translation_cache_identity, "translation cache identity"
+        )
+
+        return X86_64ToAArch64ObjectResult(
+            object_bytes=object_bytes,
+            object_format=returned_format,
+            guest_entry_pc=int(result.guest_entry_pc),
+            guest_instruction_count=int(result.guest_instruction_count),
+            guest_byte_count=int(result.guest_byte_count),
+            executable_generation=int(result.executable_generation),
+            block_ir_symbol=block_ir_symbol,
+            block_object_symbol=block_object_symbol,
+            host_triple=host_triple,
+            host_cpu=host_cpu,
+            host_target_identity=host_target_identity,
+            runtime_registry_identity=runtime_registry_identity,
+            request_cache_key=request_cache_key,
+            artifact_cache_key=artifact_cache_key,
+            translation_cache_identity=translation_cache_identity,
+            semantic_changed=bool(result.semantic_changed),
+            semantic_rewrites=int(result.semantic_rewrites),
+            semantic_search_work=int(result.semantic_search_work),
+            semantic_proof_queries=int(result.semantic_proof_queries),
+            semantic_proof_conflicts=int(result.semantic_proof_conflicts),
+            semantic_proof_propagations=int(result.semantic_proof_propagations),
+            semantic_proof_watch_visits=int(result.semantic_proof_watch_visits),
+            semantic_function_pass_invocations=int(
+                result.semantic_function_pass_invocations
+            ),
+            semantic_max_rounds=int(result.semantic_max_rounds),
+            semantic_stop=semantic_stop,
+            semantic_proof=semantic_proof,
+            llvm_optimization_pipeline_ran=bool(result.llvm_optimization_pipeline_ran),
+            object_cache_identity_version=int(result.object_cache_identity_version),
+            object_pipeline_schema_version=int(result.object_pipeline_schema_version),
+        )
+    finally:
+        dispose(ctypes.byref(result))
 
 
 __all__ = [
@@ -1454,7 +1731,14 @@ __all__ = [
     "SynthesisResult",
     "SymbolicExploration",
     "SymbolicPath",
+    "TranslationError",
+    "TranslationErrorCode",
+    "TranslationObjectFormat",
+    "TranslationProofStatus",
+    "TranslationSemanticStop",
+    "X86_64ToAArch64ObjectResult",
     "simplify_expression",
     "synthesize_expression",
     "optimize_llvm_ir",
+    "translate_x86_64_block_to_aarch64_object",
 ]

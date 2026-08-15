@@ -45,8 +45,15 @@
       ],
       "limitations": [
         "the fixed runtime state covers the x86-64 integer core and preserves unmodeled logical state outside generated code",
-        "verified object compilation emits audited relocatable bytes but does not provide complete guest instruction lowering, JITLink graph audit/link/loading, dispatch, or execution",
-        "the native publication smoke test proves only the generated-code memory boundary, not guest lowering, object linking, dispatch, or cross-architecture execution"
+        "lowering schema 8 accepts only canonical encodings without legacy prefixes or semantically redundant REX extension bits: REX.W full-width x86-64 GPR MOV, ADD/SUB, and AND/OR/XOR forms with supported register/immediate LowIR shapes; arithmetic forms retain their scalar flag computations, logical forms compute architecture-defined flags while preserving AF, canonical C3 RET or C2 iw RET imm16 terminates a return block, canonical EB cb or E9 cd terminates a direct-branch block, and canonical legacy-prefix-free traditional Jcc comprises JO/JNO short 70/71 cb or near 0F 80/81 cd, JB/JAE 72/73 cb or 0F 82/83 cd, JE/JNE 74/75 cb or 0F 84/85 cd, JBE/JA 76/77 cb or 0F 86/87 cd, JS/JNS 78/79 cb or 0F 88/89 cd, JP/JNP 7A/7B cb or 0F 8A/8B cd, JL/JGE 7C/7D cb or 0F 8C/8D cd, and JLE/JG 7E/7F cb or 0F 8E/8F cd; every other encoding fails closed",
+        "JRCXZ/JECXZ/JCXZ and LOOP/LOOPE/LOOPNE remain unpublished and are rejected before object emission",
+        "ordinary guest-memory operations, partial-register forms, any instruction outside the exact published subset, all other control flow, and unimplemented LowIR operations are rejected before object emission",
+        "the C, Python, and CLI object requests emit only audited little-endian AArch64 ELF or Mach-O relocatable objects; those three surfaces do not link, load, publish, dispatch, execute, or debug code",
+        "proof-gated semantic simplification and LLVM's default O2 optimization pipeline are composed before audited object emission",
+        "a non-zero generated-object byte budget is measured after indivisible LLVM emission into a private buffer; an oversized object is rejected before publication and artifact audit, while typed telemetry may report its exact observed size above the requested limit",
+        "the Python surface raises TranslationError with TranslationErrorCode for native translation failures, while local argument validation raises TypeError or ValueError",
+        "the standalone pre-allocation JITLink graph audit does not itself link, allocate, resolve, load, publish, dispatch, or execute code",
+        "native linking and execution are a separate experimental C++ boundary and do not turn the C, Python, or CLI object APIs into execution interfaces"
       ],
       "tests": [
         "RuntimeGuestState.X86_64LogicalStateRoundTripsWithoutLosingRFlags",
@@ -70,33 +77,105 @@
         "TranslationObjectCompiler.ComposesSemanticAndLLVMOptimization",
         "TranslationObjectCompiler.RejectsNonDeterministicProofProviders",
         "TranslationArtifactVerifier.AcceptsOnlySealedLLVMPLT32RuntimeCallsInV1Policy",
-        "TranslationArtifactVerifier.AcceptsCanonicalMachOObject"
+        "TranslationArtifactVerifier.AcceptsCanonicalMachOObject",
+        "TranslationObjectRequest.ProducesAuditedAArch64ELFFromExactX86GuestBytes",
+        "TranslationObjectRequest.EmitsAArch64MachORelocatableObject",
+        "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalRel8AndRel32DirectJumps",
+        "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalZeroFlagConditionalBranches",
+        "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalSingleFlagConditionalBranches",
+        "TranslationObjectRequest.EmitsAuditedObjectsForCanonicalMultiFlagConditionalBranches",
+        "TranslationObjectRequest.TranslatesGeneralPublishedScalarSliceWithoutMutatingGuestState",
+        "TranslationObjectRequest.EmitsAuditedObjectForLogicalScalarForms",
+        "TranslationObjectRequest.RejectsUnsupportedLowIROperations",
+        "X86TranslationBlockLowerer.LowersDifferentFullWidthRegistersAndAddImmediate",
+        "X86TranslationBlockLowerer.LowersSubtractAndSignedBorrowFlags",
+        "X86TranslationBlockLowerer.MatchesIndependentLogicalOperationAndFlagTruthVectors",
+        "X86TranslationBlockLowerer.HandlesLogicalIdiomAndSignExtendedImmediateForms",
+        "X86TranslationBlockLowerer.RejectsNonCanonicalWidthMemoryAndPrefixScalarForms",
+        "X86TranslationBlockLowerer.RejectsSemanticallyRedundantREXExtensionBits",
+        "X86TranslationBlockLowerer.AcceptsNecessaryREXExtensionBits",
+        "X86TranslationBlockLowerer.RejectsUndeclaredGuestOpcodeEvenWhenItsLowIRIsLowerable",
+        "X86TranslationBlockLowerer.LowersReturnImmediateStackAdjustment",
+        "X86TranslationBlockLowerer.LowersCanonicalZeroFlagBranchesToASelectedGuestPC",
+        "X86TranslationBlockLowerer.LowersCanonicalSingleFlagBranchesToASelectedGuestPC",
+        "X86TranslationBlockLowerer.LowersCanonicalShortJBEFromCarryOrZero",
+        "X86TranslationBlockLowerer.LowersCanonicalShortJAFromClearCarryAndZero",
+        "X86TranslationBlockLowerer.LowersEveryCanonicalUnsignedMultiFlagBranchEncoding",
+        "X86TranslationBlockLowerer.LowersCanonicalSignedMultiFlagBranchesToASelectedGuestPC",
+        "X86TranslationBlockLowerer.RejectsMultiFlagPredicatesThatDisagreeWithGuestBytes",
+        "X86TranslationBlockLowerer.RejectsPrefixedAndUnpublishedControlFormsWithoutExpandingTheSlice",
+        "X86TranslationBlockLowerer.RejectsCountedAndLoopConditionalBranchEncodings",
+        "TranslationLinkGraphVerifier.AcceptsCompilerProducedAArch64ELFBeforeAllocation",
+        "TranslationLinkGraphVerifier.AcceptsCompilerProducedAArch64MachOBeforeAllocation",
+        "NeverDTranslationCAPI.EmitsOwnedAuditedAArch64ELFObject",
+        "NeverDTranslationCAPI.EmitsOwnedAuditedAArch64MachOObject",
+        "NeverDTranslationCAPI.EmitsOwnedObjectForCanonicalShortDirectJump",
+        "NeverDTranslationCAPI.EmitsOwnedObjectForCanonicalNearDirectJump",
+        "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalZeroFlagConditionalBranches",
+        "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalSingleFlagConditionalBranches",
+        "NeverDTranslationCAPI.EmitsOwnedObjectsForCanonicalMultiFlagConditionalBranches",
+        "TranslateX86_64ToAArch64ObjectTests.test_copies_owned_result_and_reports_all_telemetry",
+        "TranslateX86_64ToAArch64ObjectTests.test_macho_is_the_only_other_published_container",
+        "TranslateX86_64ToAArch64ObjectTests.test_canonical_control_transfers_cross_the_public_boundary",
+        "TranslationIntegrationTests.test_real_library_emits_aarch64_object_for_zero_flag_branch",
+        "TranslationIntegrationTests.test_real_library_emits_aarch64_object_for_single_flag_branch",
+        "TranslationCLIContract.EmitsObjectForCanonicalShortDirectJump",
+        "TranslationCLIContract.EmitsObjectForCanonicalNearDirectJump",
+        "TranslationCLIContract.EmitsObjectsForCanonicalZeroFlagConditionalBranches",
+        "TranslationCLIContract.EmitsObjectsForCanonicalSingleFlagConditionalBranches",
+        "TranslationCLIContract.EmitsObjectsForCanonicalMultiFlagConditionalBranches",
+        "TranslationCLIContract.HelpPublishesCanonicalControlEncodings"
       ],
       "public_surfaces": {
-        "c": [],
-        "python": [],
-        "cli": [],
+        "c": [
+          "neverd_translate_x86_64_block_to_aarch64_object_v1"
+        ],
+        "python": [
+          "translate_x86_64_block_to_aarch64_object"
+        ],
+        "cli": [
+          "neverd translate-object"
+        ],
         "json": []
       }
     },
     {
       "id": "translation.executable-engine",
       "kind": "translation",
-      "status": "unsupported",
+      "status": "experimental",
       "owner": "translate",
       "targets": [
-        "x86",
-        "x86_64",
-        "arm",
-        "aarch64"
+        "x86_64"
       ],
       "docs": [
         "docs/architecture.md"
       ],
       "limitations": [
-        "verified relocatable-object compilation and page-isolated one-way RW-to-RX publication exist, but no complete guest instruction lowering, JITLink graph audit/link/loading path, dispatcher factory, or execution engine is published"
+        "the native version-1 engine runs only inside a little-endian AArch64 ELF or Mach-O process and accepts only an x86-64 guest; AArch64-to-x86-64 and every other guest/host pair remain unavailable",
+        "execution is restricted to lowering schema 8's published canonical full-width scalar-register MOV, ADD/SUB, AND/OR/XOR subset terminated by C3 RET, C2 iw RET imm16, EB cb, E9 cd, or canonical legacy-prefix-free traditional Jcc: JO/JNO short 70/71 cb or near 0F 80/81 cd, JB/JAE 72/73 cb or 0F 82/83 cd, JE/JNE 74/75 cb or 0F 84/85 cd, JBE/JA 76/77 cb or 0F 86/87 cd, JS/JNS 78/79 cb or 0F 88/89 cd, JP/JNP 7A/7B cb or 0F 8A/8B cd, JL/JGE 7C/7D cb or 0F 8C/8D cd, and JLE/JG 7E/7F cb or 0F 8E/8F cd",
+        "the sealed linker re-audits the object and JITLink graph through allocation, resolution, fixup, finalization, credential binding, invocation, and deterministic unload; the dispatcher executes one audited block at a time, follows an unconditional branch only to its exact static target, and accepts a published canonical Jcc only at the taken or fallthrough successor declared by that block's manifest",
+        "ordinary guest-memory instructions, partial registers, JRCXZ/JECXZ/JCXZ, LOOP/LOOPE/LOOPNE, every other conditional branch outside the exact published traditional-Jcc slice, indirect branches, calls, floating-point, SIMD, x87, atomics, system instructions, general exception propagation, block caching, debugging, and every encoding or LowIR operation outside the exact subset fail closed",
+        "the executable session is currently a C++ API; no C, Python, CLI, or JSON execution surface is published"
       ],
-      "tests": [],
+      "tests": [
+        "TranslationJITLinker.InvokesAuditedDirectBranchWithoutInventingRuntimeReferences",
+        "TranslationJITLinker.InvokesAuditedZeroFlagBranchesWithoutRuntimeReferences",
+        "TranslationJITLinker.InvokesAuditedSingleFlagBranchesWithoutRuntimeReferences",
+        "TranslationJITLinker.InvokesEveryMultiFlagBranchTruthTableWithoutRuntimeReferences",
+        "TranslationJITLinker.InvokesAuditedX86ReturnThroughFinalizedAArch64Code",
+        "TranslationJITLinker.RejectsRuntimeStateAtWrongEntryPCWithoutMutatingInvocationInputs",
+        "NativeTranslationSession.DispatchesDirectBranchIntoASecondAuditedBlock",
+        "NativeTranslationSession.ValidatesAResolvedConditionalBranchAgainstBothManifestSuccessors",
+        "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfAZeroFlagBranch",
+        "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfSingleFlagBranches",
+        "NativeTranslationSession.DispatchesBothSelectedSuccessorsOfEveryMultiFlagBranch",
+        "NativeTranslationSession.KeepsTheCommittedPCWhenFetchFailsAfterAnUnexecutedPrefix",
+        "NativeTranslationSession.ReportsAnUnsupportedLoweringSliceAtTheGuestBlockEntry",
+        "NativeTranslationSession.DoesNotClaimThatAnUnexecutedSupportedPrefixIsRestartableAtTheFailure",
+        "NativeTranslationSession.CommitsTheFirstBlockBeforeASecondBlockLoweringSliceStop",
+        "NativeTranslationSession.TerminalReturnWinsAtExactInstructionAndBlockBudgets",
+        "NativeTranslationSession.AcceptedCancellationWinsTheSuccessfulCommitLinearizationPoint"
+      ],
       "public_surfaces": {
         "c": [],
         "python": [],
@@ -195,10 +274,45 @@
       ],
       "limitations": [
         "format-specific components exist, but an all-formats and all-exception end-to-end rewrite pipeline is not established",
+        "Mach-O compact unwind includes strict original/generated parsing, an exact compiler-authenticated IR source-function to target MC owner-symbol mapping for public and private definitions without prefix or mangling guesses, opaque nonzero range IDs, exact half-open fragment ranges, a bidirectional one-to-one closure between generated FDEs and authenticated fragments, an exact strictly validated non-DWARF compact alternative for required fragments, same-owner adjacent or disjoint fragment reuse, range merging, deterministic regular-page encoding, and top-level transactional composition with EH-frame installation, private-owner trampolines, a unique terminal __LINKEDIT, checked offset relocation, and strict final file/VM layout replay; an existing file-backed __TEXT,__unwind_info section is rewritten only after exact validation, while an absent final section uses the exact authenticated DWARF-FDE fallback and an existing undersized or malformed section fails closed before replacing output; linked native throw/catch proof remains pending",
+        "ARM32 Mach-O compact-unwind frame decoding is Complete for encoded stack adjustment, GPR layout, and D-register pattern selectors 0 through 3; selectors 4 through 7 are Partial because the compact word alone cannot prove every runtime-aligned CFA-relative slot, so analysis retains only proven identities and every rewrite path rejects the entry fail-closed",
+        "each EH-frame install receipt binds the exact target architecture, pointer width, and byte order; compact-unwind DWARF binding rejects every receipt target-identity mismatch",
         "unsupported exception encodings and registration states fail closed without mutating output"
       ],
       "tests": [
-        "ExceptionRewriteContract.RequiredUnresolvedOutputIsByteIdenticalOnError"
+        "ExceptionRewriteContract.RequiredUnresolvedOutputIsByteIdenticalOnError",
+        "ExceptionRewriteContract.RejectsSymbolSpellingWithoutCompilerIdentity",
+        "RewriteFunctionProvenance.ResolvesPrivateMachOOwnerWithoutPublishingIt",
+        "RewriteFunctionProvenance.PreservesARMSourceOwnerWithoutDwarfCFI",
+        "CompactUnwindARM32.DecodesFrameStackAdjustmentAndGPRLayout",
+        "CompactUnwindARM32.DecodesEveryStackAdjustmentAndSavedGPRBit",
+        "CompactUnwindARM32.DecodesFixedFrameDRegisterLayouts",
+        "CompactUnwindARM32.RetainsProvenDRegistersWithoutInventingAlignedStackSlots",
+        "CompactUnwindARM32.PropagatesPartialFrameDLayoutToItsFunction",
+        "MachOExceptionPatch.RequiresAnExactGeneratedFDEForEveryAuthenticatedFragment",
+        "MachOExceptionPatch.RejectsUnauthenticatedCompactCoverageWithoutChangingBytes",
+        "MachOExceptionPatch.AcceptsVerifiedARMCompactCoverageWithoutInstallingAnFDE",
+        "MachOCompactUnwindMerge.PreservesOriginalRangePersonalityAndLSDA",
+        "MachOGeneratedCompactUnwind.RejectsMissingDuplicateDanglingAndMismatchedRangeProvenance",
+        "MachOGeneratedCompactUnwind.ParsesARM32RecordLayout",
+        "MachOCompactUnwindDwarfBind.BindsOnlyFromInstalledReceiptAndLeavesGeneratedInputUnchanged",
+        "MachOCompactUnwindDwarfBind.BindsARM32DwarfFallbackByExactRange",
+        "MachOCompactUnwindDwarfBind.RejectsAArch64ReceiptForARM32GeneratedRecords",
+        "MachOCompactUnwindDwarfBind.RejectsARM32ReceiptForAArch64GeneratedRecords",
+        "MachOCompactUnwindDwarfBind.RejectsSameWidthReceiptFromDifferentArchitecture",
+        "MachOCompactUnwindDwarfBind.RejectsInstalledReceiptWithDifferentPointerWidth",
+        "MachOCompactUnwindDwarfBind.RejectsInstalledReceiptWithDifferentByteOrder",
+        "MachOCompactUnwindRangeMap.SameOwnerAdjacentAndDisjointFragmentsReuseOneSourceRecipe",
+        "MachOCompactUnwindMerge.RejectsMissingDuplicateDanglingAndMismatchedFragmentIdentities",
+        "MachOCompactUnwindEncode.EmitsStableMultiPageLayoutAndRoundTripsEveryRecipe",
+        "MachOCompactUnwindInstall.RewritesPrefixClearsTailAndKeepsDeclaredCapacity",
+        "MachOCompactUnwindInstall.RejectsStaleRegionAndPreimageWithoutFurtherMutation",
+        "MachOCompactUnwindInstall.RejectsOneByteCapacityShortageWithoutMutation",
+        "MachOPatchTransaction.CompactPrepareFailureLeavesExistingOutputAndInputUnchanged",
+        "MachOPatchTransaction.GeneratedCompactWithoutFinalSectionUsesAuthenticatedDwarfFallback",
+        "MachOPatchSegmentInstall.RejectsDuplicateLinkeditSegmentsWithoutMutation",
+        "MachOPatchSegmentInstall.RejectsNonterminalLinkeditSegmentWithoutMutation",
+        "MachOPatchTransaction.SuccessCommitsEHSegmentTrampolineAndCompactUnwindTogether"
       ],
       "public_surfaces": {
         "c": [],

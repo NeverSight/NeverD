@@ -10,10 +10,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
-
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/WithColor.h"
@@ -25,11 +26,143 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <utility>
 
 #define DEBUG_TYPE "neverd-rewriter"
 
 namespace neverd {
+
+namespace {
+
+struct CapturedFixupReference {
+  std::string SectionName;
+  CompiledFixupReference Reference;
+  bool IsCompactFunctionField = false;
+};
+
+void captureFixupReference(std::vector<CapturedFixupReference> &Captured,
+                           const llvm::mc_rewrite::FixupCtx &Context,
+                           Arch TargetArch) {
+  if (Context.SectionName.empty() ||
+      (Context.Sym.empty() && Context.SubSym.empty()))
+    return;
+
+  // The linker-input compact-unwind section contains three symbolic pointer
+  // fields per row.  LLVM can also retain the symbolic end-minus-start
+  // expression used to form the adjacent 32-bit range length.  That value is
+  // useful while assembling the row, but it is not pointer provenance and the
+  // strict final-table parser must never mistake it for such.  Keep exactly
+  // the fields whose symbolic identities survive into final metadata.
+  if (Context.SectionName == section_names::macho::CompactUnwind) {
+    uint64_t PointerWidth = 0;
+    switch (TargetArch) {
+    case Arch::X64:
+    case Arch::AArch64:
+      PointerWidth = 8;
+      break;
+    case Arch::X86:
+    case Arch::ARM:
+      PointerWidth = 4;
+      break;
+    default:
+      return;
+    }
+    const uint64_t RecordSize = 3 * PointerWidth + 8;
+    const uint64_t FieldOffset = Context.SectionOffset % RecordSize;
+    if (FieldOffset != 0 && FieldOffset != PointerWidth + 8 &&
+        FieldOffset != 2 * PointerWidth + 8)
+      return;
+  }
+
+  CapturedFixupReference Item;
+  Item.SectionName = Context.SectionName.str();
+  Item.Reference.Offset = Context.SectionOffset;
+  Item.Reference.Kind = Context.Kind;
+  Item.Reference.Symbol = Context.Sym.str();
+  Item.Reference.SubtractSymbol = Context.SubSym.str();
+  Item.Reference.Addend = Context.Addend;
+  Item.Reference.Specifier = Context.Specifier;
+  Item.Reference.IsPCRel = Context.IsPCRel;
+  Item.Reference.IsResolved = Context.IsResolved;
+  Item.Reference.BitWidth = Context.BitWidth;
+  if (Context.SectionName == section_names::macho::CompactUnwind) {
+    const uint64_t PointerWidth =
+        TargetArch == Arch::X86 || TargetArch == Arch::ARM ? 4 : 8;
+    const uint64_t RecordSize = 3 * PointerWidth + 8;
+    Item.IsCompactFunctionField = Context.SectionOffset % RecordSize == 0;
+  }
+  Captured.push_back(std::move(Item));
+}
+
+bool attachFixupReferences(
+    CompiledSection &Section,
+    std::vector<CapturedFixupReference> &Captured,
+    llvm::ArrayRef<llvm::mc_rewrite::RewriteFunctionRange> FunctionRanges) {
+  for (CapturedFixupReference &Item : Captured) {
+    if (Item.SectionName != Section.Name)
+      continue;
+
+    if (Item.IsCompactFunctionField) {
+      const llvm::mc_rewrite::RewriteFunctionRange *ExactRange = nullptr;
+      for (const llvm::mc_rewrite::RewriteFunctionRange &Range :
+           FunctionRanges) {
+        if (Range.BeginSymbol != Item.Reference.Symbol)
+          continue;
+        if (ExactRange)
+          return false;
+        ExactRange = &Range;
+      }
+      if (ExactRange)
+        Item.Reference.FunctionRangeId = ExactRange->Id;
+    }
+
+    Section.FixupReferences.push_back(std::move(Item.Reference));
+  }
+  return true;
+}
+
+llvm::Expected<std::map<std::string, uint64_t>>
+collectSourceFunctionOriginalVAs(const llvm::Module &Module) {
+  std::map<std::string, uint64_t> Result;
+  std::set<uint64_t> SeenAddresses;
+  for (const llvm::Function &Function : Module) {
+    if (Function.isDeclaration())
+      continue;
+    auto Address = rewrite_source::getOriginalVA(Function);
+    if (!Address)
+      return Address.takeError();
+    if (!*Address)
+      continue;
+    if (**Address == InvalidVA ||
+        !Result.emplace(Function.getName().str(), **Address).second ||
+        !SeenAddresses.insert(**Address).second)
+      return llvm::createStringError(
+          std::errc::invalid_argument,
+          "rewrite source identities are duplicate or invalid");
+  }
+  return Result;
+}
+
+bool attachSourceFunctionOriginalVAs(
+    CompiledImage &Image,
+    const std::map<std::string, uint64_t> &OriginalVAs) {
+  if (!llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
+          Image.SourceFunctionOwners))
+    return false;
+  for (const auto &[SourceFunction, OriginalVA] : OriginalVAs) {
+    const size_t Matches = llvm::count_if(
+        Image.SourceFunctionOwners, [&](const auto &Owner) {
+          return Owner.SourceFunction == SourceFunction;
+        });
+    if (Matches != 1)
+      return false;
+    Image.SourceFunctionOriginalVAs.emplace(SourceFunction, OriginalVA);
+  }
+  return Image.SourceFunctionOriginalVAs.size() == OriginalVAs.size();
+}
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // compileImageForPatch — iterative multi-section image compile
@@ -41,9 +174,33 @@ static CompiledImage compileImageForPatchImpl(
         ResolveFn,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
-    uint64_t ImageBaseVA) {
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple) {
   CompiledImage Out;
   Out.BaseVA = BaseVA;
+  Out.TargetArch = TargetArch;
+  Out.Format = Fmt;
+  switch (TargetArch) {
+  case Arch::X64:
+  case Arch::AArch64:
+    Out.PointerWidth = 8;
+    break;
+  case Arch::X86:
+  case Arch::ARM:
+    Out.PointerWidth = 4;
+    break;
+  default:
+    Out.PointerWidth = 0;
+    break;
+  }
+  Out.ByteOrder = llvm::endianness::little;
+
+  auto OriginalVAs = collectSourceFunctionOriginalVAs(Mod);
+  if (!OriginalVAs) {
+    llvm::WithColor::error()
+        << "compileImageForPatch: " << llvm::toString(OriginalVAs.takeError())
+        << "\n";
+    return Out;
+  }
 
   auto IsText = [](llvm::StringRef N) {
     return section_names::isTextSectionName(N);
@@ -57,15 +214,29 @@ static CompiledImage compileImageForPatchImpl(
   // fixup *values* for cross-section references are stale, but section *sizes*
   // (fixups are fixed-width, applied in place) are exact and drive the layout.
   llvm::mc_rewrite::RewriteOptions Pass1;
+  Pass1.DeferGlobalFunctionRangeOverlap = true;
   Pass1.Model.TextVA = BaseVA;
   Pass1.Model.ImageBaseVA = ImageBaseVA;
   Pass1.Model.getSectionVA = [&](llvm::StringRef) { return BaseVA; };
   Pass1.Model.resolve = [&](llvm::StringRef S, uint32_t Sp) {
     return ResolveFn(S, Sp);
   };
+  std::vector<CapturedFixupReference> Pass1Fixups;
+  Pass1.onFixup = [&](const llvm::mc_rewrite::FixupCtx &Context,
+                      uint64_t Value) {
+    captureFixupReference(Pass1Fixups, Context, TargetArch);
+    return Value;
+  };
   Codegen CG1;
   auto Pass1Mod = llvm::CloneModule(Mod);
-  auto Res1 = CG1.compileForRewrite(*Pass1Mod, TargetArch, Pass1, Fmt);
+  auto Res1 = CG1.compileForRewrite(*Pass1Mod, TargetArch, Pass1, Fmt,
+                                    TargetTriple);
+  if (!Res1.ImageValid)
+    return Out;
+  if (!Res1.FunctionRangesValid) {
+    Out.FunctionRangesValid = false;
+    return Out;
+  }
   if (Res1.Sections.empty())
     return Out;
 
@@ -77,6 +248,11 @@ static CompiledImage compileImageForPatchImpl(
     }
 
   if (Res1.Sections.size() == 1 && !HasFixedSection) {
+    if (!llvm::mc_rewrite::validateRewriteFunctionRanges(
+            Res1.FunctionRanges, Res1.FunctionOwnerAddrs)) {
+      Out.FunctionRangesValid = false;
+      return Out;
+    }
     auto &S = Res1.Sections.front();
     if (S.Alignment == 0 || (S.Alignment & (S.Alignment - 1)) != 0 ||
         (S.IsAllocated && BaseVA % S.Alignment != 0)) {
@@ -92,10 +268,25 @@ static CompiledImage compileImageForPatchImpl(
                        S.Kind,
                        S.IsAllocated};
     CS.SymbolIndexReferences = std::move(S.SymbolIndexReferences);
+    if (!attachFixupReferences(CS, Pass1Fixups, Res1.FunctionRanges)) {
+      Out.FunctionRangesValid = false;
+      return Out;
+    }
+    if (!S.IsAllocated) {
+      CS.IsInImage = false;
+      CS.ExternalBytes = std::move(S.Bytes);
+    }
     Out.Sections.push_back(std::move(CS));
     if (S.IsAllocated)
       Out.Bytes = std::move(S.Bytes);
     Out.SymbolAddrs = std::move(Res1.SymbolAddrs);
+    Out.FunctionOwnerAddrs = std::move(Res1.FunctionOwnerAddrs);
+    Out.FunctionRanges = std::move(Res1.FunctionRanges);
+    Out.SourceFunctionOwners = std::move(Res1.SourceFunctionOwners);
+    if (!attachSourceFunctionOriginalVAs(Out, *OriginalVAs)) {
+      Out.FunctionRangesValid = false;
+      return Out;
+    }
     Out.Unresolved = std::move(Res1.Unresolved);
     Out.Success = true;
     LLVM_DEBUG(llvm::dbgs()
@@ -195,6 +386,7 @@ static CompiledImage compileImageForPatchImpl(
     return Out;
 
   llvm::mc_rewrite::RewriteResult Final;
+  std::vector<CapturedFixupReference> FinalFixups;
   bool Converged = false;
   for (int Iter = 0; Iter < 8 && !Converged; ++Iter) {
     llvm::mc_rewrite::RewriteOptions PassN;
@@ -207,9 +399,22 @@ static CompiledImage compileImageForPatchImpl(
     PassN.Model.resolve = [&](llvm::StringRef S, uint32_t Sp) {
       return ResolveFn(S, Sp);
     };
+    std::vector<CapturedFixupReference> IterationFixups;
+    PassN.onFixup = [&](const llvm::mc_rewrite::FixupCtx &Context,
+                        uint64_t Value) {
+      captureFixupReference(IterationFixups, Context, TargetArch);
+      return Value;
+    };
     Codegen CGn;
     auto IterMod = llvm::CloneModule(Mod);
-    auto ResN = CGn.compileForRewrite(*IterMod, TargetArch, PassN, Fmt);
+    auto ResN = CGn.compileForRewrite(*IterMod, TargetArch, PassN, Fmt,
+                                      TargetTriple);
+    if (!ResN.ImageValid)
+      return Out;
+    if (!ResN.FunctionRangesValid) {
+      Out.FunctionRangesValid = false;
+      return Out;
+    }
     if (ResN.Sections.empty())
       return Out;
 
@@ -229,6 +434,7 @@ static CompiledImage compileImageForPatchImpl(
       // it; its actual section bytes (<= the max spacing) are placed at these
       // VAs.
       Final = std::move(ResN);
+      FinalFixups = std::move(IterationFixups);
       TotalSize = NewTotal;
       Converged = true;
     } else {
@@ -251,21 +457,29 @@ static CompiledImage compileImageForPatchImpl(
           S.Name,      0,      0,    static_cast<uint64_t>(S.Bytes.size()),
           S.Alignment, S.Kind, false};
       CS.SymbolIndexReferences = std::move(S.SymbolIndexReferences);
+      if (!attachFixupReferences(CS, FinalFixups, Final.FunctionRanges)) {
+        Out.FunctionRangesValid = false;
+        return Out;
+      }
       CS.IsInImage = false;
+      CS.ExternalBytes = std::move(S.Bytes);
       Out.Sections.push_back(std::move(CS));
       continue;
     }
     auto VAIt = SectionVA.find(S.Name);
     if (VAIt == SectionVA.end())
       continue;
-    const bool IsExternallyPlaced =
-        static_cast<bool>(FixedSectionVAFn(S.Name));
+    const bool IsExternallyPlaced = static_cast<bool>(FixedSectionVAFn(S.Name));
     uint64_t Off = IsExternallyPlaced ? 0 : VAIt->second - BaseVA;
     CompiledSection CS{S.Name,       Off,
                        VAIt->second, static_cast<uint64_t>(S.Bytes.size()),
                        S.Alignment,  S.Kind,
                        true};
     CS.SymbolIndexReferences = std::move(S.SymbolIndexReferences);
+    if (!attachFixupReferences(CS, FinalFixups, Final.FunctionRanges)) {
+      Out.FunctionRangesValid = false;
+      return Out;
+    }
     if (IsExternallyPlaced) {
       CS.IsInImage = false;
       CS.ExternalBytes = std::move(S.Bytes);
@@ -287,6 +501,13 @@ static CompiledImage compileImageForPatchImpl(
   }
 
   Out.SymbolAddrs = std::move(Final.SymbolAddrs);
+  Out.FunctionOwnerAddrs = std::move(Final.FunctionOwnerAddrs);
+  Out.FunctionRanges = std::move(Final.FunctionRanges);
+  Out.SourceFunctionOwners = std::move(Final.SourceFunctionOwners);
+  if (!attachSourceFunctionOriginalVAs(Out, *OriginalVAs)) {
+    Out.FunctionRangesValid = false;
+    return Out;
+  }
   Out.Unresolved = std::move(Final.Unresolved);
   Out.Success = true;
   LLVM_DEBUG(llvm::dbgs() << "compileImageForPatch: " << SectionVA.size()
@@ -299,12 +520,12 @@ CompiledImage compileImageForPatch(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
         ResolveFn,
-    uint64_t ImageBaseVA) {
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple) {
   auto NoFixedSection = [](llvm::StringRef) -> std::optional<uint64_t> {
     return std::nullopt;
   };
   return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
-                                  NoFixedSection, ImageBaseVA);
+                                  NoFixedSection, ImageBaseVA, TargetTriple);
 }
 
 CompiledImage compileImageForPatchWithFixedSectionVAs(
@@ -313,9 +534,9 @@ CompiledImage compileImageForPatchWithFixedSectionVAs(
         ResolveFn,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
-    uint64_t ImageBaseVA) {
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple) {
   return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
-                                  FixedSectionVAFn, ImageBaseVA);
+                                  FixedSectionVAFn, ImageBaseVA, TargetTriple);
 }
 
 } // namespace neverd

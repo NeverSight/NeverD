@@ -1,5 +1,4 @@
-//===- TranslationObjectCompiler.h - Verified host object emission -*- C++
-//-*-===//
+//===- TranslationObjectCompiler.h - Host object emission -----*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -24,6 +23,7 @@
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -35,6 +35,8 @@ class raw_ostream;
 } // namespace llvm
 
 namespace neverd::translate {
+
+class TranslationTargetMachineV1;
 
 /// Stable failure categories for verified translation-object compilation.
 /// Append values without renumbering existing entries.
@@ -96,11 +98,15 @@ class TranslationObjectCompilerError final
 public:
   static char ID;
 
-  TranslationObjectCompilerError(TranslationObjectCompilerErrorCode Code,
-                                 std::string Detail = {});
+  TranslationObjectCompilerError(
+      TranslationObjectCompilerErrorCode Code, std::string Detail = {},
+      std::optional<uint64_t> BudgetObserved = std::nullopt,
+      std::optional<uint64_t> BudgetLimit = std::nullopt);
 
   TranslationObjectCompilerErrorCode code() const { return Code; }
   llvm::StringRef detail() const { return Detail; }
+  std::optional<uint64_t> budgetObserved() const { return BudgetObserved; }
+  std::optional<uint64_t> budgetLimit() const { return BudgetLimit; }
 
   void log(llvm::raw_ostream &OS) const override;
   std::error_code convertToErrorCode() const override;
@@ -108,6 +114,8 @@ public:
 private:
   TranslationObjectCompilerErrorCode Code;
   std::string Detail;
+  std::optional<uint64_t> BudgetObserved;
+  std::optional<uint64_t> BudgetLimit;
 };
 
 /// Why a semantic/LLVM convergence invocation stopped.  The module report
@@ -191,13 +199,17 @@ public:
   static constexpr uint32_t CacheIdentityVersion = 1;
   /// Manual schema for the exact IR optimization and object-emission recipe.
   /// Bump whenever pass ordering, sealing, or target-machine policy changes.
-  static constexpr uint32_t PipelineSchemaVersion = 2;
+  static constexpr uint32_t PipelineSchemaVersion = 3;
 
   llvm::ArrayRef<uint8_t> bytes() const { return Bytes; }
   const ResolvedHostTarget &hostTarget() const { return HostTarget; }
   const TranslationSemanticReportV1 &semanticReport() const {
     return SemanticReport;
   }
+  /// True only after the target-aware LLVM default pipeline completed.  This
+  /// is execution telemetry, not a claim that LLVM or semantic passes rewrote
+  /// the module.
+  bool llvmOptimizationPipelineRan() const { return LLVMPipelineRan; }
   llvm::ArrayRef<TranslationObjectSymbolV1> blockSymbols() const {
     return BlockSymbols;
   }
@@ -225,17 +237,22 @@ private:
   friend llvm::Expected<TranslationObjectArtifactV1>
   compileTranslationObjectV1(const llvm::Module &, const TranslationOptions &,
                              const TranslationObjectPolicyV1 &);
+  friend llvm::Expected<TranslationObjectArtifactV1>
+  compileTranslationObjectWithTargetV1(const llvm::Module &,
+                                       const TranslationOptions &,
+                                       const TranslationObjectPolicyV1 &,
+                                       TranslationTargetMachineV1 &);
 
   TranslationObjectArtifactV1(
       std::vector<uint8_t> Bytes, ResolvedHostTarget HostTarget,
-      TranslationSemanticReportV1 SemanticReport,
+      TranslationSemanticReportV1 SemanticReport, bool LLVMPipelineRan,
       std::vector<TranslationObjectSymbolV1> BlockSymbols,
       std::vector<TranslationObjectSymbolV1> RuntimeSymbols,
       std::string RuntimeRegistryIdentity, std::string RequestCacheKey,
       std::string ArtifactCacheKey)
       : Bytes(std::move(Bytes)), HostTarget(std::move(HostTarget)),
         SemanticReport(std::move(SemanticReport)),
-        BlockSymbols(std::move(BlockSymbols)),
+        LLVMPipelineRan(LLVMPipelineRan), BlockSymbols(std::move(BlockSymbols)),
         RuntimeSymbols(std::move(RuntimeSymbols)),
         RuntimeRegistryIdentity(std::move(RuntimeRegistryIdentity)),
         RequestCacheKey(std::move(RequestCacheKey)),
@@ -244,6 +261,7 @@ private:
   std::vector<uint8_t> Bytes;
   ResolvedHostTarget HostTarget;
   TranslationSemanticReportV1 SemanticReport;
+  bool LLVMPipelineRan = false;
   std::vector<TranslationObjectSymbolV1> BlockSymbols;
   std::vector<TranslationObjectSymbolV1> RuntimeSymbols;
   std::string RuntimeRegistryIdentity;
@@ -259,6 +277,16 @@ llvm::Expected<TranslationObjectArtifactV1>
 compileTranslationObjectV1(const llvm::Module &Module,
                            const TranslationOptions &Options,
                            const TranslationObjectPolicyV1 &Policy);
+
+/// Variant for a caller that already owns the exact target machine used to
+/// lower Module.  Target must have been created from Options.  Reusing this
+/// boundary prevents a lowerer and emitter from independently selecting target
+/// defaults or DataLayouts.
+llvm::Expected<TranslationObjectArtifactV1>
+compileTranslationObjectWithTargetV1(const llvm::Module &Module,
+                                     const TranslationOptions &Options,
+                                     const TranslationObjectPolicyV1 &Policy,
+                                     TranslationTargetMachineV1 &Target);
 
 } // namespace neverd::translate
 

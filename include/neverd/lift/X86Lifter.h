@@ -36,10 +36,19 @@ public:
   /// (TOP+i)&7, so TOP advances in lift order; the CFG builder reads it around
   /// each lift to later re-base ST references into control-flow order.
   int getFpuTop() const { return FPUTop; }
+  /// Reset every instruction-sequence state item before lifting an independent
+  /// function or translation block.  The historical name is retained for API
+  /// compatibility; this also clears get-PC and dividend idiom state because
+  /// neither may cross an independently cached unit.
   void resetFpuState() {
     FPUTop = 0;
     FpuReset = false;
     FuncRetPopBytes = 0;
+    LastRdxState = RdxState::Unknown;
+    LastRdxSize = 0;
+    GetPcPending = false;
+    GetPcArmedThisInsn = false;
+    GetPcValue = 0;
   }
   bool fpuDidReset() const { return FpuReset; }
 
@@ -100,8 +109,7 @@ public:
   NdVar operandRead(LiftState &S, const cs_x86_op &Op);
   static NdVar operandWrite(const cs_x86_op &Op);
 
-  void emitFlagsArith(LiftState &S, NdVar Result, NdVar A, NdVar B,
-                      bool IsSub);
+  void emitFlagsArith(LiftState &S, NdVar Result, NdVar A, NdVar B, bool IsSub);
   static void emitPF(LiftState &S, NdVar Result);
   static void emitZSPF(LiftState &S, NdVar Result);
   // AF (auxiliary carry) = carry/borrow out of bit 3 = bit 4 of (A ^ B ^

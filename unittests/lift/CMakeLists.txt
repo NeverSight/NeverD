@@ -113,6 +113,8 @@ add_neverd_unittest(NeverDLiftTests
   eh/ExceptionCFGSeedTests.cpp
   eh/ItaniumEHEmitterTests.cpp
   eh/ItaniumEHStructurerTests.cpp
+  eh/MachOARM32TransactionTests.cpp
+  eh/MachOCompactUnwindPatchTests.cpp
   eh/MachOExceptionPatchTests.cpp
   core/HighSymSimplifyTests.cpp
   eh/RegistrationTryLevelTests.cpp
@@ -187,8 +189,10 @@ target_include_directories(NeverDLLVMCVoidAnalysisTests PRIVATE
 # and the two format installers are the public fail-closed boundary under test.
 add_neverd_unittest(NeverDNativeExceptionRewriteContractTests
   eh/DwarfEHFrameTests.cpp
+  eh/MachOCompactUnwindPatchTests.cpp
   eh/MachOExceptionPatchTests.cpp
   eh/NativeExceptionRewriteContractTests.cpp
+  eh/RewriteFunctionProvenanceTests.cpp
 
   LINK_COMPONENTS
   BackendLLVM
@@ -262,6 +266,7 @@ add_neverd_unittest(NeverDLanguageEHTests
   language/GoRuntimePclnTabTests.cpp
   language/GoRuntimeStackMapTests.cpp
   language/CompactUnwindTests.cpp
+  language/CompactUnwindARM32Tests.cpp
   language/CompactUnwindARM64Tests.cpp
   language/CompactUnwindSectionTests.cpp
   language/ARMEHABITests.cpp

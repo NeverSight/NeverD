@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import sys
 import types
 import unittest
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from unittest import mock
 
@@ -423,9 +425,7 @@ class SimplifyExpressionTests(unittest.TestCase):
         from neverd_plugin.abi import NeverDSimplifyOptions
 
         host = _RecordingSimplifyHost(ok=1, input=b"x", output=b"x")
-        simplify_expression(
-            "x", host=host, width=256, deep=False, exhaustive=True
-        )
+        simplify_expression("x", host=host, width=256, deep=False, exhaustive=True)
 
         options = host.options
         self.assertEqual(options.struct_size, ctypes.sizeof(NeverDSimplifyOptions))
@@ -752,6 +752,411 @@ class OptimizeLLVMIRTests(unittest.TestCase):
         with self.assertRaises(NeverDError):
             optimize_llvm_ir("define void @f() { ret void }", host=refused)
         self.assertEqual(refused.disposals, 1)
+
+
+class _RecordingTranslationHost:
+    def __init__(self, status: int = 0, **fields: object) -> None:
+        self.status = status
+        self.fields = fields
+        self.calls = 0
+        self.disposals = 0
+        self.request: object | None = None
+        self.result_struct_size = 0
+        self.guest_bytes = b""
+        self.object_storage: object | None = None
+
+    def function(self, name: str) -> Callable[..., object]:
+        def invoke(*arguments: object) -> object:
+            return self.call(name, *arguments)
+
+        return invoke
+
+    def call(self, name: str, *arguments: object) -> object:
+        if name == "neverd_translate_x86_64_block_to_aarch64_object_v1":
+            self.calls += 1
+            request = arguments[0]._obj
+            self.request = request
+            self.guest_bytes = bytes(
+                ctypes.string_at(request.guest_bytes, request.guest_bytes_size)
+            )
+            result = arguments[1]._obj
+            self.result_struct_size = result.struct_size
+            defaults: dict[str, object] = {
+                "ok": 1,
+                "error_code": 0,
+                "object_format": request.object_format,
+                "guest_entry_pc": request.entry_pc,
+                "guest_instruction_count": 3,
+                "guest_byte_count": request.guest_bytes_size,
+                "executable_generation": request.executable_generation,
+                "block_ir_symbol": b"neverd_block_ir_1000",
+                "block_object_symbol": b"neverd_block_object_1000",
+                "host_triple": b"aarch64-unknown-linux-gnu",
+                "host_cpu": b"generic",
+                "host_target_identity": b"target-key",
+                "runtime_registry_identity": b"runtime-key",
+                "request_cache_key": b"request-key",
+                "artifact_cache_key": b"artifact-key",
+                "translation_cache_identity": b"translation-key",
+                "semantic_changed": 1,
+                "semantic_rewrites": 2,
+                "semantic_search_work": 3,
+                "semantic_proof_queries": 5,
+                "semantic_proof_conflicts": 7,
+                "semantic_proof_propagations": 11,
+                "semantic_proof_watch_visits": 13,
+                "semantic_function_pass_invocations": 17,
+                "semantic_max_rounds": 19,
+                "semantic_stop": 1,
+                "semantic_proof": 1,
+                "llvm_optimization_pipeline_ran": 1,
+                "object_cache_identity_version": 23,
+                "object_pipeline_schema_version": 29,
+            }
+            defaults.update(self.fields)
+            object_bytes = defaults.pop("object_bytes", b"\x7fELFobject")
+            for key, value in defaults.items():
+                setattr(result, key, value)
+            if object_bytes is not None:
+                raw_object = bytes(object_bytes)
+                storage = (ctypes.c_ubyte * len(raw_object))(*raw_object)
+                self.object_storage = storage
+                result.object_bytes = ctypes.cast(
+                    storage, ctypes.POINTER(ctypes.c_ubyte)
+                )
+                result.object_size = len(raw_object)
+            return self.status
+        if name == "neverd_translate_object_result_dispose":
+            self.disposals += 1
+            result = arguments[0]._obj
+            if self.object_storage is not None:
+                for index in range(len(self.object_storage)):
+                    self.object_storage[index] = 0
+            result.object_bytes = None
+            for field in (
+                "error_message",
+                "block_ir_symbol",
+                "block_object_symbol",
+                "host_triple",
+                "host_cpu",
+                "host_target_identity",
+                "runtime_registry_identity",
+                "request_cache_key",
+                "artifact_cache_key",
+                "translation_cache_identity",
+            ):
+                setattr(result, field, None)
+            return None
+        raise AssertionError(f"unexpected call {name}")
+
+
+class _MissingTranslationFunctionsHost:
+    def __init__(self) -> None:
+        self.lookups: list[str] = []
+
+    def function(self, name: str) -> Callable[..., object]:
+        self.lookups.append(name)
+        raise RuntimeError(f"missing symbol: {name}")
+
+
+class TranslateX86_64ToAArch64ObjectTests(unittest.TestCase):
+    def test_missing_translate_symbol_is_not_masked_by_missing_disposer(self) -> None:
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        host = _MissingTranslationFunctionsHost()
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "neverd_translate_x86_64_block_to_aarch64_object_v1",
+        ):
+            translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=0,
+                object_format=TranslationObjectFormat.ELF,
+                host=host,
+            )
+
+        self.assertEqual(
+            host.lookups,
+            ["neverd_translate_x86_64_block_to_aarch64_object_v1"],
+        )
+
+    def test_copies_owned_result_and_reports_all_telemetry(self) -> None:
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import TranslationProofStatus
+        from neverd_plugin import TranslationSemanticStop
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+        from neverd_plugin.abi import NeverDTranslateObjectRequestV1
+        from neverd_plugin.abi import NeverDTranslateObjectResultV1
+
+        code = bytearray(b"\x48\x89\xd8\x48\x83\xe8\x02\xc2\x10\x00")
+        host = _RecordingTranslationHost()
+        translated = translate_x86_64_block_to_aarch64_object(
+            code,
+            entry_pc=0x1000,
+            executable_generation=41,
+            object_format=TranslationObjectFormat.ELF,
+            host=host,
+        )
+        code[:] = b"\x00" * len(code)
+
+        self.assertEqual(
+            host.request.struct_size,
+            ctypes.sizeof(NeverDTranslateObjectRequestV1),
+        )
+        self.assertEqual(host.request.reserved, 0)
+        self.assertEqual(
+            host.guest_bytes,
+            b"\x48\x89\xd8\x48\x83\xe8\x02\xc2\x10\x00",
+        )
+        self.assertEqual(translated.object_bytes, b"\x7fELFobject")
+        self.assertEqual(
+            host.result_struct_size,
+            ctypes.sizeof(NeverDTranslateObjectResultV1),
+        )
+        self.assertIs(translated.object_format, TranslationObjectFormat.ELF)
+        self.assertEqual(translated.guest_entry_pc, 0x1000)
+        self.assertEqual(translated.executable_generation, 41)
+        self.assertEqual(translated.block_ir_symbol, "neverd_block_ir_1000")
+        self.assertEqual(translated.host_triple, "aarch64-unknown-linux-gnu")
+        self.assertEqual(translated.semantic_rewrites, 2)
+        self.assertEqual(translated.semantic_proof_watch_visits, 13)
+        self.assertIs(translated.semantic_stop, TranslationSemanticStop.STABLE)
+        self.assertIs(translated.semantic_proof, TranslationProofStatus.EQUIVALENT)
+        self.assertTrue(translated.llvm_optimization_pipeline_ran)
+        self.assertEqual(translated.object_cache_identity_version, 23)
+        self.assertEqual(translated.object_pipeline_schema_version, 29)
+        self.assertEqual(host.disposals, 1)
+
+    def test_macho_is_the_only_other_published_container(self) -> None:
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        host = _RecordingTranslationHost(
+            object_bytes=b"\xcf\xfa\xed\xfeobject",
+            host_triple=b"aarch64-apple-macosx",
+        )
+        translated = translate_x86_64_block_to_aarch64_object(
+            memoryview(b"\xc3"),
+            entry_pc=0,
+            object_format=TranslationObjectFormat.MACHO,
+            host=host,
+        )
+
+        self.assertIs(translated.object_format, TranslationObjectFormat.MACHO)
+        self.assertEqual(translated.object_bytes, b"\xcf\xfa\xed\xfeobject")
+        self.assertEqual(translated.host_triple, "aarch64-apple-macosx")
+        self.assertEqual(host.disposals, 1)
+
+    def test_canonical_control_transfers_cross_the_public_boundary(self) -> None:
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        control_transfers = (
+            ("short", b"\xeb\xfe"),
+            ("near", b"\xe9\xfb\xff\xff\xff"),
+            ("short-je", b"\x74\xfe"),
+            ("near-jne", b"\x0f\x85\xfa\xff\xff\xff"),
+            ("short-jo", b"\x70\xfe"),
+            ("near-jnp", b"\x0f\x8b\xfa\xff\xff\xff"),
+            ("short-jbe", b"\x76\xfe"),
+            ("near-ja", b"\x0f\x87\xfa\xff\xff\xff"),
+            ("short-jl", b"\x7c\xfe"),
+            ("near-jge", b"\x0f\x8d\xfa\xff\xff\xff"),
+            ("short-jle", b"\x7e\xfe"),
+            ("near-jg", b"\x0f\x8f\xfa\xff\xff\xff"),
+        )
+        for encoding, guest_bytes in control_transfers:
+            with self.subTest(encoding=encoding):
+                host = _RecordingTranslationHost(
+                    guest_instruction_count=1,
+                    guest_byte_count=len(guest_bytes),
+                )
+                translated = translate_x86_64_block_to_aarch64_object(
+                    guest_bytes,
+                    entry_pc=0x401000,
+                    object_format=TranslationObjectFormat.ELF,
+                    host=host,
+                )
+
+                self.assertEqual(host.guest_bytes, guest_bytes)
+                self.assertEqual(translated.guest_instruction_count, 1)
+                self.assertEqual(translated.guest_byte_count, len(guest_bytes))
+                self.assertEqual(host.disposals, 1)
+
+    def test_success_with_wrong_guest_entry_fails_closed_and_disposes(self) -> None:
+        from neverd_plugin import TranslationError, TranslationErrorCode
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        host = _RecordingTranslationHost(guest_entry_pc=0x3000)
+        with self.assertRaises(TranslationError) as raised:
+            translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=0x2000,
+                object_format=TranslationObjectFormat.ELF,
+                host=host,
+            )
+
+        self.assertIs(raised.exception.code, TranslationErrorCode.INTERNAL_FAILURE)
+        self.assertIn("guest entry", raised.exception.detail)
+        self.assertEqual(host.disposals, 1)
+
+    def test_success_with_wrong_generation_fails_closed_and_disposes(self) -> None:
+        from neverd_plugin import TranslationError, TranslationErrorCode
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        host = _RecordingTranslationHost(executable_generation=42)
+        with self.assertRaises(TranslationError) as raised:
+            translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=0x2000,
+                executable_generation=41,
+                object_format=TranslationObjectFormat.ELF,
+                host=host,
+            )
+
+        self.assertIs(raised.exception.code, TranslationErrorCode.INTERNAL_FAILURE)
+        self.assertIn("executable generation", raised.exception.detail)
+        self.assertEqual(host.disposals, 1)
+
+    def test_native_failure_is_typed_and_always_disposed(self) -> None:
+        from neverd_plugin import TranslationError, TranslationErrorCode
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        host = _RecordingTranslationHost(
+            ok=0,
+            error_code=int(TranslationErrorCode.BLOCK_LOWERING_FAILED),
+            error_message=b"unsupported exact guest block",
+            object_bytes=None,
+        )
+        with self.assertRaises(TranslationError) as raised:
+            translate_x86_64_block_to_aarch64_object(
+                b"\x90\xc3",
+                entry_pc=0x2000,
+                object_format=TranslationObjectFormat.ELF,
+                host=host,
+            )
+
+        self.assertIs(raised.exception.code, TranslationErrorCode.BLOCK_LOWERING_FAILED)
+        self.assertEqual(raised.exception.detail, "unsupported exact guest block")
+        self.assertEqual(host.disposals, 1)
+
+    def test_trailing_bytes_are_a_typed_invalid_argument(self) -> None:
+        from neverd_plugin import TranslationError, TranslationErrorCode
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        host = _RecordingTranslationHost(
+            ok=0,
+            error_code=int(TranslationErrorCode.INVALID_ARGUMENT),
+            error_message=b"trailing bytes are not accepted",
+            object_bytes=None,
+        )
+        with self.assertRaises(TranslationError) as raised:
+            translate_x86_64_block_to_aarch64_object(
+                b"\xc3\x90",
+                entry_pc=0x2000,
+                object_format=TranslationObjectFormat.ELF,
+                host=host,
+            )
+
+        self.assertIs(raised.exception.code, TranslationErrorCode.INVALID_ARGUMENT)
+        self.assertIn("trailing bytes", raised.exception.detail)
+        self.assertEqual(host.disposals, 1)
+
+    def test_success_that_did_not_consume_the_complete_block_fails_closed(
+        self,
+    ) -> None:
+        from neverd_plugin import TranslationError, TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        host = _RecordingTranslationHost(guest_byte_count=1)
+        with self.assertRaisesRegex(TranslationError, "complete guest block"):
+            translate_x86_64_block_to_aarch64_object(
+                b"\xc3\x90",
+                entry_pc=0x2000,
+                object_format=TranslationObjectFormat.ELF,
+                host=host,
+            )
+        self.assertEqual(host.disposals, 1)
+
+    def test_malformed_success_and_abi_refusal_still_dispose(self) -> None:
+        from neverd_plugin import TranslationError, TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        malformed = _RecordingTranslationHost(object_bytes=None)
+        with self.assertRaisesRegex(TranslationError, "no relocatable object"):
+            translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=0,
+                object_format=TranslationObjectFormat.ELF,
+                host=malformed,
+            )
+        self.assertEqual(malformed.disposals, 1)
+
+        invalid_utf8 = _RecordingTranslationHost(host_cpu=b"\xff")
+        with self.assertRaisesRegex(TranslationError, "invalid UTF-8 in host CPU"):
+            translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=0,
+                object_format=TranslationObjectFormat.ELF,
+                host=invalid_utf8,
+            )
+        self.assertEqual(invalid_utf8.disposals, 1)
+
+        refused = _RecordingTranslationHost(status=1)
+        with self.assertRaisesRegex(TranslationError, "ABI request"):
+            translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=0,
+                object_format=TranslationObjectFormat.ELF,
+                host=refused,
+            )
+        self.assertEqual(refused.disposals, 1)
+
+    def test_rejects_invalid_python_inputs_before_calling_native(self) -> None:
+        from neverd_plugin import TranslationObjectFormat
+        from neverd_plugin import translate_x86_64_block_to_aarch64_object
+
+        host = _RecordingTranslationHost()
+        invalid_calls = (
+            lambda: translate_x86_64_block_to_aarch64_object(
+                b"", entry_pc=0, object_format=TranslationObjectFormat.ELF, host=host
+            ),
+            lambda: translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=-1,
+                object_format=TranslationObjectFormat.ELF,
+                host=host,
+            ),
+            lambda: translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=0,
+                object_format=TranslationObjectFormat.INVALID,
+                host=host,
+            ),
+            lambda: translate_x86_64_block_to_aarch64_object(
+                b"\xc3",
+                entry_pc=0,
+                object_format=1.0,  # type: ignore[arg-type]
+                host=host,
+            ),
+            lambda: translate_x86_64_block_to_aarch64_object(
+                b"\xc3\xc3",
+                entry_pc=(1 << 64) - 1,
+                object_format=TranslationObjectFormat.ELF,
+                host=host,
+            ),
+        )
+        for call in invalid_calls:
+            with self.subTest(call=call):
+                with self.assertRaises((TypeError, ValueError)):
+                    call()
+        self.assertEqual(host.calls, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

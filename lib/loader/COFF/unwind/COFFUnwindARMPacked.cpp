@@ -234,11 +234,14 @@ ARMUnwindDecode expandARM32PackedUnwind(uint32_t PackedWord) {
     return Result;
   }
 
-  const bool SavesVFP = RF.R();
-  const bool SavesLinkRegister = RF.L();
-  const bool Chained = RF.C();
-  const uint8_t Reg = RF.Reg();
-  const bool PrologueFolded = llvm::ARM::WinEH::PrologueFolding(RF);
+  // RuntimeFunction's convenience accessors assert the encoding's cross-field
+  // restrictions. Input binaries are untrusted, so validate those raw bits
+  // before calling RF.C(), RF.Ret(), or SavedRegisterMask().
+  const bool SavesVFP = (PackedWord & 0x00080000u) != 0;
+  const bool SavesLinkRegister = (PackedWord & 0x00100000u) != 0;
+  const bool Chained = (PackedWord & 0x00200000u) != 0;
+  const uint8_t Reg = static_cast<uint8_t>((PackedWord >> 16) & 0x7u);
+  const uint8_t Return = static_cast<uint8_t>((PackedWord >> 13) & 0x3u);
 
   // The encoding forbids two combinations outright, and a record that uses one
   // was not produced by a conforming toolchain -- reading it as if it were
@@ -248,12 +251,20 @@ ARMUnwindDecode expandARM32PackedUnwind(uint32_t PackedWord) {
                     "chained ARM frame does not save the link register");
     return Result;
   }
-  if (RF.Ret() == llvm::ARM::WinEH::ReturnType::RT_POP && !SavesLinkRegister) {
+  if (Chained && Reg >= 7 && !SavesVFP) {
+    Builder.degrade(ExceptionParseStatus::Malformed,
+                    "chained ARM frame explicitly saves r11");
+    return Result;
+  }
+  if (Return == static_cast<uint8_t>(llvm::ARM::WinEH::ReturnType::RT_POP) &&
+      !SavesLinkRegister) {
     Builder.degrade(ExceptionParseStatus::Malformed,
                     "ARM frame returns by popping pc without saving the link "
                     "register");
     return Result;
   }
+
+  const bool PrologueFolded = llvm::ARM::WinEH::PrologueFolding(RF);
 
   auto addOp = [&](UnwindOperationKind Kind,
                    uint8_t InstructionSize) -> UnwindOperation & {

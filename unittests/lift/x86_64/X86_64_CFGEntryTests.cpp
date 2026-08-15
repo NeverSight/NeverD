@@ -7,6 +7,7 @@
 #include "NeverDLiftFixture.h"
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
@@ -326,6 +327,13 @@ TEST(MedLLVMEmitterAudit, CountsUnhandledValueIntrinsic) {
   auto Module = Emitter.emit({Func}, Context, "backend-audit", Arch::X64);
   ASSERT_NE(Module, nullptr);
   EXPECT_EQ(Emitter.unhandledValueIntrinsicCount(), 1u);
+  llvm::Function *Emitted = Module->getFunction(Func.Name);
+  ASSERT_NE(Emitted, nullptr);
+  auto OriginalVA = rewrite_source::getOriginalVA(*Emitted);
+  ASSERT_TRUE(static_cast<bool>(OriginalVA))
+      << llvm::toString(OriginalVA.takeError());
+  ASSERT_TRUE(OriginalVA->has_value());
+  EXPECT_EQ(**OriginalVA, Func.Entry);
 }
 
 TEST_F(X86_64_CFGEntry, TrueEntryIsBlockZeroAndBackwardEdgeSurvives) {

@@ -211,32 +211,76 @@ validateExceptionRewriteContracts(const llvm::Module &Module) {
 llvm::Expected<std::vector<uint64_t>>
 resolveRequiredFunctionAddresses(const Requirements &Requirements,
                                  const CompiledImage &Compiled) {
+  auto Owners = resolveRequiredFunctionOwners(Requirements, Compiled);
+  if (!Owners)
+    return Owners.takeError();
   std::vector<uint64_t> Addresses;
-  Addresses.reserve(Requirements.Functions.size());
-  for (const Requirements::Function &Function : Requirements.Functions) {
-    std::set<std::string> Candidates{Function.Name, "_" + Function.Name};
-    if (!Function.Name.empty() && Function.Name.front() == '_')
-      Candidates.insert(Function.Name.substr(1));
-
-    std::optional<uint64_t> Address;
-    for (const std::string &Candidate : Candidates) {
-      auto It = Compiled.SymbolAddrs.find(Candidate);
-      if (It == Compiled.SymbolAddrs.end() || It->second == 0)
-        continue;
-      if (Address && *Address != It->second)
-        return llvm::make_error<ExceptionRewriteContractError>(
-            ContractErrorReason::AmbiguousCompiledFunction, Function.Name);
-      Address = It->second;
-    }
-    if (!Address)
-      return llvm::make_error<ExceptionRewriteContractError>(
-          ContractErrorReason::MissingCompiledFunction, Function.Name);
-    Addresses.push_back(*Address);
-  }
+  Addresses.reserve(Owners->size());
+  for (const ResolvedFunctionOwner &Owner : *Owners)
+    Addresses.push_back(Owner.OwnerVA);
   std::sort(Addresses.begin(), Addresses.end());
   Addresses.erase(std::unique(Addresses.begin(), Addresses.end()),
                   Addresses.end());
   return Addresses;
+}
+
+llvm::Expected<std::vector<ResolvedFunctionOwner>>
+resolveRequiredFunctionOwners(const Requirements &Requirements,
+                              const CompiledImage &Compiled) {
+  if (!Compiled.FunctionRangesValid ||
+      !llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
+          Compiled.SourceFunctionOwners))
+    return llvm::make_error<ExceptionRewriteContractError>(
+        ContractErrorReason::MissingCompiledFunction, std::string{},
+        "compiled source-owner provenance is invalid");
+
+  std::vector<ResolvedFunctionOwner> Owners;
+  Owners.reserve(Requirements.Functions.size());
+  for (const Requirements::Function &Function : Requirements.Functions) {
+    const llvm::mc_rewrite::RewriteSourceFunctionOwner *Match = nullptr;
+    for (const llvm::mc_rewrite::RewriteSourceFunctionOwner &Candidate :
+         Compiled.SourceFunctionOwners) {
+      if (Candidate.SourceFunction != Function.Name)
+        continue;
+      if (Match)
+        return llvm::make_error<ExceptionRewriteContractError>(
+            ContractErrorReason::AmbiguousCompiledFunction, Function.Name);
+      Match = &Candidate;
+    }
+    if (!Match)
+      return llvm::make_error<ExceptionRewriteContractError>(
+          ContractErrorReason::MissingCompiledFunction, Function.Name);
+
+    const auto OwnerAddress =
+        Compiled.FunctionOwnerAddrs.find(Match->OwnerSymbol);
+    if (OwnerAddress == Compiled.FunctionOwnerAddrs.end() ||
+        OwnerAddress->second != Match->OwnerVA)
+      return llvm::make_error<ExceptionRewriteContractError>(
+          ContractErrorReason::MissingCompiledFunction, Function.Name,
+          "owner map does not match compiler provenance");
+
+    const CompiledSection *OwningCode = nullptr;
+    for (const CompiledSection &Section : Compiled.Sections) {
+      if (!Section.IsAllocated ||
+          Section.Kind != llvm::mc_rewrite::RewriteSectionKind::Code ||
+          Match->OwnerVA < Section.VA ||
+          Match->OwnerVA - Section.VA >= Section.Size)
+        continue;
+      if (OwningCode)
+        return llvm::make_error<ExceptionRewriteContractError>(
+            ContractErrorReason::AmbiguousCompiledFunction, Function.Name,
+            "owner belongs to overlapping code sections");
+      OwningCode = &Section;
+    }
+    if (!OwningCode)
+      return llvm::make_error<ExceptionRewriteContractError>(
+          ContractErrorReason::MissingCompiledFunction, Function.Name,
+          "owner is not inside allocated generated code");
+
+    Owners.push_back(
+        {Function.Name, Match->OwnerSymbol, Match->OwnerVA});
+  }
+  return Owners;
 }
 
 } // namespace neverd::exception_rewrite

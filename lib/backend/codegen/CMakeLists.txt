@@ -17,6 +17,7 @@ add_neverd_component_library(NeverDCodeGen
   ELF/ELFInplace.cpp
   ELF/ELFPatch.cpp
   ELF/ELFReloc.cpp
+  MachO/MachOCompactUnwindPatch.cpp
   MachO/MachOExceptionPatch.cpp
   MachO/MachOInplace.cpp
   MachO/MachOPatch.cpp

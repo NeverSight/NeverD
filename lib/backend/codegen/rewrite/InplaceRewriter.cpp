@@ -265,6 +265,16 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
 
     Codegen CG;
     auto RwResult = CG.compileForRewrite(*ClonedMod, TargetArch, RwOpts, Fmt);
+    if (!RwResult.ImageValid) {
+      llvm::WithColor::error()
+          << "inplace: rewrite image layout is invalid\n";
+      return PatchResult{};
+    }
+    if (!RwResult.FunctionRangesValid) {
+      llvm::WithColor::error()
+          << "inplace: rewrite image provenance is invalid\n";
+      return PatchResult{};
+    }
     if (RwResult.Sections.empty())
       continue;
 

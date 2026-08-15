@@ -2,15 +2,17 @@
 
 #include "neverd/translate/TranslationObjectCompiler.h"
 
+#include "TranslationCacheIdentity.h"
+
 #include "neverd/translate/RuntimeABI.h"
 #include "neverd/translate/RuntimeHelpers.h"
 #include "neverd/translate/RuntimeSymbolRegistry.h"
 #include "neverd/translate/TranslationArtifactVerifier.h"
+#include "neverd/translate/TranslationTargetMachine.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
@@ -21,30 +23,23 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/StructuralHash.h"
-#include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/SHA256.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
-#include <array>
-#include <bit>
 #include <cmath>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -55,9 +50,23 @@ namespace neverd::translate {
 
 char TranslationObjectCompilerError::ID = 0;
 
+namespace detail {
+
+class TranslationObjectCompilerAccess final {
+public:
+  static llvm::TargetMachine &
+  targetMachine(TranslationTargetMachineV1 &Target) {
+    return Target.targetMachine();
+  }
+};
+
+} // namespace detail
+
 TranslationObjectCompilerError::TranslationObjectCompilerError(
-    TranslationObjectCompilerErrorCode Code, std::string Detail)
-    : Code(Code), Detail(std::move(Detail)) {}
+    TranslationObjectCompilerErrorCode Code, std::string Detail,
+    std::optional<uint64_t> BudgetObserved, std::optional<uint64_t> BudgetLimit)
+    : Code(Code), Detail(std::move(Detail)), BudgetObserved(BudgetObserved),
+      BudgetLimit(BudgetLimit) {}
 
 namespace {
 
@@ -102,9 +111,53 @@ llvm::Error failure(TranslationObjectCompilerErrorCode Code,
   return llvm::make_error<TranslationObjectCompilerError>(Code, Detail.str());
 }
 
+llvm::Error budgetFailure(TranslationObjectCompilerErrorCode Code,
+                          uint64_t Observed, uint64_t Limit,
+                          llvm::StringRef Detail) {
+  return llvm::make_error<TranslationObjectCompilerError>(Code, Detail.str(),
+                                                          Observed, Limit);
+}
+
 llvm::Error failure(TranslationObjectCompilerErrorCode Code,
                     llvm::Error Cause) {
   return failure(Code, llvm::toString(std::move(Cause)));
+}
+
+TranslationObjectCompilerErrorCode
+compilerTargetErrorCode(TranslationTargetMachineErrorCode Code) {
+  switch (Code) {
+  case TranslationTargetMachineErrorCode::HostTargetResolutionFailed:
+    return TranslationObjectCompilerErrorCode::HostTargetResolutionFailed;
+  case TranslationTargetMachineErrorCode::UnsupportedHostArchitecture:
+    return TranslationObjectCompilerErrorCode::UnsupportedHostArchitecture;
+  case TranslationTargetMachineErrorCode::TargetLookupFailed:
+    return TranslationObjectCompilerErrorCode::TargetLookupFailed;
+  case TranslationTargetMachineErrorCode::TargetCPUOrFeatureRejected:
+    return TranslationObjectCompilerErrorCode::TargetCPUOrFeatureRejected;
+  case TranslationTargetMachineErrorCode::TargetMachineCreationFailed:
+    return TranslationObjectCompilerErrorCode::TargetMachineCreationFailed;
+  }
+  return TranslationObjectCompilerErrorCode::TargetMachineCreationFailed;
+}
+
+llvm::Expected<TranslationTargetMachineV1>
+createCompilerTarget(const TranslationOptions &Options) {
+  llvm::Expected<TranslationTargetMachineV1> Target =
+      createTranslationTargetMachineV1(Options);
+  if (Target)
+    return std::move(*Target);
+
+  TranslationObjectCompilerErrorCode Code =
+      TranslationObjectCompilerErrorCode::TargetMachineCreationFailed;
+  std::string Detail;
+  llvm::Error Unhandled = llvm::handleErrors(
+      Target.takeError(), [&](const TranslationTargetMachineError &Error) {
+        Code = compilerTargetErrorCode(Error.code());
+        Detail = Error.detail().str();
+      });
+  if (Unhandled)
+    Detail = llvm::toString(std::move(Unhandled));
+  return failure(Code, Detail);
 }
 
 uint64_t asStableSize(size_t Value) {
@@ -297,126 +350,6 @@ llvm::OptimizationLevel llvmOptimizationLevel(LLVMOptimizationLevel Level) {
   return llvm::OptimizationLevel::O0;
 }
 
-llvm::CodeGenOptLevel codeGenerationLevel(const TranslationOptions &Options) {
-  if (Options.Optimization !=
-      TranslationOptimizationPolicy::ProvenSemanticAndLLVM)
-    return llvm::CodeGenOptLevel::None;
-  switch (Options.LLVMLevel) {
-  case LLVMOptimizationLevel::O0:
-    return llvm::CodeGenOptLevel::None;
-  case LLVMOptimizationLevel::O1:
-    return llvm::CodeGenOptLevel::Less;
-  case LLVMOptimizationLevel::O2:
-    return llvm::CodeGenOptLevel::Default;
-  case LLVMOptimizationLevel::O3:
-    return llvm::CodeGenOptLevel::Aggressive;
-  }
-  return llvm::CodeGenOptLevel::None;
-}
-
-void registerTranslationTargets() {
-  static std::once_flag Once;
-  std::call_once(Once, [] {
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmPrinters();
-  });
-}
-
-bool isSupportedHostArchitecture(GuestArchitecture Architecture) {
-  switch (Architecture) {
-  case GuestArchitecture::X86_32:
-  case GuestArchitecture::X86_64:
-  case GuestArchitecture::ARM32:
-  case GuestArchitecture::AArch64:
-    return true;
-  }
-  return false;
-}
-
-bool hasTargetFeature(const llvm::MCSubtargetInfo &Subtarget,
-                      llvm::StringRef Name) {
-  return llvm::any_of(Subtarget.getAllProcessorFeatures(),
-                      [&](const llvm::SubtargetFeatureKV &Feature) {
-                        return Name == Feature.Key;
-                      });
-}
-
-struct CompilerTarget {
-  ResolvedHostTarget Resolved;
-  std::unique_ptr<llvm::TargetMachine> Machine;
-};
-
-llvm::Expected<CompilerTarget>
-createCompilerTarget(const TranslationOptions &Options) {
-  llvm::Expected<ResolvedHostTarget> Resolved = resolveHostTarget(Options);
-  if (!Resolved)
-    return failure(
-        TranslationObjectCompilerErrorCode::HostTargetResolutionFailed,
-        Resolved.takeError());
-  if (!isSupportedHostArchitecture(Resolved->architecture()))
-    return failure(
-        TranslationObjectCompilerErrorCode::UnsupportedHostArchitecture,
-        Resolved->triple());
-
-  registerTranslationTargets();
-  const llvm::Triple Triple(Resolved->triple());
-  std::string LookupError;
-  const llvm::Target *Target =
-      llvm::TargetRegistry::lookupTarget(Triple, LookupError);
-  if (!Target)
-    return failure(TranslationObjectCompilerErrorCode::TargetLookupFailed,
-                   LookupError);
-
-  // Probe without caller features first.  This lets the compiler reject an
-  // unknown name rather than handing it to LLVM's fatal feature parser or
-  // permitting a backend to ignore it.
-  std::unique_ptr<llvm::MCSubtargetInfo> Probe(
-      Target->createMCSubtargetInfo(Triple, /*CPU=*/"", /*Features=*/""));
-  if (!Probe)
-    return failure(
-        TranslationObjectCompilerErrorCode::TargetCPUOrFeatureRejected,
-        "target has no subtarget-information provider");
-  if (!Resolved->cpu().empty() && !Probe->isCPUStringValid(Resolved->cpu()))
-    return failure(
-        TranslationObjectCompilerErrorCode::TargetCPUOrFeatureRejected,
-        (llvm::Twine("unknown CPU '") + Resolved->cpu() + "'").str());
-  for (const std::string &Feature : Resolved->features())
-    if (!hasTargetFeature(*Probe, llvm::StringRef(Feature).drop_front()))
-      return failure(
-          TranslationObjectCompilerErrorCode::TargetCPUOrFeatureRejected,
-          "unknown target feature '" + Feature + "'");
-
-  const std::string Features = llvm::join(Resolved->features(), ",");
-  llvm::TargetOptions TargetOptions;
-  // In TargetOptions, None means "use the target default".  ARM ELF's
-  // default is EHABI and emits a .ARM.exidx cantunwind record even for this
-  // boundary's nounwind functions.  Selecting DwarfCFI while retaining no
-  // uwtable attributes makes every supported backend emit no unwind metadata.
-  TargetOptions.ExceptionModel = llvm::ExceptionHandling::DwarfCFI;
-  TargetOptions.EnableFastISel = false;
-  TargetOptions.EnableGlobalISel = false;
-  TargetOptions.GuaranteedTailCallOpt = false;
-  TargetOptions.UseInitArray = false;
-  TargetOptions.FunctionSections = false;
-  TargetOptions.DataSections = false;
-  TargetOptions.EmitAddrsig = false;
-  TargetOptions.EmitCallSiteInfo = false;
-  TargetOptions.EnableMachineOutliner = false;
-  TargetOptions.EnableMachineFunctionSplitter = false;
-
-  std::unique_ptr<llvm::TargetMachine> Machine(Target->createTargetMachine(
-      Triple, Resolved->cpu(), Features, TargetOptions, llvm::Reloc::Static,
-      llvm::CodeModel::Small, codeGenerationLevel(Options),
-      Options.Mode == TranslationMode::JIT));
-  if (!Machine)
-    return failure(
-        TranslationObjectCompilerErrorCode::TargetMachineCreationFailed,
-        Resolved->triple());
-
-  return CompilerTarget{std::move(*Resolved), std::move(Machine)};
-}
-
 struct CanonicalPolicy {
   uint64_t StateSize = 0;
   std::vector<TranslationIRMemorySlot> StateSlots;
@@ -499,126 +432,7 @@ std::vector<uint8_t> serializeBitcode(const llvm::Module &Module) {
   return std::vector<uint8_t>(Storage.begin(), Storage.end());
 }
 
-class StableHashWriter {
-public:
-  void addByte(uint8_t Value) {
-    Hash.update(llvm::ArrayRef<uint8_t>(&Value, 1));
-  }
-
-  void addBool(bool Value) { addByte(Value ? 1 : 0); }
-
-  void addU32(uint32_t Value) {
-    uint8_t Bytes[4];
-    for (unsigned Index = 0; Index != 4; ++Index)
-      Bytes[Index] = static_cast<uint8_t>(Value >> (Index * 8));
-    Hash.update(Bytes);
-  }
-
-  void addU64(uint64_t Value) {
-    uint8_t Bytes[8];
-    for (unsigned Index = 0; Index != 8; ++Index)
-      Bytes[Index] = static_cast<uint8_t>(Value >> (Index * 8));
-    Hash.update(Bytes);
-  }
-
-  void addDouble(double Value) { addU64(std::bit_cast<uint64_t>(Value)); }
-
-  void addString(llvm::StringRef Value) {
-    addU64(Value.size());
-    Hash.update(Value);
-  }
-
-  void addBytes(llvm::ArrayRef<uint8_t> Value) {
-    addU64(Value.size());
-    Hash.update(Value);
-  }
-
-  std::string finish(llvm::StringRef Prefix) {
-    const std::array<uint8_t, 32> Digest = Hash.final();
-    return (Prefix + llvm::toHex(Digest, /*LowerCase=*/true)).str();
-  }
-
-private:
-  llvm::SHA256 Hash;
-};
-
-void hashTranslationOptions(StableHashWriter &Hash,
-                            const TranslationOptions &Options,
-                            const ResolvedHostTarget &Target) {
-  Hash.addByte(static_cast<uint8_t>(Options.Guest));
-  Hash.addByte(static_cast<uint8_t>(Options.Mode));
-  Hash.addByte(static_cast<uint8_t>(Options.UnsupportedInstructions));
-  Hash.addByte(static_cast<uint8_t>(Options.Optimization));
-  Hash.addByte(static_cast<uint8_t>(Options.LLVMLevel));
-  Hash.addByte(static_cast<uint8_t>(Options.BlockCache));
-  Hash.addByte(static_cast<uint8_t>(Options.CodeInvalidation));
-  Hash.addByte(static_cast<uint8_t>(Options.DeterministicReplay));
-  Hash.addBool(Options.VerifyGeneratedIR);
-  Hash.addBool(Options.PreserveExceptionState);
-  Hash.addU32(static_cast<uint32_t>(Options.RequiredCapabilities));
-  Hash.addU64(Options.InstructionBudget);
-  Hash.addU64(Options.BlockBudget);
-  Hash.addU64(Options.GeneratedCodeByteBudget);
-  Hash.addString(Target.cacheKey());
-}
-
-void hashSemanticPolicy(StableHashWriter &Hash,
-                        const TranslationSemanticPolicyV1 &Policy) {
-  const SymSimplifyOptions &Options = Policy.Simplify;
-  Hash.addU64(asStableSize(Options.MinMeasuredNodes));
-  Hash.addU64(asStableSize(Options.MinInstructionsSaved));
-  Hash.addU32(Options.MBA.MaxAtoms);
-  Hash.addU32(Options.MBA.MaxSynthesisAtoms);
-  Hash.addU32(Options.MBA.MaxOptimalSynthesisAtoms);
-  Hash.addU32(Options.MBA.VerifySamples);
-  Hash.addBool(Options.MBA.AllowGrowth);
-  Hash.addU64(asStableSize(Options.MBA.MaxWork));
-  Hash.addU64(asStableSize(Options.MBA.MaxTableBytes));
-  Hash.addU64(asStableSize(Options.Synthesis.MaxCost));
-  Hash.addU64(asStableSize(Options.Synthesis.MaxSamples));
-  Hash.addU32(Options.Synthesis.VerifySamples);
-  Hash.addBool(Options.Synthesis.UseStochasticFallback);
-  Hash.addU64(asStableSize(Options.Synthesis.MaxWork));
-  Hash.addU32(Options.Synthesis.MaxLeaves);
-  Hash.addU32(Options.Synthesis.MaxConstants);
-  Hash.addU32(Options.Synthesis.StochasticSlots);
-  Hash.addU32(Options.Synthesis.StochasticRestarts);
-  Hash.addU64(asStableSize(Options.Synthesis.StochasticIterations));
-  Hash.addBool(Options.Synthesis.AllowVariableShifts);
-  Hash.addBool(Options.Synthesis.AllowGrowth);
-  Hash.addU64(Options.Synthesis.Seed);
-  Hash.addDouble(Options.Solver.Sat.VarDecay);
-  Hash.addDouble(Options.Solver.Sat.ClauseDecay);
-  Hash.addU64(Options.Solver.Sat.RestartInterval);
-  Hash.addDouble(Options.Solver.Sat.LearnedFraction);
-  Hash.addDouble(Options.Solver.Sat.LearnedGrowth);
-  Hash.addU64(Options.Solver.Sat.MaxConflicts);
-  Hash.addU64(Options.Solver.Sat.MaxPropagations);
-  Hash.addU64(Options.Solver.Sat.MaxWatchVisits);
-  Hash.addBool(Options.Solver.Sat.MinimizeLearned);
-  Hash.addBool(Options.Solver.Sat.PhaseSaving);
-  Hash.addBool(Options.Solver.Sat.DefaultPhase);
-  Hash.addU32(Options.Solver.Blast.MaxWidth);
-  Hash.addU64(asStableSize(Options.Solver.Blast.MaxGates));
-  Hash.addBool(Options.Solver.BuildModel);
-  Hash.addBool(Options.EnableSynthesis);
-  Hash.addByte(static_cast<uint8_t>(Options.Provider));
-  Hash.addU32(Policy.MaxRounds);
-}
-
-void hashMemorySlots(StableHashWriter &Hash,
-                     llvm::ArrayRef<TranslationIRMemorySlot> Slots) {
-  Hash.addU64(Slots.size());
-  for (const TranslationIRMemorySlot &Slot : Slots) {
-    Hash.addByte(static_cast<uint8_t>(Slot.Region));
-    Hash.addU64(Slot.Offset);
-    Hash.addU64(Slot.Size);
-    Hash.addByte(static_cast<uint8_t>(Slot.Access));
-    Hash.addU32(Slot.Alignment);
-  }
-}
-
-void hashSymbolNames(StableHashWriter &Hash,
+void hashSymbolNames(detail::StableHashWriter &Hash,
                      llvm::ArrayRef<std::string> Names) {
   Hash.addU64(Names.size());
   for (const std::string &Name : Names)
@@ -640,7 +454,7 @@ std::string createRequestCacheKey(llvm::ArrayRef<uint8_t> InputBitcode,
                                   const ResolvedHostTarget &Target,
                                   const llvm::DataLayout &DataLayout,
                                   const RuntimeSymbolRegistryV1 &Registry) {
-  StableHashWriter Hash;
+  detail::StableHashWriter Hash;
   Hash.addString("neverd.translation-object-request.v1");
   Hash.addU32(TranslationObjectArtifactV1::PipelineSchemaVersion);
   Hash.addU32(LLVM_VERSION_MAJOR);
@@ -657,13 +471,13 @@ std::string createRequestCacheKey(llvm::ArrayRef<uint8_t> InputBitcode,
   Hash.addString("code-model-small");
   Hash.addString("exception-model-dwarf-cfi-no-uwtable");
   Hash.addString(DataLayout.getStringRepresentation());
-  hashTranslationOptions(Hash, Options, Target);
+  detail::hashTranslationOptions(Hash, Options, Target);
   Hash.addU64(Policy.StateSize);
-  hashMemorySlots(Hash, Policy.StateSlots);
+  detail::hashMemorySlots(Hash, Policy.StateSlots);
   hashSymbolNames(Hash, Policy.RequiredBlockSymbols);
   const std::vector<std::string> RuntimeNames = runtimeIRSymbolNames(Registry);
   hashSymbolNames(Hash, RuntimeNames);
-  hashSemanticPolicy(Hash, Policy.Semantic);
+  detail::hashSemanticPolicy(Hash, Policy.Semantic);
   Hash.addBytes(InputBitcode);
   return Hash.finish("neverd.translation-object-request.v1.sha256:");
 }
@@ -836,7 +650,15 @@ void runCombinedOptimization(llvm::Module &Module, llvm::TargetMachine &Machine,
 /// only weakens optimization facts; it does not rewrite values or control flow.
 void sealCodeGenerationIR(llvm::Module &Module) {
   for (llvm::Function &Function : Module) {
-    if (!Function.isIntrinsic()) {
+    if (Function.isIntrinsic()) {
+      // The default optimization pipeline may infer declaration attributes
+      // in addition to the intrinsic's semantic contract.  Rebuild the exact
+      // canonical attribute list so the final verifier and cache boundary do
+      // not depend on which inference passes happened to run.
+      Function.setAttributes(llvm::Intrinsic::getAttributes(
+          Module.getContext(), Function.getIntrinsicID(),
+          Function.getFunctionType()));
+    } else {
       Function.setAttributes(llvm::AttributeList());
       Function.addFnAttr(llvm::Attribute::NoUnwind);
       Function.setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::None);
@@ -848,6 +670,12 @@ void sealCodeGenerationIR(llvm::Module &Module) {
     if (Function.isDeclaration())
       continue;
     for (llvm::Instruction &Instruction : llvm::instructions(Function)) {
+      // LLVM's target-aware pipeline may infer nowrap/exact/inbounds/range
+      // facts that are valid only under LLVM poison semantics.  Translated
+      // guest execution is total at this boundary, so retain the optimized
+      // value graph while weakening every such annotation before the final
+      // NeverD verifier and object emission.
+      Instruction.dropPoisonGeneratingAnnotations();
       auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
       if (!Call)
         continue;
@@ -877,8 +705,9 @@ emitObject(llvm::Module &Module, llvm::TargetMachine &Machine,
 
   const uint64_t Size = asStableSize(Storage.size());
   if (GeneratedCodeByteBudget != 0 && Size > GeneratedCodeByteBudget)
-    return failure(
-        TranslationObjectCompilerErrorCode::GeneratedCodeBudgetExceeded,
+    return budgetFailure(
+        TranslationObjectCompilerErrorCode::GeneratedCodeBudgetExceeded, Size,
+        GeneratedCodeByteBudget,
         ("emitted " + llvm::Twine(Size) + " bytes for a " +
          llvm::Twine(GeneratedCodeByteBudget) + "-byte budget")
             .str());
@@ -891,7 +720,7 @@ createArtifactCacheKey(llvm::StringRef RequestCacheKey,
                        llvm::ArrayRef<uint8_t> Object,
                        llvm::ArrayRef<TranslationObjectSymbolV1> Blocks,
                        llvm::ArrayRef<TranslationObjectSymbolV1> Runtime) {
-  StableHashWriter Hash;
+  detail::StableHashWriter Hash;
   Hash.addString("neverd.translation-object-artifact.v1");
   Hash.addString(RequestCacheKey);
   Hash.addBytes(FinalIR);
@@ -950,9 +779,17 @@ TranslationSemanticPolicyV1 TranslationSemanticPolicyV1::unlimited() {
 }
 
 llvm::Expected<TranslationObjectArtifactV1>
-compileTranslationObjectV1(const llvm::Module &Module,
-                           const TranslationOptions &Options,
-                           const TranslationObjectPolicyV1 &Policy) {
+compileTranslationObjectWithTargetV1(const llvm::Module &Module,
+                                     const TranslationOptions &Options,
+                                     const TranslationObjectPolicyV1 &Policy,
+                                     TranslationTargetMachineV1 &Target) {
+  if (llvm::Error Error = validateTranslationOptions(Options))
+    return failure(TranslationObjectCompilerErrorCode::InvalidRequest,
+                   std::move(Error));
+  if (!Target.matchesCodeGenerationOptions(Options))
+    return failure(TranslationObjectCompilerErrorCode::InvalidRequest,
+                   "target machine was not created from this request");
+
   llvm::Expected<RuntimeSymbolRegistryV1> RuntimeRegistry =
       RuntimeSymbolRegistryV1::create();
   if (!RuntimeRegistry)
@@ -965,11 +802,8 @@ compileTranslationObjectV1(const llvm::Module &Module,
   if (!Canonical)
     return Canonical.takeError();
 
-  llvm::Expected<CompilerTarget> Target = createCompilerTarget(Options);
-  if (!Target)
-    return Target.takeError();
-  const llvm::Triple HostTriple(Target->Resolved.triple());
-  const llvm::DataLayout HostDataLayout = Target->Machine->createDataLayout();
+  const llvm::Triple HostTriple(Target.hostTarget().triple());
+  const llvm::DataLayout &HostDataLayout = Target.dataLayout();
 
   if (llvm::Error Error = verifyRuntimeTranslationIRV1(
           Module, HostTriple, HostDataLayout, Canonical->StateSize,
@@ -979,14 +813,15 @@ compileTranslationObjectV1(const llvm::Module &Module,
         std::move(Error));
 
   const std::vector<uint8_t> InputBitcode = serializeBitcode(Module);
-  const std::string RequestCacheKey =
-      createRequestCacheKey(InputBitcode, Options, *Canonical, Target->Resolved,
-                            HostDataLayout, *RuntimeRegistry);
+  const std::string RequestCacheKey = createRequestCacheKey(
+      InputBitcode, Options, *Canonical, Target.hostTarget(), HostDataLayout,
+      *RuntimeRegistry);
 
   // Every transform and every backend preparation step owns this clone.  The
   // const input remains byte-for-byte unchanged on all exits below.
   std::unique_ptr<llvm::Module> Working = llvm::CloneModule(Module);
   TranslationSemanticReportV1 SemanticReport;
+  bool LLVMPipelineRan = false;
   switch (Options.Optimization) {
   case TranslationOptimizationPolicy::None:
     break;
@@ -994,8 +829,11 @@ compileTranslationObjectV1(const llvm::Module &Module,
     runSemanticOnly(*Working, Canonical->Semantic, SemanticReport);
     break;
   case TranslationOptimizationPolicy::ProvenSemanticAndLLVM:
-    runCombinedOptimization(*Working, *Target->Machine, Options,
-                            Canonical->Semantic, SemanticReport);
+    runCombinedOptimization(
+        *Working,
+        detail::TranslationObjectCompilerAccess::targetMachine(Target), Options,
+        Canonical->Semantic, SemanticReport);
+    LLVMPipelineRan = true;
     break;
   }
 
@@ -1018,8 +856,9 @@ compileTranslationObjectV1(const llvm::Module &Module,
     return std::move(Error);
 
   const std::vector<uint8_t> FinalIR = serializeBitcode(*Working);
-  llvm::Expected<std::vector<uint8_t>> Object =
-      emitObject(*Working, *Target->Machine, Options.GeneratedCodeByteBudget);
+  llvm::Expected<std::vector<uint8_t>> Object = emitObject(
+      *Working, detail::TranslationObjectCompilerAccess::targetMachine(Target),
+      Options.GeneratedCodeByteBudget);
   if (!Object)
     return Object.takeError();
 
@@ -1040,9 +879,20 @@ compileTranslationObjectV1(const llvm::Module &Module,
   const std::string ArtifactCacheKey = createArtifactCacheKey(
       RequestCacheKey, FinalIR, *Object, *BlockSymbols, RuntimeSymbols);
   return TranslationObjectArtifactV1(
-      std::move(*Object), std::move(Target->Resolved), SemanticReport,
+      std::move(*Object), Target.hostTarget(), SemanticReport, LLVMPipelineRan,
       std::move(*BlockSymbols), std::move(RuntimeSymbols),
       RuntimeRegistry->identity().str(), RequestCacheKey, ArtifactCacheKey);
+}
+
+llvm::Expected<TranslationObjectArtifactV1>
+compileTranslationObjectV1(const llvm::Module &Module,
+                           const TranslationOptions &Options,
+                           const TranslationObjectPolicyV1 &Policy) {
+  llvm::Expected<TranslationTargetMachineV1> Target =
+      createCompilerTarget(Options);
+  if (!Target)
+    return Target.takeError();
+  return compileTranslationObjectWithTargetV1(Module, Options, Policy, *Target);
 }
 
 } // namespace neverd::translate

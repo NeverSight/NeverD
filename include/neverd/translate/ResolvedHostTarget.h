@@ -21,6 +21,8 @@
 
 namespace neverd::translate {
 
+class TranslationTargetMachineV1;
+
 /// Immutable, normalized host identity used by code generation and caches.
 ///
 /// requestedTarget() preserves the caller's request verbatim.  The remaining
@@ -36,6 +38,12 @@ public:
   llvm::StringRef cpu() const { return CPU; }
   llvm::ArrayRef<std::string> features() const { return Features; }
 
+  /// The exact layout produced by the target machine paired with this resolved
+  /// identity.  A target returned directly by resolve() is intentionally
+  /// unbound; only TranslationTargetMachineV1 may establish this contract.
+  bool hasCanonicalDataLayout() const { return !CanonicalDataLayout.empty(); }
+  llvm::StringRef canonicalDataLayout() const { return CanonicalDataLayout; }
+
   /// Returns a locale-independent, versioned text identity.  It identifies
   /// both the request kind and every resolved code-generation input.
   llvm::StringRef cacheKey() const { return CacheKey; }
@@ -44,6 +52,8 @@ public:
   resolve(const TranslationOptions &Options);
 
 private:
+  friend class TranslationTargetMachineV1;
+
   ResolvedHostTarget(HostTarget RequestedTarget, GuestArchitecture Architecture,
                      std::string Triple, std::string CPU,
                      std::vector<std::string> Features, std::string CacheKey)
@@ -51,12 +61,17 @@ private:
         Triple(std::move(Triple)), CPU(std::move(CPU)),
         Features(std::move(Features)), CacheKey(std::move(CacheKey)) {}
 
+  void bindCanonicalDataLayout(llvm::StringRef Layout) {
+    CanonicalDataLayout = Layout.str();
+  }
+
   HostTarget RequestedTarget;
   GuestArchitecture Architecture;
   std::string Triple;
   std::string CPU;
   std::vector<std::string> Features;
   std::string CacheKey;
+  std::string CanonicalDataLayout;
 };
 
 llvm::Expected<ResolvedHostTarget>

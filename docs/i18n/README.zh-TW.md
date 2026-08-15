@@ -188,7 +188,7 @@ gh workflow run neverd-release.yml \
 | `build/bin/neverd-bench` | 基準測試（JSON） |
 | `build/bin/neverd-sigmaker` | 從靜態庫產生 `.pat` |
 | `build/bin/libneverd.*` | 引擎共用函式庫 |
-| `build/bin/sdk/` | `NeverDCAPI.h`、`NeverDPlugin.h` |
+| `build/bin/sdk/` | C SDK 的 canonical include root；使用保留 `neverd/sdk/` 階層的 `<neverd/sdk/NeverDCAPI.h>` 或 `<neverd/sdk/NeverDPlugin.h>` |
 | `build/bin/signatures/` | 內建簽名庫 |
 
 **測試**

@@ -79,12 +79,15 @@ else()
     )
 endif()
 
-# ORC is deliberately opt-in for the differential JIT tests. Keep it out of
-# NEVERD_COMMON_LIBS so production components do not inherit a JIT dependency.
+# ORC is opt-in for differential JIT tests; JITLink is opt-in for the
+# translation graph verifier.  Keep both out of NEVERD_COMMON_LIBS so an
+# unrelated production component does not inherit either dependency.
 if(NEVERD_LLVM_PREBUILT)
     llvm_map_components_to_libnames(NEVERD_LLVM_JIT_LIBS orcjit)
+    llvm_map_components_to_libnames(NEVERD_LLVM_LINKGRAPH_LIBS jitlink)
 else()
     set(NEVERD_LLVM_JIT_LIBS LLVMOrcJIT)
+    set(NEVERD_LLVM_LINKGRAPH_LIBS LLVMJITLink)
 endif()
 
 # --- Capstone (our fork, built from submodule) ---

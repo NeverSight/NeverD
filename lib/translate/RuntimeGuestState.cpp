@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <numeric>
 #include <utility>
 
 namespace neverd::translate {
@@ -31,6 +32,15 @@ constexpr TranslationIRMemorySlot gprSlot(size_t Index) {
   return stateSlot(offsetof(RuntimeGuestStateX86_64V1, GPR) +
                        Index * sizeof(uint64_t),
                    sizeof(uint64_t), ReadWrite, alignof(uint64_t));
+}
+
+constexpr uint32_t stateFieldAlignment(uint64_t Offset) {
+  // TranslationIRMemorySlot records the address guarantee at the field, not
+  // the C++ field type's natural alignment.  The fixed ABI object's
+  // alignas(16) lets byte-sized flags at aligned offsets safely retain
+  // stronger optimizer-inferred accesses.
+  return static_cast<uint32_t>(
+      std::gcd<uint64_t>(alignof(RuntimeGuestStateX86_64V1), Offset));
 }
 
 constexpr TranslationIRMemorySlot X86_64MemorySlotsV1[] = {
@@ -55,19 +65,26 @@ constexpr TranslationIRMemorySlot X86_64MemorySlotsV1[] = {
     stateSlot(offsetof(RuntimeGuestStateX86_64V1, RFlagsBase), sizeof(uint64_t),
               TranslationIRMemoryAccess::Read, alignof(uint64_t)),
     stateSlot(offsetof(RuntimeGuestStateX86_64V1, CF), sizeof(uint8_t),
-              ReadWrite, alignof(uint8_t)),
+              ReadWrite,
+              stateFieldAlignment(offsetof(RuntimeGuestStateX86_64V1, CF))),
     stateSlot(offsetof(RuntimeGuestStateX86_64V1, PF), sizeof(uint8_t),
-              ReadWrite, alignof(uint8_t)),
+              ReadWrite,
+              stateFieldAlignment(offsetof(RuntimeGuestStateX86_64V1, PF))),
     stateSlot(offsetof(RuntimeGuestStateX86_64V1, AF), sizeof(uint8_t),
-              ReadWrite, alignof(uint8_t)),
+              ReadWrite,
+              stateFieldAlignment(offsetof(RuntimeGuestStateX86_64V1, AF))),
     stateSlot(offsetof(RuntimeGuestStateX86_64V1, ZF), sizeof(uint8_t),
-              ReadWrite, alignof(uint8_t)),
+              ReadWrite,
+              stateFieldAlignment(offsetof(RuntimeGuestStateX86_64V1, ZF))),
     stateSlot(offsetof(RuntimeGuestStateX86_64V1, SF), sizeof(uint8_t),
-              ReadWrite, alignof(uint8_t)),
+              ReadWrite,
+              stateFieldAlignment(offsetof(RuntimeGuestStateX86_64V1, SF))),
     stateSlot(offsetof(RuntimeGuestStateX86_64V1, DF), sizeof(uint8_t),
-              ReadWrite, alignof(uint8_t)),
+              ReadWrite,
+              stateFieldAlignment(offsetof(RuntimeGuestStateX86_64V1, DF))),
     stateSlot(offsetof(RuntimeGuestStateX86_64V1, OF), sizeof(uint8_t),
-              ReadWrite, alignof(uint8_t)),
+              ReadWrite,
+              stateFieldAlignment(offsetof(RuntimeGuestStateX86_64V1, OF))),
 };
 
 static_assert(std::size(X86_64MemorySlotsV1) == 25);

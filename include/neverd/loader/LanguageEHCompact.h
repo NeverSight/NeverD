@@ -49,6 +49,14 @@ enum class CompactUnwindKind : uint8_t {
 
 const char *getCompactUnwindKindName(CompactUnwindKind Kind);
 
+/// Whether the compact word alone proved every normalized frame fact.  A
+/// partial entry retains facts that remain architecture-defined, but consumers
+/// must not use it to regenerate native unwind metadata.
+enum class CompactUnwindSemanticStatus : uint8_t {
+  Complete,
+  Partial,
+};
+
 /// One slot in the run of saved-register slots a compact encoding describes.
 struct CompactUnwindRegisterSlot {
   /// Value-initializes to `UnwindRegisterClass::None`, which marks a slot the
@@ -78,25 +86,42 @@ struct CompactUnwindEntry {
   va_t LSDAVA = 0;
   bool HasLSDA = false;
 
-  /// The saved-register slots in the order the encoding lists them, which is
-  /// the order each architecture's unwinder restores them in: the x86 forms
-  /// run from the lowest-addressed slot upward, the ARM64 forms in register
-  /// number order, which runs downward in memory.
+  /// The saved-register slots in the order the architecture's unwinder walks
+  /// them.  The x86 forms run from the lowest-addressed slot upward; the ARM
+  /// forms run downward from the fixed frame record.  An ARM32 `Partial`
+  /// entry stops before a runtime-aligned save whose exact CFA-relative slot
+  /// the encoding word cannot prove; the masks below still retain its proven
+  /// register identities.
   std::vector<CompactUnwindRegisterSlot> SavedRegisterSlots;
-  /// Every general-purpose register the slots name, as a bitmask over the same
-  /// numbering \ref CompactUnwindRegisterSlot::Register uses.  The frame
-  /// pointer and return address that a frame form saves are absent: no bit of
-  /// the encoding names them, \ref Kind already implies them, and a mask that
-  /// invented them could not be encoded back into a word.
+  /// Every general-purpose register the encoding proves saved, as a bitmask
+  /// over the same numbering \ref CompactUnwindRegisterSlot::Register uses.
+  /// The frame pointer and return address that a frame form saves are absent:
+  /// no bit of the encoding names them, \ref Kind already implies them, and a
+  /// mask that invented them could not be encoded back into a word.
   uint32_t SavedGPRMask = 0;
-  /// Every floating-point register the slots name.  Only the ARM64 encodings
-  /// can name one.
+  /// Every floating-point register the encoding proves saved.  For a partial
+  /// ARM32 frame this can contain registers whose runtime-aligned locations
+  /// are deliberately absent from \ref SavedRegisterSlots.
   uint32_t SavedFPRMask = 0;
   /// Distance in bytes from the frame pointer down to slot zero, for the x86
   /// frame forms: slot *i* sits at `fp - FrameOffset + i * <pointer size>`.
   /// The ARM64 frame form fixes that distance at one pointer and spends no
   /// field on it, so it leaves this zero.
   uint32_t FrameOffset = 0;
+  /// Extra bytes above the fixed frame record that the architecture requires
+  /// the unwinder to add back.  ARM32 frame encodings establish
+  /// `CFA = r7 + 8 + StackAdjustment` and use values 0, 4, 8, or 12 for the
+  /// variadic-argument register save area.  Other published modes leave this
+  /// absent rather than treating zero as an observed adjustment.
+  uint32_t StackAdjustment = 0;
+  /// Whether \ref StackAdjustment was established by this encoding.  This is
+  /// true for every valid ARM32 frame form, including a zero adjustment.
+  bool HasStackAdjustment = false;
+  /// Whether every normalized fact required to regenerate unwind metadata is
+  /// present.  Partial entries may retain individually proven facts for
+  /// analysis, but rewrite paths must reject them.
+  CompactUnwindSemanticStatus SemanticStatus =
+      CompactUnwindSemanticStatus::Complete;
 };
 
 } // namespace neverd

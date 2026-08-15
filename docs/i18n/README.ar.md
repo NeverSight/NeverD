@@ -188,7 +188,7 @@ gh workflow run neverd-release.yml \
 | `build/bin/neverd-bench` | قياس أداء (JSON) |
 | `build/bin/neverd-sigmaker` | مولّد `.pat` من مكتبات ثابتة |
 | `build/bin/libneverd.*` | مكتبة المحرك المشتركة |
-| `build/bin/sdk/` | `NeverDCAPI.h`، `NeverDPlugin.h` |
+| `build/bin/sdk/` | جذر include الرسمي لـC SDK؛ استخدم `<neverd/sdk/NeverDCAPI.h>` أو `<neverd/sdk/NeverDPlugin.h>` مع الحفاظ على هيكل `neverd/sdk/` |
 | `build/bin/signatures/` | مكتبات التوقيع المضمّنة |
 
 **الاختبارات**

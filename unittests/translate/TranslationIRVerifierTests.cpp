@@ -45,7 +45,7 @@ std::unique_ptr<llvm::Module> parseModule(llvm::LLVMContext &Context,
   EXPECT_NE(Module, nullptr);
   if (Module)
     for (llvm::Function &Function : *Module)
-      if (!Function.isDeclaration())
+      if (!Function.isDeclaration() && !Function.hasLocalLinkage())
         Function.setVisibility(llvm::GlobalValue::HiddenVisibility);
   return Module;
 }
@@ -88,6 +88,11 @@ void expectViolation(llvm::Error Error, TranslationIRViolation Reason) {
   EXPECT_TRUE(Seen);
 }
 
+void expectSuccess(llvm::Error Error) {
+  if (Error)
+    ADD_FAILURE() << llvm::toString(std::move(Error));
+}
+
 TEST(TranslationIRVerifier, AcceptsCanonicalBlockAndAllowlistedHelpers) {
   llvm::LLVMContext Context;
   std::unique_ptr<llvm::Module> Module = parseModule(Context, R"(
@@ -106,7 +111,7 @@ entry:
 }
 )");
   ASSERT_NE(Module, nullptr);
-  EXPECT_FALSE(static_cast<bool>(verify(*Module)));
+  expectSuccess(verify(*Module));
 }
 
 TEST(TranslationIRVerifier, AcceptsEmptyMemoryAndHelperPolicies) {
@@ -242,6 +247,16 @@ define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
 )");
   ASSERT_NE(Poison, nullptr);
   expectViolation(verify(*Poison),
+                  TranslationIRViolation::GuestObservableUndefOrPoison);
+
+  std::unique_ptr<llvm::Module> DerivedPoison = parseModule(Context, R"(
+define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
+  %derived = xor i32 poison, 7
+  ret i32 %derived
+}
+)");
+  ASSERT_NE(DerivedPoison, nullptr);
+  expectViolation(verify(*DerivedPoison),
                   TranslationIRViolation::GuestObservableUndefOrPoison);
 
   std::unique_ptr<llvm::Module> Flags = parseModule(Context, R"(
@@ -649,7 +664,7 @@ define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
 }
 )");
   ASSERT_NE(Module, nullptr);
-  EXPECT_FALSE(static_cast<bool>(verify(*Module)));
+  expectSuccess(verify(*Module));
 }
 
 TEST(TranslationIRVerifier, RejectsHelperAttributesAndMissingMemorySlots) {
@@ -770,7 +785,7 @@ define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
 }
 )");
   ASSERT_NE(Canonical, nullptr);
-  EXPECT_FALSE(static_cast<bool>(verify(*Canonical)));
+  expectSuccess(verify(*Canonical));
 
   std::unique_ptr<llvm::Module> DeclarationAttribute = parseModule(Context, R"(
 declare i32 @llvm.ctpop.i32(i32)
@@ -850,6 +865,52 @@ define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
 }
 
 TEST(TranslationIRVerifier,
+     AcceptsAdjacentMemorySlotsButRejectsGapsAndPermissionChanges) {
+  llvm::LLVMContext Context;
+  std::unique_ptr<llvm::Module> Module = parseModule(Context, R"(
+define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
+  %slot = getelementptr i8, ptr %state, i64 8
+  store i32 0, ptr %slot, align 8
+  ret i32 0
+}
+)");
+  ASSERT_NE(Module, nullptr);
+
+  const TranslationIRMemorySlot Adjacent[] = {
+      {TranslationIRMemoryRegion::State, 8, 1, TranslationIRMemoryAccess::Write,
+       8},
+      {TranslationIRMemoryRegion::State, 9, 1, TranslationIRMemoryAccess::Write,
+       1},
+      {TranslationIRMemoryRegion::State, 10, 1,
+       TranslationIRMemoryAccess::Write, 2},
+      {TranslationIRMemoryRegion::State, 11, 1,
+       TranslationIRMemoryAccess::Write, 1}};
+  EXPECT_FALSE(static_cast<bool>(neverd::translate::verifyTranslationIR(
+      *Module, llvm::Triple(HostTriple), llvm::DataLayout(HostLayout), 64, 64,
+      Adjacent)));
+
+  const TranslationIRMemorySlot Gap[] = {
+      {TranslationIRMemoryRegion::State, 8, 2, TranslationIRMemoryAccess::Write,
+       8},
+      {TranslationIRMemoryRegion::State, 11, 1,
+       TranslationIRMemoryAccess::Write, 1}};
+  expectViolation(neverd::translate::verifyTranslationIR(
+                      *Module, llvm::Triple(HostTriple),
+                      llvm::DataLayout(HostLayout), 64, 64, Gap),
+                  TranslationIRViolation::MemorySlotNotAllowed);
+
+  const TranslationIRMemorySlot PermissionChange[] = {
+      {TranslationIRMemoryRegion::State, 8, 2, TranslationIRMemoryAccess::Write,
+       8},
+      {TranslationIRMemoryRegion::State, 10, 2, TranslationIRMemoryAccess::Read,
+       2}};
+  expectViolation(neverd::translate::verifyTranslationIR(
+                      *Module, llvm::Triple(HostTriple),
+                      llvm::DataLayout(HostLayout), 64, 64, PermissionChange),
+                  TranslationIRViolation::MemorySlotNotAllowed);
+}
+
+TEST(TranslationIRVerifier,
      RejectsUnknownMemoryRootsAndBackendLibcallIntegerWidths) {
   llvm::LLVMContext Context;
   std::unique_ptr<llvm::Module> UnknownRoot = parseModule(Context, R"(
@@ -896,7 +957,7 @@ define i32 @translated_block(ptr %state, ptr %runtime) nounwind {
 }
 )");
   ASSERT_NE(Safe, nullptr);
-  EXPECT_FALSE(static_cast<bool>(verify(*Safe)));
+  expectSuccess(verify(*Safe));
 }
 
 TEST(TranslationIRVerifier, RejectsModuleAndGlobalCodegenMetadata) {

@@ -33,6 +33,18 @@ class PythonPluginSDKAuditTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertNotIn("copy_directory", source)
+        self.assertIn("$<TARGET_FILE_DIR:neverd_shared>/sdk", source)
+        self.assertNotIn("${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk", source)
+        for staged_path in (
+            '"${NEVERD_STAGED_SDK_DIRECTORY}"',
+            '"${NEVERD_STAGED_SDK_DIRECTORY}/neverd/sdk"',
+            '"${NEVERD_STAGED_SDK_DIRECTORY}/neverd"',
+            '"${NEVERD_STAGED_SDK_DIRECTORY}/python"',
+            '"${NEVERD_STAGED_SDK_DIRECTORY}/python/neverd_plugin"',
+            '"${NEVERD_STAGED_SDK_DIRECTORY}/python/examples"',
+        ):
+            with self.subTest(staged_path=staged_path):
+                self.assertIn(staged_path, source)
         for required in (
             "LICENSE",
             "README.md",
@@ -44,6 +56,12 @@ class PythonPluginSDKAuditTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, source)
+
+        consumer = (
+            audit.ROOT / "unittests" / "translate" / "CMakeLists.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"$<TARGET_FILE_DIR:neverd_shared>/sdk"', consumer)
+        self.assertNotIn("${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk", consumer)
 
     def test_header_parser_ignores_the_export_macro_definition(self) -> None:
         declarations = audit.parse_c_api(

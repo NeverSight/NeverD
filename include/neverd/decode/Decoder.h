@@ -143,6 +143,8 @@ public:
   /// builder around each lift to re-base ST(i) references into CFG order.
   /// No-ops / 0 for non-x86 targets.
   int getX86FpuTop() const;
+  /// Reset all x86 instruction-sequence state before an independent function
+  /// or translation block.  The historical name is retained for compatibility.
   void resetX86FpuState();
   bool x86FpuDidReset() const;
 

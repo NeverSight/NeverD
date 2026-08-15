@@ -252,7 +252,7 @@ TEST(ExceptionRewriteContract, PureSourceCFIRequiresRegistration) {
   EXPECT_TRUE(Requirements->Functions[0].HasSourceContract);
 }
 
-TEST(ExceptionRewriteContract, ResolvesAliasesOnlyWhenTheirAddressesAgree) {
+TEST(ExceptionRewriteContract, RejectsSymbolSpellingWithoutCompilerIdentity) {
   exception_rewrite::Requirements Requirements;
   Requirements.RequiresRegisteredUnwind = true;
   Requirements.Functions.push_back({"_f", true});
@@ -264,24 +264,17 @@ TEST(ExceptionRewriteContract, ResolvesAliasesOnlyWhenTheirAddressesAgree) {
                           {"f", 0x2000},
                           {"g", 0x1000},
                           {"_g", 0x1000}};
-  auto Addresses = exception_rewrite::resolveRequiredFunctionAddresses(
+  auto Missing = exception_rewrite::resolveRequiredFunctionAddresses(
       Requirements, Compiled);
-  ASSERT_TRUE(static_cast<bool>(Addresses))
-      << llvm::toString(Addresses.takeError());
-  EXPECT_EQ(*Addresses, (std::vector<uint64_t>{0x1000, 0x2000}));
-
-  Compiled.SymbolAddrs["__f"] = 0x3000;
-  auto Ambiguous = exception_rewrite::resolveRequiredFunctionAddresses(
-      Requirements, Compiled);
-  ASSERT_FALSE(static_cast<bool>(Ambiguous));
+  ASSERT_FALSE(static_cast<bool>(Missing));
   bool Seen = false;
   llvm::handleAllErrors(
-      Ambiguous.takeError(),
+      Missing.takeError(),
       [&](const exception_rewrite::ExceptionRewriteContractError &Error) {
         Seen = true;
         EXPECT_EQ(
             Error.reason(),
-            exception_rewrite::ContractErrorReason::AmbiguousCompiledFunction);
+            exception_rewrite::ContractErrorReason::MissingCompiledFunction);
       });
   EXPECT_TRUE(Seen);
 }

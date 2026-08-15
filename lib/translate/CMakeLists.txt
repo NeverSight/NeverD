@@ -1,6 +1,7 @@
 add_neverd_component_library(NeverDTranslate
   GuestMemoryRuntime.cpp
   GuestState.cpp
+  NativeTranslationSession.cpp
   ResolvedHostTarget.cpp
   RuntimeABI.cpp
   RuntimeCodeMemory.cpp
@@ -12,8 +13,19 @@ add_neverd_component_library(NeverDTranslate
   TranslationSession.cpp
   TranslationIRVerifier.cpp
   TranslationArtifactVerifier.cpp
+  TranslationJITLinker.cpp
+  TranslationLinkGraphVerifier.cpp
+  TranslationCacheIdentity.cpp
   TranslationObjectCompiler.cpp
+  TranslationObjectRequest.cpp
+  TranslationTargetMachine.cpp
+  X86TranslationBlockBuilder.cpp
+  X86TranslationBlockLowerer.cpp
 
   LINK_COMPONENTS
+  Decode
   PassIR
+
+  LINK_LIBS
+  ${NEVERD_LLVM_LINKGRAPH_LIBS}
 )

@@ -581,7 +581,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "semantic.synthesis.candidate": "supported",
                 "symbolic.execution.path-exploration": "experimental",
                 "llvm.semantic.synthesis-rewrite": "supported",
-                "translation.executable-engine": "unsupported",
+                "translation.executable-engine": "experimental",
                 "translation.runtime-contract": "experimental",
             },
         )
@@ -610,7 +610,12 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "json": [],
             },
             "translation.executable-engine": no_surfaces,
-            "translation.runtime-contract": no_surfaces,
+            "translation.runtime-contract": {
+                "c": ["neverd_translate_x86_64_block_to_aarch64_object_v1"],
+                "python": ["translate_x86_64_block_to_aarch64_object"],
+                "cli": ["neverd translate-object"],
+                "json": [],
+            },
             "llvm.semantic.synthesis-rewrite": {
                 "c": ["neverd_synthesize_expr", "neverd_optimize_llvm_ir"],
                 "python": ["synthesize_expression", "optimize_llvm_ir"],

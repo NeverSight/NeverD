@@ -44,6 +44,30 @@
 
 namespace neverd {
 
+static bool tripleMatchesTarget(const llvm::Triple &TT, Arch TargetArch,
+                                BinaryFormat ObjectFormat) {
+  const bool MatchesFormat =
+      (ObjectFormat == BinaryFormat::MachO && TT.isOSBinFormatMachO()) ||
+      (ObjectFormat == BinaryFormat::ELF && TT.isOSBinFormatELF()) ||
+      (ObjectFormat == BinaryFormat::COFF && TT.isOSBinFormatCOFF());
+  if (!MatchesFormat)
+    return false;
+
+  switch (TargetArch) {
+  case Arch::X64:
+    return TT.getArch() == llvm::Triple::x86_64;
+  case Arch::X86:
+    return TT.getArch() == llvm::Triple::x86;
+  case Arch::AArch64:
+    return TT.getArch() == llvm::Triple::aarch64;
+  case Arch::ARM:
+    return TT.getArch() == llvm::Triple::arm ||
+           TT.getArch() == llvm::Triple::thumb;
+  default:
+    return false;
+  }
+}
+
 // True when a type is (or is a vector of) IEEE half — i.e. the module performs
 // half-precision (FEAT_FP16) arithmetic and the backend needs +fullfp16 to
 // select fp16 instructions instead of softening to float.
@@ -360,7 +384,8 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
 llvm::mc_rewrite::RewriteResult
 Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
                            const llvm::mc_rewrite::RewriteOptions &Opts,
-                           BinaryFormat ObjectFormat) {
+                           BinaryFormat ObjectFormat,
+                           llvm::StringRef TargetTriple) {
   llvm::mc_rewrite::RewriteResult Result;
   ensureTargets();
 
@@ -370,14 +395,22 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
     return Result;
   }
 
-  const char *TripleStr = llvmCodegenTriple(TargetArch, ObjectFormat);
-  if (!TripleStr) {
+  const char *DefaultTriple = llvmCodegenTriple(TargetArch, ObjectFormat);
+  if (!DefaultTriple) {
     llvm::WithColor::error()
         << "codegen: no triple for arch " << getArchName(TargetArch) << "\n";
     return Result;
   }
 
-  llvm::Triple TT(TripleStr);
+  const llvm::StringRef TripleName =
+      TargetTriple.empty() ? llvm::StringRef(DefaultTriple) : TargetTriple;
+  llvm::Triple TT(TripleName);
+  if (!tripleMatchesTarget(TT, TargetArch, ObjectFormat)) {
+    llvm::WithColor::error()
+        << "codegen: target triple '" << TripleName
+        << "' does not match the requested architecture and object format\n";
+    return Result;
+  }
   Mod.setTargetTriple(TT);
 
   std::string Err;

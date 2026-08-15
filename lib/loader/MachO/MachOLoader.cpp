@@ -94,6 +94,14 @@ MachOLoader::load(const std::filesystem::path &Path) {
     return llvm::make_error<llvm::StringError>(
         "macho: unsupported cpu type 0x" + llvm::utohexstr(CpuType),
         llvm::inconvertibleErrorCode());
+  if (Img.Arch == Arch::ARM) {
+    const uint32_t RawCPUSubtype = static_cast<uint32_t>(
+        Is64 ? Obj.getHeader64().cpusubtype : Obj.getHeader().cpusubtype);
+    const uint32_t CPUSubtype =
+        RawCPUSubtype & ~static_cast<uint32_t>(CPU_SUBTYPE_MASK);
+    Img.Mode = CPUSubtype == CPU_SUBTYPE_ARM_V7K ? InstructionMode::Thumb
+                                                  : InstructionMode::ARM;
+  }
 
   va_t TextVMAddr = 0;
   bool HasTextVMAddr = false;

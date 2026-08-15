@@ -6,6 +6,7 @@
 #include "neverd/translate/RuntimeSymbolRegistry.h"
 #include "neverd/translate/TranslationArtifactVerifier.h"
 #include "neverd/translate/TranslationObjectCompiler.h"
+#include "neverd/translate/TranslationTargetMachine.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
@@ -19,20 +20,14 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBufferRef.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -40,15 +35,6 @@
 using namespace neverd::translate;
 
 namespace {
-
-void initializeTargets() {
-  static std::once_flag Once;
-  std::call_once(Once, [] {
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmPrinters();
-  });
-}
 
 TranslationOptions explicitOptions(GuestArchitecture Host,
                                    llvm::StringRef Triple) {
@@ -76,45 +62,22 @@ TranslationOptions explicitOptions(GuestArchitecture Host,
   return Options;
 }
 
-std::unique_ptr<llvm::TargetMachine>
-createTargetMachine(const ResolvedHostTarget &Resolved) {
-  initializeTargets();
-  const llvm::Triple Triple(Resolved.triple());
-  std::string LookupError;
-  const llvm::Target *Target =
-      llvm::TargetRegistry::lookupTarget(Triple, LookupError);
-  if (!Target) {
-    ADD_FAILURE() << LookupError;
-    return nullptr;
-  }
-  llvm::TargetOptions TargetOptions;
-  std::unique_ptr<llvm::TargetMachine> Machine(Target->createTargetMachine(
-      Triple, Resolved.cpu(), /*Features=*/"", TargetOptions,
-      llvm::Reloc::Static, llvm::CodeModel::Small, llvm::CodeGenOptLevel::None,
-      /*JIT=*/false));
-  if (!Machine)
-    ADD_FAILURE() << "could not create target machine for "
-                  << Resolved.triple().str();
-  return Machine;
-}
-
 std::unique_ptr<llvm::Module>
 makeCanonicalModule(llvm::LLVMContext &Context,
                     const TranslationOptions &Options,
                     llvm::ArrayRef<llvm::StringRef> BlockNames) {
-  llvm::Expected<ResolvedHostTarget> Resolved = resolveHostTarget(Options);
-  if (!Resolved) {
-    ADD_FAILURE() << llvm::toString(Resolved.takeError());
+  llvm::Expected<TranslationTargetMachineV1> TargetOrErr =
+      createTranslationTargetMachineV1(Options);
+  if (!TargetOrErr) {
+    ADD_FAILURE() << llvm::toString(TargetOrErr.takeError());
     return nullptr;
   }
-  std::unique_ptr<llvm::TargetMachine> Machine = createTargetMachine(*Resolved);
-  if (!Machine)
-    return nullptr;
+  TranslationTargetMachineV1 Target = std::move(*TargetOrErr);
 
   auto Module =
       std::make_unique<llvm::Module>("translation-object-test", Context);
-  Module->setTargetTriple(llvm::Triple(Resolved->triple()));
-  Module->setDataLayout(Machine->createDataLayout());
+  Module->setTargetTriple(llvm::Triple(Target.hostTarget().triple()));
+  Module->setDataLayout(Target.dataLayout());
   llvm::Type *Pointer = llvm::PointerType::getUnqual(Context);
   llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
   llvm::FunctionType *Type =
@@ -232,6 +195,12 @@ void expectCompilerError(llvm::Expected<T> Result,
       Result.takeError(), [&](const TranslationObjectCompilerError &Error) {
         SawCompilerError = true;
         EXPECT_EQ(Error.code(), ExpectedCode);
+        if (ExpectedCode ==
+            TranslationObjectCompilerErrorCode::GeneratedCodeBudgetExceeded) {
+          ASSERT_TRUE(Error.budgetObserved().has_value());
+          ASSERT_TRUE(Error.budgetLimit().has_value());
+          EXPECT_GT(*Error.budgetObserved(), *Error.budgetLimit());
+        }
       });
   if (Unhandled)
     ADD_FAILURE() << llvm::toString(std::move(Unhandled));
@@ -457,7 +426,7 @@ TEST(TranslationObjectCompiler, ProducesDeterministicBytesAndVersionedKeys) {
   EXPECT_TRUE(First->artifactCacheKey().starts_with(
       "neverd.translation-object-artifact.v1.sha256:"));
   static_assert(TranslationObjectArtifactV1::CacheIdentityVersion == 1);
-  static_assert(TranslationObjectArtifactV1::PipelineSchemaVersion == 2);
+  static_assert(TranslationObjectArtifactV1::PipelineSchemaVersion == 3);
 }
 
 TEST(TranslationObjectCompiler, EmitsEveryContractHostArchitecture) {

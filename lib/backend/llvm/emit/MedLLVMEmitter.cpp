@@ -24,6 +24,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
@@ -294,6 +295,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   // call targets keep default visibility (declared elsewhere, may be imports).
   LLVMFunc->setDSOLocal(true);
   LLVMFunc->addFnAttr(llvm::Attribute::NullPointerIsValid);
+  rewrite_source::setOriginalVA(*LLVMFunc, Func.Entry);
   return LLVMFunc;
 }
 

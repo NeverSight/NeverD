@@ -16,6 +16,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -122,6 +123,13 @@ void parseNonLazyPtrImports(const llvm::object::MachOObjectFile &Obj,
                             const std::vector<SectionInfo> &Sections,
                             const uint8_t *BasePtr, size_t FileSize, bool Is64,
                             BinaryImage &Img);
+
+/// Reconstruct the complete non-lazy/lazy import pointer-slot map directly
+/// from one thin Mach-O byte image.  This is the authoritative provenance
+/// check for consumers that were handed a cached BinaryImage: a structurally
+/// similar section table cannot substitute a different slot-to-symbol map.
+llvm::Expected<std::map<va_t, std::string>>
+parseImportPtrSlots(llvm::ArrayRef<uint8_t> Binary);
 
 /// File offsets for LC_DYLD_CHAINED_FIXUPS
 /// (llvm::MachO::linkedit_data_command).

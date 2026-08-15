@@ -189,7 +189,7 @@ gh workflow run neverd-release.yml \
 | `build/bin/neverd-bench` | Бенчмарки (JSON) |
 | `build/bin/neverd-sigmaker` | Генератор `.pat` из статических библиотек |
 | `build/bin/libneverd.*` | Разделяемая библиотека движка |
-| `build/bin/sdk/` | `NeverDCAPI.h`, `NeverDPlugin.h` |
+| `build/bin/sdk/` | Канонический корень include для C SDK; используйте `<neverd/sdk/NeverDCAPI.h>` или `<neverd/sdk/NeverDPlugin.h>` с сохранённой иерархией `neverd/sdk/` |
 | `build/bin/signatures/` | Встроенные сигнатурные библиотеки |
 
 **Тесты**

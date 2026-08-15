@@ -48,12 +48,13 @@ TEST(RuntimeGuestState, X86_64V1LayoutAndMemoryPolicyAreExact) {
             TranslationIRMemoryAccess::Read | TranslationIRMemoryAccess::Write);
   EXPECT_EQ(Slots[17].Offset, offsetof(RuntimeGuestStateX86_64V1, RFlagsBase));
   EXPECT_EQ(Slots[17].Access, TranslationIRMemoryAccess::Read);
+  constexpr uint32_t FlagAlignments[] = {8, 1, 2, 1, 4, 1, 2};
   for (size_t Index = 18; Index != Slots.size(); ++Index) {
     EXPECT_EQ(Slots[Index].Region, TranslationIRMemoryRegion::State);
     EXPECT_EQ(Slots[Index].Size, sizeof(uint8_t));
     EXPECT_EQ(Slots[Index].Access, TranslationIRMemoryAccess::Read |
                                        TranslationIRMemoryAccess::Write);
-    EXPECT_EQ(Slots[Index].Alignment, alignof(uint8_t));
+    EXPECT_EQ(Slots[Index].Alignment, FlagAlignments[Index - 18]);
   }
 
   EXPECT_EQ(Slots[18].Offset, offsetof(RuntimeGuestStateX86_64V1, CF));

@@ -66,15 +66,30 @@ static_assert(offsetof(RuntimeCallFrameV1, Control) == 0);
 static_assert(std::is_standard_layout_v<RuntimeCallFrameV1>);
 
 /// Create a call frame only after trusted dispatch has validated the complete
-/// published credential.  Mismatched or all-zero identities fail closed.
-llvm::Expected<RuntimeCallFrameV1>
-createRuntimeCallFrameV1(GuestMemoryRuntime &Memory,
-                         const RuntimeCodeCredentialV1 &Published,
-                         const RuntimeCodeCredentialV1 &Validated);
+/// published credential.  For ValidateBeforeDispatch, CurrentPC and
+/// ExpectedGeneration must identify the exact executable owner validated last;
+/// other policies require both values to remain zero.  Mismatched identities
+/// or an incoherent control snapshot fail closed.
+llvm::Expected<RuntimeCallFrameV1> createRuntimeCallFrameV1(
+    GuestMemoryRuntime &Memory, const RuntimeCodeCredentialV1 &Published,
+    const RuntimeCodeCredentialV1 &Validated, uint64_t CurrentPC = 0,
+    uint64_t ExpectedGeneration = 0);
 
 llvm::Error
 validateRuntimeCodeCredentialV1(const RuntimeCodeCredentialV1 &Published,
                                 const RuntimeCodeCredentialV1 &Validated);
+
+/// Validate the control record after one translated-block invocation.
+///
+/// Runtime-service statuses must exactly match a complete non-success runtime
+/// exit.  A block-exit status requires an empty runtime exit.  Under
+/// ValidateBeforeDispatch, a trusted helper may consume the entry-generation
+/// proof before the block exits; only the helper-produced zeroed proof shape is
+/// accepted in that case, while all ABI identity, reserved, budget, and exit
+/// invariants remain enforced.
+llvm::Error
+validateRuntimeControlBlockAfterInvocationV1(const RuntimeControlBlockV1 &Block,
+                                             uint32_t Status);
 
 enum class RuntimeABIHelperClassV1 : uint8_t {
   Load = 1,

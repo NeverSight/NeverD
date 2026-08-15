@@ -85,7 +85,10 @@ constexpr bool hasTranslationIRMemoryAccess(TranslationIRMemoryAccess Set,
 }
 
 /// One integer-accessible field in the backend-private state/runtime ABI.
-/// Direct LLVM loads and stores must fit wholly inside one declared slot.
+/// Direct LLVM loads and stores must be covered without gaps by one or more
+/// adjacent slots that all grant the required access.  This admits LLVM's
+/// legal coalescing of adjacent scalar fields without exposing padding or a
+/// field with different permissions.
 /// Alignment is the guaranteed alignment at Offset, not the containing
 /// object's alignment; it must be a nonzero power of two.
 struct TranslationIRMemorySlot {

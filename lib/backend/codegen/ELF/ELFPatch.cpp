@@ -25,47 +25,218 @@
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include <optional>
 
 #define DEBUG_TYPE "neverd-elf-patch"
 
 namespace neverd {
+namespace {
+
+std::optional<uint64_t> checkedAdd(uint64_t Left, uint64_t Right) {
+  if (Right > std::numeric_limits<uint64_t>::max() - Left)
+    return std::nullopt;
+  return Left + Right;
+}
+
+std::optional<uint64_t> checkedAlignUp(uint64_t Value, uint64_t Alignment) {
+  if (Alignment == 0 || (Alignment & (Alignment - 1)) != 0)
+    return std::nullopt;
+  const uint64_t Mask = Alignment - 1;
+  if (Value > std::numeric_limits<uint64_t>::max() - Mask)
+    return std::nullopt;
+  return (Value + Mask) & ~Mask;
+}
+
+std::optional<uint32_t> checkedELF32Field(uint64_t Value) {
+  if (Value > std::numeric_limits<uint32_t>::max())
+    return std::nullopt;
+  return static_cast<uint32_t>(Value);
+}
+
+bool isValidELF32Range(uint64_t Start, uint64_t Size) {
+  constexpr uint64_t AddressSpaceEnd =
+      uint64_t{std::numeric_limits<uint32_t>::max()} + 1;
+  const std::optional<uint64_t> End = checkedAdd(Start, Size);
+  return checkedELF32Field(Start).has_value() &&
+         checkedELF32Field(Size).has_value() && End && *End <= AddressSpaceEnd;
+}
+
+bool rangesOverlap(llvm::ArrayRef<uint8_t> Left,
+                   llvm::ArrayRef<uint8_t> Right) {
+  if (Left.empty() || Right.empty())
+    return false;
+  std::less<const uint8_t *> IsBefore;
+  return IsBefore(Left.data(), Right.end()) &&
+         IsBefore(Right.data(), Left.end());
+}
+
+struct ExecSegmentPlan {
+  uint16_t NewPhNum = 0;
+  uint64_t PhdrTableSize = 0;
+  uint64_t SegmentFileOffset = 0;
+  uint64_t SegmentVA = 0;
+  uint64_t CodeFileOffset = 0;
+  uint64_t CodeVA = 0;
+  uint64_t FileSize = 0;
+  uint64_t MemorySize = 0;
+  uint64_t OutputSize = 0;
+};
+
+std::optional<ExecSegmentPlan>
+planExecSegment(bool Is64, uint64_t MaxVA, uint64_t BinarySize,
+                uint16_t OldPhNum, uint16_t PhdrSize, uint64_t PageSize,
+                uint64_t CodeSize) {
+  if (OldPhNum >= std::numeric_limits<uint16_t>::max())
+    return std::nullopt;
+
+  ExecSegmentPlan Plan;
+  Plan.NewPhNum = OldPhNum + 1;
+  Plan.PhdrTableSize = static_cast<uint64_t>(Plan.NewPhNum) * PhdrSize;
+
+  const std::optional<uint64_t> SegmentFileOffset =
+      checkedAlignUp(BinarySize, PageSize);
+  const std::optional<uint64_t> SegmentVA = checkedAlignUp(MaxVA, PageSize);
+  if (!SegmentFileOffset || !SegmentVA)
+    return std::nullopt;
+  Plan.SegmentFileOffset = *SegmentFileOffset;
+  Plan.SegmentVA = *SegmentVA;
+
+  const std::optional<uint64_t> CodeFileOffset =
+      checkedAdd(Plan.SegmentFileOffset, Plan.PhdrTableSize);
+  const std::optional<uint64_t> CodeVA =
+      checkedAdd(Plan.SegmentVA, Plan.PhdrTableSize);
+  const std::optional<uint64_t> FileSize =
+      checkedAdd(Plan.PhdrTableSize, CodeSize);
+  const std::optional<uint64_t> MemorySize =
+      FileSize ? checkedAlignUp(*FileSize, PageSize) : std::nullopt;
+  const std::optional<uint64_t> OutputSize =
+      MemorySize ? checkedAdd(Plan.SegmentFileOffset, *MemorySize)
+                 : std::nullopt;
+  if (!CodeFileOffset || !CodeVA || !FileSize || !MemorySize || !OutputSize ||
+      *OutputSize > std::numeric_limits<size_t>::max())
+    return std::nullopt;
+
+  Plan.CodeFileOffset = *CodeFileOffset;
+  Plan.CodeVA = *CodeVA;
+  Plan.FileSize = *FileSize;
+  Plan.MemorySize = *MemorySize;
+  Plan.OutputSize = *OutputSize;
+
+  if (!Is64) {
+    constexpr uint64_t AddressSpaceEnd =
+        uint64_t{std::numeric_limits<uint32_t>::max()} + 1;
+    const bool FieldsFit =
+        checkedELF32Field(Plan.SegmentFileOffset).has_value() &&
+        checkedELF32Field(Plan.SegmentVA).has_value() &&
+        checkedELF32Field(Plan.CodeFileOffset).has_value() &&
+        checkedELF32Field(Plan.CodeVA).has_value() &&
+        checkedELF32Field(Plan.PhdrTableSize).has_value() &&
+        checkedELF32Field(Plan.FileSize).has_value() &&
+        checkedELF32Field(Plan.MemorySize).has_value() &&
+        checkedELF32Field(PageSize).has_value();
+    if (!FieldsFit ||
+        !isValidELF32Range(Plan.SegmentFileOffset, Plan.FileSize) ||
+        !isValidELF32Range(Plan.SegmentVA, Plan.MemorySize) ||
+        Plan.OutputSize > AddressSpaceEnd)
+      return std::nullopt;
+  }
+
+  return Plan;
+}
+
+bool hasValidELFIdentity(llvm::ArrayRef<uint8_t> Data) {
+  return Data.size() >= llvm::ELF::EI_NIDENT &&
+         (Data[llvm::ELF::EI_CLASS] == llvm::ELF::ELFCLASS32 ||
+          Data[llvm::ELF::EI_CLASS] == llvm::ELF::ELFCLASS64) &&
+         Data[llvm::ELF::EI_DATA] == llvm::ELF::ELFDATA2LSB &&
+         Data[llvm::ELF::EI_VERSION] == llvm::ELF::EV_CURRENT;
+}
+
+} // namespace
 
 bool ELFPatcher::parseLayout(const std::vector<uint8_t> &Data,
                              PatchLayout &Layout) {
+  if (!hasValidELFIdentity(Data)) {
+    llvm::WithColor::error() << "elf_patch: not a valid ELF file\n";
+    return false;
+  }
   auto Hdr = parseELFHeader(Data.data(), Data.size());
-  if (Hdr.PhNum == 0) {
+  const uint64_t EHdrSize = Hdr.Is64 ? sizeof(llvm::object::ELF64LE::Ehdr)
+                                     : sizeof(llvm::object::ELF32LE::Ehdr);
+  if (Data.size() < EHdrSize) {
+    llvm::WithColor::error() << "elf_patch: truncated ELF header\n";
+    return false;
+  }
+  const uint64_t PhdrSize = getELFPhdrSize(Hdr.Is64);
+  const uint64_t PhdrTableSize = static_cast<uint64_t>(Hdr.PhNum) * PhdrSize;
+  const uint16_t DeclaredEHdrSize =
+      Hdr.Is64 ? static_cast<uint16_t>(
+                     reinterpret_cast<const llvm::object::ELF64LE::Ehdr *>(
+                         Data.data())
+                         ->e_ehsize)
+               : static_cast<uint16_t>(
+                     reinterpret_cast<const llvm::object::ELF32LE::Ehdr *>(
+                         Data.data())
+                         ->e_ehsize);
+  if (Hdr.HeaderSize != EHdrSize || DeclaredEHdrSize != EHdrSize ||
+      Hdr.PhNum == 0 || Hdr.PhEntSize != PhdrSize ||
+      !rangeInBounds(Hdr.PhOff, PhdrTableSize, Data.size()) ||
+      (!Hdr.Is64 && !isValidELF32Range(Hdr.PhOff, PhdrTableSize))) {
     llvm::WithColor::error() << "elf_patch: not a valid ELF file\n";
     return false;
   }
 
-  Layout.Is64 = Hdr.Is64;
-  Layout.EntryPoint = Hdr.EntryPoint;
-  Layout.PhNum = Hdr.PhNum;
-  Layout.PhOff = Hdr.PhOff;
-  Layout.MaxVA = 0;
-  Layout.MaxFileOff = 0;
+  PatchLayout Candidate;
+  Candidate.Is64 = Hdr.Is64;
+  Candidate.EntryPoint = Hdr.EntryPoint;
+  Candidate.PhNum = Hdr.PhNum;
+  Candidate.PhOff = Hdr.PhOff;
+  bool IsValid = true;
+  bool SawLoad = false;
+  bool SawExecutableLoad = false;
 
-  forEachELFPhdr(Data.data(), Data.size(),
-                 [&](const ELFPhdrFields &F, const uint8_t *, bool) {
-                   if (F.Type != llvm::ELF::PT_LOAD)
-                     return;
+  forEachELFPhdr(
+      Data.data(), Data.size(),
+      [&](const ELFPhdrFields &F, const uint8_t *, bool) {
+        if (F.Type != llvm::ELF::PT_LOAD)
+          return;
 
-                   uint64_t EndVA = F.VAddr + F.MemSz;
-                   uint64_t EndFile = F.Offset + F.FileSz;
-                   if (EndVA > Layout.MaxVA)
-                     Layout.MaxVA = EndVA;
-                   if (EndFile > Layout.MaxFileOff)
-                     Layout.MaxFileOff = EndFile;
+        SawLoad = true;
+        const std::optional<uint64_t> EndVA = checkedAdd(F.VAddr, F.MemSz);
+        const std::optional<uint64_t> EndFile = checkedAdd(F.Offset, F.FileSz);
+        const bool AlignmentValid = F.Align == 0 || F.Align == 1 ||
+                                    (((F.Align & (F.Align - 1)) == 0) &&
+                                     F.VAddr % F.Align == F.Offset % F.Align);
+        const bool AddressWidthValid =
+            Candidate.Is64 || (isValidELF32Range(F.VAddr, F.MemSz) &&
+                               isValidELF32Range(F.Offset, F.FileSz));
+        if (!EndVA || !EndFile || F.FileSz > F.MemSz ||
+            !rangeInBounds(F.Offset, F.FileSz, Data.size()) ||
+            !AlignmentValid || !AddressWidthValid) {
+          IsValid = false;
+          return;
+        }
+        Candidate.MaxVA = std::max(Candidate.MaxVA, *EndVA);
+        Candidate.MaxFileOff = std::max(Candidate.MaxFileOff, *EndFile);
 
-                   if (F.Flags & llvm::ELF::PF_X) {
-                     Layout.TextVA = F.VAddr;
-                     Layout.TextSize = F.MemSz;
-                     Layout.TextFileOff = F.Offset;
-                     Layout.TextFileSize = F.FileSz;
-                   }
-                 });
+        if (F.Flags & llvm::ELF::PF_X) {
+          SawExecutableLoad = true;
+          Candidate.TextVA = F.VAddr;
+          Candidate.TextSize = F.MemSz;
+          Candidate.TextFileOff = F.Offset;
+          Candidate.TextFileSize = F.FileSz;
+        }
+      });
+
+  if (!IsValid || !SawLoad || !SawExecutableLoad) {
+    llvm::WithColor::error() << "elf_patch: malformed load segments\n";
+    return false;
+  }
+  Layout = Candidate;
 
   LLVM_DEBUG(llvm::dbgs() << "elf_patch: " << (Layout.Is64 ? "ELF64" : "ELF32")
                           << " entry=0x" << llvm::utohexstr(Layout.EntryPoint)
@@ -84,10 +255,10 @@ uint64_t ELFPatcher::plannedExecSegmentVA(const std::vector<uint8_t> &Binary,
   // so the code lives just past it.
   auto EHdr = parseELFHeader(Binary.data(), Binary.size());
   const uint64_t PageSize = elfPageSize(TargetArch);
-  uint64_t NewSegVA = alignUp(Layout.MaxVA, PageSize);
-  uint64_t PhdrTableSz =
-      static_cast<uint64_t>(EHdr.PhNum + 1) * getELFPhdrSize(Layout.Is64);
-  return NewSegVA + PhdrTableSz;
+  const std::optional<ExecSegmentPlan> Plan =
+      planExecSegment(Layout.Is64, Layout.MaxVA, Binary.size(), EHdr.PhNum,
+                      getELFPhdrSize(Layout.Is64), PageSize, /*CodeSize=*/0);
+  return Plan ? Plan->CodeVA : 0;
 }
 
 uint64_t ELFPatcher::appendExecSegment(std::vector<uint8_t> &Binary,
@@ -105,65 +276,67 @@ uint64_t ELFPatcher::appendExecSegment(std::vector<uint8_t> &Binary,
   uint64_t OldPhOff = EHdr.PhOff;
   uint16_t OldPhNum = EHdr.PhNum;
 
-  uint64_t NewSegFileOff = alignUp(Binary.size(), PageSize);
-  uint64_t NewSegVA = alignUp(Layout.MaxVA, PageSize);
-
-  // e_phnum is a uint16 field; if it is already at the maximum, adding our new
-  // PT_LOAD would wrap NewPhNum to 0, collapse PhdrTableSz, and later memcpy
-  // the old program-header table (sized from OldPhNum) past the resized buffer.
-  if (OldPhNum >= 0xFFFF)
+  const uint64_t TextSize = Code.size();
+  const std::optional<ExecSegmentPlan> Plan =
+      planExecSegment(Is64, Layout.MaxVA, Binary.size(), OldPhNum, PhdrSize,
+                      PageSize, TextSize);
+  if (!Plan)
     return 0;
-  uint16_t NewPhNum = OldPhNum + 1;
-  uint64_t PhdrTableSz = static_cast<uint64_t>(NewPhNum) * PhdrSize;
-  uint64_t CodeStartVA = NewSegVA + PhdrTableSz;
-
-  uint64_t TextSize = Code.size();
-  uint64_t CodeStartOff = NewSegFileOff + PhdrTableSz;
-  uint64_t TotalFileSz = PhdrTableSz + TextSize;
-  uint64_t TotalMemSz = alignUp(TotalFileSz, PageSize);
 
   std::vector<uint8_t> OldPhdrs(static_cast<size_t>(OldPhNum) * PhdrSize);
   // OldPhOff is the untrusted e_phoff: compare against remaining space so a
   // crafted offset cannot wrap the check and read the old headers out of
   // bounds.
-  if (OldPhOff <= Binary.size() && OldPhdrs.size() <= Binary.size() - OldPhOff)
-    std::memcpy(OldPhdrs.data(), Binary.data() + OldPhOff, OldPhdrs.size());
+  if (OldPhOff > Binary.size() || OldPhdrs.size() > Binary.size() - OldPhOff)
+    return 0;
+  std::memcpy(OldPhdrs.data(), Binary.data() + OldPhOff, OldPhdrs.size());
 
-  Binary.resize(static_cast<size_t>(NewSegFileOff + TotalMemSz), 0);
-  std::memcpy(Binary.data() + CodeStartOff, Code.data(),
-              static_cast<size_t>(TextSize));
+  // Code may be a view into Binary.  Preserve only that uncommon case before
+  // resize invalidates the caller's view; external code buffers remain
+  // zero-copy.
+  std::vector<uint8_t> AliasedCode;
+  if (rangesOverlap(Code, llvm::ArrayRef<uint8_t>(Binary))) {
+    AliasedCode.assign(Code.begin(), Code.end());
+    Code = AliasedCode;
+  }
+
+  Binary.resize(static_cast<size_t>(Plan->OutputSize), 0);
+  if (!Code.empty())
+    std::memcpy(Binary.data() + Plan->CodeFileOffset, Code.data(),
+                static_cast<size_t>(TextSize));
 
   uint8_t NewPhdr[sizeof(llvm::object::ELF64LE::Phdr)] = {};
   ELFPhdrFields NewPF;
   NewPF.Type = llvm::ELF::PT_LOAD;
   NewPF.Flags = llvm::ELF::PF_R | llvm::ELF::PF_X;
-  NewPF.Offset = NewSegFileOff;
-  NewPF.VAddr = NewSegVA;
-  NewPF.PAddr = NewSegVA;
-  NewPF.FileSz = TotalFileSz;
-  NewPF.MemSz = TotalMemSz;
+  NewPF.Offset = Plan->SegmentFileOffset;
+  NewPF.VAddr = Plan->SegmentVA;
+  NewPF.PAddr = Plan->SegmentVA;
+  NewPF.FileSz = Plan->FileSize;
+  NewPF.MemSz = Plan->MemorySize;
   NewPF.Align = PageSize;
   writeELFPhdr(NewPhdr, Is64, NewPF);
 
-  std::memcpy(Binary.data() + NewSegFileOff, OldPhdrs.data(), OldPhdrs.size());
-  std::memcpy(Binary.data() + NewSegFileOff + OldPhdrs.size(), NewPhdr,
-              PhdrSize);
+  std::memcpy(Binary.data() + Plan->SegmentFileOffset, OldPhdrs.data(),
+              OldPhdrs.size());
+  std::memcpy(Binary.data() + Plan->SegmentFileOffset + OldPhdrs.size(),
+              NewPhdr, PhdrSize);
 
-  for (uint16_t I = 0; I < NewPhNum; ++I) {
-    uint8_t *PH = Binary.data() + NewSegFileOff + I * PhdrSize;
+  for (uint16_t I = 0; I < Plan->NewPhNum; ++I) {
+    uint8_t *PH = Binary.data() + Plan->SegmentFileOffset + I * PhdrSize;
     auto F = readELFPhdr(PH, Is64);
     if (F.Type == llvm::ELF::PT_PHDR) {
-      F.Offset = NewSegFileOff;
-      F.VAddr = NewSegVA;
-      F.PAddr = NewSegVA;
-      F.FileSz = PhdrTableSz;
-      F.MemSz = PhdrTableSz;
+      F.Offset = Plan->SegmentFileOffset;
+      F.VAddr = Plan->SegmentVA;
+      F.PAddr = Plan->SegmentVA;
+      F.FileSz = Plan->PhdrTableSize;
+      F.MemSz = Plan->PhdrTableSize;
       writeELFPhdr(PH, Is64, F);
     }
   }
 
-  setELFPhdrTable(Binary.data(), Is64, NewSegFileOff, NewPhNum);
-  return CodeStartVA;
+  setELFPhdrTable(Binary.data(), Is64, Plan->SegmentFileOffset, Plan->NewPhNum);
+  return Plan->CodeVA;
 }
 
 PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,

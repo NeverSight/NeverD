@@ -15,6 +15,7 @@
 
 #include "neverd/Common.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/BinaryRewrite.h"
 
@@ -64,11 +65,13 @@ public:
 
   /// Compile directly to fixed-up image bytes using the caller's address
   /// model, bypassing the relocatable object intermediate format.
-  /// Returns an empty result (Success=false) on failure.
+  /// Callers must reject ImageValid=false and FunctionRangesValid=false;
+  /// ordinary code-generation failure may also return no sections.
   llvm::mc_rewrite::RewriteResult
   compileForRewrite(llvm::Module &Mod, Arch TargetArch,
                     const llvm::mc_rewrite::RewriteOptions &Opts,
-                    BinaryFormat ObjectFormat = BinaryFormat::MachO);
+                    BinaryFormat ObjectFormat = BinaryFormat::MachO,
+                    llvm::StringRef TargetTriple = {});
 };
 
 /// Patch pre-pass (PIE/ASLR safety). Rewrites absolute pointer constants

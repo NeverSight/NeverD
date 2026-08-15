@@ -6,12 +6,12 @@
 
 #include "neverd/loader/MachO/MachOExceptions.h"
 
-#include "neverd/object/SectionNames.h"
-#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -149,6 +149,21 @@ void parseDarwinExceptions(BinaryImage &Img) {
     F.CodeRange = Entry.CodeRange;
     F.Compact = Entry;
     F.HandlerDataVA = Entry.LSDAVA;
+
+    if (Entry.SemanticStatus == CompactUnwindSemanticStatus::Partial) {
+      F.ParseStatus = mergeExceptionParseStatus(F.ParseStatus,
+                                                ExceptionParseStatus::Partial);
+      if (Img.Arch == Arch::ARM &&
+          (Entry.NativeEncoding & kModeMask) == kARMModeFrameD &&
+          Entry.Kind == CompactUnwindKind::FramePointer) {
+        F.Diagnostics.emplace_back(
+            "compact unwind register layout depends on runtime stack "
+            "alignment");
+      } else {
+        F.Diagnostics.emplace_back(
+            "compact unwind encoding semantics are only partially decoded");
+      }
+    }
 
     if (Entry.Kind == CompactUnwindKind::Unknown) {
       F.ParseStatus = ExceptionParseStatus::Partial;

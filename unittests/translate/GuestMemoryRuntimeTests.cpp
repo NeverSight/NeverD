@@ -1204,6 +1204,60 @@ TEST(GuestMemoryRuntime, ExecutableWritesHonorEveryInvalidationPolicy) {
                        "generation validation");
 }
 
+TEST(GuestMemoryRuntime,
+     MemorySnapshotsOwnTheAuthoritativeBytesAndGenerationState) {
+  GuestState State = stateWithMemory({
+      {0x1000,
+       MemoryPermission::Read | MemoryPermission::Write,
+       3,
+       {0x10, 0x20, 0x30, 0x40}},
+      {0x2000,
+       MemoryPermission::Read | MemoryPermission::Write |
+           MemoryPermission::Execute,
+       7,
+       {0x50, 0x60, 0x70, 0x80}},
+  });
+  std::unique_ptr<GuestMemoryRuntime> Runtime =
+      createRuntime(State, CodeInvalidationPolicy::ValidateBeforeDispatch);
+
+  // The runtime owns its initial bytes rather than aliasing the logical state.
+  State.Memory[0].Bytes[0] = 0xff;
+  EXPECT_EQ(Runtime->loadScalar(0x1000, GuestScalarWidth::I8).Value, 0x10u);
+
+  ASSERT_EQ(Runtime->storeScalar(0x1001, GuestScalarWidth::I16, 0xbbaa).Status,
+            GuestMemoryAccessStatus::Completed);
+  const std::vector<GuestMemoryRegion> BeforeFailure =
+      Runtime->snapshotMemoryRegions();
+  expectFault(Runtime->storeScalar(0x1003, GuestScalarWidth::I16, 0xddcc),
+              RuntimeMemoryFaultKindV1::CrossRegion);
+  EXPECT_EQ(Runtime->storeScalar(0x2000, GuestScalarWidth::I8, 0xee).Status,
+            GuestMemoryAccessStatus::Completed);
+
+  std::vector<GuestMemoryRegion> Snapshot = Runtime->snapshotMemoryRegions();
+  ASSERT_EQ(Snapshot.size(), 2u);
+  EXPECT_EQ(Snapshot[0].Address, 0x1000u);
+  EXPECT_EQ(Snapshot[0].Permissions,
+            MemoryPermission::Read | MemoryPermission::Write);
+  EXPECT_EQ(Snapshot[0].Generation, 3u);
+  EXPECT_EQ(Snapshot[0].Bytes, (std::vector<uint8_t>{0x10, 0xaa, 0xbb, 0x40}));
+  EXPECT_EQ(Snapshot[1].Address, 0x2000u);
+  EXPECT_EQ(Snapshot[1].Generation, 8u);
+  EXPECT_EQ(Snapshot[1].Bytes, (std::vector<uint8_t>{0xee, 0x60, 0x70, 0x80}));
+
+  ASSERT_EQ(BeforeFailure.size(), 2u);
+  EXPECT_EQ(BeforeFailure[0].Bytes,
+            (std::vector<uint8_t>{0x10, 0xaa, 0xbb, 0x40}));
+  EXPECT_EQ(BeforeFailure[0].Generation, 3u);
+  EXPECT_EQ(BeforeFailure[1].Generation, 7u);
+
+  Snapshot[0].Bytes[0] = 0;
+  Snapshot[1].Generation = 0;
+  const std::vector<GuestMemoryRegion> Independent =
+      Runtime->snapshotMemoryRegions();
+  EXPECT_EQ(Independent[0].Bytes[0], 0x10u);
+  EXPECT_EQ(Independent[1].Generation, 8u);
+}
+
 TEST(GuestMemoryRuntime, GenerationOverflowFailsClosedBeforeMutation) {
   const GuestState State = stateWithMemory({
       {0x5000,

@@ -85,6 +85,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runSimplify();
   if (OptimizeIRCmd)
     return runOptimizeIR();
+  if (TranslateObjectCmd)
+    return runTranslateObject();
 
   // The active subcommand's registered name feeds the banner below.  Plugins
   // and diff returned already, so exactly one of the remaining named

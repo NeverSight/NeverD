@@ -111,10 +111,14 @@ nicht unterstützte Instruktionen, Selbstmodifikation, Ressourcenbudgets, extern
 Aufrufe, Speicherfehler und weitere Endbedingungen fest. Verbraucher müssen
 daher keine untypisierte Ganzzahl anhand des Stoppgrunds neu interpretieren.
 
-Unabhängig vom Stoppgrund dürfen die gemeldeten Instruktions-, Block- und
-Generated-Code-Zähler das jeweils zugehörige, von null verschiedene Budget der
-Anforderung nicht überschreiten. Eine `BudgetExhausted`-Nutzlast muss zusätzlich
-genau dieses angeforderte Limit benennen, nicht einen abgeleiteten oder
+Außer im jeweils passenden Fall `BudgetExhausted` dürfen die gemeldeten
+Instruktions-, Block- und Generated-Code-Zähler das zugehörige, von null
+verschiedene Anforderungsbudget nicht überschreiten. Instruktions- und
+Block-Erschöpfung stoppt exakt am Limit. Die Größe eines erzeugten Objekts kann
+erst nach dem unteilbaren Codegen exakt gemessen werden; deshalb darf das
+entsprechende Ergebnis `Observed > Limit` melden. Dieses verworfene Objekt wird
+nie gelinkt, veröffentlicht oder ausgeführt. Jede `BudgetExhausted`-Nutzlast
+nennt exakt das angeforderte Limit, keinen abgeleiteten oder
 implementierungsinternen Schwellwert.
 
 Der backend-private Vertrag `RuntimeControlBlockV1` ist
@@ -176,11 +180,15 @@ LLVM-Optimierung von `O0` bis `O3`, validiert die finale IR erneut und erzeugt
 relocatable ELF-, COFF- oder Mach-O-Objekte für die vier Hostarchitekturen des
 Vertrags. Er kanonisiert die exakten, zielgemangelten Block- und
 Runtime-Symbol-Manifeste, prüft jedes erzeugte Objekt und liefert die Identität
-der Runtime-Registry sowie versionierte Request- und Artefakt-Cache-Keys. Ein
-von null verschiedenes Generated-Byte-Budget begrenzt die Objektgröße; null
-bedeutet ohne aufruferseitige Begrenzung. Der Compiler endet bei geprüften
-relocatable Bytes: Er linkt, veröffentlicht, verteilt oder führt sie nicht aus
-und stellt kein Guest-Instruktions-Lowering bereit.
+der Runtime-Registry sowie versionierte Request- und Artefakt-Cache-Keys. Bei
+einem von null verschiedenen Generated-Byte-Budget darf nur ein passendes Objekt
+zur Artefaktprüfung fortschreiten. LLVM emittiert zuerst in einen privaten Puffer,
+um die exakte unteilbare Objektgröße zu messen; ein zu großes Objekt wird vor
+Veröffentlichung und Artefaktprüfung verworfen, wobei typisierte Telemetrie die
+beobachtete Größe und das exakte Anforderungslimit behält. Null bedeutet ohne
+aufruferseitige Begrenzung. Der Compiler endet bei geprüften relocatable Bytes:
+Er linkt, veröffentlicht, verteilt oder führt sie nicht aus und stellt kein
+Guest-Instruktions-Lowering bereit.
 
 Der Post-Codegen-Verifier prüft relocatable ELF-, COFF- und
 Mach-O-Objekte als geschlossene Menge. Format und Architektur müssen exakt zum
@@ -201,17 +209,96 @@ und jeweils höchstens eine Symboltabelle, dynamische Symboltabelle,
 Plattformversion und Data-in-Code-Anweisung; ihre Abhängigkeiten werden geprüft.
 Linker-Optionen und alle übrigen Commands werden abgelehnt.
 
-Die Implementierungen für Runtime, Zielauflösung, W^X-Veröffentlichung,
-Speicher, IR, Symbol-Registry, den verifizierten Objekt-Compiler und Objektprüfung
-definieren und validieren diese Grenzen. Es fehlen weiterhin das vollständige
-Guest-Instruktions-Lowering, ein Pfad für JITLink-Graphprüfung/Linken/Laden, ein
-vertrauenswürdiger Dispatcher oder eine Dispatcher-Factory und die Ausführung.
-Die vorhandenen Grenzen bilden daher weder ein vollständiges ausführbares
-Übersetzungs-Backend noch eine vollständige architekturübergreifende
-Übersetzungspipeline oder vollständige End-to-End-Ausnahmeumschreibung. Dieser
-Abschnitt beschreibt den Umfang von Vertrag und Verifier; er behauptet keine
-End-to-End-Verfügbarkeit von Erzeugung, Linken, Laden, Dispatch, Ausführung,
-JIT, AOT oder Ausnahmeumschreibung.
+`TranslationObjectRequestV1` ist die erste öffentliche, bewusst eng begrenzte
+Guest-Byte-zu-Objekt-Stufe auf diesen Verträgen. Aus der veröffentlichten,
+fail-closed arbeitenden x86-64-v1-Teilmenge für Skalarregister akzeptiert sie nur
+kanonische Codierungen ohne Legacy-Präfixe: REX.W-codierte `MOV`-,
+`ADD`/`SUB`- und `AND`/`OR`/`XOR`-Formen auf GPRs voller Breite, deren Operanden
+den unterstützten Register-/Immediate-LowIR-Formen entsprechen. Arithmetische
+Formen behalten ihre skalaren Flag-Berechnungen bei; logische Formen berechnen
+die von der Architektur definierten Flags und erhalten `AF`. Kanonisches `C3`
+`RET` und `C2 iw` `RET imm16` beenden Return-Blocks; kanonische direkt-relative
+`JMP`-Codierungen `EB cb` und `E9 cd` beenden Direct-Branch-Blocks. Das
+veröffentlichte Lowering-Schema ist 8. Kanonische traditionelle Jcc-Branches
+ohne Legacy-Präfix sind beschränkt auf: `JO`/`JNO` kurz `70/71 cb` oder nah
+`0F 80/81 cd`; `JB`/`JAE` mit `72/73 cb` oder `0F 82/83 cd`; `JE`/`JNE` mit
+`74/75 cb` oder `0F 84/85 cd`; `JBE`/`JA` mit `76/77 cb` oder `0F 86/87 cd`;
+`JS`/`JNS` mit `78/79 cb` oder `0F 88/89 cd`; `JP`/`JNP` mit `7A/7B cb` oder
+`0F 8A/8B cd`; `JL`/`JGE` mit `7C/7D cb` oder `0F 8C/8D cd`; und `JLE`/`JG`
+mit `7E/7F cb` oder `0F 8E/8F cd`. `JRCXZ`/`JECXZ`/`JCXZ` und
+`LOOP`/`LOOPE`/`LOOPNE` bleiben unveröffentlicht und scheitern fail-closed. Sie erzeugt
+ausschließlich ein geprüftes little-endian AArch64-ELF- oder
+Mach-O-Relocatable-Objekt. Gewöhnliche Guest-Speicheroperationen,
+Teilregisterformen, jede Instruktion oder Codierung außerhalb dieser exakten
+Teilmenge, Kontrollfluss außer Returns, diesen direkten Sprüngen und den oben
+veröffentlichten Jcc-Branches sowie jede vom Lowerer nicht implementierte
+LowIR-Operation werden vor der Objekterzeugung abgelehnt. Das
+für `RET` erforderliche geprüfte Lesen der Rücksprungadresse ist Teil seines
+Terminator-Vertrags und veröffentlicht kein allgemeines
+Guest-Speicher-Lowering. Der Request rekonstruiert und prüft den Blockdeskriptor,
+verwendet dieselbe aufgelöste Target Machine für Lowering und Objekterzeugung
+und verbindet beweisgesicherte semantische Vereinfachung mit LLVMs
+standardmäßiger `O2`-Optimierungspipeline. Diese Stufe deckt keine weiteren
+x86-64-Instruktionen, keine anderen Guest/Host-Paare und nicht die Gegenrichtung
+AArch64 nach x86-64 ab.
+
+Der öffentliche C-Einstiegspunkt
+`neverd_translate_x86_64_block_to_aarch64_object_v1`, der Python-ctypes-Wrapper
+`translate_x86_64_block_to_aarch64_object` und der Befehl
+`neverd translate-object` stellen dieselbe reine Objektgrenze bereit. Python
+verwendet `TranslationObjectFormat.ELF` oder `.MACHO`. Fehler der nativen
+Übersetzung lösen eine typisierte `TranslationError` mit `TranslationErrorCode`
+aus; die lokale Argumentprüfung löst dagegen `TypeError` oder `ValueError` aus.
+Bei Erfolg liefert Python ein unveränderliches, Python-eigenes Ergebnis. Das
+C-Ergebnis besitzt Objektbytes, stabile Cache-Identitäten und
+Optimierungstelemetrie; die CLI schreibt nur das gewählte ELF- oder
+Mach-O-Objekt. Alle drei Oberflächen enden
+vor Linken, Laden, Dispatch, Ausführung und Debugging; sie sind keine
+Schnittstellen für Ausführungssessions.
+
+`verifyTranslationLinkGraphV1` ergänzt eine unabhängige zweite Prüfung vor jeder
+Allocation. Er erzeugt aus einem akzeptierten AArch64-ELF- oder Mach-O-Objekt
+einen kurzlebigen LLVM-JITLink-Graphen und prüft Ziel, Abschnittsrechte,
+Block-/Runtime-Symbolmanifeste, den Abschluss externer Symbole sowie Arten und
+Ziele der Kanten. Der Graph wird nach Erzeugung des adressfreien Prüfergebnisses
+verworfen. Eine erfolgreiche Prüfung linkt, alloziert, löst, lädt,
+veröffentlicht, dispatcht oder führt keinen Code aus.
+
+`linkTranslationObjectV1` ist die separate Grenze für natives Linken. Sie prüft
+den vertrauenswürdigen Deskriptor, das Rohobjekt und den JITLink-Graphen vor und
+nach Pruning, Allocation, Symbolauflösung und Fixup erneut. Runtime-Symbole
+stammen ausschließlich aus der versiegelten Registry. Ein Dispatcher-Credential
+bindet den einzigen Manifest-Eintrag an seine Session, Blockidentität, Guest-
+Einstiegs-PC, Cache-Generation und Code-Epoche; beim Aufruf muss außerdem der
+Runtime-Guest-`RIP` diesem Einstieg entsprechen. Nach erfolgreicher Finalisierung
+wird ausführbarer Speicher mit endgültigen Rechten veröffentlicht. Unload sperrt
+neue Aufrufe und wartet auf einen aktiven Aufruf, bevor es die Allocation freigibt.
+Der Overload ohne Credential bleibt audit-only und kann nicht aufrufen.
+
+`NativeTranslationSessionV1` setzt diese Teile zur experimentellen C++-
+Ausführungsgrenze von x86-64 zu nativem AArch64 zusammen. In einem little-endian
+AArch64-ELF- oder Mach-O-Prozess bewahrt sie über eine mehrblockige Compile-Link-
+Validate-Invoke-Unload-Dispatcher-Schleife dieselbe geprüfte Guest-Memory-Runtime
+und denselben festen Guest State. Ein kanonischer direkter Sprung setzt am exakten
+statischen Ziel fort. Ein veröffentlichter kanonischer Jcc-Branch setzt
+nur am Taken- oder Fallthrough-Nachfolger fort, den das Blockmanifest deklariert; der Dispatcher
+lehnt jeden anderen ausgewählten PC ab. Ein Return beendet die Ausführung. Die
+globalen Budgets für Instruktionen, Blocks und erzeugte Objektbytes bleiben über
+alle Blocks exakt. Bei einem erfolgreichen Guest-Stopp werden ausgeführter
+Zustand und maßgeblicher Speicher gemeinsam committed. Cancellation ist gegenüber
+diesem finalen Commit linearisiert.
+
+Dies ist ein ausführbarer vertikaler Ausschnitt, kein vollständiger Übersetzer.
+Nicht unterstützt werden gewöhnliche Guest-Memory-Instruktionen, Teilregister,
+bedingter Kontrollfluss außerhalb des obigen exakten Schema-8-Ausschnitts für
+traditionelle Jcc, einschließlich `JRCXZ`/`JECXZ`/`JCXZ` und
+`LOOP`/`LOOPE`/`LOOPNE`,
+indirekter Kontrollfluss, Calls, Fließkomma, SIMD, x87, atomare Operationen,
+Systeminstruktionen, allgemeine Ausnahmeweitergabe, Block-Caching, andere
+Guest/Host-Paare und die Gegenrichtung AArch64 nach x86-64. Die
+Ausführungssession besitzt noch keine C-, Python-, CLI- oder JSON-Oberfläche;
+Debugging bleibt separat und nicht unterstützt. Die Objekt-APIs bleiben ohne
+Aktivierung nativer Ausführung nutzbar.
 
 Der Vertrag für erzeugte IR verlangt, dass jeder ihm unterliegende translated
 block hidden und non-preemptible ist und das C ABI
@@ -239,6 +326,53 @@ NeverDs beweisgesicherte semantische Vereinfachung bis zu einem gemeinsamen
 Fixpunkt mit der LLVM-Optimierung ausführen; die Richtlinie stellt kein
 ausführbares Übersetzungs-Backend bereit.
 
+## Grenzen der Ausnahmeumschreibung
+
+Mach-O Compact Unwind verfügt über einen strikten Parser für das ursprüngliche
+`__unwind_info`, einen Fixup-bewussten Parser für erzeugte
+`__LD,__compact_unwind`-Records, einen exakten Merge ursprünglicher und
+erzeugter Bereiche, einen deterministischen Encoder für reguläre Seiten sowie
+einen transaktionalen Installer für die finale Section. Der Installer schreibt
+eine vorhandene, dateigestützte `__TEXT,__unwind_info` nur dann in-place um,
+wenn die codierte Tabelle in ihre deklarierte Kapazität passt. Er prüft
+Architektur, Layout und Byte-Preimage erneut, nullt den ungenutzten Rest und
+parst das Ergebnis vor dem einmaligen Commit der äußeren Mach-O-Transaktion
+erneut, um semantische Gleichheit nachzuweisen. Fehlt die finale Section,
+werden erzeugte Compact-Records nicht installiert und die Transaktion darf nur
+über den unten beschriebenen exakten, authentifizierten DWARF-FDE-Abschluss
+fortfahren; eine vorhandene, aber zu kleine oder fehlerhafte finale Section
+scheitert weiterhin geschlossen. Erzeugte Records werden durch eine exakt
+vom Compiler aufgezeichnete Abbildung der IR-Quellfunktion auf das Ziel-MC-
+Owner-Symbol (einschließlich privater Definitionen, ohne Präfix- oder Mangling-
+Vermutungen), opake von null verschiedene Range-IDs und exakte halboffene
+Fragmentbereiche authentifiziert. Jeder erzeugte FDE muss genau einem
+authentifizierten Fragment entsprechen; jedes erforderliche Fragment muss
+genau einem in derselben Transaktion installierten FDE entsprechen, sofern es
+nicht durch einen exakten, strikt validierten Nicht-DWARF-Compact-Record
+abgedeckt ist. Benachbarte oder getrennte Fragmente desselben Funktions-Owners
+dürfen ein Quellrezept wiederverwenden; fehlende, doppelte, verwaiste,
+Owner-übergreifende oder grenzwidrige Identitäten scheitern vor der Mutation.
+Das neue RX-Segment wird erst nach dem Nachweis eines eindeutigen, am Datei-
+und VM-Ende liegenden `__LINKEDIT`, geprüfter Offset-Verschiebungen und einer
+strikten Wiederholung des finalen Datei- und VM-Layouts committed.
+
+Bei ARM32 Compact Unwind sind die codierte Stack-Anpassung und das GPR-Layout
+`Complete`. Die D-Register-Pattern-Selektoren 0 bis 3 sind ebenfalls `Complete`;
+4 bis 7 sind `Partial`, weil das Compact Word allein nicht jeden zur Laufzeit
+ausgerichteten CFA-relativen Slot beweisen kann. Partial-Einträge dürfen
+bewiesene Registeridentitäten für die Analyse behalten, werden aber von jedem
+Rewrite-Pfad fail-closed abgelehnt. Jeder EH-Frame-Install-Receipt bindet die
+exakte Zielarchitektur, Pointer-Breite und Byte-Reihenfolge; Compact-Unwind-
+DWARF-Binding lehnt jede abweichende Receipt-Target-Identity ab. Ein gelinkter
+nativer Throw/Catch-Nachweis fehlt weiterhin.
+
+PE, ELF und Mach-O besitzen jeweils formatspezifische Ausnahmekomponenten, doch
+NeverD veröffentlicht noch keine End-to-End-Rewrite-Pipeline für alle Formate
+und alle Ausnahmetypen. Nicht unterstützte Encodings oder ungelöste
+Registrierungs-/Layoutanforderungen müssen vor jeder Ausgabemutation scheitern;
+die vorhandene Teilunterstützung darf nicht als vollständiger Ausnahmeabschluss
+bezeichnet werden.
+
 ## Komponentenübersicht
 
 Jede Komponente ist ein von `add_neverd_component_library` erzeugtes statisches
@@ -261,7 +395,7 @@ CMake-Helper bereitgestellten LLVM- und Capstone-Bibliotheken.
 | `lib/sigs` | Signaturparsing, Datenbanken und Matching | Loader |
 | `lib/libc` | Bekannte libc-Namen und Aufrufmodell-Unterstützung | Eigenständige Komponente |
 | `lib/support` | Gemeinsame Hilfen zum Binärladen | Loader |
-| `lib/translate` | Versionierte Guest-State/Policy/Exit-Verträge, feste Runtime-ABI, geprüfter Guest-Speicher und Verträge zur Prüfung erzeugter IR/Objekte; die Implementierung eines Ausführungs-Backends liegt außerhalb dieser Komponente | IR-, LLVM- und LLVM-Object-Verträge |
+| `lib/translate` | Versionierte Guest-State/Policy/Exit-Verträge, feste Runtime-ABI, geprüfter Guest-Speicher, Audits erzeugter IR/Objekte/LinkGraphs, versiegeltes natives Linken und der experimentelle C++-Dispatcher von x86-64 zu AArch64 | IR-, LLVM-, LLVM-Object- und JITLink-Verträge |
 
 Öffentliche Header spiegeln diese Bereiche unter `include/neverd`. Lassen Sie
 keine interne C++-Klasse versehentlich Teil des SDK werden: Stabile externe

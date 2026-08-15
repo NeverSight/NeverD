@@ -18,6 +18,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPISynth.cpp
     capi/NeverDCAPISymbolic.cpp
     capi/NeverDCAPITargetConfig.cpp
+    capi/NeverDCAPITranslate.cpp
     plugin/PluginManager.cpp)
 
 # The Python host translation units include <Python.h> unconditionally, so they
@@ -66,6 +67,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDDebugInfo
     NeverDSolver
     NeverDSymbolic
+    NeverDTranslate
     NeverDSigs
     NeverDSBF
     ${NEVERD_COMMON_LIBS})
@@ -116,8 +118,10 @@ elseif(UNIX)
         INSTALL_RPATH "$ORIGIN")
 endif()
 
-# Copy public SDK headers alongside the output binaries so that
-# external consumers can find them at <bin_dir>/sdk/.
+# Copy public SDK headers alongside the output binaries.  Keep the historical
+# flat entry points, and also preserve the include hierarchy used by every
+# header so consumers can compile with `-I<libneverd_dir>/sdk` without reaching
+# back into the source tree, including with multi-configuration generators.
 set(NEVERD_SDK_HEADERS
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPI.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPITypes.h
@@ -132,15 +136,29 @@ set(NEVERD_SDK_HEADERS
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIOptimize.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISimplify.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISynth.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPITranslate.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDPlugin.h)
+
+set(NEVERD_STAGED_SDK_DIRECTORY
+    "$<TARGET_FILE_DIR:neverd_shared>/sdk")
 
 add_custom_command(TARGET neverd_shared POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk"
+        "${NEVERD_STAGED_SDK_DIRECTORY}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${NEVERD_STAGED_SDK_DIRECTORY}/neverd/sdk"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${NEVERD_STAGED_SDK_DIRECTORY}/neverd"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${NEVERD_SDK_HEADERS}
-        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/"
-    COMMENT "Copying SDK headers to ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/")
+        "${NEVERD_STAGED_SDK_DIRECTORY}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NEVERD_SDK_HEADERS}
+        "${NEVERD_STAGED_SDK_DIRECTORY}/neverd/sdk"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/include/neverd/OutputLanguages.def"
+        "${NEVERD_STAGED_SDK_DIRECTORY}/neverd"
+    COMMENT "Copying SDK headers next to libneverd")
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
   set(NEVERD_PYTHON_SDK_ROOT_FILES
@@ -160,17 +178,19 @@ if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
     "${CMAKE_SOURCE_DIR}/pluginsdk/python/examples/semantic_optimizer.py")
   add_custom_command(TARGET neverd_shared POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/neverd_plugin"
+        "${NEVERD_STAGED_SDK_DIRECTORY}/python"
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/examples"
+        "${NEVERD_STAGED_SDK_DIRECTORY}/python/neverd_plugin"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${NEVERD_STAGED_SDK_DIRECTORY}/python/examples"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${NEVERD_PYTHON_SDK_ROOT_FILES}
-        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/"
+        "${NEVERD_STAGED_SDK_DIRECTORY}/python"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${NEVERD_PYTHON_SDK_PACKAGE_FILES}
-        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/neverd_plugin"
+        "${NEVERD_STAGED_SDK_DIRECTORY}/python/neverd_plugin"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${NEVERD_PYTHON_SDK_EXAMPLE_FILES}
-        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/examples"
-    COMMENT "Copying Python plugin SDK to ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk/python/")
+        "${NEVERD_STAGED_SDK_DIRECTORY}/python/examples"
+    COMMENT "Copying Python plugin SDK next to libneverd")
 endif()

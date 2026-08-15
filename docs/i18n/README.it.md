@@ -189,7 +189,7 @@ Questo sostituisce gli artefatti omonimi ma deliberatamente non sposta il tag Gi
 | `build/bin/neverd-bench` | Benchmark (JSON) |
 | `build/bin/neverd-sigmaker` | Generatore `.pat` da librerie statiche |
 | `build/bin/libneverd.*` | Libreria condivisa del motore |
-| `build/bin/sdk/` | `NeverDCAPI.h`, `NeverDPlugin.h` |
+| `build/bin/sdk/` | Root include canonica del C SDK; usare `<neverd/sdk/NeverDCAPI.h>` o `<neverd/sdk/NeverDPlugin.h>` mantenendo la gerarchia `neverd/sdk/` |
 | `build/bin/signatures/` | Librerie di firme incluse |
 
 **Test**

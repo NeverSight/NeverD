@@ -188,7 +188,7 @@ gh workflow run neverd-release.yml \
 | `build/bin/neverd-bench` | ベンチマーク（JSON） |
 | `build/bin/neverd-sigmaker` | 静的ライブラリから `.pat` 生成 |
 | `build/bin/libneverd.*` | エンジン共有ライブラリ |
-| `build/bin/sdk/` | `NeverDCAPI.h`、`NeverDPlugin.h` |
+| `build/bin/sdk/` | C SDK の canonical include root。`neverd/sdk/` 階層を保った `<neverd/sdk/NeverDCAPI.h>` または `<neverd/sdk/NeverDPlugin.h>` を使用 |
 | `build/bin/signatures/` | 同梱シグネチャ |
 
 **テスト**

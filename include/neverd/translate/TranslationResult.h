@@ -142,8 +142,13 @@ struct TranslationResult {
   GuestArchitecture Guest = GuestArchitecture::X86_64;
   GuestArchitecture Host = GuestArchitecture::AArch64;
   uint64_t StartPC = 0;
+  /// Guest instructions successfully decoded and lowered during this request.
+  /// This is translation work, not a retired-instruction counter.
   uint64_t GuestInstructions = 0;
+  /// Complete blocks translated during this request, whether or not their
+  /// final guest instruction subsequently raised a guest-visible exit.
   uint64_t BlocksTranslated = 0;
+  /// Audited object bytes produced during this request.
   uint64_t GeneratedCodeBytes = 0;
   TranslationExit Exit;
 };

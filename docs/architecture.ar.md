@@ -98,10 +98,12 @@ fail-closed؛ لذلك لا تعتمد الحالة المستمرة على تخ
 الذاكرة، وشروط الانتهاء الأخرى. لذلك لا يحتاج المستهلك إلى إعادة تفسير عدد
 صحيح غير منمط وفقًا لسبب التوقف.
 
-مهما كان سبب التوقف، يجب ألا تتجاوز عدادات التعليمات وblocks والشفرة المولّدة
-المبلّغ عنها في النتيجة الميزانية غير الصفرية المقابلة في الطلب. ويجب أيضًا أن
-تحدد حمولة `BudgetExhausted` ذلك الـlimit المطلوب بدقة، لا عتبة مشتقة أو خاصة
-بالتنفيذ.
+باستثناء حالة `BudgetExhausted` المطابقة، يجب ألا تتجاوز عدادات التعليمات
+وblocks والشفرة المولّدة الميزانية غير الصفرية المقابلة في الطلب. يتوقف استنفاد
+التعليمات وblocks عند الـlimit تمامًا. لا يُعرف حجم object المولّد بدقة إلا بعد
+codegen غير قابل للتجزئة، لذلك قد تبلغ نتيجة الاستنفاد `Observed > Limit`؛ ولا
+يُربط ذلك الـobject المرفوض أو يُنشر أو يُنفّذ مطلقًا. تحدد كل حمولة
+`BudgetExhausted` الـlimit المطلوب بدقة، لا عتبة مشتقة أو خاصة بالتنفيذ.
 
 يبلغ عقد `RuntimeControlBlockV1` الداخلي للـbackend مقدار 128 بايت
 بالضبط، بمحاذاة 8 بايت، وتضبطه قيم magic وversion وsize وإزاحات حقول ثابتة
@@ -150,10 +152,13 @@ guest الافتراضية كونها مفاتيح بحث، ولا تتحول أ
 بالإثبات مع تحسين LLVM من `O0` إلى `O3`، ثم يتحقق من IR النهائي مجددًا ويصدر ملفات
 relocatable من ELF أو COFF أو Mach-O لمعماريات المضيف الأربع التي يغطيها العقد.
 ويطبّع manifests الدقيقة ذات target mangling لرموز blocks وruntime، ويدقق كل ملف
-ناتج، ويعيد identity لسجل runtime ومفاتيح cache ذات إصدار للطلب والأثر. تقيد ميزانية
-البايتات المولدة حجم الملف عندما تكون غير صفرية؛ ويعني الصفر عدم وجود حد من سياسة
-المستدعي. يتوقف compiler عند بايتات relocatable المدققة: فلا يربطها أو ينشرها أو
-يمررها إلى dispatcher أو ينفذها، ولا يوفر lowering لتعليمات guest.
+ناتج، ويعيد identity لسجل runtime ومفاتيح cache ذات إصدار للطلب والأثر. عندما تكون
+ميزانية البايتات المولدة غير صفرية، لا ينتقل إلى تحقق الأثر إلا object يلتزم بها.
+يصدر LLVM أولًا إلى buffer خاص لإكمال emit غير قابل للتجزئة وقياس الحجم الدقيق؛
+ويرفض object المتجاوز قبل النشر وتدقيق الأثر، مع احتفاظ telemetry المنمط بالحجم
+الملاحظ والـlimit المطلوب بدقة. ويعني الصفر عدم وجود حد من سياسة المستدعي. يتوقف
+compiler عند بايتات relocatable المدققة: فلا يربطها أو ينشرها أو يمررها إلى
+dispatcher أو ينفذها، ولا يوفر lowering لتعليمات guest.
 
 يدقق post-codegen verifier ملفات relocatable من ELF وCOFF وMach-O
 بوصفها مجموعة مغلقة. يجب أن تتطابق الصيغة والعمارة تمامًا مع المضيف المختار؛
@@ -172,14 +177,83 @@ segments. وتخضع load commands في Mach-O لقائمة سماح موجبة:
 وأمر data-in-code واحد لكل منها، مع التحقق من علاقات الاعتماد. وترفض خيارات
 linker وكل command آخر.
 
-تعرّف تطبيقات runtime وتحليل الهدف ونشر W^X والذاكرة وIR وسجل الرموز وcompiler
-ملفات الهدف المتحقق منه وتدقيق الملفات هذه الحدود وتتحقق منها. وما زال ينقصها
-lowering كامل لتعليمات guest، ومسار تدقيق/link/تحميل لـJITLink graph، وdispatcher
-موثوق أو dispatcher factory، والتنفيذ. لذلك لا تشكل الحدود المتاحة backend ترجمة
-قابلًا للتنفيذ ومتكاملًا، ولا pipeline متكاملًا للترجمة بين المعماريات، ولا إعادة
-كتابة متكاملة للاستثناءات من طرف إلى طرف. يحدد هذا القسم نطاق العقد وverifier؛
-ولا يدعي إتاحة التوليد أو الربط أو التحميل أو dispatch أو التنفيذ أو JIT أو AOT
-أو إعادة كتابة الاستثناءات من طرف إلى طرف.
+يمثل `TranslationObjectRequestV1` أول مرحلة عامة ومحددة عمدًا لتحويل بايتات guest
+إلى ملف هدف فوق هذه العقود. لا يقبل الجزء المنشور من v1 ذي سلوك fail-closed
+للسجلات العددية في x86-64 إلا الترميزات canonical الخالية من legacy prefixes:
+تعليمات `MOV` و`ADD`/`SUB` و`AND`/`OR`/`XOR` على GPR كاملة العرض بترميز REX.W
+عندما تطابق معاملاتها أشكال LowIR المدعومة للسجل/القيمة الفورية. تحتفظ الأشكال
+الحسابية بحسابات flags العددية الخاصة بها، وتحسب الأشكال المنطقية flags التي
+تحددها المعمارية مع الحفاظ على `AF`. تنهي ترميزات `C3` `RET` و`C2 iw`
+`RET imm16` canonical كتل الرجوع، وتنهي ترميزات `JMP` النسبية المباشرة canonical
+`EB cb` و`E9 cd` كتل الفرع المباشر. schema الـlowering المنشور هو 8. تقتصر فروع
+Jcc التقليدية canonical والخالية من legacy prefix على: `JO`/`JNO` بالصيغة
+القصيرة `70/71 cb` أو القريبة `0F 80/81 cd`؛ و`JB`/`JAE` مع `72/73 cb` أو
+`0F 82/83 cd`؛ و`JE`/`JNE` مع `74/75 cb` أو `0F 84/85 cd`؛ و`JBE`/`JA` مع
+`76/77 cb` أو `0F 86/87 cd`؛ و`JS`/`JNS` مع `78/79 cb` أو `0F 88/89 cd`؛
+و`JP`/`JNP` مع `7A/7B cb` أو `0F 8A/8B cd`؛ و`JL`/`JGE` مع `7C/7D cb` أو
+`0F 8C/8D cd`؛ و`JLE`/`JG` مع `7E/7F cb` أو `0F 8E/8F cd`.
+تبقى `JRCXZ`/`JECXZ`/`JCXZ` و`LOOP`/`LOOPE`/`LOOPNE` غير منشورة وتُرفض
+fail-closed. ولا ينتج إلا ملف relocatable مدققًا من AArch64
+ELF أو Mach-O بترتيب little-endian. تُرفض عمليات guest memory العادية، وأشكال
+السجلات الجزئية، وأي تعليمة أو ترميز خارج هذه المجموعة الدقيقة، وأي control flow
+عدا الرجوع وهذه القفزات المباشرة وفروع Jcc المنشورة أعلاه، وكل عملية
+LowIR لم ينفذها lowerer قبل إصدار الملف. أما القراءة المفحوصة
+لعنوان الرجوع التي
+يتطلبها `RET` فهي جزء داخلي من عقد terminator ولا تنشر lowering عامًا لذاكرة
+guest. يعيد الطلب بناء ويفحص
+descriptor الخاص بالـblock، ويستخدم target machine المحللة نفسها في lowering
+وإصدار الملف، ويدمج التبسيط الدلالي المحكوم بالإثبات مع pipeline التحسين
+الافتراضية `O2` في LLVM. لا تغطي هذه المرحلة تعليمات x86-64 الأخرى، ولا أزواج
+guest/host أخرى، ولا الاتجاه العكسي من AArch64 إلى x86-64.
+
+تكشف نقطة الدخول العامة بلغة C
+`neverd_translate_x86_64_block_to_aarch64_object_v1`، وPython ctypes wrapper
+`translate_x86_64_block_to_aarch64_object`، والأمر `neverd translate-object`
+الحد نفسه الذي يتوقف عند ملف الهدف. تستخدم Python القيمة
+`TranslationObjectFormat.ELF` أو `.MACHO`. عند فشل الترجمة في المكتبة الأصلية
+ترمي `TranslationError` منمطة تحمل `TranslationErrorCode`؛ أما التحقق المحلي
+من المعاملات فيرمي `TypeError` أو `ValueError`. وتعيد عند النجاح نتيجة ثابتة
+تملكها Python. تملك نتيجة C بايتات الملف وهويات cache المستقرة وبيانات telemetry
+للتحسين؛ ولا تكتب CLI إلا ملف ELF أو Mach-O المختار. تتوقف الواجهات الثلاث قبل
+الربط والتحميل وdispatch والتنفيذ والتصحيح؛ وليست واجهات session للتنفيذ.
+
+يضيف `verifyTranslationLinkGraphV1` تدقيقًا ثانيًا مستقلًا قبل أي allocation. يبني LLVM
+JITLink graph مؤقتًا من ملف AArch64 ELF أو Mach-O مقبول، ويفحص target وصلاحيات
+الأقسام وmanifests رموز block/runtime وانغلاق الرموز الخارجية وأنواع edges
+وأهدافها. يُتلف graph بعد إنتاج نتيجة تدقيق خالية من العناوين. لا يعني اجتياز هذا
+التدقيق ربط الشفرة أو تخصيصها أو تحليل رموزها أو تحميلها أو نشرها أو dispatch لها
+أو تنفيذها.
+
+يمثل `linkTranslationObjectV1` حد الربط الأصلي المنفصل. يعيد تدقيق descriptor
+الموثوق والملف الخام وJITLink graph قبل pruning وallocation وتحليل الرموز وfixup
+وبعدها. لا تأتي رموز runtime إلا من السجل sealed. تربط credential الخاصة
+بالـdispatcher إدخال manifest الوحيد بالـsession وهوية block وPC دخول guest
+وcache generation وcode epoch الخاصة به؛ ويتطلب الاستدعاء أيضًا تطابق `RIP`
+الخاص بـruntime guest مع ذلك الإدخال. تنشر finalization الناجحة ذاكرة قابلة للتنفيذ
+بالصلاحيات النهائية، ويلغي unload الاستدعاءات الجديدة وينتظر استدعاءً نشطًا واحدًا
+قبل تحرير allocation. تبقى overload الخالية من credential للتدقيق فقط ولا يمكنها
+الاستدعاء.
+
+يجمع `NativeTranslationSessionV1` هذه الأجزاء في حد تنفيذ C++ تجريبي من x86-64
+إلى AArch64 أصلي. في process من AArch64 ELF أو Mach-O بترتيب little-endian، يحافظ
+على runtime واحد مفحوص لذاكرة guest وعلى guest state ثابت عبر عدة blocks ضمن حلقة
+dispatcher من compile-link-validate-invoke-unload. تتابع القفزة المباشرة canonical
+عند هدفها الثابت الدقيق. ولا يتابع الفرع الشرطي canonical المنشور المعتمد على flag واحد إلا
+عند successor من نوع taken أو fallthrough يعلنه manifest الخاص بالـblock؛ ويرفض
+dispatcher أي PC محدد آخر. بينما ينهي الرجوع التنفيذ. تظل الميزانيات العالمية
+لعدد التعليمات والblocks وبايتات الملفات المولدة دقيقة عبر blocks. عند توقف guest
+ناجح تُعتمد الحالة المنفذة والذاكرة المرجعية معًا. وتُخطّى الإلغاء خطيًا بالنسبة
+إلى ذلك الاعتماد النهائي.
+
+هذه شريحة عمودية قابلة للتنفيذ وليست مترجمًا كاملًا. لا تدعم بعد تعليمات guest
+memory العادية، ولا السجلات الجزئية، ولا control flow الشرطي خارج شريحة Jcc
+التقليدية الدقيقة المنشورة في schema 8 أعلاه، بما يشمل `JRCXZ`/`JECXZ`/`JCXZ`
+و`LOOP`/`LOOPE`/`LOOPNE`، ولا control flow غير المباشر، ولا calls أو floating-point أو SIMD
+أو x87 أو atomics أو system instructions، ولا نشر الاستثناءات العام، ولا block
+cache، ولا أزواج guest/host الأخرى، ولا الاتجاه العكسي من AArch64 إلى x86-64.
+لا تملك session التنفيذ بعد واجهة C أو Python أو CLI
+أو JSON، ويبقى التصحيح منفصلًا وغير مدعوم. تظل object APIs أعلاه مفيدة دون تفعيل
+التنفيذ الأصلي.
 
 يشترط عقد IR المولّد أن يكون كل translated block خاضع له hidden وnon-preemptible
 وأن يستخدم C ABI `i32 (ptr state, ptr runtime)`. لا تُكتشف blocks إلا عبر سجل
@@ -203,6 +277,42 @@ constants إلا على عدد صحيح قياسي واحد لا يتجاوز ع
 حتى نقطة ثبات مشتركة مع تحسين LLVM؛ ولا توفر السياسة نفسها backend ترجمة قابلًا
 للتنفيذ.
 
+## حدود إعادة كتابة الاستثناءات
+
+يتوفر لـMach-O compact unwind parser صارم لـ`__unwind_info` الأصلي، وparser
+مدرك للـfixups لسجلات `__LD,__compact_unwind` المولدة، وmerge دقيق للنطاقات
+الأصلية والمولدة، وencoder حتمي للصفحات المنتظمة، وinstaller بمعاملة واحدة للـsection
+النهائي. لا يعيد installer كتابة `__TEXT,__unwind_info` موجودة وfile-backed
+in-place إلا إذا كان الجدول المرمّز يناسب سعتها المعلنة. وهو يعيد التحقق من
+المعمارية وlayout وbyte preimage، ويصفّر الذيل غير المستخدم، ثم يعيد parse النتيجة
+ويثبت تكافؤها الدلالي قبل commit الوحيد لمعاملة Mach-O الخارجية. عند غياب
+الـsection النهائي لا تُثبَّت سجلات compact المولدة، ولا يجوز أن تنجح المعاملة إلا
+عبر إغلاق DWARF-FDE الدقيق والموثّق أدناه؛ أما section موجود وقصير السعة أو malformed
+فيظل fail-closed. تُوثَّق السجلات المولدة بربط دقيق
+يسجله compiler بين IR source function وtarget MC owner symbol (بما في ذلك التعريفات
+الخاصة، من دون تخمين prefix الصيغة أو mangling)، ومعرّفات range مبهمة وغير صفرية،
+ونطاقات fragments نصف مفتوحة ودقيقة. يجب أن يطابق كل FDE مولد fragment موثقًا واحدًا
+بالضبط، ويجب أن يطابق كل fragment مطلوب FDE واحدًا ثبّتته المعاملة نفسها، إلا إذا غطاه
+سجل compact غير DWARF دقيق اجتاز تحقق encoding صارمًا. ويمكن للـfragments المتجاورة
+أو المنفصلة التابعة للـowner نفسه إعادة استخدام source recipe واحد؛ بينما تفشل الهوية
+المفقودة أو المكررة أو المعلّقة أو العابرة بين owners أو غير المطابقة للحدود قبل تعديل
+الخرج. لا يتم commit للـRX segment الجديد إلا بعد إثبات أن `__LINKEDIT` وحيد وطرفي في
+file/VM، وأن إزاحات offsets مفحوصة ضد overflow، وأن replay صارمًا للـlayout النهائي
+نجح.
+
+في ARM32 compact unwind تكون stack adjustment المشفرة وGPR layout بحالة `Complete`.
+كما تكون محددات D-register pattern من 0 إلى 3 بحالة `Complete`؛ أما من 4 إلى 7 فهي
+`Partial` لأن compact word وحده لا يثبت كل CFA-relative slot محاذى في runtime. يجوز
+لإدخال `Partial` الاحتفاظ بهويات السجلات المثبتة للتحليل، لكن كل مسار rewrite يرفضه
+fail-closed. تربط كل receipt لتثبيت EH-frame بدقة target architecture وpointer width
+وbyte order؛ ويرفض compact-unwind DWARF binding أي عدم تطابق في receipt target
+identity. ولا يزال إثبات native throw/catch على ملف مربوط قيد الإنجاز.
+
+تملك PE وELF وMach-O مكونات استثناءات خاصة بكل صيغة، لكن NeverD لا ينشر حتى الآن
+pipeline لإعادة الكتابة من طرف إلى طرف تغطي كل الصيغ وكل أنواع الاستثناءات. يجب
+أن يفشل أي encoding غير مدعوم أو متطلبات registration/layout غير محلولة قبل
+تعديل الخرج؛ ولا يجوز وصف الدعم الجزئي الحالي بأنه إغلاق كامل لمسار الاستثناءات.
+
 ## خريطة المكونات
 
 كل مكوّن أرشيف ثابت ينشئه `add_neverd_component_library`. يسرد الجدول تبعيات
@@ -225,7 +335,7 @@ CMake.
 | `lib/sigs` | تحليل التواقيع وقواعدها ومطابقتها | Loader |
 | `lib/libc` | أسماء libc المعروفة ودعم نموذج الاستدعاء | مكوّن مستقل |
 | `lib/support` | أدوات مشتركة لتحميل الثنائيات | Loader |
-| `lib/translate` | عقود ذات إصدار لحالة guest/policy/exit وruntime ABI ثابت وguest memory مفحوصة وتدقيق IR/ملفات الهدف المولدة؛ يقع تنفيذ backend التنفيذ خارج هذا المكوّن | عقود IR وLLVM وLLVM Object |
+| `lib/translate` | عقود ذات إصدار لحالة guest/policy/exit وruntime ABI ثابت وguest memory مفحوصة وتدقيق IR/ملفات الهدف/LinkGraph المولدة وربط أصلي sealed وdispatcher C++ تجريبي من x86-64 إلى AArch64 | عقود IR وLLVM وLLVM Object وJITLink |
 
 تعكس الرؤوس العامة هذه المناطق تحت `include/neverd`. تجنب جعل فئة C++ داخلية
 جزءًا من SDK بالخطأ: تنتمي العمليات الخارجية المستقرة إلى رأس C الخالص وإلى

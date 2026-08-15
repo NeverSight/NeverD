@@ -219,22 +219,23 @@ TEST(GuestState, ARM32ModeStatusAndProgramCounterStayCoherent) {
       setRegisterValue(State, 16, llvm::APInt(32, uint64_t{1} << 5))));
   EXPECT_FALSE(static_cast<bool>(validateGuestState(State)));
 
-  ASSERT_FALSE(static_cast<bool>(
-      setRegisterValue(State, 15, llvm::APInt(32, 0x1001))));
+  ASSERT_FALSE(
+      static_cast<bool>(setRegisterValue(State, 15, llvm::APInt(32, 0x1001))));
   llvm::Error TaggedPC = validateGuestState(State);
   EXPECT_NE(llvm::toString(std::move(TaggedPC)).find("canonical"),
             std::string::npos);
 
-  ASSERT_FALSE(static_cast<bool>(
-      setRegisterValue(State, 15, llvm::APInt(32, 0x1000))));
+  ASSERT_FALSE(
+      static_cast<bool>(setRegisterValue(State, 15, llvm::APInt(32, 0x1000))));
   State.ExecutionMode = GuestExecutionMode::ARM;
   llvm::Error StaleThumbBit = validateGuestState(State);
   EXPECT_NE(llvm::toString(std::move(StaleThumbBit)).find("CPSR.T"),
             std::string::npos);
 
-  ASSERT_FALSE(static_cast<bool>(setRegisterValue(State, 16, llvm::APInt(32, 0))));
-  ASSERT_FALSE(static_cast<bool>(
-      setRegisterValue(State, 15, llvm::APInt(32, 0x1002))));
+  ASSERT_FALSE(
+      static_cast<bool>(setRegisterValue(State, 16, llvm::APInt(32, 0))));
+  ASSERT_FALSE(
+      static_cast<bool>(setRegisterValue(State, 15, llvm::APInt(32, 0x1002))));
   llvm::Error MisalignedARMPC = validateGuestState(State);
   EXPECT_NE(llvm::toString(std::move(MisalignedARMPC)).find("word aligned"),
             std::string::npos);
@@ -594,8 +595,7 @@ TEST(TranslationResult, RequestContextBindsFallbackAndBudgetPolicy) {
   Options.InstructionBudget = 100;
   Options.BlockBudget = 200;
   Options.GeneratedCodeByteBudget = 300;
-  llvm::Error InstructionOverrun =
-      validateTranslationResult(Result, Options);
+  llvm::Error InstructionOverrun = validateTranslationResult(Result, Options);
   EXPECT_NE(llvm::toString(std::move(InstructionOverrun))
                 .find("guest-instruction count exceeds"),
             std::string::npos);
@@ -613,6 +613,18 @@ TEST(TranslationResult, RequestContextBindsFallbackAndBudgetPolicy) {
             std::string::npos);
 
   Result.GeneratedCodeBytes = 300;
+  EXPECT_FALSE(static_cast<bool>(validateTranslationResult(Result, Options)));
+
+  Result = TranslationResult{};
+  Result.Guest = GuestArchitecture::X86_64;
+  Result.Host = GuestArchitecture::AArch64;
+  Result.GeneratedCodeBytes = 301;
+  Result.Exit.Reason = TranslationStopReason::BudgetExhausted;
+  Result.Exit.Budget =
+      BudgetExit{TranslationBudgetKind::GeneratedCodeBytes, 300, 301};
+  Options.InstructionBudget = 0;
+  Options.BlockBudget = 0;
+  Options.GeneratedCodeByteBudget = 300;
   EXPECT_FALSE(static_cast<bool>(validateTranslationResult(Result, Options)));
 }
 

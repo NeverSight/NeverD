@@ -110,10 +110,13 @@ istruzioni non supportate, automodifica, budget di risorse, chiamate esterne,
 fault di memoria e altre condizioni terminali. I consumer non devono quindi
 reinterpretare un intero privo di tipo in base alla causa di arresto.
 
-Per qualsiasi causa di arresto, i conteggi di istruzioni, blocks e codice
-generato nel risultato non devono superare il corrispondente budget non nullo
-della richiesta. Un payload `BudgetExhausted` deve inoltre identificare
-esattamente quel limit richiesto, non una soglia derivata o privata
+Salvo il caso `BudgetExhausted` corrispondente, i conteggi di istruzioni, blocks
+e codice generato non devono superare il budget non nullo della richiesta.
+L’esaurimento di istruzioni e blocks si arresta esattamente al limit. La
+dimensione di un oggetto generato è nota solo dopo un codegen indivisibile;
+quindi il relativo risultato può indicare `Observed > Limit`. L’oggetto rifiutato
+non viene mai collegato, pubblicato o eseguito. Ogni payload `BudgetExhausted`
+identifica esattamente il limit richiesto, mai una soglia derivata o privata
 dell’implementazione.
 
 Il contratto backend-private `RuntimeControlBlockV1` misura
@@ -172,11 +175,15 @@ la semplificazione semantica proof-gated con l’ottimizzazione LLVM da `O0` a
 Mach-O per le quattro architetture host del contratto. Canonicalizza i manifest
 esatti dei blocks e dei simboli runtime dopo il mangling del target, controlla
 ogni oggetto emesso e restituisce l’identità del registro runtime insieme a
-chiavi di cache versionate per richiesta e artefatto. Un budget di byte generati
-diverso da zero limita la dimensione dell’oggetto; zero significa nessun limite
-imposto dal chiamante. Il compilatore si ferma ai byte relocatable controllati:
-non li collega, pubblica, invia al dispatcher o esegue e non fornisce il lowering
-delle istruzioni guest.
+chiavi di cache versionate per richiesta e artefatto. Con un budget di byte
+generati diverso da zero, solo un oggetto conforme può passare alla verifica
+dell’artefatto. LLVM emette prima in un buffer privato per misurare la dimensione
+esatta e indivisibile; un oggetto sovradimensionato viene rifiutato prima della
+pubblicazione e dell’audit, mentre la telemetria tipizzata conserva la dimensione
+osservata e il limit esatto richiesto. Zero significa nessun limite imposto dal
+chiamante. Il compilatore si ferma ai byte relocatable controllati: non li
+collega, pubblica, invia al dispatcher o esegue e non fornisce il lowering delle
+istruzioni guest.
 
 Il verifier post-codegen controlla gli oggetti relocatable ELF,
 COFF e Mach-O come insieme chiuso. Formato e architettura devono corrispondere
@@ -197,17 +204,98 @@ una symbol table, dynamic-symbol table, platform-version e un comando
 data-in-code, con verifica delle dipendenze. Le opzioni del linker e ogni altro
 command vengono rifiutati.
 
-Le implementazioni di runtime, risoluzione del target, pubblicazione W^X,
-memoria, IR, registro dei simboli, compilatore di oggetti verificato e audit
-degli oggetti definiscono e convalidano questi confini. Mancano ancora il
-lowering completo delle istruzioni guest, un percorso di audit/link/caricamento
-del grafo JITLink, un dispatcher fidato o la relativa factory e l’esecuzione. I
-confini disponibili non costituiscono quindi un backend di traduzione eseguibile
-completo, una pipeline completa di traduzione tra architetture né una
-riscrittura completa end-to-end
-delle eccezioni. Questa sezione descrive l’ambito del contratto e del verifier;
-non dichiara la disponibilità end-to-end di generazione, collegamento,
-caricamento, dispatch, esecuzione, JIT, AOT o riscrittura delle eccezioni.
+`TranslationObjectRequestV1` è la prima fase pubblica, volutamente ristretta,
+che trasforma byte guest in un oggetto su questi contratti. Nel sottoinsieme v1
+fail-closed pubblicato per i registri scalari x86-64 accetta soltanto codifiche
+canoniche prive di prefissi legacy: forme `MOV`, `ADD`/`SUB` e
+`AND`/`OR`/`XOR` con REX.W su GPR a larghezza intera i cui operandi hanno le
+forme LowIR registro/immediato supportate. Le forme aritmetiche mantengono i
+relativi calcoli dei flag scalari; quelle logiche calcolano i flag definiti
+dall’architettura preservando `AF`. Le codifiche canoniche `C3` `RET` e `C2 iw`
+`RET imm16` terminano i block di ritorno; le codifiche `JMP` direct-relative
+canoniche `EB cb` ed `E9 cd` terminano i block di branch diretto. Lo schema di
+lowering pubblicato è 8. I branch Jcc tradizionali, canonici e senza prefisso
+legacy sono limitati a: `JO`/`JNO` short `70/71 cb` o near `0F 80/81 cd`;
+`JB`/`JAE` con `72/73 cb` o `0F 82/83 cd`; `JE`/`JNE` con `74/75 cb` o
+`0F 84/85 cd`; `JBE`/`JA` con `76/77 cb` o `0F 86/87 cd`; `JS`/`JNS` con
+`78/79 cb` o `0F 88/89 cd`; `JP`/`JNP` con `7A/7B cb` o `0F 8A/8B cd`;
+`JL`/`JGE` con `7C/7D cb` o `0F 8C/8D cd`; e `JLE`/`JG` con `7E/7F cb` o
+`0F 8E/8F cd`. `JRCXZ`/`JECXZ`/`JCXZ` e `LOOP`/`LOOPE`/`LOOPNE` restano non
+pubblicati e falliscono fail-closed. Emette
+esclusivamente un oggetto relocatable ELF o Mach-O AArch64 little-endian
+sottoposto ad audit. Le normali operazioni sulla memoria guest, le forme a
+registro parziale, qualsiasi istruzione o codifica al di fuori di questo
+sottoinsieme esatto, i flussi di controllo diversi dai ritorni, da questi salti
+diretti e dai branch su un singolo flag pubblicati sopra, e ogni operazione
+LowIR non implementata dal lowerer vengono rifiutati prima dell’emissione. La
+lettura controllata dell’indirizzo di ritorno richiesta da
+`RET` fa parte del suo contratto di terminazione e non pubblica un lowering
+generale della memoria guest. La richiesta ricostruisce e convalida il
+descrittore del block, usa la stessa target machine risolta per lowering ed
+emissione dell’oggetto e combina la semplificazione semantica proof-gated con la
+pipeline di ottimizzazione `O2` predefinita di LLVM. Questa fase non copre altre
+istruzioni x86-64, altre coppie guest/host o la direzione inversa da AArch64 a
+x86-64.
+
+L’entry point C pubblico
+`neverd_translate_x86_64_block_to_aarch64_object_v1`, il wrapper Python ctypes
+`translate_x86_64_block_to_aarch64_object` e il comando
+`neverd translate-object` espongono lo stesso confine limitato all’oggetto.
+Python usa `TranslationObjectFormat.ELF` o `.MACHO`. Gli errori della traduzione
+nativa sollevano una `TranslationError` tipizzata che contiene
+`TranslationErrorCode`; la validazione locale degli argomenti solleva invece
+`TypeError` o `ValueError`. In caso di successo Python restituisce un risultato
+immutabile di sua proprietà. Il risultato C possiede i byte dell’oggetto, le
+identità di cache stabili e la telemetria di ottimizzazione; la CLI scrive
+soltanto l’oggetto ELF o Mach-O selezionato. Tutte e tre le superfici terminano
+prima di linking,
+caricamento, dispatch, esecuzione e debugging; non sono interfacce di sessione
+di esecuzione.
+
+`verifyTranslationLinkGraphV1` aggiunge un secondo audit indipendente prima di qualsiasi
+allocation. Costruisce un grafo LLVM JITLink effimero da un oggetto ELF o Mach-O
+AArch64 accettato e verifica target, permessi delle sezioni, manifest dei simboli
+block/runtime, chiusura dei simboli esterni, tipi e destinazioni degli edge. Il
+grafo viene distrutto dopo aver prodotto il risultato di audit privo di
+indirizzi. Superare questo audit non collega, alloca, risolve, carica, pubblica,
+invia al dispatcher né esegue codice.
+
+`linkTranslationObjectV1` è il confine separato di linking nativo. Riesegue
+l’audit del descrittore fidato, dell’oggetto grezzo e del grafo JITLink prima e
+dopo pruning, allocation, risoluzione dei simboli e fixup. I simboli runtime
+provengono soltanto dal registro sealed. Una credential del dispatcher lega
+l’unica voce del manifest alla relativa session, all’identità del block, al PC
+di ingresso guest, alla generazione della cache e all’epoca del codice;
+l’invocazione richiede inoltre che il `RIP` guest del runtime corrisponda a tale
+ingresso. Dopo la finalizzazione riuscita, pubblica memoria eseguibile con le
+permission finali. Unload revoca le nuove invocazioni e attende un’invocazione
+attiva prima di liberare l’allocation. L’overload senza credential resta
+audit-only e non può invocare.
+
+`NativeTranslationSessionV1` compone questi elementi nel confine sperimentale
+di esecuzione C++ da x86-64 ad AArch64 nativo. In un processo ELF o Mach-O
+AArch64 little-endian conserva lo stesso runtime di memoria guest controllato e
+lo stesso stato guest fisso tra più block di un loop dispatcher
+compile-link-validate-invoke-unload. Un salto diretto canonico continua al suo
+target statico esatto. Un branch canonico pubblicato su un singolo flag continua
+soltanto nel successore taken o fallthrough dichiarato dal manifest del block; il
+dispatcher rifiuta qualsiasi altro PC selezionato. Un ritorno termina. I budget
+globali per istruzioni, block e byte di oggetto generati restano esatti tra i
+block. Quando il guest si arresta con successo, lo stato eseguito e la memoria
+autorevole vengono committati insieme. La cancellazione è linearizzata rispetto
+a questo commit finale.
+
+Questa è una vertical slice eseguibile, non un traduttore completo. Non copre
+ancora normali istruzioni di memoria guest, registri parziali, flusso di
+controllo condizionale al di fuori dello slice esatto schema-8 dei Jcc
+tradizionali descritto sopra, inclusi `JRCXZ`/`JECXZ`/`JCXZ` e
+`LOOP`/`LOOPE`/`LOOPNE`, flusso
+di controllo indiretto, call, virgola mobile, SIMD, x87, operazioni atomiche,
+istruzioni di sistema, propagazione generale delle eccezioni, cache dei block,
+altre coppie guest/host o la direzione inversa da AArch64 a x86-64.
+La sessione di esecuzione non ha ancora superfici C, Python, CLI o JSON; il
+debugging resta separato e non supportato. Le API oggetto precedenti restano
+utilizzabili senza abilitare l’esecuzione nativa.
 
 Il contratto dell’IR generato richiede che ogni translated block soggetto ad
 esso sia hidden e non-preemptible e usi il C ABI
@@ -235,6 +323,52 @@ eseguire la semplificazione semantica di NeverD, subordinata a prova, fino a un
 fixed point congiunto con l’ottimizzazione LLVM; la policy non fornisce un
 backend di traduzione eseguibile.
 
+## Confini della riscrittura delle eccezioni
+
+Il compact unwind Mach-O dispone di un parser rigoroso del `__unwind_info`
+originale, di un parser consapevole dei fixup per i record
+`__LD,__compact_unwind` generati, di un merge esatto degli intervalli originali
+e generati, di un encoder deterministico per le pagine regolari e di un
+installer transazionale della sezione finale. L’installer riscrive in-place una
+`__TEXT,__unwind_info` esistente e file-backed solo quando la tabella codificata
+rientra nella capacità dichiarata. Rivalida architettura, layout e byte preimage,
+azzera la coda inutilizzata, quindi esegue nuovamente il parse del risultato e
+ne prova l’equivalenza semantica prima dell’unico commit della transazione Mach-O
+esterna. Se la sezione finale è assente, i record compact generati non vengono
+installati e la transazione può proseguire solo tramite la chiusura DWARF-FDE
+esatta e autenticata descritta sotto; una sezione finale esistente ma
+insufficiente o malformata continua a fallire in modalità fail-closed. I record
+generati sono autenticati tramite un’associazione esatta,
+registrata dal compiler, tra funzione IR sorgente e owner symbol MC di destinazione
+(incluse le definizioni private, senza ipotesi su prefissi o mangling), ID di
+intervallo opachi e diversi da zero e intervalli di frammento semiaperti esatti.
+Ogni FDE generato deve corrispondere esattamente a un solo frammento autenticato;
+ogni frammento richiesto deve corrispondere a un solo FDE installato dalla stessa
+transazione, salvo che sia coperto da un record compact non-DWARF esatto e
+rigorosamente validato. Frammenti adiacenti o disgiunti dello stesso owner di
+funzione possono riutilizzare una ricetta sorgente; identità mancanti, duplicate,
+dangling, cross-owner o con limiti incoerenti falliscono prima della modifica. Il
+nuovo segmento RX viene confermato solo dopo aver provato un `__LINKEDIT` unico e
+terminale nel file e nello spazio VM, shift degli offset con aritmetica controllata
+e un replay rigoroso del layout finale.
+
+Nel compact unwind ARM32, lo stack adjustment codificato e il layout GPR sono
+`Complete`. Anche i selettori di pattern dei registri D da 0 a 3 sono `Complete`;
+quelli da 4 a 7 sono `Partial` perché il compact word da solo non prova ogni slot
+relativo al CFA allineato a runtime. Una voce `Partial` può conservare le identità
+dei registri provate per l’analisi, ma ogni percorso di rewrite la rifiuta
+fail-closed. Ogni receipt di installazione EH-frame lega esattamente target
+architecture, pointer width e byte order; il binding DWARF compact-unwind rifiuta
+ogni target identity del receipt non corrispondente. Manca ancora una prova
+native throw/catch su un binario collegato.
+
+PE, ELF e Mach-O dispongono ciascuno di componenti delle eccezioni specifici del
+formato, ma NeverD non pubblica ancora una pipeline di riscrittura end-to-end
+per tutti i formati e tutti i tipi di eccezione. Un encoding non supportato o
+requisiti di registration/layout non risolti devono fallire prima di modificare
+l’output; il supporto parziale esistente non deve essere descritto come chiusura
+completa delle eccezioni.
+
 ## Mappa dei componenti
 
 Ogni componente è un archivio statico creato da
@@ -258,7 +392,7 @@ CMake.
 | `lib/sigs` | Parsing, database e matching delle firme | Loader |
 | `lib/libc` | Nomi libc noti e supporto del modello di chiamata | Componente autonomo |
 | `lib/support` | Helper condivisi per il caricamento binario | Loader |
-| `lib/translate` | Contratti versionati per guest state/policy/exit, runtime ABI fissa, guest memory controllata e audit di IR/oggetti generati; l’implementazione del backend di esecuzione è esterna a questo componente | Contratti IR, LLVM e LLVM Object |
+| `lib/translate` | Contratti versionati per guest state/policy/exit, runtime ABI fissa, guest memory controllata, audit di IR/oggetti/LinkGraph generati, linking nativo sealed e dispatcher C++ sperimentale da x86-64 ad AArch64 | Contratti IR, LLVM, LLVM Object e JITLink |
 
 Gli header pubblici rispecchiano queste aree sotto `include/neverd`. Evita che
 una classe C++ interna diventi accidentalmente parte dell’SDK: le operazioni

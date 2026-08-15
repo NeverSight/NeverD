@@ -90,9 +90,11 @@ triple、CPU 與特性，並拒絕互相衝突的輸入。其帶版本的快取�
 系統呼叫、例外或訊號、斷點、不支援的指令、自我修改、資源預算、外部呼叫、
 記憶體錯誤及其他終止條件。使用者不必再依停止原因重新解讀無型別整數。
 
-無論停止原因為何，結果回報的指令數、block 數與產生程式碼量都不得超過請求中
-對應的非零預算。`BudgetExhausted` 承載資料還必須精確識別該請求預算的 limit，
-不得回報推導值或實作私有門檻。
+除與對應預算相符的 `BudgetExhausted` 外，結果回報的指令數、block 數與產生程式碼量
+都不得超過請求中的對應非零預算。指令與 block 耗盡會精確停在 limit。產生目標檔案
+大小只能在不可分割的 codegen 完成後精確量測，因此該預算耗盡結果可以回報
+`Observed > Limit`；被拒絕的目標檔案絕不會被連結、發布或執行。每個
+`BudgetExhausted` 承載資料都必須精確識別請求的 limit，不得回報推導值或實作私有門檻。
 
 backend-private `RuntimeControlBlockV1` 契約固定為 128 位元組、8 位元組
 對齊，並以固定的 v1 magic、version、size、欄位偏移、全零保留欄位與自洽的型別化
@@ -133,7 +135,9 @@ helper class 與 ABI 形狀，但刻意排除原生位址，因此不受 ASLR �
 最佳化組合，再次驗證最終 IR，並為四種契約主機架構發射 relocatable ELF、COFF 或
 Mach-O 目標檔。它正規化精確的 target-mangled block/runtime 符號 manifest，稽核每個
 發射結果，並回傳 runtime registry identity 以及帶版本的請求與成品 cache key。產生
-位元組預算非零時會限制目標檔大小；零表示呼叫端政策不設上限。編譯器止於已稽核的
+位元組預算非零時，只有符合預算的目標檔才能繼續進入成品驗證。LLVM 先向私有緩衝區
+完成一次不可分割的發射以取得精確大小；超限目標檔會在發布與成品稽核前被拒絕，型別化
+遙測保留實際大小與請求的精確 limit。零表示呼叫端政策不設上限。編譯器止於已稽核的
 relocatable 位元組：不負責連結、發布、分派或執行，也不提供 guest 指令 lowering。
 
 post-codegen verifier 將 relocatable ELF、COFF、Mach-O 目標檔視為
@@ -150,12 +154,69 @@ program header 或 segment。Mach-O load command 採用正向白名單：必須�
 data-in-code command 各至多一個，並檢查相依關係；linker option 與其他所有 command
 均拒絕。
 
-runtime、目標解析、W^X 發布、memory、IR、符號登錄表、經過驗證的目標檔編譯器與
-目標檔稽核實作定義並驗證這些邊界。目前仍缺少完整的 guest 指令 lowering、JITLink
-graph 稽核/連結/載入路徑、受信任 dispatcher 或 dispatcher factory，以及執行能力。
-因此，現有邊界不構成完整的可執行翻譯後端、完整的跨架構翻譯流水線或完整的端到端
-例外重寫。本節描述契約與 verifier 的作用範圍，不宣稱具備產生、連結、載入、分派、
-執行、JIT、AOT 或例外重寫的端到端能力。
+`TranslationObjectRequestV1` 是建立在上述契約上的第一個公開、且刻意收窄的
+guest 位元組到目標檔切片。在目前發布的失敗封閉 x86-64 v1 純量暫存器子集中，它只
+接受不含 legacy prefix 的 canonical 編碼：採用受支援暫存器/立即數 LowIR 形狀的
+REX.W 全寬 GPR `MOV`、`ADD`/`SUB` 與 `AND`/`OR`/`XOR`。算術形式保留相應的純量
+flags 計算；邏輯形式計算架構定義的 flags 並保留 `AF`。canonical `C3` `RET` 與
+`C2 iw` `RET imm16` 會終止返回 block；canonical `EB cb` 與 `E9 cd` 直接相對 `JMP`
+編碼會終止直接分支 block。目前公開 lowering schema 為 8。canonical、無 legacy prefix
+的傳統 Jcc 僅支援以下形式：`JO`/`JNO` 的短形式 `70/71 cb` 或近形式 `0F 80/81 cd`；
+`JB`/`JAE` 的 `72/73 cb` 或 `0F 82/83 cd`；`JE`/`JNE` 的 `74/75 cb` 或
+`0F 84/85 cd`；`JBE`/`JA` 的 `76/77 cb` 或 `0F 86/87 cd`；`JS`/`JNS` 的
+`78/79 cb` 或 `0F 88/89 cd`；`JP`/`JNP` 的 `7A/7B cb` 或 `0F 8A/8B cd`；
+`JL`/`JGE` 的 `7C/7D cb` 或 `0F 8C/8D cd`；`JLE`/`JG` 的 `7E/7F cb` 或
+`0F 8E/8F cd`。`JRCXZ`/`JECXZ`/`JCXZ` 與 `LOOP`/`LOOPE`/`LOOPNE` 仍未發布，
+並以 fail-closed 方式拒絕。輸出僅限經過稽核的
+little-endian AArch64 ELF 或 Mach-O relocatable 目標檔。一般 guest 記憶體操作、部分
+暫存器形式、該精確子集外的任意指令或編碼、返回、這些直接跳轉與上述已發布 Jcc
+分支以外的控制流，以及 lowerer 尚未實作的任何 LowIR 操作，都會在目標檔產生前遭到
+拒絕。`RET` 所需的受檢回傳位址讀取屬於其 terminator 契約的內部
+行為，並不公開通用 guest 記憶體 lowering。請求會重建並驗證 block descriptor，
+lowering 與目標檔產生共用同一個已解析 target machine，並將證明閘控的語意簡化與
+LLVM 預設 `O2` 最佳化流水線組合。
+此切片不代表支援其他 x86-64 指令、其他 guest/host 組合，或反向 AArch64 到 x86-64
+翻譯。
+
+公開 C 入口 `neverd_translate_x86_64_block_to_aarch64_object_v1`、Python ctypes wrapper
+`translate_x86_64_block_to_aarch64_object` 與 `neverd translate-object` 命令公開同一個
+僅產生目標檔的邊界。Python 使用 `TranslationObjectFormat.ELF` 或 `.MACHO`；原生程式庫
+回報的翻譯失敗會拋出帶有 `TranslationErrorCode` 的型別化 `TranslationError`，本機
+參數驗證則拋出 `TypeError` 或 `ValueError`。成功時回傳由 Python 擁有的不可變結果。
+C 結果
+擁有目標檔位元組、穩定 cache identity 與最佳化遙測；CLI 只寫出所選的 ELF 或
+Mach-O 目標檔。這些 C、Python 與 CLI 物件介面都止於連結、載入、分派、執行與除錯
+之前；它們不是執行 session 介面。
+
+`verifyTranslationLinkGraphV1` 增加第二道獨立的 allocation 前稽核。它從已接受的 AArch64
+ELF 或 Mach-O 目標檔建立暫時的 LLVM JITLink graph，並檢查 target、section 權限、
+block/runtime 符號 manifest、外部符號閉包，以及 edge 類型與目標。產生不含位址的
+稽核結果後即銷毀 graph。通過此稽核不等於連結、配置、解析、載入、發布、分派或執行
+程式碼。
+
+`linkTranslationObjectV1` 是獨立的原生連結邊界。它會在裁剪、配置、符號解析與 fixup
+前後重新稽核受信任 descriptor、原始物件及 JITLink graph。runtime 符號只能來自 sealed
+登錄表。dispatcher credential 將唯一的 manifest 條目綁定至其 session、block identity、
+guest 入口 PC、cache generation 與 code epoch；呼叫時 runtime guest `RIP` 也必須符合
+該入口。成功 finalize 後以最終權限發布可執行記憶體；unload 會撤銷新呼叫，並等待一個
+進行中的呼叫結束後才釋放 allocation。無 credential 的 overload 仍僅供稽核，不能呼叫。
+
+`NativeTranslationSessionV1` 將這些元件組合成實驗性的 C++ x86-64 到原生 AArch64
+執行邊界。在 little-endian AArch64 ELF 或 Mach-O 程序上，它於 compile-link-validate-
+invoke-unload dispatcher 迴圈中跨 block 保留同一個受檢 guest-memory runtime 與固定
+guest state。canonical 直接跳轉會在其精確靜態目標繼續執行。已發布的 canonical
+Jcc 分支只能在 block manifest 宣告的 taken 或 fallthrough successor 繼續；dispatcher
+拒絕其他任何選定 PC。返回會終止執行。全域指令數、block 數與產生物件位元組數預算在
+多個 block 間保持精確；guest 成功停止時，已執行狀態與權威記憶體會一起提交。取消操作
+與最終提交線性化。
+
+這是一個可執行的縱向切片，而不是完整翻譯器。它尚不支援一般 guest-memory 指令、
+部分暫存器、上述精確 schema-8 傳統 Jcc 切片以外的條件控制流（包括
+`JRCXZ`/`JECXZ`/`JCXZ` 與 `LOOP`/`LOOPE`/`LOOPNE`）、間接控制流、
+呼叫、浮點、SIMD、x87、原子操作、系統指令、
+通用例外傳播、block cache、其他 guest/host 架構組合或反向 AArch64 到 x86-64。執行
+session 目前沒有 C、Python、CLI 或 JSON 介面，除錯仍是獨立且不受支援的能力。上述
+物件 API 不需啟用原生執行仍可單獨使用。
 
 產生 IR 的契約要求受該契約約束的每個 translated block 都是 hidden、non-preemptible，
 並採用 C ABI `i32 (ptr state, ptr runtime)`。runtime 只能透過私有登錄表發現 block，
@@ -173,6 +234,34 @@ TranslationIR 的直接 load/store，以及 private constant 儲存的值，只�
 generated-code ABI 只為純量整數定義。浮點、SIMD、x87、原子操作與系統指令均在
 該契約之外。選擇 `ProvenSemanticAndLLVM` 策略的實作必須執行 NeverD 現有的證明
 閘控語意簡化，並與 LLVM 最佳化共同達到不動點；該策略本身不提供可執行翻譯後端。
+
+## 例外重寫邊界
+
+Mach-O compact unwind 目前具備原始 `__unwind_info` 的嚴格 parser、產生
+`__LD,__compact_unwind` 記錄的 fixup-aware parser、原始/產生範圍的精確 merge、
+regular page 的確定性 encoder，以及交易式最終 section installer。installer 僅在既有、
+file-backed 的 `__TEXT,__unwind_info` 能容納編碼結果時原位重寫；它會重新驗證架構、版面
+與原始位元組，清零未使用尾端，並在 Mach-O 外層交易單次提交前重新解析結果、證明語意等價。
+產生的記錄以編譯器精確記錄的 IR 來源函式到目標 MC owner symbol 對應（包括私有定義，且
+不猜測物件格式前綴或改名規則）、opaque 非零 range ID，以及精確半開片段範圍進行驗證。
+每個產生的 FDE 都必須精確匹配唯一的已驗證片段；每個必要片段也必須精確匹配該交易安裝的
+唯一 FDE，除非它由一筆精確且通過嚴格 encoding 驗證的非 DWARF compact 記錄覆蓋。同一
+函式擁有的相鄰或不相鄰片段可重用同一來源 recipe；缺失、重複、懸空、跨 owner 或邊界不
+一致的身分會在修改輸出前失敗。新增 RX segment 只有在證明 `__LINKEDIT` 唯一且位於
+file/VM 末端、所有 offset relocation 均經過溢位檢查，並嚴格重播最終檔案與虛擬位址版面
+後才會提交。最終 section 缺失時不安裝產生的 compact 記錄，且僅在通過上述精確、已驗證的
+DWARF-FDE 閉環時才可繼續交易；既有最終 section 容量不足或格式錯誤時仍會 fail closed。
+已連結的原生 throw/catch 證明仍待完成。
+
+ARM32 compact unwind 的已編碼堆疊調整與 GPR 版面為 `Complete`；D 暫存器模式選擇值 0 至 3
+同樣為 `Complete`。選擇值 4 至 7 為 `Partial`，因為僅憑 compact word 無法證明每個經執行期
+對齊的 CFA 相對 slot。`Partial` 項目可為分析保留已證明的暫存器身分，但所有重寫路徑都會
+以 fail-closed 方式拒絕。每份 EH-frame 安裝 receipt 都精確綁定目標架構、指標寬度與位元組序；
+compact-unwind DWARF 綁定會拒絕任何 receipt target identity 不相符。
+
+PE、ELF 與 Mach-O 各自具備格式特定的例外元件，但 NeverD 尚未公開涵蓋所有格式、
+所有例外類型的端到端重寫流水線。不支援的 encoding 或未解析的註冊/layout 要求必須
+在修改輸出前失敗；現有的局部格式能力不能描述為例外重寫已完全閉環。
 
 ## 元件對照
 
@@ -195,7 +284,7 @@ NeverD 相依，不窮舉 CMake helper 統一提供的 LLVM 與 Capstone 程式�
 | `lib/sigs` | 簽章解析、資料庫與比對 | Loader |
 | `lib/libc` | 已知 libc 名稱與呼叫模型支援 | 獨立元件 |
 | `lib/support` | 共用二進位載入 helper | Loader |
-| `lib/translate` | 帶版本的 guest state/策略/退出、固定 runtime ABI、受檢 guest memory，以及產生 IR/目標檔稽核契約；執行後端實作不屬於此元件 | IR、LLVM 與 LLVM Object 契約 |
+| `lib/translate` | 帶版本的 guest state/策略/退出、固定 runtime ABI、受檢 guest memory、產生 IR/目標檔/LinkGraph 稽核、sealed 原生連結，以及實驗性的 x86-64 到 AArch64 C++ dispatcher | IR、LLVM、LLVM Object 與 JITLink 契約 |
 
 公開標頭在 `include/neverd` 下對應這些區域。不要意外讓內部 C++ 類別成為 SDK
 的一部分：穩定的外部操作應放在純 C 標頭及職責明確的

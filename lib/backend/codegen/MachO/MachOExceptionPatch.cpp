@@ -6,9 +6,13 @@
 
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 
+#include "MachOStrictLayout.h"
+
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/DwarfEHFrame.h"
+#include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
+#include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -26,7 +30,9 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <optional>
+#include <set>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -39,16 +45,14 @@ using namespace llvm::MachO;
 
 namespace {
 
+using macho_patch_detail::checkedAdd;
+using macho_patch_detail::collectMachOFileRanges;
+using macho_patch_detail::MachOFileRange;
+using macho_patch_detail::validateLoadCommandRegion;
+
 llvm::Error patchError(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::invalid_argument,
                                  "macho exception patch: " + Message);
-}
-
-bool checkedAdd(uint64_t Left, uint64_t Right, uint64_t &Result) {
-  if (Right > std::numeric_limits<uint64_t>::max() - Left)
-    return false;
-  Result = Left + Right;
-  return true;
 }
 
 bool sameRegion(const MachOEHFrameRegion &Left,
@@ -61,137 +65,132 @@ bool sameRegion(const MachOEHFrameRegion &Left,
          Left.SectionHeaderOff == Right.SectionHeaderOff;
 }
 
-bool validateLoadCommandRegion(llvm::ArrayRef<uint8_t> Binary,
-                               MachOHeaderInfo &Header) {
-  Header = parseMachOHeader(Binary.data(), Binary.size());
-  if (Header.HeaderSize == 0 || Header.NCmds == 0 ||
-      Header.SizeOfCmds >
-          std::numeric_limits<uint64_t>::max() - Header.HeaderSize)
-    return false;
-  const uint64_t End = Header.HeaderSize + Header.SizeOfCmds;
-  if (End > Binary.size())
-    return false;
-
-  uint64_t Cursor = Header.HeaderSize;
-  for (uint32_t I = 0; I < Header.NCmds; ++I) {
-    if (!rangeInBounds(Cursor, sizeof(load_command), End))
-      return false;
-    const auto *Command = reinterpret_cast<const load_command *>(
-        Binary.data() + static_cast<size_t>(Cursor));
-    if (Command->cmdsize < sizeof(load_command) ||
-        !rangeInBounds(Cursor, Command->cmdsize, End) ||
-        (Command->cmdsize % (Header.Is64 ? 8u : 4u)) != 0)
-      return false;
-    if (Command->cmd == getMachOSegmentCmdID(Header.Is64)) {
-      const uint32_t BaseSize = getMachOSegmentCmdSize(Header.Is64);
-      const uint32_t SectionSize = getMachOSectionSize(Header.Is64);
-      if (Command->cmdsize < BaseSize)
-        return false;
-      const uint32_t Nsects =
-          Header.Is64
-              ? reinterpret_cast<const segment_command_64 *>(Command)->nsects
-              : reinterpret_cast<const segment_command *>(Command)->nsects;
-      if (Nsects >
-              (std::numeric_limits<uint32_t>::max() - BaseSize) / SectionSize ||
-          BaseSize + Nsects * SectionSize != Command->cmdsize)
-        return false;
-    }
-    Cursor += Command->cmdsize;
-  }
-  return Cursor == End;
+bool sameRegionIdentity(const MachOEHFrameRegion &Left,
+                        const MachOEHFrameRegion &Right) {
+  return Left.Is64 == Right.Is64 && Left.SectionVA == Right.SectionVA &&
+         Left.SectionFileOff == Right.SectionFileOff &&
+         Left.LimitFileOff == Right.LimitFileOff &&
+         Left.SectionHeaderOff == Right.SectionHeaderOff;
 }
 
-struct MachOFileRange {
-  uint64_t Begin = 0;
-  uint64_t End = 0;
-  uint64_t HeaderOff = 0;
-};
+bool sameFDE(const DwarfEHFrameRecord &Left, const DwarfEHFrameRecord &Right) {
+  return Left.BeginVA == Right.BeginVA && Left.EndVA == Right.EndVA &&
+         Left.RecordVA == Right.RecordVA;
+}
 
-bool collectMachOFileRanges(llvm::ArrayRef<uint8_t> Binary,
-                            std::vector<MachOFileRange> &Segments,
-                            std::vector<MachOFileRange> &Sections) {
-  bool Valid = true;
-  forEachMachOLoadCommand(
-      Binary.data(), Binary.size(),
-      [&](const uint8_t *LCPtr, uint32_t Cmd, uint32_t CmdSize, bool Is64) {
-        if (!Valid || Cmd != getMachOSegmentCmdID(Is64))
-          return;
-        const MachOSegFields Segment = readMachOSegment(LCPtr, Is64);
-        uint64_t SegmentFileEnd = 0;
-        uint64_t SegmentVMEnd = 0;
-        if (!checkedAdd(Segment.FileOff, Segment.FileSize, SegmentFileEnd) ||
-            !checkedAdd(Segment.VMAddr, Segment.VMSize, SegmentVMEnd) ||
-            Segment.FileSize > Segment.VMSize ||
-            !rangeInBounds(Segment.FileOff, Segment.FileSize, Binary.size())) {
-          Valid = false;
-          return;
-        }
-        if (Segment.FileSize != 0)
-          Segments.push_back({Segment.FileOff, SegmentFileEnd,
-                              static_cast<uint64_t>(LCPtr - Binary.data())});
+bool sameFDEs(llvm::ArrayRef<DwarfEHFrameRecord> Left,
+              llvm::ArrayRef<DwarfEHFrameRecord> Right) {
+  return Left.size() == Right.size() &&
+         std::equal(Left.begin(), Left.end(), Right.begin(), sameFDE);
+}
 
-        const uint32_t BaseSize = getMachOSegmentCmdSize(Is64);
-        const uint32_t SectionSize = getMachOSectionSize(Is64);
-        const uint32_t Count =
-            Is64 ? reinterpret_cast<const segment_command_64 *>(LCPtr)->nsects
-                 : reinterpret_cast<const segment_command *>(LCPtr)->nsects;
-        if (BaseSize + uint64_t(Count) * SectionSize != CmdSize) {
-          Valid = false;
-          return;
-        }
-        for (uint32_t I = 0; I < Count; ++I) {
-          const uint8_t *SectionPtr =
-              LCPtr + BaseSize + uint64_t(I) * SectionSize;
-          const uint64_t Address =
-              Is64 ? reinterpret_cast<const section_64 *>(SectionPtr)->addr
-                   : reinterpret_cast<const section *>(SectionPtr)->addr;
-          const uint64_t Size =
-              Is64 ? reinterpret_cast<const section_64 *>(SectionPtr)->size
-                   : reinterpret_cast<const section *>(SectionPtr)->size;
-          const uint32_t FileOff =
-              Is64 ? reinterpret_cast<const section_64 *>(SectionPtr)->offset
-                   : reinterpret_cast<const section *>(SectionPtr)->offset;
-          const uint32_t Flags =
-              Is64 ? reinterpret_cast<const section_64 *>(SectionPtr)->flags
-                   : reinterpret_cast<const section *>(SectionPtr)->flags;
-          if (Size == 0 ||
-              isVirtualSection(static_cast<uint8_t>(Flags & SECTION_TYPE)))
-            continue;
-          uint64_t End = 0;
-          if (!checkedAdd(FileOff, Size, End) || FileOff < Segment.FileOff ||
-              End > SegmentFileEnd ||
-              !rangeInBounds(FileOff, Size, Binary.size())) {
-            Valid = false;
-            return;
-          }
-          const uint64_t Delta = FileOff - Segment.FileOff;
-          if (Delta > Segment.VMSize || Size > Segment.VMSize - Delta ||
-              Delta > std::numeric_limits<uint64_t>::max() - Segment.VMAddr ||
-              Segment.VMAddr + Delta != Address) {
-            Valid = false;
-            return;
-          }
-          Sections.push_back(
-              {FileOff, End,
-               static_cast<uint64_t>(SectionPtr - Binary.data())});
-        }
-      });
-  if (!Valid)
+bool isDwarfCompactEncoding(Arch TargetArch, uint32_t Encoding) {
+  const uint32_t Mode = Encoding & macho_unwind::kModeMask;
+  switch (TargetArch) {
+  case Arch::X64:
+  case Arch::X86:
+    return Mode == macho_unwind::kX86_64ModeDwarf;
+  case Arch::AArch64:
+    return Mode == macho_unwind::kARM64ModeDwarf;
+  case Arch::ARM:
+    return Mode == macho_unwind::kARMModeDwarf;
+  default:
     return false;
+  }
+}
 
-  auto ByBegin = [](const MachOFileRange &Left, const MachOFileRange &Right) {
-    return std::tie(Left.Begin, Left.End, Left.HeaderOff) <
-           std::tie(Right.Begin, Right.End, Right.HeaderOff);
-  };
-  std::sort(Segments.begin(), Segments.end(), ByBegin);
-  std::sort(Sections.begin(), Sections.end(), ByBegin);
-  auto HasOverlap = [](const std::vector<MachOFileRange> &Ranges) {
-    for (size_t I = 1; I < Ranges.size(); ++I)
-      if (Ranges[I].Begin < Ranges[I - 1].End)
-        return true;
-    return false;
-  };
-  return !HasOverlap(Segments) && !HasOverlap(Sections);
+uint8_t pointerWidthForArch(Arch TargetArch) {
+  switch (TargetArch) {
+  case Arch::X64:
+  case Arch::AArch64:
+    return 8;
+  case Arch::X86:
+  case Arch::ARM:
+    return 4;
+  default:
+    return 0;
+  }
+}
+
+using AuthenticatedCompactCoverage =
+    std::map<uint64_t, const MachOCompactUnwindRecord *>;
+
+llvm::Expected<AuthenticatedCompactCoverage>
+authenticateCompactCoverage(const MachOCompactUnwindRecords *Coverage,
+                            const CompiledImage &Compiled) {
+  AuthenticatedCompactCoverage Result;
+  if (!Coverage)
+    return Result;
+
+  if (Compiled.Format != BinaryFormat::MachO ||
+      (Compiled.TargetArch != Arch::X64 && Compiled.TargetArch != Arch::X86 &&
+       Compiled.TargetArch != Arch::ARM &&
+       Compiled.TargetArch != Arch::AArch64) ||
+      Compiled.PointerWidth != pointerWidthForArch(Compiled.TargetArch) ||
+      Compiled.ByteOrder != llvm::endianness::little ||
+      Coverage->TargetArch != Compiled.TargetArch ||
+      Coverage->PointerWidth != Compiled.PointerWidth ||
+      Coverage->ByteOrder != Compiled.ByteOrder)
+    return patchError("compact coverage target metadata does not match the "
+                      "compiled image");
+
+  std::map<uint64_t, const llvm::mc_rewrite::RewriteFunctionRange *> Ranges;
+  for (const llvm::mc_rewrite::RewriteFunctionRange &Range :
+       Compiled.FunctionRanges)
+    Ranges.emplace(Range.Id, &Range);
+
+  for (const MachOCompactUnwindRecord &Record : Coverage->Records) {
+    if (llvm::Error Error = validateGeneratedMachOCompactUnwindRecordEncoding(
+            Coverage->TargetArch, Record))
+      return std::move(Error);
+    if (Record.FunctionRangeId == 0 ||
+        !Result.emplace(Record.FunctionRangeId, &Record).second)
+      return patchError("compact coverage has a missing or duplicate function "
+                        "range identity");
+    const auto RangeIt = Ranges.find(Record.FunctionRangeId);
+    if (RangeIt == Ranges.end())
+      return patchError("compact coverage has a dangling function range "
+                        "identity");
+    const llvm::mc_rewrite::RewriteFunctionRange &Range = *RangeIt->second;
+    const auto Owner = Compiled.FunctionOwnerAddrs.find(Record.OwnerSymbol);
+    if (Record.FunctionVA != Range.BeginVA ||
+        Record.FunctionEndVA != Range.EndVA ||
+        Range.EndVA - Range.BeginVA != Record.RangeLength ||
+        Record.FunctionSymbol != Range.BeginSymbol ||
+        Record.OwnerSymbol != Range.OwnerSymbol ||
+        Record.OwnerVA != Range.OwnerVA ||
+        Owner == Compiled.FunctionOwnerAddrs.end() ||
+        Owner->second != Record.OwnerVA)
+      return patchError("compact coverage does not exactly match compiler "
+                        "function-range provenance");
+  }
+  return Result;
+}
+
+bool hasStandaloneCompactCoverage(
+    const AuthenticatedCompactCoverage &Coverage,
+    const llvm::mc_rewrite::RewriteFunctionRange &Range, Arch TargetArch) {
+  const auto It = Coverage.find(Range.Id);
+  return It != Coverage.end() &&
+         !isDwarfCompactEncoding(TargetArch, It->second->Encoding);
+}
+
+std::optional<uint64_t>
+getDeclaredEHFrameSize(llvm::ArrayRef<uint8_t> Binary,
+                       const MachOEHFrameRegion &Region) {
+  if (Region.Is64) {
+    if (!rangeInBounds(Region.SectionHeaderOff, sizeof(section_64),
+                       Binary.size()))
+      return std::nullopt;
+    return reinterpret_cast<const section_64 *>(Binary.data() +
+                                                Region.SectionHeaderOff)
+        ->size;
+  }
+  if (!rangeInBounds(Region.SectionHeaderOff, sizeof(section), Binary.size()))
+    return std::nullopt;
+  return reinterpret_cast<const section *>(Binary.data() +
+                                           Region.SectionHeaderOff)
+      ->size;
 }
 
 /// Return the byte offset at which another .eh_frame sequence can be appended.
@@ -468,20 +467,66 @@ bool requiresRegisteredMachOEHFrame(const llvm::Module &Mod) {
   return Requirements->RequiresRegisteredUnwind;
 }
 
-llvm::Error installMachOEHFrame(std::vector<uint8_t> &Binary,
-                                const std::optional<MachOEHFrameRegion> &Region,
-                                const CompiledImage &Compiled,
-                                const llvm::Module &Mod) {
+llvm::Expected<MachOEHFrameInstallReceipt> installMachOEHFrameWithReceipt(
+    std::vector<uint8_t> &Binary,
+    const std::optional<MachOEHFrameRegion> &Region,
+    const CompiledImage &Compiled, const llvm::Module &Mod,
+    const MachOCompactUnwindRecords *CompactCoverage) {
+  if (!Compiled.Success || Compiled.Format != BinaryFormat::MachO ||
+      (Compiled.TargetArch != Arch::X64 && Compiled.TargetArch != Arch::X86 &&
+       Compiled.TargetArch != Arch::AArch64 &&
+       Compiled.TargetArch != Arch::ARM) ||
+      Compiled.PointerWidth != pointerWidthForArch(Compiled.TargetArch) ||
+      Compiled.ByteOrder != llvm::endianness::little)
+    return patchError("compiled target metadata is invalid for Mach-O unwind "
+                      "installation");
+  MachOEHFrameInstallReceipt Receipt(Compiled.TargetArch, Compiled.PointerWidth,
+                                     Compiled.ByteOrder);
+  if (!Compiled.FunctionRangesValid ||
+      !llvm::mc_rewrite::validateRewriteFunctionRanges(
+          Compiled.FunctionRanges, Compiled.FunctionOwnerAddrs))
+    return patchError("compiled function-range provenance is invalid");
+  auto Compact = authenticateCompactCoverage(CompactCoverage, Compiled);
+  if (!Compact)
+    return Compact.takeError();
   auto Requirements = exception_rewrite::validateExceptionRewriteContracts(Mod);
   if (!Requirements)
     return Requirements.takeError();
   const bool Required = Requirements->RequiresRegisteredUnwind;
   if (Required && !Compiled.Unresolved.empty())
     return patchError("required unwind output has unresolved symbols");
-  auto RequiredFunctions = exception_rewrite::resolveRequiredFunctionAddresses(
-      *Requirements, Compiled);
+  auto RequiredFunctions =
+      exception_rewrite::resolveRequiredFunctionOwners(*Requirements, Compiled);
   if (!RequiredFunctions)
     return RequiredFunctions.takeError();
+
+  std::vector<const llvm::mc_rewrite::RewriteFunctionRange *> RequiredFDERanges;
+  if (Required) {
+    for (const exception_rewrite::ResolvedFunctionOwner &Owner :
+         *RequiredFunctions) {
+      bool HasRange = false;
+      for (const llvm::mc_rewrite::RewriteFunctionRange &Range :
+           Compiled.FunctionRanges) {
+        if (Range.OwnerSymbol != Owner.OwnerSymbol ||
+            Range.OwnerVA != Owner.OwnerVA)
+          continue;
+        HasRange = true;
+        if (!hasStandaloneCompactCoverage(*Compact, Range, Compiled.TargetArch))
+          RequiredFDERanges.push_back(&Range);
+      }
+      if (!HasRange)
+        return patchError("required function has no authenticated unwind "
+                          "fragment");
+    }
+  }
+  const bool MustInstall = !RequiredFDERanges.empty();
+
+  auto OmitOrFail = [&](const llvm::Twine &Message)
+      -> llvm::Expected<MachOEHFrameInstallReceipt> {
+    if (MustInstall)
+      return patchError(Message);
+    return Receipt;
+  };
 
   const CompiledSection *Generated = nullptr;
   for (const CompiledSection &Section : Compiled.Sections)
@@ -495,36 +540,32 @@ llvm::Error installMachOEHFrame(std::vector<uint8_t> &Binary,
   // generated section in CompiledImage::Bytes as before.  Only externally
   // placed bytes need to be appended to an existing section.
   if (!Generated || Generated->IsInImage) {
-    if (Required)
-      return patchError("no registrable __eh_frame produced");
-    return llvm::Error::success();
+    return OmitOrFail("no registrable __eh_frame produced");
   }
 
-  if (!Region) {
-    if (Required)
-      return patchError("the image declares no __eh_frame to register in");
-    return llvm::Error::success();
-  }
+  if (Generated->ExternalBytes.empty())
+    return OmitOrFail("regenerated __eh_frame is empty");
+
+  if (!Region)
+    return OmitOrFail("the image declares no __eh_frame to register in");
 
   const std::optional<MachOEHFrameRegion> Current =
       findMachOEHFrameRegion(Binary);
   if (!Current || !sameRegion(*Current, *Region)) {
-    if (Required)
-      return patchError("the public __eh_frame region is not the image's "
-                        "exact current layout");
-    return llvm::Error::success();
+    return OmitOrFail("the public __eh_frame region is not the image's exact "
+                      "current layout");
   }
 
   auto Records = decodeDwarfEHFrameRecords(Generated->ExternalBytes,
                                            Generated->VA, Current->Is64);
   if (!Records) {
-    if (Required)
+    if (MustInstall)
       return Records.takeError();
     llvm::consumeError(Records.takeError());
     LLVM_DEBUG(llvm::dbgs()
                << "macho exception patch: malformed optional __eh_frame; "
                   "leaving the image unchanged\n");
-    return llvm::Error::success();
+    return Receipt;
   }
   const uint64_t ExistingSize =
       Current->AppendFileOff - Current->SectionFileOff;
@@ -534,45 +575,141 @@ llvm::Error installMachOEHFrame(std::vector<uint8_t> &Binary,
                               static_cast<size_t>(ExistingSize)),
       Current->SectionVA, Current->Is64);
   if (!ExistingRecords) {
-    if (Required)
+    if (MustInstall)
       return ExistingRecords.takeError();
     llvm::consumeError(ExistingRecords.takeError());
     LLVM_DEBUG(llvm::dbgs()
                << "macho exception patch: malformed input __eh_frame; "
                   "leaving the image unchanged\n");
-    return llvm::Error::success();
+    return Receipt;
+  }
+
+  for (const DwarfEHFrameRecord &Record : *Records) {
+    const size_t ExactRanges = std::count_if(
+        Compiled.FunctionRanges.begin(), Compiled.FunctionRanges.end(),
+        [&](const llvm::mc_rewrite::RewriteFunctionRange &Range) {
+          return Range.BeginVA == Record.BeginVA && Range.EndVA == Record.EndVA;
+        });
+    if (ExactRanges != 1)
+      return patchError("regenerated __eh_frame contains an FDE without one "
+                        "exact compiler range identity");
   }
 
   if (llvm::Error Err = validateCombinedFDERanges(*ExistingRecords, *Records)) {
-    if (Required)
+    if (MustInstall)
       return Err;
     llvm::consumeError(std::move(Err));
     LLVM_DEBUG(llvm::dbgs()
                << "macho exception patch: overlapping optional FDE ranges; "
                   "leaving the image unchanged\n");
-    return llvm::Error::success();
+    return Receipt;
   }
 
-  if (Required) {
-    for (uint64_t Address : *RequiredFunctions)
-      if (std::none_of(Records->begin(), Records->end(),
-                       [&](const DwarfEHFrameRecord &Record) {
-                         return Record.BeginVA == Address &&
-                                Record.covers(Address);
-                       }))
-        return patchError("regenerated __eh_frame does not cover a required "
-                          "function");
+  for (const llvm::mc_rewrite::RewriteFunctionRange *Range :
+       RequiredFDERanges) {
+    const size_t ExactMatches =
+        std::count_if(Records->begin(), Records->end(),
+                      [&](const DwarfEHFrameRecord &Record) {
+                        return Record.BeginVA == Range->BeginVA &&
+                               Record.EndVA == Range->EndVA;
+                      });
+    if (ExactMatches != 1)
+      return patchError("regenerated __eh_frame does not contain exactly one "
+                        "FDE for every required compiler fragment");
   }
 
-  const bool Registered = appendGeneratedEHFrame(Binary, *Current, *Generated);
-  if (!Registered && Required)
-    return patchError("cannot register regenerated __eh_frame");
+  std::vector<uint8_t> Candidate = Binary;
+  const bool Registered =
+      appendGeneratedEHFrame(Candidate, *Current, *Generated);
+  if (!Registered)
+    return OmitOrFail("cannot register regenerated __eh_frame");
 
-  LLVM_DEBUG({
-    if (!Registered)
-      llvm::dbgs() << "macho exception patch: omitting unregistered CFI-only "
-                      "__eh_frame records\n";
-  });
+  if (!rangeInBounds(Current->AppendFileOff, Generated->ExternalBytes.size(),
+                     Candidate.size()) ||
+      !std::equal(
+          Generated->ExternalBytes.begin(), Generated->ExternalBytes.end(),
+          Candidate.begin() + static_cast<size_t>(Current->AppendFileOff)))
+    return patchError("installed __eh_frame bytes differ from compiler output");
+
+  auto InstalledRecords =
+      decodeDwarfEHFrameRecords(llvm::ArrayRef<uint8_t>(Candidate).slice(
+                                    static_cast<size_t>(Current->AppendFileOff),
+                                    Generated->ExternalBytes.size()),
+                                Generated->VA, Current->Is64);
+  if (!InstalledRecords)
+    return InstalledRecords.takeError();
+  if (!sameFDEs(*InstalledRecords, *Records))
+    return patchError("installed __eh_frame FDEs differ from validated output");
+  for (const llvm::mc_rewrite::RewriteFunctionRange *Range : RequiredFDERanges)
+    if (std::count_if(InstalledRecords->begin(), InstalledRecords->end(),
+                      [&](const DwarfEHFrameRecord &Record) {
+                        return Record.BeginVA == Range->BeginVA &&
+                               Record.EndVA == Range->EndVA;
+                      }) != 1)
+      return patchError("installed __eh_frame lost an authenticated required "
+                        "fragment");
+
+  const std::optional<uint64_t> GeneratedLogicalSize =
+      getEHFrameAppendOffset(Generated->ExternalBytes);
+  if (!GeneratedLogicalSize)
+    return patchError("installed __eh_frame has no exact logical end");
+
+  const std::optional<MachOEHFrameRegion> Updated =
+      findMachOEHFrameRegion(Candidate);
+  if (!Updated || !sameRegionIdentity(*Updated, *Current) ||
+      *GeneratedLogicalSize >
+          std::numeric_limits<uint64_t>::max() - Current->AppendVA ||
+      Updated->AppendVA != Current->AppendVA + *GeneratedLogicalSize ||
+      *GeneratedLogicalSize >
+          std::numeric_limits<uint64_t>::max() - Current->AppendFileOff ||
+      Updated->AppendFileOff != Current->AppendFileOff + *GeneratedLogicalSize)
+    return patchError("installed __eh_frame cannot be rediscovered exactly");
+
+  const std::optional<uint64_t> DeclaredSize =
+      getDeclaredEHFrameSize(Candidate, *Updated);
+  const uint64_t OriginalLogicalSize =
+      Current->AppendFileOff - Current->SectionFileOff;
+  if (!DeclaredSize ||
+      Generated->ExternalBytes.size() >
+          std::numeric_limits<uint64_t>::max() - OriginalLogicalSize ||
+      *DeclaredSize != OriginalLogicalSize + Generated->ExternalBytes.size() ||
+      !rangeInBounds(Updated->SectionFileOff, *DeclaredSize, Candidate.size()))
+    return patchError("installed __eh_frame section size is inconsistent");
+
+  auto CombinedRecords = decodeDwarfEHFrameRecords(
+      llvm::ArrayRef<uint8_t>(Candidate).slice(
+          static_cast<size_t>(Updated->SectionFileOff),
+          static_cast<size_t>(*DeclaredSize)),
+      Updated->SectionVA, Updated->Is64);
+  if (!CombinedRecords)
+    return CombinedRecords.takeError();
+  std::vector<DwarfEHFrameRecord> ExpectedCombined = *ExistingRecords;
+  ExpectedCombined.insert(ExpectedCombined.end(), Records->begin(),
+                          Records->end());
+  if (!sameFDEs(*CombinedRecords, ExpectedCombined))
+    return patchError("combined installed __eh_frame failed semantic replay");
+
+  Receipt.Disposition = MachOEHFrameInstallDisposition::Installed;
+  Receipt.Region = *Updated;
+  Receipt.InstalledFileOff = Current->AppendFileOff;
+  Receipt.InstalledBytes = Generated->ExternalBytes;
+  Receipt.InstalledFDEs = std::move(*InstalledRecords);
+  Receipt.InstalledSymbolAddrs = Compiled.SymbolAddrs;
+  Receipt.AuthenticatedFunctionOwnerAddrs = Compiled.FunctionOwnerAddrs;
+  Receipt.AuthenticatedFunctionRanges = Compiled.FunctionRanges;
+  Binary.swap(Candidate);
+
+  return Receipt;
+}
+
+llvm::Error installMachOEHFrame(std::vector<uint8_t> &Binary,
+                                const std::optional<MachOEHFrameRegion> &Region,
+                                const CompiledImage &Compiled,
+                                const llvm::Module &Mod) {
+  auto Receipt =
+      installMachOEHFrameWithReceipt(Binary, Region, Compiled, Mod, nullptr);
+  if (!Receipt)
+    return Receipt.takeError();
   return llvm::Error::success();
 }
 

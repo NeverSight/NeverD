@@ -312,25 +312,31 @@ llvm::Error validateTranslationResult(const TranslationResult &Result,
       return invalid("interpreter fallback requires a restartable trap");
   }
 
-  const auto CheckCounter = [](uint64_t Counter, uint64_t Limit,
-                               const char *Name) -> llvm::Error {
-    if (Limit != 0 && Counter > Limit)
+  const std::optional<TranslationBudgetKind> ExhaustedKind =
+      Result.Exit.Reason == TranslationStopReason::BudgetExhausted &&
+              Result.Exit.Budget
+          ? std::optional<TranslationBudgetKind>(Result.Exit.Budget->Kind)
+          : std::nullopt;
+  const auto CheckCounter = [&](uint64_t Counter, uint64_t Limit,
+                                TranslationBudgetKind Kind,
+                                const char *Name) -> llvm::Error {
+    if (Limit != 0 && Counter > Limit && ExhaustedKind != Kind)
       return invalid(llvm::Twine("translation result ") + Name +
                      " exceeds the request budget");
     return llvm::Error::success();
   };
   if (llvm::Error Error = CheckCounter(
           Result.GuestInstructions, Options.InstructionBudget,
-          "guest-instruction count"))
+          TranslationBudgetKind::GuestInstructions, "guest-instruction count"))
     return Error;
   if (llvm::Error Error =
           CheckCounter(Result.BlocksTranslated, Options.BlockBudget,
-                       "translated-block count"))
+                       TranslationBudgetKind::Blocks, "translated-block count"))
     return Error;
-  if (llvm::Error Error =
-          CheckCounter(Result.GeneratedCodeBytes,
-                       Options.GeneratedCodeByteBudget,
-                       "generated-code byte count"))
+  if (llvm::Error Error = CheckCounter(
+          Result.GeneratedCodeBytes, Options.GeneratedCodeByteBudget,
+          TranslationBudgetKind::GeneratedCodeBytes,
+          "generated-code byte count"))
     return Error;
 
   if (Result.Exit.Budget) {

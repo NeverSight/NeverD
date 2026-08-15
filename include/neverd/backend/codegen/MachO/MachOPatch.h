@@ -64,11 +64,42 @@ private:
     uint64_t TextSectSize = 0;
     uint64_t TextSectFileOff = 0;
     uint64_t LinkeditVA = 0;
+    uint64_t LinkeditVMSize = 0;
     uint64_t LinkeditFileOff = 0;
+    uint64_t LinkeditFileSize = 0;
+    uint32_t LinkeditMaxProt = 0;
+    uint32_t LinkeditInitProt = 0;
+    uint32_t LinkeditNSects = 0;
     uint32_t LinkeditCmdOff = 0;
   };
 
-  bool parseLayout(const std::vector<uint8_t> &Data, PatchLayout &Layout);
+  struct ExecSegmentInstallReceipt {
+    std::string SegmentName;
+    bool Is64 = false;
+    uint32_t NCmds = 0;
+    uint32_t SizeOfCmds = 0;
+    uint64_t SegmentVA = 0;
+    uint64_t SegmentVMSize = 0;
+    uint64_t SegmentFileOff = 0;
+    uint64_t SegmentFileSize = 0;
+    uint64_t LinkeditVA = 0;
+    uint64_t LinkeditVMSize = 0;
+    uint64_t LinkeditFileOff = 0;
+    uint64_t LinkeditFileSize = 0;
+    uint32_t LinkeditMaxProt = 0;
+    uint32_t LinkeditInitProt = 0;
+    uint32_t LinkeditNSects = 0;
+  };
+
+  bool parseLayout(const std::vector<uint8_t> &Data, PatchLayout &Layout,
+                   Arch TargetArch);
+  uint64_t appendExecSegmentImpl(std::vector<uint8_t> &Binary,
+                                 llvm::ArrayRef<uint8_t> Code,
+                                 llvm::StringRef SegName, Arch TargetArch,
+                                 ExecSegmentInstallReceipt *Receipt);
+  bool validateExecSegmentInstall(const std::vector<uint8_t> &Binary,
+                                  Arch TargetArch,
+                                  const ExecSegmentInstallReceipt &Receipt);
 };
 
 } // namespace neverd
