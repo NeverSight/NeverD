@@ -375,6 +375,28 @@ class ProvenanceOfThisRepositoryTests(unittest.TestCase):
             self.assertEqual(len(findings), 1)
             self.assertIn("source.cpp@", findings[0])
 
+    def test_git_output_decodes_patches_as_utf8(self) -> None:
+        with mock.patch.object(provenance.subprocess, "run") as run:
+            run.return_value = mock.Mock(stdout="diff --git a/docs/老.md b/docs/老.md\n")
+            text = provenance._git_output(["show", "HEAD"])
+        self.assertIn("老", text)
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+
+    def test_recent_history_reads_a_cjk_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            path = root / "note.md"
+            path.write_text("老\n", encoding="utf-8")
+            subprocess.run(("git", "add", "note.md"), cwd=root, check=True)
+            self.commit(root, "add cjk")
+            rule = ProvenanceScanTests.term_rule("private-path", "private-token")
+
+            with mock.patch.object(provenance, "REPO_ROOT", root):
+                findings = provenance.scan_recent_history(1, (rule,))
+
+            self.assertEqual(findings, [])
+
     def test_recent_history_skips_a_merge_commit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -347,30 +347,37 @@ def is_allowed(path: str, rule: str) -> bool:
     return any(a.rule == rule and fnmatch(path, a.path) for a in ALLOWED)
 
 
-def tracked_files() -> list[str]:
-    """Return every file Git tracks, leaving submodules opaque."""
-
-    output = subprocess.run(
-        ["git", "ls-files", "-z"],
+def _run_git(arguments: Sequence[str]) -> str:
+    # Git emits UTF-8.  Windows Python otherwise decodes the pipe as the
+    # locale (cp1252), which cannot read a CJK architecture patch.
+    return subprocess.run(
+        ["git", *arguments],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     ).stdout
-    return [entry for entry in output.split("\0") if entry]
+
+
+def tracked_files() -> list[str]:
+    """Return every file Git tracks, leaving submodules opaque."""
+
+    return [entry for entry in _run_git(["ls-files", "-z"]).split("\0") if entry]
 
 
 def worktree_files() -> list[str]:
     """Return tracked plus pending, non-ignored files in the worktree."""
 
-    output = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return sorted({entry for entry in output.split("\0") if entry})
+    return sorted(
+        {
+            entry
+            for entry in _run_git(
+                ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]
+            ).split("\0")
+            if entry
+        }
+    )
 
 
 def _scan_text(
@@ -419,13 +426,7 @@ def scan(paths: Sequence[str], rules: Sequence[Rule] | None = None) -> list[str]
 
 def _git_output(arguments: Sequence[str]) -> str:
     try:
-        return subprocess.run(
-            ["git", *arguments],
-            cwd=REPO_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
+        return _run_git(arguments)
     except (OSError, subprocess.CalledProcessError):
         raise GitScanError("Git patch inventory could not be read") from None
 
