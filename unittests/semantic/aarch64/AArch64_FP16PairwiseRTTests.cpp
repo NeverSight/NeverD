@@ -152,6 +152,23 @@ static const std::vector<RoundTripTC> kA64 = {
    "return (long)r;}\n",
    {H_NAN5, H_120P}, FP16FLAGS},
 
+  // --- .8H FMAXNM: initialise both Q-register halves independently, then XOR
+  // the result halves so dropping or zeroing either half is observable. ---
+  // low maxNum([NaN,5,-0,3], [1,2,+0,7]) = [1,5,+0,7]
+  // high maxNum([1,4,2,3], [5,0,6,7]) = [5,4,6,7]
+  // low64 ^ high64 = 0x0000460001007900.
+  {"fmaxnm_8h",
+   "long f(long al,long ah,long bl,long bh){unsigned long r;"
+   "__asm__ volatile(\"fmov d0,%1\\n mov v0.d[1],%2\\n"
+   " fmov d1,%3\\n mov v1.d[1],%4\\n"
+   " fmaxnm v2.8h,v0.8h,v1.8h\\n"
+   " fmov x8,d2\\n mov x9,v2.d[1]\\n eor %0,x8,x9\""
+   ":\"=r\"(r):\"r\"((unsigned long)al),\"r\"((unsigned long)ah),"
+   "\"r\"((unsigned long)bl),\"r\"((unsigned long)bh)"
+   ":\"v0\",\"v1\",\"v2\",\"x8\",\"x9\");"
+   "return (long)r;}\n",
+   {H_NAN5, H_1425, H_120P, H_5067}, FP16FLAGS},
+
   // a=[NaN,5,-0,3] b=[1,2,+0,7] -> min [1,2,-0,3] = 0x4200800040003C00
   {"fminnm_4h_nan",
    "long f(long a,long b){unsigned long r;"
