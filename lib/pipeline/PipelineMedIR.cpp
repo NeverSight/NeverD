@@ -14,6 +14,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Diagnostic.h"
@@ -92,6 +93,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img,
         MF.DebugName = LF.DebugName;
         MF.SourceFile = LF.SourceFile;
         MF.SourceLine = LF.SourceLine;
+        inferMedTypes(MF, Img.Arch);
       } catch (...) {
         syncWarning() << "pipeline: low->med threw on "
                       << Result.LowFuncs[I].Name << "\n";

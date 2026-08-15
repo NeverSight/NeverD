@@ -224,7 +224,8 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   Func.FrameHeadroom = Med.FrameHeadroom;
   Func.Name = Med.Name;
   Func.ExceptionMetadata = Med.ExceptionMetadata;
-  Func.ReturnType = NdType::makeInt(inferReturnSize(Med));
+  Func.ReturnType =
+      Med.ReturnType ? Med.ReturnType : NdType::makeInt(inferReturnSize(Med));
 
   for (auto &ML : Med.Locals) {
     HighLocal HL;

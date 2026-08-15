@@ -273,7 +273,10 @@ bool liftNEONFloat(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar Src = L.operandRead(S, ARM64.operands[1]);
-    S.emitIntrinsic(Intrinsic::A64_Frecpe, Dst, {Src});
+    unsigned ElemSz = Dst.Size;
+    if (ElemSz != 2 && ElemSz != 4 && ElemSz != 8)
+      ElemSz = 4;
+    S.emitIntrinsic(Intrinsic::A64_Frecpx, Dst, {Src, NdVar::cst(ElemSz, 4)});
     break;
   }
   default:

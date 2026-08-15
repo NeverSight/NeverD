@@ -145,3 +145,7 @@ A64_Famax, A64_Famin,
 // and High-C emission can reproduce the original instruction.
 A64_Rcwcasp, A64_Rcwcaspa, A64_Rcwcaspal, A64_Rcwcaspl,
 A64_Rcwscasp, A64_Rcwscaspa, A64_Rcwscaspal, A64_Rcwscaspl,
+
+// Scalar FP reciprocal exponent.  LLVM and ACLE both provide dedicated
+// FRECPX intrinsics; keep it distinct from the reciprocal estimate family.
+A64_Frecpx,

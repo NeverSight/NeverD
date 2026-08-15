@@ -125,6 +125,36 @@ TEST_F(AArch64_FP, FjcvtzsHighCUsesBuiltinAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
+TEST_F(AArch64_FP, FrecpxUsesDedicatedLLVMIntrinsic) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+  auto F = functionIR(r.out, "test_frecpx_a64");
+  ASSERT_FALSE(F.empty()) << r.out;
+
+  EXPECT_NE(F.find("@llvm.aarch64.neon.frecpx.f32"), std::string::npos) << F;
+  EXPECT_EQ(F.find("@llvm.aarch64.neon.frecpe"), std::string::npos) << F;
+}
+
+TEST_F(AArch64_FP, FrecpxHighCUsesACLEAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  auto F = functionSource(source, "test_frecpx_a64");
+  ASSERT_FALSE(F.empty()) << source;
+  EXPECT_NE(F.find("float test_frecpx_a64"), std::string::npos) << F;
+  EXPECT_NE(F.find("vrecpxs_f32"), std::string::npos) << F;
+  EXPECT_NE(F.find("__builtin_bit_cast(float"), std::string::npos) << F;
+  EXPECT_EQ(F.find("vrecpe"), std::string::npos) << F;
+
+  expectPairedClangSyntax(cFile, source);
+}
+
 TEST_F(AArch64_FP, NoUnreachableInFunctions) {
     verifyLLVMIRNotContains(testObj(), "", "unreachable");
 }

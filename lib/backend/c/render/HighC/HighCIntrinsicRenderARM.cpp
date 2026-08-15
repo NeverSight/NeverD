@@ -118,6 +118,32 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_Frecpx: {
+    if (Ops.size() < 2)
+      return {};
+    const char *RawTy = nullptr;
+    const char *FloatTy = nullptr;
+    const char *Builtin = nullptr;
+    if (Ops[1] == "2") {
+      RawTy = "uint16_t";
+      FloatTy = "float16_t";
+      Builtin = "vrecpxh_f16";
+    } else if (Ops[1] == "4") {
+      RawTy = "uint32_t";
+      FloatTy = "float";
+      Builtin = "vrecpxs_f32";
+    } else if (Ops[1] == "8") {
+      RawTy = "uint64_t";
+      FloatTy = "double";
+      Builtin = "vrecpxd_f64";
+    } else {
+      return {};
+    }
+    HasCIntrinsics = true;
+    return std::string("__builtin_bit_cast(") + RawTy + ", " + Builtin +
+           "(__builtin_bit_cast(" + FloatTy + ", (" + RawTy + ")(" + Ops[0] +
+           "))))";
+  }
   case I::A64_Fjcvtzs:
     if (Ops.empty())
       return {};

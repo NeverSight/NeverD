@@ -158,6 +158,18 @@ static const std::vector<RoundTripTC> kA64FPRoundTrip = {
    "}\n",
    {0x40A00000, 0x40400000}, "FPRT"},
 
+  // FRECPX(3.0f) returns the reciprocal exponent 1.0f.  FRECPE would instead
+  // produce a reciprocal estimate near 1/3, so this input distinguishes the
+  // two instructions while the integer ABI keeps the comparison bit-exact.
+  {"frecpx_s",
+   "long frecpx_s(long a) {\n"
+   "  unsigned int result;\n"
+   "  __asm__ volatile(\"fmov s0, %w1\\n frecpx s0, s0\\n fmov %w0, s0\"\n"
+   "                   : \"=r\"(result) : \"r\"((unsigned int)a) : \"v0\");\n"
+   "  return (long)result;\n"
+   "}\n",
+   {0x40400000}, "FPRT"},
+
   {"fp_f32_to_f64",
    "long fp_f32_to_f64(long a) {\n"
    "  int ai = (int)a;\n"

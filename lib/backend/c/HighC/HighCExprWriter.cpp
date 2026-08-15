@@ -110,19 +110,19 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
   case NdOp::FLOAT_NEG:
     return "-" + exprStr(*E.Operands[0], 99);
   case NdOp::FLOAT_ABS:
-    return "fabs(" + exprStr(*E.Operands[0]) + ")";
+    return "__builtin_fabs(" + exprStr(*E.Operands[0]) + ")";
   case NdOp::FLOAT_SQRT:
-    return "sqrt(" + exprStr(*E.Operands[0]) + ")";
+    return "__builtin_sqrt(" + exprStr(*E.Operands[0]) + ")";
   case NdOp::FLOAT_CEIL:
-    return "ceil(" + exprStr(*E.Operands[0]) + ")";
+    return "__builtin_ceil(" + exprStr(*E.Operands[0]) + ")";
   case NdOp::FLOAT_FLOOR:
-    return "floor(" + exprStr(*E.Operands[0]) + ")";
+    return "__builtin_floor(" + exprStr(*E.Operands[0]) + ")";
   case NdOp::FLOAT_ROUND:
-    return "round(" + exprStr(*E.Operands[0]) + ")";
+    return "__builtin_round(" + exprStr(*E.Operands[0]) + ")";
   case NdOp::FLOAT_ROUNDEVEN:
-    return "nearbyint(" + exprStr(*E.Operands[0]) + ")";
+    return "__builtin_nearbyint(" + exprStr(*E.Operands[0]) + ")";
   case NdOp::FLOAT_ISNAN:
-    return "isnan(" + exprStr(*E.Operands[0]) + ")";
+    return "__builtin_isnan(" + exprStr(*E.Operands[0]) + ")";
   case NdOp::FLOAT_INT2FLOAT:
   case NdOp::FLOAT_FLOAT2FLOAT:
     return "(" + typeToC(E.Type) + ")" + exprStr(*E.Operands[0], 99);
@@ -289,6 +289,20 @@ std::string HighCWriter::formatReturnExpr(const HighExpr &Expr) {
   auto HiLo = collapseHiLo(Expr);
   if (!HiLo.empty())
     return HiLo;
+
+  if (FuncReturnType && FuncReturnType->Kind == NdTypeKind::Float) {
+    const HighExpr *Raw = &Expr;
+    if (Raw->Kind == ExprKind::UnaryOp && Raw->Op == NdOp::INT_ZEXT &&
+        !Raw->Operands.empty() && Raw->Operands[0] && Raw->Operands[0]->Type &&
+        Raw->Operands[0]->Type->Size == FuncReturnType->Size)
+      Raw = Raw->Operands[0].get();
+    if (Raw->Type && Raw->Type->Kind == NdTypeKind::Int &&
+        Raw->Type->Size == FuncReturnType->Size) {
+      auto RawType = NdType::makeInt(FuncReturnType->Size, false);
+      return "__builtin_bit_cast(" + typeToC(FuncReturnType) + ", (" +
+             typeToC(RawType) + ")(" + exprStr(*Raw) + "))";
+    }
+  }
 
   if (!FuncReturnType || FuncReturnType->Kind != NdTypeKind::Int)
     return exprStr(Expr);

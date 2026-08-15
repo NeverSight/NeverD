@@ -531,6 +531,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     case I::A64_Frecpe:
       IID = llvm::Intrinsic::aarch64_neon_frecpe;
       break;
+    case I::A64_Frecpx:
+      IID = llvm::Intrinsic::aarch64_neon_frecpx;
+      break;
     case I::A64_Frsqrte:
       IID = llvm::Intrinsic::aarch64_neon_frsqrte;
       break;

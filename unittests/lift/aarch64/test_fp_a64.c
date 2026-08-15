@@ -112,6 +112,12 @@ unsigned test_fjcvtzs_z_a64(double input) {
   return exact;
 }
 
+float test_frecpx_a64(float input) {
+  float result;
+  __asm__ volatile("frecpx %s0, %s1" : "=w"(result) : "w"(input));
+  return result;
+}
+
 double test_fmadd_a64(double a, double b, double c) {
     double result;
     __asm__ volatile (

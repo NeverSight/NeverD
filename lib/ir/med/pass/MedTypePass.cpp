@@ -14,6 +14,7 @@
 #include "neverd/ir/med/MedTypePass.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 
 #include <map>
 #include <set>
@@ -53,6 +54,16 @@ fpReturnElemSize(const std::map<std::pair<int, int>, const MedOp *> &Defs,
   if (It == Defs.end())
     return 0;
   const MedOp *Def = It->second;
+  if (Def->Opcode == NdOp::INTRINSIC && Def->NumInputs >= 3 &&
+      Def->Inputs[0].isConst() &&
+      static_cast<Intrinsic>(Def->Inputs[0].ConstVal) ==
+          Intrinsic::A64_Frecpx) {
+    const MedVar &ElemSize = Def->Inputs[Def->NumInputs - 1];
+    if (ElemSize.isConst() &&
+        (ElemSize.ConstVal == 2 || ElemSize.ConstVal == 4 ||
+         ElemSize.ConstVal == 8))
+      return static_cast<uint16_t>(ElemSize.ConstVal);
+  }
   if (isFloatProducer(Def->Opcode))
     return Def->Output.Size <= 4 ? 4 : 8;
   if (Def->Opcode == NdOp::CONCAT && Def->NumInputs >= 2)

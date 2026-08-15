@@ -22,12 +22,17 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   S.Addr = CurOp.Addr;
 
   ExprPtr RetVal;
+  const auto &TRI = getTargetRegInfo(TargetArch);
+  const bool UsesFPReturnReg = Func.ReturnType &&
+                               Func.ReturnType->Kind == NdTypeKind::Float &&
+                               TRI.hasFPReturnReg() && !Med.FPReturnViaX87;
+  const uint64_t ReturnReg =
+      UsesFPReturnReg ? TRI.FPReturnReg : TRI.IntReturnReg;
 
   if (CurOp.NumInputs >= 1 && CurOp.Inputs[0].Id >= 0 &&
       CurOp.Inputs[0].Kind == MedVar::Reg) {
     uint64_t RO = CurOp.Inputs[0].RegOff;
-    const auto &RetTRI = getTargetRegInfo(TargetArch);
-    if (!RetTRI.isFrameOrLinkReg(RO))
+    if (!TRI.isFrameOrLinkReg(RO))
       RetVal = medvarToExpr(CurOp.Inputs[0]);
   }
 
@@ -36,7 +41,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       if (RIt->Opcode == NdOp::RETURN)
         continue;
       if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
-          RIt->Output.RegOff == 0) {
+          RIt->Output.RegOff == ReturnReg) {
         if (RIt->Opcode == NdOp::CALL || RIt->Opcode == NdOp::INDIR_CALL ||
             RIt->Opcode == NdOp::INTRINSIC)
           RetVal = HighExpr::makeVar(RIt->Output);
@@ -69,7 +74,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
 
   if (!RetVal) {
     for (auto &Phi : CurBlock.Phis) {
-      if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == 0) {
+      if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == ReturnReg) {
         RetVal = HighExpr::makeVar(Phi.Output);
         break;
       }
@@ -83,7 +88,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       auto &Pred = Med.Blocks[PI];
       for (auto RIt = Pred.Ops.rbegin(); RIt != Pred.Ops.rend(); ++RIt) {
         if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
-            RIt->Output.RegOff == 0) {
+            RIt->Output.RegOff == ReturnReg) {
           RetVal = medvarToExpr(RIt->Output);
           goto FoundRet;
         }
@@ -93,12 +98,12 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   }
 
   if (!RetVal) {
-    const auto &FbTRI = getTargetRegInfo(TargetArch);
-    uint64_t RetReg = FbTRI.IntReturnReg;
-    uint16_t RetSz = FbTRI.FullRegWidth;
+    uint16_t RetSz = Func.ReturnType && Func.ReturnType->Size
+                         ? Func.ReturnType->Size
+                         : TRI.FullRegWidth;
     MedVar RV;
     RV.Kind = MedVar::Reg;
-    RV.RegOff = RetReg;
+    RV.RegOff = ReturnReg;
     RV.Size = RetSz;
     RV.Id = -1;
     RV.SSAVer = 0;

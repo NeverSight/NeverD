@@ -63,6 +63,7 @@ C(Intrinsic::A64_Rev64,        "vrev64q");
 
 // NEON reciprocal / sqrt estimate
 C(Intrinsic::A64_Frecpe,       "vrecpeq");
+C(Intrinsic::A64_Frecpx,       "vrecpxs_f32");
 C(Intrinsic::A64_Frsqrte,      "vrsqrteq");
 C(Intrinsic::A64_Frecps,       "vrecpsq");
 C(Intrinsic::A64_Frsqrts,      "vrsqrtsq");
