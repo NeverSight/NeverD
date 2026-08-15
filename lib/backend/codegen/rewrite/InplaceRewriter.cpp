@@ -197,6 +197,12 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     Resolver->parse(State.Binary, TargetArch);
 
   BinaryFormat Fmt = getBinaryFormat();
+  if (Fmt == BinaryFormat::MachO && TargetArch == Arch::ARM) {
+    llvm::WithColor::error()
+        << "inplace: ARM Mach-O requires a function-level ABI target; use "
+           "the transactional section patch path\n";
+    return PatchResult{};
+  }
   bool RequireGeneratedEHContinuations = false;
   if (Fmt == BinaryFormat::COFF) {
     auto EHPlanOrErr = planCOFFExceptionPatch(Mod, Image, TargetArch);
@@ -266,8 +272,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     Codegen CG;
     auto RwResult = CG.compileForRewrite(*ClonedMod, TargetArch, RwOpts, Fmt);
     if (!RwResult.ImageValid) {
-      llvm::WithColor::error()
-          << "inplace: rewrite image layout is invalid\n";
+      llvm::WithColor::error() << "inplace: rewrite image layout is invalid\n";
       return PatchResult{};
     }
     if (!RwResult.FunctionRangesValid) {

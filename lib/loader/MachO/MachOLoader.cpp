@@ -14,14 +14,15 @@
 #include "neverd/loader/MachO/MachOLoader.h"
 
 #include "neverd/Limits.h"
-#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/Go/GoRuntimeEH.h"
 #include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/MachO/MachOARM32Mode.h"
 #include "neverd/loader/MachO/MachOExceptions.h"
+#include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/ObjC/ObjCEH.h"
 #include "neverd/loader/Rust/RustEH.h"
-#include "neverd/loader/MachO/MachOLoaderUtils.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/MachO.h"
@@ -95,12 +96,11 @@ MachOLoader::load(const std::filesystem::path &Path) {
         "macho: unsupported cpu type 0x" + llvm::utohexstr(CpuType),
         llvm::inconvertibleErrorCode());
   if (Img.Arch == Arch::ARM) {
-    const uint32_t RawCPUSubtype = static_cast<uint32_t>(
-        Is64 ? Obj.getHeader64().cpusubtype : Obj.getHeader().cpusubtype);
-    const uint32_t CPUSubtype =
-        RawCPUSubtype & ~static_cast<uint32_t>(CPU_SUBTYPE_MASK);
-    Img.Mode = CPUSubtype == CPU_SUBTYPE_ARM_V7K ? InstructionMode::Thumb
-                                                  : InstructionMode::ARM;
+    auto ModeInfo = macho_arm32::parseModeInfo(Img.Raw);
+    if (ModeInfo)
+      Img.Mode = ModeInfo->UniformMode;
+    else
+      llvm::consumeError(ModeInfo.takeError());
   }
 
   va_t TextVMAddr = 0;

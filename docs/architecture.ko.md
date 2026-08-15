@@ -299,6 +299,17 @@ register identity를 유지할 수 있지만 모든 rewrite path가 fail closed�
 EH-frame install receipt는 target architecture, pointer width, byte order를 정확히 결속하며,
 compact-unwind DWARF binding은 receipt target identity 불일치를 거부합니다.
 
+상위 ARM32 section transaction의 범위는 compact-unwind decoder보다 좁습니다.
+Mach-O header가 정확히 `CPU_SUBTYPE_ARM_V7K`이고 원본 symbol table의
+`N_ARM_THUMB_DEF` bit가 필요한 모든 function을 Thumb code로 명시적으로 인증할
+때만 이 경로가 활성화됩니다. 이후 정확한 `thumbv7k-apple-watchos` triple과 Thumb
+mode가 code generation 전체에 결속되며, 입력 feature 요구 사항은 Cortex-A7 한계를
+초과할 수 없습니다. flag가 없거나 mode를 알 수 없는 function, generic non-v7k
+subtype, ARM mode, 혼합되거나 알 수 없는 external-code target, ARM Mach-O in-place
+entry point, C source 기반 ARM Mach-O patch는 출력 변경 전에 모두 fail closed로
+거부됩니다. function discovery가 `LC_FUNCTION_STARTS`에만 의존하는 stripped input은
+아직 지원하지 않습니다.
+
 PE, ELF, Mach-O에는 각각 format별 예외 component가 있지만 NeverD는 모든 format과 모든
 exception type을 포괄하는 end-to-end rewrite pipeline을 아직 공개하지 않습니다. 지원하지
 않는 encoding 또는 해결되지 않은 registration/layout 요구 사항은 출력 변경 전에

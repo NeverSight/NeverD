@@ -15,6 +15,7 @@
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/MachOARM32Mode.h"
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/object/MachOLayout.h"
@@ -65,8 +66,8 @@ constexpr uint32_t kARM32DataSegmentSize = 0x4000;
 constexpr uint32_t kARM32LinkeditOff = 0xc000;
 constexpr uint32_t kARM32LinkeditSize = 0x100;
 constexpr uint32_t kARM32SymtabOff = kARM32LinkeditOff;
-constexpr uint32_t kARM32StringTableOff = kARM32LinkeditOff + 0x20;
-constexpr uint32_t kARM32IndirectTableOff = kARM32LinkeditOff + 0x40;
+constexpr uint32_t kARM32StringTableOff = kARM32LinkeditOff + 0x50;
+constexpr uint32_t kARM32IndirectTableOff = kARM32LinkeditOff + 0xc0;
 constexpr uint32_t kARM32FunctionVA = kARM32ImageBase + kARM32TextOff;
 constexpr uint32_t kARM32PersonalityVA = kARM32FunctionVA + 0x10;
 constexpr uint32_t kARM32MayThrowVA = kARM32FunctionVA + 0x20;
@@ -233,10 +234,22 @@ ARM32TransactionFixture makeARM32TransactionFixture(uint32_t OriginalEncoding,
   Symtab->cmd = LC_SYMTAB;
   Symtab->cmdsize = sizeof(symtab_command);
   Symtab->symoff = kARM32SymtabOff;
-  Symtab->nsyms = 1;
+  Symtab->nsyms = 5;
   Symtab->stroff = kARM32StringTableOff;
-  constexpr char PersonalityStringTable[] = "\0_test_personality";
-  Symtab->strsize = sizeof(PersonalityStringTable);
+
+  std::string StringTable(1, '\0');
+  auto AddString = [&](llvm::StringRef Name) {
+    const uint32_t Offset = static_cast<uint32_t>(StringTable.size());
+    StringTable.append(Name.begin(), Name.end());
+    StringTable.push_back('\0');
+    return Offset;
+  };
+  const uint32_t PersonalityName = AddString("_test_personality");
+  const uint32_t SourceName = AddString("_lifted_arm32_source_function");
+  const uint32_t MayThrowName = AddString("_may_throw");
+  const uint32_t UnwindResumeName = AddString("__Unwind_Resume");
+  const uint32_t LocalPersonalityName = AddString("_local_personality");
+  Symtab->strsize = static_cast<uint32_t>(StringTable.size());
 
   Command += sizeof(symtab_command);
   auto *Dysymtab = reinterpret_cast<dysymtab_command *>(Command);
@@ -255,16 +268,29 @@ ARM32TransactionFixture makeARM32TransactionFixture(uint32_t OriginalEncoding,
   writeU32(Fixture.Binary, kARM32GOTOff, kARM32PersonalityVA);
   std::fill(Fixture.Binary.begin() + kARM32LinkeditOff, Fixture.Binary.end(),
             0x6c);
-  auto *PersonalitySymbol =
+  auto *Symbols =
       reinterpret_cast<nlist *>(Fixture.Binary.data() + kARM32SymtabOff);
-  PersonalitySymbol->n_strx = 1;
+  nlist *PersonalitySymbol = &Symbols[0];
+  PersonalitySymbol->n_strx = PersonalityName;
   PersonalitySymbol->n_type =
       static_cast<uint8_t>(static_cast<uint8_t>(N_UNDF) | N_EXT);
   PersonalitySymbol->n_sect = NO_SECT;
   PersonalitySymbol->n_desc = 0;
   PersonalitySymbol->n_value = 0;
-  std::memcpy(Fixture.Binary.data() + kARM32StringTableOff,
-              PersonalityStringTable, sizeof(PersonalityStringTable));
+
+  auto SetThumbFunction = [&](nlist &Symbol, uint32_t Name, uint32_t Address) {
+    Symbol.n_strx = Name;
+    Symbol.n_type = static_cast<uint8_t>(static_cast<uint8_t>(N_SECT) | N_EXT);
+    Symbol.n_sect = 1;
+    Symbol.n_desc = N_ARM_THUMB_DEF;
+    Symbol.n_value = Address;
+  };
+  SetThumbFunction(Symbols[1], SourceName, kARM32FunctionVA);
+  SetThumbFunction(Symbols[2], MayThrowName, kARM32MayThrowVA);
+  SetThumbFunction(Symbols[3], UnwindResumeName, kARM32UnwindResumeVA);
+  SetThumbFunction(Symbols[4], LocalPersonalityName, kARM32PersonalityVA);
+  std::memcpy(Fixture.Binary.data() + kARM32StringTableOff, StringTable.data(),
+              StringTable.size());
   writeU32(Fixture.Binary, kARM32IndirectTableOff, 0);
   writeU32(Fixture.Binary, kARM32IndirectTableOff + sizeof(uint32_t),
            INDIRECT_SYMBOL_LOCAL);
@@ -449,8 +475,8 @@ TEST(MachOARM32Transaction,
      SuccessCommitsCompilerAuthenticatedEHAndCompactUnwind) {
   constexpr uint32_t OriginalEncoding =
       macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4;
-  ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
-      OriginalEncoding, /*CompactCapacity=*/0x2000);
+  ARM32TransactionFixture Fixture =
+      makeARM32TransactionFixture(OriginalEncoding, /*CompactCapacity=*/0x2000);
   ASSERT_FALSE(Fixture.Binary.empty());
   const std::optional<MachOEHFrameRegion> BeforeEH =
       findMachOEHFrameRegion(Fixture.Binary);
@@ -470,8 +496,7 @@ TEST(MachOARM32Transaction,
 
   MachOLoader Loader;
   auto Loaded = Loader.load(InputPath.str().str());
-  ASSERT_TRUE(static_cast<bool>(Loaded))
-      << llvm::toString(Loaded.takeError());
+  ASSERT_TRUE(static_cast<bool>(Loaded)) << llvm::toString(Loaded.takeError());
   EXPECT_EQ(Loaded->Arch, Arch::ARM);
   EXPECT_EQ(Loaded->Mode, InstructionMode::Thumb);
 
@@ -539,8 +564,8 @@ TEST(MachOARM32Transaction,
 
   ASSERT_GT(ShiftedLinkeditOff, kARM32LinkeditOff);
   ASSERT_EQ(ShiftedSymtabOff, ShiftedLinkeditOff);
-  ASSERT_EQ(ShiftedStringTableOff, ShiftedLinkeditOff + 0x20);
-  ASSERT_EQ(ShiftedIndirectTableOff, ShiftedLinkeditOff + 0x40);
+  ASSERT_EQ(ShiftedStringTableOff, ShiftedLinkeditOff + 0x50);
+  ASSERT_EQ(ShiftedIndirectTableOff, ShiftedLinkeditOff + 0xc0);
   ASSERT_LE(ShiftedIndirectTableOff + 2 * sizeof(uint32_t), Output.size());
   const auto *ShiftedPersonalitySymbol =
       reinterpret_cast<const nlist *>(Output.data() + ShiftedSymtabOff);
@@ -565,11 +590,10 @@ TEST(MachOARM32Transaction,
   ASSERT_TRUE(TrampolineTarget.has_value());
   EXPECT_EQ(*TrampolineTarget, InjectedVA);
   EXPECT_EQ(TrampolineLength, 4u);
-  EXPECT_TRUE(std::equal(Fixture.Binary.begin() + kARM32TextOff +
-                            TrampolineLength,
-                        Fixture.Binary.begin() + kARM32TextOff +
-                            kARM32TextSize,
-                        Output.begin() + kARM32TextOff + TrampolineLength));
+  EXPECT_TRUE(
+      std::equal(Fixture.Binary.begin() + kARM32TextOff + TrampolineLength,
+                 Fixture.Binary.begin() + kARM32TextOff + kARM32TextSize,
+                 Output.begin() + kARM32TextOff + TrampolineLength));
 
   const std::optional<MachOEHFrameRegion> AfterEH =
       findMachOEHFrameRegion(Output);
@@ -621,12 +645,73 @@ TEST(MachOARM32Transaction,
   EXPECT_TRUE(SawOriginal);
   EXPECT_TRUE(SawGeneratedDwarf);
   ASSERT_GE(FDEs->front().RecordVA, AfterEH->SectionVA);
-  EXPECT_EQ(GeneratedDwarfOffset,
-            FDEs->front().RecordVA - AfterEH->SectionVA);
+  EXPECT_EQ(GeneratedDwarfOffset, FDEs->front().RecordVA - AfterEH->SectionVA);
 }
 
-TEST(MachOARM32Transaction,
-     ARMv7kModeMismatchLeavesInputAndOutputUnchanged) {
+TEST(MachOARM32Transaction, ReadsPositiveThumbModeFromExactNListMetadata) {
+  ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
+      macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
+      /*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+
+  auto ModeInfo = macho_arm32::parseModeInfo(Fixture.Binary);
+  ASSERT_TRUE(static_cast<bool>(ModeInfo))
+      << llvm::toString(ModeInfo.takeError());
+  EXPECT_EQ(ModeInfo->CPUSubtype, static_cast<uint32_t>(CPU_SUBTYPE_ARM_V7K));
+  EXPECT_EQ(ModeInfo->UniformMode, InstructionMode::Thumb);
+  ASSERT_EQ(ModeInfo->CodeSymbolModes.size(), 4u);
+  auto SourceMode =
+      macho_arm32::requireUniformFunctionMode(*ModeInfo, {kARM32FunctionVA});
+  ASSERT_TRUE(static_cast<bool>(SourceMode))
+      << llvm::toString(SourceMode.takeError());
+  EXPECT_EQ(*SourceMode, InstructionMode::Thumb);
+  auto Serialized =
+      macho_arm32::serializeCodePointer(*ModeInfo, kARM32MayThrowVA);
+  ASSERT_TRUE(static_cast<bool>(Serialized))
+      << llvm::toString(Serialized.takeError());
+  EXPECT_EQ(*Serialized, kARM32MayThrowVA | 1u);
+}
+
+TEST(MachOARM32Transaction, UnflaggedTextSymbolIsNotARMModeEvidence) {
+  ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
+      macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
+      /*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+  auto *Symbols =
+      reinterpret_cast<nlist *>(Fixture.Binary.data() + kARM32SymtabOff);
+  Symbols[1].n_desc = 0;
+
+  auto ModeInfo = macho_arm32::parseModeInfo(Fixture.Binary);
+  ASSERT_TRUE(static_cast<bool>(ModeInfo))
+      << llvm::toString(ModeInfo.takeError());
+  EXPECT_EQ(ModeInfo->CodeSymbolModes.count(kARM32FunctionVA), 0u);
+  auto Mode =
+      macho_arm32::requireUniformFunctionMode(*ModeInfo, {kARM32FunctionVA});
+  EXPECT_FALSE(static_cast<bool>(Mode));
+  llvm::consumeError(Mode.takeError());
+}
+
+TEST(MachOARM32Transaction, DoesNotTreatTextSegmentDataAsModeEvidence) {
+  ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
+      macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
+      /*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+  auto *Symbols =
+      reinterpret_cast<nlist *>(Fixture.Binary.data() + kARM32SymtabOff);
+  Symbols[1].n_sect = 4;
+  Symbols[1].n_value = kARM32PersonalitySlotVA;
+
+  auto ModeInfo = macho_arm32::parseModeInfo(Fixture.Binary);
+  ASSERT_TRUE(static_cast<bool>(ModeInfo))
+      << llvm::toString(ModeInfo.takeError());
+  EXPECT_EQ(ModeInfo->CodeSymbolModes.count(kARM32FunctionVA), 0u);
+  auto Mode =
+      macho_arm32::requireUniformFunctionMode(*ModeInfo, {kARM32FunctionVA});
+  EXPECT_FALSE(static_cast<bool>(Mode));
+  llvm::consumeError(Mode.takeError());
+}
+
+TEST(MachOARM32Transaction, ARMv7kModeMismatchLeavesInputAndOutputUnchanged) {
   ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
       macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
       /*CompactCapacity=*/0x2000);
@@ -655,8 +740,63 @@ TEST(MachOARM32Transaction,
   const std::string Diagnostic = testing::internal::GetCapturedStderr();
 
   EXPECT_FALSE(Result.Success);
-  EXPECT_NE(Diagnostic.find("requires Thumb code-generation mode"),
+  EXPECT_NE(Diagnostic.find("cached ARM code mode disagrees"),
             std::string::npos)
+      << Diagnostic;
+  EXPECT_EQ(readFile(InputPath), Fixture.Binary);
+  EXPECT_EQ(readFile(OutputPath), OutputSentinel);
+}
+
+TEST(MachOARM32Transaction,
+     AmbiguousUnderscoreAliasLeavesInputAndOutputUnchanged) {
+  ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
+      macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
+      /*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+
+  symtab_command *Symtab = nullptr;
+  forEachMachOLoadCommand(
+      Fixture.Binary.data(), Fixture.Binary.size(),
+      [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
+        if (ID == LC_SYMTAB)
+          Symtab = reinterpret_cast<symtab_command *>(
+              const_cast<uint8_t *>(Command));
+      });
+  ASSERT_NE(Symtab, nullptr);
+  ASSERT_EQ(Symtab->nsyms, 5u);
+  auto *Symbols =
+      reinterpret_cast<nlist *>(Fixture.Binary.data() + Symtab->symoff);
+  nlist &ConflictingPersonality = Symbols[5];
+  ConflictingPersonality.n_strx = Symbols[0].n_strx;
+  ConflictingPersonality.n_type =
+      static_cast<uint8_t>(static_cast<uint8_t>(N_SECT) | N_EXT);
+  ConflictingPersonality.n_sect = 1;
+  ConflictingPersonality.n_desc = N_ARM_THUMB_DEF;
+  ConflictingPersonality.n_value = kARM32UnwindResumeVA;
+  Symtab->nsyms = 6;
+
+  llvm::SmallString<128> InputPath;
+  llvm::SmallString<128> OutputPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-arm32-macho-ambiguous-symbol-input", "macho", InputPath));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-arm32-macho-ambiguous-symbol-output", "macho", OutputPath));
+  llvm::FileRemover RemoveInput(InputPath);
+  llvm::FileRemover RemoveOutput(OutputPath);
+  const std::vector<uint8_t> OutputSentinel = {0x41, 0x4d, 0x42, 0x49, 0x47};
+  ASSERT_TRUE(writeFile(InputPath, Fixture.Binary));
+  ASSERT_TRUE(writeFile(OutputPath, OutputSentinel));
+
+  llvm::LLVMContext Context;
+  auto Module = makeARM32TransactionModule(Context);
+  MachOPatcher Patcher;
+  testing::internal::CaptureStderr();
+  PatchResult Result = Patcher.patch(
+      InputPath.str().str(), OutputPath.str().str(), *Module, Arch::ARM);
+  const std::string Diagnostic = testing::internal::GetCapturedStderr();
+
+  EXPECT_FALSE(Result.Success);
+  EXPECT_NE(Diagnostic.find("ambiguous Mach-O symbol"), std::string::npos)
       << Diagnostic;
   EXPECT_EQ(readFile(InputPath), Fixture.Binary);
   EXPECT_EQ(readFile(OutputPath), OutputSentinel);

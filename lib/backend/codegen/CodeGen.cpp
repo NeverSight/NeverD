@@ -40,7 +40,9 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <optional>
 #include <set>
+#include <tuple>
 
 namespace neverd {
 
@@ -118,6 +120,44 @@ detectTargetFeatures(llvm::Module &Mod, Arch TheArch) {
   default:
     return {"", ""};
   }
+}
+
+static bool isARMv7KTriple(const llvm::Triple &Triple) {
+  return Triple.getArchName() == "armv7k" || Triple.getArchName() == "thumbv7k";
+}
+
+static bool isAllowedARMv7KFeature(llvm::StringRef Feature) {
+  return Feature == "+v7" || Feature == "+vfp2" || Feature == "+vfp2sp" ||
+         Feature == "+vfp3" || Feature == "+vfp3d16" ||
+         Feature == "+vfp3d16sp" || Feature == "+vfp3sp" ||
+         Feature == "+fp16" || Feature == "+vfp4" || Feature == "+vfp4d16" ||
+         Feature == "+vfp4d16sp" || Feature == "+vfp4sp" ||
+         Feature == "+fp64" || Feature == "+d32" || Feature == "+neon" ||
+         Feature == "+hwdiv" || Feature == "+hwdiv-arm";
+}
+
+static std::optional<std::string>
+findUnsupportedARMv7KFunctionAttribute(const llvm::Module &Module) {
+  for (const llvm::Function &Function : Module) {
+    const llvm::Attribute CPU = Function.getFnAttribute("target-cpu");
+    if (CPU.isStringAttribute() && !CPU.getValueAsString().empty() &&
+        CPU.getValueAsString() != "cortex-a7")
+      return (Function.getName() + ": target-cpu=" + CPU.getValueAsString())
+          .str();
+
+    const llvm::Attribute Features = Function.getFnAttribute("target-features");
+    if (!Features.isStringAttribute())
+      continue;
+    llvm::StringRef Remaining = Features.getValueAsString();
+    while (!Remaining.empty()) {
+      auto [Feature, Rest] = Remaining.split(',');
+      Remaining = Rest;
+      if (Feature.starts_with("+") && !isAllowedARMv7KFeature(Feature))
+        return (Function.getName() + ": target-features contains " + Feature)
+            .str();
+    }
+  }
+  return std::nullopt;
 }
 
 /// Expand @llvm.fshl.iN / @llvm.fshr.iN for N < 32 into explicit
@@ -384,6 +424,14 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
 llvm::mc_rewrite::RewriteResult
 Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
                            const llvm::mc_rewrite::RewriteOptions &Opts,
+                           BinaryFormat ObjectFormat) {
+  return compileForRewrite(Mod, TargetArch, Opts, ObjectFormat,
+                           llvm::StringRef());
+}
+
+llvm::mc_rewrite::RewriteResult
+Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
+                           const llvm::mc_rewrite::RewriteOptions &Opts,
                            BinaryFormat ObjectFormat,
                            llvm::StringRef TargetTriple) {
   llvm::mc_rewrite::RewriteResult Result;
@@ -392,6 +440,7 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
   if (!archCodegenSupported(TargetArch)) {
     llvm::WithColor::error()
         << "codegen: unsupported arch " << getArchName(TargetArch) << "\n";
+    Result.ImageValid = false;
     return Result;
   }
 
@@ -399,6 +448,7 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
   if (!DefaultTriple) {
     llvm::WithColor::error()
         << "codegen: no triple for arch " << getArchName(TargetArch) << "\n";
+    Result.ImageValid = false;
     return Result;
   }
 
@@ -409,6 +459,7 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
     llvm::WithColor::error()
         << "codegen: target triple '" << TripleName
         << "' does not match the requested architecture and object format\n";
+    Result.ImageValid = false;
     return Result;
   }
   Mod.setTargetTriple(TT);
@@ -418,6 +469,7 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
   if (!TheTarget) {
     llvm::WithColor::error()
         << "codegen: target lookup failed: " << Err << "\n";
+    Result.ImageValid = false;
     return Result;
   }
 
@@ -444,11 +496,39 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
   // ARM32 gets PC-relative LDR — all handled by AddressModelBackend.
   auto RM = std::optional<llvm::Reloc::Model>(
       TargetArch == Arch::X86 ? llvm::Reloc::Static : llvm::Reloc::PIC_);
-  auto [CPU, Features] = detectTargetFeatures(Mod, TargetArch);
+  std::string CPU;
+  std::string Features;
+  if (TargetArch == Arch::ARM && isARMv7KTriple(TT)) {
+    const std::set<std::string> Requirements = scanIntrinsicPatterns(Mod);
+    if (auto Unsupported = findUnsupportedARMv7KRequirement(Requirements)) {
+      llvm::WithColor::error()
+          << "codegen: ARMv7k cannot lower requirement '" << *Unsupported
+          << "' without exceeding the input CPU feature ceiling\n";
+      Result.ImageValid = false;
+      return Result;
+    }
+    if (auto Unsupported = findUnsupportedARMv7KFunctionAttribute(Mod)) {
+      llvm::WithColor::error()
+          << "codegen: ARMv7k rejected incompatible function attribute '"
+          << *Unsupported << "'\n";
+      Result.ImageValid = false;
+      return Result;
+    }
+    std::tie(CPU, Features) = detectTargetFeaturesARMv7K();
+    for (llvm::Function &Function : Mod) {
+      Function.removeFnAttr("target-cpu");
+      Function.removeFnAttr("target-features");
+      Function.addFnAttr("target-cpu", CPU);
+      Function.addFnAttr("target-features", Features);
+    }
+  } else {
+    std::tie(CPU, Features) = detectTargetFeatures(Mod, TargetArch);
+  }
   std::unique_ptr<llvm::TargetMachine> TM(TheTarget->createTargetMachine(
       TT, CPU, Features, TOpt, RM, std::nullopt, llvm::CodeGenOptLevel::Less));
   if (!TM) {
     llvm::WithColor::error() << "codegen: cannot create TargetMachine\n";
+    Result.ImageValid = false;
     return Result;
   }
 

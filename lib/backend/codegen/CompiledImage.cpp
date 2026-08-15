@@ -9,8 +9,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/codegen/BinaryRewriter.h"
+#include "neverd/ArchSupport.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -19,6 +20,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
@@ -96,8 +98,7 @@ void captureFixupReference(std::vector<CapturedFixupReference> &Captured,
 }
 
 bool attachFixupReferences(
-    CompiledSection &Section,
-    std::vector<CapturedFixupReference> &Captured,
+    CompiledSection &Section, std::vector<CapturedFixupReference> &Captured,
     llvm::ArrayRef<llvm::mc_rewrite::RewriteFunctionRange> FunctionRanges) {
   for (CapturedFixupReference &Item : Captured) {
     if (Item.SectionName != Section.Name)
@@ -145,14 +146,13 @@ collectSourceFunctionOriginalVAs(const llvm::Module &Module) {
 }
 
 bool attachSourceFunctionOriginalVAs(
-    CompiledImage &Image,
-    const std::map<std::string, uint64_t> &OriginalVAs) {
+    CompiledImage &Image, const std::map<std::string, uint64_t> &OriginalVAs) {
   if (!llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
           Image.SourceFunctionOwners))
     return false;
   for (const auto &[SourceFunction, OriginalVA] : OriginalVAs) {
-    const size_t Matches = llvm::count_if(
-        Image.SourceFunctionOwners, [&](const auto &Owner) {
+    const size_t Matches =
+        llvm::count_if(Image.SourceFunctionOwners, [&](const auto &Owner) {
           return Owner.SourceFunction == SourceFunction;
         });
     if (Matches != 1)
@@ -179,6 +179,16 @@ static CompiledImage compileImageForPatchImpl(
   Out.BaseVA = BaseVA;
   Out.TargetArch = TargetArch;
   Out.Format = Fmt;
+  const char *DefaultTriple = llvmCodegenTriple(TargetArch, Fmt);
+  if (!DefaultTriple)
+    return Out;
+  const llvm::Triple Triple(
+      TargetTriple.empty() ? llvm::StringRef(DefaultTriple) : TargetTriple);
+  Out.TargetTriple = Triple.str();
+  if (TargetArch == Arch::ARM)
+    Out.TargetMode = Triple.getArch() == llvm::Triple::thumb
+                         ? InstructionMode::Thumb
+                         : InstructionMode::ARM;
   switch (TargetArch) {
   case Arch::X64:
   case Arch::AArch64:
@@ -229,8 +239,8 @@ static CompiledImage compileImageForPatchImpl(
   };
   Codegen CG1;
   auto Pass1Mod = llvm::CloneModule(Mod);
-  auto Res1 = CG1.compileForRewrite(*Pass1Mod, TargetArch, Pass1, Fmt,
-                                    TargetTriple);
+  auto Res1 =
+      CG1.compileForRewrite(*Pass1Mod, TargetArch, Pass1, Fmt, TargetTriple);
   if (!Res1.ImageValid)
     return Out;
   if (!Res1.FunctionRangesValid) {
@@ -407,8 +417,8 @@ static CompiledImage compileImageForPatchImpl(
     };
     Codegen CGn;
     auto IterMod = llvm::CloneModule(Mod);
-    auto ResN = CGn.compileForRewrite(*IterMod, TargetArch, PassN, Fmt,
-                                      TargetTriple);
+    auto ResN =
+        CGn.compileForRewrite(*IterMod, TargetArch, PassN, Fmt, TargetTriple);
     if (!ResN.ImageValid)
       return Out;
     if (!ResN.FunctionRangesValid) {
@@ -520,12 +530,33 @@ CompiledImage compileImageForPatch(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
         ResolveFn,
+    uint64_t ImageBaseVA) {
+  return compileImageForPatch(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
+                              ImageBaseVA, llvm::StringRef());
+}
+
+CompiledImage compileImageForPatch(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
+        ResolveFn,
     uint64_t ImageBaseVA, llvm::StringRef TargetTriple) {
   auto NoFixedSection = [](llvm::StringRef) -> std::optional<uint64_t> {
     return std::nullopt;
   };
   return compileImageForPatchImpl(Mod, TargetArch, Fmt, BaseVA, ResolveFn,
                                   NoFixedSection, ImageBaseVA, TargetTriple);
+}
+
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
+        ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA) {
+  return compileImageForPatchWithFixedSectionVAs(
+      Mod, TargetArch, Fmt, BaseVA, ResolveFn, FixedSectionVAFn, ImageBaseVA,
+      llvm::StringRef());
 }
 
 CompiledImage compileImageForPatchWithFixedSectionVAs(

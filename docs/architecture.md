@@ -333,6 +333,18 @@ fail-closed. Each EH-frame install receipt binds the exact target architecture,
 pointer width, and byte order, and
 compact-unwind DWARF binding rejects any receipt mismatch.
 
+The top-level ARM32 section transaction is narrower than the compact-unwind
+decoder. It is enabled only when the Mach-O header is exactly
+`CPU_SUBTYPE_ARM_V7K` and the original symbol table's `N_ARM_THUMB_DEF` bits
+positively authenticate every required function as Thumb code. The exact
+`thumbv7k-apple-watchos` triple and Thumb mode then remain bound throughout
+code generation, whose input feature requirements may not exceed the
+Cortex-A7 ceiling. Unflagged or unknown functions, generic non-v7k subtypes,
+ARM mode, mixed or unknown external-code targets, the ARM Mach-O in-place
+entry point, and C-source ARM Mach-O patching all fail closed before output
+mutation. Stripped inputs whose only function discovery source is
+`LC_FUNCTION_STARTS` are not yet supported.
+
 PE, ELF, and Mach-O each have format-specific exception components, but NeverD
 does not yet publish an all-formats, all-exception-types end-to-end rewrite
 pipeline. Unsupported encodings or unresolved registration/layout requirements

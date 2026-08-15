@@ -70,8 +70,15 @@ public:
   llvm::mc_rewrite::RewriteResult
   compileForRewrite(llvm::Module &Mod, Arch TargetArch,
                     const llvm::mc_rewrite::RewriteOptions &Opts,
-                    BinaryFormat ObjectFormat = BinaryFormat::MachO,
-                    llvm::StringRef TargetTriple = {});
+                    BinaryFormat ObjectFormat = BinaryFormat::MachO);
+
+  /// Compile for an exact platform ABI.  \p TargetTriple must agree with the
+  /// requested ISA and object format; binary patchers additionally authenticate
+  /// its sub-architecture, platform, and instruction mode against the input.
+  llvm::mc_rewrite::RewriteResult
+  compileForRewrite(llvm::Module &Mod, Arch TargetArch,
+                    const llvm::mc_rewrite::RewriteOptions &Opts,
+                    BinaryFormat ObjectFormat, llvm::StringRef TargetTriple);
 };
 
 /// Patch pre-pass (PIE/ASLR safety). Rewrites absolute pointer constants

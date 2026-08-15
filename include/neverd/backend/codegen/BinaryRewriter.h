@@ -174,7 +174,9 @@ struct CompiledImage {
   uint64_t BaseVA = 0;                         ///< VA of Bytes[0].
   Arch TargetArch = Arch::Unknown;             ///< Exact code-generation ISA.
   BinaryFormat Format = BinaryFormat::Unknown; ///< Exact object convention.
-  uint8_t PointerWidth = 0;                    ///< Target pointer bytes.
+  std::string TargetTriple;                    ///< Exact backend ABI target.
+  InstructionMode TargetMode = InstructionMode::Default;
+  uint8_t PointerWidth = 0; ///< Target pointer bytes.
   llvm::endianness ByteOrder = llvm::endianness::little;
   std::vector<CompiledSection> Sections;       ///< Exact logical placements.
   std::map<std::string, uint64_t> SymbolAddrs; ///< Defined symbol → final VA.
@@ -190,7 +192,7 @@ struct CompiledImage {
   /// patchers join them to SourceFunctionOwners by exact source identity.
   std::map<std::string, uint64_t> SourceFunctionOriginalVAs;
   bool FunctionRangesValid = true;
-  std::vector<std::string> Unresolved;         ///< Symbols left unresolved.
+  std::vector<std::string> Unresolved; ///< Symbols left unresolved.
   bool Success = false;
 };
 
@@ -214,7 +216,16 @@ CompiledImage compileImageForPatch(
     llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
         ResolveFn,
-    uint64_t ImageBaseVA = 0, llvm::StringRef TargetTriple = {});
+    uint64_t ImageBaseVA = 0);
+
+/// Exact-platform variant.  \p TargetTriple is propagated through the probe
+/// compile and every layout-convergence compile; callers must authenticate it
+/// against the input container before invoking this overload.
+CompiledImage compileImageForPatch(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
+        ResolveFn,
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple);
 
 /// Compile like compileImageForPatch, but allow selected allocated sections to
 /// be assigned format-owned VAs outside the contiguous patch image.  Such
@@ -225,7 +236,16 @@ CompiledImage compileImageForPatchWithFixedSectionVAs(
         ResolveFn,
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
-    uint64_t ImageBaseVA = 0, llvm::StringRef TargetTriple = {});
+    uint64_t ImageBaseVA = 0);
+
+/// Exact-platform variant of compileImageForPatchWithFixedSectionVAs.
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef, uint32_t)>
+        ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple);
 
 // ===--------------------------------------------------------------------===//
 // BinaryPatcher — base class for new-section patching
@@ -341,8 +361,7 @@ public:
       std::vector<uint8_t> &Binary,
       const std::map<std::string, uint64_t> &SymbolAddrs, uint64_t OrigTextVA,
       uint64_t OrigTextSize, uint64_t OrigTextFileOff, uint64_t ImageBase,
-      Arch TargetArch, InstructionMode Mode,
-      const std::vector<Symbol> *Symbols,
+      Arch TargetArch, InstructionMode Mode, const std::vector<Symbol> *Symbols,
       const std::vector<std::pair<va_t, va_t>> *KnownRanges,
       const std::vector<Export> *Exports,
       std::vector<va_t> *PatchedOriginalEntries,

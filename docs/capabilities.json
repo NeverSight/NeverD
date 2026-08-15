@@ -276,6 +276,8 @@
         "format-specific components exist, but an all-formats and all-exception end-to-end rewrite pipeline is not established",
         "Mach-O compact unwind includes strict original/generated parsing, an exact compiler-authenticated IR source-function to target MC owner-symbol mapping for public and private definitions without prefix or mangling guesses, opaque nonzero range IDs, exact half-open fragment ranges, a bidirectional one-to-one closure between generated FDEs and authenticated fragments, an exact strictly validated non-DWARF compact alternative for required fragments, same-owner adjacent or disjoint fragment reuse, range merging, deterministic regular-page encoding, and top-level transactional composition with EH-frame installation, private-owner trampolines, a unique terminal __LINKEDIT, checked offset relocation, and strict final file/VM layout replay; an existing file-backed __TEXT,__unwind_info section is rewritten only after exact validation, while an absent final section uses the exact authenticated DWARF-FDE fallback and an existing undersized or malformed section fails closed before replacing output; linked native throw/catch proof remains pending",
         "ARM32 Mach-O compact-unwind frame decoding is Complete for encoded stack adjustment, GPR layout, and D-register pattern selectors 0 through 3; selectors 4 through 7 are Partial because the compact word alone cannot prove every runtime-aligned CFA-relative slot, so analysis retains only proven identities and every rewrite path rejects the entry fail-closed",
+        "the top-level ARM32 Mach-O section transaction is published only for an exact CPU_SUBTYPE_ARM_V7K header plus positive N_ARM_THUMB_DEF evidence from the original nlist for every required function; it binds the exact thumbv7k-apple-watchos triple and Thumb mode through code generation and rejects input feature requirements above the Cortex-A7 ceiling",
+        "unflagged or unknown functions, generic non-v7k subtypes, ARM mode, mixed or unknown external-code targets, the ARM Mach-O in-place entry point, and C-source ARM Mach-O patching fail closed before output mutation; stripped inputs discoverable only through LC_FUNCTION_STARTS remain unsupported",
         "each EH-frame install receipt binds the exact target architecture, pointer width, and byte order; compact-unwind DWARF binding rejects every receipt target-identity mismatch",
         "unsupported exception encodings and registration states fail closed without mutating output"
       ],
@@ -284,6 +286,10 @@
         "ExceptionRewriteContract.RejectsSymbolSpellingWithoutCompilerIdentity",
         "RewriteFunctionProvenance.ResolvesPrivateMachOOwnerWithoutPublishingIt",
         "RewriteFunctionProvenance.PreservesARMSourceOwnerWithoutDwarfCFI",
+        "RewriteFunctionProvenance.ExplicitARMv7kMachOTargetAuthenticatesUnwindRange",
+        "RewriteFunctionProvenance.ARMv7kRejectsARMv8OnlyIRRequirements",
+        "RewriteFunctionProvenance.DirectRewriteRejectsSameArchitectureWrongObjectFormat",
+        "RewriteFunctionProvenance.RejectsMismatchedExplicitTargetTriple",
         "CompactUnwindARM32.DecodesFrameStackAdjustmentAndGPRLayout",
         "CompactUnwindARM32.DecodesEveryStackAdjustmentAndSavedGPRBit",
         "CompactUnwindARM32.DecodesFixedFrameDRegisterLayouts",
@@ -312,7 +318,14 @@
         "MachOPatchTransaction.GeneratedCompactWithoutFinalSectionUsesAuthenticatedDwarfFallback",
         "MachOPatchSegmentInstall.RejectsDuplicateLinkeditSegmentsWithoutMutation",
         "MachOPatchSegmentInstall.RejectsNonterminalLinkeditSegmentWithoutMutation",
-        "MachOPatchTransaction.SuccessCommitsEHSegmentTrampolineAndCompactUnwindTogether"
+        "MachOPatchTransaction.SuccessCommitsEHSegmentTrampolineAndCompactUnwindTogether",
+        "MachOARM32Transaction.RejectsEveryPartialFrameDPatternWithTypedMergeError",
+        "MachOARM32Transaction.SuccessCommitsCompilerAuthenticatedEHAndCompactUnwind",
+        "MachOARM32Transaction.ReadsPositiveThumbModeFromExactNListMetadata",
+        "MachOARM32Transaction.UnflaggedTextSymbolIsNotARMModeEvidence",
+        "MachOARM32Transaction.DoesNotTreatTextSegmentDataAsModeEvidence",
+        "MachOARM32Transaction.ARMv7kModeMismatchLeavesInputAndOutputUnchanged",
+        "MachOARM32Transaction.PartialFrameDFailureLeavesInputAndOutputUnchanged"
       ],
       "public_surfaces": {
         "c": [],

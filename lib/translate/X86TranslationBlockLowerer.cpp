@@ -185,10 +185,14 @@ uint8_t meaningfulREXExtensionMask(uint8_t Opcode) {
   case 0x2b: // SUB r64, r/m64
   case 0x31: // XOR r/m64, r64
   case 0x33: // XOR r64, r/m64
+  case 0x39: // CMP r/m64, r64
+  case 0x3b: // CMP r64, r/m64
+  case 0x85: // TEST r/m64, r64
     return REXR | REXB;
   case 0x81: // Scalar immediate with a ModR/M opcode-extension field.
   case 0x83:
   case 0xc7:
+  case 0xf7: // TEST r/m64, imm32; /0 is an opcode-extension field.
     return REXB;
   default:
     return 0;
@@ -1120,6 +1124,18 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
     const auto IsFullWidthScalarInput = [&](const cs_x86_op &Operand) {
       return IsFullWidthRegister(Operand) || Operand.type == X86_OP_IMM;
     };
+    const auto ScalarInputVariable = [&](const cs_x86_op &Operand)
+        -> std::optional<NdVar> {
+      if (IsFullWidthRegister(Operand)) {
+        const RegInfo Register =
+            mapCapstoneReg(static_cast<x86_reg>(Operand.reg));
+        return NdVar::reg(Register.Offset, sizeof(uint64_t));
+      }
+      if (Operand.type == X86_OP_IMM)
+        return NdVar::cst(static_cast<uint64_t>(Operand.imm),
+                          sizeof(uint64_t));
+      return std::nullopt;
+    };
 
     if (Boundary.FirstOp > Block.Ops.size() ||
         Boundary.OpCount > Block.Ops.size() - Boundary.FirstOp)
@@ -1260,6 +1276,92 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
                  << ", AF preserved=" << HasNoAFWrite;
           return Reject(Stream.str());
         }
+      }
+      break;
+    case X86_INS_CMP:
+      if (BoundaryIndex + 1 == Block.InstructionBoundaries.size() ||
+          !HasCanonicalREXW() || X86.op_count != 2 ||
+          !IsFullWidthRegister(X86.operands[0]) ||
+          !IsFullWidthScalarInput(X86.operands[1]))
+        return Reject(
+            "v1 CMP requires full-width GPR register/immediate form");
+      {
+        const std::optional<NdVar> Left =
+            ScalarInputVariable(X86.operands[0]);
+        const std::optional<NdVar> Right =
+            ScalarInputVariable(X86.operands[1]);
+        const size_t SubtractOperations =
+            llvm::count_if(InstructionOps, [&](const LowOp &Operation) {
+              return Left && Right && Operation.Opcode == NdOp::INT_SUB &&
+                     Operation.Output.isTemp() &&
+                     Operation.Output.Size == sizeof(uint64_t) &&
+                     Operation.NumInputs == 2 &&
+                     Operation.Inputs[0] == *Left &&
+                     Operation.Inputs[1] == *Right;
+            });
+        constexpr std::array<uint64_t, 6> RequiredFlags = {
+            x86reg::CF, x86reg::PF, x86reg::AF,
+            x86reg::ZF, x86reg::SF, x86reg::OF};
+        const bool HasAllFlagWrites =
+            llvm::all_of(RequiredFlags, [&](uint64_t Flag) {
+              return llvm::count_if(
+                         InstructionOps, [&](const LowOp &Operation) {
+                           return Operation.Output == NdVar::reg(Flag, 1);
+                         }) == 1;
+            });
+        const bool HasNoGPRWrite =
+            llvm::none_of(InstructionOps, [](const LowOp &Operation) {
+              return Operation.Output.isReg() &&
+                     Operation.Output.Size == sizeof(uint64_t) &&
+                     Operation.Output.Offset <= x86reg::R15;
+            });
+        if (SubtractOperations != 1 || !HasAllFlagWrites || !HasNoGPRWrite)
+          return Reject("v1 CMP LowIR shape is not canonical");
+      }
+      break;
+    case X86_INS_TEST:
+      if (BoundaryIndex + 1 == Block.InstructionBoundaries.size() ||
+          !HasCanonicalREXW() || X86.op_count != 2 ||
+          !IsFullWidthRegister(X86.operands[0]) ||
+          !IsFullWidthScalarInput(X86.operands[1]))
+        return Reject(
+            "v1 TEST requires full-width GPR register/immediate form");
+      {
+        const std::optional<NdVar> Left =
+            ScalarInputVariable(X86.operands[0]);
+        const std::optional<NdVar> Right =
+            ScalarInputVariable(X86.operands[1]);
+        const size_t AndOperations =
+            llvm::count_if(InstructionOps, [&](const LowOp &Operation) {
+              return Left && Right && Operation.Opcode == NdOp::INT_AND &&
+                     Operation.Output.isTemp() &&
+                     Operation.Output.Size == sizeof(uint64_t) &&
+                     Operation.NumInputs == 2 &&
+                     Operation.Inputs[0] == *Left &&
+                     Operation.Inputs[1] == *Right;
+            });
+        constexpr std::array<uint64_t, 5> RequiredFlags = {
+            x86reg::CF, x86reg::PF, x86reg::ZF, x86reg::SF, x86reg::OF};
+        const bool HasAllFlagWrites =
+            llvm::all_of(RequiredFlags, [&](uint64_t Flag) {
+              return llvm::count_if(
+                         InstructionOps, [&](const LowOp &Operation) {
+                           return Operation.Output == NdVar::reg(Flag, 1);
+                         }) == 1;
+            });
+        const bool HasNoAFWrite =
+            llvm::none_of(InstructionOps, [](const LowOp &Operation) {
+              return Operation.Output == NdVar::reg(x86reg::AF, 1);
+            });
+        const bool HasNoGPRWrite =
+            llvm::none_of(InstructionOps, [](const LowOp &Operation) {
+              return Operation.Output.isReg() &&
+                     Operation.Output.Size == sizeof(uint64_t) &&
+                     Operation.Output.Offset <= x86reg::R15;
+            });
+        if (AndOperations != 1 || !HasAllFlagWrites || !HasNoAFWrite ||
+            !HasNoGPRWrite)
+          return Reject("v1 TEST LowIR shape is not canonical");
       }
       break;
     case X86_INS_RET:

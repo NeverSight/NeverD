@@ -313,6 +313,18 @@ runtime-aligned CFA-relative slot をすべて証明できないため `Partial`
 で拒否します。各 EH-frame install receipt は target architecture、pointer width、byte order
 を厳密に束縛し、compact-unwind DWARF binding は receipt target identity の不一致を拒否します。
 
+上位の ARM32 section transaction は compact-unwind decoder より狭い範囲だけを
+公開します。Mach-O header が正確に `CPU_SUBTYPE_ARM_V7K` であり、元の symbol
+table の `N_ARM_THUMB_DEF` bit が必要なすべての function を Thumb code として
+積極的に認証する場合に限り、この経路が有効になります。その後は正確な
+`thumbv7k-apple-watchos` triple と Thumb mode が code generation 全体で束縛され、
+入力 feature 要件が Cortex-A7 の上限を超えることも許されません。flag のない
+function または mode 不明の function、generic な non-v7k subtype、ARM mode、混在
+または不明な external-code target、ARM Mach-O の in-place entry point、および C
+source からの ARM Mach-O patch は、出力を変更する前に fail closed で拒否されます。
+function discovery が `LC_FUNCTION_STARTS` だけに依存する stripped input はまだ
+サポートされていません。
+
 PE、ELF、Mach-O にはそれぞれ format 固有の例外 component がありますが、NeverD は
 全 format・全 exception type を扱う end-to-end rewrite pipeline をまだ公開していません。
 未対応 encoding または未解決の registration/layout 要件は、出力を変更する前に失敗

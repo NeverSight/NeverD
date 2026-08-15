@@ -1396,6 +1396,78 @@ TEST(X86TranslationBlockLowerer,
 }
 
 TEST(X86TranslationBlockLowerer,
+     PublishesCanonicalCompareAndTestRegisterForms) {
+  const std::array<std::vector<uint8_t>, 4> Encodings = {{
+      {0x48, 0x39, 0xd8, 0xc3}, // cmp rax, rbx
+      {0x48, 0x3b, 0xc3, 0xc3}, // cmp rax, rbx
+      {0x48, 0x85, 0xd8, 0xc3}, // test rax, rbx
+      {0x4d, 0x85, 0xc8, 0xc3}, // test r8, r9
+  }};
+
+  for (const std::vector<uint8_t> &Bytes : Encodings) {
+    SCOPED_TRACE(::testing::PrintToString(Bytes));
+    TranslationBlockDescriptorV1 Block = blockFromBytes(Bytes);
+    llvm::LLVMContext Context;
+    llvm::Expected<LoweredTranslationBlockV1> LoweredOrErr =
+        lowerX86TranslationBlockV1(Block, resolvedAArch64(),
+                                   aarch64DataLayout(), Context);
+    ASSERT_TRUE(static_cast<bool>(LoweredOrErr))
+        << llvm::toString(LoweredOrErr.takeError());
+    expectValidRuntimeIR(LoweredOrErr->module());
+  }
+}
+
+TEST(X86TranslationBlockLowerer,
+     PublishesCanonicalCompareAndTestImmediateForms) {
+  const std::array<std::vector<uint8_t>, 5> Encodings = {{
+      {0x48, 0x81, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xc3}, // cmp rax, -1
+      {0x48, 0x83, 0xf8, 0xff, 0xc3},                   // cmp rax, -1
+      {0x48, 0x3d, 0xff, 0xff, 0xff, 0xff, 0xc3},       // cmp rax, -1
+      {0x48, 0xf7, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xc3}, // test rax, -1
+      {0x48, 0xa9, 0xff, 0xff, 0xff, 0xff, 0xc3},       // test rax, -1
+  }};
+
+  for (const std::vector<uint8_t> &Bytes : Encodings) {
+    SCOPED_TRACE(::testing::PrintToString(Bytes));
+    TranslationBlockDescriptorV1 Block = blockFromBytes(Bytes);
+    llvm::LLVMContext Context;
+    llvm::Expected<LoweredTranslationBlockV1> LoweredOrErr =
+        lowerX86TranslationBlockV1(Block, resolvedAArch64(),
+                                   aarch64DataLayout(), Context);
+    ASSERT_TRUE(static_cast<bool>(LoweredOrErr))
+        << llvm::toString(LoweredOrErr.takeError());
+    expectValidRuntimeIR(LoweredOrErr->module());
+  }
+}
+
+TEST(X86TranslationBlockLowerer,
+     RejectsReservedAndNonCanonicalCompareTestEncodings) {
+  const std::array<std::vector<uint8_t>, 6> Encodings = {{
+      {0x48, 0xf7, 0xc8, 0xff, 0xff, 0xff, 0xff, 0xc3}, // reserved F7 /1
+      {0x48, 0x39, 0x18, 0xc3},                         // cmp [rax], rbx
+      {0x48, 0x85, 0x18, 0xc3},                         // test [rax], rbx
+      {0x39, 0xd8, 0xc3},                               // cmp eax, ebx
+      {0x85, 0xd8, 0xc3},                               // test eax, ebx
+      {0x4c, 0xf7, 0xc0, 0x01, 0x00, 0x00, 0x00, 0xc3}, // ignored REX.R
+  }};
+
+  for (const std::vector<uint8_t> &Bytes : Encodings) {
+    SCOPED_TRACE(::testing::PrintToString(Bytes));
+    llvm::Expected<TranslationBlockDescriptorV1> BlockOrErr =
+        tryBlockFromBytes(Bytes);
+    if (!BlockOrErr) {
+      llvm::consumeError(BlockOrErr.takeError());
+      continue;
+    }
+    llvm::LLVMContext Context;
+    expectLoweringError(
+        lowerX86TranslationBlockV1(*BlockOrErr, resolvedAArch64(),
+                                   aarch64DataLayout(), Context),
+        TranslationBlockLoweringErrorCode::UnsupportedBlockShape);
+  }
+}
+
+TEST(X86TranslationBlockLowerer,
      HandlesLogicalIdiomAndSignExtendedImmediateForms) {
   std::vector<uint8_t> ZeroExtendedRegister;
   appendMovImmediate(ZeroExtendedRegister, RuntimeX86_64GPRV1::R8,

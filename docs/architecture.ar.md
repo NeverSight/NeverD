@@ -308,6 +308,18 @@ fail-closed. تربط كل receipt لتثبيت EH-frame بدقة target archite
 وbyte order؛ ويرفض compact-unwind DWARF binding أي عدم تطابق في receipt target
 identity. ولا يزال إثبات native throw/catch على ملف مربوط قيد الإنجاز.
 
+معاملة section العليا لـ ARM32 أضيق نطاقًا من decoder الخاص بـ compact unwind.
+لا تُفعّل إلا عندما يساوي Mach-O header القيمة `CPU_SUBTYPE_ARM_V7K` بدقة،
+وتثبت بتات `N_ARM_THUMB_DEF` في symbol table الأصلية إثباتًا إيجابيًا أن كل
+function مطلوبة هي Thumb code. بعد ذلك يبقى كل من triple الدقيق
+`thumbv7k-apple-watchos` وThumb mode مرتبطًا عبر code generation بالكامل، ولا
+يجوز لمتطلبات input features أن تتجاوز حد Cortex-A7. تفشل قبل أي تعديل للخرج
+وبأسلوب fail-closed كل من functions غير الموسومة أو مجهولة الوضع، وsubtypes
+العامة غير v7k، وARM mode، وexternal-code targets المختلطة أو المجهولة، وARM
+Mach-O in-place entry point، وARM Mach-O patching من C source. ولا تزال inputs
+منزوعة الرموز التي لا يمكن اكتشاف functions فيها إلا عبر `LC_FUNCTION_STARTS`
+غير مدعومة.
+
 تملك PE وELF وMach-O مكونات استثناءات خاصة بكل صيغة، لكن NeverD لا ينشر حتى الآن
 pipeline لإعادة الكتابة من طرف إلى طرف تغطي كل الصيغ وكل أنواع الاستثناءات. يجب
 أن يفشل أي encoding غير مدعوم أو متطلبات registration/layout غير محلولة قبل

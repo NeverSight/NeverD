@@ -17,9 +17,12 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/MachOARM32Mode.h"
+#include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/object/MachOLayout.h"
 
@@ -58,43 +61,151 @@ struct MachOSectionIdentity {
 struct MachORewriteTarget {
   std::string Triple;
   InstructionMode Mode = InstructionMode::Default;
+  std::optional<macho_arm32::ModeInfo> ARM32Modes;
 };
+
+struct MachOSymbolTarget {
+  uint64_t Address = 0;
+  bool IsCode = false;
+};
+
+enum class MachOSymbolNameMatch : uint8_t { Exact, UnderscoreAlias };
+
+std::optional<MachOSymbolNameMatch>
+classifyMachOSymbolName(llvm::StringRef Requested,
+                        llvm::StringRef Candidate) {
+  if (Candidate == Requested)
+    return MachOSymbolNameMatch::Exact;
+  if ((Requested.starts_with("_") &&
+       Candidate == Requested.drop_front()) ||
+      (Candidate.starts_with("_") &&
+       Candidate.drop_front() == Requested))
+    return MachOSymbolNameMatch::UnderscoreAlias;
+  return std::nullopt;
+}
+
+llvm::Expected<std::optional<MachOSymbolTarget>>
+resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested) {
+  using CandidateKey = std::pair<uint64_t, bool>;
+  std::set<CandidateKey> ExactCandidates;
+  std::set<CandidateKey> AliasCandidates;
+  bool InvalidExactCandidate = false;
+  bool InvalidAliasCandidate = false;
+
+  auto Record = [&](llvm::StringRef Name, uint64_t Address, bool IsCode) {
+    std::optional<MachOSymbolNameMatch> Match =
+        classifyMachOSymbolName(Requested, Name);
+    if (!Match)
+      return;
+    auto &Candidates = *Match == MachOSymbolNameMatch::Exact
+                           ? ExactCandidates
+                           : AliasCandidates;
+    Candidates.emplace(Address, IsCode);
+  };
+  auto RecordInvalid = [&](llvm::StringRef Name) {
+    std::optional<MachOSymbolNameMatch> Match =
+        classifyMachOSymbolName(Requested, Name);
+    if (!Match)
+      return;
+    if (*Match == MachOSymbolNameMatch::Exact)
+      InvalidExactCandidate = true;
+    else
+      InvalidAliasCandidate = true;
+  };
+  auto IsExecutable = [&](uint64_t Address) {
+    const Segment *Segment = Image.getSegmentFor(Address);
+    return Segment && Segment->isExecutable();
+  };
+
+  for (const auto &[SlotVA, ImportedName] : Image.ImportPtrSlots) {
+    if (!classifyMachOSymbolName(Requested, ImportedName))
+      continue;
+    const uint8_t *Pointer = Image.readVA(SlotVA, Image.getPointerSize());
+    if (!Pointer) {
+      RecordInvalid(ImportedName);
+      continue;
+    }
+    const uint64_t Target =
+        Image.is64Bit() ? llvm::support::endian::read64le(Pointer)
+                        : llvm::support::endian::read32le(Pointer);
+    Record(ImportedName, Target, /*IsCode=*/true);
+  }
+  for (const Export &Item : Image.Exports)
+    Record(Item.Name, Item.Addr, IsExecutable(Item.Addr));
+  for (const Import &Item : Image.Imports)
+    Record(Item.Name, Item.IATAddr, IsExecutable(Item.IATAddr));
+  for (const Symbol &Item : Image.Symbols)
+    if (Item.IsFunc)
+      Record(Item.Name, Item.Addr, /*IsCode=*/true);
+
+  const bool HasExactEvidence =
+      InvalidExactCandidate || !ExactCandidates.empty();
+  const std::set<CandidateKey> &Candidates =
+      HasExactEvidence ? ExactCandidates : AliasCandidates;
+  const bool HasInvalidCandidate =
+      HasExactEvidence ? InvalidExactCandidate : InvalidAliasCandidate;
+  if (HasInvalidCandidate)
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        (llvm::Twine("Mach-O symbol '") + Requested +
+         "' has an unreadable pointer-slot candidate")
+            .str());
+  if (Candidates.size() > 1)
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        (llvm::Twine("ambiguous Mach-O symbol '") + Requested +
+         "' resolves to multiple addresses or kinds")
+            .str());
+  if (Candidates.empty())
+    return std::optional<MachOSymbolTarget>();
+  const auto &[Address, IsCode] = *Candidates.begin();
+  return std::optional<MachOSymbolTarget>(
+      MachOSymbolTarget{Address, IsCode});
+}
 
 llvm::Expected<MachORewriteTarget>
 resolveMachORewriteTarget(llvm::ArrayRef<uint8_t> Binary, Arch TargetArch,
-                          InstructionMode RequestedMode) {
+                          InstructionMode RequestedMode,
+                          const llvm::Module &Module) {
   MachORewriteTarget Result;
   Result.Mode = RequestedMode;
   if (TargetArch != Arch::ARM)
     return Result;
 
-  const MachOHeaderInfo Header = parseMachOHeader(Binary.data(), Binary.size());
-  if (Header.HeaderSize == 0 || Header.Is64 ||
-      Binary.size() < sizeof(mach_header))
-    return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "invalid ARM Mach-O header");
-
-  const auto *MachHeader =
-      reinterpret_cast<const mach_header *>(Binary.data());
-  const uint32_t CPUSubtype =
-      static_cast<uint32_t>(MachHeader->cpusubtype) &
-      ~static_cast<uint32_t>(CPU_SUBTYPE_MASK);
-  if (CPUSubtype == CPU_SUBTYPE_ARM_V7K) {
-    if (RequestedMode != InstructionMode::Default &&
-        RequestedMode != InstructionMode::Thumb)
-      return llvm::createStringError(
-          llvm::errc::invalid_argument,
-          "ARMv7k Mach-O requires Thumb code-generation mode");
-    Result.Triple = "thumbv7k-apple-watchos";
-    Result.Mode = InstructionMode::Thumb;
-    return Result;
-  }
-
-  if (RequestedMode == InstructionMode::Thumb)
+  auto ModeInfo = macho_arm32::parseModeInfo(Binary);
+  if (!ModeInfo)
+    return ModeInfo.takeError();
+  if (ModeInfo->CPUSubtype != CPU_SUBTYPE_ARM_V7K)
     return llvm::createStringError(
         llvm::errc::not_supported,
-        "Thumb Mach-O code generation requires an authenticated platform ABI");
-  Result.Mode = InstructionMode::ARM;
+        "32-bit ARM Mach-O rewrite currently requires the ARMv7k ABI");
+
+  std::vector<va_t> SourceEntries;
+  for (const llvm::Function &Function : Module) {
+    if (Function.isDeclaration())
+      continue;
+    auto Address = rewrite_source::getOriginalVA(Function);
+    if (!Address)
+      return Address.takeError();
+    if (*Address)
+      SourceEntries.push_back(**Address);
+  }
+
+  auto Mode = macho_arm32::requireUniformFunctionMode(*ModeInfo, SourceEntries);
+  if (!Mode)
+    return Mode.takeError();
+  if (*Mode != InstructionMode::Thumb)
+    return llvm::createStringError(
+        llvm::errc::not_supported,
+        "ARMv7k rewrite currently requires positive Thumb function evidence");
+  if (RequestedMode != InstructionMode::Default && RequestedMode != *Mode)
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "cached ARM code mode disagrees with authenticated nlist metadata");
+
+  Result.Mode = *Mode;
+  Result.Triple = "thumbv7k-apple-watchos";
+  Result.ARM32Modes = std::move(*ModeInfo);
   return Result;
 }
 
@@ -399,7 +510,8 @@ llvm::Error validateSourceFunctionIdentities(const CompiledImage &Compiled,
       return sourceIdentityError(
           "an original entry does not have exactly one compiler owner");
     if (!SeenOriginalEntries.insert(OriginalVA).second)
-      return sourceIdentityError("two source functions share an original entry");
+      return sourceIdentityError(
+          "two source functions share an original entry");
     if (!isAuthenticatedSourceFunctionEntry(*Image, OriginalVA))
       return sourceIdentityError(
           "an original entry is not a loader-authenticated function start");
@@ -435,14 +547,14 @@ llvm::Error validateSourceFunctionTrampolineClosure(
         });
     if (Owner == Compiled.SourceFunctionOwners.end())
       return sourceIdentityError("an installed source has no compiler owner");
-    const size_t Matches = std::count_if(
-        PatchedFunctions.begin(), PatchedFunctions.end(),
-        [&](const PatchedFunctionEntry &Patched) {
-          return Patched.SourceFunction == SourceFunction &&
-                 Patched.OriginalVA == OriginalVA &&
-                 Patched.OwnerSymbol == Owner->OwnerSymbol &&
-                 Patched.OwnerVA == Owner->OwnerVA;
-        });
+    const size_t Matches =
+        std::count_if(PatchedFunctions.begin(), PatchedFunctions.end(),
+                      [&](const PatchedFunctionEntry &Patched) {
+                        return Patched.SourceFunction == SourceFunction &&
+                               Patched.OriginalVA == OriginalVA &&
+                               Patched.OwnerSymbol == Owner->OwnerSymbol &&
+                               Patched.OwnerVA == Owner->OwnerVA;
+                      });
     if (Matches != 1)
       return sourceIdentityError(
           "an original entry has no exact installed trampoline receipt");
@@ -741,8 +853,7 @@ bool MachOPatcher::validateExecSegmentInstall(
   const uint64_t PageSize = machoPageSize(TargetArch);
   PatchLayout Layout;
   if (PageSize == 0 || !parseLayout(Binary, Layout, TargetArch) ||
-      Layout.Is64 != Receipt.Is64 ||
-      Layout.NCmds != Receipt.NCmds ||
+      Layout.Is64 != Receipt.Is64 || Layout.NCmds != Receipt.NCmds ||
       Layout.SizeOfCmds != Receipt.SizeOfCmds ||
       Layout.LinkeditVA != Receipt.LinkeditVA ||
       Layout.LinkeditVMSize != Receipt.LinkeditVMSize ||
@@ -1035,12 +1146,32 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
     return PatchResult{};
   }
 
+  MachOLoader Loader;
+  auto LoadedImage = Loader.load(InputPath);
+  if (!LoadedImage) {
+    llvm::WithColor::error() << "macho_patch: loader authentication failed: "
+                             << llvm::toString(LoadedImage.takeError()) << "\n";
+    return PatchResult{};
+  }
+  const BinaryImage AuthenticatedImage = std::move(*LoadedImage);
+
   return readPatchWrite(
       InputPath, OutputPath, /*SetExecPerm=*/true, "macho_patch",
       [&](std::vector<uint8_t> &Binary, PatchResult &Result) -> bool {
         PatchLayout Layout;
         if (!parseLayout(Binary, Layout, TargetArch))
           return false;
+
+        std::string AuthenticatedDetail;
+        if (!cachedImageBytesMatchInput(Binary, AuthenticatedImage, TargetArch,
+                                        Layout.Is64, AuthenticatedDetail) ||
+            !cachedAddressModelMatchesInput(Binary, AuthenticatedImage,
+                                            AuthenticatedDetail)) {
+          llvm::WithColor::error()
+              << "macho_patch: loader authentication does not match input: "
+              << AuthenticatedDetail << "\n";
+          return false;
+        }
 
         if (CachedImage) {
           std::string Detail;
@@ -1057,10 +1188,18 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
                 << "\n";
             return false;
           }
+          if (TargetArch == Arch::ARM &&
+              CachedImage->Mode != InstructionMode::Default &&
+              CachedImage->Mode != AuthenticatedImage.Mode) {
+            llvm::WithColor::error()
+                << "macho_patch: cached ARM code mode disagrees with "
+                   "authenticated nlist metadata\n";
+            return false;
+          }
         }
 
-        auto RewriteTarget =
-            resolveMachORewriteTarget(Binary, TargetArch, CachedMode);
+        auto RewriteTarget = resolveMachORewriteTarget(
+            Binary, TargetArch, AuthenticatedImage.Mode, Mod);
         if (!RewriteTarget) {
           llvm::WithColor::error()
               << "macho_patch: " << llvm::toString(RewriteTarget.takeError())
@@ -1076,44 +1215,43 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
 
         // The address-model resolver: maps external symbol names to VAs in the
         // target binary (exports / import stubs / __nd_data_* absolute data).
-        InstructionMode ResolveMode = RewriteTarget->Mode;
-        auto SerializeResolvedCode = [&](uint64_t VA, bool IsCode) {
-          return IsCode ? serializeCodePointer(VA, TargetArch, ResolveMode)
-                        : VA;
+        auto SerializeResolvedCode =
+            [&](uint64_t VA, bool IsCode) -> std::optional<uint64_t> {
+          if (!IsCode)
+            return VA;
+          if (TargetArch != Arch::ARM)
+            return serializeCodePointer(VA, TargetArch, RewriteTarget->Mode);
+          if (!RewriteTarget->ARM32Modes)
+            return std::nullopt;
+          auto Serialized =
+              macho_arm32::serializeCodePointer(*RewriteTarget->ARM32Modes, VA);
+          if (!Serialized) {
+            llvm::consumeError(Serialized.takeError());
+            return std::nullopt;
+          }
+          return *Serialized;
         };
         auto IsExecutable = [&](uint64_t VA) {
-          const Segment *Seg =
-              CachedImage ? CachedImage->getSegmentFor(VA) : nullptr;
+          const Segment *Seg = AuthenticatedImage.getSegmentFor(VA);
           return Seg && Seg->isExecutable();
         };
+        std::optional<std::string> SymbolResolutionFailure;
         auto Resolve = [&](llvm::StringRef Sym,
                            uint32_t) -> std::optional<uint64_t> {
           std::string Name = Sym.str();
-          if (CachedExports) {
-            for (auto &E : *CachedExports)
-              if (E.Name == Name || ("_" + E.Name) == Name ||
-                  (Name.size() > 1 && Name[0] == '_' &&
-                   E.Name == Name.substr(1)))
-                return SerializeResolvedCode(E.Addr, IsExecutable(E.Addr));
+          if (SymbolResolutionFailure)
+            return std::nullopt;
+          auto Target = resolveUniqueMachOSymbol(AuthenticatedImage, Name);
+          if (!Target) {
+            SymbolResolutionFailure = llvm::toString(Target.takeError());
+            return std::nullopt;
           }
-          if (CachedImports) {
-            for (auto &I : *CachedImports)
-              if (I.Name == Name || ("_" + I.Name) == Name ||
-                  (Name.size() > 1 && Name[0] == '_' &&
-                   I.Name == Name.substr(1)))
-                return SerializeResolvedCode(I.IATAddr,
-                                             IsExecutable(I.IATAddr));
-          }
-          if (CachedSymbols) {
-            for (const auto &S : *CachedSymbols)
-              if (S.IsFunc && (S.Name == Name || ("_" + S.Name) == Name ||
-                               (Name.size() > 1 && Name[0] == '_' &&
-                                S.Name == Name.substr(1))))
-                return SerializeResolvedCode(S.Addr, true);
-          }
+          if (*Target)
+            return SerializeResolvedCode((*Target)->Address,
+                                         (*Target)->IsCode);
           if (auto VA = parseNdDataSymbol(Name)) {
-            bool IsCode = IsExecutable(*VA) && CachedImage &&
-                          CachedImage->CodeRefTargets.count(*VA) != 0;
+            bool IsCode = IsExecutable(*VA) &&
+                          AuthenticatedImage.CodeRefTargets.count(*VA) != 0;
             return SerializeResolvedCode(*VA, IsCode);
           }
           if (auto VA = parseNdCodePtrSymbol(Name))
@@ -1145,13 +1283,32 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         CompiledImage Img = compileImageForPatchWithFixedSectionVAs(
             Mod, TargetArch, BinaryFormat::MachO, NewSegVMAddr, Resolve,
             FixedSectionVA, /*ImageBaseVA=*/0, RewriteTarget->Triple);
+        if (SymbolResolutionFailure) {
+          llvm::WithColor::error()
+              << "macho_patch: " << *SymbolResolutionFailure << "\n";
+          return false;
+        }
         if (!Img.Success || Img.Bytes.empty()) {
           llvm::WithColor::error()
               << "macho_patch: compileImageForPatch failed\n";
           return false;
         }
-        if (llvm::Error Error =
-                validateSourceFunctionIdentities(Img, Mod, CachedImage)) {
+        if (!RewriteTarget->Triple.empty() &&
+            (Img.TargetTriple != RewriteTarget->Triple ||
+             Img.TargetMode != RewriteTarget->Mode)) {
+          llvm::WithColor::error()
+              << "macho_patch: compiled target identity does not match the "
+                 "authenticated input ABI\n";
+          return false;
+        }
+        if (TargetArch == Arch::ARM && !Img.Unresolved.empty()) {
+          llvm::WithColor::error()
+              << "macho_patch: ARM code targets require exact nlist mode "
+                 "provenance\n";
+          return false;
+        }
+        if (llvm::Error Error = validateSourceFunctionIdentities(
+                Img, Mod, &AuthenticatedImage)) {
           llvm::WithColor::error() << llvm::toString(std::move(Error)) << "\n";
           return false;
         }
@@ -1164,13 +1321,8 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         const bool InstallGeneratedCompact =
             HasGeneratedCompact && HasFinalCompactSection;
         if (InstallGeneratedCompact) {
-          if (!CachedImage) {
-            llvm::WithColor::error()
-                << "macho_patch: compact unwind requires image context\n";
-            return false;
-          }
           auto Parsed = parseGeneratedMachOCompactUnwind(
-              Img, *CachedImage, (**CompactRegion).MachHeaderVA,
+              Img, AuthenticatedImage, (**CompactRegion).MachHeaderVA,
               llvm::endianness::little);
           if (!Parsed) {
             llvm::WithColor::error()
@@ -1214,16 +1366,15 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         size_t TrampolineCount = 0;
         std::vector<PatchedFunctionEntry> PatchedFunctions;
         if (Layout.TextSectVA != 0 && Layout.TextSectSize != 0) {
-          TrampolineCount =
-              installTrampolines(Candidate, Img.SymbolAddrs, Layout.TextSectVA,
-                                 Layout.TextSectSize, Layout.TextSectFileOff,
-                                 /*ImageBase=*/0, TargetArch,
-                                 RewriteTarget->Mode,
-                                 CachedSymbols, CachedCodeRanges, CachedExports,
-                                 /*PatchedOriginalEntries=*/nullptr,
-                                 /*PatchedEntryMappings=*/nullptr,
-                                 &PatchedFunctions, Img.SourceFunctionOwners,
-                                 Img.SourceFunctionOriginalVAs);
+          TrampolineCount = installTrampolines(
+              Candidate, Img.SymbolAddrs, Layout.TextSectVA,
+              Layout.TextSectSize, Layout.TextSectFileOff,
+              /*ImageBase=*/0, TargetArch, RewriteTarget->Mode,
+              &AuthenticatedImage.Symbols, &AuthenticatedImage.KnownCodeRanges,
+              &AuthenticatedImage.Exports,
+              /*PatchedOriginalEntries=*/nullptr,
+              /*PatchedEntryMappings=*/nullptr, &PatchedFunctions,
+              Img.SourceFunctionOwners, Img.SourceFunctionOriginalVAs);
         }
         if (llvm::Error Error = validateSourceFunctionTrampolineClosure(
                 Img, PatchedFunctions, TrampolineCount)) {

@@ -71,4 +71,23 @@ detectTargetFeaturesARM(const std::set<std::string> &Names) {
   return {"cortex-a7", F};
 }
 
+std::optional<std::string>
+findUnsupportedARMv7KRequirement(const std::set<std::string> &Names) {
+  static constexpr const char *UnsupportedPatterns[] = {
+      "arm.neon.aes",   "arm.neon.sha", "arm.crc32",   "llvm.round",
+      "llvm.floor",     "llvm.ceil",    "llvm.trunc",  "llvm.rint",
+      "llvm.nearbyint", "llvm.minnum",  "llvm.maxnum", "llvm.minimum",
+      "llvm.maximum",   "reduce.fmax",  "reduce.fmin"};
+  for (const char *Pattern : UnsupportedPatterns)
+    if (anyContains(Names, Pattern))
+      return std::string(Pattern);
+  return std::nullopt;
+}
+
+std::pair<std::string, std::string> detectTargetFeaturesARMv7K() {
+  return {"cortex-a7",
+          "+v7,+vfp2,+vfp3,+fp16,+vfp4,+fp64,+d32,+neon,+hwdiv-arm,"
+          "-fp-armv8,-fullfp16,-sha2,-aes,-crc"};
+}
+
 } // namespace neverd

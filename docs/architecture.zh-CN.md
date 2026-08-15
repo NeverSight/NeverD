@@ -256,6 +256,15 @@ ARM32 compact unwind 的已编码栈调整与 GPR 布局为 `Complete`；D 寄�
 以 fail-closed 方式拒绝。每份 EH-frame 安装 receipt 都精确绑定目标架构、指针宽度与字节序；
 compact-unwind DWARF 绑定会拒绝任何 receipt target identity 不匹配。
 
+顶层 ARM32 section 事务的能力边界比 compact-unwind 解码器更窄。只有 Mach-O header
+精确为 `CPU_SUBTYPE_ARM_V7K`，且原始 symbol table 的 `N_ARM_THUMB_DEF` 位对每个必需
+函数都提供 Thumb code 的正向证明时，才会开放这条路径。此后，精确的
+`thumbv7k-apple-watchos` triple 与 Thumb mode 会贯穿并约束整个 code generation，输入的
+feature 需求也不得超过 Cortex-A7 上限。未标记或模式未知的函数、generic non-v7k
+subtype、ARM mode、混合或未知的 external-code target、ARM Mach-O in-place entry point，
+以及从 C source 发起的 ARM Mach-O patch，都会在修改输出前 fail closed。对于 stripped
+输入，如果只能通过 `LC_FUNCTION_STARTS` 发现函数，目前仍不支持。
+
 PE、ELF 与 Mach-O 各自具备格式特定的异常组件，但 NeverD 尚未公开覆盖所有格式、
 所有异常类型的端到端重写流水线。不支持的 encoding 或未解析的注册/layout 要求必须
 在修改输出前失败；现有的局部格式能力不能描述为异常重写已经完全闭环。

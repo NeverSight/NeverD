@@ -199,6 +199,11 @@ int neverd_patch_from_c(neverd_session_t Sess, const char *CText,
     S->setError("binary patching is not supported for virtual-machine inputs");
     return 0;
   }
+  if (S->Img.Arch == Arch::ARM && S->Img.Format == BinaryFormat::MachO) {
+    S->setError("C patching for ARM Mach-O requires an authenticated watchOS "
+                "frontend ABI and is not published yet");
+    return 0;
+  }
   if (!CText) {
     S->setError("C source is null");
     return 0;

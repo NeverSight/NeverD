@@ -17,6 +17,7 @@
 #ifndef NEVERD_BACKEND_CODEGEN_CODEGENDETAIL_H
 #define NEVERD_BACKEND_CODEGEN_CODEGENDETAIL_H
 
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -53,6 +54,14 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names);
 /// ARM32 VFP/NEON/crypto feature detection (CodeGenARM.cpp).
 std::pair<std::string, std::string>
 detectTargetFeaturesARM(const std::set<std::string> &Names);
+
+/// ARMv7k/watchOS has a fixed Cortex-A7 feature ceiling.  Return the first IR
+/// requirement that would need ARMv8-A instructions, if any.
+std::optional<std::string>
+findUnsupportedARMv7KRequirement(const std::set<std::string> &Names);
+
+/// Exact ARMv7k baseline used after the requirement check above.
+std::pair<std::string, std::string> detectTargetFeaturesARMv7K();
 
 } // namespace neverd
 

@@ -81,8 +81,8 @@ TEST(RewriteFunctionProvenance, PreservesPrivateUnwindOwner) {
   exception_rewrite::Requirements Requirements;
   Requirements.RequiresRegisteredUnwind = true;
   Requirements.Functions.push_back({"private_helper", true});
-  auto Resolved = exception_rewrite::resolveRequiredFunctionOwners(
-      Requirements, Image);
+  auto Resolved =
+      exception_rewrite::resolveRequiredFunctionOwners(Requirements, Image);
   ASSERT_TRUE(static_cast<bool>(Resolved))
       << llvm::toString(Resolved.takeError());
   ASSERT_EQ(Resolved->size(), 1u);
@@ -95,18 +95,18 @@ TEST(RewriteFunctionProvenance,
   using llvm::mc_rewrite::RewriteSourceFunctionOwner;
   const std::vector<RewriteSourceFunctionOwner> SameAddress = {
       {"first", "_first", 0x1000}, {"second", "_second", 0x1000}};
-  EXPECT_TRUE(llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
-      SameAddress));
+  EXPECT_TRUE(
+      llvm::mc_rewrite::validateRewriteSourceFunctionOwners(SameAddress));
 
   auto DuplicateSource = SameAddress;
   DuplicateSource[1].SourceFunction = "first";
-  EXPECT_FALSE(llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
-      DuplicateSource));
+  EXPECT_FALSE(
+      llvm::mc_rewrite::validateRewriteSourceFunctionOwners(DuplicateSource));
 
   auto DuplicateOwner = SameAddress;
   DuplicateOwner[1].OwnerSymbol = "_first";
-  EXPECT_FALSE(llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
-      DuplicateOwner));
+  EXPECT_FALSE(
+      llvm::mc_rewrite::validateRewriteSourceFunctionOwners(DuplicateOwner));
 }
 
 TEST(RewriteFunctionProvenance, PreservesExactOriginalSourceEntry) {
@@ -114,9 +114,9 @@ TEST(RewriteFunctionProvenance, PreservesExactOriginalSourceEntry) {
   llvm::Module Module("source-entry", Context);
   auto *FunctionType =
       llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
-  auto *Function = llvm::Function::Create(
-      FunctionType, llvm::GlobalValue::ExternalLinkage,
-      "name_without_an_address", Module);
+  auto *Function =
+      llvm::Function::Create(FunctionType, llvm::GlobalValue::ExternalLinkage,
+                             "name_without_an_address", Module);
   rewrite_source::setOriginalVA(*Function, 0x401000);
   llvm::IRBuilder<> Builder(
       llvm::BasicBlock::Create(Context, "entry", Function));
@@ -178,9 +178,8 @@ TEST(RewriteFunctionProvenance, ResolvesPrivateMachOOwnerWithoutPublishingIt) {
   llvm::Module Module("private-macho-owner", Context);
   auto *FunctionType =
       llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
-  auto *Function =
-      llvm::Function::Create(FunctionType, llvm::GlobalValue::PrivateLinkage,
-                             "private_macho", Module);
+  auto *Function = llvm::Function::Create(
+      FunctionType, llvm::GlobalValue::PrivateLinkage, "private_macho", Module);
   Function->setUWTableKind(llvm::UWTableKind::Default);
   llvm::IRBuilder<> Builder(
       llvm::BasicBlock::Create(Context, "entry", Function));
@@ -206,8 +205,8 @@ TEST(RewriteFunctionProvenance, ResolvesPrivateMachOOwnerWithoutPublishingIt) {
   exception_rewrite::Requirements Requirements;
   Requirements.RequiresRegisteredUnwind = true;
   Requirements.Functions.push_back({"private_macho", true});
-  auto Resolved = exception_rewrite::resolveRequiredFunctionOwners(
-      Requirements, Image);
+  auto Resolved =
+      exception_rewrite::resolveRequiredFunctionOwners(Requirements, Image);
   ASSERT_TRUE(static_cast<bool>(Resolved))
       << llvm::toString(Resolved.takeError());
   ASSERT_EQ(Resolved->size(), 1u);
@@ -266,6 +265,8 @@ TEST(RewriteFunctionProvenance,
       /*ImageBaseVA=*/0, "thumbv7k-apple-watchos");
 
   ASSERT_TRUE(Image.Success);
+  EXPECT_EQ(Image.TargetTriple, "thumbv7k-apple-watchos");
+  EXPECT_EQ(Image.TargetMode, InstructionMode::Thumb);
   ASSERT_TRUE(Image.FunctionRangesValid);
   ASSERT_TRUE(Image.Unresolved.empty());
   ASSERT_EQ(Image.SourceFunctionOwners.size(), 1u);
@@ -278,6 +279,67 @@ TEST(RewriteFunctionProvenance,
   EXPECT_LT(Range.BeginVA, Range.EndVA);
   EXPECT_TRUE(llvm::mc_rewrite::validateRewriteFunctionRanges(
       Image.FunctionRanges, Image.FunctionOwnerAddrs));
+}
+
+TEST(RewriteFunctionProvenance, ARMv7kRejectsARMv8OnlyIRRequirements) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("armv7k-feature-ceiling", Context);
+  auto *FunctionType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  auto *Function = llvm::Function::Create(
+      FunctionType, llvm::GlobalValue::ExternalLinkage, "f", Module);
+  auto *RoundType =
+      llvm::FunctionType::get(llvm::Type::getFloatTy(Context),
+                              {llvm::Type::getFloatTy(Context)}, false);
+  auto *Round = llvm::Function::Create(
+      RoundType, llvm::GlobalValue::ExternalLinkage, "llvm.round.f32", Module);
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  Builder.CreateCall(
+      Round, llvm::ConstantFP::get(llvm::Type::getFloatTy(Context), 1.5));
+  Builder.CreateRetVoid();
+
+  testing::internal::CaptureStderr();
+  CompiledImage Image = compileImageForPatch(
+      Module, Arch::ARM, BinaryFormat::MachO, 0x400000,
+      [](llvm::StringRef, uint32_t) -> std::optional<uint64_t> {
+        return std::nullopt;
+      },
+      /*ImageBaseVA=*/0, "thumbv7k-apple-watchos");
+  const std::string Diagnostic = testing::internal::GetCapturedStderr();
+
+  EXPECT_FALSE(Image.Success);
+  EXPECT_TRUE(Image.Bytes.empty());
+  EXPECT_NE(Diagnostic.find("exceeding the input CPU feature ceiling"),
+            std::string::npos)
+      << Diagnostic;
+}
+
+TEST(RewriteFunctionProvenance,
+     DirectRewriteRejectsSameArchitectureWrongObjectFormat) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("wrong-format-rewrite-triple", Context);
+  auto *FunctionType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  auto *Function = llvm::Function::Create(
+      FunctionType, llvm::GlobalValue::ExternalLinkage, "f", Module);
+  llvm::IRBuilder<>(llvm::BasicBlock::Create(Context, "entry", Function))
+      .CreateRetVoid();
+
+  llvm::mc_rewrite::RewriteOptions Options;
+  Codegen Compiler;
+  testing::internal::CaptureStderr();
+  llvm::mc_rewrite::RewriteResult Result = Compiler.compileForRewrite(
+      Module, Arch::ARM, Options, BinaryFormat::MachO,
+      "armv7k-unknown-linux-gnueabihf");
+  const std::string Diagnostic = testing::internal::GetCapturedStderr();
+
+  EXPECT_FALSE(Result.ImageValid);
+  EXPECT_TRUE(Result.Sections.empty());
+  EXPECT_NE(Diagnostic.find("does not match the requested architecture and "
+                            "object format"),
+            std::string::npos)
+      << Diagnostic;
 }
 
 TEST(RewriteFunctionProvenance, RejectsMismatchedExplicitTargetTriple) {

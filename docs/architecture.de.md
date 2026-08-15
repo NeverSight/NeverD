@@ -366,6 +366,20 @@ exakte Zielarchitektur, Pointer-Breite und Byte-Reihenfolge; Compact-Unwind-
 DWARF-Binding lehnt jede abweichende Receipt-Target-Identity ab. Ein gelinkter
 nativer Throw/Catch-Nachweis fehlt weiterhin.
 
+Die übergeordnete ARM32-Section-Transaktion ist enger gefasst als der
+Compact-Unwind-Decoder. Sie wird nur freigeschaltet, wenn der Mach-O-Header
+exakt `CPU_SUBTYPE_ARM_V7K` angibt und die `N_ARM_THUMB_DEF`-Bits der
+ursprünglichen Symboltabelle jede erforderliche Funktion positiv als
+Thumb-Code authentifizieren. Der exakte Triple `thumbv7k-apple-watchos` und
+der Thumb-Modus bleiben anschließend über die gesamte Codegenerierung
+gebunden; deren Eingabe-Featureanforderungen dürfen die Cortex-A7-Obergrenze
+nicht überschreiten. Funktionen ohne Flag oder mit unbekanntem Modus,
+generische Nicht-v7k-Subtypen, ARM-Modus, gemischte oder unbekannte externe
+Codeziele, der In-place-Einstiegspunkt für ARM Mach-O und ARM-Mach-O-Patching
+aus C-Quelltext scheitern vor jeder Ausgabemutation fail-closed. Gestrippte
+Eingaben, deren Funktionen nur über `LC_FUNCTION_STARTS` gefunden werden
+können, werden noch nicht unterstützt.
+
 PE, ELF und Mach-O besitzen jeweils formatspezifische Ausnahmekomponenten, doch
 NeverD veröffentlicht noch keine End-to-End-Rewrite-Pipeline für alle Formate
 und alle Ausnahmetypen. Nicht unterstützte Encodings oder ungelöste

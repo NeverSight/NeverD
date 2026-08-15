@@ -47,6 +47,7 @@ add_neverd_component_library(NeverDLoader
   Go/GoStackMaps.cpp
   Loader.cpp
   MachO/MachOChainedFixups.cpp
+  MachO/MachOARM32Mode.cpp
   MachO/MachOCompactUnwind.cpp
   MachO/MachOCompactUnwindEncoding.cpp
   MachO/MachODyldBind.cpp
