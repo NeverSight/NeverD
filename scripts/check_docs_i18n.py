@@ -49,6 +49,13 @@ ARCHITECTURE_CAPABILITY_TOKENS = {
         "`__TEXT,__unwind_info`",
         "`__LINKEDIT`",
     ),
+    "exception.itanium.ada-d": (
+        "`Exception_Id`",
+        "`ClassInfo`",
+        "`std::type_info`",
+        "`invoke`",
+        "`landingpad`",
+    ),
 }
 GUIDE_STEMS = ("evm", "sbf")
 GUIDE_REQUIRED_TOKENS = {

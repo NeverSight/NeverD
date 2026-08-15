@@ -576,6 +576,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "debug.hardware": "unsupported",
                 "debug.local": "unsupported",
                 "debug.remote": "unsupported",
+                "exception.itanium.ada-d": "experimental",
                 "exception.rewrite.end-to-end": "unsupported",
                 "semantic.mba.derivation": "supported",
                 "semantic.synthesis.candidate": "supported",
@@ -590,6 +591,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
             "debug.hardware": no_surfaces,
             "debug.local": no_surfaces,
             "debug.remote": no_surfaces,
+            "exception.itanium.ada-d": no_surfaces,
             "exception.rewrite.end-to-end": no_surfaces,
             "semantic.mba.derivation": {
                 "c": ["neverd_simplify_expr"],

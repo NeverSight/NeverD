@@ -51,6 +51,7 @@ REQUIRED_CAPABILITY_IDS = frozenset(
         "debug.hardware",
         "debug.local",
         "debug.remote",
+        "exception.itanium.ada-d",
         "exception.rewrite.end-to-end",
         "llvm.semantic.synthesis-rewrite",
         "semantic.mba.derivation",
