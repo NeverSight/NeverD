@@ -354,7 +354,10 @@
       ],
       "tests": [
         "ItaniumLSDA.KeepsAdaAndDTypeDescriptorsOpaque",
-        "ItaniumEHEmitter.PreservesAdaAndDAddressFormPersonalities"
+        "ItaniumEHEmitter.PreservesAdaAndDAddressFormPersonalities",
+        "AdaDEHCorpus.DeclaresCompleteBuildMatrix",
+        "AdaDEHCorpus.RecoversTheCallSiteGraphOnEveryCell",
+        "AdaDEHCorpus.KeepsAdaAndDTypeDescriptorsOpaque"
       ],
       "public_surfaces": {
         "c": [],
