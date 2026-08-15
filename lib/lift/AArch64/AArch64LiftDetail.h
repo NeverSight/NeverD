@@ -38,6 +38,13 @@ namespace neverd {
 /// Defined in AArch64LiftCoreNEON.cpp.
 unsigned neonElemSize(AArch64Layout_VectorLayout VAS);
 
+/// Byte widths of the IEEE formats a NEON floating-point lane can hold:
+/// half (FEAT_FP16), single and double.  Integer arrangements and
+/// unrecognized specifiers must not be reinterpreted as a float lane.
+inline bool isFPLaneSize(unsigned LaneSz) {
+  return LaneSz == 2 || LaneSz == 4 || LaneSz == 8;
+}
+
 /// Floating-point element size (bytes) of a NEON vector arrangement, for
 /// the complex (FCADD/FCMLA) per-pair lifting.  Returns 0 for
 /// non-FP/unknown.  Defined in AArch64LiftSIMDExt.cpp.

@@ -1209,3 +1209,39 @@ target_link_libraries(PatchFullRepro PRIVATE
 if(WIN32)
   target_link_libraries(PatchFullRepro PRIVATE NeverDPipeline)
 endif()
+
+# Standalone FP16 FADDP / FMAXV probes — one TU, so a whitelist fix can be
+# rebuilt and run without relinking the 800-TU NeverDSemanticTests binary.
+add_neverd_unittest(NeverDFP16ReduceTests
+  aarch64/AArch64_FP16ReduceRTTests.cpp
+  TIMEOUT 120
+)
+
+target_compile_definitions(NeverDFP16ReduceTests PRIVATE
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_include_directories(NeverDFP16ReduceTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+  ${CMAKE_SOURCE_DIR}/third_party/unicorn/include
+)
+
+target_link_libraries(NeverDFP16ReduceTests PRIVATE
+  unicorn
+  neverd_shared
+  NeverDPassMIR
+  LLVMMC
+  LLVMMCParser
+  LLVMObject
+  LLVMX86AsmParser LLVMX86Desc LLVMX86Info
+  LLVMAArch64AsmParser LLVMAArch64Desc LLVMAArch64Info
+  LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
+  LLVMSupport
+)
+
+if(TARGET neverd)
+  add_dependencies(NeverDFP16ReduceTests neverd)
+endif()

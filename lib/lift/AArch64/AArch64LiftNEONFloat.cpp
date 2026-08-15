@@ -19,18 +19,6 @@
 
 namespace neverd {
 
-namespace {
-
-// Byte widths of the IEEE formats a NEON floating-point lane can hold: half
-// (FEAT_FP16), single and double.  Anything else came from an integer
-// arrangement or an arrangement specifier the decoder did not recognize, and
-// must not be reinterpreted as a float lane.
-bool isFPLaneSize(unsigned LaneSz) {
-  return LaneSz == 2 || LaneSz == 4 || LaneSz == 8;
-}
-
-} // namespace
-
 bool liftNEONFloat(AArch64Lifter &L, AArch64Lifter::LiftState &S,
                    const cs_insn *Insn, const cs_aarch64 &ARM64) {
   switch (Insn->id) {

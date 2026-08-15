@@ -387,8 +387,9 @@ bool liftNEONReduce(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdOp MM = IsNM ? (IsMin ? NdOp::FLOAT_MINNUM : NdOp::FLOAT_MAXNUM)
                    : (IsMin ? NdOp::FLOAT_MIN : NdOp::FLOAT_MAX);
     unsigned ElemSz = neonElemSize(ARM64.operands[1].vas);
-    if (ElemSz < 4 || Src.Size <= ElemSz) {
-      // Unknown / half-precision / scalar: just take the low element.
+    if (!isFPLaneSize(ElemSz) || Src.Size <= ElemSz) {
+      // Unknown arrangement or a single-lane source: take the low element.
+      // Half (ElemSz == 2) is a real IEEE lane and must reduce, not copy.
       NdVar Lo = S.makeTemp(ElemSz ? ElemSz : Dst.Size);
       S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(0, 4)});
       S.emit(NdOp::COPY, Dst, {Lo});
@@ -410,15 +411,10 @@ bool liftNEONReduce(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_FADDP: {
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     if (ARM64.op_count == 2) {
-      // Scalar pairwise: faddp Sd, Vn.2S  →  Sd = Vn[0] + Vn[1]
+      // Scalar pairwise: faddp Sd, Vn.2S / Hd, Vn.2H → Sd/Hd = Vn[0] + Vn[1]
       NdVar Src = L.operandRead(S, ARM64.operands[1]);
-      auto SrcVas = ARM64.operands[1].vas;
-      unsigned LaneSz = 0;
-      if (SrcVas == AARCH64LAYOUT_VL_2S)
-        LaneSz = 4;
-      else if (SrcVas == AARCH64LAYOUT_VL_2D)
-        LaneSz = 8;
-      if (LaneSz > 0 && Src.Size >= 2 * LaneSz) {
+      unsigned LaneSz = neonElemSize(ARM64.operands[1].vas);
+      if (isFPLaneSize(LaneSz) && Src.Size >= 2 * LaneSz) {
         NdVar Lo = S.makeTemp(LaneSz);
         S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(0, 4)});
         NdVar Hi = S.makeTemp(LaneSz);
@@ -434,14 +430,8 @@ bool liftNEONReduce(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdVar A = L.operandRead(S, ARM64.operands[1]);
     NdVar B = L.operandRead(S, ARM64.operands[2]);
 
-    auto Vas = ARM64.operands[0].vas;
-    unsigned LaneSz = 0;
-    if (Vas == AARCH64LAYOUT_VL_4S || Vas == AARCH64LAYOUT_VL_2S)
-      LaneSz = 4;
-    else if (Vas == AARCH64LAYOUT_VL_2D)
-      LaneSz = 8;
-
-    if (LaneSz > 0 && A.Size > LaneSz) {
+    unsigned LaneSz = neonElemSize(ARM64.operands[0].vas);
+    if (isFPLaneSize(LaneSz) && A.Size > LaneSz) {
       unsigned NPairs = A.Size / (LaneSz * 2);
       NdVar Acc = S.makeTemp(0);
       for (unsigned H = 0; H < 2; ++H) {
