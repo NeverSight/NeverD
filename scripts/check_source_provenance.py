@@ -515,6 +515,15 @@ def scan_recent_history(
     ).splitlines()
     findings: list[str] = []
     for commit in commits:
+        # A merge commit has no default diff-tree inventory, but `git show
+        # --first-parent` still prints a first-parent patch.  GitHub Actions
+        # checks out that synthetic merge for pull_request jobs.  The
+        # first-parent regular commits already carry the same text, so
+        # scanning the merge would only re-count it and trip the inventory
+        # check.
+        parents = _git_output(["rev-list", "--parents", "-n", "1", commit]).split()
+        if len(parents) > 2:
+            continue
         names = [
             entry
             for entry in _git_output(
