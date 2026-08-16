@@ -232,12 +232,18 @@ target_include_directories(NeverDNativeExceptionRewriteContractTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
-# NeverDIR holds function pointers into the register-name tables.  GNU ld
-# does not rescan NeverDLift after that archive, so the focused binary has
-# to name Lift again after the IR dependency is already on the line.
-target_link_libraries(NeverDNativeExceptionRewriteContractTests PRIVATE
-  NeverDLift
-)
+# NeverDIR holds function pointers into register-name tables implemented by
+# NeverDLift.  CMake may place or deduplicate a repeated NeverDLift before the
+# transitive NeverDIR archive, so give one-pass Unix linkers an explicit rescan
+# group containing the exact two archive files.
+if(UNIX AND NOT APPLE)
+  target_link_libraries(NeverDNativeExceptionRewriteContractTests PRIVATE
+    "-Wl,--start-group"
+    "$<TARGET_FILE:NeverDIR>"
+    "$<TARGET_FILE:NeverDLift>"
+    "-Wl,--end-group"
+  )
+endif()
 
 # Keeps Mach-O patch symbol selection independent from the full lift suite.
 add_neverd_unittest(NeverDMachOSymbolResolutionTests

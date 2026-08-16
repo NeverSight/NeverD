@@ -76,9 +76,10 @@ private:
   void linkSuccessors(LowFunc &Func, const std::map<va_t, int> &AddrToBlock);
   void linkExceptionalSuccessors(LowFunc &Func);
   void classifyInsn(InsnRecord &Rec);
-  /// Replace a register-indirect branch with a direct branch when its target
-  /// has a dominating constant definition in the already decoded prefix.
-  bool resolveConstantIndirectBranch(const BinaryImage &Img, InsnRecord &Rec);
+  /// Replace an AArch64 explicit-register RET with a direct branch when its
+  /// target has a dominating constant definition in the decoded prefix.
+  bool resolveConstantIndirectBranch(const BinaryImage &Img, uint32_t InsnId,
+                                     InsnRecord &Rec);
   LowInstructionBoundary makeInstructionBoundary(const InsnRecord &Rec,
                                                  uint64_t FirstOp) const;
 
