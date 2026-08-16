@@ -110,6 +110,18 @@ DEFINE_LDCLRP_TEST(test_ldclrpa, "ldclrpa")
 DEFINE_LDCLRP_TEST(test_ldclrpal, "ldclrpal")
 DEFINE_LDCLRP_TEST(test_ldclrpl, "ldclrpl")
 
+#define DEFINE_LDSETP_TEST(name, mnemonic)                                     \
+  __attribute__((naked, noinline, used)) struct pair64 name(                   \
+      struct pair64 *address, unsigned long low, unsigned long high) {         \
+    __asm__ volatile("mov x8, x0\n\t" mnemonic                                 \
+                     " x1, x2, [x8]\n\tmov x0, x1\n\tmov x1, x2\n\tret");      \
+  }
+
+DEFINE_LDSETP_TEST(test_ldsetp, "ldsetp")
+DEFINE_LDSETP_TEST(test_ldsetpa, "ldsetpa")
+DEFINE_LDSETP_TEST(test_ldsetpal, "ldsetpal")
+DEFINE_LDSETP_TEST(test_ldsetpl, "ldsetpl")
+
 #define DEFINE_LDADD_TEST(name, mnemonic)                                      \
   __attribute__((naked, noinline, used)) unsigned long name(                   \
       unsigned long *address, unsigned long value) {                           \

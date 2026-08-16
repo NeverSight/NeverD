@@ -73,3 +73,10 @@ SIDEEFFECT(Intrinsic::A64_Ldxp);
 SIDEEFFECT(Intrinsic::A64_Ldaxp);
 SIDEEFFECT(Intrinsic::A64_Stxp);
 SIDEEFFECT(Intrinsic::A64_Stlxp);
+
+// LSE128 pair bit-set mutates the addressed 16-byte object even if the old
+// pair returned in the two source registers is unused.
+SIDEEFFECT(Intrinsic::A64_Ldsetp);
+SIDEEFFECT(Intrinsic::A64_Ldsetpa);
+SIDEEFFECT(Intrinsic::A64_Ldsetpal);
+SIDEEFFECT(Intrinsic::A64_Ldsetpl);

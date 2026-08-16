@@ -387,9 +387,11 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
         "rcwcasp.old");
   }
 
-  if ((IC == I::A64_Ldclrp || IC == I::A64_Ldclrpa || IC == I::A64_Ldclrpal ||
-       IC == I::A64_Ldclrpl) &&
-      Op.Output.Size == 16 && Op.NumInputs >= 3) {
+  const bool IsLdclrp = IC == I::A64_Ldclrp || IC == I::A64_Ldclrpa ||
+                        IC == I::A64_Ldclrpal || IC == I::A64_Ldclrpl;
+  const bool IsLdsetp = IC == I::A64_Ldsetp || IC == I::A64_Ldsetpa ||
+                        IC == I::A64_Ldsetpal || IC == I::A64_Ldsetpl;
+  if ((IsLdclrp || IsLdsetp) && Op.Output.Size == 16 && Op.NumInputs >= 3) {
     auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
     auto *I128Ty = llvm::IntegerType::get(*Ctx, 128);
     auto coerceI128 = [&](llvm::Value *V) -> llvm::Value * {
@@ -398,20 +400,22 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       return V->getType() == I128Ty ? V : Builder.CreateZExtOrTrunc(V, I128Ty);
     };
 
-    llvm::Value *ClearMask = coerceI128(getVar(Op.Inputs[1], Builder));
+    llvm::Value *Mask = coerceI128(getVar(Op.Inputs[1], Builder));
     llvm::Value *Address = getVar(Op.Inputs[2], Builder);
     Address = getMemoryPtr(Address, I128Ty, Builder);
 
     llvm::AtomicOrdering Ordering = llvm::AtomicOrdering::Monotonic;
-    if (IC == I::A64_Ldclrpa)
+    if (IC == I::A64_Ldclrpa || IC == I::A64_Ldsetpa)
       Ordering = llvm::AtomicOrdering::Acquire;
-    else if (IC == I::A64_Ldclrpal)
+    else if (IC == I::A64_Ldclrpal || IC == I::A64_Ldsetpal)
       Ordering = llvm::AtomicOrdering::AcquireRelease;
-    else if (IC == I::A64_Ldclrpl)
+    else if (IC == I::A64_Ldclrpl || IC == I::A64_Ldsetpl)
       Ordering = llvm::AtomicOrdering::Release;
 
-    return Builder.CreateAtomicRMW(llvm::AtomicRMWInst::And, Address,
-                                   Builder.CreateNot(ClearMask),
+    auto AtomicOp =
+        IsLdsetp ? llvm::AtomicRMWInst::Or : llvm::AtomicRMWInst::And;
+    llvm::Value *Operand = IsLdsetp ? Mask : Builder.CreateNot(Mask);
+    return Builder.CreateAtomicRMW(AtomicOp, Address, Operand,
                                    llvm::MaybeAlign(16), Ordering);
   }
 

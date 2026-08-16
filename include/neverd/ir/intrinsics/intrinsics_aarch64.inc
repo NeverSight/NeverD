@@ -182,3 +182,7 @@ A64_SvePtrue, A64_SveDup, A64_SveLastb, A64_SveSt1, A64_SveStnt1,
 // Architectural 32-bit stack-pointer write (zero-extends into SP).
 A64_WspWrite,
 A64_WspZeroExtend,
+
+// FEAT_LSE128 pair bit-set.  Keep these appended so existing serialized
+// intrinsic IDs remain stable.
+A64_Ldsetp, A64_Ldsetpa, A64_Ldsetpal, A64_Ldsetpl,

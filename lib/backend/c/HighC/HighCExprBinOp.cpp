@@ -119,8 +119,15 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
     std::string Lo = exprStr(*E.Operands[1], 99);
     std::string Ty = typeToC(E.Type);
     int LoBits = E.Operands[1]->Type ? E.Operands[1]->Type->Size * 8 : 32;
-    return "((" + Ty + ")(" + Hi + ") << " + std::to_string(LoBits) + " | (" +
-           Ty + ")" + Lo + ")";
+    auto unsignedOperandType = [](const ExprPtr &Operand) {
+      uint16_t Size = Operand->Type ? Operand->Type->Size : 4;
+      return typeToC(NdType::makeInt(Size, false));
+    };
+    std::string HiTy = unsignedOperandType(E.Operands[0]);
+    std::string LoTy = unsignedOperandType(E.Operands[1]);
+    return "((" + Ty + ")((" + HiTy + ")(" + Hi + ")) << " +
+           std::to_string(LoBits) + " | (" + Ty + ")((" + LoTy + ")(" + Lo +
+           ")))";
   }
   case NdOp::INT_CARRY:
     return "((" + exprStr(*E.Operands[0]) + " + " + exprStr(*E.Operands[1]) +

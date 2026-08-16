@@ -171,6 +171,52 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     break;
   }
 
+  // ========================================================================
+  // FEAT_LSE128 LDSETP — atomically set a pair of 64-bit words and return the
+  // old pair in the same two registers.
+  // ========================================================================
+  case AARCH64_INS_LDSETP:
+  case AARCH64_INS_LDSETPA:
+  case AARCH64_INS_LDSETPAL:
+  case AARCH64_INS_LDSETPL: {
+    if (ARM64.op_count < 3)
+      break;
+
+    NdVar LowReg = operandRead(S, ARM64.operands[0]);
+    NdVar HighReg = operandRead(S, ARM64.operands[1]);
+    NdVar LowSrc = S.makeTemp(LowReg.Size);
+    NdVar HighSrc = S.makeTemp(HighReg.Size);
+    S.emit(NdOp::COPY, LowSrc, {LowReg});
+    S.emit(NdOp::COPY, HighSrc, {HighReg});
+
+    NdVar SetPair = S.makeTemp(LowSrc.Size + HighSrc.Size);
+    S.emit(NdOp::CONCAT, SetPair, {HighSrc, LowSrc});
+    NdVar EA = operandEffAddr(S, ARM64.operands[2]);
+    NdVar OldPair = S.makeTemp(SetPair.Size);
+
+    Intrinsic Id = Intrinsic::A64_Ldsetp;
+    if (Insn->id == AARCH64_INS_LDSETPA)
+      Id = Intrinsic::A64_Ldsetpa;
+    else if (Insn->id == AARCH64_INS_LDSETPAL)
+      Id = Intrinsic::A64_Ldsetpal;
+    else if (Insn->id == AARCH64_INS_LDSETPL)
+      Id = Intrinsic::A64_Ldsetpl;
+    NdMemoryOrdering Ordering = NdMemoryOrdering::Relaxed;
+    if (Insn->id == AARCH64_INS_LDSETPA)
+      Ordering = NdMemoryOrdering::Acquire;
+    else if (Insn->id == AARCH64_INS_LDSETPAL)
+      Ordering = NdMemoryOrdering::AcquireRelease;
+    else if (Insn->id == AARCH64_INS_LDSETPL)
+      Ordering = NdMemoryOrdering::Release;
+    S.emitIntrinsic(Id, OldPair, {SetPair, EA}, Ordering);
+
+    NdVar LowDst = operandWrite(ARM64.operands[0]);
+    NdVar HighDst = operandWrite(ARM64.operands[1]);
+    S.emit(NdOp::SUBBYTES, LowDst, {OldPair, NdVar::cst(0, 4)});
+    S.emit(NdOp::SUBBYTES, HighDst, {OldPair, NdVar::cst(LowDst.Size, 4)});
+    break;
+  }
+
   case AARCH64_INS_LDSET:
   case AARCH64_INS_LDSETA:
   case AARCH64_INS_LDSETAL:
@@ -182,11 +228,7 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_LDSETH:
   case AARCH64_INS_LDSETAH:
   case AARCH64_INS_LDSETALH:
-  case AARCH64_INS_LDSETLH:
-  case AARCH64_INS_LDSETP:
-  case AARCH64_INS_LDSETPA:
-  case AARCH64_INS_LDSETPAL:
-  case AARCH64_INS_LDSETPL: {
+  case AARCH64_INS_LDSETLH: {
     if (ARM64.op_count < 2)
       break;
     NdVar EA, OldVal, SrcN;

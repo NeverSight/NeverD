@@ -271,6 +271,66 @@ TEST_F(AArch64_Atomic, LdclrpHighCUsesStandardAtomicFetchAndAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
+TEST_F(AArch64_Atomic, LdsetpUsesOrderedAtomicI128Or) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  const struct {
+    const char *Name;
+    const char *Ordering;
+  } Cases[] = {{"test_ldsetp", "monotonic"},
+               {"test_ldsetpa", "acquire"},
+               {"test_ldsetpal", "acq_rel"},
+               {"test_ldsetpl", "release"}};
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionIR(r.out, Case.Name);
+    ASSERT_FALSE(F.empty()) << r.out;
+    EXPECT_NE(F.find("atomicrmw or ptr"), std::string::npos) << F;
+    EXPECT_NE(F.find("i128"), std::string::npos) << F;
+    EXPECT_NE(F.find(std::string(Case.Ordering) + ", align 16"),
+              std::string::npos)
+        << F;
+    EXPECT_NE(F.find("ret { i64, i64 }"), std::string::npos) << F;
+    EXPECT_EQ(F.find("load i64"), std::string::npos) << F;
+    EXPECT_EQ(F.find("store i64"), std::string::npos) << F;
+  }
+}
+
+TEST_F(AArch64_Atomic, LdsetpHighCUsesStandardAtomicFetchOrAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("__atomic_fetch_or"), std::string::npos) << source;
+  EXPECT_NE(source.find("unsigned __int128"), std::string::npos) << source;
+
+  for (const char *Name :
+       {"test_ldsetp", "test_ldsetpa", "test_ldsetpal", "test_ldsetpl"}) {
+    SCOPED_TRACE(Name);
+    auto F = functionC(source, Name);
+    ASSERT_FALSE(F.empty()) << source;
+    size_t Count = 0;
+    for (size_t Pos = F.find("__atomic_fetch_or"); Pos != std::string::npos;
+         Pos = F.find("__atomic_fetch_or", Pos + 1))
+      ++Count;
+    EXPECT_EQ(Count, 1u) << F;
+  }
+
+  auto Relaxed = functionC(source, "test_ldsetp");
+  ASSERT_FALSE(Relaxed.empty()) << source;
+  EXPECT_NE(Relaxed.find("(uint64_t)(arg1)"), std::string::npos)
+      << "the low pair half must be zero-extended before widening:\n"
+      << Relaxed;
+
+  expectPairedClangSyntax(cFile, source);
+}
+
 TEST_F(AArch64_Atomic, LdaddUsesOrderedAtomicReadModifyWrite) {
   auto r = liftToLLVMIR(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;

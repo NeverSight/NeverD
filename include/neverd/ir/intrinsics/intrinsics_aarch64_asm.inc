@@ -95,3 +95,7 @@ A(Intrinsic::A64_SveSt1,       "st1");
 A(Intrinsic::A64_SveStnt1,     "stnt1");
 A(Intrinsic::A64_WspWrite,     "mov");
 A(Intrinsic::A64_WspZeroExtend, "mov");
+A(Intrinsic::A64_Ldsetp,       "ldsetp");
+A(Intrinsic::A64_Ldsetpa,      "ldsetpa");
+A(Intrinsic::A64_Ldsetpal,     "ldsetpal");
+A(Intrinsic::A64_Ldsetpl,      "ldsetpl");

@@ -300,18 +300,27 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
   case I::A64_Ldclrp:
   case I::A64_Ldclrpa:
   case I::A64_Ldclrpal:
-  case I::A64_Ldclrpl: {
+  case I::A64_Ldclrpl:
+  case I::A64_Ldsetp:
+  case I::A64_Ldsetpa:
+  case I::A64_Ldsetpal:
+  case I::A64_Ldsetpl: {
     if (Ops.size() < 2)
       return {};
+    const bool IsSet = Id == I::A64_Ldsetp || Id == I::A64_Ldsetpa ||
+                       Id == I::A64_Ldsetpal || Id == I::A64_Ldsetpl;
     const char *Ordering = "__ATOMIC_RELAXED";
-    if (Id == I::A64_Ldclrpa)
+    if (Id == I::A64_Ldclrpa || Id == I::A64_Ldsetpa)
       Ordering = "__ATOMIC_ACQUIRE";
-    else if (Id == I::A64_Ldclrpal)
+    else if (Id == I::A64_Ldclrpal || Id == I::A64_Ldsetpal)
       Ordering = "__ATOMIC_ACQ_REL";
-    else if (Id == I::A64_Ldclrpl)
+    else if (Id == I::A64_Ldclrpl || Id == I::A64_Ldsetpl)
       Ordering = "__ATOMIC_RELEASE";
-    return "__atomic_fetch_and((unsigned __int128 *)(uintptr_t)(" + Ops[1] +
-           "), ~(unsigned __int128)(" + Ops[0] + "), " + Ordering + ")";
+    const char *Builtin = IsSet ? "__atomic_fetch_or" : "__atomic_fetch_and";
+    const char *Negate = IsSet ? "" : "~";
+    return std::string(Builtin) + "((unsigned __int128 *)(uintptr_t)(" +
+           Ops[1] + "), " + Negate + "(unsigned __int128)(" + Ops[0] + "), " +
+           Ordering + ")";
   }
   case I::A64_Ldxr:
   case I::A64_Ldaxr:
