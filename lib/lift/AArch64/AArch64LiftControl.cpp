@@ -156,8 +156,12 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     break;
   }
   case AARCH64_INS_RET: {
-    NdVar Lr = NdVar::reg(a64reg::X30, 8);
-    S.emit(NdOp::RETURN, {}, {Lr});
+    NdVar Target = ARM64.op_count >= 1 ? operandRead(S, ARM64.operands[0])
+                                       : NdVar::reg(a64reg::X30, 8);
+    if (Target.isReg() && Target.Offset == a64reg::X30)
+      S.emit(NdOp::RETURN, {}, {Target});
+    else
+      S.emit(NdOp::INDIR_BR, {}, {Target});
     break;
   }
 

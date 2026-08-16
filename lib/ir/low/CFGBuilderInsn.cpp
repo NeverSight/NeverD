@@ -144,6 +144,34 @@ void CFGBuilder::classifyInsn(InsnRecord &Rec) {
     Rec.Immediate.reset();
 }
 
+bool CFGBuilder::resolveConstantIndirectBranch(const BinaryImage &Img,
+                                               InsnRecord &Rec) {
+  if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall || Rec.IsCond)
+    return false;
+
+  for (LowOp &Op : Rec.Ops) {
+    if (Op.Opcode != NdOp::INDIR_BR || Op.NumInputs < 1 ||
+        !Op.Inputs[0].isReg())
+      continue;
+
+    const uint16_t TargetSize = Op.Inputs[0].Size;
+    auto Target = foldRegConstant(Img, Rec, Op.Inputs[0].Offset);
+    if (!Target)
+      return false;
+    const Segment *TargetSegment = Img.getSegmentFor(*Target);
+    if (!TargetSegment || !TargetSegment->isExecutable() ||
+        (*Target % getInsnAlignment()) != 0)
+      return false;
+
+    Op.Opcode = NdOp::BRANCH;
+    Op.Inputs[0] = NdVar::cst(*Target, TargetSize);
+    Rec.IsIndirect = false;
+    Rec.BranchTarget = *Target;
+    return true;
+  }
+  return false;
+}
+
 LowInstructionBoundary
 CFGBuilder::makeInstructionBoundary(const InsnRecord &Rec,
                                     uint64_t FirstOp) const {

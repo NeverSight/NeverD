@@ -341,6 +341,13 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // path.
       auto &Saved = (Insns[Cur] = std::move(Rec));
 
+      // Some architectures spell a direct local transfer through a register
+      // (for example AArch64 `adr x16, label; ret x16`).  Fold a dominating
+      // constant definition before treating an unresolved indirect branch as
+      // a function-pointer tail call, so recursive descent reaches the local
+      // target and keeps it in this function's CFG.
+      resolveConstantIndirectBranch(Img, Saved);
+
       if (Saved.IsRet && !(Saved.IsCond && Saved.IsBranch))
         break;
       if (Saved.IsRet && Saved.IsCond && Saved.IsBranch) {
