@@ -66,6 +66,11 @@ if(TARGET neverd_shared)
       COMPILE_OPTIONS "-fshort-enums"
     )
   endif()
+  if(MSVC)
+    # File-scope _Static_assert is C11.  MSVC compiles .c as C89 unless told.
+    set_source_files_properties(TranslationCAPIHeaderC.c PROPERTIES
+      COMPILE_OPTIONS /std:c11)
+  endif()
 
   # Compile the emitted SDK exactly as a native C consumer sees it.
   # Deliberately do not link neverd_shared: its PUBLIC source-tree include
