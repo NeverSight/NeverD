@@ -72,6 +72,11 @@ struct LibCArityEntry {
 /// like ldexp/frexp).  Name must have its leading underscores already stripped.
 std::optional<LibCArity> libcArity(std::string_view Name);
 
+/// The fixed arity for a symbol name as it appears in an object or executable.
+/// This preserves platform-decorated spellings whose leading underscores are
+/// semantically significant before falling back to the canonical registry.
+std::optional<LibCArity> libcArityForSymbol(std::string_view Name);
+
 /// True if Name is a known libc/POSIX library function.
 bool isKnownFunction(std::string_view Name);
 

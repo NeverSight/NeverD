@@ -147,8 +147,7 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
         // complex-return signatures because incidental V-register reads are
         // much easier to confuse with independent scalar state.
         if (Shape.front().IsFP) {
-          auto Sig =
-              libc::libcArity(llvm::StringRef(Imp->Name).ltrim('_').str());
+          auto Sig = libc::libcArityForSymbol(Imp->Name);
           if (!Sig || !Sig->FpRetComplex || Shape.size() != 2)
             continue;
         }

@@ -210,6 +210,16 @@ TEST(LibCArity, ExceptionRuntimeFunctions) {
   EXPECT_EQ(ObjCThrow->FpArgs, 0);
 }
 
+TEST(LibCArity, PreservesDarwinErrorSymbolSpelling) {
+  auto DarwinError = libcArityForSymbol("___error");
+  ASSERT_TRUE(DarwinError.has_value());
+  EXPECT_EQ(DarwinError->IntArgs, 0);
+  EXPECT_EQ(DarwinError->FpArgs, 0);
+
+  EXPECT_FALSE(libcArityForSymbol("error").has_value());
+  EXPECT_FALSE(libcArityForSymbol("__error").has_value());
+}
+
 // =====================================================================
 // isKnownFunction
 // =====================================================================

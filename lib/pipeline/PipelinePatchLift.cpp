@@ -382,8 +382,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         int IntArgs = 0, FpArgs = 0;
         uint16_t FpRetSize = 0; // 0 = callee does not return a scalar FP value
         if (const Import *Imp = Img.findImportAt(Target)) {
-          if (auto Sig =
-                  libc::libcArity(llvm::StringRef(Imp->Name).ltrim('_'))) {
+          if (auto Sig = libc::libcArityForSymbol(Imp->Name)) {
             if (!Sig->FpRetComplex) {
               IntArgs = Sig->IntArgs;
               FpArgs = Sig->FpArgs;

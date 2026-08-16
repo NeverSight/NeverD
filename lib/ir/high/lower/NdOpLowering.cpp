@@ -132,6 +132,8 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
     }
   }
   auto Args = collectCallArgs(CurBlock, CallIdx);
+  if (Callee == "___error")
+    Args.clear();
   auto CallExpr = HighExpr::makeCall(Callee, Target, std::move(Args));
 
   if (CurOp.Output.Id >= 0 && CurOp.Output.Size > 0) {

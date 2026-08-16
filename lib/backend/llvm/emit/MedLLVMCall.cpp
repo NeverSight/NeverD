@@ -294,8 +294,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // integer/vector registers (pow reads garbage d0/d1) and the double
       // result is read from x0 -- patched math returns wrong values.
       if (!Callee && !CalleeName.empty()) {
-        llvm::StringRef Bare = stripLeadingUnderscores(CalleeName);
-        auto Arity = libc::libcArity(Bare);
+        auto Arity = libc::libcArityForSymbol(CalleeName);
         // A known libc function whose RESULT is floating-point.  Three shapes
         // are modelled: (a) all-FP-args (sqrt/pow), (b) FP-first mixed int/FP
         // (ldexp/frexp), and (c) integer/pointer args with an FP return
@@ -313,7 +312,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                                    LongDoubleAsDouble || Arity->FpRetComplex);
         bool ArgsModelled = Arity && (Arity->FpArgs == 0 ||
                                       Arity->IntArgs == 0 || Arity->FpFirst);
-        if (Arity && ReturnsFp && ArgsModelled) {
+        bool IsPlainZeroArg =
+            Arity && Arity->IntArgs == 0 && Arity->FpArgs == 0 &&
+            !Arity->FpRet && !Arity->FpRetLongDouble &&
+            !Arity->FpRetComplex;
+        if (IsPlainZeroArg) {
+          auto *FT = llvm::FunctionType::get(DefaultRetTy, false);
+          Callee = llvm::Function::Create(
+              FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
+          Callee->setCallingConv(llvm::CallingConv::C);
+        } else if (Arity && ReturnsFp && ArgsModelled) {
           auto *FpTy = Arity->FpIsFloat ? llvm::Type::getFloatTy(*Ctx)
                                         : llvm::Type::getDoubleTy(*Ctx);
           const int NFp = Arity->FpArgs, NInt = Arity->IntArgs;
@@ -486,13 +494,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
       CoercedArgs.push_back(AV);
     }
-    if (!CalleeTy->isVarArg()) {
-      if (CoercedArgs.size() > CalleeTy->getNumParams())
-        CoercedArgs.resize(CalleeTy->getNumParams());
-      while (CoercedArgs.size() < CalleeTy->getNumParams()) {
-        auto *PadTy = CalleeTy->getParamType(CoercedArgs.size());
-        CoercedArgs.push_back(llvm::Constant::getNullValue(PadTy));
-      }
+    if (!CalleeTy->isVarArg() &&
+        CoercedArgs.size() > CalleeTy->getNumParams())
+      CoercedArgs.resize(CalleeTy->getNumParams());
+    // A reused variadic declaration still has a mandatory fixed prefix.  An
+    // unknown external can be recovered with fewer arguments at a later call
+    // site; supply neutral values rather than constructing an invalid call and
+    // aborting inside LLVM before the module verifier can report anything.
+    while (CoercedArgs.size() < CalleeTy->getNumParams()) {
+      auto *PadTy = CalleeTy->getParamType(CoercedArgs.size());
+      CoercedArgs.push_back(llvm::Constant::getNullValue(PadTy));
     }
     Result = Builder.CreateCall(Callee, CoercedArgs, "call");
   } else {

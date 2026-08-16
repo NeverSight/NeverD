@@ -183,7 +183,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           TargetSection->Name == section_names::macho::ObjCStubs;
       std::optional<libc::LibCArity> ExternalArity;
       if (!CI.IsIndirect)
-        ExternalArity = libc::libcArity(stripLeadingUnderscores(CI.TargetName));
+        ExternalArity = libc::libcArityForSymbol(CI.TargetName);
 
       // The callee's integer register-argument count, if it is a known direct
       // intra-module target; -1 when unknown (external / indirect).  Used to

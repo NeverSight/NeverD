@@ -74,6 +74,21 @@ TEST_F(AArch64_CallAbi, ExternalDarwinVarargsKeepOutgoingStackValues) {
       << F;
 }
 
+TEST_F(AArch64_CallAbi, ExternalZeroArgPrototypeIsStableAcrossCallSites) {
+  if (!fs::exists(callAbiObj()))
+    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+  auto R = liftToLLVMIRUnopt(callAbiObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+
+  std::string Compute = callAbiFunctionText(R.out, "_external_error_compute");
+  std::string Simple = callAbiFunctionText(R.out, "_external_error_simple");
+  ASSERT_FALSE(Compute.empty()) << R.out;
+  ASSERT_FALSE(Simple.empty()) << R.out;
+  EXPECT_NE(Compute.find("@___error()"), std::string::npos) << Compute;
+  EXPECT_NE(Simple.find("@___error()"), std::string::npos) << Simple;
+  EXPECT_EQ(R.out.find("@___error(i"), std::string::npos) << R.out;
+}
+
 TEST_F(AArch64_CallAbi, AllStagesPass) {
   if (!fs::exists(callAbiObj()))
     GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";

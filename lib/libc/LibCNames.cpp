@@ -213,4 +213,15 @@ std::optional<LibCArity> libcArity(std::string_view Name) {
   return It->second;
 }
 
+std::optional<LibCArity> libcArityForSymbol(std::string_view Name) {
+  // Mach-O prepends one underscore to the C identifier `__error`, producing
+  // `___error`.  Do not normalize it to `error`: GNU error(3) is a distinct
+  // variadic function, while Darwin __error(void) takes no arguments.
+  if (Name == "___error")
+    return LibCArity{};
+  while (!Name.empty() && Name.front() == '_')
+    Name.remove_prefix(1);
+  return libcArity(Name);
+}
+
 } // namespace neverd::libc
