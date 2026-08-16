@@ -292,8 +292,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     auto *Scale = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), FBits);
     if (IntToFP) {
       llvm::Intrinsic::ID IID =
-          IsUnsigned ? llvm::Intrinsic::aarch64_neverd_ucvtf_fixed
-                     : llvm::Intrinsic::aarch64_neverd_scvtf_fixed;
+          IsUnsigned ? llvm::Intrinsic::aarch64_ucvtf_fixed
+                     : llvm::Intrinsic::aarch64_scvtf_fixed;
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {GprTy});
       llvm::Value *Src = coerceInteger(getVar(Op.Inputs[1], Builder), GprTy);
       llvm::Value *R = Builder.CreateCall(
@@ -303,8 +303,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     }
 
     llvm::Intrinsic::ID IID =
-        IsUnsigned ? llvm::Intrinsic::aarch64_neverd_fcvtzu_fixed
-                   : llvm::Intrinsic::aarch64_neverd_fcvtzs_fixed;
+        IsUnsigned ? llvm::Intrinsic::aarch64_fcvtzu_fixed
+                   : llvm::Intrinsic::aarch64_fcvtzs_fixed;
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {GprTy});
     llvm::Value *Bits = coerceInteger(getVar(Op.Inputs[1], Builder), I16Ty);
     llvm::Value *Src = Builder.CreateBitCast(Bits, HalfTy);

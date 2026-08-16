@@ -49,7 +49,7 @@ static neverd::HighFunc fixedConvertHighFunc(const char* name,
     return func;
 }
 
-TEST(AArch64_HighCIntrinsics, FixedFP16ConversionsUseNeverCBuiltins) {
+TEST_F(AArch64_Intrinsics, FixedFP16ConversionsUseArmCompilerBuiltins) {
     using namespace neverd;
     std::vector<HighFunc> funcs;
     funcs.push_back(fixedConvertHighFunc("scvtf_w", Intrinsic::A64_ScvtfFixed,
@@ -68,14 +68,26 @@ TEST(AArch64_HighCIntrinsics, FixedFP16ConversionsUseNeverCBuiltins) {
     ASSERT_TRUE(HighCEmitter().emit(funcs, os, opts));
     os.flush();
 
-    EXPECT_NE(c.find("__neverd_a64_scvtf_fixed(arg0, 16, 0)"),
+    EXPECT_NE(c.find("__builtin_arm_scvtf_fixed(arg0, 16, 0)"),
               std::string::npos) << c;
-    EXPECT_NE(c.find("__neverd_a64_ucvtf_fixed(arg0, 64, 1)"),
+    EXPECT_NE(c.find("__builtin_arm_ucvtf_fixed(arg0, 64, 1)"),
               std::string::npos) << c;
-    EXPECT_NE(c.find("__neverd_a64_fcvtzs_fixed(arg0, 16, 0)"),
+    EXPECT_NE(c.find("__builtin_arm_fcvtzs_fixed(arg0, 16, 0)"),
               std::string::npos) << c;
-    EXPECT_NE(c.find("__neverd_a64_fcvtzu_fixed(arg0, 64, 1)"),
+    EXPECT_NE(c.find("__builtin_arm_fcvtzu_fixed(arg0, 64, 1)"),
               std::string::npos) << c;
+    EXPECT_EQ(c.find("__neverd_a64_"), std::string::npos) << c;
+
+    auto cFile = tmpFile("fixed_fp16_high.c");
+    std::ofstream output(cFile);
+    ASSERT_TRUE(output.good());
+    output << c;
+    output.close();
+    auto syntax = exec(NEVERD_TEST_CLANG,
+                       {"-target", "aarch64-none-elf", "-ffreestanding",
+                        "-march=armv8.2-a+fp16", "-std=gnu11",
+                        "-fsyntax-only", cFile.string()});
+    EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << c;
 }
 
 TEST(AArch64_HighCIntrinsics, FPSRUsesClangSystemRegisterBuiltins) {
