@@ -37,6 +37,7 @@ add_neverd_unittest(NeverDSemanticTests
   aarch64/AArch64_CarryPreserveRTTests.cpp
   aarch64/AArch64_CfinvRTTests.cpp
   aarch64/AArch64_ClsCountRTTests.cpp
+  aarch64/AArch64_CompactJumpTableRTTests.cpp
   aarch64/AArch64_CondCompareRTTests.cpp
   aarch64/AArch64_CondSelectAliasRTTests.cpp
   aarch64/AArch64_CoreNEON2RTTests.cpp
@@ -967,6 +968,7 @@ endif()
 # or the 22k-line PatchFull TU.  Differential lift->recompile roundtrip across
 # the 4 ISAs; run just this binary via `ctest -L NeverDSwitchXformTests`.
 add_neverd_unittest(NeverDSwitchXformTests
+  aarch64/AArch64_CompactJumpTableRTTests.cpp
   probe/switch/AllPlatform_SwitchXformRTTests.cpp
   probe/switch/AllPlatform_SwitchXformSparseRTTests.cpp
   probe/switch/AllPlatform_SwitchXformTableRTTests.cpp
