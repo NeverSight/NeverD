@@ -1170,21 +1170,6 @@ if(TARGET neverd)
   add_dependencies(NeverDAvxUpperXformTests neverd)
 endif()
 
-# LibCNames' C++ helpers are intentionally not exported from neverd_shared on
-# Windows.  Every executable that compiles SemanticRoundTripFixture calls them
-# directly, so provide their static definitions to all fixture users.
-if(WIN32)
-  foreach(_neverd_semantic_fixture_target IN ITEMS
-      NeverDSemanticTests
-      NeverDSwitchXformTests
-      NeverDIndCallXformTests
-      NeverDCFGLoopXformTests
-      NeverDTwoTableXformTests
-      NeverDAvxUpperXformTests)
-    target_link_libraries(${_neverd_semantic_fixture_target} PRIVATE NeverDLibC)
-  endforeach()
-endif()
-
 # --- Throwaway fast repro for obfuscation/codegen debugging ---
 # Tiny TU (compiles in seconds) mirroring the PatchFullSubstRTTests harness so a
 # bug can be isolated without the ~33min rebuild of the 22k-line suite.  Not a
@@ -1393,4 +1378,25 @@ target_link_libraries(NeverDFPSRTests PRIVATE
 
 if(TARGET neverd)
   add_dependencies(NeverDFPSRTests neverd)
+endif()
+
+# LibCNames' C++ helpers are intentionally not exported from neverd_shared on
+# Windows.  Every executable that compiles SemanticRoundTripFixture calls them
+# directly, so provide their static definitions to all fixture users.  Keep
+# this after the focused targets above so the list cannot omit later targets.
+if(WIN32)
+  foreach(_neverd_semantic_fixture_target IN ITEMS
+      NeverDSemanticTests
+      NeverDSwitchXformTests
+      NeverDIndCallXformTests
+      NeverDCFGLoopXformTests
+      NeverDTwoTableXformTests
+      NeverDAvxUpperXformTests
+      NeverDFP16ReduceTests
+      NeverDFP16PairwiseTests
+      NeverDFP16ConvTests
+      NeverDFMARoundingTests
+      NeverDFPSRTests)
+    target_link_libraries(${_neverd_semantic_fixture_target} PRIVATE NeverDLibC)
+  endforeach()
 endif()

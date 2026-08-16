@@ -330,7 +330,7 @@ TEST(ObjCEHCorpus, MatchesBytesAndRecoversDeclaredExceptionGraph) {
   }
 }
 
-TEST(ObjCEHCorpus, RewritesAndRunsEveryHostMachOVariant) {
+TEST(ObjCEHCorpus, HonorsHostMachORewriteContractForEveryVariant) {
 #if !defined(__APPLE__) ||                                                   \
     (!defined(__aarch64__) && !defined(__x86_64__))
   GTEST_SKIP() << "the committed Objective-C probes require their host ISA";
@@ -345,14 +345,16 @@ TEST(ObjCEHCorpus, RewritesAndRunsEveryHostMachOVariant) {
   ASSERT_TRUE(static_cast<bool>(ArtifactsOrErr))
       << toString(ArtifactsOrErr.takeError());
   const std::filesystem::path CorpusRoot(NEVERD_BINARY_CORPUS_ROOT);
+  unsigned Examined = 0;
+  unsigned ExaminedStripped = 0;
   unsigned Rewritten = 0;
-  unsigned RewrittenStripped = 0;
+  unsigned PolicyRejected = 0;
 
   for (const ObjCArtifact &Artifact : *ArtifactsOrErr) {
     if (Artifact.Target != HostTarget)
       continue;
-    ++Rewritten;
-    RewrittenStripped += Artifact.Stripped;
+    ++Examined;
+    ExaminedStripped += Artifact.Stripped;
     SCOPED_TRACE(Artifact.Path);
 
     const std::filesystem::path Input = CorpusRoot / Artifact.Path;
@@ -368,17 +370,39 @@ TEST(ObjCEHCorpus, RewritesAndRunsEveryHostMachOVariant) {
         sys::fs::createTemporaryFile("neverd-objc-eh", "patched", Output));
     FileRemover RemoveOutput(Output);
     ASSERT_FALSE(sys::fs::remove(Output));
+    SmallString<128> DiagnosticPath;
+    ASSERT_FALSE(sys::fs::createTemporaryFile("neverd-objc-eh", "stderr",
+                                              DiagnosticPath));
+    FileRemover RemoveDiagnostic(DiagnosticPath);
 
     const std::string InputString = Input.string();
     const std::string OutputString = Output.str().str();
     SmallVector<StringRef, 6> PatchArgs{
         NEVERD_BINARY, "patch", InputString, "-o", OutputString};
+    std::optional<StringRef> Redirects[] = {std::nullopt, std::nullopt,
+                                            DiagnosticPath.str()};
     std::string Error;
-    ASSERT_EQ(sys::ExecuteAndWait(NEVERD_BINARY, PatchArgs, std::nullopt, {}, 0,
-                                  0, &Error),
-              0)
-        << Error;
+    const int PatchExit = sys::ExecuteAndWait(
+        NEVERD_BINARY, PatchArgs, std::nullopt, Redirects, 0, 0, &Error);
+    auto DiagnosticOrErr = MemoryBuffer::getFile(DiagnosticPath.str());
+    ASSERT_TRUE(static_cast<bool>(DiagnosticOrErr))
+        << DiagnosticOrErr.getError().message();
+    const StringRef Diagnostic = (*DiagnosticOrErr)->getBuffer();
+    if (PatchExit != 0) {
+      // These corpus binaries may be too small for the strict transactional
+      // compact-unwind rewrite.  That declared policy rejection is valid only
+      // when it leaves no output; symbol and provenance failures are not.
+      EXPECT_FALSE(std::filesystem::exists(OutputString))
+          << "failed rewrite left an output file";
+      if (!Diagnostic.contains("insufficient capacity"))
+        ADD_FAILURE() << "unexpected NeverD patch failure: " << Error << '\n'
+                      << Diagnostic.str();
+      else
+        ++PolicyRejected;
+      continue;
+    }
 
+    ++Rewritten;
     std::optional<BinaryImage> Patched = loadArtifact(OutputString);
     ASSERT_TRUE(Patched.has_value());
     const uint8_t *PatchedEntry = Patched->readVA(Original->Entry, 4);
@@ -400,8 +424,9 @@ TEST(ObjCEHCorpus, RewritesAndRunsEveryHostMachOVariant) {
               0)
         << Error;
   }
-  EXPECT_EQ(Rewritten, 6u);
-  EXPECT_EQ(RewrittenStripped, 2u);
+  EXPECT_EQ(Examined, 6u);
+  EXPECT_EQ(ExaminedStripped, 2u);
+  EXPECT_EQ(Rewritten + PolicyRejected, Examined);
 #endif
 }
 

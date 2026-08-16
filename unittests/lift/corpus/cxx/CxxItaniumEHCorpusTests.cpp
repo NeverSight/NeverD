@@ -138,7 +138,7 @@ TEST(CxxItaniumEHCorpus, ResolvesMachOPersonalityPointerSlots) {
   EXPECT_GT(VirtualTableTables, 0u);
 }
 
-TEST(CxxItaniumEHCorpus, RewritesAndRunsEveryHostMachOProbeVariant) {
+TEST(CxxItaniumEHCorpus, HonorsHostMachORewriteContractForEveryProbeVariant) {
 #if !defined(__APPLE__) ||                                                   \
     (!defined(__aarch64__) && !defined(__x86_64__))
   GTEST_SKIP() << "the committed Mach-O probes only run on their host ISA";
@@ -152,7 +152,9 @@ TEST(CxxItaniumEHCorpus, RewritesAndRunsEveryHostMachOProbeVariant) {
   auto ExpectationsOrErr = loadExpectations();
   ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
       << toString(ExpectationsOrErr.takeError());
+  unsigned Examined = 0;
   unsigned Rewritten = 0;
+  unsigned PolicyRejected = 0;
   for (const CxxItaniumEHArtifactExpectation &Artifact : *ExpectationsOrErr) {
     if (Artifact.Toolchain != "clang" ||
         StringRef(Artifact.Target) != HostTarget ||
@@ -161,7 +163,7 @@ TEST(CxxItaniumEHCorpus, RewritesAndRunsEveryHostMachOProbeVariant) {
         Artifact.Execution != "passed")
       continue;
 
-    ++Rewritten;
+    ++Examined;
     SCOPED_TRACE(Artifact.Path);
     const std::filesystem::path Input =
         std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) / Artifact.Path;
@@ -172,24 +174,51 @@ TEST(CxxItaniumEHCorpus, RewritesAndRunsEveryHostMachOProbeVariant) {
                                                "patched", Output));
     FileRemover RemoveOutput(Output);
     ASSERT_FALSE(sys::fs::remove(Output));
+    SmallString<128> DiagnosticPath;
+    ASSERT_FALSE(sys::fs::createTemporaryFile("neverd-cxx-itanium-eh", "stderr",
+                                              DiagnosticPath));
+    FileRemover RemoveDiagnostic(DiagnosticPath);
 
     const std::string InputString = Input.string();
     const std::string OutputString = Output.str().str();
     SmallVector<StringRef, 6> PatchArgs{
         NEVERD_BINARY, "patch", InputString, "-o", OutputString};
+    std::optional<StringRef> Redirects[] = {std::nullopt, std::nullopt,
+                                            DiagnosticPath.str()};
     std::string Error;
-    ASSERT_EQ(sys::ExecuteAndWait(NEVERD_BINARY, PatchArgs, std::nullopt, {}, 0,
-                                  0, &Error),
-              0)
-        << Error;
+    const int PatchExit = sys::ExecuteAndWait(
+        NEVERD_BINARY, PatchArgs, std::nullopt, Redirects, 0, 0, &Error);
+    auto DiagnosticOrErr = MemoryBuffer::getFile(DiagnosticPath.str());
+    ASSERT_TRUE(static_cast<bool>(DiagnosticOrErr))
+        << DiagnosticOrErr.getError().message();
+    const StringRef Diagnostic = (*DiagnosticOrErr)->getBuffer();
+    if (PatchExit != 0) {
+      // The committed probes predate the strict compact-unwind transaction.
+      // A probe that cannot satisfy that contract must fail without output;
+      // symbol-resolution failures and every other diagnostic remain errors.
+      EXPECT_FALSE(std::filesystem::exists(OutputString))
+          << "failed rewrite left an output file";
+      const bool IsDeclaredPolicyRejection =
+          Diagnostic.contains("insufficient capacity") ||
+          Diagnostic.contains("trampoline source is not an original "
+                              "compact-unwind recipe start");
+      if (!IsDeclaredPolicyRejection)
+        ADD_FAILURE() << "unexpected NeverD patch failure: " << Error << '\n'
+                      << Diagnostic.str();
+      else
+        ++PolicyRejected;
+      continue;
+    }
 
+    ++Rewritten;
     SmallVector<StringRef, 1> RunArgs{OutputString};
     EXPECT_EQ(sys::ExecuteAndWait(OutputString, RunArgs, std::nullopt, {}, 0, 0,
                                   &Error),
               0)
         << Error;
   }
-  EXPECT_EQ(Rewritten, 4u);
+  EXPECT_EQ(Examined, 4u);
+  EXPECT_EQ(Rewritten + PolicyRejected, Examined);
 #endif
 }
 

@@ -96,6 +96,33 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                           /*isSigned=*/false, /*implicitTrunc=*/true));
   };
 
+  // An atomic address can reach the operation through a copied register or a
+  // loop PHI.  Trace that MedIR identity before emitting LLVM values, just as
+  // LOAD/STORE do, so a low relocatable-object VA becomes the rebuilt global
+  // instead of folding later to a bare inttoptr.
+  auto GetAtomicMemoryPtr = [&](llvm::Type *ValTy,
+                                uint16_t DataSize) -> llvm::Value * {
+    const MedVar &AddrVar = Op.Inputs[0];
+    llvm::Value *Ptr = nullptr;
+    uint64_t ResolvedAddr = 0;
+    if (Img) {
+      if (AddrVar.isConst())
+        ResolvedAddr = AddrVar.ConstVal;
+      else if (auto Traced = traceSSAConst(AddrVar))
+        ResolvedAddr = *Traced;
+    }
+    if (ResolvedAddr != 0) {
+      const unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
+      if (!isFrameRelativeDisplacement(ResolvedAddr, AddrBits))
+        Ptr = tryResolveGlobalData(ResolvedAddr, DataSize);
+    }
+    if (!Ptr && Img)
+      Ptr = tryResolveWritableData(AddrVar, DataSize, Builder);
+    if (!Ptr)
+      Ptr = getMemoryPtr(GetInput(0), ValTy, Builder);
+    return Ptr;
+  };
+
   auto Coerce = [&](llvm::Value *A,
                     llvm::Value *B) -> std::pair<llvm::Value *, llvm::Value *> {
     if (A->getType() == B->getType())
@@ -871,7 +898,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     llvm::Type *ValTy = sizeToType(Op.Output.Size);
     if (Val->getType() != ValTy)
       Val = Builder.CreateIntCast(Val, ValTy, false, "atomic_rmw_val");
-    llvm::Value *Ptr = getMemoryPtr(GetInput(0), ValTy, Builder);
+    llvm::Value *Ptr = GetAtomicMemoryPtr(ValTy, Op.Output.Size);
     llvm::AtomicRMWInst::BinOp RMWOp = Op.Opcode == NdOp::ATOMIC_ADD
                                            ? llvm::AtomicRMWInst::Add
                                            : llvm::AtomicRMWInst::Xchg;
@@ -902,7 +929,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (Desired->getType() != ValTy)
       Desired =
           Builder.CreateIntCast(Desired, ValTy, false, "atomic_cmp_desired");
-    llvm::Value *Ptr = getMemoryPtr(GetInput(0), ValTy, Builder);
+    llvm::Value *Ptr = GetAtomicMemoryPtr(ValTy, Op.Output.Size);
     auto *CmpXchg = Builder.CreateAtomicCmpXchg(
         Ptr, Expected, Desired, llvm::MaybeAlign(Op.Output.Size),
         toLLVMAtomicOrdering(Op.MemoryOrdering),

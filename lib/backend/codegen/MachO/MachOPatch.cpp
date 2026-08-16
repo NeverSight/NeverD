@@ -1580,11 +1580,39 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
           }
           if (auto VA = parseNdDataSymbol(Name)) {
             if (*Use == macho_patch_detail::MachOSymbolUse::ImportSlot) {
-              SymbolResolutionFailure =
-                  (llvm::Twine("Mach-O import-slot reference cannot target '") +
-                   Name + "'")
-                      .str();
-              return std::nullopt;
+              // Darwin emits LSDA type-table entries through a GOT reference
+              // even when the IR names one of our synthetic address symbols.
+              // Such EH symbols encode the original non-lazy pointer-slot VA,
+              // so accept the exact slot only after authenticating its mapped
+              // section and bounds.  Local GOT entries intentionally have no
+              // import-map name, but are still valid non-lazy pointer slots.
+              const Section *Section = AuthenticatedImage.getSectionFor(*VA);
+              const Segment *Segment = AuthenticatedImage.getSegmentFor(*VA);
+              const uint32_t PointerSize = AuthenticatedImage.getPointerSize();
+              if (!Section ||
+                  (Section->Type & SECTION_TYPE) !=
+                      S_NON_LAZY_SYMBOL_POINTERS ||
+                  !Segment || !Segment->isReadable()) {
+                SymbolResolutionFailure =
+                    (llvm::Twine("Mach-O synthetic import slot '") + Name +
+                     "' is not in authenticated readable non-lazy pointers")
+                        .str();
+                return std::nullopt;
+              }
+              const uint64_t SectionOffset = *VA - Section->VA;
+              const uint64_t SegmentOffset = *VA - Segment->VA;
+              if (PointerSize == 0 || SectionOffset % PointerSize != 0 ||
+                  SectionOffset > Section->Size ||
+                  PointerSize > Section->Size - SectionOffset ||
+                  SegmentOffset > Segment->Size ||
+                  PointerSize > Segment->Size - SegmentOffset) {
+                SymbolResolutionFailure =
+                    (llvm::Twine("Mach-O synthetic import slot '") + Name +
+                     "' exceeds authenticated pointer bounds")
+                        .str();
+                return std::nullopt;
+              }
+              return *VA;
             }
             const Segment *Segment = AuthenticatedImage.getSegmentFor(*VA);
             if (!Segment || !Segment->isReadable()) {
@@ -1607,7 +1635,7 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
             return SerializeResolvedCode(*VA, IsCode);
           }
           if (auto VA = parseNdCodePtrSymbol(Name)) {
-            if (*Use != macho_patch_detail::MachOSymbolUse::Direct) {
+            if (*Use == macho_patch_detail::MachOSymbolUse::ImportSlot) {
               SymbolResolutionFailure =
                   (llvm::Twine("Mach-O import-slot reference cannot target '") +
                    Name + "'")
@@ -1622,7 +1650,26 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
                       .str();
               return std::nullopt;
             }
-            return SerializeResolvedCode(*VA, false);
+            const Section *CodeSection = AuthenticatedImage.getSectionFor(*VA);
+            const uint32_t SectionType =
+                CodeSection ? CodeSection->Type & SECTION_TYPE : 0;
+            const uint32_t SectionAttrs =
+                CodeSection ? CodeSection->Type & SECTION_ATTRIBUTES : 0;
+            const bool IsCode =
+                IsExecutable(*VA) && CodeSection &&
+                (AuthenticatedImage.isImportStubAt(*VA) ||
+                 SectionType == S_SYMBOL_STUBS ||
+                 (SectionAttrs &
+                  (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)) != 0);
+            if (*Use == macho_patch_detail::MachOSymbolUse::Callable &&
+                !IsCode) {
+              SymbolResolutionFailure =
+                  (llvm::Twine("Mach-O callable reference cannot target '") +
+                   Name + "' without authenticated code provenance")
+                      .str();
+              return std::nullopt;
+            }
+            return SerializeResolvedCode(*VA, IsCode);
           }
           return std::nullopt;
         };
