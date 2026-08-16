@@ -83,10 +83,9 @@ TEST_F(AArch64_Intrinsics, FixedFP16ConversionsUseArmCompilerBuiltins) {
     ASSERT_TRUE(output.good());
     output << c;
     output.close();
-    auto syntax = exec(NEVERD_TEST_CLANG,
-                       {"-target", "aarch64-none-elf", "-ffreestanding",
-                        "-march=armv8.2-a+fp16", "-std=gnu11",
-                        "-fsyntax-only", cFile.string()});
+    auto syntax = checkHighCClangSyntax(
+        cFile, {"-target", "aarch64-none-elf", "-ffreestanding",
+                "-march=armv8.2-a+fp16", "-std=gnu11"});
     EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << c;
 }
 

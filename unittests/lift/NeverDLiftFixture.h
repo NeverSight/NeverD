@@ -304,6 +304,23 @@ protected:
     return exec(ndBin(), {"lift", "-no-opt", Binary.string()});
   }
 
+  // Host clang does not know NeverD LLVM-fork builtins.  Keep HighC emitting
+  // those names, and only stub them for syntax-only checking.
+  RunResult checkHighCClangSyntax(
+      const fs::path &CFile, const std::vector<std::string> &ExtraArgs) const {
+    auto StringHeader = tmpFile("string.h");
+    std::ofstream Shim(StringHeader);
+    Shim << "void *memcpy(void *, const void *, __SIZE_TYPE__);\n";
+    Shim.close();
+
+    std::vector<std::string> Args = ExtraArgs;
+    Args.insert(Args.end(),
+                {"-I", tmp().string(), "-include",
+                 std::string(TEST_SOURCE_DIR) + "/aarch64/HostClangBuiltins.h",
+                 "-fsyntax-only", CFile.string()});
+    return exec(NEVERD_TEST_CLANG, Args);
+  }
+
   void verifyAllModesSucceed(const fs::path &Binary) {
     verifyAllStages(Binary);
     verifyDecompileProducesOutput(Binary);

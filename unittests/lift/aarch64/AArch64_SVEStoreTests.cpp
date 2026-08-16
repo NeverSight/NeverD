@@ -4,16 +4,9 @@ class AArch64_SVEStore : public NeverDLiftTest {
 protected:
   void expectPairedClangSyntax(const fs::path &CFile,
                                const std::string &Source) {
-    auto stringHeader = tmpFile("string.h");
-    std::ofstream shim(stringHeader);
-    ASSERT_TRUE(shim.good());
-    shim << "void *memcpy(void *, const void *, __SIZE_TYPE__);\n";
-    shim.close();
-
-    auto Syntax = exec(NEVERD_TEST_CLANG,
-                       {"-target", "aarch64-none-elf", "-ffreestanding",
-                        "-march=armv8.2-a+sve", "-std=gnu11", "-I",
-                        tmp().string(), "-fsyntax-only", CFile.string()});
+    auto Syntax = checkHighCClangSyntax(
+        CFile, {"-target", "aarch64-none-elf", "-ffreestanding",
+                "-march=armv8.2-a+sve", "-std=gnu11"});
     EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err << "\n" << Source;
   }
 };

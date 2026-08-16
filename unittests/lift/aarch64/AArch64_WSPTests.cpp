@@ -7,9 +7,8 @@ class AArch64_WSP : public NeverDLiftTest {
 protected:
   void expectPairedClangSyntax(const fs::path &CFile,
                                const std::string &Source) {
-    auto Syntax = exec(NEVERD_TEST_CLANG,
-                       {"-target", "aarch64-none-elf", "-ffreestanding",
-                        "-std=gnu11", "-fsyntax-only", CFile.string()});
+    auto Syntax = checkHighCClangSyntax(
+        CFile, {"-target", "aarch64-none-elf", "-ffreestanding", "-std=gnu11"});
     EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err << "\n" << Source;
   }
 };
