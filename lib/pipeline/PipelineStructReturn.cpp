@@ -331,8 +331,7 @@ void recoverStructReturnFromBody(const BinaryImage &Img,
             if (O.Output.Kind == MedVar::Flag && O.Addr == Blk.Ops[WIdx].Addr)
               continue;
             for (uint8_t K = 0; K < O.NumInputs; ++K)
-              if (O.Inputs[K].Kind == MedVar::Reg &&
-                  O.Inputs[K].RegOff == C.RegOff) {
+              if (O.Inputs[K] == Blk.Ops[WIdx].Output) {
                 Consumed = true;
                 break;
               }

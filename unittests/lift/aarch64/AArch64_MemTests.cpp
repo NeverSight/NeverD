@@ -139,6 +139,19 @@ TEST_F(AArch64_Mem, LdaprHighCUsesAcquireAtomicLoadAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
+TEST_F(AArch64_Mem, PostIndexLdrKeepsBothAggregateReturnRegisters) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto F = functionIR(r.out, "test_ldr_post_return_a64");
+  ASSERT_FALSE(F.empty()) << r.out;
+  EXPECT_NE(F.find("define dso_local { i64, i64 }"), std::string::npos) << F;
+  EXPECT_NE(F.find("load i64"), std::string::npos) << F;
+  EXPECT_NE(F.find("add i64"), std::string::npos) << F;
+  EXPECT_NE(F.find(", 8"), std::string::npos) << F;
+  EXPECT_NE(F.find("ret { i64, i64 }"), std::string::npos) << F;
+}
+
 TEST_F(AArch64_Mem, LdrLiteralKeepsTheFullVirtualAddress) {
     constexpr va_t InsnVA = 0x100000460ULL;
     constexpr va_t LiteralVA = InsnVA + 8;

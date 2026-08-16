@@ -1,5 +1,10 @@
 /* AArch64 memory operations: LDR, STR, LDP, STP, extensions */
 
+struct mem_pair64 {
+  unsigned long value;
+  unsigned long pointer;
+};
+
 /*
  * Keep one load and one store observable after the lifted module's O2 pass.
  * The local round trips below are intentionally eligible for store-to-load
@@ -28,6 +33,15 @@ test_ldaprb_a64(const unsigned char *address) {
 __attribute__((naked, noinline, used)) unsigned
 test_ldaprh_a64(const unsigned short *address) {
   __asm__ volatile("ldaprh w0, [x0]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) struct mem_pair64
+test_ldr_post_return_a64(unsigned long *address) {
+  __asm__ volatile("ldr x1, [x0], #8\n\t"
+                   "mov x2, x0\n\t"
+                   "mov x0, x1\n\t"
+                   "mov x1, x2\n\t"
+                   "ret");
 }
 
 int test_ldr_str_a64(int val) {
