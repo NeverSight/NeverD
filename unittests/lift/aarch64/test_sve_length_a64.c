@@ -9,3 +9,15 @@ test_sve_length_a64(unsigned long value) {
                    "add sp, sp, #16\n\t"
                    "ret");
 }
+
+__attribute__((naked, noinline)) unsigned long test_sve_incb_mul2(void) {
+  __asm__ volatile("mov x0, #10\n\t"
+                   "incb x0, all, mul #2\n\t"
+                   "ret");
+}
+
+__attribute__((naked, noinline)) unsigned long test_sve_decw_mul4(void) {
+  __asm__ volatile("mov x0, #100\n\t"
+                   "decw x0, all, mul #4\n\t"
+                   "ret");
+}

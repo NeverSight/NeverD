@@ -34,6 +34,19 @@ static std::string sveLengthFunctionIR(const std::string &IR,
   return IR.substr(Begin, End + 2 - Begin);
 }
 
+static std::string sveLengthFunctionC(const std::string &Source,
+                                      const std::string &Name) {
+  auto NamePos = Source.find(Name + "(");
+  if (NamePos == std::string::npos)
+    return {};
+  auto Begin = Source.rfind('\n', NamePos);
+  auto End = Source.find("\n}", NamePos);
+  if (End == std::string::npos)
+    return {};
+  Begin = Begin == std::string::npos ? 0 : Begin + 1;
+  return Source.substr(Begin, End + 2 - Begin);
+}
+
 TEST_F(AArch64_SVELength, CntbAndIncbUseRuntimeVectorLength) {
   auto r = liftToLLVMIR(sveLengthObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;
@@ -43,6 +56,23 @@ TEST_F(AArch64_SVELength, CntbAndIncbUseRuntimeVectorLength) {
   EXPECT_NE(F.find("@llvm.aarch64.sve.cntb(i32 31)"), std::string::npos) << F;
   EXPECT_EQ(F.find("store i64 16"), std::string::npos) << F;
   EXPECT_EQ(F.find("add i64 %arg0, 1"), std::string::npos) << F;
+}
+
+TEST_F(AArch64_SVELength, IncAndDecHonorEncodedMultiplier) {
+  auto r = liftToLLVMIR(sveLengthObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto Inc = sveLengthFunctionIR(r.out, "test_sve_incb_mul2");
+  ASSERT_FALSE(Inc.empty()) << r.out;
+  EXPECT_NE(Inc.find("@llvm.aarch64.sve.cntb(i32 31)"), std::string::npos)
+      << Inc;
+  EXPECT_NE(Inc.find("shl i64 %svcnt, 1"), std::string::npos) << Inc;
+
+  auto Dec = sveLengthFunctionIR(r.out, "test_sve_decw_mul4");
+  ASSERT_FALSE(Dec.empty()) << r.out;
+  EXPECT_NE(Dec.find("@llvm.aarch64.sve.cntw(i32 31)"), std::string::npos)
+      << Dec;
+  EXPECT_NE(Dec.find("shl i64 %svcnt, 2"), std::string::npos) << Dec;
 }
 
 TEST_F(AArch64_SVELength, HighCUsesSVEACLEAndCompiles) {
@@ -59,6 +89,30 @@ TEST_F(AArch64_SVELength, HighCUsesSVEACLEAndCompiles) {
   EXPECT_NE(source.find("svcntb()"), std::string::npos) << source;
   EXPECT_NE(source.find("arg0"), std::string::npos) << source;
   EXPECT_EQ(source.find("return 17"), std::string::npos) << source;
+
+  expectPairedClangSyntax(cFile, source);
+}
+
+TEST_F(AArch64_SVELength, HighCHonorsEncodedMultiplierAndCompiles) {
+  auto r = decompileToHighC(sveLengthObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+
+  auto Inc = sveLengthFunctionC(source, "test_sve_incb_mul2");
+  ASSERT_FALSE(Inc.empty()) << source;
+  EXPECT_NE(Inc.find("svcntb()"), std::string::npos) << Inc;
+  EXPECT_NE(Inc.find("* 2"), std::string::npos) << Inc;
+
+  auto Dec = sveLengthFunctionC(source, "test_sve_decw_mul4");
+  ASSERT_FALSE(Dec.empty()) << source;
+  EXPECT_NE(Dec.find("svcntw()"), std::string::npos) << Dec;
+  EXPECT_NE(Dec.find("* 4"), std::string::npos) << Dec;
 
   expectPairedClangSyntax(cFile, source);
 }

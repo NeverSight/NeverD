@@ -60,6 +60,19 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     }
   };
 
+  auto scaleSVECount = [&](NdVar Count) {
+    if (ARM64.op_count < 2)
+      return Count;
+    const auto &Multiplier = ARM64.operands[ARM64.op_count - 1];
+    if (Multiplier.type != AARCH64_OP_IMM || Multiplier.imm == 1)
+      return Count;
+    NdVar Scaled = S.makeTemp(Count.Size);
+    S.emit(NdOp::INT_MULT, Scaled,
+           {Count,
+            NdVar::cst(static_cast<uint64_t>(Multiplier.imm), Count.Size)});
+    return Scaled;
+  };
+
   switch (Insn->id) {
   // ========================================================================
   // SVE / SVE2 — predicate and control operations
@@ -150,6 +163,7 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       NdVar Count = S.makeTemp(Dst.Size);
       S.emitIntrinsic(sveCountIntrinsic(Insn->id), Count,
                       {NdVar::cst(31, 4)});
+      Count = scaleSVECount(Count);
       S.emit(NdOp::INT_ADD, Dst,
              {NdVar::reg(Dst.Offset, Dst.Size), Count});
     }
@@ -172,6 +186,7 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       NdVar Count = S.makeTemp(Dst.Size);
       S.emitIntrinsic(sveCountIntrinsic(Insn->id), Count,
                       {NdVar::cst(31, 4)});
+      Count = scaleSVECount(Count);
       S.emit(NdOp::INT_SUB, Dst,
              {NdVar::reg(Dst.Offset, Dst.Size), Count});
     }
