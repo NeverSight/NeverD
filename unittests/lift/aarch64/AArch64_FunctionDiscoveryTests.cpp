@@ -92,4 +92,52 @@ TEST(AArch64FunctionDiscovery,
       0u);
 }
 
+TEST(AArch64FunctionDiscovery,
+     PreservesTypedSymbolInsideBroadCompactUnwindRange) {
+  constexpr va_t ImageVA = 0x2000;
+  constexpr va_t LeafVA = ImageVA + 0x8;
+
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::MachO;
+  Img.Base = ImageVA;
+  Img.Entry = ImageVA;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = ImageVA;
+  Text.Size = 0x10;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0);
+  writeLE<uint32_t>(Text.Data.data(), 0xD65F03C0u); // ret
+  writeLE<uint32_t>(Text.Data.data() + (LeafVA - ImageVA),
+                    0xD65F03C0u); // ret
+  Img.Segments.push_back(std::move(Text));
+  Img.Sections.push_back(
+      makeMachOSection("__text", ImageVA, 0x10, /*ContainsInstructions=*/true));
+
+  Symbol Covering = Symbol::makeFunc(ImageVA, 0x10);
+  Covering.Name = "_covering";
+  Img.Symbols.push_back(std::move(Covering));
+  Symbol Leaf = Symbol::makeFunc(LeafVA);
+  Leaf.Name = "_leaf";
+  Img.Symbols.push_back(std::move(Leaf));
+  Img.Exports.push_back({"_covering", 0, ImageVA});
+  Img.Exports.push_back({"_leaf", 0, LeafVA});
+  Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x10);
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  FuncDetector Detector;
+  auto Functions = Detector.detect(Img, Dec);
+
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == ImageVA; }),
+            1u);
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == LeafVA; }),
+            1u);
+}
+
 } // namespace

@@ -196,11 +196,12 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
   // are covered too.
   {
     std::vector<std::pair<va_t, va_t>> SizedRanges;
-    std::set<va_t> SizedStarts;
+    std::set<va_t> FunctionSymbolStarts;
     for (const auto &Sym : Img.Symbols) {
+      if (Sym.IsFunc)
+        FunctionSymbolStarts.insert(Sym.Addr);
       if (!Sym.IsFunc || Sym.Size == 0 || Sym.Size > InvalidVA - Sym.Addr)
         continue;
-      SizedStarts.insert(Sym.Addr);
       SizedRanges.push_back({Sym.Addr, Sym.Addr + Sym.Size});
     }
     if (!SizedRanges.empty()) {
@@ -210,16 +211,16 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
             return true;
         return false;
       };
-      // A sized function symbol authoritatively claims its whole [Addr,
-      // Addr+Size) extent.  Keep an entry only if it is NOT strictly inside any
-      // such range, or it IS itself a sized-function start.  This drops
-      // spurious entries inside the range — even ones mis-promoted to exports —
-      // such as an ARM embedded constant pool ($d) decoded as a bogus
-      // `sub_XXXX` (full of undecodable `msr`/`svc` that breaks recompilation).
+      // A sized function symbol ordinarily claims its whole [Addr, Addr+Size)
+      // extent.  An explicit function symbol at an interior address is stronger
+      // evidence, however: compact-unwind coverage ranges may span leaf
+      // functions that have no unwind row of their own.  Preserve those typed
+      // starts while still dropping scan/export-only candidates such as an ARM
+      // embedded constant pool ($d) decoded as a bogus `sub_XXXX`.
       std::vector<std::pair<va_t, std::string>> Filtered;
       Filtered.reserve(Results.size());
       for (auto &R : Results) {
-        if (InsideSized(R.first) && !SizedStarts.count(R.first))
+        if (InsideSized(R.first) && !FunctionSymbolStarts.count(R.first))
           continue;
         Filtered.push_back(R);
       }
