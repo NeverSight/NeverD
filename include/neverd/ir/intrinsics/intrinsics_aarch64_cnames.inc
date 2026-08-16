@@ -118,6 +118,16 @@ C(Intrinsic::A64_Sm4ekey,      "vsm4ekeyq_u32");
 C(Intrinsic::A64_Famax,        "vamax");
 C(Intrinsic::A64_Famin,        "vamin");
 
+// Internal scalar-LSE operations are rendered as standard __atomic builtins
+// by HighCIntrinsicRenderARM.  These names keep textual IR diagnostics stable.
+C(Intrinsic::A64_AtomicAnd,     "__neverd_a64_atomic_and");
+C(Intrinsic::A64_AtomicOr,      "__neverd_a64_atomic_or");
+C(Intrinsic::A64_AtomicXor,     "__neverd_a64_atomic_xor");
+C(Intrinsic::A64_AtomicSmax,    "__neverd_a64_atomic_smax");
+C(Intrinsic::A64_AtomicSmin,    "__neverd_a64_atomic_smin");
+C(Intrinsic::A64_AtomicUmax,    "__neverd_a64_atomic_umax");
+C(Intrinsic::A64_AtomicUmin,    "__neverd_a64_atomic_umin");
+
 // FEAT_THE + FEAT_D128 pair compare-and-swap builtins provided by the paired
 // Clang toolchain.
 C(Intrinsic::A64_Rcwcasp,      "__builtin_arm_rcwcasp");

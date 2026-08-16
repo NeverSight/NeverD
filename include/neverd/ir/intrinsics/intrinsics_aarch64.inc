@@ -190,3 +190,10 @@ A64_Ldsetp, A64_Ldsetpa, A64_Ldsetpal, A64_Ldsetpl,
 // Runtime-width SVE arithmetic progression.  Keep this appended so existing
 // serialized intrinsic IDs remain stable.
 A64_SveIndex,
+
+// Scalar LSE read-modify-write operations not represented by the generic
+// ATOMIC_ADD/ATOMIC_XCHG opcodes.  Access width and memory ordering travel as
+// explicit operands so LLVM and High-C preserve byte/halfword forms and
+// acquire/release suffixes without multiplying IDs by every encoding variant.
+A64_AtomicAnd, A64_AtomicOr, A64_AtomicXor,
+A64_AtomicSmax, A64_AtomicSmin, A64_AtomicUmax, A64_AtomicUmin,

@@ -133,6 +133,39 @@ DEFINE_LDADD_TEST(test_ldadda, "ldadda")
 DEFINE_LDADD_TEST(test_ldaddal, "ldaddal")
 DEFINE_LDADD_TEST(test_ldaddl, "ldaddl")
 
+#define DEFINE_LSE_RMW_TEST(name, mnemonic)                                   \
+  __attribute__((naked, noinline, used)) unsigned long name(                  \
+      unsigned long *address, unsigned long value) {                          \
+    __asm__ volatile("mov x8, x0\n\t" mnemonic " x1, x0, [x8]\n\tret");       \
+  }
+
+DEFINE_LSE_RMW_TEST(test_ldclr, "ldclr")
+DEFINE_LSE_RMW_TEST(test_ldclra, "ldclra")
+DEFINE_LSE_RMW_TEST(test_ldclral, "ldclral")
+DEFINE_LSE_RMW_TEST(test_ldclrl, "ldclrl")
+DEFINE_LSE_RMW_TEST(test_ldeoral, "ldeoral")
+DEFINE_LSE_RMW_TEST(test_ldsetal, "ldsetal")
+DEFINE_LSE_RMW_TEST(test_ldsmaxal, "ldsmaxal")
+DEFINE_LSE_RMW_TEST(test_ldsminal, "ldsminal")
+DEFINE_LSE_RMW_TEST(test_ldumaxal, "ldumaxal")
+DEFINE_LSE_RMW_TEST(test_lduminal, "lduminal")
+DEFINE_LSE_RMW_TEST(test_swpal, "swpal")
+
+__attribute__((naked, noinline, used)) unsigned
+test_ldsetalb(unsigned char *address, unsigned value) {
+  __asm__ volatile("mov x8, x0\n\tldsetalb w1, w0, [x8]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned
+test_ldeoralh(unsigned short *address, unsigned value) {
+  __asm__ volatile("mov x8, x0\n\tldeoralh w1, w0, [x8]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned long
+test_stsetl(unsigned long *address, unsigned long value) {
+  __asm__ volatile("stsetl x1, [x0]\n\tmov x0, xzr\n\tret");
+}
+
 #define DEFINE_CAS_TEST(name, mnemonic)                                        \
   __attribute__((naked, noinline, used)) unsigned long name(                   \
       unsigned long *address, unsigned long expected, unsigned long desired) { \

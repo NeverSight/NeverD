@@ -22,6 +22,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace neverd {
 
@@ -170,6 +171,66 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     return Count->getType() == OutTy
                ? Count
                : Builder.CreateZExtOrTrunc(Count, OutTy);
+  }
+
+  const bool IsScalarAtomicRMW =
+      IC == I::A64_AtomicAnd || IC == I::A64_AtomicOr ||
+      IC == I::A64_AtomicXor || IC == I::A64_AtomicSmax ||
+      IC == I::A64_AtomicSmin || IC == I::A64_AtomicUmax ||
+      IC == I::A64_AtomicUmin;
+  if (IsScalarAtomicRMW) {
+    if (Op.NumInputs < 5 ||
+        (Op.Output.Size != 1 && Op.Output.Size != 2 && Op.Output.Size != 4 &&
+         Op.Output.Size != 8) ||
+        !Op.Inputs[3].isConst() ||
+        Op.Inputs[3].ConstVal != Op.Output.Size ||
+        !Op.Inputs[4].isConst() ||
+        Op.Inputs[4].ConstVal != static_cast<uint64_t>(Op.MemoryOrdering))
+      llvm::report_fatal_error("malformed scalar LSE atomic RMW");
+
+    llvm::AtomicOrdering Ordering = llvm::AtomicOrdering::Monotonic;
+    switch (Op.MemoryOrdering) {
+    case NdMemoryOrdering::Relaxed:
+      break;
+    case NdMemoryOrdering::Acquire:
+      Ordering = llvm::AtomicOrdering::Acquire;
+      break;
+    case NdMemoryOrdering::Release:
+      Ordering = llvm::AtomicOrdering::Release;
+      break;
+    case NdMemoryOrdering::AcquireRelease:
+      Ordering = llvm::AtomicOrdering::AcquireRelease;
+      break;
+    case NdMemoryOrdering::SequentiallyConsistent:
+      Ordering = llvm::AtomicOrdering::SequentiallyConsistent;
+      break;
+    case NdMemoryOrdering::None:
+      llvm::report_fatal_error("scalar LSE atomic RMW requires ordering");
+    }
+
+    llvm::AtomicRMWInst::BinOp AtomicOp = llvm::AtomicRMWInst::And;
+    if (IC == I::A64_AtomicOr)
+      AtomicOp = llvm::AtomicRMWInst::Or;
+    else if (IC == I::A64_AtomicXor)
+      AtomicOp = llvm::AtomicRMWInst::Xor;
+    else if (IC == I::A64_AtomicSmax)
+      AtomicOp = llvm::AtomicRMWInst::Max;
+    else if (IC == I::A64_AtomicSmin)
+      AtomicOp = llvm::AtomicRMWInst::Min;
+    else if (IC == I::A64_AtomicUmax)
+      AtomicOp = llvm::AtomicRMWInst::UMax;
+    else if (IC == I::A64_AtomicUmin)
+      AtomicOp = llvm::AtomicRMWInst::UMin;
+
+    llvm::Type *ValueTy = sizeToType(Op.Output.Size);
+    llvm::Value *Operand = getVar(Op.Inputs[1], Builder);
+    if (Operand->getType() != ValueTy)
+      Operand = Builder.CreateIntCast(Operand, ValueTy, false,
+                                      "atomic_rmw_operand");
+    llvm::Value *Address = getVar(Op.Inputs[2], Builder);
+    Address = getMemoryPtr(Address, ValueTy, Builder);
+    return Builder.CreateAtomicRMW(AtomicOp, Address, Operand,
+                                   llvm::MaybeAlign(Op.Output.Size), Ordering);
   }
 
   if (IC == I::A64_Pacga && Op.Output.Size > 0 && Op.NumInputs >= 3) {

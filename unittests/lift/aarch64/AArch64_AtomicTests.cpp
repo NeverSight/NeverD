@@ -392,6 +392,99 @@ TEST_F(AArch64_Atomic, LdaddHighCUsesAtomicFetchAddAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
+TEST_F(AArch64_Atomic, RemainingLseRmwUsesOrderedAtomicInstructions) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  const struct {
+    const char *Name;
+    const char *Operation;
+    const char *Type;
+    const char *Ordering;
+  } Cases[] = {
+      {"test_ldclr", "and", "i64", "monotonic"},
+      {"test_ldclra", "and", "i64", "acquire"},
+      {"test_ldclral", "and", "i64", "acq_rel"},
+      {"test_ldclrl", "and", "i64", "release"},
+      {"test_ldeoral", "xor", "i64", "acq_rel"},
+      {"test_ldsetal", "or", "i64", "acq_rel"},
+      {"test_ldsmaxal", "max", "i64", "acq_rel"},
+      {"test_ldsminal", "min", "i64", "acq_rel"},
+      {"test_ldumaxal", "umax", "i64", "acq_rel"},
+      {"test_lduminal", "umin", "i64", "acq_rel"},
+      {"test_swpal", "xchg", "i64", "acq_rel"},
+      {"test_ldsetalb", "or", "i8", "acq_rel"},
+      {"test_ldeoralh", "xor", "i16", "acq_rel"},
+      {"test_stsetl", "or", "i64", "release"},
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionIR(r.out, Case.Name);
+    ASSERT_FALSE(F.empty()) << r.out;
+    EXPECT_NE(F.find(std::string("atomicrmw ") + Case.Operation + " ptr"),
+              std::string::npos)
+        << F;
+    EXPECT_NE(F.find(std::string(", ") + Case.Type + " "), std::string::npos)
+        << F;
+    EXPECT_NE(F.find(std::string(Case.Ordering) + ", align"),
+              std::string::npos)
+        << F;
+    EXPECT_EQ(F.find("load i"), std::string::npos) << F;
+    EXPECT_EQ(F.find("store i"), std::string::npos) << F;
+  }
+}
+
+TEST_F(AArch64_Atomic, RemainingLseRmwHighCUsesAtomicBuiltinsAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+
+  const struct {
+    const char *Name;
+    const char *Builtin;
+    const char *Ordering;
+  } Cases[] = {
+      {"test_ldclr", "__atomic_fetch_and", "__ATOMIC_RELAXED"},
+      {"test_ldclra", "__atomic_fetch_and", "__ATOMIC_ACQUIRE"},
+      {"test_ldclral", "__atomic_fetch_and", "__ATOMIC_ACQ_REL"},
+      {"test_ldclrl", "__atomic_fetch_and", "__ATOMIC_RELEASE"},
+      {"test_ldeoral", "__atomic_fetch_xor", "__ATOMIC_ACQ_REL"},
+      {"test_ldsetal", "__atomic_fetch_or", "__ATOMIC_ACQ_REL"},
+      {"test_ldsmaxal", "__atomic_fetch_max", "__ATOMIC_ACQ_REL"},
+      {"test_ldsminal", "__atomic_fetch_min", "__ATOMIC_ACQ_REL"},
+      {"test_ldumaxal", "__atomic_fetch_max", "__ATOMIC_ACQ_REL"},
+      {"test_lduminal", "__atomic_fetch_min", "__ATOMIC_ACQ_REL"},
+      {"test_swpal", "__atomic_exchange_n", "__ATOMIC_ACQ_REL"},
+      {"test_ldsetalb", "__atomic_fetch_or", "__ATOMIC_ACQ_REL"},
+      {"test_ldeoralh", "__atomic_fetch_xor", "__ATOMIC_ACQ_REL"},
+      {"test_stsetl", "__atomic_fetch_or", "__ATOMIC_RELEASE"},
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionC(source, Case.Name);
+    ASSERT_FALSE(F.empty()) << source;
+    EXPECT_NE(F.find(Case.Builtin), std::string::npos) << F;
+    EXPECT_NE(F.find(Case.Ordering), std::string::npos) << F;
+  }
+
+  EXPECT_NE(functionC(source, "test_ldsetalb").find("uint8_t"),
+            std::string::npos);
+  EXPECT_NE(functionC(source, "test_ldeoralh").find("uint16_t"),
+            std::string::npos);
+  EXPECT_NE(functionC(source, "test_ldsmaxal").find("int64_t *"),
+            std::string::npos);
+  EXPECT_NE(functionC(source, "test_ldumaxal").find("uint64_t *"),
+            std::string::npos);
+
+  expectPairedClangSyntax(cFile, source);
+}
+
 TEST_F(AArch64_Atomic, CasAndCaspUseOrderedAtomicCompareExchange) {
   auto r = liftToLLVMIR(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;

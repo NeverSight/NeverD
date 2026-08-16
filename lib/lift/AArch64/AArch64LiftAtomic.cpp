@@ -14,6 +14,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64Lifter.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 
 #include <cstring>
@@ -36,40 +37,59 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
       return 2;
     return RegSz;
   };
-  // Shared prologue for the atomic load-ops: load the (access-sized) old value
-  // from the memory operand's *effective address* — operandEffAddr, NOT
-  // operandRead, which would dereference the pointer a second time and use the
-  // loaded value as the address.  Zero-extend the old value into the register
-  // destination and narrow the source to the access width.
-  //
-  // The "store" aliases (STADD/STCLR/STSET/STEOR/STSMAX/.../STUMIN, WZR
-  // destination) decode to the same LD* instruction id but with op_count==2
-  // (Src, [Xn]) and no destination register — the old value is discarded but
-  // memory must still be updated.  Handle both forms here.
-  auto loadOpPrologue = [&](NdVar &EA, NdVar &OldVal, NdVar &SrcN) {
+  // LSE ordering is encoded as an A/L/AL suffix immediately before an
+  // optional B/H access-width suffix.  Deriving it once from the decoded
+  // mnemonic keeps every scalar RMW family and its store aliases consistent.
+  auto lseOrdering = [&]() {
+    llvm::StringRef Mn(Insn->mnemonic);
+    if (Mn.ends_with("b") || Mn.ends_with("h"))
+      Mn = Mn.drop_back();
+    if (Mn.ends_with("al"))
+      return NdMemoryOrdering::AcquireRelease;
+    if (Mn.ends_with("a"))
+      return NdMemoryOrdering::Acquire;
+    if (Mn.ends_with("l"))
+      return NdMemoryOrdering::Release;
+    return NdMemoryOrdering::Relaxed;
+  };
+
+  // Snapshot the source before writing the returned old value.  Rs==Rt is a
+  // valid encoding, and reading Rs after the destination write would otherwise
+  // feed the just-loaded value back into the RMW.  The ST* aliases decode with
+  // two operands and discard the old value while retaining the memory effect.
+  auto loadOpOperands = [&](NdVar &EA, NdVar &SrcN, bool &StoreForm) {
     NdVar SrcReg = operandRead(S, ARM64.operands[0]);
-    // Snapshot the source value up front.  For SWP/LD<op> with Rs==Rt (a valid
-    // encoding, e.g. `swp x0,x0,[x1]`) the destination write below stores the
-    // loaded memory value into the *same* register that holds the source — so a
-    // later read of the source would see the clobbered value and store the
-    // wrong datum back to memory.  Copying to a temp decouples it from the
-    // register.
     NdVar Src = S.makeTemp(SrcReg.Size);
     S.emit(NdOp::COPY, Src, {SrcReg});
-    bool StoreForm = (ARM64.op_count < 3); // STADD/ST* alias: no dest register
+    StoreForm = ARM64.op_count < 3;
     unsigned MemIdx = StoreForm ? 1 : 2;
     EA = operandEffAddr(S, ARM64.operands[MemIdx]);
     uint16_t Asz = accessSize(Src.Size);
-    OldVal = S.makeTemp(Asz);
-    S.emit(NdOp::LOAD, OldVal, {EA});
+    SrcN = narrowToWidth(S, Src, Asz);
+    return Asz;
+  };
+
+  auto writeLoadOpResult = [&](const NdVar &OldVal, bool StoreForm) {
     if (!StoreForm) {
       NdVar Dst = operandWrite(ARM64.operands[1]);
-      if (Asz < Dst.Size)
+      if (OldVal.Size < Dst.Size)
         S.emit(NdOp::INT_ZEXT, Dst, {OldVal});
       else
         S.emit(NdOp::COPY, Dst, {OldVal});
     }
-    SrcN = narrowToWidth(S, Src, Asz);
+  };
+
+  auto emitScalarAtomicRMW = [&](Intrinsic Id, const NdVar &EA,
+                                 const NdVar &Operand, uint16_t Asz,
+                                 bool StoreForm) {
+    NdMemoryOrdering Ordering = lseOrdering();
+    NdVar OldVal = S.makeTemp(Asz);
+    S.emitIntrinsic(
+        Id, OldVal,
+        {Operand, EA, NdVar::cst(Asz, 2),
+         NdVar::cst(static_cast<uint64_t>(Ordering), 1)},
+        Ordering);
+    writeLoadOpResult(OldVal, StoreForm);
   };
 
   switch (Insn->id) {
@@ -139,13 +159,12 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_LDCLRLH: {
     if (ARM64.op_count < 2)
       break;
-    NdVar EA, OldVal, SrcN;
-    loadOpPrologue(EA, OldVal, SrcN);
-    NdVar Inv = S.makeTemp(OldVal.Size);
+    NdVar EA, SrcN;
+    bool StoreForm = false;
+    uint16_t Asz = loadOpOperands(EA, SrcN, StoreForm);
+    NdVar Inv = S.makeTemp(Asz);
     S.emit(NdOp::INT_NOT, Inv, {SrcN});
-    NdVar NV = S.makeTemp(OldVal.Size);
-    S.emit(NdOp::INT_AND, NV, {OldVal, Inv});
-    S.emit(NdOp::STORE, {}, {EA, NV});
+    emitScalarAtomicRMW(Intrinsic::A64_AtomicAnd, EA, Inv, Asz, StoreForm);
     break;
   }
 
@@ -163,11 +182,10 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_LDEORLH: {
     if (ARM64.op_count < 2)
       break;
-    NdVar EA, OldVal, SrcN;
-    loadOpPrologue(EA, OldVal, SrcN);
-    NdVar NV = S.makeTemp(OldVal.Size);
-    S.emit(NdOp::INT_XOR, NV, {OldVal, SrcN});
-    S.emit(NdOp::STORE, {}, {EA, NV});
+    NdVar EA, SrcN;
+    bool StoreForm = false;
+    uint16_t Asz = loadOpOperands(EA, SrcN, StoreForm);
+    emitScalarAtomicRMW(Intrinsic::A64_AtomicXor, EA, SrcN, Asz, StoreForm);
     break;
   }
 
@@ -231,11 +249,10 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_LDSETLH: {
     if (ARM64.op_count < 2)
       break;
-    NdVar EA, OldVal, SrcN;
-    loadOpPrologue(EA, OldVal, SrcN);
-    NdVar NV = S.makeTemp(OldVal.Size);
-    S.emit(NdOp::INT_OR, NV, {OldVal, SrcN});
-    S.emit(NdOp::STORE, {}, {EA, NV});
+    NdVar EA, SrcN;
+    bool StoreForm = false;
+    uint16_t Asz = loadOpOperands(EA, SrcN, StoreForm);
+    emitScalarAtomicRMW(Intrinsic::A64_AtomicOr, EA, SrcN, Asz, StoreForm);
     break;
   }
 
@@ -287,29 +304,21 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_LDUMINAH:
   case AARCH64_INS_LDUMINALH:
   case AARCH64_INS_LDUMINLH: {
-    // new = {s,u}{max,min}(old, Src).  The old handler wrongly emitted an
-    // INT_OR into the destination register (which must receive the *old*
-    // value) and then stored the unchanged old value back to memory, so the
-    // operation, the returned value and the memory update were all wrong.
     if (ARM64.op_count < 2)
       break;
-    NdVar EA, OldVal, SrcN;
-    loadOpPrologue(EA, OldVal, SrcN);
+    NdVar EA, SrcN;
+    bool StoreForm = false;
+    uint16_t Asz = loadOpOperands(EA, SrcN, StoreForm);
     const char *Mn = Insn->mnemonic;
-    // Signed = LDSMAX/LDSMIN (or store aliases STSMAX/STSMIN); checking for the
-    // "smax"/"smin" substring covers both the ld* and st* prefixes.
     bool IsSigned = (std::strstr(Mn, "smax") != nullptr ||
                      std::strstr(Mn, "smin") != nullptr);
     bool IsMax = (std::strstr(Mn, "max") != nullptr);
-    NdOp CmpOp = IsSigned ? NdOp::INT_SLESS : NdOp::INT_LESS;
-    NdVar Cmp = S.makeTemp(1);
-    if (IsMax)
-      S.emit(CmpOp, Cmp, {SrcN, OldVal}); // (Src < old) ? old : Src = max
-    else
-      S.emit(CmpOp, Cmp, {OldVal, SrcN}); // (old < Src) ? old : Src = min
-    NdVar NV = S.makeTemp(OldVal.Size);
-    S.emit(NdOp::SELECT, NV, {Cmp, OldVal, SrcN});
-    S.emit(NdOp::STORE, {}, {EA, NV});
+    Intrinsic Id = IsSigned
+                       ? (IsMax ? Intrinsic::A64_AtomicSmax
+                                : Intrinsic::A64_AtomicSmin)
+                       : (IsMax ? Intrinsic::A64_AtomicUmax
+                                : Intrinsic::A64_AtomicUmin);
+    emitScalarAtomicRMW(Id, EA, SrcN, Asz, StoreForm);
     break;
   }
 
@@ -694,26 +703,7 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     NdVar DesN = narrowToWidth(S, Desired, Asz);
     NdVar Old = S.makeTemp(Asz);
 
-    NdMemoryOrdering Ordering = NdMemoryOrdering::Relaxed;
-    switch (Insn->id) {
-    case AARCH64_INS_CASA:
-    case AARCH64_INS_CASAB:
-    case AARCH64_INS_CASAH:
-      Ordering = NdMemoryOrdering::Acquire;
-      break;
-    case AARCH64_INS_CASL:
-    case AARCH64_INS_CASLB:
-    case AARCH64_INS_CASLH:
-      Ordering = NdMemoryOrdering::Release;
-      break;
-    case AARCH64_INS_CASAL:
-    case AARCH64_INS_CASALB:
-    case AARCH64_INS_CASALH:
-      Ordering = NdMemoryOrdering::AcquireRelease;
-      break;
-    default:
-      break;
-    }
+    NdMemoryOrdering Ordering = lseOrdering();
     S.emit(NdOp::ATOMIC_CMPXCHG, Old, {EA, ExpN, DesN}, Ordering);
     if (Asz < Dst.Size)
       S.emit(NdOp::INT_ZEXT, Dst, {Old});
@@ -750,26 +740,7 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     NdVar SrcN = narrowToWidth(S, Src, Asz);
     NdVar OldVal = S.makeTemp(Asz);
 
-    NdMemoryOrdering Ordering = NdMemoryOrdering::Relaxed;
-    switch (Insn->id) {
-    case AARCH64_INS_LDADDA:
-    case AARCH64_INS_LDADDAB:
-    case AARCH64_INS_LDADDAH:
-      Ordering = NdMemoryOrdering::Acquire;
-      break;
-    case AARCH64_INS_LDADDL:
-    case AARCH64_INS_LDADDLB:
-    case AARCH64_INS_LDADDLH:
-      Ordering = NdMemoryOrdering::Release;
-      break;
-    case AARCH64_INS_LDADDAL:
-    case AARCH64_INS_LDADDALB:
-    case AARCH64_INS_LDADDALH:
-      Ordering = NdMemoryOrdering::AcquireRelease;
-      break;
-    default:
-      break;
-    }
+    NdMemoryOrdering Ordering = lseOrdering();
 
     S.emit(NdOp::ATOMIC_ADD, OldVal, {EA, SrcN}, Ordering);
     if (!StoreForm) {
@@ -795,9 +766,12 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_SWPLH: {
     if (ARM64.op_count < 3)
       break;
-    NdVar EA, OldVal, SrcN;
-    loadOpPrologue(EA, OldVal, SrcN);
-    S.emit(NdOp::STORE, {}, {EA, SrcN});
+    NdVar EA, SrcN;
+    bool StoreForm = false;
+    uint16_t Asz = loadOpOperands(EA, SrcN, StoreForm);
+    NdVar OldVal = S.makeTemp(Asz);
+    S.emit(NdOp::ATOMIC_XCHG, OldVal, {EA, SrcN}, lseOrdering());
+    writeLoadOpResult(OldVal, StoreForm);
     break;
   }
 

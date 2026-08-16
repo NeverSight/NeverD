@@ -80,3 +80,13 @@ SIDEEFFECT(Intrinsic::A64_Ldsetp);
 SIDEEFFECT(Intrinsic::A64_Ldsetpa);
 SIDEEFFECT(Intrinsic::A64_Ldsetpal);
 SIDEEFFECT(Intrinsic::A64_Ldsetpl);
+
+// Scalar LSE RMWs mutate memory even when the returned old value is discarded
+// by an ST* alias or dead in the surrounding function.
+SIDEEFFECT(Intrinsic::A64_AtomicAnd);
+SIDEEFFECT(Intrinsic::A64_AtomicOr);
+SIDEEFFECT(Intrinsic::A64_AtomicXor);
+SIDEEFFECT(Intrinsic::A64_AtomicSmax);
+SIDEEFFECT(Intrinsic::A64_AtomicSmin);
+SIDEEFFECT(Intrinsic::A64_AtomicUmax);
+SIDEEFFECT(Intrinsic::A64_AtomicUmin);
