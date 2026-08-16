@@ -599,6 +599,7 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_param_phi_a64.s
   aarch64/test_arith_a64.c
   aarch64/test_cond_a64.c
+  aarch64/test_hbc_a64.c
   aarch64/test_mem_a64.c
   aarch64/test_bitshift_a64.c
   aarch64/test_fp_a64.c
@@ -743,6 +744,8 @@ foreach(src ${AARCH64_TEST_SOURCES})
     set(a64_extra_flags -O1)
   elseif(src MATCHES "test_fp_a64")
     set(a64_extra_flags -march=armv8.6-a+bf16)
+  elseif(src MATCHES "test_hbc_a64")
+    set(a64_extra_flags -march=armv8.8-a+hbc)
   elseif(src MATCHES "test_faminmax_a64")
     set(a64_extra_flags -march=armv9.4-a+faminmax)
   elseif(src MATCHES "test_atomic_a64")

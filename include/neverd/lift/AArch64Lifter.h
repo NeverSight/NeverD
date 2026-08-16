@@ -85,6 +85,11 @@ public:
   /// computed at 32 bits instead of 64.  No-op when already <= Sz.
   NdVar narrowToWidth(LiftState &S, NdVar V, uint16_t Sz);
 
+  /// Evaluate an AArch64 condition code from the modelled NZCV flags.  Shared
+  /// by ordinary B.<cond> and the FEAT_HBC BC.<cond> hint form, whose branch
+  /// semantics are identical.
+  static NdVar buildCondCode(AArch64CC_CondCode CC, LiftState &S);
+
   /// Pack NZCV into a GPR (MRS Xn, NZCV) / restore NZCV from a GPR
   /// (MSR NZCV, Xn).  clang spills/reloads the flags this way under register
   /// pressure (e.g. an `adcs` carry kept live across an intervening compare).

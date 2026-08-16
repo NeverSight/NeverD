@@ -108,8 +108,9 @@ bool liftSysMisc(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_BC: {
     if (ARM64.op_count < 1)
       break;
-    NdVar Target = L.operandRead(S, ARM64.operands[0]);
-    S.emit(NdOp::BRANCH, {}, {Target});
+    NdVar Cond = L.buildCondCode(ARM64.cc, S);
+    NdVar Target = NdVar::cst(static_cast<uint64_t>(ARM64.operands[0].imm), 8);
+    S.emit(NdOp::COND_BR, {}, {Target, Cond});
     break;
   }
 
