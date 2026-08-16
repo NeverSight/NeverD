@@ -107,6 +107,7 @@ add_neverd_unittest(NeverDLiftTests
   format/MachOI386RelocationFixtureTests.cpp
   format/MachOI386RelocationPipelineTests.cpp
   format/MachOI386RelocationScatteredTests.cpp
+  format/MachOFunctionListingTests.cpp
   core/MedCallingConvTests.cpp
   eh/COFFExceptionTests.cpp
   eh/COFFExceptionARM32UnwindTests.cpp

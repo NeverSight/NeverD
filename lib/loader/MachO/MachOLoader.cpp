@@ -376,7 +376,13 @@ MachOLoader::load(const std::filesystem::path &Path) {
     Symbol Sym;
     Sym.Name = NameOrErr->str();
     Sym.Addr = SymAddr;
-    Sym.IsFunc = IsSect && Img.Sections[NSect - 1].isExecutable();
+    if (IsSect) {
+      const Section &Sec = Img.Sections[NSect - 1];
+      const bool IsInstructions =
+          (Sec.Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+                       llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) != 0;
+      Sym.IsFunc = IsInstructions && Sec.contains(SymAddr);
+    }
     Img.Symbols.push_back(Sym);
 
     if (Sym.IsFunc) {

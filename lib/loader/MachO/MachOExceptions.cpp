@@ -141,7 +141,26 @@ void parseDarwinExceptions(BinaryImage &Img) {
     Personality = It->second.second;
   };
 
-  auto SeenSymbols = Img.getSymbolAddresses();
+  auto recordFunctionRange = [&](const ExceptionAddressRange &Range) {
+    if (!Range.isValid())
+      return;
+    Img.KnownCodeRanges.emplace_back(Range.Begin, Range.End);
+    const Segment *Seg = Img.getSegmentFor(Range.Begin);
+    if (!Seg || !Seg->isExecutable())
+      return;
+
+    bool Found = false;
+    for (Symbol &Sym : Img.Symbols) {
+      if (Sym.Addr != Range.Begin)
+        continue;
+      Found = true;
+      Sym.IsFunc = true;
+      if (Sym.Size == 0)
+        Sym.Size = Range.size();
+    }
+    if (!Found)
+      Img.Symbols.push_back(Symbol::makeFunc(Range.Begin, Range.size()));
+  };
 
   for (const CompactUnwindEntry &Entry : Compact.Entries) {
     ExceptionFunction F;
@@ -224,14 +243,7 @@ void parseDarwinExceptions(BinaryImage &Img) {
     attachLSDA(Img, Bases, F.HandlerDataVA, F);
     Out.ParseStatus = mergeExceptionParseStatus(Out.ParseStatus, F.ParseStatus);
 
-    if (F.CodeRange.isValid()) {
-      Img.KnownCodeRanges.emplace_back(F.CodeRange.Begin, F.CodeRange.End);
-      const Segment *Seg = Img.getSegmentFor(F.CodeRange.Begin);
-      if (Seg && Seg->isExecutable() &&
-          SeenSymbols.insert(F.CodeRange.Begin).second)
-        Img.Symbols.push_back(
-            Symbol::makeFunc(F.CodeRange.Begin, F.CodeRange.size()));
-    }
+    recordFunctionRange(F.CodeRange);
     Out.Functions.push_back(std::move(F));
   }
 
@@ -262,8 +274,7 @@ void parseDarwinExceptions(BinaryImage &Img) {
     attachLSDA(Img, Bases, FDE.LSDAVA, F);
     F.Dwarf = std::move(FDE);
     Out.ParseStatus = mergeExceptionParseStatus(Out.ParseStatus, F.ParseStatus);
-    if (F.CodeRange.isValid())
-      Img.KnownCodeRanges.emplace_back(F.CodeRange.Begin, F.CodeRange.End);
+    recordFunctionRange(F.CodeRange);
     Out.Functions.push_back(std::move(F));
   }
 
