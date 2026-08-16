@@ -70,6 +70,9 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   if (E.Op == NdOp::ATOMIC_XCHG)
     return atomicExchangeExpr(E.Type, exprStr(*E.Operands[0]),
                               exprStr(*E.Operands[1]), E.MemoryOrdering);
+  if (E.Op == NdOp::ATOMIC_ADD)
+    return atomicFetchAddExpr(E.Type, exprStr(*E.Operands[0]),
+                              exprStr(*E.Operands[1]), E.MemoryOrdering);
 
   // FJCVTZS exactness compares the original double bit pattern with the
   // signed i32 result converted back to double.  High-C otherwise represents

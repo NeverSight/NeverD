@@ -90,7 +90,8 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
     if (AddrVar.Id >= 0) {
       auto AKey = std::make_pair(AddrVar.Id, AddrVar.SSAVer);
       auto DIt = DefExpr.find(AKey);
-      if (DIt != DefExpr.end() && DIt->second->Kind != ExprKind::Call)
+      if (DIt != DefExpr.end() && DIt->second->Kind != ExprKind::Call &&
+          DIt->second->MemoryOrdering == NdMemoryOrdering::None)
         AddrExpr = DIt->second;
     }
     S.StoreAddr = AddrExpr ? AddrExpr : medvarToExpr(AddrVar);

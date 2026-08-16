@@ -326,6 +326,17 @@ bool NdOpEmulator::step(const LowOp &Op) {
       Registers.erase(Op.Output.Offset);
     return false;
 
+  case NdOp::ATOMIC_ADD: {
+    if (Op.NumInputs < 2 || Op.Output.Size == 0 || Op.Output.Size > 8)
+      return false;
+    uint64_t Addr = readOperand(Op.Inputs[0]);
+    auto Old = loadMemory(Addr, Op.Output.Size);
+    if (!Old)
+      return false;
+    writeOutput(Op.Output, *Old);
+    return storeMemory(Addr, Op.Output.Size, *Old + readOperand(Op.Inputs[1]));
+  }
+
   case NdOp::NOP:
     return true;
 

@@ -108,7 +108,8 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
   if (DIt != DefExpr.end()) {
     auto UIt = UseCount.find(Key);
     if (UIt != UseCount.end() && UIt->second == 1) {
-      if (DIt->second->Kind != ExprKind::Call)
+      if (DIt->second->Kind != ExprKind::Call &&
+          DIt->second->MemoryOrdering == NdMemoryOrdering::None)
         return DIt->second;
     }
   }
@@ -141,6 +142,7 @@ ExprPtr MedToHighConverter::forceInlineExpr(const ExprPtr &E) {
     if (!PhiOutputVars.count(Key)) {
       auto DIt = DefExpr.find(Key);
       if (DIt != DefExpr.end() && DIt->second->Kind != ExprKind::Call &&
+          DIt->second->MemoryOrdering == NdMemoryOrdering::None &&
           DIt->second.get() != E.get())
         return forceInlineExpr(DIt->second);
     }

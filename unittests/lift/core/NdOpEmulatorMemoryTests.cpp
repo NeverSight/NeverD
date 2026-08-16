@@ -110,6 +110,28 @@ TEST_F(NdOpEmulatorTest, StoreAndReload) {
   EXPECT_EQ(Emu.getRegister(8).value_or(0), 0x42u);
 }
 
+TEST_F(NdOpEmulatorTest, AtomicAddReturnsOldValueAndStoresWrappedSum) {
+  BinaryImage ImgWithData = makeDummyImage();
+  ImgWithData.Segments[0].Data[0x20] = 0xfe;
+  NdOpEmulator Emu(ImgWithData);
+
+  LowOp AtomicAdd;
+  AtomicAdd.Opcode = NdOp::ATOMIC_ADD;
+  AtomicAdd.Output = NdVar::reg(8, 1);
+  AtomicAdd.addInput(NdVar::cst(0x1020, 8));
+  AtomicAdd.addInput(NdVar::cst(5, 1));
+  ASSERT_TRUE(Emu.step(AtomicAdd));
+  EXPECT_EQ(Emu.getRegister(8).value_or(0), 0xfeu);
+
+  LowOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = NdVar::reg(16, 1);
+  Load.addInput(NdVar::cst(0, 8));
+  Load.addInput(NdVar::cst(0x1020, 8));
+  ASSERT_TRUE(Emu.step(Load));
+  EXPECT_EQ(Emu.getRegister(16).value_or(0), 3u);
+}
+
 TEST_F(NdOpEmulatorTest, StoreOverlaysImage) {
   BinaryImage ImgWithData = makeDummyImage();
   uint32_t Original = 0xAAAAAAAA;

@@ -690,11 +690,46 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_LDADDLH: {
     if (ARM64.op_count < 2)
       break;
-    NdVar EA, OldVal, SrcN;
-    loadOpPrologue(EA, OldVal, SrcN);
-    NdVar NewVal = S.makeTemp(OldVal.Size);
-    S.emit(NdOp::INT_ADD, NewVal, {OldVal, SrcN});
-    S.emit(NdOp::STORE, {}, {EA, NewVal});
+
+    NdVar SrcReg = operandRead(S, ARM64.operands[0]);
+    NdVar Src = S.makeTemp(SrcReg.Size);
+    S.emit(NdOp::COPY, Src, {SrcReg});
+    bool StoreForm = ARM64.op_count < 3;
+    unsigned MemIdx = StoreForm ? 1 : 2;
+    NdVar EA = operandEffAddr(S, ARM64.operands[MemIdx]);
+    uint16_t Asz = accessSize(Src.Size);
+    NdVar SrcN = narrowToWidth(S, Src, Asz);
+    NdVar OldVal = S.makeTemp(Asz);
+
+    NdMemoryOrdering Ordering = NdMemoryOrdering::Relaxed;
+    switch (Insn->id) {
+    case AARCH64_INS_LDADDA:
+    case AARCH64_INS_LDADDAB:
+    case AARCH64_INS_LDADDAH:
+      Ordering = NdMemoryOrdering::Acquire;
+      break;
+    case AARCH64_INS_LDADDL:
+    case AARCH64_INS_LDADDLB:
+    case AARCH64_INS_LDADDLH:
+      Ordering = NdMemoryOrdering::Release;
+      break;
+    case AARCH64_INS_LDADDAL:
+    case AARCH64_INS_LDADDALB:
+    case AARCH64_INS_LDADDALH:
+      Ordering = NdMemoryOrdering::AcquireRelease;
+      break;
+    default:
+      break;
+    }
+
+    S.emit(NdOp::ATOMIC_ADD, OldVal, {EA, SrcN}, Ordering);
+    if (!StoreForm) {
+      NdVar Dst = operandWrite(ARM64.operands[1]);
+      if (Asz < Dst.Size)
+        S.emit(NdOp::INT_ZEXT, Dst, {OldVal});
+      else
+        S.emit(NdOp::COPY, Dst, {OldVal});
+    }
     break;
   }
   case AARCH64_INS_SWP:

@@ -271,6 +271,74 @@ TEST_F(AArch64_Atomic, LdclrpHighCUsesStandardAtomicFetchAndAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
+TEST_F(AArch64_Atomic, LdaddUsesOrderedAtomicReadModifyWrite) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  const struct {
+    const char *Name;
+    const char *Type;
+    const char *Ordering;
+  } Cases[] = {
+      {"test_ldadd", "i64", "monotonic"}, {"test_ldadda", "i64", "acquire"},
+      {"test_ldaddal", "i64", "acq_rel"}, {"test_ldaddl", "i64", "release"},
+      {"test_ldaddb", "i8", "monotonic"}, {"test_ldaddh", "i16", "monotonic"},
+      {"test_stadd", "i64", "monotonic"}};
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionIR(r.out, Case.Name);
+    ASSERT_FALSE(F.empty()) << r.out;
+    EXPECT_NE(F.find(std::string("atomicrmw add ptr") + " "), std::string::npos)
+        << F;
+    EXPECT_NE(F.find(std::string(", ") + Case.Type + " "), std::string::npos)
+        << F;
+    EXPECT_NE(F.find(std::string(Case.Ordering) + ", align"), std::string::npos)
+        << F;
+  }
+}
+
+TEST_F(AArch64_Atomic, LdaddHighCUsesAtomicFetchAddAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("__atomic_fetch_add"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_RELAXED"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_ACQUIRE"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_ACQ_REL"), std::string::npos) << source;
+
+  for (const char *Name :
+       {"test_ldadd", "test_ldadda", "test_ldaddal", "test_ldaddl",
+        "test_ldaddb", "test_ldaddh", "test_stadd"}) {
+    SCOPED_TRACE(Name);
+    auto F = functionC(source, Name);
+    ASSERT_FALSE(F.empty()) << source;
+    size_t Count = 0;
+    for (size_t Pos = F.find("__atomic_fetch_add"); Pos != std::string::npos;
+         Pos = F.find("__atomic_fetch_add", Pos + 1))
+      ++Count;
+    EXPECT_EQ(Count, 1u) << F;
+  }
+
+  auto Byte = functionC(source, "test_ldaddb");
+  ASSERT_FALSE(Byte.empty()) << source;
+  EXPECT_NE(Byte.find("\n    uint8_t "), std::string::npos) << Byte;
+  EXPECT_EQ(Byte.find("\n    int8_t "), std::string::npos) << Byte;
+
+  auto Half = functionC(source, "test_ldaddh");
+  ASSERT_FALSE(Half.empty()) << source;
+  EXPECT_NE(Half.find("\n    uint16_t "), std::string::npos) << Half;
+  EXPECT_EQ(Half.find("\n    int16_t "), std::string::npos) << Half;
+
+  expectPairedClangSyntax(cFile, source);
+}
+
 TEST_F(AArch64_Atomic, RcwcaspUsesAddressOperandAndBothRegisterPairs) {
   auto r = liftToLLVMIR(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;

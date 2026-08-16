@@ -419,14 +419,16 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
     return StepResult::Continue;
   }
 
-  if (Op.Opcode == NdOp::ATOMIC_XCHG) {
+  if (Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD) {
     if (Op.NumInputs < 2 || widthOf(Op.Output) == 0)
       return unmodelled(Op);
     SymRef Addr = read(Op.Inputs[0]);
     SymRef Old = State.load(Addr, Op.Output.Size);
     SymRef Value = fit(read(Op.Inputs[1]), widthOf(Op.Output));
     writeResult(Op.Output, Old);
-    if (!State.store(Addr, Value))
+    SymRef NewValue =
+        Op.Opcode == NdOp::ATOMIC_ADD ? Ctx.mkAdd(Old, Value) : Value;
+    if (!State.store(Addr, NewValue))
       ++Unmodelled;
     return StepResult::Continue;
   }
@@ -566,6 +568,7 @@ StepResult SymExec::step(const LowOp &Op) {
   case NdOp::LOAD:
   case NdOp::STORE:
   case NdOp::ATOMIC_XCHG:
+  case NdOp::ATOMIC_ADD:
     return stepMemory(Op);
 
   case NdOp::BRANCH:

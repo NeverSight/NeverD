@@ -221,6 +221,18 @@ std::string HighCWriter::atomicExchangeExpr(
          atomicOrderingToken(Ordering) + ")";
 }
 
+std::string HighCWriter::atomicFetchAddExpr(const TypeRef &Ty,
+                                            llvm::StringRef Addr,
+                                            llvm::StringRef Val,
+                                            NdMemoryOrdering Ordering) const {
+  if (Ordering == NdMemoryOrdering::None)
+    llvm::report_fatal_error("atomic fetch-add requires memory ordering");
+  std::string Type = memoryTypeName(Ty);
+  return "__atomic_fetch_add((" + Type + " *)(uintptr_t)(" + Addr.str() +
+         "), (" + Type + ")(" + Val.str() + "), " +
+         atomicOrderingToken(Ordering) + ")";
+}
+
 void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                                          std::set<std::string> &Targets) {
   std::set<const HighExpr *> Seen;

@@ -105,7 +105,8 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
       if (AddrVar.Id >= 0) {
         auto AddrKey = varKey(AddrVar);
         auto DefIt = DefExpr.find(AddrKey);
-        if (DefIt != DefExpr.end() && DefIt->second->Kind != ExprKind::Call)
+        if (DefIt != DefExpr.end() && DefIt->second->Kind != ExprKind::Call &&
+            DefIt->second->MemoryOrdering == NdMemoryOrdering::None)
           AddrExpr = DefIt->second;
       }
       return HighExpr::makeLoad(AddrExpr ? AddrExpr : medvarToExpr(AddrVar),
@@ -116,6 +117,7 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
   }
 
   case NdOp::ATOMIC_XCHG:
+  case NdOp::ATOMIC_ADD:
     if (Op.NumInputs >= 2) {
       auto Expr = HighExpr::makeBinop(
           Op.Opcode, medvarToExpr(Op.Inputs[0]),

@@ -840,24 +840,27 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       SI->setVolatile(true);
     return;
   }
-  case NdOp::ATOMIC_XCHG: {
+  case NdOp::ATOMIC_XCHG:
+  case NdOp::ATOMIC_ADD: {
     if (Op.NumInputs < 2 || Op.Output.Size == 0 ||
         Op.Inputs[1].Size != Op.Output.Size)
-      llvm::report_fatal_error("atomic exchange has inconsistent operands");
+      llvm::report_fatal_error("atomic RMW has inconsistent operands");
     if (Op.MemoryOrdering == NdMemoryOrdering::None)
-      llvm::report_fatal_error("atomic exchange requires memory ordering");
+      llvm::report_fatal_error("atomic RMW requires memory ordering");
     if (!llvm::isPowerOf2_64(Op.Output.Size))
-      llvm::report_fatal_error("atomic exchange size must be a power of two");
+      llvm::report_fatal_error("atomic RMW size must be a power of two");
 
     llvm::Value *Val = GetInput(1);
     llvm::Type *ValTy = sizeToType(Op.Output.Size);
     if (Val->getType() != ValTy)
-      Val = Builder.CreateIntCast(Val, ValTy, false, "atomic_xchg_val");
+      Val = Builder.CreateIntCast(Val, ValTy, false, "atomic_rmw_val");
     llvm::Value *Ptr = getMemoryPtr(GetInput(0), ValTy, Builder);
-    Result = Builder.CreateAtomicRMW(
-        llvm::AtomicRMWInst::Xchg, Ptr, Val,
-        llvm::MaybeAlign(Op.Output.Size),
-        toLLVMAtomicOrdering(Op.MemoryOrdering));
+    llvm::AtomicRMWInst::BinOp RMWOp = Op.Opcode == NdOp::ATOMIC_ADD
+                                           ? llvm::AtomicRMWInst::Add
+                                           : llvm::AtomicRMWInst::Xchg;
+    Result = Builder.CreateAtomicRMW(RMWOp, Ptr, Val,
+                                     llvm::MaybeAlign(Op.Output.Size),
+                                     toLLVMAtomicOrdering(Op.MemoryOrdering));
     break;
   }
   case NdOp::BRANCH: {

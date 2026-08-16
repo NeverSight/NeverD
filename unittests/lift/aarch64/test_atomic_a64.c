@@ -110,6 +110,32 @@ DEFINE_LDCLRP_TEST(test_ldclrpa, "ldclrpa")
 DEFINE_LDCLRP_TEST(test_ldclrpal, "ldclrpal")
 DEFINE_LDCLRP_TEST(test_ldclrpl, "ldclrpl")
 
+#define DEFINE_LDADD_TEST(name, mnemonic)                                      \
+  __attribute__((naked, noinline, used)) unsigned long name(                   \
+      unsigned long *address, unsigned long value) {                           \
+    __asm__ volatile("mov x8, x0\n\t" mnemonic " x1, x0, [x8]\n\tret");        \
+  }
+
+DEFINE_LDADD_TEST(test_ldadd, "ldadd")
+DEFINE_LDADD_TEST(test_ldadda, "ldadda")
+DEFINE_LDADD_TEST(test_ldaddal, "ldaddal")
+DEFINE_LDADD_TEST(test_ldaddl, "ldaddl")
+
+__attribute__((naked, noinline, used)) unsigned
+test_ldaddb(unsigned char *address, unsigned value) {
+  __asm__ volatile("mov x8, x0\n\tldaddb w1, w0, [x8]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned
+test_ldaddh(unsigned short *address, unsigned value) {
+  __asm__ volatile("mov x8, x0\n\tldaddh w1, w0, [x8]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned long
+test_stadd(unsigned long *address, unsigned long value) {
+  __asm__ volatile("stadd x1, [x0]\n\tmov x0, xzr\n\tret");
+}
+
 __attribute__((naked, noinline)) void test_rcwcasp_pair(void) {
   __asm__ volatile("rcwcasp x0, x1, x2, x3, [x4]\n\t"
                    "ret"

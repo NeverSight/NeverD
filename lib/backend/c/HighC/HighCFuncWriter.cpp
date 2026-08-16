@@ -117,24 +117,29 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   auto VarFn = [this](const MedVar &V) { return varName(V); };
 
   std::map<std::string, TypeRef> UsedVars;
-  std::map<std::string, std::string> IntrinsicTypes;
+  std::map<std::string, std::string> ExplicitTypes;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (Analysis.DeadStmts.count(&S))
       return;
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
-        S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Call) {
+        S.Dst->Kind == ExprKind::Var) {
       std::string Name = varName(S.Dst->Var);
-      if (S.Val->IntrinsicId == Intrinsic::A64_SvePtrue) {
-        IntrinsicTypes[Name] = "svbool_t";
-      } else if (S.Val->IntrinsicId == Intrinsic::A64_SveDup) {
+      if (S.Val->Kind == ExprKind::BinOp && S.Val->Op == NdOp::ATOMIC_ADD &&
+          S.Val->Type) {
+        ExplicitTypes[Name] = typeToC(S.Val->Type);
+      } else if (S.Val->Kind == ExprKind::Call &&
+                 S.Val->IntrinsicId == Intrinsic::A64_SvePtrue) {
+        ExplicitTypes[Name] = "svbool_t";
+      } else if (S.Val->Kind == ExprKind::Call &&
+                 S.Val->IntrinsicId == Intrinsic::A64_SveDup) {
         uint64_t ElemBytes = 1;
         if (S.Val->Operands.size() >= 2 &&
             S.Val->Operands[1]->Kind == ExprKind::Const)
           ElemBytes = S.Val->Operands[1]->ConstVal;
-        IntrinsicTypes[Name] = ElemBytes == 2   ? "svuint16_t"
-                               : ElemBytes == 4 ? "svuint32_t"
-                               : ElemBytes == 8 ? "svuint64_t"
-                                                : "svuint8_t";
+        ExplicitTypes[Name] = ElemBytes == 2   ? "svuint16_t"
+                              : ElemBytes == 4 ? "svuint32_t"
+                              : ElemBytes == 8 ? "svuint64_t"
+                                               : "svuint8_t";
       }
     }
     forEachExpr(S, [&](const ExprPtr &E) {
@@ -163,9 +168,9 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
       continue;
     DeclaredNames.insert(Local.Name);
     emitIndent(1);
-    auto IntrinsicTy = IntrinsicTypes.find(Local.Name);
-    OS << (IntrinsicTy == IntrinsicTypes.end() ? typeToC(Local.Type)
-                                               : IntrinsicTy->second)
+    auto ExplicitTy = ExplicitTypes.find(Local.Name);
+    OS << (ExplicitTy == ExplicitTypes.end() ? typeToC(Local.Type)
+                                             : ExplicitTy->second)
        << " " << Local.Name << ";\n";
   }
 
@@ -176,9 +181,8 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
       continue;
     DeclaredNames.insert(Name);
     emitIndent(1);
-    auto IntrinsicTy = IntrinsicTypes.find(Name);
-    OS << (IntrinsicTy == IntrinsicTypes.end() ? typeToC(Ty)
-                                               : IntrinsicTy->second)
+    auto ExplicitTy = ExplicitTypes.find(Name);
+    OS << (ExplicitTy == ExplicitTypes.end() ? typeToC(Ty) : ExplicitTy->second)
        << " " << Name << ";\n";
   }
   if (!DeclaredNames.empty())
