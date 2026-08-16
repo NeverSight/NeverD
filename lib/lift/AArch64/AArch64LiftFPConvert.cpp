@@ -274,9 +274,9 @@ bool liftFPConvert(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     }
     break;
   }
-  // FRINT{A,I,M,N,P,X,Z} — round float to integral float.  A ties away, N/I/X
-  // tie to even (IEEE default; I/X follow FPCR which defaults to even), M
-  // floor, P ceil, Z toward zero.  Vector forms round each lane independently.
+  // FRINT{A,I,M,N,P,X,Z} — round float to integral float.  A ties away, N ties
+  // to even, I/X follow FPCR, M floors, P ceils, and Z rounds toward zero.
+  // Vector forms round each lane independently.
   case AARCH64_INS_FRINTA:
   case AARCH64_INS_FRINTI:
   case AARCH64_INS_FRINTM:
@@ -290,7 +290,9 @@ bool liftFPConvert(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdVar Src = L.operandRead(S, ARM64.operands[1]);
     auto roundLane = [&](NdVar Lane, unsigned Sz) -> NdVar {
       NdVar R = S.makeTemp(Sz);
-      if (Insn->id == AARCH64_INS_FRINTZ) {
+      if (Insn->id == AARCH64_INS_FRINTI) {
+        S.emitIntrinsic(Intrinsic::A64_Frinti, R, {Lane, NdVar::cst(Sz, 1)});
+      } else if (Insn->id == AARCH64_INS_FRINTZ) {
         // Round toward zero = floor for non-negative, ceil for negative.
         NdVar Fl = S.makeTemp(Sz), Ce = S.makeTemp(Sz), IsNeg = S.makeTemp(1);
         S.emit(NdOp::FLOAT_FLOOR, Fl, {Lane});

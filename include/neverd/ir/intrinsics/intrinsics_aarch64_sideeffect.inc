@@ -23,6 +23,7 @@ SIDEEFFECT(Intrinsic::Smc);
 SIDEEFFECT(Intrinsic::Eret);
 SIDEEFFECT(Intrinsic::A64_Clrex);
 SIDEEFFECT(Intrinsic::A64_SetFPSR);
+SIDEEFFECT(Intrinsic::A64_SetFPCR);
 // MTE allocation-tag stores mutate tag memory.
 SIDEEFFECT(Intrinsic::Stg);
 // cache / TLB

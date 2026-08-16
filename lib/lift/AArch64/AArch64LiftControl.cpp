@@ -252,6 +252,11 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       S.emitIntrinsic(Intrinsic::A64_GetFPSR, Dst);
       break;
     }
+    if (ARM64.operands[1].type == AARCH64_OP_SYSREG &&
+        ARM64.operands[1].sysop.reg.sysreg == AARCH64_SYSREG_FPCR) {
+      S.emitIntrinsic(Intrinsic::A64_GetFPCR, Dst);
+      break;
+    }
     S.emitIntrinsic(Intrinsic::Mrs, Dst);
     break;
   }
@@ -267,6 +272,11 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     if (ARM64.operands[0].type == AARCH64_OP_SYSREG &&
         ARM64.operands[0].sysop.reg.sysreg == AARCH64_SYSREG_FPSR) {
       S.emitVoidIntrinsic(Intrinsic::A64_SetFPSR, {Src});
+      break;
+    }
+    if (ARM64.operands[0].type == AARCH64_OP_SYSREG &&
+        ARM64.operands[0].sysop.reg.sysreg == AARCH64_SYSREG_FPCR) {
+      S.emitVoidIntrinsic(Intrinsic::A64_SetFPCR, {Src});
       break;
     }
     S.emitIntrinsic(Intrinsic::Msr, NdVar::reg(a64reg::X0, 8), {Src});

@@ -228,6 +228,8 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
     if (!Seen.insert(&Ex).second)
       return;
     if (Ex.Kind == ExprKind::Call) {
+      if (Ex.IntrinsicId == Intrinsic::A64_Frinti)
+        NeedsFEnvAccess = true;
       std::string Name = Ex.CallTarget;
       if (!Name.empty()) {
         if (Ex.IntrinsicId != Intrinsic::None) {
@@ -288,6 +290,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
 
   for (auto &H : Headers)
     OS << "#include <" << H << ">\n";
+  if (NeedsFEnvAccess)
+    OS << "#pragma STDC FENV_ACCESS ON\n";
   OS << "\n";
 }
 

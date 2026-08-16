@@ -184,6 +184,44 @@ TEST_F(AArch64_FP, BfmmlaHighCUsesACLEAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
+TEST_F(AArch64_FP, FrintiPreservesDynamicFPCRInLLVMIR) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+  auto F = functionIR(r.out, "test_frinti_fpcr_a64");
+  ASSERT_FALSE(F.empty()) << r.out;
+
+  EXPECT_NE(F.find("@llvm.aarch64.get.fpcr"), std::string::npos) << F;
+  EXPECT_NE(F.find("@llvm.aarch64.set.fpcr"), std::string::npos) << F;
+  EXPECT_NE(F.find("@llvm.experimental.constrained.nearbyint.f64"),
+            std::string::npos)
+      << F;
+  EXPECT_NE(F.find("metadata !\"round.dynamic\""), std::string::npos) << F;
+  EXPECT_EQ(F.find("@llvm.roundeven.f64"), std::string::npos) << F;
+}
+
+TEST_F(AArch64_FP, FrintiHighCUsesClangBuiltinsAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("#pragma STDC FENV_ACCESS ON"), std::string::npos)
+      << source;
+  auto F = functionSource(source, "test_frinti_fpcr_a64");
+  ASSERT_FALSE(F.empty()) << source;
+  EXPECT_NE(F.find("__builtin_arm_rsr64(\"FPCR\")"), std::string::npos) << F;
+  EXPECT_NE(F.find("__builtin_arm_wsr64(\"FPCR\""), std::string::npos) << F;
+  EXPECT_NE(F.find("__builtin_elementwise_nearbyint"), std::string::npos) << F;
+  EXPECT_EQ(F.find("__neverd"), std::string::npos) << F;
+  EXPECT_EQ(F.find("neverd_mem_load_"), std::string::npos) << F;
+
+  expectPairedClangSyntax(cFile, source);
+}
+
 TEST_F(AArch64_FP, NoUnreachableInFunctions) {
     verifyLLVMIRNotContains(testObj(), "", "unreachable");
 }

@@ -174,12 +174,55 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                : Builder.CreateZExtOrTrunc(DstOut, OutTy);
   }
 
-  if (IC == I::A64_GetFPSR && Op.Output.Size > 0) {
-    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
-        Mod, llvm::Intrinsic::aarch64_get_fpsr);
-    llvm::Value *R = Builder.CreateCall(Fn, {}, "fpsr");
+  if ((IC == I::A64_GetFPSR || IC == I::A64_GetFPCR) && Op.Output.Size > 0) {
+    llvm::Intrinsic::ID IID = IC == I::A64_GetFPSR
+                                  ? llvm::Intrinsic::aarch64_get_fpsr
+                                  : llvm::Intrinsic::aarch64_get_fpcr;
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID);
+    llvm::Value *R =
+        Builder.CreateCall(Fn, {}, IC == I::A64_GetFPSR ? "fpsr" : "fpcr");
     auto *OutTy = sizeToType(Op.Output.Size);
     return (R->getType() == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
+  }
+
+  if (IC == I::A64_Frinti && Op.Output.Size > 0 && Op.NumInputs >= 3 &&
+      Op.Inputs[2].isConst()) {
+    unsigned ElemBytes = static_cast<unsigned>(Op.Inputs[2].ConstVal);
+    llvm::Type *FloatTy = nullptr;
+    switch (ElemBytes) {
+    case 2:
+      FloatTy = llvm::Type::getHalfTy(*Ctx);
+      break;
+    case 4:
+      FloatTy = llvm::Type::getFloatTy(*Ctx);
+      break;
+    case 8:
+      FloatTy = llvm::Type::getDoubleTy(*Ctx);
+      break;
+    default:
+      return nullptr;
+    }
+
+    auto *BitsTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);
+    llvm::Value *Lane = getVar(Op.Inputs[1], Builder);
+    if (Lane->getType()->isPointerTy())
+      Lane = Builder.CreatePtrToInt(Lane, BitsTy);
+    else if (Lane->getType()->isFloatingPointTy())
+      Lane = Builder.CreateBitCast(Lane, BitsTy);
+    if (Lane->getType() != BitsTy)
+      Lane = Builder.CreateZExtOrTrunc(Lane, BitsTy);
+
+    llvm::Value *FPValue = Builder.CreateBitCast(Lane, FloatTy);
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::experimental_constrained_nearbyint, {FloatTy});
+    llvm::Value *Rounded = Builder.CreateConstrainedFPCall(
+        Fn, {FPValue}, "frinti", llvm::RoundingMode::Dynamic,
+        llvm::fp::ebIgnore);
+    llvm::Value *Result = Builder.CreateBitCast(Rounded, BitsTy);
+    auto *OutTy = sizeToType(Op.Output.Size);
+    return Result->getType() == OutTy
+               ? Result
+               : Builder.CreateZExtOrTrunc(Result, OutTy);
   }
 
   // Scalar FP16 fixed-point conversions have a single architectural rounding

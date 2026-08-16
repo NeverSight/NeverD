@@ -155,7 +155,7 @@ bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
     Builder.CreateCall(Fn, {TagSource, Address});
     return true;
   }
-  if (IC == Intrinsic::A64_SetFPSR) {
+  if (IC == Intrinsic::A64_SetFPSR || IC == Intrinsic::A64_SetFPCR) {
     if (Op.NumInputs < 2)
       return true;
     auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
@@ -169,8 +169,10 @@ bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
     }
     if (Value->getType() != I64Ty)
       Value = Builder.CreateZExtOrTrunc(Value, I64Ty);
-    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
-        Mod, llvm::Intrinsic::aarch64_set_fpsr);
+    llvm::Intrinsic::ID IID = IC == Intrinsic::A64_SetFPSR
+                                  ? llvm::Intrinsic::aarch64_set_fpsr
+                                  : llvm::Intrinsic::aarch64_set_fpcr;
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID);
     Builder.CreateCall(Fn, {Value});
     return true;
   }

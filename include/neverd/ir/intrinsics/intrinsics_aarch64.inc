@@ -153,3 +153,7 @@ A64_Frecpx,
 // BF16 matrix multiply-accumulate.  The destination is four f32 accumulators;
 // both multiplicands are eight packed bfloat16 lanes.
 A64_Bfmmla,
+
+// FPCR-directed scalar rounding and control-register access.  FRINTI follows
+// the runtime FPCR rounding mode, so it must remain distinct from FRINTN.
+A64_Frinti, A64_GetFPCR, A64_SetFPCR,

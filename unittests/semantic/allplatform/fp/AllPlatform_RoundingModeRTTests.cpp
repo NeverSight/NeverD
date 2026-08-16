@@ -168,6 +168,19 @@ static const std::vector<RoundTripTC> kA64Round = {
    " long o; __builtin_memcpy(&o,&r,8); return o; }\n",
    {D_NEG25}, "Rounding", 1, "-fno-math-errno"},
 
+  // FRINTI under a non-default runtime FPCR mode.  The function changes and
+  // restores FPCR itself, so the lifted state transition is part of the test.
+  {"a64_frinti_toward_zero_fpcr",
+   "long a64_frinti_toward_zero_fpcr(long a){"
+   " double d,r; __builtin_memcpy(&d,&a,8); unsigned long saved,mode;"
+   " __asm__ volatile(\"mrs %0, fpcr\":\"=r\"(saved));"
+   " mode=(saved&~(3UL<<22))|(3UL<<22);"
+   " __asm__ volatile(\"msr fpcr, %0\"::\"r\"(mode));"
+   " __asm__ volatile(\"frinti %d0, %d1\":\"=w\"(r):\"w\"(d));"
+   " __asm__ volatile(\"msr fpcr, %0\"::\"r\"(saved));"
+   " long o; __builtin_memcpy(&o,&r,8); return o; }\n",
+   {0x3FF8000000000000ULL}, "Rounding", 1, "-fno-math-errno"},
+
   // FCVTNS v.4s — vector float -> i32, round to nearest even, per lane.
   {"a64_fcvtns4",
    "#include <arm_neon.h>\n"

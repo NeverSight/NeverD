@@ -97,6 +97,7 @@ public:
   std::map<std::string, const HighFunc *> DefinedFuncs;
   std::set<va_t> GotoTargets;
   bool HasCIntrinsics = false;
+  bool NeedsFEnvAccess = false;
   std::set<std::string> CIntrinsicNames;
   std::map<std::string, unsigned> MemoryTypes;
   std::set<std::pair<std::string, NdMemoryOrdering>> AtomicLoadTypes;

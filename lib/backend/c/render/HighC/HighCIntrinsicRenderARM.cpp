@@ -174,6 +174,27 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
            "(__builtin_bit_cast(" + FloatTy + ", (" + RawTy + ")(" + Ops[0] +
            "))))";
   }
+  case I::A64_Frinti: {
+    if (Ops.size() < 2)
+      return {};
+    const char *RawTy = nullptr;
+    const char *FloatTy = nullptr;
+    if (Ops[1] == "2") {
+      RawTy = "uint16_t";
+      FloatTy = "_Float16";
+    } else if (Ops[1] == "4") {
+      RawTy = "uint32_t";
+      FloatTy = "float";
+    } else if (Ops[1] == "8") {
+      RawTy = "uint64_t";
+      FloatTy = "double";
+    } else {
+      return {};
+    }
+    return std::string("__builtin_bit_cast(") + RawTy +
+           ", __builtin_elementwise_nearbyint(__builtin_bit_cast(" + FloatTy +
+           ", (" + RawTy + ")(" + Ops[0] + "))))";
+  }
   case I::A64_Fjcvtzs:
     if (Ops.empty())
       return {};

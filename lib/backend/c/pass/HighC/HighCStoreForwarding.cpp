@@ -102,6 +102,7 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
   });
 
   std::set<std::string> UsedParams;
+  std::set<std::string> ParamForwardedAddrs;
   for (auto &[Addr, Val] : State.StoreFwd) {
     auto ExprIt = AddrToValExpr.find(Addr);
     if (ExprIt != AddrToValExpr.end() &&
@@ -122,11 +123,77 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
           UsedParams.insert(P.Name);
           State.StoreFwd[Addr] = P.Name;
           State.StoreFwdDeps[Addr] = {P.Name};
+          ParamForwardedAddrs.insert(Addr);
           State.DeadVars.insert(VName);
           break;
         }
       }
     }
+  }
+
+  // A forwarded store value may itself contain a load from another forwarded
+  // stack slot.  The first scan renders values before StoreFwd is populated,
+  // so expand those nested loads now.  Otherwise the inner store is removed
+  // while its stale memory-load spelling survives inside the outer value.
+  for (size_t Iter = 0; Iter <= State.StoreFwd.size(); ++Iter) {
+    bool Changed = false;
+    for (const auto &[Addr, ValueExpr] : AddrToValExpr) {
+      auto FwdIt = State.StoreFwd.find(Addr);
+      if (FwdIt == State.StoreFwd.end() || !ValueExpr ||
+          ParamForwardedAddrs.count(Addr))
+        continue;
+      std::string Expanded = ExprFn(*ValueExpr);
+      if (Expanded != FwdIt->second) {
+        FwdIt->second = std::move(Expanded);
+        Changed = true;
+      }
+    }
+    if (!Changed)
+      break;
+  }
+
+  auto CollectForwardedDeps = [&](const HighExpr &Root) {
+    std::set<std::string> Deps;
+    std::set<const HighExpr *> Seen;
+    std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
+      if (!Seen.insert(&E).second)
+        return;
+      if (E.Kind == ExprKind::Load && !E.Operands.empty() &&
+          E.MemoryOrdering == NdMemoryOrdering::None) {
+        std::string LoadedAddr = ExprFn(*E.Operands[0]);
+        auto FwdIt = State.StoreFwd.find(LoadedAddr);
+        auto DepIt = State.StoreFwdDeps.find(LoadedAddr);
+        if (FwdIt != State.StoreFwd.end() &&
+            DepIt != State.StoreFwdDeps.end()) {
+          Deps.insert(DepIt->second.begin(), DepIt->second.end());
+          return;
+        }
+      }
+      if (E.Kind == ExprKind::Var)
+        Deps.insert(VarFn(E.Var));
+      for (const ExprPtr &Operand : E.Operands)
+        if (Operand)
+          Visit(*Operand);
+    };
+    Visit(Root);
+    return Deps;
+  };
+
+  // Keep liveness dependencies in sync with the transitive value expansion.
+  for (size_t Iter = 0; Iter <= State.StoreFwd.size(); ++Iter) {
+    bool Changed = false;
+    for (const auto &[Addr, ValueExpr] : AddrToValExpr) {
+      if (!State.StoreFwd.count(Addr) || !ValueExpr ||
+          ParamForwardedAddrs.count(Addr))
+        continue;
+      auto ExpandedDeps = CollectForwardedDeps(*ValueExpr);
+      if (ExpandedDeps != State.StoreFwdDeps[Addr]) {
+        State.StoreFwdDeps[Addr] = std::move(ExpandedDeps);
+        Changed = true;
+      }
+    }
+    if (!Changed)
+      break;
   }
 
   for (const auto &[Addr, _] : State.StoreFwd) {

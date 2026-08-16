@@ -77,6 +77,9 @@ C(Intrinsic::A64_FcvtzsFixed,  "__neverd_a64_fcvtzs_fixed");
 C(Intrinsic::A64_FcvtzuFixed,  "__neverd_a64_fcvtzu_fixed");
 C(Intrinsic::A64_GetFPSR,       "__builtin_arm_rsr64");
 C(Intrinsic::A64_SetFPSR,       "__builtin_arm_wsr64");
+C(Intrinsic::A64_Frinti,        "__builtin_elementwise_nearbyint");
+C(Intrinsic::A64_GetFPCR,       "__builtin_arm_rsr64");
+C(Intrinsic::A64_SetFPCR,       "__builtin_arm_wsr64");
 C(Intrinsic::A64_Pmull,        "vmull_p64");
 C(Intrinsic::A64_Pmul,         "vmul_p8");
 

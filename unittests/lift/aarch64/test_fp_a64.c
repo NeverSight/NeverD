@@ -139,6 +139,19 @@ unsigned long test_bfmmla_a64(unsigned long acc_lo, unsigned long acc_hi,
   return result_lo ^ result_hi;
 }
 
+double test_frinti_fpcr_a64(double input) {
+  unsigned long saved_fpcr;
+  unsigned long toward_zero_fpcr;
+  double result;
+
+  __asm__ volatile("mrs %0, fpcr" : "=r"(saved_fpcr));
+  toward_zero_fpcr = (saved_fpcr & ~(3UL << 22)) | (3UL << 22);
+  __asm__ volatile("msr fpcr, %0" : : "r"(toward_zero_fpcr));
+  __asm__ volatile("frinti %d0, %d1" : "=w"(result) : "w"(input));
+  __asm__ volatile("msr fpcr, %0" : : "r"(saved_fpcr));
+  return result;
+}
+
 double test_fmadd_a64(double a, double b, double c) {
     double result;
     __asm__ volatile (
