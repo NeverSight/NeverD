@@ -64,6 +64,69 @@ TEST_F(AArch64_Atomic, LdxrStxrLifted) {
     EXPECT_TRUE(has_store) << "Expected STORE for STXR";
 }
 
+TEST_F(AArch64_Atomic, ExclusiveOpsRemainTargetIntrinsics) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto Single = functionIR(r.out, "test_stxr_after_clrex");
+  ASSERT_FALSE(Single.empty()) << r.out;
+  EXPECT_NE(Single.find("@llvm.aarch64.ldxr"), std::string::npos) << Single;
+  EXPECT_NE(Single.find("@llvm.aarch64.clrex"), std::string::npos) << Single;
+  EXPECT_NE(Single.find("@llvm.aarch64.stxr"), std::string::npos) << Single;
+  EXPECT_EQ(Single.find("ret i64 0"), std::string::npos) << Single;
+
+  auto Pair = functionIR(r.out, "test_stxp_after_clrex");
+  ASSERT_FALSE(Pair.empty()) << r.out;
+  EXPECT_NE(Pair.find("@llvm.aarch64.ldxp"), std::string::npos) << Pair;
+  EXPECT_NE(Pair.find("@llvm.aarch64.clrex"), std::string::npos) << Pair;
+  EXPECT_NE(Pair.find("@llvm.aarch64.stxp"), std::string::npos) << Pair;
+  EXPECT_EQ(Pair.find("ret i64 0"), std::string::npos) << Pair;
+}
+
+TEST_F(AArch64_Atomic, HighCExclusiveOpsUseStandardBuiltinsAndCompile) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+
+  auto Single = functionC(source, "test_stxr_after_clrex");
+  ASSERT_FALSE(Single.empty()) << source;
+  auto Load = Single.find("__builtin_arm_ldrex");
+  auto Store = Single.find("__builtin_arm_strex");
+  EXPECT_NE(Load, std::string::npos) << Single;
+  EXPECT_NE(Single.find("__builtin_arm_clrex()"), std::string::npos) << Single;
+  ASSERT_NE(Store, std::string::npos) << Single;
+
+  auto LoadLine = Single.rfind('\n', Load);
+  LoadLine = LoadLine == std::string::npos ? 0 : LoadLine + 1;
+  auto Equals = Single.find('=', LoadLine);
+  ASSERT_NE(Equals, std::string::npos) << Single;
+  auto LoadedName = Single.substr(LoadLine, Equals - LoadLine);
+  LoadedName.erase(0, LoadedName.find_first_not_of(" \t"));
+  LoadedName.erase(LoadedName.find_last_not_of(" \t") + 1);
+  auto StoreEnd = Single.find('\n', Store);
+  auto StoreCall = Single.substr(Store, StoreEnd - Store);
+  EXPECT_EQ(StoreCall.find("(uintptr_t)(" + LoadedName + ")"),
+            std::string::npos)
+      << "STXR address must remain distinct from the loaded value: "
+      << StoreCall;
+
+  auto Pair = functionC(source, "test_stxp_after_clrex");
+  ASSERT_FALSE(Pair.empty()) << source;
+  EXPECT_NE(Pair.find("__builtin_arm_ldrex"), std::string::npos) << Pair;
+  EXPECT_NE(Pair.find("__builtin_arm_strex"), std::string::npos) << Pair;
+  EXPECT_NE(Pair.find("__int128"), std::string::npos) << Pair;
+  EXPECT_EQ(source.find("__neverd_a64_"), std::string::npos) << source;
+  EXPECT_EQ(source.find("__clrex()"), std::string::npos) << source;
+
+  expectPairedClangSyntax(cFile, source);
+}
+
 TEST_F(AArch64_Atomic, BarrierLifted) {
     auto r = liftToLowIR(testObj());
     ASSERT_EQ(r.exitCode, 0);

@@ -25,6 +25,25 @@ TEST_P(ARM32ExclPairRT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
 static const std::vector<RoundTripTC> kA64 = {
+  // CLREX invalidates the reservation: STXR must report failure and leave the
+  // word untouched.  Encoding both status and memory catches either half.
+  {"stxr_after_clrex",
+   "long f(long a){ unsigned long v=(unsigned long)a; unsigned long* p=&v;\n"
+   "  unsigned long x; unsigned w;\n"
+   "  __asm__ volatile(\"ldxr %1,[%2]\\n\\tadd %1,%1,#7\\n\\tclrex\\n\\tstxr %w0,%1,[%2]\"\n"
+   "    :\"=&r\"(w),\"=&r\"(x):\"r\"(p):\"memory\");\n"
+   "  return (long)(v+w*1000000u); }\n",
+   {0x2468ULL}, "ExclPair"},
+  // The paired form has the same failure contract for the whole 128-bit
+  // access: neither half may be written after CLREX.
+  {"stxp_after_clrex",
+   "long f(long a){ unsigned long b[2] __attribute__((aligned(16)));\n"
+   "  b[0]=(unsigned long)a; b[1]=(unsigned long)(a*3+7);\n"
+   "  unsigned long* p=b; unsigned long x0,x1; unsigned w;\n"
+   "  __asm__ volatile(\"ldxp %1,%2,[%3]\\n\\tadd %1,%1,#5\\n\\tadd %2,%2,#9\\n\\tclrex\\n\\tstxp %w0,%1,%2,[%3]\"\n"
+   "    :\"=&r\"(w),\"=&r\"(x0),\"=&r\"(x1):\"r\"(p):\"memory\");\n"
+   "  return (long)(b[0]*1000+b[1]+w*1000000u); }\n",
+   {0x1357ULL}, "ExclPair"},
   // LDXP/STXP: load pair, add, store pair back, read memory.  The pair buffer
   // MUST be 16-byte aligned: LDXP/STXP architecturally require quadword
   // alignment and fault otherwise (QEMU enforces MO_ALIGN_16).

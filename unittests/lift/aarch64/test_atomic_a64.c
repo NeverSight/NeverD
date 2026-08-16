@@ -55,6 +55,31 @@ struct pair64 {
     unsigned long high;
 };
 
+unsigned test_stxr_after_clrex(unsigned long *addr) {
+  unsigned long value;
+  unsigned status;
+  __asm__ volatile("ldxr %1, [%2]\n\t"
+                   "clrex\n\t"
+                   "stxr %w0, %1, [%2]"
+                   : "=&r"(status), "=&r"(value)
+                   : "r"(addr)
+                   : "memory");
+  return status;
+}
+
+unsigned test_stxp_after_clrex(struct pair64 *addr) {
+  unsigned long low;
+  unsigned long high;
+  unsigned status;
+  __asm__ volatile("ldxp %1, %2, [%3]\n\t"
+                   "clrex\n\t"
+                   "stxp %w0, %1, %2, [%3]"
+                   : "=&r"(status), "=&r"(low), "=&r"(high)
+                   : "r"(addr)
+                   : "memory");
+  return status;
+}
+
 #define DEFINE_SWPP_TEST(name, mnemonic)                                      \
     struct pair64 name(struct pair64 *addr, unsigned long low,                \
                        unsigned long high) {                                  \

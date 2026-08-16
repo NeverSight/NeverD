@@ -16,6 +16,7 @@
 #define DEBUG_TYPE "neverd-med-llvm-aarch64-value"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
@@ -31,6 +32,105 @@ llvm::Value *
 MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
+
+  const bool IsExclusiveLoad = IC == I::A64_Ldxr || IC == I::A64_Ldaxr ||
+                               IC == I::A64_Ldxp || IC == I::A64_Ldaxp;
+  if (IsExclusiveLoad && Op.Output.Size > 0 && Op.NumInputs >= 3) {
+    const unsigned Bytes = Op.Inputs[2].isConst()
+                               ? static_cast<unsigned>(Op.Inputs[2].ConstVal)
+                               : Op.Output.Size;
+    if (Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8 && Bytes != 16)
+      return nullptr;
+
+    llvm::Value *Address = getVar(Op.Inputs[1], Builder);
+    auto *OutTy = sizeToType(Op.Output.Size);
+    const bool Acquire = IC == I::A64_Ldaxr || IC == I::A64_Ldaxp;
+    const bool Pair = IC == I::A64_Ldxp || IC == I::A64_Ldaxp;
+    if (Pair && Bytes == 16) {
+      auto IID = Acquire ? llvm::Intrinsic::aarch64_ldaxp
+                         : llvm::Intrinsic::aarch64_ldxp;
+      auto *I128Ty = llvm::IntegerType::get(*Ctx, 128);
+      Address = getMemoryPtr(Address, I128Ty, Builder);
+      auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID);
+      auto *Result = Builder.CreateCall(Fn, {Address}, "ldxp");
+      llvm::Value *Lo = Builder.CreateExtractValue(Result, {0}, "ldxp.lo");
+      llvm::Value *Hi = Builder.CreateExtractValue(Result, {1}, "ldxp.hi");
+      llvm::Value *Packed = Builder.CreateOr(
+          Builder.CreateZExt(Lo, I128Ty),
+          Builder.CreateShl(Builder.CreateZExt(Hi, I128Ty), 64), "ldxp.pair");
+      return Packed->getType() == OutTy
+                 ? Packed
+                 : Builder.CreateZExtOrTrunc(Packed, OutTy);
+    }
+
+    auto *AccessTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
+    Address = getMemoryPtr(Address, AccessTy, Builder);
+    auto IID = Acquire ? llvm::Intrinsic::aarch64_ldaxr
+                       : llvm::Intrinsic::aarch64_ldxr;
+    auto *Fn =
+        llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {Address->getType()});
+    auto *Call = Builder.CreateCall(Fn, {Address}, "ldxr");
+    Call->addParamAttr(
+        0, llvm::Attribute::get(*Ctx, llvm::Attribute::ElementType, AccessTy));
+    llvm::Value *Result = Builder.CreateTruncOrBitCast(Call, AccessTy);
+    return Result->getType() == OutTy
+               ? Result
+               : Builder.CreateZExtOrTrunc(Result, OutTy);
+  }
+
+  const bool IsExclusiveStore = IC == I::A64_Stxr || IC == I::A64_Stlxr ||
+                                IC == I::A64_Stxp || IC == I::A64_Stlxp;
+  if (IsExclusiveStore && Op.Output.Size > 0 && Op.NumInputs >= 4) {
+    const unsigned Bytes = Op.Inputs[3].isConst()
+                               ? static_cast<unsigned>(Op.Inputs[3].ConstVal)
+                               : Op.Inputs[1].Size;
+    if (Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8 && Bytes != 16)
+      return nullptr;
+
+    llvm::Value *Value = getVar(Op.Inputs[1], Builder);
+    llvm::Value *Address = getVar(Op.Inputs[2], Builder);
+    const bool Release = IC == I::A64_Stlxr || IC == I::A64_Stlxp;
+    const bool Pair = IC == I::A64_Stxp || IC == I::A64_Stlxp;
+    llvm::Value *Status = nullptr;
+    if (Pair && Bytes == 16) {
+      auto IID = Release ? llvm::Intrinsic::aarch64_stlxp
+                         : llvm::Intrinsic::aarch64_stxp;
+      auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+      auto *I128Ty = llvm::IntegerType::get(*Ctx, 128);
+      if (Value->getType()->isPointerTy())
+        Value = Builder.CreatePtrToInt(Value, I128Ty);
+      else if (Value->getType() != I128Ty)
+        Value = Builder.CreateZExtOrTrunc(Value, I128Ty);
+      llvm::Value *Lo = Builder.CreateTrunc(Value, I64Ty);
+      llvm::Value *Hi =
+          Builder.CreateTrunc(Builder.CreateLShr(Value, 64), I64Ty);
+      Address = getMemoryPtr(Address, I128Ty, Builder);
+      auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID);
+      Status = Builder.CreateCall(Fn, {Lo, Hi, Address}, "stxp");
+    } else {
+      auto IID = Release ? llvm::Intrinsic::aarch64_stlxr
+                         : llvm::Intrinsic::aarch64_stxr;
+      auto *AccessTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
+      auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+      if (Value->getType()->isPointerTy())
+        Value = Builder.CreatePtrToInt(Value, AccessTy);
+      else if (Value->getType() != AccessTy)
+        Value = Builder.CreateZExtOrTrunc(Value, AccessTy);
+      Value = Builder.CreateZExtOrBitCast(Value, I64Ty);
+      Address = getMemoryPtr(Address, AccessTy, Builder);
+      auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID,
+                                                         {Address->getType()});
+      auto *Call = Builder.CreateCall(Fn, {Value, Address}, "stxr");
+      Call->addParamAttr(1, llvm::Attribute::get(
+                                *Ctx, llvm::Attribute::ElementType, AccessTy));
+      Status = Call;
+    }
+
+    auto *OutTy = sizeToType(Op.Output.Size);
+    return Status->getType() == OutTy
+               ? Status
+               : Builder.CreateZExtOrTrunc(Status, OutTy);
+  }
 
   if (IC == I::Ldg && Op.Output.Size > 0 && Op.NumInputs >= 3) {
     auto *PtrTy = llvm::PointerType::getUnqual(*Ctx);

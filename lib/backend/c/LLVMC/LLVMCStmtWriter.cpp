@@ -13,6 +13,8 @@
 
 #include "LLVMCWriter.h"
 
+#include "llvm/IR/IntrinsicsAArch64.h"
+
 namespace neverd {
 
 void LLVMCWriter::emitIndent(int N) { emitCIndent(OS, N); }
@@ -241,6 +243,12 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallInst &Call, int Indent) {
     emitIndent(Indent);
     OS << "__builtin_prefetch((void*)" << valueStr(Call.getArgOperand(0))
        << ");\n";
+    return true;
+  }
+  if (IID == llvm::Intrinsic::aarch64_clrex) {
+    emitIndent(Indent);
+    OS << "__builtin_arm_clrex();\n";
+    HasCIntrinsics = true;
     return true;
   }
   return false;

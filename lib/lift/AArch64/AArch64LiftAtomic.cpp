@@ -517,13 +517,18 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     NdVar Dst = operandWrite(ARM64.operands[0]);
     NdVar EA = operandEffAddr(S, ARM64.operands[1]);
     uint16_t Asz = accessSize(Dst.Size);
-    if (Asz < Dst.Size) {
-      NdVar L = S.makeTemp(Asz);
-      S.emit(NdOp::LOAD, L, {EA});
-      S.emit(NdOp::INT_ZEXT, Dst, {L});
-    } else {
-      S.emit(NdOp::LOAD, Dst, {EA});
-    }
+    NdVar Loaded = S.makeTemp(Asz);
+    bool Acquire = Insn->id == AARCH64_INS_LDAXR ||
+                   Insn->id == AARCH64_INS_LDAXRB ||
+                   Insn->id == AARCH64_INS_LDAXRH;
+    S.emitIntrinsic(Acquire ? Intrinsic::A64_Ldaxr : Intrinsic::A64_Ldxr,
+                    Loaded, {EA, NdVar::cst(Asz, 2)},
+                    Acquire ? NdMemoryOrdering::Acquire
+                            : NdMemoryOrdering::Relaxed);
+    if (Asz < Dst.Size)
+      S.emit(NdOp::INT_ZEXT, Dst, {Loaded});
+    else
+      S.emit(NdOp::COPY, Dst, {Loaded});
     break;
   }
   case AARCH64_INS_STXR:
@@ -535,11 +540,18 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     if (ARM64.op_count < 3)
       break;
     NdVar Status = operandWrite(ARM64.operands[0]);
-    NdVar Src = operandRead(S, ARM64.operands[1]);
+    NdVar SrcReg = operandRead(S, ARM64.operands[1]);
+    NdVar Src = S.makeTemp(SrcReg.Size);
+    S.emit(NdOp::COPY, Src, {SrcReg});
     NdVar EA = operandEffAddr(S, ARM64.operands[2]);
     NdVar SrcN = narrowToWidth(S, Src, accessSize(Src.Size));
-    S.emit(NdOp::STORE, {}, {EA, SrcN});
-    S.emit(NdOp::COPY, Status, {NdVar::cst(0, Status.Size)});
+    bool Release = Insn->id == AARCH64_INS_STLXR ||
+                   Insn->id == AARCH64_INS_STLXRB ||
+                   Insn->id == AARCH64_INS_STLXRH;
+    S.emitIntrinsic(Release ? Intrinsic::A64_Stlxr : Intrinsic::A64_Stxr,
+                    Status, {SrcN, EA, NdVar::cst(SrcN.Size, 2)},
+                    Release ? NdMemoryOrdering::Release
+                            : NdMemoryOrdering::Relaxed);
     break;
   }
 
@@ -585,10 +597,14 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     NdVar Dst1 = operandWrite(ARM64.operands[0]);
     NdVar Dst2 = operandWrite(ARM64.operands[1]);
     NdVar EA = operandEffAddr(S, ARM64.operands[2]);
-    S.emit(NdOp::LOAD, Dst1, {EA});
-    NdVar EA2 = S.makeTemp(8);
-    S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(Dst1.Size, 8)});
-    S.emit(NdOp::LOAD, Dst2, {EA2});
+    NdVar Pair = S.makeTemp(Dst1.Size + Dst2.Size);
+    bool Acquire = Insn->id == AARCH64_INS_LDAXP;
+    S.emitIntrinsic(Acquire ? Intrinsic::A64_Ldaxp : Intrinsic::A64_Ldxp, Pair,
+                    {EA, NdVar::cst(Pair.Size, 2)},
+                    Acquire ? NdMemoryOrdering::Acquire
+                            : NdMemoryOrdering::Relaxed);
+    S.emit(NdOp::SUBBYTES, Dst1, {Pair, NdVar::cst(0, 4)});
+    S.emit(NdOp::SUBBYTES, Dst2, {Pair, NdVar::cst(Dst1.Size, 4)});
     break;
   }
   case AARCH64_INS_STXP:
@@ -596,14 +612,20 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     if (ARM64.op_count < 4)
       break;
     NdVar Status = operandWrite(ARM64.operands[0]);
-    NdVar Src1 = operandRead(S, ARM64.operands[1]);
-    NdVar Src2 = operandRead(S, ARM64.operands[2]);
+    NdVar Src1Reg = operandRead(S, ARM64.operands[1]);
+    NdVar Src2Reg = operandRead(S, ARM64.operands[2]);
+    NdVar Src1 = S.makeTemp(Src1Reg.Size);
+    NdVar Src2 = S.makeTemp(Src2Reg.Size);
+    S.emit(NdOp::COPY, Src1, {Src1Reg});
+    S.emit(NdOp::COPY, Src2, {Src2Reg});
     NdVar EA = operandEffAddr(S, ARM64.operands[3]);
-    S.emit(NdOp::STORE, {}, {EA, Src1});
-    NdVar EA2 = S.makeTemp(8);
-    S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(Src1.Size, 8)});
-    S.emit(NdOp::STORE, {}, {EA2, Src2});
-    S.emit(NdOp::COPY, Status, {NdVar::cst(0, Status.Size)});
+    NdVar Pair = S.makeTemp(Src1.Size + Src2.Size);
+    S.emit(NdOp::CONCAT, Pair, {Src2, Src1});
+    bool Release = Insn->id == AARCH64_INS_STLXP;
+    S.emitIntrinsic(Release ? Intrinsic::A64_Stlxp : Intrinsic::A64_Stxp,
+                    Status, {Pair, EA, NdVar::cst(Pair.Size, 2)},
+                    Release ? NdMemoryOrdering::Release
+                            : NdMemoryOrdering::Relaxed);
     break;
   }
 

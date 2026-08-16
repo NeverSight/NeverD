@@ -232,6 +232,57 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
     return "__atomic_fetch_and((unsigned __int128 *)(uintptr_t)(" + Ops[1] +
            "), ~(unsigned __int128)(" + Ops[0] + "), " + Ordering + ")";
   }
+  case I::A64_Ldxr:
+  case I::A64_Ldaxr:
+  case I::A64_Ldxp:
+  case I::A64_Ldaxp: {
+    if (Ops.size() < 2)
+      return {};
+    const char *Type = nullptr;
+    if (Ops[1] == "1")
+      Type = "uint8_t";
+    else if (Ops[1] == "2")
+      Type = "uint16_t";
+    else if (Ops[1] == "4")
+      Type = "uint32_t";
+    else if (Ops[1] == "8")
+      Type = "uint64_t";
+    else if (Ops[1] == "16")
+      Type = "unsigned __int128";
+    else
+      return {};
+    const bool Acquire = Id == I::A64_Ldaxr || Id == I::A64_Ldaxp;
+    HasCIntrinsics = true;
+    return std::string(Acquire ? "__builtin_arm_ldaex"
+                               : "__builtin_arm_ldrex") +
+           "((const volatile " + Type + " *)(uintptr_t)(" + Ops[0] + "))";
+  }
+  case I::A64_Stxr:
+  case I::A64_Stlxr:
+  case I::A64_Stxp:
+  case I::A64_Stlxp: {
+    if (Ops.size() < 3)
+      return {};
+    const char *Type = nullptr;
+    if (Ops[2] == "1")
+      Type = "uint8_t";
+    else if (Ops[2] == "2")
+      Type = "uint16_t";
+    else if (Ops[2] == "4")
+      Type = "uint32_t";
+    else if (Ops[2] == "8")
+      Type = "uint64_t";
+    else if (Ops[2] == "16")
+      Type = "unsigned __int128";
+    else
+      return {};
+    const bool Release = Id == I::A64_Stlxr || Id == I::A64_Stlxp;
+    HasCIntrinsics = true;
+    return std::string(Release ? "__builtin_arm_stlex"
+                               : "__builtin_arm_strex") +
+           "((" + Type + ")(" + Ops[0] + "), (volatile " + Type +
+           " *)(uintptr_t)(" + Ops[1] + "))";
+  }
   case I::A64_Famax:
   case I::A64_Famin: {
     if (Ops.size() < 4)
@@ -277,6 +328,8 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
   case I::ArmIsb:
     return "__isb(0xF)";
   case I::A64_Clrex:
+    HasCIntrinsics = true;
+    return "__builtin_arm_clrex()";
   case I::ArmClrex:
     return "__clrex()";
   default:

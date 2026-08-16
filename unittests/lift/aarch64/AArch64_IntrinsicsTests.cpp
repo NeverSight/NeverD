@@ -245,8 +245,9 @@ TEST_F(AArch64_Intrinsics, LlvmC_HintsUseACLE) {
     auto content = readDecompiledFile("decompiled.c");
     EXPECT_TRUE(content.find("__yield()") != std::string::npos)
         << "Expected __yield() in LLVM C:\n" << content.substr(0, 3000);
-    EXPECT_TRUE(content.find("__clrex()") != std::string::npos)
-        << "Expected __clrex() in LLVM C:\n" << content.substr(0, 3000);
+    EXPECT_TRUE(content.find("__builtin_arm_clrex()") != std::string::npos)
+        << "Expected __builtin_arm_clrex() in LLVM C:\n"
+        << content.substr(0, 3000);
 }
 
 TEST_F(AArch64_Intrinsics, LlvmC_CleanOutput) {

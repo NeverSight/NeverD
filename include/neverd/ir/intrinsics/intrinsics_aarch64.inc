@@ -162,3 +162,8 @@ A64_Frinti, A64_GetFPCR, A64_SetFPCR,
 // High-C renders the standard __atomic_fetch_and builtin; the distinct IDs
 // retain the architectural acquire/release ordering through textual IR.
 A64_Ldclrp, A64_Ldclrpa, A64_Ldclrpal, A64_Ldclrpl,
+
+// Exclusive monitor operations.  These map directly to LLVM's architectural
+// AArch64 intrinsics and to the standard Arm compiler builtins in High-C.
+A64_Ldxr, A64_Ldaxr, A64_Stxr, A64_Stlxr,
+A64_Ldxp, A64_Ldaxp, A64_Stxp, A64_Stlxp,

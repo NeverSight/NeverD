@@ -73,3 +73,13 @@ A(Intrinsic::A64_Ldclrp,      "ldclrp");
 A(Intrinsic::A64_Ldclrpa,     "ldclrpa");
 A(Intrinsic::A64_Ldclrpal,    "ldclrpal");
 A(Intrinsic::A64_Ldclrpl,     "ldclrpl");
+
+// Exclusive monitor operations (rendered as compiler builtins in High-C).
+A(Intrinsic::A64_Ldxr,         "ldxr");
+A(Intrinsic::A64_Ldaxr,        "ldaxr");
+A(Intrinsic::A64_Stxr,         "stxr");
+A(Intrinsic::A64_Stlxr,        "stlxr");
+A(Intrinsic::A64_Ldxp,         "ldxp");
+A(Intrinsic::A64_Ldaxp,        "ldaxp");
+A(Intrinsic::A64_Stxp,         "stxp");
+A(Intrinsic::A64_Stlxp,        "stlxp");

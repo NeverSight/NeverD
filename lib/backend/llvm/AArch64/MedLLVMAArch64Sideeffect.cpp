@@ -121,10 +121,9 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
     return true;
   }
   case I::A64_Clrex: {
-    auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
-    auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
-    auto *IA = llvm::InlineAsm::get(AsmFnTy, "clrex", "~{memory}", true);
-    Builder.CreateCall(IA, {});
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_clrex);
+    Builder.CreateCall(Fn, {});
     return true;
   }
   default:

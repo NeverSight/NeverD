@@ -56,3 +56,14 @@ SIDEEFFECT(Intrinsic::A64_Ldclrp);
 SIDEEFFECT(Intrinsic::A64_Ldclrpa);
 SIDEEFFECT(Intrinsic::A64_Ldclrpal);
 SIDEEFFECT(Intrinsic::A64_Ldclrpl);
+
+// Exclusive loads establish the local monitor; exclusive stores consume it
+// and may mutate memory.  Both effects are observable even if outputs die.
+SIDEEFFECT(Intrinsic::A64_Ldxr);
+SIDEEFFECT(Intrinsic::A64_Ldaxr);
+SIDEEFFECT(Intrinsic::A64_Stxr);
+SIDEEFFECT(Intrinsic::A64_Stlxr);
+SIDEEFFECT(Intrinsic::A64_Ldxp);
+SIDEEFFECT(Intrinsic::A64_Ldaxp);
+SIDEEFFECT(Intrinsic::A64_Stxp);
+SIDEEFFECT(Intrinsic::A64_Stlxp);

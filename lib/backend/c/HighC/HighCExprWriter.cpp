@@ -41,7 +41,8 @@ std::string HighCWriter::varName(const MedVar &V) {
   case MedVar::EHSelector:
     return "eh_selector";
   case MedVar::Temp:
-    return "t" + std::to_string(V.Id);
+    return "t" + std::to_string(V.Id) +
+           (V.SSAVer == 0 ? "" : "_" + std::to_string(V.SSAVer));
   default:
     if (V.Id < 0)
       return "v_" + std::to_string(static_cast<unsigned>(-V.Id)) + "_" +
