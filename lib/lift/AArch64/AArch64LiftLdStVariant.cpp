@@ -245,7 +245,18 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     S.emit(NdOp::LOAD, Dst, {EA});
     break;
   }
-  case AARCH64_INS_LDIAPP:
+  case AARCH64_INS_LDIAPP: {
+    if (ARM64.op_count < 3)
+      break;
+    NdVar LowDst = L.operandWrite(ARM64.operands[0]);
+    NdVar HighDst = L.operandWrite(ARM64.operands[1]);
+    NdVar EA = L.operandEffAddr(S, ARM64.operands[2]);
+    NdVar Pair = S.makeTemp(LowDst.Size + HighDst.Size);
+    S.emit(NdOp::LOAD, Pair, {EA}, NdMemoryOrdering::Acquire);
+    S.emit(NdOp::SUBBYTES, LowDst, {Pair, NdVar::cst(0, 4)});
+    S.emit(NdOp::SUBBYTES, HighDst, {Pair, NdVar::cst(LowDst.Size, 4)});
+    break;
+  }
   case AARCH64_INS_LDAP1: {
     if (ARM64.op_count < 2)
       break;

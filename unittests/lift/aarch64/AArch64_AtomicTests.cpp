@@ -12,8 +12,8 @@ protected:
 
     auto syntax = exec(NEVERD_TEST_CLANG,
                        {"-target", "aarch64-none-elf", "-ffreestanding",
-                        "-march=armv9.4-a+lse128+the+d128", "-std=gnu11", "-I",
-                        tmp().string(), "-fsyntax-only", CFile.string()});
+                        "-march=armv9.4-a+lse128+the+d128+rcpc3", "-std=gnu11",
+                        "-I", tmp().string(), "-fsyntax-only", CFile.string()});
     EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << Source;
   }
 };
@@ -419,6 +419,45 @@ TEST_F(AArch64_Atomic, CasAndCaspHighCUseStandardCompareExchangeAndCompile) {
   EXPECT_NE(
       functionC(source, "test_casl").find("__ATOMIC_RELEASE, __ATOMIC_RELAXED"),
       std::string::npos);
+
+  expectPairedClangSyntax(cFile, source);
+}
+
+TEST_F(AArch64_Atomic, LdiappUsesOneAcquireI128LoadAndKeepsHighHalf) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto F = functionIR(r.out, "test_ldiapp_second");
+  ASSERT_FALSE(F.empty()) << r.out;
+  EXPECT_NE(F.find("load atomic i128"), std::string::npos) << F;
+  EXPECT_NE(F.find("acquire, align 16"), std::string::npos) << F;
+  EXPECT_NE(F.find("lshr i128"), std::string::npos) << F;
+  EXPECT_NE(F.find(", 64"), std::string::npos) << F;
+  EXPECT_NE(F.find("ret i64"), std::string::npos) << F;
+}
+
+TEST_F(AArch64_Atomic, LdiappHighCUsesOneAcquireI128LoadAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("unsigned __int128"), std::string::npos) << source;
+  EXPECT_NE(source.find("__atomic_load_n"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_ACQUIRE"), std::string::npos) << source;
+
+  auto F = functionC(source, "test_ldiapp_second");
+  ASSERT_FALSE(F.empty()) << source;
+  EXPECT_NE(F.find("__int128"), std::string::npos) << F;
+  auto Load = F.find("neverd_mem_load_acquire_");
+  ASSERT_NE(Load, std::string::npos) << F;
+  EXPECT_EQ(F.find("neverd_mem_load_acquire_", Load + 1), std::string::npos)
+      << "LDIAPP must be evaluated exactly once:\n"
+      << F;
 
   expectPairedClangSyntax(cFile, source);
 }

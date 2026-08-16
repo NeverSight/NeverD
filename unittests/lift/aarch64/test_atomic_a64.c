@@ -174,6 +174,12 @@ test_stadd(unsigned long *address, unsigned long value) {
   __asm__ volatile("stadd x1, [x0]\n\tmov x0, xzr\n\tret");
 }
 
+__attribute__((naked, noinline, used)) unsigned long
+test_ldiapp_second(unsigned long unused0, unsigned long unused1,
+                   const struct pair64 *address) {
+  __asm__ volatile("ldiapp x0, x1, [x2]\n\tmov x0, x1\n\tret");
+}
+
 __attribute__((naked, noinline)) void test_rcwcasp_pair(void) {
   __asm__ volatile("rcwcasp x0, x1, x2, x3, [x4]\n\t"
                    "ret"
