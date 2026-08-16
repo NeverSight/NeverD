@@ -104,6 +104,9 @@ static std::set<std::string> scanIntrinsicPatterns(llvm::Module &Mod) {
               Seen.insert(kUsesHalfMarker);
               break;
             }
+        if (auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Inst))
+          if (RMW->getValOperand()->getType()->isIntegerTy(128))
+            Seen.insert(kUsesLSE128Marker);
       }
   return Seen;
 }

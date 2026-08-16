@@ -30,6 +30,10 @@ namespace neverd {
 /// real symbol name.
 inline constexpr const char *kUsesHalfMarker = "__nd_uses_half";
 
+/// Synthetic marker for an i128 atomicrmw.  AArch64 needs FEAT_LSE128 to
+/// select the native pair RMW instructions instead of an LL/SC expansion.
+inline constexpr const char *kUsesLSE128Marker = "__nd_uses_lse128";
+
 /// True if any scanned intrinsic/function name contains \p Pat.
 inline bool anyContains(const std::set<std::string> &Names, const char *Pat) {
   for (const auto &N : Names)

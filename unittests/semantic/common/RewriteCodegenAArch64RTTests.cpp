@@ -76,6 +76,45 @@ TEST(RewriteCodegen_AArch64, MTEIntrinsicsEnableMTE) {
   ASSERT_FALSE(Text->Bytes.empty());
 }
 
+TEST(RewriteCodegen_AArch64, I128AtomicAndEnablesLSE128) {
+  ensureLLVMTargets();
+
+  llvm::LLVMContext Ctx;
+  auto Mod = std::make_unique<llvm::Module>("lse128", Ctx);
+  Mod->setTargetTriple(llvm::Triple("aarch64-unknown-linux-elf"));
+  auto *I128Ty = llvm::IntegerType::get(Ctx, 128);
+  auto *PtrTy = llvm::PointerType::getUnqual(Ctx);
+  auto *FnTy = llvm::FunctionType::get(I128Ty, {PtrTy, I128Ty}, false);
+  auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                    "atomic_clear_pair", *Mod);
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", Fn);
+  llvm::IRBuilder<> Builder(Entry);
+  auto Arg = Fn->arg_begin();
+  llvm::Value *Address = &*Arg++;
+  llvm::Value *ClearMask = &*Arg;
+  auto *Old = Builder.CreateAtomicRMW(
+      llvm::AtomicRMWInst::And, Address, Builder.CreateNot(ClearMask),
+      llvm::MaybeAlign(16), llvm::AtomicOrdering::AcquireRelease);
+  Builder.CreateRet(Old);
+
+  auto RR = compileRewrite(*Mod, Arch::AArch64, BinaryFormat::ELF);
+  ASSERT_FALSE(RR.Sections.empty());
+  ASSERT_TRUE(RR.Unresolved.empty());
+  auto *Text = findTextSection(RR);
+  ASSERT_NE(Text, nullptr);
+  ASSERT_FALSE(Text->Bytes.empty());
+  bool HasLdclrp = false;
+  for (size_t I = 0; I + 4 <= Text->Bytes.size(); I += 4) {
+    uint32_t Word = static_cast<uint32_t>(Text->Bytes[I]) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 1]) << 8) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 2]) << 16) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 3]) << 24);
+    // LSE128 LDCLRP{,A,L,AL}: fixed opcode bits, ignoring ordering/registers.
+    HasLdclrp |= (Word & 0xff20fc00U) == 0x19201000U;
+  }
+  EXPECT_TRUE(HasLdclrp) << "expected a native LDCLRP-family instruction";
+}
+
 TEST(RewriteCodegen_AArch64, AddFunction) {
   ensureLLVMTargets();
 

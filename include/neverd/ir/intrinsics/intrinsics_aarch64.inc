@@ -157,3 +157,8 @@ A64_Bfmmla,
 // FPCR-directed scalar rounding and control-register access.  FRINTI follows
 // the runtime FPCR rounding mode, so it must remain distinct from FRINTN.
 A64_Frinti, A64_GetFPCR, A64_SetFPCR,
+
+// FEAT_LSE128 pair bit-clear.  LLVM lowers these to an i128 atomicrmw and
+// High-C renders the standard __atomic_fetch_and builtin; the distinct IDs
+// retain the architectural acquire/release ordering through textual IR.
+A64_Ldclrp, A64_Ldclrpa, A64_Ldclrpal, A64_Ldclrpl,

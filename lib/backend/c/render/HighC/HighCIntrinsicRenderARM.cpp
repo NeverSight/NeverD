@@ -216,6 +216,22 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
            "), (unsigned __int128)(" + Ops[1] + "), (void *)(uintptr_t)(" +
            Ops[2] + "))";
   }
+  case I::A64_Ldclrp:
+  case I::A64_Ldclrpa:
+  case I::A64_Ldclrpal:
+  case I::A64_Ldclrpl: {
+    if (Ops.size() < 2)
+      return {};
+    const char *Ordering = "__ATOMIC_RELAXED";
+    if (Id == I::A64_Ldclrpa)
+      Ordering = "__ATOMIC_ACQUIRE";
+    else if (Id == I::A64_Ldclrpal)
+      Ordering = "__ATOMIC_ACQ_REL";
+    else if (Id == I::A64_Ldclrpl)
+      Ordering = "__ATOMIC_RELEASE";
+    return "__atomic_fetch_and((unsigned __int128 *)(uintptr_t)(" + Ops[1] +
+           "), ~(unsigned __int128)(" + Ops[0] + "), " + Ordering + ")";
+  }
   case I::A64_Famax:
   case I::A64_Famin: {
     if (Ops.size() < 4)

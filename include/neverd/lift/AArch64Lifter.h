@@ -55,9 +55,11 @@ public:
   struct LiftState : LiftStateBase {
     using LiftStateBase::LiftStateBase;
 
-    void emitIntrinsic(Intrinsic Id, NdVar Out = NdVar::reg(a64reg::X0, 8),
-                       std::initializer_list<NdVar> Extra = {}) {
-      LiftStateBase::emitIntrinsic(Id, Out, Extra);
+    void
+    emitIntrinsic(Intrinsic Id, NdVar Out = NdVar::reg(a64reg::X0, 8),
+                  std::initializer_list<NdVar> Extra = {},
+                  NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) {
+      LiftStateBase::emitIntrinsic(Id, Out, Extra, MemoryOrdering);
     }
   };
 

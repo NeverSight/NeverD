@@ -75,6 +75,53 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   switch (Insn->id) {
 
   // ========================================================================
+  // FEAT_LSE128 LDCLRP — atomically clear a pair of 64-bit words and return
+  // the old pair in the same two registers.  This cannot share the scalar
+  // LDCLR prologue: the architectural memory access is one aligned i128 RMW.
+  // ========================================================================
+  case AARCH64_INS_LDCLRP:
+  case AARCH64_INS_LDCLRPA:
+  case AARCH64_INS_LDCLRPAL:
+  case AARCH64_INS_LDCLRPL: {
+    if (ARM64.op_count < 3)
+      break;
+
+    NdVar LowReg = operandRead(S, ARM64.operands[0]);
+    NdVar HighReg = operandRead(S, ARM64.operands[1]);
+    NdVar LowSrc = S.makeTemp(LowReg.Size);
+    NdVar HighSrc = S.makeTemp(HighReg.Size);
+    S.emit(NdOp::COPY, LowSrc, {LowReg});
+    S.emit(NdOp::COPY, HighSrc, {HighReg});
+
+    NdVar ClearPair = S.makeTemp(LowSrc.Size + HighSrc.Size);
+    S.emit(NdOp::CONCAT, ClearPair, {HighSrc, LowSrc});
+    NdVar EA = operandEffAddr(S, ARM64.operands[2]);
+    NdVar OldPair = S.makeTemp(ClearPair.Size);
+
+    Intrinsic Id = Intrinsic::A64_Ldclrp;
+    if (Insn->id == AARCH64_INS_LDCLRPA)
+      Id = Intrinsic::A64_Ldclrpa;
+    else if (Insn->id == AARCH64_INS_LDCLRPAL)
+      Id = Intrinsic::A64_Ldclrpal;
+    else if (Insn->id == AARCH64_INS_LDCLRPL)
+      Id = Intrinsic::A64_Ldclrpl;
+    NdMemoryOrdering Ordering = NdMemoryOrdering::Relaxed;
+    if (Insn->id == AARCH64_INS_LDCLRPA)
+      Ordering = NdMemoryOrdering::Acquire;
+    else if (Insn->id == AARCH64_INS_LDCLRPAL)
+      Ordering = NdMemoryOrdering::AcquireRelease;
+    else if (Insn->id == AARCH64_INS_LDCLRPL)
+      Ordering = NdMemoryOrdering::Release;
+    S.emitIntrinsic(Id, OldPair, {ClearPair, EA}, Ordering);
+
+    NdVar LowDst = operandWrite(ARM64.operands[0]);
+    NdVar HighDst = operandWrite(ARM64.operands[1]);
+    S.emit(NdOp::SUBBYTES, LowDst, {OldPair, NdVar::cst(0, 4)});
+    S.emit(NdOp::SUBBYTES, HighDst, {OldPair, NdVar::cst(LowDst.Size, 4)});
+    break;
+  }
+
+  // ========================================================================
   // Atomic LD{CLR,EOR,SET,SMAX,SMIN,UMAX,UMIN} — all ordering variants.
   // Pattern: old = *S.Addr; *S.Addr = op(old, Src); Dst = old.
   // ========================================================================
@@ -89,11 +136,7 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case AARCH64_INS_LDCLRH:
   case AARCH64_INS_LDCLRAH:
   case AARCH64_INS_LDCLRALH:
-  case AARCH64_INS_LDCLRLH:
-  case AARCH64_INS_LDCLRP:
-  case AARCH64_INS_LDCLRPA:
-  case AARCH64_INS_LDCLRPAL:
-  case AARCH64_INS_LDCLRPL: {
+  case AARCH64_INS_LDCLRLH: {
     if (ARM64.op_count < 2)
       break;
     NdVar EA, OldVal, SrcN;

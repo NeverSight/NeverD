@@ -72,9 +72,11 @@ struct LiftStateBase {
   }
 
   void emitIntrinsic(Intrinsic Id, NdVar Out,
-                     std::initializer_list<NdVar> Extra = {}) {
+                     std::initializer_list<NdVar> Extra = {},
+                     NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None) {
     LowOp Op;
     Op.Opcode = NdOp::INTRINSIC;
+    Op.MemoryOrdering = MemoryOrdering;
     Op.Addr = Addr;
     Op.Seq = Seq++;
     Op.Output = Out;

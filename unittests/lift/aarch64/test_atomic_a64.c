@@ -70,6 +70,21 @@ DEFINE_SWPP_TEST(test_swppa, "swppa")
 DEFINE_SWPP_TEST(test_swppal, "swppal")
 DEFINE_SWPP_TEST(test_swppl, "swppl")
 
+#define DEFINE_LDCLRP_TEST(name, mnemonic)                                     \
+  struct pair64 name(struct pair64 *addr, unsigned long low,                   \
+                     unsigned long high) {                                     \
+    __asm__ volatile(mnemonic " %0, %1, [%2]"                                  \
+                     : "+r"(low), "+r"(high)                                   \
+                     : "r"(addr)                                               \
+                     : "memory");                                              \
+    return (struct pair64){low, high};                                         \
+  }
+
+DEFINE_LDCLRP_TEST(test_ldclrp, "ldclrp")
+DEFINE_LDCLRP_TEST(test_ldclrpa, "ldclrpa")
+DEFINE_LDCLRP_TEST(test_ldclrpal, "ldclrpal")
+DEFINE_LDCLRP_TEST(test_ldclrpl, "ldclrpl")
+
 __attribute__((naked, noinline)) void test_rcwcasp_pair(void) {
   __asm__ volatile("rcwcasp x0, x1, x2, x3, [x4]\n\t"
                    "ret"

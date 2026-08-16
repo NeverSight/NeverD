@@ -67,3 +67,9 @@ A(Intrinsic::A64_Rcwscasp,   "rcwscasp");
 A(Intrinsic::A64_Rcwscaspa,  "rcwscaspa");
 A(Intrinsic::A64_Rcwscaspal, "rcwscaspal");
 A(Intrinsic::A64_Rcwscaspl,  "rcwscaspl");
+
+// FEAT_LSE128 pair bit-clear (rendered as standard atomics in High-C).
+A(Intrinsic::A64_Ldclrp,      "ldclrp");
+A(Intrinsic::A64_Ldclrpa,     "ldclrpa");
+A(Intrinsic::A64_Ldclrpal,    "ldclrpal");
+A(Intrinsic::A64_Ldclrpl,     "ldclrpl");

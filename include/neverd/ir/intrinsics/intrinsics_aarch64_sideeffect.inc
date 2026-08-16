@@ -49,3 +49,10 @@ SIDEEFFECT(Intrinsic::A64_Rcwscasp);
 SIDEEFFECT(Intrinsic::A64_Rcwscaspa);
 SIDEEFFECT(Intrinsic::A64_Rcwscaspal);
 SIDEEFFECT(Intrinsic::A64_Rcwscaspl);
+
+// LSE128 pair bit-clear mutates the addressed 16-byte object even if the old
+// pair returned in the two source registers is unused.
+SIDEEFFECT(Intrinsic::A64_Ldclrp);
+SIDEEFFECT(Intrinsic::A64_Ldclrpa);
+SIDEEFFECT(Intrinsic::A64_Ldclrpal);
+SIDEEFFECT(Intrinsic::A64_Ldclrpl);

@@ -99,6 +99,34 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
         "rcwcasp.old");
   }
 
+  if ((IC == I::A64_Ldclrp || IC == I::A64_Ldclrpa || IC == I::A64_Ldclrpal ||
+       IC == I::A64_Ldclrpl) &&
+      Op.Output.Size == 16 && Op.NumInputs >= 3) {
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    auto *I128Ty = llvm::IntegerType::get(*Ctx, 128);
+    auto coerceI128 = [&](llvm::Value *V) -> llvm::Value * {
+      if (V->getType()->isPointerTy())
+        V = Builder.CreatePtrToInt(V, I64Ty);
+      return V->getType() == I128Ty ? V : Builder.CreateZExtOrTrunc(V, I128Ty);
+    };
+
+    llvm::Value *ClearMask = coerceI128(getVar(Op.Inputs[1], Builder));
+    llvm::Value *Address = getVar(Op.Inputs[2], Builder);
+    Address = getMemoryPtr(Address, I128Ty, Builder);
+
+    llvm::AtomicOrdering Ordering = llvm::AtomicOrdering::Monotonic;
+    if (IC == I::A64_Ldclrpa)
+      Ordering = llvm::AtomicOrdering::Acquire;
+    else if (IC == I::A64_Ldclrpal)
+      Ordering = llvm::AtomicOrdering::AcquireRelease;
+    else if (IC == I::A64_Ldclrpl)
+      Ordering = llvm::AtomicOrdering::Release;
+
+    return Builder.CreateAtomicRMW(llvm::AtomicRMWInst::And, Address,
+                                   Builder.CreateNot(ClearMask),
+                                   llvm::MaybeAlign(16), Ordering);
+  }
+
   if (IC == I::A64_MopsCpyFP && Op.Output.Size > 0 && Op.NumInputs >= 4) {
     auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
     auto coerceI64 = [&](llvm::Value *V) -> llvm::Value * {

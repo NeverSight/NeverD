@@ -12,7 +12,7 @@ protected:
 
     auto syntax = exec(NEVERD_TEST_CLANG,
                        {"-target", "aarch64-none-elf", "-ffreestanding",
-                        "-march=armv9.4-a+the+d128", "-std=gnu11", "-I",
+                        "-march=armv9.4-a+lse128+the+d128", "-std=gnu11", "-I",
                         tmp().string(), "-fsyntax-only", CFile.string()});
     EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << Source;
   }
@@ -31,6 +31,19 @@ static std::string functionIR(const std::string &IR, const std::string &Name) {
   if (Begin == std::string::npos || End == std::string::npos)
     return {};
   return IR.substr(Begin, End + 2 - Begin);
+}
+
+static std::string functionC(const std::string &Source,
+                             const std::string &Name) {
+  auto NamePos = Source.find(Name + "(");
+  if (NamePos == std::string::npos)
+    return {};
+  auto Begin = Source.rfind('\n', NamePos);
+  auto End = Source.find("\n}", NamePos);
+  if (End == std::string::npos)
+    return {};
+  Begin = Begin == std::string::npos ? 0 : Begin + 1;
+  return Source.substr(Begin, End + 2 - Begin);
 }
 
 TEST_F(AArch64_Atomic, AllStagesPass) {
@@ -122,6 +135,77 @@ TEST_F(AArch64_Atomic, SwppUsesOrderedAtomicI128Exchange) {
     EXPECT_NE(r.out.find("acquire, align 16"), std::string::npos) << r.out;
     EXPECT_NE(r.out.find("release, align 16"), std::string::npos) << r.out;
     EXPECT_NE(r.out.find("acq_rel, align 16"), std::string::npos) << r.out;
+}
+
+TEST_F(AArch64_Atomic, LdclrpUsesOrderedAtomicI128And) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  const struct {
+    const char *Name;
+    const char *Ordering;
+  } Cases[] = {{"test_ldclrp", "monotonic"},
+               {"test_ldclrpa", "acquire"},
+               {"test_ldclrpal", "acq_rel"},
+               {"test_ldclrpl", "release"}};
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionIR(r.out, Case.Name);
+    ASSERT_FALSE(F.empty()) << r.out;
+    EXPECT_NE(F.find("atomicrmw and ptr"), std::string::npos) << F;
+    EXPECT_NE(F.find("i128"), std::string::npos) << F;
+    EXPECT_NE(F.find(std::string(Case.Ordering) + ", align 16"),
+              std::string::npos)
+        << F;
+    EXPECT_NE(F.find("ret { i64, i64 }"), std::string::npos) << F;
+  }
+}
+
+TEST_F(AArch64_Atomic, LdclrpHighCUsesStandardAtomicFetchAndAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("__atomic_fetch_and"), std::string::npos) << source;
+  EXPECT_NE(source.find("unsigned __int128"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_RELAXED"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_ACQUIRE"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_ACQ_REL"), std::string::npos) << source;
+  EXPECT_EQ(source.find("__neverd_a64_ldclrp"), std::string::npos) << source;
+
+  for (const char *Name :
+       {"test_ldclrp", "test_ldclrpa", "test_ldclrpal", "test_ldclrpl"}) {
+    SCOPED_TRACE(Name);
+    auto F = functionC(source, Name);
+    ASSERT_FALSE(F.empty()) << source;
+    auto Atomic = F.find("__atomic_fetch_and");
+    ASSERT_NE(Atomic, std::string::npos) << F;
+    auto LineEnd = F.find('\n', Atomic);
+    auto Call = F.substr(Atomic, LineEnd - Atomic);
+    const bool UsesParams = Call.find("arg1") != std::string::npos &&
+                            Call.find("arg2") != std::string::npos;
+    const bool UsesSavedParams = Call.find("v0 + 16") != std::string::npos &&
+                                 Call.find("v0 + 8") != std::string::npos;
+    EXPECT_TRUE(UsesParams || UsesSavedParams) << Call;
+
+    auto LineBegin = F.rfind('\n', Atomic);
+    LineBegin = LineBegin == std::string::npos ? 0 : LineBegin + 1;
+    auto Equals = F.find('=', LineBegin);
+    ASSERT_NE(Equals, std::string::npos) << F;
+    auto Lhs = F.substr(LineBegin, Equals - LineBegin);
+    Lhs.erase(0, Lhs.find_first_not_of(" \t"));
+    Lhs.erase(Lhs.find_last_not_of(" \t") + 1);
+    EXPECT_EQ(Call.find(Lhs), std::string::npos)
+        << "atomic clear mask must not use its own result: " << Call;
+  }
+
+  expectPairedClangSyntax(cFile, source);
 }
 
 TEST_F(AArch64_Atomic, RcwcaspUsesAddressOperandAndBothRegisterPairs) {

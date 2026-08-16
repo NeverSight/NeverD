@@ -26,6 +26,10 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names) {
   // as +sha3/+sm4.)
   if (Has(kUsesHalfMarker))
     F += ",+fullfp16";
+  // FEAT_LSE128 provides the pair exchange/set/clear instructions selected
+  // from i128 atomicrmw operations.
+  if (Has(kUsesLSE128Marker))
+    F += ",+lse128";
   // PMULL64 (@llvm.aarch64.neon.pmull64) is gated behind the AES/PMULL feature
   // even though it lives under the neon namespace; without +aes the backend
   // cannot select AArch64ISD::PMULL and aborts.  (p8 pmull is base NEON.)
