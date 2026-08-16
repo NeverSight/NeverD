@@ -10,10 +10,41 @@ protected:
     shim << "void *memcpy(void *, const void *, __SIZE_TYPE__);\n";
     shim.close();
 
+    // Host clang (CI prebuilt LLVM has no clang) does not know the paired
+    // FEAT_THE rcwcasp builtins.  Keep HighC emitting them, and only stub
+    // the names for syntax-only checking.
+    auto builtinHeader = tmpFile("neverd_rcwcasp_builtins.h");
+    std::ofstream builtins(builtinHeader);
+    ASSERT_TRUE(builtins.good());
+    builtins << "#ifndef __has_builtin\n"
+                "#define __has_builtin(x) 0\n"
+                "#endif\n"
+                "#if !__has_builtin(__builtin_arm_rcwcasp)\n"
+                "#define __builtin_arm_rcwcasp(cmp, swp, ptr) "
+                "((void)(cmp), (void)(swp), (void)(ptr), (unsigned __int128)0)\n"
+                "#define __builtin_arm_rcwcaspa(cmp, swp, ptr) "
+                "__builtin_arm_rcwcasp((cmp), (swp), (ptr))\n"
+                "#define __builtin_arm_rcwcaspal(cmp, swp, ptr) "
+                "__builtin_arm_rcwcasp((cmp), (swp), (ptr))\n"
+                "#define __builtin_arm_rcwcaspl(cmp, swp, ptr) "
+                "__builtin_arm_rcwcasp((cmp), (swp), (ptr))\n"
+                "#define __builtin_arm_rcwscasp(cmp, swp, ptr) "
+                "__builtin_arm_rcwcasp((cmp), (swp), (ptr))\n"
+                "#define __builtin_arm_rcwscaspa(cmp, swp, ptr) "
+                "__builtin_arm_rcwcasp((cmp), (swp), (ptr))\n"
+                "#define __builtin_arm_rcwscaspal(cmp, swp, ptr) "
+                "__builtin_arm_rcwcasp((cmp), (swp), (ptr))\n"
+                "#define __builtin_arm_rcwscaspl(cmp, swp, ptr) "
+                "__builtin_arm_rcwcasp((cmp), (swp), (ptr))\n"
+                "#endif\n";
+    builtins.close();
+
     auto syntax = exec(NEVERD_TEST_CLANG,
                        {"-target", "aarch64-none-elf", "-ffreestanding",
                         "-march=armv9.4-a+lse128+the+d128+rcpc3", "-std=gnu11",
-                        "-I", tmp().string(), "-fsyntax-only", CFile.string()});
+                        "-I", tmp().string(), "-include",
+                        builtinHeader.string(), "-fsyntax-only",
+                        CFile.string()});
     EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << Source;
   }
 };
