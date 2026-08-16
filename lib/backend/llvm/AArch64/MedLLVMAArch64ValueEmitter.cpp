@@ -227,8 +227,32 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     if (Operand->getType() != ValueTy)
       Operand = Builder.CreateIntCast(Operand, ValueTy, false,
                                       "atomic_rmw_operand");
-    llvm::Value *Address = getVar(Op.Inputs[2], Builder);
-    Address = getMemoryPtr(Address, ValueTy, Builder);
+
+    // The address commonly reaches an LSE instruction through ADRP+ADD copies
+    // and a loop PHI.  Resolve that MedIR identity before materializing the
+    // LLVM value, matching the generic ATOMIC_ADD/ATOMIC_XCHG path.  Otherwise
+    // a low relocatable-object .data/.bss VA folds to inttoptr while adjacent
+    // LOAD/STORE operations use the rebuilt global, splitting one atomic
+    // object into two unrelated locations after relinking.
+    const MedVar &AddressVar = Op.Inputs[2];
+    llvm::Value *Address = nullptr;
+    uint64_t ResolvedAddress = 0;
+    if (Img) {
+      if (AddressVar.isConst())
+        ResolvedAddress = AddressVar.ConstVal;
+      else if (auto Traced = traceSSAConst(AddressVar))
+        ResolvedAddress = *Traced;
+    }
+    if (ResolvedAddress != 0) {
+      const unsigned AddressBits =
+          AddressVar.Size > 0 ? AddressVar.Size * 8 : 64;
+      if (!isFrameRelativeDisplacement(ResolvedAddress, AddressBits))
+        Address = tryResolveGlobalData(ResolvedAddress, Op.Output.Size);
+    }
+    if (!Address && Img)
+      Address = tryResolveWritableData(AddressVar, Op.Output.Size, Builder);
+    if (!Address)
+      Address = getMemoryPtr(getVar(AddressVar, Builder), ValueTy, Builder);
     return Builder.CreateAtomicRMW(AtomicOp, Address, Operand,
                                    llvm::MaybeAlign(Op.Output.Size), Ordering);
   }
