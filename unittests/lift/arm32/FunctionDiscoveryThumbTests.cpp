@@ -120,6 +120,35 @@ TEST(FunctionDiscoveryThumb, NormalizesCodePointersBeforeDiscovery) {
   EXPECT_EQ(It->Addr & 1u, 0u);
 }
 
+TEST(FunctionDiscoveryThumb, IgnoresCodePointersInsideSizedFunctions) {
+  BinaryImage Img = makeThumbImage();
+  constexpr va_t CodeVA = 0x1000;
+  constexpr va_t CaseVA = CodeVA + 4;
+  const std::array<uint8_t, 8> Code = {
+      0x70, 0x47, 0x00, 0xbf, // bx lr; nop
+      0x10, 0xb5, 0x70, 0x47, // push {r4, lr}; bx lr
+  };
+  Img.Segments.push_back(makeExecutableSegment(CodeVA, Code));
+
+  Symbol Covering = Symbol::makeFunc(CodeVA, Code.size());
+  Covering.Name = "covering";
+  Img.Symbols.push_back(std::move(Covering));
+
+  Segment Rodata;
+  Rodata.VA = 0x2000;
+  Rodata.Size = sizeof(uint32_t);
+  Rodata.Flags = SegmentFlags::Readable;
+  Rodata.Data.resize(sizeof(uint32_t));
+  writeLE<uint32_t>(Rodata.Data.data(), uint32_t(CaseVA | 1));
+  Img.Segments.push_back(std::move(Rodata));
+
+  scanDataFuncPointers(Img);
+
+  EXPECT_EQ(std::count_if(Img.Symbols.begin(), Img.Symbols.end(),
+                          [](const Symbol &S) { return S.Addr == CaseVA; }),
+            0u);
+}
+
 TEST(FunctionDiscoveryThumb, NormalizesOnlyFunctionSymbols) {
   std::vector<uint8_t> Bytes = readFixture("test_patch_coff_arm.obj");
   if (Bytes.empty())

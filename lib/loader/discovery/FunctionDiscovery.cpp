@@ -110,7 +110,28 @@ void scanDataFuncPointers(BinaryImage &Img) {
   if (PtrSize == 0)
     return;
 
-  const auto &Known = Img.KnownCodeRanges;
+  // Sized function symbols claim their whole body just as unwind-derived code
+  // ranges do.  Relocatable objects often have the former but no unwind
+  // metadata; without folding those extents into Known, an absolute jump table
+  // makes every case label look like a new function when its bytes happen to
+  // resemble a prologue.
+  std::vector<std::pair<va_t, va_t>> Known = Img.KnownCodeRanges;
+  for (const Symbol &Sym : Img.Symbols) {
+    if (!Sym.IsFunc || Sym.Size == 0 || Sym.Size > InvalidVA - Sym.Addr)
+      continue;
+    Known.emplace_back(Sym.Addr, Sym.Addr + Sym.Size);
+  }
+  std::sort(Known.begin(), Known.end());
+  std::vector<std::pair<va_t, va_t>> MergedKnown;
+  MergedKnown.reserve(Known.size());
+  for (const auto &Range : Known) {
+    if (MergedKnown.empty() || Range.first > MergedKnown.back().second) {
+      MergedKnown.push_back(Range);
+      continue;
+    }
+    MergedKnown.back().second =
+        std::max(MergedKnown.back().second, Range.second);
+  }
   auto Existing = Img.getSymbolAddresses();
 
   auto InExecSeg = [&](va_t Addr) -> const Segment * {
@@ -138,7 +159,7 @@ void scanDataFuncPointers(BinaryImage &Img) {
       size_t Off = static_cast<size_t>(Val - ESeg->VA);
       if (!checkPrologueAtOffset(*ESeg, Off, Img.Arch))
         continue;
-      if (insideInterval(Known, Val))
+      if (insideInterval(MergedKnown, Val))
         continue;
       if (!Existing.insert(Val).second)
         continue;
