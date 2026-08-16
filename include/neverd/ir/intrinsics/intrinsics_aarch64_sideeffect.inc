@@ -24,6 +24,9 @@ SIDEEFFECT(Intrinsic::Eret);
 SIDEEFFECT(Intrinsic::A64_Clrex);
 SIDEEFFECT(Intrinsic::A64_SetFPSR);
 SIDEEFFECT(Intrinsic::A64_SetFPCR);
+// Predicated SVE stores mutate only their active memory lanes.
+SIDEEFFECT(Intrinsic::A64_SveSt1);
+SIDEEFFECT(Intrinsic::A64_SveStnt1);
 // WSP writes directly mutate the architectural stack pointer.
 SIDEEFFECT(Intrinsic::A64_WspWrite);
 SIDEEFFECT(Intrinsic::A64_WspZeroExtend);

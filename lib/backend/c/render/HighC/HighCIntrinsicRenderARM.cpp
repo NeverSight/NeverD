@@ -150,6 +150,30 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                         : "svlastb_u8";
     return std::string(Name) + "(" + Ops[0] + ", " + Ops[1] + ")";
   }
+  case I::A64_SveSt1:
+  case I::A64_SveStnt1: {
+    if (Ops.size() < 5)
+      return {};
+    HasCIntrinsics = true;
+    const std::string &LaneBytes = Ops[3];
+    const std::string &StoreBytes = Ops[4];
+    const char *LaneSuffix = LaneBytes == "2"   ? "16"
+                             : LaneBytes == "4" ? "32"
+                             : LaneBytes == "8" ? "64"
+                                                : "8";
+    const char *PtrType = StoreBytes == "2"   ? "uint16_t"
+                          : StoreBytes == "4" ? "uint32_t"
+                          : StoreBytes == "8" ? "uint64_t"
+                                              : "uint8_t";
+    std::string Name = Id == I::A64_SveStnt1 ? "svstnt1" : "svst1";
+    if (Id == I::A64_SveSt1 && StoreBytes != LaneBytes) {
+      Name += StoreBytes == "1" ? "b" : StoreBytes == "2" ? "h" : "w";
+    }
+    Name += "_u";
+    Name += LaneSuffix;
+    return Name + "(" + Ops[0] + ", (" + PtrType + " *)(uintptr_t)(" + Ops[2] +
+           "), " + Ops[1] + ")";
+  }
   case I::A64_SveCntb:
   case I::A64_SveCnth:
   case I::A64_SveCntw:

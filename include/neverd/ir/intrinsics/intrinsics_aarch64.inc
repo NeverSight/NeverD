@@ -177,7 +177,7 @@ A64_Pacga,
 A64_SveCntb, A64_SveCnth, A64_SveCntw, A64_SveCntd,
 
 // Runtime-width SVE register-state operations.
-A64_SvePtrue, A64_SveDup, A64_SveLastb,
+A64_SvePtrue, A64_SveDup, A64_SveLastb, A64_SveSt1, A64_SveStnt1,
 
 // Architectural 32-bit stack-pointer write (zero-extends into SP).
 A64_WspWrite,

@@ -91,5 +91,7 @@ A(Intrinsic::A64_SveCntd,      "cntd");
 A(Intrinsic::A64_SvePtrue,     "ptrue");
 A(Intrinsic::A64_SveDup,       "dup");
 A(Intrinsic::A64_SveLastb,     "lastb");
+A(Intrinsic::A64_SveSt1,       "st1");
+A(Intrinsic::A64_SveStnt1,     "stnt1");
 A(Intrinsic::A64_WspWrite,     "mov");
 A(Intrinsic::A64_WspZeroExtend, "mov");

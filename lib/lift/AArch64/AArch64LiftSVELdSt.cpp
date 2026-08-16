@@ -17,6 +17,44 @@
 
 namespace neverd {
 
+namespace {
+
+uint16_t sveLaneBytes(AArch64Layout_VectorLayout Layout) {
+  switch (Layout) {
+  case AARCH64LAYOUT_VL_B:
+    return 1;
+  case AARCH64LAYOUT_VL_H:
+    return 2;
+  case AARCH64LAYOUT_VL_S:
+    return 4;
+  case AARCH64LAYOUT_VL_D:
+    return 8;
+  default:
+    return 0;
+  }
+}
+
+uint16_t sveStoreBytes(unsigned InsnId) {
+  switch (InsnId) {
+  case AARCH64_INS_ST1B:
+  case AARCH64_INS_STNT1B:
+    return 1;
+  case AARCH64_INS_ST1H:
+  case AARCH64_INS_STNT1H:
+    return 2;
+  case AARCH64_INS_ST1W:
+  case AARCH64_INS_STNT1W:
+    return 4;
+  case AARCH64_INS_ST1D:
+  case AARCH64_INS_STNT1D:
+    return 8;
+  default:
+    return 0;
+  }
+}
+
+} // namespace
+
 bool liftSVELdSt(AArch64Lifter &L, AArch64Lifter::LiftState &S,
                  const cs_insn *Insn, const cs_aarch64 &ARM64) {
   switch (Insn->id) {
@@ -84,7 +122,7 @@ bool liftSVELdSt(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_LDNT1W: {
     if (ARM64.op_count >= 2) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      NdVar EA = L.operandRead(S, ARM64.operands[ARM64.op_count - 1]);
+      NdVar EA = L.operandEffAddr(S, ARM64.operands[ARM64.op_count - 1]);
       S.emit(NdOp::LOAD, Dst, {EA});
     }
     break;
@@ -95,7 +133,7 @@ bool liftSVELdSt(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_LDZI: {
     if (ARM64.op_count >= 2) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      NdVar EA = L.operandRead(S, ARM64.operands[ARM64.op_count - 1]);
+      NdVar EA = L.operandEffAddr(S, ARM64.operands[ARM64.op_count - 1]);
       S.emit(NdOp::LOAD, Dst, {EA});
     }
     break;
@@ -103,8 +141,32 @@ bool liftSVELdSt(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_ST1B:
   case AARCH64_INS_ST1D:
   case AARCH64_INS_ST1H:
-  case AARCH64_INS_ST1Q:
   case AARCH64_INS_ST1W:
+  case AARCH64_INS_STNT1B:
+  case AARCH64_INS_STNT1D:
+  case AARCH64_INS_STNT1H:
+  case AARCH64_INS_STNT1W: {
+    if (ARM64.op_count >= 3) {
+      NdVar Src = L.operandRead(S, ARM64.operands[0]);
+      NdVar Pred = L.operandRead(S, ARM64.operands[1]);
+      NdVar EA = L.operandEffAddr(S, ARM64.operands[ARM64.op_count - 1]);
+      uint16_t LaneBytes = sveLaneBytes(ARM64.operands[0].vas);
+      uint16_t StoreBytes = sveStoreBytes(Insn->id);
+      if (LaneBytes != 0 && StoreBytes != 0 && StoreBytes <= LaneBytes) {
+        Intrinsic Id = Insn->id == AARCH64_INS_STNT1B ||
+                               Insn->id == AARCH64_INS_STNT1D ||
+                               Insn->id == AARCH64_INS_STNT1H ||
+                               Insn->id == AARCH64_INS_STNT1W
+                           ? Intrinsic::A64_SveStnt1
+                           : Intrinsic::A64_SveSt1;
+        S.emitIntrinsic(Id, {},
+                        {Pred, Src, EA, NdVar::cst(LaneBytes, 1),
+                         NdVar::cst(StoreBytes, 1)});
+      }
+    }
+    break;
+  }
+  case AARCH64_INS_ST1Q:
   case AARCH64_INS_ST2B:
   case AARCH64_INS_ST2D:
   case AARCH64_INS_ST2H:
@@ -119,14 +181,10 @@ bool liftSVELdSt(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_ST4D:
   case AARCH64_INS_ST4H:
   case AARCH64_INS_ST4Q:
-  case AARCH64_INS_ST4W:
-  case AARCH64_INS_STNT1B:
-  case AARCH64_INS_STNT1D:
-  case AARCH64_INS_STNT1H:
-  case AARCH64_INS_STNT1W: {
+  case AARCH64_INS_ST4W: {
     if (ARM64.op_count >= 2) {
       NdVar Src = L.operandRead(S, ARM64.operands[0]);
-      NdVar EA = L.operandRead(S, ARM64.operands[ARM64.op_count - 1]);
+      NdVar EA = L.operandEffAddr(S, ARM64.operands[ARM64.op_count - 1]);
       S.emit(NdOp::STORE, {}, {EA, Src});
     }
     break;
@@ -137,7 +195,7 @@ bool liftSVELdSt(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_STZI: {
     if (ARM64.op_count >= 2) {
       NdVar Src = L.operandRead(S, ARM64.operands[0]);
-      NdVar EA = L.operandRead(S, ARM64.operands[ARM64.op_count - 1]);
+      NdVar EA = L.operandEffAddr(S, ARM64.operands[ARM64.op_count - 1]);
       S.emit(NdOp::STORE, {}, {EA, Src});
     }
     break;

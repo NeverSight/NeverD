@@ -18,6 +18,7 @@ add_neverd_unittest(NeverDLiftTests
   aarch64/AArch64_RETTests.cpp
   aarch64/AArch64_SVELengthTests.cpp
   aarch64/AArch64_SVEStateTests.cpp
+  aarch64/AArch64_SVEStoreTests.cpp
   aarch64/AArch64_WSPTests.cpp
   aarch64/AArch64_MulDivTests.cpp
   aarch64/AArch64_PipelineE2ETests.cpp
@@ -685,6 +686,7 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_ret_a64.c
   aarch64/test_sve_length_a64.c
   aarch64/test_sve_state_a64.c
+  aarch64/test_sve_store_a64.c
   aarch64/test_wsp_a64.c
   aarch64/test_intrinsics_a64.c
   aarch64/test_switch_a64.c
@@ -830,7 +832,7 @@ foreach(src ${AARCH64_TEST_SOURCES})
     set(a64_extra_flags -march=armv8.5-a+memtag)
   elseif(src MATCHES "test_pauth_a64")
     set(a64_extra_flags -march=armv8.3-a+pauth)
-  elseif(src MATCHES "test_sve_(length|state)_a64")
+  elseif(src MATCHES "test_sve_(length|state|store)_a64")
     set(a64_extra_flags -march=armv8.2-a+sve -msve-vector-bits=256)
   endif()
   add_custom_command(

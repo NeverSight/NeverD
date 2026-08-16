@@ -137,6 +137,54 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
 
 bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
                                            llvm::IRBuilder<> &Builder) {
+  if (IC == Intrinsic::A64_SveSt1 || IC == Intrinsic::A64_SveStnt1) {
+    if (Op.NumInputs < 6 || !Op.Inputs[4].isConst() || !Op.Inputs[5].isConst())
+      return true;
+    const unsigned LaneBytes = static_cast<unsigned>(Op.Inputs[4].ConstVal);
+    const unsigned StoreBytes = static_cast<unsigned>(Op.Inputs[5].ConstVal);
+    if ((LaneBytes != 1 && LaneBytes != 2 && LaneBytes != 4 &&
+         LaneBytes != 8) ||
+        (StoreBytes != 1 && StoreBytes != 2 && StoreBytes != 4 &&
+         StoreBytes != 8) ||
+        StoreBytes > LaneBytes)
+      return true;
+
+    const unsigned MinLanes = 16 / LaneBytes;
+    auto *PredTy =
+        llvm::ScalableVectorType::get(llvm::Type::getInt1Ty(*Ctx), MinLanes);
+    auto *SourceElemTy = llvm::IntegerType::get(*Ctx, LaneBytes * 8);
+    auto *SourceTy = llvm::ScalableVectorType::get(SourceElemTy, MinLanes);
+    auto *StoreElemTy = llvm::IntegerType::get(*Ctx, StoreBytes * 8);
+    auto *StoreTy = llvm::ScalableVectorType::get(StoreElemTy, MinLanes);
+
+    auto stateToScalable = [&](const MedVar &State, llvm::Type *ScalableTy,
+                               llvm::StringRef Name) -> llvm::Value * {
+      llvm::Value *Value = getVar(State, Builder);
+      auto *Slot =
+          Builder.CreateAlloca(Value->getType(), nullptr, Name + ".slot");
+      Slot->setAlignment(llvm::Align(16));
+      Builder.CreateStore(Value, Slot)->setAlignment(llvm::Align(16));
+      return Builder.CreateLoad(ScalableTy, Slot, Name);
+    };
+
+    llvm::Value *Pred = stateToScalable(Op.Inputs[1], PredTy, "sve.store.pred");
+    llvm::Value *Value =
+        stateToScalable(Op.Inputs[2], SourceTy, "sve.store.value");
+    if (SourceTy != StoreTy)
+      Value = Builder.CreateTrunc(Value, StoreTy, "sve.store.narrow");
+
+    llvm::Value *Address = getVar(Op.Inputs[3], Builder);
+    auto *PtrTy = llvm::PointerType::getUnqual(*Ctx);
+    if (!Address->getType()->isPointerTy())
+      Address = Builder.CreateIntToPtr(Address, PtrTy);
+    auto IID = IC == Intrinsic::A64_SveStnt1
+                   ? llvm::Intrinsic::aarch64_sve_stnt1
+                   : llvm::Intrinsic::aarch64_sve_st1;
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, IID, {StoreTy, Address->getType()});
+    Builder.CreateCall(Fn, {Value, Pred, Address});
+    return true;
+  }
   if (IC == Intrinsic::Stg) {
     if (Op.NumInputs < 3)
       return true;
