@@ -133,11 +133,14 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
                  S.Val->IntrinsicId == Intrinsic::A64_SvePtrue) {
         ExplicitTypes[Name] = "svbool_t";
       } else if (S.Val->Kind == ExprKind::Call &&
-                 S.Val->IntrinsicId == Intrinsic::A64_SveDup) {
+                 (S.Val->IntrinsicId == Intrinsic::A64_SveDup ||
+                  S.Val->IntrinsicId == Intrinsic::A64_SveIndex)) {
         uint64_t ElemBytes = 1;
-        if (S.Val->Operands.size() >= 2 &&
-            S.Val->Operands[1]->Kind == ExprKind::Const)
-          ElemBytes = S.Val->Operands[1]->ConstVal;
+        size_t ElemIndex =
+            S.Val->IntrinsicId == Intrinsic::A64_SveIndex ? 2 : 1;
+        if (S.Val->Operands.size() > ElemIndex &&
+            S.Val->Operands[ElemIndex]->Kind == ExprKind::Const)
+          ElemBytes = S.Val->Operands[ElemIndex]->ConstVal;
         ExplicitTypes[Name] = ElemBytes == 2   ? "svuint16_t"
                               : ElemBytes == 4 ? "svuint32_t"
                               : ElemBytes == 8 ? "svuint64_t"

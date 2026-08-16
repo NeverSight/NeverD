@@ -186,3 +186,7 @@ A64_WspZeroExtend,
 // FEAT_LSE128 pair bit-set.  Keep these appended so existing serialized
 // intrinsic IDs remain stable.
 A64_Ldsetp, A64_Ldsetpa, A64_Ldsetpal, A64_Ldsetpl,
+
+// Runtime-width SVE arithmetic progression.  Keep this appended so existing
+// serialized intrinsic IDs remain stable.
+A64_SveIndex,

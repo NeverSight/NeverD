@@ -99,3 +99,4 @@ A(Intrinsic::A64_Ldsetp,       "ldsetp");
 A(Intrinsic::A64_Ldsetpa,      "ldsetpa");
 A(Intrinsic::A64_Ldsetpal,     "ldsetpal");
 A(Intrinsic::A64_Ldsetpl,      "ldsetpl");
+A(Intrinsic::A64_SveIndex,     "index");

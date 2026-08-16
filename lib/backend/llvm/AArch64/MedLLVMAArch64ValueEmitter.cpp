@@ -112,6 +112,23 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     return scalableToState(Vec, a64reg::ZSize, "sve.vector");
   }
 
+  if (IC == I::A64_SveIndex && Op.Output.Size == a64reg::ZSize &&
+      Op.NumInputs >= 4) {
+    unsigned ElemBytes = sveElementSize(3);
+    auto *ElemTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);
+    auto *VecTy = llvm::ScalableVectorType::get(ElemTy, 16 / ElemBytes);
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_sve_index, {VecTy});
+    llvm::Value *Start = getVar(Op.Inputs[1], Builder);
+    llvm::Value *Step = getVar(Op.Inputs[2], Builder);
+    if (Start->getType() != ElemTy)
+      Start = Builder.CreateZExtOrTrunc(Start, ElemTy);
+    if (Step->getType() != ElemTy)
+      Step = Builder.CreateZExtOrTrunc(Step, ElemTy);
+    llvm::Value *Vec = Builder.CreateCall(Fn, {Start, Step}, "svindex");
+    return scalableToState(Vec, a64reg::ZSize, "sve.vector");
+  }
+
   if (IC == I::A64_SveLastb && Op.Output.Size > 0 && Op.NumInputs >= 4) {
     unsigned ElemBytes = sveElementSize(3);
     auto *ElemTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);

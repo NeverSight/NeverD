@@ -265,7 +265,18 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     }
     break;
   }
-  case AARCH64_INS_INDEX:
+  case AARCH64_INS_INDEX: {
+    if (ARM64.op_count >= 3) {
+      NdVar Dst = L.operandWrite(ARM64.operands[0]);
+      NdVar Start = L.operandRead(S, ARM64.operands[1]);
+      NdVar Step = L.operandRead(S, ARM64.operands[2]);
+      uint16_t ElemSize = sveElementSize(ARM64.operands[0].vas);
+      if (ElemSize != 0)
+        S.emitIntrinsic(Intrinsic::A64_SveIndex, Dst,
+                        {Start, Step, NdVar::cst(ElemSize, 1)});
+    }
+    break;
+  }
   case AARCH64_INS_INSR:
   case AARCH64_INS_DUPM:
   case AARCH64_INS_DUPQ: {

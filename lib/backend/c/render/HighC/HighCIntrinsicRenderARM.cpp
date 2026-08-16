@@ -140,6 +140,21 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                         : "svdup_n_u8";
     return std::string(Name) + "(" + Ops[0] + ")";
   }
+  case I::A64_SveIndex: {
+    if (Ops.size() < 3)
+      return {};
+    HasCIntrinsics = true;
+    const char *Name = Ops[2] == "2"   ? "svindex_u16"
+                       : Ops[2] == "4" ? "svindex_u32"
+                       : Ops[2] == "8" ? "svindex_u64"
+                                       : "svindex_u8";
+    const char *Type = Ops[2] == "2"   ? "uint16_t"
+                       : Ops[2] == "4" ? "uint32_t"
+                       : Ops[2] == "8" ? "uint64_t"
+                                       : "uint8_t";
+    return std::string(Name) + "((" + Type + ")(" + Ops[0] + "), (" + Type +
+           ")(" + Ops[1] + "))";
+  }
   case I::A64_SveLastb: {
     if (Ops.size() < 3)
       return {};
