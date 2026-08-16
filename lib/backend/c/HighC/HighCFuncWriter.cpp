@@ -413,6 +413,8 @@ void HighCWriter::writeFunction(const HighFunc &Func) {
 
   writeExceptionAnnotation(Func);
 
+  if (Func.DoesNotReturn)
+    OS << "_Noreturn ";
   OS << RetType << " " << FName << "(";
   for (size_t I = 0; I < Func.Params.size(); ++I) {
     if (I > 0)

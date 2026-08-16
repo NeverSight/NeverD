@@ -599,7 +599,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         else
           EmitDefaultRet();
       } else if (Blk.Succs.empty()) {
-        EmitDefaultRet();
+        if (Func.DoesNotReturn)
+          Builder.CreateUnreachable();
+        else
+          EmitDefaultRet();
       } else {
         auto SuccIt = BBMap.find(Blk.Succs[0]);
         if (SuccIt != BBMap.end())

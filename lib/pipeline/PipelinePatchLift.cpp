@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedABIPass.h"
+#include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
@@ -504,6 +505,9 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // every call to that arity.  The emitter spills these into the frame headroom
   // so the unchanged va_arg walk reads the caller's overflow arguments.
   finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.Format);
+  // Late ABI remodelling may reconvert a function from LowIR.  Refresh the
+  // interprocedural facts before either serial or sharded LLVM emission.
+  propagateInternalNoReturn(Result.MedFuncs, Img.Arch);
 
   if (!recordMedIRVerification(Result, "pipeline-backend-input")) {
     Result.Error = "MedIR verification failed before backend emission";

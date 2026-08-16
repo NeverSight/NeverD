@@ -338,8 +338,15 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
 }
 
 void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
-  for (auto &F : Funcs)
+  for (auto &F : Funcs) {
     DefinedFuncs[F.Name] = &F;
+    // Mach-O object symbols carry one platform decoration underscore.  Calls
+    // and definitions both drop it when rendered as C identifiers, so retain
+    // that spelling here as well or an internal call is mistaken for an
+    // external old-style `int f()` declaration with a conflicting type.
+    if (!F.Name.empty() && F.Name[0] == '_')
+      DefinedFuncs[F.Name.substr(1)] = &F;
+  }
 
   std::set<std::string> CallTargets;
   for (auto &F : Funcs)

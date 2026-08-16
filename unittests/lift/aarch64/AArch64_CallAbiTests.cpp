@@ -89,6 +89,24 @@ TEST_F(AArch64_CallAbi, ExternalZeroArgPrototypeIsStableAcrossCallSites) {
   EXPECT_EQ(R.out.find("@___error(i"), std::string::npos) << R.out;
 }
 
+TEST_F(AArch64_CallAbi, InternalNoReturnCallTerminatesFailingEdge) {
+  if (!fs::exists(callAbiObj()))
+    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+  auto R = liftToLLVMIRUnopt(callAbiObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+
+  std::string Caller = callAbiFunctionText(R.out, "_neverd_after_fail");
+  std::string Callee = callAbiFunctionText(R.out, "_neverd_fail");
+  ASSERT_FALSE(Caller.empty()) << R.out;
+  ASSERT_FALSE(Callee.empty()) << R.out;
+  size_t Call = Caller.find("@_neverd_fail()");
+  ASSERT_NE(Call, std::string::npos) << Caller;
+  EXPECT_NE(Caller.find("unreachable", Call), std::string::npos) << Caller;
+  EXPECT_NE(Callee.find("call void @llvm.trap()"), std::string::npos) << Callee;
+  EXPECT_NE(Callee.find("unreachable"), std::string::npos) << Callee;
+  EXPECT_EQ(Callee.find("ret i64"), std::string::npos) << Callee;
+}
+
 TEST_F(AArch64_CallAbi, AllStagesPass) {
   if (!fs::exists(callAbiObj()))
     GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";

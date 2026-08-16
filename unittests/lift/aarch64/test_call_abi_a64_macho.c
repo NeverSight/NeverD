@@ -45,3 +45,11 @@ __attribute__((noinline)) int external_error_compute(int a, int b, int c,
 __attribute__((noinline)) int external_error_simple(void) {
   return *__error();
 }
+
+__attribute__((noinline, noreturn)) void neverd_fail(void) { __builtin_trap(); }
+
+__attribute__((noinline)) int neverd_after_fail(int value) {
+  if (value != 0)
+    neverd_fail();
+  return 7;
+}

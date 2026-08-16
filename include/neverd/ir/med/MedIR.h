@@ -219,6 +219,11 @@ struct MedFunc {
   /// return used by clang's internal convention for static functions).
   bool FPReturnViaX87 = false;
 
+  /// Every reachable path is proven to terminate without returning.  This is
+  /// derived from explicit architectural traps and no-return callees, never
+  /// from the function name or from an unexplained missing return.
+  bool DoesNotReturn = false;
+
   /// A variadic function (`f(fixed..., ...)`): its prologue spills the argument
   /// registers to a register save area and `va_arg` walks that area then the
   /// caller's overflow (incoming-stack) area.  The register save area

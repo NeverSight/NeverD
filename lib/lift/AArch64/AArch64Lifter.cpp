@@ -404,6 +404,8 @@ bool AArch64Lifter::isFunctionTerminator(const cs_insn *I) {
   case AARCH64_INS_B:
   case AARCH64_INS_BR:
   case AARCH64_INS_ERET:
+  case AARCH64_INS_BRK:
+  case AARCH64_INS_HLT:
     return true;
   default:
     return false;

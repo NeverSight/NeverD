@@ -391,6 +391,7 @@ struct HighFunc {
   std::string DebugName;
   std::string SourceFile;
   uint32_t SourceLine = 0;
+  bool DoesNotReturn = false;
   TypeRef ReturnType;
   std::vector<HighParam> Params;
   std::vector<HighLocal> Locals;

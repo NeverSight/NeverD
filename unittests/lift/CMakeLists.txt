@@ -127,6 +127,7 @@ add_neverd_unittest(NeverDLiftTests
   eh/MachOCompactUnwindPatchTests.cpp
   eh/MachOExceptionPatchTests.cpp
   core/HighSymSimplifyTests.cpp
+  core/MedNoReturnTests.cpp
   eh/RegistrationTryLevelTests.cpp
   format/COFFARMFormatTests.cpp
   format/COFFARMFormatFragmentTests.cpp

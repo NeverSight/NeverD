@@ -15,6 +15,7 @@
 #include "neverd/evm/analysis/EVMAnalyzer.h"
 #include "neverd/evm/bytecode/EVMBytecode.h"
 #include "neverd/evm/emit/EVMLLVMEmitter.h"
+#include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/emit/SBFLLVMEmitter.h"
@@ -198,6 +199,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   // Phase 2: LowIR -> MedIR (parallel).
   buildMedIR(Img, Opts, Result);
+  propagateInternalNoReturn(Result.MedFuncs, Img.Arch);
 
   if (Opts.DumpMed && Opts.EmitDumpOutput)
     dumpMedIR(Result.MedFuncs);

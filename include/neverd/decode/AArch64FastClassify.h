@@ -54,7 +54,8 @@ inline va_t directCallTarget(uint32_t Word, va_t Addr) {
 
 /// Whether \p Word ends a function's straight-line decode, bit-exact to
 /// AArch64Lifter::isFunctionTerminator applied to a Capstone decode of the same
-/// word.  The Capstone-id terminator set is { RET, BR, ERET, B }, where:
+/// word.  The Capstone-id terminator set is { RET, BR, ERET, B, BRK, HLT },
+/// where:
 ///
 ///   * RET  — 0xD65F0000 | (Rn<<5); the PAC forms RETAA/RETAB (ids 888/890)
 ///            have bits[11:10] set and are excluded (not in the set).
@@ -65,6 +66,8 @@ inline va_t directCallTarget(uint32_t Word, va_t Addr) {
 ///            conditional `b.cond` (bits[31:24]==0x54 with bit4==0).  The
 ///            ARMv8.8 `bc.cond` (bits[31:24]==0x54 with bit4==1) is id 53, a
 ///            distinct id NOT in the set, so it is excluded by the bit-4 test.
+///   * BRK/HLT — exception-generation encodings with a 16-bit immediate in
+///            bits[20:5]; both lower to a non-returning trap.
 inline bool isTerminatorWord(uint32_t Word) {
   if ((Word & 0xFFFFFC1Fu) == 0xD65F0000u) // RET {Xn}
     return true;
@@ -75,6 +78,10 @@ inline bool isTerminatorWord(uint32_t Word) {
   if ((Word >> 26) == 0x05u) // B (unconditional, id 51)
     return true;
   if ((Word >> 24) == 0x54u && (Word & 0x10u) == 0u) // B.cond (id 51)
+    return true;
+  if ((Word & 0xFFE0001Fu) == 0xD4200000u) // BRK #imm16
+    return true;
+  if ((Word & 0xFFE0001Fu) == 0xD4400000u) // HLT #imm16
     return true;
   return false;
 }

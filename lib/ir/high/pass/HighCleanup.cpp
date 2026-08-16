@@ -264,6 +264,8 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
 
 void MedToHighConverter::ensureTrailingReturn(HighFunc &Func,
                                               const MedFunc &Med) {
+  if (Med.DoesNotReturn)
+    return;
   if (!Func.Body.empty() && Func.Body.back().Kind == StmtKind::Return)
     return;
   if (Func.Body.empty())

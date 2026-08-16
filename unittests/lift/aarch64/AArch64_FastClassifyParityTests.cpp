@@ -80,7 +80,8 @@ public:
     T.Decoded = true;
     unsigned Id = Insn->id;
     T.Terminator = (Id == AARCH64_INS_RET || Id == AARCH64_INS_B ||
-                    Id == AARCH64_INS_BR || Id == AARCH64_INS_ERET);
+                    Id == AARCH64_INS_BR || Id == AARCH64_INS_ERET ||
+                    Id == AARCH64_INS_BRK || Id == AARCH64_INS_HLT);
     if (Id == AARCH64_INS_BL && Insn->detail &&
         Insn->detail->aarch64.op_count >= 1 &&
         Insn->detail->aarch64.operands[0].type == AARCH64_OP_IMM)
@@ -154,6 +155,8 @@ TEST_F(A64FastClassifyParity, EdgeEncodings) {
       0x5400000Fu, // b.nv
       0x54000010u, // bc.eq   (id 53 -> NOT a terminator)
       0x5400001Fu, // bc.nv   (id 53 -> NOT a terminator)
+      0xD4200020u, // brk #1
+      0xD4400020u, // hlt #1
       0x94000000u, // bl .+0
       0x97FFFFFFu, // bl .-4
       0x94123456u, // bl arbitrary

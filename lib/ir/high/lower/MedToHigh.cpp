@@ -225,6 +225,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   Func.FrameSize = Med.FrameSize;
   Func.FrameHeadroom = Med.FrameHeadroom;
   Func.Name = Med.Name;
+  Func.DoesNotReturn = Med.DoesNotReturn;
   Func.ExceptionMetadata = Med.ExceptionMetadata;
   Func.ReturnType =
       Med.ReturnType ? Med.ReturnType : NdType::makeInt(inferReturnSize(Med));
