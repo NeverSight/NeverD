@@ -207,3 +207,70 @@ TEST_F(AArch64_Mem, Ld64bLoadsEightConsecutiveGPRs) {
     EXPECT_EQ(Address->Inputs[1].Offset, I * 8);
   }
 }
+
+TEST_F(AArch64_Mem, StlurImmediateUsesEncodedSourceBaseAndSignedOffset) {
+  const struct {
+    std::array<uint8_t, 4> Bytes;
+    unsigned SourceIndex;
+    uint16_t SourceSize;
+    uint16_t AccessSize;
+    unsigned BaseIndex;
+    int64_t Offset;
+  } Cases[] = {{{0x09, 0x81, 0x00, 0xD9}, 9, 8, 8, 8, 8},
+               {{0x4B, 0xF1, 0x1F, 0x19}, 11, 4, 1, 10, -1},
+               {{0x8D, 0x21, 0x00, 0x59}, 13, 4, 2, 12, 2}};
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Offset);
+    DecodedInsn Insn{};
+    ASSERT_EQ(Dec.decodeOneForLift(Case.Bytes.data(), Case.Bytes.size(), 0x1000,
+                                   Insn),
+              4);
+
+    std::vector<LowOp> Ops;
+    Dec.liftToLow(Insn, Ops);
+    EXPECT_EQ(
+        std::count_if(Ops.begin(), Ops.end(),
+                      [](const LowOp &Op) { return Op.Opcode == NdOp::LOAD; }),
+        0u);
+
+    const auto Store =
+        std::find_if(Ops.begin(), Ops.end(),
+                     [](const LowOp &Op) { return Op.Opcode == NdOp::STORE; });
+    ASSERT_NE(Store, Ops.end());
+    ASSERT_EQ(Store->NumInputs, 2);
+
+    const NdVar Source =
+        NdVar::reg(a64reg::X0 + Case.SourceIndex * 8, Case.SourceSize);
+    if (Case.SourceSize == Case.AccessSize) {
+      EXPECT_EQ(Store->Inputs[1], Source);
+    } else {
+      const auto Truncate =
+          std::find_if(Ops.begin(), Store, [&](const LowOp &Op) {
+            return Op.Opcode == NdOp::SUBBYTES &&
+                   Op.Output == Store->Inputs[1] && Op.NumInputs == 2 &&
+                   Op.Inputs[0] == Source && Op.Inputs[1].isConst() &&
+                   Op.Inputs[1].Offset == 0;
+          });
+      ASSERT_NE(Truncate, Store);
+      EXPECT_EQ(Truncate->Output.Size, Case.AccessSize);
+    }
+
+    const NdVar Base = NdVar::reg(a64reg::X0 + Case.BaseIndex * 8, 8);
+    const auto BaseCopy =
+        std::find_if(Ops.begin(), Store, [&](const LowOp &Op) {
+          return Op.Opcode == NdOp::COPY && Op.Output == Store->Inputs[0] &&
+                 Op.NumInputs == 1 && Op.Inputs[0] == Base;
+        });
+    ASSERT_NE(BaseCopy, Store);
+    const auto Address = std::find_if(Ops.begin(), Store, [&](const LowOp &Op) {
+      return Op.Opcode == NdOp::INT_ADD && Op.Output == Store->Inputs[0] &&
+             Op.NumInputs == 2 && Op.Inputs[0] == Store->Inputs[0] &&
+             Op.Inputs[1].isConst() &&
+             Op.Inputs[1].Offset == static_cast<uint64_t>(Case.Offset);
+    });
+    ASSERT_NE(Address, Store);
+  }
+}

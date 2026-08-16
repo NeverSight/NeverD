@@ -13,6 +13,7 @@
 
 #include "AArch64LiftDetail.h"
 
+#include "neverd/decode/AArch64NativeDecode.h"
 #include "neverd/lift/AArch64Lifter.h"
 
 #include <cstring>
@@ -46,9 +47,8 @@ static bool decodeUnscaledStoreEncoding(const cs_insn *Insn, aarch64_reg &Rt,
   unsigned RnIdx = (Enc >> 5) & 0x1F;
   unsigned SzField = (Enc >> 30) & 3;
   bool Is64 = (SzField == 3);
-  Rt = static_cast<aarch64_reg>(Is64 ? AARCH64_REG_X0 + RtIdx
-                                     : AARCH64_REG_W0 + RtIdx);
-  Rn = static_cast<aarch64_reg>(AARCH64_REG_X0 + RnIdx);
+  Rt = a64native::gpr(RtIdx, Is64);
+  Rn = a64native::gprSP(RnIdx, true);
   Imm9 = (Enc >> 12) & 0x1FF;
   if (Imm9 & 0x100)
     Imm9 |= ~0x1FFLL;
@@ -64,6 +64,8 @@ static NdVar storeSourceFromEncoding(const cs_insn *Insn) {
   auto RI = mapCapstoneReg(Rt);
   if (RI.Size == 0)
     return NdVar::cst(0, 4);
+  if (RI.Offset == a64reg::XZR)
+    return NdVar::cst(0, RI.Size);
   return NdVar::reg(RI.Offset, RI.Size);
 }
 
@@ -296,13 +298,12 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_STLURH: {
     NdVar Src;
     NdVar EA;
-    if (ARM64.op_count >= 2) {
-      Src = L.operandRead(S, ARM64.operands[0]);
-      EA = L.operandEffAddr(S, ARM64.operands[1]);
-    } else if (ARM64.op_count == 1 &&
-               ARM64.operands[0].type == AARCH64_OP_MEM) {
+    if (Insn->size == 4) {
       Src = storeSourceFromEncoding(Insn);
       EA = storeEffAddrFromEncoding(S, Insn);
+    } else if (ARM64.op_count >= 2) {
+      Src = L.operandRead(S, ARM64.operands[0]);
+      EA = L.operandEffAddr(S, ARM64.operands[1]);
     } else {
       break;
     }
