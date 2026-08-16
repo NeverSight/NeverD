@@ -9,6 +9,7 @@ add_neverd_unittest(NeverDLiftTests
   aarch64/AArch64_ExtendTests.cpp
   aarch64/AArch64_FAMinMaxTests.cpp
   aarch64/AArch64_FPTests.cpp
+  aarch64/AArch64_FunctionDiscoveryTests.cpp
   aarch64/AArch64_IntrinsicsTests.cpp
   aarch64/AArch64_LogicTests.cpp
   aarch64/AArch64_MemTests.cpp

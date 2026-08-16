@@ -15,11 +15,12 @@
 #include "neverd/ir/low/FuncDetector.h"
 
 #include "neverd/Limits.h"
-#include "neverd/support/Parallel.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/AArch64Lifter.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -483,6 +484,14 @@ static void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
   }
 }
 
+static bool isAArch64InstructionSection(const BinaryImage &Img,
+                                        const Section &Sec) {
+  if (Img.Format != BinaryFormat::MachO)
+    return Sec.isExecutable();
+  return (Sec.Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+                      llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) != 0;
+}
+
 void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec) {
   struct ScanChunk {
     const Segment *Seg;
@@ -494,15 +503,37 @@ void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec) {
   const unsigned ThreadsN = workerThreadCount();
   constexpr size_t MinChunk = limits::kMinFuncScanChunk;
 
-  for (const auto &Seg : Img.Segments) {
-    if (!Seg.isExecutable() || Seg.Data.empty())
-      continue;
-    size_t SegLen = Seg.Data.size();
-    size_t ChunkSz = std::max(MinChunk, SegLen / ThreadsN);
-    for (size_t Off = 0; Off < SegLen; Off += ChunkSz) {
-      size_t CEnd = std::min(Off + ChunkSz, SegLen);
-      Chunks.push_back({&Seg, Seg.VA + Off, Seg.VA + CEnd});
+  auto AddRange = [&](const Segment *Seg, va_t Start, uint64_t RequestedLen) {
+    if (!Seg || !Seg->isExecutable() || Seg->Data.empty() || Start < Seg->VA)
+      return;
+    const uint64_t StartOff = Start - Seg->VA;
+    if (StartOff >= Seg->Data.size())
+      return;
+    const size_t ScanLen = static_cast<size_t>(std::min<uint64_t>(
+        RequestedLen, Seg->Data.size() - static_cast<size_t>(StartOff)));
+    if (ScanLen == 0)
+      return;
+    const size_t ChunkSz = std::max(MinChunk, ScanLen / ThreadsN);
+    for (size_t Off = 0; Off < ScanLen; Off += ChunkSz) {
+      const size_t CEnd = std::min(Off + ChunkSz, ScanLen);
+      Chunks.push_back({Seg, Start + Off, Start + CEnd});
     }
+  };
+
+  // AArch64's fast BL classifier must not interpret constants that merely
+  // share an executable mapping with code.  Linked Mach-O images commonly put
+  // __text and __const in the same RX __TEXT segment; section instruction
+  // attributes are the authoritative boundary there.  Sectionless/raw images
+  // retain the segment-wide fallback.
+  if (Img.Arch == Arch::AArch64 && !Img.Sections.empty()) {
+    for (const Section &Sec : Img.Sections) {
+      if (!isAArch64InstructionSection(Img, Sec))
+        continue;
+      AddRange(Img.getSegmentFor(Sec.VA), Sec.VA, Sec.Size);
+    }
+  } else {
+    for (const Segment &Seg : Img.Segments)
+      AddRange(&Seg, Seg.VA, Seg.Data.size());
   }
 
   if (Chunks.size() <= 1) {
