@@ -140,6 +140,39 @@ TEST(VarArgFixedCount, EmptyAndGarbage) {
   EXPECT_EQ(varArgFixedCount("__some_internal_func"), 0u);
 }
 
+TEST(VarArgFixedParamKind, PrintfFamilyPreservesScalarParameters) {
+  EXPECT_EQ(varArgFixedParamKind("printf", 0), VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("dprintf", 0), VarArgFixedParamKind::Integer);
+  EXPECT_EQ(varArgFixedParamKind("dprintf", 1), VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("snprintf", 0), VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("snprintf", 1), VarArgFixedParamKind::Integer);
+  EXPECT_EQ(varArgFixedParamKind("snprintf", 2), VarArgFixedParamKind::Pointer);
+}
+
+TEST(VarArgFixedParamKind, FortifiedSnprintfShape) {
+  constexpr VarArgFixedParamKind Expected[] = {
+      VarArgFixedParamKind::Pointer, VarArgFixedParamKind::Integer,
+      VarArgFixedParamKind::Integer, VarArgFixedParamKind::Integer,
+      VarArgFixedParamKind::Pointer};
+  for (unsigned I = 0; I < 5; ++I) {
+    EXPECT_EQ(varArgFixedParamKind("___snprintf_chk", I), Expected[I]);
+    EXPECT_EQ(varArgFixedParamKind("snprintf_chk", I), Expected[I]);
+  }
+  EXPECT_EQ(varArgFixedParamKind("snprintf_chk", 5),
+            VarArgFixedParamKind::Unknown);
+}
+
+TEST(VarArgFixedParamKind, UnknownSelectorArgumentsStayRecovered) {
+  EXPECT_EQ(varArgFixedParamKind("objc_msgSend$stringWithFormat:", 0),
+            VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("objc_msgSend$stringWithFormat:", 1),
+            VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("objc_msgSend$stringWithFormat:", 2),
+            VarArgFixedParamKind::Unknown);
+  EXPECT_EQ(varArgFixedParamKind("not_variadic", 0),
+            VarArgFixedParamKind::Unknown);
+}
+
 // =====================================================================
 // isVaListConsumer — the v*printf/v*scanf family and __v*_chk variants
 // =====================================================================

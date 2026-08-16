@@ -240,14 +240,8 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
         F.deleteBody();
     }
 
-    llvm::mc_rewrite::RewriteOptions RwOpts;
-    RwOpts.Model.TextVA = Plan.OrigVA;
-    RwOpts.Model.ImageBaseVA = Image.Base;
-    RwOpts.Model.getSectionVA = [&](llvm::StringRef) -> uint64_t {
-      return Plan.OrigVA;
-    };
-    RwOpts.Model.resolve = [&](llvm::StringRef Sym,
-                               uint32_t) -> std::optional<uint64_t> {
+    auto ResolveFn = [&](llvm::StringRef Sym,
+                         uint32_t) -> std::optional<uint64_t> {
       std::string Name = Sym.str();
       auto FIt = FuncOrigVAs.find(Name);
       if (FIt != FuncOrigVAs.end())
@@ -269,39 +263,51 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
       return std::nullopt;
     };
 
-    Codegen CG;
-    auto RwResult = CG.compileForRewrite(*ClonedMod, TargetArch, RwOpts, Fmt);
-    if (!RwResult.ImageValid) {
-      llvm::WithColor::error() << "inplace: rewrite image layout is invalid\n";
-      return PatchResult{};
-    }
-    if (!RwResult.FunctionRangesValid) {
+    // Probe with the same placement-aware compiler used by the grower path.
+    // Anchoring every emitted section at OrigVA is invalid when a function
+    // entry is only instruction-aligned but a literal/data section requires
+    // 16-byte alignment (AArch64 then rejects scale16 fixups before we can
+    // discover that the function must be relocated).  The compiled-image
+    // planner keeps text at OrigVA, lays out every extra section at its native
+    // alignment, and returns the exact text slice needed for the fit/grow
+    // decision.
+    auto ProbeImage = compileImageForPatch(*ClonedMod, TargetArch, Fmt,
+                                           Plan.OrigVA, ResolveFn, Image.Base);
+    if (!ProbeImage.FunctionRangesValid) {
       llvm::WithColor::error()
           << "inplace: rewrite image provenance is invalid\n";
       return PatchResult{};
     }
-    if (RwResult.Sections.empty())
+    if (!ProbeImage.Success) {
+      llvm::WithColor::error() << "inplace: rewrite image layout is invalid\n";
+      return PatchResult{};
+    }
+    if (ProbeImage.Sections.empty())
       continue;
 
-    const llvm::mc_rewrite::RewriteSection *TextSec = nullptr;
-    for (auto &S : RwResult.Sections) {
+    const CompiledSection *TextSec = nullptr;
+    for (auto &S : ProbeImage.Sections) {
       if (section_names::isTextSectionName(S.Name)) {
         TextSec = &S;
         break;
       }
     }
-    if (!TextSec || TextSec->Bytes.empty()) {
-      if (!RwResult.Sections.empty())
-        TextSec = &RwResult.Sections[0];
+    if (!TextSec || TextSec->Size == 0) {
+      if (!ProbeImage.Sections.empty())
+        TextSec = &ProbeImage.Sections[0];
     }
-    if (TextSec && !TextSec->Bytes.empty())
-      Plan.NewBytes = TextSec->Bytes;
+    if (TextSec && TextSec->IsInImage && TextSec->Size > 0 &&
+        rangeInBounds(TextSec->Offset, TextSec->Size,
+                      ProbeImage.Bytes.size())) {
+      const auto Begin = ProbeImage.Bytes.begin() + TextSec->Offset;
+      Plan.NewBytes.assign(Begin, Begin + TextSec->Size);
+    }
 
     // Any non-text section with content (e.g. an indirect-branch offset table)
     // cannot be placed by the in-place overwrite path, which keeps only .text.
     // Force such functions through the relocating path (compileImageForPatch).
-    for (auto &S : RwResult.Sections)
-      if (&S != TextSec && !S.Bytes.empty())
+    for (auto &S : ProbeImage.Sections)
+      if (&S != TextSec && S.Size > 0)
         Plan.HasExtraSections = true;
   }
 

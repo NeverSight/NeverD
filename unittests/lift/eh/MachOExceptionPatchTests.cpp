@@ -296,6 +296,54 @@ TEST(CompiledImage, PreservesSingleMachONonAllocatedMetadataBytes) {
   EXPECT_EQ(Metadata->ExternalBytes, RawBytes);
 }
 
+TEST(CompiledImage, ProbesAlignedDataFromInstructionAlignedTextVA) {
+  constexpr uint64_t TextVA = kBaseVA + 0x1004;
+  llvm::LLVMContext Context;
+  llvm::Module Module("instruction-aligned-text-with-literal16", Context);
+  auto *I64 = llvm::Type::getInt64Ty(Context);
+  auto *VectorType = llvm::FixedVectorType::get(I64, 2);
+  auto *Initializer = llvm::ConstantVector::get(
+      {llvm::ConstantInt::get(I64, 0x1122334455667788ULL),
+       llvm::ConstantInt::get(I64, 0x8877665544332211ULL)});
+  auto *Literal = new llvm::GlobalVariable(
+      Module, VectorType, /*isConstant=*/true,
+      llvm::GlobalValue::PrivateLinkage, Initializer, "literal16");
+  Literal->setAlignment(llvm::Align(16));
+
+  auto *FunctionType = llvm::FunctionType::get(VectorType, false);
+  auto *Function = llvm::Function::Create(
+      FunctionType, llvm::GlobalValue::ExternalLinkage, "load_literal", Module);
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  auto *Load = Builder.CreateAlignedLoad(VectorType, Literal, llvm::Align(16));
+  Load->setVolatile(true);
+  Builder.CreateRet(Load);
+
+  CompiledImage Image = compileImageForPatch(
+      Module, Arch::AArch64, BinaryFormat::MachO, TextVA,
+      [](llvm::StringRef, uint32_t) -> std::optional<uint64_t> {
+        return std::nullopt;
+      },
+      kBaseVA);
+
+  ASSERT_TRUE(Image.Success);
+  const CompiledSection *Text =
+      findCompiledSection(Image, section_names::macho::Text);
+  ASSERT_NE(Text, nullptr);
+  EXPECT_EQ(Text->VA, TextVA);
+
+  const CompiledSection *AlignedData = nullptr;
+  for (const CompiledSection &Section : Image.Sections)
+    if (Section.IsAllocated &&
+        Section.Kind != llvm::mc_rewrite::RewriteSectionKind::Code &&
+        Section.Size > 0 && Section.Alignment >= 16) {
+      AlignedData = &Section;
+      break;
+    }
+  ASSERT_NE(AlignedData, nullptr);
+  EXPECT_EQ(AlignedData->VA % AlignedData->Alignment, 0u);
+}
+
 TEST(CompiledImage, KeepsMachOMetadataOutsideMultiSectionImage) {
   const std::vector<uint8_t> RawBytes = {
       0x03, 0x17, 0x2b, 0x3f, 0x53, 0x67, 0x7b, 0x8f,

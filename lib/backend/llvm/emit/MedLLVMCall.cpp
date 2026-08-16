@@ -253,9 +253,18 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Callee = Mod->getFunction(CalleeName);
         if (!Callee) {
           std::vector<llvm::Type *> FixedTypes;
-          for (unsigned I = 0; I < NumFixed && I < Args.size(); ++I)
-            FixedTypes.push_back(IsStructurallyRecoveredVarArg ? ArgTypes[I]
-                                                               : PtrTy);
+          for (unsigned I = 0; I < NumFixed && I < Args.size(); ++I) {
+            const auto Kind = libc::varArgFixedParamKind(CalleeName, I);
+            if (IsStructurallyRecoveredVarArg ||
+                Kind == libc::VarArgFixedParamKind::Unknown) {
+              FixedTypes.push_back(ArgTypes[I]);
+            } else if (Kind == libc::VarArgFixedParamKind::Pointer) {
+              FixedTypes.push_back(PtrTy);
+            } else {
+              FixedTypes.push_back(ArgTypes[I]->isIntegerTy() ? ArgTypes[I]
+                                                              : I64Ty);
+            }
+          }
           llvm::Type *VarRetTy =
               IsObjCMessageStub
                   ? RetTy
@@ -268,7 +277,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         for (unsigned I = 0;
              !IsStructurallyRecoveredVarArg && I < NumFixed && I < Args.size();
              ++I) {
-          if (Args[I]->getType()->isIntegerTy()) {
+          if (libc::varArgFixedParamKind(CalleeName, I) ==
+                  libc::VarArgFixedParamKind::Pointer &&
+              Args[I]->getType()->isIntegerTy()) {
             llvm::Value *Sym = (CI && I < CI->Args.size())
                                    ? tryResolvePointerArg(CI->Args[I], Builder)
                                    : nullptr;
@@ -432,20 +443,28 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       llvm::Value *AV = Args[AI];
       if (AI < CalleeTy->getNumParams()) {
         auto *Want = CalleeTy->getParamType(AI);
+        const auto FixedKind =
+            CalleeTy->isVarArg()
+                ? libc::varArgFixedParamKind(Callee->getName().str(), AI)
+                : libc::VarArgFixedParamKind::Unknown;
         // Symbolize a pointer-width integer arg resolving to a global address
         // when the callee param is itself an integer.  A callee recovered
         // with integer params (e.g. a variadic call whose args were recovered
         // as fixed integer params) never reaches the pointer-param path
         // below, so a computed `&global[i]` would be passed as a stale
         // absolute VA the callee dereferences into unmapped memory.
-        // tryResolvePointerArg only fires for a provable data/rodata address
-        // and the width guard keeps a narrow integer untouched; converting
-        // back to the integer param keeps the recovered signature valid. Runs
-        // before the type-mismatch block so a same-width (i64==i64) arg is
+        // tryResolvePointerArg only fires for a provable data/rodata address,
+        // but fixed libc scalars such as snprintf's size can legitimately
+        // overlap a low-address relocatable data segment.  The libc signature
+        // table keeps those integers scalar.  The width guard keeps other
+        // narrow integers untouched; converting back to the integer param keeps
+        // a structurally recovered signature valid. Runs before the
+        // type-mismatch block so a same-width (i64==i64) pointer arg is
         // symbolized too.
         if (unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
             Want->isIntegerTy() && AV->getType()->isIntegerTy() && CI &&
             AI < CI->Args.size() && PtrSz &&
+            FixedKind != libc::VarArgFixedParamKind::Integer &&
             Want->getIntegerBitWidth() == PtrSz * 8)
           if (llvm::Value *Sym = tryResolvePointerArg(CI->Args[AI], Builder))
             AV = Builder.CreatePtrToInt(Sym, Want);

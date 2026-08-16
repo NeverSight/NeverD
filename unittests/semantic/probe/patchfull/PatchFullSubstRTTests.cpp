@@ -34284,6 +34284,7 @@ bool compileHostProgram(const fs::path &Dir, const char *Program,
   }
 
   std::string Inputs = neverd::test::shellQuote(CSource);
+  std::string LinkFlags;
 #if defined(__APPLE__) &&                                                      \
     (defined(__aarch64__) || defined(__arm64__) || defined(__x86_64__))
   if (AddMachODwarfAnchor) {
@@ -34326,13 +34327,21 @@ retq
     if (!OS)
       return false;
     Inputs += " " + neverd::test::shellQuote(Anchor);
+
+    // Keep this positive fixture on the patcher's registrable DWARF path.
+    // If ld64 also synthesizes __unwind_info, its fixed-size input allocation
+    // cannot hold the larger regenerated compact-unwind table and the patcher
+    // correctly fails closed.  The compact-only negative fixture deliberately
+    // omits both this anchor and this linker option.
+    LinkFlags = " -Wl,-no_compact_unwind";
   }
 #else
   (void)AddMachODwarfAnchor;
 #endif
 
-  return runExit("clang " + std::string(OptFlag) + " -fno-stack-protector -o " +
-                 neverd::test::shellQuote(Executable) + " " + Inputs) == 0;
+  return runExit("clang " + std::string(OptFlag) + " -fno-stack-protector" +
+                 LinkFlags + " -o " + neverd::test::shellQuote(Executable) +
+                 " " + Inputs) == 0;
 }
 
 // Self-contained program (no libc) exercising all five substituted operators;

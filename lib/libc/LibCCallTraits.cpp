@@ -109,6 +109,74 @@ unsigned varArgFixedCount(std::string_view Name) {
   return irregularVarArgFixedCount(Name);
 }
 
+VarArgFixedParamKind varArgFixedParamKind(std::string_view Name,
+                                          unsigned Index) {
+  Name = stripLeadingUnderscores(Name);
+  const unsigned FixedCount = varArgFixedCount(Name);
+  if (Index >= FixedCount)
+    return VarArgFixedParamKind::Unknown;
+
+  constexpr std::string_view ObjCMsgSendPrefix = "objc_msgSend$";
+  if (Name.starts_with(ObjCMsgSendPrefix)) {
+    // The receiver and linker-supplied _cmd are pointers.  Selector arguments
+    // can be arbitrary scalars, pointers, or aggregates, so retain the type
+    // recovered from their actual registers.
+    return Index < 2 ? VarArgFixedParamKind::Pointer
+                     : VarArgFixedParamKind::Unknown;
+  }
+
+  if (Name.ends_with("_chk")) {
+    std::string_view Core = Name.substr(0, Name.size() - 4);
+    while (!Core.empty() && Core.front() == '_')
+      Core.remove_prefix(1);
+
+    if (Core == "printf")
+      return Index == 0 ? VarArgFixedParamKind::Integer
+                        : VarArgFixedParamKind::Pointer;
+    if (Core == "fprintf" || Core == "asprintf")
+      return Index == 1 ? VarArgFixedParamKind::Integer
+                        : VarArgFixedParamKind::Pointer;
+    if (Core == "dprintf")
+      return Index < 2 ? VarArgFixedParamKind::Integer
+                       : VarArgFixedParamKind::Pointer;
+    if (Core == "sprintf")
+      return Index == 0 || Index == 3 ? VarArgFixedParamKind::Pointer
+                                      : VarArgFixedParamKind::Integer;
+    if (Core == "snprintf")
+      return Index == 0 || Index == 4 ? VarArgFixedParamKind::Pointer
+                                      : VarArgFixedParamKind::Integer;
+    return VarArgFixedParamKind::Unknown;
+  }
+
+  if (Name.ends_with("printf") || Name.ends_with("scanf")) {
+    if (FixedCount == 1)
+      return VarArgFixedParamKind::Pointer;
+    if (FixedCount == 3)
+      return Index == 1 ? VarArgFixedParamKind::Integer
+                        : VarArgFixedParamKind::Pointer;
+    if (FixedCount == 2) {
+      // dprintf's file descriptor is the only scalar first parameter in the
+      // ordinary two-fixed-parameter printf/scanf family.
+      if (Name == "dprintf" && Index == 0)
+        return VarArgFixedParamKind::Integer;
+      return VarArgFixedParamKind::Pointer;
+    }
+  }
+
+  // The irregular registry intentionally carries only the fixed prefix the
+  // recovery pass can prove.  Classify that prefix without guessing the types
+  // of any optional tail arguments.
+  if (Name == "syslog" || Name == "err" || Name == "errx" || Name == "openat" ||
+      Name == "fcntl" || Name == "ioctl")
+    return VarArgFixedParamKind::Integer;
+  if (Name == "warn" || Name == "warnx" || Name == "open" || Name == "execl" ||
+      Name == "execlp" || Name == "execle" || Name == "mq_open" ||
+      Name == "sem_open")
+    return VarArgFixedParamKind::Pointer;
+
+  return VarArgFixedParamKind::Unknown;
+}
+
 bool isVaListConsumer(std::string_view Name) {
   // Fortified __v*_chk forms (e.g. __vsnprintf_chk) take a va_list just like
   // their plain v* base; strip the suffix and fall through to the v* check.

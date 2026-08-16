@@ -186,6 +186,20 @@ bool attachSourceFunctionOriginalVAs(
   return Image.SourceFunctionOriginalVAs.size() == OriginalVAs.size();
 }
 
+std::optional<uint64_t> nearestAlignedVA(uint64_t VA, uint64_t Alignment) {
+  if (Alignment == 0 || (Alignment & (Alignment - 1)) != 0)
+    return std::nullopt;
+  const uint64_t Floor = VA & ~(Alignment - 1);
+  if (Floor == VA)
+    return VA;
+  if (Floor > std::numeric_limits<uint64_t>::max() - Alignment)
+    return Floor;
+  const uint64_t Ceil = Floor + Alignment;
+  // Prefer the upper address on an exact tie: a forward PC-relative reference
+  // includes the instruction-width bias and remains inside a signed range.
+  return VA - Floor < Ceil - VA ? Floor : Ceil;
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -239,18 +253,40 @@ static CompiledImage compileImageForPatchImpl(
     return section_names::isTextSectionName(N);
   };
 
-  // Pass 1: compile with every section anchored at BaseVA. For the common
-  // single-section (text-only) case this is already final — text sits at
-  // BaseVA and there are no cross-section fixups, so every fixup value is
-  // correct and we return after one compile (matching the pre-multi-section
-  // fast path). When more than one section is emitted the
+  // The sizing compile does not know native section alignments until MC has
+  // emitted the sections.  Keep text at its required final VA, but give every
+  // provisional non-text section a nearby, conservatively aligned anchor.  A
+  // function entry commonly has only instruction alignment (4 bytes on
+  // AArch64), while a generated literal pool can require 16 bytes; anchoring
+  // both at the entry makes the target reject the fixup before its section
+  // alignment can be discovered.  Explicit over-aligned globals raise the
+  // probe alignment beyond the 64-KiB platform floor.
+  uint64_t ProbeSectionAlignment = 64 * 1024;
+  for (const llvm::GlobalVariable &GV : Mod.globals())
+    if (llvm::MaybeAlign Alignment = GV.getAlign())
+      ProbeSectionAlignment =
+          std::max<uint64_t>(ProbeSectionAlignment, Alignment->value());
+  const std::optional<uint64_t> ProbeSectionVA =
+      nearestAlignedVA(BaseVA, ProbeSectionAlignment);
+  if (!ProbeSectionVA)
+    return Out;
+
+  // Pass 1: compile text at BaseVA and provisional non-text sections at their
+  // aligned probe VA. For the common single-section (text-only) case this is
+  // already final — text sits at BaseVA and there are no cross-section fixups,
+  // so every fixup value is correct and we return after one compile (matching
+  // the pre-multi-section fast path). When more than one section is emitted the
   // fixup *values* for cross-section references are stale, but section *sizes*
   // (fixups are fixed-width, applied in place) are exact and drive the layout.
   llvm::mc_rewrite::RewriteOptions Pass1;
   Pass1.DeferGlobalFunctionRangeOverlap = true;
   Pass1.Model.TextVA = BaseVA;
   Pass1.Model.ImageBaseVA = ImageBaseVA;
-  Pass1.Model.getSectionVA = [&](llvm::StringRef) { return BaseVA; };
+  Pass1.Model.getSectionVA = [&](llvm::StringRef Name) {
+    if (std::optional<uint64_t> FixedVA = FixedSectionVAFn(Name))
+      return *FixedVA;
+    return IsText(Name) ? BaseVA : *ProbeSectionVA;
+  };
   Resolvers.install(Pass1.Model);
   std::vector<CapturedFixupReference> Pass1Fixups;
   Pass1.onFixup = [&](const llvm::mc_rewrite::FixupCtx &Context,
@@ -326,10 +362,10 @@ static CompiledImage compileImageForPatchImpl(
     return Out;
   }
 
-  // Plan a contiguous layout: text first at BaseVA, then the remaining sections
-  // in emission order, each honoring both a 16-byte patch-image floor (covers
-  // pointer/blockaddress tables and vector constants) and the alignment
-  // reported by MC.  Section
+  // Plan a contiguous layout: text first at BaseVA using its native instruction
+  // alignment, then the remaining sections in emission order, each honoring
+  // both a 16-byte patch-image floor (covers pointer/blockaddress tables and
+  // vector constants) and the alignment reported by MC.  Section
   // spacing uses a per-section MONOTONIC max size (MaxSize, grown each round)
   // rather than this compile's size, so a section never moves backward and the
   // layout cannot oscillate (see the iteration note below).
@@ -353,7 +389,8 @@ static CompiledImage compileImageForPatchImpl(
         VA[S.Name] = *FixedVA;
         return;
       }
-      uint64_t SectionAlign = std::max<uint64_t>(Align, S.Alignment);
+      uint64_t SectionAlign =
+          IsText(S.Name) ? S.Alignment : std::max<uint64_t>(Align, S.Alignment);
       if (S.Alignment == 0 || (S.Alignment & (S.Alignment - 1)) != 0 ||
           SectionAlign == 0 || (SectionAlign & (SectionAlign - 1)) != 0 ||
           Cur > std::numeric_limits<uint64_t>::max() - (SectionAlign - 1)) {

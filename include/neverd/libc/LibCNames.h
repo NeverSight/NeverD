@@ -88,6 +88,23 @@ const char *headerFor(std::string_view Name);
 /// if the function is not variadic.
 unsigned varArgFixedCount(std::string_view Name);
 
+/// ABI category of one fixed parameter in a known variadic function.  Pointer
+/// parameters must be symbolized before code generation; integer parameters
+/// must remain scalar values even when a small constant happens to overlap a
+/// low-address data segment in a relocatable image.  Unknown preserves the
+/// recovered call-site type (used for user functions and selector arguments
+/// whose source-level type is not encoded in the symbol name).
+enum class VarArgFixedParamKind {
+  Unknown,
+  Integer,
+  Pointer,
+};
+
+/// Return the ABI category of fixed parameter \p Index for a known variadic
+/// libc/POSIX function.  Names may retain platform-leading underscores.
+VarArgFixedParamKind varArgFixedParamKind(std::string_view Name,
+                                          unsigned Index);
+
 /// True if Name is a known va_list-consuming function: the v-prefixed printf /
 /// scanf family (vprintf, vfprintf, vsnprintf, vscanf, ...) and their fortified
 /// __v*_chk variants, plus vsyslog/verr/vwarn.  These take a trailing `va_list`
