@@ -150,9 +150,23 @@ add_neverd_unittest(NeverDLiftTests
   format/TextSectionDetectionTests.cpp
 )
 
+# Prebuilt LLVM packages ship libraries only.  Point HighC syntax checks at
+# that tree's clang when it exists; otherwise use the host compiler that
+# configured the build so CI does not try to exec `/clang`.
+set(_neverd_bundled_clang
+    "${LLVM_TOOLS_BINARY_DIR}/clang${CMAKE_EXECUTABLE_SUFFIX}")
+if(EXISTS "${_neverd_bundled_clang}")
+  set(_neverd_test_clang "${_neverd_bundled_clang}")
+else()
+  find_program(_neverd_test_clang NAMES clang)
+  if(NOT _neverd_test_clang AND CMAKE_C_COMPILER)
+    set(_neverd_test_clang "${CMAKE_C_COMPILER}")
+  endif()
+endif()
+
 target_compile_definitions(NeverDLiftTests PRIVATE
   NEVERD_BINARY="$<TARGET_FILE:neverd>"
-  NEVERD_TEST_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
+  NEVERD_TEST_CLANG="${_neverd_test_clang}"
   TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
   TEST_OBJ_DIR="${CMAKE_CURRENT_BINARY_DIR}"
 )
