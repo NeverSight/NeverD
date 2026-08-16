@@ -5,6 +5,24 @@
 #define QUERY_TAG 0x0a00000000000000UL
 
 __attribute__((noinline)) unsigned long
+test_addg_immediates_a64(unsigned long address) {
+  unsigned long result;
+  __asm__ volatile("addg %0, %1, #48, #5"
+                   : "=r"(result)
+                   : "r"(address));
+  return result;
+}
+
+__attribute__((noinline)) unsigned long
+test_subg_immediates_a64(unsigned long address) {
+  unsigned long result;
+  __asm__ volatile("subg %0, %1, #112, #9"
+                   : "=r"(result)
+                   : "r"(address));
+  return result;
+}
+
+__attribute__((noinline)) unsigned long
 test_ldg_after_stg_a64(unsigned long address) {
   unsigned long tagged_store = (address & ADDRESS_MASK) | STORE_TAG;
   unsigned long tagged_query = (address & ADDRESS_MASK) | QUERY_TAG;

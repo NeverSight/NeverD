@@ -42,6 +42,26 @@ TEST_F(AArch64_MTE, StgAndLdgUseArchitecturalLLVMIntrinsics) {
   EXPECT_EQ(F.find("asm sideeffect \"stg\""), std::string::npos) << F;
 }
 
+TEST_F(AArch64_MTE, AddgSubgPreserveAddressAndTagImmediates) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto Add = functionIR(r.out, "test_addg_immediates_a64");
+  ASSERT_FALSE(Add.empty()) << r.out;
+  EXPECT_NE(Add.find("@llvm.aarch64.addg"), std::string::npos) << Add;
+  EXPECT_NE(Add.find("getelementptr i8"), std::string::npos) << Add;
+  EXPECT_NE(Add.find("i64 48"), std::string::npos) << Add;
+  EXPECT_NE(Add.find("i64 5"), std::string::npos) << Add;
+  EXPECT_EQ(Add.find("add i64 %arg0, 16"), std::string::npos) << Add;
+
+  auto Sub = functionIR(r.out, "test_subg_immediates_a64");
+  ASSERT_FALSE(Sub.empty()) << r.out;
+  EXPECT_NE(Sub.find("@llvm.aarch64.subg"), std::string::npos) << Sub;
+  EXPECT_NE(Sub.find("i64 112"), std::string::npos) << Sub;
+  EXPECT_NE(Sub.find("i64 9"), std::string::npos) << Sub;
+  EXPECT_EQ(Sub.find("sub i64 %arg0, 16"), std::string::npos) << Sub;
+}
+
 TEST_F(AArch64_MTE, HighCUsesACLEAndCompiles) {
   auto r = decompileToHighC(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;
@@ -54,6 +74,11 @@ TEST_F(AArch64_MTE, HighCUsesACLEAndCompiles) {
                      std::istreambuf_iterator<char>());
   EXPECT_NE(source.find("__arm_mte_set_tag"), std::string::npos) << source;
   EXPECT_NE(source.find("__arm_mte_get_tag"), std::string::npos) << source;
+  EXPECT_NE(source.find("__builtin_arm_addg"), std::string::npos) << source;
+  EXPECT_NE(source.find("__builtin_arm_subg"), std::string::npos) << source;
+  EXPECT_NE(source.find(" + 48"), std::string::npos) << source;
+  EXPECT_NE(source.find(", 5)"), std::string::npos) << source;
+  EXPECT_NE(source.find(", 112, 9)"), std::string::npos) << source;
   EXPECT_EQ(source.find("__neverd"), std::string::npos) << source;
   EXPECT_EQ(source.find("return arg0;"), std::string::npos) << source;
 

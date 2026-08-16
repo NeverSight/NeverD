@@ -118,6 +118,17 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::Addg:
+  case I::Subg: {
+    if (Ops.size() < 3)
+      return {};
+    HasCIntrinsics = true;
+    if (Id == I::Subg)
+      return "((uint64_t)(uintptr_t)__builtin_arm_subg((void *)(uintptr_t)(" +
+             Ops[0] + "), " + Ops[1] + ", " + Ops[2] + "))";
+    return "((uint64_t)(uintptr_t)__builtin_arm_addg((void *)(uintptr_t)(" +
+           Ops[0] + " + " + Ops[1] + "), " + Ops[2] + "))";
+  }
   case I::Stg: {
     if (Ops.size() < 2)
       return {};

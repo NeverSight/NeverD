@@ -132,12 +132,18 @@ bool liftPacFlags(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   // MTE: ADDG / SUBG
   case AARCH64_INS_ADDG:
   case AARCH64_INS_SUBG: {
-    if (ARM64.op_count < 2)
+    if (ARM64.op_count < 4 || ARM64.operands[2].type != AARCH64_OP_IMM ||
+        ARM64.operands[3].type != AARCH64_OP_IMM)
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar Src = L.operandRead(S, ARM64.operands[1]);
-    S.emit(Insn->id == AARCH64_INS_ADDG ? NdOp::INT_ADD : NdOp::INT_SUB, Dst,
-           {Src, NdVar::cst(0x10, Src.Size)});
+    NdVar AddressOffset = NdVar::cst(
+        static_cast<uint64_t>(ARM64.operands[2].imm), Src.Size);
+    NdVar TagOffset =
+        NdVar::cst(static_cast<uint64_t>(ARM64.operands[3].imm), Src.Size);
+    S.emitIntrinsic(Insn->id == AARCH64_INS_ADDG ? Intrinsic::Addg
+                                                 : Intrinsic::Subg,
+                    Dst, {Src, AddressOffset, TagOffset});
     break;
   }
 

@@ -76,6 +76,35 @@ TEST(RewriteCodegen_AArch64, MTEIntrinsicsEnableMTE) {
   ASSERT_FALSE(Text->Bytes.empty());
 }
 
+TEST(RewriteCodegen_AArch64, MTEAddgSubgIntrinsicsEnableMTE) {
+  ensureLLVMTargets();
+
+  llvm::LLVMContext Ctx;
+  auto Mod = std::make_unique<llvm::Module>("mte_addg_subg", Ctx);
+  Mod->setTargetTriple(llvm::Triple("aarch64-unknown-linux-elf"));
+  auto *PtrTy = llvm::PointerType::getUnqual(Ctx);
+  auto *FnTy = llvm::FunctionType::get(PtrTy, {PtrTy}, false);
+  auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                    "mte_addg_subg", *Mod);
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", Fn);
+  llvm::IRBuilder<> Builder(Entry);
+  llvm::Value *Address = &*Fn->arg_begin();
+  auto *ADDG = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_addg);
+  auto *SUBG = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_subg);
+  llvm::Value *Tagged = Builder.CreateCall(ADDG, {Address, Builder.getInt64(5)});
+  Builder.CreateRet(Builder.CreateCall(
+      SUBG, {Tagged, Builder.getInt64(112), Builder.getInt64(9)}));
+
+  auto RR = compileRewrite(*Mod, Arch::AArch64, BinaryFormat::ELF);
+  ASSERT_FALSE(RR.Sections.empty());
+  ASSERT_TRUE(RR.Unresolved.empty());
+  auto *Text = findTextSection(RR);
+  ASSERT_NE(Text, nullptr);
+  ASSERT_FALSE(Text->Bytes.empty());
+}
+
 TEST(RewriteCodegen_AArch64, I128AtomicAndEnablesLSE128) {
   ensureLLVMTargets();
 

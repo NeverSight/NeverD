@@ -132,6 +132,51 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                : Builder.CreateZExtOrTrunc(Status, OutTy);
   }
 
+  if ((IC == I::Addg || IC == I::Subg) && Op.Output.Size > 0 &&
+      Op.NumInputs >= 4 && Op.Inputs[2].isConst() &&
+      Op.Inputs[3].isConst()) {
+    const uint64_t AddressOffset = Op.Inputs[2].ConstVal;
+    const uint64_t TagOffset = Op.Inputs[3].ConstVal;
+    if (AddressOffset > 1008 || AddressOffset % 16 != 0 || TagOffset > 15)
+      return nullptr;
+
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    auto *PtrTy = llvm::PointerType::getUnqual(*Ctx);
+    auto *OutTy = sizeToType(Op.Output.Size);
+    llvm::Value *Source = getVar(Op.Inputs[1], Builder);
+    if (Source->getType()->isPointerTy())
+      Source = Builder.CreatePtrToInt(Source, I64Ty);
+    else if (Source->getType() != I64Ty)
+      Source = Builder.CreateZExtOrTrunc(Source, I64Ty);
+    llvm::Value *Pointer = Builder.CreateIntToPtr(Source, PtrTy);
+    llvm::Value *Result = nullptr;
+
+    if (IC == I::Addg) {
+      Pointer = Builder.CreateGEP(
+          llvm::Type::getInt8Ty(*Ctx), Pointer,
+          llvm::ConstantInt::get(I64Ty, AddressOffset), "addg.address");
+      auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+          Mod, llvm::Intrinsic::aarch64_addg);
+      Result = Builder.CreateCall(
+          Fn, {Pointer, llvm::ConstantInt::get(I64Ty, TagOffset)}, "mte.addg");
+    } else {
+      auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+          Mod, llvm::Intrinsic::aarch64_subg);
+      Result = Builder.CreateCall(
+          Fn,
+          {Pointer, llvm::ConstantInt::get(I64Ty, AddressOffset),
+           llvm::ConstantInt::get(I64Ty, TagOffset)},
+          "mte.subg");
+    }
+
+    if (OutTy->isPointerTy())
+      return Result;
+    Result = Builder.CreatePtrToInt(Result, I64Ty);
+    return Result->getType() == OutTy
+               ? Result
+               : Builder.CreateZExtOrTrunc(Result, OutTy);
+  }
+
   if (IC == I::Ldg && Op.Output.Size > 0 && Op.NumInputs >= 3) {
     auto *PtrTy = llvm::PointerType::getUnqual(*Ctx);
     auto asPointer = [&](const MedVar &Input) -> llvm::Value * {
