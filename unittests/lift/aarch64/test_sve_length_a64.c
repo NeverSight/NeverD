@@ -21,3 +21,15 @@ __attribute__((naked, noinline)) unsigned long test_sve_decw_mul4(void) {
                    "decw x0, all, mul #4\n\t"
                    "ret");
 }
+
+__attribute__((naked, noinline)) unsigned long test_sve_addvl_two(void) {
+  __asm__ volatile("mov x0, #10\n\t"
+                   "addvl x0, x0, #2\n\t"
+                   "ret");
+}
+
+__attribute__((naked, noinline)) unsigned long test_sve_addvl_negative(void) {
+  __asm__ volatile("mov x0, #100\n\t"
+                   "addvl x0, x0, #-3\n\t"
+                   "ret");
+}

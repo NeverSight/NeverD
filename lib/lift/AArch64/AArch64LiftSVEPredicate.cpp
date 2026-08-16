@@ -117,9 +117,19 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_SETFFR:
     S.emitIntrinsic(Intrinsic::A64_Setffr);
     break;
+  case AARCH64_INS_ADDVL: {
+    if (ARM64.op_count >= 3) {
+      NdVar Dst = L.operandWrite(ARM64.operands[0]);
+      NdVar Src = L.operandRead(S, ARM64.operands[1]);
+      NdVar Count = S.makeTemp(Dst.Size);
+      S.emitIntrinsic(Intrinsic::A64_SveCntb, Count, {NdVar::cst(31, 4)});
+      Count = scaleSVECount(Count);
+      S.emit(NdOp::INT_ADD, Dst, {Src, Count});
+    }
+    break;
+  }
   case AARCH64_INS_RDSVL:
   case AARCH64_INS_RDVL:
-  case AARCH64_INS_ADDVL:
   case AARCH64_INS_ADDPL:
   case AARCH64_INS_ADDSPL:
   case AARCH64_INS_ADDSVL:

@@ -75,6 +75,26 @@ TEST_F(AArch64_SVELength, IncAndDecHonorEncodedMultiplier) {
   EXPECT_NE(Dec.find("shl i64 %svcnt, 2"), std::string::npos) << Dec;
 }
 
+TEST_F(AArch64_SVELength, AddvlScalesSignedImmediateByRuntimeVectorLength) {
+  auto r = liftToLLVMIR(sveLengthObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto Positive = sveLengthFunctionIR(r.out, "test_sve_addvl_two");
+  ASSERT_FALSE(Positive.empty()) << r.out;
+  EXPECT_NE(Positive.find("@llvm.aarch64.sve.cntb(i32 31)"),
+            std::string::npos)
+      << Positive;
+  EXPECT_NE(Positive.find("shl i64 %svcnt, 1"), std::string::npos)
+      << Positive;
+
+  auto Negative = sveLengthFunctionIR(r.out, "test_sve_addvl_negative");
+  ASSERT_FALSE(Negative.empty()) << r.out;
+  EXPECT_NE(Negative.find("@llvm.aarch64.sve.cntb(i32 31)"),
+            std::string::npos)
+      << Negative;
+  EXPECT_NE(Negative.find("-3"), std::string::npos) << Negative;
+}
+
 TEST_F(AArch64_SVELength, HighCUsesSVEACLEAndCompiles) {
   auto r = decompileToHighC(sveLengthObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;
@@ -113,6 +133,30 @@ TEST_F(AArch64_SVELength, HighCHonorsEncodedMultiplierAndCompiles) {
   ASSERT_FALSE(Dec.empty()) << source;
   EXPECT_NE(Dec.find("svcntw()"), std::string::npos) << Dec;
   EXPECT_NE(Dec.find("* 4"), std::string::npos) << Dec;
+
+  expectPairedClangSyntax(cFile, source);
+}
+
+TEST_F(AArch64_SVELength, HighCAddvlUsesRuntimeVectorLengthAndCompiles) {
+  auto r = decompileToHighC(sveLengthObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+
+  auto Positive = sveLengthFunctionC(source, "test_sve_addvl_two");
+  ASSERT_FALSE(Positive.empty()) << source;
+  EXPECT_NE(Positive.find("svcntb()"), std::string::npos) << Positive;
+  EXPECT_NE(Positive.find("* 2"), std::string::npos) << Positive;
+
+  auto Negative = sveLengthFunctionC(source, "test_sve_addvl_negative");
+  ASSERT_FALSE(Negative.empty()) << source;
+  EXPECT_NE(Negative.find("svcntb()"), std::string::npos) << Negative;
+  EXPECT_NE(Negative.find("-3"), std::string::npos) << Negative;
 
   expectPairedClangSyntax(cFile, source);
 }
