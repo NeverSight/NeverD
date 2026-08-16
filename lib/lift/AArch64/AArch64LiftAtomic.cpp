@@ -274,7 +274,8 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   // CASP — compare-and-swap pair.  `CASP Xs,Xs+1, Xt,Xt+1, [Xn]`:
   //   {lo,hi} = *[Xn];  if {lo,hi}=={Xs,Xs+1} then *[Xn] = {Xt,Xt+1};
   //   {Xs,Xs+1} = {lo,hi}  (old pair written back to the comparison regs).
-  // The old handler was a single COPY placeholder (no compare/swap/writeback).
+  // Keep the entire pair in one ATOMIC_CMPXCHG operation; separate scalar
+  // loads and stores allow concurrent callers to lose updates.
   case AARCH64_INS_CASP:
   case AARCH64_INS_CASPA:
   case AARCH64_INS_CASPAL:
@@ -288,27 +289,23 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     NdVar EA = operandEffAddr(S, ARM64.operands[4]);
     NdVar DstLo = operandWrite(ARM64.operands[0]);
     NdVar DstHi = operandWrite(ARM64.operands[1]);
-    uint16_t Rsz = ExpLo.Size; // 4 (W pair) or 8 (X pair)
-    NdVar LoadedLo = S.makeTemp(Rsz);
-    S.emit(NdOp::LOAD, LoadedLo, {EA});
-    NdVar EA2 = S.makeTemp(8);
-    S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(Rsz, 8)});
-    NdVar LoadedHi = S.makeTemp(Rsz);
-    S.emit(NdOp::LOAD, LoadedHi, {EA2});
-    NdVar CmpLo = S.makeTemp(1);
-    S.emit(NdOp::INT_EQUAL, CmpLo, {LoadedLo, ExpLo});
-    NdVar CmpHi = S.makeTemp(1);
-    S.emit(NdOp::INT_EQUAL, CmpHi, {LoadedHi, ExpHi});
-    NdVar Eq = S.makeTemp(1);
-    S.emit(NdOp::INT_AND, Eq, {CmpLo, CmpHi});
-    NdVar NewLo = S.makeTemp(Rsz);
-    S.emit(NdOp::SELECT, NewLo, {Eq, DesLo, LoadedLo});
-    NdVar NewHi = S.makeTemp(Rsz);
-    S.emit(NdOp::SELECT, NewHi, {Eq, DesHi, LoadedHi});
-    S.emit(NdOp::STORE, {}, {EA, NewLo});
-    S.emit(NdOp::STORE, {}, {EA2, NewHi});
-    S.emit(NdOp::COPY, DstLo, {LoadedLo});
-    S.emit(NdOp::COPY, DstHi, {LoadedHi});
+    NdVar ExpectedPair = S.makeTemp(ExpLo.Size + ExpHi.Size);
+    NdVar DesiredPair = S.makeTemp(DesLo.Size + DesHi.Size);
+    NdVar OldPair = S.makeTemp(ExpectedPair.Size);
+    S.emit(NdOp::CONCAT, ExpectedPair, {ExpHi, ExpLo});
+    S.emit(NdOp::CONCAT, DesiredPair, {DesHi, DesLo});
+
+    NdMemoryOrdering Ordering = NdMemoryOrdering::Relaxed;
+    if (Insn->id == AARCH64_INS_CASPA)
+      Ordering = NdMemoryOrdering::Acquire;
+    else if (Insn->id == AARCH64_INS_CASPAL)
+      Ordering = NdMemoryOrdering::AcquireRelease;
+    else if (Insn->id == AARCH64_INS_CASPL)
+      Ordering = NdMemoryOrdering::Release;
+    S.emit(NdOp::ATOMIC_CMPXCHG, OldPair, {EA, ExpectedPair, DesiredPair},
+           Ordering);
+    S.emit(NdOp::SUBBYTES, DstLo, {OldPair, NdVar::cst(0, 4)});
+    S.emit(NdOp::SUBBYTES, DstHi, {OldPair, NdVar::cst(DstLo.Size, 4)});
     break;
   }
 
@@ -651,25 +648,35 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     NdVar EA = operandEffAddr(S, ARM64.operands[2]);
     NdVar Dst = operandWrite(ARM64.operands[0]);
     uint16_t Asz = accessSize(Dst.Size);
-    NdVar Loaded = S.makeTemp(Asz);
-    S.emit(NdOp::LOAD, Loaded, {EA});
-    // Compute the compare/conditional-store BEFORE writing Dst.  Dst is the
-    // SAME register as Expected (Rs is both the compare value and the
-    // load-back destination); writing Dst=loaded first would make Expected read
-    // back as `loaded`, turning the compare into `loaded==loaded` (always true)
-    // and storing Desired unconditionally even on a mismatch.
     NdVar ExpN = narrowToWidth(S, Expected, Asz);
     NdVar DesN = narrowToWidth(S, Desired, Asz);
-    NdVar Cmp = S.makeTemp(1);
-    S.emit(NdOp::INT_EQUAL, Cmp, {Loaded, ExpN});
-    NdVar NewMem = S.makeTemp(Asz);
-    S.emit(NdOp::SELECT, NewMem, {Cmp, DesN, Loaded});
-    S.emit(NdOp::STORE, {}, {EA, NewMem});
-    // Write the old value back into Rs last.
+    NdVar Old = S.makeTemp(Asz);
+
+    NdMemoryOrdering Ordering = NdMemoryOrdering::Relaxed;
+    switch (Insn->id) {
+    case AARCH64_INS_CASA:
+    case AARCH64_INS_CASAB:
+    case AARCH64_INS_CASAH:
+      Ordering = NdMemoryOrdering::Acquire;
+      break;
+    case AARCH64_INS_CASL:
+    case AARCH64_INS_CASLB:
+    case AARCH64_INS_CASLH:
+      Ordering = NdMemoryOrdering::Release;
+      break;
+    case AARCH64_INS_CASAL:
+    case AARCH64_INS_CASALB:
+    case AARCH64_INS_CASALH:
+      Ordering = NdMemoryOrdering::AcquireRelease;
+      break;
+    default:
+      break;
+    }
+    S.emit(NdOp::ATOMIC_CMPXCHG, Old, {EA, ExpN, DesN}, Ordering);
     if (Asz < Dst.Size)
-      S.emit(NdOp::INT_ZEXT, Dst, {Loaded});
+      S.emit(NdOp::INT_ZEXT, Dst, {Old});
     else
-      S.emit(NdOp::COPY, Dst, {Loaded});
+      S.emit(NdOp::COPY, Dst, {Old});
     break;
   }
 

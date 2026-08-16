@@ -339,6 +339,90 @@ TEST_F(AArch64_Atomic, LdaddHighCUsesAtomicFetchAddAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
+TEST_F(AArch64_Atomic, CasAndCaspUseOrderedAtomicCompareExchange) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  const struct {
+    const char *Name;
+    const char *Type;
+    const char *Ordering;
+    unsigned Align;
+  } Cases[] = {{"test_cas", "i64", "monotonic monotonic", 8},
+               {"test_casa", "i64", "acquire acquire", 8},
+               {"test_casal", "i64", "acq_rel acquire", 8},
+               {"test_casl", "i64", "release monotonic", 8},
+               {"test_casb", "i8", "monotonic monotonic", 1},
+               {"test_cash", "i16", "monotonic monotonic", 2},
+               {"test_casp", "i128", "monotonic monotonic", 16},
+               {"test_caspa", "i128", "acquire acquire", 16},
+               {"test_caspal", "i128", "acq_rel acquire", 16},
+               {"test_caspl", "i128", "release monotonic", 16}};
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionIR(r.out, Case.Name);
+    ASSERT_FALSE(F.empty()) << r.out;
+    EXPECT_NE(F.find("cmpxchg ptr"), std::string::npos) << F;
+    EXPECT_NE(F.find(std::string(", ") + Case.Type + " "), std::string::npos)
+        << F;
+    EXPECT_NE(F.find(std::string(Case.Ordering) + ", align " +
+                     std::to_string(Case.Align)),
+              std::string::npos)
+        << F;
+    EXPECT_EQ(F.find("load i"), std::string::npos) << F;
+    EXPECT_EQ(F.find("store i"), std::string::npos) << F;
+  }
+}
+
+TEST_F(AArch64_Atomic, CasAndCaspHighCUseStandardCompareExchangeAndCompile) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("__atomic_compare_exchange_n"), std::string::npos)
+      << source;
+  EXPECT_NE(source.find("unsigned __int128"), std::string::npos) << source;
+  EXPECT_EQ(source.find("__neverd_a64_cas"), std::string::npos) << source;
+
+  for (const char *Name :
+       {"test_cas", "test_casa", "test_casal", "test_casl", "test_casb",
+        "test_cash", "test_casp", "test_caspa", "test_caspal", "test_caspl"}) {
+    SCOPED_TRACE(Name);
+    auto F = functionC(source, Name);
+    ASSERT_FALSE(F.empty()) << source;
+    size_t Count = 0;
+    for (size_t Pos = F.find("__atomic_compare_exchange_n");
+         Pos != std::string::npos;
+         Pos = F.find("__atomic_compare_exchange_n", Pos + 1))
+      ++Count;
+    EXPECT_EQ(Count, 1u) << F;
+  }
+
+  auto Byte = functionC(source, "test_casb");
+  ASSERT_FALSE(Byte.empty()) << source;
+  EXPECT_NE(Byte.find("\n    uint8_t "), std::string::npos) << Byte;
+  auto Half = functionC(source, "test_cash");
+  ASSERT_FALSE(Half.empty()) << source;
+  EXPECT_NE(Half.find("\n    uint16_t "), std::string::npos) << Half;
+
+  EXPECT_NE(
+      functionC(source, "test_casa").find("__ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE"),
+      std::string::npos);
+  EXPECT_NE(functionC(source, "test_casal")
+                .find("__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE"),
+            std::string::npos);
+  EXPECT_NE(
+      functionC(source, "test_casl").find("__ATOMIC_RELEASE, __ATOMIC_RELAXED"),
+      std::string::npos);
+
+  expectPairedClangSyntax(cFile, source);
+}
+
 TEST_F(AArch64_Atomic, RcwcaspUsesAddressOperandAndBothRegisterPairs) {
   auto r = liftToLLVMIR(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;

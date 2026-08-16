@@ -59,6 +59,10 @@ public:
   std::string atomicFetchAddExpr(const TypeRef &Ty, llvm::StringRef Addr,
                                  llvm::StringRef Val,
                                  NdMemoryOrdering MemoryOrdering) const;
+  std::string atomicCompareExchangeExpr(const TypeRef &Ty, llvm::StringRef Addr,
+                                        llvm::StringRef Expected,
+                                        llvm::StringRef Desired,
+                                        NdMemoryOrdering MemoryOrdering) const;
   void writeForwardDecls(const std::vector<HighFunc> &Funcs);
   void collectCallTargets(const std::vector<HighStmt> &Stmts,
                           std::set<std::string> &Targets);

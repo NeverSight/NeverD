@@ -68,6 +68,22 @@ const char *atomicOrderingToken(NdMemoryOrdering Ordering) {
   llvm::report_fatal_error("plain memory access has no atomic order token");
 }
 
+const char *atomicCmpXchgFailureOrderingToken(NdMemoryOrdering Ordering) {
+  switch (Ordering) {
+  case NdMemoryOrdering::Relaxed:
+  case NdMemoryOrdering::Release:
+    return "__ATOMIC_RELAXED";
+  case NdMemoryOrdering::Acquire:
+  case NdMemoryOrdering::AcquireRelease:
+    return "__ATOMIC_ACQUIRE";
+  case NdMemoryOrdering::SequentiallyConsistent:
+    return "__ATOMIC_SEQ_CST";
+  case NdMemoryOrdering::None:
+    break;
+  }
+  llvm::report_fatal_error("atomic compare-exchange requires memory ordering");
+}
+
 void validateAtomicLoadOrdering(NdMemoryOrdering Ordering) {
   if (Ordering == NdMemoryOrdering::Release ||
       Ordering == NdMemoryOrdering::AcquireRelease)
@@ -231,6 +247,20 @@ std::string HighCWriter::atomicFetchAddExpr(const TypeRef &Ty,
   return "__atomic_fetch_add((" + Type + " *)(uintptr_t)(" + Addr.str() +
          "), (" + Type + ")(" + Val.str() + "), " +
          atomicOrderingToken(Ordering) + ")";
+}
+
+std::string HighCWriter::atomicCompareExchangeExpr(
+    const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Expected,
+    llvm::StringRef Desired, NdMemoryOrdering Ordering) const {
+  if (Ordering == NdMemoryOrdering::None)
+    llvm::report_fatal_error(
+        "atomic compare-exchange requires memory ordering");
+  std::string Type = memoryTypeName(Ty);
+  return "({ " + Type + " neverd_expected = (" + Type + ")(" + Expected.str() +
+         "); (void)__atomic_compare_exchange_n((" + Type + " *)(uintptr_t)(" +
+         Addr.str() + "), &neverd_expected, (" + Type + ")(" + Desired.str() +
+         "), 0, " + atomicOrderingToken(Ordering) + ", " +
+         atomicCmpXchgFailureOrderingToken(Ordering) + "); neverd_expected; })";
 }
 
 void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,

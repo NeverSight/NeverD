@@ -50,6 +50,23 @@ llvm::AtomicOrdering toLLVMAtomicOrdering(NdMemoryOrdering Ordering) {
   llvm_unreachable("unknown NeverD memory ordering");
 }
 
+llvm::AtomicOrdering
+toLLVMAtomicCmpXchgFailureOrdering(NdMemoryOrdering Ordering) {
+  switch (Ordering) {
+  case NdMemoryOrdering::Relaxed:
+  case NdMemoryOrdering::Release:
+    return llvm::AtomicOrdering::Monotonic;
+  case NdMemoryOrdering::Acquire:
+  case NdMemoryOrdering::AcquireRelease:
+    return llvm::AtomicOrdering::Acquire;
+  case NdMemoryOrdering::SequentiallyConsistent:
+    return llvm::AtomicOrdering::SequentiallyConsistent;
+  case NdMemoryOrdering::None:
+    break;
+  }
+  llvm::report_fatal_error("atomic compare-exchange requires memory ordering");
+}
+
 } // anonymous namespace
 
 void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
@@ -861,6 +878,37 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     Result = Builder.CreateAtomicRMW(RMWOp, Ptr, Val,
                                      llvm::MaybeAlign(Op.Output.Size),
                                      toLLVMAtomicOrdering(Op.MemoryOrdering));
+    break;
+  }
+  case NdOp::ATOMIC_CMPXCHG: {
+    if (Op.NumInputs < 3 || Op.Output.Size == 0 ||
+        Op.Inputs[1].Size != Op.Output.Size ||
+        Op.Inputs[2].Size != Op.Output.Size)
+      llvm::report_fatal_error(
+          "atomic compare-exchange has inconsistent operands");
+    if (Op.MemoryOrdering == NdMemoryOrdering::None)
+      llvm::report_fatal_error(
+          "atomic compare-exchange requires memory ordering");
+    if (!llvm::isPowerOf2_64(Op.Output.Size))
+      llvm::report_fatal_error(
+          "atomic compare-exchange size must be a power of two");
+
+    llvm::Type *ValTy = sizeToType(Op.Output.Size);
+    llvm::Value *Expected = GetInput(1);
+    llvm::Value *Desired = GetInput(2);
+    if (Expected->getType() != ValTy)
+      Expected =
+          Builder.CreateIntCast(Expected, ValTy, false, "atomic_cmp_expected");
+    if (Desired->getType() != ValTy)
+      Desired =
+          Builder.CreateIntCast(Desired, ValTy, false, "atomic_cmp_desired");
+    llvm::Value *Ptr = getMemoryPtr(GetInput(0), ValTy, Builder);
+    auto *CmpXchg = Builder.CreateAtomicCmpXchg(
+        Ptr, Expected, Desired, llvm::MaybeAlign(Op.Output.Size),
+        toLLVMAtomicOrdering(Op.MemoryOrdering),
+        toLLVMAtomicCmpXchgFailureOrdering(Op.MemoryOrdering));
+    CmpXchg->setWeak(false);
+    Result = Builder.CreateExtractValue(CmpXchg, 0, "atomic_cmp_old");
     break;
   }
   case NdOp::BRANCH: {

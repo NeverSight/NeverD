@@ -104,6 +104,7 @@ bool hasObservableEffect(const std::vector<LowOp> &Ops, size_t First) {
     case NdOp::STORE:
     case NdOp::ATOMIC_XCHG:
     case NdOp::ATOMIC_ADD:
+    case NdOp::ATOMIC_CMPXCHG:
     case NdOp::INTRINSIC:
       return true;
     default:

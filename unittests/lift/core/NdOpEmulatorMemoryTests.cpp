@@ -132,6 +132,38 @@ TEST_F(NdOpEmulatorTest, AtomicAddReturnsOldValueAndStoresWrappedSum) {
   EXPECT_EQ(Emu.getRegister(16).value_or(0), 3u);
 }
 
+TEST_F(NdOpEmulatorTest, AtomicCompareExchangeStoresOnlyOnMatch) {
+  BinaryImage ImgWithData = makeDummyImage();
+  uint32_t Initial = 42;
+  std::memcpy(ImgWithData.Segments[0].Data.data() + 0x20, &Initial,
+              sizeof(Initial));
+
+  LowOp CompareExchange;
+  CompareExchange.Opcode = NdOp::ATOMIC_CMPXCHG;
+  CompareExchange.Output = NdVar::reg(8, 4);
+  CompareExchange.addInput(NdVar::cst(0x1020, 8));
+  CompareExchange.addInput(NdVar::cst(42, 4));
+  CompareExchange.addInput(NdVar::cst(99, 4));
+
+  NdOpEmulator Match(ImgWithData);
+  ASSERT_TRUE(Match.step(CompareExchange));
+  EXPECT_EQ(Match.getRegister(8).value_or(0), 42u);
+  LowOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = NdVar::reg(16, 4);
+  Load.addInput(NdVar::cst(0, 8));
+  Load.addInput(NdVar::cst(0x1020, 8));
+  ASSERT_TRUE(Match.step(Load));
+  EXPECT_EQ(Match.getRegister(16).value_or(0), 99u);
+
+  CompareExchange.Inputs[1] = NdVar::cst(7, 4);
+  NdOpEmulator Mismatch(ImgWithData);
+  ASSERT_TRUE(Mismatch.step(CompareExchange));
+  EXPECT_EQ(Mismatch.getRegister(8).value_or(0), 42u);
+  ASSERT_TRUE(Mismatch.step(Load));
+  EXPECT_EQ(Mismatch.getRegister(16).value_or(0), 42u);
+}
+
 TEST_F(NdOpEmulatorTest, StoreOverlaysImage) {
   BinaryImage ImgWithData = makeDummyImage();
   uint32_t Original = 0xAAAAAAAA;

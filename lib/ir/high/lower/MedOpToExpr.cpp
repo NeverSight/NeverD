@@ -119,9 +119,20 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
   case NdOp::ATOMIC_XCHG:
   case NdOp::ATOMIC_ADD:
     if (Op.NumInputs >= 2) {
+      auto Expr = HighExpr::makeBinop(Op.Opcode, medvarToExpr(Op.Inputs[0]),
+                                      medvarToExpr(Op.Inputs[1]));
+      Expr->Type = NdType::makeInt(Op.Output.Size, false);
+      Expr->MemoryOrdering = Op.MemoryOrdering;
+      return Expr;
+    }
+    break;
+
+  case NdOp::ATOMIC_CMPXCHG:
+    if (Op.NumInputs >= 3) {
       auto Expr = HighExpr::makeBinop(
           Op.Opcode, medvarToExpr(Op.Inputs[0]),
           medvarToExpr(Op.Inputs[1]));
+      Expr->Operands.push_back(medvarToExpr(Op.Inputs[2]));
       Expr->Type = NdType::makeInt(Op.Output.Size, false);
       Expr->MemoryOrdering = Op.MemoryOrdering;
       return Expr;

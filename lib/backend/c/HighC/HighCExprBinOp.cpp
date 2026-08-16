@@ -64,6 +64,10 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
     return "(" + exprStr(*E.Operands[0]) + " ? " + exprStr(*E.Operands[1]) +
            " : " + exprStr(*E.Operands[2]) + ")";
   }
+  if (E.Op == NdOp::ATOMIC_CMPXCHG && E.Operands.size() == 3)
+    return atomicCompareExchangeExpr(E.Type, exprStr(*E.Operands[0]),
+                                     exprStr(*E.Operands[1]),
+                                     exprStr(*E.Operands[2]), E.MemoryOrdering);
   if (E.Operands.size() != 2)
     return "/* bad binop */";
 

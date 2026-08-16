@@ -337,6 +337,27 @@ bool NdOpEmulator::step(const LowOp &Op) {
     return storeMemory(Addr, Op.Output.Size, *Old + readOperand(Op.Inputs[1]));
   }
 
+  case NdOp::ATOMIC_CMPXCHG: {
+    if (Op.NumInputs < 3 || Op.Output.Size == 0)
+      return false;
+    if (Op.Output.Size > 8) {
+      ++Skips.UnsupportedOps;
+      if (Op.Output.isReg() || Op.Output.isTemp())
+        Registers.erase(Op.Output.Offset);
+      return false;
+    }
+    uint64_t Addr = readOperand(Op.Inputs[0]);
+    auto Old = loadMemory(Addr, Op.Output.Size);
+    if (!Old)
+      return false;
+    writeOutput(Op.Output, *Old);
+    uint64_t Mask =
+        Op.Output.Size < 8 ? (1ULL << (Op.Output.Size * 8)) - 1 : ~0ULL;
+    if (*Old != (readOperand(Op.Inputs[1]) & Mask))
+      return true;
+    return storeMemory(Addr, Op.Output.Size, readOperand(Op.Inputs[2]) & Mask);
+  }
+
   case NdOp::NOP:
     return true;
 

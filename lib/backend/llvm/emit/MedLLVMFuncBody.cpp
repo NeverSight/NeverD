@@ -74,6 +74,7 @@ bool isPredicatedObservableEffect(NdOp Opcode) {
   case NdOp::STORE:
   case NdOp::ATOMIC_XCHG:
   case NdOp::ATOMIC_ADD:
+  case NdOp::ATOMIC_CMPXCHG:
   case NdOp::INTRINSIC:
   case NdOp::INDIR_BR:
   case NdOp::CALL:
@@ -292,7 +293,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           }
         } else if ((Op.Opcode == NdOp::STORE ||
                     Op.Opcode == NdOp::ATOMIC_XCHG ||
-                    Op.Opcode == NdOp::ATOMIC_ADD) &&
+                    Op.Opcode == NdOp::ATOMIC_ADD ||
+                    Op.Opcode == NdOp::ATOMIC_CMPXCHG) &&
                    Op.NumInputs >= 2) {
           DataWidth = Op.Inputs[1].Size;
           if (Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal > kMin)

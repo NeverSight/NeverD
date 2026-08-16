@@ -121,6 +121,44 @@ DEFINE_LDADD_TEST(test_ldadda, "ldadda")
 DEFINE_LDADD_TEST(test_ldaddal, "ldaddal")
 DEFINE_LDADD_TEST(test_ldaddl, "ldaddl")
 
+#define DEFINE_CAS_TEST(name, mnemonic)                                        \
+  __attribute__((naked, noinline, used)) unsigned long name(                   \
+      unsigned long *address, unsigned long expected, unsigned long desired) { \
+    __asm__ volatile("mov x8, x0\n\t" mnemonic                                 \
+                     " x1, x2, [x8]\n\tmov x0, x1\n\tret");                    \
+  }
+
+DEFINE_CAS_TEST(test_cas, "cas")
+DEFINE_CAS_TEST(test_casa, "casa")
+DEFINE_CAS_TEST(test_casal, "casal")
+DEFINE_CAS_TEST(test_casl, "casl")
+
+__attribute__((naked, noinline, used)) unsigned
+test_casb(unsigned char *address, unsigned expected, unsigned desired) {
+  __asm__ volatile("mov x8, x0\n\tcasb w1, w2, [x8]\n\tmov w0, w1\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned
+test_cash(unsigned short *address, unsigned expected, unsigned desired) {
+  __asm__ volatile("mov x8, x0\n\tcash w1, w2, [x8]\n\tmov w0, w1\n\tret");
+}
+
+#define DEFINE_CASP_TEST(name, mnemonic)                                       \
+  __attribute__((naked, noinline, used)) struct pair64 name(                   \
+      struct pair64 *address, unsigned long expected_low,                      \
+      unsigned long expected_high, unsigned long desired_low,                  \
+      unsigned long desired_high) {                                            \
+    __asm__ volatile("mov x10, x0\n\tmov x6, x1\n\tmov x7, x2\n\t"             \
+                     "mov x8, x3\n\tmov x9, x4\n\t" mnemonic                   \
+                     " x6, x7, x8, x9, [x10]\n\tmov x0, x6\n\t"                \
+                     "mov x1, x7\n\tret");                                     \
+  }
+
+DEFINE_CASP_TEST(test_casp, "casp")
+DEFINE_CASP_TEST(test_caspa, "caspa")
+DEFINE_CASP_TEST(test_caspal, "caspal")
+DEFINE_CASP_TEST(test_caspl, "caspl")
+
 __attribute__((naked, noinline, used)) unsigned
 test_ldaddb(unsigned char *address, unsigned value) {
   __asm__ volatile("mov x8, x0\n\tldaddb w1, w0, [x8]\n\tret");

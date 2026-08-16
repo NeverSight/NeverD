@@ -124,7 +124,9 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
         S.Dst->Kind == ExprKind::Var) {
       std::string Name = varName(S.Dst->Var);
-      if (S.Val->Kind == ExprKind::BinOp && S.Val->Op == NdOp::ATOMIC_ADD &&
+      if (S.Val->Kind == ExprKind::BinOp &&
+          (S.Val->Op == NdOp::ATOMIC_ADD ||
+           S.Val->Op == NdOp::ATOMIC_CMPXCHG) &&
           S.Val->Type) {
         ExplicitTypes[Name] = typeToC(S.Val->Type);
       } else if (S.Val->Kind == ExprKind::Call &&
