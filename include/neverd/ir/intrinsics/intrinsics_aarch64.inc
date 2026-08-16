@@ -175,3 +175,6 @@ A64_Pacga,
 // Runtime SVE element counts.  These map to LLVM's architectural SVE count
 // intrinsics and to the standard ACLE svcnt* functions in High-C.
 A64_SveCntb, A64_SveCnth, A64_SveCntw, A64_SveCntd,
+
+// Runtime-width SVE register-state operations.
+A64_SvePtrue, A64_SveDup, A64_SveLastb,

@@ -22,6 +22,21 @@ namespace neverd {
 
 bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
                       const cs_insn *Insn, const cs_aarch64 &ARM64) {
+  auto sveElementSize = [](AArch64Layout_VectorLayout Layout) -> uint16_t {
+    switch (Layout) {
+    case AARCH64LAYOUT_VL_B:
+      return 1;
+    case AARCH64LAYOUT_VL_H:
+      return 2;
+    case AARCH64LAYOUT_VL_S:
+      return 4;
+    case AARCH64LAYOUT_VL_D:
+      return 8;
+    default:
+      return 0;
+    }
+  };
+
   auto sveCountIntrinsic = [](unsigned InsnId) {
     switch (InsnId) {
     case AARCH64_INS_CNTB:
@@ -53,7 +68,10 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_PTRUES: {
     if (ARM64.op_count >= 1) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      S.emit(NdOp::COPY, Dst, {NdVar::cst(0xFFFFFFFFFFFFFFFFULL, Dst.Size)});
+      uint16_t ElemSize = sveElementSize(ARM64.operands[0].vas);
+      if (ElemSize != 0)
+        S.emitIntrinsic(Intrinsic::A64_SvePtrue, Dst,
+                        {NdVar::cst(31, 4), NdVar::cst(ElemSize, 1)});
     }
     break;
   }
@@ -223,12 +241,27 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_CPY:
   case AARCH64_INS_CLASTA:
   case AARCH64_INS_CLASTB:
-  case AARCH64_INS_LASTA:
-  case AARCH64_INS_LASTB: {
+  case AARCH64_INS_LASTA: {
     if (ARM64.op_count >= 2) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
       NdVar Src = L.operandRead(S, ARM64.operands[ARM64.op_count - 1]);
       S.emit(NdOp::COPY, Dst, {Src});
+    }
+    break;
+  }
+  case AARCH64_INS_LASTB: {
+    if (ARM64.op_count >= 3) {
+      NdVar Dst = L.operandWrite(ARM64.operands[0]);
+      // LASTB's W form writes the architecturally zero-extended X register.
+      // Model that directly so return-value recovery sees the real X0 def.
+      if (Dst.Size == 4 && Dst.Offset < a64reg::X29)
+        Dst = NdVar::reg(Dst.Offset, 8);
+      NdVar Pred = L.operandRead(S, ARM64.operands[1]);
+      NdVar Src = L.operandRead(S, ARM64.operands[2]);
+      uint16_t ElemSize = sveElementSize(ARM64.operands[2].vas);
+      if (ElemSize != 0)
+        S.emitIntrinsic(Intrinsic::A64_SveLastb, Dst,
+                        {Pred, Src, NdVar::cst(ElemSize, 1)});
     }
     break;
   }

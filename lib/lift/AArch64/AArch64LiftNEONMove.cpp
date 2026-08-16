@@ -12,6 +12,7 @@
 
 #include "AArch64LiftDetail.h"
 
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64Lifter.h"
 
 namespace neverd {
@@ -203,6 +204,19 @@ bool liftNEONMove(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     if (Insn->id == AARCH64_INS_DUP && DstOp.vas != AARCH64LAYOUT_INVALID) {
       uint16_t ElemSz = 0;
       auto VAS = DstOp.vas;
+      if (VAS == AARCH64LAYOUT_VL_B)
+        ElemSz = 1;
+      else if (VAS == AARCH64LAYOUT_VL_H)
+        ElemSz = 2;
+      else if (VAS == AARCH64LAYOUT_VL_S)
+        ElemSz = 4;
+      else if (VAS == AARCH64LAYOUT_VL_D)
+        ElemSz = 8;
+      if (Dst.Size == a64reg::ZSize && ElemSz != 0) {
+        S.emitIntrinsic(Intrinsic::A64_SveDup, Dst,
+                        {Src, NdVar::cst(ElemSz, 1)});
+        break;
+      }
       if (VAS == AARCH64LAYOUT_VL_16B || VAS == AARCH64LAYOUT_VL_8B)
         ElemSz = 1;
       else if (VAS == AARCH64LAYOUT_VL_8H || VAS == AARCH64LAYOUT_VL_4H)

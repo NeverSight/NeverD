@@ -88,3 +88,6 @@ A(Intrinsic::A64_SveCntb,      "cntb");
 A(Intrinsic::A64_SveCnth,      "cnth");
 A(Intrinsic::A64_SveCntw,      "cntw");
 A(Intrinsic::A64_SveCntd,      "cntd");
+A(Intrinsic::A64_SvePtrue,     "ptrue");
+A(Intrinsic::A64_SveDup,       "dup");
+A(Intrinsic::A64_SveLastb,     "lastb");

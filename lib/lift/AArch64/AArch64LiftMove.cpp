@@ -54,6 +54,32 @@ bool liftMove(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       break;
     NdVar Src = L.operandRead(S, ARM64.operands[1]);
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
+    if (ARM64.operands[0].type == AARCH64_OP_REG &&
+        ARM64.operands[1].type == AARCH64_OP_IMM &&
+        Dst.Size == a64reg::ZSize) {
+      uint16_t ElemSize = 0;
+      switch (ARM64.operands[0].vas) {
+      case AARCH64LAYOUT_VL_B:
+        ElemSize = 1;
+        break;
+      case AARCH64LAYOUT_VL_H:
+        ElemSize = 2;
+        break;
+      case AARCH64LAYOUT_VL_S:
+        ElemSize = 4;
+        break;
+      case AARCH64LAYOUT_VL_D:
+        ElemSize = 8;
+        break;
+      default:
+        break;
+      }
+      if (ElemSize != 0) {
+        S.emitIntrinsic(Intrinsic::A64_SveDup, Dst,
+                        {Src, NdVar::cst(ElemSize, 1)});
+        break;
+      }
+    }
     S.emit(NdOp::COPY, Dst, {Src});
     // W/X view synchronization is handled uniformly by the W→X zero-extension
     // post-pass in lift() plus the table-driven sub-register fixup.  Emitting

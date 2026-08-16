@@ -118,6 +118,38 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_SvePtrue: {
+    if (Ops.size() < 2)
+      return {};
+    HasCIntrinsics = true;
+    if (Ops[1] == "2")
+      return "svptrue_b16()";
+    if (Ops[1] == "4")
+      return "svptrue_b32()";
+    if (Ops[1] == "8")
+      return "svptrue_b64()";
+    return "svptrue_b8()";
+  }
+  case I::A64_SveDup: {
+    if (Ops.size() < 2)
+      return {};
+    HasCIntrinsics = true;
+    const char *Name = Ops[1] == "2"   ? "svdup_n_u16"
+                       : Ops[1] == "4" ? "svdup_n_u32"
+                       : Ops[1] == "8" ? "svdup_n_u64"
+                                        : "svdup_n_u8";
+    return std::string(Name) + "(" + Ops[0] + ")";
+  }
+  case I::A64_SveLastb: {
+    if (Ops.size() < 3)
+      return {};
+    HasCIntrinsics = true;
+    const char *Name = Ops[2] == "2"   ? "svlastb_u16"
+                       : Ops[2] == "4" ? "svlastb_u32"
+                       : Ops[2] == "8" ? "svlastb_u64"
+                                        : "svlastb_u8";
+    return std::string(Name) + "(" + Ops[0] + ", " + Ops[1] + ")";
+  }
   case I::A64_SveCntb:
   case I::A64_SveCnth:
   case I::A64_SveCntw:

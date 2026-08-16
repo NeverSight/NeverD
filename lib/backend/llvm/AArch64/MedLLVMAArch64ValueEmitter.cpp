@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/lift/AArch64Regs.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-aarch64-value"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -32,6 +33,85 @@ llvm::Value *
 MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
+
+  auto sveElementSize = [&](unsigned InputIndex) -> unsigned {
+    if (InputIndex >= Op.NumInputs || !Op.Inputs[InputIndex].isConst())
+      return 1;
+    switch (Op.Inputs[InputIndex].ConstVal) {
+    case 2:
+    case 4:
+    case 8:
+      return static_cast<unsigned>(Op.Inputs[InputIndex].ConstVal);
+    default:
+      return 1;
+    }
+  };
+  auto scalableToState = [&](llvm::Value *Value, unsigned StateBytes,
+                             llvm::StringRef Name) -> llvm::Value * {
+    auto *StateTy = llvm::IntegerType::get(*Ctx, StateBytes * 8);
+    auto *Slot = Builder.CreateAlloca(StateTy, nullptr, Name + ".slot");
+    Slot->setAlignment(llvm::Align(16));
+    Builder.CreateStore(llvm::ConstantInt::get(StateTy, 0), Slot)
+        ->setAlignment(llvm::Align(16));
+    Builder.CreateStore(Value, Slot)->setAlignment(llvm::Align(1));
+    return Builder.CreateLoad(StateTy, Slot, Name + ".state");
+  };
+  auto stateToScalable = [&](llvm::Value *State, llvm::Type *ScalableTy,
+                             llvm::StringRef Name) -> llvm::Value * {
+    auto *Slot = Builder.CreateAlloca(State->getType(), nullptr, Name + ".slot");
+    Slot->setAlignment(llvm::Align(16));
+    Builder.CreateStore(State, Slot)->setAlignment(llvm::Align(16));
+    return Builder.CreateLoad(ScalableTy, Slot, Name);
+  };
+
+  if (IC == I::A64_SvePtrue && Op.Output.Size == a64reg::PSize &&
+      Op.NumInputs >= 3) {
+    unsigned ElemBytes = sveElementSize(2);
+    auto *PredTy = llvm::ScalableVectorType::get(
+        llvm::Type::getInt1Ty(*Ctx), 16 / ElemBytes);
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_sve_ptrue, {PredTy});
+    llvm::Value *Pattern = getVar(Op.Inputs[1], Builder);
+    if (!Pattern->getType()->isIntegerTy(32))
+      Pattern = Builder.CreateZExtOrTrunc(Pattern, Builder.getInt32Ty());
+    llvm::Value *Pred = Builder.CreateCall(Fn, {Pattern}, "svptrue");
+    return scalableToState(Pred, a64reg::PSize, "sve.pred");
+  }
+
+  if (IC == I::A64_SveDup && Op.Output.Size == a64reg::ZSize &&
+      Op.NumInputs >= 3) {
+    unsigned ElemBytes = sveElementSize(2);
+    auto *ElemTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);
+    auto *VecTy = llvm::ScalableVectorType::get(ElemTy, 16 / ElemBytes);
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_sve_dup_x, {VecTy});
+    llvm::Value *Scalar = getVar(Op.Inputs[1], Builder);
+    if (Scalar->getType() != ElemTy)
+      Scalar = Builder.CreateZExtOrTrunc(Scalar, ElemTy);
+    llvm::Value *Vec = Builder.CreateCall(Fn, {Scalar}, "svdup");
+    return scalableToState(Vec, a64reg::ZSize, "sve.vector");
+  }
+
+  if (IC == I::A64_SveLastb && Op.Output.Size > 0 && Op.NumInputs >= 4) {
+    unsigned ElemBytes = sveElementSize(3);
+    auto *ElemTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);
+    auto *PredTy = llvm::ScalableVectorType::get(
+        llvm::Type::getInt1Ty(*Ctx), 16 / ElemBytes);
+    auto *VecTy = llvm::ScalableVectorType::get(ElemTy, 16 / ElemBytes);
+    llvm::Value *PredState = getVar(Op.Inputs[1], Builder);
+    llvm::Value *VecState = getVar(Op.Inputs[2], Builder);
+    llvm::Value *Pred =
+        stateToScalable(PredState, PredTy, "sve.pred.value");
+    llvm::Value *Vec =
+        stateToScalable(VecState, VecTy, "sve.vector.value");
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_sve_lastb, {VecTy});
+    llvm::Value *Last = Builder.CreateCall(Fn, {Pred, Vec}, "svlastb");
+    auto *OutTy = sizeToType(Op.Output.Size);
+    return Last->getType() == OutTy
+               ? Last
+               : Builder.CreateZExtOrTrunc(Last, OutTy);
+  }
 
   const bool IsSVECount = IC == I::A64_SveCntb || IC == I::A64_SveCnth ||
                           IC == I::A64_SveCntw || IC == I::A64_SveCntd;

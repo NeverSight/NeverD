@@ -38,8 +38,10 @@ AArch64Lifter::AArch64Lifter(Arch A) : TargetArch(A) {}
 
 NdVar AArch64Lifter::operandRead(LiftState &S, const cs_aarch64_op &Op) {
   switch (Op.type) {
-  case AARCH64_OP_REG: {
-    auto RI = mapCapstoneReg(static_cast<aarch64_reg>(Op.reg));
+  case AARCH64_OP_REG:
+  case AARCH64_OP_PRED: {
+    auto Reg = Op.type == AARCH64_OP_PRED ? Op.pred.reg : Op.reg;
+    auto RI = mapCapstoneReg(static_cast<aarch64_reg>(Reg));
     if (RI.Size == 0)
       return NdVar::cst(0, 8);
     if (RI.Offset == a64reg::XZR)
@@ -286,8 +288,9 @@ NdVar AArch64Lifter::operandEffAddr(LiftState &S, const cs_aarch64_op &Op) {
 }
 
 NdVar AArch64Lifter::operandWrite(const cs_aarch64_op &Op) {
-  if (Op.type == AARCH64_OP_REG) {
-    auto RI = mapCapstoneReg(static_cast<aarch64_reg>(Op.reg));
+  if (Op.type == AARCH64_OP_REG || Op.type == AARCH64_OP_PRED) {
+    auto Reg = Op.type == AARCH64_OP_PRED ? Op.pred.reg : Op.reg;
+    auto RI = mapCapstoneReg(static_cast<aarch64_reg>(Reg));
     if (RI.Size == 0)
       return NdVar::cst(0, 8);
     if (RI.Offset == a64reg::XZR)

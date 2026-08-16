@@ -176,6 +176,51 @@ TEST(RewriteCodegen_AArch64, SVECountBytesUsesRuntimeVectorLength) {
   EXPECT_TRUE(HasCntb) << "expected a native CNTB instruction";
 }
 
+TEST(RewriteCodegen_AArch64, SVELastByteUsesPredicateAndVectorState) {
+  ensureLLVMTargets();
+
+  llvm::LLVMContext Ctx;
+  auto Mod = std::make_unique<llvm::Module>("sve_last_byte", Ctx);
+  Mod->setTargetTriple(llvm::Triple("aarch64-unknown-linux-elf"));
+  auto *I8Ty = llvm::Type::getInt8Ty(Ctx);
+  auto *I64Ty = llvm::Type::getInt64Ty(Ctx);
+  auto *PredTy = llvm::ScalableVectorType::get(
+      llvm::Type::getInt1Ty(Ctx), 16);
+  auto *VecTy = llvm::ScalableVectorType::get(I8Ty, 16);
+  auto *FnTy = llvm::FunctionType::get(I64Ty, {}, false);
+  auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                    "sve_last_byte", *Mod);
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", Fn);
+  llvm::IRBuilder<> Builder(Entry);
+  auto *PTRUE = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_sve_ptrue, {PredTy});
+  auto *DUP = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_sve_dup_x, {VecTy});
+  auto *LASTB = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_sve_lastb, {VecTy});
+  llvm::Value *Pred = Builder.CreateCall(PTRUE, {Builder.getInt32(31)});
+  llvm::Value *Vec = Builder.CreateCall(DUP, {Builder.getInt8(1)});
+  llvm::Value *Last = Builder.CreateCall(LASTB, {Pred, Vec});
+  Builder.CreateRet(Builder.CreateZExt(Last, I64Ty));
+
+  auto RR = compileRewrite(*Mod, Arch::AArch64, BinaryFormat::ELF);
+  ASSERT_FALSE(RR.Sections.empty());
+  ASSERT_TRUE(RR.Unresolved.empty());
+  auto *Text = findTextSection(RR);
+  ASSERT_NE(Text, nullptr);
+  ASSERT_FALSE(Text->Bytes.empty());
+  bool HasLastb = false;
+  for (size_t I = 0; I + 4 <= Text->Bytes.size(); I += 4) {
+    uint32_t Word = static_cast<uint32_t>(Text->Bytes[I]) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 1]) << 8) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 2]) << 16) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 3]) << 24);
+    // LASTB Wd, Pg, Zn.B: fixed opcode bits, ignoring all three registers.
+    HasLastb |= (Word & 0xffffe000U) == 0x0521a000U;
+  }
+  EXPECT_TRUE(HasLastb) << "expected a native LASTB instruction";
+}
+
 TEST(RewriteCodegen_AArch64, I128AtomicAndEnablesLSE128) {
   ensureLLVMTargets();
 

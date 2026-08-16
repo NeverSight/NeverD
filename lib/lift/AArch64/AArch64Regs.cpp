@@ -50,6 +50,16 @@ RegInfo mapCapstoneReg(aarch64_reg Reg) {
   // B registers (8-bit byte lane)
   if (Reg >= AARCH64_REG_B0 && Reg <= AARCH64_REG_B31)
     return {a64reg::V(Reg - AARCH64_REG_B0), 1};
+
+  // SVE vector and predicate state.  The fixed backing widths are the
+  // architectural maxima; LLVM emission converts them to scalable values for
+  // operations whose active width depends on the runtime VL.
+  if (Reg >= AARCH64_REG_Z0 && Reg <= AARCH64_REG_Z31)
+    return {a64reg::Z(Reg - AARCH64_REG_Z0), a64reg::ZSize};
+  if (Reg >= AARCH64_REG_P0 && Reg <= AARCH64_REG_P15)
+    return {a64reg::P(Reg - AARCH64_REG_P0), a64reg::PSize};
+  if (Reg == AARCH64_REG_FFR)
+    return {a64reg::FFR, a64reg::PSize};
   return {0xFFFF, 0};
 }
 
@@ -99,6 +109,25 @@ const char *getAArch64RegName(uint64_t Offset, uint16_t Size) {
       snprintf(Buf, sizeof(Buf), "B%d", Idx);
     return Buf;
   }
+
+  if (Offset >= a64reg::Z0 && Offset < a64reg::Z0 + 32 * a64reg::ZSize &&
+      (Offset - a64reg::Z0) % a64reg::ZSize == 0) {
+    static thread_local char Buf[8];
+    int Idx = static_cast<int>((Offset - a64reg::Z0) / a64reg::ZSize);
+    snprintf(Buf, sizeof(Buf), "Z%d", Idx);
+    return Buf;
+  }
+
+  if (Offset >= a64reg::P0 && Offset < a64reg::P0 + 16 * a64reg::PSize &&
+      (Offset - a64reg::P0) % a64reg::PSize == 0) {
+    static thread_local char Buf[8];
+    int Idx = static_cast<int>((Offset - a64reg::P0) / a64reg::PSize);
+    snprintf(Buf, sizeof(Buf), "P%d", Idx);
+    return Buf;
+  }
+
+  if (Offset == a64reg::FFR)
+    return "FFR";
 
   return "?";
 }

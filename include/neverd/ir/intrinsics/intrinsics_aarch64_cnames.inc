@@ -161,3 +161,6 @@ C(Intrinsic::A64_SveCntb,      "svcntb");
 C(Intrinsic::A64_SveCnth,      "svcnth");
 C(Intrinsic::A64_SveCntw,      "svcntw");
 C(Intrinsic::A64_SveCntd,      "svcntd");
+C(Intrinsic::A64_SvePtrue,     "svptrue_b8");
+C(Intrinsic::A64_SveDup,       "svdup_n_u8");
+C(Intrinsic::A64_SveLastb,     "svlastb_u8");

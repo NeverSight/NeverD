@@ -117,9 +117,26 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   auto VarFn = [this](const MedVar &V) { return varName(V); };
 
   std::map<std::string, TypeRef> UsedVars;
+  std::map<std::string, std::string> IntrinsicTypes;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (Analysis.DeadStmts.count(&S))
       return;
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+        S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Call) {
+      std::string Name = varName(S.Dst->Var);
+      if (S.Val->IntrinsicId == Intrinsic::A64_SvePtrue) {
+        IntrinsicTypes[Name] = "svbool_t";
+      } else if (S.Val->IntrinsicId == Intrinsic::A64_SveDup) {
+        uint64_t ElemBytes = 1;
+        if (S.Val->Operands.size() >= 2 &&
+            S.Val->Operands[1]->Kind == ExprKind::Const)
+          ElemBytes = S.Val->Operands[1]->ConstVal;
+        IntrinsicTypes[Name] = ElemBytes == 2   ? "svuint16_t"
+                               : ElemBytes == 4 ? "svuint32_t"
+                               : ElemBytes == 8 ? "svuint64_t"
+                                                : "svuint8_t";
+      }
+    }
     forEachExpr(S, [&](const ExprPtr &E) {
       if (E)
         collectUsedVarsExpr(*E, UsedVars, VarFn);
@@ -146,7 +163,10 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
       continue;
     DeclaredNames.insert(Local.Name);
     emitIndent(1);
-    OS << typeToC(Local.Type) << " " << Local.Name << ";\n";
+    auto IntrinsicTy = IntrinsicTypes.find(Local.Name);
+    OS << (IntrinsicTy == IntrinsicTypes.end() ? typeToC(Local.Type)
+                                               : IntrinsicTy->second)
+       << " " << Local.Name << ";\n";
   }
 
   for (auto &[Name, Ty] : UsedVars) {
@@ -156,7 +176,10 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
       continue;
     DeclaredNames.insert(Name);
     emitIndent(1);
-    OS << typeToC(Ty) << " " << Name << ";\n";
+    auto IntrinsicTy = IntrinsicTypes.find(Name);
+    OS << (IntrinsicTy == IntrinsicTypes.end() ? typeToC(Ty)
+                                               : IntrinsicTy->second)
+       << " " << Name << ";\n";
   }
   if (!DeclaredNames.empty())
     OS << "\n";
