@@ -142,6 +142,40 @@ TEST(RewriteCodegen_AArch64, PAuthGenericSignatureEnablesPAuth) {
   EXPECT_TRUE(HasPacga) << "expected a native PACGA instruction";
 }
 
+TEST(RewriteCodegen_AArch64, SVECountBytesUsesRuntimeVectorLength) {
+  ensureLLVMTargets();
+
+  llvm::LLVMContext Ctx;
+  auto Mod = std::make_unique<llvm::Module>("sve_count_bytes", Ctx);
+  Mod->setTargetTriple(llvm::Triple("aarch64-unknown-linux-elf"));
+  auto *I64Ty = llvm::Type::getInt64Ty(Ctx);
+  auto *FnTy = llvm::FunctionType::get(I64Ty, {}, false);
+  auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                    "sve_count_bytes", *Mod);
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", Fn);
+  llvm::IRBuilder<> Builder(Entry);
+  auto *CNTB = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::aarch64_sve_cntb);
+  Builder.CreateRet(Builder.CreateCall(CNTB, {Builder.getInt32(31)}));
+
+  auto RR = compileRewrite(*Mod, Arch::AArch64, BinaryFormat::ELF);
+  ASSERT_FALSE(RR.Sections.empty());
+  ASSERT_TRUE(RR.Unresolved.empty());
+  auto *Text = findTextSection(RR);
+  ASSERT_NE(Text, nullptr);
+  ASSERT_FALSE(Text->Bytes.empty());
+  bool HasCntb = false;
+  for (size_t I = 0; I + 4 <= Text->Bytes.size(); I += 4) {
+    uint32_t Word = static_cast<uint32_t>(Text->Bytes[I]) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 1]) << 8) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 2]) << 16) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 3]) << 24);
+    // CNTB Xd, ALL, MUL #1: fixed opcode bits, ignoring the destination.
+    HasCntb |= (Word & 0xffffffe0U) == 0x0420e3e0U;
+  }
+  EXPECT_TRUE(HasCntb) << "expected a native CNTB instruction";
+}
+
 TEST(RewriteCodegen_AArch64, I128AtomicAndEnablesLSE128) {
   ensureLLVMTargets();
 

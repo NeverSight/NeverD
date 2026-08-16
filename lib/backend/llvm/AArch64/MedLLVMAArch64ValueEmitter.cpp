@@ -33,6 +33,28 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  const bool IsSVECount = IC == I::A64_SveCntb || IC == I::A64_SveCnth ||
+                          IC == I::A64_SveCntw || IC == I::A64_SveCntd;
+  if (IsSVECount && Op.Output.Size > 0 && Op.NumInputs >= 2) {
+    llvm::Intrinsic::ID LLVMID = llvm::Intrinsic::aarch64_sve_cntb;
+    if (IC == I::A64_SveCnth)
+      LLVMID = llvm::Intrinsic::aarch64_sve_cnth;
+    else if (IC == I::A64_SveCntw)
+      LLVMID = llvm::Intrinsic::aarch64_sve_cntw;
+    else if (IC == I::A64_SveCntd)
+      LLVMID = llvm::Intrinsic::aarch64_sve_cntd;
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, LLVMID);
+    llvm::Value *Pattern = getVar(Op.Inputs[1], Builder);
+    Pattern = Pattern->getType()->isIntegerTy(32)
+                  ? Pattern
+                  : Builder.CreateZExtOrTrunc(Pattern, Builder.getInt32Ty());
+    llvm::Value *Count = Builder.CreateCall(Fn, {Pattern}, "svcnt");
+    auto *OutTy = sizeToType(Op.Output.Size);
+    return Count->getType() == OutTy
+               ? Count
+               : Builder.CreateZExtOrTrunc(Count, OutTy);
+  }
+
   if (IC == I::A64_Pacga && Op.Output.Size > 0 && Op.NumInputs >= 3) {
     auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
     auto coerceI64 = [&](llvm::Value *Value) {

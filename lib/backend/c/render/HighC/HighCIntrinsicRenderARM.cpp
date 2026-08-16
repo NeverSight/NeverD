@@ -118,6 +118,14 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_SveCntb:
+  case I::A64_SveCnth:
+  case I::A64_SveCntw:
+  case I::A64_SveCntd: {
+    HasCIntrinsics = true;
+    const char *Name = intrinsicCName(Id);
+    return Name ? std::string(Name) + "()" : std::string();
+  }
   case I::A64_Pacga:
     if (Ops.size() < 2)
       return {};

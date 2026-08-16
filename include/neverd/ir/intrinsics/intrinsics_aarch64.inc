@@ -171,3 +171,7 @@ A64_Ldxp, A64_Ldaxp, A64_Stxp, A64_Stlxp,
 // Generic pointer authentication code.  Keep this appended so existing
 // serialized intrinsic IDs remain stable.
 A64_Pacga,
+
+// Runtime SVE element counts.  These map to LLVM's architectural SVE count
+// intrinsics and to the standard ACLE svcnt* functions in High-C.
+A64_SveCntb, A64_SveCnth, A64_SveCntw, A64_SveCntd,

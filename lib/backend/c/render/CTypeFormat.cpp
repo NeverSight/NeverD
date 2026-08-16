@@ -211,7 +211,10 @@ std::string typeToCLLVM(llvm::Type *Ty) {
 llvm::SmallVector<const char *, 3> getArchIntrinsicHeaders(Arch TheArch) {
   if (TheArch == Arch::X86 || TheArch == Arch::X64)
     return getX86IntrinsicHeaders();
-  return getARMIntrinsicHeaders();
+  auto Headers = getARMIntrinsicHeaders();
+  if (TheArch == Arch::AArch64)
+    Headers.push_back("arm_sve.h");
+  return Headers;
 }
 
 void emitCIndent(llvm::raw_ostream &OS, int Level) {

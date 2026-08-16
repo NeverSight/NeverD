@@ -22,6 +22,29 @@ namespace neverd {
 
 bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
                       const cs_insn *Insn, const cs_aarch64 &ARM64) {
+  auto sveCountIntrinsic = [](unsigned InsnId) {
+    switch (InsnId) {
+    case AARCH64_INS_CNTB:
+    case AARCH64_INS_INCB:
+    case AARCH64_INS_DECB:
+      return Intrinsic::A64_SveCntb;
+    case AARCH64_INS_CNTH:
+    case AARCH64_INS_INCH:
+    case AARCH64_INS_DECH:
+      return Intrinsic::A64_SveCnth;
+    case AARCH64_INS_CNTW:
+    case AARCH64_INS_INCW:
+    case AARCH64_INS_DECW:
+      return Intrinsic::A64_SveCntw;
+    case AARCH64_INS_CNTD:
+    case AARCH64_INS_INCD:
+    case AARCH64_INS_DECD:
+      return Intrinsic::A64_SveCntd;
+    default:
+      return Intrinsic::None;
+    }
+  };
+
   switch (Insn->id) {
   // ========================================================================
   // SVE / SVE2 — predicate and control operations
@@ -85,25 +108,35 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_CNTB:
   case AARCH64_INS_CNTD:
   case AARCH64_INS_CNTH:
-  case AARCH64_INS_CNTW:
+  case AARCH64_INS_CNTW: {
+    if (ARM64.op_count >= 1) {
+      NdVar Dst = L.operandWrite(ARM64.operands[0]);
+      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Dst,
+                      {NdVar::cst(31, 4)});
+    }
+    break;
+  }
   case AARCH64_INS_CNTP: {
     if (ARM64.op_count >= 1) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      uint64_t Val = 16;
-      if (Insn->id == AARCH64_INS_CNTD)
-        Val = 2;
-      else if (Insn->id == AARCH64_INS_CNTH)
-        Val = 8;
-      else if (Insn->id == AARCH64_INS_CNTW)
-        Val = 4;
-      S.emit(NdOp::COPY, Dst, {NdVar::cst(Val, Dst.Size)});
+      S.emit(NdOp::COPY, Dst, {NdVar::cst(16, Dst.Size)});
     }
     break;
   }
   case AARCH64_INS_INCB:
   case AARCH64_INS_INCD:
   case AARCH64_INS_INCH:
-  case AARCH64_INS_INCW:
+  case AARCH64_INS_INCW: {
+    if (ARM64.op_count >= 1) {
+      NdVar Dst = L.operandWrite(ARM64.operands[0]);
+      NdVar Count = S.makeTemp(Dst.Size);
+      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Count,
+                      {NdVar::cst(31, 4)});
+      S.emit(NdOp::INT_ADD, Dst,
+             {NdVar::reg(Dst.Offset, Dst.Size), Count});
+    }
+    break;
+  }
   case AARCH64_INS_INCP: {
     if (ARM64.op_count >= 1) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
@@ -115,7 +148,17 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_DECB:
   case AARCH64_INS_DECD:
   case AARCH64_INS_DECH:
-  case AARCH64_INS_DECW:
+  case AARCH64_INS_DECW: {
+    if (ARM64.op_count >= 1) {
+      NdVar Dst = L.operandWrite(ARM64.operands[0]);
+      NdVar Count = S.makeTemp(Dst.Size);
+      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Count,
+                      {NdVar::cst(31, 4)});
+      S.emit(NdOp::INT_SUB, Dst,
+             {NdVar::reg(Dst.Offset, Dst.Size), Count});
+    }
+    break;
+  }
   case AARCH64_INS_DECP: {
     if (ARM64.op_count >= 1) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
