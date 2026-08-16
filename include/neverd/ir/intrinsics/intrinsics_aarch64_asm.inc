@@ -83,3 +83,4 @@ A(Intrinsic::A64_Ldxp,         "ldxp");
 A(Intrinsic::A64_Ldaxp,        "ldaxp");
 A(Intrinsic::A64_Stxp,         "stxp");
 A(Intrinsic::A64_Stlxp,        "stlxp");
+A(Intrinsic::A64_Pacga,        "pacga");

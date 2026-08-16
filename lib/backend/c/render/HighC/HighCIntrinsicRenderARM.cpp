@@ -118,6 +118,12 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_Pacga:
+    if (Ops.size() < 2)
+      return {};
+    HasCIntrinsics = true;
+    return "__builtin_arm_pacga((uint64_t)(" + Ops[0] +
+           "), (uint64_t)(" + Ops[1] + "))";
   case I::Addg:
   case I::Subg: {
     if (Ops.size() < 3)

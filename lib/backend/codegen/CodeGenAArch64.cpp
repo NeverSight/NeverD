@@ -60,7 +60,8 @@ detectTargetFeaturesAArch64(const std::set<std::string> &Names) {
     F += ",+sve";
   if (Has("aarch64.crc32"))
     F += ",+crc";
-  if (Has("aarch64.pauth") || Has("pacia") || Has("autia"))
+  if (Has("aarch64.pauth") || Has("ptrauth") || Has("pacia") ||
+      Has("autia"))
     F += ",+pauth";
   if (Has("aarch64.mte") || Has("aarch64.addg") || Has("aarch64.subg") ||
       Has("aarch64.stg") || Has("aarch64.ldg") || Has("irg") || Has("gmi"))

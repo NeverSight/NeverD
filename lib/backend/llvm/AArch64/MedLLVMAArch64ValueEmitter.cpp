@@ -33,6 +33,27 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  if (IC == I::A64_Pacga && Op.Output.Size > 0 && Op.NumInputs >= 3) {
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    auto coerceI64 = [&](llvm::Value *Value) {
+      if (Value->getType()->isPointerTy())
+        return Builder.CreatePtrToInt(Value, I64Ty);
+      return Value->getType() == I64Ty
+                 ? Value
+                 : Builder.CreateZExtOrTrunc(Value, I64Ty);
+    };
+    llvm::Value *Value = coerceI64(getVar(Op.Inputs[1], Builder));
+    llvm::Value *Discriminator = coerceI64(getVar(Op.Inputs[2], Builder));
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::ptrauth_sign_generic);
+    llvm::Value *Result =
+        Builder.CreateCall(Fn, {Value, Discriminator}, "pacga");
+    auto *OutTy = sizeToType(Op.Output.Size);
+    return Result->getType() == OutTy
+               ? Result
+               : Builder.CreateZExtOrTrunc(Result, OutTy);
+  }
+
   const bool IsExclusiveLoad = IC == I::A64_Ldxr || IC == I::A64_Ldaxr ||
                                IC == I::A64_Ldxp || IC == I::A64_Ldaxp;
   if (IsExclusiveLoad && Op.Output.Size > 0 && Op.NumInputs >= 3) {

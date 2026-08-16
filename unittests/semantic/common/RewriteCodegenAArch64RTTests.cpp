@@ -105,6 +105,43 @@ TEST(RewriteCodegen_AArch64, MTEAddgSubgIntrinsicsEnableMTE) {
   ASSERT_FALSE(Text->Bytes.empty());
 }
 
+TEST(RewriteCodegen_AArch64, PAuthGenericSignatureEnablesPAuth) {
+  ensureLLVMTargets();
+
+  llvm::LLVMContext Ctx;
+  auto Mod = std::make_unique<llvm::Module>("pacga", Ctx);
+  Mod->setTargetTriple(llvm::Triple("aarch64-unknown-linux-elf"));
+  auto *I64Ty = llvm::Type::getInt64Ty(Ctx);
+  auto *FnTy = llvm::FunctionType::get(I64Ty, {I64Ty, I64Ty}, false);
+  auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                    "pacga", *Mod);
+  auto *Entry = llvm::BasicBlock::Create(Ctx, "entry", Fn);
+  llvm::IRBuilder<> Builder(Entry);
+  auto Arg = Fn->arg_begin();
+  llvm::Value *Value = &*Arg++;
+  llvm::Value *Discriminator = &*Arg;
+  auto *PACGA = llvm::Intrinsic::getOrInsertDeclaration(
+      Mod.get(), llvm::Intrinsic::ptrauth_sign_generic);
+  Builder.CreateRet(Builder.CreateCall(PACGA, {Value, Discriminator}));
+
+  auto RR = compileRewrite(*Mod, Arch::AArch64, BinaryFormat::ELF);
+  ASSERT_FALSE(RR.Sections.empty());
+  ASSERT_TRUE(RR.Unresolved.empty());
+  auto *Text = findTextSection(RR);
+  ASSERT_NE(Text, nullptr);
+  ASSERT_FALSE(Text->Bytes.empty());
+  bool HasPacga = false;
+  for (size_t I = 0; I + 4 <= Text->Bytes.size(); I += 4) {
+    uint32_t Word = static_cast<uint32_t>(Text->Bytes[I]) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 1]) << 8) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 2]) << 16) |
+                    (static_cast<uint32_t>(Text->Bytes[I + 3]) << 24);
+    // PACGA Xd, Xn, Xm: fixed opcode bits, ignoring the three registers.
+    HasPacga |= (Word & 0xffe0fc00U) == 0x9ac03000U;
+  }
+  EXPECT_TRUE(HasPacga) << "expected a native PACGA instruction";
+}
+
 TEST(RewriteCodegen_AArch64, I128AtomicAndEnablesLSE128) {
   ensureLLVMTargets();
 

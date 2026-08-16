@@ -167,3 +167,7 @@ A64_Ldclrp, A64_Ldclrpa, A64_Ldclrpal, A64_Ldclrpl,
 // AArch64 intrinsics and to the standard Arm compiler builtins in High-C.
 A64_Ldxr, A64_Ldaxr, A64_Stxr, A64_Stlxr,
 A64_Ldxp, A64_Ldaxp, A64_Stxp, A64_Stlxp,
+
+// Generic pointer authentication code.  Keep this appended so existing
+// serialized intrinsic IDs remain stable.
+A64_Pacga,

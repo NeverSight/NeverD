@@ -14,6 +14,7 @@ add_neverd_unittest(NeverDLiftTests
   aarch64/AArch64_MemTests.cpp
   aarch64/AArch64_MopsTests.cpp
   aarch64/AArch64_MTETests.cpp
+  aarch64/AArch64_PAuthTests.cpp
   aarch64/AArch64_MulDivTests.cpp
   aarch64/AArch64_PipelineE2ETests.cpp
   aarch64/AArch64_FastClassifyParityTests.cpp
@@ -676,6 +677,7 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_atomic_a64.c
   aarch64/test_mops_a64.c
   aarch64/test_mte_a64.c
+  aarch64/test_pauth_a64.c
   aarch64/test_intrinsics_a64.c
   aarch64/test_switch_a64.c
   aarch64/test_roundtrip_a64.c
@@ -818,6 +820,8 @@ foreach(src ${AARCH64_TEST_SOURCES})
     set(a64_extra_flags -march=armv8.8-a+mops)
   elseif(src MATCHES "test_mte_a64")
     set(a64_extra_flags -march=armv8.5-a+memtag)
+  elseif(src MATCHES "test_pauth_a64")
+    set(a64_extra_flags -march=armv8.3-a+pauth)
   endif()
   add_custom_command(
     OUTPUT ${obj}

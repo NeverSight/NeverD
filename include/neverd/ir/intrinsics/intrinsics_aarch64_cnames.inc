@@ -156,3 +156,4 @@ C(Intrinsic::Autda,            "__autda");
 C(Intrinsic::Autdb,            "__autdb");
 C(Intrinsic::Xpaci,            "__xpaci");
 C(Intrinsic::Xpacd,            "__xpacd");
+C(Intrinsic::A64_Pacga,        "__builtin_arm_pacga");

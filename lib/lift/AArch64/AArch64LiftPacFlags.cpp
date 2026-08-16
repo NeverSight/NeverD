@@ -341,7 +341,7 @@ bool liftPacFlags(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar A = L.operandRead(S, ARM64.operands[1]);
     NdVar B = L.operandRead(S, ARM64.operands[2]);
-    S.emit(NdOp::INT_XOR, Dst, {A, B});
+    S.emitIntrinsic(Intrinsic::A64_Pacga, Dst, {A, B});
     break;
   }
 
