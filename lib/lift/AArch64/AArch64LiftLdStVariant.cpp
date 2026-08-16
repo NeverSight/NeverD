@@ -101,10 +101,10 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     uint16_t Asz = orderedAccessWidth(Insn, Dst.Size);
     if (Asz < Dst.Size) {
       NdVar V = S.makeTemp(Asz);
-      S.emit(NdOp::LOAD, V, {EA});
+      S.emit(NdOp::LOAD, V, {EA}, NdMemoryOrdering::Acquire);
       S.emit(NdOp::INT_ZEXT, Dst, {V});
     } else {
-      S.emit(NdOp::LOAD, Dst, {EA});
+      S.emit(NdOp::LOAD, Dst, {EA}, NdMemoryOrdering::Acquire);
     }
     break;
   }

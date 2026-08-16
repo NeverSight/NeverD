@@ -45,6 +45,8 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         if (RIt->Opcode == NdOp::CALL || RIt->Opcode == NdOp::INDIR_CALL ||
             RIt->Opcode == NdOp::INTRINSIC)
           RetVal = HighExpr::makeVar(RIt->Output);
+        else if (RIt->MemoryOrdering != NdMemoryOrdering::None)
+          RetVal = HighExpr::makeVar(RIt->Output);
         else {
           bool FromCallind = false;
           if (RIt->NumInputs >= 1) {

@@ -15,6 +15,21 @@ void test_str_external_a64(int *ptr, int val) {
   __asm__ volatile("str %w1, [%0]" : : "r"(ptr), "r"(val) : "memory");
 }
 
+__attribute__((naked, noinline, used)) unsigned long
+test_ldapr_a64(const unsigned long *address) {
+  __asm__ volatile("ldapr x0, [x0]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned
+test_ldaprb_a64(const unsigned char *address) {
+  __asm__ volatile("ldaprb w0, [x0]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned
+test_ldaprh_a64(const unsigned short *address) {
+  __asm__ volatile("ldaprh w0, [x0]\n\tret");
+}
+
 int test_ldr_str_a64(int val) {
   int result;
   int buf;
