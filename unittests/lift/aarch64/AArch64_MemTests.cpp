@@ -20,8 +20,8 @@ protected:
 
     auto syntax = exec(NEVERD_TEST_CLANG,
                        {"-target", "aarch64-none-elf", "-ffreestanding",
-                        "-march=armv8.3-a+rcpc", "-std=gnu11", "-I",
-                        tmp().string(), "-fsyntax-only", CFile.string()});
+                        "-march=armv8.4-a", "-std=gnu11", "-I", tmp().string(),
+                        "-fsyntax-only", CFile.string()});
     EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << Source;
   }
 };
@@ -134,6 +134,54 @@ TEST_F(AArch64_Mem, LdaprHighCUsesAcquireAtomicLoadAndCompiles) {
     EXPECT_EQ(F.find("neverd_mem_load_acquire_", Load + 1), std::string::npos)
         << "LDAPR must be evaluated exactly once:\n"
         << F;
+  }
+
+  expectPairedClangSyntax(cFile, source);
+}
+
+TEST_F(AArch64_Mem, StlurKeepsReleaseOrderingAtEveryAccessWidth) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  const struct {
+    const char *Name;
+    const char *Type;
+    unsigned Align;
+  } Cases[] = {{"test_stlur_a64", "i64", 8},
+               {"test_stlurb_a64", "i8", 1},
+               {"test_stlurh_a64", "i16", 2}};
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionIR(r.out, Case.Name);
+    ASSERT_FALSE(F.empty()) << r.out;
+    EXPECT_NE(F.find(std::string("store atomic ") + Case.Type),
+              std::string::npos)
+        << F;
+    EXPECT_NE(F.find("release, align " + std::to_string(Case.Align)),
+              std::string::npos)
+        << F;
+  }
+}
+
+TEST_F(AArch64_Mem, StlurHighCUsesReleaseAtomicStoreAndCompiles) {
+  auto r = decompileToHighC(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+  EXPECT_NE(source.find("__atomic_store_n"), std::string::npos) << source;
+  EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
+
+  for (const char *Name :
+       {"test_stlur_a64", "test_stlurb_a64", "test_stlurh_a64"}) {
+    SCOPED_TRACE(Name);
+    auto F = functionC(source, Name);
+    ASSERT_FALSE(F.empty()) << source;
+    EXPECT_NE(F.find("neverd_mem_store_release_"), std::string::npos) << F;
   }
 
   expectPairedClangSyntax(cFile, source);
@@ -254,6 +302,7 @@ TEST_F(AArch64_Mem, StlurImmediateUsesEncodedSourceBaseAndSignedOffset) {
                      [](const LowOp &Op) { return Op.Opcode == NdOp::STORE; });
     ASSERT_NE(Store, Ops.end());
     ASSERT_EQ(Store->NumInputs, 2);
+    EXPECT_EQ(Store->MemoryOrdering, NdMemoryOrdering::Release);
 
     const NdVar Source =
         NdVar::reg(a64reg::X0 + Case.SourceIndex * 8, Case.SourceSize);

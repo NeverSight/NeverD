@@ -324,7 +324,7 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       S.emit(NdOp::SUBBYTES, T, {Src, NdVar::cst(0, 4)});
       Src = T;
     }
-    S.emit(NdOp::STORE, {}, {EA, Src});
+    S.emit(NdOp::STORE, {}, {EA, Src}, NdMemoryOrdering::Release);
     break;
   }
   case AARCH64_INS_STTR:

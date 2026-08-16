@@ -35,6 +35,21 @@ test_ldaprh_a64(const unsigned short *address) {
   __asm__ volatile("ldaprh w0, [x0]\n\tret");
 }
 
+__attribute__((naked, noinline, used)) unsigned long
+test_stlur_a64(unsigned long *address, unsigned long value) {
+  __asm__ volatile("stlur x1, [x0]\n\tmov x0, xzr\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned long
+test_stlurb_a64(unsigned char *address, unsigned value) {
+  __asm__ volatile("stlurb w1, [x0]\n\tmov x0, xzr\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned long
+test_stlurh_a64(unsigned short *address, unsigned value) {
+  __asm__ volatile("stlurh w1, [x0]\n\tmov x0, xzr\n\tret");
+}
+
 __attribute__((naked, noinline, used)) struct mem_pair64
 test_ldr_post_return_a64(unsigned long *address) {
   __asm__ volatile("ldr x1, [x0], #8\n\t"
