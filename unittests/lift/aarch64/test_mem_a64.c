@@ -36,6 +36,51 @@ test_ldaprh_a64(const unsigned short *address) {
 }
 
 __attribute__((naked, noinline, used)) unsigned long
+test_ldapur_a64(const unsigned long *address) {
+  __asm__ volatile("ldapur x0, [x0, #8]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned
+test_ldapurb_a64(const unsigned char *address) {
+  __asm__ volatile("ldapurb w0, [x0, #1]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned
+test_ldapurh_a64(const unsigned short *address) {
+  __asm__ volatile("ldapurh w0, [x0, #2]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) long
+test_ldapursb_a64(const signed char *address) {
+  __asm__ volatile("ldapursb x0, [x0, #-1]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) long
+test_ldapursh_a64(const short *address) {
+  __asm__ volatile("ldapursh x0, [x0, #-2]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) long
+test_ldapursw_a64(const int *address) {
+  __asm__ volatile("ldapursw x0, [x0, #-4]\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned long
+test_stllr_a64(unsigned long *address, unsigned long value) {
+  __asm__ volatile("stllr x1, [x0]\n\tmov x0, xzr\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned long
+test_stllrb_a64(unsigned char *address, unsigned value) {
+  __asm__ volatile("stllrb w1, [x0]\n\tmov x0, xzr\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned long
+test_stllrh_a64(unsigned short *address, unsigned value) {
+  __asm__ volatile("stllrh w1, [x0]\n\tmov x0, xzr\n\tret");
+}
+
+__attribute__((naked, noinline, used)) unsigned long
 test_stlur_a64(unsigned long *address, unsigned long value) {
   __asm__ volatile("stlur x1, [x0]\n\tmov x0, xzr\n\tret");
 }

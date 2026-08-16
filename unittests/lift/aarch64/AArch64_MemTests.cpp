@@ -132,6 +132,39 @@ TEST_F(AArch64_Mem, LdaprHighCUsesAcquireAtomicLoadAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
+TEST_F(AArch64_Mem, LdapurAndStllrKeepArchitecturalOrdering) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  const struct {
+    const char *Name;
+    const char *IRPrefix;
+    const char *Ordering;
+    unsigned Align;
+  } Cases[] = {
+      {"test_ldapur_a64", "load atomic i64", "acquire", 8},
+      {"test_ldapurb_a64", "load atomic i8", "acquire", 1},
+      {"test_ldapurh_a64", "load atomic i16", "acquire", 2},
+      {"test_ldapursb_a64", "load atomic i8", "acquire", 1},
+      {"test_ldapursh_a64", "load atomic i16", "acquire", 2},
+      {"test_ldapursw_a64", "load atomic i32", "acquire", 4},
+      {"test_stllr_a64", "store atomic i64", "release", 8},
+      {"test_stllrb_a64", "store atomic i8", "release", 1},
+      {"test_stllrh_a64", "store atomic i16", "release", 2},
+  };
+
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionIR(r.out, Case.Name);
+    ASSERT_FALSE(F.empty()) << r.out;
+    EXPECT_NE(F.find(Case.IRPrefix), std::string::npos) << F;
+    EXPECT_NE(F.find(std::string(Case.Ordering) + ", align " +
+                     std::to_string(Case.Align)),
+              std::string::npos)
+        << F;
+  }
+}
+
 TEST_F(AArch64_Mem, StlurKeepsReleaseOrderingAtEveryAccessWidth) {
   auto r = liftToLLVMIR(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;

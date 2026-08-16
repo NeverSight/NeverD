@@ -120,10 +120,10 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     uint16_t Asz = orderedAccessWidth(Insn, Dst.Size);
     if (Asz < Dst.Size) {
       NdVar V = S.makeTemp(Asz);
-      S.emit(NdOp::LOAD, V, {EA});
+      S.emit(NdOp::LOAD, V, {EA}, NdMemoryOrdering::Acquire);
       S.emit(NdOp::INT_ZEXT, Dst, {V});
     } else {
-      S.emit(NdOp::LOAD, Dst, {EA});
+      S.emit(NdOp::LOAD, Dst, {EA}, NdMemoryOrdering::Acquire);
     }
     break;
   }
@@ -140,7 +140,7 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     else if (Insn->id == AARCH64_INS_LDAPURSW)
       LoadSz = 4;
     NdVar Val = S.makeTemp(LoadSz);
-    S.emit(NdOp::LOAD, Val, {EA});
+    S.emit(NdOp::LOAD, Val, {EA}, NdMemoryOrdering::Acquire);
     S.emit(NdOp::INT_SEXT, Dst, {Val});
     break;
   }
@@ -301,7 +301,7 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       S.emit(NdOp::SUBBYTES, T, {Src, NdVar::cst(0, 4)});
       Src = T;
     }
-    S.emit(NdOp::STORE, {}, {EA, Src});
+    S.emit(NdOp::STORE, {}, {EA, Src}, NdMemoryOrdering::Release);
     break;
   }
   case AARCH64_INS_STLUR:
