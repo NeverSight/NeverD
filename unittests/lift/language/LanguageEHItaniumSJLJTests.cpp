@@ -87,6 +87,7 @@ TEST(ItaniumSJLJ, DecodesTheIndexFormAndEverythingItReaches) {
   Req.LSDAVA = LSDAVA;
   Req.FunctionStart = FuncVA;
   Req.FunctionEnd = FuncVA + 0x100;
+  Req.Personality = ExceptionPersonality::GxxPersonalitySJ0;
   Req.IsSJLJ = true;
   LSDAParseResult Result = parseLSDA(Img, Req, PointerBases{});
 
@@ -154,6 +155,7 @@ TEST(ItaniumSJLJ, IgnoresTheCallSiteEncodingByteTheProducerWrote) {
     Req.LSDAVA = LSDAVA;
     Req.FunctionStart = FuncVA;
     Req.FunctionEnd = FuncVA + 0x100;
+    Req.Personality = ExceptionPersonality::GxxPersonalitySJ0;
     Req.IsSJLJ = true;
     LSDAParseResult Result = parseLSDA(Img, Req, PointerBases{});
 
