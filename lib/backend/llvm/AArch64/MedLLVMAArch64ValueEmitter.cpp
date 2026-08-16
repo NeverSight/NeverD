@@ -34,6 +34,26 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  if (IC == I::A64_WspWrite && Op.Output.Size == 8 && Op.NumInputs >= 2) {
+    llvm::Value *Value = getVar(Op.Inputs[1], Builder);
+    if (!Value->getType()->isIntegerTy(32))
+      Value = Builder.CreateZExtOrTrunc(Value, Builder.getInt32Ty());
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_wsp_write);
+    Builder.CreateCall(Fn, {Value});
+    return Builder.CreateZExt(Value, Builder.getInt64Ty(), "wsp.value");
+  }
+
+  if (IC == I::A64_WspZeroExtend && Op.Output.Size == 8) {
+    auto *Read = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_wsp_read);
+    llvm::Value *Value = Builder.CreateCall(Read, {}, "wsp.current");
+    auto *Write = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::aarch64_wsp_write);
+    Builder.CreateCall(Write, {Value});
+    return Builder.CreateZExt(Value, Builder.getInt64Ty(), "wsp.value");
+  }
+
   auto sveElementSize = [&](unsigned InputIndex) -> unsigned {
     if (InputIndex >= Op.NumInputs || !Op.Inputs[InputIndex].isConst())
       return 1;

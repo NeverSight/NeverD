@@ -24,6 +24,9 @@ SIDEEFFECT(Intrinsic::Eret);
 SIDEEFFECT(Intrinsic::A64_Clrex);
 SIDEEFFECT(Intrinsic::A64_SetFPSR);
 SIDEEFFECT(Intrinsic::A64_SetFPCR);
+// WSP writes directly mutate the architectural stack pointer.
+SIDEEFFECT(Intrinsic::A64_WspWrite);
+SIDEEFFECT(Intrinsic::A64_WspZeroExtend);
 // MTE allocation-tag stores mutate tag memory.
 SIDEEFFECT(Intrinsic::Stg);
 // cache / TLB

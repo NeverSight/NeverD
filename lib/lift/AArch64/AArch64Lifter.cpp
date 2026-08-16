@@ -327,10 +327,14 @@ void AArch64Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
   }
 
   // W/X aliasing: writing to Wn zeros upper 32 Bits of Xn.
+  auto IsZeroExtendingWOffset = [](uint64_t Offset) {
+    return Offset < a64reg::X29 || Offset == a64reg::SP;
+  };
   llvm::DenseSet<uint64_t> XWritten;
   for (size_t K = S.OpsStart; K < Ops.size(); ++K) {
     auto &O = Ops[K];
-    if (O.Output.isReg() && O.Output.Size == 8 && O.Output.Offset < a64reg::X29)
+    if (O.Output.isReg() && O.Output.Size == 8 &&
+        IsZeroExtendingWOffset(O.Output.Offset))
       XWritten.insert(O.Output.Offset);
   }
   size_t OpsEnd = Ops.size();
@@ -340,10 +344,24 @@ void AArch64Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
     // O.Output.* after emit() would then be a use-after-free (it surfaced as a
     // garbage offset equal to the DenseSet sentinel, tripping an assert).
     uint64_t OutOff = Ops[K].Output.Offset;
+    bool IsSelfWspCopy =
+        Ops[K].Opcode == NdOp::COPY && Ops[K].NumInputs >= 1 &&
+        Ops[K].Inputs[0].isReg() &&
+        Ops[K].Inputs[0].Offset == a64reg::SP &&
+        Ops[K].Inputs[0].Size == 4;
     if (Ops[K].Output.isReg() && Ops[K].Output.Size == 4 &&
-        OutOff < a64reg::X29 && !XWritten.count(OutOff)) {
-      S.emit(NdOp::INT_ZEXT, NdVar::reg(OutOff, 8),
-             {NdVar::reg(OutOff, 4)});
+        IsZeroExtendingWOffset(OutOff) && !XWritten.count(OutOff)) {
+      if (OutOff == a64reg::SP) {
+        if (IsSelfWspCopy)
+          S.emitIntrinsic(Intrinsic::A64_WspZeroExtend,
+                          NdVar::reg(OutOff, 8), {});
+        else
+          S.emitIntrinsic(Intrinsic::A64_WspWrite, NdVar::reg(OutOff, 8),
+                          {NdVar::reg(OutOff, 4)});
+      } else {
+        S.emit(NdOp::INT_ZEXT, NdVar::reg(OutOff, 8),
+               {NdVar::reg(OutOff, 4)});
+      }
       XWritten.insert(OutOff);
     }
   }

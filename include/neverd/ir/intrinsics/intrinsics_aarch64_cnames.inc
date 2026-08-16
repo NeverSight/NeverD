@@ -164,3 +164,5 @@ C(Intrinsic::A64_SveCntd,      "svcntd");
 C(Intrinsic::A64_SvePtrue,     "svptrue_b8");
 C(Intrinsic::A64_SveDup,       "svdup_n_u8");
 C(Intrinsic::A64_SveLastb,     "svlastb_u8");
+C(Intrinsic::A64_WspWrite,     "__builtin_arm_wsp_write");
+C(Intrinsic::A64_WspZeroExtend, "__builtin_arm_wsp_zero_extend");

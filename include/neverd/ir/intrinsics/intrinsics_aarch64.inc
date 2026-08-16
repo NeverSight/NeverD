@@ -178,3 +178,7 @@ A64_SveCntb, A64_SveCnth, A64_SveCntw, A64_SveCntd,
 
 // Runtime-width SVE register-state operations.
 A64_SvePtrue, A64_SveDup, A64_SveLastb,
+
+// Architectural 32-bit stack-pointer write (zero-extends into SP).
+A64_WspWrite,
+A64_WspZeroExtend,

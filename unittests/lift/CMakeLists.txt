@@ -17,6 +17,7 @@ add_neverd_unittest(NeverDLiftTests
   aarch64/AArch64_PAuthTests.cpp
   aarch64/AArch64_SVELengthTests.cpp
   aarch64/AArch64_SVEStateTests.cpp
+  aarch64/AArch64_WSPTests.cpp
   aarch64/AArch64_MulDivTests.cpp
   aarch64/AArch64_PipelineE2ETests.cpp
   aarch64/AArch64_FastClassifyParityTests.cpp
@@ -682,6 +683,7 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_pauth_a64.c
   aarch64/test_sve_length_a64.c
   aarch64/test_sve_state_a64.c
+  aarch64/test_wsp_a64.c
   aarch64/test_intrinsics_a64.c
   aarch64/test_switch_a64.c
   aarch64/test_roundtrip_a64.c

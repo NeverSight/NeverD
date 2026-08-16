@@ -23,6 +23,8 @@ RegInfo mapCapstoneReg(aarch64_reg Reg) {
     return {a64reg::X30, 8};
   if (Reg == AARCH64_REG_SP)
     return {a64reg::SP, 8};
+  if (Reg == AARCH64_REG_WSP)
+    return {a64reg::SP, 4};
 
   if (Reg >= AARCH64_REG_W0 && Reg <= AARCH64_REG_W30)
     return {a64reg::X0 + static_cast<uint64_t>(Reg - AARCH64_REG_W0) * 8, 4};
