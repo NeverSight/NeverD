@@ -16,6 +16,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/lift/AArch64Lifter.h"
 #include "neverd/support/Parallel.h"
 
@@ -33,6 +34,71 @@
 #define DEBUG_TYPE "neverd-func-detector"
 
 namespace neverd {
+
+namespace {
+
+bool isUnconditionalNoReturnCall(const BinaryImage &Img,
+                                 const std::vector<LowOp> &Ops) {
+  va_t Target = InvalidVA;
+  bool IsConditional = false;
+  for (const LowOp &Op : Ops) {
+    if (Op.Opcode == NdOp::COND_BR)
+      IsConditional = true;
+    else if (Op.Opcode == NdOp::CALL && Op.NumInputs > 0 &&
+             Op.Inputs[0].isConst())
+      Target = Op.Inputs[0].Offset;
+  }
+  return !IsConditional && libc::isNoReturnTarget(Img, Target);
+}
+
+bool hasBoundedSemanticTerminator(const BinaryImage &Img, Decoder &Dec,
+                                  va_t Addr) {
+  constexpr int kMaxInsns = limits::kMaxVerifyInsns;
+  const Segment *Seg = Img.getSegmentFor(Addr);
+  if (!Seg || !Seg->isExecutable())
+    return false;
+
+  const bool PreviousDetail = Dec.detailEnabled();
+  Dec.setDetail(true);
+  Dec.resetX86FpuState();
+  const bool Found = [&]() {
+    va_t Cur = Addr;
+    for (int I = 0; I < kMaxInsns; ++I) {
+      if (Cur < Seg->VA)
+        return false;
+      const size_t Off = static_cast<size_t>(Cur - Seg->VA);
+      if (Off >= Seg->Data.size())
+        return false;
+
+      DecodedInsn DI;
+      const int Sz = Dec.decodeOneForLift(Seg->Data.data() + Off,
+                                          Seg->Data.size() - Off, Cur, DI);
+      if (Sz <= 0 || !DI.Raw)
+        return false;
+      if (Dec.isFunctionTerminator(DI))
+        return true;
+
+      const va_t CallTarget = Dec.directCallTarget(DI);
+      if (CallTarget != InvalidVA && libc::isNoReturnTarget(Img, CallTarget)) {
+        std::vector<LowOp> Ops;
+        try {
+          Dec.liftToLow(DI, Ops);
+        } catch (const UnliftedInstruction &) {
+          return false;
+        }
+        if (isUnconditionalNoReturnCall(Img, Ops))
+          return true;
+      }
+      Cur += static_cast<va_t>(Sz);
+    }
+    return false;
+  }();
+  Dec.resetX86FpuState();
+  Dec.setDetail(PreviousDetail);
+  return Found;
+}
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // FuncDetector::detect
@@ -312,7 +378,8 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
     }
     Cur += Sz;
   }
-  if (!SawTerminator && !KeepInconclusive)
+  if (!SawTerminator && !KeepInconclusive &&
+      !hasBoundedSemanticTerminator(Img, Dec, Addr))
     return false;
 
   // A linear walk can encounter RET on one arm while a conditional branch on
@@ -366,6 +433,7 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
         } catch (const UnliftedInstruction &) {
           return true;
         }
+        const bool IsNoReturnCall = isUnconditionalNoReturnCall(Img, Ops);
 
         bool IsBranch = false;
         bool IsCond = false;
@@ -399,6 +467,8 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
         if (!IsBranch && !IsRet && Dec.isFunctionTerminator(DI))
           IsRet = true;
 
+        if (IsNoReturnCall)
+          break;
         if (IsRet && !(IsCond && IsBranch))
           break;
         if (IsRet && IsCond && IsBranch) {

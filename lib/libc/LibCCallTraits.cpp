@@ -11,6 +11,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringSwitch.h"
 
@@ -207,6 +208,18 @@ bool isNoReturnFunction(std::string_view Name) {
 #include "neverd/libc/LibCNoReturn.inc"
 #undef LIBC_NO_RETURN_SYMBOL
       .Default(false);
+}
+
+bool isNoReturnTarget(const BinaryImage &Img, va_t Target) {
+  if (Target == InvalidVA)
+    return false;
+  if (const Import *Imp = Img.findImportAt(Target))
+    if (isNoReturnFunction(Imp->Name))
+      return true;
+  if (const Symbol *Sym = Img.findSymbolAt(Target))
+    if (isNoReturnFunction(Sym->Name))
+      return true;
+  return false;
 }
 
 bool isReturnsTwiceFunction(std::string_view Name) {

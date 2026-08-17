@@ -11,8 +11,14 @@
 // Per-header name lists live beside this file; registry lookup and call-trait
 // APIs are implemented in LibCNames.cpp and LibCCallTraits.cpp respectively.
 
+#include "neverd/Common.h"
+
 #include <optional>
 #include <string_view>
+
+namespace neverd {
+struct BinaryImage;
+}
 
 namespace neverd::libc {
 
@@ -125,6 +131,11 @@ bool isVaListConsumer(std::string_view Name);
 /// Leading platform underscores (the Mach-O `_` prefix) are stripped
 /// internally.
 bool isNoReturnFunction(std::string_view Name);
+
+/// True if \p Target resolves through \p Img to a known no-return import
+/// veneer or statically linked function symbol.  This is the image-aware
+/// counterpart of isNoReturnFunction() shared by discovery and CFG recovery.
+bool isNoReturnTarget(const BinaryImage &Img, va_t Target);
 
 /// True if Name is a setjmp-family function that may return more than once
 /// (setjmp / _setjmp / sigsetjmp): control re-enters the call site when a

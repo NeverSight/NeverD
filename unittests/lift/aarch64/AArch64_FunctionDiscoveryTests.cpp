@@ -192,4 +192,52 @@ TEST(AArch64FunctionDiscovery,
             0u);
 }
 
+TEST(AArch64FunctionDiscovery,
+     PreservesCompactRangeCalleeEndingInNoReturnImport) {
+  constexpr va_t ImageVA = 0x3000;
+  constexpr va_t HelperVA = ImageVA + 0x8;
+  constexpr va_t AbortStubVA = ImageVA + 0x150;
+
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::MachO;
+  Img.Base = ImageVA;
+  Img.Entry = ImageVA;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = ImageVA;
+  Text.Size = 0x154;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0);
+  writeLE<uint32_t>(Text.Data.data(), 0x94000002u);      // bl HelperVA
+  writeLE<uint32_t>(Text.Data.data() + 4, 0xD65F03C0u);  // ret
+  writeLE<uint32_t>(Text.Data.data() + 8, 0x52800000u);  // mov w0, #0
+  writeLE<uint32_t>(Text.Data.data() + 12, 0x94000051u); // bl AbortStubVA
+  for (size_t Off = 0x10; Off < 0x150; Off += sizeof(uint32_t))
+    writeLE<uint32_t>(Text.Data.data() + Off, 0xD503201Fu); // nop
+  writeLE<uint32_t>(Text.Data.data() + 0x150, 0xD61F0200u); // br x16
+  Img.Segments.push_back(std::move(Text));
+  Img.Sections.push_back(makeMachOSection("__text", ImageVA, 0x150,
+                                          /*ContainsInstructions=*/true));
+
+  Symbol Covering = Symbol::makeFunc(ImageVA, 0x150);
+  Covering.Name = "_main";
+  Img.Symbols.push_back(std::move(Covering));
+  Img.Exports.push_back({"_main", 0, ImageVA});
+  Img.KnownCodeRanges.emplace_back(ImageVA, AbortStubVA);
+  Img.Imports.push_back({"libSystem.B.dylib", "_abort", 0, 0});
+  ASSERT_TRUE(Img.recordImportStub(AbortStubVA, 0));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  FuncDetector Detector;
+  auto Functions = Detector.detect(Img, Dec);
+
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == HelperVA; }),
+            1u);
+}
+
 } // namespace

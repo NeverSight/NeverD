@@ -258,15 +258,7 @@ bool CFGBuilder::isNoReturnCall(const InsnRecord &Rec) const {
     }
   if (Target == InvalidVA)
     return false;
-  // External libc through any registered import address or executable veneer.
-  if (const Import *Imp = CurrentImg->findImportAt(Target))
-    if (libc::isNoReturnFunction(Imp->Name))
-      return true;
-  // Statically-linked / internal: the target is the function entry itself.
-  if (const Symbol *Sym = CurrentImg->findSymbolAt(Target))
-    if (libc::isNoReturnFunction(Sym->Name))
-      return true;
-  return false;
+  return libc::isNoReturnTarget(*CurrentImg, Target);
 }
 
 void CFGBuilder::rewriteAsTailCall(InsnRecord &Rec) {

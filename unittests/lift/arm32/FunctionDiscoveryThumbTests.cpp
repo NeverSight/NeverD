@@ -6,11 +6,13 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/FuncDetector.h"
+#include "neverd/loader/COFF/COFFLoaderUtils.h"
+#include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
-#include "neverd/loader/COFF/COFFLoaderUtils.h"
-#include "neverd/loader/FunctionDiscovery.h"
 
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Error.h"
@@ -167,6 +169,48 @@ TEST(FunctionDiscoveryThumb, IgnoresPaddingCandidatesInsideSizedFunctions) {
 
   EXPECT_EQ(std::count_if(Img.Symbols.begin(), Img.Symbols.end(),
                           [](const Symbol &S) { return S.Addr == CaseVA; }),
+            0u);
+}
+
+TEST(FunctionDiscoveryARM,
+     ConditionalNoReturnCallDoesNotTerminateCandidateVerification) {
+  constexpr va_t EntryVA = 0x1000;
+  constexpr va_t CandidateVA = 0x1100;
+  constexpr va_t AbortVA = 0x1300;
+
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Mode = InstructionMode::Default;
+  Img.Format = BinaryFormat::ELF;
+  Img.Bits = Bitness::Bits32;
+  Img.Base = EntryVA;
+  Img.Entry = EntryVA;
+
+  std::vector<uint8_t> Code(AbortVA - EntryVA + sizeof(uint32_t));
+  for (size_t Off = 0; Off < Code.size(); Off += sizeof(uint32_t))
+    writeLE<uint32_t>(Code.data() + Off, 0xE1A00000u); // nop
+  writeLE<uint32_t>(Code.data(), 0xEB00003Eu);         // bl CandidateVA
+  writeLE<uint32_t>(Code.data() + 4, 0xE12FFF1Eu);     // bx lr
+  writeLE<uint32_t>(Code.data() + (CandidateVA - EntryVA),
+                    0x0B00007Eu); // bleq AbortVA
+  writeLE<uint32_t>(Code.data() + (AbortVA - EntryVA),
+                    0xE12FFF1Eu); // bx lr
+  Img.Segments.push_back(makeExecutableSegment(EntryVA, Code));
+
+  Symbol Main = Symbol::makeFunc(EntryVA, 8);
+  Main.Name = "main";
+  Img.Symbols.push_back(std::move(Main));
+  Symbol Abort = Symbol::makeFunc(AbortVA, sizeof(uint32_t));
+  Abort.Name = "abort";
+  Img.Symbols.push_back(std::move(Abort));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::ARM, InstructionMode::Default));
+  FuncDetector Detector;
+  auto Functions = Detector.detect(Img, Dec);
+
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == CandidateVA; }),
             0u);
 }
 

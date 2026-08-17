@@ -5,9 +5,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include <gtest/gtest.h>
 
+using namespace neverd;
 using namespace neverd::libc;
 
 // =====================================================================
@@ -342,6 +344,35 @@ TEST(IsNoReturnFunction, SometimesReturningExcluded) {
   EXPECT_FALSE(isNoReturnFunction("warn"));
   EXPECT_FALSE(isNoReturnFunction("warnx"));
   EXPECT_FALSE(isNoReturnFunction("printf"));
+}
+
+TEST(IsNoReturnTarget, ResolvesImportVeneerAndStaticSymbol) {
+  constexpr va_t ImportStubVA = 0x1010;
+  constexpr va_t StaticExitVA = 0x1020;
+  constexpr va_t ReturningVA = 0x1030;
+
+  BinaryImage Img;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  Img.Segments.push_back(std::move(Text));
+
+  Img.Imports.push_back({"libSystem.B.dylib", "_abort", 0, 0});
+  ASSERT_TRUE(Img.recordImportStub(ImportStubVA, 0));
+
+  Symbol StaticExit = Symbol::makeFunc(StaticExitVA);
+  StaticExit.Name = "_exit";
+  Img.Symbols.push_back(std::move(StaticExit));
+  Symbol Returning = Symbol::makeFunc(ReturningVA);
+  Returning.Name = "warn";
+  Img.Symbols.push_back(std::move(Returning));
+
+  EXPECT_TRUE(isNoReturnTarget(Img, ImportStubVA));
+  EXPECT_TRUE(isNoReturnTarget(Img, StaticExitVA));
+  EXPECT_FALSE(isNoReturnTarget(Img, ReturningVA));
+  EXPECT_FALSE(isNoReturnTarget(Img, InvalidVA));
 }
 
 TEST(IsReturnsTwiceFunction, SetjmpFamily) {
