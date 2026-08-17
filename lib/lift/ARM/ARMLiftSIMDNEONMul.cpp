@@ -59,11 +59,13 @@ bool liftSIMDNEONMul(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar Acc = NdVar::cst(0, 0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar LA = S.makeTemp(LI.LaneSz);
-        S.emit(NdOp::SUBBYTES, LA, {A, NdVar::cst(I * LI.LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, LA,
+               {A, NdVar::cst(static_cast<uint64_t>(I) * LI.LaneSz, 4)});
         NdVar LB = ScalarB;
         if (BLane < 0) {
           LB = S.makeTemp(LI.LaneSz);
-          S.emit(NdOp::SUBBYTES, LB, {B, NdVar::cst(I * LI.LaneSz, 4)});
+          S.emit(NdOp::SUBBYTES, LB,
+                 {B, NdVar::cst(static_cast<uint64_t>(I) * LI.LaneSz, 4)});
         }
         NdVar WA = S.makeTemp(WLaneSz);
         S.emit(ExtOp, WA, {LA});

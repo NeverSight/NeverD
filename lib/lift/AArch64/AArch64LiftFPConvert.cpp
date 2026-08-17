@@ -82,7 +82,8 @@ bool liftFPConvert(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar Lane = S.makeTemp(LaneSz);
-        S.emit(NdOp::SUBBYTES, Lane, {Src, NdVar::cst(I * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, Lane,
+               {Src, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar Cvt = convertLane(Lane, LaneSz);
         if (I == 0) {
           Acc = Cvt;

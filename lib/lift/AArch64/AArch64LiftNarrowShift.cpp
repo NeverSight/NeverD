@@ -74,7 +74,8 @@ bool liftNarrowShift(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     NdVar Acc = S.makeTemp(0);
     for (unsigned I = 0; I < NLanes; ++I) {
       NdVar SLane = S.makeTemp(WideSz);
-      S.emit(NdOp::SUBBYTES, SLane, {Src, NdVar::cst(I * WideSz, 4)});
+      S.emit(NdOp::SUBBYTES, SLane,
+             {Src, NdVar::cst(static_cast<uint64_t>(I) * WideSz, 4)});
       if (IsRound && Imm > 0) {
         NdVar Rounded = S.makeTemp(WideSz);
         S.emit(NdOp::INT_ADD, Rounded,

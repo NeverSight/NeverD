@@ -140,7 +140,8 @@ bool liftNEONCompare(AArch64Lifter &L, AArch64Lifter::LiftState &S,
           if (V.isConst())
             return NdVar::cst(V.Offset, LaneSz);
           NdVar Lane = S.makeTemp(LaneSz);
-          S.emit(NdOp::SUBBYTES, Lane, {V, NdVar::cst(I * LaneSz, 4)});
+          S.emit(NdOp::SUBBYTES, Lane,
+                 {V, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
           return Lane;
         };
         for (unsigned I = 0; I < NLanes; ++I) {

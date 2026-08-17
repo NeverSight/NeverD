@@ -60,12 +60,15 @@ bool liftNEONMulAcc(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar La = AScalar ? A : S.makeTemp(LaneSz);
         if (!AScalar)
-          S.emit(NdOp::SUBBYTES, La, {A, NdVar::cst(I * LaneSz, 4)});
+          S.emit(NdOp::SUBBYTES, La,
+                 {A, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar Lb = BScalar ? B : S.makeTemp(LaneSz);
         if (!BScalar)
-          S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * LaneSz, 4)});
+          S.emit(NdOp::SUBBYTES, Lb,
+                 {B, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar Ld = S.makeTemp(LaneSz);
-        S.emit(NdOp::SUBBYTES, Ld, {DstR, NdVar::cst(I * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, Ld,
+               {DstR, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar P = S.makeTemp(LaneSz);
         S.emit(NdOp::INT_MULT, P, {La, Lb});
         NdVar R = S.makeTemp(LaneSz);

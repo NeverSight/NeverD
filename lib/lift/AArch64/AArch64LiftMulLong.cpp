@@ -49,12 +49,14 @@ bool liftMulLong(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar NarrA = S.makeTemp(NarrowLane);
-        S.emit(NdOp::SUBBYTES, NarrA, {A, NdVar::cst(I * NarrowLane, 4)});
+        S.emit(NdOp::SUBBYTES, NarrA,
+               {A, NdVar::cst(static_cast<uint64_t>(I) * NarrowLane, 4)});
         NdVar WA = S.makeTemp(DstLane);
         S.emit(IsSigned ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WA, {NarrA});
         NdVar NarrB = BScalar ? B : S.makeTemp(NarrowLane);
         if (!BScalar)
-          S.emit(NdOp::SUBBYTES, NarrB, {B, NdVar::cst(I * NarrowLane, 4)});
+          S.emit(NdOp::SUBBYTES, NarrB,
+                 {B, NdVar::cst(static_cast<uint64_t>(I) * NarrowLane, 4)});
         NdVar WB = S.makeTemp(DstLane);
         S.emit(IsSigned ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WB, {NarrB});
         NdVar Lr = S.makeTemp(DstLane);

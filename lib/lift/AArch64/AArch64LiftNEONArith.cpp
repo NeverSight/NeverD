@@ -79,7 +79,8 @@ bool liftNEONArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
         NdVar Src = (H == 0) ? A : B;
         for (unsigned I = 0; I < NPairs; ++I) {
           NdVar Lo = S.makeTemp(LaneSz);
-          S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(I * 2 * LaneSz, 4)});
+          S.emit(NdOp::SUBBYTES, Lo,
+                 {Src, NdVar::cst(static_cast<uint64_t>(I) * 2 * LaneSz, 4)});
           NdVar Hi = S.makeTemp(LaneSz);
           S.emit(NdOp::SUBBYTES, Hi,
                  {Src, NdVar::cst(I * 2 * LaneSz + LaneSz, 4)});

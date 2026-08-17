@@ -79,7 +79,8 @@ bool liftNEONWiden(AArch64Lifter &L, AArch64Lifter::LiftState &S,
           // SADDW/UADDW: A is already wide (read full lane), B is narrow and
           // taken from the upper half for the "2" variant.
           La = S.makeTemp(DstLane);
-          S.emit(NdOp::SUBBYTES, La, {A, NdVar::cst(I * DstLane, 4)});
+          S.emit(NdOp::SUBBYTES, La,
+                 {A, NdVar::cst(static_cast<uint64_t>(I) * DstLane, 4)});
           NdVar NarrB = S.makeTemp(NarrowLane);
           S.emit(NdOp::SUBBYTES, NarrB,
                  {B, NdVar::cst(NarrowBase + I * NarrowLane, 4)});

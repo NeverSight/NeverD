@@ -52,7 +52,8 @@ bool liftSIMDNEONLogic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
         NdVar Acc = S.makeTemp(0);
         for (unsigned I = 0; I < NLanes; ++I) {
           NdVar La = S.makeTemp(LaneSz);
-          S.emit(NdOp::SUBBYTES, La, {DstIn, NdVar::cst(I * LaneSz, 4)});
+          S.emit(NdOp::SUBBYTES, La,
+                 {DstIn, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
           NdVar R = S.makeTemp(LaneSz);
           S.emit(ImmOpc, R, {La, NdVar::cst(Imm, LaneSz)});
           if (I == 0)

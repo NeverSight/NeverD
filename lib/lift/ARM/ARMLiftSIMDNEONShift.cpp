@@ -47,7 +47,8 @@ bool liftSIMDNEONShift(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar SLane = S.makeTemp(SrcLaneSz);
-        S.emit(NdOp::SUBBYTES, SLane, {Src, NdVar::cst(I * SrcLaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, SLane,
+               {Src, NdVar::cst(static_cast<uint64_t>(I) * SrcLaneSz, 4)});
         NdVar WLane = S.makeTemp(DstLaneSz);
         S.emit(LI.IsSigned ? NdOp::INT_SEXT : NdOp::INT_ZEXT, WLane, {SLane});
         NdVar Shifted = S.makeTemp(DstLaneSz);

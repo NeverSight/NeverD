@@ -94,9 +94,11 @@ bool liftSIMDNEONCompare(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *I
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar La = S.makeTemp(InSz);
-        S.emit(NdOp::SUBBYTES, La, {A, NdVar::cst(I * InSz, 4)});
+        S.emit(NdOp::SUBBYTES, La,
+               {A, NdVar::cst(static_cast<uint64_t>(I) * InSz, 4)});
         NdVar Lb = S.makeTemp(InSz);
-        S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * InSz, 4)});
+        S.emit(NdOp::SUBBYTES, Lb,
+               {B, NdVar::cst(static_cast<uint64_t>(I) * InSz, 4)});
         // Compute |a-b| in the (possibly widened) output lane width.
         NdVar Wa = La, Wb = Lb;
         if (OutSz != InSz) {

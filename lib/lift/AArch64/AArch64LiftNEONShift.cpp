@@ -50,7 +50,8 @@ bool liftNEONShift(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar Ls = S.makeTemp(LaneSz);
-        S.emit(NdOp::SUBBYTES, Ls, {Src, NdVar::cst(I * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, Ls,
+               {Src, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar Lr = S.makeTemp(LaneSz);
         S.emit(NdOp::INT_LEFT, Lr, {Ls, LaneAmt});
         if (I == 0) {

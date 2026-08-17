@@ -46,8 +46,10 @@ bool liftFPRound(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar La = S.makeTemp(LaneSz);
         NdVar Lb = S.makeTemp(LaneSz);
-        S.emit(NdOp::SUBBYTES, La, {A, NdVar::cst(I * LaneSz, 4)});
-        S.emit(NdOp::SUBBYTES, Lb, {B, NdVar::cst(I * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, La,
+               {A, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, Lb,
+               {B, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar D = S.makeTemp(LaneSz);
         S.emit(NdOp::FLOAT_SUB, D, {La, Lb});
         NdVar R = S.makeTemp(LaneSz);
