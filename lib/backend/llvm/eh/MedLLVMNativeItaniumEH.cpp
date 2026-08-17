@@ -13,6 +13,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -435,6 +436,39 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
   auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
   auto *PersonalityTy = llvm::FunctionType::get(I32Ty, {}, true);
 
+  auto typeInfoNameForLLVM = [&](const ItaniumTypeEntry &Entry) {
+    llvm::StringRef Name(Entry.TypeName);
+    if (!Img || TargetFormat != BinaryFormat::MachO || Name.empty())
+      return Name.str();
+
+    bool IsObjectName = false;
+    for (const Symbol &Sym : Img->Symbols)
+      if (Sym.Addr == Entry.TypeInfoVA && Sym.Name == Name) {
+        IsObjectName = true;
+        break;
+      }
+    if (!IsObjectName && Entry.TypeInfoSlotVA != 0) {
+      if (const Import *Imp = Img->findImportAt(Entry.TypeInfoSlotVA))
+        IsObjectName = Imp->Name == Name;
+      if (!IsObjectName)
+        if (auto It = Img->ImportPtrSlots.find(Entry.TypeInfoSlotVA);
+            It != Img->ImportPtrSlots.end())
+          IsObjectName = It->second == Name;
+    }
+    if (!IsObjectName)
+      for (const RelocationEntry &Rel : Img->Relocations)
+        if ((Rel.Address == Entry.TypeInfoVA ||
+             (Entry.TypeInfoSlotVA != 0 &&
+              Rel.Address == Entry.TypeInfoSlotVA)) &&
+            Rel.SymbolName == Name) {
+          IsObjectName = true;
+          break;
+        }
+
+    return IsObjectName ? llvm_name::fromObjectSymbol(Name, TargetFormat).str()
+                        : Name.str();
+  };
+
   // getOrInsertFunction and GlobalVariable construction can otherwise create
   // bitcasted or auto-renamed symbols after the CFG has already been edited.
   // Check every name and the source identity behind it while preflight is
@@ -475,7 +509,7 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
         (DecodedName.starts_with("_ZTI") || DecodedName.starts_with("__ZTI"));
     const std::string Name =
         Identity.IsSlot ? makeNdDataSymbol(Identity.Address)
-                        : (IsRTTISymbol ? Entry->TypeName
+                        : (IsRTTISymbol ? typeInfoNameForLLVM(*Entry)
                                         : makeNdDataSymbol(Identity.Address));
     auto [NameIt, NewName] = IdentityByName.emplace(Name, Identity);
     if (!NewName && !(NameIt->second == Identity))
@@ -512,8 +546,8 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
         getItaniumTypeTableEntryKind(EH.Personality) ==
             ItaniumTypeTableEntryKind::CxxRTTI &&
         (DecodedName.starts_with("_ZTI") || DecodedName.starts_with("__ZTI"));
-    std::string Name =
-        IsRTTISymbol ? Entry.TypeName : makeNdDataSymbol(Entry.TypeInfoVA);
+    std::string Name = IsRTTISymbol ? typeInfoNameForLLVM(Entry)
+                                    : makeNdDataSymbol(Entry.TypeInfoVA);
     llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
     if (!GV)
       GV = new llvm::GlobalVariable(*Mod, I8Ty, /*isConstant=*/true,

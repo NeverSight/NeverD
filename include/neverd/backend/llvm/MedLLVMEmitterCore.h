@@ -83,6 +83,8 @@ public:
   ///     defined in another shard); functions the mask omits remain
   ///     declarations the linker resolves against their defining shard.  A
   ///     null mask emits every body.
+  /// \p Imports carries loader-native object symbol spellings.  The emitter
+  /// converts them to target LLVM global names at its object/IR boundary.
   /// The defaults (MergeableGlobals=false, null mask) reproduce the original
   /// single-module behavior byte-for-byte.
   std::unique_ptr<llvm::Module>

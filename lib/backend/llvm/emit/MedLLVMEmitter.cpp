@@ -25,6 +25,7 @@
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
@@ -55,6 +56,23 @@
 #include <vector>
 
 namespace neverd {
+
+namespace {
+
+bool hasObjectFunctionNameAt(const BinaryImage *Img, BinaryFormat Format,
+                             va_t Address, llvm::StringRef Name) {
+  if (!Img || Format != BinaryFormat::MachO)
+    return false;
+  for (const Symbol &Sym : Img->Symbols)
+    if (Sym.Addr == Address && Sym.Name == Name)
+      return true;
+  for (const Export &Exp : Img->Exports)
+    if (Exp.Addr == Address && Exp.Name == Name)
+      return true;
+  return false;
+}
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Type conversion helpers
@@ -376,11 +394,13 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
         !ConflictingPersonalityAddresses.count(F.Entry) &&
         SourceName == Personality->second)
       EmittedName = (kAutoFuncPrefix + llvm::utohexstr(F.Entry)).str();
+    else if (hasObjectFunctionNameAt(Img, Fmt, F.Entry, F.Name))
+      EmittedName = llvm_name::fromObjectSymbol(F.Name, Fmt).str();
     EmittedFuncNames[F.Entry] = EmittedName;
     FuncNames[F.Entry] = std::move(EmittedName);
   }
   for (auto &[Addr, Name] : Imports)
-    FuncNames[Addr] = Name;
+    FuncNames[Addr] = llvm_name::fromObjectSymbol(Name, Fmt).str();
 
   // Import function declarations are deferred to the CALL handler so
   // they get the correct parameter types from the actual call site.

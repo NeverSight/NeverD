@@ -108,6 +108,7 @@ add_neverd_unittest(NeverDLiftTests
   format/MachOI386RelocationPipelineTests.cpp
   format/MachOI386RelocationScatteredTests.cpp
   format/MachOFunctionListingTests.cpp
+  format/MachOLLVMNameBoundaryTests.cpp
   core/MedCallingConvTests.cpp
   eh/COFFExceptionTests.cpp
   eh/COFFExceptionARM32UnwindTests.cpp
@@ -259,6 +260,23 @@ add_neverd_unittest(NeverDMachOSymbolResolutionTests
 target_include_directories(NeverDMachOSymbolResolutionTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_SOURCE_DIR}/lib/backend/codegen/MachO
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Pins the format-native Mach-O name to canonical LLVM-global boundary without
+# relinking the full lift suite during local RED/GREEN iterations.  The same TU
+# is also listed in NeverDLiftTests above so the aggregate inventory owns it.
+add_neverd_unittest(NeverDMachOLLVMNameBoundaryTests
+  format/MachOLLVMNameBoundaryTests.cpp
+
+  LINK_COMPONENTS
+  BackendLLVM
+  LibC
+  Lift
+)
+
+target_include_directories(NeverDMachOLLVMNameBoundaryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
 

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
+#include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/libc/LibCNames.h"
@@ -104,6 +105,46 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   const MedCallInfo *CI =
       CurMedFunc ? CurMedFunc->findCall(BlockId, OpIdx) : nullptr;
 
+  auto canonicalizeObjectCallee = [&](llvm::StringRef Name) -> std::string {
+    if (!Img || TargetFormat != BinaryFormat::MachO || Name.empty())
+      return Name.str();
+
+    va_t TargetAddr = CallAddr;
+    if (TargetAddr == 0 && CI)
+      TargetAddr = CI->TargetAddr;
+    bool IsObjectName = false;
+    if (TargetAddr != 0) {
+      if (const Import *Imp = Img->findImportAt(TargetAddr))
+        IsObjectName = Imp->Name == Name;
+      if (!IsObjectName)
+        if (auto It = Img->ImportPtrSlots.find(TargetAddr);
+            It != Img->ImportPtrSlots.end())
+          IsObjectName = It->second == Name;
+      if (!IsObjectName)
+        for (const Symbol &Sym : Img->Symbols)
+          if (Sym.Addr == TargetAddr && Sym.Name == Name) {
+            IsObjectName = true;
+            break;
+          }
+      if (!IsObjectName)
+        for (const Export &Exp : Img->Exports)
+          if (Exp.Addr == TargetAddr && Exp.Name == Name) {
+            IsObjectName = true;
+            break;
+          }
+    }
+    if (!IsObjectName)
+      for (const RelocationEntry &Rel : Img->Relocations)
+        if ((Rel.Address == Op.Addr || Rel.Address == Op.Addr + 1) &&
+            Rel.SymbolName == Name) {
+          IsObjectName = true;
+          break;
+        }
+
+    return IsObjectName ? llvm_name::fromObjectSymbol(Name, TargetFormat).str()
+                        : Name.str();
+  };
+
   std::vector<llvm::Value *> Args;
   if (CI) {
     for (auto &Arg : CI->Args)
@@ -174,11 +215,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   auto resolveCalleeName = [&]() -> std::string {
     if (CI && !CI->TargetName.empty() &&
         !CI->TargetName.starts_with(kAutoFuncPrefix))
-      return CI->TargetName;
+      return canonicalizeObjectCallee(CI->TargetName);
     if (CallAddr != 0) {
       auto FnIt = FuncNames.find(CallAddr);
       if (FnIt != FuncNames.end())
-        return FnIt->second;
+        return canonicalizeObjectCallee(FnIt->second);
     }
     return {};
   };
