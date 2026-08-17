@@ -143,6 +143,13 @@ inline bool isDataRelRoSectionName(llvm::StringRef Name) {
   return Name.starts_with(elf::DataRelRo);
 }
 
+/// True if \p Name identifies a section/segment whose loader-visible flags may
+/// be writable while relocations are applied, but whose contents are immutable
+/// once loading completes.
+inline bool isReadOnlyAfterRelocSectionName(llvm::StringRef Name) {
+  return isDataRelRoSectionName(Name) || Name == macho::DataConstSeg;
+}
+
 /// True if \p Name is an ELF data/rodata/bss section whose contents are
 /// embedded alongside code in roundtrip and Unicorn test images.
 inline bool isElfImageDataSectionName(llvm::StringRef Name) {

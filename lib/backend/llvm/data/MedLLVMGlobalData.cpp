@@ -202,8 +202,9 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
   // Embedding the raw post-link bytes would bake in stale absolute target VAs
   // the loaded pointers dereference into unmapped memory (the `int*[]={&A,&B}`
   // table clang materializes for a local pointer array loaded whole).  If the
-  // mirror cannot be built (a code-pointer slot that does not resolve), fall
-  // through to the verbatim embed below — no worse than the original VA.
+  // A relocation-proven executable target that cannot resolve is a hard
+  // emission failure: falling through to the verbatim embed would reintroduce
+  // the stale original VA this boundary exists to eliminate.
   if (segHasPtrRelocSlots(Seg)) {
     uint64_t SegOut = 0;
     if (llvm::Constant *Tbl = buildCodePtrSegmentGlobal(Seg->VA, SegOut)) {
@@ -218,6 +219,8 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
       GlobalDataCache[Addr] = GEP;
       return GEP;
     }
+    if (FatalCodePointerResolution)
+      return nullptr;
   }
 
   size_t Off = static_cast<size_t>(Addr - Seg->VA);

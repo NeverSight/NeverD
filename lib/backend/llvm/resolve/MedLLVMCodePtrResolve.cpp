@@ -15,10 +15,12 @@
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/Support/WithColor.h"
 
 #include <cstring>
 #include <map>
@@ -28,6 +30,19 @@
 #include <vector>
 
 namespace neverd {
+
+llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
+  if (auto NameIt = FuncNames.find(Address); NameIt != FuncNames.end())
+    if (llvm::Function *Function = Mod->getFunction(NameIt->second))
+      return Function;
+  if (auto BlockIt = LiftedCodeBlocks.find(Address);
+      BlockIt != LiftedCodeBlocks.end()) {
+    llvm::BasicBlock *Block = BlockIt->second;
+    if (Block && Block->getParent())
+      return llvm::BlockAddress::get(Block->getParent(), Block);
+  }
+  return nullptr;
+}
 
 llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
                                                           uint64_t &OutSegVA) {
@@ -125,9 +140,10 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   size_t Size = RunBuf.size();
 
   // Drop overlapping slots and verify every CODE-pointer slot resolves up
-  // front. A code pointer that cannot map to a recompiled function aborts the
-  // mirror (the segment falls back to a verbatim embed); resolving them before
-  // the global exists keeps that abort clean.  Data-pointer targets are
+  // front. A code pointer that cannot map to a recompiled function or owned
+  // block aborts the entire emission; resolving them before the global exists
+  // keeps that failure clean and prevents a stale-address fallback.
+  // Data-pointer targets are
   // resolved only AFTER the global is created and memoized below: a relocated
   // data pointer can point back INTO this same segment (a
   // statically-initialized `next`-style chain) or form a cross-segment cycle,
@@ -151,9 +167,17 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     uint64_t TargetVA = 0;
     std::memcpy(&TargetVA, Data + Off, PtrSz);
     if (Slot.Kind == PtrSlotKind::Code) {
-      auto NameIt = FuncNames.find(TargetVA);
-      if (NameIt == FuncNames.end() || !Mod->getFunction(NameIt->second))
-        return nullptr; // code pointer does not resolve — abort the mirror
+      TargetVA = normalizeCodeAddress(TargetVA, Img->Arch, Img->Mode);
+      if (!resolveLiftedCodeAddress(TargetVA)) {
+        if (!FatalCodePointerResolution)
+          llvm::WithColor::error()
+              << "med_llvm_emitter: relocation-proven code pointer at 0x"
+              << llvm::utohexstr(Slot.VA) << " targets unresolved address 0x"
+              << llvm::utohexstr(TargetVA)
+              << "; refusing stale-address fallback\n";
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
     }
     Kept.push_back(
         {Off, TargetVA, Slot.Kind, Slot.ImportName, Slot.ImportAddend});
@@ -179,10 +203,10 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   auto *StructTy = llvm::StructType::get(*Ctx, FieldTys, /*isPacked=*/true);
   // A plain writable .data segment holding a function-pointer global (mutable,
   // reassigned at runtime) must be a writable global so stores into a slot are
-  // legal; RELRO and rodata pointer tables stay constant (read-only after
-  // relocation) — their slots are never stored to.
+  // legal; read-only-after-relocation and rodata pointer tables stay constant
+  // — their slots are never stored to.
   bool SegWritable = Seg->isWritable() && !Seg->isExecutable() &&
-                     !section_names::isDataRelRoSectionName(Seg->Name);
+                     !section_names::isReadOnlyAfterRelocSectionName(Seg->Name);
   auto *GV = new llvm::GlobalVariable(
       *Mod, StructTy, /*isConstant=*/!SegWritable, dataLinkage(),
       llvm::ConstantAggregateZero::get(StructTy),
@@ -206,8 +230,12 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     addBytes(Cursor, K.Off);
     llvm::Constant *FieldVal = nullptr;
     if (K.Kind == PtrSlotKind::Code) {
-      llvm::Function *F = Mod->getFunction(FuncNames.find(K.TargetVA)->second);
-      FieldVal = llvm::ConstantExpr::getPtrToInt(F, PtrIntTy);
+      llvm::Constant *Target = resolveLiftedCodeAddress(K.TargetVA);
+      if (!Target) {
+        FatalCodePointerResolution = true;
+        return nullptr;
+      }
+      FieldVal = llvm::ConstantExpr::getPtrToInt(Target, PtrIntTy);
     } else if (K.Kind == PtrSlotKind::Data) {
       if (llvm::Constant *G = tryResolveGlobalData(K.TargetVA))
         FieldVal = llvm::ConstantExpr::getPtrToInt(G, PtrIntTy);
@@ -478,15 +506,12 @@ MedLLVMEmitter::tryResolveCodeRefValue(const MedVar &V,
   // function pointer; a plain computed value must not be reinterpreted.
   if (!VA || !SawLoad)
     return nullptr;
-  auto FIt = FuncNames.find(*VA);
-  if (FIt == FuncNames.end())
-    return nullptr;
-  llvm::Function *F = Mod->getFunction(FIt->second);
-  if (!F)
+  llvm::Constant *Target = resolveLiftedCodeAddress(*VA);
+  if (!Target)
     return nullptr;
   unsigned PtrSz = Img->getPointerSize() ? Img->getPointerSize() : 8;
   return Builder.CreatePtrToInt(
-      F, sizeToType(V.Size > 0 ? V.Size : static_cast<uint16_t>(PtrSz)),
+      Target, sizeToType(V.Size > 0 ? V.Size : static_cast<uint16_t>(PtrSz)),
       "fnptr");
 }
 

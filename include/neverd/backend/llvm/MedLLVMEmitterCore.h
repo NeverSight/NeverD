@@ -850,14 +850,21 @@ private:
   llvm::Value *tryResolveCodeRefValue(const MedVar &V,
                                       llvm::IRBuilder<> &Builder);
 
+  /// Resolve an original executable VA in an address-value context.  Callable
+  /// entries become llvm::Function constants; relocation-proven labels inside
+  /// an emitted function become llvm::BlockAddress constants.
+  llvm::Constant *resolveLiftedCodeAddress(va_t Address);
+
   /// Build (and cache) a constant global mirroring the entire read-only data
   /// segment that contains \p SlotVA, with every code-pointer relocation slot
-  /// emitted as a `ptrtoint @func` field and the surrounding bytes preserved as
+  /// emitted as a relocatable `ptrtoint @func` or
+  /// `ptrtoint(blockaddress(...))` field and the surrounding bytes preserved as
   /// byte arrays in a packed struct.  This handles a compact pointer table, a
   /// strided struct-of-pointers array (a vtable), and the data fields beside
   /// the pointers uniformly, since any access GEPs into it by byte offset. Sets
-  /// \p OutSegVA to the segment base.  Null when \p SlotVA is not in a segment
-  /// holding code-pointer slots or any slot's target function is unknown.
+  /// \p OutSegVA to the segment base.  Null when \p SlotVA is not applicable;
+  /// an unresolved executable target also sets FatalCodePointerResolution so
+  /// no caller may fall back to stale raw bytes.
   llvm::Constant *buildCodePtrSegmentGlobal(uint64_t SlotVA,
                                             uint64_t &OutSegVA);
 
@@ -1092,6 +1099,15 @@ private:
   /// auto name so the canonical ABI name remains an external declaration.
   std::map<va_t, std::string> EmittedFuncNames;
   std::map<va_t, std::string> FuncNames;
+  // Ordinary LLVM blocks are created for every body-emitted MedFunc before
+  // any body operation runs.  This makes blockaddress resolution independent
+  // of function emission order while leaving BodyMask-omitted functions as
+  // declarations.
+  std::map<std::pair<va_t, int>, llvm::BasicBlock *> PreparedFuncBlocks;
+  std::map<va_t, llvm::BasicBlock *> LiftedCodeBlocks;
+  // Sticky hard failure: a relocation-proven executable pointer must never
+  // degrade to an embedded original VA.  emit() discards the module when set.
+  bool FatalCodePointerResolution = false;
   std::map<uint64_t, llvm::Constant *> GlobalDataCache;
   // One synthesized code-pointer mirror global per data segment base VA (see
   // buildCodePtrSegmentGlobal); reused across every access into that segment.

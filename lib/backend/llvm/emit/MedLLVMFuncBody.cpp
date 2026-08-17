@@ -164,7 +164,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
                                !Func.MutableStackParamHomes.empty();
   llvm::BasicBlock *FrameSetupBB = nullptr;
   if (NeedsFrameSetup || NeedsWindowsEHPrologue) {
-    FrameSetupBB = llvm::BasicBlock::Create(*Ctx, kFrameSetupBlock, LLVMFunc);
+    llvm::BasicBlock *InsertBefore =
+        LLVMFunc->empty() ? nullptr : &LLVMFunc->getEntryBlock();
+    FrameSetupBB = llvm::BasicBlock::Create(*Ctx, kFrameSetupBlock, LLVMFunc,
+                                            InsertBefore);
     if (NeedsFrameSetup) {
       const auto &TRI = getTargetRegInfo(TargetArch);
       llvm::IRBuilder<> FrameB(FrameSetupBB);
@@ -319,8 +322,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   llvm::DenseMap<va_t, llvm::BasicBlock *> AddressToBlock;
   llvm::DenseMap<int, va_t> BlockToAddress;
   for (auto &Blk : Func.Blocks) {
-    auto *BB = llvm::BasicBlock::Create(*Ctx, "bb_" + std::to_string(Blk.Id),
-                                        LLVMFunc);
+    auto Prepared = PreparedFuncBlocks.find({Func.Entry, Blk.Id});
+    if (Prepared == PreparedFuncBlocks.end())
+      llvm::report_fatal_error("missing pre-created MedLLVM block skeleton");
+    llvm::BasicBlock *BB = Prepared->second;
     BBMap[Blk.Id] = BB;
     ConceptualExits[Blk.Id].push_back(BB);
     const va_t Address = Blk.StartAddr != 0 || Blk.Ops.empty()

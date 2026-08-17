@@ -130,9 +130,9 @@ MedLLVMEmitter::embedExecSegmentRun(const Segment *Seg) {
 bool MedLLVMEmitter::isMutableDataSeg(const Segment *S) const {
   if (!S || !S->isReadable() || !S->isWritable() || S->isExecutable())
     return false;
-  // RELRO is writable in section flags but a relocated pointer table that is
-  // read-only after relocation; it is owned by the pointer-table machinery.
-  if (section_names::isDataRelRoSectionName(S->Name))
+  // Some formats retain writable loader flags on relocated pointer tables that
+  // become immutable after fixups; pointer-table machinery owns those ranges.
+  if (section_names::isReadOnlyAfterRelocSectionName(S->Name))
     return false;
   if (!Img)
     return true;
@@ -175,7 +175,8 @@ bool MedLLVMEmitter::segHasPtrRelocSlots(const Segment *S) const {
 
 bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
   return S && S->isReadable() && !S->isExecutable() && !S->Data.empty() &&
-         (!S->isWritable() || section_names::isDataRelRoSectionName(S->Name));
+         (!S->isWritable() ||
+          section_names::isReadOnlyAfterRelocSectionName(S->Name));
 }
 
 void MedLLVMEmitter::readOnlyAfterRelocRun(const Segment *Seg,

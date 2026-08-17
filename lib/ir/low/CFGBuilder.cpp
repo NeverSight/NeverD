@@ -90,6 +90,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   TruncatedPathAddresses.clear();
 
   CurrentFuncEntry = EntryAddr;
+  CurrentFuncRange.reset();
   CurrentImg = &Img;
   // The x87 TOP counter persists across functions in the shared lifter; start
   // each function with an empty stack so the entry block's lift TOP is 0.
@@ -106,6 +107,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   }
   if (!Exception)
     Exception = Img.ExceptionMetadata.findFunction(EntryAddr);
+  establishCurrentFuncRange(Img, Exception);
   std::vector<va_t> ExceptionalRoots;
   if (Exception) {
     // Every one of these tables spells "this field names no address" as zero,
@@ -195,6 +197,11 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     }
   }
   explore(Img, Dec, EntryAddr);
+  // A relocation can take the address of a basic block that no ordinary edge
+  // reaches (GNU computed-goto labels are the canonical case).  Decode those
+  // roots only after the normal entry walk, so an invalid target cannot split a
+  // real instruction that the entry traversal already established.
+  exploreAddressTakenRoots(Img, Dec);
   // A handler or landing pad inside the owning range is a legal CFG root even
   // though no ordinary branch reaches it — only the unwinder or the dispatcher
   // enters one, so recursive descent alone would leave its body undecoded.
@@ -347,6 +354,9 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // so recursive descent reaches the local target and keeps it in this
       // function's CFG.
       resolveConstantIndirectBranch(Img, DI.Id, Saved);
+      // Relocation-backed interior branches are deliberately resolved later,
+      // after every address-taken root has been decoded.  Until then the CFG's
+      // predecessor set is incomplete and cannot prove a unique relay path.
 
       if (Saved.IsRet && !(Saved.IsCond && Saved.IsBranch))
         break;
@@ -436,6 +446,17 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       auto It = Insns.find(UA);
       if (It == Insns.end())
         continue;
+
+      if (resolveRelocatedInteriorBranch(Img, It->second)) {
+        const va_t Target = It->second.BranchTarget;
+        if (Target != InvalidVA) {
+          BlockStarts.insert(Target);
+          if (!ExploredAddrs.count(Target))
+            explore(Img, Dec, Target);
+        }
+        MadeProgress = true;
+        continue;
+      }
 
       auto Targets = resolveJumpTable(Img, It->second);
       if (Targets.empty())

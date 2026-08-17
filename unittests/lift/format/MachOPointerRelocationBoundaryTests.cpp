@@ -7,7 +7,10 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
+#include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/IR/Constants.h"
@@ -15,15 +18,31 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace neverd {
+
+class PipelineTestPeer {
+public:
+  static bool requiresSerialLLVMEmission(const std::vector<MedFunc> &Funcs,
+                                         const BinaryImage &Image) {
+    return Pipeline::requiresSerialLLVMEmission(Funcs, Image);
+  }
+};
+
+} // namespace neverd
 
 namespace {
 
@@ -68,7 +87,9 @@ BinaryImage makeChainedImage() {
   Data.VA = DataVA;
   Data.Size = 0x100;
   Data.FileSz = Data.Size;
-  Data.Flags = SegmentFlags::Readable;
+  // Mach-O keeps __DATA_CONST writable while dyld applies fixups even though
+  // the segment is immutable once loading completes.
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   Data.Data.resize(Data.Size);
 
   dyld_chained_ptr_64_bind Bind{};
@@ -139,6 +160,26 @@ bool constantReferences(const llvm::Constant *Root,
   for (const llvm::Use &Operand : Root->operands())
     if (const auto *Child = llvm::dyn_cast<llvm::Constant>(Operand.get()))
       if (constantReferences(Child, Target))
+        return true;
+  return false;
+}
+
+bool constantContainsBlockAddress(const llvm::Constant *Root) {
+  if (llvm::isa<llvm::BlockAddress>(Root))
+    return true;
+  for (const llvm::Use &Operand : Root->operands())
+    if (const auto *Child = llvm::dyn_cast<llvm::Constant>(Operand.get()))
+      if (constantContainsBlockAddress(Child))
+        return true;
+  return false;
+}
+
+bool constantContainsInteger(const llvm::Constant *Root, uint64_t Value) {
+  if (const auto *Int = llvm::dyn_cast<llvm::ConstantInt>(Root))
+    return Int->getZExtValue() == Value;
+  for (const llvm::Use &Operand : Root->operands())
+    if (const auto *Child = llvm::dyn_cast<llvm::Constant>(Operand.get()))
+      if (constantContainsInteger(Child, Value))
         return true;
   return false;
 }
@@ -260,6 +301,393 @@ BinaryImage makeLLVMImage() {
   addImport(Image, "___stdoutp", DataVA);
   addImport(Image, "_getopt_long", ImportStubVA);
   return Image;
+}
+
+struct InteriorPointerFixture {
+  BinaryImage Image;
+  va_t Entry = 0;
+  va_t End = 0;
+  va_t SelectedSlot = 0;
+  va_t SelectedTarget = 0;
+  std::vector<va_t> InteriorTargets;
+};
+
+InteriorPointerFixture makeInteriorPointerFixture(Arch TargetArch) {
+  InteriorPointerFixture Fixture;
+  BinaryImage &Image = Fixture.Image;
+  Image.Arch = TargetArch;
+  Image.Format = BinaryFormat::MachO;
+  Image.Bits = Bitness::Bits64;
+  Image.Base = TextVA;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = TextVA;
+  Text.Size = 0x600;
+  Text.FileSz = Text.Size;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0);
+
+  va_t TableVA = 0;
+  std::vector<uint8_t> Code;
+  if (TargetArch == Arch::AArch64) {
+    Fixture.Entry = TextVA + 0x4a0;
+    Fixture.End = TextVA + 0x534;
+    TableVA = DataVA + 8;
+    Fixture.InteriorTargets = {TextVA + 0x4c8, TextVA + 0x4d4, TextVA + 0x4e0,
+                               TextVA + 0x4ec};
+    Code = {
+        0xff, 0xc3, 0x00, 0xd1, 0xfd, 0x7b, 0x02, 0xa9, 0xfd, 0x83, 0x00, 0x91,
+        0xbf, 0xc3, 0x1f, 0xb8, 0xbf, 0x83, 0x1f, 0xb8, 0x28, 0x00, 0x00, 0x90,
+        0x08, 0x21, 0x00, 0x91, 0x08, 0x05, 0x40, 0xf9, 0xe8, 0x0b, 0x00, 0xf9,
+        0x1a, 0x00, 0x00, 0x14, 0x28, 0x00, 0x80, 0x52, 0xa8, 0x83, 0x1f, 0xb8,
+        0x0a, 0x00, 0x00, 0x14, 0x48, 0x00, 0x80, 0x52, 0xa8, 0x83, 0x1f, 0xb8,
+        0x07, 0x00, 0x00, 0x14, 0x68, 0x00, 0x80, 0x52, 0xa8, 0x83, 0x1f, 0xb8,
+        0x04, 0x00, 0x00, 0x14, 0x88, 0x00, 0x80, 0x52, 0xa8, 0x83, 0x1f, 0xb8,
+        0x01, 0x00, 0x00, 0x14, 0x28, 0x00, 0x00, 0x90, 0x0a, 0x05, 0x40, 0xf9,
+        0xa8, 0x83, 0x5f, 0xb8, 0xe9, 0x03, 0x00, 0x91, 0x2a, 0x01, 0x00, 0xf9,
+        0x28, 0x05, 0x00, 0xf9, 0x00, 0x00, 0x00, 0x90, 0x00, 0x6c, 0x15, 0x91,
+        0x07, 0x00, 0x00, 0x94, 0x00, 0x00, 0x80, 0x52, 0xfd, 0x7b, 0x42, 0xa9,
+        0xff, 0xc3, 0x00, 0x91, 0xc0, 0x03, 0x5f, 0xd6, 0xe8, 0x0b, 0x40, 0xf9,
+        0x00, 0x01, 0x1f, 0xd6,
+    };
+  } else {
+    Fixture.Entry = TextVA + 0x4b0;
+    Fixture.End = TextVA + 0x51b;
+    TableVA = TextVA + 0x1010;
+    Fixture.InteriorTargets = {TextVA + 0x4d3, TextVA + 0x4dc, TextVA + 0x4e5,
+                               TextVA + 0x4ee};
+    Code = {
+        0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 0x10, 0xc7, 0x45, 0xfc, 0x00,
+        0x00, 0x00, 0x00, 0xc7, 0x45, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8b,
+        0x05, 0x4b, 0x0b, 0x00, 0x00, 0x48, 0x89, 0x45, 0xf0, 0xeb, 0x42, 0xc7,
+        0x45, 0xf8, 0x01, 0x00, 0x00, 0x00, 0xeb, 0x19, 0xc7, 0x45, 0xf8, 0x02,
+        0x00, 0x00, 0x00, 0xeb, 0x10, 0xc7, 0x45, 0xf8, 0x03, 0x00, 0x00, 0x00,
+        0xeb, 0x07, 0xc7, 0x45, 0xf8, 0x04, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x35,
+        0x14, 0x0b, 0x00, 0x00, 0x8b, 0x55, 0xf8, 0x48, 0x8d, 0x3d, 0x37, 0x00,
+        0x00, 0x00, 0xb0, 0x00, 0xe8, 0x0f, 0x00, 0x00, 0x00, 0x31, 0xc0, 0x48,
+        0x83, 0xc4, 0x10, 0x5d, 0xc3, 0x48, 0x8b, 0x45, 0xf0, 0xff, 0xe0,
+    };
+  }
+  EXPECT_LE(Fixture.Entry - TextVA + Code.size(), Text.Data.size());
+  std::copy(Code.begin(), Code.end(),
+            Text.Data.begin() + static_cast<ptrdiff_t>(Fixture.Entry - TextVA));
+  Image.Segments.push_back(std::move(Text));
+
+  Segment Data;
+  Data.Name = "__DATA_CONST";
+  Data.VA = TargetArch == Arch::AArch64 ? DataVA : TextVA + 0x1000;
+  Data.Size = 0x60;
+  Data.FileSz = Data.Size;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.assign(Data.Size, 0);
+  for (size_t I = 0; I < Fixture.InteriorTargets.size(); ++I) {
+    const va_t NameSlot = TableVA + I * 16;
+    const va_t CodeSlot = NameSlot + 8;
+    writeObject(Data.Data, static_cast<size_t>(NameSlot - Data.VA),
+                TextVA + 0x540 + I * 8);
+    writeObject(Data.Data, static_cast<size_t>(CodeSlot - Data.VA),
+                Fixture.InteriorTargets[I]);
+    Image.DataPtrRelocSlots.insert(NameSlot);
+    Image.CodePtrRelocSlots.insert(CodeSlot);
+  }
+  Image.Segments.push_back(std::move(Data));
+  Fixture.SelectedSlot = TableVA + 8;
+  Fixture.SelectedTarget = Fixture.InteriorTargets.front();
+
+  Image.Entry = Fixture.Entry;
+  Image.KnownCodeRanges.push_back({Fixture.Entry, Fixture.End});
+  ExceptionFunction Exception;
+  Exception.Kind = RuntimeFunctionKind::Primary;
+  Exception.Encoding = ExceptionEncoding::CompactUnwind;
+  Exception.ParseStatus = ExceptionParseStatus::Complete;
+  Exception.CodeRange = {Fixture.Entry, Fixture.End};
+  Image.ExceptionMetadata.Functions.push_back(std::move(Exception));
+  Image.ExceptionMetadata.rebuildIndex();
+  return Fixture;
+}
+
+LowFunc buildInteriorPointerCFG(InteriorPointerFixture &Fixture,
+                                std::set<va_t> Entries = std::set<va_t>{}) {
+  Decoder Dec;
+  EXPECT_TRUE(Dec.init(Fixture.Image.Arch));
+  CFGBuilder Builder;
+  if (Entries.empty())
+    Entries.insert(Fixture.Entry);
+  Builder.setKnownFuncEntries(&Entries);
+  return Builder.build(Fixture.Image, Dec, Fixture.Entry, "interior_owner");
+}
+
+std::set<va_t> blockStarts(const LowFunc &Func) {
+  std::set<va_t> Result;
+  for (const LowBlock &Block : Func.Blocks)
+    Result.insert(Block.StartAddr);
+  return Result;
+}
+
+bool containsOpcode(const LowFunc &Func, NdOp Opcode) {
+  for (const LowBlock &Block : Func.Blocks)
+    for (const LowOp &Op : Block.Ops)
+      if (Op.Opcode == Opcode)
+        return true;
+  return false;
+}
+
+MedFunc makeReturnFunction(llvm::StringRef Name, va_t Entry,
+                           std::optional<va_t> Interior = std::nullopt) {
+  MedFunc Func;
+  Func.Name = Name.str();
+  Func.Entry = Entry;
+  Func.ReturnType = NdType::makeVoid();
+  auto AddReturnBlock = [&](int Id, va_t Address) {
+    MedBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = Address;
+    Block.EndAddr = Address + 4;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Address;
+    Block.Ops.push_back(std::move(Return));
+    Func.Blocks.push_back(std::move(Block));
+  };
+  AddReturnBlock(0, Entry);
+  if (Interior)
+    AddReturnBlock(1, *Interior);
+  return Func;
+}
+
+TEST(MachOInteriorCodePointerCFG,
+     PreservesRelocatedInteriorRootsAndFoldsImmutableRelay) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    InteriorPointerFixture Fixture = makeInteriorPointerFixture(TargetArch);
+    LowFunc Func = buildInteriorPointerCFG(Fixture);
+    const std::set<va_t> Starts = blockStarts(Func);
+
+    for (va_t Target : Fixture.InteriorTargets)
+      EXPECT_EQ(Starts.count(Target), 1u)
+          << "missing address-taken block 0x" << llvm::utohexstr(Target);
+
+    bool HasSelectedDirectBranch = false;
+    for (const LowBlock &Block : Func.Blocks)
+      for (const LowOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::BRANCH && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Offset == Fixture.SelectedTarget)
+          HasSelectedDirectBranch = true;
+    EXPECT_TRUE(HasSelectedDirectBranch);
+    EXPECT_FALSE(containsOpcode(Func, NdOp::INDIR_CALL));
+  }
+}
+
+TEST(MachOInteriorCodePointerCFG, DoesNotFoldWritableOrUnprovenRelay) {
+  {
+    InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::AArch64);
+    Fixture.Image.Segments.back().Name = section_names::macho::DataSeg;
+    Fixture.Image.Segments.back().Flags =
+        Fixture.Image.Segments.back().Flags | SegmentFlags::Writable;
+    LowFunc Func = buildInteriorPointerCFG(Fixture);
+    EXPECT_TRUE(containsOpcode(Func, NdOp::INDIR_CALL));
+  }
+  {
+    InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::X64);
+    Fixture.Image.CodePtrRelocSlots.clear();
+    LowFunc Func = buildInteriorPointerCFG(Fixture);
+    EXPECT_TRUE(containsOpcode(Func, NdOp::INDIR_CALL));
+  }
+}
+
+TEST(MachOInteriorCodePointerCFG,
+     RejectsOtherFunctionsAdjacentTargetsAndInstructionInteriors) {
+  {
+    InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::X64);
+    const va_t InstructionInterior = Fixture.Entry + 2;
+    ASSERT_TRUE(
+        Fixture.Image.patchPtr(Fixture.SelectedSlot, InstructionInterior));
+    LowFunc Func = buildInteriorPointerCFG(Fixture);
+    EXPECT_EQ(blockStarts(Func).count(InstructionInterior), 0u);
+    EXPECT_TRUE(containsOpcode(Func, NdOp::INDIR_CALL));
+  }
+  {
+    InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::AArch64);
+    const va_t OtherFunction = Fixture.InteriorTargets.front();
+    std::set<va_t> Entries{Fixture.Entry, OtherFunction};
+    LowFunc Func = buildInteriorPointerCFG(Fixture, Entries);
+    EXPECT_EQ(blockStarts(Func).count(OtherFunction), 0u);
+    EXPECT_TRUE(containsOpcode(Func, NdOp::INDIR_CALL));
+  }
+  {
+    InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::AArch64);
+    const va_t Adjacent = Fixture.End;
+    ASSERT_TRUE(Fixture.Image.patchPtr(Fixture.SelectedSlot, Adjacent));
+    Segment &Text = Fixture.Image.Segments.front();
+    const uint32_t Ret = 0xd65f03c0;
+    writeObject(Text.Data, static_cast<size_t>(Adjacent - Text.VA), Ret);
+    std::set<va_t> Entries{Fixture.Entry, Adjacent};
+    LowFunc Func = buildInteriorPointerCFG(Fixture, Entries);
+    EXPECT_EQ(blockStarts(Func).count(Adjacent), 0u);
+    EXPECT_TRUE(containsOpcode(Func, NdOp::INDIR_CALL));
+  }
+}
+
+TEST(MachOInteriorCodePointerCFG, RejectsPotentiallyAliasingRelayStore) {
+  InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::AArch64);
+  Segment &Text = Fixture.Image.Segments.front();
+  constexpr va_t NewDispatch = TextVA + 0x560;
+  const uint32_t BranchToDispatch = 0x14000027; // b 0x100000560
+  const uint32_t UnknownStore = 0xf9000149;     // str x9, [x10]
+  const uint32_t Reload = 0xf9400be8;           // ldr x8, [sp, #16]
+  const uint32_t IndirectBranch = 0xd61f0100;   // br x8
+  writeObject(Text.Data, 0x4c4, BranchToDispatch);
+  writeObject(Text.Data, static_cast<size_t>(NewDispatch - Text.VA),
+              UnknownStore);
+  writeObject(Text.Data, static_cast<size_t>(NewDispatch - Text.VA + 4),
+              Reload);
+  writeObject(Text.Data, static_cast<size_t>(NewDispatch - Text.VA + 8),
+              IndirectBranch);
+  Fixture.End = NewDispatch + 12;
+  Fixture.Image.KnownCodeRanges.front().second = Fixture.End;
+  Fixture.Image.ExceptionMetadata.Functions.front().CodeRange.End = Fixture.End;
+  Fixture.Image.ExceptionMetadata.rebuildIndex();
+
+  LowFunc Func = buildInteriorPointerCFG(Fixture);
+  EXPECT_TRUE(containsOpcode(Func, NdOp::INDIR_CALL));
+}
+
+TEST(MachOInteriorCodePointerCFG, RejectsAmbiguousMultiplePredecessorRelay) {
+  InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::X64);
+  const va_t Dispatch = Fixture.End - 6;
+  Segment &Text = Fixture.Image.Segments.front();
+  Text.Data[Fixture.SelectedTarget - Text.VA] = 0xe9; // jmp rel32
+  const int32_t Displacement =
+      static_cast<int32_t>(static_cast<int64_t>(Dispatch) -
+                           static_cast<int64_t>(Fixture.SelectedTarget + 5));
+  writeObject(Text.Data,
+              static_cast<size_t>(Fixture.SelectedTarget - Text.VA + 1),
+              Displacement);
+
+  LowFunc Func = buildInteriorPointerCFG(Fixture);
+  EXPECT_EQ(blockStarts(Func).count(Fixture.SelectedTarget), 1u);
+  EXPECT_TRUE(containsOpcode(Func, NdOp::INDIR_CALL));
+}
+
+TEST(MachOLLVMInteriorCodePointerBoundary,
+     EmitsFunctionAndBlockIdentityWhenConsumerPrecedesOwner) {
+  constexpr va_t OwnerVA = TextVA + 0x700;
+  constexpr va_t InteriorVA = TextVA + 0x720;
+  constexpr va_t FunctionVA = TextVA + 0x780;
+  BinaryImage Image = makeLLVMImage();
+  Segment &Data = Image.Segments[1];
+  writeObject(Data.Data, 32, FunctionVA);
+  writeObject(Data.Data, 40, InteriorVA);
+  Image.CodePtrRelocSlots.insert(DataVA + 32);
+  Image.CodePtrRelocSlots.insert(DataVA + 40);
+
+  MedFunc Consumer = makePointerCall("interior_pointer_consumer", ImportStubVA,
+                                     {MedVar::makeConst(DataVA + 40, 8)});
+  MedFunc Owner =
+      makeReturnFunction("interior_pointer_owner", OwnerVA, InteriorVA);
+  MedFunc FunctionTarget =
+      makeReturnFunction("ordinary_function_target", FunctionVA);
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Consumer, Owner, FunctionTarget}, Context, "macho-interior-code-pointer",
+      Arch::AArch64, {{ImportStubVA, "_getopt_long"}}, &Image,
+      BinaryFormat::MachO);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+      (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+  ASSERT_NE(Mirror, nullptr);
+  ASSERT_TRUE(Mirror->hasInitializer());
+  llvm::Function *Function = Module->getFunction("ordinary_function_target");
+  ASSERT_NE(Function, nullptr);
+  EXPECT_TRUE(constantReferences(Mirror->getInitializer(), Function));
+  EXPECT_TRUE(constantContainsBlockAddress(Mirror->getInitializer()));
+  EXPECT_FALSE(constantContainsInteger(Mirror->getInitializer(), FunctionVA));
+  EXPECT_FALSE(constantContainsInteger(Mirror->getInitializer(), InteriorVA));
+
+  auto Clone = llvm::CloneModule(*Module);
+  ASSERT_NE(Clone, nullptr);
+  expectValidModule(*Clone);
+}
+
+TEST(MachOLLVMInteriorCodePointerBoundary,
+     FailsClosedForUnresolvedOrMaskedInteriorTarget) {
+  constexpr va_t OwnerVA = TextVA + 0x700;
+  constexpr va_t InteriorVA = TextVA + 0x720;
+
+  auto MakeInput = [&]() {
+    BinaryImage Image = makeLLVMImage();
+    writeObject(Image.Segments[1].Data, 40, InteriorVA);
+    Image.CodePtrRelocSlots.insert(DataVA + 40);
+    return Image;
+  };
+  MedFunc Consumer = makePointerCall("masked_interior_consumer", ImportStubVA,
+                                     {MedVar::makeConst(DataVA + 40, 8)});
+  MedFunc Owner =
+      makeReturnFunction("masked_interior_owner", OwnerVA, InteriorVA);
+
+  {
+    BinaryImage Image = MakeInput();
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Consumer}, Context, "macho-unresolved-interior", Arch::AArch64,
+        {{ImportStubVA, "_getopt_long"}}, &Image, BinaryFormat::MachO);
+    EXPECT_EQ(Module, nullptr);
+  }
+  {
+    BinaryImage Image = MakeInput();
+    llvm::LLVMContext Context;
+    const std::vector<char> BodyMask = {1, 0};
+    auto Module = MedLLVMEmitter().emit(
+        {Consumer, Owner}, Context, "macho-masked-interior", Arch::AArch64,
+        {{ImportStubVA, "_getopt_long"}}, &Image, BinaryFormat::MachO,
+        /*MergeableGlobals=*/false, &BodyMask);
+    EXPECT_EQ(Module, nullptr);
+  }
+}
+
+TEST(MachOLLVMInteriorCodePointerBoundary,
+     ClearsBlockIdentityStateBetweenEmissions) {
+  constexpr va_t OwnerVA = TextVA + 0x700;
+  constexpr va_t InteriorVA = TextVA + 0x720;
+  BinaryImage Image = makeLLVMImage();
+  writeObject(Image.Segments[1].Data, 40, InteriorVA);
+  Image.CodePtrRelocSlots.insert(DataVA + 40);
+  MedFunc Consumer = makePointerCall("state_reset_consumer", ImportStubVA,
+                                     {MedVar::makeConst(DataVA + 40, 8)});
+  MedFunc Owner = makeReturnFunction("state_reset_owner", OwnerVA, InteriorVA);
+
+  llvm::LLVMContext Context;
+  MedLLVMEmitter Emitter;
+  auto First = Emitter.emit(
+      {Consumer, Owner}, Context, "macho-interior-state-first", Arch::AArch64,
+      {{ImportStubVA, "_getopt_long"}}, &Image, BinaryFormat::MachO);
+  ASSERT_NE(First, nullptr);
+  expectValidModule(*First);
+
+  auto Second = Emitter.emit({Consumer}, Context, "macho-interior-state-second",
+                             Arch::AArch64, {{ImportStubVA, "_getopt_long"}},
+                             &Image, BinaryFormat::MachO);
+  EXPECT_EQ(Second, nullptr);
+}
+
+TEST(MachOLLVMInteriorCodePointerBoundary,
+     UsesSerialEmissionOnlyForInteriorCodePointers) {
+  constexpr va_t OwnerVA = TextVA + 0x700;
+  constexpr va_t InteriorVA = TextVA + 0x720;
+  BinaryImage Image = makeLLVMImage();
+  writeObject(Image.Segments[1].Data, 40, InteriorVA);
+  Image.CodePtrRelocSlots.insert(DataVA + 40);
+  const std::vector<MedFunc> Functions{
+      makeReturnFunction("shard_owner", OwnerVA, InteriorVA)};
+  EXPECT_TRUE(PipelineTestPeer::requiresSerialLLVMEmission(Functions, Image));
+
+  writeObject(Image.Segments[1].Data, 40, OwnerVA);
+  EXPECT_FALSE(PipelineTestPeer::requiresSerialLLVMEmission(Functions, Image));
 }
 
 std::vector<uint8_t> makeChainedBlob(macho_loader::ChainedFixupsInfo &Info) {

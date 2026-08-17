@@ -185,6 +185,25 @@ bool isFatalOptimizationStop(OptimizationStopReason Stop) {
 
 } // namespace
 
+bool Pipeline::requiresSerialLLVMEmission(const std::vector<MedFunc> &Funcs,
+                                          const BinaryImage &Img) {
+  if (Img.CodePtrRelocSlots.empty() || Img.getPointerSize() == 0)
+    return false;
+  std::set<va_t> FunctionEntries;
+  for (const MedFunc &Func : Funcs)
+    FunctionEntries.insert(Func.Entry);
+  for (va_t Slot : Img.CodePtrRelocSlots) {
+    const uint8_t *P = Img.readVA(Slot, Img.getPointerSize());
+    if (!P)
+      continue;
+    const va_t Target = normalizeCodeAddress(
+        static_cast<va_t>(readPtr(P, Img.is64Bit())), Img.Arch, Img.Mode);
+    if (!FunctionEntries.count(Target))
+      return true;
+  }
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // runPatchLiftMode — MedIR -> LLVM IR shortcut
 //===----------------------------------------------------------------------===//
@@ -532,7 +551,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   unsigned Workers = std::max(
       1u, std::min<unsigned>(workerThreadCount(),
                              static_cast<unsigned>(Result.MedFuncs.size())));
-  bool UseShards = !Opts.PatchMode && Result.MedFuncs.size() >= 8;
+  bool UseShards = !Opts.PatchMode && Result.MedFuncs.size() >= 8 &&
+                   !requiresSerialLLVMEmission(Result.MedFuncs, Img);
 
   if (UseShards) {
     bool LLVMVerifierFailed = false;

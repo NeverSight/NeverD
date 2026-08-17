@@ -22,6 +22,7 @@ add_neverd_component_library(NeverDIRLow
   jumptable/JumpTableResolverGuardCFG.cpp
   jumptable/JumpTableResolverGuardRange.cpp
   jumptable/JumpTableResolverGuards.cpp
+  jumptable/JumpTableResolverInterior.cpp
   jumptable/JumpTableResolverNorm.cpp
   jumptable/JumpTableResolverShapes.cpp
   jumptable/JumpTableResolverSlice.cpp

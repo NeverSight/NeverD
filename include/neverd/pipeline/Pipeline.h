@@ -41,6 +41,8 @@ class raw_ostream;
 
 namespace neverd {
 
+class PipelineTestPeer;
+
 class Decoder;
 
 struct PipelineOptions {
@@ -367,6 +369,13 @@ public:
                          llvm::raw_ostream &OS);
 
 private:
+  friend class PipelineTestPeer;
+
+  /// Interior basic-block addresses are module-local LLVM blockaddress
+  /// constants and cannot be split from their owner into another emission
+  /// shard.  Function-entry-only pointer tables remain shard-safe.
+  static bool requiresSerialLLVMEmission(const std::vector<MedFunc> &Funcs,
+                                         const BinaryImage &Img);
   /// Detect function entries, merge debug symbols, and filter import stubs.
   static std::vector<std::pair<va_t, std::string>>
   detectFunctions(const BinaryImage &Img, Decoder &Dec,

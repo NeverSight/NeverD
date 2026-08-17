@@ -288,9 +288,11 @@ add_neverd_unittest(NeverDMachOPointerRelocationBoundaryTests
 
   LINK_COMPONENTS
   BackendLLVM
+  Decode
   LibC
   Lift
   Loader
+  Pipeline
 )
 
 target_include_directories(NeverDMachOPointerRelocationBoundaryTests PRIVATE

@@ -80,6 +80,11 @@ private:
   /// target has a dominating constant definition in the decoded prefix.
   bool resolveConstantIndirectBranch(const BinaryImage &Img, uint32_t InsnId,
                                      InsnRecord &Rec);
+  /// Resolve an immutable relocation-proven scalar label pointer that reaches
+  /// an indirect branch through a unique frame spill/reload relay.  Unlike a
+  /// jump table, the exact slot has one fixed target, so the safe model is a
+  /// direct intra-function branch.
+  bool resolveRelocatedInteriorBranch(const BinaryImage &Img, InsnRecord &Rec);
   LowInstructionBoundary makeInstructionBoundary(const InsnRecord &Rec,
                                                  uint64_t FirstOp) const;
 
@@ -129,6 +134,16 @@ private:
   void extractJumpTables(LowFunc &Func);
   std::vector<va_t> resolveJumpTable(const BinaryImage &Img,
                                      const InsnRecord &Rec);
+
+  /// Establish the half-open interval that this CFG builder may claim for
+  /// address-taken interior blocks.  A merely containing unwind range is not
+  /// ownership proof for a separately callable entry.
+  void establishCurrentFuncRange(const BinaryImage &Img,
+                                 const ExceptionFunction *Exception);
+  /// Decode relocation-proven and same-function-discovered address-taken
+  /// blocks as disconnected CFG roots, without splitting decoded instructions.
+  void exploreAddressTakenRoots(const BinaryImage &Img, Decoder &Dec);
+  bool isOwnedInteriorTarget(const BinaryImage &Img, va_t Target) const;
 
   //===--------------------------------------------------------------------===//
   // JumpTableInfo — shared metadata extracted during resolution and reused
@@ -485,6 +500,7 @@ private:
   std::set<va_t> UnsupportedInstructionAddresses;
   std::set<va_t> TruncatedPathAddresses;
   va_t CurrentFuncEntry = 0;
+  std::optional<std::pair<va_t, va_t>> CurrentFuncRange;
   const BinaryImage *CurrentImg = nullptr;
   const std::set<va_t> *KnownFuncEntries = nullptr;
 };

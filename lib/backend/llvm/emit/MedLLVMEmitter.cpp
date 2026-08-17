@@ -343,6 +343,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   SegmentDataGlobals.clear();
   WritableSegmentGlobals.clear();
   CodePtrTableGlobals.clear();
+  PreparedFuncBlocks.clear();
+  LiftedCodeBlocks.clear();
+  FatalCodePointerResolution = false;
   ImportedSymbolPlaceholders.clear();
   StringDataAddrs.clear();
   GlobalStrCounter = 0;
@@ -419,6 +422,28 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     declareFunc(Func);
   }
 
+  // Build every ordinary block skeleton before emitting the first operation.
+  // A code-pointer mirror requested by an early consumer can then name an
+  // interior label owned by a later function.  BodyMask-omitted functions stay
+  // declarations: blockaddress cannot cross shard/module boundaries.
+  for (size_t I = 0; I < Funcs.size(); ++I) {
+    if (BodyMask && !(*BodyMask)[I])
+      continue;
+    const MedFunc &Func = Funcs[I];
+    if (Func.Name.empty() || Func.Blocks.empty())
+      continue;
+    llvm::Function *LLVMFunc = declareFunc(Func);
+    for (const MedBlock &Block : Func.Blocks) {
+      auto *BB = llvm::BasicBlock::Create(
+          *Ctx, "bb_" + std::to_string(Block.Id), LLVMFunc);
+      PreparedFuncBlocks[{Func.Entry, Block.Id}] = BB;
+      const va_t Address = Block.StartAddr != 0 || Block.Ops.empty()
+                               ? Block.StartAddr
+                               : Block.Ops.front().Addr;
+      LiftedCodeBlocks.try_emplace(Address, BB);
+    }
+  }
+
   // Emit bodies only for the masked-in functions; functions the mask omits
   // stay declarations (a shard defines its slice, declares the rest so
   // cross-shard references resolve at link time).  A null mask emits all.
@@ -430,6 +455,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       continue;
     emitFunc(Func);
   }
+
+  if (FatalCodePointerResolution)
+    return nullptr;
 
   // Mark the producer schema independently of per-function attachments.  A
   // later pass that drops one attachment must be distinguishable from a
