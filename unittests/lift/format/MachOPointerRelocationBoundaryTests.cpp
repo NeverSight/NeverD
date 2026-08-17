@@ -189,6 +189,53 @@ MedFunc makePointerCall(llvm::StringRef Name, va_t Target,
   return Func;
 }
 
+MedFunc makeCleanupFunction(llvm::StringRef Name, va_t FunctionVA,
+                            va_t MayThrowVA) {
+  MedFunc Func;
+  Func.Entry = FunctionVA;
+  Func.Name = Name.str();
+  Func.ReturnType = NdType::makeVoid();
+
+  MedBlock Protected;
+  Protected.Id = 0;
+  Protected.StartAddr = FunctionVA;
+  Protected.EndAddr = FunctionVA + 0x10;
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = FunctionVA + 4;
+  Call.addInput(MedVar::makeConst(MayThrowVA, 8));
+  Protected.Ops.push_back(std::move(Call));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = FunctionVA + 8;
+  Protected.Ops.push_back(std::move(Return));
+
+  MedBlock Handler;
+  Handler.Id = 1;
+  Handler.StartAddr = FunctionVA + 0x20;
+  Handler.EndAddr = FunctionVA + 0x30;
+  MedOp HandlerReturn;
+  HandlerReturn.Opcode = NdOp::RETURN;
+  HandlerReturn.Addr = FunctionVA + 0x20;
+  Handler.Ops.push_back(std::move(HandlerReturn));
+  Func.Blocks.push_back(std::move(Protected));
+  Func.Blocks.push_back(std::move(Handler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, FunctionVA + 0x30};
+  EH.Encoding = ExceptionEncoding::DwarfFDE;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::GxxPersonalityV0;
+  EH.Itanium.emplace();
+  EH.Itanium->IsCallSiteAddressForm = true;
+  ItaniumCallSite Site;
+  Site.GuardedRange = {FunctionVA, FunctionVA + 0x10};
+  Site.LandingPadVA = FunctionVA + 0x20;
+  EH.Itanium->CallSites.push_back(Site);
+  Func.ExceptionMetadata = std::move(EH);
+  return Func;
+}
+
 void addImport(BinaryImage &Image, llvm::StringRef Name, va_t Address) {
   Import Imported;
   Imported.Name = Name.str();
@@ -533,6 +580,50 @@ TEST(MachOLLVMImportPointerBoundary, SymbolizesMixedRelocationRun) {
   EXPECT_EQ(
       llvm::cast<llvm::ConstantInt>(GetoptAdd->getOperand(1))->getSExtValue(),
       -8);
+}
+
+TEST(MachOLLVMImportPointerBoundary,
+     PromotesCanonicalPersonalityPlaceholderForNativeEH) {
+  constexpr va_t EHFunctionVA = TextVA + 0x700;
+  constexpr va_t MayThrowVA = TextVA + 0x780;
+  BinaryImage Image = makeLLVMImage();
+  Image.DyldBindSlots[DataVA] = {"___gxx_personality_v0", 0};
+
+  MedFunc PointerCaller = makePointerCall(
+      "personality_pointer_caller", ImportStubVA,
+      {MedVar::makeConst(DataVA, 8)});
+  MedFunc EHFunction =
+      makeCleanupFunction("native_eh_caller", EHFunctionVA, MayThrowVA);
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {PointerCaller, EHFunction}, Context, "macho-personality-placeholder",
+      Arch::AArch64,
+      {{ImportStubVA, "_getopt_long"}, {MayThrowVA, "may_throw"}}, &Image,
+      BinaryFormat::MachO);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  llvm::Function *Emitted = Module->getFunction(EHFunction.Name);
+  ASSERT_NE(Emitted, nullptr);
+  ASSERT_TRUE(Emitted->hasPersonalityFn());
+  llvm::Function *Personality = Module->getFunction("__gxx_personality_v0");
+  ASSERT_NE(Personality, nullptr);
+  EXPECT_EQ(Emitted->getPersonalityFn()->stripPointerCasts(), Personality);
+  EXPECT_EQ(Module->getNamedGlobal("__gxx_personality_v0"), nullptr);
+
+  unsigned Invokes = 0;
+  for (llvm::BasicBlock &Block : *Emitted)
+    for (llvm::Instruction &Instruction : Block)
+      Invokes += llvm::isa<llvm::InvokeInst>(Instruction);
+  EXPECT_EQ(Invokes, 1u);
+
+  const std::string MirrorName =
+      (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str();
+  llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
+  ASSERT_NE(Mirror, nullptr);
+  ASSERT_TRUE(Mirror->hasInitializer());
+  EXPECT_TRUE(constantReferences(Mirror->getInitializer(), Personality));
 }
 
 TEST(MachOLLVMImportPointerBoundary, SymbolizesImportOnlyRun) {

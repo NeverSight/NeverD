@@ -473,10 +473,20 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
   // bitcasted or auto-renamed symbols after the CFG has already been edited.
   // Check every name and the source identity behind it while preflight is
   // still side-effect free.
+  llvm::GlobalVariable *ImportedPersonalityPlaceholder = nullptr;
   if (llvm::GlobalValue *Existing = Mod->getNamedValue(PersonalitySymbol)) {
-    const auto *Function = llvm::dyn_cast<llvm::Function>(Existing);
-    if (!Function || Function->getFunctionType() != PersonalityTy)
-      return false;
+    if (const auto *Function = llvm::dyn_cast<llvm::Function>(Existing)) {
+      if (Function->getFunctionType() != PersonalityTy)
+        return false;
+    } else {
+      auto Placeholder = ImportedSymbolPlaceholders.find(PersonalitySymbol);
+      if (Placeholder == ImportedSymbolPlaceholders.end() ||
+          Placeholder->second != Existing ||
+          !Placeholder->second->isDeclaration() ||
+          Placeholder->second->getValueType() != I8Ty)
+        return false;
+      ImportedPersonalityPlaceholder = Placeholder->second;
+    }
   }
 
   struct TypeInfoIdentity {
@@ -653,8 +663,18 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
     OldBranch->eraseFromParent();
   }
 
+  if (ImportedPersonalityPlaceholder)
+    ImportedPersonalityPlaceholder->setName(
+        std::string(PersonalitySymbol) + ".import_data");
   llvm::FunctionCallee Personality =
       Mod->getOrInsertFunction(PersonalitySymbol, PersonalityTy);
+  if (ImportedPersonalityPlaceholder) {
+    auto *PersonalityFunction =
+        llvm::cast<llvm::Function>(Personality.getCallee());
+    ImportedPersonalityPlaceholder->replaceAllUsesWith(PersonalityFunction);
+    ImportedPersonalityPlaceholder->eraseFromParent();
+    ImportedSymbolPlaceholders.erase(PersonalitySymbol);
+  }
   LLVMFunc.setPersonalityFn(
       llvm::cast<llvm::Constant>(Personality.getCallee()));
 
