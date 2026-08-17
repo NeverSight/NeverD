@@ -10,7 +10,7 @@ jobs:
   reproduce:
     name: Linux x64 focused reproducer
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 150
 
     steps:
       - name: Checkout repository
@@ -42,7 +42,7 @@ jobs:
             -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
             -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=OFF \
             -DPython3_EXECUTABLE="$python_executable" \
-            -DNEVERD_LLVM_PREBUILT=ON
+            -DNEVERD_LLVM_PREBUILT=OFF
 
       - name: Build semantic test binary
         shell: bash
@@ -67,12 +67,12 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
 
       - name: Package reproducer
-        if: always()
+        if: always() && steps.repro.outputs.status != ''
         shell: bash
         run: tar -C a64-exclusive-artifact -czf a64-exclusive-linux-x64.tar.gz .
 
       - name: Upload reproducer
-        if: always()
+        if: always() && steps.repro.outputs.status != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: a64-exclusive-linux-x64
@@ -81,6 +81,6 @@ jobs:
           retention-days: 3
 
       - name: Propagate focused test result
-        if: always()
+        if: always() && steps.repro.outputs.status != ''
         shell: bash
         run: exit "${{ steps.repro.outputs.status }}"
