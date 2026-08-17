@@ -68,8 +68,30 @@ bool checkPrologueAtOffset(const Segment &Seg, size_t Off, Arch A) {
   return isPrologueAt(Seg.Data.data() + Off, Seg.Data.size() - Off, A);
 }
 
+static std::vector<std::pair<va_t, va_t>>
+collectClaimedCodeRanges(const BinaryImage &Img) {
+  std::vector<std::pair<va_t, va_t>> Ranges = Img.KnownCodeRanges;
+  for (const Symbol &Sym : Img.Symbols) {
+    if (!Sym.IsFunc || Sym.Size == 0 || Sym.Size > InvalidVA - Sym.Addr)
+      continue;
+    Ranges.emplace_back(Sym.Addr, Sym.Addr + Sym.Size);
+  }
+
+  std::sort(Ranges.begin(), Ranges.end());
+  std::vector<std::pair<va_t, va_t>> Merged;
+  Merged.reserve(Ranges.size());
+  for (const auto &Range : Ranges) {
+    if (Merged.empty() || Range.first > Merged.back().second) {
+      Merged.push_back(Range);
+      continue;
+    }
+    Merged.back().second = std::max(Merged.back().second, Range.second);
+  }
+  return Merged;
+}
+
 void scanPaddingBoundaries(BinaryImage &Img) {
-  const auto &Known = Img.KnownCodeRanges;
+  const auto Known = collectClaimedCodeRanges(Img);
   auto Existing = Img.getSymbolAddresses();
 
   const uint8_t PadByte = codePaddingByte(Img.Arch);
@@ -115,23 +137,7 @@ void scanDataFuncPointers(BinaryImage &Img) {
   // metadata; without folding those extents into Known, an absolute jump table
   // makes every case label look like a new function when its bytes happen to
   // resemble a prologue.
-  std::vector<std::pair<va_t, va_t>> Known = Img.KnownCodeRanges;
-  for (const Symbol &Sym : Img.Symbols) {
-    if (!Sym.IsFunc || Sym.Size == 0 || Sym.Size > InvalidVA - Sym.Addr)
-      continue;
-    Known.emplace_back(Sym.Addr, Sym.Addr + Sym.Size);
-  }
-  std::sort(Known.begin(), Known.end());
-  std::vector<std::pair<va_t, va_t>> MergedKnown;
-  MergedKnown.reserve(Known.size());
-  for (const auto &Range : Known) {
-    if (MergedKnown.empty() || Range.first > MergedKnown.back().second) {
-      MergedKnown.push_back(Range);
-      continue;
-    }
-    MergedKnown.back().second =
-        std::max(MergedKnown.back().second, Range.second);
-  }
+  const auto Known = collectClaimedCodeRanges(Img);
   auto Existing = Img.getSymbolAddresses();
 
   auto InExecSeg = [&](va_t Addr) -> const Segment * {
@@ -159,7 +165,7 @@ void scanDataFuncPointers(BinaryImage &Img) {
       size_t Off = static_cast<size_t>(Val - ESeg->VA);
       if (!checkPrologueAtOffset(*ESeg, Off, Img.Arch))
         continue;
-      if (insideInterval(MergedKnown, Val))
+      if (insideInterval(Known, Val))
         continue;
       if (!Existing.insert(Val).second)
         continue;

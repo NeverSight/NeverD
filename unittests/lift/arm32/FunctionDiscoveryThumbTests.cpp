@@ -149,6 +149,27 @@ TEST(FunctionDiscoveryThumb, IgnoresCodePointersInsideSizedFunctions) {
             0u);
 }
 
+TEST(FunctionDiscoveryThumb, IgnoresPaddingCandidatesInsideSizedFunctions) {
+  BinaryImage Img = makeThumbImage();
+  constexpr va_t CodeVA = 0x1000;
+  constexpr va_t CaseVA = CodeVA + 4;
+  const std::array<uint8_t, 8> Code = {
+      0x70, 0x47, 0x00, 0x00, // bx lr; instruction bytes resembling padding
+      0x10, 0xb5, 0x70, 0x47, // switch case resembling a function prologue
+  };
+  Img.Segments.push_back(makeExecutableSegment(CodeVA, Code));
+
+  Symbol Covering = Symbol::makeFunc(CodeVA, Code.size());
+  Covering.Name = "covering";
+  Img.Symbols.push_back(std::move(Covering));
+
+  scanPaddingBoundaries(Img);
+
+  EXPECT_EQ(std::count_if(Img.Symbols.begin(), Img.Symbols.end(),
+                          [](const Symbol &S) { return S.Addr == CaseVA; }),
+            0u);
+}
+
 TEST(FunctionDiscoveryThumb, NormalizesOnlyFunctionSymbols) {
   std::vector<uint8_t> Bytes = readFixture("test_patch_coff_arm.obj");
   if (Bytes.empty())
