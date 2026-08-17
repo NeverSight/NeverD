@@ -10,7 +10,7 @@ jobs:
   reproduce:
     name: Linux x64 focused reproducer
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -42,7 +42,8 @@ jobs:
             -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
             -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=OFF \
             -DPython3_EXECUTABLE="$python_executable" \
-            -DNEVERD_LLVM_PREBUILT=OFF
+            -DNEVERD_LLVM_PREBUILT=ON \
+            -DNEVERD_LLVM_PREBUILT_SHA256=3e398b57642b81ee357c1146f209ffec17f21dd6f0b548ae71c622abfe149492
 
       - name: Build semantic test binary
         shell: bash
