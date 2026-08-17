@@ -1,0 +1,70 @@
+name: Debug Linux Mach-O focused links
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify focused GNU ld links
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 32
+          submodules: recursive
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang cmake lld ninja-build python3-dev
+
+      - name: Verify native environment
+        shell: bash
+        run: |
+          uname -a
+          uname -m
+          cmake --version
+          ninja --version
+          clang --version
+          ld.lld --version
+
+      - name: Configure focused Release build
+        shell: bash
+        run: |
+          PYTHON_EXECUTABLE="$(python3 -c 'import sys; print(sys.executable)')"
+          cmake -S . -B build-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DBUILD_TESTING=ON \
+            -DNEVERD_BUILD_PLUGINS=OFF \
+            -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
+            -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=OFF \
+            -DPython3_EXECUTABLE="$PYTHON_EXECUTABLE" \
+            -DNEVERD_LLVM_PREBUILT=OFF
+
+      - name: Show focused link commands
+        shell: bash
+        run: |
+          ninja -C build-ci -t commands NeverDMachOLLVMNameBoundaryTests | tail -1
+          ninja -C build-ci -t commands NeverDMachOPointerRelocationBoundaryTests | tail -1
+
+      - name: Build focused targets
+        shell: bash
+        run: >-
+          cmake --build build-ci --config Release --parallel 4 --target
+          NeverDMachOLLVMNameBoundaryTests
+          NeverDMachOPointerRelocationBoundaryTests
+
+      - name: Run focused tests
+        shell: bash
+        run: |
+          build-ci/bin/NeverDMachOLLVMNameBoundaryTests
+          build-ci/bin/NeverDMachOPointerRelocationBoundaryTests
