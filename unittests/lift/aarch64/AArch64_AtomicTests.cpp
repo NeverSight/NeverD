@@ -450,20 +450,20 @@ TEST_F(AArch64_Atomic, RemainingLseRmwHighCUsesAtomicBuiltinsAndCompiles) {
     const char *Builtin;
     const char *Ordering;
   } Cases[] = {
-      {"test_ldclr", "__atomic_fetch_and", "__ATOMIC_RELAXED"},
-      {"test_ldclra", "__atomic_fetch_and", "__ATOMIC_ACQUIRE"},
-      {"test_ldclral", "__atomic_fetch_and", "__ATOMIC_ACQ_REL"},
-      {"test_ldclrl", "__atomic_fetch_and", "__ATOMIC_RELEASE"},
-      {"test_ldeoral", "__atomic_fetch_xor", "__ATOMIC_ACQ_REL"},
-      {"test_ldsetal", "__atomic_fetch_or", "__ATOMIC_ACQ_REL"},
-      {"test_ldsmaxal", "__atomic_fetch_max", "__ATOMIC_ACQ_REL"},
-      {"test_ldsminal", "__atomic_fetch_min", "__ATOMIC_ACQ_REL"},
-      {"test_ldumaxal", "__atomic_fetch_max", "__ATOMIC_ACQ_REL"},
-      {"test_lduminal", "__atomic_fetch_min", "__ATOMIC_ACQ_REL"},
+      {"test_ldclr", "__builtin_arm_ldclr", "__ATOMIC_RELAXED"},
+      {"test_ldclra", "__builtin_arm_ldclr", "__ATOMIC_ACQUIRE"},
+      {"test_ldclral", "__builtin_arm_ldclr", "__ATOMIC_ACQ_REL"},
+      {"test_ldclrl", "__builtin_arm_ldclr", "__ATOMIC_RELEASE"},
+      {"test_ldeoral", "__builtin_arm_ldeor", "__ATOMIC_ACQ_REL"},
+      {"test_ldsetal", "__builtin_arm_ldset", "__ATOMIC_ACQ_REL"},
+      {"test_ldsmaxal", "__builtin_arm_ldsmax", "__ATOMIC_ACQ_REL"},
+      {"test_ldsminal", "__builtin_arm_ldsmin", "__ATOMIC_ACQ_REL"},
+      {"test_ldumaxal", "__builtin_arm_ldumax", "__ATOMIC_ACQ_REL"},
+      {"test_lduminal", "__builtin_arm_ldumin", "__ATOMIC_ACQ_REL"},
       {"test_swpal", "__atomic_exchange_n", "__ATOMIC_ACQ_REL"},
-      {"test_ldsetalb", "__atomic_fetch_or", "__ATOMIC_ACQ_REL"},
-      {"test_ldeoralh", "__atomic_fetch_xor", "__ATOMIC_ACQ_REL"},
-      {"test_stsetl", "__atomic_fetch_or", "__ATOMIC_RELEASE"},
+      {"test_ldsetalb", "__builtin_arm_ldset", "__ATOMIC_ACQ_REL"},
+      {"test_ldeoralh", "__builtin_arm_ldeor", "__ATOMIC_ACQ_REL"},
+      {"test_stsetl", "__builtin_arm_ldset", "__ATOMIC_RELEASE"},
   };
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Name);
@@ -473,14 +473,73 @@ TEST_F(AArch64_Atomic, RemainingLseRmwHighCUsesAtomicBuiltinsAndCompiles) {
     EXPECT_NE(F.find(Case.Ordering), std::string::npos) << F;
   }
 
-  EXPECT_NE(functionC(source, "test_ldsetalb").find("uint8_t"),
+  EXPECT_NE(functionC(source, "test_ldsetalb").find(", 1, __ATOMIC_ACQ_REL"),
             std::string::npos);
-  EXPECT_NE(functionC(source, "test_ldeoralh").find("uint16_t"),
+  EXPECT_NE(functionC(source, "test_ldeoralh").find(", 2, __ATOMIC_ACQ_REL"),
             std::string::npos);
-  EXPECT_NE(functionC(source, "test_ldsmaxal").find("int64_t *"),
-            std::string::npos);
-  EXPECT_NE(functionC(source, "test_ldumaxal").find("uint64_t *"),
-            std::string::npos);
+
+  expectPairedClangSyntax(cFile, source);
+}
+
+TEST_F(AArch64_Atomic, LseRmwUsesCompilerBuiltins) {
+  auto high = liftToHighIR(testObj());
+  ASSERT_EQ(high.exitCode, 0) << high.err;
+
+  auto llvm = liftToLLVMIR(testObj());
+  ASSERT_EQ(llvm.exitCode, 0) << llvm.err;
+  auto llvmLdclr = functionIR(llvm.out, "test_ldclral");
+  ASSERT_FALSE(llvmLdclr.empty()) << llvm.out;
+  auto mask = llvmLdclr.find("xor i64 %arg1, -1");
+  auto rmw = llvmLdclr.find("atomicrmw and ptr");
+  ASSERT_NE(mask, std::string::npos) << llvmLdclr;
+  ASSERT_NE(rmw, std::string::npos) << llvmLdclr;
+  EXPECT_LT(mask, rmw) << llvmLdclr;
+
+  auto decompiled = decompileToHighC(testObj());
+  ASSERT_EQ(decompiled.exitCode, 0) << decompiled.err;
+  auto cFile = tmpFile("decompiled_high.c");
+  ASSERT_TRUE(fs::exists(cFile));
+  std::ifstream input(cFile);
+  ASSERT_TRUE(input.good());
+  std::string source((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+
+  const struct {
+    const char *Name;
+    const char *HighCall;
+    const char *Builtin;
+    const char *PrivateName;
+    const char *GenericBuiltin;
+  } Cases[] = {
+      {"test_ldclral", "__builtin_arm_ldclr(arg1, arg0, 8, 4)",
+       "__builtin_arm_ldclr", "__neverd_a64_atomic_and", "__atomic_fetch_and"},
+      {"test_ldeoral", "__builtin_arm_ldeor(arg1, arg0, 8, 4)",
+       "__builtin_arm_ldeor", "__neverd_a64_atomic_xor", "__atomic_fetch_xor"},
+      {"test_ldsetal", "__builtin_arm_ldset(arg1, arg0, 8, 4)",
+       "__builtin_arm_ldset", "__neverd_a64_atomic_or", "__atomic_fetch_or"},
+      {"test_ldsmaxal", "__builtin_arm_ldsmax(arg1, arg0, 8, 4)",
+       "__builtin_arm_ldsmax", "__neverd_a64_atomic_smax",
+       "__atomic_fetch_max"},
+      {"test_ldsminal", "__builtin_arm_ldsmin(arg1, arg0, 8, 4)",
+       "__builtin_arm_ldsmin", "__neverd_a64_atomic_smin",
+       "__atomic_fetch_min"},
+      {"test_ldumaxal", "__builtin_arm_ldumax(arg1, arg0, 8, 4)",
+       "__builtin_arm_ldumax", "__neverd_a64_atomic_umax",
+       "__atomic_fetch_max"},
+      {"test_lduminal", "__builtin_arm_ldumin(arg1, arg0, 8, 4)",
+       "__builtin_arm_ldumin", "__neverd_a64_atomic_umin",
+       "__atomic_fetch_min"},
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    EXPECT_NE(high.out.find(Case.HighCall), std::string::npos) << high.out;
+    EXPECT_EQ(high.out.find(Case.PrivateName), std::string::npos) << high.out;
+    auto F = functionC(source, Case.Name);
+    ASSERT_FALSE(F.empty()) << source;
+    EXPECT_NE(F.find(Case.Builtin), std::string::npos) << F;
+    EXPECT_EQ(F.find(Case.GenericBuiltin), std::string::npos) << F;
+  }
+  EXPECT_EQ(functionC(source, "test_ldclral").find("~arg1"), std::string::npos);
 
   expectPairedClangSyntax(cFile, source);
 }

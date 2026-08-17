@@ -31,6 +31,16 @@
 #define __builtin_arm_rcwscaspl(...) ((unsigned __int128)0)
 #endif
 
+#if !__has_builtin(__builtin_arm_ldclr)
+#define __builtin_arm_ldclr(...) ((unsigned long long)0)
+#define __builtin_arm_ldeor(...) ((unsigned long long)0)
+#define __builtin_arm_ldset(...) ((unsigned long long)0)
+#define __builtin_arm_ldsmax(...) ((unsigned long long)0)
+#define __builtin_arm_ldsmin(...) ((unsigned long long)0)
+#define __builtin_arm_ldumax(...) ((unsigned long long)0)
+#define __builtin_arm_ldumin(...) ((unsigned long long)0)
+#endif
+
 #if !__has_builtin(__builtin_arm_pacga)
 #define __builtin_arm_pacga(...) ((unsigned long long)0)
 #endif

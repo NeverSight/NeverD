@@ -179,13 +179,30 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       IC == I::A64_AtomicSmin || IC == I::A64_AtomicUmax ||
       IC == I::A64_AtomicUmin;
   if (IsScalarAtomicRMW) {
+    auto builtinAtomicOrdering = [](NdMemoryOrdering Ordering) -> uint64_t {
+      switch (Ordering) {
+      case NdMemoryOrdering::Relaxed:
+        return 0;
+      case NdMemoryOrdering::Acquire:
+        return 2;
+      case NdMemoryOrdering::Release:
+        return 3;
+      case NdMemoryOrdering::AcquireRelease:
+        return 4;
+      case NdMemoryOrdering::SequentiallyConsistent:
+        return 5;
+      case NdMemoryOrdering::None:
+        break;
+      }
+      llvm_unreachable("scalar LSE RMW requires memory ordering");
+    };
     if (Op.NumInputs < 5 ||
         (Op.Output.Size != 1 && Op.Output.Size != 2 && Op.Output.Size != 4 &&
          Op.Output.Size != 8) ||
         !Op.Inputs[3].isConst() ||
         Op.Inputs[3].ConstVal != Op.Output.Size ||
         !Op.Inputs[4].isConst() ||
-        Op.Inputs[4].ConstVal != static_cast<uint64_t>(Op.MemoryOrdering))
+        Op.Inputs[4].ConstVal != builtinAtomicOrdering(Op.MemoryOrdering))
       llvm::report_fatal_error("malformed scalar LSE atomic RMW");
 
     llvm::AtomicOrdering Ordering = llvm::AtomicOrdering::Monotonic;
@@ -227,6 +244,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     if (Operand->getType() != ValueTy)
       Operand = Builder.CreateIntCast(Operand, ValueTy, false,
                                       "atomic_rmw_operand");
+    if (IC == I::A64_AtomicAnd)
+      Operand = Builder.CreateNot(Operand, "ldclr.mask");
 
     // The address commonly reaches an LSE instruction through ADRP+ADD copies
     // and a loop PHI.  Resolve that MedIR identity before materializing the

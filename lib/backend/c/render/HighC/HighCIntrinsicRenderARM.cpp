@@ -206,32 +206,8 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
   case I::A64_AtomicUmin: {
     if (Ops.size() < 4)
       return {};
-    const bool IsSigned =
-        Id == I::A64_AtomicSmax || Id == I::A64_AtomicSmin;
-    const char *Type = nullptr;
-    if (Ops[2] == "1")
-      Type = IsSigned ? "int8_t" : "uint8_t";
-    else if (Ops[2] == "2")
-      Type = IsSigned ? "int16_t" : "uint16_t";
-    else if (Ops[2] == "4")
-      Type = IsSigned ? "int32_t" : "uint32_t";
-    else if (Ops[2] == "8")
-      Type = IsSigned ? "int64_t" : "uint64_t";
-    if (!Type)
-      return {};
-
-    const char *Builtin = "__atomic_fetch_and";
-    if (Id == I::A64_AtomicOr)
-      Builtin = "__atomic_fetch_or";
-    else if (Id == I::A64_AtomicXor)
-      Builtin = "__atomic_fetch_xor";
-    else if (Id == I::A64_AtomicSmax || Id == I::A64_AtomicUmax)
-      Builtin = "__atomic_fetch_max";
-    else if (Id == I::A64_AtomicSmin || Id == I::A64_AtomicUmin)
-      Builtin = "__atomic_fetch_min";
-
     const char *Ordering = nullptr;
-    if (Ops[3] == "1")
+    if (Ops[3] == "0")
       Ordering = "__ATOMIC_RELAXED";
     else if (Ops[3] == "2")
       Ordering = "__ATOMIC_ACQUIRE";
@@ -244,8 +220,12 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
     if (!Ordering)
       return {};
 
-    return std::string(Builtin) + "((" + Type + " *)(uintptr_t)(" + Ops[1] +
-           "), (" + Type + ")(" + Ops[0] + "), " + Ordering + ")";
+    const char *Builtin = intrinsicCName(Id);
+    if (!Builtin)
+      return {};
+    return std::string(Builtin) + "((uint64_t)(" + Ops[0] +
+           "), (void *)(uintptr_t)(" + Ops[1] + "), " + Ops[2] + ", " +
+           Ordering + ")";
   }
   case I::A64_Pacga:
     if (Ops.size() < 2)

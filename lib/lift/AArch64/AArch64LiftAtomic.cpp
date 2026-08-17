@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <cstring>
 
@@ -79,6 +80,24 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     }
   };
 
+  auto builtinAtomicOrdering = [](NdMemoryOrdering Ordering) -> uint64_t {
+    switch (Ordering) {
+    case NdMemoryOrdering::Relaxed:
+      return 0;
+    case NdMemoryOrdering::Acquire:
+      return 2;
+    case NdMemoryOrdering::Release:
+      return 3;
+    case NdMemoryOrdering::AcquireRelease:
+      return 4;
+    case NdMemoryOrdering::SequentiallyConsistent:
+      return 5;
+    case NdMemoryOrdering::None:
+      break;
+    }
+    llvm_unreachable("scalar LSE RMW requires memory ordering");
+  };
+
   auto emitScalarAtomicRMW = [&](Intrinsic Id, const NdVar &EA,
                                  const NdVar &Operand, uint16_t Asz,
                                  bool StoreForm) {
@@ -87,7 +106,7 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     S.emitIntrinsic(
         Id, OldVal,
         {Operand, EA, NdVar::cst(Asz, 2),
-         NdVar::cst(static_cast<uint64_t>(Ordering), 1)},
+         NdVar::cst(builtinAtomicOrdering(Ordering), 1)},
         Ordering);
     writeLoadOpResult(OldVal, StoreForm);
   };
@@ -162,9 +181,7 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     NdVar EA, SrcN;
     bool StoreForm = false;
     uint16_t Asz = loadOpOperands(EA, SrcN, StoreForm);
-    NdVar Inv = S.makeTemp(Asz);
-    S.emit(NdOp::INT_NOT, Inv, {SrcN});
-    emitScalarAtomicRMW(Intrinsic::A64_AtomicAnd, EA, Inv, Asz, StoreForm);
+    emitScalarAtomicRMW(Intrinsic::A64_AtomicAnd, EA, SrcN, Asz, StoreForm);
     break;
   }
 
