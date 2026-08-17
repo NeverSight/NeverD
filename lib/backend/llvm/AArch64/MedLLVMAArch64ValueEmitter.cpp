@@ -297,6 +297,35 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                : Builder.CreateZExtOrTrunc(Result, OutTy);
   }
 
+  // Exclusive instructions can receive an ADRP+ADD-derived MedIR value for a
+  // relocatable .data/.bss address.  Resolve that identity to the rebuilt
+  // writable global before emitting the target intrinsic; materializing the
+  // folded object-file VA as inttoptr would make the exclusive access refer to
+  // a different object than ordinary LOAD/STORE operations after relinking.
+  auto resolveExclusiveAddress = [&](const MedVar &AddressVar,
+                                     unsigned AccessBytes,
+                                     llvm::Type *AccessTy) -> llvm::Value * {
+    llvm::Value *Address = nullptr;
+    uint64_t ResolvedAddress = 0;
+    if (Img) {
+      if (AddressVar.isConst())
+        ResolvedAddress = AddressVar.ConstVal;
+      else if (auto Traced = traceSSAConst(AddressVar))
+        ResolvedAddress = *Traced;
+    }
+    if (ResolvedAddress != 0) {
+      const unsigned AddressBits =
+          AddressVar.Size > 0 ? AddressVar.Size * 8 : 64;
+      if (!isFrameRelativeDisplacement(ResolvedAddress, AddressBits))
+        Address = tryResolveGlobalData(ResolvedAddress, AccessBytes);
+    }
+    if (!Address && Img)
+      Address = tryResolveWritableData(AddressVar, AccessBytes, Builder);
+    if (!Address)
+      Address = getMemoryPtr(getVar(AddressVar, Builder), AccessTy, Builder);
+    return Address;
+  };
+
   const bool IsExclusiveLoad = IC == I::A64_Ldxr || IC == I::A64_Ldaxr ||
                                IC == I::A64_Ldxp || IC == I::A64_Ldaxp;
   if (IsExclusiveLoad && Op.Output.Size > 0 && Op.NumInputs >= 3) {
@@ -306,15 +335,16 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     if (Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8 && Bytes != 16)
       return nullptr;
 
-    llvm::Value *Address = getVar(Op.Inputs[1], Builder);
     auto *OutTy = sizeToType(Op.Output.Size);
+    auto *AccessTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
+    llvm::Value *Address =
+        resolveExclusiveAddress(Op.Inputs[1], Bytes, AccessTy);
     const bool Acquire = IC == I::A64_Ldaxr || IC == I::A64_Ldaxp;
     const bool Pair = IC == I::A64_Ldxp || IC == I::A64_Ldaxp;
     if (Pair && Bytes == 16) {
       auto IID = Acquire ? llvm::Intrinsic::aarch64_ldaxp
                          : llvm::Intrinsic::aarch64_ldxp;
       auto *I128Ty = llvm::IntegerType::get(*Ctx, 128);
-      Address = getMemoryPtr(Address, I128Ty, Builder);
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID);
       auto *Result = Builder.CreateCall(Fn, {Address}, "ldxp");
       llvm::Value *Lo = Builder.CreateExtractValue(Result, {0}, "ldxp.lo");
@@ -327,8 +357,6 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                  : Builder.CreateZExtOrTrunc(Packed, OutTy);
     }
 
-    auto *AccessTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
-    Address = getMemoryPtr(Address, AccessTy, Builder);
     auto IID = Acquire ? llvm::Intrinsic::aarch64_ldaxr
                        : llvm::Intrinsic::aarch64_ldxr;
     auto *Fn =
@@ -352,7 +380,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       return nullptr;
 
     llvm::Value *Value = getVar(Op.Inputs[1], Builder);
-    llvm::Value *Address = getVar(Op.Inputs[2], Builder);
+    auto *AccessTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
+    llvm::Value *Address =
+        resolveExclusiveAddress(Op.Inputs[2], Bytes, AccessTy);
     const bool Release = IC == I::A64_Stlxr || IC == I::A64_Stlxp;
     const bool Pair = IC == I::A64_Stxp || IC == I::A64_Stlxp;
     llvm::Value *Status = nullptr;
@@ -368,20 +398,17 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       llvm::Value *Lo = Builder.CreateTrunc(Value, I64Ty);
       llvm::Value *Hi =
           Builder.CreateTrunc(Builder.CreateLShr(Value, 64), I64Ty);
-      Address = getMemoryPtr(Address, I128Ty, Builder);
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID);
       Status = Builder.CreateCall(Fn, {Lo, Hi, Address}, "stxp");
     } else {
       auto IID = Release ? llvm::Intrinsic::aarch64_stlxr
                          : llvm::Intrinsic::aarch64_stxr;
-      auto *AccessTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
       auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
       if (Value->getType()->isPointerTy())
         Value = Builder.CreatePtrToInt(Value, AccessTy);
       else if (Value->getType() != AccessTy)
         Value = Builder.CreateZExtOrTrunc(Value, AccessTy);
       Value = Builder.CreateZExtOrBitCast(Value, I64Ty);
-      Address = getMemoryPtr(Address, AccessTy, Builder);
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID,
                                                          {Address->getType()});
       auto *Call = Builder.CreateCall(Fn, {Value, Address}, "stxr");

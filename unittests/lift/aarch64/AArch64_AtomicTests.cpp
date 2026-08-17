@@ -76,6 +76,18 @@ TEST_F(AArch64_Atomic, ExclusiveOpsRemainTargetIntrinsics) {
   EXPECT_EQ(Pair.find("ret i64 0"), std::string::npos) << Pair;
 }
 
+TEST_F(AArch64_Atomic, ExclusiveGlobalUsesRebuiltWritableData) {
+  auto r = liftToLLVMIR(testObj());
+  ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  auto F = functionIR(r.out, "test_exclusive_global_add");
+  ASSERT_FALSE(F.empty()) << r.out;
+  EXPECT_NE(F.find("@llvm.aarch64.ldaxr"), std::string::npos) << F;
+  EXPECT_NE(F.find("@llvm.aarch64.stlxr"), std::string::npos) << F;
+  EXPECT_NE(F.find("@__nd_data_"), std::string::npos) << F;
+  EXPECT_EQ(F.find("inttoptr (i64"), std::string::npos) << F;
+}
+
 TEST_F(AArch64_Atomic, HighCExclusiveOpsUseStandardBuiltinsAndCompile) {
   auto r = decompileToHighC(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;

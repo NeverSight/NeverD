@@ -13,6 +13,26 @@ int test_ldxr_stxr(int* addr, int newval) {
     return old;
 }
 
+static unsigned test_exclusive_global_value;
+
+__attribute__((noinline, used)) unsigned
+test_exclusive_global_add(unsigned addend) {
+    unsigned old_value;
+    unsigned new_value;
+    unsigned status;
+    __asm__ volatile (
+        "1:\n\t"
+        "ldaxr %w0, [%3]\n\t"
+        "add %w1, %w0, %w4\n\t"
+        "stlxr %w2, %w1, [%3]\n\t"
+        "cbnz %w2, 1b"
+        : "=&r"(old_value), "=&r"(new_value), "=&r"(status)
+        : "r"(&test_exclusive_global_value), "r"(addend)
+        : "memory"
+    );
+    return old_value;
+}
+
 long long test_ldxr_stxr_64(long long* addr, long long newval) {
     long long old;
     int status;
