@@ -27,6 +27,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -40,6 +41,15 @@
 #include <vector>
 
 namespace neverd {
+
+/// One concrete pointer slot bound by Mach-O dyld metadata.  This is kept
+/// separate from ImportPtrSlots: that map is indirect-symbol-table provenance
+/// used by the patcher, while this record comes from the classic/chained bind
+/// programs and also preserves the runtime relocation's signed addend.
+struct ImportBindSlot {
+  std::string Name;
+  int64_t Addend = 0;
+};
 
 // ===--------------------------------------------------------------------===//
 // BinaryImage — the unified output of all loaders
@@ -163,6 +173,10 @@ struct BinaryImage {
   /// size argument it cannot model and whose stack allocation it already lowers
   /// via a real alloca.
   std::map<va_t, std::string> ImportPtrSlots;
+  /// Concrete Mach-O pointer bindings decoded from LC_DYLD_INFO bind bytecode
+  /// or LC_DYLD_CHAINED_FIXUPS chains.  Kept separate from ImportPtrSlots so
+  /// patch provenance remains an exact view of the indirect symbol table.
+  std::map<va_t, ImportBindSlot> DyldBindSlots;
   /// Exact executable import veneer address -> Imports index.  Import::IATAddr
   /// intentionally keeps its format-native, API-visible meaning (a PE/ELF data
   /// slot, historically a Mach-O stub); recording another executable spelling
@@ -263,6 +277,27 @@ struct BinaryImage {
       if (Sec.contains(Addr))
         return &Sec;
     return nullptr;
+  }
+
+  /// Classify one mapped address using the finest format-native provenance.
+  /// Mach-O commonly places non-code sections such as __cstring in the RX
+  /// __TEXT segment, so an exact section's instruction attributes take
+  /// precedence over that coarse segment permission.  Other formats retain
+  /// the historical segment-based classification.
+  bool isCodeAddress(va_t Addr) const {
+    const Segment *Seg = getSegmentFor(Addr);
+    if (!Seg)
+      return false;
+    if (isMachO())
+      if (const Section *Sec = getSectionFor(Addr))
+        return (Sec->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+                             llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) != 0;
+    return Seg->isExecutable();
+  }
+
+  bool isDataAddress(va_t Addr) const {
+    const Segment *Seg = getSegmentFor(Addr);
+    return Seg && Seg->isReadable() && !isCodeAddress(Addr);
   }
 
   const Section *getSectionByName(llvm::StringRef Name) const {

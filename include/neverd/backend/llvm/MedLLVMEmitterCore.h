@@ -958,8 +958,8 @@ private:
   /// stack allocation it guards is independently lowered to a real `alloca`
   /// (tryEmitDynamicStackAlloc).  Re-emitting the call with the recovered
   /// (wrong) argument registers makes the probe walk off the stack, so the
-  /// emitter elides it.  Resolves the GOT slot the call target is loaded from
-  /// via Img.ImportPtrSlots.
+  /// emitter elides it. Resolves the GOT slot the call target is loaded from
+  /// via Img.ImportPtrSlots or Img.DyldBindSlots.
   bool isStackProbeCall(const MedOp &Op) const;
 
   /// Canonical identity of a runtime size value, looking through the width and
@@ -1096,6 +1096,11 @@ private:
   // One synthesized code-pointer mirror global per data segment base VA (see
   // buildCodePtrSegmentGlobal); reused across every access into that segment.
   std::map<uint64_t, llvm::Constant *> CodePtrTableGlobals;
+  // External data declarations used while an imported pointer slot has proven
+  // symbolic identity but no call has yet proven function type.  A later
+  // direct call promotes the placeholder to its recovered llvm::Function and
+  // rewrites every pointer-table initializer use.
+  std::map<std::string, llvm::GlobalVariable *> ImportedSymbolPlaceholders;
   // One embedded global per read-only segment (keyed by segment base VA): all
   // constants in the segment GEP into the SAME global instead of each embedding
   // its own [Addr, segment_end] copy (which duplicated the rodata O(N) times

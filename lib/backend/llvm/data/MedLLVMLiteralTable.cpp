@@ -1,4 +1,4 @@
-//===- MedLLVMLiteralTable.cpp - Literal/select table resolution -*- C++ -*-===//
+//===- MedLLVMLiteralTable.cpp - Literal table resolution -----*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -272,16 +272,14 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectBaseLitTable(
     }
     bool SawLoad = false;
     auto VA = traceTableBaseConst(Arm, 0, &SawLoad);
-    // The arm must fold to a constant VA inside a read-only, non-executable
-    // data segment.  A literal-pool LOAD (SawLoad) is always genuine; a bare
-    // constant (x86-64 `lea rip` base) is accepted only because it sits inside
-    // such a segment and feeds a two-way pointer blend that is itself
-    // runtime-indexed — a plain integer that merely equals a low VA is not a
-    // blend of two pointers.
+    // The arm must fold to a constant VA in exact data/rodata. A literal-pool
+    // LOAD is genuine even when its target lives inline in an instruction
+    // section; a bare constant (x86-64 `lea rip` base) is accepted only for an
+    // exact data address because it feeds a runtime-indexed pointer blend.
     if (!VA || *VA == 0)
       return nullptr;
     const auto *Seg = Img->getSegmentFor(*VA);
-    if (!Seg || Seg->isWritable() || (!SawLoad && Seg->isExecutable()) ||
+    if (!Seg || Seg->isWritable() || (!SawLoad && Img->isCodeAddress(*VA)) ||
         Seg->Data.empty() || StoredConstBases.count(*VA))
       return nullptr;
     auto *G = tryResolveGlobalData(*VA, SizeHint);
@@ -360,7 +358,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       return true;
     if (bool SawLoad = false; auto C = traceTableBaseConst(V, 0, &SawLoad)) {
       const auto *Seg = Img->getSegmentFor(*C);
-      if (*C != 0 && Seg && !Seg->isWritable() && !Seg->isExecutable() &&
+      if (*C != 0 && Seg && !Seg->isWritable() && Img->isDataAddress(*C) &&
           !Seg->Data.empty()) {
         Bases.insert(*C);
         return true;
@@ -484,7 +482,7 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolBase(
   // initializer); a code VA is a function pointer and an executable literal
   // pool is left to the code-pointer path.
   const auto *Seg = Img->getSegmentFor(*VA);
-  if (!Seg || Seg->isWritable() || Seg->isExecutable() || Seg->Data.empty())
+  if (!Seg || Seg->isWritable() || Img->isCodeAddress(*VA) || Seg->Data.empty())
     return nullptr;
 
   // Never redirect a load aliasing an indexed store into the same base (a

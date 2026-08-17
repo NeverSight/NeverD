@@ -109,6 +109,7 @@ add_neverd_unittest(NeverDLiftTests
   format/MachOI386RelocationScatteredTests.cpp
   format/MachOFunctionListingTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
+  format/MachOPointerRelocationBoundaryTests.cpp
   core/MedCallingConvTests.cpp
   eh/COFFExceptionTests.cpp
   eh/COFFExceptionARM32UnwindTests.cpp
@@ -276,6 +277,23 @@ add_neverd_unittest(NeverDMachOLLVMNameBoundaryTests
 )
 
 target_include_directories(NeverDMachOLLVMNameBoundaryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Pins Mach-O bind/rebase pointer provenance and its LLVM relocation boundary
+# without relinking the full lift suite during local RED/GREEN iterations.
+add_neverd_unittest(NeverDMachOPointerRelocationBoundaryTests
+  format/MachOPointerRelocationBoundaryTests.cpp
+
+  LINK_COMPONENTS
+  BackendLLVM
+  LibC
+  Lift
+  Loader
+)
+
+target_include_directories(NeverDMachOPointerRelocationBoundaryTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )

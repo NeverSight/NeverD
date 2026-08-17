@@ -279,7 +279,9 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
   // turning it into an unnamed compact string lets LLVM merge/rename it and
   // leaves patched code pointing at copied, unrebased pointer bytes.
   bool IsRelocatedPointerSlot = Img->CodePtrRelocSlots.count(Addr) != 0 ||
-                                Img->DataPtrRelocSlots.count(Addr) != 0;
+                                Img->DataPtrRelocSlots.count(Addr) != 0 ||
+                                Img->ImportPtrSlots.count(Addr) != 0 ||
+                                Img->DyldBindSlots.count(Addr) != 0;
   if (IsString && StrLen > 0 && AtStringStart && !SizedObjectBeyondString &&
       !IsRelocatedPointerSlot && !isInductionRodataStringBase(Addr)) {
     std::string StrVal(reinterpret_cast<const char *>(Start), StrLen);

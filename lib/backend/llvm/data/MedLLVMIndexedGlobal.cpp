@@ -81,7 +81,7 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
   // simply fails that check, so over-collecting is safe.
   auto constInRodata = [&](uint64_t C) {
     const auto *Seg = Img->getSegmentFor(C);
-    return C != 0 && Seg && !Seg->isWritable() && !Seg->isExecutable() &&
+    return C != 0 && Seg && !Seg->isWritable() && Img->isDataAddress(C) &&
            !Seg->Data.empty();
   };
   std::vector<const PhiNode *> Candidates;
@@ -201,7 +201,8 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
   // the default string pointer and the absolute `.data.rel.ro` table loads
   // through one PHI; re-anchoring such a value to the rodata run would corrupt
   // it, so bail and let the access use the resolved pointer directly.
-  if (Img && !Img->DataPtrRelocSlots.empty()) {
+  if (Img && (!Img->DataPtrRelocSlots.empty() || !Img->ImportPtrSlots.empty() ||
+              !Img->DyldBindSlots.empty())) {
     auto loadsFromDataPtrTable = [&](const MedVar &Start) {
       MedVar Cur = Start;
       for (int D = 0; D < 8; ++D) {
@@ -234,6 +235,16 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
         for (uint64_t S : Img->DataPtrRelocSlots)
           if (S >= LSeg->VA && S < LSeg->VA + LSeg->Data.size())
             return true;
+        for (const auto &[S, Name] : Img->ImportPtrSlots) {
+          (void)Name;
+          if (S >= LSeg->VA && S < LSeg->VA + LSeg->Data.size())
+            return true;
+        }
+        for (const auto &[S, Binding] : Img->DyldBindSlots) {
+          (void)Binding;
+          if (S >= LSeg->VA && S < LSeg->VA + LSeg->Data.size())
+            return true;
+        }
         return false;
       }
       return false;
@@ -260,7 +271,7 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
   bool HaveBase = false;
   auto baseInRodata = [&](uint64_t B) {
     const auto *Seg = Img->getSegmentFor(B);
-    return B != 0 && Seg && !Seg->isWritable() && !Seg->isExecutable() &&
+    return B != 0 && Seg && !Seg->isWritable() && Img->isDataAddress(B) &&
            !Seg->Data.empty();
   };
   for (const PhiNode *Phi : Candidates) {

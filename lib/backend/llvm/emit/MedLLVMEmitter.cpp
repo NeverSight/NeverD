@@ -341,6 +341,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   UnhandledValueIntrinsicCount = 0;
   GlobalDataCache.clear();
   SegmentDataGlobals.clear();
+  WritableSegmentGlobals.clear();
+  CodePtrTableGlobals.clear();
+  ImportedSymbolPlaceholders.clear();
+  StringDataAddrs.clear();
   GlobalStrCounter = 0;
 
   const char *Triple = llvmEmitTriple(TheArch, Fmt);

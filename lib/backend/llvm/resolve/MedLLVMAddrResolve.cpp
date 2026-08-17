@@ -179,7 +179,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
     if (!C || *C == 0)
       return false;
     const auto *Seg = Img->getSegmentFor(*C);
-    return Seg && !Seg->isExecutable() && !Seg->Data.empty();
+    return Seg && Img->isDataAddress(*C) && !Seg->Data.empty();
   };
   const MedVar &A = Def->Inputs[0];
   const MedVar &B = Def->Inputs[1];

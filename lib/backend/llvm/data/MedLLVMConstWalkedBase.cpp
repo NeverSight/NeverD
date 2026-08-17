@@ -213,12 +213,13 @@ bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) {
     auto findPhi = [&](const MedVar &V) { return lookupPhi(V); };
     auto findDef = [&](const MedVar &V) { return lookupDef(V); };
 
-    // A bare VA that begins a C-string in a plain read-only segment (no
-    // relocated pointer slots — those belong to the data-pointer-table path the
+    // A bare VA that begins a C-string in exact read-only data (no relocated
+    // pointer slots — those belong to the data-pointer-table path the
     // DataPtrRelocSlots bail in the induction resolver handles).
     auto isCleanRodataString = [&](uint64_t C) -> bool {
       const Segment *Seg = Img->getSegmentFor(C);
-      if (!Seg || Seg->isWritable() || Seg->isExecutable() || Seg->Data.empty())
+      if (!Seg || Seg->isWritable() || Img->isCodeAddress(C) ||
+          Seg->Data.empty())
         return false;
       if (segHasPtrRelocSlots(Seg) || C < Seg->VA)
         return false;

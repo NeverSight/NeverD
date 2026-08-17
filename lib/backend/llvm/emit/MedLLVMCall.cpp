@@ -121,6 +121,10 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             It != Img->ImportPtrSlots.end())
           IsObjectName = It->second == Name;
       if (!IsObjectName)
+        if (auto It = Img->DyldBindSlots.find(TargetAddr);
+            It != Img->DyldBindSlots.end())
+          IsObjectName = It->second.Name == Name;
+      if (!IsObjectName)
         for (const Symbol &Sym : Img->Symbols)
           if (Sym.Addr == TargetAddr && Sym.Name == Name) {
             IsObjectName = true;
@@ -255,6 +259,21 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (!CalleeName.empty() && CallAddr == 0)
       CallAddr = 1; // force direct-call resolution below
     if (CallAddr != 0) {
+      // A pointer-table bind can prove a symbol's external identity before a
+      // call proves its ABI.  The mirror represents that unresolved identity
+      // as an external i8 global.  Temporarily free the canonical name so the
+      // existing call-signature recovery can create the correctly typed
+      // Function; once it has, rewrite every table initializer use to the
+      // Function and erase the placeholder.
+      llvm::GlobalVariable *ImportedPlaceholder = nullptr;
+      if (!CalleeName.empty()) {
+        auto It = ImportedSymbolPlaceholders.find(CalleeName);
+        if (It != ImportedSymbolPlaceholders.end() && It->second &&
+            It->second->getParent() == Mod) {
+          ImportedPlaceholder = It->second;
+          ImportedPlaceholder->setName(CalleeName + ".import_data");
+        }
+      }
 
       // On AArch64, variadic and non-variadic functions use different
       // calling conventions (variadic args go on the stack).  We detect
@@ -364,10 +383,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                                    LongDoubleAsDouble || Arity->FpRetComplex);
         bool ArgsModelled = Arity && (Arity->FpArgs == 0 ||
                                       Arity->IntArgs == 0 || Arity->FpFirst);
-        bool IsPlainZeroArg =
-            Arity && Arity->IntArgs == 0 && Arity->FpArgs == 0 &&
-            !Arity->FpRet && !Arity->FpRetLongDouble &&
-            !Arity->FpRetComplex;
+        bool IsPlainZeroArg = Arity && Arity->IntArgs == 0 &&
+                              Arity->FpArgs == 0 && !Arity->FpRet &&
+                              !Arity->FpRetLongDouble && !Arity->FpRetComplex;
         if (IsPlainZeroArg) {
           auto *FT = llvm::FunctionType::get(DefaultRetTy, false);
           Callee = llvm::Function::Create(
@@ -454,6 +472,18 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           Callee = llvm::Function::Create(
               StubTy, llvm::GlobalValue::ExternalLinkage, StubName, Mod);
           Callee->addFnAttr(llvm::Attribute::NullPointerIsValid);
+        }
+      }
+
+      if (ImportedPlaceholder) {
+        if (Callee) {
+          ImportedPlaceholder->replaceAllUsesWith(Callee);
+          ImportedPlaceholder->eraseFromParent();
+          ImportedSymbolPlaceholders.erase(CalleeName);
+        } else {
+          // Defensive only: every direct-call path above creates a callee, but
+          // leave a valid canonical declaration if a future path declines.
+          ImportedPlaceholder->setName(CalleeName);
         }
       }
 
@@ -554,8 +584,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
       CoercedArgs.push_back(AV);
     }
-    if (!CalleeTy->isVarArg() &&
-        CoercedArgs.size() > CalleeTy->getNumParams())
+    if (!CalleeTy->isVarArg() && CoercedArgs.size() > CalleeTy->getNumParams())
       CoercedArgs.resize(CalleeTy->getNumParams());
     // A reused variadic declaration still has a mandatory fixed prefix.  An
     // unknown external can be recovered with fewer arguments at a later call

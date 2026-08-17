@@ -419,7 +419,8 @@ MedLLVMEmitter::tryResolveDynVlaAddr(const MedOp &Op,
 }
 
 bool MedLLVMEmitter::isStackProbeCall(const MedOp &Op) const {
-  if (!Img || !CurMedFunc || Img->ImportPtrSlots.empty())
+  if (!Img || !CurMedFunc ||
+      (Img->ImportPtrSlots.empty() && Img->DyldBindSlots.empty()))
     return false;
   if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
       Op.NumInputs < 1)
@@ -491,6 +492,9 @@ bool MedLLVMEmitter::isStackProbeCall(const MedOp &Op) const {
   if (auto It = Img->ImportPtrSlots.find(SlotAddr);
       It != Img->ImportPtrSlots.end())
     Name = It->second;
+  else if (auto It = Img->DyldBindSlots.find(SlotAddr);
+           It != Img->DyldBindSlots.end())
+    Name = It->second.Name;
   else if (const Import *Imp = Img->findImportAt(SlotAddr))
     Name = Imp->Name;
   if (Name.empty())

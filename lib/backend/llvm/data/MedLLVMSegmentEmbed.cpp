@@ -144,9 +144,7 @@ bool MedLLVMEmitter::isMutableDataSeg(const Segment *S) const {
         return true;
     return false;
   };
-  return !(overlaps(Img->CodePtrRelocSlots) ||
-           overlaps(Img->DataPtrRelocSlots) ||
-           overlaps(Img->RelCodeRelocSlots));
+  return !segHasPtrRelocSlots(S) && !overlaps(Img->RelCodeRelocSlots);
 }
 
 bool MedLLVMEmitter::segHasPtrRelocSlots(const Segment *S) const {
@@ -158,7 +156,21 @@ bool MedLLVMEmitter::segHasPtrRelocSlots(const Segment *S) const {
         return true;
     return false;
   };
-  return overlaps(Img->CodePtrRelocSlots) || overlaps(Img->DataPtrRelocSlots);
+  auto overlapsImports = [&]() {
+    for (const auto &[VA, Name] : Img->ImportPtrSlots) {
+      (void)Name;
+      if (S->contains(VA))
+        return true;
+    }
+    for (const auto &[VA, Binding] : Img->DyldBindSlots) {
+      (void)Binding;
+      if (S->contains(VA))
+        return true;
+    }
+    return false;
+  };
+  return overlaps(Img->CodePtrRelocSlots) || overlaps(Img->DataPtrRelocSlots) ||
+         overlapsImports();
 }
 
 bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
@@ -246,8 +258,22 @@ bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
       }
     return false;
   };
+  auto importInRun = [&]() {
+    for (const auto &[S, Name] : Img->ImportPtrSlots) {
+      (void)Name;
+      if (S >= RunStart && S < RunEnd)
+        return true;
+    }
+    for (const auto &[S, Binding] : Img->DyldBindSlots) {
+      (void)Binding;
+      if (S >= RunStart && S < RunEnd)
+        return true;
+    }
+    return false;
+  };
   return inRun(Img->CodePtrRelocSlots, /*ExcludeJumpTables=*/true) ||
-         inRun(Img->DataPtrRelocSlots, /*ExcludeJumpTables=*/false);
+         inRun(Img->DataPtrRelocSlots, /*ExcludeJumpTables=*/false) ||
+         importInRun();
 }
 
 std::pair<llvm::GlobalVariable *, uint64_t>

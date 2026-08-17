@@ -258,6 +258,78 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
                                                   llvm::IRBuilder<> &Builder) {
   if (!Img)
     return nullptr;
+  // A flat pointer-valued SELECT must be validated as one unit before creating
+  // any globals: every non-null leaf has to be a mapped data address.  This
+  // two-pass shape prevents a rejected code/scalar arm from leaving behind a
+  // partially-symbolized sibling and, more importantly, prevents numeric
+  // coincidence from turning an ordinary integer SELECT into a pointer.
+  if (!AddrVar.isConst())
+    if (const MedOp *Top = lookupDef(AddrVar);
+        Top && Top->Opcode == NdOp::SELECT && Top->NumInputs >= 3) {
+      const unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
+      std::function<bool(const MedVar &, int)> isDataTree =
+          [&](const MedVar &V, int Depth) -> bool {
+        if (Depth > 16)
+          return false;
+        if (!V.isConst())
+          if (const MedOp *Def = lookupDef(V);
+              Def && Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
+            return isDataTree(Def->Inputs[1], Depth + 1) &&
+                   isDataTree(Def->Inputs[2], Depth + 1);
+        std::optional<uint64_t> VA = V.isConst()
+                                         ? std::optional<uint64_t>(V.ConstVal)
+                                         : traceSSAConst(V);
+        if (!VA)
+          return false;
+        if (*VA == 0)
+          return true;
+        const Segment *Seg = Img->getSegmentFor(*VA);
+        return Seg && !Seg->Data.empty() && Img->isDataAddress(*VA) &&
+               !isFrameRelativeDisplacement(*VA, AddrBits);
+      };
+
+      if (isDataTree(AddrVar, 0)) {
+        std::function<llvm::Value *(const MedVar &, int)> buildDataTree =
+            [&](const MedVar &V, int Depth) -> llvm::Value * {
+          if (Depth > 16)
+            return nullptr;
+          if (!V.isConst())
+            if (const MedOp *Def = lookupDef(V);
+                Def && Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
+              llvm::Value *True = buildDataTree(Def->Inputs[1], Depth + 1);
+              llvm::Value *False = buildDataTree(Def->Inputs[2], Depth + 1);
+              llvm::Value *Cond = getVar(Def->Inputs[0], Builder);
+              if (!True || !False || !Cond)
+                return nullptr;
+              if (Cond->getType()->isPointerTy())
+                Cond = Builder.CreateIsNotNull(Cond, "ptrselc");
+              else if (!Cond->getType()->isIntegerTy())
+                return nullptr;
+              else if (!Cond->getType()->isIntegerTy(1))
+                Cond = Builder.CreateICmpNE(
+                    Cond, llvm::ConstantInt::get(Cond->getType(), 0),
+                    "ptrselc");
+              return Builder.CreateSelect(Cond, True, False, "ptrsel");
+            }
+          std::optional<uint64_t> VA = V.isConst()
+                                           ? std::optional<uint64_t>(V.ConstVal)
+                                           : traceSSAConst(V);
+          if (!VA)
+            return nullptr;
+          if (*VA == 0)
+            return llvm::ConstantPointerNull::get(
+                llvm::PointerType::getUnqual(*Ctx));
+          return tryResolveGlobalData(*VA, /*DataSizeHint=*/0);
+        };
+        if (llvm::Value *Selected = buildDataTree(AddrVar, 0))
+          return Selected;
+      }
+      // An explicit SELECT that failed the all-arms proof must not fall into
+      // the looser induction/table recognizers below, which are designed for
+      // memory-address walks and may accept a single data-looking leaf.
+      return nullptr;
+    }
+
   // A direct &global (writable or read-only) folds to a constant address.
   uint64_t ConstAddr = 0;
   if (AddrVar.isConst())
@@ -266,13 +338,12 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
     ConstAddr = *Traced;
   if (ConstAddr != 0) {
     unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
-    // A data-pointer argument never points into executable code, so a small
-    // integer argument that merely equals a low .text offset (e.g. an unrolled
-    // loop counter 3..9 passed by value) must NOT be mistaken for a
-    // code-segment "global" and embedded as data — only a non-executable
-    // data/rodata segment qualifies.
-    const Segment *Seg = Img->getSegmentFor(ConstAddr);
-    if (Seg && !Seg->isExecutable() &&
+    // A data-pointer argument never points into an instruction section, so a
+    // small integer argument that merely equals a low .text offset (e.g. an
+    // unrolled loop counter 3..9 passed by value) must NOT be mistaken for a
+    // global. Exact data/rodata classification also admits Mach-O data sections
+    // such as __TEXT,__cstring inside an executable segment.
+    if (Img->isDataAddress(ConstAddr) &&
         !isFrameRelativeDisplacement(ConstAddr, AddrBits))
       if (auto *G = tryResolveGlobalData(ConstAddr, /*DataSizeHint=*/0))
         return G;

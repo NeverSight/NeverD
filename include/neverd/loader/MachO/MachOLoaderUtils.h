@@ -97,7 +97,8 @@ void parseRuntimeLoadCommands(const llvm::object::MachOObjectFile &Obj,
 void parseRuntimeFunctionSections(const std::vector<SectionInfo> &Sections,
                                   uint64_t TextVMAddr, BinaryImage &Img);
 
-/// Walk LC_DYLD_INFO bind / lazy_bind bytecode and enrich \p Img imports.
+/// Walk LC_DYLD_INFO bind / lazy_bind bytecode, enrich \p Img imports, and
+/// retain each pointer slot's symbol/addend in BinaryImage::DyldBindSlots.
 void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
                       const DyldInfoOffsets &DyldInfo, BinaryImage &Img);
 
@@ -138,16 +139,17 @@ struct ChainedFixupsInfo {
   uint32_t DataSize = 0;
 };
 
-/// Parse LC_DYLD_CHAINED_FIXUPS to extract import names from the chained
-/// fixups import table.  Used on macOS 12+ binaries that replaced
-/// LC_DYLD_INFO with chained pointer fixups.
+/// Parse LC_DYLD_CHAINED_FIXUPS to extract import names from its ordinal table.
+/// The chain walker below joins concrete bind slots/addends to these names.
 void parseChainedFixupsImports(const uint8_t *BasePtr, size_t FileSize,
                                const ChainedFixupsInfo &Info, BinaryImage &Img);
 
 /// Walk the LC_DYLD_CHAINED_FIXUPS rebase chains (64-bit pointer formats) and
-/// record each rebase slot that holds an absolute pointer into an executable
-/// segment in Img.CodePtrRelocSlots (and into a read-only data segment in
-/// Img.DataPtrRelocSlots).  This is the chained-fixups analogue of the classic
+/// record each rebase slot that holds an absolute pointer into code in
+/// Img.CodePtrRelocSlots (and into mapped data in Img.DataPtrRelocSlots),
+/// plus each bind slot/name/addend in Img.DyldBindSlots.  Exact Mach-O section
+/// instruction attributes distinguish code from data inside coarse RX __TEXT.
+/// This is the chained-fixups analogue of the classic
 /// R_*_64/ABS64 relocation recording the ELF loader does: a run of such slots
 /// starting at a table base is the signature of a computed-goto / threaded-
 /// dispatch jump table (no comparison guard bounds it), letting the jump-table
