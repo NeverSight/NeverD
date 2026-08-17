@@ -6,14 +6,15 @@
 
 #include "NeverDLiftFixture.h"
 
-#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -225,6 +226,66 @@ TEST(FuncDetectorCoverage, DistinguishesExecutableDataExportsFromFunctions) {
   EXPECT_EQ(ByEntry.count(Img.Entry + 0x10), 0u);
   EXPECT_EQ(ByEntry[Img.Entry + 0x20], "ordinary_export");
   EXPECT_EQ(ByEntry[Img.Entry + 0x40], "ordinary_long_export");
+}
+
+TEST(FuncDetectorCoverage,
+     PreservesVerifiedMachODirectCallInsideBroadRangeAcrossX86) {
+  constexpr va_t ImageVA = 0x1000;
+  constexpr va_t HelperVA = ImageVA + 0x10;
+  constexpr va_t InvalidVA = ImageVA + 0x18;
+
+  auto CheckArchitecture = [&](Arch TargetArch, Bitness TargetBits) {
+    BinaryImage Img;
+    Img.Arch = TargetArch;
+    Img.Bits = TargetBits;
+    Img.Format = BinaryFormat::MachO;
+    Img.Base = ImageVA;
+    Img.Entry = ImageVA;
+
+    Segment Text;
+    Text.Name = "__TEXT";
+    Text.VA = ImageVA;
+    Text.Size = 0x19;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data = {
+        0xe8, 0x0b, 0x00, 0x00, 0x00, // call HelperVA
+        0xe8, 0x0e, 0x00, 0x00, 0x00, // call InvalidVA
+        0xc3,                         // ret
+        0x90, 0x90, 0x90, 0x90, 0x90,
+        0xb8, 0x2a, 0x00, 0x00, 0x00, // mov eax, 42
+        0xc3,                         // ret
+        0x90, 0x90,
+        0x0f, // truncated two-byte opcode
+    };
+    Img.Segments.push_back(std::move(Text));
+
+    Symbol Covering = Symbol::makeFunc(ImageVA, 0x19);
+    Covering.Name = "_main";
+    Img.Symbols.push_back(std::move(Covering));
+    Img.Exports.push_back({"_main", 0, ImageVA});
+    Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x19);
+
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(TargetArch));
+    FuncDetector Detector;
+    auto Functions = Detector.detect(Img, Dec);
+
+    EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                            [=](const auto &F) { return F.first == ImageVA; }),
+              1u);
+    EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                            [=](const auto &F) { return F.first == HelperVA; }),
+              1u)
+        << "arch=" << static_cast<int>(TargetArch);
+    EXPECT_EQ(
+        std::count_if(Functions.begin(), Functions.end(),
+                      [=](const auto &F) { return F.first == InvalidVA; }),
+        0u)
+        << "arch=" << static_cast<int>(TargetArch);
+  };
+
+  CheckArchitecture(Arch::X64, Bitness::Bits64);
+  CheckArchitecture(Arch::X86, Bitness::Bits32);
 }
 
 TEST(CFGBuilderCoverage, StopsAtTrapTerminatorBeforeEmbeddedData) {

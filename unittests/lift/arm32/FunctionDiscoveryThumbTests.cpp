@@ -214,6 +214,52 @@ TEST(FunctionDiscoveryARM,
             0u);
 }
 
+TEST(FunctionDiscoveryARM, PreservesVerifiedMachODirectCallInsideBroadRange) {
+  constexpr va_t ImageVA = 0x1000;
+  constexpr va_t HelperVA = ImageVA + 0x10;
+  constexpr va_t InvalidVA = ImageVA + 0x18;
+
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Mode = InstructionMode::Default;
+  Img.Format = BinaryFormat::MachO;
+  Img.Bits = Bitness::Bits32;
+  Img.Base = ImageVA;
+  Img.Entry = ImageVA;
+
+  std::vector<uint8_t> Code(0x1a, 0);
+  writeLE<uint32_t>(Code.data(), 0xEB000002u);      // bl HelperVA
+  writeLE<uint32_t>(Code.data() + 4, 0xEB000003u);  // bl InvalidVA
+  writeLE<uint32_t>(Code.data() + 8, 0xE12FFF1Eu);  // bx lr
+  writeLE<uint32_t>(Code.data() + 12, 0xE1A00000u); // nop
+  writeLE<uint32_t>(Code.data() + 16, 0xE3A0002Au); // mov r0, #42
+  writeLE<uint32_t>(Code.data() + 20, 0xE12FFF1Eu); // bx lr
+  Code[24] = 0xff;                                  // truncated ARM instruction
+  Code[25] = 0xff;
+  Img.Segments.push_back(makeExecutableSegment(ImageVA, Code));
+
+  Symbol Covering = Symbol::makeFunc(ImageVA, Code.size());
+  Covering.Name = "_main";
+  Img.Symbols.push_back(std::move(Covering));
+  Img.Exports.push_back({"_main", 0, ImageVA});
+  Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + Code.size());
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::ARM, InstructionMode::Default));
+  FuncDetector Detector;
+  auto Functions = Detector.detect(Img, Dec);
+
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == ImageVA; }),
+            1u);
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == HelperVA; }),
+            1u);
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == InvalidVA; }),
+            0u);
+}
+
 TEST(FunctionDiscoveryThumb, NormalizesOnlyFunctionSymbols) {
   std::vector<uint8_t> Bytes = readFixture("test_patch_coff_arm.obj");
   if (Bytes.empty())
