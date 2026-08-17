@@ -130,8 +130,8 @@ TEST_F(MachOI386Relocation,
     SCOPED_TRACE(Name.str());
     auto LLVM = liftToLLVMIR(fixture(Name));
     ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
-    EXPECT_NE(LLVM.out.find("@_i386_call_dispatch"), std::string::npos);
-    EXPECT_NE(LLVM.out.find("ptrtoint (ptr @_i386_add to i32)"),
+    EXPECT_NE(LLVM.out.find("@i386_call_dispatch"), std::string::npos);
+    EXPECT_NE(LLVM.out.find("ptrtoint (ptr @i386_add to i32)"),
               std::string::npos);
   }
 }
@@ -151,8 +151,8 @@ TEST_P(MachOI386Pipeline, CompletesLiftAndDecompilation) {
 
   auto LLVM = liftToLLVMIR(Path);
   ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
-  EXPECT_NE(LLVM.out.find("@_i386_add"), std::string::npos);
-  EXPECT_NE(LLVM.out.find("@_i386_global_address"), std::string::npos);
+  EXPECT_NE(LLVM.out.find("@i386_add"), std::string::npos);
+  EXPECT_NE(LLVM.out.find("@i386_global_address"), std::string::npos);
   auto HasGlobalReference = [&](llvm::StringRef Name, va_t Address) {
     if (LLVM.out.find(Name.str()) != std::string::npos ||
         LLVM.out.find("i64 " + std::to_string(Address) + " to ptr") !=

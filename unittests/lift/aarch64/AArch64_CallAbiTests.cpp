@@ -11,10 +11,15 @@ static fs::path callAbiObj() {
 static std::string callAbiFunctionText(llvm::StringRef IR,
                                        llvm::StringRef Name) {
   std::string Needle = "@" + Name.str() + "(";
-  size_t Begin = IR.find(Needle);
-  if (Begin == llvm::StringRef::npos)
-    return {};
-  Begin = IR.take_front(Begin).rfind("define ");
+  size_t Begin = 0;
+  while ((Begin = IR.find("define ", Begin)) != llvm::StringRef::npos) {
+    size_t HeaderEnd = IR.find('\n', Begin);
+    size_t NameAt = IR.find(Needle, Begin);
+    if (NameAt != llvm::StringRef::npos &&
+        (HeaderEnd == llvm::StringRef::npos || NameAt < HeaderEnd))
+      break;
+    Begin += sizeof("define ") - 1;
+  }
   if (Begin == llvm::StringRef::npos)
     return {};
   size_t End = IR.find("\n}", Begin);
@@ -29,7 +34,7 @@ TEST_F(AArch64_CallAbi, IndirectFPCallUsesV0ForArgumentAndReturn) {
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  std::string F = callAbiFunctionText(R.out, "_indirect_double_call");
+  std::string F = callAbiFunctionText(R.out, "indirect_double_call");
   ASSERT_FALSE(F.empty()) << R.out;
   size_t Call = F.find("call <2 x i64> %");
   ASSERT_NE(Call, std::string::npos) << F;
@@ -41,7 +46,7 @@ TEST_F(AArch64_CallAbi, IndirectFPCallUsesV0ForArgumentAndReturn) {
 
   auto Opt = liftToLLVMIR(callAbiObj());
   ASSERT_EQ(Opt.exitCode, 0) << Opt.err;
-  std::string OptF = callAbiFunctionText(Opt.out, "_indirect_double_call");
+  std::string OptF = callAbiFunctionText(Opt.out, "indirect_double_call");
   EXPECT_NE(OptF.find("ret <2 x i64> %call"), std::string::npos) << OptF;
 }
 
@@ -51,9 +56,9 @@ TEST_F(AArch64_CallAbi, ExternalPairCallPreservesX0AndX1) {
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  std::string F = callAbiFunctionText(R.out, "_direct_external_pair_sum");
+  std::string F = callAbiFunctionText(R.out, "direct_external_pair_sum");
   ASSERT_FALSE(F.empty()) << R.out;
-  EXPECT_NE(F.find("call { i64, i64 } @_make_external_pair()"),
+  EXPECT_NE(F.find("call { i64, i64 } @make_external_pair()"),
             std::string::npos)
       << F;
   EXPECT_NE(F.find("extractvalue { i64, i64 }"), std::string::npos) << F;
@@ -66,9 +71,9 @@ TEST_F(AArch64_CallAbi, ExternalDarwinVarargsKeepOutgoingStackValues) {
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  std::string F = callAbiFunctionText(R.out, "_direct_external_varargs");
+  std::string F = callAbiFunctionText(R.out, "direct_external_varargs");
   ASSERT_FALSE(F.empty()) << R.out;
-  EXPECT_NE(F.find("call i64 (i64, ...) @_sum_external_varargs(i64 16, i64 32, "
+  EXPECT_NE(F.find("call i64 (i64, ...) @sum_external_varargs(i64 16, i64 32, "
                    "i64 48)"),
             std::string::npos)
       << F;
@@ -80,13 +85,13 @@ TEST_F(AArch64_CallAbi, ExternalZeroArgPrototypeIsStableAcrossCallSites) {
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  std::string Compute = callAbiFunctionText(R.out, "_external_error_compute");
-  std::string Simple = callAbiFunctionText(R.out, "_external_error_simple");
+  std::string Compute = callAbiFunctionText(R.out, "external_error_compute");
+  std::string Simple = callAbiFunctionText(R.out, "external_error_simple");
   ASSERT_FALSE(Compute.empty()) << R.out;
   ASSERT_FALSE(Simple.empty()) << R.out;
-  EXPECT_NE(Compute.find("@___error()"), std::string::npos) << Compute;
-  EXPECT_NE(Simple.find("@___error()"), std::string::npos) << Simple;
-  EXPECT_EQ(R.out.find("@___error(i"), std::string::npos) << R.out;
+  EXPECT_NE(Compute.find("@__error()"), std::string::npos) << Compute;
+  EXPECT_NE(Simple.find("@__error()"), std::string::npos) << Simple;
+  EXPECT_EQ(R.out.find("@__error(i"), std::string::npos) << R.out;
 }
 
 TEST_F(AArch64_CallAbi, InternalNoReturnCallTerminatesFailingEdge) {
@@ -95,11 +100,11 @@ TEST_F(AArch64_CallAbi, InternalNoReturnCallTerminatesFailingEdge) {
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  std::string Caller = callAbiFunctionText(R.out, "_neverd_after_fail");
-  std::string Callee = callAbiFunctionText(R.out, "_neverd_fail");
+  std::string Caller = callAbiFunctionText(R.out, "neverd_after_fail");
+  std::string Callee = callAbiFunctionText(R.out, "neverd_fail");
   ASSERT_FALSE(Caller.empty()) << R.out;
   ASSERT_FALSE(Callee.empty()) << R.out;
-  size_t Call = Caller.find("@_neverd_fail()");
+  size_t Call = Caller.find("@neverd_fail()");
   ASSERT_NE(Call, std::string::npos) << Caller;
   EXPECT_NE(Caller.find("unreachable", Call), std::string::npos) << Caller;
   EXPECT_NE(Callee.find("call void @llvm.trap()"), std::string::npos) << Callee;

@@ -298,6 +298,22 @@ target_include_directories(NeverDMachOPointerRelocationBoundaryTests PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 
+# These focused targets have the same NeverDIR-to-NeverDLift register-name
+# dependency as the native exception contract target above.  Rescan the exact
+# two archives on one-pass Unix linkers without changing other platforms.
+if(UNIX AND NOT APPLE)
+  foreach(_neverd_macho_boundary_target
+      NeverDMachOLLVMNameBoundaryTests
+      NeverDMachOPointerRelocationBoundaryTests)
+    target_link_libraries(${_neverd_macho_boundary_target} PRIVATE
+      "-Wl,--start-group"
+      "$<TARGET_FILE:NeverDIR>"
+      "$<TARGET_FILE:NeverDLift>"
+      "-Wl,--end-group"
+    )
+  endforeach()
+endif()
+
 # Guards the obfuscate-then-patch barrier in isolation.  A tiny TU that links
 # the prebuilt NeverDPipeline archive (which carries SymSimplifyPass through its
 # PassIR component), so the stamp/skip contract can be pinned without rebuilding
