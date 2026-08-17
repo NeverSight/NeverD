@@ -16,6 +16,8 @@
 
 #ifdef _WIN32
 #include "llvm/Support/Windows/WindowsSupport.h"
+
+#include <cstdlib>
 #endif
 
 #include <array>
@@ -29,6 +31,32 @@
 namespace {
 
 namespace fs = std::filesystem;
+
+#ifdef _WIN32
+void __cdecl continueAfterExpectedInvalidParameter(const wchar_t *,
+                                                   const wchar_t *,
+                                                   const wchar_t *,
+                                                   unsigned int, uintptr_t) {}
+
+class ScopedExpectedInvalidParameter {
+public:
+  ScopedExpectedInvalidParameter()
+      : Previous(_set_thread_local_invalid_parameter_handler(
+            continueAfterExpectedInvalidParameter)) {}
+
+  ~ScopedExpectedInvalidParameter() {
+    _set_thread_local_invalid_parameter_handler(Previous);
+  }
+
+  ScopedExpectedInvalidParameter(const ScopedExpectedInvalidParameter &) =
+      delete;
+  ScopedExpectedInvalidParameter &
+  operator=(const ScopedExpectedInvalidParameter &) = delete;
+
+private:
+  _invalid_parameter_handler Previous;
+};
+#endif
 
 class TranslationCLIContract : public ::testing::Test {
 protected:
@@ -394,6 +422,11 @@ TEST_F(TranslationCLIContract,
 
 TEST_F(TranslationCLIContract,
        DiscardCloseFailureStillRemovesAndForgetsTheTemporary) {
+#ifdef _WIN32
+  // This test deliberately reuses a closed descriptor so the cleanup path
+  // sees EBADF.  MSVCRT normally fast-fails before returning that error.
+  ScopedExpectedInvalidParameter ExpectedInvalidParameter;
+#endif
   llvm::Expected<llvm::sys::fs::TempFile> TemporaryOrError =
       llvm::sys::fs::TempFile::create(
           (Directory / "discard-close-%%%%%%").string());
@@ -416,6 +449,10 @@ TEST_F(TranslationCLIContract,
 
 TEST_F(TranslationCLIContract,
        CommitCloseFailureReportsContextAndPreservesTheOldOutput) {
+#ifdef _WIN32
+  // Keep the intentional bad descriptor recoverable for this test thread.
+  ScopedExpectedInvalidParameter ExpectedInvalidParameter;
+#endif
   constexpr std::array<uint8_t, 3> Original{0xaa, 0xbb, 0xcc};
   const fs::path Output = writeInput(Original, "close-failure-existing.o");
   llvm::Expected<llvm::sys::fs::TempFile> TemporaryOrError =
