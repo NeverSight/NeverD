@@ -15,11 +15,45 @@
 #include "llvm/Support/JSON.h"
 
 #include <chrono>
+#include <set>
 #include <utility>
 #include <vector>
 
 using namespace neverd;
 using namespace neverd::sdk;
+
+namespace {
+
+std::set<va_t> findUnresolvedInternalCallTargets(const BinaryImage &Img,
+                                                 const PipelineResult &Result) {
+  std::set<va_t> DefinedEntries;
+  for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
+    if (Audit.Disposition == PipelineFunctionDisposition::Accepted &&
+        Audit.HasLLVMDefinition)
+      DefinedEntries.insert(Audit.Entry);
+
+  std::set<va_t> Unresolved;
+  for (const LowFunc &Function : Result.LowFuncs) {
+    if (DefinedEntries.count(Function.Entry) == 0)
+      continue;
+    for (const LowBlock &Block : Function.Blocks) {
+      for (const LowOp &Op : Block.Ops) {
+        if (Op.Opcode != NdOp::CALL || Op.NumInputs == 0 ||
+            !Op.Inputs[0].isConst())
+          continue;
+        const va_t Target = Op.Inputs[0].Offset;
+        const Segment *TargetSegment = Img.getSegmentFor(Target);
+        if (!TargetSegment || !TargetSegment->isExecutable() ||
+            Img.isImportStubAt(Target) || DefinedEntries.count(Target) != 0)
+          continue;
+        Unresolved.insert(Target);
+      }
+    }
+  }
+  return Unresolved;
+}
+
+} // namespace
 
 const char *neverd_bench_run(neverd_session_t Sess, const char *InputPath,
                              int MaxFunctions) {
@@ -152,9 +186,12 @@ const char *neverd_bench_run(neverd_session_t Sess, const char *InputPath,
   int64_t UnsupportedInstructions = 0;
   int64_t TruncatedPaths = 0;
   int64_t MedFailures = 0;
+  const std::set<va_t> UnresolvedInternalCalls =
+      findUnresolvedInternalCallTargets(R.Img, LlvmResult);
   bool Complete = LlvmResult.Success && !LlvmResult.LLVMVerifierFailed &&
                   LlvmResult.MedIRVerifierFailures == 0 &&
-                  LlvmResult.BackendUnhandledValueIntrinsics == 0;
+                  LlvmResult.BackendUnhandledValueIntrinsics == 0 &&
+                  UnresolvedInternalCalls.empty();
 
   llvm::json::Array AuditFunctions;
   for (const auto &Audit : LlvmResult.FunctionAudits) {
@@ -252,6 +289,8 @@ const char *neverd_bench_run(neverd_session_t Sess, const char *InputPath,
       static_cast<int64_t>(LlvmResult.MedIRVerifierFailures);
   Audit["backend_unhandled_value_intrinsics"] =
       static_cast<int64_t>(LlvmResult.BackendUnhandledValueIntrinsics);
+  Audit["unresolved_internal_calls"] =
+      static_cast<int64_t>(UnresolvedInternalCalls.size());
   Audit["llvm_verifier_failed"] = LlvmResult.LLVMVerifierFailed;
   Root["audit"] = std::move(Audit);
   Root["audit_functions"] = std::move(AuditFunctions);

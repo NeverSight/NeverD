@@ -28,7 +28,8 @@ public:
                                                    Decoder &Dec);
 
 private:
-  void scanCallTargets(const BinaryImage &Img, Decoder &Dec);
+  void scanCallTargets(const BinaryImage &Img, Decoder &Dec,
+                       std::set<va_t> &Out);
   /// Validate a heuristic entry.  When KeepInconclusive is true, bounded
   /// probes that exhaust their budget remain candidates for the formal audit;
   /// definite decode or mapping failures are still rejected.

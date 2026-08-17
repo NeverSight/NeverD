@@ -165,6 +165,30 @@ std::vector<uint8_t> makeMalformedMetadataPE() {
   return Bytes;
 }
 
+std::vector<uint8_t> makeInternalCallPE() {
+  constexpr size_t kDirectoryCount = 16;
+  constexpr size_t kFileHeaderOffset = kPEOffset + 4;
+  constexpr size_t kOptionalHeaderOffset =
+      kFileHeaderOffset + sizeof(coff_file_header);
+  constexpr size_t kDirectoriesOffset =
+      kOptionalHeaderOffset + sizeof(pe32plus_header);
+  constexpr size_t kSectionHeadersOffset =
+      kDirectoriesOffset + kDirectoryCount * sizeof(data_directory);
+
+  std::vector<uint8_t> Bytes = makeMalformedMetadataPE();
+  coff_section Text{};
+  std::memcpy(&Text, Bytes.data() + kSectionHeadersOffset, sizeof(Text));
+  Text.VirtualSize = 0x10;
+  writeObject(Bytes, kSectionHeadersOffset, Text);
+
+  // entry: call helper; ret
+  // helper: mov eax, 42; ret
+  writeBytes(Bytes, kTextFileOffset,
+             {0xe8, 0x03, 0x00, 0x00, 0x00, 0xc3, 0x90, 0x90, 0xb8, 0x2a, 0x00,
+              0x00, 0x00, 0xc3});
+  return Bytes;
+}
+
 class TemporaryPE {
 public:
   explicit TemporaryPE(const std::vector<uint8_t> &Bytes) {
@@ -218,7 +242,7 @@ void expectParseableJSON(const char *Name, const char *Value) {
       << JSON;
 }
 
-json::Object runBench(const std::vector<uint8_t> &Bytes) {
+json::Object runBench(const std::vector<uint8_t> &Bytes, int MaxFunctions = 0) {
   TemporaryPE Input(Bytes);
   EXPECT_FALSE(Input.error()) << Input.error().message();
 
@@ -226,7 +250,8 @@ json::Object runBench(const std::vector<uint8_t> &Bytes) {
   EXPECT_TRUE(neverd_session_load(Session, Input.path().c_str()))
       << takeString(neverd_last_error(Session));
 
-  const char *Value = neverd_bench_run(Session, Input.path().c_str(), 0);
+  const char *Value =
+      neverd_bench_run(Session, Input.path().c_str(), MaxFunctions);
   EXPECT_NE(Value, nullptr) << takeString(neverd_last_error(Session));
   if (!Value)
     return {};
@@ -278,6 +303,7 @@ TEST(NeverDMetadataJSON, CoverageReportReconcilesEveryPipelineStage) {
   EXPECT_EQ(Audit->getInteger("med_failures"), 0);
   EXPECT_EQ(Audit->getInteger("med_ir_verifier_failures"), 0);
   EXPECT_EQ(Audit->getInteger("backend_unhandled_value_intrinsics"), 0);
+  EXPECT_EQ(Audit->getInteger("unresolved_internal_calls"), 0);
   EXPECT_EQ(Audit->getBoolean("llvm_verifier_failed"), false);
 
   const json::Array *Functions = Root.getArray("audit_functions");
@@ -305,4 +331,21 @@ TEST(NeverDMetadataJSON, CoverageReportExposesReachableDecodeFailure) {
   EXPECT_EQ(Audit->getBoolean("complete"), false);
   EXPECT_EQ(Audit->getInteger("decode_failures"), 1);
   EXPECT_EQ(Audit->getInteger("rejected_functions"), 1);
+}
+
+TEST(NeverDMetadataJSON, CoverageReportRejectsMissingInternalCallee) {
+  json::Object LimitedRoot = runBench(makeInternalCallPE(), 1);
+  const json::Object *LimitedAudit = LimitedRoot.getObject("audit");
+  ASSERT_NE(LimitedAudit, nullptr);
+  EXPECT_EQ(LimitedAudit->getBoolean("complete"), false);
+  EXPECT_EQ(LimitedAudit->getInteger("detected_functions"), 2);
+  EXPECT_EQ(LimitedAudit->getInteger("skipped_functions"), 1);
+  EXPECT_EQ(LimitedAudit->getInteger("unresolved_internal_calls"), 1);
+
+  json::Object FullRoot = runBench(makeInternalCallPE());
+  const json::Object *FullAudit = FullRoot.getObject("audit");
+  ASSERT_NE(FullAudit, nullptr);
+  EXPECT_EQ(FullAudit->getBoolean("complete"), true);
+  EXPECT_EQ(FullAudit->getInteger("accepted_functions"), 2);
+  EXPECT_EQ(FullAudit->getInteger("unresolved_internal_calls"), 0);
 }

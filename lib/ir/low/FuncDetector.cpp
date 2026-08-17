@@ -92,8 +92,16 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     }
   }
 
-  if (Img.Entry != 0)
-    scanCallTargets(Img, Dec);
+  std::set<va_t> DirectCallTargets;
+  if (Img.Entry != 0) {
+    scanCallTargets(Img, Dec, DirectCallTargets);
+    Entries.insert(DirectCallTargets.begin(), DirectCallTargets.end());
+  }
+
+  auto IsCoveredAArch64MachOCallTarget = [&](va_t Addr) {
+    return Img.Arch == Arch::AArch64 && Img.Format == BinaryFormat::MachO &&
+           DirectCallTargets.count(Addr) != 0;
+  };
 
   std::set<va_t> Already;
   for (auto &[A, _] : Results)
@@ -131,9 +139,11 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
 
     // Per-candidate keep decision.  A trusted entry (image entry, typed export,
     // sized function symbol) is kept without decoding; an ordinary scan hit
-    // inside a known code range but not at its start is dropped.  Untyped COFF
-    // exports are always verified because they can be either callable aliases
-    // or data.  Only the remaining candidates need the expensive trial decode.
+    // inside a known code range but not at its start is dropped.  AArch64
+    // Mach-O direct-call targets are instead verified: compact-unwind ranges
+    // can cover unsymbolized leaf callees.  Untyped COFF exports are always
+    // verified because they can be either callable aliases or data.  Only the
+    // remaining candidates need the expensive trial decode.
     const size_t N = Results.size();
     std::vector<char> Keep(N, 0);
     std::vector<size_t> NeedVerify;
@@ -141,7 +151,9 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       va_t Addr = Results[I].first;
       if (Trusted.count(Addr))
         Keep[I] = 1;
-      else if (UntypedCOFFExports.count(Addr) || !InsideKnownButNotStart(Addr))
+      else if (UntypedCOFFExports.count(Addr) ||
+               IsCoveredAArch64MachOCallTarget(Addr) ||
+               !InsideKnownButNotStart(Addr))
         NeedVerify.push_back(I);
     }
 
@@ -213,14 +225,16 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       };
       // A sized function symbol ordinarily claims its whole [Addr, Addr+Size)
       // extent.  An explicit function symbol at an interior address is stronger
-      // evidence, however: compact-unwind coverage ranges may span leaf
-      // functions that have no unwind row of their own.  Preserve those typed
-      // starts while still dropping scan/export-only candidates such as an ARM
-      // embedded constant pool ($d) decoded as a bogus `sub_XXXX`.
+      // evidence, however, as is an AArch64 Mach-O direct-call target that
+      // survived the verification pass above: compact-unwind coverage ranges
+      // may span leaf functions that have no unwind row of their own.  Preserve
+      // those starts while still dropping scan/export-only candidates such as
+      // an ARM embedded constant pool ($d) decoded as a bogus `sub_XXXX`.
       std::vector<std::pair<va_t, std::string>> Filtered;
       Filtered.reserve(Results.size());
       for (auto &R : Results) {
-        if (InsideSized(R.first) && !FunctionSymbolStarts.count(R.first))
+        if (InsideSized(R.first) && !FunctionSymbolStarts.count(R.first) &&
+            !IsCoveredAArch64MachOCallTarget(R.first))
           continue;
         Filtered.push_back(R);
       }
@@ -493,7 +507,8 @@ static bool isAArch64InstructionSection(const BinaryImage &Img,
                       llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) != 0;
 }
 
-void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec) {
+void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec,
+                                   std::set<va_t> &Out) {
   struct ScanChunk {
     const Segment *Seg;
     va_t Start;
@@ -539,7 +554,7 @@ void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec) {
 
   if (Chunks.size() <= 1) {
     for (auto &[Seg, Start, End] : Chunks)
-      scanSegmentCalls(Img, Dec, Seg, Start, End, Entries);
+      scanSegmentCalls(Img, Dec, Seg, Start, End, Out);
     return;
   }
 
@@ -561,7 +576,7 @@ void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec) {
     }
 
     std::lock_guard<std::mutex> Lk(Mtx);
-    Entries.insert(LocalEntries.begin(), LocalEntries.end());
+    Out.insert(LocalEntries.begin(), LocalEntries.end());
   };
 
   std::vector<std::thread> Ts;

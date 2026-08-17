@@ -140,4 +140,56 @@ TEST(AArch64FunctionDiscovery,
             1u);
 }
 
+TEST(AArch64FunctionDiscovery,
+     PreservesVerifiedDirectCallInsideBroadCompactUnwindRange) {
+  constexpr va_t ImageVA = 0x3000;
+  constexpr va_t HelperVA = ImageVA + 0x10;
+  constexpr va_t InvalidVA = ImageVA + 0x18;
+
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::MachO;
+  Img.Base = ImageVA;
+  Img.Entry = ImageVA;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = ImageVA;
+  Text.Size = 0x1c;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0);
+  writeLE<uint32_t>(Text.Data.data(), 0x94000004u);      // bl HelperVA
+  writeLE<uint32_t>(Text.Data.data() + 4, 0x94000005u);  // bl InvalidVA
+  writeLE<uint32_t>(Text.Data.data() + 8, 0xD65F03C0u);  // ret
+  writeLE<uint32_t>(Text.Data.data() + 12, 0xD503201Fu); // nop
+  writeLE<uint32_t>(Text.Data.data() + 16, 0x52800540u); // mov w0, #42
+  writeLE<uint32_t>(Text.Data.data() + 20, 0xD65F03C0u); // ret
+  writeLE<uint32_t>(Text.Data.data() + 24, 0xFFFFFFFFu); // undecodable
+  Img.Segments.push_back(std::move(Text));
+  Img.Sections.push_back(
+      makeMachOSection("__text", ImageVA, 0x1c, /*ContainsInstructions=*/true));
+
+  Symbol Covering = Symbol::makeFunc(ImageVA, 0x1c);
+  Covering.Name = "_main";
+  Img.Symbols.push_back(std::move(Covering));
+  Img.Exports.push_back({"_main", 0, ImageVA});
+  Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x1c);
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  FuncDetector Detector;
+  auto Functions = Detector.detect(Img, Dec);
+
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == ImageVA; }),
+            1u);
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == HelperVA; }),
+            1u);
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == InvalidVA; }),
+            0u);
+}
+
 } // namespace
