@@ -10,7 +10,7 @@ jobs:
   reproduce:
     name: Reproduce translation close failures
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
@@ -41,8 +41,7 @@ jobs:
             -DNEVERD_BUILD_PLUGINS=OFF \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
             -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=OFF \
-            -DNEVERD_LLVM_PREBUILT=ON \
-            -DNEVERD_LLVM_PREBUILT_SHA256=b1af5a72c5433eaf20bdc4b4281c960bd874b72f753ddd596063b544c46021c2
+            -DNEVERD_LLVM_PREBUILT=OFF
 
       - name: Build owning test binary
         shell: bash
@@ -57,10 +56,18 @@ jobs:
         env:
           NEVERD_THREADS: '1'
         run: |
-          set -o pipefail
+          set +e
           build-ci/bin/NeverDTranslationContractTests.exe \
-            --gtest_filter='TranslationCLIContract.DiscardCloseFailureStillRemovesAndForgetsTheTemporary:TranslationCLIContract.CommitCloseFailureReportsContextAndPreservesTheOldOutput' \
-            --gtest_repeat=3 2>&1 | tee translation-close.log
+            --gtest_filter='TranslationCLIContract.DiscardCloseFailureStillRemovesAndForgetsTheTemporary' \
+            --gtest_repeat=100 2>&1 | tee translation-close-discard.log
+          discard_status="${PIPESTATUS[0]}"
+          build-ci/bin/NeverDTranslationContractTests.exe \
+            --gtest_filter='TranslationCLIContract.CommitCloseFailureReportsContextAndPreservesTheOldOutput' \
+            --gtest_repeat=100 2>&1 | tee translation-close-commit.log
+          commit_status="${PIPESTATUS[0]}"
+          if [[ "$discard_status" != 0 || "$commit_status" != 0 ]]; then
+            exit 1
+          fi
 
       - name: Upload reproducer and evidence
         if: always()
@@ -71,7 +78,8 @@ jobs:
             build-ci/bin/NeverDTranslationContractTests.exe
             build-ci/bin/*.dll
             build-ci/Testing/Temporary/*.log
-            translation-close.log
+            translation-close-discard.log
+            translation-close-commit.log
           if-no-files-found: warn
           retention-days: 3
 
