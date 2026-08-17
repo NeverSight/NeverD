@@ -41,7 +41,8 @@ jobs:
             -DNEVERD_BUILD_PLUGINS=OFF \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
             -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=OFF \
-            -DNEVERD_LLVM_PREBUILT=ON
+            -DNEVERD_LLVM_PREBUILT=ON \
+            -DNEVERD_LLVM_PREBUILT_SHA256=b1af5a72c5433eaf20bdc4b4281c960bd874b72f753ddd596063b544c46021c2
 
       - name: Build owning test binary
         shell: bash
