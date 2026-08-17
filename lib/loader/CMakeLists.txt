@@ -51,6 +51,7 @@ add_neverd_component_library(NeverDLoader
   MachO/MachOCompactUnwind.cpp
   MachO/MachOCompactUnwindEncoding.cpp
   MachO/MachODyldBind.cpp
+  MachO/MachODyldRebase.cpp
   MachO/MachOExceptions.cpp
   MachO/MachOI386Relocations.cpp
   MachO/MachOIndirectSymbols.cpp

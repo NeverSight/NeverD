@@ -122,9 +122,9 @@ struct BinaryImage {
   /// array) is recovered, since it has no comparison guard to bound it and
   /// 4-byte entries are otherwise ambiguous with PIC self-relative offsets.
   std::set<uint64_t> CodePtrRelocSlots;
-  /// Virtual addresses of relocation slots that hold an absolute pointer into a
-  /// read-only DATA segment (R_386_32 / R_ARM_ABS32 / R_X86_64_64 /
-  /// R_AARCH64_ABS64 whose target is non-executable rodata).  These are the
+  /// Virtual addresses of relocation slots that hold an absolute pointer into
+  /// mapped non-code data (R_386_32 / R_ARM_ABS32 / R_X86_64_64 /
+  /// R_AARCH64_ABS64, or their Mach-O dyld rebase equivalents).  These are the
   /// entries of an absolute data-pointer table — e.g. the `.data.rel.ro` array
   /// of `const char *` a 32-bit-target switch-returning-string lowers to.  The
   /// emitter rebuilds such a table with `ptrtoint(@recompiled_data)` fields so

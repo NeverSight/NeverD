@@ -409,6 +409,7 @@ MachOLoader::load(const std::filesystem::path &Path) {
                                     Img);
   macho_loader::parseNeededLibraries(Obj, Img);
   macho_loader::parseBindStreams(BasePtr, FileSize, DyldInfo, Img);
+  macho_loader::parseRebaseStream(BasePtr, FileSize, DyldInfo, Img);
   macho_loader::parseChainedFixupsImports(BasePtr, FileSize, ChainedFixups,
                                           Img);
   macho_loader::parseChainedFixupsRebases(BasePtr, FileSize, ChainedFixups,

@@ -4,6 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MachODyldFixups.h"
+
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -185,8 +187,10 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
             Img.Imports.push_back(std::move(Imp));
           }
 
-          if (BindType == BIND_TYPE_POINTER)
+          if (BindType == BIND_TYPE_POINTER) {
+            detail::clearLocalPointerClassification(Img, BindAddr);
             Img.DyldBindSlots[BindAddr] = ImportBindSlot{SymName, Addend};
+          }
         };
 
         if (Opcode == BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB) {

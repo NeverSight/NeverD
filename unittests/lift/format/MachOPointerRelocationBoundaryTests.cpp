@@ -13,6 +13,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -312,6 +313,8 @@ std::vector<uint8_t> makeChainedBlob(macho_loader::ChainedFixupsInfo &Info) {
 
 TEST(MachOChainedPointerBoundary, RecordsBindAndFineGrainedRebases) {
   BinaryImage Image = makeChainedImage();
+  Image.CodePtrRelocSlots.insert(DataVA);
+  Image.DataPtrRelocSlots.insert(DataVA);
   macho_loader::ChainedFixupsInfo Info;
   std::vector<uint8_t> Binary = makeChainedBlob(Info);
 
@@ -325,6 +328,8 @@ TEST(MachOChainedPointerBoundary, RecordsBindAndFineGrainedRebases) {
   // Equal names do not collapse the ordinal table: ordinal 1 carries addend 7,
   // not ordinal 0's addend 99; the pointer record contributes -2.
   EXPECT_EQ(Image.DyldBindSlots.at(DataVA).Addend, 5);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA), 0u);
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA), 0u);
 
   auto Imported =
       std::find_if(Image.Imports.begin(), Image.Imports.end(),
@@ -430,6 +435,441 @@ TEST(MachOChainedPointerBoundary,
   }
 }
 
+TEST(MachOClassicRebaseBoundary, CollectsDyldInfoRegion) {
+  constexpr uint32_t RebaseOff = 0x100;
+  constexpr uint32_t RebaseSize = 0x20;
+  std::vector<uint8_t> Binary(0x200, 0);
+
+  mach_header_64 Header{};
+  Header.magic = MH_MAGIC_64;
+  Header.cputype = CPU_TYPE_ARM64;
+  Header.cpusubtype = CPU_SUBTYPE_ARM64_ALL;
+  Header.filetype = MH_EXECUTE;
+  Header.ncmds = 1;
+  Header.sizeofcmds = sizeof(dyld_info_command);
+  writeObject(Binary, 0, Header);
+
+  dyld_info_command Command{};
+  Command.cmd = LC_DYLD_INFO_ONLY;
+  Command.cmdsize = sizeof(Command);
+  Command.rebase_off = RebaseOff;
+  Command.rebase_size = RebaseSize;
+  writeObject(Binary, sizeof(Header), Command);
+
+  llvm::StringRef Bytes(reinterpret_cast<const char *>(Binary.data()),
+                        Binary.size());
+  auto ObjectOrError = llvm::object::ObjectFile::createMachOObjectFile(
+      llvm::MemoryBufferRef(Bytes, "classic-rebase-dyld-info"));
+  ASSERT_TRUE(static_cast<bool>(ObjectOrError))
+      << llvm::toString(ObjectOrError.takeError());
+
+  macho_loader::DyldInfoOffsets DyldInfo;
+  macho_loader::parseDyldInfoLoadCommands(**ObjectOrError, DyldInfo);
+  EXPECT_EQ(DyldInfo.RebaseOff, RebaseOff);
+  EXPECT_EQ(DyldInfo.RebaseSize, RebaseSize);
+}
+
+TEST(MachOClassicRebaseBoundary, RecordsDataPointerSlot) {
+  constexpr uint32_t RebaseOff = 0x20;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1), 8,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1),
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::memcpy(Binary.data() + RebaseOff, Stream.data(), Stream.size());
+
+  BinaryImage Image = makeChainedImage();
+  writeObject(Image.Segments[1].Data, 8, CStringVA);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  Image.CodePtrRelocSlots.insert(DataVA + 8);
+
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = Stream.size();
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 8), 1u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 8), 0u);
+}
+
+TEST(MachOClassicRebaseBoundary, AddsExplicitAddressDelta) {
+  constexpr uint32_t RebaseOff = 0x20;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+      8,
+      static_cast<uint8_t>(REBASE_OPCODE_ADD_ADDR_ULEB),
+      16,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1),
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::memcpy(Binary.data() + RebaseOff, Stream.data(), Stream.size());
+
+  BinaryImage Image = makeChainedImage();
+  writeObject(Image.Segments[1].Data, 24, CodeVA);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = Stream.size();
+
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 24), 1u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 8), 0u);
+}
+
+TEST(MachOClassicRebaseBoundary, AddsScaledImmediateAddressDelta) {
+  constexpr uint32_t RebaseOff = 0x20;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+      8,
+      static_cast<uint8_t>(REBASE_OPCODE_ADD_ADDR_IMM_SCALED | 2),
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1),
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::memcpy(Binary.data() + RebaseOff, Stream.data(), Stream.size());
+
+  BinaryImage Image = makeChainedImage();
+  writeObject(Image.Segments[1].Data, 24, CodeVA);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = Stream.size();
+
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 24), 1u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 8), 0u);
+}
+
+TEST(MachOClassicRebaseBoundary, RecordsULEBCountAcrossTargetClasses) {
+  constexpr uint32_t RebaseOff = 0x20;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+      8,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_ULEB_TIMES),
+      3,
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::memcpy(Binary.data() + RebaseOff, Stream.data(), Stream.size());
+
+  BinaryImage Image = makeChainedImage();
+  writeObject(Image.Segments[1].Data, 8, CStringVA);
+  writeObject(Image.Segments[1].Data, 16, CodeVA);
+  writeObject(Image.Segments[1].Data, 24, WritableVA + 8);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = Stream.size();
+
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 8), 1u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 16), 1u);
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 24), 1u);
+}
+
+TEST(MachOClassicRebaseBoundary, RebasesThenAddsULEBAddressDelta) {
+  constexpr uint32_t RebaseOff = 0x20;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+      8,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB),
+      8,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1),
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::memcpy(Binary.data() + RebaseOff, Stream.data(), Stream.size());
+
+  BinaryImage Image = makeChainedImage();
+  writeObject(Image.Segments[1].Data, 8, CStringVA);
+  writeObject(Image.Segments[1].Data, 24, CodeVA);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = Stream.size();
+
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 8), 1u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 24), 1u);
+}
+
+TEST(MachOClassicRebaseBoundary, RecordsULEBCountWithSkipping) {
+  constexpr uint32_t RebaseOff = 0x20;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+      8,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB),
+      3,
+      8,
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::memcpy(Binary.data() + RebaseOff, Stream.data(), Stream.size());
+
+  BinaryImage Image = makeChainedImage();
+  writeObject(Image.Segments[1].Data, 8, CStringVA);
+  writeObject(Image.Segments[1].Data, 24, CodeVA);
+  writeObject(Image.Segments[1].Data, 40, WritableVA + 8);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = Stream.size();
+
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 8), 1u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 24), 1u);
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 40), 1u);
+}
+
+TEST(MachOClassicRebaseBoundary, UsesImagePointerWidth) {
+  constexpr va_t Text32VA = 0x1000;
+  constexpr va_t Code32VA = Text32VA + 0x40;
+  constexpr va_t CString32VA = Text32VA + 0x80;
+  constexpr va_t Data32VA = 0x2000;
+  constexpr uint32_t RebaseOff = 0x20;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1), 0,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 2),
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::memcpy(Binary.data() + RebaseOff, Stream.data(), Stream.size());
+
+  BinaryImage Image;
+  Image.Arch = Arch::ARM;
+  Image.Format = BinaryFormat::MachO;
+  Image.Bits = Bitness::Bits32;
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = Text32VA;
+  Text.Size = 0x100;
+  Text.FileSz = Text.Size;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  Image.Segments.push_back(std::move(Text));
+  Segment Data;
+  Data.Name = "__DATA_CONST";
+  Data.VA = Data32VA;
+  Data.Size = 0x40;
+  Data.FileSz = Data.Size;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(Data.Size);
+  writeObject(Data.Data, 0, static_cast<uint32_t>(CString32VA));
+  writeObject(Data.Data, 4, static_cast<uint32_t>(Code32VA));
+  Image.Segments.push_back(std::move(Data));
+  Section Code;
+  Code.Name = "__text";
+  Code.SegmentName = "__TEXT";
+  Code.VA = Text32VA;
+  Code.Size = 0x80;
+  Code.FileSz = Code.Size;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Type = static_cast<uint32_t>(S_REGULAR) |
+              static_cast<uint32_t>(S_ATTR_PURE_INSTRUCTIONS);
+  Image.Sections.push_back(std::move(Code));
+  Section CString;
+  CString.Name = "__cstring";
+  CString.SegmentName = "__TEXT";
+  CString.VA = CString32VA;
+  CString.Size = 0x20;
+  CString.FileSz = CString.Size;
+  CString.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  CString.Type = S_CSTRING_LITERALS;
+  Image.Sections.push_back(std::move(CString));
+
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = Stream.size();
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(Data32VA), 1u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(Data32VA + 4), 1u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(Data32VA + 8), 0u);
+}
+
+TEST(MachOClassicRebaseBoundary, AdvancesWithoutClassifyingTextRebaseTypes) {
+  constexpr uint32_t RebaseOff = 0x20;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> Stream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_TEXT_ABSOLUTE32),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+      8,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_TEXT_PCREL32),
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1),
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::memcpy(Binary.data() + RebaseOff, Stream.data(), Stream.size());
+
+  BinaryImage Image = makeChainedImage();
+  writeObject(Image.Segments[1].Data, 8, CStringVA);
+  writeObject(Image.Segments[1].Data, 16, CStringBVA);
+  writeObject(Image.Segments[1].Data, 24, CodeVA);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = Stream.size();
+
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 8), 0u);
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 16), 0u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 24), 1u);
+}
+
+TEST(MachOClassicRebaseBoundary, RejectsMalformedStreamsAndPartialRuns) {
+  constexpr uint32_t RebaseOff = 0x20;
+  const uint8_t SetPointer = static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+                             static_cast<uint8_t>(REBASE_TYPE_POINTER);
+  const uint8_t SetDataSegment =
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1);
+  const uint8_t RebaseOne =
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1);
+
+  auto ExpectRejected = [&](const char *Label,
+                            const std::vector<uint8_t> &Stream,
+                            uint32_t DeclaredOff = 0x20,
+                            uint32_t DeclaredSize = 0) {
+    SCOPED_TRACE(Label);
+    std::vector<uint8_t> Binary(0x100, 0);
+    if (rangeInBounds(DeclaredOff, Stream.size(), Binary.size()))
+      std::memcpy(Binary.data() + DeclaredOff, Stream.data(), Stream.size());
+    BinaryImage Image = makeChainedImage();
+    writeObject(Image.Segments[1].Data, 8, CStringVA);
+    writeObject(Image.Segments[1].Data, 16, CodeVA);
+    writeObject(Image.Segments[1].Data, 0xf0, CStringVA);
+    writeObject(Image.Segments[1].Data, 0xf8, CodeVA);
+    Image.CodePtrRelocSlots.clear();
+    Image.DataPtrRelocSlots.clear();
+    macho_loader::DyldInfoOffsets DyldInfo;
+    DyldInfo.RebaseOff = DeclaredOff;
+    DyldInfo.RebaseSize = DeclaredSize ? DeclaredSize : Stream.size();
+    macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                    Image);
+    EXPECT_TRUE(Image.CodePtrRelocSlots.empty());
+    EXPECT_TRUE(Image.DataPtrRelocSlots.empty());
+  };
+
+  ExpectRejected("metadata range outside file", {SetPointer}, 0xf8, 0x20);
+  ExpectRejected("truncated ULEB", {SetPointer, SetDataSegment, 0x80});
+  ExpectRejected("missing segment", {SetPointer, RebaseOne});
+  ExpectRejected(
+      "invalid segment cannot be overwritten",
+      {SetPointer,
+       static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 15), 0,
+       SetDataSegment, 8, RebaseOne});
+  ExpectRejected(
+      "invalid offset cannot be overwritten",
+      {SetPointer, SetDataSegment, 0x80, 0x02, SetDataSegment, 8, RebaseOne});
+  ExpectRejected("invalid address addition cannot be overwritten",
+                 {SetPointer, SetDataSegment, 0xf8, 0x01,
+                  static_cast<uint8_t>(REBASE_OPCODE_ADD_ADDR_ULEB), 8,
+                  SetDataSegment, 8, RebaseOne});
+  ExpectRejected("unknown opcode",
+                 {SetPointer, 0x90, SetDataSegment, 8, RebaseOne});
+  ExpectRejected("unknown type",
+                 {static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+                      static_cast<uint8_t>(15),
+                  SetDataSegment, 8, RebaseOne});
+  ExpectRejected("excessive count",
+                 {SetPointer, SetDataSegment, 0,
+                  static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_ULEB_TIMES),
+                  0x81, 0x80, 0x80, 0x02});
+  ExpectRejected("escaping repeated run is atomic",
+                 {SetPointer, SetDataSegment, 0xf0, 0x01,
+                  static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_ULEB_TIMES), 3});
+}
+
+TEST(MachOClassicRebaseBoundary, ImportBindingOwnsSlotInEitherParseOrder) {
+  constexpr uint32_t RebaseOff = 0x20;
+  constexpr uint32_t BindOff = 0x60;
+  std::vector<uint8_t> Binary(0x100, 0);
+  const std::vector<uint8_t> RebaseStream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1), 8,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_IMM_TIMES | 1),
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::vector<uint8_t> BindStream = {
+      static_cast<uint8_t>(BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM)};
+  constexpr char Name[] = "_imported_pointer";
+  BindStream.insert(BindStream.end(), Name, Name + sizeof(Name));
+  BindStream.insert(
+      BindStream.end(),
+      {static_cast<uint8_t>(BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1), 8,
+       static_cast<uint8_t>(BIND_OPCODE_DO_BIND),
+       static_cast<uint8_t>(BIND_OPCODE_DONE)});
+  std::memcpy(Binary.data() + RebaseOff, RebaseStream.data(),
+              RebaseStream.size());
+  std::memcpy(Binary.data() + BindOff, BindStream.data(), BindStream.size());
+
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = RebaseStream.size();
+  DyldInfo.BindOff = BindOff;
+  DyldInfo.BindSize = BindStream.size();
+
+  auto ExpectImportOwnership = [&](bool BindFirst) {
+    SCOPED_TRACE(BindFirst ? "bind before rebase" : "rebase before bind");
+    BinaryImage Image = makeChainedImage();
+    writeObject(Image.Segments[1].Data, 8, CStringVA);
+    Image.CodePtrRelocSlots.clear();
+    Image.DataPtrRelocSlots.clear();
+    if (BindFirst) {
+      macho_loader::parseBindStreams(Binary.data(), Binary.size(), DyldInfo,
+                                     Image);
+      macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                      Image);
+    } else {
+      macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                      Image);
+      macho_loader::parseBindStreams(Binary.data(), Binary.size(), DyldInfo,
+                                     Image);
+    }
+
+    ASSERT_EQ(Image.DyldBindSlots.count(DataVA + 8), 1u);
+    EXPECT_EQ(Image.DyldBindSlots.at(DataVA + 8).Name, Name);
+    EXPECT_EQ(Image.CodePtrRelocSlots.count(DataVA + 8), 0u);
+    EXPECT_EQ(Image.DataPtrRelocSlots.count(DataVA + 8), 0u);
+  };
+
+  ExpectImportOwnership(false);
+  ExpectImportOwnership(true);
+}
+
 TEST(MachOClassicBindBoundary, RecordsSlotAndSignedAddend) {
   constexpr uint32_t BindOff = 0x20;
   std::vector<uint8_t> Binary(0x100, 0);
@@ -532,6 +972,27 @@ TEST(MachOClassicBindBoundary, RecordsEveryRepeatedPointerBinding) {
 
 TEST(MachOLLVMImportPointerBoundary, SymbolizesMixedRelocationRun) {
   BinaryImage Image = makeLLVMImage();
+  Image.DataPtrRelocSlots.clear();
+  constexpr uint32_t RebaseOff = 0x10;
+  const std::vector<uint8_t> RebaseStream = {
+      static_cast<uint8_t>(REBASE_OPCODE_SET_TYPE_IMM) |
+          static_cast<uint8_t>(REBASE_TYPE_POINTER),
+      static_cast<uint8_t>(REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB | 1),
+      16,
+      static_cast<uint8_t>(REBASE_OPCODE_DO_REBASE_ULEB_TIMES),
+      2,
+      static_cast<uint8_t>(REBASE_OPCODE_DONE)};
+  std::vector<uint8_t> Binary(0x40, 0);
+  std::memcpy(Binary.data() + RebaseOff, RebaseStream.data(),
+              RebaseStream.size());
+  macho_loader::DyldInfoOffsets DyldInfo;
+  DyldInfo.RebaseOff = RebaseOff;
+  DyldInfo.RebaseSize = RebaseStream.size();
+  macho_loader::parseRebaseStream(Binary.data(), Binary.size(), DyldInfo,
+                                  Image);
+  ASSERT_EQ(Image.DataPtrRelocSlots.count(DataVA + 16), 1u);
+  ASSERT_EQ(Image.DataPtrRelocSlots.count(DataVA + 24), 1u);
+
   MedFunc Caller = makePointerCall(
       "mixed_pointer_caller", ImportStubVA,
       {MedVar::makeConst(DataVA + 16, 8), MedVar::makeConst(CStringVA, 8)});
@@ -589,9 +1050,9 @@ TEST(MachOLLVMImportPointerBoundary,
   BinaryImage Image = makeLLVMImage();
   Image.DyldBindSlots[DataVA] = {"___gxx_personality_v0", 0};
 
-  MedFunc PointerCaller = makePointerCall(
-      "personality_pointer_caller", ImportStubVA,
-      {MedVar::makeConst(DataVA, 8)});
+  MedFunc PointerCaller =
+      makePointerCall("personality_pointer_caller", ImportStubVA,
+                      {MedVar::makeConst(DataVA, 8)});
   MedFunc EHFunction =
       makeCleanupFunction("native_eh_caller", EHFunctionVA, MayThrowVA);
 

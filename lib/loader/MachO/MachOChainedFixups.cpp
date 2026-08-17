@@ -4,6 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MachODyldFixups.h"
+
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -245,19 +247,6 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
 
   auto ImportRecords = decodeChainedImports(BasePtr, FileSize, Info, Img);
 
-  // A rebase slot at \p SlotVA points at \p TargetVA.  Mach-O's __TEXT segment
-  // also owns non-instruction sections such as __cstring, so classification is
-  // address-level rather than inherited from the coarse RX segment.
-  auto recordSlot = [&](va_t SlotVA, va_t TargetVA) {
-    const Segment *TSeg = Img.getSegmentFor(TargetVA);
-    if (!TSeg)
-      return;
-    if (Img.isCodeAddress(TargetVA))
-      Img.CodePtrRelocSlots.insert(SlotVA);
-    else if (Img.isDataAddress(TargetVA) && !TSeg->Data.empty())
-      Img.DataPtrRelocSlots.insert(SlotVA);
-  };
-
   size_t NumRecorded = 0;
   for (uint32_t S = 0; S < SegCount; ++S) {
     uint32_t SegInfoOff = Starts->seg_info_offset[S];
@@ -322,6 +311,7 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
                 static_cast<int64_t>(static_cast<int8_t>(B.addend));
             if (Record.Valid && !llvm::AddOverflow(Record.Addend, PointerAddend,
                                                    EffectiveAddend)) {
+              detail::clearLocalPointerClassification(Img, ChainVA);
               Img.DyldBindSlots[ChainVA] =
                   ImportBindSlot{Record.Name, EffectiveAddend};
               joinImportSlot(Img, Record.Name, Record.Module, ChainVA);
@@ -340,12 +330,8 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
           } else {
             TargetVA = (static_cast<uint64_t>(R.high8) << 56) | R.target;
           }
-          size_t Before =
-              Img.CodePtrRelocSlots.size() + Img.DataPtrRelocSlots.size();
-          recordSlot(ChainVA, TargetVA);
-          NumRecorded +=
-              (Img.CodePtrRelocSlots.size() + Img.DataPtrRelocSlots.size()) -
-              Before;
+          if (detail::recordAbsolutePointerSlot(Img, ChainVA, TargetVA))
+            ++NumRecorded;
           // Apply the rebase in-place: the on-disk slot holds the *encoded*
           // chained-pointer bitfield (target/next/bind), but every consumer of
           // the loaded image (jump-table resolver reading absolute table

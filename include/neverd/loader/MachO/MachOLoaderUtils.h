@@ -40,6 +40,8 @@ struct SectionInfo {
 /// Offsets from LC_DYLD_INFO / LC_DYLD_INFO_ONLY
 /// (llvm::MachO::dyld_info_command).
 struct DyldInfoOffsets {
+  uint32_t RebaseOff = 0;
+  uint32_t RebaseSize = 0;
   uint32_t BindOff = 0;
   uint32_t BindSize = 0;
   uint32_t LazyBindOff = 0;
@@ -63,7 +65,7 @@ struct FunctionStartsInfo {
 /// a packer may rename it, so the name is a preference and not a requirement.
 va_t getMachHeaderVA(const BinaryImage &Img);
 
-/// Collect dyld bind/export regions from load commands.
+/// Collect dyld rebase/bind/export regions from load commands.
 void parseDyldInfoLoadCommands(const llvm::object::MachOObjectFile &Obj,
                                DyldInfoOffsets &Out);
 
@@ -101,6 +103,11 @@ void parseRuntimeFunctionSections(const std::vector<SectionInfo> &Sections,
 /// retain each pointer slot's symbol/addend in BinaryImage::DyldBindSlots.
 void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
                       const DyldInfoOffsets &DyldInfo, BinaryImage &Img);
+
+/// Walk LC_DYLD_INFO classic rebase bytecode and retain absolute pointer-slot
+/// provenance for code and mapped data targets.
+void parseRebaseStream(const uint8_t *BasePtr, size_t FileSize,
+                       const DyldInfoOffsets &DyldInfo, BinaryImage &Img);
 
 /// Parse the export trie from DyldInfo offsets and append to \p Img exports.
 void parseExportTrie(const uint8_t *BasePtr, size_t FileSize,

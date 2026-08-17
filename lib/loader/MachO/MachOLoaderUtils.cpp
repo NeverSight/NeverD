@@ -159,6 +159,8 @@ void parseDyldInfoLoadCommands(const llvm::object::MachOObjectFile &Obj,
         LC.C.cmdsize < sizeof(dyld_info_command))
       continue;
     auto DI = *reinterpret_cast<const dyld_info_command *>(LC.Ptr);
+    Out.RebaseOff = DI.rebase_off;
+    Out.RebaseSize = DI.rebase_size;
     Out.BindOff = DI.bind_off;
     Out.BindSize = DI.bind_size;
     Out.LazyBindOff = DI.lazy_bind_off;
