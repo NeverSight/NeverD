@@ -2,6 +2,11 @@ name: Debug AArch64 exclusive global roundtrip
 
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'NeverD commit to build (empty uses the dispatched ref)'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -10,12 +15,13 @@ jobs:
   reproduce:
     name: Linux x64 focused reproducer
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 150
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           submodules: recursive
 
       - name: Set up Python
@@ -42,8 +48,7 @@ jobs:
             -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
             -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=OFF \
             -DPython3_EXECUTABLE="$python_executable" \
-            -DNEVERD_LLVM_PREBUILT=ON \
-            -DNEVERD_LLVM_PREBUILT_SHA256=3e398b57642b81ee357c1146f209ffec17f21dd6f0b548ae71c622abfe149492
+            -DNEVERD_LLVM_PREBUILT=OFF
 
       - name: Build semantic test binary
         shell: bash
@@ -55,10 +60,14 @@ jobs:
         run: |
           mkdir -p a64-exclusive-artifact
           cp build-ci/bin/NeverDSemanticTests a64-exclusive-artifact/
+          cp build-ci/bin/libneverd.so a64-exclusive-artifact/
           clang --version > a64-exclusive-artifact/clang-version.txt
           cmake --version > a64-exclusive-artifact/cmake-version.txt
           ldd build-ci/bin/NeverDSemanticTests > a64-exclusive-artifact/ldd.txt
-          sha256sum build-ci/bin/NeverDSemanticTests > a64-exclusive-artifact/sha256.txt
+          (
+            cd a64-exclusive-artifact
+            sha256sum NeverDSemanticTests libneverd.so > sha256.txt
+          )
           set +e
           build-ci/bin/NeverDSemanticTests \
             --gtest_filter='OptStress207/A64OptStress207RT.Verify/*' \
