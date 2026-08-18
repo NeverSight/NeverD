@@ -125,6 +125,125 @@ bool MedLLVMEmitter::frameSlotHasMatchingKeyLoad(
   return Result;
 }
 
+bool MedLLVMEmitter::collectFrameReloadSources(
+    const MedOp &Load, std::vector<MedVar> &Sources) const {
+  Sources.clear();
+  if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
+      Load.Output.Size == 0 ||
+      Load.Output.Size != getTargetRegInfo(TargetArch).PointerSize ||
+      !varIsFrameDerived(Load.Inputs[0]) ||
+      stackSlotAddressEscapes(Load.Inputs[0]))
+    return false;
+
+  const auto Target = addrSlotKey(Load.Inputs[0]);
+  if (!Target)
+    return false;
+
+  std::map<int, const MedBlock *> BlocksById;
+  const MedBlock *LoadBlock = nullptr;
+  size_t LoadIndex = 0;
+  for (const MedBlock &Block : CurMedFunc->Blocks) {
+    if (!BlocksById.emplace(Block.Id, &Block).second)
+      return false;
+    for (size_t I = 0; I < Block.Ops.size(); ++I)
+      if (&Block.Ops[I] == &Load) {
+        if (LoadBlock)
+          return false;
+        LoadBlock = &Block;
+        LoadIndex = I;
+      }
+  }
+  if (!LoadBlock)
+    return false;
+
+  auto isMemoryWrite = [](NdOp Opcode) {
+    return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
+           Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
+  };
+  auto overlaps = [](int64_t A, uint16_t ASize, int64_t B, uint16_t BSize) {
+    if (ASize == 0 || BSize == 0)
+      return true;
+    auto endsBefore = [](int64_t Start, uint16_t Size, int64_t Other) {
+      return Start < Other &&
+             static_cast<uint64_t>(Other) - static_cast<uint64_t>(Start) >=
+                 Size;
+    };
+    return !endsBefore(A, ASize, B) && !endsBefore(B, BSize, A);
+  };
+  auto addSource = [&](const MedVar &Source) {
+    if (std::find(Sources.begin(), Sources.end(), Source) == Sources.end())
+      Sources.push_back(Source);
+  };
+
+  std::set<std::pair<int, size_t>> Done;
+  std::set<int> ActiveBlocks;
+  std::function<bool(const MedBlock &, size_t)> Walk =
+      [&](const MedBlock &Block, size_t Boundary) -> bool {
+    if (Boundary > Block.Ops.size())
+      return false;
+    const auto State = std::make_pair(Block.Id, Boundary);
+    if (Done.count(State))
+      return true;
+    // Re-entering a block before a reaching definition proves only a loop
+    // back-edge, not that the first trip to the reload was initialized.  In
+    // particular, do not let a STORE after the LOAD become its own reaching
+    // definition through a self-edge.
+    if (!ActiveBlocks.insert(Block.Id).second)
+      return false;
+
+    bool Result = [&]() {
+      for (size_t I = Boundary; I > 0; --I) {
+        const MedOp &Op = Block.Ops[I - 1];
+        if (!isMemoryWrite(Op.Opcode))
+          continue;
+        if (Op.NumInputs < 1)
+          return false;
+        const MedVar &WriteAddr = Op.Inputs[0];
+        if (!varIsFrameDerived(WriteAddr))
+          continue;
+        const auto WriteKey = addrSlotKey(WriteAddr);
+        // A frame-derived write whose slot cannot be canonicalized, or whose
+        // root differs from the reload's root, may still alias after an
+        // unmodelled stack adjustment.  It cannot participate in a proof.
+        if (!WriteKey || WriteKey->first != Target->first)
+          return false;
+
+        uint16_t WriteSize = Op.Opcode == NdOp::STORE && Op.NumInputs >= 2
+                                 ? Op.Inputs[1].Size
+                                 : Op.Output.Size;
+        if (!overlaps(WriteKey->second, WriteSize, Target->second,
+                      Load.Output.Size))
+          continue;
+        if (Op.Opcode != NdOp::STORE || Op.NumInputs < 2 || WriteSize == 0 ||
+            WriteKey->second != Target->second || WriteSize != Load.Output.Size)
+          return false;
+        addSource(Op.Inputs[1]);
+        return true;
+      }
+
+      std::set<int> PredIds(Block.Preds.begin(), Block.Preds.end());
+      for (const ExceptionalEdge &Edge : Block.ExceptionalPreds)
+        PredIds.insert(Edge.BlockId);
+      if (PredIds.empty())
+        return false;
+      for (int PredId : PredIds) {
+        auto It = BlocksById.find(PredId);
+        if (PredId < 0 || It == BlocksById.end() ||
+            !Walk(*It->second, It->second->Ops.size()))
+          return false;
+      }
+      return true;
+    }();
+
+    ActiveBlocks.erase(Block.Id);
+    if (Result)
+      Done.insert(State);
+    return Result;
+  };
+
+  return Walk(*LoadBlock, LoadIndex) && !Sources.empty();
+}
+
 std::optional<uint64_t> MedLLVMEmitter::traceValueVA(const MedVar &V,
                                                      int Depth) const {
   if (V.isConst())

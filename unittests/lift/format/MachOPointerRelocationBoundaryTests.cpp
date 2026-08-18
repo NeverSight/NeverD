@@ -8,6 +8,7 @@
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -301,6 +302,272 @@ BinaryImage makeLLVMImage() {
   addImport(Image, "___stdoutp", DataVA);
   addImport(Image, "_getopt_long", ImportStubVA);
   return Image;
+}
+
+constexpr va_t SpilledConstTableVA = TextVA + 0x800;
+constexpr va_t OtherSpilledConstTableVA = SpilledConstTableVA + 0x20;
+
+BinaryImage makeSpilledConstTableImage(Arch TargetArch) {
+  BinaryImage Image;
+  Image.Arch = TargetArch;
+  Image.Format = BinaryFormat::MachO;
+  Image.Bits = Bitness::Bits64;
+  Image.Base = TextVA;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = TextVA;
+  Text.Size = 0x1000;
+  Text.FileSz = Text.Size;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0);
+  const uint16_t Values[] = {10, 20, 30, 40};
+  std::memcpy(Text.Data.data() + (SpilledConstTableVA - TextVA), Values,
+              sizeof(Values));
+  const uint16_t OtherValues[] = {50, 60, 70, 80};
+  std::memcpy(Text.Data.data() + (OtherSpilledConstTableVA - TextVA),
+              OtherValues, sizeof(OtherValues));
+  Image.Segments.push_back(std::move(Text));
+
+  Section Code;
+  Code.Name = "__text";
+  Code.SegmentName = "__TEXT";
+  Code.VA = CallerVA;
+  Code.Size = 0x40;
+  Code.FileSz = Code.Size;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Type = static_cast<uint32_t>(S_REGULAR) |
+              static_cast<uint32_t>(S_ATTR_PURE_INSTRUCTIONS) |
+              static_cast<uint32_t>(S_ATTR_SOME_INSTRUCTIONS);
+  Image.Sections.push_back(std::move(Code));
+
+  Section Const;
+  Const.Name = "__const";
+  Const.SegmentName = "__TEXT";
+  Const.VA = SpilledConstTableVA;
+  Const.Size = 0x40;
+  Const.FileSz = Const.Size;
+  Const.Flags = SegmentFlags::Readable;
+  Const.Type = S_REGULAR;
+  Image.Sections.push_back(std::move(Const));
+
+  Symbol Table;
+  Table.Name = "_spilled_const_table";
+  Table.Addr = SpilledConstTableVA;
+  Table.Size = sizeof(Values);
+  Image.Symbols.push_back(std::move(Table));
+  Symbol OtherTable;
+  OtherTable.Name = "_other_spilled_const_table";
+  OtherTable.Addr = OtherSpilledConstTableVA;
+  OtherTable.Size = sizeof(OtherValues);
+  Image.Symbols.push_back(std::move(OtherTable));
+  return Image;
+}
+
+MedFunc makeSpilledConstTableLookup(Arch TargetArch) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = TargetArch == Arch::AArch64 ? "spilled_const_table_arm64"
+                                          : "spilled_const_table_x86_64";
+  Func.ReturnType = NdType::makeInt(2);
+  Func.FrameSize = 16;
+
+  MedVar Index = makeVar(MedVar::Param, 0, TRI.PointerSize);
+  Index.RegOff = TRI.IntParamRegs.front();
+  Func.Params.push_back(Index);
+
+  MedVar SP = makeVar(MedVar::Reg, 100, TRI.PointerSize);
+  SP.SSAVer = 0;
+  SP.RegOff = TRI.StackPointer;
+  MedVar Slot = makeVar(MedVar::Temp, 1, TRI.PointerSize);
+  MedVar TableBase = makeVar(MedVar::Temp, 2, TRI.PointerSize);
+  MedVar ReloadedBase = makeVar(MedVar::Temp, 3, TRI.PointerSize);
+  MedVar ScaledIndex = makeVar(MedVar::Temp, 4, TRI.PointerSize);
+  MedVar ElementAddr = makeVar(MedVar::Temp, 5, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 6, 2);
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = CallerVA;
+
+  MedOp FormSlot;
+  FormSlot.Opcode = NdOp::INT_ADD;
+  FormSlot.Output = Slot;
+  FormSlot.addInput(SP);
+  FormSlot.addInput(MedVar::makeConst(uint64_t(-8), TRI.PointerSize));
+  Block.Ops.push_back(std::move(FormSlot));
+
+  MedOp MaterializeBase;
+  MaterializeBase.Opcode = NdOp::COPY;
+  MaterializeBase.Output = TableBase;
+  MaterializeBase.addInput(
+      MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  Block.Ops.push_back(std::move(MaterializeBase));
+
+  MedOp Spill;
+  Spill.Opcode = NdOp::STORE;
+  Spill.addInput(Slot);
+  Spill.addInput(TableBase);
+  Block.Ops.push_back(std::move(Spill));
+
+  MedOp Reload;
+  Reload.Opcode = NdOp::LOAD;
+  Reload.Output = ReloadedBase;
+  Reload.addInput(Slot);
+  Block.Ops.push_back(std::move(Reload));
+
+  MedOp Scale;
+  Scale.Opcode = NdOp::INT_LEFT;
+  Scale.Output = ScaledIndex;
+  Scale.addInput(Index);
+  Scale.addInput(MedVar::makeConst(1, TRI.PointerSize));
+  Block.Ops.push_back(std::move(Scale));
+
+  MedOp FormElementAddr;
+  FormElementAddr.Opcode = NdOp::INT_ADD;
+  FormElementAddr.Output = ElementAddr;
+  FormElementAddr.addInput(ReloadedBase);
+  FormElementAddr.addInput(ScaledIndex);
+  Block.Ops.push_back(std::move(FormElementAddr));
+
+  MedOp ReadElement;
+  ReadElement.Opcode = NdOp::LOAD;
+  ReadElement.Output = Element;
+  ReadElement.addInput(ElementAddr);
+  Block.Ops.push_back(std::move(ReadElement));
+
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Block.Ops.push_back(std::move(Return));
+  Block.EndAddr = CallerVA + 0x20;
+  Func.Blocks.push_back(std::move(Block));
+  return Func;
+}
+
+enum class ReachingStoreCase {
+  DistinctPredecessorBases,
+  BypassPredecessor,
+  PartialOverlap,
+  StoreAfterLoad,
+};
+
+MedFunc makeRejectedFrameReloadLookup(Arch TargetArch, ReachingStoreCase Case) {
+  MedFunc Func = makeSpilledConstTableLookup(TargetArch);
+  Func.Name += "_rejected_" + std::to_string(static_cast<int>(Case));
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  std::vector<MedOp> Ops = Func.Blocks.front().Ops;
+
+  if (Case == ReachingStoreCase::PartialOverlap) {
+    MedVar PartialAddr;
+    PartialAddr.Kind = MedVar::Temp;
+    PartialAddr.TheArch = TargetArch;
+    PartialAddr.Id = 20;
+    PartialAddr.SSAVer = 1;
+    PartialAddr.Size = TRI.PointerSize;
+    MedOp FormPartial;
+    FormPartial.Opcode = NdOp::INT_ADD;
+    FormPartial.Output = PartialAddr;
+    FormPartial.addInput(Ops[0].Output);
+    FormPartial.addInput(MedVar::makeConst(4, TRI.PointerSize));
+    MedOp PartialStore;
+    PartialStore.Opcode = NdOp::STORE;
+    PartialStore.addInput(PartialAddr);
+    PartialStore.addInput(MedVar::makeConst(0, 4));
+    Ops.insert(Ops.begin() + 3, std::move(FormPartial));
+    Ops.insert(Ops.begin() + 4, std::move(PartialStore));
+    Func.Blocks.front().Ops = std::move(Ops);
+    return Func;
+  }
+
+  if (Case == ReachingStoreCase::StoreAfterLoad) {
+    MedOp Spill = Ops[2];
+    Ops.erase(Ops.begin() + 2);
+    Ops.insert(Ops.begin() + 3, std::move(Spill));
+    Func.Blocks.front().Ops = std::move(Ops);
+    return Func;
+  }
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 4;
+  Entry.Succs = {1, 2};
+  Entry.Ops.push_back(Ops[0]);
+  MedOp Branch;
+  Branch.Opcode = NdOp::COND_BR;
+  Branch.Addr = CallerVA;
+  Branch.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Branch.addInput(Func.Params.front());
+  Entry.Ops.push_back(std::move(Branch));
+
+  MedBlock FirstStore;
+  FirstStore.Id = 1;
+  FirstStore.StartAddr = CallerVA + 8;
+  FirstStore.EndAddr = CallerVA + 0x10;
+  FirstStore.Preds = {0};
+  FirstStore.Succs = {3};
+  FirstStore.Ops.push_back(Ops[1]);
+  FirstStore.Ops.push_back(Ops[2]);
+
+  MedBlock SecondStore;
+  SecondStore.Id = 2;
+  SecondStore.StartAddr = CallerVA + 0x10;
+  SecondStore.EndAddr = CallerVA + 0x18;
+  SecondStore.Preds = {0};
+  SecondStore.Succs = {3};
+  if (Case == ReachingStoreCase::DistinctPredecessorBases) {
+    MedVar OtherBase = Ops[1].Output;
+    OtherBase.Id = 21;
+    MedOp MaterializeOther = Ops[1];
+    MaterializeOther.Output = OtherBase;
+    MaterializeOther.Inputs[0] =
+        MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize);
+    MedOp SpillOther = Ops[2];
+    SpillOther.Inputs[1] = OtherBase;
+    SecondStore.Ops.push_back(std::move(MaterializeOther));
+    SecondStore.Ops.push_back(std::move(SpillOther));
+  }
+
+  MedBlock Merge;
+  Merge.Id = 3;
+  Merge.StartAddr = CallerVA + 0x18;
+  Merge.EndAddr = CallerVA + 0x30;
+  Merge.Preds = {1, 2};
+  Merge.Ops.insert(Merge.Ops.end(), Ops.begin() + 3, Ops.end());
+
+  Func.Blocks.clear();
+  Func.Blocks.push_back(std::move(Entry));
+  Func.Blocks.push_back(std::move(FirstStore));
+  Func.Blocks.push_back(std::move(SecondStore));
+  Func.Blocks.push_back(std::move(Merge));
+  return Func;
+}
+
+bool valueReferencesConstantGlobal(const llvm::Value *Root,
+                                   std::set<const llvm::Value *> &Seen) {
+  if (!Root || !Seen.insert(Root).second)
+    return false;
+  if (const auto *GV = llvm::dyn_cast<llvm::GlobalVariable>(Root))
+    return GV->isConstant() && GV->hasInitializer();
+  const auto *User = llvm::dyn_cast<llvm::User>(Root);
+  if (!User)
+    return false;
+  for (const llvm::Use &Operand : User->operands())
+    if (valueReferencesConstantGlobal(Operand.get(), Seen))
+      return true;
+  return false;
 }
 
 struct InteriorPointerFixture {
@@ -1704,6 +1971,78 @@ TEST(MachOLLVMDataPointerBoundary, RejectsSelectWithCodeOrScalarArm) {
         << IR;
     EXPECT_EQ(IR.find("second"), std::string::npos) << IR;
   }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ResolvesReadOnlyTableBaseAcrossLocalFrameSpill) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeSpilledConstTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Lookup}, Context, "macho-spilled-const-table",
+                              TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = nullptr;
+    for (const llvm::BasicBlock &Block : *Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+            Load && Load->getType()->isIntegerTy(16) && Load->isVolatile()) {
+          ASSERT_EQ(TableLoad, nullptr);
+          TableLoad = Load;
+        }
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_TRUE(
+        llvm::isa<llvm::GetElementPtrInst>(TableLoad->getPointerOperand()));
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsAmbiguousOrUninitializedFrameReloadProvenance) {
+  const std::pair<ReachingStoreCase, const char *> Cases[] = {
+      {ReachingStoreCase::DistinctPredecessorBases, "distinct bases"},
+      {ReachingStoreCase::BypassPredecessor, "bypass predecessor"},
+      {ReachingStoreCase::PartialOverlap, "partial overlap"},
+      {ReachingStoreCase::StoreAfterLoad, "store after load"},
+  };
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (const auto &[Case, Label] : Cases) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(Label);
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      MedFunc Lookup = makeRejectedFrameReloadLookup(TargetArch, Case);
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-rejected-frame-reload", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+
+      llvm::Function *Function = Module->getFunction(Lookup.Name);
+      ASSERT_NE(Function, nullptr);
+      const llvm::LoadInst *TableLoad = nullptr;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block)
+          if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+              Load && Load->getType()->isIntegerTy(16) &&
+              !llvm::isa<llvm::AllocaInst>(
+                  Load->getPointerOperand()->stripPointerCasts())) {
+            ASSERT_EQ(TableLoad, nullptr);
+            TableLoad = Load;
+          }
+      ASSERT_NE(TableLoad, nullptr);
+      std::set<const llvm::Value *> Seen;
+      EXPECT_FALSE(
+          valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+    }
 }
 
 } // namespace

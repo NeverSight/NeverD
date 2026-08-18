@@ -507,6 +507,17 @@ private:
   /// must itself be symbolized, else the loaded pointer is a stale absolute VA.
   bool frameSlotHasMatchingKeyLoad(const MedVar &StoreAddr) const;
 
+  /// Collect the exact-width values that can reach a LOAD from one local,
+  /// non-escaping frame slot.  The backward CFG walk requires every ordinary
+  /// and exceptional predecessor path to encounter a full-width STORE to the
+  /// exact same addrSlotKey before any possibly-aliasing frame write.  It
+  /// rejects bypass/uninitialized paths, partial or overlapping writes,
+  /// ambiguous frame addresses, and cycles without a proven definition.  The
+  /// returned values are provenance candidates only; callers must still prove
+  /// what each value represents.
+  bool collectFrameReloadSources(const MedOp &Load,
+                                 std::vector<MedVar> &Sources) const;
+
   /// Best-effort fold of \p V to the absolute integer/address it computes,
   /// following the address arithmetic the lifter emits for an i386 PIC global
   /// reference — a base register that itself resolves to 0 (the get_pc_thunk

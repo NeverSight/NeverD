@@ -148,6 +148,36 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
       Def->NumInputs >= 1)
     return collectIndexedGlobalBase(Def->Inputs[0], Base, HaveBase, IdxTerms,
                                     Depth + 1);
+  // A compiler may spill the materialized table base to a local frame slot at
+  // -O0 and later form `reloaded_base + runtime_index`.  Cross that memory
+  // boundary only when the CFG-aware reaching-store proof covers every path
+  // and every exact-width source folds to the same mapped data address.  The
+  // slot itself is not an index term: it transports the base provenance.
+  if (Def && Def->Opcode == NdOp::LOAD && Def->NumInputs >= 1) {
+    if (!Img)
+      return false;
+    std::vector<MedVar> Sources;
+    if (!collectFrameReloadSources(*Def, Sources))
+      return false;
+    std::optional<uint64_t> CommonBase;
+    for (const MedVar &Source : Sources) {
+      auto Candidate = traceSSAConst(Source);
+      if (!Candidate || *Candidate == 0)
+        return false;
+      const Segment *Seg = Img->getSegmentFor(*Candidate);
+      if (!Seg || !Img->isDataAddress(*Candidate) || Seg->Data.empty() ||
+          *Candidate - Seg->VA >= Seg->Data.size())
+        return false;
+      if (CommonBase && *CommonBase != *Candidate)
+        return false;
+      CommonBase = *Candidate;
+    }
+    if (!CommonBase || (HaveBase && Base != *CommonBase))
+      return false;
+    Base = *CommonBase;
+    HaveBase = true;
+    return true;
+  }
   if (!Def || Def->NumInputs < 2 ||
       (Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB))
     return false;
