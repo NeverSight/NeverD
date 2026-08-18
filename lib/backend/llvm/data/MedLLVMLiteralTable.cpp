@@ -11,6 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -38,7 +40,7 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolTable(
   // the pointers, so the conditional table index is redirected into the rebuilt
   // rodata global instead of left as raw PC+literal arithmetic (which still
   // points at the original, un-relocated table address).
-  if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
+  if (selectPreservesPointerValues(*Def)) {
     llvm::Value *PT =
         tryResolveLiteralPoolTable(Def->Inputs[1], SizeHint, Builder);
     llvm::Value *PF =
@@ -136,55 +138,15 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectBaseLitTable(
     MedVar Cond, ArmT, ArmF;
     bool Ok = false;
   };
-  // m = INT_NEG2(INT_ZEXT(cond)); ~m = INT_NOT(m).  Return cond and whether
-  // the mask is the positive form (selects its AND operand when cond is true).
-  auto maskCond = [&](const MedVar &M,
-                      bool &Positive) -> std::optional<MedVar> {
-    const MedOp *D = findDef(M);
-    Positive = true;
-    if (D && D->Opcode == NdOp::INT_NOT && D->NumInputs >= 1) {
-      Positive = false;
-      D = findDef(D->Inputs[0]);
-    }
-    if (!D || D->Opcode != NdOp::INT_NEG2 || D->NumInputs < 1)
-      return std::nullopt;
-    D = findDef(D->Inputs[0]);
-    if (!D || D->Opcode != NdOp::INT_ZEXT || D->NumInputs < 1)
-      return std::nullopt;
-    return D->Inputs[0];
-  };
   auto matchSel = [&](const MedVar &V) -> SelArms {
     const MedOp *Def = findDef(V);
     if (!Def)
       return {};
-    if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
+    if (selectPreservesPointerValues(*Def))
       return {Def->Inputs[0], Def->Inputs[1], Def->Inputs[2], true};
-    if (Def->Opcode == NdOp::INT_OR && Def->NumInputs >= 2) {
-      const MedOp *L = findDef(Def->Inputs[0]);
-      const MedOp *R = findDef(Def->Inputs[1]);
-      if (L && R && L->Opcode == NdOp::INT_AND && R->Opcode == NdOp::INT_AND &&
-          L->NumInputs >= 2 && R->NumInputs >= 2) {
-        for (int Li = 0; Li < 2; ++Li) {
-          bool LPos;
-          auto LC = maskCond(L->Inputs[Li], LPos);
-          if (!LC)
-            continue;
-          MedVar LArm = L->Inputs[1 - Li];
-          for (int Ri = 0; Ri < 2; ++Ri) {
-            bool RPos;
-            auto RC = maskCond(R->Inputs[Ri], RPos);
-            if (!RC)
-              continue;
-            if (LC->Kind == RC->Kind && LC->Id == RC->Id &&
-                LC->SSAVer == RC->SSAVer && LPos != RPos) {
-              MedVar RArm = R->Inputs[1 - Ri];
-              return LPos ? SelArms{*LC, LArm, RArm, true}
-                          : SelArms{*LC, RArm, LArm, true};
-            }
-          }
-        }
-      }
-    }
+    MedVar Cond, ArmT, ArmF;
+    if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
+      return {Cond, ArmT, ArmF, true};
     return {};
   };
 
@@ -205,10 +167,16 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectBaseLitTable(
     if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
         Def->NumInputs >= 2) {
       if (peel(Def->Inputs[0], Depth + 1)) {
+        if (Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
+            Def->Output.Size < Def->Inputs[0].Size)
+          return false;
         IdxTerms.push_back(Def->Inputs[1]);
         return true;
       }
       if (Def->Opcode == NdOp::INT_ADD && peel(Def->Inputs[1], Depth + 1)) {
+        if (Def->Output.Size == 0 || Def->Inputs[1].Size == 0 ||
+            Def->Output.Size < Def->Inputs[1].Size)
+          return false;
         IdxTerms.push_back(Def->Inputs[0]);
         return true;
       }
@@ -271,12 +239,16 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectBaseLitTable(
       return Builder.CreateSelect(C, AT, AF, "litselptr");
     }
     bool SawLoad = false;
-    auto VA = traceTableBaseConst(Arm, 0, &SawLoad);
+    bool SawArithmetic = false;
+    auto VA = traceTableBaseConst(Arm, 0, &SawLoad, nullptr, &SawArithmetic);
     // The arm must fold to a constant VA in exact data/rodata. A literal-pool
     // LOAD is genuine even when its target lives inline in an instruction
     // section; a bare constant (x86-64 `lea rip` base) is accepted only for an
     // exact data address because it feeds a runtime-indexed pointer blend.
-    if (!VA || *VA == 0)
+    // Whole-expression arithmetic may coincidentally land on a table address;
+    // it does not prove that either operand owns that table's provenance. A
+    // literal-pool LOAD is the only arithmetic fold that supplies such proof.
+    if (!VA || *VA == 0 || (SawArithmetic && !SawLoad))
       return nullptr;
     const auto *Seg = Img->getSegmentFor(*VA);
     if (!Seg || Seg->isWritable() || (!SawLoad && Img->isCodeAddress(*VA)) ||
@@ -305,37 +277,123 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectBaseLitTable(
 }
 
 llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
-    const MedVar &AddrVar, uint16_t /*SizeHint*/, llvm::IRBuilder<> &Builder) {
+    const MedVar &AddrVar, uint16_t SizeHint, bool FailClosed,
+    llvm::IRBuilder<> &Builder, bool *SawAmbiguous) {
   if (!CurMedFunc || !Img || AddrVar.isConst())
     return nullptr;
 
   auto findDef = [&](const MedVar &V) { return lookupDef(V); };
   auto findPhi = [&](const MedVar &V) { return lookupPhi(V); };
+  auto isReadOnlyTableBase = [&](uint64_t VA) {
+    const Segment *Seg = VA != 0 ? Img->getSegmentFor(VA) : nullptr;
+    return Seg && !Seg->isWritable() && Img->isDataAddress(VA) &&
+           !Img->isCodeAddress(VA) && !Seg->Data.empty() && VA >= Seg->VA &&
+           VA - Seg->VA < Seg->Data.size();
+  };
 
-  // Peel the runtime index addends off the add chain down to the base term.
-  MedVar BaseVar = AddrVar;
-  bool PeeledIndex = false;
-  for (int Depth = 0; Depth < 8; ++Depth) {
-    const MedOp *Def = findDef(BaseVar);
-    if (!Def || Def->NumInputs < 2 ||
-        (Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB))
-      break;
-    // The base side is the operand that is not a pure runtime index; prefer the
-    // operand that still reaches a PHI/select of rodata bases.  Try operand 0
-    // first (the usual pointer position), then operand 1 for INT_ADD.
-    bool A0Frame = varIsFrameDerived(Def->Inputs[0]);
-    if (!A0Frame) {
-      BaseVar = Def->Inputs[0];
-    } else if (Def->Opcode == NdOp::INT_ADD &&
-               !varIsFrameDerived(Def->Inputs[1])) {
-      BaseVar = Def->Inputs[1];
-    } else {
-      return nullptr; // both addends frame-derived: a stack access
+  // i386 models a machine-width frame pointer through widened MedIR
+  // temporaries (`zext esp -> rbp; rbp + negative_offset`).  The narrower
+  // varIsFrameDerived predicate intentionally does not follow those width ops,
+  // so prove this ordinary stack-address shape locally before auditing table
+  // provenance.  Only direct, non-relocating numeric displacements are allowed:
+  // `sp + table_base` must still enter the full walker and fail closed.
+  using FrameSeen = std::set<std::tuple<int, int, int>>;
+  const uint64_t StackPointer = getTargetRegInfo(TargetArch).StackPointer;
+  std::function<bool(const MedVar &, int, FrameSeen)> isPureFrameAddress =
+      [&](const MedVar &V, int Depth, FrameSeen Seen) -> bool {
+    if (V.isConst() || Depth > 16)
+      return false;
+    if (V.Kind == MedVar::Reg && StackPointer != 0 && V.RegOff == StackPointer)
+      return true;
+    auto Key = std::make_tuple(static_cast<int>(V.Kind), V.Id, V.SSAVer);
+    if (!Seen.insert(Key).second)
+      return false;
+    const MedOp *Def = findDef(V);
+    if (!Def || Def->NumInputs < 1)
+      return false;
+    auto stableImmediate = [&](const MedVar &Input) {
+      if (!Input.isConst() ||
+          getVarMayRelocateConstant(Input.ConstVal, Input.Size))
+        return false;
+      const Segment *Seg =
+          Input.ConstVal != 0 ? Img->getSegmentFor(Input.ConstVal) : nullptr;
+      return !Seg || Seg->Data.empty() || !Img->isDataAddress(Input.ConstVal) ||
+             Img->isCodeAddress(Input.ConstVal);
+    };
+    switch (Def->Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+      return isPureFrameAddress(Def->Inputs[0], Depth + 1, Seen);
+    case NdOp::SUBBYTES:
+      return Def->NumInputs >= 2 && Def->Inputs[1].isConst() &&
+             Def->Inputs[1].ConstVal == 0 &&
+             isPureFrameAddress(Def->Inputs[0], Depth + 1, Seen);
+    case NdOp::INT_ADD:
+      if (Def->NumInputs < 2)
+        return false;
+      return (stableImmediate(Def->Inputs[1]) &&
+              isPureFrameAddress(Def->Inputs[0], Depth + 1, Seen)) ||
+             (stableImmediate(Def->Inputs[0]) &&
+              isPureFrameAddress(Def->Inputs[1], Depth + 1, Seen));
+    case NdOp::INT_SUB:
+      return Def->NumInputs >= 2 && stableImmediate(Def->Inputs[1]) &&
+             isPureFrameAddress(Def->Inputs[0], Depth + 1, Seen);
+    default:
+      return false;
     }
-    PeeledIndex = true;
-  }
-  if (!PeeledIndex)
+  };
+  if (isPureFrameAddress(AddrVar, 0, {}))
     return nullptr;
+
+  // A loader-proven table base plus an independently proven scalar offset is
+  // owned by the specialized indexed/pointer-table resolver.  The scalar
+  // proof is deliberately all-path: a recurrent pointer PHI, mapped data
+  // constant, LOAD, or unknown PHI edge keeps the complete address in the
+  // multi-base audit below instead of being silently treated as an index.
+  if (const MedOp *Top = findDef(AddrVar);
+      Top && Top->NumInputs >= 2 &&
+      (Top->Opcode == NdOp::INT_ADD || Top->Opcode == NdOp::INT_SUB)) {
+    auto probeBase = [&](const MedVar &Input) -> std::optional<uint64_t> {
+      uint64_t Base = 0;
+      bool HaveBase = false;
+      std::vector<MedVar> Terms;
+      if (!collectIndexedGlobalBase(Input, Base, HaveBase, Terms, /*Depth=*/0,
+                                    /*FailClosed=*/false) ||
+          !HaveBase)
+        return std::nullopt;
+      return Base;
+    };
+    auto loaderProvesTableBase = [&](uint64_t Base) {
+      if (Img->RelocDataAddrs.count(Base) || Img->RodataAnchorSeg.count(Base) ||
+          Img->RelCodeTableAnchors.count(Base))
+        return true;
+      const Segment *Seg = Img->getSegmentFor(Base);
+      if (!Seg)
+        return false;
+      auto inSegment = [&](const std::set<uint64_t> &Slots) {
+        auto It = Slots.lower_bound(Seg->VA);
+        return It != Slots.end() && *It < Seg->VA + Seg->Data.size();
+      };
+      return inSegment(Img->DataPtrRelocSlots) ||
+             inSegment(Img->RelDataPtrRelocSlots);
+    };
+    auto Left = probeBase(Top->Inputs[0]);
+    auto Right = probeBase(Top->Inputs[1]);
+    if (Left && !Right && loaderProvesTableBase(*Left) &&
+        valueIsStableAddressOffset(Top->Inputs[1]))
+      return nullptr;
+    if (Top->Opcode == NdOp::INT_ADD && Right && !Left &&
+        loaderProvesTableBase(*Right) &&
+        valueIsStableAddressOffset(Top->Inputs[0]))
+      return nullptr;
+  }
+
+  // Analyze the complete address expression.  The outer ADD/SUB is part of the
+  // proof: accepting one PHI side while silently treating another pointer PHI,
+  // a relocatable constant, or a truncating arithmetic result as an index is
+  // exactly the stale-address failure this resolver must prevent.
+  MedVar BaseVar = AddrVar;
 
   // Walk the base DAG collecting every rodata-segment base constant, requiring
   // a cross-block PHI to appear (the signature distinguishing this branchy
@@ -346,83 +404,443 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // traceTableBaseConst).
   std::set<uint64_t> Bases;
   bool SawPhi = false;
-  std::set<std::tuple<int, int, int>> Seen;
-  std::function<bool(const MedVar &, int)> walk = [&](const MedVar &V,
-                                                      int Depth) -> bool {
-    if (Depth > 16 || varIsFrameDerived(V))
-      return false;
-    if (V.isConst())
-      return true; // a non-rodata constant addend (offset); harmless
+  bool SawNonRecurrentPhi = false;
+  const PhiNode *EvidencePhi = nullptr;
+  bool SawInvalidPointerExpression = false;
+  bool SawTableShapedInvalidExpression = false;
+  bool SawUnprovedFrameReload = false;
+  bool SawRawOriginalBase = false;
+  bool SawSymbolizedBase = false;
+  bool ExceededStructuralDepth = false;
+  bool AuditIncomplete = false;
+  size_t RemainingAuditNodes = 4096;
+  // A speculative integer call argument may merely resemble an address.
+  // Its caller passes FailClosed=false so an ambiguous proof returns nullptr
+  // and preserves the ordinary integer ABI path. Concrete memory accesses and
+  // known pointer ABI parameters pass true because retaining a stale table VA
+  // in those contexts would be unsafe.
+  using SeenSet = std::set<std::tuple<int, int, int>>;
+  enum class BaseProof { Invalid, NoBase, HasBase };
+  std::function<BaseProof(const MedVar &, int, SeenSet)> walk =
+      [&](const MedVar &V, int Depth, SeenSet Seen) -> BaseProof {
+    if (RemainingAuditNodes == 0) {
+      AuditIncomplete = true;
+      return BaseProof::Invalid;
+    }
+    --RemainingAuditNodes;
+    ExceededStructuralDepth |= Depth > 16;
+    if (varIsFrameDerived(V))
+      return BaseProof::Invalid;
+    if (V.isConst()) {
+      if (isReadOnlyTableBase(V.ConstVal)) {
+        Bases.insert(V.ConstVal);
+        bool Symbolized = getVarSymbolizesDataConstant(V.ConstVal, V.Size);
+        SawRawOriginalBase |= !Symbolized;
+        SawSymbolizedBase |= Symbolized;
+        return BaseProof::HasBase;
+      }
+      const Segment *Seg =
+          V.ConstVal != 0 ? Img->getSegmentFor(V.ConstVal) : nullptr;
+      // A small numeric index can collide with a relocatable object's low-VA
+      // .text range.  It remains a scalar unless getVar itself will relocate
+      // it; mapped data is still independent address provenance even when kept
+      // raw.
+      if (getVarMayRelocateConstant(V.ConstVal, V.Size) ||
+          (Seg && !Seg->Data.empty() && Img->isDataAddress(V.ConstVal))) {
+        SawInvalidPointerExpression = true;
+        SawTableShapedInvalidExpression = true;
+        return BaseProof::Invalid;
+      }
+      return BaseProof::NoBase;
+    }
     auto Key = std::make_tuple(static_cast<int>(V.Kind), V.Id, V.SSAVer);
     if (!Seen.insert(Key).second)
-      return true;
-    if (bool SawLoad = false; auto C = traceTableBaseConst(V, 0, &SawLoad)) {
-      const auto *Seg = Img->getSegmentFor(*C);
-      if (*C != 0 && Seg && !Seg->isWritable() && Img->isDataAddress(*C) &&
-          !Seg->Data.empty()) {
+      return BaseProof::Invalid;
+
+    // A pointer-table LOAD's source address belongs to the table segment, but
+    // the value it produces belongs to one of the relocation targets.  Record
+    // those targets before generic constant/load folding can mistake the source
+    // table base for the resulting pointer's provenance.
+    std::set<uint64_t> PointerTargets;
+    bool RelativeSymbolized = false;
+    if (recoverRelativeDataPointerTargets(V, PointerTargets,
+                                          RelativeSymbolized)) {
+      Bases.insert(PointerTargets.begin(), PointerTargets.end());
+      SawRawOriginalBase |= !RelativeSymbolized;
+      SawSymbolizedBase |= RelativeSymbolized;
+      return BaseProof::HasBase;
+    }
+    if (recoverAbsoluteDataPointerLoadTargets(V, PointerTargets)) {
+      Bases.insert(PointerTargets.begin(), PointerTargets.end());
+      SawSymbolizedBase = true;
+      return BaseProof::HasBase;
+    }
+
+    const MedOp *Def = findDef(V);
+    bool SawLoad = false;
+    bool SawArithmetic = false;
+    uint16_t OriginSize = V.Size;
+    if (auto C =
+            traceTableBaseConst(V, 0, &SawLoad, &OriginSize, &SawArithmetic)) {
+      // Do not let whole-expression constant folding hide operand provenance.
+      // A plain ADD hidden under COPY/ZEXT must still be proven structurally;
+      // only a literal-pool fold or a pure forwarding chain introduces a base.
+      bool FoldPreservesRole = SawLoad || !SawArithmetic;
+      if (FoldPreservesRole && isReadOnlyTableBase(*C)) {
         Bases.insert(*C);
-        return true;
+        // A non-constant arm is not automatically relocatable: low-VA COPYs
+        // remain original numeric addresses. Classify it with the exact rule
+        // getVar itself uses, while literal-pool arithmetic always stays raw.
+        bool Symbolized =
+            !SawLoad && getVarSymbolizesDataConstant(*C, OriginSize);
+        SawRawOriginalBase |= !Symbolized;
+        SawSymbolizedBase |= Symbolized;
+        return BaseProof::HasBase;
       }
     }
     if (const PhiNode *Phi = findPhi(V)) {
+      // A recurrent PHI still transports the provenance supplied by every
+      // initialization edge.  Skip only an individually proven recurrence;
+      // treating the whole PHI as scalar lets AND(p,mask) or ADD(p,other_base)
+      // hide a table pointer from the fail-closed outer-expression audit.
+      bool Recurrent = phiIsSelfRecurrent(*Phi);
       SawPhi = true;
-      for (const auto &[Pred, Arg] : Phi->Args)
-        if (!walk(Arg, Depth + 1))
-          return false;
-      return true;
+      SawNonRecurrentPhi |= !Recurrent;
+      if (!EvidencePhi)
+        EvidencePhi = Phi;
+      bool SawFeasible = false;
+      bool SawInitialization = false;
+      bool SawBaseArm = false;
+      bool SawScalarArm = false;
+      for (const auto &[Pred, Arg] : Phi->Args) {
+        if (!phiIncomingEdgeFeasible(*Phi, Pred))
+          continue;
+        SawFeasible = true;
+        if (Recurrent && phiIncomingIsRecurrent(*Phi, Pred, Arg))
+          continue;
+        SawInitialization = true;
+        if (Arg.isConst()) {
+          if (!isReadOnlyTableBase(Arg.ConstVal)) {
+            SawScalarArm = true;
+            continue;
+          }
+          if (Phi->Output.Size == 0 || Arg.Size == 0 ||
+              Phi->Output.Size < Arg.Size) {
+            Bases.insert(Arg.ConstVal);
+            SawInvalidPointerExpression = true;
+            return BaseProof::Invalid;
+          }
+          Bases.insert(Arg.ConstVal);
+          SawRawOriginalBase = true;
+          SawBaseArm = true;
+          continue;
+        }
+        BaseProof Arm = walk(Arg, Depth + 1, Seen);
+        if (Arm == BaseProof::Invalid)
+          return BaseProof::Invalid;
+        if (Arm == BaseProof::HasBase) {
+          if (Phi->Output.Size == 0 || Arg.Size == 0 ||
+              Phi->Output.Size < Arg.Size) {
+            SawInvalidPointerExpression = true;
+            return BaseProof::Invalid;
+          }
+          SawBaseArm = true;
+        } else {
+          SawScalarArm = true;
+        }
+      }
+      if (!SawFeasible || !SawInitialization)
+        return BaseProof::Invalid;
+      if (SawBaseArm && SawScalarArm) {
+        SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      return SawBaseArm ? BaseProof::HasBase : BaseProof::NoBase;
     }
-    const MedOp *Def = findDef(V);
     if (!Def)
-      return false;
+      return BaseProof::NoBase;
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      // Pure forwarding changes representation, not provenance complexity.
+      // Keep the structural depth budget for branching/arithmetic nodes; Seen
+      // already bounds COPY/ZEXT/SUBBYTES cycles and arbitrarily long valid
+      // forwarding chains therefore cannot hide a table base.
+      return walk(*Forwarded, Depth, Seen);
     switch (Def->Opcode) {
+    case NdOp::SELECT: {
+      if (Def->NumInputs < 3)
+        return BaseProof::NoBase;
+      BaseProof T = walk(Def->Inputs[1], Depth + 1, Seen);
+      BaseProof F = walk(Def->Inputs[2], Depth + 1, Seen);
+      if (!selectPreservesPointerValues(*Def)) {
+        if (T != BaseProof::NoBase || F != BaseProof::NoBase)
+          SawInvalidPointerExpression = true;
+        return T == BaseProof::NoBase && F == BaseProof::NoBase
+                   ? BaseProof::NoBase
+                   : BaseProof::Invalid;
+      }
+      if (T == BaseProof::Invalid || F == BaseProof::Invalid || T != F) {
+        if (T != BaseProof::NoBase || F != BaseProof::NoBase)
+          SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      return T;
+    }
+    case NdOp::INT_OR: {
+      if (Def->NumInputs < 2)
+        return BaseProof::Invalid;
+      // OR never preserves a pointer merely because one operand contains table
+      // provenance. It is pointer-valued only when the whole operation is the
+      // strict complementary-mask SELECT idiom and both selected value arms are
+      // independently proven table pointers. In particular, masking a table PHI
+      // on one side and a live scalar on the other must fail closed.
+      MedVar Cond, ArmT, ArmF;
+      if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF)) {
+        BaseProof T = walk(ArmT, Depth + 1, Seen);
+        BaseProof F = walk(ArmF, Depth + 1, Seen);
+        if (T == BaseProof::HasBase && F == BaseProof::HasBase)
+          return BaseProof::HasBase;
+        if (T == BaseProof::NoBase && F == BaseProof::NoBase)
+          return BaseProof::NoBase;
+        SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      BaseProof L = walk(Def->Inputs[0], Depth + 1, Seen);
+      BaseProof R = walk(Def->Inputs[1], Depth + 1, Seen);
+      if (L != BaseProof::NoBase || R != BaseProof::NoBase) {
+        SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      return BaseProof::NoBase;
+    }
+    case NdOp::INT_ADD: {
+      if (Def->NumInputs < 2)
+        return BaseProof::Invalid;
+      BaseProof L = walk(Def->Inputs[0], Depth + 1, Seen);
+      BaseProof R = walk(Def->Inputs[1], Depth + 1, Seen);
+      if (L == BaseProof::Invalid || R == BaseProof::Invalid ||
+          (L == BaseProof::HasBase && R == BaseProof::HasBase)) {
+        if (L != BaseProof::NoBase || R != BaseProof::NoBase)
+          SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      if (L == BaseProof::HasBase || R == BaseProof::HasBase) {
+        const MedVar &PointerInput =
+            L == BaseProof::HasBase ? Def->Inputs[0] : Def->Inputs[1];
+        if (Def->Output.Size == 0 || PointerInput.Size == 0 ||
+            Def->Output.Size < PointerInput.Size) {
+          SawInvalidPointerExpression = true;
+          return BaseProof::Invalid;
+        }
+        return BaseProof::HasBase;
+      }
+      if (auto Result = traceValueVA(V);
+          Result && isReadOnlyTableBase(*Result)) {
+        SawInvalidPointerExpression = true;
+        SawTableShapedInvalidExpression = true;
+        return BaseProof::Invalid;
+      }
+      return BaseProof::NoBase;
+    }
+    case NdOp::INT_SUB: {
+      if (Def->NumInputs < 2)
+        return BaseProof::Invalid;
+      BaseProof L = walk(Def->Inputs[0], Depth + 1, Seen);
+      BaseProof R = walk(Def->Inputs[1], Depth + 1, Seen);
+      if (L == BaseProof::Invalid || R == BaseProof::Invalid) {
+        if (L != BaseProof::NoBase || R != BaseProof::NoBase)
+          SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      if (L == BaseProof::HasBase && R == BaseProof::NoBase) {
+        if (Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
+            Def->Output.Size < Def->Inputs[0].Size) {
+          SawInvalidPointerExpression = true;
+          return BaseProof::Invalid;
+        }
+        return BaseProof::HasBase;
+      }
+      if (L == BaseProof::NoBase && R == BaseProof::NoBase)
+        if (auto Result = traceValueVA(V);
+            Result && isReadOnlyTableBase(*Result)) {
+          SawInvalidPointerExpression = true;
+          SawTableShapedInvalidExpression = true;
+          return BaseProof::Invalid;
+        } else {
+          return BaseProof::NoBase;
+        }
+      SawInvalidPointerExpression = true;
+      return BaseProof::Invalid;
+    }
+    case NdOp::INT_AND:
+    case NdOp::INT_XOR:
+    case NdOp::INT_MULT:
+    case NdOp::INT_DIV:
+    case NdOp::INT_SDIV:
+    case NdOp::INT_REM:
+    case NdOp::INT_SREM:
+    case NdOp::INT_RIGHT:
+    case NdOp::INT_ASHR: {
+      bool SawAddressInput = false;
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        SawAddressInput |=
+            walk(Def->Inputs[I], Depth + 1, Seen) != BaseProof::NoBase;
+      if (SawAddressInput) {
+        SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      if (auto Result = traceValueVA(V);
+          Result && isReadOnlyTableBase(*Result)) {
+        SawInvalidPointerExpression = true;
+        SawTableShapedInvalidExpression = true;
+        return BaseProof::Invalid;
+      }
+      return BaseProof::NoBase;
+    }
+    case NdOp::INT_LEFT: {
+      // emitOp materializes direct SHL operands with GetRawInput: a mapped-VA
+      // immediate is a bit pattern here, not a relocatable address.  Computed
+      // operands still pass through getVar and therefore retain the ordinary
+      // provenance audit.
+      bool SawAddressInput = false;
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        if (!Def->Inputs[I].isConst())
+          SawAddressInput |=
+              walk(Def->Inputs[I], Depth + 1, Seen) != BaseProof::NoBase;
+      if (SawAddressInput) {
+        SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      if (auto Result = traceValueVA(V);
+          Result && isReadOnlyTableBase(*Result)) {
+        SawInvalidPointerExpression = true;
+        SawTableShapedInvalidExpression = true;
+        return BaseProof::Invalid;
+      }
+      return BaseProof::NoBase;
+    }
     case NdOp::COPY:
     case NdOp::INT_ZEXT:
     case NdOp::INT_SEXT:
-    case NdOp::SUBBYTES:
-      return Def->NumInputs >= 1 && walk(Def->Inputs[0], Depth + 1);
-    case NdOp::SELECT:
-      return Def->NumInputs >= 3 && walk(Def->Inputs[1], Depth + 1) &&
-             walk(Def->Inputs[2], Depth + 1);
-    case NdOp::INT_OR:
-    case NdOp::INT_AND:
-    case NdOp::INT_ADD:
-    case NdOp::INT_SUB:
-      if (Def->NumInputs < 2)
-        return false;
-      // Each operand is a masked base, a base, or a mask/offset; a non-base
-      // operand walks to no rodata constant, which is fine.
-      walk(Def->Inputs[0], Depth + 1);
-      walk(Def->Inputs[1], Depth + 1);
-      return true;
-    case NdOp::LOAD:
+    case NdOp::SUBBYTES: {
+      if (Def->NumInputs < 1)
+        return BaseProof::NoBase;
+      BaseProof Input = walk(Def->Inputs[0], Depth + 1, Seen);
+      if (Input != BaseProof::NoBase) {
+        SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      return BaseProof::NoBase;
+    }
+    case NdOp::LOAD: {
       // Stack spill/reload: a register-constrained target (i386 PIC) spills
       // each table base (GOT-relative `lea`) to a frame slot, then cmov-selects
-      // the reloads; follow the matching STORE's value to reach the base.
-      if (Def->NumInputs >= 1)
-        if (auto LKey = addrSlotKey(Def->Inputs[0]))
-          for (const auto &B : CurMedFunc->Blocks)
-            for (const auto &O : B.Ops)
-              if (O.Opcode == NdOp::STORE && O.NumInputs >= 2) {
-                auto SKey = addrSlotKey(O.Inputs[0]);
-                if (SKey && *SKey == *LKey)
-                  walk(O.Inputs[1], Depth + 1);
-              }
-      return true;
+      // the reloads. Use the same all-path reaching-store proof as the indexed
+      // resolver so an unrelated or partial store cannot become provenance.
+      std::vector<MedVar> Sources;
+      if (!collectFrameReloadSources(*Def, Sources) || Sources.empty()) {
+        // A pointer-width frame reload is an implicit value merge. If its
+        // all-path reaching stores cannot be established, it may carry an
+        // uninitialized or later-written table pointer. Record that uncertainty
+        // so it cannot be treated as the scalar side of a separately proven
+        // table base; by itself it is not evidence that this address contains
+        // any original-image table VA, so ordinary unresolved memory remains
+        // on the generic path.
+        const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+        if (Def->NumInputs >= 1 && Def->Output.Size == PointerSize &&
+            varIsFrameDerived(Def->Inputs[0]))
+          SawUnprovedFrameReload = true;
+        return BaseProof::NoBase;
+      }
+      bool SawBaseSource = false;
+      bool SawScalarSource = false;
+      bool SawInvalidSource = false;
+      const std::set<uint64_t> BasesBefore = Bases;
+      for (const MedVar &Source : Sources) {
+        BaseProof SourceProof = walk(Source, Depth + 1, Seen);
+        SawBaseSource |= SourceProof == BaseProof::HasBase;
+        SawScalarSource |= SourceProof == BaseProof::NoBase;
+        SawInvalidSource |= SourceProof == BaseProof::Invalid;
+      }
+      if (SawBaseSource && (SawScalarSource || SawInvalidSource)) {
+        SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      size_t DistinctReloadBases = 0;
+      for (uint64_t Base : Bases)
+        DistinctReloadBases += BasesBefore.count(Base) == 0;
+      // A frame slot is an implicit value merge.  Multiple independently
+      // reaching raw table bases cannot be left to the ordinary integer LOAD:
+      // there is no PHI later in the DAG to trigger the multi-base owner, and
+      // falling through would dereference whichever original VA was stored.
+      if (DistinctReloadBases > 1) {
+        SawInvalidPointerExpression = true;
+        return BaseProof::Invalid;
+      }
+      if (SawInvalidSource)
+        return BaseProof::Invalid;
+      return SawBaseSource ? BaseProof::HasBase : BaseProof::NoBase;
+    }
     default:
-      return true;
+      return BaseProof::NoBase;
     }
   };
-  if (!walk(BaseVar, 0) || !SawPhi || Bases.size() < 2)
+  BaseProof Proof = walk(BaseVar, 0, {});
+  auto failAmbiguousAddress = [&]() {
+    if (SawAmbiguous)
+      *SawAmbiguous = true;
+    if (!FailClosed)
+      return;
+    if (EvidencePhi) {
+      failAmbiguousDataPointerPhi(*EvidencePhi);
+      return;
+    }
+    if (!FatalDataPointerResolution)
+      syncError() << "med_llvm_emitter: ambiguous reachable read-only table-"
+                     "base address "
+                  << BaseVar.display() << " in " << CurMedFunc->Name
+                  << "; refusing stale-address fallback\n";
+    FatalDataPointerResolution = true;
+  };
+  if (AuditIncomplete) {
+    failAmbiguousAddress();
+    return nullptr;
+  }
+  if (Proof == BaseProof::Invalid && SawInvalidPointerExpression &&
+      (!Bases.empty() || SawTableShapedInvalidExpression)) {
+    failAmbiguousAddress();
+    return nullptr;
+  }
+  if (Proof == BaseProof::HasBase && SawUnprovedFrameReload) {
+    failAmbiguousAddress();
+    return nullptr;
+  }
+  if (Proof == BaseProof::HasBase && SawRawOriginalBase && SawSymbolizedBase) {
+    failAmbiguousAddress();
+    return nullptr;
+  }
+  if (Proof == BaseProof::HasBase && ExceededStructuralDepth &&
+      (!SawPhi || !SawNonRecurrentPhi)) {
+    failAmbiguousAddress();
+    return nullptr;
+  }
+  // Recurrent PHIs are walked here only so invalid surrounding expressions
+  // cannot hide their provenance.  Their actual address model (including
+  // alias-recursive components and initialization runs) remains owned by the
+  // induction resolver.  A non-recurrent pointer PHI belongs here even when
+  // all arms select the same table VA: its computed arms may already contain a
+  // relocatable pointer, while the later single-base indexed resolver assumes
+  // an original numeric VA and would rebase it a second time.
+  if (Proof != BaseProof::HasBase || !SawPhi || !SawNonRecurrentPhi)
     return nullptr;
 
-  // All collected bases must share one read-only segment so a single embedded
-  // global covers every table the select can reach.
-  const Segment *Seg = Img->getSegmentFor(*Bases.begin());
-  if (!Seg)
+  // PHI edge constants bypass getVar and still carry original-image VAs;
+  // computed arms have already passed through normal LLVM emission and carry
+  // relocatable ptrtoint values. Mixing the two representations cannot be
+  // repaired by either a raw-VA anchor or a direct pointer use.
+  if (SawRawOriginalBase && SawSymbolizedBase) {
+    failAmbiguousAddress();
     return nullptr;
-  for (uint64_t B : Bases)
-    if (Img->getSegmentFor(B) != Seg)
-      return nullptr;
+  }
 
   if (StoredBasesFor != CurMedFunc) {
     StoredBasesFor = CurMedFunc;
@@ -434,8 +852,36 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
             StoredConstBases.insert(*SB);
   }
   for (uint64_t B : Bases)
-    if (StoredConstBases.count(B))
+    if (StoredConstBases.count(B)) {
       return nullptr;
+    }
+
+  unsigned Bits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
+  auto *Ty = llvm::IntegerType::get(*Ctx, Bits);
+  llvm::Value *Cur = getVar(AddrVar, Builder);
+  if (!Cur)
+    return nullptr;
+
+  // Uniform computed/symbolized arms already contain recompiled addresses.
+  // Re-anchoring them against an original VA would add the global base twice.
+  if (SawSymbolizedBase && !SawRawOriginalBase) {
+    if (Cur->getType()->isPointerTy())
+      return Cur;
+    if (Cur->getType() != Ty)
+      Cur = Builder.CreateZExtOrTrunc(Cur, Ty);
+    return Builder.CreateIntToPtr(Cur, llvm::PointerType::get(*Ctx, 0),
+                                  "selmrgrawptr");
+  }
+
+  // All raw bases must share one read-only segment so a single embedded global
+  // covers every table the select can reach.
+  const Segment *Seg = Img->getSegmentFor(*Bases.begin());
+  if (!Seg)
+    return nullptr;
+  for (uint64_t B : Bases)
+    if (Img->getSegmentFor(B) != Seg) {
+      return nullptr;
+    }
 
   // Anchor the whole access uniformly: the PHI base still carries the original
   // VA of whichever table was selected, so `@run + (addr - run_start)` lands on
@@ -450,11 +896,6 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   if (!G)
     return nullptr;
 
-  unsigned Bits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
-  auto *Ty = llvm::IntegerType::get(*Ctx, Bits);
-  llvm::Value *Cur = getVar(AddrVar, Builder);
-  if (!Cur)
-    return nullptr;
   if (Cur->getType()->isPointerTy())
     Cur = Builder.CreatePtrToInt(Cur, Ty);
   else if (Cur->getType() != Ty)

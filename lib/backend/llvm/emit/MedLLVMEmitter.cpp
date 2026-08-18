@@ -345,7 +345,40 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   CodePtrTableGlobals.clear();
   PreparedFuncBlocks.clear();
   LiftedCodeBlocks.clear();
+
+  // Every lazy analysis cache below is keyed by the current MedFunc pointer.
+  // A caller may reuse one emitter and place a new function vector at the same
+  // address as the previous vector, so pointer equality alone is not a valid
+  // cross-emit generation key.  Drop every per-function cache at the module
+  // boundary before CurMedFunc can be assigned again.
+  CurMedFunc = nullptr;
+  StoredBasesFor = nullptr;
+  StoredConstBases.clear();
+  RodataSymbolsFor = nullptr;
+  RodataSymbolVAs.clear();
+  InductionBasesFor = nullptr;
+  InductionBaseVAs.clear();
+  SymbolizedWritableSegsFor = nullptr;
+  SymbolizedWritableSegs.clear();
+  DefPhiIndexFor = nullptr;
+  DefIndex.clear();
+  PhiIndex.clear();
+  FeasibleEdgesFor = nullptr;
+  FeasibleEdges.clear();
+  FeasibleBlocks.clear();
+  FrameDerivedCacheFor = nullptr;
+  FrameDerivedCache.clear();
+  AddrPredCacheFor = nullptr;
+  SlotAddressEscapesCache.clear();
+  SlotMatchingKeyLoadCache.clear();
+  SlotReloadUsedLocallyCache.clear();
+  WritableDataSegCache.clear();
+  PtrTableUniqueSegCache.clear();
+  ConstClassCacheFor = nullptr;
+  ConstUsedAsPointerCache.clear();
+  ConstValueUsedAsIntegerCache.clear();
   FatalCodePointerResolution = false;
+  FatalDataPointerResolution = false;
   ImportedSymbolPlaceholders.clear();
   StringDataAddrs.clear();
   GlobalStrCounter = 0;
@@ -456,7 +489,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     emitFunc(Func);
   }
 
-  if (FatalCodePointerResolution)
+  if (FatalCodePointerResolution || FatalDataPointerResolution)
     return nullptr;
 
   // Mark the producer schema independently of per-function attachments.  A

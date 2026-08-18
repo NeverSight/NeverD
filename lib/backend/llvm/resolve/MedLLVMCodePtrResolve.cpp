@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
@@ -344,9 +345,11 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
               (*C >= limits::kMinGlobalDataAddr ||
                Img->RelocDataAddrs.count(*C) || Img->RodataAnchorSeg.count(*C)))
             return 0; // a plain-constant base getVar would redirect
-          if (Found && SegVA != Seg->VA)
-            return 0; // base constants span multiple pointer-table segments
-          SegVA = Seg->VA;
+          uint64_t RunStart = 0, RunEnd = 0;
+          readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
+          if (Found && SegVA != RunStart)
+            return 0; // bases span distinct pointer-table mirror runs
+          SegVA = RunStart;
           Found = true;
         }
         continue; // fully constant: recorded as a base, else an ignorable
@@ -435,7 +438,21 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
     HaveConst = collectLiteralPoolBase(AddrVar, Base, HaveBase, IdxTerms) &&
                 HaveBase && Base != 0 && !IdxTerms.empty();
   }
-  if (HaveConst) {
+  // A single recognized pointer-table base does not make every remaining term
+  // an index.  Prove each term stays scalar in rebuilt IR before Path 1 may
+  // claim the access; otherwise a recurrent rodata pointer (or another mapped
+  // base) can be hidden in IdxTerms and added to the mirror address.  Do not
+  // fall through to Path 2 after this concrete decomposition failed its
+  // uniqueness proof, because ptrTableUniqueSegment intentionally reports only
+  // the pointer-table component and would hide the same unsafe term again.
+  bool UnsafeIndexedTerms = false;
+  if (HaveConst)
+    for (const MedVar &Term : IdxTerms)
+      if (!valueIsStableAddressOffset(Term)) {
+        UnsafeIndexedTerms = true;
+        break;
+      }
+  if (HaveConst && !UnsafeIndexedTerms) {
     // Redirect only into a segment that holds pointer slots; also gate out
     // frame-derived "indices" that would be stack-pointer arithmetic.
     uint64_t SegVA = 0;
@@ -470,6 +487,8 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
       }
     }
   }
+  if (UnsafeIndexedTerms)
+    return nullptr;
 
   // Path 2: the base is a SELECT/PHI or branchless AND/OR mask of several base
   // constants (a `cond ? A[i] : B[j]` pointer select), so path 1 cannot isolate
@@ -477,6 +496,233 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
   // in ONE pointer-table segment, the whole address provably indexes that
   // segment, so redirect by the address's own value: GEP(@seg, addr - segVA).
   if (uint64_t SelSeg = ptrTableUniqueSegment(AddrVar)) {
+    auto segmentHasPointerSlots = [&](const Segment *Seg) {
+      if (!Seg)
+        return false;
+      uint64_t Lo = Seg->VA;
+      uint64_t Hi = Seg->VA + Seg->Data.size();
+      auto contains = [&](uint64_t Slot) { return Slot >= Lo && Slot < Hi; };
+      for (uint64_t Slot : Img->CodePtrRelocSlots)
+        if (contains(Slot))
+          return true;
+      for (uint64_t Slot : Img->DataPtrRelocSlots)
+        if (contains(Slot))
+          return true;
+      for (const auto &[Slot, Name] : Img->ImportPtrSlots) {
+        (void)Name;
+        if (contains(Slot))
+          return true;
+      }
+      for (const auto &[Slot, Binding] : Img->DyldBindSlots) {
+        (void)Binding;
+        if (contains(Slot))
+          return true;
+      }
+      return false;
+    };
+    // ptrTableUniqueSegment deliberately discovers segment evidence in a broad
+    // arithmetic DAG; uniqueness alone is not proof that the RESULT carries a
+    // pointer. Prove value roles structurally before Path 2 claims the access:
+    // a table component may flow only through a complete-width forwarder, every
+    // value arm of a selection/PHI, or the unique pointer side of ADD/SUB.
+    // Merely appearing in a condition, mask, multiplier, shift, or other scalar
+    // input is invalid provenance.
+    enum class AddressRole { Invalid, Scalar, PointerTable };
+    struct AddressProof {
+      AddressRole Role = AddressRole::Invalid;
+      uint64_t Segment = 0;
+    };
+    auto invalidProof = []() { return AddressProof{}; };
+    auto scalarProof = []() { return AddressProof{AddressRole::Scalar, 0}; };
+    auto tableProof = [](uint64_t Segment) {
+      return AddressProof{AddressRole::PointerTable, Segment};
+    };
+    auto pointerTableRunStart = [&](const Segment *Seg) {
+      uint64_t RunStart = Seg->VA, RunEnd = Seg->VA + Seg->Data.size();
+      readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
+      return RunStart;
+    };
+    using AuditSeen = std::set<std::tuple<int, int, int>>;
+    std::function<AddressProof(const MedVar &, int, AuditSeen, bool)>
+        proveAddressRole = [&](const MedVar &Value, int Depth, AuditSeen Seen,
+                               bool DirectPhiConstant) -> AddressProof {
+      if (Depth > 128)
+        return invalidProof();
+      if (Value.isConst()) {
+        const Segment *Seg =
+            Value.ConstVal != 0 ? Img->getSegmentFor(Value.ConstVal) : nullptr;
+        if (!Seg || Seg->isExecutable() || !segmentHasPointerSlots(Seg))
+          return scalarProof();
+        // Operation inputs pass through getVar; a direct PHI constant instead
+        // bypasses it in the edge-copy path and remains an original numeric VA.
+        if (!DirectPhiConstant &&
+            getVarMayRelocateConstant(Value.ConstVal, Value.Size))
+          return invalidProof();
+        return tableProof(pointerTableRunStart(Seg));
+      }
+      auto Key =
+          std::make_tuple(static_cast<int>(Value.Kind), Value.Id, Value.SSAVer);
+      if (!Seen.insert(Key).second)
+        return invalidProof();
+
+      if (const PhiNode *Phi = lookupPhi(Value)) {
+        std::optional<AddressProof> Merged;
+        bool SawInitialization = false;
+        for (const auto &[Pred, Arg] : Phi->Args) {
+          PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, Pred);
+          if (Edge == PhiEdgeFeasibility::Infeasible)
+            continue;
+          if (Edge != PhiEdgeFeasibility::ProvenFeasible)
+            return invalidProof();
+          if (phiIncomingIsRecurrent(*Phi, Pred, Arg))
+            continue;
+          SawInitialization = true;
+          AddressProof Arm = proveAddressRole(
+              Arg, Depth + 1, Seen, /*DirectPhiConstant=*/Arg.isConst());
+          if (Arm.Role == AddressRole::Invalid)
+            return invalidProof();
+          if (!Merged)
+            Merged = Arm;
+          else if (Merged->Role != Arm.Role ||
+                   (Arm.Role == AddressRole::PointerTable &&
+                    Merged->Segment != Arm.Segment))
+            return invalidProof();
+        }
+        return SawInitialization && Merged ? *Merged : invalidProof();
+      }
+
+      const MedOp *Def = lookupDef(Value);
+      if (!Def)
+        return scalarProof();
+      if (auto Forwarded = pointerPreservingInput(*Def))
+        return proveAddressRole(*Forwarded, Depth + 1, Seen,
+                                /*DirectPhiConstant=*/false);
+
+      auto mergeChosenArms = [&](const MedVar &Left, const MedVar &Right,
+                                 bool PreservesPointer) {
+        AddressProof L = proveAddressRole(Left, Depth + 1, Seen,
+                                          /*DirectPhiConstant=*/false);
+        AddressProof R = proveAddressRole(Right, Depth + 1, Seen,
+                                          /*DirectPhiConstant=*/false);
+        if (L.Role == AddressRole::Invalid || R.Role == AddressRole::Invalid ||
+            L.Role != R.Role)
+          return invalidProof();
+        if (L.Role == AddressRole::PointerTable &&
+            (!PreservesPointer || L.Segment != R.Segment))
+          return invalidProof();
+        return L;
+      };
+      if (Def->Opcode == NdOp::SELECT) {
+        if (Def->NumInputs < 3)
+          return invalidProof();
+        return mergeChosenArms(Def->Inputs[1], Def->Inputs[2],
+                               selectPreservesPointerValues(*Def));
+      }
+      if (Def->Opcode == NdOp::INT_OR) {
+        MedVar Cond, ArmT, ArmF;
+        if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
+          return mergeChosenArms(ArmT, ArmF, /*PreservesPointer=*/true);
+      }
+      if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
+          Def->NumInputs >= 2) {
+        // ARM32 materializes a PIC table base as `literal-load + PC-bias`.
+        // Both operands look scalar in isolation, but the complete arithmetic
+        // expression is a loader-proven pointer value. Recognize that idiom in
+        // the pointer-producing ADD/SUB role before requiring both operands to
+        // be stable scalar offsets. Absolute pointer loads are excluded: they
+        // already produce symbolized pointers and must not be anchored again.
+        bool SawLiteralLoad = false;
+        bool SawArithmetic = false;
+        auto FoldedLiteralBase = traceTableBaseConst(Value, 0, &SawLiteralLoad,
+                                                     nullptr, &SawArithmetic);
+        std::set<uint64_t> LoadedTargets;
+        if (FoldedLiteralBase && SawLiteralLoad && SawArithmetic &&
+            Def->Output.Size == Img->getPointerSize() &&
+            !recoverAbsoluteDataPointerLoadTargets(Value, LoadedTargets)) {
+          const Segment *Seg = Img->getSegmentFor(*FoldedLiteralBase);
+          if (Seg && !Seg->isExecutable() && segmentHasPointerSlots(Seg))
+            return tableProof(pointerTableRunStart(Seg));
+        }
+
+        AddressProof L = proveAddressRole(Def->Inputs[0], Depth + 1, Seen,
+                                          /*DirectPhiConstant=*/false);
+        AddressProof R = proveAddressRole(Def->Inputs[1], Depth + 1, Seen,
+                                          /*DirectPhiConstant=*/false);
+        bool LeftTable = L.Role == AddressRole::PointerTable;
+        bool RightTable = R.Role == AddressRole::PointerTable;
+        if (RightTable && (Def->Opcode == NdOp::INT_SUB || LeftTable))
+          return invalidProof();
+        if (LeftTable) {
+          if (!valueIsStableAddressOffset(Def->Inputs[1]) ||
+              Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
+              Def->Output.Size < Def->Inputs[0].Size)
+            return invalidProof();
+          return L;
+        }
+        if (RightTable) {
+          if (Def->Opcode != NdOp::INT_ADD ||
+              !valueIsStableAddressOffset(Def->Inputs[0]) ||
+              Def->Output.Size == 0 || Def->Inputs[1].Size == 0 ||
+              Def->Output.Size < Def->Inputs[1].Size)
+            return invalidProof();
+          return R;
+        }
+
+        // Scalar arithmetic may contain deep PHI/flag-expanded DAGs whose
+        // control cycles are not pointer recurrences. Use the shared scalar
+        // proof for the non-pointer case instead of demanding that the
+        // pointer-role walk classify every implementation detail as acyclic.
+        if (!valueIsStableAddressOffset(Def->Inputs[0]) ||
+            !valueIsStableAddressOffset(Def->Inputs[1]))
+          return invalidProof();
+
+        return scalarProof();
+      }
+
+      if (Def->Opcode == NdOp::LOAD) {
+        std::vector<MedVar> Sources;
+        if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
+          return scalarProof();
+        std::optional<AddressProof> Merged;
+        for (const MedVar &Source : Sources) {
+          AddressProof SourceProof = proveAddressRole(
+              Source, Depth + 1, Seen, /*DirectPhiConstant=*/false);
+          if (SourceProof.Role == AddressRole::Invalid)
+            return invalidProof();
+          if (!Merged)
+            Merged = SourceProof;
+          else if (Merged->Role != SourceProof.Role ||
+                   (SourceProof.Role == AddressRole::PointerTable &&
+                    Merged->Segment != SourceProof.Segment))
+            return invalidProof();
+        }
+        return Merged ? *Merged : scalarProof();
+      }
+
+      // Every remaining opcode is scalar/destructive for address provenance.
+      // Audit all inputs so a table used only as a mask, multiplier, condition,
+      // shift operand, or boolean source poisons the proof instead of granting
+      // it to the result.
+      for (uint8_t I = 0; I < Def->NumInputs; ++I) {
+        AddressProof Input = proveAddressRole(Def->Inputs[I], Depth + 1, Seen,
+                                              /*DirectPhiConstant=*/false);
+        if (Input.Role != AddressRole::Scalar)
+          return invalidProof();
+      }
+      return scalarProof();
+    };
+
+    AddressProof Proven =
+        proveAddressRole(AddrVar, 0, {}, /*DirectPhiConstant=*/false);
+    if (Proven.Role != AddressRole::PointerTable || Proven.Segment != SelSeg) {
+      if (!FatalDataPointerResolution)
+        syncError() << "med_llvm_emitter: ambiguous pointer-table address "
+                    << AddrVar.display() << " in " << CurMedFunc->Name
+                    << "; refusing stale-address fallback\n";
+      FatalDataPointerResolution = true;
+      return nullptr;
+    }
+
     uint64_t OutSeg = 0;
     if (auto *G = buildCodePtrSegmentGlobal(SelSeg, OutSeg)) {
       if (llvm::Value *A = getVar(AddrVar, Builder)) {

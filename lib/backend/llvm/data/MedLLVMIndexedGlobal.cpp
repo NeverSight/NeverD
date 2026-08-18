@@ -10,59 +10,31 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
 
+#include <functional>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <vector>
 
 namespace neverd {
 
-llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
-    const MedVar &AddrVar, uint16_t SizeHint, llvm::IRBuilder<> &Builder) {
+llvm::Value *
+MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
+                                             uint16_t SizeHint, bool FailClosed,
+                                             llvm::IRBuilder<> &Builder) {
   if (!CurMedFunc || !Img || AddrVar.isConst())
     return nullptr;
 
   auto findPhi = [&](const MedVar &V) { return lookupPhi(V); };
   auto findDef = [&](const MedVar &V) { return lookupDef(V); };
-  auto sameVar = [](const MedVar &A, const MedVar &B) {
-    return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
-           A.SSAVer == B.SSAVer;
-  };
-  // Recognize the branchless-select (cmov-as-mask) idiom clang emits for a
-  // pointer wrap-reset on x86: `OR(AND(x, m), AND(y, ~m))` == `m ? x : y`,
-  // where one mask is the bitwise complement of the other.  The induction base
-  // hides in a value arm (x or y), so report the two value arms — handled like
-  // SELECT arms by the caller.  AArch64/ARM emit a real `csel` (a SELECT) and
-  // never reach here.
-  auto isMaskedSelectOr = [&](const MedOp &Or, MedVar &X, MedVar &Y) -> bool {
-    if (Or.Opcode != NdOp::INT_OR || Or.NumInputs < 2)
-      return false;
-    const MedOp *A = findDef(Or.Inputs[0]);
-    const MedOp *B = findDef(Or.Inputs[1]);
-    if (!A || !B || A->Opcode != NdOp::INT_AND || B->Opcode != NdOp::INT_AND ||
-        A->NumInputs < 2 || B->NumInputs < 2)
-      return false;
-    auto isNotOf = [&](const MedVar &M1, const MedVar &M2) {
-      const MedOp *D = findDef(M1);
-      return D && D->Opcode == NdOp::INT_NOT && D->NumInputs >= 1 &&
-             sameVar(D->Inputs[0], M2);
-    };
-    for (int Ai = 0; Ai < 2; ++Ai)
-      for (int Bi = 0; Bi < 2; ++Bi)
-        if (isNotOf(A->Inputs[Ai], B->Inputs[Bi]) ||
-            isNotOf(B->Inputs[Bi], A->Inputs[Ai])) {
-          X = A->Inputs[1 - Ai];
-          Y = B->Inputs[1 - Bi];
-          return true;
-        }
-    return false;
-  };
 
   // The access address `EA` is the induction pointer plus a displacement
   // (`INT_ADD(p, disp)`); walk INT_ADD/INT_SUB/COPY back to the defining PHI so
@@ -84,6 +56,20 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
     return C != 0 && Seg && !Seg->isWritable() && Img->isDataAddress(C) &&
            !Seg->Data.empty();
   };
+  auto failAmbiguousAddress = [&]() {
+    if (!FailClosed)
+      return;
+    if (!FatalDataPointerResolution)
+      syncError() << "med_llvm_emitter: ambiguous reachable read-only table-"
+                     "base address "
+                  << AddrVar.display() << " in " << CurMedFunc->Name
+                  << "; refusing stale-address fallback\n";
+    FatalDataPointerResolution = true;
+  };
+  auto failAmbiguousPhi = [&](const PhiNode &Phi) {
+    if (FailClosed)
+      failAmbiguousDataPointerPhi(Phi);
+  };
   std::vector<const PhiNode *> Candidates;
   uint64_t DagRodataBase = 0;
   bool HaveDagRodata = false;
@@ -91,8 +77,9 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
   // p+1` reset on ARM32, where the loop-invariant literal-pool base is carried
   // through SELECT, not a PHI).  Their bases are recovered by the literal-pool
   // / indexed detectors below when no PHI candidate yields a base.
-  std::vector<MedVar> SelectBaseVars;
+  std::vector<std::pair<MedVar, MedVar>> SelectBasePairs;
   bool SawSelect = false;
+  bool SawInvalidTableBlend = false;
   {
     std::vector<MedVar> Work{AddrVar};
     std::set<std::tuple<int, int, int>> Seen;
@@ -100,16 +87,8 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
     while (!Work.empty() && Budget-- > 0) {
       MedVar Cur = Work.back();
       Work.pop_back();
-      if (Cur.isConst()) {
-        // A rodata-segment constant reached through pure address arithmetic is
-        // a table/string base materialized inline (the unrolled string-walk
-        // wrap-around `p = cond ? &W : p+1` folds `&W`'s VA into a SELECT arm).
-        if (!HaveDagRodata && constInRodata(Cur.ConstVal)) {
-          DagRodataBase = Cur.ConstVal;
-          HaveDagRodata = true;
-        }
+      if (Cur.isConst())
         continue;
-      }
       if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
         continue;
       if (const PhiNode *P = findPhi(Cur)) {
@@ -118,23 +97,18 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
         // fold its rodata base to an inline VA constant (the string-walk
         // wrap-around `p = phi(p+1, &W)`), which the DagRodata fallback below
         // anchors when the per-arg base detectors miss the bare-VA form.
-        for (const auto &[Pred, Arg] : P->Args) {
-          (void)Pred;
-          Work.push_back(Arg);
-        }
+        for (const auto &[Pred, Arg] : P->Args)
+          if (phiIncomingEdgeFeasible(*P, Pred))
+            Work.push_back(Arg);
         continue;
       }
       const MedOp *Def = findDef(Cur);
       if (!Def)
         continue;
-      // COPY / ZEXT / SEXT just rename or widen the pointer (an i386 32-bit
-      // induction pointer is zero-extended to the 64-bit address temp before
-      // the load); a pointer-valued SELECT carries the base in its value arms —
-      // so descend through them too.
-      if ((Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
-           Def->Opcode == NdOp::INT_SEXT) &&
-          Def->NumInputs >= 1)
-        Work.push_back(Def->Inputs[0]);
+      // Descend through an operation only when it preserves the complete
+      // unsigned pointer value; then inspect pointer-valued SELECT arms.
+      if (auto Forwarded = pointerPreservingInput(*Def))
+        Work.push_back(*Forwarded);
       else if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
                Def->NumInputs >= 2) {
         // A loop-invariant literal-pool base (`load(@pool) + PC_const`, the
@@ -155,43 +129,120 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
         }
         Work.push_back(Def->Inputs[0]);
         Work.push_back(Def->Inputs[1]);
-      } else if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
+      } else if (selectPreservesPointerValues(*Def)) {
         SawSelect = true;
-        SelectBaseVars.push_back(Def->Inputs[1]);
-        SelectBaseVars.push_back(Def->Inputs[2]);
+        SelectBasePairs.emplace_back(Def->Inputs[1], Def->Inputs[2]);
         Work.push_back(Def->Inputs[1]);
         Work.push_back(Def->Inputs[2]);
+      } else if (Def->Opcode == NdOp::SELECT) {
+        // A truncating/mixed-width SELECT may contain rodata-looking arms, but
+        // it does not transport their complete pointer values.
+        for (uint8_t I = 1; I < Def->NumInputs && I < 3; ++I) {
+          bool SawLoad = false;
+          bool SawArithmetic = false;
+          auto C = traceTableBaseConst(Def->Inputs[I], 0, &SawLoad, nullptr,
+                                       &SawArithmetic);
+          if (C && (SawLoad || !SawArithmetic) && constInRodata(*C))
+            SawInvalidTableBlend = true;
+        }
       } else if (Def->Opcode == NdOp::INT_OR) {
         // x86 lowers a pointer wrap-reset to the branchless masked-select idiom
         // `OR(AND(x, m), AND(y, ~m))`; its value arms carry the induction base
         // and the advanced pointer, so descend through them like a SELECT.
-        MedVar MX, MY;
-        if (isMaskedSelectOr(*Def, MX, MY)) {
+        MedVar Cond, ArmT, ArmF;
+        if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF)) {
           SawSelect = true;
-          SelectBaseVars.push_back(MX);
-          SelectBaseVars.push_back(MY);
-          Work.push_back(MX);
-          Work.push_back(MY);
+          SelectBasePairs.emplace_back(ArmT, ArmF);
+          Work.push_back(ArmT);
+          Work.push_back(ArmF);
+        } else {
+          // A blend-shaped address with a rodata value arm is still dangerous
+          // when the strict SELECT proof rejects its boolean/width semantics.
+          // Do not let it fall through to a stale absolute LOAD merely because
+          // the malformed matcher no longer grants provenance.
+          const MedOp *Left = findDef(Def->Inputs[0]);
+          const MedOp *Right = findDef(Def->Inputs[1]);
+          if (Left && Right && Left->Opcode == NdOp::INT_AND &&
+              Right->Opcode == NdOp::INT_AND && Left->NumInputs >= 2 &&
+              Right->NumInputs >= 2) {
+            for (const MedOp *And : {Left, Right})
+              for (uint8_t I = 0; I < 2; ++I) {
+                bool SawLoad = false;
+                bool SawArithmetic = false;
+                auto C = traceTableBaseConst(And->Inputs[I], 0, &SawLoad,
+                                             nullptr, &SawArithmetic);
+                if (C && (SawLoad || !SawArithmetic) && constInRodata(*C))
+                  SawInvalidTableBlend = true;
+              }
+          }
         }
       } else if (Def->Opcode == NdOp::LOAD && Def->NumInputs >= 1) {
         // Stack spill/reload: a register-constrained target (ARM32) spills the
         // loop-invariant literal-pool base (`ldr[pc]; add pc`) to a frame slot
         // and reloads it inside the neighbourhood walk (clang's 3x3 stencil).
-        // The walk would otherwise stop at the reload; follow the matching
-        // STORE's value so the literal-pool base behind the spill is reached
-        // and anchored.  addrSlotKey only keys a `base+const` frame slot, so a
-        // real indexed table load never matches a store and is left to the
-        // resolvers.
-        if (auto LKey = addrSlotKey(Def->Inputs[0]))
-          for (const auto &B : CurMedFunc->Blocks)
-            for (const auto &O : B.Ops)
-              if (O.Opcode == NdOp::STORE && O.NumInputs >= 2)
-                if (auto SKey = addrSlotKey(O.Inputs[0]);
-                    SKey && *SKey == *LKey)
-                  Work.push_back(O.Inputs[1]);
+        // The walk would otherwise stop at the reload. Follow only the exact
+        // sources proven to reach it on every structural CFG path; scanning all
+        // same-slot stores admits stores after the load and bypassed stores as
+        // false table provenance.
+        std::vector<MedVar> Sources;
+        if (collectFrameReloadSources(*Def, Sources))
+          Work.insert(Work.end(), Sources.begin(), Sources.end());
       }
     }
   }
+
+  if (SawInvalidTableBlend) {
+    failAmbiguousAddress();
+    return nullptr;
+  }
+
+  // A bare (or forwarding-cast wrapped) non-recursive PHI has no outer
+  // INT_ADD/INT_SUB for tryResolveIndexedGlobalPtr to validate. Require its
+  // all-feasible-arm proof here before the induction fallback may inspect any
+  // one arm. Multi-base direct PHIs are handled by the select-merge resolver,
+  // which runs before this function.
+  const PhiNode *DirectAddressPhi = nullptr;
+  {
+    MedVar Cur = AddrVar;
+    for (int Depth = 0; Depth < 8; ++Depth) {
+      if (const PhiNode *Phi = findPhi(Cur)) {
+        DirectAddressPhi = Phi;
+        break;
+      }
+      const MedOp *Def = findDef(Cur);
+      if (!Def)
+        break;
+      auto Forwarded = pointerPreservingInput(*Def);
+      if (!Forwarded)
+        break;
+      Cur = *Forwarded;
+    }
+  }
+  // Audit every non-recursive PHI reached by the address DAG, not only a bare
+  // top-level PHI. A SELECT or arithmetic wrapper must not hide a raw table arm
+  // paired with a live scalar from the all-feasible-arm proof.
+  for (const PhiNode *Phi : Candidates) {
+    if (phiIsSelfRecurrent(*Phi))
+      continue;
+    uint64_t AuditedBase = 0;
+    bool HaveAuditedBase = false;
+    bool SawAmbiguousPhi = false;
+    std::vector<MedVar> AuditedTerms;
+    bool Proven = collectIndexedGlobalBase(
+        Phi->Output, AuditedBase, HaveAuditedBase, AuditedTerms, /*Depth=*/0,
+        FailClosed, &SawAmbiguousPhi);
+    if (FatalDataPointerResolution)
+      return nullptr;
+    // Proof rejection and module-fatal policy are deliberately independent.
+    // A speculative integer argument must remain non-fatal, but an ambiguous
+    // nested PHI must still poison this induction candidate rather than being
+    // skipped while a sibling recurrent PHI supplies the only accepted base.
+    if (SawAmbiguousPhi)
+      return nullptr;
+    if (Phi == DirectAddressPhi && (!Proven || !HaveAuditedBase))
+      return nullptr;
+  }
+
   if (Candidates.empty() && !HaveDagRodata && !SawSelect)
     return nullptr;
 
@@ -209,10 +260,8 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
         const MedOp *Def = findDef(Cur);
         if (!Def)
           return false;
-        if ((Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
-             Def->Opcode == NdOp::INT_SEXT) &&
-            Def->NumInputs >= 1) {
-          Cur = Def->Inputs[0];
+        if (auto Forwarded = pointerPreservingInput(*Def)) {
+          Cur = *Forwarded;
           continue;
         }
         if (Def->Opcode != NdOp::LOAD || Def->NumInputs < 1)
@@ -251,11 +300,12 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
     };
     for (const PhiNode *Phi : Candidates)
       for (const auto &[Pred, Arg] : Phi->Args)
-        if (loadsFromDataPtrTable(Arg))
+        if (phiIncomingEdgeFeasible(*Phi, Pred) && loadsFromDataPtrTable(Arg))
           return nullptr;
   }
 
-  // One incoming value must expose a base inside a read-only segment, reached
+  // Every feasible initialization value must expose a compatible base inside
+  // a read-only segment, reached
   // either through a literal-pool / rip-relative LOAD or as a bare constant
   // address (a `lea rip`/`adrp+add` materialization of a .rodata table base
   // folded to its VA).  This runs only for a LOAD address that walks back to a
@@ -269,86 +319,500 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
   // latter, and the `Cur - Base` offset below still recovers the exact element.
   uint64_t Base = 0;
   bool HaveBase = false;
+  // The resolver must follow the address model actually emitted for every
+  // initialization arm. A direct PHI constant bypasses getVar and is raw, but
+  // a non-constant COPY/ZEXT may still be raw (low VA or narrow source) or may
+  // already contain ptrtoint(@global). Syntax alone cannot distinguish them.
   auto baseInRodata = [&](uint64_t B) {
     const auto *Seg = Img->getSegmentFor(B);
     return B != 0 && Seg && !Seg->isWritable() && Img->isDataAddress(B) &&
            !Seg->Data.empty();
   };
-  for (const PhiNode *Phi : Candidates) {
-    for (const auto &[Pred, Arg] : Phi->Args) {
-      if (varIsFrameDerived(Arg))
+  enum class AddressModel { Raw, Symbolized };
+  std::optional<AddressModel> BaseAddressModel;
+  struct RecoveredPhiBase {
+    std::set<uint64_t> VAs;
+    AddressModel Model = AddressModel::Raw;
+  };
+
+  // For an indexed init, locate the exact constant leaf that owns the proven
+  // base and classify it with getVar's shared predicate at that leaf's width.
+  // Constants copied directly by a nested PHI edge bypass getVar; literal-pool
+  // arithmetic likewise carries original-image numeric values. Any mixture is
+  // ambiguous rather than an invitation to pick whichever base was seen first.
+  auto classifyIndexedBaseModel =
+      [&](const MedVar &Start,
+          uint64_t ExpectedBase) -> std::optional<AddressModel> {
+    using Item = std::pair<MedVar, bool>; // value, bypasses getVar
+    std::vector<Item> Work{{Start, Start.isConst()}};
+    std::set<std::tuple<int, int, int, bool>> Seen;
+    bool SawRaw = false;
+    bool SawSymbolized = false;
+    int Budget = 256;
+    while (!Work.empty() && Budget-- > 0) {
+      auto [Cur, BypassesGetVar] = Work.back();
+      Work.pop_back();
+      if (Cur.isConst()) {
+        const Segment *Seg =
+            Cur.ConstVal != 0 ? Img->getSegmentFor(Cur.ConstVal) : nullptr;
+        bool AddressBearing =
+            Cur.ConstVal == ExpectedBase ||
+            (Seg && !Seg->Data.empty() && Img->isDataAddress(Cur.ConstVal) &&
+             !Img->isCodeAddress(Cur.ConstVal));
+        if (!AddressBearing)
+          continue;
+        bool Symbolized = !BypassesGetVar &&
+                          getVarMayRelocateConstant(Cur.ConstVal, Cur.Size);
+        SawRaw |= !Symbolized;
+        SawSymbolized |= Symbolized;
         continue;
-      bool SawLoad = false;
-      if (auto C = traceTableBaseConst(Arg, 0, &SawLoad);
-          C && baseInRodata(*C)) {
-        Base = *C;
-        HaveBase = true;
+      }
+      auto Key = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
+                                 BypassesGetVar);
+      if (!Seen.insert(Key).second)
+        continue;
+      if (const PhiNode *Nested = findPhi(Cur)) {
+        for (const auto &[Pred, Arg] : Nested->Args)
+          if (phiIncomingEdgeFeasible(*Nested, Pred))
+            Work.emplace_back(Arg, Arg.isConst());
+        continue;
+      }
+      const MedOp *Def = findDef(Cur);
+      if (!Def)
+        continue;
+      if (auto Forwarded = pointerPreservingInput(*Def)) {
+        Work.emplace_back(*Forwarded, false);
+        continue;
+      }
+      if (Def->Opcode == NdOp::LOAD) {
+        std::set<uint64_t> PointerTargets;
+        if (recoverAbsoluteDataPointerLoadTargets(Cur, PointerTargets)) {
+          SawSymbolized = true;
+          continue;
+        }
+        bool SawLoad = false;
+        (void)traceTableBaseConst(Cur, 0, &SawLoad);
+        if (SawLoad) {
+          SawRaw = true;
+          continue;
+        }
+        std::vector<MedVar> Sources;
+        if (collectFrameReloadSources(*Def, Sources))
+          for (const MedVar &Source : Sources)
+            Work.emplace_back(Source, false);
+        continue;
+      }
+      switch (Def->Opcode) {
+      case NdOp::INT_ADD:
+      case NdOp::INT_SUB:
+      case NdOp::INT_AND:
+        if (Def->NumInputs >= 2) {
+          Work.emplace_back(Def->Inputs[0], false);
+          Work.emplace_back(Def->Inputs[1], false);
+        }
+        break;
+      case NdOp::INT_OR: {
+        MedVar Cond, ArmT, ArmF;
+        if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF)) {
+          Work.emplace_back(ArmT, false);
+          Work.emplace_back(ArmF, false);
+        } else if (Def->NumInputs >= 2) {
+          Work.emplace_back(Def->Inputs[0], false);
+          Work.emplace_back(Def->Inputs[1], false);
+        }
         break;
       }
-      uint64_t LpBase = 0;
-      bool HaveLp = false;
-      std::vector<MedVar> LpIdx;
-      if (collectLiteralPoolBase(Arg, LpBase, HaveLp, LpIdx) && HaveLp &&
-          baseInRodata(LpBase)) {
-        Base = LpBase;
-        HaveBase = true;
+      case NdOp::SELECT:
+        if (Def->NumInputs >= 3) {
+          Work.emplace_back(Def->Inputs[1], false);
+          Work.emplace_back(Def->Inputs[2], false);
+        }
         break;
-      }
-      // Direct const-base init advanced by a runtime offset: `&tab + index`
-      // where clang folds `lea tab(%rip)` / `adrp+add` to the base VA and
-      // pre-adds the first iteration's index (the strength-reduced
-      // `tab[(i+k)%n]` modulo walk keeps a `base + running_index` pointer).
-      // traceTableBaseConst only folds a pure-constant init, so peel the
-      // rodata-segment base off the runtime index here — the x86/AArch64 dual
-      // of the literal-pool form above.
-      uint64_t IgBase = 0;
-      bool HaveIg = false;
-      std::vector<MedVar> IgIdx;
-      if (collectIndexedGlobalBase(Arg, IgBase, HaveIg, IgIdx) && HaveIg &&
-          baseInRodata(IgBase)) {
-        Base = IgBase;
-        HaveBase = true;
+      default:
         break;
       }
     }
-    if (HaveBase)
-      break;
+    if (SawRaw == SawSymbolized)
+      return std::nullopt;
+    return SawSymbolized ? AddressModel::Symbolized : AddressModel::Raw;
+  };
+
+  auto recoverBase = [&](const MedVar &Arg, bool DirectConstantBypassesGetVar)
+      -> std::optional<RecoveredPhiBase> {
+    if (varIsFrameDerived(Arg))
+      return std::nullopt;
+
+    // A relocation-table LOAD produces the target pointer, not the numeric
+    // contents/source address of its slot.  Recover this before the generic
+    // literal-pool fold: absolute slots are rebuilt through a pointer mirror
+    // and are therefore already symbolized; a PC-relative table follows the
+    // exact base model reported by its dedicated recognizer.  Preserve every
+    // possible target so multi-arm/run validation never depends on an
+    // arbitrary first table entry.
+    std::set<uint64_t> PointerTargets;
+    if (recoverAbsoluteDataPointerLoadTargets(Arg, PointerTargets))
+      return RecoveredPhiBase{std::move(PointerTargets),
+                              AddressModel::Symbolized};
+    bool RelativeSymbolized = false;
+    if (recoverRelativeDataPointerTargets(Arg, PointerTargets,
+                                          RelativeSymbolized))
+      return RecoveredPhiBase{std::move(PointerTargets),
+                              RelativeSymbolized ? AddressModel::Symbolized
+                                                 : AddressModel::Raw};
+
+    bool SawLoad = false;
+    bool SawArithmetic = false;
+    uint16_t OriginSize = Arg.Size;
+    if (auto C =
+            traceTableBaseConst(Arg, 0, &SawLoad, &OriginSize, &SawArithmetic);
+        C && baseInRodata(*C) && (SawLoad || !SawArithmetic)) {
+      AddressModel Model = AddressModel::Raw;
+      if (SawArithmetic) {
+        // A folded literal load proves only that one arithmetic leaf is a raw
+        // numeric displacement.  Audit every sibling address-bearing leaf as
+        // well: `load(pool) + ptrtoint(@table)` is a mixed model even when the
+        // whole expression folds back to an original table VA.
+        auto Classified = classifyIndexedBaseModel(Arg, *C);
+        if (!Classified)
+          return std::nullopt;
+        Model = *Classified;
+      } else if (!SawLoad && !(Arg.isConst() && DirectConstantBypassesGetVar) &&
+                 getVarSymbolizesDataConstant(*C, OriginSize)) {
+        Model = AddressModel::Symbolized;
+      }
+      return RecoveredPhiBase{{*C}, Model};
+    }
+
+    uint64_t LpBase = 0;
+    bool HaveLp = false;
+    std::vector<MedVar> LpIdx;
+    if (collectLiteralPoolBase(Arg, LpBase, HaveLp, LpIdx) && HaveLp &&
+        baseInRodata(LpBase))
+      return RecoveredPhiBase{{LpBase}, AddressModel::Raw};
+
+    // Direct const-base init advanced by a runtime offset: `&tab + index`
+    // where clang folds `lea tab(%rip)` / `adrp+add` to the base VA and
+    // pre-adds the first iteration's index (the strength-reduced
+    // `tab[(i+k)%n]` modulo walk keeps a `base + running_index` pointer).
+    uint64_t IgBase = 0;
+    bool HaveIg = false;
+    std::vector<MedVar> IgIdx;
+    if (collectIndexedGlobalBase(Arg, IgBase, HaveIg, IgIdx) && HaveIg &&
+        baseInRodata(IgBase))
+      if (auto Model = classifyIndexedBaseModel(Arg, IgBase))
+        return RecoveredPhiBase{{IgBase}, *Model};
+    return std::nullopt;
+  };
+
+  struct PhiBaseEvidence {
+    const PhiNode *Phi = nullptr;
+    bool Recurrent = false;
+    bool Raw = false;
+    bool Symbolized = false;
+    std::set<uint64_t> Bases;
+  };
+  std::vector<PhiBaseEvidence> Evidence;
+  std::set<const PhiNode *> ProcessedCandidates;
+  for (const PhiNode *Phi : Candidates) {
+    if (!ProcessedCandidates.insert(Phi).second)
+      continue;
+    bool IsRecurrent = phiIsSelfRecurrent(*Phi);
+    if (!IsRecurrent && Phi != DirectAddressPhi)
+      continue;
+
+    bool SawInitialization = false;
+    bool SawInvalidInitialization = false;
+    bool SawTableShapedInvalidInitialization = false;
+    bool SawRawInitialization = false;
+    bool SawSymbolizedInitialization = false;
+    std::set<uint64_t> CandidateBases;
+    for (const auto &[Pred, Arg] : Phi->Args) {
+      if (!phiIncomingEdgeFeasible(*Phi, Pred) ||
+          phiIncomingIsRecurrent(*Phi, Pred, Arg))
+        continue;
+      SawInitialization = true;
+      auto Recovered = recoverBase(Arg, /*DirectConstantBypassesGetVar=*/true);
+      if (!Recovered) {
+        SawInvalidInitialization = true;
+        // A fully computed init whose resulting value lands in rodata is still
+        // table-shaped evidence even when its operands do not prove a pointer
+        // base (for example COPY(ADD(0x400,0x480)) == 0x880). Silently treating
+        // every such init as "no candidate" would leave the final memory access
+        // on a stale absolute VA. Dynamic non-table pointer loops remain
+        // ordinary unresolved accesses.
+        auto Value = traceValueVA(Arg);
+        SawTableShapedInvalidInitialization |= Value && baseInRodata(*Value);
+        continue;
+      }
+      CandidateBases.insert(Recovered->VAs.begin(), Recovered->VAs.end());
+      SawRawInitialization |= Recovered->Model == AddressModel::Raw;
+      SawSymbolizedInitialization |=
+          Recovered->Model == AddressModel::Symbolized;
+    }
+    if (!SawInitialization)
+      continue;
+    if (CandidateBases.empty()) {
+      if (SawTableShapedInvalidInitialization) {
+        failAmbiguousPhi(*Phi);
+        return nullptr;
+      }
+      continue;
+    }
+    if (SawInvalidInitialization ||
+        (SawRawInitialization && SawSymbolizedInitialization)) {
+      failAmbiguousPhi(*Phi);
+      return nullptr;
+    }
+    Evidence.push_back({Phi, IsRecurrent, SawRawInitialization,
+                        SawSymbolizedInitialization,
+                        std::move(CandidateBases)});
   }
+
+  auto isRegisterAlias = [&](const PhiNode &A, const PhiNode &B) {
+    const MedVar &AV = A.Output;
+    const MedVar &BV = B.Output;
+    if (AV.Kind != MedVar::Reg || BV.Kind != MedVar::Reg ||
+        AV.TheArch != BV.TheArch || AV.Size == 0 || BV.Size == 0)
+      return false;
+    const TargetRegInfo &TRI = getTargetRegInfo(AV.TheArch);
+    return TRI.isSubRegOf(AV.RegOff, AV.Size, BV.RegOff, BV.Size) ||
+           TRI.isSubRegOf(BV.RegOff, BV.Size, AV.RegOff, AV.Size);
+  };
+
+  llvm::GlobalVariable *ProvenRunGV = nullptr;
+  uint64_t ProvenRunStart = 0;
+  const PhiNode *PrimaryPhi = nullptr;
+  std::set<uint64_t> InitializationBases;
+  bool SawRawEvidence = false;
+  bool SawSymbolizedEvidence = false;
+  if (!Evidence.empty()) {
+    PrimaryPhi = Evidence.front().Phi;
+    for (const PhiBaseEvidence &Item : Evidence) {
+      // Multiple table-bearing recurrence candidates are only one pointer
+      // component when their outputs are overlapping register aliases. Two
+      // independent pointer PHIs under ADD/SUB are not an address base+index.
+      if (Item.Phi != PrimaryPhi && !isRegisterAlias(*PrimaryPhi, *Item.Phi)) {
+        failAmbiguousPhi(*Item.Phi);
+        return nullptr;
+      }
+      InitializationBases.insert(Item.Bases.begin(), Item.Bases.end());
+      SawRawEvidence |= Item.Raw;
+      SawSymbolizedEvidence |= Item.Symbolized;
+    }
+    if (SawRawEvidence && SawSymbolizedEvidence) {
+      failAmbiguousPhi(*PrimaryPhi);
+      return nullptr;
+    }
+
+    // A wide PHI may prove recurrence through a mutually recursive narrow
+    // register view. Audit that alias component's own initialization arms too;
+    // a low subregister constant is compatible only when it equals the low
+    // bits of one proven full-width base.
+    for (const PhiNode *Phi : Candidates) {
+      if (Phi == PrimaryPhi || !phiIsSelfRecurrent(*Phi) ||
+          !isRegisterAlias(*PrimaryPhi, *Phi))
+        continue;
+      bool SawAliasInitialization = false;
+      for (const auto &[Pred, Arg] : Phi->Args) {
+        if (!phiIncomingEdgeFeasible(*Phi, Pred) ||
+            phiIncomingIsRecurrent(*Phi, Pred, Arg))
+          continue;
+        SawAliasInitialization = true;
+        // Classify alias initializers with the same provenance recovery used
+        // for the primary PHI.  In particular, an i386 pointer-table LOAD
+        // followed by a stable offset is already symbolized; treating every
+        // SawLoad fold as raw here disagrees with recoverBase and falsely
+        // rejects the ordinary wide/narrow register views of one recurrence.
+        auto Recovered =
+            recoverBase(Arg, /*DirectConstantBypassesGetVar=*/true);
+        std::set<uint64_t> AliasBases;
+        AddressModel AliasModel = AddressModel::Raw;
+        if (Recovered) {
+          AliasBases = Recovered->VAs;
+          AliasModel = Recovered->Model;
+        } else {
+          // A narrow register view may contain only the low bits of a mapped
+          // full-width base (for example W0=0x800 for X0=0x100000800), so it is
+          // intentionally not a standalone mapped address recoverBase can
+          // resolve. Admit only a pure constant/forwarding chain here, then
+          // validate those bits against the primary bases below; arithmetic or
+          // LOAD provenance must use the shared structured recovery above.
+          bool SawLoad = false;
+          bool SawArithmetic = false;
+          uint16_t OriginSize = Arg.Size;
+          auto Value = traceTableBaseConst(Arg, 0, &SawLoad, &OriginSize,
+                                           &SawArithmetic);
+          if (!Value || SawLoad || SawArithmetic) {
+            failAmbiguousPhi(*Phi);
+            return nullptr;
+          }
+          AliasBases.insert(*Value);
+          if (!Arg.isConst() &&
+              getVarSymbolizesDataConstant(*Value, OriginSize))
+            AliasModel = AddressModel::Symbolized;
+        }
+        bool AliasSymbolized = AliasModel == AddressModel::Symbolized;
+        if (AliasSymbolized != SawSymbolizedEvidence) {
+          failAmbiguousPhi(*Phi);
+          return nullptr;
+        }
+        unsigned Bits = Arg.Size > 0 ? Arg.Size * 8 : Phi->Output.Size * 8;
+        uint64_t Mask = Bits >= 64 ? ~uint64_t(0) : ((uint64_t(1) << Bits) - 1);
+        for (uint64_t AliasBase : AliasBases) {
+          bool Compatible = false;
+          for (uint64_t B : InitializationBases)
+            Compatible |= ((AliasBase & Mask) == (B & Mask));
+          if (!Compatible) {
+            failAmbiguousPhi(*Phi);
+            return nullptr;
+          }
+        }
+      }
+      if (!SawAliasInitialization) {
+        failAmbiguousPhi(*Phi);
+        return nullptr;
+      }
+    }
+
+    Base = *InitializationBases.begin();
+    HaveBase = true;
+    BaseAddressModel =
+        SawRawEvidence ? AddressModel::Raw : AddressModel::Symbolized;
+
+    // A raw/current-VA anchor can cover multiple initialization bases only
+    // when every base resolves to the exact same embedded run. Uniformly
+    // symbolized values need no anchor and are handled directly below.
+    if (InitializationBases.size() > 1 &&
+        BaseAddressModel == AddressModel::Raw) {
+      for (uint64_t B : InitializationBases) {
+        const Segment *Seg = Img->getSegmentFor(B);
+        auto [RunGV, RunStart] =
+            Seg ? embedRodataRun(Seg->VA)
+                : std::pair<llvm::GlobalVariable *, uint64_t>{nullptr, 0};
+        if (!RunGV || (ProvenRunGV &&
+                       (RunGV != ProvenRunGV || RunStart != ProvenRunStart))) {
+          failAmbiguousPhi(*PrimaryPhi);
+          return nullptr;
+        }
+        ProvenRunGV = RunGV;
+        ProvenRunStart = RunStart;
+      }
+    }
+  }
+  auto failAmbiguousFallback = [&]() {
+    if (PrimaryPhi) {
+      failAmbiguousPhi(*PrimaryPhi);
+      return;
+    }
+    failAmbiguousAddress();
+  };
+
   // Fallback for a SELECT-merged base with no induction PHI: the ARM32 unrolled
   // `p = cond ? &W : p+1` reset carries a loop-invariant literal-pool base
   // (`base = PC_const + ldr[pc]`) through SELECT, not a PHI, so the per-PHI
-  // scan above never reaches it.  Recover the rodata base from a SELECT arm
-  // with the same literal-pool / indexed detectors.  getVar(addr) stays the
-  // original absolute VA (the base is computed in code, not getVar-symbolized),
-  // so the
-  // @run anchoring below is exact — the x86-64-style original-VA model.
+  // scan above never reaches it. Recover every provable rodata base from the
+  // SELECT arms and classify it by the same rule getVar uses. A direct SELECT
+  // constant is an operation input and therefore does pass through getVar,
+  // unlike a direct PHI edge constant.
   if (!HaveBase && SawSelect) {
-    for (const MedVar &Arg : SelectBaseVars) {
-      if (varIsFrameDerived(Arg))
+    std::set<uint64_t> SelectBases;
+    using SelectionEvidence = std::vector<RecoveredPhiBase>;
+    using SelectionSeen = std::set<std::tuple<int, int, int>>;
+    std::function<std::optional<SelectionEvidence>(const MedVar &, int,
+                                                   SelectionSeen)>
+        recoverSelectionArm =
+            [&](const MedVar &Arg, int Depth,
+                SelectionSeen Seen) -> std::optional<SelectionEvidence> {
+      if (Depth > 16 || varIsFrameDerived(Arg))
+        return std::nullopt;
+      if (!Arg.isConst()) {
+        auto Key =
+            std::make_tuple(static_cast<int>(Arg.Kind), Arg.Id, Arg.SSAVer);
+        if (!Seen.insert(Key).second)
+          return std::nullopt;
+        if (const MedOp *Def = findDef(Arg)) {
+          if (auto Forwarded = pointerPreservingInput(*Def))
+            return recoverSelectionArm(*Forwarded, Depth + 1, Seen);
+          MedVar ArmT, ArmF;
+          bool IsSelection = false;
+          if (selectPreservesPointerValues(*Def)) {
+            ArmT = Def->Inputs[1];
+            ArmF = Def->Inputs[2];
+            IsSelection = true;
+          } else if (Def->Opcode == NdOp::INT_OR) {
+            MedVar Cond;
+            IsSelection = isMaskedSelectOr(*Def, Cond, ArmT, ArmF);
+          }
+          if (IsSelection) {
+            auto T = recoverSelectionArm(ArmT, Depth + 1, Seen);
+            auto F = recoverSelectionArm(ArmF, Depth + 1, Seen);
+            if (!T || !F)
+              return std::nullopt;
+            T->insert(T->end(), F->begin(), F->end());
+            return T;
+          }
+        }
+      }
+      auto Recovered = recoverBase(Arg, /*DirectConstantBypassesGetVar=*/false);
+      if (!Recovered)
+        return std::nullopt;
+      return SelectionEvidence{*Recovered};
+    };
+    auto selectionArmIsTableShaped = [&](const MedVar &Arg) {
+      auto Value = traceValueVA(Arg);
+      return Value && baseInRodata(*Value);
+    };
+
+    for (const auto &[Left, Right] : SelectBasePairs) {
+      auto L = recoverSelectionArm(Left, 0, {});
+      auto R = recoverSelectionArm(Right, 0, {});
+      // Once either feasible arm proves a table base, every sibling arm must
+      // prove a compatible pointer model. A live scalar cannot be discarded
+      // merely because another arm happens to be recoverable.
+      if (static_cast<bool>(L) != static_cast<bool>(R)) {
+        failAmbiguousFallback();
+        return nullptr;
+      }
+      if (!L) {
+        // Two equally unprovable arms are not evidence that no table pointer is
+        // involved. Constant arithmetic can make both arms land in rodata while
+        // deliberately hiding the owning base (for example 0x400 + 0x480).
+        // Once the resulting values are table-shaped, refusing the selection is
+        // the only safe alternative to retaining their original absolute VAs.
+        if (selectionArmIsTableShaped(Left) ||
+            selectionArmIsTableShaped(Right)) {
+          failAmbiguousFallback();
+          return nullptr;
+        }
         continue;
-      if (auto C = traceTableBaseConst(Arg, 0, nullptr);
-          C && baseInRodata(*C)) {
-        Base = *C;
-        HaveBase = true;
-        break;
       }
-      uint64_t LpBase = 0;
-      bool HaveLp = false;
-      std::vector<MedVar> LpIdx;
-      if (collectLiteralPoolBase(Arg, LpBase, HaveLp, LpIdx) && HaveLp &&
-          baseInRodata(LpBase)) {
-        Base = LpBase;
-        HaveBase = true;
-        break;
+      L->insert(L->end(), R->begin(), R->end());
+      for (const RecoveredPhiBase &Recovered : *L) {
+        if (BaseAddressModel && *BaseAddressModel != Recovered.Model) {
+          failAmbiguousFallback();
+          return nullptr;
+        }
+        BaseAddressModel = Recovered.Model;
+        SelectBases.insert(Recovered.VAs.begin(), Recovered.VAs.end());
       }
-      uint64_t IgBase = 0;
-      bool HaveIg = false;
-      std::vector<MedVar> IgIdx;
-      if (collectIndexedGlobalBase(Arg, IgBase, HaveIg, IgIdx) && HaveIg &&
-          baseInRodata(IgBase)) {
-        Base = IgBase;
-        HaveBase = true;
-        break;
+    }
+    if (!SelectBases.empty()) {
+      Base = *SelectBases.begin();
+      HaveBase = true;
+      if (SelectBases.size() > 1 && BaseAddressModel == AddressModel::Raw) {
+        for (uint64_t B : SelectBases) {
+          const Segment *Seg = Img->getSegmentFor(B);
+          auto [RunGV, RunStart] =
+              Seg ? embedRodataRun(Seg->VA)
+                  : std::pair<llvm::GlobalVariable *, uint64_t>{nullptr, 0};
+          if (!RunGV || (ProvenRunGV && (RunGV != ProvenRunGV ||
+                                         RunStart != ProvenRunStart))) {
+            failAmbiguousFallback();
+            return nullptr;
+          }
+          ProvenRunGV = RunGV;
+          ProvenRunStart = RunStart;
+        }
       }
     }
   }
@@ -361,8 +825,9 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
   if (!HaveBase && HaveDagRodata && !varIsFrameDerived(AddrVar)) {
     Base = DagRodataBase;
     HaveBase = true;
+    BaseAddressModel = AddressModel::Raw;
   }
-  if (!HaveBase)
+  if (!HaveBase || !BaseAddressModel)
     return nullptr;
 
   // When getVar already symbolizes the base constant to a relocatable global,
@@ -378,11 +843,7 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
   // pointer base.  x86-64/AArch64 non-PIC keep the base a bare origVA constant
   // getVar leaves numeric (not flagged), so they fall through to the @run
   // anchoring.
-  bool BaseGetVarSymbolizes =
-      Base > limits::kMinGlobalDataAddr ||
-      ((Img->RelocDataAddrs.count(Base) || Img->RodataAnchorSeg.count(Base)) &&
-       !constValueUsedAsInteger(Base));
-  if (isInductionRodataStringBase(Base) || BaseGetVarSymbolizes) {
+  if (*BaseAddressModel == AddressModel::Symbolized) {
     llvm::Value *Cur = getVar(AddrVar, Builder);
     if (!Cur)
       return nullptr;
@@ -401,12 +862,14 @@ llvm::Value *MedLLVMEmitter::tryResolveInductionGlobalPtr(
   // relative layout, so `@run + (Cur - run_start)` lands on the correct element
   // for any VA in the region.  Falls back to the single-base global only when
   // the run is too large to embed.
-  llvm::Constant *G = nullptr;
-  uint64_t Anchor = Base;
-  if (const Segment *BaseSeg = Img->getSegmentFor(Base)) {
-    if (auto [RunGV, RunStart] = embedRodataRun(BaseSeg->VA); RunGV) {
-      G = RunGV;
-      Anchor = RunStart;
+  llvm::Constant *G = ProvenRunGV;
+  uint64_t Anchor = ProvenRunGV ? ProvenRunStart : Base;
+  if (!G) {
+    if (const Segment *BaseSeg = Img->getSegmentFor(Base)) {
+      if (auto [RunGV, RunStart] = embedRodataRun(BaseSeg->VA); RunGV) {
+        G = RunGV;
+        Anchor = RunStart;
+      }
     }
   }
   if (!G) {
@@ -453,8 +916,10 @@ bool MedLLVMEmitter::isReadOnlyDataSymbol(uint64_t VA) {
   return RodataSymbolVAs.count(VA) > 0;
 }
 
-llvm::Value *MedLLVMEmitter::tryResolveIndexedGlobalPtr(
-    const MedVar &AddrVar, uint16_t SizeHint, llvm::IRBuilder<> &Builder) {
+llvm::Value *
+MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
+                                           uint16_t SizeHint, bool FailClosed,
+                                           llvm::IRBuilder<> &Builder) {
   if (!CurMedFunc || !Img || AddrVar.isConst())
     return nullptr;
 
@@ -470,7 +935,8 @@ llvm::Value *MedLLVMEmitter::tryResolveIndexedGlobalPtr(
   uint64_t Base = 0;
   bool HaveBase = false;
   std::vector<MedVar> IdxTerms;
-  if (!collectIndexedGlobalBase(AddrVar, Base, HaveBase, IdxTerms) ||
+  if (!collectIndexedGlobalBase(AddrVar, Base, HaveBase, IdxTerms,
+                                /*Depth=*/0, FailClosed) ||
       !HaveBase || Base == 0 || IdxTerms.empty())
     return nullptr;
 

@@ -250,6 +250,22 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           Img.DataPtrRelocSlots.insert(P);
       };
 
+      // Relative data-pointer table entry.  The slot contains a signed
+      // displacement and the generated code adds the table base after loading
+      // it.  Record the slot (rather than only the source/target segment) so
+      // the emitter can recover the exact contiguous table and its possible
+      // target pointers without treating arbitrary integer tables as
+      // provenance.
+      auto RecordRelDataPtr = [&](uint64_t TargetVA) {
+        const Segment *PSeg = Img.getSegmentFor(P);
+        const Segment *TSeg = Img.getSegmentFor(TargetVA);
+        if (PSeg && PSeg->isReadable() && !PSeg->isWritable() &&
+            !PSeg->isExecutable() && !PSeg->Data.empty() && TSeg &&
+            TSeg->isReadable() && !TSeg->isWritable() &&
+            !TSeg->isExecutable() && !TSeg->Data.empty())
+          Img.RelDataPtrRelocSlots.insert(P);
+      };
+
       // Record a PC-relative relocation slot that sits in read-only data and
       // references executable code — a PIC `switch` jump-table entry.  A run
       // of these bounds a `switch(x % N)` table (modulus-bounded index, no
@@ -321,6 +337,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
           if (RType == R_X86_64_PC32 || RType == R_AARCH64_PREL32)
             RecordRelCodePtr(S);
+          if (RType == R_X86_64_PC32 || RType == R_AARCH64_PREL32)
+            RecordRelDataPtr(S);
           // A PC-relative `lea`/`mov` of a writable global takes/accesses its
           // address.  x86-64 RIP-relative measures the displacement from the
           // END of the (4-byte-disp-trailing) instruction, so the target VA
@@ -484,6 +502,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           case R_386_PC32:
           case R_386_PLT32:
             Put32(static_cast<uint32_t>(S + InPlace - P));
+            if (RType == R_386_PC32)
+              RecordRelDataPtr(S);
             break;
           case R_386_GOTPC:
             Put32(static_cast<uint32_t>(InPlace - P));
@@ -501,6 +521,7 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           RecordWritableDataTarget(static_cast<uint32_t>(S + InPlace));
         } else if (RType == R_ARM_REL32) {
           Put32(static_cast<int32_t>(S + InPlace - P));
+          RecordRelDataPtr(S);
           // ARM32 non-PIC takes a writable global's address via a PC-relative
           // literal pool (`ldr rN,[pc]; add rN,pc,rN`), emitted as
           // R_ARM_REL32 on the literal word.  The TARGET is the symbol VA S

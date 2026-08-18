@@ -129,9 +129,7 @@ bool MedLLVMEmitter::collectFrameReloadSources(
     const MedOp &Load, std::vector<MedVar> &Sources) const {
   Sources.clear();
   if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
-      Load.Output.Size == 0 ||
-      Load.Output.Size != getTargetRegInfo(TargetArch).PointerSize ||
-      !varIsFrameDerived(Load.Inputs[0]) ||
+      Load.Output.Size == 0 || !varIsFrameDerived(Load.Inputs[0]) ||
       stackSlotAddressEscapes(Load.Inputs[0]))
     return false;
 
@@ -156,6 +154,41 @@ bool MedLLVMEmitter::collectFrameReloadSources(
   if (!LoadBlock)
     return false;
 
+  // Preds is cached IR metadata, not authority for reachability.  Reconstruct
+  // the incoming relation from every ordinary/exceptional successor and
+  // require the two views to agree before proving an all-path reaching store.
+  // A malformed or stale predecessor list must not hide an uninitialized
+  // bypass and turn a later table-looking STORE into pointer provenance.
+  std::map<int, std::set<int>> StructuralPreds;
+  for (const auto &[Id, Block] : BlocksById) {
+    (void)Block;
+    StructuralPreds.emplace(Id, std::set<int>{});
+  }
+  for (const auto &[Id, Block] : BlocksById) {
+    for (int SuccId : Block->Succs) {
+      auto It = StructuralPreds.find(SuccId);
+      if (It == StructuralPreds.end())
+        return false;
+      It->second.insert(Id);
+    }
+    for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs) {
+      if (Edge.BlockId < 0)
+        continue;
+      auto It = StructuralPreds.find(Edge.BlockId);
+      if (It == StructuralPreds.end())
+        return false;
+      It->second.insert(Id);
+    }
+  }
+  for (const auto &[Id, Block] : BlocksById) {
+    std::set<int> Declared(Block->Preds.begin(), Block->Preds.end());
+    for (const ExceptionalEdge &Edge : Block->ExceptionalPreds)
+      if (Edge.BlockId >= 0)
+        Declared.insert(Edge.BlockId);
+    if (Declared != StructuralPreds[Id])
+      return false;
+  }
+
   auto isMemoryWrite = [](NdOp Opcode) {
     return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
            Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
@@ -170,124 +203,206 @@ bool MedLLVMEmitter::collectFrameReloadSources(
     };
     return !endsBefore(A, ASize, B) && !endsBefore(B, BSize, A);
   };
-  auto addSource = [&](const MedVar &Source) {
-    if (std::find(Sources.begin(), Sources.end(), Source) == Sources.end())
-      Sources.push_back(Source);
+  struct ReachingState {
+    bool Reachable = false;
+    bool Uninitialized = false;
+    bool Invalid = false;
+    std::vector<MedVar> Values;
   };
-
-  std::set<std::pair<int, size_t>> Done;
-  std::set<int> ActiveBlocks;
-  std::function<bool(const MedBlock &, size_t)> Walk =
-      [&](const MedBlock &Block, size_t Boundary) -> bool {
-    if (Boundary > Block.Ops.size())
+  auto addUnique = [](std::vector<MedVar> &Values, const MedVar &Value) {
+    if (std::find(Values.begin(), Values.end(), Value) == Values.end())
+      Values.push_back(Value);
+  };
+  auto sameState = [](const ReachingState &A, const ReachingState &B) {
+    if (A.Reachable != B.Reachable || A.Uninitialized != B.Uninitialized ||
+        A.Invalid != B.Invalid || A.Values.size() != B.Values.size())
       return false;
-    const auto State = std::make_pair(Block.Id, Boundary);
-    if (Done.count(State))
-      return true;
-    // Re-entering a block before a reaching definition proves only a loop
-    // back-edge, not that the first trip to the reload was initialized.  In
-    // particular, do not let a STORE after the LOAD become its own reaching
-    // definition through a self-edge.
-    if (!ActiveBlocks.insert(Block.Id).second)
-      return false;
-
-    bool Result = [&]() {
-      for (size_t I = Boundary; I > 0; --I) {
-        const MedOp &Op = Block.Ops[I - 1];
-        if (!isMemoryWrite(Op.Opcode))
-          continue;
-        if (Op.NumInputs < 1)
-          return false;
-        const MedVar &WriteAddr = Op.Inputs[0];
-        if (!varIsFrameDerived(WriteAddr))
-          continue;
-        const auto WriteKey = addrSlotKey(WriteAddr);
-        // A frame-derived write whose slot cannot be canonicalized, or whose
-        // root differs from the reload's root, may still alias after an
-        // unmodelled stack adjustment.  It cannot participate in a proof.
-        if (!WriteKey || WriteKey->first != Target->first)
-          return false;
-
-        uint16_t WriteSize = Op.Opcode == NdOp::STORE && Op.NumInputs >= 2
-                                 ? Op.Inputs[1].Size
-                                 : Op.Output.Size;
-        if (!overlaps(WriteKey->second, WriteSize, Target->second,
-                      Load.Output.Size))
-          continue;
-        if (Op.Opcode != NdOp::STORE || Op.NumInputs < 2 || WriteSize == 0 ||
-            WriteKey->second != Target->second || WriteSize != Load.Output.Size)
-          return false;
-        addSource(Op.Inputs[1]);
-        return true;
-      }
-
-      std::set<int> PredIds(Block.Preds.begin(), Block.Preds.end());
-      for (const ExceptionalEdge &Edge : Block.ExceptionalPreds)
-        PredIds.insert(Edge.BlockId);
-      if (PredIds.empty())
+    for (const MedVar &Value : A.Values)
+      if (std::find(B.Values.begin(), B.Values.end(), Value) == B.Values.end())
         return false;
-      for (int PredId : PredIds) {
-        auto It = BlocksById.find(PredId);
-        if (PredId < 0 || It == BlocksById.end() ||
-            !Walk(*It->second, It->second->Ops.size()))
-          return false;
+    return true;
+  };
+  auto mergeInto = [&](ReachingState &Dst, const ReachingState &Src) {
+    if (!Src.Reachable)
+      return false;
+    ReachingState Before = Dst;
+    Dst.Reachable = true;
+    Dst.Uninitialized |= Src.Uninitialized;
+    Dst.Invalid |= Src.Invalid;
+    for (const MedVar &Value : Src.Values)
+      addUnique(Dst.Values, Value);
+    return !sameState(Before, Dst);
+  };
+  auto transfer = [&](const MedBlock &Block, size_t Boundary,
+                      ReachingState State) {
+    if (!State.Reachable || Boundary > Block.Ops.size()) {
+      State.Invalid |= Boundary > Block.Ops.size();
+      return State;
+    }
+    for (size_t I = 0; I < Boundary; ++I) {
+      const MedOp &Op = Block.Ops[I];
+      if (!isMemoryWrite(Op.Opcode))
+        continue;
+      if (Op.NumInputs < 1) {
+        State.Invalid = true;
+        State.Values.clear();
+        continue;
       }
-      return true;
-    }();
+      const MedVar &WriteAddr = Op.Inputs[0];
+      if (!varIsFrameDerived(WriteAddr))
+        continue;
+      const auto WriteKey = addrSlotKey(WriteAddr);
+      // A frame-derived write whose slot cannot be canonicalized, or whose
+      // root differs from the reload's root, may still alias after an
+      // unmodelled stack adjustment. Keep the state poisoned until a later
+      // exact full-width STORE definitely overwrites the target slot.
+      if (!WriteKey || WriteKey->first != Target->first) {
+        State.Invalid = true;
+        State.Values.clear();
+        continue;
+      }
 
-    ActiveBlocks.erase(Block.Id);
-    if (Result)
-      Done.insert(State);
-    return Result;
+      uint16_t WriteSize = Op.Opcode == NdOp::STORE && Op.NumInputs >= 2
+                               ? Op.Inputs[1].Size
+                               : Op.Output.Size;
+      if (!overlaps(WriteKey->second, WriteSize, Target->second,
+                    Load.Output.Size))
+        continue;
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 && WriteSize != 0 &&
+          WriteKey->second == Target->second && WriteSize == Load.Output.Size) {
+        State.Uninitialized = false;
+        State.Invalid = false;
+        State.Values.clear();
+        addUnique(State.Values, Op.Inputs[1]);
+        continue;
+      }
+      State.Uninitialized = false;
+      State.Invalid = true;
+      State.Values.clear();
+    }
+    return State;
   };
 
-  return Walk(*LoadBlock, LoadIndex) && !Sources.empty();
+  // Forward may-reach dataflow over the exact slot.  Unlike a recursive
+  // backwards walk, this reaches a fixed point across loop back-edges and
+  // therefore distinguishes a preheader definition from a STORE that occurs
+  // only after the LOAD and can affect later iterations.
+  std::map<int, ReachingState> InStates;
+  std::map<int, ReachingState> OutStates;
+  ReachingState Entry;
+  Entry.Reachable = true;
+  Entry.Uninitialized = true;
+  InStates[CurMedFunc->Blocks.front().Id] = Entry;
+  std::vector<int> Work{CurMedFunc->Blocks.front().Id};
+  while (!Work.empty()) {
+    int BlockId = Work.back();
+    Work.pop_back();
+    auto BlockIt = BlocksById.find(BlockId);
+    if (BlockIt == BlocksById.end())
+      return false;
+    const MedBlock &Block = *BlockIt->second;
+    ReachingState Next = transfer(Block, Block.Ops.size(), InStates[BlockId]);
+    if (sameState(OutStates[BlockId], Next))
+      continue;
+    OutStates[BlockId] = Next;
+
+    auto propagate = [&](int SuccId) {
+      auto Succ = BlocksById.find(SuccId);
+      if (Succ == BlocksById.end())
+        return false;
+      if (mergeInto(InStates[SuccId], Next))
+        Work.push_back(SuccId);
+      return true;
+    };
+    for (int SuccId : Block.Succs)
+      if (!propagate(SuccId))
+        return false;
+    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      if (Edge.BlockId >= 0 && !propagate(Edge.BlockId))
+        return false;
+  }
+
+  ReachingState AtLoad =
+      transfer(*LoadBlock, LoadIndex, InStates[LoadBlock->Id]);
+  if (!AtLoad.Reachable || AtLoad.Uninitialized || AtLoad.Invalid ||
+      AtLoad.Values.empty())
+    return false;
+  Sources = std::move(AtLoad.Values);
+  return true;
 }
 
 std::optional<uint64_t> MedLLVMEmitter::traceValueVA(const MedVar &V,
                                                      int Depth) const {
-  if (V.isConst())
-    return V.ConstVal;
-  if (!CurMedFunc || Depth > 12)
+  if (!CurMedFunc && !V.isConst())
     return std::nullopt;
-  const MedOp *Def = lookupDef(V);
-  if (!Def)
-    return std::nullopt;
+  (void)Depth;
   auto mask = [](uint64_t X, uint16_t Size) -> uint64_t {
     if (Size == 0 || Size >= 8)
       return X;
     return X & ((1ULL << (Size * 8)) - 1);
   };
-  switch (Def->Opcode) {
-  case NdOp::COPY:
-  case NdOp::INT_ZEXT:
-  case NdOp::INT_SEXT:
-    // Width change preserves the low value an address carries; no mask needed
-    // (a zero-extended narrow value already fits, a sign-extended address stays
-    // positive in the low bits the rebase consumes).
-    return Def->NumInputs >= 1 ? traceValueVA(Def->Inputs[0], Depth + 1)
-                               : std::nullopt;
-  case NdOp::SUBBYTES:
-    if (Def->NumInputs >= 2 && Def->Inputs[1].isConst() &&
-        Def->Inputs[1].ConstVal == 0)
-      if (auto B = traceValueVA(Def->Inputs[0], Depth + 1))
-        return mask(*B, Def->Output.Size);
-    return std::nullopt;
-  case NdOp::INT_ADD:
-    if (Def->NumInputs >= 2)
-      if (auto A = traceValueVA(Def->Inputs[0], Depth + 1))
-        if (auto B = traceValueVA(Def->Inputs[1], Depth + 1))
-          return mask(*A + *B, Def->Output.Size);
-    return std::nullopt;
-  case NdOp::INT_SUB:
-    if (Def->NumInputs >= 2)
-      if (auto A = traceValueVA(Def->Inputs[0], Depth + 1))
-        if (auto B = traceValueVA(Def->Inputs[1], Depth + 1))
-          return mask(*A - *B, Def->Output.Size);
-    return std::nullopt;
-  default:
-    return std::nullopt;
-  }
+  using Key = std::tuple<int, int, int, uint16_t>;
+  std::set<Key> Active;
+  std::map<Key, std::optional<uint64_t>> Memo;
+  std::function<std::optional<uint64_t>(const MedVar &)> Eval =
+      [&](const MedVar &Cur) -> std::optional<uint64_t> {
+    if (Cur.isConst())
+      return Cur.ConstVal;
+    Key K = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
+                            Cur.Size);
+    if (auto It = Memo.find(K); It != Memo.end())
+      return It->second;
+    if (!Active.insert(K).second)
+      return std::nullopt;
+
+    std::optional<uint64_t> Result;
+    const MedOp *Def = lookupDef(Cur);
+    if (Def) {
+      switch (Def->Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ZEXT:
+        if (Def->NumInputs >= 1)
+          if (auto B = Eval(Def->Inputs[0]))
+            Result = mask(mask(*B, Def->Inputs[0].Size), Def->Output.Size);
+        break;
+      case NdOp::INT_SEXT:
+        if (Def->NumInputs >= 1)
+          if (auto B = Eval(Def->Inputs[0])) {
+            unsigned InBits = Def->Inputs[0].Size * 8;
+            uint64_t Value = mask(*B, Def->Inputs[0].Size);
+            if (InBits != 0 && InBits < 64 &&
+                (Value & (uint64_t(1) << (InBits - 1))))
+              Value |= ~((uint64_t(1) << InBits) - 1);
+            Result = mask(Value, Def->Output.Size);
+          }
+        break;
+      case NdOp::SUBBYTES:
+        if (Def->NumInputs >= 2 && Def->Inputs[1].isConst() &&
+            Def->Inputs[1].ConstVal == 0)
+          if (auto B = Eval(Def->Inputs[0]))
+            Result = mask(*B, Def->Output.Size);
+        break;
+      case NdOp::INT_ADD:
+        if (Def->NumInputs >= 2)
+          if (auto A = Eval(Def->Inputs[0]))
+            if (auto B = Eval(Def->Inputs[1]))
+              Result = mask(*A + *B, Def->Output.Size);
+        break;
+      case NdOp::INT_SUB:
+        if (Def->NumInputs >= 2)
+          if (auto A = Eval(Def->Inputs[0]))
+            if (auto B = Eval(Def->Inputs[1]))
+              Result = mask(*A - *B, Def->Output.Size);
+        break;
+      default:
+        break;
+      }
+    }
+    Active.erase(K);
+    Memo.emplace(K, Result);
+    return Result;
+  };
+  return Eval(V);
 }
 
 bool MedLLVMEmitter::frameSlotReloadUsedLocally(const MedVar &StoreAddr) const {

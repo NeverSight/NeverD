@@ -72,6 +72,15 @@ void applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
         continue;
       va_t S = SymVal;
       va_t P = SecAddr + RAddr;
+      auto RecordRelDataPtr = [&]() {
+        const Segment *PSeg = Img.getSegmentFor(P);
+        const Segment *TSeg = Img.getSegmentFor(S);
+        if (PSeg && PSeg->isReadable() && !PSeg->isWritable() &&
+            !PSeg->isExecutable() && !PSeg->Data.empty() && TSeg &&
+            TSeg->isReadable() && !TSeg->isWritable() &&
+            !TSeg->isExecutable() && !TSeg->Data.empty())
+          Img.RelDataPtrRelocSlots.insert(P);
+      };
       if (Img.Arch == Arch::X64) {
         if (RType == X86_64_RELOC_SIGNED || RType == X86_64_RELOC_BRANCH ||
             RType == X86_64_RELOC_GOT_LOAD || RType == X86_64_RELOC_GOT) {
@@ -81,6 +90,8 @@ void applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
           std::memcpy(&Existing, ApplySeg->Data.data() + SegOff, 4);
           int32_t Val = static_cast<int32_t>(S + Existing - P);
           std::memcpy(ApplySeg->Data.data() + SegOff, &Val, 4);
+          if (RType == X86_64_RELOC_SIGNED)
+            RecordRelDataPtr();
         } else if (RType == X86_64_RELOC_UNSIGNED) {
           if (!rangeInBounds(SegOff, 8, ApplySeg->Data.size()))
             continue;

@@ -62,12 +62,12 @@ bool MedLLVMEmitter::valIsPointerDiffBase(uint64_t Val) const {
         }
         continue;
       }
-      if (const MedOp *D = findDef(Cur))
+      if (const MedOp *D = findDef(Cur)) {
+        if (auto Forwarded = pointerPreservingInput(*D)) {
+          Work.push_back(*Forwarded);
+          continue;
+        }
         switch (D->Opcode) {
-        case NdOp::COPY:
-        case NdOp::INT_ZEXT:
-        case NdOp::INT_SEXT:
-        case NdOp::SUBBYTES:
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
         case NdOp::SELECT:
@@ -77,6 +77,7 @@ bool MedLLVMEmitter::valIsPointerDiffBase(uint64_t Val) const {
         default:
           break;
         }
+      }
     }
     return false;
   };
@@ -145,12 +146,12 @@ bool MedLLVMEmitter::valIsAdvancingInductionBase(uint64_t Val) const {
         }
         continue;
       }
-      if (const MedOp *D = findDef(Cur))
+      if (const MedOp *D = findDef(Cur)) {
+        if (auto Forwarded = pointerPreservingInput(*D)) {
+          Work.push_back(*Forwarded);
+          continue;
+        }
         switch (D->Opcode) {
-        case NdOp::COPY:
-        case NdOp::INT_ZEXT:
-        case NdOp::INT_SEXT:
-        case NdOp::SUBBYTES:
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
         case NdOp::SELECT:
@@ -160,6 +161,7 @@ bool MedLLVMEmitter::valIsAdvancingInductionBase(uint64_t Val) const {
         default:
           break;
         }
+      }
     }
     return false;
   };
@@ -203,7 +205,7 @@ bool MedLLVMEmitter::valIsAdvancingInductionBase(uint64_t Val) const {
   return false;
 }
 
-bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) {
+bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) const {
   if (!CurMedFunc || !Img || Val == 0)
     return false;
   if (InductionBasesFor != CurMedFunc) {
@@ -323,10 +325,8 @@ bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) {
             continue;
           }
           if (const MedOp *D = findDef(Cur)) {
-            if ((D->Opcode == NdOp::COPY || D->Opcode == NdOp::INT_ZEXT ||
-                 D->Opcode == NdOp::INT_SEXT || D->Opcode == NdOp::SUBBYTES) &&
-                D->NumInputs >= 1)
-              Work.push_back(D->Inputs[0]);
+            if (auto Forwarded = pointerPreservingInput(*D))
+              Work.push_back(*Forwarded);
             else if ((D->Opcode == NdOp::INT_ADD ||
                       D->Opcode == NdOp::INT_SUB) &&
                      D->NumInputs >= 2) {

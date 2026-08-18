@@ -234,9 +234,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (libc::isMemSetName(LibName)) {
       llvm::Value *Dest = Args[0];
       if (Dest->getType()->isIntegerTy()) {
-        llvm::Value *Sym = (CI && !CI->Args.empty())
-                               ? tryResolvePointerArg(CI->Args[0], Builder)
-                               : nullptr;
+        llvm::Value *Sym =
+            (CI && !CI->Args.empty())
+                ? tryResolvePointerArg(CI->Args[0],
+                                       /*FailClosed=*/true, Builder)
+                : nullptr;
         Dest = Sym ? Sym : Builder.CreateIntToPtr(Dest, PtrTy);
       }
       llvm::Value *Val = Args[1];
@@ -340,9 +342,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           if (libc::varArgFixedParamKind(CalleeName, I) ==
                   libc::VarArgFixedParamKind::Pointer &&
               Args[I]->getType()->isIntegerTy()) {
-            llvm::Value *Sym = (CI && I < CI->Args.size())
-                                   ? tryResolvePointerArg(CI->Args[I], Builder)
-                                   : nullptr;
+            llvm::Value *Sym =
+                (CI && I < CI->Args.size())
+                    ? tryResolvePointerArg(CI->Args[I],
+                                           /*FailClosed=*/true, Builder)
+                    : nullptr;
             Args[I] = Sym ? Sym : Builder.CreateIntToPtr(Args[I], PtrTy);
           }
         }
@@ -537,7 +541,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             AI < CI->Args.size() && PtrSz &&
             FixedKind != libc::VarArgFixedParamKind::Integer &&
             Want->getIntegerBitWidth() == PtrSz * 8)
-          if (llvm::Value *Sym = tryResolvePointerArg(CI->Args[AI], Builder))
+          if (llvm::Value *Sym = tryResolvePointerArg(
+                  CI->Args[AI], /*FailClosed=*/false, Builder))
             AV = Builder.CreatePtrToInt(Sym, Want);
         if (AV->getType() != Want) {
           llvm::Type *AT = AV->getType();
@@ -552,7 +557,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             // table VA.
             llvm::Value *Sym = nullptr;
             if (CI && AI < CI->Args.size())
-              Sym = tryResolvePointerArg(CI->Args[AI], Builder);
+              Sym = tryResolvePointerArg(CI->Args[AI],
+                                         /*FailClosed=*/true, Builder);
             AV = Sym ? Sym : Builder.CreateIntToPtr(AV, Want);
           } else if (AT->isPointerTy() && Want->isIntegerTy()) {
             AV = Builder.CreatePtrToInt(AV, Want);
@@ -683,7 +689,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       llvm::Type *Want = ParamTys[AI];
       if (Want->isIntegerTy() && AV->getType()->isIntegerTy() && CI &&
           AI < CI->Args.size())
-        if (llvm::Value *Sym = tryResolvePointerArg(CI->Args[AI], Builder))
+        if (llvm::Value *Sym = tryResolvePointerArg(
+                CI->Args[AI], /*FailClosed=*/false, Builder))
           AV = Builder.CreatePtrToInt(Sym, AV->getType());
       if (AV->getType() != Want) {
         llvm::Type *AT = AV->getType();

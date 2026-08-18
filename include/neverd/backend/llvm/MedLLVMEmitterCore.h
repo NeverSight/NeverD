@@ -270,6 +270,16 @@ private:
   llvm::Type *sizeToType(uint16_t Size);
   llvm::Type *mapNdtype(const TypeRef &Ty);
   llvm::Value *getVar(const MedVar &V, llvm::IRBuilder<> &Builder);
+  /// Return the exact primary data-address model getVar applies before
+  /// materializing a constant: true means ptrtoint(@global), false means the
+  /// original numeric VA. Address resolvers use this same predicate so a
+  /// forwarded/COPY arm is never classified merely by its SSA shape.
+  bool getVarSymbolizesDataConstant(uint64_t Val, uint16_t Size) const;
+  /// True when getVar may replace the original numeric bit pattern with a
+  /// relocatable data/function address.  Constant control folding must stop at
+  /// such a leaf: comparisons on original image VAs are not invariant after
+  /// the rebuilt object is linked at a different address.
+  bool getVarMayRelocateConstant(uint64_t Val, uint16_t Size) const;
   void setVar(const MedVar &V, llvm::Value *Val, llvm::IRBuilder<> &Builder);
 
   /// Lower an INDIR_BR with a resolved jump table into an LLVM switch on the
@@ -602,12 +612,102 @@ private:
 
   std::optional<uint64_t> traceSSAConst(const MedVar &V) const;
 
+  /// Conservatively fold a side-effect-free integer SSA expression used as a
+  /// control condition. Width changes, subpieces, arithmetic/bitwise ops,
+  /// comparisons, boolean ops, and a SELECT with a proven condition are
+  /// supported; PHIs, memory, calls, and any unrecognised operation stay
+  /// unknown. This is control-feasibility evidence, never a value rewrite.
+  std::optional<uint64_t> traceControlConst(const MedVar &V) const;
+
+  /// Build the ordinary/exceptional CFG edges reachable from the function
+  /// entry while pruning only COND_BR edges whose condition folds through
+  /// traceControlConst. Unknown conditions retain both edges.
+  void ensureFeasibleEdgeCache() const;
+
+  enum class PhiEdgeFeasibility { Infeasible, ProvenFeasible, Unknown };
+
+  /// Classify a PHI incoming edge without converting malformed/missing CFG
+  /// structure into positive reachability evidence. Provenance consumers treat
+  /// Unknown as reachable uncertainty; recurrence proofs require
+  /// ProvenFeasible.
+  PhiEdgeFeasibility classifyPhiIncomingEdge(const PhiNode &Phi,
+                                             int PredId) const;
+
+  /// True unless the conservative feasible-edge graph proves this incoming
+  /// edge dead. Malformed input remains reachable uncertainty so all-arms
+  /// pointer proofs fail closed.
+  bool phiIncomingEdgeFeasible(const PhiNode &Phi, int PredId) const;
+
+  /// True when this particular proven-feasible PHI input carries an exact
+  /// recurrence to the root output or through an overlapping wide/narrow
+  /// register-alias sibling PHI.
+  bool phiIncomingIsRecurrent(const PhiNode &Phi, int PredId,
+                              const MedVar &Arg) const;
+
+  /// True when an incoming value's defining DAG reaches the PHI output or a
+  /// mutually recurrent sibling PHI (for example, x86 wide/narrow register
+  /// aliases). Such a loop-carried PHI belongs to the induction resolver and
+  /// must not be treated as an ambiguous one-shot pointer selection.
+  bool phiIsSelfRecurrent(const PhiNode &Phi) const;
+
+  /// Prove that a value remains a numeric address offset in rebuilt IR.  Every
+  /// feasible PHI/selection arm and arithmetic input must be scalar; a mapped
+  /// data constant, relocatable constant, LOAD, unknown CFG arm, or optional
+  /// forbidden recurrence makes the proof fail closed.
+  bool valueIsStableAddressOffset(const MedVar &V,
+                                  const MedVar *Forbidden = nullptr) const;
+
+  /// Return the sole input of an operation only when the emitted operation is
+  /// guaranteed to preserve that input's complete unsigned pointer value.
+  /// This deliberately rejects values truncated below the target pointer width,
+  /// non-zero SUBBYTES, and sign extensions whose sign bit cannot be proved
+  /// clear. A wider MedIR temporary narrowed back to the machine pointer width
+  /// still preserves the complete target pointer payload.
+  std::optional<MedVar> pointerPreservingInput(const MedOp &Op) const;
+
+  /// True when SELECT's emitted coercion and output store preserve each value
+  /// arm at one complete width. A truncating/mixed-width SELECT cannot
+  /// transport pointer provenance even though its control semantics are valid.
+  bool selectPreservesPointerValues(const MedOp &Op) const;
+
+  /// Recognize the exact complementary-mask OR used to lower a branchless
+  /// pointer SELECT: OR(AND(value0, mask), AND(value1, NOT(mask))).  The mask
+  /// must cover the complete value/AND/OR width and derive from a proven
+  /// boolean; returns the condition and the true/false value arms.
+  bool isMaskedSelectOr(const MedOp &Or, MedVar &Cond, MedVar &ArmT,
+                        MedVar &ArmF) const;
+
+  /// Record one sticky module-level refusal for an ambiguous data-pointer PHI.
+  void failAmbiguousDataPointerPhi(const PhiNode &Phi) const;
+
   /// Fold an indexed-table base to a constant, additionally resolving
   /// `INT_ADD` of two constants and a `LOAD` from a read-only segment (an ARM
   /// literal-pool `ldr rN,[pc,#imm]` feeding `add rN,pc` to a `.rodata` table).
   /// When \p SawLoad is non-null it is set if a literal-pool LOAD was folded.
-  std::optional<uint64_t> traceTableBaseConst(const MedVar &V, int Depth = 0,
-                                              bool *SawLoad = nullptr) const;
+  /// \p OriginSize receives the width of a forwarded constant leaf, and
+  /// \p SawArithmetic records any ADD fold so callers cannot mistake
+  /// COPY(ADD(...)) for a pure materialization.
+  std::optional<uint64_t>
+  traceTableBaseConst(const MedVar &V, int Depth = 0, bool *SawLoad = nullptr,
+                      uint16_t *OriginSize = nullptr,
+                      bool *SawArithmetic = nullptr) const;
+
+  /// Recover the possible read-only data targets of a pointer-width LOAD from
+  /// a loader-proven absolute data-pointer relocation table, including a
+  /// width-preserving ADD/SUB by a proven numeric constant.  Such a value is
+  /// emitted from the relocation mirror and therefore remains an already
+  /// symbolized pointer, not the raw table-slot bytes.
+  bool recoverAbsoluteDataPointerLoadTargets(const MedVar &V,
+                                             std::set<uint64_t> &Targets) const;
+
+  /// Recover `table_base + sext(load32(table_base + index))` when the loaded
+  /// slots are loader-proven PC-relative data-pointer relocations.  Returns the
+  /// possible target VAs and whether the table base is materialized by getVar
+  /// as a relocatable global (otherwise the resulting pointer retains a raw
+  /// VA).
+  bool recoverRelativeDataPointerTargets(const MedVar &V,
+                                         std::set<uint64_t> &Targets,
+                                         bool &Symbolized) const;
 
   /// Resolve an ARM literal-pool value-table access `load[ (ldr[pc] + pc) +
   /// index*scale ]` into a GEP on the embedded read-only `.rodata` global.
@@ -632,8 +732,9 @@ private:
   /// selected, so the offset is exact without resolving each arm in its
   /// predecessor block.
   llvm::Value *tryResolveSelectMergeTable(const MedVar &AddrVar,
-                                          uint16_t SizeHint,
-                                          llvm::IRBuilder<> &Builder);
+                                          uint16_t SizeHint, bool FailClosed,
+                                          llvm::IRBuilder<> &Builder,
+                                          bool *SawAmbiguous = nullptr);
 
   /// Resolve a *direct* (no runtime index) literal-pool data pointer — the ARM
   /// `ldr rN,[pc]; add rN,pc; ldr/vld [rN]` address-of a read-only constant
@@ -653,7 +754,7 @@ private:
   /// through such a pointer instead of `base + index`, which the table
   /// resolvers above (they require an INT_ADD/INT_SUB address) cannot redirect.
   llvm::Value *tryResolveInductionGlobalPtr(const MedVar &AddrVar,
-                                            uint16_t SizeHint,
+                                            uint16_t SizeHint, bool FailClosed,
                                             llvm::IRBuilder<> &Builder);
 
   /// Resolve a load whose address indexes a `.data.rel.ro` function-pointer
@@ -845,7 +946,7 @@ private:
   /// resolver emit a plain load through that consistent recompiled pointer.
   /// x86-64/AArch64 keep the base a bare origVA constant and never reach this.
   /// Result cached per function (InductionBasesFor / InductionBaseVAs).
-  bool isInductionRodataStringBase(uint64_t Val);
+  bool isInductionRodataStringBase(uint64_t Val) const;
 
   /// If \p V is a PC-relative materialization of a function's address that the
   /// optimizer left computed rather than folded to a constant (the ARM
@@ -889,11 +990,11 @@ private:
   /// array the frame analysis modelled with an absolute address) and is left as
   /// an absolute access so its store/load pair stays consistent.
   llvm::Value *tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
-                                          uint16_t SizeHint,
+                                          uint16_t SizeHint, bool FailClosed,
                                           llvm::IRBuilder<> &Builder);
 
-  /// Symbolize an integer address materialized as a *pointer call argument*
-  /// (the callee dereferences it), mirroring the LOAD/STORE address resolvers.
+  /// Speculatively symbolize an integer call argument that may be a pointer,
+  /// mirroring the LOAD/STORE address resolvers.
   /// A computed `&global[index]` passed to a function would otherwise stay a
   /// raw `inttoptr(baseVA + index)` — the original table VA — so the callee's
   /// load/store lands at a stale absolute address while the caller's own direct
@@ -901,9 +1002,12 @@ private:
   /// Tries the writable-data resolver first (a pointer arg may be written
   /// through), then the read-only table/induction resolvers, then a constant
   /// `&global`.  Null when \p AddrVar is not a resolvable global address (a
-  /// stack pointer, an opaque runtime pointer) — the caller then falls back to
-  /// inttoptr.
-  llvm::Value *tryResolvePointerArg(const MedVar &AddrVar,
+  /// stack pointer, an opaque runtime pointer) — the caller then retains its
+  /// ordinary ABI value.  When \p FailClosed is true, an expression that mixes
+  /// proven table provenance with an unproved arm is a module-level error;
+  /// callers must set it only for an ABI parameter known to be dereferenced,
+  /// never for speculative integer-argument recognition.
+  llvm::Value *tryResolvePointerArg(const MedVar &AddrVar, bool FailClosed,
                                     llvm::IRBuilder<> &Builder);
 
   /// Constant base of `INT_ADD(const_base, index)` defining \p AddrVar, if any.
@@ -915,10 +1019,17 @@ private:
   /// a one-level `INT_ADD(const,index)` match misses.  Returns false if two
   /// base constants appear (not a simple table access); otherwise sets \p
   /// HaveBase /
-  /// \p Base and appends every non-base addend to \p IdxTerms.
+  /// \p Base and appends every non-base addend to \p IdxTerms. When
+  /// \p FailClosed is true, a reachable PHI that mixes a raw mapped base with
+  /// an unproved arm marks emission fatal; speculative code-pointer and
+  /// literal-pool probes leave it false so a later all-arms resolver can own
+  /// the decision. \p SawAmbiguousPhi, when supplied, is set independently of
+  /// that diagnostic policy so a speculative caller can reject the candidate
+  /// without making the whole module fatal.
   bool collectIndexedGlobalBase(const MedVar &V, uint64_t &Base, bool &HaveBase,
-                                std::vector<MedVar> &IdxTerms,
-                                int Depth = 0) const;
+                                std::vector<MedVar> &IdxTerms, int Depth = 0,
+                                bool FailClosed = false,
+                                bool *SawAmbiguousPhi = nullptr) const;
 
   /// Literal-pool variant of collectIndexedGlobalBase: the base must fold
   /// through a literal-pool LOAD (the ARM `ldr rN,[pc]; add rN,pc` idiom), and
@@ -1022,8 +1133,8 @@ private:
 
   // Cache of rodata C-string base VAs walked by an induction pointer (see
   // isInductionRodataStringBase); keyed on the current function.
-  const MedFunc *InductionBasesFor = nullptr;
-  std::set<uint64_t> InductionBaseVAs;
+  mutable const MedFunc *InductionBasesFor = nullptr;
+  mutable std::set<uint64_t> InductionBaseVAs;
 
   // Cache of writable-segment base VAs that contain at least one already-
   // symbolized writable-reloc pointer constant (see
@@ -1042,6 +1153,13 @@ private:
   mutable const MedFunc *DefPhiIndexFor = nullptr;
   mutable llvm::DenseMap<std::pair<int64_t, int>, const MedOp *> DefIndex;
   mutable llvm::DenseMap<std::pair<int64_t, int>, const PhiNode *> PhiIndex;
+
+  // Conservative feasible CFG edges after pruning only statically proven
+  // constant conditional branches. Used to ignore a dead PHI input without
+  // teaching every address resolver its own reachability walk.
+  mutable const MedFunc *FeasibleEdgesFor = nullptr;
+  mutable std::set<std::pair<int, int>> FeasibleEdges;
+  mutable std::set<int> FeasibleBlocks;
 
   // Per-function memoized results of varIsFrameDerived, dropped when CurMedFunc
   // changes.  The "traces back to the stack pointer" property of an SSA value
@@ -1117,6 +1235,11 @@ private:
   // Sticky hard failure: a relocation-proven executable pointer must never
   // degrade to an embedded original VA.  emit() discards the module when set.
   bool FatalCodePointerResolution = false;
+  // Sticky hard failure for a load address that mixes a proven original-image
+  // data pointer with another feasible, unproved PHI input. Mutable because
+  // the address-decomposition helpers are logically const over MedIR while
+  // recording an emission failure.
+  mutable bool FatalDataPointerResolution = false;
   std::map<uint64_t, llvm::Constant *> GlobalDataCache;
   // One synthesized code-pointer mirror global per data segment base VA (see
   // buildCodePtrSegmentGlobal); reused across every access into that segment.

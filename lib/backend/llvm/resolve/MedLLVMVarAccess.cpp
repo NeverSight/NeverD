@@ -90,6 +90,60 @@ const PhiNode *MedLLVMEmitter::lookupPhi(const MedVar &V) const {
 // Variable access
 //===----------------------------------------------------------------------===//
 
+bool MedLLVMEmitter::getVarSymbolizesDataConstant(uint64_t Val,
+                                                  uint16_t Size) const {
+  if (!Img)
+    return false;
+  unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
+  bool IsPointerWidth = Size == 0 || PtrSize == 0 || Size >= PtrSize;
+  bool LoaderProven =
+      ((Img->RelocDataAddrs.count(Val) || Img->RodataAnchorSeg.count(Val)) &&
+       !constValueUsedAsInteger(Val) && !addrInCodePtrMirrorRun(Val)) ||
+      (constIsRodataEndPointer(Val) && !constValueUsedAsInteger(Val) &&
+       !addrInCodePtrMirrorRun(Val)) ||
+      constIsWritableRunEndPointer(Val) || isInductionRodataStringBase(Val);
+  bool Candidate =
+      (IsPointerWidth && Val > limits::kMinGlobalDataAddr) || LoaderProven;
+  if (!Candidate)
+    return false;
+
+  // Executable and mutable segments are collision-prone: a large arithmetic
+  // immediate may merely land inside them. Match getVar's pointer-use gate so
+  // the shared predicate describes the value that is actually emitted.
+  const Segment *Seg = Img->getSegmentFor(Val);
+  // The numeric threshold only asks getVar to *try* global-data resolution.
+  // If the value is outside every image segment, tryResolveGlobalData returns
+  // null and getVar emits the original integer.  Keep this classifier aligned
+  // with that observable result: in particular, a pointer-width negative i386
+  // arithmetic immediate such as -14 must not become address provenance merely
+  // because its zero-extended bit pattern is numerically large.  Loader-proven
+  // anchors and one-past-end pointers are the intentional out-of-segment cases.
+  if (!Seg && !LoaderProven)
+    return false;
+  bool Collidable = Seg && (Seg->isExecutable() || isMutableDataSeg(Seg));
+  return !Collidable || constUsedAsPointer(Val);
+}
+
+bool MedLLVMEmitter::getVarMayRelocateConstant(uint64_t Val,
+                                               uint16_t Size) const {
+  if (getVarSymbolizesDataConstant(Val, Size) ||
+      symbolizesWritableRelocPtr(Val, Size))
+    return true;
+
+  unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
+  bool IsPointerWidth = Size == 0 || PtrSize == 0 || Size >= PtrSize;
+  if (!IsPointerWidth)
+    return false;
+
+  if (symbolizesSelectPeer(Val))
+    return true;
+  if (!Img || !Mod ||
+      (Val < limits::kMinGlobalDataAddr && !Img->CodeRefTargets.count(Val)))
+    return false;
+  auto FIt = FuncNames.find(Val);
+  return FIt != FuncNames.end() && Mod->getFunction(FIt->second) != nullptr;
+}
+
 llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
                                     llvm::IRBuilder<> &Builder) {
   if (V.Kind == MedVar::EHException || V.Kind == MedVar::EHSelector) {
@@ -122,7 +176,6 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   if (V.isConst()) {
     constexpr uint64_t kMinGlobalDataAddr = limits::kMinGlobalDataAddr;
     unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
-    bool IsPointerWidth = V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz;
     // A pointer-width constant above the heuristic threshold, or one the
     // loader proved is a relocation target inside read-only data, is a real
     // pointer rather than an integer literal — resolve it to the embedded
@@ -152,16 +205,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // i386 PIC stack table of node pointers mix two addressing models and
     // corrupt the mirror-relative load (the head nodes raw, the rodata tail
     // recompiled).
-    if (Img && ((IsPointerWidth && V.ConstVal > kMinGlobalDataAddr) ||
-                ((Img->RelocDataAddrs.count(V.ConstVal) ||
-                  Img->RodataAnchorSeg.count(V.ConstVal)) &&
-                 !constValueUsedAsInteger(V.ConstVal) &&
-                 !addrInCodePtrMirrorRun(V.ConstVal)) ||
-                (constIsRodataEndPointer(V.ConstVal) &&
-                 !constValueUsedAsInteger(V.ConstVal) &&
-                 !addrInCodePtrMirrorRun(V.ConstVal)) ||
-                constIsWritableRunEndPointer(V.ConstVal) ||
-                isInductionRodataStringBase(V.ConstVal))) {
+    if (getVarSymbolizesDataConstant(V.ConstVal, V.Size)) {
       // A constant that falls in an EXECUTABLE segment is a genuine pointer
       // only when it actually reaches a memory-access address — a
       // `.text`-embedded literal-pool load on ARM32.  An integer that merely
@@ -171,7 +215,6 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       // a code-segment global corrupts the value after relink (the #456/#499
       // small-constant-collides-with-a-segment-VA family, executable arm).
       // Non-executable rodata/data pointers are unaffected.
-      const Segment *CSeg = Img->getSegmentFor(V.ConstVal);
       // A constant in an EXECUTABLE segment, or in a MUTABLE .bss/.data segment
       // whose VA range extends past the pointer-heuristic threshold, is a
       // genuine pointer only when it actually reaches a memory-access address.
@@ -184,11 +227,8 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       // small-constant-collides-with-a- segment-VA family).  Read-only rodata
       // bases are dereferenced (so they pass constUsedAsPointer) or anchored
       // via RelocDataAddrs above, hence unaffected.
-      bool CollidableSeg =
-          CSeg && (CSeg->isExecutable() || isMutableDataSeg(CSeg));
-      if (!CollidableSeg || constUsedAsPointer(V.ConstVal))
-        if (auto *Global = tryResolveGlobalData(V.ConstVal))
-          return Builder.CreatePtrToInt(Global, sizeToType(V.Size), "gdata");
+      if (auto *Global = tryResolveGlobalData(V.ConstVal))
+        return Builder.CreatePtrToInt(Global, sizeToType(V.Size), "gdata");
     }
     // A constant equal to a function entry whose address was taken (recorded by
     // the loader/lift as a code reference, or above the heuristic VA threshold)

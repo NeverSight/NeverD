@@ -306,6 +306,13 @@ BinaryImage makeLLVMImage() {
 
 constexpr va_t SpilledConstTableVA = TextVA + 0x800;
 constexpr va_t OtherSpilledConstTableVA = SpilledConstTableVA + 0x20;
+constexpr va_t FarSpilledConstTableVA = TextVA + 0x3000;
+constexpr va_t LowSpilledConstTableVA = 0x880;
+constexpr va_t OtherLowSpilledConstTableVA = 0x8A0;
+constexpr va_t SymbolizedSameRunTableVA = 0x1200;
+constexpr va_t OtherSymbolizedSameRunTableVA = 0x1220;
+constexpr va_t SignBitTableVA = 0x80001000;
+constexpr va_t OtherSignBitTableVA = SignBitTableVA + 0x20;
 
 BinaryImage makeSpilledConstTableImage(Arch TargetArch) {
   BinaryImage Image;
@@ -362,6 +369,117 @@ BinaryImage makeSpilledConstTableImage(Arch TargetArch) {
   OtherTable.Size = sizeof(OtherValues);
   Image.Symbols.push_back(std::move(OtherTable));
   return Image;
+}
+
+void addThresholdCrossingConstTableRun(BinaryImage &Image) {
+  Segment LowData;
+  LowData.Name = "__LOW_CONST";
+  LowData.VA = 0x800;
+  LowData.Size = 0xC00;
+  LowData.FileSz = LowData.Size;
+  LowData.Flags = SegmentFlags::Readable;
+  LowData.Data.assign(LowData.Size, 0);
+  const uint16_t FirstValues[] = {11, 22, 33, 44};
+  const uint16_t SecondValues[] = {55, 66, 77, 88};
+  const uint16_t SymbolizedValues[] = {99, 111, 123, 135};
+  const uint16_t OtherSymbolizedValues[] = {147, 159, 171, 183};
+  std::memcpy(LowData.Data.data() + (LowSpilledConstTableVA - LowData.VA),
+              FirstValues, sizeof(FirstValues));
+  std::memcpy(LowData.Data.data() + (OtherLowSpilledConstTableVA - LowData.VA),
+              SecondValues, sizeof(SecondValues));
+  std::memcpy(LowData.Data.data() + (SymbolizedSameRunTableVA - LowData.VA),
+              SymbolizedValues, sizeof(SymbolizedValues));
+  std::memcpy(LowData.Data.data() +
+                  (OtherSymbolizedSameRunTableVA - LowData.VA),
+              OtherSymbolizedValues, sizeof(OtherSymbolizedValues));
+  Image.Segments.push_back(std::move(LowData));
+
+  Section LowConst;
+  LowConst.Name = "__low_const";
+  LowConst.SegmentName = "__LOW_CONST";
+  LowConst.VA = 0x800;
+  LowConst.Size = 0xC00;
+  LowConst.FileSz = LowConst.Size;
+  LowConst.Flags = SegmentFlags::Readable;
+  LowConst.Type = S_REGULAR;
+  Image.Sections.push_back(std::move(LowConst));
+}
+
+void addAdjacentLowPointerTableSegments(BinaryImage &Image) {
+  auto addSegment = [&](llvm::StringRef Name, va_t VA, va_t Target) {
+    Segment Data;
+    Data.Name = Name.str();
+    Data.VA = VA;
+    Data.Size = 0x20;
+    Data.FileSz = Data.Size;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.assign(Data.Size, 0);
+    writeObject(Data.Data, 0, Target);
+    Image.Segments.push_back(std::move(Data));
+
+    Section Const;
+    Const.Name = (Name + "_const").str();
+    Const.SegmentName = Name.str();
+    Const.VA = VA;
+    Const.Size = 0x20;
+    Const.FileSz = Const.Size;
+    Const.Flags = SegmentFlags::Readable;
+    Const.Type = S_REGULAR;
+    Image.Sections.push_back(std::move(Const));
+    Image.DataPtrRelocSlots.insert(VA);
+  };
+  addSegment("__LOW_PTR_A", LowSpilledConstTableVA, SpilledConstTableVA);
+  addSegment("__LOW_PTR_B", OtherLowSpilledConstTableVA,
+             OtherSpilledConstTableVA);
+}
+
+void addSignBitConstTableRun(BinaryImage &Image) {
+  Segment Data;
+  Data.Name = "__SIGN_CONST";
+  Data.VA = SignBitTableVA;
+  Data.Size = 0x40;
+  Data.FileSz = Data.Size;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.assign(Data.Size, 0);
+  const uint16_t FirstValues[] = {13, 26, 39, 52};
+  const uint16_t SecondValues[] = {65, 78, 91, 104};
+  std::memcpy(Data.Data.data(), FirstValues, sizeof(FirstValues));
+  std::memcpy(Data.Data.data() + (OtherSignBitTableVA - SignBitTableVA),
+              SecondValues, sizeof(SecondValues));
+  Image.Segments.push_back(std::move(Data));
+
+  Section Const;
+  Const.Name = "__sign_const";
+  Const.SegmentName = "__SIGN_CONST";
+  Const.VA = SignBitTableVA;
+  Const.Size = 0x40;
+  Const.FileSz = Const.Size;
+  Const.Flags = SegmentFlags::Readable;
+  Const.Type = S_REGULAR;
+  Image.Sections.push_back(std::move(Const));
+}
+
+void addFarSpilledConstTable(BinaryImage &Image) {
+  Segment Far;
+  Far.Name = "__FAR_CONST";
+  Far.VA = FarSpilledConstTableVA;
+  Far.Size = 0x40;
+  Far.FileSz = Far.Size;
+  Far.Flags = SegmentFlags::Readable;
+  Far.Data.assign(Far.Size, 0);
+  const uint16_t Values[] = {90, 100, 110, 120};
+  std::memcpy(Far.Data.data(), Values, sizeof(Values));
+  Image.Segments.push_back(std::move(Far));
+
+  Section Const;
+  Const.Name = "__const_far";
+  Const.SegmentName = "__FAR_CONST";
+  Const.VA = FarSpilledConstTableVA;
+  Const.Size = 0x40;
+  Const.FileSz = Const.Size;
+  Const.Flags = SegmentFlags::Readable;
+  Const.Type = S_REGULAR;
+  Image.Sections.push_back(std::move(Const));
 }
 
 MedFunc makeSpilledConstTableLookup(Arch TargetArch) {
@@ -459,8 +577,16 @@ MedFunc makeSpilledConstTableLookup(Arch TargetArch) {
 enum class ReachingStoreCase {
   DistinctPredecessorBases,
   BypassPredecessor,
+  MalformedMissingBypassPredecessor,
   PartialOverlap,
   StoreAfterLoad,
+};
+
+enum class PhiTableBaseCase {
+  DeadScalarClobber,
+  SameBaseOnReachableEdges,
+  AmbiguousRuntimeClobber,
+  MalformedRuntimeClobber,
 };
 
 MedFunc makeRejectedFrameReloadLookup(Arch TargetArch, ReachingStoreCase Case) {
@@ -544,7 +670,9 @@ MedFunc makeRejectedFrameReloadLookup(Arch TargetArch, ReachingStoreCase Case) {
   Merge.Id = 3;
   Merge.StartAddr = CallerVA + 0x18;
   Merge.EndAddr = CallerVA + 0x30;
-  Merge.Preds = {1, 2};
+  Merge.Preds = Case == ReachingStoreCase::MalformedMissingBypassPredecessor
+                    ? std::vector<int>{1}
+                    : std::vector<int>{1, 2};
   Merge.Ops.insert(Merge.Ops.end(), Ops.begin() + 3, Ops.end());
 
   Func.Blocks.clear();
@@ -552,6 +680,2660 @@ MedFunc makeRejectedFrameReloadLookup(Arch TargetArch, ReachingStoreCase Case) {
   Func.Blocks.push_back(std::move(FirstStore));
   Func.Blocks.push_back(std::move(SecondStore));
   Func.Blocks.push_back(std::move(Merge));
+  return Func;
+}
+
+MedFunc makeLateLiteralPoolSpillLookup(Arch TargetArch) {
+  MedFunc Func = makeSpilledConstTableLookup(TargetArch);
+  Func.Name = TargetArch == Arch::AArch64 ? "late_literal_pool_spill_arm64"
+                                          : "late_literal_pool_spill_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  std::vector<MedOp> &Ops = Func.Blocks.front().Ops;
+  MedVar TableBase = Ops[1].Output;
+  MedVar PoolValue = TableBase;
+  PoolValue.Id = 20;
+
+  MedOp LoadPool;
+  LoadPool.Opcode = NdOp::LOAD;
+  LoadPool.Output = PoolValue;
+  LoadPool.addInput(MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  Ops[1] = std::move(LoadPool);
+  MedOp FormBase;
+  FormBase.Opcode = NdOp::INT_ADD;
+  FormBase.Output = TableBase;
+  FormBase.addInput(PoolValue);
+  FormBase.addInput(MedVar::makeConst(CallerVA, TRI.PointerSize));
+  Ops.insert(Ops.begin() + 2, std::move(FormBase));
+
+  // Move the matching STORE after the reload. It is a real same-slot store,
+  // but cannot define the value already loaded above it.
+  MedOp LateStore = std::move(Ops[3]);
+  Ops.erase(Ops.begin() + 3);
+  Ops.insert(Ops.begin() + 4, std::move(LateStore));
+  return Func;
+}
+
+MedFunc makeLoopFrameReloadTableOffsetLookup(Arch TargetArch,
+                                             bool InitializeInPreheader) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "loop_frame_reload_table_offset_arm64_"
+                              : "loop_frame_reload_table_offset_x86_64_") +
+              (InitializeInPreheader ? "initialized" : "post_store_only");
+  Func.ReturnType = NdType::makeInt(2);
+  Func.FrameSize = 16;
+
+  MedVar Offset = makeVar(MedVar::Param, 0, TRI.PointerSize);
+  Offset.RegOff = TRI.IntParamRegs[0];
+  MedVar Continue = makeVar(MedVar::Param, 1, 1);
+  Continue.RegOff = TRI.IntParamRegs[1];
+  Func.Params = {Offset, Continue};
+
+  MedVar SP = makeVar(MedVar::Reg, 100, TRI.PointerSize);
+  SP.SSAVer = 0;
+  SP.RegOff = TRI.StackPointer;
+  MedVar Slot = makeVar(MedVar::Temp, 1, TRI.PointerSize);
+  MedVar Reloaded = makeVar(MedVar::Temp, 2, TRI.PointerSize);
+  MedVar Address = makeVar(MedVar::Temp, 3, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 4, 2);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 8;
+  Entry.Succs = {1};
+  MedOp FormSlot;
+  FormSlot.Opcode = NdOp::INT_ADD;
+  FormSlot.Output = Slot;
+  FormSlot.addInput(SP);
+  FormSlot.addInput(MedVar::makeConst(uint64_t(-8), TRI.PointerSize));
+  Entry.Ops.push_back(std::move(FormSlot));
+  if (InitializeInPreheader) {
+    MedOp Initialize;
+    Initialize.Opcode = NdOp::STORE;
+    Initialize.addInput(Slot);
+    Initialize.addInput(Offset);
+    Entry.Ops.push_back(std::move(Initialize));
+  }
+  MedOp EnterLoop;
+  EnterLoop.Opcode = NdOp::BRANCH;
+  EnterLoop.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(EnterLoop));
+
+  MedBlock Loop;
+  Loop.Id = 1;
+  Loop.StartAddr = CallerVA + 0x10;
+  Loop.EndAddr = CallerVA + 0x28;
+  Loop.Preds = {0, 1};
+  Loop.Succs = {1, 2};
+  MedOp Reload;
+  Reload.Opcode = NdOp::LOAD;
+  Reload.Output = Reloaded;
+  Reload.addInput(Slot);
+  Loop.Ops.push_back(std::move(Reload));
+  if (!InitializeInPreheader) {
+    // This store can reach a later iteration but not the first LOAD reached
+    // from the entry edge.  It must not manufacture an all-path proof.
+    MedOp LateStore;
+    LateStore.Opcode = NdOp::STORE;
+    LateStore.addInput(Slot);
+    LateStore.addInput(Offset);
+    Loop.Ops.push_back(std::move(LateStore));
+  }
+  MedOp FormAddress;
+  FormAddress.Opcode = NdOp::INT_ADD;
+  FormAddress.Output = Address;
+  FormAddress.addInput(MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  FormAddress.addInput(Reloaded);
+  Loop.Ops.push_back(std::move(FormAddress));
+  MedOp ReadElement;
+  ReadElement.Opcode = NdOp::LOAD;
+  ReadElement.Output = Element;
+  ReadElement.addInput(Address);
+  Loop.Ops.push_back(std::move(ReadElement));
+  MedOp BackOrExit;
+  BackOrExit.Opcode = NdOp::COND_BR;
+  BackOrExit.addInput(MedVar::makeConst(Loop.StartAddr, TRI.PointerSize));
+  BackOrExit.addInput(Continue);
+  Loop.Ops.push_back(std::move(BackOrExit));
+
+  MedBlock Exit;
+  Exit.Id = 2;
+  Exit.StartAddr = CallerVA + 0x30;
+  Exit.EndAddr = CallerVA + 0x34;
+  Exit.Preds = {1};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Exit.Ops.push_back(std::move(Return));
+
+  Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Exit)};
+  return Func;
+}
+
+MedFunc makeNarrowFrameReloadSecondTableBaseLookup(Arch TargetArch) {
+  MedFunc Func = makeLoopFrameReloadTableOffsetLookup(
+      TargetArch, /*InitializeInPreheader=*/true);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "narrow_frame_reload_second_table_base_arm64"
+                  : "narrow_frame_reload_second_table_base_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+
+  // Store only the low 32 bits of an independently relocatable table address,
+  // reload them, then widen before adding them to a second table base.  The
+  // narrow LOAD is not automatically a scalar index merely because it cannot
+  // carry a complete native pointer: its reaching value still has address
+  // provenance and must not be added to another relocated base.
+  MedOp &Store = Func.Blocks[0].Ops[1];
+  Store.Inputs[1] = MedVar::makeConst(OtherSpilledConstTableVA, 4);
+  MedOp &Reload = Func.Blocks[1].Ops[0];
+  Reload.Output.Size = 4;
+  MedVar Narrow = Reload.Output;
+  MedVar Wide = Narrow;
+  Wide.Id = 5;
+  Wide.Size = TRI.PointerSize;
+  MedOp Widen;
+  Widen.Opcode = NdOp::INT_ZEXT;
+  Widen.Output = Wide;
+  Widen.addInput(Narrow);
+  Func.Blocks[1].Ops[1].Inputs[1] = Wide;
+  Func.Blocks[1].Ops.insert(std::next(Func.Blocks[1].Ops.begin()),
+                            std::move(Widen));
+  return Func;
+}
+
+MedFunc makePhiConstTableLookup(Arch TargetArch, PhiTableBaseCase Case) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = (TargetArch == Arch::AArch64 ? "phi_const_table_arm64_"
+                                           : "phi_const_table_x86_64_") +
+              std::to_string(static_cast<int>(Case));
+  Func.ReturnType = NdType::makeInt(2);
+
+  MedVar Index = makeVar(MedVar::Param, 0, TRI.PointerSize);
+  Index.RegOff = TRI.IntParamRegs[0];
+  MedVar RuntimeCond = makeVar(MedVar::Param, 1, 1);
+  RuntimeCond.RegOff = TRI.IntParamRegs[1];
+  MedVar RuntimeClobber = makeVar(MedVar::Param, 2, 4);
+  RuntimeClobber.RegOff = TRI.IntParamRegs[2];
+  Func.Params = {Index, RuntimeCond, RuntimeClobber};
+
+  MedVar Zero32 = makeVar(MedVar::Temp, 10, 4);
+  MedVar WideZero = makeVar(MedVar::Temp, 11, TRI.PointerSize);
+  MedVar LowZero = makeVar(MedVar::Temp, 12, 4);
+  MedVar FoldedCond = makeVar(MedVar::Temp, 13, 1);
+  MedVar BadWide = makeVar(MedVar::Temp, 14, TRI.PointerSize);
+  MedVar PhiBase = makeVar(MedVar::Temp, 15, TRI.PointerSize);
+  MedVar ScaledIndex = makeVar(MedVar::Temp, 16, TRI.PointerSize);
+  MedVar ElementAddr = makeVar(MedVar::Temp, 17, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 18, 2);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 0x10;
+  Entry.Succs = {1, 2};
+
+  if (Case == PhiTableBaseCase::DeadScalarClobber) {
+    MedOp MaterializeZero;
+    MaterializeZero.Opcode = NdOp::COPY;
+    MaterializeZero.Output = Zero32;
+    MaterializeZero.addInput(MedVar::makeConst(0, 4));
+    Entry.Ops.push_back(std::move(MaterializeZero));
+
+    MedOp WidenZero;
+    WidenZero.Opcode = NdOp::INT_ZEXT;
+    WidenZero.Output = WideZero;
+    WidenZero.addInput(Zero32);
+    Entry.Ops.push_back(std::move(WidenZero));
+
+    MedOp SliceZero;
+    SliceZero.Opcode = NdOp::SUBBYTES;
+    SliceZero.Output = LowZero;
+    SliceZero.addInput(WideZero);
+    SliceZero.addInput(MedVar::makeConst(0, 4));
+    Entry.Ops.push_back(std::move(SliceZero));
+
+    MedOp CompareZero;
+    CompareZero.Opcode = NdOp::INT_NOTEQUAL;
+    CompareZero.Output = FoldedCond;
+    CompareZero.addInput(LowZero);
+    CompareZero.addInput(MedVar::makeConst(0, 4));
+    Entry.Ops.push_back(std::move(CompareZero));
+  }
+
+  MedOp ConditionalBranch;
+  ConditionalBranch.Opcode = NdOp::COND_BR;
+  ConditionalBranch.Addr = CallerVA + 0xc;
+  ConditionalBranch.addInput(
+      MedVar::makeConst(CallerVA + 0x20, TRI.PointerSize));
+  ConditionalBranch.addInput(
+      Case == PhiTableBaseCase::DeadScalarClobber ? FoldedCond : RuntimeCond);
+  Entry.Ops.push_back(std::move(ConditionalBranch));
+
+  MedBlock Merge;
+  Merge.Id = 1;
+  Merge.StartAddr = CallerVA + 0x10;
+  Merge.EndAddr = CallerVA + 0x20;
+  Merge.Preds = Case == PhiTableBaseCase::MalformedRuntimeClobber
+                    ? std::vector<int>{0, 99}
+                    : std::vector<int>{0, 2};
+
+  PhiNode BasePhi;
+  BasePhi.Output = PhiBase;
+  BasePhi.Args.push_back(
+      {0, MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize)});
+  if (Case == PhiTableBaseCase::SameBaseOnReachableEdges)
+    BasePhi.Args.push_back(
+        {2, MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize)});
+  else
+    BasePhi.Args.push_back(
+        {Case == PhiTableBaseCase::MalformedRuntimeClobber ? 99 : 2, BadWide});
+  Merge.Phis.push_back(std::move(BasePhi));
+
+  MedOp Scale;
+  Scale.Opcode = NdOp::INT_LEFT;
+  Scale.Output = ScaledIndex;
+  Scale.addInput(Index);
+  Scale.addInput(MedVar::makeConst(1, TRI.PointerSize));
+  Merge.Ops.push_back(std::move(Scale));
+
+  MedOp FormElementAddr;
+  FormElementAddr.Opcode = NdOp::INT_ADD;
+  FormElementAddr.Output = ElementAddr;
+  FormElementAddr.addInput(PhiBase);
+  FormElementAddr.addInput(ScaledIndex);
+  Merge.Ops.push_back(std::move(FormElementAddr));
+
+  MedOp ReadElement;
+  ReadElement.Opcode = NdOp::LOAD;
+  ReadElement.Output = Element;
+  ReadElement.addInput(ElementAddr);
+  Merge.Ops.push_back(std::move(ReadElement));
+
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Merge.Ops.push_back(std::move(Return));
+
+  MedBlock Alternate;
+  Alternate.Id = 2;
+  Alternate.StartAddr = CallerVA + 0x20;
+  Alternate.EndAddr = CallerVA + 0x28;
+  Alternate.Preds = {0};
+  Alternate.Succs = {1};
+
+  MedOp WidenClobber;
+  WidenClobber.Opcode = NdOp::INT_ZEXT;
+  WidenClobber.Output = BadWide;
+  WidenClobber.addInput(Case == PhiTableBaseCase::DeadScalarClobber
+                            ? MedVar::makeConst(0, 4)
+                            : RuntimeClobber);
+  Alternate.Ops.push_back(std::move(WidenClobber));
+
+  MedOp BranchToMerge;
+  BranchToMerge.Opcode = NdOp::BRANCH;
+  BranchToMerge.addInput(MedVar::makeConst(Merge.StartAddr, TRI.PointerSize));
+  Alternate.Ops.push_back(std::move(BranchToMerge));
+
+  Func.Blocks.push_back(std::move(Entry));
+  Func.Blocks.push_back(std::move(Merge));
+  Func.Blocks.push_back(std::move(Alternate));
+  return Func;
+}
+
+MedFunc makeThreeWayPhiConstTableLookup(Arch TargetArch, bool ScalarArmDead) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name =
+      std::string(TargetArch == Arch::AArch64 ? "three_way_phi_table_arm64_"
+                                              : "three_way_phi_table_x86_64_") +
+      (ScalarArmDead ? "dead" : "reachable");
+  Func.ReturnType = NdType::makeInt(2);
+
+  MedVar Index = makeVar(MedVar::Param, 0, TRI.PointerSize);
+  Index.RegOff = TRI.IntParamRegs[0];
+  MedVar GateCond = makeVar(MedVar::Param, 1, 1);
+  GateCond.RegOff = TRI.IntParamRegs[1];
+  MedVar TableCond = makeVar(MedVar::Param, 2, 1);
+  TableCond.RegOff = TRI.IntParamRegs[2];
+  Func.Params = {Index, GateCond, TableCond};
+
+  MedVar PhiBase = makeVar(MedVar::Temp, 40, TRI.PointerSize);
+  MedVar ScaledIndex = makeVar(MedVar::Temp, 41, TRI.PointerSize);
+  MedVar ElementAddr = makeVar(MedVar::Temp, 42, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 43, 2);
+  MedVar ProvenTableOnly = makeVar(MedVar::Temp, 44, 1);
+
+  auto appendBranch = [&](MedBlock &Block, va_t Target) {
+    MedOp Branch;
+    Branch.Opcode = NdOp::BRANCH;
+    Branch.addInput(MedVar::makeConst(Target, TRI.PointerSize));
+    Block.Ops.push_back(std::move(Branch));
+  };
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 0x10;
+  Entry.Succs = {1, 2};
+  if (ScalarArmDead) {
+    MedOp FoldGate;
+    FoldGate.Opcode = NdOp::INT_EQUAL;
+    FoldGate.Output = ProvenTableOnly;
+    FoldGate.addInput(MedVar::makeConst(3, 1));
+    FoldGate.addInput(MedVar::makeConst(3, 1));
+    Entry.Ops.push_back(std::move(FoldGate));
+  }
+  MedOp Gate;
+  Gate.Opcode = NdOp::COND_BR;
+  Gate.Addr = CallerVA + 0xc;
+  Gate.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Gate.addInput(ScalarArmDead ? ProvenTableOnly : GateCond);
+  Entry.Ops.push_back(std::move(Gate));
+
+  MedBlock ChooseTable;
+  ChooseTable.Id = 1;
+  ChooseTable.StartAddr = CallerVA + 0x10;
+  ChooseTable.EndAddr = CallerVA + 0x20;
+  ChooseTable.Preds = {0};
+  ChooseTable.Succs = {3, 4};
+  MedOp Choose;
+  Choose.Opcode = NdOp::COND_BR;
+  Choose.Addr = CallerVA + 0x1c;
+  Choose.addInput(MedVar::makeConst(CallerVA + 0x30, TRI.PointerSize));
+  Choose.addInput(TableCond);
+  ChooseTable.Ops.push_back(std::move(Choose));
+
+  MedBlock Scalar;
+  Scalar.Id = 2;
+  Scalar.StartAddr = CallerVA + 0x20;
+  Scalar.EndAddr = CallerVA + 0x28;
+  Scalar.Preds = {0};
+  Scalar.Succs = {5};
+  appendBranch(Scalar, CallerVA + 0x50);
+
+  MedBlock FirstTable;
+  FirstTable.Id = 3;
+  FirstTable.StartAddr = CallerVA + 0x30;
+  FirstTable.EndAddr = CallerVA + 0x38;
+  FirstTable.Preds = {1};
+  FirstTable.Succs = {5};
+  appendBranch(FirstTable, CallerVA + 0x50);
+
+  MedBlock SecondTable;
+  SecondTable.Id = 4;
+  SecondTable.StartAddr = CallerVA + 0x40;
+  SecondTable.EndAddr = CallerVA + 0x48;
+  SecondTable.Preds = {1};
+  SecondTable.Succs = {5};
+  appendBranch(SecondTable, CallerVA + 0x50);
+
+  MedBlock Merge;
+  Merge.Id = 5;
+  Merge.StartAddr = CallerVA + 0x50;
+  Merge.EndAddr = CallerVA + 0x60;
+  Merge.Preds = {2, 3, 4};
+  PhiNode BasePhi;
+  BasePhi.Output = PhiBase;
+  BasePhi.Args = {
+      {3, MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize)},
+      {4, MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize)},
+      {2, MedVar::makeConst(7, TRI.PointerSize)},
+  };
+  Merge.Phis.push_back(std::move(BasePhi));
+  MedOp Scale;
+  Scale.Opcode = NdOp::INT_LEFT;
+  Scale.Output = ScaledIndex;
+  Scale.addInput(Index);
+  Scale.addInput(MedVar::makeConst(1, TRI.PointerSize));
+  Merge.Ops.push_back(std::move(Scale));
+  MedOp FormElementAddr;
+  FormElementAddr.Opcode = NdOp::INT_ADD;
+  FormElementAddr.Output = ElementAddr;
+  FormElementAddr.addInput(PhiBase);
+  FormElementAddr.addInput(ScaledIndex);
+  Merge.Ops.push_back(std::move(FormElementAddr));
+  MedOp ReadElement;
+  ReadElement.Opcode = NdOp::LOAD;
+  ReadElement.Output = Element;
+  ReadElement.addInput(ElementAddr);
+  Merge.Ops.push_back(std::move(ReadElement));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Merge.Ops.push_back(std::move(Return));
+
+  Func.Blocks = {std::move(Entry),       std::move(ChooseTable),
+                 std::move(Scalar),      std::move(FirstTable),
+                 std::move(SecondTable), std::move(Merge)};
+  return Func;
+}
+
+MedFunc makeMixedPhiIntegerCall(Arch TargetArch) {
+  MedFunc Func =
+      makeThreeWayPhiConstTableLookup(TargetArch, /*ScalarArmDead=*/false);
+  Func.Name = TargetArch == Arch::AArch64 ? "mixed_phi_integer_call_arm64"
+                                          : "mixed_phi_integer_call_x86_64";
+  Func.ReturnType = NdType::makeVoid();
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  MedBlock &Merge = Func.Blocks[5];
+  MedVar PhiValue = Merge.Phis.front().Output;
+  Merge.Ops.clear();
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = Merge.StartAddr;
+  Call.addInput(MedVar::makeConst(ImportStubVA, TRI.PointerSize));
+  Merge.Ops.push_back(std::move(Call));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Merge.StartAddr + 4;
+  Merge.Ops.push_back(std::move(Return));
+
+  MedCallInfo Info;
+  Info.BlockId = Merge.Id;
+  Info.OpIdx = 0;
+  Info.TargetAddr = ImportStubVA;
+  Info.TargetName = "_opaque_integer_sink";
+  Info.Args.push_back(PhiValue);
+  Func.CallInfos.push_back(std::move(Info));
+  return Func;
+}
+
+MedFunc makeRecurrentConstTableLookup(Arch TargetArch) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = TargetArch == Arch::AArch64 ? "recurrent_const_table_arm64"
+                                          : "recurrent_const_table_x86_64";
+  Func.ReturnType = NdType::makeVoid();
+  Func.DoesNotReturn = true;
+
+  MedVar Index = makeVar(MedVar::Param, 0, TRI.PointerSize);
+  Index.RegOff = TRI.IntParamRegs.front();
+  Func.Params.push_back(Index);
+
+  MedVar PhiBase = makeVar(MedVar::Temp, 30, TRI.PointerSize);
+  MedVar NextBase = makeVar(MedVar::Temp, 31, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 32, 2);
+  MedVar ScaledIndex = makeVar(MedVar::Temp, 33, TRI.PointerSize);
+  MedVar ElementAddr = makeVar(MedVar::Temp, 34, TRI.PointerSize);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 4;
+  Entry.Succs = {1};
+  MedOp EnterLoop;
+  EnterLoop.Opcode = NdOp::BRANCH;
+  EnterLoop.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(EnterLoop));
+
+  MedBlock Loop;
+  Loop.Id = 1;
+  Loop.StartAddr = CallerVA + 0x10;
+  Loop.EndAddr = CallerVA + 0x18;
+  Loop.Preds = {0, 2};
+  Loop.Succs = {2};
+  PhiNode BasePhi;
+  BasePhi.Output = PhiBase;
+  BasePhi.Args = {{0, MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize)},
+                  {2, NextBase}};
+  Loop.Phis.push_back(std::move(BasePhi));
+  MedOp Scale;
+  Scale.Opcode = NdOp::INT_LEFT;
+  Scale.Output = ScaledIndex;
+  Scale.addInput(Index);
+  Scale.addInput(MedVar::makeConst(1, TRI.PointerSize));
+  Loop.Ops.push_back(std::move(Scale));
+  MedOp FormElementAddr;
+  FormElementAddr.Opcode = NdOp::INT_ADD;
+  FormElementAddr.Output = ElementAddr;
+  FormElementAddr.addInput(PhiBase);
+  FormElementAddr.addInput(ScaledIndex);
+  Loop.Ops.push_back(std::move(FormElementAddr));
+  MedOp ReadElement;
+  ReadElement.Opcode = NdOp::LOAD;
+  ReadElement.Output = Element;
+  ReadElement.addInput(ElementAddr);
+  Loop.Ops.push_back(std::move(ReadElement));
+  MedOp Advance;
+  Advance.Opcode = NdOp::BRANCH;
+  Advance.addInput(MedVar::makeConst(CallerVA + 0x20, TRI.PointerSize));
+  Loop.Ops.push_back(std::move(Advance));
+
+  MedBlock Latch;
+  Latch.Id = 2;
+  Latch.StartAddr = CallerVA + 0x20;
+  Latch.EndAddr = CallerVA + 0x28;
+  Latch.Preds = {1};
+  Latch.Succs = {1};
+  MedOp Step;
+  Step.Opcode = NdOp::INT_ADD;
+  Step.Output = NextBase;
+  Step.addInput(PhiBase);
+  Step.addInput(MedVar::makeConst(2, TRI.PointerSize));
+  Latch.Ops.push_back(std::move(Step));
+  MedOp BackEdge;
+  BackEdge.Opcode = NdOp::BRANCH;
+  BackEdge.addInput(MedVar::makeConst(Loop.StartAddr, TRI.PointerSize));
+  Latch.Ops.push_back(std::move(BackEdge));
+
+  Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Latch)};
+  return Func;
+}
+
+MedFunc makeRecurrentAbsolutePointerTableLoad() {
+  MedFunc Func = makeRecurrentConstTableLookup(Arch::AArch64);
+  Func.Name = "recurrent_absolute_pointer_table_load_arm64";
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
+
+  MedVar LoadedBase;
+  LoadedBase.Kind = MedVar::Temp;
+  LoadedBase.TheArch = Arch::AArch64;
+  LoadedBase.Id = 40;
+  LoadedBase.SSAVer = 1;
+  LoadedBase.Size = TRI.PointerSize;
+
+  MedOp LoadBase;
+  LoadBase.Opcode = NdOp::LOAD;
+  LoadBase.Output = LoadedBase;
+  LoadBase.addInput(MedVar::makeConst(DataVA + 16, TRI.PointerSize));
+  Func.Blocks.front().Ops.insert(Func.Blocks.front().Ops.begin(),
+                                 std::move(LoadBase));
+  Func.Blocks[1].Phis.front().Args.front().second = LoadedBase;
+  return Func;
+}
+
+enum class FalseRecurrenceCase {
+  ControlOnlySelect,
+  AnnihilatingMultiply,
+  IndependentTableAdd,
+  DuplicatePointerAdd,
+  TableSubtrahend,
+  UnknownNestedPhiArm,
+  LoadedOffset,
+};
+
+MedFunc makeFalseRecurrentTableLookup(Arch TargetArch,
+                                      FalseRecurrenceCase Case) {
+  MedFunc Func = makeRecurrentConstTableLookup(TargetArch);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "false_recurrent_table_arm64_"
+                              : "false_recurrent_table_x86_64_") +
+              std::to_string(static_cast<int>(Case));
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+  MedVar ScalarA = makeVar(MedVar::Param, 1, TRI.PointerSize);
+  ScalarA.RegOff = TRI.IntParamRegs[1];
+  MedVar ScalarB = makeVar(MedVar::Param, 2, TRI.PointerSize);
+  ScalarB.RegOff = TRI.IntParamRegs[2];
+  Func.Params.push_back(ScalarA);
+  Func.Params.push_back(ScalarB);
+
+  MedVar PhiBase = Func.Blocks[1].Phis.front().Output;
+  MedVar NextBase = Func.Blocks[1].Phis.front().Args[1].second;
+  if (Case == FalseRecurrenceCase::UnknownNestedPhiArm) {
+    MedVar Nested = makeVar(MedVar::Temp, 41, TRI.PointerSize);
+    PhiNode NestedPhi;
+    NestedPhi.Output = Nested;
+    NestedPhi.Args = {{2, NextBase}, {99, ScalarA}};
+    Func.Blocks[1].Phis.push_back(std::move(NestedPhi));
+    Func.Blocks[1].Phis.front().Args[1].second = Nested;
+    return Func;
+  }
+  MedBlock &Latch = Func.Blocks[2];
+  MedOp BackEdge = std::move(Latch.Ops.back());
+  Latch.Ops.clear();
+  if (Case == FalseRecurrenceCase::LoadedOffset) {
+    MedVar Loaded = makeVar(MedVar::Temp, 40, TRI.PointerSize);
+    MedOp Load;
+    Load.Opcode = NdOp::LOAD;
+    Load.Output = Loaded;
+    Load.addInput(ScalarA);
+    Latch.Ops.push_back(std::move(Load));
+    MedOp Step;
+    Step.Opcode = NdOp::INT_ADD;
+    Step.Output = NextBase;
+    Step.addInput(PhiBase);
+    Step.addInput(Loaded);
+    Latch.Ops.push_back(std::move(Step));
+    Latch.Ops.push_back(std::move(BackEdge));
+    return Func;
+  }
+  if (Case == FalseRecurrenceCase::ControlOnlySelect) {
+    MedVar Cond = makeVar(MedVar::Temp, 40, 1);
+    MedOp Compare;
+    Compare.Opcode = NdOp::INT_NOTEQUAL;
+    Compare.Output = Cond;
+    Compare.addInput(PhiBase);
+    Compare.addInput(MedVar::makeConst(0, TRI.PointerSize));
+    Latch.Ops.push_back(std::move(Compare));
+    MedOp Select;
+    Select.Opcode = NdOp::SELECT;
+    Select.Output = NextBase;
+    Select.addInput(Cond);
+    Select.addInput(ScalarA);
+    Select.addInput(ScalarB);
+    Latch.Ops.push_back(std::move(Select));
+  } else if (Case == FalseRecurrenceCase::AnnihilatingMultiply) {
+    MedOp Multiply;
+    Multiply.Opcode = NdOp::INT_MULT;
+    Multiply.Output = NextBase;
+    Multiply.addInput(PhiBase);
+    Multiply.addInput(MedVar::makeConst(0, TRI.PointerSize));
+    Latch.Ops.push_back(std::move(Multiply));
+  } else {
+    MedVar OtherBase = makeVar(MedVar::Temp, 40, TRI.PointerSize);
+    if (Case != FalseRecurrenceCase::DuplicatePointerAdd) {
+      MedOp Copy;
+      Copy.Opcode = NdOp::COPY;
+      Copy.Output = OtherBase;
+      Copy.addInput(
+          MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize));
+      Latch.Ops.push_back(std::move(Copy));
+    }
+    MedOp Step;
+    Step.Opcode = Case == FalseRecurrenceCase::TableSubtrahend ? NdOp::INT_SUB
+                                                               : NdOp::INT_ADD;
+    Step.Output = NextBase;
+    Step.addInput(PhiBase);
+    Step.addInput(Case == FalseRecurrenceCase::DuplicatePointerAdd ? PhiBase
+                                                                   : OtherBase);
+    Latch.Ops.push_back(std::move(Step));
+  }
+  Latch.Ops.push_back(std::move(BackEdge));
+  return Func;
+}
+
+enum class NestedRecurrentPhiCase {
+  MutualSubregisterAlias,
+  UnrelatedReachableCycle,
+  UnrelatedDeadCycle,
+};
+
+MedFunc makeNestedRecurrentPhiTableLookup(Arch TargetArch,
+                                          NestedRecurrentPhiCase Case) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = (TargetArch == Arch::AArch64 ? "nested_recurrent_table_arm64_"
+                                           : "nested_recurrent_table_x86_64_") +
+              std::to_string(static_cast<int>(Case));
+  Func.ReturnType = NdType::makeInt(2);
+
+  MedVar Index = makeVar(MedVar::Param, 0, TRI.PointerSize);
+  Index.RegOff = TRI.IntParamRegs[0];
+  MedVar RuntimeCond = makeVar(MedVar::Param, 1, 1);
+  RuntimeCond.RegOff = TRI.IntParamRegs[1];
+  MedVar RuntimeSeed = makeVar(MedVar::Param, 2, TRI.PointerSize);
+  RuntimeSeed.RegOff = TRI.IntParamRegs[2];
+  Func.Params = {Index, RuntimeCond, RuntimeSeed};
+
+  MedVar RootPhi = makeVar(MedVar::Reg, 30, TRI.PointerSize);
+  RootPhi.RegOff = TRI.IntReturnReg;
+  const bool IsAlias = Case == NestedRecurrentPhiCase::MutualSubregisterAlias;
+  MedVar NestedPhi = makeVar(MedVar::Reg, 31, IsAlias ? 4 : TRI.PointerSize);
+  NestedPhi.RegOff = IsAlias ? RootPhi.RegOff : TRI.IntReturnReg2;
+  MedVar NestedNext = makeVar(MedVar::Temp, 32, IsAlias ? 4 : TRI.PointerSize);
+  MedVar RootNext = makeVar(MedVar::Temp, 33, TRI.PointerSize);
+  MedVar ScaledIndex = makeVar(MedVar::Temp, 34, TRI.PointerSize);
+  MedVar ElementAddr = makeVar(MedVar::Temp, 35, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 36, 2);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 8;
+  Entry.Succs = {1};
+  MedOp EnterLoop;
+  EnterLoop.Opcode = NdOp::BRANCH;
+  EnterLoop.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(EnterLoop));
+
+  MedBlock Header;
+  Header.Id = 1;
+  Header.StartAddr = CallerVA + 0x10;
+  Header.EndAddr = CallerVA + 0x20;
+  Header.Preds = {0, 2};
+  Header.Succs = {2, 3};
+
+  PhiNode Root;
+  Root.Output = RootPhi;
+  Root.Args = {{0, MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize)},
+               {2, RootNext}};
+  Header.Phis.push_back(std::move(Root));
+
+  PhiNode Nested;
+  Nested.Output = NestedPhi;
+  Nested.Args = {
+      {0, IsAlias
+              ? MedVar::makeConst(static_cast<uint32_t>(SpilledConstTableVA), 4)
+              : RuntimeSeed},
+      {2, NestedNext}};
+  Header.Phis.push_back(std::move(Nested));
+
+  MedOp Scale;
+  Scale.Opcode = NdOp::INT_LEFT;
+  Scale.Output = ScaledIndex;
+  Scale.addInput(Index);
+  Scale.addInput(MedVar::makeConst(1, TRI.PointerSize));
+  Header.Ops.push_back(std::move(Scale));
+  MedOp FormElementAddr;
+  FormElementAddr.Opcode = NdOp::INT_ADD;
+  FormElementAddr.Output = ElementAddr;
+  FormElementAddr.addInput(RootPhi);
+  FormElementAddr.addInput(ScaledIndex);
+  Header.Ops.push_back(std::move(FormElementAddr));
+  MedOp ReadElement;
+  ReadElement.Opcode = NdOp::LOAD;
+  ReadElement.Output = Element;
+  ReadElement.addInput(ElementAddr);
+  Header.Ops.push_back(std::move(ReadElement));
+  MedOp ContinueOrExit;
+  ContinueOrExit.Opcode = NdOp::COND_BR;
+  ContinueOrExit.Addr = CallerVA + 0x1c;
+  ContinueOrExit.addInput(MedVar::makeConst(CallerVA + 0x20, TRI.PointerSize));
+  ContinueOrExit.addInput(Case == NestedRecurrentPhiCase::UnrelatedDeadCycle
+                              ? MedVar::makeConst(0, 1)
+                              : RuntimeCond);
+  Header.Ops.push_back(std::move(ContinueOrExit));
+
+  MedBlock Latch;
+  Latch.Id = 2;
+  Latch.StartAddr = CallerVA + 0x20;
+  Latch.EndAddr = CallerVA + 0x30;
+  Latch.Preds = {1};
+  Latch.Succs = {1};
+  MedOp StepNested;
+  StepNested.Opcode = NdOp::INT_ADD;
+  StepNested.Output = NestedNext;
+  StepNested.addInput(NestedPhi);
+  StepNested.addInput(MedVar::makeConst(2, IsAlias ? 4 : TRI.PointerSize));
+  Latch.Ops.push_back(std::move(StepNested));
+  MedOp FormRootNext;
+  FormRootNext.Opcode = IsAlias ? NdOp::INT_ZEXT : NdOp::COPY;
+  FormRootNext.Output = RootNext;
+  FormRootNext.addInput(NestedNext);
+  Latch.Ops.push_back(std::move(FormRootNext));
+  MedOp BackEdge;
+  BackEdge.Opcode = NdOp::BRANCH;
+  BackEdge.addInput(MedVar::makeConst(Header.StartAddr, TRI.PointerSize));
+  Latch.Ops.push_back(std::move(BackEdge));
+
+  MedBlock Exit;
+  Exit.Id = 3;
+  Exit.StartAddr = CallerVA + 0x30;
+  Exit.EndAddr = CallerVA + 0x38;
+  Exit.Preds = {1};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Exit.Ops.push_back(std::move(Return));
+
+  Func.Blocks = {std::move(Entry), std::move(Header), std::move(Latch),
+                 std::move(Exit)};
+  return Func;
+}
+
+MedFunc makeDirectPhiTableLookup(Arch TargetArch, bool WrapInCopy,
+                                 bool TableArmDead) {
+  MedFunc Func = makePhiConstTableLookup(
+      TargetArch, PhiTableBaseCase::AmbiguousRuntimeClobber);
+  Func.Name =
+      std::string(TargetArch == Arch::AArch64 ? "direct_phi_table_arm64_"
+                                              : "direct_phi_table_x86_64_") +
+      (WrapInCopy ? "copy_" : "bare_") +
+      (TableArmDead ? "dead_table" : "ambiguous");
+
+  MedBlock &Entry = Func.Blocks[0];
+  if (TableArmDead)
+    Entry.Ops.back().Inputs[1] = MedVar::makeConst(1, 1);
+
+  MedBlock &Merge = Func.Blocks[1];
+  MedVar DirectAddress = Merge.Phis.front().Output;
+  if (WrapInCopy) {
+    MedVar Wrapped = DirectAddress;
+    Wrapped.Kind = MedVar::Temp;
+    Wrapped.Id = 60;
+    Wrapped.SSAVer = 1;
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = Wrapped;
+    Copy.addInput(DirectAddress);
+    Merge.Ops.insert(Merge.Ops.begin(), std::move(Copy));
+    DirectAddress = Wrapped;
+  }
+  for (MedOp &Op : Merge.Ops)
+    if (Op.Opcode == NdOp::LOAD && Op.Output.Size == 2) {
+      Op.Inputs[0] = DirectAddress;
+      break;
+    }
+  return Func;
+}
+
+MedFunc makeMixedRepresentationRecurrentTableLookup(Arch TargetArch,
+                                                    bool RawArmFirst) {
+  MedFunc Func = makeRecurrentConstTableLookup(TargetArch);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "mixed_recurrent_table_arm64_"
+                              : "mixed_recurrent_table_x86_64_") +
+              (RawArmFirst ? "raw_first" : "symbol_first");
+
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  MedBlock &Entry = Func.Blocks[0];
+  MedBlock &Loop = Func.Blocks[1];
+  MedVar PhiBase = Loop.Phis.front().Output;
+  MedVar NextBase = Loop.Phis.front().Args.back().second;
+  MedVar ComputedBase = PhiBase;
+  ComputedBase.Kind = MedVar::Temp;
+  ComputedBase.Id = 60;
+  ComputedBase.SSAVer = 1;
+
+  constexpr int RawInitId = 10;
+  constexpr int SymbolInitId = 11;
+  constexpr va_t RawInitVA = CallerVA + 0x40;
+  constexpr va_t SymbolInitVA = CallerVA + 0x50;
+
+  Entry.Succs = {RawInitId, SymbolInitId};
+  Entry.Ops.clear();
+  MedOp ChooseInit;
+  ChooseInit.Opcode = NdOp::COND_BR;
+  ChooseInit.Addr = CallerVA;
+  ChooseInit.addInput(MedVar::makeConst(RawInitVA, TRI.PointerSize));
+  ChooseInit.addInput(Func.Params.front());
+  Entry.Ops.push_back(std::move(ChooseInit));
+
+  MedBlock RawInit;
+  RawInit.Id = RawInitId;
+  RawInit.StartAddr = RawInitVA;
+  RawInit.EndAddr = RawInitVA + 8;
+  RawInit.Preds = {0};
+  RawInit.Succs = {Loop.Id};
+  MedOp RawToLoop;
+  RawToLoop.Opcode = NdOp::BRANCH;
+  RawToLoop.addInput(MedVar::makeConst(Loop.StartAddr, TRI.PointerSize));
+  RawInit.Ops.push_back(std::move(RawToLoop));
+
+  MedBlock SymbolInit;
+  SymbolInit.Id = SymbolInitId;
+  SymbolInit.StartAddr = SymbolInitVA;
+  SymbolInit.EndAddr = SymbolInitVA + 8;
+  SymbolInit.Preds = {0};
+  SymbolInit.Succs = {Loop.Id};
+  MedOp MaterializeSymbol;
+  MaterializeSymbol.Opcode = NdOp::COPY;
+  MaterializeSymbol.Output = ComputedBase;
+  MaterializeSymbol.addInput(
+      MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  SymbolInit.Ops.push_back(std::move(MaterializeSymbol));
+  MedOp SymbolToLoop;
+  SymbolToLoop.Opcode = NdOp::BRANCH;
+  SymbolToLoop.addInput(MedVar::makeConst(Loop.StartAddr, TRI.PointerSize));
+  SymbolInit.Ops.push_back(std::move(SymbolToLoop));
+
+  Loop.Preds = {RawInitId, SymbolInitId, 2};
+  const std::pair<int, MedVar> RawArg = {
+      RawInitId, MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize)};
+  const std::pair<int, MedVar> SymbolArg = {SymbolInitId, ComputedBase};
+  Loop.Phis.front().Args =
+      RawArmFirst ? std::vector<std::pair<int, MedVar>>{RawArg,
+                                                        SymbolArg,
+                                                        {2, NextBase}}
+                  : std::vector<std::pair<int, MedVar>>{
+                        SymbolArg, RawArg, {2, NextBase}};
+  for (MedOp &Op : Loop.Ops)
+    if (Op.Opcode == NdOp::LOAD && Op.Output.Size == 2) {
+      Op.Inputs[0] = PhiBase;
+      break;
+    }
+
+  Func.Blocks.push_back(std::move(RawInit));
+  Func.Blocks.push_back(std::move(SymbolInit));
+  return Func;
+}
+
+MedFunc makeLiteralOffsetMixedRecurrentTableLookup(Arch TargetArch) {
+  MedFunc Func =
+      makeMixedRepresentationRecurrentTableLookup(TargetArch,
+                                                  /*RawArmFirst=*/true);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "literal_offset_mixed_recurrent_arm64"
+                  : "literal_offset_mixed_recurrent_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  MedBlock &Loop = Func.Blocks[1];
+  MedVar ComputedBase;
+  for (const auto &[Pred, Arg] : Loop.Phis.front().Args)
+    if (Pred == 11)
+      ComputedBase = Arg;
+
+  MedBlock *SymbolInit = nullptr;
+  for (MedBlock &Block : Func.Blocks)
+    if (Block.Id == 11)
+      SymbolInit = &Block;
+  EXPECT_NE(SymbolInit, nullptr);
+  if (!SymbolInit)
+    return Func;
+
+  MedVar LoadedOffset = ComputedBase;
+  LoadedOffset.Id = 61;
+  MedVar SymbolizedSibling = ComputedBase;
+  SymbolizedSibling.Id = 62;
+
+  MedOp ToSibling;
+  ToSibling.Opcode = NdOp::COPY;
+  ToSibling.Output = SymbolizedSibling;
+  ToSibling.addInput(
+      MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize));
+  MedOp LoadOffset;
+  LoadOffset.Opcode = NdOp::LOAD;
+  LoadOffset.Output = LoadedOffset;
+  LoadOffset.addInput(
+      MedVar::makeConst(SpilledConstTableVA + 0x30, TRI.PointerSize));
+  MedOp FormComputedBase;
+  FormComputedBase.Opcode = NdOp::INT_ADD;
+  FormComputedBase.Output = ComputedBase;
+  FormComputedBase.addInput(LoadedOffset);
+  FormComputedBase.addInput(SymbolizedSibling);
+
+  MedOp ToLoop = std::move(SymbolInit->Ops.back());
+  SymbolInit->Ops.clear();
+  SymbolInit->Ops.push_back(std::move(ToSibling));
+  SymbolInit->Ops.push_back(std::move(LoadOffset));
+  SymbolInit->Ops.push_back(std::move(FormComputedBase));
+  SymbolInit->Ops.push_back(std::move(ToLoop));
+  return Func;
+}
+
+void replaceMedConstant(MedFunc &Func, uint64_t OldValue, uint64_t NewValue) {
+  auto replace = [&](MedVar &V) {
+    if (V.isConst() && V.ConstVal == OldValue)
+      V.ConstVal = NewValue;
+  };
+  for (MedBlock &Block : Func.Blocks) {
+    for (MedOp &Op : Block.Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        replace(Op.Inputs[I]);
+    for (PhiNode &Phi : Block.Phis)
+      for (auto &[Pred, Arg] : Phi.Args) {
+        (void)Pred;
+        replace(Arg);
+      }
+  }
+}
+
+MedFunc makeDualComputedRecurrentTableLookup(Arch TargetArch,
+                                             uint64_t FirstBase,
+                                             uint64_t SecondBase) {
+  MedFunc Func = makeMixedRepresentationRecurrentTableLookup(
+      TargetArch, /*RawArmFirst=*/true);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "dual_computed_recurrent_arm64_"
+                              : "dual_computed_recurrent_x86_64_") +
+              std::to_string(FirstBase) + "_" + std::to_string(SecondBase);
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  MedVar FirstComputed;
+  FirstComputed.Kind = MedVar::Temp;
+  FirstComputed.TheArch = TargetArch;
+  FirstComputed.Id = 70;
+  FirstComputed.SSAVer = 1;
+  FirstComputed.Size = TRI.PointerSize;
+
+  constexpr int FirstInitId = 10;
+  constexpr int SecondInitId = 11;
+  for (MedBlock &Block : Func.Blocks) {
+    if (Block.Id == FirstInitId) {
+      MedOp Materialize;
+      Materialize.Opcode = NdOp::COPY;
+      Materialize.Output = FirstComputed;
+      Materialize.addInput(MedVar::makeConst(FirstBase, TRI.PointerSize));
+      Block.Ops.insert(Block.Ops.begin(), std::move(Materialize));
+    } else if (Block.Id == SecondInitId) {
+      if (!Block.Ops.empty() && Block.Ops.front().Opcode == NdOp::COPY)
+        Block.Ops.front().Inputs[0] =
+            MedVar::makeConst(SecondBase, TRI.PointerSize);
+    }
+  }
+  for (auto &[Pred, Arg] : Func.Blocks[1].Phis.front().Args)
+    if (Pred == FirstInitId)
+      Arg = FirstComputed;
+  return Func;
+}
+
+MedFunc makeTwoBaseArithmeticPhiTableLookup(Arch TargetArch,
+                                            NdOp ArithmeticOpcode) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name =
+      std::string(TargetArch == Arch::AArch64 ? "two_base_arithmetic_arm64_"
+                                              : "two_base_arithmetic_x86_64_") +
+      std::to_string(static_cast<int>(ArithmeticOpcode));
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+
+  MedVar FirstBase;
+  FirstBase.Kind = MedVar::Temp;
+  FirstBase.TheArch = TargetArch;
+  FirstBase.Id = 60;
+  FirstBase.SSAVer = 1;
+  FirstBase.Size = TRI.PointerSize;
+  MedVar SecondBase = FirstBase;
+  SecondBase.Id = 61;
+  MedVar Combined = FirstBase;
+  Combined.Id = 62;
+
+  MedBlock &FirstTable = Func.Blocks[3];
+  MedOp Branch = std::move(FirstTable.Ops.back());
+  FirstTable.Ops.clear();
+  MedOp MaterializeFirst;
+  MaterializeFirst.Opcode = NdOp::COPY;
+  MaterializeFirst.Output = FirstBase;
+  MaterializeFirst.addInput(
+      MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  FirstTable.Ops.push_back(std::move(MaterializeFirst));
+  MedOp MaterializeSecond;
+  MaterializeSecond.Opcode = NdOp::COPY;
+  MaterializeSecond.Output = SecondBase;
+  MaterializeSecond.addInput(
+      MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize));
+  FirstTable.Ops.push_back(std::move(MaterializeSecond));
+  MedOp Combine;
+  Combine.Opcode = ArithmeticOpcode;
+  Combine.Output = Combined;
+  Combine.addInput(FirstBase);
+  Combine.addInput(SecondBase);
+  FirstTable.Ops.push_back(std::move(Combine));
+  FirstTable.Ops.push_back(std::move(Branch));
+
+  MedBlock &Merge = Func.Blocks[5];
+  for (auto &[Pred, Arg] : Merge.Phis.front().Args)
+    if (Pred == FirstTable.Id) {
+      Arg = Combined;
+      break;
+    }
+  return Func;
+}
+
+enum class InvalidPhiPointerExprCase {
+  StandaloneAnd,
+  DirectSecondBase,
+  NumericOffset,
+  PureArithmeticSameResult,
+};
+
+MedFunc makePhiPointerExpressionLookup(Arch TargetArch,
+                                       InvalidPhiPointerExprCase Case) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name =
+      std::string(TargetArch == Arch::AArch64 ? "phi_pointer_expr_arm64_"
+                                              : "phi_pointer_expr_x86_64_") +
+      std::to_string(static_cast<int>(Case));
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+
+  if (Case == InvalidPhiPointerExprCase::NumericOffset) {
+    replaceMedConstant(Func, SpilledConstTableVA, LowSpilledConstTableVA);
+    replaceMedConstant(Func, OtherSpilledConstTableVA,
+                       OtherLowSpilledConstTableVA);
+  }
+
+  auto replaceArm = [&](MedBlock &Block, MedVar Arm) {
+    for (auto &[Pred, Arg] : Func.Blocks[5].Phis.front().Args)
+      if (Pred == Block.Id) {
+        Arg = Arm;
+        return;
+      }
+    ADD_FAILURE() << "missing PHI arm for block " << Block.Id;
+  };
+  auto appendBeforeBranch = [](MedBlock &Block, MedOp Op) {
+    Block.Ops.insert(std::prev(Block.Ops.end()), std::move(Op));
+  };
+
+  if (Case == InvalidPhiPointerExprCase::PureArithmeticSameResult) {
+    for (int BlockId : {3, 4}) {
+      MedBlock &Block = Func.Blocks[BlockId];
+      MedVar Left = makeTemp(60 + BlockId * 3);
+      MedVar Right = makeTemp(61 + BlockId * 3);
+      MedVar Sum = makeTemp(62 + BlockId * 3);
+      MedOp CopyLeft;
+      CopyLeft.Opcode = NdOp::COPY;
+      CopyLeft.Output = Left;
+      CopyLeft.addInput(MedVar::makeConst(0x400, TRI.PointerSize));
+      appendBeforeBranch(Block, std::move(CopyLeft));
+      MedOp CopyRight;
+      CopyRight.Opcode = NdOp::COPY;
+      CopyRight.Output = Right;
+      CopyRight.addInput(MedVar::makeConst(0x480, TRI.PointerSize));
+      appendBeforeBranch(Block, std::move(CopyRight));
+      MedOp Add;
+      Add.Opcode = NdOp::INT_ADD;
+      Add.Output = Sum;
+      Add.addInput(Left);
+      Add.addInput(Right);
+      appendBeforeBranch(Block, std::move(Add));
+      replaceArm(Block, Sum);
+    }
+    return Func;
+  }
+
+  MedBlock &FirstTable = Func.Blocks[3];
+  MedVar Base = makeTemp(60);
+  MedVar Result = makeTemp(61);
+  uint64_t BaseVA = Case == InvalidPhiPointerExprCase::NumericOffset
+                        ? LowSpilledConstTableVA
+                        : SpilledConstTableVA;
+  MedOp CopyBase;
+  CopyBase.Opcode = NdOp::COPY;
+  CopyBase.Output = Base;
+  CopyBase.addInput(MedVar::makeConst(BaseVA, TRI.PointerSize));
+  appendBeforeBranch(FirstTable, std::move(CopyBase));
+  MedOp Arithmetic;
+  Arithmetic.Opcode = Case == InvalidPhiPointerExprCase::StandaloneAnd
+                          ? NdOp::INT_AND
+                          : NdOp::INT_ADD;
+  Arithmetic.Output = Result;
+  Arithmetic.addInput(Base);
+  if (Case == InvalidPhiPointerExprCase::StandaloneAnd)
+    Arithmetic.addInput(Func.Params[0]);
+  else if (Case == InvalidPhiPointerExprCase::DirectSecondBase)
+    Arithmetic.addInput(
+        MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize));
+  else
+    Arithmetic.addInput(MedVar::makeConst(4, TRI.PointerSize));
+  appendBeforeBranch(FirstTable, std::move(Arithmetic));
+  replaceArm(FirstTable, Result);
+  return Func;
+}
+
+MedFunc makeIndependentPointerPhiAddressLookup(Arch TargetArch, NdOp Opcode) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "independent_pointer_phis_arm64_"
+                              : "independent_pointer_phis_x86_64_") +
+              std::to_string(static_cast<int>(Opcode));
+  PhiNode &First = Func.Blocks[5].Phis.front();
+  for (auto &[Pred, Arg] : First.Args)
+    if (Pred == 3 || Pred == 4)
+      Arg = MedVar::makeConst(SpilledConstTableVA, Arg.Size);
+
+  PhiNode Second = First;
+  Second.Output.Id = 45;
+  for (auto &[Pred, Arg] : Second.Args)
+    if (Pred == 3 || Pred == 4)
+      Arg = MedVar::makeConst(OtherSpilledConstTableVA, Arg.Size);
+  MedVar SecondOutput = Second.Output;
+  Func.Blocks[5].Phis.push_back(std::move(Second));
+
+  for (MedOp &Op : Func.Blocks[5].Ops)
+    if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs >= 2) {
+      Op.Opcode = Opcode;
+      Op.Inputs[0] = First.Output;
+      Op.Inputs[1] = SecondOutput;
+      break;
+    }
+  return Func;
+}
+
+MedFunc makeTruncatingPointerExpressionLookup(Arch TargetArch, bool TruncatePhi,
+                                              NdOp Opcode = NdOp::INT_ADD) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "truncating_pointer_expr_arm64_"
+                              : "truncating_pointer_expr_x86_64_") +
+              (TruncatePhi ? "phi" : std::to_string(static_cast<int>(Opcode)));
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  PhiNode &Phi = Func.Blocks[5].Phis.front();
+  if (TruncatePhi) {
+    for (int BlockId : {3, 4}) {
+      MedBlock &Block = Func.Blocks[BlockId];
+      MedVar Materialized = Phi.Output;
+      Materialized.Kind = MedVar::Temp;
+      Materialized.Id = 70 + BlockId;
+      Materialized.Size = TRI.PointerSize;
+      MedOp Copy;
+      Copy.Opcode = NdOp::COPY;
+      Copy.Output = Materialized;
+      Copy.addInput(MedVar::makeConst(BlockId == 3 ? SpilledConstTableVA
+                                                   : OtherSpilledConstTableVA,
+                                      TRI.PointerSize));
+      Block.Ops.insert(std::prev(Block.Ops.end()), std::move(Copy));
+      for (auto &[Pred, Arg] : Phi.Args)
+        if (Pred == Block.Id)
+          Arg = Materialized;
+    }
+    Phi.Output.Size = 4;
+    MedVar WidePhi = Phi.Output;
+    WidePhi.Kind = MedVar::Temp;
+    WidePhi.Id = 46;
+    WidePhi.Size = TRI.PointerSize;
+    MedOp Widen;
+    Widen.Opcode = NdOp::INT_ZEXT;
+    Widen.Output = WidePhi;
+    Widen.addInput(Phi.Output);
+    Func.Blocks[5].Ops.insert(Func.Blocks[5].Ops.begin(), std::move(Widen));
+    for (MedOp &Op : Func.Blocks[5].Ops)
+      if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs >= 2 &&
+          Op.Inputs[0].Id == Phi.Output.Id) {
+        Op.Inputs[0] = WidePhi;
+        break;
+      }
+    return Func;
+  }
+
+  for (MedOp &Op : Func.Blocks[5].Ops)
+    if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs >= 2) {
+      Op.Opcode = Opcode;
+      Op.Output.Size = 4;
+      for (MedOp &Consumer : Func.Blocks[5].Ops)
+        for (uint8_t I = 0; I < Consumer.NumInputs; ++I)
+          if (!Consumer.Inputs[I].isConst() &&
+              Consumer.Inputs[I].Id == Op.Output.Id)
+            Consumer.Inputs[I].Size = 4;
+      break;
+    }
+  return Func;
+}
+
+MedFunc makeNoPhiSelectedTableLookup(Arch TargetArch, bool Masked);
+
+MedFunc makeNoPhiMaskedArithmeticSelection(Arch TargetArch) {
+  MedFunc Func = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+  Func.Name = TargetArch == Arch::AArch64 ? "no_phi_masked_arithmetic_arm64"
+                                          : "no_phi_masked_arithmetic_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+  MedVar Left = makeTemp(90);
+  MedVar Right = makeTemp(91);
+  MedOp MaskLeft;
+  MaskLeft.Opcode = NdOp::INT_AND;
+  MaskLeft.Output = Left;
+  MaskLeft.addInput(MedVar::makeConst(LowSpilledConstTableVA, TRI.PointerSize));
+  MaskLeft.addInput(Func.Params[1]);
+  MedOp MaskRight;
+  MaskRight.Opcode = NdOp::INT_AND;
+  MaskRight.Output = Right;
+  MaskRight.addInput(
+      MedVar::makeConst(OtherLowSpilledConstTableVA, TRI.PointerSize));
+  MaskRight.addInput(Func.Params[1]);
+
+  MedBlock &Entry = Func.Blocks.front();
+  auto Select = std::find_if(Entry.Ops.begin(), Entry.Ops.end(), [](MedOp &Op) {
+    return Op.Opcode == NdOp::SELECT;
+  });
+  EXPECT_NE(Select, Entry.Ops.end());
+  if (Select != Entry.Ops.end()) {
+    Select->Inputs[1] = Left;
+    Select->Inputs[2] = Right;
+    Select = Entry.Ops.insert(Select, std::move(MaskLeft));
+    Entry.Ops.insert(std::next(Select), std::move(MaskRight));
+  }
+  return Func;
+}
+
+MedFunc makeMalformedSelfRecurrentPhiTableLookup(Arch TargetArch) {
+  MedFunc Func = makePhiConstTableLookup(
+      TargetArch, PhiTableBaseCase::AmbiguousRuntimeClobber);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "malformed_self_recurrent_table_arm64"
+                  : "malformed_self_recurrent_table_x86_64";
+  MedBlock &Merge = Func.Blocks[1];
+  Merge.Preds.push_back(99);
+  Merge.Phis.front().Args.push_back({99, Merge.Phis.front().Output});
+  return Func;
+}
+
+MedFunc makeMisassignedMaskedOrPhiTableLookup(Arch TargetArch) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name = TargetArch == Arch::AArch64 ? "misassigned_masked_or_phi_arm64"
+                                          : "misassigned_masked_or_phi_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+
+  MedVar A = makeTemp(60);
+  MedVar B = makeTemp(61);
+  MedVar NotA = makeTemp(62);
+  MedVar NotB = makeTemp(63);
+  MedVar Left = makeTemp(64);
+  MedVar Right = makeTemp(65);
+  MedVar Blend = makeTemp(66);
+
+  MedBlock &FirstTable = Func.Blocks[3];
+  MedOp Branch = std::move(FirstTable.Ops.back());
+  FirstTable.Ops.clear();
+  auto appendCopy = [&](MedVar Output, uint64_t Value) {
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = Output;
+    Copy.addInput(MedVar::makeConst(Value, TRI.PointerSize));
+    FirstTable.Ops.push_back(std::move(Copy));
+  };
+  appendCopy(A, SpilledConstTableVA);
+  appendCopy(B, OtherSpilledConstTableVA);
+  MedOp ComplementA;
+  ComplementA.Opcode = NdOp::INT_NOT;
+  ComplementA.Output = NotA;
+  ComplementA.addInput(A);
+  FirstTable.Ops.push_back(std::move(ComplementA));
+  MedOp ComplementB;
+  ComplementB.Opcode = NdOp::INT_NOT;
+  ComplementB.Output = NotB;
+  ComplementB.addInput(B);
+  FirstTable.Ops.push_back(std::move(ComplementB));
+  MedOp FormLeft;
+  FormLeft.Opcode = NdOp::INT_AND;
+  FormLeft.Output = Left;
+  FormLeft.addInput(A);
+  FormLeft.addInput(NotB);
+  FirstTable.Ops.push_back(std::move(FormLeft));
+  MedOp FormRight;
+  FormRight.Opcode = NdOp::INT_AND;
+  FormRight.Output = Right;
+  FormRight.addInput(B);
+  FormRight.addInput(NotA);
+  FirstTable.Ops.push_back(std::move(FormRight));
+  MedOp FormBlend;
+  FormBlend.Opcode = NdOp::INT_OR;
+  FormBlend.Output = Blend;
+  FormBlend.addInput(Left);
+  FormBlend.addInput(Right);
+  FirstTable.Ops.push_back(std::move(FormBlend));
+  FirstTable.Ops.push_back(std::move(Branch));
+
+  for (auto &[Pred, Arg] : Func.Blocks[5].Phis.front().Args)
+    if (Pred == FirstTable.Id) {
+      Arg = Blend;
+      break;
+    }
+  return Func;
+}
+
+MedFunc makeFoldedScalarAddPhiTableLookup(Arch TargetArch, bool WrapInCopy) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "folded_scalar_add_phi_arm64_"
+                              : "folded_scalar_add_phi_x86_64_") +
+              (WrapInCopy ? "copy" : "direct");
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+  MedVar One = makeTemp(60);
+  MedVar Rest = makeTemp(61);
+  MedVar Sum = makeTemp(62);
+  MedVar PhiArg = Sum;
+
+  MedBlock &FirstTable = Func.Blocks[3];
+  MedOp Branch = std::move(FirstTable.Ops.back());
+  FirstTable.Ops.clear();
+  MedOp MaterializeOne;
+  MaterializeOne.Opcode = NdOp::COPY;
+  MaterializeOne.Output = One;
+  MaterializeOne.addInput(MedVar::makeConst(1, TRI.PointerSize));
+  FirstTable.Ops.push_back(std::move(MaterializeOne));
+  MedOp MaterializeRest;
+  MaterializeRest.Opcode = NdOp::COPY;
+  MaterializeRest.Output = Rest;
+  MaterializeRest.addInput(
+      MedVar::makeConst(SpilledConstTableVA - 1, TRI.PointerSize));
+  FirstTable.Ops.push_back(std::move(MaterializeRest));
+  MedOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Output = Sum;
+  Add.addInput(One);
+  Add.addInput(Rest);
+  FirstTable.Ops.push_back(std::move(Add));
+  if (WrapInCopy) {
+    PhiArg = makeTemp(63);
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = PhiArg;
+    Copy.addInput(Sum);
+    FirstTable.Ops.push_back(std::move(Copy));
+  }
+  FirstTable.Ops.push_back(std::move(Branch));
+
+  for (auto &[Pred, Arg] : Func.Blocks[5].Phis.front().Args)
+    if (Pred == FirstTable.Id) {
+      Arg = PhiArg;
+      break;
+    }
+  return Func;
+}
+
+MedFunc makeUniformFoldedScalarAddPhiTableLookup(Arch TargetArch) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "uniform_folded_scalar_add_phi_arm64"
+                  : "uniform_folded_scalar_add_phi_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+  auto replaceArm = [&](MedBlock &Block, uint64_t Target, int FirstId) {
+    MedOp Branch = std::move(Block.Ops.back());
+    Block.Ops.clear();
+    MedVar Left = makeTemp(FirstId);
+    MedVar Right = makeTemp(FirstId + 1);
+    MedVar Sum = makeTemp(FirstId + 2);
+    constexpr uint64_t Split = 0x80000000ULL;
+    MedOp CopyLeft;
+    CopyLeft.Opcode = NdOp::COPY;
+    CopyLeft.Output = Left;
+    CopyLeft.addInput(MedVar::makeConst(Split, TRI.PointerSize));
+    Block.Ops.push_back(std::move(CopyLeft));
+    MedOp CopyRight;
+    CopyRight.Opcode = NdOp::COPY;
+    CopyRight.Output = Right;
+    CopyRight.addInput(MedVar::makeConst(Target - Split, TRI.PointerSize));
+    Block.Ops.push_back(std::move(CopyRight));
+    MedOp Add;
+    Add.Opcode = NdOp::INT_ADD;
+    Add.Output = Sum;
+    Add.addInput(Left);
+    Add.addInput(Right);
+    Block.Ops.push_back(std::move(Add));
+    Block.Ops.push_back(std::move(Branch));
+    for (auto &[Pred, Arg] : Func.Blocks[5].Phis.front().Args)
+      if (Pred == Block.Id)
+        Arg = Sum;
+  };
+  replaceArm(Func.Blocks[3], SpilledConstTableVA, 60);
+  replaceArm(Func.Blocks[4], OtherSpilledConstTableVA, 70);
+  return Func;
+}
+
+MedFunc makeComputedModelPhiTableLookup(Arch TargetArch, bool MixedModel,
+                                        bool SameBase = false) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name =
+      std::string(TargetArch == Arch::AArch64 ? "computed_model_phi_arm64_"
+                                              : "computed_model_phi_x86_64_") +
+      (MixedModel ? "mixed"
+       : SameBase ? "uniform_single"
+                  : "uniform_multi");
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+  auto materialize = [&](MedBlock &Block, MedVar Output, uint64_t Value) {
+    MedOp Branch = std::move(Block.Ops.back());
+    Block.Ops.clear();
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = Output;
+    Copy.addInput(MedVar::makeConst(Value, TRI.PointerSize));
+    Block.Ops.push_back(std::move(Copy));
+    Block.Ops.push_back(std::move(Branch));
+  };
+
+  MedVar A = makeTemp(60);
+  materialize(Func.Blocks[3], A, SpilledConstTableVA);
+  for (auto &[Pred, Arg] : Func.Blocks[5].Phis.front().Args)
+    if (Pred == Func.Blocks[3].Id)
+      Arg = A;
+
+  if (!MixedModel) {
+    MedVar B = makeTemp(61);
+    materialize(Func.Blocks[4], B,
+                SameBase ? SpilledConstTableVA : OtherSpilledConstTableVA);
+    for (auto &[Pred, Arg] : Func.Blocks[5].Phis.front().Args)
+      if (Pred == Func.Blocks[4].Id)
+        Arg = B;
+  }
+  return Func;
+}
+
+MedFunc makeNarrowForwardedPhiTableLookup(Arch TargetArch) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name = TargetArch == Arch::AArch64 ? "narrow_forwarded_phi_table_arm64"
+                                          : "narrow_forwarded_phi_table_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+  auto materialize = [&](MedBlock &Block, int Id, uint64_t Value) {
+    MedOp Branch = std::move(Block.Ops.back());
+    Block.Ops.clear();
+    MedVar Narrow = makeTemp(Id, 4);
+    MedVar Wide = makeTemp(Id + 1, TRI.PointerSize);
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = Narrow;
+    Copy.addInput(MedVar::makeConst(Value, 4));
+    Block.Ops.push_back(std::move(Copy));
+    MedOp Widen;
+    Widen.Opcode = NdOp::INT_ZEXT;
+    Widen.Output = Wide;
+    Widen.addInput(Narrow);
+    Block.Ops.push_back(std::move(Widen));
+    Block.Ops.push_back(std::move(Branch));
+    return Wide;
+  };
+
+  MedVar A = materialize(Func.Blocks[3], 60, SymbolizedSameRunTableVA);
+  MedVar B = materialize(Func.Blocks[4], 62, OtherSymbolizedSameRunTableVA);
+  for (auto &[Pred, Arg] : Func.Blocks[5].Phis.front().Args) {
+    if (Pred == Func.Blocks[3].Id)
+      Arg = A;
+    else if (Pred == Func.Blocks[4].Id)
+      Arg = B;
+  }
+  return Func;
+}
+
+MedFunc makeNestedAmbiguousPhiSelectTableLookup(Arch TargetArch) {
+  MedFunc Func = makePhiConstTableLookup(
+      TargetArch, PhiTableBaseCase::AmbiguousRuntimeClobber);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "nested_ambiguous_phi_select_arm64"
+                  : "nested_ambiguous_phi_select_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  MedBlock &Merge = Func.Blocks[1];
+  MedVar Selected = Merge.Phis.front().Output;
+  Selected.Kind = MedVar::Temp;
+  Selected.Id = 60;
+  Selected.SSAVer = 1;
+  MedOp Select;
+  Select.Opcode = NdOp::SELECT;
+  Select.Output = Selected;
+  Select.addInput(Func.Params[1]);
+  Select.addInput(Merge.Phis.front().Output);
+  Select.addInput(MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize));
+  Merge.Ops.insert(Merge.Ops.begin(), std::move(Select));
+  for (MedOp &Op : Merge.Ops)
+    if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs >= 2) {
+      Op.Inputs[0] = Selected;
+      break;
+    }
+  return Func;
+}
+
+MedFunc makeTwoRecurrentPointerTableLookup(Arch TargetArch,
+                                           NdOp AddressOpcode) {
+  MedFunc Func = makeRecurrentConstTableLookup(TargetArch);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "two_recurrent_pointer_table_arm64_"
+                              : "two_recurrent_pointer_table_x86_64_") +
+              std::to_string(static_cast<int>(AddressOpcode));
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+  MedVar OtherPhi = makeTemp(40);
+  MedVar OtherNext = makeTemp(41);
+  PhiNode Other;
+  Other.Output = OtherPhi;
+  Other.Args = {
+      {0, MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize)},
+      {2, OtherNext}};
+  Func.Blocks[1].Phis.push_back(std::move(Other));
+
+  for (MedOp &Op : Func.Blocks[1].Ops)
+    if (Op.Output.Id == 34) {
+      Op.Opcode = AddressOpcode;
+      Op.Inputs[1] = OtherPhi;
+      break;
+    }
+
+  MedOp StepOther;
+  StepOther.Opcode = NdOp::INT_ADD;
+  StepOther.Output = OtherNext;
+  StepOther.addInput(OtherPhi);
+  StepOther.addInput(MedVar::makeConst(2, TRI.PointerSize));
+  Func.Blocks[2].Ops.insert(Func.Blocks[2].Ops.begin(), std::move(StepOther));
+  return Func;
+}
+
+MedFunc makeAmbiguousAliasSiblingTableLookup(Arch TargetArch,
+                                             bool DifferentConst) {
+  MedFunc Func = makeNestedRecurrentPhiTableLookup(
+      TargetArch, NestedRecurrentPhiCase::MutualSubregisterAlias);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "ambiguous_alias_sibling_arm64_"
+                              : "ambiguous_alias_sibling_x86_64_") +
+              (DifferentConst ? "different" : "scalar");
+  PhiNode &Sibling = Func.Blocks[1].Phis[1];
+  if (!DifferentConst) {
+    Sibling.Args.front().second = Func.Params[2];
+    return Func;
+  }
+
+  MedVar Computed = Sibling.Output;
+  Computed.Kind = MedVar::Temp;
+  Computed.Id = 60;
+  Computed.SSAVer = 1;
+  MedOp Materialize;
+  Materialize.Opcode = NdOp::COPY;
+  Materialize.Output = Computed;
+  Materialize.addInput(
+      MedVar::makeConst(static_cast<uint32_t>(OtherSpilledConstTableVA), 4));
+  Func.Blocks[0].Ops.insert(Func.Blocks[0].Ops.begin(), std::move(Materialize));
+  Sibling.Args.front().second = Computed;
+  return Func;
+}
+
+MedFunc makeMultiRawInitRecurrentTableLookup(Arch TargetArch, bool CrossRun,
+                                             bool AlternateFirst) {
+  MedFunc Func =
+      makeMixedRepresentationRecurrentTableLookup(TargetArch, AlternateFirst);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "multi_raw_init_recurrent_arm64_"
+                              : "multi_raw_init_recurrent_x86_64_") +
+              (CrossRun ? "cross_" : "same_") +
+              (AlternateFirst ? "alternate_first" : "primary_first");
+  PhiNode &Phi = Func.Blocks[1].Phis.front();
+  uint64_t OtherBase =
+      CrossRun ? FarSpilledConstTableVA : OtherSpilledConstTableVA;
+  for (auto &[Pred, Arg] : Phi.Args) {
+    if (Pred == 10)
+      Arg = MedVar::makeConst(AlternateFirst ? OtherBase : SpilledConstTableVA,
+                              Arg.Size);
+    else if (Pred == 11)
+      Arg = MedVar::makeConst(AlternateFirst ? SpilledConstTableVA : OtherBase,
+                              Arg.Size);
+  }
+  return Func;
+}
+
+enum class MixedWidthControlCase { Shift, Select, IntNot, IntNeg2 };
+
+MedFunc makeMixedWidthControlPhiTableLookup(Arch TargetArch,
+                                            MixedWidthControlCase Case) {
+  MedFunc Func = makePhiConstTableLookup(
+      TargetArch, PhiTableBaseCase::AmbiguousRuntimeClobber);
+  const char *CaseName = Case == MixedWidthControlCase::Shift    ? "shift"
+                         : Case == MixedWidthControlCase::Select ? "select"
+                         : Case == MixedWidthControlCase::IntNot ? "not"
+                                                                 : "neg2";
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "mixed_width_control_phi_table_arm64_"
+                              : "mixed_width_control_phi_table_x86_64_") +
+              CaseName;
+
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedBlock &Entry = Func.Blocks[0];
+  MedBlock &Merge = Func.Blocks[1];
+  Entry.Ops.clear();
+
+  MedVar FoldedCond = makeTemp(72, 1);
+  if (Case == MixedWidthControlCase::Shift) {
+    MedVar SmallOne = makeTemp(70, 1);
+    MedVar Shifted = makeTemp(71, TRI.PointerSize);
+
+    MedOp MaterializeOne;
+    MaterializeOne.Opcode = NdOp::COPY;
+    MaterializeOne.Output = SmallOne;
+    MaterializeOne.addInput(MedVar::makeConst(1, 1));
+    Entry.Ops.push_back(std::move(MaterializeOne));
+
+    // emitOp first zero-extends the i8 value to the i64 shift-count width, so
+    // this is 1 << 8 == 256, not an overshift of an eight-bit value.
+    MedOp Shift;
+    Shift.Opcode = NdOp::INT_LEFT;
+    Shift.Output = Shifted;
+    Shift.addInput(SmallOne);
+    Shift.addInput(MedVar::makeConst(8, TRI.PointerSize));
+    Entry.Ops.push_back(std::move(Shift));
+
+    MedOp Compare;
+    Compare.Opcode = NdOp::INT_NOTEQUAL;
+    Compare.Output = FoldedCond;
+    Compare.addInput(Shifted);
+    Compare.addInput(MedVar::makeConst(0, TRI.PointerSize));
+    Entry.Ops.push_back(std::move(Compare));
+  } else if (Case == MixedWidthControlCase::Select) {
+    MedVar WideScalar = makeTemp(70, TRI.PointerSize);
+    MedOp WidenScalar;
+    WidenScalar.Opcode = NdOp::INT_ZEXT;
+    WidenScalar.Output = WideScalar;
+    WidenScalar.addInput(Func.Params[2]);
+    Entry.Ops.push_back(std::move(WidenScalar));
+
+    // SELECT coerces its value arms to pointer width, then setVar truncates the
+    // selected 0x100 back to FoldedCond's i8 output.  The branch condition is
+    // therefore zero even though the selected wide arm is non-zero.
+    MedOp Select;
+    Select.Opcode = NdOp::SELECT;
+    Select.Output = FoldedCond;
+    Select.addInput(MedVar::makeConst(1, 1));
+    Select.addInput(MedVar::makeConst(0x100, TRI.PointerSize));
+    Select.addInput(MedVar::makeConst(0, 1));
+    Entry.Ops.push_back(std::move(Select));
+
+    Merge.Phis.front().Args = {
+        {Entry.Id, WideScalar},
+        {Func.Blocks[2].Id,
+         MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize)}};
+  } else {
+    MedVar NarrowInput = makeTemp(70, 1);
+    MedVar WideUnary = makeTemp(71, TRI.PointerSize);
+
+    MedOp MaterializeInput;
+    MaterializeInput.Opcode = NdOp::COPY;
+    MaterializeInput.Output = NarrowInput;
+    MaterializeInput.addInput(
+        MedVar::makeConst(Case == MixedWidthControlCase::IntNot ? 0 : 1, 1));
+    Entry.Ops.push_back(std::move(MaterializeInput));
+
+    // Unary integer operations execute at the input width.  Both ~i8(0) and
+    // -i8(1) are 255, which setVar then zero-extends to this i64 output.
+    MedOp Unary;
+    Unary.Opcode =
+        Case == MixedWidthControlCase::IntNot ? NdOp::INT_NOT : NdOp::INT_NEG2;
+    Unary.Output = WideUnary;
+    Unary.addInput(NarrowInput);
+    Entry.Ops.push_back(std::move(Unary));
+
+    MedOp Compare;
+    Compare.Opcode = NdOp::INT_EQUAL;
+    Compare.Output = FoldedCond;
+    Compare.addInput(WideUnary);
+    Compare.addInput(MedVar::makeConst(255, TRI.PointerSize));
+    Entry.Ops.push_back(std::move(Compare));
+  }
+
+  MedOp ConditionalBranch;
+  ConditionalBranch.Opcode = NdOp::COND_BR;
+  ConditionalBranch.Addr = CallerVA + 0xc;
+  ConditionalBranch.addInput(
+      MedVar::makeConst(Func.Blocks[2].StartAddr, TRI.PointerSize));
+  ConditionalBranch.addInput(FoldedCond);
+  Entry.Ops.push_back(std::move(ConditionalBranch));
+  return Func;
+}
+
+MedFunc makeNoPhiSelectedTableLookup(Arch TargetArch, bool Masked) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "no_phi_selected_table_arm64_"
+                              : "no_phi_selected_table_x86_64_") +
+              (Masked ? "masked" : "select");
+  Func.ReturnType = NdType::makeInt(2);
+  MedVar CondSeed = makeVar(MedVar::Param, 0, 4);
+  CondSeed.RegOff = TRI.IntParamRegs[0];
+  MedVar Scalar = makeVar(MedVar::Param, 1, TRI.PointerSize);
+  Scalar.RegOff = TRI.IntParamRegs[1];
+  Func.Params = {CondSeed, Scalar};
+
+  MedVar Cond = makeVar(MedVar::Temp, 80, 1);
+  MedVar Selected = makeVar(MedVar::Temp, 81, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 82, 2);
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 0x20;
+
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_NOTEQUAL;
+  Compare.Output = Cond;
+  Compare.addInput(CondSeed);
+  Compare.addInput(MedVar::makeConst(0, 4));
+  Entry.Ops.push_back(std::move(Compare));
+
+  if (!Masked) {
+    MedOp Select;
+    Select.Opcode = NdOp::SELECT;
+    Select.Output = Selected;
+    Select.addInput(Cond);
+    Select.addInput(MedVar::makeConst(LowSpilledConstTableVA, TRI.PointerSize));
+    Select.addInput(Scalar);
+    Entry.Ops.push_back(std::move(Select));
+  } else {
+    MedVar WideCond = makeVar(MedVar::Temp, 83, TRI.PointerSize);
+    MedVar Mask = makeVar(MedVar::Temp, 84, TRI.PointerSize);
+    MedVar NotMask = makeVar(MedVar::Temp, 85, TRI.PointerSize);
+    MedVar TableArm = makeVar(MedVar::Temp, 86, TRI.PointerSize);
+    MedVar ScalarArm = makeVar(MedVar::Temp, 87, TRI.PointerSize);
+    MedOp Widen;
+    Widen.Opcode = NdOp::INT_ZEXT;
+    Widen.Output = WideCond;
+    Widen.addInput(Cond);
+    Entry.Ops.push_back(std::move(Widen));
+    MedOp Negate;
+    Negate.Opcode = NdOp::INT_NEG2;
+    Negate.Output = Mask;
+    Negate.addInput(WideCond);
+    Entry.Ops.push_back(std::move(Negate));
+    MedOp Complement;
+    Complement.Opcode = NdOp::INT_NOT;
+    Complement.Output = NotMask;
+    Complement.addInput(Mask);
+    Entry.Ops.push_back(std::move(Complement));
+    MedOp KeepTable;
+    KeepTable.Opcode = NdOp::INT_AND;
+    KeepTable.Output = TableArm;
+    KeepTable.addInput(
+        MedVar::makeConst(LowSpilledConstTableVA, TRI.PointerSize));
+    KeepTable.addInput(Mask);
+    Entry.Ops.push_back(std::move(KeepTable));
+    MedOp KeepScalar;
+    KeepScalar.Opcode = NdOp::INT_AND;
+    KeepScalar.Output = ScalarArm;
+    KeepScalar.addInput(Scalar);
+    KeepScalar.addInput(NotMask);
+    Entry.Ops.push_back(std::move(KeepScalar));
+    MedOp Blend;
+    Blend.Opcode = NdOp::INT_OR;
+    Blend.Output = Selected;
+    Blend.addInput(TableArm);
+    Blend.addInput(ScalarArm);
+    Entry.Ops.push_back(std::move(Blend));
+  }
+
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = Element;
+  Load.addInput(Selected);
+  Entry.Ops.push_back(std::move(Load));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Entry.Ops.push_back(std::move(Return));
+  Func.Blocks.push_back(std::move(Entry));
+  return Func;
+}
+
+MedFunc makePointerTableNonValueRoleLookup(Arch TargetArch,
+                                           bool TableOnlyInSelectCondition) {
+  MedFunc Func = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "pointer_table_non_value_role_arm64_"
+                              : "pointer_table_non_value_role_x86_64_") +
+              (TableOnlyInSelectCondition ? "control" : "annihilated");
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  MedBlock &Entry = Func.Blocks.front();
+  auto Select = std::find_if(Entry.Ops.begin(), Entry.Ops.end(), [](MedOp &Op) {
+    return Op.Opcode == NdOp::SELECT;
+  });
+  EXPECT_NE(Select, Entry.Ops.end());
+  if (Select == Entry.Ops.end())
+    return Func;
+
+  if (TableOnlyInSelectCondition) {
+    // ptrTableUniqueSegment's broad discovery walk sees this mapped constant,
+    // but it is control-only: neither selected value carries table provenance.
+    Select->Inputs[0] =
+        MedVar::makeConst(LowSpilledConstTableVA, TRI.PointerSize);
+    Select->Inputs[1] = Func.Params[1];
+    Select->Inputs[2] = Func.Params[1];
+  } else {
+    // Multiplication is not pointer-preserving.  In particular, multiplying a
+    // table address by zero must not let Path 2 manufacture a pointer into the
+    // rebuilt table mirror merely because its discovery walk saw one operand.
+    MedOp Annihilate;
+    Annihilate.Opcode = NdOp::INT_MULT;
+    Annihilate.Output = Select->Output;
+    Annihilate.addInput(
+        MedVar::makeConst(LowSpilledConstTableVA, TRI.PointerSize));
+    Annihilate.addInput(MedVar::makeConst(0, TRI.PointerSize));
+    *Select = std::move(Annihilate);
+  }
+  return Func;
+}
+
+MedFunc makeDeepForwardedLowTableLookup(Arch TargetArch) {
+  MedFunc Func = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+  Func.Name = TargetArch == Arch::AArch64 ? "deep_forwarded_low_table_arm64"
+                                          : "deep_forwarded_low_table_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  MedBlock &Entry = Func.Blocks.front();
+  auto Select = std::find_if(Entry.Ops.begin(), Entry.Ops.end(), [](MedOp &Op) {
+    return Op.Opcode == NdOp::SELECT;
+  });
+  auto Load = std::find_if(Entry.Ops.begin(), Entry.Ops.end(),
+                           [](MedOp &Op) { return Op.Opcode == NdOp::LOAD; });
+  EXPECT_NE(Select, Entry.Ops.end());
+  EXPECT_NE(Load, Entry.Ops.end());
+  if (Select == Entry.Ops.end() || Load == Entry.Ops.end())
+    return Func;
+
+  MedVar Current = Select->Output;
+  MedOp Materialize;
+  Materialize.Opcode = NdOp::COPY;
+  Materialize.Output = Current;
+  Materialize.addInput(
+      MedVar::makeConst(LowSpilledConstTableVA, TRI.PointerSize));
+  *Select = std::move(Materialize);
+
+  std::vector<MedOp> Copies;
+  for (int I = 0; I < 20; ++I) {
+    MedVar Next = Current;
+    Next.Id = 100 + I;
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = Next;
+    Copy.addInput(Current);
+    Copies.push_back(std::move(Copy));
+    Current = Next;
+  }
+  Load = Entry.Ops.insert(Load, std::make_move_iterator(Copies.begin()),
+                          std::make_move_iterator(Copies.end()));
+  std::advance(Load, static_cast<long>(Copies.size()));
+  Load->Inputs[0] = Current;
+  return Func;
+}
+
+MedFunc makeDeepArithmeticLowTableLookup(Arch TargetArch) {
+  MedFunc Func = makeDeepForwardedLowTableLookup(TargetArch);
+  Func.Name = TargetArch == Arch::AArch64 ? "deep_arithmetic_low_table_arm64"
+                                          : "deep_arithmetic_low_table_x86_64";
+  MedBlock &Entry = Func.Blocks.front();
+  for (MedOp &Op : Entry.Ops) {
+    if (Op.Opcode != NdOp::COPY || Op.Output.Id < 100)
+      continue;
+    Op.Opcode = NdOp::INT_ADD;
+    Op.addInput(MedVar::makeConst(0, Op.Output.Size));
+  }
+  return Func;
+}
+
+MedFunc makeDeepDynamicArithmeticLowTableLookup(Arch TargetArch) {
+  MedFunc Func = makeDeepArithmeticLowTableLookup(TargetArch);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "deep_dynamic_arithmetic_low_table_arm64"
+                  : "deep_dynamic_arithmetic_low_table_x86_64";
+  for (MedOp &Op : Func.Blocks.front().Ops) {
+    if (Op.Opcode != NdOp::INT_ADD || Op.Output.Id != 100)
+      continue;
+    EXPECT_GE(Func.Params.size(), 2u);
+    if (Func.Params.size() >= 2)
+      Op.Inputs[1] = Func.Params[1];
+    break;
+  }
+  return Func;
+}
+
+MedFunc makeNoPhiInvalidFoldedSelection(Arch TargetArch,
+                                        bool WithRuntimeIndex = false) {
+  MedFunc Func = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "no_phi_invalid_folded_selection_arm64"
+                  : "no_phi_invalid_folded_selection_x86_64";
+  if (WithRuntimeIndex)
+    Func.Name += "_indexed";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+  MedVar Shared = makeTemp(90);
+  MedVar LeftOffset = makeTemp(91);
+  MedVar RightOffset = makeTemp(92);
+  MedVar Left = makeTemp(93);
+  MedVar Right = makeTemp(94);
+
+  std::vector<MedOp> Prefix;
+  auto appendCopy = [&](MedVar Output, uint64_t Value) {
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = Output;
+    Copy.addInput(MedVar::makeConst(Value, TRI.PointerSize));
+    Prefix.push_back(std::move(Copy));
+  };
+  appendCopy(Shared, 0x400);
+  appendCopy(LeftOffset, 0x480);
+  appendCopy(RightOffset, 0x4a0);
+  MedOp FormLeft;
+  FormLeft.Opcode = NdOp::INT_ADD;
+  FormLeft.Output = Left;
+  FormLeft.addInput(Shared);
+  FormLeft.addInput(LeftOffset);
+  Prefix.push_back(std::move(FormLeft));
+  MedOp FormRight;
+  FormRight.Opcode = NdOp::INT_ADD;
+  FormRight.Output = Right;
+  FormRight.addInput(Shared);
+  FormRight.addInput(RightOffset);
+  Prefix.push_back(std::move(FormRight));
+
+  MedBlock &Entry = Func.Blocks.front();
+  auto Select = std::find_if(Entry.Ops.begin(), Entry.Ops.end(), [](MedOp &Op) {
+    return Op.Opcode == NdOp::SELECT;
+  });
+  EXPECT_NE(Select, Entry.Ops.end());
+  if (Select != Entry.Ops.end()) {
+    Select->Inputs[1] = Left;
+    Select->Inputs[2] = Right;
+    Entry.Ops.insert(Select, std::make_move_iterator(Prefix.begin()),
+                     std::make_move_iterator(Prefix.end()));
+  }
+  if (WithRuntimeIndex) {
+    auto Load = std::find_if(Entry.Ops.begin(), Entry.Ops.end(),
+                             [](MedOp &Op) { return Op.Opcode == NdOp::LOAD; });
+    EXPECT_NE(Load, Entry.Ops.end());
+    if (Load == Entry.Ops.end())
+      return Func;
+    MedVar Address = makeTemp(95);
+    MedOp Add;
+    Add.Opcode = NdOp::INT_ADD;
+    Add.Output = Address;
+    Add.addInput(Load->Inputs[0]);
+    Add.addInput(Func.Params[1]);
+    Load->Inputs[0] = Address;
+    Entry.Ops.insert(Load, std::move(Add));
+  }
+  return Func;
+}
+
+MedFunc makeTruncatingCopySelectTableLookup(Arch TargetArch) {
+  MedFunc Func = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "truncating_copy_select_table_arm64"
+                  : "truncating_copy_select_table_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+  MedVar Narrow = makeTemp(90, 4);
+  MedVar Widened = makeTemp(91, TRI.PointerSize);
+  MedOp Truncate;
+  Truncate.Opcode = NdOp::COPY;
+  Truncate.Output = Narrow;
+  Truncate.addInput(MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  MedOp Widen;
+  Widen.Opcode = NdOp::INT_ZEXT;
+  Widen.Output = Widened;
+  Widen.addInput(Narrow);
+
+  MedBlock &Entry = Func.Blocks.front();
+  auto Select = std::find_if(Entry.Ops.begin(), Entry.Ops.end(), [](MedOp &Op) {
+    return Op.Opcode == NdOp::SELECT;
+  });
+  EXPECT_NE(Select, Entry.Ops.end());
+  if (Select != Entry.Ops.end()) {
+    Select->Inputs[1] = Widened;
+    Select->Inputs[2] =
+        MedVar::makeConst(OtherLowSpilledConstTableVA, TRI.PointerSize);
+    Select = Entry.Ops.insert(Select, std::move(Truncate));
+    Entry.Ops.insert(std::next(Select), std::move(Widen));
+  }
+  return Func;
+}
+
+MedFunc makeLoaderBasePlusTruncatingSelectOffsetLookup(Arch TargetArch) {
+  MedFunc Func = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "loader_base_truncating_select_offset_arm64"
+                  : "loader_base_truncating_select_offset_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedBlock &Entry = Func.Blocks.front();
+  auto Select = std::find_if(Entry.Ops.begin(), Entry.Ops.end(), [](MedOp &Op) {
+    return Op.Opcode == NdOp::SELECT;
+  });
+  auto Load = std::find_if(Entry.Ops.begin(), Entry.Ops.end(),
+                           [](MedOp &Op) { return Op.Opcode == NdOp::LOAD; });
+  EXPECT_NE(Select, Entry.Ops.end());
+  EXPECT_NE(Load, Entry.Ops.end());
+  if (Select == Entry.Ops.end() || Load == Entry.Ops.end())
+    return Func;
+
+  MedVar Narrow = Select->Output;
+  Narrow.Size = 4;
+  Select->Output = Narrow;
+  Select->Inputs[1] =
+      MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize);
+
+  MedVar Widened = makeTemp(90, TRI.PointerSize);
+  MedVar Address = makeTemp(91, TRI.PointerSize);
+  MedOp Widen;
+  Widen.Opcode = NdOp::INT_ZEXT;
+  Widen.Output = Widened;
+  Widen.addInput(Narrow);
+  MedOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Output = Address;
+  Add.addInput(MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  Add.addInput(Widened);
+  Load->Inputs[0] = Address;
+  Load = Entry.Ops.insert(Load, std::move(Widen));
+  Entry.Ops.insert(std::next(Load), std::move(Add));
+  return Func;
+}
+
+MedFunc makeInvalidFoldedRecurrentTableLookup(Arch TargetArch) {
+  MedFunc Func = makeRecurrentConstTableLookup(TargetArch);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "invalid_folded_recurrent_table_arm64"
+                  : "invalid_folded_recurrent_table_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+  MedVar First = makeTemp(80);
+  MedVar Second = makeTemp(81);
+  MedVar Folded = makeTemp(82);
+  MedBlock &Entry = Func.Blocks[0];
+  MedOp Branch = std::move(Entry.Ops.back());
+  Entry.Ops.clear();
+  MedOp CopyFirst;
+  CopyFirst.Opcode = NdOp::COPY;
+  CopyFirst.Output = First;
+  CopyFirst.addInput(MedVar::makeConst(0x400, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(CopyFirst));
+  MedOp CopySecond;
+  CopySecond.Opcode = NdOp::COPY;
+  CopySecond.Output = Second;
+  CopySecond.addInput(MedVar::makeConst(0x480, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(CopySecond));
+  MedOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Output = Folded;
+  Add.addInput(First);
+  Add.addInput(Second);
+  Entry.Ops.push_back(std::move(Add));
+  Entry.Ops.push_back(std::move(Branch));
+  Func.Blocks[1].Phis.front().Args.front().second = Folded;
+  return Func;
+}
+
+MedFunc makeRelocatableControlPhiTableLookup(Arch TargetArch) {
+  MedFunc Func = makePhiConstTableLookup(
+      TargetArch, PhiTableBaseCase::AmbiguousRuntimeClobber);
+  Func.Name = TargetArch == Arch::AArch64 ? "reloc_control_phi_table_arm64"
+                                          : "reloc_control_phi_table_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+  MedVar Symbolized = makeTemp(80, TRI.PointerSize);
+  MedVar RawNarrow = makeTemp(81, TRI.PointerSize);
+  MedVar Cond = makeTemp(82, 1);
+  MedBlock &Entry = Func.Blocks[0];
+  MedOp Branch = std::move(Entry.Ops.back());
+  Entry.Ops.clear();
+  MedOp Copy;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Output = Symbolized;
+  Copy.addInput(MedVar::makeConst(SymbolizedSameRunTableVA, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(Copy));
+  MedOp Widen;
+  Widen.Opcode = NdOp::INT_ZEXT;
+  Widen.Output = RawNarrow;
+  Widen.addInput(MedVar::makeConst(SymbolizedSameRunTableVA, 4));
+  Entry.Ops.push_back(std::move(Widen));
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_NOTEQUAL;
+  Compare.Output = Cond;
+  Compare.addInput(Symbolized);
+  Compare.addInput(RawNarrow);
+  Entry.Ops.push_back(std::move(Compare));
+  Branch.Inputs[1] = Cond;
+  Entry.Ops.push_back(std::move(Branch));
+  return Func;
+}
+
+MedFunc makeRelocatableSubbytesControlPhiTableLookup(Arch TargetArch) {
+  MedFunc Func = makePhiConstTableLookup(
+      TargetArch, PhiTableBaseCase::AmbiguousRuntimeClobber);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "reloc_subbytes_control_phi_table_arm64"
+                  : "reloc_subbytes_control_phi_table_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+  MedVar Sliced = makeTemp(83, 4);
+  MedVar Cond = makeTemp(84, 1);
+  MedBlock &Entry = Func.Blocks[0];
+  MedOp Branch = std::move(Entry.Ops.back());
+  Entry.Ops.clear();
+
+  // getVar turns this pointer-width table VA into ptrtoint(@global), so the
+  // emitter does not see a ConstantInt byte offset and deliberately uses zero.
+  // Control folding must make the same choice instead of shifting by the old
+  // image VA and proving the opposite edge dead.
+  MedOp Slice;
+  Slice.Opcode = NdOp::SUBBYTES;
+  Slice.Output = Sliced;
+  Slice.addInput(MedVar::makeConst(0x12345678, 4));
+  Slice.addInput(MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(Slice));
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_EQUAL;
+  Compare.Output = Cond;
+  Compare.addInput(Sliced);
+  Compare.addInput(MedVar::makeConst(0x12345678, 4));
+  Entry.Ops.push_back(std::move(Compare));
+  Branch.Inputs[1] = Cond;
+  Entry.Ops.push_back(std::move(Branch));
+  return Func;
+}
+
+enum class NonPreservingForwardCase { Subbytes, SignExtend };
+
+MedFunc makeNonPreservingForwardPhiTableLookup(Arch TargetArch,
+                                               NonPreservingForwardCase Case) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name =
+      std::string(TargetArch == Arch::AArch64
+                      ? "nonpreserving_phi_table_arm64_"
+                      : "nonpreserving_phi_table_x86_64_") +
+      (Case == NonPreservingForwardCase::Subbytes ? "subbytes" : "sext");
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  uint64_t FirstBase = Case == NonPreservingForwardCase::Subbytes
+                           ? LowSpilledConstTableVA
+                           : SignBitTableVA;
+  uint64_t SecondBase = Case == NonPreservingForwardCase::Subbytes
+                            ? OtherLowSpilledConstTableVA
+                            : OtherSignBitTableVA;
+  replaceMedConstant(Func, SpilledConstTableVA, FirstBase);
+  replaceMedConstant(Func, OtherSpilledConstTableVA, SecondBase);
+
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+  MedVar Input = makeTemp(
+      80, Case == NonPreservingForwardCase::SignExtend ? 4 : TRI.PointerSize);
+  MedVar Forwarded = makeTemp(81, TRI.PointerSize);
+  MedBlock &FirstTable = Func.Blocks[3];
+  MedOp Branch = std::move(FirstTable.Ops.back());
+  FirstTable.Ops.clear();
+  MedOp Copy;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Output = Input;
+  Copy.addInput(MedVar::makeConst(FirstBase, Input.Size));
+  FirstTable.Ops.push_back(std::move(Copy));
+  MedOp Forward;
+  Forward.Opcode = Case == NonPreservingForwardCase::Subbytes ? NdOp::SUBBYTES
+                                                              : NdOp::INT_SEXT;
+  Forward.Output = Forwarded;
+  Forward.addInput(Input);
+  if (Case == NonPreservingForwardCase::Subbytes)
+    Forward.addInput(MedVar::makeConst(1, TRI.PointerSize));
+  FirstTable.Ops.push_back(std::move(Forward));
+  FirstTable.Ops.push_back(std::move(Branch));
+  for (auto &[Pred, Arg] : Func.Blocks[5].Phis.front().Args)
+    if (Pred == FirstTable.Id)
+      Arg = Forwarded;
+  return Func;
+}
+
+enum class InvalidMaskedBlendCase {
+  NonBooleanCondition,
+  NarrowMask,
+  NonBooleanBoolOp
+};
+
+MedFunc makeInvalidMaskedBlendTableLookup(Arch TargetArch,
+                                          InvalidMaskedBlendCase Case) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name =
+      std::string(TargetArch == Arch::AArch64
+                      ? "invalid_masked_table_arm64_"
+                      : "invalid_masked_table_x86_64_") +
+      (Case == InvalidMaskedBlendCase::NarrowMask         ? "narrow"
+       : Case == InvalidMaskedBlendCase::NonBooleanBoolOp ? "boolop"
+                                                          : "nonboolean");
+  Func.ReturnType = NdType::makeInt(2);
+  MedVar Index = makeVar(MedVar::Param, 0, TRI.PointerSize);
+  Index.RegOff = TRI.IntParamRegs[0];
+  MedVar CondSeed = makeVar(MedVar::Param, 1, 4);
+  CondSeed.RegOff = TRI.IntParamRegs[1];
+  Func.Params = {Index, CondSeed};
+  uint16_t MaskSize =
+      Case == InvalidMaskedBlendCase::NarrowMask ? 4 : TRI.PointerSize;
+  MedVar BoolCond = makeVar(MedVar::Temp, 80,
+                            Case == InvalidMaskedBlendCase::NarrowMask ? 1 : 4);
+  MedVar WideCond = makeVar(MedVar::Temp, 81, MaskSize);
+  MedVar Mask = makeVar(MedVar::Temp, 82, MaskSize);
+  MedVar NotMask = makeVar(MedVar::Temp, 83, MaskSize);
+  MedVar Left = makeVar(MedVar::Temp, 84, TRI.PointerSize);
+  MedVar Right = makeVar(MedVar::Temp, 85, TRI.PointerSize);
+  MedVar Blend = makeVar(MedVar::Temp, 86, TRI.PointerSize);
+  MedVar Scaled = makeVar(MedVar::Temp, 87, TRI.PointerSize);
+  MedVar Address = makeVar(MedVar::Temp, 88, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 89, 2);
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 0x40;
+  if (Case == InvalidMaskedBlendCase::NarrowMask) {
+    MedOp Compare;
+    Compare.Opcode = NdOp::INT_NOTEQUAL;
+    Compare.Output = BoolCond;
+    Compare.addInput(CondSeed);
+    Compare.addInput(MedVar::makeConst(0, 4));
+    Entry.Ops.push_back(std::move(Compare));
+  } else if (Case == InvalidMaskedBlendCase::NonBooleanBoolOp) {
+    MedOp BoolOr;
+    BoolOr.Opcode = NdOp::BOOL_OR;
+    BoolOr.Output = BoolCond;
+    BoolOr.addInput(CondSeed);
+    BoolOr.addInput(MedVar::makeConst(0, 4));
+    Entry.Ops.push_back(std::move(BoolOr));
+  }
+  MedOp Widen;
+  Widen.Opcode = NdOp::INT_ZEXT;
+  Widen.Output = WideCond;
+  Widen.addInput(Case == InvalidMaskedBlendCase::NonBooleanCondition
+                     ? CondSeed
+                     : BoolCond);
+  Entry.Ops.push_back(std::move(Widen));
+  MedOp Negate;
+  Negate.Opcode = NdOp::INT_NEG2;
+  Negate.Output = Mask;
+  Negate.addInput(WideCond);
+  Entry.Ops.push_back(std::move(Negate));
+  MedOp Complement;
+  Complement.Opcode = NdOp::INT_NOT;
+  Complement.Output = NotMask;
+  Complement.addInput(Mask);
+  Entry.Ops.push_back(std::move(Complement));
+  MedOp KeepLeft;
+  KeepLeft.Opcode = NdOp::INT_AND;
+  KeepLeft.Output = Left;
+  KeepLeft.addInput(MedVar::makeConst(LowSpilledConstTableVA, TRI.PointerSize));
+  KeepLeft.addInput(Mask);
+  Entry.Ops.push_back(std::move(KeepLeft));
+  MedOp KeepRight;
+  KeepRight.Opcode = NdOp::INT_AND;
+  KeepRight.Output = Right;
+  KeepRight.addInput(
+      MedVar::makeConst(OtherLowSpilledConstTableVA, TRI.PointerSize));
+  KeepRight.addInput(NotMask);
+  Entry.Ops.push_back(std::move(KeepRight));
+  MedOp Or;
+  Or.Opcode = NdOp::INT_OR;
+  Or.Output = Blend;
+  Or.addInput(Left);
+  Or.addInput(Right);
+  Entry.Ops.push_back(std::move(Or));
+  MedOp Scale;
+  Scale.Opcode = NdOp::INT_LEFT;
+  Scale.Output = Scaled;
+  Scale.addInput(Index);
+  Scale.addInput(MedVar::makeConst(1, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(Scale));
+  MedOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Output = Address;
+  Add.addInput(Blend);
+  Add.addInput(Scaled);
+  Entry.Ops.push_back(std::move(Add));
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = Element;
+  Load.addInput(Address);
+  Entry.Ops.push_back(std::move(Load));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Entry.Ops.push_back(std::move(Return));
+  Func.Blocks.push_back(std::move(Entry));
+  return Func;
+}
+
+MedFunc makeOneSidedMaskedOrPhiTableLookup(Arch TargetArch) {
+  MedFunc Func = makeThreeWayPhiConstTableLookup(TargetArch, true);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "one_sided_masked_or_phi_table_arm64"
+                  : "one_sided_masked_or_phi_table_x86_64";
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = TRI.PointerSize;
+    return V;
+  };
+  MedVar WideCond = makeTemp(90);
+  MedVar Mask = makeTemp(91);
+  MedVar NotMask = makeTemp(92);
+  MedVar TableArm = makeTemp(93);
+  MedVar ScalarArm = makeTemp(94);
+  MedVar Blend = makeTemp(95);
+  MedVar BoolCond = makeTemp(89);
+  BoolCond.Size = 1;
+  MedBlock &Merge = Func.Blocks[5];
+  EXPECT_FALSE(Merge.Phis.empty());
+  if (Merge.Phis.empty())
+    return Func;
+  MedVar PhiBase = Merge.Phis.front().Output;
+  MedVar Cond = Func.Params[2];
+  MedVar Scalar = Func.Params[0];
+
+  std::vector<MedOp> Prefix;
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_NOTEQUAL;
+  Compare.Output = BoolCond;
+  Compare.addInput(Cond);
+  Compare.addInput(MedVar::makeConst(0, Cond.Size));
+  Prefix.push_back(std::move(Compare));
+  MedOp Widen;
+  Widen.Opcode = NdOp::INT_ZEXT;
+  Widen.Output = WideCond;
+  Widen.addInput(BoolCond);
+  Prefix.push_back(std::move(Widen));
+  MedOp Negate;
+  Negate.Opcode = NdOp::INT_NEG2;
+  Negate.Output = Mask;
+  Negate.addInput(WideCond);
+  Prefix.push_back(std::move(Negate));
+  MedOp Complement;
+  Complement.Opcode = NdOp::INT_NOT;
+  Complement.Output = NotMask;
+  Complement.addInput(Mask);
+  Prefix.push_back(std::move(Complement));
+  MedOp KeepTable;
+  KeepTable.Opcode = NdOp::INT_AND;
+  KeepTable.Output = TableArm;
+  KeepTable.addInput(PhiBase);
+  KeepTable.addInput(Mask);
+  Prefix.push_back(std::move(KeepTable));
+  MedOp KeepScalar;
+  KeepScalar.Opcode = NdOp::INT_AND;
+  KeepScalar.Output = ScalarArm;
+  KeepScalar.addInput(Scalar);
+  KeepScalar.addInput(NotMask);
+  Prefix.push_back(std::move(KeepScalar));
+  MedOp Or;
+  Or.Opcode = NdOp::INT_OR;
+  Or.Output = Blend;
+  Or.addInput(TableArm);
+  Or.addInput(ScalarArm);
+  Prefix.push_back(std::move(Or));
+  Merge.Ops.insert(Merge.Ops.begin(), std::make_move_iterator(Prefix.begin()),
+                   std::make_move_iterator(Prefix.end()));
+  auto Address =
+      std::find_if(Merge.Ops.begin(), Merge.Ops.end(),
+                   [](MedOp &Op) { return Op.Opcode == NdOp::INT_ADD; });
+  EXPECT_NE(Address, Merge.Ops.end());
+  if (Address != Merge.Ops.end())
+    Address->Inputs[0] = Blend;
   return Func;
 }
 
@@ -568,6 +3350,32 @@ bool valueReferencesConstantGlobal(const llvm::Value *Root,
     if (valueReferencesConstantGlobal(Operand.get(), Seen))
       return true;
   return false;
+}
+
+const llvm::LoadInst *findVolatileI16Load(const llvm::Function &Function) {
+  const llvm::LoadInst *Result = nullptr;
+  for (const llvm::BasicBlock &Block : Function)
+    for (const llvm::Instruction &Instruction : Block)
+      if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+          Load && Load->getType()->isIntegerTy(16) && Load->isVolatile()) {
+        EXPECT_EQ(Result, nullptr);
+        Result = Load;
+      }
+  return Result;
+}
+
+const llvm::LoadInst *findNonAllocaI16Load(const llvm::Function &Function) {
+  const llvm::LoadInst *Result = nullptr;
+  for (const llvm::BasicBlock &Block : Function)
+    for (const llvm::Instruction &Instruction : Block)
+      if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+          Load && Load->getType()->isIntegerTy(16) &&
+          !llvm::isa<llvm::AllocaInst>(
+              Load->getPointerOperand()->stripPointerCasts())) {
+        EXPECT_EQ(Result, nullptr);
+        Result = Load;
+      }
+  return Result;
 }
 
 struct InteriorPointerFixture {
@@ -1974,6 +4782,127 @@ TEST(MachOLLVMDataPointerBoundary, RejectsSelectWithCodeOrScalarArm) {
 }
 
 TEST(MachOLLVMDataPointerBoundary,
+     SpeculativePointerRewriteDoesNotFatalOnMixedIntegerPhi) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Caller = makeMixedPhiIntegerCall(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Caller}, Context, "macho-mixed-phi-integer-call", TargetArch,
+        {{ImportStubVA, "_opaque_integer_sink"}}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Caller.Name);
+    ASSERT_NE(Function, nullptr);
+    std::vector<llvm::CallInst *> Calls = callsIn(*Function);
+    ASSERT_EQ(Calls.size(), 1u);
+    EXPECT_TRUE(Calls.front()->getArgOperand(0)->getType()->isIntegerTy());
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     SpeculativePointerRewriteRejectsNestedMixedPhiBesideInduction) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Caller =
+        makeTwoRecurrentPointerTableLookup(TargetArch, NdOp::INT_ADD);
+    Caller.Name = TargetArch == Arch::AArch64
+                      ? "nested_mixed_phi_integer_call_arm64"
+                      : "nested_mixed_phi_integer_call_x86_64";
+
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    MedBlock &Loop = Caller.Blocks[1];
+    ASSERT_EQ(Loop.Phis.size(), 2u);
+    ASSERT_EQ(Loop.Phis[1].Args.size(), 2u);
+    // The second address operand is a non-recurrent, live merge of another
+    // table base and an opaque scalar.  The first operand remains a valid
+    // recurrent table pointer.
+    Loop.Phis[1].Args[1].second = Caller.Params.front();
+    ASSERT_GE(Loop.Ops.size(), 3u);
+    MedVar Address = Loop.Ops[1].Output;
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = Loop.StartAddr + 4;
+    Call.addInput(MedVar::makeConst(ImportStubVA, TRI.PointerSize));
+    Loop.Ops[2] = std::move(Call);
+
+    MedCallInfo Info;
+    Info.BlockId = Loop.Id;
+    Info.OpIdx = 2;
+    Info.TargetAddr = ImportStubVA;
+    Info.TargetName = "_opaque_integer_sink";
+    Info.Args.push_back(Address);
+    Caller.CallInfos.push_back(std::move(Info));
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Caller}, Context, "macho-nested-mixed-phi-integer-call", TargetArch,
+        {{ImportStubVA, "_opaque_integer_sink"}}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Caller.Name);
+    ASSERT_NE(Function, nullptr);
+    std::vector<llvm::CallInst *> Calls = callsIn(*Function);
+    ASSERT_EQ(Calls.size(), 1u);
+    EXPECT_FALSE(isPtrToIntValue(Calls.front()->getArgOperand(0)));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     SpeculativePointerRewriteRejectsMixedPhiUsedAsTableIndex) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Caller = makeMixedPhiIntegerCall(TargetArch);
+    Caller.Name = TargetArch == Arch::AArch64
+                      ? "mixed_phi_table_index_integer_call_arm64"
+                      : "mixed_phi_table_index_integer_call_x86_64";
+
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    MedBlock &Merge = Caller.Blocks[5];
+    ASSERT_EQ(Merge.Phis.size(), 1u);
+    ASSERT_FALSE(Merge.Ops.empty());
+    MedVar Address = Merge.Phis.front().Output;
+    Address.Kind = MedVar::Temp;
+    Address.Id = 90;
+    Address.SSAVer = 1;
+    MedOp Add;
+    Add.Opcode = NdOp::INT_ADD;
+    Add.Output = Address;
+    Add.addInput(MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+    Add.addInput(Merge.Phis.front().Output);
+    Merge.Ops.insert(Merge.Ops.begin(), std::move(Add));
+    ASSERT_EQ(Caller.CallInfos.size(), 1u);
+    Caller.CallInfos.front().OpIdx = 1;
+    Caller.CallInfos.front().Args.front() = Address;
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Caller}, Context, "macho-mixed-phi-table-index-integer-call",
+        TargetArch, {{ImportStubVA, "_opaque_integer_sink"}}, &Image,
+        BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Caller.Name);
+    ASSERT_NE(Function, nullptr);
+    std::vector<llvm::CallInst *> Calls = callsIn(*Function);
+    ASSERT_EQ(Calls.size(), 1u);
+    EXPECT_FALSE(isPtrToIntValue(Calls.front()->getArgOperand(0)));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
      ResolvesReadOnlyTableBaseAcrossLocalFrameSpill) {
   for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
     SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
@@ -2008,8 +4937,9 @@ TEST(MachOLLVMDataPointerBoundary,
 TEST(MachOLLVMDataPointerBoundary,
      RejectsAmbiguousOrUninitializedFrameReloadProvenance) {
   const std::pair<ReachingStoreCase, const char *> Cases[] = {
-      {ReachingStoreCase::DistinctPredecessorBases, "distinct bases"},
       {ReachingStoreCase::BypassPredecessor, "bypass predecessor"},
+      {ReachingStoreCase::MalformedMissingBypassPredecessor,
+       "malformed missing bypass predecessor"},
       {ReachingStoreCase::PartialOverlap, "partial overlap"},
       {ReachingStoreCase::StoreAfterLoad, "store after load"},
   };
@@ -2039,6 +4969,1524 @@ TEST(MachOLLVMDataPointerBoundary,
             TableLoad = Load;
           }
       ASSERT_NE(TableLoad, nullptr);
+      std::set<const llvm::Value *> Seen;
+      EXPECT_FALSE(
+          valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ProvesOnlyPreheaderInitializedLoopFrameReloadAsStableOffset) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.RelocDataAddrs.insert(SpilledConstTableVA);
+
+    MedFunc Positive =
+        makeLoopFrameReloadTableOffsetLookup(TargetArch, /*preheader=*/true);
+    llvm::LLVMContext PositiveContext;
+    auto PositiveModule = MedLLVMEmitter().emit(
+        {Positive}, PositiveContext, "macho-loop-frame-stable-offset",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(PositiveModule, nullptr);
+    expectValidModule(*PositiveModule);
+    llvm::Function *PositiveFunction =
+        PositiveModule->getFunction(Positive.Name);
+    ASSERT_NE(PositiveFunction, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*PositiveFunction);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "tblptr");
+
+    MedFunc Negative = makeLoopFrameReloadTableOffsetLookup(
+        TargetArch, /*InitializeInPreheader=*/false);
+    llvm::LLVMContext NegativeContext;
+    testing::internal::CaptureStderr();
+    auto NegativeModule = MedLLVMEmitter().emit(
+        {Negative}, NegativeContext, "macho-loop-frame-uninitialized-offset",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(NegativeModule.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     AuditsSelfLoopPostLoadStoreOnLaterIterations) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.RelocDataAddrs.insert(SpilledConstTableVA);
+    MedFunc Lookup =
+        makeLoopFrameReloadTableOffsetLookup(TargetArch, /*preheader=*/true);
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    MedOp LatePointerStore;
+    LatePointerStore.Opcode = NdOp::STORE;
+    LatePointerStore.addInput(Lookup.Blocks[0].Ops.front().Output);
+    LatePointerStore.addInput(
+        MedVar::makeConst(OtherSpilledConstTableVA, TRI.PointerSize));
+    Lookup.Blocks[1].Ops.insert(std::next(Lookup.Blocks[1].Ops.begin()),
+                                std::move(LatePointerStore));
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-loop-frame-late-pointer-store", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsNarrowFrameReloadOfIndependentTableBaseAsScalarOffset) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    Image.RelocDataAddrs.insert(SpilledConstTableVA);
+    Image.RelocDataAddrs.insert(OtherSpilledConstTableVA);
+    MedFunc Lookup = makeNarrowFrameReloadSecondTableBaseLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-narrow-frame-second-table-base", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    std::string IR;
+    if (Module) {
+      llvm::raw_string_ostream Stream(IR);
+      Module->print(Stream, nullptr);
+    }
+    EXPECT_EQ(Module.get(), nullptr) << IR;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForDistinctRawFrameReloadTableBases) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeRejectedFrameReloadLookup(
+        TargetArch, ReachingStoreCase::DistinctPredecessorBases);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-distinct-frame-table-bases", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    std::string IR;
+    if (Module) {
+      llvm::raw_string_ostream Stream(IR);
+      Module->print(Stream, nullptr);
+      Stream.flush();
+    }
+    EXPECT_EQ(Module.get(), nullptr) << IR;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     InductionScanIgnoresLiteralPoolStoreAfterReload) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    uint64_t Relative = OtherSpilledConstTableVA - CallerVA;
+    writeObject(
+        Image.Segments.front().Data,
+        static_cast<size_t>(SpilledConstTableVA - Image.Segments.front().VA),
+        Relative);
+    MedFunc Lookup = makeLateLiteralPoolSpillLookup(TargetArch);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-late-literal-pool-spill", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findNonAllocaI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_FALSE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ResolvesReadOnlyTableBaseAcrossReachablePhiInputs) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (PhiTableBaseCase Case : {PhiTableBaseCase::DeadScalarClobber,
+                                  PhiTableBaseCase::SameBaseOnReachableEdges}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(Case == PhiTableBaseCase::DeadScalarClobber
+                       ? "statically dead clobber"
+                       : "same base on both reachable edges");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      MedFunc Lookup = makePhiConstTableLookup(TargetArch, Case);
+      llvm::LLVMContext Context;
+      auto Module =
+          MedLLVMEmitter().emit({Lookup}, Context, "macho-phi-const-table",
+                                TargetArch, {}, &Image, BinaryFormat::MachO);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+
+      llvm::Function *Function = Module->getFunction(Lookup.Name);
+      ASSERT_NE(Function, nullptr);
+      const llvm::LoadInst *TableLoad = nullptr;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block)
+          if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+              Load && Load->getType()->isIntegerTy(16) && Load->isVolatile()) {
+            ASSERT_EQ(TableLoad, nullptr);
+            TableLoad = Load;
+          }
+      ASSERT_NE(TableLoad, nullptr);
+      EXPECT_TRUE(
+          llvm::isa<llvm::GetElementPtrInst>(TableLoad->getPointerOperand()));
+      std::set<const llvm::Value *> Seen;
+      EXPECT_TRUE(
+          valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForAmbiguousReachablePhiTableBase) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (PhiTableBaseCase Case : {
+             PhiTableBaseCase::AmbiguousRuntimeClobber,
+             PhiTableBaseCase::MalformedRuntimeClobber,
+         }) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(Case == PhiTableBaseCase::MalformedRuntimeClobber
+                       ? "missing predecessor block"
+                       : "reachable runtime clobber");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      MedFunc Lookup = makePhiConstTableLookup(TargetArch, Case);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-ambiguous-phi-const-table", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     KeepsSelfRecurrentTablePhiOnInductionResolverPath) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeRecurrentConstTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Lookup}, Context, "macho-recurrent-const-table",
+                              TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = nullptr;
+    for (const llvm::BasicBlock &Block : *Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+            Load && Load->getType()->isIntegerTy(16) && Load->isVolatile()) {
+          ASSERT_EQ(TableLoad, nullptr);
+          TableLoad = Load;
+        }
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_TRUE(
+        llvm::isa<llvm::GetElementPtrInst>(TableLoad->getPointerOperand()));
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     KeepsRebuiltPointerTableLoadOnSymbolizedInductionPath) {
+  BinaryImage Image = makeLLVMImage();
+  Image.DataPtrRelocSlots.erase(DataVA + 24);
+  MedFunc Lookup = makeRecurrentAbsolutePointerTableLoad();
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Lookup}, Context, "macho-recurrent-pointer-table-load", Arch::AArch64,
+      {}, &Image, BinaryFormat::MachO);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  llvm::Function *Function = Module->getFunction(Lookup.Name);
+  ASSERT_NE(Function, nullptr);
+  const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+  ASSERT_NE(TableLoad, nullptr);
+  EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indrawptr");
+  const std::string MirrorName =
+      (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str();
+  llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
+  ASSERT_NE(Mirror, nullptr);
+  EXPECT_TRUE(Mirror->hasInitializer());
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     KeepsOffsetRebuiltPointerTableLoadOnSymbolizedInductionPath) {
+  BinaryImage Image = makeLLVMImage();
+  Image.Segments[1].Flags = SegmentFlags::Readable;
+  Image.DataPtrRelocSlots.erase(DataVA + 24);
+  MedFunc Lookup = makeRecurrentAbsolutePointerTableLoad();
+  MedVar LoadedBase = Lookup.Blocks.front().Ops.front().Output;
+  MedVar OffsetBase = LoadedBase;
+  OffsetBase.Id = 41;
+  MedOp AddOffset;
+  AddOffset.Opcode = NdOp::INT_ADD;
+  AddOffset.Output = OffsetBase;
+  AddOffset.addInput(LoadedBase);
+  AddOffset.addInput(MedVar::makeConst(1, LoadedBase.Size));
+  Lookup.Blocks.front().Ops.insert(std::next(Lookup.Blocks.front().Ops.begin()),
+                                   std::move(AddOffset));
+  Lookup.Blocks[1].Phis.front().Args.front().second = OffsetBase;
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Lookup}, Context, "macho-offset-pointer-table-load", Arch::AArch64, {},
+      &Image, BinaryFormat::MachO);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  llvm::Function *Function = Module->getFunction(Lookup.Name);
+  ASSERT_NE(Function, nullptr);
+  const llvm::LoadInst *TableLoad = findNonAllocaI16Load(*Function);
+  ASSERT_NE(TableLoad, nullptr);
+  EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indrawptr");
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     DoesNotTreatControlOrAnnihilatingUseAsPointerRecurrence) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (FalseRecurrenceCase Case : {FalseRecurrenceCase::ControlOnlySelect,
+                                     FalseRecurrenceCase::AnnihilatingMultiply,
+                                     FalseRecurrenceCase::IndependentTableAdd,
+                                     FalseRecurrenceCase::DuplicatePointerAdd,
+                                     FalseRecurrenceCase::TableSubtrahend,
+                                     FalseRecurrenceCase::UnknownNestedPhiArm,
+                                     FalseRecurrenceCase::LoadedOffset}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(static_cast<int>(Case));
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      MedFunc Lookup = makeFalseRecurrentTableLookup(TargetArch, Case);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-false-pointer-recurrence", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     KeepsMutualSubregisterRecurrentPhiOnInductionResolverPath) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeNestedRecurrentPhiTableLookup(
+        TargetArch, NestedRecurrentPhiCase::MutualSubregisterAlias);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-mutual-alias-recurrent-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedWhenReachablePhiArmOnlyContainsUnrelatedCycle) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeNestedRecurrentPhiTableLookup(
+        TargetArch, NestedRecurrentPhiCase::UnrelatedReachableCycle);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-unrelated-recurrent-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module, nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     IgnoresStaticallyDeadUnrelatedCycleInPhiArm) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeNestedRecurrentPhiTableLookup(
+        TargetArch, NestedRecurrentPhiCase::UnrelatedDeadCycle);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-dead-unrelated-recurrent-table", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "tblptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForReachableScalarArmInMultiTablePhi) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeThreeWayPhiConstTableLookup(TargetArch, false);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-three-way-ambiguous-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module, nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ResolvesMultiTablePhiWhenScalarArmIsStaticallyDead) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeThreeWayPhiConstTableLookup(TargetArch, true);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-three-way-dead-scalar-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForReachableScalarInDirectPhiAddress) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (bool WrapInCopy : {false, true}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(WrapInCopy ? "copy-wrapped" : "bare");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      MedFunc Lookup = makeDirectPhiTableLookup(TargetArch, WrapInCopy, false);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-direct-ambiguous-phi-table", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary, IgnoresDeadTableArmInDirectPhiAddress) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeDirectPhiTableLookup(TargetArch, /*WrapInCopy=*/true,
+                                              /*TableArmDead=*/true);
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Lookup}, Context, "macho-direct-dead-table-phi",
+                              TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = nullptr;
+    for (const llvm::BasicBlock &Block : *Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+            Load && Load->getType()->isIntegerTy(16) &&
+            !llvm::isa<llvm::AllocaInst>(
+                Load->getPointerOperand()->stripPointerCasts())) {
+          ASSERT_EQ(TableLoad, nullptr);
+          TableLoad = Load;
+        }
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "memptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_FALSE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForMixedRawAndSymbolizedRecurrentPhiBases) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (bool RawArmFirst : {false, true}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(RawArmFirst ? "raw first" : "symbol first");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      Image.Segments.front().Flags = SegmentFlags::Readable;
+      MedFunc Lookup =
+          makeMixedRepresentationRecurrentTableLookup(TargetArch, RawArmFirst);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-mixed-recurrent-table", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedWhenLiteralOffsetHidesSymbolizedRecurrentBase) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    const uint64_t Offset =
+        uint64_t(0) - (OtherSpilledConstTableVA - SpilledConstTableVA);
+    writeObject(Image.Segments.front().Data,
+                SpilledConstTableVA + 0x30 - Image.Segments.front().VA, Offset);
+    MedFunc Lookup = makeLiteralOffsetMixedRecurrentTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-literal-offset-mixed-recurrent", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    std::string IR;
+    if (Module) {
+      llvm::raw_string_ostream Stream(IR);
+      Module->print(Stream, nullptr);
+      Stream.flush();
+    }
+    EXPECT_EQ(Module.get(), nullptr) << IR;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ClassifiesRecurrentInitializationByEmittedAddressModel) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    auto expectAnchored = [&](MedFunc Lookup, llvm::StringRef ModuleName) {
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      addThresholdCrossingConstTableRun(Image);
+      llvm::LLVMContext Context;
+      auto Module =
+          MedLLVMEmitter().emit({Lookup}, Context, ModuleName.str(), TargetArch,
+                                {}, &Image, BinaryFormat::MachO);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+      llvm::Function *Function = Module->getFunction(Lookup.Name);
+      ASSERT_NE(Function, nullptr);
+      const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+      ASSERT_NE(TableLoad, nullptr);
+      EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indptr");
+    };
+
+    for (bool RawArmFirst : {false, true}) {
+      SCOPED_TRACE(RawArmFirst ? "raw first" : "computed first");
+      MedFunc SameRawModel =
+          makeMixedRepresentationRecurrentTableLookup(TargetArch, RawArmFirst);
+      replaceMedConstant(SameRawModel, SpilledConstTableVA,
+                         LowSpilledConstTableVA);
+      expectAnchored(std::move(SameRawModel),
+                     "macho-low-raw-computed-recurrent");
+    }
+
+    expectAnchored(
+        makeDualComputedRecurrentTableLookup(TargetArch, LowSpilledConstTableVA,
+                                             OtherLowSpilledConstTableVA),
+        "macho-low-dual-computed-recurrent");
+
+    BinaryImage MixedImage = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(MixedImage);
+    MedFunc MixedComputed = makeDualComputedRecurrentTableLookup(
+        TargetArch, LowSpilledConstTableVA, SymbolizedSameRunTableVA);
+    llvm::LLVMContext MixedContext;
+    testing::internal::CaptureStderr();
+    auto MixedModule = MedLLVMEmitter().emit(
+        {MixedComputed}, MixedContext, "macho-mixed-computed-recurrent",
+        TargetArch, {}, &MixedImage, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(MixedModule.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForTwoBaseArithmeticInMultiTablePhi) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (NdOp Opcode :
+         {NdOp::INT_ADD, NdOp::INT_SUB, NdOp::INT_AND, NdOp::INT_OR}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(static_cast<int>(Opcode));
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      Image.Segments.front().Flags = SegmentFlags::Readable;
+      MedFunc Lookup = makeTwoBaseArithmeticPhiTableLookup(TargetArch, Opcode);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-two-base-arithmetic-table", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary, MalformedSelfEdgeCannotProvePhiRecurrence) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeMalformedSelfRecurrentPhiTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-malformed-recurrent-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForInvalidTablePointerProvenanceExpressions) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    auto expectRefused = [&](MedFunc Lookup, llvm::StringRef ModuleName,
+                             bool AddLowRun = false) {
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      Image.Segments.front().Flags = SegmentFlags::Readable;
+      if (AddLowRun)
+        addThresholdCrossingConstTableRun(Image);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module =
+          MedLLVMEmitter().emit({Lookup}, Context, ModuleName.str(), TargetArch,
+                                {}, &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    };
+
+    for (InvalidPhiPointerExprCase Case :
+         {InvalidPhiPointerExprCase::StandaloneAnd,
+          InvalidPhiPointerExprCase::DirectSecondBase,
+          InvalidPhiPointerExprCase::PureArithmeticSameResult}) {
+      SCOPED_TRACE(static_cast<int>(Case));
+      expectRefused(makePhiPointerExpressionLookup(TargetArch, Case),
+                    "macho-invalid-phi-pointer-expression",
+                    Case ==
+                        InvalidPhiPointerExprCase::PureArithmeticSameResult);
+    }
+    for (NdOp Opcode : {NdOp::INT_ADD, NdOp::INT_SUB}) {
+      SCOPED_TRACE(static_cast<int>(Opcode));
+      expectRefused(makeIndependentPointerPhiAddressLookup(TargetArch, Opcode),
+                    "macho-independent-pointer-phis");
+      expectRefused(makeTruncatingPointerExpressionLookup(
+                        TargetArch, /*TruncatePhi=*/false, Opcode),
+                    "macho-truncating-pointer-arithmetic");
+    }
+    expectRefused(
+        makeTruncatingPointerExpressionLookup(TargetArch, /*TruncatePhi=*/true),
+        "macho-truncating-pointer-phi");
+    expectRefused(makeNoPhiMaskedArithmeticSelection(TargetArch),
+                  "macho-no-phi-masked-arithmetic-selection",
+                  /*AddLowRun=*/true);
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForRecurrentPhiPlusLoaderProvenSecondBase) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.RelocDataAddrs.insert(OtherSpilledConstTableVA);
+    MedFunc Lookup = makeRecurrentConstTableLookup(TargetArch);
+    MedBlock &Loop = Lookup.Blocks[1];
+    const MedVar PhiBase = Loop.Phis.front().Output;
+    bool Replaced = false;
+    for (MedOp &Op : Loop.Ops)
+      if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs >= 2 &&
+          !Op.Inputs[0].isConst() && Op.Inputs[0].Kind == PhiBase.Kind &&
+          Op.Inputs[0].Id == PhiBase.Id &&
+          Op.Inputs[0].SSAVer == PhiBase.SSAVer) {
+        Op.Inputs[1] =
+            MedVar::makeConst(OtherSpilledConstTableVA, PhiBase.Size);
+        Replaced = true;
+        break;
+      }
+    ASSERT_TRUE(Replaced);
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-recurrent-plus-second-base", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedBeforePointerTableResolverForRecurrentSecondBase) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Segment PointerTable;
+    PointerTable.Name = "__DATA_CONST";
+    PointerTable.VA = FarSpilledConstTableVA;
+    PointerTable.Size = 0x20;
+    PointerTable.FileSz = PointerTable.Size;
+    PointerTable.Flags = SegmentFlags::Readable;
+    PointerTable.Data.assign(PointerTable.Size, 0);
+    writeObject(PointerTable.Data, 0, SpilledConstTableVA);
+    Image.Segments.push_back(std::move(PointerTable));
+    Image.DataPtrRelocSlots.insert(FarSpilledConstTableVA);
+
+    MedFunc Lookup = makeRecurrentConstTableLookup(TargetArch);
+    MedBlock &Loop = Lookup.Blocks[1];
+    const MedVar PhiBase = Loop.Phis.front().Output;
+    bool Replaced = false;
+    for (MedOp &Op : Loop.Ops)
+      if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs >= 2 &&
+          !Op.Inputs[0].isConst() && Op.Inputs[0].Kind == PhiBase.Kind &&
+          Op.Inputs[0].Id == PhiBase.Id &&
+          Op.Inputs[0].SSAVer == PhiBase.SSAVer) {
+        Op.Inputs[1] = MedVar::makeConst(FarSpilledConstTableVA, PhiBase.Size);
+        Replaced = true;
+        break;
+      }
+    ASSERT_TRUE(Replaced);
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-pointer-table-second-base", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary, KeepsProvenTableBasePlusNumericPhiOffset) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(Image);
+    // Relocatable objects commonly place .text at VA zero.  The numeric +4
+    // offset must stay an integer even though its value lands in that mapped
+    // executable segment; only materialized code-pointer provenance would make
+    // it a second address base.
+    Segment LowText;
+    LowText.Name = "__LOW_TEXT";
+    LowText.VA = 0;
+    LowText.Size = 0x100;
+    LowText.FileSz = LowText.Size;
+    LowText.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    LowText.Data.assign(LowText.Size, 0);
+    Image.Segments.push_back(std::move(LowText));
+    MedFunc Lookup = makePhiPointerExpressionLookup(
+        TargetArch, InvalidPhiPointerExprCase::NumericOffset);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-table-base-numeric-phi-offset", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgptr");
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedWhenTablePointersOccupyMaskedOrMaskRoles) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeMisassignedMaskedOrPhiTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module =
+        MedLLVMEmitter().emit({Lookup}, Context, "macho-misassigned-masked-or",
+                              TargetArch, {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     DoesNotTreatFoldedScalarAddAsTableProvenance) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (bool WrapInCopy : {false, true}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(WrapInCopy ? "copy-wrapped" : "direct");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      Image.Segments.front().Flags = SegmentFlags::Readable;
+      MedFunc Lookup =
+          makeFoldedScalarAddPhiTableLookup(TargetArch, WrapInCopy);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-folded-scalar-add-phi", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     DoesNotClassifyUniformFoldedScalarAddsAsSymbolizedPointers) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeUniformFoldedScalarAddPhiTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-uniform-folded-scalar-add-phi", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    std::string IR;
+    if (Module) {
+      llvm::raw_string_ostream Stream(IR);
+      Module->print(Stream, nullptr);
+    }
+    EXPECT_EQ(Module.get(), nullptr) << IR;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     UsesCurrentPointerForUniformComputedMultiTablePhi) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeComputedModelPhiTableLookup(TargetArch, false);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-computed-model-multi-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgrawptr");
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     UsesCurrentPointerForUniformComputedSingleBasePhi) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeComputedModelPhiTableLookup(
+        TargetArch, /*MixedModel=*/false, /*SameBase=*/true);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-computed-model-single-base", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgrawptr");
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     UsesLeafWidthForForwardedMultiTablePhiAddressModel) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(Image);
+    MedFunc Lookup = makeNarrowForwardedPhiTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-narrow-forwarded-multi-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findNonAllocaI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForMixedRawAndComputedMultiTablePhi) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeComputedModelPhiTableLookup(TargetArch, true);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-mixed-model-multi-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForNestedAmbiguousPhiInSelectAddress) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeNestedAmbiguousPhiSelectTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-nested-ambiguous-phi-select", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForTwoIndependentRecurrentPointerBases) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (NdOp Opcode : {NdOp::INT_ADD, NdOp::INT_SUB}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(static_cast<int>(Opcode));
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      Image.Segments.front().Flags = SegmentFlags::Readable;
+      MedFunc Lookup = makeTwoRecurrentPointerTableLookup(TargetArch, Opcode);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-two-recurrent-pointer-bases", TargetArch,
+          {}, &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary, AuditsEveryAliasRecurrenceInitialization) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (bool DifferentConst : {false, true}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(DifferentConst ? "different" : "scalar");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      MedFunc Lookup =
+          makeAmbiguousAliasSiblingTableLookup(TargetArch, DifferentConst);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-ambiguous-alias-sibling", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RequiresMultiRawRecurrentBasesToShareRelocatableRun) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (bool AlternateFirst : {false, true}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(AlternateFirst ? "alternate first" : "primary first");
+
+      BinaryImage CrossRunImage = makeSpilledConstTableImage(TargetArch);
+      CrossRunImage.Segments.front().Flags = SegmentFlags::Readable;
+      addFarSpilledConstTable(CrossRunImage);
+      MedFunc CrossRun = makeMultiRawInitRecurrentTableLookup(
+          TargetArch, /*CrossRun=*/true, AlternateFirst);
+      llvm::LLVMContext CrossRunContext;
+      testing::internal::CaptureStderr();
+      auto CrossRunModule = MedLLVMEmitter().emit(
+          {CrossRun}, CrossRunContext, "macho-cross-run-recurrent-bases",
+          TargetArch, {}, &CrossRunImage, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(CrossRunModule.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+
+      BinaryImage SameRunImage = makeSpilledConstTableImage(TargetArch);
+      SameRunImage.Segments.front().Flags = SegmentFlags::Readable;
+      MedFunc SameRun = makeMultiRawInitRecurrentTableLookup(
+          TargetArch, /*CrossRun=*/false, AlternateFirst);
+      llvm::LLVMContext SameRunContext;
+      auto SameRunModule = MedLLVMEmitter().emit(
+          {SameRun}, SameRunContext, "macho-same-run-recurrent-bases",
+          TargetArch, {}, &SameRunImage, BinaryFormat::MachO);
+      ASSERT_NE(SameRunModule, nullptr);
+      expectValidModule(*SameRunModule);
+      llvm::Function *Function = SameRunModule->getFunction(SameRun.Name);
+      ASSERT_NE(Function, nullptr);
+      const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+      ASSERT_NE(TableLoad, nullptr);
+      EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indptr");
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForScalarArmInNoPhiPointerSelection) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (bool Masked : {false, true}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(Masked ? "masked" : "select");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      addThresholdCrossingConstTableRun(Image);
+      MedFunc Lookup = makeNoPhiSelectedTableLookup(TargetArch, Masked);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-no-phi-scalar-selection", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForTableShapedInvalidRecurrentInitialization) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(Image);
+    MedFunc Lookup = makeInvalidFoldedRecurrentTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-invalid-folded-recurrent-init", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedWhenNoPhiSelectionHasOnlyInvalidTableShapedArms) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (bool WithRuntimeIndex : {false, true}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(WithRuntimeIndex ? "indexed" : "direct");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      addThresholdCrossingConstTableRun(Image);
+      MedFunc Lookup =
+          makeNoPhiInvalidFoldedSelection(TargetArch, WithRuntimeIndex);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-no-phi-invalid-folded-selection",
+          TargetArch, {}, &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsTruncatingCopyAsSelectedTableProvenance) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(Image);
+    MedFunc Lookup = makeTruncatingCopySelectTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-truncating-copy-table-selection", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary, RejectsTruncatingSelectAsLoaderTableOffset) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    Image.RelocDataAddrs.insert(SpilledConstTableVA);
+    MedFunc Lookup = makeLoaderBasePlusTruncatingSelectOffsetLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-loader-base-truncating-select-offset",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedBeforePointerTableSelectForScalarArm) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    addThresholdCrossingConstTableRun(Image);
+    auto LowRun = std::find_if(
+        Image.Segments.begin(), Image.Segments.end(), [](const Segment &Seg) {
+          return LowSpilledConstTableVA >= Seg.VA &&
+                 LowSpilledConstTableVA < Seg.VA + Seg.Data.size();
+        });
+    ASSERT_NE(LowRun, Image.Segments.end());
+    writeObject(LowRun->Data, LowSpilledConstTableVA - LowRun->VA,
+                SpilledConstTableVA);
+    Image.DataPtrRelocSlots.insert(LowSpilledConstTableVA);
+    MedFunc Lookup = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-pointer-table-select-scalar-arm", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsPointerTableEvidenceOutsidePointerValueRoles) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (bool ControlOnly : {false, true}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(ControlOnly ? "select condition" : "multiply by zero");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      Image.Segments.front().Flags = SegmentFlags::Readable;
+      addThresholdCrossingConstTableRun(Image);
+      auto LowRun = std::find_if(
+          Image.Segments.begin(), Image.Segments.end(), [](const Segment &Seg) {
+            return LowSpilledConstTableVA >= Seg.VA &&
+                   LowSpilledConstTableVA < Seg.VA + Seg.Data.size();
+          });
+      ASSERT_NE(LowRun, Image.Segments.end());
+      writeObject(LowRun->Data, LowSpilledConstTableVA - LowRun->VA,
+                  SpilledConstTableVA);
+      Image.DataPtrRelocSlots.insert(LowSpilledConstTableVA);
+      MedFunc Lookup =
+          makePointerTableNonValueRoleLookup(TargetArch, ControlOnly);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-pointer-table-non-value-role", TargetArch,
+          {}, &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      std::string IR;
+      if (Module) {
+        llvm::raw_string_ostream Stream(IR);
+        Module->print(Stream, nullptr);
+      }
+      EXPECT_EQ(Module.get(), nullptr) << IR;
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ResolvesAdjacentPointerTableSegmentsThroughOneRelocationMirror) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    addAdjacentLowPointerTableSegments(Image);
+    MedFunc Lookup = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+    MedOp *Select = nullptr;
+    for (MedOp &Op : Lookup.Blocks.front().Ops)
+      if (Op.Opcode == NdOp::SELECT) {
+        Select = &Op;
+        break;
+      }
+    ASSERT_NE(Select, nullptr);
+    Select->Inputs[1] = MedVar::makeConst(
+        LowSpilledConstTableVA, getTargetRegInfo(TargetArch).PointerSize);
+    Select->Inputs[2] = MedVar::makeConst(
+        OtherLowSpilledConstTableVA, getTargetRegInfo(TargetArch).PointerSize);
+
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-adjacent-distinct-pointer-table-segments",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "cptsel");
+    EXPECT_NE(Module->getNamedGlobal("__nd_codeptr_880"), nullptr);
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ResolvesDeepForwardingChainWithoutStaleAddressFallback) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(Image);
+    MedFunc Lookup = makeDeepForwardedLowTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-deep-forwarded-low-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    llvm::GlobalVariable *Rodata =
+        Module->getNamedGlobal("__nd_data_800.rodata");
+    ASSERT_NE(Rodata, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedWhenArithmeticDepthHidesRawTableBase) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(Image);
+    MedFunc Lookup = makeDeepArithmeticLowTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-deep-arithmetic-low-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    std::string IR;
+    if (Module) {
+      llvm::raw_string_ostream Stream(IR);
+      Module->print(Stream, nullptr);
+    }
+    EXPECT_EQ(Module.get(), nullptr) << IR;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     DoesNotFallBackWhenDynamicArithmeticDepthHidesRawTableBase) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(Image);
+    MedFunc Lookup = makeDeepDynamicArithmeticLowTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-deep-dynamic-arithmetic-low-table",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    if (!Module) {
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+      continue;
+    }
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    std::string IR;
+    llvm::raw_string_ostream Stream(IR);
+    Module->print(Stream, nullptr);
+    ASSERT_NE(TableLoad, nullptr) << IR;
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RelocatableControlConstantsCannotPrunePhiEdges) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addThresholdCrossingConstTableRun(Image);
+    MedFunc Lookup = makeRelocatableControlPhiTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-relocatable-control-phi", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RelocatableSubbytesOffsetCannotPrunePhiEdges) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeRelocatableSubbytesControlPhiTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-relocatable-subbytes-control", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsNonPreservingForwardersAsTableProvenance) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (NonPreservingForwardCase Case :
+         {NonPreservingForwardCase::Subbytes,
+          NonPreservingForwardCase::SignExtend}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(static_cast<int>(Case));
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      if (Case == NonPreservingForwardCase::Subbytes)
+        addThresholdCrossingConstTableRun(Image);
+      else
+        addSignBitConstTableRun(Image);
+      MedFunc Lookup = makeNonPreservingForwardPhiTableLookup(TargetArch, Case);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-nonpreserving-table-forwarder", TargetArch,
+          {}, &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ResolvesMultiTablePhiWithCommutedAddressAdd) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeThreeWayPhiConstTableLookup(TargetArch, true);
+    Lookup.Name += "_commuted";
+    for (MedOp &Op : Lookup.Blocks[5].Ops)
+      if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs >= 2) {
+        std::swap(Op.Inputs[0], Op.Inputs[1]);
+        break;
+      }
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-commuted-multi-table-add", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgptr");
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForInvalidMaskedPointerBlendSemantics) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (InvalidMaskedBlendCase Case :
+         {InvalidMaskedBlendCase::NonBooleanCondition,
+          InvalidMaskedBlendCase::NarrowMask,
+          InvalidMaskedBlendCase::NonBooleanBoolOp}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(static_cast<int>(Case));
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      addThresholdCrossingConstTableRun(Image);
+      MedFunc Lookup = makeInvalidMaskedBlendTableLookup(TargetArch, Case);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-invalid-masked-pointer-blend", TargetArch,
+          {}, &Image, BinaryFormat::MachO);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      EXPECT_EQ(Module.get(), nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForMaskedOrWithOnlyOneTablePointerArm) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    MedFunc Lookup = makeOneSidedMaskedOrPhiTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-one-sided-masked-or-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     MixedWidthControlFoldingMatchesEmitterBeforePruningPhiEdges) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (MixedWidthControlCase Case :
+         {MixedWidthControlCase::Shift, MixedWidthControlCase::Select,
+          MixedWidthControlCase::IntNot, MixedWidthControlCase::IntNeg2}) {
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(static_cast<int>(Case));
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+      MedFunc Lookup = makeMixedWidthControlPhiTableLookup(TargetArch, Case);
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(
+          {Lookup}, Context, "macho-mixed-width-control-phi", TargetArch, {},
+          &Image, BinaryFormat::MachO);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+
+      llvm::Function *Function = Module->getFunction(Lookup.Name);
+      ASSERT_NE(Function, nullptr);
+      const llvm::LoadInst *TableLoad = findNonAllocaI16Load(*Function);
+      ASSERT_NE(TableLoad, nullptr);
+      EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "memptr");
       std::set<const llvm::Value *> Seen;
       EXPECT_FALSE(
           valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));

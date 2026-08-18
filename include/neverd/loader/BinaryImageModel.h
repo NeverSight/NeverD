@@ -131,6 +131,14 @@ struct BinaryImage {
   /// the pointers survive relinking (the data analogue of CodePtrRelocSlots),
   /// instead of leaving the stale original VAs that would read unmapped memory.
   std::set<uint64_t> DataPtrRelocSlots;
+  /// Virtual addresses of 32-bit PC-relative relocation slots in read-only
+  /// data whose targets are also non-code data.  Clang uses a contiguous run of
+  /// these for a PIC switch that returns one of several data pointers (commonly
+  /// string literals): the emitted code loads a signed entry and adds the table
+  /// base.  Keeping the exact slot provenance lets later address lowering
+  /// distinguish the source offset table from the data segment reached by the
+  /// resulting pointer.
+  std::set<uint64_t> RelDataPtrRelocSlots;
   /// Virtual addresses of relocation slots in a read-only data segment that
   /// hold a PC-relative reference to an executable target (R_X86_64_PC32 /
   /// R_386_PC32 / R_AARCH64_PREL32 / R_ARM_PREL31 / R_ARM_REL32 whose target is
