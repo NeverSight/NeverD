@@ -281,6 +281,21 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
     if (const MedOp *Top = lookupDef(AddrVar);
         Top && Top->Opcode == NdOp::SELECT && Top->NumInputs >= 3) {
       const unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
+      // ARM materializes a global address as `ldr reg, [pc, #literal]` plus
+      // the current PC.  Such a SELECT leaf is fully constant, but only the
+      // literal-pool-aware folder can see it; traceSSAConst deliberately stops
+      // at the LOAD.  Admit that form only when the fold actually crossed a
+      // literal-pool load, preserving the all-arms pointer proof below for
+      // ordinary computed integer SELECTs.
+      auto tracePointerLeafVA = [&](const MedVar &V) {
+        if (V.isConst())
+          return std::optional<uint64_t>(V.ConstVal);
+        if (auto VA = traceSSAConst(V))
+          return VA;
+        bool SawLiteralLoad = false;
+        auto VA = traceTableBaseConst(V, 0, &SawLiteralLoad);
+        return SawLiteralLoad ? VA : std::optional<uint64_t>();
+      };
       std::function<bool(const MedVar &, int)> isDataTree =
           [&](const MedVar &V, int Depth) -> bool {
         if (Depth > 16)
@@ -290,9 +305,7 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
               Def && Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
             return isDataTree(Def->Inputs[1], Depth + 1) &&
                    isDataTree(Def->Inputs[2], Depth + 1);
-        std::optional<uint64_t> VA = V.isConst()
-                                         ? std::optional<uint64_t>(V.ConstVal)
-                                         : traceSSAConst(V);
+        std::optional<uint64_t> VA = tracePointerLeafVA(V);
         if (!VA)
           return false;
         if (*VA == 0)
@@ -325,9 +338,7 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
                     "ptrselc");
               return Builder.CreateSelect(Cond, True, False, "ptrsel");
             }
-          std::optional<uint64_t> VA = V.isConst()
-                                           ? std::optional<uint64_t>(V.ConstVal)
-                                           : traceSSAConst(V);
+          std::optional<uint64_t> VA = tracePointerLeafVA(V);
           if (!VA)
             return nullptr;
           if (*VA == 0)
