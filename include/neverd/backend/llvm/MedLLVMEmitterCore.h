@@ -581,14 +581,12 @@ private:
   bool i386WritableSegBasePlusOff(const MedVar &AddrVar, uint64_t SegVA,
                                   MedVar &OffVar, uint64_t &BaseConstVA) const;
 
-  /// True when \p AddrVar's MedIR address expression carries a CONSTANT that
-  /// lands in the writable segment at \p SegVA above the pointer threshold AND
-  /// is used as a pointer — a SECOND large global in the same segment (`static
-  /// T A[N], B[N]`) whose base const `segBase + sizeof A` getVar symbolizes to
-  /// `@G + k`.  getVar(AddrVar) is then already run-relative (the @G reference
-  /// is hidden behind the virtual-stack alloca/load on the emitted value, so
-  /// this is checked on the MedIR), and tryResolveWritableData must use it
-  /// directly rather than re-base it (which would reference @G twice).
+  /// True when \p AddrVar's MedIR expression carries a constant in the segment
+  /// at \p SegVA that getVar already symbolizes to that segment's relocated
+  /// global.  The global reference is hidden behind the virtual-register
+  /// alloca/load in the emitted value, so this must be checked on the MedIR.
+  /// Writable-data and code-pointer-segment resolvers use the result directly
+  /// rather than re-basing it, which would apply the relocated base twice.
   bool addrHasSymbolizedSegConst(const MedVar &AddrVar, uint64_t SegVA) const;
 
   std::optional<uint64_t> traceSSAConst(const MedVar &V) const;

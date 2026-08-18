@@ -237,6 +237,20 @@ MedLLVMEmitter::tryResolveCodePtrSegPtr(const MedVar &AddrVar,
   llvm::Constant *Tbl = buildCodePtrSegmentGlobal(SegVA, SegOut);
   if (!Tbl)
     return nullptr;
+  // getVar may already have rewritten an in-segment constant to the relocated
+  // code-pointer mirror.  The emitted value is initially hidden behind a
+  // virtual-register alloca/load, so inspect the MedIR rather than the current
+  // LLVM value.  Re-basing an already-symbolized value would apply the mirror
+  // base twice: `@codeptr + (ptrtoint(@codeptr + off) - segVA)`.
+  if (addrHasSymbolizedSegConst(AddrVar, SegVA)) {
+    llvm::Value *Raw = getVar(AddrVar, Builder);
+    if (!Raw)
+      return nullptr;
+    if (Raw->getType()->isPointerTy())
+      return Raw;
+    return Builder.CreateIntToPtr(Raw, llvm::PointerType::getUnqual(*Ctx),
+                                  "cptr.direct");
+  }
   // GEP by the original address minus the segment base, mirroring
   // tryResolveWritableData: getVar reproduces the original absolute slot VA
   // (the GOT base folds to 0), so `addr - segStart` is the in-segment byte
