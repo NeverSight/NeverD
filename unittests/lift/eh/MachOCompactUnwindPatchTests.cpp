@@ -2921,6 +2921,40 @@ TEST(MachOCompactUnwindRangeMap,
 }
 
 TEST(MachOCompactUnwindRangeMap,
+     AcceptsInstalledFunctionInsideCoalescedSourceRecipe) {
+  const auto Original = makeRawOriginal(
+      {{0x100, macho_unwind::kARM64ModeFrameless, std::nullopt}}, 0x180);
+  const std::vector<uint8_t> Binary =
+      makeInstallableUnwindInfoMachO(Original, Original.OriginalBytes.size());
+  const auto Generated = makeGeneratedRecords(
+      {makeGeneratedRecord(kImageBase + 0x500, kImageBase + 0x520,
+                           macho_unwind::kARM64ModeFrameless, std::nullopt,
+                           std::nullopt, 0),
+       makeGeneratedRecord(kImageBase + 0x540, kImageBase + 0x560,
+                           macho_unwind::kARM64ModeFrameless, std::nullopt,
+                           std::nullopt, 1)});
+  const std::array<PatchedFunctionEntry, 2> Installed = {
+      PatchedFunctionEntry{"_generated_0", kImageBase + 0x100,
+                           kImageBase + 0x500},
+      PatchedFunctionEntry{"_generated_1", kImageBase + 0x120,
+                           kImageBase + 0x540}};
+
+  auto Mappings = buildMachOCompactUnwindRangeMappings(
+      Binary, Arch::AArch64, Generated, Installed, llvm::endianness::little);
+  ASSERT_TRUE(static_cast<bool>(Mappings))
+      << llvm::toString(Mappings.takeError());
+  ASSERT_EQ(Mappings->size(), 2u);
+  EXPECT_EQ((*Mappings)[0].SourceVA, kImageBase + 0x100);
+  EXPECT_EQ((*Mappings)[0].SourceEndVA, kImageBase + 0x180);
+  EXPECT_EQ((*Mappings)[1].SourceVA, kImageBase + 0x120);
+  EXPECT_EQ((*Mappings)[1].SourceEndVA, kImageBase + 0x180);
+
+  auto Merged = mergeMachOCompactUnwind(Arch::AArch64, kImageBase, Original,
+                                        Generated, *Mappings);
+  EXPECT_TRUE(static_cast<bool>(Merged)) << llvm::toString(Merged.takeError());
+}
+
+TEST(MachOCompactUnwindRangeMap,
      RejectsMissingSymbolMismatchedAndDuplicateSourceEvidence) {
   const auto Original = makeRawOriginal(
       {{0x100, macho_unwind::kARM64ModeFrame, std::nullopt}}, 0x180);
@@ -2942,7 +2976,7 @@ TEST(MachOCompactUnwindRangeMap,
           Binary, Arch::AArch64, One, {WrongSymbol}, llvm::endianness::little),
       MapFailure::TrampolineSymbolMismatch, 8);
 
-  const PatchedFunctionEntry MissingSource{"_generated_8", kImageBase + 0x120,
+  const PatchedFunctionEntry MissingSource{"_generated_8", kImageBase + 0x180,
                                            kImageBase + 0x500};
   expectRangeMapFailure(buildMachOCompactUnwindRangeMappings(
                             Binary, Arch::AArch64, One, {MissingSource},
@@ -3272,7 +3306,7 @@ TEST(MachOCompactUnwindMerge, RejectsFourthExactPersonalitySlot) {
                      MachOCompactUnwindMergeInputKind::MergedRecord);
 }
 
-TEST(MachOCompactUnwindMerge, RejectsPartialAndAmbiguousSourceMaps) {
+TEST(MachOCompactUnwindMerge, RejectsInvalidAndAmbiguousSourceMaps) {
   const auto Original = makeRawOriginal(
       {{0x100, macho_unwind::kARM64ModeFrame, std::nullopt}}, 0x180);
   const auto Generated = makeGeneratedRecords(
@@ -3284,7 +3318,7 @@ TEST(MachOCompactUnwindMerge, RejectsPartialAndAmbiguousSourceMaps) {
                            std::nullopt, 1)});
 
   const MachOCompactUnwindRangeMapping Partial = makeMapping(
-      0x110, 0x180, 0x500, 0x520, MachOCompactUnwindRangeMode::NewSegment);
+      0x110, 0x170, 0x500, 0x520, MachOCompactUnwindRangeMode::NewSegment);
   expectMergeFailure(mergeMachOCompactUnwind(Arch::AArch64, kImageBase,
                                              Original, Generated, {Partial}),
                      MergeFailure::SourceRangeNotExact,

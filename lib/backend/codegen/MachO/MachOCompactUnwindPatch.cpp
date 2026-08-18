@@ -404,7 +404,8 @@ void MachOCompactUnwindRangeMapError::log(llvm::raw_ostream &OS) const {
     OS << "installed trampoline symbol does not match generated provenance";
     break;
   case MachOCompactUnwindRangeMapFailure::MissingSourceRange:
-    OS << "trampoline source is not an original compact-unwind recipe start";
+    OS << "trampoline source does not belong to an original compact-unwind "
+          "recipe";
     break;
   case MachOCompactUnwindRangeMapFailure::AmbiguousSourceRange:
     OS << "trampoline source names more than one original recipe";
@@ -1678,7 +1679,7 @@ buildMachOCompactUnwindRangeMappings(
     std::string Symbol;
     uint64_t VA = 0;
   };
-  std::vector<SourceOwner> SourceOwners(OriginalTable->Records.size());
+  std::map<uint32_t, SourceOwner> SourceOwners;
   std::set<uint64_t> RangeIds;
   std::vector<MachOCompactUnwindRangeMapping> Result;
   Result.reserve(Generated.Records.size());
@@ -1729,7 +1730,13 @@ buildMachOCompactUnwindRangeMappings(
     std::optional<size_t> SourceIndex;
     size_t SourceCount = 0;
     for (size_t S = 0; S < OriginalTable->Records.size(); ++S) {
-      if (OriginalTable->Records[S].FunctionRVA != SourceRVA)
+      const MergedRecord &Candidate = OriginalTable->Records[S];
+      // A compact-unwind recipe is a half-open PC range, not necessarily a
+      // one-to-one list of function starts.  The linker can coalesce adjacent
+      // functions with the same recipe, so an authenticated trampoline may
+      // begin inside the range even though no new table row begins there.
+      if (SourceRVA < Candidate.FunctionRVA ||
+          SourceRVA >= Candidate.FunctionEndRVA)
         continue;
       if (!SourceIndex)
         SourceIndex = S;
@@ -1743,7 +1750,10 @@ buildMachOCompactUnwindRangeMappings(
       return rangeMapError(MapFailure::AmbiguousSourceRange,
                            GeneratedRecord.SourceRecordIndex,
                            GeneratedRecord.OwnerSymbol);
-    SourceOwner &BoundOwner = SourceOwners[*SourceIndex];
+    // Reuse is safe for fragments of the same source function.  Distinct
+    // installed function starts may legitimately share one coalesced recipe,
+    // but one exact trampoline source must never authenticate two owners.
+    SourceOwner &BoundOwner = SourceOwners[SourceRVA];
     if (BoundOwner.Used && (BoundOwner.Symbol != GeneratedRecord.OwnerSymbol ||
                             BoundOwner.VA != GeneratedRecord.OwnerVA))
       return rangeMapError(MapFailure::CrossOwnerSourceReuse,
@@ -1796,7 +1806,7 @@ llvm::Expected<MachOCompactUnwindMergeResult> mergeMachOCompactUnwind(
     std::string Symbol;
     uint64_t VA = 0;
   };
-  std::vector<SourceOwner> SourceOwners(OriginalTable->Records.size());
+  std::map<uint32_t, SourceOwner> SourceOwners;
   std::vector<uint8_t> GeneratedUse(GeneratedRecords->size(), 0);
   std::vector<bool> RemoveSource(OriginalTable->Records.size(), false);
   std::set<uint64_t> MappingIds;
@@ -1861,8 +1871,14 @@ llvm::Expected<MachOCompactUnwindMergeResult> mergeMachOCompactUnwind(
     std::optional<size_t> SourceIndex;
     for (size_t S = 0; S < OriginalTable->Records.size(); ++S) {
       const MergedRecord &Record = OriginalTable->Records[S];
-      if (Record.FunctionRVA == *SourceRVA &&
-          Record.FunctionEndRVA == *SourceEndRVA) {
+      const bool ExactRecipe = Record.FunctionRVA == *SourceRVA &&
+                               Record.FunctionEndRVA == *SourceEndRVA;
+      const bool CoalescedNewSegment =
+          Mapping.Mode == MachOCompactUnwindRangeMode::NewSegment &&
+          Record.FunctionRVA <= *SourceRVA &&
+          *SourceRVA < Record.FunctionEndRVA &&
+          Record.FunctionEndRVA == *SourceEndRVA;
+      if (ExactRecipe || CoalescedNewSegment) {
         SourceIndex = S;
         break;
       }
@@ -1870,7 +1886,7 @@ llvm::Expected<MachOCompactUnwindMergeResult> mergeMachOCompactUnwind(
     if (!SourceIndex)
       return mergeError(MergeFailure::SourceRangeNotExact,
                         MergeInputKind::RangeMapping, I);
-    SourceOwner &BoundOwner = SourceOwners[*SourceIndex];
+    SourceOwner &BoundOwner = SourceOwners[*SourceRVA];
     if (BoundOwner.Used && (BoundOwner.Symbol != Mapping.OwnerSymbol ||
                             BoundOwner.VA != Mapping.OwnerVA))
       return mergeError(MergeFailure::CrossOwnerSourceReuse,

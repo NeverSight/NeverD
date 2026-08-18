@@ -10,7 +10,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/codegen/CodeGen.h"
-
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -111,12 +110,17 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
       Old->replaceAllUsesWith(New);
   }
 
+  auto isReadableImageVA = [&](va_t VA) {
+    const Segment *Seg = Img.getSegmentFor(VA);
+    return Seg && Seg->isReadable();
+  };
+
   auto inImageInttoptrVA = [&](llvm::Value *V) -> std::optional<va_t> {
     auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(V);
     if (!CE || CE->getOpcode() != llvm::Instruction::IntToPtr)
       return std::nullopt;
     auto *CI = llvm::dyn_cast<llvm::ConstantInt>(CE->getOperand(0));
-    if (!CI || !Img.containsVA(CI->getZExtValue()))
+    if (!CI || !isReadableImageVA(CI->getZExtValue()))
       return std::nullopt;
     return CI->getZExtValue();
   };
@@ -232,7 +236,12 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
         if (auto *ITP = llvm::dyn_cast<llvm::IntToPtrInst>(&I)) {
           if (auto *CI =
                   llvm::dyn_cast<llvm::ConstantInt>(ITP->getOperand(0))) {
-            if (Img.containsVA(CI->getZExtValue())) {
+            // Mach-O's __PAGEZERO is represented as a segment, but it is an
+            // inaccessible guard range rather than relocatable image memory.
+            // A small scalar coerced to a pointer (for example, an imprecisely
+            // recovered call argument `inttoptr(3)`) must stay numeric instead
+            // of becoming an unresolvable `__nd_data_3` reference.
+            if (isReadableImageVA(CI->getZExtValue())) {
               ITP->replaceAllUsesWith(
                   getOrCreateDataGlobal(CI->getZExtValue()));
               ITP->eraseFromParent();

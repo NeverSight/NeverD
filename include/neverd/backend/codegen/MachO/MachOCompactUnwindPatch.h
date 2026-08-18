@@ -304,10 +304,14 @@ static_assert(
         static_cast<uint8_t>(MachOCompactUnwindRangeMode::SameVAInPlace) == 1,
     "compact-unwind range modes are an API contract");
 
-/// One exact old-to-new function-range mapping.  All ranges are half-open
-/// virtual-address ranges.  SameVAInPlace requires equal start addresses, but
-/// permits the generated range to be shorter than the replaced source range;
-/// the merger then emits an absence boundary when required.
+/// One authenticated old-to-new function-range mapping.  All ranges are
+/// half-open virtual-address ranges.  For NewSegment, SourceVA is the exact
+/// installed trampoline source and SourceEndVA is the end of its containing
+/// compact-unwind recipe; SourceVA may be inside that recipe when the linker
+/// coalesced adjacent functions with identical unwind state.  SameVAInPlace
+/// still names an exact recipe and requires equal source/destination starts,
+/// but permits the generated range to be shorter than the replaced source
+/// range; the merger then emits an absence boundary when required.
 struct MachOCompactUnwindRangeMapping {
   uint64_t SourceVA = 0;
   uint64_t SourceEndVA = 0;
@@ -367,9 +371,10 @@ private:
 };
 
 /// Strictly bind each generated compact row to one symbol-identical installed
-/// trampoline and one exact original compact-unwind recipe.  Source ranges
-/// come from the lossless original table, never from symbol-size guesses.
-/// Every generated record must have a unique mapping; no input is mutated.
+/// trampoline and one containing original compact-unwind recipe.  Recipe ends
+/// come from the lossless original table, never from symbol-size guesses, and
+/// the exact trampoline start remains part of the mapping.  Every generated
+/// record must have a unique mapping; no input is mutated.
 llvm::Expected<std::vector<MachOCompactUnwindRangeMapping>>
 buildMachOCompactUnwindRangeMappings(
     llvm::ArrayRef<uint8_t> Binary, Arch TargetArch,
@@ -494,9 +499,10 @@ private:
 
 /// Strictly normalize and merge original and generated compact-unwind state.
 /// Original.OriginalBytes is reparsed and must reproduce every retained raw
-/// field before it is trusted.  Each mapping must name one exact original
-/// recipe range and one exact generated range.  NewSegment preserves both;
-/// SameVAInPlace replaces only its exact source recipe.  Inputs are never
+/// field before it is trusted.  Each mapping must name either one exact
+/// original recipe or a NewSegment trampoline start inside a recipe with its
+/// exact end boundary, plus one exact generated range.  NewSegment preserves
+/// both; SameVAInPlace replaces only its exact source recipe.  Inputs are never
 /// sorted, repaired, or mutated in place.
 llvm::Expected<MachOCompactUnwindMergeResult> mergeMachOCompactUnwind(
     Arch TargetArch, uint64_t MachHeaderVA,

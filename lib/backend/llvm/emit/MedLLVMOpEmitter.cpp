@@ -795,8 +795,10 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // are considered (an ordinary integer store is never an address; a code
     // pointer is already symbolized at source).
     if (Img && Op.NumInputs >= 2 && Val && Val->getType()->isIntegerTy()) {
-      bool FrameReSymbolized = varIsFrameDerived(Op.Inputs[0]) &&
-                               frameSlotHasMatchingKeyLoad(Op.Inputs[0]);
+      const bool HasMatchingSlotReload =
+          frameSlotHasMatchingKeyLoad(Op.Inputs[0]);
+      bool FrameReSymbolized =
+          varIsFrameDerived(Op.Inputs[0]) && HasMatchingSlotReload;
       unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
       llvm::Value *Sym = nullptr;
       if (!FrameReSymbolized && PtrSz && Op.Inputs[1].Size == PtrSz) {
@@ -838,7 +840,14 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         // a segment — so the stored vtable pointer is the recompiled mirror,
         // not a stale VA the later `vt->m()` indirect call would fetch from
         // unmapped memory.
-        if (!Sym)
+        // A fixed stack-slot reload will reach this same pointer-table resolver
+        // later in an ADDRESS context, which is the point where an arithmetic
+        // value has actual pointer evidence.  Keep the stored value raw here.
+        // Besides avoiding a double rebase, this prevents an unrelated scalar
+        // constant inside the value expression from becoming evidence merely
+        // because it numerically falls inside a low-VA i386 jump-table segment
+        // (for example `h ^ 0xff` beside a table at 0xe4).
+        if (!Sym && !HasMatchingSlotReload)
           Sym = tryResolveCodePtrSegPtr(Op.Inputs[1], Builder);
       }
       // A stored read-only (rodata) pointer — a const string/table address

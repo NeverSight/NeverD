@@ -7,9 +7,15 @@
 #include "MachOSymbolResolution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/BinaryFormat/MachO.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 
@@ -87,6 +93,30 @@ BinaryImage makeStubAndSlotImage() {
   Image.Imports.push_back(std::move(Imported));
   Image.ImportStubIndices.emplace(StubVA, 0);
   Image.ImportPtrSlots.emplace(SlotVA, "_callee");
+  return Image;
+}
+
+BinaryImage makePageZeroImage() {
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::MachO;
+  Image.Bits = Bitness::Bits64;
+
+  Segment PageZero;
+  PageZero.Name = "__PAGEZERO";
+  PageZero.VA = 0;
+  PageZero.Size = 0x100000000ULL;
+  PageZero.Flags = SegmentFlags::None;
+  Image.Segments.push_back(std::move(PageZero));
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = 0x100000000ULL;
+  Text.Size = 0x1000;
+  Text.FileSz = Text.Size;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  Image.Segments.push_back(std::move(Text));
   return Image;
 }
 
@@ -282,6 +312,39 @@ TEST(MachOSymbolResolution, AmbiguousSelectedCandidateSetFailsClosed) {
       resolveUniqueMachOSymbol(Image, "_callee", MachOSymbolUse::ImportSlot);
   ASSERT_FALSE(static_cast<bool>(Target));
   llvm::consumeError(Target.takeError());
+}
+
+TEST(MachOSymbolResolution,
+     PatchSymbolizationRejectsIntToPtrInsideUnreadablePageZero) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("pagezero-symbolization", Context);
+  llvm::IRBuilder<> Builder(Context);
+
+  auto *CalleeTy = llvm::FunctionType::get(
+      Builder.getVoidTy(), {Builder.getPtrTy()}, /*isVarArg=*/false);
+  auto *Callee = llvm::Function::Create(
+      CalleeTy, llvm::GlobalValue::ExternalLinkage, "consume", Module);
+  auto *CallerTy =
+      llvm::FunctionType::get(Builder.getVoidTy(), /*isVarArg=*/false);
+  auto *Caller = llvm::Function::Create(
+      CallerTy, llvm::GlobalValue::ExternalLinkage, "caller", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Caller);
+  Builder.SetInsertPoint(Entry);
+  llvm::Constant *SmallPointer = llvm::ConstantExpr::getIntToPtr(
+      llvm::ConstantInt::get(Builder.getInt64Ty(), 3), Builder.getPtrTy());
+  llvm::CallInst *Call = Builder.CreateCall(CalleeTy, Callee, {SmallPointer});
+  Builder.CreateRetVoid();
+
+  BinaryImage Image = makePageZeroImage();
+  ASSERT_TRUE(Image.containsVA(3));
+  ASSERT_FALSE(Image.getSegmentFor(3)->isReadable());
+
+  symbolizeImageAbsolutePointers(Module, Image);
+
+  EXPECT_EQ(Module.getNamedGlobal(makeNdDataSymbol(3)), nullptr);
+  auto *Preserved = llvm::dyn_cast<llvm::ConstantExpr>(Call->getArgOperand(0));
+  ASSERT_NE(Preserved, nullptr);
+  EXPECT_EQ(Preserved->getOpcode(), llvm::Instruction::IntToPtr);
 }
 
 } // namespace
