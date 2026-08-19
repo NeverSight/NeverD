@@ -8,6 +8,18 @@ static fs::path callAbiObj() {
   return fs::path(TEST_OBJ_DIR) / "test_call_abi_a64_macho";
 }
 
+static fs::path callArgPhiMachOObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_call_arg_phi_a64_macho";
+}
+
+static fs::path callArgPhiELFObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_call_arg_phi_a64_elf.so";
+}
+
+static fs::path callArgPhiPEObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_call_arg_phi_a64_pe.exe";
+}
+
 static std::string callAbiFunctionText(llvm::StringRef IR,
                                        llvm::StringRef Name) {
   std::string Needle = "@" + Name.str() + "(";
@@ -77,6 +89,56 @@ TEST_F(AArch64_CallAbi, ExternalDarwinVarargsKeepOutgoingStackValues) {
                    "i64 48)"),
             std::string::npos)
       << F;
+}
+
+TEST_F(AArch64_CallAbi, FixedPointerArgumentUsesFullWidthPhiAlias) {
+  if (!fs::exists(callArgPhiMachOObj()))
+    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+  auto R = liftToLLVMIRUnopt(callArgPhiMachOObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+
+  std::string F = callAbiFunctionText(R.out, "body");
+  ASSERT_FALSE(F.empty()) << R.out;
+  size_t Call = F.find("@snprintf(");
+  ASSERT_NE(Call, std::string::npos) << F;
+  size_t LineBegin = F.rfind('\n', Call);
+  size_t LineEnd = F.find('\n', Call);
+  std::string CallLine = F.substr(LineBegin + 1, LineEnd - LineBegin - 1);
+  EXPECT_NE(CallLine.find("call i32 (ptr, i64, ptr, ...) @snprintf"),
+            std::string::npos)
+      << CallLine;
+  EXPECT_NE(CallLine.find("ptr %selmrgptr"), std::string::npos) << CallLine;
+}
+
+TEST_F(AArch64_CallAbi, ELFFixedPointerArgumentUsesFullWidthPhiAlias) {
+  if (!fs::exists(callArgPhiELFObj()))
+    GTEST_SKIP() << "AArch64 ELF ABI fixture requires ld.lld";
+  auto R = liftToLLVMIRUnopt(callArgPhiELFObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+
+  EXPECT_NE(R.out.find("%selmrgoff = sub i64 %X2."), std::string::npos)
+      << R.out;
+  EXPECT_NE(R.out.find("%selmrgptr = getelementptr"), std::string::npos)
+      << R.out;
+}
+
+TEST_F(AArch64_CallAbi, PEFixedPointerArgumentUsesFullWidthPhiAlias) {
+  if (!fs::exists(callArgPhiPEObj()))
+    GTEST_SKIP() << "AArch64 PE ABI fixture requires lld-link";
+  auto R = liftToLLVMIRUnopt(callArgPhiPEObj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+
+  EXPECT_NE(R.out.find("%selmrgrawptr = inttoptr i64 %X2."), std::string::npos)
+      << R.out;
+  size_t Call = R.out.find("@snprintf(");
+  ASSERT_NE(Call, std::string::npos) << R.out;
+  size_t LineBegin = R.out.rfind('\n', Call);
+  size_t LineEnd = R.out.find('\n', Call);
+  std::string CallLine = R.out.substr(LineBegin + 1, LineEnd - LineBegin - 1);
+  EXPECT_NE(CallLine.find("call i32 (ptr, i64, ptr, ...) @snprintf"),
+            std::string::npos)
+      << CallLine;
+  EXPECT_NE(CallLine.find("ptr %selmrgrawptr"), std::string::npos) << CallLine;
 }
 
 TEST_F(AArch64_CallAbi, ExternalZeroArgPrototypeIsStableAcrossCallSites) {

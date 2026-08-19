@@ -1,0 +1,3 @@
+LIBRARY test_call_arg_phi_provider_a64_pe
+EXPORTS
+  snprintf

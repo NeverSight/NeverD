@@ -543,6 +543,72 @@ MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
   return Base;
 }
 
+const PhiNode *selectAuthoritativeArgPhi(const MedFunc &Func,
+                                         const MedBlock &Block,
+                                         const TargetRegInfo &TRI, int ArgIdx) {
+  // AArch64 may carry both Wn and Xn PHIs for one ABI argument.  Ordinarily the
+  // full-width view is authoritative, but a wide alias synthesized only by a
+  // loop back-edge is undef on the first iteration.  Prefer a PHI whose value
+  // is genuinely defined on every function-entry edge, then prefer width.
+  auto entryEdgesSeeded = [&](const PhiNode &Phi) {
+    for (const auto &A : Phi.Args) {
+      const MedBlock *Pred = nullptr;
+      for (const auto &B : Func.Blocks)
+        if (B.Id == A.first) {
+          Pred = &B;
+          break;
+        }
+      if (!Pred)
+        return false;
+      if (!Pred->Preds.empty())
+        continue;
+      if (A.second.isConst())
+        continue;
+
+      bool Defined = false;
+      for (const auto &P : Pred->Phis)
+        if (P.Output.Id == A.second.Id && P.Output.SSAVer == A.second.SSAVer) {
+          Defined = true;
+          break;
+        }
+      if (!Defined)
+        for (const auto &O : Pred->Ops)
+          if (O.Output.Id == A.second.Id &&
+              O.Output.SSAVer == A.second.SSAVer && O.Output.Size > 0) {
+            Defined = true;
+            break;
+          }
+      if (!Defined)
+        for (const auto &P : Func.Params)
+          if ((A.second.Kind == MedVar::Reg ||
+               A.second.Kind == MedVar::Param) &&
+              P.RegOff == A.second.RegOff && P.Size == A.second.Size) {
+            Defined = true;
+            break;
+          }
+      if (!Defined)
+        return false;
+    }
+    return true; // no undef value on a function-entry predecessor
+  };
+
+  const PhiNode *Best = nullptr;
+  bool BestSeeded = false;
+  for (const auto &Phi : Block.Phis) {
+    if (Phi.Output.Kind != MedVar::Reg ||
+        TRI.regToArgIdx(Phi.Output.RegOff) != ArgIdx)
+      continue;
+    const bool PhiSeeded = entryEdgesSeeded(Phi);
+    if (!Best ||
+        (PhiSeeded != BestSeeded ? PhiSeeded
+                                 : Phi.Output.Size > Best->Output.Size)) {
+      Best = &Phi;
+      BestSeeded = PhiSeeded;
+    }
+  }
+  return Best;
+}
+
 // Value reaching argument register \p ArgIdx at the call in (\p BlockId,
 // \p OpIdx), found by walking the CFG backwards into predecessor blocks: the
 // nearest write to that argument register, then a block PHI for it.  Returns
@@ -573,14 +639,8 @@ std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
           TRI.regToArgIdx(Op.Output.RegOff) == ArgIdx)
         return argRegSourceValueInBlock(B, J, TRI);
     }
-    const PhiNode *Widest = nullptr;
-    for (const auto &Phi : B.Phis)
-      if (Phi.Output.Kind == MedVar::Reg &&
-          TRI.regToArgIdx(Phi.Output.RegOff) == ArgIdx &&
-          (!Widest || Phi.Output.Size > Widest->Output.Size))
-        Widest = &Phi;
-    if (Widest)
-      return Widest->Output;
+    if (const PhiNode *Phi = selectAuthoritativeArgPhi(Func, B, TRI, ArgIdx))
+      return Phi->Output;
     return std::nullopt;
   };
 
@@ -589,10 +649,9 @@ std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
     return std::nullopt;
   // The call block's straight-line ops were already handled by the caller (with
   // its call-boundary stop); only its PHIs and the predecessor chain remain.
-  for (const auto &Phi : It->second->Phis)
-    if (Phi.Output.Kind == MedVar::Reg &&
-        TRI.regToArgIdx(Phi.Output.RegOff) == ArgIdx)
-      return Phi.Output;
+  if (const PhiNode *Phi =
+          selectAuthoritativeArgPhi(Func, *It->second, TRI, ArgIdx))
+    return Phi->Output;
 
   std::set<int> Visited{BlockId};
   std::vector<int> Work(It->second->Preds.begin(), It->second->Preds.end());

@@ -68,6 +68,46 @@ void addLiveIn(MedBlock &Entry, const MedVar &LiveIn) {
   Entry.Ops.push_back(unary(NdOp::COPY, LiveIn, LiveIn));
 }
 
+MedFunc recoverDirectCallWithArgumentPhis(Arch TheArch, int ArgIdx,
+                                          std::vector<MedVar> EntryValues,
+                                          std::vector<PhiNode> Phis) {
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "argument_phi_caller";
+  Func.Blocks.resize(2);
+  Func.Blocks[0].Id = 0;
+  Func.Blocks[0].Succs = {1};
+  for (const MedVar &Value : EntryValues)
+    addLiveIn(Func.Blocks[0], Value);
+
+  MedBlock &CallBlock = Func.Blocks[1];
+  CallBlock.Id = 1;
+  CallBlock.Preds = {0, 1};
+  CallBlock.Succs = {1};
+  CallBlock.Phis = std::move(Phis);
+  for (int K = 0; K < ArgIdx; ++K)
+    CallBlock.Ops.push_back(
+        unary(NdOp::COPY,
+              reg(100 + K, 0, TRI.PointerSize, TRI.IntParamRegs[K], TheArch),
+              MedVar::makeConst(K + 1, TRI.PointerSize)));
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Output = reg(300, 0, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  CallBlock.Ops.push_back(Call);
+
+  const int Arity = ArgIdx + 1;
+  const std::map<va_t, std::string> Names{{Callee, "callee"}};
+  const std::map<va_t, int> RegArity{{Callee, Arity}};
+  const std::map<va_t, int> TotalArity{{Callee, Arity}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
+  return Func;
+}
+
 TEST(MedCallingConvValueClosure, ReachesReverseBlockOrderChain) {
   MedVar Seed = temp(1, 0, 4, Arch::X86);
   MedVar Mid = temp(2, 0, 4, Arch::X86);
@@ -316,6 +356,83 @@ TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
   EXPECT_EQ(Func.CallInfos[0].Args[0].RegOff, TRI.IntParamRegs[0]);
   EXPECT_EQ(Func.CallInfos[0].Args[1].Kind, MedVar::Param);
   EXPECT_EQ(Func.CallInfos[0].Args[1].RegOff, TRI.IntParamRegs[1]);
+}
+
+TEST(MedABIPass, DirectCallUsesWidestEquallySeededArgumentPhi) {
+  constexpr Arch TheArch = Arch::AArch64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  const uint64_t Arg2 = TRI.IntParamRegs[2];
+
+  MedVar NarrowSeed = reg(20, 0, 4, Arg2, TheArch);
+  MedVar NarrowBackedge = reg(20, 1, 4, Arg2, TheArch);
+  MedVar NarrowPhi = reg(20, 2, 4, Arg2, TheArch);
+  MedVar WideSeed = reg(21, 0, TRI.PointerSize, Arg2, TheArch);
+  MedVar WideBackedge = reg(21, 1, TRI.PointerSize, Arg2, TheArch);
+  MedVar WidePhi = reg(21, 2, TRI.PointerSize, Arg2, TheArch);
+
+  // Keep the narrow alias first: argument recovery must be semantic, not
+  // dependent on the PHI insertion order.
+  MedFunc Func = recoverDirectCallWithArgumentPhis(
+      TheArch, 2, {NarrowSeed, WideSeed},
+      {{NarrowPhi, {{0, NarrowSeed}, {1, NarrowBackedge}}},
+       {WidePhi, {{0, WideSeed}, {1, WideBackedge}}}});
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 3u);
+  EXPECT_EQ(Func.CallInfos[0].Args[2], WidePhi);
+  EXPECT_EQ(Func.CallInfos[0].Args[2].Size, TRI.PointerSize);
+}
+
+TEST(MedABIPass, DirectCallPhiAliasSelectionIsSharedAcrossRegisterAbis) {
+  for (Arch TheArch : {Arch::AArch64, Arch::ARM, Arch::X64, Arch::X86}) {
+    SCOPED_TRACE(static_cast<int>(TheArch));
+    const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+    ASSERT_GE(TRI.IntParamRegs.size(), 2u);
+    const uint64_t Arg1 = TRI.IntParamRegs[1];
+    const uint16_t NarrowSize = TRI.PointerSize / 2;
+
+    MedVar NarrowSeed = reg(20, 0, NarrowSize, Arg1, TheArch);
+    MedVar NarrowBackedge = reg(20, 1, NarrowSize, Arg1, TheArch);
+    MedVar NarrowPhi = reg(20, 2, NarrowSize, Arg1, TheArch);
+    MedVar WideSeed = reg(21, 0, TRI.PointerSize, Arg1, TheArch);
+    MedVar WideBackedge = reg(21, 1, TRI.PointerSize, Arg1, TheArch);
+    MedVar WidePhi = reg(21, 2, TRI.PointerSize, Arg1, TheArch);
+
+    MedFunc Func = recoverDirectCallWithArgumentPhis(
+        TheArch, 1, {NarrowSeed, WideSeed},
+        {{NarrowPhi, {{0, NarrowSeed}, {1, NarrowBackedge}}},
+         {WidePhi, {{0, WideSeed}, {1, WideBackedge}}}});
+
+    ASSERT_EQ(Func.CallInfos.size(), 1u);
+    ASSERT_EQ(Func.CallInfos[0].Args.size(), 2u);
+    EXPECT_EQ(Func.CallInfos[0].Args[1], WidePhi);
+    EXPECT_EQ(Func.CallInfos[0].Args[1].Size, TRI.PointerSize);
+  }
+}
+
+TEST(MedABIPass, DirectCallPrefersSeededArgumentPhiOverWiderUndefPhi) {
+  constexpr Arch TheArch = Arch::AArch64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  const uint64_t Arg2 = TRI.IntParamRegs[2];
+
+  MedVar NarrowSeed = reg(20, 0, 4, Arg2, TheArch);
+  MedVar NarrowBackedge = reg(20, 1, 4, Arg2, TheArch);
+  MedVar NarrowPhi = reg(20, 2, 4, Arg2, TheArch);
+  MedVar WideUndef = reg(21, 0, TRI.PointerSize, Arg2, TheArch);
+  MedVar WideBackedge = reg(21, 1, TRI.PointerSize, Arg2, TheArch);
+  MedVar WidePhi = reg(21, 2, TRI.PointerSize, Arg2, TheArch);
+
+  // Keep the unsafe wide alias first to prove that an entry-defined narrow
+  // value wins over a wider view that is undef on the first iteration.
+  MedFunc Func = recoverDirectCallWithArgumentPhis(
+      TheArch, 2, {NarrowSeed},
+      {{WidePhi, {{0, WideUndef}, {1, WideBackedge}}},
+       {NarrowPhi, {{0, NarrowSeed}, {1, NarrowBackedge}}}});
+
+  ASSERT_EQ(Func.CallInfos.size(), 1u);
+  ASSERT_EQ(Func.CallInfos[0].Args.size(), 3u);
+  EXPECT_EQ(Func.CallInfos[0].Args[2], NarrowPhi);
+  EXPECT_EQ(Func.CallInfos[0].Args[2].Size, 4u);
 }
 
 TEST(MedVerifier, AcceptsImplicitCallClobberDefinition) {

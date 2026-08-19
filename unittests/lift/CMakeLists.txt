@@ -849,6 +849,10 @@ if(APPLE)
       "${CMAKE_CURRENT_BINARY_DIR}/libtest_call_abi_a64_macho.dylib")
   set(call_abi_a64_macho_exe
       "${CMAKE_CURRENT_BINARY_DIR}/test_call_abi_a64_macho")
+  set(call_arg_phi_a64_macho_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_macho.s")
+  set(call_arg_phi_a64_macho_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_a64_macho")
   add_custom_command(
     OUTPUT ${call_abi_a64_macho_dylib}
     COMMAND /usr/bin/clang -target arm64-apple-macos14 -dynamiclib
@@ -865,7 +869,14 @@ if(APPLE)
             -o ${call_abi_a64_macho_exe}
     DEPENDS ${call_abi_a64_macho_src} ${call_abi_a64_macho_dylib}
     COMMENT "Linking AArch64 Mach-O call-ABI fixture")
-  list(APPEND TEST_OBJECTS ${call_abi_a64_macho_exe})
+  add_custom_command(
+    OUTPUT ${call_arg_phi_a64_macho_exe}
+    COMMAND /usr/bin/clang -target arm64-apple-macos14
+            ${call_arg_phi_a64_macho_src} -o ${call_arg_phi_a64_macho_exe}
+    DEPENDS ${call_arg_phi_a64_macho_src}
+    COMMENT "Linking AArch64 Mach-O call-argument PHI fixture")
+  list(APPEND TEST_OBJECTS ${call_abi_a64_macho_exe}
+                           ${call_arg_phi_a64_macho_exe})
 endif()
 
 foreach(src ${X86_64_TEST_SOURCES})
@@ -1018,6 +1029,42 @@ endforeach()
 # --- Compile COFF/PE test binary ---
 find_program(LLD_LINK_EXEC lld-link)
 if(LLD_LINK_EXEC)
+  set(call_arg_phi_a64_pe_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_pe.s")
+  set(call_arg_phi_a64_pe_def
+      "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_pe.def")
+  set(call_arg_phi_a64_pe_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_a64_pe.obj")
+  set(call_arg_phi_a64_pe_import_lib
+      "${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_a64_pe.lib")
+  set(call_arg_phi_a64_pe_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_a64_pe.exe")
+  add_custom_command(
+    OUTPUT ${call_arg_phi_a64_pe_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-pc-windows-msvc -c
+            ${call_arg_phi_a64_pe_src} -o ${call_arg_phi_a64_pe_obj}
+    DEPENDS ${call_arg_phi_a64_pe_src}
+    COMMENT "Compiling AArch64 PE call-argument PHI fixture")
+  add_custom_command(
+    OUTPUT ${call_arg_phi_a64_pe_import_lib}
+    COMMAND ${LLD_LINK_EXEC} /dll /noentry /machine:arm64
+            /def:${call_arg_phi_a64_pe_def}
+            /implib:${call_arg_phi_a64_pe_import_lib}
+            /out:${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_provider_a64_pe.dll
+    DEPENDS ${call_arg_phi_a64_pe_def}
+    COMMENT "Generating AArch64 PE call-argument import library")
+  add_custom_command(
+    OUTPUT ${call_arg_phi_a64_pe_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:arm64 /entry:start /subsystem:console
+            /nodefaultlib ${call_arg_phi_a64_pe_obj}
+            ${call_arg_phi_a64_pe_import_lib}
+            /out:${call_arg_phi_a64_pe_exe}
+    DEPENDS ${call_arg_phi_a64_pe_obj} ${call_arg_phi_a64_pe_import_lib}
+    COMMENT "Linking AArch64 PE call-argument PHI fixture")
+  list(APPEND TEST_OBJECTS ${call_arg_phi_a64_pe_obj}
+                           ${call_arg_phi_a64_pe_import_lib}
+                           ${call_arg_phi_a64_pe_exe})
+
   set(native_pointer_pe_src
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_pe_pointer_reloc_x64.s")
   set(native_pointer_pe_obj
@@ -1178,6 +1225,27 @@ endif()
 find_program(LLD_EXEC ld.lld)
 set(ELF_EXECUTABLES "")
 if(LLD_EXEC)
+  set(call_arg_phi_a64_elf_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_elf.s")
+  set(call_arg_phi_a64_elf_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_a64_elf.o")
+  set(call_arg_phi_a64_elf_so
+      "${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_a64_elf.so")
+  add_custom_command(
+    OUTPUT ${call_arg_phi_a64_elf_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-linux-gnu -fPIC -c
+            ${call_arg_phi_a64_elf_src} -o ${call_arg_phi_a64_elf_obj}
+    DEPENDS ${call_arg_phi_a64_elf_src}
+    COMMENT "Compiling AArch64 ELF call-argument PHI fixture")
+  add_custom_command(
+    OUTPUT ${call_arg_phi_a64_elf_so}
+    COMMAND ${LLD_EXEC} -shared -m aarch64linux
+            -o ${call_arg_phi_a64_elf_so} ${call_arg_phi_a64_elf_obj}
+    DEPENDS ${call_arg_phi_a64_elf_obj}
+    COMMENT "Linking AArch64 ELF call-argument PHI fixture")
+  list(APPEND ELF_EXECUTABLES ${call_arg_phi_a64_elf_obj}
+                              ${call_arg_phi_a64_elf_so})
+
   set(native_pointer_elf_src
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_elf_pointer_reloc_x64.s")
   set(native_pointer_elf_obj

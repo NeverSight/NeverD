@@ -410,53 +410,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           continue;
         if (!CI.IsIndirect && K > RegPhiLimit)
           break; // direct call: never invent a trailing argument
-        // Prefer the widest reaching register view, except when that view is
-        // created only on a loop back-edge and therefore has no value on the
-        // entry edge.  AArch64 commonly carries a 32-bit Wn argument and also
-        // synthesises an Xn PHI from a back-edge zext; selecting the wider PHI
-        // would pass undef on the first iteration.  A narrower PHI with a real
-        // definition on that same entry edge is the authoritative value.
-        auto entryEdgeSeeded = [&](const PhiNode &Phi) {
-          for (const auto &A : Phi.Args) {
-            const MedBlock *Pred = nullptr;
-            for (const auto &B : Func.Blocks)
-              if (B.Id == A.first) {
-                Pred = &B;
-                break;
-              }
-            if (!Pred || !Pred->Preds.empty())
-              continue;
-            for (const auto &P : Pred->Phis)
-              if (P.Output.Id == A.second.Id &&
-                  P.Output.SSAVer == A.second.SSAVer)
-                return true;
-            for (const auto &O : Pred->Ops)
-              if (O.Output.Id == A.second.Id &&
-                  O.Output.SSAVer == A.second.SSAVer && O.Output.Size > 0)
-                return true;
-            for (const auto &P : Func.Params)
-              if (P.RegOff == A.second.RegOff && P.Size == A.second.Size)
-                return true;
-            return false;
-          }
-          return true; // no function-entry predecessor on this PHI
-        };
-
-        const PhiNode *Best = nullptr;
-        for (auto &Phi : Blk.Phis) {
-          if (Phi.Output.Kind != MedVar::Reg ||
-              TRI.regToArgIdx(Phi.Output.RegOff) != K)
-            continue;
-          const bool PhiSeeded = entryEdgeSeeded(Phi);
-          if (!Best) {
-            Best = &Phi;
-            continue;
-          }
-          const bool BestSeeded = entryEdgeSeeded(*Best);
-          if (PhiSeeded != BestSeeded ? PhiSeeded
-                                      : Phi.Output.Size > Best->Output.Size)
-            Best = &Phi;
-        }
+        const PhiNode *Best = selectAuthoritativeArgPhi(Func, Blk, TRI, K);
         if (!Best) {
           if (CI.IsIndirect)
             break;  // indirect arguments are consecutive from arg0

@@ -101,6 +101,15 @@ std::string relocCalleeName(const BinaryImage &Img, va_t InsnAddr);
 MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
                                 const TargetRegInfo &TRI);
 
+/// Select the authoritative PHI for integer argument slot \p ArgIdx in
+/// \p Block.  A PHI with a value on every function-entry edge wins over an
+/// alias that is undef on the first iteration; otherwise the widest register
+/// view wins.  Centralizing this rule keeps in-block and cross-block argument
+/// recovery independent of PHI insertion order.
+const PhiNode *selectAuthoritativeArgPhi(const MedFunc &Func,
+                                         const MedBlock &Block,
+                                         const TargetRegInfo &TRI, int ArgIdx);
+
 /// Value reaching argument register \p ArgIdx at the call in block \p BlockId,
 /// found by walking the CFG backwards into predecessor blocks (nearest write,
 /// then a block PHI, then -- when \p AllowUnknownLiveIn -- an incoming
