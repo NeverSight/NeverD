@@ -676,6 +676,23 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
             !valueIsStableAddressOffset(Def->Inputs[1]))
           return invalidProof();
 
+        // Low-VA PIC object code can materialize a fixed data address as the
+        // sum of two scalar immediates that individually live in .text (for
+        // example, the call/pop PC plus a SECTDIFF displacement). When the
+        // complete value lands inside the one relocation-backed mirror run
+        // already discovered by ptrTableUniqueSegment, the result is a raw
+        // address into that run even though neither operand is pointer-valued.
+        if (auto Folded = traceValueVA(Value)) {
+          const Segment *Seg = Img->getSegmentFor(*Folded);
+          if (Seg && !Seg->isExecutable() && segmentHasPointerSlots(Seg)) {
+            uint64_t RunStart = Seg->VA;
+            uint64_t RunEnd = Seg->VA + Seg->Data.size();
+            readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
+            if (RunStart == SelSeg && *Folded >= RunStart && *Folded < RunEnd)
+              return tableProof(RunStart);
+          }
+        }
+
         return scalarProof();
       }
 

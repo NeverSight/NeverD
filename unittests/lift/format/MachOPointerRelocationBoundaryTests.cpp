@@ -1923,6 +1923,7 @@ MedFunc makeIndependentPointerPhiAddressLookup(Arch TargetArch, NdOp Opcode) {
   for (auto &[Pred, Arg] : First.Args)
     if (Pred == 3 || Pred == 4)
       Arg = MedVar::makeConst(SpilledConstTableVA, Arg.Size);
+  const MedVar FirstOutput = First.Output;
 
   PhiNode Second = First;
   Second.Output.Id = 45;
@@ -1935,7 +1936,7 @@ MedFunc makeIndependentPointerPhiAddressLookup(Arch TargetArch, NdOp Opcode) {
   for (MedOp &Op : Func.Blocks[5].Ops)
     if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs >= 2) {
       Op.Opcode = Opcode;
-      Op.Inputs[0] = First.Output;
+      Op.Inputs[0] = FirstOutput;
       Op.Inputs[1] = SecondOutput;
       break;
     }
@@ -4934,6 +4935,130 @@ TEST(MachOLLVMDataPointerBoundary,
   }
 }
 
+TEST(MachOLLVMDataPointerBoundary, AllowsSelfCopyScalarTableOffset) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeSpilledConstTableLookup(TargetArch);
+
+    ASSERT_FALSE(Lookup.Params.empty());
+    ASSERT_FALSE(Lookup.Blocks.empty());
+    const MedVar Index = Lookup.Params.front();
+    MedOp SelfCopy;
+    SelfCopy.Opcode = NdOp::COPY;
+    SelfCopy.Output = Index;
+    SelfCopy.addInput(Index);
+    Lookup.Blocks.front().Ops.insert(Lookup.Blocks.front().Ops.begin(),
+                                     std::move(SelfCopy));
+
+    const MedOp &Inserted = Lookup.Blocks.front().Ops.front();
+    ASSERT_EQ(Inserted.Opcode, NdOp::COPY);
+    ASSERT_EQ(Inserted.NumInputs, 1u);
+    EXPECT_EQ(Inserted.Output, Inserted.Inputs[0]);
+    EXPECT_EQ(Inserted.Output.TheArch, Inserted.Inputs[0].TheArch);
+    EXPECT_EQ(Inserted.Output.Size, Inserted.Inputs[0].Size);
+    EXPECT_EQ(Inserted.Output.RenameTag, Inserted.Inputs[0].RenameTag);
+    EXPECT_EQ(Inserted.Output.RegOff, Inserted.Inputs[0].RegOff);
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-self-copy-scalar-table-offset", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsTwoNodeForwardingCycleBesideTableBase) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    ASSERT_GE(TRI.IntParamRegs.size(), 2u);
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeSpilledConstTableLookup(TargetArch);
+
+    MedVar First = Lookup.Params.front();
+    MedVar Second = First;
+    Second.Id = 99;
+    Second.RegOff = TRI.IntParamRegs[1];
+    Lookup.Params.push_back(Second);
+
+    MedOp FirstFromSecond;
+    FirstFromSecond.Opcode = NdOp::COPY;
+    FirstFromSecond.Output = First;
+    FirstFromSecond.addInput(Second);
+    MedOp SecondFromFirst;
+    SecondFromFirst.Opcode = NdOp::COPY;
+    SecondFromFirst.Output = Second;
+    SecondFromFirst.addInput(First);
+    MedBlock &Entry = Lookup.Blocks.front();
+    Entry.Ops.insert(Entry.Ops.begin(), std::move(SecondFromFirst));
+    Entry.Ops.insert(Entry.Ops.begin(), std::move(FirstFromSecond));
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-two-node-scalar-forward-cycle", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     LeavesRelocatableCodeBaseOutsideDataTableAudit) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    ASSERT_TRUE(Image.isCodeAddress(CodeVA));
+
+    MedFunc Lookup = makeSpilledConstTableLookup(TargetArch);
+    Lookup.Name = TargetArch == Arch::AArch64
+                      ? "code_base_scalar_offset_arm64"
+                      : "code_base_scalar_offset_x86_64";
+    replaceMedConstant(Lookup, SpilledConstTableVA, CodeVA);
+
+    MedFunc CodeTarget;
+    CodeTarget.Entry = CodeVA;
+    CodeTarget.Name = TargetArch == Arch::AArch64 ? "code_target_arm64"
+                                                  : "code_target_x86_64";
+    CodeTarget.ReturnType = NdType::makeInt(2);
+    MedBlock TargetBlock;
+    TargetBlock.Id = 0;
+    TargetBlock.StartAddr = CodeVA;
+    TargetBlock.EndAddr = CodeVA + 4;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.addInput(MedVar::makeConst(0, 2));
+    TargetBlock.Ops.push_back(std::move(Return));
+    CodeTarget.Blocks.push_back(std::move(TargetBlock));
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup, CodeTarget}, Context, "macho-code-base-scalar-offset",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+    EXPECT_NE(Module->getFunction(Lookup.Name), nullptr);
+  }
+}
+
 TEST(MachOLLVMDataPointerBoundary,
      RejectsAmbiguousOrUninitializedFrameReloadProvenance) {
   const std::pair<ReachingStoreCase, const char *> Cases[] = {
@@ -5649,11 +5774,18 @@ TEST(MachOLLVMDataPointerBoundary,
     }
     for (NdOp Opcode : {NdOp::INT_ADD, NdOp::INT_SUB}) {
       SCOPED_TRACE(static_cast<int>(Opcode));
-      expectRefused(makeIndependentPointerPhiAddressLookup(TargetArch, Opcode),
-                    "macho-independent-pointer-phis");
-      expectRefused(makeTruncatingPointerExpressionLookup(
-                        TargetArch, /*TruncatePhi=*/false, Opcode),
-                    "macho-truncating-pointer-arithmetic");
+      {
+        SCOPED_TRACE("independent pointer phis");
+        expectRefused(
+            makeIndependentPointerPhiAddressLookup(TargetArch, Opcode),
+            "macho-independent-pointer-phis");
+      }
+      {
+        SCOPED_TRACE("truncating pointer arithmetic");
+        expectRefused(makeTruncatingPointerExpressionLookup(
+                          TargetArch, /*TruncatePhi=*/false, Opcode),
+                      "macho-truncating-pointer-arithmetic");
+      }
     }
     expectRefused(
         makeTruncatingPointerExpressionLookup(TargetArch, /*TruncatePhi=*/true),

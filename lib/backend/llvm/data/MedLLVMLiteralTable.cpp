@@ -18,7 +18,9 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
 
+#include <algorithm>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -413,7 +415,10 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   bool SawSymbolizedBase = false;
   bool ExceededStructuralDepth = false;
   bool AuditIncomplete = false;
-  size_t RemainingAuditNodes = 4096;
+  // Large flag-expanded scalar DAGs in real computed-goto loops use just under
+  // 5K nodes. Keep the audit bounded while leaving headroom above that proven
+  // valid shape; a partial walk still fails closed below.
+  size_t RemainingAuditNodes = 8192;
   // A speculative integer call argument may merely resemble an address.
   // Its caller passes FailClosed=false so an ambiguous proof returns nullptr
   // and preserves the ordinary integer ABI path. Concrete memory accesses and
@@ -421,6 +426,445 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // in those contexts would be unsafe.
   using SeenSet = std::set<std::tuple<int, int, int>>;
   enum class BaseProof { Invalid, NoBase, HasBase };
+  auto isExactSameVar = [](const MedVar &Left, const MedVar &Right) {
+    if (Left.Kind != Right.Kind || Left.TheArch != Right.TheArch ||
+        Left.RenameTag != Right.RenameTag || Left.Id != Right.Id ||
+        Left.SSAVer != Right.SSAVer || Left.Size != Right.Size)
+      return false;
+    switch (Left.Kind) {
+    case MedVar::Const:
+      return Left.ConstVal == Right.ConstVal;
+    case MedVar::Reg:
+    case MedVar::Param:
+      return Left.RegOff == Right.RegOff;
+    case MedVar::Stack:
+      return Left.StackOff == Right.StackOff;
+    default:
+      return true;
+    }
+  };
+
+  // A run of ARM predicated instructions is split into synthetic effect
+  // blocks before SSA construction.  The resulting address can look like
+  //   PHI(default, literal_base) -> SELECT(pred, base + pc, default) -> LOAD
+  // even though the LOAD effect block is reachable only when `pred` is true.
+  // Prove that path correlation instead of rejecting the unreachable scalar
+  // PHI arm, but keep the proof deliberately local to the exact synthetic CFG
+  // shape produced by materializePredicatedEffects.
+  struct ConditionSet {
+    bool IsConstant = false;
+    bool Constant = false;
+    MedVar Root;
+    uint64_t Max = 0;
+    std::vector<std::pair<uint64_t, uint64_t>> Intervals;
+  };
+  auto constantCondition = [](bool Value) {
+    ConditionSet Result;
+    Result.IsConstant = true;
+    Result.Constant = Value;
+    return Result;
+  };
+  auto maxForSize = [](uint16_t Size) {
+    return Size == 0 || Size >= 8 ? std::numeric_limits<uint64_t>::max()
+                                  : (uint64_t(1) << (Size * 8)) - 1;
+  };
+  auto normalizeIntervals = [](std::vector<std::pair<uint64_t, uint64_t>> V) {
+    std::sort(V.begin(), V.end());
+    std::vector<std::pair<uint64_t, uint64_t>> Result;
+    for (auto Range : V) {
+      if (Range.first > Range.second)
+        continue;
+      if (Result.empty() ||
+          (Result.back().second != std::numeric_limits<uint64_t>::max() &&
+           Range.first > Result.back().second + 1)) {
+        Result.push_back(Range);
+      } else {
+        Result.back().second = std::max(Result.back().second, Range.second);
+      }
+    }
+    return Result;
+  };
+  auto complementCondition = [&](ConditionSet Input) {
+    if (Input.IsConstant)
+      return constantCondition(!Input.Constant);
+    std::vector<std::pair<uint64_t, uint64_t>> Complement;
+    uint64_t Next = 0;
+    bool AtEnd = false;
+    for (const auto &[Lo, Hi] : Input.Intervals) {
+      if (Next < Lo)
+        Complement.emplace_back(Next, Lo - 1);
+      if (Hi == Input.Max) {
+        AtEnd = true;
+        break;
+      }
+      Next = Hi + 1;
+    }
+    if (!AtEnd)
+      Complement.emplace_back(Next, Input.Max);
+    Input.Intervals = normalizeIntervals(std::move(Complement));
+    return Input;
+  };
+  auto combineConditions = [&](ConditionSet Left, ConditionSet Right,
+                               bool IsOr) -> std::optional<ConditionSet> {
+    if (Left.IsConstant)
+      return IsOr ? (Left.Constant ? std::optional<ConditionSet>(Left)
+                                   : std::optional<ConditionSet>(Right))
+                  : (Left.Constant ? std::optional<ConditionSet>(Right)
+                                   : std::optional<ConditionSet>(Left));
+    if (Right.IsConstant)
+      return IsOr ? (Right.Constant ? std::optional<ConditionSet>(Right)
+                                    : std::optional<ConditionSet>(Left))
+                  : (Right.Constant ? std::optional<ConditionSet>(Left)
+                                    : std::optional<ConditionSet>(Right));
+    if (!isExactSameVar(Left.Root, Right.Root) || Left.Max != Right.Max)
+      return std::nullopt;
+    if (IsOr) {
+      Left.Intervals.insert(Left.Intervals.end(), Right.Intervals.begin(),
+                            Right.Intervals.end());
+      Left.Intervals = normalizeIntervals(std::move(Left.Intervals));
+      return Left;
+    }
+    std::vector<std::pair<uint64_t, uint64_t>> Intersection;
+    size_t I = 0, J = 0;
+    while (I < Left.Intervals.size() && J < Right.Intervals.size()) {
+      uint64_t Lo = std::max(Left.Intervals[I].first, Right.Intervals[J].first);
+      uint64_t Hi =
+          std::min(Left.Intervals[I].second, Right.Intervals[J].second);
+      if (Lo <= Hi)
+        Intersection.emplace_back(Lo, Hi);
+      if (Left.Intervals[I].second < Right.Intervals[J].second)
+        ++I;
+      else
+        ++J;
+    }
+    Left.Intervals = std::move(Intersection);
+    return Left;
+  };
+  struct AffineRoot {
+    MedVar Root;
+    uint64_t Offset = 0;
+    uint64_t Max = 0;
+  };
+  using CondSeen = std::set<std::tuple<int, int, int, uint16_t>>;
+  std::function<std::optional<AffineRoot>(const MedVar &, int, CondSeen)>
+      affineRoot = [&](const MedVar &Value, int Depth,
+                       CondSeen Seen) -> std::optional<AffineRoot> {
+    if (Value.isConst() || Depth > 16)
+      return std::nullopt;
+    auto Key = std::make_tuple(static_cast<int>(Value.Kind), Value.Id,
+                               Value.SSAVer, Value.Size);
+    if (!Seen.insert(Key).second)
+      return AffineRoot{Value, 0, maxForSize(Value.Size)};
+    const MedOp *Def = findDef(Value);
+    if (!Def)
+      return AffineRoot{Value, 0, maxForSize(Value.Size)};
+    if (auto Forwarded = pointerPreservingInput(*Def)) {
+      if (isExactSameVar(*Forwarded, Value))
+        return AffineRoot{Value, 0, maxForSize(Value.Size)};
+      return affineRoot(*Forwarded, Depth + 1, Seen);
+    }
+    if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
+        Def->NumInputs >= 2) {
+      auto Right = traceValueVA(Def->Inputs[1]);
+      if (Right) {
+        auto Left = affineRoot(Def->Inputs[0], Depth + 1, Seen);
+        if (!Left || Left->Max != maxForSize(Def->Output.Size))
+          return std::nullopt;
+        Left->Offset = Def->Opcode == NdOp::INT_ADD
+                           ? (Left->Offset + *Right) & Left->Max
+                           : (Left->Offset - *Right) & Left->Max;
+        return Left;
+      }
+      if (Def->Opcode == NdOp::INT_ADD)
+        if (auto LeftConst = traceValueVA(Def->Inputs[0])) {
+          auto RightRoot = affineRoot(Def->Inputs[1], Depth + 1, Seen);
+          if (!RightRoot || RightRoot->Max != maxForSize(Def->Output.Size))
+            return std::nullopt;
+          RightRoot->Offset = (RightRoot->Offset + *LeftConst) & RightRoot->Max;
+          return RightRoot;
+        }
+    }
+    return AffineRoot{Value, 0, maxForSize(Value.Size)};
+  };
+  std::function<std::optional<ConditionSet>(const MedVar &, int, CondSeen)>
+      conditionSet = [&](const MedVar &Value, int Depth,
+                         CondSeen Seen) -> std::optional<ConditionSet> {
+    if (Depth > 24)
+      return std::nullopt;
+    if (Value.isConst())
+      return constantCondition(Value.ConstVal != 0);
+    auto Key = std::make_tuple(static_cast<int>(Value.Kind), Value.Id,
+                               Value.SSAVer, Value.Size);
+    if (!Seen.insert(Key).second)
+      return std::nullopt;
+    const MedOp *Def = findDef(Value);
+    if (!Def)
+      return std::nullopt;
+    if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1 &&
+        !isExactSameVar(Def->Inputs[0], Value))
+      return conditionSet(Def->Inputs[0], Depth + 1, Seen);
+    if (Def->Opcode == NdOp::BOOL_NOT && Def->NumInputs >= 1) {
+      auto Input = conditionSet(Def->Inputs[0], Depth + 1, Seen);
+      return Input ? std::optional<ConditionSet>(
+                         complementCondition(std::move(*Input)))
+                   : std::nullopt;
+    }
+    if ((Def->Opcode == NdOp::BOOL_AND || Def->Opcode == NdOp::BOOL_OR) &&
+        Def->NumInputs >= 2) {
+      auto Left = conditionSet(Def->Inputs[0], Depth + 1, Seen);
+      auto Right = conditionSet(Def->Inputs[1], Depth + 1, Seen);
+      if (!Left || !Right)
+        return std::nullopt;
+      return combineConditions(std::move(*Left), std::move(*Right),
+                               Def->Opcode == NdOp::BOOL_OR);
+    }
+    if (Def->NumInputs < 2 ||
+        (Def->Opcode != NdOp::INT_EQUAL && Def->Opcode != NdOp::INT_NOTEQUAL &&
+         Def->Opcode != NdOp::INT_LESS && Def->Opcode != NdOp::INT_LESSEQUAL))
+      return std::nullopt;
+
+    auto makeAtomic = [&](const MedVar &Expr, uint64_t Constant,
+                          bool RootOnLeft) -> std::optional<ConditionSet> {
+      auto Affine = affineRoot(Expr, 0, {});
+      if (!Affine)
+        return std::nullopt;
+      Constant &= Affine->Max;
+      ConditionSet Result;
+      Result.Root = Affine->Root;
+      Result.Max = Affine->Max;
+      if (Def->Opcode == NdOp::INT_EQUAL || Def->Opcode == NdOp::INT_NOTEQUAL) {
+        uint64_t Match = (Constant - Affine->Offset) & Affine->Max;
+        Result.Intervals.emplace_back(Match, Match);
+        if (Def->Opcode == NdOp::INT_NOTEQUAL)
+          Result = complementCondition(std::move(Result));
+        return Result;
+      }
+      // Offset comparisons can wrap and are not one interval in the root
+      // domain. They are unnecessary for the ARM predicate idiom, so refuse
+      // them rather than weakening the proof.
+      if (Affine->Offset != 0)
+        return std::nullopt;
+      if (Def->Opcode == NdOp::INT_LESS) {
+        if (RootOnLeft) {
+          if (Constant != 0)
+            Result.Intervals.emplace_back(0, Constant - 1);
+        } else if (Constant != Affine->Max) {
+          Result.Intervals.emplace_back(Constant + 1, Affine->Max);
+        }
+      } else if (RootOnLeft) {
+        Result.Intervals.emplace_back(0, Constant);
+      } else {
+        Result.Intervals.emplace_back(Constant, Affine->Max);
+      }
+      return Result;
+    };
+    if (auto Right = traceValueVA(Def->Inputs[1]))
+      return makeAtomic(Def->Inputs[0], *Right, /*RootOnLeft=*/true);
+    if (auto Left = traceValueVA(Def->Inputs[0]))
+      return makeAtomic(Def->Inputs[1], *Left, /*RootOnLeft=*/false);
+    return std::nullopt;
+  };
+  auto conditionsEquivalent = [&](const MedVar &Left, const MedVar &Right,
+                                  bool InvertRight) {
+    auto L = conditionSet(Left, 0, {});
+    auto R = conditionSet(Right, 0, {});
+    if (!L || !R)
+      return false;
+    if (InvertRight)
+      *R = complementCondition(std::move(*R));
+    if (L->IsConstant || R->IsConstant)
+      return L->IsConstant && R->IsConstant && L->Constant == R->Constant;
+    return isExactSameVar(L->Root, R->Root) && L->Max == R->Max &&
+           L->Intervals == R->Intervals;
+  };
+
+  const MedBlock *PredicatedAccessBlock = nullptr;
+  const MedOp *PredicatedAccessLoad = nullptr;
+  const MedOp *PredicatedAccessGuard = nullptr;
+  if (TargetArch == Arch::ARM) {
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            isExactSameVar(Op.Inputs[0], AddrVar)) {
+          if (PredicatedAccessLoad) {
+            PredicatedAccessLoad = nullptr;
+            PredicatedAccessBlock = nullptr;
+            break;
+          }
+          PredicatedAccessLoad = &Op;
+          PredicatedAccessBlock = &Block;
+        }
+    if (PredicatedAccessBlock && PredicatedAccessBlock->Preds.size() == 1) {
+      const int GuardId = PredicatedAccessBlock->Preds.front();
+      const MedBlock *GuardBlock = nullptr;
+      for (const MedBlock &Block : CurMedFunc->Blocks)
+        if (Block.Id == GuardId) {
+          GuardBlock = &Block;
+          break;
+        }
+      if (GuardBlock && GuardBlock->Succs.size() == 2 &&
+          GuardBlock->Succs[1] == PredicatedAccessBlock->Id &&
+          PredicatedAccessBlock->Succs.size() == 1 &&
+          !GuardBlock->Ops.empty()) {
+        const MedOp &Guard = GuardBlock->Ops.back();
+        if (Guard.Opcode == NdOp::COND_BR && Guard.NumInputs >= 2 &&
+            Guard.Addr == PredicatedAccessLoad->Addr &&
+            PredicatedAccessBlock->StartAddr == Guard.Addr)
+          PredicatedAccessGuard = &Guard;
+      }
+    }
+  }
+
+  auto blockById = [&](int Id) -> const MedBlock * {
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      if (Block.Id == Id)
+        return &Block;
+    return nullptr;
+  };
+  auto predicatedPhiInput = [&](const PhiNode &Phi) -> std::optional<MedVar> {
+    if (!PredicatedAccessGuard || Phi.Args.size() != 2)
+      return std::nullopt;
+    const MedBlock *Merge = nullptr;
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      for (const PhiNode &Candidate : Block.Phis)
+        if (&Candidate == &Phi)
+          Merge = &Block;
+    if (!Merge)
+      return std::nullopt;
+    for (const MedBlock &GuardBlock : CurMedFunc->Blocks) {
+      if (GuardBlock.Succs.size() != 2 || GuardBlock.Succs[0] != Merge->Id ||
+          GuardBlock.Ops.empty())
+        continue;
+      const MedOp &Guard = GuardBlock.Ops.back();
+      if (Guard.Opcode != NdOp::COND_BR || Guard.NumInputs < 2)
+        continue;
+      const MedBlock *Effect = blockById(GuardBlock.Succs[1]);
+      if (!Effect || Effect->Preds.size() != 1 ||
+          Effect->Preds.front() != GuardBlock.Id || Effect->Succs.size() != 1 ||
+          Effect->Succs.front() != Merge->Id || Effect->StartAddr != Guard.Addr)
+        continue;
+      const MedVar *DirectArg = nullptr;
+      const MedVar *EffectArg = nullptr;
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        if (Pred == GuardBlock.Id)
+          DirectArg = &Arg;
+        if (Pred == Effect->Id)
+          EffectArg = &Arg;
+      }
+      if (!DirectArg || !EffectArg)
+        continue;
+      if (conditionsEquivalent(Guard.Inputs[1],
+                               PredicatedAccessGuard->Inputs[1],
+                               /*InvertRight=*/false))
+        return *EffectArg; // both effect paths require their guard to be false
+      if (conditionsEquivalent(Guard.Inputs[1],
+                               PredicatedAccessGuard->Inputs[1],
+                               /*InvertRight=*/true))
+        return *DirectArg; // this direct path is the access guard's false path
+    }
+    return std::nullopt;
+  };
+
+  bool SawPredicatedLiteralLoad = false;
+  using PredSeen = std::set<std::tuple<int, int, int, uint16_t>>;
+  std::function<std::optional<uint64_t>(const MedVar &, int, PredSeen)>
+      predicatedValue = [&](const MedVar &Value, int Depth,
+                            PredSeen Seen) -> std::optional<uint64_t> {
+    if (!PredicatedAccessGuard || Depth > 24)
+      return std::nullopt;
+    if (Value.isConst())
+      return Value.ConstVal;
+    auto Key = std::make_tuple(static_cast<int>(Value.Kind), Value.Id,
+                               Value.SSAVer, Value.Size);
+    if (!Seen.insert(Key).second)
+      return std::nullopt;
+    if (const PhiNode *Phi = findPhi(Value)) {
+      auto Selected = predicatedPhiInput(*Phi);
+      return Selected ? predicatedValue(*Selected, Depth + 1, Seen)
+                      : std::nullopt;
+    }
+    const MedOp *Def = findDef(Value);
+    if (!Def)
+      return std::nullopt;
+    if (auto Forwarded = pointerPreservingInput(*Def)) {
+      if (isExactSameVar(*Forwarded, Value))
+        return std::nullopt;
+      return predicatedValue(*Forwarded, Depth + 1, Seen);
+    }
+    if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3 &&
+        selectPreservesPointerValues(*Def)) {
+      if (conditionsEquivalent(Def->Inputs[0], PredicatedAccessGuard->Inputs[1],
+                               /*InvertRight=*/true))
+        return predicatedValue(Def->Inputs[1], Depth + 1, Seen);
+      if (conditionsEquivalent(Def->Inputs[0], PredicatedAccessGuard->Inputs[1],
+                               /*InvertRight=*/false))
+        return predicatedValue(Def->Inputs[2], Depth + 1, Seen);
+      return std::nullopt;
+    }
+    if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
+        Def->NumInputs >= 2) {
+      auto Left = predicatedValue(Def->Inputs[0], Depth + 1, Seen);
+      auto Right = predicatedValue(Def->Inputs[1], Depth + 1, Seen);
+      if (!Left || !Right)
+        return std::nullopt;
+      uint64_t Result =
+          Def->Opcode == NdOp::INT_ADD ? *Left + *Right : *Left - *Right;
+      return Result & maxForSize(Def->Output.Size);
+    }
+    if (Def->Opcode == NdOp::LOAD) {
+      bool SawLoad = false;
+      auto Folded = traceTableBaseConst(Value, 0, &SawLoad);
+      if (Folded && SawLoad) {
+        SawPredicatedLiteralLoad = true;
+        return Folded;
+      }
+    }
+    return std::nullopt;
+  };
+  std::function<std::optional<uint64_t>(const MedVar &, int, PredSeen)>
+      predicatedTableBase = [&](const MedVar &Value, int Depth,
+                                PredSeen Seen) -> std::optional<uint64_t> {
+    if (!PredicatedAccessGuard || Depth > 16)
+      return std::nullopt;
+    if (auto Folded = predicatedValue(Value, 0, {});
+        Folded && isReadOnlyTableBase(*Folded))
+      return Folded;
+    if (Value.isConst())
+      return std::nullopt;
+    auto Key = std::make_tuple(static_cast<int>(Value.Kind), Value.Id,
+                               Value.SSAVer, Value.Size);
+    if (!Seen.insert(Key).second)
+      return std::nullopt;
+    const MedOp *Def = findDef(Value);
+    if (!Def)
+      return std::nullopt;
+    if (auto Forwarded = pointerPreservingInput(*Def)) {
+      if (!isExactSameVar(*Forwarded, Value))
+        return predicatedTableBase(*Forwarded, Depth + 1, Seen);
+      return std::nullopt;
+    }
+    if ((Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB) ||
+        Def->NumInputs < 2)
+      return std::nullopt;
+    auto Left = predicatedValue(Def->Inputs[0], 0, {});
+    if (Left && isReadOnlyTableBase(*Left) &&
+        valueIsStableAddressOffset(Def->Inputs[1]))
+      return Left;
+    if (Def->Opcode == NdOp::INT_ADD) {
+      auto Right = predicatedValue(Def->Inputs[1], 0, {});
+      if (Right && isReadOnlyTableBase(*Right) &&
+          valueIsStableAddressOffset(Def->Inputs[0]))
+        return Right;
+    }
+    if (auto Nested = predicatedTableBase(Def->Inputs[0], Depth + 1, Seen);
+        Nested && valueIsStableAddressOffset(Def->Inputs[1]))
+      return Nested;
+    if (Def->Opcode == NdOp::INT_ADD)
+      if (auto Nested = predicatedTableBase(Def->Inputs[1], Depth + 1, Seen);
+          Nested && valueIsStableAddressOffset(Def->Inputs[0]))
+        return Nested;
+    return std::nullopt;
+  };
   std::function<BaseProof(const MedVar &, int, SeenSet)> walk =
       [&](const MedVar &V, int Depth, SeenSet Seen) -> BaseProof {
     if (RemainingAuditNodes == 0) {
@@ -448,7 +892,11 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       if (getVarMayRelocateConstant(V.ConstVal, V.Size) ||
           (Seg && !Seg->Data.empty() && Img->isDataAddress(V.ConstVal))) {
         SawInvalidPointerExpression = true;
-        SawTableShapedInvalidExpression = true;
+        // This resolver owns data-table provenance, not executable-relative
+        // jump-table anchors.  Keep a code address Invalid so combining it
+        // with a proven data base still fails closed, but do not make a
+        // code-only address fatal before the later code-table path can own it.
+        SawTableShapedInvalidExpression |= !Img->isCodeAddress(V.ConstVal);
         return BaseProof::Invalid;
       }
       return BaseProof::NoBase;
@@ -559,12 +1007,22 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     }
     if (!Def)
       return BaseProof::NoBase;
-    if (auto Forwarded = pointerPreservingInput(*Def))
+    if (auto Forwarded = pointerPreservingInput(*Def)) {
+      // Calling-convention lowering can retain an entry live-in as an exact
+      // identity COPY (for example `COPY EDI EDI`).  It has the same opaque
+      // scalar provenance as a parameter with no defining op.  Keep this
+      // shortcut narrower than MedVar::operator==: a width/arch change or a
+      // longer forwarding cycle may still hide independently relocatable
+      // pointer provenance and must remain fail-closed.
+      if (Def->Opcode == NdOp::COPY && Def->NumInputs == 1 &&
+          isExactSameVar(Def->Output, V) && isExactSameVar(*Forwarded, V))
+        return BaseProof::NoBase;
       // Pure forwarding changes representation, not provenance complexity.
       // Keep the structural depth budget for branching/arithmetic nodes; Seen
       // already bounds COPY/ZEXT/SUBBYTES cycles and arbitrarily long valid
       // forwarding chains therefore cannot hide a table base.
       return walk(*Forwarded, Depth, Seen);
+    }
     switch (Def->Opcode) {
     case NdOp::SELECT: {
       if (Def->NumInputs < 3)
@@ -785,6 +1243,23 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     }
   };
   BaseProof Proof = walk(BaseVar, 0, {});
+  if (Proof == BaseProof::Invalid && !AuditIncomplete &&
+      !SawTableShapedInvalidExpression && PredicatedAccessGuard) {
+    SawPredicatedLiteralLoad = false;
+    if (auto PredicatedBase = predicatedTableBase(BaseVar, 0, {});
+        PredicatedBase && SawPredicatedLiteralLoad) {
+      // The path proof selected one concrete literal-pool base and excluded
+      // every scalar PHI/SELECT arm at this LOAD. Anchor only that reachable
+      // base; retaining bases observed on unreachable arms would reintroduce
+      // the all-path ambiguity this proof just discharged.
+      Bases.clear();
+      Bases.insert(*PredicatedBase);
+      SawInvalidPointerExpression = false;
+      SawRawOriginalBase = true;
+      SawSymbolizedBase = false;
+      Proof = BaseProof::HasBase;
+    }
+  }
   auto failAmbiguousAddress = [&]() {
     if (SawAmbiguous)
       *SawAmbiguous = true;
