@@ -21,7 +21,9 @@
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/support/Diagnostic.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
@@ -90,8 +92,8 @@ const PhiNode *MedLLVMEmitter::lookupPhi(const MedVar &V) const {
 // Variable access
 //===----------------------------------------------------------------------===//
 
-bool MedLLVMEmitter::getVarSymbolizesDataConstant(uint64_t Val,
-                                                  uint16_t Size) const {
+bool MedLLVMEmitter::getVarHasDirectDataSymbolizationIntent(
+    uint64_t Val, uint16_t Size) const {
   if (!Img)
     return false;
   unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
@@ -101,7 +103,7 @@ bool MedLLVMEmitter::getVarSymbolizesDataConstant(uint64_t Val,
        !constValueUsedAsInteger(Val) && !addrInCodePtrMirrorRun(Val)) ||
       (constIsRodataEndPointer(Val) && !constValueUsedAsInteger(Val) &&
        !addrInCodePtrMirrorRun(Val)) ||
-      constIsWritableRunEndPointer(Val) || isInductionRodataStringBase(Val);
+      constIsWritableRunEndPointer(Val);
   bool Candidate =
       (IsPointerWidth && Val > limits::kMinGlobalDataAddr) || LoaderProven;
   if (!Candidate)
@@ -111,18 +113,26 @@ bool MedLLVMEmitter::getVarSymbolizesDataConstant(uint64_t Val,
   // immediate may merely land inside them. Match getVar's pointer-use gate so
   // the shared predicate describes the value that is actually emitted.
   const Segment *Seg = Img->getSegmentFor(Val);
-  // The numeric threshold only asks getVar to *try* global-data resolution.
-  // If the value is outside every image segment, or lies in an unreadable guard
-  // segment, tryResolveGlobalData returns null and getVar emits the original
-  // integer.  Keep this classifier aligned with that observable result: in
-  // particular, neither a zero-extended negative arithmetic immediate nor an
-  // integer mask that numerically collides with a guard range may become
-  // address provenance merely because its bit pattern is large.  Explicit
-  // loader proofs include the intentional anchored and one-past-end cases.
   if ((!Seg || !Seg->isReadable()) && !LoaderProven)
     return false;
   bool Collidable = Seg && (Seg->isExecutable() || isMutableDataSeg(Seg));
   return !Collidable || constUsedAsPointer(Val);
+}
+
+bool MedLLVMEmitter::getVarDirectlySymbolizesDataConstant(uint64_t Val,
+                                                          uint16_t Size) const {
+  return getVarHasDirectDataSymbolizationIntent(Val, Size) &&
+         canResolveGlobalDataConstant(Val);
+}
+
+bool MedLLVMEmitter::getVarSymbolizesDataConstant(uint64_t Val,
+                                                  uint16_t Size) const {
+  if (getVarDirectlySymbolizesDataConstant(Val, Size))
+    return true;
+  // Induction-string closure deliberately makes every arm of one walked
+  // string pointer share the canonical rodata run.  Its recognizer asks the
+  // direct classifier above, so this final closure cannot recurse into itself.
+  return isInductionRodataStringBase(Val) && canResolveGlobalDataConstant(Val);
 }
 
 bool MedLLVMEmitter::getVarMayRelocateConstant(uint64_t Val,
@@ -206,6 +216,16 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // i386 PIC stack table of node pointers mix two addressing models and
     // corrupt the mirror-relative load (the head nodes raw, the rodata tail
     // recompiled).
+    auto failUnresolvableDataConstant = [&]() -> llvm::Value * {
+      if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+        syncError() << "med_llvm_emitter: relocatable data constant 0x"
+                    << llvm::utohexstr(V.ConstVal) << " in " << CurMedFunc->Name
+                    << " has no global-data materialization route; refusing "
+                       "stale-address fallback\n";
+      if (!FatalCodePointerResolution)
+        FatalDataPointerResolution = true;
+      return llvm::UndefValue::get(sizeToType(V.Size));
+    };
     if (getVarSymbolizesDataConstant(V.ConstVal, V.Size)) {
       // A constant that falls in an EXECUTABLE segment is a genuine pointer
       // only when it actually reaches a memory-access address — a
@@ -230,6 +250,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       // via RelocDataAddrs above, hence unaffected.
       if (auto *Global = tryResolveGlobalData(V.ConstVal))
         return Builder.CreatePtrToInt(Global, sizeToType(V.Size), "gdata");
+      return failUnresolvableDataConstant();
     }
     // A constant equal to a function entry whose address was taken (recorded by
     // the loader/lift as a code reference, or above the heuristic VA threshold)
@@ -262,9 +283,11 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // &G broadcast into a SIMD lane (clang's `tab[i]=&G` vectorization) carries
     // a relocatable @G that survives relinking instead of the stale original
     // VA.
-    if (symbolizesWritableRelocPtr(V.ConstVal, V.Size))
+    if (symbolizesWritableRelocPtr(V.ConstVal, V.Size)) {
       if (auto *Global = tryResolveGlobalData(V.ConstVal))
         return Builder.CreatePtrToInt(Global, sizeToType(V.Size), "wgdata");
+      return failUnresolvableDataConstant();
+    }
     // A pointer-SELECT peer of an already-symbolized same-segment global —
     // `cond ? &A : &B` where &B relocates but &A is a PC-relative-only (AArch64
     // ADRP) sibling the loader left out of WritableRelocDataAddrs.  Symbolizing
@@ -272,10 +295,32 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // used-as-pointer
     // + not a walked base).
     if (V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz)
-      if (symbolizesSelectPeer(V.ConstVal))
+      if (symbolizesSelectPeer(V.ConstVal)) {
         if (auto *Global = tryResolveGlobalData(V.ConstVal))
           return Builder.CreatePtrToInt(Global, sizeToType(V.Size),
                                         "wgdatapeer");
+        return failUnresolvableDataConstant();
+      }
+    if (!canResolveGlobalDataConstant(V.ConstVal)) {
+      const Segment *Seg = Img ? Img->getSegmentFor(V.ConstVal) : nullptr;
+      bool AnchoredIntent = Img && Img->RodataAnchorSeg.count(V.ConstVal) &&
+                            !constValueUsedAsInteger(V.ConstVal) &&
+                            !addrInCodePtrMirrorRun(V.ConstVal);
+      bool ReadableDirectIntent =
+          Seg && Seg->isReadable() &&
+          getVarHasDirectDataSymbolizationIntent(V.ConstVal, V.Size) &&
+          (constUsedAsPointer(V.ConstVal) ||
+           (Img && Img->RelocDataAddrs.count(V.ConstVal)));
+      bool RodataEndIntent = constIsRodataEndPointer(V.ConstVal) &&
+                             !constValueUsedAsInteger(V.ConstVal) &&
+                             !addrInCodePtrMirrorRun(V.ConstVal);
+      bool WritableIntent =
+          Seg && Seg->isReadable() &&
+          writableRelocPtrHasSymbolizationIntent(V.ConstVal, V.Size);
+      if (AnchoredIntent || ReadableDirectIntent || RodataEndIntent ||
+          WritableIntent)
+        return failUnresolvableDataConstant();
+    }
     // Materialize the constant's raw Size-byte bit pattern.  V.ConstVal carries
     // the value in its low Size*8 bits, so a narrow constant whose top bit is
     // set (e.g. a 4-byte 0x9E3779B9) is larger than the signed range of that

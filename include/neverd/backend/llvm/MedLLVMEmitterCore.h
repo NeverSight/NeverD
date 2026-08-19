@@ -285,9 +285,21 @@ private:
   llvm::Value *getVar(const MedVar &V, llvm::IRBuilder<> &Builder);
   /// Return the exact primary data-address model getVar applies before
   /// materializing a constant: true means ptrtoint(@global), false means the
-  /// original numeric VA. Address resolvers use this same predicate so a
+  /// original numeric VA unless trusted pointer intent requires emission to
+  /// fail closed. Address resolvers use this same predicate so a
   /// forwarded/COPY arm is never classified merely by its SSA shape.
   bool getVarSymbolizesDataConstant(uint64_t Val, uint16_t Size) const;
+  /// The non-recursive core of getVarSymbolizesDataConstant.  This excludes
+  /// induction-string closure so the induction recognizer can ask how a
+  /// constant would otherwise be emitted without recursively justifying
+  /// itself.
+  bool getVarDirectlySymbolizesDataConstant(uint64_t Val, uint16_t Size) const;
+  /// Pointer intent before the materialization-route check.  This is kept
+  /// separate so getVar can fail closed for a trusted mapped/anchored pointer
+  /// whose required global cannot be built, while ignoring stray loader hints
+  /// for unmapped or unreadable scalar values.
+  bool getVarHasDirectDataSymbolizationIntent(uint64_t Val,
+                                              uint16_t Size) const;
   /// True when getVar may replace the original numeric bit pattern with a
   /// relocatable data/function address.  Constant control folding must stop at
   /// such a leaf: comparisons on original image VAs are not invariant after
@@ -421,6 +433,26 @@ private:
 
   llvm::Constant *tryResolveGlobalData(uint64_t Addr,
                                        uint16_t DataSizeHint = 0);
+
+  /// True when tryResolveGlobalData has a concrete address-local route for
+  /// \p Addr. Loader relocation evidence identifies pointer intent, but it does
+  /// not override mapping permissions, missing bytes, or segment-embedding
+  /// limits. Context-sensitive routes may impose a stronger canonical-global
+  /// invariant and fail closed. Keep classification and materialization on
+  /// this contract so a value predicted as relocatable never silently falls
+  /// back to its stale VA.
+  bool canResolveGlobalDataConstant(uint64_t Addr) const;
+
+  /// Compute the exact read-only segment run embedRodataRun would materialize.
+  /// Returns false when \p SegVA is not an eligible segment start or the run
+  /// cannot be represented by one bounded global.
+  bool rodataRunBounds(uint64_t SegVA, uint64_t &RunStart,
+                       uint64_t &RunEnd) const;
+
+  /// Compute the exact writable segment run embedWritableRun would
+  /// materialize. Returns false for non-mutable or oversized segments.
+  bool writableRunBounds(uint64_t SegVA, uint64_t &RunStart,
+                         uint64_t &RunEnd) const;
 
   /// Embed the maximal contiguous run of read-only, non-executable data
   /// segments containing the segment at \p SegVA as one internal global,
@@ -902,6 +934,10 @@ private:
   /// >= pointer width and !constValueUsedAsInteger so a sub-word or non-pointer
   /// integer that merely equals a reloc-target VA stays an integer.
   bool symbolizesWritableRelocPtr(uint64_t Val, uint16_t Size) const;
+  /// The writable relocation predicate before checking whether its owning
+  /// mutable run fits the embedding contract.
+  bool writableRelocPtrHasSymbolizationIntent(uint64_t Val,
+                                              uint16_t Size) const;
 
   /// True when some OTHER constant in the same writable segment as \p Val is a
   /// proven writable relocation target that getVar already symbolizes to a
@@ -1330,9 +1366,10 @@ private:
   // Sticky hard failure: a relocation-proven executable pointer must never
   // degrade to an embedded original VA.  emit() discards the module when set.
   bool FatalCodePointerResolution = false;
-  // Sticky hard failure for a load address that mixes a proven original-image
-  // data pointer with another feasible, unproved PHI input. Mutable because
-  // the address-decomposition helpers are logically const over MedIR while
+  // Sticky hard failure for any data-address contract violation: mixed or
+  // incomplete provenance, an unmaterializable trusted pointer/relocation, or
+  // a canonical run that cannot be represented. Mutable because some
+  // address-decomposition helpers are logically const over MedIR while
   // recording an emission failure.
   mutable bool FatalDataPointerResolution = false;
   std::map<uint64_t, llvm::Constant *> GlobalDataCache;

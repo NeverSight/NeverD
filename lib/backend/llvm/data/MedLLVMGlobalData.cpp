@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/Diagnostic.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-global-data"
 #include "neverd/ArchSupport.h"
@@ -44,6 +45,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -57,9 +59,73 @@ namespace neverd {
 // Global data resolution
 //===----------------------------------------------------------------------===//
 
+bool MedLLVMEmitter::canResolveGlobalDataConstant(uint64_t Addr) const {
+  if (!Img || Addr == 0)
+    return false;
+
+  // An anchored folded base has an explicit owner.  If that owner cannot be
+  // embedded, resolving the same numeric value through a different segment
+  // would silently change the relocation's meaning.
+  if (auto AIt = Img->RodataAnchorSeg.find(Addr);
+      AIt != Img->RodataAnchorSeg.end()) {
+    uint64_t RunStart = 0, RunEnd = 0;
+    return rodataRunBounds(AIt->second, RunStart, RunEnd);
+  }
+
+  const Segment *Seg = Img->getSegmentFor(Addr);
+  if (!Seg) {
+    // One-past-end pointers are the only intentional unmapped constants.  They
+    // are valid only when the owning run itself can be materialized.
+    for (const auto &S : Img->Segments) {
+      if (S.isExecutable() || S.isWritable() || S.Data.empty() ||
+          S.Data.size() > std::numeric_limits<uint64_t>::max() - S.VA ||
+          Addr != S.VA + S.Data.size() || segHasPtrRelocSlots(&S))
+        continue;
+      uint64_t RunStart = 0, RunEnd = 0;
+      if (rodataRunBounds(S.VA, RunStart, RunEnd))
+        return true;
+    }
+    for (const auto &S : Img->Segments) {
+      if (!isMutableDataSeg(&S))
+        continue;
+      uint64_t Size = S.Size ? S.Size : S.Data.size();
+      if (Size > std::numeric_limits<uint64_t>::max() - S.VA ||
+          Addr != S.VA + Size)
+        continue;
+      uint64_t RunStart = 0, RunEnd = 0;
+      if (writableRunBounds(S.VA, RunStart, RunEnd))
+        return true;
+    }
+    return false;
+  }
+  if (!Seg->isReadable())
+    return false;
+
+  // Objective-C runtime objects intentionally remain external identities and
+  // therefore do not require file-backed bytes in the rebuilt module.
+  if (Img->isMachO()) {
+    const Section *Sec = Img->getSectionFor(Addr);
+    if (Sec && (llvm::StringRef(Sec->Name).starts_with(
+                    section_names::macho::ObjCMetadataPrefix) ||
+                Sec->Name == section_names::macho::CfString))
+      return true;
+  }
+
+  if (isMutableDataSeg(Seg)) {
+    uint64_t RunStart = 0, RunEnd = 0;
+    return writableRunBounds(Seg->VA, RunStart, RunEnd);
+  }
+
+  // Pointer-table mirrors and ordinary read-only/executable data both need an
+  // actual byte at Addr.  Mirror construction may still discover a corrupt
+  // relocation target and fail closed via FatalCodePointerResolution, but it
+  // can never legitimately fall back to an unmapped or byte-less address.
+  return Addr - Seg->VA < Seg->Data.size();
+}
+
 llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
                                                      uint16_t DataSizeHint) {
-  if (!Img || Addr == 0)
+  if (!canResolveGlobalDataConstant(Addr))
     return nullptr;
 
   auto CacheIt = GlobalDataCache.find(Addr);
@@ -285,8 +351,9 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
                                 Img->DataPtrRelocSlots.count(Addr) != 0 ||
                                 Img->ImportPtrSlots.count(Addr) != 0 ||
                                 Img->DyldBindSlots.count(Addr) != 0;
+  bool IsInductionStringBase = isInductionRodataStringBase(Addr);
   if (IsString && StrLen > 0 && AtStringStart && !SizedObjectBeyondString &&
-      !IsRelocatedPointerSlot && !isInductionRodataStringBase(Addr)) {
+      !IsRelocatedPointerSlot && !IsInductionStringBase) {
     std::string StrVal(reinterpret_cast<const char *>(Start), StrLen);
     auto *StrConst = llvm::ConstantDataArray::getString(*Ctx, StrVal, true);
     // In mergeable (sharded) mode the name must be a pure function of the
@@ -354,6 +421,20 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
           RunGV->getValueType(), RunGV, Indices);
       GlobalDataCache[Addr] = GEP;
       return GEP;
+    }
+    // Every materialization of a walked C-string pointer must name one
+    // canonical global.  A suffix/per-constant copy would appear valid near
+    // Addr but the recurrent pointer would eventually leave that copy, and
+    // sibling PHI arms could name different objects.  Reject the module when
+    // the complete read-only run exceeds the embedding contract.
+    if (IsInductionStringBase) {
+      if (!FatalDataPointerResolution)
+        syncError() << "med_llvm_emitter: induction string constant 0x"
+                    << llvm::utohexstr(Addr) << " in " << CurMedFunc->Name
+                    << " has no canonical read-only run; refusing "
+                       "stale-address fallback\n";
+      FatalDataPointerResolution = true;
+      return nullptr;
     }
   }
 

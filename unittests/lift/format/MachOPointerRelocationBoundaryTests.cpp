@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -2942,6 +2943,115 @@ MedFunc makePointerTableNonValueRoleLookup(Arch TargetArch,
   return Func;
 }
 
+MedFunc makeFoldedHighPointerTableLookup(Arch TargetArch) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = TargetArch == Arch::AArch64 ? "folded_high_pointer_table_arm64"
+                                          : "folded_high_pointer_table_x86_64";
+  Func.ReturnType = NdType::makeInt(2);
+
+  MedVar Left = makeTemp(90, TRI.PointerSize);
+  MedVar Right = makeTemp(91, TRI.PointerSize);
+  MedVar Address = makeTemp(92, TRI.PointerSize);
+  MedVar Element = makeTemp(93, 2);
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 0x14;
+
+  // Each leaf is an unmapped ordinary integer.  Their wrapping ADD result is
+  // the 0x1200 pointer-table address; provenance must classify the values
+  // getVar actually emits, not apply the address threshold to the separately
+  // folded result.
+  MedOp MaterializeLeft;
+  MaterializeLeft.Opcode = NdOp::COPY;
+  MaterializeLeft.Output = Left;
+  MaterializeLeft.addInput(
+      MedVar::makeConst(uint64_t(-0x1000), TRI.PointerSize));
+  Entry.Ops.push_back(std::move(MaterializeLeft));
+  MedOp MaterializeRight;
+  MaterializeRight.Opcode = NdOp::COPY;
+  MaterializeRight.Output = Right;
+  MaterializeRight.addInput(MedVar::makeConst(0x2200, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(MaterializeRight));
+  MedOp FormAddress;
+  FormAddress.Opcode = NdOp::INT_ADD;
+  FormAddress.Output = Address;
+  FormAddress.addInput(Left);
+  FormAddress.addInput(Right);
+  Entry.Ops.push_back(std::move(FormAddress));
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = Element;
+  Load.addInput(Address);
+  Entry.Ops.push_back(std::move(Load));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Entry.Ops.push_back(std::move(Return));
+  Func.Blocks.push_back(std::move(Entry));
+  return Func;
+}
+
+MedFunc makePointerEndComparison(llvm::StringRef Name, Arch TargetArch,
+                                 uint64_t Base, uint64_t End) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = Name.str();
+  Func.ReturnType = NdType::makeInt(1);
+  MedVar BaseValue = makeTemp(94, TRI.PointerSize);
+  MedVar Byte = makeTemp(95, 1);
+  MedVar BeforeEnd = makeTemp(96, 1);
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 0x10;
+  MedOp MaterializeBase;
+  MaterializeBase.Opcode = NdOp::COPY;
+  MaterializeBase.Output = BaseValue;
+  MaterializeBase.addInput(MedVar::makeConst(Base, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(MaterializeBase));
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = Byte;
+  Load.addInput(BaseValue);
+  Entry.Ops.push_back(std::move(Load));
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_LESS;
+  Compare.Output = BeforeEnd;
+  Compare.addInput(BaseValue);
+  Compare.addInput(MedVar::makeConst(End, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(Compare));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(BeforeEnd);
+  Entry.Ops.push_back(std::move(Return));
+  Func.Blocks.push_back(std::move(Entry));
+  return Func;
+}
+
 MedFunc makeDeepForwardedLowTableLookup(Arch TargetArch) {
   MedFunc Func = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
   Func.Name = TargetArch == Arch::AArch64 ? "deep_forwarded_low_table_arm64"
@@ -5369,46 +5479,289 @@ TEST(MachOLLVMDataPointerBoundary,
 TEST(MachOLLVMDataPointerBoundary,
      KeepsMaskedScalarIndexPhiOutOfTableProvenance) {
   constexpr uint64_t Mask32 = 0xffffffffULL;
-  BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
-  addMachOPageZero(Image);
-  Image.RelocDataAddrs.insert(SpilledConstTableVA);
-  MedFunc Lookup = makeMaskedScalarPhiIndexLookup();
-  llvm::LLVMContext Context;
-  testing::internal::CaptureStderr();
-  auto Module = MedLLVMEmitter().emit(
-      {Lookup}, Context, "macho-masked-scalar-phi-table-index", Arch::AArch64,
-      {}, &Image, BinaryFormat::MachO);
-  std::string Diagnostic = testing::internal::GetCapturedStderr();
-  if (!Module) {
-    EXPECT_NE(
-        Diagnostic.find("ambiguous reachable read-only table-base PHI X10.1"),
-        std::string::npos)
+  struct Scenario {
+    bool AddPageZero;
+    bool AddFalseLoaderEvidence;
+    const char *Name;
+  };
+  const Scenario Scenarios[] = {
+      {true, false, "pagezero"},
+      {true, true, "pagezero-with-loader-evidence"},
+      {false, true, "unmapped-with-loader-evidence"},
+  };
+
+  for (const Scenario &Case : Scenarios) {
+    SCOPED_TRACE(Case.Name);
+    BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+    if (Case.AddPageZero)
+      addMachOPageZero(Image);
+    Image.RelocDataAddrs.insert(SpilledConstTableVA);
+    if (Case.AddFalseLoaderEvidence)
+      Image.RelocDataAddrs.insert(Mask32);
+    MedFunc Lookup = makeMaskedScalarPhiIndexLookup();
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context,
+        std::string("macho-masked-scalar-phi-table-index-") + Case.Name,
+        Arch::AArch64, {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    if (!Module) {
+      EXPECT_NE(
+          Diagnostic.find("ambiguous reachable read-only table-base PHI X10.1"),
+          std::string::npos)
+          << Diagnostic;
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+      ADD_FAILURE() << "scalar mask was promoted to address provenance";
+      continue;
+    }
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+
+    bool SawIntegerMask = false;
+    for (const llvm::BasicBlock &Block : *Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (const auto *And =
+                llvm::dyn_cast<llvm::BinaryOperator>(&Instruction);
+            And && And->getOpcode() == llvm::Instruction::And)
+          for (const llvm::Value *Operand : And->operands())
+            if (const auto *Integer =
+                    llvm::dyn_cast<llvm::ConstantInt>(Operand))
+              SawIntegerMask |= Integer->getZExtValue() == Mask32;
+    EXPECT_TRUE(SawIntegerMask);
+    EXPECT_EQ(Module->getNamedGlobal(makeNdDataSymbol(Mask32)), nullptr);
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsUnmaterializableReadOnlyAndWritableRelocationEvidence) {
+  constexpr uint64_t Mask32 = 0xffffffffULL;
+  struct Scenario {
+    bool AddPageZero;
+    bool WritableEvidence;
+    const char *Name;
+  };
+  const Scenario Scenarios[] = {
+      {false, false, "unmapped-readonly"},
+      {true, false, "pagezero-readonly"},
+      {false, true, "unmapped-writable"},
+      {true, true, "pagezero-writable"},
+  };
+
+  for (const Scenario &Case : Scenarios) {
+    SCOPED_TRACE(Case.Name);
+    BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+    if (Case.AddPageZero)
+      addMachOPageZero(Image);
+    if (Case.WritableEvidence)
+      Image.WritableRelocDataAddrs.insert(Mask32);
+    else
+      Image.RelocDataAddrs.insert(Mask32);
+
+    MedFunc Caller = makePointerCall(
+        std::string("unmaterializable-loader-evidence-") + Case.Name,
+        ImportStubVA, {MedVar::makeConst(Mask32, 8)});
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    auto Module = Emitter.emit(
+        {Caller}, Context,
+        std::string("macho-unmaterializable-loader-evidence-") + Case.Name,
+        Arch::AArch64, {{ImportStubVA, "_getopt_long"}}, &Image,
+        BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Caller.Name);
+    ASSERT_NE(Function, nullptr);
+    std::vector<llvm::CallInst *> Calls = callsIn(*Function);
+    ASSERT_EQ(Calls.size(), 1u);
+    const auto *Argument =
+        llvm::dyn_cast<llvm::ConstantInt>(Calls.front()->getArgOperand(0));
+    ASSERT_NE(Argument, nullptr);
+    EXPECT_EQ(Argument->getZExtValue(), Mask32);
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::symbolizesDataConstant(
+        Emitter, Mask32, /*Size=*/8));
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::mayRelocateConstant(Emitter, Mask32,
+                                                                /*Size=*/8));
+    EXPECT_EQ(Module->getNamedGlobal(makeNdDataSymbol(Mask32)), nullptr);
+  }
+
+  // A readable segment range can be larger than its file-backed bytes.  A
+  // scalar that merely lands in that sparse tail is still an integer: mapping
+  // permission alone is not trusted pointer intent and must not turn the new
+  // fail-closed contract into a regression.
+  BinaryImage SparseImage = makeSpilledConstTableImage(Arch::AArch64);
+  Segment Sparse;
+  Sparse.Name = "__SPARSE_CONST";
+  Sparse.VA = 0xfff00000ULL;
+  Sparse.Size = 0x200000;
+  Sparse.Flags = SegmentFlags::Readable;
+  SparseImage.Segments.push_back(std::move(Sparse));
+  MedFunc SparseCaller =
+      makePointerCall("sparse_segment_scalar", ImportStubVA,
+                      {MedVar::makeConst(Mask32, /*Size=*/8)});
+  llvm::LLVMContext SparseContext;
+  MedLLVMEmitter SparseEmitter;
+  auto SparseModule = SparseEmitter.emit(
+      {SparseCaller}, SparseContext, "macho-sparse-segment-scalar",
+      Arch::AArch64, {{ImportStubVA, "_getopt_long"}}, &SparseImage,
+      BinaryFormat::MachO);
+  ASSERT_NE(SparseModule, nullptr);
+  expectValidModule(*SparseModule);
+  llvm::Function *SparseFunction = SparseModule->getFunction(SparseCaller.Name);
+  ASSERT_NE(SparseFunction, nullptr);
+  std::vector<llvm::CallInst *> SparseCalls = callsIn(*SparseFunction);
+  ASSERT_EQ(SparseCalls.size(), 1u);
+  const auto *SparseArgument =
+      llvm::dyn_cast<llvm::ConstantInt>(SparseCalls.front()->getArgOperand(0));
+  ASSERT_NE(SparseArgument, nullptr);
+  EXPECT_EQ(SparseArgument->getZExtValue(), Mask32);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::mayRelocateConstant(
+      SparseEmitter, Mask32, /*Size=*/8));
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForTrustedButUnmaterializableDataPointers) {
+  {
+    BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+    Image.RodataAnchorSeg[SpilledConstTableVA] = 0xdead0000;
+    MedFunc Caller =
+        makePointerCall("invalid_rodata_anchor", ImportStubVA,
+                        {MedVar::makeConst(SpilledConstTableVA, /*Size=*/8)});
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Caller}, Context, "macho-invalid-rodata-anchor", Arch::AArch64,
+        {{ImportStubVA, "_getopt_long"}}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module, nullptr);
+    EXPECT_NE(Diagnostic.find("no global-data materialization route"),
+              std::string::npos)
         << Diagnostic;
     EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
               std::string::npos)
         << Diagnostic;
   }
-  ASSERT_NE(Module, nullptr) << Diagnostic;
-  expectValidModule(*Module);
 
-  llvm::Function *Function = Module->getFunction(Lookup.Name);
-  ASSERT_NE(Function, nullptr);
-  const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
-  ASSERT_NE(TableLoad, nullptr);
-  std::set<const llvm::Value *> Seen;
-  EXPECT_TRUE(
-      valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  {
+    constexpr uint64_t WritableBase = 0x200000000ULL;
+    BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+    Segment Writable;
+    Writable.Name = "__OVERSIZED_DATA";
+    Writable.VA = WritableBase;
+    Writable.Size = limits::kMaxSingleGlobalEmbedLen + 1;
+    Writable.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Image.Segments.push_back(std::move(Writable));
+    Image.WritableRelocDataAddrs.insert(WritableBase);
+    MedFunc Caller =
+        makePointerCall("oversized_writable_pointer", ImportStubVA,
+                        {MedVar::makeConst(WritableBase, /*Size=*/8)});
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Caller}, Context, "macho-oversized-writable-pointer", Arch::AArch64,
+        {{ImportStubVA, "_getopt_long"}}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module, nullptr);
+    EXPECT_NE(Diagnostic.find("no global-data materialization route"),
+              std::string::npos)
+        << Diagnostic;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
 
-  bool SawIntegerMask = false;
-  for (const llvm::BasicBlock &Block : *Function)
-    for (const llvm::Instruction &Instruction : Block)
-      if (const auto *And = llvm::dyn_cast<llvm::BinaryOperator>(&Instruction);
-          And && And->getOpcode() == llvm::Instruction::And)
-        for (const llvm::Value *Operand : And->operands())
-          if (const auto *Integer = llvm::dyn_cast<llvm::ConstantInt>(Operand))
-            SawIntegerMask |= Integer->getZExtValue() == Mask32;
-  EXPECT_TRUE(SawIntegerMask);
-  EXPECT_EQ(Module->getNamedGlobal(makeNdDataSymbol(Mask32)), nullptr);
+  {
+    constexpr uint64_t RodataBase = 0x300000000ULL;
+    BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+    Segment Rodata;
+    Rodata.Name = "__OVERSIZED_CONST";
+    Rodata.VA = RodataBase;
+    Rodata.Size = limits::kMaxSingleGlobalEmbedLen + 1;
+    Rodata.FileSz = Rodata.Size;
+    Rodata.Flags = SegmentFlags::Readable;
+    Rodata.Data.assign(static_cast<size_t>(Rodata.Size), 0);
+    const uint64_t RodataEnd = Rodata.VA + Rodata.Data.size();
+    Image.Segments.push_back(std::move(Rodata));
+    MedFunc Compare = makePointerEndComparison(
+        "oversized_rodata_end", Arch::AArch64, RodataBase, RodataEnd);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module =
+        MedLLVMEmitter().emit({Compare}, Context, "macho-oversized-rodata-end",
+                              Arch::AArch64, {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module, nullptr);
+    EXPECT_NE(Diagnostic.find("no global-data materialization route"),
+              std::string::npos)
+        << Diagnostic;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+
+  {
+    constexpr uint64_t WritableBase = 0x210000000ULL;
+    BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+    Segment Writable;
+    Writable.Name = "__OVERSIZED_DIRECT_DATA";
+    Writable.VA = WritableBase;
+    Writable.Size = limits::kMaxSingleGlobalEmbedLen + 1;
+    Writable.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    const uint64_t WritableEnd = Writable.VA + Writable.Size;
+    Image.Segments.push_back(std::move(Writable));
+    MedFunc Access = makePointerEndComparison(
+        "oversized_writable_access", Arch::AArch64, WritableBase, WritableEnd);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Access}, Context, "macho-oversized-writable-access", Arch::AArch64, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module, nullptr);
+    EXPECT_NE(Diagnostic.find("no global-data materialization route"),
+              std::string::npos)
+        << Diagnostic;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedWhenInductionStringCannotUseOneCanonicalRun) {
+  BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+  Segment &Rodata = Image.Segments.front();
+  Rodata.Name = "__OVERSIZED_CONST";
+  Rodata.Size = limits::kMaxSingleGlobalEmbedLen + 1;
+  Rodata.FileSz = Rodata.Size;
+  Rodata.Flags = SegmentFlags::Readable;
+  Rodata.Data.assign(static_cast<size_t>(Rodata.Size), 0);
+  constexpr char WalkedString[] = "walked-string";
+  std::memcpy(Rodata.Data.data() + (SpilledConstTableVA - Rodata.VA),
+              WalkedString, sizeof(WalkedString));
+
+  MedFunc Lookup = makeRecurrentConstTableLookup(Arch::AArch64);
+  llvm::LLVMContext Context;
+  testing::internal::CaptureStderr();
+  auto Module = MedLLVMEmitter().emit(
+      {Lookup}, Context, "macho-oversized-induction-string", Arch::AArch64, {},
+      &Image, BinaryFormat::MachO);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(Module, nullptr);
+  EXPECT_NE(Diagnostic.find("canonical read-only run"), std::string::npos)
+      << Diagnostic;
+  EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+            std::string::npos)
+      << Diagnostic;
 }
 
 TEST(MachOLLVMDataPointerBoundary, AllowsSelfCopyScalarTableOffset) {
@@ -6055,6 +6408,58 @@ TEST(MachOLLVMDataPointerBoundary,
   llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
   ASSERT_NE(Mirror, nullptr);
   EXPECT_TRUE(Mirror->hasInitializer());
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForUnmaterializableRelocationProvenTableTarget) {
+  constexpr uint64_t Mask32 = 0xffffffffULL;
+  BinaryImage Image = makeLLVMImage();
+  addMachOPageZero(Image);
+  writeObject(Image.Segments[1].Data, /*Off=*/16, Mask32);
+  Image.DataPtrRelocSlots.erase(DataVA + 24);
+
+  MedFunc Lookup = makeRecurrentAbsolutePointerTableLoad();
+  llvm::LLVMContext Context;
+  testing::internal::CaptureStderr();
+  auto Module = MedLLVMEmitter().emit(
+      {Lookup}, Context, "macho-unmaterializable-pointer-table-target",
+      Arch::AArch64, {}, &Image, BinaryFormat::MachO);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(Module, nullptr);
+  EXPECT_NE(Diagnostic.find("relocation-proven data pointer"),
+            std::string::npos)
+      << Diagnostic;
+  EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+            std::string::npos)
+      << Diagnostic;
+}
+
+TEST(MachOLLVMDataPointerBoundary, PreservesNullRelocationProvenTableTarget) {
+  BinaryImage Image = makeLLVMImage();
+  const uint64_t NullTarget = 0;
+  writeObject(Image.Segments[1].Data, /*Off=*/16, NullTarget);
+  Image.DataPtrRelocSlots.erase(DataVA + 24);
+
+  MedFunc Lookup = makeRecurrentAbsolutePointerTableLoad();
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Lookup}, Context, "macho-null-pointer-table-target", Arch::AArch64, {},
+      &Image, BinaryFormat::MachO);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+  const std::string MirrorName =
+      (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str();
+  llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
+  ASSERT_NE(Mirror, nullptr);
+  ASSERT_TRUE(Mirror->hasInitializer());
+  const auto *Initializer =
+      llvm::dyn_cast<llvm::ConstantStruct>(Mirror->getInitializer());
+  ASSERT_NE(Initializer, nullptr);
+  ASSERT_GE(Initializer->getNumOperands(), 3u);
+  const auto *NullField =
+      llvm::dyn_cast<llvm::ConstantInt>(Initializer->getOperand(2));
+  ASSERT_NE(NullField, nullptr);
+  EXPECT_TRUE(NullField->isZero());
 }
 
 TEST(MachOLLVMDataPointerBoundary,
@@ -7029,6 +7434,46 @@ TEST(MachOLLVMDataPointerBoundary,
                 std::string::npos)
           << Diagnostic;
     }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ClassifiesActualLeavesOfFoldedHighPointerTableAddress) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    addThresholdCrossingConstTableRun(Image);
+    auto LowRun = std::find_if(
+        Image.Segments.begin(), Image.Segments.end(), [](const Segment &Seg) {
+          return SymbolizedSameRunTableVA >= Seg.VA &&
+                 SymbolizedSameRunTableVA < Seg.VA + Seg.Data.size();
+        });
+    ASSERT_NE(LowRun, Image.Segments.end());
+    writeObject(LowRun->Data, SymbolizedSameRunTableVA - LowRun->VA,
+                SpilledConstTableVA);
+    Image.DataPtrRelocSlots.insert(SymbolizedSameRunTableVA);
+
+    MedFunc Lookup = makeFoldedHighPointerTableLookup(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-folded-high-pointer-table", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findNonAllocaI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    const std::string MirrorName =
+        (kNdCodePtrPrefix + llvm::utohexstr(0x800)).str();
+    llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
+    ASSERT_NE(Mirror, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesTarget(TableLoad->getPointerOperand(), Mirror, Seen));
+  }
 }
 
 TEST(MachOLLVMDataPointerBoundary,

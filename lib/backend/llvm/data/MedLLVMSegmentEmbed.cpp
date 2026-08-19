@@ -37,8 +37,10 @@
 #include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -48,10 +50,15 @@
 
 namespace neverd {
 
-std::pair<llvm::GlobalVariable *, uint64_t>
-MedLLVMEmitter::embedRodataRun(uint64_t SegVA) {
+static bool collectRodataRun(const BinaryImage *Img, uint64_t SegVA,
+                             std::vector<const Segment *> &Run,
+                             uint64_t &RunStart, uint64_t &RunEnd) {
+  Run.clear();
+  RunStart = 0;
+  RunEnd = 0;
   if (!Img)
-    return {nullptr, 0};
+    return false;
+
   // Collect read-only, non-executable segments that carry data, sorted by VA.
   std::vector<const Segment *> Ro;
   for (const auto &S : Img->Segments)
@@ -60,6 +67,7 @@ MedLLVMEmitter::embedRodataRun(uint64_t SegVA) {
       Ro.push_back(&S);
   std::sort(Ro.begin(), Ro.end(),
             [](const Segment *A, const Segment *B) { return A->VA < B->VA; });
+
   size_t Idx = Ro.size();
   for (size_t I = 0; I < Ro.size(); ++I)
     if (Ro[I]->VA == SegVA) {
@@ -67,31 +75,60 @@ MedLLVMEmitter::embedRodataRun(uint64_t SegVA) {
       break;
     }
   if (Idx == Ro.size())
-    return {nullptr, 0};
+    return false;
+
   // Extend over neighbours separated only by a small alignment gap; a larger
-  // gap means a distinct region that must not be merged.
-  auto adjacent = [](const Segment *Prev, const Segment *Next) {
-    uint64_t PrevEnd = Prev->VA + Prev->Data.size();
-    return Next->VA >= PrevEnd && Next->VA - PrevEnd <= 16;
+  // gap means a distinct region that must not be merged. Reject overflowing
+  // segment ranges rather than letting their wrapped end look adjacent.
+  auto endOf = [](const Segment *S, uint64_t &End) {
+    if (S->Data.size() > std::numeric_limits<uint64_t>::max() - S->VA)
+      return false;
+    End = S->VA + static_cast<uint64_t>(S->Data.size());
+    return true;
+  };
+  auto adjacent = [&](const Segment *Prev, const Segment *Next) {
+    uint64_t PrevEnd = 0;
+    return endOf(Prev, PrevEnd) && Next->VA >= PrevEnd &&
+           Next->VA - PrevEnd <= 16;
   };
   size_t Lo = Idx, Hi = Idx;
   while (Lo > 0 && adjacent(Ro[Lo - 1], Ro[Lo]))
     --Lo;
   while (Hi + 1 < Ro.size() && adjacent(Ro[Hi], Ro[Hi + 1]))
     ++Hi;
-  uint64_t RunStart = Ro[Lo]->VA;
-  uint64_t RunEnd = Ro[Hi]->VA + Ro[Hi]->Data.size();
-  uint64_t RunLen64 = RunEnd - RunStart;
-  if (RunLen64 == 0 || RunLen64 > limits::kMaxSingleGlobalEmbedLen)
+
+  uint64_t End = 0;
+  if (!endOf(Ro[Hi], End) || End <= Ro[Lo]->VA ||
+      End - Ro[Lo]->VA > limits::kMaxSingleGlobalEmbedLen)
+    return false;
+  RunStart = Ro[Lo]->VA;
+  RunEnd = End;
+  Run.assign(Ro.begin() + static_cast<std::ptrdiff_t>(Lo),
+             Ro.begin() + static_cast<std::ptrdiff_t>(Hi + 1));
+  return true;
+}
+
+bool MedLLVMEmitter::rodataRunBounds(uint64_t SegVA, uint64_t &RunStart,
+                                     uint64_t &RunEnd) const {
+  std::vector<const Segment *> Run;
+  return collectRodataRun(Img, SegVA, Run, RunStart, RunEnd);
+}
+
+std::pair<llvm::GlobalVariable *, uint64_t>
+MedLLVMEmitter::embedRodataRun(uint64_t SegVA) {
+  uint64_t RunStart = 0, RunEnd = 0;
+  std::vector<const Segment *> Run;
+  if (!collectRodataRun(Img, SegVA, Run, RunStart, RunEnd))
     return {nullptr, 0};
+  uint64_t RunLen64 = RunEnd - RunStart;
   size_t RunLen = static_cast<size_t>(RunLen64);
   if (auto It = SegmentDataGlobals.find(RunStart);
       It != SegmentDataGlobals.end())
     return {It->second, RunStart};
   std::vector<uint8_t> Buf(RunLen, 0);
-  for (size_t I = Lo; I <= Hi; ++I)
-    std::memcpy(Buf.data() + static_cast<size_t>(Ro[I]->VA - RunStart),
-                Ro[I]->Data.data(), Ro[I]->Data.size());
+  for (const Segment *S : Run)
+    std::memcpy(Buf.data() + static_cast<size_t>(S->VA - RunStart),
+                S->Data.data(), S->Data.size());
   auto *ArrTy = llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), RunLen);
   auto *Init = llvm::ConstantDataArray::get(*Ctx, llvm::ArrayRef<uint8_t>(Buf));
   auto *GV = new llvm::GlobalVariable(
@@ -279,13 +316,11 @@ bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
 
 std::pair<llvm::GlobalVariable *, uint64_t>
 MedLLVMEmitter::embedWritableRun(uint64_t SegVA) {
-  if (!Img)
+  uint64_t RunStart = 0, RunEnd = 0;
+  if (!writableRunBounds(SegVA, RunStart, RunEnd))
     return {nullptr, 0};
   const Segment *Seg = Img->getSegmentFor(SegVA);
-  if (!isMutableDataSeg(Seg))
-    return {nullptr, 0};
-  uint64_t RunStart = Seg->VA;
-  uint64_t RunLen64 = Seg->Size ? Seg->Size : Seg->Data.size();
+  uint64_t RunLen64 = RunEnd - RunStart;
   // One cohesive mutable global per writable segment, GEP'd into for every
   // access — the writable counterpart of embedRodataRun.  Bounded by the
   // single-global cap (not the per-access kMaxEmbeddedDataLen): a single whole-
@@ -293,8 +328,6 @@ MedLLVMEmitter::embedWritableRun(uint64_t SegVA) {
   // (e.g. `static unsigned G[2048]`, 8 KiB) is embedded once rather than left
   // as a bare inttoptr(VA) the relinked object never maps ->
   // WRITE/READ_UNMAPPED.
-  if (RunLen64 == 0 || RunLen64 > limits::kMaxSingleGlobalEmbedLen)
-    return {nullptr, 0};
   if (auto It = WritableSegmentGlobals.find(RunStart);
       It != WritableSegmentGlobals.end())
     return {It->second, RunStart};
@@ -335,6 +368,24 @@ MedLLVMEmitter::embedWritableRun(uint64_t SegVA) {
   markSharedLocal(GV);
   WritableSegmentGlobals[RunStart] = GV;
   return {GV, RunStart};
+}
+
+bool MedLLVMEmitter::writableRunBounds(uint64_t SegVA, uint64_t &RunStart,
+                                       uint64_t &RunEnd) const {
+  RunStart = 0;
+  RunEnd = 0;
+  if (!Img)
+    return false;
+  const Segment *Seg = Img->getSegmentFor(SegVA);
+  if (!isMutableDataSeg(Seg))
+    return false;
+  uint64_t RunLen = Seg->Size ? Seg->Size : Seg->Data.size();
+  if (RunLen == 0 || RunLen > limits::kMaxSingleGlobalEmbedLen ||
+      RunLen > std::numeric_limits<uint64_t>::max() - Seg->VA)
+    return false;
+  RunStart = Seg->VA;
+  RunEnd = Seg->VA + RunLen;
+  return true;
 }
 
 } // namespace neverd

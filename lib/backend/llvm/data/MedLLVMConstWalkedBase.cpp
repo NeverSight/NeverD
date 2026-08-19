@@ -252,10 +252,8 @@ bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) const {
     // constant (no reloc), so none is flagged and they stay on the @run
     // induction model below.
     auto wouldExistingSymbolize = [&](uint64_t VA) {
-      return VA > limits::kMinGlobalDataAddr ||
-             ((Img->RelocDataAddrs.count(VA) ||
-               Img->RodataAnchorSeg.count(VA)) &&
-              !constValueUsedAsInteger(VA));
+      return getVarDirectlySymbolizesDataConstant(
+          VA, getTargetRegInfo(TargetArch).PointerSize);
     };
 
     // The induction base of a PHI arg: a rodata constant reached as a direct

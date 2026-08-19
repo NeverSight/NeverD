@@ -20,7 +20,6 @@
 
 #define DEBUG_TYPE "neverd-med-llvm-global-data"
 #include "neverd/ArchSupport.h"
-#include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -176,9 +175,7 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
       // low-VA writable reloc target getVar also symbolizes
       // (symbolizesWritableRelocPtr, the SIMD-lane `&G` form) must likewise be
       // used directly, not re-based.
-      if ((Cur.ConstVal > limits::kMinGlobalDataAddr &&
-           constUsedAsPointer(Cur.ConstVal)) ||
-          symbolizesWritableRelocPtr(Cur.ConstVal, Cur.Size)) {
+      if (getVarMayRelocateConstant(Cur.ConstVal, Cur.Size)) {
         const Segment *S = Img->getSegmentFor(Cur.ConstVal);
         if (S && S->VA == SegVA)
           return true;

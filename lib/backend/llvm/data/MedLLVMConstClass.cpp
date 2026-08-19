@@ -190,8 +190,8 @@ bool MedLLVMEmitter::constIsWritableRunEndPointer(uint64_t Val) const {
   return false;
 }
 
-bool MedLLVMEmitter::symbolizesWritableRelocPtr(uint64_t Val,
-                                                uint16_t Size) const {
+bool MedLLVMEmitter::writableRelocPtrHasSymbolizationIntent(
+    uint64_t Val, uint16_t Size) const {
   if (!Img || !Img->WritableRelocDataAddrs.count(Val))
     return false;
   unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
@@ -228,6 +228,12 @@ bool MedLLVMEmitter::symbolizesWritableRelocPtr(uint64_t Val,
          !valIsPointerDiffBase(Val) && !valIsAdvancingInductionBase(Val);
 }
 
+bool MedLLVMEmitter::symbolizesWritableRelocPtr(uint64_t Val,
+                                                uint16_t Size) const {
+  return writableRelocPtrHasSymbolizationIntent(Val, Size) &&
+         canResolveGlobalDataConstant(Val);
+}
+
 bool MedLLVMEmitter::hasSymbolizedWritableSibling(uint64_t Val) const {
   if (!Img || !CurMedFunc)
     return false;
@@ -260,8 +266,8 @@ bool MedLLVMEmitter::hasSymbolizedWritableSibling(uint64_t Val) const {
         continue;
       // A sibling that the existing symbolization predicate already accepts:
       // used as a pointer and NOT flagged as an integer.
-      if (constUsedAsPointer(C) && !constValueUsedAsInteger(C) &&
-          !addrInCodePtrMirrorRun(C))
+      if (canResolveGlobalDataConstant(C) && constUsedAsPointer(C) &&
+          !constValueUsedAsInteger(C) && !addrInCodePtrMirrorRun(C))
         SymbolizedWritableSegs.insert(Seg->VA);
     }
   }
@@ -273,7 +279,7 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
   if (!Img || !CurMedFunc || Val == 0)
     return false;
   const Segment *VSeg = Img->getSegmentFor(Val);
-  if (!VSeg || !VSeg->isWritable())
+  if (!VSeg || !VSeg->isWritable() || !canResolveGlobalDataConstant(Val))
     return false;
   // Same walked-base protection the reloc-target fallback uses: never pull a
   // pointer-difference base or a (segment-) walked induction base onto the

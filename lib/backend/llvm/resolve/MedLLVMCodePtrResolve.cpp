@@ -11,7 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
-#include "neverd/Limits.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/object/SectionNames.h"
@@ -238,12 +237,26 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
       }
       FieldVal = llvm::ConstantExpr::getPtrToInt(Target, PtrIntTy);
     } else if (K.Kind == PtrSlotKind::Data) {
-      if (llvm::Constant *G = tryResolveGlobalData(K.TargetVA))
+      if (K.TargetVA == 0)
+        FieldVal = llvm::ConstantInt::get(PtrIntTy, 0);
+      else if (llvm::Constant *G = tryResolveGlobalData(K.TargetVA))
         FieldVal = llvm::ConstantExpr::getPtrToInt(G, PtrIntTy);
-      else
-        // Unresolvable data pointer: keep the original VA (byte-identical to
-        // the verbatim fallback) so the field count still matches the layout.
-        FieldVal = llvm::ConstantInt::get(PtrIntTy, K.TargetVA);
+      else {
+        // This slot is loader-proven pointer state.  Keeping its original VA
+        // would make the mirror look complete while leaving a stale pointer in
+        // the rebuilt object; reject the entire module just as an unresolved
+        // code-pointer relocation does.  A literal null remains valid above.
+        if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+          llvm::WithColor::error()
+              << "med_llvm_emitter: relocation-proven data pointer at 0x"
+              << llvm::utohexstr(RunStart + K.Off)
+              << " targets unmaterializable address 0x"
+              << llvm::utohexstr(K.TargetVA)
+              << "; refusing stale-address fallback\n";
+        if (!FatalCodePointerResolution)
+          FatalDataPointerResolution = true;
+        return nullptr;
+      }
     } else {
       const std::string Name =
           llvm_name::fromObjectSymbol(K.ImportName, TargetFormat).str();
@@ -314,6 +327,53 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
   auto findDef = [&](const MedVar &X) { return lookupDef(X); };
   auto findPhi = [&](const MedVar &X) { return lookupPhi(X); };
 
+  // traceTableBaseConst may fold several numeric leaves into one table VA, but
+  // getVar emits those leaves individually.  Determine whether the rebuilt IR
+  // already carries a relocatable pointer by classifying the actual leaves,
+  // stopping at a literal-pool LOAD because its loaded value remains the raw
+  // image VA even though the pool address itself is symbolized.
+  auto emittedConstLeafRelocates = [&](const MedVar &Root) {
+    std::vector<MedVar> Pending{Root};
+    std::set<std::tuple<int, int, int, uint16_t>> LeafSeen;
+    int LeafBudget = 128;
+    while (!Pending.empty() && LeafBudget-- > 0) {
+      MedVar Cur = Pending.back();
+      Pending.pop_back();
+      if (Cur.isConst()) {
+        if (getVarMayRelocateConstant(Cur.ConstVal, Cur.Size))
+          return true;
+        continue;
+      }
+      auto Key = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
+                                 Cur.Size);
+      if (!LeafSeen.insert(Key).second)
+        continue;
+      const MedOp *Def = findDef(Cur);
+      if (!Def)
+        continue;
+      switch (Def->Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ZEXT:
+        if (auto Forwarded = pointerPreservingInput(*Def))
+          Pending.push_back(*Forwarded);
+        break;
+      case NdOp::INT_ADD:
+        for (int I = 0; I < Def->NumInputs; ++I)
+          Pending.push_back(Def->Inputs[I]);
+        break;
+      case NdOp::LOAD:
+        break;
+      default:
+        break;
+      }
+    }
+    // An incomplete leaf audit cannot prove the expression is raw.  Treat it
+    // as already relocated so this resolver declines to add a second base;
+    // the later strict address-role audit can then reject ambiguity instead of
+    // silently manufacturing a mixed-model pointer.
+    return !Pending.empty();
+  };
+
   auto compute = [&]() -> uint64_t {
     uint64_t SegVA = 0;
     bool Found = false;
@@ -332,19 +392,15 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
       // A subexpression that folds to a single constant is a base or an offset:
       // a plain constant, `const + const`, or the ARM biased literal-pool base
       // `const_offset + ldr[pc]` (the table VA split as a constant plus a
-      // literal the loader applied).  SawLoad distinguishes a
-      // literal-pool-derived base (getVar reloads the raw VA, so no redirect
-      // guard) from a plain constant operand (which getVar may rewrite to a
-      // relocated global).
-      bool SawLoad = false;
-      if (auto C = traceTableBaseConst(Cur, 0, &SawLoad)) {
+      // literal the loader applied).  The folded value locates the table; the
+      // actual emitted leaves above decide whether the expression already
+      // carries a relocated base.
+      if (auto C = traceTableBaseConst(Cur)) {
         const Segment *Seg = Img->getSegmentFor(*C);
         if (Seg && !Seg->isExecutable() && !Seg->Data.empty() &&
             segHasPtrSlots(Seg)) {
-          if (!SawLoad &&
-              (*C >= limits::kMinGlobalDataAddr ||
-               Img->RelocDataAddrs.count(*C) || Img->RodataAnchorSeg.count(*C)))
-            return 0; // a plain-constant base getVar would redirect
+          if (emittedConstLeafRelocates(Cur))
+            return 0; // rebuilt expression already carries a relocated base
           uint64_t RunStart = 0, RunEnd = 0;
           readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
           if (Found && SegVA != RunStart)
