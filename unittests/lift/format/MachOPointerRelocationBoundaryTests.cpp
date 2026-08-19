@@ -4733,6 +4733,106 @@ MedFunc makeSelectPointerCaller(bool InvalidCodeArm, bool InvalidScalarArm) {
   return Func;
 }
 
+MedFunc makePhiPointerCaller() {
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = "data_phi_caller";
+  Func.ReturnType = NdType::makeVoid();
+
+  MedVar Cond;
+  Cond.Kind = MedVar::Param;
+  Cond.Id = 0;
+  Cond.Size = 1;
+  Cond.TheArch = Arch::AArch64;
+  Func.Params.push_back(Cond);
+
+  MedVar Selected;
+  Selected.Kind = MedVar::Reg;
+  Selected.Id = 1;
+  Selected.SSAVer = 44;
+  Selected.Size = 8;
+  Selected.TheArch = Arch::AArch64;
+  Selected.RegOff = getTargetRegInfo(Arch::AArch64).IntParamRegs[1];
+  MedVar FirstPointer = Selected;
+  FirstPointer.SSAVer = 43;
+  MedVar SecondPointer = Selected;
+  SecondPointer.SSAVer = 41;
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 0x10;
+  Entry.Succs = {1, 2};
+  MedOp ConditionalBranch;
+  ConditionalBranch.Opcode = NdOp::COND_BR;
+  ConditionalBranch.Addr = CallerVA;
+  ConditionalBranch.addInput(MedVar::makeConst(CallerVA + 0x20, 8));
+  ConditionalBranch.addInput(Cond);
+  Entry.Ops.push_back(std::move(ConditionalBranch));
+
+  MedBlock First;
+  First.Id = 1;
+  First.StartAddr = CallerVA + 0x10;
+  First.EndAddr = CallerVA + 0x18;
+  First.Preds = {0};
+  First.Succs = {3};
+  MedOp FirstValue;
+  FirstValue.Opcode = NdOp::COPY;
+  FirstValue.Output = FirstPointer;
+  FirstValue.addInput(MedVar::makeConst(CStringVA, 8));
+  First.Ops.push_back(std::move(FirstValue));
+  MedOp FirstBranch;
+  FirstBranch.Opcode = NdOp::BRANCH;
+  FirstBranch.addInput(MedVar::makeConst(CallerVA + 0x30, 8));
+  First.Ops.push_back(std::move(FirstBranch));
+
+  MedBlock Second;
+  Second.Id = 2;
+  Second.StartAddr = CallerVA + 0x20;
+  Second.EndAddr = CallerVA + 0x28;
+  Second.Preds = {0};
+  Second.Succs = {3};
+  MedOp SecondValue;
+  SecondValue.Opcode = NdOp::COPY;
+  SecondValue.Output = SecondPointer;
+  SecondValue.addInput(MedVar::makeConst(CStringBVA, 8));
+  Second.Ops.push_back(std::move(SecondValue));
+  MedOp SecondBranch;
+  SecondBranch.Opcode = NdOp::BRANCH;
+  SecondBranch.addInput(MedVar::makeConst(CallerVA + 0x30, 8));
+  Second.Ops.push_back(std::move(SecondBranch));
+
+  MedBlock Merge;
+  Merge.Id = 3;
+  Merge.StartAddr = CallerVA + 0x30;
+  Merge.EndAddr = CallerVA + 0x38;
+  Merge.Preds = {1, 2};
+  PhiNode PointerPhi;
+  PointerPhi.Output = Selected;
+  PointerPhi.Args = {{1, FirstPointer}, {2, SecondPointer}};
+  Merge.Phis.push_back(std::move(PointerPhi));
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = CallerVA + 0x30;
+  Call.addInput(MedVar::makeConst(ImportStubVA + 4, 8));
+  Merge.Ops.push_back(std::move(Call));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = CallerVA + 0x34;
+  Merge.Ops.push_back(std::move(Return));
+
+  Func.Blocks = {std::move(Entry), std::move(First), std::move(Second),
+                 std::move(Merge)};
+  MedCallInfo Info;
+  Info.BlockId = 3;
+  Info.OpIdx = 0;
+  Info.TargetAddr = ImportStubVA + 4;
+  Info.TargetName = "_printf";
+  Info.Args.push_back(Selected);
+  Func.CallInfos.push_back(std::move(Info));
+  return Func;
+}
+
 TEST(MachOLLVMDataPointerBoundary, SymbolizesDirectAndAllDataSelect) {
   BinaryImage Image = makeLLVMImage();
   MedFunc Caller = makeSelectPointerCaller(false, false);
@@ -4752,6 +4852,29 @@ TEST(MachOLLVMDataPointerBoundary, SymbolizesDirectAndAllDataSelect) {
       llvm::cast<llvm::Instruction>(Calls[1]->getArgOperand(0))->getOperand(0));
   ASSERT_NE(PointerSelect, nullptr);
   EXPECT_TRUE(PointerSelect->getType()->isPointerTy());
+}
+
+TEST(MachOLLVMDataPointerBoundary, SymbolizesExecutableCStringPhi) {
+  BinaryImage Image = makeLLVMImage();
+  addImport(Image, "_printf", ImportStubVA + 4);
+  MedFunc Caller = makePhiPointerCaller();
+  llvm::LLVMContext Context;
+  testing::internal::CaptureStderr();
+  auto Module = MedLLVMEmitter().emit(
+      {Caller}, Context, "macho-data-pointer-phi", Arch::AArch64,
+      {{ImportStubVA + 4, "_printf"}}, &Image, BinaryFormat::MachO);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  ASSERT_NE(Module, nullptr) << Diagnostic;
+  expectValidModule(*Module);
+
+  llvm::Function *Function = Module->getFunction(Caller.Name);
+  ASSERT_NE(Function, nullptr);
+  std::vector<llvm::CallInst *> Calls = callsIn(*Function);
+  ASSERT_EQ(Calls.size(), 1u);
+  llvm::Value *Argument = Calls.front()->getArgOperand(0);
+  EXPECT_TRUE(Argument->getType()->isPointerTy());
+  std::set<const llvm::Value *> Seen;
+  EXPECT_TRUE(valueReferencesConstantGlobal(Argument, Seen));
 }
 
 TEST(MachOLLVMDataPointerBoundary, RejectsSelectWithCodeOrScalarArm) {
@@ -5489,7 +5612,9 @@ TEST(MachOLLVMDataPointerBoundary,
     ASSERT_NE(Function, nullptr);
     const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
     ASSERT_NE(TableLoad, nullptr);
-    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "tblptr");
+    // With executable read-only data mirrored like direct global data, the
+    // surviving entry-only PHI is owned by the all-arms merge resolver.
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgptr");
     std::set<const llvm::Value *> Seen;
     EXPECT_TRUE(
         valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));

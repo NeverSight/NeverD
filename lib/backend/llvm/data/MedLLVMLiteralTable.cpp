@@ -1349,7 +1349,9 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   }
 
   // All raw bases must share one read-only segment so a single embedded global
-  // covers every table the select can reach.
+  // covers every table the select can reach. Mach-O keeps non-code data such
+  // as __TEXT,__cstring inside an executable segment, so use the same bounded
+  // executable-segment mirror as direct global-data resolution for that case.
   const Segment *Seg = Img->getSegmentFor(*Bases.begin());
   if (!Seg)
     return nullptr;
@@ -1364,7 +1366,9 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // index.
   llvm::Constant *G = nullptr;
   uint64_t Anchor = 0;
-  if (auto [RunGV, RunStart] = embedRodataRun(Seg->VA); RunGV) {
+  auto [RunGV, RunStart] =
+      Seg->isExecutable() ? embedExecSegmentRun(Seg) : embedRodataRun(Seg->VA);
+  if (RunGV) {
     G = RunGV;
     Anchor = RunStart;
   }
