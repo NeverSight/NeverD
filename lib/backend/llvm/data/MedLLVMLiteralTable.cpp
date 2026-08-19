@@ -82,8 +82,7 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolTable(
 
   // Only redirect into a genuine read-only table at this base, and never when
   // the function indexes-stores to it (a read-write array).
-  const auto *Seg = Img->getSegmentFor(Base);
-  if (!Seg || Seg->isWritable() || Seg->Data.empty())
+  if (!isMaterializableReadOnlyDataAddress(Base))
     return nullptr;
   if (StoredBasesFor != CurMedFunc) {
     StoredBasesFor = CurMedFunc;
@@ -252,9 +251,8 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectBaseLitTable(
     // literal-pool LOAD is the only arithmetic fold that supplies such proof.
     if (!VA || *VA == 0 || (SawArithmetic && !SawLoad))
       return nullptr;
-    const auto *Seg = Img->getSegmentFor(*VA);
-    if (!Seg || Seg->isWritable() || (!SawLoad && Img->isCodeAddress(*VA)) ||
-        Seg->Data.empty() || StoredConstBases.count(*VA))
+    if (!isMaterializableReadOnlyDataAddress(*VA) ||
+        StoredConstBases.count(*VA))
       return nullptr;
     auto *G = tryResolveGlobalData(*VA, SizeHint);
     if (!G)
@@ -287,10 +285,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   auto findDef = [&](const MedVar &V) { return lookupDef(V); };
   auto findPhi = [&](const MedVar &V) { return lookupPhi(V); };
   auto isReadOnlyTableBase = [&](uint64_t VA) {
-    const Segment *Seg = VA != 0 ? Img->getSegmentFor(VA) : nullptr;
-    return Seg && !Seg->isWritable() && Img->isDataAddress(VA) &&
-           !Img->isCodeAddress(VA) && !Seg->Data.empty() && VA >= Seg->VA &&
-           VA - Seg->VA < Seg->Data.size();
+    return isMaterializableReadOnlyDataAddress(VA);
   };
 
   // i386 models a machine-width frame pointer through widened MedIR
@@ -1401,8 +1396,7 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolBase(
   // Redirect only into a genuine read-only data constant (a `.rodata` aggregate
   // initializer); a code VA is a function pointer and an executable literal
   // pool is left to the code-pointer path.
-  const auto *Seg = Img->getSegmentFor(*VA);
-  if (!Seg || Seg->isWritable() || Img->isCodeAddress(*VA) || Seg->Data.empty())
+  if (!isMaterializableReadOnlyDataAddress(*VA))
     return nullptr;
 
   // Never redirect a load aliasing an indexed store into the same base (a

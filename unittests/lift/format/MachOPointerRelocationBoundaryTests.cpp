@@ -1524,6 +1524,94 @@ MedFunc makeRecurrentAbsolutePointerTableLoad() {
   return Func;
 }
 
+MedFunc makeRecurrentPointerTableSlotWalk(Arch TargetArch) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "recurrent_pointer_table_slot_walk_arm64"
+                  : "recurrent_pointer_table_slot_walk_x86_64";
+  Func.ReturnType = NdType::makeVoid();
+  Func.DoesNotReturn = true;
+
+  MedVar InitialSlot = makeVar(49, TRI.PointerSize);
+  MedVar PhiSlot = makeVar(50, TRI.PointerSize);
+  MedVar NextSlot = makeVar(51, TRI.PointerSize);
+  MedVar LoadedTarget = makeVar(52, TRI.PointerSize);
+  MedVar LoadedValue = makeVar(53, 4);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 4;
+  Entry.Succs = {1};
+  MedOp MaterializeInitialSlot;
+  MaterializeInitialSlot.Opcode = NdOp::COPY;
+  MaterializeInitialSlot.Output = InitialSlot;
+  MaterializeInitialSlot.addInput(
+      MedVar::makeConst(DataVA + 16, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(MaterializeInitialSlot));
+  MedOp EnterLoop;
+  EnterLoop.Opcode = NdOp::BRANCH;
+  EnterLoop.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(EnterLoop));
+
+  MedBlock Loop;
+  Loop.Id = 1;
+  Loop.StartAddr = CallerVA + 0x10;
+  Loop.EndAddr = CallerVA + 0x1c;
+  Loop.Preds = {0, 2};
+  Loop.Succs = {2};
+  PhiNode SlotPhi;
+  SlotPhi.Output = PhiSlot;
+  SlotPhi.Args = {{0, InitialSlot}, {2, NextSlot}};
+  Loop.Phis.push_back(std::move(SlotPhi));
+  MedOp ReadTarget;
+  ReadTarget.Opcode = NdOp::LOAD;
+  ReadTarget.Output = LoadedTarget;
+  ReadTarget.addInput(PhiSlot);
+  Loop.Ops.push_back(std::move(ReadTarget));
+  MedOp ReadValue;
+  ReadValue.Opcode = NdOp::LOAD;
+  ReadValue.Output = LoadedValue;
+  ReadValue.addInput(LoadedTarget);
+  Loop.Ops.push_back(std::move(ReadValue));
+  MedOp Advance;
+  Advance.Opcode = NdOp::BRANCH;
+  Advance.addInput(MedVar::makeConst(CallerVA + 0x20, TRI.PointerSize));
+  Loop.Ops.push_back(std::move(Advance));
+
+  MedBlock Latch;
+  Latch.Id = 2;
+  Latch.StartAddr = CallerVA + 0x20;
+  Latch.EndAddr = CallerVA + 0x28;
+  Latch.Preds = {1};
+  Latch.Succs = {1};
+  MedOp Step;
+  Step.Opcode = NdOp::INT_ADD;
+  Step.Output = NextSlot;
+  Step.addInput(PhiSlot);
+  Step.addInput(MedVar::makeConst(24, TRI.PointerSize));
+  Latch.Ops.push_back(std::move(Step));
+  MedOp BackEdge;
+  BackEdge.Opcode = NdOp::BRANCH;
+  BackEdge.addInput(MedVar::makeConst(Loop.StartAddr, TRI.PointerSize));
+  Latch.Ops.push_back(std::move(BackEdge));
+
+  Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Latch)};
+  return Func;
+}
+
 enum class FalseRecurrenceCase {
   ControlOnlySelect,
   AnnihilatingMultiply,
@@ -6408,6 +6496,65 @@ TEST(MachOLLVMDataPointerBoundary,
   llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
   ASSERT_NE(Mirror, nullptr);
   EXPECT_TRUE(Mirror->hasInitializer());
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     GenericPhiAuditDefersPureRelocatedPointerTableSlotInduction) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeLLVMImage();
+    Image.Arch = TargetArch;
+    ASSERT_EQ(Image.Segments[1].Name, section_names::macho::DataConstSeg);
+    ASSERT_TRUE(Image.Segments[1].isWritable());
+    writeObject(Image.Segments[1].Data, /*Off=*/40, CStringBVA);
+    Image.DataPtrRelocSlots.clear();
+    Image.DataPtrRelocSlots.insert(DataVA + 16);
+    Image.DataPtrRelocSlots.insert(DataVA + 40);
+
+    MedFunc Lookup = makeRecurrentPointerTableSlotWalk(TargetArch);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-recurrent-pointer-table-slot-walk",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *PointerLoad = nullptr;
+    for (const llvm::BasicBlock &Block : *Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+            Load && Load->isVolatile() &&
+            Load->getType()->isIntegerTy(
+                getTargetRegInfo(TargetArch).PointerSize * 8)) {
+          EXPECT_EQ(PointerLoad, nullptr);
+          PointerLoad = Load;
+        }
+    ASSERT_NE(PointerLoad, nullptr);
+    EXPECT_EQ(PointerLoad->getPointerOperand()->getName(), "indrawptr");
+    const std::string MirrorName =
+        (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str();
+    llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
+    ASSERT_NE(Mirror, nullptr);
+    bool FunctionReferencesMirror = false;
+    bool RetainsRawSlotVA = false;
+    for (const llvm::BasicBlock &Block : *Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        std::set<const llvm::Value *> Seen;
+        FunctionReferencesMirror |=
+            valueReferencesTarget(&Instruction, Mirror, Seen);
+        for (const llvm::Value *Operand : Instruction.operands())
+          if (const auto *C = llvm::dyn_cast<llvm::Constant>(Operand))
+            RetainsRawSlotVA |= constantContainsInteger(C, DataVA + 16);
+      }
+    EXPECT_TRUE(FunctionReferencesMirror);
+    EXPECT_FALSE(RetainsRawSlotVA);
+    EXPECT_EQ(
+        Module->getNamedGlobal((kNdDataPrefix + llvm::utohexstr(DataVA)).str() +
+                               section_names::elf::Rodata),
+        nullptr);
+  }
 }
 
 TEST(MachOLLVMDataPointerBoundary,

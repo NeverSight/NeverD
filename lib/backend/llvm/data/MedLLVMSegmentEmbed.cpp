@@ -216,6 +216,25 @@ bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
           section_names::isReadOnlyAfterRelocSectionName(S->Name));
 }
 
+bool MedLLVMEmitter::isMaterializableReadOnlyDataAddress(uint64_t VA) const {
+  if (!Img || VA == 0)
+    return false;
+  const Segment *Seg = Img->getSegmentFor(VA);
+  if (!Seg || !Seg->isReadable() || Seg->Data.empty() ||
+      !Img->isDataAddress(VA) || Img->isCodeAddress(VA) || VA < Seg->VA ||
+      VA - Seg->VA >= Seg->Data.size())
+    return false;
+
+  // A Mach-O data section may share an executable __TEXT segment, so ordinary
+  // read-only data is identified by !writable rather than by the segment's
+  // execute bit.  Conversely __DATA_CONST/.data.rel.ro retain writable object
+  // flags while dyld/the dynamic loader applies fixups; their section name is
+  // the semantic evidence that the pointer-table mirror owns them afterward.
+  if (Seg->isWritable() && !isReadOnlyAfterReloc(Seg))
+    return false;
+  return canResolveGlobalDataConstant(VA);
+}
+
 void MedLLVMEmitter::readOnlyAfterRelocRun(const Segment *Seg,
                                            uint64_t &RunStart,
                                            uint64_t &RunEnd) const {

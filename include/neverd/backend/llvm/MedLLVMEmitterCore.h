@@ -506,6 +506,15 @@ private:
   /// run may span (see buildCodePtrSegmentGlobal / readOnlyAfterRelocRun).
   bool isReadOnlyAfterReloc(const Segment *S) const;
 
+  /// True when \p VA names a file-backed data byte with immutable runtime
+  /// semantics and a concrete global-data materialization route.  This unifies
+  /// ordinary rodata (including data sections inside an executable Mach-O
+  /// segment) with read-only-after-relocation pointer tables such as
+  /// `__DATA_CONST` / `.data.rel.ro`; resolver provenance and emission must use
+  /// the same predicate or one resolver can reject an address the next one is
+  /// responsible for materializing.
+  bool isMaterializableReadOnlyDataAddress(uint64_t VA) const;
+
   /// Compute the contiguous run of read-only-after-relocation segments (.rodata
   /// + adjacent .data.rel.ro, separated only by a small alignment gap) that
   /// contains \p Seg, returning [RunStart, RunEnd).  When \p Seg is not read-
@@ -811,6 +820,17 @@ private:
   llvm::Value *tryResolveInductionGlobalPtr(const MedVar &AddrVar,
                                             uint16_t SizeHint, bool FailClosed,
                                             llvm::IRBuilder<> &Builder);
+
+  /// Resolve a computed immutable-data address through the shared resolver
+  /// arbitration order.  The generic all-arms proof audits every reachable
+  /// source first, explicitly deferring a pure recurrent PHI to the induction
+  /// resolver; an ambiguous merge stops before any narrower indexed/literal
+  /// recognizer can claim it.  This single entry point keeps LOAD and pointer-
+  /// argument lowering from drifting into different ownership/fail-closed
+  /// behavior.
+  llvm::Value *tryResolveReadOnlyDataPtr(const MedVar &AddrVar,
+                                         uint16_t SizeHint, bool FailClosed,
+                                         llvm::IRBuilder<> &Builder);
 
   /// Resolve a load whose address indexes a `.data.rel.ro` function-pointer
   /// table (the callback-table / vtable / threaded-dispatch code-pointer array)

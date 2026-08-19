@@ -689,26 +689,12 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         // path.
         Ptr = tryResolveCodePtrTablePtr(AddrVar, Builder);
       if (!Ptr)
-        // A cross-block PHI may intentionally select among several fully
-        // proven read-only table bases. Resolve that multi-base form before
-        // the single-base and induction paths inspect only one incoming arm.
-        Ptr = tryResolveSelectMergeTable(AddrVar, Op.Output.Size,
-                                         /*FailClosed=*/true, Builder);
-      if (!Ptr)
-        // Indexed lookup-table access: addr = const_base + index.
-        Ptr = tryResolveIndexedGlobalPtr(AddrVar, Op.Output.Size,
-                                         /*FailClosed=*/true, Builder);
-      if (!Ptr)
-        // ARM literal-pool value table: addr = (ldr[pc]+pc) + index*scale.
-        Ptr = tryResolveLiteralPoolTable(AddrVar, Op.Output.Size, Builder);
-      if (!Ptr)
-        // rodata-walking induction pointer: addr = PHI(litbase, addr+stride).
-        Ptr = tryResolveInductionGlobalPtr(AddrVar, Op.Output.Size,
-                                           /*FailClosed=*/true, Builder);
-      if (!Ptr)
-        // Direct literal-pool data pointer: addr = ldr[pc]+pc (no index), the
-        // ARM address-of a `.rodata` constant (e.g. a cst16 initializer).
-        Ptr = tryResolveLiteralPoolBase(AddrVar, Op.Output.Size, Builder);
+        // Immutable-data resolver arbitration is shared with pointer
+        // arguments: the generic all-arms audit defers a pure recurrent PHI to
+        // the induction owner, while ambiguous provenance fails closed before
+        // any narrower indexed/literal matcher can claim it.
+        Ptr = tryResolveReadOnlyDataPtr(AddrVar, Op.Output.Size,
+                                        /*FailClosed=*/true, Builder);
       if (Ptr)
         IsGlobalData = true;
     }

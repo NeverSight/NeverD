@@ -1167,10 +1167,7 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
       return false;
     uint64_t Target = 0;
     std::memcpy(&Target, Bytes, PtrSize);
-    const Segment *TargetSeg =
-        Target != 0 ? Img->getSegmentFor(Target) : nullptr;
-    if (!TargetSeg || TargetSeg->isWritable() || !Img->isDataAddress(Target) ||
-        TargetSeg->Data.empty())
+    if (!isMaterializableReadOnlyDataAddress(Target))
       return false;
     Targets.insert(Target);
     return true;
@@ -1315,10 +1312,7 @@ bool MedLLVMEmitter::recoverRelativeDataPointerTargets(
     std::memcpy(&Displacement, Bytes, sizeof(Displacement));
     uint64_t Target =
         Base + static_cast<uint64_t>(static_cast<int64_t>(Displacement));
-    const Segment *TargetSeg =
-        Target != 0 ? Img->getSegmentFor(Target) : nullptr;
-    if (!TargetSeg || TargetSeg->isWritable() || !Img->isDataAddress(Target) ||
-        TargetSeg->Data.empty())
+    if (!isMaterializableReadOnlyDataAddress(Target))
       return false;
     Targets.insert(Target);
     if (Slot > InvalidVA - sizeof(int32_t))
@@ -1438,6 +1432,11 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
   if (V.isConst()) {
     if (!Img || V.ConstVal == 0)
       return false;
+    // Deliberately narrower than isMaterializableReadOnlyDataAddress: a
+    // writable-in-object RELRO / __DATA_CONST pointer table belongs to the
+    // complete all-arms audit and, for a pure recurrence, the induction
+    // resolver.  Letting this single-base decomposer claim one convenient arm
+    // can discard a loader-proven second base and bypass fail-closed handling.
     const Segment *Seg = Img->getSegmentFor(V.ConstVal);
     if (!Seg || Seg->isWritable() || !Img->isDataAddress(V.ConstVal) ||
         Seg->Data.empty() || V.ConstVal < Seg->VA ||

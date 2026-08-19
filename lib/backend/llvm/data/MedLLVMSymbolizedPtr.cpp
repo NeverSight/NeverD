@@ -265,6 +265,31 @@ MedLLVMEmitter::tryResolveCodePtrSegPtr(const MedVar &AddrVar,
   return Builder.CreateGEP(llvm::Type::getInt8Ty(*Ctx), Tbl, Off, "cptr");
 }
 
+llvm::Value *
+MedLLVMEmitter::tryResolveReadOnlyDataPtr(const MedVar &AddrVar,
+                                          uint16_t SizeHint, bool FailClosed,
+                                          llvm::IRBuilder<> &Builder) {
+  // The complete provenance audit distinguishes an ordinary non-match from an
+  // expression it explicitly rejected.  It understands recurrent PHIs and
+  // returns a clean non-match for a pure induction, but a mixed/malformed PHI
+  // must stop here before a narrower resolver can select one convenient arm.
+  bool SawAmbiguous = false;
+  if (auto *P = tryResolveSelectMergeTable(AddrVar, SizeHint, FailClosed,
+                                           Builder, &SawAmbiguous))
+    return P;
+  if (SawAmbiguous)
+    return nullptr;
+  if (auto *P =
+          tryResolveIndexedGlobalPtr(AddrVar, SizeHint, FailClosed, Builder))
+    return P;
+  if (auto *P = tryResolveLiteralPoolTable(AddrVar, SizeHint, Builder))
+    return P;
+  if (auto *P =
+          tryResolveInductionGlobalPtr(AddrVar, SizeHint, FailClosed, Builder))
+    return P;
+  return tryResolveLiteralPoolBase(AddrVar, SizeHint, Builder);
+}
+
 llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
                                                   bool FailClosed,
                                                   llvm::IRBuilder<> &Builder) {
@@ -380,31 +405,8 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
   // pointer.
   if (auto *P = tryResolveWritableData(AddrVar, /*SizeHint=*/0, Builder))
     return P;
-  // Keep multi-base PHIs on their all-arms resolver before the single-base
-  // indexed path.  This order must match LOAD emission: pointer arithmetic is
-  // symbolized while its defining op is emitted, before the later LOAD gets a
-  // chance to inspect the same address.
-  bool SawAmbiguous = false;
-  if (auto *P = tryResolveSelectMergeTable(AddrVar, /*SizeHint=*/0, FailClosed,
-                                           Builder, &SawAmbiguous))
-    return P;
-  // The complete provenance audit distinguishes an ordinary non-match from an
-  // expression it explicitly rejected. Once rejected, no narrower resolver may
-  // reinterpret one table-looking subexpression and silently discard the mixed
-  // sibling, whether that sibling becomes an index or an induction term.
-  if (SawAmbiguous)
-    return nullptr;
-  if (auto *P = tryResolveIndexedGlobalPtr(AddrVar, /*SizeHint=*/0, FailClosed,
-                                           Builder))
-    return P;
-  if (auto *P = tryResolveLiteralPoolTable(AddrVar, /*SizeHint=*/0, Builder))
-    return P;
-  if (auto *P = tryResolveInductionGlobalPtr(AddrVar, /*SizeHint=*/0,
-                                             FailClosed, Builder))
-    return P;
-  if (auto *P = tryResolveLiteralPoolBase(AddrVar, /*SizeHint=*/0, Builder))
-    return P;
-  return nullptr;
+  return tryResolveReadOnlyDataPtr(AddrVar, /*SizeHint=*/0, FailClosed,
+                                   Builder);
 }
 
 } // namespace neverd

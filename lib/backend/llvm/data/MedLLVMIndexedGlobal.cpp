@@ -52,9 +52,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
   // by an incoming rodata base; a non-induction PHI (e.g. a loop counter)
   // simply fails that check, so over-collecting is safe.
   auto constInRodata = [&](uint64_t C) {
-    const auto *Seg = Img->getSegmentFor(C);
-    return C != 0 && Seg && !Seg->isWritable() && Img->isDataAddress(C) &&
-           !Seg->Data.empty();
+    return isMaterializableReadOnlyDataAddress(C);
   };
   auto failAmbiguousAddress = [&]() {
     if (!FailClosed)
@@ -324,9 +322,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
   // a non-constant COPY/ZEXT may still be raw (low VA or narrow source) or may
   // already contain ptrtoint(@global). Syntax alone cannot distinguish them.
   auto baseInRodata = [&](uint64_t B) {
-    const auto *Seg = Img->getSegmentFor(B);
-    return B != 0 && Seg && !Seg->isWritable() && Img->isDataAddress(B) &&
-           !Seg->Data.empty();
+    return isMaterializableReadOnlyDataAddress(B);
   };
   enum class AddressModel { Raw, Symbolized };
   std::optional<AddressModel> BaseAddressModel;
@@ -908,8 +904,7 @@ bool MedLLVMEmitter::isReadOnlyDataSymbol(uint64_t VA) {
     for (const auto &Sym : Img->Symbols) {
       if (Sym.Addr == 0 || Sym.IsFunc)
         continue;
-      const auto *Seg = Img->getSegmentFor(Sym.Addr);
-      if (Seg && !Seg->isWritable() && !Seg->Data.empty())
+      if (isMaterializableReadOnlyDataAddress(Sym.Addr))
         RodataSymbolVAs.insert(Sym.Addr);
     }
   }
