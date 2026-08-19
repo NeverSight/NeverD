@@ -192,6 +192,37 @@ TEST_F(NativePointerRelocationBoundary,
 }
 
 TEST_F(NativePointerRelocationBoundary,
+       ELFRelocatableLookupIgnoresUnmappedSectionAddressAliases) {
+  const fs::path Path = fixture("test_elf_pointer_reloc_arm32.o");
+  ASSERT_TRUE(fs::exists(Path));
+  auto ImgOrErr = loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::ELF);
+  ASSERT_EQ(Img.Arch, Arch::ARM);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Section *Table = Img.getSectionByName(".data.rel.ro");
+  const Section *StringTable = Img.getSectionByName(".strtab");
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(StringTable, nullptr);
+  ASSERT_TRUE(Table->isReadable());
+  ASSERT_FALSE(StringTable->isReadable());
+
+  // ET_REL metadata sections retain VA zero.  This fixture deliberately uses
+  // long symbol names so .strtab numerically covers the synthesized table VA;
+  // a mapped-address lookup must nevertheless return the SHF_ALLOC table.
+  ASSERT_TRUE(StringTable->contains(Table->VA));
+  for (unsigned I = 0; I < 3; ++I) {
+    const va_t Slot = Table->VA + I * sizeof(uint32_t);
+    EXPECT_EQ(Img.getSectionFor(Slot), Table);
+    EXPECT_EQ(Img.CodePtrRelocSlots.count(Slot), 1u);
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot));
+  }
+}
+
+TEST_F(NativePointerRelocationBoundary,
        LiftedPEAndELFUseRelocatablePointerMirrors) {
   for (const char *Name :
        {"test_pe_pointer_reloc_x64.exe", "test_elf_pointer_reloc_x64",

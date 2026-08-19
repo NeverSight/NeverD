@@ -280,9 +280,19 @@ struct BinaryImage {
     return nullptr;
   }
 
+  /// Return the mapped format-native section that owns \p Addr.
+  ///
+  /// Relocatable ELF metadata sections do not have runtime addresses.  Their
+  /// synthetic VA remains zero, so a large `.strtab`, `.symtab`, or relocation
+  /// section can numerically overlap every low-VA SHF_ALLOC section.  Such
+  /// metadata must never win an address lookup: Sections with Readable set are
+  /// the loader model's mapped/SHF_ALLOC sections, and the address must also be
+  /// backed by a mapped segment.
   const Section *getSectionFor(va_t Addr) const {
+    if (!getSegmentFor(Addr))
+      return nullptr;
     for (const auto &Sec : Sections)
-      if (Sec.contains(Addr))
+      if (Sec.isReadable() && Sec.contains(Addr))
         return &Sec;
     return nullptr;
   }

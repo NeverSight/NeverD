@@ -801,6 +801,7 @@ set(AARCH64_TEST_SOURCES
 
 set(ARM32_TEST_SOURCES
   arm32/test_frame_pointer_void_arm.s
+  format/test_elf_pointer_reloc_arm32.s
   arm32/test_arith_arm.c
   arm32/test_mem_arm.c
   arm32/test_control_arm.c
