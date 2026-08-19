@@ -62,6 +62,7 @@
 namespace neverd {
 
 class MedLLVMEmitterTestPeer;
+class MedLLVMProvenanceTestPeer;
 
 class MedLLVMEmitter {
 public:
@@ -101,6 +102,18 @@ public:
 
 private:
   friend class MedLLVMEmitterTestPeer;
+  friend class MedLLVMProvenanceTestPeer;
+
+  struct AddressProvenanceWorkCounts {
+    uint64_t EdgeClassifications = 0;
+    uint64_t RecurrenceProofs = 0;
+    uint64_t StableOffsetProofs = 0;
+    uint64_t IndexedBaseProofs = 0;
+  };
+
+  // Deterministic test observability for the recursive provenance proofs. The
+  // counters never participate in an emission decision.
+  mutable AddressProvenanceWorkCounts AddressProvenanceWork;
 
   /// Linkage for a synthesized data/table global: linkonce_odr in mergeable
   /// (sharded) mode so identical per-address globals from sibling shards merge;
@@ -624,6 +637,10 @@ private:
   /// traceControlConst. Unknown conditions retain both edges.
   void ensureFeasibleEdgeCache() const;
 
+  /// Index PHI ownership and structural CFG edges for exact incoming-edge
+  /// classification without rescanning every block for every proof query.
+  void ensurePhiEdgeIndex() const;
+
   enum class PhiEdgeFeasibility { Infeasible, ProvenFeasible, Unknown };
 
   /// Classify a PHI incoming edge without converting malformed/missing CFG
@@ -644,6 +661,9 @@ private:
   bool phiIncomingIsRecurrent(const PhiNode &Phi, int PredId,
                               const MedVar &Arg) const;
 
+  bool phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
+                                  const MedVar &Arg) const;
+
   /// True when an incoming value's defining DAG reaches the PHI output or a
   /// mutually recurrent sibling PHI (for example, x86 wide/narrow register
   /// aliases). Such a loop-carried PHI belongs to the induction resolver and
@@ -656,6 +676,9 @@ private:
   /// forbidden recurrence makes the proof fail closed.
   bool valueIsStableAddressOffset(const MedVar &V,
                                   const MedVar *Forbidden = nullptr) const;
+
+  bool valueIsStableAddressOffsetImpl(const MedVar &V,
+                                      const MedVar *Forbidden) const;
 
   /// Return the sole input of an operation only when the emitted operation is
   /// guaranteed to preserve that input's complete unsigned pointer value.
@@ -1031,6 +1054,15 @@ private:
                                 bool FailClosed = false,
                                 bool *SawAmbiguousPhi = nullptr) const;
 
+  /// Pure recursive implementation behind collectIndexedGlobalBase. Diagnostic
+  /// policy is replayed by the wrapper so a speculative cached query cannot
+  /// suppress a later strict query for the same value.
+  bool collectIndexedGlobalBaseImpl(const MedVar &V, uint64_t &Base,
+                                    bool &HaveBase,
+                                    std::vector<MedVar> &IdxTerms, int Depth,
+                                    bool *SawAmbiguousPhi,
+                                    const PhiNode **AmbiguousPhi) const;
+
   /// Literal-pool variant of collectIndexedGlobalBase: the base must fold
   /// through a literal-pool LOAD (the ARM `ldr rN,[pc]; add rN,pc` idiom), and
   /// likewise descends an INT_ADD tree so a base nested under multi-dimensional
@@ -1136,6 +1168,63 @@ private:
   mutable const MedFunc *InductionBasesFor = nullptr;
   mutable std::set<uint64_t> InductionBaseVAs;
 
+  using AddressProvenanceVarKey =
+      std::tuple<int, int, int, int, int, uint16_t, uint64_t>;
+  struct IndexedGlobalBaseProof {
+    bool Proven = false;
+    uint64_t Base = 0;
+    bool HaveBase = false;
+    std::vector<MedVar> IdxTerms;
+    bool SawAmbiguousPhi = false;
+    const PhiNode *AmbiguousPhi = nullptr;
+  };
+
+  /// Exact value identity used by the provenance caches. Constants include
+  /// their payload and width; register/parameter/stack values include their
+  /// physical payload in addition to SSA identity.
+  static AddressProvenanceVarKey addressProvenanceVarKey(const MedVar &V) {
+    uint64_t Payload = 0;
+    switch (V.Kind) {
+    case MedVar::Const:
+      Payload = V.ConstVal;
+      break;
+    case MedVar::Reg:
+    case MedVar::Param:
+      Payload = V.RegOff;
+      break;
+    case MedVar::Stack:
+      Payload = static_cast<uint64_t>(V.StackOff);
+      break;
+    default:
+      break;
+    }
+    return {static_cast<int>(V.Kind),
+            static_cast<int>(V.TheArch),
+            V.RenameTag,
+            V.Id,
+            V.SSAVer,
+            V.Size,
+            Payload};
+  }
+
+  // Completed clean top-level indexed-base proofs for the current function.
+  // The cached record contains only MedIR facts, never llvm::Value objects.
+  mutable const MedFunc *IndexedGlobalBaseCacheFor = nullptr;
+  mutable std::map<AddressProvenanceVarKey, IndexedGlobalBaseProof>
+      IndexedGlobalBaseCache;
+
+  mutable const MedFunc *PhiRecurrenceCacheFor = nullptr;
+  mutable std::map<std::tuple<const PhiNode *, int, AddressProvenanceVarKey>,
+                   bool>
+      PhiRecurrenceCache;
+  mutable const MedFunc *SelfRecurrenceCacheFor = nullptr;
+  mutable std::map<const PhiNode *, bool> SelfRecurrenceCache;
+
+  mutable const MedFunc *StableOffsetCacheFor = nullptr;
+  mutable std::map<
+      std::tuple<AddressProvenanceVarKey, bool, AddressProvenanceVarKey>, bool>
+      StableOffsetCache;
+
   // Cache of writable-segment base VAs that contain at least one already-
   // symbolized writable-reloc pointer constant (see
   // hasSymbolizedWritableSibling); keyed on the current function.  Mutable so
@@ -1160,6 +1249,12 @@ private:
   mutable const MedFunc *FeasibleEdgesFor = nullptr;
   mutable std::set<std::pair<int, int>> FeasibleEdges;
   mutable std::set<int> FeasibleBlocks;
+
+  mutable const MedFunc *PhiEdgeIndexFor = nullptr;
+  mutable std::map<const PhiNode *, int> PhiOwnerBlocks;
+  mutable std::set<std::pair<int, int>> StructuralEdges;
+  mutable std::map<std::pair<const PhiNode *, int>, PhiEdgeFeasibility>
+      PhiEdgeClassCache;
 
   // Per-function memoized results of varIsFrameDerived, dropped when CurMedFunc
   // changes.  The "traces back to the stack pointer" property of an SSA value

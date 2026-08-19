@@ -343,45 +343,58 @@ void MedLLVMEmitter::ensureFeasibleEdgeCache() const {
   }
 }
 
+void MedLLVMEmitter::ensurePhiEdgeIndex() const {
+  if (PhiEdgeIndexFor == CurMedFunc)
+    return;
+  PhiEdgeIndexFor = CurMedFunc;
+  PhiOwnerBlocks.clear();
+  StructuralEdges.clear();
+  PhiEdgeClassCache.clear();
+  if (!CurMedFunc)
+    return;
+
+  for (const MedBlock &Block : CurMedFunc->Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      PhiOwnerBlocks.emplace(&Phi, Block.Id);
+    for (int Succ : Block.Succs)
+      StructuralEdges.insert({Block.Id, Succ});
+    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      StructuralEdges.insert({Block.Id, Edge.BlockId});
+  }
+}
+
 MedLLVMEmitter::PhiEdgeFeasibility
 MedLLVMEmitter::classifyPhiIncomingEdge(const PhiNode &Phi, int PredId) const {
   if (!CurMedFunc)
     return PhiEdgeFeasibility::Unknown;
-  int OwnerId = -1;
-  for (const MedBlock &Block : CurMedFunc->Blocks)
-    for (const PhiNode &Candidate : Block.Phis)
-      if (&Candidate == &Phi) {
-        OwnerId = Block.Id;
-        break;
-      }
-  if (OwnerId < 0)
+  ensurePhiEdgeIndex();
+  const auto CacheKey = std::make_pair(&Phi, PredId);
+  if (auto It = PhiEdgeClassCache.find(CacheKey); It != PhiEdgeClassCache.end())
+    return It->second;
+
+  ++AddressProvenanceWork.EdgeClassifications;
+  auto Owner = PhiOwnerBlocks.find(&Phi);
+  if (Owner == PhiOwnerBlocks.end()) {
+    PhiEdgeClassCache.emplace(CacheKey, PhiEdgeFeasibility::Unknown);
     return PhiEdgeFeasibility::Unknown;
+  }
+  const int OwnerId = Owner->second;
 
   // A PHI argument whose predecessor cannot be tied to any CFG edge is
   // malformed or incomplete input, not proof that the arm is dead. Keep it
   // feasible so pointer recovery fails closed instead of silently accepting
   // whichever well-formed arm remains.
-  bool IsStructuralEdge = false;
-  for (const MedBlock &Block : CurMedFunc->Blocks) {
-    if (Block.Id != PredId)
-      continue;
-    IsStructuralEdge = std::find(Block.Succs.begin(), Block.Succs.end(),
-                                 OwnerId) != Block.Succs.end();
-    if (!IsStructuralEdge)
-      for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
-        if (Edge.BlockId == OwnerId) {
-          IsStructuralEdge = true;
-          break;
-        }
-    break;
-  }
-  if (!IsStructuralEdge)
+  if (!StructuralEdges.count({PredId, OwnerId})) {
+    PhiEdgeClassCache.emplace(CacheKey, PhiEdgeFeasibility::Unknown);
     return PhiEdgeFeasibility::Unknown;
+  }
 
   ensureFeasibleEdgeCache();
-  return FeasibleEdges.count({PredId, OwnerId}) != 0
-             ? PhiEdgeFeasibility::ProvenFeasible
-             : PhiEdgeFeasibility::Infeasible;
+  const PhiEdgeFeasibility Result = FeasibleEdges.count({PredId, OwnerId}) != 0
+                                        ? PhiEdgeFeasibility::ProvenFeasible
+                                        : PhiEdgeFeasibility::Infeasible;
+  PhiEdgeClassCache.emplace(CacheKey, Result);
+  return Result;
 }
 
 bool MedLLVMEmitter::phiIncomingEdgeFeasible(const PhiNode &Phi,
@@ -391,6 +404,29 @@ bool MedLLVMEmitter::phiIncomingEdgeFeasible(const PhiNode &Phi,
 
 bool MedLLVMEmitter::valueIsStableAddressOffset(const MedVar &V,
                                                 const MedVar *Forbidden) const {
+  if (!CurMedFunc) {
+    ++AddressProvenanceWork.StableOffsetProofs;
+    return valueIsStableAddressOffsetImpl(V, Forbidden);
+  }
+  if (StableOffsetCacheFor != CurMedFunc) {
+    StableOffsetCacheFor = CurMedFunc;
+    StableOffsetCache.clear();
+  }
+  const AddressProvenanceVarKey EmptyForbidden{};
+  const auto Key = std::make_tuple(
+      addressProvenanceVarKey(V), Forbidden != nullptr,
+      Forbidden ? addressProvenanceVarKey(*Forbidden) : EmptyForbidden);
+  if (auto It = StableOffsetCache.find(Key); It != StableOffsetCache.end())
+    return It->second;
+
+  ++AddressProvenanceWork.StableOffsetProofs;
+  const bool Result = valueIsStableAddressOffsetImpl(V, Forbidden);
+  StableOffsetCache.emplace(Key, Result);
+  return Result;
+}
+
+bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
+    const MedVar &V, const MedVar *Forbidden) const {
   auto sameVar = [](const MedVar &A, const MedVar &B) {
     return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
            A.SSAVer == B.SSAVer;
@@ -539,6 +575,26 @@ bool MedLLVMEmitter::valueIsStableAddressOffset(const MedVar &V,
 
 bool MedLLVMEmitter::phiIncomingIsRecurrent(const PhiNode &Phi, int PredId,
                                             const MedVar &Arg) const {
+  if (!CurMedFunc) {
+    ++AddressProvenanceWork.RecurrenceProofs;
+    return phiIncomingIsRecurrentImpl(Phi, PredId, Arg);
+  }
+  if (PhiRecurrenceCacheFor != CurMedFunc) {
+    PhiRecurrenceCacheFor = CurMedFunc;
+    PhiRecurrenceCache.clear();
+  }
+  const auto Key = std::make_tuple(&Phi, PredId, addressProvenanceVarKey(Arg));
+  if (auto It = PhiRecurrenceCache.find(Key); It != PhiRecurrenceCache.end())
+    return It->second;
+
+  ++AddressProvenanceWork.RecurrenceProofs;
+  const bool Result = phiIncomingIsRecurrentImpl(Phi, PredId, Arg);
+  PhiRecurrenceCache.emplace(Key, Result);
+  return Result;
+}
+
+bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
+                                                const MedVar &Arg) const {
   if (classifyPhiIncomingEdge(Phi, PredId) !=
       PhiEdgeFeasibility::ProvenFeasible)
     return false;
@@ -699,9 +755,23 @@ bool MedLLVMEmitter::phiIncomingIsRecurrent(const PhiNode &Phi, int PredId,
 }
 
 bool MedLLVMEmitter::phiIsSelfRecurrent(const PhiNode &Phi) const {
+  if (CurMedFunc) {
+    if (SelfRecurrenceCacheFor != CurMedFunc) {
+      SelfRecurrenceCacheFor = CurMedFunc;
+      SelfRecurrenceCache.clear();
+    }
+    if (auto It = SelfRecurrenceCache.find(&Phi);
+        It != SelfRecurrenceCache.end())
+      return It->second;
+  }
   for (const auto &[PredId, Arg] : Phi.Args)
-    if (phiIncomingIsRecurrent(Phi, PredId, Arg))
+    if (phiIncomingIsRecurrent(Phi, PredId, Arg)) {
+      if (CurMedFunc)
+        SelfRecurrenceCache.emplace(&Phi, true);
       return true;
+    }
+  if (CurMedFunc)
+    SelfRecurrenceCache.emplace(&Phi, false);
   return false;
 }
 
@@ -1304,6 +1374,64 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
                                               std::vector<MedVar> &IdxTerms,
                                               int Depth, bool FailClosed,
                                               bool *SawAmbiguousPhi) const {
+  const bool CleanTopLevel =
+      Depth == 0 && Base == 0 && !HaveBase && IdxTerms.empty();
+  auto replayDiagnostic = [&](bool SawAmbiguous, const PhiNode *AmbiguousPhi) {
+    if (SawAmbiguousPhi && SawAmbiguous)
+      *SawAmbiguousPhi = true;
+    if (FailClosed && AmbiguousPhi)
+      failAmbiguousDataPointerPhi(*AmbiguousPhi);
+  };
+
+  if (CleanTopLevel && CurMedFunc) {
+    if (IndexedGlobalBaseCacheFor != CurMedFunc) {
+      IndexedGlobalBaseCacheFor = CurMedFunc;
+      IndexedGlobalBaseCache.clear();
+    }
+    const AddressProvenanceVarKey Key = addressProvenanceVarKey(V);
+    if (auto It = IndexedGlobalBaseCache.find(Key);
+        It != IndexedGlobalBaseCache.end()) {
+      const IndexedGlobalBaseProof &Proof = It->second;
+      Base = Proof.Base;
+      HaveBase = Proof.HaveBase;
+      IdxTerms = Proof.IdxTerms;
+      replayDiagnostic(Proof.SawAmbiguousPhi, Proof.AmbiguousPhi);
+      return Proof.Proven;
+    }
+
+    ++AddressProvenanceWork.IndexedBaseProofs;
+    bool LocalSawAmbiguous = false;
+    const PhiNode *LocalAmbiguousPhi = nullptr;
+    const bool Proven =
+        collectIndexedGlobalBaseImpl(V, Base, HaveBase, IdxTerms, Depth,
+                                     &LocalSawAmbiguous, &LocalAmbiguousPhi);
+    IndexedGlobalBaseProof Proof;
+    Proof.Proven = Proven;
+    Proof.Base = Base;
+    Proof.HaveBase = HaveBase;
+    Proof.IdxTerms = IdxTerms;
+    Proof.SawAmbiguousPhi = LocalSawAmbiguous;
+    Proof.AmbiguousPhi = LocalAmbiguousPhi;
+    IndexedGlobalBaseCache.emplace(Key, std::move(Proof));
+    replayDiagnostic(LocalSawAmbiguous, LocalAmbiguousPhi);
+    return Proven;
+  }
+
+  if (CleanTopLevel)
+    ++AddressProvenanceWork.IndexedBaseProofs;
+  bool LocalSawAmbiguous = false;
+  const PhiNode *LocalAmbiguousPhi = nullptr;
+  const bool Proven =
+      collectIndexedGlobalBaseImpl(V, Base, HaveBase, IdxTerms, Depth,
+                                   &LocalSawAmbiguous, &LocalAmbiguousPhi);
+  replayDiagnostic(LocalSawAmbiguous, LocalAmbiguousPhi);
+  return Proven;
+}
+
+bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
+    const MedVar &V, uint64_t &Base, bool &HaveBase,
+    std::vector<MedVar> &IdxTerms, int Depth, bool *SawAmbiguousPhi,
+    const PhiNode **AmbiguousPhi) const {
   if (!CurMedFunc || Depth > 8)
     return false;
 
@@ -1327,8 +1455,9 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
   // SUBBYTES do not carry the original table base.
   if (Def)
     if (auto Forwarded = pointerPreservingInput(*Def))
-      return collectIndexedGlobalBase(*Forwarded, Base, HaveBase, IdxTerms,
-                                      Depth + 1, FailClosed, SawAmbiguousPhi);
+      return collectIndexedGlobalBaseImpl(*Forwarded, Base, HaveBase, IdxTerms,
+                                          Depth + 1, SawAmbiguousPhi,
+                                          AmbiguousPhi);
   // A non-recursive control-flow PHI can transport one table base just like a
   // COPY, but only after proving every feasible incoming edge.  Direct PHI
   // constants are emitted as raw original-image integers (the edge-copy path
@@ -1363,9 +1492,9 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
         uint64_t ArmBase = 0;
         bool HaveArmBase = false;
         std::vector<MedVar> ArmTerms;
-        if (collectIndexedGlobalBase(Arg, ArmBase, HaveArmBase, ArmTerms,
-                                     Depth + 1, /*FailClosed=*/false,
-                                     SawAmbiguousPhi) &&
+        if (collectIndexedGlobalBaseImpl(Arg, ArmBase, HaveArmBase, ArmTerms,
+                                         Depth + 1, SawAmbiguousPhi,
+                                         AmbiguousPhi) &&
             HaveArmBase)
           Candidate = traceValueVA(Arg);
       }
@@ -1393,16 +1522,16 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
       if (SawTableShapedInvalid) {
         if (SawAmbiguousPhi)
           *SawAmbiguousPhi = true;
-        if (FailClosed)
-          failAmbiguousDataPointerPhi(*Phi);
+        if (AmbiguousPhi && !*AmbiguousPhi)
+          *AmbiguousPhi = Phi;
       }
       return false;
     }
     if (SawUnproved || SawDifferent) {
       if (SawAmbiguousPhi)
         *SawAmbiguousPhi = true;
-      if (FailClosed)
-        failAmbiguousDataPointerPhi(*Phi);
+      if (AmbiguousPhi && !*AmbiguousPhi)
+        *AmbiguousPhi = Phi;
       return false;
     }
     if (!CommonBase || (HaveBase && Base != *CommonBase))
@@ -1452,8 +1581,8 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
     auto KC = traceSSAConst(Def->Inputs[1]);
     if (!KC || Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
         Def->Output.Size < Def->Inputs[0].Size ||
-        !collectIndexedGlobalBase(Def->Inputs[0], Base, HaveBase, IdxTerms,
-                                  Depth + 1, FailClosed, SawAmbiguousPhi))
+        !collectIndexedGlobalBaseImpl(Def->Inputs[0], Base, HaveBase, IdxTerms,
+                                      Depth + 1, SawAmbiguousPhi, AmbiguousPhi))
       return false;
     uint16_t KSz = Def->Inputs[1].Size ? Def->Inputs[1].Size : 8;
     IdxTerms.push_back(MedVar::makeConst(uint64_t(0) - *KC, KSz));
@@ -1504,15 +1633,17 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
   // base nested under multi-dimensional indexing (`base + row*stride + col`) or
   // past a constant field offset (`base + i*stride + off`); each non-base side
   // (including a constant offset) becomes an index addend.
-  if (!CA && collectIndexedGlobalBase(A, Base, HaveBase, IdxTerms, Depth + 1,
-                                      FailClosed, SawAmbiguousPhi)) {
+  if (!CA &&
+      collectIndexedGlobalBaseImpl(A, Base, HaveBase, IdxTerms, Depth + 1,
+                                   SawAmbiguousPhi, AmbiguousPhi)) {
     if (Def->Output.Size == 0 || A.Size == 0 || Def->Output.Size < A.Size)
       return false;
     IdxTerms.push_back(B);
     return true;
   }
-  if (!CB && collectIndexedGlobalBase(B, Base, HaveBase, IdxTerms, Depth + 1,
-                                      FailClosed, SawAmbiguousPhi)) {
+  if (!CB &&
+      collectIndexedGlobalBaseImpl(B, Base, HaveBase, IdxTerms, Depth + 1,
+                                   SawAmbiguousPhi, AmbiguousPhi)) {
     if (Def->Output.Size == 0 || B.Size == 0 || Def->Output.Size < B.Size)
       return false;
     IdxTerms.push_back(A);

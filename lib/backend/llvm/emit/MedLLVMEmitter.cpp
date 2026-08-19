@@ -339,6 +339,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   TargetFormat = Fmt;
   MergeableGlobals = MergeableGlobals_;
   UnhandledValueIntrinsicCount = 0;
+  AddressProvenanceWork = {};
   GlobalDataCache.clear();
   SegmentDataGlobals.clear();
   WritableSegmentGlobals.clear();
@@ -358,6 +359,14 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   RodataSymbolVAs.clear();
   InductionBasesFor = nullptr;
   InductionBaseVAs.clear();
+  IndexedGlobalBaseCacheFor = nullptr;
+  IndexedGlobalBaseCache.clear();
+  PhiRecurrenceCacheFor = nullptr;
+  PhiRecurrenceCache.clear();
+  SelfRecurrenceCacheFor = nullptr;
+  SelfRecurrenceCache.clear();
+  StableOffsetCacheFor = nullptr;
+  StableOffsetCache.clear();
   SymbolizedWritableSegsFor = nullptr;
   SymbolizedWritableSegs.clear();
   DefPhiIndexFor = nullptr;
@@ -366,6 +375,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   FeasibleEdgesFor = nullptr;
   FeasibleEdges.clear();
   FeasibleBlocks.clear();
+  PhiEdgeIndexFor = nullptr;
+  PhiOwnerBlocks.clear();
+  StructuralEdges.clear();
+  PhiEdgeClassCache.clear();
   FrameDerivedCacheFor = nullptr;
   FrameDerivedCache.clear();
   AddrPredCacheFor = nullptr;
