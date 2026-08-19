@@ -61,9 +61,16 @@ void MedLLVMEmitter::ensureAddrPredCache() const {
 bool MedLLVMEmitter::stackSlotAddressEscapes(const MedVar &SlotAddr) const {
   if (!CurMedFunc)
     return false;
-  // Canonicalize the slot through register copies so a parameter-register copy
-  // of the address compares equal to the load/store form (both ThroughRegs).
-  auto Target = addrSlotKey(SlotAddr, /*Depth=*/0, /*ThroughRegs=*/true);
+  // Prefer the common entry-SP coordinate so an FP-relative load/store and an
+  // SP-relative address passed to a callee compare equal. Preserve the legacy
+  // identity key as a conservative fallback for frames whose root cannot be
+  // proven affine (notably a live-in frame pointer).
+  auto keyOf = [&](const MedVar &V) {
+    if (auto Canonical = canonicalFrameSlotKey(V))
+      return Canonical;
+    return addrSlotKey(V, /*Depth=*/0, /*ThroughRegs=*/true);
+  };
+  auto Target = keyOf(SlotAddr);
   if (!Target)
     return false;
   ensureAddrPredCache();
@@ -76,7 +83,7 @@ bool MedLLVMEmitter::stackSlotAddressEscapes(const MedVar &SlotAddr) const {
   // #475).
   for (const auto &CI : CurMedFunc->CallInfos) {
     for (const auto &Arg : CI.Args)
-      if (auto K = addrSlotKey(Arg, 0, true); K && *K == *Target) {
+      if (auto K = keyOf(Arg); K && *K == *Target) {
         Result = true;
         break;
       }
@@ -88,7 +95,7 @@ bool MedLLVMEmitter::stackSlotAddressEscapes(const MedVar &SlotAddr) const {
     for (const auto &Blk : CurMedFunc->Blocks) {
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
-          if (auto K = addrSlotKey(Op.Inputs[1], 0, true); K && *K == *Target) {
+          if (auto K = keyOf(Op.Inputs[1]); K && *K == *Target) {
             Result = true;
             break;
           }
@@ -103,7 +110,12 @@ bool MedLLVMEmitter::frameSlotHasMatchingKeyLoad(
     const MedVar &StoreAddr) const {
   if (!CurMedFunc)
     return false;
-  auto SK = addrSlotKey(StoreAddr);
+  auto keyOf = [&](const MedVar &V) {
+    if (auto Canonical = canonicalFrameSlotKey(V))
+      return Canonical;
+    return addrSlotKey(V);
+  };
+  auto SK = keyOf(StoreAddr);
   if (!SK)
     return false;
   ensureAddrPredCache();
@@ -114,7 +126,7 @@ bool MedLLVMEmitter::frameSlotHasMatchingKeyLoad(
   for (const auto &Blk : CurMedFunc->Blocks) {
     for (const auto &Op : Blk.Ops)
       if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
-        if (auto LK = addrSlotKey(Op.Inputs[0]); LK && *LK == *SK) {
+        if (auto LK = keyOf(Op.Inputs[0]); LK && *LK == *SK) {
           Result = true;
           break;
         }
@@ -129,20 +141,25 @@ bool MedLLVMEmitter::collectFrameReloadSources(
     const MedOp &Load, std::vector<MedVar> &Sources) const {
   Sources.clear();
   if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
-      Load.Output.Size == 0 || !varIsFrameDerived(Load.Inputs[0]) ||
-      stackSlotAddressEscapes(Load.Inputs[0]))
+      Load.Output.Size == 0 || stackSlotAddressEscapes(Load.Inputs[0]))
     return false;
 
-  const auto Target = addrSlotKey(Load.Inputs[0]);
+  const auto Target = canonicalFrameSlotKey(Load.Inputs[0]);
   if (!Target)
     return false;
 
   std::map<int, const MedBlock *> BlocksById;
+  const MedBlock *EntryBlock = nullptr;
   const MedBlock *LoadBlock = nullptr;
   size_t LoadIndex = 0;
   for (const MedBlock &Block : CurMedFunc->Blocks) {
     if (!BlocksById.emplace(Block.Id, &Block).second)
       return false;
+    if (Block.StartAddr == CurMedFunc->Entry) {
+      if (EntryBlock)
+        return false;
+      EntryBlock = &Block;
+    }
     for (size_t I = 0; I < Block.Ops.size(); ++I)
       if (&Block.Ops[I] == &Load) {
         if (LoadBlock)
@@ -151,7 +168,7 @@ bool MedLLVMEmitter::collectFrameReloadSources(
         LoadIndex = I;
       }
   }
-  if (!LoadBlock)
+  if (!EntryBlock || !LoadBlock)
     return false;
 
   // Preds is cached IR metadata, not authority for reachability.  Reconstruct
@@ -249,9 +266,9 @@ bool MedLLVMEmitter::collectFrameReloadSources(
         continue;
       }
       const MedVar &WriteAddr = Op.Inputs[0];
-      if (!varIsFrameDerived(WriteAddr))
+      if (!varMayBeFrameAddress(WriteAddr))
         continue;
-      const auto WriteKey = addrSlotKey(WriteAddr);
+      const auto WriteKey = canonicalFrameSlotKey(WriteAddr);
       // A frame-derived write whose slot cannot be canonicalized, or whose
       // root differs from the reload's root, may still alias after an
       // unmodelled stack adjustment. Keep the state poisoned until a later
@@ -292,8 +309,8 @@ bool MedLLVMEmitter::collectFrameReloadSources(
   ReachingState Entry;
   Entry.Reachable = true;
   Entry.Uninitialized = true;
-  InStates[CurMedFunc->Blocks.front().Id] = Entry;
-  std::vector<int> Work{CurMedFunc->Blocks.front().Id};
+  InStates[EntryBlock->Id] = Entry;
+  std::vector<int> Work{EntryBlock->Id};
   while (!Work.empty()) {
     int BlockId = Work.back();
     Work.pop_back();
@@ -408,7 +425,12 @@ std::optional<uint64_t> MedLLVMEmitter::traceValueVA(const MedVar &V,
 bool MedLLVMEmitter::frameSlotReloadUsedLocally(const MedVar &StoreAddr) const {
   if (!CurMedFunc)
     return false;
-  auto SK = addrSlotKey(StoreAddr);
+  auto keyOf = [&](const MedVar &V) {
+    if (auto Canonical = canonicalFrameSlotKey(V))
+      return Canonical;
+    return addrSlotKey(V);
+  };
+  auto SK = keyOf(StoreAddr);
   if (!SK)
     return false;
   ensureAddrPredCache();
@@ -432,7 +454,7 @@ bool MedLLVMEmitter::frameSlotReloadUsedLocally(const MedVar &StoreAddr) const {
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
-          if (auto LK = addrSlotKey(Op.Inputs[0]); LK && *LK == *SK)
+          if (auto LK = keyOf(Op.Inputs[0]); LK && *LK == *SK)
             ReloadVals.push_back(Op.Output);
     if (ReloadVals.empty())
       return false;

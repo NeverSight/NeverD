@@ -157,25 +157,17 @@ uint64_t MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
           }
           break;
         case NdOp::LOAD:
-          // Stack spill/reload of a writable-data base: a register-constrained
-          // target (i386 PIC) spills a `lea`/GOTOFF global address to a frame
-          // slot and reloads it to blend into a call-arg / stored pointer.
-          // Follow the matching STORE's value to reach the spilled base
-          // constant. addrSlotKey only keys on a register-rooted slot, so a
-          // load from a global pointer (constant address) yields no key and is
-          // left as an index computation. A slot whose ADDRESS escapes is
-          // skipped: a callee may have written an already-symbolized pointer
-          // there, so the in-function constant base no longer matches the
-          // runtime value (double-relocation, the #475 shape).
-          if (Def->NumInputs >= 1)
-            if (auto LKey = addrSlotKey(Def->Inputs[0]);
-                LKey && !stackSlotAddressEscapes(Def->Inputs[0]))
-              for (const auto &B : CurMedFunc->Blocks)
-                for (const auto &O : B.Ops)
-                  if (O.Opcode == NdOp::STORE && O.NumInputs >= 2)
-                    if (auto SKey = addrSlotKey(O.Inputs[0]);
-                        SKey && *SKey == *LKey)
-                      Work.push_back(O.Inputs[1]);
+          // Stack spill/reload of a writable-data base. Use the shared exact
+          // reaching-store proof rather than scanning every same-key STORE:
+          // the latter admits a store after the LOAD or on only one CFG path,
+          // while also drifting from the read-only/code-pointer resolvers that
+          // cross the identical stack boundary. A global-memory LOAD has no
+          // frame slot proof and remains an ordinary index/value computation.
+          {
+            std::vector<MedVar> Sources;
+            if (collectFrameReloadSources(*Def, Sources))
+              Work.insert(Work.end(), Sources.begin(), Sources.end());
+          }
           break;
         default:
           // INT_MULT/XOR/shift: an index computation, not a base — its

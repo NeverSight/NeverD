@@ -24,7 +24,9 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/MathExtras.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -121,6 +123,68 @@ bool MedLLVMEmitter::varIsFrameDerived(const MedVar &V, int /*Depth*/) const {
   llvm::DenseSet<std::pair<int64_t, int>> Visited;
   bool Result = frameDerivedRec(V, Visited);
   FrameDerivedCache[Key] = Result;
+  return Result;
+}
+
+bool MedLLVMEmitter::frameAddressRec(
+    const MedVar &V, llvm::DenseSet<std::pair<int64_t, int>> &Visited) const {
+  if (V.isConst() || !CurMedFunc)
+    return false;
+
+  if (V.Kind == MedVar::Reg) {
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    if ((TRI.StackPointer != 0 && V.RegOff == TRI.StackPointer) ||
+        (TRI.FramePointer != 0 && V.RegOff == TRI.FramePointer))
+      return true;
+  }
+
+  if (!Visited.insert(frameKey(V)).second)
+    return false;
+
+  if (const PhiNode *Phi = lookupPhi(V))
+    for (const auto &[PredId, Arg] : Phi->Args) {
+      (void)PredId;
+      if (frameAddressRec(Arg, Visited))
+        return true;
+    }
+
+  const MedOp *Def = lookupDef(V);
+  if (!Def)
+    return false;
+  switch (Def->Opcode) {
+  case NdOp::COPY:
+  case NdOp::SUBBYTES:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::SELECT:
+    for (uint8_t I = 0; I < Def->NumInputs; ++I)
+      if (frameAddressRec(Def->Inputs[I], Visited))
+        return true;
+    return false;
+  default:
+    return false;
+  }
+}
+
+bool MedLLVMEmitter::varMayBeFrameAddress(const MedVar &V) const {
+  if (V.isConst() || !CurMedFunc)
+    return false;
+  if (FrameAddressCacheFor != CurMedFunc) {
+    FrameAddressCacheFor = CurMedFunc;
+    FrameAddressCache.clear();
+  }
+  auto Key = frameKey(V);
+  if (auto It = FrameAddressCache.find(Key); It != FrameAddressCache.end())
+    return It->second;
+
+  llvm::DenseSet<std::pair<int64_t, int>> Visited;
+  const bool Result = frameAddressRec(V, Visited);
+  FrameAddressCache[Key] = Result;
   return Result;
 }
 
@@ -314,6 +378,128 @@ MedLLVMEmitter::addrSlotKey(const MedVar &V, int Depth,
   }
 }
 
+std::optional<med_llvm::SlotKey>
+MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V) const {
+  if (!CurMedFunc || V.isConst())
+    return std::nullopt;
+
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  const uint64_t SpOff = TRI.StackPointer;
+  const uint64_t FpOff = TRI.FramePointer;
+  const unsigned PointerSize = TRI.PointerSize;
+  std::set<AddressProvenanceVarKey> Active;
+  auto sameVar = [](const MedVar &A, const MedVar &B) {
+    return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
+           A.SSAVer == B.SSAVer;
+  };
+  auto signedDelta = [](const MedVar &C,
+                        uint16_t FallbackSize) -> std::optional<int64_t> {
+    if (!C.isConst())
+      return std::nullopt;
+    // INT_ADD/INT_SUB wrap at the operation's result width.  A wider literal
+    // feeding a 32-bit address therefore represents its signed low 32 bits,
+    // not a positive 64-bit displacement.
+    const unsigned Bytes = FallbackSize != 0 ? FallbackSize : C.Size;
+    if (Bytes == 0 || Bytes > sizeof(uint64_t))
+      return std::nullopt;
+    const unsigned Bits = Bytes * 8;
+    uint64_t Value = C.ConstVal;
+    if (Bits < 64) {
+      const uint64_t Mask = (uint64_t{1} << Bits) - 1;
+      Value &= Mask;
+      if (Value & (uint64_t{1} << (Bits - 1)))
+        Value |= ~Mask;
+    }
+    return static_cast<int64_t>(Value);
+  };
+
+  std::function<std::optional<med_llvm::SlotKey>(const MedVar &, int)> rec =
+      [&](const MedVar &Cur, int Depth) -> std::optional<med_llvm::SlotKey> {
+    if (Cur.isConst() || Depth > limits::kMaxStackPtrTraceDepth)
+      return std::nullopt;
+
+    const AddressProvenanceVarKey Key = addressProvenanceVarKey(Cur);
+    if (!Active.insert(Key).second)
+      return std::nullopt;
+
+    const MedOp *Def = lookupDef(Cur);
+    // The lifter's entry register seeds are represented as self-copies.  They
+    // are roots, not definitions to recurse through.  Only the physical stack
+    // pointer is the preferred canonical frame origin.  A physical frame
+    // pointer with no provable definition is also an exact origin, but remains
+    // distinct from SP: only an explicit affine FP definition may unify them.
+    // This admits i386 live-in EBP slots without guessing their SP delta.
+    const bool IsSelfCopy = Def && Def->Opcode == NdOp::COPY &&
+                            Def->NumInputs >= 1 && sameVar(Cur, Def->Inputs[0]);
+    const bool IsEntryStackPointer =
+        Cur.Kind == MedVar::Reg && SpOff != 0 && Cur.RegOff == SpOff &&
+        Cur.Size >= PointerSize && (!Def || IsSelfCopy);
+    const bool IsLiveInFramePointer =
+        Cur.Kind == MedVar::Reg && FpOff != 0 && Cur.RegOff == FpOff &&
+        Cur.Size >= PointerSize && (!Def || IsSelfCopy);
+    if (IsEntryStackPointer || IsLiveInFramePointer) {
+      Active.erase(Key);
+      return med_llvm::SlotKey{{Cur.Id, Cur.SSAVer}, 0};
+    }
+
+    std::optional<med_llvm::SlotKey> Result;
+    if (Def && Def->NumInputs >= 1) {
+      auto addOffset = [&](const MedVar &Base,
+                           int64_t Delta) -> std::optional<med_llvm::SlotKey> {
+        auto BaseKey = rec(Base, Depth + 1);
+        if (!BaseKey)
+          return std::nullopt;
+        int64_t Offset = 0;
+        if (llvm::AddOverflow(BaseKey->second, Delta, Offset))
+          return std::nullopt;
+        return med_llvm::SlotKey{BaseKey->first, Offset};
+      };
+      switch (Def->Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+        // Width changes preserve a frame address only when neither side drops
+        // any target pointer bits.  This still admits 32->64 bookkeeping on a
+        // 32-bit target, while rejecting a lossy x86-64 low-register roundtrip.
+        if (PointerSize != 0 && Def->Output.Size >= PointerSize &&
+            Def->Inputs[0].Size >= PointerSize)
+          Result = rec(Def->Inputs[0], Depth + 1);
+        break;
+      case NdOp::SUBBYTES:
+        if (Def->NumInputs >= 2 && Def->Inputs[1].isConst() &&
+            Def->Inputs[1].ConstVal == 0 && PointerSize != 0 &&
+            Def->Output.Size >= PointerSize &&
+            Def->Inputs[0].Size >= PointerSize)
+          Result = rec(Def->Inputs[0], Depth + 1);
+        break;
+      case NdOp::INT_ADD:
+        if (Def->NumInputs >= 2 && Def->Inputs[1].isConst()) {
+          if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size))
+            Result = addOffset(Def->Inputs[0], *Delta);
+        } else if (Def->NumInputs >= 2 && Def->Inputs[0].isConst()) {
+          if (auto Delta = signedDelta(Def->Inputs[0], Cur.Size))
+            Result = addOffset(Def->Inputs[1], *Delta);
+        }
+        break;
+      case NdOp::INT_SUB:
+        if (Def->NumInputs >= 2 && Def->Inputs[1].isConst()) {
+          if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size)) {
+            int64_t Negated = 0;
+            if (!llvm::SubOverflow(int64_t{0}, *Delta, Negated))
+              Result = addOffset(Def->Inputs[0], Negated);
+          }
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    Active.erase(Key);
+    return Result;
+  };
+  return rec(V, 0);
+}
+
 bool MedLLVMEmitter::varIsReloadedStackPtr(const MedVar &V, int Depth) const {
   if (!CurMedFunc || V.isConst() || Depth > limits::kMaxStackPtrTraceDepth)
     return false;
@@ -331,18 +517,12 @@ bool MedLLVMEmitter::varIsReloadedStackPtr(const MedVar &V, int Depth) const {
       return varIsReloadedStackPtr(Def->Inputs[0], Depth + 1);
     return false;
   case NdOp::LOAD: {
-    auto LKey = addrSlotKey(Def->Inputs[0]);
-    if (!LKey)
+    std::vector<MedVar> Sources;
+    if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
       return false;
-    for (const auto &Blk : CurMedFunc->Blocks)
-      for (const auto &O : Blk.Ops)
-        if (O.Opcode == NdOp::STORE && O.NumInputs >= 2 &&
-            varIsStackPtrDerived(O.Inputs[1])) {
-          auto SKey = addrSlotKey(O.Inputs[0]);
-          if (SKey && *SKey == *LKey)
-            return true;
-        }
-    return false;
+    return std::all_of(
+        Sources.begin(), Sources.end(),
+        [&](const MedVar &Source) { return varIsStackPtrDerived(Source); });
   }
   default:
     return false;

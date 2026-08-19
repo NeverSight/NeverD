@@ -440,17 +440,14 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
           break;
         case NdOp::LOAD:
           // Stack spill/reload: a register-constrained target (i386/ARM32)
-          // spills the table base to a stack slot; follow the matching STORE's
-          // value.
-          if (Def->NumInputs >= 1)
-            if (auto LKey = addrSlotKey(Def->Inputs[0]))
-              for (const auto &B : CurMedFunc->Blocks)
-                for (const auto &O : B.Ops)
-                  if (O.Opcode == NdOp::STORE && O.NumInputs >= 2) {
-                    auto SKey = addrSlotKey(O.Inputs[0]);
-                    if (SKey && *SKey == *LKey)
-                      Work.push_back(O.Inputs[1]);
-                  }
+          // spills the table base to a stack slot. Follow only exact all-path
+          // reaching STOREs; a whole-function same-key scan admits later and
+          // path-only writes and disagrees with the other provenance walkers.
+          {
+            std::vector<MedVar> Sources;
+            if (collectFrameReloadSources(*Def, Sources))
+              Work.insert(Work.end(), Sources.begin(), Sources.end());
+          }
           break;
         default:
           break; // stop at any non-address-arithmetic producer

@@ -90,6 +90,15 @@ public:
                                   uint16_t Size) {
     return Emitter.getVarMayRelocateConstant(Value, Size);
   }
+
+  static bool collectFrameReloadSources(MedLLVMEmitter &Emitter,
+                                        const MedFunc &Func, Arch TargetArch,
+                                        const MedOp &Load,
+                                        std::vector<MedVar> &Sources) {
+    Emitter.TargetArch = TargetArch;
+    Emitter.CurMedFunc = &Func;
+    return Emitter.collectFrameReloadSources(Load, Sources);
+  }
 };
 
 } // namespace neverd
@@ -362,6 +371,7 @@ constexpr va_t SymbolizedSameRunTableVA = 0x1200;
 constexpr va_t OtherSymbolizedSameRunTableVA = 0x1220;
 constexpr va_t SignBitTableVA = 0x80001000;
 constexpr va_t OtherSignBitTableVA = SignBitTableVA + 0x20;
+constexpr va_t ScalarLiteralVA = TextVA + 0x5C0;
 
 BinaryImage makeSpilledConstTableImage(Arch TargetArch) {
   BinaryImage Image;
@@ -1012,6 +1022,159 @@ MedFunc makeNarrowFrameReloadSecondTableBaseLookup(Arch TargetArch) {
   Func.Blocks[1].Ops[1].Inputs[1] = Wide;
   Func.Blocks[1].Ops.insert(std::next(Func.Blocks[1].Ops.begin()),
                             std::move(Widen));
+  return Func;
+}
+
+MedFunc makeFrameAliasedPointerTableRecurrence(Arch TargetArch) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, int SSAVer, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = SSAVer;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "frame_aliased_pointer_table_recurrence_arm64"
+                  : "frame_aliased_pointer_table_recurrence_x86_64";
+  Func.ReturnType = NdType::makeInt(TRI.PointerSize);
+  Func.FrameSize = 64;
+
+  MedVar Continue = makeVar(MedVar::Param, 0, 0, 1);
+  Continue.RegOff = TRI.IntParamRegs.front();
+  Func.Params.push_back(Continue);
+
+  MedVar EntrySP = makeVar(MedVar::Reg, 100, 0, TRI.PointerSize);
+  EntrySP.RegOff = TRI.StackPointer;
+  MedVar FrameSP = makeVar(MedVar::Reg, 100, 1, TRI.PointerSize);
+  FrameSP.RegOff = TRI.StackPointer;
+  MedVar FramePointer = makeVar(MedVar::Reg, 101, 1, TRI.PointerSize);
+  FramePointer.RegOff = TRI.FramePointer;
+  MedVar CounterSlot = makeVar(MedVar::Temp, 1, 1, TRI.PointerSize);
+  MedVar DisjointSlot = makeVar(MedVar::Temp, 2, 1, TRI.PointerSize);
+  MedVar Counter = makeVar(MedVar::Temp, 3, 1, TRI.PointerSize);
+  MedVar Scaled = makeVar(MedVar::Temp, 4, 1, TRI.PointerSize);
+  MedVar Address = makeVar(MedVar::Temp, 5, 1, TRI.PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 6, 1, TRI.PointerSize);
+  MedVar ScalarLiteral = makeVar(MedVar::Temp, 7, 1, TRI.PointerSize);
+  MedVar Next = makeVar(MedVar::Temp, 8, 1, TRI.PointerSize);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 0x18;
+  Entry.Succs = {1};
+  MedOp AllocateFrame;
+  AllocateFrame.Opcode = NdOp::INT_SUB;
+  AllocateFrame.Output = FrameSP;
+  AllocateFrame.addInput(EntrySP);
+  AllocateFrame.addInput(MedVar::makeConst(64, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(AllocateFrame));
+  MedOp EstablishFramePointer;
+  EstablishFramePointer.Opcode = NdOp::INT_ADD;
+  EstablishFramePointer.Output = FramePointer;
+  EstablishFramePointer.addInput(FrameSP);
+  EstablishFramePointer.addInput(MedVar::makeConst(48, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(EstablishFramePointer));
+  MedOp FormCounterSlot;
+  FormCounterSlot.Opcode = NdOp::INT_ADD;
+  FormCounterSlot.Output = CounterSlot;
+  FormCounterSlot.addInput(FramePointer);
+  FormCounterSlot.addInput(MedVar::makeConst(uint64_t(-16), TRI.PointerSize));
+  Entry.Ops.push_back(std::move(FormCounterSlot));
+  MedOp InitializeCounter;
+  InitializeCounter.Opcode = NdOp::STORE;
+  InitializeCounter.addInput(CounterSlot);
+  InitializeCounter.addInput(MedVar::makeConst(0, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(InitializeCounter));
+  MedOp FormDisjointSlot;
+  FormDisjointSlot.Opcode = NdOp::INT_ADD;
+  FormDisjointSlot.Output = DisjointSlot;
+  FormDisjointSlot.addInput(FrameSP);
+  FormDisjointSlot.addInput(MedVar::makeConst(8, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(FormDisjointSlot));
+  MedOp InitializeDisjoint;
+  InitializeDisjoint.Opcode = NdOp::STORE;
+  InitializeDisjoint.addInput(DisjointSlot);
+  InitializeDisjoint.addInput(MedVar::makeConst(0x55, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(InitializeDisjoint));
+  MedOp EnterLoop;
+  EnterLoop.Opcode = NdOp::BRANCH;
+  EnterLoop.addInput(MedVar::makeConst(CallerVA + 0x20, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(EnterLoop));
+
+  MedBlock Loop;
+  Loop.Id = 1;
+  Loop.StartAddr = CallerVA + 0x20;
+  Loop.EndAddr = CallerVA + 0x48;
+  Loop.Preds = {0, 1};
+  Loop.Succs = {1, 2};
+  MedOp ReloadCounter;
+  ReloadCounter.Opcode = NdOp::LOAD;
+  ReloadCounter.Output = Counter;
+  ReloadCounter.addInput(CounterSlot);
+  Loop.Ops.push_back(std::move(ReloadCounter));
+  MedOp ScaleCounter;
+  ScaleCounter.Opcode = NdOp::INT_LEFT;
+  ScaleCounter.Output = Scaled;
+  ScaleCounter.addInput(Counter);
+  ScaleCounter.addInput(MedVar::makeConst(3, TRI.PointerSize));
+  Loop.Ops.push_back(std::move(ScaleCounter));
+  MedOp FormAddress;
+  FormAddress.Opcode = NdOp::INT_ADD;
+  FormAddress.Output = Address;
+  FormAddress.addInput(MedVar::makeConst(DataVA + 16, TRI.PointerSize));
+  FormAddress.addInput(Scaled);
+  Loop.Ops.push_back(std::move(FormAddress));
+  MedOp ReadElement;
+  ReadElement.Opcode = NdOp::LOAD;
+  ReadElement.Output = Element;
+  ReadElement.addInput(Address);
+  Loop.Ops.push_back(std::move(ReadElement));
+  MedOp ReadScalarLiteral;
+  ReadScalarLiteral.Opcode = NdOp::LOAD;
+  ReadScalarLiteral.Output = ScalarLiteral;
+  ReadScalarLiteral.addInput(
+      MedVar::makeConst(ScalarLiteralVA, TRI.PointerSize));
+  Loop.Ops.push_back(std::move(ReadScalarLiteral));
+  MedOp AdvanceCounter;
+  AdvanceCounter.Opcode = NdOp::INT_XOR;
+  AdvanceCounter.Output = Next;
+  AdvanceCounter.addInput(Counter);
+  AdvanceCounter.addInput(ScalarLiteral);
+  Loop.Ops.push_back(std::move(AdvanceCounter));
+  MedOp StoreCounter;
+  StoreCounter.Opcode = NdOp::STORE;
+  StoreCounter.addInput(CounterSlot);
+  StoreCounter.addInput(Next);
+  Loop.Ops.push_back(std::move(StoreCounter));
+  MedOp RewriteDisjoint;
+  RewriteDisjoint.Opcode = NdOp::STORE;
+  RewriteDisjoint.addInput(DisjointSlot);
+  RewriteDisjoint.addInput(MedVar::makeConst(0xAA, TRI.PointerSize));
+  Loop.Ops.push_back(std::move(RewriteDisjoint));
+  MedOp BackOrExit;
+  BackOrExit.Opcode = NdOp::COND_BR;
+  BackOrExit.addInput(MedVar::makeConst(Loop.StartAddr, TRI.PointerSize));
+  BackOrExit.addInput(Continue);
+  Loop.Ops.push_back(std::move(BackOrExit));
+
+  MedBlock Exit;
+  Exit.Id = 2;
+  Exit.StartAddr = CallerVA + 0x50;
+  Exit.EndAddr = CallerVA + 0x54;
+  Exit.Preds = {1};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Element);
+  Exit.Ops.push_back(std::move(Return));
+
+  Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Exit)};
   return Func;
 }
 
@@ -6018,6 +6181,75 @@ TEST(MachOLLVMDataPointerBoundary,
 }
 
 TEST(MachOLLVMDataPointerBoundary,
+     TreatsLiveInFramePointerAsExactButDistinctFrameOrigin) {
+  auto useLiveInFramePointer = [](MedFunc &Func) {
+    const TargetRegInfo &TRI = getTargetRegInfo(Arch::X86);
+    ASSERT_FALSE(Func.Blocks.empty());
+    ASSERT_FALSE(Func.Blocks.front().Ops.empty());
+    MedOp &FormSlot = Func.Blocks.front().Ops.front();
+    ASSERT_EQ(FormSlot.Opcode, NdOp::INT_ADD);
+    ASSERT_GE(FormSlot.NumInputs, 1u);
+    MedVar LiveInFP = FormSlot.Inputs[0];
+    LiveInFP.Id += 1000;
+    LiveInFP.RegOff = TRI.FramePointer;
+    FormSlot.Inputs[0] = LiveInFP;
+  };
+  auto slotReload = [](const MedFunc &Func) -> const MedOp * {
+    const MedVar &Slot = Func.Blocks.front().Ops.front().Output;
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            Op.Inputs[0] == Slot)
+          return &Op;
+    return nullptr;
+  };
+
+  MedFunc Defined = makeSpilledConstTableLookup(Arch::X86);
+  useLiveInFramePointer(Defined);
+  const MedOp *DefinedReload = slotReload(Defined);
+  ASSERT_NE(DefinedReload, nullptr);
+  MedLLVMEmitter DefinedEmitter;
+  std::vector<MedVar> Sources;
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      DefinedEmitter, Defined, Arch::X86, *DefinedReload, Sources));
+  ASSERT_EQ(Sources.size(), 1u);
+  EXPECT_EQ(Sources.front(), Defined.Blocks.front().Ops[1].Output);
+
+  MedFunc Late = makeRejectedFrameReloadLookup(
+      Arch::X86, ReachingStoreCase::StoreAfterLoad);
+  useLiveInFramePointer(Late);
+  const MedOp *LateReload = slotReload(Late);
+  ASSERT_NE(LateReload, nullptr);
+  MedLLVMEmitter LateEmitter;
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      LateEmitter, Late, Arch::X86, *LateReload, Sources));
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ReachingStoreProofUsesFunctionEntryNotBlockStorageOrder) {
+  MedFunc Func = makeLoopFrameReloadTableOffsetLookup(
+      Arch::X64, /*InitializeInPreheader=*/true);
+  ASSERT_EQ(Func.Blocks.size(), 3u);
+  const MedVar Slot = Func.Blocks[0].Ops.front().Output;
+  std::rotate(Func.Blocks.begin(), std::next(Func.Blocks.begin()),
+              Func.Blocks.end());
+
+  const MedOp *Reload = nullptr;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 && Op.Inputs[0] == Slot)
+        Reload = &Op;
+  ASSERT_NE(Reload, nullptr);
+
+  MedLLVMEmitter Emitter;
+  std::vector<MedVar> Sources;
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, *Reload, Sources));
+  ASSERT_EQ(Sources.size(), 1u);
+  EXPECT_EQ(Sources.front(), Func.Params.front());
+}
+
+TEST(MachOLLVMDataPointerBoundary,
      ProvesOnlyPreheaderInitializedLoopFrameReloadAsStableOffset) {
   for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
     SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
@@ -6048,6 +6280,62 @@ TEST(MachOLLVMDataPointerBoundary,
         TargetArch, {}, &Image, BinaryFormat::MachO);
     std::string Diagnostic = testing::internal::GetCapturedStderr();
     EXPECT_EQ(NegativeModule.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     CanonicalizesSPFPAliasesForPointerTableScalarRecurrence) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeLLVMImage();
+    Image.Arch = TargetArch;
+    constexpr uint64_t ScalarLiteral = 0x9E3779B185EBCA87ULL;
+    writeObject(Image.Segments.front().Data,
+                static_cast<size_t>(ScalarLiteralVA - TextVA), ScalarLiteral);
+    MedFunc Lookup = makeFrameAliasedPointerTableRecurrence(TargetArch);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-frame-alias-pointer-table-recurrence",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    bool FoundPointerTableLoad = false;
+    for (const llvm::BasicBlock &Block : *Function)
+      for (const llvm::Instruction &Instruction : Block)
+        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+            Load && Load->getPointerOperand()->getName() == "cptptr")
+          FoundPointerTableLoad = true;
+    EXPECT_TRUE(FoundPointerTableLoad);
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RelocatedExecutableLiteralCannotBecomeScalarTableOffset) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeLLVMImage();
+    Image.Arch = TargetArch;
+    constexpr uint64_t ScalarLiteral = 0x9E3779B185EBCA87ULL;
+    writeObject(Image.Segments.front().Data,
+                static_cast<size_t>(ScalarLiteralVA - TextVA), ScalarLiteral);
+    RelocationEntry Relocation;
+    Relocation.Address = ScalarLiteralVA;
+    Relocation.Type = 1;
+    Image.Relocations.push_back(std::move(Relocation));
+    MedFunc Lookup = makeFrameAliasedPointerTableRecurrence(TargetArch);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-relocated-literal-table-offset", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
     EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
               std::string::npos)
         << Diagnostic;

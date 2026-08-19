@@ -559,16 +559,16 @@ private:
   uint64_t writableDataSegOf(const MedVar &AddrVar,
                              bool RequireRelocBase = false) const;
 
-  /// True when the stack slot identified by \p Key (an addrSlotKey result) has
-  /// its ADDRESS escape the current function — passed as a call argument or
+  /// True when the stack slot identified by \p SlotAddr has its ADDRESS escape
+  /// the current function — passed as a call argument or
   /// stored to memory — so a callee may overwrite the slot with an already-
   /// symbolized (recompiled) pointer.  A store-to-load forward of such a slot's
   /// in-function constant base would double-relocate it (the escaping output-
   /// pointer shape), so the spill base recovery skips it.
   bool stackSlotAddressEscapes(const MedVar &SlotAddr) const;
 
-  /// True when some LOAD reads the same constant stack slot (identical
-  /// addrSlotKey) that \p StoreAddr writes.  Such a fixed-offset reload is
+  /// True when some LOAD reads the same canonical constant frame slot that
+  /// \p StoreAddr writes.  Such a fixed-offset reload is
   /// where the store-to-load forward re-symbolizes a spilled global base at the
   /// use (GEP(@run, val-segVA)), so the spill must keep the original VA.  Its
   /// absence means the slot is read only through a runtime index (a local
@@ -578,13 +578,13 @@ private:
   bool frameSlotHasMatchingKeyLoad(const MedVar &StoreAddr) const;
 
   /// Collect the exact-width values that can reach a LOAD from one local,
-  /// non-escaping frame slot.  The backward CFG walk requires every ordinary
-  /// and exceptional predecessor path to encounter a full-width STORE to the
-  /// exact same addrSlotKey before any possibly-aliasing frame write.  It
-  /// rejects bypass/uninitialized paths, partial or overlapping writes,
-  /// ambiguous frame addresses, and cycles without a proven definition.  The
-  /// returned values are provenance candidates only; callers must still prove
-  /// what each value represents.
+  /// non-escaping frame slot.  A forward CFG fixed point requires every
+  /// ordinary and exceptional predecessor path to encounter a full-width
+  /// STORE to the exact same canonical frame slot before any possibly-aliasing
+  /// frame write.  It rejects bypass/uninitialized paths, partial or
+  /// overlapping writes, ambiguous frame addresses, and cycles without a
+  /// proven definition.  The returned values are provenance candidates only;
+  /// callers must still prove what each value represents.
   bool collectFrameReloadSources(const MedOp &Load,
                                  std::vector<MedVar> &Sources) const;
 
@@ -926,6 +926,12 @@ private:
   bool frameDerivedRec(const MedVar &V,
                        llvm::DenseSet<std::pair<int64_t, int>> &Visited) const;
 
+  /// Recursive worker for \ref varMayBeFrameAddress.  This intentionally
+  /// includes both the stack pointer and a live-in frame pointer, unlike the
+  /// SP-specific varIsFrameDerived predicate used by address lowering.
+  bool frameAddressRec(const MedVar &V,
+                       llvm::DenseSet<std::pair<int64_t, int>> &Visited) const;
+
   /// Per-function memoization for the two const classifiers below.  Both are
   /// pure functions of (CurMedFunc, Val), but each call is O(ops^2) and getVar
   /// invokes them once per constant operand, so the same ConstVal is recomputed
@@ -1140,6 +1146,13 @@ private:
   /// table GEP.
   bool varIsFrameDerived(const MedVar &V, int Depth = 0) const;
 
+  /// True when \p V may derive from either physical frame register through
+  /// the integer/copy/selection graph used for memory addresses.  This is a
+  /// conservative alias predicate: exact slot comparisons still require
+  /// canonicalFrameSlotKey, while an uncanonicalizable frame-derived write
+  /// invalidates a reaching-store proof instead of being ignored.
+  bool varMayBeFrameAddress(const MedVar &V) const;
+
   /// True when \p V derives from the entry stack pointer through the identity,
   /// width and adjustment ops the lifter threads SP through — COPY, SUBBYTES,
   /// INT_ZEXT/SEXT (the sub-register round-trips `mov`/`push` emit), the
@@ -1197,6 +1210,13 @@ private:
   /// into a parameter register before a call (escape detection).
   std::optional<std::pair<std::pair<int, int>, int64_t>>
   addrSlotKey(const MedVar &V, int Depth = 0, bool ThroughRegs = false) const;
+
+  /// Resolve a fixed frame address to the entry stack-pointer coordinate
+  /// system.  Unlike addrSlotKey, this follows register definitions, so an
+  /// FP-relative slot and an SP-relative write can be compared by byte range.
+  /// Only exact affine COPY/width/constant-add chains are accepted; dynamic
+  /// stack adjustments, ambiguous PHIs, and overflow fail closed.
+  std::optional<med_llvm::SlotKey> canonicalFrameSlotKey(const MedVar &V) const;
 
   /// True when \p V is reloaded from a stack slot that a stack-pointer-derived
   /// value was spilled to (`mov [slot],sp ; ... ; mov reg,[slot]`).  clang
@@ -1327,6 +1347,8 @@ private:
   // functions).  Same {(Id<<32)|SSAVer, Kind} key scheme as DefIndex.
   mutable const MedFunc *FrameDerivedCacheFor = nullptr;
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameDerivedCache;
+  mutable const MedFunc *FrameAddressCacheFor = nullptr;
+  mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameAddressCache;
 
   // Per-function memoized results of the stack-slot address predicates, dropped
   // when CurMedFunc changes (see ensureAddrPredCache).  Each answer depends
@@ -1334,8 +1356,9 @@ private:
   // body, so it is computed once per distinct slot and reused across the many
   // per-operand queries the address resolvers make — these whole-function slot
   // scans were a top serial cost of emit() after the frame-derived /
-  // return-type walks were fixed.  Keyed by the addrSlotKey {(base Id,SSAVer),
-  // byte offset}.
+  // return-type walks were fixed. Keyed by a canonical frame coordinate when
+  // available (entry SP, or a distinct unproved live-in FP origin), with
+  // addrSlotKey identity as a conservative fallback.
   mutable const MedFunc *AddrPredCacheFor = nullptr;
   mutable std::map<med_llvm::SlotKey, bool> SlotAddressEscapesCache;
   mutable std::map<med_llvm::SlotKey, bool> SlotMatchingKeyLoadCache;

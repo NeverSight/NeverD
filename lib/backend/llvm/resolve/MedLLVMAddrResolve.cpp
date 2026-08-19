@@ -432,6 +432,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
            A.SSAVer == B.SSAVer;
   };
   using Key = std::tuple<int, int, int>;
+  using FrameSlotKey = std::pair<std::pair<int, int>, int64_t>;
   auto keyOf = [](const MedVar &V) {
     return Key{static_cast<int>(V.Kind), V.Id, V.SSAVer};
   };
@@ -440,8 +441,10 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   // or forwarded/arithmetic DAG that carries independently relocatable address
   // provenance. Runtime parameters and opaque scalar results remain valid
   // offsets because getVar does not rewrite them into another global pointer.
-  std::function<bool(const MedVar &, int, std::set<Key>)> prove =
-      [&](const MedVar &Start, int Depth, std::set<Key> Seen) -> bool {
+  std::function<bool(const MedVar &, int, std::set<Key>,
+                     std::set<FrameSlotKey>)>
+      prove = [&](const MedVar &Start, int Depth, std::set<Key> Seen,
+                  std::set<FrameSlotKey> ActiveFrameSlots) -> bool {
     if (Forbidden && sameVar(Start, *Forbidden))
       return false;
     // Recognize a scalar recurrence before applying the acyclic-depth budget:
@@ -477,7 +480,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         if (Edge != PhiEdgeFeasibility::ProvenFeasible)
           return false;
         SawPotential = true;
-        if (!prove(NestedArg, Depth + 1, Seen))
+        if (!prove(NestedArg, Depth + 1, Seen, ActiveFrameSlots))
           return false;
       }
       return SawPotential;
@@ -493,7 +496,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         Value && constantIsMappedAddress(*Value, Start.Size))
       return false;
     if (auto Forwarded = pointerPreservingInput(*Def))
-      return prove(*Forwarded, Depth + 1, Seen);
+      return prove(*Forwarded, Depth + 1, Seen, ActiveFrameSlots);
     if (Def->Opcode == NdOp::SELECT) {
       // Width changes do not by themselves make a scalar SELECT unstable, but
       // every chosen value must remain numeric in rebuilt IR. In particular a
@@ -502,13 +505,14 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // SELECTs remain valid scalar offset computations.
       if (Def->NumInputs < 3)
         return false;
-      return prove(Def->Inputs[1], Depth + 1, Seen) &&
-             prove(Def->Inputs[2], Depth + 1, Seen);
+      return prove(Def->Inputs[1], Depth + 1, Seen, ActiveFrameSlots) &&
+             prove(Def->Inputs[2], Depth + 1, Seen, ActiveFrameSlots);
     }
     if (Def->Opcode == NdOp::INT_OR) {
       MedVar Cond, ArmT, ArmF;
       if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
-        return prove(ArmT, Depth + 1, Seen) && prove(ArmF, Depth + 1, Seen);
+        return prove(ArmT, Depth + 1, Seen, ActiveFrameSlots) &&
+               prove(ArmF, Depth + 1, Seen, ActiveFrameSlots);
     }
 
     bool CarriesArithmeticValue = false;
@@ -548,12 +552,21 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // remains an independently relocatable component, while an ordinary
       // spilled scalar remains a valid offset.
       const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
-      if (varIsFrameDerived(Def->Inputs[0])) {
+      if (auto Slot = canonicalFrameSlotKey(Def->Inputs[0])) {
+        // A loop-carried scalar can be represented through memory rather than
+        // an SSA PHI: load(slot), update, store(slot), backedge. Once the exact
+        // slot's complete reaching definitions are being audited, encountering
+        // that slot again is the recurrence edge, not an unproved new source.
+        // The outer source set still audits every non-cyclic initialization,
+        // so a pointer initializer or an uninitialized path remains rejected.
+        if (ActiveFrameSlots.count(*Slot))
+          return true;
         std::vector<MedVar> Sources;
         if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
           return false;
+        ActiveFrameSlots.insert(*Slot);
         for (const MedVar &Source : Sources)
-          if (!prove(Source, Depth + 1, Seen))
+          if (!prove(Source, Depth + 1, Seen, ActiveFrameSlots))
             return false;
         return true;
       }
@@ -562,14 +575,42 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // complete independently relocatable address. It is an ordinary numeric
       // input (for example a byte from the selected string feeding an x86-64
       // loop state/index DAG), even when later arithmetic widens it.
-      return PointerSize != 0 && Def->Output.Size < PointerSize;
+      if (PointerSize != 0 && Def->Output.Size < PointerSize)
+        return true;
+
+      // ARM32 materializes large scalar immediates in an executable literal
+      // pool. They are pointer-width LOADs, but an exact immutable pool word
+      // with no relocation provenance and a non-address payload is still a
+      // proven scalar. Keep the rule format-neutral: every loader reports
+      // pointer slots/relocations through BinaryImage, and any missing or
+      // conflicting evidence fails closed. A relocated PC displacement can
+      // still be scalar at the LOAD itself; the enclosing `pc + displacement`
+      // is independently folded and rejected above when it forms an address.
+      auto scalarLiteralLoad = [&]() {
+        if (!Img || PointerSize == 0 || Def->Output.Size != PointerSize)
+          return false;
+        auto SlotVA = traceValueVA(Def->Inputs[0]);
+        if (!SlotVA)
+          return false;
+        const Segment *SlotSeg = Img->getSegmentFor(*SlotVA);
+        if (!SlotSeg || !SlotSeg->isReadable() || !SlotSeg->isExecutable() ||
+            SlotSeg->isWritable())
+          return false;
+        if (Img->hasRelocationProvenanceAt(*SlotVA))
+          return false;
+        bool SawLiteralLoad = false;
+        auto Literal = traceTableBaseConst(Start, 0, &SawLiteralLoad);
+        return Literal && SawLiteralLoad &&
+               !constantIsMappedAddress(*Literal, Def->Output.Size);
+      };
+      return scalarLiteralLoad();
     }
     for (uint8_t I = 0; I < Def->NumInputs; ++I)
-      if (!prove(Def->Inputs[I], Depth + 1, Seen))
+      if (!prove(Def->Inputs[I], Depth + 1, Seen, ActiveFrameSlots))
         return false;
     return true;
   };
-  return prove(V, 0, {});
+  return prove(V, 0, {}, {});
 }
 
 bool MedLLVMEmitter::phiIncomingIsRecurrent(const PhiNode &Phi, int PredId,
@@ -1428,13 +1469,17 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
   if (V.isConst()) {
     if (!Img || V.ConstVal == 0)
       return false;
-    // Deliberately narrower than isMaterializableReadOnlyDataAddress: a
-    // writable-in-object RELRO / __DATA_CONST pointer table belongs to the
-    // complete all-arms audit and, for a pure recurrence, the induction
-    // resolver.  Letting this single-base decomposer claim one convenient arm
-    // can discard a loader-proven second base and bypass fail-closed handling.
     const Segment *Seg = Img->getSegmentFor(V.ConstVal);
-    if (!Seg || Seg->isWritable() || !hasObjectDataProvenance(V.ConstVal) ||
+    // Ordinary writable bytes are not immutable-table bases. A segment with
+    // loader-proven pointer slots is different: the pointer-table mirror owns
+    // it even when Mach-O/ELF object flags remain writable while relocations
+    // are applied. Admitting that explicit loader-owned domain lets the
+    // pointer-table resolver claim `base + scalar_index` before the generic
+    // all-arms audit, while the caller still rejects mixed/multiple bases.
+    const bool LoaderOwnedPointerTable =
+        Seg && !Seg->isExecutable() && segHasPtrRelocSlots(Seg);
+    if (!Seg || (Seg->isWritable() && !LoaderOwnedPointerTable) ||
+        !hasObjectDataProvenance(V.ConstVal) ||
         (HaveBase && Base != V.ConstVal))
       return false;
     Base = V.ConstVal;

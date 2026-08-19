@@ -381,6 +381,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   PhiEdgeClassCache.clear();
   FrameDerivedCacheFor = nullptr;
   FrameDerivedCache.clear();
+  FrameAddressCacheFor = nullptr;
+  FrameAddressCache.clear();
   AddrPredCacheFor = nullptr;
   SlotAddressEscapesCache.clear();
   SlotMatchingKeyLoadCache.clear();

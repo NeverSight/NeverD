@@ -77,6 +77,18 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_EQ(Img.RelocDataAddrs, (std::set<va_t>{0x2020, 0x2028}));
   EXPECT_EQ(Img.WritableRelocDataAddrs, (std::set<va_t>{0x3000, 0x4000}));
   EXPECT_EQ(Img.CodeRefTargets, (std::set<va_t>{0x1000}));
+  for (va_t Slot : {0x2000, 0x2008, 0x2010, 0x2018})
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot));
+  EXPECT_FALSE(Img.hasRelocationProvenanceAt(0x2020));
+
+  Img.Relocations.push_back(RelocationEntry{.Address = 0x1020});
+  Img.BaseRelocations.push_back(BaseRelocation{.Address = 0x1028});
+  Img.RelDataPtrRelocSlots.insert(0x2030);
+  Img.RelCodeRelocSlots.insert(0x2038);
+  Img.ImportPtrSlots[0x2040] = "_import";
+  Img.DyldBindSlots[0x2048] = {"_bind", 0};
+  for (va_t Slot : {0x1020, 0x1028, 0x2030, 0x2038, 0x2040, 0x2048})
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot));
 }
 
 TEST_F(NativePointerRelocationBoundary,
@@ -115,6 +127,8 @@ TEST_F(NativePointerRelocationBoundary,
               Target1);
     EXPECT_TRUE(hasBaseRelocation(Img, Slot0));
     EXPECT_TRUE(hasBaseRelocation(Img, Slot1));
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot0));
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot1));
     EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot0), 1u);
     EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot1), 1u);
     EXPECT_EQ(Img.RelocDataAddrs.count(Target0), 1u);
@@ -155,6 +169,8 @@ TEST_F(NativePointerRelocationBoundary,
     EXPECT_EQ(readLE<uint64_t>(Img.readVA(Slot1, sizeof(uint64_t))), Target1);
     EXPECT_TRUE(hasBaseRelocation(Img, Slot0));
     EXPECT_TRUE(hasBaseRelocation(Img, Slot1));
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot0));
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot1));
     EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot0), 1u);
     EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot1), 1u);
     EXPECT_EQ(Img.RelocDataAddrs.count(Target0), 1u);

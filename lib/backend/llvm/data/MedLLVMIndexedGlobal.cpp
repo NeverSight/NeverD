@@ -244,12 +244,14 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
   if (Candidates.empty() && !HaveDagRodata && !SawSelect)
     return nullptr;
 
-  // A PHI incoming value loaded from a rebuilt data-pointer table already
-  // carries a resolved `ptrtoint(@global)` pointer, not a raw VA to anchor.
-  // This is the 32-bit switch-returning-string shape, where the dispatch merges
-  // the default string pointer and the absolute `.data.rel.ro` table loads
-  // through one PHI; re-anchoring such a value to the rodata run would corrupt
-  // it, so bail and let the access use the resolved pointer directly.
+  // A NON-RECURRENT PHI incoming value loaded from a rebuilt data-pointer
+  // table already carries a resolved `ptrtoint(@global)` pointer, not a raw VA
+  // to anchor. This is the 32-bit switch-returning-string shape, where the
+  // dispatch merges the default string pointer and absolute `.data.rel.ro`
+  // table loads through one PHI; bail and let that direct merge use the
+  // resolved pointer. A recurrent PHI must continue into recoverBase below:
+  // its step arithmetic needs the explicit Symbolized address model or the
+  // later iterations fall back to stale integer addresses.
   if (Img && (!Img->DataPtrRelocSlots.empty() || !Img->ImportPtrSlots.empty() ||
               !Img->DyldBindSlots.empty())) {
     auto loadsFromDataPtrTable = [&](const MedVar &Start) {
@@ -296,10 +298,13 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
       }
       return false;
     };
-    for (const PhiNode *Phi : Candidates)
+    for (const PhiNode *Phi : Candidates) {
+      if (phiIsSelfRecurrent(*Phi))
+        continue;
       for (const auto &[Pred, Arg] : Phi->Args)
         if (phiIncomingEdgeFeasible(*Phi, Pred) && loadsFromDataPtrTable(Arg))
           return nullptr;
+    }
   }
 
   // Every feasible initialization value must expose a compatible base inside

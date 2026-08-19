@@ -49,38 +49,29 @@ bool MedLLVMEmitter::i386WalkedPointerDeref(const MedVar &AddrVar) const {
   auto reloadIsSegmentRelative = [&](const MedOp *Def) -> bool {
     if (Def->Opcode != NdOp::LOAD || Def->NumInputs < 1)
       return false;
-    auto LKey = addrSlotKey(Def->Inputs[0]);
-    if (!LKey || stackSlotAddressEscapes(Def->Inputs[0]))
+    std::vector<MedVar> Sources;
+    if (!collectFrameReloadSources(*Def, Sources))
       return false;
-    for (const auto &B : CurMedFunc->Blocks)
-      for (const auto &O : B.Ops) {
-        if (O.Opcode != NdOp::STORE || O.NumInputs < 2)
-          continue;
-        auto SKey = addrSlotKey(O.Inputs[0]);
-        if (!SKey || *SKey != *LKey || PtrSz == 0)
-          continue;
-        if (!O.Inputs[1].isConst() && O.Inputs[1].Size != PtrSz)
-          continue;
-        if (O.Inputs[1].isConst()) {
-          if (symbolizesWritableRelocPtr(O.Inputs[1].ConstVal,
-                                         O.Inputs[1].Size))
-            return true;
-          continue;
-        }
-        auto StoreVA = traceValueVA(O.Inputs[1]);
-        bool StoreSymbolized =
-            StoreVA && symbolizesWritableRelocPtr(*StoreVA, O.Inputs[1].Size);
-        if (!StoreSymbolized && varIsFrameDerived(O.Inputs[0]) &&
-            frameSlotHasMatchingKeyLoad(O.Inputs[0]))
-          continue;
-        bool StoreSeg =
-            writableDataSegOf(O.Inputs[1], /*RequireRelocBase=*/true);
-        if (!StoreSeg && !O.Inputs[1].isConst())
-          StoreSeg =
-              writableDataSegOf(O.Inputs[1], /*RequireRelocBase=*/false) != 0;
-        if (StoreSymbolized || StoreSeg)
+    for (const MedVar &Source : Sources) {
+      if (PtrSz == 0 || (!Source.isConst() && Source.Size != PtrSz))
+        continue;
+      if (Source.isConst()) {
+        if (symbolizesWritableRelocPtr(Source.ConstVal, Source.Size))
           return true;
+        continue;
       }
+      auto StoreVA = traceValueVA(Source);
+      bool StoreSymbolized =
+          StoreVA && symbolizesWritableRelocPtr(*StoreVA, Source.Size);
+      if (!StoreSymbolized && varIsFrameDerived(Def->Inputs[0]) &&
+          frameSlotHasMatchingKeyLoad(Def->Inputs[0]))
+        continue;
+      bool StoreSeg = writableDataSegOf(Source, /*RequireRelocBase=*/true);
+      if (!StoreSeg)
+        StoreSeg = writableDataSegOf(Source, /*RequireRelocBase=*/false) != 0;
+      if (StoreSymbolized || StoreSeg)
+        return true;
+    }
     return false;
   };
   std::set<std::tuple<int, int, int>> Seen;

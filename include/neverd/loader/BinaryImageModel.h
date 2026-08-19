@@ -447,6 +447,29 @@ struct BinaryImage {
   /// Check whether this binary has any relocations.
   bool hasRelocations() const { return !Relocations.empty(); }
 
+  /// True when loader metadata records a relocation/fixup whose storage slot
+  /// begins at \p Address.  This is deliberately format-neutral: PE base
+  /// relocations, ELF/Mach-O object relocations, dyld binds, imports, and the
+  /// normalized absolute/relative pointer-slot sets all answer through the
+  /// same query.  Target-address evidence such as RelocDataAddrs and
+  /// CodeRefTargets is excluded because those sets do not identify the bytes
+  /// being loaded.
+  bool hasRelocationProvenanceAt(va_t Address) const {
+    if (CodePtrRelocSlots.count(Address) || DataPtrRelocSlots.count(Address) ||
+        RelDataPtrRelocSlots.count(Address) ||
+        RelCodeRelocSlots.count(Address) || ImportPtrSlots.count(Address) ||
+        DyldBindSlots.count(Address))
+      return true;
+    if (std::any_of(BaseRelocations.begin(), BaseRelocations.end(),
+                    [&](const BaseRelocation &Reloc) {
+                      return Reloc.Address == Address;
+                    }))
+      return true;
+    return std::any_of(
+        Relocations.begin(), Relocations.end(),
+        [&](const RelocationEntry &Reloc) { return Reloc.Address == Address; });
+  }
+
   /// Get the total virtual size of all loadable segments.
   uint64_t getVirtualSize() const {
     va_t Lo = InvalidVA, Hi = 0;

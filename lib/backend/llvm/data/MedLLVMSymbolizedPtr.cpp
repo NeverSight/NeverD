@@ -64,35 +64,31 @@ bool MedLLVMEmitter::reloadsSymbolizedWritablePtr(const MedVar &AddrVar) const {
   auto reloadIsSymbolizedPtr = [&](const MedOp *Def) -> bool {
     if (Def->Opcode != NdOp::LOAD || Def->NumInputs < 1)
       return false;
-    auto LKey = addrSlotKey(Def->Inputs[0]);
-    if (!LKey || stackSlotAddressEscapes(Def->Inputs[0]))
+    std::vector<MedVar> Sources;
+    if (!collectFrameReloadSources(*Def, Sources))
       return false;
-    for (const auto &B : CurMedFunc->Blocks)
-      for (const auto &O : B.Ops) {
-        if (O.Opcode != NdOp::STORE || O.NumInputs < 2 || O.Inputs[1].isConst())
-          continue;
-        auto SKey = addrSlotKey(O.Inputs[0]);
-        if (!SKey || *SKey != *LKey || PtrSz == 0 || O.Inputs[1].Size != PtrSz)
-          continue;
-        // A frame-derived (SP-relative) store normally keeps the original VA
-        // and the deref re-bases it — UNLESS getVar SYMBOLIZED the stored
-        // value: an i386 PIC `cond ? &A : &B` blend arm is a
-        // writable-reloc-target global pointer getVar emits as `@G + off` even
-        // on an SP-relative frame, so the slot already holds the recompiled
-        // pointer and the deref must use it directly (re-basing it would
-        // double-relocate).  traceValueVA folds the `SUBBYTES(ZEXT(base0 +
-        // GOTOFF))` materialization to the VA so symbolizesWritableRelocPtr can
-        // mirror getVar's decision exactly.
-        auto StoreVA = traceValueVA(O.Inputs[1]);
-        bool StoreSymbolized =
-            StoreVA && symbolizesWritableRelocPtr(*StoreVA, O.Inputs[1].Size);
-        if (!StoreSymbolized && varIsFrameDerived(O.Inputs[0]) &&
-            frameSlotHasMatchingKeyLoad(O.Inputs[0]))
-          continue; // store kept the original VA; the deref re-bases it
-        if (StoreSymbolized ||
-            writableDataSegOf(O.Inputs[1], /*RequireRelocBase=*/true))
-          return true;
-      }
+    for (const MedVar &Source : Sources) {
+      if (Source.isConst() || PtrSz == 0 || Source.Size != PtrSz)
+        continue;
+      // A frame-derived (SP-relative) store normally keeps the original VA
+      // and the deref re-bases it — UNLESS getVar SYMBOLIZED the stored
+      // value: an i386 PIC `cond ? &A : &B` blend arm is a
+      // writable-reloc-target global pointer getVar emits as `@G + off` even
+      // on an SP-relative frame, so the slot already holds the recompiled
+      // pointer and the deref must use it directly (re-basing it would
+      // double-relocate).  traceValueVA folds the `SUBBYTES(ZEXT(base0 +
+      // GOTOFF))` materialization to the VA so symbolizesWritableRelocPtr can
+      // mirror getVar's decision exactly.
+      auto StoreVA = traceValueVA(Source);
+      bool StoreSymbolized =
+          StoreVA && symbolizesWritableRelocPtr(*StoreVA, Source.Size);
+      if (!StoreSymbolized && varIsFrameDerived(Def->Inputs[0]) &&
+          frameSlotHasMatchingKeyLoad(Def->Inputs[0]))
+        continue; // store kept the original VA; the deref re-bases it
+      if (StoreSymbolized ||
+          writableDataSegOf(Source, /*RequireRelocBase=*/true))
+        return true;
+    }
     return false;
   };
   // Walk the address-forming chain (COPY/ZEXT/SEXT widen the pointer; ADD/SUB
