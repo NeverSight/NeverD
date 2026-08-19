@@ -506,6 +506,12 @@ private:
   /// run may span (see buildCodePtrSegmentGlobal / readOnlyAfterRelocRun).
   bool isReadOnlyAfterReloc(const Segment *S) const;
 
+  /// True when \p VA has object-level data provenance rather than merely
+  /// falling inside a coarse readable load segment.  Exact section metadata
+  /// wins when present; this keeps low immediates inside ELF/Mach-O headers
+  /// from masquerading as data addresses while preserving segment-only images.
+  bool hasObjectDataProvenance(uint64_t VA) const;
+
   /// True when \p VA names a file-backed data byte with immutable runtime
   /// semantics and a concrete global-data materialization route.  This unifies
   /// ordinary rodata (including data sections inside an executable Mach-O

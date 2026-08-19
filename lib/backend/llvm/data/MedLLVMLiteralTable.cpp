@@ -312,10 +312,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       if (!Input.isConst() ||
           getVarMayRelocateConstant(Input.ConstVal, Input.Size))
         return false;
-      const Segment *Seg =
-          Input.ConstVal != 0 ? Img->getSegmentFor(Input.ConstVal) : nullptr;
-      return !Seg || Seg->Data.empty() || !Img->isDataAddress(Input.ConstVal) ||
-             Img->isCodeAddress(Input.ConstVal);
+      return !hasObjectDataProvenance(Input.ConstVal);
     };
     switch (Def->Opcode) {
     case NdOp::COPY:
@@ -878,14 +875,12 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         SawSymbolizedBase |= Symbolized;
         return BaseProof::HasBase;
       }
-      const Segment *Seg =
-          V.ConstVal != 0 ? Img->getSegmentFor(V.ConstVal) : nullptr;
       // A small numeric index can collide with a relocatable object's low-VA
-      // .text range.  It remains a scalar unless getVar itself will relocate
-      // it; mapped data is still independent address provenance even when kept
-      // raw.
+      // .text range or with a linked ELF's header PT_LOAD.  It remains a scalar
+      // unless getVar itself will relocate it; exact object data is still
+      // independent address provenance even when kept raw.
       if (getVarMayRelocateConstant(V.ConstVal, V.Size) ||
-          (Seg && !Seg->Data.empty() && Img->isDataAddress(V.ConstVal))) {
+          hasObjectDataProvenance(V.ConstVal)) {
         SawInvalidPointerExpression = true;
         // This resolver owns data-table provenance, not executable-relative
         // jump-table anchors.  Keep a code address Invalid so combining it

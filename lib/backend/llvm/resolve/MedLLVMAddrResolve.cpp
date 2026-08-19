@@ -456,14 +456,13 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         return false;
       if (getVarMayRelocateConstant(Value, Size))
         return true;
-      const Segment *Seg = Img->getSegmentFor(Value);
       // A low object-file text VA can numerically equal an ordinary induction
       // stride (for example AArch64 `p += 4`).  getVar keeps such an immediate
-      // numeric, so segment membership alone is not pointer provenance.  A
-      // mapped data constant is different: even when its low VA stays raw, it
-      // is an independent table/global base and cannot be an induction offset.
-      return Seg && !Seg->Data.empty() && Img->isDataAddress(Value) &&
-             !Img->isCodeAddress(Value);
+      // numeric, so segment membership alone is not pointer provenance.  The
+      // same applies to ELF-header bytes inside a readable low PT_LOAD.  Only
+      // exact object-data provenance is an independent base when getVar keeps
+      // the low address raw.
+      return hasObjectDataProvenance(Value);
     };
     if (Start.isConst())
       return !constantIsMappedAddress(Start.ConstVal, Start.Size);
@@ -1057,14 +1056,11 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
     if (!Offset.isConst() ||
         getVarMayRelocateConstant(Offset.ConstVal, Offset.Size))
       return false;
-    const Segment *Seg =
-        Offset.ConstVal != 0 ? Img->getSegmentFor(Offset.ConstVal) : nullptr;
     // A low executable VA can also be an ordinary stride immediate and stays
-    // numeric when getVar does not relocate it.  A mapped data VA is always
-    // independent address provenance, even when its value is below the normal
-    // symbolization threshold.
-    return !Seg || Seg->Data.empty() || !Img->isDataAddress(Offset.ConstVal) ||
-           Img->isCodeAddress(Offset.ConstVal);
+    // numeric when getVar does not relocate it.  Exact object-data provenance
+    // is independent even below the normal symbolization threshold, whereas a
+    // coincident ELF-header VA is not.
+    return !hasObjectDataProvenance(Offset.ConstVal);
   };
 
   MedVar Cur = V;
@@ -1438,9 +1434,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     // resolver.  Letting this single-base decomposer claim one convenient arm
     // can discard a loader-proven second base and bypass fail-closed handling.
     const Segment *Seg = Img->getSegmentFor(V.ConstVal);
-    if (!Seg || Seg->isWritable() || !Img->isDataAddress(V.ConstVal) ||
-        Seg->Data.empty() || V.ConstVal < Seg->VA ||
-        V.ConstVal - Seg->VA >= Seg->Data.size() ||
+    if (!Seg || Seg->isWritable() || !hasObjectDataProvenance(V.ConstVal) ||
         (HaveBase && Base != V.ConstVal))
       return false;
     Base = V.ConstVal;
@@ -1479,7 +1473,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
       if (Phi->Output.Size == 0 || Arg.Size == 0 ||
           Phi->Output.Size < Arg.Size) {
         auto Value = traceValueVA(Arg);
-        SawTableShapedInvalid |= Value && Img->isDataAddress(*Value);
+        SawTableShapedInvalid |= Value && hasObjectDataProvenance(*Value);
         SawUnproved = true;
         continue;
       }
@@ -1501,12 +1495,10 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
                                ? Img->getSegmentFor(*Candidate)
                                : nullptr;
       bool IsMappedReadOnlyData = Candidate && Seg && !Seg->isWritable() &&
-                                  Img->isDataAddress(*Candidate) &&
-                                  !Seg->Data.empty() && *Candidate >= Seg->VA &&
-                                  *Candidate - Seg->VA < Seg->Data.size();
+                                  hasObjectDataProvenance(*Candidate);
       if (!IsMappedReadOnlyData) {
         auto Value = traceValueVA(Arg);
-        SawTableShapedInvalid |= Value && Img->isDataAddress(*Value);
+        SawTableShapedInvalid |= Value && hasObjectDataProvenance(*Value);
         SawUnproved = true;
         continue;
       }
@@ -1555,9 +1547,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
       auto Candidate = traceSSAConst(Source);
       if (!Candidate || *Candidate == 0)
         return false;
-      const Segment *Seg = Img->getSegmentFor(*Candidate);
-      if (!Seg || !Img->isDataAddress(*Candidate) || Seg->Data.empty() ||
-          *Candidate - Seg->VA >= Seg->Data.size())
+      if (!hasObjectDataProvenance(*Candidate))
         return false;
       if (CommonBase && *CommonBase != *Candidate)
         return false;
@@ -1601,8 +1591,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
   auto isBaseConst = [&](const std::optional<uint64_t> &C) {
     if (!C || *C == 0)
       return false;
-    const auto *Seg = Img->getSegmentFor(*C);
-    return Seg && Img->isDataAddress(*C) && !Seg->Data.empty();
+    return hasObjectDataProvenance(*C);
   };
   const MedVar &A = Def->Inputs[0];
   const MedVar &B = Def->Inputs[1];

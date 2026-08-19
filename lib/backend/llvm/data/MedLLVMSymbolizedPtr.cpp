@@ -333,8 +333,7 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
           return false;
         if (*VA == 0)
           return true;
-        const Segment *Seg = Img->getSegmentFor(*VA);
-        return Seg && !Seg->Data.empty() && Img->isDataAddress(*VA) &&
+        return hasObjectDataProvenance(*VA) &&
                !isFrameRelativeDisplacement(*VA, AddrBits);
       };
 
@@ -395,7 +394,7 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
     // unrolled loop counter 3..9 passed by value) must NOT be mistaken for a
     // global. Exact data/rodata classification also admits Mach-O data sections
     // such as __TEXT,__cstring inside an executable segment.
-    if (Img->isDataAddress(ConstAddr) &&
+    if (hasObjectDataProvenance(ConstAddr) &&
         !isFrameRelativeDisplacement(ConstAddr, AddrBits))
       if (auto *G = tryResolveGlobalData(ConstAddr, /*DataSizeHint=*/0))
         return G;

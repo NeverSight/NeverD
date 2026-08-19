@@ -349,12 +349,8 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
       auto [Cur, BypassesGetVar] = Work.back();
       Work.pop_back();
       if (Cur.isConst()) {
-        const Segment *Seg =
-            Cur.ConstVal != 0 ? Img->getSegmentFor(Cur.ConstVal) : nullptr;
-        bool AddressBearing =
-            Cur.ConstVal == ExpectedBase ||
-            (Seg && !Seg->Data.empty() && Img->isDataAddress(Cur.ConstVal) &&
-             !Img->isCodeAddress(Cur.ConstVal));
+        bool AddressBearing = Cur.ConstVal == ExpectedBase ||
+                              hasObjectDataProvenance(Cur.ConstVal);
         if (!AddressBearing)
           continue;
         bool Symbolized = !BypassesGetVar &&

@@ -17,12 +17,14 @@
 
 #include "neverd/Limits.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
 #include <utility>
@@ -46,10 +48,16 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
 
   // --- Relocations ---
   for (const Elf_Shdr &SH : Sections) {
-    bool IsRela = (SH.sh_type == SHT_RELA);
-    if (!IsRela && SH.sh_type != SHT_REL)
+    const bool IsRela = SH.sh_type == SHT_RELA;
+    const bool IsRel = SH.sh_type == SHT_REL;
+    const bool IsAndroidRela = SH.sh_type == SHT_ANDROID_RELA;
+    const bool IsAndroidRel = SH.sh_type == SHT_ANDROID_REL;
+    const bool IsAndroidPacked = IsAndroidRela || IsAndroidRel;
+    if (!IsRela && !IsRel && !IsAndroidPacked)
       continue;
-    if (SH.sh_entsize == 0 || !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
+    const size_t MinEntrySize = IsRela ? sizeof(Elf_Rela) : sizeof(Elf_Rel);
+    if ((!IsAndroidPacked && SH.sh_entsize < MinEntrySize) ||
+        !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
       continue;
 
     const Elf_Shdr *SymSH = getShdr<ELFT>(Sections, SH.sh_link);
@@ -63,29 +71,7 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
     }
 
     llvm::StringRef SecName = getSectionName<ELFT>(ShStrTab, SH);
-    size_t Count = static_cast<size_t>(SH.sh_size / SH.sh_entsize);
-    for (size_t I = 0; I < Count; ++I) {
-      uint64_t ROff64 = SH.sh_offset + static_cast<uint64_t>(I) * SH.sh_entsize;
-      RelocationEntry RE;
-      uint32_t SymIdx = 0;
-      if (IsRela) {
-        if (!rangeInBounds(ROff64, sizeof(Elf_Rela), Size))
-          break;
-        Elf_Rela R;
-        std::memcpy(&R, Data + static_cast<size_t>(ROff64), sizeof(R));
-        RE.Address = R.r_offset;
-        RE.Addend = R.r_addend;
-        RE.Type = R.getType(false);
-        SymIdx = R.getSymbol(false);
-      } else {
-        if (!rangeInBounds(ROff64, sizeof(Elf_Rel), Size))
-          break;
-        Elf_Rel R;
-        std::memcpy(&R, Data + static_cast<size_t>(ROff64), sizeof(R));
-        RE.Address = R.r_offset;
-        RE.Type = R.getType(false);
-        SymIdx = R.getSymbol(false);
-      }
+    auto Record = [&](RelocationEntry RE, uint32_t SymIdx) {
       RE.SymbolIndex = SymIdx;
       if (!SecName.empty())
         RE.SectionName = SecName.str();
@@ -104,8 +90,227 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       if (!IsRelocatable)
         elf_loader::recordIRelativeResolver(
             RE.Type, RE.Address,
-            IsRela ? std::optional<int64_t>(RE.Addend) : std::nullopt, Img);
+            RE.HasExplicitAddend ? std::optional<int64_t>(RE.Addend)
+                                 : std::nullopt,
+            Img);
       Img.Relocations.push_back(std::move(RE));
+    };
+
+    if (IsAndroidPacked) {
+      auto RelasOr = ELF.android_relas(SH);
+      if (!RelasOr) {
+        llvm::consumeError(RelasOr.takeError());
+        continue;
+      }
+      for (const Elf_Rela &R : *RelasOr) {
+        RelocationEntry RE;
+        RE.Address = R.r_offset;
+        RE.Addend = R.r_addend;
+        RE.HasExplicitAddend = IsAndroidRela;
+        RE.Type = R.getType(false);
+        Record(std::move(RE), R.getSymbol(false));
+      }
+      continue;
+    }
+
+    size_t Count = static_cast<size_t>(SH.sh_size / SH.sh_entsize);
+    for (size_t I = 0; I < Count; ++I) {
+      uint64_t ROff64 = SH.sh_offset + static_cast<uint64_t>(I) * SH.sh_entsize;
+      RelocationEntry RE;
+      uint32_t SymIdx = 0;
+      if (IsRela) {
+        if (!rangeInBounds(ROff64, sizeof(Elf_Rela), Size))
+          break;
+        Elf_Rela R;
+        std::memcpy(&R, Data + static_cast<size_t>(ROff64), sizeof(R));
+        RE.Address = R.r_offset;
+        RE.Addend = R.r_addend;
+        RE.HasExplicitAddend = true;
+        RE.Type = R.getType(false);
+        SymIdx = R.getSymbol(false);
+      } else {
+        if (!rangeInBounds(ROff64, sizeof(Elf_Rel), Size))
+          break;
+        Elf_Rel R;
+        std::memcpy(&R, Data + static_cast<size_t>(ROff64), sizeof(R));
+        RE.Address = R.r_offset;
+        RE.Type = R.getType(false);
+        SymIdx = R.getSymbol(false);
+      }
+      Record(std::move(RE), SymIdx);
+    }
+  }
+}
+
+template <typename ELFT>
+void applyDynamicRelativeRelocations(
+    const llvm::object::ELFFile<ELFT> &ELF,
+    llvm::ArrayRef<typename ELFT::Shdr> Sections, const uint8_t *Data,
+    size_t Size, BinaryImage &Img) {
+  using namespace llvm::ELF;
+  using Elf_Rel = typename ELFT::Rel;
+  using Elf_Rela = typename ELFT::Rela;
+  using Elf_Shdr = typename ELFT::Shdr;
+
+  auto IsRelative = [&](uint32_t Type) {
+    if constexpr (ELFT::Is64Bits) {
+      return (Img.Arch == Arch::X64 && Type == R_X86_64_RELATIVE) ||
+             (Img.Arch == Arch::AArch64 && Type == R_AARCH64_RELATIVE);
+    }
+    return (Img.Arch == Arch::X86 && Type == R_386_RELATIVE) ||
+           (Img.Arch == Arch::ARM && Type == R_ARM_RELATIVE);
+  };
+
+  constexpr size_t PtrSize = sizeof(typename ELFT::Addr);
+  auto ApplyPointerSlot = [&](va_t SlotVA, uint64_t TargetVA) {
+    if (!Img.patchPtr(SlotVA, TargetVA))
+      return false;
+
+    // Keep the section view coherent with the mapped segment view.  Public
+    // BinaryImage consumers can read either, and RELA slots are commonly zero
+    // in the file before the dynamic loader writes them.
+    for (Section &Sec : Img.Sections) {
+      if (!Sec.contains(SlotVA))
+        continue;
+      const size_t Off = static_cast<size_t>(SlotVA - Sec.VA);
+      if (rangeInBounds(Off, PtrSize, Sec.Data.size()))
+        writePtr(Sec.Data.data() + Off, TargetVA, ELFT::Is64Bits);
+      break;
+    }
+
+    if (std::none_of(
+            Img.BaseRelocations.begin(), Img.BaseRelocations.end(),
+            [&](const BaseRelocation &R) { return R.Address == SlotVA; }))
+      Img.BaseRelocations.push_back(BaseRelocation{SlotVA, 0});
+    recordAbsolutePointerRelocation(Img, SlotVA, TargetVA);
+    return true;
+  };
+
+  for (const Elf_Shdr &SH : Sections) {
+    const bool IsAndroidPacked =
+        SH.sh_type == SHT_ANDROID_REL || SH.sh_type == SHT_ANDROID_RELA;
+    if (IsAndroidPacked) {
+      if (!(SH.sh_flags & SHF_ALLOC))
+        continue;
+      auto RelasOr = ELF.android_relas(SH);
+      if (!RelasOr) {
+        llvm::consumeError(RelasOr.takeError());
+        continue;
+      }
+      const bool HasExplicitAddend = SH.sh_type == SHT_ANDROID_RELA;
+      for (const Elf_Rela &R : *RelasOr) {
+        const va_t SlotVA = static_cast<va_t>(R.r_offset);
+        const uint32_t Type = R.getType(false);
+        const uint32_t Symbol = R.getSymbol(false);
+        if (Symbol != 0 || !IsRelative(Type))
+          continue;
+        uint64_t TargetVA = 0;
+        if (HasExplicitAddend) {
+          TargetVA = static_cast<typename ELFT::Addr>(R.r_addend);
+        } else {
+          const uint8_t *Existing = Img.readVA(SlotVA, PtrSize);
+          if (!Existing)
+            continue;
+          TargetVA = readPtr(Existing, ELFT::Is64Bits);
+        }
+        ApplyPointerSlot(SlotVA, TargetVA);
+      }
+      continue;
+    }
+
+    const bool IsRelr =
+        SH.sh_type == SHT_RELR || SH.sh_type == SHT_ANDROID_RELR;
+    if (IsRelr) {
+      if (!(SH.sh_flags & SHF_ALLOC) || SH.sh_entsize < PtrSize ||
+          !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
+        continue;
+
+      // RELR alternates direct slot addresses with bitmaps for the following
+      // pointer-sized words.  The slot itself carries the implicit addend, so
+      // in NeverD's link-time address model the patched target is its current
+      // value (the runtime load bias is deliberately zero here).
+      const size_t Count = static_cast<size_t>(SH.sh_size / SH.sh_entsize);
+      va_t Cursor = 0;
+      bool HaveCursor = false;
+      constexpr unsigned BitmapBits = PtrSize * 8 - 1;
+      constexpr uint64_t BitmapSpan = uint64_t(BitmapBits) * PtrSize;
+      for (size_t I = 0; I < Count; ++I) {
+        const uint64_t EntryOff =
+            SH.sh_offset + static_cast<uint64_t>(I) * SH.sh_entsize;
+        if (!rangeInBounds(EntryOff, PtrSize, Size))
+          break;
+        const uint64_t Entry =
+            readPtr(Data + static_cast<size_t>(EntryOff), ELFT::Is64Bits);
+        if ((Entry & 1) == 0) {
+          if (const uint8_t *P = Img.readVA(Entry, PtrSize))
+            ApplyPointerSlot(Entry, readPtr(P, ELFT::Is64Bits));
+          HaveCursor = Entry <= InvalidVA - PtrSize;
+          if (HaveCursor)
+            Cursor = Entry + PtrSize;
+          continue;
+        }
+        if (!HaveCursor)
+          continue;
+
+        const uint64_t Bitmap = Entry >> 1;
+        for (unsigned Bit = 0; Bit < BitmapBits; ++Bit) {
+          if ((Bitmap & (uint64_t{1} << Bit)) == 0)
+            continue;
+          const uint64_t Delta = uint64_t(Bit) * PtrSize;
+          if (Cursor > InvalidVA - Delta)
+            break;
+          const va_t SlotVA = Cursor + Delta;
+          if (const uint8_t *P = Img.readVA(SlotVA, PtrSize))
+            ApplyPointerSlot(SlotVA, readPtr(P, ELFT::Is64Bits));
+        }
+        HaveCursor = Cursor <= InvalidVA - BitmapSpan;
+        if (HaveCursor)
+          Cursor += BitmapSpan;
+      }
+      continue;
+    }
+
+    const bool IsRela = SH.sh_type == SHT_RELA;
+    if ((!IsRela && SH.sh_type != SHT_REL) || !(SH.sh_flags & SHF_ALLOC))
+      continue;
+    const size_t EntrySize = IsRela ? sizeof(Elf_Rela) : sizeof(Elf_Rel);
+    if (SH.sh_entsize < EntrySize ||
+        !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
+      continue;
+
+    const size_t Count = static_cast<size_t>(SH.sh_size / SH.sh_entsize);
+    for (size_t I = 0; I < Count; ++I) {
+      const uint64_t EntryOff =
+          SH.sh_offset + static_cast<uint64_t>(I) * SH.sh_entsize;
+      va_t SlotVA = 0;
+      uint32_t Type = 0;
+      uint32_t Symbol = 0;
+      uint64_t TargetVA = 0;
+      if (IsRela) {
+        if (!rangeInBounds(EntryOff, sizeof(Elf_Rela), Size))
+          break;
+        Elf_Rela R;
+        std::memcpy(&R, Data + static_cast<size_t>(EntryOff), sizeof(R));
+        SlotVA = static_cast<va_t>(R.r_offset);
+        Type = R.getType(false);
+        Symbol = R.getSymbol(false);
+        TargetVA = static_cast<typename ELFT::Addr>(R.r_addend);
+      } else {
+        if (!rangeInBounds(EntryOff, sizeof(Elf_Rel), Size))
+          break;
+        Elf_Rel R;
+        std::memcpy(&R, Data + static_cast<size_t>(EntryOff), sizeof(R));
+        SlotVA = static_cast<va_t>(R.r_offset);
+        Type = R.getType(false);
+        Symbol = R.getSymbol(false);
+        const uint8_t *Existing = Img.readVA(SlotVA, PtrSize);
+        if (!Existing)
+          continue;
+        TargetVA = readPtr(Existing, ELFT::Is64Bits);
+      }
+      if (Symbol != 0 || !IsRelative(Type))
+        continue;
+      ApplyPointerSlot(SlotVA, TargetVA);
     }
   }
 }
@@ -572,6 +777,15 @@ template void applyRelocations<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, const uint8_t *, size_t,
     const std::vector<va_t> &, bool, BinaryImage &);
+
+template void applyDynamicRelativeRelocations<llvm::object::ELF32LE>(
+    const llvm::object::ELFFile<llvm::object::ELF32LE> &,
+    llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, const uint8_t *, size_t,
+    BinaryImage &);
+template void applyDynamicRelativeRelocations<llvm::object::ELF64LE>(
+    const llvm::object::ELFFile<llvm::object::ELF64LE> &,
+    llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, const uint8_t *, size_t,
+    BinaryImage &);
 
 } // namespace detail
 } // namespace elf_loader

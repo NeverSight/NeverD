@@ -152,6 +152,9 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
   if (IsRelocatable)
     elf_loader::detail::applyRelocations<ELFT>(ELF, *SectionsOr, Data, Size,
                                                SecBase, IsRelocatable, Img);
+  else
+    elf_loader::detail::applyDynamicRelativeRelocations<ELFT>(ELF, *SectionsOr,
+                                                              Data, Size, Img);
 
   elf_loader::detail::collectSymbols<ELFT>(ELF, *SectionsOr, Size, SecBase,
                                            IsRelocatable, Img);

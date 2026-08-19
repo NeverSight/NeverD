@@ -6,9 +6,10 @@
 
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 
+#include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
-#include "neverd/loader/FunctionDiscovery.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -361,6 +362,16 @@ void parseBaseRelocations(const COFFObjectFile &Obj, BinaryImage &Img,
       BR.Address = ImageBase + RelocRVA;
       BR.Type = Type;
       Img.BaseRelocations.push_back(BR);
+
+      const uint32_t PtrSize = Img.getPointerSize();
+      const bool IsFullPointer =
+          (PtrSize == 8 && Type == llvm::COFF::IMAGE_REL_BASED_DIR64) ||
+          (PtrSize == 4 && Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW);
+      if (!IsFullPointer)
+        continue;
+      if (const uint8_t *Bytes = Img.readVA(BR.Address, PtrSize))
+        recordAbsolutePointerRelocation(
+            Img, BR.Address, static_cast<va_t>(readPtr(Bytes, PtrSize == 8)));
     }
     P += BlockSize;
   }

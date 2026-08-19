@@ -110,6 +110,7 @@ add_neverd_unittest(NeverDLiftTests
   format/MachOFunctionListingTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
   format/MachOPointerRelocationBoundaryTests.cpp
+  format/NativePointerRelocationBoundaryTests.cpp
   core/MedCallingConvTests.cpp
   eh/COFFExceptionTests.cpp
   eh/COFFExceptionARM32UnwindTests.cpp
@@ -299,6 +300,31 @@ target_include_directories(NeverDMachOPointerRelocationBoundaryTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
+
+# Pins the format-neutral full-pointer relocation contract at both public
+# loader and end-to-end LLVM lift boundaries without relinking the aggregate
+# lift suite during RED/GREEN iterations.
+add_neverd_unittest(NeverDNativePointerRelocationBoundaryTests
+  format/NativePointerRelocationBoundaryTests.cpp
+
+  LINK_COMPONENTS
+  Support
+)
+
+target_compile_definitions(NeverDNativePointerRelocationBoundaryTests PRIVATE
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  NEVERD_TEST_CLANG="${_neverd_test_clang}"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  TEST_OBJ_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+)
+
+target_include_directories(NeverDNativePointerRelocationBoundaryTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+)
+
+add_dependencies(NeverDNativePointerRelocationBoundaryTests neverd)
 
 # These focused targets have the same NeverDIR-to-NeverDLift register-name
 # dependency as the native exception contract target above.  Rescan the exact
@@ -991,6 +1017,48 @@ endforeach()
 # --- Compile COFF/PE test binary ---
 find_program(LLD_LINK_EXEC lld-link)
 if(LLD_LINK_EXEC)
+  set(native_pointer_pe_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_pe_pointer_reloc_x64.s")
+  set(native_pointer_pe_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_pe_pointer_reloc_x64.obj")
+  set(native_pointer_pe_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_pe_pointer_reloc_x64.exe")
+  set(native_pointer_pe_x86_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_pe_pointer_reloc_x86.s")
+  set(native_pointer_pe_x86_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_pe_pointer_reloc_x86.obj")
+  set(native_pointer_pe_x86_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_pe_pointer_reloc_x86.exe")
+  add_custom_command(
+    OUTPUT ${native_pointer_pe_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${native_pointer_pe_src} -o ${native_pointer_pe_obj}
+    DEPENDS ${native_pointer_pe_src}
+    COMMENT "Compiling x64 PE pointer-relocation fixture")
+  add_custom_command(
+    OUTPUT ${native_pointer_pe_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:main /subsystem:console /nodefaultlib
+            /machine:x64 /dynamicbase /fixed:no ${native_pointer_pe_obj}
+            /out:${native_pointer_pe_exe}
+    DEPENDS ${native_pointer_pe_obj}
+    COMMENT "Linking x64 PE pointer-relocation fixture")
+  add_custom_command(
+    OUTPUT ${native_pointer_pe_x86_obj}
+    COMMAND ${CLANG_EXEC} -target i686-pc-windows-msvc -c
+            ${native_pointer_pe_x86_src} -o ${native_pointer_pe_x86_obj}
+    DEPENDS ${native_pointer_pe_x86_src}
+    COMMENT "Compiling x86 PE pointer-relocation fixture")
+  add_custom_command(
+    OUTPUT ${native_pointer_pe_x86_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:start /subsystem:console /nodefaultlib
+            /machine:x86 /safeseh:no /dynamicbase /fixed:no
+            ${native_pointer_pe_x86_obj} /out:${native_pointer_pe_x86_exe}
+    DEPENDS ${native_pointer_pe_x86_obj}
+    COMMENT "Linking x86 PE pointer-relocation fixture")
+  list(APPEND TEST_OBJECTS ${native_pointer_pe_obj} ${native_pointer_pe_exe}
+                           ${native_pointer_pe_x86_obj}
+                           ${native_pointer_pe_x86_exe})
+
   set(coff_src "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff.c")
   set(coff_obj "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff.obj")
   set(coff_exe "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff.exe")
@@ -1109,6 +1177,56 @@ endif()
 find_program(LLD_EXEC ld.lld)
 set(ELF_EXECUTABLES "")
 if(LLD_EXEC)
+  set(native_pointer_elf_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_elf_pointer_reloc_x64.s")
+  set(native_pointer_elf_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_elf_pointer_reloc_x64.o")
+  set(native_pointer_elf
+      "${CMAKE_CURRENT_BINARY_DIR}/test_elf_pointer_reloc_x64")
+  set(native_pointer_elf_relr
+      "${CMAKE_CURRENT_BINARY_DIR}/test_elf_pointer_relr_x64")
+  set(native_pointer_elf_android_relr
+      "${CMAKE_CURRENT_BINARY_DIR}/test_elf_pointer_android_relr_x64")
+  set(native_pointer_elf_android_packed
+      "${CMAKE_CURRENT_BINARY_DIR}/test_elf_pointer_android_packed_x64")
+  add_custom_command(
+    OUTPUT ${native_pointer_elf_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c
+            ${native_pointer_elf_src} -o ${native_pointer_elf_obj}
+    DEPENDS ${native_pointer_elf_src}
+    COMMENT "Compiling x64 ELF pointer-relocation fixture")
+  add_custom_command(
+    OUTPUT ${native_pointer_elf}
+    COMMAND ${LLD_EXEC} -pie -z relro --entry=_start
+            ${native_pointer_elf_obj} -o ${native_pointer_elf}
+    DEPENDS ${native_pointer_elf_obj}
+    COMMENT "Linking x64 ELF pointer-relocation fixture")
+  add_custom_command(
+    OUTPUT ${native_pointer_elf_relr}
+    COMMAND ${LLD_EXEC} -pie -z relro --pack-dyn-relocs=relr
+            --entry=_start ${native_pointer_elf_obj}
+            -o ${native_pointer_elf_relr}
+    DEPENDS ${native_pointer_elf_obj}
+    COMMENT "Linking x64 ELF packed-pointer-relocation fixture")
+  add_custom_command(
+    OUTPUT ${native_pointer_elf_android_relr}
+    COMMAND ${LLD_EXEC} -pie -z relro --pack-dyn-relocs=relr
+            --use-android-relr-tags --entry=_start ${native_pointer_elf_obj}
+            -o ${native_pointer_elf_android_relr}
+    DEPENDS ${native_pointer_elf_obj}
+    COMMENT "Linking x64 ELF Android-RELR pointer fixture")
+  add_custom_command(
+    OUTPUT ${native_pointer_elf_android_packed}
+    COMMAND ${LLD_EXEC} -pie -z relro --pack-dyn-relocs=android
+            --entry=_start ${native_pointer_elf_obj}
+            -o ${native_pointer_elf_android_packed}
+    DEPENDS ${native_pointer_elf_obj}
+    COMMENT "Linking x64 ELF Android-packed pointer fixture")
+  list(APPEND ELF_EXECUTABLES ${native_pointer_elf_obj} ${native_pointer_elf}
+                              ${native_pointer_elf_relr}
+                              ${native_pointer_elf_android_relr}
+                              ${native_pointer_elf_android_packed})
+
   # Patch-success fixtures publish the native unwind index and leave a
   # deterministic file-backed gap after each growable unwind section.  The
   # low-level tests separately require byte-identical failure when a real image
@@ -1199,3 +1317,4 @@ endif()
 
 add_custom_target(lift-test-objects DEPENDS ${TEST_OBJECTS} ${ELF_EXECUTABLES})
 add_dependencies(NeverDLiftTests lift-test-objects)
+add_dependencies(NeverDNativePointerRelocationBoundaryTests lift-test-objects)

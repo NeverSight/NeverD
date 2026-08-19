@@ -100,6 +100,16 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
                       const std::vector<va_t> &SecBase, bool IsRelocatable,
                       BinaryImage &Img);
 
+/// Apply full-width dynamic-loader-relative relocations in a linked ELF image
+/// at its link-time virtual addresses, and normalize their pointer provenance
+/// into the same slot/target sets used by relocatable objects and other
+/// container formats.
+template <typename ELFT>
+void applyDynamicRelativeRelocations(
+    const llvm::object::ELFFile<ELFT> &ELF,
+    llvm::ArrayRef<typename ELFT::Shdr> Sections, const uint8_t *Data,
+    size_t Size, BinaryImage &Img);
+
 /// Record the defined symbols of every SHT_SYMTAB / SHT_DYNSYM section in
 /// `Img.Symbols`, and every global or weak function among them in
 /// `Img.Exports`.

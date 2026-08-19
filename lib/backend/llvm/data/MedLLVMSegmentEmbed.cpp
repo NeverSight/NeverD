@@ -216,21 +216,73 @@ bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
           section_names::isReadOnlyAfterRelocSectionName(S->Name));
 }
 
+bool MedLLVMEmitter::hasObjectDataProvenance(uint64_t VA) const {
+  if (!Img || VA == 0)
+    return false;
+  const Segment *Seg = Img->getSegmentFor(VA);
+  if (!Seg || Seg->Data.empty() || VA < Seg->VA ||
+      VA - Seg->VA >= Seg->Data.size() || !Seg->isReadable())
+    return false;
+
+  // Section-less/stripped inputs have no finer provenance than their mapped
+  // segments.  Once section metadata exists, however, a readable PT_LOAD also
+  // covers ELF headers and alignment gaps: those bytes are addressable but do
+  // not prove that a coincident scalar immediate is an object-data pointer.
+  if (Img->Sections.empty())
+    return !Seg->isExecutable();
+  const Section *Sec = Img->getSectionFor(VA);
+  if (Sec)
+    return Sec->isReadable() &&
+           (Img->isMachO() ? !Img->isCodeAddress(VA) : !Sec->isExecutable());
+
+  // Some images (and format-focused synthetic tests) have complete segment
+  // bytes but no section rows for a particular segment.  Fall back for that
+  // whole segment only when no readable section overlaps it at all.  If the
+  // segment does carry sections, an uncovered byte is a header/alignment gap,
+  // not object-level evidence (the ELF PIE low-immediate collision).
+  bool SegmentHasSectionMetadata = false;
+  for (const Section &Candidate : Img->Sections) {
+    if (!Candidate.isReadable() || Candidate.Size == 0 ||
+        Candidate.Size > InvalidVA - Candidate.VA ||
+        Seg->Size > InvalidVA - Seg->VA)
+      continue;
+    const uint64_t CandidateEnd = Candidate.VA + Candidate.Size;
+    const uint64_t SegmentEnd = Seg->VA + Seg->Size;
+    if (Candidate.VA < SegmentEnd && Seg->VA < CandidateEnd) {
+      SegmentHasSectionMetadata = true;
+      break;
+    }
+  }
+  return !SegmentHasSectionMetadata && !Seg->isExecutable();
+}
+
 bool MedLLVMEmitter::isMaterializableReadOnlyDataAddress(uint64_t VA) const {
   if (!Img || VA == 0)
     return false;
   const Segment *Seg = Img->getSegmentFor(VA);
   if (!Seg || !Seg->isReadable() || Seg->Data.empty() ||
-      !Img->isDataAddress(VA) || Img->isCodeAddress(VA) || VA < Seg->VA ||
+      !hasObjectDataProvenance(VA) || VA < Seg->VA ||
       VA - Seg->VA >= Seg->Data.size())
     return false;
 
-  // A Mach-O data section may share an executable __TEXT segment, so ordinary
-  // read-only data is identified by !writable rather than by the segment's
-  // execute bit.  Conversely __DATA_CONST/.data.rel.ro retain writable object
-  // flags while dyld/the dynamic loader applies fixups; their section name is
-  // the semantic evidence that the pointer-table mirror owns them afterward.
-  if (Seg->isWritable() && !isReadOnlyAfterReloc(Seg))
+  // A format-native section is finer provenance than its load segment.  In a
+  // linked ELF, lld can place `.data.rel.ro` in an ordinary writable PT_LOAD
+  // together with unrelated sections; the segment name/permissions therefore
+  // cannot express the post-relocation immutability of this exact address.
+  // Mach-O has the inverse coarse-layout case: read-only data can share the
+  // executable __TEXT segment.  Accept exact readable, non-executable section
+  // evidence when the enclosing segment is too coarse, including writable
+  // RELRO sections that become immutable after the dynamic loader fixes them.
+  bool HasReadOnlySectionEvidence = false;
+  if (const Section *Sec = Img->getSectionFor(VA))
+    HasReadOnlySectionEvidence =
+        Sec->isReadable() &&
+        (Img->isMachO() ? !Img->isCodeAddress(VA) : !Sec->isExecutable()) &&
+        (!Sec->isWritable() ||
+         section_names::isReadOnlyAfterRelocSectionName(Sec->Name) ||
+         section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName));
+  if (Seg->isWritable() && !isReadOnlyAfterReloc(Seg) &&
+      !HasReadOnlySectionEvidence)
     return false;
   return canResolveGlobalDataConstant(VA);
 }
@@ -277,7 +329,14 @@ bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
   if (!Img || VA == 0)
     return false;
   const Segment *Seg = Img->getSegmentFor(VA);
-  if (!isReadOnlyAfterReloc(Seg))
+  // Keep this ownership predicate in lockstep with
+  // buildCodePtrSegmentGlobal(): both immutable relocation tables and mutable
+  // data segments with proven pointer slots are represented by a pointer
+  // mirror.  Restricting this check to segment-level RELRO names loses that
+  // fact for linked ELF PT_LOADs whose exact `.data.rel.ro` section is nested
+  // inside a coarsely writable segment.
+  if (!Seg || Seg->Data.empty() || Seg->isExecutable() ||
+      !segHasPtrRelocSlots(Seg))
     return false;
   uint64_t RunStart = 0, RunEnd = 0;
   readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
