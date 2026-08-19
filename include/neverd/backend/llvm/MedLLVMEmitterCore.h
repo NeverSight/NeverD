@@ -792,15 +792,14 @@ private:
                                             uint16_t SizeHint,
                                             llvm::IRBuilder<> &Builder);
 
-  /// Resolve a nested/chained multi-way table select whose base is a
-  /// *cross-block PHI* merging two-way selects/blends of rodata table bases —
-  /// `(c0 ? (c1?A:B) : (c2?C:D))[i]`, which clang -O2 lowers to branches plus a
-  /// `PHI(blend1, blend2)` base rather than a flat select.  Every candidate
-  /// table lives in one read-only segment (merged into one embedded global), so
-  /// the access is anchored uniformly as `@run + (getVar(addr) - run_start)` —
-  /// the PHI value still carries the original VA of whichever table was
-  /// selected, so the offset is exact without resolving each arm in its
-  /// predecessor block.
+  /// Resolve a read-only table address whose complete pointer value is merged
+  /// by a PHI, SELECT/masked SELECT, or an all-path-proven frame spill/reload.
+  /// Every candidate table must live in one read-only segment (merged into one
+  /// embedded global), so the access is anchored uniformly as
+  /// `@run + (getVar(addr) - run_start)`.  This also covers a direct selection
+  /// between adjacent table elements and a stack slot acting as an implicit
+  /// PHI; unsafe scalar arms, incomplete reaching stores, and cross-run bases
+  /// still fail closed.
   llvm::Value *tryResolveSelectMergeTable(const MedVar &AddrVar,
                                           uint16_t SizeHint, bool FailClosed,
                                           llvm::IRBuilder<> &Builder,

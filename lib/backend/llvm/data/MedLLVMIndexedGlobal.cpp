@@ -931,9 +931,30 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
   uint64_t Base = 0;
   bool HaveBase = false;
   std::vector<MedVar> IdxTerms;
-  if (!collectIndexedGlobalBase(AddrVar, Base, HaveBase, IdxTerms,
-                                /*Depth=*/0, FailClosed) ||
-      !HaveBase || Base == 0 || IdxTerms.empty())
+  std::optional<MedVar> DynamicSubtrahend;
+  // clang's branchless final-element lookup can form `table_base - (0|-1)`;
+  // after lowering, the subtrahend is a non-constant scalar flag DAG.  The
+  // generic decomposition intentionally accepts only a constant subtrahend
+  // because IdxTerms are additive, so prove the dynamic value independently
+  // and retain its negative role for emission below.
+  if (Def->Opcode == NdOp::INT_SUB && !traceSSAConst(Def->Inputs[1]) &&
+      Def->Output.Size != 0 && Def->Inputs[0].Size != 0 &&
+      Def->Output.Size >= Def->Inputs[0].Size &&
+      valueIsStableAddressOffset(Def->Inputs[1]) &&
+      collectIndexedGlobalBase(Def->Inputs[0], Base, HaveBase, IdxTerms,
+                               /*Depth=*/0, FailClosed) &&
+      HaveBase)
+    DynamicSubtrahend = Def->Inputs[1];
+
+  if (!DynamicSubtrahend) {
+    Base = 0;
+    HaveBase = false;
+    IdxTerms.clear();
+    if (!collectIndexedGlobalBase(AddrVar, Base, HaveBase, IdxTerms,
+                                  /*Depth=*/0, FailClosed))
+      return nullptr;
+  }
+  if (!HaveBase || Base == 0 || (IdxTerms.empty() && !DynamicSubtrahend))
     return nullptr;
 
   // A base at a real read-only data symbol is a genuine lookup table (the .o's
@@ -1002,6 +1023,18 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
     else if (TV->getType() != IdxTy)
       TV = Builder.CreateZExtOrTrunc(TV, IdxTy);
     IdxVal = IdxVal ? Builder.CreateAdd(IdxVal, TV, "tblidx") : TV;
+  }
+  if (DynamicSubtrahend) {
+    llvm::Value *TV = getVar(*DynamicSubtrahend, Builder);
+    if (!TV)
+      return nullptr;
+    if (TV->getType()->isPointerTy())
+      TV = Builder.CreatePtrToInt(TV, IdxTy);
+    else if (TV->getType() != IdxTy)
+      TV = Builder.CreateZExtOrTrunc(TV, IdxTy);
+    IdxVal = IdxVal ? Builder.CreateSub(IdxVal, TV, "tblidx")
+                    : Builder.CreateSub(llvm::ConstantInt::get(IdxTy, 0), TV,
+                                        "tblidx");
   }
   if (!IdxVal)
     return nullptr;

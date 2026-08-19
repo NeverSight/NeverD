@@ -347,4 +347,129 @@ TEST(MachOSymbolResolution,
   EXPECT_EQ(Preserved->getOpcode(), llvm::Instruction::IntToPtr);
 }
 
+TEST(MachOSymbolResolution, PatchSymbolizationCancelsSelectedFrameReloadBase) {
+  constexpr uint64_t ImageBase = 0x100000000ULL;
+  constexpr uint64_t FirstString = ImageBase + 0x100;
+  constexpr uint64_t SecondString = ImageBase + 0x200;
+
+  llvm::LLVMContext Context;
+  llvm::Module Module("selected-frame-reload-symbolization", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *CallerTy = llvm::FunctionType::get(
+      Builder.getInt64Ty(), {Builder.getInt1Ty()}, /*isVarArg=*/false);
+  auto *Caller = llvm::Function::Create(
+      CallerTy, llvm::GlobalValue::ExternalLinkage, "caller", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Caller);
+  Builder.SetInsertPoint(Entry);
+
+  llvm::Value *Slot = Builder.CreateAlloca(Builder.getInt64Ty());
+  llvm::Value *Selected = Builder.CreateSelect(
+      Caller->getArg(0),
+      llvm::ConstantInt::get(Builder.getInt64Ty(), FirstString),
+      llvm::ConstantInt::get(Builder.getInt64Ty(), SecondString));
+  Builder.CreateStore(Selected, Slot);
+  llvm::Value *Reloaded = Builder.CreateLoad(Builder.getInt64Ty(), Slot);
+  auto *Offset = llvm::cast<llvm::BinaryOperator>(Builder.CreateSub(
+      Reloaded, llvm::ConstantInt::get(Builder.getInt64Ty(), ImageBase)));
+  Builder.CreateRet(Offset);
+
+  auto *MixedCaller = llvm::Function::Create(
+      CallerTy, llvm::GlobalValue::ExternalLinkage, "mixed_caller", Module);
+  auto *MixedEntry = llvm::BasicBlock::Create(Context, "entry", MixedCaller);
+  Builder.SetInsertPoint(MixedEntry);
+  llvm::Value *MixedSlot = Builder.CreateAlloca(Builder.getInt64Ty());
+  llvm::Value *MixedSelected = Builder.CreateSelect(
+      MixedCaller->getArg(0),
+      llvm::ConstantInt::get(Builder.getInt64Ty(), FirstString),
+      llvm::ConstantInt::get(Builder.getInt64Ty(), 7));
+  Builder.CreateStore(MixedSelected, MixedSlot);
+  llvm::Value *MixedReloaded =
+      Builder.CreateLoad(Builder.getInt64Ty(), MixedSlot);
+  auto *MixedOffset = llvm::cast<llvm::BinaryOperator>(Builder.CreateSub(
+      MixedReloaded, llvm::ConstantInt::get(Builder.getInt64Ty(), ImageBase)));
+  Builder.CreateRet(MixedOffset);
+
+  BinaryImage Image = makePageZeroImage();
+  symbolizeImageAbsolutePointers(Module, Image);
+
+  auto *SelectedInst = llvm::cast<llvm::SelectInst>(Selected);
+  for (unsigned Arm : {1u, 2u}) {
+    auto *RelocatedArm =
+        llvm::dyn_cast<llvm::ConstantExpr>(SelectedInst->getOperand(Arm));
+    ASSERT_NE(RelocatedArm, nullptr);
+    EXPECT_EQ(RelocatedArm->getOpcode(), llvm::Instruction::PtrToInt);
+  }
+
+  auto *RelocatedBase =
+      llvm::dyn_cast<llvm::ConstantExpr>(Offset->getOperand(1));
+  ASSERT_NE(RelocatedBase, nullptr)
+      << "a selected pointer reloaded from a frame slot must cancel a "
+         "relocatable base, not the original image VA";
+  ASSERT_EQ(RelocatedBase->getOpcode(), llvm::Instruction::PtrToInt);
+  auto *BaseGlobal =
+      llvm::dyn_cast<llvm::GlobalVariable>(RelocatedBase->getOperand(0));
+  ASSERT_NE(BaseGlobal, nullptr);
+  EXPECT_EQ(BaseGlobal->getName(), makeNdDataSymbol(ImageBase));
+
+  EXPECT_TRUE(llvm::isa<llvm::ConstantInt>(MixedOffset->getOperand(1)))
+      << "a pointer/scalar SELECT must not prove a uniformly relocatable "
+         "minuend";
+}
+
+TEST(MachOSymbolResolution, PatchSymbolizationCancelsPhiFrameReloadBase) {
+  constexpr uint64_t ImageBase = 0x100000000ULL;
+  constexpr uint64_t FirstString = ImageBase + 0x100;
+  constexpr uint64_t SecondString = ImageBase + 0x200;
+
+  llvm::LLVMContext Context;
+  llvm::Module Module("phi-frame-reload-symbolization", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *CallerTy = llvm::FunctionType::get(
+      Builder.getInt64Ty(), {Builder.getInt1Ty()}, /*isVarArg=*/false);
+  auto *Caller = llvm::Function::Create(
+      CallerTy, llvm::GlobalValue::ExternalLinkage, "caller", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Caller);
+  auto *Left = llvm::BasicBlock::Create(Context, "left", Caller);
+  auto *Right = llvm::BasicBlock::Create(Context, "right", Caller);
+  auto *Merge = llvm::BasicBlock::Create(Context, "merge", Caller);
+
+  Builder.SetInsertPoint(Entry);
+  llvm::Value *Slot = Builder.CreateAlloca(Builder.getInt64Ty());
+  Builder.CreateCondBr(Caller->getArg(0), Left, Right);
+  Builder.SetInsertPoint(Left);
+  Builder.CreateBr(Merge);
+  Builder.SetInsertPoint(Right);
+  Builder.CreateBr(Merge);
+  Builder.SetInsertPoint(Merge);
+  auto *Phi = Builder.CreatePHI(Builder.getInt64Ty(), 2);
+  Phi->addIncoming(llvm::ConstantInt::get(Builder.getInt64Ty(), FirstString),
+                   Left);
+  Phi->addIncoming(llvm::ConstantInt::get(Builder.getInt64Ty(), SecondString),
+                   Right);
+  Builder.CreateStore(Phi, Slot);
+  llvm::Value *Reloaded = Builder.CreateLoad(Builder.getInt64Ty(), Slot);
+  auto *Offset = llvm::cast<llvm::BinaryOperator>(Builder.CreateSub(
+      Reloaded, llvm::ConstantInt::get(Builder.getInt64Ty(), ImageBase)));
+  Builder.CreateRet(Offset);
+
+  BinaryImage Image = makePageZeroImage();
+  symbolizeImageAbsolutePointers(Module, Image);
+
+  for (unsigned Incoming = 0; Incoming < Phi->getNumIncomingValues();
+       ++Incoming) {
+    auto *RelocatedIncoming =
+        llvm::dyn_cast<llvm::ConstantExpr>(Phi->getIncomingValue(Incoming));
+    ASSERT_NE(RelocatedIncoming, nullptr);
+    EXPECT_EQ(RelocatedIncoming->getOpcode(), llvm::Instruction::PtrToInt);
+  }
+  auto *RelocatedBase =
+      llvm::dyn_cast<llvm::ConstantExpr>(Offset->getOperand(1));
+  ASSERT_NE(RelocatedBase, nullptr);
+  ASSERT_EQ(RelocatedBase->getOpcode(), llvm::Instruction::PtrToInt);
+  auto *BaseGlobal =
+      llvm::dyn_cast<llvm::GlobalVariable>(RelocatedBase->getOperand(0));
+  ASSERT_NE(BaseGlobal, nullptr);
+  EXPECT_EQ(BaseGlobal->getName(), makeNdDataSymbol(ImageBase));
+}
+
 } // namespace

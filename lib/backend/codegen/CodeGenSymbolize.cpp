@@ -204,6 +204,24 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
     if (auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(V))
       return derivesFromNdData(BO->getOperand(0), Depth - 1) ||
              derivesFromNdData(BO->getOperand(1), Depth - 1);
+    // A value merge is relocatable only when every value arm is relocatable.
+    // The bare-constant pass above symbolizes readable Mach-O VAs in SELECT
+    // and PHI operands before a later base-cancel SUB is visited.  Follow those
+    // complete merges so `@run + (merged - image_base)` also relocates the
+    // subtracted base.  Requiring every arm keeps a mixed pointer/scalar merge
+    // out of this proof; the SELECT condition itself carries no address
+    // provenance.
+    if (auto *Select = llvm::dyn_cast<llvm::SelectInst>(V))
+      return derivesFromNdData(Select->getTrueValue(), Depth - 1) &&
+             derivesFromNdData(Select->getFalseValue(), Depth - 1);
+    if (auto *Phi = llvm::dyn_cast<llvm::PHINode>(V)) {
+      if (Phi->getNumIncomingValues() == 0)
+        return false;
+      for (llvm::Value *Incoming : Phi->incoming_values())
+        if (!derivesFromNdData(Incoming, Depth - 1))
+          return false;
+      return true;
+    }
     // Width casts: SROA reconstructs a reloaded pointer from byte/word pieces
     // through zext/trunc/sext (`or(shl(zext(piece)), ...)`).  Trace through
     // them so a symbolized pointer is still recognized after the reconstruction

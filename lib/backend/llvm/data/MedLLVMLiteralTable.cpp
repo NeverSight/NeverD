@@ -389,16 +389,16 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // exactly the stale-address failure this resolver must prevent.
   MedVar BaseVar = AddrVar;
 
-  // Walk the base DAG collecting every rodata-segment base constant, requiring
-  // a cross-block PHI to appear (the signature distinguishing this branchy
-  // multi-way table select from the flat SELECT/blend
-  // tryResolveSelectBaseLitTable already handles).  Traverse the constructs
-  // clang emits to merge table bases: PHI, SELECT, the bitwise blend
-  // (INT_OR/INT_AND), width casts, COPY, and the literal-pool LOAD (folded by
-  // traceTableBaseConst).
+  // Walk the base DAG collecting every rodata-segment base constant.  Ownership
+  // requires a complete pointer merge: a non-recurrent cross-block PHI, a
+  // pointer-preserving SELECT/blend, or an all-path-proven frame reload with
+  // distinct reaching bases.  Traverse the constructs clang emits around those
+  // merges: PHI, SELECT, the bitwise blend (INT_OR/INT_AND), width casts, COPY,
+  // and the literal-pool LOAD (folded by traceTableBaseConst).
   std::set<uint64_t> Bases;
   bool SawPhi = false;
   bool SawNonRecurrentPhi = false;
+  bool SawPointerValueMerge = false;
   const PhiNode *EvidencePhi = nullptr;
   bool SawInvalidPointerExpression = false;
   bool SawTableShapedInvalidExpression = false;
@@ -1031,6 +1031,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
           SawInvalidPointerExpression = true;
         return BaseProof::Invalid;
       }
+      SawPointerValueMerge |= T == BaseProof::HasBase;
       return T;
     }
     case NdOp::INT_OR: {
@@ -1045,8 +1046,10 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF)) {
         BaseProof T = walk(ArmT, Depth + 1, Seen);
         BaseProof F = walk(ArmF, Depth + 1, Seen);
-        if (T == BaseProof::HasBase && F == BaseProof::HasBase)
+        if (T == BaseProof::HasBase && F == BaseProof::HasBase) {
+          SawPointerValueMerge = true;
           return BaseProof::HasBase;
+        }
         if (T == BaseProof::NoBase && F == BaseProof::NoBase)
           return BaseProof::NoBase;
         SawInvalidPointerExpression = true;
@@ -1217,13 +1220,12 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       for (uint64_t Base : Bases)
         DistinctReloadBases += BasesBefore.count(Base) == 0;
       // A frame slot is an implicit value merge.  Multiple independently
-      // reaching raw table bases cannot be left to the ordinary integer LOAD:
-      // there is no PHI later in the DAG to trigger the multi-base owner, and
-      // falling through would dereference whichever original VA was stored.
-      if (DistinctReloadBases > 1) {
-        SawInvalidPointerExpression = true;
-        return BaseProof::Invalid;
-      }
+      // reaching raw table bases need the same all-arms owner as an explicit
+      // PHI/SELECT.  collectFrameReloadSources proved every structural path,
+      // so the complete reload value can be relocated uniformly when all bases
+      // share one embedded run; the run check below still fails closed across
+      // segments.
+      SawPointerValueMerge |= DistinctReloadBases > 1;
       if (SawInvalidSource)
         return BaseProof::Invalid;
       return SawBaseSource ? BaseProof::HasBase : BaseProof::NoBase;
@@ -1295,7 +1297,8 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // all arms select the same table VA: its computed arms may already contain a
   // relocatable pointer, while the later single-base indexed resolver assumes
   // an original numeric VA and would rebase it a second time.
-  if (Proof != BaseProof::HasBase || !SawPhi || !SawNonRecurrentPhi)
+  if (Proof != BaseProof::HasBase ||
+      (!(SawPhi && SawNonRecurrentPhi) && !SawPointerValueMerge))
     return nullptr;
 
   // PHI edge constants bypass getVar and still carry original-image VAs;
@@ -1343,17 +1346,20 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // as __TEXT,__cstring inside an executable segment, so use the same bounded
   // executable-segment mirror as direct global-data resolution for that case.
   const Segment *Seg = Img->getSegmentFor(*Bases.begin());
-  if (!Seg)
+  if (!Seg) {
+    failAmbiguousAddress();
     return nullptr;
+  }
   for (uint64_t B : Bases)
     if (Img->getSegmentFor(B) != Seg) {
+      failAmbiguousAddress();
       return nullptr;
     }
 
-  // Anchor the whole access uniformly: the PHI base still carries the original
-  // VA of whichever table was selected, so `@run + (addr - run_start)` lands on
-  // the correct element of the rebuilt rodata run for any reachable table +
-  // index.
+  // Anchor the whole access uniformly: the merged value still carries the
+  // original VA of whichever table was selected, so
+  // `@run + (addr - run_start)` lands on the correct element of the rebuilt
+  // rodata run for any reachable table + index.
   llvm::Constant *G = nullptr;
   uint64_t Anchor = 0;
   auto [RunGV, RunStart] =
@@ -1362,8 +1368,10 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     G = RunGV;
     Anchor = RunStart;
   }
-  if (!G)
+  if (!G) {
+    failAmbiguousAddress();
     return nullptr;
+  }
 
   if (Cur->getType()->isPointerTy())
     Cur = Builder.CreatePtrToInt(Cur, Ty);

@@ -5689,6 +5689,39 @@ TEST(MachOLLVMDataPointerBoundary,
 }
 
 TEST(MachOLLVMDataPointerBoundary,
+     ResolvesReadOnlyTableBaseMinusStableRuntimeOffset) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeSpilledConstTableLookup(TargetArch);
+    MedOp *Address = nullptr;
+    for (MedOp &Op : Lookup.Blocks.front().Ops)
+      if (Op.Opcode == NdOp::INT_ADD && Op.Output.Id == 5) {
+        Address = &Op;
+        break;
+      }
+    ASSERT_NE(Address, nullptr);
+    Address->Opcode = NdOp::INT_SUB;
+    Address->Inputs[1] = Lookup.Params.front();
+
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Lookup}, Context, "macho-table-base-dynamic-sub",
+                              TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findNonAllocaI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "tblptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
      RejectsUnreadablePageZeroMaskAsRelocatableConstant) {
   constexpr uint64_t Mask32 = 0xffffffffULL;
   constexpr uint16_t PointerSize = 8;
@@ -6400,25 +6433,46 @@ TEST(MachOLLVMDataPointerBoundary,
 }
 
 TEST(MachOLLVMDataPointerBoundary,
-     FailsClosedForDistinctRawFrameReloadTableBases) {
+     ResolvesDistinctRawFrameReloadTableBasesWithinOneRun) {
   for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
     SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
     BinaryImage Image = makeSpilledConstTableImage(TargetArch);
     MedFunc Lookup = makeRejectedFrameReloadLookup(
         TargetArch, ReachingStoreCase::DistinctPredecessorBases);
     llvm::LLVMContext Context;
-    testing::internal::CaptureStderr();
     auto Module = MedLLVMEmitter().emit(
         {Lookup}, Context, "macho-distinct-frame-table-bases", TargetArch, {},
         &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForDistinctRawFrameReloadTableBasesAcrossRuns) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addFarSpilledConstTable(Image);
+    MedFunc Lookup = makeRejectedFrameReloadLookup(
+        TargetArch, ReachingStoreCase::DistinctPredecessorBases);
+    replaceMedConstant(Lookup, OtherSpilledConstTableVA,
+                       FarSpilledConstTableVA);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-cross-run-frame-table-bases", TargetArch, {},
+        &Image, BinaryFormat::MachO);
     std::string Diagnostic = testing::internal::GetCapturedStderr();
-    std::string IR;
-    if (Module) {
-      llvm::raw_string_ostream Stream(IR);
-      Module->print(Stream, nullptr);
-      Stream.flush();
-    }
-    EXPECT_EQ(Module.get(), nullptr) << IR;
+    EXPECT_EQ(Module.get(), nullptr);
     EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
               std::string::npos)
         << Diagnostic;
@@ -7696,6 +7750,67 @@ TEST(MachOLLVMDataPointerBoundary,
       ASSERT_NE(TableLoad, nullptr);
       EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indptr");
     }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     ResolvesDirectRawTableSelectionWithinOneRun) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    MedFunc Lookup = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+    auto Select = std::find_if(
+        Lookup.Blocks.front().Ops.begin(), Lookup.Blocks.front().Ops.end(),
+        [](const MedOp &Op) { return Op.Opcode == NdOp::SELECT; });
+    ASSERT_NE(Select, Lookup.Blocks.front().Ops.end());
+    Select->Inputs[1] = MedVar::makeConst(
+        SpilledConstTableVA, getTargetRegInfo(TargetArch).PointerSize);
+    Select->Inputs[2] = MedVar::makeConst(
+        OtherSpilledConstTableVA, getTargetRegInfo(TargetArch).PointerSize);
+
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-direct-raw-table-selection", TargetArch, {},
+        &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "selmrgptr");
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FailsClosedForDirectRawTableSelectionAcrossRuns) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
+    addFarSpilledConstTable(Image);
+    MedFunc Lookup = makeNoPhiSelectedTableLookup(TargetArch, /*Masked=*/false);
+    auto Select = std::find_if(
+        Lookup.Blocks.front().Ops.begin(), Lookup.Blocks.front().Ops.end(),
+        [](const MedOp &Op) { return Op.Opcode == NdOp::SELECT; });
+    ASSERT_NE(Select, Lookup.Blocks.front().Ops.end());
+    Select->Inputs[1] = MedVar::makeConst(
+        SpilledConstTableVA, getTargetRegInfo(TargetArch).PointerSize);
+    Select->Inputs[2] = MedVar::makeConst(
+        FarSpilledConstTableVA, getTargetRegInfo(TargetArch).PointerSize);
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-cross-run-direct-table-selection", TargetArch,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module.get(), nullptr);
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
 }
 
 TEST(MachOLLVMDataPointerBoundary,
