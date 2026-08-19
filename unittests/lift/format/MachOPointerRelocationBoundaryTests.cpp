@@ -79,6 +79,16 @@ public:
     std::vector<MedVar> Terms;
     return Emitter.collectIndexedGlobalBase(Address, Base, HaveBase, Terms);
   }
+
+  static bool symbolizesDataConstant(const MedLLVMEmitter &Emitter,
+                                     uint64_t Value, uint16_t Size) {
+    return Emitter.getVarSymbolizesDataConstant(Value, Size);
+  }
+
+  static bool mayRelocateConstant(const MedLLVMEmitter &Emitter, uint64_t Value,
+                                  uint16_t Size) {
+    return Emitter.getVarMayRelocateConstant(Value, Size);
+  }
 };
 
 } // namespace neverd
@@ -409,6 +419,16 @@ BinaryImage makeSpilledConstTableImage(Arch TargetArch) {
   return Image;
 }
 
+void addMachOPageZero(BinaryImage &Image) {
+  Image.Base = 0;
+  Segment PageZero;
+  PageZero.Name = "__PAGEZERO";
+  PageZero.VA = 0;
+  PageZero.Size = TextVA;
+  PageZero.Flags = SegmentFlags::None;
+  Image.Segments.push_back(std::move(PageZero));
+}
+
 void addThresholdCrossingConstTableRun(BinaryImage &Image) {
   Segment LowData;
   LowData.Name = "__LOW_CONST";
@@ -609,6 +629,108 @@ MedFunc makeSpilledConstTableLookup(Arch TargetArch) {
   Block.Ops.push_back(std::move(Return));
   Block.EndAddr = CallerVA + 0x20;
   Func.Blocks.push_back(std::move(Block));
+  return Func;
+}
+
+MedFunc makeMaskedScalarPhiIndexLookup() {
+  constexpr uint16_t PointerSize = 8;
+  auto makeVar = [](MedVar::VarKind Kind, int Id, int SSAVer, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = Arch::AArch64;
+    V.Id = Id;
+    V.SSAVer = SSAVer;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = "masked_scalar_phi_table_index_arm64";
+  Func.ReturnType = NdType::makeVoid();
+  Func.DoesNotReturn = true;
+
+  MedVar ScalarIndex = makeVar(MedVar::Reg, 10, 1, PointerSize);
+  ScalarIndex.RegOff = 10 * PointerSize;
+  MedVar NextIndex = makeVar(MedVar::Reg, 10, 2, PointerSize);
+  NextIndex.RegOff = ScalarIndex.RegOff;
+  MedVar TableBase = makeVar(MedVar::Temp, 20, 1, PointerSize);
+  MedVar MaskedIndex = makeVar(MedVar::Temp, 21, 1, PointerSize);
+  MedVar ScaledIndex = makeVar(MedVar::Temp, 22, 1, PointerSize);
+  MedVar ElementAddr = makeVar(MedVar::Temp, 23, 1, PointerSize);
+  MedVar Element = makeVar(MedVar::Temp, 24, 1, 2);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 8;
+  Entry.Succs = {1};
+  MedOp MaterializeBase;
+  MaterializeBase.Opcode = NdOp::COPY;
+  MaterializeBase.Output = TableBase;
+  MaterializeBase.addInput(MedVar::makeConst(SpilledConstTableVA, PointerSize));
+  Entry.Ops.push_back(std::move(MaterializeBase));
+  MedOp EnterLoop;
+  EnterLoop.Opcode = NdOp::BRANCH;
+  EnterLoop.addInput(MedVar::makeConst(CallerVA + 0x10, PointerSize));
+  Entry.Ops.push_back(std::move(EnterLoop));
+
+  MedBlock Loop;
+  Loop.Id = 1;
+  Loop.StartAddr = CallerVA + 0x10;
+  Loop.EndAddr = CallerVA + 0x24;
+  Loop.Preds = {0, 2};
+  Loop.Succs = {2};
+  PhiNode IndexPhi;
+  IndexPhi.Output = ScalarIndex;
+  IndexPhi.Args = {{0, MedVar::makeConst(0, PointerSize)}, {2, NextIndex}};
+  Loop.Phis.push_back(std::move(IndexPhi));
+  MedOp Mask;
+  Mask.Opcode = NdOp::INT_AND;
+  Mask.Output = MaskedIndex;
+  Mask.addInput(ScalarIndex);
+  Mask.addInput(MedVar::makeConst(0xffffffffULL, PointerSize));
+  Loop.Ops.push_back(std::move(Mask));
+  MedOp Scale;
+  Scale.Opcode = NdOp::INT_LEFT;
+  Scale.Output = ScaledIndex;
+  Scale.addInput(MaskedIndex);
+  Scale.addInput(MedVar::makeConst(4, PointerSize));
+  Loop.Ops.push_back(std::move(Scale));
+  MedOp FormElementAddr;
+  FormElementAddr.Opcode = NdOp::INT_ADD;
+  FormElementAddr.Output = ElementAddr;
+  FormElementAddr.addInput(TableBase);
+  FormElementAddr.addInput(ScaledIndex);
+  Loop.Ops.push_back(std::move(FormElementAddr));
+  MedOp ReadElement;
+  ReadElement.Opcode = NdOp::LOAD;
+  ReadElement.Output = Element;
+  ReadElement.addInput(ElementAddr);
+  Loop.Ops.push_back(std::move(ReadElement));
+  MedOp Advance;
+  Advance.Opcode = NdOp::BRANCH;
+  Advance.addInput(MedVar::makeConst(CallerVA + 0x30, PointerSize));
+  Loop.Ops.push_back(std::move(Advance));
+
+  MedBlock Latch;
+  Latch.Id = 2;
+  Latch.StartAddr = CallerVA + 0x30;
+  Latch.EndAddr = CallerVA + 0x38;
+  Latch.Preds = {1};
+  Latch.Succs = {1};
+  MedOp Step;
+  Step.Opcode = NdOp::INT_ADD;
+  Step.Output = NextIndex;
+  Step.addInput(ScalarIndex);
+  Step.addInput(MedVar::makeConst(1, PointerSize));
+  Latch.Ops.push_back(std::move(Step));
+  MedOp BackEdge;
+  BackEdge.Opcode = NdOp::BRANCH;
+  BackEdge.addInput(MedVar::makeConst(Loop.StartAddr, PointerSize));
+  Latch.Ops.push_back(std::move(BackEdge));
+
+  Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Latch)};
   return Func;
 }
 
@@ -5203,6 +5325,90 @@ TEST(MachOLLVMDataPointerBoundary,
     EXPECT_TRUE(
         valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
   }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsUnreadablePageZeroMaskAsRelocatableConstant) {
+  constexpr uint64_t Mask32 = 0xffffffffULL;
+  constexpr uint16_t PointerSize = 8;
+
+  BinaryImage PageZeroImage = makeSpilledConstTableImage(Arch::AArch64);
+  addMachOPageZero(PageZeroImage);
+  MedFunc PageZeroLookup = makeSpilledConstTableLookup(Arch::AArch64);
+  llvm::LLVMContext PageZeroContext;
+  MedLLVMEmitter PageZeroEmitter;
+  auto PageZeroModule = PageZeroEmitter.emit(
+      {PageZeroLookup}, PageZeroContext, "macho-pagezero-mask-classification",
+      Arch::AArch64, {}, &PageZeroImage, BinaryFormat::MachO);
+  ASSERT_NE(PageZeroModule, nullptr);
+  expectValidModule(*PageZeroModule);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::symbolizesDataConstant(
+      PageZeroEmitter, Mask32, PointerSize));
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::mayRelocateConstant(
+      PageZeroEmitter, Mask32, PointerSize));
+
+  BinaryImage LowImage = makeSpilledConstTableImage(Arch::AArch64);
+  addThresholdCrossingConstTableRun(LowImage);
+  MedFunc LowLookup = makeSpilledConstTableLookup(Arch::AArch64);
+  llvm::LLVMContext LowContext;
+  MedLLVMEmitter LowEmitter;
+  auto LowModule = LowEmitter.emit(
+      {LowLookup}, LowContext, "macho-low-loader-proven-classification",
+      Arch::AArch64, {}, &LowImage, BinaryFormat::MachO);
+  ASSERT_NE(LowModule, nullptr);
+  expectValidModule(*LowModule);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::symbolizesDataConstant(
+      LowEmitter, LowSpilledConstTableVA, PointerSize));
+  LowImage.RelocDataAddrs.insert(LowSpilledConstTableVA);
+  EXPECT_TRUE(MedLLVMProvenanceTestPeer::symbolizesDataConstant(
+      LowEmitter, LowSpilledConstTableVA, PointerSize));
+  EXPECT_TRUE(MedLLVMProvenanceTestPeer::mayRelocateConstant(
+      LowEmitter, LowSpilledConstTableVA, PointerSize));
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     KeepsMaskedScalarIndexPhiOutOfTableProvenance) {
+  constexpr uint64_t Mask32 = 0xffffffffULL;
+  BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+  addMachOPageZero(Image);
+  Image.RelocDataAddrs.insert(SpilledConstTableVA);
+  MedFunc Lookup = makeMaskedScalarPhiIndexLookup();
+  llvm::LLVMContext Context;
+  testing::internal::CaptureStderr();
+  auto Module = MedLLVMEmitter().emit(
+      {Lookup}, Context, "macho-masked-scalar-phi-table-index", Arch::AArch64,
+      {}, &Image, BinaryFormat::MachO);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  if (!Module) {
+    EXPECT_NE(
+        Diagnostic.find("ambiguous reachable read-only table-base PHI X10.1"),
+        std::string::npos)
+        << Diagnostic;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+  }
+  ASSERT_NE(Module, nullptr) << Diagnostic;
+  expectValidModule(*Module);
+
+  llvm::Function *Function = Module->getFunction(Lookup.Name);
+  ASSERT_NE(Function, nullptr);
+  const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+  ASSERT_NE(TableLoad, nullptr);
+  std::set<const llvm::Value *> Seen;
+  EXPECT_TRUE(
+      valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
+
+  bool SawIntegerMask = false;
+  for (const llvm::BasicBlock &Block : *Function)
+    for (const llvm::Instruction &Instruction : Block)
+      if (const auto *And = llvm::dyn_cast<llvm::BinaryOperator>(&Instruction);
+          And && And->getOpcode() == llvm::Instruction::And)
+        for (const llvm::Value *Operand : And->operands())
+          if (const auto *Integer = llvm::dyn_cast<llvm::ConstantInt>(Operand))
+            SawIntegerMask |= Integer->getZExtValue() == Mask32;
+  EXPECT_TRUE(SawIntegerMask);
+  EXPECT_EQ(Module->getNamedGlobal(makeNdDataSymbol(Mask32)), nullptr);
 }
 
 TEST(MachOLLVMDataPointerBoundary, AllowsSelfCopyScalarTableOffset) {

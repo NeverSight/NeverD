@@ -112,13 +112,14 @@ bool MedLLVMEmitter::getVarSymbolizesDataConstant(uint64_t Val,
   // the shared predicate describes the value that is actually emitted.
   const Segment *Seg = Img->getSegmentFor(Val);
   // The numeric threshold only asks getVar to *try* global-data resolution.
-  // If the value is outside every image segment, tryResolveGlobalData returns
-  // null and getVar emits the original integer.  Keep this classifier aligned
-  // with that observable result: in particular, a pointer-width negative i386
-  // arithmetic immediate such as -14 must not become address provenance merely
-  // because its zero-extended bit pattern is numerically large.  Loader-proven
-  // anchors and one-past-end pointers are the intentional out-of-segment cases.
-  if (!Seg && !LoaderProven)
+  // If the value is outside every image segment, or lies in an unreadable guard
+  // segment, tryResolveGlobalData returns null and getVar emits the original
+  // integer.  Keep this classifier aligned with that observable result: in
+  // particular, neither a zero-extended negative arithmetic immediate nor an
+  // integer mask that numerically collides with a guard range may become
+  // address provenance merely because its bit pattern is large.  Explicit
+  // loader proofs include the intentional anchored and one-past-end cases.
+  if ((!Seg || !Seg->isReadable()) && !LoaderProven)
     return false;
   bool Collidable = Seg && (Seg->isExecutable() || isMutableDataSeg(Seg));
   return !Collidable || constUsedAsPointer(Val);
