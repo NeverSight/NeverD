@@ -211,9 +211,56 @@ cl::opt<bool> BitMask(
         "identity (x & m) | (x & ~m) using opaque masks (bit-masking pass)"),
     cl::sub(PatchCmd));
 
-cl::opt<bool> NoDebug("no-debug", cl::desc("Skip debug info loading"),
-                      cl::sub(LiftCmd), cl::sub(DecompileCmd),
-                      cl::sub(PatchCmd), cl::sub(CfgCmd));
+//===----------------------------------------------------------------------===//
+// Debug-symbol options
+//
+// Registered with every subcommand that opens a binary: debug symbols name the
+// functions each of them reports, not just the ones that decompile.
+//===----------------------------------------------------------------------===//
+
+cl::opt<bool> NoDebug(
+    "no-debug",
+    cl::desc("Ignore debug symbols and read the image alone.  Use when a "
+             "companion .pdb/.map is stale or belongs to a sibling build"),
+    cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
+    cl::sub(InfoCmd), cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(FuncsCmd),
+    cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
+    cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
+    cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
+    cl::sub(RenameCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
+    cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
+    cl::sub(EntryPointsCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+    cl::sub(SymbolicCmd));
+
+cl::opt<std::string> PdbFile(
+    "pdb",
+    cl::desc("Load symbols from this .pdb instead of searching beside the "
+             "binary.  Failing to read it is an error, not a fallback"),
+    cl::init(""), cl::value_desc("file"), cl::sub(LiftCmd),
+    cl::sub(DecompileCmd), cl::sub(PatchCmd), cl::sub(InfoCmd),
+    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(FuncsCmd),
+    cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
+    cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
+    cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
+    cl::sub(RenameCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
+    cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
+    cl::sub(EntryPointsCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+    cl::sub(SymbolicCmd));
+
+cl::opt<std::string> MapFile(
+    "map",
+    cl::desc("Load symbols from this linker .map (MSVC, lld, GNU ld, or "
+             "ld64) instead of searching beside the binary"),
+    cl::init(""), cl::value_desc("file"), cl::sub(LiftCmd),
+    cl::sub(DecompileCmd), cl::sub(PatchCmd), cl::sub(InfoCmd),
+    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(FuncsCmd),
+    cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
+    cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
+    cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
+    cl::sub(RenameCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
+    cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
+    cl::sub(EntryPointsCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+    cl::sub(SymbolicCmd));
 
 cl::opt<bool> NoOpt("no-opt", cl::desc("Skip LLVM optimization passes"),
                     cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),

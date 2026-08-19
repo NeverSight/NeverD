@@ -110,6 +110,15 @@ static int realMain(int Argc, char *Argv[]) {
 
   neverd_session_t Sess = neverd_session_create();
   SessionGuard SessGuard(Sess);
+
+  // The debug-symbol search is part of loading, so its policy has to be in
+  // place before the load rather than adjusted afterwards.
+  neverd_session_set_debug_info_enabled(Sess, NoDebug ? 0 : 1);
+  if (!PdbFile.getValue().empty())
+    neverd_session_set_pdb_path(Sess, PdbFile.getValue().c_str());
+  if (!MapFile.getValue().empty())
+    neverd_session_set_map_path(Sess, MapFile.getValue().c_str());
+
   if (!neverd_session_load(Sess, InputFile.getValue().c_str())) {
     WithColor::error() << "failed to load: " << takeLastError(Sess) << "\n";
     return 1;
@@ -125,6 +134,17 @@ static int realMain(int Argc, char *Argv[]) {
     outs() << "File:  " << Path.filename().string() << "\n";
     outs() << "Arch:  " << ArchStr << "\n";
     neverd_free_string(ArchStr);
+
+    // Which names the run is working from is worth stating up front: it
+    // explains why a function reads as `parse_header` in one run and
+    // `sub_140001A20` in the next.
+    const char *DbgKind = neverd_session_debug_info_kind(Sess);
+    const char *DbgPath = neverd_session_debug_info_path(Sess);
+    if (DbgPath[0] != '\0')
+      outs() << "Debug: " << DbgKind << " ("
+             << std::filesystem::path(DbgPath).filename().string() << ")\n";
+    neverd_free_string(DbgKind);
+    neverd_free_string(DbgPath);
   }
 
   // Dispatch to the category handler for the active subcommand.  Each reads its

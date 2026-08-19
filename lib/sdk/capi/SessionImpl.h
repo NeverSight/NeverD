@@ -18,6 +18,7 @@
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/debug/DebugInfoDiscovery.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/evm/emit/EVMLLVMEmitter.h"
 #include "neverd/ir/high/HighIR.h"
@@ -57,6 +58,14 @@ struct Session {
   std::filesystem::path FilePath;
   BinaryImage Img;
   bool Loaded = false;
+
+  // Debug information for the loaded image.  DbgRequest is the caller's search
+  // policy and must be set before neverd_session_load(); the rest describe what
+  // that load actually found.
+  DebugInfoRequest DbgRequest;
+  std::unique_ptr<DebugContext> Dbg;
+  DebugInfoKind DbgKind = DebugInfoKind::None;
+  std::filesystem::path DbgPath;
 
   std::unique_ptr<llvm::LLVMContext> LLVMCtx;
   PipelineResult PipeResult;
@@ -218,7 +227,10 @@ struct Session {
     PipelineOptions Opts;
     applyAnalysisOptions(Opts);
     Pipeline ThePipeline;
-    PipeResult = ThePipeline.run(Img, *LLVMCtx, Opts);
+    // Debug names already reached Img.Symbols at load time; handing the context
+    // to the pipeline as well is what carries the rest of what it knows —
+    // source file and line, declared sizes, parameter names — into the IR.
+    PipeResult = ThePipeline.run(Img, *LLVMCtx, Opts, Dbg.get());
     PipeRan = true;
     if (!PipeResult.Success)
       setError(PipeResult.Error.empty() ? "pipeline failed" : PipeResult.Error);
@@ -298,6 +310,7 @@ inline std::string jsonToString(const llvm::json::Value &V) {
 /// C API functions that take an input path instead of a session.
 struct PipelineRunner {
   BinaryImage Img;
+  DebugInfoRequest DbgRequest;
   std::unique_ptr<DebugContext> Dbg;
   llvm::LLVMContext LLVMCtx;
   PipelineResult Result;

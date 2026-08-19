@@ -54,6 +54,41 @@ NEVERD_API int neverd_session_is_64bit(neverd_session_t Sess);
 NEVERD_API int neverd_session_bitness(neverd_session_t Sess);
 
 // ===--------------------------------------------------------------------===//
+// Debug information
+//
+// Loading a binary also looks for the debug information that belongs to it —
+// PDB for PE, DWARF (in-image, .dSYM, or a split .debug file) for ELF and
+// Mach-O, then a linker MAP — and the names it finds populate the symbol table
+// the rest of the API reads.  The three setters below adjust that search and
+// only take effect on the next neverd_session_load(); the two queries report
+// what the last load settled on.
+// ===--------------------------------------------------------------------===//
+
+/// Load debug symbols from \p Path instead of searching for a companion file.
+/// The named file is authoritative: neverd_session_load() fails if it cannot be
+/// read or holds no function symbols.  Pass NULL or "" to resume searching.
+NEVERD_API void neverd_session_set_pdb_path(neverd_session_t Sess,
+                                            const char *Path);
+
+/// Linker MAP counterpart of neverd_session_set_pdb_path().
+NEVERD_API void neverd_session_set_map_path(neverd_session_t Sess,
+                                            const char *Path);
+
+/// Pass 0 to analyze the image alone, ignoring any debug file beside it.
+/// The escape hatch for a stale companion file that names functions worse than
+/// the image itself does.  Enabled by default.
+NEVERD_API void neverd_session_set_debug_info_enabled(neverd_session_t Sess,
+                                                      int Enabled);
+
+/// Which loader supplied the session's debug symbols: "dwarf", "pdb", "map",
+/// or "none".  Caller frees.
+NEVERD_API const char *neverd_session_debug_info_kind(neverd_session_t Sess);
+
+/// Path of the file the debug symbols came from, empty when there are none.
+/// Caller frees.
+NEVERD_API const char *neverd_session_debug_info_path(neverd_session_t Sess);
+
+// ===--------------------------------------------------------------------===//
 // Error handling
 // ===--------------------------------------------------------------------===//
 

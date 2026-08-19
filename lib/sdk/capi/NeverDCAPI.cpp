@@ -27,9 +27,9 @@
 #include "SessionImpl.h"
 
 #include "neverd/Common.h"
-#include "neverd/support/BinaryLoading.h"
-#include "neverd/debug/DWARFLoader.h"
+#include "neverd/debug/DebugInfoDiscovery.h"
 #include "neverd/sdk/NeverDPlugin.h"
+#include "neverd/support/BinaryLoading.h"
 
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
@@ -108,8 +108,16 @@ bool PipelineRunner::load(const char *InputPath, std::string &Err) {
     return false;
   }
   Img = std::move(*ImgOrErr);
-  if (Img.Arch != Arch::EVM && Img.Arch != Arch::SBF)
-    Dbg = DWARFDebugContext::load(Path, Img.Format);
+
+  auto Found = loadDebugInfo(Path, Img, DbgRequest);
+  if (!Found.Error.empty()) {
+    Err = Found.Error;
+    return false;
+  }
+  if (Found) {
+    applyDebugSymbols(Img, *Found.Context);
+    Dbg = std::move(Found.Context);
+  }
   return true;
 }
 
@@ -167,6 +175,26 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   S->Loaded = true;
   S->Annotations.clear();
   S->Renames.clear();
+
+  // Debug names are published into the image before the function list is built
+  // from it, so everything downstream reads one symbol table instead of having
+  // to reconcile the image's names with a debug context of its own.
+  S->Dbg.reset();
+  S->DbgKind = DebugInfoKind::None;
+  S->DbgPath.clear();
+  auto Found = loadDebugInfo(P, S->Img, S->DbgRequest);
+  if (!Found.Error.empty()) {
+    S->setError(Found.Error);
+    S->Loaded = false;
+    return 0;
+  }
+  if (Found) {
+    applyDebugSymbols(S->Img, *Found.Context);
+    S->Dbg = std::move(Found.Context);
+    S->DbgKind = Found.Kind;
+    S->DbgPath = std::move(Found.Path);
+  }
+
   S->invalidatePipeline();
 
   if (S->Img.Arch != Arch::EVM && S->Img.Arch != Arch::SBF &&
@@ -184,6 +212,35 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
 
 int neverd_session_is_loaded(neverd_session_t Sess) {
   return toSession(Sess)->Loaded ? 1 : 0;
+}
+
+// ===--------------------------------------------------------------------===//
+// Debug information
+// ===--------------------------------------------------------------------===//
+
+void neverd_session_set_pdb_path(neverd_session_t Sess, const char *Path) {
+  if (auto *S = toSession(Sess))
+    S->DbgRequest.PDBPath = Path ? std::filesystem::path(Path) : "";
+}
+
+void neverd_session_set_map_path(neverd_session_t Sess, const char *Path) {
+  if (auto *S = toSession(Sess))
+    S->DbgRequest.MapPath = Path ? std::filesystem::path(Path) : "";
+}
+
+void neverd_session_set_debug_info_enabled(neverd_session_t Sess, int Enabled) {
+  if (auto *S = toSession(Sess))
+    S->DbgRequest.Enabled = Enabled != 0;
+}
+
+const char *neverd_session_debug_info_kind(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  return dupStr(debugInfoKindName(S ? S->DbgKind : DebugInfoKind::None));
+}
+
+const char *neverd_session_debug_info_path(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  return dupStr(S ? S->DbgPath.string() : std::string());
 }
 
 int neverd_session_analyze(neverd_session_t Sess) {

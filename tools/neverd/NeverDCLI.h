@@ -148,6 +148,8 @@ extern llvm::cl::opt<std::string> OutputFile;
 extern llvm::cl::opt<bool> Verbose;
 extern llvm::cl::opt<bool> JsonOutput;
 extern llvm::cl::opt<bool> NoDebug;
+extern llvm::cl::opt<std::string> PdbFile;
+extern llvm::cl::opt<std::string> MapFile;
 extern llvm::cl::opt<bool> NoOpt;
 extern llvm::cl::opt<size_t> MaxFunc;
 

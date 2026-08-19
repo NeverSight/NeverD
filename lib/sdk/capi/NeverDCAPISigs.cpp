@@ -41,6 +41,12 @@ static int matchLoadedSignatures(Session &S) {
     auto It = NameMap.find(F.Entry);
     if (It == NameMap.end() || It->second.empty())
       continue;
+    // A signature hit is NameOrigin::Analysis: a claim that these bytes look
+    // like a library routine somebody once compiled.  A name the symbol table,
+    // debug file, or MAP stated outranks it and stays, and so does a rename the
+    // user typed.  Only a placeholder is free to take the match.
+    if (!isSynthesizedFuncName(F.Name))
+      continue;
     if (S.Renames.find(F.Entry) == S.Renames.end())
       F.Name = It->second;
   }

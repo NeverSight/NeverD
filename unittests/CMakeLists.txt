@@ -21,6 +21,7 @@ add_neverd_unittest(NeverDTestProcessTests
 add_subdirectory(symbolic)
 add_subdirectory(solver)
 add_subdirectory(sigs)
+add_subdirectory(debug)
 add_subdirectory(libc)
 add_subdirectory(lift)
 add_subdirectory(translate)

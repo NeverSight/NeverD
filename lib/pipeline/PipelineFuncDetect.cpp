@@ -82,9 +82,7 @@ void Pipeline::mergeDebugSymbols(
   for (auto &DF : DbgFuncs) {
     auto It = Existing.find(DF.Addr);
     if (It != Existing.end()) {
-      bool IsSynthetic = It->second.starts_with(kAutoFuncPrefix) ||
-                         It->second.starts_with("func_");
-      if (IsSynthetic || It->second.empty()) {
+      if (isSynthesizedFuncName(It->second)) {
         for (auto &[EA, EN] : FuncEntries)
           if (EA == DF.Addr) {
             EN = DF.Name;

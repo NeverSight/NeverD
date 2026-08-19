@@ -34,6 +34,50 @@ inline constexpr unsigned kBitsPerByte = 8;
 /// Default prefix for auto-generated function symbols (e.g. "sub_1234").
 inline constexpr llvm::StringLiteral kAutoFuncPrefix("sub_");
 
+/// The EVM analyzer's spelling of the same idea, used for a contract function
+/// the dispatcher exposes under a selector no known signature hashes to
+/// (e.g. "func_a9059cbb").  Kept here rather than shared with
+/// evm::kRecoveredFunctionPrefix so this header stays free of target headers.
+inline constexpr llvm::StringLiteral kAutoFuncPrefixEVM("func_");
+
+/// Ranked origins of a function name, ordered weakest to strongest.  Every
+/// source that can name a function agrees on this order, so a weaker source
+/// never displaces what a stronger one already said:
+///
+///   Synthesized  NeverD had nothing to go on and minted `sub_<va>`.
+///   Analysis     A guess NeverD derived from the code — a FLIRT signature
+///                hit, a personality-routine classification, a thunk that
+///                borrows its target's name.
+///   Stated       The image or a companion file said so: symbol table,
+///                exports, DWARF, PDB, or a linker MAP.
+///   User         An explicit rename, which overrides everything.
+///
+/// \sa isSynthesizedFuncName
+enum class NameOrigin { Synthesized, Analysis, Stated, User };
+
+/// True when \p Name is a placeholder NeverD minted for an address nothing
+/// could name, and is therefore free for any better-informed source to
+/// replace.  Guessing sources must check this before overwriting a name; a
+/// symbol table, debug file, or MAP outranks anything inferred from the code.
+///
+/// A placeholder is a prefix followed by the hex that identifies it and
+/// nothing else, which is what every mint site produces.  Requiring the exact
+/// shape keeps a binary that genuinely exports `sub_total` or `func_ptr` from
+/// having its own name treated as up for grabs.
+inline bool isSynthesizedFuncName(llvm::StringRef Name) {
+  if (Name.empty())
+    return true;
+  if (!Name.consume_front(kAutoFuncPrefix) &&
+      !Name.consume_front(kAutoFuncPrefixEVM))
+    return false;
+  if (Name.empty())
+    return false;
+  for (char C : Name)
+    if (!llvm::isHexDigit(C))
+      return false;
+  return true;
+}
+
 /// Names of the synthetic frame-setup block and the initial stack-pointer value
 /// the LLVM emitter materializes for a lifted function.  The optimizer keys
 /// frame-pointer recovery (fixLiftedStackPointers) off these names, so the
