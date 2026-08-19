@@ -561,6 +561,33 @@ _declare(
 )
 _declare("neverd_session_is_64bit", "int", ["neverd_session_t"])
 _declare("neverd_session_bitness", "int", ["neverd_session_t"])
+_declare(
+    "neverd_session_set_pdb_path",
+    "void",
+    ["neverd_session_t", "const char *"],
+)
+_declare(
+    "neverd_session_set_map_path",
+    "void",
+    ["neverd_session_t", "const char *"],
+)
+_declare(
+    "neverd_session_set_debug_info_enabled",
+    "void",
+    ["neverd_session_t", "int"],
+)
+_declare(
+    "neverd_session_debug_info_kind",
+    "const char *",
+    ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_session_debug_info_path",
+    "const char *",
+    ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_func_count", "int", ["neverd_session_t"])
 _declare("neverd_func_entry", "neverd_va_t", ["neverd_session_t", "int"])
 _declare("neverd_func_size", "int", ["neverd_session_t", "int"])

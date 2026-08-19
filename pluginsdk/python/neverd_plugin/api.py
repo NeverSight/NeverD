@@ -295,6 +295,18 @@ class Session:
         return int(self._call("neverd_session_bitness"))
 
     @property
+    def debug_info_kind(self) -> str:
+        """Which loader named the functions: "dwarf", "pdb", "map", or "none"."""
+
+        return self._owned_string("neverd_session_debug_info_kind") or "none"
+
+    @property
+    def debug_info_path(self) -> str:
+        """File the debug symbols came from, empty when there are none."""
+
+        return self._owned_string("neverd_session_debug_info_path") or ""
+
+    @property
     def file_size(self) -> int:
         return int(self._call("neverd_session_file_size"))
 
@@ -337,6 +349,37 @@ class Session:
     @property
     def version(self) -> str:
         return self._host_api().owned_string("neverd_version_number") or ""
+
+    def set_debug_info(
+        self,
+        *,
+        enabled: bool = True,
+        pdb_path: os.PathLike[str] | str | None = None,
+        map_path: os.PathLike[str] | str | None = None,
+    ) -> None:
+        """Choose the debug symbols the next load() reads.
+
+        The search happens during load(), so this only takes effect on a
+        subsequent one.  Naming a file makes it authoritative: load() then
+        fails rather than falling back to a companion file that happens to sit
+        beside the binary.  Pass an empty path to resume searching, or
+        enabled=False to read the image alone.
+        """
+
+        self._call(
+            "neverd_session_set_debug_info_enabled",
+            int(_boolean("enabled", enabled)),
+        )
+        if pdb_path is not None:
+            self._call(
+                "neverd_session_set_pdb_path",
+                _utf8_argument("PDB path", os.fspath(pdb_path), allow_empty=True),
+            )
+        if map_path is not None:
+            self._call(
+                "neverd_session_set_map_path",
+                _utf8_argument("MAP path", os.fspath(map_path), allow_empty=True),
+            )
 
     def load(self, path: os.PathLike[str] | str) -> None:
         encoded = _utf8_argument("path", os.fspath(path), allow_empty=False)
