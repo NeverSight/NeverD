@@ -4142,6 +4142,137 @@ MedFunc makeReturnFunction(llvm::StringRef Name, va_t Entry,
   return Func;
 }
 
+MedFunc makeFrameReloadedDirectPhiPointerTableLookup(Arch TargetArch) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  MedFunc Func = makePhiConstTableLookup(
+      TargetArch, PhiTableBaseCase::SameBaseOnReachableEdges);
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "frame_reloaded_raw_pointer_phi_arm64"
+                  : "frame_reloaded_raw_pointer_phi_x86_64";
+  Func.FrameSize = 16;
+
+  MedVar SP;
+  SP.Kind = MedVar::Reg;
+  SP.TheArch = TargetArch;
+  SP.Id = 100;
+  SP.SSAVer = 0;
+  SP.Size = TRI.PointerSize;
+  SP.RegOff = TRI.StackPointer;
+  MedVar Slot;
+  Slot.Kind = MedVar::Temp;
+  Slot.TheArch = TargetArch;
+  Slot.Id = 101;
+  Slot.SSAVer = 1;
+  Slot.Size = TRI.PointerSize;
+  MedVar Reloaded = Slot;
+  Reloaded.Id = 102;
+
+  MedOp FormSlot;
+  FormSlot.Opcode = NdOp::INT_ADD;
+  FormSlot.Output = Slot;
+  FormSlot.addInput(SP);
+  FormSlot.addInput(MedVar::makeConst(uint64_t(-8), TRI.PointerSize));
+  Func.Blocks.front().Ops.insert(Func.Blocks.front().Ops.begin(),
+                                 std::move(FormSlot));
+
+  MedBlock &Merge = Func.Blocks[1];
+  EXPECT_FALSE(Merge.Phis.empty());
+  if (Merge.Phis.empty())
+    return Func;
+  for (auto &[Pred, Arg] : Merge.Phis.front().Args) {
+    (void)Pred;
+    Arg = MedVar::makeConst(WritableVA, TRI.PointerSize);
+  }
+  MedOp Spill;
+  Spill.Opcode = NdOp::STORE;
+  Spill.addInput(Slot);
+  Spill.addInput(Merge.Phis.front().Output);
+  MedOp Reload;
+  Reload.Opcode = NdOp::LOAD;
+  Reload.Output = Reloaded;
+  Reload.addInput(Slot);
+  Merge.Ops.insert(Merge.Ops.begin(), std::move(Spill));
+  Merge.Ops.insert(std::next(Merge.Ops.begin()), std::move(Reload));
+  for (MedOp &Op : Merge.Ops)
+    if (Op.Opcode == NdOp::LOAD && Op.Output.Size == 2) {
+      Op.Inputs[0] = Reloaded;
+      break;
+    }
+  return Func;
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     UsesSymbolizedPointerTableBaseAfterLocalFrameReload) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    BinaryImage Image = makeLLVMImage();
+    Image.Arch = TargetArch;
+    writeObject(Image.Segments[2].Data, 0, CodeVA);
+    Image.CodePtrRelocSlots.insert(WritableVA);
+    Image.CodeRefTargets.insert(CodeVA);
+
+    MedFunc Lookup = makeSpilledConstTableLookup(TargetArch);
+    Lookup.Name = TargetArch == Arch::AArch64
+                      ? "symbolized_spilled_pointer_table_arm64"
+                      : "symbolized_spilled_pointer_table_x86_64";
+    ASSERT_GE(Lookup.Blocks.front().Ops.size(), 7u);
+    MedOp &MaterializeBase = Lookup.Blocks.front().Ops[1];
+    ASSERT_EQ(MaterializeBase.Opcode, NdOp::COPY);
+    MaterializeBase.Inputs[0] = MedVar::makeConst(WritableVA, TRI.PointerSize);
+    const MedVar ReloadedBase = Lookup.Blocks.front().Ops[3].Output;
+    MedOp &ReadElement = Lookup.Blocks.front().Ops[6];
+    ASSERT_EQ(ReadElement.Opcode, NdOp::LOAD);
+    ReadElement.Inputs[0] = ReloadedBase;
+
+    MedFunc Target = makeReturnFunction("spilled_pointer_target", CodeVA);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup, Target}, Context, "macho-symbolized-spilled-pointer-table",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "cptsel.direct");
+    EXPECT_NE(Module->getNamedGlobal(
+                  (kNdCodePtrPrefix + llvm::utohexstr(WritableVA)).str()),
+              nullptr);
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RebasesRawDirectPhiPointerTableBaseAfterLocalFrameReload) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    BinaryImage Image = makeLLVMImage();
+    Image.Arch = TargetArch;
+    writeObject(Image.Segments[2].Data, 0, CodeVA);
+    Image.CodePtrRelocSlots.insert(WritableVA);
+    Image.CodeRefTargets.insert(CodeVA);
+
+    MedFunc Lookup = makeFrameReloadedDirectPhiPointerTableLookup(TargetArch);
+    MedFunc Target = makeReturnFunction("raw_spilled_pointer_target", CodeVA);
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup, Target}, Context, "macho-raw-spilled-pointer-table",
+        TargetArch, {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "cptsel");
+  }
+}
+
 TEST(MachOInteriorCodePointerCFG,
      PreservesRelocatedInteriorRootsAndFoldsImmutableRelay) {
   for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {

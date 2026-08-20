@@ -328,10 +328,11 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
   auto findPhi = [&](const MedVar &X) { return lookupPhi(X); };
 
   // traceTableBaseConst may fold several numeric leaves into one table VA, but
-  // getVar emits those leaves individually.  Determine whether the rebuilt IR
+  // getVar emits those leaves individually. Determine whether the rebuilt IR
   // already carries a relocatable pointer by classifying the actual leaves,
   // stopping at a literal-pool LOAD because its loaded value remains the raw
   // image VA even though the pool address itself is symbolized.
+  enum class ConstLeafModel { Raw, Symbolized, Incomplete };
   auto emittedConstLeafRelocates = [&](const MedVar &Root) {
     std::vector<MedVar> Pending{Root};
     std::set<std::tuple<int, int, int, uint16_t>> LeafSeen;
@@ -341,7 +342,7 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
       Pending.pop_back();
       if (Cur.isConst()) {
         if (getVarMayRelocateConstant(Cur.ConstVal, Cur.Size))
-          return true;
+          return ConstLeafModel::Symbolized;
         continue;
       }
       auto Key = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
@@ -367,18 +368,14 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
         break;
       }
     }
-    // An incomplete leaf audit cannot prove the expression is raw.  Treat it
-    // as already relocated so this resolver declines to add a second base;
-    // the later strict address-role audit can then reject ambiguity instead of
-    // silently manufacturing a mixed-model pointer.
-    return !Pending.empty();
+    return Pending.empty() ? ConstLeafModel::Raw : ConstLeafModel::Incomplete;
   };
 
   auto compute = [&]() -> uint64_t {
     uint64_t SegVA = 0;
     bool Found = false;
-    std::vector<MedVar> Work{V};
-    std::set<std::tuple<int, int, int>> Seen;
+    std::vector<std::pair<MedVar, bool>> Work{{V, false}};
+    std::set<std::tuple<int, int, int, bool>> Seen;
     // The Seen set bounds the walk to the function's distinct
     // address-arithmetic values; the counter is only a safety cap against a
     // pathological DAG (and is large enough that an index subtree — e.g. a deep
@@ -386,21 +383,29 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
     // + index` address).
     int Budget = 4096;
     while (!Work.empty() && Budget-- > 0) {
-      MedVar Cur = Work.back();
+      auto [Cur, ThroughFrameReload] = Work.back();
       Work.pop_back();
 
       // A subexpression that folds to a single constant is a base or an offset:
       // a plain constant, `const + const`, or the ARM biased literal-pool base
       // `const_offset + ldr[pc]` (the table VA split as a constant plus a
       // literal the loader applied).  The folded value locates the table; the
-      // actual emitted leaves above decide whether the expression already
-      // carries a relocated base.
+      // address-role audit below proves whether that table evidence actually
+      // reaches the result. Representation is tracked separately so consumers
+      // can choose between the already-relocated value and a raw-VA rebase.
       if (auto C = traceTableBaseConst(Cur)) {
         const Segment *Seg = Img->getSegmentFor(*C);
         if (Seg && !Seg->isExecutable() && !Seg->Data.empty() &&
             segHasPtrSlots(Seg)) {
-          if (emittedConstLeafRelocates(Cur))
-            return 0; // rebuilt expression already carries a relocated base
+          // Ordinarily an already-symbolized table base belongs to the
+          // resolver that produced it, and rebasing it here would apply the
+          // mirror twice. A proven frame spill/reload is different: the LOAD
+          // hides that representation from the address consumer, so retain
+          // ownership and let the consuming proof select direct use.
+          ConstLeafModel LeafModel = emittedConstLeafRelocates(Cur);
+          if (LeafModel == ConstLeafModel::Incomplete ||
+              (LeafModel == ConstLeafModel::Symbolized && !ThroughFrameReload))
+            return 0;
           uint64_t RunStart = 0, RunEnd = 0;
           readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
           if (Found && SegVA != RunStart)
@@ -414,7 +419,8 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
       if (Cur.isConst())
         continue;
 
-      auto K = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer);
+      auto K = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
+                               ThroughFrameReload);
       if (!Seen.insert(K).second)
         continue;
       if (const MedOp *Def = findDef(Cur)) {
@@ -436,7 +442,7 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
         case NdOp::SUBBYTES:
         case NdOp::SELECT:
           for (int I = 0; I < Def->NumInputs; ++I)
-            Work.push_back(Def->Inputs[I]);
+            Work.emplace_back(Def->Inputs[I], ThroughFrameReload);
           break;
         case NdOp::LOAD:
           // Stack spill/reload: a register-constrained target (i386/ARM32)
@@ -446,7 +452,8 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
           {
             std::vector<MedVar> Sources;
             if (collectFrameReloadSources(*Def, Sources))
-              Work.insert(Work.end(), Sources.begin(), Sources.end());
+              for (const MedVar &Source : Sources)
+                Work.emplace_back(Source, true);
           }
           break;
         default:
@@ -457,7 +464,7 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
       if (const PhiNode *Phi = findPhi(Cur))
         for (const auto &[PredId, Arg] : Phi->Args) {
           (void)PredId;
-          Work.push_back(Arg);
+          Work.emplace_back(Arg, ThroughFrameReload);
         }
     }
     return Found ? SegVA : 0;
@@ -581,14 +588,19 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
     // Merely appearing in a condition, mask, multiplier, shift, or other scalar
     // input is invalid provenance.
     enum class AddressRole { Invalid, Scalar, PointerTable };
+    enum class AddressModel { Raw, Symbolized };
     struct AddressProof {
       AddressRole Role = AddressRole::Invalid;
       uint64_t Segment = 0;
+      AddressModel Model = AddressModel::Raw;
     };
     auto invalidProof = []() { return AddressProof{}; };
-    auto scalarProof = []() { return AddressProof{AddressRole::Scalar, 0}; };
-    auto tableProof = [](uint64_t Segment) {
-      return AddressProof{AddressRole::PointerTable, Segment};
+    auto scalarProof = []() {
+      return AddressProof{AddressRole::Scalar, 0, AddressModel::Raw};
+    };
+    auto tableProof = [](uint64_t Segment,
+                         AddressModel Model = AddressModel::Raw) {
+      return AddressProof{AddressRole::PointerTable, Segment, Model};
     };
     auto pointerTableRunStart = [&](const Segment *Seg) {
       uint64_t RunStart = Seg->VA, RunEnd = Seg->VA + Seg->Data.size();
@@ -606,12 +618,17 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
             Value.ConstVal != 0 ? Img->getSegmentFor(Value.ConstVal) : nullptr;
         if (!Seg || Seg->isExecutable() || !segmentHasPointerSlots(Seg))
           return scalarProof();
-        // Operation inputs pass through getVar; a direct PHI constant instead
-        // bypasses it in the edge-copy path and remains an original numeric VA.
-        if (!DirectPhiConstant &&
-            getVarMayRelocateConstant(Value.ConstVal, Value.Size))
-          return invalidProof();
-        return tableProof(pointerTableRunStart(Seg));
+        // A pointer-table constant is valid provenance in either address
+        // model. Operation inputs pass through getVar and may already carry
+        // the mirror, while a direct PHI constant bypasses getVar and remains
+        // an original numeric VA. Preserve that distinction through the same
+        // role proof so the emitter can choose direct use versus raw rebasing.
+        AddressModel Model =
+            !DirectPhiConstant &&
+                    getVarMayRelocateConstant(Value.ConstVal, Value.Size)
+                ? AddressModel::Symbolized
+                : AddressModel::Raw;
+        return tableProof(pointerTableRunStart(Seg), Model);
       }
       auto Key =
           std::make_tuple(static_cast<int>(Value.Kind), Value.Id, Value.SSAVer);
@@ -638,7 +655,8 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
             Merged = Arm;
           else if (Merged->Role != Arm.Role ||
                    (Arm.Role == AddressRole::PointerTable &&
-                    Merged->Segment != Arm.Segment))
+                    (Merged->Segment != Arm.Segment ||
+                     Merged->Model != Arm.Model)))
             return invalidProof();
         }
         return SawInitialization && Merged ? *Merged : invalidProof();
@@ -661,7 +679,7 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
             L.Role != R.Role)
           return invalidProof();
         if (L.Role == AddressRole::PointerTable &&
-            (!PreservesPointer || L.Segment != R.Segment))
+            (!PreservesPointer || L.Segment != R.Segment || L.Model != R.Model))
           return invalidProof();
         return L;
       };
@@ -763,7 +781,8 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
             Merged = SourceProof;
           else if (Merged->Role != SourceProof.Role ||
                    (SourceProof.Role == AddressRole::PointerTable &&
-                    Merged->Segment != SourceProof.Segment))
+                    (Merged->Segment != SourceProof.Segment ||
+                     Merged->Model != SourceProof.Model)))
             return invalidProof();
         }
         return Merged ? *Merged : scalarProof();
@@ -796,6 +815,12 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
     uint64_t OutSeg = 0;
     if (auto *G = buildCodePtrSegmentGlobal(SelSeg, OutSeg)) {
       if (llvm::Value *A = getVar(AddrVar, Builder)) {
+        if (Proven.Model == AddressModel::Symbolized) {
+          if (A->getType()->isPointerTy())
+            return A;
+          return Builder.CreateIntToPtr(A, llvm::PointerType::getUnqual(*Ctx),
+                                        "cptsel.direct");
+        }
         unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
         auto *IdxTy = llvm::IntegerType::get(*Ctx, AddrBits);
         if (A->getType()->isPointerTy())
