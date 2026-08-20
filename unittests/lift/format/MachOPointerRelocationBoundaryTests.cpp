@@ -233,14 +233,22 @@ bool constantContainsBlockAddress(const llvm::Constant *Root) {
   return false;
 }
 
-bool constantContainsInteger(const llvm::Constant *Root, uint64_t Value) {
+bool constantContainsIntegerImpl(const llvm::Constant *Root, uint64_t Value,
+                                 std::set<const llvm::Constant *> &Seen) {
+  if (!Root || !Seen.insert(Root).second)
+    return false;
   if (const auto *Int = llvm::dyn_cast<llvm::ConstantInt>(Root))
     return Int->getZExtValue() == Value;
   for (const llvm::Use &Operand : Root->operands())
     if (const auto *Child = llvm::dyn_cast<llvm::Constant>(Operand.get()))
-      if (constantContainsInteger(Child, Value))
+      if (constantContainsIntegerImpl(Child, Value, Seen))
         return true;
   return false;
+}
+
+bool constantContainsInteger(const llvm::Constant *Root, uint64_t Value) {
+  std::set<const llvm::Constant *> Seen;
+  return constantContainsIntegerImpl(Root, Value, Seen);
 }
 
 bool isPtrToIntValue(const llvm::Value *Value) {
@@ -373,60 +381,149 @@ constexpr va_t SignBitTableVA = 0x80001000;
 constexpr va_t OtherSignBitTableVA = SignBitTableVA + 0x20;
 constexpr va_t ScalarLiteralVA = TextVA + 0x5C0;
 
-BinaryImage makeSpilledConstTableImage(Arch TargetArch) {
+const char *formatTraceName(BinaryFormat Format) {
+  switch (Format) {
+  case BinaryFormat::MachO:
+    return "Mach-O";
+  case BinaryFormat::ELF:
+    return "ELF";
+  case BinaryFormat::COFF:
+    return "COFF";
+  default:
+    return "unknown";
+  }
+}
+
+BinaryImage
+makeSpilledConstTableImage(Arch TargetArch,
+                           BinaryFormat Format = BinaryFormat::MachO,
+                           bool PointerTable = false) {
   BinaryImage Image;
   Image.Arch = TargetArch;
-  Image.Format = BinaryFormat::MachO;
+  Image.Format = Format;
   Image.Bits = Bitness::Bits64;
   Image.Base = TextVA;
+  const bool IsMachO = Format == BinaryFormat::MachO;
+  const bool TableInText = IsMachO && !PointerTable;
+  const uint64_t FirstTarget = SpilledConstTableVA + 0x10;
+  const uint64_t SecondTarget = SpilledConstTableVA + 0x30;
+
+  auto fillTables = [&](std::vector<uint8_t> &Bytes, size_t BaseOffset) {
+    const uint16_t Values[] = {10, 20, 30, 40};
+    const uint16_t OtherValues[] = {50, 60, 70, 80};
+    if (!PointerTable) {
+      std::memcpy(Bytes.data() + BaseOffset, Values, sizeof(Values));
+      std::memcpy(Bytes.data() + BaseOffset +
+                      (OtherSpilledConstTableVA - SpilledConstTableVA),
+                  OtherValues, sizeof(OtherValues));
+      return;
+    }
+    writeObject(Bytes, BaseOffset, FirstTarget);
+    writeObject(Bytes, BaseOffset + 8, FirstTarget);
+    writeObject(Bytes,
+                BaseOffset + (OtherSpilledConstTableVA - SpilledConstTableVA),
+                SecondTarget);
+    writeObject(Bytes,
+                BaseOffset + (OtherSpilledConstTableVA - SpilledConstTableVA) +
+                    8,
+                SecondTarget);
+  };
 
   Segment Text;
-  Text.Name = "__TEXT";
+  Text.Name = IsMachO ? "__TEXT" : ".text";
   Text.VA = TextVA;
-  Text.Size = 0x1000;
+  Text.Size = TableInText ? 0x1000 : SpilledConstTableVA - TextVA;
   Text.FileSz = Text.Size;
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data.assign(Text.Size, 0);
-  const uint16_t Values[] = {10, 20, 30, 40};
-  std::memcpy(Text.Data.data() + (SpilledConstTableVA - TextVA), Values,
-              sizeof(Values));
-  const uint16_t OtherValues[] = {50, 60, 70, 80};
-  std::memcpy(Text.Data.data() + (OtherSpilledConstTableVA - TextVA),
-              OtherValues, sizeof(OtherValues));
+  if (TableInText)
+    fillTables(Text.Data, SpilledConstTableVA - TextVA);
   Image.Segments.push_back(std::move(Text));
 
+  if (!TableInText) {
+    Segment Data;
+    Data.Name = IsMachO                       ? "__DATA_CONST"
+                : Format == BinaryFormat::ELF ? ".data.rel.ro"
+                                              : ".rdata";
+    Data.VA = SpilledConstTableVA;
+    Data.Size = 0x40;
+    Data.FileSz = Data.Size;
+    Data.Flags = SegmentFlags::Readable;
+    if (IsMachO || Format == BinaryFormat::ELF)
+      Data.Flags = Data.Flags | SegmentFlags::Writable;
+    Data.Data.assign(Data.Size, 0);
+    fillTables(Data.Data, 0);
+    Image.Segments.push_back(std::move(Data));
+  }
+
   Section Code;
-  Code.Name = "__text";
-  Code.SegmentName = "__TEXT";
+  Code.Name = IsMachO ? "__text" : ".text";
+  Code.SegmentName = IsMachO ? "__TEXT" : ".text";
   Code.VA = CallerVA;
   Code.Size = 0x40;
   Code.FileSz = Code.Size;
   Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-  Code.Type = static_cast<uint32_t>(S_REGULAR) |
-              static_cast<uint32_t>(S_ATTR_PURE_INSTRUCTIONS) |
-              static_cast<uint32_t>(S_ATTR_SOME_INSTRUCTIONS);
+  if (IsMachO)
+    Code.Type = static_cast<uint32_t>(S_REGULAR) |
+                static_cast<uint32_t>(S_ATTR_PURE_INSTRUCTIONS) |
+                static_cast<uint32_t>(S_ATTR_SOME_INSTRUCTIONS);
   Image.Sections.push_back(std::move(Code));
 
   Section Const;
-  Const.Name = "__const";
-  Const.SegmentName = "__TEXT";
+  Const.Name = IsMachO                       ? "__const"
+               : Format == BinaryFormat::ELF ? ".data.rel.ro"
+                                             : ".rdata";
+  Const.SegmentName =
+      IsMachO ? (TableInText ? "__TEXT" : "__DATA_CONST") : Const.Name;
   Const.VA = SpilledConstTableVA;
   Const.Size = 0x40;
   Const.FileSz = Const.Size;
   Const.Flags = SegmentFlags::Readable;
-  Const.Type = S_REGULAR;
+  if ((IsMachO && !TableInText) || Format == BinaryFormat::ELF)
+    Const.Flags = Const.Flags | SegmentFlags::Writable;
+  if (IsMachO)
+    Const.Type = S_REGULAR;
   Image.Sections.push_back(std::move(Const));
+
+  if (PointerTable) {
+    for (uint64_t Slot :
+         {SpilledConstTableVA, SpilledConstTableVA + 8,
+          OtherSpilledConstTableVA, OtherSpilledConstTableVA + 8})
+      Image.DataPtrRelocSlots.insert(Slot);
+    Image.RelocDataAddrs.insert(FirstTarget);
+    Image.RelocDataAddrs.insert(SecondTarget);
+  }
 
   Symbol Table;
   Table.Name = "_spilled_const_table";
   Table.Addr = SpilledConstTableVA;
-  Table.Size = sizeof(Values);
+  Table.Size = PointerTable ? 16 : 8;
   Image.Symbols.push_back(std::move(Table));
   Symbol OtherTable;
   OtherTable.Name = "_other_spilled_const_table";
   OtherTable.Addr = OtherSpilledConstTableVA;
-  OtherTable.Size = sizeof(OtherValues);
+  OtherTable.Size = PointerTable ? 16 : 8;
   Image.Symbols.push_back(std::move(OtherTable));
+  return Image;
+}
+
+BinaryImage makeWritablePointerTableImage(Arch TargetArch,
+                                          BinaryFormat Format) {
+  BinaryImage Image =
+      makeSpilledConstTableImage(TargetArch, Format, /*PointerTable=*/true);
+  for (Segment &Seg : Image.Segments) {
+    if (!Seg.contains(SpilledConstTableVA))
+      continue;
+    Seg.Name = Format == BinaryFormat::MachO ? "__DATA" : ".data";
+    Seg.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  }
+  for (Section &Sec : Image.Sections) {
+    if (!Sec.contains(SpilledConstTableVA))
+      continue;
+    Sec.Name = Format == BinaryFormat::MachO ? "__data" : ".data";
+    Sec.SegmentName = Format == BinaryFormat::MachO ? "__DATA" : ".data";
+    Sec.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  }
   return Image;
 }
 
@@ -1617,7 +1714,90 @@ MedFunc makeRecurrentConstTableLookup(Arch TargetArch) {
   return Func;
 }
 
-MedFunc makeRematerializedRecurrentTableLookup(Arch TargetArch) {
+MedFunc makeMaterializedPointerTableInductionLookup(Arch TargetArch) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = TargetArch == Arch::AArch64
+                  ? "materialized_pointer_table_induction_arm64"
+                  : "materialized_pointer_table_induction_x86_64";
+  Func.ReturnType = NdType::makeVoid();
+  Func.DoesNotReturn = true;
+
+  MedVar InitialBase = makeVar(MedVar::Temp, 120, TRI.PointerSize);
+  MedVar PhiBase = makeVar(MedVar::Temp, 121, TRI.PointerSize);
+  MedVar LoadedPointer = makeVar(MedVar::Temp, 122, TRI.PointerSize);
+  MedVar NextBase = makeVar(MedVar::Temp, 123, TRI.PointerSize);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 8;
+  Entry.Succs = {1};
+  MedOp MaterializeBase;
+  MaterializeBase.Opcode = NdOp::COPY;
+  MaterializeBase.Output = InitialBase;
+  MaterializeBase.addInput(
+      MedVar::makeConst(SpilledConstTableVA, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(MaterializeBase));
+  MedOp EnterLoop;
+  EnterLoop.Opcode = NdOp::BRANCH;
+  EnterLoop.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(EnterLoop));
+
+  MedBlock Loop;
+  Loop.Id = 1;
+  Loop.StartAddr = CallerVA + 0x10;
+  Loop.EndAddr = CallerVA + 0x18;
+  Loop.Preds = {0, 2};
+  Loop.Succs = {2};
+  PhiNode BasePhi;
+  BasePhi.Output = PhiBase;
+  BasePhi.Args = {{0, InitialBase}, {2, NextBase}};
+  Loop.Phis.push_back(std::move(BasePhi));
+  MedOp ReadPointer;
+  ReadPointer.Opcode = NdOp::LOAD;
+  ReadPointer.Output = LoadedPointer;
+  ReadPointer.addInput(PhiBase);
+  Loop.Ops.push_back(std::move(ReadPointer));
+  MedOp Advance;
+  Advance.Opcode = NdOp::BRANCH;
+  Advance.addInput(MedVar::makeConst(CallerVA + 0x20, TRI.PointerSize));
+  Loop.Ops.push_back(std::move(Advance));
+
+  MedBlock Latch;
+  Latch.Id = 2;
+  Latch.StartAddr = CallerVA + 0x20;
+  Latch.EndAddr = CallerVA + 0x28;
+  Latch.Preds = {1};
+  Latch.Succs = {1};
+  MedOp Step;
+  Step.Opcode = NdOp::INT_ADD;
+  Step.Output = NextBase;
+  Step.addInput(PhiBase);
+  Step.addInput(MedVar::makeConst(TRI.PointerSize, TRI.PointerSize));
+  Latch.Ops.push_back(std::move(Step));
+  MedOp BackEdge;
+  BackEdge.Opcode = NdOp::BRANCH;
+  BackEdge.addInput(MedVar::makeConst(Loop.StartAddr, TRI.PointerSize));
+  Latch.Ops.push_back(std::move(BackEdge));
+
+  Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Latch)};
+  return Func;
+}
+
+MedFunc makeRematerializedRecurrentTableLookup(Arch TargetArch,
+                                               uint16_t ElementSize = 2) {
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
     MedVar V;
@@ -1649,11 +1829,11 @@ MedFunc makeRematerializedRecurrentTableLookup(Arch TargetArch) {
   MedVar SelectedBase = makeVar(MedVar::Temp, 103, TRI.PointerSize);
   MedVar ScaledIndex = makeVar(MedVar::Temp, 104, TRI.PointerSize);
   MedVar FirstAddress = makeVar(MedVar::Temp, 105, TRI.PointerSize);
-  MedVar FirstElement = makeVar(MedVar::Temp, 106, 2);
+  MedVar FirstElement = makeVar(MedVar::Temp, 106, ElementSize);
   MedVar NextIndex = makeVar(MedVar::Temp, 107, TRI.PointerSize);
   MedVar NextScaledIndex = makeVar(MedVar::Temp, 108, TRI.PointerSize);
   MedVar SecondAddress = makeVar(MedVar::Temp, 109, TRI.PointerSize);
-  MedVar SecondElement = makeVar(MedVar::Temp, 110, 2);
+  MedVar SecondElement = makeVar(MedVar::Temp, 110, ElementSize);
   MedVar RematerializedBase = makeVar(MedVar::Temp, 111, TRI.PointerSize);
   MedVar JoinBase = makeVar(MedVar::Temp, 112, TRI.PointerSize);
 
@@ -1790,8 +1970,11 @@ MedFunc makeRematerializedRecurrentTableLookup(Arch TargetArch) {
   return Func;
 }
 
-MedFunc makeDifferentBaseRematerializedRecurrentTableLookup(Arch TargetArch) {
-  MedFunc Func = makeRematerializedRecurrentTableLookup(TargetArch);
+MedFunc
+makeDifferentBaseRematerializedRecurrentTableLookup(Arch TargetArch,
+                                                    uint16_t ElementSize = 2) {
+  MedFunc Func =
+      makeRematerializedRecurrentTableLookup(TargetArch, ElementSize);
   Func.Name = TargetArch == Arch::AArch64
                   ? "different_rematerialized_recurrent_table_arm64"
                   : "different_rematerialized_recurrent_table_x86_64";
@@ -1801,8 +1984,10 @@ MedFunc makeDifferentBaseRematerializedRecurrentTableLookup(Arch TargetArch) {
   return Func;
 }
 
-MedFunc makeComputedCoincidenceRecurrentTableLookup(Arch TargetArch) {
-  MedFunc Func = makeRematerializedRecurrentTableLookup(TargetArch);
+MedFunc makeComputedCoincidenceRecurrentTableLookup(Arch TargetArch,
+                                                    uint16_t ElementSize = 2) {
+  MedFunc Func =
+      makeRematerializedRecurrentTableLookup(TargetArch, ElementSize);
   Func.Name = TargetArch == Arch::AArch64
                   ? "computed_coincidence_recurrent_table_arm64"
                   : "computed_coincidence_recurrent_table_x86_64";
@@ -1819,8 +2004,10 @@ MedFunc makeComputedCoincidenceRecurrentTableLookup(Arch TargetArch) {
   return Func;
 }
 
-MedFunc makeNarrowRematerializedRecurrentTableLookup(Arch TargetArch) {
-  MedFunc Func = makeRematerializedRecurrentTableLookup(TargetArch);
+MedFunc makeNarrowRematerializedRecurrentTableLookup(Arch TargetArch,
+                                                     uint16_t ElementSize = 2) {
+  MedFunc Func =
+      makeRematerializedRecurrentTableLookup(TargetArch, ElementSize);
   Func.Name = TargetArch == Arch::AArch64
                   ? "narrow_rematerialized_recurrent_table_arm64"
                   : "narrow_rematerialized_recurrent_table_x86_64";
@@ -1846,10 +2033,35 @@ MedFunc makeNarrowRematerializedRecurrentTableLookup(Arch TargetArch) {
   return Func;
 }
 
-MedFunc
-makeMixedModelRematerializedRecurrentTableLookup(Arch TargetArch,
-                                                 bool RawInitializerFirst) {
-  MedFunc Func = makeRematerializedRecurrentTableLookup(TargetArch);
+MedFunc makeZeroExtendedNarrowConstantRematerializedTableLookup(
+    Arch TargetArch, bool TruncatedHighAddress, uint16_t ElementSize = 2) {
+  MedFunc Func =
+      makeRematerializedRecurrentTableLookup(TargetArch, ElementSize);
+  Func.Name = std::string(TargetArch == Arch::AArch64
+                              ? "narrow_constant_rematerialized_arm64_"
+                              : "narrow_constant_rematerialized_x86_64_") +
+              (TruncatedHighAddress ? "truncated" : "exact");
+  const uint64_t Base =
+      TruncatedHighAddress ? SpilledConstTableVA : LowSpilledConstTableVA;
+  const uint16_t PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+  for (MedBlock &Block : Func.Blocks)
+    for (MedOp &Op : Block.Ops) {
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (!TruncatedHighAddress && Op.Inputs[I].isConst() &&
+            Op.Inputs[I].ConstVal == SpilledConstTableVA)
+          Op.Inputs[I].ConstVal = Base;
+      if (Op.Opcode == NdOp::COPY && Op.Output.Size == PointerSize &&
+          Op.NumInputs >= 1 && Op.Inputs[0].isConst() &&
+          Op.Inputs[0].ConstVal == Base)
+        Op.Inputs[0].Size = 4;
+    }
+  return Func;
+}
+
+MedFunc makeMixedModelRematerializedRecurrentTableLookup(
+    Arch TargetArch, bool RawInitializerFirst, uint16_t ElementSize = 2) {
+  MedFunc Func =
+      makeRematerializedRecurrentTableLookup(TargetArch, ElementSize);
   Func.Name = std::string(TargetArch == Arch::AArch64
                               ? "mixed_model_rematerialized_table_arm64_"
                               : "mixed_model_rematerialized_table_x86_64_") +
@@ -4191,6 +4403,33 @@ bool valueReferencesConstantGlobal(const llvm::Value *Root,
     return false;
   for (const llvm::Use &Operand : User->operands())
     if (valueReferencesConstantGlobal(Operand.get(), Seen))
+      return true;
+  return false;
+}
+
+bool valueReferencesMaterializedGlobal(const llvm::Value *Root,
+                                       std::set<const llvm::Value *> &Seen) {
+  if (!Root || !Seen.insert(Root).second)
+    return false;
+  if (const auto *GV = llvm::dyn_cast<llvm::GlobalVariable>(Root))
+    return GV->hasInitializer();
+  // MedIR PHIs are lowered through edge stores into an alloca. Follow those
+  // reaching values when a pointer expression loads the PHI slot; an ordinary
+  // operand-only walk stops at the alloca and cannot see the symbolized reset
+  // values that make the address relocation-safe.
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Root))
+    if (const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(
+            Load->getPointerOperand()->stripPointerCasts()))
+      for (const llvm::User *User : Slot->users())
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
+            Store && Store->getPointerOperand()->stripPointerCasts() == Slot &&
+            valueReferencesMaterializedGlobal(Store->getValueOperand(), Seen))
+          return true;
+  const auto *User = llvm::dyn_cast<llvm::User>(Root);
+  if (!User)
+    return false;
+  for (const llvm::Use &Operand : User->operands())
+    if (valueReferencesMaterializedGlobal(Operand.get(), Seen))
       return true;
   return false;
 }
@@ -6980,118 +7219,277 @@ TEST(MachOLLVMDataPointerBoundary,
   }
 }
 
-TEST(MachOLLVMDataPointerBoundary,
-     PreservesPureRematerializedTableBaseRecurrence) {
-  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
-    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
-    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
-    MedFunc Lookup = makeRematerializedRecurrentTableLookup(TargetArch);
-    llvm::LLVMContext Context;
-    testing::internal::CaptureStderr();
-    auto Module = MedLLVMEmitter().emit(
-        {Lookup}, Context, "macho-rematerialized-recurrent-table", TargetArch,
-        {}, &Image, BinaryFormat::MachO);
-    std::string Diagnostic = testing::internal::GetCapturedStderr();
-    ASSERT_NE(Module, nullptr) << Diagnostic;
-    expectValidModule(*Module);
-
-    llvm::Function *Function = Module->getFunction(Lookup.Name);
-    ASSERT_NE(Function, nullptr);
-    unsigned TableLoads = 0;
-    for (const llvm::BasicBlock &Block : *Function)
-      for (const llvm::Instruction &Instruction : Block)
-        if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
-            Load && Load->getType()->isIntegerTy(16) && Load->isVolatile()) {
-          ++TableLoads;
-          EXPECT_TRUE(
-              llvm::isa<llvm::GetElementPtrInst>(Load->getPointerOperand()));
-          std::set<const llvm::Value *> Seen;
-          EXPECT_TRUE(
-              valueReferencesConstantGlobal(Load->getPointerOperand(), Seen));
-        }
-    EXPECT_EQ(TableLoads, 2U);
-  }
-}
-
-TEST(MachOLLVMDataPointerBoundary,
-     RejectsDifferentRematerializedTableBaseRecurrence) {
-  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
-    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
-    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
-    MedFunc Lookup =
-        makeDifferentBaseRematerializedRecurrentTableLookup(TargetArch);
-    llvm::LLVMContext Context;
-    testing::internal::CaptureStderr();
-    auto Module = MedLLVMEmitter().emit(
-        {Lookup}, Context, "macho-different-rematerialized-recurrent-table",
-        TargetArch, {}, &Image, BinaryFormat::MachO);
-    std::string Diagnostic = testing::internal::GetCapturedStderr();
-    EXPECT_EQ(Module.get(), nullptr);
-    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
-              std::string::npos)
-        << Diagnostic;
-  }
-}
-
-TEST(MachOLLVMDataPointerBoundary,
-     RejectsNumericCoincidenceAsRematerializedTableBase) {
-  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
-    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
-    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
-    MedFunc Lookup = makeComputedCoincidenceRecurrentTableLookup(TargetArch);
-    llvm::LLVMContext Context;
-    testing::internal::CaptureStderr();
-    auto Module = MedLLVMEmitter().emit(
-        {Lookup}, Context, "macho-computed-coincidence-recurrent-table",
-        TargetArch, {}, &Image, BinaryFormat::MachO);
-    std::string Diagnostic = testing::internal::GetCapturedStderr();
-    EXPECT_EQ(Module.get(), nullptr);
-    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
-              std::string::npos)
-        << Diagnostic;
-  }
-}
-
-TEST(MachOLLVMDataPointerBoundary,
-     RejectsNarrowRematerializedTableBaseRecurrence) {
-  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
-    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
-    BinaryImage Image = makeSpilledConstTableImage(TargetArch);
-    MedFunc Lookup = makeNarrowRematerializedRecurrentTableLookup(TargetArch);
-    llvm::LLVMContext Context;
-    testing::internal::CaptureStderr();
-    auto Module = MedLLVMEmitter().emit(
-        {Lookup}, Context, "macho-narrow-rematerialized-recurrent-table",
-        TargetArch, {}, &Image, BinaryFormat::MachO);
-    std::string Diagnostic = testing::internal::GetCapturedStderr();
-    EXPECT_EQ(Module.get(), nullptr);
-    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
-              std::string::npos)
-        << Diagnostic;
-  }
-}
-
-TEST(MachOLLVMDataPointerBoundary,
-     RejectsMixedAddressModelsForRematerializedTableBase) {
-  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
-    for (bool RawInitializerFirst : {false, true}) {
+TEST(LLVMDataPointerInvariantBoundary,
+     PreservesSymbolizedWritablePointerTableInductionPhi) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+      SCOPED_TRACE(formatTraceName(Format));
       SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
-      SCOPED_TRACE(RawInitializerFirst ? "raw first" : "symbol first");
-      BinaryImage Image = makeSpilledConstTableImage(TargetArch);
-      Image.Segments.front().Flags = SegmentFlags::Readable;
-      MedFunc Lookup = makeMixedModelRematerializedRecurrentTableLookup(
-          TargetArch, RawInitializerFirst);
+      BinaryImage Image = makeWritablePointerTableImage(TargetArch, Format);
+      MedFunc Lookup = makeMaterializedPointerTableInductionLookup(TargetArch);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit({Lookup}, Context,
+                                          "writable-pointer-table-induction",
+                                          TargetArch, {}, &Image, Format);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      ASSERT_NE(Module, nullptr) << Diagnostic;
+      expectValidModule(*Module);
+
+      const llvm::GlobalVariable *Mirror = nullptr;
+      for (const llvm::GlobalVariable &Global : Module->globals())
+        if (Global.getName().starts_with("__nd_codeptr_")) {
+          ASSERT_EQ(Mirror, nullptr);
+          Mirror = &Global;
+        }
+      ASSERT_NE(Mirror, nullptr);
+      EXPECT_FALSE(Mirror->isConstant());
+
+      llvm::Function *Function = Module->getFunction(Lookup.Name);
+      ASSERT_NE(Function, nullptr);
+      const llvm::LoadInst *PointerLoad = nullptr;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block)
+          if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+              Load && Load->getType()->isIntegerTy(64) && Load->isVolatile()) {
+            ASSERT_EQ(PointerLoad, nullptr);
+            PointerLoad = Load;
+          }
+      ASSERT_NE(PointerLoad, nullptr);
+      EXPECT_EQ(PointerLoad->getPointerOperand()->getName(), "cptsel.direct");
+      std::set<const llvm::Value *> Seen;
+      EXPECT_TRUE(valueReferencesMaterializedGlobal(
+          PointerLoad->getPointerOperand(), Seen));
+      bool RetainsRawTableVA = false;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block)
+          for (const llvm::Value *Operand : Instruction.operands())
+            if (const auto *C = llvm::dyn_cast<llvm::Constant>(Operand))
+              RetainsRawTableVA |=
+                  constantContainsInteger(C, SpilledConstTableVA);
+      EXPECT_FALSE(RetainsRawTableVA);
+      EXPECT_EQ(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+    }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     PreservesPureRematerializedTableBaseRecurrence) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (bool PointerTable : {false, true})
+      for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(PointerTable ? "pointer table" : "plain table");
+        SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+        const uint16_t ElementSize =
+            PointerTable ? getTargetRegInfo(TargetArch).PointerSize : 2;
+        BinaryImage Image =
+            makeSpilledConstTableImage(TargetArch, Format, PointerTable);
+        MedFunc Lookup =
+            makeRematerializedRecurrentTableLookup(TargetArch, ElementSize);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit({Lookup}, Context,
+                                            "rematerialized-recurrent-table",
+                                            TargetArch, {}, &Image, Format);
+        std::string Diagnostic = testing::internal::GetCapturedStderr();
+        ASSERT_NE(Module, nullptr) << Diagnostic;
+        expectValidModule(*Module);
+
+        llvm::Function *Function = Module->getFunction(Lookup.Name);
+        ASSERT_NE(Function, nullptr);
+        unsigned TableLoads = 0;
+        for (const llvm::BasicBlock &Block : *Function)
+          for (const llvm::Instruction &Instruction : Block) {
+            if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+                Load && Load->getType()->isIntegerTy(ElementSize * 8) &&
+                Load->isVolatile()) {
+              ++TableLoads;
+              std::set<const llvm::Value *> Seen;
+              EXPECT_TRUE(valueReferencesMaterializedGlobal(
+                  Load->getPointerOperand(), Seen));
+            }
+          }
+        EXPECT_EQ(TableLoads, 2U);
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     PreservesExactZeroExtendedNarrowConstantTableBase) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+      SCOPED_TRACE(formatTraceName(Format));
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+      addThresholdCrossingConstTableRun(Image);
+      MedFunc Lookup = makeZeroExtendedNarrowConstantRematerializedTableLookup(
+          TargetArch, /*TruncatedHighAddress=*/false);
       llvm::LLVMContext Context;
       testing::internal::CaptureStderr();
       auto Module = MedLLVMEmitter().emit(
-          {Lookup}, Context, "macho-mixed-model-rematerialized-table",
-          TargetArch, {}, &Image, BinaryFormat::MachO);
+          {Lookup}, Context, "narrow-constant-rematerialized-table", TargetArch,
+          {}, &Image, Format);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      ASSERT_NE(Module, nullptr) << Diagnostic;
+      expectValidModule(*Module);
+
+      llvm::Function *Function = Module->getFunction(Lookup.Name);
+      ASSERT_NE(Function, nullptr);
+      unsigned TableLoads = 0;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block)
+          if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+              Load && Load->getType()->isIntegerTy(16) && Load->isVolatile()) {
+            ++TableLoads;
+            std::set<const llvm::Value *> Seen;
+            EXPECT_TRUE(
+                valueReferencesConstantGlobal(Load->getPointerOperand(), Seen));
+          }
+      EXPECT_EQ(TableLoads, 2U);
+    }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     RejectsTruncatedHighNarrowConstantTableBase) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+      SCOPED_TRACE(formatTraceName(Format));
+      SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+      MedFunc Lookup = makeZeroExtendedNarrowConstantRematerializedTableLookup(
+          TargetArch, /*TruncatedHighAddress=*/true);
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit({Lookup}, Context,
+                                          "truncated-narrow-constant-table",
+                                          TargetArch, {}, &Image, Format);
       std::string Diagnostic = testing::internal::GetCapturedStderr();
       EXPECT_EQ(Module.get(), nullptr);
       EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
                 std::string::npos)
           << Diagnostic;
     }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     RejectsDifferentRematerializedTableBaseRecurrence) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (bool PointerTable : {false, true})
+      for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(PointerTable ? "pointer table" : "plain table");
+        SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+        const uint16_t ElementSize =
+            PointerTable ? getTargetRegInfo(TargetArch).PointerSize : 2;
+        BinaryImage Image =
+            makeSpilledConstTableImage(TargetArch, Format, PointerTable);
+        MedFunc Lookup = makeDifferentBaseRematerializedRecurrentTableLookup(
+            TargetArch, ElementSize);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit(
+            {Lookup}, Context, "different-rematerialized-recurrent-table",
+            TargetArch, {}, &Image, Format);
+        std::string Diagnostic = testing::internal::GetCapturedStderr();
+        EXPECT_EQ(Module.get(), nullptr);
+        EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                  std::string::npos)
+            << Diagnostic;
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     RejectsNumericCoincidenceAsRematerializedTableBase) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (bool PointerTable : {false, true})
+      for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(PointerTable ? "pointer table" : "plain table");
+        SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+        const uint16_t ElementSize =
+            PointerTable ? getTargetRegInfo(TargetArch).PointerSize : 2;
+        BinaryImage Image =
+            makeSpilledConstTableImage(TargetArch, Format, PointerTable);
+        MedFunc Lookup = makeComputedCoincidenceRecurrentTableLookup(
+            TargetArch, ElementSize);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit(
+            {Lookup}, Context, "computed-coincidence-recurrent-table",
+            TargetArch, {}, &Image, Format);
+        std::string Diagnostic = testing::internal::GetCapturedStderr();
+        EXPECT_EQ(Module.get(), nullptr);
+        EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                  std::string::npos)
+            << Diagnostic;
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     RejectsNarrowRematerializedTableBaseRecurrence) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (bool PointerTable : {false, true})
+      for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(PointerTable ? "pointer table" : "plain table");
+        SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+        const uint16_t ElementSize =
+            PointerTable ? getTargetRegInfo(TargetArch).PointerSize : 2;
+        BinaryImage Image =
+            makeSpilledConstTableImage(TargetArch, Format, PointerTable);
+        MedFunc Lookup = makeNarrowRematerializedRecurrentTableLookup(
+            TargetArch, ElementSize);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit(
+            {Lookup}, Context, "narrow-rematerialized-recurrent-table",
+            TargetArch, {}, &Image, Format);
+        std::string Diagnostic = testing::internal::GetCapturedStderr();
+        EXPECT_EQ(Module.get(), nullptr);
+        EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                  std::string::npos)
+            << Diagnostic;
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     RejectsMixedAddressModelsForRematerializedTableBase) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (bool PointerTable : {false, true})
+      for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+        for (bool RawInitializerFirst : {false, true}) {
+          SCOPED_TRACE(formatTraceName(Format));
+          SCOPED_TRACE(PointerTable ? "pointer table" : "plain table");
+          SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+          SCOPED_TRACE(RawInitializerFirst ? "raw first" : "symbol first");
+          const uint16_t ElementSize =
+              PointerTable ? getTargetRegInfo(TargetArch).PointerSize : 2;
+          BinaryImage Image =
+              makeSpilledConstTableImage(TargetArch, Format, PointerTable);
+          if (Format == BinaryFormat::MachO && !PointerTable)
+            Image.Segments.front().Flags = SegmentFlags::Readable;
+          MedFunc Lookup = makeMixedModelRematerializedRecurrentTableLookup(
+              TargetArch, RawInitializerFirst, ElementSize);
+          llvm::LLVMContext Context;
+          testing::internal::CaptureStderr();
+          auto Module = MedLLVMEmitter().emit(
+              {Lookup}, Context, "mixed-model-rematerialized-table", TargetArch,
+              {}, &Image, Format);
+          std::string Diagnostic = testing::internal::GetCapturedStderr();
+          EXPECT_EQ(Module.get(), nullptr);
+          EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                    std::string::npos)
+              << Diagnostic;
+        }
 }
 
 TEST(MachOLLVMDataPointerBoundary,
@@ -7333,7 +7731,7 @@ TEST(MachOLLVMDataPointerBoundary,
 }
 
 TEST(MachOLLVMDataPointerBoundary,
-     GenericPhiAuditDefersPureRelocatedPointerTableSlotInduction) {
+     PointerTableOwnerClaimsPureRelocatedSlotInduction) {
   for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
     SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
     BinaryImage Image = makeLLVMImage();
@@ -7366,7 +7764,7 @@ TEST(MachOLLVMDataPointerBoundary,
           PointerLoad = Load;
         }
     ASSERT_NE(PointerLoad, nullptr);
-    EXPECT_EQ(PointerLoad->getPointerOperand()->getName(), "indrawptr");
+    EXPECT_EQ(PointerLoad->getPointerOperand()->getName(), "cptsel.direct");
     const std::string MirrorName =
         (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str();
     llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);

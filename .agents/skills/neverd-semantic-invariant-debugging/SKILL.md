@@ -161,6 +161,36 @@ re-materializes an immutable table base, read
 before changing recurrence or provenance logic. It defines the split proof,
 initializer anchoring, fail-closed boundaries, and regression matrix.
 
+### Keep discovery separate from semantic ownership
+
+A broad DAG walk should collect candidate evidence; it should not make a
+context-sensitive ownership decision that only the consuming operation can
+prove. In particular, pointer-table discovery may report a unique segment and
+whether every reachable leaf was understood, but the table-load owner must
+still prove:
+
+- that the recovered value is used in the expected base/index role;
+- that every feasible PHI initializer and recurrent arm is accounted for;
+- that widths and zero-extension behavior preserve the exact virtual address;
+- that all accepted leaves use one compatible raw-or-symbolized model; and
+- whether the result needs one raw-address rebase or can use the symbolized
+  value directly.
+
+Keep conservative discovery callers raw-only by default. Permit symbolized
+evidence only for a caller that subsequently performs the complete role and
+model proof. Otherwise an early "already symbolized" rejection can suppress
+the only owner capable of validating a legitimate mixed-use induction PHI.
+
+Use the emitter's actual value transformation as the width ground truth. A
+direct narrow constant followed only by zero-extension may identify a
+pointer-width table base when the address is exact, mapped, accepted by the
+authoritative materializable-address classifier, and fits completely in the
+narrow width. Reject truncation, arithmetic, sub-byte extraction, a second
+width change, and narrow symbolization: a relocated narrow pointer can lose
+high bits after relinking. Remember that PHI constants may bypass `getVar`
+while operation operands pass through it, so equal numeric leaves can acquire
+different provenance at different use sites.
+
 ## 5. Audit Sibling Surfaces
 
 Expand from the root abstraction, not from superficial text similarity.
@@ -210,6 +240,11 @@ does not prove that a recovered pointer remains valid after recompilation.
 
 Report exact pass, failure, and skip counts. A skip is not coverage. If platform
 CI is still running, say so explicitly rather than reporting it as passed.
+When a nearby suite already contains fail-closed skips, compare the patched
+tree with a clean build of the current base commit before calling them a
+regression. Expand by shared semantic owner and invariant, not merely by a
+similar diagnostic string; two fallback paths can emit the same wording after
+different specialized owners decline them.
 
 ### Choose the build profile by the evidence needed
 
@@ -217,6 +252,15 @@ Release is the default for broad NeverD semantic validation, not a universal
 replacement for Debug. NeverD's Debug configuration is intentionally
 unoptimized, and its decode/lift path is substantially slower; the repository
 CI runs the normal cross-platform suite in Release.
+
+A focused Debug green is diagnostic evidence, not closure. After it passes,
+repeat the exact linked fixture and the full owning regression binaries from a
+freshly rebuilt Release target. Use both a shared synthetic MedIR matrix and
+real linked fixtures when loader metadata matters: the former proves one
+format-neutral policy, while Mach-O, ELF, and PE/COFF fixtures prove that each
+loader supplies the required permissions and relocation provenance. A writable
+section containing pointer relocation slots can still belong to the generic
+pointer mirror; do not classify ownership from the writable flag alone.
 
 | Purpose | Preferred profile |
 |---|---|
@@ -243,7 +287,13 @@ after adding a test source so an old executable cannot silently omit it. If a
 reused build tree has inconsistent Ninja/CMake state or unexpectedly starts an
 unrelated full rebuild, stop using it as validation evidence and configure a
 separate clean tree instead of trying to salvage the authoritative run in
-place.
+place. Inspect the CMake target and CTest inventory before selecting a test:
+specialized probe suites may be standalone executables rather than part of
+`NeverDSemanticTests`, and a `ctest -R` run that reports zero tests is no
+evidence. When NeverD and its LLVM fork evolve together, prefer the integrated
+fork build for authoritative validation; a cached prebuilt package is usable
+only after its API revision is proven compatible with the checked-out NeverD
+source.
 
 A long run counts only when the process exits normally and prints its final
 summary. Do not attach a debugger to the only authoritative suite process to

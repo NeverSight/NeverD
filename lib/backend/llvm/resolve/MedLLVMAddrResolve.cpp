@@ -626,6 +626,59 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
   MedVar Cur = V;
   bool BypassesGetVar = DirectPhiConstantBypassesGetVar && Cur.isConst();
   std::set<std::tuple<int, int, int>> Seen;
+
+  // AArch64 ADRP/ADD folding can leave a low linked VA in a 32-bit constant
+  // input even though COPY writes the architecturally full X register. The
+  // emitter's setVar performs an explicit zero-extension in that case, so the
+  // resulting value is an exact raw pointer when (and only when) the narrow
+  // leaf itself is a pure constant materialization whose bits already equal
+  // the complete mapped VA. Follow same-width COPY/ZEXT forwarders to cover
+  // harmless lift temporaries, but never cross SUBBYTES, arithmetic, a PHI, or
+  // another width change: those shapes may have discarded pointer bits and a
+  // coincidentally equal numeric result is not provenance. A narrow leaf that
+  // getVar would symbolize is also invalid because ptrtoint-to-narrow followed
+  // by zext cannot preserve the re-linked pointer's high bits.
+  auto zeroExtendedNarrowConstantIdentity =
+      [&](const MedOp &WideningDef) -> std::optional<PureReadOnlyBaseIdentity> {
+    if ((WideningDef.Opcode != NdOp::COPY &&
+         WideningDef.Opcode != NdOp::INT_ZEXT) ||
+        WideningDef.NumInputs < 1 || WideningDef.Output.Size != PointerSize)
+      return std::nullopt;
+    MedVar Leaf = WideningDef.Inputs[0];
+    const uint16_t LeafSize = Leaf.Size;
+    if (LeafSize == 0 || LeafSize >= PointerSize || LeafSize > 8)
+      return std::nullopt;
+
+    std::set<std::tuple<int, int, int>> LeafSeen;
+    for (int Depth = 0; Depth <= 16; ++Depth) {
+      if (Leaf.Size != LeafSize)
+        return std::nullopt;
+      if (Leaf.isConst()) {
+        const unsigned Bits = LeafSize * 8;
+        if (Bits < 64 && (Leaf.ConstVal >> Bits) != 0)
+          return std::nullopt;
+        if (!isMaterializableReadOnlyDataAddress(Leaf.ConstVal) ||
+            getVarMayRelocateConstant(Leaf.ConstVal, Leaf.Size))
+          return std::nullopt;
+        return PureReadOnlyBaseIdentity{Leaf.ConstVal, PointerSize,
+                                        /*Symbolized=*/false};
+      }
+      const auto Key =
+          std::make_tuple(static_cast<int>(Leaf.Kind), Leaf.Id, Leaf.SSAVer);
+      if (!LeafSeen.insert(Key).second)
+        return std::nullopt;
+      const MedOp *LeafDef = lookupDef(Leaf);
+      if (!LeafDef ||
+          (LeafDef->Opcode != NdOp::COPY &&
+           LeafDef->Opcode != NdOp::INT_ZEXT) ||
+          LeafDef->NumInputs < 1 || LeafDef->Output.Size != LeafSize ||
+          LeafDef->Inputs[0].Size != LeafSize)
+        return std::nullopt;
+      Leaf = LeafDef->Inputs[0];
+    }
+    return std::nullopt;
+  };
+
   for (int Depth = 0; Depth <= 32; ++Depth) {
     if (Cur.Size != PointerSize)
       return std::nullopt;
@@ -644,6 +697,8 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
     const MedOp *Def = lookupDef(Cur);
     if (!Def)
       return std::nullopt;
+    if (auto Identity = zeroExtendedNarrowConstantIdentity(*Def))
+      return Identity;
     auto Forwarded = pointerPreservingInput(*Def);
     if (!Forwarded || Forwarded->Size != PointerSize)
       return std::nullopt;

@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/BinaryLoading.h"
 
@@ -238,6 +239,153 @@ TEST_F(NativePointerRelocationBoundary,
         << Name << " retained a raw pointer-table byte array:\n"
         << R.out;
     EXPECT_NE(R.out.find("ptrtoint"), std::string::npos) << Name;
+  }
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       RematerializedTableBaseRecurrenceLiftsAcrossELFAndPE) {
+  struct Case {
+    const char *Name;
+    BinaryFormat Format;
+    Arch TargetArch;
+    const char *TableSection;
+  };
+  for (const Case &C : {
+           Case{"test_rematerialized_table_base_a64_elf", BinaryFormat::ELF,
+                Arch::AArch64, ".data.rel.ro"},
+           Case{"test_rematerialized_table_base_x64_elf", BinaryFormat::ELF,
+                Arch::X64, ".data.rel.ro"},
+           Case{"test_rematerialized_table_base_a64_pe.exe", BinaryFormat::COFF,
+                Arch::AArch64, ".rdata"},
+           Case{"test_rematerialized_table_base_x64_pe.exe", BinaryFormat::COFF,
+                Arch::X64, ".rdata"},
+       }) {
+    SCOPED_TRACE(C.Name);
+    const fs::path Path = fixture(C.Name);
+    if (!fs::exists(Path))
+      GTEST_SKIP() << C.Name << " not built";
+
+    auto ImgOrErr = loadBinary(Path);
+    ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+        << llvm::toString(ImgOrErr.takeError());
+    const BinaryImage &Img = *ImgOrErr;
+    ASSERT_EQ(Img.Format, C.Format);
+    ASSERT_EQ(Img.Arch, C.TargetArch);
+    ASSERT_EQ(Img.getPointerSize(), 8u);
+
+    const Section *Table = Img.getSectionByName(C.TableSection);
+    ASSERT_NE(Table, nullptr);
+    ASSERT_TRUE(Table->isReadable());
+    ASSERT_FALSE(Table->isExecutable());
+    if (Table->isWritable())
+      EXPECT_TRUE(section_names::isReadOnlyAfterRelocSectionName(Table->Name));
+
+    const va_t Slot0 = Table->VA;
+    const va_t Slot1 = Slot0 + Img.getPointerSize();
+    const uint8_t *SlotBytes = Img.readVA(Slot0, 2 * Img.getPointerSize());
+    ASSERT_NE(SlotBytes, nullptr);
+    const va_t Target0 = readPtr(SlotBytes, /*Is64=*/true);
+    const va_t Target1 =
+        readPtr(SlotBytes + Img.getPointerSize(), /*Is64=*/true);
+    EXPECT_EQ(Target0, Target1);
+    EXPECT_NE(Img.getSectionFor(Target0), nullptr);
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot0));
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot1));
+    EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot0), 1u);
+    EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot1), 1u);
+    EXPECT_EQ(Img.RelocDataAddrs.count(Target0), 1u);
+
+    RunResult R = liftToLLVMIRUnopt(Path);
+    ASSERT_EQ(R.exitCode, 0) << R.err;
+    EXPECT_EQ(R.err.find("refusing stale-address fallback"), std::string::npos)
+        << R.err;
+    if (C.Format == BinaryFormat::ELF)
+      EXPECT_NE(R.out.find("@probe("), std::string::npos) << R.out;
+    EXPECT_NE(R.out.find("@__nd_codeptr_"), std::string::npos) << R.out;
+    EXPECT_NE(R.out.find("getelementptr"), std::string::npos) << R.out;
+  }
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       WritablePointerTableInductionLiftsAcrossFormatsAndArchitectures) {
+  struct Case {
+    const char *Name;
+    BinaryFormat Format;
+    Arch TargetArch;
+    const char *TableSection;
+  };
+  for (const Case &C : {
+#if defined(__APPLE__)
+           Case{"test_writable_pointer_table_induction_a64_macho",
+                BinaryFormat::MachO, Arch::AArch64, "__data"},
+           Case{"test_writable_pointer_table_induction_x64_macho",
+                BinaryFormat::MachO, Arch::X64, "__data"},
+#endif
+           Case{"test_writable_pointer_table_induction_a64_elf",
+                BinaryFormat::ELF, Arch::AArch64, ".data"},
+           Case{"test_writable_pointer_table_induction_x64_elf",
+                BinaryFormat::ELF, Arch::X64, ".data"},
+           Case{"test_writable_pointer_table_induction_a64_pe.exe",
+                BinaryFormat::COFF, Arch::AArch64, ".data"},
+           Case{"test_writable_pointer_table_induction_x64_pe.exe",
+                BinaryFormat::COFF, Arch::X64, ".data"},
+       }) {
+    SCOPED_TRACE(C.Name);
+    const fs::path Path = fixture(C.Name);
+    if (!fs::exists(Path))
+      GTEST_SKIP() << C.Name << " not built";
+
+    auto ImgOrErr = loadBinary(Path);
+    ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+        << llvm::toString(ImgOrErr.takeError());
+    const BinaryImage &Img = *ImgOrErr;
+    ASSERT_EQ(Img.Format, C.Format);
+    ASSERT_EQ(Img.Arch, C.TargetArch);
+    ASSERT_EQ(Img.getPointerSize(), 8u);
+
+    const Section *Table = Img.getSectionByName(C.TableSection);
+    ASSERT_NE(Table, nullptr);
+    ASSERT_TRUE(Table->isReadable());
+    ASSERT_TRUE(Table->isWritable());
+    ASSERT_FALSE(Table->isExecutable());
+    const va_t Slot0 = Table->VA;
+    const va_t Slot1 = Slot0 + Img.getPointerSize();
+    const uint8_t *Slots = Img.readVA(Slot0, 2 * Img.getPointerSize());
+    ASSERT_NE(Slots, nullptr);
+    const va_t Target0 = readPtr(Slots, /*Is64=*/true);
+    const va_t Target1 = readPtr(Slots + Img.getPointerSize(), /*Is64=*/true);
+    ASSERT_NE(Target0, Target1);
+    ASSERT_NE(Img.getSectionFor(Target0), nullptr);
+    ASSERT_NE(Img.getSectionFor(Target1), nullptr);
+    ASSERT_NE(Img.readVA(Target0, sizeof(uint32_t)), nullptr);
+    ASSERT_NE(Img.readVA(Target1, sizeof(uint32_t)), nullptr);
+    EXPECT_EQ(readLE<uint32_t>(Img.readVA(Target0, sizeof(uint32_t))), 3u);
+    EXPECT_EQ(readLE<uint32_t>(Img.readVA(Target1, sizeof(uint32_t))), 4u);
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot0));
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot1));
+    EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot0), 1u);
+    EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot1), 1u);
+
+    RunResult Med = liftToMedIR(Path);
+    ASSERT_EQ(Med.exitCode, 0) << Med.err;
+    EXPECT_NE(Med.out.find("PHI"), std::string::npos) << Med.out;
+    EXPECT_NE(Med.out.find("INT_ADD"), std::string::npos) << Med.out;
+
+    RunResult LLVM = liftToLLVMIRUnopt(Path);
+    ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+    EXPECT_EQ(LLVM.err.find("refusing stale-address fallback"),
+              std::string::npos)
+        << LLVM.err;
+    EXPECT_NE(LLVM.out.find("@__nd_codeptr_"), std::string::npos) << LLVM.out;
+    EXPECT_NE(LLVM.out.find("%cptsel"), std::string::npos) << LLVM.out;
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (C.Format == BinaryFormat::MachO && C.TargetArch == Arch::AArch64)
+      for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
+        RunResult Native = exec(Path.string(), {});
+        EXPECT_EQ(Native.exitCode, 7) << Native.err;
+      }
+#endif
   }
 }
 

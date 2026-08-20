@@ -282,7 +282,9 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   return GV;
 }
 
-uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
+uint64_t
+MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
+                                      bool IncludeSymbolizedEvidence) const {
   if (!CurMedFunc || !Img)
     return 0;
   if (V.isConst())
@@ -291,11 +293,11 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
   // Memoize per non-constant address value: a pure function of the (immutable
   // during emit) function body, queried repeatedly for the same values.
   ensureAddrPredCache();
-  std::pair<int64_t, int> CacheKey{
+  std::tuple<int64_t, int, bool> CacheKey{
       static_cast<int64_t>(
           (static_cast<uint64_t>(static_cast<uint32_t>(V.Id)) << 32) |
           static_cast<uint32_t>(V.SSAVer)),
-      static_cast<int>(V.Kind)};
+      static_cast<int>(V.Kind), IncludeSymbolizedEvidence};
   if (auto It = PtrTableUniqueSegCache.find(CacheKey);
       It != PtrTableUniqueSegCache.end())
     return It->second;
@@ -397,14 +399,18 @@ uint64_t MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V) const {
         const Segment *Seg = Img->getSegmentFor(*C);
         if (Seg && !Seg->isExecutable() && !Seg->Data.empty() &&
             segHasPtrSlots(Seg)) {
-          // Ordinarily an already-symbolized table base belongs to the
-          // resolver that produced it, and rebasing it here would apply the
-          // mirror twice. A proven frame spill/reload is different: the LOAD
-          // hides that representation from the address consumer, so retain
-          // ownership and let the consuming proof select direct use.
+          // Callers that can only rebase a raw original VA must not claim an
+          // already-symbolized table base: doing so applies the mirror twice.
+          // The pointer-table LOAD owner instead requests this segment
+          // evidence and follows it with the complete structural role/model
+          // proof below, which selects direct use for a symbolized induction
+          // and raw rebasing otherwise. A proven frame spill/reload already
+          // had this exception because the LOAD hides the representation from
+          // the address consumer and its caller performs the direct-use audit.
           ConstLeafModel LeafModel = emittedConstLeafRelocates(Cur);
           if (LeafModel == ConstLeafModel::Incomplete ||
-              (LeafModel == ConstLeafModel::Symbolized && !ThroughFrameReload))
+              (LeafModel == ConstLeafModel::Symbolized &&
+               !IncludeSymbolizedEvidence && !ThroughFrameReload))
             return 0;
           uint64_t RunStart = 0, RunEnd = 0;
           readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
@@ -555,7 +561,8 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
   // a single constant base.  When every base-like constant in the address lands
   // in ONE pointer-table segment, the whole address provably indexes that
   // segment, so redirect by the address's own value: GEP(@seg, addr - segVA).
-  if (uint64_t SelSeg = ptrTableUniqueSegment(AddrVar)) {
+  if (uint64_t SelSeg =
+          ptrTableUniqueSegment(AddrVar, /*IncludeSymbolizedEvidence=*/true)) {
     auto segmentHasPointerSlots = [&](const Segment *Seg) {
       if (!Seg)
         return false;

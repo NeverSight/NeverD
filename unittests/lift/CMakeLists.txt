@@ -853,6 +853,14 @@ if(APPLE)
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_macho.s")
   set(call_arg_phi_a64_macho_exe
       "${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_a64_macho")
+  set(writable_pointer_induction_a64_macho_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_a64_macho.s")
+  set(writable_pointer_induction_a64_macho_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_a64_macho")
+  set(writable_pointer_induction_x64_macho_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_x64_macho.s")
+  set(writable_pointer_induction_x64_macho_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_x64_macho")
   add_custom_command(
     OUTPUT ${call_abi_a64_macho_dylib}
     COMMAND /usr/bin/clang -target arm64-apple-macos14 -dynamiclib
@@ -875,8 +883,24 @@ if(APPLE)
             ${call_arg_phi_a64_macho_src} -o ${call_arg_phi_a64_macho_exe}
     DEPENDS ${call_arg_phi_a64_macho_src}
     COMMENT "Linking AArch64 Mach-O call-argument PHI fixture")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_a64_macho_exe}
+    COMMAND /usr/bin/clang -target arm64-apple-macos14
+            ${writable_pointer_induction_a64_macho_src}
+            -o ${writable_pointer_induction_a64_macho_exe}
+    DEPENDS ${writable_pointer_induction_a64_macho_src}
+    COMMENT "Linking AArch64 Mach-O writable pointer-table induction fixture")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_x64_macho_exe}
+    COMMAND /usr/bin/clang -target x86_64-apple-macos14
+            ${writable_pointer_induction_x64_macho_src}
+            -o ${writable_pointer_induction_x64_macho_exe}
+    DEPENDS ${writable_pointer_induction_x64_macho_src}
+    COMMENT "Linking x64 Mach-O writable pointer-table induction fixture")
   list(APPEND TEST_OBJECTS ${call_abi_a64_macho_exe}
-                           ${call_arg_phi_a64_macho_exe})
+                           ${call_arg_phi_a64_macho_exe}
+                           ${writable_pointer_induction_a64_macho_exe}
+                           ${writable_pointer_induction_x64_macho_exe})
 endif()
 
 foreach(src ${X86_64_TEST_SOURCES})
@@ -1107,6 +1131,102 @@ if(LLD_LINK_EXEC)
                            ${native_pointer_pe_x86_obj}
                            ${native_pointer_pe_x86_exe})
 
+  set(rematerialized_table_a64_pe_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_rematerialized_table_base_a64_pe.s")
+  set(rematerialized_table_a64_pe_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_rematerialized_table_base_a64_pe.obj")
+  set(rematerialized_table_a64_pe_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_rematerialized_table_base_a64_pe.exe")
+  set(rematerialized_table_x64_pe_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_rematerialized_table_base_x64_pe.s")
+  set(rematerialized_table_x64_pe_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_rematerialized_table_base_x64_pe.obj")
+  set(rematerialized_table_x64_pe_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_rematerialized_table_base_x64_pe.exe")
+  add_custom_command(
+    OUTPUT ${rematerialized_table_a64_pe_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-pc-windows-msvc -c
+            ${rematerialized_table_a64_pe_src}
+            -o ${rematerialized_table_a64_pe_obj}
+    DEPENDS ${rematerialized_table_a64_pe_src}
+    COMMENT "Compiling AArch64 PE rematerialized table-base fixture")
+  add_custom_command(
+    OUTPUT ${rematerialized_table_a64_pe_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:arm64 /entry:start /subsystem:console
+            /nodefaultlib /dynamicbase /fixed:no
+            ${rematerialized_table_a64_pe_obj}
+            /out:${rematerialized_table_a64_pe_exe}
+    DEPENDS ${rematerialized_table_a64_pe_obj}
+    COMMENT "Linking AArch64 PE rematerialized table-base fixture")
+  add_custom_command(
+    OUTPUT ${rematerialized_table_x64_pe_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${rematerialized_table_x64_pe_src}
+            -o ${rematerialized_table_x64_pe_obj}
+    DEPENDS ${rematerialized_table_x64_pe_src}
+    COMMENT "Compiling x64 PE rematerialized table-base fixture")
+  add_custom_command(
+    OUTPUT ${rematerialized_table_x64_pe_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:x64 /entry:main /subsystem:console
+            /nodefaultlib /dynamicbase /fixed:no
+            ${rematerialized_table_x64_pe_obj}
+            /out:${rematerialized_table_x64_pe_exe}
+    DEPENDS ${rematerialized_table_x64_pe_obj}
+    COMMENT "Linking x64 PE rematerialized table-base fixture")
+  list(APPEND TEST_OBJECTS
+       ${rematerialized_table_a64_pe_obj}
+       ${rematerialized_table_a64_pe_exe}
+       ${rematerialized_table_x64_pe_obj}
+       ${rematerialized_table_x64_pe_exe})
+
+  set(writable_pointer_induction_a64_pe_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_a64_pe.s")
+  set(writable_pointer_induction_a64_pe_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_a64_pe.obj")
+  set(writable_pointer_induction_a64_pe_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_a64_pe.exe")
+  set(writable_pointer_induction_x64_pe_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_x64_pe.s")
+  set(writable_pointer_induction_x64_pe_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_x64_pe.obj")
+  set(writable_pointer_induction_x64_pe_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_x64_pe.exe")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_a64_pe_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-pc-windows-msvc -c
+            ${writable_pointer_induction_a64_pe_src}
+            -o ${writable_pointer_induction_a64_pe_obj}
+    DEPENDS ${writable_pointer_induction_a64_pe_src}
+    COMMENT "Compiling AArch64 PE writable pointer-table induction fixture")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_a64_pe_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:arm64 /entry:start /subsystem:console
+            /nodefaultlib /dynamicbase /fixed:no
+            ${writable_pointer_induction_a64_pe_obj}
+            /out:${writable_pointer_induction_a64_pe_exe}
+    DEPENDS ${writable_pointer_induction_a64_pe_obj}
+    COMMENT "Linking AArch64 PE writable pointer-table induction fixture")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_x64_pe_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${writable_pointer_induction_x64_pe_src}
+            -o ${writable_pointer_induction_x64_pe_obj}
+    DEPENDS ${writable_pointer_induction_x64_pe_src}
+    COMMENT "Compiling x64 PE writable pointer-table induction fixture")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_x64_pe_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:x64 /entry:main /subsystem:console
+            /nodefaultlib /dynamicbase /fixed:no
+            ${writable_pointer_induction_x64_pe_obj}
+            /out:${writable_pointer_induction_x64_pe_exe}
+    DEPENDS ${writable_pointer_induction_x64_pe_obj}
+    COMMENT "Linking x64 PE writable pointer-table induction fixture")
+  list(APPEND TEST_OBJECTS
+       ${writable_pointer_induction_a64_pe_obj}
+       ${writable_pointer_induction_a64_pe_exe}
+       ${writable_pointer_induction_x64_pe_obj}
+       ${writable_pointer_induction_x64_pe_exe})
+
   set(coff_src "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff.c")
   set(coff_obj "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff.obj")
   set(coff_exe "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff.exe")
@@ -1295,6 +1415,98 @@ if(LLD_EXEC)
                               ${native_pointer_elf_relr}
                               ${native_pointer_elf_android_relr}
                               ${native_pointer_elf_android_packed})
+
+  set(rematerialized_table_a64_elf_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_rematerialized_table_base_a64_elf.s")
+  set(rematerialized_table_a64_elf_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_rematerialized_table_base_a64_elf.o")
+  set(rematerialized_table_a64_elf
+      "${CMAKE_CURRENT_BINARY_DIR}/test_rematerialized_table_base_a64_elf")
+  set(rematerialized_table_x64_elf_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_rematerialized_table_base_x64_elf.s")
+  set(rematerialized_table_x64_elf_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_rematerialized_table_base_x64_elf.o")
+  set(rematerialized_table_x64_elf
+      "${CMAKE_CURRENT_BINARY_DIR}/test_rematerialized_table_base_x64_elf")
+  add_custom_command(
+    OUTPUT ${rematerialized_table_a64_elf_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-linux-gnu -fPIC -c
+            ${rematerialized_table_a64_elf_src}
+            -o ${rematerialized_table_a64_elf_obj}
+    DEPENDS ${rematerialized_table_a64_elf_src}
+    COMMENT "Compiling AArch64 ELF rematerialized table-base fixture")
+  add_custom_command(
+    OUTPUT ${rematerialized_table_a64_elf}
+    COMMAND ${LLD_EXEC} -pie -z relro -m aarch64linux --entry=_start
+            ${rematerialized_table_a64_elf_obj}
+            -o ${rematerialized_table_a64_elf}
+    DEPENDS ${rematerialized_table_a64_elf_obj}
+    COMMENT "Linking AArch64 ELF rematerialized table-base fixture")
+  add_custom_command(
+    OUTPUT ${rematerialized_table_x64_elf_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -fPIC -c
+            ${rematerialized_table_x64_elf_src}
+            -o ${rematerialized_table_x64_elf_obj}
+    DEPENDS ${rematerialized_table_x64_elf_src}
+    COMMENT "Compiling x64 ELF rematerialized table-base fixture")
+  add_custom_command(
+    OUTPUT ${rematerialized_table_x64_elf}
+    COMMAND ${LLD_EXEC} -pie -z relro --entry=_start
+            ${rematerialized_table_x64_elf_obj}
+            -o ${rematerialized_table_x64_elf}
+    DEPENDS ${rematerialized_table_x64_elf_obj}
+    COMMENT "Linking x64 ELF rematerialized table-base fixture")
+  list(APPEND ELF_EXECUTABLES
+       ${rematerialized_table_a64_elf_obj}
+       ${rematerialized_table_a64_elf}
+       ${rematerialized_table_x64_elf_obj}
+       ${rematerialized_table_x64_elf})
+
+  set(writable_pointer_induction_a64_elf_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_a64_elf.s")
+  set(writable_pointer_induction_a64_elf_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_a64_elf.o")
+  set(writable_pointer_induction_a64_elf
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_a64_elf")
+  set(writable_pointer_induction_x64_elf_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_x64_elf.s")
+  set(writable_pointer_induction_x64_elf_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_x64_elf.o")
+  set(writable_pointer_induction_x64_elf
+      "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_x64_elf")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_a64_elf_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-linux-gnu -fPIC -c
+            ${writable_pointer_induction_a64_elf_src}
+            -o ${writable_pointer_induction_a64_elf_obj}
+    DEPENDS ${writable_pointer_induction_a64_elf_src}
+    COMMENT "Compiling AArch64 ELF writable pointer-table induction fixture")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_a64_elf}
+    COMMAND ${LLD_EXEC} -pie -m aarch64linux --entry=_start
+            ${writable_pointer_induction_a64_elf_obj}
+            -o ${writable_pointer_induction_a64_elf}
+    DEPENDS ${writable_pointer_induction_a64_elf_obj}
+    COMMENT "Linking AArch64 ELF writable pointer-table induction fixture")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_x64_elf_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -fPIC -c
+            ${writable_pointer_induction_x64_elf_src}
+            -o ${writable_pointer_induction_x64_elf_obj}
+    DEPENDS ${writable_pointer_induction_x64_elf_src}
+    COMMENT "Compiling x64 ELF writable pointer-table induction fixture")
+  add_custom_command(
+    OUTPUT ${writable_pointer_induction_x64_elf}
+    COMMAND ${LLD_EXEC} -pie --entry=_start
+            ${writable_pointer_induction_x64_elf_obj}
+            -o ${writable_pointer_induction_x64_elf}
+    DEPENDS ${writable_pointer_induction_x64_elf_obj}
+    COMMENT "Linking x64 ELF writable pointer-table induction fixture")
+  list(APPEND ELF_EXECUTABLES
+       ${writable_pointer_induction_a64_elf_obj}
+       ${writable_pointer_induction_a64_elf}
+       ${writable_pointer_induction_x64_elf_obj}
+       ${writable_pointer_induction_x64_elf})
 
   # Patch-success fixtures publish the native unwind index and leave a
   # deterministic file-backed gap after each growable unwind section.  The

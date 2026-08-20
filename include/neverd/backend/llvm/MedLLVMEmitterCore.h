@@ -882,12 +882,18 @@ private:
   /// the base VA of the SINGLE non-executable pointer-table segment that EVERY
   /// base-like constant reachable in \p AddrVar resolves into, so the whole
   /// address provably indexes that segment and can be redirected by its own
-  /// value.  Returns 0 when the address has no such base, spans more than one
-  /// such segment, or any base constant would itself be getVar-redirected (so
-  /// the address value would not be the raw original VA).  Walks the address
-  /// arithmetic (ADD/SUB/AND/OR/XOR/shift/mul/SELECT/PHI + width casts) and
-  /// stops at a LOAD (a loaded value is not a base materialization).
-  uint64_t ptrTableUniqueSegment(const MedVar &AddrVar) const;
+  /// value. Returns 0 when the address has no such base, spans more than one
+  /// such segment, or carries an incomplete constant-leaf model. By default an
+  /// already-symbolized base is also excluded, preserving the conservative
+  /// contract for callers that can only rebase a raw original VA. A caller may
+  /// set \p IncludeSymbolizedEvidence only when it subsequently proves the
+  /// complete address role and raw-versus-symbolized model before choosing
+  /// direct use or rebasing. Walks the address arithmetic
+  /// (ADD/SUB/AND/OR/XOR/shift/mul/SELECT/PHI + width casts) and stops at a
+  /// LOAD (a loaded value is not a base materialization, except for a proven
+  /// frame spill/reload whose source is followed explicitly).
+  uint64_t ptrTableUniqueSegment(const MedVar &AddrVar,
+                                 bool IncludeSymbolizedEvidence = false) const;
 
   /// True when constant value \p Val is used in the current function as a
   /// genuine integer that merely coincides with a rodata relocation-target VA —
@@ -1385,9 +1391,11 @@ private:
   // RequireRelocBase flag since the value/address contexts differ.
   mutable std::map<std::tuple<int, int, int, bool>, uint64_t>
       WritableDataSegCache;
-  // ptrTableUniqueSegment result per (Kind,Id,SSAVer) — a pure per-address DAG
-  // walk over the (immutable during emit) function body.
-  mutable std::map<std::pair<int64_t, int>, uint64_t> PtrTableUniqueSegCache;
+  // ptrTableUniqueSegment result per
+  // (Kind,Id,SSAVer,IncludeSymbolizedEvidence) — a pure per-address DAG walk
+  // over the (immutable during emit) function body.
+  mutable std::map<std::tuple<int64_t, int, bool>, uint64_t>
+      PtrTableUniqueSegCache;
 
   // Per-function memoized results of the two const classifiers, dropped when
   // CurMedFunc changes (see ensureConstClassCache).  std::unordered_map rather
