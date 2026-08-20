@@ -613,6 +613,48 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   return prove(V, 0, {}, {});
 }
 
+std::optional<MedLLVMEmitter::PureReadOnlyBaseIdentity>
+MedLLVMEmitter::pureReadOnlyBaseIdentity(
+    const MedVar &V, bool DirectPhiConstantBypassesGetVar) const {
+  if (!CurMedFunc || !Img)
+    return std::nullopt;
+
+  const uint16_t PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+  if (PointerSize == 0 || V.Size != PointerSize)
+    return std::nullopt;
+
+  MedVar Cur = V;
+  bool BypassesGetVar = DirectPhiConstantBypassesGetVar && Cur.isConst();
+  std::set<std::tuple<int, int, int>> Seen;
+  for (int Depth = 0; Depth <= 32; ++Depth) {
+    if (Cur.Size != PointerSize)
+      return std::nullopt;
+    if (Cur.isConst()) {
+      if (!isMaterializableReadOnlyDataAddress(Cur.ConstVal))
+        return std::nullopt;
+      const bool Symbolized = !BypassesGetVar && getVarSymbolizesDataConstant(
+                                                     Cur.ConstVal, Cur.Size);
+      return PureReadOnlyBaseIdentity{Cur.ConstVal, PointerSize, Symbolized};
+    }
+
+    const auto Key =
+        std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer);
+    if (!Seen.insert(Key).second)
+      return std::nullopt;
+    const MedOp *Def = lookupDef(Cur);
+    if (!Def)
+      return std::nullopt;
+    auto Forwarded = pointerPreservingInput(*Def);
+    if (!Forwarded || Forwarded->Size != PointerSize)
+      return std::nullopt;
+    Cur = *Forwarded;
+    // An operation input is materialized through getVar even when the original
+    // value supplied to this helper was itself a direct PHI constant.
+    BypassesGetVar = false;
+  }
+  return std::nullopt;
+}
+
 bool MedLLVMEmitter::phiIncomingIsRecurrent(const PhiNode &Phi, int PredId,
                                             const MedVar &Arg) const {
   if (!CurMedFunc) {
@@ -657,82 +699,191 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
            TRI.isSubRegOf(B.RegOff, B.Size, A.RegOff, A.Size);
   };
 
+  struct RecurrencePathProof {
+    bool PreservesPointer = false;
+    bool ReachesExactTarget = false;
+  };
+  auto sameIdentity = [](const PureReadOnlyBaseIdentity &A,
+                         const PureReadOnlyBaseIdentity &B) {
+    return A.VA == B.VA && A.Width == B.Width && A.Symbolized == B.Symbolized;
+  };
+
   // Prove value recurrence, not generic data/control dependence. COPY-like
   // forwarders and the pointer side of ADD/SUB transport a pointer; SELECT and
   // masked-select transport it only when every selectable value arm does. A PHI
   // appearing solely in a condition, multiplier, shift count, or mask is not a
   // loop-carried pointer (for example SELECT(cmp(phi), scalarA, scalarB)).
-  std::function<bool(const MedVar &, const MedVar &, int, std::set<Key>)>
-      reachesExact = [&](const MedVar &Start, const MedVar &Target, int Depth,
-                         std::set<Key> Seen) -> bool {
-    if (Depth > 32 || Start.isConst())
-      return false;
-    if (sameVar(Start, Target))
-      return true;
-    if (!Seen.insert(keyOf(Start)).second)
-      return false;
+  //
+  // PreservesPointer and ReachesExactTarget stay separate so a nested reset can
+  // carry the outer PHI's one audited base without pretending that the reset
+  // leaf itself is a backedge. The incoming value is recurrent only when both
+  // facts hold for the complete feasible expression.
+  std::function<RecurrencePathProof(
+      const MedVar &, const MedVar &,
+      const std::optional<PureReadOnlyBaseIdentity> &, int, std::set<Key>,
+      bool)>
+      proveRecurrence =
+          [&](const MedVar &Start, const MedVar &Target,
+              const std::optional<PureReadOnlyBaseIdentity> &ExpectedBase,
+              int Depth, std::set<Key> Seen,
+              bool DirectPhiConstant) -> RecurrencePathProof {
+    if (Depth > 32)
+      return {};
+    if (!Start.isConst() && sameVar(Start, Target))
+      return {true, true};
+    if (ExpectedBase)
+      if (auto Identity = pureReadOnlyBaseIdentity(Start, DirectPhiConstant);
+          Identity && sameIdentity(*Identity, *ExpectedBase))
+        return {true, false};
+    if (Start.isConst() || !Seen.insert(keyOf(Start)).second)
+      return {};
 
     if (const PhiNode *Nested = lookupPhi(Start)) {
       bool SawFeasible = false;
+      bool AllPreserve = true;
+      bool ReachesTarget = false;
       for (const auto &[NestedPred, NestedArg] : Nested->Args) {
         PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Nested, NestedPred);
         if (Edge == PhiEdgeFeasibility::Infeasible)
           continue;
-        if (Edge != PhiEdgeFeasibility::ProvenFeasible)
-          return false;
+        if (Edge != PhiEdgeFeasibility::ProvenFeasible) {
+          AllPreserve = false;
+          continue;
+        }
         SawFeasible = true;
-        if (!reachesExact(NestedArg, Target, Depth + 1, Seen))
-          return false;
+        RecurrencePathProof Arm =
+            proveRecurrence(NestedArg, Target, ExpectedBase, Depth + 1, Seen,
+                            /*DirectPhiConstant=*/NestedArg.isConst());
+        AllPreserve &= Arm.PreservesPointer;
+        ReachesTarget |= Arm.ReachesExactTarget;
       }
-      return SawFeasible;
+      return {SawFeasible && AllPreserve, ReachesTarget};
     }
 
     const MedOp *Def = lookupDef(Start);
     if (!Def)
-      return false;
+      return {};
     if (auto Forwarded = pointerPreservingInput(*Def))
-      return reachesExact(*Forwarded, Target, Depth + 1, Seen);
+      return proveRecurrence(*Forwarded, Target, ExpectedBase, Depth + 1, Seen,
+                             /*DirectPhiConstant=*/false);
 
     auto canCarry = [&](const MedVar &Input) {
       return Def->Output.Size != 0 && Input.Size != 0 &&
              Def->Output.Size >= Input.Size;
     };
     if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
-      bool LeftRecurrent =
-          canCarry(Def->Inputs[0]) &&
-          reachesExact(Def->Inputs[0], Target, Depth + 1, Seen);
-      bool RightRecurrent =
-          canCarry(Def->Inputs[1]) &&
-          reachesExact(Def->Inputs[1], Target, Depth + 1, Seen);
-      if (LeftRecurrent == RightRecurrent)
-        return false;
-      const MedVar &Offset = LeftRecurrent ? Def->Inputs[1] : Def->Inputs[0];
-      return valueIsStableAddressOffset(Offset, &Target);
+      RecurrencePathProof Left;
+      RecurrencePathProof Right;
+      if (canCarry(Def->Inputs[0]))
+        Left = proveRecurrence(Def->Inputs[0], Target, ExpectedBase, Depth + 1,
+                               Seen, /*DirectPhiConstant=*/false);
+      if (canCarry(Def->Inputs[1]))
+        Right = proveRecurrence(Def->Inputs[1], Target, ExpectedBase, Depth + 1,
+                                Seen,
+                                /*DirectPhiConstant=*/false);
+      const bool ReachesTarget =
+          Left.ReachesExactTarget || Right.ReachesExactTarget;
+      if (Left.PreservesPointer == Right.PreservesPointer)
+        return {false, ReachesTarget};
+      const MedVar &Offset =
+          Left.PreservesPointer ? Def->Inputs[1] : Def->Inputs[0];
+      return {valueIsStableAddressOffset(Offset, &Target), ReachesTarget};
     }
     if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
-      bool LeftRecurrent =
-          canCarry(Def->Inputs[0]) &&
-          reachesExact(Def->Inputs[0], Target, Depth + 1, Seen);
-      bool RightRecurrent =
-          canCarry(Def->Inputs[1]) &&
-          reachesExact(Def->Inputs[1], Target, Depth + 1, Seen);
-      return LeftRecurrent && !RightRecurrent &&
-             valueIsStableAddressOffset(Def->Inputs[1], &Target);
+      RecurrencePathProof Left;
+      RecurrencePathProof Right;
+      if (canCarry(Def->Inputs[0]))
+        Left = proveRecurrence(Def->Inputs[0], Target, ExpectedBase, Depth + 1,
+                               Seen, /*DirectPhiConstant=*/false);
+      if (canCarry(Def->Inputs[1]))
+        Right = proveRecurrence(Def->Inputs[1], Target, ExpectedBase, Depth + 1,
+                                Seen,
+                                /*DirectPhiConstant=*/false);
+      const bool ReachesTarget =
+          Left.ReachesExactTarget || Right.ReachesExactTarget;
+      const bool Preserves =
+          Left.PreservesPointer && !Right.PreservesPointer &&
+          valueIsStableAddressOffset(Def->Inputs[1], &Target);
+      return {Preserves, ReachesTarget};
     }
-    if (selectPreservesPointerValues(*Def))
-      return reachesExact(Def->Inputs[1], Target, Depth + 1, Seen) &&
-             reachesExact(Def->Inputs[2], Target, Depth + 1, Seen);
+    if (selectPreservesPointerValues(*Def)) {
+      RecurrencePathProof TrueArm =
+          proveRecurrence(Def->Inputs[1], Target, ExpectedBase, Depth + 1, Seen,
+                          /*DirectPhiConstant=*/false);
+      RecurrencePathProof FalseArm =
+          proveRecurrence(Def->Inputs[2], Target, ExpectedBase, Depth + 1, Seen,
+                          /*DirectPhiConstant=*/false);
+      return {TrueArm.PreservesPointer && FalseArm.PreservesPointer,
+              TrueArm.ReachesExactTarget || FalseArm.ReachesExactTarget};
+    }
     if (Def->Opcode == NdOp::INT_OR) {
       MedVar Cond, ArmT, ArmF;
-      return isMaskedSelectOr(*Def, Cond, ArmT, ArmF) &&
-             reachesExact(ArmT, Target, Depth + 1, Seen) &&
-             reachesExact(ArmF, Target, Depth + 1, Seen);
+      if (!isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
+        return {};
+      RecurrencePathProof TrueArm =
+          proveRecurrence(ArmT, Target, ExpectedBase, Depth + 1, Seen,
+                          /*DirectPhiConstant=*/false);
+      RecurrencePathProof FalseArm =
+          proveRecurrence(ArmF, Target, ExpectedBase, Depth + 1, Seen,
+                          /*DirectPhiConstant=*/false);
+      return {TrueArm.PreservesPointer && FalseArm.PreservesPointer,
+              TrueArm.ReachesExactTarget || FalseArm.ReachesExactTarget};
     }
-    return false;
+    return {};
   };
 
-  if (reachesExact(Arg, Phi.Output, 0, {}))
+  const std::optional<PureReadOnlyBaseIdentity> NoExpectedBase;
+  auto reachesExact = [&](const MedVar &Start, const MedVar &Target) {
+    RecurrencePathProof Proof =
+        proveRecurrence(Start, Target, NoExpectedBase, /*Depth=*/0, {},
+                        /*DirectPhiConstant=*/Start.isConst());
+    return Proof.PreservesPointer && Proof.ReachesExactTarget;
+  };
+
+  RecurrencePathProof ExactProof =
+      proveRecurrence(Arg, Phi.Output, NoExpectedBase, /*Depth=*/0, {},
+                      /*DirectPhiConstant=*/Arg.isConst());
+  if (ExactProof.PreservesPointer && ExactProof.ReachesExactTarget)
     return true;
+
+  // A reset arm cannot nominate the identity that excuses itself. Derive one
+  // expected identity solely from every feasible outer-PHI initializer: an
+  // incoming value whose exact-only pointer walk does not reach the root. Any
+  // unknown edge, complex/unproved initializer, differing base, width, or
+  // raw/symbolized model disables re-materialization equivalence and leaves the
+  // complete table audit fail-closed.
+  if (ExactProof.ReachesExactTarget) {
+    std::optional<PureReadOnlyBaseIdentity> ExpectedBase;
+    bool InitializersValid = true;
+    for (const auto &[InitPred, InitArg] : Phi.Args) {
+      PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(Phi, InitPred);
+      if (Edge == PhiEdgeFeasibility::Infeasible)
+        continue;
+      if (Edge != PhiEdgeFeasibility::ProvenFeasible) {
+        InitializersValid = false;
+        break;
+      }
+      RecurrencePathProof Shape =
+          proveRecurrence(InitArg, Phi.Output, NoExpectedBase, /*Depth=*/0, {},
+                          /*DirectPhiConstant=*/InitArg.isConst());
+      if (Shape.ReachesExactTarget)
+        continue;
+      auto Identity = pureReadOnlyBaseIdentity(InitArg, InitArg.isConst());
+      if (!Identity ||
+          (ExpectedBase && !sameIdentity(*ExpectedBase, *Identity))) {
+        InitializersValid = false;
+        break;
+      }
+      ExpectedBase = *Identity;
+    }
+    if (InitializersValid && ExpectedBase) {
+      RecurrencePathProof Rematerialized =
+          proveRecurrence(Arg, Phi.Output, ExpectedBase, /*Depth=*/0, {},
+                          /*DirectPhiConstant=*/Arg.isConst());
+      if (Rematerialized.PreservesPointer && Rematerialized.ReachesExactTarget)
+        return true;
+    }
+  }
 
   // Wide/narrow register views can form one mutual recurrence. Discover only
   // aliases in pointer-value roles, then require the incoming expression to
@@ -783,12 +934,12 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
   collectAliases(Arg, 0, {});
 
   for (const PhiNode *Alias : AliasCandidates) {
-    if (!reachesExact(Arg, Alias->Output, 0, {}))
+    if (!reachesExact(Arg, Alias->Output))
       continue;
     for (const auto &[AliasPred, AliasArg] : Alias->Args)
       if (classifyPhiIncomingEdge(*Alias, AliasPred) ==
               PhiEdgeFeasibility::ProvenFeasible &&
-          reachesExact(AliasArg, Alias->Output, 0, {}))
+          reachesExact(AliasArg, Alias->Output))
         return true;
   }
   return false;

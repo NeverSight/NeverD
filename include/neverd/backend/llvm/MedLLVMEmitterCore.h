@@ -702,9 +702,26 @@ private:
   /// pointer proofs fail closed.
   bool phiIncomingEdgeFeasible(const PhiNode &Phi, int PredId) const;
 
+  struct PureReadOnlyBaseIdentity {
+    uint64_t VA = 0;
+    uint16_t Width = 0;
+    bool Symbolized = false;
+  };
+
+  /// Recover the identity of a full-width immutable object-data base carried
+  /// only through pointer-preserving forwarders. Direct PHI constants bypass
+  /// getVar and therefore retain the raw address model; operation inputs use
+  /// getVar's shared raw-versus-symbolized policy. PHIs, loads, arithmetic,
+  /// truncation, and numeric coincidences are deliberately not identities.
+  std::optional<PureReadOnlyBaseIdentity>
+  pureReadOnlyBaseIdentity(const MedVar &V,
+                           bool DirectPhiConstantBypassesGetVar) const;
+
   /// True when this particular proven-feasible PHI input carries an exact
-  /// recurrence to the root output or through an overlapping wide/narrow
-  /// register-alias sibling PHI.
+  /// recurrence to the root output, through an overlapping wide/narrow
+  /// register-alias sibling PHI, or through a feasible reset arm that purely
+  /// re-materializes the one immutable base established by every outer-PHI
+  /// initializer.
   bool phiIncomingIsRecurrent(const PhiNode &Phi, int PredId,
                               const MedVar &Arg) const;
 
