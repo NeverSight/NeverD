@@ -205,6 +205,31 @@ bool MedLLVMEmitter::valIsAdvancingInductionBase(uint64_t Val) const {
   return false;
 }
 
+bool MedLLVMEmitter::isCleanRodataStringAddress(uint64_t Val) const {
+  if (!Img || Val == 0)
+    return false;
+  const Segment *Seg = Img->getSegmentFor(Val);
+  if (!Seg || Seg->isWritable() || Img->isCodeAddress(Val) ||
+      Seg->Data.empty() || segHasPtrRelocSlots(Seg) || Val < Seg->VA)
+    return false;
+  size_t Off = static_cast<size_t>(Val - Seg->VA);
+  if (Off >= Seg->Data.size())
+    return false;
+  const uint8_t *S = Seg->Data.data() + Off;
+  size_t Max = Seg->Data.size() - Off, Len = 0;
+  for (size_t I = 0; I < Max && I < limits::kMaxStringScanLen; ++I) {
+    if (S[I] == 0)
+      return Len >= 2;
+    uint8_t Ch = S[I];
+    if ((Ch >= 0x20 && Ch < 0x7F) || Ch == '\n' || Ch == '\r' || Ch == '\t' ||
+        Ch >= 0x80)
+      ++Len;
+    else
+      return false;
+  }
+  return false;
+}
+
 bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) const {
   if (!CurMedFunc || !Img || Val == 0)
     return false;
@@ -214,34 +239,6 @@ bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) const {
 
     auto findPhi = [&](const MedVar &V) { return lookupPhi(V); };
     auto findDef = [&](const MedVar &V) { return lookupDef(V); };
-
-    // A bare VA that begins a C-string in exact read-only data (no relocated
-    // pointer slots — those belong to the data-pointer-table path the
-    // DataPtrRelocSlots bail in the induction resolver handles).
-    auto isCleanRodataString = [&](uint64_t C) -> bool {
-      const Segment *Seg = Img->getSegmentFor(C);
-      if (!Seg || Seg->isWritable() || Img->isCodeAddress(C) ||
-          Seg->Data.empty())
-        return false;
-      if (segHasPtrRelocSlots(Seg) || C < Seg->VA)
-        return false;
-      size_t Off = static_cast<size_t>(C - Seg->VA);
-      if (Off >= Seg->Data.size())
-        return false;
-      const uint8_t *S = Seg->Data.data() + Off;
-      size_t Max = Seg->Data.size() - Off, Len = 0;
-      for (size_t I = 0; I < Max && I < limits::kMaxStringScanLen; ++I) {
-        if (S[I] == 0)
-          return Len >= 2;
-        uint8_t Ch = S[I];
-        if ((Ch >= 0x20 && Ch < 0x7F) || Ch == '\n' || Ch == '\r' ||
-            Ch == '\t' || Ch >= 0x80)
-          Len++;
-        else
-          return false;
-      }
-      return false;
-    };
 
     // True when getVar's existing constant-pointer condition would symbolize
     // this base to a recompiled-VA pointer — the i386/ARM32 PIC reloc/anchor
@@ -297,7 +294,7 @@ bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) const {
         bool SawPhi = false, SawSymbolized = false;
         int Budget = 256;
         auto note = [&](uint64_t B) {
-          if (!isCleanRodataString(B))
+          if (!isCleanRodataStringAddress(B))
             return;
           Cand.insert(B);
           if (wouldExistingSymbolize(B))

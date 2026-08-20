@@ -630,8 +630,11 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
     std::vector<std::pair<MedVar, llvm::Value *>> Pending;
     for (const PhiNode &Phi : Target->Phis)
       for (const auto &[IncomingPred, Incoming] : Phi.Args)
-        if (IncomingPred == Plan.PredId)
-          Pending.emplace_back(Phi.Output, getVar(Incoming, Builder));
+        if (IncomingPred == Plan.PredId) {
+          llvm::Value *Value =
+              getPhiIncomingValue(Incoming, Phi.Output.Size, Builder);
+          Pending.emplace_back(Phi.Output, Value);
+        }
     for (auto &[Output, Value] : Pending)
       setVar(Output, Value, Builder);
   };
@@ -664,8 +667,8 @@ bool MedLLVMEmitter::emitNativeItaniumEH(
   }
 
   if (ImportedPersonalityPlaceholder)
-    ImportedPersonalityPlaceholder->setName(
-        std::string(PersonalitySymbol) + ".import_data");
+    ImportedPersonalityPlaceholder->setName(std::string(PersonalitySymbol) +
+                                            ".import_data");
   llvm::FunctionCallee Personality =
       Mod->getOrInsertFunction(PersonalitySymbol, PersonalityTy);
   if (ImportedPersonalityPlaceholder) {

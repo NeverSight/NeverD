@@ -48,6 +48,10 @@ struct MedVar {
   int Id = 0;
   int SSAVer = 0;
   uint16_t Size = 0;
+  /// Occurrence-sensitive provenance copied from LowIR.  It is meaningful for
+  /// Kind==Const and remains separate from the numeric value so scalar,
+  /// incomplete-page, and complete-address occurrences cannot share a model.
+  ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
 
   union {
     int64_t StackOff = 0;
@@ -59,19 +63,23 @@ struct MedVar {
     if (Kind != O.Kind)
       return false;
     if (Kind == Const)
-      return ConstVal == O.ConstVal && Size == O.Size;
+      return ConstVal == O.ConstVal && Size == O.Size &&
+             Provenance == O.Provenance;
     return Id == O.Id && SSAVer == O.SSAVer;
   }
   bool operator!=(const MedVar &O) const { return !(*this == O); }
 
   bool isConst() const { return Kind == Const; }
 
-  static MedVar makeConst(uint64_t Val, uint16_t Sz) {
+  static MedVar makeConst(uint64_t Val, uint16_t Sz,
+                          ConstantAddressProvenance AddressProvenance =
+                              ConstantAddressProvenance::Unknown) {
     MedVar V;
     V.Kind = Const;
     V.Id = -1;
     V.Size = Sz;
     V.ConstVal = Val;
+    V.Provenance = AddressProvenance;
     return V;
   }
 

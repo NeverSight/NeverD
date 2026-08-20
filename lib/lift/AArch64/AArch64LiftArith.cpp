@@ -19,6 +19,15 @@ namespace neverd {
 
 bool liftArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
                const cs_insn *Insn, const cs_aarch64 &ARM64) {
+  auto readAddSubOperand = [&](const cs_aarch64_op &Operand) {
+    NdVar Value = L.operandRead(S, Operand);
+    // An encoded ADD/SUB immediate is a displacement/count, not an address
+    // occurrence. This distinction is essential for ADRP+ADD completion when
+    // a low-VA page offset happens to equal another mapped data address.
+    if (Operand.type == AARCH64_OP_IMM && Value.isConst())
+      Value.Provenance = ConstantAddressProvenance::Scalar;
+    return Value;
+  };
   switch (Insn->id) {
   // --- ADD / SUB ---
   case AARCH64_INS_ADD:
@@ -26,7 +35,7 @@ bool liftArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     // Capstone 6 alias: CMN Rn, Rm → id=ADDS, op_count=2 (dest=XZR implicit)
     if (Insn->is_alias && ARM64.op_count == 2 && Insn->id == AARCH64_INS_ADDS) {
       NdVar A = L.operandRead(S, ARM64.operands[0]);
-      NdVar B = L.operandRead(S, ARM64.operands[1]);
+      NdVar B = readAddSubOperand(ARM64.operands[1]);
       uint16_t Sz = A.Size;
       B = L.narrowToWidth(S, B, Sz);
       NdVar Result = S.makeTemp(Sz);
@@ -53,7 +62,7 @@ bool liftArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar A = L.operandRead(S, ARM64.operands[1]);
-    NdVar B = L.operandRead(S, ARM64.operands[2]);
+    NdVar B = readAddSubOperand(ARM64.operands[2]);
     B = L.narrowToWidth(S, B, Dst.Size);
     // Snapshot the source operands BEFORE the INT_ADD writes Dst: ADDS often
     // has dst==src (`adds w8,w8,#imm`), and the C/V flags must use the
@@ -121,7 +130,7 @@ bool liftArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       if ((Mn[0] == 'c' || Mn[0] == 'C') && (Mn[1] == 'm' || Mn[1] == 'M') &&
           (Mn[2] == 'p' || Mn[2] == 'P')) {
         NdVar A = L.operandRead(S, ARM64.operands[0]);
-        NdVar B = L.operandRead(S, ARM64.operands[1]);
+        NdVar B = readAddSubOperand(ARM64.operands[1]);
         uint16_t Sz = A.Size;
         B = L.narrowToWidth(S, B, Sz);
         NdVar Result = S.makeTemp(Sz);
@@ -157,7 +166,7 @@ bool liftArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar A = L.operandRead(S, ARM64.operands[1]);
-    NdVar B = L.operandRead(S, ARM64.operands[2]);
+    NdVar B = readAddSubOperand(ARM64.operands[2]);
     B = L.narrowToWidth(S, B, Dst.Size);
     // Snapshot operands BEFORE the INT_SUB writes Dst (SUBS often has dst==src,
     // e.g. `subs w8,w8,#imm`): the C/V flags must compare the *pre-sub* values.

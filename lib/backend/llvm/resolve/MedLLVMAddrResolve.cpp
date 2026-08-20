@@ -11,11 +11,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
+#include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/support/Diagnostic.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -29,6 +31,59 @@ namespace neverd {
 //===----------------------------------------------------------------------===//
 // Conservative control-flow feasibility
 //===----------------------------------------------------------------------===//
+
+bool MedLLVMEmitter::controlConstantMayRelocate(const MedVar &V) const {
+  if (!Img)
+    return false;
+  const uint64_t Val = V.ConstVal;
+  const uint16_t Size = V.Size;
+
+  const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+  const bool IsPointerWidth =
+      Size == 0 || PointerSize == 0 || Size >= PointerSize;
+  const bool CanResolveData = canResolveGlobalDataConstant(Val);
+  const bool ExactReadOnlyData = Img->RelocDataAddrs.count(Val) != 0 ||
+                                 Img->RodataAnchorSeg.count(Val) != 0;
+
+  if (isExactAddressProvenance(V.Provenance) ||
+      V.Provenance == ConstantAddressProvenance::AddressFragment)
+    return true;
+  if (V.Provenance == ConstantAddressProvenance::Scalar)
+    return false;
+
+  // Match the high-VA direct getVar domain without consulting use-site
+  // analysis. Readable executable bytes are intentionally included: an exact
+  // literal-pool/data use inside .text can still be emitted as rebuilt data.
+  if (IsPointerWidth && Val > limits::kMinGlobalDataAddr && CanResolveData)
+    return true;
+
+  // Every pointer-width data constant getVar can currently rewrite must first
+  // have a valid materialization route. Treat that complete route domain as
+  // potential, including anchors and one-past-end runs. Narrow constants need
+  // stronger loader/string evidence: otherwise a small integer that merely
+  // lands in a low-VA segment would make an ordinary constant branch unknown.
+  if (CanResolveData &&
+      (ExactReadOnlyData || Img->getSegmentFor(Val) == nullptr ||
+       isCleanRodataStringAddress(Val)))
+    return true;
+
+  if (!IsPointerWidth)
+    return false;
+
+  if (Img->WritableRelocDataAddrs.count(Val) != 0)
+    return true;
+
+  if (CanResolveData && mayBeWritableSelectPeerCycleFree(Val))
+    return true;
+
+  // Function/code-reference constants can become rebuilt function pointers
+  // even when they have no data materialization route. A bare low-VA function
+  // name is not enough: getVar deliberately requires either an address-taken
+  // target or the same high-VA threshold, otherwise an ordinary small integer
+  // that equals a function entry would keep a dead control edge alive.
+  return FuncNames.count(Val) != 0 && (Val >= limits::kMinGlobalDataAddr ||
+                                       Img->CodeRefTargets.count(Val) != 0);
+}
 
 std::optional<uint64_t>
 MedLLVMEmitter::traceControlConst(const MedVar &V) const {
@@ -54,7 +109,6 @@ MedLLVMEmitter::traceControlConst(const MedVar &V) const {
       X |= ~bitMask(Bits);
     return static_cast<int64_t>(X);
   };
-
   std::function<std::optional<uint64_t>(const MedVar &, int)> Eval =
       [&](const MedVar &Cur, int Depth) -> std::optional<uint64_t> {
     unsigned CurWidth = width(Cur);
@@ -64,7 +118,7 @@ MedLLVMEmitter::traceControlConst(const MedVar &V) const {
     // this original numeric value. Once a leaf becomes ptrtoint(@global) or
     // ptrtoint(@function), equality/order against another original VA is a
     // link-time question and cannot prove either CFG edge dead here.
-    if (Cur.isConst() && getVarMayRelocateConstant(Cur.ConstVal, Cur.Size))
+    if (Cur.isConst() && controlConstantMayRelocate(Cur))
       return std::nullopt;
     if (Cur.isConst())
       return atWidth(Cur.ConstVal, CurWidth);
@@ -118,8 +172,7 @@ MedLLVMEmitter::traceControlConst(const MedVar &V) const {
       break;
     case NdOp::SUBBYTES:
       if (Def->NumInputs >= 2 && Def->Inputs[1].isConst() &&
-          !getVarMayRelocateConstant(Def->Inputs[1].ConstVal,
-                                     Def->Inputs[1].Size))
+          !controlConstantMayRelocate(Def->Inputs[1]))
         if (auto A = one()) {
           uint64_t Shift = Def->Inputs[1].ConstVal * 8;
           unsigned InWidth = width(Def->Inputs[0]);
@@ -270,14 +323,53 @@ MedLLVMEmitter::traceControlConst(const MedVar &V) const {
   return Eval(V, 0);
 }
 
+void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
+  PhiEdgeClassCache.clear();
+
+  PhiRecurrenceCacheFor = nullptr;
+  PhiRecurrenceCache.clear();
+  SelfRecurrenceCacheFor = nullptr;
+  SelfRecurrenceCache.clear();
+  StableOffsetCacheFor = nullptr;
+  StableOffsetCache.clear();
+  IndexedGlobalBaseCacheFor = nullptr;
+  IndexedGlobalBaseCache.clear();
+  InductionBasesFor = nullptr;
+  InductionBaseVAs.clear();
+  PtrTableUniqueSegCache.clear();
+}
+
 void MedLLVMEmitter::ensureFeasibleEdgeCache() const {
-  if (FeasibleEdgesFor == CurMedFunc)
+  if (FeasibleEdgesFor != CurMedFunc) {
+    FeasibleEdgesFor = CurMedFunc;
+    FeasibleEdgeState = FeasibleEdgeCacheState::Empty;
+    FeasibleEdgeBuildSawReentrantQuery = false;
+    FeasibleEdges.clear();
+    FeasibleBlocks.clear();
+  }
+  if (FeasibleEdgeState == FeasibleEdgeCacheState::Ready)
     return;
-  FeasibleEdgesFor = CurMedFunc;
-  FeasibleEdges.clear();
-  FeasibleBlocks.clear();
-  if (!CurMedFunc || CurMedFunc->Blocks.empty())
+  if (FeasibleEdgeState == FeasibleEdgeCacheState::Building) {
+    FeasibleEdgeBuildSawReentrantQuery = true;
     return;
+  }
+
+  // No dependent memo may survive into a new generation. A second reset after
+  // publication discards any provisional result produced by defensive
+  // Building-state re-entry.
+  invalidateFeasibleEdgeDependentCaches();
+  FeasibleEdgeState = FeasibleEdgeCacheState::Building;
+  FeasibleEdgeBuildSawReentrantQuery = false;
+
+  std::set<std::pair<int, int>> NextFeasibleEdges;
+  std::set<int> NextFeasibleBlocks;
+  if (!CurMedFunc || CurMedFunc->Blocks.empty()) {
+    FeasibleEdges = std::move(NextFeasibleEdges);
+    FeasibleBlocks = std::move(NextFeasibleBlocks);
+    FeasibleEdgeState = FeasibleEdgeCacheState::Ready;
+    invalidateFeasibleEdgeDependentCaches();
+    return;
+  }
 
   std::map<int, const MedBlock *> Blocks;
   for (const MedBlock &Block : CurMedFunc->Blocks)
@@ -292,7 +384,7 @@ void MedLLVMEmitter::ensureFeasibleEdgeCache() const {
   };
 
   std::vector<int> Work{CurMedFunc->Blocks.front().Id};
-  FeasibleBlocks.insert(Work.front());
+  NextFeasibleBlocks.insert(Work.front());
   while (!Work.empty()) {
     int BlockId = Work.back();
     Work.pop_back();
@@ -309,8 +401,22 @@ void MedLLVMEmitter::ensureFeasibleEdgeCache() const {
           Branch = &Op;
           break;
         }
-      if (Branch && Branch->NumInputs >= 2 && Branch->Inputs[0].isConst())
-        if (auto Cond = traceControlConst(Branch->Inputs[1])) {
+      if (Branch && Branch->NumInputs >= 2 && Branch->Inputs[0].isConst() &&
+          !FeasibleEdgeBuildSawReentrantQuery) {
+#ifndef NDEBUG
+        const bool HadFatalCodePointerResolution = FatalCodePointerResolution;
+        const bool HadFatalDataPointerResolution = FatalDataPointerResolution;
+#endif
+        auto Cond = traceControlConst(Branch->Inputs[1]);
+#ifndef NDEBUG
+        assert(HadFatalCodePointerResolution == FatalCodePointerResolution &&
+               HadFatalDataPointerResolution == FatalDataPointerResolution &&
+               "control feasibility must not emit pointer diagnostics");
+#endif
+        // A future dependency accidentally re-entering PHI feasibility while
+        // this condition is evaluated makes the whole build conservative. Do
+        // not let a provisional negative result prune this or any later edge.
+        if (Cond && !FeasibleEdgeBuildSawReentrantQuery) {
           // Match MedLLVMFuncBody's branch lowering exactly: successor 1 is
           // the default taken edge, while a non-zero target address may name
           // successor 0 explicitly. In particular, never confuse an unknown
@@ -324,23 +430,67 @@ void MedLLVMEmitter::ensureFeasibleEdgeCache() const {
               Taken == Block.Succs[0] ? Block.Succs[1] : Block.Succs[0];
           OrdinarySuccs = {*Cond != 0 ? Taken : Fallthrough};
         }
+      }
     }
 
     for (int Succ : OrdinarySuccs) {
       if (!Blocks.count(Succ))
         continue;
-      FeasibleEdges.insert({BlockId, Succ});
-      if (FeasibleBlocks.insert(Succ).second)
+      NextFeasibleEdges.insert({BlockId, Succ});
+      if (NextFeasibleBlocks.insert(Succ).second)
         Work.push_back(Succ);
     }
     for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs) {
       if (!Blocks.count(Edge.BlockId))
         continue;
-      FeasibleEdges.insert({BlockId, Edge.BlockId});
-      if (FeasibleBlocks.insert(Edge.BlockId).second)
+      NextFeasibleEdges.insert({BlockId, Edge.BlockId});
+      if (NextFeasibleBlocks.insert(Edge.BlockId).second)
         Work.push_back(Edge.BlockId);
     }
+    if (FeasibleEdgeBuildTestHook) {
+      std::function<void()> Hook = std::move(FeasibleEdgeBuildTestHook);
+      FeasibleEdgeBuildTestHook = {};
+      Hook();
+    }
   }
+
+  if (FeasibleEdgeBuildSawReentrantQuery) {
+    // A defensive re-entry may be discovered only after earlier conditions
+    // were pruned. Rebuild from structure alone so the sticky fallback really
+    // applies to the entire generation, not merely the remaining worklist.
+    NextFeasibleEdges.clear();
+    NextFeasibleBlocks.clear();
+    Work = {CurMedFunc->Blocks.front().Id};
+    NextFeasibleBlocks.insert(Work.front());
+    while (!Work.empty()) {
+      const int BlockId = Work.back();
+      Work.pop_back();
+      const auto It = Blocks.find(BlockId);
+      if (It == Blocks.end())
+        continue;
+      const MedBlock &Block = *It->second;
+      for (int Succ : Block.Succs) {
+        if (!Blocks.count(Succ))
+          continue;
+        NextFeasibleEdges.insert({BlockId, Succ});
+        if (NextFeasibleBlocks.insert(Succ).second)
+          Work.push_back(Succ);
+      }
+      for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs) {
+        if (!Blocks.count(Edge.BlockId))
+          continue;
+        NextFeasibleEdges.insert({BlockId, Edge.BlockId});
+        if (NextFeasibleBlocks.insert(Edge.BlockId).second)
+          Work.push_back(Edge.BlockId);
+      }
+    }
+  }
+
+  FeasibleEdges = std::move(NextFeasibleEdges);
+  FeasibleBlocks = std::move(NextFeasibleBlocks);
+  FeasibleEdgeState = FeasibleEdgeCacheState::Ready;
+  FeasibleEdgeBuildSawReentrantQuery = false;
+  invalidateFeasibleEdgeDependentCaches();
 }
 
 void MedLLVMEmitter::ensurePhiEdgeIndex() const {
@@ -369,8 +519,13 @@ MedLLVMEmitter::classifyPhiIncomingEdge(const PhiNode &Phi, int PredId) const {
     return PhiEdgeFeasibility::Unknown;
   ensurePhiEdgeIndex();
   const auto CacheKey = std::make_pair(&Phi, PredId);
-  if (auto It = PhiEdgeClassCache.find(CacheKey); It != PhiEdgeClassCache.end())
-    return It->second;
+  const bool BuildingFeasibleEdges =
+      FeasibleEdgesFor == CurMedFunc &&
+      FeasibleEdgeState == FeasibleEdgeCacheState::Building;
+  if (!BuildingFeasibleEdges)
+    if (auto It = PhiEdgeClassCache.find(CacheKey);
+        It != PhiEdgeClassCache.end())
+      return It->second;
 
   ++AddressProvenanceWork.EdgeClassifications;
   auto Owner = PhiOwnerBlocks.find(&Phi);
@@ -389,7 +544,20 @@ MedLLVMEmitter::classifyPhiIncomingEdge(const PhiNode &Phi, int PredId) const {
     return PhiEdgeFeasibility::Unknown;
   }
 
+  // A structurally valid edge queried during feasible-graph construction has
+  // no terminal reachability class yet. Returning Unknown keeps every
+  // provenance proof fail-closed; not memoizing it prevents a provisional
+  // answer from surviving publication. The sticky marker also makes the
+  // current feasible build retain all remaining control edges if a future
+  // change accidentally recreates a semantic dependency cycle.
+  if (BuildingFeasibleEdges) {
+    FeasibleEdgeBuildSawReentrantQuery = true;
+    return PhiEdgeFeasibility::Unknown;
+  }
+
   ensureFeasibleEdgeCache();
+  if (FeasibleEdgeState != FeasibleEdgeCacheState::Ready)
+    return PhiEdgeFeasibility::Unknown;
   const PhiEdgeFeasibility Result = FeasibleEdges.count({PredId, OwnerId}) != 0
                                         ? PhiEdgeFeasibility::ProvenFeasible
                                         : PhiEdgeFeasibility::Infeasible;
@@ -467,6 +635,11 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // the low address raw.
       return hasObjectDataProvenance(Value);
     };
+    if (Start.isConst() &&
+        Start.Provenance == ConstantAddressProvenance::Scalar)
+      return true;
+    if (Start.isConst() && isAddressProvenance(Start.Provenance))
+      return false;
     if (Start.isConst())
       return !constantIsMappedAddress(Start.ConstVal, Start.Size);
     Seen.insert(keyOf(Start));
@@ -624,7 +797,8 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
     return std::nullopt;
 
   MedVar Cur = V;
-  bool BypassesGetVar = DirectPhiConstantBypassesGetVar && Cur.isConst();
+  bool BypassesGetVar = DirectPhiConstantBypassesGetVar && Cur.isConst() &&
+                        !isExactAddressProvenance(Cur.Provenance);
   std::set<std::tuple<int, int, int>> Seen;
 
   // AArch64 ADRP/ADD folding can leave a low linked VA in a 32-bit constant
@@ -657,7 +831,8 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
         const unsigned Bits = LeafSize * 8;
         if (Bits < 64 && (Leaf.ConstVal >> Bits) != 0)
           return std::nullopt;
-        if (!isMaterializableReadOnlyDataAddress(Leaf.ConstVal) ||
+        if (Leaf.Provenance != ConstantAddressProvenance::Unknown ||
+            !isMaterializableReadOnlyDataAddress(Leaf.ConstVal) ||
             getVarMayRelocateConstant(Leaf.ConstVal, Leaf.Size))
           return std::nullopt;
         return PureReadOnlyBaseIdentity{Leaf.ConstVal, PointerSize,
@@ -685,8 +860,7 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
     if (Cur.isConst()) {
       if (!isMaterializableReadOnlyDataAddress(Cur.ConstVal))
         return std::nullopt;
-      const bool Symbolized = !BypassesGetVar && getVarSymbolizesDataConstant(
-                                                     Cur.ConstVal, Cur.Size);
+      const bool Symbolized = dataOccurrenceSymbolizes(Cur, BypassesGetVar);
       return PureReadOnlyBaseIdentity{Cur.ConstVal, PointerSize, Symbolized};
     }
 
@@ -1300,7 +1474,11 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
     return false;
 
   auto isStableNumericOffset = [&](const MedVar &Offset) {
-    if (!Offset.isConst() ||
+    if (!Offset.isConst())
+      return false;
+    if (Offset.Provenance == ConstantAddressProvenance::Scalar)
+      return true;
+    if (isAddressProvenance(Offset.Provenance) ||
         getVarMayRelocateConstant(Offset.ConstVal, Offset.Size))
       return false;
     // A low executable VA can also be an ordinary stride immediate and stays
@@ -1520,7 +1698,7 @@ bool MedLLVMEmitter::recoverRelativeDataPointerTargets(
     if (!Folded || *Folded == 0 || (SawArithmetic && !SawLoad))
       return false;
     Base = *Folded;
-    BaseSymbolized = !SawLoad && getVarSymbolizesDataConstant(Base, OriginSize);
+    BaseSymbolized = !SawLoad && dataOccurrenceSymbolizes(BaseVar);
     return true;
   };
 

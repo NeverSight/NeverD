@@ -22,7 +22,8 @@ namespace neverd {
 
 class ARMLifter {
 public:
-  explicit ARMLifter(Arch TargetArch);
+  explicit ARMLifter(Arch TargetArch,
+                     InstructionMode SourceMode = InstructionMode::Default);
 
   void lift(const cs_insn *Insn, std::vector<LowOp> &Ops);
 
@@ -159,6 +160,7 @@ private:
   bool liftSIMDNEON(LiftState &S, const cs_insn *Insn, const cs_arm &ARM);
 
   Arch TargetArch;
+  InstructionMode SourceMode = InstructionMode::Default;
   bool Strict = true;
 };
 

@@ -14,6 +14,7 @@
 #include "neverd/ir/med/LowToMed.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -470,7 +471,7 @@ MedVar LowToMedConverter::ndVarToMedVar(const NdVar &VN) {
     break;
   }
   case VnodeSpace::CONST: {
-    MV = MedVar::makeConst(VN.Offset, VN.Size);
+    MV = MedVar::makeConst(VN.Offset, VN.Size, VN.Provenance);
     break;
   }
   case VnodeSpace::STACK: {

@@ -235,6 +235,17 @@ bool liftShiftMulDiv(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar Src = L.operandRead(S, ARM64.operands[1]);
+    // ADR/ADRP immediates encode a PC-relative displacement, but the
+    // architectural result is a full-width address in Xd. Capstone reports
+    // the encoded immediate as four bytes; retaining that transport width on
+    // the COPY makes later relocation analysis mistake a pointer for a narrow
+    // scalar (notably a linker-relaxed ADR in a low-VA ELF PIE).
+    if (Src.isConst()) {
+      Src.Size = Dst.Size;
+      Src.Provenance = Insn->id == AARCH64_INS_ADRP
+                           ? ConstantAddressProvenance::AddressFragment
+                           : ConstantAddressProvenance::Address;
+    }
     S.emit(NdOp::COPY, Dst, {Src});
     break;
   }

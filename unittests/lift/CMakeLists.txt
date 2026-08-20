@@ -853,6 +853,10 @@ if(APPLE)
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_macho.s")
   set(call_arg_phi_a64_macho_exe
       "${CMAKE_CURRENT_BINARY_DIR}/test_call_arg_phi_a64_macho")
+  set(reentrant_feasible_phi_a64_macho_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_reentrant_feasible_phi_a64_macho.s")
+  set(reentrant_feasible_phi_a64_macho_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_reentrant_feasible_phi_a64_macho")
   set(writable_pointer_induction_a64_macho_src
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_a64_macho.s")
   set(writable_pointer_induction_a64_macho_exe
@@ -884,6 +888,13 @@ if(APPLE)
     DEPENDS ${call_arg_phi_a64_macho_src}
     COMMENT "Linking AArch64 Mach-O call-argument PHI fixture")
   add_custom_command(
+    OUTPUT ${reentrant_feasible_phi_a64_macho_exe}
+    COMMAND /usr/bin/clang -target arm64-apple-macos14
+            ${reentrant_feasible_phi_a64_macho_src}
+            -o ${reentrant_feasible_phi_a64_macho_exe}
+    DEPENDS ${reentrant_feasible_phi_a64_macho_src}
+    COMMENT "Linking AArch64 Mach-O reentrant feasible-edge PHI fixture")
+  add_custom_command(
     OUTPUT ${writable_pointer_induction_a64_macho_exe}
     COMMAND /usr/bin/clang -target arm64-apple-macos14
             ${writable_pointer_induction_a64_macho_src}
@@ -899,6 +910,7 @@ if(APPLE)
     COMMENT "Linking x64 Mach-O writable pointer-table induction fixture")
   list(APPEND TEST_OBJECTS ${call_abi_a64_macho_exe}
                            ${call_arg_phi_a64_macho_exe}
+                           ${reentrant_feasible_phi_a64_macho_exe}
                            ${writable_pointer_induction_a64_macho_exe}
                            ${writable_pointer_induction_x64_macho_exe})
 endif()
@@ -1178,6 +1190,31 @@ if(LLD_LINK_EXEC)
        ${rematerialized_table_a64_pe_exe}
        ${rematerialized_table_x64_pe_obj}
        ${rematerialized_table_x64_pe_exe})
+
+  set(reentrant_feasible_phi_a64_pe_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_reentrant_feasible_phi_a64_pe.s")
+  set(reentrant_feasible_phi_a64_pe_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_reentrant_feasible_phi_a64_pe.obj")
+  set(reentrant_feasible_phi_a64_pe_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_reentrant_feasible_phi_a64_pe.exe")
+  add_custom_command(
+    OUTPUT ${reentrant_feasible_phi_a64_pe_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-pc-windows-msvc -c
+            ${reentrant_feasible_phi_a64_pe_src}
+            -o ${reentrant_feasible_phi_a64_pe_obj}
+    DEPENDS ${reentrant_feasible_phi_a64_pe_src}
+    COMMENT "Compiling AArch64 PE reentrant feasible-edge PHI fixture")
+  add_custom_command(
+    OUTPUT ${reentrant_feasible_phi_a64_pe_exe}
+    COMMAND ${LLD_LINK_EXEC} /machine:arm64 /entry:start /subsystem:console
+            /nodefaultlib /dynamicbase /fixed:no
+            ${reentrant_feasible_phi_a64_pe_obj}
+            /out:${reentrant_feasible_phi_a64_pe_exe}
+    DEPENDS ${reentrant_feasible_phi_a64_pe_obj}
+    COMMENT "Linking AArch64 PE reentrant feasible-edge PHI fixture")
+  list(APPEND TEST_OBJECTS
+       ${reentrant_feasible_phi_a64_pe_obj}
+       ${reentrant_feasible_phi_a64_pe_exe})
 
   set(writable_pointer_induction_a64_pe_src
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_a64_pe.s")
@@ -1461,6 +1498,30 @@ if(LLD_EXEC)
        ${rematerialized_table_a64_elf}
        ${rematerialized_table_x64_elf_obj}
        ${rematerialized_table_x64_elf})
+
+  set(reentrant_feasible_phi_a64_elf_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_reentrant_feasible_phi_a64_elf.s")
+  set(reentrant_feasible_phi_a64_elf_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_reentrant_feasible_phi_a64_elf.o")
+  set(reentrant_feasible_phi_a64_elf
+      "${CMAKE_CURRENT_BINARY_DIR}/test_reentrant_feasible_phi_a64_elf")
+  add_custom_command(
+    OUTPUT ${reentrant_feasible_phi_a64_elf_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-linux-gnu -fPIC -c
+            ${reentrant_feasible_phi_a64_elf_src}
+            -o ${reentrant_feasible_phi_a64_elf_obj}
+    DEPENDS ${reentrant_feasible_phi_a64_elf_src}
+    COMMENT "Compiling AArch64 ELF reentrant feasible-edge PHI fixture")
+  add_custom_command(
+    OUTPUT ${reentrant_feasible_phi_a64_elf}
+    COMMAND ${LLD_EXEC} -pie -m aarch64linux --entry=_start
+            ${reentrant_feasible_phi_a64_elf_obj}
+            -o ${reentrant_feasible_phi_a64_elf}
+    DEPENDS ${reentrant_feasible_phi_a64_elf_obj}
+    COMMENT "Linking AArch64 ELF reentrant feasible-edge PHI fixture")
+  list(APPEND ELF_EXECUTABLES
+       ${reentrant_feasible_phi_a64_elf_obj}
+       ${reentrant_feasible_phi_a64_elf})
 
   set(writable_pointer_induction_a64_elf_src
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_a64_elf.s")

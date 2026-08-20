@@ -36,6 +36,7 @@ X86Lifter::X86Lifter(Arch A) : TargetArch(A) {}
 NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
   NdVar EA = makeTemp(8);
   bool First = true;
+  bool ConsumedDisplacement = false;
   auto Acc = [&](NdVar V) {
     if (First) {
       emit(NdOp::COPY, EA, {V});
@@ -45,9 +46,18 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
     }
   };
   if (MemOp.mem.base != X86_REG_INVALID) {
-    if (MemOp.mem.base == X86_REG_RIP || MemOp.mem.base == X86_REG_EIP) {
-      uint64_t NextPC = Addr + InsnSize;
-      Acc(NdVar::cst(NextPC, 8));
+    if (MemOp.mem.base == X86_REG_RIP) {
+      Acc(NdVar::address(Addr + InsnSize, 8));
+    } else if (MemOp.mem.base == X86_REG_EIP) {
+      // In 64-bit mode an address-size override makes EIP-relative arithmetic
+      // wrap at 32 bits and then zero-extend. Fold the displacement at that
+      // architectural width; adding it to the full instruction VA preserves a
+      // stale high half.
+      const uint32_t NextEIP = static_cast<uint32_t>(Addr + InsnSize);
+      const uint32_t Effective =
+          NextEIP + static_cast<uint32_t>(MemOp.mem.disp);
+      Acc(NdVar::address(Effective, 8));
+      ConsumedDisplacement = true;
     } else {
       auto RI = mapCapstoneReg(static_cast<x86_reg>(MemOp.mem.base));
       Acc(NdVar::reg(RI.Offset, 8));
@@ -58,16 +68,18 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
     NdVar Idx = NdVar::reg(RI.Offset, 8);
     if (MemOp.mem.scale > 1) {
       NdVar Scaled = makeTemp(8);
-      emit(NdOp::INT_MULT, Scaled, {Idx, NdVar::cst(MemOp.mem.scale, 8)});
+      emit(NdOp::INT_MULT, Scaled, {Idx, NdVar::scalar(MemOp.mem.scale, 8)});
       Acc(Scaled);
     } else {
       Acc(Idx);
     }
   }
-  if (MemOp.mem.disp != 0)
-    Acc(NdVar::cst(static_cast<uint64_t>(MemOp.mem.disp), 8));
+  if (MemOp.mem.disp != 0 && !ConsumedDisplacement)
+    Acc(MemOp.mem.base == X86_REG_INVALID
+            ? NdVar::address(static_cast<uint64_t>(MemOp.mem.disp), 8)
+            : NdVar::scalar(static_cast<uint64_t>(MemOp.mem.disp), 8));
   if (First)
-    Acc(NdVar::cst(0, 8));
+    Acc(NdVar::address(0, 8));
   return EA;
 }
 
@@ -226,8 +238,8 @@ void X86Lifter::emitAF(LiftState &S, NdVar Result, NdVar A, NdVar B) {
          {AfBit, NdVar::cst(0, Sz)});
 }
 
-void X86Lifter::emitFlagsArith(LiftState &S, NdVar Result, NdVar A,
-                               NdVar B, bool IsSub) {
+void X86Lifter::emitFlagsArith(LiftState &S, NdVar Result, NdVar A, NdVar B,
+                               bool IsSub) {
   emitZSPF(S, Result);
   emitAF(S, Result, A, B);
   if (IsSub) {
@@ -361,8 +373,7 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
       if (ROffs == x86reg::RSP || ROffs == x86reg::RBP)
         continue;
 
-      S.emit(NdOp::INT_ZEXT, NdVar::reg(ROffs, 8),
-             {NdVar::reg(ROffs, 4)});
+      S.emit(NdOp::INT_ZEXT, NdVar::reg(ROffs, 8), {NdVar::reg(ROffs, 4)});
     }
   }
 }
@@ -489,6 +500,10 @@ va_t X86Lifter::pcRelCodeRefTarget(const cs_insn *I) {
   if ((M.base != X86_REG_RIP && M.base != X86_REG_EIP) ||
       M.index != X86_REG_INVALID)
     return InvalidVA;
+  if (M.base == X86_REG_EIP) {
+    const uint32_t NextEIP = static_cast<uint32_t>(I->address + I->size);
+    return static_cast<va_t>(NextEIP + static_cast<uint32_t>(M.disp));
+  }
   return static_cast<va_t>(I->address + I->size + static_cast<int64_t>(M.disp));
 }
 

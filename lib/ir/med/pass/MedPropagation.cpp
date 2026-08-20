@@ -10,7 +10,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/Limits.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include <map>
 #include <optional>
@@ -29,6 +32,31 @@ void LowToMedConverter::propagate(MedFunc &Func) {
     return {static_cast<int>(V.Kind), V.Id, V.SSAVer};
   };
   std::map<DefKey, const MedOp *> Defs;
+
+  const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+  auto HasExactLoaderProvenance = [&](uint64_t Value) {
+    return Image && (Image->RelocDataAddrs.count(Value) != 0 ||
+                     Image->WritableRelocDataAddrs.count(Value) != 0 ||
+                     Image->RodataAnchorSeg.count(Value) != 0 ||
+                     Image->CodeRefTargets.count(Value) != 0);
+  };
+  auto MayConstantRelocate = [&](uint64_t Value, uint16_t Size) {
+    const bool IsPointerWidth =
+        Size == 0 || PointerSize == 0 || Size >= PointerSize;
+    if (!Image)
+      return false;
+    if (HasExactLoaderProvenance(Value))
+      return true;
+    if (!IsPointerWidth)
+      return false;
+    const bool Potential = Image->isPotentiallyRelocatableAddress(Value);
+    const bool Eligible = Value > limits::kMinGlobalDataAddr ||
+                          Image->hasObjectDataProvenance(Value) ||
+                          Image->WritableRelocDataAddrs.count(Value) != 0 ||
+                          Image->CodeRefTargets.count(Value) != 0 ||
+                          (!Image->getSegmentFor(Value) && Potential);
+    return Eligible && Potential;
+  };
 
   for (auto &Blk : Func.Blocks) {
     for (auto &Op : Blk.Ops) {
@@ -89,13 +117,47 @@ void LowToMedConverter::propagate(MedFunc &Func) {
             Op.Opcode != NdOp::INT_XOR && Op.Opcode != NdOp::INT_MULT)
           continue;
 
-        auto ResolveConst = [&](const MedVar &V) -> std::optional<uint64_t> {
+        struct ConstantInfo {
+          uint64_t Value = 0;
+          bool MayRelocate = false;
+          bool HasAddressOrigin = false;
+          bool HasAddressFragment = false;
+          bool IsStableScalar = false;
+          ConstantAddressProvenance Provenance =
+              ConstantAddressProvenance::Unknown;
+        };
+        auto ResolveConst =
+            [&](const MedVar &V) -> std::optional<ConstantInfo> {
+          auto Describe = [&](const MedVar &C) {
+            const bool FullWidth =
+                (C.Size == 0 || PointerSize == 0 || C.Size >= PointerSize);
+            const bool ExactOrigin =
+                isExactAddressProvenance(C.Provenance) && FullWidth;
+            const bool Fragment =
+                C.Provenance == ConstantAddressProvenance::AddressFragment &&
+                FullWidth;
+            // A narrow address marker cannot be materialized, but its bit
+            // pattern is still relocation-dependent.  Keep it out of ordinary
+            // constant folding so a later widen cannot resurrect a frozen VA.
+            bool MayRelocate = isAddressProvenance(C.Provenance);
+            if (C.Provenance == ConstantAddressProvenance::Unknown)
+              MayRelocate = HasExactLoaderProvenance(C.ConstVal) ||
+                            MayConstantRelocate(C.ConstVal, C.Size);
+            const bool StableScalar =
+                C.Provenance == ConstantAddressProvenance::Scalar ||
+                (C.Provenance == ConstantAddressProvenance::Unknown &&
+                 !MayRelocate);
+            return ConstantInfo{C.ConstVal, MayRelocate,  ExactOrigin,
+                                Fragment,   StableScalar, C.Provenance};
+          };
           if (V.isConst())
-            return V.ConstVal;
+            return Describe(V);
           auto It = Defs.find(keyOf(V));
           if (It != Defs.end() && It->second->Opcode == NdOp::COPY &&
-              It->second->NumInputs == 1 && It->second->Inputs[0].isConst())
-            return It->second->Inputs[0].ConstVal;
+              It->second->NumInputs == 1 && It->second->Inputs[0].isConst() &&
+              It->second->Output.Size == V.Size &&
+              It->second->Inputs[0].Size == V.Size)
+            return Describe(It->second->Inputs[0]);
           return std::nullopt;
         };
 
@@ -107,22 +169,22 @@ void LowToMedConverter::propagate(MedFunc &Func) {
         uint64_t Result = 0;
         switch (Op.Opcode) {
         case NdOp::INT_ADD:
-          Result = *A + *B;
+          Result = A->Value + B->Value;
           break;
         case NdOp::INT_SUB:
-          Result = *A - *B;
+          Result = A->Value - B->Value;
           break;
         case NdOp::INT_AND:
-          Result = *A & *B;
+          Result = A->Value & B->Value;
           break;
         case NdOp::INT_OR:
-          Result = *A | *B;
+          Result = A->Value | B->Value;
           break;
         case NdOp::INT_XOR:
-          Result = *A ^ *B;
+          Result = A->Value ^ B->Value;
           break;
         case NdOp::INT_MULT:
-          Result = *A * *B;
+          Result = A->Value * B->Value;
           break;
         default:
           continue;
@@ -134,8 +196,52 @@ void LowToMedConverter::propagate(MedFunc &Func) {
           Result &= Mask;
         }
 
+        bool ResultHasAddressOrigin = false;
+        if (A->MayRelocate || B->MayRelocate) {
+          // Preserve expressions whose value depends on two independently
+          // rebuilt symbols, or on pointer bit patterns. The one safe fold is
+          // canonical address construction: address +/- a numeric displacement
+          // that itself lands on another loader-recognized address. This keeps
+          // AArch64 ADRP+ADD and equivalent PIC materialization compact while
+          // preventing a later compare from observing a frozen link-time
+          // distance.
+          const bool OutputIsPointerWidth = Op.Output.Size == 0 ||
+                                            PointerSize == 0 ||
+                                            Op.Output.Size >= PointerSize;
+          const bool CanonicalAddressAdjustment =
+              ((Op.Opcode == NdOp::INT_ADD &&
+                (A->HasAddressOrigin || A->HasAddressFragment) &&
+                B->IsStableScalar) ||
+               (Op.Opcode == NdOp::INT_ADD &&
+                (B->HasAddressOrigin || B->HasAddressFragment) &&
+                A->IsStableScalar) ||
+               (Op.Opcode == NdOp::INT_SUB &&
+                (A->HasAddressOrigin || A->HasAddressFragment) &&
+                B->IsStableScalar)) &&
+              OutputIsPointerWidth && Image &&
+              Image->isPotentiallyRelocatableAddress(Result);
+          if (!CanonicalAddressAdjustment)
+            continue;
+          ResultHasAddressOrigin = true;
+        }
+
         Op.Opcode = NdOp::COPY;
-        Op.Inputs[0] = MedVar::makeConst(Result, Op.Output.Size);
+        ConstantAddressProvenance ResultProvenance =
+            ConstantAddressProvenance::Unknown;
+        if (ResultHasAddressOrigin) {
+          const ConstantInfo &Base =
+              (A->HasAddressOrigin || A->HasAddressFragment) ? *A : *B;
+          if (Base.Provenance == ConstantAddressProvenance::DataAddress)
+            ResultProvenance = ConstantAddressProvenance::DataAddress;
+          else if (Base.Provenance == ConstantAddressProvenance::CodeAddress)
+            ResultProvenance = ConstantAddressProvenance::CodeAddress;
+          else
+            ResultProvenance = ConstantAddressProvenance::Address;
+        } else if (A->Provenance == ConstantAddressProvenance::Scalar &&
+                   B->Provenance == ConstantAddressProvenance::Scalar)
+          ResultProvenance = ConstantAddressProvenance::Scalar;
+        Op.Inputs[0] =
+            MedVar::makeConst(Result, Op.Output.Size, ResultProvenance);
         Op.NumInputs = 1;
         Changed = true;
       }

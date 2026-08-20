@@ -69,6 +69,32 @@ toLLVMAtomicCmpXchgFailureOrdering(NdMemoryOrdering Ordering) {
 
 } // anonymous namespace
 
+llvm::Value *MedLLVMEmitter::resolveAtomicMemoryPtr(
+    const MedVar &AddressVar, uint16_t AccessBytes, llvm::Type *AccessTy,
+    llvm::IRBuilder<> &Builder) {
+  llvm::Value *Address = nullptr;
+  std::optional<uint64_t> ResolvedAddress;
+  if (Img) {
+    if (AddressVar.isConst())
+      ResolvedAddress = AddressVar.ConstVal;
+    else
+      ResolvedAddress = traceSSAConst(AddressVar);
+  }
+  if (ResolvedAddress) {
+    const unsigned AddressBits = AddressVar.Size > 0 ? AddressVar.Size * 8 : 64;
+    if (!isFrameRelativeDisplacement(*ResolvedAddress, AddressBits))
+      Address = tryResolveGlobalData(*ResolvedAddress, AccessBytes);
+  }
+  if (!Address && Img)
+    Address = tryResolveWritableData(AddressVar, AccessBytes, Builder);
+  if (!Address) {
+    rejectEscapingAddressFragment(AddressVar,
+                                  "an unresolved atomic memory address");
+    Address = getMemoryPtr(getVar(AddressVar, Builder), AccessTy, Builder);
+  }
+  return Address;
+}
+
 void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                             int BlockId, int OpIdx) {
   if (Op.Dead)
@@ -96,31 +122,18 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                           /*isSigned=*/false, /*implicitTrunc=*/true));
   };
 
-  // An atomic address can reach the operation through a copied register or a
-  // loop PHI.  Trace that MedIR identity before emitting LLVM values, just as
-  // LOAD/STORE do, so a low relocatable-object VA becomes the rebuilt global
-  // instead of folding later to a bare inttoptr.
-  auto GetAtomicMemoryPtr = [&](llvm::Type *ValTy,
-                                uint16_t DataSize) -> llvm::Value * {
-    const MedVar &AddrVar = Op.Inputs[0];
-    llvm::Value *Ptr = nullptr;
-    uint64_t ResolvedAddr = 0;
-    if (Img) {
-      if (AddrVar.isConst())
-        ResolvedAddr = AddrVar.ConstVal;
-      else if (auto Traced = traceSSAConst(AddrVar))
-        ResolvedAddr = *Traced;
-    }
-    if (ResolvedAddr != 0) {
-      const unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
-      if (!isFrameRelativeDisplacement(ResolvedAddr, AddrBits))
-        Ptr = tryResolveGlobalData(ResolvedAddr, DataSize);
-    }
-    if (!Ptr && Img)
-      Ptr = tryResolveWritableData(AddrVar, DataSize, Builder);
-    if (!Ptr)
-      Ptr = getMemoryPtr(GetInput(0), ValTy, Builder);
-    return Ptr;
+  // Integer relations and arithmetic must consume the same relocatable code
+  // identity that observable value sinks use.  Keep this occurrence-scoped:
+  // an architectural PC/interior label used as a switch arithmetic base has
+  // no FuncNames identity and therefore stays with its established numeric
+  // owner, while an ADR/LEA of an emitted function becomes ptrtoint @func.
+  auto GetRelocatableIdentityInput = [&](uint8_t Idx) -> llvm::Value * {
+    if (Idx >= Op.NumInputs)
+      return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), 0);
+    if (llvm::Value *Code =
+            tryResolveCodeIdentityOperand(Op.Inputs[Idx], Builder))
+      return Code;
+    return GetInput(Idx);
   };
 
   auto Coerce = [&](llvm::Value *A,
@@ -180,7 +193,26 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   switch (Op.Opcode) {
   case NdOp::COPY: {
-    Result = GetInput(0);
+    // A direct occurrence that names an emitted function is unambiguous even
+    // before a later use supplies a code role. Materialize it once at the COPY
+    // so PHI/SELECT transports and no-opt IR cannot retain a dead original VA.
+    // Keep executable interior addresses on the ordinary path: architectural
+    // PC/switch arithmetic needs use-role analysis before choosing
+    // BlockAddress versus numeric layout semantics.
+    const MedVar &Input = Op.Inputs[0];
+    llvm::Function *KnownFunction = nullptr;
+    if (Input.isConst() && isExactAddressProvenance(Input.Provenance)) {
+      const va_t Normalized =
+          normalizeCodeAddress(Input.ConstVal, Img ? Img->Arch : TargetArch,
+                               Img ? Img->Mode : InstructionMode::Default);
+      if (auto It = FuncNames.find(Normalized); It != FuncNames.end())
+        KnownFunction = Mod->getFunction(It->second);
+    }
+    Result = KnownFunction
+                 ? Builder.CreatePtrToInt(KnownFunction,
+                                          sizeToType(Op.Output.Size),
+                                          "code.copy")
+                 : GetInput(0);
     break;
   }
   case NdOp::INT_ADD: {
@@ -207,8 +239,9 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     bool RawR = Op.NumInputs > 1 && Op.Inputs[1].isConst() &&
                 varIsFrameDerived(Op.Inputs[0]);
     auto AddInput = [&](uint8_t Idx) -> llvm::Value * {
-      return ((Idx == 0 && RawL) || (Idx == 1 && RawR)) ? GetRawInput(Idx)
-                                                        : GetInput(Idx);
+      return ((Idx == 0 && RawL) || (Idx == 1 && RawR))
+                 ? GetRawInput(Idx)
+                 : GetRelocatableIdentityInput(Idx);
     };
     if (TargetArch == Arch::AArch64 && Op.Output.Size > 0 &&
         Op.Output.Size <= 4) {
@@ -239,7 +272,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Result = Dyn;
       break;
     }
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateSub(L, R, "sub");
     break;
   }
@@ -247,8 +281,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (TargetArch == Arch::AArch64 && Op.Output.Size > 0 &&
         Op.Output.Size <= 4) {
       auto *Ty = sizeToType(Op.Output.Size);
-      llvm::Value *L = GetInput(0);
-      llvm::Value *R = GetInput(1);
+      llvm::Value *L = GetRelocatableIdentityInput(0);
+      llvm::Value *R = GetRelocatableIdentityInput(1);
       if (L->getType() != Ty)
         L = L->getType()->getIntegerBitWidth() > Ty->getIntegerBitWidth()
                 ? Builder.CreateTrunc(L, Ty)
@@ -259,13 +293,15 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                 : Builder.CreateZExt(R, Ty);
       Result = Builder.CreateMul(L, R, "mul");
     } else {
-      auto [L, R] = Coerce(GetInput(0), GetInput(1));
+      auto [L, R] = Coerce(GetRelocatableIdentityInput(0),
+                           GetRelocatableIdentityInput(1));
       Result = Builder.CreateMul(L, R, "mul");
     }
     break;
   }
   case NdOp::INT_DIV: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = emitX86WideDivRem(Builder, L, R, /*IsSigned=*/false,
                                /*WantRem=*/false);
     if (!Result)
@@ -273,7 +309,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_SDIV: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = emitX86WideDivRem(Builder, L, R, /*IsSigned=*/true,
                                /*WantRem=*/false);
     if (!Result)
@@ -281,7 +318,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_REM: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = emitX86WideDivRem(Builder, L, R, /*IsSigned=*/false,
                                /*WantRem=*/true);
     if (!Result)
@@ -289,7 +327,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_SREM: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = emitX86WideDivRem(Builder, L, R, /*IsSigned=*/true,
                                /*WantRem=*/true);
     if (!Result)
@@ -297,8 +336,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_AND: {
-    auto *L = GetInput(0);
-    auto *R = GetInput(1);
+    auto *L = GetRelocatableIdentityInput(0);
+    auto *R = GetRelocatableIdentityInput(1);
     // Fix i128 AND masks created from 64-bit NdVar::cst: sign-extend
     // negative constants so bitmasks like 0xFFFFFFFFFFFF0000 become
     // 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFF0000 instead of being zero-extended.
@@ -327,19 +366,24 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_OR: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateOr(L, R, "or");
     break;
   }
   case NdOp::INT_XOR: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateXor(L, R, "xor");
     break;
   }
   case NdOp::INT_LEFT: {
-    // Shift operands are raw bit patterns.  In particular, an ARM MOVT high
-    // half must not become a pointer when it happens to equal a relocation VA.
-    auto [L, R] = Coerce(GetRawInput(0), GetRawInput(1));
+    // Shift operands are bit patterns, but an explicitly relocatable code
+    // occurrence must first become ptrtoint(function/blockaddress).  The
+    // occurrence-aware helper leaves ordinary ARM MOVT immediates raw even
+    // when their numeric value collides with a relocation VA.
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     unsigned Bits = L->getType()->getIntegerBitWidth();
     auto *Zero = llvm::ConstantInt::get(L->getType(), 0);
     auto *Limit = llvm::ConstantInt::get(R->getType(), Bits);
@@ -349,7 +393,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_RIGHT: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     unsigned Bits = L->getType()->getIntegerBitWidth();
     auto *Zero = llvm::ConstantInt::get(L->getType(), 0);
     auto *Limit = llvm::ConstantInt::get(R->getType(), Bits);
@@ -359,7 +404,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_ASHR: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     unsigned Bits = L->getType()->getIntegerBitWidth();
     auto *MaxShift = llvm::ConstantInt::get(R->getType(), Bits - 1);
     auto *Limit = llvm::ConstantInt::get(R->getType(), Bits);
@@ -369,50 +415,58 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_EQUAL: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateZExt(Builder.CreateICmpEQ(L, R, "eq"),
                                 llvm::Type::getInt8Ty(*Ctx));
     break;
   }
   case NdOp::INT_NOTEQUAL: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateZExt(Builder.CreateICmpNE(L, R, "ne"),
                                 llvm::Type::getInt8Ty(*Ctx));
     break;
   }
   case NdOp::INT_LESS: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateZExt(Builder.CreateICmpULT(L, R, "ult"),
                                 llvm::Type::getInt8Ty(*Ctx));
     break;
   }
   case NdOp::INT_SLESS: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateZExt(Builder.CreateICmpSLT(L, R, "slt"),
                                 llvm::Type::getInt8Ty(*Ctx));
     break;
   }
   case NdOp::INT_LESSEQUAL: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateZExt(Builder.CreateICmpULE(L, R, "ule"),
                                 llvm::Type::getInt8Ty(*Ctx));
     break;
   }
   case NdOp::INT_SLESSEQUAL: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateZExt(Builder.CreateICmpSLE(L, R, "sle"),
                                 llvm::Type::getInt8Ty(*Ctx));
     break;
   }
   case NdOp::INT_CARRY: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     auto *Sum = Builder.CreateAdd(L, R, "uadd");
     Result = Builder.CreateZExt(Builder.CreateICmpULT(Sum, L, "carry"),
                                 llvm::Type::getInt8Ty(*Ctx));
     break;
   }
   case NdOp::INT_SOVF: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     auto *Sum = Builder.CreateAdd(L, R);
     auto *XorAB = Builder.CreateXor(L, R);
     auto *XorSA = Builder.CreateXor(Sum, L);
@@ -428,7 +482,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_SBOR: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     auto *Diff = Builder.CreateSub(L, R);
     auto *XorAB = Builder.CreateXor(L, R);
     auto *XorDA = Builder.CreateXor(Diff, L);
@@ -444,37 +499,40 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   }
   case NdOp::INT_NEGATE:
   case NdOp::INT_NOT: {
-    Result = Builder.CreateNot(GetInput(0), "not");
+    Result = Builder.CreateNot(GetRelocatableIdentityInput(0), "not");
     break;
   }
   case NdOp::INT_NEG2: {
-    Result = Builder.CreateNeg(GetInput(0), "neg");
+    Result = Builder.CreateNeg(GetRelocatableIdentityInput(0), "neg");
     break;
   }
   case NdOp::BOOL_AND: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateAnd(L, R, "band");
     break;
   }
   case NdOp::BOOL_OR: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateOr(L, R, "bor");
     break;
   }
   case NdOp::BOOL_XOR: {
-    auto [L, R] = Coerce(GetInput(0), GetInput(1));
+    auto [L, R] =
+        Coerce(GetRelocatableIdentityInput(0), GetRelocatableIdentityInput(1));
     Result = Builder.CreateXor(L, R, "bxor");
     break;
   }
   case NdOp::BOOL_NOT: {
-    auto *Operand = GetInput(0);
+    auto *Operand = GetRelocatableIdentityInput(0);
     auto *Zero = llvm::ConstantInt::get(Operand->getType(), 0);
     auto *IsZero = Builder.CreateICmpEQ(Operand, Zero, "bnot");
     Result = Builder.CreateZExt(IsZero, Operand->getType());
     break;
   }
   case NdOp::INT_ZEXT: {
-    auto *Operand = GetInput(0);
+    auto *Operand = GetRelocatableIdentityInput(0);
     auto *DstTy = sizeToType(Op.Output.Size);
     unsigned SrcW = Operand->getType()->isIntegerTy()
                         ? Operand->getType()->getIntegerBitWidth()
@@ -489,7 +547,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_SEXT: {
-    auto *Operand = GetInput(0);
+    auto *Operand = GetRelocatableIdentityInput(0);
     auto *DstTy = sizeToType(Op.Output.Size);
     unsigned SrcW = Operand->getType()->isIntegerTy()
                         ? Operand->getType()->getIntegerBitWidth()
@@ -518,6 +576,10 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // address-of used as an ordinary address keeps its existing re-based
     // handling — symbolizing it in getVar instead double-relocates those uses.
     auto LaneInput = [&](uint8_t Idx) -> llvm::Value * {
+      if (Idx < Op.NumInputs)
+        if (llvm::Value *Code =
+                tryResolveCodeIdentityOperand(Op.Inputs[Idx], Builder))
+          return Code;
       if (Idx < Op.NumInputs && TargetArch == Arch::ARM && Img && CurMedFunc &&
           !Op.Inputs[Idx].isConst()) {
         bool SawLoad = false;
@@ -561,7 +623,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::SUBBYTES: {
-    auto *Src = GetInput(0);
+    auto *Src = GetRelocatableIdentityInput(0);
     if (Op.Output.Size == 0) {
       Result = Src;
       break;
@@ -607,7 +669,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::POPCOUNT: {
-    auto *Operand = GetInput(0);
+    auto *Operand = GetRelocatableIdentityInput(0);
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
         Mod, llvm::Intrinsic::ctpop, {Operand->getType()});
     Result = Builder.CreateCall(Fn, {Operand}, "popcount");
@@ -617,7 +679,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::LZCOUNT: {
-    auto *Operand = GetInput(0);
+    auto *Operand = GetRelocatableIdentityInput(0);
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
         Mod, llvm::Intrinsic::ctlz, {Operand->getType()});
     Result = Builder.CreateCall(
@@ -699,6 +761,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         IsGlobalData = true;
     }
     if (!Ptr) {
+      rejectEscapingAddressFragment(AddrVar, "an unresolved load address");
       auto *Addr = GetInput(0);
       Ptr = getMemoryPtr(Addr, ValTy, Builder);
     }
@@ -765,6 +828,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         IsGlobalData = true;
     }
     if (!Ptr) {
+      rejectEscapingAddressFragment(AddrVar, "an unresolved store address");
       auto *Addr = GetInput(0);
       Ptr = getMemoryPtr(Addr, Val->getType(), Builder);
     }
@@ -784,7 +848,20 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // a pointer-width value and only the conservative writable-data resolver
     // are considered (an ordinary integer store is never an address; a code
     // pointer is already symbolized at source).
-    if (Img && Op.NumInputs >= 2 && Val && Val->getType()->isIntegerTy()) {
+    const bool IsLocalValueTransport =
+        Op.NumInputs >= 2 &&
+        addressFragmentCanStayInLocalFrameSlot(Op.Inputs[0], Op.Inputs[1].Size);
+    if (Op.NumInputs >= 2 && !IsLocalValueTransport)
+      if (llvm::Value *Code = tryResolveCodeAddressValue(
+              Op.Inputs[1], /*RequireCodeRole=*/false, Builder))
+        Val = Code;
+    const ConstantProvenanceSummary StoredOccurrence =
+        Op.NumInputs >= 2 ? summarizeConstantProvenance(Op.Inputs[1])
+                          : ConstantProvenanceSummary{};
+    if (Op.NumInputs >= 2 && !IsLocalValueTransport)
+      rejectEscapingAddressFragment(Op.Inputs[1], "a stored value");
+    if (Img && Op.NumInputs >= 2 && Val && Val->getType()->isIntegerTy() &&
+        !StoredOccurrence.hasExplicitProvenance()) {
       const bool HasMatchingSlotReload =
           frameSlotHasMatchingKeyLoad(Op.Inputs[0]);
       bool FrameReSymbolized =
@@ -893,11 +970,12 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (!llvm::isPowerOf2_64(Op.Output.Size))
       llvm::report_fatal_error("atomic RMW size must be a power of two");
 
-    llvm::Value *Val = GetInput(1);
+    llvm::Value *Val = GetRelocatableIdentityInput(1);
     llvm::Type *ValTy = sizeToType(Op.Output.Size);
     if (Val->getType() != ValTy)
       Val = Builder.CreateIntCast(Val, ValTy, false, "atomic_rmw_val");
-    llvm::Value *Ptr = GetAtomicMemoryPtr(ValTy, Op.Output.Size);
+    llvm::Value *Ptr =
+        resolveAtomicMemoryPtr(Op.Inputs[0], Op.Output.Size, ValTy, Builder);
     llvm::AtomicRMWInst::BinOp RMWOp = Op.Opcode == NdOp::ATOMIC_ADD
                                            ? llvm::AtomicRMWInst::Add
                                            : llvm::AtomicRMWInst::Xchg;
@@ -920,15 +998,16 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           "atomic compare-exchange size must be a power of two");
 
     llvm::Type *ValTy = sizeToType(Op.Output.Size);
-    llvm::Value *Expected = GetInput(1);
-    llvm::Value *Desired = GetInput(2);
+    llvm::Value *Expected = GetRelocatableIdentityInput(1);
+    llvm::Value *Desired = GetRelocatableIdentityInput(2);
     if (Expected->getType() != ValTy)
       Expected =
           Builder.CreateIntCast(Expected, ValTy, false, "atomic_cmp_expected");
     if (Desired->getType() != ValTy)
       Desired =
           Builder.CreateIntCast(Desired, ValTy, false, "atomic_cmp_desired");
-    llvm::Value *Ptr = GetAtomicMemoryPtr(ValTy, Op.Output.Size);
+    llvm::Value *Ptr =
+        resolveAtomicMemoryPtr(Op.Inputs[0], Op.Output.Size, ValTy, Builder);
     auto *CmpXchg = Builder.CreateAtomicCmpXchg(
         Ptr, Expected, Desired, llvm::MaybeAlign(Op.Output.Size),
         toLLVMAtomicOrdering(Op.MemoryOrdering),
@@ -945,8 +1024,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   }
   case NdOp::SELECT: {
     auto *Cond = GetInput(0);
-    auto *TrueVal = GetInput(1);
-    auto *FalseVal = GetInput(2);
+    auto *TrueVal = GetRelocatableIdentityInput(1);
+    auto *FalseVal = GetRelocatableIdentityInput(2);
     auto [TV, FV] = Coerce(TrueVal, FalseVal);
     if (Cond->getType() != llvm::Type::getInt1Ty(*Ctx)) {
       auto *Zero = llvm::ConstantInt::get(Cond->getType(), 0);

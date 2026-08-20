@@ -107,7 +107,13 @@ TEST_F(AArch64_CallAbi, FixedPointerArgumentUsesFullWidthPhiAlias) {
   EXPECT_NE(CallLine.find("call i32 (ptr, i64, ptr, ...) @snprintf"),
             std::string::npos)
       << CallLine;
-  EXPECT_NE(CallLine.find("ptr %selmrgptr"), std::string::npos) << CallLine;
+  // Mach-O ADRP+ADD arms are occurrence-symbolized before the PHI.  The
+  // all-arm owner must consume that already-relocated merge directly instead
+  // of applying a second run-relative base.
+  EXPECT_NE(F.find(" = phi i64 [ ptrtoint"), std::string::npos) << F;
+  EXPECT_NE(F.find("%selmrgrawptr = inttoptr i64 %X2."), std::string::npos)
+      << F;
+  EXPECT_NE(CallLine.find("ptr %selmrgrawptr"), std::string::npos) << CallLine;
 }
 
 TEST_F(AArch64_CallAbi, ELFFixedPointerArgumentUsesFullWidthPhiAlias) {
@@ -116,10 +122,16 @@ TEST_F(AArch64_CallAbi, ELFFixedPointerArgumentUsesFullWidthPhiAlias) {
   auto R = liftToLLVMIRUnopt(callArgPhiELFObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  EXPECT_NE(R.out.find("%selmrgoff = sub i64 %X2."), std::string::npos)
+  EXPECT_NE(R.out.find(" = phi i64 [ ptrtoint"), std::string::npos) << R.out;
+  EXPECT_NE(R.out.find("%selmrgrawptr = inttoptr i64 %X2."), std::string::npos)
       << R.out;
-  EXPECT_NE(R.out.find("%selmrgptr = getelementptr"), std::string::npos)
-      << R.out;
+  const size_t Call = R.out.find("@snprintf(");
+  ASSERT_NE(Call, std::string::npos) << R.out;
+  const size_t LineBegin = R.out.rfind('\n', Call);
+  const size_t LineEnd = R.out.find('\n', Call);
+  const std::string CallLine =
+      R.out.substr(LineBegin + 1, LineEnd - LineBegin - 1);
+  EXPECT_NE(CallLine.find("ptr %selmrgrawptr"), std::string::npos) << CallLine;
 }
 
 TEST_F(AArch64_CallAbi, PEFixedPointerArgumentUsesFullWidthPhiAlias) {
@@ -128,7 +140,11 @@ TEST_F(AArch64_CallAbi, PEFixedPointerArgumentUsesFullWidthPhiAlias) {
   auto R = liftToLLVMIRUnopt(callArgPhiPEObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  EXPECT_NE(R.out.find("%selmrgrawptr = inttoptr i64 %X2."), std::string::npos)
+  // PE's direct PHI constants retain the original-VA model, so the same owner
+  // rebases the merged offset into the reconstructed rodata run.
+  EXPECT_NE(R.out.find("%selmrgoff = sub i64 %X2."), std::string::npos)
+      << R.out;
+  EXPECT_NE(R.out.find("%selmrgptr = getelementptr"), std::string::npos)
       << R.out;
   size_t Call = R.out.find("@snprintf(");
   ASSERT_NE(Call, std::string::npos) << R.out;
@@ -138,7 +154,7 @@ TEST_F(AArch64_CallAbi, PEFixedPointerArgumentUsesFullWidthPhiAlias) {
   EXPECT_NE(CallLine.find("call i32 (ptr, i64, ptr, ...) @snprintf"),
             std::string::npos)
       << CallLine;
-  EXPECT_NE(CallLine.find("ptr %selmrgrawptr"), std::string::npos) << CallLine;
+  EXPECT_NE(CallLine.find("ptr %selmrgptr"), std::string::npos) << CallLine;
 }
 
 TEST_F(AArch64_CallAbi, ExternalZeroArgPrototypeIsStableAcrossCallSites) {

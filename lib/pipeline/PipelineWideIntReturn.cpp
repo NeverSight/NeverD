@@ -13,12 +13,12 @@
 #include "PipelineReturnModelingDetail.h"
 
 #include "neverd/Common.h"
-#include "neverd/support/BinaryEncoding.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <cstring>
@@ -481,6 +481,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
         // widening restored afterwards.
         bool SelfWide = WideRetCallees.count(Result.MedFuncs[I].Entry) != 0;
         LowToMedConverter Reconv;
+        Reconv.setBinaryImage(&Img);
         Reconv.setCalleePopMap(&CalleePop);
         Reconv.setStackProbeSlots(&StackProbeSlots);
         Reconv.setI64Callees(&I64RetCallees);

@@ -36,7 +36,7 @@
 #include <limits>
 #include <map>
 #include <optional>
-#include <tuple>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -116,6 +116,163 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     return nullptr;
 
   CurMedFunc = &Func;
+
+  // A page fragment or truncated exact address is an incomplete relocation
+  // relation, not a runtime value.
+  // Build one function-wide taint closure, then audit every observable sink
+  // before opcode/ABI-specific lowering can bypass a local pointer helper.
+  // This is linear in the SSA graph (including arbitrarily deep chains) and
+  // cycle-safe, unlike repeating a bounded recursive walk for every load,
+  // store, atomic, branch, call argument, indirect target, and return.
+  using FragmentKey = AddressProvenanceVarKey;
+  auto FragmentVarKey = [](const MedVar &V) {
+    return addressProvenanceVarKey(V);
+  };
+  auto IsDirectFragment = [&](const MedVar &V) {
+    return V.isConst() && occurrenceHasAddressFragmentTaint(V);
+  };
+  std::map<FragmentKey, std::vector<FragmentKey>> FragmentUses;
+  AddressFragmentTaintFor = &Func;
+  AddressFragmentTaint.clear();
+  std::vector<FragmentKey> FragmentWork;
+  auto SeedOutput = [&](const MedVar &Output) {
+    if (!Output.isConst() && Output.Size > 0) {
+      const FragmentKey Key = FragmentVarKey(Output);
+      if (AddressFragmentTaint.insert(Key).second)
+        FragmentWork.push_back(Key);
+    }
+  };
+  auto AddFlow = [&](const MedVar &Input, const MedVar &Output) {
+    if (Output.isConst() || Output.Size == 0)
+      return;
+    if (IsDirectFragment(Input)) {
+      SeedOutput(Output);
+      return;
+    }
+    if (!Input.isConst())
+      FragmentUses[FragmentVarKey(Input)].push_back(FragmentVarKey(Output));
+  };
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const MedOp &Op : Block.Ops) {
+      // Track semantic value flow, not mere operand use.  A memory address
+      // does not taint the value loaded from it, a call target/argument does
+      // not taint the callee's return value, and SELECT's condition does not
+      // taint either value arm.  All ordinary arithmetic/forwarding operations
+      // remain conservative: if a fragment participates, the result stays
+      // tainted until LowToMed has replaced a canonical completion with an
+      // exact-address COPY.
+      switch (Op.Opcode) {
+      case NdOp::LOAD: {
+        std::vector<MedVar> Sources;
+        if (collectFrameReloadSources(Op, Sources))
+          for (const MedVar &Source : Sources)
+            AddFlow(Source, Op.Output);
+        break;
+      }
+      case NdOp::STORE:
+      case NdOp::ATOMIC_XCHG:
+      case NdOp::ATOMIC_ADD:
+      case NdOp::ATOMIC_CMPXCHG:
+      case NdOp::CALL:
+      case NdOp::INDIR_CALL:
+      case NdOp::RETURN:
+      case NdOp::BRANCH:
+      case NdOp::COND_BR:
+      case NdOp::INDIR_BR:
+        break;
+      case NdOp::INTRINSIC:
+        if (!atomicIntrinsicAddressInput(Op))
+          for (uint8_t I = 0; I < Op.NumInputs; ++I)
+            AddFlow(Op.Inputs[I], Op.Output);
+        break;
+      case NdOp::SELECT:
+        for (uint8_t I = 1; I < Op.NumInputs; ++I)
+          AddFlow(Op.Inputs[I], Op.Output);
+        break;
+      default:
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          AddFlow(Op.Inputs[I], Op.Output);
+        break;
+      }
+    }
+    for (const PhiNode &Phi : Block.Phis)
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        if (classifyPhiIncomingEdge(Phi, Pred) ==
+            PhiEdgeFeasibility::Infeasible)
+          continue;
+        AddFlow(Arg, Phi.Output);
+      }
+  }
+  while (!FragmentWork.empty()) {
+    const FragmentKey Current = FragmentWork.back();
+    FragmentWork.pop_back();
+    auto It = FragmentUses.find(Current);
+    if (It == FragmentUses.end())
+      continue;
+    for (const FragmentKey &User : It->second)
+      if (AddressFragmentTaint.insert(User).second)
+        FragmentWork.push_back(User);
+  }
+  auto RejectFragment = [&](const MedVar &V, const char *Sink) {
+    rejectEscapingAddressFragment(V, Sink);
+  };
+  for (const MedBlock &Block : Func.Blocks)
+    for (size_t OpIndex = 0; OpIndex < Block.Ops.size(); ++OpIndex) {
+      const MedOp &Op = Block.Ops[OpIndex];
+      // Audit only values that actually escape or affect observable control.
+      // Memory addresses are completed by their format/architecture-specific
+      // resolver and are rejected at the raw fallback site if that owner
+      // cannot prove them.
+      switch (Op.Opcode) {
+      case NdOp::STORE:
+        if (Op.NumInputs >= 2 && addressFragmentCanStayInLocalFrameSlot(
+                                     Op.Inputs[0], Op.Inputs[1].Size))
+          break;
+        [[fallthrough]];
+      case NdOp::ATOMIC_XCHG:
+      case NdOp::ATOMIC_ADD:
+        if (Op.NumInputs >= 2)
+          RejectFragment(Op.Inputs[1], "a stored value");
+        break;
+      case NdOp::ATOMIC_CMPXCHG:
+        for (uint8_t I = 1; I < Op.NumInputs; ++I)
+          RejectFragment(Op.Inputs[I], "an atomic stored value");
+        break;
+      case NdOp::INDIR_CALL:
+        if (Op.NumInputs >= 1)
+          RejectFragment(Op.Inputs[0], "an indirect call target");
+        [[fallthrough]];
+      case NdOp::CALL:
+        if (const MedCallInfo *CI = Func.findCall(Block.Id, OpIndex))
+          for (const MedVar &Arg : CI->Args)
+            RejectFragment(Arg, "a call argument");
+        break;
+      case NdOp::INDIR_BR:
+        if (Op.NumInputs >= 1)
+          RejectFragment(Op.Inputs[0], "an indirect branch target");
+        break;
+      case NdOp::COND_BR:
+        if (Op.NumInputs >= 2)
+          RejectFragment(Op.Inputs[1], "a branch condition");
+        break;
+      case NdOp::SELECT:
+        if (Op.NumInputs >= 1)
+          RejectFragment(Op.Inputs[0], "a select condition");
+        break;
+      case NdOp::INTRINSIC: {
+        const std::optional<uint8_t> AddressInput =
+            atomicIntrinsicAddressInput(Op);
+        for (uint8_t I = 1; I < Op.NumInputs; ++I)
+          if (!AddressInput || I != *AddressInput)
+            RejectFragment(Op.Inputs[I], "an intrinsic value argument");
+        break;
+      }
+      default:
+        break;
+      }
+    }
+  if (FatalDataPointerResolution)
+    return nullptr;
 
   auto *LLVMFunc = declareFunc(Func);
   emitExceptionMetadata(Func, *LLVMFunc);
@@ -748,12 +905,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         std::vector<std::pair<MedVar, llvm::Value *>> Pending;
         Pending.reserve(Copies.size());
         for (auto &[Dst, Src] : Copies) {
-          llvm::Value *Val;
-          if (Src.isConst()) {
-            Val = llvm::ConstantInt::get(sizeToType(Dst.Size),
-                                         static_cast<int64_t>(Src.ConstVal),
-                                         /*isSigned=*/true);
-          } else {
+          llvm::Value *Val = nullptr;
+          if (!Src.isConst()) {
             auto SrcKey = std::make_pair(Src.Id, Src.SSAVer);
             auto DstKey = std::make_pair(Dst.Id, Dst.SSAVer);
             llvm::AllocaInst *HiddenAlloca = nullptr;
@@ -773,10 +926,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
                 VarAllocs.erase(It);
               }
             }
-            Val = getVar(Src, InsBuilder);
+            Val = getPhiIncomingValue(Src, Dst.Size, InsBuilder);
             if (HiddenAlloca)
               VarAllocs[SrcKey] = HiddenAlloca;
-          }
+          } else
+            Val = getPhiIncomingValue(Src, Dst.Size, InsBuilder);
           Pending.emplace_back(Dst, Val);
         }
 

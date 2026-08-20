@@ -41,10 +41,42 @@ enum class VnodeSpace : uint8_t {
   STACK,
 };
 
+/// What an immediate means at this exact IR occurrence.  Numeric equality is
+/// not provenance: the same value can be a scalar, an incomplete page base,
+/// or a complete address in different operands.
+enum class ConstantAddressProvenance : uint8_t {
+  Unknown,
+  Scalar,
+  AddressFragment,
+  Address,
+  DataAddress,
+  CodeAddress,
+};
+
+constexpr bool isExactAddressProvenance(ConstantAddressProvenance Provenance) {
+  return Provenance == ConstantAddressProvenance::Address ||
+         Provenance == ConstantAddressProvenance::DataAddress ||
+         Provenance == ConstantAddressProvenance::CodeAddress;
+}
+
+constexpr bool isDataAddressProvenance(ConstantAddressProvenance Provenance) {
+  return Provenance == ConstantAddressProvenance::DataAddress;
+}
+
+constexpr bool isCodeAddressProvenance(ConstantAddressProvenance Provenance) {
+  return Provenance == ConstantAddressProvenance::CodeAddress;
+}
+
+constexpr bool isAddressProvenance(ConstantAddressProvenance Provenance) {
+  return isExactAddressProvenance(Provenance) ||
+         Provenance == ConstantAddressProvenance::AddressFragment;
+}
+
 struct NdVar {
   VnodeSpace Space = VnodeSpace::CONST;
   uint64_t Offset = 0;
   uint16_t Size = 0;
+  ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
 
   bool isConst() const { return Space == VnodeSpace::CONST; }
   bool isReg() const { return Space == VnodeSpace::REG; }
@@ -52,7 +84,8 @@ struct NdVar {
   bool isRam() const { return Space == VnodeSpace::RAM; }
 
   bool operator==(const NdVar &O) const {
-    return Space == O.Space && Offset == O.Offset && Size == O.Size;
+    return Space == O.Space && Offset == O.Offset && Size == O.Size &&
+           Provenance == O.Provenance;
   }
   bool operator!=(const NdVar &O) const { return !(*this == O); }
 
@@ -64,6 +97,22 @@ struct NdVar {
   }
   static NdVar cst(uint64_t Val, uint16_t Sz) {
     return {VnodeSpace::CONST, Val, Sz};
+  }
+  static NdVar scalar(uint64_t Val, uint16_t Sz) {
+    return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::Scalar};
+  }
+  static NdVar addressFragment(uint64_t Val, uint16_t Sz) {
+    return {VnodeSpace::CONST, Val, Sz,
+            ConstantAddressProvenance::AddressFragment};
+  }
+  static NdVar address(uint64_t Val, uint16_t Sz) {
+    return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::Address};
+  }
+  static NdVar dataAddress(uint64_t Val, uint16_t Sz) {
+    return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::DataAddress};
+  }
+  static NdVar codeAddress(uint64_t Val, uint16_t Sz) {
+    return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::CodeAddress};
   }
   static NdVar ram(uint64_t Addr, uint16_t Sz) {
     return {VnodeSpace::RAM, Addr, Sz};

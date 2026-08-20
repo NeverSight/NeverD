@@ -99,7 +99,7 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
         Imm19 -= 0x80000;
       const va_t LiteralVA = Insn->address + static_cast<uint64_t>(Imm19 * 4);
       NdVar EA = S.makeTemp(8);
-      S.emit(NdOp::COPY, EA, {NdVar::cst(LiteralVA, 8)});
+      S.emit(NdOp::COPY, EA, {NdVar::dataAddress(LiteralVA, 8)});
       EmitLoad(EA);
       break;
     }
@@ -129,9 +129,9 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
       // not part of the effective address (EA = [base]).  Only pre-index /
       // offset forms fold the displacement into the EA.
       if (M.mem.disp != 0 && !ARM64.post_index)
-        Acc(NdVar::cst(static_cast<uint64_t>(M.mem.disp), 8));
+        Acc(NdVar::scalar(static_cast<uint64_t>(M.mem.disp), 8));
       if (First)
-        Acc(NdVar::cst(0, 8));
+        Acc(NdVar::scalar(0, 8));
 
       EmitLoad(EA);
 
@@ -143,8 +143,9 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
           if (ARM64.op_count >= 3 && ARM64.operands[2].type == AARCH64_OP_IMM)
             WBOffset = ARM64.operands[2].imm;
           if (WBOffset != 0)
-            S.emit(NdOp::INT_ADD, BaseReg,
-                   {BaseReg, NdVar::cst(static_cast<uint64_t>(WBOffset), 8)});
+            S.emit(
+                NdOp::INT_ADD, BaseReg,
+                {BaseReg, NdVar::scalar(static_cast<uint64_t>(WBOffset), 8)});
         } else {
           S.emit(NdOp::COPY, BaseReg, {EA});
         }
@@ -179,17 +180,17 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
       }
       // Post-index: displacement is the write-back amount, not part of the EA.
       if (M.mem.disp != 0 && !ARM64.post_index)
-        Acc(NdVar::cst(static_cast<uint64_t>(M.mem.disp), 8));
+        Acc(NdVar::scalar(static_cast<uint64_t>(M.mem.disp), 8));
     }
     if (First)
-      Acc(NdVar::cst(0, 8));
+      Acc(NdVar::scalar(0, 8));
 
     NdVar Val1 = S.makeTemp(RegSize);
     S.emit(NdOp::LOAD, Val1, {EA});
     S.emit(NdOp::COPY, Dst1, {Val1});
 
     NdVar EA2 = S.makeTemp(8);
-    S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(RegSize, 8)});
+    S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::scalar(RegSize, 8)});
     NdVar Val2 = S.makeTemp(RegSize);
     S.emit(NdOp::LOAD, Val2, {EA2});
     S.emit(NdOp::COPY, Dst2, {Val2});
@@ -204,7 +205,7 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
           WBOffset = ARM64.operands[3].imm;
         if (WBOffset != 0)
           S.emit(NdOp::INT_ADD, BaseReg,
-                 {BaseReg, NdVar::cst(static_cast<uint64_t>(WBOffset), 8)});
+                 {BaseReg, NdVar::scalar(static_cast<uint64_t>(WBOffset), 8)});
       } else {
         S.emit(NdOp::COPY, BaseReg, {EA});
       }
@@ -236,7 +237,7 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
     }
     if (StoreSz < Src.Size) {
       NdVar Trunc = S.makeTemp(StoreSz);
-      S.emit(NdOp::SUBBYTES, Trunc, {Src, NdVar::cst(0, 4)});
+      S.emit(NdOp::SUBBYTES, Trunc, {Src, NdVar::scalar(0, 4)});
       Src = Trunc;
     }
 
@@ -265,9 +266,9 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
         Acc(emitMemIndex(S, M));
       // Post-index: displacement is the write-back amount, not part of the EA.
       if (M.mem.disp != 0 && !ARM64.post_index)
-        Acc(NdVar::cst(static_cast<uint64_t>(M.mem.disp), 8));
+        Acc(NdVar::scalar(static_cast<uint64_t>(M.mem.disp), 8));
       if (First)
-        Acc(NdVar::cst(0, 8));
+        Acc(NdVar::scalar(0, 8));
       S.emit(NdOp::STORE, {}, {EA, Src});
 
       if (Insn->detail->writeback && M.mem.base != AARCH64_REG_INVALID) {
@@ -278,8 +279,9 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
           if (ARM64.op_count >= 3 && ARM64.operands[2].type == AARCH64_OP_IMM)
             WBOffset = ARM64.operands[2].imm;
           if (WBOffset != 0)
-            S.emit(NdOp::INT_ADD, BaseReg,
-                   {BaseReg, NdVar::cst(static_cast<uint64_t>(WBOffset), 8)});
+            S.emit(
+                NdOp::INT_ADD, BaseReg,
+                {BaseReg, NdVar::scalar(static_cast<uint64_t>(WBOffset), 8)});
         } else {
           S.emit(NdOp::COPY, BaseReg, {EA});
         }
@@ -310,12 +312,12 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
       }
       // Post-index: displacement is the write-back amount, not part of the EA.
       if (M.mem.disp != 0 && !ARM64.post_index)
-        Acc(NdVar::cst(static_cast<uint64_t>(M.mem.disp), 8));
+        Acc(NdVar::scalar(static_cast<uint64_t>(M.mem.disp), 8));
       if (First)
-        Acc(NdVar::cst(0, 8));
+        Acc(NdVar::scalar(0, 8));
       S.emit(NdOp::STORE, {}, {EA, Src1});
       NdVar EA2 = S.makeTemp(8);
-      S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(RegSize, 8)});
+      S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::scalar(RegSize, 8)});
       S.emit(NdOp::STORE, {}, {EA2, Src2});
 
       if (Insn->detail->writeback && M.mem.base != AARCH64_REG_INVALID) {
@@ -326,8 +328,9 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
           if (ARM64.op_count >= 4 && ARM64.operands[3].type == AARCH64_OP_IMM)
             WBOffset = ARM64.operands[3].imm;
           if (WBOffset != 0)
-            S.emit(NdOp::INT_ADD, BaseReg,
-                   {BaseReg, NdVar::cst(static_cast<uint64_t>(WBOffset), 8)});
+            S.emit(
+                NdOp::INT_ADD, BaseReg,
+                {BaseReg, NdVar::scalar(static_cast<uint64_t>(WBOffset), 8)});
         } else {
           S.emit(NdOp::COPY, BaseReg, {EA});
         }

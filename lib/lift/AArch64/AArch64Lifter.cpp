@@ -203,9 +203,9 @@ NdVar AArch64Lifter::operandRead(LiftState &S, const cs_aarch64_op &Op) {
     if (Op.mem.index != AARCH64_REG_INVALID)
       Acc(emitMemIndex(S, Op));
     if (Op.mem.disp != 0)
-      Acc(NdVar::cst(static_cast<uint64_t>(Op.mem.disp), 8));
+      Acc(NdVar::scalar(static_cast<uint64_t>(Op.mem.disp), 8));
     if (First)
-      Acc(NdVar::cst(0, 8));
+      Acc(NdVar::scalar(0, 8));
 
     uint16_t Sz = 8;
     NdVar Result = S.makeTemp(Sz);
@@ -344,23 +344,21 @@ void AArch64Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
     // O.Output.* after emit() would then be a use-after-free (it surfaced as a
     // garbage offset equal to the DenseSet sentinel, tripping an assert).
     uint64_t OutOff = Ops[K].Output.Offset;
-    bool IsSelfWspCopy =
-        Ops[K].Opcode == NdOp::COPY && Ops[K].NumInputs >= 1 &&
-        Ops[K].Inputs[0].isReg() &&
-        Ops[K].Inputs[0].Offset == a64reg::SP &&
-        Ops[K].Inputs[0].Size == 4;
+    bool IsSelfWspCopy = Ops[K].Opcode == NdOp::COPY && Ops[K].NumInputs >= 1 &&
+                         Ops[K].Inputs[0].isReg() &&
+                         Ops[K].Inputs[0].Offset == a64reg::SP &&
+                         Ops[K].Inputs[0].Size == 4;
     if (Ops[K].Output.isReg() && Ops[K].Output.Size == 4 &&
         IsZeroExtendingWOffset(OutOff) && !XWritten.count(OutOff)) {
       if (OutOff == a64reg::SP) {
         if (IsSelfWspCopy)
-          S.emitIntrinsic(Intrinsic::A64_WspZeroExtend,
-                          NdVar::reg(OutOff, 8), {});
+          S.emitIntrinsic(Intrinsic::A64_WspZeroExtend, NdVar::reg(OutOff, 8),
+                          {});
         else
           S.emitIntrinsic(Intrinsic::A64_WspWrite, NdVar::reg(OutOff, 8),
                           {NdVar::reg(OutOff, 4)});
       } else {
-        S.emit(NdOp::INT_ZEXT, NdVar::reg(OutOff, 8),
-               {NdVar::reg(OutOff, 4)});
+        S.emit(NdOp::INT_ZEXT, NdVar::reg(OutOff, 8), {NdVar::reg(OutOff, 4)});
       }
       XWritten.insert(OutOff);
     }

@@ -309,7 +309,11 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     if (!Def || Def->NumInputs < 1)
       return false;
     auto stableImmediate = [&](const MedVar &Input) {
-      if (!Input.isConst() ||
+      if (!Input.isConst())
+        return false;
+      if (Input.Provenance == ConstantAddressProvenance::Scalar)
+        return true;
+      if (isAddressProvenance(Input.Provenance) ||
           getVarMayRelocateConstant(Input.ConstVal, Input.Size))
         return false;
       return !hasObjectDataProvenance(Input.ConstVal);
@@ -339,49 +343,6 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   };
   if (isPureFrameAddress(AddrVar, 0, {}))
     return nullptr;
-
-  // A loader-proven table base plus an independently proven scalar offset is
-  // owned by the specialized indexed/pointer-table resolver.  The scalar
-  // proof is deliberately all-path: a recurrent pointer PHI, mapped data
-  // constant, LOAD, or unknown PHI edge keeps the complete address in the
-  // multi-base audit below instead of being silently treated as an index.
-  if (const MedOp *Top = findDef(AddrVar);
-      Top && Top->NumInputs >= 2 &&
-      (Top->Opcode == NdOp::INT_ADD || Top->Opcode == NdOp::INT_SUB)) {
-    auto probeBase = [&](const MedVar &Input) -> std::optional<uint64_t> {
-      uint64_t Base = 0;
-      bool HaveBase = false;
-      std::vector<MedVar> Terms;
-      if (!collectIndexedGlobalBase(Input, Base, HaveBase, Terms, /*Depth=*/0,
-                                    /*FailClosed=*/false) ||
-          !HaveBase)
-        return std::nullopt;
-      return Base;
-    };
-    auto loaderProvesTableBase = [&](uint64_t Base) {
-      if (Img->RelocDataAddrs.count(Base) || Img->RodataAnchorSeg.count(Base) ||
-          Img->RelCodeTableAnchors.count(Base))
-        return true;
-      const Segment *Seg = Img->getSegmentFor(Base);
-      if (!Seg)
-        return false;
-      auto inSegment = [&](const std::set<uint64_t> &Slots) {
-        auto It = Slots.lower_bound(Seg->VA);
-        return It != Slots.end() && *It < Seg->VA + Seg->Data.size();
-      };
-      return inSegment(Img->DataPtrRelocSlots) ||
-             inSegment(Img->RelDataPtrRelocSlots);
-    };
-    auto Left = probeBase(Top->Inputs[0]);
-    auto Right = probeBase(Top->Inputs[1]);
-    if (Left && !Right && loaderProvesTableBase(*Left) &&
-        valueIsStableAddressOffset(Top->Inputs[1]))
-      return nullptr;
-    if (Top->Opcode == NdOp::INT_ADD && Right && !Left &&
-        loaderProvesTableBase(*Right) &&
-        valueIsStableAddressOffset(Top->Inputs[0]))
-      return nullptr;
-  }
 
   // Analyze the complete address expression.  The outer ADD/SUB is part of the
   // proof: accepting one PHI side while silently treating another pointer PHI,
@@ -857,6 +818,13 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         return Nested;
     return std::nullopt;
   };
+  auto markTableShapedInvalidFold = [&](const MedVar &Value) {
+    if (auto Result = traceValueVA(Value);
+        Result && isReadOnlyTableBase(*Result)) {
+      SawInvalidPointerExpression = true;
+      SawTableShapedInvalidExpression = true;
+    }
+  };
   std::function<BaseProof(const MedVar &, int, SeenSet)> walk =
       [&](const MedVar &V, int Depth, SeenSet Seen) -> BaseProof {
     if (RemainingAuditNodes == 0) {
@@ -870,7 +838,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     if (V.isConst()) {
       if (isReadOnlyTableBase(V.ConstVal)) {
         Bases.insert(V.ConstVal);
-        bool Symbolized = getVarSymbolizesDataConstant(V.ConstVal, V.Size);
+        bool Symbolized = dataOccurrenceSymbolizes(V);
         SawRawOriginalBase |= !Symbolized;
         SawSymbolizedBase |= Symbolized;
         return BaseProof::HasBase;
@@ -879,7 +847,10 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       // .text range or with a linked ELF's header PT_LOAD.  It remains a scalar
       // unless getVar itself will relocate it; exact object data is still
       // independent address provenance even when kept raw.
-      if (getVarMayRelocateConstant(V.ConstVal, V.Size) ||
+      if (V.Provenance == ConstantAddressProvenance::Scalar)
+        return BaseProof::NoBase;
+      if (isAddressProvenance(V.Provenance) ||
+          getVarMayRelocateConstant(V.ConstVal, V.Size) ||
           hasObjectDataProvenance(V.ConstVal)) {
         SawInvalidPointerExpression = true;
         // This resolver owns data-table provenance, not executable-relative
@@ -929,8 +900,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         // A non-constant arm is not automatically relocatable: low-VA COPYs
         // remain original numeric addresses. Classify it with the exact rule
         // getVar itself uses, while literal-pool arithmetic always stays raw.
-        bool Symbolized =
-            !SawLoad && getVarSymbolizesDataConstant(*C, OriginSize);
+        bool Symbolized = !SawLoad && dataOccurrenceSymbolizes(V);
         SawRawOriginalBase |= !Symbolized;
         SawSymbolizedBase |= Symbolized;
         return BaseProof::HasBase;
@@ -969,7 +939,10 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
             return BaseProof::Invalid;
           }
           Bases.insert(Arg.ConstVal);
-          SawRawOriginalBase = true;
+          bool Symbolized = dataOccurrenceSymbolizes(
+              Arg, /*DirectPhiConstantBypassesGetVar=*/true);
+          SawRawOriginalBase |= !Symbolized;
+          SawSymbolizedBase |= Symbolized;
           SawBaseArm = true;
           continue;
         }
@@ -1072,6 +1045,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
           (L == BaseProof::HasBase && R == BaseProof::HasBase)) {
         if (L != BaseProof::NoBase || R != BaseProof::NoBase)
           SawInvalidPointerExpression = true;
+        markTableShapedInvalidFold(V);
         return BaseProof::Invalid;
       }
       if (L == BaseProof::HasBase || R == BaseProof::HasBase) {
@@ -1080,6 +1054,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         if (Def->Output.Size == 0 || PointerInput.Size == 0 ||
             Def->Output.Size < PointerInput.Size) {
           SawInvalidPointerExpression = true;
+          markTableShapedInvalidFold(V);
           return BaseProof::Invalid;
         }
         return BaseProof::HasBase;
@@ -1100,17 +1075,19 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       if (L == BaseProof::Invalid || R == BaseProof::Invalid) {
         if (L != BaseProof::NoBase || R != BaseProof::NoBase)
           SawInvalidPointerExpression = true;
+        markTableShapedInvalidFold(V);
         return BaseProof::Invalid;
       }
       if (L == BaseProof::HasBase && R == BaseProof::NoBase) {
         if (Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
             Def->Output.Size < Def->Inputs[0].Size) {
           SawInvalidPointerExpression = true;
+          markTableShapedInvalidFold(V);
           return BaseProof::Invalid;
         }
         return BaseProof::HasBase;
       }
-      if (L == BaseProof::NoBase && R == BaseProof::NoBase)
+      if (L == BaseProof::NoBase && R == BaseProof::NoBase) {
         if (auto Result = traceValueVA(V);
             Result && isReadOnlyTableBase(*Result)) {
           SawInvalidPointerExpression = true;
@@ -1119,7 +1096,9 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         } else {
           return BaseProof::NoBase;
         }
+      }
       SawInvalidPointerExpression = true;
+      markTableShapedInvalidFold(V);
       return BaseProof::Invalid;
     }
     case NdOp::INT_AND:
@@ -1235,6 +1214,18 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     }
   };
   BaseProof Proof = walk(BaseVar, 0, {});
+  // An invalid relocatable leaf can be hidden by constant arithmetic whose
+  // old-image value happens to fold back into a read-only table.  The child
+  // walk intentionally rejects that leaf before recording a raw table base;
+  // classify the complete expression as table-shaped here so it cannot fall
+  // through to a narrower resolver and be emitted with a stale link-time
+  // delta.  Keeping this at the root covers ADD/SUB and destructive bitwise
+  // forms uniformly.
+  if (Proof == BaseProof::Invalid && SawInvalidPointerExpression &&
+      Bases.empty() && !SawTableShapedInvalidExpression)
+    if (auto Result = traceValueVA(BaseVar);
+        Result && isReadOnlyTableBase(*Result))
+      SawTableShapedInvalidExpression = true;
   if (Proof == BaseProof::Invalid && !AuditIncomplete &&
       !SawTableShapedInvalidExpression && PredicatedAccessGuard) {
     SawPredicatedLiteralLoad = false;

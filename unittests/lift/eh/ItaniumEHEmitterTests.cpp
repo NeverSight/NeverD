@@ -140,6 +140,58 @@ TEST(ItaniumEHEmitter, PreservesAdaAndDAddressFormPersonalities) {
   }
 }
 
+TEST(ItaniumEHEmitter,
+     ExceptionalPhiKeepsUntaggedDirectConstantOnOrdinaryRawModel) {
+  constexpr va_t FunctionVA = 0x100001000;
+  constexpr va_t MayThrowVA = 0x100001100;
+  constexpr va_t DataVA = 0x100003000;
+
+  MedFunc Func = makeSingleCallCleanupFunction("exceptional_phi_raw_constant",
+                                               FunctionVA, MayThrowVA);
+  MedVar PhiOutput;
+  PhiOutput.Kind = MedVar::Temp;
+  PhiOutput.TheArch = Arch::AArch64;
+  PhiOutput.Id = 100;
+  PhiOutput.SSAVer = 1;
+  PhiOutput.Size = 8;
+  PhiNode Phi;
+  Phi.Output = PhiOutput;
+  Phi.Args.emplace_back(0, MedVar::makeConst(DataVA, 8));
+  Func.Blocks[1].Phis.push_back(std::move(Phi));
+
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Bits = Bitness::Bits64;
+  Segment Rodata;
+  Rodata.Name = ".rodata";
+  Rodata.VA = DataVA;
+  Rodata.Size = 0x40;
+  Rodata.FileSz = Rodata.Size;
+  Rodata.Flags = SegmentFlags::Readable;
+  Rodata.Data.resize(Rodata.Size);
+  Image.Segments.push_back(std::move(Rodata));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Func}, Context, "exceptional-phi-raw-constant", Arch::AArch64,
+      {{MayThrowVA, "may_throw"}}, &Image, BinaryFormat::ELF);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Emitted = Module->getFunction(Func.Name);
+  ASSERT_NE(Emitted, nullptr);
+
+  bool SawRawExceptionalCopy = false;
+  for (const llvm::BasicBlock &Block : *Emitted)
+    for (const llvm::Instruction &Instruction : Block)
+      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
+        if (const auto *Value =
+                llvm::dyn_cast<llvm::ConstantInt>(Store->getValueOperand()))
+          SawRawExceptionalCopy |= Value->getZExtValue() == DataVA;
+  EXPECT_TRUE(SawRawExceptionalCopy)
+      << "exceptional and ordinary PHI edges must share the direct-constant "
+         "raw-address model";
+}
+
 TEST(ItaniumEHEmitter, UsesTheOriginalIndirectTypeInfoSlotForCatchClauses) {
   constexpr va_t FunctionVA = 0x100001000;
   constexpr va_t MayThrowVA = 0x100001100;

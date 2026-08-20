@@ -50,6 +50,7 @@
 #include "llvm/IR/Module.h"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -272,6 +273,18 @@ private:
   // AArch64 value-producing INTRINSIC
   llvm::Value *emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                          llvm::IRBuilder<> &Builder);
+  /// Return the address operand of an intrinsic whose backend owns complete
+  /// relocation-aware memory resolution.  Function-wide fragment auditing
+  /// uses this same role map so stored values remain escape sinks while the
+  /// address is deferred to the specialized memory owner.
+  std::optional<uint8_t> atomicIntrinsicAddressInput(const MedOp &Op) const;
+  /// Shared memory owner for generic and AArch64 intrinsic atomics.  It tries
+  /// exact/global and writable-run models before allowing a numeric fallback;
+  /// an incomplete address fragment may never cross that fallback.
+  llvm::Value *resolveAtomicMemoryPtr(const MedVar &AddressVar,
+                                      uint16_t AccessBytes,
+                                      llvm::Type *AccessTy,
+                                      llvm::IRBuilder<> &Builder);
   void emitVoidInlineAsm(const char *Mnemonic, const MedOp &Op,
                          llvm::IRBuilder<> &Builder);
 
@@ -283,12 +296,72 @@ private:
   llvm::Type *sizeToType(uint16_t Size);
   llvm::Type *mapNdtype(const TypeRef &Ty);
   llvm::Value *getVar(const MedVar &V, llvm::IRBuilder<> &Builder);
+  /// Materialize a constant copied along a PHI edge. Ordinary and exceptional
+  /// edges must share this policy: untagged legacy constants remain raw,
+  /// while an occurrence carrying architectural address origin goes through
+  /// getVar and retains its relocatable identity.
+  llvm::Value *getPhiIncomingConstant(const MedVar &V, uint16_t OutputSize,
+                                      llvm::IRBuilder<> &Builder);
+
+  /// Materialize one PHI-edge value using the same occurrence policy for
+  /// ordinary and exceptional edges.  Exact code identities are rebuilt at
+  /// the edge, while already relocation-aware dynamic relations keep their
+  /// emitted SSA value.
+  llvm::Value *getPhiIncomingValue(const MedVar &V, uint16_t OutputSize,
+                                   llvm::IRBuilder<> &Builder);
   /// Return the exact primary data-address model getVar applies before
   /// materializing a constant: true means ptrtoint(@global), false means the
   /// original numeric VA unless trusted pointer intent requires emission to
   /// fail closed. Address resolvers use this same predicate so a
   /// forwarded/COPY arm is never classified merely by its SSA shape.
   bool getVarSymbolizesDataConstant(uint64_t Val, uint16_t Size) const;
+  /// Return whether the concrete occurrence \p V is emitted through a data
+  /// global. Unlike the legacy value classifier above, this preserves the
+  /// architectural address-origin bit and the special direct-PHI constant
+  /// path used by emitFunc. Only bit-preserving, same-width forwarders are
+  /// followed; PHIs, selects, loads, arithmetic, and width changes remain the
+  /// responsibility of their structural provenance walkers.
+  bool
+  dataOccurrenceSymbolizes(const MedVar &V,
+                           bool DirectPhiConstantBypassesGetVar = false) const;
+  /// Occurrence-aware counterpart of getVarMayRelocateConstant for audits
+  /// that care about either a data or function symbol. Direct untagged PHI
+  /// constants retain the raw edge-copy model; tagged constants and ordinary
+  /// operation inputs follow the same data/code precedence as getVar.
+  bool constantOccurrenceMayRelocate(
+      const MedVar &V, bool DirectPhiConstantBypassesGetVar = false) const;
+  struct ConstantProvenanceSummary {
+    enum class ValueModel : uint8_t {
+      Unknown,
+      Scalar,
+      AddressFragment,
+      Address,
+      Mixed,
+    };
+    ValueModel Model = ValueModel::Unknown;
+    bool SawAddressFragment = false;
+
+    bool hasExplicitProvenance() const { return Model != ValueModel::Unknown; }
+  };
+  /// Conservatively summarize explicit constant provenance through
+  /// pointer/value-preserving SSA, merges, arithmetic, and proven frame
+  /// reloads.  Escape sinks use this before any legacy value-global resolver:
+  /// explicit values have already been emitted according to their occurrence,
+  /// while an incomplete page fragment must never escape as a frozen VA.
+  ConstantProvenanceSummary summarizeConstantProvenance(const MedVar &V) const;
+  /// Query the exact function-wide address-fragment taint closure built before
+  /// body emission. This is the authoritative sink policy; unlike the richer
+  /// provenance summary it has no recursion budget and therefore cannot lose
+  /// an incomplete page/truncated-address relation (or invent one) on a deep
+  /// forwarding chain.
+  bool occurrenceHasAddressFragmentTaint(const MedVar &V) const;
+  /// A page-base fragment may be spilled only to a canonical, nonescaping
+  /// synthetic-frame slot so a later address-forming use can complete it.
+  /// Every other STORE of the fragment is a true value escape.
+  bool addressFragmentCanStayInLocalFrameSlot(const MedVar &SlotAddr,
+                                              uint16_t StoredSize) const;
+  bool rejectEscapingAddressFragment(const MedVar &V,
+                                     const char *SinkDescription) const;
   /// The non-recursive core of getVarSymbolizesDataConstant.  This excludes
   /// induction-string closure so the induction recognizer can ask how a
   /// constant would otherwise be emitted without recursively justifying
@@ -305,6 +378,10 @@ private:
   /// such a leaf: comparisons on original image VAs are not invariant after
   /// the rebuilt object is linked at a different address.
   bool getVarMayRelocateConstant(uint64_t Val, uint16_t Size) const;
+  /// Materialize one operand of a proven address relation without changing how
+  /// another occurrence of the same numeric constant is classified.
+  llvm::Value *materializeDataRelationConstant(uint64_t Val, uint16_t Size,
+                                               llvm::IRBuilder<> &Builder);
   void setVar(const MedVar &V, llvm::Value *Val, llvm::IRBuilder<> &Builder);
 
   /// Lower an INDIR_BR with a resolved jump table into an LLVM switch on the
@@ -679,10 +756,24 @@ private:
   /// unknown. This is control-feasibility evidence, never a value rewrite.
   std::optional<uint64_t> traceControlConst(const MedVar &V) const;
 
+  /// Conservative upper bound on whether getVar may replace a constant with a
+  /// rebuilt pointer. This predicate is intentionally independent of PHI/CFG
+  /// provenance so feasible-edge construction cannot recursively depend on
+  /// the graph it is still building. False positives merely retain both CFG
+  /// edges; false negatives would make control pruning unsound.
+  bool controlConstantMayRelocate(const MedVar &V) const;
+
+  enum class FeasibleEdgeCacheState { Empty, Building, Ready };
+
   /// Build the ordinary/exceptional CFG edges reachable from the function
   /// entry while pruning only COND_BR edges whose condition folds through
-  /// traceControlConst. Unknown conditions retain both edges.
+  /// traceControlConst. Unknown conditions retain both edges. The result is
+  /// assembled privately and published only after the complete walk.
   void ensureFeasibleEdgeCache() const;
+
+  /// Drop every semantic memo whose result can transitively depend on PHI-edge
+  /// feasibility. Both cache contents and per-function owners are reset.
+  void invalidateFeasibleEdgeDependentCaches() const;
 
   /// Index PHI ownership and structural CFG edges for exact incoming-edge
   /// classification without rescanning every block for every proof query.
@@ -964,6 +1055,10 @@ private:
   /// lookup-or-compute wrappers around these *Impl bodies (which hold the
   /// unchanged analysis).
   void ensureConstClassCache() const;
+  /// Resolve one occurrence-sensitive address operand through bit-preserving
+  /// COPYs. Numeric membership in a mapped segment is insufficient: the leaf
+  /// must carry architectural address origin or exact loader provenance.
+  bool resolveMaterializableDataAddress(const MedVar &V, uint64_t &Value) const;
   bool constUsedAsPointerImpl(uint64_t Val) const;
   bool constValueUsedAsIntegerImpl(uint64_t Val) const;
 
@@ -1021,6 +1116,7 @@ private:
   /// model. Gated (by the caller) on \p Val being used as a pointer and NOT a
   /// walked base, so a colliding integer or an induction base is never pulled
   /// in.
+  bool mayBeWritableSelectPeerCycleFree(uint64_t Val) const;
   bool symbolizesSelectPeer(uint64_t Val) const;
 
   /// True when \p Val is the common base of a pointer DIFFERENCE — an INT_SUB
@@ -1058,6 +1154,10 @@ private:
   /// them UNIFORMLY to the one canonical rodata run global and the induction
   /// resolver emit a plain load through that consistent recompiled pointer.
   /// x86-64/AArch64 keep the base a bare origVA constant and never reach this.
+  /// Cycle-free byte/segment predicate shared by induction discovery and
+  /// conservative control-flow relocation classification.
+  bool isCleanRodataStringAddress(uint64_t Val) const;
+
   /// Result cached per function (InductionBasesFor / InductionBaseVAs).
   bool isInductionRodataStringBase(uint64_t Val) const;
 
@@ -1072,6 +1172,47 @@ private:
   /// entry.
   llvm::Value *tryResolveCodeRefValue(const MedVar &V,
                                       llvm::IRBuilder<> &Builder);
+
+  /// True when \p Opcode emits every code-identity-bearing operand through
+  /// tryResolveCodeIdentityOperand.  The code-value proof uses the same policy
+  /// to distinguish relocation-aware arithmetic from an unsupported operation
+  /// that would otherwise freeze an original function VA.
+  bool operationUsesRelocatableCodeIdentity(NdOp Opcode) const;
+
+  /// Return true when \p V's pointer-preserving value graph contains an
+  /// occurrence that names an emitted function.  Unlike generic executable-
+  /// segment membership, this never treats an architectural PC/interior label
+  /// used for switch arithmetic as a function identity.
+  bool codeIdentityOccurrenceMayRelocate(const MedVar &V) const;
+
+  /// Materialize a function identity used as an integer/arithmetic operand.
+  /// Null means the operand has no such occurrence and its normal owner should
+  /// emit it.  Mixed or conflicting graphs fail closed through
+  /// tryResolveCodeAddressValue rather than leaking one original VA.
+  llvm::Value *tryResolveCodeIdentityOperand(const MedVar &V,
+                                             llvm::IRBuilder<> &Builder);
+
+  /// Materialize a code-bearing address occurrence at an observable value use
+  /// (return, stored value, call argument, or indirect-call target).  Generic
+  /// ADR/LEA values stay numeric in getVar because arithmetic and literal data
+  /// may also live in executable sections; the use site supplies the missing
+  /// role here.  Pointer-preserving forwarders and feasible PHI/SELECT arms
+  /// must converge to one emitted function entry.  A mixed, conflicting, or
+  /// otherwise unresolved value that contains an explicit code-address origin
+  /// fails closed instead of leaking an original VA.  When \p RequireCodeRole
+  /// is false, values with no explicit code origin are left to the existing
+  /// data/scalar owner; when true, an explicit non-code occurrence is rejected
+  /// while an ordinary dynamic/unknown function pointer may still fall back.
+  llvm::Value *tryResolveCodeAddressValue(const MedVar &V, bool RequireCodeRole,
+                                          llvm::IRBuilder<> &Builder);
+
+  /// Resolve an exact address occurrence at an indirect-call use site.  A
+  /// role-neutral ADR/LEA value is deliberately left numeric by generic
+  /// getVar because it may be a switch/literal arithmetic base; the call site
+  /// provides the missing code role and may safely bind a converged function
+  /// entry without reintroducing eager BlockAddress materialization.
+  llvm::Value *tryResolveIndirectCallTarget(const MedVar &V,
+                                            llvm::IRBuilder<> &Builder);
 
   /// Resolve an original executable VA in an address-value context.  Callable
   /// entries become llvm::Function constants; relocation-proven labels inside
@@ -1273,7 +1414,7 @@ private:
   mutable std::set<uint64_t> InductionBaseVAs;
 
   using AddressProvenanceVarKey =
-      std::tuple<int, int, int, int, int, uint16_t, uint64_t>;
+      std::tuple<int, int, int, int, int, uint16_t, uint64_t, int>;
   struct IndexedGlobalBaseProof {
     bool Proven = false;
     uint64_t Base = 0;
@@ -1284,8 +1425,9 @@ private:
   };
 
   /// Exact value identity used by the provenance caches. Constants include
-  /// their payload and width; register/parameter/stack values include their
-  /// physical payload in addition to SSA identity.
+  /// their payload, width, and occurrence-sensitive relocation provenance;
+  /// register/parameter/stack values include their physical payload in
+  /// addition to SSA identity.
   static AddressProvenanceVarKey addressProvenanceVarKey(const MedVar &V) {
     uint64_t Payload = 0;
     switch (V.Kind) {
@@ -1308,8 +1450,16 @@ private:
             V.Id,
             V.SSAVer,
             V.Size,
-            Payload};
+            Payload,
+            static_cast<int>(V.Provenance)};
   }
+
+  // Exact, cycle-safe propagation of incomplete architectural address
+  // fragments for the function currently being emitted. Observable sinks and
+  // ABI return recovery share this cache so no opcode-specific path can fall
+  // back to a bounded recursive approximation.
+  mutable const MedFunc *AddressFragmentTaintFor = nullptr;
+  mutable std::set<AddressProvenanceVarKey> AddressFragmentTaint;
 
   // Completed clean top-level indexed-base proofs for the current function.
   // The cached record contains only MedIR facts, never llvm::Value objects.
@@ -1347,10 +1497,29 @@ private:
   mutable llvm::DenseMap<std::pair<int64_t, int>, const MedOp *> DefIndex;
   mutable llvm::DenseMap<std::pair<int64_t, int>, const PhiNode *> PhiIndex;
 
+  // Occurrence-level proof that a value graph contains an emitted function
+  // identity. Integer emission asks this for many operands, so memoize it per
+  // function instead of repeatedly walking large PHI/arithmetic DAGs. This is
+  // deliberately a structural upper bound over all PHI arms: it does not call
+  // feasibility/recurrence analysis and therefore cannot re-enter or depend
+  // on feasible-edge cache construction.
+  mutable const MedFunc *CodeIdentityOccurrenceCacheFor = nullptr;
+  mutable std::map<AddressProvenanceVarKey, bool> CodeIdentityOccurrenceCache;
+
   // Conservative feasible CFG edges after pruning only statically proven
   // constant conditional branches. Used to ignore a dead PHI input without
-  // teaching every address resolver its own reachability walk.
+  // teaching every address resolver its own reachability walk. FeasibleEdges
+  // and FeasibleBlocks are visible to consumers only in Ready state.
   mutable const MedFunc *FeasibleEdgesFor = nullptr;
+  mutable FeasibleEdgeCacheState FeasibleEdgeState =
+      FeasibleEdgeCacheState::Empty;
+  mutable bool FeasibleEdgeBuildSawReentrantQuery = false;
+  // One-shot friend-test seam for forcing a query after an early edge has
+  // already been pruned. Production never installs it; keeping the seam at
+  // the transaction boundary lets Release tests verify whole-build rollback
+  // and dependent-cache invalidation without recreating the former semantic
+  // dependency cycle.
+  mutable std::function<void()> FeasibleEdgeBuildTestHook;
   mutable std::set<std::pair<int, int>> FeasibleEdges;
   mutable std::set<int> FeasibleBlocks;
 
@@ -1446,6 +1615,12 @@ private:
   // recording an emission failure.
   mutable bool FatalDataPointerResolution = false;
   std::map<uint64_t, llvm::Constant *> GlobalDataCache;
+  // Complete address occurrences are discovered before body emission so the
+  // first use of a VA chooses an identity-preserving run global.  Without this
+  // pre-registration, an earlier legacy use could create a mergeable compact
+  // string and a later address-algebra use could create a second identity for
+  // the same original VA.
+  std::set<uint64_t> IdentityPreservingDataAddrs;
   // One synthesized code-pointer mirror global per data segment base VA (see
   // buildCodePtrSegmentGlobal); reused across every access into that segment.
   std::map<uint64_t, llvm::Constant *> CodePtrTableGlobals;

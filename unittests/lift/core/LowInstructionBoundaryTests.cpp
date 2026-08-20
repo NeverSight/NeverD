@@ -65,7 +65,8 @@ std::string errorText(llvm::Error Error) {
 }
 
 std::vector<LowOp> liftARMInstruction(InstructionMode Mode,
-                                      const std::vector<uint8_t> &Bytes) {
+                                      const std::vector<uint8_t> &Bytes,
+                                      va_t Address = kEntry) {
   Decoder Dec;
   if (!Dec.init(Arch::ARM, Mode)) {
     ADD_FAILURE() << "decoder initialization failed";
@@ -73,7 +74,28 @@ std::vector<LowOp> liftARMInstruction(InstructionMode Mode,
   }
 
   DecodedInsn Insn{};
-  int Size = Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn);
+  int Size = Dec.decodeOneForLift(Bytes.data(), Bytes.size(), Address, Insn);
+  if (Size <= 0) {
+    ADD_FAILURE() << "instruction decode failed";
+    return {};
+  }
+  EXPECT_EQ(static_cast<size_t>(Size), Bytes.size());
+
+  std::vector<LowOp> Ops;
+  Dec.liftToLow(Insn, Ops);
+  return Ops;
+}
+
+std::vector<LowOp> liftAArch64Instruction(const std::vector<uint8_t> &Bytes,
+                                          va_t Address = kEntry) {
+  Decoder Dec;
+  if (!Dec.init(Arch::AArch64, InstructionMode::Default)) {
+    ADD_FAILURE() << "decoder initialization failed";
+    return {};
+  }
+
+  DecodedInsn Insn{};
+  int Size = Dec.decodeOneForLift(Bytes.data(), Bytes.size(), Address, Insn);
   if (Size <= 0) {
     ADD_FAILURE() << "instruction decode failed";
     return {};
@@ -327,6 +349,103 @@ TEST(LowInstructionBoundary, ARMPCWritesEmitExplicitControlOps) {
     EXPECT_TRUE(containsOp(Ops, Test.Terminator));
     EXPECT_FALSE(containsOp(
         Ops, Test.Terminator == NdOp::RETURN ? NdOp::INDIR_BR : NdOp::RETURN));
+  }
+}
+
+TEST(LowInstructionBoundary, ARMPCReadUsesModeSpecificRelocatableAddress) {
+  struct Case {
+    InstructionMode Mode;
+    va_t Address;
+    std::vector<uint8_t> Bytes;
+    uint64_t ExpectedPC;
+  };
+  const std::vector<Case> Cases = {
+      {InstructionMode::Thumb, 0x1000, {0x00, 0x48}, 0x1004},
+      {InstructionMode::Thumb, 0x1002, {0x00, 0x48}, 0x1004},
+      {InstructionMode::ARM, 0x1000, {0x00, 0x00, 0x9f, 0xe5}, 0x1008},
+  };
+
+  for (const Case &Test : Cases) {
+    SCOPED_TRACE(::testing::Message()
+                 << (Test.Mode == InstructionMode::Thumb ? "Thumb" : "ARM")
+                 << " at 0x" << std::hex << Test.Address);
+    const std::vector<LowOp> Ops =
+        liftARMInstruction(Test.Mode, Test.Bytes, Test.Address);
+    auto PCWrite = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+      return Op.Opcode == NdOp::COPY &&
+             Op.Output == NdVar::reg(armreg::PC, 4) && Op.NumInputs == 1 &&
+             Op.Inputs[0].isConst();
+    });
+    ASSERT_NE(PCWrite, Ops.end());
+    EXPECT_EQ(PCWrite->Inputs[0].Offset, Test.ExpectedPC);
+    EXPECT_EQ(PCWrite->Inputs[0].Provenance,
+              ConstantAddressProvenance::Address);
+  }
+}
+
+TEST(LowInstructionBoundary, X86EIPRelativeAddressWrapsBeforeZeroExtension) {
+  constexpr va_t HighAddress = 0x100001000ULL;
+  struct Case {
+    std::vector<uint8_t> Bytes;
+    va_t ExpectedTarget;
+    uint64_t ExpectedTaggedLeaf;
+    ConstantAddressProvenance ExpectedProvenance;
+  };
+  const std::vector<Case> Cases = {
+      {{0x67, 0x48, 0x8d, 0x05, 0xf9, 0xff, 0xff, 0xff},
+       0x1001,
+       0x1001,
+       ConstantAddressProvenance::Address},
+      {{0x48, 0x8d, 0x05, 0xf9, 0xff, 0xff, 0xff},
+       HighAddress,
+       HighAddress + 7,
+       ConstantAddressProvenance::Address},
+  };
+
+  for (const Case &Test : Cases) {
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::X64, InstructionMode::Default));
+    DecodedInsn Insn{};
+    ASSERT_EQ(Dec.decodeOneForLift(Test.Bytes.data(), Test.Bytes.size(),
+                                   HighAddress, Insn),
+              static_cast<int>(Test.Bytes.size()));
+    EXPECT_EQ(Dec.pcRelCodeRefTarget(Insn), Test.ExpectedTarget);
+
+    std::vector<LowOp> Ops;
+    Dec.liftToLow(Insn, Ops);
+    bool SawTaggedLeaf = false;
+    for (const LowOp &Op : Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        SawTaggedLeaf |= Op.Inputs[I].isConst() &&
+                         Op.Inputs[I].Provenance == Test.ExpectedProvenance &&
+                         Op.Inputs[I].Offset == Test.ExpectedTaggedLeaf;
+    EXPECT_TRUE(SawTaggedLeaf);
+  }
+}
+
+TEST(LowInstructionBoundary, AArch64AddressDisplacementsCarryScalarProvenance) {
+  struct Case {
+    std::vector<uint8_t> Bytes;
+    uint64_t Displacement;
+  };
+  // add x12,x12,#0x248; str x11,[sp,#16]. The first value deliberately
+  // matches the low-VA table_b address in the issue fixture: its instruction
+  // role, not numeric segment membership, proves that it is a displacement.
+  const std::vector<Case> Cases = {
+      {{0x8c, 0x21, 0x09, 0x91}, 0x248},
+      {{0xeb, 0x0b, 0x00, 0xf9}, 16},
+  };
+
+  for (const Case &Test : Cases) {
+    const std::vector<LowOp> Ops = liftAArch64Instruction(Test.Bytes);
+    bool SawScalarDisplacement = false;
+    for (const LowOp &Op : Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        SawScalarDisplacement |=
+            Op.Inputs[I].isConst() &&
+            Op.Inputs[I].Offset == Test.Displacement &&
+            Op.Inputs[I].Provenance == ConstantAddressProvenance::Scalar;
+    EXPECT_TRUE(SawScalarDisplacement);
   }
 }
 

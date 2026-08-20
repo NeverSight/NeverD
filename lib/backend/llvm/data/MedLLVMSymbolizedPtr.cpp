@@ -155,11 +155,12 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
     return false;
   auto findDef = [&](const MedVar &X) { return lookupDef(X); };
   auto findPhi = [&](const MedVar &X) { return lookupPhi(X); };
-  std::set<std::tuple<int, int, int>> Seen;
-  std::vector<MedVar> Work{AddrVar};
+  using WorkItem = std::pair<MedVar, bool>; // value, direct PHI constant
+  std::set<std::tuple<int, int, int, bool>> Seen;
+  std::vector<WorkItem> Work{{AddrVar, false}};
   int Budget = 256;
   while (!Work.empty() && Budget-- > 0) {
-    MedVar Cur = Work.back();
+    auto [Cur, DirectPhiConstant] = Work.back();
     Work.pop_back();
     if (Cur.isConst()) {
       // getVar symbolizes a constant above the threshold that lands in this run
@@ -171,14 +172,15 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
       // low-VA writable reloc target getVar also symbolizes
       // (symbolizesWritableRelocPtr, the SIMD-lane `&G` form) must likewise be
       // used directly, not re-based.
-      if (getVarMayRelocateConstant(Cur.ConstVal, Cur.Size)) {
+      if (dataOccurrenceSymbolizes(Cur, DirectPhiConstant)) {
         const Segment *S = Img->getSegmentFor(Cur.ConstVal);
         if (S && S->VA == SegVA)
           return true;
       }
       continue;
     }
-    if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
+    if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer, DirectPhiConstant})
+             .second)
       continue;
     if (const MedOp *D = findDef(Cur)) {
       switch (D->Opcode) {
@@ -196,9 +198,12 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
       case NdOp::INT_ZEXT:
       case NdOp::INT_SEXT:
       case NdOp::SUBBYTES:
-      case NdOp::SELECT:
         for (int I = 0; I < D->NumInputs; ++I)
-          Work.push_back(D->Inputs[I]);
+          Work.emplace_back(D->Inputs[I], false);
+        break;
+      case NdOp::SELECT:
+        for (int I = 1; I < D->NumInputs; ++I)
+          Work.emplace_back(D->Inputs[I], false);
         break;
       default:
         break;
@@ -208,7 +213,7 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
     if (const PhiNode *Phi = findPhi(Cur))
       for (const auto &[PredId, Arg] : Phi->Args) {
         (void)PredId;
-        Work.push_back(Arg);
+        Work.emplace_back(Arg, Arg.isConst());
       }
   }
   return false;
@@ -290,6 +295,28 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
                                                   bool FailClosed,
                                                   llvm::IRBuilder<> &Builder) {
   if (!Img)
+    return nullptr;
+  const ConstantProvenanceSummary Occurrence =
+      summarizeConstantProvenance(AddrVar);
+  if (occurrenceHasAddressFragmentTaint(AddrVar)) {
+    (void)FailClosed;
+    rejectEscapingAddressFragment(AddrVar, "a call argument");
+    return nullptr;
+  }
+  // An all-address PHI/SELECT still needs the structural merge owner even
+  // though its leaves now carry exact occurrence provenance.  getVar has
+  // already materialized those leaves, but emitting the integer SSA merge
+  // directly can mix raw and symbolized address models (and loses the
+  // canonical run-relative form used by fixed pointer arguments).  Give the
+  // all-arms audit one opportunity to rebuild the merge, then stop: explicit
+  // provenance must never fall through to the legacy value-global heuristics.
+  if (Occurrence.Model == ConstantProvenanceSummary::ValueModel::Address)
+    return tryResolveSelectMergeTable(AddrVar, /*SizeHint=*/0, FailClosed,
+                                      Builder);
+  // Explicit occurrences were already materialized by getVar at their leaves.
+  // Running a value-global pointer resolver again would either override a
+  // scalar or apply a second base to an address expression.
+  if (Occurrence.hasExplicitProvenance())
     return nullptr;
   // A flat pointer-valued SELECT must be validated as one unit before creating
   // any globals: every non-null leaf has to be a mapped data address.  This

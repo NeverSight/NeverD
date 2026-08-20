@@ -78,7 +78,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
     CsMode = static_cast<cs_mode>(
         (Mode == InstructionMode::Thumb ? CS_MODE_THUMB : CS_MODE_ARM) |
         CS_MODE_V8);
-    NewARM = std::make_unique<ARMLifter>(TheArch);
+    NewARM = std::make_unique<ARMLifter>(TheArch, Mode);
     NewARM->setStrict(Strict);
     break;
   default:

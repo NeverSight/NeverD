@@ -426,7 +426,7 @@ TEST(TranslationObjectCompiler, ProducesDeterministicBytesAndVersionedKeys) {
   EXPECT_TRUE(First->artifactCacheKey().starts_with(
       "neverd.translation-object-artifact.v1.sha256:"));
   static_assert(TranslationObjectArtifactV1::CacheIdentityVersion == 1);
-  static_assert(TranslationObjectArtifactV1::PipelineSchemaVersion == 3);
+  static_assert(TranslationObjectArtifactV1::PipelineSchemaVersion == 4);
 }
 
 TEST(TranslationObjectCompiler, EmitsEveryContractHostArchitecture) {

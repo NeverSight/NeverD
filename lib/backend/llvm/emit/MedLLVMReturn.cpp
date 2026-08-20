@@ -28,10 +28,16 @@ namespace neverd {
 //===----------------------------------------------------------------------===//
 
 void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
+  auto GetReturnValue = [&](const MedVar &V) -> llvm::Value * {
+    if (llvm::Value *Code =
+            tryResolveCodeAddressValue(V, /*RequireCodeRole=*/false, Builder))
+      return Code;
+    return getVar(V, Builder);
+  };
   auto GetInput = [&](uint8_t Idx) -> llvm::Value * {
     if (Idx >= Op.NumInputs)
       return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), 0);
-    return getVar(Op.Inputs[Idx], Builder);
+    return GetReturnValue(Op.Inputs[Idx]);
   };
   auto *RetTy = CurFunc->getReturnType();
   if (RetTy->isVoidTy()) {
@@ -132,16 +138,20 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
       auto *FT = ST->getElementType(I);
       llvm::Value *V = nullptr;
       if (RV) {
+        rejectEscapingAddressFragment(*RV, "an aggregate return field");
         // Symbolize a pointer-width integer field holding a writable-global
         // address (`return (struct){ &g[i], n }`) — the aggregate analog of
         // the scalar return symbolization, else the caller dereferences a raw
         // absolute VA.  FP fields and plain integers fall through to getVar.
-        if (!RR.IsFP && FT->isIntegerTy())
+        const ConstantProvenanceSummary FieldOccurrence =
+            summarizeConstantProvenance(*RV);
+        if (!RR.IsFP && FT->isIntegerTy() &&
+            !FieldOccurrence.hasExplicitProvenance())
           if (llvm::Value *Sym = tryResolveWritableData(
                   *RV, RV->Size, Builder, /*IsValueOperand=*/true))
             V = Builder.CreatePtrToInt(Sym, llvm::Type::getInt64Ty(*Ctx));
         if (!V)
-          V = getVar(*RV, Builder);
+          V = GetReturnValue(*RV);
       }
       V = V ? coerce(V, FT) : llvm::Constant::getNullValue(FT);
       Agg = Builder.CreateInsertValue(Agg, V, I);
@@ -248,7 +258,10 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
               HiVar = &Phi.Output;
       }
       if (RetVar) {
-        RetVal = getVar(*RetVar, Builder);
+        rejectEscapingAddressFragment(*RetVar, "a return value");
+        RetVal = GetReturnValue(*RetVar);
+        const ConstantProvenanceSummary ReturnOccurrence =
+            summarizeConstantProvenance(*RetVar);
         // A returned address into a WRITABLE global (`return &g[index]` /
         // `return cond?A:B`) must be symbolized — otherwise the value is a
         // raw inttoptr(baseVA+index) and the caller, dereferencing the
@@ -259,13 +272,16 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
         // result that merely traces to a read-only base (e.g. a NEON kernel
         // folding a rodata vector).
         if (!WantFloat && !WantWide64 && RetTy->isIntegerTy() && RetVal &&
-            RetVal->getType()->isIntegerTy())
+            RetVal->getType()->isIntegerTy() &&
+            !ReturnOccurrence.hasExplicitProvenance())
           if (llvm::Value *Sym = tryResolveWritableData(
                   *RetVar, RetVar->Size, Builder, /*IsValueOperand=*/true))
             RetVal = Builder.CreatePtrToInt(Sym, RetTy);
       }
       // Splice the high half above the low half into the 64-bit result.
       if (WantWide64 && RetVal && HiVar) {
+        rejectEscapingAddressFragment(*HiVar,
+                                      "the high half of a return value");
         auto *I64 = llvm::Type::getInt64Ty(*Ctx);
         auto toI64 = [&](llvm::Value *V) -> llvm::Value * {
           if (V->getType() == I64)
@@ -275,7 +291,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
           return Builder.CreateZExt(V, I64);
         };
         llvm::Value *Lo = toI64(RetVal);
-        llvm::Value *Hi = toI64(getVar(*HiVar, Builder));
+        llvm::Value *Hi = toI64(GetReturnValue(*HiVar));
         RetVal = Builder.CreateOr(
             Builder.CreateShl(Hi, llvm::ConstantInt::get(I64, 32)), Lo,
             "ret64");
@@ -332,14 +348,16 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
           }
         }
         if (RetVar) {
-          RetVal = getVar(*RetVar, Builder);
+          rejectEscapingAddressFragment(*RetVar, "a return value");
+          RetVal = GetReturnValue(*RetVar);
           break;
         }
         for (auto &Phi : Blk.Phis) {
           if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
               (WantX87 ? TRI.isX87StackReg(Phi.Output.RegOff)
                        : Phi.Output.RegOff == RetRegOff)) {
-            RetVal = getVar(Phi.Output, Builder);
+            rejectEscapingAddressFragment(Phi.Output, "a return value");
+            RetVal = GetReturnValue(Phi.Output);
             break;
           }
         }
@@ -362,7 +380,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
       FpLiveIn.SSAVer = 0;
       FpLiveIn.Id = -1;
       FpLiveIn.TheArch = TargetArch;
-      RetVal = getVar(FpLiveIn, Builder);
+      RetVal = GetReturnValue(FpLiveIn);
     }
   }
 
@@ -375,8 +393,10 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
     // lifters put RAX/EAX in the RETURN operand, so retain their fallback.
     if (TRI.LinkRegister != 0 || Op.NumInputs == 0)
       RetVal = llvm::ConstantInt::get(RetTy, 0);
-    else
+    else {
+      rejectEscapingAddressFragment(Op.Inputs[0], "a return value");
       RetVal = GetInput(0);
+    }
   }
 
   if (RetVal->getType() != RetTy) {

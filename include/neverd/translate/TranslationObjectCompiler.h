@@ -199,7 +199,7 @@ public:
   static constexpr uint32_t CacheIdentityVersion = 1;
   /// Manual schema for the exact IR optimization and object-emission recipe.
   /// Bump whenever pass ordering, sealing, or target-machine policy changes.
-  static constexpr uint32_t PipelineSchemaVersion = 3;
+  static constexpr uint32_t PipelineSchemaVersion = 4;
 
   llvm::ArrayRef<uint8_t> bytes() const { return Bytes; }
   const ResolvedHostTarget &hostTarget() const { return HostTarget; }

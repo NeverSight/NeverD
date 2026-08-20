@@ -133,7 +133,8 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
     // A genuine multi-byte data load must not reuse a C-string interpretation
     // cached from an earlier address-taken (size-0) access: the region is a
     // table whose string view was truncated at its first NUL byte.  Re-resolve.
-    if (!(DataSizeHint > 1 && StringDataAddrs.count(Addr)))
+    if (!((DataSizeHint > 1 || IdentityPreservingDataAddrs.count(Addr)) &&
+          StringDataAddrs.count(Addr)))
       return CacheIt->second;
     StringDataAddrs.erase(Addr);
     GlobalDataCache.erase(Addr);
@@ -353,7 +354,8 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
                                 Img->DyldBindSlots.count(Addr) != 0;
   bool IsInductionStringBase = isInductionRodataStringBase(Addr);
   if (IsString && StrLen > 0 && AtStringStart && !SizedObjectBeyondString &&
-      !IsRelocatedPointerSlot && !IsInductionStringBase) {
+      !IsRelocatedPointerSlot && !IsInductionStringBase &&
+      !IdentityPreservingDataAddrs.count(Addr)) {
     std::string StrVal(reinterpret_cast<const char *>(Start), StrLen);
     auto *StrConst = llvm::ConstantDataArray::getString(*Ctx, StrVal, true);
     // In mergeable (sharded) mode the name must be a pure function of the

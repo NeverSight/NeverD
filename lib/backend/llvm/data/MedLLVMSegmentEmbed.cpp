@@ -217,43 +217,7 @@ bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
 }
 
 bool MedLLVMEmitter::hasObjectDataProvenance(uint64_t VA) const {
-  if (!Img || VA == 0)
-    return false;
-  const Segment *Seg = Img->getSegmentFor(VA);
-  if (!Seg || Seg->Data.empty() || VA < Seg->VA ||
-      VA - Seg->VA >= Seg->Data.size() || !Seg->isReadable())
-    return false;
-
-  // Section-less/stripped inputs have no finer provenance than their mapped
-  // segments.  Once section metadata exists, however, a readable PT_LOAD also
-  // covers ELF headers and alignment gaps: those bytes are addressable but do
-  // not prove that a coincident scalar immediate is an object-data pointer.
-  if (Img->Sections.empty())
-    return !Seg->isExecutable();
-  const Section *Sec = Img->getSectionFor(VA);
-  if (Sec)
-    return Sec->isReadable() &&
-           (Img->isMachO() ? !Img->isCodeAddress(VA) : !Sec->isExecutable());
-
-  // Some images (and format-focused synthetic tests) have complete segment
-  // bytes but no section rows for a particular segment.  Fall back for that
-  // whole segment only when no readable section overlaps it at all.  If the
-  // segment does carry sections, an uncovered byte is a header/alignment gap,
-  // not object-level evidence (the ELF PIE low-immediate collision).
-  bool SegmentHasSectionMetadata = false;
-  for (const Section &Candidate : Img->Sections) {
-    if (!Candidate.isReadable() || Candidate.Size == 0 ||
-        Candidate.Size > InvalidVA - Candidate.VA ||
-        Seg->Size > InvalidVA - Seg->VA)
-      continue;
-    const uint64_t CandidateEnd = Candidate.VA + Candidate.Size;
-    const uint64_t SegmentEnd = Seg->VA + Seg->Size;
-    if (Candidate.VA < SegmentEnd && Seg->VA < CandidateEnd) {
-      SegmentHasSectionMetadata = true;
-      break;
-    }
-  }
-  return !SegmentHasSectionMetadata && !Seg->isExecutable();
+  return Img && Img->hasObjectDataProvenance(VA);
 }
 
 bool MedLLVMEmitter::isMaterializableReadOnlyDataAddress(uint64_t VA) const {

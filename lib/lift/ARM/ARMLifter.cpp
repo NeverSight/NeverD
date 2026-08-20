@@ -119,7 +119,9 @@ bool hasObservableEffect(const std::vector<LowOp> &Ops, size_t First) {
 // ARMLifter construction
 // ===----------------------------------------------------------------------===//
 
-ARMLifter::ARMLifter(Arch A) : TargetArch(A) {}
+ARMLifter::ARMLifter(Arch A, InstructionMode M)
+    : TargetArch(A),
+      SourceMode(M == InstructionMode::Default ? InstructionMode::ARM : M) {}
 
 // ===----------------------------------------------------------------------===//
 // Main dispatch
@@ -133,7 +135,7 @@ void ARMLifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
   auto &ARM = Detail->arm;
   LiftState S(Insn->address, static_cast<uint16_t>(Insn->size), Ops);
 
-  const ControlInfo Control = classifyControl(Insn, InstructionMode::Default);
+  const ControlInfo Control = classifyControl(Insn, SourceMode);
   if (Control.Kind == ControlKind::ExceptionReturn ||
       hasA32UserRegisterTransferBit(Insn)) {
     // TODO: introduce a typed LowIR exception-return operation that restores
@@ -147,9 +149,16 @@ void ARMLifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
     return;
   }
 
-  // ARM32 pipeline: PC reads as current_addr + 8 during execution.
-  S.emit(NdOp::COPY, NdVar::reg(armreg::PC, 4),
-         {NdVar::cst(Insn->address + 8, 4)});
+  // A32 reads PC as address+8. T32 reads Align(address+4, 4), including for a
+  // 32-bit instruction beginning at the second halfword of an aligned word.
+  // Preserve architectural address origin so a PC-relative value that escapes
+  // the memory resolver remains relocatable.
+  const uint32_t InsnAddress = static_cast<uint32_t>(Insn->address);
+  const uint32_t PCValue =
+      SourceMode == InstructionMode::Thumb
+          ? static_cast<uint32_t>((InsnAddress + 4u) & ~uint32_t{3})
+          : static_cast<uint32_t>(InsnAddress + 8u);
+  S.emit(NdOp::COPY, NdVar::reg(armreg::PC, 4), {NdVar::address(PCValue, 4)});
 
   // A genuinely predicated instruction carries a real condition (EQ..LE).
   // ARMCC_AL and the "execute always" sentinel capstone surfaces for some

@@ -341,6 +341,27 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   UnhandledValueIntrinsicCount = 0;
   AddressProvenanceWork = {};
   GlobalDataCache.clear();
+  IdentityPreservingDataAddrs.clear();
+  for (const MedFunc &Func : Funcs)
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const MedOp &Op : Block.Ops)
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (Op.Inputs[I].isConst() &&
+              (Op.Inputs[I].Provenance ==
+                   ConstantAddressProvenance::DataAddress ||
+               (Op.Inputs[I].Provenance == ConstantAddressProvenance::Address &&
+                (!Img || !Img->isCodeAddress(Op.Inputs[I].ConstVal)))))
+            IdentityPreservingDataAddrs.insert(Op.Inputs[I].ConstVal);
+      for (const PhiNode &Phi : Block.Phis)
+        for (const auto &[Pred, Arg] : Phi.Args) {
+          (void)Pred;
+          if (Arg.isConst() &&
+              (Arg.Provenance == ConstantAddressProvenance::DataAddress ||
+               (Arg.Provenance == ConstantAddressProvenance::Address &&
+                (!Img || !Img->isCodeAddress(Arg.ConstVal)))))
+            IdentityPreservingDataAddrs.insert(Arg.ConstVal);
+        }
+    }
   SegmentDataGlobals.clear();
   WritableSegmentGlobals.clear();
   CodePtrTableGlobals.clear();
@@ -367,12 +388,19 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   SelfRecurrenceCache.clear();
   StableOffsetCacheFor = nullptr;
   StableOffsetCache.clear();
+  AddressFragmentTaintFor = nullptr;
+  AddressFragmentTaint.clear();
   SymbolizedWritableSegsFor = nullptr;
   SymbolizedWritableSegs.clear();
   DefPhiIndexFor = nullptr;
   DefIndex.clear();
   PhiIndex.clear();
+  CodeIdentityOccurrenceCacheFor = nullptr;
+  CodeIdentityOccurrenceCache.clear();
   FeasibleEdgesFor = nullptr;
+  FeasibleEdgeState = FeasibleEdgeCacheState::Empty;
+  FeasibleEdgeBuildSawReentrantQuery = false;
+  FeasibleEdgeBuildTestHook = {};
   FeasibleEdges.clear();
   FeasibleBlocks.clear();
   PhiEdgeIndexFor = nullptr;

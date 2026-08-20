@@ -36,6 +36,10 @@ bool liftCoreExtBit(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar Src = L.operandRead(S, ARM.operands[1]);
+    if (Src.isConst()) {
+      Src.Size = Dst.Size;
+      Src.Provenance = ConstantAddressProvenance::Address;
+    }
     S.emit(NdOp::COPY, Dst, {Src});
     break;
   }
@@ -48,8 +52,7 @@ bool liftCoreExtBit(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     uint32_t Width = static_cast<uint32_t>(ARM.operands[2].imm);
     if (Width == 0 || Width > 32 || LSB >= 32 || Width > 32 - LSB)
       break;
-    uint32_t FieldMask =
-        Width == 32 ? ~0u : ((1u << Width) - 1) << LSB;
+    uint32_t FieldMask = Width == 32 ? ~0u : ((1u << Width) - 1) << LSB;
     uint32_t Mask = ~FieldMask;
     S.emit(NdOp::INT_AND, Dst,
            {NdVar::reg(Dst.Offset, 4), NdVar::cst(Mask, 4)});
@@ -66,8 +69,7 @@ bool liftCoreExtBit(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     uint32_t Width = static_cast<uint32_t>(ARM.operands[3].imm);
     if (Width == 0 || Width > 32 || LSB >= 32 || Width > 32 - LSB)
       break;
-    uint32_t FieldMask =
-        Width == 32 ? ~0u : ((1u << Width) - 1) << LSB;
+    uint32_t FieldMask = Width == 32 ? ~0u : ((1u << Width) - 1) << LSB;
     NdVar ShiftedSrc = S.makeTemp(4);
     S.emit(NdOp::INT_LEFT, ShiftedSrc, {Src, NdVar::cst(LSB, 4)});
     NdVar MaskedSrc = S.makeTemp(4);

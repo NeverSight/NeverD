@@ -31,9 +31,21 @@
 
 #include <algorithm>
 #include <set>
+#include <tuple>
 #include <utility>
 
 namespace neverd {
+
+static bool isIncompleteRelocatableConstant(const MedVar &V, Arch TargetArch) {
+  if (!V.isConst())
+    return false;
+  if (V.Provenance == ConstantAddressProvenance::AddressFragment)
+    return true;
+  if (!isExactAddressProvenance(V.Provenance))
+    return false;
+  const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+  return V.Size != 0 && PointerSize != 0 && V.Size < PointerSize;
+}
 
 //===----------------------------------------------------------------------===//
 // Definition / PHI index
@@ -135,6 +147,410 @@ bool MedLLVMEmitter::getVarSymbolizesDataConstant(uint64_t Val,
   return isInductionRodataStringBase(Val) && canResolveGlobalDataConstant(Val);
 }
 
+bool MedLLVMEmitter::dataOccurrenceSymbolizes(
+    const MedVar &V, bool DirectPhiConstantBypassesGetVar) const {
+  MedVar Cur = V;
+  bool BypassesGetVar = DirectPhiConstantBypassesGetVar && Cur.isConst() &&
+                        !isExactAddressProvenance(Cur.Provenance);
+  std::set<std::tuple<int, int, int, uint16_t>> Seen;
+
+  while (!Cur.isConst()) {
+    auto Key = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
+                               Cur.Size);
+    if (!Seen.insert(Key).second)
+      return false;
+    const MedOp *Def = lookupDef(Cur);
+    if (!Def)
+      return false;
+    auto Forwarded = pointerPreservingInput(*Def);
+    if (!Forwarded || Forwarded->Size != Cur.Size)
+      return false;
+    Cur = *Forwarded;
+    BypassesGetVar = false;
+  }
+
+  if (BypassesGetVar)
+    return false;
+
+  const unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
+  const bool IsPointerWidth =
+      Cur.Size == 0 || PtrSize == 0 || Cur.Size >= PtrSize;
+
+  // getVar gives an exact architectural code address precedence over the data
+  // routes. Keep data-table ownership audits from mistaking ptrtoint(@func)
+  // for a data-global address merely because executable bytes are readable.
+  if ((isCodeAddressProvenance(Cur.Provenance) ||
+       (Cur.Provenance == ConstantAddressProvenance::Address && Img &&
+        Img->isCodeAddress(Cur.ConstVal))) &&
+      IsPointerWidth)
+    return false;
+
+  uint64_t Address = 0;
+  if (isExactAddressProvenance(Cur.Provenance) &&
+      resolveMaterializableDataAddress(Cur, Address))
+    return true;
+
+  if (Cur.Provenance != ConstantAddressProvenance::Unknown)
+    return false;
+
+  if (getVarSymbolizesDataConstant(Cur.ConstVal, Cur.Size))
+    return true;
+
+  // The ordinary function-address path also precedes writable/select-peer
+  // data materialization in getVar.
+  if (IsPointerWidth && Img && Mod &&
+      (Cur.ConstVal >= limits::kMinGlobalDataAddr ||
+       Img->CodeRefTargets.count(Cur.ConstVal)))
+    if (auto FIt = FuncNames.find(Cur.ConstVal); FIt != FuncNames.end())
+      if (Mod->getFunction(FIt->second))
+        return false;
+
+  if (symbolizesWritableRelocPtr(Cur.ConstVal, Cur.Size))
+    return true;
+  return IsPointerWidth && symbolizesSelectPeer(Cur.ConstVal);
+}
+
+bool MedLLVMEmitter::constantOccurrenceMayRelocate(
+    const MedVar &V, bool DirectPhiConstantBypassesGetVar) const {
+  if (dataOccurrenceSymbolizes(V, DirectPhiConstantBypassesGetVar))
+    return true;
+
+  MedVar Cur = V;
+  bool BypassesGetVar = DirectPhiConstantBypassesGetVar && Cur.isConst() &&
+                        !isExactAddressProvenance(Cur.Provenance);
+  std::set<std::tuple<int, int, int, uint16_t>> Seen;
+  while (!Cur.isConst()) {
+    auto Key = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
+                               Cur.Size);
+    if (!Seen.insert(Key).second)
+      return false;
+    const MedOp *Def = lookupDef(Cur);
+    if (!Def)
+      return false;
+    auto Forwarded = pointerPreservingInput(*Def);
+    if (!Forwarded || Forwarded->Size != Cur.Size)
+      return false;
+    Cur = *Forwarded;
+    BypassesGetVar = false;
+  }
+  if (BypassesGetVar)
+    return false;
+
+  if (Cur.Provenance == ConstantAddressProvenance::Scalar ||
+      Cur.Provenance == ConstantAddressProvenance::AddressFragment)
+    return false;
+
+  const unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
+  const bool IsPointerWidth =
+      Cur.Size == 0 || PtrSize == 0 || Cur.Size >= PtrSize;
+  if (!IsPointerWidth || !Img || !Mod)
+    return false;
+
+  const bool CodeIntent =
+      isCodeAddressProvenance(Cur.Provenance) ||
+      (Cur.Provenance == ConstantAddressProvenance::Address &&
+       Img->isCodeAddress(Cur.ConstVal)) ||
+      (Cur.Provenance == ConstantAddressProvenance::Unknown &&
+       (Cur.ConstVal >= limits::kMinGlobalDataAddr ||
+        Img->CodeRefTargets.count(Cur.ConstVal)));
+  if (!CodeIntent)
+    return false;
+  auto FIt = FuncNames.find(Cur.ConstVal);
+  return FIt != FuncNames.end() && Mod->getFunction(FIt->second) != nullptr;
+}
+
+MedLLVMEmitter::ConstantProvenanceSummary
+MedLLVMEmitter::summarizeConstantProvenance(const MedVar &V) const {
+  using Model = ConstantProvenanceSummary::ValueModel;
+  struct Result {
+    Model Kind = Model::Unknown;
+    bool SawFragment = false;
+  };
+  using Key = std::tuple<int, int, int, uint16_t>;
+  std::map<Key, Result> Memo;
+  std::set<Key> Active;
+  int Budget = 512;
+
+  auto mergeValues = [&](Result A, const MedVar &AV, Result B,
+                         const MedVar &BV) {
+    Result Out{Model::Mixed, A.SawFragment || B.SawFragment};
+    if (A.Kind == B.Kind) {
+      Out.Kind = A.Kind;
+      return Out;
+    }
+    // A PHI/SELECT/frame merge does not inherit arithmetic's
+    // Unknown+Scalar=>Unknown rule.  The arms are alternative values, so
+    // unlike an address plus a displacement they form a mixed occurrence that
+    // must not re-enter a value-global pointer heuristic.
+    auto isNullScalar = [&](Result R, const MedVar &Value) {
+      if (R.Kind != Model::Scalar)
+        return false;
+      auto Folded = traceValueVA(Value);
+      return Folded && *Folded == 0;
+    };
+    if ((A.Kind == Model::Unknown && isNullScalar(B, BV)) ||
+        (B.Kind == Model::Unknown && isNullScalar(A, AV))) {
+      Out.Kind = Model::Unknown;
+      return Out;
+    }
+    if ((A.Kind == Model::Address && isNullScalar(B, BV)) ||
+        (B.Kind == Model::Address && isNullScalar(A, AV))) {
+      Out.Kind = Model::Address;
+      return Out;
+    }
+    return Out;
+  };
+
+  std::function<Result(const MedVar &)> evaluate =
+      [&](const MedVar &Cur) -> Result {
+    if (--Budget < 0)
+      // Exhaustion is analysis uncertainty, never evidence that a relocation
+      // taint is absent.  Escape audits must fail closed for adversarially deep
+      // forwarding chains instead of reopening legacy numeric heuristics.
+      return {Model::Mixed, true};
+    if (Cur.isConst()) {
+      switch (Cur.Provenance) {
+      case ConstantAddressProvenance::Unknown:
+        return {Model::Unknown, false};
+      case ConstantAddressProvenance::Scalar:
+        return {Model::Scalar, false};
+      case ConstantAddressProvenance::AddressFragment:
+        return {Model::AddressFragment, true};
+      case ConstantAddressProvenance::Address:
+      case ConstantAddressProvenance::DataAddress:
+      case ConstantAddressProvenance::CodeAddress:
+        if (isIncompleteRelocatableConstant(Cur, TargetArch))
+          return {Model::AddressFragment, true};
+        return {Model::Address, false};
+      }
+    }
+
+    Key K = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer,
+                            Cur.Size);
+    if (auto It = Memo.find(K); It != Memo.end())
+      return It->second;
+    if (!Active.insert(K).second)
+      return {};
+
+    Result Out;
+    if (const PhiNode *Phi = lookupPhi(Cur)) {
+      bool First = true;
+      MedVar Previous;
+      for (const auto &[Pred, Arg] : Phi->Args) {
+        if (classifyPhiIncomingEdge(*Phi, Pred) ==
+            PhiEdgeFeasibility::Infeasible)
+          continue;
+        Result Arm = evaluate(Arg);
+        if (First) {
+          Out = Arm;
+          Previous = Arg;
+          First = false;
+        } else {
+          Out = mergeValues(Out, Previous, Arm, Arg);
+          Previous = Cur;
+        }
+      }
+    } else if (const MedOp *Def = lookupDef(Cur)) {
+      if (auto Forwarded = pointerPreservingInput(*Def)) {
+        Out = evaluate(*Forwarded);
+      } else if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
+        Result T = evaluate(Def->Inputs[1]);
+        Result F = evaluate(Def->Inputs[2]);
+        Out = mergeValues(T, Def->Inputs[1], F, Def->Inputs[2]);
+      } else if ((Def->Opcode == NdOp::INT_ADD ||
+                  Def->Opcode == NdOp::INT_SUB) &&
+                 Def->NumInputs >= 2) {
+        Result A = evaluate(Def->Inputs[0]);
+        Result B = evaluate(Def->Inputs[1]);
+        Out.SawFragment = A.SawFragment || B.SawFragment;
+        if (A.Kind == Model::Mixed || B.Kind == Model::Mixed) {
+          Out.Kind = Model::Mixed;
+        } else if (A.Kind == Model::AddressFragment) {
+          Out.Kind = B.Kind == Model::Scalar || B.Kind == Model::Unknown
+                         ? Model::AddressFragment
+                         : Model::Mixed;
+        } else if (Def->Opcode == NdOp::INT_ADD &&
+                   B.Kind == Model::AddressFragment) {
+          Out.Kind = A.Kind == Model::Scalar || A.Kind == Model::Unknown
+                         ? Model::AddressFragment
+                         : Model::Mixed;
+        } else if (A.Kind == Model::Address) {
+          if (B.Kind == Model::Address)
+            Out.Kind =
+                Def->Opcode == NdOp::INT_SUB ? Model::Scalar : Model::Mixed;
+          else
+            Out.Kind = Model::Address;
+        } else if (Def->Opcode == NdOp::INT_ADD && B.Kind == Model::Address) {
+          Out.Kind = A.Kind == Model::Address ? Model::Mixed : Model::Address;
+        } else if (Def->Opcode == NdOp::INT_SUB && B.Kind == Model::Address) {
+          Out.Kind = Model::Mixed;
+        } else if (A.Kind == Model::Scalar && B.Kind == Model::Scalar) {
+          Out.Kind = Model::Scalar;
+        } else {
+          Out.Kind = Model::Unknown;
+        }
+      } else if (Def->Opcode == NdOp::LOAD) {
+        std::vector<MedVar> Sources;
+        if (collectFrameReloadSources(*Def, Sources) && !Sources.empty()) {
+          bool First = true;
+          MedVar Previous;
+          for (const MedVar &Source : Sources) {
+            Result SourceResult = evaluate(Source);
+            if (First) {
+              Out = SourceResult;
+              Previous = Source;
+              First = false;
+            } else {
+              Out = mergeValues(Out, Previous, SourceResult, Source);
+              Previous = Cur;
+            }
+          }
+        }
+      } else {
+        switch (Def->Opcode) {
+        case NdOp::INT_AND:
+        case NdOp::INT_OR:
+        case NdOp::INT_XOR:
+        case NdOp::INT_LEFT:
+        case NdOp::INT_RIGHT:
+        case NdOp::INT_ASHR:
+        case NdOp::INT_MULT:
+        case NdOp::INT_NEGATE:
+        case NdOp::INT_NEG2: {
+          bool AllScalar = Def->NumInputs > 0;
+          bool AllUnknownOrScalar = Def->NumInputs > 0;
+          bool SawFragment = false;
+          for (uint8_t I = 0; I < Def->NumInputs; ++I) {
+            Result Input = evaluate(Def->Inputs[I]);
+            SawFragment |= Input.SawFragment;
+            AllScalar &= Input.Kind == Model::Scalar;
+            AllUnknownOrScalar &=
+                Input.Kind == Model::Unknown || Input.Kind == Model::Scalar;
+          }
+          Out.SawFragment = SawFragment;
+          Out.Kind = AllScalar            ? Model::Scalar
+                     : AllUnknownOrScalar ? Model::Unknown
+                                          : Model::Mixed;
+          break;
+        }
+        default:
+          break;
+        }
+      }
+    }
+
+    Active.erase(K);
+    Memo.emplace(K, Out);
+    return Out;
+  };
+
+  Result Final = evaluate(V);
+  return {Final.Kind, Final.SawFragment};
+}
+
+bool MedLLVMEmitter::occurrenceHasAddressFragmentTaint(const MedVar &V) const {
+  if (V.isConst())
+    return isIncompleteRelocatableConstant(V, TargetArch);
+  if (!CurMedFunc || AddressFragmentTaintFor != CurMedFunc)
+    return false;
+  return AddressFragmentTaint.count(addressProvenanceVarKey(V)) != 0;
+}
+
+bool MedLLVMEmitter::addressFragmentCanStayInLocalFrameSlot(
+    const MedVar &SlotAddr, uint16_t StoredSize) const {
+  const auto Slot = canonicalFrameSlotKey(SlotAddr);
+  if (!Slot || StoredSize == 0 || stackSlotAddressEscapes(SlotAddr))
+    return false;
+
+  auto overlaps = [](int64_t LeftOffset, uint16_t LeftSize, int64_t RightOffset,
+                     uint16_t RightSize) {
+    if (LeftSize == 0 || RightSize == 0)
+      return true;
+    // Ordered signed endpoints can be subtracted in unsigned space without
+    // overflow: even INT64_MIN..INT64_MAX has the exact UINT64_MAX distance.
+    // This keeps the alias proof portable to MSVC, which has no __int128.
+    if (LeftOffset <= RightOffset)
+      return static_cast<uint64_t>(RightOffset) -
+                 static_cast<uint64_t>(LeftOffset) <
+             LeftSize;
+    return static_cast<uint64_t>(LeftOffset) -
+               static_cast<uint64_t>(RightOffset) <
+           RightSize;
+  };
+  auto readMayAliasStoredSlot = [&](const MedVar &ReadAddr, uint16_t ReadSize) {
+    if (!varMayBeFrameAddress(ReadAddr))
+      return false;
+    const auto ReadSlot = canonicalFrameSlotKey(ReadAddr);
+    if (!ReadSlot || ReadSlot->first != Slot->first)
+      // An uncanonical frame address or a different live-in root may alias
+      // after an unmodelled stack adjustment.  Lack of proof is not evidence
+      // that a fragment cannot escape.
+      return true;
+    return overlaps(Slot->second, StoredSize, ReadSlot->second, ReadSize);
+  };
+
+  // The exemption is sound only when every reload of the slot has a complete
+  // all-path source proof.  Otherwise a fragment store on one branch and an
+  // uninitialized/partially-aliased path on another could make the may-flow
+  // disappear from the function-wide taint graph and escape after the join.
+  if (!CurMedFunc)
+    return false;
+  for (const MedBlock &Block : CurMedFunc->Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Opcode != NdOp::LOAD || Op.NumInputs < 1)
+        continue;
+      if (!readMayAliasStoredSlot(Op.Inputs[0], Op.Output.Size))
+        continue;
+      std::vector<MedVar> Sources;
+      if (!collectFrameReloadSources(Op, Sources) || Sources.empty())
+        return false;
+    }
+  for (const MedBlock &Block : CurMedFunc->Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      std::optional<uint8_t> AddressInput;
+      if (Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD ||
+          Op.Opcode == NdOp::ATOMIC_CMPXCHG)
+        AddressInput =
+            Op.NumInputs >= 1 ? std::optional<uint8_t>(0) : std::nullopt;
+      else if (Op.Opcode == NdOp::INTRINSIC)
+        AddressInput = atomicIntrinsicAddressInput(Op);
+      if (!AddressInput) {
+        if (Op.Opcode == NdOp::INTRINSIC)
+          for (uint8_t I = 1; I < Op.NumInputs; ++I)
+            if (varMayBeFrameAddress(Op.Inputs[I]))
+              return false;
+        continue;
+      }
+      uint16_t AccessSize = Op.Output.Size;
+      if (*AddressInput == 3)
+        AccessSize = 16;
+      else if (*AddressInput == 2 && Op.NumInputs > 3 && Op.Inputs[3].isConst())
+        AccessSize = static_cast<uint16_t>(Op.Inputs[3].ConstVal);
+      else if (*AddressInput == 1 && Op.NumInputs > 2 && Op.Inputs[2].isConst())
+        AccessSize = static_cast<uint16_t>(Op.Inputs[2].ConstVal);
+      if (readMayAliasStoredSlot(Op.Inputs[*AddressInput], AccessSize))
+        // collectFrameReloadSources deliberately models plain LOAD only.  A
+        // read/modify/write or exclusive read of the same slot can observe the
+        // fragment, so do not exempt its STORE until atomic reaching-memory
+        // flow has an equally complete all-path proof.
+        return false;
+    }
+  return true;
+}
+
+bool MedLLVMEmitter::rejectEscapingAddressFragment(
+    const MedVar &V, const char *SinkDescription) const {
+  if (!occurrenceHasAddressFragmentTaint(V))
+    return false;
+  if (!FatalDataPointerResolution)
+    syncError() << "med_llvm_emitter: incomplete relocatable address value "
+                << V.display() << " escapes through " << SinkDescription
+                << " in " << (CurMedFunc ? CurMedFunc->Name : "<unknown>")
+                << "; refusing stale-address fallback\n";
+  FatalDataPointerResolution = true;
+  return true;
+}
+
 bool MedLLVMEmitter::getVarMayRelocateConstant(uint64_t Val,
                                                uint16_t Size) const {
   if (getVarSymbolizesDataConstant(Val, Size) ||
@@ -153,6 +569,49 @@ bool MedLLVMEmitter::getVarMayRelocateConstant(uint64_t Val,
     return false;
   auto FIt = FuncNames.find(Val);
   return FIt != FuncNames.end() && Mod->getFunction(FIt->second) != nullptr;
+}
+
+llvm::Value *
+MedLLVMEmitter::materializeDataRelationConstant(uint64_t Val, uint16_t Size,
+                                                llvm::IRBuilder<> &Builder) {
+  // A non-zero hint selects the identity-preserving raw/run representation;
+  // the compact unnamed-string form may legally merge equal contents at two
+  // original VAs and therefore cannot represent address algebra.
+  if (llvm::Constant *Global = tryResolveGlobalData(Val, Size))
+    return Builder.CreatePtrToInt(Global, sizeToType(Size), "gdatarel");
+
+  if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+    syncError() << "med_llvm_emitter: relocatable data-relation constant 0x"
+                << llvm::utohexstr(Val) << " in "
+                << (CurMedFunc ? CurMedFunc->Name : "<unknown>")
+                << " has no global-data materialization route; refusing "
+                   "stale-address fallback\n";
+  if (!FatalCodePointerResolution)
+    FatalDataPointerResolution = true;
+  return llvm::UndefValue::get(sizeToType(Size));
+}
+
+llvm::Value *
+MedLLVMEmitter::getPhiIncomingConstant(const MedVar &V, uint16_t OutputSize,
+                                       llvm::IRBuilder<> &Builder) {
+  assert(V.isConst() && "PHI constant materializer requires a constant");
+  if (isExactAddressProvenance(V.Provenance))
+    return getVar(V, Builder);
+  return llvm::ConstantInt::get(sizeToType(OutputSize),
+                                static_cast<int64_t>(V.ConstVal),
+                                /*isSigned=*/true);
+}
+
+llvm::Value *
+MedLLVMEmitter::getPhiIncomingValue(const MedVar &V, uint16_t OutputSize,
+                                    llvm::IRBuilder<> &Builder) {
+  if (codeIdentityOccurrenceMayRelocate(V))
+    if (llvm::Value *Code = tryResolveCodeAddressValue(
+            V, /*RequireCodeRole=*/false, Builder))
+      return Code;
+  if (V.isConst())
+    return getPhiIncomingConstant(V, OutputSize, Builder);
+  return getVar(V, Builder);
 }
 
 llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
@@ -226,6 +685,54 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         FatalDataPointerResolution = true;
       return llvm::UndefValue::get(sizeToType(V.Size));
     };
+    // Explicit scalar and page-fragment occurrences never enter the legacy
+    // value-global classifier.  A fragment is allowed to exist as an
+    // intermediate ADRP/page-base value; escape sinks reject it separately.
+    if (V.Provenance == ConstantAddressProvenance::Scalar ||
+        V.Provenance == ConstantAddressProvenance::AddressFragment)
+      return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+
+    // Explicit provenance owns the occurrence and never falls through to the
+    // legacy value-global classifier. Role-neutral Address is resolved only
+    // outside executable bytes; executable data and code must be identified
+    // by DataAddress/CodeAddress respectively.
+    if (isExactAddressProvenance(V.Provenance)) {
+      const bool IsPointerWidth = V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz;
+      if (!IsPointerWidth)
+        return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+
+      if (isCodeAddressProvenance(V.Provenance)) {
+        if (llvm::Constant *Code = resolveLiftedCodeAddress(V.ConstVal))
+          return Builder.CreatePtrToInt(Code, sizeToType(V.Size),
+                                        "codeptr.prov");
+        if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+          syncError() << "med_llvm_emitter: relocatable code address 0x"
+                      << llvm::utohexstr(V.ConstVal) << " in "
+                      << CurMedFunc->Name
+                      << " has no lifted code identity; refusing stale-address "
+                         "fallback\n";
+        FatalCodePointerResolution = true;
+        return llvm::UndefValue::get(sizeToType(V.Size));
+      }
+
+      if (V.Provenance == ConstantAddressProvenance::Address && Img &&
+          Img->isCodeAddress(V.ConstVal)) {
+        // A role-neutral architectural PC is also used as the numeric base of
+        // ARM switch/literal expressions.  Eagerly turning every such COPY
+        // into blockaddress changes arithmetic semantics and can leave an
+        // in-memory BlockAddress owned by a different cloning context.  Code
+        // and data use sites own that decision; only an explicit CodeAddress
+        // is materialized above.
+        return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+      }
+
+      uint64_t Address = 0;
+      if (resolveMaterializableDataAddress(V, Address))
+        return materializeDataRelationConstant(Address, V.Size, Builder);
+      if (V.Provenance == ConstantAddressProvenance::Address)
+        return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
+      return failUnresolvableDataConstant();
+    }
     if (getVarSymbolizesDataConstant(V.ConstVal, V.Size)) {
       // A constant that falls in an EXECUTABLE segment is a genuine pointer
       // only when it actually reaches a memory-access address — a

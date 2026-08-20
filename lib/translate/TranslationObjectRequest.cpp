@@ -245,6 +245,7 @@ void hashVariable(detail::StableHashWriter &Hash, const NdVar &Variable) {
   Hash.addByte(static_cast<uint8_t>(Variable.Space));
   Hash.addU64(Variable.Offset);
   Hash.addU16(Variable.Size);
+  Hash.addByte(static_cast<uint8_t>(Variable.Provenance));
 }
 
 void hashDescriptor(detail::StableHashWriter &Hash,

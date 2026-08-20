@@ -80,6 +80,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img,
 
   parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
     LowToMedConverter Local;
+    Local.setBinaryImage(&Img);
     Local.setCalleePopMap(&CalleePop);
     Local.setStackProbeSlots(&StackProbeSlots);
     for (size_t I; (I = Claim()) < N;) {

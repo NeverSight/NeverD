@@ -191,6 +191,142 @@ high bits after relinking. Remember that PHI constants may bypass `getVar`
 while operation operands pass through it, so equal numeric leaves can acquire
 different provenance at different use sites.
 
+### Make semantic caches transactional and re-entrancy-safe
+
+A cache owner such as `CacheFor == CurFunc` proves only which function the
+storage belongs to; it does not prove that construction finished. When cache
+construction can call a helper that transitively consults the same cache, use
+an explicit lifecycle such as `Empty -> Building -> Ready`.
+
+- Build into private scratch containers and publish them only after the full
+  computation completes.
+- During `Building`, return a conservative non-cacheable result. Never memoize
+  a terminal negative answer from partial state.
+- If re-entry can affect decisions already made in the current build, set a
+  sticky marker and rebuild from a conservative structural model before
+  publication. Merely clearing a memo after publication cannot repair a graph
+  that was already pruned from provisional evidence.
+- Invalidate every transitive dependent memo at generation boundaries. Reset
+  both contents and owner/generation fields; clearing only the container can
+  turn later queries into permanent false negatives.
+- Keep any predicate used while constructing reachability cycle-free. A
+  control-folding predicate may be a conservative upper bound for
+  relocatability, but it must not call PHI recurrence, indexed-base, induction,
+  or feasibility analysis that depends on the graph being built.
+- Assert that speculative/cache-building queries do not emit or clear fatal
+  diagnostics. They may lose precision, never mutate the final safety state.
+
+Test the cold first query and both call orders. A warm-cache test can miss the
+entire defect. Lock down all three edge classes: a completed live edge is
+proven feasible, a truly pruned structural edge is infeasible, and a malformed
+non-edge remains unknown. Also poison a dependent memo during `Building` and
+prove publication invalidates and recomputes it.
+
+When a new semantic field is added to IR identity (for example occurrence-level
+address provenance), include it in equality, every semantic memo key,
+serialized or translation-cache hashes, and the relevant cache/schema version.
+Otherwise old artifacts or same-value occurrences can silently reuse decisions
+computed under a different semantic model.
+
+Numeric equality is not address provenance. The same bit pattern can be a
+scalar, an incomplete address-forming fragment, or a complete address in
+different operands. Preserve occurrence provenance through bit-preserving
+transports, prevent narrowing/widening from manufacturing a complete pointer,
+and make observable escape checks fail closed for an unresolved fragment.
+
+### Propagate fragment taint by semantic value flow
+
+Propagate relocation taint along semantic value-flow edges, not every operand
+use. A load address does not taint the loaded value, and a call target or
+argument does not taint the return value. A `SELECT` condition likewise is not
+value provenance for either arm, but it is observable control: reject an
+unresolved fragment used as that condition, just as for a conditional branch.
+
+Conversely, a fragment spilled into a canonical nonescaping frame slot must
+taint a proven reload. The spill exemption is valid only when every potentially
+aliasing read has a complete all-path reaching-store proof. An uninitialized
+path, uncanonical frame root, partially overlapping read, or atomic read must
+cancel the exemption.
+
+Let the memory or code owner first try to complete a fragment in its operand
+role. If that owner cannot prove reconstruction, reject the fragment immediately
+before the raw fallback. This keeps legal PC-relative memory forms working
+without allowing a page fragment to escape through a return, stored value, call
+argument, branch or selection condition, or indirect target.
+
+### Classify intrinsic operands by role
+
+Classify intrinsic operands by role rather than treating the entire operation
+uniformly. For atomic intrinsics, stored, expected, and desired values are
+observable value sinks; the address belongs to the shared relocation-aware
+memory owner; and width, ordering, and intrinsic-ID fields are metadata. Loaded
+old-value and status outputs do not inherit address taint.
+
+Keep one address-index policy shared by the taint audit and the emitter. Generic
+and architecture-specific atomics must use the same global, writable, and raw
+fallback resolver so equivalent memory operands cannot acquire different
+relocation behavior.
+
+### Keep exact addresses role-neutral until consumption
+
+A role-neutral exact address may need different materialization at different
+uses. Generic emission must not eagerly turn every executable address into a
+`BlockAddress` merely because it lies in `.text`; switch and literal
+arithmetic may need its numeric form. A data-memory owner applies the
+corresponding data policy. A code sink such as `INDIR_CALL` owns the callable
+role: converge every feasible PHI or `SELECT` arm to one normalized lifted
+function entry and materialize that function there, otherwise fail closed.
+
+This use-role split prevents both stale raw targets and premature code/data
+reinterpretation. Do not infer a code-identity role from executable-segment
+membership alone: architectural PC values used by switch lowering are
+layout-dependent numerics, not automatically function pointers.
+
+### Preserve observable code identity
+
+Code identity is observable when carried as an integer value, not only when
+called. Route return values, escaping stores, every call argument (including
+integer-class and variadic arguments), atomic stored/expected/desired values,
+and pointer-identity arithmetic or comparisons through the same
+occurrence-aware code-identity owner.
+
+An ordinary observable sink may preserve either an emitted
+`llvm::Function` identity or an interior `BlockAddress` identity when the
+origin proves that exact target. In contrast, `INDIR_CALL` must resolve to an
+`llvm::Function` entry; an interior `BlockAddress` is valid for
+computed-goto or pointer-table identity, but it is not callable.
+
+For an explicitly supported bit or flag transform, relocate each genuine code
+leaf in its own operand before applying the operation. Do not replace the whole
+expression with one symbol, and do not leave any participating code leaf as a
+raw original VA. A dynamic scalar offset, mask, flag, or comparison operand in
+such a supported relation is not an alternative code identity. Distinguish it
+from a reachable scalar arm of a PHI or `SELECT`: that merge can produce a
+non-code value at runtime and must not be accepted as one exact code identity.
+An unsupported transform that contains a code leaf must fail closed when its
+result reaches an observable sink.
+
+For a PHI or `SELECT` that combines an exact code identity with a supported
+adjusted relation, materialize the exact arm at the merge edge and keep the
+adjusted arm as its current SSA value. Do not collapse an arithmetic recurrence
+such as `p = PHI(&f, p + stride)` back to `&f`; only a bit-preserving self-arm
+may be treated as one unchanged identity. A nullable zero arm is a valid
+ordinary code-value merge, while a nonzero scalar arm remains mixed and must
+fail closed unless a more specific owner proves its semantics.
+
+When proving a merged code identity, ignore proven-infeasible incoming edges and
+proven recurrent self-arms, then require every remaining initialization arm to
+converge to one emitted identity of the required kind.
+
+### Keep all-address merges with their structural owner
+
+An explicit-address summary is not permission to bypass a structural owner.
+For an all-address PHI or `SELECT`, run the complete all-arm
+raw-versus-symbolized model audit before the generic "already materialized"
+guard. The guard prevents value-global reclassification; it must not suppress
+the only owner capable of detecting mixed models or rebuilding a canonical
+merged pointer.
+
 ## 5. Audit Sibling Surfaces
 
 Expand from the root abstraction, not from superficial text similarity.

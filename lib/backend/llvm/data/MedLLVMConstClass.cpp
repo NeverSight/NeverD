@@ -83,10 +83,8 @@ bool MedLLVMEmitter::constIsWritableRunEndPointer(uint64_t Val) const {
     return false;
   const Segment *EndSeg = nullptr;
   for (const auto &S : Img->Segments) {
-    if (!isMutableDataSeg(&S))
-      continue;
-    uint64_t End = S.VA + (S.Size ? S.Size : S.Data.size());
-    if (Val == End) {
+    uint64_t RunStart = 0, RunEnd = 0;
+    if (writableRunBounds(S.VA, RunStart, RunEnd) && Val == RunEnd) {
       EndSeg = &S;
       break;
     }
@@ -145,8 +143,11 @@ bool MedLLVMEmitter::constIsWritableRunEndPointer(uint64_t Val) const {
         case NdOp::SUBBYTES:
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
-        case NdOp::SELECT:
           for (int I = 0; I < D->NumInputs; ++I)
+            Work.push_back(D->Inputs[I]);
+          break;
+        case NdOp::SELECT:
+          for (int I = 1; I < D->NumInputs; ++I)
             Work.push_back(D->Inputs[I]);
           break;
         default:
@@ -275,18 +276,115 @@ bool MedLLVMEmitter::hasSymbolizedWritableSibling(uint64_t Val) const {
   return VSeg && SymbolizedWritableSegs.count(VSeg->VA);
 }
 
+bool MedLLVMEmitter::mayBeWritableSelectPeerCycleFree(uint64_t Val) const {
+  if (!Img || !CurMedFunc || Val == 0)
+    return false;
+  const Segment *VSeg = Img->getSegmentFor(Val);
+  if (!VSeg || !VSeg->isReadable() || !VSeg->isWritable() ||
+      !canResolveGlobalDataConstant(Val))
+    return false;
+
+  auto reaches = [&](const MedVar &Start, auto &&Pred, bool AllowBitwise) {
+    std::vector<MedVar> Work{Start};
+    std::set<std::tuple<int, int, int>> Seen;
+    int Budget = 256;
+    while (!Work.empty() && Budget-- > 0) {
+      MedVar Cur = Work.back();
+      Work.pop_back();
+      if (Cur.isConst()) {
+        if (Pred(Cur.ConstVal))
+          return true;
+        continue;
+      }
+      if (auto C = traceSSAConst(Cur); C && Pred(*C))
+        return true;
+      if (!Seen.insert({static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer}).second)
+        continue;
+      if (const PhiNode *Phi = lookupPhi(Cur)) {
+        for (const auto &[PredId, Arg] : Phi->Args) {
+          (void)PredId;
+          Work.push_back(Arg);
+        }
+        continue;
+      }
+      const MedOp *Def = lookupDef(Cur);
+      if (!Def)
+        continue;
+      switch (Def->Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+      case NdOp::SUBBYTES:
+      case NdOp::INT_ADD:
+      case NdOp::INT_SUB:
+        for (int I = 0; I < Def->NumInputs; ++I)
+          Work.push_back(Def->Inputs[I]);
+        break;
+      case NdOp::SELECT:
+        // A SELECT condition is a scalar decision, never an address arm.
+        for (int I = 1; I < Def->NumInputs; ++I)
+          Work.push_back(Def->Inputs[I]);
+        break;
+      case NdOp::INT_AND:
+      case NdOp::INT_OR:
+      case NdOp::INT_XOR:
+        if (AllowBitwise)
+          for (int I = 0; I < Def->NumInputs; ++I)
+            Work.push_back(Def->Inputs[I]);
+        break;
+      default:
+        break;
+      }
+    }
+    return false;
+  };
+
+  auto IsVal = [&](uint64_t C) { return C == Val; };
+  auto IsLoaderProvenPeer = [&](uint64_t C) {
+    if (C == Val || !Img->WritableRelocDataAddrs.count(C) ||
+        !canResolveGlobalDataConstant(C))
+      return false;
+    const Segment *CSeg = Img->getSegmentFor(C);
+    return CSeg && CSeg->VA == VSeg->VA;
+  };
+
+  for (const MedBlock &Block : CurMedFunc->Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::SELECT && Op.NumInputs >= 3) {
+        for (int I = 1; I < Op.NumInputs; ++I)
+          for (int J = 1; J < Op.NumInputs; ++J)
+            if (I != J && reaches(Op.Inputs[I], IsVal, false) &&
+                reaches(Op.Inputs[J], IsLoaderProvenPeer, false))
+              return true;
+      }
+      if (Op.Opcode == NdOp::INT_OR && Op.NumInputs >= 2)
+        for (int I = 0; I < 2; ++I)
+          for (int J = 0; J < 2; ++J)
+            if (I != J && reaches(Op.Inputs[I], IsVal, true) &&
+                reaches(Op.Inputs[J], IsLoaderProvenPeer, true))
+              return true;
+    }
+  return false;
+}
+
 bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
   if (!Img || !CurMedFunc || Val == 0)
     return false;
   const Segment *VSeg = Img->getSegmentFor(Val);
   if (!VSeg || !VSeg->isWritable() || !canResolveGlobalDataConstant(Val))
     return false;
+  // Keep the control-flow upper bound and the precise classifier on one
+  // structural domain. The exact checks below may reject candidates, but may
+  // never accept a shape this cycle-free predicate omitted.
+  if (!mayBeWritableSelectPeerCycleFree(Val))
+    return false;
   // Same walked-base protection the reloc-target fallback uses: never pull a
   // pointer-difference base or a (segment-) walked induction base onto the
   // recompiled-pointer model.  No constUsedAsPointer gate is needed — being the
   // SELECT peer of a proven recompiled pointer (checked below) is itself the
-  // pointer evidence, and constUsedAsPointer's backward walk does not even
-  // traverse SELECT, so it would spuriously reject every genuine peer.
+  // pointer evidence. The generic constant-use walk intentionally follows
+  // only SELECT value arms, while this classifier additionally audits the
+  // peer arm's loader provenance.
   if (valIsPointerDiffBase(Val) || valIsAdvancingInductionBase(Val))
     return false;
   unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
@@ -326,8 +424,11 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
         case NdOp::SUBBYTES:
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
-        case NdOp::SELECT:
           for (int I = 0; I < D->NumInputs; ++I)
+            Work.push_back(D->Inputs[I]);
+          break;
+        case NdOp::SELECT:
+          for (int I = 1; I < D->NumInputs; ++I)
             Work.push_back(D->Inputs[I]);
           break;
         default:
@@ -349,10 +450,10 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
   // relocates.
   for (const auto &Blk : CurMedFunc->Blocks)
     for (const auto &Op : Blk.Ops) {
-      if (Op.Opcode != NdOp::SELECT || Op.NumInputs < 2)
+      if (Op.Opcode != NdOp::SELECT || Op.NumInputs < 3)
         continue;
-      for (int I = 0; I < Op.NumInputs; ++I)
-        for (int J = 0; J < Op.NumInputs; ++J) {
+      for (int I = 1; I < Op.NumInputs; ++I)
+        for (int J = 1; J < Op.NumInputs; ++J) {
           if (I == J)
             continue;
           if (reaches(Op.Inputs[I], isVal) &&
@@ -404,11 +505,14 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
         case NdOp::SUBBYTES:
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
-        case NdOp::SELECT:
         case NdOp::INT_AND:
         case NdOp::INT_OR:
         case NdOp::INT_XOR:
           for (int I = 0; I < D->NumInputs; ++I)
+            Work.push_back(D->Inputs[I]);
+          break;
+        case NdOp::SELECT:
+          for (int I = 1; I < D->NumInputs; ++I)
             Work.push_back(D->Inputs[I]);
           break;
         default:

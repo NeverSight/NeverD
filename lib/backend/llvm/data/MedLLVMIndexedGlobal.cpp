@@ -358,8 +358,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
                               hasObjectDataProvenance(Cur.ConstVal);
         if (!AddressBearing)
           continue;
-        bool Symbolized = !BypassesGetVar &&
-                          getVarMayRelocateConstant(Cur.ConstVal, Cur.Size);
+        bool Symbolized = dataOccurrenceSymbolizes(Cur, BypassesGetVar);
         SawRaw |= !Symbolized;
         SawSymbolized |= Symbolized;
         continue;
@@ -473,8 +472,8 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
         if (!Classified)
           return std::nullopt;
         Model = *Classified;
-      } else if (!SawLoad && !(Arg.isConst() && DirectConstantBypassesGetVar) &&
-                 getVarSymbolizesDataConstant(*C, OriginSize)) {
+      } else if (!SawLoad &&
+                 dataOccurrenceSymbolizes(Arg, DirectConstantBypassesGetVar)) {
         Model = AddressModel::Symbolized;
       }
       return RecoveredPhiBase{{*C}, Model};
@@ -644,8 +643,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
             return nullptr;
           }
           AliasBases.insert(*Value);
-          if (!Arg.isConst() &&
-              getVarSymbolizesDataConstant(*Value, OriginSize))
+          if (dataOccurrenceSymbolizes(Arg))
             AliasModel = AddressModel::Symbolized;
         }
         bool AliasSymbolized = AliasModel == AddressModel::Symbolized;

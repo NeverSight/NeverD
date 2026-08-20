@@ -18,7 +18,9 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <regex>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -78,6 +80,17 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_EQ(Img.RelocDataAddrs, (std::set<va_t>{0x2020, 0x2028}));
   EXPECT_EQ(Img.WritableRelocDataAddrs, (std::set<va_t>{0x3000, 0x4000}));
   EXPECT_EQ(Img.CodeRefTargets, (std::set<va_t>{0x1000}));
+  EXPECT_FALSE(Img.hasObjectDataProvenance(0));
+  EXPECT_FALSE(Img.hasObjectDataProvenance(0x1000));
+  EXPECT_TRUE(Img.hasObjectDataProvenance(0x2000));
+  EXPECT_TRUE(Img.hasObjectDataProvenance(0x3000));
+  EXPECT_FALSE(Img.hasObjectDataProvenance(0x4000));
+  EXPECT_TRUE(Img.isPotentiallyRelocatableAddress(0x2000));
+  EXPECT_TRUE(Img.isPotentiallyRelocatableAddress(0x2080));
+  EXPECT_TRUE(Img.isPotentiallyRelocatableAddress(0x4000));
+  EXPECT_TRUE(Img.isPotentiallyRelocatableAddress(0x4040));
+  EXPECT_FALSE(Img.isPotentiallyRelocatableAddress(0));
+  EXPECT_FALSE(Img.isPotentiallyRelocatableAddress(0x1040));
   for (va_t Slot : {0x2000, 0x2008, 0x2010, 0x2018})
     EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot));
   EXPECT_FALSE(Img.hasRelocationProvenanceAt(0x2020));
@@ -304,6 +317,80 @@ TEST_F(NativePointerRelocationBoundary,
     EXPECT_NE(R.out.find("@__nd_codeptr_"), std::string::npos) << R.out;
     EXPECT_NE(R.out.find("getelementptr"), std::string::npos) << R.out;
   }
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       ReentrantFeasibleEdgePhiPreservesRelocatableAddressRelations) {
+  struct Case {
+    const char *Name;
+    BinaryFormat Format;
+  };
+  unsigned TestedCases = 0;
+  for (const Case &C : {
+#if defined(__APPLE__)
+           Case{"test_reentrant_feasible_phi_a64_macho", BinaryFormat::MachO},
+#endif
+           Case{"test_reentrant_feasible_phi_a64_elf", BinaryFormat::ELF},
+           Case{"test_reentrant_feasible_phi_a64_pe.exe", BinaryFormat::COFF},
+       }) {
+    SCOPED_TRACE(C.Name);
+    const fs::path Path = fixture(C.Name);
+    if (!fs::exists(Path))
+      continue;
+    ++TestedCases;
+
+    auto ImgOrErr = loadBinary(Path);
+    ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+        << llvm::toString(ImgOrErr.takeError());
+    const BinaryImage &Img = *ImgOrErr;
+    ASSERT_EQ(Img.Format, C.Format);
+    ASSERT_EQ(Img.Arch, Arch::AArch64);
+    ASSERT_EQ(Img.getPointerSize(), 8u);
+
+    RunResult Med = liftToMedIR(Path);
+    ASSERT_EQ(Med.exitCode, 0) << Med.err;
+    EXPECT_EQ(Med.err.find("ambiguous reachable read-only table-base PHI"),
+              std::string::npos)
+        << Med.err;
+    EXPECT_NE(Med.out.find("PHI X13"), std::string::npos) << Med.out;
+    EXPECT_TRUE(std::regex_search(
+        Med.out, std::regex(R"(block 0 succs=\[[0-9]+,[0-9]+\])")))
+        << Med.out;
+    RunResult LLVM = liftToLLVMIRUnopt(Path);
+    ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+    EXPECT_EQ(LLVM.err.find("refusing stale-address fallback"),
+              std::string::npos)
+        << LLVM.err;
+    auto lineHasTwoRelocatableOperands = [&](std::string_view Opcode) {
+      size_t LineStart = 0;
+      while (LineStart < LLVM.out.size()) {
+        size_t LineEnd = LLVM.out.find('\n', LineStart);
+        if (LineEnd == std::string::npos)
+          LineEnd = LLVM.out.size();
+        std::string_view Line(LLVM.out.data() + LineStart, LineEnd - LineStart);
+        if (Line.find(Opcode) != std::string_view::npos) {
+          const size_t First = Line.find("ptrtoint");
+          if (First != std::string_view::npos &&
+              Line.find("ptrtoint", First + 1) != std::string_view::npos)
+            return true;
+        }
+        LineStart = LineEnd + 1;
+      }
+      return false;
+    };
+    EXPECT_TRUE(lineHasTwoRelocatableOperands("sub")) << LLVM.out;
+    EXPECT_TRUE(lineHasTwoRelocatableOperands("icmp")) << LLVM.out;
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (C.Format == BinaryFormat::MachO)
+      for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
+        RunResult Native = exec(Path.string(), {});
+        EXPECT_EQ(Native.exitCode, 7) << Native.err;
+      }
+#endif
+  }
+  if (TestedCases == 0)
+    GTEST_SKIP() << "cross-format fixtures not built";
 }
 
 TEST_F(NativePointerRelocationBoundary,

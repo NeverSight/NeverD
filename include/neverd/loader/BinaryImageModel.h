@@ -243,6 +243,89 @@ struct BinaryImage {
     return false;
   }
 
+  /// True when \p Addr is backed by format-native object data, rather than
+  /// merely falling inside a coarse readable load segment. Exact section
+  /// metadata excludes executable bytes plus ELF/Mach-O headers and alignment
+  /// gaps; section-less images conservatively fall back to non-executable
+  /// file-backed segments.
+  bool hasObjectDataProvenance(va_t Addr) const {
+    if (Addr == 0)
+      return false;
+    const Segment *Seg = getSegmentFor(Addr);
+    if (!Seg || Seg->Data.empty() || Addr < Seg->VA ||
+        Addr - Seg->VA >= Seg->Data.size() || !Seg->isReadable())
+      return false;
+
+    if (Sections.empty())
+      return !Seg->isExecutable();
+    if (const Section *Sec = getSectionFor(Addr))
+      return Sec->isReadable() &&
+             (isMachO() ? !isCodeAddress(Addr) : !Sec->isExecutable());
+
+    // Some synthetic/stripped images describe a whole data segment but omit a
+    // section row for it. Fall back only if no readable section overlaps this
+    // segment at all; otherwise an uncovered byte is a header/alignment gap.
+    bool SegmentHasSectionMetadata = false;
+    for (const Section &Candidate : Sections) {
+      if (!Candidate.isReadable() || Candidate.Size == 0 ||
+          Candidate.Size > InvalidVA - Candidate.VA ||
+          Seg->Size > InvalidVA - Seg->VA)
+        continue;
+      const uint64_t CandidateEnd = Candidate.VA + Candidate.Size;
+      const uint64_t SegmentEnd = Seg->VA + Seg->Size;
+      if (Candidate.VA < SegmentEnd && Seg->VA < CandidateEnd) {
+        SegmentHasSectionMetadata = true;
+        break;
+      }
+    }
+    return !SegmentHasSectionMetadata && !Seg->isExecutable();
+  }
+
+  /// Loader/layout-only upper bound for constants whose numeric value may
+  /// change when the image is rebuilt.  This deliberately ignores use-site
+  /// heuristics: callers may conservatively retain arithmetic or CFG edges,
+  /// but must never freeze a relation between two independently emitted
+  /// symbols.  Keeping this fact on BinaryImage gives every format and every
+  /// semantic stage one owner for mapped, anchored, relocation-proven, and
+  /// one-past-end address candidates.
+  bool isPotentiallyRelocatableAddress(va_t Addr) const {
+    const bool LoaderProven = RelocDataAddrs.count(Addr) != 0 ||
+                              WritableRelocDataAddrs.count(Addr) != 0 ||
+                              RodataAnchorSeg.count(Addr) != 0 ||
+                              CodeRefTargets.count(Addr) != 0;
+    if (LoaderProven)
+      return true;
+
+    // Zero remains the null integer unless exact loader provenance above says
+    // otherwise. Relocatable objects may synthesize a section at VA zero, but
+    // treating every pointer-width zero as its address would suppress nearly
+    // all ordinary zero arithmetic in that object.
+    if (Addr == 0)
+      return false;
+
+    if (const Segment *Seg = getSegmentFor(Addr))
+      return Seg->isReadable();
+
+    // Both read-only runs (file-backed extent) and writable/bss runs (virtual
+    // extent) may materialize a legal one-past-end pointer in the emitter.
+    for (const Segment &Seg : Segments) {
+      if (!Seg.isReadable())
+        continue;
+      const uint64_t Extents[] = {Seg.Data.size(), Seg.Size};
+      for (uint64_t Extent : Extents) {
+        const bool HasFileBackedOwner =
+            Addr > Seg.VA && hasObjectDataProvenance(Addr - 1);
+        const bool HasVirtualDataOwner =
+            Extent == Seg.Size && !Seg.isExecutable();
+        if (Extent != 0 && Extent <= InvalidVA - Seg.VA &&
+            Addr == Seg.VA + Extent && Addr > Seg.VA &&
+            (HasFileBackedOwner || HasVirtualDataOwner))
+          return true;
+      }
+    }
+    return false;
+  }
+
   /// Write bytes at a virtual address (modifies in-memory segment data).
   /// Returns true on success.
   bool writeVA(va_t Addr, const uint8_t *Src, size_t Len) {

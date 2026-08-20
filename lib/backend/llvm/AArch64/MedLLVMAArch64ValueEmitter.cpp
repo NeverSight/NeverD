@@ -35,6 +35,15 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  auto getObservableValue = [&](uint8_t InputIndex) -> llvm::Value * {
+    if (InputIndex >= Op.NumInputs)
+      return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), 0);
+    if (llvm::Value *Code =
+            tryResolveCodeIdentityOperand(Op.Inputs[InputIndex], Builder))
+      return Code;
+    return getVar(Op.Inputs[InputIndex], Builder);
+  };
+
   if (IC == I::A64_WspWrite && Op.Output.Size == 8 && Op.NumInputs >= 2) {
     llvm::Value *Value = getVar(Op.Inputs[1], Builder);
     if (!Value->getType()->isIntegerTy(32))
@@ -79,7 +88,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
   };
   auto stateToScalable = [&](llvm::Value *State, llvm::Type *ScalableTy,
                              llvm::StringRef Name) -> llvm::Value * {
-    auto *Slot = Builder.CreateAlloca(State->getType(), nullptr, Name + ".slot");
+    auto *Slot =
+        Builder.CreateAlloca(State->getType(), nullptr, Name + ".slot");
     Slot->setAlignment(llvm::Align(16));
     Builder.CreateStore(State, Slot)->setAlignment(llvm::Align(16));
     return Builder.CreateLoad(ScalableTy, Slot, Name);
@@ -88,8 +98,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
   if (IC == I::A64_SvePtrue && Op.Output.Size == a64reg::PSize &&
       Op.NumInputs >= 3) {
     unsigned ElemBytes = sveElementSize(2);
-    auto *PredTy = llvm::ScalableVectorType::get(
-        llvm::Type::getInt1Ty(*Ctx), 16 / ElemBytes);
+    auto *PredTy = llvm::ScalableVectorType::get(llvm::Type::getInt1Ty(*Ctx),
+                                                 16 / ElemBytes);
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
         Mod, llvm::Intrinsic::aarch64_sve_ptrue, {PredTy});
     llvm::Value *Pattern = getVar(Op.Inputs[1], Builder);
@@ -133,22 +143,19 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
   if (IC == I::A64_SveLastb && Op.Output.Size > 0 && Op.NumInputs >= 4) {
     unsigned ElemBytes = sveElementSize(3);
     auto *ElemTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);
-    auto *PredTy = llvm::ScalableVectorType::get(
-        llvm::Type::getInt1Ty(*Ctx), 16 / ElemBytes);
+    auto *PredTy = llvm::ScalableVectorType::get(llvm::Type::getInt1Ty(*Ctx),
+                                                 16 / ElemBytes);
     auto *VecTy = llvm::ScalableVectorType::get(ElemTy, 16 / ElemBytes);
     llvm::Value *PredState = getVar(Op.Inputs[1], Builder);
     llvm::Value *VecState = getVar(Op.Inputs[2], Builder);
-    llvm::Value *Pred =
-        stateToScalable(PredState, PredTy, "sve.pred.value");
-    llvm::Value *Vec =
-        stateToScalable(VecState, VecTy, "sve.vector.value");
+    llvm::Value *Pred = stateToScalable(PredState, PredTy, "sve.pred.value");
+    llvm::Value *Vec = stateToScalable(VecState, VecTy, "sve.vector.value");
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
         Mod, llvm::Intrinsic::aarch64_sve_lastb, {VecTy});
     llvm::Value *Last = Builder.CreateCall(Fn, {Pred, Vec}, "svlastb");
     auto *OutTy = sizeToType(Op.Output.Size);
-    return Last->getType() == OutTy
-               ? Last
-               : Builder.CreateZExtOrTrunc(Last, OutTy);
+    return Last->getType() == OutTy ? Last
+                                    : Builder.CreateZExtOrTrunc(Last, OutTy);
   }
 
   const bool IsSVECount = IC == I::A64_SveCntb || IC == I::A64_SveCnth ||
@@ -168,9 +175,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                   : Builder.CreateZExtOrTrunc(Pattern, Builder.getInt32Ty());
     llvm::Value *Count = Builder.CreateCall(Fn, {Pattern}, "svcnt");
     auto *OutTy = sizeToType(Op.Output.Size);
-    return Count->getType() == OutTy
-               ? Count
-               : Builder.CreateZExtOrTrunc(Count, OutTy);
+    return Count->getType() == OutTy ? Count
+                                     : Builder.CreateZExtOrTrunc(Count, OutTy);
   }
 
   const bool IsScalarAtomicRMW =
@@ -199,8 +205,7 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     if (Op.NumInputs < 5 ||
         (Op.Output.Size != 1 && Op.Output.Size != 2 && Op.Output.Size != 4 &&
          Op.Output.Size != 8) ||
-        !Op.Inputs[3].isConst() ||
-        Op.Inputs[3].ConstVal != Op.Output.Size ||
+        !Op.Inputs[3].isConst() || Op.Inputs[3].ConstVal != Op.Output.Size ||
         !Op.Inputs[4].isConst() ||
         Op.Inputs[4].ConstVal != builtinAtomicOrdering(Op.MemoryOrdering))
       llvm::report_fatal_error("malformed scalar LSE atomic RMW");
@@ -240,10 +245,10 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       AtomicOp = llvm::AtomicRMWInst::UMin;
 
     llvm::Type *ValueTy = sizeToType(Op.Output.Size);
-    llvm::Value *Operand = getVar(Op.Inputs[1], Builder);
+    llvm::Value *Operand = getObservableValue(1);
     if (Operand->getType() != ValueTy)
-      Operand = Builder.CreateIntCast(Operand, ValueTy, false,
-                                      "atomic_rmw_operand");
+      Operand =
+          Builder.CreateIntCast(Operand, ValueTy, false, "atomic_rmw_operand");
     if (IC == I::A64_AtomicAnd)
       Operand = Builder.CreateNot(Operand, "ldclr.mask");
 
@@ -253,25 +258,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     // a low relocatable-object .data/.bss VA folds to inttoptr while adjacent
     // LOAD/STORE operations use the rebuilt global, splitting one atomic
     // object into two unrelated locations after relinking.
-    const MedVar &AddressVar = Op.Inputs[2];
-    llvm::Value *Address = nullptr;
-    uint64_t ResolvedAddress = 0;
-    if (Img) {
-      if (AddressVar.isConst())
-        ResolvedAddress = AddressVar.ConstVal;
-      else if (auto Traced = traceSSAConst(AddressVar))
-        ResolvedAddress = *Traced;
-    }
-    if (ResolvedAddress != 0) {
-      const unsigned AddressBits =
-          AddressVar.Size > 0 ? AddressVar.Size * 8 : 64;
-      if (!isFrameRelativeDisplacement(ResolvedAddress, AddressBits))
-        Address = tryResolveGlobalData(ResolvedAddress, Op.Output.Size);
-    }
-    if (!Address && Img)
-      Address = tryResolveWritableData(AddressVar, Op.Output.Size, Builder);
-    if (!Address)
-      Address = getMemoryPtr(getVar(AddressVar, Builder), ValueTy, Builder);
+    llvm::Value *Address =
+        resolveAtomicMemoryPtr(Op.Inputs[2], Op.Output.Size, ValueTy, Builder);
     return Builder.CreateAtomicRMW(AtomicOp, Address, Operand,
                                    llvm::MaybeAlign(Op.Output.Size), Ordering);
   }
@@ -302,30 +290,6 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
   // writable global before emitting the target intrinsic; materializing the
   // folded object-file VA as inttoptr would make the exclusive access refer to
   // a different object than ordinary LOAD/STORE operations after relinking.
-  auto resolveExclusiveAddress = [&](const MedVar &AddressVar,
-                                     unsigned AccessBytes,
-                                     llvm::Type *AccessTy) -> llvm::Value * {
-    llvm::Value *Address = nullptr;
-    uint64_t ResolvedAddress = 0;
-    if (Img) {
-      if (AddressVar.isConst())
-        ResolvedAddress = AddressVar.ConstVal;
-      else if (auto Traced = traceSSAConst(AddressVar))
-        ResolvedAddress = *Traced;
-    }
-    if (ResolvedAddress != 0) {
-      const unsigned AddressBits =
-          AddressVar.Size > 0 ? AddressVar.Size * 8 : 64;
-      if (!isFrameRelativeDisplacement(ResolvedAddress, AddressBits))
-        Address = tryResolveGlobalData(ResolvedAddress, AccessBytes);
-    }
-    if (!Address && Img)
-      Address = tryResolveWritableData(AddressVar, AccessBytes, Builder);
-    if (!Address)
-      Address = getMemoryPtr(getVar(AddressVar, Builder), AccessTy, Builder);
-    return Address;
-  };
-
   const bool IsExclusiveLoad = IC == I::A64_Ldxr || IC == I::A64_Ldaxr ||
                                IC == I::A64_Ldxp || IC == I::A64_Ldaxp;
   if (IsExclusiveLoad && Op.Output.Size > 0 && Op.NumInputs >= 3) {
@@ -338,7 +302,7 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     auto *OutTy = sizeToType(Op.Output.Size);
     auto *AccessTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
     llvm::Value *Address =
-        resolveExclusiveAddress(Op.Inputs[1], Bytes, AccessTy);
+        resolveAtomicMemoryPtr(Op.Inputs[1], Bytes, AccessTy, Builder);
     const bool Acquire = IC == I::A64_Ldaxr || IC == I::A64_Ldaxp;
     const bool Pair = IC == I::A64_Ldxp || IC == I::A64_Ldaxp;
     if (Pair && Bytes == 16) {
@@ -379,10 +343,10 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     if (Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8 && Bytes != 16)
       return nullptr;
 
-    llvm::Value *Value = getVar(Op.Inputs[1], Builder);
+    llvm::Value *Value = getObservableValue(1);
     auto *AccessTy = llvm::IntegerType::get(*Ctx, Bytes * 8);
     llvm::Value *Address =
-        resolveExclusiveAddress(Op.Inputs[2], Bytes, AccessTy);
+        resolveAtomicMemoryPtr(Op.Inputs[2], Bytes, AccessTy, Builder);
     const bool Release = IC == I::A64_Stlxr || IC == I::A64_Stlxp;
     const bool Pair = IC == I::A64_Stxp || IC == I::A64_Stlxp;
     llvm::Value *Status = nullptr;
@@ -424,8 +388,7 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
   }
 
   if ((IC == I::Addg || IC == I::Subg) && Op.Output.Size > 0 &&
-      Op.NumInputs >= 4 && Op.Inputs[2].isConst() &&
-      Op.Inputs[3].isConst()) {
+      Op.NumInputs >= 4 && Op.Inputs[2].isConst() && Op.Inputs[3].isConst()) {
     const uint64_t AddressOffset = Op.Inputs[2].ConstVal;
     const uint64_t TagOffset = Op.Inputs[3].ConstVal;
     if (AddressOffset > 1008 || AddressOffset % 16 != 0 || TagOffset > 15)
@@ -443,9 +406,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     llvm::Value *Result = nullptr;
 
     if (IC == I::Addg) {
-      Pointer = Builder.CreateGEP(
-          llvm::Type::getInt8Ty(*Ctx), Pointer,
-          llvm::ConstantInt::get(I64Ty, AddressOffset), "addg.address");
+      Pointer = Builder.CreateGEP(llvm::Type::getInt8Ty(*Ctx), Pointer,
+                                  llvm::ConstantInt::get(I64Ty, AddressOffset),
+                                  "addg.address");
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
           Mod, llvm::Intrinsic::aarch64_addg);
       Result = Builder.CreateCall(
@@ -453,11 +416,11 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     } else {
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
           Mod, llvm::Intrinsic::aarch64_subg);
-      Result = Builder.CreateCall(
-          Fn,
-          {Pointer, llvm::ConstantInt::get(I64Ty, AddressOffset),
-           llvm::ConstantInt::get(I64Ty, TagOffset)},
-          "mte.subg");
+      Result = Builder.CreateCall(Fn,
+                                  {Pointer,
+                                   llvm::ConstantInt::get(I64Ty, AddressOffset),
+                                   llvm::ConstantInt::get(I64Ty, TagOffset)},
+                                  "mte.subg");
     }
 
     if (OutTy->isPointerTy())
@@ -510,10 +473,10 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       return Builder.CreateTrunc(Builder.CreateLShr(V, 64), I64Ty);
     };
 
-    llvm::Value *Expected = coerceI128(getVar(Op.Inputs[1], Builder));
-    llvm::Value *Desired = coerceI128(getVar(Op.Inputs[2], Builder));
-    llvm::Value *Address = getVar(Op.Inputs[3], Builder);
-    Address = getMemoryPtr(Address, I128Ty, Builder);
+    llvm::Value *Expected = coerceI128(getObservableValue(1));
+    llvm::Value *Desired = coerceI128(getObservableValue(2));
+    llvm::Value *Address =
+        resolveAtomicMemoryPtr(Op.Inputs[3], 16, I128Ty, Builder);
 
     auto *ResultTy = llvm::StructType::get(*Ctx, {I64Ty, I64Ty});
     auto *AsmTy = llvm::FunctionType::get(
@@ -548,9 +511,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       return V->getType() == I128Ty ? V : Builder.CreateZExtOrTrunc(V, I128Ty);
     };
 
-    llvm::Value *Mask = coerceI128(getVar(Op.Inputs[1], Builder));
-    llvm::Value *Address = getVar(Op.Inputs[2], Builder);
-    Address = getMemoryPtr(Address, I128Ty, Builder);
+    llvm::Value *Mask = coerceI128(getObservableValue(1));
+    llvm::Value *Address =
+        resolveAtomicMemoryPtr(Op.Inputs[2], 16, I128Ty, Builder);
 
     llvm::AtomicOrdering Ordering = llvm::AtomicOrdering::Monotonic;
     if (IC == I::A64_Ldclrpa || IC == I::A64_Ldsetpa)
@@ -731,9 +694,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
 
     auto *Scale = llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), FBits);
     if (IntToFP) {
-      llvm::Intrinsic::ID IID =
-          IsUnsigned ? llvm::Intrinsic::aarch64_ucvtf_fixed
-                     : llvm::Intrinsic::aarch64_scvtf_fixed;
+      llvm::Intrinsic::ID IID = IsUnsigned
+                                    ? llvm::Intrinsic::aarch64_ucvtf_fixed
+                                    : llvm::Intrinsic::aarch64_scvtf_fixed;
       auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {GprTy});
       llvm::Value *Src = coerceInteger(getVar(Op.Inputs[1], Builder), GprTy);
       llvm::Value *R = Builder.CreateCall(
@@ -742,9 +705,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
       return (R->getType() == OutTy) ? R : Builder.CreateZExtOrTrunc(R, OutTy);
     }
 
-    llvm::Intrinsic::ID IID =
-        IsUnsigned ? llvm::Intrinsic::aarch64_fcvtzu_fixed
-                   : llvm::Intrinsic::aarch64_fcvtzs_fixed;
+    llvm::Intrinsic::ID IID = IsUnsigned
+                                  ? llvm::Intrinsic::aarch64_fcvtzu_fixed
+                                  : llvm::Intrinsic::aarch64_fcvtzs_fixed;
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(Mod, IID, {GprTy});
     llvm::Value *Bits = coerceInteger(getVar(Op.Inputs[1], Builder), I16Ty);
     llvm::Value *Src = Builder.CreateBitCast(Bits, HalfTy);

@@ -17,8 +17,8 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-intrinsic"
-#include "neverd/support/Diagnostic.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
@@ -28,6 +28,56 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace neverd {
+
+std::optional<uint8_t>
+MedLLVMEmitter::atomicIntrinsicAddressInput(const MedOp &Op) const {
+  if (TargetArch != Arch::AArch64 || Op.NumInputs == 0 ||
+      !Op.Inputs[0].isConst())
+    return std::nullopt;
+
+  using I = Intrinsic;
+  const auto IC = static_cast<I>(Op.Inputs[0].ConstVal);
+  switch (IC) {
+  case I::A64_AtomicAnd:
+  case I::A64_AtomicOr:
+  case I::A64_AtomicXor:
+  case I::A64_AtomicSmax:
+  case I::A64_AtomicSmin:
+  case I::A64_AtomicUmax:
+  case I::A64_AtomicUmin:
+    return Op.NumInputs >= 3 ? std::optional<uint8_t>(2) : std::nullopt;
+  case I::A64_Ldxr:
+  case I::A64_Ldaxr:
+  case I::A64_Ldxp:
+  case I::A64_Ldaxp:
+    return Op.NumInputs >= 2 ? std::optional<uint8_t>(1) : std::nullopt;
+  case I::A64_Stxr:
+  case I::A64_Stlxr:
+  case I::A64_Stxp:
+  case I::A64_Stlxp:
+    return Op.NumInputs >= 3 ? std::optional<uint8_t>(2) : std::nullopt;
+  case I::A64_Rcwcasp:
+  case I::A64_Rcwcaspa:
+  case I::A64_Rcwcaspal:
+  case I::A64_Rcwcaspl:
+  case I::A64_Rcwscasp:
+  case I::A64_Rcwscaspa:
+  case I::A64_Rcwscaspal:
+  case I::A64_Rcwscaspl:
+    return Op.NumInputs >= 4 ? std::optional<uint8_t>(3) : std::nullopt;
+  case I::A64_Ldclrp:
+  case I::A64_Ldclrpa:
+  case I::A64_Ldclrpal:
+  case I::A64_Ldclrpl:
+  case I::A64_Ldsetp:
+  case I::A64_Ldsetpa:
+  case I::A64_Ldsetpal:
+  case I::A64_Ldsetpl:
+    return Op.NumInputs >= 3 ? std::optional<uint8_t>(2) : std::nullopt;
+  default:
+    return std::nullopt;
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // INTRINSIC dispatch

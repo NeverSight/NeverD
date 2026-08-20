@@ -27,10 +27,19 @@
 
 namespace neverd {
 
+struct BinaryImage;
+
 class LowToMedConverter {
 public:
   MedFunc convert(const LowFunc &Low, Arch TheArch,
                   BinaryFormat Fmt = BinaryFormat::ELF);
+
+  /// Provide the fully loaded image while converting pipeline-owned LowIR.
+  /// Constant propagation uses this immutable layout evidence to avoid
+  /// freezing arithmetic between addresses that will be rebuilt as distinct
+  /// symbols. Optional for standalone IR clients; null preserves the generic
+  /// image-independent folding policy.
+  void setBinaryImage(const BinaryImage *I) { Image = I; }
 
   /// Provide the per-callee callee-cleanup pop map (entry VA -> x86 `ret imm`
   /// bytes).  When set, a direct CALL to such a callee gets a post-call stack-
@@ -179,6 +188,8 @@ private:
   int NextTempId = 0;
   uint32_t NextCallSiteId = 1;
   Arch TargetArch = Arch::Unknown;
+
+  const BinaryImage *Image = nullptr;
 
   std::vector<StackSlot> StackSlots;
 

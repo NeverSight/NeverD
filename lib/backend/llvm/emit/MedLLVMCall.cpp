@@ -94,16 +94,32 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
              Builder);
     return;
   }
-  auto *Target = GetInput(0);
+
+  const MedCallInfo *CI =
+      CurMedFunc ? CurMedFunc->findCall(BlockId, OpIdx) : nullptr;
+  // Address fragments are legal only while an address-forming expression is
+  // being completed. Audit every call escape before ABI classification: an
+  // indirect target, integer-class argument, FP/vector argument, or variadic
+  // tail can otherwise bypass tryResolvePointerArg and leak a stale page VA.
+  if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs > 0)
+    rejectEscapingAddressFragment(Op.Inputs[0], "an indirect call target");
+  if (CI)
+    for (const MedVar &Arg : CI->Args)
+      rejectEscapingAddressFragment(Arg, "a call argument");
+
+  llvm::Value *Target = nullptr;
+  if (Op.Opcode == NdOp::INDIR_CALL) {
+    if (Op.NumInputs > 0)
+      Target = tryResolveIndirectCallTarget(Op.Inputs[0], Builder);
+    if (!Target)
+      Target = GetInput(0);
+  }
   uint64_t CallAddr = Op.Inputs[0].isConst() ? Op.Inputs[0].ConstVal : 0;
   const Section *TargetSection =
       Img && CallAddr != 0 ? Img->getSectionFor(CallAddr) : nullptr;
   const bool IsObjCMessageStub =
       TargetSection && Img->isMachO() &&
       TargetSection->Name == section_names::macho::ObjCStubs;
-
-  const MedCallInfo *CI =
-      CurMedFunc ? CurMedFunc->findCall(BlockId, OpIdx) : nullptr;
 
   auto canonicalizeObjectCallee = [&](llvm::StringRef Name) -> std::string {
     if (!Img || TargetFormat != BinaryFormat::MachO || Name.empty())
@@ -151,8 +167,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   std::vector<llvm::Value *> Args;
   if (CI) {
-    for (auto &Arg : CI->Args)
-      Args.push_back(getVar(Arg, Builder));
+    for (auto &Arg : CI->Args) {
+      llvm::Value *Value =
+          tryResolveCodeAddressValue(Arg, /*RequireCodeRole=*/false, Builder);
+      Args.push_back(Value ? Value : getVar(Arg, Builder));
+    }
   }
 
   auto *RetTy = llvm::Type::getInt64Ty(*Ctx);
