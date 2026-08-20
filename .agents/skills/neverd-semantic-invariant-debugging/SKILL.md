@@ -153,6 +153,14 @@ If the decision is made after decoding into shared MedIR, prefer a
 format-neutral fix. Use a loader-specific fix only when evidence shows that the
 formats produce different or incomplete metadata before the shared boundary.
 
+### Re-materialized immutable table bases
+
+When a nested PHI combines an exact recurrent arm with a reset arm that
+re-materializes an immutable table base, read
+[references/rematerialized-table-base.md](references/rematerialized-table-base.md)
+before changing recurrence or provenance logic. It defines the split proof,
+initializer anchoring, fail-closed boundaries, and regression matrix.
+
 ## 5. Audit Sibling Surfaces
 
 Expand from the root abstraction, not from superficial text similarity.
@@ -203,6 +211,63 @@ does not prove that a recovered pointer remains valid after recompilation.
 Report exact pass, failure, and skip counts. A skip is not coverage. If platform
 CI is still running, say so explicitly rather than reporting it as passed.
 
+### Choose the build profile by the evidence needed
+
+Release is the default for broad NeverD semantic validation, not a universal
+replacement for Debug. NeverD's Debug configuration is intentionally
+unoptimized, and its decode/lift path is substantially slower; the repository
+CI runs the normal cross-platform suite in Release.
+
+| Purpose | Preferred profile |
+|---|---|
+| Focused RED test, assertion failure, source stepping | Debug |
+| Broad `NeverDSemanticTests`, lift/recompile, or end-to-end regression | Release |
+| Optimized-path diagnosis that still needs symbols | RelWithDebInfo |
+| Sanitizer run | Dedicated Debug/sanitizer build |
+
+For a broad semantic run, use a dedicated, known-good Release tree and rebuild
+the owning target from the current sources before executing it:
+
+```bash
+cmake -S . -B build-release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON
+cmake --build build-release --target NeverDSemanticTests --parallel 4
+ctest --test-dir build-release --build-config Release \
+  -L '^NeverDSemanticTests$' --output-on-failure --parallel 4
+```
+
+Do not infer the profile from a directory name. Check `CMAKE_BUILD_TYPE` in its
+`CMakeCache.txt`, and ensure the requested target actually rebuilt. Reconfigure
+after adding a test source so an old executable cannot silently omit it. If a
+reused build tree has inconsistent Ninja/CMake state or unexpectedly starts an
+unrelated full rebuild, stop using it as validation evidence and configure a
+separate clean tree instead of trying to salvage the authoritative run in
+place.
+
+A long run counts only when the process exits normally and prints its final
+summary. Do not attach a debugger to the only authoritative suite process to
+investigate a long tail: attaching can suspend it, and terminating the debugger
+can terminate or invalidate the test run. Reproduce the suspected case in a
+separate filtered process. Report an interrupted, timed-out, killed, or
+debugger-disturbed run as incomplete even when no failure appeared before the
+interruption.
+
+### Keep the validation toolchain matched to NeverD LLVM
+
+Do not use an arbitrary system Clang as the sole oracle for LLVM IR emitted by
+NeverD. The repository LLVM fork can carry a different canonical intrinsic
+signature from the host toolchain; a host parser error around an overloaded
+intrinsic can therefore be version skew rather than invalid NeverD output.
+Re-run object emission with the repository's LLVM/Codegen path and use that
+result for the relink/runtime check.
+
+Do not rename a canonical LLVM operation to a private `__neverd_*` pseudo
+intrinsic merely to make the host compiler accept it. If the required intrinsic
+is genuinely absent from the project toolchain, add the real intrinsic to the
+LLVM fork and keep neverc's corresponding surface synchronized. Record host
+toolchain incompatibility separately from semantic test failures.
+
 ## 7. Classify the Change Honestly
 
 Use evidence from history and the failing path:
@@ -230,6 +295,10 @@ Do not call the issue root-fixed until all applicable items are true:
 - [ ] The original fixture passes through every affected stage.
 - [ ] Safety diagnostics remain enabled.
 - [ ] Relevant broad regression suites pass with skips identified.
+- [ ] Broad runs completed in a verified build profile; interrupted runs were
+      not counted.
+- [ ] LLVM IR/object validation used the repository-matched toolchain or any
+      host-version mismatch was stated explicitly.
 - [ ] The final explanation distinguishes regression, latent defect, and
       incomplete prior fix.
 
