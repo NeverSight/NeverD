@@ -13,6 +13,7 @@ Panoramica, build e CLI sono nel README del repository. I riferimenti di design 
 | [Architettura](architecture.it.md) | Percorsi IR, confini dei componenti, lifting strict, profondità del supporto e punti di modifica |
 | [Test](testing.it.md) | Suite, fixture generate, roundtrip Unicorn e comandi incrementali |
 | [Ricostruzione delle eccezioni Windows](windows-exception-reconstruction.it.md) | Matrice di supporto SEH/C++, contratto IR, regole di patch nativo e validazione PE |
+| [Audit e hunt di sicurezza della memoria](memory-safety.it.md) | Analisi di vita dell’heap e overflow di copia: contratto di identità per formato, catalogo sink/source, verdetti, budget e schema JSON |
 | [Plugin Python](python-plugins.it.md) | Sviluppo, API di sessione ed eventi, isolamento, test e pubblicazione |
 | [Decompilazione EVM](evm.it.md) | Input, hardfork, IR a stadi, ABI host C/LLVM, ricostruzione Solidity e limiti |
 | [Decompilazione Solana SBF](sbf.it.md) | SBF v0-v4, LLVM IR, output C/Rust, verifica e limiti noti |

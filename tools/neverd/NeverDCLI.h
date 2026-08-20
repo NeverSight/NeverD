@@ -137,6 +137,8 @@ extern llvm::cl::SubCommand SimplifyCmd;
 extern llvm::cl::SubCommand SymbolicCmd;
 extern llvm::cl::SubCommand OptimizeIRCmd;
 extern llvm::cl::SubCommand TranslateObjectCmd;
+extern llvm::cl::SubCommand AuditCmd;
+extern llvm::cl::SubCommand HuntCmd;
 
 //===----------------------------------------------------------------------===//
 // Options (defined in NeverDCLIOptions.cpp)
@@ -205,6 +207,14 @@ extern llvm::cl::opt<unsigned> SymbolicMaxPaths;
 extern llvm::cl::opt<unsigned> SymbolicMaxSteps;
 extern llvm::cl::opt<unsigned> SymbolicMaxBlockVisits;
 extern llvm::cl::opt<bool> SymbolicExpressions;
+
+// Safety (audit / hunt).
+extern llvm::cl::opt<std::string> SafetySinks;
+extern llvm::cl::opt<std::string> SafetySources;
+extern llvm::cl::opt<unsigned> SafetyMaxPaths;
+extern llvm::cl::opt<unsigned> SafetyMaxSteps;
+extern llvm::cl::opt<unsigned> SafetyMaxLoop;
+extern llvm::cl::opt<unsigned long long> SafetySolverConflicts;
 
 // Plugins.
 extern llvm::cl::opt<bool> PluginList;
@@ -363,6 +373,10 @@ int runCfg(neverd_session_t Sess);
 int runXrefs(neverd_session_t Sess);
 int runCallGraph(neverd_session_t Sess);
 int runSymbolicExplore(neverd_session_t Sess);
+
+// NeverDCmdSafety.cpp — memory-safety audit and hunt over the lifted IR.
+int runAudit(neverd_session_t Sess);
+int runHunt(neverd_session_t Sess);
 
 // NeverDCmdMarkup.cpp — user annotations persisted beside the binary.
 // runBookmarks operates purely on the JSON sidecar, so it needs no session.

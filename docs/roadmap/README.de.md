@@ -62,7 +62,21 @@ Differentialtests gegen Anvil. Host-ABI und Grenzen stehen unter
 
 ---
 
-## 4. Engine- & Produkt-Härtung (laufend)
+## 4. Speicher-Audit und Hunt
+
+Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-after-Free) und gefährliche Copy-Überläufe analysieren, als strukturiertes JSON, mit einem konkreten Zeugen für einen bewiesenen Überlauf. Die Analyse läuft auf dem formatneutralen IR und der gemeinsamen Identitätsansicht, daher sind **PE, ELF und Mach-O gleichrangige Ziele**, und sie nutzt die eigene symbolische Ausführung und den Bitvektor-Solver — kein externer Solver, kein Container.
+
+| Punkt | Hinweise |
+|-------|----------|
+| Spur `audit` | Heap-Zustandsmaschine über IR + Escape-Zusammenfassungen: Leak, Double-Free, Use-after-Free |
+| Spur `hunt` | Senkenkatalog + Argument-Vorfilter + Zielkapazität + Solver-Zeuge |
+| Identitätsvertrag | Senkenauflösung je Format (PE-IAT, ELF-PLT, Mach-O-dyld-Bind) und PDB-/DWARF-/MAP-Namensquellen |
+
+**Status:** P0 für PE, ELF und Mach-O abgeschlossen. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) über eine host-native Fixture festgeschrieben. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md). P1 erweitert auf Stack-/Global-Überlauf, uninitialisierte Reads und Formatstrings.
+
+---
+
+## 5. Engine- & Produkt-Härtung (laufend)
 
 | Bereich | Richtung |
 |---------|----------|
@@ -75,11 +89,12 @@ Differentialtests gegen Anvil. Host-ABI und Grenzen stehen unter
 
 ## Zeitplan
 
-Native Formatvollständigkeit, EVM- und Solana-SBF-Dekompilation sind abgeschlossen und regressionstestgedeckt. Keine Termine zugesagt.
+Native Formatvollständigkeit, EVM- und Solana-SBF-Dekompilation sowie Speichersicherheit P0 sind abgeschlossen und regressionstestgedeckt. Keine Termine zugesagt.
 
 | Feature | Status |
 |---------|--------|
 | Native Formatvollständigkeit (PE ARM*, Mach-O i386) | Abgeschlossen |
 | EVM-Bytecode-Dekompilation | Abgeschlossen — C, Solidity und LLVM; regressionstestgedeckt |
 | Solana-eBPF-(SBF)-Dekompilation | Abgeschlossen — v0-v4, C, Rust und LLVM; regressionstestgedeckt |
+| Speicher-Audit und Hunt | Abgeschlossen — P0 für PE, ELF und Mach-O; regressionstestgedeckt |
 | Engine- & Produkt-Härtung | Laufend |

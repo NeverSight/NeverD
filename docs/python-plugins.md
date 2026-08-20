@@ -129,6 +129,19 @@ replaced by unknown state; unsupported LowIR operations, calls without
 summaries, and stores through unresolved addresses are counted in
 `unmodelled_ops`. EVM and SBF sessions do not expose native LowIR exploration.
 
+### Memory-safety audit and hunt
+
+`session.audit()` and `session.hunt()` return parsed JSON reports (the same
+schema as the CLI). They require a lifted native session:
+
+```python
+audit = session.audit()
+hunt = session.hunt(max_paths=64, max_steps=1 << 16)
+print(audit.get("ok"), hunt.get("findings"))
+```
+
+EVM and SBF sessions reject these calls.
+
 ### Proof-gated synthesis and LLVM optimization
 
 `synthesize_expression` is deliberately separate from the legacy MBA-only

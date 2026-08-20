@@ -421,11 +421,12 @@ helper de CMake.
 | `lib/backend/c` | Renderizado HighIR-a-C y LLVM-IR-a-C | IR |
 | `lib/backend/llvm` | Lowering de MedIR a LLVM | IR |
 | `lib/backend/codegen` | Generación de código objetivo y patch/reescritura in-place PE/ELF/Mach-O | IR, loader |
-| `lib/sdk` | ABI C pública, ciclo de session, consultas, persistencia, plugins, entradas lift/decompile/patch | Agrega el motor en `libneverd` |
+| `lib/sdk` | ABI C pública, ciclo de session, consultas, persistencia, plugins, entradas lift/decompile/patch/audit/hunt | Agrega el motor en `libneverd` |
 | `lib/pass` | Pases de ofuscación LLVM IR y ejecutor de pases MIR | IR |
 | `lib/debug` | Contextos de depuración DWARF, PDB y linker-map | IR |
 | `lib/sigs` | Análisis, bases de datos y coincidencia de firmas | Loader |
 | `lib/libc` | Nombres libc conocidos y soporte del modelo de llamada | Componente independiente |
+| `lib/safety` | Auditoría de vida del montón y caza de desbordamiento de copia sobre el IR levantado | Symbolic, Solver |
 | `lib/support` | Helpers compartidos de carga binaria | Loader |
 | `lib/translate` | Contratos versionados de estado/policy/exit guest, ABI runtime fija, memoria guest comprobada, auditorías de IR/objetos/LinkGraphs generados, enlace nativo sellado y dispatcher C++ experimental de x86-64 a AArch64 | Contratos IR, LLVM, LLVM Object y JITLink |
 
@@ -537,6 +538,7 @@ para la cuadrícula de 12 celdas. Consulte la [guía de pruebas](testing.es.md).
 | Añadir transformación LLVM | `lib/pass/ir`, encabezado público en `include/neverd/pass/ir`, opción pipeline si se expone | Suite de transformación enfocada + `NeverDPatchFullTests` si cambia la salida patch |
 | Añadir operación C API | `include/neverd/sdk/NeverDCAPI.h`, `lib/sdk/NeverDCAPI*.cpp` enfocado, `SessionImpl.h` solo para estado | Pruebas semánticas SDK/CLI; conservar `neverd_last_error` y convenciones de asignación |
 | Añadir comando CLI | `tools/neverd/NeverDCLIOptions.cpp`, `NeverDCLI.h`, `NeverDCmd*.cpp` enfocado y despacho en `neverd.cpp` | `unittests/semantic/CLIEndToEndTests.cpp` y smoke test CLI directo |
+| Cambiar la auditoría de vida del montón o la caza de desbordamiento de copia | `lib/safety`, `include/neverd/safety`, `include/neverd/sdk/NeverDCAPISafety.h` | `NeverDSafetyTests` y `NeverDSafetyIntegrationTests` |
 | Añadir regresión semántica | `unittests/semantic/*Tests.cpp` enfocado; registrar archivo nuevo en `unittests/semantic/CMakeLists.txt` | Construir su binario de pruebas y seleccionar el caso con `ctest -R` |
 
 Mantenga los cambios estrechos. Los archivos que definen una representación

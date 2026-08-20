@@ -1,0 +1,108 @@
+//===- SafetyEnums.def - Safety vocabulary spellings ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. These spellings are the
+// stable JSON vocabulary for audit and hunt reports; the same macros expand
+// the enums, toString, and specification-file parsers.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SAFETY_TRACK
+#define SAFETY_TRACK(ID, SPELLING)
+#endif
+#ifndef SAFETY_VERDICT
+#define SAFETY_VERDICT(ID, SPELLING)
+#endif
+#ifndef SAFETY_CONFIDENCE
+#define SAFETY_CONFIDENCE(ID, SPELLING)
+#endif
+#ifndef SAFETY_VULN_CLASS
+#define SAFETY_VULN_CLASS(ID, SPELLING)
+#endif
+#ifndef SAFETY_SINK_KIND
+#define SAFETY_SINK_KIND(ID, SPELLING)
+#endif
+#ifndef SAFETY_NAME_SOURCE
+#define SAFETY_NAME_SOURCE(ID, SPELLING)
+#endif
+#ifndef SAFETY_ARG_FLOW
+#define SAFETY_ARG_FLOW(ID, SPELLING)
+#endif
+
+//===----------------------------------------------------------------------===//
+// Tracks
+//===----------------------------------------------------------------------===//
+
+SAFETY_TRACK(Audit, "audit")
+SAFETY_TRACK(Hunt, "hunt")
+
+//===----------------------------------------------------------------------===//
+// Verdicts
+//===----------------------------------------------------------------------===//
+
+SAFETY_VERDICT(Safe, "SAFE")
+SAFETY_VERDICT(Unsafe, "UNSAFE")
+SAFETY_VERDICT(Unknown, "UNKNOWN")
+
+//===----------------------------------------------------------------------===//
+// Confidence
+//===----------------------------------------------------------------------===//
+
+SAFETY_CONFIDENCE(High, "HIGH")
+SAFETY_CONFIDENCE(Medium, "MEDIUM")
+SAFETY_CONFIDENCE(Low, "LOW")
+
+//===----------------------------------------------------------------------===//
+// Weakness classes
+//===----------------------------------------------------------------------===//
+
+SAFETY_VULN_CLASS(BufferOverflow, "buffer_overflow")
+SAFETY_VULN_CLASS(FormatString, "format_string")
+SAFETY_VULN_CLASS(CommandInjection, "command_injection")
+SAFETY_VULN_CLASS(HeapLeak, "heap_leak")
+SAFETY_VULN_CLASS(DoubleFree, "double_free")
+SAFETY_VULN_CLASS(UseAfterFree, "use_after_free")
+SAFETY_VULN_CLASS(Unknown, "unknown")
+
+//===----------------------------------------------------------------------===//
+// Catalog roles
+//===----------------------------------------------------------------------===//
+
+SAFETY_SINK_KIND(Copy, "copy")
+SAFETY_SINK_KIND(Format, "format")
+SAFETY_SINK_KIND(Alloc, "alloc")
+SAFETY_SINK_KIND(Free, "free")
+SAFETY_SINK_KIND(Realloc, "realloc")
+SAFETY_SINK_KIND(Exec, "exec")
+SAFETY_SINK_KIND(Source, "source")
+
+//===----------------------------------------------------------------------===//
+// Callee-name identity origin
+//===----------------------------------------------------------------------===//
+
+SAFETY_NAME_SOURCE(Rename, "rename")
+SAFETY_NAME_SOURCE(Pdb, "pdb")
+SAFETY_NAME_SOURCE(Dwarf, "dwarf")
+SAFETY_NAME_SOURCE(Map, "map")
+SAFETY_NAME_SOURCE(Export, "export")
+SAFETY_NAME_SOURCE(Symbol, "symbol")
+SAFETY_NAME_SOURCE(Import, "import")
+SAFETY_NAME_SOURCE(Sig, "sig")
+SAFETY_NAME_SOURCE(Synthetic, "synthetic")
+
+//===----------------------------------------------------------------------===//
+// Argument provenance
+//===----------------------------------------------------------------------===//
+
+SAFETY_ARG_FLOW(Bounded, "BOUNDED")
+SAFETY_ARG_FLOW(Tainted, "TAINTED")
+SAFETY_ARG_FLOW(Unknown, "UNKNOWN")
+
+#undef SAFETY_ARG_FLOW
+#undef SAFETY_NAME_SOURCE
+#undef SAFETY_SINK_KIND
+#undef SAFETY_VULN_CLASS
+#undef SAFETY_CONFIDENCE
+#undef SAFETY_VERDICT
+#undef SAFETY_TRACK

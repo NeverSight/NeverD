@@ -67,6 +67,11 @@ cl::SubCommand DashboardCmd("dashboard", "Show binary overview dashboard");
 cl::SubCommand SigsCmd("sigs", "Apply FLIRT signatures to binary");
 cl::SubCommand SymbolicCmd("sym-explore",
                            "Explore bounded symbolic paths through a function");
+cl::SubCommand AuditCmd("audit",
+                        "Audit heap object lifetimes for leaks, double frees, "
+                        "and use-after-free");
+cl::SubCommand HuntCmd("hunt",
+                       "Hunt dangerous-copy overflows and report a witness");
 // Takes text rather than a binary, so it is not among the subcommands that
 // register the positional input file below.
 cl::SubCommand SimplifyCmd("simplify", "Simplify a bitvector expression");
@@ -107,11 +112,13 @@ cl::opt<std::string>
               cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
               cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
               cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
-              cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd));
+              cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
+              cl::sub(AuditCmd), cl::sub(HuntCmd));
 
 cl::opt<std::string> OutputFile("o", cl::desc("Output file"), cl::init(""),
                                 cl::sub(LiftCmd), cl::sub(DecompileCmd),
-                                cl::sub(PatchCmd));
+                                cl::sub(PatchCmd), cl::sub(AuditCmd),
+                                cl::sub(HuntCmd));
 
 cl::opt<bool>
     Verbose("v", cl::desc("Verbose output"), cl::sub(LiftCmd),
@@ -230,7 +237,7 @@ cl::opt<bool> NoDebug(
     cl::sub(RenameCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
     cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
     cl::sub(EntryPointsCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd));
+    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd));
 
 cl::opt<std::string> PdbFile(
     "pdb",
@@ -245,7 +252,7 @@ cl::opt<std::string> PdbFile(
     cl::sub(RenameCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
     cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
     cl::sub(EntryPointsCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd));
+    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd));
 
 cl::opt<std::string> MapFile(
     "map",
@@ -260,7 +267,7 @@ cl::opt<std::string> MapFile(
     cl::sub(RenameCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
     cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
     cl::sub(EntryPointsCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd));
+    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd));
 
 cl::opt<bool> NoOpt("no-opt", cl::desc("Skip LLVM optimization passes"),
                     cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
@@ -439,6 +446,40 @@ cl::opt<bool> SymbolicExpressions(
     cl::sub(SymbolicCmd));
 
 //===----------------------------------------------------------------------===//
+// Safety options (audit / hunt)
+//===----------------------------------------------------------------------===//
+
+cl::opt<std::string>
+    SafetySinks("sinks",
+                cl::desc("Extend the sink catalog from a specification file"),
+                cl::init(""), cl::value_desc("file"), cl::sub(AuditCmd),
+                cl::sub(HuntCmd));
+
+cl::opt<std::string> SafetySources(
+    "sources", cl::desc("Extend the input-source catalog from a file"),
+    cl::init(""), cl::value_desc("file"), cl::sub(AuditCmd), cl::sub(HuntCmd));
+
+cl::opt<unsigned> SafetyMaxPaths("max-paths",
+                                 cl::desc("Maximum reachable paths to explore"),
+                                 cl::init(0), cl::sub(HuntCmd),
+                                 cl::sub(AuditCmd));
+
+cl::opt<unsigned> SafetyMaxSteps("max-steps",
+                                 cl::desc("Maximum operations along each path"),
+                                 cl::init(0), cl::sub(HuntCmd),
+                                 cl::sub(AuditCmd));
+
+cl::opt<unsigned> SafetyMaxLoop("max-loop",
+                                cl::desc("Maximum iterations of one loop header"),
+                                cl::init(0), cl::sub(HuntCmd),
+                                cl::sub(AuditCmd));
+
+cl::opt<unsigned long long>
+    SafetySolverConflicts("solver-conflicts",
+                          cl::desc("Solver conflict budget (0 = unbounded)"),
+                          cl::init(0), cl::sub(HuntCmd), cl::sub(AuditCmd));
+
+//===----------------------------------------------------------------------===//
 // JSON output option (shared)
 //===----------------------------------------------------------------------===//
 
@@ -451,7 +492,8 @@ cl::opt<bool>
                cl::sub(CallGraphCmd), cl::sub(RenameCmd), cl::sub(SearchCmd),
                cl::sub(SectionsCmd), cl::sub(SymbolsCmd), cl::sub(RelocsCmd),
                cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
-               cl::sub(DashboardCmd), cl::sub(SigsCmd));
+               cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(AuditCmd),
+               cl::sub(HuntCmd));
 
 //===----------------------------------------------------------------------===//
 // Plugins-specific options
@@ -627,14 +669,16 @@ cl::opt<std::string> TextSection(
 
 cl::opt<std::string> SigDir("sig-dir",
                             cl::desc("Directory containing .pat files"),
-                            cl::init(""), cl::sub(SigsCmd));
+                            cl::init(""), cl::sub(SigsCmd), cl::sub(AuditCmd),
+                            cl::sub(HuntCmd));
 
 cl::opt<std::string> SigFile("sig-file", cl::desc("Single .pat file to load"),
-                             cl::init(""), cl::sub(SigsCmd));
+                             cl::init(""), cl::sub(SigsCmd), cl::sub(AuditCmd),
+                             cl::sub(HuntCmd));
 
 cl::opt<bool>
     SigAuto("auto", cl::desc("Auto-detect arch/format and load matching sigs"),
-            cl::sub(SigsCmd));
+            cl::sub(SigsCmd), cl::sub(AuditCmd), cl::sub(HuntCmd));
 
 //===----------------------------------------------------------------------===//
 // Simplify-specific options

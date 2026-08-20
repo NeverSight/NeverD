@@ -38,6 +38,7 @@
 #include "neverd/sdk/NeverDCAPIPersist.h"
 #include "neverd/sdk/NeverDCAPIPlugin.h"
 #include "neverd/sdk/NeverDCAPIQuery.h"
+#include "neverd/sdk/NeverDCAPISafety.h"
 #include "neverd/sdk/NeverDCAPISession.h"
 #include "neverd/sdk/NeverDCAPISigs.h"
 #include "neverd/sdk/NeverDCAPISimplify.h"

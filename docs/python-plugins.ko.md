@@ -103,6 +103,18 @@ for path in result.paths:
 
 경로, 단계, 루프 방문 또는 확인되지 않은 분기 제한 때문에 탐색이 중단되면 `complete`는 false입니다. `exact`가 true이려면 어떤 연산도 보수적으로 미지 상태로 대체되지 않아야 합니다. 지원되지 않는 LowIR 연산, 요약이 없는 호출 및 확인되지 않은 주소를 통한 저장은 `unmodelled_ops`에 포함됩니다. EVM 및 SBF 세션에서는 네이티브 LowIR 탐색을 사용할 수 없습니다.
 
+### 메모리 안전성 감사와 헌트
+
+`session.audit()`와 `session.hunt()`는 파싱된 JSON 보고서를 반환합니다(CLI와 같은 스키마). 리프트된 네이티브 세션이 필요합니다.
+
+```python
+audit = session.audit()
+hunt = session.hunt(max_paths=64, max_steps=1 << 16)
+print(audit.get("ok"), hunt.get("findings"))
+```
+
+EVM 및 SBF 세션은 이러한 호출을 거부합니다.
+
 변경 불가능한 여섯 이벤트는 `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE`, `PATCH_APPLIED`입니다. 콜백 중 payload 문자열이 복사되며 해당 이벤트 종류와 관계없는 필드는 `None`입니다.
 
 종료 후 사용하기 위해 `Session`을 저장하지 마십시오. 네이티브 capsule은 `on_term`이 시작되기 전과 네이티브 세션을 해제할 수 있기 전에 무효화됩니다. 이후 호출은 오래된 메모리를 역참조하지 않고 `RuntimeError`로 실패합니다.

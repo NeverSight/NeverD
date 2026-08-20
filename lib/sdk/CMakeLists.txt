@@ -12,6 +12,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIPatch.cpp
     capi/NeverDCAPIPersist.cpp
     capi/NeverDCAPIRoundtrip.cpp
+    capi/NeverDCAPISafety.cpp
     capi/NeverDCAPISearch.cpp
     capi/NeverDCAPISigs.cpp
     capi/NeverDCAPISimplify.cpp
@@ -67,6 +68,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDDebugInfo
     NeverDSolver
     NeverDSymbolic
+    NeverDSafety
     NeverDTranslate
     NeverDSigs
     NeverDSBF
@@ -129,6 +131,7 @@ set(NEVERD_SDK_HEADERS
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIDisasm.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIQuery.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISymbolic.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISafety.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIPatch.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIPersist.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISigs.h

@@ -61,7 +61,21 @@ C23/LLVM/Solidity backend, CLI/C API, Anvil differential을 포함합니다. hos
 
 ---
 
-## 4. 엔진·제품 강화 (지속)
+## 4. 메모리 안전성 감사와 헌트
+
+리프트된 바이너리에서 힙 수명 결함(누수, 이중 해제, 해제 후 사용)과 위험한 복사 오버플로를 분석하고 구조화된 JSON으로 보고합니다. 증명된 오버플로에는 구체적 증거를 붙입니다. 분석은 형식에 의존하지 않는 IR과 공유 신원 뷰에서 동작하므로 **PE, ELF, Mach-O는 동등한 대상**이며, 자체 기호 실행과 비트벡터 솔버를 재사용합니다. 외부 솔버나 컨테이너는 없습니다.
+
+| 항목 | 설명 |
+|------|------|
+| `audit` 트랙 | IR 위의 힙 상태 기계 + 탈출 요약: 누수, 이중 해제, 해제 후 사용 |
+| `hunt` 트랙 | 싱크 카탈로그 + 인수 사전 필터 + 목적지 용량 + 솔버 증거 |
+| 신원 계약 | 형식별 싱크 해석(PE IAT, ELF PLT, Mach-O dyld bind)과 PDB / DWARF / MAP 이름 출처 |
+
+**상태:** PE, ELF, Mach-O의 P0 완료. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 호스트 네이티브 fixture에 대한 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 감사와 헌트](../memory-safety.ko.md). P1은 스택/전역 오버플로, 미초기화 읽기, 형식 문자열로 확장합니다.
+
+---
+
+## 5. 엔진·제품 강화 (지속)
 
 | 영역 | 방향 |
 |------|------|
@@ -74,11 +88,12 @@ C23/LLVM/Solidity backend, CLI/C API, Anvil differential을 포함합니다. hos
 
 ## 일정
 
-네이티브 포맷, EVM, Solana SBF 디컴파일은 구현 및 회귀 테스트가 완료되었습니다. 출시일을 약속하지 않습니다.
+네이티브 포맷, EVM, Solana SBF 디컴파일과 메모리 안전성 P0은 구현 및 회귀 테스트가 완료되었습니다. 출시일을 약속하지 않습니다.
 
 | 기능 | 상태 |
 |------|------|
 | 네이티브 포맷 완성 (PE ARM*, Mach-O i386) | 완료 |
 | EVM 바이트코드 디컴파일 | 완료 — C, Solidity, LLVM; 회귀 테스트 완료 |
 | Solana eBPF (SBF) 디컴파일 | 완료 — v0-v4, C, Rust, LLVM; 회귀 테스트 완료 |
+| 메모리 안전성 감사와 헌트 | 완료 — PE, ELF, Mach-O의 P0; 회귀 테스트 완료 |
 | 엔진·제품 강화 | 지속 |

@@ -103,6 +103,18 @@ for path in result.paths:
 
 `complete` ist false, wenn eine Grenze für Pfade, Schritte, Schleifenbesuche oder nicht aufgelöste Verzweigungen die Erkundung beendet. `exact` setzt zusätzlich voraus, dass keine Operation konservativ durch einen unbekannten Zustand ersetzt wurde; nicht unterstützte LowIR-Operationen, Aufrufe ohne Zusammenfassung und Speicherzugriffe über nicht aufgelöste Adressen werden in `unmodelled_ops` gezählt. EVM- und SBF-Sessions bieten keine native LowIR-Erkundung.
 
+### Speicher-Audit und Hunt
+
+`session.audit()` und `session.hunt()` liefern geparste JSON-Berichte (dasselbe Schema wie die CLI). Sie brauchen eine geliftete native Session:
+
+```python
+audit = session.audit()
+hunt = session.hunt(max_paths=64, max_steps=1 << 16)
+print(audit.get("ok"), hunt.get("findings"))
+```
+
+EVM- und SBF-Sessions weisen diese Aufrufe zurück.
+
 Die sechs unveränderlichen Event-Varianten heißen `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` und `PATCH_APPLIED`. Payload-Zeichenketten werden während des Callbacks kopiert; für die jeweilige Variante irrelevante Felder sind `None`.
 
 Speichern Sie niemals eine `Session`, um sie nach der Terminierung weiterzuverwenden. Die native Capsule wird vor Beginn von `on_term` und vor einer möglichen Freigabe der nativen Session ungültig gemacht. Ein späterer Aufruf schlägt mit `RuntimeError` fehl, statt veralteten Speicher zu dereferenzieren.

@@ -39,6 +39,7 @@ target 이름과 같은 CTest label을 지정합니다.
 |-----------|------------------------|------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | 교차 플랫폼 하위 프로세스 호출, quoting, redirect, 종료 코드 |
 | `unittests/libc` | `NeverDLibCTests` | 알려진 libc 이름과 분류 |
+| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | 싱크 카탈로그, 신원 우선순위, 인수 사전 필터, 복사 오버플로 헌트, 힙 수명 감사, 호스트 네이티브 종단 간 fixture |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 모양, IR 단계, loader, relocation, 포맷 fixture, 디컴파일, 대표 patch 흐름 |
 | `unittests/semantic`의 대부분 파일 | `NeverDSemanticTests` | 명령어, ABI, 제어 흐름, C 표현식, lift/recompile 차등 의미론 |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | hardfork metadata, input normalization, CFG/SSA/recovery, interpreter semantics, LLVM/C/Solidity differential execution, public API routing |
@@ -52,7 +53,8 @@ target 이름과 같은 CTest label을 지정합니다.
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt),
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt),
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)입니다.
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt),
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt)입니다.
 
 ### pin 된 바이너리 corpus
 
@@ -370,6 +372,7 @@ GoogleTest discovery는 `DISCOVERY_MODE PRE_TEST`를 사용하므로 CTest가 �
 | EVM loader, opcode, IR 또는 backend | 가장 작은 소유 `NeverDEVM*Tests` target | 모든 EVM target과 생성 C/Solidity 컴파일 검사 |
 | SBF loader, ISA, IR 또는 backend | 가장 작은 소유 `NeverDSBF*Tests` target | 모든 SBF target과 생성 C/Rust 컴파일 검사 |
 | Libc 인식 | `NeverDLibCTests` | 동작 변경 시 의미론 call/ABI 사례 |
+| 힙 수명 감사 또는 복사 오버플로 헌트 | `NeverDSafetyTests` | 호스트 네이티브 fixture의 `NeverDSafetyIntegrationTests` |
 | 프로세스 실행 또는 quoting | `NeverDTestProcessTests` | 지원 host마다 영향받는 CLI/의미론 사례 하나 |
 
 테스트는 가장 낮은 안정 경계에서 계약을 표현해야 합니다. LowIR 모양 테스트는 lifter
@@ -382,8 +385,10 @@ dump를 피하세요.
 CI는 Linux, macOS, Windows에서 테스트를 켠 Release를 빌드하고 발견 inventory를
 audit한 다음 플랫폼별 label 제외를 적용합니다. 프로필은
 `.github/workflows/ci.yml`과 `scripts/audit_ci_test_inventory.py`에 있습니다.
-비싼 모든 스위트를 대표하는 단일 matrix shard는 없으므로 필요한 교차 도구를 갖춘
-머신에서는 로컬 `check-neverd`가 가장 명확한 전체 병합 전 신호입니다.
+`NeverDSafetyTests`와 `NeverDSafetyIntegrationTests`는 모든 matrix 호스트에서
+필수입니다. Linux는 호스트 네이티브 ELF fixture, macOS는 Mach-O, Windows는 PE를
+실행합니다. 비싼 모든 스위트를 대표하는 단일 matrix shard는 없으므로 필요한 교차
+도구를 갖춘 머신에서는 로컬 `check-neverd`가 가장 명확한 전체 병합 전 신호입니다.
 
 ## 현재 Solana SBF conformance 및 sanitizer profile
 

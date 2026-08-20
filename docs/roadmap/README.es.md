@@ -61,7 +61,21 @@ Programas **Solana eBPF / SBF** con la misma semántica strict.
 
 ---
 
-## 4. Endurecimiento del motor y producto (continuo)
+## 4. Auditoría y caza de seguridad de memoria
+
+Analizar un binario levantado en busca de defectos de vida del montón (fuga, doble liberación, uso después de liberar) y desbordamientos de copias peligrosas, en JSON estructurado, con un testigo concreto para un desbordamiento demostrado. El análisis corre sobre el IR independiente del formato y la vista de identidad compartida, de modo que **PE, ELF y Mach-O son objetivos equivalentes**, y reutiliza la ejecución simbólica y el solver de vectores de bits internos — sin solver externo ni contenedor.
+
+| Elemento | Notas |
+|----------|--------|
+| Pista `audit` | Máquina de estados del montón sobre IR + resúmenes de escape: fuga, doble liberación, uso después de liberar |
+| Pista `hunt` | Catálogo de sumideros + prefiltro de argumentos + capacidad de destino + testigo del solver |
+| Contrato de identidad | Resolución de sumideros por formato (IAT PE, PLT ELF, bind dyld Mach-O) y fuentes de nombres PDB / DWARF / MAP |
+
+**Estado:** P0 completo para PE, ELF y Mach-O. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) sobre una fixture nativa del anfitrión. Véase [Auditoría y caza de seguridad de memoria](../memory-safety.es.md). P1 se amplía a desbordamiento de pila/global, lecturas no inicializadas y cadenas de formato.
+
+---
+
+## 5. Endurecimiento del motor y producto (continuo)
 
 | Área | Dirección |
 |------|-----------|
@@ -74,11 +88,12 @@ Programas **Solana eBPF / SBF** con la misma semántica strict.
 
 ## Calendario
 
-Los formatos nativos y las descompilaciones EVM y Solana SBF están terminados y cubiertos por regresión. Sin fechas comprometidas.
+Los formatos nativos, las descompilaciones EVM y Solana SBF, y la seguridad de memoria P0 están terminados y cubiertos por regresión. Sin fechas comprometidas.
 
 | Función | Estado |
 |---------|--------|
 | Completitud formatos nativos (PE ARM*, Mach-O i386) | Completa |
 | Descompilación EVM | Completa — C, Solidity y LLVM; cubierta por regresión |
 | Descompilación Solana eBPF (SBF) | Completa — v0-v4, C, Rust y LLVM; cubierta por regresión |
+| Auditoría y caza de seguridad de memoria | Completa — P0 para PE, ELF y Mach-O; cubierta por regresión |
 | Endurecimiento motor y producto | Continuo |

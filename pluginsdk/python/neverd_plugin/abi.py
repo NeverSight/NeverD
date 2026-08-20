@@ -437,6 +437,20 @@ class NeverDSymbolicExploreOptions(ctypes.Structure):
     ]
 
 
+class NeverDSafetyOptions(ctypes.Structure):
+    """Layout of ``neverd_safety_options``."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("max_paths", ctypes.c_uint),
+        ("max_steps", ctypes.c_uint),
+        ("max_loop", ctypes.c_uint),
+        ("solver_conflicts", ctypes.c_ulonglong),
+        ("sinks_path", ctypes.c_char_p),
+        ("sources_path", ctypes.c_char_p),
+    ]
+
+
 class Ownership(Enum):
     """Memory/lifetime contract for a native result."""
 
@@ -485,6 +499,7 @@ _C_TYPES: dict[str, object] = {
     "const neverd_symbolic_explore_options *": ctypes.POINTER(
         NeverDSymbolicExploreOptions
     ),
+    "const neverd_safety_options *": ctypes.POINTER(NeverDSafetyOptions),
 }
 
 
@@ -689,6 +704,24 @@ _declare(
         "neverd_session_t",
         "neverd_va_t",
         "const neverd_symbolic_explore_options *",
+    ],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_session_audit_json",
+    "const char *",
+    [
+        "neverd_session_t",
+        "const neverd_safety_options *",
+    ],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_session_hunt_json",
+    "const char *",
+    [
+        "neverd_session_t",
+        "const neverd_safety_options *",
     ],
     ownership=Ownership.OWNED_STRING,
 )

@@ -61,7 +61,21 @@ Programmes **Solana eBPF / SBF** avec la même sémantique strict.
 
 ---
 
-## 4. Renforcement moteur & produit (continu)
+## 4. Audit et chasse de sûreté mémoire
+
+Analyser un binaire levé pour les défauts de durée de vie du tas (fuite, double libération, utilisation après libération) et les débordements de copies dangereuses, en JSON structuré, avec un témoin concret pour un débordement prouvé. L’analyse s’exécute sur l’IR indépendant du format et la vue d’identité partagée, donc **PE, ELF et Mach-O sont des cibles à égalité**, et réutilise l’exécution symbolique et le solveur bitvector internes — pas de solveur externe ni de conteneur.
+
+| Élément | Notes |
+|---------|--------|
+| Piste `audit` | Machine d’état du tas sur l’IR + résumés d’évasion : fuite, double libération, utilisation après libération |
+| Piste `hunt` | Catalogue de puits + préfiltre d’arguments + capacité de destination + témoin du solveur |
+| Contrat d’identité | Résolution des puits par format (IAT PE, PLT ELF, bind dyld Mach-O) et sources de noms PDB / DWARF / MAP |
+
+**État :** P0 terminé pour PE, ELF et Mach-O. La couverture des verdicts et de l’identité est verrouillée par [`unittests/safety`](../../unittests/safety) et le bout-en-bout [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) sur une fixture native hôte. Voir [Audit et chasse de sûreté mémoire](../memory-safety.fr.md). P1 s’étend aux débordements pile/global, lectures non initialisées et chaînes de format.
+
+---
+
+## 5. Renforcement moteur & produit (continu)
 
 | Domaine | Direction |
 |---------|-----------|
@@ -74,11 +88,12 @@ Programmes **Solana eBPF / SBF** avec la même sémantique strict.
 
 ## Calendrier
 
-Les formats natifs et les décompilations EVM et Solana SBF sont terminés et couverts par régression. Pas de dates promises.
+Les formats natifs, les décompilations EVM et Solana SBF, et la sûreté mémoire P0 sont terminés et couverts par régression. Pas de dates promises.
 
 | Fonctionnalité | Statut |
 |----------------|--------|
 | Complétude formats natifs (PE ARM*, Mach-O i386) | Terminée |
 | Décompilation EVM | Terminée — C, Solidity et LLVM ; couverte par régression |
 | Décompilation Solana eBPF (SBF) | Terminée — v0-v4, C, Rust et LLVM ; couverte par régression |
+| Audit et chasse de sûreté mémoire | Terminée — P0 pour PE, ELF et Mach-O ; couverte par régression |
 | Renforcement moteur & produit | Continu |

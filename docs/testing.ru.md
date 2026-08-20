@@ -40,6 +40,7 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 |--------------------|--------------------|----------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Кросс-платформенные дочерние процессы, quoting, перенаправления и коды выхода |
 | `unittests/libc` | `NeverDLibCTests` | Известные имена libc и классификация |
+| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Каталог стоков, приоритет идентичности, предфильтр аргументов, охота на переполнение копий, аудит жизни кучи и сквозная нативная fixture хоста |
 | `unittests/lift` | `NeverDLiftTests` | Формы LowIR decoder/lifter, стадии IR, loader, relocation, fixture форматов, декомпиляция и представительные patch-маршруты |
 | Большинство файлов `unittests/semantic` | `NeverDSemanticTests` | Дифференциальная семантика инструкций, ABI, управления, выражений C и lift/recompile |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Metadata hardfork, нормализация входа, CFG/SSA/recovery, семантика interpreter, differential execution LLVM/C/Solidity и публичный API |
@@ -53,7 +54,8 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) и
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) и
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) и
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt).
 
 ### Зафиксированный бинарный corpus
 
@@ -389,6 +391,7 @@ ctest --test-dir build-release --build-config Release \
 | EVM loader, opcode, IR или backend | Минимальная ответственная цель `NeverDEVM*Tests` | Все цели EVM и компиляция сгенерированных C/Solidity |
 | SBF loader, ISA, IR или backend | Минимальная ответственная цель `NeverDSBF*Tests` | Все цели SBF и компиляция сгенерированных C/Rust |
 | Распознавание libc | `NeverDLibCTests` | Семантические случаи call/ABI при изменении поведения |
+| Аудит жизни кучи или охота на переполнение копий | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` на нативной fixture хоста |
 | Запуск процессов или quoting | `NeverDTestProcessTests` | Один затронутый CLI/семантический случай на каждом поддерживаемом хосте |
 
 Тесты должны выражать контракт на самой низкой стабильной границе. Проверка
@@ -401,8 +404,10 @@ ctest --test-dir build-release --build-config Release \
 
 CI собирает Release с тестами на Linux, macOS и Windows, проверяет обнаруженный
 инвентарь, а затем применяет платформенные исключения меток. Профили определены
-в `.github/workflows/ci.yml` и `scripts/audit_ci_test_inventory.py`. Поскольку
-ни один shard матрицы не представляет все дорогие наборы, локальный
+в `.github/workflows/ci.yml` и `scripts/audit_ci_test_inventory.py`.
+`NeverDSafetyTests` и `NeverDSafetyIntegrationTests` обязательны на каждом
+хосте матрицы: Linux гоняет нативную ELF-fixture, macOS — Mach-O, Windows — PE.
+Поскольку ни один shard матрицы не представляет все дорогие наборы, локальный
 `check-neverd` остаётся самым ясным полным сигналом перед merge на машине со
 всеми необходимыми cross-инструментами.
 

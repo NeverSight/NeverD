@@ -123,6 +123,8 @@ cmake --build build
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
+./build/bin/neverd audit binary
+./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -250,6 +252,8 @@ neverd patch --subst --flatten --mba -o patched binary
 | `funcs` | الدوال المكتشفة |
 | `disasm` | تفكيك (`--func` اسم أو hex) |
 | `sym-explore` | استكشاف محدود لمسارات LowIR الأصلية (`--func`؛ خرج JSON) |
+| `audit` | عيوب عمر الكومة: تسرّب، تحرير مزدوج، استخدام بعد التحرير (JSON) |
+| `hunt` | فيضانات النسخ الخطرة مع شاهد ملموس (JSON) |
 | `hex` | تفريغ hex عند عنوان |
 | `cfg` / `callgraph` | CFG / رسم استدعاء (JSON؛ DOT/SVG اختياري) |
 | `xrefs` | مراجع متقاطعة |

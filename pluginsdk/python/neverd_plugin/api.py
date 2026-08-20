@@ -22,6 +22,7 @@ from .abi import (
     NeverDSimplifyResult,
     NeverDSynthesizeOptions,
     NeverDSynthesizeResult,
+    NeverDSafetyOptions,
     NeverDSymbolicExploreOptions,
     NeverDTranslateObjectRequestV1,
     NeverDTranslateObjectResultV1,
@@ -587,6 +588,96 @@ class Session:
             unmodelled_ops=int(report.get("unmodelledOps", 0)),
             paths=tuple(paths),
         )
+
+    def _safety_options(
+        self,
+        *,
+        max_paths: int,
+        max_steps: int,
+        max_loop: int,
+        solver_conflicts: int,
+        sinks: str | None,
+        sources: str | None,
+    ) -> "NeverDSafetyOptions":
+        options = NeverDSafetyOptions()
+        options.struct_size = ctypes.sizeof(NeverDSafetyOptions)
+        options.max_paths = _unsigned("max_paths", max_paths, 32)
+        options.max_steps = _unsigned("max_steps", max_steps, 32)
+        options.max_loop = _unsigned("max_loop", max_loop, 32)
+        options.solver_conflicts = _unsigned(
+            "solver_conflicts", solver_conflicts, 64
+        )
+        options.sinks_path = sinks.encode("utf-8") if sinks else None
+        options.sources_path = sources.encode("utf-8") if sources else None
+        return options
+
+    def audit(
+        self,
+        *,
+        max_paths: int = 0,
+        max_steps: int = 0,
+        max_loop: int = 0,
+        solver_conflicts: int = 0,
+        sinks: str | None = None,
+        sources: str | None = None,
+    ) -> Mapping[str, object]:
+        """Audit heap-object lifetimes for leaks, double frees, and use after
+        free, and return the parsed JSON report."""
+
+        options = self._safety_options(
+            max_paths=max_paths,
+            max_steps=max_steps,
+            max_loop=max_loop,
+            solver_conflicts=solver_conflicts,
+            sinks=sinks,
+            sources=sources,
+        )
+        report = self._json(
+            "neverd_session_audit_json", "safety audit", ctypes.byref(options)
+        )
+        if not isinstance(report, Mapping) or report.get("ok") is not True:
+            message = (
+                report.get("error")
+                if isinstance(report, Mapping)
+                else "invalid safety audit report"
+            )
+            raise NeverDError(str(message or self.last_error))
+        return report
+
+    def hunt(
+        self,
+        *,
+        max_paths: int = 0,
+        max_steps: int = 0,
+        max_loop: int = 0,
+        solver_conflicts: int = 0,
+        sinks: str | None = None,
+        sources: str | None = None,
+    ) -> Mapping[str, object]:
+        """Hunt dangerous-copy overflows and return the parsed JSON report.
+
+        Each finding carries a verdict (SAFE / UNSAFE / UNKNOWN), a confidence,
+        and — for a proven overflow — the concrete witness that drives it."""
+
+        options = self._safety_options(
+            max_paths=max_paths,
+            max_steps=max_steps,
+            max_loop=max_loop,
+            solver_conflicts=solver_conflicts,
+            sinks=sinks,
+            sources=sources,
+        )
+        report = self._json(
+            "neverd_session_hunt_json", "overflow hunt", ctypes.byref(options)
+        )
+        if not isinstance(report, Mapping) or report.get("ok") is not True:
+            message = (
+                report.get("error")
+                if isinstance(report, Mapping)
+                else "invalid overflow hunt report"
+            )
+            raise NeverDError(str(message or self.last_error))
+        return report
 
     def hex_dump(self, address: int, size: int) -> str:
         value = self._owned_string(

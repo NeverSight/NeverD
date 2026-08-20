@@ -99,7 +99,33 @@ on that cluster's feature activation. See [Solana SBF decompilation](../sbf.md).
 
 ---
 
-## 4. Engine & product hardening (ongoing)
+## 4. Memory-safety audit & hunt
+
+Analyse a lifted binary for heap-lifetime defects (leak, double free, use after
+free) and dangerous-copy overflows, reporting structured JSON with a concrete
+witness for a proven overflow. The analysis runs on the format-neutral IR and
+the shared identity view, so **PE, ELF, and Mach-O are co-equal targets**, and
+it reuses the in-house symbolic execution and bitvector solver — no external
+solver or container.
+
+| Item | Notes |
+|------|--------|
+| `audit` track | Heap state machine over IR + escape summaries: leak, double free, use after free |
+| `hunt` track | Sink catalog + argument prefilter + destination capacity + solver witness |
+| Identity contract | Per-format sink resolution (PE IAT, ELF PLT, Mach-O dyld bind) and PDB / DWARF / MAP name sources |
+
+**Status:** P0 complete for PE, ELF, and Mach-O. Verdict and identity coverage
+is locked by
+[`unittests/safety`](../../unittests/safety) (catalog, scanner, argument
+prefilter, object model, hunt, audit) and an end-to-end
+[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)
+over a host-native fixture. See
+[Memory-safety audit & hunt](../memory-safety.md). P1 widens to stack/global
+overflow, uninitialised reads, and format strings.
+
+---
+
+## 5. Engine & product hardening (ongoing)
 
 Cross-cutting work that unblocks the items above and improves today’s native engine.
 
@@ -123,4 +149,5 @@ committed. Progress will be tracked here.
 | Native format completeness (PE ARM*, Mach-O i386) | Complete — regression-covered |
 | EVM bytecode decompilation | Complete — C, Solidity, and LLVM; regression-covered |
 | Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
+| Memory-safety audit & hunt | Complete — P0 for PE, ELF, and Mach-O; regression-covered |
 | Engine & product hardening | Ongoing |

@@ -408,11 +408,12 @@ NeverD, но не все общие библиотеки LLVM и Capstone, до�
 | `lib/backend/c` | Вывод HighIR-в-C и LLVM-IR-в-C | IR |
 | `lib/backend/llvm` | Lowering MedIR в LLVM | IR |
 | `lib/backend/codegen` | Генерация целевого кода и patch/переписывание на месте PE/ELF/Mach-O | IR, loader |
-| `lib/sdk` | Публичный C ABI, жизненный цикл session, запросы, хранение, плагины, входы lift/decompile/patch | Объединяет движок в `libneverd` |
+| `lib/sdk` | Публичный C ABI, жизненный цикл session, запросы, хранение, плагины, входы lift/decompile/patch/audit/hunt | Объединяет движок в `libneverd` |
 | `lib/pass` | Проходы обфускации LLVM IR и запуск проходов MIR | IR |
 | `lib/debug` | Контексты отладки DWARF, PDB и linker-map | IR |
 | `lib/sigs` | Разбор, базы и сопоставление сигнатур | Loader |
 | `lib/libc` | Известные имена libc и поддержка модели вызовов | Самостоятельный компонент |
+| `lib/safety` | Аудит жизни кучи и охота на переполнение копий на поднятом IR | Symbolic, Solver |
 | `lib/support` | Общие вспомогательные средства загрузки бинарников | Loader |
 | `lib/translate` | Версионированные контракты guest state/policy/exit, фиксированный runtime ABI, проверяемая guest memory, аудит сгенерированных IR/объектов/LinkGraph, sealed нативная линковка и экспериментальный C++-dispatcher x86-64 в AArch64 | Контракты IR, LLVM, LLVM Object и JITLink |
 
@@ -522,6 +523,7 @@ fixture ELF и PE,
 | Добавить преобразование LLVM | `lib/pass/ir`, публичный заголовок в `include/neverd/pass/ir`, переключатель pipeline при публикации | Целевой набор преобразований + `NeverDPatchFullTests` при изменении patch-выхода |
 | Добавить операцию C API | `include/neverd/sdk/NeverDCAPI.h`, целевой `lib/sdk/NeverDCAPI*.cpp`, `SessionImpl.h` только для состояния | Семантические тесты SDK/CLI; сохранить `neverd_last_error` и правила выделения |
 | Добавить команду CLI | `tools/neverd/NeverDCLIOptions.cpp`, `NeverDCLI.h`, целевой `NeverDCmd*.cpp` и диспетчеризация в `neverd.cpp` | `unittests/semantic/CLIEndToEndTests.cpp` и прямой CLI smoke test |
+| Изменить аудит жизни кучи или охоту на переполнение копий | `lib/safety`, `include/neverd/safety`, `include/neverd/sdk/NeverDCAPISafety.h` | `NeverDSafetyTests` и `NeverDSafetyIntegrationTests` |
 | Добавить семантическую регрессию | Целевой `unittests/semantic/*Tests.cpp`; зарегистрировать новый файл в `unittests/semantic/CMakeLists.txt` | Собрать тестовый бинарник и выбрать случай через `ctest -R` |
 
 Сохраняйте узкий объём изменений. Файлы, определяющие представление, могут

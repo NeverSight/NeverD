@@ -76,7 +76,21 @@ stack-SSA 復原、strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API
 
 ---
 
-## 4. 引擎與產品加固（持續）
+## 4. 記憶體安全稽核與獵取
+
+對已提升的二進位做堆積生命週期缺陷（洩漏、重複釋放、釋放後使用）與危險拷貝越界分析，並以結構化 JSON 報告；對已證明的越界給出具體見證。分析跑在格式無關的 IR 與共享身分檢視上，因此 **PE、ELF、Mach-O 是同等目標**，並複用自研符號執行與位向量求解器——不依賴外部求解器或容器。
+
+| 項目 | 說明 |
+|------|------|
+| `audit` 軌道 | IR 上的堆積狀態機 + 逃逸摘要：洩漏、重複釋放、釋放後使用 |
+| `hunt` 軌道 | 匯目錄 + 參數預過濾 + 目標容量 + 求解器見證 |
+| 身分契約 | 依格式解析匯（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名稱來源 |
+
+**狀態：** PE、ELF、Mach-O 的 P0 已完成。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及針對宿主原生 fixture 的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。P1 將擴展到堆疊／全域越界、未初始化讀取與格式字串。
+
+---
+
+## 5. 引擎與產品加固（持續）
 
 | 領域 | 方向 |
 |------|------|
@@ -89,11 +103,12 @@ stack-SSA 復原、strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API
 
 ## 時間線
 
-原生格式補齊、傳統 EVM 與 Solana SBF 反編譯均已完成，並有迴歸測試覆蓋。不承諾具體發布日期。
+原生格式補齊、傳統 EVM 與 Solana SBF 反編譯、記憶體安全 P0 均已完成，並有迴歸測試覆蓋。不承諾具體發布日期。
 
 | 功能 | 狀態 |
 |------|------|
 | 原生格式補齊（PE ARM*、Mach-O i386） | 已完成 |
 | EVM 位元組碼反編譯 | 已完成 — C、Solidity 與 LLVM；有迴歸測試覆蓋 |
 | Solana eBPF（SBF）反編譯 | 已完成 — v0-v4、C、Rust 與 LLVM；有迴歸測試覆蓋 |
+| 記憶體安全稽核與獵取 | 已完成 — PE、ELF、Mach-O 的 P0；有迴歸測試覆蓋 |
 | 引擎與產品加固 | 持續進行 |

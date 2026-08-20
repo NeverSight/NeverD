@@ -359,11 +359,12 @@ CMake.
 | `lib/backend/c` | عرض HighIR إلى C وLLVM IR إلى C | IR |
 | `lib/backend/llvm` | خفض MedIR إلى LLVM | IR |
 | `lib/backend/codegen` | توليد شفرة الهدف وpatch/إعادة الكتابة الموضعية لـ PE/ELF/Mach-O | IR وloader |
-| `lib/sdk` | C ABI العامة، ودورة session، والاستعلامات، والاستمرارية، والإضافات، ومداخل lift/decompile/patch | يجمع المحرك في `libneverd` |
+| `lib/sdk` | C ABI العامة، ودورة session، والاستعلامات، والاستمرارية، والإضافات، ومداخل lift/decompile/patch/audit/hunt | يجمع المحرك في `libneverd` |
 | `lib/pass` | مسارات تشويش LLVM IR ومشغل مسارات MIR | IR |
 | `lib/debug` | سياقات تصحيح DWARF وPDB وlinker-map | IR |
 | `lib/sigs` | تحليل التواقيع وقواعدها ومطابقتها | Loader |
 | `lib/libc` | أسماء libc المعروفة ودعم نموذج الاستدعاء | مكوّن مستقل |
+| `lib/safety` | تدقيق عمر الكومة وصيد فيضان النسخ على IR المرفوع | Symbolic، Solver |
 | `lib/support` | أدوات مشتركة لتحميل الثنائيات | Loader |
 | `lib/translate` | عقود ذات إصدار لحالة guest/policy/exit وruntime ABI ثابت وguest memory مفحوصة وتدقيق IR/ملفات الهدف/LinkGraph المولدة وربط أصلي sealed وdispatcher C++ تجريبي من x86-64 إلى AArch64 | عقود IR وLLVM وLLVM Object وJITLink |
 
@@ -464,6 +465,7 @@ fail-closed عندما تكون دلالة التعليمة خارج التغط�
 | إضافة تحويل LLVM | `lib/pass/ir`، والرأس العام في `include/neverd/pass/ir`، ومفتاح pipeline إن كُشف | مجموعة تحويل محددة + `NeverDPatchFullTests` عند تغير مخرج patch |
 | إضافة عملية C API | `include/neverd/sdk/NeverDCAPI.h` و`lib/sdk/NeverDCAPI*.cpp` محدد، و`SessionImpl.h` للحالة فقط | اختبارات SDK/CLI الدلالية؛ الحفاظ على `neverd_last_error` وأعراف التخصيص |
 | إضافة أمر CLI | `tools/neverd/NeverDCLIOptions.cpp` و`NeverDCLI.h` و`NeverDCmd*.cpp` محدد، والتوزيع في `neverd.cpp` | `unittests/semantic/CLIEndToEndTests.cpp` وCLI smoke test مباشر |
+| تغيير تدقيق عمر الكومة أو صيد فيضان النسخ | `lib/safety` و`include/neverd/safety` و`include/neverd/sdk/NeverDCAPISafety.h` | `NeverDSafetyTests` و`NeverDSafetyIntegrationTests` |
 | إضافة انحدار دلالي | ملف `unittests/semantic/*Tests.cpp` محدد؛ وتسجيل الملف الجديد في `unittests/semantic/CMakeLists.txt` | بناء ثنائي الاختبار ثم اختيار الحالة بـ `ctest -R` |
 
 أبق التغييرات ضيقة. يمكن أن تتغير ملفات تعريف التمثيل مع تحويلاته، لكن لا ينبغي

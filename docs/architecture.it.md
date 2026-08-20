@@ -421,11 +421,12 @@ CMake.
 | `lib/backend/c` | Rendering HighIR-to-C e LLVM-IR-to-C | IR |
 | `lib/backend/llvm` | Lowering da MedIR a LLVM | IR |
 | `lib/backend/codegen` | Generazione codice target e patch/riscrittura in-place PE/ELF/Mach-O | IR, loader |
-| `lib/sdk` | ABI C pubblica, ciclo session, query, persistenza, plugin, punti lift/decompile/patch | Aggrega il motore in `libneverd` |
+| `lib/sdk` | ABI C pubblica, ciclo session, query, persistenza, plugin, punti lift/decompile/patch/audit/hunt | Aggrega il motore in `libneverd` |
 | `lib/pass` | Pass di offuscamento LLVM IR e runner di pass MIR | IR |
 | `lib/debug` | Contesti di debug DWARF, PDB e linker-map | IR |
 | `lib/sigs` | Parsing, database e matching delle firme | Loader |
 | `lib/libc` | Nomi libc noti e supporto del modello di chiamata | Componente autonomo |
+| `lib/safety` | Audit di vita dell’heap e hunt di overflow di copia sull’IR sollevato | Symbolic, Solver |
 | `lib/support` | Helper condivisi per il caricamento binario | Loader |
 | `lib/translate` | Contratti versionati per guest state/policy/exit, runtime ABI fissa, guest memory controllata, audit di IR/oggetti/LinkGraph generati, linking nativo sealed e dispatcher C++ sperimentale da x86-64 ad AArch64 | Contratti IR, LLVM, LLVM Object e JITLink |
 
@@ -537,6 +538,7 @@ per la griglia di 12 celle. Consulta la [guida ai test](testing.it.md).
 | Aggiungere trasformazione LLVM | `lib/pass/ir`, header pubblico in `include/neverd/pass/ir`, toggle pipeline se esposto | Suite di trasformazione mirata + `NeverDPatchFullTests` se cambia l’output patch |
 | Aggiungere operazione C API | `include/neverd/sdk/NeverDCAPI.h`, `lib/sdk/NeverDCAPI*.cpp` mirato, `SessionImpl.h` solo per stato | Test semantici SDK/CLI; preservare `neverd_last_error` e convenzioni di allocazione |
 | Aggiungere comando CLI | `tools/neverd/NeverDCLIOptions.cpp`, `NeverDCLI.h`, `NeverDCmd*.cpp` mirato e dispatch in `neverd.cpp` | `unittests/semantic/CLIEndToEndTests.cpp` e smoke test CLI diretto |
+| Modificare l’audit di vita dell’heap o l’hunt di overflow di copia | `lib/safety`, `include/neverd/safety`, `include/neverd/sdk/NeverDCAPISafety.h` | `NeverDSafetyTests` e `NeverDSafetyIntegrationTests` |
 | Aggiungere regressione semantica | `unittests/semantic/*Tests.cpp` mirato; registrare il nuovo file in `unittests/semantic/CMakeLists.txt` | Costruire il binario di test e selezionare il caso con `ctest -R` |
 
 Mantieni le modifiche ristrette. I file che definiscono una rappresentazione

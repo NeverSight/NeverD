@@ -27,6 +27,13 @@ CORPUS_LABELS = (
     "NeverDRustEHCorpusTests",
     "NeverDWindowsEHCorpusTests",
 )
+# Host-native memory-safety coverage: the unit suite on every host, plus an
+# integration binary compiled as Mach-O / ELF / PE on that host.  A matrix
+# leg that configures tests but omits either label is a silent PE or ELF hole.
+SAFETY_LABELS = (
+    "NeverDSafetyTests",
+    "NeverDSafetyIntegrationTests",
+)
 PROFILE_EXCLUSIONS = {
     "linux-semantic": r"^NeverDPatchFullTests$",
     "macos-patch": r"^NeverDSemanticTests$",
@@ -155,6 +162,15 @@ def audit_inventory(
             + ", ".join(absent)
             + "; configure with -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=ON and "
             "check out the unittests/corpus submodule"
+        )
+
+    absent_safety = [label for label in SAFETY_LABELS if label not in present_labels]
+    if absent_safety:
+        raise InventoryError(
+            "memory-safety tests are not under test: "
+            + ", ".join(absent_safety)
+            + "; NeverDSafetyTests and NeverDSafetyIntegrationTests must be "
+            "built on every CI host (host-native ELF, Mach-O, or PE fixture)"
         )
 
     semantic_names = {

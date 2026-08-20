@@ -61,7 +61,21 @@ Programmi **Solana eBPF / SBF** con la stessa semantica strict.
 
 ---
 
-## 4. Rafforzamento motore e prodotto (continuo)
+## 4. Audit e hunt di sicurezza della memoria
+
+Analizzare un binario sollevato per difetti di vita dell’heap (leak, doppia free, use-after-free) e overflow di copie pericolose, in JSON strutturato, con un testimone concreto per un overflow dimostrato. L’analisi gira sull’IR indipendente dal formato e sulla vista di identità condivisa, quindi **PE, ELF e Mach-O sono bersagli paritari**, e riutilizza l’esecuzione simbolica e il solver bitvector interni — nessun solver esterno né contenitore.
+
+| Voce | Note |
+|------|------|
+| Pista `audit` | Macchina a stati dell’heap su IR + riassunti di escape: leak, doppia free, use-after-free |
+| Pista `hunt` | Catalogo di sink + prefiltro degli argomenti + capacità di destinazione + testimone del solver |
+| Contratto di identità | Risoluzione dei sink per formato (IAT PE, PLT ELF, bind dyld Mach-O) e fonti di nomi PDB / DWARF / MAP |
+
+**Stato:** P0 completo per PE, ELF e Mach-O. La copertura di verdetti e identità è bloccata da [`unittests/safety`](../../unittests/safety) e dal end-to-end [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) su una fixture nativa dell’host. Vedi [Audit e hunt di sicurezza della memoria](../memory-safety.it.md). P1 si allarga a overflow di stack/globale, letture non inizializzate e stringhe di formato.
+
+---
+
+## 5. Rafforzamento motore e prodotto (continuo)
 
 | Area | Direzione |
 |------|-----------|
@@ -74,11 +88,12 @@ Programmi **Solana eBPF / SBF** con la stessa semantica strict.
 
 ## Tempistica
 
-Formati nativi e decompilazioni EVM e Solana SBF sono completati e coperti da regressione. Nessuna data impegnativa.
+Formati nativi, decompilazioni EVM e Solana SBF e sicurezza della memoria P0 sono completati e coperti da regressione. Nessuna data impegnativa.
 
 | Funzione | Stato |
 |----------|-------|
 | Completezza formati nativi (PE ARM*, Mach-O i386) | Completata |
 | Decompilazione EVM | Completata — C, Solidity e LLVM; coperta da regressione |
 | Decompilazione Solana eBPF (SBF) | Completata — v0-v4, C, Rust e LLVM; coperta da regressione |
+| Audit e hunt di sicurezza della memoria | Completata — P0 per PE, ELF e Mach-O; coperta da regressione |
 | Rafforzamento motore e prodotto | Continuo |

@@ -13,6 +13,7 @@ La visión general, la compilación y el CLI están en el README del repositorio
 | [Arquitectura](architecture.es.md) | Rutas IR, límites de componentes, lifting estricto, profundidad de soporte y puntos de edición |
 | [Pruebas](testing.es.md) | Suites, fixtures generadas, recorridos Unicorn y comandos incrementales |
 | [Reconstrucción de excepciones de Windows](windows-exception-reconstruction.es.md) | Matriz de soporte SEH/C++, contrato IR, reglas de patch nativo y validación PE |
+| [Auditoría y caza de seguridad de memoria](memory-safety.es.md) | Análisis de vida del montón y desbordamiento de copia: contrato de identidad por formato, catálogo de sumideros/fuentes, veredictos, presupuestos y esquema JSON |
 | [Plugins de Python](python-plugins.es.md) | Autoría, API de sesión y eventos, aislamiento, pruebas y publicación |
 | [Descompilación EVM](evm.es.md) | Entradas, hardforks, IR por fases, ABI host C/LLVM, reconstrucción Solidity y límites |
 | [Descompilación de Solana SBF](sbf.es.md) | SBF v0-v4, LLVM IR, salida C/Rust, verificación y límites conocidos |

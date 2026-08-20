@@ -43,6 +43,7 @@ gefundenen Fall ein CTest-Label mit dem Namen dieses Executable-Targets zu.
 |--------------|------------------------|-----------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Plattformübergreifende Kindprozesse, Quoting, Umleitungen und Exitcodes |
 | `unittests/libc` | `NeverDLibCTests` | Bekannte libc-Namen und Klassifizierung |
+| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Senkenkatalog, Identitätsvorrang, Argument-Vorfilter, Copy-Überlauf-Hunt, Heap-Lebensdauer-Audit und eine host-native End-to-End-Fixture |
 | `unittests/lift` | `NeverDLiftTests` | Decoder-/Lifter-LowIR-Formen, IR-Stufen, Loader, Relokationen, Format-Fixtures, Dekompilierung und repräsentative Patch-Flows |
 | Die meisten Dateien in `unittests/semantic` | `NeverDSemanticTests` | Differentielle Semantik von Instruktionen, ABI, Kontrollfluss, C-Ausdrücken und Lift/Recompile |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Hardfork-Metadata, Eingabenormalisierung, CFG/SSA/Recovery, Interpreter-Semantik, differentielle LLVM/C/Solidity-Ausführung und API-Routing |
@@ -56,7 +57,8 @@ Die Registrierungsquellen sind
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) und
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) und
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) und
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt).
 
 ### Das fixierte Binär-Corpus
 
@@ -406,6 +408,7 @@ mit gemessenen schweren Fällen erweitert werden.
 | EVM-Loader, Opcode, IR oder Backend | Kleinstes zuständiges `NeverDEVM*Tests`-Target | Alle EVM-Targets plus Kompilierung des generierten C/Solidity |
 | SBF-Loader, ISA, IR oder Backend | Kleinstes zuständiges `NeverDSBF*Tests`-Target | Alle SBF-Targets plus Kompilierung des generierten C/Rust |
 | Libc-Erkennung | `NeverDLibCTests` | Semantische Call-/ABI-Fälle bei Verhaltensänderung |
+| Heap-Lebensdauer-Audit oder Copy-Überlauf-Hunt | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` auf einer host-nativen Fixture |
 | Prozessausführung oder Quoting | `NeverDTestProcessTests` | Ein betroffener CLI-/Semantikfall je unterstütztem Host |
 
 Tests sollen den Vertrag an der niedrigsten stabilen Grenze ausdrücken. Ein
@@ -419,9 +422,12 @@ CFG- oder Beobachtungszustands-Assertion genügt.
 Die CI baut Release mit aktivierten Tests unter Linux, macOS und Windows,
 prüft das gefundene Inventar und wendet danach plattformspezifische
 Label-Ausschlüsse an. Die Profile stehen in `.github/workflows/ci.yml` und
-`scripts/audit_ci_test_inventory.py`. Da kein einzelner Matrix-Shard alle
-teuren Suiten darstellt, bleibt ein lokales `check-neverd` auf einer Maschine
-mit allen Cross-Werkzeugen das klarste vollständige Signal vor dem Merge.
+`scripts/audit_ci_test_inventory.py`. `NeverDSafetyTests` und
+`NeverDSafetyIntegrationTests` sind auf jedem Matrix-Host Pflicht: Linux
+führt die host-native ELF-Fixture aus, macOS Mach-O, Windows PE. Da kein
+einzelner Matrix-Shard alle teuren Suiten darstellt, bleibt ein lokales
+`check-neverd` auf einer Maschine mit allen Cross-Werkzeugen das klarste
+vollständige Signal vor dem Merge.
 
 ## Aktuelles Solana-SBF-Konformitäts- und Sanitizer-Profil
 

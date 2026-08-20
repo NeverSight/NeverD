@@ -45,6 +45,7 @@ discovered case a CTest label equal to that executable's target name.
 |-------------|-------------------------|----------------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Cross-platform child-process invocation, quoting, redirects, and exit codes |
 | `unittests/libc` | `NeverDLibCTests` | Known libc names and classification |
+| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Sink catalog, identity precedence, argument prefilter, copy-overflow hunt, heap-lifetime audit, and a host-native end-to-end fixture |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR shapes, IR stages, loaders, relocations, format fixtures, decompilation, and representative patch flows |
 | Most files in `unittests/semantic` | `NeverDSemanticTests` | Instruction, ABI, control-flow, C-expression, and lift/recompile differential semantics |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Hardfork metadata, input normalization, CFG/SSA/recovery, interpreter semantics, LLVM/C/Solidity differential execution, and public API routing |
@@ -59,8 +60,9 @@ The source of truth for registration is
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt), and
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt),
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt), and
-[`unittests/plugin/CMakeLists.txt`](../unittests/plugin/CMakeLists.txt).
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt),
+[`unittests/plugin/CMakeLists.txt`](../unittests/plugin/CMakeLists.txt), and
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt).
 
 ### The pinned binary corpus
 
@@ -484,6 +486,7 @@ widened only for suites with measured heavy cases.
 | EVM loader, opcode, IR, or backend | Smallest owning `NeverDEVM*Tests` target | All EVM targets plus generated C/Solidity compilation |
 | SBF loader, ISA, IR, or backend | Smallest owning `NeverDSBF*Tests` target | All SBF targets plus generated C/Rust compilation |
 | Libc recognition | `NeverDLibCTests` | Semantic call/ABI cases if behavior changes |
+| Heap-lifetime audit or copy-overflow hunt | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` on a host-native fixture |
 | Process execution or quoting | `NeverDTestProcessTests` | One affected CLI/semantic case on each supported host |
 
 Tests should express the contract at the lowest stable boundary. A LowIR shape
@@ -496,6 +499,9 @@ functions when a small opcode, CFG, or observable-state assertion is enough.
 CI builds Release with tests enabled on Linux, macOS, and Windows, then audits
 the discovered inventory before applying platform-specific label exclusions.
 Those profiles are defined in `.github/workflows/ci.yml` and
-`scripts/audit_ci_test_inventory.py`. Because no single matrix shard represents
-every expensive suite, a local `check-neverd` remains the clearest complete
-pre-merge signal when the machine has all required cross tools.
+`scripts/audit_ci_test_inventory.py`. `NeverDSafetyTests` and
+`NeverDSafetyIntegrationTests` are required on every matrix host: Linux runs
+the host-native ELF fixture, macOS Mach-O, and Windows PE. Because no single
+matrix shard represents every expensive suite, a local `check-neverd` remains
+the clearest complete pre-merge signal when the machine has all required
+cross tools.

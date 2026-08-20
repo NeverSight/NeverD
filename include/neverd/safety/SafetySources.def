@@ -1,0 +1,40 @@
+//===- SafetySources.def - Default input-source catalog ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard.
+//
+// SAFETY_SOURCE(NAME, OUT)
+//
+//   OUT is the argument index that receives the tainted bytes, or -1 when
+//   taint arrives through the return value.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SAFETY_SOURCE
+#define SAFETY_SOURCE(NAME, OUT)
+#endif
+
+// POSIX providers.
+SAFETY_SOURCE(getenv, -1)
+SAFETY_SOURCE(secure_getenv, -1)
+SAFETY_SOURCE(read, 1)
+SAFETY_SOURCE(pread, 1)
+SAFETY_SOURCE(recv, 1)
+SAFETY_SOURCE(recvfrom, 1)
+SAFETY_SOURCE(fgets, 0)
+SAFETY_SOURCE(fread, 0)
+SAFETY_SOURCE(gets, 0)
+SAFETY_SOURCE(scanf, -1)
+SAFETY_SOURCE(fscanf, -1)
+SAFETY_SOURCE(sscanf, -1)
+
+// Win32 providers, so a PE hunt is not restricted to POSIX inputs.
+SAFETY_SOURCE(GetCommandLineA, -1)
+SAFETY_SOURCE(GetCommandLineW, -1)
+SAFETY_SOURCE(ReadFile, 1)
+SAFETY_SOURCE(GetEnvironmentVariableA, 1)
+SAFETY_SOURCE(GetEnvironmentVariableW, 1)
+SAFETY_SOURCE(argv, -1)
+
+#undef SAFETY_SOURCE

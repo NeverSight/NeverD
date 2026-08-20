@@ -79,7 +79,21 @@ strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，以及与 Anvil 
 
 ---
 
-## 4. 引擎与产品加固（持续）
+## 4. 内存安全审计与猎取
+
+对已提升的二进制做堆对象生命周期缺陷（泄漏、重复释放、释放后使用）与危险拷贝越界分析，并以结构化 JSON 报告；对已证明的越界给出具体见证。分析跑在格式无关的 IR 与共享身份视图上，因此 **PE、ELF、Mach-O 是同等目标**，并复用自研符号执行与位向量求解器——不依赖外部求解器或容器。
+
+| 项目 | 说明 |
+|------|------|
+| `audit` 轨道 | IR 上的堆状态机 + 逃逸摘要：泄漏、重复释放、释放后使用 |
+| `hunt` 轨道 | 汇目录 + 参数预过滤 + 目标容量 + 求解器见证 |
+| 身份契约 | 按格式解析汇（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名称来源 |
+
+**状态：** PE、ELF、Mach-O 的 P0 已完成。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及针对宿主原生 fixture 的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。P1 将扩展到栈/全局越界、未初始化读取与格式串。
+
+---
+
+## 5. 引擎与产品加固（持续）
 
 支撑上述方向、并提升当前原生引擎质量的横切工作。
 
@@ -96,7 +110,7 @@ strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，以及与 Anvil 
 
 ## 时间线
 
-原生格式补齐、传统 EVM 与 Solana SBF 反编译均已完成，并有回归测试覆盖。不承诺具体发布日期。
+原生格式补齐、传统 EVM 与 Solana SBF 反编译、内存安全 P0 均已完成，并有回归测试覆盖。不承诺具体发布日期。
 
 
 | 功能                          | 状态        |
@@ -104,4 +118,5 @@ strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，以及与 Anvil 
 | 原生格式补齐（PE ARM*、Mach-O i386） | 已完成       |
 | EVM 字节码反编译                  | 已完成 — C、Solidity 与 LLVM；有回归测试覆盖 |
 | Solana eBPF（SBF）反编译         | 已完成 — v0-v4、C、Rust 与 LLVM；有回归测试覆盖 |
+| 内存安全审计与猎取                   | 已完成 — PE、ELF、Mach-O 的 P0；有回归测试覆盖 |
 | 引擎与产品加固                     | 持续进行      |

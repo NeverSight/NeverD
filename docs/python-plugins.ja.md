@@ -103,6 +103,18 @@ for path in result.paths:
 
 パス数、ステップ数、ループ訪問回数、または未解決分岐の上限によって探索が停止した場合、`complete` は false です。さらに `exact` が true になるには、未知状態による保守的な置換が一度も行われていない必要があります。未対応の LowIR 操作、要約のない呼び出し、未解決アドレスへのストアは `unmodelled_ops` に数えられます。EVM および SBF セッションではネイティブ LowIR 探索を利用できません。
 
+### メモリ安全性の監査とハント
+
+`session.audit()` と `session.hunt()` は解析済み JSON レポートを返します（CLI と同じスキーマ）。リフト済みのネイティブセッションが必要です。
+
+```python
+audit = session.audit()
+hunt = session.hunt(max_paths=64, max_steps=1 << 16)
+print(audit.get("ok"), hunt.get("findings"))
+```
+
+EVM および SBF セッションではこれらの呼び出しは拒否されます。
+
 6 種類の不変イベントは `BINARY_LOADED`、`BINARY_CLOSING`、`FUNCTION_SELECTED`、`ADDRESS_CHANGED`、`ANALYSIS_DONE`、`PATCH_APPLIED` です。コールバック中に payload 文字列がコピーされ、イベント種別に無関係なフィールドは `None` になります。
 
 終了後に使う目的で `Session` を保存しないでください。ネイティブ capsule は `on_term` の開始前、かつネイティブセッションを解放できるようになる前に無効化されます。それ以降の呼び出しは古いメモリを参照せず、`RuntimeError` で失敗します。

@@ -103,6 +103,18 @@ for path in result.paths:
 
 若路徑數、步數、迴圈造訪次數或未解析分支達到上限並終止遍歷，`complete` 為 false。`exact` 還要求沒有任何操作被保守地替換為未知狀態；不受支援的 LowIR 操作、沒有摘要的呼叫，以及透過未解析位址進行的儲存都會計入 `unmodelled_ops`。EVM 與 SBF 工作階段不提供原生 LowIR 探索。
 
+### 記憶體安全稽核與獵取
+
+`session.audit()` 與 `session.hunt()` 會傳回解析後的 JSON 報告（與 CLI 同一模式）。它們需要已提升的原生工作階段：
+
+```python
+audit = session.audit()
+hunt = session.hunt(max_paths=64, max_steps=1 << 16)
+print(audit.get("ok"), hunt.get("findings"))
+```
+
+EVM 與 SBF 工作階段會拒絕這些呼叫。
+
 六種不可變事件分別是 `BINARY_LOADED`、`BINARY_CLOSING`、`FUNCTION_SELECTED`、`ADDRESS_CHANGED`、`ANALYSIS_DONE` 與 `PATCH_APPLIED`。回呼期間會複製承載字串；與目前事件類型無關的欄位為 `None`。
 
 切勿儲存 `Session` 並在終止後繼續使用。原生 capsule 會在 `on_term` 開始前及原生工作階段釋放前失效。後續呼叫會擲出 `RuntimeError`，而不會取消參照過期記憶體。

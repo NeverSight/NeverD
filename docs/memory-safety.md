@@ -1,0 +1,182 @@
+**Languages**: [English](memory-safety.md) | [简体中文](memory-safety.zh-CN.md) | [繁體中文](memory-safety.zh-TW.md) | [日本語](memory-safety.ja.md) | [한국어](memory-safety.ko.md) | [Français](memory-safety.fr.md) | [Deutsch](memory-safety.de.md) | [Español](memory-safety.es.md) | [Italiano](memory-safety.it.md) | [Русский](memory-safety.ru.md) | [العربية](memory-safety.ar.md)
+
+[← Documentation Index](README.md)
+
+# Memory-Safety Audit & Hunt
+
+NeverD analyses a loaded binary for two families of memory-safety defect and
+reports them as structured JSON. Both run on the format-neutral lifted IR, so
+**PE/COFF, ELF, and Mach-O are first-class, co-equal targets** — a finding is
+never gated behind one format's scanner or import table.
+
+| Track | Command | Reports |
+|-------|---------|---------|
+| **Audit** | `neverd audit <binary>` | Heap-object lifetime defects: leak, double free, use after free |
+| **Hunt** | `neverd hunt <binary>` | Dangerous-copy overflows with a concrete witness |
+
+The engine reuses NeverD's in-house symbolic execution and bitvector solver for
+witnesses and reachability; there is no external solver, VM, or container
+dependency.
+
+---
+
+## Core invariant: fail closed
+
+An unlifted operation, a call whose arguments the ABI pass could not recover, an
+unresolved indirect target, or an exhausted budget yields **UNKNOWN**, never
+SAFE. A destination whose capacity cannot be recovered is UNKNOWN. Strict
+lifting stays as-is; the safety layer only ever adds conservative verdicts on
+top of it.
+
+---
+
+## Identity contract per format
+
+Both tracks require the lift pipeline (it recovers per-call arguments), and both
+name every finding's callee through the same identity view the rest of NeverD
+uses. Debug discovery precedence is unchanged:
+
+| Format | Debug (in precedence order) | Import / thunk resolution |
+|--------|------------------------------|---------------------------|
+| **PE/COFF** | `--pdb`, debug-directory or sibling `.pdb`, then MSVC `/MAP` | IAT slot and `__imp_` thunks, ordinal imports |
+| **ELF** | in-image DWARF, split `*.debug`, then GNU/LLD MAP | PLT stubs resolved to the imported name |
+| **Mach-O** | in-image DWARF, adjacent `.dSYM`, then ld64 `-map` | dyld bind / indirect-symbol slots and stub helpers |
+
+`--pdb` / `--map` name an authoritative companion file: failing to read it is an
+error, not a silent fallback. `--no-debug` reads the image alone on every
+format.
+
+### Name-source precedence
+
+Every finding carries a `name_source` describing where its callee name was
+established, chosen by this precedence:
+
+1. `rename` — a caller-supplied rename
+2. `import` — an IAT (PE), PLT (ELF), or dyld-bind / stub (Mach-O) entry
+3. `pdb` / `dwarf` / `map` — a debug symbol, by loader kind
+4. `export` / `symbol` — an image export or symbol-table entry
+5. `sig` — a signature-database match
+6. `synthetic` — a placeholder minted for an unnamed routine
+
+A statically-linked `memcpy` named by DWARF reports `dwarf`; an imported
+`memcpy` reports `import` on every format. A signature match never displaces a
+name a debugger or import table already stated.
+
+---
+
+## Sink & source catalog
+
+The catalog is a configurable table, not a hard-coded set. Each **sink** entry
+declares its weakness class, its role (copy, format, alloc, free, realloc), and
+the argument slots that matter (destination, source, length, capacity). Each
+**source** entry names a provider of attacker-influenced input. The built-in
+rows live in [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) and
+[`SafetySources.def`](../include/neverd/safety/SafetySources.def): the C runtime
+copy family (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), their
+fortified `_chk` variants, the allocation/release family
+(`malloc`/`calloc`/`realloc`/`free`, operator `new`/`delete`), optional Win32
+heap APIs, POSIX inputs (`getenv`, `read`, `recv`, `fgets`, `fread`, `scanf`,
+program arguments), and Win32 inputs (`GetCommandLineA/W`, `ReadFile`,
+`GetEnvironmentVariable*`).
+
+Per-format spellings fold onto one entry: leading underscores are stripped
+(`_malloc`, `___strcpy_chk`) and mangled operator new/delete are matched through
+aliases.
+
+Extend or override the catalog with a specification file:
+
+```bash
+neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
+```
+
+```json
+{ "sinks": [
+    { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 }
+] }
+```
+
+---
+
+## Hunt: copy-overflow verdicts
+
+For each copy sink the hunt resolves the destination capacity — a debug-declared
+array size, then a heap allocation site with a known size, then a sound
+stack-frame bound — and classifies the argument that decides the write length by
+a backward SSA walk (following spill/reload through stack slots):
+
+- **Constant length** is compared directly to the capacity → SAFE or UNSAFE.
+- **Fortified** `_chk` copies carry a runtime destination bound → SAFE.
+- **Provably bounded** length (a length-returning call, a mask, a clamp) is
+  retired as a SAFE skip, recording why.
+- **Attacker-influenced** length with a known capacity is checked with the
+  bitvector solver: if a length greater than the capacity is feasible the
+  verdict is UNSAFE and the solver's model is reported as the concrete witness.
+- Anything else — unknown length or unknown capacity — is UNKNOWN.
+
+Every recovered capacity is an **upper bound** on the true object size, so a
+proven overflow is never a false positive.
+
+---
+
+## Audit: heap-lifetime verdicts
+
+For each allocation the audit tracks the handle across the control-flow graph,
+including through stack spill/reload, and applies an escape summary
+(returned, stored through a non-stack address, or handed to an opaque callee):
+
+- **Leak** — the handle is neither released nor allowed to escape.
+- **Double free** — a second release is reachable after a first on a path.
+- **Use after free** — a dereference or opaque use is reachable after a release.
+
+Allocation and release **wrappers** are recognised through per-function escape
+summaries, so a `malloc`/`free` forwarder does not hide the defect. Releases on
+mutually-exclusive branches are not reported as a double free.
+
+---
+
+## Budgets, output, and bindings
+
+Hunt exploration and the solver are bounded (`--max-paths`, `--max-steps`,
+`--max-loop`, `--solver-conflicts`); budget exhaustion yields UNKNOWN. Both
+commands print JSON and honour `-o`. The exit code is `0` for a clean run, `2`
+when an unsafe finding is present, and `1` on error.
+
+The same analyses are available through the C API
+(`neverd_session_audit_json` / `neverd_session_hunt_json` with a versioned
+`neverd_safety_options`) and the Python SDK (`Session.audit()` /
+`Session.hunt()`).
+
+### Finding schema
+
+```json
+{
+  "class": "buffer_overflow",
+  "function": "parse_header",
+  "name": "strcpy",
+  "name_source": "import",
+  "call_va": "0x11a4",
+  "source": "reader.c:42",
+  "sink": "strcpy",
+  "arg_index": 1,
+  "flow": "TAINTED",
+  "verdict": "UNSAFE",
+  "confidence": "HIGH",
+  "capacity": 16,
+  "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
+}
+```
+
+---
+
+## False-positive bounds & scope
+
+- Capacity is always an upper bound, so an UNSAFE verdict reflects a real
+  overflow. A too-small buffer whose declared size is unavailable may be
+  reported SAFE rather than UNSAFE (a conservative miss, never a false alarm).
+- A length-bounded copy is retired as a SAFE skip; this favours precision on the
+  attacker-controlled cases the hunt is designed to prove.
+- **P0** (this release, all three formats): the sink catalog, the argument
+  prefilter, copy-overflow hunt, and the heap-lifetime audit.
+- **P1**: stack/global overflow, uninitialised reads, format strings, richer PDB
+  stack types, more platform allocators.
+- **P2**: patch-inserted runtime checks, interprocedural attacker-reachability.

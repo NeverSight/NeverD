@@ -103,6 +103,18 @@ for path in result.paths:
 
 تكون `complete` بقيمة false عندما يوقف الاستكشاف حد للمسارات أو الخطوات أو زيارات الحلقات أو الفروع غير المحلولة. وتتطلب `exact` أيضاً ألا تكون أي عملية قد استُبدلت بصورة محافظة بحالة مجهولة؛ إذ تُحتسب عمليات LowIR غير المدعومة، والاستدعاءات التي بلا ملخص، وعمليات التخزين عبر عناوين غير محلولة ضمن `unmodelled_ops`. لا تتيح جلسات EVM وSBF استكشاف LowIR الأصلي.
 
+### تدقيق وصيد أمان الذاكرة
+
+تعيد `session.audit()` و`session.hunt()` تقارير JSON محلولة (نفس مخطط CLI). تتطلب جلسة أصلية مرفوعة:
+
+```python
+audit = session.audit()
+hunt = session.hunt(max_paths=64, max_steps=1 << 16)
+print(audit.get("ok"), hunt.get("findings"))
+```
+
+ترفض جلسات EVM وSBF هذه الاستدعاءات.
+
 متغيرات الأحداث الستة غير القابلة للتغيير هي `BINARY_LOADED` و`BINARY_CLOSING` و`FUNCTION_SELECTED` و`ADDRESS_CHANGED` و`ANALYSIS_DONE` و`PATCH_APPLIED`. تُنسخ سلاسل الحمولة أثناء callback؛ وتكون الحقول غير المتعلقة بنوع الحدث `None`.
 
 لا تحتفظ أبداً بكائن `Session` لاستخدامه بعد الإنهاء. تُبطل capsule الأصلية قبل بدء `on_term` وقبل إمكان تحرير الجلسة الأصلية. يفشل أي استدعاء لاحق بـ `RuntimeError` بدلاً من إلغاء مرجع ذاكرة قديمة.

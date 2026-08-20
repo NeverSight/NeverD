@@ -42,6 +42,7 @@ scoperto una label CTest uguale al nome del target eseguibile.
 |---------------|----------------------|-----------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Invocazione di processi figlio multipiattaforma, quoting, redirect e codici di uscita |
 | `unittests/libc` | `NeverDLibCTests` | Nomi libc noti e classificazione |
+| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Catalogo di sink, precedenza di identità, prefiltro degli argomenti, hunt di overflow di copia, audit di vita dell’heap e fixture nativa host end-to-end |
 | `unittests/lift` | `NeverDLiftTests` | Forme LowIR decoder/lifter, fasi IR, loader, relocation, fixture di formato, decompilazione e flussi patch rappresentativi |
 | La maggior parte di `unittests/semantic` | `NeverDSemanticTests` | Semantica differenziale di istruzioni, ABI, controllo, espressioni C e lift/recompile |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Metadata hardfork, normalizzazione input, CFG/SSA/recovery, semantica interpreter, esecuzione differenziale LLVM/C/Solidity e API pubblica |
@@ -55,7 +56,8 @@ Le fonti autorevoli per la registrazione sono
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) e
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt),
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) e
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) e
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt).
 
 ### Il corpus binario fissato
 
@@ -396,6 +398,7 @@ solo per suite con casi pesanti misurati.
 | Loader, opcode, IR o backend EVM | Target proprietario `NeverDEVM*Tests` più piccolo | Tutti i target EVM e compilazione del C/Solidity generato |
 | Loader, ISA, IR o backend SBF | Target proprietario `NeverDSBF*Tests` più piccolo | Tutti i target SBF e compilazione del C/Rust generato |
 | Riconoscimento libc | `NeverDLibCTests` | Casi semantici call/ABI se cambia il comportamento |
+| Audit di vita dell’heap o hunt di overflow di copia | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` su una fixture nativa dell’host |
 | Esecuzione o quoting di processi | `NeverDTestProcessTests` | Un caso CLI/semantico interessato su ogni host supportato |
 
 I test devono esprimere il contratto al confine stabile più basso. Un test della
@@ -409,10 +412,12 @@ osservabile.
 La CI compila Release con test abilitati su Linux, macOS e Windows, controlla
 l’inventario scoperto e poi applica esclusioni di label specifiche della
 piattaforma. I profili sono in `.github/workflows/ci.yml` e
-`scripts/audit_ci_test_inventory.py`. Poiché nessuno shard della matrice
-rappresenta tutte le suite costose, un `check-neverd` locale resta il segnale
-pre-merge completo più chiaro quando la macchina dispone di tutti gli strumenti
-cross richiesti.
+`scripts/audit_ci_test_inventory.py`. `NeverDSafetyTests` e
+`NeverDSafetyIntegrationTests` sono obbligatori su ogni host della matrice:
+Linux esegue la fixture ELF nativa, macOS Mach-O e Windows PE. Poiché nessuno
+shard della matrice rappresenta tutte le suite costose, un `check-neverd`
+locale resta il segnale pre-merge completo più chiaro quando la macchina
+dispone di tutti gli strumenti cross richiesti.
 
 ## Profilo corrente di conformità e sanitizer Solana SBF
 

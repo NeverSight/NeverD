@@ -103,6 +103,18 @@ for path in result.paths:
 
 `complete` vaut false lorsqu’une limite de chemins, d’étapes, de visites de boucle ou de branche non résolue arrête le parcours. `exact` exige en outre qu’aucune opération n’ait été remplacée de façon conservatrice par un état inconnu ; les opérations LowIR non prises en charge, les appels sans résumé et les écritures via une adresse non résolue sont comptés dans `unmodelled_ops`. Les sessions EVM et SBF n’exposent pas l’exploration LowIR native.
 
+### Audit et chasse de sûreté mémoire
+
+`session.audit()` et `session.hunt()` renvoient des rapports JSON analysés (même schéma que le CLI). Ils exigent une session native levée :
+
+```python
+audit = session.audit()
+hunt = session.hunt(max_paths=64, max_steps=1 << 16)
+print(audit.get("ok"), hunt.get("findings"))
+```
+
+Les sessions EVM et SBF rejettent ces appels.
+
 Les six variantes d’événement immuables sont `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` et `PATCH_APPLIED`. Les chaînes du payload sont copiées pendant le callback ; les champs sans rapport avec la variante valent `None`.
 
 Ne conservez jamais une `Session` pour l’utiliser après la terminaison. La capsule native est invalidée avant le début de `on_term` et avant que la session native puisse être libérée. Un appel ultérieur échoue avec `RuntimeError` au lieu de déréférencer une mémoire périmée.

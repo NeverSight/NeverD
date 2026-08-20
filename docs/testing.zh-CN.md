@@ -37,6 +37,7 @@ cmake --build build-release --parallel 4
 |----------|-------------------|----------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | 跨平台子进程调用、引号、重定向与退出码 |
 | `unittests/libc` | `NeverDLibCTests` | 已知 libc 名称与分类 |
+| `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | 汇目录、身份优先序、参数预过滤、拷贝越界猎取、堆生命周期审计，以及宿主原生端到端 fixture |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 形状、IR 阶段、loader、重定位、格式 fixture、反编译与代表性 patch 流程 |
 | `unittests/semantic` 中的大多数文件 | `NeverDSemanticTests` | 指令、ABI、控制流、C 表达式和 lift/recompile 差分语义 |
 | `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | 硬分叉元数据、输入规范化、CFG/SSA/恢复、解释器语义、LLVM/C/Solidity 差分执行及公共 API 路由 |
@@ -50,7 +51,8 @@ cmake --build build-release --parallel 4
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) 和
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 和
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) 和
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt)。
 
 ### 钉住的二进制 corpus
 
@@ -348,6 +350,7 @@ GoogleTest 发现使用 `DISCOVERY_MODE PRE_TEST`，因此 CTest 枚举前必须
 | EVM loader、opcode、IR 或 backend | 最小的所属 `NeverDEVM*Tests` 目标 | 所有 EVM 目标，以及生成 C/Solidity 的编译检查 |
 | SBF loader、ISA、IR 或后端 | 最小的所属 `NeverDSBF*Tests` 目标 | 所有 SBF 目标，以及生成 C/Rust 的编译检查 |
 | Libc 识别 | `NeverDLibCTests` | 行为变化时的语义 call/ABI 用例 |
+| 堆生命周期审计或拷贝越界猎取 | `NeverDSafetyTests` | 宿主原生 fixture 上的 `NeverDSafetyIntegrationTests` |
 | 进程执行或 quoting | `NeverDTestProcessTests` | 每个受支持主机上的一个受影响 CLI/语义用例 |
 
 测试应在最低的稳定边界表达契约。LowIR 形状测试适合归因到 lifter；若两种看似
@@ -358,8 +361,10 @@ GoogleTest 发现使用 `DISCOVERY_MODE PRE_TEST`，因此 CTest 枚举前必须
 
 CI 在 Linux、macOS 和 Windows 上以 Release 开启测试构建，先审核发现的测试清单，
 再应用平台特定的标签排除。配置定义于 `.github/workflows/ci.yml` 和
-`scripts/audit_ci_test_inventory.py`。由于没有单个矩阵 shard 代表所有昂贵套件，当
-机器具备全部跨目标工具时，本地 `check-neverd` 仍是最清晰的完整合并前信号。
+`scripts/audit_ci_test_inventory.py`。每个矩阵主机都必须包含 `NeverDSafetyTests`
+和 `NeverDSafetyIntegrationTests`：Linux 跑宿主 ELF fixture，macOS 跑 Mach-O，
+Windows 跑 PE。由于没有单个矩阵 shard 代表所有昂贵套件，当机器具备全部跨目标
+工具时，本地 `check-neverd` 仍是最清晰的完整合并前信号。
 
 ## 当前 Solana SBF 一致性与 sanitizer 配置
 

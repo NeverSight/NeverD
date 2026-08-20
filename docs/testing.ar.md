@@ -39,6 +39,7 @@ cmake --build build-release --parallel 4
 |--------------|------------------|---------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | استدعاء العمليات الفرعية عابر المنصات، وquoting، وإعادة التوجيه، ورموز الخروج |
 | `unittests/libc` | `NeverDLibCTests` | أسماء libc المعروفة وتصنيفها |
+| `unittests/safety` | `NeverDSafetyTests`، `NeverDSafetyIntegrationTests` | كتالوج المصارف، وأولوية الهوية، ومرشح الوسائط المسبق، وصيد فيضان النسخ، وتدقيق عمر الكومة، وfixture أصلية للمضيف من الطرف إلى الطرف |
 | `unittests/lift` | `NeverDLiftTests` | أشكال LowIR لـ decoder/lifter، ومراحل IR، وloader، وrelocation، وfixtures الصيغ، وإعادة التجميع، ومسارات patch الممثلة |
 | معظم ملفات `unittests/semantic` | `NeverDSemanticTests` | دلالات تفاضلية للتعليمات وABI والتحكم وتعابير C وlift/recompile |
 | `unittests/evm` | `NeverDEVMOpcodeTests` و`NeverDEVMBytecodeTests` و`NeverDEVMLoaderTests` و`NeverDEVMAnalyzerTests` و`NeverDEVMSemanticTests` و`NeverDEVMEmitterTests` و`NeverDEVMIntegrationTests` | metadata للـhardfork وتطبيع الإدخال وCFG/SSA والاستعادة ودلالات interpreter وتنفيذ LLVM/C/Solidity التفاضلي وتوجيه API العامة |
@@ -52,7 +53,8 @@ cmake --build build-release --parallel 4
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) و
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt) و
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) و
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt).
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) و
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt).
 
 ### الـcorpus الثنائي المثبّت
 
@@ -368,6 +370,7 @@ ctest --test-dir build-release --build-config Release \
 | ‏EVM loader أو opcode أو IR أو backend | أصغر هدف مالك من `NeverDEVM*Tests` | جميع أهداف EVM مع فحوص تجميع C/Solidity المولدين |
 | ‏SBF loader أو ISA أو IR أو backend | أصغر هدف مالك من `NeverDSBF*Tests` | جميع أهداف SBF مع فحوص تجميع C/Rust المولدين |
 | تعرف libc | `NeverDLibCTests` | حالات call/ABI دلالية إذا تغير السلوك |
+| تدقيق عمر الكومة أو صيد فيضان النسخ | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` على fixture أصلية للمضيف |
 | تنفيذ العمليات أو quoting | `NeverDTestProcessTests` | حالة CLI/دلالية متأثرة على كل مضيف مدعوم |
 
 يجب أن تعبر الاختبارات عن العقد عند أدنى حد مستقر. يفيد اختبار شكل LowIR في
@@ -379,7 +382,9 @@ ctest --test-dir build-release --build-config Release \
 
 تبني CI ‏Release مع الاختبارات على Linux وmacOS وWindows، ثم تدقق المخزون
 المكتشف قبل تطبيق استثناءات الوسوم الخاصة بالمنصة. تُعرّف الملفات في
-`.github/workflows/ci.yml` و`scripts/audit_ci_test_inventory.py`. ولأن لا shard
+`.github/workflows/ci.yml` و`scripts/audit_ci_test_inventory.py`. يجب أن يضم كل
+مضيف في المصفوفة `NeverDSafetyTests` و`NeverDSafetyIntegrationTests`: Linux يشغّل
+fixture ELF الأصلية، وmacOS يشغّل Mach-O، وWindows يشغّل PE. ولأن لا shard
 واحدًا من المصفوفة يمثل كل المجموعات المكلفة، يبقى `check-neverd` المحلي أوضح
 إشارة كاملة قبل الدمج عندما تملك الآلة كل الأدوات العابرة اللازمة.
 

@@ -123,6 +123,8 @@ cmake --build build
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
+./build/bin/neverd audit binary
+./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -250,6 +252,8 @@ neverd patch --subst --flatten --mba -o patched binary
 | `funcs` | 发现的函数 |
 | `disasm` | 反汇编（`--func` 名称或十六进制） |
 | `sym-explore` | 有界原生 LowIR 路径探索（`--func`；JSON 输出） |
+| `audit` | 堆对象生命周期缺陷：泄漏、重复释放、释放后使用（JSON） |
+| `hunt` | 危险拷贝越界，附具体见证（JSON） |
 | `hex` | 按地址十六进制转储 |
 | `cfg` / `callgraph` | CFG / 调用图（JSON；可选 DOT/SVG） |
 | `xrefs` | 交叉引用 |

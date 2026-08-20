@@ -13,6 +13,7 @@
 | [아키텍처](architecture.ko.md) | IR 경로, 구성 요소 경계, strict lifting, 지원 깊이, 수정 위치 |
 | [테스트](testing.ko.md) | 테스트 스위트, 생성 fixture, Unicorn 왕복, 증분 명령 |
 | [Windows 예외 재구성](windows-exception-reconstruction.ko.md) | SEH/C++ 지원 표, IR 계약, 네이티브 patch 규칙 및 PE 검증 |
+| [메모리 안전성 감사와 헌트](memory-safety.ko.md) | 힙 수명과 복사 오버플로 분석: 형식별 신원 계약, 싱크/소스 카탈로그, 판정, 예산, JSON 스키마 |
 | [Python 플러그인](python-plugins.ko.md) | 플러그인 작성, 세션·이벤트 API, 격리, 테스트 및 배포 |
 | [EVM 디컴파일](evm.ko.md) | 입력, hardfork, 단계별 IR, C/LLVM host ABI, Solidity 복구 및 제한 |
 | [Solana SBF 디컴파일](sbf.ko.md) | SBF v0-v4, LLVM IR, C/Rust 출력, 검증 및 알려진 제한 사항 |

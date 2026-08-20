@@ -123,11 +123,39 @@ static int realMain(int Argc, char *Argv[]) {
     WithColor::error() << "failed to load: " << takeLastError(Sess) << "\n";
     return 1;
   }
-  if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd || SymbolicCmd) &&
+  if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd || SymbolicCmd ||
+       AuditCmd || HuntCmd) &&
       !configureAnalysisSession(Sess))
     return 1;
 
-  if (!JsonOutput && !SymbolicCmd) {
+  // Hunt and audit name callees through the same identity view as the rest of
+  // the engine, so optional signature matching has to land before they run.
+  if ((AuditCmd || HuntCmd) &&
+      (SigAuto || !SigFile.getValue().empty() || !SigDir.getValue().empty())) {
+    int MatchCount = -1;
+    if (SigAuto) {
+      std::error_code EC;
+      auto ExeDir =
+          std::filesystem::canonical(std::filesystem::path(Argv[0]), EC)
+              .parent_path();
+      auto SigBase = ExeDir / "signatures";
+      if (!std::filesystem::exists(SigBase))
+        SigBase = std::filesystem::current_path() / "signatures";
+      MatchCount = neverd_auto_apply_signatures(Sess, SigBase.string().c_str());
+    } else if (!SigFile.getValue().empty()) {
+      MatchCount =
+          neverd_apply_signature_file(Sess, SigFile.getValue().c_str());
+    } else {
+      MatchCount = neverd_apply_signatures(Sess, SigDir.getValue().c_str());
+    }
+    if (MatchCount < 0) {
+      WithColor::error() << "signature matching failed: " << takeLastError(Sess)
+                         << "\n";
+      return 1;
+    }
+  }
+
+  if (!JsonOutput && !SymbolicCmd && !AuditCmd && !HuntCmd) {
     const char *ArchStr = neverd_session_arch_name(Sess);
     outs() << "=== " << ProjectName << " v" << VersionString << " (" << Command
            << ") ===\n";
@@ -181,6 +209,10 @@ static int realMain(int Argc, char *Argv[]) {
     return runCfg(Sess);
   if (SymbolicCmd)
     return runSymbolicExplore(Sess);
+  if (AuditCmd)
+    return runAudit(Sess);
+  if (HuntCmd)
+    return runHunt(Sess);
   if (XrefsCmd)
     return runXrefs(Sess);
   if (CallGraphCmd)

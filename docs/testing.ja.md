@@ -40,6 +40,7 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 |------------|---------------------------|------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | クロスプラットフォーム子プロセス、引用、リダイレクト、終了コード |
 | `unittests/libc` | `NeverDLibCTests` | 既知の libc 名と分類 |
+| `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | シンクカタログ、識別優先順位、引数事前フィルタ、コピー越境ハント、ヒープ寿命監査、ホストネイティブのエンドツーエンド fixture |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter の LowIR 形状、IR 段階、loader、relocation、形式 fixture、デコンパイル、代表的 patch 経路 |
 | `unittests/semantic` の大半 | `NeverDSemanticTests` | 命令、ABI、制御フロー、C 式、lift/recompile の差分セマンティクス |
 | `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | hardfork metadata、input normalization、CFG/SSA/recovery、interpreter semantics、LLVM/C/Solidity differential execution、public API routing |
@@ -53,7 +54,8 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt)、
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt)、
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) です。
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)、
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt) です。
 
 ### pin されたバイナリ corpus
 
@@ -376,6 +378,7 @@ GoogleTest の検出は `DISCOVERY_MODE PRE_TEST` を使うため、CTest が列
 | EVM loader、opcode、IR、backend | 所有する最小の `NeverDEVM*Tests` ターゲット | 全 EVM ターゲットと生成 C/Solidity のコンパイル |
 | SBF loader、ISA、IR、backend | 所有する最小の `NeverDSBF*Tests` ターゲット | 全 SBF ターゲットと生成 C/Rust のコンパイル |
 | Libc 認識 | `NeverDLibCTests` | 動作変更時のセマンティック call/ABI ケース |
+| ヒープ寿命監査またはコピー越境ハント | `NeverDSafetyTests` | ホストネイティブ fixture 上の `NeverDSafetyIntegrationTests` |
 | プロセス実行または quoting | `NeverDTestProcessTests` | 対応各ホストの影響を受ける CLI/セマンティックケース 1 件 |
 
 テストは最も低い安定した境界で契約を表現してください。LowIR 形状テストは lifter
@@ -388,8 +391,11 @@ GoogleTest の検出は `DISCOVERY_MODE PRE_TEST` を使うため、CTest が列
 CI は Linux、macOS、Windows でテストを有効にした Release をビルドし、検出した
 一覧を監査してからプラットフォーム固有のラベル除外を適用します。プロファイルは
 `.github/workflows/ci.yml` と `scripts/audit_ci_test_inventory.py` にあります。
-高コストスイートのすべてを表す単一 matrix shard はないため、必要なクロスツールが
-揃うマシンではローカルの `check-neverd` が最も明確な完全マージ前シグナルです。
+`NeverDSafetyTests` と `NeverDSafetyIntegrationTests` はすべての matrix ホストで
+必須です。Linux はホストネイティブ ELF fixture、macOS は Mach-O、Windows は PE
+を実行します。高コストスイートのすべてを表す単一 matrix shard はないため、必要な
+クロスツールが揃うマシンではローカルの `check-neverd` が最も明確な完全マージ前
+シグナルです。
 
 ## 現在の Solana SBF conformance / sanitizer profile
 

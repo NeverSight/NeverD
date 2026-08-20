@@ -125,6 +125,8 @@ cmake --build build
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
+./build/bin/neverd audit binary
+./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -252,6 +254,8 @@ neverd patch --subst --flatten --mba -o patched binary
 | `funcs` | Gefundene Funktionen |
 | `disasm` | Disassemblieren (`--func` Name oder Hex) |
 | `sym-explore` | Begrenzte Pfaderkundung für natives LowIR (`--func`; JSON-Ausgabe) |
+| `audit` | Heap-Lebensdauerfehler: Leak, Double-Free, Use-after-Free (JSON) |
+| `hunt` | Gefährliche Copy-Überläufe mit konkretem Zeugen (JSON) |
 | `hex` | Hex-Dump an einer Adresse |
 | `cfg` / `callgraph` | CFG / Callgraph (JSON; DOT/SVG optional) |
 | `xrefs` | Querverweise |

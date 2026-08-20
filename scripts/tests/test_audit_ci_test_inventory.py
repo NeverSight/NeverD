@@ -4,6 +4,7 @@ from pathlib import Path
 
 from scripts.audit_ci_test_inventory import (
     CORPUS_LABELS,
+    SAFETY_LABELS,
     InventoryError,
     audit_inventory,
     write_github_reports,
@@ -13,6 +14,7 @@ from scripts.audit_ci_test_inventory import (
 SEMANTIC = "NeverDSemanticTests"
 PATCH = "NeverDPatchFullTests"
 CORPUS_NAMES = tuple(f"corpus/{label}" for label in CORPUS_LABELS)
+SAFETY_NAMES = tuple(f"safety/{label}" for label in SAFETY_LABELS)
 
 
 def ctest_inventory(*entries: tuple[str, tuple[str, ...]]) -> dict:
@@ -39,6 +41,7 @@ def valid_inventory() -> dict:
         ("patch/b", (PATCH,)),
         ("lift/a", ("NeverDLiftTests",)),
         ("cfg/a", ("NeverDCFGLoopXformTests",)),
+        *((name, (label,)) for name, label in zip(SAFETY_NAMES, SAFETY_LABELS)),
         *((name, (label,)) for name, label in zip(CORPUS_NAMES, CORPUS_LABELS)),
     )
 
@@ -55,31 +58,39 @@ class AuditInventoryTests(unittest.TestCase):
 
     def test_linux_owns_semantic_and_keeps_focused_tests(self):
         result = self.audit("linux-semantic", r"^NeverDPatchFullTests$")
-        self.assertEqual(result.full_count, 6 + len(CORPUS_NAMES))
+        self.assertEqual(result.full_count, 8 + len(CORPUS_NAMES))
         self.assertEqual(result.semantic_count, 2)
         self.assertEqual(result.patch_count, 2)
-        self.assertEqual(result.selected_count, 4 + len(CORPUS_NAMES))
+        self.assertEqual(result.selected_count, 6 + len(CORPUS_NAMES))
         self.assertEqual(result.excluded_count, 2)
         self.assertEqual(
             set(result.selected_names),
-            {"semantic/a", "semantic/b", "lift/a", "cfg/a", *CORPUS_NAMES},
+            {
+                "semantic/a",
+                "semantic/b",
+                "lift/a",
+                "cfg/a",
+                *SAFETY_NAMES,
+                *CORPUS_NAMES,
+            },
         )
 
     def test_macos_owns_patch_and_keeps_focused_tests(self):
         result = self.audit("macos-patch", r"^NeverDSemanticTests$")
-        self.assertEqual(result.selected_count, 4 + len(CORPUS_NAMES))
+        self.assertEqual(result.selected_count, 6 + len(CORPUS_NAMES))
         self.assertEqual(
             set(result.selected_names),
-            {"patch/a", "patch/b", "lift/a", "cfg/a", *CORPUS_NAMES},
+            {"patch/a", "patch/b", "lift/a", "cfg/a", *SAFETY_NAMES, *CORPUS_NAMES},
         )
 
     def test_windows_keeps_only_focused_tests(self):
         result = self.audit(
             "windows-focused", r"^NeverD(Semantic|PatchFull)Tests$"
         )
-        self.assertEqual(result.selected_count, 2 + len(CORPUS_NAMES))
+        self.assertEqual(result.selected_count, 4 + len(CORPUS_NAMES))
         self.assertEqual(
-            set(result.selected_names), {"lift/a", "cfg/a", *CORPUS_NAMES}
+            set(result.selected_names),
+            {"lift/a", "cfg/a", *SAFETY_NAMES, *CORPUS_NAMES},
         )
 
     # Every host reads the corpus.  The bytes are the same everywhere, but what
@@ -94,6 +105,32 @@ class AuditInventoryTests(unittest.TestCase):
             with self.subTest(profile=profile):
                 result = self.audit(profile, expression)
                 self.assertTrue(set(CORPUS_NAMES) <= set(result.selected_names))
+
+    def test_every_profile_selects_the_safety_suites(self):
+        for profile, expression in (
+            ("linux-semantic", r"^NeverDPatchFullTests$"),
+            ("macos-patch", r"^NeverDSemanticTests$"),
+            ("windows-focused", r"^NeverD(Semantic|PatchFull)Tests$"),
+        ):
+            with self.subTest(profile=profile):
+                result = self.audit(profile, expression)
+                self.assertTrue(set(SAFETY_NAMES) <= set(result.selected_names))
+
+    def test_a_build_that_left_safety_out_fails(self):
+        for label, name in zip(SAFETY_LABELS, SAFETY_NAMES):
+            document = valid_inventory()
+            document["tests"] = [
+                test for test in document["tests"] if test["name"] != name
+            ]
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(InventoryError, label):
+                    audit_inventory(
+                        document,
+                        "linux-semantic",
+                        r"^NeverDPatchFullTests$",
+                        semantic_minimum=2,
+                        patch_minimum=2,
+                    )
 
     def test_a_build_that_left_the_corpus_out_fails(self):
         for label, name in zip(CORPUS_LABELS, CORPUS_NAMES):
@@ -225,10 +262,10 @@ class AuditInventoryTests(unittest.TestCase):
                 summary_path=summary_path,
             )
 
-            selected = 4 + len(CORPUS_NAMES)
+            selected = 6 + len(CORPUS_NAMES)
             outputs = output_path.read_text(encoding="utf-8")
             self.assertIn(f"count={selected}\n", outputs)
-            self.assertIn(f"full_count={6 + len(CORPUS_NAMES)}\n", outputs)
+            self.assertIn(f"full_count={8 + len(CORPUS_NAMES)}\n", outputs)
             self.assertIn("semantic_count=2\n", outputs)
             self.assertIn("patch_count=2\n", outputs)
             self.assertIn("excluded_count=2\n", outputs)

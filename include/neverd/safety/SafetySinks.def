@@ -1,0 +1,155 @@
+//===- SafetySinks.def - Default dangerous-call catalog ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+// This file intentionally has no include guard. Argument indices are
+// zero-based recovered-call slots; -1 means the routine has no such slot.
+//
+// SAFETY_COPY_SINK(NAME, DST, SRC, LEN, CAP, SEV)
+// SAFETY_FORMAT_SINK(NAME, DST, FMT, CAP, SEV)
+// SAFETY_ALLOC_SINK(NAME, SIZE, SRC, HANDLE, SEV)
+// SAFETY_FREE_SINK(NAME, HANDLE, SEV)
+// SAFETY_REALLOC_SINK(NAME, HANDLE, LEN, SEV)
+// SAFETY_SINK_ALIAS(NAME, ALIAS)
+//
+// Canonical NAME is an identifier (stringized at the include site). ALIAS is
+// a string literal for a per-format spelling that normalizes onto NAME.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef SAFETY_COPY_SINK
+#define SAFETY_COPY_SINK(NAME, DST, SRC, LEN, CAP, SEV)
+#endif
+#ifndef SAFETY_FORMAT_SINK
+#define SAFETY_FORMAT_SINK(NAME, DST, FMT, CAP, SEV)
+#endif
+#ifndef SAFETY_ALLOC_SINK
+#define SAFETY_ALLOC_SINK(NAME, SIZE, SRC, HANDLE, SEV)
+#endif
+#ifndef SAFETY_FREE_SINK
+#define SAFETY_FREE_SINK(NAME, HANDLE, SEV)
+#endif
+#ifndef SAFETY_REALLOC_SINK
+#define SAFETY_REALLOC_SINK(NAME, HANDLE, LEN, SEV)
+#endif
+#ifndef SAFETY_SINK_ALIAS
+#define SAFETY_SINK_ALIAS(NAME, ALIAS)
+#endif
+
+//===----------------------------------------------------------------------===//
+// Copy family (buffer overflow)
+//===----------------------------------------------------------------------===//
+
+// memcpy(dst, src, n) and relatives: the count argument decides the write.
+SAFETY_COPY_SINK(memcpy, 0, 1, 2, -1, 70)
+SAFETY_COPY_SINK(memmove, 0, 1, 2, -1, 70)
+SAFETY_COPY_SINK(wmemcpy, 0, 1, 2, -1, 70)
+SAFETY_COPY_SINK(wmemmove, 0, 1, 2, -1, 70)
+
+// memset(dst, c, n): a wild count still overruns the destination.
+SAFETY_COPY_SINK(memset, 0, -1, 2, -1, 55)
+SAFETY_COPY_SINK(bzero, 0, -1, 1, -1, 45)
+
+// bcopy(src, dst, n): source and destination are swapped relative to memcpy.
+SAFETY_COPY_SINK(bcopy, 1, 0, 2, -1, 60)
+
+// strcpy(dst, src) / stpcpy / strcat: the copy length is strlen(src).
+SAFETY_COPY_SINK(strcpy, 0, 1, -1, -1, 85)
+SAFETY_COPY_SINK(stpcpy, 0, 1, -1, -1, 80)
+SAFETY_COPY_SINK(strcat, 0, 1, -1, -1, 85)
+SAFETY_COPY_SINK(wcscpy, 0, 1, -1, -1, 80)
+SAFETY_COPY_SINK(wcscat, 0, 1, -1, -1, 80)
+
+// gets(dst): unbounded read straight into the destination.
+SAFETY_COPY_SINK(gets, 0, -1, -1, -1, 95)
+
+// Bounded relatives keep an explicit count.
+SAFETY_COPY_SINK(strncpy, 0, 1, 2, -1, 55)
+SAFETY_COPY_SINK(strncat, 0, 1, 2, -1, 55)
+SAFETY_COPY_SINK(strlcpy, 0, 1, 2, -1, 40)
+SAFETY_COPY_SINK(strlcat, 0, 1, 2, -1, 40)
+
+// Fortified variants carry the destination capacity as their last argument.
+SAFETY_COPY_SINK(memcpy_chk, 0, 1, 2, 3, 40)
+SAFETY_SINK_ALIAS(memcpy_chk, "__memcpy_chk")
+SAFETY_COPY_SINK(memmove_chk, 0, 1, 2, 3, 40)
+SAFETY_SINK_ALIAS(memmove_chk, "__memmove_chk")
+SAFETY_COPY_SINK(memset_chk, 0, -1, 2, 3, 35)
+SAFETY_SINK_ALIAS(memset_chk, "__memset_chk")
+SAFETY_COPY_SINK(strcpy_chk, 0, 1, -1, 2, 40)
+SAFETY_SINK_ALIAS(strcpy_chk, "__strcpy_chk")
+SAFETY_COPY_SINK(stpcpy_chk, 0, 1, -1, 2, 40)
+SAFETY_SINK_ALIAS(stpcpy_chk, "__stpcpy_chk")
+SAFETY_COPY_SINK(strcat_chk, 0, 1, -1, 2, 40)
+SAFETY_SINK_ALIAS(strcat_chk, "__strcat_chk")
+SAFETY_COPY_SINK(strncpy_chk, 0, 1, 2, 3, 35)
+SAFETY_SINK_ALIAS(strncpy_chk, "__strncpy_chk")
+SAFETY_COPY_SINK(strncat_chk, 0, 1, 2, 3, 35)
+SAFETY_SINK_ALIAS(strncat_chk, "__strncat_chk")
+
+//===----------------------------------------------------------------------===//
+// Format family
+//===----------------------------------------------------------------------===//
+
+SAFETY_FORMAT_SINK(printf, -1, 0, -1, 60)
+SAFETY_FORMAT_SINK(wprintf, -1, 0, -1, 60)
+SAFETY_FORMAT_SINK(fprintf, -1, 1, -1, 55)
+SAFETY_FORMAT_SINK(dprintf, -1, 1, -1, 55)
+SAFETY_FORMAT_SINK(sprintf, 0, 1, -1, 80)
+SAFETY_FORMAT_SINK(vsprintf, 0, 1, -1, 80)
+SAFETY_FORMAT_SINK(syslog, -1, 1, -1, 55)
+// snprintf(dst, n, fmt, ...): a size-bounded write with a format string.
+SAFETY_FORMAT_SINK(snprintf, 0, 2, 1, 45)
+SAFETY_FORMAT_SINK(vsnprintf, 0, 2, 1, 45)
+SAFETY_FORMAT_SINK(sprintf_chk, 0, 3, 2, 40)
+SAFETY_FORMAT_SINK(snprintf_chk, 0, 4, 2, 40)
+
+//===----------------------------------------------------------------------===//
+// Heap lifetime (audit)
+//===----------------------------------------------------------------------===//
+
+SAFETY_ALLOC_SINK(malloc, 0, -1, -1, 50)
+SAFETY_ALLOC_SINK(alloca, 0, -1, -1, 40)
+SAFETY_SINK_ALIAS(alloca, "_alloca")
+SAFETY_SINK_ALIAS(alloca, "__builtin_alloca")
+SAFETY_ALLOC_SINK(valloc, 0, -1, -1, 50)
+SAFETY_ALLOC_SINK(aligned_alloc, 1, -1, -1, 50)
+SAFETY_ALLOC_SINK(strdup, -1, -1, -1, 45)
+SAFETY_ALLOC_SINK(strndup, -1, -1, -1, 45)
+// calloc(nmemb, size): element count in arg0, element size in arg1.
+SAFETY_ALLOC_SINK(calloc, 1, 0, -1, 50)
+// Operator new / new[] arrive underscore-stripped as their Itanium spelling.
+SAFETY_ALLOC_SINK(Znwm, 0, -1, -1, 50)
+SAFETY_SINK_ALIAS(Znwm, "_Znwm")
+SAFETY_SINK_ALIAS(Znwm, "Znwj")
+SAFETY_ALLOC_SINK(Znam, 0, -1, -1, 50)
+SAFETY_SINK_ALIAS(Znam, "_Znam")
+SAFETY_SINK_ALIAS(Znam, "Znaj")
+// posix_memalign(&p, align, n) writes the handle through its first argument.
+SAFETY_ALLOC_SINK(posix_memalign, 2, -1, 0, 50)
+
+SAFETY_REALLOC_SINK(realloc, 0, 1, 55)
+
+SAFETY_FREE_SINK(free, 0, 50)
+SAFETY_FREE_SINK(reallocf, 0, 50)
+SAFETY_FREE_SINK(ZdlPv, 0, 50)
+SAFETY_SINK_ALIAS(ZdlPv, "_ZdlPv")
+SAFETY_SINK_ALIAS(ZdlPv, "ZdlPvm")
+SAFETY_FREE_SINK(ZdaPv, 0, 50)
+SAFETY_SINK_ALIAS(ZdaPv, "_ZdaPv")
+SAFETY_SINK_ALIAS(ZdaPv, "ZdaPvm")
+
+// Optional Win32 heap aliases so a PE that uses them is not format-blind.
+SAFETY_ALLOC_SINK(HeapAlloc, 2, -1, -1, 45)
+SAFETY_FREE_SINK(HeapFree, 2, 45)
+SAFETY_ALLOC_SINK(LocalAlloc, 1, -1, -1, 40)
+SAFETY_FREE_SINK(LocalFree, 0, 40)
+SAFETY_ALLOC_SINK(GlobalAlloc, 1, -1, -1, 40)
+SAFETY_FREE_SINK(GlobalFree, 0, 40)
+
+#undef SAFETY_SINK_ALIAS
+#undef SAFETY_REALLOC_SINK
+#undef SAFETY_FREE_SINK
+#undef SAFETY_ALLOC_SINK
+#undef SAFETY_FORMAT_SINK
+#undef SAFETY_COPY_SINK

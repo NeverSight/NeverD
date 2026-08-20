@@ -37,6 +37,7 @@ cmake --build build-release --parallel 4
 |------------|-------------------|----------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | 跨平台子行程呼叫、引號、重新導向與結束碼 |
 | `unittests/libc` | `NeverDLibCTests` | 已知 libc 名稱與分類 |
+| `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | 匯目錄、身分優先序、參數預過濾、拷貝越界獵取、堆積生命週期稽核，以及宿主原生端到端 fixture |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 形狀、IR 階段、loader、重定位、格式 fixture、反編譯與代表性 patch 流程 |
 | `unittests/semantic` 中的大多數檔案 | `NeverDSemanticTests` | 指令、ABI、控制流、C 運算式與 lift/recompile 差分語意 |
 | `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | 硬分叉中繼資料、輸入正規化、CFG/SSA/還原、interpreter 語意、LLVM/C/Solidity 差分執行及公共 API routing |
@@ -50,7 +51,8 @@ cmake --build build-release --parallel 4
 [`unittests/lift/CMakeLists.txt`](../unittests/lift/CMakeLists.txt) 與
 [`unittests/semantic/CMakeLists.txt`](../unittests/semantic/CMakeLists.txt)、
 [`unittests/evm/CMakeLists.txt`](../unittests/evm/CMakeLists.txt) 與
-[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt)。
+[`unittests/sbf/CMakeLists.txt`](../unittests/sbf/CMakeLists.txt) 和
+[`unittests/safety/CMakeLists.txt`](../unittests/safety/CMakeLists.txt)。
 
 ### 釘住的二進位 corpus
 
@@ -352,6 +354,7 @@ GoogleTest 發現使用 `DISCOVERY_MODE PRE_TEST`，因此 CTest 列舉前必須
 | EVM loader、opcode、IR 或 backend | 最小的所屬 `NeverDEVM*Tests` 目標 | 所有 EVM 目標，以及產生 C/Solidity 的編譯檢查 |
 | SBF loader、ISA、IR 或後端 | 最小的所屬 `NeverDSBF*Tests` 目標 | 所有 SBF 目標，以及產生 C/Rust 的編譯檢查 |
 | Libc 辨識 | `NeverDLibCTests` | 行為變更時的語意 call/ABI 案例 |
+| 堆積生命週期稽核或拷貝越界獵取 | `NeverDSafetyTests` | 宿主原生 fixture 上的 `NeverDSafetyIntegrationTests` |
 | 行程執行或 quoting | `NeverDTestProcessTests` | 每個支援主機上的一個受影響 CLI/語意案例 |
 
 測試應在最低穩定邊界表達契約。LowIR 形狀測試適合歸因至 lifter；若兩種看似
@@ -362,8 +365,10 @@ GoogleTest 發現使用 `DISCOVERY_MODE PRE_TEST`，因此 CTest 列舉前必須
 
 CI 在 Linux、macOS 和 Windows 上以 Release 開啟測試建置，先稽核發現的測試清單，
 再套用平台特定標籤排除。設定定義於 `.github/workflows/ci.yml` 與
-`scripts/audit_ci_test_inventory.py`。由於沒有單一矩陣 shard 代表所有昂貴套件，當
-機器具備全部跨目標工具時，本機 `check-neverd` 仍是最清楚的完整合併前訊號。
+`scripts/audit_ci_test_inventory.py`。每個矩陣主機都必須包含 `NeverDSafetyTests`
+與 `NeverDSafetyIntegrationTests`：Linux 跑宿主 ELF fixture，macOS 跑 Mach-O，
+Windows 跑 PE。由於沒有單一矩陣 shard 代表所有昂貴套件，當機器具備全部跨目標
+工具時，本機 `check-neverd` 仍是最清楚的完整合併前訊號。
 
 ## 目前 Solana SBF 一致性與 sanitizer profile
 
