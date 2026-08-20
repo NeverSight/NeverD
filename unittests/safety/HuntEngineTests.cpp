@@ -4,15 +4,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/safety/HuntEngine.h"
-
-#include "neverd/safety/SinkScanner.h"
+#include "gtest/gtest.h"
 
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
-
-#include "gtest/gtest.h"
+#include "neverd/safety/HuntEngine.h"
+#include "neverd/safety/SinkScanner.h"
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -38,6 +36,7 @@ MedVar param(int Id, uint16_t Size = 8) {
 MedVar mkReg(uint64_t Off, int Ver, uint16_t Size = 8) {
   MedVar V;
   V.Kind = MedVar::Reg;
+  V.Id = static_cast<int>(Off);
   V.RegOff = Off;
   V.SSAVer = Ver;
   V.Size = Size;
@@ -104,8 +103,7 @@ std::optional<Finding> hunt(MedFunc &F, bool StackRegs = false,
   return std::nullopt;
 }
 
-LowOp lop(NdOp Opcode, NdVar Output, std::vector<NdVar> Inputs,
-          va_t Addr = 0) {
+LowOp lop(NdOp Opcode, NdVar Output, std::vector<NdVar> Inputs, va_t Addr = 0) {
   LowOp O;
   O.Opcode = Opcode;
   O.Output = Output;
@@ -151,7 +149,40 @@ LowFunc guardedMemcpyLow(va_t MemcpyVA, bool OverflowGuard) {
   return LF;
 }
 
-LowFunc strlenGuardedStrcpyLow(va_t StrlenVA, va_t StrcpyVA, bool OverflowGuard) {
+LowFunc fortifiedMemcpyLow(va_t MemcpyVA) {
+  constexpr uint64_t kRuntimeCap = 24;
+  constexpr uint64_t kFlag = 200;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock B0, B1, B2;
+  B0.Id = 0;
+  B0.StartAddr = kEntry;
+  B0.EndAddr = kEntry + 0x10;
+  B1.Id = 1;
+  B1.StartAddr = MemcpyVA;
+  B1.EndAddr = MemcpyVA + 0x10;
+  B2.Id = 2;
+  B2.StartAddr = MemcpyVA + 0x10;
+  B2.EndAddr = MemcpyVA + 0x20;
+  B0.Ops.push_back(lop(NdOp::INT_LESSEQUAL, NdVar::reg(kFlag, 1),
+                       {NdVar::reg(kRuntimeCap, 8), NdVar::cst(8, 8)}));
+  B0.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                       {NdVar::cst(MemcpyVA, 8), NdVar::reg(kFlag, 1)}));
+  B0.Succs = {1, 2};
+  B1.Ops.push_back(lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, MemcpyVA));
+  B1.Succs = {2};
+  B1.Preds = {0};
+  B2.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  B2.Preds = {0, 1};
+  LF.Blocks.push_back(std::move(B0));
+  LF.Blocks.push_back(std::move(B1));
+  LF.Blocks.push_back(std::move(B2));
+  return LF;
+}
+
+LowFunc strlenGuardedStrcpyLow(va_t StrlenVA, va_t StrcpyVA,
+                               bool OverflowGuard) {
   constexpr uint64_t kRax = 0;
   constexpr uint64_t kFlag = 200;
   constexpr va_t kEntry = 0x400000;
@@ -188,6 +219,54 @@ LowFunc strlenGuardedStrcpyLow(va_t StrlenVA, va_t StrcpyVA, bool OverflowGuard)
   return LF;
 }
 
+LowFunc reachableSinkLow(va_t SinkVA) {
+  LowFunc LF;
+  LowBlock B;
+  B.Id = 0;
+  B.StartAddr = SinkVA;
+  B.EndAddr = SinkVA + 8;
+  B.Ops.push_back(lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, SinkVA));
+  B.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  LF.Blocks.push_back(std::move(B));
+  return LF;
+}
+
+LowFunc unmodelledThenSinkLow(va_t SinkVA) {
+  LowFunc LF = reachableSinkLow(SinkVA);
+  LF.Blocks[0].Ops.insert(
+      LF.Blocks[0].Ops.begin(),
+      lop(NdOp::INTRINSIC, NdVar::tmp(7, 8), {NdVar::reg(0, 8)}, SinkVA - 4));
+  LF.Blocks[0].StartAddr = SinkVA - 4;
+  return LF;
+}
+
+LowFunc unresolvedIndirectThenSinkLow(va_t SinkVA) {
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = kEntry + 8;
+  Entry.Ops.push_back(
+      lop(NdOp::INDIR_BR, NdVar{}, {NdVar::reg(64, 8)}, kEntry));
+  Entry.Succs = {1, 2};
+  Sink.Id = 1;
+  Sink.StartAddr = SinkVA;
+  Sink.EndAddr = SinkVA + 8;
+  Sink.Ops.push_back(lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, SinkVA));
+  Sink.Preds = {0};
+  Exit.Id = 2;
+  Exit.StartAddr = SinkVA + 8;
+  Exit.EndAddr = SinkVA + 16;
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  Exit.Preds = {0};
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
 MedVar rdxLen() {
   MedVar V;
   V.Kind = MedVar::Reg;
@@ -201,15 +280,97 @@ MedVar rdxLen() {
 
 TEST(HuntEngine, TaintedStrcpyIntoStackBufferIsUnsafe) {
   Builder B("main");
-  B.op(NdOp::INT_SUB, mkReg(kSP, 1), {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  B.op(NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  B.op(NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0x8, 8)});
+  B.call("strcpy", temp(0), {temp(10), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = reachableSinkLow(0x400010);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/true, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, TaintedStrcpyWithoutReachabilityIsUnknown) {
+  Builder B("main");
+  B.op(NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
   B.op(NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0x8, 8)});
   B.call("strcpy", temp(0), {temp(10), param(2)});
 
   auto Fnd = hunt(B.F, /*StackRegs=*/true);
   ASSERT_TRUE(Fnd.has_value());
-  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
-  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
-  EXPECT_FALSE(Fnd->Witness.empty());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, UnmodelledOperationBeforeSinkFailsClosed) {
+  Builder B("main");
+  B.op(NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  B.op(NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0x8, 8)});
+  B.call("strcpy", temp(0), {temp(10), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = unmodelledThenSinkLow(0x400010);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/true, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, IncompleteInstructionLiftFailsClosed) {
+  Builder B("main");
+  B.op(NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  B.op(NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0x8, 8)});
+  B.call("strcpy", temp(0), {temp(10), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = reachableSinkLow(0x400010);
+  LF.DecodedInstructionCount = 2;
+  LF.LiftedInstructionCount = 1;
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/true, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, UnresolvedIndirectBranchDoesNotGuessASuccessor) {
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.op(NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  B.op(NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0x8, 8)});
+  B.call("strcpy", temp(0), {temp(10), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = unresolvedIndirectThenSinkLow(0x400010);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/true, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, MissingCallAddressDoesNotGuessFirstCallAsSink) {
+  Builder B("main");
+  B.op(NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  B.op(NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0x8, 8)});
+  B.call("strcpy", temp(0), {temp(10), param(2)});
+  LowFunc LF = reachableSinkLow(0x400010);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/true, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, TaintedMemcpyIntoHeapIsUnsafe) {
@@ -217,8 +378,11 @@ TEST(HuntEngine, TaintedMemcpyIntoHeapIsUnsafe) {
   B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
   B.call("read", temp(5), {});
   B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  B.F.CC = CallingConv::SysV_AMD64;
+  LowFunc LF = reachableSinkLow(0x400010);
 
-  auto Fnd = hunt(B.F);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   ASSERT_TRUE(Fnd->Capacity.has_value());
@@ -235,21 +399,72 @@ TEST(HuntEngine, ConstLengthWithinCapacityIsSafe) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
 }
 
-TEST(HuntEngine, ConstLengthExceedingCapacityIsUnsafe) {
+TEST(HuntEngine, ConstLengthExceedingCapacityWithoutReachabilityIsUnknown) {
   Builder B;
   B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
   B.call("memcpy", temp(0), {temp(1), temp(2), MedVar::makeConst(32, 8)});
 
   auto Fnd = hunt(B.F);
   ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, ReachableConstLengthExceedingCapacityIsUnsafe) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("memcpy", temp(0), {temp(1), temp(2), MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = reachableSinkLow(0x400010);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
 }
 
-TEST(HuntEngine, StrlenBoundedCopyIsSafeSkip) {
+TEST(HuntEngine, ConstLengthWithinStackFrameBoundIsUnknown) {
+  Builder B;
+  B.op(NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  B.op(NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0x8, 8)});
+  B.call("memcpy", temp(0), {temp(10), temp(2), MedVar::makeConst(16, 8)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/true);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Fnd->SkipReason.empty());
+}
+
+TEST(HuntEngine, StrlenWithoutDestinationGuardIsUnknown) {
   Builder B;
   B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
   B.call("strlen", temp(5), {});
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->SkipReason.empty());
+}
+
+TEST(HuntEngine, MaskBoundMustFitDestinationBeforeSafeSkip) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(NdOp::INT_AND, temp(5), {param(1), MedVar::makeConst(0xff, 8)});
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->SkipReason.empty());
+}
+
+TEST(HuntEngine, MaskBoundWithinDestinationIsSafeSkip) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(NdOp::INT_AND, temp(5), {param(1), MedVar::makeConst(0x0f, 8)});
   B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
 
   auto Fnd = hunt(B.F);
@@ -260,6 +475,7 @@ TEST(HuntEngine, StrlenBoundedCopyIsSafeSkip) {
 
 TEST(HuntEngine, FortifiedCopyIsSafe) {
   Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
   // __strcpy_chk(dst, src, dstlen)
   B.call("___strcpy_chk", temp(0),
          {temp(1), param(2), MedVar::makeConst(16, 8)});
@@ -268,6 +484,108 @@ TEST(HuntEngine, FortifiedCopyIsSafe) {
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
   EXPECT_NE(Fnd->Detail.find("fortified"), std::string::npos);
+}
+
+TEST(HuntEngine, FortifiedCopyWithoutDestinationCapacityIsUnknown) {
+  Builder B;
+  B.call("___strcpy_chk", temp(0),
+         {temp(1), param(2), MedVar::makeConst(16, 8)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+}
+
+TEST(HuntEngine, FortifiedBoundLargerThanObjectStillAllowsOverflow) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call(
+      "___memcpy_chk", temp(0),
+      {temp(1), temp(2), MedVar::makeConst(12, 8), MedVar::makeConst(16, 8)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = reachableSinkLow(0x400010);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, FortifiedBoundRejectingCopyPreventsOverflow) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("___memcpy_chk", temp(0),
+         {temp(1), temp(2), MedVar::makeConst(12, 8), MedVar::makeConst(8, 8)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, FortifiedRuntimeBoundParticipatesInOverflowQuery) {
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("___memcpy_chk", temp(0), {temp(1), temp(2), rdxLen(), mkReg(24, 0)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = fortifiedMemcpyLow(0x400010);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, ConstantStringPointerIsNotAConstantStringLength) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("strcpy", temp(0), {temp(1), MedVar::makeConst(0x100000, 8)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, AppendRequiresDestinationStringState) {
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("strlen", temp(5), {param(2)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400004;
+  B.call("strcat", temp(0), {temp(1), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = strlenGuardedStrcpyLow(0x400004, 0x400010,
+                                      /*OverflowGuard=*/false);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+}
+
+TEST(HuntEngine, SizeLimitedStringCopyRequiresSourceLength) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("strlcpy", temp(0),
+         {temp(1), MedVar::makeConst(0x100000, 8), MedVar::makeConst(16, 8)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, WideCopyFailsClosedUntilElementWidthIsModelled) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("wmemcpy", temp(0), {temp(1), temp(2), MedVar::makeConst(4, 8)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
 }
 
 TEST(HuntEngine, UnknownCapacityFailsClosed) {
@@ -290,6 +608,22 @@ TEST(HuntEngine, PathConstraintKeepsCopyInBound) {
   B.call("memcpy", temp(0), {temp(1), temp(2), rdxLen()});
   B.F.Blocks[0].Ops.back().Addr = 0x400010;
   LowFunc LF = guardedMemcpyLow(0x400010, /*OverflowGuard=*/false);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, FunctionEntrySelectsTheStartBlock) {
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("memcpy", temp(0), {temp(1), temp(2), rdxLen()});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = guardedMemcpyLow(0x400010, /*OverflowGuard=*/false);
+  std::swap(LF.Blocks[0], LF.Blocks[1]);
+
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
@@ -321,7 +655,8 @@ TEST(HuntEngine, StrlenGuardKeepsStrcpyInBound) {
   B.F.Blocks[0].Ops.back().Addr = 0x400004;
   B.call("strcpy", temp(0), {temp(1), param(2)});
   B.F.Blocks[0].Ops.back().Addr = 0x400010;
-  LowFunc LF = strlenGuardedStrcpyLow(0x400004, 0x400010, /*OverflowGuard=*/false);
+  LowFunc LF =
+      strlenGuardedStrcpyLow(0x400004, 0x400010, /*OverflowGuard=*/false);
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
@@ -337,7 +672,8 @@ TEST(HuntEngine, StrlenGuardWitnessesOverflow) {
   B.F.Blocks[0].Ops.back().Addr = 0x400004;
   B.call("strcpy", temp(0), {temp(1), param(2)});
   B.F.Blocks[0].Ops.back().Addr = 0x400010;
-  LowFunc LF = strlenGuardedStrcpyLow(0x400004, 0x400010, /*OverflowGuard=*/true);
+  LowFunc LF =
+      strlenGuardedStrcpyLow(0x400004, 0x400010, /*OverflowGuard=*/true);
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);

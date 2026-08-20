@@ -37,8 +37,12 @@ namespace safety {
 struct ArgClassification {
   ArgFlow Flow = ArgFlow::Unknown;
   std::optional<uint64_t> ConstValue; ///< set when the argument is a constant.
-  std::string Reason;                 ///< why it was classed as it was.
-  std::string TaintSource;            ///< the reaching input, when TAINTED.
+  /// Inclusive numeric upper bound proved by the slice.  `Bounded` without a
+  /// concrete upper bound is not sufficient to retire a sink: the caller must
+  /// still compare this value with the recovered destination capacity.
+  std::optional<uint64_t> UpperBound;
+  std::string Reason;      ///< why it was classed as it was.
+  std::string TaintSource; ///< the reaching input, when TAINTED.
 };
 
 /// Classify the argument at position \p ArgIndex of the call record

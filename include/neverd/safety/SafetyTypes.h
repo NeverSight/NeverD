@@ -85,20 +85,27 @@ const char *toString(ArgFlow F);
 
 /// A call site that matched a catalog entry, before any property is checked.
 struct SinkSite {
-  va_t FuncEntry = 0;   ///< entry VA of the function containing the call.
-  std::string FuncName; ///< display name of that function.
-  int BlockId = -1;     ///< MedIR block holding the call op.
-  int OpIdx = -1;       ///< index of the call op within that block.
+  va_t FuncEntry = 0;       ///< entry VA of the function containing the call.
+  std::string FuncName;     ///< display name of that function.
+  int BlockId = -1;         ///< MedIR block holding the call op.
+  int OpIdx = -1;           ///< index of the call op within that block.
   size_t CallInfoIndex = 0; ///< index into the function's recovered call list.
-  va_t CallVA = 0;      ///< address of the call instruction.
+  va_t CallVA = 0;          ///< address of the call instruction.
 
   std::string StatedName; ///< the callee name as resolved by the pipeline.
   std::string Sink;       ///< the normalized catalog name it matched.
   VulnClass Class = VulnClass::Unknown;
   SinkKind Kind = SinkKind::Copy;
-  int ArgIndex = -1;      ///< the argument whose value decides the property.
-  bool IsIndirect = false;///< the call reached the callee indirectly.
+  int ArgIndex = -1;       ///< the argument whose value decides the property.
+  bool IsIndirect = false; ///< the call reached the callee indirectly.
   NameSource Source = NameSource::Synthetic;
+};
+
+/// A MedIR program point used internally to replay a candidate on a symbolic
+/// path.  It is deliberately not serialized into the report.
+struct FindingEvent {
+  int BlockId = -1;
+  int OpIdx = -1;
 };
 
 /// One evidence-carrying record in a report.
@@ -108,26 +115,32 @@ struct Finding {
   Verdict TheVerdict = Verdict::Unknown;
   Confidence TheConfidence = Confidence::Low;
 
-  std::string Function;   ///< containing function display name.
+  std::string Function; ///< containing function display name.
   va_t FuncEntry = 0;
-  std::string Name;       ///< sink / callee name.
+  std::string Name; ///< sink / callee name.
   NameSource Source = NameSource::Synthetic;
   va_t CallVA = 0;
-  std::string SourceLoc;  ///< "file:line" when debug info supplies it.
-  std::string Sink;       ///< normalized catalog name.
+  std::string SourceLoc; ///< "file:line" when debug info supplies it.
+  std::string Sink;      ///< normalized catalog name.
   int ArgIndex = -1;
   ArgFlow Flow = ArgFlow::Unknown;
 
-  std::optional<uint64_t> Capacity;   ///< destination capacity, when known.
+  std::optional<uint64_t> Capacity; ///< destination capacity, when known.
+  bool CapacityExact = false;       ///< false means Capacity is an upper bound.
 
   // Evidence — at most one of the following is populated per finding.
   std::string SkipReason;  ///< why a bounded sink was filtered before solving.
   std::string Constraints; ///< the path predicate, rendered.
   std::vector<std::pair<std::string, std::string>>
-      Witness;             ///< concrete inputs that drive the violation.
+      Witness;               ///< concrete inputs that drive the violation.
   std::string Corroboration; ///< how a symbolic pass confirmed a candidate.
-  std::string Detail;      ///< a short human-readable note.
-  bool BudgetHit = false;  ///< exploration or the solver ran out of budget.
+  std::string Detail;        ///< a short human-readable note.
+  bool BudgetHit = false;    ///< exploration or the solver ran out of budget.
+
+  std::vector<FindingEvent> RequiredPathEvents;
+  std::vector<FindingEvent> ForbiddenPathEvents;
+  bool RequireReturnedPath = false;
+  va_t RequireNonNullCallVA = 0;
 };
 
 /// The result of running one track over a binary.

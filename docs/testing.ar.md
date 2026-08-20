@@ -39,7 +39,7 @@ cmake --build build-release --parallel 4
 |--------------|------------------|---------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | استدعاء العمليات الفرعية عابر المنصات، وquoting، وإعادة التوجيه، ورموز الخروج |
 | `unittests/libc` | `NeverDLibCTests` | أسماء libc المعروفة وتصنيفها |
-| `unittests/safety` | `NeverDSafetyTests`، `NeverDSafetyIntegrationTests` | كتالوج المصارف، وأولوية الهوية، ومرشح الوسائط المسبق، وصيد فيضان النسخ، وتدقيق عمر الكومة، وfixture أصلية للمضيف من الطرف إلى الطرف |
+| `unittests/safety` | `NeverDSafetyTests`، `NeverDSafetyIntegrationTests` | كتالوج المصارف، وأولوية الهوية، ومرشح الوسائط المسبق، وصيد فيضان النسخ، وتدقيق عمر الكومة، ومصفوفة إلزامية من ست خلايا PE/ELF/Mach-O × x86-64/AArch64 |
 | `unittests/lift` | `NeverDLiftTests` | أشكال LowIR لـ decoder/lifter، ومراحل IR، وloader، وrelocation، وfixtures الصيغ، وإعادة التجميع، ومسارات patch الممثلة |
 | معظم ملفات `unittests/semantic` | `NeverDSemanticTests` | دلالات تفاضلية للتعليمات وABI والتحكم وتعابير C وlift/recompile |
 | `unittests/evm` | `NeverDEVMOpcodeTests` و`NeverDEVMBytecodeTests` و`NeverDEVMLoaderTests` و`NeverDEVMAnalyzerTests` و`NeverDEVMSemanticTests` و`NeverDEVMEmitterTests` و`NeverDEVMIntegrationTests` | metadata للـhardfork وتطبيع الإدخال وCFG/SSA والاستعادة ودلالات interpreter وتنفيذ LLVM/C/Solidity التفاضلي وتوجيه API العامة |
@@ -155,6 +155,29 @@ PE/COFF وصورًا مرتبطة، وكائنات Mach-O i386 ‏PIC/no-PIC. ع
 وفحص LowIR وMedIR وHighIR وLLVM IR وC المولدة أو ثنائي معاد كتابته. يمكن لمتغير
 البيئة `NEVERD` تجاوز مسار CLI في تجربة يدوية محددة؛ وتستخدم عمليات CTest العادية
 الملف التنفيذي الذي يضمنه CMake.
+
+### Fixtures سلامة الذاكرة
+
+يحتوي `unittests/safety/fixtures/binaries` على صور PE وELF وMach-O مُودعة
+لمعماريتَي x86-64 وAArch64، مع ملف PDB أو dSYM المرافق الذي توفّره كل صيغة،
+إضافةً إلى ملف MAP من الرابط لكل صورة. الـMAP هو ما تبقى البُنية المجرّدة من
+الرموز تُصدره، لذلك تُحلَّل كل خانة أيضًا مع تسمية الـMAP صراحةً، وهو ما يثبّت
+ما يحق للنتيجة أن تدّعيه حين لا تبقى أنواع ولا أسطر مصدرية. يشغّل
+`NeverDSafetyIntegrationTests` الخانات الست كلها على كل مضيف؛ وتفشل التهيئة إذا
+غابت أي صورة أو ملف مرافق مطلوب، ولا يملك الطقم أي مسار تخطٍّ يعتمد على سلسلة
+أدوات المضيف.
+
+تأتي الثنائيات المتكافئة من ملف مصدري واحد. أعد بناء fixture الدخان الأصلية
+للمضيف بـ `make`، أو أعد توليد المصفوفة المُودعة كاملةً بـ:
+
+```bash
+make -C unittests/safety/fixtures matrix
+```
+
+تحتاج وصفة المصفوفة إلى أهداف Clang المتقاطعة للينكس وويندوز، وأدوات COFF من
+LLD، ومعماريتَي Darwin كلتيهما، و`dsymutil`. تُعاد خرائط مسارات التنقيح ويُعطَّل
+تسجيل سطر أوامر CodeView حتى لا تلتقط الملفات المرافقة المُودعة المسار المطلق
+لمساحة عمل المطوّر.
 
 ### إعادة بناء استثناءات Windows
 
@@ -370,7 +393,7 @@ ctest --test-dir build-release --build-config Release \
 | ‏EVM loader أو opcode أو IR أو backend | أصغر هدف مالك من `NeverDEVM*Tests` | جميع أهداف EVM مع فحوص تجميع C/Solidity المولدين |
 | ‏SBF loader أو ISA أو IR أو backend | أصغر هدف مالك من `NeverDSBF*Tests` | جميع أهداف SBF مع فحوص تجميع C/Rust المولدين |
 | تعرف libc | `NeverDLibCTests` | حالات call/ABI دلالية إذا تغير السلوك |
-| تدقيق عمر الكومة أو صيد فيضان النسخ | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` على fixture أصلية للمضيف |
+| تدقيق عمر الكومة أو صيد فيضان النسخ | `NeverDSafetyTests` | الخلايا الست كلها في `NeverDSafetyIntegrationTests` |
 | تنفيذ العمليات أو quoting | `NeverDTestProcessTests` | حالة CLI/دلالية متأثرة على كل مضيف مدعوم |
 
 يجب أن تعبر الاختبارات عن العقد عند أدنى حد مستقر. يفيد اختبار شكل LowIR في
@@ -383,10 +406,11 @@ ctest --test-dir build-release --build-config Release \
 تبني CI ‏Release مع الاختبارات على Linux وmacOS وWindows، ثم تدقق المخزون
 المكتشف قبل تطبيق استثناءات الوسوم الخاصة بالمنصة. تُعرّف الملفات في
 `.github/workflows/ci.yml` و`scripts/audit_ci_test_inventory.py`. يجب أن يضم كل
-مضيف في المصفوفة `NeverDSafetyTests` و`NeverDSafetyIntegrationTests`: Linux يشغّل
-fixture ELF الأصلية، وmacOS يشغّل Mach-O، وWindows يشغّل PE. ولأن لا shard
-واحدًا من المصفوفة يمثل كل المجموعات المكلفة، يبقى `check-neverd` المحلي أوضح
-إشارة كاملة قبل الدمج عندما تملك الآلة كل الأدوات العابرة اللازمة.
+مضيف في المصفوفة `NeverDSafetyTests` و`NeverDSafetyIntegrationTests`؛ وتقرأ كل
+عملية تشغيل fixtures نفسها المثبتة لـ PE وELF وMach-O على x86-64 وAArch64.
+ولأن لا shard واحدًا من المصفوفة يمثل كل المجموعات المكلفة، يبقى
+`check-neverd` المحلي أوضح إشارة كاملة قبل الدمج عندما تملك الآلة كل الأدوات
+العابرة اللازمة.
 
 ## ملف مطابقة وتعقيم Solana SBF الحالي
 

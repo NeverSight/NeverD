@@ -36,7 +36,8 @@ size_t scanImportThunksX86(BinaryImage &Img, const Segment &Seg,
                            const std::map<va_t, size_t> &Targets,
                            std::set<va_t> &Existing);
 
-/// AArch64: ADRP x16 / LDR x16,[x16] / BR x16.
+/// AArch64: three-instruction import veneers and four-instruction ELF PLT
+/// veneers that load and branch through x17.
 size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
                                const std::map<va_t, size_t> &Targets,
                                std::set<va_t> &Existing);

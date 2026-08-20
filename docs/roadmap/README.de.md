@@ -72,7 +72,7 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 | Spur `hunt` | Senkenkatalog + Argument-Vorfilter + Zielkapazität + Solver-Zeuge |
 | Identitätsvertrag | Senkenauflösung je Format (PE-IAT, ELF-PLT, Mach-O-dyld-Bind) und PDB-/DWARF-/MAP-Namensquellen |
 
-**Status:** P0 für PE, ELF und Mach-O abgeschlossen. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) über eine host-native Fixture festgeschrieben. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md). P1 erweitert auf Stack-/Global-Überlauf, uninitialisierte Reads und Formatstrings.
+**Status:** P0 für PE, ELF und Mach-O abgeschlossen. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](../memory-safety.de.md). P1 erweitert auf Stack-/Global-Überlauf, uninitialisierte Reads und Formatstrings.
 
 ---
 

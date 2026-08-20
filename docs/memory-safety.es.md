@@ -33,6 +33,8 @@ Ambas pistas requieren el pipeline de lift (recupera argumentos por llamada). Ca
 
 `--pdb` / `--map` nombran un archivo compañero autoritativo: no leerlo es un error, no un repliegue silencioso. `--no-debug` lee solo la imagen en todos los formatos.
 
+Las firmas de procedimiento del PDB sirven para distinguir los asignadores que devuelven un valor de las funciones de liberación `void`. La recuperación rica de tipos locales y de pila desde un PDB sigue siendo limitada; cuando no puede establecer un tamaño de objeto exacto, la caza recurre al modelo de marco o de asignación e informa UNKNOWN en lugar de inventar un tamaño.
+
 ### Precedencia de `name_source`
 
 Cada hallazgo lleva un `name_source` que describe de dónde salió el nombre del callee, con esta precedencia:
@@ -52,7 +54,7 @@ Un `memcpy` enlazado estáticamente nombrado por DWARF informa `dwarf`; un `memc
 
 El catálogo es una tabla configurable, no un conjunto fijo. Cada **sumidero** declara su clase de debilidad, su rol (copy, format, alloc, free, realloc) y las ranuras de argumentos que importan (destino, origen, longitud, capacidad). Cada **fuente** nombra un proveedor de entrada influida por el atacante.
 
-El catálogo integrado cubre la familia de copias habitual del runtime C (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), las variantes fortificadas `_chk` (límite explícito de destino), la familia de asignación y liberación (`malloc`/`calloc`/`realloc`/`free`, operadores `new`/`delete`) y APIs de montón Win32 opcionales. Las fuentes de entrada incluyen POSIX (`getenv`, `read`, `recv`, `fgets`, `fread`, `scanf`, argumentos del programa) **y** Win32 (`GetCommandLineA/W`, `ReadFile`, `GetEnvironmentVariable*`), de modo que una caza PE no queda restringida a entradas POSIX.
+Las entradas integradas viven en [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) y [`SafetySources.def`](../include/neverd/safety/SafetySources.def); cubren la familia de copias habitual del runtime C (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), las variantes fortificadas `_chk` (límite explícito de destino), la familia de asignación y liberación (`malloc`/`calloc`/`realloc`/`free`, operadores `new`/`delete`) y APIs de montón Win32 opcionales. Las fuentes de entrada incluyen POSIX (`getenv`, `read`, `recv`, `fgets`, `fread`, `scanf`, argumentos del programa) **y** Win32 (`GetCommandLineA/W`, `ReadFile`, `GetEnvironmentVariable*`), de modo que una caza PE no queda restringida a entradas POSIX.
 
 Las grafías por formato se pliegan a una sola entrada: se quitan los guiones bajos iniciales (`_malloc`, `___strcpy_chk`) y los operadores `new`/`delete` mangled coinciden por alias.
 
@@ -74,9 +76,9 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 Para cada sumidero de copia, la caza recupera la capacidad de destino — tamaño de array declarado por depuración, luego un sitio de asignación de montón de tamaño conocido, luego un límite sano de marco de pila — y clasifica el argumento que decide la longitud de escritura con un recorrido SSA hacia atrás (siguiendo spill/reload por ranuras de pila):
 
-- **Longitud constante** comparada directamente con la capacidad → SAFE o UNSAFE.
-- Copias **fortificadas** `_chk` con límite de destino en tiempo de ejecución → SAFE.
-- Longitud **demostrablemente acotada** (llamada que devuelve longitud, máscara, clamp) se retira como SAFE skip, registrando el motivo.
+- Una **longitud constante** dentro de una capacidad exacta es SAFE. Un desbordamiento constante solo es UNSAFE si el sumidero es alcanzable en una ruta corroborada; en otro caso permanece UNKNOWN.
+- Las copias **fortificadas** `_chk` llevan un límite de destino en tiempo de ejecución. Un rechazo o un límite que cabe de forma demostrable es SAFE; una escritura factible más allá del objeto es UNSAFE; un límite no recuperado o inconcluso es UNKNOWN.
+- Longitud **demostrablemente acotada** (llamada que devuelve longitud, máscara, clamp) se retira antes del solver, registrando el motivo. Solo es SAFE con un tamaño de destino exacto; una cota de región permanece UNKNOWN.
 - Longitud **influida por el atacante** con capacidad conocida: el solver de vectores de bits. Si una longitud mayor que la capacidad es factible, el veredicto es UNSAFE y el modelo del solver es el testigo concreto.
 - Cualquier otra cosa — longitud o capacidad desconocidas — es UNKNOWN.
 
@@ -93,6 +95,8 @@ Para cada asignación, la auditoría sigue el handle en el grafo de control, inc
 - **Uso después de liberar** — una desreferencia o uso opaco es alcanzable tras una liberación.
 
 Los **envoltorios** de asignación y liberación se reconocen con resúmenes de escape por función, de modo que un reenvío `malloc`/`free` no oculta el defecto. Liberaciones en ramas mutuamente excluyentes no se informan como doble liberación.
+
+La máquina de estados del montón emite primero una secuencia de eventos candidata (asignación, liberación, uso o salida por retorno). Una segunda pasada debe reproducir esa secuencia sobre un camino LowIR simbólico y demostrar que su predicado de camino es satisfacible antes de que el hallazgo sea UNSAFE de confianza ALTA. La falta de LowIR, las operaciones opacas, las llamadas sin resumen, la incertidumbre del solucionador y los límites de exploración rebajan el candidato a UNKNOWN. El havoc de memoria may-alias conservador se rastrea por separado, de modo que las escrituras ordinarias al marco de pila no invalidan una evidencia de alcanzabilidad por lo demás exacta.
 
 ---
 
@@ -118,6 +122,8 @@ Los mismos análisis están disponibles por la API C (`neverd_session_audit_json
   "verdict": "UNSAFE",
   "confidence": "HIGH",
   "capacity": 16,
+  "capacity_kind": "exact",
+  "corroboration": "path predicate and overflow are jointly satisfiable",
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
 }
 ```
@@ -126,8 +132,9 @@ Los mismos análisis están disponibles por la API C (`neverd_session_audit_json
 
 ## Cotas de falsos positivos y alcance
 
-- La capacidad es siempre una cota superior, así que UNSAFE refleja un desbordamiento real. Un búfer demasiado pequeño cuya talla declarada no está disponible puede informarse SAFE en lugar de UNSAFE (omisión conservadora, nunca falsa alarma).
-- Una copia acotada en longitud se retira como SAFE skip; esto favorece la precisión en los casos controlados por el atacante que la caza está diseñada para probar.
-- **P0** (esta versión, los tres formatos): catálogo de sumideros, prefiltro de argumentos, caza de desbordamiento de copia, auditoría de vida del montón.
+- La capacidad es exacta o una cota superior del tamaño real, así que UNSAFE refleja un desbordamiento real. Sin tamaño exacto, una cota de región insuficiente para probar seguridad produce UNKNOWN.
+- Una copia acotada se retira antes del solver y cuenta en `skipped`; una capacidad exacta puede probar SAFE, mientras una cota sola permanece UNKNOWN.
+- Las copias de caracteres anchos y de anexado catalogadas permanecen UNKNOWN hasta recuperar el ancho de elemento y la extensión actual del destino. Los asignadores por parámetro de salida y la propiedad condicional de `realloc` también permanecen UNKNOWN si no puede probarse la transición del manejador.
+- **P0** (esta versión, los tres formatos): catálogo de sumideros, prefiltro de argumentos, caza de desbordamiento de copia, auditoría de vida del montón. Cada host ejecuta seis fixtures PE, ELF y Mach-O para x86-64 y AArch64.
 - **P1**: desbordamiento de pila/global, lecturas no inicializadas, cadenas de formato, tipos de pila PDB más ricos, más asignadores de plataforma.
 - **P2**: comprobaciones de tiempo de ejecución insertadas por patch, alcanzabilidad interprocedural del atacante.

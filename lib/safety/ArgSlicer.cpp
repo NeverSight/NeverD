@@ -6,13 +6,18 @@
 
 #include "neverd/safety/ArgSlicer.h"
 
+#include "StackSlotFlow.h"
+
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/safety/SinkScanner.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
 
+#include <algorithm>
+#include <limits>
 #include <tuple>
 
 using namespace neverd;
@@ -26,14 +31,28 @@ ValueKey keyOf(const MedVar &V) {
   return {static_cast<uint8_t>(V.Kind), V.Id, V.SSAVer};
 }
 
-// A call whose return value is a length no larger than an existing object, so a
-// copy bounded by it does not depend on attacker-controlled size.
-bool isBoundedReturn(llvm::StringRef Name) {
+bool isLengthReturn(llvm::StringRef Name) {
   return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
 #define SAFETY_CALL_TRAIT(NAME, IS_LENGTH, IS_BOUNDED)                         \
-  .Case(NAME, IS_BOUNDED != 0)
+  .Case(NAME, IS_LENGTH != 0)
 #include "neverd/safety/SafetyCallTraits.inc"
 #undef SAFETY_CALL_TRAIT
+      .Default(false);
+}
+
+bool isCappedLengthReturn(llvm::StringRef Name) {
+  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
+      .Cases({"strnlen", "strnlen_s", "wcsnlen"}, true)
+      .Default(false);
+}
+
+bool sourceReturnCarriesInput(llvm::StringRef Name) {
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  return llvm::StringSwitch<bool>(Normalized)
+      .Cases({"getenv", "secure_getenv", "read", "pread"}, true)
+      .Cases({"recv", "recvfrom", "fgets", "fread", "gets"}, true)
+      .Cases({"GetCommandLineA", "GetCommandLineW"}, true)
+      .Cases({"GetEnvironmentVariableA", "GetEnvironmentVariableW"}, true)
       .Default(false);
 }
 
@@ -70,12 +89,18 @@ class Slicer {
 public:
   Slicer(const AnalysisInput &In, const SinkCatalog &Cat, const MedFunc &F)
       : In(In), Cat(Cat), F(F), Defs(F) {
-    indexStackStores();
+    indexSourceOutputs();
   }
 
   ArgClassification run(const MedVar &Arg) {
     ArgClassification R;
     R.Flow = classify(Arg, 0, R);
+    llvm::DenseSet<ValueKey> Seen;
+    R.UpperBound = upperBound(Arg, 0, Seen);
+    if (R.ConstValue)
+      R.UpperBound = R.ConstValue;
+    if (R.Flow == ArgFlow::Bounded && !R.UpperBound)
+      R.Flow = ArgFlow::Unknown;
     return R;
   }
 
@@ -85,10 +110,7 @@ private:
   const MedFunc &F;
   DefIndex Defs;
   llvm::DenseSet<ValueKey> Active; ///< guards against SSA cycles.
-  llvm::DenseSet<int64_t> ActiveSlots; ///< guards store/load slot cycles.
-  /// Values written to each stack slot, so a spill/reload chain preserves
-  /// provenance across an unoptimised binary's memory traffic.
-  llvm::DenseMap<int64_t, llvm::SmallVector<MedVar, 2>> StoredByOffset;
+  llvm::DenseMap<ValueKey, std::string> TaintedOutputValues;
 
   const MedOp *defOp(const MedVar &V) const {
     auto It = Defs.OpDef.find(keyOf(V));
@@ -137,27 +159,235 @@ private:
       return std::nullopt;
     const bool Sub = Op.Opcode == NdOp::INT_SUB;
     if (Op.Inputs[1].isConst()) {
-      if (auto Base = stackOffset(Op.Inputs[0], Depth + 1, Seen))
-        return Sub ? *Base - static_cast<int64_t>(Op.Inputs[1].ConstVal)
-                   : *Base + static_cast<int64_t>(Op.Inputs[1].ConstVal);
+      auto Delta = detail::signedStackConstant(Op.Inputs[1]);
+      if (auto Base = stackOffset(Op.Inputs[0], Depth + 1, Seen); Base && Delta)
+        return detail::checkedStackOffset(*Base, *Delta, Sub);
     } else if (Op.Inputs[0].isConst() && !Sub) {
-      if (auto Base = stackOffset(Op.Inputs[1], Depth + 1, Seen))
-        return *Base + static_cast<int64_t>(Op.Inputs[0].ConstVal);
+      auto Delta = detail::signedStackConstant(Op.Inputs[0]);
+      if (auto Base = stackOffset(Op.Inputs[1], Depth + 1, Seen); Base && Delta)
+        return detail::checkedStackOffset(*Base, *Delta, false);
     }
     return std::nullopt;
   }
 
-  void indexStackStores() {
-    for (const MedBlock &B : F.Blocks)
-      for (const MedOp &Op : B.Ops) {
-        if (Op.Opcode != NdOp::STORE || Op.NumInputs < 2)
-          continue;
-        const MedVar &Addr = Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
-        const MedVar &Val = Op.Inputs[Op.NumInputs >= 3 ? 2 : 1];
-        llvm::DenseSet<ValueKey> Seen;
-        if (auto Off = stackOffset(Addr, 0, Seen))
-          StoredByOffset[*Off].push_back(Val);
+  bool mayBeStackAddress(const MedVar &V, int Depth,
+                         llvm::DenseSet<ValueKey> &Seen) const {
+    if (!In.StackRegsKnown || V.isConst() || Depth > 64 ||
+        !Seen.insert(keyOf(V)).second)
+      return false;
+    if (V.Kind == MedVar::Reg &&
+        (V.RegOff == In.StackPointerReg || V.RegOff == In.FramePointerReg))
+      return true;
+    if (auto It = Defs.PhiDef.find(keyOf(V)); It != Defs.PhiDef.end()) {
+      const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        (void)Pred;
+        llvm::DenseSet<ValueKey> BranchSeen = Seen;
+        if (mayBeStackAddress(Arg, Depth + 1, BranchSeen))
+          return true;
       }
+      return false;
+    }
+    const MedOp *Op = defOp(V);
+    if (!Op)
+      return false;
+    unsigned Begin = 0;
+    unsigned End = Op->NumInputs;
+    switch (Op->Opcode) {
+    case NdOp::COPY:
+    case NdOp::CAST:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+    case NdOp::SUBBYTES:
+      End = std::min<unsigned>(End, 1);
+      break;
+    case NdOp::SELECT:
+      Begin = std::min<unsigned>(1, End);
+      break;
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+      break;
+    default:
+      return false;
+    }
+    for (unsigned I = Begin; I < End; ++I) {
+      llvm::DenseSet<ValueKey> BranchSeen = Seen;
+      if (mayBeStackAddress(Op->Inputs[I], Depth + 1, BranchSeen))
+        return true;
+    }
+    return false;
+  }
+
+  detail::ReachingStackValues reachingLoad(const MedBlock &B, int OpIdx,
+                                           const MedOp &Op) const {
+    if (Op.Opcode != NdOp::LOAD || Op.NumInputs == 0)
+      return {};
+    const MedVar &Addr = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
+    llvm::DenseSet<ValueKey> Seen;
+    std::optional<int64_t> Off = stackOffset(Addr, 0, Seen);
+    if (!Off)
+      return {};
+    auto Resolve = [&](const MedVar &V) {
+      llvm::DenseSet<ValueKey> ResolveSeen;
+      return stackOffset(V, 0, ResolveSeen);
+    };
+    auto MayBeFrame = [&](const MedVar &V) {
+      llvm::DenseSet<ValueKey> FrameSeen;
+      return mayBeStackAddress(V, 0, FrameSeen);
+    };
+    return detail::reachingStackValues(F, B.Id, OpIdx, *Off, Op.Output.Size,
+                                       Resolve, MayBeFrame);
+  }
+
+  void indexSourceOutputs() {
+    for (const MedCallInfo &CI : F.CallInfos) {
+      const std::string Name = resolveCallName(In, CI);
+      const SourceEntry *Source = Cat.matchSource(Name);
+      if (!Source || Source->OutArg < 0 ||
+          Source->OutArg >= static_cast<int>(CI.Args.size()))
+        continue;
+      const MedVar &Out = CI.Args[Source->OutArg];
+      if (!Out.isConst())
+        TaintedOutputValues[keyOf(Out)] = SinkCatalog::normalize(Name);
+    }
+  }
+
+  std::optional<uint64_t> clampBound(const MedOp &Op) const {
+    if (Op.Opcode != NdOp::SELECT || Op.NumInputs < 3)
+      return std::nullopt;
+    const MedVar &Then = Op.Inputs[1];
+    const MedVar &Else = Op.Inputs[2];
+    if (!((Then.isConst() && !Else.isConst()) ||
+          (Else.isConst() && !Then.isConst())))
+      return std::nullopt;
+    const MedVar &Bound = Then.isConst() ? Then : Else;
+    const MedVar &Other = Then.isConst() ? Else : Then;
+    const MedOp *Cond = defOp(Op.Inputs[0]);
+    if (!Cond ||
+        (Cond->Opcode != NdOp::INT_LESS &&
+         Cond->Opcode != NdOp::INT_LESSEQUAL) ||
+        Cond->NumInputs < 2)
+      return std::nullopt;
+    auto isOther = [&](const MedVar &V) {
+      return V.Kind == Other.Kind && V.Id == Other.Id &&
+             V.SSAVer == Other.SSAVer;
+    };
+    auto isBound = [&](const MedVar &V) {
+      return V.isConst() && V.ConstVal == Bound.ConstVal;
+    };
+    const bool OtherBelowBound =
+        isOther(Cond->Inputs[0]) && isBound(Cond->Inputs[1]);
+    const bool BoundBelowOther =
+        isBound(Cond->Inputs[0]) && isOther(Cond->Inputs[1]);
+    if ((OtherBelowBound && isOther(Then) && isBound(Else)) ||
+        (BoundBelowOther && isBound(Then) && isOther(Else)))
+      return Bound.ConstVal;
+    return std::nullopt;
+  }
+
+  std::optional<uint64_t> upperBound(const MedVar &V, int Depth,
+                                     llvm::DenseSet<ValueKey> &Seen) const {
+    if (V.isConst())
+      return V.ConstVal;
+    if (Depth > 64 || !Seen.insert(keyOf(V)).second)
+      return std::nullopt;
+
+    if (auto It = Defs.PhiDef.find(keyOf(V)); It != Defs.PhiDef.end()) {
+      const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+      std::optional<uint64_t> Max;
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        llvm::DenseSet<ValueKey> BranchSeen = Seen;
+        auto B = upperBound(Arg, Depth + 1, BranchSeen);
+        if (!B)
+          return std::nullopt;
+        Max = Max ? std::max(*Max, *B) : *B;
+      }
+      return Max;
+    }
+
+    const MedOp *Op = defOp(V);
+    if (!Op)
+      return std::nullopt;
+    switch (Op->Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::CAST:
+    case NdOp::SUBBYTES:
+      return Op->NumInputs >= 1 ? upperBound(Op->Inputs[0], Depth + 1, Seen)
+                                : std::nullopt;
+    case NdOp::INT_AND:
+      for (unsigned I = 0; I < Op->NumInputs; ++I)
+        if (Op->Inputs[I].isConst())
+          return Op->Inputs[I].ConstVal;
+      return std::nullopt;
+    case NdOp::SELECT:
+      if (auto Bound = clampBound(*Op))
+        return Bound;
+      if (Op->NumInputs >= 3) {
+        llvm::DenseSet<ValueKey> ThenSeen = Seen;
+        llvm::DenseSet<ValueKey> ElseSeen = Seen;
+        auto Then = upperBound(Op->Inputs[1], Depth + 1, ThenSeen);
+        auto Else = upperBound(Op->Inputs[2], Depth + 1, ElseSeen);
+        if (Then && Else)
+          return std::max(*Then, *Else);
+      }
+      return std::nullopt;
+    case NdOp::INT_ADD:
+    case NdOp::INT_MULT: {
+      if (Op->NumInputs < 2)
+        return std::nullopt;
+      llvm::DenseSet<ValueKey> ASeen = Seen;
+      llvm::DenseSet<ValueKey> BSeen = Seen;
+      auto A = upperBound(Op->Inputs[0], Depth + 1, ASeen);
+      auto B = upperBound(Op->Inputs[1], Depth + 1, BSeen);
+      if (!A || !B)
+        return std::nullopt;
+      if (Op->Opcode == NdOp::INT_ADD) {
+        if (*A > std::numeric_limits<uint64_t>::max() - *B)
+          return std::nullopt;
+        return *A + *B;
+      }
+      if (*A != 0 && *B > std::numeric_limits<uint64_t>::max() / *A)
+        return std::nullopt;
+      return *A * *B;
+    }
+    case NdOp::CALL:
+    case NdOp::INDIR_CALL: {
+      auto It = Defs.OpDef.find(keyOf(V));
+      if (It == Defs.OpDef.end())
+        return std::nullopt;
+      const MedBlock &B = F.Blocks[It->second.first];
+      const MedCallInfo *CI = F.findCall(B.Id, It->second.second);
+      if (!CI)
+        return std::nullopt;
+      const std::string Name = resolveCallName(In, *CI);
+      if (!isCappedLengthReturn(Name) || CI->Args.size() < 2 ||
+          !CI->Args[1].isConst())
+        return std::nullopt;
+      return CI->Args[1].ConstVal;
+    }
+    case NdOp::LOAD: {
+      auto It = Defs.OpDef.find(keyOf(V));
+      if (It == Defs.OpDef.end())
+        return std::nullopt;
+      const MedBlock &B = F.Blocks[It->second.first];
+      detail::ReachingStackValues Reaching =
+          reachingLoad(B, It->second.second, *Op);
+      if (!Reaching.Complete)
+        return std::nullopt;
+      std::optional<uint64_t> Max;
+      for (const MedVar &Value : Reaching.Values) {
+        llvm::DenseSet<ValueKey> BranchSeen = Seen;
+        auto Bound = upperBound(Value, Depth + 1, BranchSeen);
+        if (!Bound)
+          return std::nullopt;
+        Max = Max ? std::max(*Max, *Bound) : *Bound;
+      }
+      return Max;
+    }
+    default:
+      return std::nullopt;
+    }
   }
 
   // Merge sub-results: taint must win (the sink must be explored), a lone
@@ -181,6 +411,15 @@ private:
     if (Depth > 64)
       return ArgFlow::Unknown;
 
+    if (auto It = TaintedOutputValues.find(keyOf(V));
+        It != TaintedOutputValues.end()) {
+      if (Top.TaintSource.empty()) {
+        Top.TaintSource = It->second;
+        Top.Reason = "reaches external input " + Top.TaintSource;
+      }
+      return ArgFlow::Tainted;
+    }
+
     ValueKey K = keyOf(V);
     if (!Active.insert(K).second)
       return ArgFlow::Unknown; // already on the current path (a loop phi).
@@ -198,7 +437,8 @@ private:
         }
         return ArgFlow::Tainted;
       }
-      return ArgFlow::Unknown; // an unconstrained parameter is never assumed safe.
+      return ArgFlow::Unknown; // an unconstrained parameter is never assumed
+                               // safe.
     }
 
     if (auto It = Defs.PhiDef.find(K); It != Defs.PhiDef.end()) {
@@ -217,7 +457,8 @@ private:
 
     auto It = Defs.OpDef.find(K);
     if (It == Defs.OpDef.end())
-      return ArgFlow::Unknown; // no definition in this function -> conservative.
+      return ArgFlow::Unknown; // no definition in this function ->
+                               // conservative.
 
     const MedBlock &B = F.Blocks[It->second.first];
     const MedOp &Op = B.Ops[It->second.second];
@@ -230,15 +471,25 @@ private:
     case NdOp::CALL:
     case NdOp::INDIR_CALL: {
       const MedCallInfo *CI = F.findCall(B.Id, OpIdx);
-      llvm::StringRef Name = CI ? llvm::StringRef(CI->TargetName) : "";
-      if (!Name.empty() && isBoundedReturn(Name)) {
+      const std::string ResolvedName = CI ? resolveCallName(In, *CI) : "";
+      llvm::StringRef Name = ResolvedName;
+      if (CI && isCappedLengthReturn(Name) && CI->Args.size() >= 2 &&
+          CI->Args[1].isConst()) {
         if (Top.Reason.empty())
           Top.Reason = ("bounded by " + stripLeadingUnderscores(Name)).str();
         return ArgFlow::Bounded;
       }
-      if (CI && Cat.matchSource(CI->TargetName)) {
+      if (CI && isLengthReturn(Name)) {
+        if (!CI->Args.empty()) {
+          ArgFlow Source = classify(CI->Args[0], Depth + 1, Top);
+          return Source == ArgFlow::Tainted ? ArgFlow::Tainted
+                                            : ArgFlow::Unknown;
+        }
+        return ArgFlow::Unknown;
+      }
+      if (CI && Cat.matchSource(Name) && sourceReturnCarriesInput(Name)) {
         if (Top.TaintSource.empty()) {
-          Top.TaintSource = stripLeadingUnderscores(CI->TargetName).str();
+          Top.TaintSource = stripLeadingUnderscores(Name).str();
           Top.Reason = "reaches external input " + Top.TaintSource;
         }
         return ArgFlow::Tainted;
@@ -285,63 +536,26 @@ private:
       return combineInputs(Op, Depth, Top);
 
     case NdOp::SELECT:
+      if (auto Bound = clampBound(Op)) {
+        if (Top.Reason.empty())
+          Top.Reason = "clamped to a constant";
+        return ArgFlow::Bounded;
+      }
       if (Op.NumInputs >= 3) {
         const MedVar &Then = Op.Inputs[1];
         const MedVar &Else = Op.Inputs[2];
-        if ((Then.isConst() && !Else.isConst()) ||
-            (Else.isConst() && !Then.isConst())) {
-          const MedVar &Bound = Then.isConst() ? Then : Else;
-          const MedVar &Other = Then.isConst() ? Else : Then;
-          const MedOp *Cond = defOp(Op.Inputs[0]);
-          if (Cond && (Cond->Opcode == NdOp::INT_LESS ||
-                       Cond->Opcode == NdOp::INT_LESSEQUAL ||
-                       Cond->Opcode == NdOp::INT_SLESS ||
-                       Cond->Opcode == NdOp::INT_SLESSEQUAL) &&
-              Cond->NumInputs >= 2) {
-            auto isOther = [&](const MedVar &V) {
-              return V.Kind == Other.Kind && V.Id == Other.Id &&
-                     V.SSAVer == Other.SSAVer;
-            };
-            auto isBound = [&](const MedVar &V) {
-              return V.isConst() && V.ConstVal == Bound.ConstVal;
-            };
-            if ((isOther(Cond->Inputs[0]) && isBound(Cond->Inputs[1])) ||
-                (isOther(Cond->Inputs[1]) && isBound(Cond->Inputs[0]))) {
-              if (Top.Reason.empty())
-                Top.Reason = "clamped to a constant";
-              return ArgFlow::Bounded;
-            }
-          }
-        }
         return merge(classify(Then, Depth + 1, Top),
                      classify(Else, Depth + 1, Top));
       }
       return ArgFlow::Unknown;
 
     case NdOp::LOAD: {
-      const MedVar &Addr = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
-      if (Addr.isConst()) {
-        if (Top.Reason.empty())
-          Top.Reason = "load from a constant address";
-        return ArgFlow::Bounded;
-      }
-      llvm::DenseSet<ValueKey> Seen;
-      auto Off = stackOffset(Addr, 0, Seen);
-      if (!Off)
+      detail::ReachingStackValues Reaching = reachingLoad(B, OpIdx, Op);
+      if (!Reaching.Complete)
         return ArgFlow::Unknown;
-      auto It = StoredByOffset.find(*Off);
-      if (It == StoredByOffset.end() || It->second.empty())
-        return ArgFlow::Unknown;
-      if (!ActiveSlots.insert(*Off).second)
-        return ArgFlow::Unknown;
-      struct Pop {
-        llvm::DenseSet<int64_t> &S;
-        int64_t K;
-        ~Pop() { S.erase(K); }
-      } Guard{ActiveSlots, *Off};
       ArgFlow Acc = ArgFlow::Bounded;
       bool First = true;
-      for (const MedVar &Val : It->second) {
+      for (const MedVar &Val : Reaching.Values) {
         ArgFlow Sub = classify(Val, Depth + 1, Top);
         Acc = First ? Sub : merge(Acc, Sub);
         First = false;

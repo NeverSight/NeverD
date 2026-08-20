@@ -25,6 +25,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
 
@@ -40,8 +41,11 @@ struct DWARFDebugContext::Impl {
 
   struct LocalInfo {
     std::map<int64_t, VariableSym> ByOffset;
+    std::map<int64_t, VariableSym> ByStackPointerOffset;
   };
   std::map<va_t, LocalInfo> LocalsMap;
+
+  std::optional<unsigned> DwarfStackPointerReg;
 
   bool Loaded = false;
 
@@ -111,6 +115,26 @@ getObjectFromBuffer(llvm::MemoryBuffer &Buf) {
   return std::move(*BinOr);
 }
 
+static std::optional<unsigned>
+dwarfStackPointerRegister(llvm::Triple::ArchType Arch) {
+  switch (Arch) {
+  case llvm::Triple::x86:
+    return 4;
+  case llvm::Triple::x86_64:
+    return 7;
+  case llvm::Triple::arm:
+  case llvm::Triple::armeb:
+  case llvm::Triple::thumb:
+  case llvm::Triple::thumbeb:
+    return 13;
+  case llvm::Triple::aarch64:
+  case llvm::Triple::aarch64_be:
+    return 31;
+  default:
+    return std::nullopt;
+  }
+}
+
 std::unique_ptr<DWARFDebugContext>
 DWARFDebugContext::load(const std::filesystem::path &BinaryPath,
                         BinaryFormat Format) {
@@ -132,6 +156,8 @@ DWARFDebugContext::load(const std::filesystem::path &BinaryPath,
     return Ctx;
   }
 
+  Ctx->PImpl->DwarfStackPointerReg = dwarfStackPointerRegister(Obj->getArch());
+
   Ctx->PImpl->DwarfCtx = llvm::DWARFContext::create(*Obj);
   if (!Ctx->PImpl->DwarfCtx) {
     llvm::WithColor::warning() << "debug: cannot create DWARFContext for "
@@ -151,6 +177,8 @@ DWARFDebugContext::load(const std::filesystem::path &BinaryPath,
         Ctx->PImpl->DSYMBuf = std::move(*DSYMBufOr);
         auto DSYMObj = getObjectFromBuffer(*Ctx->PImpl->DSYMBuf);
         if (DSYMObj) {
+          Ctx->PImpl->DwarfStackPointerReg =
+              dwarfStackPointerRegister(DSYMObj->getArch());
           Ctx->PImpl->DwarfCtx = llvm::DWARFContext::create(*DSYMObj);
           HasDwarf = Ctx->PImpl->DwarfCtx &&
                      Ctx->PImpl->DwarfCtx->getNumCompileUnits() > 0;
@@ -363,30 +391,46 @@ void DWARFDebugContext::Impl::parseVariable(llvm::DWARFDie Die, va_t FuncAddr,
       TypeDie.isValid() ? convertDwarfType(TypeDie) : NdType::makeInt(4);
 
   int64_t StackOff = 0;
+  bool FrameRelative = false;
+  bool StackPointerRelative = false;
   auto Loc = Die.find(llvm::dwarf::DW_AT_location);
   if (Loc && Loc->isFormClass(llvm::DWARFFormValue::FC_Exprloc)) {
     auto Block = Loc->getAsBlock();
     if (Block && Block->size() >= 2) {
       auto Op = (*Block)[0];
-      if (Op == llvm::dwarf::DW_OP_fbreg) {
+      const bool IsFrame = Op == llvm::dwarf::DW_OP_fbreg;
+      const bool IsStackPointer =
+          DwarfStackPointerReg && Op >= llvm::dwarf::DW_OP_breg0 &&
+          Op <= llvm::dwarf::DW_OP_breg31 &&
+          static_cast<unsigned>(Op - llvm::dwarf::DW_OP_breg0) ==
+              *DwarfStackPointerReg;
+      if (IsFrame || IsStackPointer) {
         const uint8_t *Begin = Block->data() + 1;
         const uint8_t *End = Block->data() + Block->size();
         unsigned BytesRead = 0;
         const char *Error = nullptr;
-        int64_t Val =
-            llvm::decodeSLEB128(Begin, &BytesRead, End, &Error);
-        if (!Error && BytesRead > 0)
+        int64_t Val = llvm::decodeSLEB128(Begin, &BytesRead, End, &Error);
+        if (!Error && BytesRead > 0) {
           StackOff = Val;
+          FrameRelative = IsFrame;
+          StackPointerRelative = IsStackPointer;
+        }
       }
     }
   }
+
+  if (!FrameRelative && !StackPointerRelative)
+    return;
 
   VariableSym VSym;
   VSym.Name = VName;
   VSym.Type = VType;
   VSym.StackOffset = StackOff;
   VSym.IsParam = IsParam;
-  LocalsMap[FuncAddr].ByOffset[StackOff] = VSym;
+  if (FrameRelative)
+    LocalsMap[FuncAddr].ByOffset[StackOff] = VSym;
+  else
+    LocalsMap[FuncAddr].ByStackPointerOffset[StackOff] = VSym;
 }
 
 void DWARFDebugContext::Impl::parseCompileUnits() {
@@ -438,6 +482,20 @@ DWARFDebugContext::resolveVariable(va_t FuncAddr, int64_t Offset) const {
     return std::nullopt;
   auto VIt = It->second.ByOffset.find(Offset);
   if (VIt == It->second.ByOffset.end())
+    return std::nullopt;
+  return VIt->second;
+}
+
+std::optional<VariableSym>
+DWARFDebugContext::resolveStackPointerVariable(va_t FuncAddr,
+                                               int64_t Offset) const {
+  if (!PImpl || !PImpl->Loaded)
+    return std::nullopt;
+  auto It = PImpl->LocalsMap.find(FuncAddr);
+  if (It == PImpl->LocalsMap.end())
+    return std::nullopt;
+  auto VIt = It->second.ByStackPointerOffset.find(Offset);
+  if (VIt == It->second.ByStackPointerOffset.end())
     return std::nullopt;
   return VIt->second;
 }

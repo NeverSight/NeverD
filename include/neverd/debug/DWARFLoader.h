@@ -30,6 +30,8 @@ public:
   std::optional<FunctionSym> resolveFunction(va_t Addr) const override;
   std::optional<VariableSym> resolveVariable(va_t FuncAddr,
                                              int64_t Offset) const override;
+  std::optional<VariableSym>
+  resolveStackPointerVariable(va_t FuncAddr, int64_t Offset) const override;
   std::optional<TypeSym> resolveType(uint64_t TypeId) const override;
   std::optional<SourceLoc> sourceLocation(va_t Addr) const override;
   std::vector<FunctionSym> allFunctions() const override;

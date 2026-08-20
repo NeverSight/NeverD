@@ -9,6 +9,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/MachO.h"
@@ -238,6 +239,40 @@ TEST(AArch64FunctionDiscovery,
   EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
                           [](const auto &F) { return F.first == HelperVA; }),
             1u);
+}
+
+TEST(AArch64FunctionDiscovery, RecognizesCanonicalELFPLTVeneer) {
+  constexpr va_t StubVA = 0x10CC0;
+  constexpr va_t IATAddr = 0x30EB0;
+
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::ELF;
+
+  Segment Text;
+  Text.Name = ".plt";
+  Text.VA = StubVA;
+  Text.Size = 16;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  writeLE<uint32_t>(Text.Data.data(), 0x90000110u); // adrp x16, 0x30000
+  writeLE<uint32_t>(Text.Data.data() + 4,
+                    0xF9475A11u); // ldr x17, [x16, #0xeb0]
+  writeLE<uint32_t>(Text.Data.data() + 8, 0x913AC210u);  // add x16, x16, #0xeb0
+  writeLE<uint32_t>(Text.Data.data() + 12, 0xD61F0220u); // br x17
+  Img.Segments.push_back(std::move(Text));
+  Img.Imports.push_back({"extern", "getenv", 0, IATAddr});
+
+  scanImportThunks(Img);
+
+  const Import *Resolved = Img.findImportAt(StubVA);
+  ASSERT_NE(Resolved, nullptr);
+  EXPECT_EQ(Resolved->Name, "getenv");
+  const Symbol *Stub = Img.findSymbolAt(StubVA);
+  ASSERT_NE(Stub, nullptr);
+  EXPECT_TRUE(Stub->IsFunc);
+  EXPECT_EQ(Stub->Size, 16u);
 }
 
 } // namespace

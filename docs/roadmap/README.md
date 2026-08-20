@@ -119,7 +119,8 @@ is locked by
 [`unittests/safety`](../../unittests/safety) (catalog, scanner, argument
 prefilter, object model, hunt, audit) and an end-to-end
 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)
-over a host-native fixture. See
+that runs the mandatory PE/ELF/Mach-O × x86-64/AArch64 fixture matrix on every
+host. See
 [Memory-safety audit & hunt](../memory-safety.md). P1 widens to stack/global
 overflow, uninitialised reads, and format strings.
 

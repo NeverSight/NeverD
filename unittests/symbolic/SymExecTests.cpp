@@ -657,6 +657,9 @@ TEST(SymExec, AnOperationTheEngineCannotModelBecomesANamedUnknown) {
   EXPECT_FALSE(Ctx.isConst(Result));
   EXPECT_EQ(Ctx.toString(Result).rfind("undef$", 0), 0u)
       << Ctx.toString(Result);
+  EXPECT_EQ(Exec.opaqueOperationCount(), 1u);
+  EXPECT_EQ(Exec.callHavocCount(), 0u);
+  EXPECT_EQ(Exec.memoryHavocCount(), 0u);
 
   // And the code after it still executes exactly, in terms of that unknown.
   Exec.step(op(NdOp::INT_ADD, NdVar::reg(kRcx, 8),
@@ -709,6 +712,9 @@ TEST(SymExec, ACallInvalidatesMemoryTheCalleeMayHaveWritten) {
             StepResult::Continue);
 
   EXPECT_EQ(Exec.unmodelledCount(), 1u);
+  EXPECT_EQ(Exec.callHavocCount(), 1u);
+  EXPECT_EQ(Exec.opaqueOperationCount(), 0u);
+  EXPECT_EQ(Exec.memoryHavocCount(), 0u);
   EXPECT_TRUE(State.memoryIsUnknown());
   EXPECT_FALSE(Ctx.isConst(State.load(Addr, 4)));
 }
@@ -723,6 +729,9 @@ TEST(SymExec, AStoreThroughAnUnknownAddressIsReportedAsAnApproximation) {
             StepResult::Continue);
 
   EXPECT_EQ(Exec.unmodelledCount(), 1u);
+  EXPECT_EQ(Exec.memoryHavocCount(), 1u);
+  EXPECT_EQ(Exec.opaqueOperationCount(), 0u);
+  EXPECT_EQ(Exec.callHavocCount(), 0u);
   EXPECT_TRUE(State.memoryIsUnknown());
 }
 

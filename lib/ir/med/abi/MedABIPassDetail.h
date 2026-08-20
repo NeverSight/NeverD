@@ -50,7 +50,8 @@ va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
 /// when the provenance is not provable within the call's block.
 std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
                                                const TargetRegInfo &TRI,
-                                               const MedVar &V, int Depth = 0);
+                                               const MedVar &V, bool IsWin64,
+                                               int Depth = 0);
 
 //===----------------------------------------------------------------------===//
 // Stack-pointer offset tracing
@@ -99,7 +100,7 @@ std::string relocCalleeName(const BinaryImage &Img, va_t InsnAddr);
 /// slot, resolving a low-half sub-register sync to the paired full-width write
 /// so a wide (pointer/struct) argument keeps its high bits.
 MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
-                                const TargetRegInfo &TRI);
+                                const TargetRegInfo &TRI, bool IsWin64);
 
 /// Select the authoritative PHI for integer argument slot \p ArgIdx in
 /// \p Block.  A PHI with a value on every function-entry edge wins over an
@@ -108,7 +109,8 @@ MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
 /// recovery independent of PHI insertion order.
 const PhiNode *selectAuthoritativeArgPhi(const MedFunc &Func,
                                          const MedBlock &Block,
-                                         const TargetRegInfo &TRI, int ArgIdx);
+                                         const TargetRegInfo &TRI, int ArgIdx,
+                                         bool IsWin64);
 
 /// Value reaching argument register \p ArgIdx at the call in block \p BlockId,
 /// found by walking the CFG backwards into predecessor blocks (nearest write,
@@ -118,7 +120,7 @@ const PhiNode *selectAuthoritativeArgPhi(const MedFunc &Func,
 /// any path to the call.
 std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
                                          const TargetRegInfo &TRI, Arch TheArch,
-                                         int BlockId, int ArgIdx,
+                                         int BlockId, int ArgIdx, bool IsWin64,
                                          bool AllowUnknownLiveIn = false,
                                          bool *FromLiveIn = nullptr);
 

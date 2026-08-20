@@ -137,6 +137,8 @@ struct ExploreOptions {
   llvm::endianness ByteOrder = llvm::endianness::little;
   /// Register byte ranges preserved by the target's calling convention.
   std::vector<SymRegisterRange> CallPreservedRegisters;
+  /// Optional ABI return register to snapshot immediately after every call.
+  std::optional<SymRegisterRange> TrackedCallResultRegister;
   /// The concrete engine of a concolic walk, or null for a purely symbolic
   /// one.
   ///
@@ -156,6 +158,13 @@ struct ExploreOptions {
   std::vector<SymConcreteRegister> ConcolicSeed;
 };
 
+struct SymCallResult {
+  va_t CallVA = 0;
+  int BlockId = -1;
+  size_t OpIndex = 0;
+  SymRef Value;
+};
+
 /// One finished path.
 struct SymPath {
   PathOutcome Outcome = PathOutcome::StepBudget;
@@ -170,6 +179,8 @@ struct SymPath {
   std::vector<int> Blocks;
   /// The machine state where it stopped.
   SymState State;
+  /// Call results captured before a later call can clobber the return register.
+  std::vector<SymCallResult> CallResults;
   /// For a branch that left the function or could not be resolved, its target;
   /// for an explicitly targeted return, the canonical return address.  A
   /// concrete interworking target is stored after pointer tag removal.
@@ -183,6 +194,12 @@ struct SymPath {
   std::optional<InstructionMode> DestinationMode;
   /// Operations conservatively replaced by unknown values along this path.
   unsigned UnmodelledOps = 0;
+  /// Operations whose value semantics were unavailable.
+  unsigned OpaqueOps = 0;
+  /// Calls whose effects were conservatively havoced.
+  unsigned CallHavocs = 0;
+  /// Writes that required conservative may-alias memory havoc.
+  unsigned MemoryHavocs = 0;
   /// Branches a concrete shadow decided rather than the walk forking at.  Zero
   /// for a purely symbolic walk.
   unsigned ConcreteBranches = 0;

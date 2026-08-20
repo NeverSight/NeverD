@@ -1,0 +1,50 @@
+# Path: binaries/safety_cases_macho_x64
+# Arch: x86_64
+# Object files:
+[  0] linker synthesized
+[  1] .fixture-build/safety_cases_macho_x64.o
+[  2] /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/libSystem.tbd
+[  3] /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/system/libsystem_c.tbd
+[  4] /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/system/libsystem_kernel.tbd
+[  5] /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/system/libsystem_malloc.tbd
+# Sections:
+# Address	Size    	Segment	Section
+0x100000470	0x000002B9	__TEXT	__text
+0x10000072A	0x00000036	__TEXT	__stubs
+0x100000760	0x0000000E	__TEXT	__cstring
+0x100000770	0x00000058	__TEXT	__unwind_info
+0x100001000	0x00000048	__DATA_CONST	__got
+# Symbols:
+# Address	Size    	File  Name
+0x100000000	0x00000000	[  0] __mh_execute_header
+0x100000470	0x00000040	[  1] _tainted_stack_overflow
+0x1000004B0	0x00000080	[  1] _tainted_heap_overflow
+0x100000530	0x00000040	[  1] _bounded_copy_is_safe
+0x100000570	0x00000050	[  1] _strlen_guarded_copy
+0x1000005C0	0x00000020	[  1] _leaks_memory
+0x1000005E0	0x00000040	[  1] _leak_on_one_path
+0x100000620	0x00000030	[  1] _guarded_free
+0x100000650	0x00000030	[  1] _double_frees
+0x100000680	0x00000030	[  1] _uses_after_free
+0x1000006B0	0x00000030	[  1] _balanced_alloc
+0x1000006E0	0x00000049	[  1] _main
+0x10000072A	0x00000006	[  5] _free.stub
+0x100000730	0x00000006	[  3] _getenv.stub
+0x100000736	0x00000006	[  5] _malloc.stub
+0x10000073C	0x00000006	[  3] _memcpy.stub
+0x100000742	0x00000006	[  3] _puts.stub
+0x100000748	0x00000006	[  4] _read.stub
+0x10000074E	0x00000006	[  3] _strcpy.stub
+0x100000754	0x00000006	[  3] _strlen.stub
+0x10000075A	0x00000006	[  3] _strncpy.stub
+0x100000760	0x00000008	[  1] literal string: PAYLOAD
+0x100000768	0x00000006	[  1] literal string: EARLY
+0x100001000	0x00000008	[  5] _free.got
+0x100001008	0x00000008	[  3] _getenv.got
+0x100001010	0x00000008	[  5] _malloc.got
+0x100001018	0x00000008	[  3] _memcpy.got
+0x100001020	0x00000008	[  3] _puts.got
+0x100001028	0x00000008	[  4] _read.got
+0x100001030	0x00000008	[  3] _strcpy.got
+0x100001038	0x00000008	[  3] _strlen.got
+0x100001040	0x00000008	[  3] _strncpy.got

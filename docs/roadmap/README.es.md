@@ -71,7 +71,7 @@ Analizar un binario levantado en busca de defectos de vida del montón (fuga, do
 | Pista `hunt` | Catálogo de sumideros + prefiltro de argumentos + capacidad de destino + testigo del solver |
 | Contrato de identidad | Resolución de sumideros por formato (IAT PE, PLT ELF, bind dyld Mach-O) y fuentes de nombres PDB / DWARF / MAP |
 
-**Estado:** P0 completo para PE, ELF y Mach-O. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) sobre una fixture nativa del anfitrión. Véase [Auditoría y caza de seguridad de memoria](../memory-safety.es.md). P1 se amplía a desbordamiento de pila/global, lecturas no inicializadas y cadenas de formato.
+**Estado:** P0 completo para PE, ELF y Mach-O. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), que ejecuta en cada host la matriz obligatoria PE/ELF/Mach-O × x86-64/AArch64. Véase [Auditoría y caza de seguridad de memoria](../memory-safety.es.md). P1 se amplía a desbordamiento de pila/global, lecturas no inicializadas y cadenas de formato.
 
 ---
 

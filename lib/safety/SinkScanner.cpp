@@ -6,9 +6,9 @@
 
 #include "neverd/safety/SinkScanner.h"
 
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
-#include "neverd/debug/DebugContext.h"
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -54,7 +54,40 @@ bool isImportAddress(const BinaryImage &Img, va_t Addr) {
   return false;
 }
 
+std::string importNameAt(const BinaryImage &Img, va_t Addr) {
+  if (Addr == 0)
+    return {};
+  if (const Import *Imp = Img.findImportAt(Addr); Imp && !Imp->Name.empty())
+    return Imp->Name;
+  if (auto It = Img.ImportPtrSlots.find(Addr);
+      It != Img.ImportPtrSlots.end() && !It->second.empty())
+    return It->second;
+  if (auto It = Img.DyldBindSlots.find(Addr);
+      It != Img.DyldBindSlots.end() && !It->second.Name.empty())
+    return It->second.Name;
+  return {};
+}
+
 } // namespace
+
+std::string neverd::safety::resolveCallName(const AnalysisInput &In,
+                                            const MedCallInfo &Call) {
+  if (!In.Img)
+    return Call.TargetName;
+
+  if (std::string Name = importNameAt(*In.Img, Call.TargetAddr); !Name.empty())
+    return Name;
+
+  if (Call.IsIndirect || Call.TargetAddr == 0) {
+    const std::string Norm = SinkCatalog::normalize(Call.TargetName);
+    if (!Norm.empty())
+      for (const Import &Imp : In.Img->Imports)
+        if (SinkCatalog::normalize(Imp.Name) == Norm)
+          return Imp.Name;
+  }
+
+  return Call.TargetName;
+}
 
 NameSource neverd::safety::classifyNameSource(const AnalysisInput &In,
                                               va_t CalleeAddr,
@@ -116,7 +149,8 @@ std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,
   for (const MedFunc &F : *In.MedFuncs) {
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
       const MedCallInfo &CI = F.CallInfos[I];
-      const SinkEntry *Entry = Cat.matchSink(CI.TargetName);
+      std::string StatedName = resolveCallName(In, CI);
+      const SinkEntry *Entry = Cat.matchSink(StatedName);
       if (!Entry)
         continue;
 
@@ -128,7 +162,7 @@ std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,
       Site.CallInfoIndex = I;
       if (const MedOp *Op = opFor(F, CI.BlockId, CI.OpIdx))
         Site.CallVA = Op->Addr;
-      Site.StatedName = CI.TargetName;
+      Site.StatedName = StatedName;
       Site.Sink = Entry->Name;
       Site.Class = Entry->Class;
       Site.Kind = Entry->Kind;
@@ -140,6 +174,7 @@ std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,
         Site.ArgIndex = Entry->decidingArg();
         break;
       case SinkKind::Alloc:
+      case SinkKind::StackAlloc:
       case SinkKind::Realloc:
         Site.ArgIndex = Entry->LenArg;
         break;
@@ -151,8 +186,8 @@ std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,
         break;
       }
 
-      Site.Source = classifyNameSource(In, CI.TargetAddr, CI.TargetName,
-                                       CI.IsIndirect);
+      Site.Source =
+          classifyNameSource(In, CI.TargetAddr, StatedName, CI.IsIndirect);
       Sites.push_back(std::move(Site));
     }
   }

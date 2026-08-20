@@ -22,11 +22,11 @@ dependency.
 
 ## Core invariant: fail closed
 
-An unlifted operation, a call whose arguments the ABI pass could not recover, an
-unresolved indirect target, or an exhausted budget yields **UNKNOWN**, never
-SAFE. A destination whose capacity cannot be recovered is UNKNOWN. Strict
-lifting stays as-is; the safety layer only ever adds conservative verdicts on
-top of it.
+An unlifted operation, an unsummarised call, a call whose arguments the ABI pass
+could not recover, an unresolved indirect target, or an exhausted budget yields
+**UNKNOWN**, never SAFE. A destination whose capacity cannot be recovered is
+UNKNOWN. Strict lifting stays as-is; the safety layer only ever adds
+conservative verdicts on top of it.
 
 ---
 
@@ -45,6 +45,11 @@ uses. Debug discovery precedence is unchanged:
 `--pdb` / `--map` name an authoritative companion file: failing to read it is an
 error, not a silent fallback. `--no-debug` reads the image alone on every
 format.
+
+PDB procedure signatures are used to distinguish value-returning allocators
+from `void` release functions. Rich PDB local/stack type recovery remains
+limited; when it cannot establish an exact object size, Hunt falls through to
+the frame/allocation model and reports UNKNOWN rather than inventing a size.
 
 ### Name-source precedence
 
@@ -104,10 +109,15 @@ array size, then a heap allocation site with a known size, then a sound
 stack-frame bound — and classifies the argument that decides the write length by
 a backward SSA walk (following spill/reload through stack slots):
 
-- **Constant length** is compared directly to the capacity → SAFE or UNSAFE.
-- **Fortified** `_chk` copies carry a runtime destination bound → SAFE.
+- **Constant length** within an exact capacity is SAFE. A constant overflow is
+  UNSAFE only when the sink is reachable on a corroborated path; otherwise it
+  remains UNKNOWN.
+- **Fortified** `_chk` copies carry a runtime destination bound. Rejection, or
+  a bound proven to fit the recovered object, is SAFE; a feasible write beyond
+  the object is UNSAFE; an unrecovered or inconclusive bound is UNKNOWN.
 - **Provably bounded** length (a length-returning call, a mask, a clamp) is
-  retired as a SAFE skip, recording why.
+  retired before solving, recording why. It is SAFE only when the destination
+  size is exact; against a containing-region upper bound it remains UNKNOWN.
 - **Attacker-influenced** length with a known capacity is checked with the
   bitvector solver: if a length greater than the capacity is feasible the
   verdict is UNSAFE and the solver's model is reported as the concrete witness.
@@ -126,11 +136,20 @@ including through stack spill/reload, and applies an escape summary
 
 - **Leak** — the handle is neither released nor allowed to escape.
 - **Double free** — a second release is reachable after a first on a path.
-- **Use after free** — a dereference or opaque use is reachable after a release.
+- **Use after free** — a dereference or modelled non-release use is reachable
+  after a release.
 
 Allocation and release **wrappers** are recognised through per-function escape
 summaries, so a `malloc`/`free` forwarder does not hide the defect. Releases on
 mutually-exclusive branches are not reported as a double free.
+
+The heap state machine first emits a candidate event sequence (allocation,
+release, use, or returned exit). A second pass must replay that sequence on a
+symbolic LowIR path and prove its path predicate satisfiable before the finding
+is HIGH-confidence UNSAFE. Missing LowIR, opaque operations, unsummarised calls,
+solver uncertainty, and exploration limits downgrade the candidate to UNKNOWN.
+Conservative may-alias memory havoc is tracked separately, so ordinary stack
+frame stores do not invalidate otherwise exact reachability evidence.
 
 ---
 
@@ -162,6 +181,8 @@ The same analyses are available through the C API
   "verdict": "UNSAFE",
   "confidence": "HIGH",
   "capacity": 16,
+  "capacity_kind": "exact",
+  "corroboration": "path predicate and overflow are jointly satisfiable",
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
 }
 ```
@@ -170,13 +191,20 @@ The same analyses are available through the C API
 
 ## False-positive bounds & scope
 
-- Capacity is always an upper bound, so an UNSAFE verdict reflects a real
-  overflow. A too-small buffer whose declared size is unavailable may be
-  reported SAFE rather than UNSAFE (a conservative miss, never a false alarm).
-- A length-bounded copy is retired as a SAFE skip; this favours precision on the
-  attacker-controlled cases the hunt is designed to prove.
+- Capacity is always exact or an upper bound, so an UNSAFE verdict reflects a
+  real overflow. A too-small buffer whose exact declared size is unavailable is
+  UNKNOWN when a containing-region bound is insufficient to prove safety.
+- A length-bounded copy is retired before solving and counted in `skipped`;
+  exact capacity can establish SAFE, while an upper-bound-only capacity remains
+  UNKNOWN.
+- Catalogued wide-character and append copies remain UNKNOWN until element
+  width and the existing destination extent are recovered. Out-parameter
+  allocators and conditional `realloc` ownership also remain UNKNOWN when the
+  handle transition cannot be proved.
 - **P0** (this release, all three formats): the sink catalog, the argument
-  prefilter, copy-overflow hunt, and the heap-lifetime audit.
+  prefilter, copy-overflow hunt, and the heap-lifetime audit. Mandatory
+  checked-in fixtures cover PE, ELF, and Mach-O on both x86-64 and AArch64 on
+  every test host.
 - **P1**: stack/global overflow, uninitialised reads, format strings, richer PDB
   stack types, more platform allocators.
 - **P2**: patch-inserted runtime checks, interprocedural attacker-reachability.

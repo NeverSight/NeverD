@@ -62,16 +62,19 @@ void parseCOFFLLDMap(llvm::StringRef Content,
 
     llvm::StringRef LastToken = Tokens.back();
 
+    // An input chunk states the object file it came from, and that path may
+    // itself begin with a dot -- `./foo.o:(.text)`, or a build directory named
+    // `.build`.  Recognising it first keeps such a path from being taken for
+    // the enclosing output section, which would drop every symbol under it.
+    if (LastToken.contains(":("))
+      continue;
+
     if (LastToken.starts_with(".")) {
       CurrentOutSection = LastToken.str();
       continue;
     }
 
-    if (LastToken.contains(":(.") || LastToken.contains(":("))
-      continue;
-
-    bool IsCodeSection =
-        section_names::isTextSectionName(CurrentOutSection);
+    bool IsCodeSection = section_names::isTextSectionName(CurrentOutSection);
 
     if (!IsCodeSection)
       continue;

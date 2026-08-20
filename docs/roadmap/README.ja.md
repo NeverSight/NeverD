@@ -85,7 +85,7 @@ host ABI と制限は [EVM 逆コンパイル](../evm.ja.md)を参照してく�
 | `hunt` トラック | シンクカタログ + 引数事前フィルタ + 宛先容量 + ソルバ証人 |
 | 識別契約 | 形式ごとのシンク解決（PE IAT、ELF PLT、Mach-O dyld bind）と PDB / DWARF / MAP の名前出所 |
 
-**状態：** PE、ELF、Mach-O の P0 は完了。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、ホストネイティブ fixture に対するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.ja.md)。P1 はスタック／グローバル越境、未初期化読み、書式文字列へ広がります。
+**状態：** PE、ELF、Mach-O の P0 は完了。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](../memory-safety.ja.md)。P1 はスタック／グローバル越境、未初期化読み、書式文字列へ広がります。
 
 ---
 

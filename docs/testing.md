@@ -45,7 +45,7 @@ discovered case a CTest label equal to that executable's target name.
 |-------------|-------------------------|----------------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Cross-platform child-process invocation, quoting, redirects, and exit codes |
 | `unittests/libc` | `NeverDLibCTests` | Known libc names and classification |
-| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Sink catalog, identity precedence, argument prefilter, copy-overflow hunt, heap-lifetime audit, and a host-native end-to-end fixture |
+| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Sink catalog, identity precedence, argument prefilter, copy-overflow hunt, heap-lifetime audit, and the mandatory six-cell PE/ELF/Mach-O × x86-64/AArch64 matrix |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR shapes, IR stages, loaders, relocations, format fixtures, decompilation, and representative patch flows |
 | Most files in `unittests/semantic` | `NeverDSemanticTests` | Instruction, ABI, control-flow, C-expression, and lift/recompile differential semantics |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Hardfork metadata, input normalization, CFG/SSA/recovery, interpreter semantics, LLVM/C/Solidity differential execution, and public API routing |
@@ -184,6 +184,29 @@ Most lift tests use `NeverDLiftFixture.h` to invoke the built `neverd` CLI and
 inspect LowIR, MedIR, HighIR, LLVM IR, generated C, or a rewritten binary. The
 `NEVERD` environment variable can override the CLI path for a focused manual
 experiment; ordinary CTest runs use the executable embedded by CMake.
+
+### Memory-safety fixtures
+
+`unittests/safety/fixtures/binaries` contains checked-in PE, ELF, and Mach-O
+images for x86-64 and AArch64, together with the PDB or dSYM companion each
+format supplies and a linker MAP for every image. The MAP is what a stripped
+build still ships, so each cell is also analysed with the MAP named explicitly,
+which pins what a finding may claim once no types and no source lines are left.
+`NeverDSafetyIntegrationTests` runs all six cells on every host; configure fails
+if any required image or companion is absent, and the suite has no
+host-toolchain skip path.
+
+The equivalent binaries come from one source file. Rebuild the host-native
+smoke fixture with `make`, or regenerate the complete checked-in matrix with:
+
+```bash
+make -C unittests/safety/fixtures matrix
+```
+
+The matrix recipe needs Clang's Linux and Windows cross targets, LLD's COFF
+tools, both Darwin architectures, and `dsymutil`. Its debug paths are remapped
+and CodeView command-line recording is disabled so checked-in companions do not
+capture a developer's absolute workspace path.
 
 ### Windows exception reconstruction
 
@@ -486,7 +509,7 @@ widened only for suites with measured heavy cases.
 | EVM loader, opcode, IR, or backend | Smallest owning `NeverDEVM*Tests` target | All EVM targets plus generated C/Solidity compilation |
 | SBF loader, ISA, IR, or backend | Smallest owning `NeverDSBF*Tests` target | All SBF targets plus generated C/Rust compilation |
 | Libc recognition | `NeverDLibCTests` | Semantic call/ABI cases if behavior changes |
-| Heap-lifetime audit or copy-overflow hunt | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` on a host-native fixture |
+| Heap-lifetime audit or copy-overflow hunt | `NeverDSafetyTests` | All six cells in `NeverDSafetyIntegrationTests` |
 | Process execution or quoting | `NeverDTestProcessTests` | One affected CLI/semantic case on each supported host |
 
 Tests should express the contract at the lowest stable boundary. A LowIR shape
@@ -500,8 +523,8 @@ CI builds Release with tests enabled on Linux, macOS, and Windows, then audits
 the discovered inventory before applying platform-specific label exclusions.
 Those profiles are defined in `.github/workflows/ci.yml` and
 `scripts/audit_ci_test_inventory.py`. `NeverDSafetyTests` and
-`NeverDSafetyIntegrationTests` are required on every matrix host: Linux runs
-the host-native ELF fixture, macOS Mach-O, and Windows PE. Because no single
-matrix shard represents every expensive suite, a local `check-neverd` remains
-the clearest complete pre-merge signal when the machine has all required
-cross tools.
+`NeverDSafetyIntegrationTests` are required on every matrix host, and every
+such run reads the same checked-in PE, ELF, and Mach-O fixtures for both native
+architectures. Because no single matrix shard represents every expensive
+suite, a local `check-neverd` remains the clearest complete pre-merge signal
+when the machine has all required cross tools.

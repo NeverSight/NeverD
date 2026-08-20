@@ -40,7 +40,7 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 |--------------------|--------------------|----------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Кросс-платформенные дочерние процессы, quoting, перенаправления и коды выхода |
 | `unittests/libc` | `NeverDLibCTests` | Известные имена libc и классификация |
-| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Каталог стоков, приоритет идентичности, предфильтр аргументов, охота на переполнение копий, аудит жизни кучи и сквозная нативная fixture хоста |
+| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Каталог стоков, приоритет идентичности, предфильтр аргументов, охота на переполнение копий, аудит жизни кучи и обязательная шестиячеечная матрица PE/ELF/Mach-O × x86-64/AArch64 |
 | `unittests/lift` | `NeverDLiftTests` | Формы LowIR decoder/lifter, стадии IR, loader, relocation, fixture форматов, декомпиляция и представительные patch-маршруты |
 | Большинство файлов `unittests/semantic` | `NeverDSemanticTests` | Дифференциальная семантика инструкций, ABI, управления, выражений C и lift/recompile |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Metadata hardfork, нормализация входа, CFG/SSA/recovery, семантика interpreter, differential execution LLVM/C/Solidity и публичный API |
@@ -164,6 +164,31 @@ PE/COFF-объекты и слинкованные образы, а также P
 сгенерированный C или переписанный бинарник. Переменная окружения `NEVERD` может
 переопределить путь CLI для целевого ручного эксперимента; обычные запуски CTest
 используют встроенный CMake исполняемый файл.
+
+### Fixture безопасности памяти
+
+`unittests/safety/fixtures/binaries` содержит зафиксированные образы PE, ELF и
+Mach-O для x86-64 и AArch64 вместе со спутником PDB или dSYM, который даёт
+каждый формат, и компоновочным MAP для каждого образа. MAP — единственное, что
+всё ещё поставляет обрезанная сборка, поэтому каждая ячейка дополнительно
+анализируется с явно указанным MAP: это фиксирует, что находка вправе
+утверждать, когда не осталось ни типов, ни строк исходника.
+`NeverDSafetyIntegrationTests` выполняет все шесть ячеек на каждом хосте;
+конфигурация завершается ошибкой, если отсутствует любой требуемый образ или
+спутник, и у набора нет пути пропуска из-за инструментов хоста.
+
+Равнозначные двоичные файлы происходят из одного исходного файла. Пересоберите
+родную для хоста smoke-fixture командой `make` либо перегенерируйте полную
+зафиксированную матрицу так:
+
+```bash
+make -C unittests/safety/fixtures matrix
+```
+
+Рецепту матрицы нужны кросс-цели Clang для Linux и Windows, COFF-инструменты
+LLD, обе архитектуры Darwin и `dsymutil`. Его отладочные пути переотображаются,
+а запись командной строки CodeView отключена, чтобы зафиксированные спутники не
+сохраняли абсолютный путь рабочего пространства разработчика.
 
 ### Реконструкция исключений Windows
 
@@ -391,7 +416,7 @@ ctest --test-dir build-release --build-config Release \
 | EVM loader, opcode, IR или backend | Минимальная ответственная цель `NeverDEVM*Tests` | Все цели EVM и компиляция сгенерированных C/Solidity |
 | SBF loader, ISA, IR или backend | Минимальная ответственная цель `NeverDSBF*Tests` | Все цели SBF и компиляция сгенерированных C/Rust |
 | Распознавание libc | `NeverDLibCTests` | Семантические случаи call/ABI при изменении поведения |
-| Аудит жизни кучи или охота на переполнение копий | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` на нативной fixture хоста |
+| Аудит жизни кучи или охота на переполнение копий | `NeverDSafetyTests` | Все шесть ячеек `NeverDSafetyIntegrationTests` |
 | Запуск процессов или quoting | `NeverDTestProcessTests` | Один затронутый CLI/семантический случай на каждом поддерживаемом хосте |
 
 Тесты должны выражать контракт на самой низкой стабильной границе. Проверка
@@ -406,10 +431,10 @@ CI собирает Release с тестами на Linux, macOS и Windows, пр
 инвентарь, а затем применяет платформенные исключения меток. Профили определены
 в `.github/workflows/ci.yml` и `scripts/audit_ci_test_inventory.py`.
 `NeverDSafetyTests` и `NeverDSafetyIntegrationTests` обязательны на каждом
-хосте матрицы: Linux гоняет нативную ELF-fixture, macOS — Mach-O, Windows — PE.
-Поскольку ни один shard матрицы не представляет все дорогие наборы, локальный
-`check-neverd` остаётся самым ясным полным сигналом перед merge на машине со
-всеми необходимыми cross-инструментами.
+хосте матрицы; каждый запуск читает одни и те же зафиксированные PE-, ELF- и
+Mach-O-fixtures для x86-64 и AArch64. Поскольку ни один shard матрицы не
+представляет все дорогие наборы, локальный `check-neverd` остаётся самым ясным
+полным сигналом перед merge на машине со всеми необходимыми cross-инструментами.
 
 ## Текущий профиль соответствия и sanitizer для Solana SBF
 

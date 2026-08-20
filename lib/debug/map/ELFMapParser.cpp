@@ -62,13 +62,16 @@ void parseELFMap(llvm::StringRef Content,
 
       llvm::StringRef LastToken = Tokens.back();
 
+      // Input chunks are written as `<object>:(<section>)`.  Their relative
+      // path may begin with a dot, so recognise that shape before treating a
+      // leading dot as an output-section name.
+      if (LastToken.contains(":("))
+        continue;
+
       if (LastToken.starts_with(".")) {
         CurrentSection = LastToken.str();
         continue;
       }
-
-      if (LastToken.contains(":(.") || LastToken.contains(":("))
-        continue;
 
       bool IsCodeSection =
           section_names::isELFExecutableMapSection(CurrentSection);

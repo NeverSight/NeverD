@@ -12,6 +12,8 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
+
 using namespace neverd;
 using namespace neverd::safety;
 
@@ -43,7 +45,7 @@ SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
     if (!Fnd)
       continue;
     ++R.Scanned;
-    if (Fnd->TheVerdict == Verdict::Safe && !Fnd->SkipReason.empty())
+    if (!Fnd->SkipReason.empty())
       ++R.Skipped;
     if (Fnd->BudgetHit)
       R.BudgetHit = true;
@@ -58,8 +60,10 @@ SafetyReport neverd::safety::runAudit(const AnalysisInput &In,
   SafetyReport R;
   R.Origin = Track::Audit;
   describeImage(In, R);
+  for (const SinkSite &Site : scanSinks(In, Cat))
+    if (Site.Kind == SinkKind::Alloc || Site.Kind == SinkKind::Realloc)
+      ++R.Scanned;
   R.Findings = auditHeap(In, Cat, Budgets);
-  R.Scanned = static_cast<unsigned>(R.Findings.size());
   for (const Finding &F : R.Findings)
     if (F.BudgetHit)
       R.BudgetHit = true;
@@ -100,8 +104,10 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
     O["flow"] = toString(F.Flow);
     O["verdict"] = toString(F.TheVerdict);
     O["confidence"] = toString(F.TheConfidence);
-    if (F.Capacity)
+    if (F.Capacity) {
       O["capacity"] = static_cast<int64_t>(*F.Capacity);
+      O["capacity_kind"] = F.CapacityExact ? "exact" : "upper_bound";
+    }
     if (!F.Detail.empty())
       O["detail"] = F.Detail;
     if (!F.Corroboration.empty())
@@ -126,9 +132,34 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
     }
   }
 
+  const Verdict Aggregate = Unsafe > 0    ? Verdict::Unsafe
+                            : Unknown > 0 ? Verdict::Unknown
+                                          : Verdict::Safe;
+  Confidence AggregateConfidence = Confidence::High;
+  bool HaveAggregateConfidence = false;
+  for (const Finding &F : Report.Findings) {
+    if (F.TheVerdict != Aggregate)
+      continue;
+    if (!HaveAggregateConfidence) {
+      AggregateConfidence = F.TheConfidence;
+      HaveAggregateConfidence = true;
+      continue;
+    }
+    const auto Current = static_cast<unsigned>(AggregateConfidence);
+    const auto Candidate = static_cast<unsigned>(F.TheConfidence);
+    // One proven unsafe finding establishes the aggregate; SAFE/UNKNOWN must
+    // retain the least-confident contributing result.
+    AggregateConfidence = static_cast<Confidence>(
+        Aggregate == Verdict::Unsafe ? std::min(Current, Candidate)
+                                     : std::max(Current, Candidate));
+  }
+
   json::Object Root;
+  Root["schema_version"] = 1;
   Root["ok"] = true;
   Root["track"] = toString(Report.Origin);
+  Root["verdict"] = toString(Aggregate);
+  Root["confidence"] = toString(AggregateConfidence);
   Root["format"] = Report.Format;
   Root["arch"] = Report.Arch;
   Root["scanned"] = Report.Scanned;

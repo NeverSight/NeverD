@@ -72,6 +72,7 @@ struct Frontier {
   SymState State;
   std::vector<SymRef> Constraints;
   std::vector<int> Blocks;
+  std::vector<SymCallResult> CallResults;
   /// How often this path has entered each block, which is what the loop bound
   /// is counted against.  Per path, because two paths through a loop have
   /// nothing to say about each other.
@@ -94,6 +95,9 @@ struct Frontier {
   bool Resumed = false;
   unsigned Steps = 0;
   unsigned UnmodelledOps = 0;
+  unsigned OpaqueOps = 0;
+  unsigned CallHavocs = 0;
+  unsigned MemoryHavocs = 0;
   unsigned ConcreteBranches = 0;
   unsigned MergedPaths = 0;
 };
@@ -507,18 +511,21 @@ ControlTargetResolution resolveControlTarget(
 SymPath finish(Frontier &&F, PathOutcome Outcome, SymRef Target = SymRef(),
                std::optional<InstructionMode> SourceMode = std::nullopt,
                std::optional<InstructionMode> DestinationMode = std::nullopt) {
-  SymPath Done{Outcome,
-               F.BlockId,
-               std::move(F.Constraints),
-               std::move(F.Blocks),
-               std::move(F.State),
-               Target,
-               SourceMode,
-               DestinationMode,
-               F.UnmodelledOps,
-               F.ConcreteBranches,
-               F.MergedPaths};
-  return Done;
+  return SymPath{Outcome,
+                 F.BlockId,
+                 std::move(F.Constraints),
+                 std::move(F.Blocks),
+                 std::move(F.State),
+                 std::move(F.CallResults),
+                 Target,
+                 SourceMode,
+                 DestinationMode,
+                 F.UnmodelledOps,
+                 F.OpaqueOps,
+                 F.CallHavocs,
+                 F.MemoryHavocs,
+                 F.ConcreteBranches,
+                 F.MergedPaths};
 }
 
 } // namespace
@@ -579,6 +586,9 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
       mergeVisits(Waiter.Visits, F.Visits);
       Waiter.Steps = std::max(Waiter.Steps, F.Steps);
       Waiter.UnmodelledOps = std::max(Waiter.UnmodelledOps, F.UnmodelledOps);
+      Waiter.OpaqueOps = std::max(Waiter.OpaqueOps, F.OpaqueOps);
+      Waiter.CallHavocs = std::max(Waiter.CallHavocs, F.CallHavocs);
+      Waiter.MemoryHavocs = std::max(Waiter.MemoryHavocs, F.MemoryHavocs);
       // Everything the arriving path already stood for is now stood for here.
       MergedPaths += F.MergedPaths + 1;
       Waiter.MergedPaths += F.MergedPaths + 1;
@@ -667,6 +677,30 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
         }
         ++ExecutedSteps;
         Result = Exec.step(Op);
+        if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+            Opts.TrackedCallResultRegister) {
+          auto Snapshot = [&](SymSpace Space, uint64_t Offset, uint16_t Bytes) {
+            // The first read may materialise an untouched word as bytes.  Read
+            // it again so the snapshot has the same canonical shape as later
+            // uses of that register or temporary.
+            Current.State.read(Space, Offset, Bytes);
+            return Current.State.read(Space, Offset, Bytes);
+          };
+          SymRef Value;
+          if (Op.Output.isReg() && Op.Output.Size)
+            Value =
+                Snapshot(SymSpace::Register, Op.Output.Offset, Op.Output.Size);
+          else if (Op.Output.isTemp() && Op.Output.Size)
+            Value =
+                Snapshot(SymSpace::Temporary, Op.Output.Offset, Op.Output.Size);
+          else if (Opts.TrackedCallResultRegister->Bytes)
+            Value = Snapshot(SymSpace::Register,
+                             Opts.TrackedCallResultRegister->Offset,
+                             Opts.TrackedCallResultRegister->Bytes);
+          if (Value.isValid())
+            Current.CallResults.push_back(
+                {Op.Addr, Current.BlockId, OpIndex, Value});
+        }
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
           const LowInstructionBoundary *Boundary =
               instructionBoundaryForOp(*Block, OpIndex);
@@ -694,6 +728,9 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
           ShadowTrusted = Shadow->step(Op);
       }
       Current.UnmodelledOps += Exec.unmodelledCount();
+      Current.OpaqueOps += Exec.opaqueOperationCount();
+      Current.CallHavocs += Exec.callHavocCount();
+      Current.MemoryHavocs += Exec.memoryHavocCount();
       UnmodelledOps += Exec.unmodelledCount();
       if (OutOfSteps) {
         Record(std::move(Current), PathOutcome::StepBudget);

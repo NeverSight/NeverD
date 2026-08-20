@@ -62,6 +62,13 @@ public:
   virtual std::optional<FunctionSym> resolveFunction(va_t Addr) const = 0;
   virtual std::optional<VariableSym> resolveVariable(va_t FuncAddr,
                                                      int64_t Offset) const = 0;
+  /// Resolve a variable described relative to the function's adjusted stack
+  /// pointer. Most consumers use CFA-relative offsets through resolveVariable;
+  /// this separate query keeps the two coordinate systems unambiguous.
+  virtual std::optional<VariableSym>
+  resolveStackPointerVariable(va_t, int64_t) const {
+    return std::nullopt;
+  }
   virtual std::optional<TypeSym> resolveType(uint64_t TypeId) const = 0;
   virtual std::optional<SourceLoc> sourceLocation(va_t Addr) const = 0;
 

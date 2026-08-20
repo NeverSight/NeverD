@@ -33,6 +33,8 @@ Entrambe le piste richiedono la pipeline di lift (recupera gli argomenti per chi
 
 `--pdb` / `--map` nominano un file companion autorevole: fallire la lettura è un errore, non un fallback silenzioso. `--no-debug` legge solo l’immagine su ogni formato.
 
+Le firme di procedura del PDB servono a distinguere gli allocatori che restituiscono un valore dalle funzioni di rilascio `void`. Il recupero ricco dei tipi locali e di stack da un PDB resta limitato; quando non riesce a stabilire una dimensione esatta dell’oggetto, la caccia ripiega sul modello di frame o di allocazione e riporta UNKNOWN invece di inventare una dimensione.
+
 ### Precedenza di `name_source`
 
 Ogni reperto porta un `name_source` che descrive da dove proviene il nome del callee, con questa precedenza:
@@ -52,7 +54,7 @@ Un `memcpy` linkato staticamente nominato da DWARF riporta `dwarf`; un `memcpy` 
 
 Il catalogo è una tabella configurabile, non un insieme cablato. Ogni **sink** dichiara la classe di debolezza, il ruolo (copy, format, alloc, free, realloc) e gli slot di argomento rilevanti (destinazione, origine, lunghezza, capacità). Ogni **source** nomina un fornitore di input influenzato dall’attaccante.
 
-Il catalogo integrato copre la famiglia di copie C comune (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), le varianti fortificate `_chk` (limite esplicito di destinazione), la famiglia di allocazione e rilascio (`malloc`/`calloc`/`realloc`/`free`, operator `new`/`delete`) e API heap Win32 opzionali. Le sorgenti di input includono POSIX (`getenv`, `read`, `recv`, `fgets`, `fread`, `scanf`, argomenti del programma) **e** Win32 (`GetCommandLineA/W`, `ReadFile`, `GetEnvironmentVariable*`), così un hunt PE non è limitato agli input POSIX.
+Le voci integrate risiedono in [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) e [`SafetySources.def`](../include/neverd/safety/SafetySources.def); coprono la famiglia di copie C comune (`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…), le varianti fortificate `_chk` (limite esplicito di destinazione), la famiglia di allocazione e rilascio (`malloc`/`calloc`/`realloc`/`free`, operator `new`/`delete`) e API heap Win32 opzionali. Le sorgenti di input includono POSIX (`getenv`, `read`, `recv`, `fgets`, `fread`, `scanf`, argomenti del programma) **e** Win32 (`GetCommandLineA/W`, `ReadFile`, `GetEnvironmentVariable*`), così un hunt PE non è limitato agli input POSIX.
 
 Le grafie per formato si piegano su una sola voce: gli underscore iniziali vengono rimossi (`_malloc`, `___strcpy_chk`) e gli operator `new`/`delete` mangled coincidono tramite alias.
 
@@ -74,9 +76,9 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 Per ogni sink di copia il hunt recupera la capacità di destinazione — dimensione di array dichiarata dal debug, poi un sito di allocazione heap di dimensione nota, poi un bound sano del frame di stack — e classifica l’argomento che decide la lunghezza di scrittura con una camminata SSA all’indietro (seguendo spill/reload tramite slot di stack):
 
-- **Lunghezza costante** confrontata direttamente con la capacità → SAFE o UNSAFE.
-- Copie **fortificate** `_chk` con bound di destinazione a runtime → SAFE.
-- Lunghezza **dimostrabilmente limitata** (chiamata che restituisce una lunghezza, maschera, clamp) ritirata come SAFE skip, con il motivo.
+- Una **lunghezza costante** entro una capacità esatta è SAFE. Un overflow costante è UNSAFE solo se il sink è raggiungibile su un percorso corroborato; altrimenti resta UNKNOWN.
+- Le copie **fortificate** `_chk` portano un bound di destinazione a runtime. Un rifiuto o un bound dimostrato compatibile è SAFE; una scrittura possibile oltre l’oggetto è UNSAFE; un bound non recuperato o inconcludente è UNKNOWN.
+- Lunghezza **dimostrabilmente limitata** (chiamata che restituisce una lunghezza, maschera, clamp) ritirata prima del solver, con il motivo. È SAFE solo con una dimensione di destinazione esatta; un solo upper bound di regione resta UNKNOWN.
 - Lunghezza **influenzata dall’attaccante** con capacità nota: solver bitvector. Se una lunghezza maggiore della capacità è soddisfacibile, il verdetto è UNSAFE e il modello del solver è il testimone concreto.
 - Qualsiasi altra cosa — lunghezza o capacità sconosciuta — è UNKNOWN.
 
@@ -93,6 +95,8 @@ Per ogni allocazione l’audit segue l’handle nel grafo di controllo, anche tr
 - **Use-after-free** — un dereference o un uso opaco è raggiungibile dopo un rilascio.
 
 I **wrapper** di allocazione e rilascio sono riconosciuti tramite riassunti di escape per funzione, così un forwarder `malloc`/`free` non nasconde il difetto. Rilasci su rami mutuamente esclusivi non sono riportati come doppia free.
+
+La macchina a stati dell’heap emette dapprima una sequenza di eventi candidata (allocazione, rilascio, uso o uscita per ritorno). Una seconda passata deve rieseguire quella sequenza su un percorso LowIR simbolico e dimostrare che il suo predicato di percorso è soddisfacibile prima che il risultato diventi un UNSAFE ad ALTA confidenza. LowIR mancante, operazioni opache, chiamate senza riassunto, incertezza del solutore e limiti di esplorazione declassano il candidato a UNKNOWN. L’havoc di memoria may-alias conservativo è tracciato a parte, così le normali scritture nel frame di stack non invalidano una prova di raggiungibilità per il resto esatta.
 
 ---
 
@@ -118,6 +122,8 @@ Le stesse analisi sono disponibili tramite l’API C (`neverd_session_audit_json
   "verdict": "UNSAFE",
   "confidence": "HIGH",
   "capacity": 16,
+  "capacity_kind": "exact",
+  "corroboration": "path predicate and overflow are jointly satisfiable",
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
 }
 ```
@@ -126,8 +132,9 @@ Le stesse analisi sono disponibili tramite l’API C (`neverd_session_audit_json
 
 ## Limiti dei falsi positivi e ambito
 
-- La capacità è sempre un upper bound, quindi UNSAFE riflette un overflow reale. Un buffer troppo piccolo la cui dimensione dichiarata non è disponibile può essere riportato SAFE anziché UNSAFE (omissione conservativa, mai falso allarme).
-- Una copia limitata in lunghezza è ritirata come SAFE skip; questo privilegia la precisione sui casi controllati dall’attaccante che il hunt è progettato per dimostrare.
-- **P0** (questa versione, tutti e tre i formati): catalogo di sink, prefiltro degli argomenti, hunt di overflow di copia, audit di vita dell’heap.
+- La capacità è esatta o un upper bound della dimensione reale, quindi UNSAFE riflette un overflow reale. Senza una dimensione esatta, un bound di regione insufficiente a provare sicurezza produce UNKNOWN.
+- Una copia limitata è ritirata prima del solver e conta in `skipped`; una capacità esatta può provare SAFE, mentre un solo upper bound resta UNKNOWN.
+- Le copie catalogate wide-character e append restano UNKNOWN finché non sono recuperati la larghezza dell’elemento e l’estensione esistente della destinazione. Gli allocator con parametro di uscita e la proprietà condizionale di `realloc` restano UNKNOWN quando la transizione dell’handle non può essere provata.
+- **P0** (questa versione, tutti e tre i formati): catalogo di sink, prefiltro degli argomenti, hunt di overflow di copia, audit di vita dell’heap. Ogni host esegue sei fixture PE, ELF e Mach-O per x86-64 e AArch64.
 - **P1**: overflow di stack/globale, letture non inizializzate, stringhe di formato, tipi di stack PDB più ricchi, ulteriori allocator di piattaforma.
 - **P2**: controlli runtime inseriti da patch, raggiungibilità interprocedurale dell’attaccante.

@@ -28,6 +28,12 @@
 # windows executable files
 *.exe
 *.bin
+# The memory-safety matrix ships prebuilt images so every host runs PE, ELF,
+# and Mach-O, not just the formats it can compile.
+!unittests/safety/fixtures/binaries/*.exe
+unittests/safety/fixtures/.fixture-build/
+unittests/safety/fixtures/safety_cases_native
+unittests/safety/fixtures/binaries/*.dSYM/Contents/Resources/Relocations/
 .cursor
 
 

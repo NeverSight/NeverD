@@ -4,10 +4,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "gtest/gtest.h"
+
 #include "neverd/safety/SinkCatalog.h"
 
 #include "llvm/Support/raw_ostream.h"
-#include "gtest/gtest.h"
 
 #include <fstream>
 
@@ -49,7 +50,7 @@ TEST(SinkCatalog, MatchesItaniumDemangledMemcpy) {
 TEST(SinkCatalog, MatchesAllocaAliases) {
   SinkCatalog C = SinkCatalog::defaults();
   ASSERT_NE(C.matchSink("alloca"), nullptr);
-  EXPECT_EQ(C.matchSink("alloca")->Kind, SinkKind::Alloc);
+  EXPECT_EQ(C.matchSink("alloca")->Kind, SinkKind::StackAlloc);
   EXPECT_EQ(C.matchSink("__builtin_alloca"), C.matchSink("alloca"));
 }
 
@@ -88,6 +89,7 @@ TEST(SinkCatalog, HeapAllocAndFree) {
   EXPECT_EQ(C.matchSink("malloc")->Kind, SinkKind::Alloc);
   EXPECT_EQ(C.matchSink("free")->Kind, SinkKind::Free);
   EXPECT_EQ(C.matchSink("realloc")->Kind, SinkKind::Realloc);
+  EXPECT_EQ(C.matchSink("reallocf")->Kind, SinkKind::Realloc);
 }
 
 TEST(SinkCatalog, MangledOperatorNewAndDelete) {

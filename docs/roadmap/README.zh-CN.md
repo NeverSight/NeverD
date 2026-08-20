@@ -89,7 +89,7 @@ strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API，以及与 Anvil 
 | `hunt` 轨道 | 汇目录 + 参数预过滤 + 目标容量 + 求解器见证 |
 | 身份契约 | 按格式解析汇（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名称来源 |
 
-**状态：** PE、ELF、Mach-O 的 P0 已完成。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及针对宿主原生 fixture 的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。P1 将扩展到栈/全局越界、未初始化读取与格式串。
+**状态：** PE、ELF、Mach-O 的 P0 已完成。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](../memory-safety.zh-CN.md)。P1 将扩展到栈/全局越界、未初始化读取与格式串。
 
 ---
 

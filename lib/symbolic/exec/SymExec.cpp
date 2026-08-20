@@ -86,6 +86,7 @@ void SymExec::writeResult(const NdVar &Output, SymRef Value) {
 
 StepResult SymExec::unmodelled(const LowOp &Op) {
   ++Unmodelled;
+  ++OpaqueOperations;
   if (widthOf(Op.Output) != 0)
     writeResult(Op.Output, State.freshInput("undef", widthOf(Op.Output)));
   return StepResult::Unmodelled;
@@ -428,8 +429,10 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
     writeResult(Op.Output, Old);
     SymRef NewValue =
         Op.Opcode == NdOp::ATOMIC_ADD ? Ctx.mkAdd(Old, Value) : Value;
-    if (!State.store(Addr, NewValue))
+    if (!State.store(Addr, NewValue)) {
       ++Unmodelled;
+      ++MemoryHavocs;
+    }
     return StepResult::Continue;
   }
 
@@ -441,8 +444,10 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
     SymRef Expected = fit(read(Op.Inputs[1]), widthOf(Op.Output));
     SymRef Desired = fit(read(Op.Inputs[2]), widthOf(Op.Output));
     writeResult(Op.Output, Old);
-    if (!State.store(Addr, Ctx.mkIte(Ctx.mkEq(Old, Expected), Desired, Old)))
+    if (!State.store(Addr, Ctx.mkIte(Ctx.mkEq(Old, Expected), Desired, Old))) {
       ++Unmodelled;
+      ++MemoryHavocs;
+    }
     return StepResult::Continue;
   }
 
@@ -451,8 +456,10 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
   const bool HasSpace = Op.NumInputs >= 3;
   SymRef Addr = read(Op.Inputs[HasSpace ? 1 : 0]);
   SymRef Value = read(Op.Inputs[HasSpace ? 2 : 1]);
-  if (!State.store(Addr, Value))
+  if (!State.store(Addr, Value)) {
     ++Unmodelled;
+    ++MemoryHavocs;
+  }
   return StepResult::Continue;
 }
 
@@ -497,6 +504,7 @@ StepResult SymExec::stepControl(const LowOp &Op) {
     // call does not return.
     Target = Op.NumInputs >= 1 ? read(Op.Inputs[0]) : SymRef();
     ++Unmodelled;
+    ++CallHavocs;
     State.clobberRegistersExcept(CallPreserved);
     // With no function summary, the callee may write through any pointer it
     // can reach.  Keeping a pre-call memory byte would turn that uncertainty

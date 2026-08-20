@@ -40,7 +40,7 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 |------------|---------------------------|------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | クロスプラットフォーム子プロセス、引用、リダイレクト、終了コード |
 | `unittests/libc` | `NeverDLibCTests` | 既知の libc 名と分類 |
-| `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | シンクカタログ、識別優先順位、引数事前フィルタ、コピー越境ハント、ヒープ寿命監査、ホストネイティブのエンドツーエンド fixture |
+| `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | シンクカタログ、識別優先順位、引数事前フィルタ、コピー越境ハント、ヒープ寿命監査、必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル行列 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter の LowIR 形状、IR 段階、loader、relocation、形式 fixture、デコンパイル、代表的 patch 経路 |
 | `unittests/semantic` の大半 | `NeverDSemanticTests` | 命令、ABI、制御フロー、C 式、lift/recompile の差分セマンティクス |
 | `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | hardfork metadata、input normalization、CFG/SSA/recovery、interpreter semantics、LLVM/C/Solidity differential execution、public API routing |
@@ -158,6 +158,30 @@ fixture が更新されます。
 LowIR、MedIR、HighIR、LLVM IR、生成 C、書き換えバイナリを検査します。重点的な
 手動実験では `NEVERD` 環境変数で CLI パスを上書きできます。通常の CTest は
 CMake が埋め込んだ実行ファイルを使います。
+
+### メモリ安全性 fixture
+
+`unittests/safety/fixtures/binaries` には x86-64 と AArch64 の PE、ELF、Mach-O
+イメージが検入されており、各形式が用意する PDB または dSYM の付属ファイルに
+加えて、イメージごとにリンカ MAP が付きます。MAP は strip されたビルドが唯一
+残す識別情報なので、各セルは MAP を明示的に指定した解析も行い、型も行番号も
+残っていない状態で発見が何を主張できるかを固定します。
+`NeverDSafetyIntegrationTests` はすべてのホストで 6 セルすべてを実行します。
+必要なイメージや付属ファイルが欠けていれば構成段階で失敗し、ホストのツール
+チェーンによるスキップ経路はありません。
+
+6 つの等価なバイナリは 1 つのソースから生成します。`make` はホストネイティブ
+の smoke fixture だけを再構築します。検入済みの完全な行列を再生成するには次を
+使います。
+
+```bash
+make -C unittests/safety/fixtures matrix
+```
+
+行列のレシピには Clang の Linux／Windows クロスターゲット、LLD の COFF ツール、
+両方の Darwin アーキテクチャ、そして `dsymutil` が必要です。デバッグパスは
+再マップされ、CodeView のコマンドライン記録は無効化されるため、検入された
+付属ファイルが開発者のワークスペース絶対パスを取り込むことはありません。
 
 ### Windows 例外再構築
 
@@ -378,7 +402,7 @@ GoogleTest の検出は `DISCOVERY_MODE PRE_TEST` を使うため、CTest が列
 | EVM loader、opcode、IR、backend | 所有する最小の `NeverDEVM*Tests` ターゲット | 全 EVM ターゲットと生成 C/Solidity のコンパイル |
 | SBF loader、ISA、IR、backend | 所有する最小の `NeverDSBF*Tests` ターゲット | 全 SBF ターゲットと生成 C/Rust のコンパイル |
 | Libc 認識 | `NeverDLibCTests` | 動作変更時のセマンティック call/ABI ケース |
-| ヒープ寿命監査またはコピー越境ハント | `NeverDSafetyTests` | ホストネイティブ fixture 上の `NeverDSafetyIntegrationTests` |
+| ヒープ寿命監査またはコピー越境ハント | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` の全 6 セル |
 | プロセス実行または quoting | `NeverDTestProcessTests` | 対応各ホストの影響を受ける CLI/セマンティックケース 1 件 |
 
 テストは最も低い安定した境界で契約を表現してください。LowIR 形状テストは lifter
@@ -392,10 +416,7 @@ CI は Linux、macOS、Windows でテストを有効にした Release をビル�
 一覧を監査してからプラットフォーム固有のラベル除外を適用します。プロファイルは
 `.github/workflows/ci.yml` と `scripts/audit_ci_test_inventory.py` にあります。
 `NeverDSafetyTests` と `NeverDSafetyIntegrationTests` はすべての matrix ホストで
-必須です。Linux はホストネイティブ ELF fixture、macOS は Mach-O、Windows は PE
-を実行します。高コストスイートのすべてを表す単一 matrix shard はないため、必要な
-クロスツールが揃うマシンではローカルの `check-neverd` が最も明確な完全マージ前
-シグナルです。
+必須であり、各実行は同じチェックイン済み PE、ELF、Mach-O × x86-64、AArch64 fixture を読みます。高コストスイートのすべてを表す単一 matrix shard はないため、必要なクロスツールが揃うマシンではローカルの `check-neverd` が最も明確な完全マージ前シグナルです。
 
 ## 現在の Solana SBF conformance / sanitizer profile
 

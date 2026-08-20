@@ -117,6 +117,16 @@ public:
   /// like independence.
   unsigned unmodelledCount() const { return Unmodelled; }
 
+  /// Operations whose value semantics were replaced by a fresh unknown.
+  unsigned opaqueOperationCount() const { return OpaqueOperations; }
+
+  /// Calls stepped with conservative register and memory havoc.
+  unsigned callHavocCount() const { return CallHavocs; }
+
+  /// Stores modelled at their target region while conservatively forgetting
+  /// other regions that may alias it.
+  unsigned memoryHavocCount() const { return MemoryHavocs; }
+
 private:
   SymRef read(const NdVar &V);
   void writeResult(const NdVar &Output, SymRef Value);
@@ -140,6 +150,9 @@ private:
   std::vector<SymRef> Constraints;
   std::vector<SymRegisterRange> CallPreserved;
   unsigned Unmodelled = 0;
+  unsigned OpaqueOperations = 0;
+  unsigned CallHavocs = 0;
+  unsigned MemoryHavocs = 0;
 };
 
 } // namespace neverd::symbolic

@@ -15,12 +15,18 @@
 #pragma function(free)
 #endif
 
-extern unsigned long strlen(const char *);
+#if defined(_WIN32)
+typedef unsigned long long fixture_size_t;
+#else
+typedef unsigned long fixture_size_t;
+#endif
+
+extern fixture_size_t strlen(const char *);
 extern char *strcpy(char *, const char *);
-extern char *strncpy(char *, const char *, unsigned long);
-extern void *memcpy(void *, const void *, unsigned long);
+extern char *strncpy(char *, const char *, fixture_size_t);
+extern void *memcpy(void *, const void *, fixture_size_t);
 extern char *getenv(const char *);
-extern void *malloc(unsigned long);
+extern void *malloc(fixture_size_t);
 extern void free(void *);
 extern int puts(const char *);
 #if defined(_WIN32)
@@ -46,7 +52,7 @@ void tainted_heap_overflow(void) {
 #else
   long n = read(0, src, sizeof src);
 #endif
-  memcpy(dst, src, (unsigned long)n);
+  memcpy(dst, src, (fixture_size_t)n);
   puts(dst);
   free(dst);
 }

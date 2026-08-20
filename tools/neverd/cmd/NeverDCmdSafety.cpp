@@ -64,7 +64,20 @@ int emit(const char *Report) {
 
   if (!OutputFile.empty()) {
     std::ofstream OS(OutputFile);
+    if (!OS) {
+      WithColor::error() << "cannot open safety output file: "
+                         << OutputFile.getValue() << "\n";
+      neverd_free_string(Report);
+      return 1;
+    }
     OS << Report << "\n";
+    OS.close();
+    if (!OS) {
+      WithColor::error() << "cannot write safety output file: "
+                         << OutputFile.getValue() << "\n";
+      neverd_free_string(Report);
+      return 1;
+    }
   } else {
     outs() << Report << "\n";
   }

@@ -71,7 +71,7 @@ Analizzare un binario sollevato per difetti di vita dell’heap (leak, doppia fr
 | Pista `hunt` | Catalogo di sink + prefiltro degli argomenti + capacità di destinazione + testimone del solver |
 | Contratto di identità | Risoluzione dei sink per formato (IAT PE, PLT ELF, bind dyld Mach-O) e fonti di nomi PDB / DWARF / MAP |
 
-**Stato:** P0 completo per PE, ELF e Mach-O. La copertura di verdetti e identità è bloccata da [`unittests/safety`](../../unittests/safety) e dal end-to-end [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) su una fixture nativa dell’host. Vedi [Audit e hunt di sicurezza della memoria](../memory-safety.it.md). P1 si allarga a overflow di stack/globale, letture non inizializzate e stringhe di formato.
+**Stato:** P0 completo per PE, ELF e Mach-O. La copertura di verdetti e identità è bloccata da [`unittests/safety`](../../unittests/safety) e dal test end-to-end [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), che esegue su ogni host la matrice obbligatoria PE/ELF/Mach-O × x86-64/AArch64. Vedi [Audit e hunt di sicurezza della memoria](../memory-safety.it.md). P1 si allarga a overflow di stack/globale, letture non inizializzate e stringhe di formato.
 
 ---
 

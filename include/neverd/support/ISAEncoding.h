@@ -114,16 +114,21 @@ constexpr uint32_t kLDR_Imm12Shift = 10;
 constexpr uint32_t kLDR_Imm12Mask = 0xFFF;
 constexpr uint64_t kPageMask = ~uint64_t(0xFFF);
 
-// --- IAT thunk pattern: ADRP x16 / LDR x16,[x16,...] / BR x16 ---
+// --- Import veneer patterns ---
 constexpr uint32_t kADRP_X16_Mask = 0x9F00001F;
 constexpr uint32_t kADRP_X16_Match = 0x90000010;
 constexpr uint32_t kLDR_X16_X16_Mask = 0xFFC003FF;
 constexpr uint32_t kLDR_X16_X16_Match = 0xF9400210;
+constexpr uint32_t kLDR_X17_X16_Match = 0xF9400211;
+constexpr uint32_t kADD_X16_X16_Mask = 0xFFC003FF;
+constexpr uint32_t kADD_X16_X16_Match = 0x91000210;
 constexpr size_t kThunkLen = 12;
+constexpr size_t kELFPLTThunkLen = 16;
 
 // --- Miscellaneous ---
 constexpr uint32_t kNop = 0xD503201F;
 constexpr uint32_t kBR_X16 = 0xD61F0200;
+constexpr uint32_t kBR_X17 = 0xD61F0220;
 
 /// +/- 128 MB reach of B/BL (26-bit signed imm << 2).
 constexpr int64_t kBranchRange = 1LL << 27;

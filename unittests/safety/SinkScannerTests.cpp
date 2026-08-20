@@ -4,13 +4,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/safety/SinkScanner.h"
+#include "gtest/gtest.h"
 
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
-
-#include "gtest/gtest.h"
+#include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/safety/SinkScanner.h"
+#include "neverd/support/BinaryEncoding.h"
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -109,6 +110,73 @@ TEST(SinkScanner, IndirectCallMatchesImportByName) {
   std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
   ASSERT_EQ(Sites.size(), 1u);
   EXPECT_TRUE(Sites[0].IsIndirect);
+  EXPECT_EQ(Sites[0].Source, NameSource::Import);
+}
+
+TEST(SinkScanner, ImportAddressRecoversSyntheticCalleeName) {
+  std::vector<MedFunc> Funcs;
+  Funcs.push_back(makeCallFunc(0x100, "f", 0x2000, "sub_2000"));
+
+  BinaryImage Img;
+  Import Imp;
+  Imp.Module = "runtime";
+  Imp.Name = "memcpy";
+  Imp.IATAddr = 0x2000;
+  Img.Imports.push_back(Imp);
+
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &Funcs;
+
+  std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].Sink, "memcpy");
+  EXPECT_EQ(Sites[0].StatedName, "memcpy");
+  EXPECT_EQ(Sites[0].Source, NameSource::Import);
+}
+
+TEST(SinkScanner, DirectInternalCallDoesNotBorrowUnrelatedImportIdentity) {
+  BinaryImage Img;
+  Img.Imports.push_back({"runtime", "memcpy", 0, 0x2000});
+
+  MedFunc Func = makeCallFunc(0x100, "f", 0x3000, "_memcpy");
+  AnalysisInput In;
+  In.Img = &Img;
+
+  EXPECT_EQ(resolveCallName(In, Func.CallInfos[0]), "_memcpy");
+}
+
+TEST(SinkScanner, AArch64ELFPLTVeneerRecoversImportIdentity) {
+  constexpr va_t StubVA = 0x10CC0;
+  constexpr va_t IATAddr = 0x30EB0;
+
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::ELF;
+  Segment Text;
+  Text.Name = ".plt";
+  Text.VA = StubVA;
+  Text.Size = 16;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  writeLE<uint32_t>(Text.Data.data(), 0x90000110u);
+  writeLE<uint32_t>(Text.Data.data() + 4, 0xF9475A11u);
+  writeLE<uint32_t>(Text.Data.data() + 8, 0x913AC210u);
+  writeLE<uint32_t>(Text.Data.data() + 12, 0xD61F0220u);
+  Img.Segments.push_back(std::move(Text));
+  Img.Imports.push_back({"extern", "memcpy", 0, IATAddr});
+
+  scanImportThunks(Img);
+  std::vector<MedFunc> Funcs;
+  Funcs.push_back(makeCallFunc(0x100, "f", StubVA, "sub_10CC0"));
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &Funcs;
+
+  std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].Sink, "memcpy");
   EXPECT_EQ(Sites[0].Source, NameSource::Import);
 }
 

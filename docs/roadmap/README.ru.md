@@ -71,7 +71,7 @@ backends C23/LLVM/Solidity, CLI/C API и differential tests с Anvil. Host ABI �
 | Дорожка `hunt` | Каталог стоков + предфильтр аргументов + ёмкость назначения + свидетель солвера |
 | Контракт идентичности | Разрешение стоков по формату (IAT PE, PLT ELF, dyld bind Mach-O) и источники имён PDB / DWARF / MAP |
 
-**Статус:** P0 для PE, ELF и Mach-O завершён. Покрытие вердиктов и идентичности закреплено [`unittests/safety`](../../unittests/safety) и сквозным [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) на нативной fixture хоста. См. [Аудит и охота на ошибки безопасности памяти](../memory-safety.ru.md). P1 расширяется на переполнение стека/глобальных, неинициализированные чтения и строки формата.
+**Статус:** P0 для PE, ELF и Mach-O завершён. Покрытие вердиктов и идентичности закреплено [`unittests/safety`](../../unittests/safety) и сквозным [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), который на каждом хосте запускает обязательную матрицу PE/ELF/Mach-O × x86-64/AArch64. См. [Аудит и охота на ошибки безопасности памяти](../memory-safety.ru.md). P1 расширяется на переполнение стека/глобальных, неинициализированные чтения и строки формата.
 
 ---
 

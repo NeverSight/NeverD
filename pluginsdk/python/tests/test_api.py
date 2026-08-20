@@ -195,6 +195,34 @@ class _SymbolicHost:
         )
 
 
+class _SafetyHost:
+    def __init__(self, *, ok: bool = True) -> None:
+        self.ok = ok
+        self.calls: list[str] = []
+        self.options: dict[str, object] = {}
+
+    def owned_string(self, name: str, *arguments: object) -> str:
+        self.calls.append(name)
+        if name == "neverd_last_error":
+            return "native safety error"
+        if name not in {"neverd_session_audit_json", "neverd_session_hunt_json"}:
+            raise AssertionError(name)
+        options = arguments[1]._obj
+        self.options[name] = options
+        if not self.ok:
+            return json.dumps({"ok": False, "error": "analysis failed"})
+        track = "audit" if "audit" in name else "hunt"
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "ok": True,
+                "track": track,
+                "verdict": "UNSAFE",
+                "findings": [],
+            }
+        )
+
+
 class SessionTests(unittest.TestCase):
     def test_default_host_is_lazy_and_cached(self) -> None:
         import neverd_plugin.api as api_module
@@ -311,6 +339,49 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(host.options.max_steps, 100)
         self.assertEqual(host.options.max_block_visits, 4)
         self.assertEqual(host.options.include_expressions, 1)
+
+    def test_safety_tracks_parse_reports_and_pass_versioned_options(self) -> None:
+        from neverd_plugin import Session
+
+        host = _SafetyHost()
+        session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+        audit = session.audit(
+            max_paths=7,
+            max_steps=101,
+            max_loop=5,
+            solver_conflicts=999,
+            sinks="rules/sinks.json",
+            sources="rules/sources.json",
+        )
+        hunt = session.hunt(max_paths=3)
+
+        self.assertEqual(audit["track"], "audit")
+        self.assertEqual(hunt["track"], "hunt")
+        audit_options = host.options["neverd_session_audit_json"]
+        self.assertEqual(audit_options.struct_size, ctypes.sizeof(type(audit_options)))
+        self.assertEqual(audit_options.max_paths, 7)
+        self.assertEqual(audit_options.max_steps, 101)
+        self.assertEqual(audit_options.max_loop, 5)
+        self.assertEqual(audit_options.solver_conflicts, 999)
+        self.assertEqual(audit_options.sinks_path, b"rules/sinks.json")
+        self.assertEqual(audit_options.sources_path, b"rules/sources.json")
+        self.assertEqual(
+            host.options["neverd_session_hunt_json"].max_paths,
+            3,
+        )
+
+    def test_safety_tracks_surface_native_errors_and_validate_budgets(self) -> None:
+        from neverd_plugin import NeverDError, Session
+
+        session = Session(
+            object(), _native=_FakeNativeBridge(), _host=_SafetyHost(ok=False)
+        )
+        with self.assertRaisesRegex(NeverDError, "analysis failed"):
+            session.audit()
+        with self.assertRaisesRegex(ValueError, "max_paths"):
+            session.hunt(max_paths=-1)
+        with self.assertRaisesRegex(ValueError, "solver_conflicts"):
+            session.hunt(solver_conflicts=1 << 64)
 
 
 class EventTests(unittest.TestCase):

@@ -1,0 +1,11 @@
+LIBRARY safety_runtime.dll
+EXPORTS
+  strlen
+  strcpy
+  strncpy
+  memcpy
+  getenv
+  malloc
+  free
+  puts
+  _read

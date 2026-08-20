@@ -71,7 +71,7 @@ strict/relaxed، وbackends C23/LLVM/Solidity، وتكامل CLI/C API، واخ�
 | مسار `hunt` | كتالوج المصارف + مرشح الوسائط المسبق + سعة الوجهة + شاهد المحلّل |
 | عقد الهوية | حلّ المصارف حسب الصيغة (IAT لـ PE وPLT لـ ELF وربط dyld لـ Mach-O) ومصادر الأسماء PDB / DWARF / MAP |
 
-**الحالة:** اكتمل P0 لـ PE وELF وMach-O. تغطية الأحكام والهوية مثبتة بـ [`unittests/safety`](../../unittests/safety) واختبار الطرف إلى الطرف [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) على fixture أصلية للمضيف. انظر [تدقيق وصيد أمان الذاكرة](../memory-safety.ar.md). يتسع P1 إلى فيضان المكدس/العالمي والقراءات غير المهيأة وسلاسل التنسيق.
+**الحالة:** اكتمل P0 لـ PE وELF وMach-O. تغطية الأحكام والهوية مثبتة بـ [`unittests/safety`](../../unittests/safety) واختبار الطرف إلى الطرف [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) الذي يشغّل على كل مضيف مصفوفة PE/ELF/Mach-O × x86-64/AArch64 الإلزامية. انظر [تدقيق وصيد أمان الذاكرة](../memory-safety.ar.md). يتسع P1 إلى فيضان المكدس/العالمي والقراءات غير المهيأة وسلاسل التنسيق.
 
 ---
 

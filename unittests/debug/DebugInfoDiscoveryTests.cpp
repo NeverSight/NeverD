@@ -11,14 +11,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "gtest/gtest.h"
+
 #include "neverd/Common.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
-
-#include "gtest/gtest.h"
 
 #include <filesystem>
 #include <fstream>
@@ -109,7 +109,8 @@ private:
   std::filesystem::path Root;
 };
 
-/// A link.exe /MAP naming two functions in a PE whose image base is 0x140000000.
+/// A link.exe /MAP naming two functions in a PE whose image base is
+/// 0x140000000.
 constexpr llvm::StringLiteral kMSVCMap =
     " probe\n"
     "\n"
@@ -124,6 +125,28 @@ constexpr llvm::StringLiteral kMSVCMap =
     " 0001:00001040       emit_record             0000140001040 f   probe.obj\n"
     "\n"
     " entry point at        0001:00001000\n";
+
+/// An lld-link /lldmap whose object file sits in a dot-prefixed build
+/// directory, with one symbol in code and one in read-only data.
+constexpr llvm::StringLiteral kCOFFLLDMap =
+    "Address  Size     Align Out     In      Symbol\n"
+    "00001000 00000080  4096 .text\n"
+    "00001000 00000080    16         .build/probe.obj:(.text)\n"
+    "00001000 00000000     0                 parse_header\n"
+    "00001040 00000000     0                 emit_record\n"
+    "00002000 00000200  4096 .rdata\n"
+    "00002000 00000008     1         .build/probe.obj:(.rdata)\n"
+    "00002000 00000000     0                 lookup_table\n";
+
+constexpr llvm::StringLiteral kELFLLDMap =
+    "VMA LMA Size Align Out In Symbol\n"
+    "00001000 00001000 00000080 16 .text\n"
+    "00001000 00001000 00000080 16 .build/probe.o:(.text)\n"
+    "00001000 00001000 00000020 1 parse_header\n"
+    "00001040 00001040 00000020 1 emit_record\n"
+    "00002000 00002000 00000200 16 .rodata\n"
+    "00002000 00002000 00000008 1 .build/probe.o:(.rodata)\n"
+    "00002000 00002000 00000008 1 lookup_table\n";
 
 BinaryImage makePEImage() {
   BinaryImage Img;
@@ -222,7 +245,8 @@ TEST(ApplyDebugSymbolsTest, StatedEntryDecidesWhenAnAddressCarriesBoth) {
 
 TEST(ApplyDebugSymbolsTest, IgnoresUnusableDebugEntries) {
   BinaryImage Img;
-  FakeDebugContext Dbg({makeDebugFunc(0x1000, ""), makeDebugFunc(0, "at_zero")});
+  FakeDebugContext Dbg(
+      {makeDebugFunc(0x1000, ""), makeDebugFunc(0, "at_zero")});
 
   EXPECT_EQ(applyDebugSymbols(Img, Dbg), 0u);
   EXPECT_TRUE(Img.Symbols.empty());
@@ -329,6 +353,46 @@ TEST(LoadDebugInfoTest, ExplicitMapWithoutFunctionsIsAnError) {
 
   EXPECT_FALSE(static_cast<bool>(R));
   EXPECT_FALSE(R.Error.empty());
+}
+
+// lld-link states each input chunk as `<object>:(<section>)`, and that object
+// path is free to start with a dot.  Mistaking it for the enclosing output
+// section files every symbol under it as non-code, which loses the whole map
+// while still looking like a successful parse.
+TEST(LoadDebugInfoTest, LLDMapKeepsSymbolsUnderADotPrefixedObjectPath) {
+  ScratchDir Dir;
+
+  DebugInfoRequest Req;
+  Req.MapPath = Dir.write("probe.exe.map", kCOFFLLDMap);
+
+  BinaryImage Img = makePEImage();
+  DebugInfoResult R = loadDebugInfo(Dir.path("probe.exe"), Img, Req);
+
+  ASSERT_TRUE(static_cast<bool>(R));
+  EXPECT_EQ(R.Kind, DebugInfoKind::Map);
+
+  // The data symbol stays out, so tracking the output section still works.
+  std::vector<FunctionSym> Funcs = R.Context->allFunctions();
+  ASSERT_EQ(Funcs.size(), 2u);
+  EXPECT_EQ(Funcs[0].Name, "parse_header");
+  EXPECT_EQ(Funcs[1].Name, "emit_record");
+}
+
+TEST(LoadDebugInfoTest, ELFMapKeepsSymbolsUnderADotPrefixedObjectPath) {
+  ScratchDir Dir;
+
+  DebugInfoRequest Req;
+  Req.MapPath = Dir.write("probe.elf.map", kELFLLDMap);
+
+  BinaryImage Img = makePEImage();
+  DebugInfoResult R = loadDebugInfo(Dir.path("probe.elf"), Img, Req);
+
+  ASSERT_TRUE(static_cast<bool>(R));
+  EXPECT_EQ(R.Kind, DebugInfoKind::Map);
+  std::vector<FunctionSym> Funcs = R.Context->allFunctions();
+  ASSERT_EQ(Funcs.size(), 2u);
+  EXPECT_EQ(Funcs[0].Name, "parse_header");
+  EXPECT_EQ(Funcs[1].Name, "emit_record");
 }
 
 TEST(LoadDebugInfoTest, MissingExplicitPDBIsAnError) {

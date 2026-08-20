@@ -7,7 +7,8 @@
 ///
 /// \file
 /// AArch64 import thunk recognition for heuristic function discovery.
-/// Recognizes the ADRP x16 / LDR x16,[x16,#off] / BR x16 PLT-style veneer.
+/// Recognizes both three-instruction import veneers and the four-instruction
+/// PLT form that loads the destination through x17.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -36,9 +37,21 @@ size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
     std::memcpy(&W2, D + I + 2 * kInsnSize, kInsnSize);
     if ((W0 & kADRP_X16_Mask) != kADRP_X16_Match)
       continue;
-    if ((W1 & kLDR_X16_X16_Mask) != kLDR_X16_X16_Match)
-      continue;
-    if (W2 != kBR_X16)
+
+    size_t ThunkSize = kThunkLen;
+    bool Matches =
+        (W1 & kLDR_X16_X16_Mask) == kLDR_X16_X16_Match && W2 == kBR_X16;
+    if (!Matches && I + kELFPLTThunkLen <= N &&
+        (W1 & kLDR_X16_X16_Mask) == kLDR_X17_X16_Match &&
+        (W2 & kADD_X16_X16_Mask) == kADD_X16_X16_Match) {
+      uint32_t W3;
+      std::memcpy(&W3, D + I + 3 * kInsnSize, kInsnSize);
+      const uint32_t LoadOff = ((W1 >> kLDR_Imm12Shift) & kLDR_Imm12Mask) << 3;
+      const uint32_t AddOff = (W2 >> kLDR_Imm12Shift) & kLDR_Imm12Mask;
+      Matches = W3 == kBR_X17 && LoadOff == AddOff;
+      ThunkSize = kELFPLTThunkLen;
+    }
+    if (!Matches)
       continue;
     int32_t ImmHi = (W0 >> kImmHiShift) & kImmHiMask;
     int32_t ImmLo = (W0 >> kImmLoShift) & kImmLoMask;
@@ -56,7 +69,7 @@ size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
     Img.recordImportStub(AdrpVA, TargetIt->second);
     if (!Existing.insert(AdrpVA).second)
       continue;
-    Img.Symbols.push_back(Symbol::makeFunc(AdrpVA, kThunkLen));
+    Img.Symbols.push_back(Symbol::makeFunc(AdrpVA, ThunkSize));
     ++Added;
   }
   return Added;

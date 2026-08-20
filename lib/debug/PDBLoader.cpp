@@ -15,11 +15,16 @@
 #include "llvm/DebugInfo/CodeView/SymbolDeserializer.h"
 #include "llvm/DebugInfo/CodeView/SymbolRecord.h"
 #include "llvm/DebugInfo/PDB/Native/DbiStream.h"
+#include "llvm/DebugInfo/PDB/Native/ModuleDebugStream.h"
 #include "llvm/DebugInfo/PDB/Native/NativeSession.h"
 #include "llvm/DebugInfo/PDB/Native/PDBFile.h"
 #include "llvm/DebugInfo/PDB/Native/PublicsStream.h"
+#include "llvm/DebugInfo/PDB/Native/SymbolCache.h"
 #include "llvm/DebugInfo/PDB/Native/SymbolStream.h"
 #include "llvm/DebugInfo/PDB/PDB.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeBuiltin.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeFunctionSig.h"
+#include "llvm/DebugInfo/PDB/PDBSymbolTypePointer.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
@@ -29,6 +34,69 @@
 #include <algorithm>
 
 namespace neverd {
+
+namespace {
+
+TypeRef convertPDBType(const llvm::pdb::PDBSymbol &Symbol) {
+  using namespace llvm::pdb;
+  if (const auto *Builtin = llvm::dyn_cast<PDBSymbolTypeBuiltin>(&Symbol)) {
+    const uint64_t Length = Builtin->getLength();
+    switch (Builtin->getBuiltinType()) {
+    case PDB_BuiltinType::Void:
+      return NdType::makeVoid();
+    case PDB_BuiltinType::Float:
+      return Length ? NdType::makeFloat(static_cast<uint16_t>(Length))
+                    : TypeRef{};
+    case PDB_BuiltinType::UInt:
+    case PDB_BuiltinType::ULong:
+    case PDB_BuiltinType::Bool:
+      return Length ? NdType::makeInt(static_cast<uint16_t>(Length), false)
+                    : TypeRef{};
+    case PDB_BuiltinType::Char:
+    case PDB_BuiltinType::WCharT:
+    case PDB_BuiltinType::Int:
+    case PDB_BuiltinType::Long:
+    case PDB_BuiltinType::HResult:
+    case PDB_BuiltinType::Char8:
+    case PDB_BuiltinType::Char16:
+    case PDB_BuiltinType::Char32:
+      return Length ? NdType::makeInt(static_cast<uint16_t>(Length), true)
+                    : TypeRef{};
+    default:
+      return {};
+    }
+  }
+  if (const auto *Pointer = llvm::dyn_cast<PDBSymbolTypePointer>(&Symbol)) {
+    TypeRef Pointee;
+    if (auto Inner = Pointer->getPointeeType())
+      Pointee = convertPDBType(*Inner);
+    if (!Pointee)
+      Pointee = NdType::makeVoid();
+    return NdType::makePtr(Pointee);
+  }
+  return {};
+}
+
+TypeRef functionReturnType(llvm::pdb::NativeSession &Session,
+                           llvm::codeview::TypeIndex FunctionType) {
+  using namespace llvm::pdb;
+  const SymIndexId Id =
+      Session.getSymbolCache().findSymbolByTypeIndex(FunctionType);
+  if (Id == 0)
+    return {};
+  auto Symbol = Session.getSymbolById(Id);
+  if (!Symbol)
+    return {};
+  auto Signature =
+      llvm::unique_dyn_cast<PDBSymbolTypeFunctionSig>(std::move(Symbol));
+  if (!Signature)
+    return {};
+  if (auto Return = Signature->getReturnType())
+    return convertPDBType(*Return);
+  return {};
+}
+
+} // namespace
 
 struct PDBDebugContext::Impl {
   std::map<va_t, FunctionSym> Functions;
@@ -58,6 +126,7 @@ PDBDebugContext::load(const std::filesystem::path &PdbPath,
   }
 
   auto *Native = static_cast<llvm::pdb::NativeSession *>(Session.get());
+  Session->setLoadAddress(ImageBase);
   auto &PDB = Native->getPDBFile();
 
   auto DbiOr = PDB.getPDBDbiStream();
@@ -118,6 +187,36 @@ PDBDebugContext::load(const std::filesystem::path &PdbPath,
     }
   } else {
     llvm::consumeError(PubOr.takeError());
+  }
+
+  for (uint32_t ModuleIndex = 0; ModuleIndex < DBI.modules().getModuleCount();
+       ++ModuleIndex) {
+    auto ModuleOr = Native->getModuleDebugStream(ModuleIndex);
+    if (!ModuleOr) {
+      llvm::consumeError(ModuleOr.takeError());
+      continue;
+    }
+    for (const auto &Record : ModuleOr->getSymbolArray()) {
+      if (Record.kind() != llvm::codeview::SymbolKind::S_LPROC32 &&
+          Record.kind() != llvm::codeview::SymbolKind::S_GPROC32)
+        continue;
+      auto ProcOr = llvm::codeview::SymbolDeserializer::deserializeAs<
+          llvm::codeview::ProcSym>(Record);
+      if (!ProcOr) {
+        llvm::consumeError(ProcOr.takeError());
+        continue;
+      }
+      const auto &Proc = *ProcOr;
+      const va_t VA = ResolveVA(Proc.Segment, Proc.CodeOffset);
+      if (VA == 0)
+        continue;
+      auto &FS = Ctx->PImpl->Functions[VA];
+      if (FS.Name.empty())
+        FS.Name = std::string(Proc.Name);
+      FS.Addr = VA;
+      FS.Size = Proc.CodeSize;
+      FS.ReturnType = functionReturnType(*Native, Proc.FunctionType);
+    }
   }
 
   Ctx->PImpl->Loaded = !Ctx->PImpl->Functions.empty();

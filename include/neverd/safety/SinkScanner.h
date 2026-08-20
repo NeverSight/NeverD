@@ -22,9 +22,19 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <string>
 #include <vector>
 
+namespace neverd {
+struct MedCallInfo;
+}
+
 namespace neverd::safety {
+
+/// Return the semantic callee identity used by every safety analysis.  An
+/// exact import address or slot takes precedence over the recovered label;
+/// name-only import matching is reserved for unresolved indirect calls.
+std::string resolveCallName(const AnalysisInput &In, const MedCallInfo &Call);
 
 /// Decide where the name of the routine at \p CalleeAddr came from, honouring
 /// the per-format identity precedence: a rename, then an import, then a debug
@@ -35,7 +45,8 @@ NameSource classifyNameSource(const AnalysisInput &In, va_t CalleeAddr,
                               llvm::StringRef StatedName, bool IsIndirect);
 
 /// Scan every lifted function and return one record per catalog match.
-std::vector<SinkSite> scanSinks(const AnalysisInput &In, const SinkCatalog &Cat);
+std::vector<SinkSite> scanSinks(const AnalysisInput &In,
+                                const SinkCatalog &Cat);
 
 } // namespace neverd::safety
 

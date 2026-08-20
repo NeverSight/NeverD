@@ -145,6 +145,12 @@ SinkEntry allocSink(const char *Name, int SizeArg, int SrcArg, int HandleArg,
   return E;
 }
 
+SinkEntry stackAllocSink(const char *Name, int SizeArg, unsigned Sev) {
+  SinkEntry E = allocSink(Name, SizeArg, -1, -1, Sev);
+  E.Kind = SinkKind::StackAlloc;
+  return E;
+}
+
 SinkEntry freeSink(const char *Name, int Handle, unsigned Sev) {
   SinkEntry E;
   E.Name = Name;
@@ -176,6 +182,8 @@ SinkCatalog SinkCatalog::defaults() {
   C.addSink(formatSink(#NAME, DST, FMT, CAP, SEV));
 #define SAFETY_ALLOC_SINK(NAME, SIZE, SRC, HANDLE, SEV)                        \
   C.addSink(allocSink(#NAME, SIZE, SRC, HANDLE, SEV));
+#define SAFETY_STACK_ALLOC_SINK(NAME, SIZE, SEV)                               \
+  C.addSink(stackAllocSink(#NAME, SIZE, SEV));
 #define SAFETY_FREE_SINK(NAME, HANDLE, SEV)                                    \
   C.addSink(freeSink(#NAME, HANDLE, SEV));
 #define SAFETY_REALLOC_SINK(NAME, HANDLE, LEN, SEV)                            \

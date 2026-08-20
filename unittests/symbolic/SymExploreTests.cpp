@@ -205,6 +205,35 @@ TEST(SymExplore, TargetCallingConventionPreservesDeclaredRegisterBytes) {
   EXPECT_EQ(Ctx.constValue(Preserved).getZExtValue(), 2u);
 }
 
+TEST(SymExplore, TracksTheCallResultUsedByLaterBranches) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  constexpr int NonNull = 1, Null = 2;
+  B.block({op(NdOp::CALL, NdVar{}, {NdVar::cst(0x401500, 8)}),
+           op(NdOp::INT_NOTEQUAL, NdVar::reg(kFlag, 1),
+              {NdVar::reg(kRax, 8), NdVar::cst(0, 8)}),
+           op(NdOp::COND_BR, NdVar{},
+              {FunctionBuilder::addressOf(NonNull), NdVar::reg(kFlag, 1)})},
+          {NonNull, Null});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  ExploreOptions Opts;
+  Opts.TrackedCallResultRegister = SymRegisterRange{kRax, 8};
+
+  SymExploration Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  ASSERT_EQ(Exploration.Paths.size(), 2u);
+  for (SymPath &Path : Exploration.Paths) {
+    ASSERT_EQ(Path.CallResults.size(), 1u);
+    EXPECT_EQ(Path.CallResults[0].Value,
+              Path.State.read(SymSpace::Register, kRax, 8));
+  }
+
+  EXPECT_EQ(Exploration.Paths[0].Blocks, (std::vector<int>{0, NonNull}));
+  EXPECT_EQ(Exploration.Paths[1].Blocks, (std::vector<int>{0, Null}));
+  EXPECT_EQ(Ctx.mkNot(Exploration.Paths[0].predicate(Ctx)),
+            Exploration.Paths[1].predicate(Ctx));
+}
+
 TEST(SymExplore, ARealBranchBecomesTwoPathsWithOppositeConditions) {
   SymContext Ctx;
   FunctionBuilder B;

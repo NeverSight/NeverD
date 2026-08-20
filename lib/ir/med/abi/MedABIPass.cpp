@@ -44,6 +44,16 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
   (void)CalleeReturnsVec; // FP-return routing is modeled earlier (LowToMed)
 
   const auto &TRI = getTargetRegInfo(TheArch);
+  const bool IsWin64 = TheArch == Arch::X64 && Func.CC == CallingConv::Win64;
+  const llvm::ArrayRef<uint64_t> IntParamRegs =
+      IsWin64 && !TRI.Win64ParamRegs.empty() ? TRI.Win64ParamRegs
+                                             : TRI.IntParamRegs;
+  auto regToIntArgIdx = [&](uint64_t RegOff) {
+    for (size_t I = 0; I < IntParamRegs.size(); ++I)
+      if (IntParamRegs[I] == RegOff)
+        return static_cast<int>(I);
+    return -1;
+  };
 
   // Argument registers a forwarder passes straight through from its incoming
   // value (recovered only via the live-in fallback, never written in the
@@ -220,11 +230,10 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         // functions may use the compiler's ECX/EDX regparm convention.  Do
         // not promote scratch register values to caller parameters merely
         // because the external function's total arity is known.
-        CalleeRegArgs =
-            TheArch == Arch::X86
-                ? 0
-                : std::min(ExternalArity->IntArgs,
-                           static_cast<int>(TRI.IntParamRegs.size()));
+        CalleeRegArgs = TheArch == Arch::X86
+                            ? 0
+                            : std::min(ExternalArity->IntArgs,
+                                       static_cast<int>(IntParamRegs.size()));
         CalleeArgs = ExternalArity->IntArgs;
       }
 
@@ -312,9 +321,9 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           // it in between — the accumulator chain `acc = f(acc, i)`.  Record it
           // (only if the slot is still open) before stopping the backward scan.
           if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0) {
-            int ArgIdx = TRI.regToArgIdx(Prev.Output.RegOff);
+            int ArgIdx = regToIntArgIdx(Prev.Output.RegOff);
             if (ArgIdx >= 0 && ArgIdx < MaxArgs && !FoundMask[ArgIdx]) {
-              Found[ArgIdx] = argRegSourceValueInBlock(Blk, J, TRI);
+              Found[ArgIdx] = argRegSourceValueInBlock(Blk, J, TRI, IsWin64);
               FoundMask[ArgIdx] = true;
             }
           }
@@ -333,7 +342,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       std::optional<int> IndirectTargetArgIdx;
       if (CI.IsIndirect && Op.NumInputs >= 1)
         IndirectTargetArgIdx = resolveIndirectTargetArgIdx(
-            Blk, static_cast<int>(OI), TRI, Op.Inputs[0]);
+            Blk, static_cast<int>(OI), TRI, Op.Inputs[0], IsWin64);
 
       // The stack-store scan is windowed to the outgoing-arg setup just before
       // the call; it stops at the previous call boundary and lets the closest
@@ -377,13 +386,21 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         if (Prev.Opcode == NdOp::STORE && Prev.NumInputs >= 2)
           if (auto D = stackPtrDelta(Blk, TRI, Prev.Inputs[0]))
             if (int64_t Rel = *D - CallSpDelta; Rel >= 0) {
+              if (IsWin64 && Rel < static_cast<int64_t>(IntParamRegs.size() *
+                                                        TRI.PointerSize))
+                continue;
               HasStackArg = true;
-              if (Rel == 0 && !(Prev.Inputs[1].Kind == MedVar::Reg &&
-                                TRI.isFrameOrLinkReg(Prev.Inputs[1].RegOff)))
+              const int64_t FirstStackOff =
+                  IsWin64 ? static_cast<int64_t>(IntParamRegs.size() *
+                                                 TRI.PointerSize)
+                          : 0;
+              if (Rel == FirstStackOff &&
+                  !(Prev.Inputs[1].Kind == MedVar::Reg &&
+                    TRI.isFrameOrLinkReg(Prev.Inputs[1].RegOff)))
                 HasStackArgAtCallSP = true;
             }
       }
-      const int NumIntParamRegs = static_cast<int>(TRI.IntParamRegs.size());
+      const int NumIntParamRegs = static_cast<int>(IntParamRegs.size());
 
       // An argument already resident in its parameter register — a loop-carried
       // value never re-moved before the call, e.g. `for(...) acc = f(acc, i)`
@@ -410,7 +427,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           continue;
         if (!CI.IsIndirect && K > RegPhiLimit)
           break; // direct call: never invent a trailing argument
-        const PhiNode *Best = selectAuthoritativeArgPhi(Func, Blk, TRI, K);
+        const PhiNode *Best =
+            selectAuthoritativeArgPhi(Func, Blk, TRI, K, IsWin64);
         if (!Best) {
           if (CI.IsIndirect)
             break;  // indirect arguments are consecutive from arg0
@@ -439,7 +457,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           // the callee never takes is not invented as an argument.
           bool AllowLiveIn = (CalleeRegArgs >= 0 && K < CalleeRegArgs);
           bool FromLiveIn = false;
-          auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K,
+          auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K, IsWin64,
                                       AllowLiveIn, &FromLiveIn);
           if (!V)
             break;
@@ -502,7 +520,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         for (int K = 0; K < HiEvidenced && K < MaxArgs; ++K) {
           if (FoundMask[K])
             continue;
-          auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K,
+          auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K, IsWin64,
                                       /*AllowUnknownLiveIn=*/false, nullptr);
           if (!V)
             continue;
@@ -513,8 +531,9 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
 
       if (IndirectTargetArgIdx && *IndirectTargetArgIdx >= 0 &&
           *IndirectTargetArgIdx < MaxArgs && FoundMask[*IndirectTargetArgIdx]) {
-        std::optional<int> ValueArgIdx = resolveIndirectTargetArgIdx(
-            Blk, static_cast<int>(OI), TRI, Found[*IndirectTargetArgIdx]);
+        std::optional<int> ValueArgIdx =
+            resolveIndirectTargetArgIdx(Blk, static_cast<int>(OI), TRI,
+                                        Found[*IndirectTargetArgIdx], IsWin64);
         if (ValueArgIdx == IndirectTargetArgIdx) {
           FoundMask[*IndirectTargetArgIdx] = false;
           Found[*IndirectTargetArgIdx] = MedVar();
@@ -682,7 +701,15 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           continue;
 
         int SlotSize = TRI.PointerSize;
-        const int NumRegArgSlots = static_cast<int>(TRI.IntParamRegs.size());
+        int64_t SlotOff = StackOff;
+        if (IsWin64) {
+          const int64_t ShadowBytes =
+              static_cast<int64_t>(IntParamRegs.size() * TRI.PointerSize);
+          if (SlotOff < ShadowBytes)
+            continue;
+          SlotOff -= ShadowBytes;
+        }
+        const int NumRegArgSlots = static_cast<int>(IntParamRegs.size());
         // The argument index of the first stack slot [call_sp + 0]:
         //  - i386 cdecl: arg FirstStackSlot (every argument is stack-passed).
         //  - Darwin AArch64 variadic: arg NumFixed (all varargs are
@@ -692,7 +719,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         int StackArgBase = (TheArch == Arch::X86)  ? FirstStackSlot
                            : DarwinVarArgBase >= 0 ? DarwinVarArgBase
                                                    : NumRegArgSlots;
-        int SlotIdx = StackArgBase + static_cast<int>(StackOff / SlotSize);
+        int SlotIdx = StackArgBase + static_cast<int>(SlotOff / SlotSize);
 
         // Record an FP/vector-register-valued outgoing store at store
         // granularity so packed floats are not collapsed by the slot model.
@@ -730,7 +757,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
               bool InputIsParam = false;
               for (int AI = 0; AI < MaxArgs; ++AI) {
                 if (Def.Inputs[0].Kind == MedVar::Reg &&
-                    TRI.regToArgIdx(Def.Inputs[0].RegOff) >= 0) {
+                    regToIntArgIdx(Def.Inputs[0].RegOff) >= 0) {
                   InputIsParam = true;
                   break;
                 }
@@ -816,10 +843,10 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // args are a separate, documented gap (ind-variadic-note family).
       if (!CI.IsIndirect && !IntStackByOff.empty() && TRI.PointerSize > 0) {
         const int PackSlotSize = TRI.PointerSize;
-        const int PackStackBase =
-            (TheArch == Arch::X86)  ? FirstStackSlot
-            : DarwinVarArgBase >= 0 ? DarwinVarArgBase
-                                    : static_cast<int>(TRI.IntParamRegs.size());
+        const int PackStackBase = (TheArch == Arch::X86) ? FirstStackSlot
+                                  : DarwinVarArgBase >= 0
+                                      ? DarwinVarArgBase
+                                      : static_cast<int>(IntParamRegs.size());
         std::map<int, std::vector<std::pair<int64_t, MedVar>>> BySlot;
         for (auto &E : IntStackByOff) {
           int Slot = PackStackBase + static_cast<int>(E.first / PackSlotSize);
@@ -1136,7 +1163,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       if (CI.IsIndirect && !FPStackByOff.empty() && !TRI.FPParamRegs.empty() &&
           static_cast<int>(FoundFP.size()) ==
               static_cast<int>(TRI.FPParamRegs.size())) {
-        const int NumRegArgSlots = static_cast<int>(TRI.IntParamRegs.size());
+        const int NumRegArgSlots = static_cast<int>(IntParamRegs.size());
         const int SlotSize = TRI.PointerSize;
         int64_t Next = 0;
         for (auto &Entry : FPStackByOff) {
@@ -1192,7 +1219,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       // promoted only during its own ABI recovery, so its arity is not yet
       // known here, and the emitter truncates any surplus to the real
       // signature.
-      const int NumIntRegArgs = static_cast<int>(TRI.IntParamRegs.size());
+      const int NumIntRegArgs = static_cast<int>(IntParamRegs.size());
       bool CalleeHasFP = false;
       if (!CI.IsIndirect && !IsRelocExtern && CalleeFPArity) {
         auto FIt = CalleeFPArity->find(CI.TargetAddr);
@@ -1331,7 +1358,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         const int RegPrefix = static_cast<int>(IntPart.size());
         const int StackCnt = static_cast<int>(StackPart.size());
         if (RegPrefix > 0 && StackCnt > 0 &&
-            RegPrefix < static_cast<int>(TRI.IntParamRegs.size())) {
+            RegPrefix < static_cast<int>(IntParamRegs.size())) {
           bool WideBlob = false;
           if (StackCnt == 1) {
             for (int K = 0; K < MaxArgs; ++K)
@@ -1472,7 +1499,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
   // register parameters are known untouched.
   bool HasIntRegParam = false;
   for (const auto &P : Func.Params)
-    if (P.RegOff != kNoParamReg && TRI.regToArgIdx(P.RegOff) >= 0) {
+    if (P.RegOff != kNoParamReg && regToIntArgIdx(P.RegOff) >= 0) {
       HasIntRegParam = true;
       break;
     }
@@ -1488,7 +1515,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         P.Size = It->second.Size > 0 ? It->second.Size
                                      : static_cast<uint16_t>(TRI.PointerSize);
       } else {
-        P.RegOff = TRI.IntParamRegs[I];
+        P.RegOff = IntParamRegs[I];
         P.Size = TRI.FullRegWidth;
       }
       RegParams.push_back(P);
@@ -1618,8 +1645,15 @@ void finalizeVariadicCallees(std::vector<MedFunc> &Funcs, Arch TheArch,
     // count past this prefix is the overflow-argument count.
     int RegParamCount = 0;
     int MaxId = 0;
+    const bool CalleeIsWin64 =
+        TheArch == Arch::X64 && Callee.CC == CallingConv::Win64;
+    const llvm::ArrayRef<uint64_t> CalleeIntParamRegs =
+        CalleeIsWin64 && !TRI.Win64ParamRegs.empty() ? TRI.Win64ParamRegs
+                                                     : TRI.IntParamRegs;
     for (const auto &P : Callee.Params) {
-      if (P.RegOff != kNoParamReg && TRI.regToArgIdx(P.RegOff) >= 0)
+      if (P.RegOff != kNoParamReg &&
+          std::find(CalleeIntParamRegs.begin(), CalleeIntParamRegs.end(),
+                    P.RegOff) != CalleeIntParamRegs.end())
         ++RegParamCount;
       if (P.Id > MaxId)
         MaxId = P.Id;

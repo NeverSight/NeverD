@@ -33,6 +33,8 @@ NeverD 對已載入二進位做兩類記憶體安全分析，並以結構化 JSO
 
 `--pdb` / `--map` 指定權威伴生檔：讀取失敗是錯誤，不是靜默回退。`--no-debug` 在所有格式上都只讀映像本身。
 
+PDB 程序簽章用來區分有回傳值的配置函式與 `void` 釋放函式。PDB 區域變數與堆疊型別的完整恢復仍然有限；無法確認精確物件大小時，獵取會回退到框架／配置點模型並給出 UNKNOWN，而不會虛構容量。
+
 ### 名稱來源優先級
 
 每條發現都帶 `name_source`，說明被調名來自何處，依以下優先級選擇：
@@ -52,7 +54,7 @@ DWARF 命名的靜態連結 `memcpy` 報告 `dwarf`；匯入的 `memcpy` 在所�
 
 目錄是可設定表，不是寫死的集合。每個 **sink** 條目宣告弱點類別、角色（copy、format、alloc、free、realloc）以及相關參數槽（目的、來源、長度、容量）。每個 **source** 條目命名一個受攻擊者影響的輸入提供者。
 
-內建目錄涵蓋常見 C 執行階段拷貝族（`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…）、帶明確目的容量的加固 `_chk` 變體、配置與釋放族（`malloc`/`calloc`/`realloc`/`free`、operator `new`/`delete`），以及可選的 Win32 堆積 API。輸入來源包括 POSIX（`getenv`、`read`、`recv`、`fgets`、`fread`、`scanf`、程式引數）**以及** Win32（`GetCommandLineA/W`、`ReadFile`、`GetEnvironmentVariable*`），因此 PE 獵取不限於 POSIX 輸入。
+內建條目位於 [`SafetySinks.def`](../include/neverd/safety/SafetySinks.def) 與 [`SafetySources.def`](../include/neverd/safety/SafetySources.def)，涵蓋常見 C 執行階段拷貝族（`memcpy`/`memmove`/`strcpy`/`strcat`/`strncpy`/`gets`/…）、帶明確目的容量的加固 `_chk` 變體、配置與釋放族（`malloc`/`calloc`/`realloc`/`free`、operator `new`/`delete`），以及可選的 Win32 堆積 API。輸入來源包括 POSIX（`getenv`、`read`、`recv`、`fgets`、`fread`、`scanf`、程式引數）**以及** Win32（`GetCommandLineA/W`、`ReadFile`、`GetEnvironmentVariable*`），因此 PE 獵取不限於 POSIX 輸入。
 
 各格式拼寫摺疊到同一條目：去掉前導底線（`_malloc`、`___strcpy_chk`），透過別名匹配重整後的 operator new/delete。
 
@@ -74,9 +76,9 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 對每個拷貝 sink，獵取依此順序恢復目的容量——除錯宣告的陣列大小，然後是已知大小的堆積配置點，然後是可靠的堆疊框上界——並透過反向 SSA 行走（跟隨堆疊槽 spill/reload）對決定寫入長度的參數分類：
 
-- **常數長度** 直接與容量比較 → SAFE 或 UNSAFE。
-- **加固** `_chk` 拷貝帶執行階段目的上界 → SAFE。
-- **可證明有界** 的長度（回傳長度的呼叫、遮罩、鉗位）作為 SAFE skip 退出，並記錄原因。
+- **常數長度** 在精確容量內時為 SAFE。常數越界只有在已佐證路徑上可達 sink 時才為 UNSAFE；否則保持 UNKNOWN。
+- **加固** `_chk` 拷貝帶執行階段目的上界。請求被拒絕，或該上界已證明不超過恢復出的物件容量時為 SAFE；存在越過物件的可行寫入時為 UNSAFE；上界未恢復或結論不足時為 UNKNOWN。
+- **可證明有界** 的長度（回傳長度的呼叫、遮罩、鉗位）在求解前退出並記錄原因。只有目的大小精確時才是 SAFE；若只有包含區域上界，則仍為 UNKNOWN。
 - **受攻擊者影響** 且容量已知的長度交給位向量求解器：若存在大於容量的可行長度，裁決為 UNSAFE，求解器模型作為具體見證。
 - 其餘情況——未知長度或未知容量——為 UNKNOWN。
 
@@ -93,6 +95,8 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 - **釋放後使用** — 釋放之後仍可達解參考或不透明使用。
 
 配置與釋放 **包裝函式** 透過逐函式逃逸摘要識別，因此 `malloc`/`free` 轉發器不會掩蓋缺陷。互斥分支上的釋放不報告為重複釋放。
+
+堆狀態機先產生候選事件序列（配置、釋放、使用或返回出口）；只有第二遍在符號 LowIR 路徑上依序重放這些事件，並由求解器證明路徑謂詞可滿足後，發現才會成為高信心 UNSAFE。缺少 LowIR、不透明操作、無摘要呼叫、求解器不確定或探索預算耗盡，都會把候選降為 UNKNOWN。可能別名造成的記憶體 havoc 另行追蹤，因此一般堆疊框架寫入不會否決本來精確的可達性證據。
 
 ---
 
@@ -118,6 +122,8 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
   "verdict": "UNSAFE",
   "confidence": "HIGH",
   "capacity": 16,
+  "capacity_kind": "exact",
+  "corroboration": "path predicate and overflow are jointly satisfiable",
   "evidence": { "concrete_input": { "copy_length": "17", "argv[1]": "17 bytes" } }
 }
 ```
@@ -126,8 +132,9 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 
 ## 誤報邊界與範圍
 
-- 容量始終是上界，因此 UNSAFE 反映真實越界。宣告大小不可用的過小緩衝區可能被報 SAFE 而不是 UNSAFE（保守漏報，絕非誤報）。
-- 長度受限的拷貝作為 SAFE skip 退出；這優先保證獵取要證明的受攻擊者控制案例的精度。
-- **P0**（本發行，三種格式）：sink 目錄、參數預過濾、拷貝越界獵取、堆積生命週期稽核。
+- 容量要麼精確、要麼是真實物件大小的上界，因此 UNSAFE 反映真實越界。若精確大小不可用，而包含區域上界又不足以證明安全，結果為 UNKNOWN。
+- 長度受限的拷貝在求解前退出並計入 `skipped`；精確容量可證明 SAFE，只有上界時仍為 UNKNOWN。
+- 已入目錄的寬字元與追加拷貝，在元素位元組寬度或目的字串既有長度未恢復時保持 UNKNOWN。出參配置器與條件 `realloc` 的所有權轉移無法證明時也保持 UNKNOWN。
+- **P0**（本發行，三種格式）：sink 目錄、參數預過濾、拷貝越界獵取、堆積生命週期稽核。每個測試主機都執行 PE、ELF、Mach-O × x86-64、AArch64 六個已檢入樣例。
 - **P1**：堆疊/全域越界、未初始化讀、格式字串、更豐富的 PDB 堆疊型別、更多平台配置器。
 - **P2**：patch 插入的執行階段檢查、程序間攻擊者可達性。

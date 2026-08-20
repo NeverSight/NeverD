@@ -53,7 +53,11 @@ const char *readPath(const neverd_safety_options *In, size_t End,
 }
 
 std::string errorReport(const std::string &Message) {
-  llvm::json::Object O{{"ok", false}, {"error", Message}};
+  llvm::json::Object O{{"schema_version", 1},
+                       {"ok", false},
+                       {"verdict", "UNKNOWN"},
+                       {"confidence", "LOW"},
+                       {"error", Message}};
   return jsonToString(llvm::json::Value(std::move(O)));
 }
 
@@ -65,14 +69,14 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
     return errorReport("safety analysis supports native binaries only");
 
   safety::SinkCatalog Cat = safety::SinkCatalog::defaults();
-  if (const char *P = readPath(
-          Options, FIELD_END(neverd_safety_options, sinks_path),
-          Options ? Options->sinks_path : nullptr))
+  if (const char *P =
+          readPath(Options, FIELD_END(neverd_safety_options, sinks_path),
+                   Options ? Options->sinks_path : nullptr))
     if (llvm::Error E = Cat.mergeSinksFromFile(P))
       return errorReport(llvm::toString(std::move(E)));
-  if (const char *P = readPath(
-          Options, FIELD_END(neverd_safety_options, sources_path),
-          Options ? Options->sources_path : nullptr))
+  if (const char *P =
+          readPath(Options, FIELD_END(neverd_safety_options, sources_path),
+                   Options ? Options->sources_path : nullptr))
     if (llvm::Error E = Cat.mergeSourcesFromFile(P))
       return errorReport(llvm::toString(std::move(E)));
 
@@ -124,6 +128,8 @@ extern "C" {
 const char *neverd_session_audit_json(neverd_session_t Sess,
                                       const neverd_safety_options *Options) {
   auto *S = toSession(Sess);
+  if (!S)
+    return dupStr(errorReport("invalid session"));
   S->clearError();
   return dupStr(runSafety(S, Options, safety::Track::Audit));
 }
@@ -131,6 +137,8 @@ const char *neverd_session_audit_json(neverd_session_t Sess,
 const char *neverd_session_hunt_json(neverd_session_t Sess,
                                      const neverd_safety_options *Options) {
   auto *S = toSession(Sess);
+  if (!S)
+    return dupStr(errorReport("invalid session"));
   S->clearError();
   return dupStr(runSafety(S, Options, safety::Track::Hunt));
 }

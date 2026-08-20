@@ -6,14 +6,14 @@
 
 #include "neverd/safety/HuntEngine.h"
 
-#include "neverd/safety/ArgSlicer.h"
-#include "neverd/safety/ObjectModel.h"
-
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
+#include "neverd/safety/ArgSlicer.h"
+#include "neverd/safety/ObjectModel.h"
+#include "neverd/safety/SinkScanner.h"
 #include "neverd/solver/BitVectorSolver.h"
 #include "neverd/symbolic/SymExec.h"
 #include "neverd/symbolic/SymExpr.h"
@@ -47,7 +47,8 @@ void stampSite(Finding &F, const AnalysisInput &In, const MedFunc &Fn,
   F.Sink = Site.Sink;
   F.ArgIndex = Site.ArgIndex;
   if (In.Dbg) {
-    if (auto Loc = In.Dbg->sourceLocation(Site.CallVA); Loc && !Loc->File.empty())
+    if (auto Loc = In.Dbg->sourceLocation(Site.CallVA);
+        Loc && !Loc->File.empty())
       F.SourceLoc = Loc->File + ":" + std::to_string(Loc->Line);
   }
 }
@@ -64,7 +65,8 @@ bool pathFeasible(SymContext &Ctx, const std::vector<SymRef> &Constraints,
   Unknown = false;
   if (Constraints.empty())
     return true;
-  SymRef Pred = Constraints.size() == 1 ? Constraints[0] : Ctx.mkAnd(Constraints);
+  SymRef Pred =
+      Constraints.size() == 1 ? Constraints[0] : Ctx.mkAnd(Constraints);
   if (std::optional<llvm::APInt> C = Ctx.asConst(Pred))
     return !C->isZero();
   SatResult R = checkSat(Ctx, Pred, nullptr, solverOpts(Budgets));
@@ -103,9 +105,8 @@ void addWitness(Finding &F, const SinkEntry &E, uint64_t Length,
   F.Witness.push_back({"copy_length", std::to_string(Length)});
   const bool ImplicitLen = E.LenArg < 0 && E.SrcArg >= 0;
   std::string InputName =
-      !TaintSource.empty()
-          ? (TaintSource == "argv" ? "argv[1]" : TaintSource)
-          : (ImplicitLen ? "source" : "length");
+      !TaintSource.empty() ? (TaintSource == "argv" ? "argv[1]" : TaintSource)
+                           : (ImplicitLen ? "source" : "length");
   if (ImplicitLen || !TaintSource.empty())
     F.Witness.push_back({InputName, std::to_string(Length) + " bytes"});
 }
@@ -146,7 +147,8 @@ const MedCallInfo *medCallAt(const MedFunc &F, va_t Addr) {
   if (!Addr)
     return nullptr;
   for (const MedCallInfo &CI : F.CallInfos)
-    if (const MedOp *Op = medOpAt(F, CI.BlockId, CI.OpIdx); Op && Op->Addr == Addr)
+    if (const MedOp *Op = medOpAt(F, CI.BlockId, CI.OpIdx);
+        Op && Op->Addr == Addr)
       return &CI;
   return nullptr;
 }
@@ -157,6 +159,19 @@ bool isStringLengthCall(llvm::StringRef Name) {
   .Case(NAME, IS_LENGTH != 0)
 #include "neverd/safety/SafetyCallTraits.inc"
 #undef SAFETY_CALL_TRAIT
+      .Default(false);
+}
+
+bool usesWideElements(llvm::StringRef Name) {
+  return llvm::StringSwitch<bool>(SinkCatalog::normalize(Name))
+      .Cases({"wmemcpy", "wmemmove", "wcscpy", "wcscat"}, true)
+      .Default(false);
+}
+
+bool requiresStringExtents(llvm::StringRef Name) {
+  return llvm::StringSwitch<bool>(SinkCatalog::normalize(Name))
+      .Cases({"strcat", "strncat", "strlcat", "strlcpy"}, true)
+      .Cases({"strcat_chk", "strncat_chk"}, true)
       .Default(false);
 }
 
@@ -202,19 +217,45 @@ llvm::DenseSet<int> reverseReachable(const LowFunc &LF, int SinkId) {
   return Reach;
 }
 
-int takenSucc(const LowFunc &LF, const LowBlock &B, const LowOp &Br,
-              SymContext &Ctx, SymExec &Exec) {
+std::optional<int> takenSucc(const LowFunc &LF, const LowBlock &B,
+                             const LowOp &Br, SymContext &Ctx, SymExec &Exec) {
   if (Br.NumInputs < 1)
-    return B.Succs.empty() ? -1 : B.Succs.front();
+    return std::nullopt;
   SymRef T = Exec.branchTarget();
   if (!T.isValid() && Br.Inputs[0].isConst())
     T = Ctx.mkConst(64, Br.Inputs[0].Offset);
   if (std::optional<llvm::APInt> Addr = Ctx.asConst(T)) {
     int Id = blockIdAt(LF, Addr->getZExtValue());
-    if (Id >= 0)
+    if (Id >= 0 && B.hasSucc(Id))
       return Id;
   }
-  return B.Succs.empty() ? -1 : B.Succs.front();
+  return std::nullopt;
+}
+
+std::optional<int> entryBlockId(const LowFunc &LF) {
+  for (const LowBlock &B : LF.Blocks)
+    if (B.StartAddr == LF.Entry)
+      return B.Id;
+  for (const LowBlock &B : LF.Blocks)
+    if (LF.Entry >= B.StartAddr && LF.Entry < B.EndAddr)
+      return B.Id;
+
+  llvm::DenseSet<int> HasIncoming;
+  for (const LowBlock &B : LF.Blocks) {
+    if (!B.Preds.empty())
+      HasIncoming.insert(B.Id);
+    for (int Succ : B.Succs)
+      HasIncoming.insert(Succ);
+  }
+  std::optional<int> Entry;
+  for (const LowBlock &B : LF.Blocks) {
+    if (HasIncoming.count(B.Id))
+      continue;
+    if (Entry)
+      return std::nullopt;
+    Entry = B.Id;
+  }
+  return Entry;
 }
 
 int otherSucc(const LowBlock &B, int Taken) {
@@ -224,8 +265,8 @@ int otherSucc(const LowBlock &B, int Taken) {
   return -1;
 }
 
-SymRef readLength(const AnalysisInput &In, const MedFunc &Fn,
-                  const SinkEntry &E, const MedCallInfo &CI, SymState &State) {
+SymRef readCallArgument(const AnalysisInput &In, const MedFunc &Fn,
+                        int ArgIndex, const MedCallInfo &CI, SymState &State) {
   SymContext &Ctx = State.context();
   auto fromVar = [&](const MedVar &V) -> SymRef {
     if (V.isConst())
@@ -235,8 +276,8 @@ SymRef readLength(const AnalysisInput &In, const MedFunc &Fn,
     return SymRef();
   };
 
-  if (E.LenArg >= 0 && E.LenArg < static_cast<int>(CI.Args.size())) {
-    if (SymRef R = fromVar(CI.Args[E.LenArg]); R.isValid())
+  if (ArgIndex >= 0 && ArgIndex < static_cast<int>(CI.Args.size())) {
+    if (SymRef R = fromVar(CI.Args[ArgIndex]); R.isValid())
       return Ctx.mkZExtOrTrunc(R, 64);
   }
 
@@ -245,12 +286,11 @@ SymRef readLength(const AnalysisInput &In, const MedFunc &Fn,
   const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
   llvm::ArrayRef<uint64_t> Params =
       Fn.CC == CallingConv::Win64 ? TRI.Win64ParamRegs : TRI.IntParamRegs;
-  const int Idx = E.LenArg >= 0 ? E.LenArg : -1;
-  if (Idx < 0 || Idx >= static_cast<int>(Params.size()))
+  if (ArgIndex < 0 || ArgIndex >= static_cast<int>(Params.size()))
     return SymRef();
   const uint16_t Bytes = TRI.PointerSize ? TRI.PointerSize : 8;
   return Ctx.mkZExtOrTrunc(
-      State.read(SymSpace::Register, Params[Idx], Bytes), 64);
+      State.read(SymSpace::Register, Params[ArgIndex], Bytes), 64);
 }
 
 struct ExploreHit {
@@ -259,13 +299,20 @@ struct ExploreHit {
   std::string PredText;
   bool Budget = false;
   bool SolverUnknown = false;
+  bool SemanticUnknown = false;
+  bool MissingLength = false;
   bool Reached = false;
 };
 
 void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
-                  uint64_t Capacity, const SafetyBudgets &Budgets) {
-  if (!Len.isValid())
+                  SymRef RuntimeCap, uint64_t Capacity,
+                  const SafetyBudgets &Budgets) {
+  if (!Len.isValid()) {
+    Best.MissingLength = true;
+    if (Best.Kind == ExploreHit::Miss)
+      Best.Kind = ExploreHit::Unresolved;
     return;
+  }
 
   BitVectorModel Model;
   SymRef WideLen = Ctx.mkZExtOrTrunc(Len, 64);
@@ -275,10 +322,13 @@ void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
   if (!Ctx.isConstOnes(Pred))
     Parts.push_back(Pred);
   Parts.push_back(Over);
+  if (RuntimeCap.isValid())
+    Parts.push_back(Ctx.mkUle(WideLen, Ctx.mkZExtOrTrunc(RuntimeCap, 64)));
   // A compact witness for an unconstrained length.  Do not add it when a path
   // predicate already forces a larger overflow — the bound would unsat a real
   // defect.
-  if (Ctx.isConstOnes(Pred) && Capacity <= UINT64_MAX - 1)
+  if (Ctx.isConstOnes(Pred) && !Ctx.isConst(WideLen) &&
+      Capacity <= UINT64_MAX - 1)
     Parts.push_back(Ctx.mkUle(WideLen, Ctx.mkConst(64, Capacity + 1)));
   SymRef Query = Parts.size() == 1 ? Parts[0] : Ctx.mkAnd(Parts);
 
@@ -306,17 +356,29 @@ void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
     Best.Kind = ExploreHit::Unresolved;
 }
 
-ExploreHit exploreSink(const AnalysisInput &In, const MedFunc &Fn,
-                       const SinkSite &Site, const SinkEntry &E,
-                       uint64_t Capacity, const SafetyBudgets &Budgets) {
+ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
+                       const MedFunc &Fn, const SinkSite &Site,
+                       const SinkEntry &E, uint64_t Capacity,
+                       const SafetyBudgets &Budgets) {
   ExploreHit Best;
   const LowFunc *LF = In.findLowFunc(Fn.Entry);
   if (!LF || LF->Blocks.empty())
     return Best;
 
-  int SinkBlk = Site.CallVA ? blockIdAt(*LF, Site.CallVA) : -1;
-  if (SinkBlk < 0 && !LF->Blocks.empty())
-    SinkBlk = LF->Blocks.front().Id;
+  if (!LF->hasCompleteInstructionLift()) {
+    Best.SemanticUnknown = true;
+    return Best;
+  }
+
+  if (Site.CallVA == 0) {
+    Best.SemanticUnknown = true;
+    return Best;
+  }
+  int SinkBlk = blockIdAt(*LF, Site.CallVA);
+  if (SinkBlk < 0) {
+    Best.SemanticUnknown = true;
+    return Best;
+  }
   llvm::DenseSet<int> Reach = reverseReachable(*LF, SinkBlk);
   if (Reach.empty())
     for (const LowBlock &B : LF->Blocks)
@@ -326,9 +388,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const MedFunc &Fn,
   const unsigned MaxSteps = Budgets.MaxSteps ? Budgets.MaxSteps : (1u << 16);
   const unsigned MaxLoop = Budgets.MaxLoop ? Budgets.MaxLoop : 3;
 
-  const MedCallInfo *CI =
-      Site.CallInfoIndex < Fn.CallInfos.size() ? &Fn.CallInfos[Site.CallInfoIndex]
-                                               : nullptr;
+  const MedCallInfo *CI = Site.CallInfoIndex < Fn.CallInfos.size()
+                              ? &Fn.CallInfos[Site.CallInfoIndex]
+                              : nullptr;
   const bool Implicit = E.LenArg < 0;
 
   struct Frontier {
@@ -338,6 +400,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const MedFunc &Fn,
     unsigned Steps = 0;
     llvm::DenseMap<int, unsigned> Visits;
     SymRef ImplicitLen;
+    bool SemanticUnknown = false;
     explicit Frontier(SymContext &C) : State(C) {}
   };
 
@@ -351,8 +414,13 @@ ExploreHit exploreSink(const AnalysisInput &In, const MedFunc &Fn,
   SymContext Ctx;
   llvm::SmallVector<Frontier, 8> Pending;
   {
+    std::optional<int> Entry = entryBlockId(*LF);
+    if (!Entry) {
+      Best.SemanticUnknown = true;
+      return Best;
+    }
     Frontier Start(Ctx);
-    Start.BlockId = LF->Blocks.front().Id;
+    Start.BlockId = *Entry;
     Pending.push_back(std::move(Start));
   }
 
@@ -387,29 +455,56 @@ ExploreHit exploreSink(const AnalysisInput &In, const MedFunc &Fn,
 
         const bool IsSinkCall =
             (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
-            ((Site.CallVA != 0 && Op.Addr == Site.CallVA) ||
-             (Site.CallVA == 0 && Cur.BlockId == SinkBlk));
+            Op.Addr == Site.CallVA;
         if (IsSinkCall) {
           bool Unknown = false;
           if (!pathFeasible(Ctx, Cur.Constraints, Budgets, Unknown)) {
             Stopped = true;
             break;
           }
-          if (Unknown)
+          if (Unknown) {
             Best.SolverUnknown = true;
-          SymRef Pred = Cur.Constraints.empty()
-                            ? Ctx.mkTrue()
-                            : (Cur.Constraints.size() == 1
-                                   ? Cur.Constraints[0]
-                                   : Ctx.mkAnd(Cur.Constraints));
-          SymRef Len = CI ? readLength(In, Fn, E, *CI, Cur.State) : SymRef();
+            Best.Reached = true;
+            ++Finished;
+            HitSink = true;
+            Stopped = true;
+            break;
+          }
+          if (Cur.SemanticUnknown) {
+            Best.SemanticUnknown = true;
+            Best.Reached = true;
+            ++Finished;
+            HitSink = true;
+            Stopped = true;
+            break;
+          }
+          SymRef Pred =
+              Cur.Constraints.empty()
+                  ? Ctx.mkTrue()
+                  : (Cur.Constraints.size() == 1 ? Cur.Constraints[0]
+                                                 : Ctx.mkAnd(Cur.Constraints));
+          SymRef Len = CI ? readCallArgument(In, Fn, E.LenArg, *CI, Cur.State)
+                          : SymRef();
           if (!Len.isValid() && Cur.ImplicitLen.isValid()) {
             Len = Ctx.mkZExtOrTrunc(Cur.ImplicitLen, 64);
             if (Implicit)
               Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
           }
+          SymRef RuntimeCap;
+          if (E.CapArg >= 0) {
+            RuntimeCap = CI ? readCallArgument(In, Fn, E.CapArg, *CI, Cur.State)
+                            : SymRef();
+            if (!RuntimeCap.isValid()) {
+              Best.SemanticUnknown = true;
+              Best.Reached = true;
+              ++Finished;
+              HitSink = true;
+              Stopped = true;
+              break;
+            }
+          }
           Best.Reached = true;
-          considerSink(Best, Ctx, Pred, Len, Capacity, Budgets);
+          considerSink(Best, Ctx, Pred, Len, RuntimeCap, Capacity, Budgets);
           ++Finished;
           HitSink = true;
           Stopped = true;
@@ -417,12 +512,29 @@ ExploreHit exploreSink(const AnalysisInput &In, const MedFunc &Fn,
         }
 
         const MedCallInfo *Callee = medCallAt(Fn, Op.Addr);
-        const bool LengthCall =
-            Callee && isStringLengthCall(Callee->TargetName);
+        const std::string CalleeName =
+            Callee ? resolveCallName(In, *Callee) : "";
+        const bool LengthCall = Callee && isStringLengthCall(CalleeName);
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+          bool Summarized = LengthCall;
+          if (Callee && Cat.matchSource(CalleeName))
+            Summarized = true;
+          if (Callee)
+            if (const SinkEntry *Known = Cat.matchSink(CalleeName))
+              Summarized = Summarized || Known->Kind == SinkKind::Alloc ||
+                           Known->Kind == SinkKind::StackAlloc ||
+                           Known->Kind == SinkKind::Realloc;
+          if (!Summarized)
+            Cur.SemanticUnknown = true;
+        }
         StepResult SR = Exec.step(Op);
         if (LengthCall)
           Cur.ImplicitLen = captureReturn(Op, Cur.State, In);
-        if (SR == StepResult::Continue || SR == StepResult::Unmodelled)
+        if (SR == StepResult::Unmodelled) {
+          Cur.SemanticUnknown = true;
+          continue;
+        }
+        if (SR == StepResult::Continue)
           continue;
         if (SR == StepResult::Return) {
           Stopped = true;
@@ -430,19 +542,29 @@ ExploreHit exploreSink(const AnalysisInput &In, const MedFunc &Fn,
           break;
         }
         if (SR == StepResult::Branch || SR == StepResult::IndirectBranch) {
-          int Next = takenSucc(*LF, *Block, Op, Ctx, Exec);
-          if (Next >= 0 && Reach.count(Next)) {
+          std::optional<int> Next = takenSucc(*LF, *Block, Op, Ctx, Exec);
+          if (!Next) {
+            Best.SemanticUnknown = true;
+            Stopped = true;
+            break;
+          }
+          if (Reach.count(*Next)) {
             Frontier N = Cur;
-            N.BlockId = Next;
+            N.BlockId = *Next;
             Forks.push_back(std::move(N));
           }
           Stopped = true;
           break;
         }
         if (SR == StepResult::CondBranch) {
-          int Taken = takenSucc(*LF, *Block, Op, Ctx, Exec);
-          int NotTaken = otherSucc(*Block, Taken);
+          std::optional<int> Taken = takenSucc(*LF, *Block, Op, Ctx, Exec);
           SymRef Cond = Exec.branchCondition();
+          if (!Taken || !Cond.isValid()) {
+            Best.SemanticUnknown = true;
+            Stopped = true;
+            break;
+          }
+          int NotTaken = otherSucc(*Block, *Taken);
           auto fork = [&](int Next, SymRef Assume) {
             if (Next < 0 || !Reach.count(Next))
               return;
@@ -456,7 +578,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const MedFunc &Fn,
               Best.SolverUnknown = true;
             Forks.push_back(std::move(F));
           };
-          fork(Taken, Cond);
+          fork(*Taken, Cond);
           fork(NotTaken, Ctx.mkNot(Cond));
           Stopped = true;
           break;
@@ -492,43 +614,77 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
 
   Finding Out;
   stampSite(Out, In, F, Site);
-
-  if (E->CapArg >= 0) {
-    Out.TheVerdict = Verdict::Safe;
-    Out.TheConfidence = Confidence::High;
-    Out.Detail = "fortified copy with a runtime destination bound";
-    return Out;
-  }
+  const bool WideElements = usesWideElements(Site.Sink);
+  const bool NeedsStringExtents = requiresStringExtents(Site.Sink);
 
   ArgClassification Arg =
       classifyArgument(In, Cat, F, Site.CallInfoIndex, Site.ArgIndex);
   Out.Flow = Arg.Flow;
 
-  DestObject Dst = resolveDestination(In, Cat, F, Site.CallInfoIndex, E->DstArg);
-  if (Dst.Capacity)
-    Out.Capacity = Dst.Capacity;
-
-  if (Arg.ConstValue && Dst.Capacity) {
-    if (*Arg.ConstValue <= *Dst.Capacity) {
-      Out.TheVerdict = Verdict::Safe;
-      Out.TheConfidence = Confidence::High;
-      Out.Detail = "constant length within destination capacity";
-    } else {
-      Out.TheVerdict = Verdict::Unsafe;
-      Out.TheConfidence = Confidence::High;
-      Out.Detail = "constant length exceeds destination capacity";
-      Out.Witness.push_back({"copy_length", std::to_string(*Arg.ConstValue)});
-      Out.Witness.push_back({"capacity", std::to_string(*Dst.Capacity)});
+  const bool Fortified = E->CapArg >= 0;
+  std::optional<ArgClassification> RuntimeBound;
+  if (Fortified) {
+    if (Site.CallInfoIndex >= F.CallInfos.size() ||
+        E->CapArg >=
+            static_cast<int>(F.CallInfos[Site.CallInfoIndex].Args.size())) {
+      Out.TheVerdict = Verdict::Unknown;
+      Out.TheConfidence = Confidence::Low;
+      Out.Detail = "fortified destination bound was not recovered";
+      return Out;
     }
+    RuntimeBound = classifyArgument(In, Cat, F, Site.CallInfoIndex, E->CapArg);
+  }
+
+  DestObject Dst =
+      resolveDestination(In, Cat, F, Site.CallInfoIndex, E->DstArg);
+  if (Dst.Capacity) {
+    Out.Capacity = Dst.Capacity;
+    Out.CapacityExact = Dst.CapacityExact;
+  }
+
+  if (Fortified && E->LenArg >= 0 && Arg.ConstValue &&
+      RuntimeBound->UpperBound && *Arg.ConstValue > *RuntimeBound->UpperBound) {
+    Out.TheVerdict = Verdict::Safe;
+    Out.TheConfidence = Confidence::High;
+    Out.SkipReason = "fortified runtime bound rejects the constant length";
+    Out.Detail = "fortified copy aborts before writing the requested length";
     return Out;
   }
 
-  if (Arg.Flow == ArgFlow::Bounded) {
+  if (Fortified && Dst.CapacityExact && RuntimeBound->UpperBound &&
+      *RuntimeBound->UpperBound <= *Dst.Capacity) {
     Out.TheVerdict = Verdict::Safe;
-    Out.TheConfidence = Confidence::Medium;
-    Out.SkipReason = Arg.Reason.empty() ? "bounded length" : Arg.Reason;
-    Out.Detail = "retired by the argument prefilter";
+    Out.TheConfidence = Confidence::High;
+    Out.SkipReason = "fortified runtime bound fits the destination";
+    Out.Detail = "fortified copy cannot write beyond the recovered object";
     return Out;
+  }
+
+  if (WideElements || NeedsStringExtents) {
+    Out.TheVerdict = Verdict::Unknown;
+    Out.TheConfidence = Confidence::Low;
+    Out.Detail = WideElements
+                     ? "wide-element byte width is not established"
+                     : "source and destination string extents are unresolved";
+    return Out;
+  }
+
+  if (E->LenArg >= 0 && Arg.ConstValue && Dst.Capacity) {
+    if (*Arg.ConstValue <= *Dst.Capacity && Dst.CapacityExact) {
+      Out.TheVerdict = Verdict::Safe;
+      Out.TheConfidence = Confidence::High;
+      Out.SkipReason = Arg.Reason.empty() ? "constant length" : Arg.Reason;
+      Out.Detail = "constant length within destination capacity";
+      return Out;
+    }
+    if (*Arg.ConstValue <= *Dst.Capacity) {
+      Out.TheVerdict = Verdict::Unknown;
+      Out.TheConfidence = Confidence::High;
+      Out.SkipReason = Arg.Reason.empty() ? "constant length" : Arg.Reason;
+      Out.Detail = "constant length is bounded, but the exact destination size "
+                   "is unresolved";
+      return Out;
+    }
   }
 
   if (!Dst.Capacity) {
@@ -538,39 +694,59 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  ExploreHit Hit = exploreSink(In, F, Site, *E, *Dst.Capacity, Budgets);
+  if (E->LenArg >= 0 && Arg.Flow == ArgFlow::Bounded && Arg.UpperBound &&
+      *Arg.UpperBound <= *Dst.Capacity) {
+    Out.TheVerdict = Dst.CapacityExact ? Verdict::Safe : Verdict::Unknown;
+    Out.TheConfidence =
+        Dst.CapacityExact ? Confidence::Medium : Confidence::High;
+    Out.SkipReason = Arg.Reason.empty() ? "bounded length" : Arg.Reason;
+    Out.Detail =
+        Dst.CapacityExact
+            ? "proven argument bound fits destination capacity"
+            : "length is bounded, but the exact destination size is unresolved";
+    return Out;
+  }
+
+  ExploreHit Hit = exploreSink(In, Cat, F, Site, *E, *Dst.Capacity, Budgets);
   if (Hit.Kind == ExploreHit::Overflow) {
     Out.TheVerdict = Verdict::Unsafe;
     Out.TheConfidence = Confidence::High;
-    Out.Detail = "copy length can exceed destination capacity on a reachable path";
+    Out.Detail =
+        "copy length can exceed destination capacity on a reachable path";
     Out.Constraints = Hit.PredText;
     addWitness(Out, *E, Hit.WitnessLen, Arg.TaintSource);
     Out.Corroboration = "path predicate and overflow are jointly satisfiable";
     Out.BudgetHit = Hit.Budget;
     return Out;
   }
-  if (Hit.Kind == ExploreHit::InBound && !Hit.Budget && !Hit.SolverUnknown) {
-    Out.TheVerdict = Verdict::Safe;
+  if (Hit.Kind == ExploreHit::InBound && Hit.Reached && !Hit.Budget &&
+      !Hit.SolverUnknown && !Hit.SemanticUnknown && !Hit.MissingLength) {
+    Out.TheVerdict = Dst.CapacityExact ? Verdict::Safe : Verdict::Unknown;
     Out.TheConfidence = Confidence::High;
-    Out.Detail = "every explored path keeps the copy within capacity";
+    Out.Detail = Dst.CapacityExact
+                     ? "every explored path keeps the copy within capacity"
+                     : "paths fit a containing-region upper bound, but the "
+                       "object size is unresolved";
     Out.Constraints = Hit.PredText;
     return Out;
   }
 
-  if (Arg.Flow == ArgFlow::Tainted) {
-    if (auto Len = abstractOverflowLen(*Dst.Capacity, Budgets)) {
-      Out.TheVerdict = Verdict::Unsafe;
-      Out.TheConfidence = Confidence::High;
-      Out.Detail = "attacker-controlled length can exceed destination capacity";
-      addWitness(Out, *E, *Len, Arg.TaintSource);
-      if (Hit.Budget && !Hit.Reached) {
-        Out.BudgetHit = true;
-        Out.Corroboration = "sink reachability not established in budget";
-      } else if (Hit.Reached) {
-        Out.Corroboration = "sink reachable on a symbolic path";
+  if (Arg.Flow == ArgFlow::Tainted && E->LenArg < 0 && E->SrcArg >= 0 &&
+      Hit.Reached && !Hit.Budget && !Hit.SolverUnknown &&
+      !Hit.SemanticUnknown) {
+    const bool GuardAllowsOverflow =
+        !Fortified ||
+        (RuntimeBound->ConstValue && *RuntimeBound->ConstValue > *Dst.Capacity);
+    if (GuardAllowsOverflow)
+      if (auto Len = abstractOverflowLen(*Dst.Capacity, Budgets)) {
+        Out.TheVerdict = Verdict::Unsafe;
+        Out.TheConfidence = Confidence::High;
+        Out.Detail =
+            "attacker-controlled length can exceed destination capacity";
+        addWitness(Out, *E, *Len, Arg.TaintSource);
+        Out.Corroboration = "sink reachable on a summarized symbolic path";
+        return Out;
       }
-      return Out;
-    }
   }
 
   Out.TheVerdict = Verdict::Unknown;
@@ -578,6 +754,10 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
   Out.BudgetHit = Hit.Budget;
   if (Hit.Budget)
     Out.Detail = "exploration budget exhausted";
+  else if (Hit.SemanticUnknown)
+    Out.Detail = "path contains an operation or call without a summary";
+  else if (Hit.SolverUnknown)
+    Out.Detail = "solver could not establish path feasibility";
   else
     Out.Detail = "length provenance unresolved";
   return Out;

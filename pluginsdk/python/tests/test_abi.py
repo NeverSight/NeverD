@@ -121,6 +121,26 @@ class ABIInventoryTests(unittest.TestCase):
             ],
         )
 
+    def test_safety_options_mirror_the_versioned_c_layout(self) -> None:
+        from neverd_plugin import abi
+
+        self.assertEqual(
+            [name for name, _ctype in abi.NeverDSafetyOptions._fields_],
+            [
+                "struct_size",
+                "max_paths",
+                "max_steps",
+                "max_loop",
+                "solver_conflicts",
+                "sinks_path",
+                "sources_path",
+            ],
+        )
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDSafetyOptions), 48)
+            self.assertEqual(abi.NeverDSafetyOptions.solver_conflicts.offset, 24)
+            self.assertEqual(abi.NeverDSafetyOptions.sinks_path.offset, 32)
+
     def test_every_exported_c_function_has_a_python_signature(self) -> None:
         from neverd_plugin import abi
 

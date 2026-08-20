@@ -37,7 +37,7 @@ cmake --build build-release --parallel 4
 |------------|-------------------|----------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | 跨平台子行程呼叫、引號、重新導向與結束碼 |
 | `unittests/libc` | `NeverDLibCTests` | 已知 libc 名稱與分類 |
-| `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | 匯目錄、身分優先序、參數預過濾、拷貝越界獵取、堆積生命週期稽核，以及宿主原生端到端 fixture |
+| `unittests/safety` | `NeverDSafetyTests`、`NeverDSafetyIntegrationTests` | 匯目錄、身分優先序、參數預過濾、拷貝越界獵取、堆積生命週期稽核，以及強制執行的 PE/ELF/Mach-O × x86-64/AArch64 六單元矩陣 |
 | `unittests/lift` | `NeverDLiftTests` | Decoder/lifter LowIR 形狀、IR 階段、loader、重定位、格式 fixture、反編譯與代表性 patch 流程 |
 | `unittests/semantic` 中的大多數檔案 | `NeverDSemanticTests` | 指令、ABI、控制流、C 運算式與 lift/recompile 差分語意 |
 | `unittests/evm` | `NeverDEVMOpcodeTests`、`NeverDEVMBytecodeTests`、`NeverDEVMLoaderTests`、`NeverDEVMAnalyzerTests`、`NeverDEVMSemanticTests`、`NeverDEVMEmitterTests`、`NeverDEVMIntegrationTests` | 硬分叉中繼資料、輸入正規化、CFG/SSA/還原、interpreter 語意、LLVM/C/Solidity 差分執行及公共 API routing |
@@ -146,6 +146,26 @@ patch 測試所需的可執行檔。`NeverDLiftTests` 依賴 `lift-test-objects`
 多數 lift 測試使用 `NeverDLiftFixture.h` 呼叫建置出的 `neverd` CLI，並檢查
 LowIR、MedIR、HighIR、LLVM IR、產生的 C 或重寫後的二進位。聚焦手動實驗可用
 `NEVERD` 環境變數覆寫 CLI 路徑；一般 CTest 執行使用 CMake 內嵌的可執行檔。
+
+### 記憶體安全 fixture
+
+`unittests/safety/fixtures/binaries` 檢入了 x86-64 與 AArch64 的 PE、ELF、
+Mach-O 映像，以及各格式對應的 PDB 或 dSYM 伴生檔，每個映像還附帶一份連結器
+MAP。MAP 是被 strip 的建置唯一還會留下的身分資訊，因此每個單元還會明確指定
+MAP 再分析一次，用來釘住在既無型別也無原始碼行號時結論還能說什麼。
+`NeverDSafetyIntegrationTests` 在每台主機上執行全部六個單元；任何必需映像或
+伴生檔缺失都會在設定階段失敗，測試不存在依宿主工具鏈跳過的路徑。
+
+六個等價二進位來自同一個原始檔。`make` 只重建宿主原生 smoke fixture；完整
+矩陣用：
+
+```bash
+make -C unittests/safety/fixtures matrix
+```
+
+完整重建需要 Clang 的 Linux／Windows 交叉目標、LLD COFF 工具、兩個 Darwin
+架構與 `dsymutil`。規則會重新映射除錯路徑並關閉 CodeView 命令列記錄，避免
+檢入的伴生檔捕捉開發者工作區絕對路徑。
 
 ### Windows 例外重建
 
@@ -354,7 +374,7 @@ GoogleTest 發現使用 `DISCOVERY_MODE PRE_TEST`，因此 CTest 列舉前必須
 | EVM loader、opcode、IR 或 backend | 最小的所屬 `NeverDEVM*Tests` 目標 | 所有 EVM 目標，以及產生 C/Solidity 的編譯檢查 |
 | SBF loader、ISA、IR 或後端 | 最小的所屬 `NeverDSBF*Tests` 目標 | 所有 SBF 目標，以及產生 C/Rust 的編譯檢查 |
 | Libc 辨識 | `NeverDLibCTests` | 行為變更時的語意 call/ABI 案例 |
-| 堆積生命週期稽核或拷貝越界獵取 | `NeverDSafetyTests` | 宿主原生 fixture 上的 `NeverDSafetyIntegrationTests` |
+| 堆積生命週期稽核或拷貝越界獵取 | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` 的全部六個單元 |
 | 行程執行或 quoting | `NeverDTestProcessTests` | 每個支援主機上的一個受影響 CLI/語意案例 |
 
 測試應在最低穩定邊界表達契約。LowIR 形狀測試適合歸因至 lifter；若兩種看似
@@ -366,9 +386,7 @@ GoogleTest 發現使用 `DISCOVERY_MODE PRE_TEST`，因此 CTest 列舉前必須
 CI 在 Linux、macOS 和 Windows 上以 Release 開啟測試建置，先稽核發現的測試清單，
 再套用平台特定標籤排除。設定定義於 `.github/workflows/ci.yml` 與
 `scripts/audit_ci_test_inventory.py`。每個矩陣主機都必須包含 `NeverDSafetyTests`
-與 `NeverDSafetyIntegrationTests`：Linux 跑宿主 ELF fixture，macOS 跑 Mach-O，
-Windows 跑 PE。由於沒有單一矩陣 shard 代表所有昂貴套件，當機器具備全部跨目標
-工具時，本機 `check-neverd` 仍是最清楚的完整合併前訊號。
+與 `NeverDSafetyIntegrationTests`，而且每次都讀取同一組已檢入的 PE、ELF、Mach-O × x86-64、AArch64 fixture。由於沒有單一矩陣 shard 代表所有昂貴套件，當機器具備全部跨目標工具時，本機 `check-neverd` 仍是最清楚的完整合併前訊號。
 
 ## 目前 Solana SBF 一致性與 sanitizer profile
 

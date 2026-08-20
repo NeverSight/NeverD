@@ -71,7 +71,7 @@ C23/LLVM/Solidity backend, CLI/C API, Anvil differential을 포함합니다. hos
 | `hunt` 트랙 | 싱크 카탈로그 + 인수 사전 필터 + 목적지 용량 + 솔버 증거 |
 | 신원 계약 | 형식별 싱크 해석(PE IAT, ELF PLT, Mach-O dyld bind)과 PDB / DWARF / MAP 이름 출처 |
 
-**상태:** PE, ELF, Mach-O의 P0 완료. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 호스트 네이티브 fixture에 대한 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 감사와 헌트](../memory-safety.ko.md). P1은 스택/전역 오버플로, 미초기화 읽기, 형식 문자열로 확장합니다.
+**상태:** PE, ELF, Mach-O의 P0 완료. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 모든 호스트에서 필수 PE/ELF/Mach-O × x86-64/AArch64 6셀 fixture 매트릭스를 실행하는 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 감사와 헌트](../memory-safety.ko.md). P1은 스택/전역 오버플로, 미초기화 읽기, 형식 문자열로 확장합니다.
 
 ---
 

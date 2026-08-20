@@ -86,7 +86,7 @@ stack-SSA 復原、strict/relaxed 分析、C23/LLVM/Solidity backend、CLI/C API
 | `hunt` 軌道 | 匯目錄 + 參數預過濾 + 目標容量 + 求解器見證 |
 | 身分契約 | 依格式解析匯（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名稱來源 |
 
-**狀態：** PE、ELF、Mach-O 的 P0 已完成。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及針對宿主原生 fixture 的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。P1 將擴展到堆疊／全域越界、未初始化讀取與格式字串。
+**狀態：** PE、ELF、Mach-O 的 P0 已完成。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](../memory-safety.zh-TW.md)。P1 將擴展到堆疊／全域越界、未初始化讀取與格式字串。
 
 ---
 

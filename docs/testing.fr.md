@@ -43,7 +43,7 @@ découvert un label CTest identique au nom de cette cible.
 |-------------|----------------------|------------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Invocation de sous-processus multiplateforme, quoting, redirections et codes de sortie |
 | `unittests/libc` | `NeverDLibCTests` | Noms libc connus et classification |
-| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Catalogue de puits, priorité d’identité, préfiltre d’arguments, chasse de débordement de copie, audit de durée de vie du tas, et fixture native hôte bout-en-bout |
+| `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Catalogue de puits, priorité d’identité, préfiltre d’arguments, chasse de débordement de copie, audit de durée de vie du tas et matrice obligatoire de six cellules PE/ELF/Mach-O × x86-64/AArch64 |
 | `unittests/lift` | `NeverDLiftTests` | Formes LowIR decoder/lifter, étapes IR, loaders, relocations, fixtures de format, décompilation et patch représentatif |
 | La plupart de `unittests/semantic` | `NeverDSemanticTests` | Sémantique différentielle des instructions, ABI, contrôle, expressions C et lift/recompile |
 | `unittests/evm` | `NeverDEVMOpcodeTests`, `NeverDEVMBytecodeTests`, `NeverDEVMLoaderTests`, `NeverDEVMAnalyzerTests`, `NeverDEVMSemanticTests`, `NeverDEVMEmitterTests`, `NeverDEVMIntegrationTests` | Metadata hardfork, normalisation d’entrée, CFG/SSA/récupération, sémantique interpréteur, exécution différentielle LLVM/C/Solidity et API publique |
@@ -172,6 +172,32 @@ La plupart des tests lift utilisent `NeverDLiftFixture.h` pour invoquer le CLI
 binaire réécrit. La variable d’environnement `NEVERD` peut remplacer le chemin
 du CLI lors d’une expérience manuelle ciblée ; les exécutions CTest ordinaires
 utilisent l’exécutable intégré par CMake.
+
+### Fixtures de sûreté mémoire
+
+`unittests/safety/fixtures/binaries` contient des images PE, ELF et Mach-O
+versionnées pour x86-64 et AArch64, accompagnées du PDB ou du dSYM que fournit
+chaque format et d’un MAP d’éditeur de liens pour chaque image. Le MAP est ce
+qu’une compilation dépouillée livre encore, aussi chaque cellule est-elle
+également analysée en nommant le MAP explicitement, ce qui fige ce qu’un
+résultat a le droit d’affirmer lorsqu’il ne reste ni types ni lignes source.
+`NeverDSafetyIntegrationTests` exécute les six cellules sur chaque hôte ; la
+configuration échoue si une image ou un fichier compagnon requis manque, et la
+suite n’a aucun chemin de contournement lié à la chaîne d’outils de l’hôte.
+
+Les binaires équivalents proviennent d’un seul fichier source. Reconstruisez la
+fixture smoke native de l’hôte avec `make`, ou régénérez la matrice complète
+versionnée avec :
+
+```bash
+make -C unittests/safety/fixtures matrix
+```
+
+La recette de la matrice exige les cibles croisées Linux et Windows de Clang,
+les outils COFF de LLD, les deux architectures Darwin et `dsymutil`. Ses chemins
+de débogage sont remappés et l’enregistrement de la ligne de commande CodeView
+est désactivé, afin que les compagnons versionnés ne capturent pas le chemin
+absolu de l’espace de travail d’un développeur.
 
 ### Reconstruction des exceptions Windows
 
@@ -407,7 +433,7 @@ doivent être élargis que pour des suites dont les cas lourds ont été mesuré
 | Loader, opcode, IR ou backend EVM | Plus petite cible propriétaire `NeverDEVM*Tests` | Toutes les cibles EVM et compilation du C/Solidity généré |
 | Loader, ISA, IR ou backend SBF | Plus petite cible propriétaire `NeverDSBF*Tests` | Toutes les cibles SBF et compilation du C/Rust généré |
 | Reconnaissance libc | `NeverDLibCTests` | Cas sémantiques call/ABI si le comportement change |
-| Audit de durée de vie du tas ou chasse de débordement de copie | `NeverDSafetyTests` | `NeverDSafetyIntegrationTests` sur une fixture native hôte |
+| Audit de durée de vie du tas ou chasse de débordement de copie | `NeverDSafetyTests` | Les six cellules de `NeverDSafetyIntegrationTests` |
 | Exécution ou quoting de processus | `NeverDTestProcessTests` | Un cas CLI/sémantique affecté sur chaque hôte pris en charge |
 
 Les tests doivent exprimer le contrat à la frontière stable la plus basse. Un
@@ -423,10 +449,10 @@ puis audite l’inventaire découvert avant d’appliquer les exclusions de labe
 propres à la plateforme. Les profils sont définis dans
 `.github/workflows/ci.yml` et `scripts/audit_ci_test_inventory.py`.
 `NeverDSafetyTests` et `NeverDSafetyIntegrationTests` sont exigés sur chaque
-hôte de la matrice : Linux exécute la fixture ELF native, macOS Mach-O, et
-Windows PE. Comme aucun shard de la matrice ne représente toutes les suites
-coûteuses, un `check-neverd` local reste le signal pré-fusion complet le plus
-clair si la machine possède tous les outils croisés nécessaires.
+hôte de la matrice ; chaque exécution lit les mêmes fixtures PE, ELF et Mach-O
+versionnées pour x86-64 et AArch64. Comme aucun shard de la matrice ne représente
+toutes les suites coûteuses, un `check-neverd` local reste le signal pré-fusion
+complet le plus clair si la machine possède tous les outils croisés nécessaires.
 
 ## Profil actuel de conformité et de sanitizers Solana SBF
 
