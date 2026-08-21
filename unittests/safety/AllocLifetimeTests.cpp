@@ -469,6 +469,65 @@ TEST(AllocLifetime, AlternateEscapeSitesProveWrapperEscaped) {
   EXPECT_FALSE(has(audit({Helper.F, User.F}), VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, ExceptionalExitDoesNotProveWrapperEscaped) {
+  FB Helper("exceptional_escape", 0x200);
+  Helper.F.Params = {temp(0)};
+  int hEntry = Helper.block();
+  int hPublish = Helper.block();
+  int hHandler = Helper.block();
+  Helper.succ(hEntry, hPublish);
+  ExceptionalEdge Edge;
+  Edge.BlockId = hHandler;
+  Helper.F.Blocks[hEntry].ExceptionalSuccs.push_back(Edge);
+  Helper.op(hPublish, NdOp::STORE, MedVar{},
+            {MedVar::makeConst(0x5000, 8), temp(0)});
+  Helper.ret(hPublish, {});
+  Helper.ret(hHandler, {});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(u0, "exceptional_escape", MedVar{}, {temp(1)}, 0x200);
+  User.ret(u0, {});
+
+  auto Fs = audit({Helper.F, User.F});
+  const Finding *UserLeak = nullptr;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+      UserLeak = &F;
+  ASSERT_NE(UserLeak, nullptr);
+  EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, ExceptionalExitDoesNotProveWrapperReleased) {
+  FB Helper("exceptional_free", 0x200);
+  Helper.F.Params = {temp(0)};
+  int hEntry = Helper.block();
+  int hFree = Helper.block();
+  int hHandler = Helper.block();
+  Helper.succ(hEntry, hFree);
+  ExceptionalEdge Edge;
+  Edge.BlockId = hHandler;
+  Helper.F.Blocks[hEntry].ExceptionalSuccs.push_back(Edge);
+  Helper.call(hFree, "free", MedVar{}, {temp(0)});
+  Helper.ret(hFree, {});
+  Helper.ret(hHandler, {});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(u0, "exceptional_free", MedVar{}, {temp(1)}, 0x200);
+  User.ret(u0, {});
+
+  auto Fs = audit({Helper.F, User.F});
+  const Finding *UserLeak = nullptr;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+      UserLeak = &F;
+  ASSERT_NE(UserLeak, nullptr);
+  EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
+}
+
 TEST(AllocLifetime, DoubleFreeSequential) {
   FB B("f", 0x100);
   int b0 = B.block();

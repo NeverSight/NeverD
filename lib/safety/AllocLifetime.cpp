@@ -662,6 +662,7 @@ private:
                                const std::vector<FreeEvent> &Events,
                                bool *ReachedEvent = nullptr) const {
     llvm::DenseSet<ValueKey> SeenPts;
+    llvm::DenseSet<int> ExpandedExceptional;
     std::deque<std::pair<int, int>> Work;
     auto enqueue = [&](int B, int O) {
       if (SeenPts.insert(ValueKey{0, B, O}).second)
@@ -679,6 +680,12 @@ private:
         }
       if (!Blk)
         continue;
+      if (ExpandedExceptional.insert(BlkId).second)
+        for (const ExceptionalEdge &Edge : Blk->ExceptionalSuccs) {
+          if (Edge.BlockId < 0)
+            return true;
+          enqueue(Edge.BlockId, 0);
+        }
       if (OpIdx >= static_cast<int>(Blk->Ops.size())) {
         if (Blk->Succs.empty())
           return true;
