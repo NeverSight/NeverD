@@ -463,6 +463,97 @@ LowFunc readFileThenMemcpyLow(va_t SourceVA, va_t MemcpyVA, va_t BytesReadVA,
   return LF;
 }
 
+LowFunc readFileFailureThenSinkLow(va_t SourceVA, va_t SinkVA, va_t BytesReadVA,
+                                   bool LoadCount,
+                                   uint64_t CopyLengthReg = 24) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kFlag = 200;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = SinkVA;
+  Entry.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9000, 8)}, SourceVA));
+  Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+                          {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
+                          SourceVA + 2));
+  Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kFlag, 1),
+                          {NdVar::reg(kRax, 4), NdVar::cst(0, 4)},
+                          SourceVA + 4));
+  Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(SinkVA, 8), NdVar::reg(kFlag, 1)},
+                          SourceVA + 8));
+  Entry.Succs = {1, 2};
+
+  Sink.Id = 1;
+  Sink.StartAddr = SinkVA;
+  Sink.EndAddr = SinkVA + 8;
+  Sink.Preds = {0};
+  Sink.Succs = {2};
+  if (LoadCount)
+    Sink.Ops.push_back(lop(NdOp::LOAD, NdVar::reg(CopyLengthReg, 4),
+                           {NdVar::cst(BytesReadVA, 8)}, SinkVA - 4));
+  Sink.Ops.push_back(lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, SinkVA));
+
+  Exit.Id = 2;
+  Exit.StartAddr = SinkVA + 8;
+  Exit.EndAddr = SinkVA + 16;
+  Exit.Preds = {0, 1};
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}, SinkVA + 8));
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
+LowFunc pointerReturnThenFormatLow(va_t SourceVA, va_t SinkVA,
+                                   bool RequireNull) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kFlag = 200;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = SinkVA;
+  Entry.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9000, 8)}, SourceVA));
+  if (RequireNull) {
+    Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kFlag, 1),
+                            {NdVar::reg(kRax, 8), NdVar::cst(0, 8)},
+                            SourceVA + 4));
+    Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                            {NdVar::cst(SinkVA, 8), NdVar::reg(kFlag, 1)},
+                            SourceVA + 8));
+    Entry.Succs = {1, 2};
+  } else {
+    Entry.Ops.push_back(
+        lop(NdOp::BRANCH, NdVar{}, {NdVar::cst(SinkVA, 8)}, SourceVA + 4));
+    Entry.Succs = {1};
+  }
+
+  Sink.Id = 1;
+  Sink.StartAddr = SinkVA;
+  Sink.EndAddr = SinkVA + 8;
+  Sink.Preds = {0};
+  Sink.Succs = {2};
+  Sink.Ops.push_back(lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, SinkVA));
+
+  Exit.Id = 2;
+  Exit.StartAddr = SinkVA + 8;
+  Exit.EndAddr = SinkVA + 16;
+  Exit.Preds = RequireNull ? std::vector<int>{0, 1} : std::vector<int>{1};
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}, SinkVA + 8));
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
 LowFunc formattedScalarThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
                                      va_t OutputSlot) {
   constexpr uint64_t kCopyLengthReg = 16;
@@ -937,6 +1028,44 @@ TEST(HuntEngine, ReachableTaintedFormatStringIsUnsafe) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
   EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, ReturnSourceCorroboratesReachableFormatInput) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("getenv", mkReg(0, 1), {param(1)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {mkReg(0, 1)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = pointerReturnThenFormatLow(SourceVA, SinkVA,
+                                          /*RequireNull=*/false);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, NullReturnSourceDoesNotCorroborateFormatInput) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("getenv", mkReg(0, 1), {param(1)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {mkReg(0, 1)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = pointerReturnThenFormatLow(SourceVA, SinkVA,
+                                          /*RequireNull=*/true);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, WritableConstantAddressDoesNotHideTaintedFormatString) {
@@ -1438,6 +1567,57 @@ TEST(HuntEngine, ReadFileByteCountUsesCOFFOutputContract) {
     EXPECT_EQ(Fnd->TheVerdict, C.Expected) << Fnd->Detail;
     EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
   }
+}
+
+TEST(HuntEngine, ReadFileFailureZeroesTheReportedByteCount) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  constexpr va_t BytesReadVA = 0x700000;
+  constexpr uint64_t CopyLengthReg = 24;
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("ReadFile", temp(5, 4),
+         {MedVar::makeConst(1, 8), param(2), MedVar::makeConst(32, 8),
+          MedVar::makeConst(BytesReadVA, 8), MedVar::makeConst(0, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.op(NdOp::LOAD, mkReg(CopyLengthReg, 1, 4),
+       {MedVar::makeConst(BytesReadVA, 8)});
+  B.call("memcpy", temp(0), {temp(1), param(2), mkReg(CopyLengthReg, 1, 4)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = readFileFailureThenSinkLow(SourceVA, SinkVA, BytesReadVA,
+                                          /*LoadCount=*/true, CopyLengthReg);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, ReadFileFailureDoesNotCorroborateStringInput) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  constexpr va_t BytesReadVA = 0x700000;
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("ReadFile", temp(5, 4),
+         {MedVar::makeConst(1, 8), param(2), MedVar::makeConst(32, 8),
+          MedVar::makeConst(BytesReadVA, 8), MedVar::makeConst(0, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = readFileFailureThenSinkLow(SourceVA, SinkVA, BytesReadVA,
+                                          /*LoadCount=*/false);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, FreadReturnHonorsElementCount) {

@@ -205,6 +205,8 @@ struct CountedSourceOutput {
   int CountPointerArg = -1;
   uint32_t CountBits = 0;
   uint32_t BoundBits = 0;
+  uint32_t ReturnBits = 0;
+  bool ZeroOnFailure = false;
 };
 
 struct BoundedStringOutput {
@@ -231,7 +233,7 @@ CountedSourceOutput countedSourceOutput(llvm::StringRef Name,
                                         BinaryFormat Format) {
   if (Format == BinaryFormat::COFF &&
       SinkCatalog::normalize(Name) == "ReadFile")
-    return {2, 3, 32, 32};
+    return {2, 3, 32, 32, 32, true};
   return {};
 }
 
@@ -313,6 +315,17 @@ bool predicateMustHold(SymContext &Ctx, SymRef Predicate,
   Counterexample.push_back(Ctx.mkNot(Predicate));
   bool Unknown = false;
   return !pathFeasible(Ctx, Counterexample, Budgets, Unknown) && !Unknown;
+}
+
+bool predicateMayHold(SymContext &Ctx, SymRef Predicate,
+                      const std::vector<SymRef> &Constraints,
+                      const SafetyBudgets &Budgets) {
+  if (!Predicate.isValid())
+    return true;
+  std::vector<SymRef> Candidate = Constraints;
+  Candidate.push_back(Predicate);
+  bool Unknown = false;
+  return pathFeasible(Ctx, Candidate, Budgets, Unknown) && !Unknown;
 }
 
 bool valuesShareUniqueLoadOrigin(const SymState &State, SymRef Left,
@@ -548,6 +561,12 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                               : nullptr;
   const bool Implicit = E.LenArg < 0;
 
+  struct SourceEvent {
+    std::string Name;
+    SymRef Buffer;
+    SymRef Success;
+  };
+
   struct Frontier {
     SymState State;
     std::vector<SymRef> Constraints;
@@ -557,7 +576,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     SymRef ImplicitLen;
     SymRef ImplicitSource;
     SymRef ImplicitSuccess;
-    std::vector<std::pair<std::string, SymRef>> SourceEvents;
+    std::vector<SourceEvent> SourceEvents;
     bool ImplicitFromLength = false;
     bool ImplicitLenIncludesTerminator = false;
     bool SemanticUnknown = false;
@@ -652,12 +671,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               CI ? readCallArgument(In, Fn, E.SrcArg, *CI, Cur.State)
                  : SymRef();
           if (!RequiredSource.empty()) {
-            for (const auto &[Name, Buffer] : Cur.SourceEvents) {
-              if (Name != RequiredSource)
+            for (const SourceEvent &Event : Cur.SourceEvents) {
+              if (Event.Name != RequiredSource)
                 continue;
-              if (expressionsMustEqual(Ctx, Buffer, SinkSource, Cur.Constraints,
-                                       Budgets) ||
-                  valuesShareUniqueLoadOrigin(Cur.State, Buffer, SinkSource)) {
+              if ((expressionsMustEqual(Ctx, Event.Buffer, SinkSource,
+                                        Cur.Constraints, Budgets) ||
+                   valuesShareUniqueLoadOrigin(Cur.State, Event.Buffer,
+                                               SinkSource)) &&
+                  predicateMayHold(Ctx, Event.Success, Cur.Constraints,
+                                   Budgets)) {
                 Best.SourceEvidence = true;
                 break;
               }
@@ -736,14 +758,14 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                 : nullptr;
         const SourceEntry *CalleeSource =
             Callee ? Cat.matchSource(CalleeName) : nullptr;
-        std::vector<std::pair<std::string, SymRef>> NewSourceEvents;
+        std::vector<SourceEvent> NewSourceEvents;
         if (Callee && CalleeSource && CalleeSource->OutArg >= 0 &&
             CalleeSource->OutArg < static_cast<int>(Callee->Args.size())) {
           SymRef Output = readCallArgument(In, Fn, CalleeSource->OutArg,
                                            *Callee, Cur.State);
           if (Output.isValid())
-            NewSourceEvents.emplace_back(SinkCatalog::normalize(CalleeName),
-                                         Output);
+            NewSourceEvents.push_back(
+                {SinkCatalog::normalize(CalleeName), Output, SymRef()});
         }
         if (Callee && CalleeSource)
           if (std::optional<safety::detail::FormattedSourceOutputs> Outputs =
@@ -755,8 +777,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               SymRef Output =
                   readCallArgument(In, Fn, ArgIndex, *Callee, Cur.State);
               if (Output.isValid())
-                NewSourceEvents.emplace_back(SinkCatalog::normalize(CalleeName),
-                                             Output);
+                NewSourceEvents.push_back(
+                    {SinkCatalog::normalize(CalleeName), Output, SymRef()});
             }
         SymRef ReturnBound;
         if (CountedReturnApplies)
@@ -806,10 +828,6 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.SemanticUnknown = true;
         }
         StepResult SR = Exec.step(Op);
-        if (IsCall)
-          Cur.SourceEvents.insert(Cur.SourceEvents.end(),
-                                  NewSourceEvents.begin(),
-                                  NewSourceEvents.end());
         SymRef CountedReturnValue;
         if (CountedReturnApplies) {
           SymRef Ret = captureReturn(Op, Cur.State, In);
@@ -849,7 +867,20 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           }
         }
         SymRef CountedOutputValue;
+        SymRef CountedOutputSuccess;
         if (CountedOutputApplies) {
+          const SymRef Ret = captureReturn(Op, Cur.State, In);
+          if (!Ret.isValid())
+            Cur.SemanticUnknown = true;
+          else {
+            SymRef SemanticRet = Ret;
+            if (CountedOutput.ReturnBits != 0 &&
+                CountedOutput.ReturnBits < Ctx.width(SemanticRet))
+              SemanticRet =
+                  Ctx.mkExtract(SemanticRet, 0, CountedOutput.ReturnBits);
+            CountedOutputSuccess =
+                Ctx.mkNe(SemanticRet, Ctx.mkZero(Ctx.width(SemanticRet)));
+          }
           const std::optional<llvm::APInt> CountPointerConstant =
               OutputCountPointer.isValid() ? Ctx.asConst(OutputCountPointer)
                                            : std::optional<llvm::APInt>();
@@ -867,9 +898,32 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.Constraints.push_back(
                 Ctx.mkUle(Ctx.mkZExtOrTrunc(CountedOutputValue, 64),
                           Ctx.mkZExtOrTrunc(SemanticBound, 64)));
+            if (CountedOutput.ZeroOnFailure && CountedOutputSuccess.isValid())
+              Cur.Constraints.push_back(Ctx.mkOr(
+                  CountedOutputSuccess,
+                  Ctx.mkEq(CountedOutputValue,
+                           Ctx.mkZero(Ctx.width(CountedOutputValue)))));
             Cur.State.store(OutputCountPointer, CountedOutputValue);
           }
         }
+        if (CountedOutputApplies && CountedOutputSuccess.isValid())
+          for (SourceEvent &Event : NewSourceEvents)
+            Event.Success = CountedOutputSuccess;
+        if (CalleeSource && CalleeSource->OutArg < 0 &&
+            CalleeSource->returnCarriesInput()) {
+          const SymRef Ret = captureReturn(Op, Cur.State, In);
+          if (!Ret.isValid()) {
+            Cur.SemanticUnknown = true;
+          } else {
+            NewSourceEvents.push_back(
+                {SinkCatalog::normalize(CalleeName), Ret,
+                 Ctx.mkNe(Ret, Ctx.mkZero(Ctx.width(Ret)))});
+          }
+        }
+        if (IsCall)
+          Cur.SourceEvents.insert(Cur.SourceEvents.end(),
+                                  NewSourceEvents.begin(),
+                                  NewSourceEvents.end());
         if (IsCall) {
           if (CaptureLength) {
             Cur.ImplicitLen = captureReturn(Op, Cur.State, In);
@@ -919,7 +973,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               std::remove_if(Cur.SourceEvents.begin(), Cur.SourceEvents.end(),
                              [&](const auto &Event) {
                                return writesStringTerminatorAtSource(
-                                   Ctx, Cur.State, Op, Event.second,
+                                   Ctx, Cur.State, Op, Event.Buffer,
                                    Cur.Constraints, Budgets);
                              }),
               Cur.SourceEvents.end());
