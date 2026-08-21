@@ -1606,8 +1606,37 @@ private:
       return ArgIndex < static_cast<int>(FixedCount) ? CallUse::Definite
                                                      : CallUse::Possible;
     }
-    if (const SourceEntry *Source = Cat.matchSource(Name))
-      return ArgIndex == Source->OutArg ? CallUse::Definite : CallUse::Possible;
+    if (const SourceEntry *Source = Cat.matchSource(Name)) {
+      if (ArgIndex != Source->OutArg)
+        return CallUse::Possible;
+      const std::string Normalized = SinkCatalog::normalize(Name);
+      auto countedOutputUse = [&](int CountArg) {
+        if (CountArg < 0 || CountArg >= static_cast<int>(CI.Args.size()))
+          return CallUse::Possible;
+        if (std::optional<uint64_t> Count = unsignedConstant(CI.Args[CountArg]))
+          return *Count == 0 ? CallUse::None : CallUse::Definite;
+        return CallUse::Possible;
+      };
+      if (Normalized == "read" || Normalized == "pread" ||
+          Normalized == "recv" || Normalized == "recvfrom" ||
+          Normalized == "ReadFile" || Normalized == "GetEnvironmentVariableA" ||
+          Normalized == "GetEnvironmentVariableW")
+        return countedOutputUse(2);
+      if (Normalized == "fread") {
+        if (CI.Args.size() <= 2)
+          return CallUse::Possible;
+        const std::optional<uint64_t> ElementSize =
+            unsignedConstant(CI.Args[1]);
+        const std::optional<uint64_t> ElementCount =
+            unsignedConstant(CI.Args[2]);
+        if ((ElementSize && *ElementSize == 0) ||
+            (ElementCount && *ElementCount == 0))
+          return CallUse::None;
+        return ElementSize && ElementCount ? CallUse::Definite
+                                           : CallUse::Possible;
+      }
+      return CallUse::Definite;
+    }
     if (isStringLengthCall(Name))
       return ArgIndex == 0 ? CallUse::Definite : CallUse::None;
     return CallUse::Possible;

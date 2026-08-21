@@ -955,6 +955,53 @@ TEST(AllocLifetime, UnknownCallUseOfFreedPointerIsNotDefinite) {
   EXPECT_NE(Use->Detail.find("may access"), std::string::npos);
 }
 
+TEST(AllocLifetime, ZeroLengthInputSourcesDoNotUseFreedOutputBuffer) {
+  struct SourceCase {
+    const char *Name;
+    std::vector<MedVar> Args;
+  };
+  const auto Buffer = temp(1);
+  const std::vector<SourceCase> Cases = {
+      {"read", {temp(3), Buffer, MedVar::makeConst(0, 8)}},
+      {"pread",
+       {temp(3), Buffer, MedVar::makeConst(0, 8), MedVar::makeConst(0, 8)}},
+      {"recv",
+       {temp(3), Buffer, MedVar::makeConst(0, 8), MedVar::makeConst(0, 8)}},
+      {"recvfrom",
+       {temp(3), Buffer, MedVar::makeConst(0, 8), MedVar::makeConst(0, 8),
+        temp(4), temp(5)}},
+      {"fread",
+       {Buffer, MedVar::makeConst(0, 8), MedVar::makeConst(4, 8), temp(3)}},
+      {"fread",
+       {Buffer, MedVar::makeConst(4, 8), MedVar::makeConst(0, 8), temp(3)}},
+      {"ReadFile",
+       {temp(3), Buffer, MedVar::makeConst(0, 8), temp(4), temp(5)}},
+      {"GetEnvironmentVariableA", {temp(3), Buffer, MedVar::makeConst(0, 8)}}};
+
+  for (const SourceCase &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    FB B("f", 0x100);
+    int b0 = B.block();
+    B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call(b0, "free", MedVar{}, {temp(1)});
+    B.call(b0, C.Name, temp(2), C.Args);
+    B.ret(b0, {});
+
+    EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
+  }
+}
+
+TEST(AllocLifetime, PositiveLengthInputSourceUsesFreedOutputBuffer) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "read", temp(2), {temp(3), temp(1), MedVar::makeConst(1, 8)});
+  B.ret(b0, {});
+
+  EXPECT_TRUE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
 TEST(AllocLifetime, StringLengthCallDefinitelyUsesFreedStorage) {
   constexpr va_t MallocVA = 0x400;
   constexpr va_t FreeVA = 0x408;
