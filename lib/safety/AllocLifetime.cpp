@@ -1479,10 +1479,20 @@ private:
           Mem.stackOffsetThroughReloads(Source);
       if (!Offset || *Offset >= 0)
         continue;
-      const uint16_t ReadSize =
-          Bytes ? static_cast<uint16_t>(std::min<uint64_t>(
-                      *Bytes, std::numeric_limits<uint16_t>::max()))
-                : 1;
+      if (!Bytes || *Bytes > std::numeric_limits<uint16_t>::max()) {
+        Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
+                                 callName(CI), CI.TargetAddr, CI.IsIndirect);
+        Fn.ArgIndex = E->SrcArg;
+        Fn.TheVerdict = Verdict::Unknown;
+        Fn.TheConfidence = Confidence::Low;
+        Fn.Detail = !Count ? "copy source has a runtime length that may extend "
+                             "past initialized local stack bytes"
+                           : "copy source byte count exceeds the range of the "
+                             "local stack initialization audit";
+        Out.push_back(std::move(Fn));
+        continue;
+      }
+      const uint16_t ReadSize = static_cast<uint16_t>(*Bytes);
       const detail::ReachingStackValues Reaching =
           Mem.reachingRead(*Block, CI.OpIdx, Source, ReadSize);
       if (!Reaching.Reachable ||
@@ -1490,7 +1500,7 @@ private:
         continue;
 
       const bool Definite =
-          Count && !Reaching.HasUnknownWrites && Reaching.Values.empty();
+          !Reaching.HasUnknownWrites && Reaching.Values.empty();
       Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
                                callName(CI), CI.TargetAddr, CI.IsIndirect);
       Fn.ArgIndex = E->SrcArg;
