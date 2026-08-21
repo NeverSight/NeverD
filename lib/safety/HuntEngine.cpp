@@ -243,6 +243,14 @@ BoundedStringOutput boundedStringOutput(llvm::StringRef Name) {
   return {};
 }
 
+uint32_t outputSourceReturnBits(llvm::StringRef Name, BinaryFormat Format) {
+  if (Format != BinaryFormat::COFF)
+    return 0;
+  return llvm::StringSwitch<uint32_t>(SinkCatalog::normalize(Name))
+      .Cases({"GetEnvironmentVariableA", "GetEnvironmentVariableW"}, 32)
+      .Default(0);
+}
+
 bool mayWriteMemory(NdOp Opcode) {
   return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
          Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
@@ -759,6 +767,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         const SourceEntry *CalleeSource =
             Callee ? Cat.matchSource(CalleeName) : nullptr;
         std::vector<SourceEvent> NewSourceEvents;
+        bool HasFormattedSourceOutput = false;
         if (Callee && CalleeSource && CalleeSource->OutArg >= 0 &&
             CalleeSource->OutArg < static_cast<int>(Callee->Args.size())) {
           SymRef Output = readCallArgument(In, Fn, CalleeSource->OutArg,
@@ -771,8 +780,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           if (std::optional<safety::detail::FormattedSourceOutputs> Outputs =
                   safety::detail::recoverFormattedSourceOutputs(
                       In.Img, CalleeName, Callee->Args);
-              Outputs && Outputs->Kind ==
-                             safety::detail::FormattedSourceKind::ExternalInput)
+              Outputs &&
+              Outputs->Kind ==
+                  safety::detail::FormattedSourceKind::ExternalInput) {
+            HasFormattedSourceOutput = true;
             for (int ArgIndex : Outputs->UnboundedTextArgs) {
               SymRef Output =
                   readCallArgument(In, Fn, ArgIndex, *Callee, Cur.State);
@@ -780,6 +791,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                 NewSourceEvents.push_back(
                     {SinkCatalog::normalize(CalleeName), Output, SymRef()});
             }
+          }
         SymRef ReturnBound;
         if (CountedReturnApplies)
           ReturnBound = readCallArgument(In, Fn, CountedReturn.BoundArg,
@@ -829,6 +841,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         }
         StepResult SR = Exec.step(Op);
         SymRef CountedReturnValue;
+        SymRef CountedReturnSuccess;
         if (CountedReturnApplies) {
           SymRef Ret = captureReturn(Op, Cur.State, In);
           if (!ReturnBound.isValid() || !Ret.isValid())
@@ -841,6 +854,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             const uint32_t ReturnWidth = Ctx.width(ConstraintRet);
             const SymRef IsError =
                 Ctx.mkEq(ConstraintRet, Ctx.mkOnes(ReturnWidth));
+            CountedReturnSuccess =
+                CountedReturn.AllowsMinusOne
+                    ? Ctx.mkSgt(ConstraintRet, Ctx.mkZero(ReturnWidth))
+                    : Ctx.mkUgt(ConstraintRet, Ctx.mkZero(ReturnWidth));
             if (CountedReturn.ReturnBits != 0 &&
                 CountedReturn.ReturnBits < Ctx.width(Ret)) {
               const uint16_t PointerBytes =
@@ -866,6 +883,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             }
           }
         }
+        if (CountedReturnSuccess.isValid())
+          for (SourceEvent &Event : NewSourceEvents)
+            Event.Success = CountedReturnSuccess;
         SymRef CountedOutputValue;
         SymRef CountedOutputSuccess;
         if (CountedOutputApplies) {
@@ -909,6 +929,39 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         if (CountedOutputApplies && CountedOutputSuccess.isValid())
           for (SourceEvent &Event : NewSourceEvents)
             Event.Success = CountedOutputSuccess;
+        if (CalleeSource && CalleeSource->OutArg >= 0 &&
+            CalleeSource->returnCarriesInput()) {
+          const SymRef Ret = captureReturn(Op, Cur.State, In);
+          if (!Ret.isValid()) {
+            Cur.SemanticUnknown = true;
+          } else {
+            SymRef SemanticRet = Ret;
+            const uint32_t ReturnBits = outputSourceReturnBits(
+                CalleeName, In.Img ? In.Img->Format : BinaryFormat::Unknown);
+            if (ReturnBits != 0 && ReturnBits < Ctx.width(SemanticRet))
+              SemanticRet = Ctx.mkExtract(SemanticRet, 0, ReturnBits);
+            const SymRef ProducedInput =
+                Ctx.mkNe(SemanticRet, Ctx.mkZero(Ctx.width(SemanticRet)));
+            for (SourceEvent &Event : NewSourceEvents)
+              if (!Event.Success.isValid())
+                Event.Success = ProducedInput;
+          }
+        }
+        if (HasFormattedSourceOutput) {
+          const SymRef Ret = captureReturn(Op, Cur.State, In);
+          if (!Ret.isValid()) {
+            Cur.SemanticUnknown = true;
+          } else {
+            SymRef SemanticRet = Ret;
+            if (Ctx.width(SemanticRet) > 32)
+              SemanticRet = Ctx.mkExtract(SemanticRet, 0, 32);
+            const SymRef ProducedInput =
+                Ctx.mkSgt(SemanticRet, Ctx.mkZero(Ctx.width(SemanticRet)));
+            for (SourceEvent &Event : NewSourceEvents)
+              if (!Event.Success.isValid())
+                Event.Success = ProducedInput;
+          }
+        }
         if (CalleeSource && CalleeSource->OutArg < 0 &&
             CalleeSource->returnCarriesInput()) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);

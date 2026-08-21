@@ -509,8 +509,9 @@ LowFunc readFileFailureThenSinkLow(va_t SourceVA, va_t SinkVA, va_t BytesReadVA,
   return LF;
 }
 
-LowFunc pointerReturnThenFormatLow(va_t SourceVA, va_t SinkVA,
-                                   bool RequireNull) {
+LowFunc returnSourceThenFormatLow(va_t SourceVA, va_t SinkVA,
+                                  std::optional<uint64_t> RequiredReturn,
+                                  uint16_t ReturnBytes = 8) {
   constexpr uint64_t kRax = 0;
   constexpr uint64_t kFlag = 200;
   constexpr va_t kEntry = 0x400000;
@@ -522,9 +523,14 @@ LowFunc pointerReturnThenFormatLow(va_t SourceVA, va_t SinkVA,
   Entry.EndAddr = SinkVA;
   Entry.Ops.push_back(
       lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9000, 8)}, SourceVA));
-  if (RequireNull) {
+  if (RequiredReturn) {
+    if (ReturnBytes < 8)
+      Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, ReturnBytes),
+                              {NdVar::reg(kRax, 8), NdVar::cst(0, ReturnBytes)},
+                              SourceVA + 2));
     Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kFlag, 1),
-                            {NdVar::reg(kRax, 8), NdVar::cst(0, 8)},
+                            {NdVar::reg(kRax, ReturnBytes),
+                             NdVar::cst(*RequiredReturn, ReturnBytes)},
                             SourceVA + 4));
     Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
                             {NdVar::cst(SinkVA, 8), NdVar::reg(kFlag, 1)},
@@ -546,7 +552,7 @@ LowFunc pointerReturnThenFormatLow(va_t SourceVA, va_t SinkVA,
   Exit.Id = 2;
   Exit.StartAddr = SinkVA + 8;
   Exit.EndAddr = SinkVA + 16;
-  Exit.Preds = RequireNull ? std::vector<int>{0, 1} : std::vector<int>{1};
+  Exit.Preds = RequiredReturn ? std::vector<int>{0, 1} : std::vector<int>{1};
   Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}, SinkVA + 8));
   LF.Blocks.push_back(std::move(Entry));
   LF.Blocks.push_back(std::move(Sink));
@@ -1040,8 +1046,7 @@ TEST(HuntEngine, ReturnSourceCorroboratesReachableFormatInput) {
   B.F.Blocks[0].Ops.back().Addr = SourceVA;
   B.call("printf", temp(0), {mkReg(0, 1)});
   B.F.Blocks[0].Ops.back().Addr = SinkVA;
-  LowFunc LF = pointerReturnThenFormatLow(SourceVA, SinkVA,
-                                          /*RequireNull=*/false);
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, std::nullopt);
 
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
   ASSERT_TRUE(Fnd.has_value());
@@ -1059,10 +1064,96 @@ TEST(HuntEngine, NullReturnSourceDoesNotCorroborateFormatInput) {
   B.F.Blocks[0].Ops.back().Addr = SourceVA;
   B.call("printf", temp(0), {mkReg(0, 1)});
   B.F.Blocks[0].Ops.back().Addr = SinkVA;
-  LowFunc LF = pointerReturnThenFormatLow(SourceVA, SinkVA,
-                                          /*RequireNull=*/true);
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, 0);
 
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, FailedReadDoesNotCorroborateFormatBuffer) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("read", mkReg(0, 1),
+         {MedVar::makeConst(0, 8), SourceBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, UINT64_MAX);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, FailedEnvironmentQueryDoesNotCorroborateFormatBuffer) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("GetEnvironmentVariableA", mkReg(0, 1),
+         {param(1), SourceBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, 0,
+                                         /*ReturnBytes=*/4);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, EnvironmentQueryCorroboratesReachableFormatBuffer) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("GetEnvironmentVariableA", mkReg(0, 1),
+         {param(1), SourceBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, std::nullopt);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, FailedScanfDoesNotCorroborateFormatBuffer) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("scanf", mkReg(0, 1, 4),
+         {MedVar::makeConst(FormatVA, 8), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, UINT32_MAX,
+                                         /*ReturnBytes=*/4);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
   EXPECT_TRUE(Fnd->Witness.empty());
