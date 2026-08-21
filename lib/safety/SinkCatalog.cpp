@@ -35,8 +35,13 @@ std::string SinkCatalog::normalize(llvm::StringRef StatedName) {
         IsStdcallSuffix = false;
         break;
       }
-    if (IsStdcallSuffix)
+    if (IsStdcallSuffix) {
       S = S.take_front(At);
+      if (S.starts_with('@'))
+        S = S.drop_front();
+      if (S.ends_with('@'))
+        S = S.drop_back();
+    }
   }
   return S.str();
 }
