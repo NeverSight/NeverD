@@ -156,46 +156,99 @@ public:
   }
 
 private:
+  struct ExactDataIdentity {
+    uint64_t Address = 0;
+    uint64_t OwnerVA = InvalidVA;
+  };
+
   const AnalysisInput &In;
   const SinkCatalog &Cat;
   const MedFunc &F;
   DefIndex Defs;
   llvm::DenseSet<ValueKey> Active;
 
+  std::optional<ExactDataIdentity>
+  exactDataIdentity(const MedVar &V, int Depth,
+                    llvm::DenseSet<ValueKey> &Seen) const {
+    if (V.isConst()) {
+      if (V.Provenance != ConstantAddressProvenance::DataAddress ||
+          V.AddressOwnerVA == InvalidVA)
+        return std::nullopt;
+      return ExactDataIdentity{truncateToSize(V.ConstVal, V.Size),
+                               V.AddressOwnerVA};
+    }
+    if (Depth > 32 || !Seen.insert(keyOf(V)).second)
+      return std::nullopt;
+    struct Pop {
+      llvm::DenseSet<ValueKey> &Set;
+      ValueKey Key;
+      ~Pop() { Set.erase(Key); }
+    } Guard{Seen, keyOf(V)};
+
+    int Blk = 0, Oi = 0;
+    const MedOp *Op = defOp(V, Blk, Oi);
+    if (!Op || Op->NumInputs != 1 || Op->Output.Size != Op->Inputs[0].Size ||
+        (Op->Opcode != NdOp::COPY && Op->Opcode != NdOp::CAST))
+      return std::nullopt;
+    return exactDataIdentity(Op->Inputs[0], Depth + 1, Seen);
+  }
+
   std::optional<DestObject> globalObject(const MedVar &V) const {
     if (!In.Img)
       return std::nullopt;
+    llvm::DenseSet<ValueKey> IdentitySeen;
+    const std::optional<ExactDataIdentity> Identity =
+        exactDataIdentity(V, 0, IdentitySeen);
     llvm::DenseSet<ValueKey> Seen;
-    std::optional<uint64_t> Address = constantValue(V, 0, Seen);
+    std::optional<uint64_t> Address =
+        Identity ? std::optional<uint64_t>(Identity->Address)
+                 : constantValue(V, 0, Seen);
     if (!Address)
       return std::nullopt;
-    const bool IsOwnedZero = *Address == 0 && V.isConst() &&
-                             isDataAddressProvenance(V.Provenance) &&
-                             V.AddressOwnerVA != InvalidVA;
-    if (*Address == 0 && !IsOwnedZero)
+    if (*Address == 0 && !Identity)
       return std::nullopt;
 
-    const Segment *Seg = In.Img->getSegmentFor(*Address);
-    if (!Seg || !Seg->isWritable() || Seg->Size > InvalidVA - Seg->VA)
-      return std::nullopt;
-    if (IsOwnedZero) {
-      const Segment *OwnerSeg = In.Img->getSegmentFor(V.AddressOwnerVA);
-      const Section *TargetSec = In.Img->getSectionFor(*Address);
-      const Section *OwnerSec = In.Img->getSectionFor(V.AddressOwnerVA);
-      if (OwnerSeg != Seg || ((TargetSec || OwnerSec) && TargetSec != OwnerSec))
+    const Segment *Seg = nullptr;
+    const Section *Sec = nullptr;
+    uint64_t OwnerBegin = 0;
+    uint64_t OwnerEnd = 0;
+    if (Identity) {
+      Seg = In.Img->getSegmentFor(Identity->OwnerVA);
+      if (!Seg || !Seg->isWritable() || Seg->Size > InvalidVA - Seg->VA)
         return std::nullopt;
-    }
-    const uint64_t SegmentEnd = Seg->VA + Seg->Size;
-    uint64_t OwnerBegin = Seg->VA;
-    uint64_t OwnerEnd = SegmentEnd;
-    if (const Section *Sec = In.Img->getSectionFor(*Address)) {
-      if (!Sec->isWritable() || Sec->Size == 0 ||
-          Sec->Size > InvalidVA - Sec->VA)
+      const uint64_t SegmentEnd = Seg->VA + Seg->Size;
+      Sec = In.Img->getSectionFor(Identity->OwnerVA);
+      if (Sec) {
+        if (!Sec->isWritable() || Sec->Size == 0 ||
+            Sec->Size > InvalidVA - Sec->VA)
+          return std::nullopt;
+        OwnerBegin = Sec->VA;
+        OwnerEnd = std::min<uint64_t>(SegmentEnd, Sec->VA + Sec->Size);
+      } else {
+        if (In.Img->segmentHasReadableSectionMetadata(*Seg))
+          return std::nullopt;
+        OwnerBegin = Seg->VA;
+        OwnerEnd = SegmentEnd;
+      }
+      if (*Address < OwnerBegin || *Address > OwnerEnd)
         return std::nullopt;
-      OwnerBegin = Sec->VA;
-      OwnerEnd = std::min<uint64_t>(OwnerEnd, Sec->VA + Sec->Size);
-    } else if (In.Img->segmentHasReadableSectionMetadata(*Seg)) {
-      return std::nullopt;
+    } else {
+      Seg = In.Img->getSegmentFor(*Address);
+      if (!Seg || !Seg->isWritable() || Seg->Size > InvalidVA - Seg->VA)
+        return std::nullopt;
+      const uint64_t SegmentEnd = Seg->VA + Seg->Size;
+      OwnerBegin = Seg->VA;
+      OwnerEnd = SegmentEnd;
+      Sec = In.Img->getSectionFor(*Address);
+      if (Sec) {
+        if (!Sec->isWritable() || Sec->Size == 0 ||
+            Sec->Size > InvalidVA - Sec->VA)
+          return std::nullopt;
+        OwnerBegin = Sec->VA;
+        OwnerEnd = std::min<uint64_t>(OwnerEnd, Sec->VA + Sec->Size);
+      } else if (In.Img->segmentHasReadableSectionMetadata(*Seg)) {
+        return std::nullopt;
+      }
     }
 
     std::optional<uint64_t> ExactCapacity;
@@ -227,8 +280,9 @@ private:
     if (*Address > OwnerEnd)
       return std::nullopt;
     Result.Capacity = OwnerEnd - *Address;
-    Result.CapacityExact = false;
-    Result.Detail = "mapped global bound";
+    Result.CapacityExact = Identity && *Address == OwnerEnd;
+    Result.Detail = Result.CapacityExact ? "relocation owner boundary"
+                                         : "mapped global bound";
     return Result;
   }
 

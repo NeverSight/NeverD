@@ -277,6 +277,61 @@ TEST(ObjectModel, GlobalCapacityUsesWritableSectionOwnership) {
                    .Capacity.has_value());
 }
 
+TEST(ObjectModel, ExactOnePastDestinationKeepsItsRelocationOwnerAcrossFormats) {
+  constexpr std::array<std::pair<BinaryFormat, Arch>, 6> Targets = {{
+      {BinaryFormat::ELF, Arch::X64},
+      {BinaryFormat::ELF, Arch::AArch64},
+      {BinaryFormat::COFF, Arch::X64},
+      {BinaryFormat::COFF, Arch::AArch64},
+      {BinaryFormat::MachO, Arch::X64},
+      {BinaryFormat::MachO, Arch::AArch64},
+  }};
+  for (const auto &[Format, A] : Targets) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    SCOPED_TRACE(static_cast<int>(A));
+
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Format = Format;
+    Segment Mapping;
+    Mapping.Name = "rw";
+    Mapping.VA = 0x4000;
+    Mapping.Size = 0x40;
+    Mapping.FileSz = 0x40;
+    Mapping.Data.resize(0x40);
+    Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Img.Segments.push_back(std::move(Mapping));
+
+    Section Owner;
+    Owner.Name = "owner";
+    Owner.VA = 0x4000;
+    Owner.Size = 0x10;
+    Owner.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Img.Sections.push_back(std::move(Owner));
+    Section Neighbour;
+    Neighbour.Name = "neighbour";
+    Neighbour.VA = 0x4010;
+    Neighbour.Size = 0x20;
+    Neighbour.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Img.Sections.push_back(std::move(Neighbour));
+
+    AnalysisInput In;
+    In.Img = &Img;
+    MedFunc F = newFunc(A);
+    push(F, NdOp::COPY, temp(1),
+         {MedVar::makeConst(0x4010, 8, ConstantAddressProvenance::DataAddress,
+                            0x4000)});
+    const size_t Sink = pushCall(F, "memcpy", temp(0),
+                                 {temp(1), temp(2), MedVar::makeConst(1, 8)});
+
+    DestObject D = resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_EQ(D.Region, ObjectRegion::Global);
+    ASSERT_TRUE(D.Capacity.has_value());
+    EXPECT_EQ(*D.Capacity, 0u);
+    EXPECT_TRUE(D.CapacityExact);
+  }
+}
+
 TEST(ObjectModel, HeapAllocationSurvivesStackSpillReload) {
   BinaryImage Img;
   Img.Arch = Arch::X64;
