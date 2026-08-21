@@ -172,6 +172,22 @@ bool usesWideElements(llvm::StringRef Name) {
       .Default(false);
 }
 
+std::optional<uint64_t> countedWideElementBytes(llvm::StringRef Name,
+                                                BinaryFormat Format) {
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  if (Normalized != "wmemcpy" && Normalized != "wmemmove")
+    return std::nullopt;
+  switch (Format) {
+  case BinaryFormat::COFF:
+    return 2;
+  case BinaryFormat::ELF:
+  case BinaryFormat::MachO:
+    return 4;
+  default:
+    return std::nullopt;
+  }
+}
+
 bool requiresStringExtents(llvm::StringRef Name) {
   return llvm::StringSwitch<bool>(SinkCatalog::normalize(Name))
       .Cases({"strcat", "strncat", "strlcat", "strlcpy"}, true)
@@ -1604,6 +1620,17 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     Out.SkipReason = "destination-size argument fits the destination";
     Out.Detail = "size-limited string operation cannot write beyond the "
                  "recovered object";
+    return Out;
+  }
+
+  const std::optional<uint64_t> WideElementBytes = countedWideElementBytes(
+      Site.Sink, In.Img ? In.Img->Format : BinaryFormat::Unknown);
+  if (WideElementBytes && Dst.Capacity && Dst.CapacityExact && Arg.UpperBound &&
+      *Arg.UpperBound <= *Dst.Capacity / *WideElementBytes) {
+    Out.TheVerdict = Verdict::Safe;
+    Out.TheConfidence = Confidence::High;
+    Out.SkipReason = "wide-element count fits the destination";
+    Out.Detail = "wide-element copy cannot write beyond the recovered object";
     return Out;
   }
 

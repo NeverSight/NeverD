@@ -2846,6 +2846,47 @@ TEST(HuntEngine, WideCopyFailsClosedUntilElementWidthIsModelled) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
 }
 
+TEST(HuntEngine, WideCopyUsesThePlatformElementWidth) {
+  struct Case {
+    const char *Name;
+    BinaryFormat Format;
+    uint64_t Count;
+    Verdict Expected;
+  } Cases[] = {
+      {"wmemcpy", BinaryFormat::COFF, 4, Verdict::Safe},
+      {"wmemmove", BinaryFormat::COFF, 4, Verdict::Safe},
+      {"wmemcpy", BinaryFormat::ELF, 2, Verdict::Safe},
+      {"wmemmove", BinaryFormat::MachO, 2, Verdict::Safe},
+      {"wmemcpy", BinaryFormat::ELF, 4, Verdict::Unknown},
+      {"wmemcpy", BinaryFormat::Unknown, 2, Verdict::Unknown},
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    SCOPED_TRACE(static_cast<int>(C.Format));
+    SCOPED_TRACE(C.Count);
+    Builder B;
+    B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+    B.call(C.Name, temp(0), {temp(1), temp(2), MedVar::makeConst(C.Count, 8)});
+
+    auto Fnd =
+        hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {}, C.Format);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, C.Expected) << Fnd->Detail;
+  }
+}
+
+TEST(HuntEngine, WideStringCopyStillRequiresAStringExtent) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("wcscpy", temp(0), {temp(1), temp(2)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+}
+
 TEST(HuntEngine, UnknownCapacityFailsClosed) {
   Builder B;
   // dst is a bare load; length comes from read (tainted) but capacity unknown.
