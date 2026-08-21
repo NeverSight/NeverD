@@ -184,7 +184,9 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
       ++AssignmentCount;
     if (Conversion == 'n' && InputExtentMayVary)
       Outputs.ScalarArgs.push_back({NextArg, AssignmentCount});
-    else if (Conversion == 'c' && !HasLength)
+    else if (Conversion == 'c')
+      Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
+    else if ((Conversion == 's' || IsScanSet) && HasLength)
       Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
     else if ((Conversion == 's' || IsScanSet) && !HasWidth && !HasLength)
       Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
