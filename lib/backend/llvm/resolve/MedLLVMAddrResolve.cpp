@@ -20,6 +20,7 @@
 #include <cassert>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -343,6 +344,8 @@ void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
   InductionBasesFor = nullptr;
   InductionBaseVAs.clear();
   PtrTableUniqueSegCache.clear();
+  PointerTableLoadRoleCacheFor = nullptr;
+  PointerTableLoadRoleCache.clear();
   WritableDataSegCache.clear();
   FrameDerivedCacheFor = nullptr;
   FrameDerivedCache.clear();
@@ -1522,6 +1525,500 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
   }
 }
 
+MedLLVMEmitter::PointerTableLoadRoleSummary
+MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
+  PointerTableLoadRoleSummary Result;
+  if (!CurMedFunc || !Img || V.isConst())
+    return Result;
+
+  const unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
+  if (PtrSize == 0 || PtrSize > 8)
+    return Result;
+  const unsigned PtrBits = PtrSize * 8;
+  const uint64_t PtrMask =
+      PtrBits >= 64 ? ~uint64_t(0) : (uint64_t(1) << PtrBits) - 1;
+
+  if (PointerTableLoadRoleCacheFor != CurMedFunc) {
+    PointerTableLoadRoleCacheFor = CurMedFunc;
+    PointerTableLoadRoleCache.clear();
+  }
+  const AddressProvenanceVarKey CacheKey = addressProvenanceVarKey(V);
+  if (auto It = PointerTableLoadRoleCache.find(CacheKey);
+      It != PointerTableLoadRoleCache.end())
+    return It->second;
+  auto finish = [&](PointerTableLoadRoleSummary Summary) {
+    if (PointerTableLoadRoleCacheFor != CurMedFunc) {
+      PointerTableLoadRoleCacheFor = CurMedFunc;
+      PointerTableLoadRoleCache.clear();
+    }
+    PointerTableLoadRoleCache.insert_or_assign(CacheKey, Summary);
+    return Summary;
+  };
+
+  auto isStableNumericOffset = [&](const MedVar &Offset) {
+    if (!Offset.isConst())
+      return false;
+    if (Offset.Provenance == ConstantAddressProvenance::Scalar)
+      return true;
+    if (isAddressProvenance(Offset.Provenance) ||
+        getVarMayRelocateConstant(Offset.ConstVal, Offset.Size))
+      return false;
+    return !hasObjectDataProvenance(Offset.ConstVal);
+  };
+  auto signedOffset = [&](const MedVar &Offset) -> std::optional<int64_t> {
+    if (!isStableNumericOffset(Offset))
+      return std::nullopt;
+    unsigned Bits = Offset.Size == 0 ? PtrBits : Offset.Size * 8;
+    if (Bits == 0 || Bits > 64)
+      return std::nullopt;
+    uint64_t Value = Offset.ConstVal;
+    if (Bits < 64) {
+      const uint64_t Mask = (uint64_t(1) << Bits) - 1;
+      Value &= Mask;
+      if ((Value & (uint64_t(1) << (Bits - 1))) != 0)
+        Value |= ~Mask;
+    }
+    return static_cast<int64_t>(Value);
+  };
+  auto addSigned = [](int64_t Left, int64_t Right, int64_t &Out) -> bool {
+    if ((Right > 0 && Left > std::numeric_limits<int64_t>::max() - Right) ||
+        (Right < 0 && Left < std::numeric_limits<int64_t>::min() - Right))
+      return false;
+    Out = Left + Right;
+    return true;
+  };
+  auto offsetAddress = [&](uint64_t Base, int64_t Delta,
+                           uint64_t &Out) -> bool {
+    Base &= PtrMask;
+    if (Delta >= 0) {
+      const uint64_t Magnitude = static_cast<uint64_t>(Delta);
+      if (Magnitude > PtrMask || Base > PtrMask - Magnitude)
+        return false;
+      Out = Base + Magnitude;
+      return true;
+    }
+    const uint64_t Magnitude =
+        static_cast<uint64_t>(-(Delta + 1)) + uint64_t(1);
+    if (Magnitude > PtrMask || Base < Magnitude)
+      return false;
+    Out = Base - Magnitude;
+    return true;
+  };
+
+  // First isolate the pointer-width LOAD whose value reaches this consumer.
+  // Width-preserving pointer +/- scalar operations retain the slot role, but
+  // their adjustment is recorded so a callable consumer can reject an
+  // interior target rather than treating it as an exact function entry.
+  MedVar Current = V;
+  for (int Depth = 0; Depth < 16; ++Depth) {
+    const MedOp *Def = lookupDef(Current);
+    if (!Def)
+      return finish(Result);
+    if (Def->Opcode == NdOp::LOAD) {
+      Result.Load = Def;
+      break;
+    }
+    if (auto Forwarded = pointerPreservingInput(*Def)) {
+      Current = *Forwarded;
+      continue;
+    }
+    auto carriesPointerWidth = [&](const MedVar &Input) {
+      return Def->Output.Size == PtrSize && Input.Size == PtrSize;
+    };
+    std::optional<int64_t> Delta;
+    MedVar PointerInput;
+    if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
+      if (auto D = signedOffset(Def->Inputs[1]);
+          D && carriesPointerWidth(Def->Inputs[0])) {
+        Delta = *D;
+        PointerInput = Def->Inputs[0];
+      } else if (auto D = signedOffset(Def->Inputs[0]);
+                 D && carriesPointerWidth(Def->Inputs[1])) {
+        Delta = *D;
+        PointerInput = Def->Inputs[1];
+      }
+    } else if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
+      if (auto D = signedOffset(Def->Inputs[1]);
+          D && carriesPointerWidth(Def->Inputs[0]) &&
+          *D != std::numeric_limits<int64_t>::min()) {
+        Delta = -*D;
+        PointerInput = Def->Inputs[0];
+      }
+    }
+    if (!Delta)
+      return finish(Result);
+    Result.ValueAdjustment =
+        (Result.ValueAdjustment + static_cast<uint64_t>(*Delta)) & PtrMask;
+    Current = PointerInput;
+  }
+  if (!Result.Load || Result.Load->NumInputs < 1 ||
+      Result.Load->Output.Size != PtrSize)
+    return finish(Result);
+
+  const MedVar &LoadAddress = Result.Load->Inputs[0];
+  struct AddressDomain {
+    std::set<uint64_t> Seeds;
+    std::optional<int64_t> Step;
+    bool Complete = false;
+  };
+  using SeenSet = std::set<AddressProvenanceVarKey>;
+  auto exactAddress = [&](const MedVar &Address) -> std::optional<uint64_t> {
+    if (Address.isConst())
+      return Address.ConstVal & PtrMask;
+    if (auto Folded = traceTableBaseConst(Address))
+      return *Folded & PtrMask;
+    return std::nullopt;
+  };
+  auto sameValue = [&](const MedVar &Left, const MedVar &Right) {
+    return addressProvenanceVarKey(Left) == addressProvenanceVarKey(Right);
+  };
+
+  std::function<std::optional<int64_t>(const MedVar &, const MedVar &, int,
+                                       SeenSet)>
+      recurrenceDelta = [&](const MedVar &Value, const MedVar &Root, int Depth,
+                            SeenSet Seen) -> std::optional<int64_t> {
+    if (Depth > 32 || Value.isConst())
+      return std::nullopt;
+    if (sameValue(Value, Root))
+      return int64_t(0);
+    const AddressProvenanceVarKey Key = addressProvenanceVarKey(Value);
+    if (!Seen.insert(Key).second)
+      return std::nullopt;
+    const MedOp *Def = lookupDef(Value);
+    if (!Def)
+      return std::nullopt;
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      return recurrenceDelta(*Forwarded, Root, Depth + 1, Seen);
+
+    auto addToInput = [&](const MedVar &Input,
+                          int64_t Delta) -> std::optional<int64_t> {
+      std::optional<int64_t> Prefix =
+          recurrenceDelta(Input, Root, Depth + 1, Seen);
+      int64_t Combined = 0;
+      return Prefix && addSigned(*Prefix, Delta, Combined)
+                 ? std::optional<int64_t>(Combined)
+                 : std::nullopt;
+    };
+    if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
+      if (auto Delta = signedOffset(Def->Inputs[1]))
+        if (auto Combined = addToInput(Def->Inputs[0], *Delta))
+          return Combined;
+      if (auto Delta = signedOffset(Def->Inputs[0]))
+        return addToInput(Def->Inputs[1], *Delta);
+    }
+    if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2)
+      if (auto Delta = signedOffset(Def->Inputs[1]);
+          Delta && *Delta != std::numeric_limits<int64_t>::min())
+        return addToInput(Def->Inputs[0], -*Delta);
+    return std::nullopt;
+  };
+
+  std::function<bool(const MedVar &, int, SeenSet)> isPointerAlignedOffset =
+      [&](const MedVar &Value, int Depth, SeenSet Seen) -> bool {
+    if (Depth > 32)
+      return false;
+    if (Value.isConst()) {
+      std::optional<int64_t> Offset = signedOffset(Value);
+      return Offset && *Offset % static_cast<int64_t>(PtrSize) == 0;
+    }
+    const AddressProvenanceVarKey Key = addressProvenanceVarKey(Value);
+    if (!Seen.insert(Key).second)
+      return false;
+    const MedOp *Def = lookupDef(Value);
+    if (!Def)
+      return false;
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      return isPointerAlignedOffset(*Forwarded, Depth + 1, Seen);
+    if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
+        Def->NumInputs >= 2)
+      return isPointerAlignedOffset(Def->Inputs[0], Depth + 1, Seen) &&
+             isPointerAlignedOffset(Def->Inputs[1], Depth + 1, Seen);
+    if (Def->Opcode == NdOp::INT_MULT && Def->NumInputs >= 2) {
+      for (unsigned ConstantIndex : {0U, 1U}) {
+        const unsigned OtherIndex = 1U - ConstantIndex;
+        std::optional<int64_t> Factor =
+            signedOffset(Def->Inputs[ConstantIndex]);
+        if (Factor && *Factor % static_cast<int64_t>(PtrSize) == 0 &&
+            valueIsStableAddressOffset(Def->Inputs[OtherIndex]))
+          return true;
+      }
+      return false;
+    }
+    if (Def->Opcode == NdOp::INT_LEFT && Def->NumInputs >= 2) {
+      std::optional<int64_t> Shift = signedOffset(Def->Inputs[1]);
+      unsigned RequiredShift = 0;
+      for (unsigned Alignment = PtrSize; Alignment > 1; Alignment >>= 1)
+        ++RequiredShift;
+      return Shift && *Shift >= static_cast<int64_t>(RequiredShift) &&
+             *Shift < 64 && valueIsStableAddressOffset(Def->Inputs[0]);
+    }
+    if (Def->Opcode == NdOp::SELECT && selectPreservesPointerValues(*Def))
+      return isPointerAlignedOffset(Def->Inputs[1], Depth + 1, Seen) &&
+             isPointerAlignedOffset(Def->Inputs[2], Depth + 1, Seen);
+    return false;
+  };
+
+  std::function<AddressDomain(const MedVar &, int, SeenSet)> analyzeAddress =
+      [&](const MedVar &Address, int Depth, SeenSet Seen) -> AddressDomain {
+    if (Depth > 32)
+      return {};
+    if (auto Exact = exactAddress(Address))
+      return AddressDomain{{*Exact}, std::nullopt, true};
+    if (Address.isConst())
+      return {};
+    const AddressProvenanceVarKey Key = addressProvenanceVarKey(Address);
+    if (!Seen.insert(Key).second)
+      return {};
+
+    if (const PhiNode *Phi = lookupPhi(Address)) {
+      AddressDomain Domain;
+      Domain.Complete = true;
+      bool SawReachableArm = false;
+      bool SawRecurrence = false;
+      for (const auto &[Pred, Arg] : Phi->Args) {
+        const PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, Pred);
+        if (Edge == PhiEdgeFeasibility::Infeasible)
+          continue;
+        if (Edge != PhiEdgeFeasibility::ProvenFeasible) {
+          Domain.Complete = false;
+          break;
+        }
+        SawReachableArm = true;
+        if (phiIncomingIsRecurrent(*Phi, Pred, Arg)) {
+          std::optional<int64_t> Delta =
+              recurrenceDelta(Arg, Phi->Output, 0, {});
+          if (!Delta || (Domain.Step && *Domain.Step != *Delta)) {
+            Domain.Complete = false;
+            break;
+          }
+          Domain.Step = *Delta;
+          SawRecurrence = true;
+          continue;
+        }
+        AddressDomain Initial = analyzeAddress(Arg, Depth + 1, Seen);
+        if (!Initial.Complete || Initial.Step) {
+          Domain.Complete = false;
+          break;
+        }
+        Domain.Seeds.insert(Initial.Seeds.begin(), Initial.Seeds.end());
+      }
+      if (!SawReachableArm || Domain.Seeds.empty())
+        Domain.Complete = false;
+      if (SawRecurrence && Domain.Step && *Domain.Step == 0)
+        Domain.Step.reset();
+      return Domain;
+    }
+
+    const MedOp *Def = lookupDef(Address);
+    if (!Def)
+      return {};
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      return analyzeAddress(*Forwarded, Depth + 1, Seen);
+    if (Def->Opcode == NdOp::SELECT && selectPreservesPointerValues(*Def)) {
+      AddressDomain True = analyzeAddress(Def->Inputs[1], Depth + 1, Seen);
+      AddressDomain False = analyzeAddress(Def->Inputs[2], Depth + 1, Seen);
+      if (!True.Complete || !False.Complete || True.Step != False.Step)
+        return {};
+      True.Seeds.insert(False.Seeds.begin(), False.Seeds.end());
+      return True;
+    }
+    if (Def->Opcode == NdOp::LOAD) {
+      std::vector<MedVar> Sources;
+      if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
+        return {};
+      AddressDomain Combined;
+      Combined.Complete = true;
+      for (const MedVar &Source : Sources) {
+        AddressDomain Arm = analyzeAddress(Source, Depth + 1, Seen);
+        if (!Arm.Complete ||
+            (Combined.Step && Arm.Step && Combined.Step != Arm.Step) ||
+            ((Combined.Step || Arm.Step) && Combined.Seeds.size() != 0 &&
+             Combined.Step != Arm.Step))
+          return {};
+        if (!Combined.Step)
+          Combined.Step = Arm.Step;
+        Combined.Seeds.insert(Arm.Seeds.begin(), Arm.Seeds.end());
+      }
+      return Combined;
+    }
+
+    const MedVar *BaseInput = nullptr;
+    std::optional<int64_t> Delta;
+    if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
+      if (auto D = signedOffset(Def->Inputs[1])) {
+        BaseInput = &Def->Inputs[0];
+        Delta = *D;
+      } else if (auto D = signedOffset(Def->Inputs[0])) {
+        BaseInput = &Def->Inputs[1];
+        Delta = *D;
+      }
+    } else if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
+      if (auto D = signedOffset(Def->Inputs[1]);
+          D && *D != std::numeric_limits<int64_t>::min()) {
+        BaseInput = &Def->Inputs[0];
+        Delta = -*D;
+      }
+    }
+    if (!BaseInput || !Delta)
+      return {};
+    AddressDomain Base = analyzeAddress(*BaseInput, Depth + 1, Seen);
+    if (!Base.Complete)
+      return {};
+    std::set<uint64_t> Shifted;
+    for (uint64_t Seed : Base.Seeds) {
+      uint64_t Value = 0;
+      if (!offsetAddress(Seed, *Delta, Value))
+        return {};
+      Shifted.insert(Value);
+    }
+    Base.Seeds = std::move(Shifted);
+    return Base;
+  };
+
+  AddressDomain Domain = analyzeAddress(LoadAddress, 0, {});
+  const std::optional<uint64_t> DiscoveredRun =
+      ptrTableUniqueSegment(LoadAddress,
+                            /*IncludeSymbolizedEvidence=*/true);
+  if (!Domain.Complete || Domain.Seeds.empty()) {
+    // A conventional `table[index]` has a dynamic offset rather than an
+    // affine address PHI.  Preserve that established case only when the index
+    // is pointer-aligned and every pointer-sized cell in the owning section
+    // has one explicit relocation role.  This admits pure code/import arrays
+    // while a record section containing scalar or data lanes remains mixed.
+    uint64_t IndexedBase = 0;
+    bool HaveIndexedBase = false;
+    std::vector<MedVar> IndexTerms;
+    const bool Indexed =
+        DiscoveredRun &&
+        collectIndexedGlobalBase(LoadAddress, IndexedBase, HaveIndexedBase,
+                                 IndexTerms) &&
+        HaveIndexedBase && !IndexTerms.empty() &&
+        std::all_of(IndexTerms.begin(), IndexTerms.end(),
+                    [&](const MedVar &Term) {
+                      return isPointerAlignedOffset(Term, 0, {});
+                    });
+    const Segment *Segment =
+        Indexed ? Img->getSegmentFor(IndexedBase) : nullptr;
+    const Section *Section = Segment && !Segment->isExecutable()
+                                 ? Img->getSectionFor(IndexedBase)
+                                 : nullptr;
+    if (Section && Section->isReadable() && !Section->isExecutable() &&
+        Section->Size <= InvalidVA - Section->VA &&
+        IndexedBase >= Section->VA &&
+        IndexedBase < Section->VA + Section->Size) {
+      const uint64_t BoundEnd = Section->VA + Section->Size;
+      const uint64_t Residue = (IndexedBase - Section->VA) % PtrSize;
+      uint64_t Slot = Section->VA + Residue;
+      size_t Remaining = static_cast<size_t>(limits::kMaxSSANodes);
+      bool ExhaustedBudget = false;
+      while (Slot < BoundEnd && PtrSize <= BoundEnd - Slot) {
+        if (Remaining == 0) {
+          ExhaustedBudget = true;
+          break;
+        }
+        --Remaining;
+        Domain.Seeds.insert(Slot);
+        if (Slot > InvalidVA - PtrSize)
+          break;
+        Slot += PtrSize;
+      }
+      Domain.Complete = !ExhaustedBudget && !Domain.Seeds.empty();
+    }
+  }
+  if (!Domain.Complete || Domain.Seeds.empty()) {
+    Result.Recognized = DiscoveredRun.has_value();
+    return finish(Result);
+  }
+
+  const Segment *OwnerSegment = nullptr;
+  const Section *OwnerSection = nullptr;
+  uint64_t RunStart = 0;
+  uint64_t RunEnd = 0;
+  for (uint64_t Seed : Domain.Seeds) {
+    const Segment *Segment = Img->getSegmentFor(Seed);
+    if (!Segment || Segment->isExecutable() || !segHasPtrRelocSlots(Segment)) {
+      Result.Recognized |= DiscoveredRun.has_value();
+      return finish(Result);
+    }
+    uint64_t SeedRunStart = 0;
+    uint64_t SeedRunEnd = 0;
+    readOnlyAfterRelocRun(Segment, SeedRunStart, SeedRunEnd);
+    if (Seed < SeedRunStart || Seed >= SeedRunEnd ||
+        PtrSize > SeedRunEnd - Seed) {
+      Result.Recognized = true;
+      return finish(Result);
+    }
+    if (!OwnerSegment) {
+      OwnerSegment = Segment;
+      RunStart = SeedRunStart;
+      RunEnd = SeedRunEnd;
+      OwnerSection = Img->getSectionFor(Seed);
+    } else if (RunStart != SeedRunStart || RunEnd != SeedRunEnd) {
+      Result.Recognized = true;
+      return finish(Result);
+    }
+    if (Domain.Step && Img->getSectionFor(Seed) != OwnerSection) {
+      Result.Recognized = true;
+      return finish(Result);
+    }
+  }
+  Result.Recognized = true;
+
+  if (!Domain.Step) {
+    Result.Slots = Domain.Seeds;
+  } else {
+    uint64_t BoundStart = RunStart;
+    uint64_t BoundEnd = RunEnd;
+    if (OwnerSection) {
+      if (!OwnerSection->isReadable() || OwnerSection->isExecutable() ||
+          OwnerSection->Size > InvalidVA - OwnerSection->VA) {
+        return finish(Result);
+      }
+      BoundStart = OwnerSection->VA;
+      BoundEnd = OwnerSection->VA + OwnerSection->Size;
+    }
+    const int64_t Step = *Domain.Step;
+    if (Step == 0 || Step == std::numeric_limits<int64_t>::min())
+      return finish(Result);
+    size_t Remaining = static_cast<size_t>(limits::kMaxSSANodes);
+    for (uint64_t Seed : Domain.Seeds) {
+      uint64_t Slot = Seed;
+      while (Slot >= BoundStart && Slot < BoundEnd &&
+             PtrSize <= BoundEnd - Slot) {
+        if (Remaining == 0)
+          return finish(Result);
+        --Remaining;
+        Result.Slots.insert(Slot);
+        uint64_t Next = 0;
+        if (!offsetAddress(Slot, Step, Next))
+          return finish(Result);
+        if ((Step > 0 && Next <= Slot) || (Step < 0 && Next >= Slot))
+          return finish(Result);
+        Slot = Next;
+      }
+    }
+  }
+  if (Result.Slots.empty())
+    return finish(Result);
+
+  for (uint64_t Slot : Result.Slots) {
+    const bool IsCode = Img->CodePtrRelocSlots.count(Slot) != 0;
+    const bool IsData = Img->DataPtrRelocSlots.count(Slot) != 0;
+    const bool IsImport = Img->ImportPtrSlots.count(Slot) != 0 ||
+                          Img->DyldBindSlots.count(Slot) != 0;
+    const unsigned Kinds = static_cast<unsigned>(IsCode) +
+                           static_cast<unsigned>(IsData) +
+                           static_cast<unsigned>(IsImport);
+    Result.SawConflict |= Kinds > 1;
+    Result.SawCode |= IsCode;
+    Result.SawData |= IsData;
+    Result.SawImport |= IsImport;
+    Result.SawUnknown |= Kinds == 0;
+  }
+  Result.Complete = true;
+  return finish(Result);
+}
+
 bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadIdentities(
     const MedVar &V, std::set<DataAddressIdentity> &Targets) const {
   Targets.clear();
@@ -1530,6 +2027,17 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadIdentities(
 
   const unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
   if (PtrSize == 0 || PtrSize > 8)
+    return false;
+
+  // Segment discovery is only an ownership hint.  When the LOAD address can
+  // be classified at occurrence granularity, data recovery must agree with
+  // that role proof instead of collecting neighbouring data relocations from
+  // the same mixed record run.  Incomplete/mixed/code/import/scalar domains
+  // deliberately fail closed here; all consumers of this helper therefore
+  // share the same slot-role decision as indirect-call validation.
+  const PointerTableLoadRoleSummary SlotRoles =
+      classifyPointerTableLoadRoles(V);
+  if (SlotRoles.Recognized && !SlotRoles.isDataOnly())
     return false;
 
   auto isStableNumericOffset = [&](const MedVar &Offset) {

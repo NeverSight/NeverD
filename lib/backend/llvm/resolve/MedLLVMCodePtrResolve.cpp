@@ -1567,6 +1567,35 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
   // computed-goto/jump-table ownership; using that broader result here would
   // emit an invalid call to an interior basic-block label.
   if (!V.isConst()) {
+    const PointerTableLoadRoleSummary SlotRoles =
+        classifyPointerTableLoadRoles(V);
+    if (SlotRoles.Recognized) {
+      // The LOAD emitter has already routed this address through the mixed
+      // relocation mirror. Reuse that relocation-safe runtime value only when
+      // every reachable slot is a code/import field and no post-load pointer
+      // arithmetic changed the function entry. Discovery of the surrounding
+      // run alone is never role proof: records commonly interleave length,
+      // handler, and name fields.
+      if (SlotRoles.isCallableOnly() && SlotRoles.ValueAdjustment == 0)
+        if (llvm::Value *Target = getVar(V, Builder))
+          return Target;
+
+      if (!FatalCodePointerResolution && !FatalDataPointerResolution) {
+        if (SlotRoles.isDataOnly())
+          syncError() << "med_llvm_emitter: data-pointer relocation used as an "
+                         "indirect-call target in "
+                      << CurMedFunc->Name
+                      << "; refusing code-identity fallback\n";
+        else
+          syncError() << "med_llvm_emitter: pointer-table load used as an "
+                         "indirect-call target in "
+                      << CurMedFunc->Name
+                      << " has no complete code-slot role; refusing "
+                         "code-identity fallback\n";
+      }
+      FatalCodePointerResolution = true;
+      return nullptr;
+    }
     std::set<DataAddressIdentity> DataIdentities;
     if (recoverAbsoluteDataPointerLoadIdentities(V, DataIdentities)) {
       if (!FatalCodePointerResolution && !FatalDataPointerResolution)

@@ -96,6 +96,12 @@ public:
     Emitter.CurMedFunc = &Func;
   }
 
+  static bool recoversAbsoluteDataPointerIdentity(MedLLVMEmitter &Emitter,
+                                                  const MedVar &Value) {
+    std::set<MedLLVMEmitter::DataAddressIdentity> Identities;
+    return Emitter.recoverAbsoluteDataPointerLoadIdentities(Value, Identities);
+  }
+
   static bool buildingEdgeQueryIsProvisional(MedLLVMEmitter &Emitter,
                                              const PhiNode &Phi, int PredId) {
     Emitter.FeasibleEdgesFor = Emitter.CurMedFunc;
@@ -140,6 +146,8 @@ public:
       Emitter.InductionBaseVAs.insert(0x1234);
       Emitter.PtrTableUniqueSegCache[std::make_tuple(
           int64_t{1}, static_cast<int>(MedVar::Temp), false)] = 1;
+      Emitter.PointerTableLoadRoleCacheFor = Emitter.CurMedFunc;
+      Emitter.PointerTableLoadRoleCache[ArgKey] = {};
       Emitter.WritableDataSegCache[std::make_tuple(
           static_cast<int>(Arg.Kind), Arg.Id, Arg.SSAVer, false)] = 0x1234;
       Emitter.FrameDerivedCacheFor = Emitter.CurMedFunc;
@@ -168,6 +176,8 @@ public:
            Emitter.InductionBasesFor == nullptr &&
            Emitter.InductionBaseVAs.empty() &&
            Emitter.PtrTableUniqueSegCache.empty() &&
+           Emitter.PointerTableLoadRoleCacheFor == nullptr &&
+           Emitter.PointerTableLoadRoleCache.empty() &&
            Emitter.WritableDataSegCache.empty() &&
            Emitter.FrameDerivedCacheFor == nullptr &&
            Emitter.FrameDerivedCache.empty() &&
@@ -5311,6 +5321,294 @@ MedFunc makeReturnFunction(llvm::StringRef Name, va_t Entry,
   return Func;
 }
 
+BinaryImage
+makeMixedPointerRecordImage(Arch TargetArch,
+                            BinaryFormat Format = BinaryFormat::MachO) {
+  BinaryImage Image = makeLLVMImage();
+  Image.Arch = TargetArch;
+  Image.Format = Format;
+  Image.DyldBindSlots.clear();
+  Image.ImportPtrSlots.clear();
+  Image.Imports.clear();
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  Image.DataPtrRelocTargetOwners.clear();
+
+  Segment &Data = Image.Segments[1];
+  if (Format == BinaryFormat::MachO) {
+    Data.Name = section_names::macho::DataConstSeg;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  } else if (Format == BinaryFormat::ELF) {
+    Data.Name = section_names::elf::DataRelRo;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  } else {
+    Data.Name = section_names::coff::Rdata;
+    Data.Flags = SegmentFlags::Readable;
+  }
+  std::fill(Data.Data.begin(), Data.Data.end(), 0);
+
+  constexpr uint64_t FirstLength = 4;
+  constexpr uint64_t SecondLength = 5;
+  writeObject(Data.Data, 0, FirstLength);
+  writeObject(Data.Data, 8, CodeVA);
+  writeObject(Data.Data, 16, CStringVA);
+  writeObject(Data.Data, 24, SecondLength);
+  writeObject(Data.Data, 32, CodeVA);
+  writeObject(Data.Data, 40, CStringBVA);
+  Image.CodePtrRelocSlots.insert(DataVA + 8);
+  Image.CodePtrRelocSlots.insert(DataVA + 32);
+  Image.DataPtrRelocSlots.insert(DataVA + 16);
+  Image.DataPtrRelocSlots.insert(DataVA + 40);
+
+  Section Records;
+  Records.Name = Format == BinaryFormat::MachO ? section_names::macho::Const
+                 : Format == BinaryFormat::ELF ? section_names::elf::DataRelRo
+                                               : section_names::coff::Rdata;
+  Records.SegmentName = Data.Name;
+  Records.VA = DataVA;
+  Records.Size = 48;
+  Records.FileSz = Records.Size;
+  Records.Flags = Data.Flags;
+  Image.Sections.push_back(std::move(Records));
+  return Image;
+}
+
+MedFunc makeMixedPointerRecordIndirectCaller(Arch TargetArch,
+                                             uint64_t InitialOffset = 8,
+                                             uint64_t RecordStride = 24) {
+  const uint16_t PointerSize =
+      static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
+  auto makeTemp = [&](int Id, uint16_t Size) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.TheArch = TargetArch;
+    Value.Id = Id;
+    Value.SSAVer = 1;
+    Value.Size = Size;
+    return Value;
+  };
+
+  MedVar InitialSlot = makeTemp(200, PointerSize);
+  MedVar CurrentSlot = makeTemp(201, PointerSize);
+  MedVar LoadedTarget = makeTemp(202, PointerSize);
+  MedVar NextSlot = makeTemp(203, PointerSize);
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = "mixed_pointer_record_indirect_caller";
+  Func.ReturnType = NdType::makeVoid();
+  Func.DoesNotReturn = true;
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 8;
+  Entry.Succs = {1};
+  MedOp Materialize;
+  Materialize.Opcode = NdOp::COPY;
+  Materialize.Addr = CallerVA;
+  Materialize.Output = InitialSlot;
+  Materialize.addInput(MedVar::makeConst(DataVA + InitialOffset, PointerSize,
+                                         ConstantAddressProvenance::Address));
+  Entry.Ops.push_back(std::move(Materialize));
+  MedOp Enter;
+  Enter.Opcode = NdOp::BRANCH;
+  Enter.Addr = CallerVA + 4;
+  Enter.addInput(MedVar::makeConst(CallerVA + 0x10, PointerSize));
+  Entry.Ops.push_back(std::move(Enter));
+
+  MedBlock Loop;
+  Loop.Id = 1;
+  Loop.StartAddr = CallerVA + 0x10;
+  Loop.EndAddr = CallerVA + 0x1c;
+  Loop.Preds = {0, 2};
+  Loop.Succs = {2};
+  PhiNode SlotPhi;
+  SlotPhi.Output = CurrentSlot;
+  SlotPhi.Args = {{0, InitialSlot}, {2, NextSlot}};
+  Loop.Phis.push_back(std::move(SlotPhi));
+  MedOp LoadTarget;
+  LoadTarget.Opcode = NdOp::LOAD;
+  LoadTarget.Addr = CallerVA + 0x10;
+  LoadTarget.Output = LoadedTarget;
+  LoadTarget.addInput(CurrentSlot);
+  Loop.Ops.push_back(std::move(LoadTarget));
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.Addr = CallerVA + 0x14;
+  Call.addInput(LoadedTarget);
+  Loop.Ops.push_back(std::move(Call));
+  MedOp Continue;
+  Continue.Opcode = NdOp::BRANCH;
+  Continue.Addr = CallerVA + 0x18;
+  Continue.addInput(MedVar::makeConst(CallerVA + 0x20, PointerSize));
+  Loop.Ops.push_back(std::move(Continue));
+
+  MedBlock Latch;
+  Latch.Id = 2;
+  Latch.StartAddr = CallerVA + 0x20;
+  Latch.EndAddr = CallerVA + 0x28;
+  Latch.Preds = {1};
+  Latch.Succs = {1};
+  MedOp Step;
+  Step.Opcode = NdOp::INT_ADD;
+  Step.Addr = CallerVA + 0x20;
+  Step.Output = NextSlot;
+  Step.addInput(CurrentSlot);
+  Step.addInput(MedVar::makeConst(RecordStride, PointerSize));
+  Latch.Ops.push_back(std::move(Step));
+  MedOp BackEdge;
+  BackEdge.Opcode = NdOp::BRANCH;
+  BackEdge.Addr = CallerVA + 0x24;
+  BackEdge.addInput(MedVar::makeConst(Loop.StartAddr, PointerSize));
+  Latch.Ops.push_back(std::move(BackEdge));
+
+  Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Latch)};
+  return Func;
+}
+
+MedFunc makeMixedPointerRecordArgumentCaller(Arch TargetArch) {
+  MedFunc Func = makeMixedPointerRecordIndirectCaller(TargetArch);
+  Func.Name = "mixed_pointer_record_argument_caller";
+  MedBlock &Loop = Func.Blocks[1];
+  MedOp &Call = Loop.Ops[1];
+  Call.Opcode = NdOp::CALL;
+  Call.Inputs[0] =
+      MedVar::makeConst(ImportStubVA, getTargetRegInfo(TargetArch).PointerSize,
+                        ConstantAddressProvenance::CodeAddress);
+
+  MedCallInfo Info;
+  Info.BlockId = Loop.Id;
+  Info.OpIdx = 1;
+  Info.TargetAddr = ImportStubVA;
+  Info.TargetName = "consume_handler";
+  Info.Args.push_back(Loop.Ops[0].Output);
+  Func.CallInfos.push_back(std::move(Info));
+  return Func;
+}
+
+MedFunc makeExactMixedPointerSlotIndirectCaller(Arch TargetArch,
+                                                uint64_t SlotOffset,
+                                                uint64_t TargetAdjustment = 0) {
+  const uint16_t PointerSize =
+      static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
+  auto makeTemp = [&](int Id) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.TheArch = TargetArch;
+    Value.Id = Id;
+    Value.SSAVer = 1;
+    Value.Size = PointerSize;
+    return Value;
+  };
+  MedVar Slot = makeTemp(210);
+  MedVar Target = makeTemp(211);
+  MedVar AdjustedTarget = makeTemp(214);
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name =
+      "exact_mixed_pointer_slot_indirect_caller_" + std::to_string(SlotOffset);
+  Func.ReturnType = NdType::makeVoid();
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = CallerVA;
+  Block.EndAddr = CallerVA + (TargetAdjustment != 0 ? 0x14 : 0x10);
+  MedOp Materialize;
+  Materialize.Opcode = NdOp::COPY;
+  Materialize.Addr = CallerVA;
+  Materialize.Output = Slot;
+  Materialize.addInput(MedVar::makeConst(DataVA + SlotOffset, PointerSize,
+                                         ConstantAddressProvenance::Address));
+  Block.Ops.push_back(std::move(Materialize));
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = CallerVA + 4;
+  Load.Output = Target;
+  Load.addInput(Slot);
+  Block.Ops.push_back(std::move(Load));
+  if (TargetAdjustment != 0) {
+    MedOp Adjust;
+    Adjust.Opcode = NdOp::INT_ADD;
+    Adjust.Addr = CallerVA + 8;
+    Adjust.Output = AdjustedTarget;
+    Adjust.addInput(Target);
+    Adjust.addInput(MedVar::makeConst(TargetAdjustment, PointerSize,
+                                      ConstantAddressProvenance::Scalar));
+    Block.Ops.push_back(std::move(Adjust));
+  }
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.Addr = CallerVA + (TargetAdjustment != 0 ? 12 : 8);
+  Call.addInput(TargetAdjustment != 0 ? AdjustedTarget : Target);
+  Block.Ops.push_back(std::move(Call));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = CallerVA + (TargetAdjustment != 0 ? 16 : 12);
+  Block.Ops.push_back(std::move(Return));
+  Func.Blocks.push_back(std::move(Block));
+  return Func;
+}
+
+MedFunc makeIndexedPointerTableIndirectCaller(Arch TargetArch,
+                                              uint64_t TableVA) {
+  const uint16_t PointerSize =
+      static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
+  MedFunc Func =
+      makeExactMixedPointerSlotIndirectCaller(TargetArch, TableVA - DataVA);
+  Func.Name = "indexed_pointer_table_indirect_caller";
+
+  MedVar Index;
+  Index.Kind = MedVar::Param;
+  Index.TheArch = TargetArch;
+  Index.Id = 0;
+  Index.Size = PointerSize;
+  Func.Params.push_back(Index);
+
+  auto makeTemp = [&](int Id) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.TheArch = TargetArch;
+    Value.Id = Id;
+    Value.SSAVer = 1;
+    Value.Size = PointerSize;
+    return Value;
+  };
+  MedVar ScaledIndex = makeTemp(212);
+  MedVar IndexedSlot = makeTemp(213);
+  MedBlock &Block = Func.Blocks.front();
+  MedOp Load = std::move(Block.Ops[1]);
+  MedOp Call = std::move(Block.Ops[2]);
+  MedOp Return = std::move(Block.Ops[3]);
+  Block.Ops.resize(1);
+
+  MedOp Scale;
+  Scale.Opcode = NdOp::INT_MULT;
+  Scale.Addr = CallerVA + 4;
+  Scale.Output = ScaledIndex;
+  Scale.addInput(Index);
+  Scale.addInput(MedVar::makeConst(PointerSize, PointerSize,
+                                   ConstantAddressProvenance::Scalar));
+  Block.Ops.push_back(std::move(Scale));
+  MedOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Addr = CallerVA + 8;
+  Add.Output = IndexedSlot;
+  Add.addInput(Block.Ops[0].Output);
+  Add.addInput(ScaledIndex);
+  Block.Ops.push_back(std::move(Add));
+  Load.Addr = CallerVA + 12;
+  Load.Inputs[0] = IndexedSlot;
+  Block.Ops.push_back(std::move(Load));
+  Call.Addr = CallerVA + 16;
+  Block.Ops.push_back(std::move(Call));
+  Return.Addr = CallerVA + 20;
+  Block.Ops.push_back(std::move(Return));
+  Block.EndAddr = CallerVA + 24;
+  return Func;
+}
+
 MedFunc makeFrameReloadedDirectPhiPointerTableLookup(Arch TargetArch) {
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   MedFunc Func = makePhiConstTableLookup(
@@ -8676,6 +8974,242 @@ TEST(MachOLLVMDataPointerBoundary,
     EXPECT_EQ(
         Module->getNamedGlobal((kNdDataPrefix + llvm::utohexstr(DataVA)).str() +
                                section_names::elf::Rodata),
+        nullptr);
+  }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     MixedPointerTableCodeLaneRemainsCallable) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+      SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                   std::to_string(static_cast<int>(TargetArch)));
+      BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+      MedFunc Caller = makeMixedPointerRecordIndirectCaller(TargetArch);
+      MedFunc Callee =
+          makeReturnFunction("mixed_pointer_record_target", CodeVA);
+
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                          "mixed-pointer-record-indirect-call",
+                                          TargetArch, {}, &Image, Format);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+
+      llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+      ASSERT_NE(EmittedCaller, nullptr);
+      std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+      ASSERT_EQ(Calls.size(), 1u);
+
+      const std::string MirrorName =
+          (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str();
+      llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
+      ASSERT_NE(Mirror, nullptr);
+      std::set<const llvm::Value *> SeenMirror;
+      EXPECT_TRUE(valueReferencesSpecificGlobal(
+          Calls.front()->getCalledOperand(), Mirror, SeenMirror));
+      bool RetainsRawTargetVA = false;
+      for (const llvm::BasicBlock &Block : *EmittedCaller)
+        for (const llvm::Instruction &Instruction : Block)
+          for (const llvm::Value *Operand : Instruction.operands())
+            if (const auto *C = llvm::dyn_cast<llvm::Constant>(Operand))
+              RetainsRawTargetVA |= constantContainsInteger(C, CodeVA);
+      EXPECT_FALSE(RetainsRawTargetVA);
+    }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     MixedPointerTableCodeLaneIsNotReclassifiedAsDataArgument) {
+  BinaryImage Image = makeMixedPointerRecordImage(Arch::AArch64);
+  MedFunc Caller = makeMixedPointerRecordArgumentCaller(Arch::AArch64);
+  MedFunc Callee = makeReturnFunction("mixed_pointer_record_target", CodeVA);
+
+  MedLLVMEmitter Classifier;
+  MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+      Classifier, Caller, Image, Arch::AArch64, BinaryFormat::MachO);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoversAbsoluteDataPointerIdentity(
+      Classifier, Caller.Blocks[1].Ops[0].Output));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Caller, Callee}, Context, "mixed-pointer-record-code-argument",
+      Arch::AArch64, {{ImportStubVA, "consume_handler"}}, &Image,
+      BinaryFormat::MachO);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+  ASSERT_NE(EmittedCaller, nullptr);
+  std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+  ASSERT_EQ(Calls.size(), 1u);
+  ASSERT_EQ(Calls.front()->arg_size(), 1u);
+  const std::string MirrorName =
+      (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str();
+  llvm::GlobalVariable *Mirror = Module->getNamedGlobal(MirrorName);
+  ASSERT_NE(Mirror, nullptr);
+  std::set<const llvm::Value *> Seen;
+  EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getArgOperand(0),
+                                            Mirror, Seen));
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     ExactMixedPointerSlotsRequireAnExplicitCallableRole) {
+  struct Case {
+    uint64_t Offset;
+    bool Callable;
+  };
+  for (const Case &C : {Case{0, false}, Case{8, true}, Case{16, false},
+                        Case{24, false}, Case{32, true}, Case{40, false}}) {
+    SCOPED_TRACE(C.Offset);
+    BinaryImage Image = makeMixedPointerRecordImage(Arch::AArch64);
+    MedFunc Caller =
+        makeExactMixedPointerSlotIndirectCaller(Arch::AArch64, C.Offset);
+    MedFunc Callee = makeReturnFunction("mixed_pointer_record_target", CodeVA);
+
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Caller, Callee}, Context, "exact-mixed-pointer-slot", Arch::AArch64,
+        {}, &Image, BinaryFormat::MachO);
+    if (!C.Callable) {
+      EXPECT_EQ(Module, nullptr);
+      continue;
+    }
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+    ASSERT_NE(EmittedCaller, nullptr);
+    std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+    ASSERT_EQ(Calls.size(), 1u);
+    llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+        (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+    ASSERT_NE(Mirror, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getCalledOperand(),
+                                              Mirror, Seen));
+  }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     MixedPointerTableImportLaneRemainsCallable) {
+  BinaryImage Image = makeMixedPointerRecordImage(Arch::AArch64);
+  Image.CodePtrRelocSlots.clear();
+  Image.ImportPtrSlots[DataVA + 8] = "handler_one";
+  Image.ImportPtrSlots[DataVA + 32] = "handler_two";
+  addImport(Image, "handler_one", DataVA + 8);
+  addImport(Image, "handler_two", DataVA + 32);
+  MedFunc Caller = makeMixedPointerRecordIndirectCaller(Arch::AArch64);
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Caller}, Context, "mixed-pointer-record-import-call", Arch::AArch64, {},
+      &Image, BinaryFormat::MachO);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+  ASSERT_NE(EmittedCaller, nullptr);
+  std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+  ASSERT_EQ(Calls.size(), 1u);
+  llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+      (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+  ASSERT_NE(Mirror, nullptr);
+  std::set<const llvm::Value *> Seen;
+  EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getCalledOperand(),
+                                            Mirror, Seen));
+  EXPECT_NE(Module->getNamedValue("handler_one"), nullptr);
+  EXPECT_NE(Module->getNamedValue("handler_two"), nullptr);
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     CodePointerSlotWithPostLoadAdjustmentFailsClosed) {
+  BinaryImage Image = makeMixedPointerRecordImage(Arch::AArch64);
+  MedFunc Caller = makeExactMixedPointerSlotIndirectCaller(Arch::AArch64, 8, 4);
+  MedFunc Callee = makeReturnFunction("mixed_pointer_record_target", CodeVA);
+
+  llvm::LLVMContext Context;
+  EXPECT_EQ(MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                  "adjusted-code-pointer-slot", Arch::AArch64,
+                                  {}, &Image, BinaryFormat::MachO),
+            nullptr);
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     IndexedPointerTableRequiresOneCompleteCallableDomain) {
+  MedFunc Callee = makeReturnFunction("indexed_pointer_target", CodeVA);
+  {
+    BinaryImage Image = makeMixedPointerRecordImage(Arch::AArch64);
+    Segment &Data = Image.Segments[1];
+    writeObject(Data.Data, 0, CodeVA);
+    writeObject(Data.Data, 8, CodeVA);
+    Image.CodePtrRelocSlots = {DataVA, DataVA + 8};
+    Image.DataPtrRelocSlots.clear();
+    Section &Table = Image.Sections.back();
+    Table.Size = 16;
+    Table.FileSz = Table.Size;
+    MedFunc Caller =
+        makeIndexedPointerTableIndirectCaller(Arch::AArch64, DataVA);
+
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(
+        {Caller, Callee}, Context, "indexed-code-pointer-table", Arch::AArch64,
+        {}, &Image, BinaryFormat::MachO);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+    ASSERT_NE(EmittedCaller, nullptr);
+    std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+    ASSERT_EQ(Calls.size(), 1u);
+    llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+        (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+    ASSERT_NE(Mirror, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getCalledOperand(),
+                                              Mirror, Seen));
+  }
+  {
+    BinaryImage Image = makeMixedPointerRecordImage(Arch::AArch64);
+    MedFunc Caller =
+        makeIndexedPointerTableIndirectCaller(Arch::AArch64, DataVA);
+    llvm::LLVMContext Context;
+    EXPECT_EQ(MedLLVMEmitter().emit(
+                  {Caller, Callee}, Context, "indexed-mixed-pointer-table",
+                  Arch::AArch64, {}, &Image, BinaryFormat::MachO),
+              nullptr);
+  }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     MixedPointerTableNonCodeLanesFailClosed) {
+  struct Case {
+    uint64_t InitialOffset;
+    uint64_t Stride;
+    const char *Name;
+  };
+  const Case Cases[] = {
+      {0, 24, "scalar-lane"},
+      {16, 24, "data-lane"},
+      {8, 8, "mixed-lanes"},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    BinaryImage Image = makeMixedPointerRecordImage(Arch::AArch64);
+    MedFunc Caller = makeMixedPointerRecordIndirectCaller(
+        Arch::AArch64, C.InitialOffset, C.Stride);
+    MedFunc Callee = makeReturnFunction("mixed_pointer_record_target", CodeVA);
+
+    MedLLVMEmitter Classifier;
+    MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+        Classifier, Caller, Image, Arch::AArch64, BinaryFormat::MachO);
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::recoversAbsoluteDataPointerIdentity(
+                  Classifier, Caller.Blocks[1].Ops[0].Output),
+              C.InitialOffset == 16 && C.Stride == 24);
+
+    llvm::LLVMContext Context;
+    EXPECT_EQ(
+        MedLLVMEmitter().emit({Caller, Callee}, Context,
+                              std::string("mixed-pointer-record-") + C.Name,
+                              Arch::AArch64, {}, &Image, BinaryFormat::MachO),
         nullptr);
   }
 }

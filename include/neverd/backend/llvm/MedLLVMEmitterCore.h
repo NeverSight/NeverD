@@ -898,6 +898,40 @@ private:
     }
   };
 
+  /// Occurrence-level relocation roles reachable through one pointer-width
+  /// LOAD. Discovery of a pointer-table run is deliberately separate from
+  /// this result: a run may interleave code, data, import, and scalar fields,
+  /// while the LOAD address reaches only one record lane.
+  struct PointerTableLoadRoleSummary {
+    const MedOp *Load = nullptr;
+    std::set<uint64_t> Slots;
+    uint64_t ValueAdjustment = 0;
+    bool Recognized = false;
+    bool Complete = false;
+    bool SawCode = false;
+    bool SawData = false;
+    bool SawImport = false;
+    bool SawUnknown = false;
+    bool SawConflict = false;
+
+    bool isCallableOnly() const {
+      return Complete && (SawCode || SawImport) && !SawData && !SawUnknown &&
+             !SawConflict;
+    }
+    bool isDataOnly() const {
+      return Complete && SawData && !SawCode && !SawImport && !SawUnknown &&
+             !SawConflict;
+    }
+  };
+
+  /// Prove which relocation-slot roles the address of a pointer-width LOAD
+  /// can reach. Handles exact slots and bounded affine PHI recurrences. An
+  /// unsupported or ambiguous address inside a known pointer-table run is
+  /// returned as Recognized but incomplete so consumers fail closed instead
+  /// of borrowing a neighbouring slot's role.
+  PointerTableLoadRoleSummary
+  classifyPointerTableLoadRoles(const MedVar &V) const;
+
   /// Recover the possible data identities of a pointer-width LOAD from a
   /// loader-proven absolute data-pointer relocation table, including a
   /// width-preserving ADD/SUB by a proven numeric constant. Such a value is
@@ -1640,6 +1674,11 @@ private:
   // over the (immutable during emit) function body.
   mutable std::map<std::tuple<int64_t, int, bool>, std::optional<uint64_t>>
       PtrTableUniqueSegCache;
+  // Occurrence-level relocation roles depend on exact PHI feasibility and are
+  // invalidated with the other feasible-edge-dependent pointer-table proofs.
+  mutable const MedFunc *PointerTableLoadRoleCacheFor = nullptr;
+  mutable std::map<AddressProvenanceVarKey, PointerTableLoadRoleSummary>
+      PointerTableLoadRoleCache;
 
   // Per-function memoized results of the two const classifiers, dropped when
   // CurMedFunc changes (see ensureConstClassCache).  std::unordered_map rather
