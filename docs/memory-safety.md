@@ -142,6 +142,17 @@ spill/reload through stack slots):
 Every recovered capacity is an **upper bound** on the true object size, so a
 proven overflow is never a false positive.
 
+### Formatted input
+
+For `scanf`/`fscanf` and their versioned spellings, a readable constant format
+maps each non-suppressed conversion to its actual variadic output argument.
+Unbounded `%s`/`%[` outputs taint later string uses; numeric and character
+outputs taint values loaded from the written object, but not the output-pointer
+value itself. `sscanf` propagates those effects only when its input string is
+already attacker-influenced. Suppressed conversions, excess arguments,
+position-dependent or unsupported formats, bounded text fields, and `%n`
+remain UNKNOWN instead of being guessed.
+
 ### Formatted output
 
 Formatting calls keep their two independent bounds: `snprintf`/`vsnprintf`

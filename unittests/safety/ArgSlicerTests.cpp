@@ -608,6 +608,81 @@ TEST(ArgSlicer, ScanfReturnIsNotBufferContent) {
   EXPECT_TRUE(C.TaintSource.empty());
 }
 
+TEST(ArgSlicer, ScanfNumericOutputLoadIsTainted) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%zu");
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+  defOp(F, NdOp::LOAD, temp(6), temp(4));
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(6)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(C.TaintSource, "scanf");
+}
+
+TEST(ArgSlicer, FutureScanfNumericOutputDoesNotTaintEarlierLoad) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%zu");
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  defOp(F, NdOp::LOAD, temp(6), temp(4));
+  addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(6)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
+}
+
+TEST(ArgSlicer, ScanfPercentNIsNotTreatedAsUnboundedInput) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%n");
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+  defOp(F, NdOp::LOAD, temp(6), temp(4));
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(6)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
+}
+
+TEST(ArgSlicer, SscanfNumericOutputRequiresTaintedInput) {
+  for (bool TaintedInput : {false, true}) {
+    SCOPED_TRACE(TaintedInput);
+    BinaryImage Img;
+    const va_t FormatVA = addCString(Img, "%zu");
+    AnalysisInput In;
+    In.Img = &Img;
+    SinkCatalog Cat = SinkCatalog::defaults();
+
+    MedFunc F = newFunc();
+    if (TaintedInput)
+      addCall(F, "read", temp(7),
+              {MedVar::makeConst(0, 8), temp(3), MedVar::makeConst(32, 8)});
+    addCall(F, "sscanf", temp(5),
+            {temp(3), MedVar::makeConst(FormatVA, 8), temp(4)});
+    defOp(F, NdOp::LOAD, temp(6), temp(4));
+    size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(6)});
+
+    ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+    EXPECT_EQ(C.Flow, TaintedInput ? ArgFlow::Tainted : ArgFlow::Unknown);
+    EXPECT_EQ(C.TaintSource, TaintedInput ? "sscanf" : "");
+  }
+}
+
 TEST(ArgSlicer, FutureSourceOutputDoesNotTaintEarlierUse) {
   BinaryImage Img;
   AnalysisInput In;

@@ -442,6 +442,27 @@ LowFunc sourceReturnThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
   return LF;
 }
 
+LowFunc formattedScalarThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
+                                     va_t OutputSlot) {
+  constexpr uint64_t kCopyLengthReg = 16;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = kEntry;
+  Block.EndAddr = MemcpyVA + 8;
+  Block.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, SourceVA));
+  Block.Ops.push_back(lop(NdOp::LOAD, NdVar::reg(kCopyLengthReg, 8),
+                          {NdVar::cst(OutputSlot, 8)}, SourceVA + 4));
+  Block.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, MemcpyVA));
+  Block.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}, MemcpyVA + 4));
+  LF.Blocks.push_back(std::move(Block));
+  return LF;
+}
+
 LowFunc fgetsThenStrcpyLow(va_t FgetsVA, va_t StrcpyVA, bool RequireSuccess) {
   constexpr uint64_t kRax = 0;
   constexpr uint64_t kFlag = 200;
@@ -1146,6 +1167,36 @@ TEST(HuntEngine, ReachableUnboundedScanfOutputIsUnsafe) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
   EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, ScanfNumericOutputCanDriveReachableOverflow) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  constexpr va_t LengthSlotVA = 0x7000;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%zu");
+  const MedVar LengthSlot = MedVar::makeConst(
+      LengthSlotVA, 8, ConstantAddressProvenance::DataAddress, LengthSlotVA);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("scanf", temp(5), {MedVar::makeConst(FormatVA, 8), LengthSlot});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.op(NdOp::LOAD, temp(6), {LengthSlot});
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = formattedScalarThenMemcpyLow(SourceVA, SinkVA, LengthSlotVA);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_TRUE(
+      std::any_of(Fnd->Witness.begin(), Fnd->Witness.end(),
+                  [](const auto &Item) { return Item.first == "scanf"; }));
 }
 
 TEST(HuntEngine, GuardedFgetsBoundsImplicitStringCopy) {

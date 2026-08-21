@@ -117,6 +117,7 @@ private:
     std::string Name;
   };
   std::vector<IndexedSourceOutput> IndexedSourceOutputs;
+  std::vector<IndexedSourceOutput> IndexedPointeeOutputs;
 
   const MedOp *defOp(const MedVar &V) const {
     auto It = Defs.OpDef.find(keyOf(V));
@@ -252,10 +253,10 @@ private:
     return nullptr;
   }
 
-  bool sourceMayPrecedeSink(const MedCallInfo &Source,
-                            const MedCallInfo &Sink) const {
-    if (Source.BlockId == Sink.BlockId && Source.OpIdx < Sink.OpIdx)
-      return true;
+  bool sourceMayPrecede(const MedCallInfo &Source, int TargetBlockId,
+                        int OpIdx) const {
+    if (Source.BlockId == TargetBlockId)
+      return Source.OpIdx < OpIdx;
 
     const MedBlock *SourceBlock = blockById(Source.BlockId);
     if (!SourceBlock)
@@ -264,12 +265,12 @@ private:
                                        SourceBlock->Succs.end());
     llvm::DenseSet<int> Seen;
     while (!Worklist.empty()) {
-      const int BlockId = Worklist.pop_back_val();
-      if (BlockId == Sink.BlockId)
+      const int CurBlockId = Worklist.pop_back_val();
+      if (CurBlockId == TargetBlockId)
         return true;
-      if (!Seen.insert(BlockId).second)
+      if (!Seen.insert(CurBlockId).second)
         continue;
-      const MedBlock *Block = blockById(BlockId);
+      const MedBlock *Block = blockById(CurBlockId);
       if (!Block)
         continue;
       Worklist.append(Block->Succs.begin(), Block->Succs.end());
@@ -277,8 +278,14 @@ private:
     return false;
   }
 
-  bool addIndexedSourceOutput(size_t CallInfoIndex, int ArgIndex,
-                              llvm::StringRef Name) {
+  bool sourceMayPrecedeSink(const MedCallInfo &Source,
+                            const MedCallInfo &Sink) const {
+    return sourceMayPrecede(Source, Sink.BlockId, Sink.OpIdx);
+  }
+
+  bool addIndexedOutput(std::vector<IndexedSourceOutput> &Outputs,
+                        size_t CallInfoIndex, int ArgIndex,
+                        llvm::StringRef Name) {
     if (CallInfoIndex >= F.CallInfos.size())
       return false;
     const MedCallInfo &CI = F.CallInfos[CallInfoIndex];
@@ -296,12 +303,35 @@ private:
       if (!ExactDataAddress || (Value.ConstVal == 0 && !AuthenticatedZero))
         return false;
     }
-    for (const IndexedSourceOutput &Output : IndexedSourceOutputs)
+    for (const IndexedSourceOutput &Output : Outputs)
       if (Output.CallInfoIndex == CallInfoIndex && Output.Value == Value)
         return false;
-    IndexedSourceOutputs.push_back(
-        {Value, CallInfoIndex, SinkCatalog::normalize(Name)});
+    Outputs.push_back({Value, CallInfoIndex, SinkCatalog::normalize(Name)});
     return true;
+  }
+
+  bool addIndexedSourceOutput(size_t CallInfoIndex, int ArgIndex,
+                              llvm::StringRef Name) {
+    return addIndexedOutput(IndexedSourceOutputs, CallInfoIndex, ArgIndex,
+                            Name);
+  }
+
+  bool addIndexedPointeeOutput(size_t CallInfoIndex, int ArgIndex,
+                               llvm::StringRef Name) {
+    return addIndexedOutput(IndexedPointeeOutputs, CallInfoIndex, ArgIndex,
+                            Name);
+  }
+
+  std::optional<std::string> pointeeSourceBefore(const MedVar &Address,
+                                                 int BlockId, int OpIdx) const {
+    for (const IndexedSourceOutput &Output : IndexedPointeeOutputs) {
+      if (Output.Value != Address)
+        continue;
+      const MedCallInfo &Source = F.CallInfos[Output.CallInfoIndex];
+      if (sourceMayPrecede(Source, BlockId, OpIdx))
+        return Output.Name;
+    }
+    return std::nullopt;
   }
 
   void publishSourceOutputsBefore(const MedCallInfo &Point) {
@@ -341,8 +371,10 @@ private:
       const MedCallInfo &CI = F.CallInfos[I];
       const std::string Name = resolveCallName(In, CI);
       const SourceEntry *Source = Cat.matchSource(Name);
-      if (Source && Source->OutArg >= 0)
+      if (Source && Source->OutArg >= 0) {
         addIndexedSourceOutput(I, Source->OutArg, Name);
+        addIndexedPointeeOutput(I, Source->OutArg, Name);
+      }
     }
 
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
@@ -357,6 +389,10 @@ private:
         continue;
       for (int ArgIndex : Outputs->UnboundedTextArgs)
         addIndexedSourceOutput(I, ArgIndex, Name);
+      for (int ArgIndex : Outputs->UnboundedTextArgs)
+        addIndexedPointeeOutput(I, ArgIndex, Name);
+      for (int ArgIndex : Outputs->ScalarArgs)
+        addIndexedPointeeOutput(I, ArgIndex, Name);
     }
 
     for (size_t Pass = 0; Pass <= F.CallInfos.size(); ++Pass) {
@@ -374,8 +410,12 @@ private:
             Outputs->InputArg >= static_cast<int>(CI.Args.size()) ||
             !valueIsTaintedBefore(CI.Args[Outputs->InputArg], CI))
           continue;
-        for (int ArgIndex : Outputs->UnboundedTextArgs)
+        for (int ArgIndex : Outputs->UnboundedTextArgs) {
           Changed |= addIndexedSourceOutput(I, ArgIndex, Name);
+          Changed |= addIndexedPointeeOutput(I, ArgIndex, Name);
+        }
+        for (int ArgIndex : Outputs->ScalarArgs)
+          Changed |= addIndexedPointeeOutput(I, ArgIndex, Name);
       }
       if (!Changed)
         break;
@@ -691,6 +731,17 @@ private:
       return ArgFlow::Unknown;
 
     case NdOp::LOAD: {
+      if (Op.NumInputs > 0) {
+        const MedVar &Addr = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
+        if (std::optional<std::string> Source =
+                pointeeSourceBefore(Addr, B.Id, OpIdx)) {
+          if (Top.TaintSource.empty()) {
+            Top.TaintSource = *Source;
+            Top.Reason = "loads external input from " + *Source;
+          }
+          return ArgFlow::Tainted;
+        }
+      }
       detail::ReachingStackValues Reaching = reachingLoad(B, OpIdx, Op);
       if (!Reaching.Complete)
         return ArgFlow::Unknown;

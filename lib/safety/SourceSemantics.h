@@ -34,6 +34,12 @@ struct FormattedSourceOutputs {
   FormattedSourceKind Kind = FormattedSourceKind::ExternalInput;
   int InputArg = -1;
   std::vector<int> UnboundedTextArgs;
+  std::vector<int> ScalarArgs;
+};
+
+struct ParsedScanfOutputs {
+  std::vector<int> UnboundedTextArgs;
+  std::vector<int> ScalarArgs;
 };
 
 inline std::optional<std::pair<std::string, FormattedSourceKind>>
@@ -77,13 +83,13 @@ inline bool isDigit(char C) {
   return std::isdigit(static_cast<unsigned char>(C)) != 0;
 }
 
-inline std::optional<std::vector<int>>
-parseUnboundedScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
-                           size_t ArgCount) {
+inline std::optional<ParsedScanfOutputs>
+parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
+                  size_t ArgCount) {
   if (FixedCount == 0 || FixedCount > ArgCount)
     return std::nullopt;
   int NextArg = static_cast<int>(FixedCount);
-  std::vector<int> Outputs;
+  ParsedScanfOutputs Outputs;
   for (size_t I = 0; I < Format.size(); ++I) {
     if (Format[I] != '%')
       continue;
@@ -147,7 +153,9 @@ parseUnboundedScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
     if (NextArg < 0 || static_cast<size_t>(NextArg) >= ArgCount)
       return std::nullopt;
     if ((Conversion == 's' || IsScanSet) && !HasWidth && !HasLength)
-      Outputs.push_back(NextArg);
+      Outputs.UnboundedTextArgs.push_back(NextArg);
+    else if (Conversion != 's' && Conversion != 'n' && !IsScanSet)
+      Outputs.ScalarArgs.push_back(NextArg);
     ++NextArg;
   }
   return Outputs;
@@ -168,14 +176,15 @@ recoverFormattedSourceOutputs(const BinaryImage *Img,
   std::optional<std::string> Format = readMappedCString(Img, Args[FormatArg]);
   if (!Format)
     return std::nullopt;
-  std::optional<std::vector<int>> Outputs =
-      parseUnboundedScanfOutputs(*Format, FixedCount, Args.size());
+  std::optional<ParsedScanfOutputs> Outputs =
+      parseScanfOutputs(*Format, FixedCount, Args.size());
   if (!Outputs)
     return std::nullopt;
   FormattedSourceOutputs Result;
   Result.Kind = Source->second;
   Result.InputArg = Result.Kind == FormattedSourceKind::DerivedInput ? 0 : -1;
-  Result.UnboundedTextArgs = std::move(*Outputs);
+  Result.UnboundedTextArgs = std::move(Outputs->UnboundedTextArgs);
+  Result.ScalarArgs = std::move(Outputs->ScalarArgs);
   return Result;
 }
 
