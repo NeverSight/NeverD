@@ -360,6 +360,59 @@ TEST(AllocLifetime, MayAliasFreeWrapperDoesNotProveCallerReleased) {
   EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
 }
 
+TEST(AllocLifetime, ConditionalFreeWrapperDoesNotProveCallerReleased) {
+  FB Helper("conditional_free", 0x200);
+  Helper.F.Params = {temp(0)};
+  int hEntry = Helper.block();
+  int hFree = Helper.block();
+  int hSkip = Helper.block();
+  int hJoin = Helper.block();
+  Helper.succ(hEntry, hFree);
+  Helper.succ(hEntry, hSkip);
+  Helper.succ(hFree, hJoin);
+  Helper.succ(hSkip, hJoin);
+  Helper.call(hFree, "free", MedVar{}, {temp(0)});
+  Helper.ret(hJoin, {});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(u0, "conditional_free", MedVar{}, {temp(1)}, 0x200);
+  User.ret(u0, {});
+
+  auto Fs = audit({Helper.F, User.F});
+  const Finding *UserLeak = nullptr;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+      UserLeak = &F;
+  ASSERT_NE(UserLeak, nullptr);
+  EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, AlternateFreeSitesProveWrapperReleased) {
+  FB Helper("always_free", 0x200);
+  Helper.F.Params = {temp(0)};
+  int hEntry = Helper.block();
+  int hLeft = Helper.block();
+  int hRight = Helper.block();
+  int hJoin = Helper.block();
+  Helper.succ(hEntry, hLeft);
+  Helper.succ(hEntry, hRight);
+  Helper.succ(hLeft, hJoin);
+  Helper.succ(hRight, hJoin);
+  Helper.call(hLeft, "free", MedVar{}, {temp(0)});
+  Helper.call(hRight, "free", MedVar{}, {temp(0)});
+  Helper.ret(hJoin, {});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(u0, "always_free", MedVar{}, {temp(1)}, 0x200);
+  User.ret(u0, {});
+
+  EXPECT_FALSE(has(audit({Helper.F, User.F}), VulnClass::HeapLeak));
+}
+
 TEST(AllocLifetime, DoubleFreeSequential) {
   FB B("f", 0x100);
   int b0 = B.block();

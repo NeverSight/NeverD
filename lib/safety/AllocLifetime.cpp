@@ -506,24 +506,45 @@ private:
   Summary summarize(const MedFunc &F) const {
     Summary S;
     MemModel Mem(F, In);
-    for (const MedCallInfo &CI : F.CallInfos) {
-      for (int FA : freeArgsOf(CI)) {
-        if (FA < 0 || FA >= static_cast<int>(CI.Args.size()) ||
-            CI.Args[FA].isConst())
-          continue;
-        for (int PI = 0; PI < static_cast<int>(F.Params.size()); ++PI) {
-          if (F.Params[PI].isConst())
+    for (int PI = 0; PI < static_cast<int>(F.Params.size()); ++PI) {
+      if (F.Params[PI].isConst())
+        continue;
+      llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(F.Params[PI]);
+      llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(F.Params[PI]);
+      std::vector<FreeEvent> DefiniteFrees;
+      bool HasPotentialFree = false;
+      for (const MedCallInfo &CI : F.CallInfos) {
+        for (int FA : freeArgsOf(CI)) {
+          if (FA < 0 || FA >= static_cast<int>(CI.Args.size()) ||
+              CI.Args[FA].isConst())
             continue;
-          llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(F.Params[PI]);
-          llvm::DenseSet<ValueKey> MustAlias =
-              Mem.mustAliasClosure(F.Params[PI]);
           const ValueKey ArgKey = keyOf(CI.Args[FA]);
-          if (MustAlias.count(ArgKey))
-            S.FreesParam.insert(PI);
-          else if (Alias.count(ArgKey))
-            S.UnknownParam.insert(PI);
+          if (MustAlias.count(ArgKey)) {
+            DefiniteFrees.push_back({CI.BlockId, CI.OpIdx, callVA(F, CI),
+                                     CI.TargetAddr, callName(CI),
+                                     CI.IsIndirect});
+            break;
+          } else if (Alias.count(ArgKey))
+            HasPotentialFree = true;
         }
       }
+
+      bool ReachedFree = false;
+      bool HasUnreleasedExit = true;
+      if (!F.Blocks.empty()) {
+        int EntryBlock = F.Blocks.front().Id;
+        for (const MedBlock &B : F.Blocks)
+          if (B.StartAddr == F.Entry) {
+            EntryBlock = B.Id;
+            break;
+          }
+        HasUnreleasedExit = reachesExitWithoutFree(F, EntryBlock, -1,
+                                                   DefiniteFrees, &ReachedFree);
+      }
+      if (ReachedFree && !HasUnreleasedExit)
+        S.FreesParam.insert(PI);
+      else if (ReachedFree || HasPotentialFree)
+        S.UnknownParam.insert(PI);
     }
 
     for (int PI = 0; PI < static_cast<int>(F.Params.size()); ++PI) {
@@ -623,7 +644,8 @@ private:
   }
 
   bool reachesExitWithoutFree(const MedFunc &F, int AllocBlock, int AllocOp,
-                              const std::vector<FreeEvent> &Frees) const {
+                              const std::vector<FreeEvent> &Frees,
+                              bool *ReachedFree = nullptr) const {
     llvm::DenseSet<ValueKey> SeenPts;
     std::deque<std::pair<int, int>> Work;
     auto enqueue = [&](int B, int O) {
@@ -649,8 +671,11 @@ private:
           enqueue(S, 0);
         continue;
       }
-      if (isFreeSite(BlkId, OpIdx, Frees))
+      if (isFreeSite(BlkId, OpIdx, Frees)) {
+        if (ReachedFree)
+          *ReachedFree = true;
         continue;
+      }
       if (Blk->Ops[OpIdx].Opcode == NdOp::RETURN)
         return true;
       enqueue(BlkId, OpIdx + 1);
