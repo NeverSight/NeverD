@@ -2172,6 +2172,26 @@ TEST(HuntEngine, FreadReturnHonorsElementCount) {
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
 }
 
+TEST(HuntEngine, FreadZeroElementSizeReturnsZero) {
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(
+      "fread", temp(5),
+      {temp(2), MedVar::makeConst(0, 8), MedVar::makeConst(100, 8), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400004;
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = sourceReturnThenMemcpyLow(0x400004, 0x400010,
+                                         /*RequireNonnegative=*/false);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
 TEST(HuntEngine, UncheckedReadErrorRemainsUnsafe) {
   Builder B;
   B.F.Entry = 0x400000;

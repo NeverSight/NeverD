@@ -200,6 +200,7 @@ struct CountedSourceReturn {
   uint32_t BoundBits = 0;
   bool BoundIsSigned = false;
   int RequiredZeroArg = -1;
+  int ZeroResultIfArgZero = -1;
 };
 
 struct CountedSourceOutput {
@@ -226,7 +227,7 @@ CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
             WindowsRead ? uint32_t(32) : uint32_t(0)};
   }
   if (Normalized == "fread")
-    return {2, false, 0};
+    return {2, false, 0, 0, false, -1, 1};
   if (Normalized == "recv" || Normalized == "recvfrom") {
     const bool WindowsSocket = Format == BinaryFormat::COFF;
     return {2,
@@ -869,6 +870,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         if (CountedReturnApplies)
           ReturnBound = readCallArgument(In, Fn, CountedReturn.BoundArg,
                                          *Callee, Cur.State);
+        SymRef ZeroResultArg;
+        if (CountedReturnApplies && CountedReturn.ZeroResultIfArgZero >= 0)
+          ZeroResultArg = readCallArgument(
+              In, Fn, CountedReturn.ZeroResultIfArgZero, *Callee, Cur.State);
         SymRef OutputBound;
         SymRef OutputCountPointer;
         if (CountedOutputApplies) {
@@ -962,6 +967,16 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               Cur.Constraints.push_back(Ctx.mkOr(IsError, Success));
             } else {
               Cur.Constraints.push_back(WithinBound);
+            }
+            if (CountedReturn.ZeroResultIfArgZero >= 0) {
+              if (!ZeroResultArg.isValid()) {
+                Cur.SemanticUnknown = true;
+              } else {
+                const SymRef SemanticArg = Ctx.mkZExtOrTrunc(ZeroResultArg, 64);
+                Cur.Constraints.push_back(
+                    Ctx.mkOr(Ctx.mkNe(SemanticArg, Ctx.mkZero(64)),
+                             Ctx.mkEq(ConstraintRet, Ctx.mkZero(ReturnWidth))));
+              }
             }
           }
         }
