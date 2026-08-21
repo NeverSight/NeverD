@@ -165,7 +165,9 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
       continue;
     if (NextArg < 0 || static_cast<size_t>(NextArg) >= ArgCount)
       return std::nullopt;
-    if ((Conversion == 's' || IsScanSet) && !HasWidth && !HasLength)
+    if (Conversion == 'c' && !HasLength)
+      Outputs.UnboundedTextArgs.push_back(NextArg);
+    else if ((Conversion == 's' || IsScanSet) && !HasWidth && !HasLength)
       Outputs.UnboundedTextArgs.push_back(NextArg);
     else if ((Conversion == 's' || IsScanSet) && HasWidth && !HasLength) {
       if (Width == std::numeric_limits<uint64_t>::max())

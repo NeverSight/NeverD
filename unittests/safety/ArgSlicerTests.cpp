@@ -592,6 +592,25 @@ TEST(ArgSlicer, BoundedScanfStringRemainsAttackerControlled) {
   EXPECT_EQ(C.TaintSource, "scanf");
 }
 
+TEST(ArgSlicer, ScanfCharacterBufferRemainsAttackerControlled) {
+  for (const char *Format : {"%c", "%7c"}) {
+    SCOPED_TRACE(Format);
+    BinaryImage Img;
+    const va_t FormatVA = addCString(Img, Format);
+    AnalysisInput In;
+    In.Img = &Img;
+    SinkCatalog Cat = SinkCatalog::defaults();
+
+    MedFunc F = newFunc();
+    addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+    size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+
+    ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
+    EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+    EXPECT_EQ(C.TaintSource, "scanf");
+  }
+}
+
 TEST(ArgSlicer, ScanfReturnIsNotBufferContent) {
   BinaryImage Img;
   const va_t FormatVA = addCString(Img, "%s");

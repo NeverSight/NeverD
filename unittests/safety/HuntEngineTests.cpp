@@ -1619,6 +1619,33 @@ TEST(HuntEngine, GuardedBoundedScanfStringCanOverflowSmallerDestination) {
       }));
 }
 
+TEST(HuntEngine, ScanfCharacterOutputHasNoImplicitStringBound) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  for (const char *Format : {"%c", "%7c"}) {
+    SCOPED_TRACE(Format);
+    BinaryImage Img;
+    const va_t FormatVA = addCString(Img, Format);
+    const MedVar SourceBuffer = mkReg(24, 0);
+
+    Builder B;
+    B.F.Entry = 0x400000;
+    B.F.CC = CallingConv::SysV_AMD64;
+    B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call("scanf", temp(5, 4), {MedVar::makeConst(FormatVA, 8), SourceBuffer});
+    B.F.Blocks[0].Ops.back().Addr = SourceVA;
+    B.call("strcpy", temp(0), {temp(1), SourceBuffer});
+    B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+    LowFunc LF = scanfThenStrcpyLow(SourceVA, SinkVA);
+    auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                    BinaryFormat::ELF, &Img);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+    EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  }
+}
+
 TEST(HuntEngine, LaterUnboundedScanfInvalidatesEarlierStringBound) {
   constexpr va_t FirstSourceVA = 0x400004;
   constexpr va_t SecondSourceVA = 0x400008;
