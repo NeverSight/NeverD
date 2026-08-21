@@ -6,6 +6,7 @@
 
 #include "neverd/safety/ArgSlicer.h"
 
+#include "SourceSemantics.h"
 #include "StackSlotFlow.h"
 
 #include "neverd/ir/med/MedIR.h"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <tuple>
 
 using namespace neverd;
@@ -26,9 +28,15 @@ using namespace neverd::safety;
 namespace {
 
 using ValueKey = std::tuple<uint8_t, int, int>;
+using ConstantSourceKey =
+    std::tuple<uint64_t, uint16_t, ConstantAddressProvenance, uint64_t>;
 
 ValueKey keyOf(const MedVar &V) {
   return {static_cast<uint8_t>(V.Kind), V.Id, V.SSAVer};
+}
+
+ConstantSourceKey constantSourceKey(const MedVar &V) {
+  return {V.ConstVal, V.Size, V.Provenance, V.AddressOwnerVA};
 }
 
 bool isLengthReturn(llvm::StringRef Name) {
@@ -112,6 +120,13 @@ private:
   DefIndex Defs;
   llvm::DenseSet<ValueKey> Active; ///< guards against SSA cycles.
   llvm::DenseMap<ValueKey, std::string> TaintedOutputValues;
+  std::map<ConstantSourceKey, std::string> TaintedOutputConstants;
+  struct IndexedSourceOutput {
+    MedVar Value;
+    size_t CallInfoIndex = 0;
+    std::string Name;
+  };
+  std::vector<IndexedSourceOutput> IndexedSourceOutputs;
 
   const MedOp *defOp(const MedVar &V) const {
     auto It = Defs.OpDef.find(keyOf(V));
@@ -272,22 +287,111 @@ private:
     return false;
   }
 
+  bool addIndexedSourceOutput(size_t CallInfoIndex, int ArgIndex,
+                              llvm::StringRef Name) {
+    if (CallInfoIndex >= F.CallInfos.size())
+      return false;
+    const MedCallInfo &CI = F.CallInfos[CallInfoIndex];
+    if (ArgIndex < 0 || ArgIndex >= static_cast<int>(CI.Args.size()))
+      return false;
+    const MedVar &Value = CI.Args[ArgIndex];
+    if (Value.isConst()) {
+      const bool ExactDataAddress =
+          Value.Provenance == ConstantAddressProvenance::DataAddress ||
+          Value.Provenance == ConstantAddressProvenance::Address;
+      const bool AuthenticatedZero =
+          Value.ConstVal == 0 &&
+          Value.Provenance == ConstantAddressProvenance::DataAddress &&
+          Value.AddressOwnerVA != InvalidVA;
+      if (!ExactDataAddress || (Value.ConstVal == 0 && !AuthenticatedZero))
+        return false;
+    }
+    for (const IndexedSourceOutput &Output : IndexedSourceOutputs)
+      if (Output.CallInfoIndex == CallInfoIndex && Output.Value == Value)
+        return false;
+    IndexedSourceOutputs.push_back(
+        {Value, CallInfoIndex, SinkCatalog::normalize(Name)});
+    return true;
+  }
+
+  void publishSourceOutputsBefore(const MedCallInfo &Point) {
+    TaintedOutputValues.clear();
+    TaintedOutputConstants.clear();
+    for (const IndexedSourceOutput &Output : IndexedSourceOutputs) {
+      const MedCallInfo &Source = F.CallInfos[Output.CallInfoIndex];
+      if (!sourceMayPrecedeSink(Source, Point))
+        continue;
+      if (Output.Value.isConst())
+        TaintedOutputConstants[constantSourceKey(Output.Value)] = Output.Name;
+      else
+        TaintedOutputValues[keyOf(Output.Value)] = Output.Name;
+    }
+  }
+
+  bool valueIsTaintedBefore(const MedVar &V, const MedCallInfo &Point) {
+    llvm::DenseMap<ValueKey, std::string> Saved =
+        std::move(TaintedOutputValues);
+    std::map<ConstantSourceKey, std::string> SavedConstants =
+        std::move(TaintedOutputConstants);
+    publishSourceOutputsBefore(Point);
+    Active.clear();
+    ArgClassification Classification;
+    const bool Tainted = classify(V, 0, Classification) == ArgFlow::Tainted;
+    Active.clear();
+    TaintedOutputValues = std::move(Saved);
+    TaintedOutputConstants = std::move(SavedConstants);
+    return Tainted;
+  }
+
   void indexSourceOutputs(size_t SinkCallInfoIndex) {
     if (SinkCallInfoIndex >= F.CallInfos.size())
       return;
-    const MedCallInfo &Sink = F.CallInfos[SinkCallInfoIndex];
-    for (const MedCallInfo &CI : F.CallInfos) {
-      if (!sourceMayPrecedeSink(CI, Sink))
-        continue;
+
+    for (size_t I = 0; I < F.CallInfos.size(); ++I) {
+      const MedCallInfo &CI = F.CallInfos[I];
       const std::string Name = resolveCallName(In, CI);
       const SourceEntry *Source = Cat.matchSource(Name);
-      if (!Source || Source->OutArg < 0 ||
-          Source->OutArg >= static_cast<int>(CI.Args.size()))
-        continue;
-      const MedVar &Out = CI.Args[Source->OutArg];
-      if (!Out.isConst())
-        TaintedOutputValues[keyOf(Out)] = SinkCatalog::normalize(Name);
+      if (Source && Source->OutArg >= 0)
+        addIndexedSourceOutput(I, Source->OutArg, Name);
     }
+
+    for (size_t I = 0; I < F.CallInfos.size(); ++I) {
+      const MedCallInfo &CI = F.CallInfos[I];
+      const std::string Name = resolveCallName(In, CI);
+      if (!Cat.matchSource(Name))
+        continue;
+      std::optional<detail::FormattedSourceOutputs> Outputs =
+          detail::recoverFormattedSourceOutputs(In.Img, Name, CI.Args);
+      if (!Outputs ||
+          Outputs->Kind != detail::FormattedSourceKind::ExternalInput)
+        continue;
+      for (int ArgIndex : Outputs->UnboundedTextArgs)
+        addIndexedSourceOutput(I, ArgIndex, Name);
+    }
+
+    for (size_t Pass = 0; Pass <= F.CallInfos.size(); ++Pass) {
+      bool Changed = false;
+      for (size_t I = 0; I < F.CallInfos.size(); ++I) {
+        const MedCallInfo &CI = F.CallInfos[I];
+        const std::string Name = resolveCallName(In, CI);
+        if (!Cat.matchSource(Name))
+          continue;
+        std::optional<detail::FormattedSourceOutputs> Outputs =
+            detail::recoverFormattedSourceOutputs(In.Img, Name, CI.Args);
+        if (!Outputs ||
+            Outputs->Kind != detail::FormattedSourceKind::DerivedInput ||
+            Outputs->InputArg < 0 ||
+            Outputs->InputArg >= static_cast<int>(CI.Args.size()) ||
+            !valueIsTaintedBefore(CI.Args[Outputs->InputArg], CI))
+          continue;
+        for (int ArgIndex : Outputs->UnboundedTextArgs)
+          Changed |= addIndexedSourceOutput(I, ArgIndex, Name);
+      }
+      if (!Changed)
+        break;
+    }
+
+    publishSourceOutputsBefore(F.CallInfos[SinkCallInfoIndex]);
   }
 
   std::optional<uint64_t> clampBound(const MedOp &Op) const {
@@ -440,6 +544,14 @@ private:
 
   ArgFlow classify(const MedVar &V, int Depth, ArgClassification &Top) {
     if (V.isConst()) {
+      if (auto It = TaintedOutputConstants.find(constantSourceKey(V));
+          It != TaintedOutputConstants.end()) {
+        if (Top.TaintSource.empty()) {
+          Top.TaintSource = It->second;
+          Top.Reason = "reaches external input " + Top.TaintSource;
+        }
+        return ArgFlow::Tainted;
+      }
       if (Depth == 0) {
         Top.ConstValue = V.ConstVal;
         Top.Reason = "constant argument";

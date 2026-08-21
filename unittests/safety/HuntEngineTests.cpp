@@ -44,6 +44,20 @@ MedVar mkReg(uint64_t Off, int Ver, uint16_t Size = 8) {
   return V;
 }
 
+va_t addCString(BinaryImage &Img, llvm::StringRef Value,
+                va_t Address = 0x1000) {
+  Segment Seg;
+  Seg.Name = "data";
+  Seg.VA = Address;
+  Seg.Flags = SegmentFlags::Readable;
+  Seg.Data.assign(Value.bytes_begin(), Value.bytes_end());
+  Seg.Data.push_back(0);
+  Seg.Size = Seg.Data.size();
+  Seg.FileSz = Seg.Data.size();
+  Img.Segments.push_back(std::move(Seg));
+  return Address;
+}
+
 struct Builder {
   MedFunc F;
   explicit Builder(const std::string &Name = "f") {
@@ -81,8 +95,9 @@ struct Builder {
 std::optional<Finding> hunt(MedFunc &F, bool StackRegs = false,
                             LowFunc *LF = nullptr, Arch A = Arch::Unknown,
                             const SafetyBudgets &Budgets = {},
-                            BinaryFormat Format = BinaryFormat::Unknown) {
-  BinaryImage Img;
+                            BinaryFormat Format = BinaryFormat::Unknown,
+                            const BinaryImage *Image = nullptr) {
+  BinaryImage Img = Image ? *Image : BinaryImage{};
   Img.Arch = A;
   Img.Format = Format;
   std::vector<MedFunc> Funcs{F};
@@ -662,6 +677,89 @@ TEST(HuntEngine, SourceAndSinkMustShareFeasiblePath) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
   EXPECT_TRUE(Fnd->Witness.empty());
   EXPECT_EQ(Fnd->Detail, "length provenance unresolved");
+}
+
+TEST(HuntEngine, ScanfOutputAndSinkMustShareFeasiblePath) {
+  constexpr va_t MallocVA = 0x400000;
+  constexpr va_t SourceVA = 0x400010;
+  constexpr va_t SinkVA = 0x400050;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+
+  MedFunc F;
+  F.Name = "f";
+  F.Entry = MallocVA;
+  F.CC = CallingConv::SysV_AMD64;
+  F.Blocks.resize(6);
+  for (int I = 0; I < 6; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  F.Blocks[3].Succs = {4, 5};
+  F.Blocks[4].Preds = {3};
+  F.Blocks[5].Preds = {3};
+  const MedVar SourceBuffer = mkReg(24, 0);
+
+  auto addBlockCall = [&](int BlockId, llvm::StringRef Name, MedVar Ret,
+                          std::vector<MedVar> Args, va_t Addr) {
+    MedBlock &Block = F.Blocks[BlockId];
+    const int OpIdx = static_cast<int>(Block.Ops.size());
+    MedOp Op;
+    Op.Opcode = NdOp::CALL;
+    Op.Output = Ret;
+    Op.Addr = Addr;
+    Op.addInput(MedVar::makeConst(0x9000, 8));
+    Block.Ops.push_back(std::move(Op));
+    MedCallInfo CI;
+    CI.BlockId = BlockId;
+    CI.OpIdx = OpIdx;
+    CI.TargetName = Name.str();
+    CI.Args = std::move(Args);
+    F.CallInfos.push_back(std::move(CI));
+  };
+
+  addBlockCall(0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, MallocVA);
+  addBlockCall(1, "scanf", temp(5),
+               {MedVar::makeConst(FormatVA, 8), SourceBuffer}, SourceVA);
+  addBlockCall(5, "strcpy", temp(0), {temp(1), SourceBuffer}, SinkVA);
+
+  LowFunc LF = mutuallyExclusiveSourceAndSinkLow(MallocVA, SourceVA, SinkVA);
+  auto Fnd = hunt(F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::Unknown, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
+  EXPECT_EQ(Fnd->Detail, "length provenance unresolved");
+}
+
+TEST(HuntEngine, ReachableUnboundedScanfOutputIsUnsafe) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  const MedVar SourceBuffer = mkReg(24, 0);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("scanf", temp(5), {MedVar::makeConst(FormatVA, 8), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = sourceReturnThenMemcpyLow(SourceVA, SinkVA,
+                                         /*RequireNonnegative=*/false);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::Unknown, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, GuardedReadReturnHonorsRequestedCount) {

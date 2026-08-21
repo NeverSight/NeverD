@@ -62,6 +62,20 @@ MedFunc newFunc(const std::string &Name = "f") {
   return F;
 }
 
+va_t addCString(BinaryImage &Img, llvm::StringRef Value,
+                va_t Address = 0x1000) {
+  Segment Seg;
+  Seg.Name = "data";
+  Seg.VA = Address;
+  Seg.Flags = SegmentFlags::Readable;
+  Seg.Data.assign(Value.bytes_begin(), Value.bytes_end());
+  Seg.Data.push_back(0);
+  Seg.Size = Seg.Data.size();
+  Seg.FileSz = Seg.Data.size();
+  Img.Segments.push_back(std::move(Seg));
+  return Address;
+}
+
 // Register a call at the end of block 0 that defines Ret and record its info.
 void addCall(MedFunc &F, const std::string &Callee, MedVar Ret,
              std::vector<MedVar> Args = {}) {
@@ -411,6 +425,158 @@ TEST(ArgSlicer, SourceOutputBufferIsTainted) {
   ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
   EXPECT_EQ(C.Flow, ArgFlow::Tainted);
   EXPECT_EQ(C.TaintSource, "read");
+}
+
+TEST(ArgSlicer, ExactGlobalSourceOutputDoesNotTaintNumericCoincidences) {
+  BinaryImage Img;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = 0x2000;
+  Data.Size = 16;
+  Data.FileSz = 16;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(16);
+  Img.Segments.push_back(std::move(Data));
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+  const MedVar Global = MedVar::makeConst(
+      0x2000, 8, ConstantAddressProvenance::DataAddress, 0x2000);
+
+  MedFunc F = newFunc();
+  addCall(F, "read", temp(5),
+          {MedVar::makeConst(0, 8), Global, MedVar::makeConst(32, 8)});
+  size_t GlobalIdx = addSink(F, "strcpy", {temp(1), Global});
+  const MedVar Scalar =
+      MedVar::makeConst(0x2000, 8, ConstantAddressProvenance::Scalar);
+  size_t ScalarIdx = addSink(F, "strcpy", {temp(1), Scalar});
+
+  ArgClassification GlobalResult = classifyArgument(In, Cat, F, GlobalIdx, 1);
+  EXPECT_EQ(GlobalResult.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(GlobalResult.TaintSource, "read");
+  ArgClassification ScalarResult = classifyArgument(In, Cat, F, ScalarIdx, 1);
+  EXPECT_NE(ScalarResult.Flow, ArgFlow::Tainted);
+  EXPECT_TRUE(ScalarResult.TaintSource.empty());
+
+  MedFunc Coincidence = newFunc();
+  addCall(Coincidence, "read", temp(5),
+          {MedVar::makeConst(0, 8), Scalar, MedVar::makeConst(32, 8)});
+  size_t CoincidenceIdx = addSink(Coincidence, "strcpy", {temp(1), Scalar});
+  ArgClassification CoincidenceResult =
+      classifyArgument(In, Cat, Coincidence, CoincidenceIdx, 1);
+  EXPECT_NE(CoincidenceResult.Flow, ArgFlow::Tainted);
+  EXPECT_TRUE(CoincidenceResult.TaintSource.empty());
+}
+
+TEST(ArgSlicer, ScanfVariadicBufferOutputIsTainted) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+  size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(C.TaintSource, "scanf");
+}
+
+TEST(ArgSlicer, VersionedScanfSpellingsPreserveOutputSemantics) {
+  for (const char *Name : {"__isoc99_scanf", "__isoc23_scanf"}) {
+    SCOPED_TRACE(Name);
+    BinaryImage Img;
+    const va_t FormatVA = addCString(Img, "%s");
+    AnalysisInput In;
+    In.Img = &Img;
+    SinkCatalog Cat = SinkCatalog::defaults();
+
+    MedFunc F = newFunc();
+    addCall(F, Name, temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+    size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+
+    ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
+    EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+    EXPECT_EQ(C.TaintSource, SinkCatalog::normalize(Name));
+  }
+}
+
+TEST(ArgSlicer, FscanfAndSscanfUseTheirFixedPrefixes) {
+  for (const char *Name : {"fscanf", "sscanf"}) {
+    SCOPED_TRACE(Name);
+    BinaryImage Img;
+    const va_t FormatVA = addCString(Img, "%s");
+    AnalysisInput In;
+    In.Img = &Img;
+    SinkCatalog Cat = SinkCatalog::defaults();
+
+    MedFunc F = newFunc();
+    if (llvm::StringRef(Name) == "sscanf")
+      addCall(F, "read", temp(7),
+              {MedVar::makeConst(0, 8), temp(3), MedVar::makeConst(32, 8)});
+    addCall(F, Name, temp(5),
+            {temp(3), MedVar::makeConst(FormatVA, 8), temp(4)});
+    size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+
+    ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
+    EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+    EXPECT_EQ(C.TaintSource, Name);
+  }
+}
+
+TEST(ArgSlicer, ScanfSuppressedConversionConsumesNoOutputArgument) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%*s%s");
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "scanf", temp(5),
+          {MedVar::makeConst(FormatVA, 8), temp(4), temp(6)});
+  size_t TaintedIdx = addSink(F, "strcpy", {temp(1), temp(4)});
+  size_t ExcessIdx = addSink(F, "strcpy", {temp(1), temp(6)});
+
+  ArgClassification Tainted = classifyArgument(In, Cat, F, TaintedIdx, 1);
+  EXPECT_EQ(Tainted.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(Tainted.TaintSource, "scanf");
+  ArgClassification Excess = classifyArgument(In, Cat, F, ExcessIdx, 1);
+  EXPECT_EQ(Excess.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(Excess.TaintSource.empty());
+}
+
+TEST(ArgSlicer, BoundedScanfStringDoesNotClaimUnboundedTaint) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%7s");
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+  size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
+}
+
+TEST(ArgSlicer, ScanfReturnIsNotBufferContent) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(4)});
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
 }
 
 TEST(ArgSlicer, FutureSourceOutputDoesNotTaintEarlierUse) {

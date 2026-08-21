@@ -28,6 +28,12 @@ SAFETY_SOURCE(gets, 0)
 SAFETY_SOURCE(scanf, -1)
 SAFETY_SOURCE(fscanf, -1)
 SAFETY_SOURCE(sscanf, -1)
+SAFETY_SOURCE(isoc99_scanf, -1)
+SAFETY_SOURCE(isoc99_fscanf, -1)
+SAFETY_SOURCE(isoc99_sscanf, -1)
+SAFETY_SOURCE(isoc23_scanf, -1)
+SAFETY_SOURCE(isoc23_fscanf, -1)
+SAFETY_SOURCE(isoc23_sscanf, -1)
 
 // Win32 providers, so a PE hunt is not restricted to POSIX inputs.
 SAFETY_SOURCE(GetCommandLineA, -1)

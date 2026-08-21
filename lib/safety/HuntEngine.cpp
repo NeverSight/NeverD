@@ -6,6 +6,8 @@
 
 #include "neverd/safety/HuntEngine.h"
 
+#include "SourceSemantics.h"
+
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
@@ -632,11 +634,28 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                                : nullptr;
         const SourceEntry *CalleeSource =
             Callee ? Cat.matchSource(CalleeName) : nullptr;
-        SymRef SourceOutput;
+        std::vector<std::pair<std::string, SymRef>> NewSourceEvents;
         if (Callee && CalleeSource && CalleeSource->OutArg >= 0 &&
-            CalleeSource->OutArg < static_cast<int>(Callee->Args.size()))
-          SourceOutput = readCallArgument(In, Fn, CalleeSource->OutArg, *Callee,
-                                          Cur.State);
+            CalleeSource->OutArg < static_cast<int>(Callee->Args.size())) {
+          SymRef Output = readCallArgument(In, Fn, CalleeSource->OutArg,
+                                           *Callee, Cur.State);
+          if (Output.isValid())
+            NewSourceEvents.emplace_back(SinkCatalog::normalize(CalleeName),
+                                         Output);
+        }
+        if (Callee && CalleeSource)
+          if (std::optional<safety::detail::FormattedSourceOutputs> Outputs =
+                  safety::detail::recoverFormattedSourceOutputs(
+                      In.Img, CalleeName, Callee->Args);
+              Outputs && Outputs->Kind ==
+                             safety::detail::FormattedSourceKind::ExternalInput)
+            for (int ArgIndex : Outputs->UnboundedTextArgs) {
+              SymRef Output =
+                  readCallArgument(In, Fn, ArgIndex, *Callee, Cur.State);
+              if (Output.isValid())
+                NewSourceEvents.emplace_back(SinkCatalog::normalize(CalleeName),
+                                             Output);
+            }
         SymRef ReturnBound;
         if (Callee && CountedReturn.BoundArg >= 0)
           ReturnBound = readCallArgument(In, Fn, CountedReturn.BoundArg,
@@ -665,9 +684,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.SemanticUnknown = true;
         }
         StepResult SR = Exec.step(Op);
-        if (IsCall && SourceOutput.isValid())
-          Cur.SourceEvents.emplace_back(SinkCatalog::normalize(CalleeName),
-                                        SourceOutput);
+        if (IsCall)
+          Cur.SourceEvents.insert(Cur.SourceEvents.end(),
+                                  NewSourceEvents.begin(),
+                                  NewSourceEvents.end());
         SymRef CountedReturnValue;
         if (CountedReturn.BoundArg >= 0) {
           SymRef Ret = captureReturn(Op, Cur.State, In);
@@ -918,7 +938,9 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
   std::string RequiredSource;
   if (!UnboundedInput && E->LenArg < 0 && E->SrcArg >= 0)
     if (const SourceEntry *Source = Cat.matchSource(Arg.TaintSource);
-        Source && Source->OutArg >= 0)
+        Source &&
+        (Source->OutArg >= 0 ||
+         safety::detail::formattedSourceName(Arg.TaintSource).has_value()))
       RequiredSource = SinkCatalog::normalize(Arg.TaintSource);
   ExploreHit Hit =
       exploreSink(In, Cat, F, Site, *E, *Dst.Capacity, Budgets, RequiredSource);
