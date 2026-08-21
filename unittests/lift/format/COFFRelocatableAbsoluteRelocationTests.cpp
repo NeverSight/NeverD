@@ -839,4 +839,101 @@ data_target:
   EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot->Addr), 1u);
 }
 
+TEST_F(COFFRelocatableAbsoluteRelocation,
+       MachOARM32AppliesBranchAndHalfPairRelocations) {
+  const fs::path Object =
+      compileCOFF("macho_arm32_branch_half", "armv7-apple-darwin", R"(
+.syntax unified
+.arm
+.section __TEXT,__text,regular,pure_instructions
+.globl _caller
+_caller:
+  nop
+  bl _callee
+  bl _thumb_callee
+  movw r0, :lower16:_data_target+4
+  movt r0, :upper16:_data_target+4
+  bx lr
+
+.section __TEXT,__callee,regular,pure_instructions
+.globl _callee
+_callee:
+  bx lr
+
+.section __TEXT,__thumb_callee,regular,pure_instructions
+.thumb
+.thumb_func _thumb_callee
+.globl _thumb_callee
+_thumb_callee:
+  bx lr
+
+.section __DATA,__const
+.p2align 2
+.globl _pointer_slot
+_pointer_slot:
+  .long _data_target+4
+
+.section __DATA,__data
+.p2align 2
+.globl _data_target
+_data_target:
+  .long 0x11223344
+  .long 0x55667788
+)");
+  ASSERT_FALSE(Object.empty());
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::MachO);
+  ASSERT_EQ(Img.Arch, Arch::ARM);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Symbol *Caller = findSymbol(Img, "_caller");
+  const Symbol *Callee = findSymbol(Img, "_callee");
+  const Symbol *ThumbCallee = findSymbol(Img, "_thumb_callee");
+  const Symbol *Slot = findSymbol(Img, "_pointer_slot");
+  const Symbol *Target = findSymbol(Img, "_data_target");
+  ASSERT_NE(Caller, nullptr);
+  ASSERT_NE(Callee, nullptr);
+  ASSERT_NE(ThumbCallee, nullptr);
+  ASSERT_NE(Slot, nullptr);
+  ASSERT_NE(Target, nullptr);
+
+  const uint8_t *Instructions = Img.readVA(Caller->Addr, 20);
+  const uint8_t *SlotBytes = Img.readVA(Slot->Addr, sizeof(uint32_t));
+  ASSERT_NE(Instructions, nullptr);
+  ASSERT_NE(SlotBytes, nullptr);
+  const uint32_t Branch = readLE<uint32_t>(Instructions + 4);
+  int32_t BranchWords = static_cast<int32_t>(Branch & 0x00ffffffu);
+  if ((BranchWords & 0x00800000) != 0)
+    BranchWords |= ~0x00ffffff;
+  EXPECT_EQ(static_cast<uint64_t>(static_cast<int64_t>(Caller->Addr) + 12 +
+                                  static_cast<int64_t>(BranchWords) * 4),
+            Callee->Addr);
+
+  const uint32_t ThumbBranch = readLE<uint32_t>(Instructions + 8);
+  EXPECT_EQ(ThumbBranch & 0xfe000000u, 0xfa000000u);
+  uint32_t ThumbDisplacement =
+      ((ThumbBranch & 0x00ffffffu) << 2) | ((ThumbBranch >> 23) & 0x2u);
+  if ((ThumbDisplacement & 0x02000000u) != 0)
+    ThumbDisplacement |= 0xfc000000u;
+  EXPECT_EQ(static_cast<uint64_t>(static_cast<int64_t>(Caller->Addr) + 16 +
+                                  static_cast<int32_t>(ThumbDisplacement)),
+            ThumbCallee->Addr);
+
+  auto DecodeARMImm16 = [](const uint8_t *Bytes) {
+    const uint32_t Insn = readLE<uint32_t>(Bytes);
+    return ((Insn >> 4) & 0xf000u) | (Insn & 0x0fffu);
+  };
+  const uint32_t Materialized = DecodeARMImm16(Instructions + 12) |
+                                (DecodeARMImm16(Instructions + 16) << 16);
+  EXPECT_EQ(Materialized, static_cast<uint32_t>(Target->Addr + 4));
+  EXPECT_EQ(readLE<uint32_t>(SlotBytes),
+            static_cast<uint32_t>(Target->Addr + 4));
+  EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot->Addr), 1u);
+  EXPECT_EQ(Img.WritableRelocDataAddrs.count(Target->Addr + 4), 1u);
+}
+
 } // namespace

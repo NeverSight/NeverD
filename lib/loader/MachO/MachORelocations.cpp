@@ -43,6 +43,12 @@ struct RelocationMetadata {
 struct ResolvedSymbol {
   uint64_t Address = 0;
   uint64_t OwnerVA = InvalidVA;
+  bool IsThumb = false;
+};
+
+struct MappedObjectAddress {
+  uint64_t Address = 0;
+  uint64_t OwnerVA = InvalidVA;
 };
 
 std::optional<uint8_t>
@@ -101,7 +107,12 @@ std::optional<ResolvedSymbol> resolveExternalSymbol(const MachOObjectFile &Obj,
   if (Owner.Size > InvalidVA - Owner.VA || *AddrOrErr < Owner.VA ||
       *AddrOrErr > Owner.VA + Owner.Size)
     return std::nullopt;
-  return ResolvedSymbol{*AddrOrErr, Owner.VA};
+  llvm::object::DataRefImpl DRI = SymIt->getRawDataRefImpl();
+  const uint16_t Description = Obj.is64Bit()
+                                   ? Obj.getSymbol64TableEntry(DRI).n_desc
+                                   : Obj.getSymbolTableEntry(DRI).n_desc;
+  return ResolvedSymbol{*AddrOrErr, Owner.VA,
+                        (Description & llvm::MachO::N_ARM_THUMB_DEF) != 0};
 }
 
 std::optional<ResolvedSymbol>
@@ -116,6 +127,26 @@ resolveRelocationTarget(const MachOObjectFile &Obj, const RelocationRef &Reloc,
     return std::nullopt;
   const Section &Owner = Img.Sections[Info.SymbolNumber - 1];
   return ResolvedSymbol{Owner.VA, Owner.VA};
+}
+
+std::optional<MappedObjectAddress> mapObjectAddress(const MachOObjectFile &Obj,
+                                                    const BinaryImage &Img,
+                                                    uint64_t Address) {
+  size_t SectionIndex = 0;
+  for (const llvm::object::SectionRef &ObjectSec : Obj.sections()) {
+    if (SectionIndex >= Img.Sections.size())
+      return std::nullopt;
+    const uint64_t OriginalBase = ObjectSec.getAddress();
+    const uint64_t Size = ObjectSec.getSize();
+    const Section &MappedSec = Img.Sections[SectionIndex++];
+    if (Address < OriginalBase || Address - OriginalBase >= Size)
+      continue;
+    const uint64_t Offset = Address - OriginalBase;
+    if (Offset > InvalidVA - MappedSec.VA)
+      return std::nullopt;
+    return MappedObjectAddress{MappedSec.VA + Offset, MappedSec.VA};
+  }
+  return std::nullopt;
 }
 
 void diagnoseRelocation(llvm::StringRef Reason, uint64_t SectionAddress,
@@ -369,8 +400,8 @@ std::optional<uint64_t> x64PCRelativeTailSize(uint32_t Type) {
   }
 }
 
-void recordARM64AddressMaterialization(BinaryImage &Img, va_t Place,
-                                       va_t TargetVA, va_t OwnerVA) {
+void recordARMAddressMaterialization(BinaryImage &Img, va_t Place,
+                                     va_t TargetVA, va_t OwnerVA) {
   if (OwnerVA == InvalidVA)
     return;
   const Segment *OwnerSeg = Img.getSegmentFor(OwnerVA);
@@ -645,7 +676,7 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
             if (!Target)
               return relocationError("ARM64 materialized address overflows",
                                      SecAddr, RAddr);
-            recordARM64AddressMaterialization(Img, P, *Target, SymOwnerVA);
+            recordARMAddressMaterialization(Img, P, *Target, SymOwnerVA);
           }
         } else if (RType == ARM64_RELOC_GOT_LOAD_PAGE21 ||
                    RType == ARM64_RELOC_GOT_LOAD_PAGEOFF12 ||
@@ -661,22 +692,208 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
         }
       } else if (Img.Arch == Arch::ARM) {
         if (RType == ARM_RELOC_VANILLA) {
-          if (Info.IsScattered || Info.IsPCRel || Info.Length != 2)
+          if (Info.IsPCRel || Info.Length != 2)
             return relocationError("invalid ARM VANILLA metadata", SecAddr,
                                    RAddr);
           if (!rangeInBounds(SegOff, 4, ApplySeg->Data.size()))
             return relocationError("ARM VANILLA field is out of bounds",
                                    SecAddr, RAddr);
-          if (!Resolved) {
+          if (!Info.IsScattered && !Resolved) {
             diagnoseRelocation("unresolved ARM target", SecAddr, RAddr);
             continue;
           }
-          uint32_t Addend = 0;
-          std::memcpy(&Addend, ApplySeg->Data.data() + SegOff, 4);
-          uint32_t Val = static_cast<uint32_t>(S + Addend);
+          uint32_t Encoded = 0;
+          std::memcpy(&Encoded, ApplySeg->Data.data() + SegOff, 4);
+          std::optional<uint64_t> Target;
+          uint64_t TargetOwnerVA = SymOwnerVA;
+          if (Info.IsScattered) {
+            const auto RawReloc = Obj.getRelocation(Reloc.getRawDataRefImpl());
+            const uint64_t OriginalTarget =
+                Obj.getScatteredRelocationValue(RawReloc);
+            auto MappedTarget = mapObjectAddress(Obj, Img, OriginalTarget);
+            if (MappedTarget && OriginalTarget <= UINT32_MAX) {
+              const int32_t Addend = static_cast<int32_t>(
+                  Encoded - static_cast<uint32_t>(OriginalTarget));
+              Target = addSigned(MappedTarget->Address, Addend);
+              TargetOwnerVA = MappedTarget->OwnerVA;
+            }
+          } else if (Info.IsExternal) {
+            Target = addSigned(S, static_cast<int32_t>(Encoded));
+          } else if (Info.SymbolNumber > 0 &&
+                     Info.SymbolNumber <= Img.Sections.size()) {
+            uint32_t SectionOrdinal = 0;
+            for (const llvm::object::SectionRef &ObjectSec : Obj.sections()) {
+              if (++SectionOrdinal != Info.SymbolNumber)
+                continue;
+              const uint64_t OriginalBase = ObjectSec.getAddress();
+              if (OriginalBase <= UINT32_MAX) {
+                const int32_t Addend = static_cast<int32_t>(
+                    Encoded - static_cast<uint32_t>(OriginalBase));
+                Target = addSigned(S, Addend);
+              }
+              break;
+            }
+          }
+          if (!Target || *Target > UINT32_MAX)
+            return relocationError("ARM VANILLA target is unresolved", SecAddr,
+                                   RAddr);
+          const uint32_t Val = static_cast<uint32_t>(*Target);
           std::memcpy(ApplySeg->Data.data() + SegOff, &Val, 4);
-          if (SymOwnerVA != InvalidVA)
-            recordAbsolutePointerRelocation(Img, P, Val, SymOwnerVA);
+          if (TargetOwnerVA != InvalidVA)
+            recordAbsolutePointerRelocation(Img, P, Val, TargetOwnerVA);
+        } else if (RType == ARM_RELOC_BR24) {
+          if (Info.IsScattered || !Info.IsPCRel || Info.Length != 2)
+            return relocationError("invalid ARM BR24 metadata", SecAddr, RAddr);
+          if (!rangeInBounds(SegOff, 4, ApplySeg->Data.size()))
+            return relocationError("ARM BR24 field is out of bounds", SecAddr,
+                                   RAddr);
+          if (!Resolved) {
+            diagnoseRelocation("unresolved ARM branch target", SecAddr, RAddr);
+            continue;
+          }
+          uint32_t Instruction = 0;
+          std::memcpy(&Instruction, ApplySeg->Data.data() + SegOff, 4);
+          const bool IsLink = (Instruction & 0x01000000u) != 0;
+          if ((Instruction & 0x0e000000u) != 0x0a000000u ||
+              (Instruction >> 28) == 0xf || (Resolved->IsThumb && !IsLink))
+            return relocationError("invalid ARM BR24 instruction", SecAddr,
+                                   RAddr);
+          int32_t EncodedWords =
+              static_cast<int32_t>(Instruction & 0x00ffffffu);
+          if ((EncodedWords & 0x00800000) != 0)
+            EncodedWords |= ~0x00ffffff;
+          if (P > InvalidVA - 8)
+            return relocationError("ARM BR24 place overflows", SecAddr, RAddr);
+          const int64_t EncodedDisplacement =
+              static_cast<int64_t>(EncodedWords) * 4;
+          auto OriginalTarget = addSigned(P + 8, EncodedDisplacement);
+          std::optional<uint64_t> Target;
+          if (OriginalTarget && Info.IsExternal &&
+              *OriginalTarget <= UINT32_MAX) {
+            Target = addSigned(S, static_cast<int32_t>(
+                                      static_cast<uint32_t>(*OriginalTarget)));
+          } else if (OriginalTarget && Info.SymbolNumber > 0 &&
+                     Info.SymbolNumber <= Img.Sections.size()) {
+            uint32_t SectionOrdinal = 0;
+            for (const llvm::object::SectionRef &ObjectSec : Obj.sections()) {
+              if (++SectionOrdinal != Info.SymbolNumber)
+                continue;
+              auto TargetOffset =
+                  signedDifference(*OriginalTarget, ObjectSec.getAddress());
+              if (TargetOffset)
+                Target = addSigned(S, *TargetOffset);
+              break;
+            }
+          }
+          if (!Target)
+            return relocationError("ARM BR24 target overflows", SecAddr, RAddr);
+          auto Displacement = signedDifference(*Target, P + 8);
+          const int64_t Alignment = Resolved->IsThumb ? 2 : 4;
+          const int64_t Maximum =
+              (int64_t(1) << 25) - (Resolved->IsThumb ? 2 : 4);
+          if (!Displacement || (*Displacement & (Alignment - 1)) != 0 ||
+              *Displacement < -(int64_t(1) << 25) || *Displacement > Maximum)
+            return relocationError("ARM BR24 target is out of range", SecAddr,
+                                   RAddr);
+          if (Resolved->IsThumb) {
+            Instruction =
+                0xfa000000u |
+                (static_cast<uint32_t>(*Displacement >> 2) & 0x00ffffffu) |
+                ((static_cast<uint32_t>(*Displacement >> 1) & 1u) << 24);
+          } else {
+            Instruction =
+                (Instruction & 0xff000000u) |
+                (static_cast<uint32_t>(*Displacement >> 2) & 0x00ffffffu);
+          }
+          std::memcpy(ApplySeg->Data.data() + SegOff, &Instruction, 4);
+        } else if (RType == ARM_RELOC_HALF) {
+          if (Info.IsScattered || Info.IsPCRel || I + 1 >= Relocations.size())
+            return relocationError("malformed ARM HALF pair", SecAddr, RAddr);
+          const RelocationMetadata PairInfo =
+              relocationMetadata(Obj, Relocations[I + 1]);
+          if (PairInfo.IsScattered || PairInfo.IsPCRel || PairInfo.IsExternal ||
+              PairInfo.Type != ARM_RELOC_PAIR || PairInfo.Length != Info.Length)
+            return relocationError("malformed ARM HALF pair", SecAddr, RAddr);
+          if (!rangeInBounds(SegOff, 4, ApplySeg->Data.size()))
+            return relocationError("ARM HALF field is out of bounds", SecAddr,
+                                   RAddr);
+          if (!Resolved) {
+            diagnoseRelocation("unresolved ARM HALF target", SecAddr, RAddr);
+            ++I;
+            continue;
+          }
+          uint32_t Instruction = 0;
+          std::memcpy(&Instruction, ApplySeg->Data.data() + SegOff, 4);
+          const bool IsHigh = (Info.Length & 1u) != 0;
+          const bool IsThumb = (Info.Length & 2u) != 0;
+          uint16_t InstructionHalf = 0;
+          if (IsThumb) {
+            const uint16_t Hi = static_cast<uint16_t>(Instruction);
+            const uint16_t Lo = static_cast<uint16_t>(Instruction >> 16);
+            const uint16_t ExpectedOpcode = IsHigh ? 0xf2c0u : 0xf240u;
+            if ((Hi & 0xfbf0u) != ExpectedOpcode)
+              return relocationError("invalid Thumb HALF instruction", SecAddr,
+                                     RAddr);
+            InstructionHalf = static_cast<uint16_t>(
+                ((Hi & 0x000fu) << 12) | ((Hi & 0x0400u) << 1) |
+                ((Lo & 0x7000u) >> 4) | (Lo & 0x00ffu));
+          } else {
+            const uint32_t ExpectedOpcode = IsHigh ? 0x03400000u : 0x03000000u;
+            if ((Instruction & 0x0ff00000u) != ExpectedOpcode)
+              return relocationError("invalid ARM HALF instruction", SecAddr,
+                                     RAddr);
+            InstructionHalf = static_cast<uint16_t>(
+                ((Instruction >> 4) & 0xf000u) | (Instruction & 0x0fffu));
+          }
+          const uint16_t OtherHalf =
+              static_cast<uint16_t>(PairInfo.Address & 0xffffu);
+          const uint32_t EncodedAddress =
+              IsHigh
+                  ? (static_cast<uint32_t>(InstructionHalf) << 16) | OtherHalf
+                  : (static_cast<uint32_t>(OtherHalf) << 16) | InstructionHalf;
+          std::optional<uint64_t> Target;
+          if (Info.IsExternal) {
+            Target = addSigned(S, static_cast<int32_t>(EncodedAddress));
+          } else if (Info.SymbolNumber > 0) {
+            uint32_t SectionOrdinal = 0;
+            std::optional<uint64_t> OriginalOwnerVA;
+            for (const llvm::object::SectionRef &OriginalSec : Obj.sections()) {
+              ++SectionOrdinal;
+              if (SectionOrdinal == Info.SymbolNumber) {
+                OriginalOwnerVA = OriginalSec.getAddress();
+                break;
+              }
+            }
+            if (OriginalOwnerVA) {
+              auto OwnerAddend =
+                  signedDifference(EncodedAddress, *OriginalOwnerVA);
+              if (OwnerAddend)
+                Target = addSigned(S, *OwnerAddend);
+            }
+          }
+          if (!Target || *Target > UINT32_MAX)
+            return relocationError("ARM HALF target overflows", SecAddr, RAddr);
+          const uint16_t Result =
+              static_cast<uint16_t>(IsHigh ? *Target >> 16 : *Target);
+          if (IsThumb) {
+            uint16_t Hi = static_cast<uint16_t>(Instruction);
+            uint16_t Lo = static_cast<uint16_t>(Instruction >> 16);
+            Hi = static_cast<uint16_t>((Hi & ~0x040fu) |
+                                       ((Result >> 12) & 0x000fu) |
+                                       ((Result >> 1) & 0x0400u));
+            Lo = static_cast<uint16_t>((Lo & ~0x70ffu) |
+                                       ((Result << 4) & 0x7000u) |
+                                       (Result & 0x00ffu));
+            Instruction =
+                static_cast<uint32_t>(Hi) | (static_cast<uint32_t>(Lo) << 16);
+          } else {
+            Instruction = (Instruction & ~0x000f0fffu) |
+                          ((static_cast<uint32_t>(Result) & 0xf000u) << 4) |
+                          (static_cast<uint32_t>(Result) & 0x0fffu);
+          }
+          std::memcpy(ApplySeg->Data.data() + SegOff, &Instruction, 4);
+          recordARMAddressMaterialization(Img, P, *Target, SymOwnerVA);
+          ++I;
         } else {
           return relocationError("unsupported ARM relocation", SecAddr, RAddr);
         }
