@@ -575,7 +575,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
            TRI.isSubRegOf(BV.RegOff, BV.Size, AV.RegOff, AV.Size);
   };
 
-  llvm::GlobalVariable *ProvenRunGV = nullptr;
+  llvm::Constant *ProvenRun = nullptr;
   uint64_t ProvenRunStart = 0;
   const PhiNode *PrimaryPhi = nullptr;
   std::set<uint64_t> InitializationBases;
@@ -675,21 +675,23 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
         SawRawEvidence ? AddressModel::Raw : AddressModel::Symbolized;
 
     // A raw/current-VA anchor can cover multiple initialization bases only
-    // when every base resolves to the exact same embedded run. Uniformly
-    // symbolized values need no anchor and are handled directly below.
+    // when every base resolves to the exact same canonical materialized run.
+    // Uniformly symbolized values need no anchor and are handled directly
+    // below.
     if (InitializationBases.size() > 1 &&
         BaseAddressModel == AddressModel::Raw) {
       for (uint64_t B : InitializationBases) {
         const Segment *Seg = Img->getSegmentFor(B);
         auto [RunGV, RunStart] =
-            Seg ? embedRodataRun(Seg->VA)
-                : std::pair<llvm::GlobalVariable *, uint64_t>{nullptr, 0};
-        if (!RunGV || (ProvenRunGV &&
-                       (RunGV != ProvenRunGV || RunStart != ProvenRunStart))) {
-          failAmbiguousPhi(*PrimaryPhi);
+            Seg ? materializeReadOnlyDataRun(Seg)
+                : std::pair<llvm::Constant *, uint64_t>{nullptr, 0};
+        if (!RunGV ||
+            (ProvenRun && (RunGV != ProvenRun || RunStart != ProvenRunStart))) {
+          if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+            failAmbiguousPhi(*PrimaryPhi);
           return nullptr;
         }
-        ProvenRunGV = RunGV;
+        ProvenRun = RunGV;
         ProvenRunStart = RunStart;
       }
     }
@@ -798,14 +800,15 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
         for (uint64_t B : SelectBases) {
           const Segment *Seg = Img->getSegmentFor(B);
           auto [RunGV, RunStart] =
-              Seg ? embedRodataRun(Seg->VA)
-                  : std::pair<llvm::GlobalVariable *, uint64_t>{nullptr, 0};
-          if (!RunGV || (ProvenRunGV && (RunGV != ProvenRunGV ||
-                                         RunStart != ProvenRunStart))) {
-            failAmbiguousFallback();
+              Seg ? materializeReadOnlyDataRun(Seg)
+                  : std::pair<llvm::Constant *, uint64_t>{nullptr, 0};
+          if (!RunGV || (ProvenRun &&
+                         (RunGV != ProvenRun || RunStart != ProvenRunStart))) {
+            if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+              failAmbiguousFallback();
             return nullptr;
           }
-          ProvenRunGV = RunGV;
+          ProvenRun = RunGV;
           ProvenRunStart = RunStart;
         }
       }
@@ -848,20 +851,19 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
                                   "indrawptr");
   }
 
-  // Anchor to the merged contiguous rodata run, not a single string/segment
-  // global.  The induction value can range over the WHOLE rodata region — a
+  // Anchor to the canonical contiguous data run, not a single string/segment
+  // global.  The induction value can range over the WHOLE region — a
   // switch-to-string table yields any of several strings spread across
-  // `.rodata.str1.1` — so resolving Base to a lone string global (which the
-  // C-string path would return for a Base that lands inside a string) leaves
-  // every other reachable target out of bounds.  The run preserves the original
-  // relative layout, so `@run + (Cur - run_start)` lands on the correct element
-  // for any VA in the region.  Falls back to the single-base global only when
-  // the run is too large to embed.
-  llvm::Constant *G = ProvenRunGV;
-  uint64_t Anchor = ProvenRunGV ? ProvenRunStart : Base;
+  // `.rodata.str1.1`, while a RELRO table must retain every relocated pointer
+  // in its mirror.  The run preserves the original relative layout, so
+  // `@run + (Cur - run_start)` lands on the correct element for any VA in the
+  // region. Falls back to the single-base global only when no canonical run is
+  // available.
+  llvm::Constant *G = ProvenRun;
+  uint64_t Anchor = ProvenRun ? ProvenRunStart : Base;
   if (!G) {
     if (const Segment *BaseSeg = Img->getSegmentFor(Base)) {
-      if (auto [RunGV, RunStart] = embedRodataRun(BaseSeg->VA); RunGV) {
+      if (auto [RunGV, RunStart] = materializeReadOnlyDataRun(BaseSeg); RunGV) {
         G = RunGV;
         Anchor = RunStart;
       }

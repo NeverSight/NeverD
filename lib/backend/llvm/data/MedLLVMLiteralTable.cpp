@@ -1449,10 +1449,14 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
                                   "selmrgrawptr");
   }
 
-  // All raw bases must share one read-only segment so a single embedded global
-  // covers every table the select can reach. Mach-O keeps non-code data such
-  // as __TEXT,__cstring inside an executable segment, so use the same bounded
-  // executable-segment mirror as direct global-data resolution for that case.
+  // All raw bases must share one read-only segment so a single materialized
+  // global covers every table the select can reach. Mach-O keeps non-code data
+  // such as __TEXT,__cstring inside an executable segment, while Mach-O/ELF
+  // RELRO and COFF .rdata can carry relocated pointer slots. Preserve the same
+  // representation owner as direct global-data resolution: executable bytes
+  // use their bounded segment mirror, relocation-backed pointer tables use the
+  // pointer mirror, and only pointer-free immutable data may use a raw rodata
+  // embedding.
   const Segment *Seg = nullptr;
   std::optional<uint64_t> ExactOwner;
   bool SawUnownedBase = false;
@@ -1485,17 +1489,13 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // Anchor the whole access uniformly: the merged value still carries the
   // original VA of whichever table was selected, so
   // `@run + (addr - run_start)` lands on the correct element of the rebuilt
-  // rodata run for any reachable table + index.
-  llvm::Constant *G = nullptr;
-  uint64_t Anchor = 0;
-  auto [RunGV, RunStart] =
-      Seg->isExecutable() ? embedExecSegmentRun(Seg) : embedRodataRun(Seg->VA);
-  if (RunGV) {
-    G = RunGV;
-    Anchor = RunStart;
-  }
+  // canonical run for any reachable table + index.
+  auto [G, Anchor] = materializeReadOnlyDataRun(Seg);
   if (!G) {
-    failAmbiguousAddress();
+    if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+      failAmbiguousAddress();
+    else if (SawAmbiguous)
+      *SawAmbiguous = true;
     return nullptr;
   }
 

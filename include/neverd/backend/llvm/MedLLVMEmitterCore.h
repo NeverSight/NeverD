@@ -567,6 +567,15 @@ private:
   std::pair<llvm::GlobalVariable *, uint64_t>
   embedExecSegmentRun(const Segment *Seg);
 
+  /// Materialize one immutable-data run using its canonical representation.
+  /// Executable containers use the bounded executable-byte mirror,
+  /// non-executable segments with loader-proven pointer slots use
+  /// buildCodePtrSegmentGlobal, and only pointer-free immutable data uses
+  /// embedRodataRun. Pointer-mirror failure never falls back to raw bytes.
+  /// Returns {value, run-start VA}.
+  std::pair<llvm::Constant *, uint64_t>
+  materializeReadOnlyDataRun(const Segment *Seg);
+
   /// Recreate a WRITABLE data segment (.data / .bss) at \p SegVA as one
   /// cohesive mutable internal global, zero-filling holes and any zero-init
   /// (.bss) bytes. Cached per segment so every access into the segment — a

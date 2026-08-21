@@ -216,6 +216,24 @@ bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
           section_names::isReadOnlyAfterRelocSectionName(S->Name));
 }
 
+std::pair<llvm::Constant *, uint64_t>
+MedLLVMEmitter::materializeReadOnlyDataRun(const Segment *Seg) {
+  if (!Seg || !Seg->isReadable() || Seg->Data.empty())
+    return {nullptr, 0};
+  if (Seg->isExecutable()) {
+    auto [Run, RunStart] = embedExecSegmentRun(Seg);
+    return {Run, RunStart};
+  }
+  if (segHasPtrRelocSlots(Seg)) {
+    uint64_t RunStart = 0;
+    // A failed relocation mirror is authoritative. Falling through to raw
+    // bytes would preserve the exact stale pointer the mirror rejected.
+    return {buildCodePtrSegmentGlobal(Seg->VA, RunStart), RunStart};
+  }
+  auto [Run, RunStart] = embedRodataRun(Seg->VA);
+  return {Run, RunStart};
+}
+
 bool MedLLVMEmitter::hasObjectDataProvenance(uint64_t VA) const {
   return Img && Img->hasObjectDataProvenance(VA);
 }

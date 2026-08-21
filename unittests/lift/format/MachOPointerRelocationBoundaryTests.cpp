@@ -4045,6 +4045,34 @@ MedFunc makeMultiRawInitRecurrentTableLookup(Arch TargetArch, bool CrossRun,
   return Func;
 }
 
+MedFunc makeMultiRawPointerTableArgumentCaller(Arch TargetArch) {
+  MedFunc Func = makeMultiRawInitRecurrentTableLookup(
+      TargetArch, /*CrossRun=*/false, /*AlternateFirst=*/false);
+  Func.Name = "multi_raw_pointer_table_argument_caller";
+  MedBlock &Loop = Func.Blocks[1];
+  MedVar TableBase = Loop.Phis.front().Output;
+  MedOp Advance = std::move(Loop.Ops.back());
+  Loop.Ops.clear();
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = Loop.StartAddr;
+  Call.addInput(MedVar::makeConst(ImportStubVA,
+                                  getTargetRegInfo(TargetArch).PointerSize,
+                                  ConstantAddressProvenance::CodeAddress));
+  Loop.Ops.push_back(std::move(Call));
+  Loop.Ops.push_back(std::move(Advance));
+
+  MedCallInfo Info;
+  Info.BlockId = Loop.Id;
+  Info.OpIdx = 0;
+  Info.TargetAddr = ImportStubVA;
+  Info.TargetName = "printf";
+  Info.Args.push_back(TableBase);
+  Func.CallInfos.push_back(std::move(Info));
+  return Func;
+}
+
 enum class MixedWidthControlCase { Shift, Select, IntNot, IntNeg2 };
 
 MedFunc makeMixedWidthControlPhiTableLookup(Arch TargetArch,
@@ -5483,6 +5511,72 @@ MedFunc makeMixedPointerRecordArgumentCaller(Arch TargetArch) {
   Info.TargetAddr = ImportStubVA;
   Info.TargetName = "consume_handler";
   Info.Args.push_back(Loop.Ops[0].Output);
+  Func.CallInfos.push_back(std::move(Info));
+  return Func;
+}
+
+MedFunc makePointerTableSelectArgumentCaller(Arch TargetArch,
+                                             uint64_t FirstBase,
+                                             uint64_t SecondBase) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  const uint16_t PointerSize = static_cast<uint16_t>(TRI.PointerSize);
+  auto makeTemp = [&](int Id, uint16_t Size = 0) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.TheArch = TargetArch;
+    Value.Id = Id;
+    Value.SSAVer = 1;
+    Value.Size = Size == 0 ? PointerSize : Size;
+    return Value;
+  };
+
+  MedVar Condition;
+  Condition.Kind = MedVar::Param;
+  Condition.TheArch = TargetArch;
+  Condition.Id = 0;
+  Condition.Size = PointerSize;
+  Condition.RegOff = TRI.IntParamRegs.front();
+  MedVar Selected = makeTemp(220);
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = "pointer_table_select_argument_caller";
+  Func.ReturnType = NdType::makeVoid();
+  Func.Params.push_back(Condition);
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = CallerVA;
+  Block.EndAddr = CallerVA + 0xc;
+  MedOp Select;
+  Select.Opcode = NdOp::SELECT;
+  Select.Addr = CallerVA;
+  Select.Output = Selected;
+  Select.addInput(Condition);
+  Select.addInput(MedVar::makeConst(FirstBase, PointerSize,
+                                    ConstantAddressProvenance::Address));
+  Select.addInput(MedVar::makeConst(SecondBase, PointerSize,
+                                    ConstantAddressProvenance::Address));
+  Block.Ops.push_back(std::move(Select));
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = CallerVA + 4;
+  Call.addInput(MedVar::makeConst(ImportStubVA, PointerSize,
+                                  ConstantAddressProvenance::CodeAddress));
+  Block.Ops.push_back(std::move(Call));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = CallerVA + 8;
+  Block.Ops.push_back(std::move(Return));
+  Func.Blocks.push_back(std::move(Block));
+
+  MedCallInfo Info;
+  Info.BlockId = 0;
+  Info.OpIdx = 1;
+  Info.TargetAddr = ImportStubVA;
+  Info.TargetName = "printf";
+  Info.Args.push_back(Selected);
   Func.CallInfos.push_back(std::move(Info));
   return Func;
 }
@@ -9211,6 +9305,154 @@ TEST(LLVMCodePointerInvariantBoundary,
                               std::string("mixed-pointer-record-") + C.Name,
                               Arch::AArch64, {}, &Image, BinaryFormat::MachO),
         nullptr);
+  }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     PointerTableSelectUsesRelocationMirrorAcrossFormats) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+      SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                   std::to_string(static_cast<int>(TargetArch)));
+      BinaryImage Image =
+          makeSpilledConstTableImage(TargetArch, Format, /*PointerTable=*/true);
+      MedFunc Caller = makePointerTableSelectArgumentCaller(
+          TargetArch, SpilledConstTableVA, OtherSpilledConstTableVA);
+
+      llvm::LLVMContext Context;
+      testing::internal::CaptureStderr();
+      auto Module = MedLLVMEmitter().emit(
+          {Caller}, Context, "pointer-table-select-argument", TargetArch,
+          {{ImportStubVA, "printf"}}, &Image, Format);
+      std::string Diagnostic = testing::internal::GetCapturedStderr();
+      ASSERT_NE(Module, nullptr) << Diagnostic;
+      expectValidModule(*Module);
+
+      llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+          (kNdCodePtrPrefix + llvm::utohexstr(SpilledConstTableVA)).str());
+      std::string IR;
+      llvm::raw_string_ostream IRStream(IR);
+      Module->print(IRStream, nullptr);
+      IRStream.flush();
+      ASSERT_NE(Mirror, nullptr) << IR;
+      llvm::Function *Emitted = Module->getFunction(Caller.Name);
+      ASSERT_NE(Emitted, nullptr);
+      std::vector<llvm::CallInst *> Calls = callsIn(*Emitted);
+      ASSERT_EQ(Calls.size(), 1u);
+      ASSERT_EQ(Calls.front()->arg_size(), 1u);
+      std::set<const llvm::Value *> Seen;
+      EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getArgOperand(0),
+                                                Mirror, Seen));
+
+      const std::string RawRunName =
+          (kNdDataPrefix + llvm::utohexstr(SpilledConstTableVA)).str() +
+          section_names::elf::Rodata;
+      EXPECT_EQ(Module->getNamedGlobal(RawRunName), nullptr);
+    }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     MultiInitPointerTableArgumentUsesRelocationMirrorAcrossFormats) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(formatTraceName(Format));
+    BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64, Format,
+                                                   /*PointerTable=*/true);
+    MedFunc Caller = makeMultiRawPointerTableArgumentCaller(Arch::AArch64);
+
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Caller}, Context, "multi-init-pointer-table-argument", Arch::AArch64,
+        {{ImportStubVA, "printf"}}, &Image, Format);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+
+    llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+        (kNdCodePtrPrefix + llvm::utohexstr(SpilledConstTableVA)).str());
+    ASSERT_NE(Mirror, nullptr);
+    llvm::Function *Emitted = Module->getFunction(Caller.Name);
+    ASSERT_NE(Emitted, nullptr);
+    std::vector<llvm::CallInst *> Calls = callsIn(*Emitted);
+    ASSERT_EQ(Calls.size(), 1u);
+    ASSERT_EQ(Calls.front()->arg_size(), 1u);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getArgOperand(0),
+                                              Mirror, Seen));
+  }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     PointerTableSelectStillRejectsDistinctRelocationRuns) {
+  BinaryImage Image = makeSpilledConstTableImage(
+      Arch::AArch64, BinaryFormat::MachO, /*PointerTable=*/true);
+  addFarSpilledConstTable(Image);
+  Segment *FarSegment = nullptr;
+  for (Segment &Seg : Image.Segments)
+    if (Seg.contains(FarSpilledConstTableVA)) {
+      FarSegment = &Seg;
+      break;
+    }
+  ASSERT_NE(FarSegment, nullptr);
+  writeObject(FarSegment->Data, FarSpilledConstTableVA - FarSegment->VA,
+              SpilledConstTableVA + 0x10);
+  Image.DataPtrRelocSlots.insert(FarSpilledConstTableVA);
+
+  MedFunc Caller = makePointerTableSelectArgumentCaller(
+      Arch::AArch64, SpilledConstTableVA, FarSpilledConstTableVA);
+  llvm::LLVMContext Context;
+  testing::internal::CaptureStderr();
+  auto Module = MedLLVMEmitter().emit(
+      {Caller}, Context, "cross-run-pointer-table-select", Arch::AArch64,
+      {{ImportStubVA, "printf"}}, &Image, BinaryFormat::MachO);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(Module, nullptr);
+  EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+            std::string::npos)
+      << Diagnostic;
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     PointerTableSelectRejectsUnmaterializableRelocationTargets) {
+  for (bool CodeSlot : {false, true}) {
+    SCOPED_TRACE(CodeSlot ? "code slot" : "data slot");
+    BinaryImage Image = makeSpilledConstTableImage(
+        Arch::AArch64, BinaryFormat::MachO, /*PointerTable=*/true);
+    Segment *TableSegment = nullptr;
+    for (Segment &Seg : Image.Segments)
+      if (Seg.contains(SpilledConstTableVA)) {
+        TableSegment = &Seg;
+        break;
+      }
+    ASSERT_NE(TableSegment, nullptr);
+    writeObject(TableSegment->Data, SpilledConstTableVA - TableSegment->VA,
+                uint64_t{0xfffffffffffffff0ULL});
+    if (CodeSlot) {
+      Image.DataPtrRelocSlots.erase(SpilledConstTableVA);
+      Image.CodePtrRelocSlots.insert(SpilledConstTableVA);
+    }
+
+    MedFunc Caller = makePointerTableSelectArgumentCaller(
+        Arch::AArch64, SpilledConstTableVA, OtherSpilledConstTableVA);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Caller}, Context, "invalid-target-pointer-table-select", Arch::AArch64,
+        {{ImportStubVA, "printf"}}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Module, nullptr);
+    EXPECT_NE(Diagnostic.find(CodeSlot ? "relocation-proven code pointer"
+                                       : "relocation-proven data pointer"),
+              std::string::npos)
+        << Diagnostic;
+    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+              std::string::npos)
+        << Diagnostic;
+    EXPECT_EQ(Diagnostic.find("ambiguous reachable read-only table-base"),
+              std::string::npos)
+        << Diagnostic;
   }
 }
 
