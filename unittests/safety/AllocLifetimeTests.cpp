@@ -779,6 +779,37 @@ TEST(AllocLifetime, ZeroCountStrncatUsesOnlyItsDestination) {
   EXPECT_TRUE(has(audit({FreedDst.F}), VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, ZeroSizeSnprintfUsesOnlyItsFormat) {
+  FB FreedDst("freed_dst", 0x100);
+  int d0 = FreedDst.block();
+  FreedDst.call(d0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  FreedDst.call(d0, "free", MedVar{}, {temp(1)});
+  FreedDst.call(d0, "snprintf", temp(2),
+                {temp(1), MedVar::makeConst(0, 8), temp(3)});
+  FreedDst.ret(d0, {});
+  EXPECT_FALSE(has(audit({FreedDst.F}), VulnClass::UseAfterFree));
+
+  FB FreedFormat("freed_format", 0x200);
+  int f0 = FreedFormat.block();
+  FreedFormat.call(f0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  FreedFormat.call(f0, "free", MedVar{}, {temp(1)});
+  FreedFormat.call(f0, "snprintf", temp(2),
+                   {temp(3), MedVar::makeConst(0, 8), temp(1)});
+  FreedFormat.ret(f0, {});
+  EXPECT_TRUE(has(audit({FreedFormat.F}), VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, PositiveSizeSnprintfUsesFreedDestination) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "snprintf", temp(2), {temp(1), MedVar::makeConst(1, 8), temp(3)});
+  B.ret(b0, {});
+
+  EXPECT_TRUE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
 TEST(AllocLifetime, AtomicReadResultPreservesHeapAlias) {
   FB B("f", 0x100);
   int b0 = B.block();

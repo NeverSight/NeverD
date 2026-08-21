@@ -1346,8 +1346,18 @@ private:
           return *Count == 0 ? CallUse::None : CallUse::Definite;
         return CallUse::Possible;
       case SinkKind::Format:
-        if (ArgIndex == E->DstArg || ArgIndex == E->FmtArg)
+        if (ArgIndex == E->FmtArg)
           return CallUse::Definite;
+        if (ArgIndex == E->DstArg) {
+          if (E->LenArg < 0)
+            return CallUse::Definite;
+          if (E->LenArg >= static_cast<int>(CI.Args.size()))
+            return CallUse::Possible;
+          if (std::optional<uint64_t> Limit =
+                  unsignedConstant(CI.Args[E->LenArg]))
+            return *Limit == 0 ? CallUse::None : CallUse::Definite;
+          return CallUse::Possible;
+        }
         if (ArgIndex == E->LenArg || ArgIndex == E->CapArg)
           return CallUse::None;
         return CallUse::Possible;
