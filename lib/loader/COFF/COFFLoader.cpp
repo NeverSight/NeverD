@@ -349,6 +349,32 @@ COFFLoader::load(const std::filesystem::path &Path) {
           return -static_cast<int32_t>(Magnitude);
         };
 
+        auto SignedDifference = [](uint64_t Left,
+                                   uint64_t Right) -> std::optional<int64_t> {
+          if (Left >= Right) {
+            const uint64_t Delta = Left - Right;
+            if (Delta > static_cast<uint64_t>(INT64_MAX))
+              return std::nullopt;
+            return static_cast<int64_t>(Delta);
+          }
+          const uint64_t Magnitude = Right - Left;
+          if (Magnitude > static_cast<uint64_t>(INT64_MAX) + 1)
+            return std::nullopt;
+          if (Magnitude == static_cast<uint64_t>(INT64_MAX) + 1)
+            return INT64_MIN;
+          return -static_cast<int64_t>(Magnitude);
+        };
+
+        auto SignExtend = [](uint64_t Value, unsigned Bits) -> int64_t {
+          const uint64_t Sign = uint64_t(1) << (Bits - 1);
+          const uint64_t Mask = (uint64_t(1) << Bits) - 1;
+          Value &= Mask;
+          if ((Value & Sign) == 0)
+            return static_cast<int64_t>(Value);
+          return static_cast<int64_t>(Value) -
+                 static_cast<int64_t>(uint64_t(1) << Bits);
+        };
+
         // A complete absolute address stored in data is a pointer slot, while
         // the same field inside an instruction is occurrence provenance for
         // exactly that operand. On AMD64, ADDR32 is narrower than a pointer,
@@ -405,6 +431,49 @@ COFFLoader::load(const std::filesystem::path &Path) {
 
           Img.CodeAddressRelocOperands.erase(P);
           Img.DataAddressRelocOperands[P] = Field;
+          if (TargetWritable)
+            Img.WritableRelocDataAddrs.insert(TargetVA);
+          else
+            Img.RelocDataAddrs.insert(TargetVA);
+        };
+
+        auto RecordMaterializedTarget = [&](uint64_t TargetVA,
+                                            uint64_t TargetOwnerVA,
+                                            bool IsAddressValue) {
+          if (TargetOwnerVA == InvalidVA)
+            return;
+          const Segment *TargetSeg = Img.getSegmentFor(TargetOwnerVA);
+          if (!TargetSeg)
+            return;
+          const Section *TargetSec = Img.getSectionFor(TargetOwnerVA);
+          const uint64_t OwnerBegin = TargetSec ? TargetSec->VA : TargetSeg->VA;
+          const uint64_t OwnerSize =
+              TargetSec ? TargetSec->Size : TargetSeg->Size;
+          if (OwnerSize > InvalidVA - OwnerBegin)
+            return;
+          const uint64_t OwnerEnd = OwnerBegin + OwnerSize;
+          const bool TargetExecutable =
+              Img.hasExecutableCodeOwnerAt(TargetOwnerVA);
+          if (TargetVA < OwnerBegin ||
+              (TargetExecutable ? TargetVA >= OwnerEnd : TargetVA > OwnerEnd))
+            return;
+          if (TargetExecutable) {
+            if (IsAddressValue)
+              Img.CodeRefTargets.insert(
+                  normalizeCodeAddress(TargetVA, Img.Arch, Img.Mode));
+            return;
+          }
+          const bool TargetReadable =
+              TargetSec ? TargetSec->isReadable() : TargetSeg->isReadable();
+          if (!TargetReadable)
+            return;
+          const bool TargetWritable =
+              TargetSec ? TargetSec->isWritable() &&
+                              !section_names::isReadOnlyAfterRelocSectionName(
+                                  TargetSec->Name) &&
+                              !section_names::isReadOnlyAfterRelocSectionName(
+                                  TargetSec->SegmentName)
+                        : TargetSeg->isWritable();
           if (TargetWritable)
             Img.WritableRelocDataAddrs.insert(TargetVA);
           else
@@ -496,44 +565,201 @@ COFFLoader::load(const std::filesystem::path &Path) {
           if (RType == IMAGE_REL_ARM64_BRANCH26) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            int64_t Disp = static_cast<int64_t>(S - P);
             uint32_t Insn;
             std::memcpy(&Insn, ApplySeg->Data.data() + RAddr, 4);
-            Insn = (Insn & 0xFC000000u) |
-                   (static_cast<uint32_t>((Disp >> 2) & 0x03FFFFFFu));
+            if ((Insn & 0xfc000000u) != 0x14000000u &&
+                (Insn & 0xfc000000u) != 0x94000000u)
+              continue;
+            const int64_t Addend = SignExtend(Insn & 0x03ffffffu, 26) * 4;
+            auto Target = AddSignedAddend(S, Addend);
+            if (!Target)
+              continue;
+            auto Disp = SignedDifference(*Target, P);
+            if (!Disp || (*Disp & 3) != 0 || *Disp < -(int64_t(1) << 27) ||
+                *Disp > (int64_t(1) << 27) - 4)
+              continue;
+            Insn = (Insn & 0xfc000000u) |
+                   (static_cast<uint32_t>(*Disp >> 2) & 0x03ffffffu);
             std::memcpy(ApplySeg->Data.data() + RAddr, &Insn, 4);
           } else if (RType == IMAGE_REL_ARM64_PAGEBASE_REL21) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            int64_t PageDelta =
-                static_cast<int64_t>((S & ~0xFFFULL) - (P & ~0xFFFULL));
-            uint32_t ImmLo = static_cast<uint32_t>((PageDelta >> 12) & 0x3);
-            uint32_t ImmHi = static_cast<uint32_t>((PageDelta >> 14) & 0x7FFFF);
             uint32_t Insn;
             std::memcpy(&Insn, ApplySeg->Data.data() + RAddr, 4);
-            Insn = (Insn & 0x9F00001Fu) | (ImmLo << 29) | (ImmHi << 5);
+            if ((Insn & 0x9f000000u) != 0x90000000u)
+              continue;
+            const uint32_t EncodedPages =
+                (((Insn >> 5) & 0x7ffffu) << 2) | ((Insn >> 29) & 0x3u);
+            const int64_t Addend = SignExtend(EncodedPages, 21) * 0x1000;
+            auto Target = AddSignedAddend(S, Addend);
+            if (!Target)
+              continue;
+            auto PageDelta =
+                SignedDifference(*Target & ~0xfffULL, P & ~0xfffULL);
+            if (!PageDelta || *PageDelta < -(int64_t(1) << 32) ||
+                *PageDelta > (int64_t(1) << 32) - 0x1000)
+              continue;
+            const uint32_t ImmLo =
+                static_cast<uint32_t>(*PageDelta >> 12) & 0x3u;
+            const uint32_t ImmHi =
+                static_cast<uint32_t>(*PageDelta >> 14) & 0x7ffffu;
+            Insn = (Insn & 0x9f00001fu) | (ImmLo << 29) | (ImmHi << 5);
             std::memcpy(ApplySeg->Data.data() + RAddr, &Insn, 4);
           } else if (RType == IMAGE_REL_ARM64_PAGEOFFSET_12A ||
                      RType == IMAGE_REL_ARM64_PAGEOFFSET_12L) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            uint32_t Imm12 = static_cast<uint32_t>(S & 0xFFF);
             uint32_t Insn;
             std::memcpy(&Insn, ApplySeg->Data.data() + RAddr, 4);
-            Insn = (Insn & 0xFFC003FFu) | ((Imm12 & 0xFFF) << 10);
+            unsigned Shift = 0;
+            if (RType == IMAGE_REL_ARM64_PAGEOFFSET_12A) {
+              if ((Insn & 0x7f800000u) != 0x11000000u ||
+                  (Insn & (1u << 22)) != 0)
+                continue;
+            } else {
+              if ((Insn & 0x3b000000u) != 0x39000000u)
+                continue;
+              Shift = Insn >> 30;
+              if (Shift == 0 && (Insn & 0x04800000u) == 0x04800000u)
+                Shift = 4;
+            }
+            const uint64_t Addend = static_cast<uint64_t>((Insn >> 10) & 0xfffu)
+                                    << Shift;
+            if (Addend > static_cast<uint64_t>(INT64_MAX))
+              continue;
+            auto Target = AddSignedAddend(S, static_cast<int64_t>(Addend));
+            if (!Target)
+              continue;
+            const uint64_t PageOffset = *Target & 0xfffULL;
+            if ((PageOffset & ((uint64_t(1) << Shift) - 1)) != 0)
+              continue;
+            const uint32_t Imm12 = static_cast<uint32_t>(PageOffset >> Shift);
+            Insn = (Insn & 0xffc003ffu) | ((Imm12 & 0xfffu) << 10);
             std::memcpy(ApplySeg->Data.data() + RAddr, &Insn, 4);
+            RecordMaterializedTarget(*Target, SymOwnerVA,
+                                     RType == IMAGE_REL_ARM64_PAGEOFFSET_12A);
+          } else if (RType == IMAGE_REL_ARM64_ADDR64) {
+            if (RAddr + 8 > ApplySeg->Data.size())
+              continue;
+            uint64_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 8);
+            const uint64_t Val = S + InPlace;
+            std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 8);
+            int64_t SignedAddend = 0;
+            std::memcpy(&SignedAddend, &InPlace, sizeof(SignedAddend));
+            if (auto FullTarget = AddSignedAddend(S, SignedAddend))
+              RecordAbsoluteField(Val, *FullTarget, SymOwnerVA, 8);
+          } else if (RType == IMAGE_REL_ARM64_ADDR32) {
+            if (RAddr + 4 > ApplySeg->Data.size())
+              continue;
+            int32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            const uint32_t Val =
+                static_cast<uint32_t>(S) + static_cast<uint32_t>(InPlace);
+            std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
+            if (auto FullTarget = AddSignedAddend(S, InPlace);
+                FullTarget && *FullTarget <= UINT32_MAX)
+              RecordAbsoluteField(Val, *FullTarget, SymOwnerVA, 4);
+          } else if (RType == IMAGE_REL_ARM64_ADDR32NB) {
+            if (RAddr + 4 > ApplySeg->Data.size())
+              continue;
+            int32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            auto FullTarget = AddSignedAddend(S, InPlace);
+            if (!FullTarget || *FullTarget < ImageBase ||
+                *FullTarget - ImageBase > UINT32_MAX)
+              continue;
+            const uint32_t Val = static_cast<uint32_t>(*FullTarget - ImageBase);
+            std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
           }
         } else if (Img.Arch == Arch::ARM) {
           if (RType == IMAGE_REL_ARM_ADDR32) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            uint32_t Val = static_cast<uint32_t>(S);
+            int32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            const uint32_t Val =
+                static_cast<uint32_t>(S) + static_cast<uint32_t>(InPlace);
             std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
+            if (auto FullTarget = AddSignedAddend(S, InPlace);
+                FullTarget && *FullTarget <= UINT32_MAX)
+              RecordAbsoluteField(Val, *FullTarget, SymOwnerVA, 4);
           } else if (RType == IMAGE_REL_ARM_REL32) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            int32_t Val = static_cast<int32_t>(S - (P + 4));
-            std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
+            int32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            auto Target = AddSignedAddend(S, InPlace);
+            if (!Target || P > InvalidVA - 4)
+              continue;
+            auto Val = EncodeSignedRel32(*Target, P + 4);
+            if (!Val)
+              continue;
+            std::memcpy(ApplySeg->Data.data() + RAddr, &*Val, 4);
+          } else if (RType == IMAGE_REL_ARM_MOV32T) {
+            if (RAddr + 8 > ApplySeg->Data.size())
+              continue;
+            uint16_t MovWHi = 0, MovWLo = 0, MovTHi = 0, MovTLo = 0;
+            std::memcpy(&MovWHi, ApplySeg->Data.data() + RAddr, 2);
+            std::memcpy(&MovWLo, ApplySeg->Data.data() + RAddr + 2, 2);
+            std::memcpy(&MovTHi, ApplySeg->Data.data() + RAddr + 4, 2);
+            std::memcpy(&MovTLo, ApplySeg->Data.data() + RAddr + 6, 2);
+            if ((MovWHi & 0xfbf0u) != 0xf240u || (MovTHi & 0xfbf0u) != 0xf2c0u)
+              continue;
+            auto DecodeThumbImm16 = [](uint16_t Hi, uint16_t Lo) {
+              return static_cast<uint32_t>(
+                  ((Hi & 0x000fu) << 12) | ((Hi & 0x0400u) << 1) |
+                  ((Lo & 0x7000u) >> 4) | (Lo & 0x00ffu));
+            };
+            const uint32_t Encoded = DecodeThumbImm16(MovWHi, MovWLo) |
+                                     (DecodeThumbImm16(MovTHi, MovTLo) << 16);
+            auto Target = AddSignedAddend(S, static_cast<int32_t>(Encoded));
+            if (!Target || *Target > UINT32_MAX)
+              continue;
+            auto EncodeThumbImm16 = [](uint16_t &Hi, uint16_t &Lo,
+                                       uint16_t Value) {
+              Hi = static_cast<uint16_t>((Hi & ~0x040fu) |
+                                         ((Value >> 12) & 0x000fu) |
+                                         ((Value >> 1) & 0x0400u));
+              Lo = static_cast<uint16_t>((Lo & ~0x70ffu) |
+                                         ((Value << 4) & 0x7000u) |
+                                         (Value & 0x00ffu));
+            };
+            EncodeThumbImm16(MovWHi, MovWLo, static_cast<uint16_t>(*Target));
+            EncodeThumbImm16(MovTHi, MovTLo,
+                             static_cast<uint16_t>(*Target >> 16));
+            std::memcpy(ApplySeg->Data.data() + RAddr, &MovWHi, 2);
+            std::memcpy(ApplySeg->Data.data() + RAddr + 2, &MovWLo, 2);
+            std::memcpy(ApplySeg->Data.data() + RAddr + 4, &MovTHi, 2);
+            std::memcpy(ApplySeg->Data.data() + RAddr + 6, &MovTLo, 2);
+            RecordMaterializedTarget(*Target, SymOwnerVA, true);
+          } else if (RType == IMAGE_REL_ARM_MOV32A) {
+            if (RAddr + 8 > ApplySeg->Data.size())
+              continue;
+            uint32_t MovW = 0, MovT = 0;
+            std::memcpy(&MovW, ApplySeg->Data.data() + RAddr, 4);
+            std::memcpy(&MovT, ApplySeg->Data.data() + RAddr + 4, 4);
+            if ((MovW & 0x0ff00000u) != 0x03000000u ||
+                (MovT & 0x0ff00000u) != 0x03400000u)
+              continue;
+            auto DecodeARMImm16 = [](uint32_t Insn) {
+              return ((Insn >> 4) & 0xf000u) | (Insn & 0x0fffu);
+            };
+            const uint32_t Encoded =
+                DecodeARMImm16(MovW) | (DecodeARMImm16(MovT) << 16);
+            auto Target = AddSignedAddend(S, static_cast<int32_t>(Encoded));
+            if (!Target || *Target > UINT32_MAX)
+              continue;
+            auto EncodeARMImm16 = [](uint32_t Insn, uint16_t Value) {
+              return (Insn & ~0x000f0fffu) |
+                     ((static_cast<uint32_t>(Value) & 0xf000u) << 4) |
+                     (static_cast<uint32_t>(Value) & 0x0fffu);
+            };
+            MovW = EncodeARMImm16(MovW, static_cast<uint16_t>(*Target));
+            MovT = EncodeARMImm16(MovT, static_cast<uint16_t>(*Target >> 16));
+            std::memcpy(ApplySeg->Data.data() + RAddr, &MovW, 4);
+            std::memcpy(ApplySeg->Data.data() + RAddr + 4, &MovT, 4);
+            RecordMaterializedTarget(*Target, SymOwnerVA, true);
           }
         }
       }

@@ -554,4 +554,289 @@ high_target:
   EXPECT_EQ(Img.WritableRelocDataAddrs.count(OnePastTarget), 0u);
 }
 
+TEST_F(COFFRelocatableAbsoluteRelocation,
+       ARM64AppliesPageOffsetAddendsAndAbsoluteSlots) {
+  const fs::path Object =
+      compileCOFF("coff_arm64_address_addends", "aarch64-pc-windows-msvc",
+                  R"(
+.text
+.globl materialize_data
+materialize_data:
+  adrp x0, data_target+8
+  add x0, x0, :lo12:data_target+8
+  adrp x1, data_target+8
+  ldr x1, [x1, :lo12:data_target+8]
+  adrp x2, data_target+16
+  ldr q0, [x2, :lo12:data_target+16]
+  ret
+
+.section .rdata,"dr"
+.p2align 3
+.globl pointer_slot
+pointer_slot:
+  .quad data_target+8
+.globl narrow_slot
+narrow_slot:
+  .long data_target+8
+
+.data
+.p2align 4
+.globl data_target
+data_target:
+  .quad 0x1122334455667788
+  .quad 0x99aabbccddeeff00
+)");
+  ASSERT_FALSE(Object.empty());
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::COFF);
+  ASSERT_EQ(Img.Arch, Arch::AArch64);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Symbol *Function = findSymbol(Img, "materialize_data");
+  const Symbol *Slot = findSymbol(Img, "pointer_slot");
+  const Symbol *NarrowSlot = findSymbol(Img, "narrow_slot");
+  const Symbol *Target = findSymbol(Img, "data_target");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Slot, nullptr);
+  ASSERT_NE(NarrowSlot, nullptr);
+  ASSERT_NE(Target, nullptr);
+  const Section *TargetOwner = Img.getSectionFor(Target->Addr);
+  ASSERT_NE(TargetOwner, nullptr);
+
+  const uint8_t *AddBytes = Img.readVA(Function->Addr + 4, sizeof(uint32_t));
+  const uint8_t *LoadBytes = Img.readVA(Function->Addr + 12, sizeof(uint32_t));
+  const uint8_t *VectorLoadBytes =
+      Img.readVA(Function->Addr + 20, sizeof(uint32_t));
+  const uint8_t *SlotBytes = Img.readVA(Slot->Addr, sizeof(uint64_t));
+  const uint8_t *NarrowSlotBytes =
+      Img.readVA(NarrowSlot->Addr, sizeof(uint32_t));
+  ASSERT_NE(AddBytes, nullptr);
+  ASSERT_NE(LoadBytes, nullptr);
+  ASSERT_NE(VectorLoadBytes, nullptr);
+  ASSERT_NE(SlotBytes, nullptr);
+  ASSERT_NE(NarrowSlotBytes, nullptr);
+  const uint64_t ExpectedTarget = Target->Addr + 8;
+  const uint32_t AddInsn = readLE<uint32_t>(AddBytes);
+  const uint32_t LoadInsn = readLE<uint32_t>(LoadBytes);
+  const uint32_t VectorLoadInsn = readLE<uint32_t>(VectorLoadBytes);
+  EXPECT_EQ((AddInsn >> 10) & 0xfffu, ExpectedTarget & 0xfffu);
+  EXPECT_EQ((LoadInsn >> 10) & 0xfffu, (ExpectedTarget & 0xfffu) >> 3);
+  EXPECT_EQ((VectorLoadInsn >> 10) & 0xfffu,
+            ((Target->Addr + 16) & 0xfffu) >> 4);
+  EXPECT_EQ(readLE<uint64_t>(SlotBytes), ExpectedTarget);
+  EXPECT_EQ(readLE<uint32_t>(NarrowSlotBytes),
+            static_cast<uint32_t>(ExpectedTarget));
+
+  EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot->Addr), 1u);
+  auto OwnerIt = Img.DataPtrRelocTargetOwners.find(Slot->Addr);
+  ASSERT_NE(OwnerIt, Img.DataPtrRelocTargetOwners.end());
+  EXPECT_EQ(OwnerIt->second, TargetOwner->VA);
+}
+
+TEST_F(COFFRelocatableAbsoluteRelocation,
+       ARM32AppliesAbsoluteAddendsAndRecordsPointerSlots) {
+  const fs::path Object =
+      compileCOFF("coff_arm32_address_addends", "armv7-pc-windows-msvc",
+                  R"(
+.syntax unified
+.thumb
+.text
+.globl materialize_data
+.thumb_func
+materialize_data:
+  movw r0, :lower16:data_target+4
+  movt r0, :upper16:data_target+4
+  bx lr
+
+.globl materialize_negative
+.thumb_func
+materialize_negative:
+  movw r2, :lower16:data_target-4
+  movt r2, :upper16:data_target-4
+  bx lr
+
+.section .rdata,"dr"
+.p2align 2
+.globl pointer_slot
+pointer_slot:
+  .long data_target+4
+
+.data
+.p2align 2
+.globl data_target
+data_target:
+  .long 0x11223344
+  .long 0x55667788
+)");
+  ASSERT_FALSE(Object.empty());
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::COFF);
+  ASSERT_EQ(Img.Arch, Arch::ARM);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Symbol *Function = findSymbol(Img, "materialize_data");
+  const Symbol *NegativeFunction = findSymbol(Img, "materialize_negative");
+  const Symbol *Slot = findSymbol(Img, "pointer_slot");
+  const Symbol *Target = findSymbol(Img, "data_target");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(NegativeFunction, nullptr);
+  ASSERT_NE(Slot, nullptr);
+  ASSERT_NE(Target, nullptr);
+  const Section *TargetOwner = Img.getSectionFor(Target->Addr);
+  ASSERT_NE(TargetOwner, nullptr);
+
+  const uint8_t *SlotBytes = Img.readVA(Slot->Addr, sizeof(uint32_t));
+  ASSERT_NE(SlotBytes, nullptr);
+  EXPECT_EQ(readLE<uint32_t>(SlotBytes),
+            static_cast<uint32_t>(Target->Addr + 4));
+  EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot->Addr), 1u);
+  auto OwnerIt = Img.DataPtrRelocTargetOwners.find(Slot->Addr);
+  ASSERT_NE(OwnerIt, Img.DataPtrRelocTargetOwners.end());
+  EXPECT_EQ(OwnerIt->second, TargetOwner->VA);
+
+  const uint8_t *MovBytes = Img.readVA(Function->Addr, 8);
+  ASSERT_NE(MovBytes, nullptr);
+  auto DecodeThumbImm16 = [](const uint8_t *Bytes) {
+    const uint16_t Hi = readLE<uint16_t>(Bytes);
+    const uint16_t Lo = readLE<uint16_t>(Bytes + 2);
+    return static_cast<uint32_t>(((Hi & 0x000fu) << 12) |
+                                 ((Hi & 0x0400u) << 1) | ((Lo & 0x7000u) >> 4) |
+                                 (Lo & 0x00ffu));
+  };
+  const uint32_t Low = DecodeThumbImm16(MovBytes);
+  const uint32_t High = DecodeThumbImm16(MovBytes + 4);
+  EXPECT_EQ(Low | (High << 16), static_cast<uint32_t>(Target->Addr + 4));
+
+  const uint8_t *NegativeBytes = Img.readVA(NegativeFunction->Addr, 8);
+  ASSERT_NE(NegativeBytes, nullptr);
+  const uint32_t NegativeAddress = DecodeThumbImm16(NegativeBytes) |
+                                   (DecodeThumbImm16(NegativeBytes + 4) << 16);
+  EXPECT_EQ(NegativeAddress, static_cast<uint32_t>(Target->Addr - 4));
+}
+
+TEST_F(COFFRelocatableAbsoluteRelocation,
+       ELFARM32AppliesMOVWMovTAddressRelocations) {
+  const fs::path Object =
+      compileCOFF("elf_arm32_mov_pair", "armv7-none-linux-gnueabihf", R"(
+.syntax unified
+.arm
+.text
+.globl materialize_data
+.type materialize_data,%function
+materialize_data:
+  movw r0, #:lower16:data_target+4
+  movt r0, #:upper16:data_target+4
+  bx lr
+
+.globl materialize_negative
+.type materialize_negative,%function
+materialize_negative:
+  movw r2, #:lower16:data_target-4
+  movt r2, #:upper16:data_target-4
+  bx lr
+
+.thumb
+.globl materialize_thumb
+.thumb_func
+.type materialize_thumb,%function
+materialize_thumb:
+  movw r1, #:lower16:data_target+4
+  movt r1, #:upper16:data_target+4
+  bx lr
+
+
+.globl materialize_thumb_negative
+.thumb_func
+.type materialize_thumb_negative,%function
+materialize_thumb_negative:
+  movw r3, #:lower16:data_target-4
+  movt r3, #:upper16:data_target-4
+  bx lr
+
+.section .rodata,"a",%progbits
+.p2align 2
+.globl pointer_slot
+pointer_slot:
+  .word data_target+4
+
+.data
+.p2align 2
+.globl data_target
+data_target:
+  .word 0x11223344
+  .word 0x55667788
+)");
+  ASSERT_FALSE(Object.empty());
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::ELF);
+  ASSERT_EQ(Img.Arch, Arch::ARM);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Symbol *Function = findSymbol(Img, "materialize_data");
+  const Symbol *NegativeFunction = findSymbol(Img, "materialize_negative");
+  const Symbol *ThumbFunction = findSymbol(Img, "materialize_thumb");
+  const Symbol *ThumbNegativeFunction =
+      findSymbol(Img, "materialize_thumb_negative");
+  const Symbol *Slot = findSymbol(Img, "pointer_slot");
+  const Symbol *Target = findSymbol(Img, "data_target");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(NegativeFunction, nullptr);
+  ASSERT_NE(ThumbFunction, nullptr);
+  ASSERT_NE(ThumbNegativeFunction, nullptr);
+  ASSERT_NE(Slot, nullptr);
+  ASSERT_NE(Target, nullptr);
+
+  const uint8_t *MovBytes = Img.readVA(Function->Addr, 8);
+  const uint8_t *SlotBytes = Img.readVA(Slot->Addr, sizeof(uint32_t));
+  ASSERT_NE(MovBytes, nullptr);
+  ASSERT_NE(SlotBytes, nullptr);
+  auto DecodeARMImm16 = [](const uint8_t *Bytes) {
+    const uint32_t Insn = readLE<uint32_t>(Bytes);
+    return ((Insn >> 4) & 0xf000u) | (Insn & 0x0fffu);
+  };
+  const uint32_t Address =
+      DecodeARMImm16(MovBytes) | (DecodeARMImm16(MovBytes + 4) << 16);
+  EXPECT_EQ(Address, static_cast<uint32_t>(Target->Addr + 4));
+  const uint8_t *NegativeBytes = Img.readVA(NegativeFunction->Addr, 8);
+  ASSERT_NE(NegativeBytes, nullptr);
+  const uint32_t NegativeAddress =
+      DecodeARMImm16(NegativeBytes) | (DecodeARMImm16(NegativeBytes + 4) << 16);
+  EXPECT_EQ(NegativeAddress, static_cast<uint32_t>(Target->Addr - 4));
+
+  const uint8_t *ThumbBytes = Img.readVA(ThumbFunction->Addr, 8);
+  ASSERT_NE(ThumbBytes, nullptr);
+  auto DecodeThumbImm16 = [](const uint8_t *Bytes) {
+    const uint16_t Hi = readLE<uint16_t>(Bytes);
+    const uint16_t Lo = readLE<uint16_t>(Bytes + 2);
+    return static_cast<uint32_t>(((Hi & 0x000fu) << 12) |
+                                 ((Hi & 0x0400u) << 1) | ((Lo & 0x7000u) >> 4) |
+                                 (Lo & 0x00ffu));
+  };
+  const uint32_t ThumbAddress =
+      DecodeThumbImm16(ThumbBytes) | (DecodeThumbImm16(ThumbBytes + 4) << 16);
+  EXPECT_EQ(ThumbAddress, static_cast<uint32_t>(Target->Addr + 4));
+  const uint8_t *ThumbNegativeBytes =
+      Img.readVA(ThumbNegativeFunction->Addr, 8);
+  ASSERT_NE(ThumbNegativeBytes, nullptr);
+  const uint32_t ThumbNegativeAddress =
+      DecodeThumbImm16(ThumbNegativeBytes) |
+      (DecodeThumbImm16(ThumbNegativeBytes + 4) << 16);
+  EXPECT_EQ(ThumbNegativeAddress, static_cast<uint32_t>(Target->Addr - 4));
+  EXPECT_EQ(readLE<uint32_t>(SlotBytes),
+            static_cast<uint32_t>(Target->Addr + 4));
+  EXPECT_EQ(Img.DataPtrRelocSlots.count(Slot->Addr), 1u);
+}
+
 } // namespace

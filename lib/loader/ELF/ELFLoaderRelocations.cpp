@@ -801,6 +801,74 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           default:
             break;
           }
+        } else if (RType == R_ARM_MOVW_ABS_NC || RType == R_ARM_MOVT_ABS) {
+          uint32_t Insn = 0;
+          std::memcpy(&Insn, ApplySeg->Data.data() + RAddr, 4);
+          const uint32_t ExpectedOpcode =
+              RType == R_ARM_MOVW_ABS_NC ? 0x03000000u : 0x03400000u;
+          if ((Insn & 0x0ff00000u) != ExpectedOpcode)
+            continue;
+          const uint16_t Encoded =
+              static_cast<uint16_t>(((Insn >> 4) & 0xf000u) | (Insn & 0x0fffu));
+          const int64_t Addend =
+              IsRela ? RAddend : static_cast<int16_t>(Encoded);
+          uint64_t Target = S;
+          if (Addend >= 0) {
+            if (static_cast<uint64_t>(Addend) > InvalidVA - Target)
+              continue;
+            Target += static_cast<uint64_t>(Addend);
+          } else {
+            const uint64_t Magnitude = static_cast<uint64_t>(-(Addend + 1)) + 1;
+            if (Magnitude > Target)
+              continue;
+            Target -= Magnitude;
+          }
+          const uint16_t Result = static_cast<uint16_t>(
+              RType == R_ARM_MOVW_ABS_NC ? Target : Target >> 16);
+          Insn = (Insn & ~0x000f0fffu) |
+                 ((static_cast<uint32_t>(Result) & 0xf000u) << 4) |
+                 (static_cast<uint32_t>(Result) & 0x0fffu);
+          Put32(Insn);
+          RecordCodeRef(Target);
+          RecordDataTarget(Target);
+          RecordWritableDataTarget(Target);
+        } else if (RType == R_ARM_THM_MOVW_ABS_NC ||
+                   RType == R_ARM_THM_MOVT_ABS) {
+          uint16_t Hi = 0, Lo = 0;
+          std::memcpy(&Hi, ApplySeg->Data.data() + RAddr, 2);
+          std::memcpy(&Lo, ApplySeg->Data.data() + RAddr + 2, 2);
+          const uint16_t ExpectedOpcode =
+              RType == R_ARM_THM_MOVW_ABS_NC ? 0xf240u : 0xf2c0u;
+          if ((Hi & 0xfbf0u) != ExpectedOpcode)
+            continue;
+          const uint16_t Encoded = static_cast<uint16_t>(
+              ((Hi & 0x000fu) << 12) | ((Hi & 0x0400u) << 1) |
+              ((Lo & 0x7000u) >> 4) | (Lo & 0x00ffu));
+          const int64_t Addend =
+              IsRela ? RAddend : static_cast<int16_t>(Encoded);
+          uint64_t Target = S;
+          if (Addend >= 0) {
+            if (static_cast<uint64_t>(Addend) > InvalidVA - Target)
+              continue;
+            Target += static_cast<uint64_t>(Addend);
+          } else {
+            const uint64_t Magnitude = static_cast<uint64_t>(-(Addend + 1)) + 1;
+            if (Magnitude > Target)
+              continue;
+            Target -= Magnitude;
+          }
+          const uint16_t Result = static_cast<uint16_t>(
+              RType == R_ARM_THM_MOVW_ABS_NC ? Target : Target >> 16);
+          Hi = static_cast<uint16_t>((Hi & ~0x040fu) |
+                                     ((Result >> 12) & 0x000fu) |
+                                     ((Result >> 1) & 0x0400u));
+          Lo = static_cast<uint16_t>(
+              (Lo & ~0x70ffu) | ((Result << 4) & 0x7000u) | (Result & 0x00ffu));
+          std::memcpy(ApplySeg->Data.data() + RAddr, &Hi, 2);
+          std::memcpy(ApplySeg->Data.data() + RAddr + 2, &Lo, 2);
+          RecordCodeRef(Target);
+          RecordDataTarget(Target);
+          RecordWritableDataTarget(Target);
         } else if (RType == R_ARM_ABS32) {
           // Absolute 32-bit slot — a function-pointer table entry (handled by
           // the code-pointer table mirror) or a literal-pool word, not a
