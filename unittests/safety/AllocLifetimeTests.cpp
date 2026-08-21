@@ -1005,6 +1005,48 @@ TEST(AllocLifetime, UninitializedLocalStackLoadIsReported) {
   EXPECT_EQ(Read->CallVA, 0x408u);
 }
 
+TEST(AllocLifetime, UninitializedLocalStackLoadSurvivesPointerSpill) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x40, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(11),
+       {mkReg(kSP, 1), MedVar::makeConst(0x28, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(11), temp(10)});
+  B.op(b0, NdOp::LOAD, temp(12), {temp(11)});
+  B.op(b0, NdOp::COPY, temp(13), {temp(12)});
+  B.op(b0, NdOp::LOAD, temp(14), {temp(13)}, 0x408);
+  B.ret(b0, {temp(14)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->CallVA, 0x408u);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, InitializedLocalStackLoadSurvivesPointerSpill) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x40, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(0x1234, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(11),
+       {mkReg(kSP, 1), MedVar::makeConst(0x28, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(11), temp(10)});
+  B.op(b0, NdOp::LOAD, temp(12), {temp(11)});
+  B.op(b0, NdOp::COPY, temp(13), {temp(12)});
+  B.op(b0, NdOp::LOAD, temp(14), {temp(13)}, 0x408);
+  B.ret(b0, {temp(14)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
+}
+
 TEST(AllocLifetime, UninitializedLocalStackMemcpySourceIsReported) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -1212,6 +1254,28 @@ TEST(AllocLifetime, UninitializedLocalStackAtomicReadIsReported) {
   const Finding *Read = find(Fs, VulnClass::UninitializedRead);
   ASSERT_NE(Read, nullptr);
   EXPECT_EQ(Read->CallVA, 0x408u);
+}
+
+TEST(AllocLifetime, UninitializedLocalStackAtomicReadSurvivesPointerSpill) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x40, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(11),
+       {mkReg(kSP, 1), MedVar::makeConst(0x28, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(11), temp(10)});
+  B.op(b0, NdOp::LOAD, temp(12), {temp(11)});
+  B.op(b0, NdOp::ATOMIC_CMPXCHG, temp(13),
+       {temp(12), MedVar::makeConst(0, 8), MedVar::makeConst(1, 8)}, 0x408);
+  B.ret(b0, {temp(13)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->CallVA, 0x408u);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
 }
 
 TEST(AllocLifetime, InitializedLocalStackAtomicReadIsClean) {

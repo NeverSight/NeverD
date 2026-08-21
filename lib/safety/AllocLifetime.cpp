@@ -1408,13 +1408,14 @@ private:
         const MedVar *Addr = detail::memoryAddress(Op);
         if (!Addr)
           continue;
-        const std::optional<int64_t> Offset = Mem.stackOffset(*Addr);
+        const std::optional<int64_t> Offset =
+            Mem.stackOffsetThroughReloads(*Addr);
         // Positive entry-SP offsets are caller-owned argument/ABI storage.
         // This audit only claims local frame bytes below the entry SP.
         if (!Offset || *Offset >= 0)
           continue;
         const detail::ReachingStackValues Reaching =
-            Mem.reachingLoad(B, Oi, Op);
+            Mem.reachingRead(B, Oi, *Addr, Op.Output.Size);
         if (!Reaching.Reachable ||
             (!Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites))
           continue;
