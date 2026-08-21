@@ -6,6 +6,7 @@
 
 #include "neverd/safety/AllocLifetime.h"
 
+#include "SourceSemantics.h"
 #include "StackSlotFlow.h"
 
 #include "neverd/debug/DebugContext.h"
@@ -1269,9 +1270,17 @@ private:
         return CallUse::Possible;
       }
     }
-    if (const SourceEntry *Source = Cat.matchSource(callName(CI)))
+    const std::string Name = callName(CI);
+    if (std::optional<
+            std::pair<std::string, safety::detail::FormattedSourceKind>>
+            Formatted = safety::detail::formattedSourceName(Name)) {
+      const unsigned FixedCount = libc::varArgFixedCount(Formatted->first);
+      return ArgIndex < static_cast<int>(FixedCount) ? CallUse::Definite
+                                                     : CallUse::Possible;
+    }
+    if (const SourceEntry *Source = Cat.matchSource(Name))
       return ArgIndex == Source->OutArg ? CallUse::Definite : CallUse::Possible;
-    if (isStringLengthCall(callName(CI)))
+    if (isStringLengthCall(Name))
       return ArgIndex == 0 ? CallUse::Definite : CallUse::None;
     return CallUse::Possible;
   }

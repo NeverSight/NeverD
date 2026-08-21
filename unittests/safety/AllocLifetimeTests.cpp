@@ -720,6 +720,51 @@ TEST(AllocLifetime, StringLengthCallDefinitelyUsesFreedStorage) {
   EXPECT_FALSE(Use->Corroboration.empty());
 }
 
+TEST(AllocLifetime, ScanfFixedPrefixDefinitelyUsesFreedStorage) {
+  constexpr va_t MallocVA = 0x400;
+  constexpr va_t FreeVA = 0x408;
+  constexpr va_t ScanfVA = 0x410;
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000, MallocVA);
+  B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, FreeVA);
+  B.call(b0, "sscanf", temp(2),
+         {temp(1), MedVar::makeConst(0x5000, 8), temp(3)}, 0x9200, ScanfVA);
+  B.ret(b0, {});
+
+  LowFunc LF;
+  LF.Entry = B.F.Entry;
+  LF.DecodedInstructionCount = 1;
+  LF.LiftedInstructionCount = 1;
+  LowBlock LB;
+  LB.Id = b0;
+  LB.StartAddr = B.F.Entry;
+  LB.EndAddr = ScanfVA + 8;
+  LB.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, MallocVA));
+  LB.Ops.push_back(lowOp(NdOp::CALL, NdVar{}, {NdVar::cst(0x9100, 8)}, FreeVA));
+  LB.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9200, 8)}, ScanfVA));
+  LB.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}, ScanfVA + 4));
+  LF.Blocks.push_back(std::move(LB));
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::vector<MedFunc> MedFuncs{B.F};
+  std::vector<LowFunc> LowFuncs{std::move(LF)};
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &MedFuncs;
+  In.LowFuncs = &LowFuncs;
+  const std::vector<Finding> Fs =
+      auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const Finding *Use = find(Fs, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unsafe) << Use->Detail;
+  EXPECT_EQ(Use->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Use->Corroboration.empty());
+}
+
 TEST(AllocLifetime, OverwrittenSpillDoesNotRemainAHeapAlias) {
   FB B("f", 0x100);
   int b0 = B.block();
