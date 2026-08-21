@@ -1001,7 +1001,8 @@ TEST(AllocLifetime, FallibleInputSourceUseRemainsUnknown) {
   };
   for (const SourceCase &C :
        {SourceCase{"read", {temp(3), temp(1), MedVar::makeConst(1, 8)}},
-        SourceCase{"fgets", {temp(1), MedVar::makeConst(16, 8), temp(3)}}}) {
+        SourceCase{"fgets", {temp(1), MedVar::makeConst(16, 8), temp(3)}},
+        SourceCase{"gets", {temp(1)}}}) {
     SCOPED_TRACE(C.Name);
     FB B("f", 0x100);
     int b0 = B.block();

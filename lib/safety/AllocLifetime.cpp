@@ -1536,6 +1536,9 @@ private:
       case SinkKind::Copy:
         if (ArgIndex != E->DstArg && ArgIndex != E->SrcArg)
           return CallUse::None;
+        if (E->UnboundedWrite && ArgIndex == E->DstArg &&
+            Cat.matchSource(callName(CI)))
+          return CallUse::Possible;
         if (E->LenArg >= 0 && E->LenArg < static_cast<int>(CI.Args.size()) &&
             E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size()))
           if (std::optional<uint64_t> Count =
