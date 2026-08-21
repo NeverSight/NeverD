@@ -789,7 +789,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                           In.Img ? In.Img->Format
                                                  : BinaryFormat::Unknown)
                    : ReturnedStringOutput{};
-        bool CountedReturnApplies = Callee && CountedReturn.BoundArg >= 0;
+        const bool CountedReturnRecognized =
+            Callee && CountedReturn.BoundArg >= 0;
+        bool CountedReturnApplies = CountedReturnRecognized;
         if (CountedReturnApplies && CountedReturn.RequiredZeroArg >= 0) {
           const SymRef Flags = readCallArgument(
               In, Fn, CountedReturn.RequiredZeroArg, *Callee, Cur.State);
@@ -940,6 +942,22 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         StepResult SR = Exec.step(Op);
         SymRef CountedReturnValue;
         SymRef CountedReturnSuccess;
+        if (CountedReturnRecognized && !CountedReturnApplies) {
+          const SymRef Ret = captureReturn(Op, Cur.State, In);
+          if (!Ret.isValid()) {
+            Cur.SemanticUnknown = true;
+          } else {
+            SymRef SemanticRet = Ret;
+            if (CountedReturn.ReturnBits != 0 &&
+                CountedReturn.ReturnBits < Ctx.width(Ret))
+              SemanticRet = Ctx.mkExtract(Ret, 0, CountedReturn.ReturnBits);
+            CountedReturnSuccess =
+                CountedReturn.AllowsMinusOne
+                    ? Ctx.mkSgt(SemanticRet, Ctx.mkZero(Ctx.width(SemanticRet)))
+                    : Ctx.mkUgt(SemanticRet,
+                                Ctx.mkZero(Ctx.width(SemanticRet)));
+          }
+        }
         if (CountedReturnApplies) {
           SymRef Ret = captureReturn(Op, Cur.State, In);
           if (!ReturnBound.isValid() || !Ret.isValid())

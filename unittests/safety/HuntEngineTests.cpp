@@ -1453,6 +1453,59 @@ TEST(HuntEngine, FailedReadDoesNotCorroborateFormatBuffer) {
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, FailedRecvWithNonzeroFlagsDoesNotCorroborateFormatBuffer) {
+  for (const char *Name : {"recv", "recvfrom"}) {
+    SCOPED_TRACE(Name);
+    constexpr va_t SourceVA = 0x400004;
+    constexpr va_t SinkVA = 0x400020;
+    const MedVar SourceBuffer = mkReg(24, 0);
+    Builder B("main");
+    B.F.Entry = 0x400000;
+    B.F.CC = CallingConv::SysV_AMD64;
+    std::vector<MedVar> Args = {MedVar::makeConst(0, 8), SourceBuffer,
+                                MedVar::makeConst(32, 8),
+                                MedVar::makeConst(1, 8)};
+    if (llvm::StringRef(Name) == "recvfrom") {
+      Args.push_back(param(3));
+      Args.push_back(param(4));
+    }
+    B.call(Name, mkReg(0, 1), std::move(Args));
+    B.F.Blocks[0].Ops.back().Addr = SourceVA;
+    B.call("printf", temp(0), {SourceBuffer});
+    B.F.Blocks[0].Ops.back().Addr = SinkVA;
+    LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, UINT64_MAX);
+
+    auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+    EXPECT_TRUE(Fnd->Witness.empty());
+  }
+}
+
+TEST(HuntEngine,
+     FailedWinSockRecvWithNonzeroFlagsDoesNotCorroborateFormatBuffer) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("recv", mkReg(0, 1, 4),
+         {MedVar::makeConst(0, 8), SourceBuffer, MedVar::makeConst(32, 8),
+          MedVar::makeConst(1, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, UINT32_MAX,
+                                         /*ReturnBytes=*/4);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
 TEST(HuntEngine, FailedEnvironmentQueryDoesNotCorroborateFormatBuffer) {
   constexpr va_t SourceVA = 0x400004;
   constexpr va_t SinkVA = 0x400020;
