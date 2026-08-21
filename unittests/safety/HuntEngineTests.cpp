@@ -562,6 +562,87 @@ LowFunc readFileResultThenFormatLow(va_t SourceVA, va_t SinkVA,
   return LF;
 }
 
+LowFunc repeatedReadFileThenFormatLow(va_t FirstSourceVA, va_t SecondSourceVA,
+                                      va_t SinkVA, va_t FirstBytesReadVA,
+                                      va_t SecondBytesReadVA) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kFirstCount = 24;
+  constexpr uint64_t kSecondCount = 28;
+  constexpr uint64_t kFirstReturnMatches = 200;
+  constexpr uint64_t kFirstCountMatches = 201;
+  constexpr uint64_t kSecondReturnMatches = 202;
+  constexpr uint64_t kSecondCountMatches = 203;
+  constexpr uint64_t kFirstProducedInput = 204;
+  constexpr uint64_t kSecondProducedNoInput = 205;
+  constexpr uint64_t kPath = 206;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = SinkVA;
+  Entry.Ops.push_back(lop(NdOp::CALL, NdVar::reg(kRax, 8),
+                          {NdVar::cst(0x9000, 8)}, FirstSourceVA));
+  Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+                          {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
+                          FirstSourceVA + 1));
+  Entry.Ops.push_back(lop(NdOp::LOAD, NdVar::reg(kFirstCount, 4),
+                          {NdVar::cst(FirstBytesReadVA, 8)},
+                          FirstSourceVA + 2));
+  Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kFirstReturnMatches, 1),
+                          {NdVar::reg(kRax, 4), NdVar::cst(1, 4)},
+                          FirstSourceVA + 3));
+  Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kFirstCountMatches, 1),
+                          {NdVar::reg(kFirstCount, 4), NdVar::cst(1, 4)},
+                          FirstSourceVA + 4));
+  Entry.Ops.push_back(lop(
+      NdOp::INT_AND, NdVar::reg(kFirstProducedInput, 1),
+      {NdVar::reg(kFirstReturnMatches, 1), NdVar::reg(kFirstCountMatches, 1)},
+      FirstSourceVA + 5));
+  Entry.Ops.push_back(lop(NdOp::CALL, NdVar::reg(kRax, 8),
+                          {NdVar::cst(0x9000, 8)}, SecondSourceVA));
+  Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+                          {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
+                          SecondSourceVA + 1));
+  Entry.Ops.push_back(lop(NdOp::LOAD, NdVar::reg(kSecondCount, 4),
+                          {NdVar::cst(SecondBytesReadVA, 8)},
+                          SecondSourceVA + 2));
+  Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kSecondReturnMatches, 1),
+                          {NdVar::reg(kRax, 4), NdVar::cst(1, 4)},
+                          SecondSourceVA + 3));
+  Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kSecondCountMatches, 1),
+                          {NdVar::reg(kSecondCount, 4), NdVar::cst(0, 4)},
+                          SecondSourceVA + 4));
+  Entry.Ops.push_back(lop(
+      NdOp::INT_AND, NdVar::reg(kSecondProducedNoInput, 1),
+      {NdVar::reg(kSecondReturnMatches, 1), NdVar::reg(kSecondCountMatches, 1)},
+      SecondSourceVA + 5));
+  Entry.Ops.push_back(lop(NdOp::INT_AND, NdVar::reg(kPath, 1),
+                          {NdVar::reg(kFirstProducedInput, 1),
+                           NdVar::reg(kSecondProducedNoInput, 1)},
+                          SecondSourceVA + 6));
+  Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(SinkVA, 8), NdVar::reg(kPath, 1)},
+                          SecondSourceVA + 7));
+  Entry.Succs = {1, 2};
+  Sink.Id = 1;
+  Sink.StartAddr = SinkVA;
+  Sink.EndAddr = SinkVA + 8;
+  Sink.Ops.push_back(lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, SinkVA));
+  Sink.Succs = {2};
+  Sink.Preds = {0};
+  Exit.Id = 2;
+  Exit.StartAddr = SinkVA + 8;
+  Exit.EndAddr = SinkVA + 16;
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  Exit.Preds = {0, 1};
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
 LowFunc returnSourceThenFormatLow(va_t SourceVA, va_t SinkVA,
                                   std::optional<uint64_t> RequiredReturn,
                                   uint16_t ReturnBytes = 8) {
@@ -2333,6 +2414,37 @@ TEST(HuntEngine, ReadFileByteCountGatesStringInput) {
     EXPECT_EQ(Fnd->TheVerdict, Expected) << Fnd->Detail;
     EXPECT_EQ(Fnd->Witness.empty(), Expected != Verdict::Unsafe);
   }
+}
+
+TEST(HuntEngine, ZeroByteReadFilePreservesEarlierInputEvidence) {
+  constexpr va_t FirstSourceVA = 0x400004;
+  constexpr va_t SecondSourceVA = 0x400010;
+  constexpr va_t SinkVA = 0x400020;
+  constexpr va_t FirstBytesReadVA = 0x700000;
+  constexpr va_t SecondBytesReadVA = 0x700004;
+  const MedVar SourceBuffer = param(2);
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("ReadFile", temp(5, 4),
+         {MedVar::makeConst(1, 8), SourceBuffer, MedVar::makeConst(32, 8),
+          MedVar::makeConst(FirstBytesReadVA, 8), MedVar::makeConst(0, 8)});
+  B.F.Blocks[0].Ops.back().Addr = FirstSourceVA;
+  B.call("ReadFile", temp(6, 4),
+         {MedVar::makeConst(1, 8), SourceBuffer, MedVar::makeConst(32, 8),
+          MedVar::makeConst(SecondBytesReadVA, 8), MedVar::makeConst(0, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SecondSourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF =
+      repeatedReadFileThenFormatLow(FirstSourceVA, SecondSourceVA, SinkVA,
+                                    FirstBytesReadVA, SecondBytesReadVA);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
 }
 
 TEST(HuntEngine, FreadReturnHonorsElementCount) {

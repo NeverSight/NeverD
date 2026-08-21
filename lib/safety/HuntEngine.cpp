@@ -1152,15 +1152,27 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           }
         }
         if (IsCall) {
-          for (const SourceEvent &NewEvent : NewSourceEvents)
-            Cur.SourceEvents.erase(
-                std::remove_if(Cur.SourceEvents.begin(), Cur.SourceEvents.end(),
-                               [&](const SourceEvent &OldEvent) {
-                                 return expressionsMustEqual(
-                                     Ctx, OldEvent.Buffer, NewEvent.Buffer,
-                                     Cur.Constraints, Budgets);
-                               }),
-                Cur.SourceEvents.end());
+          for (const SourceEvent &NewEvent : NewSourceEvents) {
+            auto SameBuffer = [&](const SourceEvent &OldEvent) {
+              return expressionsMustEqual(Ctx, OldEvent.Buffer, NewEvent.Buffer,
+                                          Cur.Constraints, Budgets);
+            };
+            if (!NewEvent.Success.isValid()) {
+              Cur.SourceEvents.erase(std::remove_if(Cur.SourceEvents.begin(),
+                                                    Cur.SourceEvents.end(),
+                                                    SameBuffer),
+                                     Cur.SourceEvents.end());
+              continue;
+            }
+            for (SourceEvent &OldEvent : Cur.SourceEvents) {
+              if (!SameBuffer(OldEvent))
+                continue;
+              const SymRef PriorSuccess =
+                  OldEvent.Success.isValid() ? OldEvent.Success : Ctx.mkTrue();
+              OldEvent.Success =
+                  Ctx.mkAnd(PriorSuccess, Ctx.mkNot(NewEvent.Success));
+            }
+          }
           Cur.SourceEvents.insert(Cur.SourceEvents.end(),
                                   NewSourceEvents.begin(),
                                   NewSourceEvents.end());
