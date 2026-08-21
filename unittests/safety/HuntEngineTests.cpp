@@ -802,6 +802,55 @@ LowFunc readAndScanfThenStrcpyLow(va_t ReadVA, va_t ScanfVA, va_t StrcpyVA) {
   return LF;
 }
 
+LowFunc environmentThenStrcpyLow(va_t SourceVA, va_t StrcpyVA,
+                                 uint32_t BufferChars) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kPositive = 200;
+  constexpr uint64_t kFits = 201;
+  constexpr uint64_t kSuccess = 202;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = StrcpyVA;
+  Entry.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9100, 8)}, SourceVA));
+  Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+                          {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
+                          SourceVA + 1));
+  Entry.Ops.push_back(lop(NdOp::INT_LESS, NdVar::reg(kPositive, 1),
+                          {NdVar::cst(0, 4), NdVar::reg(kRax, 4)},
+                          SourceVA + 2));
+  Entry.Ops.push_back(lop(NdOp::INT_LESS, NdVar::reg(kFits, 1),
+                          {NdVar::reg(kRax, 4), NdVar::cst(BufferChars, 4)},
+                          SourceVA + 3));
+  Entry.Ops.push_back(lop(NdOp::INT_AND, NdVar::reg(kSuccess, 1),
+                          {NdVar::reg(kPositive, 1), NdVar::reg(kFits, 1)},
+                          SourceVA + 4));
+  Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(StrcpyVA, 8), NdVar::reg(kSuccess, 1)},
+                          SourceVA + 5));
+  Entry.Succs = {1, 2};
+  Sink.Id = 1;
+  Sink.StartAddr = StrcpyVA;
+  Sink.EndAddr = StrcpyVA + 8;
+  Sink.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, StrcpyVA));
+  Sink.Succs = {2};
+  Sink.Preds = {0};
+  Exit.Id = 2;
+  Exit.StartAddr = StrcpyVA + 8;
+  Exit.EndAddr = StrcpyVA + 16;
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  Exit.Preds = {0, 1};
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
 LowFunc readThenTerminateStrcpyLow(va_t ReadVA, va_t StrcpyVA, va_t SourceVA) {
   constexpr va_t kEntry = 0x400000;
   LowFunc LF;
@@ -1311,6 +1360,57 @@ TEST(HuntEngine, EnvironmentQueryCorroboratesReachableFormatBuffer) {
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, TruncatedEnvironmentQueryDoesNotCorroborateFormatBuffer) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  constexpr uint32_t BufferChars = 8;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("GetEnvironmentVariableA", mkReg(0, 1, 4),
+         {param(1), SourceBuffer, MedVar::makeConst(BufferChars, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, BufferChars,
+                                         /*ReturnBytes=*/4);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, SuccessfulEnvironmentQueryBoundsImplicitStringCopy) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  constexpr uint32_t BufferChars = 8;
+  for (const auto &[Capacity, Expected] :
+       {std::pair<uint64_t, Verdict>{8, Verdict::Safe},
+        std::pair<uint64_t, Verdict>{7, Verdict::Unsafe}}) {
+    SCOPED_TRACE(Capacity);
+    const MedVar SourceBuffer = param(2);
+    Builder B("main");
+    B.F.Entry = 0x400000;
+    B.F.CC = CallingConv::Win64;
+    B.call("malloc", temp(1), {MedVar::makeConst(Capacity, 8)});
+    B.call("GetEnvironmentVariableA", mkReg(0, 1, 4),
+           {param(1), SourceBuffer, MedVar::makeConst(BufferChars, 8)});
+    B.F.Blocks[0].Ops.back().Addr = SourceVA;
+    B.call("strcpy", temp(0), {temp(1), SourceBuffer});
+    B.F.Blocks[0].Ops.back().Addr = SinkVA;
+    LowFunc LF = environmentThenStrcpyLow(SourceVA, SinkVA, BufferChars);
+
+    auto Fnd =
+        hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, Expected) << Fnd->Detail;
+    EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  }
 }
 
 TEST(HuntEngine, FailedScanfDoesNotCorroborateFormatBuffer) {

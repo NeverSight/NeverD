@@ -217,6 +217,13 @@ struct BoundedStringOutput {
   int BoundArg = -1;
 };
 
+struct ReturnedStringOutput {
+  int BufferArg = -1;
+  int BoundArg = -1;
+  uint32_t ReturnBits = 0;
+  uint32_t BoundBits = 0;
+};
+
 CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
                                         BinaryFormat Format) {
   const std::string Normalized = SinkCatalog::normalize(Name);
@@ -251,6 +258,14 @@ CountedSourceOutput countedSourceOutput(llvm::StringRef Name,
 BoundedStringOutput boundedStringOutput(llvm::StringRef Name) {
   if (SinkCatalog::normalize(Name) == "fgets")
     return {0, 1};
+  return {};
+}
+
+ReturnedStringOutput returnedStringOutput(llvm::StringRef Name,
+                                          BinaryFormat Format) {
+  if (Format == BinaryFormat::COFF &&
+      SinkCatalog::normalize(Name) == "GetEnvironmentVariableA")
+    return {1, 2, 32, 32};
   return {};
 }
 
@@ -546,7 +561,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                        const SinkEntry &E, uint64_t Capacity,
                        const SafetyBudgets &Budgets,
                        llvm::StringRef RequiredSource,
-                       std::optional<uint64_t> FixedLength = std::nullopt) {
+                       std::optional<uint64_t> FixedLength = std::nullopt,
+                       bool UseImplicitLength = true) {
   ExploreHit Best;
   const LowFunc *LF = In.findLowFunc(Fn.Entry);
   if (!LF || LF->Blocks.empty())
@@ -707,7 +723,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               continue;
             if (!RequiredSource.empty() && Event.Name == RequiredSource)
               Best.SourceEvidence = true;
-            if (!Event.ImplicitLen.isValid())
+            if (!UseImplicitLength || !Event.ImplicitLen.isValid())
               continue;
             if (EventImplicitLen.isValid() &&
                 !expressionsMustEqual(Ctx, EventImplicitLen, Event.ImplicitLen,
@@ -733,8 +749,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
             ConditionalBoundNotProven = !predicateMustHold(
                 Ctx, EventImplicitSuccess, Cur.Constraints, Budgets);
-          } else if (!Len.isValid() && Cur.ImplicitLen.isValid() &&
-                     SameImplicitSource) {
+          } else if (UseImplicitLength && !Len.isValid() &&
+                     Cur.ImplicitLen.isValid() && SameImplicitSource) {
             Len = Ctx.mkZExtOrTrunc(Cur.ImplicitLen, 64);
             if (Implicit && !Cur.ImplicitLenIncludesTerminator)
               Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
@@ -780,6 +796,11 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                    : CountedSourceOutput{};
         const BoundedStringOutput BoundedString =
             Callee ? boundedStringOutput(CalleeName) : BoundedStringOutput{};
+        const ReturnedStringOutput ReturnedString =
+            Callee ? returnedStringOutput(CalleeName,
+                                          In.Img ? In.Img->Format
+                                                 : BinaryFormat::Unknown)
+                   : ReturnedStringOutput{};
         bool CountedReturnApplies = Callee && CountedReturn.BoundArg >= 0;
         if (CountedReturnApplies && CountedReturn.RequiredZeroArg >= 0) {
           const SymRef Flags = readCallArgument(
@@ -884,6 +905,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         }
         SymRef NextImplicitSource;
         SymRef BoundedStringLimit;
+        SymRef ReturnedStringBuffer;
+        SymRef ReturnedStringLimit;
         const bool CaptureLength = LengthCall && Callee;
         const bool CaptureCountedSource =
             E.LenArg >= 0 && Callee && CountedSource &&
@@ -904,6 +927,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                                 *Callee, Cur.State);
           BoundedStringLimit = readCallArgument(In, Fn, BoundedString.BoundArg,
                                                 *Callee, Cur.State);
+        }
+        if (Callee && ReturnedString.BufferArg >= 0 &&
+            ReturnedString.BoundArg >= 0 &&
+            ReturnedString.BufferArg < static_cast<int>(Callee->Args.size()) &&
+            ReturnedString.BoundArg < static_cast<int>(Callee->Args.size())) {
+          ReturnedStringBuffer = readCallArgument(
+              In, Fn, ReturnedString.BufferArg, *Callee, Cur.State);
+          ReturnedStringLimit = readCallArgument(
+              In, Fn, ReturnedString.BoundArg, *Callee, Cur.State);
         }
         if (IsCall) {
           bool Summarized = LengthCall;
@@ -1043,6 +1075,41 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               if (!Event.Success.isValid())
                 Event.Success = ProducedInput;
           }
+        }
+        if (ReturnedStringBuffer.isValid() && ReturnedStringLimit.isValid()) {
+          const SymRef Ret = captureReturn(Op, Cur.State, In);
+          if (!Ret.isValid()) {
+            Cur.SemanticUnknown = true;
+          } else {
+            SymRef SemanticRet = Ret;
+            if (ReturnedString.ReturnBits != 0 &&
+                ReturnedString.ReturnBits < Ctx.width(SemanticRet))
+              SemanticRet =
+                  Ctx.mkExtract(SemanticRet, 0, ReturnedString.ReturnBits);
+            SymRef SemanticLimit = ReturnedStringLimit;
+            if (ReturnedString.BoundBits != 0 &&
+                ReturnedString.BoundBits < Ctx.width(SemanticLimit))
+              SemanticLimit =
+                  Ctx.mkExtract(SemanticLimit, 0, ReturnedString.BoundBits);
+            const SymRef ProducedString = Ctx.mkAnd(
+                Ctx.mkUgt(SemanticRet, Ctx.mkZero(Ctx.width(SemanticRet))),
+                Ctx.mkUlt(Ctx.mkZExtOrTrunc(SemanticRet, 64),
+                          Ctx.mkZExtOrTrunc(SemanticLimit, 64)));
+            const SymRef StringBytes = Ctx.mkAdd(
+                Ctx.mkZExtOrTrunc(SemanticRet, 64), Ctx.mkConst(64, 1));
+            for (SourceEvent &Event : NewSourceEvents) {
+              if (!expressionsMustEqual(Ctx, Event.Buffer, ReturnedStringBuffer,
+                                        Cur.Constraints, Budgets))
+                continue;
+              Event.Success = Event.Success.isValid()
+                                  ? Ctx.mkAnd(Event.Success, ProducedString)
+                                  : ProducedString;
+              Event.ImplicitLen = StringBytes;
+              Event.ImplicitLenIncludesTerminator = true;
+            }
+          }
+        } else if (ReturnedString.BufferArg >= 0) {
+          Cur.SemanticUnknown = true;
         }
         if (HasFormattedSourceOutput) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
@@ -1416,7 +1483,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     Probe.SrcArg = E->FmtArg;
     Probe.CapArg = -1;
     ExploreHit Hit = exploreSink(In, Cat, F, Site, Probe, UINT64_MAX, Budgets,
-                                 EntrySource ? llvm::StringRef() : Source);
+                                 EntrySource ? llvm::StringRef() : Source,
+                                 std::nullopt, false);
     if (Hit.Reached && !Hit.Budget && !Hit.SolverUnknown &&
         !Hit.SemanticUnknown && (EntrySource || Hit.SourceEvidence)) {
       Out.TheVerdict = Verdict::Unsafe;
