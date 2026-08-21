@@ -6,7 +6,7 @@
 
 #include "neverd/safety/SinkCatalog.h"
 
-#include "neverd/loader/LanguageRuntime.h"
+#include "neverd/Common.h"
 
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Demangle/Demangle.h"
@@ -46,47 +46,17 @@ std::string SinkCatalog::normalize(llvm::StringRef StatedName) {
   return S.str();
 }
 
-static llvm::StringRef lastIdentifier(llvm::StringRef Dem) {
-  if (auto P = Dem.find('('); P != llvm::StringRef::npos)
-    Dem = Dem.take_front(P);
-  Dem = Dem.rtrim();
-  if (auto P = Dem.rfind(':'); P != llvm::StringRef::npos)
-    Dem = Dem.drop_front(P + 1);
-  return Dem;
-}
-
 static std::string demangledKey(llvm::StringRef StatedName) {
-  if (std::string Rust = demangleRustName(StatedName); !Rust.empty())
-    return SinkCatalog::normalize(lastIdentifier(Rust));
   if (char *Dem = llvm::itaniumDemangle(StatedName.str())) {
     std::string Owned(Dem);
     std::free(Dem);
-    return SinkCatalog::normalize(lastIdentifier(Owned));
-  }
-
-  llvm::StringRef MicrosoftName = StatedName;
-  if (auto Bang = MicrosoftName.rfind('!'); Bang != llvm::StringRef::npos)
-    MicrosoftName = MicrosoftName.drop_front(Bang + 1);
-  while (MicrosoftName.starts_with("__imp_"))
-    MicrosoftName = MicrosoftName.drop_front(6);
-  size_t Consumed = 0;
-  if (char *Dem =
-          llvm::microsoftDemangle(MicrosoftName.str(), &Consumed, nullptr)) {
-    std::string Owned(Dem);
-    std::free(Dem);
-    if (Consumed != MicrosoftName.size())
-      return {};
     llvm::StringRef Name(Owned);
     if (auto Paren = Name.find('('); Paren != llvm::StringRef::npos)
-      Name = Name.take_front(Paren).rtrim();
-    if (Name.ends_with("operator new[]"))
-      return "Znam";
-    if (Name.ends_with("operator new"))
-      return "Znwm";
-    if (Name.ends_with("operator delete[]"))
-      return "ZdaPv";
-    if (Name.ends_with("operator delete"))
-      return "ZdlPv";
+      Name = Name.take_front(Paren);
+    Name = Name.trim();
+    if (Name.empty() || Name.contains("::"))
+      return {};
+    return SinkCatalog::normalize(Name);
   }
   return {};
 }

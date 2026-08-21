@@ -184,6 +184,69 @@ TEST(SinkCatalog, MangledOperatorNewAndDelete) {
   EXPECT_EQ(C.matchSink("??2@YAPEAX_K@Z.trailing"), nullptr);
 }
 
+TEST(SinkCatalog, StandardOperatorVariantsAreExactAcrossABIs) {
+  SinkCatalog C = SinkCatalog::defaults();
+  for (const char *Name : {
+           "_ZnwmRKSt9nothrow_t",
+           "_ZnwjRKSt9nothrow_t",
+           "_ZnwmSt11align_val_tRKSt9nothrow_t",
+           "_ZnwjSt11align_val_tRKSt9nothrow_t",
+           "_ZnamRKSt9nothrow_t",
+           "_ZnajRKSt9nothrow_t",
+           "_ZnamSt11align_val_tRKSt9nothrow_t",
+           "_ZnajSt11align_val_tRKSt9nothrow_t",
+           "??2@YAPEAX_KW4align_val_t@std@@AEBUnothrow_t@1@@Z",
+           "??2@YAPAXIW4align_val_t@std@@ABUnothrow_t@1@@Z",
+           "??_U@YAPEAX_KAEBUnothrow_t@std@@@Z",
+           "??_U@YAPAXIABUnothrow_t@std@@@Z",
+       }) {
+    SCOPED_TRACE(Name);
+    const SinkEntry *Entry = C.matchSink(Name);
+    ASSERT_NE(Entry, nullptr);
+    EXPECT_EQ(Entry->Kind, SinkKind::Alloc);
+  }
+
+  for (const char *Name : {
+           "_ZdlPvj",
+           "_ZdaPvj",
+           "_ZdlPvjSt11align_val_t",
+           "_ZdaPvjSt11align_val_t",
+           "_ZdlPvRKSt9nothrow_t",
+           "_ZdaPvSt11align_val_tRKSt9nothrow_t",
+           "??3@YAXPEAX_KW4align_val_t@std@@@Z",
+           "??3@YAXPAXIW4align_val_t@std@@@Z",
+           "??_V@YAXPEAXAEBUnothrow_t@std@@@Z",
+           "??_V@YAXPAXW4align_val_t@std@@ABUnothrow_t@1@@Z",
+       }) {
+    SCOPED_TRACE(Name);
+    const SinkEntry *Entry = C.matchSink(Name);
+    ASSERT_NE(Entry, nullptr);
+    EXPECT_EQ(Entry->Kind, SinkKind::Free);
+  }
+}
+
+TEST(SinkCatalog, RejectsQualifiedAndPlacementOperatorLookalikes) {
+  SinkCatalog C = SinkCatalog::defaults();
+  for (const char *Name : {
+           "??2@YAPEAX_KPEAX@Z",
+           "??_U@YAPAXIPAX@Z",
+           "??3@YAXPEAX0@Z",
+           "??_V@YAXPAX0@Z",
+           "??2X@@SAPEAX_K@Z",
+           "??_UX@@SAPAXI@Z",
+           "??3X@@SAXPEAX@Z",
+           "??_VX@@SAXPAX@Z",
+           "_ZnwmPv",
+           "_ZdlPvS_",
+           "_ZN1X6memcpyEPvS0_m",
+           "_ZN1X6mallocEm",
+           "_ZN1X4freeEPv",
+       }) {
+    SCOPED_TRACE(Name);
+    EXPECT_EQ(C.matchSink(Name), nullptr);
+  }
+}
+
 TEST(SinkCatalog, ItaniumAlignedOperatorNewAndDelete) {
   SinkCatalog C = SinkCatalog::defaults();
   for (const char *Name : {"_ZnwmSt11align_val_t", "_ZnwjSt11align_val_t",

@@ -252,6 +252,28 @@ TEST(AllocLifetime, MicrosoftOperatorNamesDriveLifetimeAnalysis) {
   EXPECT_TRUE(has(audit({Leaked.F}), VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, PlacementAndCustomOperatorsDoNotClaimHeapLifetime) {
+  for (const char *Name : {"??2@YAPEAX_KPEAX@Z", "??2X@@SAPEAX_K@Z"}) {
+    SCOPED_TRACE(Name);
+    FB B("not_an_allocation", 0x100);
+    int b0 = B.block();
+    B.call(b0, Name, temp(1),
+           {MedVar::makeConst(16, 8), MedVar::makeConst(0x1000, 8)});
+    B.ret(b0, {});
+    EXPECT_FALSE(has(audit({B.F}), VulnClass::HeapLeak));
+  }
+
+  for (const char *Name : {"??3@YAXPEAX0@Z", "??3X@@SAXPEAX@Z"}) {
+    SCOPED_TRACE(Name);
+    FB B("not_a_release", 0x200);
+    int b0 = B.block();
+    B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call(b0, Name, MedVar{}, {temp(1), MedVar::makeConst(0x1000, 8)});
+    B.ret(b0, {});
+    EXPECT_TRUE(has(audit({B.F}), VulnClass::HeapLeak));
+  }
+}
+
 TEST(AllocLifetime, ItaniumAlignedOperatorNamesDriveLifetimeAnalysis) {
   FB Released("released", 0x100);
   int ReleasedBlock = Released.block();
