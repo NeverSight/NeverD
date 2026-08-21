@@ -623,12 +623,34 @@ private:
       if (!Op || Op->Output.isConst() || Op->Output.Size == 0)
         continue;
       llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(Op->Output);
+      llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(Op->Output);
+      std::vector<FreeEvent> ReturnEvents;
       for (const MedBlock &B : F.Blocks)
-        for (const MedOp &O : B.Ops)
-          if (O.Opcode == NdOp::RETURN)
-            for (unsigned I = 0; I < O.NumInputs; ++I)
-              if (!O.Inputs[I].isConst() && Alias.count(keyOf(O.Inputs[I])))
-                S.ReturnsHeap = true;
+        for (int OI = 0; OI < static_cast<int>(B.Ops.size()); ++OI) {
+          const MedOp &O = B.Ops[OI];
+          if (O.Opcode != NdOp::RETURN)
+            continue;
+          for (unsigned Input = 0; Input < O.NumInputs; ++Input)
+            if (!O.Inputs[Input].isConst() &&
+                Alias.count(keyOf(O.Inputs[Input]))) {
+              ReturnEvents.push_back({B.Id, OI});
+              break;
+            }
+        }
+      std::vector<FreeEvent> DefiniteFrees;
+      for (const MedCallInfo &FC : F.CallInfos)
+        for (int FreeArg : freeArgsOf(FC)) {
+          if (FreeArg < 0 || FreeArg >= static_cast<int>(FC.Args.size()) ||
+              FC.Args[FreeArg].isConst())
+            continue;
+          if (MustAlias.count(keyOf(FC.Args[FreeArg]))) {
+            DefiniteFrees.push_back({FC.BlockId, FC.OpIdx});
+            break;
+          }
+        }
+      if (reachesAnyEventWithoutBlocker(F, CI.BlockId, CI.OpIdx, ReturnEvents,
+                                        DefiniteFrees))
+        S.ReturnsHeap = true;
     }
     return S;
   }
@@ -719,6 +741,50 @@ private:
     const bool HasUncoveredExit =
         reachesExitWithoutEvent(F, EntryBlock, -1, Events, &ReachedEvent);
     return ReachedEvent && !HasUncoveredExit;
+  }
+
+  bool
+  reachesAnyEventWithoutBlocker(const MedFunc &F, int StartBlock, int StartOp,
+                                const std::vector<FreeEvent> &Targets,
+                                const std::vector<FreeEvent> &Blockers) const {
+    if (Targets.empty())
+      return false;
+    llvm::DenseSet<ValueKey> SeenPts;
+    llvm::DenseSet<int> ExpandedExceptional;
+    std::deque<std::pair<int, int>> Work;
+    auto enqueue = [&](int BlockId, int OpIdx) {
+      if (SeenPts.insert(ValueKey{0, BlockId, OpIdx}).second)
+        Work.emplace_back(BlockId, OpIdx);
+    };
+    enqueue(StartBlock, StartOp + 1);
+    while (!Work.empty()) {
+      const auto [BlockId, OpIdx] = Work.front();
+      Work.pop_front();
+      const MedBlock *Block = nullptr;
+      for (const MedBlock &Candidate : F.Blocks)
+        if (Candidate.Id == BlockId) {
+          Block = &Candidate;
+          break;
+        }
+      if (!Block)
+        continue;
+      if (ExpandedExceptional.insert(BlockId).second)
+        for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs)
+          if (Edge.BlockId >= 0)
+            enqueue(Edge.BlockId, 0);
+      if (OpIdx >= static_cast<int>(Block->Ops.size())) {
+        for (int Succ : Block->Succs)
+          enqueue(Succ, 0);
+        continue;
+      }
+      if (isEventSite(BlockId, OpIdx, Blockers))
+        continue;
+      if (isEventSite(BlockId, OpIdx, Targets))
+        return true;
+      if (Block->Ops[OpIdx].Opcode != NdOp::RETURN)
+        enqueue(BlockId, OpIdx + 1);
+    }
+    return false;
   }
 
   bool shouldReportLeak(const MedFunc &F, const MedCallInfo &Alloc,

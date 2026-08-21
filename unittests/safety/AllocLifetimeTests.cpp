@@ -809,6 +809,51 @@ TEST(AllocLifetime, WrapperAllocationLeakIsInterprocedural) {
   EXPECT_TRUE(UserLeak);
 }
 
+TEST(AllocLifetime, FreedAllocationIsNotReturnedAsOwnedHeap) {
+  FB Wrap("released_factory", 0x200);
+  int w0 = Wrap.block();
+  Wrap.call(w0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  Wrap.call(w0, "free", MedVar{}, {temp(1)});
+  Wrap.ret(w0, {temp(1)});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "released_factory", temp(9), {}, 0x200);
+  User.ret(u0, {});
+
+  auto Fs = audit({Wrap.F, User.F});
+  for (const Finding &F : Fs)
+    EXPECT_FALSE(F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+        << F.Detail;
+}
+
+TEST(AllocLifetime, PartiallyFreedAllocationMayStillReturnOwnedHeap) {
+  FB Wrap("conditional_factory", 0x200);
+  int wEntry = Wrap.block();
+  int wFree = Wrap.block();
+  int wKeep = Wrap.block();
+  int wJoin = Wrap.block();
+  Wrap.call(wEntry, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  Wrap.succ(wEntry, wFree);
+  Wrap.succ(wEntry, wKeep);
+  Wrap.succ(wFree, wJoin);
+  Wrap.succ(wKeep, wJoin);
+  Wrap.call(wFree, "free", MedVar{}, {temp(1)});
+  Wrap.ret(wJoin, {temp(1)});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "conditional_factory", temp(9), {}, 0x200);
+  User.ret(u0, {});
+
+  auto Fs = audit({Wrap.F, User.F});
+  bool UserLeak = false;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+      UserLeak = true;
+  EXPECT_TRUE(UserLeak);
+}
+
 TEST(AllocLifetime, NestedWrapperAllocationLeak) {
   FB Inner("xmalloc", 0x200);
   int i0 = Inner.block();
