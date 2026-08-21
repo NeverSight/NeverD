@@ -1602,16 +1602,21 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  if (WideElements || NeedsStringExtents) {
+  std::optional<uint64_t> FixedExploreLength;
+  if (WideElements && WideElementBytes && Arg.ConstValue)
+    FixedExploreLength = safety::detail::exactCountedMemoryBytes(
+        Site.Sink, In.Img ? In.Img->Format : BinaryFormat::Unknown,
+        *Arg.ConstValue);
+  if ((WideElements && !FixedExploreLength) || NeedsStringExtents) {
     Out.TheVerdict = Verdict::Unknown;
     Out.TheConfidence = Confidence::Low;
-    Out.Detail = WideElements
-                     ? "wide-element byte width is not established"
-                     : "source and destination string extents are unresolved";
+    Out.Detail = WideElements ? "wide-element byte extent is not established"
+                              : "source and destination string extents are "
+                                "unresolved";
     return Out;
   }
 
-  if (E->LenArg >= 0 && Arg.ConstValue && Dst.Capacity) {
+  if (!FixedExploreLength && E->LenArg >= 0 && Arg.ConstValue && Dst.Capacity) {
     if (*Arg.ConstValue <= *Dst.Capacity && Dst.CapacityExact) {
       Out.TheVerdict = Verdict::Safe;
       Out.TheConfidence = Confidence::High;
@@ -1636,8 +1641,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  if (E->LenArg >= 0 && Arg.Flow == ArgFlow::Bounded && Arg.UpperBound &&
-      *Arg.UpperBound <= *Dst.Capacity) {
+  if (!FixedExploreLength && E->LenArg >= 0 && Arg.Flow == ArgFlow::Bounded &&
+      Arg.UpperBound && *Arg.UpperBound <= *Dst.Capacity) {
     Out.TheVerdict = Dst.CapacityExact ? Verdict::Safe : Verdict::Unknown;
     Out.TheConfidence =
         Dst.CapacityExact ? Confidence::Medium : Confidence::High;
@@ -1659,8 +1664,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
            safety::detail::formattedSourceName(Arg.TaintSource).has_value()))
         RequiredSource = NormalizedSource;
     }
-  ExploreHit Hit =
-      exploreSink(In, Cat, F, Site, *E, *Dst.Capacity, Budgets, RequiredSource);
+  ExploreHit Hit = exploreSink(In, Cat, F, Site, *E, *Dst.Capacity, Budgets,
+                               RequiredSource, FixedExploreLength);
   if (Hit.Kind == ExploreHit::Overflow) {
     Out.TheVerdict = Verdict::Unsafe;
     Out.TheConfidence = Confidence::High;

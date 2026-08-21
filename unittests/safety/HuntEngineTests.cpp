@@ -2876,6 +2876,24 @@ TEST(HuntEngine, WideCopyUsesThePlatformElementWidth) {
   }
 }
 
+TEST(HuntEngine, ReachableWideCopyOverflowUsesPlatformElementWidth) {
+  constexpr va_t SinkVA = 0x400010;
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("wmemcpy", temp(0), {temp(1), temp(2), MedVar::makeConst(3, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  B.F.CC = CallingConv::SysV_AMD64;
+  LowFunc LF = reachableSinkLow(SinkVA);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::ELF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  ASSERT_FALSE(Fnd->Witness.empty());
+  EXPECT_EQ(Fnd->Witness.front().second, "12");
+}
+
 TEST(HuntEngine, WideStringCopyStillRequiresAStringExtent) {
   Builder B;
   B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
