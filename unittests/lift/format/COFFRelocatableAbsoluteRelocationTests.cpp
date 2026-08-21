@@ -54,6 +54,96 @@ protected:
 };
 
 TEST_F(COFFRelocatableAbsoluteRelocation,
+       AMD64REL32AppliesSignedInPlaceAddends) {
+  const fs::path Object =
+      compileCOFF("coff_rel32_addends_x64", "x86_64-pc-windows-msvc", R"(
+.text
+.globl rel32_positive
+rel32_positive:
+  leaq data_target+8(%rip), %rax
+  retq
+
+.globl rel32_negative
+rel32_negative:
+  leaq data_target-4(%rip), %rcx
+  retq
+
+.section .rdata,"dr"
+.p2align 3
+.globl data_target
+data_target:
+  .quad 0x1122334455667788
+  .quad 0x99aabbccddeeff00
+)");
+  ASSERT_FALSE(Object.empty());
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::COFF);
+  ASSERT_EQ(Img.Arch, Arch::X64);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Symbol *Positive = findSymbol(Img, "rel32_positive");
+  const Symbol *Negative = findSymbol(Img, "rel32_negative");
+  const Symbol *Target = findSymbol(Img, "data_target");
+  ASSERT_NE(Positive, nullptr);
+  ASSERT_NE(Negative, nullptr);
+  ASSERT_NE(Target, nullptr);
+
+  const va_t PositiveField = Positive->Addr + 3;
+  const va_t NegativeField = Negative->Addr + 3;
+  const uint8_t *PositiveBytes = Img.readVA(PositiveField, sizeof(uint32_t));
+  const uint8_t *NegativeBytes = Img.readVA(NegativeField, sizeof(uint32_t));
+  ASSERT_NE(PositiveBytes, nullptr);
+  ASSERT_NE(NegativeBytes, nullptr);
+  EXPECT_EQ(readLE<uint32_t>(PositiveBytes),
+            static_cast<uint32_t>(Target->Addr + 8 - (PositiveField + 4)));
+  EXPECT_EQ(readLE<uint32_t>(NegativeBytes),
+            static_cast<uint32_t>(Target->Addr - 4 - (NegativeField + 4)));
+}
+
+TEST_F(COFFRelocatableAbsoluteRelocation, I386REL32AppliesSignedInPlaceAddend) {
+  const fs::path Object =
+      compileCOFF("coff_rel32_addend_x86", "i686-pc-windows-msvc", R"(
+.text
+.globl caller
+caller:
+  calll callee+4
+  retl
+
+.section .text$callee,"xr"
+.globl callee
+callee:
+  retl
+  retl
+  retl
+  retl
+  retl
+)");
+  ASSERT_FALSE(Object.empty());
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::COFF);
+  ASSERT_EQ(Img.Arch, Arch::X86);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Symbol *Caller = findSymbol(Img, "caller");
+  const Symbol *Callee = findSymbol(Img, "callee");
+  ASSERT_NE(Caller, nullptr);
+  ASSERT_NE(Callee, nullptr);
+  const va_t FieldVA = Caller->Addr + 1;
+  const uint8_t *Bytes = Img.readVA(FieldVA, sizeof(uint32_t));
+  ASSERT_NE(Bytes, nullptr);
+  EXPECT_EQ(readLE<uint32_t>(Bytes),
+            static_cast<uint32_t>(Callee->Addr + 4 - (FieldVA + 4)));
+}
+
+TEST_F(COFFRelocatableAbsoluteRelocation,
        AMD64SeparatesFullDataSlotsFromExactInstructionFields) {
   const fs::path Object =
       compileCOFF("coff_absolute_occurrences_x64", "x86_64-pc-windows-msvc", R"(

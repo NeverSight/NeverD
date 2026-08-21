@@ -202,7 +202,8 @@ TEST_F(MachOI386Relocation,
     DataSegment->VA = ShiftedDataVA;
     ImgOrErr->CodePtrRelocSlots.clear();
 
-    macho_loader::applyObjectRelocations(*Obj, *ImgOrErr);
+    if (llvm::Error Err = macho_loader::applyObjectRelocations(*Obj, *ImgOrErr))
+      ADD_FAILURE() << llvm::toString(std::move(Err));
     auto Actual = readLoadedField(*ImgOrErr, LoadedText->VA + 0x2b, 4, false);
     ASSERT_TRUE(Actual.has_value());
     EXPECT_EQ(*Actual, Sentinel);

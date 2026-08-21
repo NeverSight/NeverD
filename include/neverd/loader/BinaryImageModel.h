@@ -1062,8 +1062,9 @@ struct BinaryImage {
   /// Record a structurally identified loader/runtime function when it maps to
   /// executable code.  Address zero is valid for relocatable images.
   bool recordRuntimeFunction(va_t Addr) {
-    const Segment *Seg = getSegmentFor(Addr);
-    if (!Seg || !Seg->isExecutable())
+    const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
+    const Segment *Seg = getSegmentFor(Normalized);
+    if (!Seg || !Seg->isExecutable() || !isCodeAddress(Normalized))
       return false;
     RuntimeFunctionAddrs.insert(Addr);
     return true;

@@ -25,7 +25,8 @@
 namespace neverd {
 
 void parseCOFFLLDMap(llvm::StringRef Content,
-                     std::map<va_t, FunctionSym> &Functions) {
+                     std::map<va_t, FunctionSym> &Functions,
+                     uint64_t ImageBase) {
   bool InTable = false;
   std::string CurrentOutSection;
 
@@ -90,7 +91,9 @@ void parseCOFFLLDMap(llvm::StringRef Content,
     if (Name.empty() || Name[0] == '(' || Name[0] == '.')
       continue;
 
-    va_t VA = static_cast<va_t>(Addr);
+    if (Addr > InvalidVA - ImageBase)
+      continue;
+    va_t VA = ImageBase + static_cast<va_t>(Addr);
     if (VA != 0 && Functions.find(VA) == Functions.end()) {
       FunctionSym FS;
       FS.Name = std::move(Name);

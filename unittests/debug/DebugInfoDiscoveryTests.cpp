@@ -270,7 +270,9 @@ TEST(LoadDebugInfoTest, FindsMapBesideTheBinary) {
   auto Funcs = R.Context->allFunctions();
   ASSERT_EQ(Funcs.size(), 2u);
   EXPECT_EQ(Funcs[0].Name, "parse_header");
+  EXPECT_EQ(Funcs[0].Addr, Img.Base + 0x1000);
   EXPECT_EQ(Funcs[1].Name, "emit_record");
+  EXPECT_EQ(Funcs[1].Addr, Img.Base + 0x1040);
 }
 
 TEST(LoadDebugInfoTest, FindsMapNamedAfterTheWholeFileName) {

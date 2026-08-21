@@ -28,7 +28,7 @@ namespace neverd {
 class LLDMapDebugContext : public MapDebugContextBase {
 public:
   static std::unique_ptr<LLDMapDebugContext>
-  load(const std::filesystem::path &MapPath);
+  load(const std::filesystem::path &MapPath, uint64_t ImageBase = 0);
 };
 
 } // namespace neverd

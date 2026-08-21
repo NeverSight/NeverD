@@ -176,8 +176,8 @@ void parseBuildVersion(const llvm::object::MachOObjectFile &Obj,
                        BinaryImage &Img);
 
 /// Apply architecture-specific relocations to mapped MH_OBJECT sections.
-void applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
-                            BinaryImage &Img);
+llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
+                                   BinaryImage &Img);
 
 } // namespace macho_loader
 } // namespace neverd

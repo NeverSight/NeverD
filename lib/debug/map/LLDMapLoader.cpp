@@ -74,7 +74,8 @@ MapFormat detectFormat(llvm::StringRef Content) {
 //===----------------------------------------------------------------------===//
 
 std::unique_ptr<LLDMapDebugContext>
-LLDMapDebugContext::load(const std::filesystem::path &MapPath) {
+LLDMapDebugContext::load(const std::filesystem::path &MapPath,
+                         uint64_t ImageBase) {
   auto Ctx = std::unique_ptr<LLDMapDebugContext>(new LLDMapDebugContext());
 
   auto BufOr = llvm::MemoryBuffer::getFile(MapPath.string());
@@ -94,11 +95,12 @@ LLDMapDebugContext::load(const std::filesystem::path &MapPath) {
     FmtName = "ELF";
     break;
   case MapFormat::COFFStandard:
-    MapDebugContextBase::parseCOFFMapContent(Content, Ctx->Functions);
+    MapDebugContextBase::parseCOFFMapContent(Content, Ctx->Functions,
+                                             ImageBase);
     FmtName = "COFF /MAP";
     break;
   case MapFormat::COFFLLDMap:
-    parseCOFFLLDMap(Content, Ctx->Functions);
+    parseCOFFLLDMap(Content, Ctx->Functions, ImageBase);
     FmtName = "COFF /lldmap";
     break;
   case MapFormat::MachO:

@@ -332,6 +332,23 @@ COFFLoader::load(const std::filesystem::path &Path) {
           return Base - Magnitude;
         };
 
+        auto EncodeSignedRel32 = [](uint64_t Target,
+                                    uint64_t Base) -> std::optional<int32_t> {
+          if (Target >= Base) {
+            const uint64_t Delta = Target - Base;
+            if (Delta > static_cast<uint64_t>(INT32_MAX))
+              return std::nullopt;
+            return static_cast<int32_t>(Delta);
+          }
+
+          const uint64_t Magnitude = Base - Target;
+          if (Magnitude > static_cast<uint64_t>(INT32_MAX) + 1)
+            return std::nullopt;
+          if (Magnitude == static_cast<uint64_t>(INT32_MAX) + 1)
+            return INT32_MIN;
+          return -static_cast<int32_t>(Magnitude);
+        };
+
         // A complete absolute address stored in data is a pointer slot, while
         // the same field inside an instruction is occurrence provenance for
         // exactly that operand. On AMD64, ADDR32 is narrower than a pointer,
@@ -406,8 +423,18 @@ COFFLoader::load(const std::filesystem::path &Path) {
             int32_t Extra = 0;
             if (RType >= IMAGE_REL_AMD64_REL32_1)
               Extra = static_cast<int32_t>(RType - IMAGE_REL_AMD64_REL32);
-            int32_t Val = static_cast<int32_t>(S - (P + 4 + Extra));
-            std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
+            int32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            const uint64_t Bias = 4 + static_cast<uint64_t>(Extra);
+            if (Bias > InvalidVA - P)
+              continue;
+            auto Target = AddSignedAddend(S, InPlace);
+            if (!Target)
+              continue;
+            auto Val = EncodeSignedRel32(*Target, P + Bias);
+            if (!Val)
+              continue;
+            std::memcpy(ApplySeg->Data.data() + RAddr, &*Val, 4);
           } else if (RType == IMAGE_REL_AMD64_ADDR64) {
             if (RAddr + 8 > ApplySeg->Data.size())
               continue;
@@ -442,8 +469,17 @@ COFFLoader::load(const std::filesystem::path &Path) {
           if (RType == IMAGE_REL_I386_REL32) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            int32_t Val = static_cast<int32_t>(S - (P + 4));
-            std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
+            int32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            if (P > InvalidVA - 4)
+              continue;
+            auto Target = AddSignedAddend(S, InPlace);
+            if (!Target)
+              continue;
+            auto Val = EncodeSignedRel32(*Target, P + 4);
+            if (!Val)
+              continue;
+            std::memcpy(ApplySeg->Data.data() + RAddr, &*Val, 4);
           } else if (RType == IMAGE_REL_I386_DIR32) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;

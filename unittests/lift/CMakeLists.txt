@@ -102,6 +102,7 @@ add_neverd_unittest(NeverDLiftTests
   core/InstructionModeTests.cpp
   core/LowInstructionBoundaryTests.cpp
   core/LiftCommonTests.cpp
+  format/MachOARM64RelocationTests.cpp
   format/MachOI386RelocationTests.cpp
   format/MachOI386RelocationExternalTests.cpp
   format/MachOI386RelocationFixtureTests.cpp
@@ -181,6 +182,20 @@ target_include_directories(NeverDLiftTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_SOURCE_DIR}/lib/loader/COFF/unwind
+  ${LLVM_INCLUDE_DIRS}
+)
+
+# Keeps ARM64 Mach-O object relocation arithmetic and pair validation focused
+# without relinking the aggregate lift suite during local iterations.
+add_neverd_unittest(NeverDMachOARM64RelocationTests
+  format/MachOARM64RelocationTests.cpp
+
+  LINK_COMPONENTS
+  Loader
+)
+
+target_include_directories(NeverDMachOARM64RelocationTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
 

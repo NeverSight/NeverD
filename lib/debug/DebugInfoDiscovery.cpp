@@ -141,7 +141,7 @@ DebugInfoResult loadMap(const std::filesystem::path &P, const BinaryImage &Img) 
     }
   }
 
-  auto Ctx = LLDMapDebugContext::load(P);
+  auto Ctx = LLDMapDebugContext::load(P, Img.isCOFF() ? Img.Base : 0);
   if (Ctx && Ctx->hasInfo()) {
     R.Context = std::move(Ctx);
     R.Kind = DebugInfoKind::Map;

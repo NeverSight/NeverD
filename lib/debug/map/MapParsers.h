@@ -52,7 +52,8 @@ void parseELFMap(llvm::StringRef Content,
 
 /// COFF /lldmap parser (lld-link /lldmap:).
 void parseCOFFLLDMap(llvm::StringRef Content,
-                     std::map<va_t, FunctionSym> &Functions);
+                     std::map<va_t, FunctionSym> &Functions,
+                     uint64_t ImageBase);
 
 /// MachO-style map parser (ld64.lld -map).
 void parseMachOMap(llvm::StringRef Content,

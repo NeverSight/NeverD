@@ -346,6 +346,52 @@ TEST(RuntimeMetadata, RecordsOnlyMappedRuntimeFunctions) {
   EXPECT_FALSE(Img.recordRuntimeFunction(0x2000));
 }
 
+TEST(RuntimeMetadata, RuntimeFunctionsRespectExactSectionCodeOwnership) {
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+
+    BinaryImage Img;
+    Img.Format = Format;
+    Img.Segments.push_back(makeSegment(0x1000, 0x100, true));
+
+    Section Code;
+    Code.Name = "code";
+    Code.VA = 0x1010;
+    Code.Size = 0x10;
+    Code.FileSz = Code.Size;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    if (Format == BinaryFormat::MachO)
+      Code.Type = static_cast<uint32_t>(llvm::MachO::S_REGULAR) |
+                  static_cast<uint32_t>(llvm::MachO::S_ATTR_PURE_INSTRUCTIONS);
+    Img.Sections.push_back(std::move(Code));
+
+    Section Data;
+    Data.Name = "data";
+    Data.VA = 0x1040;
+    Data.Size = 0x10;
+    Data.FileSz = Data.Size;
+    Data.Flags = SegmentFlags::Readable;
+    if (Format == BinaryFormat::MachO) {
+      Data.Flags = Data.Flags | SegmentFlags::Executable;
+      Data.Type = llvm::MachO::S_REGULAR;
+    }
+    Img.Sections.push_back(std::move(Data));
+
+    EXPECT_TRUE(Img.recordRuntimeFunction(0x1010));
+    EXPECT_TRUE(Img.isRuntimeFunctionAt(0x1010));
+    EXPECT_FALSE(Img.recordRuntimeFunction(0x1040));
+    EXPECT_FALSE(Img.isRuntimeFunctionAt(0x1040));
+    EXPECT_FALSE(Img.recordRuntimeFunction(0x1080));
+    EXPECT_FALSE(Img.isRuntimeFunctionAt(0x1080));
+
+    BinaryImage Sectionless = Img;
+    Sectionless.Sections.clear();
+    EXPECT_TRUE(Sectionless.recordRuntimeFunction(0x1080));
+    EXPECT_TRUE(Sectionless.isRuntimeFunctionAt(0x1080));
+  }
+}
+
 TEST(RuntimeMetadata, ChoosesExportSymbolThenAutomaticFunctionName) {
   BinaryImage Img;
   Symbol Sym = Symbol::makeFunc(0x1000);

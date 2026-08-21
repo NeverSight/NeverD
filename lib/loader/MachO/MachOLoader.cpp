@@ -394,8 +394,10 @@ MachOLoader::load(const std::filesystem::path &Path) {
   }
 
   // --- Apply relocations for .o files ---
-  if (Obj.getHeader().filetype == MH_OBJECT)
-    macho_loader::applyObjectRelocations(Obj, Img);
+  if (Obj.getHeader().filetype == MH_OBJECT) {
+    if (llvm::Error Err = macho_loader::applyObjectRelocations(Obj, Img))
+      return std::move(Err);
+  }
 
   // --- Stub-to-import mapping via indirect symbol table ---
   macho_loader::parseStubImports(Obj, Sections, BasePtr, FileSize, Is64, Img);
