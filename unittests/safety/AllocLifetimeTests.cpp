@@ -1096,6 +1096,38 @@ TEST(AllocLifetime, ZeroLengthMemcpyDoesNotReadUninitializedSource) {
   EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
 }
 
+TEST(AllocLifetime, RejectedFortifiedCopyDoesNotReadUninitializedSource) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(b0, "memcpy_chk", temp(11),
+         {temp(12), temp(10), MedVar::makeConst(8, 8), MedVar::makeConst(4, 8)},
+         0x9000, 0x408);
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
+}
+
+TEST(AllocLifetime, AcceptedFortifiedCopyReadsUninitializedSource) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(b0, "memcpy_chk", temp(11),
+         {temp(12), temp(10), MedVar::makeConst(4, 8), MedVar::makeConst(8, 8)},
+         0x9000, 0x408);
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  EXPECT_TRUE(has(Fs, VulnClass::UninitializedRead));
+}
+
 TEST(AllocLifetime, WideCopyReadsPlatformSizedElements) {
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {

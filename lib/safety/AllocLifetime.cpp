@@ -1463,6 +1463,12 @@ private:
                       callName(CI),
                       In.Img ? In.Img->Format : BinaryFormat::Unknown, *Count)
                 : std::nullopt;
+      if (Bytes && E->CapArg >= 0 &&
+          E->CapArg < static_cast<int>(CI.Args.size()))
+        if (std::optional<uint64_t> Capacity =
+                unsignedConstant(CI.Args[E->CapArg]);
+            Capacity && *Bytes > *Capacity)
+          continue;
       const MedOp *CallOp = opAt(F, CI.BlockId, CI.OpIdx);
       if (!CallOp ||
           (CallOp->Opcode != NdOp::CALL && CallOp->Opcode != NdOp::INDIR_CALL))
