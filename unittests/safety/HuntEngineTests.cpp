@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
@@ -383,9 +384,9 @@ LowFunc mutuallyExclusiveSourceAndSinkLow(va_t MallocVA, va_t SourceVA,
 
 LowFunc sourceReturnThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
                                   bool RequireNonnegative,
-                                  uint16_t ReturnBytes = 8) {
+                                  uint16_t ReturnBytes = 8,
+                                  uint64_t CopyLengthReg = 16) {
   constexpr uint64_t kRax = 0;
-  constexpr uint64_t kRdx = 16;
   constexpr uint64_t kFlag = 200;
   constexpr va_t kEntry = 0x400000;
   LowFunc LF;
@@ -401,11 +402,11 @@ LowFunc sourceReturnThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
     Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
                             {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
                             SourceVA + 1));
-    Entry.Ops.push_back(lop(NdOp::INT_SEXT, NdVar::reg(kRdx, 8),
+    Entry.Ops.push_back(lop(NdOp::INT_SEXT, NdVar::reg(CopyLengthReg, 8),
                             {NdVar::reg(kRax, 4)}, SourceVA + 2));
     ComparedReturn = NdVar::reg(kRax, 4);
   } else {
-    Entry.Ops.push_back(lop(NdOp::COPY, NdVar::reg(kRdx, 8),
+    Entry.Ops.push_back(lop(NdOp::COPY, NdVar::reg(CopyLengthReg, 8),
                             {NdVar::reg(kRax, 8)}, SourceVA + 1));
   }
   if (RequireNonnegative) {
@@ -893,6 +894,78 @@ TEST(HuntEngine, GuardedReadReturnHonorsRequestedCount) {
     EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
     EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
   }
+}
+
+TEST(HuntEngine, GuardedRecvWithoutFlagsHonorsRequestedCount) {
+  for (const char *Name : {"recv", "recvfrom"}) {
+    SCOPED_TRACE(Name);
+    Builder B;
+    B.F.Entry = 0x400000;
+    B.F.CC = CallingConv::SysV_AMD64;
+    B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+    std::vector<MedVar> Args = {MedVar::makeConst(0, 8), param(2),
+                                MedVar::makeConst(8, 8),
+                                MedVar::makeConst(0, 8)};
+    if (llvm::StringRef(Name) == "recvfrom") {
+      Args.push_back(param(3));
+      Args.push_back(param(4));
+    }
+    B.call(Name, temp(5), std::move(Args));
+    B.F.Blocks[0].Ops.back().Addr = 0x400004;
+    B.call("memcpy", temp(0), {temp(1), param(2), temp(5)});
+    B.F.Blocks[0].Ops.back().Addr = 0x400010;
+    LowFunc LF = sourceReturnThenMemcpyLow(0x400004, 0x400010,
+                                           /*RequireNonnegative=*/true);
+
+    auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+    EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  }
+}
+
+TEST(HuntEngine, NonzeroRecvFlagsDoNotAssumeRequestedCount) {
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("recv", temp(5),
+         {MedVar::makeConst(0, 8), param(2), MedVar::makeConst(8, 8),
+          MedVar::makeConst(1, 8)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400004;
+  B.call("memcpy", temp(0), {temp(1), param(2), temp(5)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = sourceReturnThenMemcpyLow(0x400004, 0x400010,
+                                         /*RequireNonnegative=*/true);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, GuardedWinSockRecvUsesSigned32BitReturn) {
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("recv", temp(5, 4),
+         {MedVar::makeConst(0, 8), param(2), MedVar::makeConst(8, 8),
+          MedVar::makeConst(0, 8)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400004;
+  B.op(NdOp::INT_SEXT, temp(6), {temp(5, 4)});
+  B.call("memcpy", temp(0), {temp(1), param(2), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = sourceReturnThenMemcpyLow(
+      0x400004, 0x400010,
+      /*RequireNonnegative=*/true,
+      /*ReturnBytes=*/4, getTargetRegInfo(Arch::X64).Win64ParamRegs[2]);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
 }
 
 TEST(HuntEngine, FreadReturnHonorsElementCount) {

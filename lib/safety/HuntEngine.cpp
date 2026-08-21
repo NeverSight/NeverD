@@ -182,6 +182,7 @@ struct CountedSourceReturn {
   int BoundArg = -1;
   bool AllowsMinusOne = false;
   uint32_t ReturnBits = 0;
+  int RequiredZeroArg = -1;
 };
 
 struct BoundedStringOutput {
@@ -198,6 +199,9 @@ CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
                                                                  : uint32_t(0)};
   if (Normalized == "fread")
     return {2, false, 0};
+  if (Normalized == "recv" || Normalized == "recvfrom")
+    return {2, true, Format == BinaryFormat::COFF ? uint32_t(32) : uint32_t(0),
+            3};
   return {};
 }
 
@@ -660,9 +664,18 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                    : CountedSourceReturn{};
         const BoundedStringOutput BoundedString =
             Callee ? boundedStringOutput(CalleeName) : BoundedStringOutput{};
-        const SourceEntry *CountedSource = Callee && CountedReturn.BoundArg >= 0
-                                               ? Cat.matchSource(CalleeName)
-                                               : nullptr;
+        bool CountedReturnApplies = Callee && CountedReturn.BoundArg >= 0;
+        if (CountedReturnApplies && CountedReturn.RequiredZeroArg >= 0) {
+          const SymRef Flags = readCallArgument(
+              In, Fn, CountedReturn.RequiredZeroArg, *Callee, Cur.State);
+          CountedReturnApplies =
+              Flags.isValid() &&
+              predicateMustHold(
+                  Ctx, Ctx.mkEq(Ctx.mkZExtOrTrunc(Flags, 64), Ctx.mkZero(64)),
+                  Cur.Constraints, Budgets);
+        }
+        const SourceEntry *CountedSource =
+            CountedReturnApplies ? Cat.matchSource(CalleeName) : nullptr;
         const SourceEntry *CalleeSource =
             Callee ? Cat.matchSource(CalleeName) : nullptr;
         std::vector<std::pair<std::string, SymRef>> NewSourceEvents;
@@ -688,7 +701,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                              Output);
             }
         SymRef ReturnBound;
-        if (Callee && CountedReturn.BoundArg >= 0)
+        if (CountedReturnApplies)
           ReturnBound = readCallArgument(In, Fn, CountedReturn.BoundArg,
                                          *Callee, Cur.State);
         SymRef NextImplicitSource;
@@ -732,7 +745,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                   NewSourceEvents.begin(),
                                   NewSourceEvents.end());
         SymRef CountedReturnValue;
-        if (CountedReturn.BoundArg >= 0) {
+        if (CountedReturnApplies) {
           SymRef Ret = captureReturn(Op, Cur.State, In);
           if (!ReturnBound.isValid() || !Ret.isValid())
             Cur.SemanticUnknown = true;
