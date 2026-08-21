@@ -1463,11 +1463,14 @@ private:
                       callName(CI),
                       In.Img ? In.Img->Format : BinaryFormat::Unknown, *Count)
                 : std::nullopt;
-      if (Bytes && E->CapArg >= 0 &&
+      if (Count && E->CapArg >= 0 &&
           E->CapArg < static_cast<int>(CI.Args.size()))
         if (std::optional<uint64_t> Capacity =
                 unsignedConstant(CI.Args[E->CapArg]);
-            Capacity && *Bytes > *Capacity)
+            Capacity &&
+            detail::fortifiedExactAccessIsRejected(
+                callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
+                *Count, *Capacity))
           continue;
       const MedOp *CallOp = opAt(F, CI.BlockId, CI.OpIdx);
       if (!CallOp ||
@@ -1533,6 +1536,18 @@ private:
       case SinkKind::Copy:
         if (ArgIndex != E->DstArg && ArgIndex != E->SrcArg)
           return CallUse::None;
+        if (E->LenArg >= 0 && E->LenArg < static_cast<int>(CI.Args.size()) &&
+            E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size()))
+          if (std::optional<uint64_t> Count =
+                  unsignedConstant(CI.Args[E->LenArg]);
+              Count)
+            if (std::optional<uint64_t> Capacity =
+                    unsignedConstant(CI.Args[E->CapArg]);
+                Capacity && detail::fortifiedExactAccessIsRejected(
+                                callName(CI),
+                                In.Img ? In.Img->Format : BinaryFormat::Unknown,
+                                *Count, *Capacity))
+              return CallUse::None;
         if (!detail::copyAccessRequiresPositiveCount(
                 callName(CI), /*IsDestination=*/ArgIndex == E->DstArg))
           return CallUse::Definite;

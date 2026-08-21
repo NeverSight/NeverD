@@ -670,6 +670,30 @@ TEST(AllocLifetime, PositiveLengthMemcpyUsesFreedStorage) {
   EXPECT_TRUE(has(Fs, VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, RejectedFortifiedCopyDoesNotUseFreedStorage) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "memcpy_chk", temp(2),
+         {temp(1), temp(1), MedVar::makeConst(8, 8), MedVar::makeConst(4, 8)});
+  B.ret(b0, {});
+
+  EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, AcceptedFortifiedCopyUsesFreedStorage) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "memcpy_chk", temp(2),
+         {temp(1), temp(1), MedVar::makeConst(4, 8), MedVar::makeConst(8, 8)});
+  B.ret(b0, {});
+
+  EXPECT_TRUE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
 TEST(AllocLifetime, ZeroLengthWideCopyDoesNotUseFreedStorage) {
   FB B("f", 0x100);
   int b0 = B.block();

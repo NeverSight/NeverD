@@ -94,6 +94,13 @@ inline std::optional<uint64_t> exactCountedMemoryBytes(llvm::StringRef Name,
   return Count;
 }
 
+inline bool fortifiedExactAccessIsRejected(llvm::StringRef Name,
+                                           BinaryFormat Format, uint64_t Count,
+                                           uint64_t ObjectCapacity) {
+  std::optional<uint64_t> Bytes = exactCountedMemoryBytes(Name, Format, Count);
+  return Bytes && *Bytes > ObjectCapacity;
+}
+
 inline bool isExactCopySourceRead(llvm::StringRef Name) {
   const std::string Normalized = SinkCatalog::normalize(Name);
   return Normalized == "memcpy" || Normalized == "memmove" ||
