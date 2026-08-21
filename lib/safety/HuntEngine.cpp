@@ -1640,11 +1640,14 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
 
   std::string RequiredSource;
   if (!UnboundedInput && E->LenArg < 0 && E->SrcArg >= 0)
-    if (const SourceEntry *Source = Cat.matchSource(Arg.TaintSource);
-        Source &&
-        (Source->OutArg >= 0 ||
-         safety::detail::formattedSourceName(Arg.TaintSource).has_value()))
-      RequiredSource = SinkCatalog::normalize(Arg.TaintSource);
+    if (const SourceEntry *Source = Cat.matchSource(Arg.TaintSource); Source) {
+      const std::string NormalizedSource =
+          SinkCatalog::normalize(Arg.TaintSource);
+      if (NormalizedSource != "argv" &&
+          (Source->OutArg >= 0 || Source->returnCarriesInput() ||
+           safety::detail::formattedSourceName(Arg.TaintSource).has_value()))
+        RequiredSource = NormalizedSource;
+    }
   ExploreHit Hit =
       exploreSink(In, Cat, F, Site, *E, *Dst.Capacity, Budgets, RequiredSource);
   if (Hit.Kind == ExploreHit::Overflow) {

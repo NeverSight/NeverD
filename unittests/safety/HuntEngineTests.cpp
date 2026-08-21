@@ -1759,6 +1759,89 @@ TEST(HuntEngine, SourceAndSinkMustShareFeasiblePath) {
   EXPECT_EQ(Fnd->Detail, "length provenance unresolved");
 }
 
+TEST(HuntEngine, ReturnSourceAndSinkMustShareFeasiblePath) {
+  constexpr va_t MallocVA = 0x400000;
+  constexpr va_t SourceVA = 0x400010;
+  constexpr va_t SinkVA = 0x400050;
+
+  MedFunc F;
+  F.Name = "f";
+  F.Entry = MallocVA;
+  F.CC = CallingConv::SysV_AMD64;
+  F.Blocks.resize(6);
+  for (int I = 0; I < 6; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  F.Blocks[3].Succs = {4, 5};
+  F.Blocks[4].Preds = {3};
+  F.Blocks[5].Preds = {3};
+
+  auto addBlockCall = [&](int BlockId, llvm::StringRef Name, MedVar Ret,
+                          std::vector<MedVar> Args, va_t Addr) {
+    MedBlock &Block = F.Blocks[BlockId];
+    const int OpIdx = static_cast<int>(Block.Ops.size());
+    MedOp Op;
+    Op.Opcode = NdOp::CALL;
+    Op.Output = Ret;
+    Op.Addr = Addr;
+    Op.addInput(MedVar::makeConst(0x9000, 8));
+    Block.Ops.push_back(std::move(Op));
+    MedCallInfo CI;
+    CI.BlockId = BlockId;
+    CI.OpIdx = OpIdx;
+    CI.TargetName = Name.str();
+    CI.Args = std::move(Args);
+    F.CallInfos.push_back(std::move(CI));
+  };
+
+  addBlockCall(0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, MallocVA);
+  addBlockCall(1, "getenv", temp(5), {param(1)}, SourceVA);
+  addBlockCall(5, "strcpy", temp(0), {temp(1), temp(5)}, SinkVA);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+  ArgClassification SourceArg = classifyArgument(In, Cat, F, 2, 1);
+  ASSERT_EQ(SourceArg.Flow, ArgFlow::Tainted);
+  ASSERT_EQ(SourceArg.TaintSource, "getenv");
+
+  LowFunc LF = mutuallyExclusiveSourceAndSinkLow(MallocVA, SourceVA, SinkVA);
+  auto Fnd = hunt(F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+  EXPECT_EQ(Fnd->Detail, "length provenance unresolved");
+}
+
+TEST(HuntEngine, ReturnSourceOnSinkPathCorroboratesImplicitCopy) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  const MedVar SourceResult = mkReg(0, 1);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("getenv", SourceResult, {param(1)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), SourceResult});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA,
+                                         /*RequiredReturn=*/1);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  EXPECT_FALSE(Fnd->Witness.empty());
+}
+
 TEST(HuntEngine, ScanfOutputAndSinkMustShareFeasiblePath) {
   constexpr va_t MallocVA = 0x400000;
   constexpr va_t SourceVA = 0x400010;
