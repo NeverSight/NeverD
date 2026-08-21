@@ -6,6 +6,7 @@
 // zero-based recovered-call slots; -1 means the routine has no such slot.
 //
 // SAFETY_COPY_SINK(NAME, DST, SRC, LEN, CAP, SEV)
+// SAFETY_UNBOUNDED_COPY_SINK(NAME, DST, SEV)
 // SAFETY_FORMAT_SINK(NAME, DST, FMT, LIMIT, OBJECT_CAP, SEV)
 // SAFETY_ALLOC_SINK(NAME, SIZE, SRC, HANDLE, SEV)
 // SAFETY_STACK_ALLOC_SINK(NAME, SIZE, SEV)
@@ -20,6 +21,10 @@
 
 #ifndef SAFETY_COPY_SINK
 #define SAFETY_COPY_SINK(NAME, DST, SRC, LEN, CAP, SEV)
+#endif
+#ifndef SAFETY_UNBOUNDED_COPY_SINK
+#define SAFETY_UNBOUNDED_COPY_SINK(NAME, DST, SEV)                             \
+  SAFETY_COPY_SINK(NAME, DST, -1, -1, -1, SEV)
 #endif
 #ifndef SAFETY_FORMAT_SINK
 #define SAFETY_FORMAT_SINK(NAME, DST, FMT, LEN, CAP, SEV)
@@ -65,7 +70,7 @@ SAFETY_COPY_SINK(wcscpy, 0, 1, -1, -1, 80)
 SAFETY_COPY_SINK(wcscat, 0, 1, -1, -1, 80)
 
 // gets(dst): unbounded read straight into the destination.
-SAFETY_COPY_SINK(gets, 0, -1, -1, -1, 95)
+SAFETY_UNBOUNDED_COPY_SINK(gets, 0, 95)
 
 // Bounded relatives keep an explicit count.
 SAFETY_COPY_SINK(strncpy, 0, 1, 2, -1, 55)
@@ -157,4 +162,5 @@ SAFETY_FREE_SINK(GlobalFree, 0, 40)
 #undef SAFETY_STACK_ALLOC_SINK
 #undef SAFETY_ALLOC_SINK
 #undef SAFETY_FORMAT_SINK
+#undef SAFETY_UNBOUNDED_COPY_SINK
 #undef SAFETY_COPY_SINK

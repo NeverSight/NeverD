@@ -83,6 +83,43 @@ TEST(SinkCatalog, FortifiedVariantCarriesCapacity) {
   EXPECT_EQ(C.matchSink("strcpy")->CapArg, -1);
 }
 
+TEST(SinkCatalog, UnboundedWritesRequireAnExplicitSummary) {
+  SinkCatalog C = SinkCatalog::defaults();
+  const SinkEntry *Gets = C.matchSink("gets");
+  ASSERT_NE(Gets, nullptr);
+  EXPECT_TRUE(Gets->UnboundedWrite);
+  EXPECT_FALSE(C.matchSink("strcpy")->UnboundedWrite);
+
+  std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_unbounded_sink.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"custom_input","kind":"copy",)"
+       << R"("dst":0,"unbounded":true}]})";
+  }
+  ASSERT_FALSE((bool)C.mergeSinksFromFile(Path));
+  const SinkEntry *Custom = C.matchSink("custom_input");
+  ASSERT_NE(Custom, nullptr);
+  EXPECT_TRUE(Custom->UnboundedWrite);
+}
+
+TEST(SinkCatalog, RejectsInvalidUnboundedSummaryTransactionally) {
+  std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_bad_unbounded_sink.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"would_publish","kind":"copy","dst":0},)"
+       << R"({"name":"bad","kind":"copy","dst":0,"src":1,)"
+       << R"("unbounded":true}]})";
+  }
+  SinkCatalog C = SinkCatalog::defaults();
+  llvm::Error Err = C.mergeSinksFromFile(Path);
+  ASSERT_TRUE(static_cast<bool>(Err));
+  EXPECT_NE(llvm::toString(std::move(Err)).find("destination-only"),
+            std::string::npos);
+  EXPECT_EQ(C.matchSink("would_publish"), nullptr);
+}
+
 TEST(SinkCatalog, FormatArgumentLayoutSeparatesWriteLimitAndObjectCapacity) {
   SinkCatalog C = SinkCatalog::defaults();
 

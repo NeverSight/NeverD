@@ -100,6 +100,11 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 ] }
 ```
 
+Destination-only input routines are not inferred to be unbounded merely
+because they also appear in the source catalog. A `gets`-like custom routine
+must opt in explicitly with `"unbounded": true`; contradictory source/length
+fields are rejected transactionally.
+
 ---
 
 ## Hunt: copy-overflow verdicts

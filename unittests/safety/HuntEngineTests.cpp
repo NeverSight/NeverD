@@ -97,7 +97,8 @@ std::optional<Finding> hunt(MedFunc &F, bool StackRegs = false,
                             LowFunc *LF = nullptr, Arch A = Arch::Unknown,
                             const SafetyBudgets &Budgets = {},
                             BinaryFormat Format = BinaryFormat::Unknown,
-                            const BinaryImage *Image = nullptr) {
+                            const BinaryImage *Image = nullptr,
+                            const SinkCatalog *Catalog = nullptr) {
   BinaryImage Img = Image ? *Image : BinaryImage{};
   Img.Arch = A;
   Img.Format = Format;
@@ -114,7 +115,8 @@ std::optional<Finding> hunt(MedFunc &F, bool StackRegs = false,
     In.LowFuncs = &Lows;
   In.StackRegsKnown = StackRegs;
   In.StackPointerReg = kSP;
-  SinkCatalog Cat = SinkCatalog::defaults();
+  SinkCatalog DefaultCatalog = SinkCatalog::defaults();
+  const SinkCatalog &Cat = Catalog ? *Catalog : DefaultCatalog;
   for (const SinkSite &S : scanSinks(In, Cat))
     if (auto Fnd = huntSink(In, Cat, Budgets, Funcs[0], S))
       return Fnd;
@@ -560,6 +562,31 @@ TEST(HuntEngine, ReachableUnboundedInputIntoStackBufferIsUnsafe) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
   EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, CustomSourceSinkIsNotImplicitlyUnbounded) {
+  SinkCatalog Cat = SinkCatalog::defaults();
+  SinkEntry Wrapper;
+  Wrapper.Name = "bounded_input";
+  Wrapper.Class = VulnClass::BufferOverflow;
+  Wrapper.Kind = SinkKind::Copy;
+  Wrapper.DstArg = 0;
+  Cat.addSink(std::move(Wrapper));
+  Cat.addSource(SourceEntry{"bounded_input", 0});
+
+  Builder B("main");
+  B.op(NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x30, 8)});
+  B.op(NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(0x8, 8)});
+  B.call("bounded_input", temp(0), {temp(10)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = reachableSinkLow(0x400010);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/true, &LF, Arch::X64, {},
+                  BinaryFormat::Unknown, /*Image=*/nullptr, &Cat);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, TaintedStrcpyWithoutReachabilityIsUnknown) {

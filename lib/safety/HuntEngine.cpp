@@ -1153,10 +1153,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
   stampSite(Out, In, F, Site);
   const bool WideElements = usesWideElements(Site.Sink);
   const bool NeedsStringExtents = requiresStringExtents(Site.Sink);
-  const SourceEntry *DirectInput = Cat.matchSource(Site.Sink);
-  const bool UnboundedInput = E->LenArg < 0 && E->SrcArg < 0 &&
-                              E->DstArg >= 0 && DirectInput &&
-                              DirectInput->OutArg == E->DstArg;
+  const bool UnboundedInput = E->UnboundedWrite;
 
   ArgClassification Arg =
       classifyArgument(In, Cat, F, Site.CallInfoIndex, Site.ArgIndex);

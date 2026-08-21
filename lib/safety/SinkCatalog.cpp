@@ -121,6 +121,12 @@ SinkEntry copySink(const char *Name, int Dst, int Src, int Len, int Cap,
   return E;
 }
 
+SinkEntry unboundedCopySink(const char *Name, int Dst, unsigned Sev) {
+  SinkEntry E = copySink(Name, Dst, -1, -1, -1, Sev);
+  E.UnboundedWrite = true;
+  return E;
+}
+
 SinkEntry formatSink(const char *Name, int Dst, int Fmt, int Len, int Cap,
                      unsigned Sev) {
   SinkEntry E;
@@ -181,6 +187,8 @@ SinkCatalog SinkCatalog::defaults() {
 
 #define SAFETY_COPY_SINK(NAME, DST, SRC, LEN, CAP, SEV)                        \
   C.addSink(copySink(#NAME, DST, SRC, LEN, CAP, SEV));
+#define SAFETY_UNBOUNDED_COPY_SINK(NAME, DST, SEV)                             \
+  C.addSink(unboundedCopySink(#NAME, DST, SEV));
 #define SAFETY_FORMAT_SINK(NAME, DST, FMT, LEN, CAP, SEV)                      \
   C.addSink(formatSink(#NAME, DST, FMT, LEN, CAP, SEV));
 #define SAFETY_ALLOC_SINK(NAME, SIZE, SRC, HANDLE, SEV)                        \
@@ -309,6 +317,19 @@ llvm::Error SinkCatalog::mergeSinksFromFile(llvm::StringRef Path) {
       return Err;
     if (llvm::Error Err = readIndex("handle", E.HandleArg))
       return Err;
+    if (const llvm::json::Value *Raw = O->get("unbounded")) {
+      std::optional<bool> Value = Raw->getAsBoolean();
+      if (!Value)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "sink field 'unbounded' is not a boolean");
+      E.UnboundedWrite = *Value;
+    }
+    if (E.UnboundedWrite && (E.Kind != SinkKind::Copy || E.DstArg < 0 ||
+                             E.SrcArg >= 0 || E.LenArg >= 0))
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "an unbounded sink must be a destination-only copy");
     llvm::Expected<unsigned> Severity = severityFieldOr(*O, 50);
     if (!Severity)
       return Severity.takeError();

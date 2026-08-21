@@ -43,6 +43,7 @@ struct SinkEntry {
   int CapArg = -1; ///< explicit destination capacity (fortified variants).
   int FmtArg = -1; ///< format-string argument.
   int HandleArg = -1; ///< the freed / reallocated handle (audit).
+  bool UnboundedWrite = false; ///< the call itself accepts unbounded input.
 
   unsigned Severity = 50;
 
