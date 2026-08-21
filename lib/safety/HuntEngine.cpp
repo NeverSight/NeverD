@@ -940,10 +940,17 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     if (Arg.Flow != ArgFlow::Tainted && FormatSegment &&
         !FormatSegment->isWritable() &&
         safety::detail::readMappedCString(In.Img, FormatArg)) {
-      Out.TheVerdict = Verdict::Safe;
-      Out.TheConfidence = Confidence::High;
-      Out.SkipReason = "constant format string";
-      Out.Detail = "format string is a mapped constant";
+      if (E->DstArg >= 0) {
+        Out.TheVerdict = Verdict::Unknown;
+        Out.TheConfidence = Confidence::Low;
+        Out.Detail =
+            "format string is constant, but destination extent is unresolved";
+      } else {
+        Out.TheVerdict = Verdict::Safe;
+        Out.TheConfidence = Confidence::High;
+        Out.SkipReason = "constant format string";
+        Out.Detail = "format string is a mapped constant";
+      }
       return Out;
     }
 

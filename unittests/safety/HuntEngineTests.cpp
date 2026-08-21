@@ -591,6 +591,23 @@ TEST(HuntEngine, ConstantFormatStringIsSafe) {
   EXPECT_FALSE(Fnd->SkipReason.empty());
 }
 
+TEST(HuntEngine, ConstantSprintfFormatDoesNotHideDestinationExtent) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  Builder B("main");
+  B.call("sprintf", temp(0),
+         {param(1), MedVar::makeConst(FormatVA, 8), param(2)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::FormatString);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
+  EXPECT_TRUE(Fnd->SkipReason.empty());
+  EXPECT_NE(Fnd->Detail.find("destination"), std::string::npos);
+}
+
 TEST(HuntEngine, ReachableTaintedFormatStringIsUnsafe) {
   constexpr va_t SourceVA = 0x400004;
   constexpr va_t SinkVA = 0x400010;
