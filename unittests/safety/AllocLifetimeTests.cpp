@@ -235,6 +235,23 @@ TEST(AllocLifetime, ResolvedImportIdentityDrivesAllocationSemantics) {
   EXPECT_EQ(Fs[0].Source, NameSource::Import);
 }
 
+TEST(AllocLifetime, MicrosoftOperatorNamesDriveLifetimeAnalysis) {
+  FB Released("released", 0x100);
+  int ReleasedBlock = Released.block();
+  Released.call(ReleasedBlock, "??2@YAPEAX_K@Z", temp(1),
+                {MedVar::makeConst(16, 8)});
+  Released.call(ReleasedBlock, "??3@YAXPEAX@Z", MedVar{}, {temp(1)});
+  Released.ret(ReleasedBlock, {});
+  EXPECT_FALSE(has(audit({Released.F}), VulnClass::HeapLeak));
+
+  FB Leaked("leaked", 0x200);
+  int LeakedBlock = Leaked.block();
+  Leaked.call(LeakedBlock, "??_U@YAPEAX_K@Z", temp(2),
+              {MedVar::makeConst(32, 8)});
+  Leaked.ret(LeakedBlock, {});
+  EXPECT_TRUE(has(audit({Leaked.F}), VulnClass::HeapLeak));
+}
+
 TEST(AllocLifetime, StackAllocationIsNotAHeapLeak) {
   FB B("f", 0x100);
   int b0 = B.block();

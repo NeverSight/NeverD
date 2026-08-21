@@ -58,6 +58,31 @@ static std::string demangledKey(llvm::StringRef StatedName) {
     std::free(Dem);
     return SinkCatalog::normalize(lastIdentifier(Owned));
   }
+
+  llvm::StringRef MicrosoftName = StatedName;
+  if (auto Bang = MicrosoftName.rfind('!'); Bang != llvm::StringRef::npos)
+    MicrosoftName = MicrosoftName.drop_front(Bang + 1);
+  while (MicrosoftName.starts_with("__imp_"))
+    MicrosoftName = MicrosoftName.drop_front(6);
+  size_t Consumed = 0;
+  if (char *Dem =
+          llvm::microsoftDemangle(MicrosoftName.str(), &Consumed, nullptr)) {
+    std::string Owned(Dem);
+    std::free(Dem);
+    if (Consumed != MicrosoftName.size())
+      return {};
+    llvm::StringRef Name(Owned);
+    if (auto Paren = Name.find('('); Paren != llvm::StringRef::npos)
+      Name = Name.take_front(Paren).rtrim();
+    if (Name.ends_with("operator new[]"))
+      return "Znam";
+    if (Name.ends_with("operator new"))
+      return "Znwm";
+    if (Name.ends_with("operator delete[]"))
+      return "ZdaPv";
+    if (Name.ends_with("operator delete"))
+      return "ZdlPv";
+  }
   return {};
 }
 

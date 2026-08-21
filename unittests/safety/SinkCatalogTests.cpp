@@ -160,6 +160,23 @@ TEST(SinkCatalog, MangledOperatorNewAndDelete) {
   EXPECT_EQ(C.matchSink("_Znwm")->Kind, SinkKind::Alloc);
   ASSERT_NE(C.matchSink("_ZdlPv"), nullptr);
   EXPECT_EQ(C.matchSink("_ZdlPv")->Kind, SinkKind::Free);
+
+  // Microsoft C++ names encode the target word size and overload signature.
+  // They must resolve through the same allocation/lifetime summaries.
+  ASSERT_NE(C.matchSink("??2@YAPEAX_K@Z"), nullptr);
+  EXPECT_EQ(C.matchSink("??2@YAPEAX_K@Z")->Kind, SinkKind::Alloc);
+  EXPECT_EQ(C.matchSink("__imp_??2@YAPEAX_K@Z"), C.matchSink("??2@YAPEAX_K@Z"));
+  ASSERT_NE(C.matchSink("??2@YAPAXI@Z"), nullptr);
+  EXPECT_EQ(C.matchSink("??2@YAPAXI@Z")->Kind, SinkKind::Alloc);
+  ASSERT_NE(C.matchSink("??_U@YAPEAX_K@Z"), nullptr);
+  EXPECT_EQ(C.matchSink("??_U@YAPEAX_K@Z")->Kind, SinkKind::Alloc);
+  ASSERT_NE(C.matchSink("??3@YAXPEAX@Z"), nullptr);
+  EXPECT_EQ(C.matchSink("??3@YAXPEAX@Z")->Kind, SinkKind::Free);
+  ASSERT_NE(C.matchSink("??3@YAXPEAX_K@Z"), nullptr);
+  EXPECT_EQ(C.matchSink("??3@YAXPEAX_K@Z")->Kind, SinkKind::Free);
+  ASSERT_NE(C.matchSink("??_V@YAXPEAX@Z"), nullptr);
+  EXPECT_EQ(C.matchSink("??_V@YAXPEAX@Z")->Kind, SinkKind::Free);
+  EXPECT_EQ(C.matchSink("??2@YAPEAX_K@Z.trailing"), nullptr);
 }
 
 TEST(SinkCatalog, DefaultSourcesCoverPosixAndWin32) {
