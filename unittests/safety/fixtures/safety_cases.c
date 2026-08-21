@@ -99,14 +99,14 @@ void guarded_free(void) {
 void double_frees(void) {
   void *p = malloc(24);
   free(p);
-  free(p);
+  free(p); // codeql[cpp/double-free]
 }
 
 // Audit: a handle used after it is released.
 void uses_after_free(void) {
   char *p = (char *)malloc(24);
   free(p);
-  p[0] = 65;
+  p[0] = 65; // codeql[cpp/use-after-free]
 }
 
 // Audit negative control: a balanced allocate/release pair.
