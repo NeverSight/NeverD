@@ -36,7 +36,7 @@ ValueKey keyOf(const MedVar &V) {
   return {static_cast<uint8_t>(V.Kind), V.Id, V.SSAVer};
 }
 
-bool forwardsPointerInput(NdOp Op, unsigned Input) {
+bool mayForwardPointerInput(NdOp Op, unsigned Input) {
   switch (Op) {
   case NdOp::COPY:
   case NdOp::CAST:
@@ -47,6 +47,42 @@ bool forwardsPointerInput(NdOp Op, unsigned Input) {
     return Input == 0;
   case NdOp::INT_ADD:
     return Input < 2;
+  case NdOp::SELECT:
+    return Input == 1 || Input == 2;
+  default:
+    return false;
+  }
+}
+
+bool mustForwardPointerValue(const MedOp &Op,
+                             const llvm::DenseSet<ValueKey> &Aliases) {
+  auto aliases = [&](unsigned Input) {
+    return Input < Op.NumInputs && !Op.Inputs[Input].isConst() &&
+           Aliases.count(keyOf(Op.Inputs[Input]));
+  };
+  auto sameSize = [&](unsigned Input) {
+    return Input < Op.NumInputs && Op.Output.Size == Op.Inputs[Input].Size;
+  };
+  auto isZero = [&](unsigned Input) {
+    return Input < Op.NumInputs && Op.Inputs[Input].isConst() &&
+           Op.Inputs[Input].ConstVal == 0;
+  };
+
+  switch (Op.Opcode) {
+  case NdOp::COPY:
+  case NdOp::CAST:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+    return aliases(0) && sameSize(0);
+  case NdOp::SUBBYTES:
+    return aliases(0) && sameSize(0) && isZero(1);
+  case NdOp::INT_ADD:
+    return (aliases(0) && sameSize(0) && isZero(1)) ||
+           (isZero(0) && aliases(1) && sameSize(1));
+  case NdOp::INT_SUB:
+    return aliases(0) && sameSize(0) && isZero(1);
+  case NdOp::SELECT:
+    return aliases(1) && sameSize(1) && aliases(2) && sameSize(2);
   default:
     return false;
   }
@@ -198,7 +234,7 @@ struct MemModel {
   }
 
   llvm::DenseSet<ValueKey> aliasClosureImpl(const MedVar &Seed,
-                                            bool RequireAllPhiArms) const {
+                                            bool RequireExactAlias) const {
     llvm::DenseSet<ValueKey> Set;
     Set.insert(keyOf(Seed));
     bool Changed = true;
@@ -216,16 +252,22 @@ struct MemModel {
             AnyAlias |= Aliases;
             AllAlias &= Aliases;
           }
-          if ((RequireAllPhiArms ? AllAlias : AnyAlias) &&
+          if ((RequireExactAlias ? AllAlias : AnyAlias) &&
               Set.insert(keyOf(Phi.Output)).second)
             Changed = true;
         }
         for (const MedOp &Op : B.Ops) {
           if (Op.Output.isConst() || Op.Output.Size == 0)
             continue;
+          if (RequireExactAlias) {
+            if (mustForwardPointerValue(Op, Set) &&
+                Set.insert(keyOf(Op.Output)).second)
+              Changed = true;
+            continue;
+          }
           for (unsigned I = 0; I < Op.NumInputs; ++I)
-            if (forwardsPointerInput(Op.Opcode, I) && !Op.Inputs[I].isConst() &&
-                Set.count(keyOf(Op.Inputs[I])) &&
+            if (mayForwardPointerInput(Op.Opcode, I) &&
+                !Op.Inputs[I].isConst() && Set.count(keyOf(Op.Inputs[I])) &&
                 Set.insert(keyOf(Op.Output)).second)
               Changed = true;
         }
@@ -237,15 +279,17 @@ struct MemModel {
               Op.Output.Size == 0)
             continue;
           detail::ReachingStackValues Reaching = reachingLoad(B, Oi, Op);
-          if (!Reaching.Complete)
+          if (!Reaching.Reachable)
             continue;
-          bool MustAlias = true;
+          bool AnyAlias = false;
+          bool AllAlias = Reaching.Complete && !Reaching.Values.empty();
           for (const MedVar &Source : Reaching.Values)
-            if (Source.isConst() || !Set.count(keyOf(Source))) {
-              MustAlias = false;
-              break;
-            }
-          if (MustAlias && Set.insert(keyOf(Op.Output)).second)
+            if (!Source.isConst() && Set.count(keyOf(Source)))
+              AnyAlias = true;
+            else
+              AllAlias = false;
+          if ((RequireExactAlias ? AllAlias : AnyAlias) &&
+              Set.insert(keyOf(Op.Output)).second)
             Changed = true;
         }
     }
@@ -255,12 +299,12 @@ struct MemModel {
   // Every value that may alias the seed, by SSA forwarding and by
   // spill/reload through a stack slot.
   llvm::DenseSet<ValueKey> aliasClosure(const MedVar &Seed) const {
-    return aliasClosureImpl(Seed, /*RequireAllPhiArms=*/false);
+    return aliasClosureImpl(Seed, /*RequireExactAlias=*/false);
   }
 
   // Values that are guaranteed to derive from the seed on every PHI arm.
   llvm::DenseSet<ValueKey> mustAliasClosure(const MedVar &Seed) const {
-    return aliasClosureImpl(Seed, /*RequireAllPhiArms=*/true);
+    return aliasClosureImpl(Seed, /*RequireExactAlias=*/true);
   }
 };
 

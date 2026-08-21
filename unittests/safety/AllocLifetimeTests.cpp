@@ -297,6 +297,31 @@ TEST(AllocLifetime, MayAliasFreeDoesNotProveAllocationReleased) {
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, AdjustedPointerFreeDoesNotReleaseAllocation) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(2), {temp(1), MedVar::makeConst(8, 8)});
+  B.call(b0, "free", MedVar{}, {temp(2)});
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F});
+  const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, SelectOfSamePointerCanReleaseAllocation) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(b0, NdOp::SELECT, temp(2), {temp(9), temp(1), temp(1)});
+  B.call(b0, "free", MedVar{}, {temp(2)});
+  B.ret(b0, {});
+
+  EXPECT_FALSE(has(audit({B.F}), VulnClass::HeapLeak));
+}
+
 TEST(AllocLifetime, NoLeakWhenReturned) {
   FB B("f", 0x100);
   int b0 = B.block();
