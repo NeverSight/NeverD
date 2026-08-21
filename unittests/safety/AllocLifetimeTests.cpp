@@ -622,6 +622,47 @@ TEST(AllocLifetime, UseAfterFree) {
   EXPECT_TRUE(has(Fs, VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, AtomicMemoryUseAfterFree) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, 0x400);
+  B.op(b0, NdOp::ATOMIC_ADD, temp(2), {temp(1), MedVar::makeConst(1, 8)},
+       0x408);
+  B.ret(b0, {});
+
+  EXPECT_TRUE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, AtomicValueDoesNotDereferenceFreedStorage) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, 0x400);
+  B.op(b0, NdOp::ATOMIC_XCHG, temp(2), {MedVar::makeConst(0x5000, 8), temp(1)},
+       0x408);
+  B.ret(b0, {});
+
+  EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, AtomicReadResultPreservesHeapAlias) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(10), temp(1)});
+  B.op(b0, NdOp::ATOMIC_XCHG, temp(2), {temp(10), MedVar::makeConst(0, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.op(b0, NdOp::LOAD, temp(3), {temp(2)});
+  B.ret(b0, {});
+
+  EXPECT_TRUE(
+      has(audit({B.F}, nullptr, /*StackRegs=*/true), VulnClass::UseAfterFree));
+}
+
 TEST(AllocLifetime, UseAfterFreeAcrossLoopBackedge) {
   FB B("f", 0x100);
   int entry = B.block();
@@ -798,6 +839,39 @@ TEST(AllocLifetime, UninitializedLocalStackLoadIsReported) {
   ASSERT_NE(Read, nullptr);
   EXPECT_EQ(Read->FuncEntry, 0x100u);
   EXPECT_EQ(Read->CallVA, 0x408u);
+}
+
+TEST(AllocLifetime, UninitializedLocalStackAtomicReadIsReported) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::ATOMIC_CMPXCHG, temp(11),
+       {temp(10), MedVar::makeConst(0, 8), MedVar::makeConst(1, 8)}, 0x408);
+  B.ret(b0, {temp(11)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->CallVA, 0x408u);
+}
+
+TEST(AllocLifetime, InitializedLocalStackAtomicReadIsClean) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(0x1234, 8)});
+  B.op(b0, NdOp::ATOMIC_ADD, temp(11), {temp(10), MedVar::makeConst(1, 8)},
+       0x408);
+  B.ret(b0, {temp(11)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
 }
 
 TEST(AllocLifetime, InitializedLocalStackLoadIsClean) {

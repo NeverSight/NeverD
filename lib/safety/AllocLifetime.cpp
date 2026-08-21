@@ -229,10 +229,13 @@ struct MemModel {
 
   detail::ReachingStackValues reachingLoad(const MedBlock &B, int OpIdx,
                                            const MedOp &Op) const {
-    if (Op.Opcode != NdOp::LOAD || Op.NumInputs == 0)
+    if (!detail::isStackMemoryRead(Op.Opcode) || Op.NumInputs == 0 ||
+        Op.Output.Size == 0)
       return {};
-    const MedVar &Addr = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
-    std::optional<int64_t> Off = stackOffset(Addr);
+    const MedVar *Addr = detail::memoryAddress(Op);
+    if (!Addr)
+      return {};
+    std::optional<int64_t> Off = stackOffset(*Addr);
     if (!Off)
       return {};
     auto Resolve = [&](const MedVar &V) { return stackOffset(V); };
@@ -286,7 +289,7 @@ struct MemModel {
       for (const MedBlock &B : F.Blocks)
         for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
           const MedOp &Op = B.Ops[Oi];
-          if (Op.Opcode != NdOp::LOAD || Op.Output.isConst() ||
+          if (!detail::isStackMemoryRead(Op.Opcode) || Op.Output.isConst() ||
               Op.Output.Size == 0)
             continue;
           detail::ReachingStackValues Reaching = reachingLoad(B, Oi, Op);
@@ -1196,7 +1199,7 @@ private:
     for (const MedBlock &B : F.Blocks)
       for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
         const MedOp &Op = B.Ops[Oi];
-        if (Op.Opcode != NdOp::LOAD || Op.Output.Size == 0)
+        if (!detail::isStackMemoryRead(Op.Opcode) || Op.Output.Size == 0)
           continue;
         const MedVar *Addr = detail::memoryAddress(Op);
         if (!Addr)
@@ -1221,8 +1224,8 @@ private:
         Fn.TheConfidence = Definite ? Confidence::Medium : Confidence::Low;
         Fn.Function = F.Name;
         Fn.FuncEntry = F.Entry;
-        Fn.Name = "stack_load";
-        Fn.Sink = "stack_load";
+        Fn.Name = Op.Opcode == NdOp::LOAD ? "stack_load" : "stack_atomic";
+        Fn.Sink = Fn.Name;
         Fn.CallVA = Op.Addr;
         Fn.Source = NameSource::Synthetic;
         Fn.Flow = ArgFlow::Unknown;
@@ -1299,13 +1302,9 @@ private:
     for (const MedBlock &B : F.Blocks)
       for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
         const MedOp &Op = B.Ops[Oi];
-        if (Op.Opcode == NdOp::LOAD) {
-          const MedVar &Addr = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
-          if (!Addr.isConst() && Alias.count(keyOf(Addr)))
-            Uses.Definite.push_back({B.Id, Oi, Op.Addr});
-        } else if (Op.Opcode == NdOp::STORE) {
-          const MedVar &Addr = Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
-          if (!Addr.isConst() && Alias.count(keyOf(Addr)))
+        if (Op.Opcode == NdOp::LOAD || detail::isStackMemoryWrite(Op.Opcode)) {
+          const MedVar *Addr = detail::memoryAddress(Op);
+          if (Addr && !Addr->isConst() && Alias.count(keyOf(*Addr)))
             Uses.Definite.push_back({B.Id, Oi, Op.Addr});
         }
       }

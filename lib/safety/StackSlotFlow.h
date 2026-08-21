@@ -26,9 +26,17 @@ struct ReachingStackValues {
   std::vector<MedVar> Values;
 };
 
+inline bool isAtomicMemoryAccess(NdOp Opcode) {
+  return Opcode == NdOp::ATOMIC_XCHG || Opcode == NdOp::ATOMIC_ADD ||
+         Opcode == NdOp::ATOMIC_CMPXCHG;
+}
+
+inline bool isStackMemoryRead(NdOp Opcode) {
+  return Opcode == NdOp::LOAD || isAtomicMemoryAccess(Opcode);
+}
+
 inline bool isStackMemoryWrite(NdOp Opcode) {
-  return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
-         Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
+  return Opcode == NdOp::STORE || isAtomicMemoryAccess(Opcode);
 }
 
 inline const MedVar *memoryAddress(const MedOp &Op) {
@@ -101,7 +109,7 @@ reachingStackValues(const MedFunc &F, int LoadBlockId, int LoadOpIdx,
   auto LoadIt = Blocks.find(LoadBlockId);
   if (LoadIt == Blocks.end() ||
       LoadOpIdx >= static_cast<int>(LoadIt->second->Ops.size()) ||
-      LoadIt->second->Ops[LoadOpIdx].Opcode != NdOp::LOAD)
+      !isStackMemoryRead(LoadIt->second->Ops[LoadOpIdx].Opcode))
     return Result;
 
   std::map<int, std::set<int>> Preds;
