@@ -2276,6 +2276,27 @@ TEST(HuntEngine, GuardedFgetsBoundCanWitnessImplicitCopyOverflow) {
   EXPECT_FALSE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, NegativeFgetsBoundCannotProduceInput) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("fgets", temp(5),
+         {param(2), MedVar::makeConst(UINT32_MAX, 8), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = fgetsThenStrcpyLow(SourceVA, SinkVA, /*RequireSuccess=*/true);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
 TEST(HuntEngine, GuardedReadReturnHonorsRequestedCount) {
   for (const char *Name : {"read", "pread", "_read"}) {
     SCOPED_TRACE(Name);

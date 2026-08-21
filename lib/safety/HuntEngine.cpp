@@ -203,6 +203,8 @@ struct CountedSourceOutput {
 struct BoundedStringOutput {
   int BufferArg = -1;
   int BoundArg = -1;
+  uint32_t BoundBits = 0;
+  bool BoundIsSigned = false;
 };
 
 struct ReturnedStringOutput {
@@ -245,7 +247,7 @@ CountedSourceOutput countedSourceOutput(llvm::StringRef Name,
 
 BoundedStringOutput boundedStringOutput(llvm::StringRef Name) {
   if (SinkCatalog::normalize(Name) == "fgets")
-    return {0, 1};
+    return {0, 1, 32, true};
   return {};
 }
 
@@ -698,6 +700,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                  : SymRef();
           SymRef EventImplicitLen;
           SymRef EventImplicitSuccess;
+          SymRef ConditionalLenSuccess;
           bool EventLenIncludesTerminator = false;
           bool EventLenConflict = false;
           for (const SourceEvent &Event : Cur.SourceEvents) {
@@ -735,15 +738,19 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Len = Ctx.mkZExtOrTrunc(EventImplicitLen, 64);
             if (Implicit && !EventLenIncludesTerminator)
               Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
-            ConditionalBoundNotProven = !predicateMustHold(
-                Ctx, EventImplicitSuccess, Cur.Constraints, Budgets);
+            ConditionalLenSuccess = EventImplicitSuccess;
           } else if (UseImplicitLength && !Len.isValid() &&
                      Cur.ImplicitLen.isValid() && SameImplicitSource) {
             Len = Ctx.mkZExtOrTrunc(Cur.ImplicitLen, 64);
             if (Implicit && !Cur.ImplicitLenIncludesTerminator)
               Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
+            ConditionalLenSuccess = Cur.ImplicitSuccess;
+          }
+          if (ConditionalLenSuccess.isValid()) {
             ConditionalBoundNotProven = !predicateMustHold(
-                Ctx, Cur.ImplicitSuccess, Cur.Constraints, Budgets);
+                Ctx, ConditionalLenSuccess, Cur.Constraints, Budgets);
+            SymRef Parts[] = {Pred, ConditionalLenSuccess};
+            Pred = Ctx.mkAnd(Parts);
           }
           SymRef RuntimeCap;
           if (E.CapArg >= 0) {
@@ -1210,13 +1217,24 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               Cur.ImplicitLenIncludesTerminator = false;
             } else {
               const SymRef WideRet = Ctx.mkZExtOrTrunc(Ret, 64);
-              const SymRef WideLimit =
-                  Ctx.mkZExtOrTrunc(BoundedStringLimit, 64);
+              SymRef SemanticLimit = BoundedStringLimit;
+              if (BoundedString.BoundBits != 0 &&
+                  BoundedString.BoundBits < Ctx.width(SemanticLimit))
+                SemanticLimit =
+                    Ctx.mkExtract(SemanticLimit, 0, BoundedString.BoundBits);
+              const SymRef WideLimit = Ctx.mkZExtOrTrunc(SemanticLimit, 64);
+              const SymRef PositiveLimit =
+                  BoundedString.BoundIsSigned
+                      ? Ctx.mkSgt(SemanticLimit,
+                                  Ctx.mkZero(Ctx.width(SemanticLimit)))
+                      : Ctx.mkUgt(SemanticLimit,
+                                  Ctx.mkZero(Ctx.width(SemanticLimit)));
+              const SymRef Returned = Ctx.mkNe(WideRet, Ctx.mkZero(64));
+              Cur.Constraints.push_back(
+                  Ctx.mkOr(Ctx.mkNot(Returned), PositiveLimit));
               Cur.ImplicitLen = WideLimit;
               Cur.ImplicitSource = NextImplicitSource;
-              Cur.ImplicitSuccess =
-                  Ctx.mkAnd(Ctx.mkNe(WideRet, Ctx.mkZero(64)),
-                            Ctx.mkUgt(WideLimit, Ctx.mkZero(64)));
+              Cur.ImplicitSuccess = Ctx.mkAnd(Returned, PositiveLimit);
               Cur.ImplicitFromLength = false;
               Cur.ImplicitLenIncludesTerminator = true;
             }
