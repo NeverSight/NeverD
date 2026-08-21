@@ -20,6 +20,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSwitch.h"
 
 #include <algorithm>
 #include <deque>
@@ -34,6 +35,15 @@ using ValueKey = std::tuple<uint8_t, int, int>;
 
 ValueKey keyOf(const MedVar &V) {
   return {static_cast<uint8_t>(V.Kind), V.Id, V.SSAVer};
+}
+
+bool isStringLengthCall(llvm::StringRef Name) {
+  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
+#define SAFETY_CALL_TRAIT(NAME, IS_LENGTH, IS_BOUNDED)                         \
+  .Case(NAME, IS_LENGTH != 0)
+#include "neverd/safety/SafetyCallTraits.inc"
+#undef SAFETY_CALL_TRAIT
+      .Default(false);
 }
 
 bool mayForwardPointerInput(NdOp Op, unsigned Input) {
@@ -898,6 +908,7 @@ private:
           continue;
         const std::string Name = callName(*Call);
         if (catalogSink(*Call) || Cat.matchSource(Name) ||
+            isStringLengthCall(Name) ||
             (!Call->IsIndirect && In.findMedFunc(Call->TargetAddr)))
           ++Count;
       }
@@ -1260,6 +1271,8 @@ private:
     }
     if (const SourceEntry *Source = Cat.matchSource(callName(CI)))
       return ArgIndex == Source->OutArg ? CallUse::Definite : CallUse::Possible;
+    if (isStringLengthCall(callName(CI)))
+      return ArgIndex == 0 ? CallUse::Definite : CallUse::None;
     return CallUse::Possible;
   }
 
