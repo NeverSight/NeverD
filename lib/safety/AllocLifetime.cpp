@@ -1449,6 +1449,84 @@ private:
         Out.push_back(std::move(Fn));
       }
 
+    auto auditCallStackSource = [&](const MedCallInfo &CI, int SourceArg,
+                                    std::optional<uint64_t> Bytes,
+                                    llvm::StringRef UnknownDetail,
+                                    llvm::StringRef DefiniteDetail,
+                                    llvm::StringRef PossibleDetail) {
+      if (SourceArg < 0 || SourceArg >= static_cast<int>(CI.Args.size()))
+        return;
+      const MedOp *CallOp = opAt(F, CI.BlockId, CI.OpIdx);
+      if (!CallOp ||
+          (CallOp->Opcode != NdOp::CALL && CallOp->Opcode != NdOp::INDIR_CALL))
+        return;
+      const MedBlock *Block = nullptr;
+      for (const MedBlock &Candidate : F.Blocks)
+        if (Candidate.Id == CI.BlockId) {
+          Block = &Candidate;
+          break;
+        }
+      if (!Block)
+        return;
+      const MedVar &Source = CI.Args[SourceArg];
+      const std::optional<int64_t> Offset =
+          Mem.stackOffsetThroughReloads(Source);
+      if (!Offset || *Offset >= 0)
+        return;
+      if (!Bytes || *Bytes > std::numeric_limits<uint16_t>::max()) {
+        Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
+                                 callName(CI), CI.TargetAddr, CI.IsIndirect);
+        Fn.ArgIndex = SourceArg;
+        Fn.TheVerdict = Verdict::Unknown;
+        Fn.TheConfidence = Confidence::Low;
+        Fn.Detail = UnknownDetail.str();
+        Out.push_back(std::move(Fn));
+        return;
+      }
+      const uint16_t ReadSize = static_cast<uint16_t>(*Bytes);
+      const detail::ReachingStackValues Reaching =
+          Mem.reachingRead(*Block, CI.OpIdx, Source, ReadSize);
+      if (!Reaching.Reachable ||
+          (!Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites))
+        return;
+
+      const bool Definite =
+          !Reaching.HasUnknownWrites && Reaching.Values.empty();
+      Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
+                               callName(CI), CI.TargetAddr, CI.IsIndirect);
+      Fn.ArgIndex = SourceArg;
+      Fn.TheVerdict = Definite ? Verdict::Unsafe : Verdict::Unknown;
+      Fn.TheConfidence = Definite ? Confidence::Medium : Confidence::Low;
+      Fn.Detail = (Definite ? DefiniteDetail : PossibleDetail).str();
+      if (Definite)
+        Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
+      Out.push_back(std::move(Fn));
+    };
+
+    for (const MedCallInfo &CI : F.CallInfos) {
+      const std::string Name = SinkCatalog::normalize(callName(CI));
+      if (Name != "strdup" && Name != "strndup")
+        continue;
+      std::optional<uint64_t> Bytes = 1;
+      if (Name == "strndup") {
+        if (CI.Args.size() <= 1)
+          Bytes = std::nullopt;
+        else if (std::optional<uint64_t> Limit = unsignedConstant(CI.Args[1])) {
+          if (*Limit == 0)
+            continue;
+        } else {
+          Bytes = std::nullopt;
+        }
+      }
+      auditCallStackSource(
+          CI, 0, Bytes,
+          "string duplication source has a runtime length that may read "
+          "uninitialized local stack bytes",
+          "string duplication reads a local stack byte before initialization",
+          "string duplication may read a local stack byte before "
+          "initialization on a control-flow path");
+    }
+
     for (const MedCallInfo &CI : F.CallInfos) {
       const SinkEntry *E = catalogSink(CI);
       if (!E || E->Kind != SinkKind::Copy || E->SrcArg < 0 || E->LenArg < 0 ||
@@ -1474,57 +1552,16 @@ private:
                 callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
                 *Count, *Capacity))
           continue;
-      const MedOp *CallOp = opAt(F, CI.BlockId, CI.OpIdx);
-      if (!CallOp ||
-          (CallOp->Opcode != NdOp::CALL && CallOp->Opcode != NdOp::INDIR_CALL))
-        continue;
-      const MedBlock *Block = nullptr;
-      for (const MedBlock &Candidate : F.Blocks)
-        if (Candidate.Id == CI.BlockId) {
-          Block = &Candidate;
-          break;
-        }
-      if (!Block)
-        continue;
-      const MedVar &Source = CI.Args[E->SrcArg];
-      const std::optional<int64_t> Offset =
-          Mem.stackOffsetThroughReloads(Source);
-      if (!Offset || *Offset >= 0)
-        continue;
-      if (!Bytes || *Bytes > std::numeric_limits<uint16_t>::max()) {
-        Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
-                                 callName(CI), CI.TargetAddr, CI.IsIndirect);
-        Fn.ArgIndex = E->SrcArg;
-        Fn.TheVerdict = Verdict::Unknown;
-        Fn.TheConfidence = Confidence::Low;
-        Fn.Detail = !Count ? "copy source has a runtime length that may extend "
-                             "past initialized local stack bytes"
-                           : "copy source byte count exceeds the range of the "
-                             "local stack initialization audit";
-        Out.push_back(std::move(Fn));
-        continue;
-      }
-      const uint16_t ReadSize = static_cast<uint16_t>(*Bytes);
-      const detail::ReachingStackValues Reaching =
-          Mem.reachingRead(*Block, CI.OpIdx, Source, ReadSize);
-      if (!Reaching.Reachable ||
-          (!Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites))
-        continue;
-
-      const bool Definite =
-          !Reaching.HasUnknownWrites && Reaching.Values.empty();
-      Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
-                               callName(CI), CI.TargetAddr, CI.IsIndirect);
-      Fn.ArgIndex = E->SrcArg;
-      Fn.TheVerdict = Definite ? Verdict::Unsafe : Verdict::Unknown;
-      Fn.TheConfidence = Definite ? Confidence::Medium : Confidence::Low;
-      Fn.Detail = Definite ? "copy source reads local stack bytes before any "
-                             "full-width initialization"
-                           : "copy source may read local stack bytes before "
-                             "initialization on a control-flow path";
-      if (Definite)
-        Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
-      Out.push_back(std::move(Fn));
+      auditCallStackSource(
+          CI, E->SrcArg, Bytes,
+          !Count ? "copy source has a runtime length that may extend past "
+                   "initialized local stack bytes"
+                 : "copy source byte count exceeds the range of the local "
+                   "stack initialization audit",
+          "copy source reads local stack bytes before any full-width "
+          "initialization",
+          "copy source may read local stack bytes before initialization on a "
+          "control-flow path");
     }
   }
 

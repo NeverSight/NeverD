@@ -1322,6 +1322,60 @@ TEST(AllocLifetime, UninitializedLocalStackMemcpySourceIsReported) {
   EXPECT_EQ(Read->CallVA, 0x408u);
 }
 
+TEST(AllocLifetime, StringDuplicationReadsUninitializedStackSource) {
+  for (const char *Name : {"strdup", "strndup"}) {
+    SCOPED_TRACE(Name);
+    FB B("f", 0x100);
+    int b0 = B.block();
+    B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+         {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+    B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+    std::vector<MedVar> Args = {temp(10)};
+    if (llvm::StringRef(Name) == "strndup")
+      Args.push_back(MedVar::makeConst(1, 8));
+    B.call(b0, Name, temp(11), std::move(Args), 0x9000, 0x408);
+    B.ret(b0, {});
+
+    const std::vector<Finding> Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                                          /*IncludeStackReads=*/true);
+    const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+    ASSERT_NE(Read, nullptr);
+    EXPECT_EQ(Read->CallVA, 0x408u);
+  }
+}
+
+TEST(AllocLifetime, ZeroLengthStrndupDoesNotReadUninitializedStackSource) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(b0, "strndup", temp(11), {temp(10), MedVar::makeConst(0, 8)}, 0x9000,
+         0x408);
+  B.ret(b0, {});
+
+  EXPECT_FALSE(has(audit({B.F}, nullptr, /*StackRegs=*/true,
+                         /*IncludeStackReads=*/true),
+                   VulnClass::UninitializedRead));
+}
+
+TEST(AllocLifetime, RuntimeLengthStrndupStackReadFailsClosed) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(b0, "strndup", temp(11), {temp(10), temp(8)}, 0x9000, 0x408);
+  B.ret(b0, {});
+
+  const std::vector<Finding> Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                                        /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Read->TheConfidence, Confidence::Low);
+}
+
 TEST(AllocLifetime, InitializedLocalStackMemcpySourceIsClean) {
   FB B("f", 0x100);
   int b0 = B.block();
