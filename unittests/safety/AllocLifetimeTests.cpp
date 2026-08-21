@@ -252,6 +252,24 @@ TEST(AllocLifetime, MicrosoftOperatorNamesDriveLifetimeAnalysis) {
   EXPECT_TRUE(has(audit({Leaked.F}), VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, ItaniumAlignedOperatorNamesDriveLifetimeAnalysis) {
+  FB Released("released", 0x100);
+  int ReleasedBlock = Released.block();
+  Released.call(ReleasedBlock, "_ZnwmSt11align_val_t", temp(1),
+                {MedVar::makeConst(64, 8), MedVar::makeConst(64, 8)});
+  Released.call(ReleasedBlock, "_ZdlPvmSt11align_val_t", MedVar{},
+                {temp(1), MedVar::makeConst(64, 8), MedVar::makeConst(64, 8)});
+  Released.ret(ReleasedBlock, {});
+  EXPECT_FALSE(has(audit({Released.F}), VulnClass::HeapLeak));
+
+  FB Leaked("leaked", 0x200);
+  int LeakedBlock = Leaked.block();
+  Leaked.call(LeakedBlock, "_ZnamSt11align_val_t", temp(2),
+              {MedVar::makeConst(64, 8), MedVar::makeConst(64, 8)});
+  Leaked.ret(LeakedBlock, {});
+  EXPECT_TRUE(has(audit({Leaked.F}), VulnClass::HeapLeak));
+}
+
 TEST(AllocLifetime, StackAllocationIsNotAHeapLeak) {
   FB B("f", 0x100);
   int b0 = B.block();

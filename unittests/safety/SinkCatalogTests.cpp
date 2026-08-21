@@ -181,6 +181,24 @@ TEST(SinkCatalog, MangledOperatorNewAndDelete) {
   EXPECT_EQ(C.matchSink("??2@YAPEAX_K@Z.trailing"), nullptr);
 }
 
+TEST(SinkCatalog, ItaniumAlignedOperatorNewAndDelete) {
+  SinkCatalog C = SinkCatalog::defaults();
+  for (const char *Name : {"_ZnwmSt11align_val_t", "_ZnwjSt11align_val_t",
+                           "_ZnamSt11align_val_t", "_ZnajSt11align_val_t"}) {
+    SCOPED_TRACE(Name);
+    const SinkEntry *Entry = C.matchSink(Name);
+    ASSERT_NE(Entry, nullptr);
+    EXPECT_EQ(Entry->Kind, SinkKind::Alloc);
+  }
+  for (const char *Name : {"_ZdlPvSt11align_val_t", "_ZdlPvmSt11align_val_t",
+                           "_ZdaPvSt11align_val_t", "_ZdaPvmSt11align_val_t"}) {
+    SCOPED_TRACE(Name);
+    const SinkEntry *Entry = C.matchSink(Name);
+    ASSERT_NE(Entry, nullptr);
+    EXPECT_EQ(Entry->Kind, SinkKind::Free);
+  }
+}
+
 TEST(SinkCatalog, DefaultSourcesCoverPosixAndWin32) {
   SinkCatalog C = SinkCatalog::defaults();
   EXPECT_NE(C.matchSource("getenv"), nullptr);
