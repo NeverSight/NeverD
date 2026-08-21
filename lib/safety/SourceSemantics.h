@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -30,15 +31,22 @@ enum class FormattedSourceKind : uint8_t {
   DerivedInput,
 };
 
+struct BoundedTextOutput {
+  int ArgIndex = -1;
+  uint64_t MaxChars = 0;
+};
+
 struct FormattedSourceOutputs {
   FormattedSourceKind Kind = FormattedSourceKind::ExternalInput;
   int InputArg = -1;
   std::vector<int> UnboundedTextArgs;
+  std::vector<BoundedTextOutput> BoundedTextArgs;
   std::vector<int> ScalarArgs;
 };
 
 struct ParsedScanfOutputs {
   std::vector<int> UnboundedTextArgs;
+  std::vector<BoundedTextOutput> BoundedTextArgs;
   std::vector<int> ScalarArgs;
 };
 
@@ -112,11 +120,16 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
     }
 
     bool HasWidth = false;
+    uint64_t Width = 0;
     while (I < Format.size() && isDigit(Format[I])) {
       HasWidth = true;
+      const uint64_t Digit = static_cast<uint64_t>(Format[I] - '0');
+      if (Width > (std::numeric_limits<uint64_t>::max() - Digit) / 10)
+        return std::nullopt;
+      Width = Width * 10 + Digit;
       ++I;
     }
-    if (I >= Format.size() || Format[I] == 'm')
+    if (I >= Format.size() || Format[I] == 'm' || (HasWidth && Width == 0))
       return std::nullopt;
 
     bool HasLength = false;
@@ -154,7 +167,11 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
       return std::nullopt;
     if ((Conversion == 's' || IsScanSet) && !HasWidth && !HasLength)
       Outputs.UnboundedTextArgs.push_back(NextArg);
-    else if (Conversion != 's' && Conversion != 'n' && !IsScanSet)
+    else if ((Conversion == 's' || IsScanSet) && HasWidth && !HasLength) {
+      if (Width == std::numeric_limits<uint64_t>::max())
+        return std::nullopt;
+      Outputs.BoundedTextArgs.push_back({NextArg, Width});
+    } else if (Conversion != 's' && Conversion != 'n' && !IsScanSet)
       Outputs.ScalarArgs.push_back(NextArg);
     ++NextArg;
   }
@@ -184,6 +201,7 @@ recoverFormattedSourceOutputs(const BinaryImage *Img,
   Result.Kind = Source->second;
   Result.InputArg = Result.Kind == FormattedSourceKind::DerivedInput ? 0 : -1;
   Result.UnboundedTextArgs = std::move(Outputs->UnboundedTextArgs);
+  Result.BoundedTextArgs = std::move(Outputs->BoundedTextArgs);
   Result.ScalarArgs = std::move(Outputs->ScalarArgs);
   return Result;
 }

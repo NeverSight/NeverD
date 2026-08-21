@@ -624,6 +624,89 @@ LowFunc fgetsThenStrcpyLow(va_t FgetsVA, va_t StrcpyVA, bool RequireSuccess) {
   return LF;
 }
 
+LowFunc scanfThenStrcpyLow(va_t ScanfVA, va_t StrcpyVA) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kFlag = 200;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = StrcpyVA;
+  Entry.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9100, 8)}, ScanfVA));
+  Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+                          {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
+                          ScanfVA + 1));
+  Entry.Ops.push_back(lop(NdOp::INT_SLESS, NdVar::reg(kFlag, 1),
+                          {NdVar::cst(0, 4), NdVar::reg(kRax, 4)},
+                          ScanfVA + 2));
+  Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(StrcpyVA, 8), NdVar::reg(kFlag, 1)},
+                          ScanfVA + 3));
+  Entry.Succs = {1, 2};
+  Sink.Id = 1;
+  Sink.StartAddr = StrcpyVA;
+  Sink.EndAddr = StrcpyVA + 8;
+  Sink.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, StrcpyVA));
+  Sink.Succs = {2};
+  Sink.Preds = {0};
+  Exit.Id = 2;
+  Exit.StartAddr = StrcpyVA + 8;
+  Exit.EndAddr = StrcpyVA + 16;
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  Exit.Preds = {0, 1};
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
+LowFunc twoScanfThenStrcpyLow(va_t FirstScanfVA, va_t SecondScanfVA,
+                              va_t StrcpyVA) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kFlag = 200;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = StrcpyVA;
+  Entry.Ops.push_back(lop(NdOp::CALL, NdVar::reg(kRax, 8),
+                          {NdVar::cst(0x9100, 8)}, FirstScanfVA));
+  Entry.Ops.push_back(lop(NdOp::CALL, NdVar::reg(kRax, 8),
+                          {NdVar::cst(0x9100, 8)}, SecondScanfVA));
+  Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+                          {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
+                          SecondScanfVA + 1));
+  Entry.Ops.push_back(lop(NdOp::INT_SLESS, NdVar::reg(kFlag, 1),
+                          {NdVar::cst(0, 4), NdVar::reg(kRax, 4)},
+                          SecondScanfVA + 2));
+  Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(StrcpyVA, 8), NdVar::reg(kFlag, 1)},
+                          SecondScanfVA + 3));
+  Entry.Succs = {1, 2};
+  Sink.Id = 1;
+  Sink.StartAddr = StrcpyVA;
+  Sink.EndAddr = StrcpyVA + 8;
+  Sink.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, StrcpyVA));
+  Sink.Succs = {2};
+  Sink.Preds = {0};
+  Exit.Id = 2;
+  Exit.StartAddr = StrcpyVA + 8;
+  Exit.EndAddr = StrcpyVA + 16;
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  Exit.Preds = {0, 1};
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
 LowFunc readThenTerminateStrcpyLow(va_t ReadVA, va_t StrcpyVA, va_t SourceVA) {
   constexpr va_t kEntry = 0x400000;
   LowFunc LF;
@@ -1428,6 +1511,88 @@ TEST(HuntEngine, ReachableUnboundedScanfOutputIsUnsafe) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
   EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, GuardedBoundedScanfStringFitsImplicitCopy) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%7s");
+  const MedVar SourceBuffer = mkReg(24, 0);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("scanf", temp(5, 4), {MedVar::makeConst(FormatVA, 8), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = scanfThenStrcpyLow(SourceVA, SinkVA);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, GuardedBoundedScanfStringCanOverflowSmallerDestination) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%7s");
+  const MedVar SourceBuffer = mkReg(24, 0);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(7, 8)});
+  B.call("scanf", temp(5, 4), {MedVar::makeConst(FormatVA, 8), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = scanfThenStrcpyLow(SourceVA, SinkVA);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  EXPECT_TRUE(std::any_of(
+      Fnd->Witness.begin(), Fnd->Witness.end(), [](const auto &Item) {
+        return Item.first == "copy_length" && Item.second == "8";
+      }));
+}
+
+TEST(HuntEngine, LaterUnboundedScanfInvalidatesEarlierStringBound) {
+  constexpr va_t FirstSourceVA = 0x400004;
+  constexpr va_t SecondSourceVA = 0x400008;
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  const va_t BoundedFormatVA = addCString(Img, "%7s", 0x1000);
+  const va_t UnboundedFormatVA = addCString(Img, "%s", 0x1100);
+  const MedVar SourceBuffer = mkReg(24, 0);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("scanf", temp(5, 4),
+         {MedVar::makeConst(BoundedFormatVA, 8), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = FirstSourceVA;
+  B.call("scanf", temp(6, 4),
+         {MedVar::makeConst(UnboundedFormatVA, 8), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SecondSourceVA;
+  B.call("strcpy", temp(0), {temp(1), SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = twoScanfThenStrcpyLow(FirstSourceVA, SecondSourceVA, SinkVA);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
 }
 
 TEST(HuntEngine, ScanfNumericOutputCanDriveReachableOverflow) {

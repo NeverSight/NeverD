@@ -391,6 +391,10 @@ private:
         addIndexedSourceOutput(I, ArgIndex, Name);
       for (int ArgIndex : Outputs->UnboundedTextArgs)
         addIndexedPointeeOutput(I, ArgIndex, Name);
+      for (const detail::BoundedTextOutput &Output : Outputs->BoundedTextArgs) {
+        addIndexedSourceOutput(I, Output.ArgIndex, Name);
+        addIndexedPointeeOutput(I, Output.ArgIndex, Name);
+      }
       for (int ArgIndex : Outputs->ScalarArgs)
         addIndexedPointeeOutput(I, ArgIndex, Name);
     }
@@ -413,6 +417,11 @@ private:
         for (int ArgIndex : Outputs->UnboundedTextArgs) {
           Changed |= addIndexedSourceOutput(I, ArgIndex, Name);
           Changed |= addIndexedPointeeOutput(I, ArgIndex, Name);
+        }
+        for (const detail::BoundedTextOutput &Output :
+             Outputs->BoundedTextArgs) {
+          Changed |= addIndexedSourceOutput(I, Output.ArgIndex, Name);
+          Changed |= addIndexedPointeeOutput(I, Output.ArgIndex, Name);
         }
         for (int ArgIndex : Outputs->ScalarArgs)
           Changed |= addIndexedPointeeOutput(I, ArgIndex, Name);

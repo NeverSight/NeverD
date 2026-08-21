@@ -576,7 +576,7 @@ TEST(ArgSlicer, ScanfSuppressedConversionConsumesNoOutputArgument) {
   EXPECT_TRUE(Excess.TaintSource.empty());
 }
 
-TEST(ArgSlicer, BoundedScanfStringDoesNotClaimUnboundedTaint) {
+TEST(ArgSlicer, BoundedScanfStringRemainsAttackerControlled) {
   BinaryImage Img;
   const va_t FormatVA = addCString(Img, "%7s");
   AnalysisInput In;
@@ -588,8 +588,8 @@ TEST(ArgSlicer, BoundedScanfStringDoesNotClaimUnboundedTaint) {
   size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
 
   ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
-  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
-  EXPECT_TRUE(C.TaintSource.empty());
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(C.TaintSource, "scanf");
 }
 
 TEST(ArgSlicer, ScanfReturnIsNotBufferContent) {

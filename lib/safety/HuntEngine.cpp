@@ -583,6 +583,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     std::string Name;
     SymRef Buffer;
     SymRef Success;
+    SymRef ImplicitLen;
+    bool ImplicitLenIncludesTerminator = false;
   };
 
   struct Frontier {
@@ -688,20 +690,32 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           SymRef SinkSource =
               CI ? readCallArgument(In, Fn, E.SrcArg, *CI, Cur.State)
                  : SymRef();
-          if (!RequiredSource.empty()) {
-            for (const SourceEvent &Event : Cur.SourceEvents) {
-              if (Event.Name != RequiredSource)
-                continue;
-              if ((expressionsMustEqual(Ctx, Event.Buffer, SinkSource,
-                                        Cur.Constraints, Budgets) ||
-                   valuesShareUniqueLoadOrigin(Cur.State, Event.Buffer,
-                                               SinkSource)) &&
-                  predicateMayHold(Ctx, Event.Success, Cur.Constraints,
-                                   Budgets)) {
-                Best.SourceEvidence = true;
-                break;
-              }
+          SymRef EventImplicitLen;
+          SymRef EventImplicitSuccess;
+          bool EventLenIncludesTerminator = false;
+          bool EventLenConflict = false;
+          for (const SourceEvent &Event : Cur.SourceEvents) {
+            const bool SameSource =
+                expressionsMustEqual(Ctx, Event.Buffer, SinkSource,
+                                     Cur.Constraints, Budgets) ||
+                valuesShareUniqueLoadOrigin(Cur.State, Event.Buffer,
+                                            SinkSource);
+            if (!SameSource ||
+                !predicateMayHold(Ctx, Event.Success, Cur.Constraints, Budgets))
+              continue;
+            if (!RequiredSource.empty() && Event.Name == RequiredSource)
+              Best.SourceEvidence = true;
+            if (!Event.ImplicitLen.isValid())
+              continue;
+            if (EventImplicitLen.isValid() &&
+                !expressionsMustEqual(Ctx, EventImplicitLen, Event.ImplicitLen,
+                                      Cur.Constraints, Budgets)) {
+              EventLenConflict = true;
+              continue;
             }
+            EventImplicitLen = Event.ImplicitLen;
+            EventImplicitSuccess = Event.Success;
+            EventLenIncludesTerminator = Event.ImplicitLenIncludesTerminator;
           }
           const bool SameImplicitSource =
               expressionsMustEqual(Ctx, Cur.ImplicitSource, SinkSource,
@@ -710,8 +724,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                valuesShareUniqueLoadOrigin(Cur.State, Cur.ImplicitSource,
                                            SinkSource));
           bool ConditionalBoundNotProven = false;
-          if (!Len.isValid() && Cur.ImplicitLen.isValid() &&
-              SameImplicitSource) {
+          if (!Len.isValid() && EventImplicitLen.isValid() &&
+              !EventLenConflict) {
+            Len = Ctx.mkZExtOrTrunc(EventImplicitLen, 64);
+            if (Implicit && !EventLenIncludesTerminator)
+              Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
+            ConditionalBoundNotProven = !predicateMustHold(
+                Ctx, EventImplicitSuccess, Cur.Constraints, Budgets);
+          } else if (!Len.isValid() && Cur.ImplicitLen.isValid() &&
+                     SameImplicitSource) {
             Len = Ctx.mkZExtOrTrunc(Cur.ImplicitLen, 64);
             if (Implicit && !Cur.ImplicitLenIncludesTerminator)
               Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
@@ -800,6 +821,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               if (Output.isValid())
                 NewSourceEvents.push_back(
                     {SinkCatalog::normalize(CalleeName), Output, SymRef()});
+            }
+            for (const safety::detail::BoundedTextOutput &Bounded :
+                 Outputs->BoundedTextArgs) {
+              SymRef Output = readCallArgument(In, Fn, Bounded.ArgIndex,
+                                               *Callee, Cur.State);
+              if (Output.isValid())
+                NewSourceEvents.push_back(
+                    {SinkCatalog::normalize(CalleeName), Output, SymRef(),
+                     Ctx.mkConst(64, Bounded.MaxChars + 1), true});
             }
           }
         SymRef ReturnBound;
@@ -992,10 +1022,20 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                  Ctx.mkNe(Ret, Ctx.mkZero(Ctx.width(Ret)))});
           }
         }
-        if (IsCall)
+        if (IsCall) {
+          for (const SourceEvent &NewEvent : NewSourceEvents)
+            Cur.SourceEvents.erase(
+                std::remove_if(Cur.SourceEvents.begin(), Cur.SourceEvents.end(),
+                               [&](const SourceEvent &OldEvent) {
+                                 return expressionsMustEqual(
+                                     Ctx, OldEvent.Buffer, NewEvent.Buffer,
+                                     Cur.Constraints, Budgets);
+                               }),
+                Cur.SourceEvents.end());
           Cur.SourceEvents.insert(Cur.SourceEvents.end(),
                                   NewSourceEvents.begin(),
                                   NewSourceEvents.end());
+        }
         if (IsCall) {
           if (CaptureLength) {
             Cur.ImplicitLen = captureReturn(Op, Cur.State, In);
