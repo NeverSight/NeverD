@@ -149,6 +149,9 @@ public:
       return R;
     }
 
+    if (std::optional<DestObject> Global = globalObject(Dst))
+      return *Global;
+
     return R; // unknown destination -> capacity stays unset.
   }
 
@@ -158,6 +161,76 @@ private:
   const MedFunc &F;
   DefIndex Defs;
   llvm::DenseSet<ValueKey> Active;
+
+  std::optional<DestObject> globalObject(const MedVar &V) const {
+    if (!In.Img)
+      return std::nullopt;
+    llvm::DenseSet<ValueKey> Seen;
+    std::optional<uint64_t> Address = constantValue(V, 0, Seen);
+    if (!Address)
+      return std::nullopt;
+    const bool IsOwnedZero = *Address == 0 && V.isConst() &&
+                             isDataAddressProvenance(V.Provenance) &&
+                             V.AddressOwnerVA != InvalidVA;
+    if (*Address == 0 && !IsOwnedZero)
+      return std::nullopt;
+
+    const Segment *Seg = In.Img->getSegmentFor(*Address);
+    if (!Seg || !Seg->isWritable() || Seg->Size > InvalidVA - Seg->VA)
+      return std::nullopt;
+    if (IsOwnedZero) {
+      const Segment *OwnerSeg = In.Img->getSegmentFor(V.AddressOwnerVA);
+      const Section *TargetSec = In.Img->getSectionFor(*Address);
+      const Section *OwnerSec = In.Img->getSectionFor(V.AddressOwnerVA);
+      if (OwnerSeg != Seg || ((TargetSec || OwnerSec) && TargetSec != OwnerSec))
+        return std::nullopt;
+    }
+    const uint64_t SegmentEnd = Seg->VA + Seg->Size;
+    uint64_t OwnerBegin = Seg->VA;
+    uint64_t OwnerEnd = SegmentEnd;
+    if (const Section *Sec = In.Img->getSectionFor(*Address)) {
+      if (!Sec->isWritable() || Sec->Size == 0 ||
+          Sec->Size > InvalidVA - Sec->VA)
+        return std::nullopt;
+      OwnerBegin = Sec->VA;
+      OwnerEnd = std::min<uint64_t>(OwnerEnd, Sec->VA + Sec->Size);
+    } else if (In.Img->segmentHasReadableSectionMetadata(*Seg)) {
+      return std::nullopt;
+    }
+
+    std::optional<uint64_t> ExactCapacity;
+    bool ConflictingSymbols = false;
+    for (const Symbol &Sym : In.Img->Symbols) {
+      if (Sym.IsFunc || Sym.Size == 0 || Sym.Addr < OwnerBegin ||
+          Sym.Addr > *Address || Sym.Size > InvalidVA - Sym.Addr)
+        continue;
+      const uint64_t SymbolEnd = Sym.Addr + Sym.Size;
+      if (*Address >= SymbolEnd || SymbolEnd > OwnerEnd)
+        continue;
+      const uint64_t Capacity = SymbolEnd - *Address;
+      if (ExactCapacity && *ExactCapacity != Capacity) {
+        ConflictingSymbols = true;
+        break;
+      }
+      ExactCapacity = Capacity;
+    }
+
+    DestObject Result;
+    Result.Region = ObjectRegion::Global;
+    if (ExactCapacity && !ConflictingSymbols) {
+      Result.Capacity = *ExactCapacity;
+      Result.CapacityExact = true;
+      Result.Detail = "sized data symbol";
+      return Result;
+    }
+
+    if (*Address > OwnerEnd)
+      return std::nullopt;
+    Result.Capacity = OwnerEnd - *Address;
+    Result.CapacityExact = false;
+    Result.Detail = "mapped global bound";
+    return Result;
+  }
 
   const MedOp *defOp(const MedVar &V, int &BlkOut, int &OpOut) const {
     auto It = Defs.OpDef.find(keyOf(V));

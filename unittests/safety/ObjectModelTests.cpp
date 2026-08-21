@@ -12,6 +12,7 @@
 #include "neverd/safety/ObjectModel.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
 using namespace neverd;
@@ -96,6 +97,184 @@ TEST(ObjectModel, HeapAllocationExactSize) {
   ASSERT_TRUE(D.Capacity.has_value());
   EXPECT_EQ(*D.Capacity, 16u);
   EXPECT_TRUE(D.CapacityExact);
+}
+
+TEST(ObjectModel, SizedGlobalSymbolHasExactRemainingCapacityAcrossFormats) {
+  constexpr std::array<std::pair<BinaryFormat, Arch>, 6> Targets = {{
+      {BinaryFormat::ELF, Arch::X64},
+      {BinaryFormat::ELF, Arch::AArch64},
+      {BinaryFormat::COFF, Arch::X64},
+      {BinaryFormat::COFF, Arch::AArch64},
+      {BinaryFormat::MachO, Arch::X64},
+      {BinaryFormat::MachO, Arch::AArch64},
+  }};
+  for (const auto &[Format, A] : Targets) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Format = Format;
+    Segment Data;
+    Data.Name = "data";
+    Data.VA = 0x1000;
+    Data.Size = 0x40;
+    Data.FileSz = 0x40;
+    Data.Data.resize(0x40);
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Img.Segments.push_back(std::move(Data));
+    Img.Symbols.push_back(Symbol{"buffer", 0x1010, 16, false});
+
+    AnalysisInput In;
+    In.Img = &Img;
+    MedFunc F = newFunc(A);
+    push(F, NdOp::COPY, temp(1),
+         {MedVar::makeConst(0x1014, 8, ConstantAddressProvenance::DataAddress,
+                            0x1000)});
+    size_t Sink = pushCall(F, "memcpy", temp(0),
+                           {temp(1), temp(2), MedVar::makeConst(8, 8)});
+
+    DestObject D = resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_EQ(D.Region, ObjectRegion::Global);
+    ASSERT_TRUE(D.Capacity.has_value());
+    EXPECT_EQ(*D.Capacity, 12u);
+    EXPECT_TRUE(D.CapacityExact);
+  }
+}
+
+TEST(ObjectModel, WritableGlobalRunIsOnlyACapacityUpperBound) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = 0x2000;
+  Data.Size = 0x40;
+  Data.FileSz = 0x40;
+  Data.Data.resize(0x40);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc(Arch::X64);
+  size_t Sink =
+      pushCall(F, "memcpy", temp(0),
+               {MedVar::makeConst(
+                    0x2010, 8, ConstantAddressProvenance::DataAddress, 0x2000),
+                temp(2), MedVar::makeConst(8, 8)});
+
+  DestObject D = resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Global);
+  ASSERT_TRUE(D.Capacity.has_value());
+  EXPECT_EQ(*D.Capacity, 0x30u);
+  EXPECT_FALSE(D.CapacityExact);
+}
+
+TEST(ObjectModel, OnlyExactDataOccurrenceCanNameZeroVAGlobal) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = 0;
+  Data.Size = 0x20;
+  Data.FileSz = 0x20;
+  Data.Data.resize(0x20);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Segment Foreign;
+  Foreign.Name = "foreign";
+  Foreign.VA = 0x1000;
+  Foreign.Size = 0x20;
+  Foreign.FileSz = 0x20;
+  Foreign.Data.resize(0x20);
+  Foreign.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Foreign));
+  Img.Symbols.push_back(Symbol{"zero_buffer", 0, 16, false});
+
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc(Arch::X64);
+  size_t NullSink =
+      pushCall(F, "memcpy", temp(0),
+               {MedVar::makeConst(0, 8), temp(2), MedVar::makeConst(8, 8)});
+  size_t GlobalSink = pushCall(
+      F, "memcpy", temp(0),
+      {MedVar::makeConst(0, 8, ConstantAddressProvenance::DataAddress, 0),
+       temp(2), MedVar::makeConst(8, 8)});
+  size_t WrongOwnerSink = pushCall(
+      F, "memcpy", temp(0),
+      {MedVar::makeConst(0, 8, ConstantAddressProvenance::DataAddress, 0x1000),
+       temp(2), MedVar::makeConst(8, 8)});
+
+  DestObject Null =
+      resolveDestination(In, SinkCatalog::defaults(), F, NullSink, 0);
+  EXPECT_FALSE(Null.Capacity.has_value());
+  DestObject Global =
+      resolveDestination(In, SinkCatalog::defaults(), F, GlobalSink, 0);
+  EXPECT_EQ(Global.Region, ObjectRegion::Global);
+  ASSERT_TRUE(Global.Capacity.has_value());
+  EXPECT_EQ(*Global.Capacity, 16u);
+  EXPECT_TRUE(Global.CapacityExact);
+  EXPECT_FALSE(
+      resolveDestination(In, SinkCatalog::defaults(), F, WrongOwnerSink, 0)
+          .Capacity.has_value());
+}
+
+TEST(ObjectModel, GlobalCapacityUsesWritableSectionOwnership) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Segment Mapping;
+  Mapping.Name = "rw";
+  Mapping.VA = 0x3000;
+  Mapping.Size = 0x80;
+  Mapping.FileSz = 0x80;
+  Mapping.Data.resize(0x80);
+  Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Mapping));
+
+  Section ReadOnly;
+  ReadOnly.Name = "const";
+  ReadOnly.VA = 0x3000;
+  ReadOnly.Size = 0x20;
+  ReadOnly.Flags = SegmentFlags::Readable;
+  Img.Sections.push_back(std::move(ReadOnly));
+  Section Writable;
+  Writable.Name = "data";
+  Writable.VA = 0x3020;
+  Writable.Size = 0x10;
+  Writable.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Sections.push_back(std::move(Writable));
+  Img.Symbols.push_back(Symbol{"const_object", 0x3000, 16, false});
+  Img.Symbols.push_back(Symbol{"oversized_object", 0x3028, 16, false});
+
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc(Arch::X64);
+  size_t ReadOnlySink =
+      pushCall(F, "memcpy", temp(0),
+               {MedVar::makeConst(
+                    0x3000, 8, ConstantAddressProvenance::DataAddress, 0x3000),
+                temp(2), MedVar::makeConst(4, 8)});
+  size_t WritableSink =
+      pushCall(F, "memcpy", temp(0),
+               {MedVar::makeConst(
+                    0x3028, 8, ConstantAddressProvenance::DataAddress, 0x3020),
+                temp(2), MedVar::makeConst(4, 8)});
+  size_t GapSink =
+      pushCall(F, "memcpy", temp(0),
+               {MedVar::makeConst(
+                    0x3040, 8, ConstantAddressProvenance::DataAddress, 0x3000),
+                temp(2), MedVar::makeConst(4, 8)});
+
+  EXPECT_FALSE(
+      resolveDestination(In, SinkCatalog::defaults(), F, ReadOnlySink, 0)
+          .Capacity.has_value());
+  DestObject InWritable =
+      resolveDestination(In, SinkCatalog::defaults(), F, WritableSink, 0);
+  ASSERT_TRUE(InWritable.Capacity.has_value());
+  EXPECT_EQ(*InWritable.Capacity, 8u);
+  EXPECT_FALSE(InWritable.CapacityExact);
+  EXPECT_FALSE(resolveDestination(In, SinkCatalog::defaults(), F, GapSink, 0)
+                   .Capacity.has_value());
 }
 
 TEST(ObjectModel, HeapAllocationSurvivesStackSpillReload) {

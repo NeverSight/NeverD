@@ -110,9 +110,10 @@ fields are rejected transactionally.
 ## Hunt: copy-overflow verdicts
 
 For each copy sink the hunt resolves the destination capacity — a debug-declared
-array size, then a heap allocation site with a known size, then a sound
-stack-frame bound — and classifies the argument that decides the write length by
-a backward SSA walk (following spill/reload through stack slots):
+array size, a heap allocation site with a known size, a sized writable global
+symbol, or a sound stack/section/segment upper bound — and classifies the
+argument that decides the write length by a backward SSA walk (following
+spill/reload through stack slots):
 
 - **Constant length** within an exact capacity is SAFE. A constant overflow is
   UNSAFE only when the sink is reachable on a corroborated path; otherwise it

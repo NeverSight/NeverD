@@ -589,6 +589,62 @@ TEST(HuntEngine, CustomSourceSinkIsNotImplicitlyUnbounded) {
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, ConstantCopyFitsSizedGlobalDestination) {
+  BinaryImage Img;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = 0x5000;
+  Data.Size = 0x20;
+  Data.FileSz = 0x20;
+  Data.Data.resize(0x20);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.Symbols.push_back(Symbol{"buffer", 0x5000, 8, false});
+
+  Builder B("main");
+  B.call("memcpy", temp(0),
+         {MedVar::makeConst(0x5000, 8, ConstantAddressProvenance::DataAddress,
+                            0x5000),
+          param(2), MedVar::makeConst(8, 8)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->Capacity, 8u);
+  EXPECT_TRUE(Fnd->CapacityExact);
+}
+
+TEST(HuntEngine, ConstantCopyExceedsSizedGlobalOnReachablePath) {
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = 0x5000;
+  Data.Size = 0x20;
+  Data.FileSz = 0x20;
+  Data.Data.resize(0x20);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.Symbols.push_back(Symbol{"buffer", 0x5000, 8, false});
+
+  Builder B("main");
+  B.call("memcpy", temp(0),
+         {MedVar::makeConst(0x5000, 8, ConstantAddressProvenance::DataAddress,
+                            0x5000),
+          param(2), MedVar::makeConst(9, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = reachableSinkLow(SinkVA);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->Capacity, 8u);
+  EXPECT_TRUE(Fnd->CapacityExact);
+  EXPECT_FALSE(Fnd->Witness.empty());
+}
+
 TEST(HuntEngine, TaintedStrcpyWithoutReachabilityIsUnknown) {
   Builder B("main");
   B.op(NdOp::INT_SUB, mkReg(kSP, 1),
