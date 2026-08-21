@@ -1558,6 +1558,18 @@ private:
           return *Count == 0 ? CallUse::None : CallUse::Definite;
         return CallUse::Possible;
       case SinkKind::Format:
+        if (E->LenArg >= 0 && E->LenArg < static_cast<int>(CI.Args.size()) &&
+            E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size()))
+          if (std::optional<uint64_t> Limit =
+                  unsignedConstant(CI.Args[E->LenArg]);
+              Limit)
+            if (std::optional<uint64_t> Capacity =
+                    unsignedConstant(CI.Args[E->CapArg]);
+                Capacity && detail::fortifiedCountedAccessIsRejected(
+                                callName(CI),
+                                In.Img ? In.Img->Format : BinaryFormat::Unknown,
+                                *Limit, *Capacity))
+              return CallUse::None;
         if (ArgIndex == E->FmtArg)
           return CallUse::Definite;
         if (ArgIndex == E->DstArg) {

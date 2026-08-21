@@ -98,7 +98,8 @@ inline bool fortifiedCountedAccessIsRejected(llvm::StringRef Name,
                                              BinaryFormat Format,
                                              uint64_t Count,
                                              uint64_t ObjectCapacity) {
-  if (SinkCatalog::normalize(Name) == "strncpy_chk")
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  if (Normalized == "strncpy_chk" || Normalized == "snprintf_chk")
     return Count > ObjectCapacity;
   std::optional<uint64_t> Bytes = exactCountedMemoryBytes(Name, Format, Count);
   return Bytes && *Bytes > ObjectCapacity;
