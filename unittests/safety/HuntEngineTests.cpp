@@ -92,7 +92,7 @@ struct Builder {
   }
 };
 
-// Run the hunt over one function and return the copy finding, if any.
+// Run the hunt over one function and return its first finding, if any.
 std::optional<Finding> hunt(MedFunc &F, bool StackRegs = false,
                             LowFunc *LF = nullptr, Arch A = Arch::Unknown,
                             const SafetyBudgets &Budgets = {},
@@ -116,9 +116,8 @@ std::optional<Finding> hunt(MedFunc &F, bool StackRegs = false,
   In.StackPointerReg = kSP;
   SinkCatalog Cat = SinkCatalog::defaults();
   for (const SinkSite &S : scanSinks(In, Cat))
-    if (S.Kind == SinkKind::Copy)
-      if (auto Fnd = huntSink(In, Cat, Budgets, Funcs[0], S))
-        return Fnd;
+    if (auto Fnd = huntSink(In, Cat, Budgets, Funcs[0], S))
+      return Fnd;
   return std::nullopt;
 }
 
@@ -572,6 +571,86 @@ TEST(HuntEngine, TaintedStrcpyWithoutReachabilityIsUnknown) {
 
   auto Fnd = hunt(B.F, /*StackRegs=*/true);
   ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, ConstantFormatStringIsSafe) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  Builder B("main");
+  B.call("printf", temp(0), {MedVar::makeConst(FormatVA, 8)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::FormatString);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Fnd->SkipReason.empty());
+}
+
+TEST(HuntEngine, ReachableTaintedFormatStringIsUnsafe) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), SourceBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = sourceReturnThenMemcpyLow(SourceVA, SinkVA,
+                                         /*RequireNonnegative=*/false);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::FormatString);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, WritableConstantAddressDoesNotHideTaintedFormatString) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  Img.Segments.back().Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  const MedVar FormatBuffer = MedVar::makeConst(
+      FormatVA, 8, ConstantAddressProvenance::DataAddress, FormatVA);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), FormatBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {FormatBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = sourceReturnThenMemcpyLow(SourceVA, SinkVA,
+                                         /*RequireNonnegative=*/false);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::FormatString);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, TaintedFormatWithoutPathEvidenceIsUnknown) {
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), SourceBuffer, MedVar::makeConst(32, 8)});
+  B.call("printf", temp(0), {SourceBuffer});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::FormatString);
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
   EXPECT_TRUE(Fnd->Witness.empty());

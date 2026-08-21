@@ -41,7 +41,7 @@ namespace {
 void stampSite(Finding &F, const AnalysisInput &In, const MedFunc &Fn,
                const SinkSite &Site) {
   F.Origin = Track::Hunt;
-  F.Class = VulnClass::BufferOverflow;
+  F.Class = Site.Class;
   F.Function = Fn.Name;
   F.FuncEntry = Site.FuncEntry;
   F.Name = Site.Sink;
@@ -914,7 +914,84 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
                                                 const MedFunc &F,
                                                 const SinkSite &Site) {
   const SinkEntry *E = Cat.matchSink(Site.Sink);
-  if (!E || E->Kind != SinkKind::Copy)
+  if (!E)
+    return std::nullopt;
+
+  if (E->Kind == SinkKind::Format) {
+    Finding Out;
+    stampSite(Out, In, F, Site);
+    if (Site.CallInfoIndex >= F.CallInfos.size() || E->FmtArg < 0 ||
+        E->FmtArg >=
+            static_cast<int>(F.CallInfos[Site.CallInfoIndex].Args.size())) {
+      Out.TheVerdict = Verdict::Unknown;
+      Out.TheConfidence = Confidence::Low;
+      Out.Detail = "format-string argument was not recovered";
+      return Out;
+    }
+
+    const MedVar &FormatArg = F.CallInfos[Site.CallInfoIndex].Args[E->FmtArg];
+    ArgClassification Arg =
+        classifyArgument(In, Cat, F, Site.CallInfoIndex, E->FmtArg);
+    Out.Flow = Arg.Flow;
+    const Segment *FormatSegment =
+        In.Img && FormatArg.isConst()
+            ? In.Img->getSegmentFor(FormatArg.ConstVal)
+            : nullptr;
+    if (Arg.Flow != ArgFlow::Tainted && FormatSegment &&
+        !FormatSegment->isWritable() &&
+        safety::detail::readMappedCString(In.Img, FormatArg)) {
+      Out.TheVerdict = Verdict::Safe;
+      Out.TheConfidence = Confidence::High;
+      Out.SkipReason = "constant format string";
+      Out.Detail = "format string is a mapped constant";
+      return Out;
+    }
+
+    if (Arg.Flow != ArgFlow::Tainted) {
+      Out.TheVerdict = Verdict::Unknown;
+      Out.TheConfidence = Confidence::Low;
+      Out.Detail = "format-string provenance unresolved";
+      return Out;
+    }
+
+    const std::string Source = SinkCatalog::normalize(Arg.TaintSource);
+    const bool EntrySource = Source == "argv";
+    SinkEntry Probe = *E;
+    Probe.LenArg = -1;
+    Probe.SrcArg = E->FmtArg;
+    Probe.CapArg = -1;
+    ExploreHit Hit = exploreSink(In, Cat, F, Site, Probe, UINT64_MAX, Budgets,
+                                 EntrySource ? llvm::StringRef() : Source);
+    if (Hit.Reached && !Hit.Budget && !Hit.SolverUnknown &&
+        !Hit.SemanticUnknown && (EntrySource || Hit.SourceEvidence)) {
+      Out.TheVerdict = Verdict::Unsafe;
+      Out.TheConfidence = Confidence::High;
+      Out.Detail =
+          "attacker-controlled format string reaches a formatting call";
+      Out.Witness.push_back({"format_string", "%n"});
+      if (!Source.empty())
+        Out.Witness.push_back({"source", Source});
+      Out.Corroboration =
+          "source and formatting call occur on one feasible path";
+      return Out;
+    }
+
+    Out.TheVerdict = Verdict::Unknown;
+    Out.TheConfidence = Confidence::Low;
+    Out.BudgetHit = Hit.Budget || Hit.SolverUnknown;
+    if (Hit.Budget)
+      Out.Detail = "exploration budget exhausted";
+    else if (Hit.SemanticUnknown)
+      Out.Detail = "path contains an operation or call without a summary";
+    else if (Hit.SolverUnknown)
+      Out.Detail = "solver could not establish path feasibility";
+    else
+      Out.Detail =
+          "format-string source was not established on a reachable path";
+    return Out;
+  }
+
+  if (E->Kind != SinkKind::Copy)
     return std::nullopt;
 
   Finding Out;
