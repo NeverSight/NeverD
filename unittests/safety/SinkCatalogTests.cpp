@@ -120,6 +120,7 @@ TEST(SafetyVocab, JsonSpellingsComeFromTheEnumTable) {
   EXPECT_STREQ(toString(Verdict::Unsafe), "UNSAFE");
   EXPECT_STREQ(toString(SinkKind::Copy), "copy");
   EXPECT_STREQ(toString(VulnClass::HeapLeak), "heap_leak");
+  EXPECT_STREQ(toString(VulnClass::UninitializedRead), "uninitialized_read");
   EXPECT_STREQ(toString(NameSource::Import), "import");
   EXPECT_STREQ(toString(ArgFlow::Tainted), "TAINTED");
 }

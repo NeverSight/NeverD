@@ -20,6 +20,9 @@ namespace neverd::safety::detail {
 
 struct ReachingStackValues {
   bool Complete = false;
+  bool Reachable = false;
+  bool MayBeUninitialized = false;
+  bool HasUnknownWrites = false;
   std::vector<MedVar> Values;
 };
 
@@ -268,11 +271,14 @@ reachingStackValues(const MedFunc &F, int LoadBlockId, int LoadOpIdx,
 
   State AtLoad = transfer(*LoadIt->second, static_cast<size_t>(LoadOpIdx),
                           In[LoadBlockId]);
+  Result.Reachable = AtLoad.Reachable;
+  Result.MayBeUninitialized = AtLoad.Uninitialized;
+  Result.HasUnknownWrites = AtLoad.Invalid;
+  Result.Values = AtLoad.Values;
   if (!AtLoad.Reachable || AtLoad.Uninitialized || AtLoad.Invalid ||
       AtLoad.Values.empty())
     return Result;
   Result.Complete = true;
-  Result.Values = std::move(AtLoad.Values);
   return Result;
 }
 

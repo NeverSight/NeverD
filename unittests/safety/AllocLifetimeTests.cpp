@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/safety/AllocLifetime.h"
@@ -85,14 +86,17 @@ struct FB {
 
 std::vector<Finding> audit(std::vector<MedFunc> Funcs,
                            const BinaryImage *Image = nullptr,
-                           bool StackRegs = false) {
+                           bool StackRegs = false,
+                           bool IncludeStackReads = false) {
   static BinaryImage Img;
   AnalysisInput In;
   In.Img = Image ? Image : &Img;
   In.MedFuncs = &Funcs;
   In.StackRegsKnown = StackRegs;
   In.StackPointerReg = kSP;
-  return auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
+  return IncludeStackReads
+             ? auditMemory(In, SinkCatalog::defaults(), SafetyBudgets{})
+             : auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
 }
 
 bool has(const std::vector<Finding> &Fs, VulnClass C) {
@@ -278,6 +282,161 @@ TEST(AllocLifetime, OverwrittenSpillDoesNotRemainAHeapAlias) {
 
   auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true);
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, UninitializedLocalStackLoadIsReported) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::LOAD, temp(11), {temp(10)}, 0x408);
+  B.ret(b0, {temp(11)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->FuncEntry, 0x100u);
+  EXPECT_EQ(Read->CallVA, 0x408u);
+}
+
+TEST(AllocLifetime, InitializedLocalStackLoadIsClean) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(0x1234, 8)});
+  B.op(b0, NdOp::LOAD, temp(11), {temp(10)}, 0x408);
+  B.ret(b0, {temp(11)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
+}
+
+TEST(AllocLifetime, ConditionalStackInitializationFailsClosed) {
+  FB B("f", 0x100);
+  int entry = B.block();
+  int initialized = B.block();
+  int uninitialized = B.block();
+  int join = B.block();
+  B.op(entry, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(entry, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.succ(entry, initialized);
+  B.succ(entry, uninitialized);
+  B.op(initialized, NdOp::STORE, MedVar{},
+       {temp(10), MedVar::makeConst(0x1234, 8)});
+  B.succ(initialized, join);
+  B.succ(uninitialized, join);
+  B.op(join, NdOp::LOAD, temp(11), {temp(10)}, 0x420);
+  B.ret(join, {temp(11)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Read->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, PartialStackInitializationFailsClosed) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(0x1234, 4)});
+  B.op(b0, NdOp::LOAD, temp(11), {temp(10)}, 0x408);
+  B.ret(b0, {temp(11)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Read->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, EveryBranchInitializingStackSlotIsClean) {
+  FB B("f", 0x100);
+  int entry = B.block();
+  int left = B.block();
+  int right = B.block();
+  int join = B.block();
+  B.op(entry, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(entry, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.succ(entry, left);
+  B.succ(entry, right);
+  B.op(left, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(1, 8)});
+  B.op(right, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(2, 8)});
+  B.succ(left, join);
+  B.succ(right, join);
+  B.op(join, NdOp::LOAD, temp(11), {temp(10)}, 0x420);
+  B.ret(join, {temp(11)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
+}
+
+TEST(AllocLifetime, CallerStackArgumentIsNotTreatedAsUninitializedLocal) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 0), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::LOAD, temp(11), {temp(10)}, 0x408);
+  B.ret(b0, {temp(11)});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
+}
+
+TEST(AllocLifetime, ReachableUninitializedStackReadIsCorroborated) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::LOAD, temp(11), {temp(10)}, 0x408);
+  B.ret(b0, {temp(11)});
+
+  LowFunc LF;
+  LF.Entry = B.F.Entry;
+  LF.DecodedInstructionCount = 1;
+  LF.LiftedInstructionCount = 1;
+  LowBlock LB;
+  LB.Id = b0;
+  LB.StartAddr = B.F.Entry;
+  LB.EndAddr = B.F.Entry + 0x10;
+  LowOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = 0x410;
+  LB.Ops.push_back(Ret);
+  LF.Blocks.push_back(std::move(LB));
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::vector<MedFunc> MedFuncs{B.F};
+  std::vector<LowFunc> LowFuncs{std::move(LF)};
+  AnalysisInput In;
+  In.Img = &Img;
+  In.LowFuncs = &LowFuncs;
+  In.MedFuncs = &MedFuncs;
+  In.StackRegsKnown = true;
+  In.StackPointerReg = kSP;
+  auto Fs = auditMemory(In, SinkCatalog::defaults(), SafetyBudgets{});
+
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unsafe);
+  EXPECT_EQ(Read->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Read->Corroboration.empty());
 }
 
 TEST(AllocLifetime, WrapperAllocationLeakIsInterprocedural) {

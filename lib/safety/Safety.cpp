@@ -129,7 +129,7 @@ SafetyReport neverd::safety::runAudit(const AnalysisInput &In,
   for (const SinkSite &Site : scanSinks(In, Cat))
     if (Site.Kind == SinkKind::Alloc || Site.Kind == SinkKind::Realloc)
       ++R.Scanned;
-  R.Findings = auditHeap(In, Cat, Budgets);
+  R.Findings = auditMemory(In, Cat, Budgets);
   for (const Finding &F : R.Findings)
     if (F.BudgetHit)
       R.BudgetHit = true;

@@ -30,6 +30,12 @@ namespace neverd::safety {
 std::vector<Finding> auditHeap(const AnalysisInput &In, const SinkCatalog &Cat,
                                const SafetyBudgets &Budgets);
 
+/// Run the complete audit track, including heap lifetime and local stack
+/// initialization checks.
+std::vector<Finding> auditMemory(const AnalysisInput &In,
+                                 const SinkCatalog &Cat,
+                                 const SafetyBudgets &Budgets);
+
 } // namespace neverd::safety
 
 #endif // NEVERD_SAFETY_ALLOCLIFETIME_H

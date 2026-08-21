@@ -63,6 +63,7 @@ SAFETY_VULN_CLASS(CommandInjection, "command_injection")
 SAFETY_VULN_CLASS(HeapLeak, "heap_leak")
 SAFETY_VULN_CLASS(DoubleFree, "double_free")
 SAFETY_VULN_CLASS(UseAfterFree, "use_after_free")
+SAFETY_VULN_CLASS(UninitializedRead, "uninitialized_read")
 SAFETY_VULN_CLASS(Unknown, "unknown")
 
 //===----------------------------------------------------------------------===//

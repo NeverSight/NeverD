@@ -153,6 +153,18 @@ frame stores do not invalidate otherwise exact reachability evidence.
 
 ---
 
+## Audit: local stack initialization
+
+The audit also follows full-width stores reaching loads from local frame slots
+below the function-entry stack pointer. A load with no possible prior
+initialization is reported as `uninitialized_read`; LowIR path replay must
+confirm that the load is reachable before it becomes HIGH-confidence UNSAFE.
+Conditional initialization, partial writes, escaped slot addresses, and other
+uncertain definitions remain UNKNOWN. Caller-owned argument slots at or above
+the entry stack pointer are excluded from this check.
+
+---
+
 ## Budgets, output, and bindings
 
 Hunt exploration and the solver are bounded (`--max-paths`, `--max-steps`,
@@ -205,6 +217,7 @@ The same analyses are available through the C API
   prefilter, copy-overflow hunt, and the heap-lifetime audit. Mandatory
   checked-in fixtures cover PE, ELF, and Mach-O on both x86-64 and AArch64 on
   every test host.
-- **P1**: stack/global overflow, uninitialised reads, format strings, richer PDB
-  stack types, more platform allocators.
+- **P1**: local-stack uninitialised-read and format-string checks are available;
+  stack/global overflow, richer PDB stack types, and more platform allocators
+  remain incremental coverage areas.
 - **P2**: patch-inserted runtime checks, interprocedural attacker-reachability.

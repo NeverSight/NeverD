@@ -363,8 +363,9 @@ bool containsForbiddenAfter(const symbolic::SymPath &Path,
 class Auditor {
 public:
   Auditor(const AnalysisInput &In, const SinkCatalog &Cat,
-          const SafetyBudgets &Budgets)
-      : In(In), Cat(Cat), Budgets(Budgets) {
+          const SafetyBudgets &Budgets, bool IncludeStackReads)
+      : In(In), Cat(Cat), Budgets(Budgets),
+        IncludeStackReads(IncludeStackReads) {
     buildSummaries();
   }
 
@@ -386,6 +387,7 @@ private:
   const AnalysisInput &In;
   const SinkCatalog &Cat;
   const SafetyBudgets &Budgets;
+  bool IncludeStackReads = false;
   llvm::DenseMap<va_t, Summary> Summaries;
 
   std::string callName(const MedCallInfo &CI) const {
@@ -813,6 +815,9 @@ private:
     CFG G(F);
     MemModel Mem(F, In);
 
+    if (IncludeStackReads)
+      auditUninitializedStackReads(F, Mem, Out);
+
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
       const MedCallInfo &CI = F.CallInfos[I];
       if (!allocates(CI))
@@ -931,6 +936,55 @@ private:
     }
   }
 
+  void auditUninitializedStackReads(const MedFunc &F, const MemModel &Mem,
+                                    std::vector<Finding> &Out) const {
+    for (const MedBlock &B : F.Blocks)
+      for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
+        const MedOp &Op = B.Ops[Oi];
+        if (Op.Opcode != NdOp::LOAD || Op.Output.Size == 0)
+          continue;
+        const MedVar *Addr = detail::memoryAddress(Op);
+        if (!Addr)
+          continue;
+        const std::optional<int64_t> Offset = Mem.stackOffset(*Addr);
+        // Positive entry-SP offsets are caller-owned argument/ABI storage.
+        // This audit only claims local frame bytes below the entry SP.
+        if (!Offset || *Offset >= 0)
+          continue;
+        const detail::ReachingStackValues Reaching =
+            Mem.reachingLoad(B, Oi, Op);
+        if (!Reaching.Reachable ||
+            (!Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites))
+          continue;
+
+        const bool Definite =
+            !Reaching.HasUnknownWrites && Reaching.Values.empty();
+        Finding Fn;
+        Fn.Origin = Track::Audit;
+        Fn.Class = VulnClass::UninitializedRead;
+        Fn.TheVerdict = Definite ? Verdict::Unsafe : Verdict::Unknown;
+        Fn.TheConfidence = Definite ? Confidence::Medium : Confidence::Low;
+        Fn.Function = F.Name;
+        Fn.FuncEntry = F.Entry;
+        Fn.Name = "stack_load";
+        Fn.Sink = "stack_load";
+        Fn.CallVA = Op.Addr;
+        Fn.Source = NameSource::Synthetic;
+        Fn.Flow = ArgFlow::Unknown;
+        Fn.Detail = Definite ? "local stack slot is read before any full-width "
+                               "initialization"
+                             : "local stack slot may be read before "
+                               "initialization on a control-flow path";
+        if (Definite)
+          Fn.RequiredPathEvents = {{B.Id, Oi}};
+        if (In.Dbg)
+          if (auto Loc = In.Dbg->sourceLocation(Op.Addr);
+              Loc && !Loc->File.empty())
+            Fn.SourceLoc = Loc->File + ":" + std::to_string(Loc->Line);
+        Out.push_back(std::move(Fn));
+      }
+  }
+
   std::vector<std::tuple<int, int, va_t>>
   collectUses(const MedFunc &F, const llvm::DenseSet<ValueKey> &Alias,
               const std::vector<FreeEvent> &Frees) const {
@@ -1024,6 +1078,13 @@ private:
 std::vector<Finding> neverd::safety::auditHeap(const AnalysisInput &In,
                                                const SinkCatalog &Cat,
                                                const SafetyBudgets &Budgets) {
-  Auditor A(In, Cat, Budgets);
+  Auditor A(In, Cat, Budgets, /*IncludeStackReads=*/false);
+  return A.run();
+}
+
+std::vector<Finding> neverd::safety::auditMemory(const AnalysisInput &In,
+                                                 const SinkCatalog &Cat,
+                                                 const SafetyBudgets &Budgets) {
+  Auditor A(In, Cat, Budgets, /*IncludeStackReads=*/true);
   return A.run();
 }
