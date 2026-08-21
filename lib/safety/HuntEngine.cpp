@@ -1055,9 +1055,17 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.State.store(OutputCountPointer, CountedOutputValue);
           }
         }
-        if (CountedOutputApplies && CountedOutputSuccess.isValid())
+        if (CountedOutputApplies && CountedOutputSuccess.isValid() &&
+            CountedOutputValue.isValid()) {
+          const SymRef ProducedInput =
+              Ctx.mkAnd(CountedOutputSuccess,
+                        Ctx.mkNe(CountedOutputValue,
+                                 Ctx.mkZero(Ctx.width(CountedOutputValue))));
           for (SourceEvent &Event : NewSourceEvents)
-            Event.Success = CountedOutputSuccess;
+            Event.Success = Event.Success.isValid()
+                                ? Ctx.mkAnd(Event.Success, ProducedInput)
+                                : ProducedInput;
+        }
         if (CalleeSource && CalleeSource->OutArg >= 0 &&
             CalleeSource->returnCarriesInput()) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
