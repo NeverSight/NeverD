@@ -197,6 +197,8 @@ struct CountedSourceReturn {
   int BoundArg = -1;
   bool AllowsMinusOne = false;
   uint32_t ReturnBits = 0;
+  uint32_t BoundBits = 0;
+  bool BoundIsSigned = false;
   int RequiredZeroArg = -1;
 };
 
@@ -217,15 +219,23 @@ struct BoundedStringOutput {
 CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
                                         BinaryFormat Format) {
   const std::string Normalized = SinkCatalog::normalize(Name);
-  if (Normalized == "read" || Normalized == "pread")
-    return {2, true,
-            Normalized == "read" && Format == BinaryFormat::COFF ? uint32_t(32)
-                                                                 : uint32_t(0)};
+  if (Normalized == "read" || Normalized == "pread") {
+    const bool WindowsRead =
+        Normalized == "read" && Format == BinaryFormat::COFF;
+    return {2, true, WindowsRead ? uint32_t(32) : uint32_t(0),
+            WindowsRead ? uint32_t(32) : uint32_t(0)};
+  }
   if (Normalized == "fread")
     return {2, false, 0};
-  if (Normalized == "recv" || Normalized == "recvfrom")
-    return {2, true, Format == BinaryFormat::COFF ? uint32_t(32) : uint32_t(0),
+  if (Normalized == "recv" || Normalized == "recvfrom") {
+    const bool WindowsSocket = Format == BinaryFormat::COFF;
+    return {2,
+            true,
+            WindowsSocket ? uint32_t(32) : uint32_t(0),
+            WindowsSocket ? uint32_t(32) : uint32_t(0),
+            WindowsSocket,
             3};
+  }
   return {};
 }
 
@@ -870,14 +880,23 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             } else {
               CountedReturnValue = Ret;
             }
+            SymRef SemanticBound = ReturnBound;
+            if (CountedReturn.BoundBits != 0 &&
+                CountedReturn.BoundBits < Ctx.width(SemanticBound))
+              SemanticBound =
+                  Ctx.mkExtract(SemanticBound, 0, CountedReturn.BoundBits);
             const SymRef WideRet = Ctx.mkZExtOrTrunc(ConstraintRet, 64);
-            const SymRef WideBound = Ctx.mkZExtOrTrunc(ReturnBound, 64);
+            const SymRef WideBound = Ctx.mkZExtOrTrunc(SemanticBound, 64);
             const SymRef WithinBound = Ctx.mkUle(WideRet, WideBound);
             if (CountedReturn.AllowsMinusOne) {
               const SymRef IsNonnegative =
                   Ctx.mkSge(ConstraintRet, Ctx.mkZero(ReturnWidth));
-              Cur.Constraints.push_back(
-                  Ctx.mkOr(IsError, Ctx.mkAnd(IsNonnegative, WithinBound)));
+              SymRef Success = Ctx.mkAnd(IsNonnegative, WithinBound);
+              if (CountedReturn.BoundIsSigned)
+                Success = Ctx.mkAnd(
+                    Success, Ctx.mkSge(SemanticBound,
+                                       Ctx.mkZero(Ctx.width(SemanticBound))));
+              Cur.Constraints.push_back(Ctx.mkOr(IsError, Success));
             } else {
               Cur.Constraints.push_back(WithinBound);
             }

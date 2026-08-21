@@ -1622,6 +1622,61 @@ TEST(HuntEngine, GuardedWinSockRecvUsesSigned32BitReturn) {
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
 }
 
+TEST(HuntEngine, WindowsCountedSourcesTruncateRequestedCountTo32Bits) {
+  constexpr uint64_t EncodedCount = 0x100000008ULL;
+  for (const char *Name : {"_read", "recv"}) {
+    SCOPED_TRACE(Name);
+    Builder B;
+    B.F.Entry = 0x400000;
+    B.F.CC = CallingConv::Win64;
+    B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+    std::vector<MedVar> Args = {MedVar::makeConst(0, 8), temp(2),
+                                MedVar::makeConst(EncodedCount, 8)};
+    if (llvm::StringRef(Name) == "recv")
+      Args.push_back(MedVar::makeConst(0, 8));
+    B.call(Name, temp(5, 4), std::move(Args));
+    B.F.Blocks[0].Ops.back().Addr = 0x400004;
+    B.op(NdOp::INT_SEXT, temp(6), {temp(5, 4)});
+    B.call("memcpy", temp(0), {temp(1), temp(2), temp(6)});
+    B.F.Blocks[0].Ops.back().Addr = 0x400010;
+    LowFunc LF = sourceReturnThenMemcpyLow(
+        0x400004, 0x400010,
+        /*RequireNonnegative=*/true,
+        /*ReturnBytes=*/4, getTargetRegInfo(Arch::X64).Win64ParamRegs[2]);
+
+    auto Fnd =
+        hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe)
+        << Fnd->Detail << " constraints=" << Fnd->Constraints;
+    EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  }
+}
+
+TEST(HuntEngine, NegativeWinSockLengthCannotProduceSuccessfulCopy) {
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("recv", temp(5, 4),
+         {MedVar::makeConst(0, 8), temp(2), MedVar::makeConst(UINT32_MAX, 8),
+          MedVar::makeConst(0, 8)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400004;
+  B.op(NdOp::INT_SEXT, temp(6), {temp(5, 4)});
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = 0x400010;
+  LowFunc LF = sourceReturnThenMemcpyLow(
+      0x400004, 0x400010, /*RequireNonnegative=*/true,
+      /*ReturnBytes=*/4, getTargetRegInfo(Arch::X64).Win64ParamRegs[2]);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
 TEST(HuntEngine, ReadFileByteCountUsesCOFFOutputContract) {
   constexpr va_t SourceVA = 0x400004;
   constexpr va_t SinkVA = 0x400010;
