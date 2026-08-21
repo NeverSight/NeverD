@@ -104,10 +104,14 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
     return std::nullopt;
   int NextArg = static_cast<int>(FixedCount);
   uint32_t AssignmentCount = 0;
+  bool InputExtentMayVary = false;
   ParsedScanfOutputs Outputs;
   for (size_t I = 0; I < Format.size(); ++I) {
-    if (Format[I] != '%')
+    if (Format[I] != '%') {
+      InputExtentMayVary |=
+          std::isspace(static_cast<unsigned char>(Format[I])) != 0;
       continue;
+    }
     if (++I >= Format.size())
       return std::nullopt;
     if (Format[I] == '%')
@@ -168,13 +172,19 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
       I = Close;
     }
 
-    if (Suppressed)
+    const bool ConversionHasVariableExtent =
+        Conversion != 'c' && Conversion != 'n';
+    if (Suppressed) {
+      InputExtentMayVary |= ConversionHasVariableExtent;
       continue;
+    }
     if (NextArg < 0 || static_cast<size_t>(NextArg) >= ArgCount)
       return std::nullopt;
     if (Conversion != 'n')
       ++AssignmentCount;
-    if (Conversion == 'c' && !HasLength)
+    if (Conversion == 'n' && InputExtentMayVary)
+      Outputs.ScalarArgs.push_back({NextArg, AssignmentCount});
+    else if (Conversion == 'c' && !HasLength)
       Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
     else if ((Conversion == 's' || IsScanSet) && !HasWidth && !HasLength)
       Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
@@ -185,6 +195,7 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
     } else if (Conversion != 's' && Conversion != 'n' && !IsScanSet)
       Outputs.ScalarArgs.push_back({NextArg, AssignmentCount});
     ++NextArg;
+    InputExtentMayVary |= ConversionHasVariableExtent;
   }
   return Outputs;
 }
