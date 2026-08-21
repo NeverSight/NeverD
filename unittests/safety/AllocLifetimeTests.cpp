@@ -36,6 +36,76 @@ MedVar mkReg(uint64_t Off, int Ver, uint16_t Size = 8) {
   return V;
 }
 
+LowOp lowOp(NdOp Opcode, NdVar Output, std::vector<NdVar> Inputs,
+            va_t Address = 0) {
+  LowOp Op;
+  Op.Opcode = Opcode;
+  Op.Output = Output;
+  Op.Addr = Address;
+  for (NdVar &Input : Inputs)
+    Op.addInput(Input);
+  return Op;
+}
+
+LowFunc solverHeavyReturnedPath(va_t EntryVA) {
+  constexpr uint64_t kInputA = 16;
+  constexpr uint64_t kInputB = 24;
+  constexpr uint64_t kAValue = 201;
+  constexpr uint64_t kA = 202;
+  constexpr uint64_t kBValue = 203;
+  constexpr uint64_t kB = 204;
+  constexpr uint64_t kNotB = 205;
+  constexpr uint64_t kClause1 = 206;
+  constexpr uint64_t kClause2 = 207;
+  constexpr uint64_t kFlag = 208;
+
+  LowFunc F;
+  F.Entry = EntryVA;
+  F.DecodedInstructionCount = 1;
+  F.LiftedInstructionCount = 1;
+  F.Blocks.resize(3);
+  for (int I = 0; I < 3; ++I)
+    F.Blocks[I].Id = I;
+
+  LowBlock &Entry = F.Blocks[0];
+  Entry.StartAddr = EntryVA;
+  Entry.EndAddr = EntryVA + 0x10;
+  Entry.Succs = {1, 2};
+  Entry.Ops.push_back(lowOp(NdOp::INT_AND, NdVar::reg(kAValue, 8),
+                            {NdVar::reg(kInputA, 8), NdVar::cst(1, 8)}));
+  Entry.Ops.push_back(lowOp(NdOp::INT_NOTEQUAL, NdVar::reg(kA, 1),
+                            {NdVar::reg(kAValue, 8), NdVar::cst(0, 8)}));
+  Entry.Ops.push_back(lowOp(NdOp::INT_AND, NdVar::reg(kBValue, 8),
+                            {NdVar::reg(kInputB, 8), NdVar::cst(1, 8)}));
+  Entry.Ops.push_back(lowOp(NdOp::INT_NOTEQUAL, NdVar::reg(kB, 1),
+                            {NdVar::reg(kBValue, 8), NdVar::cst(0, 8)}));
+  Entry.Ops.push_back(
+      lowOp(NdOp::INT_NOT, NdVar::reg(kNotB, 1), {NdVar::reg(kB, 1)}));
+  Entry.Ops.push_back(lowOp(NdOp::INT_OR, NdVar::reg(kClause1, 1),
+                            {NdVar::reg(kA, 1), NdVar::reg(kB, 1)}));
+  Entry.Ops.push_back(lowOp(NdOp::INT_OR, NdVar::reg(kClause2, 1),
+                            {NdVar::reg(kA, 1), NdVar::reg(kNotB, 1)}));
+  Entry.Ops.push_back(
+      lowOp(NdOp::INT_AND, NdVar::reg(kFlag, 1),
+            {NdVar::reg(kClause1, 1), NdVar::reg(kClause2, 1)}));
+  Entry.Ops.push_back(
+      lowOp(NdOp::COND_BR, NdVar{},
+            {NdVar::cst(EntryVA + 0x10, 8), NdVar::reg(kFlag, 1)}));
+
+  LowBlock &Read = F.Blocks[1];
+  Read.StartAddr = EntryVA + 0x10;
+  Read.EndAddr = EntryVA + 0x20;
+  Read.Preds = {0};
+  Read.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}));
+
+  LowBlock &Exit = F.Blocks[2];
+  Exit.StartAddr = EntryVA + 0x20;
+  Exit.EndAddr = EntryVA + 0x30;
+  Exit.Preds = {0};
+  Exit.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}));
+  return F;
+}
+
 struct FB {
   MedFunc F;
   FB(const std::string &Name, va_t Entry) {
@@ -437,6 +507,41 @@ TEST(AllocLifetime, ReachableUninitializedStackReadIsCorroborated) {
   EXPECT_EQ(Read->TheVerdict, Verdict::Unsafe);
   EXPECT_EQ(Read->TheConfidence, Confidence::High);
   EXPECT_FALSE(Read->Corroboration.empty());
+}
+
+TEST(AllocLifetime, SolverBudgetExhaustionIsReported) {
+  FB B("f", 0x100);
+  int Entry = B.block();
+  int ReadBlock = B.block();
+  int Exit = B.block();
+  B.op(Entry, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(Entry, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.succ(Entry, ReadBlock);
+  B.succ(Entry, Exit);
+  B.op(ReadBlock, NdOp::LOAD, temp(11), {temp(10)}, 0x118);
+  B.ret(ReadBlock, {temp(11)});
+  B.ret(Exit, {});
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::vector<MedFunc> MedFuncs{B.F};
+  std::vector<LowFunc> LowFuncs{solverHeavyReturnedPath(B.F.Entry)};
+  AnalysisInput In;
+  In.Img = &Img;
+  In.LowFuncs = &LowFuncs;
+  In.MedFuncs = &MedFuncs;
+  In.StackRegsKnown = true;
+  In.StackPointerReg = kSP;
+  SafetyBudgets Budgets;
+  Budgets.SolverConflicts = 1;
+
+  auto Fs = auditMemory(In, SinkCatalog::defaults(), Budgets);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Read->BudgetHit) << Read->Detail;
 }
 
 TEST(AllocLifetime, WrapperAllocationLeakIsInterprocedural) {

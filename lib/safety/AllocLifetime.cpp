@@ -784,7 +784,7 @@ private:
     if (SawUnmodelled)
       failClosed("a candidate path contained an unmodelled operation");
     else if (SolverUnknown)
-      failClosed("the solver could not establish candidate feasibility");
+      failClosed("the solver could not establish candidate feasibility", true);
     else if (!Ex.Complete)
       failClosed("symbolic exploration ended before all candidate paths", true);
     else
