@@ -796,6 +796,52 @@ TEST_F(NativePointerRelocationBoundary,
 }
 
 TEST_F(NativePointerRelocationBoundary,
+       BoundedMixedPointerTableWalkUsesOnlyRuntimeReachableSlots) {
+#if !defined(__APPLE__)
+  GTEST_SKIP() << "AArch64 Mach-O fixture is built only on Apple hosts";
+#else
+  const fs::path Path = fixture("test_bounded_mixed_pointer_table_a64_macho");
+  ASSERT_TRUE(fs::exists(Path));
+
+  auto ImgOrErr = loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::MachO);
+  ASSERT_EQ(Img.Arch, Arch::AArch64);
+  ASSERT_EQ(Img.getPointerSize(), 8u);
+  const Section *Table = Img.getSectionByName("__const");
+  ASSERT_NE(Table, nullptr);
+  ASSERT_GE(Table->Size, 72u);
+  EXPECT_EQ(Img.CodePtrRelocSlots.count(Table->VA + 8), 1u);
+  EXPECT_EQ(Img.CodePtrRelocSlots.count(Table->VA + 32), 1u);
+  EXPECT_EQ(Img.DataPtrRelocSlots.count(Table->VA + 56), 1u);
+
+#if defined(__aarch64__)
+  for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
+    RunResult Native = exec(Path.string(), {});
+    EXPECT_EQ(Native.exitCode, 0) << Native.err;
+  }
+#endif
+
+  RunResult Med = liftToMedIR(Path);
+  ASSERT_EQ(Med.exitCode, 0) << Med.err;
+  EXPECT_NE(Med.out.find("PHI X23"), std::string::npos) << Med.out;
+  EXPECT_NE(Med.out.find("INT_LESS"), std::string::npos) << Med.out;
+  EXPECT_NE(Med.out.find("INDIR_CALL"), std::string::npos) << Med.out;
+
+  RunResult LLVM = liftToLLVMIRUnopt(Path);
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  EXPECT_EQ(LLVM.err.find("has no complete code-slot role"), std::string::npos)
+      << LLVM.err;
+  EXPECT_NE(LLVM.out.find("@__nd_codeptr_"), std::string::npos) << LLVM.out;
+  EXPECT_NE(LLVM.out.find("getelementptr i8, ptr @__nd_codeptr_"),
+            std::string::npos)
+      << LLVM.out;
+#endif
+}
+
+TEST_F(NativePointerRelocationBoundary,
        WritablePointerTableInductionLiftsAcrossFormatsAndArchitectures) {
   struct Case {
     const char *Name;

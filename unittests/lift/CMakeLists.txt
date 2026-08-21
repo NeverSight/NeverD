@@ -874,6 +874,10 @@ if(APPLE)
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_reentrant_feasible_phi_a64_macho.s")
   set(reentrant_feasible_phi_a64_macho_exe
       "${CMAKE_CURRENT_BINARY_DIR}/test_reentrant_feasible_phi_a64_macho")
+  set(bounded_mixed_pointer_table_a64_macho_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/format/test_bounded_mixed_pointer_table_a64_macho.s")
+  set(bounded_mixed_pointer_table_a64_macho_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_bounded_mixed_pointer_table_a64_macho")
   set(writable_pointer_induction_a64_macho_src
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_a64_macho.s")
   set(writable_pointer_induction_a64_macho_exe
@@ -912,6 +916,13 @@ if(APPLE)
     DEPENDS ${reentrant_feasible_phi_a64_macho_src}
     COMMENT "Linking AArch64 Mach-O reentrant feasible-edge PHI fixture")
   add_custom_command(
+    OUTPUT ${bounded_mixed_pointer_table_a64_macho_exe}
+    COMMAND /usr/bin/clang -target arm64-apple-macos14
+            ${bounded_mixed_pointer_table_a64_macho_src}
+            -o ${bounded_mixed_pointer_table_a64_macho_exe}
+    DEPENDS ${bounded_mixed_pointer_table_a64_macho_src}
+    COMMENT "Linking AArch64 Mach-O bounded mixed pointer-table fixture")
+  add_custom_command(
     OUTPUT ${writable_pointer_induction_a64_macho_exe}
     COMMAND /usr/bin/clang -target arm64-apple-macos14
             ${writable_pointer_induction_a64_macho_src}
@@ -928,6 +939,7 @@ if(APPLE)
   list(APPEND TEST_OBJECTS ${call_abi_a64_macho_exe}
                            ${call_arg_phi_a64_macho_exe}
                            ${reentrant_feasible_phi_a64_macho_exe}
+                           ${bounded_mixed_pointer_table_a64_macho_exe}
                            ${writable_pointer_induction_a64_macho_exe}
                            ${writable_pointer_induction_x64_macho_exe})
 endif()

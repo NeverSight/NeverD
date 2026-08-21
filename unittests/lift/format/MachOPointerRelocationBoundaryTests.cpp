@@ -102,6 +102,11 @@ public:
     return Emitter.recoverAbsoluteDataPointerLoadIdentities(Value, Identities);
   }
 
+  static bool pointerTableLoadIsCallableOnly(MedLLVMEmitter &Emitter,
+                                             const MedVar &Value) {
+    return Emitter.classifyPointerTableLoadRoles(Value).isCallableOnly();
+  }
+
   static bool buildingEdgeQueryIsProvisional(MedLLVMEmitter &Emitter,
                                              const PhiNode &Phi, int PredId) {
     Emitter.FeasibleEdgesFor = Emitter.CurMedFunc;
@@ -5562,6 +5567,64 @@ makeMixedPointerRecordImage(Arch TargetArch,
   return Image;
 }
 
+BinaryImage
+makeBoundedMixedPointerRecordImage(Arch TargetArch,
+                                   BinaryFormat Format = BinaryFormat::MachO) {
+  BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+  Segment &Data = Image.Segments[1];
+  constexpr uint64_t ThirdLength = 6;
+  writeObject(Data.Data, 48, ThirdLength);
+  writeObject(Data.Data, 56, CStringVA);
+  writeObject(Data.Data, 64, CStringBVA);
+  Image.DataPtrRelocSlots.insert(DataVA + 56);
+  Image.DataPtrRelocSlots.insert(DataVA + 64);
+  Section &Records = Image.Sections.back();
+  Records.Size = 72;
+  Records.FileSz = Records.Size;
+  return Image;
+}
+
+BinaryImage makeStrideWidthPointerTableImage(Arch TargetArch,
+                                             uint64_t TableBase,
+                                             bool Subtract) {
+  const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+  constexpr uint64_t RequiredSize = 272;
+  BinaryImage Image;
+  Image.Arch = TargetArch;
+  Image.Format = BinaryFormat::MachO;
+  Image.Bits = PointerSize == 8 ? Bitness::Bits64 : Bitness::Bits32;
+  Image.Base = TableBase;
+
+  Segment Data;
+  Data.Name = section_names::macho::DataConstSeg;
+  Data.VA = TableBase;
+  Data.Size = RequiredSize;
+  Data.FileSz = RequiredSize;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(RequiredSize);
+  Image.Segments.push_back(std::move(Data));
+
+  Section Records;
+  Records.Name = section_names::macho::Const;
+  Records.SegmentName = section_names::macho::DataConstSeg;
+  Records.VA = TableBase;
+  Records.Size = RequiredSize;
+  Records.FileSz = RequiredSize;
+  Records.Flags = SegmentFlags::Readable;
+  Image.Sections.push_back(std::move(Records));
+
+  if (Subtract) {
+    Image.DataPtrRelocSlots.insert(TableBase);
+    Image.CodePtrRelocSlots.insert(TableBase + 232);
+    Image.CodePtrRelocSlots.insert(TableBase + 256);
+  } else {
+    Image.CodePtrRelocSlots.insert(TableBase + 8);
+    Image.CodePtrRelocSlots.insert(TableBase + 32);
+    Image.DataPtrRelocSlots.insert(TableBase + 264);
+  }
+  return Image;
+}
+
 MedFunc makeMixedPointerRecordIndirectCaller(Arch TargetArch,
                                              uint64_t InitialOffset = 8,
                                              uint64_t RecordStride = 24) {
@@ -5653,6 +5716,185 @@ MedFunc makeMixedPointerRecordIndirectCaller(Arch TargetArch,
   Latch.Ops.push_back(std::move(BackEdge));
 
   Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Latch)};
+  return Func;
+}
+
+MedFunc makeBoundedMixedPointerRecordIndirectCaller(
+    Arch TargetArch, std::optional<uint64_t> ConstantLimit,
+    uint64_t CounterStep = 1, NdOp GuardOpcode = NdOp::INT_LESS,
+    bool NegateGuard = false, uint16_t CounterSize = 0,
+    bool WidenCounterForGuard = false, uint64_t TableBaseVA = DataVA,
+    uint64_t FunctionVA = CallerVA, uint64_t InitialSlotOffset = 8) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  const uint16_t PointerSize = static_cast<uint16_t>(TRI.PointerSize);
+  if (CounterSize == 0)
+    CounterSize = PointerSize;
+  const uint16_t GuardSize = WidenCounterForGuard
+                                 ? static_cast<uint16_t>(CounterSize * 2)
+                                 : CounterSize;
+  auto makeTemp = [&](int Id, uint16_t Size = 0) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.TheArch = TargetArch;
+    Value.Id = Id;
+    Value.SSAVer = 1;
+    Value.Size = Size == 0 ? PointerSize : Size;
+    return Value;
+  };
+
+  MedVar InitialSlot = makeTemp(210);
+  MedVar CurrentSlot = makeTemp(211);
+  MedVar LoadedTarget = makeTemp(212);
+  MedVar NextSlot = makeTemp(213);
+  MedVar Counter = makeTemp(214, CounterSize);
+  MedVar NextCounter = makeTemp(215, CounterSize);
+  MedVar InBounds = makeTemp(216, 1);
+  MedVar GuardCounter =
+      WidenCounterForGuard ? makeTemp(217, GuardSize) : Counter;
+  MedVar BranchCondition = NegateGuard ? makeTemp(218, 1) : InBounds;
+
+  MedFunc Func;
+  Func.Entry = FunctionVA;
+  Func.Name = "bounded_mixed_pointer_record_indirect_caller";
+  Func.ReturnType = NdType::makeVoid();
+
+  MedVar Limit;
+  if (!ConstantLimit) {
+    Limit.Kind = MedVar::Param;
+    Limit.TheArch = TargetArch;
+    Limit.Id = 0;
+    Limit.SSAVer = 1;
+    Limit.Size = GuardSize;
+    Limit.RegOff = TRI.IntParamRegs[0];
+    Func.Params.push_back(Limit);
+  }
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = FunctionVA;
+  Entry.EndAddr = FunctionVA + 8;
+  Entry.Succs = {1};
+  MedOp Materialize;
+  Materialize.Opcode = NdOp::COPY;
+  Materialize.Addr = FunctionVA;
+  Materialize.Output = InitialSlot;
+  Materialize.addInput(MedVar::makeConst(TableBaseVA + InitialSlotOffset,
+                                         PointerSize,
+                                         ConstantAddressProvenance::Address));
+  Entry.Ops.push_back(std::move(Materialize));
+  MedOp Enter;
+  Enter.Opcode = NdOp::BRANCH;
+  Enter.Addr = FunctionVA + 4;
+  Enter.addInput(MedVar::makeConst(FunctionVA + 0x10, PointerSize));
+  Entry.Ops.push_back(std::move(Enter));
+
+  MedBlock Header;
+  Header.Id = 1;
+  Header.StartAddr = FunctionVA + 0x10;
+  Header.EndAddr = FunctionVA + 0x18;
+  Header.Preds = {0, 3};
+  Header.Succs = {2, 4};
+  PhiNode SlotPhi;
+  SlotPhi.Output = CurrentSlot;
+  SlotPhi.Args = {{0, InitialSlot}, {3, NextSlot}};
+  Header.Phis.push_back(std::move(SlotPhi));
+  PhiNode CounterPhi;
+  CounterPhi.Output = Counter;
+  CounterPhi.Args = {{0, MedVar::makeConst(0, CounterSize)}, {3, NextCounter}};
+  Header.Phis.push_back(std::move(CounterPhi));
+  if (WidenCounterForGuard) {
+    MedOp WidenCounter;
+    WidenCounter.Opcode = NdOp::INT_ZEXT;
+    WidenCounter.Addr = FunctionVA + 0x10;
+    WidenCounter.Output = GuardCounter;
+    WidenCounter.addInput(Counter);
+    Header.Ops.push_back(std::move(WidenCounter));
+  }
+  MedOp Compare;
+  Compare.Opcode = GuardOpcode;
+  Compare.Addr = FunctionVA + 0x10;
+  Compare.Output = InBounds;
+  Compare.addInput(GuardCounter);
+  Compare.addInput(ConstantLimit ? MedVar::makeConst(*ConstantLimit, GuardSize)
+                                 : Limit);
+  Header.Ops.push_back(std::move(Compare));
+  if (NegateGuard) {
+    MedOp Negate;
+    Negate.Opcode = NdOp::BOOL_NOT;
+    Negate.Addr = FunctionVA + 0x10;
+    Negate.Output = BranchCondition;
+    Negate.addInput(InBounds);
+    Header.Ops.push_back(std::move(Negate));
+  }
+  MedOp Guard;
+  Guard.Opcode = NdOp::COND_BR;
+  Guard.Addr = FunctionVA + 0x14;
+  Guard.addInput(MedVar::makeConst(
+      NegateGuard ? FunctionVA + 0x18 : FunctionVA + 0x20, PointerSize));
+  Guard.addInput(BranchCondition);
+  Header.Ops.push_back(std::move(Guard));
+
+  MedBlock Body;
+  Body.Id = 2;
+  Body.StartAddr = FunctionVA + 0x20;
+  Body.EndAddr = FunctionVA + 0x2c;
+  Body.Preds = {1};
+  Body.Succs = {3};
+  MedOp LoadTarget;
+  LoadTarget.Opcode = NdOp::LOAD;
+  LoadTarget.Addr = FunctionVA + 0x20;
+  LoadTarget.Output = LoadedTarget;
+  LoadTarget.addInput(CurrentSlot);
+  Body.Ops.push_back(std::move(LoadTarget));
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.Addr = FunctionVA + 0x24;
+  Call.addInput(LoadedTarget);
+  Body.Ops.push_back(std::move(Call));
+  MedOp Continue;
+  Continue.Opcode = NdOp::BRANCH;
+  Continue.Addr = FunctionVA + 0x28;
+  Continue.addInput(MedVar::makeConst(FunctionVA + 0x30, PointerSize));
+  Body.Ops.push_back(std::move(Continue));
+
+  MedBlock Latch;
+  Latch.Id = 3;
+  Latch.StartAddr = FunctionVA + 0x30;
+  Latch.EndAddr = FunctionVA + 0x3c;
+  Latch.Preds = {2};
+  Latch.Succs = {1};
+  MedOp StepSlot;
+  StepSlot.Opcode = NdOp::INT_ADD;
+  StepSlot.Addr = FunctionVA + 0x30;
+  StepSlot.Output = NextSlot;
+  StepSlot.addInput(CurrentSlot);
+  StepSlot.addInput(MedVar::makeConst(24, PointerSize));
+  Latch.Ops.push_back(std::move(StepSlot));
+  MedOp StepCounter;
+  StepCounter.Opcode = NdOp::INT_ADD;
+  StepCounter.Addr = FunctionVA + 0x34;
+  StepCounter.Output = NextCounter;
+  StepCounter.addInput(Counter);
+  StepCounter.addInput(MedVar::makeConst(CounterStep, CounterSize));
+  Latch.Ops.push_back(std::move(StepCounter));
+  MedOp BackEdge;
+  BackEdge.Opcode = NdOp::BRANCH;
+  BackEdge.Addr = FunctionVA + 0x38;
+  BackEdge.addInput(MedVar::makeConst(Header.StartAddr, PointerSize));
+  Latch.Ops.push_back(std::move(BackEdge));
+
+  MedBlock Exit;
+  Exit.Id = 4;
+  Exit.StartAddr = FunctionVA + 0x18;
+  Exit.EndAddr = FunctionVA + 0x1c;
+  Exit.Preds = {1};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = FunctionVA + 0x18;
+  Exit.Ops.push_back(std::move(Return));
+
+  Func.Blocks = {std::move(Entry), std::move(Header), std::move(Body),
+                 std::move(Latch), std::move(Exit)};
   return Func;
 }
 
@@ -9564,6 +9806,224 @@ TEST(LLVMCodePointerInvariantBoundary,
               RetainsRawTargetVA |= constantContainsInteger(C, CodeVA);
       EXPECT_FALSE(RetainsRawTargetVA);
     }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     BoundedMixedPointerTableWalkUsesOnlyGuardedCallableSlots) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+      for (bool NegateGuard : {false, true}) {
+        SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                     std::to_string(static_cast<int>(TargetArch)) + "/" +
+                     (NegateGuard ? "fallthrough" : "taken"));
+        BinaryImage Image =
+            makeBoundedMixedPointerRecordImage(TargetArch, Format);
+        MedFunc Caller = makeBoundedMixedPointerRecordIndirectCaller(
+            TargetArch, /*ConstantLimit=*/2, /*CounterStep=*/1, NdOp::INT_LESS,
+            NegateGuard);
+        MedFunc Callee =
+            makeReturnFunction("bounded_mixed_pointer_record_target", CodeVA);
+
+        llvm::LLVMContext Context;
+        auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                            "bounded-mixed-pointer-record-call",
+                                            TargetArch, {}, &Image, Format);
+        ASSERT_NE(Module, nullptr);
+        expectValidModule(*Module);
+
+        llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+        ASSERT_NE(EmittedCaller, nullptr);
+        std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+        ASSERT_EQ(Calls.size(), 1u);
+        llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+            (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+        ASSERT_NE(Mirror, nullptr);
+        std::set<const llvm::Value *> Seen;
+        EXPECT_TRUE(valueReferencesSpecificGlobal(
+            Calls.front()->getCalledOperand(), Mirror, Seen));
+      }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     PointerTableWalkBoundsMustBeConstantAndLockstep) {
+  struct Case {
+    std::optional<uint64_t> Limit;
+    uint64_t CounterStep;
+    NdOp GuardOpcode;
+    bool WidenCounter;
+    uint16_t CounterSize;
+    const char *Name;
+  };
+  const Case Cases[] = {
+      {3, 1, NdOp::INT_LESS, false, 0, "third-mixed-slot-is-reachable"},
+      {std::nullopt, 1, NdOp::INT_LESS, false, 0, "runtime-limit"},
+      {2, 0, NdOp::INT_LESS, false, 0, "counter-does-not-advance"},
+      {2, 1, NdOp::INT_SLESS, false, 0, "signed-guard"},
+      {1, 1, NdOp::INT_LESSEQUAL, false, 0, "inclusive-guard"},
+      {256, 1, NdOp::INT_LESS, true, 1, "widened-counter-wrap"},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    BinaryImage Image = makeBoundedMixedPointerRecordImage(Arch::AArch64);
+    MedFunc Caller = makeBoundedMixedPointerRecordIndirectCaller(
+        Arch::AArch64, C.Limit, C.CounterStep, C.GuardOpcode,
+        /*NegateGuard=*/false, C.CounterSize, C.WidenCounter);
+    MedFunc Callee =
+        makeReturnFunction("bounded_mixed_pointer_record_target", CodeVA);
+
+    llvm::LLVMContext Context;
+    EXPECT_EQ(MedLLVMEmitter().emit(
+                  {Caller, Callee}, Context,
+                  std::string("bounded-mixed-pointer-record-") + C.Name,
+                  Arch::AArch64, {}, &Image, BinaryFormat::MachO),
+              nullptr);
+  }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     BoundedPointerTableWalkRequiresEveryProvenIterationSlot) {
+  BinaryImage Image = makeBoundedMixedPointerRecordImage(Arch::AArch64);
+  Section &Records = Image.Sections.back();
+  Records.Size = 32;
+  Records.FileSz = Records.Size;
+  MedFunc Caller = makeBoundedMixedPointerRecordIndirectCaller(
+      Arch::AArch64, /*ConstantLimit=*/2);
+  MedFunc Callee =
+      makeReturnFunction("bounded_mixed_pointer_record_target", CodeVA);
+
+  llvm::LLVMContext Context;
+  EXPECT_EQ(
+      MedLLVMEmitter().emit({Caller, Callee}, Context,
+                            "bounded-mixed-pointer-record-truncated-section",
+                            Arch::AArch64, {}, &Image, BinaryFormat::MachO),
+      nullptr);
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     BoundedPointerTableWalkRequiresOneHeaderControlTransfer) {
+  BinaryImage Image = makeBoundedMixedPointerRecordImage(Arch::AArch64);
+  MedFunc Caller = makeBoundedMixedPointerRecordIndirectCaller(
+      Arch::AArch64, /*ConstantLimit=*/2);
+  MedBlock &Header = Caller.Blocks[1];
+  MedOp EarlyExit;
+  EarlyExit.Opcode = NdOp::BRANCH;
+  EarlyExit.Addr = Header.StartAddr;
+  EarlyExit.addInput(MedVar::makeConst(Caller.Blocks[4].StartAddr, /*Size=*/8));
+  Header.Ops.insert(Header.Ops.begin(), std::move(EarlyExit));
+
+  MedLLVMEmitter Emitter;
+  MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+      Emitter, Caller, Image, Arch::AArch64, BinaryFormat::MachO);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::pointerTableLoadIsCallableOnly(
+      Emitter, Caller.Blocks[2].Ops[0].Output));
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     BoundedPointerTableWalkRejectsZeroBranchTargetSentinel) {
+  BinaryImage Image = makeBoundedMixedPointerRecordImage(Arch::AArch64);
+  MedFunc Caller = makeBoundedMixedPointerRecordIndirectCaller(
+      Arch::AArch64, /*ConstantLimit=*/2);
+  MedBlock &Header = Caller.Blocks[1];
+  MedBlock &Body = Caller.Blocks[2];
+  ASSERT_EQ(Header.Ops.back().Opcode, NdOp::COND_BR);
+  Header.Ops.back().Inputs[0] = MedVar::makeConst(0, /*Size=*/8);
+  Body.StartAddr = 0;
+  ASSERT_FALSE(Body.Ops.empty());
+  Body.Ops.front().Addr = 0;
+
+  MedLLVMEmitter Emitter;
+  MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+      Emitter, Caller, Image, Arch::AArch64, BinaryFormat::MachO);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::pointerTableLoadIsCallableOnly(
+      Emitter, Body.Ops[0].Output));
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     BoundedPointerTableWalkUsesEmittedAddressStrideWidth) {
+  struct Case {
+    Arch TargetArch;
+    uint64_t TableBase;
+    uint64_t FunctionVA;
+  };
+  for (const Case &C : {Case{Arch::AArch64, DataVA, CallerVA},
+                        Case{Arch::X86, 0x4000, 0x1000}}) {
+    const uint16_t PointerSize =
+        static_cast<uint16_t>(getTargetRegInfo(C.TargetArch).PointerSize);
+    auto isCallableOnly = [&](bool Subtract, uint64_t InitialSlotOffset,
+                              uint64_t StepBits, uint16_t StepSize) {
+      BinaryImage Image =
+          makeStrideWidthPointerTableImage(C.TargetArch, C.TableBase, Subtract);
+      MedFunc Caller = makeBoundedMixedPointerRecordIndirectCaller(
+          C.TargetArch, /*ConstantLimit=*/2, /*CounterStep=*/1, NdOp::INT_LESS,
+          /*NegateGuard=*/false, /*CounterSize=*/0,
+          /*WidenCounterForGuard=*/false, C.TableBase, C.FunctionVA,
+          InitialSlotOffset);
+      MedOp &Step = Caller.Blocks[3].Ops[0];
+      Step.Opcode = Subtract ? NdOp::INT_SUB : NdOp::INT_ADD;
+      Step.Inputs[1] = MedVar::makeConst(StepBits, StepSize,
+                                         ConstantAddressProvenance::Scalar);
+
+      MedLLVMEmitter Emitter;
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+          Emitter, Caller, Image, C.TargetArch, BinaryFormat::MachO);
+      return MedLLVMProvenanceTestPeer::pointerTableLoadIsCallableOnly(
+          Emitter, Caller.Blocks[2].Ops[0].Output);
+    };
+
+    SCOPED_TRACE(std::to_string(static_cast<int>(C.TargetArch)));
+    EXPECT_FALSE(isCallableOnly(/*Subtract=*/false, /*InitialSlotOffset=*/32,
+                                /*StepBits=*/0xe8, /*StepSize=*/1));
+    EXPECT_FALSE(isCallableOnly(/*Subtract=*/true, /*InitialSlotOffset=*/232,
+                                /*StepBits=*/0xe8, /*StepSize=*/1));
+    const uint64_t NegativeTwentyFour =
+        PointerSize == 8 ? uint64_t(-24) : uint64_t(uint32_t(-24));
+    EXPECT_TRUE(isCallableOnly(/*Subtract=*/false, /*InitialSlotOffset=*/32,
+                               NegativeTwentyFour, PointerSize));
+  }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     BoundedPointerTableWalkRequiresACompleteLoopProof) {
+  auto expectRejected = [&](const char *Name, auto Mutate) {
+    SCOPED_TRACE(Name);
+    BinaryImage Image = makeBoundedMixedPointerRecordImage(Arch::AArch64);
+    MedFunc Caller = makeBoundedMixedPointerRecordIndirectCaller(
+        Arch::AArch64, /*ConstantLimit=*/2);
+    Mutate(Caller);
+
+    MedLLVMEmitter Emitter;
+    MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+        Emitter, Caller, Image, Arch::AArch64, BinaryFormat::MachO);
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::pointerTableLoadIsCallableOnly(
+        Emitter, Caller.Blocks[2].Ops[0].Output));
+  };
+
+  expectRejected(
+      "counter-predecessor-does-not-match-address",
+      [](MedFunc &Caller) { Caller.Blocks[1].Phis[1].Args[1].first = 2; });
+  expectRejected("counter-starts-nonzero", [](MedFunc &Caller) {
+    Caller.Blocks[1].Phis[1].Args[0].second.ConstVal = 1;
+  });
+  expectRejected("counter-advances-by-two", [](MedFunc &Caller) {
+    Caller.Blocks[3].Ops[1].Inputs[1].ConstVal = 2;
+  });
+  expectRejected("bound-exceeds-proof-budget", [](MedFunc &Caller) {
+    Caller.Blocks[1].Ops[0].Inputs[1].ConstVal = 10001;
+  });
+  expectRejected("branch-target-is-not-a-successor", [](MedFunc &Caller) {
+    Caller.Blocks[1].Ops.back().Inputs[0].ConstVal = Caller.Blocks[3].StartAddr;
+  });
+  expectRejected("load-has-an-unrecorded-predecessor",
+                 [](MedFunc &Caller) { Caller.Blocks[2].Preds.push_back(0); });
+  expectRejected("header-has-an-ordinary-side-exit",
+                 [](MedFunc &Caller) { Caller.Blocks[1].Succs.push_back(3); });
+  expectRejected("header-has-a-dangling-exit",
+                 [](MedFunc &Caller) { Caller.Blocks[1].Succs[1] = 99; });
+  expectRejected("header-has-an-exceptional-side-exit", [](MedFunc &Caller) {
+    Caller.Blocks[1].ExceptionalSuccs.push_back(
+        ExceptionalEdge{.BlockId = 4, .TargetVA = Caller.Blocks[4].StartAddr});
+  });
 }
 
 TEST(LLVMCodePointerInvariantBoundary,

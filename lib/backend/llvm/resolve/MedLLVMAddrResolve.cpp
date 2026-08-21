@@ -2982,7 +2982,8 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
       return false;
     return !hasObjectDataProvenance(Offset.ConstVal);
   };
-  auto signedOffset = [&](const MedVar &Offset) -> std::optional<int64_t> {
+  auto signedOffset = [&](const MedVar &Offset,
+                          unsigned ResultBits) -> std::optional<int64_t> {
     std::optional<uint64_t> Folded;
     if (isStableNumericOffset(Offset))
       Folded = Offset.ConstVal;
@@ -2990,15 +2991,19 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
       Folded = traceSSAConst(Offset);
     if (!Folded)
       return std::nullopt;
-    unsigned Bits = Offset.Size == 0 ? PtrBits : Offset.Size * 8;
-    if (Bits == 0 || Bits > 64)
+    const unsigned SourceBits =
+        Offset.Size == 0 ? ResultBits : static_cast<unsigned>(Offset.Size) * 8;
+    if (SourceBits == 0 || SourceBits > 64 || ResultBits == 0 ||
+        ResultBits > 64)
       return std::nullopt;
     uint64_t Value = *Folded;
-    if (Bits < 64) {
-      const uint64_t Mask = (uint64_t(1) << Bits) - 1;
-      Value &= Mask;
-      if ((Value & (uint64_t(1) << (Bits - 1))) != 0)
-        Value |= ~Mask;
+    if (SourceBits < 64)
+      Value &= (uint64_t(1) << SourceBits) - 1;
+    if (ResultBits < 64) {
+      const uint64_t ResultMask = (uint64_t(1) << ResultBits) - 1;
+      Value &= ResultMask;
+      if ((Value & (uint64_t(1) << (ResultBits - 1))) != 0)
+        Value |= ~ResultMask;
     }
     return static_cast<int64_t>(Value);
   };
@@ -3052,17 +3057,17 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     std::optional<int64_t> Delta;
     MedVar PointerInput;
     if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
-      if (auto D = signedOffset(Def->Inputs[1]);
+      if (auto D = signedOffset(Def->Inputs[1], Def->Output.Size * 8);
           D && carriesPointerWidth(Def->Inputs[0])) {
         Delta = *D;
         PointerInput = Def->Inputs[0];
-      } else if (auto D = signedOffset(Def->Inputs[0]);
+      } else if (auto D = signedOffset(Def->Inputs[0], Def->Output.Size * 8);
                  D && carriesPointerWidth(Def->Inputs[1])) {
         Delta = *D;
         PointerInput = Def->Inputs[1];
       }
     } else if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
-      if (auto D = signedOffset(Def->Inputs[1]);
+      if (auto D = signedOffset(Def->Inputs[1], Def->Output.Size * 8);
           D && carriesPointerWidth(Def->Inputs[0]) &&
           *D != std::numeric_limits<int64_t>::min()) {
         Delta = -*D;
@@ -3125,14 +3130,14 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
                  : std::nullopt;
     };
     if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
-      if (auto Delta = signedOffset(Def->Inputs[1]))
+      if (auto Delta = signedOffset(Def->Inputs[1], Def->Output.Size * 8))
         if (auto Combined = addToInput(Def->Inputs[0], *Delta))
           return Combined;
-      if (auto Delta = signedOffset(Def->Inputs[0]))
+      if (auto Delta = signedOffset(Def->Inputs[0], Def->Output.Size * 8))
         return addToInput(Def->Inputs[1], *Delta);
     }
     if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2)
-      if (auto Delta = signedOffset(Def->Inputs[1]);
+      if (auto Delta = signedOffset(Def->Inputs[1], Def->Output.Size * 8);
           Delta && *Delta != std::numeric_limits<int64_t>::min())
         return addToInput(Def->Inputs[0], -*Delta);
     return std::nullopt;
@@ -3236,15 +3241,15 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     const MedVar *BaseInput = nullptr;
     std::optional<int64_t> Delta;
     if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
-      if (auto D = signedOffset(Def->Inputs[1])) {
+      if (auto D = signedOffset(Def->Inputs[1], Def->Output.Size * 8)) {
         BaseInput = &Def->Inputs[0];
         Delta = *D;
-      } else if (auto D = signedOffset(Def->Inputs[0])) {
+      } else if (auto D = signedOffset(Def->Inputs[0], Def->Output.Size * 8)) {
         BaseInput = &Def->Inputs[1];
         Delta = *D;
       }
     } else if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
-      if (auto D = signedOffset(Def->Inputs[1]);
+      if (auto D = signedOffset(Def->Inputs[1], Def->Output.Size * 8);
           D && *D != std::numeric_limits<int64_t>::min()) {
         BaseInput = &Def->Inputs[0];
         Delta = -*D;
@@ -3266,7 +3271,285 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     return Base;
   };
 
+  // A section boundary is only a conservative layout bound, not a runtime
+  // trip bound.  Admit a tighter bound for the narrow loop shape produced by
+  // a pre-tested unsigned counter: the address and counter PHIs must share the
+  // same initial/recurrent edges, and the guarded successor must execute the
+  // classified load before that recurrent edge can be taken.  Any missing CFG
+  // fact leaves the caller on the existing section-span fallback.
+  auto guardedIterationCount =
+      [&](const MedVar &Address,
+          std::optional<int64_t> AddressStep) -> std::optional<size_t> {
+    if (!AddressStep || *AddressStep == 0)
+      return std::nullopt;
+    const PhiNode *AddressPhi = lookupPhi(Address);
+    if (!AddressPhi || AddressPhi->Args.size() != 2)
+      return std::nullopt;
+
+    std::map<int, const MedBlock *> Blocks;
+    const MedBlock *Header = nullptr;
+    const MedBlock *LoadBlock = nullptr;
+    for (const MedBlock &Block : CurMedFunc->Blocks) {
+      if (!Blocks.emplace(Block.Id, &Block).second)
+        return std::nullopt;
+      for (const PhiNode &Phi : Block.Phis)
+        if (&Phi == AddressPhi)
+          Header = &Block;
+      for (const MedOp &Op : Block.Ops)
+        if (&Op == Result.Load)
+          LoadBlock = &Block;
+    }
+    if (!Header || !LoadBlock || CurMedFunc->Blocks.empty() ||
+        Header == LoadBlock || Header->Id == CurMedFunc->Blocks.front().Id ||
+        LoadBlock->Id == CurMedFunc->Blocks.front().Id ||
+        Header->Preds.size() != 2 || Header->Succs.size() != 2 ||
+        !Header->ExceptionalSuccs.empty())
+      return std::nullopt;
+    if (Header->Succs[0] == Header->Succs[1] ||
+        Blocks.count(Header->Succs[0]) == 0 ||
+        Blocks.count(Header->Succs[1]) == 0 || LoadBlock->Preds.size() != 1)
+      return std::nullopt;
+
+    std::set<int> StructuralHeaderPreds;
+    std::set<int> StructuralLoadPreds;
+    for (const auto &[BlockId, Block] : Blocks) {
+      auto recordIncoming = [&](int Succ) {
+        if (Succ == Header->Id)
+          StructuralHeaderPreds.insert(BlockId);
+        if (Succ == LoadBlock->Id)
+          StructuralLoadPreds.insert(BlockId);
+      };
+      for (int Succ : Block->Succs)
+        recordIncoming(Succ);
+      for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs)
+        recordIncoming(Edge.BlockId);
+    }
+    if (StructuralHeaderPreds !=
+            std::set<int>(Header->Preds.begin(), Header->Preds.end()) ||
+        StructuralLoadPreds != std::set<int>{Header->Id} ||
+        std::set<int>(LoadBlock->Preds.begin(), LoadBlock->Preds.end()) !=
+            std::set<int>{Header->Id})
+      return std::nullopt;
+
+    struct PhiEdges {
+      int InitialPred = -1;
+      const MedVar *InitialValue = nullptr;
+      int RecurrentPred = -1;
+      const MedVar *RecurrentValue = nullptr;
+    };
+    auto splitPhiEdges = [&](const PhiNode &Phi,
+                             int64_t ExpectedStep) -> std::optional<PhiEdges> {
+      if (Phi.Args.size() != 2)
+        return std::nullopt;
+      PhiEdges Edges;
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        if (classifyPhiIncomingEdge(Phi, Pred) !=
+            PhiEdgeFeasibility::ProvenFeasible)
+          return std::nullopt;
+        if (phiIncomingIsRecurrent(Phi, Pred, Arg)) {
+          if (Edges.RecurrentValue)
+            return std::nullopt;
+          const std::optional<int64_t> Delta =
+              recurrenceDelta(Arg, Phi.Output, 0, {});
+          if (!Delta || *Delta != ExpectedStep)
+            return std::nullopt;
+          Edges.RecurrentPred = Pred;
+          Edges.RecurrentValue = &Arg;
+        } else {
+          if (Edges.InitialValue)
+            return std::nullopt;
+          Edges.InitialPred = Pred;
+          Edges.InitialValue = &Arg;
+        }
+      }
+      if (!Edges.InitialValue || !Edges.RecurrentValue ||
+          Edges.InitialPred == Edges.RecurrentPred)
+        return std::nullopt;
+      return Edges;
+    };
+    const std::optional<PhiEdges> AddressEdges =
+        splitPhiEdges(*AddressPhi, *AddressStep);
+    if (!AddressEdges || Address.Size != PtrSize ||
+        AddressPhi->Output.Size != PtrSize ||
+        AddressEdges->InitialValue->Size != PtrSize ||
+        AddressEdges->RecurrentValue->Size != PtrSize)
+      return std::nullopt;
+    const std::set<int> HeaderPreds(Header->Preds.begin(), Header->Preds.end());
+    if (HeaderPreds !=
+        std::set<int>{AddressEdges->InitialPred, AddressEdges->RecurrentPred})
+      return std::nullopt;
+
+    const MedOp *Branch = nullptr;
+    for (const MedOp &Op : Header->Ops) {
+      if (Op.Opcode == NdOp::COND_BR) {
+        if (Branch)
+          return std::nullopt;
+        Branch = &Op;
+      } else if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::INDIR_BR ||
+                 Op.Opcode == NdOp::RETURN) {
+        return std::nullopt;
+      }
+    }
+    if (!Branch || Branch->NumInputs < 2 || !Branch->Inputs[0].isConst() ||
+        Branch->Inputs[0].ConstVal == 0 || Header->Ops.empty() ||
+        &Header->Ops.back() != Branch)
+      return std::nullopt;
+
+    bool ReachedLoad = false;
+    for (const MedOp &Op : LoadBlock->Ops) {
+      if (&Op == Result.Load) {
+        ReachedLoad = true;
+        break;
+      }
+      if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+          Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN)
+        return std::nullopt;
+    }
+    if (!ReachedLoad)
+      return std::nullopt;
+
+    auto blockAddress = [&](int Id) -> std::optional<va_t> {
+      auto It = Blocks.find(Id);
+      if (It == Blocks.end())
+        return std::nullopt;
+      const MedBlock &Block = *It->second;
+      return Block.StartAddr != 0 || Block.Ops.empty()
+                 ? std::optional<va_t>(Block.StartAddr)
+                 : std::optional<va_t>(Block.Ops.front().Addr);
+    };
+    std::optional<int> Taken;
+    for (int Succ : Header->Succs) {
+      const std::optional<va_t> Address = blockAddress(Succ);
+      if (Address && *Address == Branch->Inputs[0].ConstVal) {
+        if (Taken)
+          return std::nullopt;
+        Taken = Succ;
+      }
+    }
+    if (!Taken)
+      return std::nullopt;
+    const int Fallthrough =
+        *Taken == Header->Succs[0] ? Header->Succs[1] : Header->Succs[0];
+    if (LoadBlock->Id != *Taken && LoadBlock->Id != Fallthrough)
+      return std::nullopt;
+    const bool LoadOnBranchTrue = LoadBlock->Id == *Taken;
+    const int ExitSucc = LoadOnBranchTrue ? Fallthrough : *Taken;
+
+    MedVar Condition = Branch->Inputs[1];
+    bool Negated = false;
+    const MedOp *Compare = nullptr;
+    for (int Depth = 0; Depth < 16 && !Condition.isConst(); ++Depth) {
+      const MedOp *Def = lookupDef(Condition);
+      if (!Def)
+        return std::nullopt;
+      if (Def->Opcode == NdOp::BOOL_NOT && Def->NumInputs >= 1) {
+        Negated = !Negated;
+        Condition = Def->Inputs[0];
+        continue;
+      }
+      if (Def->Opcode == NdOp::INT_LESS && Def->NumInputs >= 2) {
+        Compare = Def;
+        break;
+      }
+      const std::optional<MedVar> Forwarded = pointerPreservingInput(*Def);
+      if (!Forwarded)
+        return std::nullopt;
+      Condition = *Forwarded;
+    }
+    if (!Compare || LoadOnBranchTrue != !Negated)
+      return std::nullopt;
+
+    const MedVar &Counter = Compare->Inputs[0];
+    const MedVar &BoundValue = Compare->Inputs[1];
+    const PhiNode *CounterPhi = lookupPhi(Counter);
+    if (!CounterPhi || CounterPhi == AddressPhi || Counter.Size == 0 ||
+        Counter.Size > 8 || BoundValue.Size != Counter.Size ||
+        !sameValue(CounterPhi->Output, Counter))
+      return std::nullopt;
+    bool CounterOwnedByHeader = false;
+    for (const PhiNode &Phi : Header->Phis)
+      CounterOwnedByHeader |= &Phi == CounterPhi;
+    if (!CounterOwnedByHeader)
+      return std::nullopt;
+    const std::optional<PhiEdges> CounterEdges = splitPhiEdges(*CounterPhi, 1);
+    if (!CounterEdges ||
+        CounterEdges->InitialPred != AddressEdges->InitialPred ||
+        CounterEdges->RecurrentPred != AddressEdges->RecurrentPred ||
+        CounterEdges->InitialValue->Size != Counter.Size ||
+        CounterEdges->RecurrentValue->Size != Counter.Size)
+      return std::nullopt;
+
+    std::function<std::optional<uint64_t>(const MedVar &, int, SeenSet)>
+        scalarConstant = [&](const MedVar &Value, int Depth,
+                             SeenSet Seen) -> std::optional<uint64_t> {
+      if (Depth > 16 || Value.Size != Counter.Size)
+        return std::nullopt;
+      if (Value.isConst()) {
+        if (!isStableNumericOffset(Value))
+          return std::nullopt;
+        const unsigned Bits =
+            Value.Size == 0 ? PtrBits : static_cast<unsigned>(Value.Size) * 8;
+        if (Bits == 0 || Bits > 64)
+          return std::nullopt;
+        const uint64_t Mask =
+            Bits == 64 ? ~uint64_t(0) : (uint64_t(1) << Bits) - uint64_t(1);
+        return Value.ConstVal & Mask;
+      }
+      const AddressProvenanceVarKey Key = addressProvenanceVarKey(Value);
+      if (!Seen.insert(Key).second)
+        return std::nullopt;
+      const MedOp *Def = lookupDef(Value);
+      if (!Def)
+        return std::nullopt;
+      const std::optional<MedVar> Forwarded = pointerPreservingInput(*Def);
+      return Forwarded ? scalarConstant(*Forwarded, Depth + 1, Seen)
+                       : std::nullopt;
+    };
+    const std::optional<uint64_t> InitialCounter =
+        scalarConstant(*CounterEdges->InitialValue, 0, {});
+    const std::optional<uint64_t> Bound = scalarConstant(BoundValue, 0, {});
+    if (!InitialCounter || *InitialCounter != 0 || !Bound || *Bound == 0 ||
+        *Bound > static_cast<uint64_t>(limits::kMaxSSANodes))
+      return std::nullopt;
+
+    auto canReachWithoutHeader = [&](int Start, int Goal) {
+      std::vector<int> Work{Start};
+      std::set<int> Seen;
+      while (!Work.empty()) {
+        const int Current = Work.back();
+        Work.pop_back();
+        if (Current == Goal)
+          return true;
+        if (!Seen.insert(Current).second)
+          continue;
+        auto It = Blocks.find(Current);
+        if (It == Blocks.end())
+          continue;
+        auto enqueue = [&](int Succ) {
+          if (Succ == Goal || Succ != Header->Id)
+            Work.push_back(Succ);
+        };
+        for (int Succ : It->second->Succs)
+          enqueue(Succ);
+        for (const ExceptionalEdge &Edge : It->second->ExceptionalSuccs)
+          enqueue(Edge.BlockId);
+      }
+      return false;
+    };
+    if (!canReachWithoutHeader(LoadBlock->Id, AddressEdges->RecurrentPred) ||
+        canReachWithoutHeader(LoadBlock->Id, AddressEdges->InitialPred) ||
+        canReachWithoutHeader(ExitSucc, LoadBlock->Id) ||
+        canReachWithoutHeader(ExitSucc, AddressEdges->RecurrentPred) ||
+        canReachWithoutHeader(ExitSucc, Header->Id))
+      return std::nullopt;
+
+    return static_cast<size_t>(*Bound);
+  };
+
   AddressDomain Domain = analyzeAddress(LoadAddress, 0, {});
+  const std::optional<size_t> GuardedIterations =
+      Domain.Complete ? guardedIterationCount(LoadAddress, Domain.Step)
+                      : std::nullopt;
   const std::optional<uint64_t> DiscoveredRun =
       ptrTableUniqueSegment(LoadAddress,
                             /*IncludeSymbolizedEvidence=*/true);
@@ -3389,12 +3672,17 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     size_t Remaining = static_cast<size_t>(limits::kMaxSSANodes);
     for (uint64_t Seed : Domain.Seeds) {
       uint64_t Slot = Seed;
+      std::optional<size_t> Iterations = GuardedIterations;
       while (Slot >= BoundStart && Slot < BoundEnd &&
-             PtrSize <= BoundEnd - Slot) {
+             PtrSize <= BoundEnd - Slot && (!Iterations || *Iterations != 0)) {
         if (Remaining == 0)
           return finish(Result);
         --Remaining;
+        if (Iterations)
+          --*Iterations;
         Result.Slots.insert(Slot);
+        if (Iterations && *Iterations == 0)
+          break;
         uint64_t Next = 0;
         if (!offsetAddress(Slot, Step, Next))
           return finish(Result);
@@ -3402,6 +3690,8 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
           return finish(Result);
         Slot = Next;
       }
+      if (Iterations && *Iterations != 0)
+        return finish(Result);
     }
   }
   if (Result.Slots.empty())
