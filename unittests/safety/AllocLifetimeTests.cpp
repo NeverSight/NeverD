@@ -641,7 +641,7 @@ TEST(AllocLifetime, UseAfterFree) {
 }
 
 TEST(AllocLifetime, StringDuplicationReadsFreedSource) {
-  for (const char *Name : {"strdup", "strndup"}) {
+  for (const char *Name : {"strdup", "strndup", "wcsdup", "_wcsdup"}) {
     SCOPED_TRACE(Name);
     FB B("f", 0x100);
     int b0 = B.block();
@@ -1323,7 +1323,7 @@ TEST(AllocLifetime, UninitializedLocalStackMemcpySourceIsReported) {
 }
 
 TEST(AllocLifetime, StringDuplicationReadsUninitializedStackSource) {
-  for (const char *Name : {"strdup", "strndup"}) {
+  for (const char *Name : {"strdup", "strndup", "wcsdup", "_wcsdup"}) {
     SCOPED_TRACE(Name);
     FB B("f", 0x100);
     int b0 = B.block();
@@ -1341,6 +1341,32 @@ TEST(AllocLifetime, StringDuplicationReadsUninitializedStackSource) {
     const Finding *Read = find(Fs, VulnClass::UninitializedRead);
     ASSERT_NE(Read, nullptr);
     EXPECT_EQ(Read->CallVA, 0x408u);
+  }
+}
+
+TEST(AllocLifetime, WideStringDuplicationReadsPlatformSizedElement) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    BinaryImage Img;
+    Img.Format = Format;
+
+    FB B("f", 0x100);
+    int b0 = B.block();
+    B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+         {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+    B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+    // A two-byte zero is a complete Windows wchar_t but only half of the
+    // first wchar_t on the ELF and Mach-O ABIs.
+    B.op(b0, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(0, 2)});
+    B.call(b0, Format == BinaryFormat::COFF ? "_wcsdup" : "wcsdup", temp(11),
+           {temp(10)}, 0x9000, 0x408);
+    B.ret(b0, {});
+
+    const bool HasRead = has(audit({B.F}, &Img, /*StackRegs=*/true,
+                                   /*IncludeStackReads=*/true),
+                             VulnClass::UninitializedRead);
+    EXPECT_EQ(HasRead, Format != BinaryFormat::COFF);
   }
 }
 

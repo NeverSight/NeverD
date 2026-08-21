@@ -51,6 +51,37 @@ bool isStringLengthCall(llvm::StringRef Name) {
       .Default(false);
 }
 
+enum class StringDuplicationKind : uint8_t {
+  None,
+  NullTerminated,
+  WideNullTerminated,
+  Counted
+};
+
+StringDuplicationKind stringDuplicationKind(llvm::StringRef Name) {
+  return llvm::StringSwitch<StringDuplicationKind>(SinkCatalog::normalize(Name))
+      .Case("strdup", StringDuplicationKind::NullTerminated)
+      .Case("wcsdup", StringDuplicationKind::WideNullTerminated)
+      .Case("strndup", StringDuplicationKind::Counted)
+      .Default(StringDuplicationKind::None);
+}
+
+std::optional<uint64_t>
+minimumStringDuplicationReadBytes(StringDuplicationKind Kind,
+                                  BinaryFormat Format) {
+  if (Kind != StringDuplicationKind::WideNullTerminated)
+    return 1;
+  switch (Format) {
+  case BinaryFormat::COFF:
+    return 2;
+  case BinaryFormat::ELF:
+  case BinaryFormat::MachO:
+    return 4;
+  default:
+    return std::nullopt;
+  }
+}
+
 std::optional<uint64_t> unsignedConstant(const MedVar &Value) {
   if (!Value.isConst() || Value.Size == 0 || Value.Size > sizeof(uint64_t))
     return std::nullopt;
@@ -1504,11 +1535,12 @@ private:
     };
 
     for (const MedCallInfo &CI : F.CallInfos) {
-      const std::string Name = SinkCatalog::normalize(callName(CI));
-      if (Name != "strdup" && Name != "strndup")
+      const StringDuplicationKind Kind = stringDuplicationKind(callName(CI));
+      if (Kind == StringDuplicationKind::None)
         continue;
-      std::optional<uint64_t> Bytes = 1;
-      if (Name == "strndup") {
+      std::optional<uint64_t> Bytes = minimumStringDuplicationReadBytes(
+          Kind, In.Img ? In.Img->Format : BinaryFormat::Unknown);
+      if (Kind == StringDuplicationKind::Counted) {
         if (CI.Args.size() <= 1)
           Bytes = std::nullopt;
         else if (std::optional<uint64_t> Limit = unsignedConstant(CI.Args[1])) {
@@ -1627,14 +1659,17 @@ private:
         if (ArgIndex == E->LenArg || ArgIndex == E->CapArg)
           return CallUse::None;
         return CallUse::Possible;
-      case SinkKind::Alloc:
+      case SinkKind::Alloc: {
         if (E->HandleArg >= 0 && ArgIndex == E->HandleArg)
           return CallUse::Definite;
         if (ArgIndex != 0)
           return CallUse::None;
-        if (SinkCatalog::normalize(callName(CI)) == "strdup")
+        const StringDuplicationKind DupKind =
+            stringDuplicationKind(callName(CI));
+        if (DupKind == StringDuplicationKind::NullTerminated ||
+            DupKind == StringDuplicationKind::WideNullTerminated)
           return CallUse::Definite;
-        if (SinkCatalog::normalize(callName(CI)) == "strndup") {
+        if (DupKind == StringDuplicationKind::Counted) {
           if (CI.Args.size() <= 1)
             return CallUse::Possible;
           if (std::optional<uint64_t> Limit = unsignedConstant(CI.Args[1]))
@@ -1642,6 +1677,7 @@ private:
           return CallUse::Possible;
         }
         return CallUse::None;
+      }
       case SinkKind::Realloc:
         return ArgIndex == E->HandleArg ? CallUse::Definite : CallUse::None;
       case SinkKind::Free:

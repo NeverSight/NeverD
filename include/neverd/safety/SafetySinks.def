@@ -139,6 +139,7 @@ SAFETY_ALLOC_SINK(valloc, 0, -1, -1, 50)
 SAFETY_ALLOC_SINK(aligned_alloc, 1, -1, -1, 50)
 SAFETY_ALLOC_SINK(strdup, -1, -1, -1, 45)
 SAFETY_ALLOC_SINK(strndup, -1, -1, -1, 45)
+SAFETY_ALLOC_SINK(wcsdup, -1, -1, -1, 45)
 // calloc(nmemb, size): element count in arg0, element size in arg1.
 SAFETY_ALLOC_SINK(calloc, 1, 0, -1, 50)
 // Operator new / new[] arrive underscore-stripped as their Itanium spelling.

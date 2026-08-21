@@ -153,6 +153,9 @@ TEST(SinkCatalog, HeapAllocAndFree) {
   EXPECT_EQ(C.matchSink("free")->Kind, SinkKind::Free);
   EXPECT_EQ(C.matchSink("realloc")->Kind, SinkKind::Realloc);
   EXPECT_EQ(C.matchSink("reallocf")->Kind, SinkKind::Realloc);
+  ASSERT_NE(C.matchSink("wcsdup"), nullptr);
+  EXPECT_EQ(C.matchSink("wcsdup")->Kind, SinkKind::Alloc);
+  EXPECT_EQ(C.matchSink("_wcsdup"), C.matchSink("wcsdup"));
 }
 
 TEST(SinkCatalog, MangledOperatorNewAndDelete) {
