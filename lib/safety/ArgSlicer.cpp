@@ -387,16 +387,16 @@ private:
       if (!Outputs ||
           Outputs->Kind != detail::FormattedSourceKind::ExternalInput)
         continue;
-      for (int ArgIndex : Outputs->UnboundedTextArgs)
-        addIndexedSourceOutput(I, ArgIndex, Name);
-      for (int ArgIndex : Outputs->UnboundedTextArgs)
-        addIndexedPointeeOutput(I, ArgIndex, Name);
+      for (const detail::FormattedOutput &Output : Outputs->UnboundedTextArgs)
+        addIndexedSourceOutput(I, Output.ArgIndex, Name);
+      for (const detail::FormattedOutput &Output : Outputs->UnboundedTextArgs)
+        addIndexedPointeeOutput(I, Output.ArgIndex, Name);
       for (const detail::BoundedTextOutput &Output : Outputs->BoundedTextArgs) {
         addIndexedSourceOutput(I, Output.ArgIndex, Name);
         addIndexedPointeeOutput(I, Output.ArgIndex, Name);
       }
-      for (int ArgIndex : Outputs->ScalarArgs)
-        addIndexedPointeeOutput(I, ArgIndex, Name);
+      for (const detail::FormattedOutput &Output : Outputs->ScalarArgs)
+        addIndexedPointeeOutput(I, Output.ArgIndex, Name);
     }
 
     for (size_t Pass = 0; Pass <= F.CallInfos.size(); ++Pass) {
@@ -414,17 +414,18 @@ private:
             Outputs->InputArg >= static_cast<int>(CI.Args.size()) ||
             !valueIsTaintedBefore(CI.Args[Outputs->InputArg], CI))
           continue;
-        for (int ArgIndex : Outputs->UnboundedTextArgs) {
-          Changed |= addIndexedSourceOutput(I, ArgIndex, Name);
-          Changed |= addIndexedPointeeOutput(I, ArgIndex, Name);
+        for (const detail::FormattedOutput &Output :
+             Outputs->UnboundedTextArgs) {
+          Changed |= addIndexedSourceOutput(I, Output.ArgIndex, Name);
+          Changed |= addIndexedPointeeOutput(I, Output.ArgIndex, Name);
         }
         for (const detail::BoundedTextOutput &Output :
              Outputs->BoundedTextArgs) {
           Changed |= addIndexedSourceOutput(I, Output.ArgIndex, Name);
           Changed |= addIndexedPointeeOutput(I, Output.ArgIndex, Name);
         }
-        for (int ArgIndex : Outputs->ScalarArgs)
-          Changed |= addIndexedPointeeOutput(I, ArgIndex, Name);
+        for (const detail::FormattedOutput &Output : Outputs->ScalarArgs)
+          Changed |= addIndexedPointeeOutput(I, Output.ArgIndex, Name);
       }
       if (!Changed)
         break;

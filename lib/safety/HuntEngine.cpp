@@ -585,6 +585,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     SymRef Success;
     SymRef ImplicitLen;
     bool ImplicitLenIncludesTerminator = false;
+    uint32_t RequiredAssignments = 0;
   };
 
   struct Frontier {
@@ -843,12 +844,14 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             }
             if (InputIsTainted) {
               HasFormattedSourceOutput = true;
-              for (int ArgIndex : Outputs->UnboundedTextArgs) {
-                SymRef Output =
-                    readCallArgument(In, Fn, ArgIndex, *Callee, Cur.State);
+              for (const safety::detail::FormattedOutput &Formatted :
+                   Outputs->UnboundedTextArgs) {
+                SymRef Output = readCallArgument(In, Fn, Formatted.ArgIndex,
+                                                 *Callee, Cur.State);
                 if (Output.isValid())
-                  NewSourceEvents.push_back({SinkCatalog::normalize(CalleeName),
-                                             Output, InputSuccess});
+                  NewSourceEvents.push_back(
+                      {SinkCatalog::normalize(CalleeName), Output, InputSuccess,
+                       SymRef(), false, Formatted.RequiredAssignments});
               }
               for (const safety::detail::BoundedTextOutput &Bounded :
                    Outputs->BoundedTextArgs) {
@@ -857,7 +860,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                 if (Output.isValid())
                   NewSourceEvents.push_back(
                       {SinkCatalog::normalize(CalleeName), Output, InputSuccess,
-                       Ctx.mkConst(64, Bounded.MaxChars + 1), true});
+                       Ctx.mkConst(64, Bounded.MaxChars + 1), true,
+                       Bounded.RequiredAssignments});
               }
             }
           }
@@ -1033,13 +1037,17 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             SymRef SemanticRet = Ret;
             if (Ctx.width(SemanticRet) > 32)
               SemanticRet = Ctx.mkExtract(SemanticRet, 0, 32);
-            const SymRef ProducedInput =
-                Ctx.mkSgt(SemanticRet, Ctx.mkZero(Ctx.width(SemanticRet)));
-            for (SourceEvent &Event : NewSourceEvents)
+            for (SourceEvent &Event : NewSourceEvents) {
+              if (Event.RequiredAssignments == 0)
+                continue;
+              const SymRef ProducedInput = Ctx.mkSge(
+                  SemanticRet, Ctx.mkConst(Ctx.width(SemanticRet),
+                                           Event.RequiredAssignments));
               if (Event.Success.isValid())
                 Event.Success = Ctx.mkAnd(Event.Success, ProducedInput);
               else
                 Event.Success = ProducedInput;
+            }
           }
         }
         if (CalleeSource && CalleeSource->OutArg < 0 &&

@@ -664,6 +664,47 @@ LowFunc scanfThenStrcpyLow(va_t ScanfVA, va_t StrcpyVA) {
   return LF;
 }
 
+LowFunc scanfExactCountThenStrcpyLow(va_t ScanfVA, va_t StrcpyVA,
+                                     uint32_t AssignmentCount) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kFlag = 200;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = StrcpyVA;
+  Entry.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9100, 8)}, ScanfVA));
+  Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+                          {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
+                          ScanfVA + 1));
+  Entry.Ops.push_back(lop(NdOp::INT_EQUAL, NdVar::reg(kFlag, 1),
+                          {NdVar::reg(kRax, 4), NdVar::cst(AssignmentCount, 4)},
+                          ScanfVA + 2));
+  Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(StrcpyVA, 8), NdVar::reg(kFlag, 1)},
+                          ScanfVA + 3));
+  Entry.Succs = {1, 2};
+  Sink.Id = 1;
+  Sink.StartAddr = StrcpyVA;
+  Sink.EndAddr = StrcpyVA + 8;
+  Sink.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, StrcpyVA));
+  Sink.Succs = {2};
+  Sink.Preds = {0};
+  Exit.Id = 2;
+  Exit.StartAddr = StrcpyVA + 8;
+  Exit.EndAddr = StrcpyVA + 16;
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  Exit.Preds = {0, 1};
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
 LowFunc twoScanfThenStrcpyLow(va_t FirstScanfVA, va_t SecondScanfVA,
                               va_t StrcpyVA) {
   constexpr uint64_t kRax = 0;
@@ -1643,6 +1684,46 @@ TEST(HuntEngine, ScanfCharacterOutputHasNoImplicitStringBound) {
     ASSERT_TRUE(Fnd.has_value());
     EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
     EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  }
+}
+
+TEST(HuntEngine, ScanfOutputRequiresItsOwnAssignmentCount) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  struct Case {
+    const char *Format;
+    uint32_t AssignmentCount;
+    Verdict Expected;
+  };
+  for (const Case C :
+       {Case{"%7s%7s", 1, Verdict::Unknown}, Case{"%7s%7s", 2, Verdict::Safe},
+        Case{"%7s%s", 1, Verdict::Unknown},
+        Case{"%7s%s", 2, Verdict::Unsafe}}) {
+    SCOPED_TRACE(C.Format);
+    SCOPED_TRACE(C.AssignmentCount);
+    BinaryImage Img;
+    const va_t FormatVA = addCString(Img, C.Format);
+    const MedVar FirstOutput = mkReg(24, 0);
+    const MedVar SecondOutput = mkReg(32, 0);
+
+    Builder B;
+    B.F.Entry = 0x400000;
+    B.F.CC = CallingConv::SysV_AMD64;
+    B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+    B.call("scanf", temp(5, 4),
+           {MedVar::makeConst(FormatVA, 8), FirstOutput, SecondOutput});
+    B.F.Blocks[0].Ops.back().Addr = SourceVA;
+    B.call("strcpy", temp(0), {temp(1), SecondOutput});
+    B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+    LowFunc LF =
+        scanfExactCountThenStrcpyLow(SourceVA, SinkVA, C.AssignmentCount);
+    auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                    BinaryFormat::ELF, &Img);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, C.Expected) << Fnd->Detail;
+    if (C.Expected != Verdict::Unknown)
+      EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
   }
 }
 

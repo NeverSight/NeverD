@@ -31,23 +31,29 @@ enum class FormattedSourceKind : uint8_t {
   DerivedInput,
 };
 
+struct FormattedOutput {
+  int ArgIndex = -1;
+  uint32_t RequiredAssignments = 0;
+};
+
 struct BoundedTextOutput {
   int ArgIndex = -1;
+  uint32_t RequiredAssignments = 0;
   uint64_t MaxChars = 0;
 };
 
 struct FormattedSourceOutputs {
   FormattedSourceKind Kind = FormattedSourceKind::ExternalInput;
   int InputArg = -1;
-  std::vector<int> UnboundedTextArgs;
+  std::vector<FormattedOutput> UnboundedTextArgs;
   std::vector<BoundedTextOutput> BoundedTextArgs;
-  std::vector<int> ScalarArgs;
+  std::vector<FormattedOutput> ScalarArgs;
 };
 
 struct ParsedScanfOutputs {
-  std::vector<int> UnboundedTextArgs;
+  std::vector<FormattedOutput> UnboundedTextArgs;
   std::vector<BoundedTextOutput> BoundedTextArgs;
-  std::vector<int> ScalarArgs;
+  std::vector<FormattedOutput> ScalarArgs;
 };
 
 inline std::optional<std::pair<std::string, FormattedSourceKind>>
@@ -97,6 +103,7 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
   if (FixedCount == 0 || FixedCount > ArgCount)
     return std::nullopt;
   int NextArg = static_cast<int>(FixedCount);
+  uint32_t AssignmentCount = 0;
   ParsedScanfOutputs Outputs;
   for (size_t I = 0; I < Format.size(); ++I) {
     if (Format[I] != '%')
@@ -165,16 +172,18 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
       continue;
     if (NextArg < 0 || static_cast<size_t>(NextArg) >= ArgCount)
       return std::nullopt;
+    if (Conversion != 'n')
+      ++AssignmentCount;
     if (Conversion == 'c' && !HasLength)
-      Outputs.UnboundedTextArgs.push_back(NextArg);
+      Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
     else if ((Conversion == 's' || IsScanSet) && !HasWidth && !HasLength)
-      Outputs.UnboundedTextArgs.push_back(NextArg);
+      Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
     else if ((Conversion == 's' || IsScanSet) && HasWidth && !HasLength) {
       if (Width == std::numeric_limits<uint64_t>::max())
         return std::nullopt;
-      Outputs.BoundedTextArgs.push_back({NextArg, Width});
+      Outputs.BoundedTextArgs.push_back({NextArg, AssignmentCount, Width});
     } else if (Conversion != 's' && Conversion != 'n' && !IsScanSet)
-      Outputs.ScalarArgs.push_back(NextArg);
+      Outputs.ScalarArgs.push_back({NextArg, AssignmentCount});
     ++NextArg;
   }
   return Outputs;
