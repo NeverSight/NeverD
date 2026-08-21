@@ -2801,6 +2801,41 @@ TEST(HuntEngine, SizeLimitedStringCopyRequiresSourceLength) {
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, StrlcpyTotalSizeWithinDestinationIsSafe) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("strlcpy", temp(0), {temp(1), param(2), MedVar::makeConst(8, 8)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Fnd->SkipReason.empty());
+}
+
+TEST(HuntEngine, StrlcatTotalSizeWithinDestinationIsSafe) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("strlcat", temp(0), {temp(1), param(2), MedVar::makeConst(8, 8)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Fnd->SkipReason.empty());
+}
+
+TEST(HuntEngine, StrncatCountAloneDoesNotBoundTheFinalString) {
+  Builder B;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("strncat", temp(0), {temp(1), param(2), MedVar::makeConst(4, 8)});
+
+  auto Fnd = hunt(B.F);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->SkipReason.empty());
+}
+
 TEST(HuntEngine, WideCopyFailsClosedUntilElementWidthIsModelled) {
   Builder B;
   B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});

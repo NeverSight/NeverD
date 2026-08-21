@@ -179,6 +179,12 @@ bool requiresStringExtents(llvm::StringRef Name) {
       .Default(false);
 }
 
+bool usesTotalDestinationBound(llvm::StringRef Name) {
+  return llvm::StringSwitch<bool>(SinkCatalog::normalize(Name))
+      .Cases({"strlcpy", "strlcat"}, true)
+      .Default(false);
+}
+
 std::optional<uint64_t> literalFormattedBytes(llvm::StringRef Format) {
   uint64_t Bytes = 1; // terminating NUL
   for (size_t I = 0; I < Format.size(); ++I) {
@@ -1588,6 +1594,16 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     Out.TheConfidence = Confidence::High;
     Out.SkipReason = "fortified runtime bound fits the destination";
     Out.Detail = "fortified copy cannot write beyond the recovered object";
+    return Out;
+  }
+
+  if (usesTotalDestinationBound(Site.Sink) && Dst.Capacity &&
+      Dst.CapacityExact && Arg.UpperBound && *Arg.UpperBound <= *Dst.Capacity) {
+    Out.TheVerdict = Verdict::Safe;
+    Out.TheConfidence = Confidence::High;
+    Out.SkipReason = "destination-size argument fits the destination";
+    Out.Detail = "size-limited string operation cannot write beyond the "
+                 "recovered object";
     return Out;
   }
 
