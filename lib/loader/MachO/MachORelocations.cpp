@@ -373,16 +373,28 @@ void recordARM64AddressMaterialization(BinaryImage &Img, va_t Place,
                                        va_t TargetVA, va_t OwnerVA) {
   if (OwnerVA == InvalidVA)
     return;
-  if (Img.hasExecutableCodeOwnerAt(OwnerVA)) {
+  const Segment *OwnerSeg = Img.getSegmentFor(OwnerVA);
+  if (!OwnerSeg)
+    return;
+  const Section *OwnerSec = Img.getSectionFor(OwnerVA);
+  const va_t OwnerBegin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
+  const uint64_t OwnerSize = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
+  if (OwnerSize == 0 || OwnerSize > InvalidVA - OwnerBegin)
+    return;
+  const va_t OwnerEnd = OwnerBegin + OwnerSize;
+  const bool OwnerIsCode = Img.hasExecutableCodeOwnerAt(OwnerVA);
+  if (TargetVA < OwnerBegin ||
+      (OwnerIsCode ? TargetVA >= OwnerEnd : TargetVA > OwnerEnd))
+    return;
+  if (OwnerIsCode) {
     Img.CodeRefTargets.insert(
         normalizeCodeAddress(TargetVA, Img.Arch, Img.Mode));
     return;
   }
-  const Segment *OwnerSeg = Img.getSegmentFor(OwnerVA);
-  if (!OwnerSeg || !OwnerSeg->isReadable())
+  if (!OwnerSeg->isReadable())
     return;
   bool Writable = OwnerSeg->isWritable();
-  if (const Section *OwnerSec = Img.getSectionFor(OwnerVA))
+  if (OwnerSec)
     Writable = OwnerSec->isWritable();
   if (Writable) {
     Img.WritableRelocDataAddrs.insert(TargetVA);

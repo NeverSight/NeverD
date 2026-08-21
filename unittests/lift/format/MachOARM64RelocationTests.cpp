@@ -194,6 +194,9 @@ BinaryImage makeImage(Arch TargetArch, llvm::ArrayRef<uint8_t> Data) {
   Sec.Size = Data.size();
   Sec.FileSz = Sec.Size;
   Sec.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Sec.Type = static_cast<uint32_t>(S_REGULAR) |
+             static_cast<uint32_t>(S_ATTR_PURE_INSTRUCTIONS) |
+             static_cast<uint32_t>(S_ATTR_SOME_INSTRUCTIONS);
   Sec.Data.assign(Data.begin(), Data.end());
   Image.Sections.push_back(std::move(Sec));
   return Image;
@@ -322,6 +325,28 @@ TEST(MachOARM64Relocation, AddendPairsWithPageOff12) {
                                   Relocations, {Target});
   ASSERT_FALSE(Patched.empty());
   EXPECT_EQ(readInstruction(Patched, 0x80), 0x91000021u | (0x148u << 10));
+}
+
+TEST(MachOARM64Relocation,
+     AddressMaterializationDoesNotAuthenticateCodeOwnerOnePast) {
+  for (const bool OnePast : {false, true}) {
+    SCOPED_TRACE(OnePast ? "one-past" : "interior");
+    std::vector<uint8_t> Data(0x200);
+    writeInstruction(Data, 0x20, 0x91000000u);
+    const uint64_t Target = SectionVA + (OnePast ? Data.size() : 0x100);
+    const std::vector<RawRelocation> Relocations = {
+        arm64InstructionRelocation(0x20, ARM64_RELOC_PAGEOFF12)};
+    auto Bytes = makeObject(CPU_TYPE_ARM64, Data, Relocations, {Target});
+    auto Obj = parseObject(Bytes);
+    ASSERT_NE(Obj, nullptr);
+    BinaryImage Image = makeImage(Arch::AArch64, Data);
+    if (llvm::Error Err =
+            neverd::macho_loader::applyObjectRelocations(*Obj, Image)) {
+      ADD_FAILURE() << llvm::toString(std::move(Err));
+      continue;
+    }
+    EXPECT_EQ(Image.CodeRefTargets.count(Target), OnePast ? 0u : 1u);
+  }
 }
 
 struct PageOffCase {
