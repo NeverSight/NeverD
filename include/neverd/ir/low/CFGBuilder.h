@@ -72,6 +72,12 @@ private:
   };
 
   void explore(const BinaryImage &Img, Decoder &Dec, va_t Addr);
+  /// Complete an AArch64 ADRP occurrence whose unmodified page-base register
+  /// is subsequently dereferenced at offset zero.  The proof is instruction-
+  /// local and use-driven: numeric equality with a symbol or relocation at the
+  /// page start is never sufficient, and a register adjusted by a nonzero
+  /// PAGEOFF remains an AddressFragment for the ordinary address fold.
+  void completeExactAArch64PageBases(const BinaryImage &Img);
   void splitBlocks();
   void linkSuccessors(LowFunc &Func, const std::map<va_t, int> &AddrToBlock);
   void linkExceptionalSuccessors(LowFunc &Func);

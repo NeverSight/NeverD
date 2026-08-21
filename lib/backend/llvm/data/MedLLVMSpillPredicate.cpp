@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -137,11 +138,504 @@ bool MedLLVMEmitter::frameSlotHasMatchingKeyLoad(
   return Result;
 }
 
+bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
+                                                 uint16_t ASize,
+                                                 const MedVar &B,
+                                                 uint16_t BSize) const {
+  const unsigned PointerBytes = getTargetRegInfo(TargetArch).PointerSize;
+  if (!CurMedFunc || PointerBytes == 0 || PointerBytes > sizeof(uint64_t) ||
+      ASize == 0 || BSize == 0)
+    return false;
+
+  std::map<int, const MedBlock *> BlocksById;
+  for (const MedBlock &Block : CurMedFunc->Blocks)
+    if (!BlocksById.emplace(Block.Id, &Block).second)
+      return false;
+
+  struct UnsignedRange {
+    uint64_t Min = 0;
+    uint64_t Max = 0;
+  };
+  auto maskForSize = [](uint16_t Size) -> std::optional<uint64_t> {
+    if (Size == 0 || Size > sizeof(uint64_t))
+      return std::nullopt;
+    return Size == sizeof(uint64_t) ? std::numeric_limits<uint64_t>::max()
+                                    : (uint64_t{1} << (Size * 8)) - 1;
+  };
+  auto sameValue = [&](const MedVar &Left, const MedVar &Right) {
+    return !Left.isConst() && !Right.isConst() &&
+           addressProvenanceVarKey(Left) == addressProvenanceVarKey(Right);
+  };
+  auto constantValue = [&](const MedVar &Value) -> std::optional<uint64_t> {
+    if (!Value.isConst() || controlConstantMayRelocate(Value))
+      return std::nullopt;
+    auto Mask = maskForSize(Value.Size);
+    return Mask ? std::optional<uint64_t>(Value.ConstVal & *Mask)
+                : std::nullopt;
+  };
+  auto signedConstant = [&](const MedVar &Value,
+                            uint16_t Width) -> std::optional<int64_t> {
+    auto Raw = constantValue(Value);
+    auto Mask = maskForSize(Width);
+    if (!Raw || !Mask)
+      return std::nullopt;
+    const unsigned Bits = Width * 8;
+    uint64_t Result = *Raw & *Mask;
+    if (Bits < 64 && (Result & (uint64_t{1} << (Bits - 1))))
+      Result |= ~*Mask;
+    return static_cast<int64_t>(Result);
+  };
+
+  std::function<std::optional<int64_t>(const MedVar &, const MedVar &,
+                                       std::set<AddressProvenanceVarKey>)>
+      affineStepTo = [&](const MedVar &Start, const MedVar &Root,
+                         std::set<AddressProvenanceVarKey> Seen)
+      -> std::optional<int64_t> {
+    if (Start.isConst())
+      return std::nullopt;
+    if (sameValue(Start, Root))
+      return int64_t{0};
+    if (!Seen.insert(addressProvenanceVarKey(Start)).second)
+      return std::nullopt;
+    const MedOp *Def = lookupDef(Start);
+    if (!Def || Def->NumInputs < 1 || Def->Output.Size != Root.Size)
+      return std::nullopt;
+    if (Def->Opcode == NdOp::COPY && Def->Inputs[0].Size == Def->Output.Size)
+      return affineStepTo(Def->Inputs[0], Root, std::move(Seen));
+    if (Def->Opcode == NdOp::SUBBYTES && Def->NumInputs >= 2 &&
+        Def->Inputs[0].Size == Def->Output.Size &&
+        constantValue(Def->Inputs[1]) == std::optional<uint64_t>(0))
+      return affineStepTo(Def->Inputs[0], Root, std::move(Seen));
+    if ((Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB) ||
+        Def->NumInputs < 2)
+      return std::nullopt;
+
+    const MedVar *Base = &Def->Inputs[0];
+    const MedVar *DeltaValue = &Def->Inputs[1];
+    if (Def->Opcode == NdOp::INT_ADD && Def->Inputs[0].isConst()) {
+      Base = &Def->Inputs[1];
+      DeltaValue = &Def->Inputs[0];
+    }
+    auto Delta = signedConstant(*DeltaValue, Def->Output.Size);
+    auto BaseDelta = affineStepTo(*Base, Root, std::move(Seen));
+    if (!Delta || !BaseDelta)
+      return std::nullopt;
+    int64_t SignedDelta = *Delta;
+    if (Def->Opcode == NdOp::INT_SUB) {
+      if (SignedDelta == std::numeric_limits<int64_t>::min())
+        return std::nullopt;
+      SignedDelta = -SignedDelta;
+    }
+    const __int128 Sum = static_cast<__int128>(*BaseDelta) + SignedDelta;
+    if (Sum < std::numeric_limits<int64_t>::min() ||
+        Sum > std::numeric_limits<int64_t>::max())
+      return std::nullopt;
+    return static_cast<int64_t>(Sum);
+  };
+
+  auto phiBlock = [&](const PhiNode &Phi) -> const MedBlock * {
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      for (const PhiNode &Candidate : Block.Phis)
+        if (&Candidate == &Phi)
+          return &Block;
+    return nullptr;
+  };
+  auto recurrenceEdgeExcludes =
+      [&](int PredId, const MedBlock &Successor,
+          const MedVar &RecurrenceValue) -> std::optional<uint64_t> {
+    auto PredIt = BlocksById.find(PredId);
+    if (PredIt == BlocksById.end() || PredIt->second->Succs.size() != 2 ||
+        PredIt->second->Ops.empty())
+      return std::nullopt;
+    const MedBlock &Pred = *PredIt->second;
+    const MedOp &Branch = Pred.Ops.back();
+    if (Branch.Opcode != NdOp::COND_BR || Branch.NumInputs < 2 ||
+        !Branch.Inputs[0].isConst())
+      return std::nullopt;
+
+    const uint64_t TargetAddr = Branch.Inputs[0].ConstVal;
+    bool SuccessorOnTrue = false;
+    bool SawTarget = false;
+    bool SawSuccessor = false;
+    for (int SuccId : Pred.Succs) {
+      auto SuccIt = BlocksById.find(SuccId);
+      if (SuccIt == BlocksById.end())
+        return std::nullopt;
+      SawSuccessor |= SuccId == Successor.Id;
+      if (SuccIt->second->StartAddr == TargetAddr) {
+        if (SawTarget)
+          return std::nullopt;
+        SawTarget = true;
+        SuccessorOnTrue = SuccId == Successor.Id;
+      }
+    }
+    if (!SawTarget || !SawSuccessor)
+      return std::nullopt;
+
+    MedVar Condition = Branch.Inputs[1];
+    bool Inverted = false;
+    for (unsigned Guard = 0; Guard < 8; ++Guard) {
+      const MedOp *Def = lookupDef(Condition);
+      if (!Def || Def->NumInputs < 1)
+        break;
+      if (Def->Opcode == NdOp::COPY &&
+          Def->Inputs[0].Size == Def->Output.Size) {
+        Condition = Def->Inputs[0];
+        continue;
+      }
+      if (Def->Opcode == NdOp::BOOL_NOT) {
+        Inverted = !Inverted;
+        Condition = Def->Inputs[0];
+        continue;
+      }
+      break;
+    }
+    const MedOp *Compare = lookupDef(Condition);
+    if (!Compare || Compare->NumInputs < 2 ||
+        (Compare->Opcode != NdOp::INT_EQUAL &&
+         Compare->Opcode != NdOp::INT_NOTEQUAL))
+      return std::nullopt;
+    const MedVar *Other = nullptr;
+    if (sameValue(Compare->Inputs[0], RecurrenceValue))
+      Other = &Compare->Inputs[1];
+    else if (sameValue(Compare->Inputs[1], RecurrenceValue))
+      Other = &Compare->Inputs[0];
+    if (!Other)
+      return std::nullopt;
+    auto Bound = constantValue(*Other);
+    if (!Bound)
+      return std::nullopt;
+
+    const bool CompareTrueMeansNotEqual = Compare->Opcode == NdOp::INT_NOTEQUAL;
+    const bool EdgeTakesCondition = SuccessorOnTrue != Inverted;
+    const bool EdgeMeansNotEqual = EdgeTakesCondition
+                                       ? CompareTrueMeansNotEqual
+                                       : !CompareTrueMeansNotEqual;
+    return EdgeMeansNotEqual ? Bound : std::nullopt;
+  };
+
+  std::map<AddressProvenanceVarKey, std::optional<UnsignedRange>> RangeMemo;
+  std::set<AddressProvenanceVarKey> RangeActive;
+  size_t RemainingRangeNodes = 8192;
+  std::function<std::optional<UnsignedRange>(const MedVar &)> unsignedRange =
+      [&](const MedVar &Value) -> std::optional<UnsignedRange> {
+    auto Mask = maskForSize(Value.Size);
+    if (!Mask || RemainingRangeNodes-- == 0)
+      return std::nullopt;
+    if (auto Constant = constantValue(Value))
+      return UnsignedRange{*Constant, *Constant};
+    if (Value.isConst())
+      return std::nullopt;
+
+    const AddressProvenanceVarKey Key = addressProvenanceVarKey(Value);
+    if (auto It = RangeMemo.find(Key); It != RangeMemo.end())
+      return It->second;
+    if (!RangeActive.insert(Key).second)
+      return std::nullopt;
+    auto finish = [&](std::optional<UnsignedRange> Result) {
+      RangeActive.erase(Key);
+      RangeMemo.emplace(Key, Result);
+      return Result;
+    };
+    auto merge =
+        [](std::optional<UnsignedRange> Left,
+           std::optional<UnsignedRange> Right) -> std::optional<UnsignedRange> {
+      if (!Left || !Right)
+        return std::nullopt;
+      return UnsignedRange{std::min(Left->Min, Right->Min),
+                           std::max(Left->Max, Right->Max)};
+    };
+
+    if (const PhiNode *Phi = lookupPhi(Value)) {
+      const MedBlock *Owner = phiBlock(*Phi);
+      if (!Owner)
+        return finish(std::nullopt);
+      std::optional<UnsignedRange> Initial;
+      struct RecurrenceArm {
+        int PredId = -1;
+        MedVar Value;
+        int64_t Step = 0;
+      };
+      std::vector<RecurrenceArm> Recurrences;
+      bool SawFeasible = false;
+      for (const auto &[PredId, Arg] : Phi->Args) {
+        PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, PredId);
+        if (Edge == PhiEdgeFeasibility::Infeasible)
+          continue;
+        if (Edge != PhiEdgeFeasibility::ProvenFeasible)
+          return finish(std::nullopt);
+        SawFeasible = true;
+        if (auto Step = affineStepTo(Arg, Value, {})) {
+          Recurrences.push_back({PredId, Arg, *Step});
+          continue;
+        }
+        auto Arm = unsignedRange(Arg);
+        if (!Arm)
+          return finish(std::nullopt);
+        Initial = Initial ? merge(Initial, Arm) : Arm;
+      }
+      if (!SawFeasible || !Initial)
+        return finish(std::nullopt);
+      if (Recurrences.empty())
+        return finish(Initial);
+
+      std::optional<RecurrenceArm> Positive;
+      for (const RecurrenceArm &Arm : Recurrences) {
+        if (Arm.Step == 0)
+          continue;
+        if (Arm.Step < 0 || Positive)
+          return finish(std::nullopt);
+        Positive = Arm;
+      }
+      if (!Positive)
+        return finish(Initial);
+      if (Initial->Min != Initial->Max)
+        return finish(std::nullopt);
+      auto Bound =
+          recurrenceEdgeExcludes(Positive->PredId, *Owner, Positive->Value);
+      const uint64_t Step = static_cast<uint64_t>(Positive->Step);
+      if (!Bound || *Bound > *Mask || Initial->Min >= *Bound || Step == 0 ||
+          Step > *Bound - Initial->Min || ((*Bound - Initial->Min) % Step) != 0)
+        return finish(std::nullopt);
+      return finish(UnsignedRange{Initial->Min, *Bound - Step});
+    }
+
+    const MedOp *Def = lookupDef(Value);
+    if (!Def || Def->NumInputs < 1)
+      return finish(std::nullopt);
+    auto unary = [&]() { return unsignedRange(Def->Inputs[0]); };
+    auto binary =
+        [&]() -> std::optional<std::pair<UnsignedRange, UnsignedRange>> {
+      if (Def->NumInputs < 2)
+        return std::nullopt;
+      auto Left = unsignedRange(Def->Inputs[0]);
+      auto Right = unsignedRange(Def->Inputs[1]);
+      return Left && Right ? std::optional(std::pair{*Left, *Right})
+                           : std::nullopt;
+    };
+
+    switch (Def->Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+      if (auto Input = unary(); Input && Input->Max <= *Mask)
+        return finish(Input);
+      break;
+    case NdOp::INT_SEXT:
+      if (auto Input = unary()) {
+        auto InputMask = maskForSize(Def->Inputs[0].Size);
+        if (InputMask && Input->Max <= (*InputMask >> 1) && Input->Max <= *Mask)
+          return finish(Input);
+      }
+      break;
+    case NdOp::SUBBYTES:
+      if (Def->NumInputs >= 2 &&
+          constantValue(Def->Inputs[1]) == std::optional<uint64_t>(0))
+        if (auto Input = unary(); Input && Input->Max <= *Mask)
+          return finish(Input);
+      break;
+    case NdOp::INT_AND:
+      if (Def->NumInputs >= 2) {
+        if (auto Constant = constantValue(Def->Inputs[0]))
+          return finish(UnsignedRange{0, *Constant & *Mask});
+        if (auto Constant = constantValue(Def->Inputs[1]))
+          return finish(UnsignedRange{0, *Constant & *Mask});
+      }
+      break;
+    case NdOp::INT_ADD:
+      if (auto Inputs = binary();
+          Inputs && Inputs->first.Max <= *Mask - Inputs->second.Max)
+        return finish(UnsignedRange{Inputs->first.Min + Inputs->second.Min,
+                                    Inputs->first.Max + Inputs->second.Max});
+      break;
+    case NdOp::INT_SUB:
+      if (auto Inputs = binary();
+          Inputs && Inputs->first.Min >= Inputs->second.Max)
+        return finish(UnsignedRange{Inputs->first.Min - Inputs->second.Max,
+                                    Inputs->first.Max - Inputs->second.Min});
+      break;
+    case NdOp::INT_MULT:
+      if (auto Inputs = binary();
+          Inputs && (Inputs->first.Max == 0 ||
+                     Inputs->second.Max <= *Mask / Inputs->first.Max))
+        return finish(UnsignedRange{Inputs->first.Min * Inputs->second.Min,
+                                    Inputs->first.Max * Inputs->second.Max});
+      break;
+    case NdOp::INT_LEFT:
+    case NdOp::INT_RIGHT:
+      if (Def->NumInputs >= 2)
+        if (auto Shift = constantValue(Def->Inputs[1])) {
+          const unsigned Bits = Def->Output.Size * 8;
+          if (*Shift >= Bits)
+            return finish(UnsignedRange{0, 0});
+          if (auto Input = unary()) {
+            if (Def->Opcode == NdOp::INT_RIGHT)
+              return finish(
+                  UnsignedRange{Input->Min >> *Shift, Input->Max >> *Shift});
+            if (Input->Max <= (*Mask >> *Shift))
+              return finish(
+                  UnsignedRange{Input->Min << *Shift, Input->Max << *Shift});
+          }
+        }
+      break;
+    case NdOp::SELECT:
+      if (selectPreservesPointerValues(*Def))
+        return finish(merge(unsignedRange(Def->Inputs[1]),
+                            unsignedRange(Def->Inputs[2])));
+      break;
+    default:
+      break;
+    }
+    return finish(std::nullopt);
+  };
+
+  struct FrameOffsetRange {
+    std::pair<int, int> Root;
+    int64_t Min = 0;
+    int64_t Max = 0;
+  };
+  struct FrameRangeProof {
+    bool Valid = false;
+    bool SawCycle = false;
+    std::optional<FrameOffsetRange> Range;
+  };
+  size_t RemainingFrameRangeNodes = 8192;
+  std::function<FrameRangeProof(const MedVar &,
+                                std::set<AddressProvenanceVarKey>)>
+      proveFrameOffsetRange =
+          [&](const MedVar &Address,
+              std::set<AddressProvenanceVarKey> Seen) -> FrameRangeProof {
+    if (Address.isConst() || RemainingFrameRangeNodes-- == 0)
+      return {};
+    if (auto Exact = canonicalFrameSlotKey(Address))
+      return {true, false,
+              FrameOffsetRange{Exact->first, Exact->second, Exact->second}};
+    const AddressProvenanceVarKey Key = addressProvenanceVarKey(Address);
+    if (!Seen.insert(Key).second)
+      return {true, true, std::nullopt};
+    auto extend = [&](const FrameOffsetRange &Base, const UnsignedRange &Delta,
+                      bool Subtract) -> std::optional<FrameOffsetRange> {
+      const __int128 Min = static_cast<__int128>(Base.Min) +
+                           (Subtract ? -static_cast<__int128>(Delta.Max)
+                                     : static_cast<__int128>(Delta.Min));
+      const __int128 Max = static_cast<__int128>(Base.Max) +
+                           (Subtract ? -static_cast<__int128>(Delta.Min)
+                                     : static_cast<__int128>(Delta.Max));
+      if (Min < std::numeric_limits<int64_t>::min() ||
+          Max > std::numeric_limits<int64_t>::max())
+        return std::nullopt;
+      return FrameOffsetRange{Base.Root, static_cast<int64_t>(Min),
+                              static_cast<int64_t>(Max)};
+    };
+    auto mergeProofs = [](const FrameRangeProof &Left,
+                          const FrameRangeProof &Right) -> FrameRangeProof {
+      if (!Left.Valid || !Right.Valid ||
+          (Left.Range && Right.Range && Left.Range->Root != Right.Range->Root))
+        return {};
+      std::optional<FrameOffsetRange> Range =
+          Left.Range ? Left.Range : Right.Range;
+      if (Left.Range && Right.Range)
+        Range = FrameOffsetRange{Left.Range->Root,
+                                 std::min(Left.Range->Min, Right.Range->Min),
+                                 std::max(Left.Range->Max, Right.Range->Max)};
+      return {true, Left.SawCycle || Right.SawCycle, Range};
+    };
+
+    if (const PhiNode *Phi = lookupPhi(Address)) {
+      FrameRangeProof Result;
+      bool SawFeasible = false;
+      for (const auto &[PredId, Arg] : Phi->Args) {
+        PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, PredId);
+        if (Edge == PhiEdgeFeasibility::Infeasible)
+          continue;
+        if (Edge != PhiEdgeFeasibility::ProvenFeasible)
+          return {};
+        FrameRangeProof Arm = proveFrameOffsetRange(Arg, Seen);
+        if (!Arm.Valid)
+          return {};
+        Result = SawFeasible ? mergeProofs(Result, Arm) : Arm;
+        if (!Result.Valid)
+          return {};
+        SawFeasible = true;
+      }
+      return SawFeasible ? Result : FrameRangeProof{};
+    }
+
+    const MedOp *Def = lookupDef(Address);
+    if (!Def || Def->NumInputs < 1)
+      return {};
+    if (Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
+        Def->Opcode == NdOp::INT_SEXT || Def->Opcode == NdOp::SUBBYTES) {
+      if (auto Forwarded = pointerPreservingInput(*Def))
+        return proveFrameOffsetRange(*Forwarded, std::move(Seen));
+      return {};
+    }
+    if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
+        Def->NumInputs >= 2) {
+      auto extendProof = [&](const MedVar &BaseValue, const MedVar &DeltaValue,
+                             bool Subtract) -> FrameRangeProof {
+        FrameRangeProof Base = proveFrameOffsetRange(BaseValue, Seen);
+        auto Delta = unsignedRange(DeltaValue);
+        if (!Base.Valid || !Delta)
+          return {};
+        if (!Base.Range)
+          return Delta->Min == 0 && Delta->Max == 0 ? Base : FrameRangeProof{};
+        auto Range = extend(*Base.Range, *Delta, Subtract);
+        return Range ? FrameRangeProof{true, Base.SawCycle, Range}
+                     : FrameRangeProof{};
+      };
+      if (FrameRangeProof Left = extendProof(Def->Inputs[0], Def->Inputs[1],
+                                             Def->Opcode == NdOp::INT_SUB);
+          Left.Valid)
+        return Left;
+      if (Def->Opcode == NdOp::INT_ADD)
+        return extendProof(Def->Inputs[1], Def->Inputs[0], false);
+      return {};
+    }
+    if (selectPreservesPointerValues(*Def)) {
+      FrameRangeProof True = proveFrameOffsetRange(Def->Inputs[1], Seen);
+      FrameRangeProof False =
+          proveFrameOffsetRange(Def->Inputs[2], std::move(Seen));
+      return mergeProofs(True, False);
+    }
+    return {};
+  };
+  auto frameOffsetRange =
+      [&](const MedVar &Address) -> std::optional<FrameOffsetRange> {
+    FrameRangeProof Proof = proveFrameOffsetRange(Address, {});
+    return Proof.Valid ? Proof.Range : std::nullopt;
+  };
+
+  auto ARange = frameOffsetRange(A);
+  auto BRange = frameOffsetRange(B);
+  if (!ARange || !BRange || ARange->Root != BRange->Root)
+    return false;
+
+  // Two byte ranges alias after pointer-width wrapping iff the signed
+  // difference interval contains a multiple of 2^N.
+  const __int128 Modulus = __int128{1} << (PointerBytes * 8);
+  const __int128 DifferenceMin =
+      static_cast<__int128>(ARange->Min) -
+      (static_cast<__int128>(BRange->Max) + BSize - 1);
+  const __int128 DifferenceMax =
+      (static_cast<__int128>(ARange->Max) + ASize - 1) -
+      static_cast<__int128>(BRange->Min);
+  auto floorDiv = [](__int128 Value, __int128 Divisor) {
+    return Value >= 0 ? Value / Divisor : -((-Value + Divisor - 1) / Divisor);
+  };
+  auto ceilDiv = [&](const __int128 Value, const __int128 Divisor) {
+    return -floorDiv(-Value, Divisor);
+  };
+  return ceilDiv(DifferenceMin, Modulus) > floorDiv(DifferenceMax, Modulus);
+}
+
 bool MedLLVMEmitter::collectFrameReloadSources(
     const MedOp &Load, std::vector<MedVar> &Sources) const {
   Sources.clear();
+  const bool Escapes = CurMedFunc && Load.Opcode == NdOp::LOAD &&
+                       Load.NumInputs >= 1 &&
+                       stackSlotAddressEscapes(Load.Inputs[0]);
   if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
-      Load.Output.Size == 0 || stackSlotAddressEscapes(Load.Inputs[0]))
+      Load.Output.Size == 0 || Escapes)
     return false;
 
   const auto Target = canonicalFrameSlotKey(Load.Inputs[0]);
@@ -268,20 +762,26 @@ bool MedLLVMEmitter::collectFrameReloadSources(
       const MedVar &WriteAddr = Op.Inputs[0];
       if (!varMayBeFrameAddress(WriteAddr))
         continue;
+      uint16_t WriteSize = Op.Opcode == NdOp::STORE && Op.NumInputs >= 2
+                               ? Op.Inputs[1].Size
+                               : Op.Output.Size;
       const auto WriteKey = canonicalFrameSlotKey(WriteAddr);
       // A frame-derived write whose slot cannot be canonicalized, or whose
       // root differs from the reload's root, may still alias after an
       // unmodelled stack adjustment. Keep the state poisoned until a later
       // exact full-width STORE definitely overwrites the target slot.
       if (!WriteKey || WriteKey->first != Target->first) {
+        const bool ProvenDisjoint =
+            !WriteKey &&
+            frameAccessesProvenDisjoint(WriteAddr, WriteSize, Load.Inputs[0],
+                                        Load.Output.Size);
+        if (ProvenDisjoint)
+          continue;
         State.Invalid = true;
         State.Values.clear();
         continue;
       }
 
-      uint16_t WriteSize = Op.Opcode == NdOp::STORE && Op.NumInputs >= 2
-                               ? Op.Inputs[1].Size
-                               : Op.Output.Size;
       if (!overlaps(WriteKey->second, WriteSize, Target->second,
                     Load.Output.Size))
         continue;

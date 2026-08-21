@@ -349,7 +349,14 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     const Section *OwnerSec = Img->getSectionFor(OwnerVA);
     const uint64_t Begin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
     const uint64_t Size = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
-    if (Size > InvalidVA - Begin || VA < Begin || VA > Begin + Size)
+    // Relocations can intentionally name a read-only symbol with a small
+    // negative addend (`table - 1`) so a subsequent one-based index lands on
+    // the first element.  The owner, not the adjusted numeric value, selects
+    // the rebuilt run.  Admit at most one native word of look-behind; larger
+    // cross-object arithmetic still needs an explicit complete-domain proof.
+    const uint64_t PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+    const uint64_t LowerBound = Begin > PointerSize ? Begin - PointerSize : 0;
+    if (Size > InvalidVA - Begin || VA < LowerBound || VA > Begin + Size)
       return false;
 
     bool HasReadOnlySectionEvidence = false;
@@ -443,13 +450,13 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   bool SawPhi = false;
   bool SawNonRecurrentPhi = false;
   bool SawPointerValueMerge = false;
+  bool SawNonBaseValueMerge = false;
   const PhiNode *EvidencePhi = nullptr;
   bool SawInvalidPointerExpression = false;
   bool SawTableShapedInvalidExpression = false;
   bool SawUnprovedFrameReload = false;
   bool SawRawOriginalBase = false;
   bool SawSymbolizedBase = false;
-  bool ExceededStructuralDepth = false;
   bool AuditIncomplete = false;
   // Large flag-expanded scalar DAGs in real computed-goto loops use just under
   // 5K nodes. Keep the audit bounded while leaving headroom above that proven
@@ -461,7 +468,12 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // known pointer ABI parameters pass true because retaining a stale table VA
   // in those contexts would be unsafe.
   using SeenSet = std::set<std::tuple<int, int, int>>;
-  enum class BaseProof { Invalid, NoBase, HasBase };
+  // Cycle is a coinductive edge inside the address-expression SCC.  It is not
+  // a base by itself: only a complete PHI/selection that also has a real
+  // HasBase arm may discharge it.  Keeping it distinct from Invalid makes the
+  // proof traversal-order independent without granting an unanchored cycle
+  // pointer authority.
+  enum class BaseProof { Invalid, NoBase, HasBase, Cycle };
   auto isExactSameVar = [](const MedVar &Left, const MedVar &Right) {
     if (Left.Kind != Right.Kind || Left.TheArch != Right.TheArch ||
         Left.RenameTag != Right.RenameTag || Left.Id != Right.Id ||
@@ -484,6 +496,11 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   auto readOnlyBaseIdentity =
       [&](const MedVar &Occurrence,
           uint64_t VA) -> std::optional<ReadOnlyBaseIdentity> {
+    const uint16_t PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+    if (Occurrence.Size != 0 && PointerSize != 0 &&
+        Occurrence.Size < PointerSize && Occurrence.Size < 8 &&
+        (VA >> (Occurrence.Size * 8)) != 0)
+      return std::nullopt;
     bool OwnerConflict = false;
     std::optional<uint64_t> Owner =
         uniqueDataAddressOwner(Occurrence, VA, OwnerConflict);
@@ -930,10 +947,17 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       return BaseProof::Invalid;
     }
     --RemainingAuditNodes;
-    ExceededStructuralDepth |= Depth > 16;
     if (varIsFrameDerived(V))
       return BaseProof::Invalid;
     if (V.isConst()) {
+      const uint16_t PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+      if (V.Size != 0 && PointerSize != 0 && V.Size < PointerSize &&
+          V.Size < 8 && (V.ConstVal >> (V.Size * 8)) != 0 &&
+          isReadOnlyTableBase(V.ConstVal)) {
+        SawInvalidPointerExpression = true;
+        SawTableShapedInvalidExpression = true;
+        return BaseProof::Invalid;
+      }
       if (auto Base = readOnlyBaseIdentity(V, V.ConstVal)) {
         Bases.insert(*Base);
         bool Symbolized = dataOccurrenceSymbolizes(V);
@@ -964,14 +988,22 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         // jump-table anchors.  Keep a code address Invalid so combining it
         // with a proven data base still fails closed, but do not make a
         // code-only address fatal before the later code-table path can own it.
-        SawTableShapedInvalidExpression |= !Img->isCodeAddress(V.ConstVal);
+        SawTableShapedInvalidExpression |= isReadOnlyTableBase(V.ConstVal);
         return BaseProof::Invalid;
       }
       return BaseProof::NoBase;
     }
+    // The table-base audit owns address provenance; its other operand may be
+    // an arbitrarily lowered scalar recurrence.  Reuse the canonical all-path
+    // scalar-domain proof before applying pointer-recurrence rules below.  It
+    // accepts multiply/shift/flag-expanded induction DAGs, but rejects any
+    // feasible data/code-address leaf, mixed PHI, incomplete frame reload, or
+    // relocatable constant, so a second base cannot hide behind this shortcut.
+    if (valueIsStableAddressOffset(V))
+      return BaseProof::NoBase;
     auto Key = std::make_tuple(static_cast<int>(V.Kind), V.Id, V.SSAVer);
     if (!Seen.insert(Key).second)
-      return BaseProof::Invalid;
+      return BaseProof::Cycle;
 
     // A pointer-table LOAD's source address belongs to the table segment, but
     // the value it produces belongs to one of the relocation targets.  Record
@@ -1007,14 +1039,19 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       // Do not let whole-expression constant folding hide operand provenance.
       // A plain ADD hidden under COPY/ZEXT must still be proven structurally;
       // only a literal-pool fold or a pure forwarding chain introduces a base.
-      bool FoldPreservesRole = SawLoad || !SawArithmetic;
+      std::optional<PureReadOnlyBaseIdentity> PureIdentity;
+      if (!SawLoad && !SawArithmetic)
+        PureIdentity = pureReadOnlyBaseIdentity(
+            V, /*DirectPhiConstantBypassesGetVar=*/false);
+      bool FoldPreservesRole =
+          SawLoad || (PureIdentity && PureIdentity->VA == *C);
       if (FoldPreservesRole) {
         if (auto Base = readOnlyBaseIdentity(V, *C)) {
           Bases.insert(*Base);
           // A non-constant arm is not automatically relocatable: low-VA COPYs
           // remain original numeric addresses. Classify it with the exact rule
           // getVar itself uses, while literal-pool arithmetic always stays raw.
-          bool Symbolized = !SawLoad && dataOccurrenceSymbolizes(V);
+          bool Symbolized = PureIdentity && PureIdentity->Symbolized;
           SawRawOriginalBase |= !Symbolized;
           SawSymbolizedBase |= Symbolized;
           return BaseProof::HasBase;
@@ -1027,14 +1064,19 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       // treating the whole PHI as scalar lets AND(p,mask) or ADD(p,other_base)
       // hide a table pointer from the fail-closed outer-expression audit.
       bool Recurrent = phiIsSelfRecurrent(*Phi);
-      SawPhi = true;
-      SawNonRecurrentPhi |= !Recurrent;
-      if (!EvidencePhi)
-        EvidencePhi = Phi;
+      const bool StructuralCycle = phiHasPureForwardingCycle(*Phi);
+      const std::set<ReadOnlyBaseIdentity> BasesBefore = Bases;
+      auto markPointerPhi = [&]() {
+        SawPhi = true;
+        SawNonRecurrentPhi |= !Recurrent;
+        if (!EvidencePhi)
+          EvidencePhi = Phi;
+      };
       bool SawFeasible = false;
       bool SawInitialization = false;
       bool SawBaseArm = false;
       bool SawScalarArm = false;
+      bool SawCycleArm = false;
       for (const auto &[Pred, Arg] : Phi->Args) {
         if (!phiIncomingEdgeFeasible(*Phi, Pred))
           continue;
@@ -1049,6 +1091,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
             SawScalarArm = true;
             continue;
           }
+          markPointerPhi();
           if (Phi->Output.Size == 0 || Arg.Size == 0 ||
               Phi->Output.Size < Arg.Size) {
             Bases.insert(*Base);
@@ -1067,23 +1110,49 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         if (Arm == BaseProof::Invalid)
           return BaseProof::Invalid;
         if (Arm == BaseProof::HasBase) {
+          markPointerPhi();
           if (Phi->Output.Size == 0 || Arg.Size == 0 ||
               Phi->Output.Size < Arg.Size) {
             SawInvalidPointerExpression = true;
             return BaseProof::Invalid;
           }
           SawBaseArm = true;
+        } else if (Arm == BaseProof::Cycle) {
+          SawCycleArm = true;
         } else {
           SawScalarArm = true;
         }
       }
       if (!SawFeasible || !SawInitialization)
         return BaseProof::Invalid;
+      if (StructuralCycle && !Recurrent) {
+        size_t DistinctComponentBases = 0;
+        for (const ReadOnlyBaseIdentity &Base : Bases)
+          DistinctComponentBases += BasesBefore.count(Base) == 0;
+        if (DistinctComponentBases > 1) {
+          markPointerPhi();
+          SawInvalidPointerExpression = true;
+          return BaseProof::Invalid;
+        }
+      }
       if (SawBaseArm && SawScalarArm) {
+        // A runtime value can legally share a pointer PHI with a fully
+        // symbolized static base (for example an incoming caller pointer on
+        // one path and &table on another).  Preserve the merge and decide its
+        // address model after the complete walk: it is safe only when no raw
+        // original-image base remains to be uniformly re-anchored.
+        markPointerPhi();
+        SawPointerValueMerge = true;
+        SawNonBaseValueMerge = true;
+        return BaseProof::HasBase;
+      }
+      if (SawBaseArm)
+        return BaseProof::HasBase;
+      if (SawCycleArm && SawScalarArm) {
         SawInvalidPointerExpression = true;
         return BaseProof::Invalid;
       }
-      return SawBaseArm ? BaseProof::HasBase : BaseProof::NoBase;
+      return SawCycleArm ? BaseProof::Cycle : BaseProof::NoBase;
     }
     if (!Def)
       return BaseProof::NoBase;
@@ -1116,13 +1185,27 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
                    ? BaseProof::NoBase
                    : BaseProof::Invalid;
       }
-      if (T == BaseProof::Invalid || F == BaseProof::Invalid || T != F) {
+      if (T == BaseProof::Invalid || F == BaseProof::Invalid) {
         if (T != BaseProof::NoBase || F != BaseProof::NoBase)
           SawInvalidPointerExpression = true;
         return BaseProof::Invalid;
       }
-      SawPointerValueMerge |= T == BaseProof::HasBase;
-      return T;
+      if (T == F)
+        return T;
+      if ((T == BaseProof::HasBase && F == BaseProof::Cycle) ||
+          (F == BaseProof::HasBase && T == BaseProof::Cycle)) {
+        SawPointerValueMerge = true;
+        return BaseProof::HasBase;
+      }
+      if ((T == BaseProof::HasBase && F == BaseProof::NoBase) ||
+          (F == BaseProof::HasBase && T == BaseProof::NoBase)) {
+        SawPointerValueMerge = true;
+        SawNonBaseValueMerge = true;
+        return BaseProof::HasBase;
+      }
+      if (T != BaseProof::NoBase || F != BaseProof::NoBase)
+        SawInvalidPointerExpression = true;
+      return BaseProof::Invalid;
     }
     case NdOp::INT_OR: {
       if (Def->NumInputs < 2)
@@ -1136,10 +1219,14 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF)) {
         BaseProof T = walk(ArmT, Depth + 1, Seen);
         BaseProof F = walk(ArmF, Depth + 1, Seen);
-        if (T == BaseProof::HasBase && F == BaseProof::HasBase) {
+        if ((T == BaseProof::HasBase || T == BaseProof::Cycle) &&
+            (F == BaseProof::HasBase || F == BaseProof::Cycle) &&
+            (T == BaseProof::HasBase || F == BaseProof::HasBase)) {
           SawPointerValueMerge = true;
           return BaseProof::HasBase;
         }
+        if (T == BaseProof::Cycle && F == BaseProof::Cycle)
+          return BaseProof::Cycle;
         if (T == BaseProof::NoBase && F == BaseProof::NoBase)
           return BaseProof::NoBase;
         SawInvalidPointerExpression = true;
@@ -1158,23 +1245,32 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         return BaseProof::Invalid;
       BaseProof L = walk(Def->Inputs[0], Depth + 1, Seen);
       BaseProof R = walk(Def->Inputs[1], Depth + 1, Seen);
+      const bool LeftPointer = L == BaseProof::HasBase || L == BaseProof::Cycle;
+      const bool RightPointer =
+          R == BaseProof::HasBase || R == BaseProof::Cycle;
       if (L == BaseProof::Invalid || R == BaseProof::Invalid ||
-          (L == BaseProof::HasBase && R == BaseProof::HasBase)) {
+          (LeftPointer && RightPointer)) {
         if (L != BaseProof::NoBase || R != BaseProof::NoBase)
           SawInvalidPointerExpression = true;
         markTableShapedInvalidFold(V);
         return BaseProof::Invalid;
       }
-      if (L == BaseProof::HasBase || R == BaseProof::HasBase) {
+      if (LeftPointer || RightPointer) {
         const MedVar &PointerInput =
-            L == BaseProof::HasBase ? Def->Inputs[0] : Def->Inputs[1];
+            LeftPointer ? Def->Inputs[0] : Def->Inputs[1];
+        const MedVar &OffsetInput =
+            LeftPointer ? Def->Inputs[1] : Def->Inputs[0];
+        if (!valueIsStableAddressOffset(OffsetInput)) {
+          SawInvalidPointerExpression = true;
+          return BaseProof::Invalid;
+        }
         if (Def->Output.Size == 0 || PointerInput.Size == 0 ||
             Def->Output.Size < PointerInput.Size) {
           SawInvalidPointerExpression = true;
           markTableShapedInvalidFold(V);
           return BaseProof::Invalid;
         }
-        return BaseProof::HasBase;
+        return LeftPointer ? L : R;
       }
       if (auto Result = traceValueVA(V);
           Result && isReadOnlyTableBase(*Result)) {
@@ -1195,14 +1291,19 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         markTableShapedInvalidFold(V);
         return BaseProof::Invalid;
       }
-      if (L == BaseProof::HasBase && R == BaseProof::NoBase) {
+      if ((L == BaseProof::HasBase || L == BaseProof::Cycle) &&
+          R == BaseProof::NoBase) {
+        if (!valueIsStableAddressOffset(Def->Inputs[1])) {
+          SawInvalidPointerExpression = true;
+          return BaseProof::Invalid;
+        }
         if (Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
             Def->Output.Size < Def->Inputs[0].Size) {
           SawInvalidPointerExpression = true;
           markTableShapedInvalidFold(V);
           return BaseProof::Invalid;
         }
-        return BaseProof::HasBase;
+        return L;
       }
       if (L == BaseProof::NoBase && R == BaseProof::NoBase) {
         if (auto Result = traceValueVA(V);
@@ -1284,7 +1385,9 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       // the reloads. Use the same all-path reaching-store proof as the indexed
       // resolver so an unrelated or partial store cannot become provenance.
       std::vector<MedVar> Sources;
-      if (!collectFrameReloadSources(*Def, Sources) || Sources.empty()) {
+      const bool CompleteFrameSources =
+          collectFrameReloadSources(*Def, Sources);
+      if (!CompleteFrameSources || Sources.empty()) {
         // A pointer-width frame reload is an implicit value merge. If its
         // all-path reaching stores cannot be established, it may carry an
         // uninitialized or later-written table pointer. Record that uncertainty
@@ -1298,19 +1401,118 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
           SawUnprovedFrameReload = true;
         return BaseProof::NoBase;
       }
+      const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+      if (PointerSize != 0 && Def->Output.Size < PointerSize) {
+        // A narrow frame reload cannot itself transport a complete native
+        // pointer, but its reaching stores may still contain the low fragment
+        // of an independently relocatable table address.  Scan value-carrying
+        // leaves once before recursing through the full merge audit.  Proven
+        // scalar recurrences (including a later-iteration frame cycle) have no
+        // address leaf and remain an offset; an address leaf or an incomplete
+        // scan keeps the existing fail-closed path below.
+        enum class NarrowLeafScan { ScalarOnly, AddressEvidence, Incomplete };
+        auto scanNarrowSources = [&]() {
+          std::vector<MedVar> Work = Sources;
+          SeenSet ScanSeen;
+          size_t Budget = 8192;
+          while (!Work.empty()) {
+            if (Budget-- == 0)
+              return NarrowLeafScan::Incomplete;
+            MedVar Current = Work.back();
+            Work.pop_back();
+            if (Current.isConst()) {
+              if (Current.Provenance == ConstantAddressProvenance::Scalar)
+                continue;
+              if (readOnlyBaseIdentity(Current, Current.ConstVal) ||
+                  isAddressProvenance(Current.Provenance) ||
+                  getVarMayRelocateConstant(Current.ConstVal, Current.Size) ||
+                  hasObjectDataProvenance(Current.ConstVal))
+                return NarrowLeafScan::AddressEvidence;
+              continue;
+            }
+            auto CurrentKey = std::make_tuple(static_cast<int>(Current.Kind),
+                                              Current.Id, Current.SSAVer);
+            if (!ScanSeen.insert(CurrentKey).second)
+              continue;
+            if (const PhiNode *Phi = findPhi(Current)) {
+              for (const auto &[Pred, Arg] : Phi->Args)
+                if (phiIncomingEdgeFeasible(*Phi, Pred))
+                  Work.push_back(Arg);
+              continue;
+            }
+            const MedOp *CurrentDef = findDef(Current);
+            if (!CurrentDef)
+              continue;
+            if (CurrentDef->Opcode == NdOp::LOAD) {
+              std::vector<MedVar> ReloadSources;
+              if (!collectFrameReloadSources(*CurrentDef, ReloadSources))
+                return NarrowLeafScan::Incomplete;
+              Work.insert(Work.end(), ReloadSources.begin(),
+                          ReloadSources.end());
+              continue;
+            }
+            if (CurrentDef->Opcode == NdOp::SELECT &&
+                CurrentDef->NumInputs >= 3) {
+              Work.push_back(CurrentDef->Inputs[1]);
+              Work.push_back(CurrentDef->Inputs[2]);
+              continue;
+            }
+            switch (CurrentDef->Opcode) {
+            case NdOp::COPY:
+            case NdOp::INT_ZEXT:
+            case NdOp::INT_SEXT:
+            case NdOp::SUBBYTES:
+            case NdOp::INT_ADD:
+            case NdOp::INT_SUB:
+            case NdOp::INT_AND:
+            case NdOp::INT_OR:
+            case NdOp::INT_XOR:
+            case NdOp::INT_MULT:
+            case NdOp::INT_DIV:
+            case NdOp::INT_SDIV:
+            case NdOp::INT_REM:
+            case NdOp::INT_SREM:
+            case NdOp::INT_LEFT:
+            case NdOp::INT_RIGHT:
+            case NdOp::INT_ASHR:
+            case NdOp::INT_NEGATE:
+            case NdOp::INT_NEG2:
+              for (uint8_t I = 0; I < CurrentDef->NumInputs; ++I)
+                Work.push_back(CurrentDef->Inputs[I]);
+              break;
+            default:
+              break;
+            }
+          }
+          return NarrowLeafScan::ScalarOnly;
+        };
+        const NarrowLeafScan Scan = scanNarrowSources();
+        if (Scan == NarrowLeafScan::ScalarOnly)
+          return BaseProof::NoBase;
+        if (Scan == NarrowLeafScan::Incomplete) {
+          SawInvalidPointerExpression = true;
+          return BaseProof::Invalid;
+        }
+      }
       bool SawBaseSource = false;
       bool SawScalarSource = false;
       bool SawInvalidSource = false;
+      bool SawCycleSource = false;
       const std::set<ReadOnlyBaseIdentity> BasesBefore = Bases;
       for (const MedVar &Source : Sources) {
         BaseProof SourceProof = walk(Source, Depth + 1, Seen);
         SawBaseSource |= SourceProof == BaseProof::HasBase;
         SawScalarSource |= SourceProof == BaseProof::NoBase;
         SawInvalidSource |= SourceProof == BaseProof::Invalid;
+        SawCycleSource |= SourceProof == BaseProof::Cycle;
       }
-      if (SawBaseSource && (SawScalarSource || SawInvalidSource)) {
+      if (SawCycleSource && SawScalarSource) {
         SawInvalidPointerExpression = true;
         return BaseProof::Invalid;
+      }
+      if (SawBaseSource && SawScalarSource) {
+        SawPointerValueMerge = true;
+        SawNonBaseValueMerge = true;
       }
       size_t DistinctReloadBases = 0;
       for (const ReadOnlyBaseIdentity &Base : Bases)
@@ -1324,7 +1526,9 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       SawPointerValueMerge |= DistinctReloadBases > 1;
       if (SawInvalidSource)
         return BaseProof::Invalid;
-      return SawBaseSource ? BaseProof::HasBase : BaseProof::NoBase;
+      if (SawBaseSource)
+        return BaseProof::HasBase;
+      return SawCycleSource ? BaseProof::Cycle : BaseProof::NoBase;
     }
     default:
       return BaseProof::NoBase;
@@ -1343,7 +1547,11 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     if (auto Result = traceValueVA(BaseVar);
         Result && isReadOnlyTableBase(*Result))
       SawTableShapedInvalidExpression = true;
-  if (Proof == BaseProof::Invalid && !AuditIncomplete &&
+  const bool NeedsPredicatedPathProof =
+      Proof == BaseProof::Invalid ||
+      (Proof == BaseProof::HasBase && SawNonBaseValueMerge &&
+       SawRawOriginalBase && !SawSymbolizedBase);
+  if (NeedsPredicatedPathProof && !AuditIncomplete &&
       !SawTableShapedInvalidExpression && PredicatedAccessGuard) {
     SawPredicatedLiteralLoad = false;
     if (auto PredicatedBase = predicatedTableBase(BaseVar, 0, {});
@@ -1355,6 +1563,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       Bases.clear();
       Bases.insert({*PredicatedBase, InvalidVA});
       SawInvalidPointerExpression = false;
+      SawNonBaseValueMerge = false;
       SawRawOriginalBase = true;
       SawSymbolizedBase = false;
       Proof = BaseProof::HasBase;
@@ -1393,20 +1602,21 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     failAmbiguousAddress();
     return nullptr;
   }
-  if (Proof == BaseProof::HasBase && ExceededStructuralDepth &&
-      (!SawPhi || !SawNonRecurrentPhi)) {
+  if (Proof == BaseProof::HasBase && SawNonBaseValueMerge &&
+      SawRawOriginalBase) {
     failAmbiguousAddress();
     return nullptr;
   }
-  // Recurrent PHIs are walked here only so invalid surrounding expressions
-  // cannot hide their provenance.  Their actual address model (including
-  // alias-recursive components and initialization runs) remains owned by the
-  // induction resolver.  A non-recurrent pointer PHI belongs here even when
-  // all arms select the same table VA: its computed arms may already contain a
-  // relocatable pointer, while the later single-base indexed resolver assumes
-  // an original numeric VA and would rebase it a second time.
-  if (Proof != BaseProof::HasBase ||
-      (!(SawPhi && SawNonRecurrentPhi) && !SawPointerValueMerge))
+  if (Proof != BaseProof::HasBase)
+    return nullptr;
+
+  // A pure recurrent PHI still belongs to the induction resolver: it owns the
+  // recurrence step as well as the initialization base.  Every other complete
+  // proof is owned here, including a deeply nested single-base expression.
+  // Deferring the latter to the shallower indexed recognizer makes address
+  // safety depend on expression depth even though this audit has already
+  // inspected every reachable operand.
+  if (SawPhi && !SawNonRecurrentPhi && !SawPointerValueMerge)
     return nullptr;
 
   // PHI edge constants bypass getVar and still carry original-image VAs;
@@ -1416,6 +1626,24 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   if (SawRawOriginalBase && SawSymbolizedBase) {
     failAmbiguousAddress();
     return nullptr;
+  }
+
+  // The audit above is the authority for all reachable pointer-valued arms.
+  // Once it proves that the expression is not a pointer merge and did not
+  // itself encounter a pointer-valued PHI, let the one-base indexed owner
+  // preserve the exact additive/subtractive index role and canonical `tblptr`
+  // representation.  A PHI can have only one reachable/distinct base after
+  // edge pruning, but it still owns the emitted current-pointer model; handing
+  // that shape to the indexed resolver would either select one convenient arm
+  // or re-anchor an already computed address.  Scalar index PHIs do not set
+  // SawPhi because the scalar-domain proof consumes them before this pointer
+  // audit, so ordinary `base +/- scalar_phi` remains eligible.
+  if (!SawPointerValueMerge && !SawPhi) {
+    if (llvm::Value *Indexed =
+            tryResolveIndexedGlobalPtr(AddrVar, SizeHint, FailClosed, Builder))
+      return Indexed;
+    if (FatalDataPointerResolution || FatalCodePointerResolution)
+      return nullptr;
   }
 
   if (StoredBasesFor != CurMedFunc) {

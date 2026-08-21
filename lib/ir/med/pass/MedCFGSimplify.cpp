@@ -11,13 +11,30 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/loader/BinaryImage.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <map>
+#include <set>
 
 namespace neverd {
 
 void LowToMedConverter::simplifyCfg(MedFunc &Func) {
+  std::set<va_t> AddressTakenTargets;
+  if (Image) {
+    for (va_t Target : Image->CodeRefTargets)
+      AddressTakenTargets.insert(
+          normalizeCodeAddress(Target, Image->Arch, Image->Mode));
+    const unsigned PointerSize = Image->getPointerSize();
+    if (PointerSize != 0)
+      for (va_t Slot : Image->CodePtrRelocSlots)
+        if (const uint8_t *Bytes = Image->readVA(Slot, PointerSize))
+          AddressTakenTargets.insert(normalizeCodeAddress(
+              static_cast<va_t>(readPtr(Bytes, Image->is64Bit())), Image->Arch,
+              Image->Mode));
+  }
+
   bool Changed = true;
   while (Changed) {
     Changed = false;
@@ -42,6 +59,19 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
       if (!IsTrivial)
         continue;
       if (Blk.Id == 0)
+        continue;
+
+      // A relocation-backed code value names this exact native label, not
+      // merely its eventual CFG successor.  Removing the jump-only block would
+      // leave the pointer table targeting an address with no LLVM BlockAddress
+      // owner.  Direct branches and JumpTable metadata can be rewritten below;
+      // an externally stored code identity cannot, so retain its block.
+      const va_t BlockAddress = Blk.StartAddr != 0 || Blk.Ops.empty()
+                                    ? Blk.StartAddr
+                                    : Blk.Ops.front().Addr;
+      if (AddressTakenTargets.count(normalizeCodeAddress(
+              BlockAddress, TargetArch,
+              Image ? Image->Mode : InstructionMode::Default)) != 0)
         continue;
 
       int Target = Blk.Succs[0];

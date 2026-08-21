@@ -303,40 +303,73 @@ void CFGBuilder::rewriteAsIndirectTailCall(InsnRecord &Rec) {
     return;
 
   // Capture the indirect branch target (the function-pointer register/temp)
-  // before clearing the instruction's lifted ops.
+  // and its instruction-local definition slice before replacing the control
+  // transfer.  x86 memory-indirect JMP materializes the effective address and
+  // LOAD in the same instruction, and LiftState temporary ids are reused by
+  // every later instruction.  Keeping only the naked temp after clearing the
+  // record therefore reconnects the tail call to an unrelated later temp once
+  // SSA is built (often a one-byte flag calculation).
   NdVar Target;
-  bool Found = false;
-  for (auto &Op : Rec.Ops)
-    if (Op.Opcode == NdOp::INDIR_BR && Op.NumInputs >= 1) {
-      Target = Op.Inputs[0];
-      Found = true;
+  size_t BranchIndex = Rec.Ops.size();
+  for (size_t I = 0; I < Rec.Ops.size(); ++I)
+    if (Rec.Ops[I].Opcode == NdOp::INDIR_BR && Rec.Ops[I].NumInputs >= 1) {
+      Target = Rec.Ops[I].Inputs[0];
+      BranchIndex = I;
       break;
     }
-  if (!Found)
+  if (BranchIndex == Rec.Ops.size())
     return;
+
+  auto sameStorage = [](const NdVar &Left, const NdVar &Right) {
+    return Left.Space == Right.Space && Left.Offset == Right.Offset &&
+           Left.Size == Right.Size;
+  };
+  std::vector<NdVar> Needed{Target};
+  std::vector<bool> Keep(BranchIndex, false);
+  for (size_t I = BranchIndex; I-- > 0;) {
+    const LowOp &Candidate = Rec.Ops[I];
+    if (Candidate.Output.Size == 0)
+      continue;
+    const bool DefinesNeeded =
+        std::any_of(Needed.begin(), Needed.end(), [&](const NdVar &Value) {
+          return sameStorage(Candidate.Output, Value);
+        });
+    if (!DefinesNeeded)
+      continue;
+    Keep[I] = true;
+    for (uint8_t Input = 0; Input < Candidate.NumInputs; ++Input)
+      if (!Candidate.Inputs[Input].isConst())
+        Needed.push_back(Candidate.Inputs[Input]);
+  }
 
   const auto &TRI = getTargetRegInfo(CurrentImg->Arch);
   NdVar RetReg = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
   va_t At = Rec.Addr;
 
-  // Replace `bx reg` (+ any ARM `COPY PC, reg` pipeline model) with an indirect
-  // call to the target followed by a return of the result, mirroring a real
-  // `blx reg; bx lr`.  Downstream ABI recovery threads the call arguments set
-  // up before the branch into the INDIR_CALL.
-  Rec.Ops.clear();
+  // Replace `bx reg` (+ any unrelated ARM `COPY PC, next` pipeline model) with
+  // an indirect call followed by a return.  Retain only the backward slice
+  // that computes an instruction-local target, so a memory-indirect x86 tail
+  // call keeps its address arithmetic and LOAD without leaking unrelated
+  // architectural bookkeeping into call-argument recovery.
+  std::vector<LowOp> Rewritten;
+  Rewritten.reserve(BranchIndex + 2);
+  for (size_t I = 0; I < BranchIndex; ++I)
+    if (Keep[I])
+      Rewritten.push_back(Rec.Ops[I]);
 
   LowOp Call;
   Call.Opcode = NdOp::INDIR_CALL;
   Call.Output = RetReg;
   Call.addInput(Target);
   Call.Addr = At;
-  Rec.Ops.push_back(Call);
+  Rewritten.push_back(Call);
 
   LowOp Ret;
   Ret.Opcode = NdOp::RETURN;
   Ret.addInput(RetReg);
   Ret.Addr = At;
-  Rec.Ops.push_back(Ret);
+  Rewritten.push_back(Ret);
+  Rec.Ops = std::move(Rewritten);
 
   Rec.IsBranch = false;
   Rec.IsCond = false;

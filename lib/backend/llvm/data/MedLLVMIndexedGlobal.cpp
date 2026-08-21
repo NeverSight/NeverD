@@ -19,6 +19,7 @@
 #include "llvm/IR/Instructions.h"
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -33,6 +34,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
   if (!CurMedFunc || !Img || AddrVar.isConst())
     return nullptr;
 
+  const uint16_t PointerSize = getTargetRegInfo(TargetArch).PointerSize;
   auto findPhi = [&](const MedVar &V) { return lookupPhi(V); };
   auto findDef = [&](const MedVar &V) { return lookupDef(V); };
 
@@ -463,7 +465,20 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
             traceTableBaseConst(Arg, 0, &SawLoad, &OriginSize, &SawArithmetic);
         C && baseInRodata(*C) && (SawLoad || !SawArithmetic)) {
       AddressModel Model = AddressModel::Raw;
-      if (SawArithmetic) {
+      if (!SawLoad && !SawArithmetic) {
+        // A pure forwarding chain is an address identity only when it
+        // preserves every pointer bit.  In particular, COPY/ZEXT from a
+        // narrow constant cannot authorize the masked numeric value produced
+        // by traceTableBaseConst when the original mapped VA did not fit in
+        // that leaf.  Keep this decision shared with the other read-only base
+        // consumers instead of re-inferring provenance from the folded value.
+        auto Identity =
+            pureReadOnlyBaseIdentity(Arg, DirectConstantBypassesGetVar);
+        if (!Identity || Identity->VA != *C)
+          return std::nullopt;
+        Model =
+            Identity->Symbolized ? AddressModel::Symbolized : AddressModel::Raw;
+      } else if (SawArithmetic) {
         // A folded literal load proves only that one arithmetic leaf is a raw
         // numeric displacement.  Audit every sibling address-bearing leaf as
         // well: `load(pool) + ptrtoint(@table)` is a mixed model even when the
@@ -472,9 +487,6 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
         if (!Classified)
           return std::nullopt;
         Model = *Classified;
-      } else if (!SawLoad &&
-                 dataOccurrenceSymbolizes(Arg, DirectConstantBypassesGetVar)) {
-        Model = AddressModel::Symbolized;
       }
       return RecoveredPhiBase{{*C}, Model};
     }
@@ -500,6 +512,89 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
     return std::nullopt;
   };
 
+  auto losesMappedAddressBits = [&](const MedVar &Arg) {
+    if (PointerSize == 0 || Arg.Size != PointerSize)
+      return false;
+    MedVar Current = Arg;
+    std::set<std::tuple<int, int, int, uint16_t>> Seen;
+    for (int Depth = 0; Depth <= 16; ++Depth) {
+      if (Current.isConst()) {
+        if (Current.Size == 0 || Current.Size >= PointerSize ||
+            Current.Size >= 8)
+          return false;
+        const unsigned Bits = Current.Size * 8;
+        return (Current.ConstVal >> Bits) != 0 &&
+               isMaterializableReadOnlyDataAddress(Current.ConstVal);
+      }
+      auto Key = std::make_tuple(static_cast<int>(Current.Kind), Current.Id,
+                                 Current.SSAVer, Current.Size);
+      if (!Seen.insert(Key).second)
+        return false;
+      const MedOp *Def = findDef(Current);
+      if (!Def || Def->NumInputs < 1 ||
+          (Def->Opcode != NdOp::COPY && Def->Opcode != NdOp::INT_ZEXT) ||
+          Def->Output.Size != Current.Size ||
+          Def->Inputs[0].Size > Def->Output.Size)
+        return false;
+      Current = Def->Inputs[0];
+    }
+    return false;
+  };
+
+  const std::set<const PhiNode *> CandidateSet(Candidates.begin(),
+                                               Candidates.end());
+  std::map<const PhiNode *, std::set<const PhiNode *>> ForwardPhiEdges;
+  auto forwardedPhi = [&](const MedVar &Value) {
+    MedVar Current = Value;
+    std::set<std::tuple<int, int, int>> Seen;
+    for (int Depth = 0; Depth <= 64 && !Current.isConst(); ++Depth) {
+      if (const PhiNode *Phi = findPhi(Current))
+        return Phi;
+      auto Key = std::make_tuple(static_cast<int>(Current.Kind), Current.Id,
+                                 Current.SSAVer);
+      if (!Seen.insert(Key).second)
+        break;
+      const MedOp *Def = findDef(Current);
+      if (!Def)
+        break;
+      auto Forwarded = pointerPreservingInput(*Def);
+      if (!Forwarded || Forwarded->Size != Current.Size)
+        break;
+      Current = *Forwarded;
+    }
+    return static_cast<const PhiNode *>(nullptr);
+  };
+  for (const PhiNode *Phi : CandidateSet) {
+    auto &Edges = ForwardPhiEdges[Phi];
+    for (const auto &[Pred, Arg] : Phi->Args) {
+      if (!phiIncomingEdgeFeasible(*Phi, Pred))
+        continue;
+      const PhiNode *Source = forwardedPhi(Arg);
+      if (Source && CandidateSet.count(Source))
+        Edges.insert(Source);
+    }
+  }
+  auto inSameForwardingComponent = [&](const PhiNode *A, const PhiNode *B) {
+    if (A == B)
+      return true;
+    std::vector<const PhiNode *> Work{A};
+    std::set<const PhiNode *> Seen;
+    while (!Work.empty()) {
+      const PhiNode *Current = Work.back();
+      Work.pop_back();
+      if (!Seen.insert(Current).second)
+        continue;
+      if (Current == B)
+        return true;
+      if (auto It = ForwardPhiEdges.find(Current); It != ForwardPhiEdges.end())
+        Work.insert(Work.end(), It->second.begin(), It->second.end());
+      for (const auto &[Owner, Sources] : ForwardPhiEdges)
+        if (Sources.count(Current))
+          Work.push_back(Owner);
+    }
+    return false;
+  };
+
   struct PhiBaseEvidence {
     const PhiNode *Phi = nullptr;
     bool Recurrent = false;
@@ -513,7 +608,8 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
     if (!ProcessedCandidates.insert(Phi).second)
       continue;
     bool IsRecurrent = phiIsSelfRecurrent(*Phi);
-    if (!IsRecurrent && Phi != DirectAddressPhi)
+    if (!IsRecurrent && Phi != DirectAddressPhi &&
+        !phiHasPureForwardingCycle(*Phi))
       continue;
 
     bool SawInitialization = false;
@@ -537,7 +633,8 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
         // on a stale absolute VA. Dynamic non-table pointer loops remain
         // ordinary unresolved accesses.
         auto Value = traceValueVA(Arg);
-        SawTableShapedInvalidInitialization |= Value && baseInRodata(*Value);
+        SawTableShapedInvalidInitialization |=
+            (Value && baseInRodata(*Value)) || losesMappedAddressBits(Arg);
         continue;
       }
       CandidateBases.insert(Recovered->VAs.begin(), Recovered->VAs.end());
@@ -587,7 +684,19 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
       // Multiple table-bearing recurrence candidates are only one pointer
       // component when their outputs are overlapping register aliases. Two
       // independent pointer PHIs under ADD/SUB are not an address base+index.
-      if (Item.Phi != PrimaryPhi && !isRegisterAlias(*PrimaryPhi, *Item.Phi)) {
+      if (Item.Phi != PrimaryPhi && !isRegisterAlias(*PrimaryPhi, *Item.Phi) &&
+          !inSameForwardingComponent(PrimaryPhi, Item.Phi)) {
+        failAmbiguousPhi(*Item.Phi);
+        return nullptr;
+      }
+      // A pure-forwarding PHI component is one loop-carried pointer identity,
+      // so each member must expose the same external initialization bases.
+      // Multiple alternatives on one PHI remain valid when they share a
+      // relocatable run, but a nested reset PHI may not silently replace the
+      // component's owner with a different address in that run.
+      if (Item.Phi != PrimaryPhi && !isRegisterAlias(*PrimaryPhi, *Item.Phi) &&
+          inSameForwardingComponent(PrimaryPhi, Item.Phi) &&
+          Item.Bases != Evidence.front().Bases) {
         failAmbiguousPhi(*Item.Phi);
         return nullptr;
       }
@@ -977,9 +1086,21 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
   // looks like the index.  A real table index is a data value, never a stack
   // pointer, so reject when any runtime addend is frame-derived (it stays a
   // stack load).
-  for (const auto &T : IdxTerms)
+  for (const auto &T : IdxTerms) {
     if (varIsFrameDerived(T))
       return nullptr;
+    if (!valueIsStableAddressOffset(T)) {
+      if (FailClosed) {
+        if (!FatalDataPointerResolution)
+          syncError() << "med_llvm_emitter: read-only table address "
+                      << AddrVar.display() << " in " << CurMedFunc->Name
+                      << " has an unproved runtime offset; refusing stale-"
+                         "address fallback\n";
+        FatalDataPointerResolution = true;
+      }
+      return nullptr;
+    }
+  }
 
   // A genuine lookup table is read-only.  If this function performs ANY indexed
   // store to a constant base, it has a read-write array that the frame analysis

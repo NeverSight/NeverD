@@ -90,8 +90,19 @@ void LowToMedConverter::propagate(MedFunc &Func) {
           // structurally invalid.
           if (Def->Opcode == NdOp::COPY && Def->NumInputs == 1 &&
               Def->Inputs[0].Size == Op.Inputs[I].Size) {
-            if (Op.Inputs[I] != Def->Inputs[0]) {
-              Op.Inputs[I] = Def->Inputs[0];
+            MedVar Replacement = Def->Inputs[0];
+            // COPY is value transport, so an untagged immediate remains
+            // role-neutral at its definition.  Once SSA substitutes it into a
+            // numeric operand, classify only this occurrence as scalar.  Exact
+            // loader/decoder provenance is never overwritten, and other COPY,
+            // SELECT, memory, or control uses of the same definition remain
+            // pointer-capable.
+            if (Replacement.isConst() &&
+                Replacement.Provenance == ConstantAddressProvenance::Unknown &&
+                isNumericConstantOperand(Op.Opcode, I))
+              Replacement.Provenance = ConstantAddressProvenance::Scalar;
+            if (Op.Inputs[I] != Replacement) {
+              Op.Inputs[I] = Replacement;
               Changed = true;
             }
           }

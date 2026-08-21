@@ -525,12 +525,107 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
   return Result;
 }
 
-llvm::Value *
-MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
-                                          llvm::IRBuilder<> &Builder,
-                                          bool AllowImplicitZeroBase) {
+const JumpTable *
+MedLLVMEmitter::recoveredJumpTableForLoad(const MedOp &Load) const {
+  if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
+      Load.Output.isConst() || Load.Output.Size == 0)
+    return nullptr;
+
+  const AddressProvenanceVarKey LoadKey = addressProvenanceVarKey(Load.Output);
+  std::function<bool(const MedVar &, int, std::set<AddressProvenanceVarKey>)>
+      dependsOnLoad = [&](const MedVar &Value, int Depth,
+                          std::set<AddressProvenanceVarKey> Seen) {
+        if (Depth > 128 || Value.isConst())
+          return false;
+        const AddressProvenanceVarKey Key = addressProvenanceVarKey(Value);
+        if (Key == LoadKey)
+          return true;
+        if (!Seen.insert(Key).second)
+          return false;
+        if (const PhiNode *Phi = lookupPhi(Value)) {
+          for (const auto &[Pred, Arg] : Phi->Args)
+            if (phiIncomingEdgeFeasible(*Phi, Pred) &&
+                dependsOnLoad(Arg, Depth + 1, Seen))
+              return true;
+          return false;
+        }
+        const MedOp *Def = lookupDef(Value);
+        if (!Def || Def->Opcode == NdOp::LOAD)
+          return false;
+        if (auto Forwarded = pointerPreservingInput(*Def))
+          return dependsOnLoad(*Forwarded, Depth + 1, std::move(Seen));
+        if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
+          return dependsOnLoad(Def->Inputs[1], Depth + 1, Seen) ||
+                 dependsOnLoad(Def->Inputs[2], Depth + 1, std::move(Seen));
+        switch (Def->Opcode) {
+        case NdOp::COPY:
+        case NdOp::INT_ZEXT:
+        case NdOp::INT_SEXT:
+        case NdOp::SUBBYTES:
+        case NdOp::INT_ADD:
+        case NdOp::INT_SUB:
+        case NdOp::INT_MULT:
+        case NdOp::INT_DIV:
+        case NdOp::INT_SDIV:
+        case NdOp::INT_REM:
+        case NdOp::INT_SREM:
+        case NdOp::INT_LEFT:
+        case NdOp::INT_RIGHT:
+        case NdOp::INT_ASHR:
+        case NdOp::INT_AND:
+        case NdOp::INT_OR:
+        case NdOp::INT_XOR:
+        case NdOp::INT_NEG2:
+        case NdOp::INT_NEGATE:
+        case NdOp::INT_NOT:
+          for (uint8_t I = 0; I < Def->NumInputs; ++I)
+            if (dependsOnLoad(Def->Inputs[I], Depth + 1, Seen))
+              return true;
+          return false;
+        default:
+          return false;
+        }
+      };
+
+  for (const JumpTable &JT : CurMedFunc->JumpTables) {
+    if (JT.EntrySize != Load.Output.Size || JT.Targets.empty())
+      continue;
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INDIR_BR && Op.Addr == JT.InsnAddr &&
+            Op.NumInputs >= 1 && dependsOnLoad(Op.Inputs[0], 0, {}))
+          return &JT;
+  }
+  return nullptr;
+}
+
+llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
+    const MedVar &AddrVar, llvm::IRBuilder<> &Builder,
+    bool AllowImplicitZeroBase, const MedVar *LoadedValue) {
   if (!CurMedFunc || !Img || AddrVar.isConst())
     return nullptr;
+
+  const MedOp *LoadedOp = LoadedValue ? lookupDef(*LoadedValue) : nullptr;
+  const JumpTable *RecoveredJumpTable =
+      LoadedOp ? recoveredJumpTableForLoad(*LoadedOp) : nullptr;
+
+  // The relocation mirror owns the memory representation of its complete
+  // read-only run, including adjacent narrow scalar fields.  Do not confuse
+  // that container role with the loaded value's callable role: indirect-call
+  // and indirect-branch consumers validate the exact LOAD domain separately.
+  // RecoveredJumpTable is used below only to discharge an otherwise unsafe
+  // indexed term for the exact switch table that feeds its terminal branch.
+  if (LoadedValue && LoadedValue->Size != 0 && Img->getPointerSize() != 0 &&
+      LoadedValue->Size != Img->getPointerSize() && !RecoveredJumpTable) {
+    const PointerTableLoadRoleSummary MemoryRoles =
+        classifyPointerTableLoadRoles(*LoadedValue,
+                                      /*RequirePointerWidth=*/false);
+    const bool RelocationOwnedAccess =
+        MemoryRoles.Complete && !MemoryRoles.SawConflict &&
+        (MemoryRoles.SawCode || MemoryRoles.SawData || MemoryRoles.SawImport);
+    if (!RelocationOwnedAccess)
+      return nullptr;
+  }
 
   // Path 1: one constant base + runtime index addends, the common
   // `lea table; mov (table,idx)` shape.  The base is a direct constant (x86-64
@@ -570,6 +665,9 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
       HaveConst = true;
     }
   }
+  const bool RecoveredIndexedJumpTable =
+      RecoveredJumpTable && RecoveredJumpTable->HasBaseAddr && HaveConst &&
+      Base == RecoveredJumpTable->BaseAddr;
   // A single recognized pointer-table base does not make every remaining term
   // an index.  Prove each term stays scalar in rebuilt IR before Path 1 may
   // claim the access; otherwise a recurrent rodata pointer (or another mapped
@@ -584,7 +682,7 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
         UnsafeIndexedTerms = true;
         break;
       }
-  if (HaveConst && !UnsafeIndexedTerms) {
+  if (HaveConst && (!UnsafeIndexedTerms || RecoveredIndexedJumpTable)) {
     // Redirect only into a segment that holds pointer slots; also gate out
     // frame-derived "indices" that would be stack-pointer arithmetic.
     uint64_t SegVA = 0;
@@ -619,7 +717,7 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
       }
     }
   }
-  if (UnsafeIndexedTerms)
+  if (UnsafeIndexedTerms && !RecoveredIndexedJumpTable)
     return nullptr;
 
   // Path 2: the base is a SELECT/PHI or branchless AND/OR mask of several base
@@ -630,29 +728,47 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
   if (auto SelSegOpt =
           ptrTableUniqueSegment(AddrVar, /*IncludeSymbolizedEvidence=*/true)) {
     const uint64_t SelSeg = *SelSegOpt;
-    auto segmentHasPointerSlots = [&](const Segment *Seg) {
-      if (!Seg)
+    // Recovered switch metadata deliberately keeps ordinary, dead residual
+    // jump-table loads out of generic constant symbolization.  A residual
+    // LOAD whose complete address domain reaches only code/import relocation
+    // slots is different: it is the live computed-goto/function-pointer
+    // access itself and must use the relocation mirror.  Let the shared
+    // occurrence-level lane classifier grant that narrow ownership instead of
+    // making this address-role walk rediscover slot semantics independently.
+    bool HasCompleteCallableLoadDomain = false;
+    if (LoadedValue) {
+      const PointerTableLoadRoleSummary Roles =
+          classifyPointerTableLoadRoles(*LoadedValue);
+      HasCompleteCallableLoadDomain =
+          Roles.Load && Roles.Load->NumInputs >= 1 && Roles.isCallableOnly() &&
+          addressProvenanceVarKey(Roles.Load->Inputs[0]) ==
+              addressProvenanceVarKey(AddrVar);
+      if (HasCompleteCallableLoadDomain)
+        for (uint64_t Slot : Roles.Slots) {
+          const Segment *SlotSeg = Img->getSegmentFor(Slot);
+          uint64_t RunStart = 0, RunEnd = 0;
+          if (!SlotSeg || SlotSeg->isExecutable()) {
+            HasCompleteCallableLoadDomain = false;
+            break;
+          }
+          readOnlyAfterRelocRun(SlotSeg, RunStart, RunEnd);
+          if (RunStart != SelSeg || Slot < RunStart || Slot >= RunEnd) {
+            HasCompleteCallableLoadDomain = false;
+            break;
+          }
+        }
+    }
+    auto belongsToClaimedCodeTableRun = [&](uint64_t Address) {
+      if (addrInCodePtrMirrorRun(Address))
+        return true;
+      if (!HasCompleteCallableLoadDomain)
         return false;
-      uint64_t Lo = Seg->VA;
-      uint64_t Hi = Seg->VA + Seg->Data.size();
-      auto contains = [&](uint64_t Slot) { return Slot >= Lo && Slot < Hi; };
-      for (uint64_t Slot : Img->CodePtrRelocSlots)
-        if (contains(Slot))
-          return true;
-      for (uint64_t Slot : Img->DataPtrRelocSlots)
-        if (contains(Slot))
-          return true;
-      for (const auto &[Slot, Name] : Img->ImportPtrSlots) {
-        (void)Name;
-        if (contains(Slot))
-          return true;
-      }
-      for (const auto &[Slot, Binding] : Img->DyldBindSlots) {
-        (void)Binding;
-        if (contains(Slot))
-          return true;
-      }
-      return false;
+      const Segment *Seg = Img->getSegmentFor(Address);
+      if (!Seg || Seg->isExecutable() || !segHasPtrRelocSlots(Seg))
+        return false;
+      uint64_t RunStart = 0, RunEnd = 0;
+      readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
+      return RunStart == SelSeg && Address >= RunStart && Address < RunEnd;
     };
     // ptrTableUniqueSegment deliberately discovers segment evidence in a broad
     // arithmetic DAG; uniqueness alone is not proof that the RESULT carries a
@@ -695,7 +811,8 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
             (Value.ConstVal != 0 || isExactAddressProvenance(Value.Provenance))
                 ? Img->getSegmentFor(Value.ConstVal)
                 : nullptr;
-        if (!Seg || Seg->isExecutable() || !segmentHasPointerSlots(Seg))
+        if (!Seg || Seg->isExecutable() ||
+            !belongsToClaimedCodeTableRun(Value.ConstVal))
           return scalarProof();
         // A pointer-table constant is valid provenance in either address
         // model. Operation inputs pass through getVar and may already carry
@@ -788,7 +905,8 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
             Def->Output.Size == Img->getPointerSize() &&
             !recoverAbsoluteDataPointerLoadTargets(Value, LoadedTargets)) {
           const Segment *Seg = Img->getSegmentFor(*FoldedLiteralBase);
-          if (Seg && !Seg->isExecutable() && segmentHasPointerSlots(Seg))
+          if (Seg && !Seg->isExecutable() &&
+              belongsToClaimedCodeTableRun(*FoldedLiteralBase))
             return tableProof(pointerTableRunStart(Seg));
         }
 
@@ -832,7 +950,8 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
         // address into that run even though neither operand is pointer-valued.
         if (auto Folded = traceValueVA(Value)) {
           const Segment *Seg = Img->getSegmentFor(*Folded);
-          if (Seg && !Seg->isExecutable() && segmentHasPointerSlots(Seg)) {
+          if (Seg && !Seg->isExecutable() &&
+              belongsToClaimedCodeTableRun(*Folded)) {
             uint64_t RunStart = Seg->VA;
             uint64_t RunEnd = Seg->VA + Seg->Data.size();
             readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
@@ -1345,6 +1464,65 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     return CodeProofResult{std::move(Proof), true};
   };
 
+  // Some targets materialize one exact function address as arithmetic before
+  // spilling it: i386 uses call/pop + GOTOFF, while ARM32 loads a relocated
+  // PC-relative displacement from the literal pool and adds PC.  The generic
+  // arithmetic proof correctly treats arbitrary code-address arithmetic as a
+  // relation rather than a callable identity, so recognize this narrower
+  // occurrence here only when the complete expression folds to an emitted
+  // function entry and the expression itself contains occurrence-level code
+  // evidence.  Local ARM literal pools can encode a resolved PC displacement
+  // without a loader relocation, so an exact executable literal occurrence is
+  // also evidence; a same-valued scalar/data word is not.
+  auto exactFunctionMaterialization =
+      [&](const MedVar &Root) -> std::optional<va_t> {
+    bool SawLiteralLoad = false;
+    bool SawArithmetic = false;
+    auto Folded =
+        traceTableBaseConst(Root, 0, &SawLiteralLoad, nullptr, &SawArithmetic);
+    if (!Folded || !SawArithmetic)
+      return std::nullopt;
+    const va_t Target = normalizeCodeAddress(*Folded, Img->Arch, Img->Mode);
+    if (!resolveLiftedFunctionEntry(Target))
+      return std::nullopt;
+
+    using EvidenceKey = std::tuple<int, int, int, uint16_t>;
+    std::function<bool(const MedVar &, int, std::set<EvidenceKey>)>
+        hasOccurrenceEvidence = [&](const MedVar &Value, int Depth,
+                                    std::set<EvidenceKey> Seen) {
+          if (Depth > 32)
+            return false;
+          if (Value.isConst())
+            return codeIdentityOccurrenceMayRelocate(
+                Value, /*IncludeLayoutCodeOwners=*/false);
+          EvidenceKey Key{static_cast<int>(Value.Kind), Value.Id, Value.SSAVer,
+                          Value.Size};
+          if (!Seen.insert(Key).second)
+            return false;
+          const MedOp *Def = lookupDef(Value);
+          if (!Def)
+            return false;
+          if (Def->Opcode == NdOp::LOAD && Def->NumInputs >= 1) {
+            auto Slot = traceValueVA(Def->Inputs[0]);
+            if (!Slot)
+              return false;
+            if (Img->hasRelocationProvenanceAt(*Slot))
+              return true;
+            const Segment *SlotSegment = Img->getSegmentFor(*Slot);
+            return SawLiteralLoad && SlotSegment &&
+                   SlotSegment->isExecutable() && !SlotSegment->isWritable();
+          }
+          if (auto Forwarded = pointerPreservingInput(*Def))
+            return hasOccurrenceEvidence(*Forwarded, Depth + 1, Seen);
+          if (Def->Opcode != NdOp::INT_ADD || Def->NumInputs < 2)
+            return false;
+          return hasOccurrenceEvidence(Def->Inputs[0], Depth + 1, Seen) ||
+                 hasOccurrenceEvidence(Def->Inputs[1], Depth + 1, Seen);
+        };
+    return hasOccurrenceEvidence(Root, 0, {}) ? std::optional<va_t>(Target)
+                                              : std::nullopt;
+  };
+
   // Classify code identity through the SSA value graph without changing the
   // generic getVar policy.  Only pointer-preserving forwarders and value
   // merges can publish a unique identity.  Other operations are scanned for a
@@ -1417,6 +1595,13 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     const MedOp *Def = lookupDef(Current);
     if (!Def)
       return Finish(completeProof({.SawUnresolved = true}));
+    if (auto ExactTarget = exactFunctionMaterialization(Current))
+      return Finish(completeProof({.CommonTarget = *ExactTarget,
+                                   .SawCode = true,
+                                   .SawExplicit = true,
+                                   .SawFunctionIdentity = true,
+                                   .SawLiftedCodeIdentity = true,
+                                   .SawStrongCodeProvenance = true}));
     if (std::optional<MedVar> Forwarded = pointerPreservingInput(*Def)) {
       // Low-to-Med publishes entry-state registers as COPY R,R. This is a
       // runtime input boundary, not an incomplete SSA recurrence. Treat the

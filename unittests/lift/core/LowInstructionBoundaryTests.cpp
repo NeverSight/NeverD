@@ -7,6 +7,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/lift/ARMRegs.h"
+#include "neverd/lift/LiftCommon.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Error.h"
@@ -106,6 +107,57 @@ std::vector<LowOp> liftAArch64Instruction(const std::vector<uint8_t> &Bytes,
   std::vector<LowOp> Ops;
   Dec.liftToLow(Insn, Ops);
   return Ops;
+}
+
+LowFunc buildAArch64PageBaseUse(std::vector<uint8_t> Bytes) {
+  constexpr va_t DataPage = 0x9000;
+
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Mode = InstructionMode::Default;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::MachO;
+  Image.Base = kEntry;
+  Image.Entry = kEntry;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = kEntry;
+  Text.Size = Bytes.size();
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = std::move(Bytes);
+  Image.Segments.push_back(std::move(Text));
+
+  Segment Data;
+  Data.Name = "__DATA";
+  Data.VA = DataPage;
+  Data.Size = 0x100;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(Data.Size);
+  Image.Segments.push_back(std::move(Data));
+
+  // Deliberately give the page start exact loader ownership in both tests.
+  // The negative case therefore cannot pass by merely noticing that the ADRP
+  // result numerically equals a known pointer slot.
+  Image.CodePtrRelocSlots.insert(DataPage);
+
+  Decoder Dec;
+  if (!Dec.init(Arch::AArch64, InstructionMode::Default)) {
+    ADD_FAILURE() << "decoder initialization failed";
+    return {};
+  }
+  CFGBuilder Builder;
+  return Builder.build(Image, Dec, kEntry, "aarch64_page_base_use");
+}
+
+const LowOp *findAddressMaterialization(const LowFunc &Function,
+                                        va_t InstructionAddress) {
+  for (const LowBlock &Block : Function.Blocks)
+    for (const LowOp &Op : Block.Ops)
+      if (Op.Addr == InstructionAddress && Op.Opcode == NdOp::COPY &&
+          Op.NumInputs == 1 && Op.Output.isReg() && Op.Inputs[0].isConst())
+        return &Op;
+  return nullptr;
 }
 
 bool containsOp(const std::vector<LowOp> &Ops, NdOp Opcode) {
@@ -662,6 +714,106 @@ TEST(LowInstructionBoundary, X86GeneratedArithmeticConstantsAreScalar) {
   EXPECT_TRUE(SawPointerWidthOne);
 }
 
+TEST(LowInstructionBoundary,
+     NumericLowIROperandsDefaultToScalarWithoutErasingExactProvenance) {
+  std::vector<LowOp> Ops;
+  LiftStateBase State(kEntry, 4, Ops);
+
+  State.emit(NdOp::INT_AND, NdVar::tmp(0, 4),
+             {NdVar::reg(0, 4), NdVar::cst(0xff, 4)});
+  State.emit(NdOp::INT_LEFT, NdVar::tmp(1, 4),
+             {NdVar::reg(4, 4), NdVar::cst(31, 4)});
+  State.emit(NdOp::INT_ADD, NdVar::tmp(2, 8),
+             {NdVar::reg(8, 8), NdVar::dataAddress(0x2000, 8)});
+  State.emit(NdOp::COPY, NdVar::tmp(3, 8), {NdVar::cst(0x3000, 8)});
+
+  ASSERT_EQ(Ops.size(), 4u);
+  EXPECT_EQ(Ops[0].Inputs[1].Provenance, ConstantAddressProvenance::Scalar);
+  EXPECT_EQ(Ops[1].Inputs[1].Provenance, ConstantAddressProvenance::Scalar);
+  EXPECT_EQ(Ops[2].Inputs[1].Provenance,
+            ConstantAddressProvenance::DataAddress);
+  EXPECT_EQ(Ops[3].Inputs[0].Provenance, ConstantAddressProvenance::Unknown);
+}
+
+TEST(LowInstructionBoundary,
+     CopyPropagatedImmediatesAcquireTheNumericUseRoleOnlyAtThatUse) {
+  LowFunc Low;
+  Low.Entry = kEntry;
+  Low.Name = "copy_propagated_numeric_occurrence";
+
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = kEntry;
+  Block.EndAddr = kEntry + 0x10;
+
+  const NdVar UnknownValue = NdVar::tmp(0, 4);
+  LowOp MaterializeUnknown;
+  MaterializeUnknown.Opcode = NdOp::COPY;
+  MaterializeUnknown.Addr = kEntry;
+  MaterializeUnknown.Output = UnknownValue;
+  MaterializeUnknown.addInput(NdVar::cst(0x83, 4));
+  Block.Ops.push_back(std::move(MaterializeUnknown));
+
+  LowOp NumericUse;
+  NumericUse.Opcode = NdOp::INT_ADD;
+  NumericUse.Addr = kEntry + 4;
+  NumericUse.Output = NdVar::tmp(8, 4);
+  NumericUse.addInput(NdVar::reg(0, 4));
+  NumericUse.addInput(UnknownValue);
+  Block.Ops.push_back(std::move(NumericUse));
+
+  const NdVar ExactAddress = NdVar::tmp(16, 4);
+  LowOp MaterializeAddress;
+  MaterializeAddress.Opcode = NdOp::COPY;
+  MaterializeAddress.Addr = kEntry + 8;
+  MaterializeAddress.Output = ExactAddress;
+  MaterializeAddress.addInput(NdVar::dataAddress(0x83, 4, 0x80));
+  Block.Ops.push_back(std::move(MaterializeAddress));
+
+  LowOp AddressUse;
+  AddressUse.Opcode = NdOp::INT_ADD;
+  AddressUse.Addr = kEntry + 0xc;
+  AddressUse.Output = NdVar::tmp(24, 4);
+  AddressUse.addInput(NdVar::reg(4, 4));
+  AddressUse.addInput(ExactAddress);
+  Block.Ops.push_back(std::move(AddressUse));
+  Low.Blocks.push_back(std::move(Block));
+
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Format = BinaryFormat::ELF;
+  Image.Bits = Bitness::Bits32;
+  Segment Data;
+  Data.Name = ".rodata";
+  Data.VA = 0x80;
+  Data.Size = 0x20;
+  Data.FileSz = Data.Size;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(Data.Size);
+  Image.Segments.push_back(std::move(Data));
+  Image.RelocDataAddrs.insert(0x83);
+
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&Image);
+  MedFunc Med = Converter.convert(Low, Arch::X86, BinaryFormat::ELF);
+  ASSERT_EQ(Med.Blocks.size(), 1u);
+
+  auto inputAt = [&](va_t Addr) -> const MedVar * {
+    for (const MedOp &Op : Med.Blocks.front().Ops)
+      if (Op.Addr == Addr && Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2)
+        return &Op.Inputs[1];
+    return nullptr;
+  };
+  const MedVar *ScalarUse = inputAt(kEntry + 4);
+  const MedVar *RelocatableUse = inputAt(kEntry + 0xc);
+  ASSERT_NE(ScalarUse, nullptr);
+  ASSERT_NE(RelocatableUse, nullptr);
+  ASSERT_TRUE(ScalarUse->isConst());
+  ASSERT_TRUE(RelocatableUse->isConst());
+  EXPECT_EQ(ScalarUse->Provenance, ConstantAddressProvenance::Scalar);
+  EXPECT_EQ(RelocatableUse->Provenance, ConstantAddressProvenance::DataAddress);
+}
+
 TEST(LowInstructionBoundary, X86GeneratedStringAndLoopConstantsAreScalar) {
   struct Case {
     const char *Name;
@@ -833,6 +985,45 @@ TEST(LowInstructionBoundary, AArch64AddressDisplacementsCarryScalarProvenance) {
             Op.Inputs[I].Provenance == ConstantAddressProvenance::Scalar;
     EXPECT_TRUE(SawScalarDisplacement);
   }
+}
+
+TEST(LowInstructionBoundary,
+     AArch64BarePageBaseCompletesOnlyForExactDereference) {
+  // adrp x8,0x9000; str x8,[sp,#0x18]; ldr x8,[x8]; ret
+  //
+  // The page base is itself the complete address of the pointer table.  It is
+  // spilled as a first-class pointer and dereferenced before x8 is redefined,
+  // so retaining AddressFragment would later reject the stack reload even
+  // though this exact instruction occurrence proved the zero page offset.
+  LowFunc Function =
+      buildAArch64PageBaseUse({0x48, 0x00, 0x00, 0x90, 0xe8, 0x0f, 0x00, 0xf9,
+                               0x08, 0x01, 0x40, 0xf9, 0xc0, 0x03, 0x5f, 0xd6});
+
+  const LowOp *Materialization = findAddressMaterialization(Function, kEntry);
+  ASSERT_NE(Materialization, nullptr);
+  ASSERT_EQ(Materialization->Inputs[0].Offset, 0x9000u);
+  EXPECT_EQ(Materialization->Inputs[0].Provenance,
+            ConstantAddressProvenance::DataAddress);
+  EXPECT_EQ(Materialization->Inputs[0].AddressOwnerVA, 0x9000u);
+}
+
+TEST(LowInstructionBoundary,
+     AArch64PageStartCollisionDoesNotCompleteOffsetAddress) {
+  // adrp x8,0x9000; add x8,x8,#0x20; ldr x8,[x8]; ret
+  //
+  // A real pointer slot also begins at 0x9000, but this occurrence addresses
+  // 0x9020.  Numeric equality with the unrelated page-start slot must not turn
+  // the incomplete ADRP result into that slot's relocatable identity.
+  LowFunc Function =
+      buildAArch64PageBaseUse({0x48, 0x00, 0x00, 0x90, 0x08, 0x81, 0x00, 0x91,
+                               0x08, 0x01, 0x40, 0xf9, 0xc0, 0x03, 0x5f, 0xd6});
+
+  const LowOp *Materialization = findAddressMaterialization(Function, kEntry);
+  ASSERT_NE(Materialization, nullptr);
+  ASSERT_EQ(Materialization->Inputs[0].Offset, 0x9000u);
+  EXPECT_EQ(Materialization->Inputs[0].Provenance,
+            ConstantAddressProvenance::AddressFragment);
+  EXPECT_EQ(Materialization->Inputs[0].AddressOwnerVA, InvalidVA);
 }
 
 TEST(LowInstructionBoundary, ARMExceptionReturnsFailClosed) {
@@ -1107,6 +1298,140 @@ TEST(LowInstructionBoundary, ConditionalIndirectBranchKeepsFallthrough) {
             LowInstructionTargetMode::FromTargetBit0);
   EXPECT_FALSE(static_cast<bool>(validateLowInstructionBoundaries(
       Function, LowInstructionBoundaryRequirement::Required)));
+}
+
+TEST(LowInstructionBoundary,
+     MemoryIndirectTailCallKeepsInstructionLocalTargetSlice) {
+  // jmpq *(%rcx,%rax,8).  An unresolved terminal indirect jump is modeled as
+  // an indirect tail call.  Its target LOAD is part of this same instruction;
+  // dropping that definition leaves a reusable instruction-local temp whose
+  // next occurrence can silently become the call target during SSA renaming.
+  LowFunc Function =
+      buildFunction(Arch::X64, InstructionMode::Default, {0xff, 0x24, 0xc1});
+
+  const LowBlock *Entry = findBlock(Function, kEntry);
+  ASSERT_NE(Entry, nullptr);
+  auto Call =
+      std::find_if(Entry->Ops.begin(), Entry->Ops.end(), [](const LowOp &Op) {
+        return Op.Opcode == NdOp::INDIR_CALL;
+      });
+  ASSERT_NE(Call, Entry->Ops.end());
+  ASSERT_EQ(Call->NumInputs, 1u);
+  EXPECT_TRUE(Call->Inputs[0].isTemp());
+
+  auto TargetLoad =
+      std::find_if(Entry->Ops.begin(), Call, [&](const LowOp &Op) {
+        return Op.Opcode == NdOp::LOAD &&
+               Op.Output.Space == Call->Inputs[0].Space &&
+               Op.Output.Offset == Call->Inputs[0].Offset &&
+               Op.Output.Size == Call->Inputs[0].Size;
+      });
+  ASSERT_NE(TargetLoad, Call)
+      << "the tail-call target must retain its same-instruction LOAD";
+  EXPECT_NE(
+      std::find_if(std::next(Call), Entry->Ops.end(),
+                   [](const LowOp &Op) { return Op.Opcode == NdOp::RETURN; }),
+      Entry->Ops.end());
+  EXPECT_FALSE(static_cast<bool>(validateLowInstructionBoundaries(
+      Function, LowInstructionBoundaryRequirement::Required)));
+
+  MedFunc Med =
+      LowToMedConverter().convert(Function, Arch::X64, BinaryFormat::ELF);
+  ASSERT_EQ(Med.Blocks.size(), 1u);
+  auto MedCall = std::find_if(
+      Med.Blocks[0].Ops.begin(), Med.Blocks[0].Ops.end(),
+      [](const MedOp &Op) { return Op.Opcode == NdOp::INDIR_CALL; });
+  ASSERT_NE(MedCall, Med.Blocks[0].Ops.end());
+  ASSERT_EQ(MedCall->NumInputs, 1u);
+  EXPECT_NE(std::find_if(Med.Blocks[0].Ops.begin(), MedCall,
+                         [&](const MedOp &Op) {
+                           return Op.Opcode == NdOp::LOAD &&
+                                  Op.Output.Kind == MedCall->Inputs[0].Kind &&
+                                  Op.Output.Id == MedCall->Inputs[0].Id &&
+                                  Op.Output.SSAVer == MedCall->Inputs[0].SSAVer;
+                         }),
+            MedCall);
+  EXPECT_TRUE(verifyMedFunc(Med, "memory-indirect-tail-call"));
+}
+
+TEST(LowInstructionBoundary,
+     RelocationAddressTakenTrivialBlockSurvivesMedSimplification) {
+  constexpr va_t TrivialAddress = kEntry + 0x10;
+  constexpr va_t TargetAddress = kEntry + 0x20;
+  constexpr va_t PointerSlot = 0x2000;
+
+  LowFunc Low;
+  Low.Entry = kEntry;
+  Low.Name = "address_taken_trivial_block";
+
+  auto makeBranchBlock = [](int Id, va_t Address, int Succ, va_t Target) {
+    LowBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = Address;
+    Block.EndAddr = Address + 2;
+    Block.Succs = {Succ};
+    LowOp Branch;
+    Branch.Opcode = NdOp::BRANCH;
+    Branch.Addr = Address;
+    Branch.addInput(NdVar::cst(Target, 8));
+    Block.Ops.push_back(std::move(Branch));
+    return Block;
+  };
+  Low.Blocks.push_back(makeBranchBlock(0, kEntry, 1, TrivialAddress));
+  Low.Blocks.push_back(makeBranchBlock(1, TrivialAddress, 2, TargetAddress));
+  Low.Blocks[1].Preds = {0};
+  LowBlock Target;
+  Target.Id = 2;
+  Target.StartAddr = TargetAddress;
+  Target.EndAddr = TargetAddress + 1;
+  Target.Preds = {1};
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = TargetAddress;
+  Target.Ops.push_back(std::move(Return));
+  Low.Blocks.push_back(std::move(Target));
+
+  auto convert = [&](bool AddressTaken) {
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Bits = Bitness::Bits64;
+    Segment Text;
+    Text.Name = ".text";
+    Text.VA = kEntry;
+    Text.Size = 0x40;
+    Text.FileSz = Text.Size;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.assign(Text.Size, 0);
+    Image.Segments.push_back(std::move(Text));
+    Segment Data;
+    Data.Name = ".data.rel.ro";
+    Data.VA = PointerSlot;
+    Data.Size = 8;
+    Data.FileSz = Data.Size;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.assign(Data.Size, 0);
+    for (unsigned I = 0; I < 8; ++I)
+      Data.Data[I] = static_cast<uint8_t>(TrivialAddress >> (I * 8));
+    Image.Segments.push_back(std::move(Data));
+    if (AddressTaken)
+      Image.CodePtrRelocSlots.insert(PointerSlot);
+
+    LowToMedConverter Converter;
+    Converter.setBinaryImage(&Image);
+    return Converter.convert(Low, Arch::X64, BinaryFormat::ELF);
+  };
+  auto hasBlockAt = [](const MedFunc &Func, va_t Address) {
+    return std::any_of(
+        Func.Blocks.begin(), Func.Blocks.end(),
+        [&](const MedBlock &Block) { return Block.StartAddr == Address; });
+  };
+
+  const MedFunc Unreferenced = convert(false);
+  const MedFunc AddressTaken = convert(true);
+  EXPECT_FALSE(hasBlockAt(Unreferenced, TrivialAddress));
+  EXPECT_TRUE(hasBlockAt(AddressTaken, TrivialAddress));
+  EXPECT_TRUE(verifyMedFunc(AddressTaken, "address-taken-trivial-block"));
 }
 
 TEST(LowInstructionBoundary, ConditionalNoReturnCallKeepsFalsePath) {

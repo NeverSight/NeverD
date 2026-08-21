@@ -29,6 +29,407 @@
 
 namespace neverd {
 
+namespace {
+
+struct IndexedPointerLaneSummary {
+  std::set<uint64_t> Slots;
+  std::vector<MedVar> IndexTerms;
+  bool Recognized = false;
+  bool Complete = false;
+};
+
+struct OffsetCongruence {
+  bool Valid = false;
+  uint64_t Residue = 0;
+  uint64_t Modulus = 0;
+  std::optional<uint64_t> MinValue;
+  std::optional<uint64_t> MaxValue;
+
+  bool isExact() const { return Valid && Modulus == 0; }
+  bool hasFiniteRange() const {
+    return MinValue.has_value() && MaxValue.has_value();
+  }
+};
+
+/// Recover the one record lane selected by a conventional `base + index`
+/// address without deciding whether the runtime index itself is relocatable.
+/// The modular result is purely algebraic: multiplying any bit-pattern by 16
+/// reaches only the +0 lane modulo 16, for example.  Consumers separately
+/// prove the index value model before using the result, while scalar-load
+/// recurrence analysis can use the lane first and then audit the index in the
+/// same DFS (so a loop-carried scalar field does not create a false cycle).
+template <typename LookupDefFn, typename TraceConstFn, typename CollectBaseFn,
+          typename DiscoverRunFn, typename ReadOnlyRunFn>
+IndexedPointerLaneSummary analyzeIndexedPointerLane(
+    const MedVar &Address, const BinaryImage *Img, unsigned PtrSize,
+    LookupDefFn &&LookupDef, TraceConstFn &&TraceConst,
+    CollectBaseFn &&CollectBase, DiscoverRunFn &&DiscoverRun,
+    ReadOnlyRunFn &&ReadOnlyRun, const std::set<uint64_t> *KnownBases = nullptr,
+    const std::vector<MedVar> *KnownTerms = nullptr,
+    bool SubtractKnownTerms = false) {
+  IndexedPointerLaneSummary Result;
+  if (!Img || PtrSize == 0 || PtrSize > 8)
+    return Result;
+
+  const unsigned PtrBits = PtrSize * 8;
+  const uint64_t PtrMask =
+      PtrBits >= 64 ? ~uint64_t(0) : (uint64_t(1) << PtrBits) - 1;
+  const uint64_t MaxModulus = uint64_t(1) << (std::min(PtrBits, 64U) - 1);
+  auto exact = [&](uint64_t Value) {
+    Value &= PtrMask;
+    return OffsetCongruence{true, Value, 0, Value, Value};
+  };
+  auto dynamic = [&](uint64_t Residue, uint64_t Modulus,
+                     std::optional<uint64_t> MinValue = std::nullopt,
+                     std::optional<uint64_t> MaxValue = std::nullopt) {
+    assert(Modulus != 0 && (Modulus & (Modulus - 1)) == 0);
+    return OffsetCongruence{true, Residue & (Modulus - 1), Modulus, MinValue,
+                            MaxValue};
+  };
+  auto lowBit = [](uint64_t Value) {
+    return Value == 0 ? uint64_t(0) : Value & (~Value + uint64_t(1));
+  };
+  auto add = [&](OffsetCongruence Left, OffsetCongruence Right, bool Subtract) {
+    if (!Left.Valid || !Right.Valid)
+      return OffsetCongruence{};
+    const uint64_t RightResidue =
+        Subtract ? (uint64_t(0) - Right.Residue) & PtrMask : Right.Residue;
+    const uint64_t Residue = (Left.Residue + RightResidue) & PtrMask;
+    if (Left.isExact() && Right.isExact())
+      return exact(Residue);
+    const uint64_t Modulus = Left.isExact() ? Right.Modulus
+                             : Right.isExact()
+                                 ? Left.Modulus
+                                 : std::min(Left.Modulus, Right.Modulus);
+    OffsetCongruence Result = dynamic(Residue, Modulus);
+    if (Left.hasFiniteRange() && Right.hasFiniteRange()) {
+      if (!Subtract && *Left.MaxValue <= PtrMask - *Right.MaxValue) {
+        Result.MinValue = *Left.MinValue + *Right.MinValue;
+        Result.MaxValue = *Left.MaxValue + *Right.MaxValue;
+      } else if (Subtract && *Left.MinValue >= *Right.MaxValue) {
+        Result.MinValue = *Left.MinValue - *Right.MaxValue;
+        Result.MaxValue = *Left.MaxValue - *Right.MinValue;
+      }
+    }
+    return Result;
+  };
+  auto scale = [&](OffsetCongruence Input, uint64_t Factor) {
+    if (!Input.Valid)
+      return OffsetCongruence{};
+    const uint64_t Residue = (Input.Residue * Factor) & PtrMask;
+    if (Input.isExact() || Factor == 0)
+      return exact(Residue);
+    const uint64_t FactorModulus = lowBit(Factor);
+    uint64_t Modulus = Input.Modulus;
+    if (FactorModulus > 1) {
+      if (Modulus > MaxModulus / FactorModulus)
+        Modulus = MaxModulus;
+      else
+        Modulus *= FactorModulus;
+    }
+    OffsetCongruence Result = dynamic(Residue, Modulus);
+    if (Input.hasFiniteRange() &&
+        (Factor == 0 || *Input.MaxValue <= PtrMask / Factor)) {
+      Result.MinValue = *Input.MinValue * Factor;
+      Result.MaxValue = *Input.MaxValue * Factor;
+    }
+    return Result;
+  };
+  auto resize = [&](OffsetCongruence Input, unsigned SourceBits,
+                    unsigned ResultBits, bool SignExtend) {
+    if (!Input.Valid || SourceBits == 0 || ResultBits == 0)
+      return OffsetCongruence{};
+    SourceBits = std::min(SourceBits, 64U);
+    ResultBits = std::min(ResultBits, 64U);
+    const uint64_t SourceMask =
+        SourceBits == 64 ? ~uint64_t(0) : (uint64_t(1) << SourceBits) - 1;
+    const uint64_t ResultMask =
+        ResultBits == 64 ? ~uint64_t(0) : (uint64_t(1) << ResultBits) - 1;
+    uint64_t Residue = Input.Residue & SourceMask;
+    if (SignExtend && ResultBits > SourceBits &&
+        (Residue & (uint64_t(1) << (SourceBits - 1))) != 0)
+      Residue |= ~SourceMask;
+    Residue &= ResultMask & PtrMask;
+    if (Input.isExact())
+      return exact(Residue);
+    const unsigned PreservedBits =
+        std::min({SourceBits, ResultBits, PtrBits, 64U});
+    const uint64_t MaxPreserved = uint64_t(1) << (PreservedBits - 1);
+    OffsetCongruence Result =
+        dynamic(Residue, std::min(Input.Modulus, MaxPreserved));
+    if (Input.hasFiniteRange()) {
+      if (!SignExtend && *Input.MaxValue <= ResultMask) {
+        Result.MinValue = *Input.MinValue;
+        Result.MaxValue = *Input.MaxValue;
+      } else if (!SignExtend) {
+        Result.MinValue = 0;
+        Result.MaxValue = ResultMask & PtrMask;
+      } else {
+        const uint64_t SignBit = uint64_t(1) << (SourceBits - 1);
+        if (*Input.MaxValue < SignBit) {
+          Result.MinValue = *Input.MinValue;
+          Result.MaxValue = *Input.MaxValue;
+        }
+      }
+    }
+    return Result;
+  };
+  auto merge = [&](OffsetCongruence Left, OffsetCongruence Right) {
+    if (!Left.Valid || !Right.Valid)
+      return OffsetCongruence{};
+    if (Left.isExact() && Right.isExact() && Left.Residue == Right.Residue)
+      return Left;
+    const uint64_t Difference = (Left.Residue - Right.Residue) & PtrMask;
+    uint64_t Modulus = 0;
+    auto includeModulus = [&](uint64_t Candidate) {
+      if (Candidate != 0)
+        Modulus = Modulus == 0 ? Candidate : std::min(Modulus, Candidate);
+    };
+    includeModulus(Left.isExact() ? 0 : Left.Modulus);
+    includeModulus(Right.isExact() ? 0 : Right.Modulus);
+    includeModulus(lowBit(Difference));
+    OffsetCongruence Result =
+        Modulus == 0 ? exact(Left.Residue) : dynamic(Left.Residue, Modulus);
+    if (Left.hasFiniteRange() && Right.hasFiniteRange()) {
+      Result.MinValue = std::min(*Left.MinValue, *Right.MinValue);
+      Result.MaxValue = std::max(*Left.MaxValue, *Right.MaxValue);
+    }
+    return Result;
+  };
+  auto foldedConstant = [&](const MedVar &Value) -> std::optional<uint64_t> {
+    if (Value.isConst())
+      return Value.ConstVal & PtrMask;
+    if (auto Folded = TraceConst(Value))
+      return *Folded & PtrMask;
+    return std::nullopt;
+  };
+
+  using Key = std::tuple<int, int, int, uint16_t>;
+  auto keyOf = [](const MedVar &Value) {
+    return Key{static_cast<int>(Value.Kind), Value.Id, Value.SSAVer,
+               Value.Size};
+  };
+  std::function<OffsetCongruence(const MedVar &, int, std::set<Key>)> walk =
+      [&](const MedVar &Value, int Depth,
+          std::set<Key> Seen) -> OffsetCongruence {
+    if (Depth > 64)
+      return {};
+    if (auto Folded = foldedConstant(Value))
+      return exact(*Folded);
+    if (!Seen.insert(keyOf(Value)).second)
+      return dynamic(0, 1);
+    const MedOp *Def = LookupDef(Value);
+    if (!Def)
+      return dynamic(0, 1);
+    if ((Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
+         Def->Opcode == NdOp::INT_SEXT || Def->Opcode == NdOp::SUBBYTES) &&
+        Def->NumInputs >= 1) {
+      if (Def->Opcode == NdOp::SUBBYTES &&
+          (Def->NumInputs < 2 || !Def->Inputs[1].isConst() ||
+           Def->Inputs[1].ConstVal != 0))
+        return dynamic(0, 1);
+      return resize(walk(Def->Inputs[0], Depth + 1, Seen),
+                    Def->Inputs[0].Size * 8, Def->Output.Size * 8,
+                    Def->Opcode == NdOp::INT_SEXT);
+    }
+    if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
+        Def->NumInputs >= 2)
+      return add(walk(Def->Inputs[0], Depth + 1, Seen),
+                 walk(Def->Inputs[1], Depth + 1, Seen),
+                 Def->Opcode == NdOp::INT_SUB);
+    if (Def->Opcode == NdOp::INT_MULT && Def->NumInputs >= 2) {
+      for (unsigned ConstantIndex : {0U, 1U})
+        if (auto Factor = foldedConstant(Def->Inputs[ConstantIndex]))
+          return scale(walk(Def->Inputs[1U - ConstantIndex], Depth + 1, Seen),
+                       *Factor);
+      return dynamic(0, 1);
+    }
+    if (Def->Opcode == NdOp::INT_LEFT && Def->NumInputs >= 2)
+      if (auto Shift = foldedConstant(Def->Inputs[1]);
+          Shift && *Shift < PtrBits)
+        return scale(walk(Def->Inputs[0], Depth + 1, Seen),
+                     uint64_t(1) << static_cast<unsigned>(*Shift));
+    if ((Def->Opcode == NdOp::INT_AND || Def->Opcode == NdOp::INT_OR ||
+         Def->Opcode == NdOp::INT_XOR) &&
+        Def->NumInputs >= 2) {
+      for (unsigned ConstantIndex : {0U, 1U}) {
+        auto Constant = foldedConstant(Def->Inputs[ConstantIndex]);
+        if (!Constant)
+          continue;
+        const uint64_t Bits = *Constant & PtrMask;
+        OffsetCongruence Input =
+            walk(Def->Inputs[1U - ConstantIndex], Depth + 1, Seen);
+        if (!Input.Valid)
+          return {};
+        if (Input.isExact()) {
+          if (Def->Opcode == NdOp::INT_AND)
+            return exact(Input.Residue & Bits);
+          if (Def->Opcode == NdOp::INT_OR)
+            return exact(Input.Residue | Bits);
+          return exact(Input.Residue ^ Bits);
+        }
+        if (Def->Opcode == NdOp::INT_XOR)
+          return dynamic(Input.Residue ^ Bits, Input.Modulus);
+        const uint64_t FreeBits =
+            Def->Opcode == NdOp::INT_AND ? Bits : (~Bits & PtrMask);
+        if (FreeBits == 0)
+          return exact(Def->Opcode == NdOp::INT_AND ? 0 : PtrMask);
+        const uint64_t ForcedModulus = lowBit(FreeBits);
+        const uint64_t Modulus = std::max(Input.Modulus, ForcedModulus);
+        const uint64_t Residue = Def->Opcode == NdOp::INT_AND
+                                     ? Input.Residue & Bits
+                                     : Input.Residue | Bits;
+        if (Def->Opcode == NdOp::INT_AND)
+          return dynamic(Residue, Modulus, uint64_t(0), Bits);
+        return dynamic(Residue, Modulus);
+      }
+    }
+    if ((Def->Opcode == NdOp::INT_RIGHT || Def->Opcode == NdOp::INT_ASHR) &&
+        Def->NumInputs >= 2)
+      if (auto Shift = foldedConstant(Def->Inputs[1]);
+          Shift && Def->Inputs[0].Size != 0 &&
+          *Shift < Def->Inputs[0].Size * 8 && *Shift < PtrBits) {
+        OffsetCongruence Input = walk(Def->Inputs[0], Depth + 1, Seen);
+        if (!Input.Valid)
+          return {};
+        if (Input.isExact()) {
+          uint64_t Shifted = Input.Residue >> static_cast<unsigned>(*Shift);
+          const unsigned SourceBits =
+              std::min<unsigned>(Def->Inputs[0].Size * 8, 64U);
+          if (Def->Opcode == NdOp::INT_ASHR && *Shift != 0 && SourceBits != 0 &&
+              (Input.Residue & (uint64_t(1) << (SourceBits - 1))) != 0)
+            Shifted |= ~uint64_t(0) << (SourceBits - *Shift);
+          return exact(Shifted);
+        }
+        const uint64_t Divisor = uint64_t(1) << static_cast<unsigned>(*Shift);
+        if (Input.Modulus <= Divisor)
+          return dynamic(0, 1);
+        OffsetCongruence Result =
+            dynamic(Input.Residue >> static_cast<unsigned>(*Shift),
+                    Input.Modulus / Divisor);
+        if (Input.hasFiniteRange()) {
+          Result.MinValue = *Input.MinValue >> static_cast<unsigned>(*Shift);
+          Result.MaxValue = *Input.MaxValue >> static_cast<unsigned>(*Shift);
+        }
+        return Result;
+      }
+    if ((Def->Opcode == NdOp::INT_NEG2 || Def->Opcode == NdOp::INT_NOT) &&
+        Def->NumInputs >= 1) {
+      OffsetCongruence Input = walk(Def->Inputs[0], Depth + 1, Seen);
+      if (!Input.Valid)
+        return {};
+      const uint64_t Residue = Def->Opcode == NdOp::INT_NEG2
+                                   ? uint64_t(0) - Input.Residue
+                                   : ~Input.Residue;
+      return Input.isExact() ? exact(Residue) : dynamic(Residue, Input.Modulus);
+    }
+    if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
+      return merge(walk(Def->Inputs[1], Depth + 1, Seen),
+                   walk(Def->Inputs[2], Depth + 1, Seen));
+    return dynamic(0, 1);
+  };
+
+  const std::optional<uint64_t> Run = DiscoverRun(Address);
+  Result.Recognized = Run.has_value();
+  std::set<uint64_t> Bases;
+  if (KnownBases && KnownTerms) {
+    Bases = *KnownBases;
+    Result.IndexTerms = *KnownTerms;
+  } else {
+    uint64_t Base = 0;
+    bool HaveBase = false;
+    if (!CollectBase(Address, Base, HaveBase, Result.IndexTerms) || !HaveBase)
+      return Result;
+    Bases.insert(Base);
+  }
+  if (Bases.empty() || Result.IndexTerms.empty())
+    return Result;
+
+  OffsetCongruence Combined = exact(0);
+  for (const MedVar &Term : Result.IndexTerms)
+    Combined = add(Combined, walk(Term, 0, {}), SubtractKnownTerms);
+  if (!Combined.Valid || Combined.isExact() || Combined.Modulus < PtrSize ||
+      Combined.Modulus % PtrSize != 0)
+    return Result;
+
+  size_t Remaining = static_cast<size_t>(limits::kMaxSSANodes);
+  std::optional<uint64_t> CommonRunStart;
+  for (uint64_t Base : Bases) {
+    uint64_t Origin = (Base + Combined.Residue) & PtrMask;
+    std::optional<uint64_t> LastBoundedSlot;
+    if (Combined.hasFiniteRange()) {
+      const uint64_t MinValue = *Combined.MinValue;
+      const uint64_t MaxValue = *Combined.MaxValue;
+      const uint64_t MinResidue = MinValue & (Combined.Modulus - 1);
+      const uint64_t Adjustment =
+          (Combined.Residue - MinResidue) & (Combined.Modulus - 1);
+      if (MinValue > PtrMask - Adjustment)
+        return Result;
+      const uint64_t FirstOffset = MinValue + Adjustment;
+      if (FirstOffset > MaxValue || Base > PtrMask - FirstOffset)
+        return Result;
+      const uint64_t LastOffset =
+          FirstOffset +
+          ((MaxValue - FirstOffset) / Combined.Modulus) * Combined.Modulus;
+      if (Base > PtrMask - LastOffset)
+        return Result;
+      Origin = Base + FirstOffset;
+      LastBoundedSlot = Base + LastOffset;
+    }
+    const Segment *OriginSegment = Img->getSegmentFor(Origin);
+    const Section *OriginSection =
+        OriginSegment && !OriginSegment->isExecutable()
+            ? Img->getSectionFor(Origin)
+            : nullptr;
+    if (!OriginSection || !OriginSection->isReadable() ||
+        OriginSection->isExecutable() ||
+        OriginSection->Size > InvalidVA - OriginSection->VA ||
+        Origin < OriginSection->VA ||
+        Origin >= OriginSection->VA + OriginSection->Size)
+      return Result;
+
+    uint64_t RunStart = OriginSegment->VA;
+    uint64_t RunEnd = OriginSegment->VA + OriginSegment->Data.size();
+    ReadOnlyRun(OriginSegment, RunStart, RunEnd);
+    if ((Run && *Run != RunStart) ||
+        (CommonRunStart && *CommonRunStart != RunStart))
+      return Result;
+    CommonRunStart = RunStart;
+
+    const uint64_t BoundEnd = OriginSection->VA + OriginSection->Size;
+    uint64_t Slot = Origin;
+    if (!LastBoundedSlot) {
+      const uint64_t Residue = (Origin - OriginSection->VA) % Combined.Modulus;
+      Slot = OriginSection->VA + Residue;
+    } else if (*LastBoundedSlot < Origin || *LastBoundedSlot >= BoundEnd ||
+               PtrSize > BoundEnd - *LastBoundedSlot) {
+      return Result;
+    }
+    while (Slot < BoundEnd && PtrSize <= BoundEnd - Slot &&
+           (!LastBoundedSlot || Slot <= *LastBoundedSlot)) {
+      if (Remaining-- == 0)
+        return Result;
+      const Segment *SlotSegment = Img->getSegmentFor(Slot);
+      if (!SlotSegment || SlotSegment->isExecutable())
+        return Result;
+      uint64_t SlotRunStart = SlotSegment->VA;
+      uint64_t SlotRunEnd = SlotSegment->VA + SlotSegment->Data.size();
+      ReadOnlyRun(SlotSegment, SlotRunStart, SlotRunEnd);
+      if (SlotRunStart != RunStart || Slot < SlotRunStart ||
+          PtrSize > SlotRunEnd - Slot)
+        return Result;
+      Result.Slots.insert(Slot);
+      if (Slot > InvalidVA - Combined.Modulus)
+        break;
+      Slot += Combined.Modulus;
+    }
+  }
+  Result.Complete = !Result.Slots.empty();
+  return Result;
+}
+
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // Conservative control-flow feasibility
 //===----------------------------------------------------------------------===//
@@ -332,6 +733,8 @@ MedLLVMEmitter::traceControlConst(const MedVar &V) const {
 
 void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
   PhiEdgeClassCache.clear();
+  FeasibleControlComponentsReady = false;
+  FeasibleControlComponents.clear();
 
   PhiRecurrenceCacheFor = nullptr;
   PhiRecurrenceCache.clear();
@@ -584,6 +987,34 @@ bool MedLLVMEmitter::phiIncomingEdgeFeasible(const PhiNode &Phi,
   return classifyPhiIncomingEdge(Phi, PredId) != PhiEdgeFeasibility::Infeasible;
 }
 
+bool MedLLVMEmitter::constantIsStableAddressOffset(const MedVar &V) const {
+  if (!V.isConst())
+    return false;
+  if (V.Provenance == ConstantAddressProvenance::Scalar)
+    return true;
+  if (isAddressProvenance(V.Provenance))
+    return false;
+  if (!Img)
+    return true;
+
+  // Most strides and masks are small unmapped immediates. Prove that case
+  // from occurrence and loader inventories without entering whole-function
+  // getVar use analysis: that analysis may ask whether the surrounding PHI is
+  // recurrent and create a transient mutual proof cycle. A negative answer
+  // from that cycle must not become the PHI's memoized final role.
+  const uint64_t Value = V.ConstVal;
+  const bool HasLowRelocationEvidence =
+      Img->RelocDataAddrs.count(Value) || Img->RodataAnchorSeg.count(Value) ||
+      Img->WritableRelocDataAddrs.count(Value) ||
+      Img->CodeRefTargets.count(Value) || hasObjectDataProvenance(Value);
+  if (Value < limits::kMinGlobalDataAddr && !HasLowRelocationEvidence &&
+      !Img->getSegmentFor(Value))
+    return true;
+
+  return !getVarMayRelocateConstant(Value, V.Size) &&
+         !hasObjectDataProvenance(Value);
+}
+
 bool MedLLVMEmitter::valueIsStableAddressOffset(const MedVar &V,
                                                 const MedVar *Forbidden) const {
   if (!CurMedFunc) {
@@ -601,23 +1032,198 @@ bool MedLLVMEmitter::valueIsStableAddressOffset(const MedVar &V,
   if (auto It = StableOffsetCache.find(Key); It != StableOffsetCache.end())
     return It->second;
 
+  // A frame-domain proof may need to validate the scalar side of a
+  // loop-carried frame address.  That nested query can encounter the original
+  // frame reload again through a different SSA path before its cache entry is
+  // complete.  Treat such cross-query re-entry as unproved instead of starting
+  // a second unbounded walk.  The outer proof still audits every ordinary
+  // initializer/source and publishes only its completed result.
+  using ActiveStableOffsetKey =
+      std::tuple<const MedLLVMEmitter *, const MedFunc *, decltype(Key)>;
+  static thread_local std::set<ActiveStableOffsetKey> ActiveProofs;
+  const ActiveStableOffsetKey ActiveKey{this, CurMedFunc, Key};
+  if (!ActiveProofs.insert(ActiveKey).second)
+    return false;
+
   ++AddressProvenanceWork.StableOffsetProofs;
   const bool Result = valueIsStableAddressOffsetImpl(V, Forbidden);
+  ActiveProofs.erase(ActiveKey);
   StableOffsetCache.emplace(Key, Result);
   return Result;
 }
 
 bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     const MedVar &V, const MedVar *Forbidden) const {
+  auto stableOffsetFailure = [](const char *, const MedVar &, int) {
+    return false;
+  };
   auto sameVar = [](const MedVar &A, const MedVar &B) {
     return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
            A.SSAVer == B.SSAVer;
   };
+  auto exactSameVar = [](const MedVar &A, const MedVar &B) {
+    if (A.isConst() || B.isConst() || A.Kind != B.Kind ||
+        A.TheArch != B.TheArch || A.RenameTag != B.RenameTag || A.Id != B.Id ||
+        A.SSAVer != B.SSAVer || A.Size != B.Size)
+      return false;
+    if (A.Kind == MedVar::Reg || A.Kind == MedVar::Param)
+      return A.RegOff == B.RegOff;
+    if (A.Kind == MedVar::Stack)
+      return A.StackOff == B.StackOff;
+    return true;
+  };
   using Key = std::tuple<int, int, int>;
   using FrameSlotKey = std::pair<std::pair<int, int>, int64_t>;
+  using FrameRootKey = std::pair<int, int>;
   auto keyOf = [](const MedVar &V) {
     return Key{static_cast<int>(V.Kind), V.Id, V.SSAVer};
   };
+  // Exact frame-slot recovery intentionally rejects runtime indexes.  Scalar
+  // provenance needs a weaker, orthogonal identity: which entry SP/FP root an
+  // address is derived from, irrespective of its dynamic lane.  This lets a
+  // local scalar array be audited as one memory domain without weakening the
+  // exact reaching-store proof used to recover spilled pointers.
+  struct FrameRootProof {
+    bool Valid = false;
+    bool SawCycle = false;
+    std::optional<FrameRootKey> Root;
+  };
+  int RemainingFrameRootNodes = 8192;
+  std::function<FrameRootProof(const MedVar &, int, std::set<Key>)>
+      frameRootProof = [&](const MedVar &Start, int Depth,
+                           std::set<Key> Seen) -> FrameRootProof {
+    if (Start.isConst() || RemainingFrameRootNodes-- <= 0)
+      return {};
+    if (auto Exact = canonicalFrameSlotKey(Start))
+      return {true, false, Exact->first};
+    const MedOp *Def = lookupDef(Start);
+    if (!Seen.insert(keyOf(Start)).second)
+      return {true, true, std::nullopt};
+
+    auto mergeProofs = [](const FrameRootProof &A,
+                          const FrameRootProof &B) -> FrameRootProof {
+      if (!A.Valid || !B.Valid || (A.Root && B.Root && *A.Root != *B.Root))
+        return {};
+      return {true, A.SawCycle || B.SawCycle, A.Root ? A.Root : B.Root};
+    };
+
+    if (const PhiNode *Phi = lookupPhi(Start)) {
+      FrameRootProof Result;
+      bool SawFeasible = false;
+      for (const auto &[Pred, Arg] : Phi->Args) {
+        PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, Pred);
+        if (Edge == PhiEdgeFeasibility::Infeasible)
+          continue;
+        if (Edge != PhiEdgeFeasibility::ProvenFeasible)
+          return {};
+        FrameRootProof Arm = frameRootProof(Arg, Depth + 1, Seen);
+        if (!Arm.Valid)
+          return {};
+        Result = SawFeasible ? mergeProofs(Result, Arm) : Arm;
+        if (!Result.Valid)
+          return {};
+        SawFeasible = true;
+      }
+      return SawFeasible ? Result : FrameRootProof{};
+    }
+
+    if (!Def || Def->NumInputs < 1)
+      return {};
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      return frameRootProof(*Forwarded, Depth + 1, Seen);
+    if (Def->Opcode == NdOp::LOAD) {
+      std::vector<MedVar> Sources;
+      if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
+        return {};
+      FrameRootProof Result;
+      bool SawSource = false;
+      for (const MedVar &Source : Sources) {
+        FrameRootProof SourceProof = frameRootProof(Source, Depth + 1, Seen);
+        if (!SourceProof.Valid)
+          return {};
+        Result = SawSource ? mergeProofs(Result, SourceProof) : SourceProof;
+        if (!Result.Valid)
+          return {};
+        SawSource = true;
+      }
+      return SawSource ? Result : FrameRootProof{};
+    }
+
+    auto mergeFrameOperand = [&](const MedVar &A,
+                                 const MedVar *B) -> FrameRootProof {
+      FrameRootProof Left = frameRootProof(A, Depth + 1, Seen);
+      if (!Left.Valid)
+        return {};
+      if (!B) {
+        return Left;
+      }
+      FrameRootProof Right = frameRootProof(*B, Depth + 1, Seen);
+      if (!Right.Valid) {
+        // A recurrence is pointer-preserving only when its non-pointer side
+        // remains numeric in rebuilt IR.  This is the same invariant used by
+        // the general pointer recurrence proof; applying it at the operation
+        // that carries the cycle avoids blessing `p + @other_object`.
+        if (B && Left.SawCycle && !valueIsStableAddressOffset(*B, &Start))
+          return {};
+        return Left;
+      }
+      // Combining two independently frame-derived values is not an affine
+      // pointer step.  Preserve the legacy same-root classification for
+      // acyclic address formation, but never let it close a recurrence.
+      if (Left.SawCycle || Right.SawCycle)
+        return {};
+      return mergeProofs(Left, Right);
+    };
+    switch (Def->Opcode) {
+    case NdOp::INT_ADD:
+      if (Def->NumInputs < 2)
+        return {};
+      if (FrameRootProof Left =
+              mergeFrameOperand(Def->Inputs[0], &Def->Inputs[1]);
+          Left.Valid)
+        return Left;
+      return mergeFrameOperand(Def->Inputs[1], &Def->Inputs[0]);
+    case NdOp::INT_SUB:
+      if (Def->NumInputs < 2)
+        return {};
+      return mergeFrameOperand(Def->Inputs[0], &Def->Inputs[1]);
+    case NdOp::INT_AND:
+    case NdOp::INT_OR:
+    case NdOp::INT_XOR: {
+      if (Def->NumInputs < 2)
+        return {};
+      FrameRootProof Carrier =
+          mergeFrameOperand(Def->Inputs[0], &Def->Inputs[1]);
+      // Bitwise transforms can conservatively retain an already-established
+      // frame domain (alignment/tag arithmetic), but are not valid recurrence
+      // edges: repeated XOR/OR/AND is not pointer-plus-scalar induction.
+      return Carrier.Valid && !Carrier.SawCycle ? Carrier : FrameRootProof{};
+    }
+    case NdOp::SELECT: {
+      if (!selectPreservesPointerValues(*Def))
+        return {};
+      FrameRootProof TrueRoot = frameRootProof(Def->Inputs[1], Depth + 1, Seen);
+      FrameRootProof FalseRoot =
+          frameRootProof(Def->Inputs[2], Depth + 1, Seen);
+      return mergeProofs(TrueRoot, FalseRoot);
+    }
+    default:
+      return {};
+    }
+  };
+  auto frameRoot = [&](const MedVar &Start, int Depth,
+                       std::set<Key> Seen) -> std::optional<FrameRootKey> {
+    FrameRootProof Proof = frameRootProof(Start, Depth, std::move(Seen));
+    return Proof.Valid ? Proof.Root : std::nullopt;
+  };
+  std::set<FrameRootKey> ActiveFrameDomains;
+  // A relocation-free immutable scalar table can feed the index used by its
+  // next lookup (for example, a finite-state transition table in a loop).
+  // Record such a LOAD only after every reachable lane slot has been audited
+  // as scalar.  Re-entry is then a value recurrence, not a new pointer source;
+  // it is accepted only while a PHI or frame recurrence with an independently
+  // proven initializer is already active.
+  std::set<Key> ActiveImmutableScalarLoads;
   // The non-pointer side of an induction step must remain a numeric offset in
   // rebuilt IR. Reject a second occurrence of the recurrence and any constant
   // or forwarded/arithmetic DAG that carries independently relocatable address
@@ -628,22 +1234,349 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   // path-local depth limit alone still permits exponential re-traversal.  On
   // exhaustion, false is conservative: callers retain the mixed/raw model
   // instead of granting a scalar-offset proof.
-  int RemainingProofNodes = 4096;
-  std::function<bool(const MedVar &, int, std::set<Key>,
-                     std::set<FrameSlotKey>)>
-      prove = [&](const MedVar &Start, int Depth, std::set<Key> Seen,
-                  std::set<FrameSlotKey> ActiveFrameSlots) -> bool {
-    if (Forbidden && sameVar(Start, *Forbidden))
+  // The proof is deliberately bounded, but real flag-expanded loop indices
+  // can exceed 4K visited occurrences while remaining a finite scalar DAG.
+  // Match the complete table-base audit's bound so the two halves of the same
+  // provenance decision cannot disagree solely because one has less budget.
+  int RemainingProofNodes = 8192;
+  // Identify only value-producing recurrence edges.  This is deliberately
+  // separate from generic use/def reachability: a PHI used as a SELECT
+  // condition or shift/mask control does not anchor the selected scalar.
+  // Exact frame reload sources are followed so an SSA PHI whose backedge is
+  // carried through a spill slot remains one scalar SCC.
+  std::function<bool(const MedVar &, const Key &, int, std::set<Key>)>
+      scalarValueReaches = [&](const MedVar &Start, const Key &Target,
+                               int Depth, std::set<Key> Seen) -> bool {
+    if (Depth > 128 || Start.isConst())
       return false;
+    const Key StartKey = keyOf(Start);
+    if (StartKey == Target)
+      return true;
+    if (!Seen.insert(StartKey).second)
+      return false;
+    if (const PhiNode *Phi = lookupPhi(Start)) {
+      for (const auto &[Pred, Arg] : Phi->Args)
+        if (classifyPhiIncomingEdge(*Phi, Pred) ==
+                PhiEdgeFeasibility::ProvenFeasible &&
+            scalarValueReaches(Arg, Target, Depth + 1, Seen))
+          return true;
+      return false;
+    }
+    const MedOp *Def = lookupDef(Start);
+    if (!Def || Def->NumInputs < 1)
+      return false;
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      return scalarValueReaches(*Forwarded, Target, Depth + 1, std::move(Seen));
+    if (Def->Opcode == NdOp::LOAD) {
+      std::vector<MedVar> Sources;
+      if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
+        return false;
+      for (const MedVar &Source : Sources)
+        if (scalarValueReaches(Source, Target, Depth + 1, Seen))
+          return true;
+      return false;
+    }
+    if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
+      return scalarValueReaches(Def->Inputs[1], Target, Depth + 1, Seen) ||
+             scalarValueReaches(Def->Inputs[2], Target, Depth + 1,
+                                std::move(Seen));
+    if (Def->Opcode == NdOp::INT_OR) {
+      MedVar Cond, ArmT, ArmF;
+      if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
+        return scalarValueReaches(ArmT, Target, Depth + 1, Seen) ||
+               scalarValueReaches(ArmF, Target, Depth + 1, std::move(Seen));
+    }
+    switch (Def->Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+    case NdOp::SUBBYTES:
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+    case NdOp::INT_MULT:
+    case NdOp::INT_DIV:
+    case NdOp::INT_SDIV:
+    case NdOp::INT_REM:
+    case NdOp::INT_SREM:
+    case NdOp::INT_LEFT:
+    case NdOp::INT_RIGHT:
+    case NdOp::INT_ASHR:
+    case NdOp::INT_AND:
+    case NdOp::INT_OR:
+    case NdOp::INT_XOR:
+    case NdOp::INT_NEG2:
+    case NdOp::INT_NEGATE:
+    case NdOp::INT_NOT:
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        if (scalarValueReaches(Def->Inputs[I], Target, Depth + 1, Seen))
+          return true;
+      return false;
+    default:
+      return false;
+    }
+  };
+  std::function<bool(const MedVar &, const std::set<Key> &)>
+      reachesAnchoredPhi =
+          [&](const MedVar &Start, const std::set<Key> &AnchoredPhis) {
+            for (const Key &Anchor : AnchoredPhis)
+              if (scalarValueReaches(Start, Anchor, 0, {}))
+                return true;
+            return false;
+          };
+
+  // Some lowered loop states are not value-carried back to their PHI.  A
+  // later iteration can instead feed the state through a LOAD address or a
+  // call argument before producing the incoming value.  scalarValueReaches()
+  // deliberately does not follow those non-value operands, so use the
+  // already-proven feasible CFG as the second, orthogonal recurrence signal:
+  // an incoming edge is loop-carried exactly when the PHI owner can reach its
+  // predecessor again.  This marks only edges inside a feasible control SCC;
+  // every edge entering that SCC remains an initializer and is audited before
+  // any recurrent arm receives PHI authority.
+  auto phiIncomingClosesFeasibleControlCycle = [&](const PhiNode &Phi,
+                                                   int PredId) {
+    ensurePhiEdgeIndex();
+    const auto Owner = PhiOwnerBlocks.find(&Phi);
+    if (Owner == PhiOwnerBlocks.end())
+      return false;
+    const int OwnerId = Owner->second;
+
+    ensureFeasibleEdgeCache();
+    if (FeasibleEdgeState != FeasibleEdgeCacheState::Ready ||
+        !FeasibleEdges.count({PredId, OwnerId}))
+      return false;
+    if (!FeasibleControlComponentsReady) {
+      std::map<int, std::vector<int>> Successors;
+      std::map<int, std::vector<int>> Predecessors;
+      for (int BlockId : FeasibleBlocks) {
+        Successors[BlockId];
+        Predecessors[BlockId];
+      }
+      for (const auto &[From, To] : FeasibleEdges) {
+        Successors[From].push_back(To);
+        Predecessors[To].push_back(From);
+      }
+
+      std::set<int> SeenBlocks;
+      std::vector<int> FinishOrder;
+      for (int Root : FeasibleBlocks) {
+        if (SeenBlocks.count(Root))
+          continue;
+        std::vector<std::pair<int, bool>> Work{{Root, false}};
+        while (!Work.empty()) {
+          const auto [BlockId, Expanded] = Work.back();
+          Work.pop_back();
+          if (Expanded) {
+            FinishOrder.push_back(BlockId);
+            continue;
+          }
+          if (!SeenBlocks.insert(BlockId).second)
+            continue;
+          Work.push_back({BlockId, true});
+          for (auto It = Successors[BlockId].rbegin();
+               It != Successors[BlockId].rend(); ++It)
+            if (!SeenBlocks.count(*It))
+              Work.push_back({*It, false});
+        }
+      }
+
+      int Component = 0;
+      for (auto It = FinishOrder.rbegin(); It != FinishOrder.rend(); ++It) {
+        if (FeasibleControlComponents.count(*It))
+          continue;
+        std::vector<int> Work{*It};
+        FeasibleControlComponents.emplace(*It, Component);
+        while (!Work.empty()) {
+          const int BlockId = Work.back();
+          Work.pop_back();
+          for (int Pred : Predecessors[BlockId])
+            if (FeasibleControlComponents.emplace(Pred, Component).second)
+              Work.push_back(Pred);
+        }
+        ++Component;
+      }
+      FeasibleControlComponentsReady = true;
+    }
+
+    const auto OwnerComponent = FeasibleControlComponents.find(OwnerId);
+    const auto PredComponent = FeasibleControlComponents.find(PredId);
+    return OwnerComponent != FeasibleControlComponents.end() &&
+           PredComponent != FeasibleControlComponents.end() &&
+           OwnerComponent->second == PredComponent->second;
+  };
+
+  // A lowered loop can contain a whole PHI SCC rather than one canonical
+  // header PHI with a direct initializer.  In particular, an unrolled switch
+  // feeds its case-merge PHIs back into a later loop header while the actual
+  // entry value reaches a deeper dispatch PHI.  Classifying each PHI in
+  // isolation makes every immediate arm look recurrent and loses that entry
+  // proof.  Find an initializer on the value-carrying portion of the complete
+  // recurrence component instead.  Arithmetic side inputs are deliberately
+  // not initializers: `p = p + 1` remains a source-free cycle, while a PHI,
+  // SELECT, or exact frame reload with an external value arm establishes a
+  // real entry.  The ordinary prove() walk below still audits that arm and all
+  // other operands for address provenance.
+  auto scalarRecurrenceHasInitializer = [&](const MedVar &Root) {
+    if (Root.isConst())
+      return false;
+    const Key RootKey = keyOf(Root);
+    std::vector<MedVar> Work{Root};
+    std::set<Key> Seen;
+    int Budget = 8192;
+    auto reachesRoot = [&](const MedVar &Value) {
+      return scalarValueReaches(Value, RootKey, 0, {});
+    };
+    auto inspectValueArms = [&](const std::vector<MedVar> &Arms,
+                                bool &FoundInitializer) {
+      bool SawCarrier = false;
+      for (const MedVar &Arm : Arms) {
+        if (reachesRoot(Arm)) {
+          Work.push_back(Arm);
+          SawCarrier = true;
+        } else {
+          FoundInitializer = true;
+        }
+      }
+      return SawCarrier;
+    };
+
+    while (!Work.empty() && Budget-- > 0) {
+      MedVar Current = Work.back();
+      Work.pop_back();
+      if (Current.isConst() || !Seen.insert(keyOf(Current)).second)
+        continue;
+
+      if (const PhiNode *Phi = lookupPhi(Current)) {
+        bool SawFeasible = false;
+        for (const auto &[Pred, Arg] : Phi->Args) {
+          PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, Pred);
+          if (Edge == PhiEdgeFeasibility::Infeasible)
+            continue;
+          if (Edge != PhiEdgeFeasibility::ProvenFeasible)
+            return false;
+          SawFeasible = true;
+          if (!reachesRoot(Arg))
+            return true;
+          Work.push_back(Arg);
+        }
+        if (!SawFeasible)
+          return false;
+        continue;
+      }
+
+      const MedOp *Def = lookupDef(Current);
+      if (!Def || Def->NumInputs < 1)
+        continue;
+      if (auto Forwarded = pointerPreservingInput(*Def)) {
+        if (reachesRoot(*Forwarded))
+          Work.push_back(*Forwarded);
+        continue;
+      }
+      if (Def->Opcode == NdOp::LOAD) {
+        std::vector<MedVar> Sources;
+        if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
+          return false;
+        bool FoundInitializer = false;
+        (void)inspectValueArms(Sources, FoundInitializer);
+        if (FoundInitializer)
+          return true;
+        continue;
+      }
+      if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
+        bool FoundInitializer = false;
+        (void)inspectValueArms({Def->Inputs[1], Def->Inputs[2]},
+                               FoundInitializer);
+        if (FoundInitializer)
+          return true;
+        continue;
+      }
+      if (Def->Opcode == NdOp::INT_OR) {
+        MedVar Cond, ArmT, ArmF;
+        if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF)) {
+          bool FoundInitializer = false;
+          (void)inspectValueArms({ArmT, ArmF}, FoundInitializer);
+          if (FoundInitializer)
+            return true;
+          continue;
+        }
+      }
+
+      switch (Def->Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+      case NdOp::SUBBYTES:
+      case NdOp::INT_ADD:
+      case NdOp::INT_SUB:
+      case NdOp::INT_MULT:
+      case NdOp::INT_DIV:
+      case NdOp::INT_SDIV:
+      case NdOp::INT_REM:
+      case NdOp::INT_SREM:
+      case NdOp::INT_LEFT:
+      case NdOp::INT_RIGHT:
+      case NdOp::INT_ASHR:
+      case NdOp::INT_AND:
+      case NdOp::INT_OR:
+      case NdOp::INT_XOR:
+      case NdOp::INT_NEG2:
+      case NdOp::INT_NEGATE:
+      case NdOp::INT_NOT:
+        for (uint8_t I = 0; I < Def->NumInputs; ++I)
+          if (reachesRoot(Def->Inputs[I]))
+            Work.push_back(Def->Inputs[I]);
+        break;
+      default:
+        break;
+      }
+    }
+    return false;
+  };
+
+  std::function<bool(const MedVar &, int, std::set<Key>, std::set<FrameSlotKey>,
+                     std::set<Key>)>
+      prove = [&](const MedVar &Start, int Depth, std::set<Key> Seen,
+                  std::set<FrameSlotKey> ActiveFrameSlots,
+                  std::set<Key> AnchoredPhis) -> bool {
+    if (Forbidden && sameVar(Start, *Forbidden))
+      return stableOffsetFailure("forbidden", Start, Depth);
     // Recognize a scalar recurrence before applying the acyclic-depth budget:
     // a long lowered arithmetic chain can return to its PHI only after dozens
     // nodes.  Every non-cyclic initialization arm is still audited below.
-    if (!Start.isConst() && Seen.count(keyOf(Start)))
-      return true;
+    if (!Start.isConst() && Seen.count(keyOf(Start))) {
+      // A real SSA recurrence returns to a PHI whose non-cyclic initializer
+      // arms were audited before this edge.  Keep the legacy exact live-in
+      // self-COPY as a harmless identity, but reject an arbitrary multi-node
+      // forwarding cycle: it has no dominating scalar initializer and could
+      // otherwise hide unproved address provenance.
+      if (reachesAnchoredPhi(Start, AnchoredPhis))
+        return true;
+      const MedOp *CycleDef = lookupDef(Start);
+      if (CycleDef && CycleDef->Opcode == NdOp::LOAD &&
+          CycleDef->NumInputs >= 1) {
+        if (auto Slot = canonicalFrameSlotKey(CycleDef->Inputs[0]);
+            Slot && ActiveFrameSlots.count(*Slot))
+          return true;
+        if (auto Root = frameRoot(CycleDef->Inputs[0], 0, {});
+            Root && ActiveFrameDomains.count(*Root))
+          return true;
+        if (ActiveImmutableScalarLoads.count(keyOf(Start)) &&
+            (!AnchoredPhis.empty() || !ActiveFrameSlots.empty() ||
+             !ActiveFrameDomains.empty()))
+          return true;
+      }
+      const bool ExactSelfCopy = CycleDef && CycleDef->Opcode == NdOp::COPY &&
+                                 CycleDef->NumInputs == 1 &&
+                                 exactSameVar(CycleDef->Output, Start) &&
+                                 exactSameVar(CycleDef->Inputs[0], Start);
+      return ExactSelfCopy
+                 ? true
+                 : stableOffsetFailure("unanchored-cycle", Start, Depth);
+    }
     if (Depth > 128)
-      return false;
+      return stableOffsetFailure("depth", Start, Depth);
     if (RemainingProofNodes-- <= 0)
-      return false;
+      return stableOffsetFailure("budget", Start, Depth);
     auto constantIsMappedAddress = [&](uint64_t Value, uint16_t Size) {
       if (!Img || Value == 0)
         return false;
@@ -661,8 +1594,9 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         Start.Provenance == ConstantAddressProvenance::Scalar)
       return true;
     if (Start.isConst() && isAddressProvenance(Start.Provenance)) {
-      if (Start.Provenance != ConstantAddressProvenance::Address)
-        return false;
+      if (Start.Provenance != ConstantAddressProvenance::Address) {
+        return stableOffsetFailure("exact-address", Start, Depth);
+      }
       // A role-neutral architectural-PC seed (i386 call/pop) is numeric at a
       // scalar-offset use when neither data nor code arbitration would rewrite
       // this exact occurrence.  This keeps `pc + GOTOFF/SECTDIFF + index`
@@ -675,22 +1609,60 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
                  Start, /*IncludeLayoutCodeOwners=*/false);
     }
     if (Start.isConst())
-      return !constantIsMappedAddress(Start.ConstVal, Start.Size);
+      return !constantIsMappedAddress(Start.ConstVal, Start.Size)
+                 ? true
+                 : stableOffsetFailure("mapped-constant", Start, Depth);
     Seen.insert(keyOf(Start));
 
     if (const PhiNode *Nested = lookupPhi(Start)) {
       bool SawPotential = false;
+      struct PhiArm {
+        int Pred = -1;
+        MedVar Arg;
+        bool Recurrent = false;
+      };
+      std::vector<PhiArm> Arms;
       for (const auto &[NestedPred, NestedArg] : Nested->Args) {
         PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Nested, NestedPred);
         if (Edge == PhiEdgeFeasibility::Infeasible)
           continue;
         if (Edge != PhiEdgeFeasibility::ProvenFeasible)
-          return false;
+          return stableOffsetFailure("unknown-phi-edge", Start, Depth);
         SawPotential = true;
-        if (!prove(NestedArg, Depth + 1, Seen, ActiveFrameSlots))
-          return false;
+        Arms.push_back(
+            {NestedPred, NestedArg,
+             scalarValueReaches(NestedArg, keyOf(Start), 0, {}) ||
+                 phiIncomingClosesFeasibleControlCycle(*Nested, NestedPred)});
       }
-      return SawPotential;
+      if (!SawPotential)
+        return stableOffsetFailure("no-feasible-phi-arm", Start, Depth);
+
+      // Establish the PHI's authority only from its non-recurrent incoming
+      // values.  Then audit every recurrence arm with that authority.  This
+      // admits PHI -> spill -> arithmetic -> PHI scalar loops while rejecting
+      // a self-contained or unrelated cycle with no numeric initializer.
+      bool SawInitializer = false;
+      for (const PhiArm &Arm : Arms) {
+        if (Arm.Recurrent)
+          continue;
+        const bool ArmResult =
+            prove(Arm.Arg, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis);
+        if (!ArmResult)
+          return stableOffsetFailure("unstable-phi-initializer", Start, Depth);
+        SawInitializer = true;
+      }
+      if (!SawInitializer && !scalarRecurrenceHasInitializer(Start))
+        return stableOffsetFailure("unanchored-phi-component", Start, Depth);
+      AnchoredPhis.insert(keyOf(Start));
+      for (const PhiArm &Arm : Arms) {
+        if (!Arm.Recurrent)
+          continue;
+        const bool ArmResult =
+            prove(Arm.Arg, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis);
+        if (!ArmResult)
+          return stableOffsetFailure("unstable-phi-recurrence", Start, Depth);
+      }
+      return true;
     }
 
     const MedOp *Def = lookupDef(Start);
@@ -700,10 +1672,21 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     bool SawArithmetic = false;
     if (auto Value =
             traceTableBaseConst(Start, 0, &SawLoad, nullptr, &SawArithmetic);
-        Value && constantIsMappedAddress(*Value, Start.Size))
-      return false;
+        Value && constantIsMappedAddress(*Value, Start.Size)) {
+      // Numeric coincidence is not address provenance.  traceTableBaseConst
+      // intentionally returns only the folded bits, so consult the structural
+      // occurrence summary before rejecting a low-VA scalar expression.  A
+      // literal-pool LOAD, an untagged construction, or any explicit/mixed
+      // address source remains fail-closed; only an all-path Scalar summary
+      // can discharge the collision.
+      const ConstantProvenanceSummary Summary =
+          summarizeConstantProvenance(Start);
+      if (SawLoad ||
+          Summary.Model != ConstantProvenanceSummary::ValueModel::Scalar)
+        return stableOffsetFailure("folded-mapped-address", Start, Depth);
+    }
     if (auto Forwarded = pointerPreservingInput(*Def))
-      return prove(*Forwarded, Depth + 1, Seen, ActiveFrameSlots);
+      return prove(*Forwarded, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis);
     if (Def->Opcode == NdOp::SELECT) {
       // Width changes do not by themselves make a scalar SELECT unstable, but
       // every chosen value must remain numeric in rebuilt IR. In particular a
@@ -711,15 +1694,17 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // rejected when that arm is audited here; ordinary lowered flag/index
       // SELECTs remain valid scalar offset computations.
       if (Def->NumInputs < 3)
-        return false;
-      return prove(Def->Inputs[1], Depth + 1, Seen, ActiveFrameSlots) &&
-             prove(Def->Inputs[2], Depth + 1, Seen, ActiveFrameSlots);
+        return stableOffsetFailure("short-select", Start, Depth);
+      return prove(Def->Inputs[1], Depth + 1, Seen, ActiveFrameSlots,
+                   AnchoredPhis) &&
+             prove(Def->Inputs[2], Depth + 1, Seen, ActiveFrameSlots,
+                   AnchoredPhis);
     }
     if (Def->Opcode == NdOp::INT_OR) {
       MedVar Cond, ArmT, ArmF;
       if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
-        return prove(ArmT, Depth + 1, Seen, ActiveFrameSlots) &&
-               prove(ArmF, Depth + 1, Seen, ActiveFrameSlots);
+        return prove(ArmT, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis) &&
+               prove(ArmF, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis);
     }
 
     bool CarriesArithmeticValue = false;
@@ -759,24 +1744,187 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // remains an independently relocatable component, while an ordinary
       // spilled scalar remains a valid offset.
       const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
-      if (auto Slot = canonicalFrameSlotKey(Def->Inputs[0])) {
+      const auto ExactFrameSlot = canonicalFrameSlotKey(Def->Inputs[0]);
+      if (ExactFrameSlot) {
         // A loop-carried scalar can be represented through memory rather than
         // an SSA PHI: load(slot), update, store(slot), backedge. Once the exact
         // slot's complete reaching definitions are being audited, encountering
         // that slot again is the recurrence edge, not an unproved new source.
         // The outer source set still audits every non-cyclic initialization,
         // so a pointer initializer or an uninitialized path remains rejected.
-        if (ActiveFrameSlots.count(*Slot))
+        if (ActiveFrameSlots.count(*ExactFrameSlot))
           return true;
         std::vector<MedVar> Sources;
-        if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
-          return false;
-        ActiveFrameSlots.insert(*Slot);
-        for (const MedVar &Source : Sources)
-          if (!prove(Source, Depth + 1, Seen, ActiveFrameSlots))
-            return false;
-        return true;
+        const bool CompleteSources = collectFrameReloadSources(*Def, Sources);
+        if (CompleteSources && !Sources.empty()) {
+          ActiveFrameSlots.insert(*ExactFrameSlot);
+          bool SawAnchoredSource = false;
+          for (const MedVar &Source : Sources) {
+            // A memory-carried recurrence returns the value being computed to
+            // the same exact slot, so its later-iteration reaching source can
+            // already be on this proof path.  That edge contributes no new
+            // provenance.  Skip only that exact path-local backedge, and still
+            // require a separately proven initializer/source below; a slot
+            // whose reaching definitions are only cyclic remains unproved.
+            if (!Source.isConst() && Seen.count(keyOf(Source))) {
+              if (reachesAnchoredPhi(Source, AnchoredPhis))
+                SawAnchoredSource = true;
+              continue;
+            }
+            if (!prove(Source, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis))
+              return false;
+            SawAnchoredSource = true;
+          }
+          return SawAnchoredSource;
+        }
+        // An exact slot has a stronger contract than frame-domain purity: its
+        // reaching-store fixed point must cover the LOAD on every path.  A
+        // later same-slot STORE cannot initialize the first loop iteration,
+        // so do not let the broader dynamic-array audit below turn an
+        // incomplete exact proof into a scalar one.
+        return stableOffsetFailure("incomplete-frame-reload", Start, Depth);
       }
+
+      // Runtime-indexed local arrays cannot supply an exact SlotKey, and a
+      // constant-lane reload can be reached by a dynamic STORE.  Do not relax
+      // collectFrameReloadSources: pointer recovery needs its exact all-path
+      // definition set.  For the scalar-offset question, instead audit the
+      // complete same-root frame memory domain. Every possibly aliasing local
+      // write must itself remain numeric, and no same-root address may escape
+      // to a call or an untracked memory owner. This proves domain purity, not
+      // a particular reaching value.
+      const auto ReloadFrameRoot = frameRoot(Def->Inputs[0], 0, {});
+      if (ReloadFrameRoot) {
+        const FrameRootKey Root = *ReloadFrameRoot;
+        if (ActiveFrameDomains.count(Root))
+          return true;
+
+        auto sameOrUnknownFrameRoot = [&](const MedVar &Address) {
+          if (!varMayBeFrameAddress(Address))
+            return false;
+          auto Candidate = frameRoot(Address, 0, {});
+          return !Candidate || *Candidate == Root;
+        };
+
+        auto rangesDisjoint = [](int64_t A, uint64_t ASize, int64_t B,
+                                 uint64_t BSize) {
+          if (ASize == 0 || BSize == 0)
+            return true;
+          auto endsBefore = [](int64_t Start, uint64_t Size, int64_t Other) {
+            return Start < Other && static_cast<uint64_t>(Other) -
+                                            static_cast<uint64_t>(Start) >=
+                                        Size;
+          };
+          return endsBefore(A, ASize, B) || endsBefore(B, BSize, A);
+        };
+        auto boundedCallFrameArgIsSafe = [&](const MedCallInfo &Call,
+                                             size_t ArgIndex) {
+          llvm::StringRef Name = stripLeadingUnderscores(Call.TargetName);
+          int WriteArg = -1;
+          int LengthArg = -1;
+          if (Name == "memset" || Name == "memset_chk") {
+            WriteArg = 0;
+            LengthArg = 2;
+          } else if (Name == "bzero" || Name == "explicit_bzero") {
+            WriteArg = 0;
+            LengthArg = 1;
+          } else if (Name == "memcpy" || Name == "memmove" ||
+                     Name == "mempcpy" || Name == "memcpy_chk" ||
+                     Name == "memmove_chk" || Name == "mempcpy_chk" ||
+                     Name == "strncpy" || Name == "stpncpy") {
+            WriteArg = 0;
+            LengthArg = 2;
+          } else {
+            return false;
+          }
+
+          // All other pointer-shaped operands of these exact signatures are
+          // read-only sources (or scalar fill/size operands), so they cannot
+          // mutate the frame domain being audited.
+          if (ArgIndex != static_cast<size_t>(WriteArg))
+            return true;
+          if (!ExactFrameSlot || WriteArg < 0 || LengthArg < 0 ||
+              static_cast<size_t>(std::max(WriteArg, LengthArg)) >=
+                  Call.Args.size())
+            return false;
+          auto Destination =
+              canonicalFrameSlotKey(Call.Args[static_cast<size_t>(WriteArg)]);
+          auto Length =
+              traceControlConst(Call.Args[static_cast<size_t>(LengthArg)]);
+          return Destination && Destination->first == Root && Length &&
+                 rangesDisjoint(Destination->second, *Length,
+                                ExactFrameSlot->second, Def->Output.Size);
+        };
+
+        bool DomainInvalid = false;
+        for (const auto &Call : CurMedFunc->CallInfos)
+          for (size_t ArgIndex = 0; ArgIndex < Call.Args.size(); ++ArgIndex) {
+            const MedVar &Arg = Call.Args[ArgIndex];
+            if (sameOrUnknownFrameRoot(Arg)) {
+              if (!boundedCallFrameArgIsSafe(Call, ArgIndex))
+                DomainInvalid = true;
+            }
+          }
+
+        std::vector<MedVar> DomainSources;
+        for (const MedBlock &Block : CurMedFunc->Blocks) {
+          for (const MedOp &Write : Block.Ops) {
+            if (Write.Opcode == NdOp::STORE && Write.NumInputs >= 2) {
+              // Storing the frame address outside its own root lets an alias
+              // re-enter through a call or an otherwise untracked load.
+              if (sameOrUnknownFrameRoot(Write.Inputs[1])) {
+                auto DestinationRoot = frameRoot(Write.Inputs[0], 0, {});
+                if (!DestinationRoot || *DestinationRoot != Root)
+                  DomainInvalid = true;
+              }
+              if (!sameOrUnknownFrameRoot(Write.Inputs[0]))
+                continue;
+              if (frameAccessesProvenDisjoint(Write.Inputs[0],
+                                              Write.Inputs[1].Size,
+                                              Def->Inputs[0], Def->Output.Size))
+                continue;
+              if (Write.Inputs[1].Size == 0)
+                DomainInvalid = true;
+              else
+                DomainSources.push_back(Write.Inputs[1]);
+              continue;
+            }
+
+            const bool IsAtomicWrite = Write.Opcode == NdOp::ATOMIC_XCHG ||
+                                       Write.Opcode == NdOp::ATOMIC_ADD ||
+                                       Write.Opcode == NdOp::ATOMIC_CMPXCHG;
+            if (IsAtomicWrite && Write.NumInputs >= 1 &&
+                sameOrUnknownFrameRoot(Write.Inputs[0])) {
+              if (frameAccessesProvenDisjoint(Write.Inputs[0],
+                                              Write.Output.Size, Def->Inputs[0],
+                                              Def->Output.Size))
+                continue;
+              DomainInvalid = true;
+            }
+            if (Write.Opcode == NdOp::INTRINSIC)
+              for (uint8_t I = 1; I < Write.NumInputs; ++I)
+                if (sameOrUnknownFrameRoot(Write.Inputs[I]))
+                  DomainInvalid = true;
+          }
+        }
+
+        if (!DomainInvalid && !DomainSources.empty()) {
+          ActiveFrameDomains.insert(Root);
+          bool DomainStable = true;
+          for (const MedVar &Source : DomainSources)
+            if (!prove(Source, Depth + 1, Seen, ActiveFrameSlots,
+                       AnchoredPhis)) {
+              DomainStable = false;
+              break;
+            }
+          ActiveFrameDomains.erase(Root);
+          if (DomainStable)
+            return true;
+        }
+      }
+
+      if (ExactFrameSlot || varMayBeFrameAddress(Def->Inputs[0]))
+        return stableOffsetFailure("incomplete-frame-reload", Start, Depth);
 
       // A non-frame load narrower than the target pointer cannot transport a
       // complete independently relocatable address. It is an ordinary numeric
@@ -784,6 +1932,178 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // loop state/index DAG), even when later arithmetic widens it.
       if (PointerSize != 0 && Def->Output.Size < PointerSize)
         return true;
+
+      // An exact immutable record field with no overlapping relocation is a
+      // scalar load even when its width equals the machine pointer width.  Its
+      // numeric payload may itself fall inside a low-VA section; relocation
+      // provenance belongs to the field occurrence, not to that coincidental
+      // value.  Indexed records take the lane proof below because more than
+      // one slot can be reached.
+      auto exactImmutableScalarLoad = [&]() {
+        if (!Img || PointerSize == 0 || Def->Output.Size == 0)
+          return false;
+        auto SlotVA = traceValueVA(Def->Inputs[0]);
+        if (!SlotVA)
+          return false;
+        const Segment *SlotSegment = Img->getSegmentFor(*SlotVA);
+        if (!SlotSegment || !SlotSegment->isReadable() ||
+            (SlotSegment->isExecutable() && Def->Output.Size <= PointerSize) ||
+            (SlotSegment->isWritable() && !isReadOnlyAfterReloc(SlotSegment)) ||
+            *SlotVA < SlotSegment->VA ||
+            *SlotVA - SlotSegment->VA > SlotSegment->Data.size() ||
+            Def->Output.Size >
+                SlotSegment->Data.size() - (*SlotVA - SlotSegment->VA))
+          return false;
+
+        const uint64_t FirstCandidate =
+            *SlotVA >= PointerSize - 1 ? *SlotVA - (PointerSize - 1) : 0;
+        if (*SlotVA > InvalidVA - Def->Output.Size)
+          return false;
+        const uint64_t LoadEnd = *SlotVA + Def->Output.Size;
+        for (uint64_t Candidate = FirstCandidate; Candidate < LoadEnd;
+             ++Candidate) {
+          if (!Img->hasRelocationProvenanceAt(Candidate))
+            continue;
+          if (Candidate <= InvalidVA - PointerSize &&
+              Candidate + PointerSize > *SlotVA)
+            return false;
+        }
+        return true;
+      };
+      if (exactImmutableScalarLoad())
+        return true;
+
+      // A pointer-width load can still be an ordinary scalar record field.
+      // First recover its algebraic record lane without assuming anything
+      // about the loop-carried index, then require every reachable slot in
+      // that lane to be immutable and relocation-free.  Finally audit the
+      // index terms in this same DFS: if a later iteration feeds this scalar
+      // field back into the index, the already-active PHI/frame recurrence is
+      // observed here rather than lost through a fresh top-level proof.
+      auto sizeMask = [](uint16_t Size) {
+        return Size == 0 || Size >= 8 ? ~uint64_t(0)
+                                      : (uint64_t(1) << (Size * 8)) - 1;
+      };
+      std::function<std::optional<uint64_t>(const MedVar &, int, std::set<Key>)>
+          traceLaneConstImpl =
+              [&](const MedVar &Value, int TraceDepth,
+                  std::set<Key> Visited) -> std::optional<uint64_t> {
+        if (TraceDepth > 32)
+          return std::nullopt;
+        if (auto Constant = traceSSAConst(Value))
+          return *Constant & sizeMask(Value.Size);
+        if (Value.isConst() || !Visited.insert(keyOf(Value)).second)
+          return std::nullopt;
+        const MedOp *ValueDef = lookupDef(Value);
+        if (!ValueDef || ValueDef->NumInputs < 1)
+          return std::nullopt;
+        if (ValueDef->Opcode == NdOp::LOAD) {
+          std::vector<MedVar> Sources;
+          const bool CompleteSources =
+              collectFrameReloadSources(*ValueDef, Sources);
+          if (!CompleteSources || Sources.empty())
+            return std::nullopt;
+          std::optional<uint64_t> Common;
+          for (const MedVar &Source : Sources) {
+            auto Constant = traceLaneConstImpl(Source, TraceDepth + 1, Visited);
+            if (!Constant || (Common && *Common != *Constant))
+              return std::nullopt;
+            Common = *Constant;
+          }
+          return Common;
+        }
+        if ((ValueDef->Opcode == NdOp::INT_ADD ||
+             ValueDef->Opcode == NdOp::INT_SUB) &&
+            ValueDef->NumInputs >= 2) {
+          auto Left =
+              traceLaneConstImpl(ValueDef->Inputs[0], TraceDepth + 1, Visited);
+          auto Right =
+              traceLaneConstImpl(ValueDef->Inputs[1], TraceDepth + 1, Visited);
+          if (!Left || !Right)
+            return std::nullopt;
+          const uint64_t Result = ValueDef->Opcode == NdOp::INT_ADD
+                                      ? *Left + *Right
+                                      : *Left - *Right;
+          return Result & sizeMask(ValueDef->Output.Size);
+        }
+        if (ValueDef->Opcode != NdOp::COPY &&
+            ValueDef->Opcode != NdOp::INT_ZEXT &&
+            ValueDef->Opcode != NdOp::INT_SEXT &&
+            ValueDef->Opcode != NdOp::SUBBYTES)
+          return std::nullopt;
+        auto Constant =
+            traceLaneConstImpl(ValueDef->Inputs[0], TraceDepth + 1, Visited);
+        if (!Constant)
+          return std::nullopt;
+        if (ValueDef->Opcode == NdOp::INT_ZEXT)
+          return *Constant & sizeMask(ValueDef->Inputs[0].Size);
+        if (ValueDef->Opcode == NdOp::INT_SEXT) {
+          const unsigned SourceBits = ValueDef->Inputs[0].Size * 8;
+          uint64_t Extended = *Constant & sizeMask(ValueDef->Inputs[0].Size);
+          if (SourceBits != 0 && SourceBits < 64 &&
+              (Extended & (uint64_t(1) << (SourceBits - 1))) != 0)
+            Extended |= ~sizeMask(ValueDef->Inputs[0].Size);
+          return Extended & sizeMask(ValueDef->Output.Size);
+        }
+        if (ValueDef->Opcode == NdOp::SUBBYTES) {
+          if (ValueDef->NumInputs < 2 || !ValueDef->Inputs[1].isConst() ||
+              ValueDef->Inputs[1].ConstVal >= 8)
+            return std::nullopt;
+          return (*Constant >> (ValueDef->Inputs[1].ConstVal * 8)) &
+                 sizeMask(ValueDef->Output.Size);
+        }
+        return *Constant & sizeMask(ValueDef->Output.Size);
+      };
+      auto traceLaneConst = [&](const MedVar &Value) {
+        return traceLaneConstImpl(Value, 0, {});
+      };
+      const IndexedPointerLaneSummary ScalarLane = analyzeIndexedPointerLane(
+          Def->Inputs[0], Img, PointerSize,
+          [&](const MedVar &Value) { return lookupDef(Value); }, traceLaneConst,
+          [&](const MedVar &Value, uint64_t &Base, bool &HaveBase,
+              std::vector<MedVar> &Terms) {
+            if (collectIndexedGlobalBase(Value, Base, HaveBase, Terms) &&
+                HaveBase)
+              return true;
+            Base = 0;
+            HaveBase = false;
+            Terms.clear();
+            return collectLiteralPoolBase(Value, Base, HaveBase, Terms);
+          },
+          [&](const MedVar &Value) {
+            return ptrTableUniqueSegment(Value,
+                                         /*IncludeSymbolizedEvidence=*/true);
+          },
+          [&](const Segment *Segment, uint64_t &RunStart, uint64_t &RunEnd) {
+            readOnlyAfterRelocRun(Segment, RunStart, RunEnd);
+          });
+      if (ScalarLane.Complete) {
+        bool ScalarOnly = true;
+        for (uint64_t Slot : ScalarLane.Slots) {
+          const Segment *SlotSegment = Img->getSegmentFor(Slot);
+          if (!SlotSegment || SlotSegment->isExecutable() ||
+              (SlotSegment->isWritable() &&
+               !isReadOnlyAfterReloc(SlotSegment)) ||
+              Img->hasRelocationProvenanceAt(Slot)) {
+            ScalarOnly = false;
+            break;
+          }
+        }
+        if (ScalarOnly) {
+          const Key LoadKey = keyOf(Start);
+          const bool Inserted =
+              ActiveImmutableScalarLoads.insert(LoadKey).second;
+          for (const MedVar &Term : ScalarLane.IndexTerms)
+            if (!prove(Term, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis)) {
+              ScalarOnly = false;
+              break;
+            }
+          if (Inserted)
+            ActiveImmutableScalarLoads.erase(LoadKey);
+          if (ScalarOnly)
+            return true;
+        }
+      }
 
       // ARM32 materializes large scalar immediates in an executable literal
       // pool. They are pointer-width LOADs, but an exact immutable pool word
@@ -810,14 +2130,17 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         return Literal && SawLiteralLoad &&
                !constantIsMappedAddress(*Literal, Def->Output.Size);
       };
-      return scalarLiteralLoad();
+      return scalarLiteralLoad()
+                 ? true
+                 : stableOffsetFailure("pointer-width-load", Start, Depth);
     }
     for (uint8_t I = 0; I < Def->NumInputs; ++I)
-      if (!prove(Def->Inputs[I], Depth + 1, Seen, ActiveFrameSlots))
-        return false;
+      if (!prove(Def->Inputs[I], Depth + 1, Seen, ActiveFrameSlots,
+                 AnchoredPhis))
+        return stableOffsetFailure("unstable-input", Start, Depth);
     return true;
   };
-  return prove(V, 0, {}, {});
+  return prove(V, 0, {}, {}, {});
 }
 
 std::optional<MedLLVMEmitter::PureReadOnlyBaseIdentity>
@@ -1023,8 +2346,17 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
       if (auto Identity = pureReadOnlyBaseIdentity(Start, DirectPhiConstant);
           Identity && sameIdentity(*Identity, *ExpectedBase))
         return {true, false};
-    if (Start.isConst() || !Seen.insert(keyOf(Start)).second)
+    if (Start.isConst())
       return {};
+    // Pointer transport is a coinductive property inside a recurrence SCC.
+    // Re-entering a node through COPY/PHI/pointer-side arithmetic preserves
+    // the candidate value, but does not by itself prove connection to the
+    // outer target.  The caller still requires ReachesExactTarget from another
+    // feasible arm, and every selectable arm must preserve the pointer.  This
+    // admits nested identity PHIs such as outer <- inner <- outer while still
+    // rejecting an unanchored cycle or a scalar/reset arm.
+    if (!Seen.insert(keyOf(Start)).second)
+      return {true, false};
 
     if (const PhiNode *Nested = lookupPhi(Start)) {
       bool SawFeasible = false;
@@ -1054,6 +2386,21 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
     if (auto Forwarded = pointerPreservingInput(*Def))
       return proveRecurrence(*Forwarded, Target, ExpectedBase, Depth + 1, Seen,
                              /*DirectPhiConstant=*/false);
+    if (Def->Opcode == NdOp::LOAD) {
+      std::vector<MedVar> Sources;
+      if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
+        return {};
+      bool AllPreserve = true;
+      bool ReachesTarget = false;
+      for (const MedVar &Source : Sources) {
+        RecurrencePathProof SourceProof =
+            proveRecurrence(Source, Target, ExpectedBase, Depth + 1, Seen,
+                            /*DirectPhiConstant=*/false);
+        AllPreserve &= SourceProof.PreservesPointer;
+        ReachesTarget |= SourceProof.ReachesExactTarget;
+      }
+      return {AllPreserve, ReachesTarget};
+    }
 
     auto canCarry = [&](const MedVar &Input) {
       return Def->Output.Size != 0 && Input.Size != 0 &&
@@ -1075,7 +2422,10 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         return {false, ReachesTarget};
       const MedVar &Offset =
           Left.PreservesPointer ? Def->Inputs[1] : Def->Inputs[0];
-      return {valueIsStableAddressOffset(Offset, &Target), ReachesTarget};
+      const bool Stable = Offset.isConst()
+                              ? constantIsStableAddressOffset(Offset)
+                              : valueIsStableAddressOffset(Offset, &Target);
+      return {Stable, ReachesTarget};
     }
     if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
       RecurrencePathProof Left;
@@ -1089,9 +2439,12 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
                                 /*DirectPhiConstant=*/false);
       const bool ReachesTarget =
           Left.ReachesExactTarget || Right.ReachesExactTarget;
+      const bool StableOffset =
+          Def->Inputs[1].isConst()
+              ? constantIsStableAddressOffset(Def->Inputs[1])
+              : valueIsStableAddressOffset(Def->Inputs[1], &Target);
       const bool Preserves =
-          Left.PreservesPointer && !Right.PreservesPointer &&
-          valueIsStableAddressOffset(Def->Inputs[1], &Target);
+          Left.PreservesPointer && !Right.PreservesPointer && StableOffset;
       return {Preserves, ReachesTarget};
     }
     if (selectPreservesPointerValues(*Def)) {
@@ -1198,6 +2551,13 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
           collectAliases(*Forwarded, Depth + 1, Seen);
           return;
         }
+        if (Def->Opcode == NdOp::LOAD) {
+          std::vector<MedVar> Sources;
+          if (collectFrameReloadSources(*Def, Sources))
+            for (const MedVar &Source : Sources)
+              collectAliases(Source, Depth + 1, Seen);
+          return;
+        }
         auto carry = [&](const MedVar &Input) {
           if (Def->Output.Size != 0 && Input.Size != 0 &&
               Def->Output.Size >= Input.Size)
@@ -1229,6 +2589,53 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
               PhiEdgeFeasibility::ProvenFeasible &&
           reachesExact(AliasArg, Alias->Output))
         return true;
+  }
+  return false;
+}
+
+bool MedLLVMEmitter::phiHasPureForwardingCycle(const PhiNode &Phi) const {
+  if (!CurMedFunc)
+    return false;
+
+  auto forwardedPhi = [&](const MedVar &Value) {
+    MedVar Current = Value;
+    std::set<AddressProvenanceVarKey> Seen;
+    for (int Depth = 0; Depth <= 64 && !Current.isConst(); ++Depth) {
+      if (const PhiNode *Nested = lookupPhi(Current))
+        return Nested;
+      if (!Seen.insert(addressProvenanceVarKey(Current)).second)
+        break;
+      const MedOp *Def = lookupDef(Current);
+      if (!Def)
+        break;
+      auto Forwarded = pointerPreservingInput(*Def);
+      if (!Forwarded || Forwarded->Size != Current.Size)
+        break;
+      Current = *Forwarded;
+    }
+    return static_cast<const PhiNode *>(nullptr);
+  };
+
+  std::vector<const PhiNode *> Work;
+  auto appendSources = [&](const PhiNode &Owner) {
+    for (const auto &[Pred, Arg] : Owner.Args) {
+      if (classifyPhiIncomingEdge(Owner, Pred) !=
+          PhiEdgeFeasibility::ProvenFeasible)
+        continue;
+      if (const PhiNode *Source = forwardedPhi(Arg))
+        Work.push_back(Source);
+    }
+  };
+  appendSources(Phi);
+  std::set<const PhiNode *> Seen;
+  size_t Budget = 4096;
+  while (!Work.empty() && Budget-- > 0) {
+    const PhiNode *Current = Work.back();
+    Work.pop_back();
+    if (Current == &Phi)
+      return true;
+    if (Seen.insert(Current).second)
+      appendSources(*Current);
   }
   return false;
 }
@@ -1459,10 +2866,15 @@ std::optional<uint64_t>
 MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
                                     uint16_t *OriginSize,
                                     bool *SawArithmetic) const {
+  auto atSize = [](uint64_t Value, uint16_t Size) {
+    if (Size == 0 || Size >= 8)
+      return Value;
+    return Value & ((uint64_t(1) << (Size * 8)) - 1);
+  };
   if (V.isConst()) {
     if (OriginSize)
       *OriginSize = V.Size;
-    return V.ConstVal;
+    return atSize(V.ConstVal, V.Size);
   }
   if (!CurMedFunc || Depth > 8)
     return std::nullopt;
@@ -1474,9 +2886,12 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
   switch (Def->Opcode) {
   case NdOp::COPY:
   case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+  case NdOp::SUBBYTES:
     if (auto Forwarded = pointerPreservingInput(*Def))
-      return traceTableBaseConst(*Forwarded, Depth + 1, SawLoad, OriginSize,
-                                 SawArithmetic);
+      if (auto Value = traceTableBaseConst(*Forwarded, Depth + 1, SawLoad,
+                                           OriginSize, SawArithmetic))
+        return atSize(*Value, Def->Output.Size);
     return std::nullopt;
   case NdOp::INT_ADD: {
     if (Def->NumInputs < 2)
@@ -1488,7 +2903,7 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
     auto B = traceTableBaseConst(Def->Inputs[1], Depth + 1, SawLoad, OriginSize,
                                  SawArithmetic);
     if (A && B)
-      return *A + *B;
+      return atSize(*A + *B, Def->Output.Size);
     return std::nullopt;
   }
   case NdOp::LOAD: {
@@ -1526,7 +2941,8 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
 }
 
 MedLLVMEmitter::PointerTableLoadRoleSummary
-MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
+MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
+                                              bool RequirePointerWidth) const {
   PointerTableLoadRoleSummary Result;
   if (!CurMedFunc || !Img || V.isConst())
     return Result;
@@ -1542,7 +2958,8 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
     PointerTableLoadRoleCacheFor = CurMedFunc;
     PointerTableLoadRoleCache.clear();
   }
-  const AddressProvenanceVarKey CacheKey = addressProvenanceVarKey(V);
+  const auto CacheKey =
+      std::make_tuple(addressProvenanceVarKey(V), RequirePointerWidth);
   if (auto It = PointerTableLoadRoleCache.find(CacheKey);
       It != PointerTableLoadRoleCache.end())
     return It->second;
@@ -1566,12 +2983,17 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
     return !hasObjectDataProvenance(Offset.ConstVal);
   };
   auto signedOffset = [&](const MedVar &Offset) -> std::optional<int64_t> {
-    if (!isStableNumericOffset(Offset))
+    std::optional<uint64_t> Folded;
+    if (isStableNumericOffset(Offset))
+      Folded = Offset.ConstVal;
+    else if (valueIsStableAddressOffset(Offset))
+      Folded = traceSSAConst(Offset);
+    if (!Folded)
       return std::nullopt;
     unsigned Bits = Offset.Size == 0 ? PtrBits : Offset.Size * 8;
     if (Bits == 0 || Bits > 64)
       return std::nullopt;
-    uint64_t Value = Offset.ConstVal;
+    uint64_t Value = *Folded;
     if (Bits < 64) {
       const uint64_t Mask = (uint64_t(1) << Bits) - 1;
       Value &= Mask;
@@ -1605,10 +3027,12 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
     return true;
   };
 
-  // First isolate the pointer-width LOAD whose value reaches this consumer.
-  // Width-preserving pointer +/- scalar operations retain the slot role, but
-  // their adjustment is recorded so a callable consumer can reject an
-  // interior target rather than treating it as an exact function entry.
+  // First isolate the LOAD whose value reaches this consumer. Callable mode
+  // requires pointer width; memory-representation mode accepts a narrow LOAD
+  // only to decide which rebuilt run owns its bytes. Width-preserving pointer
+  // +/- scalar operations retain the slot role, but their adjustment is
+  // recorded so a callable consumer can reject an interior target rather than
+  // treating it as an exact function entry.
   MedVar Current = V;
   for (int Depth = 0; Depth < 16; ++Depth) {
     const MedOp *Def = lookupDef(Current);
@@ -1652,7 +3076,8 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
     Current = PointerInput;
   }
   if (!Result.Load || Result.Load->NumInputs < 1 ||
-      Result.Load->Output.Size != PtrSize)
+      Result.Load->Output.Size == 0 ||
+      (RequirePointerWidth && Result.Load->Output.Size != PtrSize))
     return finish(Result);
 
   const MedVar &LoadAddress = Result.Load->Inputs[0];
@@ -1711,51 +3136,6 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
           Delta && *Delta != std::numeric_limits<int64_t>::min())
         return addToInput(Def->Inputs[0], -*Delta);
     return std::nullopt;
-  };
-
-  std::function<bool(const MedVar &, int, SeenSet)> isPointerAlignedOffset =
-      [&](const MedVar &Value, int Depth, SeenSet Seen) -> bool {
-    if (Depth > 32)
-      return false;
-    if (Value.isConst()) {
-      std::optional<int64_t> Offset = signedOffset(Value);
-      return Offset && *Offset % static_cast<int64_t>(PtrSize) == 0;
-    }
-    const AddressProvenanceVarKey Key = addressProvenanceVarKey(Value);
-    if (!Seen.insert(Key).second)
-      return false;
-    const MedOp *Def = lookupDef(Value);
-    if (!Def)
-      return false;
-    if (auto Forwarded = pointerPreservingInput(*Def))
-      return isPointerAlignedOffset(*Forwarded, Depth + 1, Seen);
-    if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
-        Def->NumInputs >= 2)
-      return isPointerAlignedOffset(Def->Inputs[0], Depth + 1, Seen) &&
-             isPointerAlignedOffset(Def->Inputs[1], Depth + 1, Seen);
-    if (Def->Opcode == NdOp::INT_MULT && Def->NumInputs >= 2) {
-      for (unsigned ConstantIndex : {0U, 1U}) {
-        const unsigned OtherIndex = 1U - ConstantIndex;
-        std::optional<int64_t> Factor =
-            signedOffset(Def->Inputs[ConstantIndex]);
-        if (Factor && *Factor % static_cast<int64_t>(PtrSize) == 0 &&
-            valueIsStableAddressOffset(Def->Inputs[OtherIndex]))
-          return true;
-      }
-      return false;
-    }
-    if (Def->Opcode == NdOp::INT_LEFT && Def->NumInputs >= 2) {
-      std::optional<int64_t> Shift = signedOffset(Def->Inputs[1]);
-      unsigned RequiredShift = 0;
-      for (unsigned Alignment = PtrSize; Alignment > 1; Alignment >>= 1)
-        ++RequiredShift;
-      return Shift && *Shift >= static_cast<int64_t>(RequiredShift) &&
-             *Shift < 64 && valueIsStableAddressOffset(Def->Inputs[0]);
-    }
-    if (Def->Opcode == NdOp::SELECT && selectPreservesPointerValues(*Def))
-      return isPointerAlignedOffset(Def->Inputs[1], Depth + 1, Seen) &&
-             isPointerAlignedOffset(Def->Inputs[2], Depth + 1, Seen);
-    return false;
   };
 
   std::function<AddressDomain(const MedVar &, int, SeenSet)> analyzeAddress =
@@ -1822,6 +3202,17 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
       True.Seeds.insert(False.Seeds.begin(), False.Seeds.end());
       return True;
     }
+    if (Def->Opcode == NdOp::INT_OR) {
+      MedVar Cond, TrueValue, FalseValue;
+      if (isMaskedSelectOr(*Def, Cond, TrueValue, FalseValue)) {
+        AddressDomain True = analyzeAddress(TrueValue, Depth + 1, Seen);
+        AddressDomain False = analyzeAddress(FalseValue, Depth + 1, Seen);
+        if (!True.Complete || !False.Complete || True.Step != False.Step)
+          return {};
+        True.Seeds.insert(False.Seeds.begin(), False.Seeds.end());
+        return True;
+      }
+    }
     if (Def->Opcode == NdOp::LOAD) {
       std::vector<MedVar> Sources;
       if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
@@ -1879,50 +3270,65 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V) const {
   const std::optional<uint64_t> DiscoveredRun =
       ptrTableUniqueSegment(LoadAddress,
                             /*IncludeSymbolizedEvidence=*/true);
+  auto pointerLanes = [&](const std::set<uint64_t> *KnownBases,
+                          const std::vector<MedVar> *KnownTerms,
+                          bool SubtractKnownTerms) {
+    return analyzeIndexedPointerLane(
+        LoadAddress, Img, PtrSize,
+        [&](const MedVar &Value) { return lookupDef(Value); },
+        [&](const MedVar &Value) { return traceSSAConst(Value); },
+        [&](const MedVar &Value, uint64_t &Base, bool &HaveBase,
+            std::vector<MedVar> &Terms) {
+          if (collectIndexedGlobalBase(Value, Base, HaveBase, Terms) &&
+              HaveBase)
+            return true;
+          Base = 0;
+          HaveBase = false;
+          Terms.clear();
+          return collectLiteralPoolBase(Value, Base, HaveBase, Terms);
+        },
+        [&](const MedVar &Value) {
+          return ptrTableUniqueSegment(Value,
+                                       /*IncludeSymbolizedEvidence=*/true);
+        },
+        [&](const Segment *Segment, uint64_t &RunStart, uint64_t &RunEnd) {
+          readOnlyAfterRelocRun(Segment, RunStart, RunEnd);
+        },
+        KnownBases, KnownTerms, SubtractKnownTerms);
+  };
   if (!Domain.Complete || Domain.Seeds.empty()) {
-    // A conventional `table[index]` has a dynamic offset rather than an
-    // affine address PHI.  Preserve that established case only when the index
-    // is pointer-aligned and every pointer-sized cell in the owning section
-    // has one explicit relocation role.  This admits pure code/import arrays
-    // while a record section containing scalar or data lanes remains mixed.
-    uint64_t IndexedBase = 0;
-    bool HaveIndexedBase = false;
-    std::vector<MedVar> IndexTerms;
-    const bool Indexed =
-        DiscoveredRun &&
-        collectIndexedGlobalBase(LoadAddress, IndexedBase, HaveIndexedBase,
-                                 IndexTerms) &&
-        HaveIndexedBase && !IndexTerms.empty() &&
-        std::all_of(IndexTerms.begin(), IndexTerms.end(),
+    IndexedPointerLaneSummary Lane;
+    const MedOp *AddressDef = lookupDef(LoadAddress);
+    if (AddressDef && AddressDef->NumInputs >= 2 &&
+        (AddressDef->Opcode == NdOp::INT_ADD ||
+         AddressDef->Opcode == NdOp::INT_SUB)) {
+      auto analyzeBaseAndTerm = [&](const MedVar &BaseValue, const MedVar &Term,
+                                    bool SubtractTerm) {
+        if (!valueIsStableAddressOffset(Term))
+          return IndexedPointerLaneSummary{};
+        AddressDomain Bases = analyzeAddress(BaseValue, 0, {});
+        if (!Bases.Complete || Bases.Step || Bases.Seeds.empty())
+          return IndexedPointerLaneSummary{};
+        std::vector<MedVar> Terms{Term};
+        return pointerLanes(&Bases.Seeds, &Terms, SubtractTerm);
+      };
+      Lane = analyzeBaseAndTerm(AddressDef->Inputs[0], AddressDef->Inputs[1],
+                                AddressDef->Opcode == NdOp::INT_SUB);
+      if (!Lane.Complete && AddressDef->Opcode == NdOp::INT_ADD)
+        Lane = analyzeBaseAndTerm(AddressDef->Inputs[1], AddressDef->Inputs[0],
+                                  false);
+    }
+    if (!Lane.Complete)
+      Lane = pointerLanes(nullptr, nullptr, false);
+    const bool StableTerms =
+        Lane.Complete &&
+        std::all_of(Lane.IndexTerms.begin(), Lane.IndexTerms.end(),
                     [&](const MedVar &Term) {
-                      return isPointerAlignedOffset(Term, 0, {});
+                      return valueIsStableAddressOffset(Term);
                     });
-    const Segment *Segment =
-        Indexed ? Img->getSegmentFor(IndexedBase) : nullptr;
-    const Section *Section = Segment && !Segment->isExecutable()
-                                 ? Img->getSectionFor(IndexedBase)
-                                 : nullptr;
-    if (Section && Section->isReadable() && !Section->isExecutable() &&
-        Section->Size <= InvalidVA - Section->VA &&
-        IndexedBase >= Section->VA &&
-        IndexedBase < Section->VA + Section->Size) {
-      const uint64_t BoundEnd = Section->VA + Section->Size;
-      const uint64_t Residue = (IndexedBase - Section->VA) % PtrSize;
-      uint64_t Slot = Section->VA + Residue;
-      size_t Remaining = static_cast<size_t>(limits::kMaxSSANodes);
-      bool ExhaustedBudget = false;
-      while (Slot < BoundEnd && PtrSize <= BoundEnd - Slot) {
-        if (Remaining == 0) {
-          ExhaustedBudget = true;
-          break;
-        }
-        --Remaining;
-        Domain.Seeds.insert(Slot);
-        if (Slot > InvalidVA - PtrSize)
-          break;
-        Slot += PtrSize;
-      }
-      Domain.Complete = !ExhaustedBudget && !Domain.Seeds.empty();
+    if (StableTerms) {
+      Domain.Seeds = Lane.Slots;
+      Domain.Complete = true;
     }
   }
   if (!Domain.Complete || Domain.Seeds.empty()) {

@@ -757,15 +757,10 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // path.
       {
         bool AllowImplicitZeroBase = false;
-        if (CurMedFunc)
-          for (const JumpTable &JT : CurMedFunc->JumpTables)
-            if (JT.HasBaseAddr && JT.BaseAddr == 0 && JT.InsnAddr == Op.Addr &&
-                JT.EntrySize == Op.Output.Size) {
-              AllowImplicitZeroBase = true;
-              break;
-            }
-        Ptr =
-            tryResolveCodePtrTablePtr(AddrVar, Builder, AllowImplicitZeroBase);
+        if (const JumpTable *JT = recoveredJumpTableForLoad(Op))
+          AllowImplicitZeroBase = JT->HasBaseAddr && JT->BaseAddr == 0;
+        Ptr = tryResolveCodePtrTablePtr(AddrVar, Builder, AllowImplicitZeroBase,
+                                        &Op.Output);
       }
       if (!Ptr)
         // Immutable-data resolver arbitration is shared with pointer

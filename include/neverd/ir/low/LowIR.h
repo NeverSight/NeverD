@@ -53,6 +53,81 @@ enum class ConstantAddressProvenance : uint8_t {
   CodeAddress,
 };
 
+/// Whether a constant at this operand position is consumed as a numeric value
+/// rather than transported as a first-class pointer.  Keep this occurrence
+/// rule shared by initial LowIR emission and later COPY propagation: SSA
+/// substitution must not turn an encoded scalar immediate back into an
+/// address merely because its bits collide with a low image VA.
+constexpr bool isNumericConstantOperand(NdOp Opcode, unsigned Index) {
+  switch (Opcode) {
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::INT_LEFT:
+  case NdOp::INT_RIGHT:
+  case NdOp::INT_ASHR:
+  case NdOp::INT_MULT:
+  case NdOp::INT_DIV:
+  case NdOp::INT_SDIV:
+  case NdOp::INT_REM:
+  case NdOp::INT_SREM:
+  case NdOp::INT_EQUAL:
+  case NdOp::INT_NOTEQUAL:
+  case NdOp::INT_LESS:
+  case NdOp::INT_SLESS:
+  case NdOp::INT_LESSEQUAL:
+  case NdOp::INT_SLESSEQUAL:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+  case NdOp::INT_NEGATE:
+  case NdOp::INT_NOT:
+  case NdOp::INT_CARRY:
+  case NdOp::INT_SOVF:
+  case NdOp::INT_SBOR:
+  case NdOp::BOOL_AND:
+  case NdOp::BOOL_OR:
+  case NdOp::BOOL_XOR:
+  case NdOp::BOOL_NOT:
+  case NdOp::FLOAT_ADD:
+  case NdOp::FLOAT_SUB:
+  case NdOp::FLOAT_MULT:
+  case NdOp::FLOAT_DIV:
+  case NdOp::FLOAT_NEG:
+  case NdOp::FLOAT_ABS:
+  case NdOp::FLOAT_SQRT:
+  case NdOp::FLOAT_EQUAL:
+  case NdOp::FLOAT_NOTEQUAL:
+  case NdOp::FLOAT_LESS:
+  case NdOp::FLOAT_INT2FLOAT:
+  case NdOp::FLOAT_FLOAT2INT:
+  case NdOp::FLOAT_TRUNC:
+  case NdOp::FLOAT_CEIL:
+  case NdOp::FLOAT_FLOOR:
+  case NdOp::INT_NEG2:
+  case NdOp::POPCOUNT:
+  case NdOp::FLOAT_LESSEQUAL:
+  case NdOp::FLOAT_ISNAN:
+  case NdOp::FLOAT_FLOAT2FLOAT:
+  case NdOp::FLOAT_ROUND:
+  case NdOp::LZCOUNT:
+  case NdOp::FLOAT_UINT2FLOAT:
+  case NdOp::FLOAT_FLOAT2UINT:
+  case NdOp::FLOAT_FMA:
+  case NdOp::FLOAT_ROUNDEVEN:
+  case NdOp::FLOAT_MIN:
+  case NdOp::FLOAT_MAX:
+  case NdOp::FLOAT_MINNUM:
+  case NdOp::FLOAT_MAXNUM:
+    return true;
+  case NdOp::SUBBYTES:
+    return Index == 1;
+  default:
+    return false;
+  }
+}
+
 constexpr bool isExactAddressProvenance(ConstantAddressProvenance Provenance) {
   return Provenance == ConstantAddressProvenance::Address ||
          Provenance == ConstantAddressProvenance::DataAddress ||

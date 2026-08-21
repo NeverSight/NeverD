@@ -24,6 +24,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <queue>
 #include <vector>
@@ -216,6 +217,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   for (va_t Root : ExceptionalRoots)
     if (!ExploredAddrs.count(Root))
       explore(Img, Dec, Root);
+  completeExactAArch64PageBases(Img);
   splitBlocks();
 
   LowFunc Func;
@@ -464,6 +466,134 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
   }
 }
 
+void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
+  if (Img.Arch != Arch::AArch64)
+    return;
+
+  auto sameRegister = [](const NdVar &Left, const NdVar &Right) {
+    return Left.isReg() && Right.isReg() && Left.Offset == Right.Offset &&
+           Left.Size == Right.Size;
+  };
+  auto overlapsRegister = [](const NdVar &Left, const NdVar &Right) {
+    if (!Left.isReg() || !Right.isReg() || Left.Size == 0 || Right.Size == 0)
+      return false;
+    const uint64_t LeftEnd = Left.Offset + Left.Size;
+    const uint64_t RightEnd = Right.Offset + Right.Size;
+    return Left.Offset < RightEnd && Right.Offset < LeftEnd;
+  };
+
+  // ADRP always clears the architectural low 12 bits, independent of the
+  // operating system's VM page size.
+  constexpr uint64_t AArch64PageMask = 0xfff;
+  constexpr unsigned MaxLookaheadInstructions = 32;
+
+  for (auto RootIt = Insns.begin(); RootIt != Insns.end(); ++RootIt) {
+    InsnRecord &RootRec = RootIt->second;
+    if (RootRec.Ops.size() != 1)
+      continue;
+    LowOp &Root = RootRec.Ops.front();
+    if (Root.Opcode != NdOp::COPY || Root.NumInputs != 1 ||
+        !Root.Output.isReg() || Root.Output.Size != Img.getPointerSize() ||
+        !Root.Inputs[0].isConst() ||
+        Root.Inputs[0].Provenance != ConstantAddressProvenance::AddressFragment)
+      continue;
+
+    const va_t PageBase = Root.Inputs[0].Offset;
+    if ((PageBase & AArch64PageMask) != 0 ||
+        !Img.hasObjectDataProvenance(PageBase) ||
+        Img.hasExecutableCodeOwnerAt(PageBase))
+      continue;
+
+    const Segment *OwnerSegment = Img.getSegmentFor(PageBase);
+    if (!OwnerSegment)
+      continue;
+    const Section *OwnerSection = Img.getSectionFor(PageBase);
+    const va_t OwnerVA = OwnerSection ? OwnerSection->VA : OwnerSegment->VA;
+    const NdVar PageRegister = Root.Output;
+
+    bool ProvedExactDereference = false;
+    va_t ExpectedAddress = RootRec.Addr + RootRec.Size;
+    unsigned Lookahead = 0;
+    for (auto UseIt = std::next(RootIt);
+         UseIt != Insns.end() && Lookahead++ < MaxLookaheadInstructions;
+         ++UseIt) {
+      InsnRecord &UseRec = UseIt->second;
+      if (UseRec.Addr != ExpectedAddress)
+        break;
+
+      // Temporary ids are instruction-local.  Track only expressions that are
+      // an exact byte offset from the still-live ADRP destination; this is
+      // enough to distinguish [xN] from [xN,#off] without treating unrelated
+      // constants in the instruction as addresses.
+      std::vector<std::pair<NdVar, uint64_t>> RelativeValues;
+      auto relativeOffset = [&](const NdVar &Value) -> std::optional<uint64_t> {
+        if (sameRegister(Value, PageRegister))
+          return 0;
+        for (auto It = RelativeValues.rbegin(); It != RelativeValues.rend();
+             ++It)
+          if (It->first.Space == Value.Space &&
+              It->first.Offset == Value.Offset && It->first.Size == Value.Size)
+            return It->second;
+        return std::nullopt;
+      };
+      auto scalarValue = [](const NdVar &Value) -> std::optional<uint64_t> {
+        if (!Value.isConst() ||
+            Value.Provenance != ConstantAddressProvenance::Scalar)
+          return std::nullopt;
+        return Value.Offset;
+      };
+
+      bool RedefinedPageRegister = false;
+      for (const LowOp &Op : UseRec.Ops) {
+        if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+            Op.NumInputs >= 1) {
+          if (auto Offset = relativeOffset(Op.Inputs[0]);
+              Offset && *Offset == 0) {
+            ProvedExactDereference = true;
+            break;
+          }
+        }
+
+        std::optional<uint64_t> Derived;
+        if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
+          Derived = relativeOffset(Op.Inputs[0]);
+        } else if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2) {
+          if (auto Base = relativeOffset(Op.Inputs[0])) {
+            if (auto Delta = scalarValue(Op.Inputs[1]))
+              Derived = *Base + *Delta;
+          } else if (auto Base = relativeOffset(Op.Inputs[1])) {
+            if (auto Delta = scalarValue(Op.Inputs[0]))
+              Derived = *Base + *Delta;
+          }
+        } else if (Op.Opcode == NdOp::INT_SUB && Op.NumInputs == 2) {
+          if (auto Base = relativeOffset(Op.Inputs[0]))
+            if (auto Delta = scalarValue(Op.Inputs[1]))
+              Derived = *Base - *Delta;
+        }
+
+        if (Op.Output.Size != 0 && Derived)
+          RelativeValues.emplace_back(Op.Output, *Derived);
+        if (overlapsRegister(Op.Output, PageRegister)) {
+          RedefinedPageRegister = true;
+          break;
+        }
+      }
+
+      if (ProvedExactDereference || RedefinedPageRegister)
+        break;
+      if (UseRec.IsBranch || UseRec.IsCall || UseRec.IsRet ||
+          UseRec.IsOpaqueTerminator)
+        break;
+      ExpectedAddress = UseRec.Addr + UseRec.Size;
+    }
+
+    if (!ProvedExactDereference)
+      continue;
+    Root.Inputs[0].Provenance = ConstantAddressProvenance::DataAddress;
+    Root.Inputs[0].AddressOwnerVA = OwnerVA;
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // multiStageResolve — retry unresolved INDIR_BR with more context
 //===----------------------------------------------------------------------===//
@@ -521,6 +651,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     if (!MadeProgress)
       break;
 
+    completeExactAArch64PageBases(Img);
     splitBlocks();
     rebuildBlocks(Func);
 

@@ -693,6 +693,14 @@ private:
   bool collectFrameReloadSources(const MedOp &Load,
                                  std::vector<MedVar> &Sources) const;
 
+  /// Prove that two frame-derived byte ranges cannot overlap for any runtime
+  /// value admitted by their scalar address DAGs.  Both addresses are reduced
+  /// to the entry SP/FP coordinate system; masked values and exactly guarded
+  /// positive induction PHIs contribute bounded unsigned intervals.  Unknown,
+  /// wrapping, unguarded, or differently rooted expressions fail closed.
+  bool frameAccessesProvenDisjoint(const MedVar &A, uint16_t ASize,
+                                   const MedVar &B, uint16_t BSize) const;
+
   /// Best-effort fold of \p V to the absolute integer/address it computes,
   /// following the address arithmetic the lifter emits for an i386 PIC global
   /// reference — a base register that itself resolves to 0 (the get_pc_thunk
@@ -847,6 +855,12 @@ private:
   bool phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
                                   const MedVar &Arg) const;
 
+  /// True when proven-feasible PHI edges form a cycle using only complete
+  /// pointer-value forwarders. This is structural evidence, not authority to
+  /// ignore an edge: semantic recurrence still requires compatible external
+  /// initializers through phiIncomingIsRecurrent.
+  bool phiHasPureForwardingCycle(const PhiNode &Phi) const;
+
   /// True when an incoming value's defining DAG reaches the PHI output or a
   /// mutually recurrent sibling PHI (for example, x86 wide/narrow register
   /// aliases). Such a loop-carried PHI belongs to the induction resolver and
@@ -857,6 +871,7 @@ private:
   /// feasible PHI/selection arm and arithmetic input must be scalar; a mapped
   /// data constant, relocatable constant, LOAD, unknown CFG arm, or optional
   /// forbidden recurrence makes the proof fail closed.
+  bool constantIsStableAddressOffset(const MedVar &V) const;
   bool valueIsStableAddressOffset(const MedVar &V,
                                   const MedVar *Forbidden = nullptr) const;
 
@@ -907,10 +922,12 @@ private:
     }
   };
 
-  /// Occurrence-level relocation roles reachable through one pointer-width
-  /// LOAD. Discovery of a pointer-table run is deliberately separate from
-  /// this result: a run may interleave code, data, import, and scalar fields,
-  /// while the LOAD address reaches only one record lane.
+  /// Occurrence-level relocation roles reachable through one LOAD. Discovery
+  /// of a pointer-table run is deliberately separate from this result: a run
+  /// may interleave code, data, import, and scalar fields, while the LOAD
+  /// address reaches only one record lane. Callable consumers keep
+  /// RequirePointerWidth=true; a memory-representation owner may pass false to
+  /// decide whether a narrow field actually touches relocation-owned slots.
   struct PointerTableLoadRoleSummary {
     const MedOp *Load = nullptr;
     std::set<uint64_t> Slots;
@@ -933,13 +950,15 @@ private:
     }
   };
 
-  /// Prove which relocation-slot roles the address of a pointer-width LOAD
-  /// can reach. Handles exact slots and bounded affine PHI recurrences. An
-  /// unsupported or ambiguous address inside a known pointer-table run is
-  /// returned as Recognized but incomplete so consumers fail closed instead
-  /// of borrowing a neighbouring slot's role.
+  /// Prove which relocation-slot roles a LOAD address can reach. Callable
+  /// consumers require the default pointer width; memory-representation
+  /// arbitration may inspect a narrower LOAD. Handles exact slots and bounded
+  /// affine PHI recurrences. An unsupported or ambiguous address inside a
+  /// known pointer-table run is returned as Recognized but incomplete so
+  /// consumers fail closed instead of borrowing a neighbouring slot's role.
   PointerTableLoadRoleSummary
-  classifyPointerTableLoadRoles(const MedVar &V) const;
+  classifyPointerTableLoadRoles(const MedVar &V,
+                                bool RequirePointerWidth = true) const;
 
   /// Recover the possible data identities of a pointer-width LOAD from a
   /// loader-proven absolute data-pointer relocation table, including a
@@ -1037,7 +1056,15 @@ private:
   /// table.
   llvm::Value *tryResolveCodePtrTablePtr(const MedVar &AddrVar,
                                          llvm::IRBuilder<> &Builder,
-                                         bool AllowImplicitZeroBase = false);
+                                         bool AllowImplicitZeroBase = false,
+                                         const MedVar *LoadedValue = nullptr);
+
+  /// Return the recovered jump table whose indirect-branch target depends on
+  /// this exact LOAD result and whose entry width matches the LOAD.  JumpTable
+  /// metadata records the branch instruction, not the earlier table LOAD, so
+  /// ownership is a value-flow relation rather than an instruction-address
+  /// equality check.
+  const JumpTable *recoveredJumpTableForLoad(const MedOp &Load) const;
 
   /// Resolve a load/store whose address folds to a constant inside a segment
   /// holding relocated pointer slots — a *writable* function-pointer global
@@ -1640,6 +1667,11 @@ private:
   mutable std::function<void()> FeasibleEdgeBuildTestHook;
   mutable std::set<std::pair<int, int>> FeasibleEdges;
   mutable std::set<int> FeasibleBlocks;
+  // Strongly connected components of the published feasible CFG.  Scalar
+  // provenance uses these to distinguish loop-carried PHI inputs from entry
+  // initializers without repeating a whole-graph reachability walk per arm.
+  mutable bool FeasibleControlComponentsReady = false;
+  mutable std::map<int, int> FeasibleControlComponents;
 
   mutable const MedFunc *PhiEdgeIndexFor = nullptr;
   mutable std::map<const PhiNode *, int> PhiOwnerBlocks;
@@ -1686,7 +1718,8 @@ private:
   // Occurrence-level relocation roles depend on exact PHI feasibility and are
   // invalidated with the other feasible-edge-dependent pointer-table proofs.
   mutable const MedFunc *PointerTableLoadRoleCacheFor = nullptr;
-  mutable std::map<AddressProvenanceVarKey, PointerTableLoadRoleSummary>
+  mutable std::map<std::tuple<AddressProvenanceVarKey, bool>,
+                   PointerTableLoadRoleSummary>
       PointerTableLoadRoleCache;
 
   // Per-function memoized results of the two const classifiers, dropped when

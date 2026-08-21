@@ -147,7 +147,7 @@ public:
       Emitter.PtrTableUniqueSegCache[std::make_tuple(
           int64_t{1}, static_cast<int>(MedVar::Temp), false)] = 1;
       Emitter.PointerTableLoadRoleCacheFor = Emitter.CurMedFunc;
-      Emitter.PointerTableLoadRoleCache[ArgKey] = {};
+      Emitter.PointerTableLoadRoleCache[std::make_tuple(ArgKey, true)] = {};
       Emitter.WritableDataSegCache[std::make_tuple(
           static_cast<int>(Arg.Kind), Arg.Id, Arg.SSAVer, false)] = 0x1234;
       Emitter.FrameDerivedCacheFor = Emitter.CurMedFunc;
@@ -966,6 +966,46 @@ MedFunc makeSpilledConstTableLookup(Arch TargetArch) {
   Block.Ops.push_back(std::move(Return));
   Block.EndAddr = CallerVA + 0x20;
   Func.Blocks.push_back(std::move(Block));
+  return Func;
+}
+
+MedFunc makeDeepScalarIndexTableLookup(Arch TargetArch) {
+  MedFunc Func = makeSpilledConstTableLookup(TargetArch);
+  Func.Name = TargetArch == Arch::AArch64 ? "deep_scalar_index_table_arm64"
+                                          : "deep_scalar_index_table_x86_64";
+  const uint16_t PointerSize =
+      static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
+  MedBlock &Block = Func.Blocks.front();
+  auto Scale = std::find_if(Block.Ops.begin(), Block.Ops.end(), [](MedOp &Op) {
+    return Op.Opcode == NdOp::INT_LEFT;
+  });
+  EXPECT_NE(Scale, Block.Ops.end());
+  if (Scale == Block.Ops.end())
+    return Func;
+
+  MedVar Current = Func.Params.front();
+  std::vector<MedOp> ScalarChain;
+  for (int I = 0; I < 20; ++I) {
+    MedVar Next;
+    Next.Kind = MedVar::Temp;
+    Next.TheArch = TargetArch;
+    Next.Id = 300 + I;
+    Next.SSAVer = 1;
+    Next.Size = PointerSize;
+    MedOp AddZero;
+    AddZero.Opcode = NdOp::INT_ADD;
+    AddZero.Output = Next;
+    AddZero.addInput(Current);
+    AddZero.addInput(
+        MedVar::makeConst(0, PointerSize, ConstantAddressProvenance::Scalar));
+    ScalarChain.push_back(std::move(AddZero));
+    Current = Next;
+  }
+  const size_t ScaleIndex =
+      static_cast<size_t>(std::distance(Block.Ops.begin(), Scale));
+  Block.Ops.insert(Scale, std::make_move_iterator(ScalarChain.begin()),
+                   std::make_move_iterator(ScalarChain.end()));
+  Block.Ops[ScaleIndex + ScalarChain.size()].Inputs[0] = Current;
   return Func;
 }
 
@@ -1940,6 +1980,127 @@ MedFunc makeRecurrentConstTableLookup(Arch TargetArch) {
   Latch.Ops.push_back(std::move(BackEdge));
 
   Func.Blocks = {std::move(Entry), std::move(Loop), std::move(Latch)};
+  return Func;
+}
+
+MedFunc makeNestedScalarPhiComponent(Arch TargetArch,
+                                     bool HasExternalInitializer) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+    V.Size = Size;
+    return V;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = HasExternalInitializer
+                  ? "nested_scalar_phi_component_initialized"
+                  : "nested_scalar_phi_component_source_free";
+  Func.ReturnType = NdType::makeVoid();
+  Func.DoesNotReturn = true;
+
+  MedVar Initial = makeVar(MedVar::Param, 0, TRI.PointerSize);
+  Initial.RegOff = TRI.IntParamRegs[0];
+  MedVar Continue = makeVar(MedVar::Param, 1, 1);
+  Continue.RegOff = TRI.IntParamRegs[1];
+  Func.Params = {Initial, Continue};
+
+  MedVar HeaderValue = makeVar(MedVar::Temp, 100, TRI.PointerSize);
+  MedVar HeaderToDispatch = makeVar(MedVar::Temp, 101, TRI.PointerSize);
+  MedVar HeaderToLatch = makeVar(MedVar::Temp, 102, TRI.PointerSize);
+  MedVar DispatchValue = makeVar(MedVar::Temp, 103, TRI.PointerSize);
+  MedVar DispatchForward = makeVar(MedVar::Temp, 104, TRI.PointerSize);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = CallerVA;
+  Entry.EndAddr = CallerVA + 4;
+  Entry.Succs = {2};
+  MedOp EnterDispatch;
+  EnterDispatch.Opcode = NdOp::BRANCH;
+  EnterDispatch.addInput(MedVar::makeConst(CallerVA + 0x20, TRI.PointerSize));
+  Entry.Ops.push_back(std::move(EnterDispatch));
+
+  MedBlock Header;
+  Header.Id = 1;
+  Header.StartAddr = CallerVA + 0x10;
+  Header.EndAddr = CallerVA + 0x1c;
+  Header.Preds = {3, 4};
+  Header.Succs = {2, 4};
+  PhiNode HeaderPhi;
+  HeaderPhi.Output = HeaderValue;
+  HeaderPhi.Args = {{3, DispatchForward}, {4, HeaderToLatch}};
+  Header.Phis.push_back(std::move(HeaderPhi));
+  MedOp StepToDispatch;
+  StepToDispatch.Opcode = NdOp::INT_ADD;
+  StepToDispatch.Output = HeaderToDispatch;
+  StepToDispatch.addInput(HeaderValue);
+  StepToDispatch.addInput(
+      MedVar::makeConst(1, TRI.PointerSize, ConstantAddressProvenance::Scalar));
+  Header.Ops.push_back(std::move(StepToDispatch));
+  MedOp StepToLatch;
+  StepToLatch.Opcode = NdOp::INT_ADD;
+  StepToLatch.Output = HeaderToLatch;
+  StepToLatch.addInput(HeaderValue);
+  StepToLatch.addInput(
+      MedVar::makeConst(2, TRI.PointerSize, ConstantAddressProvenance::Scalar));
+  Header.Ops.push_back(std::move(StepToLatch));
+  MedOp ChoosePath;
+  ChoosePath.Opcode = NdOp::COND_BR;
+  ChoosePath.addInput(MedVar::makeConst(CallerVA + 0x20, TRI.PointerSize));
+  ChoosePath.addInput(Continue);
+  Header.Ops.push_back(std::move(ChoosePath));
+
+  MedBlock Dispatch;
+  Dispatch.Id = 2;
+  Dispatch.StartAddr = CallerVA + 0x20;
+  Dispatch.EndAddr = CallerVA + 0x28;
+  Dispatch.Preds = {0, 1};
+  Dispatch.Succs = {3};
+  PhiNode DispatchPhi;
+  DispatchPhi.Output = DispatchValue;
+  DispatchPhi.Args = {{0, HasExternalInitializer ? Initial : DispatchValue},
+                      {1, HeaderToDispatch}};
+  Dispatch.Phis.push_back(std::move(DispatchPhi));
+  MedOp ForwardDispatch;
+  ForwardDispatch.Opcode = NdOp::COPY;
+  ForwardDispatch.Output = DispatchForward;
+  ForwardDispatch.addInput(DispatchValue);
+  Dispatch.Ops.push_back(std::move(ForwardDispatch));
+  MedOp ToMerge;
+  ToMerge.Opcode = NdOp::BRANCH;
+  ToMerge.addInput(MedVar::makeConst(CallerVA + 0x30, TRI.PointerSize));
+  Dispatch.Ops.push_back(std::move(ToMerge));
+
+  MedBlock Merge;
+  Merge.Id = 3;
+  Merge.StartAddr = CallerVA + 0x30;
+  Merge.EndAddr = CallerVA + 0x34;
+  Merge.Preds = {2};
+  Merge.Succs = {1};
+  MedOp BackToHeader;
+  BackToHeader.Opcode = NdOp::BRANCH;
+  BackToHeader.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Merge.Ops.push_back(std::move(BackToHeader));
+
+  MedBlock Latch;
+  Latch.Id = 4;
+  Latch.StartAddr = CallerVA + 0x40;
+  Latch.EndAddr = CallerVA + 0x44;
+  Latch.Preds = {1};
+  Latch.Succs = {1};
+  MedOp LatchBack;
+  LatchBack.Opcode = NdOp::BRANCH;
+  LatchBack.addInput(MedVar::makeConst(CallerVA + 0x10, TRI.PointerSize));
+  Latch.Ops.push_back(std::move(LatchBack));
+
+  Func.Blocks = {std::move(Entry), std::move(Header), std::move(Dispatch),
+                 std::move(Merge), std::move(Latch)};
   return Func;
 }
 
@@ -5645,10 +5806,13 @@ MedFunc makeExactMixedPointerSlotIndirectCaller(Arch TargetArch,
   return Func;
 }
 
-MedFunc makeIndexedPointerTableIndirectCaller(Arch TargetArch,
-                                              uint64_t TableVA) {
+MedFunc makeIndexedPointerTableIndirectCaller(Arch TargetArch, uint64_t TableVA,
+                                              uint64_t ElementStride = 0,
+                                              bool RoundTripNarrowIndex = false,
+                                              uint64_t FieldOffset = 0) {
   const uint16_t PointerSize =
       static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
+  const uint64_t Stride = ElementStride ? ElementStride : PointerSize;
   MedFunc Func =
       makeExactMixedPointerSlotIndirectCaller(TargetArch, TableVA - DataVA);
   Func.Name = "indexed_pointer_table_indirect_caller";
@@ -5657,7 +5821,7 @@ MedFunc makeIndexedPointerTableIndirectCaller(Arch TargetArch,
   Index.Kind = MedVar::Param;
   Index.TheArch = TargetArch;
   Index.Id = 0;
-  Index.Size = PointerSize;
+  Index.Size = RoundTripNarrowIndex ? 4 : PointerSize;
   Func.Params.push_back(Index);
 
   auto makeTemp = [&](int Id) {
@@ -5671,35 +5835,301 @@ MedFunc makeIndexedPointerTableIndirectCaller(Arch TargetArch,
   };
   MedVar ScaledIndex = makeTemp(212);
   MedVar IndexedSlot = makeTemp(213);
+  MedVar FieldSlot = makeTemp(214);
   MedBlock &Block = Func.Blocks.front();
   MedOp Load = std::move(Block.Ops[1]);
   MedOp Call = std::move(Block.Ops[2]);
   MedOp Return = std::move(Block.Ops[3]);
   Block.Ops.resize(1);
 
+  uint64_t OpAddr = CallerVA + 4;
+  MedVar IndexTerm = ScaledIndex;
+  if (!RoundTripNarrowIndex) {
+    MedOp Scale;
+    Scale.Opcode = NdOp::INT_MULT;
+    Scale.Addr = OpAddr;
+    Scale.Output = ScaledIndex;
+    Scale.addInput(Index);
+    Scale.addInput(MedVar::makeConst(Stride, PointerSize,
+                                     ConstantAddressProvenance::Scalar));
+    Block.Ops.push_back(std::move(Scale));
+    OpAddr += 4;
+  } else {
+    unsigned Shift = 0;
+    while (Shift < 63 && (uint64_t(1) << Shift) < Stride)
+      ++Shift;
+    EXPECT_EQ(uint64_t(1) << Shift, Stride);
+    MedVar ShiftAmount = makeTemp(215);
+    ShiftAmount.Size = 4;
+    ScaledIndex.Size = 4;
+    MedVar Widened = makeTemp(216);
+    MedVar NarrowedAgain = makeTemp(217);
+    NarrowedAgain.Size = 4;
+    MedVar WidenedAgain = makeTemp(218);
+
+    MedOp MaterializeShift;
+    MaterializeShift.Opcode = NdOp::COPY;
+    MaterializeShift.Addr = OpAddr;
+    MaterializeShift.Output = ShiftAmount;
+    MaterializeShift.addInput(
+        MedVar::makeConst(Shift, 4, ConstantAddressProvenance::Scalar));
+    Block.Ops.push_back(std::move(MaterializeShift));
+    OpAddr += 4;
+    MedOp Scale;
+    Scale.Opcode = NdOp::INT_LEFT;
+    Scale.Addr = OpAddr;
+    Scale.Output = ScaledIndex;
+    Scale.addInput(Index);
+    Scale.addInput(ShiftAmount);
+    Block.Ops.push_back(std::move(Scale));
+    OpAddr += 4;
+    MedOp Widen;
+    Widen.Opcode = NdOp::INT_ZEXT;
+    Widen.Addr = OpAddr;
+    Widen.Output = Widened;
+    Widen.addInput(ScaledIndex);
+    Block.Ops.push_back(std::move(Widen));
+    OpAddr += 4;
+    MedOp TakeLowSubregister;
+    TakeLowSubregister.Opcode = NdOp::SUBBYTES;
+    TakeLowSubregister.Addr = OpAddr;
+    TakeLowSubregister.Output = NarrowedAgain;
+    TakeLowSubregister.addInput(Widened);
+    TakeLowSubregister.addInput(
+        MedVar::makeConst(0, PointerSize, ConstantAddressProvenance::Scalar));
+    Block.Ops.push_back(std::move(TakeLowSubregister));
+    OpAddr += 4;
+    MedOp WidenAgain;
+    WidenAgain.Opcode = NdOp::INT_ZEXT;
+    WidenAgain.Addr = OpAddr;
+    WidenAgain.Output = WidenedAgain;
+    WidenAgain.addInput(NarrowedAgain);
+    Block.Ops.push_back(std::move(WidenAgain));
+    OpAddr += 4;
+    IndexTerm = WidenedAgain;
+  }
+  MedOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Addr = OpAddr;
+  Add.Output = IndexedSlot;
+  Add.addInput(Block.Ops[0].Output);
+  Add.addInput(IndexTerm);
+  Block.Ops.push_back(std::move(Add));
+  OpAddr += 4;
+  MedVar LoadAddress = IndexedSlot;
+  if (FieldOffset != 0) {
+    MedOp AddField;
+    AddField.Opcode = NdOp::INT_ADD;
+    AddField.Addr = OpAddr;
+    AddField.Output = FieldSlot;
+    AddField.addInput(IndexedSlot);
+    AddField.addInput(MedVar::makeConst(FieldOffset, PointerSize,
+                                        ConstantAddressProvenance::Scalar));
+    Block.Ops.push_back(std::move(AddField));
+    OpAddr += 4;
+    LoadAddress = FieldSlot;
+  }
+  Load.Addr = OpAddr;
+  Load.Inputs[0] = LoadAddress;
+  Block.Ops.push_back(std::move(Load));
+  OpAddr += 4;
+  Call.Addr = OpAddr;
+  Block.Ops.push_back(std::move(Call));
+  OpAddr += 4;
+  Return.Addr = OpAddr;
+  Block.Ops.push_back(std::move(Return));
+  Block.EndAddr = OpAddr + 4;
+  return Func;
+}
+
+MedFunc makeMaskedSelectedRecoveredCodeTableCaller(Arch TargetArch) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  const uint16_t PointerSize = static_cast<uint16_t>(TRI.PointerSize);
+  auto makeTemp = [&](int Id, uint16_t Size = 0) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.TheArch = TargetArch;
+    Value.Id = Id;
+    Value.SSAVer = 1;
+    Value.Size = Size == 0 ? PointerSize : Size;
+    return Value;
+  };
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = "masked_selected_recovered_code_table_caller";
+  Func.ReturnType = NdType::makeVoid();
+  MedVar CondSeed;
+  CondSeed.Kind = MedVar::Param;
+  CondSeed.TheArch = TargetArch;
+  CondSeed.Id = 0;
+  CondSeed.Size = 4;
+  CondSeed.RegOff = TRI.IntParamRegs.front();
+  Func.Params.push_back(CondSeed);
+
+  MedVar Cond = makeTemp(220, 1);
+  MedVar WideCond = makeTemp(221);
+  MedVar Mask = makeTemp(222);
+  MedVar NotMask = makeTemp(223);
+  MedVar FirstArm = makeTemp(224);
+  MedVar SecondArm = makeTemp(225);
+  MedVar SelectedSlot = makeTemp(226);
+  MedVar LoadedTarget = makeTemp(227);
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = CallerVA;
+  va_t OpAddr = CallerVA;
+  auto append = [&](MedOp Op) {
+    Op.Addr = OpAddr;
+    OpAddr += 4;
+    Block.Ops.push_back(std::move(Op));
+  };
+
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_NOTEQUAL;
+  Compare.Output = Cond;
+  Compare.addInput(CondSeed);
+  Compare.addInput(MedVar::makeConst(0, 4, ConstantAddressProvenance::Scalar));
+  append(std::move(Compare));
+  MedOp Widen;
+  Widen.Opcode = NdOp::INT_ZEXT;
+  Widen.Output = WideCond;
+  Widen.addInput(Cond);
+  append(std::move(Widen));
+  MedOp Negate;
+  Negate.Opcode = NdOp::INT_NEG2;
+  Negate.Output = Mask;
+  Negate.addInput(WideCond);
+  append(std::move(Negate));
+  MedOp Complement;
+  Complement.Opcode = NdOp::INT_NOT;
+  Complement.Output = NotMask;
+  Complement.addInput(Mask);
+  append(std::move(Complement));
+  MedOp KeepFirst;
+  KeepFirst.Opcode = NdOp::INT_AND;
+  KeepFirst.Output = FirstArm;
+  KeepFirst.addInput(MedVar::makeConst(DataVA + 8, PointerSize,
+                                       ConstantAddressProvenance::Address));
+  KeepFirst.addInput(Mask);
+  append(std::move(KeepFirst));
+  MedOp KeepSecond;
+  KeepSecond.Opcode = NdOp::INT_AND;
+  KeepSecond.Output = SecondArm;
+  KeepSecond.addInput(MedVar::makeConst(DataVA + 32, PointerSize,
+                                        ConstantAddressProvenance::Address));
+  KeepSecond.addInput(NotMask);
+  append(std::move(KeepSecond));
+  MedOp Blend;
+  Blend.Opcode = NdOp::INT_OR;
+  Blend.Output = SelectedSlot;
+  Blend.addInput(FirstArm);
+  Blend.addInput(SecondArm);
+  append(std::move(Blend));
+  const va_t LoadAddr = OpAddr;
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = LoadedTarget;
+  Load.addInput(SelectedSlot);
+  append(std::move(Load));
+  MedOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.addInput(LoadedTarget);
+  append(std::move(Call));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  append(std::move(Return));
+  Block.EndAddr = OpAddr;
+  Func.Blocks.push_back(std::move(Block));
+
+  for (va_t Slot : {DataVA + 8, DataVA + 32}) {
+    JumpTable Table;
+    Table.InsnAddr = LoadAddr;
+    Table.BaseAddr = Slot;
+    Table.HasBaseAddr = true;
+    Table.EntrySize = PointerSize;
+    Table.Targets = {CodeVA};
+    Func.JumpTables.push_back(std::move(Table));
+  }
+  return Func;
+}
+
+MedFunc makeIndexedWritablePointerArgumentCaller(
+    Arch TargetArch, uint64_t TableVA = SpilledConstTableVA) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  const uint16_t PointerSize = static_cast<uint16_t>(TRI.PointerSize);
+  auto makeTemp = [&](int Id) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.TheArch = TargetArch;
+    Value.Id = Id;
+    Value.SSAVer = 1;
+    Value.Size = PointerSize;
+    return Value;
+  };
+
+  MedVar Index;
+  Index.Kind = MedVar::Param;
+  Index.TheArch = TargetArch;
+  Index.Id = 0;
+  Index.Size = PointerSize;
+  Index.RegOff = TRI.IntParamRegs.front();
+  MedVar Base = makeTemp(230);
+  MedVar Offset = makeTemp(231);
+  MedVar Address = makeTemp(232);
+
+  MedFunc Func;
+  Func.Entry = CallerVA;
+  Func.Name = "indexed_writable_pointer_argument_caller";
+  Func.ReturnType = NdType::makeVoid();
+  Func.Params.push_back(Index);
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = CallerVA;
+  Block.EndAddr = CallerVA + 0x14;
+  MedOp Materialize;
+  Materialize.Opcode = NdOp::COPY;
+  Materialize.Addr = CallerVA;
+  Materialize.Output = Base;
+  Materialize.addInput(MedVar::makeConst(
+      TableVA, PointerSize, ConstantAddressProvenance::DataAddress));
+  Block.Ops.push_back(std::move(Materialize));
   MedOp Scale;
   Scale.Opcode = NdOp::INT_MULT;
   Scale.Addr = CallerVA + 4;
-  Scale.Output = ScaledIndex;
+  Scale.Output = Offset;
   Scale.addInput(Index);
-  Scale.addInput(MedVar::makeConst(PointerSize, PointerSize,
-                                   ConstantAddressProvenance::Scalar));
+  Scale.addInput(
+      MedVar::makeConst(4, PointerSize, ConstantAddressProvenance::Scalar));
   Block.Ops.push_back(std::move(Scale));
   MedOp Add;
   Add.Opcode = NdOp::INT_ADD;
   Add.Addr = CallerVA + 8;
-  Add.Output = IndexedSlot;
-  Add.addInput(Block.Ops[0].Output);
-  Add.addInput(ScaledIndex);
+  Add.Output = Address;
+  Add.addInput(Base);
+  Add.addInput(Offset);
   Block.Ops.push_back(std::move(Add));
-  Load.Addr = CallerVA + 12;
-  Load.Inputs[0] = IndexedSlot;
-  Block.Ops.push_back(std::move(Load));
-  Call.Addr = CallerVA + 16;
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = CallerVA + 12;
+  Call.addInput(MedVar::makeConst(ImportStubVA, PointerSize,
+                                  ConstantAddressProvenance::CodeAddress));
   Block.Ops.push_back(std::move(Call));
-  Return.Addr = CallerVA + 20;
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = CallerVA + 16;
   Block.Ops.push_back(std::move(Return));
-  Block.EndAddr = CallerVA + 24;
+  Func.Blocks.push_back(std::move(Block));
+
+  MedCallInfo Info;
+  Info.BlockId = 0;
+  Info.OpIdx = 3;
+  Info.TargetAddr = ImportStubVA;
+  Info.TargetName = "printf";
+  Info.Args.push_back(Address);
+  Func.CallInfos.push_back(std::move(Info));
   return Func;
 }
 
@@ -8908,6 +9338,29 @@ TEST(MachOLLVMDataPointerBoundary,
       << "stable-offset cache keys must preserve the optional forbidden value";
 }
 
+TEST(LLVMDataPointerInvariantBoundary,
+     StableOffsetRequiresAnInitializerAcrossNestedPhiComponents) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+      for (bool HasExternalInitializer : {false, true}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+        SCOPED_TRACE(HasExternalInitializer ? "initialized" : "source-free");
+        BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+        MedFunc Func =
+            makeNestedScalarPhiComponent(TargetArch, HasExternalInitializer);
+        MedLLVMEmitter Emitter;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, Func, Image,
+                                                        TargetArch, Format);
+
+        const MedVar &HeaderValue = Func.Blocks[1].Phis.front().Output;
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(Emitter, HeaderValue,
+                                                          nullptr),
+                  HasExternalInitializer);
+      }
+}
+
 TEST(MachOLLVMDataPointerBoundary,
      ClearsProvenanceCachesAcrossFunctionsAndEmitterReuse) {
   {
@@ -9274,6 +9727,135 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     LiveMaskedCodeTableAccessOverridesRecoveredTableExclusion) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+      SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                   std::to_string(static_cast<int>(TargetArch)));
+      BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+      Image.DataPtrRelocSlots.clear();
+      Image.DataPtrRelocTargetOwners.clear();
+      MedFunc Caller = makeMaskedSelectedRecoveredCodeTableCaller(TargetArch);
+      MedFunc Callee = makeReturnFunction("selected_code_target", CodeVA);
+
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                          "live-masked-recovered-code-table",
+                                          TargetArch, {}, &Image, Format);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+      llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+      ASSERT_NE(EmittedCaller, nullptr);
+      std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+      ASSERT_EQ(Calls.size(), 1u);
+      llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+          (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+      ASSERT_NE(Mirror, nullptr);
+      std::set<const llvm::Value *> Seen;
+      EXPECT_TRUE(valueReferencesSpecificGlobal(
+          Calls.front()->getCalledOperand(), Mirror, Seen));
+    }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     IndexedPointerRecordUsesOnlyTheProvenCodeLane) {
+  struct Case {
+    uint64_t FieldOffset;
+    bool RoundTripNarrowIndex;
+  };
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+      for (const Case &C : {Case{0, true}, Case{8, false}}) {
+        SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                     std::to_string(static_cast<int>(TargetArch)) + "/" +
+                     std::to_string(C.FieldOffset));
+        BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+        Segment &Data = Image.Segments[1];
+        Image.CodePtrRelocSlots.clear();
+        Image.DataPtrRelocSlots.clear();
+        for (uint64_t RecordOffset : {0ULL, 16ULL, 32ULL}) {
+          const uint64_t CodeOffset = RecordOffset + C.FieldOffset;
+          const uint64_t ScalarOffset = RecordOffset + (C.FieldOffset ^ 8);
+          writeObject(Data.Data, static_cast<size_t>(CodeOffset), CodeVA);
+          writeObject(Data.Data, static_cast<size_t>(ScalarOffset),
+                      uint64_t(4));
+          Image.CodePtrRelocSlots.insert(DataVA + CodeOffset);
+        }
+        MedFunc Caller = makeIndexedPointerTableIndirectCaller(
+            TargetArch, DataVA, /*ElementStride=*/16, C.RoundTripNarrowIndex,
+            C.FieldOffset);
+        MedFunc Callee = makeReturnFunction("indexed_record_target", CodeVA);
+
+        llvm::LLVMContext Context;
+        auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                            "indexed-record-code-lane",
+                                            TargetArch, {}, &Image, Format);
+        ASSERT_NE(Module, nullptr);
+        expectValidModule(*Module);
+        llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+        ASSERT_NE(EmittedCaller, nullptr);
+        std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+        ASSERT_EQ(Calls.size(), 1u);
+        llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+            (kNdCodePtrPrefix + llvm::utohexstr(DataVA)).str());
+        ASSERT_NE(Mirror, nullptr);
+        std::set<const llvm::Value *> Seen;
+        EXPECT_TRUE(valueReferencesSpecificGlobal(
+            Calls.front()->getCalledOperand(), Mirror, Seen));
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     IndexedWritableArgumentBypassesReadOnlyMergeOwner) {
+  constexpr uint64_t LowWritableTableVA = 0xc0;
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+      SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                   std::to_string(static_cast<int>(TargetArch)));
+      BinaryImage Image = makeWritablePointerTableImage(TargetArch, Format);
+      for (Segment &Seg : Image.Segments)
+        if (Seg.contains(SpilledConstTableVA))
+          Seg.VA = LowWritableTableVA;
+      for (Section &Sec : Image.Sections)
+        if (Sec.contains(SpilledConstTableVA))
+          Sec.VA = LowWritableTableVA;
+      for (Symbol &Sym : Image.Symbols)
+        if (Sym.Addr >= SpilledConstTableVA &&
+            Sym.Addr < SpilledConstTableVA + 0x40)
+          Sym.Addr = LowWritableTableVA + (Sym.Addr - SpilledConstTableVA);
+      Image.CodePtrRelocSlots.clear();
+      Image.DataPtrRelocSlots.clear();
+      Image.DataPtrRelocTargetOwners.clear();
+      Image.RelocDataAddrs.clear();
+      MedFunc Caller = makeIndexedWritablePointerArgumentCaller(
+          TargetArch, LowWritableTableVA);
+
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(
+          {Caller}, Context, "indexed-writable-pointer-argument", TargetArch,
+          {{ImportStubVA, "printf"}}, &Image, Format);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+      llvm::Function *EmittedCaller = Module->getFunction(Caller.Name);
+      ASSERT_NE(EmittedCaller, nullptr);
+      std::vector<llvm::CallInst *> Calls = callsIn(*EmittedCaller);
+      ASSERT_EQ(Calls.size(), 1u);
+      ASSERT_EQ(Calls.front()->arg_size(), 1u);
+      llvm::GlobalVariable *Writable = Module->getNamedGlobal(
+          (kNdDataPrefix + llvm::utohexstr(LowWritableTableVA)).str() +
+          section_names::elf::Data);
+      ASSERT_NE(Writable, nullptr);
+      EXPECT_FALSE(Writable->isConstant());
+      std::set<const llvm::Value *> Seen;
+      EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getArgOperand(0),
+                                                Writable, Seen));
+    }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      MixedPointerTableNonCodeLanesFailClosed) {
   struct Case {
     uint64_t InitialOffset;
@@ -9385,7 +9967,7 @@ TEST(LLVMDataPointerInvariantBoundary,
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
-     PointerTableSelectStillRejectsDistinctRelocationRuns) {
+     PointerTableSelectSymbolizesDistinctRelocationRunsIndependently) {
   BinaryImage Image = makeSpilledConstTableImage(
       Arch::AArch64, BinaryFormat::MachO, /*PointerTable=*/true);
   addFarSpilledConstTable(Image);
@@ -9403,15 +9985,36 @@ TEST(LLVMDataPointerInvariantBoundary,
   MedFunc Caller = makePointerTableSelectArgumentCaller(
       Arch::AArch64, SpilledConstTableVA, FarSpilledConstTableVA);
   llvm::LLVMContext Context;
-  testing::internal::CaptureStderr();
   auto Module = MedLLVMEmitter().emit(
       {Caller}, Context, "cross-run-pointer-table-select", Arch::AArch64,
       {{ImportStubVA, "printf"}}, &Image, BinaryFormat::MachO);
-  std::string Diagnostic = testing::internal::GetCapturedStderr();
-  EXPECT_EQ(Module, nullptr);
-  EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
-            std::string::npos)
-      << Diagnostic;
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  const std::string FirstMirrorName =
+      (kNdCodePtrPrefix + llvm::utohexstr(SpilledConstTableVA)).str();
+  const std::string FarMirrorName =
+      (kNdCodePtrPrefix + llvm::utohexstr(FarSpilledConstTableVA)).str();
+  llvm::GlobalVariable *FirstMirror = Module->getNamedGlobal(FirstMirrorName);
+  llvm::GlobalVariable *FarMirror = Module->getNamedGlobal(FarMirrorName);
+  std::string IR;
+  llvm::raw_string_ostream IRStream(IR);
+  Module->print(IRStream, nullptr);
+  IRStream.flush();
+  ASSERT_NE(FirstMirror, nullptr) << IR;
+  ASSERT_NE(FarMirror, nullptr) << IR;
+
+  llvm::Function *Emitted = Module->getFunction(Caller.Name);
+  ASSERT_NE(Emitted, nullptr);
+  std::vector<llvm::CallInst *> Calls = callsIn(*Emitted);
+  ASSERT_EQ(Calls.size(), 1u);
+  ASSERT_EQ(Calls.front()->arg_size(), 1u);
+  std::set<const llvm::Value *> SeenFirst;
+  std::set<const llvm::Value *> SeenFar;
+  EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getArgOperand(0),
+                                            FirstMirror, SeenFirst));
+  EXPECT_TRUE(valueReferencesSpecificGlobal(Calls.front()->getArgOperand(0),
+                                            FarMirror, SeenFar));
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
@@ -9805,7 +10408,14 @@ TEST(MachOLLVMDataPointerBoundary,
       expectValidModule(*Module);
       llvm::Function *Function = Module->getFunction(Lookup.Name);
       ASSERT_NE(Function, nullptr);
-      const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+      const llvm::LoadInst *TableLoad = nullptr;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block)
+          if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+              Load && Load->getType()->isIntegerTy(16)) {
+            ASSERT_EQ(TableLoad, nullptr);
+            TableLoad = Load;
+          }
       ASSERT_NE(TableLoad, nullptr);
       EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indptr");
     };
@@ -10303,7 +10913,14 @@ TEST(MachOLLVMDataPointerBoundary,
       expectValidModule(*SameRunModule);
       llvm::Function *Function = SameRunModule->getFunction(SameRun.Name);
       ASSERT_NE(Function, nullptr);
-      const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+      const llvm::LoadInst *TableLoad = nullptr;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block)
+          if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+              Load && Load->getType()->isIntegerTy(16)) {
+            ASSERT_EQ(TableLoad, nullptr);
+            TableLoad = Load;
+          }
       ASSERT_NE(TableLoad, nullptr);
       EXPECT_EQ(TableLoad->getPointerOperand()->getName(), "indptr");
     }
@@ -10659,28 +11276,67 @@ TEST(MachOLLVMDataPointerBoundary,
   }
 }
 
+TEST(LLVMDataPointerInvariantBoundary,
+     DeepScalarIndexDoesNotConsumePointerMergeDepth) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+      SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                   std::to_string(static_cast<int>(TargetArch)));
+      BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+      MedFunc Lookup = makeDeepScalarIndexTableLookup(TargetArch);
+      llvm::LLVMContext Context;
+      auto Module =
+          MedLLVMEmitter().emit({Lookup}, Context, "deep-scalar-index-table",
+                                TargetArch, {}, &Image, Format);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+      llvm::Function *Function = Module->getFunction(Lookup.Name);
+      ASSERT_NE(Function, nullptr);
+      bool SawI16Load = false;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block) {
+          if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+              Load && Load->getType()->isIntegerTy(16))
+            SawI16Load = true;
+        }
+      EXPECT_TRUE(SawI16Load);
+      bool ReferencesRebuiltGlobal = false;
+      for (const llvm::GlobalVariable &Global : Module->globals()) {
+        if (!Global.getName().starts_with(kNdDataPrefix) &&
+            !Global.getName().starts_with(kNdCodePtrPrefix))
+          continue;
+        for (const llvm::BasicBlock &Block : *Function)
+          for (const llvm::Instruction &Instruction : Block) {
+            std::set<const llvm::Value *> Seen;
+            ReferencesRebuiltGlobal |=
+                valueReferencesSpecificGlobal(&Instruction, &Global, Seen);
+          }
+      }
+      EXPECT_TRUE(ReferencesRebuiltGlobal);
+    }
+}
+
 TEST(MachOLLVMDataPointerBoundary,
-     FailsClosedWhenArithmeticDepthHidesRawTableBase) {
+     ArithmeticDepthDoesNotInvalidateCompletelyAuditedRawTableBase) {
   for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
     SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
     BinaryImage Image = makeSpilledConstTableImage(TargetArch);
     addThresholdCrossingConstTableRun(Image);
     MedFunc Lookup = makeDeepArithmeticLowTableLookup(TargetArch);
     llvm::LLVMContext Context;
-    testing::internal::CaptureStderr();
     auto Module = MedLLVMEmitter().emit(
         {Lookup}, Context, "macho-deep-arithmetic-low-table", TargetArch, {},
         &Image, BinaryFormat::MachO);
-    std::string Diagnostic = testing::internal::GetCapturedStderr();
-    std::string IR;
-    if (Module) {
-      llvm::raw_string_ostream Stream(IR);
-      Module->print(Stream, nullptr);
-    }
-    EXPECT_EQ(Module.get(), nullptr) << IR;
-    EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
-              std::string::npos)
-        << Diagnostic;
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findNonAllocaI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
   }
 }
 

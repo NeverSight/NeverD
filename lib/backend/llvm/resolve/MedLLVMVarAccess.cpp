@@ -190,7 +190,8 @@ bool MedLLVMEmitter::dataOccurrenceSymbolizes(
   uint64_t Address = 0;
   if (isExactAddressProvenance(Cur.Provenance) &&
       resolveMaterializableDataAddress(Cur, Address))
-    return true;
+    return Cur.Provenance != ConstantAddressProvenance::Address ||
+           !addrInCodePtrMirrorRun(Cur.ConstVal);
 
   if (Cur.Provenance != ConstantAddressProvenance::Unknown)
     return false;
@@ -609,6 +610,16 @@ MedLLVMEmitter::getPhiIncomingConstant(const MedVar &V, uint16_t OutputSize,
 llvm::Value *MedLLVMEmitter::getPhiIncomingValue(const MedVar &V,
                                                  uint16_t OutputSize,
                                                  llvm::IRBuilder<> &Builder) {
+  // A PHI feeding another PHI is already a relocation-aware runtime value:
+  // its predecessor copies materialized every exact code/data arm before
+  // storing the selected value in the source PHI's alloca.  Re-proving the
+  // complete source merge here incorrectly treats a harmless architectural
+  // register state such as PHI(&function, call_result) as one observable code
+  // identity.  Actual sinks (store/return/call target) still run their own
+  // strict proof on the merged value and therefore keep mixed identities
+  // fail-closed.
+  if (!V.isConst() && lookupPhi(V))
+    return getVar(V, Builder);
   if (codeIdentityOccurrenceMayRelocate(V))
     if (llvm::Value *Code =
             tryResolveCodeAddressValue(V, /*RequireCodeRole=*/false, Builder))
@@ -729,6 +740,15 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         // is materialized above.
         return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
       }
+
+      // A role-neutral address anywhere in a contiguous pointer-mirror run
+      // must stay in the original numeric model until the complete memory
+      // access is anchored to that mirror.  This includes a relocation-free
+      // tail object in an adjacent .rodata segment; eagerly materializing only
+      // that tail would mix it with the raw RELRO head nodes in a PHI/SELECT.
+      if (V.Provenance == ConstantAddressProvenance::Address &&
+          addrInCodePtrMirrorRun(V.ConstVal))
+        return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
 
       uint64_t Address = 0;
       uint64_t OwnerVA = InvalidVA;

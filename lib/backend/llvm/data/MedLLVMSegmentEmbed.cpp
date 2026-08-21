@@ -351,8 +351,7 @@ bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
   // mirror.  Restricting this check to segment-level RELRO names loses that
   // fact for linked ELF PT_LOADs whose exact `.data.rel.ro` section is nested
   // inside a coarsely writable segment.
-  if (!Seg || Seg->Data.empty() || Seg->isExecutable() ||
-      !segHasPtrRelocSlots(Seg))
+  if (!Seg || Seg->Data.empty() || Seg->isExecutable())
     return false;
   uint64_t RunStart = 0, RunEnd = 0;
   readOnlyAfterRelocRun(Seg, RunStart, RunEnd);

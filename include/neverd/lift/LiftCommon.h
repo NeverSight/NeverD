@@ -60,14 +60,28 @@ struct LiftStateBase {
         Opc = NdOp::COPY;
     }
 
+    // Numeric operation operands are scalar occurrences unless the decoder or
+    // loader attached a more precise address role to this exact field.  Keep
+    // this at the shared emission boundary: architecture helpers synthesize
+    // masks, shift counts, bounds, and strides in many different files, and a
+    // low-VA image can otherwise make an untagged value such as 0xff look like
+    // unrelated object data.  COPY/SELECT/value-transport and memory/control
+    // operands deliberately stay untouched because their constants may be
+    // first-class data or code pointers.
     LowOp Op;
     Op.Opcode = Opc;
     Op.MemoryOrdering = MemoryOrdering;
     Op.Addr = Addr;
     Op.Seq = Seq++;
     Op.Output = Out;
-    for (const auto &V : Ins)
+    unsigned InputIndex = 0;
+    for (NdVar V : Ins) {
+      if (V.isConst() && V.Provenance == ConstantAddressProvenance::Unknown &&
+          isNumericConstantOperand(Opc, InputIndex))
+        V.Provenance = ConstantAddressProvenance::Scalar;
       Op.addInput(V);
+      ++InputIndex;
+    }
     Ops.push_back(Op);
   }
 

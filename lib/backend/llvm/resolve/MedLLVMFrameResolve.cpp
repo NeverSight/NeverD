@@ -132,23 +132,39 @@ bool MedLLVMEmitter::frameAddressRec(
   if (V.isConst() || !CurMedFunc)
     return false;
 
+  const MedOp *Def = lookupDef(V);
+  const PhiNode *Phi = lookupPhi(V);
   if (V.Kind == MedVar::Reg) {
     const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
-    if ((TRI.StackPointer != 0 && V.RegOff == TRI.StackPointer) ||
-        (TRI.FramePointer != 0 && V.RegOff == TRI.FramePointer))
+    auto sameSSAValue = [](const MedVar &A, const MedVar &B) {
+      return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
+             A.SSAVer == B.SSAVer && A.RegOff == B.RegOff && A.Size == B.Size;
+    };
+    const bool IsSelfCopy =
+        Def && Def->Opcode == NdOp::COPY && Def->NumInputs == 1 &&
+        sameSSAValue(Def->Output, V) && sameSSAValue(Def->Inputs[0], V);
+    // A physical register name is not frame provenance after SSA has assigned
+    // it a new value.  Optimized i386 routinely reuses EBP as a scalar loop
+    // index after the prologue save; treating every EBP version as a frame
+    // root makes unrelated rodata indexing look like an opaque stack reload.
+    // Only the unmerged live-in (normally the lifter's exact self-COPY) is a
+    // root.  Derived SP/FP versions are discovered structurally below.
+    const bool IsUnmergedLiveIn = !Phi && (!Def || IsSelfCopy);
+    if (IsUnmergedLiveIn &&
+        ((TRI.StackPointer != 0 && V.RegOff == TRI.StackPointer) ||
+         (TRI.FramePointer != 0 && V.RegOff == TRI.FramePointer)))
       return true;
   }
 
   if (!Visited.insert(frameKey(V)).second)
     return false;
 
-  if (const PhiNode *Phi = lookupPhi(V))
+  if (Phi)
     for (const auto &[PredId, Arg] : Phi->Args)
       if (phiIncomingEdgeFeasible(*Phi, PredId) &&
           frameAddressRec(Arg, Visited))
         return true;
 
-  const MedOp *Def = lookupDef(V);
   if (!Def)
     return false;
   switch (Def->Opcode) {
@@ -419,9 +435,97 @@ MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V) const {
     return static_cast<int64_t>(Value);
   };
 
+  // Exact slot identity may pass through a loop-carried stack-pointer PHI
+  // whose backedge restores the same architectural SP after temporary call
+  // arguments have been popped.  Prove that edge independently as an affine
+  // identity of this exact PHI value.  A non-zero net adjustment, a dynamic
+  // operand, a lossy cast, or a selectable path that does not reach the target
+  // is not an exact slot recurrence.
+  auto sameExactValue = [&](const MedVar &A, const MedVar &B) {
+    return !A.isConst() && !B.isConst() &&
+           addressProvenanceVarKey(A) == addressProvenanceVarKey(B);
+  };
+  std::function<std::optional<int64_t>(const MedVar &, const MedVar &, int,
+                                       std::set<AddressProvenanceVarKey>)>
+      affineDeltaTo = [&](const MedVar &Start, const MedVar &Target, int Depth,
+                          std::set<AddressProvenanceVarKey> Seen)
+      -> std::optional<int64_t> {
+    if (Start.isConst() || Depth > 64)
+      return std::nullopt;
+    if (sameExactValue(Start, Target))
+      return int64_t{0};
+    if (!Seen.insert(addressProvenanceVarKey(Start)).second)
+      return std::nullopt;
+
+    if (const PhiNode *Phi = lookupPhi(Start)) {
+      std::optional<int64_t> Common;
+      bool SawFeasible = false;
+      for (const auto &[PredId, Arg] : Phi->Args) {
+        PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, PredId);
+        if (Edge == PhiEdgeFeasibility::Infeasible)
+          continue;
+        if (Edge != PhiEdgeFeasibility::ProvenFeasible)
+          return std::nullopt;
+        auto Delta = affineDeltaTo(Arg, Target, Depth + 1, Seen);
+        if (!Delta || (Common && *Common != *Delta))
+          return std::nullopt;
+        Common = *Delta;
+        SawFeasible = true;
+      }
+      return SawFeasible ? Common : std::nullopt;
+    }
+
+    const MedOp *Def = lookupDef(Start);
+    if (!Def || Def->NumInputs < 1)
+      return std::nullopt;
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      return affineDeltaTo(*Forwarded, Target, Depth + 1, Seen);
+
+    auto addDelta = [&](const MedVar &Base,
+                        int64_t Local) -> std::optional<int64_t> {
+      auto BaseDelta = affineDeltaTo(Base, Target, Depth + 1, Seen);
+      if (!BaseDelta)
+        return std::nullopt;
+      int64_t Result = 0;
+      return llvm::AddOverflow(*BaseDelta, Local, Result)
+                 ? std::nullopt
+                 : std::optional<int64_t>(Result);
+    };
+    if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
+      if (auto Delta = signedDelta(Def->Inputs[1], Def->Output.Size))
+        return addDelta(Def->Inputs[0], *Delta);
+      if (auto Delta = signedDelta(Def->Inputs[0], Def->Output.Size))
+        return addDelta(Def->Inputs[1], *Delta);
+      return std::nullopt;
+    }
+    if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
+      auto Delta = signedDelta(Def->Inputs[1], Def->Output.Size);
+      if (!Delta)
+        return std::nullopt;
+      int64_t Negated = 0;
+      return llvm::SubOverflow(int64_t{0}, *Delta, Negated)
+                 ? std::nullopt
+                 : addDelta(Def->Inputs[0], Negated);
+    }
+    if (selectPreservesPointerValues(*Def)) {
+      auto TrueDelta = affineDeltaTo(Def->Inputs[1], Target, Depth + 1, Seen);
+      auto FalseDelta = affineDeltaTo(Def->Inputs[2], Target, Depth + 1, Seen);
+      return TrueDelta && FalseDelta && *TrueDelta == *FalseDelta
+                 ? TrueDelta
+                 : std::nullopt;
+    }
+    return std::nullopt;
+  };
+
+  // Cycle detection, rather than the syntactic length of an ESP/RSP
+  // round-trip chain, determines termination.  Real i386 prologues with
+  // callee-save pushes, a large local frame, and one outgoing call already
+  // exceed the legacy depth cap of 24.  Keep an aggregate work bound for
+  // hostile/degenerate DAGs while allowing any finite normal chain.
+  size_t RemainingSlotProofNodes = 8192;
   std::function<std::optional<med_llvm::SlotKey>(const MedVar &, int)> rec =
       [&](const MedVar &Cur, int Depth) -> std::optional<med_llvm::SlotKey> {
-    if (Cur.isConst() || Depth > limits::kMaxStackPtrTraceDepth)
+    if (Cur.isConst() || RemainingSlotProofNodes-- == 0)
       return std::nullopt;
 
     const AddressProvenanceVarKey Key = addressProvenanceVarKey(Cur);
@@ -437,18 +541,48 @@ MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V) const {
     // This admits i386 live-in EBP slots without guessing their SP delta.
     const bool IsSelfCopy = Def && Def->Opcode == NdOp::COPY &&
                             Def->NumInputs >= 1 && sameVar(Cur, Def->Inputs[0]);
+    const bool IsMergedValue = lookupPhi(Cur) != nullptr;
     const bool IsEntryStackPointer =
         Cur.Kind == MedVar::Reg && SpOff != 0 && Cur.RegOff == SpOff &&
-        Cur.Size >= PointerSize && (!Def || IsSelfCopy);
+        Cur.Size >= PointerSize && !IsMergedValue && (!Def || IsSelfCopy);
     const bool IsLiveInFramePointer =
         Cur.Kind == MedVar::Reg && FpOff != 0 && Cur.RegOff == FpOff &&
-        Cur.Size >= PointerSize && (!Def || IsSelfCopy);
+        Cur.Size >= PointerSize && !IsMergedValue && (!Def || IsSelfCopy);
     if (IsEntryStackPointer || IsLiveInFramePointer) {
       Active.erase(Key);
       return med_llvm::SlotKey{{Cur.Id, Cur.SSAVer}, 0};
     }
 
     std::optional<med_llvm::SlotKey> Result;
+    if (const PhiNode *Phi = lookupPhi(Cur)) {
+      bool SawRootArm = false;
+      for (const auto &[PredId, Arg] : Phi->Args) {
+        PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, PredId);
+        if (Edge == PhiEdgeFeasibility::Infeasible)
+          continue;
+        if (Edge != PhiEdgeFeasibility::ProvenFeasible) {
+          Active.erase(Key);
+          return std::nullopt;
+        }
+        if (auto Delta = affineDeltaTo(Arg, Cur, 0, {})) {
+          if (*Delta != 0) {
+            Active.erase(Key);
+            return std::nullopt;
+          }
+          continue;
+        }
+        auto Arm = rec(Arg, Depth + 1);
+        if (!Arm || (Result && *Result != *Arm)) {
+          Active.erase(Key);
+          return std::nullopt;
+        }
+        Result = *Arm;
+        SawRootArm = true;
+      }
+      Active.erase(Key);
+      return SawRootArm ? Result : std::nullopt;
+    }
+
     if (Def && Def->NumInputs >= 1) {
       auto addOffset = [&](const MedVar &Base,
                            int64_t Delta) -> std::optional<med_llvm::SlotKey> {

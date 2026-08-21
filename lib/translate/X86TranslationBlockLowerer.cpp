@@ -306,21 +306,21 @@ bool hasCanonicalCompareShape(llvm::ArrayRef<LowOp> Operations,
   const NdVar Result = Operations[0].Output;
   return isCanonicalOperation(Operations[1], NdOp::INT_EQUAL,
                               NdVar::reg(x86reg::ZF, 1),
-                              {Result, NdVar::cst(0, sizeof(uint64_t))}) &&
+                              {Result, NdVar::scalar(0, sizeof(uint64_t))}) &&
          isCanonicalOperation(Operations[2], NdOp::INT_SLESS,
                               NdVar::reg(x86reg::SF, 1),
-                              {Result, NdVar::cst(0, sizeof(uint64_t))}) &&
-         isCanonicalTempOperation(Operations[3], NdOp::SUBBYTES,
-                                  sizeof(uint8_t),
-                                  {Result, NdVar::cst(0, sizeof(uint32_t))}) &&
+                              {Result, NdVar::scalar(0, sizeof(uint64_t))}) &&
+         isCanonicalTempOperation(
+             Operations[3], NdOp::SUBBYTES, sizeof(uint8_t),
+             {Result, NdVar::scalar(0, sizeof(uint32_t))}) &&
          isCanonicalTempOperation(Operations[4], NdOp::POPCOUNT,
                                   sizeof(uint8_t), {Operations[3].Output}) &&
          isCanonicalTempOperation(
              Operations[5], NdOp::INT_AND, sizeof(uint8_t),
-             {Operations[4].Output, NdVar::cst(1, sizeof(uint8_t))}) &&
+             {Operations[4].Output, NdVar::scalar(1, sizeof(uint8_t))}) &&
          isCanonicalOperation(
              Operations[6], NdOp::INT_EQUAL, NdVar::reg(x86reg::PF, 1),
-             {Operations[5].Output, NdVar::cst(0, sizeof(uint8_t))}) &&
+             {Operations[5].Output, NdVar::scalar(0, sizeof(uint8_t))}) &&
          isCanonicalTempOperation(Operations[7], NdOp::INT_XOR,
                                   sizeof(uint64_t), {Left, Right}) &&
          isCanonicalTempOperation(Operations[8], NdOp::INT_XOR,
@@ -328,10 +328,10 @@ bool hasCanonicalCompareShape(llvm::ArrayRef<LowOp> Operations,
                                   {Operations[7].Output, Result}) &&
          isCanonicalTempOperation(
              Operations[9], NdOp::INT_AND, sizeof(uint64_t),
-             {Operations[8].Output, NdVar::cst(0x10, sizeof(uint64_t))}) &&
+             {Operations[8].Output, NdVar::scalar(0x10, sizeof(uint64_t))}) &&
          isCanonicalOperation(
              Operations[10], NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::AF, 1),
-             {Operations[9].Output, NdVar::cst(0, sizeof(uint64_t))}) &&
+             {Operations[9].Output, NdVar::scalar(0, sizeof(uint64_t))}) &&
          isCanonicalOperation(Operations[11], NdOp::INT_LESS,
                               NdVar::reg(x86reg::CF, 1), {Left, Right}) &&
          isCanonicalOperation(Operations[12], NdOp::INT_SBOR,
@@ -348,27 +348,27 @@ bool hasCanonicalTestShape(llvm::ArrayRef<LowOp> Operations, const NdVar &Left,
   const NdVar Result = Operations[0].Output;
   return isCanonicalOperation(Operations[1], NdOp::INT_EQUAL,
                               NdVar::reg(x86reg::ZF, 1),
-                              {Result, NdVar::cst(0, sizeof(uint64_t))}) &&
+                              {Result, NdVar::scalar(0, sizeof(uint64_t))}) &&
          isCanonicalOperation(Operations[2], NdOp::INT_SLESS,
                               NdVar::reg(x86reg::SF, 1),
-                              {Result, NdVar::cst(0, sizeof(uint64_t))}) &&
-         isCanonicalTempOperation(Operations[3], NdOp::SUBBYTES,
-                                  sizeof(uint8_t),
-                                  {Result, NdVar::cst(0, sizeof(uint32_t))}) &&
+                              {Result, NdVar::scalar(0, sizeof(uint64_t))}) &&
+         isCanonicalTempOperation(
+             Operations[3], NdOp::SUBBYTES, sizeof(uint8_t),
+             {Result, NdVar::scalar(0, sizeof(uint32_t))}) &&
          isCanonicalTempOperation(Operations[4], NdOp::POPCOUNT,
                                   sizeof(uint8_t), {Operations[3].Output}) &&
          isCanonicalTempOperation(
              Operations[5], NdOp::INT_AND, sizeof(uint8_t),
-             {Operations[4].Output, NdVar::cst(1, sizeof(uint8_t))}) &&
+             {Operations[4].Output, NdVar::scalar(1, sizeof(uint8_t))}) &&
          isCanonicalOperation(
              Operations[6], NdOp::INT_EQUAL, NdVar::reg(x86reg::PF, 1),
-             {Operations[5].Output, NdVar::cst(0, sizeof(uint8_t))}) &&
+             {Operations[5].Output, NdVar::scalar(0, sizeof(uint8_t))}) &&
          isCanonicalOperation(Operations[7], NdOp::COPY,
                               NdVar::reg(x86reg::CF, 1),
-                              {NdVar::cst(0, sizeof(uint8_t))}) &&
+                              {NdVar::scalar(0, sizeof(uint8_t))}) &&
          isCanonicalOperation(Operations[8], NdOp::COPY,
                               NdVar::reg(x86reg::OF, 1),
-                              {NdVar::cst(0, sizeof(uint8_t))});
+                              {NdVar::scalar(0, sizeof(uint8_t))});
 }
 
 bool isCanonicalConditionalBranch(const LowOp &Operation,
@@ -1223,7 +1223,8 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
         return NdVar::reg(Register.Offset, sizeof(uint64_t));
       }
       if (Operand.type == X86_OP_IMM)
-        return NdVar::cst(static_cast<uint64_t>(Operand.imm), sizeof(uint64_t));
+        return NdVar::scalar(static_cast<uint64_t>(Operand.imm),
+                             sizeof(uint64_t));
       return std::nullopt;
     };
 
@@ -1354,7 +1355,7 @@ validatePublishedScalarSlice(const TranslationBlockDescriptorV1 &Block) {
               return Operation.Opcode == NdOp::COPY &&
                      Operation.Output == Destination &&
                      Operation.NumInputs == 1 &&
-                     Operation.Inputs[0] == NdVar::cst(0, sizeof(uint64_t));
+                     Operation.Inputs[0] == NdVar::scalar(0, sizeof(uint64_t));
             });
         constexpr std::array<uint64_t, 5> RequiredFlags = {
             x86reg::CF, x86reg::PF, x86reg::ZF, x86reg::SF, x86reg::OF};
