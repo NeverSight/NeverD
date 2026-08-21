@@ -207,7 +207,7 @@ TEST(SinkScanner, ImportBeatsDebugForCalleeName) {
 TEST(SinkScanner, DebugKindSelectsNameSource) {
   BinaryImage Img;
   std::vector<MedFunc> Funcs;
-  Funcs.push_back(makeCallFunc(0x100, "f", 0x5000, "memcpy"));
+  Funcs.push_back(makeCallFunc(0x100, "f", 0x5000, "sub_5000"));
 
   OneFunctionDebug Dbg(0x5000, "memcpy");
   AnalysisInput In;
@@ -216,8 +216,10 @@ TEST(SinkScanner, DebugKindSelectsNameSource) {
   In.Dbg = &Dbg;
 
   In.DebugKind = DebugInfoKind::DWARF;
-  EXPECT_EQ(scanSinks(In, SinkCatalog::defaults())[0].Source,
-            NameSource::Dwarf);
+  std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].StatedName, "memcpy");
+  EXPECT_EQ(Sites[0].Source, NameSource::Dwarf);
   In.DebugKind = DebugInfoKind::PDB;
   EXPECT_EQ(scanSinks(In, SinkCatalog::defaults())[0].Source, NameSource::Pdb);
   In.DebugKind = DebugInfoKind::Map;
@@ -269,10 +271,16 @@ TEST(SinkScanner, ExportAndSymbolAndSignatureFallbacks) {
   EXPECT_EQ(scanSinks(In, SinkCatalog::defaults())[0].Source,
             NameSource::Symbol);
 
-  // With neither, a signature-named address -> sig.
+  // With neither, a signature-only name replaces the stale placeholder and
+  // supplies its matching origin atomically.
   BinaryImage Img3;
-  std::set<va_t> SigNamed{0x3000};
+  Funcs[0].CallInfos[0].TargetName = "sub_3000";
+  std::unordered_map<va_t, std::string> SignatureNames{{0x3000, "memcpy"}};
   In.Img = &Img3;
-  In.SignatureNamed = &SigNamed;
-  EXPECT_EQ(scanSinks(In, SinkCatalog::defaults())[0].Source, NameSource::Sig);
+  In.SignatureNames = &SignatureNames;
+  const std::vector<SinkSite> SignatureSites =
+      scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(SignatureSites.size(), 1u);
+  EXPECT_EQ(SignatureSites[0].StatedName, "memcpy");
+  EXPECT_EQ(SignatureSites[0].Source, NameSource::Sig);
 }

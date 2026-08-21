@@ -8,7 +8,9 @@
 
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
+#include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -27,6 +29,44 @@ void describeImage(const AnalysisInput &In, SafetyReport &R) {
 }
 
 } // namespace
+
+std::optional<std::string>
+neverd::safety::validatePipelineCoverage(const PipelineResult &Result) {
+  using Disposition = PipelineFunctionDisposition;
+  size_t AcceptedCount = 0;
+  for (const PipelineFunctionAudit &Audit : Result.FunctionAudits) {
+    bool Incomplete = false;
+    switch (Audit.Disposition) {
+    case Disposition::Candidate:
+    case Disposition::SkippedLimit:
+    case Disposition::RejectedLowIR:
+    case Disposition::RejectedIncomplete:
+    case Disposition::MedIRFailed:
+      Incomplete = true;
+      break;
+    case Disposition::Accepted:
+      ++AcceptedCount;
+      Incomplete = !Audit.HasLowIR || !Audit.HasMedIR || !Audit.MedIRVerified ||
+                   !Audit.DecodeFailures.empty() ||
+                   !Audit.UnsupportedInstructions.empty() ||
+                   !Audit.TruncatedPaths.empty() ||
+                   Audit.LiftedInstructions < Audit.DecodedInstructions;
+      break;
+    case Disposition::SkippedImportStub:
+    case Disposition::SkippedRuntimeScaffold:
+    case Disposition::RemovedJumpTableTarget:
+      break;
+    }
+    if (!Incomplete)
+      continue;
+    return "incomplete safety lift at 0x" + llvm::utohexstr(Audit.Entry) +
+           " (" + pipelineFunctionDispositionName(Audit.Disposition) + ")";
+  }
+  if (AcceptedCount == 0 || AcceptedCount != Result.LowFuncs.size() ||
+      AcceptedCount != Result.MedFuncs.size())
+    return "incomplete safety lift inventory";
+  return std::nullopt;
+}
 
 SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
                                      const SinkCatalog &Cat,
@@ -105,7 +145,7 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
     O["verdict"] = toString(F.TheVerdict);
     O["confidence"] = toString(F.TheConfidence);
     if (F.Capacity) {
-      O["capacity"] = static_cast<int64_t>(*F.Capacity);
+      O["capacity"] = *F.Capacity;
       O["capacity_kind"] = F.CapacityExact ? "exact" : "upper_bound";
     }
     if (!F.Detail.empty())

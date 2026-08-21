@@ -9,11 +9,49 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
+#include "neverd/pipeline/Pipeline.h"
 #include "neverd/safety/Safety.h"
 
 #include "llvm/Support/JSON.h"
 
+#include <limits>
+
 using namespace neverd::safety;
+
+TEST(SafetyReport, PipelineCoverageRejectsPartialFunctionLifts) {
+  neverd::PipelineResult Result;
+
+  neverd::PipelineFunctionAudit Accepted;
+  Accepted.Entry = 0x1000;
+  Accepted.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+  Accepted.HasLowIR = true;
+  Accepted.HasMedIR = true;
+  Accepted.MedIRVerified = true;
+  Result.FunctionAudits.push_back(Accepted);
+  Result.LowFuncs.resize(1);
+  Result.MedFuncs.resize(1);
+  EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  neverd::PipelineFunctionAudit Import;
+  Import.Entry = 0x2000;
+  Import.Disposition = neverd::PipelineFunctionDisposition::SkippedImportStub;
+  Result.FunctionAudits.push_back(Import);
+  EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  Result.FunctionAudits.front().TruncatedPaths.push_back(0x1010);
+  EXPECT_TRUE(validatePipelineCoverage(Result).has_value());
+  Result.FunctionAudits.front().TruncatedPaths.clear();
+
+  neverd::PipelineFunctionAudit Rejected;
+  Rejected.Entry = 0x3000;
+  Rejected.Disposition =
+      neverd::PipelineFunctionDisposition::RejectedIncomplete;
+  Result.FunctionAudits.push_back(Rejected);
+  const std::optional<std::string> Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("0x3000"), std::string::npos);
+  EXPECT_NE(Error->find("rejected-incomplete"), std::string::npos);
+}
 
 TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {
   SafetyReport Report;
@@ -57,6 +95,27 @@ TEST(SafetyReport, UnknownDominatesSafeAtTheRoot) {
   ASSERT_NE(Root, nullptr);
   EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
   EXPECT_EQ(Root->getString("confidence"), "LOW");
+}
+
+TEST(SafetyReport, PreservesUnsignedCapacityRange) {
+  SafetyReport Report;
+  Finding F;
+  F.TheVerdict = Verdict::Unknown;
+  F.Capacity = std::numeric_limits<uint64_t>::max();
+  Report.Findings.push_back(std::move(F));
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  const llvm::json::Array *Findings = Root->getArray("findings");
+  ASSERT_NE(Findings, nullptr);
+  ASSERT_EQ(Findings->size(), 1u);
+  const llvm::json::Object *FindingObject = Findings->front().getAsObject();
+  ASSERT_NE(FindingObject, nullptr);
+  const llvm::json::Value *Capacity = FindingObject->get("capacity");
+  ASSERT_NE(Capacity, nullptr);
+  EXPECT_EQ(Capacity->getAsUINT64(), std::numeric_limits<uint64_t>::max());
 }
 
 TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {

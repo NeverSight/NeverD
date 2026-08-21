@@ -14,6 +14,8 @@
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <cstdlib>
+#include <limits>
+#include <optional>
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -199,10 +201,38 @@ SinkCatalog SinkCatalog::defaults() {
 
 namespace {
 
-int fieldOr(const llvm::json::Object &O, llvm::StringRef Key, int Default) {
-  if (auto V = O.getInteger(Key))
-    return static_cast<int>(*V);
-  return Default;
+llvm::Expected<int> indexFieldOr(const llvm::json::Object &O,
+                                 llvm::StringRef Key, int Default) {
+  const llvm::json::Value *Raw = O.get(Key);
+  if (!Raw)
+    return Default;
+  auto Value = Raw->getAsInteger();
+  if (!Value || *Value < -1 ||
+      *Value > static_cast<int64_t>(std::numeric_limits<int>::max()))
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "sink field '%s' is out of range",
+                                   Key.str().c_str());
+  return static_cast<int>(*Value);
+}
+
+llvm::Expected<unsigned> severityFieldOr(const llvm::json::Object &O,
+                                         unsigned Default) {
+  const llvm::json::Value *Raw = O.get("severity");
+  if (!Raw)
+    return Default;
+  auto Value = Raw->getAsInteger();
+  if (!Value || *Value < 0 ||
+      static_cast<uint64_t>(*Value) > std::numeric_limits<unsigned>::max())
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "sink field 'severity' is out of range");
+  return static_cast<unsigned>(*Value);
+}
+
+std::optional<SinkKind> parseSinkKind(llvm::StringRef Kind) {
+  return llvm::StringSwitch<std::optional<SinkKind>>(Kind)
+#define SAFETY_SINK_KIND(ID, SPELLING) .Case(SPELLING, SinkKind::ID)
+#include "neverd/safety/SafetyEnums.def"
+      .Default(std::nullopt);
 }
 
 } // namespace
@@ -225,36 +255,67 @@ llvm::Error SinkCatalog::mergeSinksFromFile(llvm::StringRef Path) {
   if (!Items)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "sink specification has no sink list");
+  std::vector<SinkEntry> Pending;
+  Pending.reserve(Items->size());
   for (const llvm::json::Value &V : *Items) {
     const llvm::json::Object *O = V.getAsObject();
     if (!O)
-      continue;
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "sink entry is not an object");
     SinkEntry E;
     if (auto N = O->getString("name"))
       E.Name = N->str();
     if (E.Name.empty())
-      continue;
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "sink entry has no name");
     if (const llvm::json::Array *A = O->getArray("aliases"))
       for (const llvm::json::Value &AV : *A)
         if (auto S = AV.getAsString())
           E.Aliases.push_back(S->str());
-    llvm::StringRef Kind =
-        O->getString("kind").value_or(toString(SinkKind::Copy));
-    E.Kind = llvm::StringSwitch<SinkKind>(Kind)
-#define SAFETY_SINK_KIND(ID, SPELLING) .Case(SPELLING, SinkKind::ID)
-#include "neverd/safety/SafetyEnums.def"
-                 .Default(SinkKind::Copy);
-    E.Class = E.Kind == SinkKind::Format ? VulnClass::FormatString
-                                         : VulnClass::BufferOverflow;
-    E.DstArg = fieldOr(*O, "dst", -1);
-    E.SrcArg = fieldOr(*O, "src", -1);
-    E.LenArg = fieldOr(*O, "len", -1);
-    E.CapArg = fieldOr(*O, "cap", -1);
-    E.FmtArg = fieldOr(*O, "fmt", -1);
-    E.HandleArg = fieldOr(*O, "handle", -1);
-    E.Severity = static_cast<unsigned>(fieldOr(*O, "severity", 50));
-    addSink(std::move(E));
+    llvm::StringRef Kind = toString(SinkKind::Copy);
+    if (const llvm::json::Value *KindValue = O->get("kind")) {
+      auto KindString = KindValue->getAsString();
+      if (!KindString)
+        return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                       "sink kind is not a string");
+      Kind = *KindString;
+    }
+    std::optional<SinkKind> ParsedKind = parseSinkKind(Kind);
+    if (!ParsedKind)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "unknown sink kind '%s'",
+                                     Kind.str().c_str());
+    E.Kind = *ParsedKind;
+    E.Class = E.Kind == SinkKind::Copy     ? VulnClass::BufferOverflow
+              : E.Kind == SinkKind::Format ? VulnClass::FormatString
+                                           : VulnClass::Unknown;
+    auto readIndex = [&](llvm::StringRef Key, int &Out) -> llvm::Error {
+      llvm::Expected<int> Value = indexFieldOr(*O, Key, -1);
+      if (!Value)
+        return Value.takeError();
+      Out = *Value;
+      return llvm::Error::success();
+    };
+    if (llvm::Error Err = readIndex("dst", E.DstArg))
+      return Err;
+    if (llvm::Error Err = readIndex("src", E.SrcArg))
+      return Err;
+    if (llvm::Error Err = readIndex("len", E.LenArg))
+      return Err;
+    if (llvm::Error Err = readIndex("cap", E.CapArg))
+      return Err;
+    if (llvm::Error Err = readIndex("fmt", E.FmtArg))
+      return Err;
+    if (llvm::Error Err = readIndex("handle", E.HandleArg))
+      return Err;
+    llvm::Expected<unsigned> Severity = severityFieldOr(*O, 50);
+    if (!Severity)
+      return Severity.takeError();
+    E.Severity = *Severity;
+    Pending.push_back(std::move(E));
   }
+  for (SinkEntry &E : Pending)
+    addSink(std::move(E));
   return llvm::Error::success();
 }
 
@@ -276,17 +337,26 @@ llvm::Error SinkCatalog::mergeSourcesFromFile(llvm::StringRef Path) {
   if (!Items)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "source specification has no source list");
+  std::vector<SourceEntry> Pending;
+  Pending.reserve(Items->size());
   for (const llvm::json::Value &V : *Items) {
     const llvm::json::Object *O = V.getAsObject();
     if (!O)
-      continue;
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "source entry is not an object");
     SourceEntry E;
     if (auto N = O->getString("name"))
       E.Name = N->str();
     if (E.Name.empty())
-      continue;
-    E.OutArg = fieldOr(*O, "out", -1);
-    addSource(std::move(E));
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "source entry has no name");
+    llvm::Expected<int> OutArg = indexFieldOr(*O, "out", -1);
+    if (!OutArg)
+      return OutArg.takeError();
+    E.OutArg = *OutArg;
+    Pending.push_back(std::move(E));
   }
+  for (SourceEntry &E : Pending)
+    addSource(std::move(E));
   return llvm::Error::success();
 }

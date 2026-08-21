@@ -27,6 +27,7 @@
 #include <deque>
 #include <optional>
 #include <string>
+#include <utility>
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -175,6 +176,82 @@ bool requiresStringExtents(llvm::StringRef Name) {
       .Default(false);
 }
 
+struct CountedSourceReturn {
+  int BoundArg = -1;
+  bool AllowsMinusOne = false;
+  uint32_t ReturnBits = 0;
+};
+
+CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
+                                        BinaryFormat Format) {
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  if (Normalized == "read" || Normalized == "pread")
+    return {2, true,
+            Normalized == "read" && Format == BinaryFormat::COFF ? uint32_t(32)
+                                                                 : uint32_t(0)};
+  if (Normalized == "fread")
+    return {2, false, 0};
+  return {};
+}
+
+bool mayWriteMemory(NdOp Opcode) {
+  return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
+         Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
+}
+
+SymRef readLowValue(SymContext &Ctx, SymState &State, const NdVar &Value) {
+  const uint16_t Bytes = Value.Size ? Value.Size : uint16_t(8);
+  if (Value.isConst())
+    return Ctx.mkConst(uint32_t(Bytes) * 8, Value.Offset);
+  if (Value.isRam())
+    return State.load(Ctx.mkConst(64, Value.Offset), Bytes);
+  return State.read(Value.isTemp() ? SymSpace::Temporary : SymSpace::Register,
+                    Value.Offset, Bytes);
+}
+
+bool writeIsProvablyBeforeSource(SymContext &Ctx, SymState &State,
+                                 const LowOp &Op, SymRef Source,
+                                 const std::vector<SymRef> &Constraints,
+                                 const SafetyBudgets &Budgets) {
+  if (!Source.isValid() || Op.NumInputs < 2)
+    return false;
+  const SymRef Address =
+      Ctx.mkZExtOrTrunc(readLowValue(Ctx, State, Op.Inputs[0]), 64);
+  const uint64_t Bytes = Op.Inputs[1].Size ? Op.Inputs[1].Size : 1;
+  const SymRef NoOverflow =
+      Ctx.mkUle(Address, Ctx.mkConst(64, UINT64_MAX - Bytes));
+  const SymRef End = Ctx.mkAdd(Address, Ctx.mkConst(64, Bytes));
+  const SymRef Before = Ctx.mkUle(End, Ctx.mkZExtOrTrunc(Source, 64));
+  std::vector<SymRef> Counterexample = Constraints;
+  Counterexample.push_back(Ctx.mkNot(Ctx.mkAnd(NoOverflow, Before)));
+  bool Unknown = false;
+  return !pathFeasible(Ctx, Counterexample, Budgets, Unknown) && !Unknown;
+}
+
+bool expressionsMustEqual(SymContext &Ctx, SymRef Left, SymRef Right,
+                          const std::vector<SymRef> &Constraints,
+                          const SafetyBudgets &Budgets) {
+  if (!Left.isValid() || !Right.isValid())
+    return false;
+  Left = Ctx.mkZExtOrTrunc(Left, 64);
+  Right = Ctx.mkZExtOrTrunc(Right, 64);
+  if (Left == Right)
+    return true;
+  std::vector<SymRef> Counterexample = Constraints;
+  Counterexample.push_back(Ctx.mkNe(Left, Right));
+  bool Unknown = false;
+  return !pathFeasible(Ctx, Counterexample, Budgets, Unknown) && !Unknown;
+}
+
+bool valuesShareUniqueLoadOrigin(const SymState &State, SymRef Left,
+                                 SymRef Right) {
+  if (!Left.isValid() || !Right.isValid())
+    return false;
+  const SymState::LoadOrigin *LeftOrigin = State.loadOrigin(Left);
+  const SymState::LoadOrigin *RightOrigin = State.loadOrigin(Right);
+  return LeftOrigin && RightOrigin && *LeftOrigin == *RightOrigin;
+}
+
 SymRef captureReturn(const LowOp &Op, SymState &State,
                      const AnalysisInput &In) {
   if (Op.Output.isReg() && Op.Output.Size)
@@ -273,6 +350,9 @@ SymRef readCallArgument(const AnalysisInput &In, const MedFunc &Fn,
       return Ctx.mkConst(64, V.ConstVal);
     if (V.Kind == MedVar::Reg && V.Size > 0)
       return State.read(SymSpace::Register, V.RegOff, V.Size);
+    if (V.Kind == MedVar::Param)
+      return Ctx.mkVar("param$" + std::to_string(V.Id),
+                       uint32_t(V.Size ? V.Size : uint16_t(8)) * 8);
     return SymRef();
   };
 
@@ -400,6 +480,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     unsigned Steps = 0;
     llvm::DenseMap<int, unsigned> Visits;
     SymRef ImplicitLen;
+    SymRef ImplicitSource;
+    bool ImplicitFromLength = false;
     bool SemanticUnknown = false;
     explicit Frontier(SymContext &C) : State(C) {}
   };
@@ -447,15 +529,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
       Exec.setCallPreservedRegisters(Preserved);
       for (size_t Oi = 0; Oi < Block->Ops.size(); ++Oi) {
         const LowOp &Op = Block->Ops[Oi];
+        const bool IsCall =
+            Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
         if (++Cur.Steps > MaxSteps) {
           Best.Budget = true;
           Stopped = true;
           break;
         }
 
-        const bool IsSinkCall =
-            (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
-            Op.Addr == Site.CallVA;
+        const bool IsSinkCall = IsCall && Op.Addr == Site.CallVA;
         if (IsSinkCall) {
           bool Unknown = false;
           if (!pathFeasible(Ctx, Cur.Constraints, Budgets, Unknown)) {
@@ -485,7 +567,17 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                                  : Ctx.mkAnd(Cur.Constraints));
           SymRef Len = CI ? readCallArgument(In, Fn, E.LenArg, *CI, Cur.State)
                           : SymRef();
-          if (!Len.isValid() && Cur.ImplicitLen.isValid()) {
+          SymRef SinkSource =
+              CI ? readCallArgument(In, Fn, E.SrcArg, *CI, Cur.State)
+                 : SymRef();
+          const bool SameImplicitSource =
+              expressionsMustEqual(Ctx, Cur.ImplicitSource, SinkSource,
+                                   Cur.Constraints, Budgets) ||
+              (Cur.ImplicitFromLength &&
+               valuesShareUniqueLoadOrigin(Cur.State, Cur.ImplicitSource,
+                                           SinkSource));
+          if (!Len.isValid() && Cur.ImplicitLen.isValid() &&
+              SameImplicitSource) {
             Len = Ctx.mkZExtOrTrunc(Cur.ImplicitLen, 64);
             if (Implicit)
               Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
@@ -511,11 +603,34 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           break;
         }
 
-        const MedCallInfo *Callee = medCallAt(Fn, Op.Addr);
+        const MedCallInfo *Callee = IsCall ? medCallAt(Fn, Op.Addr) : nullptr;
         const std::string CalleeName =
             Callee ? resolveCallName(In, *Callee) : "";
         const bool LengthCall = Callee && isStringLengthCall(CalleeName);
-        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        const CountedSourceReturn CountedReturn =
+            Callee ? countedSourceReturn(CalleeName,
+                                         In.Img ? In.Img->Format
+                                                : BinaryFormat::Unknown)
+                   : CountedSourceReturn{};
+        const SourceEntry *CountedSource = Callee && CountedReturn.BoundArg >= 0
+                                               ? Cat.matchSource(CalleeName)
+                                               : nullptr;
+        SymRef ReturnBound;
+        if (Callee && CountedReturn.BoundArg >= 0)
+          ReturnBound = readCallArgument(In, Fn, CountedReturn.BoundArg,
+                                         *Callee, Cur.State);
+        SymRef NextImplicitSource;
+        const bool CaptureLength = LengthCall && Callee;
+        const bool CaptureCountedSource =
+            E.LenArg >= 0 && Callee && CountedSource &&
+            CountedSource->OutArg >= 0 &&
+            CountedSource->OutArg < static_cast<int>(Callee->Args.size());
+        if (CaptureLength)
+          NextImplicitSource = readCallArgument(In, Fn, 0, *Callee, Cur.State);
+        else if (CaptureCountedSource)
+          NextImplicitSource = readCallArgument(In, Fn, CountedSource->OutArg,
+                                                *Callee, Cur.State);
+        if (IsCall) {
           bool Summarized = LengthCall;
           if (Callee && Cat.matchSource(CalleeName))
             Summarized = true;
@@ -528,8 +643,67 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.SemanticUnknown = true;
         }
         StepResult SR = Exec.step(Op);
-        if (LengthCall)
-          Cur.ImplicitLen = captureReturn(Op, Cur.State, In);
+        SymRef CountedReturnValue;
+        if (CountedReturn.BoundArg >= 0) {
+          SymRef Ret = captureReturn(Op, Cur.State, In);
+          if (!ReturnBound.isValid() || !Ret.isValid())
+            Cur.SemanticUnknown = true;
+          else {
+            SymRef ConstraintRet = Ret;
+            if (CountedReturn.ReturnBits != 0 &&
+                CountedReturn.ReturnBits < Ctx.width(Ret))
+              ConstraintRet = Ctx.mkExtract(Ret, 0, CountedReturn.ReturnBits);
+            const uint32_t ReturnWidth = Ctx.width(ConstraintRet);
+            const SymRef IsError =
+                Ctx.mkEq(ConstraintRet, Ctx.mkOnes(ReturnWidth));
+            if (CountedReturn.ReturnBits != 0 &&
+                CountedReturn.ReturnBits < Ctx.width(Ret)) {
+              const uint16_t PointerBytes =
+                  In.Img ? getTargetRegInfo(In.Img->Arch).PointerSize : 0;
+              const uint32_t SemanticBits =
+                  PointerBytes ? uint32_t(PointerBytes) * 8 : Ctx.width(Ret);
+              CountedReturnValue =
+                  Ctx.mkIte(IsError, Ctx.mkOnes(SemanticBits),
+                            Ctx.mkZExtOrTrunc(ConstraintRet, SemanticBits));
+            } else {
+              CountedReturnValue = Ret;
+            }
+            const SymRef WideRet = Ctx.mkZExtOrTrunc(ConstraintRet, 64);
+            const SymRef WideBound = Ctx.mkZExtOrTrunc(ReturnBound, 64);
+            const SymRef WithinBound = Ctx.mkUle(WideRet, WideBound);
+            if (CountedReturn.AllowsMinusOne) {
+              const SymRef IsNonnegative =
+                  Ctx.mkSge(ConstraintRet, Ctx.mkZero(ReturnWidth));
+              Cur.Constraints.push_back(
+                  Ctx.mkOr(IsError, Ctx.mkAnd(IsNonnegative, WithinBound)));
+            } else {
+              Cur.Constraints.push_back(WithinBound);
+            }
+          }
+        }
+        if (IsCall) {
+          if (CaptureLength) {
+            Cur.ImplicitLen = captureReturn(Op, Cur.State, In);
+            Cur.ImplicitSource = NextImplicitSource;
+            Cur.ImplicitFromLength = true;
+          } else if (CaptureCountedSource && CountedReturnValue.isValid()) {
+            Cur.ImplicitLen = CountedReturnValue;
+            Cur.ImplicitSource = NextImplicitSource;
+            Cur.ImplicitFromLength = false;
+          } else {
+            Cur.ImplicitLen = SymRef();
+            Cur.ImplicitSource = SymRef();
+            Cur.ImplicitFromLength = false;
+          }
+        } else if (mayWriteMemory(Op.Opcode) &&
+                   (Cur.ImplicitFromLength ||
+                    !writeIsProvablyBeforeSource(Ctx, Cur.State, Op,
+                                                 Cur.ImplicitSource,
+                                                 Cur.Constraints, Budgets))) {
+          Cur.ImplicitLen = SymRef();
+          Cur.ImplicitSource = SymRef();
+          Cur.ImplicitFromLength = false;
+        }
         if (SR == StepResult::Unmodelled) {
           Cur.SemanticUnknown = true;
           continue;
@@ -616,9 +790,18 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
   stampSite(Out, In, F, Site);
   const bool WideElements = usesWideElements(Site.Sink);
   const bool NeedsStringExtents = requiresStringExtents(Site.Sink);
+  const SourceEntry *DirectInput = Cat.matchSource(Site.Sink);
+  const bool UnboundedInput = E->LenArg < 0 && E->SrcArg < 0 &&
+                              E->DstArg >= 0 && DirectInput &&
+                              DirectInput->OutArg == E->DstArg;
 
   ArgClassification Arg =
       classifyArgument(In, Cat, F, Site.CallInfoIndex, Site.ArgIndex);
+  if (UnboundedInput) {
+    Arg.Flow = ArgFlow::Tainted;
+    Arg.TaintSource = SinkCatalog::normalize(Site.Sink);
+    Arg.Reason = "sink receives unbounded external input";
+  }
   Out.Flow = Arg.Flow;
 
   const bool Fortified = E->CapArg >= 0;
@@ -716,7 +899,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     Out.Constraints = Hit.PredText;
     addWitness(Out, *E, Hit.WitnessLen, Arg.TaintSource);
     Out.Corroboration = "path predicate and overflow are jointly satisfiable";
-    Out.BudgetHit = Hit.Budget;
+    Out.BudgetHit = Hit.Budget || Hit.SolverUnknown;
     return Out;
   }
   if (Hit.Kind == ExploreHit::InBound && Hit.Reached && !Hit.Budget &&
@@ -731,9 +914,9 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  if (Arg.Flow == ArgFlow::Tainted && E->LenArg < 0 && E->SrcArg >= 0 &&
-      Hit.Reached && !Hit.Budget && !Hit.SolverUnknown &&
-      !Hit.SemanticUnknown) {
+  if (Arg.Flow == ArgFlow::Tainted && E->LenArg < 0 &&
+      (E->SrcArg >= 0 || UnboundedInput) && Hit.Reached && !Hit.Budget &&
+      !Hit.SolverUnknown && !Hit.SemanticUnknown) {
     const bool GuardAllowsOverflow =
         !Fortified ||
         (RuntimeBound->ConstValue && *RuntimeBound->ConstValue > *Dst.Capacity);
@@ -751,7 +934,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
 
   Out.TheVerdict = Verdict::Unknown;
   Out.TheConfidence = Confidence::Low;
-  Out.BudgetHit = Hit.Budget;
+  Out.BudgetHit = Hit.Budget || Hit.SolverUnknown;
   if (Hit.Budget)
     Out.Detail = "exploration budget exhausted";
   else if (Hit.SemanticUnknown)

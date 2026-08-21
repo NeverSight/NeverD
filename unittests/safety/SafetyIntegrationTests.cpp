@@ -15,9 +15,14 @@
 #include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/sdk/NeverDCAPISafety.h"
 
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -31,6 +36,38 @@ struct FixtureSpec {
   std::string Path;
   std::string Format;
   std::string Arch;
+};
+
+class TemporaryFixture {
+public:
+  explicit TemporaryFixture(const std::string &Source) {
+    llvm::SmallString<128> UniqueDirectory;
+    if (std::error_code EC = llvm::sys::fs::createUniqueDirectory(
+            "neverd-safety-identity", UniqueDirectory)) {
+      Error = EC.message();
+      return;
+    }
+    Directory = UniqueDirectory.c_str();
+    Binary = Directory / std::filesystem::path(Source).filename();
+    if (std::error_code EC = llvm::sys::fs::copy_file(Source, Binary.string()))
+      Error = EC.message();
+  }
+
+  ~TemporaryFixture() {
+    if (Directory.empty())
+      return;
+    std::error_code EC;
+    std::filesystem::remove_all(Directory, EC);
+  }
+
+  bool valid() const { return Error.empty() && !Binary.empty(); }
+  const std::filesystem::path &path() const { return Binary; }
+  const std::string &error() const { return Error; }
+
+private:
+  std::filesystem::path Directory;
+  std::filesystem::path Binary;
+  std::string Error;
 };
 
 std::vector<FixtureSpec> fixtureSpecs() {
@@ -118,6 +155,18 @@ const llvm::json::Object *findingNamed(const llvm::json::Object &Root,
     if (auto Fn = O->getString("function"); Fn && namesMatch(*Fn, Function))
       return O;
   }
+  return nullptr;
+}
+
+const llvm::json::Object *findingWithNameSource(const llvm::json::Object &Root,
+                                                llvm::StringRef Source) {
+  const llvm::json::Array *Findings = Root.getArray("findings");
+  if (!Findings)
+    return nullptr;
+  for (const llvm::json::Value &V : *Findings)
+    if (const llvm::json::Object *O = V.getAsObject())
+      if (O->getString("name_source") == Source)
+        return O;
   return nullptr;
 }
 
@@ -403,6 +452,86 @@ TEST(SafetyCAPI, ExplicitMissingDebugCompanionsFailTheLoad) {
     EXPECT_FALSE(takeOwned(neverd_last_error(Sess)).empty());
     neverd_session_destroy(Sess);
   }
+}
+
+TEST(SafetyCAPI, SessionRenameDrivesSafetySinkIdentity) {
+  const FixtureSpec Spec = fixtureSpecs()[4];
+  TemporaryFixture Temp(Spec.Path);
+  ASSERT_TRUE(Temp.valid()) << Temp.error();
+
+  neverd_session_t Sess = neverd_session_create();
+  neverd_session_set_debug_info_enabled(Sess, 0);
+  ASSERT_TRUE(neverd_session_load(Sess, Temp.path().string().c_str()))
+      << takeOwned(neverd_last_error(Sess));
+  ASSERT_GE(neverd_func_find_by_name(Sess, "sub_140001000"), 0);
+  ASSERT_EQ(neverd_rename_func(Sess, "sub_140001000", "memcpy"), 0)
+      << takeOwned(neverd_last_error(Sess));
+
+  neverd_safety_options Options{};
+  Options.struct_size = sizeof(Options);
+  const std::string Json = takeOwned(neverd_session_hunt_json(Sess, &Options));
+  neverd_session_destroy(Sess);
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Json);
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  ASSERT_TRUE(Root->getBoolean("ok").value_or(false));
+  const llvm::json::Object *Renamed = findingWithNameSource(*Root, "rename");
+  ASSERT_NE(Renamed, nullptr);
+  EXPECT_EQ(Renamed->getString("name"), "memcpy");
+  EXPECT_EQ(Renamed->getString("sink"), "memcpy");
+}
+
+TEST(SafetyCAPI, SignatureOnlyNameDrivesSafetySinkIdentity) {
+  const FixtureSpec Spec = fixtureSpecs()[4];
+  TemporaryFixture Temp(Spec.Path);
+  ASSERT_TRUE(Temp.valid()) << Temp.error();
+
+  neverd_session_t Sess = neverd_session_create();
+  neverd_session_set_debug_info_enabled(Sess, 0);
+  ASSERT_TRUE(neverd_session_load(Sess, Temp.path().string().c_str()))
+      << takeOwned(neverd_last_error(Sess));
+
+  const int Target = neverd_func_find_by_name(Sess, "sub_140001000");
+  ASSERT_GE(Target, 0);
+  const neverd_va_t Entry = neverd_func_entry(Sess, Target);
+  unsigned char Bytes[16]{};
+  ASSERT_EQ(neverd_read_bytes(Sess, Entry, Bytes, sizeof(Bytes)),
+            static_cast<int>(sizeof(Bytes)));
+
+  std::string Pattern;
+  for (unsigned char Byte : Bytes)
+    Pattern += llvm::utohexstr(Byte, /*LowerCase=*/false, 2);
+  Pattern += " 00 0000 0010 :0000 memcpy\n";
+  const std::filesystem::path SignaturePath =
+      Temp.path().parent_path() / "identity.pat";
+  {
+    std::ofstream Output(SignaturePath, std::ios::binary);
+    ASSERT_TRUE(Output.good());
+    Output << Pattern;
+    ASSERT_TRUE(Output.good());
+  }
+
+  ASSERT_GT(neverd_apply_signature_file(Sess, SignaturePath.string().c_str()),
+            0)
+      << takeOwned(neverd_last_error(Sess));
+  ASSERT_GE(neverd_func_find_by_name(Sess, "memcpy"), 0);
+
+  neverd_safety_options Options{};
+  Options.struct_size = sizeof(Options);
+  const std::string Json = takeOwned(neverd_session_hunt_json(Sess, &Options));
+  neverd_session_destroy(Sess);
+
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Json);
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const llvm::json::Object *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  ASSERT_TRUE(Root->getBoolean("ok").value_or(false));
+  const llvm::json::Object *Signed = findingWithNameSource(*Root, "sig");
+  ASSERT_NE(Signed, nullptr);
+  EXPECT_EQ(Signed->getString("name"), "memcpy");
+  EXPECT_EQ(Signed->getString("sink"), "memcpy");
 }
 
 INSTANTIATE_TEST_SUITE_P(Fixtures, SafetyIntegration,

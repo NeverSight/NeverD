@@ -24,9 +24,21 @@
 #include "neverd/safety/SinkCatalog.h"
 #include "neverd/safety/SinkScanner.h"
 
+#include <optional>
 #include <string>
 
+namespace neverd {
+struct PipelineResult;
+}
+
 namespace neverd::safety {
+
+/// Validate that every real native function candidate reached verified MedIR.
+/// Legitimate import veneers and detector-only jump-table entries are not
+/// analysis gaps.  A returned message means a caller must report UNKNOWN
+/// instead of aggregating the surviving functions into a false SAFE result.
+std::optional<std::string>
+validatePipelineCoverage(const PipelineResult &Result);
 
 /// Hunt every copy sink for a destination overflow.
 SafetyReport runHunt(const AnalysisInput &In, const SinkCatalog &Cat,

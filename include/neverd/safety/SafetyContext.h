@@ -21,8 +21,8 @@
 #include "neverd/debug/DebugInfoDiscovery.h"
 
 #include <map>
-#include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace neverd {
@@ -55,9 +55,10 @@ struct AnalysisInput {
   /// Caller renames, keyed by function entry VA — the strongest identity.
   const std::map<va_t, std::string> *Renames = nullptr;
 
-  /// Entry VAs whose name was established by a signature match, when the caller
-  /// can supply it.  Absent simply means the analysis will not claim `sig`.
-  const std::set<va_t> *SignatureNamed = nullptr;
+  /// Names established by signature matching, keyed by entry VA.  Keeping the
+  /// name and its origin together prevents a signature-only identity from being
+  /// labelled `sig` while the scanner still tries to match a stale placeholder.
+  const std::unordered_map<va_t, std::string> *SignatureNames = nullptr;
 
   const MedFunc *findMedFunc(va_t Entry) const;
   const LowFunc *findLowFunc(va_t Entry) const;

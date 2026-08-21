@@ -138,3 +138,50 @@ TEST(SinkCatalog, FileOverrideReplacesEntry) {
   EXPECT_EQ(E->LenArg, 2);
   EXPECT_EQ(E->Severity, 90u);
 }
+
+TEST(SinkCatalog, RejectsUnknownSinkKind) {
+  std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_bad_sink_kind.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"bad","kind":"not-a-kind"}]})";
+  }
+  SinkCatalog C = SinkCatalog::defaults();
+  llvm::Error Err = C.mergeSinksFromFile(Path);
+  ASSERT_TRUE(static_cast<bool>(Err));
+  EXPECT_NE(llvm::toString(std::move(Err)).find("unknown sink kind"),
+            std::string::npos);
+  EXPECT_EQ(C.matchSink("bad"), nullptr);
+}
+
+TEST(SinkCatalog, RejectsOutOfRangeNumericFields) {
+  std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_bad_sink_number.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"bad","kind":"copy","dst":4294967296,)"
+       << R"("severity":-1}]})";
+  }
+  SinkCatalog C = SinkCatalog::defaults();
+  llvm::Error Err = C.mergeSinksFromFile(Path);
+  ASSERT_TRUE(static_cast<bool>(Err));
+  EXPECT_NE(llvm::toString(std::move(Err)).find("out of range"),
+            std::string::npos);
+  EXPECT_EQ(C.matchSink("bad"), nullptr);
+}
+
+TEST(SinkCatalog, SourceOverridesAreTransactional) {
+  std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_bad_sources.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sources":[{"name":"would_publish","out":0},)"
+       << R"({"name":"bad","out":4294967296}]})";
+  }
+  SinkCatalog C = SinkCatalog::defaults();
+  llvm::Error Err = C.mergeSourcesFromFile(Path);
+  ASSERT_TRUE(static_cast<bool>(Err));
+  EXPECT_NE(llvm::toString(std::move(Err)).find("out of range"),
+            std::string::npos);
+  EXPECT_EQ(C.matchSource("would_publish"), nullptr);
+}

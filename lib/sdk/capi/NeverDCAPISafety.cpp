@@ -14,8 +14,6 @@
 #include "llvm/Support/JSON.h"
 
 #include <cstddef>
-#include <set>
-
 using namespace neverd;
 using namespace neverd::sdk;
 
@@ -97,6 +95,9 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
   if (Res.MedFuncs.empty())
     return errorReport(Res.Error.empty() ? "lifting failed for this binary"
                                          : Res.Error);
+  if (std::optional<std::string> CoverageError =
+          safety::validatePipelineCoverage(Res))
+    return errorReport(*CoverageError);
 
   safety::AnalysisInput In;
   In.Img = &S->Img;
@@ -105,10 +106,8 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
   In.Dbg = S->Dbg.get();
   In.DebugKind = S->DbgKind;
   In.Renames = &S->Renames;
-  std::set<va_t> SigNamed;
-  for (const auto &M : S->SigDB.matches())
-    SigNamed.insert(M.Address);
-  In.SignatureNamed = &SigNamed;
+  const auto SignatureNames = S->SigDB.buildNameMap();
+  In.SignatureNames = &SignatureNames;
   const TargetRegInfo &TRI = getTargetRegInfo(S->Img.Arch);
   In.StackPointerReg = TRI.StackPointer;
   In.FramePointerReg = TRI.FramePointer;

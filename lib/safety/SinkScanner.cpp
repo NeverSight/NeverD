@@ -33,6 +33,11 @@ const LowFunc *AnalysisInput::findLowFunc(va_t Entry) const {
 
 namespace {
 
+struct ResolvedIdentity {
+  std::string Name;
+  NameSource Source = NameSource::Symbol;
+};
+
 const MedOp *opFor(const MedFunc &F, int BlockId, int OpIdx) {
   for (const MedBlock &B : F.Blocks)
     if (B.Id == BlockId)
@@ -40,18 +45,6 @@ const MedOp *opFor(const MedFunc &F, int BlockId, int OpIdx) {
                  ? &B.Ops[OpIdx]
                  : nullptr;
   return nullptr;
-}
-
-bool isImportAddress(const BinaryImage &Img, va_t Addr) {
-  if (Addr == 0)
-    return false;
-  if (Img.findImportAt(Addr))
-    return true;
-  if (Img.ImportPtrSlots.count(Addr))
-    return true;
-  if (Img.DyldBindSlots.count(Addr))
-    return true;
-  return false;
 }
 
 std::string importNameAt(const BinaryImage &Img, va_t Addr) {
@@ -68,43 +61,23 @@ std::string importNameAt(const BinaryImage &Img, va_t Addr) {
   return {};
 }
 
-} // namespace
-
-std::string neverd::safety::resolveCallName(const AnalysisInput &In,
-                                            const MedCallInfo &Call) {
-  if (!In.Img)
-    return Call.TargetName;
-
-  if (std::string Name = importNameAt(*In.Img, Call.TargetAddr); !Name.empty())
-    return Name;
-
-  if (Call.IsIndirect || Call.TargetAddr == 0) {
-    const std::string Norm = SinkCatalog::normalize(Call.TargetName);
-    if (!Norm.empty())
-      for (const Import &Imp : In.Img->Imports)
-        if (SinkCatalog::normalize(Imp.Name) == Norm)
-          return Imp.Name;
+ResolvedIdentity resolveIdentity(const AnalysisInput &In, va_t CalleeAddr,
+                                 llvm::StringRef StatedName, bool IsIndirect) {
+  if (In.Renames && CalleeAddr) {
+    if (auto It = In.Renames->find(CalleeAddr); It != In.Renames->end())
+      return {It->second, NameSource::Rename};
   }
 
-  return Call.TargetName;
-}
-
-NameSource neverd::safety::classifyNameSource(const AnalysisInput &In,
-                                              va_t CalleeAddr,
-                                              llvm::StringRef StatedName,
-                                              bool IsIndirect) {
-  if (In.Renames && CalleeAddr && In.Renames->count(CalleeAddr))
-    return NameSource::Rename;
-
   if (In.Img) {
-    if (CalleeAddr && isImportAddress(*In.Img, CalleeAddr))
-      return NameSource::Import;
+    if (std::string Name = importNameAt(*In.Img, CalleeAddr); !Name.empty())
+      return {std::move(Name), NameSource::Import};
+
     if (IsIndirect || CalleeAddr == 0) {
       const std::string Norm = SinkCatalog::normalize(StatedName);
       if (!Norm.empty())
         for (const Import &Imp : In.Img->Imports)
           if (SinkCatalog::normalize(Imp.Name) == Norm)
-            return NameSource::Import;
+            return {Imp.Name, NameSource::Import};
     }
   }
 
@@ -113,11 +86,11 @@ NameSource neverd::safety::classifyNameSource(const AnalysisInput &In,
         Fn && !Fn->Name.empty() && !isSynthesizedFuncName(Fn->Name)) {
       switch (In.DebugKind) {
       case DebugInfoKind::PDB:
-        return NameSource::Pdb;
+        return {Fn->Name, NameSource::Pdb};
       case DebugInfoKind::DWARF:
-        return NameSource::Dwarf;
+        return {Fn->Name, NameSource::Dwarf};
       case DebugInfoKind::Map:
-        return NameSource::Map;
+        return {Fn->Name, NameSource::Map};
       case DebugInfoKind::None:
         break;
       }
@@ -125,19 +98,38 @@ NameSource neverd::safety::classifyNameSource(const AnalysisInput &In,
   }
 
   if (In.Img && CalleeAddr) {
-    if (In.Img->findExportAt(CalleeAddr))
-      return NameSource::Export;
-    if (In.Img->findSymbolAt(CalleeAddr))
-      return NameSource::Symbol;
+    if (const Export *Exp = In.Img->findExportAt(CalleeAddr);
+        Exp && !Exp->Name.empty() && !isSynthesizedFuncName(Exp->Name))
+      return {Exp->Name, NameSource::Export};
+    if (const Symbol *Sym = In.Img->findSymbolAt(CalleeAddr);
+        Sym && !Sym->Name.empty() && !isSynthesizedFuncName(Sym->Name))
+      return {Sym->Name, NameSource::Symbol};
   }
 
-  if (In.SignatureNamed && CalleeAddr && In.SignatureNamed->count(CalleeAddr))
-    return NameSource::Sig;
+  if (In.SignatureNames && CalleeAddr) {
+    if (auto It = In.SignatureNames->find(CalleeAddr);
+        It != In.SignatureNames->end() && !It->second.empty())
+      return {It->second, NameSource::Sig};
+  }
 
-  if (isSynthesizedFuncName(StatedName))
-    return NameSource::Synthetic;
+  return {StatedName.str(), isSynthesizedFuncName(StatedName)
+                                ? NameSource::Synthetic
+                                : NameSource::Symbol};
+}
 
-  return NameSource::Symbol;
+} // namespace
+
+std::string neverd::safety::resolveCallName(const AnalysisInput &In,
+                                            const MedCallInfo &Call) {
+  return resolveIdentity(In, Call.TargetAddr, Call.TargetName, Call.IsIndirect)
+      .Name;
+}
+
+NameSource neverd::safety::classifyNameSource(const AnalysisInput &In,
+                                              va_t CalleeAddr,
+                                              llvm::StringRef StatedName,
+                                              bool IsIndirect) {
+  return resolveIdentity(In, CalleeAddr, StatedName, IsIndirect).Source;
 }
 
 std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,
@@ -149,8 +141,9 @@ std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,
   for (const MedFunc &F : *In.MedFuncs) {
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
       const MedCallInfo &CI = F.CallInfos[I];
-      std::string StatedName = resolveCallName(In, CI);
-      const SinkEntry *Entry = Cat.matchSink(StatedName);
+      ResolvedIdentity Identity =
+          resolveIdentity(In, CI.TargetAddr, CI.TargetName, CI.IsIndirect);
+      const SinkEntry *Entry = Cat.matchSink(Identity.Name);
       if (!Entry)
         continue;
 
@@ -162,7 +155,7 @@ std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,
       Site.CallInfoIndex = I;
       if (const MedOp *Op = opFor(F, CI.BlockId, CI.OpIdx))
         Site.CallVA = Op->Addr;
-      Site.StatedName = StatedName;
+      Site.StatedName = std::move(Identity.Name);
       Site.Sink = Entry->Name;
       Site.Class = Entry->Class;
       Site.Kind = Entry->Kind;
@@ -186,8 +179,7 @@ std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,
         break;
       }
 
-      Site.Source =
-          classifyNameSource(In, CI.TargetAddr, StatedName, CI.IsIndirect);
+      Site.Source = Identity.Source;
       Sites.push_back(std::move(Site));
     }
   }

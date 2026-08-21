@@ -25,30 +25,6 @@
 
 namespace neverd {
 
-const char *pipelineFunctionDispositionName(PipelineFunctionDisposition Value) {
-  switch (Value) {
-  case PipelineFunctionDisposition::Candidate:
-    return "candidate";
-  case PipelineFunctionDisposition::SkippedImportStub:
-    return "skipped-import-stub";
-  case PipelineFunctionDisposition::SkippedRuntimeScaffold:
-    return "skipped-runtime-scaffold";
-  case PipelineFunctionDisposition::SkippedLimit:
-    return "skipped-limit";
-  case PipelineFunctionDisposition::RejectedLowIR:
-    return "rejected-low-ir";
-  case PipelineFunctionDisposition::RejectedIncomplete:
-    return "rejected-incomplete";
-  case PipelineFunctionDisposition::RemovedJumpTableTarget:
-    return "removed-jump-table-target";
-  case PipelineFunctionDisposition::MedIRFailed:
-    return "med-ir-failed";
-  case PipelineFunctionDisposition::Accepted:
-    return "accepted";
-  }
-  return "unknown";
-}
-
 namespace {
 
 bool isELFRuntimeScaffold(llvm::StringRef Name) {
