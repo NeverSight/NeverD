@@ -21,6 +21,10 @@ TEST(SinkCatalog, NormalizesLeadingUnderscores) {
   EXPECT_EQ(SinkCatalog::normalize("memcpy"), "memcpy");
   EXPECT_EQ(SinkCatalog::normalize("__imp_memcpy"), "memcpy");
   EXPECT_EQ(SinkCatalog::normalize("msvcrt.dll!memcpy"), "memcpy");
+  EXPECT_EQ(SinkCatalog::normalize("__imp__ReadFile@20"), "ReadFile");
+  EXPECT_EQ(SinkCatalog::normalize("KERNEL32.dll!_ReadFile@20"), "ReadFile");
+  EXPECT_EQ(SinkCatalog::normalize("name@not_a_size"), "name@not_a_size");
+  EXPECT_EQ(SinkCatalog::normalize("@pascal_name"), "@pascal_name");
 }
 
 TEST(SinkCatalog, MatchesImportThunkSpelling) {
@@ -171,6 +175,7 @@ TEST(SinkCatalog, DefaultSourcesCoverPosixAndWin32) {
   ASSERT_NE(C.matchSource("scanf"), nullptr);
   EXPECT_FALSE(C.matchSource("scanf")->returnCarriesInput());
   ASSERT_NE(C.matchSource("ReadFile"), nullptr);
+  EXPECT_EQ(C.matchSource("__imp__ReadFile@20"), C.matchSource("ReadFile"));
   EXPECT_FALSE(C.matchSource("ReadFile")->returnCarriesInput());
   // PE/ucrt spells the same source as `_read`; the leading underscore folds.
   EXPECT_EQ(C.matchSource("_read"), Read);

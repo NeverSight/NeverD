@@ -26,7 +26,19 @@ std::string SinkCatalog::normalize(llvm::StringRef StatedName) {
     S = S.drop_front(Bang + 1);
   while (S.starts_with("__imp_"))
     S = S.drop_front(6);
-  return stripLeadingUnderscores(S).str();
+  S = stripLeadingUnderscores(S);
+  if (const size_t At = S.rfind('@');
+      At != llvm::StringRef::npos && At > 0 && At + 1 < S.size()) {
+    bool IsStdcallSuffix = true;
+    for (const char C : S.drop_front(At + 1))
+      if (C < '0' || C > '9') {
+        IsStdcallSuffix = false;
+        break;
+      }
+    if (IsStdcallSuffix)
+      S = S.take_front(At);
+  }
+  return S.str();
 }
 
 static llvm::StringRef lastIdentifier(llvm::StringRef Dem) {

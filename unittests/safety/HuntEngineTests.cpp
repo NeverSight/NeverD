@@ -1401,7 +1401,7 @@ TEST(HuntEngine, ReadFileByteCountUsesCOFFOutputContract) {
     B.F.Entry = 0x400000;
     B.F.CC = CallingConv::Win64;
     B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
-    B.call("KERNEL32.dll!ReadFile", temp(5, 4),
+    B.call("KERNEL32.dll!__imp__ReadFile@20", temp(5, 4),
            {MedVar::makeConst(1, 8), param(2),
             MedVar::makeConst(C.Requested, 8),
             MedVar::makeConst(BytesReadVA, 8), MedVar::makeConst(0, 8)});
