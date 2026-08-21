@@ -1614,7 +1614,8 @@ private:
         if (CountArg < 0 || CountArg >= static_cast<int>(CI.Args.size()))
           return CallUse::Possible;
         if (std::optional<uint64_t> Count = unsignedConstant(CI.Args[CountArg]))
-          return *Count == 0 ? CallUse::None : CallUse::Definite;
+          if (*Count == 0)
+            return CallUse::None;
         return CallUse::Possible;
       };
       if (Normalized == "read" || Normalized == "pread" ||
@@ -1632,10 +1633,11 @@ private:
         if ((ElementSize && *ElementSize == 0) ||
             (ElementCount && *ElementCount == 0))
           return CallUse::None;
-        return ElementSize && ElementCount ? CallUse::Definite
-                                           : CallUse::Possible;
+        return CallUse::Possible;
       }
-      return CallUse::Definite;
+      // External input APIs may fail or produce no output. Without a call
+      // result predicate, reaching the call proves only a possible access.
+      return CallUse::Possible;
     }
     if (isStringLengthCall(Name))
       return ArgIndex == 0 ? CallUse::Definite : CallUse::None;
