@@ -97,8 +97,18 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 ```json
 { "sinks": [
     { "name": "my_copy", "kind": "copy", "dst": 0, "src": 1, "len": 2 }
-] }
+  ],
+  "sources": [
+    { "name": "my_read", "out": 1, "return_tainted": true },
+    { "name": "my_scan", "out": -1, "return_tainted": false }
+  ]
+}
 ```
+
+`out` identifies a buffer written by the source. `return_tainted` separately
+states whether the returned pointer or scalar carries attacker-controlled
+input; when omitted, the legacy `out == -1` return-source convention applies.
+This keeps status/count returns distinct from buffer content.
 
 Destination-only input routines are not inferred to be unbounded merely
 because they also appear in the source catalog. A `gets`-like custom routine

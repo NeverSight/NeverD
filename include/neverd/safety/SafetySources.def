@@ -5,42 +5,53 @@
 // This file intentionally has no include guard.
 //
 // SAFETY_SOURCE(NAME, OUT)
+// SAFETY_SOURCE_RETURN(NAME, OUT)
+// SAFETY_SOURCE_NO_RETURN(NAME, OUT)
 //
-//   OUT is the argument index that receives the tainted bytes, or -1 when
-//   taint arrives through the return value.
+//   OUT is the argument index that receives tainted bytes, or -1 when there is
+//   no output-buffer argument.  The RETURN variants explicitly state whether
+//   the scalar/pointer return also carries attacker-controlled input.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef SAFETY_SOURCE
 #define SAFETY_SOURCE(NAME, OUT)
 #endif
+#ifndef SAFETY_SOURCE_RETURN
+#define SAFETY_SOURCE_RETURN(NAME, OUT) SAFETY_SOURCE(NAME, OUT)
+#endif
+#ifndef SAFETY_SOURCE_NO_RETURN
+#define SAFETY_SOURCE_NO_RETURN(NAME, OUT) SAFETY_SOURCE(NAME, OUT)
+#endif
 
 // POSIX providers.
-SAFETY_SOURCE(getenv, -1)
-SAFETY_SOURCE(secure_getenv, -1)
-SAFETY_SOURCE(read, 1)
-SAFETY_SOURCE(pread, 1)
-SAFETY_SOURCE(recv, 1)
-SAFETY_SOURCE(recvfrom, 1)
-SAFETY_SOURCE(fgets, 0)
-SAFETY_SOURCE(fread, 0)
-SAFETY_SOURCE(gets, 0)
-SAFETY_SOURCE(scanf, -1)
-SAFETY_SOURCE(fscanf, -1)
-SAFETY_SOURCE(sscanf, -1)
-SAFETY_SOURCE(isoc99_scanf, -1)
-SAFETY_SOURCE(isoc99_fscanf, -1)
-SAFETY_SOURCE(isoc99_sscanf, -1)
-SAFETY_SOURCE(isoc23_scanf, -1)
-SAFETY_SOURCE(isoc23_fscanf, -1)
-SAFETY_SOURCE(isoc23_sscanf, -1)
+SAFETY_SOURCE_RETURN(getenv, -1)
+SAFETY_SOURCE_RETURN(secure_getenv, -1)
+SAFETY_SOURCE_RETURN(read, 1)
+SAFETY_SOURCE_RETURN(pread, 1)
+SAFETY_SOURCE_RETURN(recv, 1)
+SAFETY_SOURCE_RETURN(recvfrom, 1)
+SAFETY_SOURCE_RETURN(fgets, 0)
+SAFETY_SOURCE_RETURN(fread, 0)
+SAFETY_SOURCE_RETURN(gets, 0)
+SAFETY_SOURCE_NO_RETURN(scanf, -1)
+SAFETY_SOURCE_NO_RETURN(fscanf, -1)
+SAFETY_SOURCE_NO_RETURN(sscanf, -1)
+SAFETY_SOURCE_NO_RETURN(isoc99_scanf, -1)
+SAFETY_SOURCE_NO_RETURN(isoc99_fscanf, -1)
+SAFETY_SOURCE_NO_RETURN(isoc99_sscanf, -1)
+SAFETY_SOURCE_NO_RETURN(isoc23_scanf, -1)
+SAFETY_SOURCE_NO_RETURN(isoc23_fscanf, -1)
+SAFETY_SOURCE_NO_RETURN(isoc23_sscanf, -1)
 
 // Win32 providers, so a PE hunt is not restricted to POSIX inputs.
-SAFETY_SOURCE(GetCommandLineA, -1)
-SAFETY_SOURCE(GetCommandLineW, -1)
-SAFETY_SOURCE(ReadFile, 1)
-SAFETY_SOURCE(GetEnvironmentVariableA, 1)
-SAFETY_SOURCE(GetEnvironmentVariableW, 1)
-SAFETY_SOURCE(argv, -1)
+SAFETY_SOURCE_RETURN(GetCommandLineA, -1)
+SAFETY_SOURCE_RETURN(GetCommandLineW, -1)
+SAFETY_SOURCE_NO_RETURN(ReadFile, 1)
+SAFETY_SOURCE_RETURN(GetEnvironmentVariableA, 1)
+SAFETY_SOURCE_RETURN(GetEnvironmentVariableW, 1)
+SAFETY_SOURCE_RETURN(argv, -1)
 
+#undef SAFETY_SOURCE_NO_RETURN
+#undef SAFETY_SOURCE_RETURN
 #undef SAFETY_SOURCE

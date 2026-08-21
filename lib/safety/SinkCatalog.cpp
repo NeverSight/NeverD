@@ -203,6 +203,10 @@ SinkCatalog SinkCatalog::defaults() {
 #include "neverd/safety/SafetySinks.def"
 
 #define SAFETY_SOURCE(NAME, OUT) C.addSource(SourceEntry{#NAME, OUT});
+#define SAFETY_SOURCE_RETURN(NAME, OUT)                                        \
+  C.addSource(SourceEntry{#NAME, OUT, true});
+#define SAFETY_SOURCE_NO_RETURN(NAME, OUT)                                     \
+  C.addSource(SourceEntry{#NAME, OUT, false});
 #include "neverd/safety/SafetySources.def"
 
   return C;
@@ -376,6 +380,14 @@ llvm::Error SinkCatalog::mergeSourcesFromFile(llvm::StringRef Path) {
     if (!OutArg)
       return OutArg.takeError();
     E.OutArg = *OutArg;
+    if (const llvm::json::Value *Raw = O->get("return_tainted")) {
+      std::optional<bool> Value = Raw->getAsBoolean();
+      if (!Value)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "source field 'return_tainted' is not a boolean");
+      E.TaintedReturn = *Value;
+    }
     Pending.push_back(std::move(E));
   }
   for (SourceEntry &E : Pending)

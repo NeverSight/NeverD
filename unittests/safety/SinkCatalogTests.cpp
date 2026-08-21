@@ -167,8 +167,48 @@ TEST(SinkCatalog, DefaultSourcesCoverPosixAndWin32) {
   const SourceEntry *Read = C.matchSource("read");
   ASSERT_NE(Read, nullptr);
   EXPECT_EQ(Read->OutArg, 1); // read(fd, buf, n) taints buf.
+  EXPECT_TRUE(Read->returnCarriesInput());
+  ASSERT_NE(C.matchSource("scanf"), nullptr);
+  EXPECT_FALSE(C.matchSource("scanf")->returnCarriesInput());
+  ASSERT_NE(C.matchSource("ReadFile"), nullptr);
+  EXPECT_FALSE(C.matchSource("ReadFile")->returnCarriesInput());
   // PE/ucrt spells the same source as `_read`; the leading underscore folds.
   EXPECT_EQ(C.matchSource("_read"), Read);
+}
+
+TEST(SinkCatalog, SourceReturnSemanticsAreConfigurable) {
+  std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_source_returns.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sources":[{"name":"implicit_return","out":-1},)"
+       << R"({"name":"output_and_count","out":0,"return_tainted":true},)"
+       << R"({"name":"scalar_status","out":-1,"return_tainted":false}]})";
+  }
+  SinkCatalog C = SinkCatalog::defaults();
+  ASSERT_FALSE((bool)C.mergeSourcesFromFile(Path));
+  ASSERT_NE(C.matchSource("implicit_return"), nullptr);
+  EXPECT_TRUE(C.matchSource("implicit_return")->returnCarriesInput());
+  ASSERT_NE(C.matchSource("output_and_count"), nullptr);
+  EXPECT_TRUE(C.matchSource("output_and_count")->returnCarriesInput());
+  ASSERT_NE(C.matchSource("scalar_status"), nullptr);
+  EXPECT_FALSE(C.matchSource("scalar_status")->returnCarriesInput());
+}
+
+TEST(SinkCatalog, InvalidSourceReturnSemanticsAreTransactional) {
+  std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_bad_source_return.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sources":[{"name":"would_publish","out":-1},)"
+       << R"({"name":"bad","out":0,"return_tainted":"yes"}]})";
+  }
+  SinkCatalog C = SinkCatalog::defaults();
+  llvm::Error Err = C.mergeSourcesFromFile(Path);
+  ASSERT_TRUE(static_cast<bool>(Err));
+  EXPECT_NE(llvm::toString(std::move(Err)).find("return_tainted"),
+            std::string::npos);
+  EXPECT_EQ(C.matchSource("would_publish"), nullptr);
 }
 
 TEST(SafetyVocab, JsonSpellingsComeFromTheEnumTable) {

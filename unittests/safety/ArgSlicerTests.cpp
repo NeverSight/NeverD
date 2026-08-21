@@ -158,6 +158,35 @@ TEST(ArgSlicer, ReadReturnIsTainted) {
   EXPECT_EQ(C.TaintSource, "read");
 }
 
+TEST(ArgSlicer, CustomReturnSourceUsesCatalogSemantics) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+  Cat.addSource(SourceEntry{"custom_input", -1});
+
+  MedFunc F = newFunc();
+  addCall(F, "custom_input", temp(5));
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(C.TaintSource, "custom_input");
+}
+
+TEST(ArgSlicer, ScanfReturnCountIsNotInputContent) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "scanf", temp(5));
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
+}
+
 TEST(ArgSlicer, UnknownLoadIsUnknown) {
   BinaryImage Img;
   AnalysisInput In;

@@ -589,6 +589,34 @@ TEST(HuntEngine, CustomSourceSinkIsNotImplicitlyUnbounded) {
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, CustomReturnSourceDrivesReachableCopyLength) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  SinkCatalog Cat = SinkCatalog::defaults();
+  Cat.addSource(SourceEntry{"custom_input", -1});
+
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("custom_input", temp(5), {});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = sourceReturnThenMemcpyLow(SourceVA, SinkVA,
+                                         /*RequireNonnegative=*/false);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::Unknown, /*Image=*/nullptr, &Cat);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  ASSERT_FALSE(Fnd->Witness.empty());
+  EXPECT_TRUE(std::any_of(
+      Fnd->Witness.begin(), Fnd->Witness.end(),
+      [](const auto &Item) { return Item.first == "custom_input"; }));
+}
+
 TEST(HuntEngine, ConstantCopyFitsSizedGlobalDestination) {
   BinaryImage Img;
   Segment Data;

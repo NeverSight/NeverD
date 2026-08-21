@@ -23,6 +23,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -62,13 +63,18 @@ struct SinkEntry {
   }
 };
 
-/// One external-input provider whose return value or output buffer is treated
-/// as attacker-controlled by the argument prefilter.
+/// One external-input provider whose return value and/or output buffer can be
+/// treated as attacker-controlled by the argument prefilter.
 struct SourceEntry {
   std::string Name;
-  /// The argument index that receives the tainted bytes, or -1 when the taint
-  /// arrives through the return value (getenv, recv-less read wrappers, ...).
+  /// The argument index that receives tainted bytes, or -1 when there is no
+  /// output-buffer argument.
   int OutArg = -1;
+  /// Explicit return-value semantics.  An absent value preserves the catalog's
+  /// legacy contract: a source without an output argument taints its return.
+  std::optional<bool> TaintedReturn;
+
+  bool returnCarriesInput() const { return TaintedReturn.value_or(OutArg < 0); }
 };
 
 /// A folded view of the catalog with normalized lookup.

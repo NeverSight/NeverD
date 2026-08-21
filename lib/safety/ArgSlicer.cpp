@@ -54,16 +54,6 @@ bool isCappedLengthReturn(llvm::StringRef Name) {
       .Default(false);
 }
 
-bool sourceReturnCarriesInput(llvm::StringRef Name) {
-  const std::string Normalized = SinkCatalog::normalize(Name);
-  return llvm::StringSwitch<bool>(Normalized)
-      .Cases({"getenv", "secure_getenv", "read", "pread"}, true)
-      .Cases({"recv", "recvfrom", "fgets", "fread", "gets"}, true)
-      .Cases({"GetCommandLineA", "GetCommandLineW"}, true)
-      .Cases({"GetEnvironmentVariableA", "GetEnvironmentVariableW"}, true)
-      .Default(false);
-}
-
 bool isMainLike(llvm::StringRef Name) {
   return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
 #define SAFETY_ENTRY_NAME(NAME) .Case(NAME, true)
@@ -637,7 +627,8 @@ private:
         }
         return ArgFlow::Unknown;
       }
-      if (CI && Cat.matchSource(Name) && sourceReturnCarriesInput(Name)) {
+      const SourceEntry *Source = CI ? Cat.matchSource(Name) : nullptr;
+      if (Source && Source->returnCarriesInput()) {
         if (Top.TaintSource.empty()) {
           Top.TaintSource = stripLeadingUnderscores(Name).str();
           Top.Reason = "reaches external input " + Top.TaintSource;
