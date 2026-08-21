@@ -143,4 +143,70 @@ void hashMemorySlots(StableHashWriter &Hash,
   }
 }
 
+namespace {
+
+void hashVariable(StableHashWriter &Hash, const NdVar &Variable) {
+  Hash.addByte(static_cast<uint8_t>(Variable.Space));
+  Hash.addU64(Variable.Offset);
+  Hash.addU16(Variable.Size);
+  Hash.addByte(static_cast<uint8_t>(Variable.Provenance));
+  Hash.addU64(Variable.AddressOwnerVA);
+}
+
+} // namespace
+
+void hashTranslationBlockDescriptor(
+    StableHashWriter &Hash, const TranslationBlockDescriptorV1 &Descriptor) {
+  const TranslationBlockDescriptorHeaderV1 &Header = Descriptor.Header;
+  Hash.addU32(Header.Magic);
+  Hash.addU16(Header.Version);
+  Hash.addU16(Header.Size);
+  Hash.addU32(static_cast<uint32_t>(Header.Terminator));
+  Hash.addU32(static_cast<uint32_t>(Header.Flags));
+  Hash.addU64(Header.EntryPC);
+  Hash.addU64(Header.FallthroughPC);
+  Hash.addU64(Header.StaticTargetPC);
+  Hash.addU64(Header.GuestInstructionCount);
+  Hash.addU64(Header.GuestByteCount);
+  Hash.addU64(Header.ReturnImmediate);
+  Hash.addBytes(Descriptor.Bytes);
+
+  Hash.addU64(Descriptor.InstructionBoundaries.size());
+  for (const LowInstructionBoundary &Boundary :
+       Descriptor.InstructionBoundaries) {
+    Hash.addU64(Boundary.Address);
+    Hash.addU16(Boundary.Size);
+    Hash.addU64(Boundary.FirstOp);
+    Hash.addU64(Boundary.OpCount);
+    Hash.addByte(static_cast<uint8_t>(Boundary.Mode));
+    Hash.addByte(static_cast<uint8_t>(Boundary.Control));
+    Hash.addU16(static_cast<uint16_t>(Boundary.ControlFlags));
+    Hash.addByte(static_cast<uint8_t>(Boundary.TargetMode));
+    Hash.addBool(Boundary.Immediate.has_value());
+    if (Boundary.Immediate)
+      Hash.addU64(*Boundary.Immediate);
+  }
+
+  static_assert(sizeof(int) == sizeof(int32_t));
+  Hash.addU64(Descriptor.Ops.size());
+  for (const LowOp &Op : Descriptor.Ops) {
+    Hash.addByte(static_cast<uint8_t>(Op.Opcode));
+    Hash.addByte(static_cast<uint8_t>(Op.MemoryOrdering));
+    hashVariable(Hash, Op.Output);
+    for (const NdVar &Input : Op.Inputs)
+      hashVariable(Hash, Input);
+    Hash.addByte(Op.NumInputs);
+    Hash.addU64(Op.Addr);
+    Hash.addI32(static_cast<int32_t>(Op.Seq));
+  }
+
+  Hash.addU64(Descriptor.GenerationBindings.size());
+  for (const GuestExecutableRangeBinding &Binding :
+       Descriptor.GenerationBindings) {
+    Hash.addU64(Binding.Address);
+    Hash.addU64(Binding.Size);
+    Hash.addU64(Binding.Generation);
+  }
+}
+
 } // namespace neverd::translate::detail

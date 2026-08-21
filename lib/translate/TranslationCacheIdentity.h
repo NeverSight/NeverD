@@ -7,6 +7,7 @@
 #ifndef NEVERD_LIB_TRANSLATE_TRANSLATIONCACHEIDENTITY_H
 #define NEVERD_LIB_TRANSLATE_TRANSLATIONCACHEIDENTITY_H
 
+#include "neverd/translate/TranslationBlock.h"
 #include "neverd/translate/TranslationObjectCompiler.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -51,6 +52,9 @@ void hashSemanticPolicy(StableHashWriter &Hash,
 
 void hashMemorySlots(StableHashWriter &Hash,
                      llvm::ArrayRef<TranslationIRMemorySlot> Slots);
+
+void hashTranslationBlockDescriptor(
+    StableHashWriter &Hash, const TranslationBlockDescriptorV1 &Descriptor);
 
 } // namespace neverd::translate::detail
 

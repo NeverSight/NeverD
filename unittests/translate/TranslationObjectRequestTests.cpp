@@ -1,5 +1,6 @@
 //===- TranslationObjectRequestTests.cpp - x86-64 object vertical slice -===//
 
+#include "TranslationCacheIdentity.h"
 #include "gtest/gtest.h"
 
 #include "neverd/translate/GuestState.h"
@@ -22,8 +23,19 @@
 #include <vector>
 
 using namespace neverd::translate;
+using neverd::LowOp;
+using neverd::NdMemoryOrdering;
+using neverd::NdOp;
+using neverd::NdVar;
+using neverd::TmpBase;
+using neverd::TmpStride;
 
 namespace {
+
+static_assert(kTranslationObjectWrapperCacheIdentityVersionV1 == 1);
+static_assert(kTranslationObjectWrapperCacheIdentityVersionV2 == 2);
+static_assert(kTranslationObjectWrapperCacheIdentityVersion ==
+              kTranslationObjectWrapperCacheIdentityVersionV2);
 
 constexpr uint64_t EntryPC = 0x401000;
 constexpr llvm::StringLiteral
@@ -107,6 +119,12 @@ undefinedSymbols(const llvm::object::ObjectFile &Object) {
   }
   llvm::sort(Result);
   return Result;
+}
+
+std::string descriptorIdentity(const TranslationBlockDescriptorV1 &Descriptor) {
+  detail::StableHashWriter Hash;
+  detail::hashTranslationBlockDescriptor(Hash, Descriptor);
+  return Hash.finish("test.translation-block.sha256:");
 }
 
 void expectRequestError(
@@ -352,6 +370,37 @@ TEST(TranslationObjectRequest,
             PermutedOrErr->artifact().requestCacheKey());
   EXPECT_EQ(FirstOrErr->artifact().artifactCacheKey(),
             PermutedOrErr->artifact().artifactCacheKey());
+}
+
+TEST(TranslationObjectRequest,
+     CacheIdentityDistinguishesAddressOccurrenceOwners) {
+  TranslationBlockDescriptorV1 First;
+  LowOp Op;
+  Op.Opcode = NdOp::COPY;
+  Op.Output = NdVar::tmp(TmpBase, 8);
+  Op.addInput(NdVar::dataAddress(0x2000, 8, 0x1000));
+  First.Ops.push_back(Op);
+
+  TranslationBlockDescriptorV1 Second = First;
+  Second.Ops.front().Inputs[0].AddressOwnerVA = 0x2000;
+
+  ASSERT_NE(First.Ops.front().Inputs[0], Second.Ops.front().Inputs[0]);
+  EXPECT_NE(descriptorIdentity(First), descriptorIdentity(Second));
+}
+
+TEST(TranslationObjectRequest, CacheIdentityDistinguishesMemoryOrdering) {
+  TranslationBlockDescriptorV1 Relaxed;
+  LowOp Op;
+  Op.Opcode = NdOp::LOAD;
+  Op.MemoryOrdering = NdMemoryOrdering::Relaxed;
+  Op.Output = NdVar::tmp(TmpBase, 8);
+  Op.addInput(NdVar::tmp(TmpBase + TmpStride, 8));
+  Relaxed.Ops.push_back(Op);
+
+  TranslationBlockDescriptorV1 Acquire = Relaxed;
+  Acquire.Ops.front().MemoryOrdering = NdMemoryOrdering::Acquire;
+
+  EXPECT_NE(descriptorIdentity(Relaxed), descriptorIdentity(Acquire));
 }
 
 TEST(TranslationObjectRequest, RejectsUnsupportedModeAndHostBeforeLowering) {

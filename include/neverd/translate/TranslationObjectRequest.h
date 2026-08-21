@@ -38,6 +38,9 @@ namespace neverd::translate {
 
 inline constexpr uint32_t kTranslationObjectRequestSchemaV1 = 1;
 inline constexpr uint32_t kTranslationObjectWrapperCacheIdentityVersionV1 = 1;
+inline constexpr uint32_t kTranslationObjectWrapperCacheIdentityVersionV2 = 2;
+inline constexpr uint32_t kTranslationObjectWrapperCacheIdentityVersion =
+    kTranslationObjectWrapperCacheIdentityVersionV2;
 
 /// Stable failures for the complete request boundary.  Nested typed codes are
 /// retained where a lower stage supplied them.  Append without renumbering.
