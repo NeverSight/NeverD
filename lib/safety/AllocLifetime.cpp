@@ -378,6 +378,20 @@ struct FreeEvent {
   bool IsIndirect = false;
 };
 
+struct UseEvent {
+  int BlockId = -1;
+  int OpIdx = -1;
+  va_t VA = 0;
+  va_t TargetAddr = 0;
+  std::string Name;
+  bool IsIndirect = false;
+};
+
+struct CollectedUses {
+  std::vector<UseEvent> Definite;
+  std::vector<UseEvent> Possible;
+};
+
 struct EventCursor {
   size_t PathIndex = 0;
   int BlockId = -1;
@@ -1087,22 +1101,21 @@ private:
           }
         }
 
-      std::vector<std::tuple<int, int, va_t>> Uses =
-          collectUses(F, Alias, Frees);
+      CollectedUses Uses = collectUses(F, Alias, Frees);
       bool ReportedUAF = false;
       for (const FreeEvent &Fr : Frees) {
         if (ReportedUAF)
           break;
-        for (const auto &U : Uses)
-          if (G.after(Fr.BlockId, Fr.OpIdx, std::get<0>(U), std::get<1>(U))) {
-            Finding Fn = baseFinding(F, VulnClass::UseAfterFree, std::get<2>(U),
-                                     Fr.Name, Fr.TargetAddr, Fr.IsIndirect);
+        for (const UseEvent &U : Uses.Definite)
+          if (G.after(Fr.BlockId, Fr.OpIdx, U.BlockId, U.OpIdx)) {
+            Finding Fn = baseFinding(F, VulnClass::UseAfterFree, U.VA, Fr.Name,
+                                     Fr.TargetAddr, Fr.IsIndirect);
             Fn.TheConfidence = Confidence::High;
             Fn.Detail = "handle used after it was released";
             Fn.RequiredPathEvents = {
                 {CI.BlockId, CI.OpIdx},
                 {Fr.BlockId, Fr.OpIdx},
-                {std::get<0>(U), std::get<1>(U)},
+                {U.BlockId, U.OpIdx},
             };
             Fn.RequireNonNullCallVA = AllocVA;
             Out.push_back(std::move(Fn));
@@ -1110,6 +1123,24 @@ private:
             break;
           }
       }
+      if (!ReportedUAF)
+        for (const FreeEvent &Fr : Frees) {
+          bool ReportedPossibleUAF = false;
+          for (const UseEvent &U : Uses.Possible) {
+            if (!G.after(Fr.BlockId, Fr.OpIdx, U.BlockId, U.OpIdx))
+              continue;
+            Finding Fn = baseFinding(F, VulnClass::UseAfterFree, U.VA, U.Name,
+                                     U.TargetAddr, U.IsIndirect);
+            Fn.TheVerdict = Verdict::Unknown;
+            Fn.TheConfidence = Confidence::Low;
+            Fn.Detail = "callee may access a handle after it was released";
+            Out.push_back(std::move(Fn));
+            ReportedPossibleUAF = true;
+            break;
+          }
+          if (ReportedPossibleUAF)
+            break;
+        }
 
       const bool MayLeak = shouldReportLeak(F, CI, Frees);
       if (MayLeak && (Escape == EscapeState::Unknown || UnresolvedLifecycle)) {
@@ -1186,9 +1217,44 @@ private:
       }
   }
 
-  std::vector<std::tuple<int, int, va_t>>
-  collectUses(const MedFunc &F, const llvm::DenseSet<ValueKey> &Alias,
-              const std::vector<FreeEvent> &Frees) const {
+  enum class CallUse : uint8_t { None, Definite, Possible };
+
+  CallUse callUse(const MedCallInfo &CI, int ArgIndex) const {
+    if (ArgIndex < 0 || ArgIndex >= static_cast<int>(CI.Args.size()))
+      return CallUse::Possible;
+    if (const SinkEntry *E = catalogSink(CI)) {
+      switch (E->Kind) {
+      case SinkKind::Copy:
+        return ArgIndex == E->DstArg || ArgIndex == E->SrcArg
+                   ? CallUse::Definite
+                   : CallUse::None;
+      case SinkKind::Format:
+        if (ArgIndex == E->DstArg || ArgIndex == E->FmtArg)
+          return CallUse::Definite;
+        if (ArgIndex == E->LenArg || ArgIndex == E->CapArg)
+          return CallUse::None;
+        return CallUse::Possible;
+      case SinkKind::Alloc:
+        return E->HandleArg >= 0 && ArgIndex == E->HandleArg ? CallUse::Definite
+                                                             : CallUse::None;
+      case SinkKind::Realloc:
+        return ArgIndex == E->HandleArg ? CallUse::Definite : CallUse::None;
+      case SinkKind::Free:
+      case SinkKind::StackAlloc:
+        return CallUse::None;
+      case SinkKind::Exec:
+      case SinkKind::Source:
+        return CallUse::Possible;
+      }
+    }
+    if (const SourceEntry *Source = Cat.matchSource(callName(CI)))
+      return ArgIndex == Source->OutArg ? CallUse::Definite : CallUse::Possible;
+    return CallUse::Possible;
+  }
+
+  CollectedUses collectUses(const MedFunc &F,
+                            const llvm::DenseSet<ValueKey> &Alias,
+                            const std::vector<FreeEvent> &Frees) const {
     auto isFree = [&](int BlockId, int OpIdx) {
       for (const FreeEvent &Fr : Frees)
         if (Fr.BlockId == BlockId && Fr.OpIdx == OpIdx)
@@ -1196,18 +1262,18 @@ private:
       return false;
     };
 
-    std::vector<std::tuple<int, int, va_t>> Uses;
+    CollectedUses Uses;
     for (const MedBlock &B : F.Blocks)
       for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
         const MedOp &Op = B.Ops[Oi];
         if (Op.Opcode == NdOp::LOAD) {
           const MedVar &Addr = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
           if (!Addr.isConst() && Alias.count(keyOf(Addr)))
-            Uses.emplace_back(B.Id, Oi, Op.Addr);
+            Uses.Definite.push_back({B.Id, Oi, Op.Addr});
         } else if (Op.Opcode == NdOp::STORE) {
           const MedVar &Addr = Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
           if (!Addr.isConst() && Alias.count(keyOf(Addr)))
-            Uses.emplace_back(B.Id, Oi, Op.Addr);
+            Uses.Definite.push_back({B.Id, Oi, Op.Addr});
         }
       }
     for (const MedCallInfo &CI : F.CallInfos) {
@@ -1216,14 +1282,26 @@ private:
       llvm::DenseSet<int> FreeArgs;
       for (int FA : freeArgsOf(CI))
         FreeArgs.insert(FA);
+      CallUse Use = CallUse::None;
       for (int I = 0; I < static_cast<int>(CI.Args.size()); ++I) {
         if (FreeArgs.count(I) || CI.Args[I].isConst())
           continue;
-        if (Alias.count(keyOf(CI.Args[I]))) {
-          Uses.emplace_back(CI.BlockId, CI.OpIdx, callVA(F, CI));
+        if (!Alias.count(keyOf(CI.Args[I])))
+          continue;
+        const CallUse ArgUse = callUse(CI, I);
+        if (ArgUse == CallUse::Definite) {
+          Use = CallUse::Definite;
           break;
         }
+        if (ArgUse == CallUse::Possible)
+          Use = CallUse::Possible;
       }
+      if (Use == CallUse::None)
+        continue;
+      UseEvent Event{CI.BlockId,    CI.OpIdx,     callVA(F, CI),
+                     CI.TargetAddr, callName(CI), CI.IsIndirect};
+      (Use == CallUse::Definite ? Uses.Definite : Uses.Possible)
+          .push_back(std::move(Event));
     }
     return Uses;
   }

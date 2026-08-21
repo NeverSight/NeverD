@@ -605,6 +605,33 @@ TEST(AllocLifetime, UseBeforeFreeIsClean) {
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, FreedPointerUsedAsAllocatorSizeIsNotAUseAfterFree) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "malloc", temp(2), {temp(1)});
+  B.call(b0, "free", MedVar{}, {temp(2)});
+  B.ret(b0, {});
+
+  EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, UnknownCallUseOfFreedPointerIsNotDefinite) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "observe_pointer", MedVar{}, {temp(1)}, 0x9200);
+  B.ret(b0, {});
+
+  const std::vector<Finding> Fs = audit({B.F});
+  const Finding *Use = find(Fs, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unknown);
+  EXPECT_NE(Use->Detail.find("may access"), std::string::npos);
+}
+
 TEST(AllocLifetime, OverwrittenSpillDoesNotRemainAHeapAlias) {
   FB B("f", 0x100);
   int b0 = B.block();
