@@ -94,9 +94,12 @@ inline std::optional<uint64_t> exactCountedMemoryBytes(llvm::StringRef Name,
   return Count;
 }
 
-inline bool fortifiedExactAccessIsRejected(llvm::StringRef Name,
-                                           BinaryFormat Format, uint64_t Count,
-                                           uint64_t ObjectCapacity) {
+inline bool fortifiedCountedAccessIsRejected(llvm::StringRef Name,
+                                             BinaryFormat Format,
+                                             uint64_t Count,
+                                             uint64_t ObjectCapacity) {
+  if (SinkCatalog::normalize(Name) == "strncpy_chk")
+    return Count > ObjectCapacity;
   std::optional<uint64_t> Bytes = exactCountedMemoryBytes(Name, Format, Count);
   return Bytes && *Bytes > ObjectCapacity;
 }

@@ -1468,7 +1468,7 @@ private:
         if (std::optional<uint64_t> Capacity =
                 unsignedConstant(CI.Args[E->CapArg]);
             Capacity &&
-            detail::fortifiedExactAccessIsRejected(
+            detail::fortifiedCountedAccessIsRejected(
                 callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
                 *Count, *Capacity))
           continue;
@@ -1543,7 +1543,7 @@ private:
               Count)
             if (std::optional<uint64_t> Capacity =
                     unsignedConstant(CI.Args[E->CapArg]);
-                Capacity && detail::fortifiedExactAccessIsRejected(
+                Capacity && detail::fortifiedCountedAccessIsRejected(
                                 callName(CI),
                                 In.Img ? In.Img->Format : BinaryFormat::Unknown,
                                 *Count, *Capacity))
