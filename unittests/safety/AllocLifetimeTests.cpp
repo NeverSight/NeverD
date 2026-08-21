@@ -646,6 +646,86 @@ TEST(AllocLifetime, AtomicValueDoesNotDereferenceFreedStorage) {
   EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, ZeroLengthMemcpyDoesNotUseFreedStorage) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "memcpy", temp(2), {temp(1), temp(3), MedVar::makeConst(0, 8)});
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F});
+  EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, PositiveLengthMemcpyUsesFreedStorage) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "memcpy", temp(2), {temp(1), temp(3), MedVar::makeConst(1, 8)});
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F});
+  EXPECT_TRUE(has(Fs, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, ZeroLengthWideCopyDoesNotUseFreedStorage) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "wmemmove", temp(2), {temp(1), temp(3), MedVar::makeConst(0, 8)});
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F});
+  EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, RuntimeLengthMemcpyUseAfterFreeFailsClosed) {
+  constexpr va_t MallocVA = 0x400;
+  constexpr va_t FreeVA = 0x408;
+  constexpr va_t MemcpyVA = 0x410;
+  FB B("f", 0x100);
+  B.F.Params.push_back(temp(8));
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000, MallocVA);
+  B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, FreeVA);
+  B.call(b0, "memcpy", temp(2), {temp(1), temp(3), temp(8)}, 0x9200, MemcpyVA);
+  B.ret(b0, {});
+
+  LowFunc LF;
+  LF.Entry = B.F.Entry;
+  LF.DecodedInstructionCount = 1;
+  LF.LiftedInstructionCount = 1;
+  LowBlock LB;
+  LB.Id = b0;
+  LB.StartAddr = B.F.Entry;
+  LB.EndAddr = MemcpyVA + 8;
+  LB.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, MallocVA));
+  LB.Ops.push_back(lowOp(NdOp::CALL, NdVar{}, {NdVar::cst(0x9100, 8)}, FreeVA));
+  LB.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9200, 8)}, MemcpyVA));
+  LB.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}, MemcpyVA + 4));
+  LF.Blocks.push_back(std::move(LB));
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::vector<MedFunc> MedFuncs{B.F};
+  std::vector<LowFunc> LowFuncs{std::move(LF)};
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &MedFuncs;
+  In.LowFuncs = &LowFuncs;
+  const std::vector<Finding> Fs =
+      auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const Finding *Use = find(Fs, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unknown) << Use->Detail;
+  EXPECT_EQ(Use->TheConfidence, Confidence::Low);
+}
+
 TEST(AllocLifetime, AtomicReadResultPreservesHeapAlias) {
   FB B("f", 0x100);
   int b0 = B.block();

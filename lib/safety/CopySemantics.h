@@ -53,9 +53,23 @@ inline bool usesTotalDestinationBound(llvm::StringRef Name) {
   return Normalized == "strlcpy" || Normalized == "strlcat";
 }
 
-inline std::optional<uint64_t>
-exactCopyReadBytes(llvm::StringRef Name, BinaryFormat Format, uint64_t Count) {
+inline bool isExactCountedMemoryAccess(llvm::StringRef Name) {
   const std::string Normalized = SinkCatalog::normalize(Name);
+  return Normalized == "memcpy" || Normalized == "memmove" ||
+         Normalized == "wmemcpy" || Normalized == "wmemmove" ||
+         Normalized == "bcopy" || Normalized == "memset" ||
+         Normalized == "bzero" || Normalized == "memcpy_chk" ||
+         Normalized == "memmove_chk" || Normalized == "memset_chk";
+}
+
+inline std::optional<uint64_t> exactCountedMemoryBytes(llvm::StringRef Name,
+                                                       BinaryFormat Format,
+                                                       uint64_t Count) {
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  if (!isExactCountedMemoryAccess(Normalized))
+    return std::nullopt;
+  if (Count == 0)
+    return 0;
   if (Normalized == "wmemcpy" || Normalized == "wmemmove") {
     std::optional<uint64_t> ElementBytes =
         countedWideElementBytes(Normalized, Format);
@@ -64,10 +78,17 @@ exactCopyReadBytes(llvm::StringRef Name, BinaryFormat Format, uint64_t Count) {
       return std::nullopt;
     return Count * *ElementBytes;
   }
+  return Count;
+}
+
+inline std::optional<uint64_t>
+exactCopyReadBytes(llvm::StringRef Name, BinaryFormat Format, uint64_t Count) {
+  const std::string Normalized = SinkCatalog::normalize(Name);
   if (Normalized == "memcpy" || Normalized == "memmove" ||
+      Normalized == "wmemcpy" || Normalized == "wmemmove" ||
       Normalized == "bcopy" || Normalized == "memcpy_chk" ||
       Normalized == "memmove_chk")
-    return Count;
+    return exactCountedMemoryBytes(Normalized, Format, Count);
   return std::nullopt;
 }
 

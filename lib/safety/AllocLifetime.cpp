@@ -49,6 +49,15 @@ bool isStringLengthCall(llvm::StringRef Name) {
       .Default(false);
 }
 
+std::optional<uint64_t> unsignedConstant(const MedVar &Value) {
+  if (!Value.isConst() || Value.Size == 0 || Value.Size > sizeof(uint64_t))
+    return std::nullopt;
+  const unsigned Bits = static_cast<unsigned>(Value.Size) * 8;
+  const uint64_t Mask = Bits == 64 ? std::numeric_limits<uint64_t>::max()
+                                   : (uint64_t{1} << Bits) - 1;
+  return Value.ConstVal & Mask;
+}
+
 bool mayForwardPointerInput(NdOp Op, unsigned Input) {
   switch (Op) {
   case NdOp::COPY:
@@ -1268,17 +1277,12 @@ private:
           E->SrcArg >= static_cast<int>(CI.Args.size()) ||
           E->LenArg >= static_cast<int>(CI.Args.size()))
         continue;
-      const MedVar &Length = CI.Args[E->LenArg];
-      if (!Length.isConst() || Length.Size == 0 ||
-          Length.Size > sizeof(uint64_t))
+      std::optional<uint64_t> Count = unsignedConstant(CI.Args[E->LenArg]);
+      if (!Count)
         continue;
-      const unsigned LengthBits = static_cast<unsigned>(Length.Size) * 8;
-      const uint64_t LengthMask = LengthBits == 64
-                                      ? std::numeric_limits<uint64_t>::max()
-                                      : (uint64_t{1} << LengthBits) - 1;
       const std::optional<uint64_t> Bytes = detail::exactCopyReadBytes(
           callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
-          Length.ConstVal & LengthMask);
+          *Count);
       if (!Bytes || *Bytes == 0)
         continue;
       const MedOp *CallOp = opAt(F, CI.BlockId, CI.OpIdx);
@@ -1330,9 +1334,16 @@ private:
     if (const SinkEntry *E = catalogSink(CI)) {
       switch (E->Kind) {
       case SinkKind::Copy:
-        return ArgIndex == E->DstArg || ArgIndex == E->SrcArg
-                   ? CallUse::Definite
-                   : CallUse::None;
+        if (ArgIndex != E->DstArg && ArgIndex != E->SrcArg)
+          return CallUse::None;
+        if (!detail::isExactCountedMemoryAccess(callName(CI)))
+          return CallUse::Definite;
+        if (E->LenArg < 0 || E->LenArg >= static_cast<int>(CI.Args.size()))
+          return CallUse::Possible;
+        if (std::optional<uint64_t> Count =
+                unsignedConstant(CI.Args[E->LenArg]))
+          return *Count == 0 ? CallUse::None : CallUse::Definite;
+        return CallUse::Possible;
       case SinkKind::Format:
         if (ArgIndex == E->DstArg || ArgIndex == E->FmtArg)
           return CallUse::Definite;
