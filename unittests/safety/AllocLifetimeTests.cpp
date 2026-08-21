@@ -582,6 +582,34 @@ TEST(AllocLifetime, SiblingFreesAreNotDoubleFree) {
   EXPECT_FALSE(has(Fs, VulnClass::DoubleFree));
 }
 
+TEST(AllocLifetime, RepeatedFreeSiteAcrossLoopBackedgeIsDoubleFree) {
+  FB B("f", 0x100);
+  int entry = B.block();
+  int loop = B.block();
+  int exit = B.block();
+  B.call(entry, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.succ(entry, loop);
+  B.call(loop, "free", MedVar{}, {temp(1)}, 0x9100, 0x408);
+  B.succ(loop, loop);
+  B.succ(loop, exit);
+  B.ret(exit, {});
+
+  EXPECT_TRUE(has(audit({B.F}), VulnClass::DoubleFree));
+}
+
+TEST(AllocLifetime, ReallocationOnLoopBackedgePreventsSameSiteDoubleFree) {
+  FB B("f", 0x100);
+  int loop = B.block();
+  int exit = B.block();
+  B.call(loop, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(loop, "free", MedVar{}, {temp(1)}, 0x9100, 0x408);
+  B.succ(loop, loop);
+  B.succ(loop, exit);
+  B.ret(exit, {});
+
+  EXPECT_FALSE(has(audit({B.F}), VulnClass::DoubleFree));
+}
+
 TEST(AllocLifetime, UseAfterFree) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -592,6 +620,22 @@ TEST(AllocLifetime, UseAfterFree) {
   B.ret(b0, {});
   auto Fs = audit({B.F});
   EXPECT_TRUE(has(Fs, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, UseAfterFreeAcrossLoopBackedge) {
+  FB B("f", 0x100);
+  int entry = B.block();
+  int loop = B.block();
+  int exit = B.block();
+  B.call(entry, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.succ(entry, loop);
+  B.op(loop, NdOp::LOAD, temp(2), {temp(1)}, 0x400);
+  B.call(loop, "free", MedVar{}, {temp(1)}, 0x9100, 0x408);
+  B.succ(loop, loop);
+  B.succ(loop, exit);
+  B.ret(exit, {});
+
+  EXPECT_TRUE(has(audit({B.F}), VulnClass::UseAfterFree));
 }
 
 TEST(AllocLifetime, UseBeforeFreeIsClean) {

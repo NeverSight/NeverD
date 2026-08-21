@@ -410,7 +410,7 @@ bool containsEventsInOrder(const symbolic::SymPath &Path,
       if (Path.Blocks[I] != Event.BlockId)
         continue;
       if (Cursor.Valid && I == Cursor.PathIndex &&
-          Event.BlockId == Cursor.BlockId && Event.OpIdx < Cursor.OpIdx)
+          Event.BlockId == Cursor.BlockId && Event.OpIdx <= Cursor.OpIdx)
         continue;
       Cursor = {I, Event.BlockId, Event.OpIdx, true};
       Found = true;
@@ -801,10 +801,11 @@ private:
     return ReachedEvent && !HasUncoveredExit;
   }
 
-  bool
-  reachesAnyEventWithoutBlocker(const MedFunc &F, int StartBlock, int StartOp,
-                                const std::vector<FreeEvent> &Targets,
-                                const std::vector<FreeEvent> &Blockers) const {
+  bool reachesAnyEventWithoutBlocker(const MedFunc &F, int StartBlock,
+                                     int StartOp,
+                                     const std::vector<FreeEvent> &Targets,
+                                     const std::vector<FreeEvent> &Blockers,
+                                     bool FollowExceptional = true) const {
     if (Targets.empty())
       return false;
     llvm::DenseSet<ValueKey> SeenPts;
@@ -826,7 +827,7 @@ private:
         }
       if (!Block)
         continue;
-      if (ExpandedExceptional.insert(BlockId).second)
+      if (FollowExceptional && ExpandedExceptional.insert(BlockId).second)
         for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs)
           if (Edge.BlockId >= 0)
             enqueue(Edge.BlockId, 0);
@@ -1056,6 +1057,9 @@ private:
       llvm::DenseSet<ValueKey> MustAlias =
           Mem.mustAliasClosure(AllocOp->Output);
       const va_t AllocVA = callVA(F, CI);
+      const std::vector<FreeEvent> AllocationSite = {
+          {CI.BlockId, CI.OpIdx, AllocVA, CI.TargetAddr, callName(CI),
+           CI.IsIndirect}};
 
       std::vector<FreeEvent> Frees;
       bool HasPotentialFree = false;
@@ -1080,10 +1084,10 @@ private:
       bool ReportedDouble = false;
       for (size_t A = 0; A < Frees.size() && !ReportedDouble; ++A)
         for (size_t B = 0; B < Frees.size(); ++B) {
-          if (A == B)
-            continue;
-          if (G.after(Frees[A].BlockId, Frees[A].OpIdx, Frees[B].BlockId,
-                      Frees[B].OpIdx)) {
+          const std::vector<FreeEvent> Target = {Frees[B]};
+          if (reachesAnyEventWithoutBlocker(F, Frees[A].BlockId, Frees[A].OpIdx,
+                                            Target, AllocationSite,
+                                            /*FollowExceptional=*/false)) {
             Finding Fn = baseFinding(F, VulnClass::DoubleFree, Frees[B].VA,
                                      Frees[B].Name, Frees[B].TargetAddr,
                                      Frees[B].IsIndirect);
@@ -1106,8 +1110,11 @@ private:
       for (const FreeEvent &Fr : Frees) {
         if (ReportedUAF)
           break;
-        for (const UseEvent &U : Uses.Definite)
-          if (G.after(Fr.BlockId, Fr.OpIdx, U.BlockId, U.OpIdx)) {
+        for (const UseEvent &U : Uses.Definite) {
+          const std::vector<FreeEvent> Target = {{U.BlockId, U.OpIdx}};
+          if (reachesAnyEventWithoutBlocker(F, Fr.BlockId, Fr.OpIdx, Target,
+                                            AllocationSite,
+                                            /*FollowExceptional=*/false)) {
             Finding Fn = baseFinding(F, VulnClass::UseAfterFree, U.VA, Fr.Name,
                                      Fr.TargetAddr, Fr.IsIndirect);
             Fn.TheConfidence = Confidence::High;
@@ -1122,12 +1129,16 @@ private:
             ReportedUAF = true;
             break;
           }
+        }
       }
       if (!ReportedUAF)
         for (const FreeEvent &Fr : Frees) {
           bool ReportedPossibleUAF = false;
           for (const UseEvent &U : Uses.Possible) {
-            if (!G.after(Fr.BlockId, Fr.OpIdx, U.BlockId, U.OpIdx))
+            const std::vector<FreeEvent> Target = {{U.BlockId, U.OpIdx}};
+            if (!reachesAnyEventWithoutBlocker(F, Fr.BlockId, Fr.OpIdx, Target,
+                                               AllocationSite,
+                                               /*FollowExceptional=*/false))
               continue;
             Finding Fn = baseFinding(F, VulnClass::UseAfterFree, U.VA, U.Name,
                                      U.TargetAddr, U.IsIndirect);
