@@ -259,10 +259,16 @@ TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
 
   EXPECT_EQ(Root->getInteger("scanned").value_or(-1), 7);
   EXPECT_EQ(Root->getInteger("unsafe").value_or(-1), 4);
-  EXPECT_EQ(Root->getInteger("unknown").value_or(-1), 0);
+  EXPECT_EQ(Root->getInteger("unknown").value_or(-1), 1);
   EXPECT_TRUE(hasClass(*Root, "heap_leak"));
   EXPECT_TRUE(hasClass(*Root, "double_free"));
   EXPECT_TRUE(hasClass(*Root, "use_after_free"));
+
+  const llvm::json::Object *UncheckedRead =
+      findingNamed(*Root, "tainted_heap_overflow");
+  ASSERT_NE(UncheckedRead, nullptr);
+  EXPECT_EQ(UncheckedRead->getString("class"), "uninitialized_read");
+  EXPECT_EQ(UncheckedRead->getString("verdict"), "UNKNOWN");
 
   if (const llvm::json::Object *O = findingNamed(*Root, "leaks_memory"))
     EXPECT_EQ(O->getString("class"), "heap_leak");

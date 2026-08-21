@@ -26,7 +26,9 @@
 
 #include <algorithm>
 #include <deque>
+#include <functional>
 #include <limits>
+#include <map>
 #include <tuple>
 
 using namespace neverd;
@@ -150,6 +152,177 @@ struct MemModel {
     return stackOffsetRec(V, 0, Seen);
   }
 
+  std::optional<int64_t> stackOffsetThroughReloads(const MedVar &V) const {
+    llvm::DenseSet<ValueKey> Active;
+    std::map<ValueKey, std::optional<int64_t>> Cache;
+    std::function<std::optional<int64_t>(const MedVar &, int)> Resolve =
+        [&](const MedVar &Current, int Depth) -> std::optional<int64_t> {
+      if (std::optional<int64_t> Direct = stackOffset(Current))
+        return Direct;
+      if (Current.isConst() || Depth > 32)
+        return std::nullopt;
+      const ValueKey Key = keyOf(Current);
+      if (auto It = Cache.find(Key); It != Cache.end())
+        return It->second;
+      if (!Active.insert(Key).second)
+        return std::nullopt;
+      struct PopActive {
+        llvm::DenseSet<ValueKey> &Set;
+        ValueKey Key;
+        ~PopActive() { Set.erase(Key); }
+      } Guard{Active, Key};
+
+      auto merge = [&](std::optional<int64_t> &Result,
+                       const MedVar &Candidate) {
+        std::optional<int64_t> Offset = Resolve(Candidate, Depth + 1);
+        if (!Offset || (Result && *Result != *Offset))
+          return false;
+        Result = Offset;
+        return true;
+      };
+
+      std::optional<int64_t> Result;
+      if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
+        const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+        if (Phi.Args.empty())
+          return Cache[Key] = std::nullopt;
+        for (const auto &[Pred, Arg] : Phi.Args) {
+          (void)Pred;
+          if (!merge(Result, Arg))
+            return Cache[Key] = std::nullopt;
+        }
+        return Cache[Key] = Result;
+      }
+
+      auto It = OpDef.find(Key);
+      if (It == OpDef.end())
+        return Cache[Key] = std::nullopt;
+      const MedBlock &Block = F.Blocks[It->second.first];
+      const int OpIdx = It->second.second;
+      const MedOp &Op = Block.Ops[OpIdx];
+      auto sameSize = [&](unsigned Input) {
+        return Input < Op.NumInputs && Op.Output.Size == Op.Inputs[Input].Size;
+      };
+      auto isZero = [&](unsigned Input) {
+        return Input < Op.NumInputs && Op.Inputs[Input].isConst() &&
+               Op.Inputs[Input].ConstVal == 0;
+      };
+      switch (Op.Opcode) {
+      case NdOp::COPY:
+      case NdOp::CAST:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+        if (sameSize(0))
+          Result = Resolve(Op.Inputs[0], Depth + 1);
+        break;
+      case NdOp::SUBBYTES:
+        if (sameSize(0) && isZero(1))
+          Result = Resolve(Op.Inputs[0], Depth + 1);
+        break;
+      case NdOp::INT_ADD:
+        if (sameSize(0) && isZero(1))
+          Result = Resolve(Op.Inputs[0], Depth + 1);
+        else if (isZero(0) && sameSize(1))
+          Result = Resolve(Op.Inputs[1], Depth + 1);
+        break;
+      case NdOp::INT_SUB:
+        if (sameSize(0) && isZero(1))
+          Result = Resolve(Op.Inputs[0], Depth + 1);
+        break;
+      case NdOp::SELECT:
+        if (Op.NumInputs >= 3 && sameSize(1) && sameSize(2) &&
+            merge(Result, Op.Inputs[1]) && merge(Result, Op.Inputs[2]))
+          break;
+        Result.reset();
+        break;
+      case NdOp::LOAD: {
+        detail::ReachingStackValues Reaching = reachingLoad(Block, OpIdx, Op);
+        if (!Reaching.Complete || Reaching.Values.empty())
+          break;
+        for (const MedVar &Stored : Reaching.Values)
+          if (!merge(Result, Stored)) {
+            Result.reset();
+            break;
+          }
+        break;
+      }
+      default:
+        break;
+      }
+      Cache[Key] = Result;
+      return Result;
+    };
+    return Resolve(V, 0);
+  }
+
+  bool mayBeStackAddressThroughReloads(const MedVar &V) const {
+    llvm::DenseSet<ValueKey> Active;
+    std::function<bool(const MedVar &, int)> MayBe = [&](const MedVar &Current,
+                                                         int Depth) {
+      if (stackOffsetThroughReloads(Current))
+        return true;
+      if (Current.isConst() || Depth > 32)
+        return false;
+      const ValueKey Key = keyOf(Current);
+      if (!Active.insert(Key).second)
+        return false;
+      struct PopActive {
+        llvm::DenseSet<ValueKey> &Set;
+        ValueKey Key;
+        ~PopActive() { Set.erase(Key); }
+      } Guard{Active, Key};
+
+      if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
+        const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+        for (const auto &[Pred, Arg] : Phi.Args) {
+          (void)Pred;
+          if (MayBe(Arg, Depth + 1))
+            return true;
+        }
+        return false;
+      }
+
+      auto It = OpDef.find(Key);
+      if (It == OpDef.end())
+        return false;
+      const MedBlock &Block = F.Blocks[It->second.first];
+      const int OpIdx = It->second.second;
+      const MedOp &Op = Block.Ops[OpIdx];
+      if (Op.Opcode == NdOp::LOAD) {
+        detail::ReachingStackValues Reaching = reachingLoad(Block, OpIdx, Op);
+        for (const MedVar &Stored : Reaching.Values)
+          if (MayBe(Stored, Depth + 1))
+            return true;
+        return false;
+      }
+
+      unsigned Begin = 0;
+      unsigned End = Op.NumInputs;
+      switch (Op.Opcode) {
+      case NdOp::COPY:
+      case NdOp::CAST:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+      case NdOp::SUBBYTES:
+        End = std::min<unsigned>(End, 1);
+        break;
+      case NdOp::SELECT:
+        Begin = std::min<unsigned>(1, End);
+        break;
+      case NdOp::INT_ADD:
+      case NdOp::INT_SUB:
+        break;
+      default:
+        return false;
+      }
+      for (unsigned I = Begin; I < End; ++I)
+        if (MayBe(Op.Inputs[I], Depth + 1))
+          return true;
+      return false;
+    };
+    return MayBe(V, 0);
+  }
+
   std::optional<int64_t> stackOffsetRec(const MedVar &V, int Depth,
                                         llvm::DenseSet<ValueKey> &Seen) const {
     if (!Have || V.isConst() || Depth > 48 || !Seen.insert(keyOf(V)).second)
@@ -263,17 +436,19 @@ struct MemModel {
                                            uint16_t Size) const {
     if (Size == 0)
       return {};
-    std::optional<int64_t> Off = stackOffset(Addr);
+    std::optional<int64_t> Off = stackOffsetThroughReloads(Addr);
     if (!Off)
       return {};
-    auto Resolve = [&](const MedVar &V) { return stackOffset(V); };
+    auto Resolve = [&](const MedVar &V) {
+      return stackOffsetThroughReloads(V);
+    };
     auto MayBeFrame = [&](const MedVar &V) {
-      llvm::DenseSet<ValueKey> Seen;
-      return mayBeStackAddress(V, 0, Seen);
+      return mayBeStackAddressThroughReloads(V);
     };
     return detail::reachingStackValues(F, B.Id, OpIdx, *Off, Size, Resolve,
                                        MayBeFrame,
-                                       /*RequireMemoryRead=*/false);
+                                       /*RequireMemoryRead=*/false,
+                                       /*InvalidateEscapedAddresses=*/false);
   }
 
   llvm::DenseSet<ValueKey> aliasClosureImpl(const MedVar &Seed,
@@ -1277,14 +1452,16 @@ private:
           E->SrcArg >= static_cast<int>(CI.Args.size()) ||
           E->LenArg >= static_cast<int>(CI.Args.size()))
         continue;
+      if (!detail::isExactCopySourceRead(callName(CI)))
+        continue;
       std::optional<uint64_t> Count = unsignedConstant(CI.Args[E->LenArg]);
-      if (!Count)
+      if (Count && *Count == 0)
         continue;
-      const std::optional<uint64_t> Bytes = detail::exactCopyReadBytes(
-          callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
-          *Count);
-      if (!Bytes || *Bytes == 0)
-        continue;
+      const std::optional<uint64_t> Bytes =
+          Count ? detail::exactCopyReadBytes(
+                      callName(CI),
+                      In.Img ? In.Img->Format : BinaryFormat::Unknown, *Count)
+                : std::nullopt;
       const MedOp *CallOp = opAt(F, CI.BlockId, CI.OpIdx);
       if (!CallOp ||
           (CallOp->Opcode != NdOp::CALL && CallOp->Opcode != NdOp::INDIR_CALL))
@@ -1298,11 +1475,14 @@ private:
       if (!Block)
         continue;
       const MedVar &Source = CI.Args[E->SrcArg];
-      const std::optional<int64_t> Offset = Mem.stackOffset(Source);
+      const std::optional<int64_t> Offset =
+          Mem.stackOffsetThroughReloads(Source);
       if (!Offset || *Offset >= 0)
         continue;
-      const uint16_t ReadSize = static_cast<uint16_t>(
-          std::min<uint64_t>(*Bytes, std::numeric_limits<uint16_t>::max()));
+      const uint16_t ReadSize =
+          Bytes ? static_cast<uint16_t>(std::min<uint64_t>(
+                      *Bytes, std::numeric_limits<uint16_t>::max()))
+                : 1;
       const detail::ReachingStackValues Reaching =
           Mem.reachingRead(*Block, CI.OpIdx, Source, ReadSize);
       if (!Reaching.Reachable ||
@@ -1310,7 +1490,7 @@ private:
         continue;
 
       const bool Definite =
-          !Reaching.HasUnknownWrites && Reaching.Values.empty();
+          Count && !Reaching.HasUnknownWrites && Reaching.Values.empty();
       Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
                                callName(CI), CI.TargetAddr, CI.IsIndirect);
       Fn.ArgIndex = E->SrcArg;

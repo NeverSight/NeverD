@@ -94,11 +94,10 @@ inline std::optional<int64_t> checkedStackOffset(int64_t Base, int64_t Delta,
 }
 
 template <typename ResolveOffset, typename MayBeFrameAddress>
-ReachingStackValues
-reachingStackValues(const MedFunc &F, int LoadBlockId, int LoadOpIdx,
-                    int64_t TargetOffset, uint16_t LoadSize,
-                    ResolveOffset Resolve, MayBeFrameAddress MayBeFrame,
-                    bool RequireMemoryRead = true) {
+ReachingStackValues reachingStackValues(
+    const MedFunc &F, int LoadBlockId, int LoadOpIdx, int64_t TargetOffset,
+    uint16_t LoadSize, ResolveOffset Resolve, MayBeFrameAddress MayBeFrame,
+    bool RequireMemoryRead = true, bool InvalidateEscapedAddresses = true) {
   ReachingStackValues Result;
   if (LoadOpIdx < 0 || LoadSize == 0)
     return Result;
@@ -229,7 +228,7 @@ reachingStackValues(const MedFunc &F, int LoadBlockId, int LoadOpIdx,
       const uint16_t WriteSize = Value ? Value->Size : Op.Output.Size;
       if (!stackRangesOverlap(*WriteOffset, WriteSize, TargetOffset,
                               LoadSize)) {
-        if (Value)
+        if (Value && InvalidateEscapedAddresses)
           if (auto Escaped = Resolve(*Value);
               Escaped && *Escaped == TargetOffset)
             invalidate(S);

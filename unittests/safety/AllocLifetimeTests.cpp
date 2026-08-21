@@ -1094,6 +1094,67 @@ TEST(AllocLifetime, BoundedStringCopyIsNotTreatedAsAnExactMemoryRead) {
   EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
 }
 
+TEST(AllocLifetime, RuntimeLengthStackMemcpyReadFailsClosed) {
+  FB B("f", 0x100);
+  B.F.Params.push_back(temp(20));
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(b0, "memcpy", temp(11), {temp(12), temp(10), temp(20)}, 0x9000, 0x408);
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Read->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, RuntimeLengthStackMemcpyReadSurvivesPointerSpill) {
+  FB B("f", 0x100);
+  B.F.Params.push_back(temp(20));
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x40, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(13),
+       {mkReg(kSP, 1), MedVar::makeConst(0x28, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(13), temp(10)});
+  B.op(b0, NdOp::LOAD, temp(14), {temp(13)});
+  B.op(b0, NdOp::COPY, temp(15), {temp(14)});
+  B.call(b0, "memcpy", temp(11), {temp(12), temp(15), temp(20)}, 0x9000, 0x408);
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, InitializedStackMemcpyReadSurvivesPointerSpill) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x40, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(0x1234, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(13),
+       {mkReg(kSP, 1), MedVar::makeConst(0x28, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(13), temp(10)});
+  B.op(b0, NdOp::LOAD, temp(14), {temp(13)});
+  B.op(b0, NdOp::COPY, temp(15), {temp(14)});
+  B.call(b0, "memcpy", temp(11), {temp(12), temp(15), MedVar::makeConst(8, 8)},
+         0x9000, 0x408);
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                  /*IncludeStackReads=*/true);
+  EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
+}
+
 TEST(AllocLifetime, UninitializedLocalStackAtomicReadIsReported) {
   FB B("f", 0x100);
   int b0 = B.block();

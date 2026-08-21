@@ -94,13 +94,18 @@ inline std::optional<uint64_t> exactCountedMemoryBytes(llvm::StringRef Name,
   return Count;
 }
 
+inline bool isExactCopySourceRead(llvm::StringRef Name) {
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  return Normalized == "memcpy" || Normalized == "memmove" ||
+         Normalized == "wmemcpy" || Normalized == "wmemmove" ||
+         Normalized == "bcopy" || Normalized == "memcpy_chk" ||
+         Normalized == "memmove_chk";
+}
+
 inline std::optional<uint64_t>
 exactCopyReadBytes(llvm::StringRef Name, BinaryFormat Format, uint64_t Count) {
   const std::string Normalized = SinkCatalog::normalize(Name);
-  if (Normalized == "memcpy" || Normalized == "memmove" ||
-      Normalized == "wmemcpy" || Normalized == "wmemmove" ||
-      Normalized == "bcopy" || Normalized == "memcpy_chk" ||
-      Normalized == "memmove_chk")
+  if (isExactCopySourceRead(Normalized))
     return exactCountedMemoryBytes(Normalized, Format, Count);
   return std::nullopt;
 }
