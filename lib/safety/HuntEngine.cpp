@@ -200,6 +200,13 @@ struct CountedSourceReturn {
   int RequiredZeroArg = -1;
 };
 
+struct CountedSourceOutput {
+  int BoundArg = -1;
+  int CountPointerArg = -1;
+  uint32_t CountBits = 0;
+  uint32_t BoundBits = 0;
+};
+
 struct BoundedStringOutput {
   int BufferArg = -1;
   int BoundArg = -1;
@@ -217,6 +224,14 @@ CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
   if (Normalized == "recv" || Normalized == "recvfrom")
     return {2, true, Format == BinaryFormat::COFF ? uint32_t(32) : uint32_t(0),
             3};
+  return {};
+}
+
+CountedSourceOutput countedSourceOutput(llvm::StringRef Name,
+                                        BinaryFormat Format) {
+  if (Format == BinaryFormat::COFF &&
+      SinkCatalog::normalize(Name) == "ReadFile")
+    return {2, 3, 32, 32};
   return {};
 }
 
@@ -681,6 +696,11 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                          In.Img ? In.Img->Format
                                                 : BinaryFormat::Unknown)
                    : CountedSourceReturn{};
+        const CountedSourceOutput CountedOutput =
+            Callee ? countedSourceOutput(CalleeName,
+                                         In.Img ? In.Img->Format
+                                                : BinaryFormat::Unknown)
+                   : CountedSourceOutput{};
         const BoundedStringOutput BoundedString =
             Callee ? boundedStringOutput(CalleeName) : BoundedStringOutput{};
         bool CountedReturnApplies = Callee && CountedReturn.BoundArg >= 0;
@@ -693,8 +713,13 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                   Ctx, Ctx.mkEq(Ctx.mkZExtOrTrunc(Flags, 64), Ctx.mkZero(64)),
                   Cur.Constraints, Budgets);
         }
+        const bool CountedOutputApplies =
+            Callee && CountedOutput.BoundArg >= 0 &&
+            CountedOutput.CountPointerArg >= 0 && CountedOutput.CountBits > 0;
         const SourceEntry *CountedSource =
-            CountedReturnApplies ? Cat.matchSource(CalleeName) : nullptr;
+            CountedReturnApplies || CountedOutputApplies
+                ? Cat.matchSource(CalleeName)
+                : nullptr;
         const SourceEntry *CalleeSource =
             Callee ? Cat.matchSource(CalleeName) : nullptr;
         std::vector<std::pair<std::string, SymRef>> NewSourceEvents;
@@ -723,6 +748,14 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         if (CountedReturnApplies)
           ReturnBound = readCallArgument(In, Fn, CountedReturn.BoundArg,
                                          *Callee, Cur.State);
+        SymRef OutputBound;
+        SymRef OutputCountPointer;
+        if (CountedOutputApplies) {
+          OutputBound = readCallArgument(In, Fn, CountedOutput.BoundArg,
+                                         *Callee, Cur.State);
+          OutputCountPointer = readCallArgument(
+              In, Fn, CountedOutput.CountPointerArg, *Callee, Cur.State);
+        }
         SymRef NextImplicitSource;
         SymRef BoundedStringLimit;
         const bool CaptureLength = LengthCall && Callee;
@@ -801,6 +834,28 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             }
           }
         }
+        SymRef CountedOutputValue;
+        if (CountedOutputApplies) {
+          const std::optional<llvm::APInt> CountPointerConstant =
+              OutputCountPointer.isValid() ? Ctx.asConst(OutputCountPointer)
+                                           : std::optional<llvm::APInt>();
+          if (!OutputBound.isValid() || !OutputCountPointer.isValid() ||
+              (CountPointerConstant && CountPointerConstant->isZero())) {
+            Cur.SemanticUnknown = true;
+          } else {
+            CountedOutputValue =
+                Cur.State.freshInput("source_count", CountedOutput.CountBits);
+            SymRef SemanticBound = OutputBound;
+            if (CountedOutput.BoundBits != 0 &&
+                CountedOutput.BoundBits < Ctx.width(SemanticBound))
+              SemanticBound =
+                  Ctx.mkExtract(SemanticBound, 0, CountedOutput.BoundBits);
+            Cur.Constraints.push_back(
+                Ctx.mkUle(Ctx.mkZExtOrTrunc(CountedOutputValue, 64),
+                          Ctx.mkZExtOrTrunc(SemanticBound, 64)));
+            Cur.State.store(OutputCountPointer, CountedOutputValue);
+          }
+        }
         if (IsCall) {
           if (CaptureLength) {
             Cur.ImplicitLen = captureReturn(Op, Cur.State, In);
@@ -808,8 +863,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.ImplicitSuccess = SymRef();
             Cur.ImplicitFromLength = true;
             Cur.ImplicitLenIncludesTerminator = false;
-          } else if (CaptureCountedSource && CountedReturnValue.isValid()) {
-            Cur.ImplicitLen = CountedReturnValue;
+          } else if (CaptureCountedSource && (CountedReturnValue.isValid() ||
+                                              CountedOutputValue.isValid())) {
+            Cur.ImplicitLen = CountedReturnValue.isValid() ? CountedReturnValue
+                                                           : CountedOutputValue;
             Cur.ImplicitSource = NextImplicitSource;
             Cur.ImplicitSuccess = SymRef();
             Cur.ImplicitFromLength = false;

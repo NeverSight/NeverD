@@ -442,6 +442,27 @@ LowFunc sourceReturnThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
   return LF;
 }
 
+LowFunc readFileThenMemcpyLow(va_t SourceVA, va_t MemcpyVA, va_t BytesReadVA,
+                              uint64_t CopyLengthReg = 24) {
+  constexpr uint64_t kRax = 0;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = kEntry;
+  Block.EndAddr = MemcpyVA + 8;
+  Block.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9000, 8)}, SourceVA));
+  Block.Ops.push_back(lop(NdOp::LOAD, NdVar::reg(CopyLengthReg, 4),
+                          {NdVar::cst(BytesReadVA, 8)}, SourceVA + 4));
+  Block.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, MemcpyVA));
+  Block.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}, MemcpyVA + 4));
+  LF.Blocks.push_back(std::move(Block));
+  return LF;
+}
+
 LowFunc formattedScalarThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
                                      va_t OutputSlot) {
   constexpr uint64_t kCopyLengthReg = 16;
@@ -1359,6 +1380,44 @@ TEST(HuntEngine, GuardedWinSockRecvUsesSigned32BitReturn) {
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, ReadFileByteCountUsesCOFFOutputContract) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  constexpr va_t BytesReadVA = 0x700000;
+  constexpr uint64_t CopyLengthReg = 24;
+  struct Case {
+    uint64_t Requested;
+    BinaryFormat Format;
+    Verdict Expected;
+  };
+  for (const Case C : {Case{8, BinaryFormat::COFF, Verdict::Safe},
+                       Case{32, BinaryFormat::COFF, Verdict::Unsafe},
+                       Case{8, BinaryFormat::ELF, Verdict::Unsafe}}) {
+    SCOPED_TRACE(static_cast<int>(C.Format));
+    SCOPED_TRACE(C.Requested);
+    Builder B;
+    B.F.Entry = 0x400000;
+    B.F.CC = CallingConv::Win64;
+    B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call("KERNEL32.dll!ReadFile", temp(5, 4),
+           {MedVar::makeConst(1, 8), param(2),
+            MedVar::makeConst(C.Requested, 8),
+            MedVar::makeConst(BytesReadVA, 8), MedVar::makeConst(0, 8)});
+    B.F.Blocks[0].Ops.back().Addr = SourceVA;
+    B.op(NdOp::LOAD, mkReg(CopyLengthReg, 1, 4),
+         {MedVar::makeConst(BytesReadVA, 8)});
+    B.call("memcpy", temp(0), {temp(1), param(2), mkReg(CopyLengthReg, 1, 4)});
+    B.F.Blocks[0].Ops.back().Addr = SinkVA;
+    LowFunc LF =
+        readFileThenMemcpyLow(SourceVA, SinkVA, BytesReadVA, CopyLengthReg);
+
+    auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, C.Format);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, C.Expected) << Fnd->Detail;
+    EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+  }
 }
 
 TEST(HuntEngine, FreadReturnHonorsElementCount) {
