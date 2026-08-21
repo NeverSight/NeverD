@@ -601,11 +601,146 @@ TEST(HuntEngine, ConstantSprintfFormatDoesNotHideDestinationExtent) {
   auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
                   BinaryFormat::ELF, &Img);
   ASSERT_TRUE(Fnd.has_value());
-  EXPECT_EQ(Fnd->Class, VulnClass::FormatString);
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
   EXPECT_TRUE(Fnd->SkipReason.empty());
   EXPECT_NE(Fnd->Detail.find("destination"), std::string::npos);
+}
+
+TEST(HuntEngine, ConstantSprintfOutputFitsRecoveredDestination) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "abc%%");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(5, 8)});
+  B.call("sprintf", temp(0), {temp(1), MedVar::makeConst(FormatVA, 8)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_EQ(Fnd->Capacity, 5u);
+}
+
+TEST(HuntEngine, ConstantSprintfOutputExceedsRecoveredDestination) {
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "abcd");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(4, 8)});
+  B.call("sprintf", temp(0), {temp(1), MedVar::makeConst(FormatVA, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = reachableSinkLow(SinkVA);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_EQ(Fnd->Capacity, 4u);
+  EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, ConstantSnprintfLimitFitsRecoveredDestination) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "abcdef");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(4, 8)});
+  B.call("snprintf", temp(0),
+         {temp(1), MedVar::makeConst(4, 8), MedVar::makeConst(FormatVA, 8)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, ConstantSnprintfLimitCanExceedRecoveredDestination) {
+  constexpr va_t SinkVA = 0x400010;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "abcdef");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(4, 8)});
+  B.call("snprintf", temp(0),
+         {temp(1), MedVar::makeConst(8, 8), MedVar::makeConst(FormatVA, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = reachableSinkLow(SinkVA);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, ConstantSprintfOverflowWithoutReachabilityIsUnknown) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "abcd");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(4, 8)});
+  B.call("sprintf", temp(0), {temp(1), MedVar::makeConst(FormatVA, 8)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, ConstantSprintfConversionExtentRemainsUnknown) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(4, 8)});
+  B.call("sprintf", temp(0),
+         {temp(1), MedVar::makeConst(FormatVA, 8), param(2)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->Detail, "formatted output extent is unresolved");
+}
+
+TEST(HuntEngine, ConstantSnprintfLimitBoundsUnknownConversion) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(4, 8)});
+  B.call("snprintf", temp(0),
+         {temp(1), MedVar::makeConst(4, 8), MedVar::makeConst(FormatVA, 8),
+          param(2)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+}
+
+TEST(HuntEngine, CheckedSnprintfUsesDeclaredObjectCapacity) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  Builder B("main");
+  B.call("malloc", temp(1), {MedVar::makeConst(1, 8)});
+  B.call("__snprintf_chk", temp(0),
+         {temp(1), MedVar::makeConst(8, 8), MedVar::makeConst(2, 4),
+          MedVar::makeConst(1, 8), MedVar::makeConst(FormatVA, 8), param(2)});
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, /*LF=*/nullptr, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->Class, VulnClass::BufferOverflow);
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_NE(Fnd->SkipReason.find("fortified"), std::string::npos);
 }
 
 TEST(HuntEngine, ReachableTaintedFormatStringIsUnsafe) {

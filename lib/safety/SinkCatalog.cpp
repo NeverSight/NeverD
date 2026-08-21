@@ -121,7 +121,7 @@ SinkEntry copySink(const char *Name, int Dst, int Src, int Len, int Cap,
   return E;
 }
 
-SinkEntry formatSink(const char *Name, int Dst, int Fmt, int Cap,
+SinkEntry formatSink(const char *Name, int Dst, int Fmt, int Len, int Cap,
                      unsigned Sev) {
   SinkEntry E;
   E.Name = Name;
@@ -129,6 +129,7 @@ SinkEntry formatSink(const char *Name, int Dst, int Fmt, int Cap,
   E.Kind = SinkKind::Format;
   E.DstArg = Dst;
   E.FmtArg = Fmt;
+  E.LenArg = Len;
   E.CapArg = Cap;
   E.Severity = Sev;
   return E;
@@ -180,8 +181,8 @@ SinkCatalog SinkCatalog::defaults() {
 
 #define SAFETY_COPY_SINK(NAME, DST, SRC, LEN, CAP, SEV)                        \
   C.addSink(copySink(#NAME, DST, SRC, LEN, CAP, SEV));
-#define SAFETY_FORMAT_SINK(NAME, DST, FMT, CAP, SEV)                           \
-  C.addSink(formatSink(#NAME, DST, FMT, CAP, SEV));
+#define SAFETY_FORMAT_SINK(NAME, DST, FMT, LEN, CAP, SEV)                      \
+  C.addSink(formatSink(#NAME, DST, FMT, LEN, CAP, SEV));
 #define SAFETY_ALLOC_SINK(NAME, SIZE, SRC, HANDLE, SEV)                        \
   C.addSink(allocSink(#NAME, SIZE, SRC, HANDLE, SEV));
 #define SAFETY_STACK_ALLOC_SINK(NAME, SIZE, SEV)                               \

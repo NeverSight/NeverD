@@ -83,6 +83,26 @@ TEST(SinkCatalog, FortifiedVariantCarriesCapacity) {
   EXPECT_EQ(C.matchSink("strcpy")->CapArg, -1);
 }
 
+TEST(SinkCatalog, FormatArgumentLayoutSeparatesWriteLimitAndObjectCapacity) {
+  SinkCatalog C = SinkCatalog::defaults();
+
+  const SinkEntry *Snprintf = C.matchSink("snprintf");
+  ASSERT_NE(Snprintf, nullptr);
+  EXPECT_EQ(Snprintf->DstArg, 0);
+  EXPECT_EQ(Snprintf->LenArg, 1);
+  EXPECT_EQ(Snprintf->FmtArg, 2);
+  EXPECT_EQ(Snprintf->CapArg, -1);
+  EXPECT_EQ(Snprintf->decidingArg(), 2);
+
+  const SinkEntry *Checked = C.matchSink("__snprintf_chk");
+  ASSERT_NE(Checked, nullptr);
+  EXPECT_EQ(Checked->DstArg, 0);
+  EXPECT_EQ(Checked->LenArg, 1);
+  EXPECT_EQ(Checked->CapArg, 3);
+  EXPECT_EQ(Checked->FmtArg, 4);
+  EXPECT_EQ(Checked->decidingArg(), 4);
+}
+
 TEST(SinkCatalog, HeapAllocAndFree) {
   SinkCatalog C = SinkCatalog::defaults();
   ASSERT_NE(C.matchSink("malloc"), nullptr);

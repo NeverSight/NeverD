@@ -25,6 +25,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <optional>
@@ -176,6 +177,20 @@ bool requiresStringExtents(llvm::StringRef Name) {
       .Cases({"strcat", "strncat", "strlcat", "strlcpy"}, true)
       .Cases({"strcat_chk", "strncat_chk"}, true)
       .Default(false);
+}
+
+std::optional<uint64_t> literalFormattedBytes(llvm::StringRef Format) {
+  uint64_t Bytes = 1; // terminating NUL
+  for (size_t I = 0; I < Format.size(); ++I) {
+    if (Format[I] != '%') {
+      ++Bytes;
+      continue;
+    }
+    if (++I >= Format.size() || Format[I] != '%')
+      return std::nullopt;
+    ++Bytes;
+  }
+  return Bytes;
 }
 
 struct CountedSourceReturn {
@@ -469,7 +484,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                        const MedFunc &Fn, const SinkSite &Site,
                        const SinkEntry &E, uint64_t Capacity,
                        const SafetyBudgets &Budgets,
-                       llvm::StringRef RequiredSource) {
+                       llvm::StringRef RequiredSource,
+                       std::optional<uint64_t> FixedLength = std::nullopt) {
   ExploreHit Best;
   const LowFunc *LF = In.findLowFunc(Fn.Entry);
   if (!LF || LF->Blocks.empty())
@@ -598,8 +614,11 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                   ? Ctx.mkTrue()
                   : (Cur.Constraints.size() == 1 ? Cur.Constraints[0]
                                                  : Ctx.mkAnd(Cur.Constraints));
-          SymRef Len = CI ? readCallArgument(In, Fn, E.LenArg, *CI, Cur.State)
-                          : SymRef();
+          SymRef Len =
+              FixedLength
+                  ? Ctx.mkConst(64, *FixedLength)
+                  : (CI ? readCallArgument(In, Fn, E.LenArg, *CI, Cur.State)
+                        : SymRef());
           SymRef SinkSource =
               CI ? readCallArgument(In, Fn, E.SrcArg, *CI, Cur.State)
                  : SymRef();
@@ -937,20 +956,149 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
         In.Img && FormatArg.isConst()
             ? In.Img->getSegmentFor(FormatArg.ConstVal)
             : nullptr;
+    std::optional<std::string> ConstantFormat;
     if (Arg.Flow != ArgFlow::Tainted && FormatSegment &&
-        !FormatSegment->isWritable() &&
-        safety::detail::readMappedCString(In.Img, FormatArg)) {
-      if (E->DstArg >= 0) {
-        Out.TheVerdict = Verdict::Unknown;
-        Out.TheConfidence = Confidence::Low;
-        Out.Detail =
-            "format string is constant, but destination extent is unresolved";
-      } else {
+        !FormatSegment->isWritable())
+      ConstantFormat = safety::detail::readMappedCString(In.Img, FormatArg);
+    if (Arg.Flow != ArgFlow::Tainted && ConstantFormat) {
+      if (E->DstArg < 0) {
         Out.TheVerdict = Verdict::Safe;
         Out.TheConfidence = Confidence::High;
         Out.SkipReason = "constant format string";
         Out.Detail = "format string is a mapped constant";
+        return Out;
       }
+
+      Out.Class = VulnClass::BufferOverflow;
+      Out.ArgIndex = E->LenArg >= 0 ? E->LenArg : E->FmtArg;
+      DestObject Dst =
+          resolveDestination(In, Cat, F, Site.CallInfoIndex, E->DstArg);
+      if (Dst.Capacity) {
+        Out.Capacity = Dst.Capacity;
+        Out.CapacityExact = Dst.CapacityExact;
+      }
+
+      auto classifyCallArg =
+          [&](int Index) -> std::optional<ArgClassification> {
+        if (Index < 0 || Site.CallInfoIndex >= F.CallInfos.size() ||
+            Index >=
+                static_cast<int>(F.CallInfos[Site.CallInfoIndex].Args.size()))
+          return std::nullopt;
+        return classifyArgument(In, Cat, F, Site.CallInfoIndex, Index);
+      };
+
+      if (E->CapArg >= 0) {
+        std::optional<ArgClassification> ObjectBound =
+            classifyCallArg(E->CapArg);
+        if (!ObjectBound) {
+          Out.TheVerdict = Verdict::Unknown;
+          Out.TheConfidence = Confidence::Low;
+          Out.Detail = "fortified destination bound was not recovered";
+          return Out;
+        }
+        if (Dst.Capacity && Dst.CapacityExact && ObjectBound->UpperBound &&
+            *ObjectBound->UpperBound <= *Dst.Capacity) {
+          Out.TheVerdict = Verdict::Safe;
+          Out.TheConfidence = Confidence::High;
+          Out.SkipReason = "fortified runtime bound fits the destination";
+          Out.Detail =
+              "fortified formatting cannot write beyond the recovered object";
+          return Out;
+        }
+        Out.TheVerdict = Verdict::Unknown;
+        Out.TheConfidence = Confidence::Low;
+        Out.Detail = "fortified destination bound does not prove the recovered "
+                     "object is large enough";
+        return Out;
+      }
+
+      std::optional<uint64_t> ExactWritten =
+          literalFormattedBytes(*ConstantFormat);
+      std::optional<uint64_t> MaxWritten = ExactWritten;
+      if (E->LenArg >= 0) {
+        std::optional<ArgClassification> WriteLimit =
+            classifyCallArg(E->LenArg);
+        if (!WriteLimit) {
+          Out.TheVerdict = Verdict::Unknown;
+          Out.TheConfidence = Confidence::Low;
+          Out.Detail = "formatted write limit was not recovered";
+          return Out;
+        }
+        if (WriteLimit->ConstValue) {
+          MaxWritten = ExactWritten
+                           ? std::min(*ExactWritten, *WriteLimit->ConstValue)
+                           : WriteLimit->ConstValue;
+          if (ExactWritten)
+            ExactWritten = MaxWritten;
+        } else if (WriteLimit->UpperBound) {
+          MaxWritten = ExactWritten
+                           ? std::min(*ExactWritten, *WriteLimit->UpperBound)
+                           : WriteLimit->UpperBound;
+          ExactWritten.reset();
+        } else {
+          MaxWritten.reset();
+          ExactWritten.reset();
+        }
+      }
+
+      if (MaxWritten && *MaxWritten == 0) {
+        Out.TheVerdict = Verdict::Safe;
+        Out.TheConfidence = Confidence::High;
+        Out.SkipReason = "zero formatted write limit";
+        Out.Detail = "formatting is configured to write no destination bytes";
+        return Out;
+      }
+      if (!Dst.Capacity) {
+        Out.TheVerdict = Verdict::Unknown;
+        Out.TheConfidence = Confidence::Low;
+        Out.Detail = "format string is constant, but destination extent is "
+                     "unresolved";
+        return Out;
+      }
+      if (MaxWritten && *MaxWritten <= *Dst.Capacity) {
+        Out.TheVerdict = Dst.CapacityExact ? Verdict::Safe : Verdict::Unknown;
+        Out.TheConfidence = Confidence::High;
+        Out.SkipReason = "formatted output fits the destination";
+        Out.Detail = Dst.CapacityExact
+                         ? "formatted output cannot exceed destination capacity"
+                         : "formatted output fits a containing-region bound, "
+                           "but the object size is unresolved";
+        return Out;
+      }
+      if (ExactWritten && *ExactWritten > *Dst.Capacity) {
+        ExploreHit Hit = exploreSink(In, Cat, F, Site, *E, *Dst.Capacity,
+                                     Budgets, llvm::StringRef(), ExactWritten);
+        if (Hit.Kind == ExploreHit::Overflow) {
+          Out.TheVerdict = Verdict::Unsafe;
+          Out.TheConfidence = Confidence::High;
+          Out.Detail = "formatted output exceeds destination capacity on a "
+                       "reachable path";
+          Out.Witness.push_back(
+              {"formatted_bytes", std::to_string(*ExactWritten)});
+          Out.Constraints = Hit.PredText;
+          Out.Corroboration =
+              "constant formatted output and overflow are jointly reachable";
+          Out.BudgetHit = Hit.Budget || Hit.SolverUnknown;
+          return Out;
+        }
+        Out.TheVerdict = Verdict::Unknown;
+        Out.TheConfidence = Confidence::Low;
+        Out.BudgetHit = Hit.Budget || Hit.SolverUnknown;
+        if (Hit.Budget)
+          Out.Detail = "exploration budget exhausted";
+        else if (Hit.SemanticUnknown)
+          Out.Detail = "path contains an operation or call without a summary";
+        else if (Hit.SolverUnknown)
+          Out.Detail = "solver could not establish path feasibility";
+        else
+          Out.Detail = "formatted overflow was not established on a reachable "
+                       "path";
+        return Out;
+      }
+
+      Out.TheVerdict = Verdict::Unknown;
+      Out.TheConfidence = Confidence::Low;
+      Out.Detail = "formatted output extent is unresolved";
       return Out;
     }
 

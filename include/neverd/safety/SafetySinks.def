@@ -6,7 +6,7 @@
 // zero-based recovered-call slots; -1 means the routine has no such slot.
 //
 // SAFETY_COPY_SINK(NAME, DST, SRC, LEN, CAP, SEV)
-// SAFETY_FORMAT_SINK(NAME, DST, FMT, CAP, SEV)
+// SAFETY_FORMAT_SINK(NAME, DST, FMT, LIMIT, OBJECT_CAP, SEV)
 // SAFETY_ALLOC_SINK(NAME, SIZE, SRC, HANDLE, SEV)
 // SAFETY_STACK_ALLOC_SINK(NAME, SIZE, SEV)
 // SAFETY_FREE_SINK(NAME, HANDLE, SEV)
@@ -22,7 +22,7 @@
 #define SAFETY_COPY_SINK(NAME, DST, SRC, LEN, CAP, SEV)
 #endif
 #ifndef SAFETY_FORMAT_SINK
-#define SAFETY_FORMAT_SINK(NAME, DST, FMT, CAP, SEV)
+#define SAFETY_FORMAT_SINK(NAME, DST, FMT, LEN, CAP, SEV)
 #endif
 #ifndef SAFETY_ALLOC_SINK
 #define SAFETY_ALLOC_SINK(NAME, SIZE, SRC, HANDLE, SEV)
@@ -95,18 +95,18 @@ SAFETY_SINK_ALIAS(strncat_chk, "__strncat_chk")
 // Format family
 //===----------------------------------------------------------------------===//
 
-SAFETY_FORMAT_SINK(printf, -1, 0, -1, 60)
-SAFETY_FORMAT_SINK(wprintf, -1, 0, -1, 60)
-SAFETY_FORMAT_SINK(fprintf, -1, 1, -1, 55)
-SAFETY_FORMAT_SINK(dprintf, -1, 1, -1, 55)
-SAFETY_FORMAT_SINK(sprintf, 0, 1, -1, 80)
-SAFETY_FORMAT_SINK(vsprintf, 0, 1, -1, 80)
-SAFETY_FORMAT_SINK(syslog, -1, 1, -1, 55)
+SAFETY_FORMAT_SINK(printf, -1, 0, -1, -1, 60)
+SAFETY_FORMAT_SINK(wprintf, -1, 0, -1, -1, 60)
+SAFETY_FORMAT_SINK(fprintf, -1, 1, -1, -1, 55)
+SAFETY_FORMAT_SINK(dprintf, -1, 1, -1, -1, 55)
+SAFETY_FORMAT_SINK(sprintf, 0, 1, -1, -1, 80)
+SAFETY_FORMAT_SINK(vsprintf, 0, 1, -1, -1, 80)
+SAFETY_FORMAT_SINK(syslog, -1, 1, -1, -1, 55)
 // snprintf(dst, n, fmt, ...): a size-bounded write with a format string.
-SAFETY_FORMAT_SINK(snprintf, 0, 2, 1, 45)
-SAFETY_FORMAT_SINK(vsnprintf, 0, 2, 1, 45)
-SAFETY_FORMAT_SINK(sprintf_chk, 0, 3, 2, 40)
-SAFETY_FORMAT_SINK(snprintf_chk, 0, 4, 2, 40)
+SAFETY_FORMAT_SINK(snprintf, 0, 2, 1, -1, 45)
+SAFETY_FORMAT_SINK(vsnprintf, 0, 2, 1, -1, 45)
+SAFETY_FORMAT_SINK(sprintf_chk, 0, 3, -1, 2, 40)
+SAFETY_FORMAT_SINK(snprintf_chk, 0, 4, 1, 3, 40)
 
 //===----------------------------------------------------------------------===//
 // Heap lifetime (audit)

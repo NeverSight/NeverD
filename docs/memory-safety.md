@@ -12,7 +12,7 @@ never gated behind one format's scanner or import table.
 | Track | Command | Reports |
 |-------|---------|---------|
 | **Audit** | `neverd audit <binary>` | Heap-object lifetime defects: leak, double free, use after free |
-| **Hunt** | `neverd hunt <binary>` | Dangerous-copy overflows with a concrete witness |
+| **Hunt** | `neverd hunt <binary>` | Copy/formatting overflows and uncontrolled format strings |
 
 The engine reuses NeverD's in-house symbolic execution and bitvector solver for
 witnesses and reachability; there is no external solver, VM, or container
@@ -125,6 +125,21 @@ a backward SSA walk (following spill/reload through stack slots):
 
 Every recovered capacity is an **upper bound** on the true object size, so a
 proven overflow is never a false positive.
+
+### Formatted output
+
+Formatting calls keep their two independent bounds: `snprintf`/`vsnprintf`
+carry a maximum write length, while fortified `_chk` variants also carry the
+compiler-provided destination-object size. A trusted constant format containing
+only literal bytes and `%%` has an exact output extent, including its terminating
+NUL, which is checked against the same heap/stack destination model as copy
+sinks. A bounded `snprintf` write is SAFE when its maximum write fits an exact
+destination; a literal output larger than the destination is UNSAFE. Formats
+with value conversions remain UNKNOWN until the converted argument extents are
+proved. As with copy sinks, an overflow becomes high-confidence UNSAFE only
+after LowIR path replay proves the formatting call reachable. An
+attacker-controlled format string is reported separately as `format_string`,
+regardless of destination truncation.
 
 ---
 

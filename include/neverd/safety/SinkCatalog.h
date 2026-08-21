@@ -39,16 +39,18 @@ struct SinkEntry {
 
   int DstArg = -1; ///< destination buffer.
   int SrcArg = -1; ///< source buffer (its length bounds an implicit copy).
-  int LenArg = -1; ///< explicit copy length / element count.
+  int LenArg = -1; ///< explicit copy length / formatted-write limit.
   int CapArg = -1; ///< explicit destination capacity (fortified variants).
   int FmtArg = -1; ///< format-string argument.
   int HandleArg = -1; ///< the freed / reallocated handle (audit).
 
   unsigned Severity = 50;
 
-  /// The single argument whose value decides the checked property: an explicit
-  /// length when present, otherwise the source whose length is implicit.
+  /// The single argument whose value decides the checked property: the format
+  /// string for format sinks, otherwise an explicit length or implicit source.
   int decidingArg() const {
+    if (Kind == SinkKind::Format && FmtArg >= 0)
+      return FmtArg;
     if (LenArg >= 0)
       return LenArg;
     if (SrcArg >= 0)
