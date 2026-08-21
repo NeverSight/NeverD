@@ -212,6 +212,7 @@ struct ReturnedStringOutput {
   int BoundArg = -1;
   uint32_t ReturnBits = 0;
   uint32_t BoundBits = 0;
+  bool ProvidesNarrowCStringExtent = false;
 };
 
 CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
@@ -253,9 +254,13 @@ BoundedStringOutput boundedStringOutput(llvm::StringRef Name) {
 
 ReturnedStringOutput returnedStringOutput(llvm::StringRef Name,
                                           BinaryFormat Format) {
-  if (Format == BinaryFormat::COFF &&
-      SinkCatalog::normalize(Name) == "GetEnvironmentVariableA")
-    return {1, 2, 32, 32};
+  if (Format != BinaryFormat::COFF)
+    return {};
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  if (Normalized == "GetEnvironmentVariableA")
+    return {1, 2, 32, 32, true};
+  if (Normalized == "GetEnvironmentVariableW")
+    return {1, 2, 32, 32, false};
   return {};
 }
 
@@ -1125,8 +1130,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               Event.Success = Event.Success.isValid()
                                   ? Ctx.mkAnd(Event.Success, ProducedString)
                                   : ProducedString;
-              Event.ImplicitLen = StringBytes;
-              Event.ImplicitLenIncludesTerminator = true;
+              if (ReturnedString.ProvidesNarrowCStringExtent) {
+                Event.ImplicitLen = StringBytes;
+                Event.ImplicitLenIncludesTerminator = true;
+              }
             }
           }
         } else if (ReturnedString.BufferArg >= 0) {

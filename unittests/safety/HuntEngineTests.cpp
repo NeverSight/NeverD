@@ -1572,6 +1572,51 @@ TEST(HuntEngine, TruncatedEnvironmentQueryDoesNotCorroborateFormatBuffer) {
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, TruncatedWideEnvironmentQueryDoesNotCorroborateFormatBuffer) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  constexpr uint32_t BufferChars = 8;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("GetEnvironmentVariableW", mkReg(0, 1, 4),
+         {param(1), SourceBuffer, MedVar::makeConst(BufferChars, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("wprintf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, BufferChars,
+                                         /*ReturnBytes=*/4);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, SuccessfulWideEnvironmentQueryCorroboratesFormatBuffer) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("GetEnvironmentVariableW", mkReg(0, 1, 4),
+         {param(1), SourceBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("wprintf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA, 7,
+                                         /*ReturnBytes=*/4);
+
+  auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
 TEST(HuntEngine, SuccessfulEnvironmentQueryBoundsImplicitStringCopy) {
   constexpr va_t SourceVA = 0x400004;
   constexpr va_t SinkVA = 0x400020;
