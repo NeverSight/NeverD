@@ -723,6 +723,33 @@ TEST(AllocLifetime, ZeroLengthMemcpyDoesNotUseFreedStorage) {
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, ArmEabiMemoryHelpersHonorZeroLength) {
+  for (const char *Name : {"__aeabi_memcpy4", "__aeabi_memmove8",
+                           "__aeabi_memset", "__aeabi_memclr"}) {
+    for (uint64_t Count : {uint64_t(0), uint64_t(1)}) {
+      SCOPED_TRACE(Name);
+      SCOPED_TRACE(Count);
+      FB B("f", 0x100);
+      int b0 = B.block();
+      B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+      B.call(b0, "free", MedVar{}, {temp(1)});
+      std::vector<MedVar> Args;
+      if (llvm::StringRef(Name).contains("memcpy") ||
+          llvm::StringRef(Name).contains("memmove"))
+        Args = {temp(1), temp(3), MedVar::makeConst(Count, 8)};
+      else if (llvm::StringRef(Name).contains("memset"))
+        Args = {temp(1), MedVar::makeConst(Count, 8),
+                MedVar::makeConst(0x5a, 8)};
+      else
+        Args = {temp(1), MedVar::makeConst(Count, 8)};
+      B.call(b0, Name, temp(2), std::move(Args));
+      B.ret(b0, {});
+
+      EXPECT_EQ(has(audit({B.F}), VulnClass::UseAfterFree), Count != 0);
+    }
+  }
+}
+
 TEST(AllocLifetime, PositiveLengthMemcpyUsesFreedStorage) {
   FB B("f", 0x100);
   int b0 = B.block();

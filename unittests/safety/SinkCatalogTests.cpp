@@ -199,6 +199,32 @@ TEST(SinkCatalog, ItaniumAlignedOperatorNewAndDelete) {
   }
 }
 
+TEST(SinkCatalog, ArmEabiMemoryHelpersPreserveArgumentLayouts) {
+  SinkCatalog C = SinkCatalog::defaults();
+  for (const char *Name :
+       {"__aeabi_memcpy", "__aeabi_memcpy4", "__aeabi_memcpy8",
+        "__aeabi_memmove", "__aeabi_memmove4", "__aeabi_memmove8"}) {
+    SCOPED_TRACE(Name);
+    const SinkEntry *Entry = C.matchSink(Name);
+    ASSERT_NE(Entry, nullptr);
+    EXPECT_EQ(Entry->Kind, SinkKind::Copy);
+    EXPECT_EQ(Entry->DstArg, 0);
+    EXPECT_EQ(Entry->SrcArg, 1);
+    EXPECT_EQ(Entry->LenArg, 2);
+  }
+  for (const char *Name :
+       {"__aeabi_memset", "__aeabi_memset4", "__aeabi_memset8",
+        "__aeabi_memclr", "__aeabi_memclr4", "__aeabi_memclr8"}) {
+    SCOPED_TRACE(Name);
+    const SinkEntry *Entry = C.matchSink(Name);
+    ASSERT_NE(Entry, nullptr);
+    EXPECT_EQ(Entry->Kind, SinkKind::Copy);
+    EXPECT_EQ(Entry->DstArg, 0);
+    EXPECT_EQ(Entry->SrcArg, -1);
+    EXPECT_EQ(Entry->LenArg, 1);
+  }
+}
+
 TEST(SinkCatalog, DefaultSourcesCoverPosixAndWin32) {
   SinkCatalog C = SinkCatalog::defaults();
   EXPECT_NE(C.matchSource("getenv"), nullptr);

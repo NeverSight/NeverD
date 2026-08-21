@@ -51,13 +51,27 @@
 
 // memcpy(dst, src, n) and relatives: the count argument decides the write.
 SAFETY_COPY_SINK(memcpy, 0, 1, 2, -1, 70)
+SAFETY_SINK_ALIAS(memcpy, "__aeabi_memcpy")
+SAFETY_SINK_ALIAS(memcpy, "__aeabi_memcpy4")
+SAFETY_SINK_ALIAS(memcpy, "__aeabi_memcpy8")
 SAFETY_COPY_SINK(memmove, 0, 1, 2, -1, 70)
+SAFETY_SINK_ALIAS(memmove, "__aeabi_memmove")
+SAFETY_SINK_ALIAS(memmove, "__aeabi_memmove4")
+SAFETY_SINK_ALIAS(memmove, "__aeabi_memmove8")
 SAFETY_COPY_SINK(wmemcpy, 0, 1, 2, -1, 70)
 SAFETY_COPY_SINK(wmemmove, 0, 1, 2, -1, 70)
 
 // memset(dst, c, n): a wild count still overruns the destination.
 SAFETY_COPY_SINK(memset, 0, -1, 2, -1, 55)
 SAFETY_COPY_SINK(bzero, 0, -1, 1, -1, 45)
+SAFETY_COPY_SINK(aeabi_memset, 0, -1, 1, -1, 55)
+SAFETY_SINK_ALIAS(aeabi_memset, "__aeabi_memset")
+SAFETY_SINK_ALIAS(aeabi_memset, "__aeabi_memset4")
+SAFETY_SINK_ALIAS(aeabi_memset, "__aeabi_memset8")
+SAFETY_COPY_SINK(aeabi_memclr, 0, -1, 1, -1, 45)
+SAFETY_SINK_ALIAS(aeabi_memclr, "__aeabi_memclr")
+SAFETY_SINK_ALIAS(aeabi_memclr, "__aeabi_memclr4")
+SAFETY_SINK_ALIAS(aeabi_memclr, "__aeabi_memclr8")
 
 // bcopy(src, dst, n): source and destination are swapped relative to memcpy.
 SAFETY_COPY_SINK(bcopy, 1, 0, 2, -1, 60)

@@ -2741,6 +2741,31 @@ TEST(HuntEngine, ConstLengthWithinCapacityIsSafe) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe);
 }
 
+TEST(HuntEngine, ArmEabiMemsetUsesItsSecondArgumentAsLength) {
+  struct Case {
+    uint64_t Count;
+    uint64_t Value;
+    Verdict Expected;
+  } Cases[] = {{8, 32, Verdict::Safe}, {32, 0, Verdict::Unsafe}};
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Count);
+    SCOPED_TRACE(C.Value);
+    Builder B;
+    B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call("__aeabi_memset", temp(0),
+           {temp(1), MedVar::makeConst(C.Count, 8),
+            MedVar::makeConst(C.Value, 8)});
+    B.F.Blocks[0].Ops.back().Addr = 0x400010;
+    LowFunc LF = reachableSinkLow(0x400010);
+
+    auto Fnd =
+        hunt(B.F, /*StackRegs=*/false, &LF, Arch::ARM, {}, BinaryFormat::ELF);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, C.Expected) << Fnd->Detail;
+  }
+}
+
 TEST(HuntEngine, ConstLengthExceedingCapacityWithoutReachabilityIsUnknown) {
   Builder B;
   B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
