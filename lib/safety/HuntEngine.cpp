@@ -382,6 +382,7 @@ struct ExploreHit {
   bool SemanticUnknown = false;
   bool MissingLength = false;
   bool Reached = false;
+  bool SourceEvidence = false;
 };
 
 void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
@@ -439,7 +440,8 @@ void considerSink(ExploreHit &Best, SymContext &Ctx, SymRef Pred, SymRef Len,
 ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                        const MedFunc &Fn, const SinkSite &Site,
                        const SinkEntry &E, uint64_t Capacity,
-                       const SafetyBudgets &Budgets) {
+                       const SafetyBudgets &Budgets,
+                       llvm::StringRef RequiredSource) {
   ExploreHit Best;
   const LowFunc *LF = In.findLowFunc(Fn.Entry);
   if (!LF || LF->Blocks.empty())
@@ -481,6 +483,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     llvm::DenseMap<int, unsigned> Visits;
     SymRef ImplicitLen;
     SymRef ImplicitSource;
+    std::vector<std::pair<std::string, SymRef>> SourceEvents;
     bool ImplicitFromLength = false;
     bool SemanticUnknown = false;
     explicit Frontier(SymContext &C) : State(C) {}
@@ -570,6 +573,18 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           SymRef SinkSource =
               CI ? readCallArgument(In, Fn, E.SrcArg, *CI, Cur.State)
                  : SymRef();
+          if (!RequiredSource.empty()) {
+            for (const auto &[Name, Buffer] : Cur.SourceEvents) {
+              if (Name != RequiredSource)
+                continue;
+              if (expressionsMustEqual(Ctx, Buffer, SinkSource, Cur.Constraints,
+                                       Budgets) ||
+                  valuesShareUniqueLoadOrigin(Cur.State, Buffer, SinkSource)) {
+                Best.SourceEvidence = true;
+                break;
+              }
+            }
+          }
           const bool SameImplicitSource =
               expressionsMustEqual(Ctx, Cur.ImplicitSource, SinkSource,
                                    Cur.Constraints, Budgets) ||
@@ -615,6 +630,13 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         const SourceEntry *CountedSource = Callee && CountedReturn.BoundArg >= 0
                                                ? Cat.matchSource(CalleeName)
                                                : nullptr;
+        const SourceEntry *CalleeSource =
+            Callee ? Cat.matchSource(CalleeName) : nullptr;
+        SymRef SourceOutput;
+        if (Callee && CalleeSource && CalleeSource->OutArg >= 0 &&
+            CalleeSource->OutArg < static_cast<int>(Callee->Args.size()))
+          SourceOutput = readCallArgument(In, Fn, CalleeSource->OutArg, *Callee,
+                                          Cur.State);
         SymRef ReturnBound;
         if (Callee && CountedReturn.BoundArg >= 0)
           ReturnBound = readCallArgument(In, Fn, CountedReturn.BoundArg,
@@ -643,6 +665,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.SemanticUnknown = true;
         }
         StepResult SR = Exec.step(Op);
+        if (IsCall && SourceOutput.isValid())
+          Cur.SourceEvents.emplace_back(SinkCatalog::normalize(CalleeName),
+                                        SourceOutput);
         SymRef CountedReturnValue;
         if (CountedReturn.BoundArg >= 0) {
           SymRef Ret = captureReturn(Op, Cur.State, In);
@@ -890,7 +915,13 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  ExploreHit Hit = exploreSink(In, Cat, F, Site, *E, *Dst.Capacity, Budgets);
+  std::string RequiredSource;
+  if (!UnboundedInput && E->LenArg < 0 && E->SrcArg >= 0)
+    if (const SourceEntry *Source = Cat.matchSource(Arg.TaintSource);
+        Source && Source->OutArg >= 0)
+      RequiredSource = SinkCatalog::normalize(Arg.TaintSource);
+  ExploreHit Hit =
+      exploreSink(In, Cat, F, Site, *E, *Dst.Capacity, Budgets, RequiredSource);
   if (Hit.Kind == ExploreHit::Overflow) {
     Out.TheVerdict = Verdict::Unsafe;
     Out.TheConfidence = Confidence::High;
@@ -916,7 +947,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
 
   if (Arg.Flow == ArgFlow::Tainted && E->LenArg < 0 &&
       (E->SrcArg >= 0 || UnboundedInput) && Hit.Reached && !Hit.Budget &&
-      !Hit.SolverUnknown && !Hit.SemanticUnknown) {
+      !Hit.SolverUnknown && !Hit.SemanticUnknown &&
+      (RequiredSource.empty() || Hit.SourceEvidence)) {
     const bool GuardAllowsOverflow =
         !Fortified ||
         (RuntimeBound->ConstValue && *RuntimeBound->ConstValue > *Dst.Capacity);

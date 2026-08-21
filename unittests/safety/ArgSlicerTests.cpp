@@ -413,6 +413,69 @@ TEST(ArgSlicer, SourceOutputBufferIsTainted) {
   EXPECT_EQ(C.TaintSource, "read");
 }
 
+TEST(ArgSlicer, FutureSourceOutputDoesNotTaintEarlierUse) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+  addCall(F, "read", temp(5),
+          {MedVar::makeConst(0, 8), temp(4), MedVar::makeConst(32, 8)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
+}
+
+TEST(ArgSlicer, SourceAndSinkOnSiblingPathsDoNotShareTaint) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F;
+  F.Name = "f";
+  F.Entry = 0x100;
+  F.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+
+  MedOp Read;
+  Read.Opcode = NdOp::CALL;
+  Read.Output = temp(5);
+  Read.addInput(MedVar::makeConst(0x9000, 8));
+  F.Blocks[1].Ops.push_back(Read);
+  MedCallInfo ReadInfo;
+  ReadInfo.BlockId = 1;
+  ReadInfo.OpIdx = 0;
+  ReadInfo.TargetName = "read";
+  ReadInfo.Args = {MedVar::makeConst(0, 8), temp(4), MedVar::makeConst(32, 8)};
+  F.CallInfos.push_back(ReadInfo);
+
+  MedOp Copy;
+  Copy.Opcode = NdOp::CALL;
+  Copy.addInput(MedVar::makeConst(0x8000, 8));
+  F.Blocks[2].Ops.push_back(Copy);
+  MedCallInfo CopyInfo;
+  CopyInfo.BlockId = 2;
+  CopyInfo.OpIdx = 0;
+  CopyInfo.TargetName = "strcpy";
+  CopyInfo.Args = {temp(1), temp(4)};
+  F.CallInfos.push_back(CopyInfo);
+
+  ArgClassification C = classifyArgument(In, Cat, F, 1, 1);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
+}
+
 TEST(ArgSlicer, UnrecoveredArgumentFailsClosed) {
   BinaryImage Img;
   AnalysisInput In;

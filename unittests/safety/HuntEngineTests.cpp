@@ -9,6 +9,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
+#include "neverd/safety/ArgSlicer.h"
 #include "neverd/safety/HuntEngine.h"
 #include "neverd/safety/SinkScanner.h"
 
@@ -296,6 +297,75 @@ LowFunc reachableSinkLow(va_t SinkVA) {
   return LF;
 }
 
+LowFunc mutuallyExclusiveSourceAndSinkLow(va_t MallocVA, va_t SourceVA,
+                                          va_t SinkVA) {
+  constexpr uint64_t kConditionInput = 24;
+  constexpr uint64_t kFlag = 96;
+  constexpr va_t kEntry = 0x400000;
+  constexpr va_t kBypass = 0x400020;
+  constexpr va_t kJoin = 0x400030;
+  constexpr va_t kExit = 0x400040;
+
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LF.Blocks.resize(6);
+  for (int I = 0; I < 6; ++I)
+    LF.Blocks[I].Id = I;
+
+  LowBlock &Entry = LF.Blocks[0];
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = SourceVA;
+  Entry.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, MallocVA));
+  Entry.Ops.push_back(lop(NdOp::INT_NOTEQUAL, NdVar::reg(kFlag, 1),
+                          {NdVar::reg(kConditionInput, 8), NdVar::cst(0, 8)},
+                          kEntry + 4));
+  Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(SourceVA, 8), NdVar::reg(kFlag, 1)},
+                          kEntry + 8));
+  Entry.Succs = {1, 2};
+
+  LowBlock &Source = LF.Blocks[1];
+  Source.StartAddr = SourceVA;
+  Source.EndAddr = kBypass;
+  Source.Preds = {0};
+  Source.Succs = {3};
+  Source.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, SourceVA));
+  Source.Ops.push_back(
+      lop(NdOp::BRANCH, NdVar{}, {NdVar::cst(kJoin, 8)}, SourceVA + 4));
+
+  LowBlock &Bypass = LF.Blocks[2];
+  Bypass.StartAddr = kBypass;
+  Bypass.EndAddr = kJoin;
+  Bypass.Preds = {0};
+  Bypass.Succs = {3};
+  Bypass.Ops.push_back(
+      lop(NdOp::BRANCH, NdVar{}, {NdVar::cst(kJoin, 8)}, kBypass));
+
+  LowBlock &Join = LF.Blocks[3];
+  Join.StartAddr = kJoin;
+  Join.EndAddr = kExit;
+  Join.Preds = {1, 2};
+  Join.Succs = {4, 5};
+  Join.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                         {NdVar::cst(kExit, 8), NdVar::reg(kFlag, 1)}, kJoin));
+
+  LowBlock &Exit = LF.Blocks[4];
+  Exit.StartAddr = kExit;
+  Exit.EndAddr = SinkVA;
+  Exit.Preds = {3};
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}, kExit));
+
+  LowBlock &Sink = LF.Blocks[5];
+  Sink.StartAddr = SinkVA;
+  Sink.EndAddr = SinkVA + 8;
+  Sink.Preds = {3};
+  Sink.Ops.push_back(lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, SinkVA));
+  Sink.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}, SinkVA + 4));
+  return LF;
+}
+
 LowFunc sourceReturnThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
                                   bool RequireNonnegative,
                                   uint16_t ReturnBytes = 8) {
@@ -527,6 +597,71 @@ TEST(HuntEngine, TaintedMemcpyIntoHeapIsUnsafe) {
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   ASSERT_TRUE(Fnd->Capacity.has_value());
   EXPECT_EQ(*Fnd->Capacity, 16u);
+}
+
+TEST(HuntEngine, SourceAndSinkMustShareFeasiblePath) {
+  constexpr va_t MallocVA = 0x400000;
+  constexpr va_t SourceVA = 0x400010;
+  constexpr va_t SinkVA = 0x400050;
+
+  MedFunc F;
+  F.Name = "f";
+  F.Entry = MallocVA;
+  F.CC = CallingConv::SysV_AMD64;
+  F.Blocks.resize(6);
+  for (int I = 0; I < 6; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Preds = {0};
+  F.Blocks[1].Succs = {3};
+  F.Blocks[2].Preds = {0};
+  F.Blocks[2].Succs = {3};
+  F.Blocks[3].Preds = {1, 2};
+  F.Blocks[3].Succs = {4, 5};
+  F.Blocks[4].Preds = {3};
+  F.Blocks[5].Preds = {3};
+  const MedVar SourceBuffer = mkReg(24, 0);
+
+  auto addBlockCall = [&](int BlockId, llvm::StringRef Name, MedVar Ret,
+                          std::vector<MedVar> Args, va_t Addr) {
+    MedBlock &Block = F.Blocks[BlockId];
+    const int OpIdx = static_cast<int>(Block.Ops.size());
+    MedOp Op;
+    Op.Opcode = NdOp::CALL;
+    Op.Output = Ret;
+    Op.Addr = Addr;
+    Op.addInput(MedVar::makeConst(0x9000, 8));
+    Block.Ops.push_back(std::move(Op));
+    MedCallInfo CI;
+    CI.BlockId = BlockId;
+    CI.OpIdx = OpIdx;
+    CI.TargetName = Name.str();
+    CI.Args = std::move(Args);
+    F.CallInfos.push_back(std::move(CI));
+  };
+
+  addBlockCall(0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, MallocVA);
+  addBlockCall(
+      1, "read", temp(5),
+      {MedVar::makeConst(0, 8), SourceBuffer, MedVar::makeConst(32, 8)},
+      SourceVA);
+  addBlockCall(5, "strcpy", temp(0), {temp(1), SourceBuffer}, SinkVA);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+  ArgClassification SourceArg = classifyArgument(In, Cat, F, 2, 1);
+  ASSERT_EQ(SourceArg.Flow, ArgFlow::Tainted);
+  ASSERT_EQ(SourceArg.TaintSource, "read");
+
+  LowFunc LF = mutuallyExclusiveSourceAndSinkLow(MallocVA, SourceVA, SinkVA);
+  auto Fnd = hunt(F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
+  EXPECT_EQ(Fnd->Detail, "length provenance unresolved");
 }
 
 TEST(HuntEngine, GuardedReadReturnHonorsRequestedCount) {

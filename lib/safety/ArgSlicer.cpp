@@ -87,9 +87,10 @@ struct DefIndex {
 
 class Slicer {
 public:
-  Slicer(const AnalysisInput &In, const SinkCatalog &Cat, const MedFunc &F)
+  Slicer(const AnalysisInput &In, const SinkCatalog &Cat, const MedFunc &F,
+         size_t SinkCallInfoIndex)
       : In(In), Cat(Cat), F(F), Defs(F) {
-    indexSourceOutputs();
+    indexSourceOutputs(SinkCallInfoIndex);
   }
 
   ArgClassification run(const MedVar &Arg) {
@@ -239,8 +240,45 @@ private:
                                        Resolve, MayBeFrame);
   }
 
-  void indexSourceOutputs() {
+  const MedBlock *blockById(int BlockId) const {
+    for (const MedBlock &B : F.Blocks)
+      if (B.Id == BlockId)
+        return &B;
+    return nullptr;
+  }
+
+  bool sourceMayPrecedeSink(const MedCallInfo &Source,
+                            const MedCallInfo &Sink) const {
+    if (Source.BlockId == Sink.BlockId && Source.OpIdx < Sink.OpIdx)
+      return true;
+
+    const MedBlock *SourceBlock = blockById(Source.BlockId);
+    if (!SourceBlock)
+      return false;
+    llvm::SmallVector<int, 8> Worklist(SourceBlock->Succs.begin(),
+                                       SourceBlock->Succs.end());
+    llvm::DenseSet<int> Seen;
+    while (!Worklist.empty()) {
+      const int BlockId = Worklist.pop_back_val();
+      if (BlockId == Sink.BlockId)
+        return true;
+      if (!Seen.insert(BlockId).second)
+        continue;
+      const MedBlock *Block = blockById(BlockId);
+      if (!Block)
+        continue;
+      Worklist.append(Block->Succs.begin(), Block->Succs.end());
+    }
+    return false;
+  }
+
+  void indexSourceOutputs(size_t SinkCallInfoIndex) {
+    if (SinkCallInfoIndex >= F.CallInfos.size())
+      return;
+    const MedCallInfo &Sink = F.CallInfos[SinkCallInfoIndex];
     for (const MedCallInfo &CI : F.CallInfos) {
+      if (!sourceMayPrecedeSink(CI, Sink))
+        continue;
       const std::string Name = resolveCallName(In, CI);
       const SourceEntry *Source = Cat.matchSource(Name);
       if (!Source || Source->OutArg < 0 ||
@@ -596,6 +634,6 @@ ArgClassification neverd::safety::classifyArgument(const AnalysisInput &In,
     R.Reason = "argument not recovered";
     return R; // fail closed: an unrecovered argument stays UNKNOWN.
   }
-  Slicer S(In, Cat, F);
+  Slicer S(In, Cat, F, CallInfoIndex);
   return S.run(CI.Args[ArgIndex]);
 }
