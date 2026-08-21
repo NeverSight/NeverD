@@ -811,25 +811,54 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           if (std::optional<safety::detail::FormattedSourceOutputs> Outputs =
                   safety::detail::recoverFormattedSourceOutputs(
                       In.Img, CalleeName, Callee->Args);
-              Outputs &&
-              Outputs->Kind ==
-                  safety::detail::FormattedSourceKind::ExternalInput) {
-            HasFormattedSourceOutput = true;
-            for (int ArgIndex : Outputs->UnboundedTextArgs) {
-              SymRef Output =
-                  readCallArgument(In, Fn, ArgIndex, *Callee, Cur.State);
-              if (Output.isValid())
-                NewSourceEvents.push_back(
-                    {SinkCatalog::normalize(CalleeName), Output, SymRef()});
+              Outputs) {
+            bool InputIsTainted =
+                Outputs->Kind ==
+                safety::detail::FormattedSourceKind::ExternalInput;
+            SymRef InputSuccess;
+            bool InputIsUnconditionallyTainted = false;
+            if (Outputs->Kind ==
+                    safety::detail::FormattedSourceKind::DerivedInput &&
+                Outputs->InputArg >= 0) {
+              SymRef Input = readCallArgument(In, Fn, Outputs->InputArg,
+                                              *Callee, Cur.State);
+              for (const SourceEvent &Event : Cur.SourceEvents) {
+                const bool SameInput =
+                    expressionsMustEqual(Ctx, Event.Buffer, Input,
+                                         Cur.Constraints, Budgets) ||
+                    valuesShareUniqueLoadOrigin(Cur.State, Event.Buffer, Input);
+                if (!SameInput || !predicateMayHold(Ctx, Event.Success,
+                                                    Cur.Constraints, Budgets))
+                  continue;
+                InputIsTainted = true;
+                if (!Event.Success.isValid()) {
+                  InputIsUnconditionallyTainted = true;
+                  InputSuccess = SymRef();
+                } else if (!InputIsUnconditionallyTainted) {
+                  InputSuccess = InputSuccess.isValid()
+                                     ? Ctx.mkOr(InputSuccess, Event.Success)
+                                     : Event.Success;
+                }
+              }
             }
-            for (const safety::detail::BoundedTextOutput &Bounded :
-                 Outputs->BoundedTextArgs) {
-              SymRef Output = readCallArgument(In, Fn, Bounded.ArgIndex,
-                                               *Callee, Cur.State);
-              if (Output.isValid())
-                NewSourceEvents.push_back(
-                    {SinkCatalog::normalize(CalleeName), Output, SymRef(),
-                     Ctx.mkConst(64, Bounded.MaxChars + 1), true});
+            if (InputIsTainted) {
+              HasFormattedSourceOutput = true;
+              for (int ArgIndex : Outputs->UnboundedTextArgs) {
+                SymRef Output =
+                    readCallArgument(In, Fn, ArgIndex, *Callee, Cur.State);
+                if (Output.isValid())
+                  NewSourceEvents.push_back({SinkCatalog::normalize(CalleeName),
+                                             Output, InputSuccess});
+              }
+              for (const safety::detail::BoundedTextOutput &Bounded :
+                   Outputs->BoundedTextArgs) {
+                SymRef Output = readCallArgument(In, Fn, Bounded.ArgIndex,
+                                                 *Callee, Cur.State);
+                if (Output.isValid())
+                  NewSourceEvents.push_back(
+                      {SinkCatalog::normalize(CalleeName), Output, InputSuccess,
+                       Ctx.mkConst(64, Bounded.MaxChars + 1), true});
+              }
             }
           }
         SymRef ReturnBound;
@@ -1007,7 +1036,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             const SymRef ProducedInput =
                 Ctx.mkSgt(SemanticRet, Ctx.mkZero(Ctx.width(SemanticRet)));
             for (SourceEvent &Event : NewSourceEvents)
-              if (!Event.Success.isValid())
+              if (Event.Success.isValid())
+                Event.Success = Ctx.mkAnd(Event.Success, ProducedInput);
+              else
                 Event.Success = ProducedInput;
           }
         }

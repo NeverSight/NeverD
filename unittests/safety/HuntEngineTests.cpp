@@ -707,6 +707,60 @@ LowFunc twoScanfThenStrcpyLow(va_t FirstScanfVA, va_t SecondScanfVA,
   return LF;
 }
 
+LowFunc readAndScanfThenStrcpyLow(va_t ReadVA, va_t ScanfVA, va_t StrcpyVA) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kFlag = 200;
+  constexpr va_t kEntry = 0x400000;
+  constexpr va_t kScanfBlock = 0x400020;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Scanf, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = kScanfBlock;
+  Entry.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9100, 8)}, ReadVA));
+  Entry.Ops.push_back(lop(NdOp::INT_SLESS, NdVar::reg(kFlag, 1),
+                          {NdVar::cst(0, 8), NdVar::reg(kRax, 8)}, ReadVA + 1));
+  Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(kScanfBlock, 8), NdVar::reg(kFlag, 1)},
+                          ReadVA + 2));
+  Entry.Succs = {1, 3};
+  Scanf.Id = 1;
+  Scanf.StartAddr = kScanfBlock;
+  Scanf.EndAddr = StrcpyVA;
+  Scanf.Preds = {0};
+  Scanf.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9200, 8)}, ScanfVA));
+  Scanf.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+                          {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
+                          ScanfVA + 1));
+  Scanf.Ops.push_back(lop(NdOp::INT_SLESS, NdVar::reg(kFlag, 1),
+                          {NdVar::cst(0, 4), NdVar::reg(kRax, 4)},
+                          ScanfVA + 2));
+  Scanf.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                          {NdVar::cst(StrcpyVA, 8), NdVar::reg(kFlag, 1)},
+                          ScanfVA + 3));
+  Scanf.Succs = {2, 3};
+  Sink.Id = 2;
+  Sink.StartAddr = StrcpyVA;
+  Sink.EndAddr = StrcpyVA + 8;
+  Sink.Preds = {1};
+  Sink.Succs = {3};
+  Sink.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, StrcpyVA));
+  Exit.Id = 3;
+  Exit.StartAddr = StrcpyVA + 8;
+  Exit.EndAddr = StrcpyVA + 16;
+  Exit.Preds = {0, 1, 2};
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Scanf));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
 LowFunc readThenTerminateStrcpyLow(va_t ReadVA, va_t StrcpyVA, va_t SourceVA) {
   constexpr va_t kEntry = 0x400000;
   LowFunc LF;
@@ -1592,6 +1646,66 @@ TEST(HuntEngine, LaterUnboundedScanfInvalidatesEarlierStringBound) {
                   BinaryFormat::ELF, &Img);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, TaintedSscanfInputDrivesReachableUnboundedCopy) {
+  constexpr va_t ReadVA = 0x400004;
+  constexpr va_t ScanfVA = 0x400020;
+  constexpr va_t SinkVA = 0x400040;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%s");
+  const MedVar InputBuffer = param(3);
+  const MedVar OutputBuffer = param(4);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), InputBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = ReadVA;
+  B.call("sscanf", temp(6, 4),
+         {InputBuffer, MedVar::makeConst(FormatVA, 8), OutputBuffer});
+  B.F.Blocks[0].Ops.back().Addr = ScanfVA;
+  B.call("strcpy", temp(0), {temp(1), OutputBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = readAndScanfThenStrcpyLow(ReadVA, ScanfVA, SinkVA);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, TaintedSscanfInputPreservesBoundedStringExtent) {
+  constexpr va_t ReadVA = 0x400004;
+  constexpr va_t ScanfVA = 0x400020;
+  constexpr va_t SinkVA = 0x400040;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%7s");
+  const MedVar InputBuffer = param(3);
+  const MedVar OutputBuffer = param(4);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), InputBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = ReadVA;
+  B.call("sscanf", temp(6, 4),
+         {InputBuffer, MedVar::makeConst(FormatVA, 8), OutputBuffer});
+  B.F.Blocks[0].Ops.back().Addr = ScanfVA;
+  B.call("strcpy", temp(0), {temp(1), OutputBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = readAndScanfThenStrcpyLow(ReadVA, ScanfVA, SinkVA);
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                  BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
 }
 
