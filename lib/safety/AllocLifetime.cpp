@@ -529,21 +529,9 @@ private:
         }
       }
 
-      bool ReachedFree = false;
-      bool HasUnreleasedExit = true;
-      if (!F.Blocks.empty()) {
-        int EntryBlock = F.Blocks.front().Id;
-        for (const MedBlock &B : F.Blocks)
-          if (B.StartAddr == F.Entry) {
-            EntryBlock = B.Id;
-            break;
-          }
-        HasUnreleasedExit = reachesExitWithoutFree(F, EntryBlock, -1,
-                                                   DefiniteFrees, &ReachedFree);
-      }
-      if (ReachedFree && !HasUnreleasedExit)
+      if (eventsCoverEveryExit(F, DefiniteFrees))
         S.FreesParam.insert(PI);
-      else if (ReachedFree || HasPotentialFree)
+      else if (!DefiniteFrees.empty() || HasPotentialFree)
         S.UnknownParam.insert(PI);
     }
 
@@ -551,40 +539,67 @@ private:
       if (F.Params[PI].isConst())
         continue;
       llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(F.Params[PI]);
-      bool Escapes = false;
-      bool Unknown = false;
+      llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(F.Params[PI]);
+      std::vector<FreeEvent> DefiniteEscapes;
+      bool HasPotentialEscape = false;
       for (const MedBlock &B : F.Blocks) {
-        for (const MedOp &Op : B.Ops) {
+        for (int OI = 0; OI < static_cast<int>(B.Ops.size()); ++OI) {
+          const MedOp &Op = B.Ops[OI];
           if (Op.Opcode == NdOp::RETURN && returnsValue(F)) {
-            for (unsigned I = 0; I < Op.NumInputs; ++I)
-              if (!Op.Inputs[I].isConst() && Alias.count(keyOf(Op.Inputs[I])))
-                Escapes = true;
+            for (unsigned I = 0; I < Op.NumInputs; ++I) {
+              if (Op.Inputs[I].isConst())
+                continue;
+              const ValueKey InputKey = keyOf(Op.Inputs[I]);
+              if (MustAlias.count(InputKey)) {
+                DefiniteEscapes.push_back({B.Id, OI});
+                break;
+              }
+              HasPotentialEscape |= Alias.count(InputKey) != 0;
+            }
           } else if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
             const MedVar &Addr = Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
             const MedVar &Val = Op.Inputs[Op.NumInputs >= 3 ? 2 : 1];
-            if (!Val.isConst() && Alias.count(keyOf(Val)) &&
-                !Mem.stackOffset(Addr))
-              Escapes = true;
+            if (Val.isConst() || Mem.stackOffset(Addr))
+              continue;
+            const ValueKey StoredKey = keyOf(Val);
+            if (MustAlias.count(StoredKey))
+              DefiniteEscapes.push_back({B.Id, OI});
+            else
+              HasPotentialEscape |= Alias.count(StoredKey) != 0;
           }
         }
       }
-      for (const MedCallInfo &CI : F.CallInfos)
-        for (int AI = 0; AI < static_cast<int>(CI.Args.size()); ++AI)
-          if (!CI.Args[AI].isConst() && Alias.count(keyOf(CI.Args[AI]))) {
-            switch (callArgEscape(CI, AI)) {
-            case EscapeState::Yes:
-              Escapes = true;
-              break;
-            case EscapeState::Unknown:
-              Unknown = true;
-              break;
-            case EscapeState::No:
-              break;
-            }
+      for (const MedCallInfo &CI : F.CallInfos) {
+        bool CallDefinitelyEscapes = false;
+        bool CallMayEscape = false;
+        for (int AI = 0; AI < static_cast<int>(CI.Args.size()); ++AI) {
+          if (CI.Args[AI].isConst())
+            continue;
+          const ValueKey ArgKey = keyOf(CI.Args[AI]);
+          if (!Alias.count(ArgKey))
+            continue;
+          switch (callArgEscape(CI, AI)) {
+          case EscapeState::Yes:
+            if (MustAlias.count(ArgKey))
+              CallDefinitelyEscapes = true;
+            else
+              CallMayEscape = true;
+            break;
+          case EscapeState::Unknown:
+            CallMayEscape = true;
+            break;
+          case EscapeState::No:
+            break;
           }
-      if (Escapes)
+        }
+        if (CallDefinitelyEscapes)
+          DefiniteEscapes.push_back({CI.BlockId, CI.OpIdx});
+        else
+          HasPotentialEscape |= CallMayEscape;
+      }
+      if (eventsCoverEveryExit(F, DefiniteEscapes))
         S.EscapesParam.insert(PI);
-      else if (Unknown)
+      else if (!DefiniteEscapes.empty() || HasPotentialEscape)
         S.UnknownParam.insert(PI);
     }
 
@@ -635,24 +650,24 @@ private:
     }
   }
 
-  bool isFreeSite(int BlockId, int OpIdx,
-                  const std::vector<FreeEvent> &Frees) const {
-    for (const FreeEvent &Fr : Frees)
-      if (Fr.BlockId == BlockId && Fr.OpIdx == OpIdx)
+  bool isEventSite(int BlockId, int OpIdx,
+                   const std::vector<FreeEvent> &Events) const {
+    for (const FreeEvent &Event : Events)
+      if (Event.BlockId == BlockId && Event.OpIdx == OpIdx)
         return true;
     return false;
   }
 
-  bool reachesExitWithoutFree(const MedFunc &F, int AllocBlock, int AllocOp,
-                              const std::vector<FreeEvent> &Frees,
-                              bool *ReachedFree = nullptr) const {
+  bool reachesExitWithoutEvent(const MedFunc &F, int StartBlock, int StartOp,
+                               const std::vector<FreeEvent> &Events,
+                               bool *ReachedEvent = nullptr) const {
     llvm::DenseSet<ValueKey> SeenPts;
     std::deque<std::pair<int, int>> Work;
     auto enqueue = [&](int B, int O) {
       if (SeenPts.insert(ValueKey{0, B, O}).second)
         Work.emplace_back(B, O);
     };
-    enqueue(AllocBlock, AllocOp + 1);
+    enqueue(StartBlock, StartOp + 1);
     while (!Work.empty()) {
       auto [BlkId, OpIdx] = Work.front();
       Work.pop_front();
@@ -671,9 +686,9 @@ private:
           enqueue(S, 0);
         continue;
       }
-      if (isFreeSite(BlkId, OpIdx, Frees)) {
-        if (ReachedFree)
-          *ReachedFree = true;
+      if (isEventSite(BlkId, OpIdx, Events)) {
+        if (ReachedEvent)
+          *ReachedEvent = true;
         continue;
       }
       if (Blk->Ops[OpIdx].Opcode == NdOp::RETURN)
@@ -683,11 +698,27 @@ private:
     return false;
   }
 
+  bool eventsCoverEveryExit(const MedFunc &F,
+                            const std::vector<FreeEvent> &Events) const {
+    if (F.Blocks.empty() || Events.empty())
+      return false;
+    int EntryBlock = F.Blocks.front().Id;
+    for (const MedBlock &B : F.Blocks)
+      if (B.StartAddr == F.Entry) {
+        EntryBlock = B.Id;
+        break;
+      }
+    bool ReachedEvent = false;
+    const bool HasUncoveredExit =
+        reachesExitWithoutEvent(F, EntryBlock, -1, Events, &ReachedEvent);
+    return ReachedEvent && !HasUncoveredExit;
+  }
+
   bool shouldReportLeak(const MedFunc &F, const MedCallInfo &Alloc,
                         const std::vector<FreeEvent> &Frees) const {
     if (Frees.empty())
       return true;
-    return reachesExitWithoutFree(F, Alloc.BlockId, Alloc.OpIdx, Frees);
+    return reachesExitWithoutEvent(F, Alloc.BlockId, Alloc.OpIdx, Frees);
   }
 
   bool hasUnresolvedLifecycleCall(const MedFunc &F, const CFG &G,

@@ -413,6 +413,62 @@ TEST(AllocLifetime, AlternateFreeSitesProveWrapperReleased) {
   EXPECT_FALSE(has(audit({Helper.F, User.F}), VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, ConditionalEscapeWrapperDoesNotHideCallerLeak) {
+  FB Helper("conditional_escape", 0x200);
+  Helper.F.Params = {temp(0)};
+  int hEntry = Helper.block();
+  int hPublish = Helper.block();
+  int hSkip = Helper.block();
+  int hJoin = Helper.block();
+  Helper.succ(hEntry, hPublish);
+  Helper.succ(hEntry, hSkip);
+  Helper.succ(hPublish, hJoin);
+  Helper.succ(hSkip, hJoin);
+  Helper.op(hPublish, NdOp::STORE, MedVar{},
+            {MedVar::makeConst(0x5000, 8), temp(0)});
+  Helper.ret(hJoin, {});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(u0, "conditional_escape", MedVar{}, {temp(1)}, 0x200);
+  User.ret(u0, {});
+
+  auto Fs = audit({Helper.F, User.F});
+  const Finding *UserLeak = nullptr;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+      UserLeak = &F;
+  ASSERT_NE(UserLeak, nullptr);
+  EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, AlternateEscapeSitesProveWrapperEscaped) {
+  FB Helper("always_escape", 0x200);
+  Helper.F.Params = {temp(0)};
+  int hEntry = Helper.block();
+  int hLeft = Helper.block();
+  int hRight = Helper.block();
+  int hJoin = Helper.block();
+  Helper.succ(hEntry, hLeft);
+  Helper.succ(hEntry, hRight);
+  Helper.succ(hLeft, hJoin);
+  Helper.succ(hRight, hJoin);
+  Helper.op(hLeft, NdOp::STORE, MedVar{},
+            {MedVar::makeConst(0x5000, 8), temp(0)});
+  Helper.op(hRight, NdOp::STORE, MedVar{},
+            {MedVar::makeConst(0x6000, 8), temp(0)});
+  Helper.ret(hJoin, {});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(u0, "always_escape", MedVar{}, {temp(1)}, 0x200);
+  User.ret(u0, {});
+
+  EXPECT_FALSE(has(audit({Helper.F, User.F}), VulnClass::HeapLeak));
+}
+
 TEST(AllocLifetime, DoubleFreeSequential) {
   FB B("f", 0x100);
   int b0 = B.block();
