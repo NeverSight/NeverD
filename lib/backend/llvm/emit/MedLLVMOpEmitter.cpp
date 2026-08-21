@@ -73,18 +73,8 @@ llvm::Value *MedLLVMEmitter::resolveAtomicMemoryPtr(
     const MedVar &AddressVar, uint16_t AccessBytes, llvm::Type *AccessTy,
     llvm::IRBuilder<> &Builder) {
   llvm::Value *Address = nullptr;
-  std::optional<uint64_t> ResolvedAddress;
-  if (Img) {
-    if (AddressVar.isConst())
-      ResolvedAddress = AddressVar.ConstVal;
-    else
-      ResolvedAddress = traceSSAConst(AddressVar);
-  }
-  if (ResolvedAddress) {
-    const unsigned AddressBits = AddressVar.Size > 0 ? AddressVar.Size * 8 : 64;
-    if (!isFrameRelativeDisplacement(*ResolvedAddress, AddressBits))
-      Address = tryResolveGlobalData(*ResolvedAddress, AccessBytes);
-  }
+  if (Img)
+    Address = tryResolveDirectGlobalDataAddress(AddressVar, AccessBytes);
   if (!Address && Img)
     Address = tryResolveWritableData(AddressVar, AccessBytes, Builder);
   if (!Address) {
@@ -124,9 +114,10 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   // Integer relations and arithmetic must consume the same relocatable code
   // identity that observable value sinks use.  Keep this occurrence-scoped:
-  // an architectural PC/interior label used as a switch arithmetic base has
-  // no FuncNames identity and therefore stays with its established numeric
-  // owner, while an ADR/LEA of an emitted function becomes ptrtoint @func.
+  // an AArch32 architectural-PC seed used as a switch arithmetic base stays
+  // with its established numeric owner, while an authenticated function or an
+  // exact lifted-block address on targets without a readable PC GPR becomes a
+  // relocation-aware ptrtoint identity.
   auto GetRelocatableIdentityInput = [&](uint8_t Idx) -> llvm::Value * {
     if (Idx >= Op.NumInputs)
       return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), 0);
@@ -205,14 +196,12 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       const va_t Normalized =
           normalizeCodeAddress(Input.ConstVal, Img ? Img->Arch : TargetArch,
                                Img ? Img->Mode : InstructionMode::Default);
-      if (auto It = FuncNames.find(Normalized); It != FuncNames.end())
-        KnownFunction = Mod->getFunction(It->second);
+      KnownFunction = resolveLiftedFunctionEntry(Normalized);
     }
-    Result = KnownFunction
-                 ? Builder.CreatePtrToInt(KnownFunction,
-                                          sizeToType(Op.Output.Size),
-                                          "code.copy")
-                 : GetInput(0);
+    Result = KnownFunction ? Builder.CreatePtrToInt(KnownFunction,
+                                                    sizeToType(Op.Output.Size),
+                                                    "code.copy")
+                           : GetInput(0);
     break;
   }
   case NdOp::INT_ADD: {
@@ -582,6 +571,36 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           return Code;
       if (Idx < Op.NumInputs && TargetArch == Arch::ARM && Img && CurMedFunc &&
           !Op.Inputs[Idx].isConst()) {
+        uint64_t ExactVA = 0;
+        uint64_t ExactOwnerVA = InvalidVA;
+        if (resolveMaterializableDataAddress(Op.Inputs[Idx], ExactVA,
+                                             &ExactOwnerVA) &&
+            ExactOwnerVA != InvalidVA) {
+          // getVar has already selected this occurrence's authenticated owner.
+          // Do not replace it below through a value-only lookup: an owner's
+          // one-past address may equal the beginning of an adjacent object.
+          return GetInput(Idx);
+        }
+        std::set<DataAddressIdentity> Identities;
+        if (recoverAbsoluteDataPointerLoadIdentities(Op.Inputs[Idx],
+                                                     Identities)) {
+          if (Identities.size() == 1) {
+            const DataAddressIdentity &Identity = *Identities.begin();
+            MedVar Owned = MedVar::makeConst(
+                Identity.VA, Op.Inputs[Idx].Size,
+                ConstantAddressProvenance::DataAddress, Identity.OwnerVA);
+            if (Identity.OwnerVA != InvalidVA &&
+                writableDataSegOf(Owned, /*RequireRelocBase=*/true))
+              if (auto *G = tryResolveOwnedGlobalData(
+                      Identity.VA, Identity.OwnerVA, Op.Inputs[Idx].Size))
+                return Builder.CreatePtrToInt(
+                    G, sizeToType(Op.Inputs[Idx].Size), "wlitlane");
+          }
+          // The relocation mirror has already materialized this lane. Never
+          // replace an owner-bearing absolute pointer through a value-only
+          // lookup that may select an adjacent section with the same VA.
+          return GetInput(Idx);
+        }
         bool SawLoad = false;
         if (auto VA = traceTableBaseConst(Op.Inputs[Idx], 0, &SawLoad))
           if (SawLoad && *VA != 0 &&
@@ -722,21 +741,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     auto *ValTy = sizeToType(Op.Output.Size);
     llvm::Value *Ptr = nullptr;
     const MedVar &AddrVar = Op.Inputs[0];
-    uint64_t ResolvedAddr = 0;
-    if (Op.NumInputs >= 1 && Img) {
-      if (AddrVar.isConst()) {
-        ResolvedAddr = AddrVar.ConstVal;
-      } else if (auto Traced = traceSSAConst(AddrVar)) {
-        ResolvedAddr = *Traced;
-      }
-    }
-    if (ResolvedAddr != 0) {
-      unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
-      if (!isFrameRelativeDisplacement(ResolvedAddr, AddrBits)) {
-        uint16_t Hint = Op.Output.Size;
-        Ptr = tryResolveGlobalData(ResolvedAddr, Hint);
-      }
-    }
+    if (Op.NumInputs >= 1 && Img)
+      Ptr = tryResolveDirectGlobalDataAddress(AddrVar, Op.Output.Size);
     bool IsGlobalData = (Ptr != nullptr);
     if (!Ptr && Img && Op.NumInputs >= 1) {
       // Runtime-indexed access into a writable .data / .bss segment: redirect
@@ -745,11 +751,22 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // that claims writable data (the rodata resolvers below reject it).
       Ptr = tryResolveWritableData(AddrVar, Op.Output.Size, Builder);
       if (!Ptr)
-        // Function-pointer table dispatch: addr = code_ptr_table + idx*ptrsize.
-        // Checked next so a `.data.rel.ro` code-pointer table is rebuilt as a
-        // `ptrtoint @func` array instead of falling into the raw-byte data
-        // path.
-        Ptr = tryResolveCodePtrTablePtr(AddrVar, Builder);
+      // Function-pointer table dispatch: addr = code_ptr_table + idx*ptrsize.
+      // Checked next so a `.data.rel.ro` code-pointer table is rebuilt as a
+      // `ptrtoint @func` array instead of falling into the raw-byte data
+      // path.
+      {
+        bool AllowImplicitZeroBase = false;
+        if (CurMedFunc)
+          for (const JumpTable &JT : CurMedFunc->JumpTables)
+            if (JT.HasBaseAddr && JT.BaseAddr == 0 && JT.InsnAddr == Op.Addr &&
+                JT.EntrySize == Op.Output.Size) {
+              AllowImplicitZeroBase = true;
+              break;
+            }
+        Ptr =
+            tryResolveCodePtrTablePtr(AddrVar, Builder, AllowImplicitZeroBase);
+      }
       if (!Ptr)
         // Immutable-data resolver arbitration is shared with pointer
         // arguments: the generic all-arms audit defers a pure recurrent PHI to
@@ -784,26 +801,14 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     auto *Val = GetInput(1);
     llvm::Value *Ptr = nullptr;
     const MedVar &AddrVar = Op.Inputs[0];
-    uint64_t ResolvedAddr = 0;
     if (Op.NumInputs >= 1 && Img) {
-      if (AddrVar.isConst()) {
-        ResolvedAddr = AddrVar.ConstVal;
-      } else if (auto Traced = traceSSAConst(AddrVar)) {
-        ResolvedAddr = *Traced;
+      uint16_t Hint = 0;
+      if (Val->getType()->isSized()) {
+        uint64_t Bits = Mod->getDataLayout().getTypeSizeInBits(Val->getType());
+        if (Bits > 0 && Bits <= 64 && (Bits % 8) == 0)
+          Hint = static_cast<uint16_t>(Bits / 8);
       }
-    }
-    if (ResolvedAddr != 0) {
-      unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
-      if (!isFrameRelativeDisplacement(ResolvedAddr, AddrBits)) {
-        uint16_t Hint = 0;
-        if (Val->getType()->isSized()) {
-          uint64_t Bits =
-              Mod->getDataLayout().getTypeSizeInBits(Val->getType());
-          if (Bits > 0 && Bits <= 64 && (Bits % 8) == 0)
-            Hint = static_cast<uint16_t>(Bits / 8);
-        }
-        Ptr = tryResolveGlobalData(ResolvedAddr, Hint);
-      }
+      Ptr = tryResolveDirectGlobalDataAddress(AddrVar, Hint);
     }
     bool IsGlobalData = (Ptr != nullptr);
     if (!Ptr && Img && Op.NumInputs >= 1) {
@@ -860,8 +865,19 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                           : ConstantProvenanceSummary{};
     if (Op.NumInputs >= 2 && !IsLocalValueTransport)
       rejectEscapingAddressFragment(Op.Inputs[1], "a stored value");
+    const bool StoredAddressRelation =
+        StoredOccurrence.Model ==
+        ConstantProvenanceSummary::ValueModel::Address;
+    auto traceStoredAddress = [&]() -> std::optional<uint64_t> {
+      // Address is producer evidence that this value is a complete address
+      // relation, so its consumer may use the width-aware arithmetic folder.
+      // Keep ordinary/unknown values on the COPY-only trace: widening that
+      // path would again turn low integer coincidences into data pointers.
+      return StoredAddressRelation ? traceValueVA(Op.Inputs[1])
+                                   : traceSSAConst(Op.Inputs[1]);
+    };
     if (Img && Op.NumInputs >= 2 && Val && Val->getType()->isIntegerTy() &&
-        !StoredOccurrence.hasExplicitProvenance()) {
+        (!StoredOccurrence.hasExplicitProvenance() || StoredAddressRelation)) {
       const bool HasMatchingSlotReload =
           frameSlotHasMatchingKeyLoad(Op.Inputs[0]);
       bool FrameReSymbolized =
@@ -871,6 +887,18 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (!FrameReSymbolized && PtrSz && Op.Inputs[1].Size == PtrSz) {
         Sym = tryResolveWritableData(Op.Inputs[1], Op.Inputs[1].Size, Builder,
                                      /*IsValueOperand=*/true);
+        // Exact relocation ownership outranks the numeric target.  In
+        // particular `&A[N]` may equal the next section B's start; value-only
+        // lookup would silently store &B instead of A's one-past pointer.
+        if (!Sym) {
+          uint64_t OwnedVA = 0;
+          uint64_t OwnerVA = InvalidVA;
+          if (resolveMaterializableDataAddress(Op.Inputs[1], OwnedVA,
+                                               &OwnerVA) &&
+              OwnerVA != InvalidVA)
+            Sym =
+                tryResolveOwnedGlobalData(OwnedVA, OwnerVA, Op.Inputs[1].Size);
+        }
         // The stored value may be a pointer to a read-only pointer TABLE — a
         // vtable / const dispatch-table base (`obj->vt = &VT`).  Its slots are
         // relocated by the code-pointer mirror, so a raw store leaves the later
@@ -881,7 +909,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         // frame-derived base the consumer re-symbolizes is already excluded
         // above.
         if (!Sym)
-          if (auto C = traceSSAConst(Op.Inputs[1])) {
+          if (auto C = traceStoredAddress()) {
             // A vtable / dispatch-table base lives in read-only-after-reloc
             // DATA
             // (`.data.rel.ro` / `.rodata`), never in executable code.  An
@@ -936,7 +964,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           Sym = tryResolveLiteralPoolBase(Op.Inputs[1], Op.Inputs[1].Size,
                                           Builder);
         if (!Sym)
-          if (auto C = traceSSAConst(Op.Inputs[1])) {
+          if (auto C = traceStoredAddress()) {
             const Segment *Seg = Img->getSegmentFor(*C);
             if (Seg && Seg->isReadable() && !Seg->isWritable() &&
                 !Seg->isExecutable() && !Seg->Data.empty())

@@ -169,8 +169,7 @@ bool MachORelocResolver::populateFromImage(const BinaryImage &Image,
     E.Name = Imp.Name;
     E.Addr = Imp.IATAddr;
     E.Size = StubSz;
-    const Segment *Seg = Image.getSegmentFor(E.Addr);
-    E.IsCode = Seg && Seg->isExecutable();
+    E.IsCode = Image.isImportStubAt(E.Addr);
     ByName[E.Name] = Entries.size();
     Entries.push_back(std::move(E));
   }

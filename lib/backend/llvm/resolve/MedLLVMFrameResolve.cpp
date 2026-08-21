@@ -86,7 +86,8 @@ bool MedLLVMEmitter::frameDerivedRec(
     // whole function (e.g. clang's table-driven CRC alongside msg[]).
     if (const PhiNode *Phi = lookupPhi(V))
       for (const auto &[PredId, Arg] : Phi->Args)
-        if (frameDerivedRec(Arg, Visited))
+        if (phiIncomingEdgeFeasible(*Phi, PredId) &&
+            frameDerivedRec(Arg, Visited))
           return true;
     return false;
   }
@@ -142,11 +143,10 @@ bool MedLLVMEmitter::frameAddressRec(
     return false;
 
   if (const PhiNode *Phi = lookupPhi(V))
-    for (const auto &[PredId, Arg] : Phi->Args) {
-      (void)PredId;
-      if (frameAddressRec(Arg, Visited))
+    for (const auto &[PredId, Arg] : Phi->Args)
+      if (phiIncomingEdgeFeasible(*Phi, PredId) &&
+          frameAddressRec(Arg, Visited))
         return true;
-    }
 
   const MedOp *Def = lookupDef(V);
   if (!Def)
@@ -161,8 +161,14 @@ bool MedLLVMEmitter::frameAddressRec(
   case NdOp::INT_AND:
   case NdOp::INT_OR:
   case NdOp::INT_XOR:
-  case NdOp::SELECT:
     for (uint8_t I = 0; I < Def->NumInputs; ++I)
+      if (frameAddressRec(Def->Inputs[I], Visited))
+        return true;
+    return false;
+  case NdOp::SELECT:
+    if (!selectPreservesPointerValues(*Def))
+      return false;
+    for (uint8_t I = 1; I < Def->NumInputs; ++I)
       if (frameAddressRec(Def->Inputs[I], Visited))
         return true;
     return false;

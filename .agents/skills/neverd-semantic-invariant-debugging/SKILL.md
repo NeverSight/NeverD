@@ -282,6 +282,100 @@ reinterpretation. Do not infer a code-identity role from executable-segment
 membership alone: architectural PC values used by switch lowering are
 layout-dependent numerics, not automatically function pointers.
 
+Do not infer code identity from a mixed symbol-name map either. Loader import
+maps include data bind/IAT slots such as RTTI vtable fields and Objective-C
+class references; a name at an address is not proof that the address denotes a
+callable symbol. Require explicit code provenance or an actually materializable
+lifted `Function`/`BlockAddress`. An exact format-native section must also beat
+coarse segment permissions: Mach-O uses instruction attributes, while ELF/COFF
+use the section executable flag. Thus an RX `__TEXT` header/alignment gap or
+non-executable `.rodata` sharing an RX load map with `.text` is not code. Use
+segment-level fallback only when the current mapped segment has no overlapping
+mapped/readable section metadata. Keep this check segment-local: packed/partial images
+may describe one data segment while leaving a different executable segment
+section-less. Once the current segment has section ownership, an uncovered
+header/gap has no section code owner.
+
+Separate stable ownership from late materialization. The structural
+upper-bound may trust a lifted function entry or a loader-authenticated import
+veneer, but it must not depend on whether an earlier CALL happened to create an
+LLVM declaration. Cache only that stable owner fact. The precise consumer may
+then materialize the current `Function`, or fail closed if no declaration is
+available; never cache a transient module-order-dependent `false`. Treat an
+authenticated but unresolved entry as strong relocation evidence so an
+unsupported transform cannot silently escape as raw arithmetic.
+
+Re-authenticate the same owner after a patch pipeline reloads the input image.
+Cached discovery sets such as `CodeRefTargets` are enrichment, not the only
+proof that a synthetic original-VA symbol denotes a function. A fresh loader
+may instead prove it through a typed function symbol, known-code range, export
+with a section code owner, or explicit import veneer. This distinction is
+observable on ARM/Thumb, where serializing a code pointer can change its low
+mode bit even though x64/AArch64 address serialization is numerically inert.
+In particular, when patch symbolization reuses an absolute-address symbol
+spelling for a defined function's original identity, every Mach-O, ELF, COFF,
+and in-place resolver must recover the typed function owner before deciding
+whether to serialize that address as code.
+
+Apply the same format-aware code classifier at every producer. Absolute
+relocations and relocation-free RIP-relative LEA discovery must agree with the
+consumer about Mach-O section instruction attributes; otherwise a header,
+alignment gap, or `__cstring` address can re-enter the pipeline as a strong
+code target even after the emitter-side classifier was fixed.
+
+Heuristic post-load discovery is another producer, not independent proof.
+Import-thunk byte patterns, padding/prologue scans, and data function-pointer
+scans may only publish a function symbol or stub after the candidate entry has
+one exact section code owner for every byte the recognizer consumes. Checking
+only the first instruction lets a pattern start at the tail of `.text` and
+finish in adjacent data. Otherwise executable-segment data can be promoted into
+a typed function symbol, which later stages will reasonably—but incorrectly—
+treat as authenticated identity.
+
+Treat exports as names, not automatic function ownership. Mach-O export tries
+and ELF/COFF symbol surfaces can name data in a coarse RX mapping, including
+bytes that happen to decode as a valid return sequence. Function discovery and
+patch-time source-function authentication must require the same format-aware
+section code owner before trusting an export; otherwise detection can
+manufacture a function from data and the patcher can overwrite it with a
+trampoline.
+
+An import's legacy `IATAddr` is likewise not structural stub proof: dyld bind
+metadata can place a data pointer slot in an executable segment. Prefer exact
+loader-recorded stub indices/ranges. If compatibility requires treating an
+`IATAddr` as a veneer, limit that fallback to the legacy format that needs it
+and require the same section-aware code classification; section-less images may
+retain the documented segment fallback. PE/ELF IAT or GOT slots remain data
+unless their loaders explicitly register a thunk/stub owner.
+
+### Keep source replacement transactional
+
+A lifted source definition is replaceable only when its original entry can
+host the target trampoline without crossing a code-owner boundary or another
+authenticated entry. If it cannot, externalize that definition before final
+code generation so generated callers continue to resolve the original body
+and no duplicate unwind record or second implementation is emitted. Merely
+skipping its trampoline after compiling a copy creates split direct/indirect
+call semantics. An exact replacement plan with zero eligible definitions is a
+successful no-op; it must never fall back to legacy name-based trampoline
+installation. For the replaceable subset, require one authenticated source
+identity, one installed trampoline receipt, and one matching generated owner.
+
+Preflight preserved definitions before calling `Function::deleteBody()`.
+LLVM rewrites a still-live `blockaddress` whose BasicBlock is destroyed to an
+`inttoptr(1)` sentinel, so a label address that escapes through another emitted
+function, a global initializer, or metadata would otherwise become a silent
+miscompile. Walk the complete constant-user DAG before mutating any body and
+fail closed unless every terminal instruction belongs to another definition
+being externalized in the same transaction.
+
+Target-specific lowering exceptions used only by final-image rewriting need an
+explicit backend-mode bit in addition to a tightly scoped IR marker and symbol
+shape. Metadata alone is forgeable and cannot authorize bypassing the normal
+object ABI. Verify address materialization after sliding the emitted bytes, not
+only at the preferred base, so an absolute constant cannot masquerade as a
+relocation-aware relation.
+
 ### Preserve observable code identity
 
 Code identity is observable when carried as an integer value, not only when

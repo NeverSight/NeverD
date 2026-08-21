@@ -471,7 +471,8 @@ MedVar LowToMedConverter::ndVarToMedVar(const NdVar &VN) {
     break;
   }
   case VnodeSpace::CONST: {
-    MV = MedVar::makeConst(VN.Offset, VN.Size, VN.Provenance);
+    MV =
+        MedVar::makeConst(VN.Offset, VN.Size, VN.Provenance, VN.AddressOwnerVA);
     break;
   }
   case VnodeSpace::STACK: {

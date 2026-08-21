@@ -47,16 +47,38 @@
 
 namespace neverd {
 
-uint64_t MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
-                                           bool RequireRelocBase) const {
+std::optional<uint64_t>
+MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
+                                  bool RequireRelocBase) const {
   if (!Img || !CurMedFunc)
-    return 0;
-  auto writableSeg = [&](uint64_t C) -> const Segment * {
-    if (C == 0)
+    return std::nullopt;
+  auto writableSeg = [&](uint64_t C,
+                         const MedVar *ExactOccurrence) -> const Segment * {
+    const bool HasOwner =
+        ExactOccurrence &&
+        isDataAddressProvenance(ExactOccurrence->Provenance) &&
+        ExactOccurrence->AddressOwnerVA != InvalidVA;
+    if (C == 0 && !HasOwner)
       return nullptr;
-    const Segment *S = Img->getSegmentFor(C);
+
+    // An occurrence-local relocation owner is authoritative. In particular,
+    // `&rodata[N]` may numerically equal the next writable section's start;
+    // it must not be reclassified as that section merely because another
+    // relocation targets the same integer value.
+    const Segment *S = HasOwner
+                           ? Img->getSegmentFor(ExactOccurrence->AddressOwnerVA)
+                           : Img->getSegmentFor(C);
     if (!S || !isMutableDataSeg(S) || (S->Data.empty() && S->Size == 0))
       return nullptr;
+    if (HasOwner) {
+      const Section *OwnerSec =
+          Img->getSectionFor(ExactOccurrence->AddressOwnerVA);
+      const uint64_t Begin = OwnerSec ? OwnerSec->VA : S->VA;
+      const uint64_t Size = OwnerSec ? OwnerSec->Size : S->Size;
+      if (Size > InvalidVA - Begin || C < Begin || C > Begin + Size)
+        return nullptr;
+      return S;
+    }
     // A VALUE context (store/return operand) demands the base be a recorded
     // writable relocation target: an ordinary data immediate that merely lands
     // in a wide low-VA run (a 4-byte LCG increment on a 32-bit target) is not a
@@ -69,8 +91,8 @@ uint64_t MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
     return S;
   };
   if (AddrVar.isConst()) {
-    const Segment *S = writableSeg(AddrVar.ConstVal);
-    return S ? S->VA : 0;
+    const Segment *S = writableSeg(AddrVar.ConstVal, &AddrVar);
+    return S ? std::optional<uint64_t>(S->VA) : std::nullopt;
   }
 
   // Memoize the DAG walk per non-constant address value: it is a pure function
@@ -87,7 +109,7 @@ uint64_t MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
   auto findDef = [&](const MedVar &X) { return lookupDef(X); };
   auto findPhi = [&](const MedVar &X) { return lookupPhi(X); };
 
-  auto compute = [&]() -> uint64_t {
+  auto compute = [&]() -> std::optional<uint64_t> {
     uint64_t SegVA = 0;
     bool Found = false;
     std::vector<MedVar> Work{AddrVar};
@@ -98,23 +120,54 @@ uint64_t MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
       Work.pop_back();
       // A fully-constant subexpression is a base or an offset: record it as a
       // base only when it lands in a writable data segment.
-      if (auto C = traceTableBaseConst(Cur)) {
-        if (const Segment *S = writableSeg(*C)) {
+      if (Cur.isConst()) {
+        const bool HasOwner = isDataAddressProvenance(Cur.Provenance) &&
+                              Cur.AddressOwnerVA != InvalidVA;
+        if (const Segment *S = writableSeg(Cur.ConstVal, &Cur)) {
           if (Found && SegVA != S->VA)
-            return 0; // base constants span two distinct data segments
+            return std::nullopt; // bases span two distinct data segments
+          SegVA = S->VA;
+          Found = true;
+        } else if (HasOwner)
+          return std::nullopt;
+        continue;
+      }
+      uint64_t ExactAddress = 0;
+      uint64_t ExactOwnerVA = InvalidVA;
+      if (resolveMaterializableDataAddress(Cur, ExactAddress, &ExactOwnerVA) &&
+          ExactOwnerVA != InvalidVA) {
+        MedVar Owned = MedVar::makeConst(ExactAddress, Cur.Size,
+                                         ConstantAddressProvenance::DataAddress,
+                                         ExactOwnerVA);
+        if (const Segment *S = writableSeg(ExactAddress, &Owned)) {
+          if (Found && SegVA != S->VA)
+            return std::nullopt;
+          SegVA = S->VA;
+          Found = true;
+        } else
+          return std::nullopt;
+        // Even a non-writable owner is authoritative: do not retry the same
+        // numeric value through a neighbouring writable section.
+        continue;
+      }
+      if (auto C = traceTableBaseConst(Cur); C && *C != 0) {
+        if (const Segment *S = writableSeg(*C, nullptr)) {
+          if (Found && SegVA != S->VA)
+            return std::nullopt;
           SegVA = S->VA;
           Found = true;
         }
         continue;
       }
-      if (Cur.isConst())
-        continue;
       auto K = std::make_tuple(static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer);
       if (!Seen.insert(K).second)
         continue;
       if (const MedOp *Def = findDef(Cur)) {
         switch (Def->Opcode) {
-        // Address-forming ops: the base may live in any operand, so descend.
+        // Address-forming ops: the base may live in any value operand, so
+        // descend. SELECT's condition controls which pointer is chosen; it is
+        // not part of the resulting address and must never authenticate a
+        // writable-data owner on behalf of two raw value arms.
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
         case NdOp::INT_OR:
@@ -122,9 +175,14 @@ uint64_t MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
         case NdOp::INT_ZEXT:
         case NdOp::INT_SEXT:
         case NdOp::SUBBYTES:
-        case NdOp::SELECT:
           for (int I = 0; I < Def->NumInputs; ++I)
             Work.push_back(Def->Inputs[I]);
+          break;
+        case NdOp::SELECT:
+          if (!selectPreservesPointerValues(*Def))
+            return std::nullopt;
+          Work.push_back(Def->Inputs[1]);
+          Work.push_back(Def->Inputs[2]);
           break;
         case NdOp::INT_AND:
           // Branchless base blend `(-cond & baseA) | (~cond & baseB)`: each arm
@@ -145,12 +203,15 @@ uint64_t MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
               // an RMW value `(x & 0xff) + load(G)` stored back as a G pointer.
               if (C != 0 && (C & (C + 1)) == 0)
                 continue;
-              if (const Segment *S = writableSeg(C)) {
+              const MedVar &Input = Def->Inputs[I];
+              if (const Segment *S = writableSeg(C, &Input)) {
                 if (Found && SegVA != S->VA)
-                  return 0;
+                  return std::nullopt;
                 SegVA = S->VA;
                 Found = true;
-              }
+              } else if (isDataAddressProvenance(Input.Provenance) &&
+                         Input.AddressOwnerVA != InvalidVA)
+                return std::nullopt;
             } else {
               Work.push_back(Def->Inputs[I]);
             }
@@ -176,16 +237,22 @@ uint64_t MedLLVMEmitter::writableDataSegOf(const MedVar &AddrVar,
         }
         continue;
       }
-      if (const PhiNode *Phi = findPhi(Cur))
+      if (const PhiNode *Phi = findPhi(Cur)) {
+        bool SawFeasible = false;
         for (const auto &[PredId, Arg] : Phi->Args) {
-          (void)PredId;
+          if (!phiIncomingEdgeFeasible(*Phi, PredId))
+            continue;
+          SawFeasible = true;
           Work.push_back(Arg);
         }
+        if (!SawFeasible)
+          return std::nullopt;
+      }
     }
-    return Found ? SegVA : 0;
+    return Found ? std::optional<uint64_t>(SegVA) : std::nullopt;
   };
 
-  uint64_t Result = compute();
+  std::optional<uint64_t> Result = compute();
   WritableDataSegCache[CacheKey] = Result;
   return Result;
 }
@@ -197,13 +264,33 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
   (void)SizeHint;
   if (!Img || !CurMedFunc)
     return nullptr;
-  uint64_t SegVA =
+  std::optional<uint64_t> SegVA =
       writableDataSegOf(AddrVar, /*RequireRelocBase=*/IsValueOperand);
   if (!SegVA)
     return nullptr;
-  auto [RunGV, RunStart] = embedWritableRun(SegVA);
+  auto [RunGV, RunStart] = embedWritableRun(*SegVA);
   if (!RunGV)
     return nullptr;
+
+  // Exact DataAddress occurrences are materialized by getVar through their
+  // owner-specific global.  Re-basing that already-relocated value against
+  // the old numeric run would add the writable base twice; this is especially
+  // visible for COPY(&A[N]) when A's one-past value equals B's start.
+  uint64_t ExactAddress = 0;
+  uint64_t ExactOwnerVA = InvalidVA;
+  if (resolveMaterializableDataAddress(AddrVar, ExactAddress, &ExactOwnerVA) &&
+      ExactOwnerVA != InvalidVA) {
+    const Segment *OwnerSeg = Img->getSegmentFor(ExactOwnerVA);
+    if (!OwnerSeg || OwnerSeg->VA != *SegVA)
+      return nullptr;
+    llvm::Value *P = getVar(AddrVar, Builder);
+    if (!P)
+      return nullptr;
+    if (P->getType()->isPointerTy())
+      return P;
+    return Builder.CreateIntToPtr(P, llvm::PointerType::get(*Ctx, 0),
+                                  "wrexactptr");
+  }
 
   // A compiler may merge two forms of the same writable-data pointer at a
   // MedIR PHI: one arm loaded from a relocated data-pointer table (already
@@ -211,73 +298,134 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
   // from an executable literal pool (still the original image VA).  MedIR
   // phis are lowered through edge copies and allocas, so inspect the MedIR
   // provenance here; the pre-optimization LLVM value is only an alloca load.
-  std::function<bool(const MedVar &, int)> carriesSymbolizedPointer =
-      [&](const MedVar &V, int Depth) -> bool {
-    if (V.isConst() || Depth > 16)
-      return false;
+  enum class PointerAddressModel { Raw, Symbolized, Mixed };
+  using PointerModelSeen = std::set<AddressProvenanceVarKey>;
+  auto mergePointerModels = [](PointerAddressModel Left,
+                               PointerAddressModel Right) {
+    if (Left == Right)
+      return Left;
+    return PointerAddressModel::Mixed;
+  };
+  std::map<AddressProvenanceVarKey, PointerAddressModel> PointerModelCache;
+  PointerModelSeen PointerModelActive;
+  std::function<PointerAddressModel(const MedVar &, int)> pointerAddressModel =
+      [&](const MedVar &V, int Depth) -> PointerAddressModel {
+    if (Depth > 32)
+      return PointerAddressModel::Mixed;
+    if (V.isConst()) {
+      uint64_t ExactVA = 0;
+      uint64_t OwnerVA = InvalidVA;
+      if (!resolveMaterializableDataAddress(V, ExactVA, &OwnerVA) ||
+          OwnerVA == InvalidVA)
+        return PointerAddressModel::Raw;
+      const Segment *OwnerSeg = Img->getSegmentFor(OwnerVA);
+      return OwnerSeg && OwnerSeg->VA == *SegVA
+                 ? PointerAddressModel::Symbolized
+                 : PointerAddressModel::Mixed;
+    }
+    const AddressProvenanceVarKey Key = addressProvenanceVarKey(V);
+    if (auto It = PointerModelCache.find(Key); It != PointerModelCache.end())
+      return It->second;
+    if (!PointerModelActive.insert(Key).second)
+      return PointerAddressModel::Mixed;
+    auto finish = [&](PointerAddressModel Result) {
+      PointerModelActive.erase(Key);
+      PointerModelCache[Key] = Result;
+      return Result;
+    };
     if (const PhiNode *Phi = lookupPhi(V)) {
+      std::optional<PointerAddressModel> Result;
       for (const auto &[PredId, Arg] : Phi->Args) {
-        (void)PredId;
-        if (carriesSymbolizedPointer(Arg, Depth + 1))
-          return true;
+        if (!phiIncomingEdgeFeasible(*Phi, PredId))
+          continue;
+        PointerAddressModel Arm = pointerAddressModel(Arg, Depth + 1);
+        Result = Result ? mergePointerModels(*Result, Arm) : Arm;
       }
-      return false;
+      return finish(Result.value_or(PointerAddressModel::Mixed));
     }
     const MedOp *Def = lookupDef(V);
     if (!Def)
-      return false;
-    if (Def->Opcode == NdOp::LOAD)
-      return Def->NumInputs >= 1 && ptrTableUniqueSegment(Def->Inputs[0]) != 0;
+      return finish(PointerAddressModel::Raw);
+    if (Def->Opcode == NdOp::LOAD) {
+      if (Def->NumInputs >= 1 &&
+          ptrTableUniqueSegment(Def->Inputs[0]).has_value())
+        return finish(PointerAddressModel::Symbolized);
+
+      // A frame reload has the same emitted addressing model as every exact
+      // reaching STORE source.  In particular, i386 commonly spills an
+      // already-symbolized `ptrtoint(@G + off)` and later indexes through the
+      // reload; classifying the LOAD as raw would rebase it against @G a second
+      // time.  Merge all proven reaching sources so mixed-path spills remain
+      // fail-closed/runtime-arbitrated rather than guessed.
+      std::vector<MedVar> Sources;
+      if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
+        return finish(PointerAddressModel::Raw);
+      std::optional<PointerAddressModel> ReloadModel;
+      for (const MedVar &Source : Sources) {
+        PointerAddressModel SourceModel =
+            pointerAddressModel(Source, Depth + 1);
+        ReloadModel = ReloadModel
+                          ? mergePointerModels(*ReloadModel, SourceModel)
+                          : SourceModel;
+      }
+      return finish(ReloadModel.value_or(PointerAddressModel::Mixed));
+    }
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      return finish(pointerAddressModel(*Forwarded, Depth + 1));
+    auto mergeValueArms = [&](const MedVar &Left, const MedVar &Right) {
+      return mergePointerModels(pointerAddressModel(Left, Depth + 1),
+                                pointerAddressModel(Right, Depth + 1));
+    };
+    if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3 &&
+        selectPreservesPointerValues(*Def))
+      return finish(mergeValueArms(Def->Inputs[1], Def->Inputs[2]));
+    if (Def->Opcode == NdOp::INT_OR && Def->NumInputs >= 2) {
+      MedVar Cond, ArmT, ArmF;
+      if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
+        return finish(mergeValueArms(ArmT, ArmF));
+    }
     switch (Def->Opcode) {
-    case NdOp::COPY:
-    case NdOp::INT_ZEXT:
-    case NdOp::INT_SEXT:
-    case NdOp::SUBBYTES:
     case NdOp::INT_ADD:
     case NdOp::INT_SUB:
     case NdOp::INT_OR:
     case NdOp::INT_AND:
-    case NdOp::INT_XOR:
-    case NdOp::SELECT:
-      for (uint8_t I = 0; I < Def->NumInputs; ++I)
-        if (carriesSymbolizedPointer(Def->Inputs[I], Depth + 1))
-          return true;
-      break;
-    default:
-      break;
+    case NdOp::INT_XOR: {
+      bool SawSymbolized = false;
+      std::vector<MedVar> RawInputs;
+      for (uint8_t I = 0; I < Def->NumInputs; ++I) {
+        PointerAddressModel Input =
+            pointerAddressModel(Def->Inputs[I], Depth + 1);
+        if (Input == PointerAddressModel::Mixed)
+          return finish(Input);
+        SawSymbolized |= Input == PointerAddressModel::Symbolized;
+        if (Input == PointerAddressModel::Raw)
+          RawInputs.push_back(Def->Inputs[I]);
+      }
+      if (SawSymbolized)
+        for (const MedVar &Raw : RawInputs)
+          if (!valueIsStableAddressOffset(Raw))
+            return finish(PointerAddressModel::Mixed);
+      return finish(SawSymbolized ? PointerAddressModel::Symbolized
+                                  : PointerAddressModel::Raw);
     }
-    return false;
+    default:
+      return finish(PointerAddressModel::Raw);
+    }
   };
   auto resolveMixedPointerPhi = [&]() -> llvm::Value * {
-    const PhiNode *BasePhi = lookupPhi(AddrVar);
-    if (!BasePhi)
-      if (const MedOp *Def = lookupDef(AddrVar))
-        if (Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB ||
-            Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
-            Def->Opcode == NdOp::INT_SEXT || Def->Opcode == NdOp::SUBBYTES)
-          for (uint8_t I = 0; I < Def->NumInputs; ++I)
-            if (const PhiNode *Candidate = lookupPhi(Def->Inputs[I])) {
-              BasePhi = Candidate;
-              break;
-            }
-    if (!BasePhi)
-      return nullptr;
-    bool AnySymbolized = false;
-    bool AnyRaw = false;
-    for (const auto &[PredId, Arg] : BasePhi->Args) {
-      (void)PredId;
-      bool IsSymbolized = carriesSymbolizedPointer(Arg, 0);
-      AnySymbolized |= IsSymbolized;
-      AnyRaw |= !IsSymbolized;
-    }
-    if (!AnySymbolized)
+    // Classify the complete address expression rather than searching only one
+    // level for a PHI/SELECT.  Pointer merges routinely sit behind several
+    // COPY/cast/arithmetic forwarders; a shallow search would leave a raw arm
+    // at its stale image VA whenever another arm was already symbolized.
+    PointerAddressModel Model = pointerAddressModel(AddrVar, 0);
+    if (Model == PointerAddressModel::Raw)
       return nullptr;
 
     llvm::Value *Raw = getVar(AddrVar, Builder);
     if (!Raw)
       return nullptr;
     auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
-    if (!AnyRaw)
+    if (Model == PointerAddressModel::Symbolized)
       return Raw->getType()->isPointerTy()
                  ? Raw
                  : Builder.CreateIntToPtr(Raw, PtrTy, "wrptr.symbolized");
@@ -294,9 +442,12 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
     else if (RawInt->getType() != I64Ty)
       RawInt = Builder.CreateZExtOrTrunc(RawInt, I64Ty);
     llvm::Value *InOldRun = Builder.CreateAnd(
-        Builder.CreateICmpUGE(RawInt, llvm::ConstantInt::get(I64Ty, RunStart)),
-        Builder.CreateICmpULT(
-            RawInt, llvm::ConstantInt::get(I64Ty, RunStart + RunLen)));
+        Builder.CreateICmpNE(RawInt, llvm::ConstantInt::get(I64Ty, 0)),
+        Builder.CreateAnd(
+            Builder.CreateICmpUGE(RawInt,
+                                  llvm::ConstantInt::get(I64Ty, RunStart)),
+            Builder.CreateICmpULT(
+                RawInt, llvm::ConstantInt::get(I64Ty, RunStart + RunLen))));
     llvm::Value *OldOff =
         Builder.CreateSub(RawInt, llvm::ConstantInt::get(I64Ty, RunStart));
     llvm::Value *Rebased = Builder.CreateGEP(llvm::Type::getInt8Ty(*Ctx), RunGV,
@@ -308,9 +459,8 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
     return Builder.CreateSelect(InOldRun, Rebased, AlreadySymbolized,
                                 "wrptr.mixed");
   };
-  if (!IsValueOperand)
-    if (llvm::Value *P = resolveMixedPointerPhi())
-      return P;
+  if (llvm::Value *P = resolveMixedPointerPhi())
+    return P;
 
   auto i386WritableBlendAddr = [&](const MedVar &V) -> bool {
     if (TargetArch != Arch::X86 || !CurMedFunc || V.isConst())
@@ -328,10 +478,9 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
       if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
         continue;
       if (const PhiNode *Ph = findPhi(Cur)) {
-        for (const auto &[PredId, Arg] : Ph->Args) {
-          (void)PredId;
-          Work.push_back(Arg);
-        }
+        for (const auto &[PredId, Arg] : Ph->Args)
+          if (phiIncomingEdgeFeasible(*Ph, PredId))
+            Work.push_back(Arg);
         continue;
       }
       const MedOp *D = findDef(Cur);
@@ -348,9 +497,14 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
       case NdOp::INT_SUB:
       case NdOp::INT_AND:
       case NdOp::INT_XOR:
-      case NdOp::SELECT:
         for (int I = 0; I < D->NumInputs; ++I)
           Work.push_back(D->Inputs[I]);
+        break;
+      case NdOp::SELECT:
+        if (selectPreservesPointerValues(*D)) {
+          Work.push_back(D->Inputs[1]);
+          Work.push_back(D->Inputs[2]);
+        }
         break;
       default:
         break;
@@ -392,7 +546,7 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
   // stack alloca/load, so the @G reference is not visible on the emitted
   // value).
   if (reloadsSymbolizedWritablePtr(AddrVar) ||
-      addrHasSymbolizedSegConst(AddrVar, SegVA)) {
+      addrHasSymbolizedSegConst(AddrVar, *SegVA)) {
     llvm::Value *P = getVar(AddrVar, Builder);
     if (!P)
       return nullptr;
@@ -400,7 +554,7 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
       return P;
     if (TargetArch == Arch::X86 && !IsValueOperand &&
         !i386WritableBlendAddr(AddrVar) &&
-        addrHasSymbolizedSegConst(AddrVar, SegVA) &&
+        addrHasSymbolizedSegConst(AddrVar, *SegVA) &&
         !i386WalkedPointerDeref(AddrVar)) {
       if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(P)) {
         if (CI->getSExtValue() <
@@ -410,7 +564,7 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
                                    Builder.CreateZExtOrTrunc(P, I64Ty),
                                    "wrptr");
         }
-      } else if (i386PeeledInitStoreAddr(AddrVar, SegVA)) {
+      } else if (i386PeeledInitStoreAddr(AddrVar, *SegVA)) {
         auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
         llvm::Value *Off = P;
         if (Off->getType() != I64Ty)
@@ -420,7 +574,7 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
       } else {
         MedVar SegOff;
         uint64_t BaseConstVA = 0;
-        if (i386WritableSegBasePlusOff(AddrVar, SegVA, SegOff, BaseConstVA)) {
+        if (i386WritableSegBasePlusOff(AddrVar, *SegVA, SegOff, BaseConstVA)) {
           llvm::Value *Off = getVar(SegOff, Builder);
           if (!Off)
             return nullptr;
@@ -504,7 +658,7 @@ llvm::Value *MedLLVMEmitter::tryResolveWritableData(const MedVar &AddrVar,
               }
             }
           }
-        } else if (i386PeeledInitStoreAddr(AddrVar, SegVA)) {
+        } else if (i386PeeledInitStoreAddr(AddrVar, *SegVA)) {
           auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
           llvm::Value *Off = P;
           if (Off->getType() != I64Ty)

@@ -57,6 +57,8 @@ size_t scanThumbImportThunks(BinaryImage &Img, const Segment &Seg,
     if (TargetIt == Targets.end())
       continue;
     va_t ThunkVA = normalizeCodeAddress(Seg.VA + I, Img.Arch, Img.Mode);
+    if (!Img.isCodeRange(ThunkVA, arm::kThumbImportThunkLen))
+      continue;
     Img.recordImportStub(ThunkVA, TargetIt->second);
     if (!Existing.insert(ThunkVA).second)
       continue;
@@ -90,6 +92,8 @@ size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
     if (TargetIt == Targets.end())
       continue;
     va_t InsnVA = Seg.VA + I;
+    if (!Img.isCodeRange(InsnVA, arm::kLdrPCTrampLen))
+      continue;
     Img.recordImportStub(InsnVA, TargetIt->second);
     if (!Existing.insert(InsnVA).second)
       continue;

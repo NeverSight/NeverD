@@ -282,7 +282,10 @@ TEST_F(MachOI386Relocation,
     EXPECT_TRUE(Data->isWritable());
     EXPECT_FALSE(Data->isExecutable());
     EXPECT_NE(Img.CodePtrRelocSlots.count(Data->VA + 8), 0u);
-    EXPECT_NE(Img.CodeRefTargets.count(Text->VA), 0u);
+    // A full-width code pointer stored in data is owned by its relocation
+    // slot. Only a relocation embedded in an instruction publishes a bare
+    // CodeRefTarget; otherwise the same occurrence would be modeled twice.
+    EXPECT_EQ(Img.CodeRefTargets.count(Text->VA), 0u);
 
     const Symbol *ReadOnlyValue = findSymbol(Img, "_readonly_value");
     const Symbol *ReadOnlySlot = findSymbol(Img, "_i386_readonly_dispatch");

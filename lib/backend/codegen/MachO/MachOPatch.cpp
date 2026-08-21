@@ -19,6 +19,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/loader/BinaryImage.h"
@@ -26,6 +27,7 @@
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/object/MachOLayout.h"
+#include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -33,6 +35,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <cstring>
@@ -198,11 +201,9 @@ classifyMappedMachOAddress(const BinaryImage &Image, uint64_t Address) {
     return MachOSymbolTargetKind::Callable;
 
   const Section *Section = Image.getSectionFor(Address);
-  if (!Section) {
-    if (!Segment->isExecutable())
-      return MachOSymbolTargetKind::Data;
-    return std::nullopt;
-  }
+  if (!Section)
+    return Image.isCodeAddress(Address) ? MachOSymbolTargetKind::Callable
+                                        : MachOSymbolTargetKind::Data;
 
   const uint32_t Type = Section->Type & SECTION_TYPE;
   const uint32_t Attributes = Section->Type & SECTION_ATTRIBUTES;
@@ -432,6 +433,10 @@ resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested,
     for (const Export &Item : Image.Exports) {
       std::optional<MachOSymbolTargetKind> Kind =
           classifyMappedMachOAddress(Image, Item.Addr);
+      if (Kind && !Image.getSectionFor(Item.Addr) &&
+          *Kind == MachOSymbolTargetKind::Callable &&
+          !Image.hasAuthenticatedFunctionEntryAt(Item.Addr))
+        Kind = MachOSymbolTargetKind::Data;
       if (!Kind || (Use == MachOSymbolUse::Callable &&
                     *Kind != MachOSymbolTargetKind::Callable)) {
         RecordInvalid(Item.Name);
@@ -442,8 +447,16 @@ resolveUniqueMachOSymbol(const BinaryImage &Image, llvm::StringRef Requested,
     for (const Symbol &Item : Image.Symbols) {
       std::optional<MachOSymbolTargetKind> Kind =
           classifyMappedMachOAddress(Image, Item.Addr);
+      const bool HasTypedSection = Image.getSectionFor(Item.Addr) != nullptr;
+      if (Kind && !HasTypedSection) {
+        if (Item.IsFunc && Image.hasExecutableCodeOwnerAt(Item.Addr))
+          Kind = MachOSymbolTargetKind::Callable;
+        else
+          Kind = MachOSymbolTargetKind::Data;
+      }
       if (!Kind ||
-          (Item.IsFunc != (*Kind == MachOSymbolTargetKind::Callable)) ||
+          (HasTypedSection &&
+           Item.IsFunc != (*Kind == MachOSymbolTargetKind::Callable)) ||
           (Use == MachOSymbolUse::Callable &&
            *Kind != MachOSymbolTargetKind::Callable)) {
         RecordInvalid(Item.Name);
@@ -782,25 +795,7 @@ bool isAuthenticatedSourceFunctionEntry(const BinaryImage &Image,
   if (Address == InvalidVA ||
       normalizeCodeAddress(Address, Image.Arch, Image.Mode) != Address)
     return false;
-
-  for (const Symbol &Symbol : Image.Symbols)
-    if (Symbol.IsFunc &&
-        normalizeCodeAddress(Symbol.Addr, Image.Arch, Image.Mode) == Address)
-      return true;
-
-  for (const auto &[Begin, End] : Image.KnownCodeRanges)
-    if (Begin < End &&
-        normalizeCodeAddress(Begin, Image.Arch, Image.Mode) == Address)
-      return true;
-
-  for (const Export &Export : Image.Exports) {
-    const uint64_t ExportAddress =
-        normalizeCodeAddress(Export.Addr, Image.Arch, Image.Mode);
-    const Segment *Segment = Image.getSegmentFor(ExportAddress);
-    if (ExportAddress == Address && Segment && Segment->isExecutable())
-      return true;
-  }
-  return false;
+  return Image.hasAuthenticatedFunctionEntryAt(Address);
 }
 
 llvm::Error validateSourceFunctionIdentities(const CompiledImage &Compiled,
@@ -815,6 +810,11 @@ llvm::Error validateSourceFunctionIdentities(const CompiledImage &Compiled,
   if (!llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
           Compiled.SourceFunctionOwners))
     return sourceIdentityError("compiler source-owner provenance is invalid");
+
+  const uint64_t TrampolineSize =
+      getTargetCodegenInfo(Image->Arch, Image->Mode).trampolineSize();
+  if (TrampolineSize == 0)
+    return sourceIdentityError("the target has no supported entry trampoline");
 
   std::set<uint64_t> SeenOriginalEntries;
   for (const auto &[SourceFunction, OriginalVA] :
@@ -848,22 +848,21 @@ llvm::Error validateSourceFunctionIdentities(const CompiledImage &Compiled,
 }
 
 llvm::Error validateSourceFunctionTrampolineClosure(
-    const CompiledImage &Compiled,
+    const SourceTrampolinePlan &Plan,
     llvm::ArrayRef<PatchedFunctionEntry> PatchedFunctions,
     size_t TrampolineCount) {
   if (TrampolineCount != PatchedFunctions.size() ||
-      PatchedFunctions.size() != Compiled.SourceFunctionOriginalVAs.size())
+      PatchedFunctions.size() != Plan.OriginalVAs.size())
     return sourceIdentityError(
-        "installed trampolines do not cover every original entry exactly once");
+        "installed trampolines do not cover every replaceable original entry "
+        "exactly once");
 
-  for (const auto &[SourceFunction, OriginalVA] :
-       Compiled.SourceFunctionOriginalVAs) {
+  for (const auto &[SourceFunction, OriginalVA] : Plan.OriginalVAs) {
     const auto Owner = std::find_if(
-        Compiled.SourceFunctionOwners.begin(),
-        Compiled.SourceFunctionOwners.end(), [&](const auto &Candidate) {
+        Plan.Owners.begin(), Plan.Owners.end(), [&](const auto &Candidate) {
           return Candidate.SourceFunction == SourceFunction;
         });
-    if (Owner == Compiled.SourceFunctionOwners.end())
+    if (Owner == Plan.Owners.end())
       return sourceIdentityError("an installed source has no compiler owner");
     const size_t Matches =
         std::count_if(PatchedFunctions.begin(), PatchedFunctions.end(),
@@ -1471,7 +1470,7 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
                              << llvm::toString(LoadedImage.takeError()) << "\n";
     return PatchResult{};
   }
-  const BinaryImage AuthenticatedImage = std::move(*LoadedImage);
+  BinaryImage AuthenticatedImage = std::move(*LoadedImage);
 
   return readPatchWrite(
       InputPath, OutputPath, /*SetExecPerm=*/true, "macho_patch",
@@ -1514,6 +1513,21 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
                    "authenticated nlist metadata\n";
             return false;
           }
+
+          // FuncDetector's complete-decode verdict is structural provenance
+          // produced after loading, so a fresh patch-time loader cannot
+          // recreate it by itself.  The byte and address-model checks above
+          // authenticate that the cached analysis belongs to this exact input;
+          // carry only its verified entry points forward, and only while the
+          // fresh image independently provides an executable owner.  A coarse
+          // RX segment is insufficient when exact section metadata says the
+          // cached point belongs to cstring/const data.
+          for (va_t Entry : CachedImage->VerifiedFunctionEntries) {
+            const va_t Normalized = normalizeCodeAddress(
+                Entry, AuthenticatedImage.Arch, AuthenticatedImage.Mode);
+            if (AuthenticatedImage.hasExecutableCodeOwnerAt(Normalized))
+              AuthenticatedImage.VerifiedFunctionEntries.insert(Normalized);
+          }
         }
 
         auto RewriteTarget = resolveMachORewriteTarget(
@@ -1523,6 +1537,21 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
               << "macho_patch: " << llvm::toString(RewriteTarget.takeError())
               << "\n";
           return false;
+        }
+
+        auto CompileMod = llvm::CloneModule(Mod);
+        SourceFunctionPreparation SourcePreparation;
+        if (!prepareSourceFunctionsForPatch(*CompileMod, &AuthenticatedImage,
+                                            SourcePreparation,
+                                            AuthenticatedDetail)) {
+          llvm::WithColor::error()
+              << "macho_patch: source identity preparation failed: "
+              << AuthenticatedDetail << "\n";
+          return false;
+        }
+        if (SourcePreparation.isExactNoOp()) {
+          Result.Success = true;
+          return true;
         }
 
         uint64_t NewSegVMAddr = plannedExecSegmentVA(Binary, TargetArch);
@@ -1550,8 +1579,7 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
           return *Serialized;
         };
         auto IsExecutable = [&](uint64_t VA) {
-          const Segment *Seg = AuthenticatedImage.getSegmentFor(VA);
-          return Seg && Seg->isExecutable();
+          return AuthenticatedImage.isCodeAddress(VA);
         };
         std::optional<std::string> SymbolResolutionFailure;
         auto Resolve =
@@ -1560,6 +1588,12 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
           std::string Name = Request.Symbol.str();
           if (SymbolResolutionFailure)
             return std::nullopt;
+          const std::string PreservedKey = resolveSourceFunctionAlias(
+              Name, SourcePreparation.PreservedOriginalVAs, BinaryFormat::MachO,
+              TargetArch);
+          if (!PreservedKey.empty())
+            return SerializeResolvedCode(
+                SourcePreparation.PreservedOriginalVAs.at(PreservedKey), true);
           auto Use =
               macho_patch_detail::classifyMachOSymbolUse(TargetArch, Request);
           if (!Use) {
@@ -1622,8 +1656,11 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
                       .str();
               return std::nullopt;
             }
-            bool IsCode = IsExecutable(*VA) &&
-                          AuthenticatedImage.CodeRefTargets.count(*VA) != 0;
+            const bool IsCode =
+                isAuthenticatedSourceFunctionEntry(AuthenticatedImage, *VA) ||
+                AuthenticatedImage.isImportStubAt(*VA) ||
+                (IsExecutable(*VA) &&
+                 AuthenticatedImage.CodeRefTargets.count(*VA) != 0);
             if (*Use == macho_patch_detail::MachOSymbolUse::Callable &&
                 !IsCode) {
               SymbolResolutionFailure =
@@ -1650,17 +1687,9 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
                       .str();
               return std::nullopt;
             }
-            const Section *CodeSection = AuthenticatedImage.getSectionFor(*VA);
-            const uint32_t SectionType =
-                CodeSection ? CodeSection->Type & SECTION_TYPE : 0;
-            const uint32_t SectionAttrs =
-                CodeSection ? CodeSection->Type & SECTION_ATTRIBUTES : 0;
             const bool IsCode =
-                IsExecutable(*VA) && CodeSection &&
-                (AuthenticatedImage.isImportStubAt(*VA) ||
-                 SectionType == S_SYMBOL_STUBS ||
-                 (SectionAttrs &
-                  (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)) != 0);
+                AuthenticatedImage.isImportStubAt(*VA) ||
+                (IsExecutable(*VA) && AuthenticatedImage.isCodeAddress(*VA));
             if (*Use == macho_patch_detail::MachOSymbolUse::Callable &&
                 !IsCode) {
               SymbolResolutionFailure =
@@ -1696,7 +1725,7 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         };
 
         CompiledImage Img = compileImageForPatchWithFixedSectionVAs(
-            Mod, TargetArch, BinaryFormat::MachO, NewSegVMAddr, Resolve,
+            *CompileMod, TargetArch, BinaryFormat::MachO, NewSegVMAddr, Resolve,
             FixedSectionVA, /*ImageBaseVA=*/0, RewriteTarget->Triple);
         if (SymbolResolutionFailure) {
           llvm::WithColor::error()
@@ -1727,8 +1756,17 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
           return false;
         }
         if (llvm::Error Error = validateSourceFunctionIdentities(
-                Img, Mod, &AuthenticatedImage)) {
+                Img, *CompileMod, &AuthenticatedImage)) {
           llvm::WithColor::error() << llvm::toString(std::move(Error)) << "\n";
+          return false;
+        }
+        const SourceTrampolinePlan TrampolinePlan =
+            makeSourceTrampolinePlan(Img, &AuthenticatedImage);
+        if (SourcePreparation.HasExactSources &&
+            TrampolinePlan.PreservedCount != 0) {
+          llvm::WithColor::error()
+              << "macho_patch: an unsafe source definition escaped the "
+                 "preservation prepass\n";
           return false;
         }
 
@@ -1753,7 +1791,7 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
 
         std::vector<uint8_t> Candidate = Binary;
         auto EHReceipt = installMachOEHFrameWithReceipt(
-            Candidate, EHRegion, Img, Mod,
+            Candidate, EHRegion, Img, *CompileMod,
             InstallGeneratedCompact ? &GeneratedCompact : nullptr);
         if (!EHReceipt) {
           llvm::WithColor::error()
@@ -1785,18 +1823,20 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
         size_t TrampolineCount = 0;
         std::vector<PatchedFunctionEntry> PatchedFunctions;
         if (Layout.TextSectVA != 0 && Layout.TextSectSize != 0) {
-          TrampolineCount = installTrampolines(
-              Candidate, Img.SymbolAddrs, Layout.TextSectVA,
-              Layout.TextSectSize, Layout.TextSectFileOff,
-              /*ImageBase=*/0, TargetArch, RewriteTarget->Mode,
-              &AuthenticatedImage.Symbols, &AuthenticatedImage.KnownCodeRanges,
-              &AuthenticatedImage.Exports,
-              /*PatchedOriginalEntries=*/nullptr,
-              /*PatchedEntryMappings=*/nullptr, &PatchedFunctions,
-              Img.SourceFunctionOwners, Img.SourceFunctionOriginalVAs);
+          if (!TrampolinePlan.OriginalVAs.empty())
+            TrampolineCount = installTrampolines(
+                Candidate, Img.SymbolAddrs, Layout.TextSectVA,
+                Layout.TextSectSize, Layout.TextSectFileOff,
+                /*ImageBase=*/0, TargetArch, RewriteTarget->Mode,
+                &AuthenticatedImage.Symbols,
+                &AuthenticatedImage.KnownCodeRanges,
+                &AuthenticatedImage.Exports,
+                /*PatchedOriginalEntries=*/nullptr,
+                /*PatchedEntryMappings=*/nullptr, &PatchedFunctions,
+                TrampolinePlan.Owners, TrampolinePlan.OriginalVAs);
         }
         if (llvm::Error Error = validateSourceFunctionTrampolineClosure(
-                Img, PatchedFunctions, TrampolineCount)) {
+                TrampolinePlan, PatchedFunctions, TrampolineCount)) {
           llvm::WithColor::error() << llvm::toString(std::move(Error)) << "\n";
           return false;
         }

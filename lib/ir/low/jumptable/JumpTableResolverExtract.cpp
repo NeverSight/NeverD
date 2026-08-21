@@ -108,7 +108,7 @@ bool CFGBuilder::reconcileSharedTables(const BinaryImage &Img, Decoder &Dec) {
     if (Rec.JumpTableTargets.empty())
       continue;
     auto It = ResolvedTableInfo.find(Addr);
-    if (It == ResolvedTableInfo.end() || It->second.BaseAddr == 0)
+    if (It == ResolvedTableInfo.end() || !It->second.HasBaseAddr)
       continue;
     auto B = BestByBase.find(It->second.BaseAddr);
     if (B == BestByBase.end() ||
@@ -123,7 +123,7 @@ bool CFGBuilder::reconcileSharedTables(const BinaryImage &Img, Decoder &Dec) {
     if (Rec.JumpTableTargets.empty())
       continue;
     auto It = ResolvedTableInfo.find(Addr);
-    if (It == ResolvedTableInfo.end() || It->second.BaseAddr == 0)
+    if (It == ResolvedTableInfo.end() || !It->second.HasBaseAddr)
       continue;
     auto B = BestByBase.find(It->second.BaseAddr);
     if (B == BestByBase.end() || B->second == Addr)
@@ -185,6 +185,7 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
     if (CachedIt != ResolvedTableInfo.end()) {
       auto &Info = CachedIt->second;
       JT.BaseAddr = Info.BaseAddr;
+      JT.HasBaseAddr = Info.HasBaseAddr;
       JT.EntrySize = Info.EntrySize;
       JT.IsRelative = Info.IsRelative;
       JT.IsSigned = Info.IsSigned;
@@ -210,6 +211,7 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
         case NdOp::INT_ADD:
           if (!FoundBase && Op.NumInputs >= 2 && Op.Inputs[1].isConst()) {
             JT.BaseAddr = Op.Inputs[1].Offset;
+            JT.HasBaseAddr = true;
             FoundBase = true;
           }
           break;

@@ -60,7 +60,13 @@ namespace neverd {
 //===----------------------------------------------------------------------===//
 
 bool MedLLVMEmitter::canResolveGlobalDataConstant(uint64_t Addr) const {
-  if (!Img || Addr == 0)
+  if (!Img)
+    return false;
+
+  // The value-only route can never distinguish null/scalar zero from a mapped
+  // ET_REL object at VA zero. Exact relocation occurrences and pointer slots
+  // carry an owner and use tryResolveOwnedGlobalData instead.
+  if (Addr == 0)
     return false;
 
   // An anchored folded base has an explicit owner.  If that owner cannot be
@@ -121,6 +127,103 @@ bool MedLLVMEmitter::canResolveGlobalDataConstant(uint64_t Addr) const {
   // relocation target and fail closed via FatalCodePointerResolution, but it
   // can never legitimately fall back to an unmapped or byte-less address.
   return Addr - Seg->VA < Seg->Data.size();
+}
+
+llvm::Constant *
+MedLLVMEmitter::tryResolveDirectGlobalDataAddress(const MedVar &Address,
+                                                  uint16_t DataSizeHint) {
+  if (!Img)
+    return nullptr;
+
+  uint64_t OwnedAddress = 0;
+  uint64_t OwnerVA = InvalidVA;
+  if (resolveMaterializableDataAddress(Address, OwnedAddress, &OwnerVA) &&
+      OwnerVA != InvalidVA) {
+    const unsigned AddressBits = Address.Size > 0 ? Address.Size * 8 : 64;
+    if (isFrameRelativeDisplacement(OwnedAddress, AddressBits))
+      return nullptr;
+    return tryResolveOwnedGlobalData(OwnedAddress, OwnerVA, DataSizeHint);
+  }
+
+  std::optional<uint64_t> NumericAddress =
+      Address.isConst() ? std::optional<uint64_t>(Address.ConstVal)
+                        : traceSSAConst(Address);
+  if (!NumericAddress)
+    return nullptr;
+  if (*NumericAddress == 0)
+    return nullptr;
+  const unsigned AddressBits = Address.Size > 0 ? Address.Size * 8 : 64;
+  if (isFrameRelativeDisplacement(*NumericAddress, AddressBits))
+    return nullptr;
+  return tryResolveGlobalData(*NumericAddress, DataSizeHint);
+}
+
+llvm::Constant *
+MedLLVMEmitter::tryResolveOwnedGlobalData(uint64_t Addr, uint64_t OwnerVA,
+                                          uint16_t DataSizeHint) {
+  if (!Img || OwnerVA == InvalidVA)
+    return tryResolveGlobalData(Addr, DataSizeHint);
+
+  const Segment *OwnerSeg = Img->getSegmentFor(OwnerVA);
+  if (!OwnerSeg || !OwnerSeg->isReadable())
+    return nullptr;
+  const Section *OwnerSec = Img->getSectionFor(OwnerVA);
+  const uint64_t OwnerBegin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
+  const uint64_t OwnerSize = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
+  if (OwnerSize > InvalidVA - OwnerBegin)
+    return nullptr;
+  const uint64_t OwnerEnd = OwnerBegin + OwnerSize;
+
+  // i386 GOTOFF may encode `symbol + negative bias`, placing the folded
+  // numeric base immediately before its read-only owner.  The loader records
+  // that relation explicitly; honor it before the ordinary inclusive owner
+  // range check so the owner metadata does not accidentally disable the
+  // established negative-anchor route.
+  if (auto Anchor = Img->RodataAnchorSeg.find(Addr);
+      Anchor != Img->RodataAnchorSeg.end() && Anchor->second == OwnerSeg->VA) {
+    auto [RunGV, RunStart] = embedRodataRun(Anchor->second);
+    if (!RunGV)
+      return nullptr;
+    auto *I64 = llvm::Type::getInt64Ty(*Ctx);
+    auto *Off = llvm::ConstantInt::get(I64, Addr - RunStart);
+    return llvm::ConstantExpr::getGetElementPtr(llvm::Type::getInt8Ty(*Ctx),
+                                                RunGV, Off);
+  }
+
+  if (Addr < OwnerBegin || Addr > OwnerEnd)
+    return nullptr;
+
+  // Interior addresses keep every established special case (Objective-C
+  // runtime identities, compact strings, pointer mirrors).  The owner-aware
+  // path is required when zero denotes NOBITS storage or when one-past lands
+  // in another section and value-only lookup would choose that neighbour.
+  const Section *NumericSec = Img->getSectionFor(Addr);
+  if (Addr < OwnerEnd && NumericSec == OwnerSec &&
+      !(Addr == 0 && !Img->hasObjectDataProvenance(0)))
+    if (llvm::Constant *Direct = tryResolveGlobalData(Addr, DataSizeHint))
+      return Direct;
+
+  llvm::GlobalVariable *RunGV = nullptr;
+  uint64_t RunStart = 0;
+  if (isMutableDataSeg(OwnerSeg)) {
+    std::tie(RunGV, RunStart) = embedWritableRun(OwnerSeg->VA);
+  } else if (segHasPtrRelocSlots(OwnerSeg)) {
+    uint64_t OutVA = 0;
+    llvm::Constant *Table = buildCodePtrSegmentGlobal(OwnerSeg->VA, OutVA);
+    RunGV = llvm::dyn_cast_or_null<llvm::GlobalVariable>(Table);
+    RunStart = OutVA;
+  } else if (OwnerSeg->isExecutable()) {
+    std::tie(RunGV, RunStart) = embedExecSegmentRun(OwnerSeg);
+  } else {
+    std::tie(RunGV, RunStart) = embedRodataRun(OwnerSeg->VA);
+  }
+  if (!RunGV)
+    return nullptr;
+
+  auto *I64 = llvm::Type::getInt64Ty(*Ctx);
+  auto *Off = llvm::ConstantInt::get(I64, Addr - RunStart);
+  return llvm::ConstantExpr::getGetElementPtr(llvm::Type::getInt8Ty(*Ctx),
+                                              RunGV, Off);
 }
 
 llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,

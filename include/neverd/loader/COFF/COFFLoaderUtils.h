@@ -15,6 +15,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Object/COFF.h"
 
 #include <cstddef>
@@ -34,8 +35,10 @@ void addImportedSymbol(const llvm::object::imported_symbol_iterator &SI,
 
 /// Parse the COFF symbol table (.symtab) and populate Img.Symbols.
 /// Applies to object files and some executables with embedded symbols.
+/// SectionVAs is an optional one-based mapped-section table; relocatable COFF
+/// uses it because its format-native section VirtualAddress fields must be 0.
 void parseSymbolTable(const llvm::object::COFFObjectFile &Obj, BinaryImage &Img,
-                      uint64_t ImageBase);
+                      uint64_t ImageBase, llvm::ArrayRef<va_t> SectionVAs = {});
 
 /// Parse one delay-import descriptor from the already mapped image.  Supports
 /// current RVA descriptors and legacy VA descriptors, returning the number of

@@ -12,6 +12,7 @@
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/IR/Constants.h"
@@ -27,6 +28,52 @@
 #include <vector>
 
 namespace neverd {
+
+llvm::Constant *MedLLVMEmitter::tryResolveReadOnlyDataOccurrence(
+    const MedVar &Occurrence, uint64_t Address, uint16_t SizeHint) {
+  if (!Img)
+    return nullptr;
+  const unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
+  const uint64_t Mask = PtrSize == 0 || PtrSize >= 8
+                            ? ~uint64_t(0)
+                            : (uint64_t(1) << (PtrSize * 8)) - 1;
+  // A 32-bit absolute pointer LOAD is an address-sized bit pattern.  The
+  // generic literal tracer sign-extends 4-byte loads because PC-relative
+  // displacements also use it; canonicalize this occurrence before applying
+  // its exact relocation owner.
+  const uint64_t CanonicalAddress = Address & Mask;
+  bool OwnerConflict = false;
+  std::optional<uint64_t> Owner;
+  std::set<DataAddressIdentity> Identities;
+  if (recoverAbsoluteDataPointerLoadIdentities(Occurrence, Identities)) {
+    for (const DataAddressIdentity &Identity : Identities) {
+      if ((Identity.VA & Mask) != CanonicalAddress)
+        continue;
+      if (Identity.OwnerVA == InvalidVA ||
+          (Owner && *Owner != Identity.OwnerVA)) {
+        OwnerConflict = true;
+        break;
+      }
+      Owner = Identity.OwnerVA;
+    }
+    // An authenticated absolute pointer LOAD may never degrade to a
+    // value-only lookup, even when legacy input omitted its target owner.
+    if (!Owner)
+      OwnerConflict = true;
+  } else {
+    Owner = uniqueDataAddressOwner(Occurrence, CanonicalAddress, OwnerConflict);
+  }
+  if (OwnerConflict || (CanonicalAddress == 0 && !Owner))
+    return nullptr;
+  if (Owner) {
+    if (!isMaterializableReadOnlyDataAddress(CanonicalAddress, *Owner))
+      return nullptr;
+    return tryResolveOwnedGlobalData(CanonicalAddress, *Owner, SizeHint);
+  }
+  if (!isMaterializableReadOnlyDataAddress(CanonicalAddress))
+    return nullptr;
+  return tryResolveGlobalData(CanonicalAddress, SizeHint);
+}
 
 llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolTable(
     const MedVar &AddrVar, uint16_t SizeHint, llvm::IRBuilder<> &Builder) {
@@ -71,7 +118,7 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolTable(
   bool HaveBase = false;
   std::vector<MedVar> IdxTerms;
   if (!collectLiteralPoolBase(AddrVar, Base, HaveBase, IdxTerms) || !HaveBase ||
-      Base == 0 || IdxTerms.empty())
+      IdxTerms.empty())
     return tryResolveSelectBaseLitTable(AddrVar, SizeHint, Builder);
 
   // A real table index is a data value; a frame-derived addend is stack-pointer
@@ -82,8 +129,6 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolTable(
 
   // Only redirect into a genuine read-only table at this base, and never when
   // the function indexes-stores to it (a read-write array).
-  if (!isMaterializableReadOnlyDataAddress(Base))
-    return nullptr;
   if (StoredBasesFor != CurMedFunc) {
     StoredBasesFor = CurMedFunc;
     StoredConstBases.clear();
@@ -96,7 +141,7 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolTable(
   if (StoredConstBases.count(Base))
     return nullptr;
 
-  auto *G = tryResolveGlobalData(Base, SizeHint);
+  auto *G = tryResolveReadOnlyDataOccurrence(AddrVar, Base, SizeHint);
   if (!G)
     return nullptr;
   if (auto *GV = llvm::dyn_cast<llvm::GlobalVariable>(G->stripPointerCasts()))
@@ -249,12 +294,11 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectBaseLitTable(
     // Whole-expression arithmetic may coincidentally land on a table address;
     // it does not prove that either operand owns that table's provenance. A
     // literal-pool LOAD is the only arithmetic fold that supplies such proof.
-    if (!VA || *VA == 0 || (SawArithmetic && !SawLoad))
+    if (!VA || (SawArithmetic && !SawLoad))
       return nullptr;
-    if (!isMaterializableReadOnlyDataAddress(*VA) ||
-        StoredConstBases.count(*VA))
+    if (StoredConstBases.count(*VA))
       return nullptr;
-    auto *G = tryResolveGlobalData(*VA, SizeHint);
+    auto *G = tryResolveReadOnlyDataOccurrence(Arm, *VA, SizeHint);
     if (!G)
       return nullptr;
     if (auto *GV = llvm::dyn_cast<llvm::GlobalVariable>(G->stripPointerCasts()))
@@ -286,6 +330,45 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   auto findPhi = [&](const MedVar &V) { return lookupPhi(V); };
   auto isReadOnlyTableBase = [&](uint64_t VA) {
     return isMaterializableReadOnlyDataAddress(VA);
+  };
+
+  struct ReadOnlyBaseIdentity {
+    uint64_t VA = 0;
+    uint64_t OwnerVA = InvalidVA;
+
+    bool operator<(const ReadOnlyBaseIdentity &Other) const {
+      return std::tie(VA, OwnerVA) < std::tie(Other.VA, Other.OwnerVA);
+    }
+  };
+  auto isOwnedReadOnlyTableBase = [&](uint64_t VA, uint64_t OwnerVA) {
+    if (OwnerVA == InvalidVA)
+      return isReadOnlyTableBase(VA);
+    const Segment *OwnerSeg = Img->getSegmentFor(OwnerVA);
+    if (!OwnerSeg || !OwnerSeg->isReadable() || OwnerSeg->Data.empty())
+      return false;
+    const Section *OwnerSec = Img->getSectionFor(OwnerVA);
+    const uint64_t Begin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
+    const uint64_t Size = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
+    if (Size > InvalidVA - Begin || VA < Begin || VA > Begin + Size)
+      return false;
+
+    bool HasReadOnlySectionEvidence = false;
+    if (OwnerSec)
+      HasReadOnlySectionEvidence =
+          OwnerSec->isReadable() &&
+          (Img->isMachO() ? !Img->isCodeAddress(OwnerVA)
+                          : !OwnerSec->isExecutable()) &&
+          (!OwnerSec->isWritable() ||
+           section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) ||
+           section_names::isReadOnlyAfterRelocSectionName(
+               OwnerSec->SegmentName));
+    if (OwnerSeg->isWritable() && !isReadOnlyAfterReloc(OwnerSeg) &&
+        !HasReadOnlySectionEvidence)
+      return false;
+    if (OwnerSeg->isExecutable() && Img->hasExecutableCodeOwnerAt(OwnerVA) &&
+        !HasReadOnlySectionEvidence)
+      return false;
+    return true;
   };
 
   // i386 models a machine-width frame pointer through widened MedIR
@@ -356,7 +439,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // distinct reaching bases.  Traverse the constructs clang emits around those
   // merges: PHI, SELECT, the bitwise blend (INT_OR/INT_AND), width casts, COPY,
   // and the literal-pool LOAD (folded by traceTableBaseConst).
-  std::set<uint64_t> Bases;
+  std::set<ReadOnlyBaseIdentity> Bases;
   bool SawPhi = false;
   bool SawNonRecurrentPhi = false;
   bool SawPointerValueMerge = false;
@@ -386,7 +469,9 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       return false;
     switch (Left.Kind) {
     case MedVar::Const:
-      return Left.ConstVal == Right.ConstVal;
+      return Left.ConstVal == Right.ConstVal &&
+             Left.Provenance == Right.Provenance &&
+             Left.AddressOwnerVA == Right.AddressOwnerVA;
     case MedVar::Reg:
     case MedVar::Param:
       return Left.RegOff == Right.RegOff;
@@ -395,6 +480,19 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     default:
       return true;
     }
+  };
+  auto readOnlyBaseIdentity =
+      [&](const MedVar &Occurrence,
+          uint64_t VA) -> std::optional<ReadOnlyBaseIdentity> {
+    bool OwnerConflict = false;
+    std::optional<uint64_t> Owner =
+        uniqueDataAddressOwner(Occurrence, VA, OwnerConflict);
+    if (OwnerConflict)
+      return std::nullopt;
+    const uint64_t OwnerVA = Owner.value_or(InvalidVA);
+    if (!isOwnedReadOnlyTableBase(VA, OwnerVA))
+      return std::nullopt;
+    return ReadOnlyBaseIdentity{VA, OwnerVA};
   };
 
   // A run of ARM predicated instructions is split into synthetic effect
@@ -836,8 +934,8 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     if (varIsFrameDerived(V))
       return BaseProof::Invalid;
     if (V.isConst()) {
-      if (isReadOnlyTableBase(V.ConstVal)) {
-        Bases.insert(V.ConstVal);
+      if (auto Base = readOnlyBaseIdentity(V, V.ConstVal)) {
+        Bases.insert(*Base);
         bool Symbolized = dataOccurrenceSymbolizes(V);
         SawRawOriginalBase |= !Symbolized;
         SawSymbolizedBase |= Symbolized;
@@ -848,6 +946,15 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       // unless getVar itself will relocate it; exact object data is still
       // independent address provenance even when kept raw.
       if (V.Provenance == ConstantAddressProvenance::Scalar)
+        return BaseProof::NoBase;
+      // A role-neutral architectural-PC seed can be the numeric offset side
+      // of a table address (`getpc + GOTOFF`).  It is not a second pointer
+      // base when the ordinary emission path proves that this exact
+      // occurrence stays numeric.  Keep explicit DataAddress/CodeAddress
+      // occurrences, and any Address that a data/code owner would
+      // materialize, on the fail-closed path below.
+      if (V.Provenance == ConstantAddressProvenance::Address &&
+          valueIsStableAddressOffset(V))
         return BaseProof::NoBase;
       if (isAddressProvenance(V.Provenance) ||
           getVarMayRelocateConstant(V.ConstVal, V.Size) ||
@@ -874,13 +981,19 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     bool RelativeSymbolized = false;
     if (recoverRelativeDataPointerTargets(V, PointerTargets,
                                           RelativeSymbolized)) {
-      Bases.insert(PointerTargets.begin(), PointerTargets.end());
+      for (uint64_t Target : PointerTargets)
+        Bases.insert({Target, InvalidVA});
       SawRawOriginalBase |= !RelativeSymbolized;
       SawSymbolizedBase |= RelativeSymbolized;
       return BaseProof::HasBase;
     }
-    if (recoverAbsoluteDataPointerLoadTargets(V, PointerTargets)) {
-      Bases.insert(PointerTargets.begin(), PointerTargets.end());
+    std::set<DataAddressIdentity> PointerIdentities;
+    if (recoverAbsoluteDataPointerLoadIdentities(V, PointerIdentities)) {
+      for (const DataAddressIdentity &Identity : PointerIdentities) {
+        if (!isOwnedReadOnlyTableBase(Identity.VA, Identity.OwnerVA))
+          return BaseProof::NoBase;
+        Bases.insert({Identity.VA, Identity.OwnerVA});
+      }
       SawSymbolizedBase = true;
       return BaseProof::HasBase;
     }
@@ -895,15 +1008,17 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       // A plain ADD hidden under COPY/ZEXT must still be proven structurally;
       // only a literal-pool fold or a pure forwarding chain introduces a base.
       bool FoldPreservesRole = SawLoad || !SawArithmetic;
-      if (FoldPreservesRole && isReadOnlyTableBase(*C)) {
-        Bases.insert(*C);
-        // A non-constant arm is not automatically relocatable: low-VA COPYs
-        // remain original numeric addresses. Classify it with the exact rule
-        // getVar itself uses, while literal-pool arithmetic always stays raw.
-        bool Symbolized = !SawLoad && dataOccurrenceSymbolizes(V);
-        SawRawOriginalBase |= !Symbolized;
-        SawSymbolizedBase |= Symbolized;
-        return BaseProof::HasBase;
+      if (FoldPreservesRole) {
+        if (auto Base = readOnlyBaseIdentity(V, *C)) {
+          Bases.insert(*Base);
+          // A non-constant arm is not automatically relocatable: low-VA COPYs
+          // remain original numeric addresses. Classify it with the exact rule
+          // getVar itself uses, while literal-pool arithmetic always stays raw.
+          bool Symbolized = !SawLoad && dataOccurrenceSymbolizes(V);
+          SawRawOriginalBase |= !Symbolized;
+          SawSymbolizedBase |= Symbolized;
+          return BaseProof::HasBase;
+        }
       }
     }
     if (const PhiNode *Phi = findPhi(V)) {
@@ -928,17 +1043,19 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
           continue;
         SawInitialization = true;
         if (Arg.isConst()) {
-          if (!isReadOnlyTableBase(Arg.ConstVal)) {
+          std::optional<ReadOnlyBaseIdentity> Base =
+              readOnlyBaseIdentity(Arg, Arg.ConstVal);
+          if (!Base) {
             SawScalarArm = true;
             continue;
           }
           if (Phi->Output.Size == 0 || Arg.Size == 0 ||
               Phi->Output.Size < Arg.Size) {
-            Bases.insert(Arg.ConstVal);
+            Bases.insert(*Base);
             SawInvalidPointerExpression = true;
             return BaseProof::Invalid;
           }
-          Bases.insert(Arg.ConstVal);
+          Bases.insert(*Base);
           bool Symbolized = dataOccurrenceSymbolizes(
               Arg, /*DirectPhiConstantBypassesGetVar=*/true);
           SawRawOriginalBase |= !Symbolized;
@@ -1184,7 +1301,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       bool SawBaseSource = false;
       bool SawScalarSource = false;
       bool SawInvalidSource = false;
-      const std::set<uint64_t> BasesBefore = Bases;
+      const std::set<ReadOnlyBaseIdentity> BasesBefore = Bases;
       for (const MedVar &Source : Sources) {
         BaseProof SourceProof = walk(Source, Depth + 1, Seen);
         SawBaseSource |= SourceProof == BaseProof::HasBase;
@@ -1196,7 +1313,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         return BaseProof::Invalid;
       }
       size_t DistinctReloadBases = 0;
-      for (uint64_t Base : Bases)
+      for (const ReadOnlyBaseIdentity &Base : Bases)
         DistinctReloadBases += BasesBefore.count(Base) == 0;
       // A frame slot is an implicit value merge.  Multiple independently
       // reaching raw table bases need the same all-arms owner as an explicit
@@ -1236,7 +1353,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       // base; retaining bases observed on unreachable arms would reintroduce
       // the all-path ambiguity this proof just discharged.
       Bases.clear();
-      Bases.insert(*PredicatedBase);
+      Bases.insert({*PredicatedBase, InvalidVA});
       SawInvalidPointerExpression = false;
       SawRawOriginalBase = true;
       SawSymbolizedBase = false;
@@ -1310,8 +1427,8 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
           if (auto SB = indexedConstBase(Op.Inputs[0]))
             StoredConstBases.insert(*SB);
   }
-  for (uint64_t B : Bases)
-    if (StoredConstBases.count(B)) {
+  for (const ReadOnlyBaseIdentity &B : Bases)
+    if (StoredConstBases.count(B.VA)) {
       return nullptr;
     }
 
@@ -1336,16 +1453,34 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // covers every table the select can reach. Mach-O keeps non-code data such
   // as __TEXT,__cstring inside an executable segment, so use the same bounded
   // executable-segment mirror as direct global-data resolution for that case.
-  const Segment *Seg = Img->getSegmentFor(*Bases.begin());
-  if (!Seg) {
-    failAmbiguousAddress();
-    return nullptr;
-  }
-  for (uint64_t B : Bases)
-    if (Img->getSegmentFor(B) != Seg) {
+  const Segment *Seg = nullptr;
+  std::optional<uint64_t> ExactOwner;
+  bool SawUnownedBase = false;
+  for (const ReadOnlyBaseIdentity &B : Bases) {
+    const uint64_t LookupVA = B.OwnerVA == InvalidVA ? B.VA : B.OwnerVA;
+    const Segment *BaseSeg = Img->getSegmentFor(LookupVA);
+    if (!BaseSeg || (Seg && Seg != BaseSeg)) {
       failAmbiguousAddress();
       return nullptr;
     }
+    Seg = BaseSeg;
+    if (B.OwnerVA == InvalidVA) {
+      SawUnownedBase = true;
+      continue;
+    }
+    if (ExactOwner && *ExactOwner != B.OwnerVA) {
+      failAmbiguousAddress();
+      return nullptr;
+    }
+    ExactOwner = B.OwnerVA;
+  }
+  // An exact relocation occurrence and a value-only legacy candidate cannot
+  // jointly prove one raw address model.  The same numeric VA may denote the
+  // one-past end of one object and the beginning of another.
+  if ((ExactOwner && SawUnownedBase) || !Seg) {
+    failAmbiguousAddress();
+    return nullptr;
+  }
 
   // Anchor the whole access uniformly: the merged value still carries the
   // original VA of whichever table was selected, so
@@ -1384,15 +1519,12 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolBase(
   // equals a data VA, exactly as the function-pointer resolver does.
   bool SawLoad = false;
   auto VA = traceTableBaseConst(AddrVar, 0, &SawLoad);
-  if (!VA || !SawLoad || *VA == 0)
+  if (!VA || !SawLoad)
     return nullptr;
 
   // Redirect only into a genuine read-only data constant (a `.rodata` aggregate
   // initializer); a code VA is a function pointer and an executable literal
   // pool is left to the code-pointer path.
-  if (!isMaterializableReadOnlyDataAddress(*VA))
-    return nullptr;
-
   // Never redirect a load aliasing an indexed store into the same base (a
   // read-write table the function mutates); the read-only gate above already
   // excludes it, but keep the symmetry with tryResolveLiteralPoolTable.
@@ -1408,7 +1540,7 @@ llvm::Value *MedLLVMEmitter::tryResolveLiteralPoolBase(
   if (StoredConstBases.count(*VA))
     return nullptr;
 
-  auto *G = tryResolveGlobalData(*VA, SizeHint);
+  auto *G = tryResolveReadOnlyDataOccurrence(AddrVar, *VA, SizeHint);
   if (!G)
     return nullptr;
   if (auto *GV = llvm::dyn_cast<llvm::GlobalVariable>(G->stripPointerCasts()))

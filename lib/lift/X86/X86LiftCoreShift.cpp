@@ -32,6 +32,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (X86.op_count < 2)
       break;
     NdVar Cnt = L.operandRead(S, X86.operands[1]);
+    if (Cnt.isConst())
+      Cnt.Provenance = ConstantAddressProvenance::Scalar;
     NdVar DstR = L.operandRead(S, X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
 
@@ -44,7 +46,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // x86 masks the shift count: 0x1F for 8/16/32-bit, 0x3F for 64-bit
     uint64_t ShiftMask = (Bits == 64) ? 0x3F : 0x1F;
     NdVar MaskedCnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, MaskedCnt, {Cnt, NdVar::cst(ShiftMask, Sz)});
+    S.emit(NdOp::INT_AND, MaskedCnt, {Cnt, NdVar::scalar(ShiftMask, Sz)});
 
     // Snapshot the source before the shift writes the (aliased) destination, so
     // SHR's OF (= MSB of the original operand) reads the pre-shift value.
@@ -67,14 +69,14 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     {
       NdVar CfIdx = S.makeTemp(Sz);
       if (InsnId == X86_INS_SHL || InsnId == X86_INS_SAL)
-        S.emit(NdOp::INT_SUB, CfIdx, {NdVar::cst(Bits, Sz), MaskedCnt});
+        S.emit(NdOp::INT_SUB, CfIdx, {NdVar::scalar(Bits, Sz), MaskedCnt});
       else
-        S.emit(NdOp::INT_SUB, CfIdx, {MaskedCnt, NdVar::cst(1, Sz)});
+        S.emit(NdOp::INT_SUB, CfIdx, {MaskedCnt, NdVar::scalar(1, Sz)});
       NdVar CfTmp = S.makeTemp(Sz);
       S.emit(NdOp::INT_RIGHT, CfTmp, {DstR, CfIdx});
       NdVar CfBit = S.makeTemp(1);
-      S.emit(NdOp::SUBBYTES, CfBit, {CfTmp, NdVar::cst(0, 4)});
-      S.emit(NdOp::INT_AND, CfBit, {CfBit, NdVar::cst(1, 1)});
+      S.emit(NdOp::SUBBYTES, CfBit, {CfTmp, NdVar::scalar(0, 4)});
+      S.emit(NdOp::INT_AND, CfBit, {CfBit, NdVar::scalar(1, 1)});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {CfBit});
     }
 
@@ -94,7 +96,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (InsnId == X86_INS_SHR) {
       S.emit(NdOp::COPY, OfBit, {L.extractBit(S, PreSrc, Bits - 1)});
     } else if (InsnId == X86_INS_SAR) {
-      S.emit(NdOp::COPY, OfBit, {NdVar::cst(0, 1)});
+      S.emit(NdOp::COPY, OfBit, {NdVar::scalar(0, 1)});
     } else {
       S.emit(NdOp::BOOL_XOR, OfBit,
              {L.extractBit(S, Result, Bits - 1), NdVar::reg(x86reg::CF, 1)});
@@ -116,6 +118,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (X86.op_count < 2)
       break;
     NdVar Cnt = L.operandRead(S, X86.operands[1]);
+    if (Cnt.isConst())
+      Cnt.Provenance = ConstantAddressProvenance::Scalar;
     NdVar DstR = L.operandRead(S, X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     bool MemDst = (X86.operands[0].type == X86_OP_MEM);
@@ -126,14 +130,15 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // x86 masks rotate count: 0x1F for 8/16/32-bit, 0x3F for 64-bit
     uint64_t RotMask = (Bits == 64) ? 0x3F : 0x1F;
     NdVar MaskedCnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, MaskedCnt, {Cnt, NdVar::cst(RotMask, Sz)});
+    S.emit(NdOp::INT_AND, MaskedCnt, {Cnt, NdVar::scalar(RotMask, Sz)});
     // BYTE/WORD rotates take a SECOND reduction mod the operand size (Intel
     // SDM: tempCOUNT = (COUNT AND 1Fh) MOD size).  Since size is a power of two
     // this is `& (Bits-1)`.  Without it, e.g. `rolb $9` feeds x<<9 into the
     // saturating INT_LEFT (over-shift -> 0), dropping the high half.  32/64-bit
     // need no step (the 5/6-bit mask already yields a count < size).
     if (Bits < 32)
-      S.emit(NdOp::INT_AND, MaskedCnt, {MaskedCnt, NdVar::cst(Bits - 1, Sz)});
+      S.emit(NdOp::INT_AND, MaskedCnt,
+             {MaskedCnt, NdVar::scalar(Bits - 1, Sz)});
 
     // Rotates affect only CF and OF; snapshot CF so a zero count preserves it.
     NdVar OldCF = S.makeTemp(1);
@@ -144,27 +149,27 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       NdVar Comp = S.makeTemp(Sz);
       NdVar Shr = S.makeTemp(Sz);
       S.emit(NdOp::INT_LEFT, Shl, {DstR, MaskedCnt});
-      S.emit(NdOp::INT_SUB, Comp, {NdVar::cst(Bits, Sz), MaskedCnt});
-      S.emit(NdOp::INT_AND, Comp, {Comp, NdVar::cst(Bits - 1, Sz)});
+      S.emit(NdOp::INT_SUB, Comp, {NdVar::scalar(Bits, Sz), MaskedCnt});
+      S.emit(NdOp::INT_AND, Comp, {Comp, NdVar::scalar(Bits - 1, Sz)});
       S.emit(NdOp::INT_RIGHT, Shr, {DstR, Comp});
       S.emit(NdOp::INT_OR, Result, {Shl, Shr});
       NdVar CfTmp = S.makeTemp(Sz);
-      S.emit(NdOp::INT_AND, CfTmp, {Result, NdVar::cst(1, Sz)});
+      S.emit(NdOp::INT_AND, CfTmp, {Result, NdVar::scalar(1, Sz)});
       S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::CF, 1),
-             {CfTmp, NdVar::cst(0, Sz)});
+             {CfTmp, NdVar::scalar(0, Sz)});
     } else {
       NdVar Shr = S.makeTemp(Sz);
       NdVar Comp = S.makeTemp(Sz);
       NdVar Shl = S.makeTemp(Sz);
       S.emit(NdOp::INT_RIGHT, Shr, {DstR, MaskedCnt});
-      S.emit(NdOp::INT_SUB, Comp, {NdVar::cst(Bits, Sz), MaskedCnt});
-      S.emit(NdOp::INT_AND, Comp, {Comp, NdVar::cst(Bits - 1, Sz)});
+      S.emit(NdOp::INT_SUB, Comp, {NdVar::scalar(Bits, Sz), MaskedCnt});
+      S.emit(NdOp::INT_AND, Comp, {Comp, NdVar::scalar(Bits - 1, Sz)});
       S.emit(NdOp::INT_LEFT, Shl, {DstR, Comp});
       S.emit(NdOp::INT_OR, Result, {Shr, Shl});
       NdVar CfTmp = S.makeTemp(Sz);
-      S.emit(NdOp::INT_RIGHT, CfTmp, {Result, NdVar::cst(Bits - 1, Sz)});
+      S.emit(NdOp::INT_RIGHT, CfTmp, {Result, NdVar::scalar(Bits - 1, Sz)});
       S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::CF, 1),
-             {CfTmp, NdVar::cst(0, Sz)});
+             {CfTmp, NdVar::scalar(0, Sz)});
     }
     // OF (1-bit rotates only): ROL = MSB(result) ^ LSB(result),
     // ROR = MSB(result) ^ next-MSB(result).
@@ -193,6 +198,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar DstW = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
     NdVar CntRaw = L.operandRead(S, X86.operands[2]);
+    if (CntRaw.isConst())
+      CntRaw.Provenance = ConstantAddressProvenance::Scalar;
     uint16_t Sz = DstR.Size;
     uint16_t Bits = Sz * 8;
     // A MEMORY destination must be written with an explicit STORE:
@@ -204,7 +211,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar Result = MemDst ? S.makeTemp(Sz) : DstW;
     uint64_t ShldMask = (Bits == 64) ? 0x3F : 0x1F;
     NdVar Cnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::cst(ShldMask, Sz)});
+    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::scalar(ShldMask, Sz)});
     // Snapshot flags so a zero (post-mask) count restores them: x86 leaves all
     // flags unchanged when SHLD/SHRD shift by 0 (same rule as the single
     // shifts).
@@ -217,17 +224,17 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar OldPF = S.makeTemp(1);
     S.emit(NdOp::COPY, OldPF, {NdVar::reg(x86reg::PF, 1)});
     NdVar CfIdx = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, CfIdx, {NdVar::cst(Bits, Sz), Cnt});
+    S.emit(NdOp::INT_SUB, CfIdx, {NdVar::scalar(Bits, Sz), Cnt});
     NdVar CfTmp = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, CfTmp, {DstR, CfIdx});
     NdVar CfBit = S.makeTemp(1);
-    S.emit(NdOp::SUBBYTES, CfBit, {CfTmp, NdVar::cst(0, 4)});
-    S.emit(NdOp::INT_AND, CfBit, {CfBit, NdVar::cst(1, 1)});
+    S.emit(NdOp::SUBBYTES, CfBit, {CfTmp, NdVar::scalar(0, 4)});
+    S.emit(NdOp::INT_AND, CfBit, {CfBit, NdVar::scalar(1, 1)});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {CfBit});
     NdVar Hi = S.makeTemp(Sz);
     S.emit(NdOp::INT_LEFT, Hi, {DstR, Cnt});
     NdVar Rem = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, Rem, {NdVar::cst(Bits, Sz), Cnt});
+    S.emit(NdOp::INT_SUB, Rem, {NdVar::scalar(Bits, Sz), Cnt});
     NdVar Lo = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, Lo, {Src, Rem});
     S.emit(NdOp::INT_OR, Result, {Hi, Lo});
@@ -255,6 +262,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar DstW = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
     NdVar CntRaw = L.operandRead(S, X86.operands[2]);
+    if (CntRaw.isConst())
+      CntRaw.Provenance = ConstantAddressProvenance::Scalar;
     uint16_t Sz = DstR.Size;
     uint16_t Bits = Sz * 8;
     // Memory destination: store the result explicitly (see SHLD note above).
@@ -262,7 +271,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar Result = MemDst ? S.makeTemp(Sz) : DstW;
     uint64_t ShrdMask = (Bits == 64) ? 0x3F : 0x1F;
     NdVar Cnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::cst(ShrdMask, Sz)});
+    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::scalar(ShrdMask, Sz)});
     // Snapshot the original destination MSB (for OF) and the flags (for a zero
     // count) before the result write aliases the destination register.
     NdVar PreMsb = S.makeTemp(1);
@@ -276,17 +285,17 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar OldPF = S.makeTemp(1);
     S.emit(NdOp::COPY, OldPF, {NdVar::reg(x86reg::PF, 1)});
     NdVar CfIdx = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, CfIdx, {Cnt, NdVar::cst(1, Sz)});
+    S.emit(NdOp::INT_SUB, CfIdx, {Cnt, NdVar::scalar(1, Sz)});
     NdVar CfTmp = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, CfTmp, {DstR, CfIdx});
     NdVar CfBit = S.makeTemp(1);
-    S.emit(NdOp::SUBBYTES, CfBit, {CfTmp, NdVar::cst(0, 4)});
-    S.emit(NdOp::INT_AND, CfBit, {CfBit, NdVar::cst(1, 1)});
+    S.emit(NdOp::SUBBYTES, CfBit, {CfTmp, NdVar::scalar(0, 4)});
+    S.emit(NdOp::INT_AND, CfBit, {CfBit, NdVar::scalar(1, 1)});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {CfBit});
     NdVar Lo = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, Lo, {DstR, Cnt});
     NdVar Rem = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, Rem, {NdVar::cst(Bits, Sz), Cnt});
+    S.emit(NdOp::INT_SUB, Rem, {NdVar::scalar(Bits, Sz), Cnt});
     NdVar Hi = S.makeTemp(Sz);
     S.emit(NdOp::INT_LEFT, Hi, {Src, Rem});
     S.emit(NdOp::INT_OR, Result, {Lo, Hi});
@@ -313,6 +322,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar SrcR = L.operandRead(S, X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     NdVar CntRaw = L.operandRead(S, X86.operands[1]);
+    if (CntRaw.isConst())
+      CntRaw.Provenance = ConstantAddressProvenance::Scalar;
     uint16_t Sz = SrcR.Size;
     uint16_t Bits = Sz * 8;
     // Memory destination: store the result explicitly (see SHLD note above).
@@ -320,7 +331,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar Result = MemDst ? S.makeTemp(Sz) : DstW;
     uint64_t RcrMask = (Bits == 64) ? 0x3F : 0x1F;
     NdVar Cnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::cst(RcrMask, Sz)});
+    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::scalar(RcrMask, Sz)});
     // RCR affects only CF and OF; snapshot CF so a zero count preserves it.
     NdVar OldCF = S.makeTemp(1);
     S.emit(NdOp::COPY, OldCF, {NdVar::reg(x86reg::CF, 1)});
@@ -329,32 +340,33 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // 32/64-bit need no step (the masked count is already < Bits+1).
     if (Bits < 32) {
       NdVar Modded = S.makeTemp(Sz);
-      S.emit(NdOp::INT_REM, Modded, {Cnt, NdVar::cst((uint64_t)Bits + 1, Sz)});
+      S.emit(NdOp::INT_REM, Modded,
+             {Cnt, NdVar::scalar((uint64_t)Bits + 1, Sz)});
       Cnt = Modded;
     }
     NdVar CfExt = snapshotCarryAtWidth(S, Sz);
     NdVar CfIdx = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, CfIdx, {Cnt, NdVar::cst(1, Sz)});
+    S.emit(NdOp::INT_SUB, CfIdx, {Cnt, NdVar::scalar(1, Sz)});
     NdVar CfShifted = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, CfShifted, {SrcR, CfIdx});
     NdVar NewCf = S.makeTemp(1);
-    S.emit(NdOp::SUBBYTES, NewCf, {CfShifted, NdVar::cst(0, 4)});
-    S.emit(NdOp::INT_AND, NewCf, {NewCf, NdVar::cst(1, 1)});
+    S.emit(NdOp::SUBBYTES, NewCf, {CfShifted, NdVar::scalar(0, 4)});
+    S.emit(NdOp::INT_AND, NewCf, {NewCf, NdVar::scalar(1, 1)});
     NdVar Lower = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, Lower, {SrcR, Cnt});
     NdVar CfPos = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, CfPos, {NdVar::cst(Bits, Sz), Cnt});
+    S.emit(NdOp::INT_SUB, CfPos, {NdVar::scalar(Bits, Sz), Cnt});
     NdVar CfIn = S.makeTemp(Sz);
     S.emit(NdOp::INT_LEFT, CfIn, {CfExt, CfPos});
     // WrapAmt = Bits+1-Cnt.  Clamp to avoid UB shift when Cnt==1.
     NdVar WrapAmtRaw = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, WrapAmtRaw, {NdVar::cst(Bits + 1, Sz), Cnt});
+    S.emit(NdOp::INT_SUB, WrapAmtRaw, {NdVar::scalar(Bits + 1, Sz), Cnt});
     NdVar WrapOk = S.makeTemp(1);
-    S.emit(NdOp::INT_LESS, WrapOk, {WrapAmtRaw, NdVar::cst(Bits, Sz)});
+    S.emit(NdOp::INT_LESS, WrapOk, {WrapAmtRaw, NdVar::scalar(Bits, Sz)});
     NdVar WrapSafe = S.makeTemp(Sz);
     S.emit(NdOp::INT_LEFT, WrapSafe, {SrcR, WrapAmtRaw});
     NdVar Wrapped = S.makeTemp(Sz);
-    S.emit(NdOp::SELECT, Wrapped, {WrapOk, WrapSafe, NdVar::cst(0, Sz)});
+    S.emit(NdOp::SELECT, Wrapped, {WrapOk, WrapSafe, NdVar::scalar(0, Sz)});
     NdVar Tmp1 = S.makeTemp(Sz);
     S.emit(NdOp::INT_OR, Tmp1, {Lower, CfIn});
     S.emit(NdOp::INT_OR, Result, {Tmp1, Wrapped});
@@ -381,6 +393,8 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar SrcR = L.operandRead(S, X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     NdVar CntRaw = L.operandRead(S, X86.operands[1]);
+    if (CntRaw.isConst())
+      CntRaw.Provenance = ConstantAddressProvenance::Scalar;
     uint16_t Sz = SrcR.Size;
     uint16_t Bits = Sz * 8;
     // Memory destination: store the result explicitly (see SHLD note above).
@@ -388,7 +402,7 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar Result = MemDst ? S.makeTemp(Sz) : DstW;
     uint64_t RclMask = (Bits == 64) ? 0x3F : 0x1F;
     NdVar Cnt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::cst(RclMask, Sz)});
+    S.emit(NdOp::INT_AND, Cnt, {CntRaw, NdVar::scalar(RclMask, Sz)});
     // RCL affects only CF and OF; snapshot CF so a zero count preserves it.
     NdVar OldCF = S.makeTemp(1);
     S.emit(NdOp::COPY, OldCF, {NdVar::reg(x86reg::CF, 1)});
@@ -397,33 +411,34 @@ bool liftCoreShift(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // 32/64-bit need no step (the masked count is already < Bits+1).
     if (Bits < 32) {
       NdVar Modded = S.makeTemp(Sz);
-      S.emit(NdOp::INT_REM, Modded, {Cnt, NdVar::cst((uint64_t)Bits + 1, Sz)});
+      S.emit(NdOp::INT_REM, Modded,
+             {Cnt, NdVar::scalar((uint64_t)Bits + 1, Sz)});
       Cnt = Modded;
     }
     NdVar CfExt = snapshotCarryAtWidth(S, Sz);
     NdVar CfBitPos = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, CfBitPos, {NdVar::cst(Bits, Sz), Cnt});
+    S.emit(NdOp::INT_SUB, CfBitPos, {NdVar::scalar(Bits, Sz), Cnt});
     NdVar CfShifted = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, CfShifted, {SrcR, CfBitPos});
     NdVar NewCf = S.makeTemp(1);
-    S.emit(NdOp::SUBBYTES, NewCf, {CfShifted, NdVar::cst(0, 4)});
-    S.emit(NdOp::INT_AND, NewCf, {NewCf, NdVar::cst(1, 1)});
+    S.emit(NdOp::SUBBYTES, NewCf, {CfShifted, NdVar::scalar(0, 4)});
+    S.emit(NdOp::INT_AND, NewCf, {NewCf, NdVar::scalar(1, 1)});
     NdVar Upper = S.makeTemp(Sz);
     S.emit(NdOp::INT_LEFT, Upper, {SrcR, Cnt});
     NdVar CfPos = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, CfPos, {Cnt, NdVar::cst(1, Sz)});
+    S.emit(NdOp::INT_SUB, CfPos, {Cnt, NdVar::scalar(1, Sz)});
     NdVar CfIn = S.makeTemp(Sz);
     S.emit(NdOp::INT_LEFT, CfIn, {CfExt, CfPos});
     // WrapAmt = Bits+1-Cnt.  When Cnt==1, WrapAmt==Bits which is UB for
     // a shift-right of Bits-wide value.  Guard with a saturating clamp.
     NdVar WrapAmtRaw = S.makeTemp(Sz);
-    S.emit(NdOp::INT_SUB, WrapAmtRaw, {NdVar::cst(Bits + 1, Sz), Cnt});
+    S.emit(NdOp::INT_SUB, WrapAmtRaw, {NdVar::scalar(Bits + 1, Sz), Cnt});
     NdVar WrapOk = S.makeTemp(1);
-    S.emit(NdOp::INT_LESS, WrapOk, {WrapAmtRaw, NdVar::cst(Bits, Sz)});
+    S.emit(NdOp::INT_LESS, WrapOk, {WrapAmtRaw, NdVar::scalar(Bits, Sz)});
     NdVar WrapSafe = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, WrapSafe, {SrcR, WrapAmtRaw});
     NdVar Wrapped = S.makeTemp(Sz);
-    S.emit(NdOp::SELECT, Wrapped, {WrapOk, WrapSafe, NdVar::cst(0, Sz)});
+    S.emit(NdOp::SELECT, Wrapped, {WrapOk, WrapSafe, NdVar::scalar(0, Sz)});
     NdVar Tmp1 = S.makeTemp(Sz);
     S.emit(NdOp::INT_OR, Tmp1, {Upper, CfIn});
     S.emit(NdOp::INT_OR, Result, {Tmp1, Wrapped});

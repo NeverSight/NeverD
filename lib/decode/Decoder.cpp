@@ -235,9 +235,10 @@ void Decoder::setDetail(bool On) {
   Detail = On;
 }
 
-void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops) {
+void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+                        llvm::ArrayRef<RelocatedAddressOperand> Relocs) {
   if (X86) {
-    X86->lift(Insn.Raw, Ops);
+    X86->lift(Insn.Raw, Ops, Relocs);
   } else if (AArch64) {
     AArch64->lift(Insn.Raw, Ops);
   } else if (ARM) {

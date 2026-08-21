@@ -235,8 +235,23 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
                  "exception-table rewriting\n";
           return false;
         }
+
+        auto CompileMod = llvm::CloneModule(Mod);
+        SourceFunctionPreparation SourcePreparation;
+        std::string SourceDetail;
+        if (!prepareSourceFunctionsForPatch(*CompileMod, CachedImage,
+                                            SourcePreparation, SourceDetail)) {
+          llvm::WithColor::error()
+              << "coff_patch: source identity preparation failed: "
+              << SourceDetail << "\n";
+          return false;
+        }
+        if (SourcePreparation.isExactNoOp()) {
+          Result.Success = true;
+          return true;
+        }
         auto EHPlanOrErr =
-            planCOFFExceptionPatch(Mod, *CachedImage, TargetArch);
+            planCOFFExceptionPatch(*CompileMod, *CachedImage, TargetArch);
         if (!EHPlanOrErr) {
           llvm::WithColor::error()
               << llvm::toString(EHPlanOrErr.takeError()) << "\n";
@@ -254,14 +269,15 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
           return IsCode ? serializeCodePointer(VA, TargetArch, ResolveMode)
                         : VA;
         };
-        auto IsExecutable = [&](uint64_t VA) {
-          const Segment *Seg = CachedImage ? CachedImage->getSegmentFor(VA)
-                                           : nullptr;
-          return Seg && Seg->isExecutable();
-        };
         auto Resolve = [&](llvm::StringRef Sym,
                            uint32_t) -> std::optional<uint64_t> {
           std::string Name = Sym.str();
+          const std::string PreservedKey = resolveSourceFunctionAlias(
+              Name, SourcePreparation.PreservedOriginalVAs, BinaryFormat::COFF,
+              TargetArch);
+          if (!PreservedKey.empty())
+            return SerializeResolvedCode(
+                SourcePreparation.PreservedOriginalVAs.at(PreservedKey), true);
           if (CachedImage)
             if (auto Personality =
                     findCOFFExceptionPersonalityVA(*CachedImage, Sym))
@@ -269,8 +285,7 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
           std::string Key = resolveSymbolAlias(Name, Layout.IATMap);
           auto It = Layout.IATMap.find(Key);
           if (It != Layout.IATMap.end())
-            return SerializeResolvedCode(Layout.ImageBase + It->second,
-                                         false);
+            return SerializeResolvedCode(Layout.ImageBase + It->second, false);
           if (CachedExports) {
             for (auto &E : *CachedExports)
               if (E.Name == Name)
@@ -284,16 +299,15 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
                 return SerializeResolvedCode(S.Addr, true);
           }
           if (auto VA = parseNdDataSymbol(Name)) {
-            bool IsCode = IsExecutable(*VA) && CachedImage &&
-                          CachedImage->CodeRefTargets.count(*VA) != 0;
-            return SerializeResolvedCode(*VA, IsCode);
+            return CachedImage
+                       ? serializeImageDataSymbolAddress(*CachedImage, *VA)
+                       : *VA;
           }
           if (auto VA = parseNdCodePtrSymbol(Name))
             return SerializeResolvedCode(*VA, false);
           return std::nullopt;
         };
 
-        auto CompileMod = llvm::CloneModule(Mod);
         for (llvm::Function &F : *CompileMod) {
           if (F.isDeclaration() ||
               !findCOFFExceptionPersonalityVA(*CachedImage, F.getName()))
@@ -325,11 +339,53 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
 
         std::vector<va_t> PatchedOriginalEntries;
         std::vector<std::pair<va_t, va_t>> PatchedEntryMappings;
-        size_t TrampCount = installTrampolines(
-            Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
-            Layout.TextFileOff, Layout.ImageBase, TargetArch, CachedMode,
-            CachedSymbols, CachedCodeRanges, CachedExports,
-            &PatchedOriginalEntries, &PatchedEntryMappings);
+        const std::vector<Export> AuthenticatedExports =
+            authenticatedFunctionExports(CachedImage);
+        const std::vector<Export> *TrampolineExports =
+            CachedImage ? &AuthenticatedExports : CachedExports;
+        std::vector<PatchedFunctionEntry> PatchedFunctions;
+        const bool HasExactSourcePlan = SourcePreparation.HasExactSources;
+        if (HasExactSourcePlan &&
+            !validateSourceFunctionPatchPlan(Img, CachedImage, SourceDetail)) {
+          llvm::WithColor::error()
+              << "coff_patch: source identity validation failed: "
+              << SourceDetail << "\n";
+          return false;
+        }
+        const SourceTrampolinePlan TrampolinePlan =
+            HasExactSourcePlan ? makeSourceTrampolinePlan(Img, CachedImage)
+                               : SourceTrampolinePlan{};
+        if (HasExactSourcePlan && TrampolinePlan.PreservedCount != 0) {
+          llvm::WithColor::error()
+              << "coff_patch: an unsafe source definition escaped the "
+                 "preservation prepass\n";
+          return false;
+        }
+
+        size_t TrampCount = 0;
+        if (HasExactSourcePlan) {
+          if (!TrampolinePlan.OriginalVAs.empty())
+            TrampCount = installTrampolines(
+                Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
+                Layout.TextFileOff, Layout.ImageBase, TargetArch, CachedMode,
+                CachedSymbols, CachedCodeRanges, TrampolineExports,
+                &PatchedOriginalEntries, &PatchedEntryMappings,
+                &PatchedFunctions, TrampolinePlan.Owners,
+                TrampolinePlan.OriginalVAs);
+          if (!validatePatchedSourceTrampolineClosure(
+                  TrampolinePlan, PatchedFunctions, TrampCount, SourceDetail)) {
+            llvm::WithColor::error()
+                << "coff_patch: source trampoline closure failed: "
+                << SourceDetail << "\n";
+            return false;
+          }
+        } else {
+          TrampCount = installTrampolines(
+              Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
+              Layout.TextFileOff, Layout.ImageBase, TargetArch, CachedMode,
+              CachedSymbols, CachedCodeRanges, TrampolineExports,
+              &PatchedOriginalEntries, &PatchedEntryMappings);
+        }
 
         auto EHUpdateOrErr = prepareCOFFExceptionDirectory(
             Binary, *CachedImage, Img, PatchedOriginalEntries,

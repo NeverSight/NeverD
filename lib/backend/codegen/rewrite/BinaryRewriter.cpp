@@ -16,6 +16,7 @@
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFInplace.h"
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
@@ -29,8 +30,12 @@
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Magic.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileOutputBuffer.h"
@@ -41,6 +46,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <set>
 
 #define DEBUG_TYPE "neverd-rewriter"
 
@@ -74,6 +80,104 @@ std::unique_ptr<InplaceRewriter> InplaceRewriter::create(BinaryFormat Format) {
   default:
     return nullptr;
   }
+}
+
+std::vector<Export>
+BinaryPatcher::authenticatedFunctionExports(const BinaryImage *Image) {
+  std::vector<Export> Result;
+  if (!Image)
+    return Result;
+  for (const Export &Exp : Image->Exports)
+    if (Image->hasAuthenticatedFunctionEntryAt(Exp.Addr))
+      Result.push_back(Exp);
+  return Result;
+}
+
+bool BinaryPatcher::validateSourceFunctionPatchPlan(
+    const CompiledImage &Compiled, const BinaryImage *Image,
+    std::string &Detail) {
+  Detail.clear();
+  if (Compiled.SourceFunctionOriginalVAs.empty())
+    return true;
+  if (!Image) {
+    Detail = "an exact loader image is required for source identities";
+    return false;
+  }
+  if (!llvm::mc_rewrite::validateRewriteSourceFunctionOwners(
+          Compiled.SourceFunctionOwners)) {
+    Detail = "compiler source-owner provenance is invalid";
+    return false;
+  }
+
+  const uint64_t TrampolineSize =
+      getTargetCodegenInfo(Image->Arch, Image->Mode).trampolineSize();
+  if (TrampolineSize == 0) {
+    Detail = "the target has no supported entry trampoline";
+    return false;
+  }
+
+  std::set<va_t> SeenEntries;
+  for (const auto &[SourceFunction, OriginalVA] :
+       Compiled.SourceFunctionOriginalVAs) {
+    const va_t Normalized =
+        normalizeCodeAddress(OriginalVA, Image->Arch, Image->Mode);
+    if (Normalized != OriginalVA) {
+      Detail = "an original entry uses a non-canonical code address";
+      return false;
+    }
+    const size_t OwnerCount =
+        llvm::count_if(Compiled.SourceFunctionOwners, [&](const auto &Owner) {
+          return Owner.SourceFunction == SourceFunction;
+        });
+    if (OwnerCount != 1) {
+      Detail = "an original entry does not have exactly one compiler owner";
+      return false;
+    }
+    if (!SeenEntries.insert(Normalized).second) {
+      Detail = "two source functions share an original entry";
+      return false;
+    }
+    if (!Image->hasAuthenticatedFunctionEntryAt(OriginalVA)) {
+      Detail = "an original entry is not loader-authenticated code";
+      return false;
+    }
+  }
+  return true;
+}
+
+bool BinaryPatcher::validatePatchedSourceTrampolineClosure(
+    const SourceTrampolinePlan &Plan,
+    llvm::ArrayRef<PatchedFunctionEntry> PatchedFunctions,
+    size_t TrampolineCount, std::string &Detail) {
+  Detail.clear();
+  if (TrampolineCount != PatchedFunctions.size() ||
+      PatchedFunctions.size() != Plan.OriginalVAs.size()) {
+    Detail = "installed trampolines do not cover every replaceable original "
+             "entry";
+    return false;
+  }
+
+  for (const auto &[SourceFunction, OriginalVA] : Plan.OriginalVAs) {
+    const auto Owner = llvm::find_if(Plan.Owners, [&](const auto &Candidate) {
+      return Candidate.SourceFunction == SourceFunction;
+    });
+    if (Owner == Plan.Owners.end()) {
+      Detail = "an installed source has no compiler owner";
+      return false;
+    }
+    const size_t Matches = llvm::count_if(
+        PatchedFunctions, [&](const PatchedFunctionEntry &Patched) {
+          return Patched.SourceFunction == SourceFunction &&
+                 Patched.OriginalVA == OriginalVA &&
+                 Patched.OwnerSymbol == Owner->OwnerSymbol &&
+                 Patched.OwnerVA == Owner->OwnerVA;
+        });
+    if (Matches != 1) {
+      Detail = "an original entry has no exact trampoline receipt";
+      return false;
+    }
+  }
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -247,6 +351,225 @@ provenFunctionSpan(uint64_t OrigVA, uint64_t TextStartVA, uint64_t TextEndVA,
              : 0;
 }
 
+static uint64_t
+provenNextEntrySpan(uint64_t OrigVA, uint64_t TextStartVA, uint64_t TextEndVA,
+                    const std::vector<Symbol> *Symbols,
+                    const std::vector<std::pair<va_t, va_t>> *KnownRanges,
+                    const std::vector<Export> *Exports) {
+  if (OrigVA < TextStartVA || OrigVA >= TextEndVA)
+    return 0;
+  uint64_t Next = TextEndVA;
+  bool Found = false;
+  auto Consider = [&](uint64_t Candidate) {
+    if (Candidate > OrigVA && Candidate < Next && Candidate < TextEndVA) {
+      Next = Candidate;
+      Found = true;
+    }
+  };
+  if (Symbols)
+    for (const Symbol &S : *Symbols)
+      if (S.IsFunc && S.Addr >= TextStartVA)
+        Consider(S.Addr);
+  if (KnownRanges)
+    for (const auto &[Begin, End] : *KnownRanges) {
+      (void)End;
+      if (Begin >= TextStartVA)
+        Consider(Begin);
+    }
+  if (Exports)
+    for (const Export &E : *Exports)
+      if (E.Addr >= TextStartVA)
+        Consider(E.Addr);
+  return Found ? Next - OrigVA : 0;
+}
+
+static bool sourceEntryCanHostTrampoline(const BinaryImage &Image,
+                                         va_t OriginalVA,
+                                         uint64_t TrampolineSize) {
+  if (TrampolineSize == 0 || OriginalVA == InvalidVA)
+    return false;
+  const va_t Normalized =
+      normalizeCodeAddress(OriginalVA, Image.Arch, Image.Mode);
+  if (Normalized != OriginalVA ||
+      !Image.hasExecutableCodeOwnerRange(Normalized, TrampolineSize))
+    return false;
+
+  for (uint64_t Offset = 1; Offset < TrampolineSize; ++Offset) {
+    if (OriginalVA > InvalidVA - Offset)
+      return false;
+    const va_t Candidate =
+        normalizeCodeAddress(OriginalVA + Offset, Image.Arch, Image.Mode);
+    if (Candidate != Normalized &&
+        Image.hasAuthenticatedFunctionEntryAt(Candidate))
+      return false;
+  }
+
+  if (Image.Arch != Arch::ARM || Image.Mode != InstructionMode::Thumb)
+    return true;
+  const Segment *Seg = Image.getSegmentFor(Normalized);
+  const uint64_t End =
+      Seg && Seg->Size <= InvalidVA - Seg->VA ? Seg->VA + Seg->Size : 0;
+  if (!Seg || End <= Seg->VA)
+    return false;
+  return provenFunctionSpan(Normalized, Seg->VA, End, &Image.Symbols,
+                            &Image.KnownCodeRanges,
+                            &Image.Exports) >= TrampolineSize;
+}
+
+bool BinaryPatcher::prepareSourceFunctionsForPatch(
+    llvm::Module &Module, const BinaryImage *Image,
+    SourceFunctionPreparation &Preparation, std::string &Detail) {
+  Preparation = SourceFunctionPreparation{};
+  Detail.clear();
+  std::set<va_t> SeenEntries;
+  struct SourceCandidate {
+    llvm::Function *Function = nullptr;
+    bool Replaceable = false;
+  };
+  std::vector<SourceCandidate> Candidates;
+  const uint64_t TrampolineSize =
+      Image ? getTargetCodegenInfo(Image->Arch, Image->Mode).trampolineSize()
+            : 0;
+
+  for (llvm::Function &Function : Module) {
+    if (Function.isDeclaration())
+      continue;
+    auto Address = rewrite_source::getOriginalVA(Function);
+    if (!Address) {
+      Detail = llvm::toString(Address.takeError());
+      return false;
+    }
+    if (!*Address)
+      continue;
+    Preparation.HasExactSources = true;
+    const va_t OriginalVA = **Address;
+    if (!Image) {
+      Detail = "an exact loader image is required for source identities";
+      return false;
+    }
+    const va_t Normalized =
+        normalizeCodeAddress(OriginalVA, Image->Arch, Image->Mode);
+    if (Normalized != OriginalVA) {
+      Detail = "an original entry uses a non-canonical code address";
+      return false;
+    }
+    if (!SeenEntries.insert(Normalized).second) {
+      Detail = "two source functions share an original entry";
+      return false;
+    }
+    if (!Image->hasAuthenticatedFunctionEntryAt(Normalized)) {
+      Detail = "an original entry is not loader-authenticated code";
+      return false;
+    }
+    const bool Replaceable =
+        sourceEntryCanHostTrampoline(*Image, Normalized, TrampolineSize);
+    auto &OriginalVAs = Replaceable ? Preparation.ReplaceableOriginalVAs
+                                    : Preparation.PreservedOriginalVAs;
+    OriginalVAs.emplace(Function.getName().str(), Normalized);
+    Candidates.push_back({&Function, Replaceable});
+  }
+
+  // Nothing from an exact source plan needs recompilation. Keep the clone
+  // intact and let the format patcher commit a true no-op, irrespective of
+  // unrelated helper definitions or blockaddress constants in the module.
+  if (Preparation.isExactNoOp())
+    return true;
+
+  llvm::SmallPtrSet<const llvm::Function *, 8> FunctionsToExternalize;
+  for (const SourceCandidate &Candidate : Candidates)
+    if (!Candidate.Replaceable)
+      FunctionsToExternalize.insert(Candidate.Function);
+
+  // Deleting a body destroys its BasicBlocks. LLVM intentionally rewrites a
+  // still-live blockaddress for such a block to inttoptr(1), which would turn
+  // a cross-function label reference into a silent stale identity. Validate
+  // the complete preservation set before mutating any source body and reject
+  // the transaction when a block address escapes that body. There is no
+  // authoritative BasicBlock-to-original-VA map here, so guessing a numeric
+  // replacement would be less safe than failing closed.
+  for (const SourceCandidate &Candidate : Candidates) {
+    if (Candidate.Replaceable)
+      continue;
+    for (const llvm::BasicBlock &Block : *Candidate.Function) {
+      llvm::BlockAddress *Address = llvm::BlockAddress::lookup(&Block);
+      if (!Address)
+        continue;
+      if (Address->isUsedByMetadata()) {
+        Detail = "a preserved source has a metadata blockaddress escape";
+        return false;
+      }
+      llvm::SmallVector<const llvm::User *, 8> Worklist;
+      llvm::SmallPtrSet<const llvm::User *, 16> SeenUsers;
+      for (const llvm::User *User : Address->users())
+        Worklist.push_back(User);
+      while (!Worklist.empty()) {
+        const llvm::User *User = Worklist.pop_back_val();
+        if (!SeenUsers.insert(User).second)
+          continue;
+        if (User->isUsedByMetadata()) {
+          Detail = "a preserved source has a metadata blockaddress escape";
+          return false;
+        }
+        if (const auto *Instruction = llvm::dyn_cast<llvm::Instruction>(User)) {
+          if (!FunctionsToExternalize.contains(Instruction->getFunction())) {
+            Detail = "a preserved source has an escaping blockaddress";
+            return false;
+          }
+          continue;
+        }
+        if (llvm::isa<llvm::GlobalValue>(User)) {
+          Detail = "a preserved source has an escaping blockaddress";
+          return false;
+        }
+        if (llvm::isa<llvm::Constant>(User)) {
+          for (const llvm::User *Nested : User->users())
+            Worklist.push_back(Nested);
+          continue;
+        }
+        Detail = "a preserved source has an escaping blockaddress";
+        return false;
+      }
+    }
+  }
+
+  for (const SourceCandidate &Candidate : Candidates) {
+    if (Candidate.Replaceable)
+      continue;
+    Candidate.Function->deleteBody();
+    Candidate.Function->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    Candidate.Function->setDSOLocal(true);
+  }
+  return true;
+}
+
+SourceTrampolinePlan
+BinaryPatcher::makeSourceTrampolinePlan(const CompiledImage &Compiled,
+                                        const BinaryImage *Image) {
+  SourceTrampolinePlan Plan;
+  if (!Image)
+    return Plan;
+  const uint64_t TrampolineSize =
+      getTargetCodegenInfo(Image->Arch, Image->Mode).trampolineSize();
+  if (TrampolineSize == 0)
+    return Plan;
+
+  for (const auto &[SourceFunction, OriginalVA] :
+       Compiled.SourceFunctionOriginalVAs) {
+    const bool Replaceable =
+        sourceEntryCanHostTrampoline(*Image, OriginalVA, TrampolineSize);
+
+    if (!Replaceable) {
+      ++Plan.PreservedCount;
+      continue;
+    }
+    Plan.OriginalVAs.emplace(SourceFunction, OriginalVA);
+    for (const auto &Owner : Compiled.SourceFunctionOwners)
+      if (Owner.SourceFunction == SourceFunction)
+        Plan.Owners.push_back(Owner);
+  }
+  return Plan;
+}
+
 size_t BinaryPatcher::installTrampolines(
     std::vector<uint8_t> &Binary,
     const std::map<std::string, uint64_t> &SymbolAddrs, uint64_t OrigTextVA,
@@ -348,10 +671,32 @@ size_t BinaryPatcher::installTrampolines(
     uint64_t OrigOff = OrigTextFileOff + TextDelta;
     uint64_t OrigAnalysisVA = ImageBase + OrigRVA;
     uint64_t MaxOverwriteBytes = TextEndVA - OrigAnalysisVA;
-    if (TargetArch == Arch::ARM && Mode == InstructionMode::Thumb)
-      MaxOverwriteBytes =
+    // A function-body extent and a safe overwrite boundary are different
+    // concepts.  Every target must stop at the next authenticated entry, while
+    // a fixed-size trampoline may otherwise consume ordinary alignment bytes
+    // after a short body.  Thumb retains the stricter body-span requirement
+    // because its variable-width stream cannot safely infer such padding.
+    const uint64_t NextEntrySpan = provenNextEntrySpan(
+        OrigAnalysisVA, TextStartVA, TextEndVA, Symbols, KnownRanges, Exports);
+    if (NextEntrySpan != 0)
+      MaxOverwriteBytes = std::min(MaxOverwriteBytes, NextEntrySpan);
+    const bool IsThumb =
+        TargetArch == Arch::ARM && Mode == InstructionMode::Thumb;
+    if (IsThumb && SourceFunctionOwners.empty()) {
+      const uint64_t ProvenSpan =
           provenFunctionSpan(OrigAnalysisVA, TextStartVA, TextEndVA, Symbols,
                              KnownRanges, Exports);
+      if (ProvenSpan != 0)
+        MaxOverwriteBytes = std::min(MaxOverwriteBytes, ProvenSpan);
+      else if (IsThumb)
+        MaxOverwriteBytes = 0;
+    }
+    for (const auto &[OtherSource, OtherVA] : SourceFunctionOriginalVAs) {
+      (void)OtherSource;
+      if (OtherVA > OrigAnalysisVA)
+        MaxOverwriteBytes =
+            std::min<uint64_t>(MaxOverwriteBytes, OtherVA - OrigAnalysisVA);
+    }
     if (writeTrampoline(Binary, OrigOff, FuncNewVA, ImageBase + OrigRVA,
                         TargetArch, Mode, MaxOverwriteBytes)) {
       ++Count;
@@ -362,15 +707,14 @@ size_t BinaryPatcher::installTrampolines(
       if (PatchedFunctions)
         PatchedFunctions->push_back({OwnerSymbol.str(), OrigAnalysisVA,
                                      FuncNewVA, SourceFunction.str()});
-      LLVM_DEBUG(llvm::dbgs() << "patch: trampoline " << SourceFunction
-                              << " (" << OwnerSymbol << ") @ VA 0x"
-                              << llvm::utohexstr(OrigRVA) << " -> 0x"
-                              << llvm::utohexstr(FuncNewVA) << "\n");
-    } else {
       LLVM_DEBUG(llvm::dbgs()
-                 << "patch: skipped unsafe/unreachable trampoline "
-                 << SourceFunction
-                 << " @ VA 0x" << llvm::utohexstr(OrigAnalysisVA) << "\n");
+                 << "patch: trampoline " << SourceFunction << " ("
+                 << OwnerSymbol << ") @ VA 0x" << llvm::utohexstr(OrigRVA)
+                 << " -> 0x" << llvm::utohexstr(FuncNewVA) << "\n");
+    } else {
+      LLVM_DEBUG(llvm::dbgs() << "patch: skipped unsafe/unreachable trampoline "
+                              << SourceFunction << " @ VA 0x"
+                              << llvm::utohexstr(OrigAnalysisVA) << "\n");
     }
   };
 

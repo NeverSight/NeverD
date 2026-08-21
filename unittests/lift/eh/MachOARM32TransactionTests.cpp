@@ -9,10 +9,14 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
+#include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/codegen/DwarfEHFrame.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/NdOpEmulator.h"
+#include "neverd/lift/ARMRegs.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/MachOARM32Mode.h"
@@ -33,6 +37,7 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -416,6 +421,70 @@ makeARM32TransactionModule(llvm::LLVMContext &Context) {
   return Module;
 }
 
+std::unique_ptr<llvm::Module>
+makeARM32CodeAddressModule(llvm::LLVMContext &Context) {
+  auto Module =
+      std::make_unique<llvm::Module>("arm32-macho-code-address", Context);
+  Module->setTargetTriple(llvm::Triple("thumbv7k-apple-watchos"));
+  auto *I32 = llvm::Type::getInt32Ty(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(I32, false), llvm::GlobalValue::ExternalLinkage,
+      "lifted_arm32_source_function", Module.get());
+  rewrite_source::setOriginalVA(*Function, kARM32FunctionVA);
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  Builder.CreateRet(llvm::ConstantExpr::getPtrToInt(Function, I32));
+  return Module;
+}
+
+std::optional<uint32_t> emulateThumbI32Return(llvm::ArrayRef<uint8_t> Bytes,
+                                              va_t EntryVA) {
+  BinaryImage Image;
+  Image.Arch = Arch::ARM;
+  Image.Bits = Bitness::Bits32;
+  Image.Mode = InstructionMode::Thumb;
+  Segment Text;
+  Text.VA = EntryVA;
+  Text.Size = Bytes.size();
+  Text.FileSz = Bytes.size();
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Bytes.begin(), Bytes.end());
+  Image.Segments.push_back(std::move(Text));
+
+  Decoder Decode;
+  if (!Decode.init(Arch::ARM, InstructionMode::Thumb))
+    return std::nullopt;
+  std::vector<LowOp> Operations;
+  size_t Offset = 0;
+  bool SawReturn = false;
+  while (Offset < Bytes.size()) {
+    DecodedInsn Instruction{};
+    const int Size =
+        Decode.decodeOne(Bytes.data() + Offset, Bytes.size() - Offset,
+                         EntryVA + Offset, Instruction);
+    if (Size <= 0)
+      return std::nullopt;
+    Decode.liftToLow(Instruction, Operations);
+    Offset += static_cast<size_t>(Size);
+    if (Decode.isFunctionTerminator(Instruction)) {
+      SawReturn = true;
+      break;
+    }
+  }
+  if (!SawReturn)
+    return std::nullopt;
+
+  NdOpEmulator Emulator(Image);
+  Emulator.setStrictMode(true);
+  Emulator.setRegister(armreg::LR, 0);
+  Emulator.run(Operations);
+  if (Emulator.skips().any())
+    return std::nullopt;
+  auto R0 = Emulator.getRegister(armreg::R0);
+  return R0 ? std::optional<uint32_t>(static_cast<uint32_t>(*R0))
+            : std::nullopt;
+}
+
 bool writeFile(llvm::StringRef Path, llvm::ArrayRef<uint8_t> Bytes) {
   std::error_code Error;
   llvm::raw_fd_ostream Stream(Path, Error, llvm::sys::fs::OF_None);
@@ -546,7 +615,7 @@ TEST(MachOARM32Transaction,
         if (ID != LC_SEGMENT)
           return;
         const MachOSegFields Segment = readMachOSegment(Command, Is64);
-        const llvm::StringRef SegmentName = readMachOName(Segment.SegName);
+        const std::string SegmentName = readMachOName(Segment.SegName);
         if (SegmentName == section_names::macho::LinkeditSeg) {
           ShiftedLinkeditOff = Segment.FileOff;
           return;
@@ -670,6 +739,68 @@ TEST(MachOARM32Transaction, ReadsPositiveThumbModeFromExactNListMetadata) {
   ASSERT_TRUE(static_cast<bool>(Serialized))
       << llvm::toString(Serialized.takeError());
   EXPECT_EQ(*Serialized, kARM32MayThrowVA | 1u);
+}
+
+TEST(MachOARM32Transaction,
+     SymbolizedDefinedFunctionAddressKeepsAuthenticatedThumbBit) {
+  ARM32TransactionFixture Fixture = makeARM32TransactionFixture(
+      macho_unwind::kARMModeFrame | macho_unwind::kARMFrameFirstPushR4,
+      /*CompactCapacity=*/0x2000);
+  ASSERT_FALSE(Fixture.Binary.empty());
+  ASSERT_EQ(Fixture.Image.Symbols.size(), 1u);
+  Fixture.Image.Symbols.front().Name = "lifted_arm32_source_function";
+  Fixture.Image.KnownCodeRanges.clear();
+  ASSERT_TRUE(Fixture.Image.CodeRefTargets.empty());
+
+  llvm::SmallString<128> InputPath;
+  llvm::SmallString<128> OutputPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-arm32-macho-code-address-input", "macho", InputPath));
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "neverd-arm32-macho-code-address-output", "macho", OutputPath));
+  llvm::FileRemover RemoveInput(InputPath);
+  llvm::FileRemover RemoveOutput(OutputPath);
+  ASSERT_TRUE(writeFile(InputPath, Fixture.Binary));
+
+  MachOLoader Loader;
+  auto FreshImage = Loader.load(InputPath.str().str());
+  ASSERT_TRUE(static_cast<bool>(FreshImage))
+      << llvm::toString(FreshImage.takeError());
+  EXPECT_TRUE(FreshImage->CodeRefTargets.empty());
+  EXPECT_TRUE(FreshImage->hasFunctionSymbolAt(kARM32FunctionVA));
+
+  llvm::LLVMContext Context;
+  auto Module = makeARM32CodeAddressModule(Context);
+  symbolizeImageAbsolutePointers(*Module, Fixture.Image);
+  llvm::GlobalVariable *OriginalAddress =
+      Module->getNamedGlobal(makeNdDataSymbol(kARM32FunctionVA));
+  ASSERT_NE(OriginalAddress, nullptr);
+  EXPECT_TRUE(OriginalAddress->isDeclaration());
+
+  MachOPatcher Patcher;
+  Patcher.setImageContext(&Fixture.Image);
+  PatchResult Result = Patcher.patch(
+      InputPath.str().str(), OutputPath.str().str(), *Module, Arch::ARM);
+  ASSERT_TRUE(Result.Success);
+  ASSERT_GT(Result.CodeSize, 0u);
+
+  const std::vector<uint8_t> Output = readFile(OutputPath);
+  ASSERT_LE(kARM32LinkeditOff + Result.CodeSize, Output.size());
+  const std::optional<uint32_t> Returned = emulateThumbI32Return(
+      llvm::ArrayRef<uint8_t>(Output).slice(kARM32LinkeditOff, Result.CodeSize),
+      kARM32ImageBase + kARM32LinkeditOff);
+  ASSERT_TRUE(Returned.has_value());
+  EXPECT_EQ(*Returned, kARM32FunctionVA | 1u);
+
+  // The emitted bytes must encode a final-image-relative relation, not merely
+  // the preferred-base absolute value. Re-run the exact bytes after sliding
+  // both the injected entry and original function by one page.
+  constexpr uint32_t Slide = 0x1000;
+  const std::optional<uint32_t> SlidReturned = emulateThumbI32Return(
+      llvm::ArrayRef<uint8_t>(Output).slice(kARM32LinkeditOff, Result.CodeSize),
+      kARM32ImageBase + kARM32LinkeditOff + Slide);
+  ASSERT_TRUE(SlidReturned.has_value());
+  EXPECT_EQ(*SlidReturned, (kARM32FunctionVA + Slide) | 1u);
 }
 
 TEST(MachOARM32Transaction, UnflaggedTextSymbolIsNotARMModeEvidence) {

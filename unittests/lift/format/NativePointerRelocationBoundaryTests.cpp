@@ -14,10 +14,12 @@
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Error.h"
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <regex>
 #include <string>
 #include <string_view>
@@ -37,6 +39,19 @@ protected:
     return std::any_of(
         Img.BaseRelocations.begin(), Img.BaseRelocations.end(),
         [&](const BaseRelocation &R) { return R.Address == Address; });
+  }
+
+  static std::string_view functionBody(std::string_view IR,
+                                       std::string_view Name) {
+    const std::string Marker = "@" + std::string(Name) + "(";
+    const size_t NamePos = IR.find(Marker);
+    if (NamePos == std::string_view::npos)
+      return {};
+    const size_t Start = IR.rfind("define ", NamePos);
+    const size_t End = IR.find("\n}", NamePos);
+    if (Start == std::string_view::npos || End == std::string_view::npos)
+      return {};
+    return IR.substr(Start, End + 2 - Start);
   }
 };
 
@@ -103,6 +118,393 @@ TEST_F(NativePointerRelocationBoundary,
   Img.DyldBindSlots[0x2048] = {"_bind", 0};
   for (va_t Slot : {0x1020, 0x1028, 0x2030, 0x2038, 0x2040, 0x2048})
     EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot));
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       MachOAbsoluteRelocationUsesSectionAwareCodeIdentity) {
+  BinaryImage Img;
+  Img.Format = BinaryFormat::MachO;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = 0x1000;
+  Text.Size = 0x400;
+  Text.FileSz = Text.Size;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  Img.Segments.push_back(std::move(Text));
+
+  Segment Data;
+  Data.Name = "__DATA_CONST";
+  Data.VA = 0x2000;
+  Data.Size = 0x40;
+  Data.FileSz = Data.Size;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(Data.Size);
+  Img.Segments.push_back(std::move(Data));
+
+  Section Code;
+  Code.Name = "__text";
+  Code.SegmentName = "__TEXT";
+  Code.VA = 0x1100;
+  Code.Size = 0x100;
+  Code.FileSz = Code.Size;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Type = static_cast<uint32_t>(llvm::MachO::S_REGULAR) |
+              static_cast<uint32_t>(llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) |
+              static_cast<uint32_t>(llvm::MachO::S_ATTR_SOME_INSTRUCTIONS);
+  Img.Sections.push_back(std::move(Code));
+
+  EXPECT_FALSE(Img.isCodeAddress(0x1000));
+  EXPECT_TRUE(Img.isCodeAddress(0x1100));
+
+  BinaryImage Sectionless = Img;
+  Sectionless.Sections.clear();
+  EXPECT_TRUE(Sectionless.isCodeAddress(0x1000));
+  EXPECT_TRUE(recordAbsolutePointerRelocation(Sectionless, 0x2010, 0x1000));
+  EXPECT_EQ(Sectionless.CodePtrRelocSlots, (std::set<va_t>{0x2010}));
+  EXPECT_TRUE(Sectionless.DataPtrRelocSlots.empty());
+  EXPECT_TRUE(Sectionless.RelocDataAddrs.empty());
+
+  EXPECT_TRUE(recordAbsolutePointerRelocation(Img, 0x2000, 0x1000));
+  EXPECT_EQ(Img.DataPtrRelocSlots, (std::set<va_t>{0x2000}));
+  EXPECT_EQ(Img.RelocDataAddrs, (std::set<va_t>{0x1000}));
+  EXPECT_TRUE(Img.CodePtrRelocSlots.empty());
+  EXPECT_TRUE(Img.CodeRefTargets.empty());
+
+  EXPECT_TRUE(recordAbsolutePointerRelocation(Img, 0x2008, 0x1100));
+  EXPECT_EQ(Img.CodePtrRelocSlots, (std::set<va_t>{0x2008}));
+  EXPECT_EQ(Img.CodeRefTargets, (std::set<va_t>{}));
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       ELFAndCOFFAbsoluteRelocationsUseExactSectionPermissions) {
+  struct Case {
+    BinaryFormat Format;
+    const char *LoadName;
+    const char *DataName;
+    const char *Trace;
+  };
+
+  for (const Case &C : {Case{BinaryFormat::ELF, "PT_LOAD_RX", ".rodata", "ELF"},
+                        Case{BinaryFormat::COFF, ".mixed", ".rdata", "COFF"}}) {
+    SCOPED_TRACE(C.Trace);
+
+    BinaryImage Img;
+    Img.Format = C.Format;
+    Img.Arch = Arch::X64;
+    Img.Bits = Bitness::Bits64;
+
+    Segment Load;
+    Load.Name = C.LoadName;
+    Load.VA = 0x1000;
+    Load.Size = 0x200;
+    Load.FileSz = Load.Size;
+    Load.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Load.Data.resize(Load.Size);
+    Img.Segments.push_back(std::move(Load));
+
+    Segment Slots;
+    Slots.Name = ".reloc-slots";
+    Slots.VA = 0x2000;
+    Slots.Size = 0x20;
+    Slots.FileSz = Slots.Size;
+    Slots.Flags = SegmentFlags::Readable;
+    Slots.Data.resize(Slots.Size);
+    Img.Segments.push_back(std::move(Slots));
+
+    Section Data;
+    Data.Name = C.DataName;
+    Data.SegmentName = C.LoadName;
+    Data.VA = 0x1000;
+    Data.Size = 0x40;
+    Data.FileSz = Data.Size;
+    Data.Flags = SegmentFlags::Readable;
+    Img.Sections.push_back(std::move(Data));
+
+    Section Code;
+    Code.Name = ".text";
+    Code.SegmentName = C.LoadName;
+    Code.VA = 0x1100;
+    Code.Size = 0x40;
+    Code.FileSz = Code.Size;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Img.Sections.push_back(std::move(Code));
+
+    Section SlotSection;
+    SlotSection.Name = ".reloc-slots";
+    SlotSection.SegmentName = ".reloc-slots";
+    SlotSection.VA = 0x2000;
+    SlotSection.Size = 0x20;
+    SlotSection.FileSz = SlotSection.Size;
+    SlotSection.Flags = SegmentFlags::Readable;
+    Img.Sections.push_back(std::move(SlotSection));
+
+    EXPECT_FALSE(Img.isCodeAddress(0x1010));
+    EXPECT_FALSE(Img.isCodeAddress(0x1080));
+    EXPECT_TRUE(Img.isCodeAddress(0x1110));
+
+    BinaryImage Sectionless = Img;
+    Sectionless.Sections.clear();
+    EXPECT_TRUE(Sectionless.isCodeAddress(0x1010));
+
+    BinaryImage PartiallyDescribed = Img;
+    std::erase_if(PartiallyDescribed.Sections,
+                  [](const Section &Sec) { return Sec.VA < 0x1200; });
+    ASSERT_FALSE(PartiallyDescribed.Sections.empty());
+    Section UnmappedMetadata;
+    UnmappedMetadata.Name = ".symtab";
+    UnmappedMetadata.VA = 0x1000;
+    UnmappedMetadata.Size = 0x200;
+    UnmappedMetadata.FileSz = UnmappedMetadata.Size;
+    PartiallyDescribed.Sections.push_back(std::move(UnmappedMetadata));
+    EXPECT_TRUE(PartiallyDescribed.isCodeAddress(0x1010));
+
+    EXPECT_TRUE(recordAbsolutePointerRelocation(Img, 0x2000, 0x1010));
+    EXPECT_TRUE(recordAbsolutePointerRelocation(Img, 0x2008, 0x1110));
+    EXPECT_TRUE(recordAbsolutePointerRelocation(Img, 0x2010, 0x1080));
+    EXPECT_EQ(Img.DataPtrRelocSlots, (std::set<va_t>{0x2000, 0x2010}));
+    EXPECT_EQ(Img.RelocDataAddrs, (std::set<va_t>{0x1010, 0x1080}));
+    EXPECT_EQ(Img.CodePtrRelocSlots, (std::set<va_t>{0x2008}));
+    EXPECT_TRUE(Img.CodeRefTargets.empty());
+  }
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       MachOObjectAbsoluteCodePointerRelocationSurvivesLift) {
+  const fs::path Source = tmpFile("macho_absolute_code_pointer.s");
+  const fs::path Object = tmpFile("macho_absolute_code_pointer.o");
+  {
+    std::ofstream OS(Source);
+    ASSERT_TRUE(OS) << Source;
+    OS << R"(
+.section __TEXT,__text,regular,pure_instructions
+.p2align 2
+.globl _target
+_target:
+  mov w0, #7
+  ret
+
+.globl _get_target
+_get_target:
+  adrp x8, _table@PAGE
+  add x8, x8, _table@PAGEOFF
+  ldr x0, [x8]
+  ret
+
+.section __TEXT,__const
+.p2align 3
+_table:
+  .quad _target
+)";
+  }
+
+  RunResult Compile =
+      exec(NEVERD_TEST_CLANG, {"-target", "arm64-apple-macos14.0", "-c",
+                               Source.string(), "-o", Object.string()});
+  if (Compile.exitCode != 0)
+    GTEST_SKIP() << "clang cannot emit the Mach-O AArch64 fixture: "
+                 << Compile.err;
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::MachO);
+  ASSERT_EQ(Img.Arch, Arch::AArch64);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Section *Table = Img.getSectionByName("__const");
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, sizeof(uint64_t));
+  const va_t Slot = Table->VA;
+  ASSERT_NE(Img.readVA(Slot, sizeof(uint64_t)), nullptr);
+  const va_t Target = readLE<uint64_t>(Img.readVA(Slot, sizeof(uint64_t)));
+  EXPECT_EQ(Img.CodePtrRelocSlots.count(Slot), 1u);
+  EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot));
+  EXPECT_TRUE(Img.hasExecutableCodeOwnerAt(Target));
+
+  RunResult LLVM = liftToLLVMIRUnopt(Object);
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  EXPECT_EQ(LLVM.err.find("refusing stale-address fallback"), std::string::npos)
+      << LLVM.err;
+  EXPECT_TRUE(std::regex_search(
+      LLVM.out,
+      std::regex(
+          R"(@__nd_codeptr_[0-9A-Fa-f]+ = [^\n]*ptrtoint \(ptr @[^ ]+ to i64\))")))
+      << LLVM.out;
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       ELFRelocatableMovabsCodeRelocationStaysInstructionProvenance) {
+  const fs::path Source = tmpFile("elf_movabs_code_reference.s");
+  const fs::path Object = tmpFile("elf_movabs_code_reference.o");
+  {
+    std::ofstream OS(Source);
+    ASSERT_TRUE(OS) << Source;
+    OS << R"(
+.section .text,"ax",@progbits
+.p2align 4
+.globl return_target_immediate
+.type return_target_immediate,@function
+return_target_immediate:
+  movabsq $target, %rax
+  ret
+.size return_target_immediate, .-return_target_immediate
+
+.p2align 4
+.globl target
+.type target,@function
+target:
+  mov $7, %eax
+  ret
+.size target, .-target
+)";
+  }
+
+  RunResult Compile =
+      exec(NEVERD_TEST_CLANG, {"-target", "x86_64-unknown-linux-gnu", "-c",
+                               Source.string(), "-o", Object.string()});
+  if (Compile.exitCode != 0)
+    GTEST_SKIP() << "clang cannot emit the ELF x86-64 fixture: " << Compile.err;
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::ELF);
+  ASSERT_EQ(Img.Arch, Arch::X64);
+  ASSERT_TRUE(Img.IsRelocatable);
+
+  const Section *Text = Img.getSectionByName(".text");
+  ASSERT_NE(Text, nullptr);
+  ASSERT_EQ(Text->VA, 0u);
+  const auto Reloc = std::find_if(
+      Img.Relocations.begin(), Img.Relocations.end(),
+      [](const RelocationEntry &R) {
+        return R.Type == llvm::ELF::R_X86_64_64 && R.SymbolName == "target";
+      });
+  ASSERT_NE(Reloc, Img.Relocations.end());
+  const va_t Place = Text->VA + Reloc->Address;
+  const auto Target =
+      std::find_if(Img.Symbols.begin(), Img.Symbols.end(), [](const Symbol &S) {
+        return S.Name == "target" && S.IsFunc;
+      });
+  ASSERT_NE(Target, Img.Symbols.end());
+  ASSERT_NE(Img.readVA(Place, sizeof(uint64_t)), nullptr);
+  EXPECT_EQ(readLE<uint64_t>(Img.readVA(Place, sizeof(uint64_t))),
+            Target->Addr);
+  EXPECT_EQ(Img.CodePtrRelocSlots.count(Place), 0u);
+  EXPECT_EQ(Img.DataPtrRelocSlots.count(Place), 0u);
+  EXPECT_EQ(Img.CodeRefTargets.count(Target->Addr), 1u);
+
+  RunResult LLVM = liftToLLVMIRUnopt(Object);
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  const std::string_view Body =
+      functionBody(LLVM.out, "return_target_immediate");
+  ASSERT_FALSE(Body.empty()) << LLVM.out;
+  EXPECT_NE(Body.find("ptrtoint (ptr @target to i64)"), std::string_view::npos)
+      << Body;
+  EXPECT_EQ(Body.find("@__nd_codeptr_"), std::string_view::npos) << Body;
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       ELFRelocatableZeroVAPointerTablePreservesSwitchAndParameterLoad) {
+  const fs::path Source = tmpFile("elf_zero_va_pointer_table.s");
+  const fs::path Object = tmpFile("elf_zero_va_pointer_table.o");
+  {
+    std::ofstream OS(Source);
+    ASSERT_TRUE(OS) << Source;
+    OS << R"(
+.section .rodata,"a",@progbits
+.p2align 3
+.globl zero_va_table
+.type zero_va_table,@object
+zero_va_table:
+  .quad .Lcase0
+  .quad .Lcase1
+  .quad .Lcase2
+.size zero_va_table, .-zero_va_table
+
+.section .mytext,"ax",@progbits
+.globl dispatch_zero_va_table
+.type dispatch_zero_va_table,@function
+dispatch_zero_va_table:
+  cmp $2, %edi
+  ja .Ldefault
+  mov %edi, %eax
+  jmp *zero_va_table(,%rax,8)
+.Lcase0:
+  mov $10, %eax
+  ret
+.Lcase1:
+  mov $20, %eax
+  ret
+.Lcase2:
+  mov $30, %eax
+  ret
+.Ldefault:
+  mov $-1, %eax
+  ret
+.size dispatch_zero_va_table, .-dispatch_zero_va_table
+
+.globl load_parameter_beside_zero_va_table
+.type load_parameter_beside_zero_va_table,@function
+load_parameter_beside_zero_va_table:
+  mov (%rdi), %rax
+  ret
+.size load_parameter_beside_zero_va_table, .-load_parameter_beside_zero_va_table
+)";
+  }
+
+  RunResult Compile =
+      exec(NEVERD_TEST_CLANG, {"-target", "x86_64-unknown-linux-gnu", "-c",
+                               Source.string(), "-o", Object.string()});
+  if (Compile.exitCode != 0)
+    GTEST_SKIP() << "clang cannot emit the ELF x86-64 fixture: " << Compile.err;
+
+  auto ImgOrErr = loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::ELF);
+  ASSERT_EQ(Img.Arch, Arch::X64);
+  ASSERT_TRUE(Img.IsRelocatable);
+  const Section *Table = Img.getSectionByName(".rodata");
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->VA, 0u);
+  ASSERT_EQ(Table->Size, 3u * sizeof(uint64_t));
+  for (va_t Slot : {va_t(0), va_t(8), va_t(16)}) {
+    EXPECT_EQ(Img.CodePtrRelocSlots.count(Slot), 1u);
+    EXPECT_TRUE(Img.hasRelocationProvenanceAt(Slot));
+  }
+
+  RunResult LLVM = liftToLLVMIRUnopt(Object);
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  EXPECT_EQ(LLVM.err.find("refusing stale-address fallback"), std::string::npos)
+      << LLVM.err;
+
+  const std::string_view Dispatch =
+      functionBody(LLVM.out, "dispatch_zero_va_table");
+  ASSERT_FALSE(Dispatch.empty()) << LLVM.out;
+  EXPECT_NE(Dispatch.find("switch i64"), std::string_view::npos) << Dispatch;
+  EXPECT_NE(Dispatch.find("i64 0, label"), std::string_view::npos) << Dispatch;
+  EXPECT_NE(Dispatch.find("i64 1, label"), std::string_view::npos) << Dispatch;
+  EXPECT_NE(Dispatch.find("i64 2, label"), std::string_view::npos) << Dispatch;
+  EXPECT_EQ(Dispatch.find("No predecessors"), std::string_view::npos)
+      << Dispatch;
+
+  const std::string_view ParameterLoad =
+      functionBody(LLVM.out, "load_parameter_beside_zero_va_table");
+  ASSERT_FALSE(ParameterLoad.empty()) << LLVM.out;
+  EXPECT_NE(ParameterLoad.find("ptrtoint ptr %arg0"), std::string_view::npos)
+      << ParameterLoad;
+  EXPECT_NE(ParameterLoad.find("load"), std::string_view::npos)
+      << ParameterLoad;
+  EXPECT_EQ(ParameterLoad.find("@__nd_codeptr_"), std::string_view::npos)
+      << ParameterLoad;
 }
 
 TEST_F(NativePointerRelocationBoundary,

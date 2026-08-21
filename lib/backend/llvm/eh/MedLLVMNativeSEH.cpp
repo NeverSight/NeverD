@@ -102,9 +102,7 @@ bool MedLLVMEmitter::emitNativeSEH(
   };
 
   auto FunctionAt = [&](va_t Address) -> llvm::Function * {
-    auto NameIt = FuncNames.find(Address);
-    return NameIt == FuncNames.end() ? nullptr
-                                     : Mod->getFunction(NameIt->second);
+    return resolveLiftedFunctionEntry(Address);
   };
   auto BlockAt = [&](va_t Address) -> llvm::BasicBlock * {
     for (const MedBlock &Block : Func.Blocks) {

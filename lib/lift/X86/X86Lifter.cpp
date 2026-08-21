@@ -18,6 +18,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstring>
+#include <limits>
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
@@ -74,10 +75,16 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
       Acc(Idx);
     }
   }
-  if (MemOp.mem.disp != 0 && !ConsumedDisplacement)
-    Acc(MemOp.mem.base == X86_REG_INVALID
+  if ((MemOp.mem.disp != 0 || RelocatedDisplacement) && !ConsumedDisplacement) {
+    const bool IsCompleteAbsoluteAddress =
+        MemOp.mem.base == X86_REG_INVALID && MemOp.mem.index == X86_REG_INVALID;
+    NdVar Displacement =
+        RelocatedDisplacement ? *RelocatedDisplacement
+        : IsCompleteAbsoluteAddress
             ? NdVar::address(static_cast<uint64_t>(MemOp.mem.disp), 8)
-            : NdVar::scalar(static_cast<uint64_t>(MemOp.mem.disp), 8));
+            : NdVar::scalar(static_cast<uint64_t>(MemOp.mem.disp), 8);
+    Acc(Displacement);
+  }
   if (First)
     Acc(NdVar::address(0, 8));
   return EA;
@@ -94,23 +101,23 @@ NdVar X86Lifter::LiftState::emitByteSwap(NdVar Src) {
   if (Sz == 2) {
     NdVar Lo = makeTemp(2);
     NdVar Hi = makeTemp(2);
-    emit(NdOp::INT_AND, Lo, {Src, NdVar::cst(0xFF, 2)});
-    emit(NdOp::INT_LEFT, Lo, {Lo, NdVar::cst(8, 2)});
-    emit(NdOp::INT_RIGHT, Hi, {Src, NdVar::cst(8, 2)});
+    emit(NdOp::INT_AND, Lo, {Src, NdVar::scalar(0xFF, 2)});
+    emit(NdOp::INT_LEFT, Lo, {Lo, NdVar::scalar(8, 2)});
+    emit(NdOp::INT_RIGHT, Hi, {Src, NdVar::scalar(8, 2)});
     emit(NdOp::INT_OR, Result, {Lo, Hi});
   } else if (Sz == 4) {
     NdVar B0 = makeTemp(4), B1 = makeTemp(4);
     NdVar B2 = makeTemp(4), B3 = makeTemp(4);
     NdVar T0 = makeTemp(4), T1 = makeTemp(4);
     NdVar T2 = makeTemp(4), T3 = makeTemp(4);
-    emit(NdOp::INT_AND, B0, {Src, NdVar::cst(0xFF, 4)});
-    emit(NdOp::INT_LEFT, T0, {B0, NdVar::cst(24, 4)});
-    emit(NdOp::INT_AND, B1, {Src, NdVar::cst(0xFF00, 4)});
-    emit(NdOp::INT_LEFT, T1, {B1, NdVar::cst(8, 4)});
-    emit(NdOp::INT_RIGHT, T2, {Src, NdVar::cst(8, 4)});
-    emit(NdOp::INT_AND, B2, {T2, NdVar::cst(0xFF00, 4)});
-    emit(NdOp::INT_RIGHT, T3, {Src, NdVar::cst(24, 4)});
-    emit(NdOp::INT_AND, B3, {T3, NdVar::cst(0xFF, 4)});
+    emit(NdOp::INT_AND, B0, {Src, NdVar::scalar(0xFF, 4)});
+    emit(NdOp::INT_LEFT, T0, {B0, NdVar::scalar(24, 4)});
+    emit(NdOp::INT_AND, B1, {Src, NdVar::scalar(0xFF00, 4)});
+    emit(NdOp::INT_LEFT, T1, {B1, NdVar::scalar(8, 4)});
+    emit(NdOp::INT_RIGHT, T2, {Src, NdVar::scalar(8, 4)});
+    emit(NdOp::INT_AND, B2, {T2, NdVar::scalar(0xFF00, 4)});
+    emit(NdOp::INT_RIGHT, T3, {Src, NdVar::scalar(24, 4)});
+    emit(NdOp::INT_AND, B3, {T3, NdVar::scalar(0xFF, 4)});
     NdVar R01 = makeTemp(4), R23 = makeTemp(4);
     emit(NdOp::INT_OR, R01, {T0, T1});
     emit(NdOp::INT_OR, R23, {B2, B3});
@@ -124,22 +131,22 @@ NdVar X86Lifter::LiftState::emitByteSwap(NdVar Src) {
     NdVar T2 = makeTemp(8), T3 = makeTemp(8);
     NdVar T4 = makeTemp(8), T5 = makeTemp(8);
     NdVar T6 = makeTemp(8), T7 = makeTemp(8);
-    emit(NdOp::INT_AND, B0, {Src, NdVar::cst(0xFF, 8)});
-    emit(NdOp::INT_LEFT, T0, {B0, NdVar::cst(56, 8)});
-    emit(NdOp::INT_AND, B1, {Src, NdVar::cst(0xFF00, 8)});
-    emit(NdOp::INT_LEFT, T1, {B1, NdVar::cst(40, 8)});
-    emit(NdOp::INT_AND, B2, {Src, NdVar::cst(0xFF0000, 8)});
-    emit(NdOp::INT_LEFT, T2, {B2, NdVar::cst(24, 8)});
-    emit(NdOp::INT_AND, B3, {Src, NdVar::cst(0xFF000000ULL, 8)});
-    emit(NdOp::INT_LEFT, T3, {B3, NdVar::cst(8, 8)});
-    emit(NdOp::INT_RIGHT, T4, {Src, NdVar::cst(8, 8)});
-    emit(NdOp::INT_AND, B4, {T4, NdVar::cst(0xFF000000ULL, 8)});
-    emit(NdOp::INT_RIGHT, T5, {Src, NdVar::cst(24, 8)});
-    emit(NdOp::INT_AND, B5, {T5, NdVar::cst(0xFF0000, 8)});
-    emit(NdOp::INT_RIGHT, T6, {Src, NdVar::cst(40, 8)});
-    emit(NdOp::INT_AND, B6, {T6, NdVar::cst(0xFF00, 8)});
-    emit(NdOp::INT_RIGHT, T7, {Src, NdVar::cst(56, 8)});
-    emit(NdOp::INT_AND, B7, {T7, NdVar::cst(0xFF, 8)});
+    emit(NdOp::INT_AND, B0, {Src, NdVar::scalar(0xFF, 8)});
+    emit(NdOp::INT_LEFT, T0, {B0, NdVar::scalar(56, 8)});
+    emit(NdOp::INT_AND, B1, {Src, NdVar::scalar(0xFF00, 8)});
+    emit(NdOp::INT_LEFT, T1, {B1, NdVar::scalar(40, 8)});
+    emit(NdOp::INT_AND, B2, {Src, NdVar::scalar(0xFF0000, 8)});
+    emit(NdOp::INT_LEFT, T2, {B2, NdVar::scalar(24, 8)});
+    emit(NdOp::INT_AND, B3, {Src, NdVar::scalar(0xFF000000ULL, 8)});
+    emit(NdOp::INT_LEFT, T3, {B3, NdVar::scalar(8, 8)});
+    emit(NdOp::INT_RIGHT, T4, {Src, NdVar::scalar(8, 8)});
+    emit(NdOp::INT_AND, B4, {T4, NdVar::scalar(0xFF000000ULL, 8)});
+    emit(NdOp::INT_RIGHT, T5, {Src, NdVar::scalar(24, 8)});
+    emit(NdOp::INT_AND, B5, {T5, NdVar::scalar(0xFF0000, 8)});
+    emit(NdOp::INT_RIGHT, T6, {Src, NdVar::scalar(40, 8)});
+    emit(NdOp::INT_AND, B6, {T6, NdVar::scalar(0xFF00, 8)});
+    emit(NdOp::INT_RIGHT, T7, {Src, NdVar::scalar(56, 8)});
+    emit(NdOp::INT_AND, B7, {T7, NdVar::scalar(0xFF, 8)});
     NdVar R01 = makeTemp(8), R23 = makeTemp(8);
     NdVar R45 = makeTemp(8), R67 = makeTemp(8);
     NdVar R03 = makeTemp(8), R47 = makeTemp(8);
@@ -168,6 +175,14 @@ NdVar X86Lifter::operandRead(LiftState &S, const cs_x86_op &Op) {
     return NdVar::reg(RI.Offset, RI.Size);
   }
   case X86_OP_IMM:
+    if (S.RelocatedImmediate) {
+      NdVar Value = *S.RelocatedImmediate;
+      Value.Size = Sz;
+      return Value;
+    }
+    // An encoded immediate is role-neutral until the instruction handler or
+    // an exact relocation occurrence establishes its semantics. In
+    // particular, MOVABS may legitimately carry a function address.
     return NdVar::cst(static_cast<uint64_t>(Op.imm), Sz);
   case X86_OP_MEM: {
     NdVar EA = S.computeEA(Op);
@@ -176,7 +191,7 @@ NdVar X86Lifter::operandRead(LiftState &S, const cs_x86_op &Op) {
     return Result;
   }
   default:
-    return NdVar::cst(0, Sz);
+    return NdVar::scalar(0, Sz);
   }
 }
 
@@ -190,7 +205,7 @@ NdVar X86Lifter::operandWrite(const cs_x86_op &Op) {
   case X86_OP_MEM:
     return NdVar::ram(0, Sz);
   default:
-    return NdVar::cst(0, Sz);
+    return NdVar::scalar(0, Sz);
   }
 }
 
@@ -200,27 +215,27 @@ NdVar X86Lifter::operandWrite(const cs_x86_op &Op) {
 
 void X86Lifter::emitPF(LiftState &S, NdVar Result) {
   NdVar LoByte = S.makeTemp(1);
-  S.emit(NdOp::SUBBYTES, LoByte, {Result, NdVar::cst(0, 4)});
+  S.emit(NdOp::SUBBYTES, LoByte, {Result, NdVar::scalar(0, 4)});
   NdVar PopCnt = S.makeTemp(1);
   S.emit(NdOp::POPCOUNT, PopCnt, {LoByte});
   NdVar ParBit = S.makeTemp(1);
-  S.emit(NdOp::INT_AND, ParBit, {PopCnt, NdVar::cst(1, 1)});
+  S.emit(NdOp::INT_AND, ParBit, {PopCnt, NdVar::scalar(1, 1)});
   S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::PF, 1),
-         {ParBit, NdVar::cst(0, 1)});
+         {ParBit, NdVar::scalar(0, 1)});
 }
 
 void X86Lifter::emitZSPF(LiftState &S, NdVar Result) {
   S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::ZF, 1),
-         {Result, NdVar::cst(0, Result.Size)});
+         {Result, NdVar::scalar(0, Result.Size)});
   S.emit(NdOp::INT_SLESS, NdVar::reg(x86reg::SF, 1),
-         {Result, NdVar::cst(0, Result.Size)});
+         {Result, NdVar::scalar(0, Result.Size)});
   emitPF(S, Result);
 }
 
 void X86Lifter::emitFlagsLogic(LiftState &S, NdVar Result) {
   emitZSPF(S, Result);
-  S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {NdVar::cst(0, 1)});
-  S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::cst(0, 1)});
+  S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {NdVar::scalar(0, 1)});
+  S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::scalar(0, 1)});
 }
 
 // AF (auxiliary carry) reflects a carry/borrow out of bit 3, identical for
@@ -233,9 +248,9 @@ void X86Lifter::emitAF(LiftState &S, NdVar Result, NdVar A, NdVar B) {
   NdVar AxBxR = S.makeTemp(Sz);
   S.emit(NdOp::INT_XOR, AxBxR, {AxB, Result});
   NdVar AfBit = S.makeTemp(Sz);
-  S.emit(NdOp::INT_AND, AfBit, {AxBxR, NdVar::cst(0x10, Sz)});
+  S.emit(NdOp::INT_AND, AfBit, {AxBxR, NdVar::scalar(0x10, Sz)});
   S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::AF, 1),
-         {AfBit, NdVar::cst(0, Sz)});
+         {AfBit, NdVar::scalar(0, Sz)});
 }
 
 void X86Lifter::emitFlagsArith(LiftState &S, NdVar Result, NdVar A, NdVar B,
@@ -254,16 +269,16 @@ void X86Lifter::emitFlagsArith(LiftState &S, NdVar Result, NdVar A, NdVar B,
 NdVar X86Lifter::extractBit(LiftState &S, NdVar Val, unsigned BitPos) {
   uint16_t Sz = Val.Size;
   NdVar Shifted = S.makeTemp(Sz);
-  S.emit(NdOp::INT_RIGHT, Shifted, {Val, NdVar::cst(BitPos, Sz)});
+  S.emit(NdOp::INT_RIGHT, Shifted, {Val, NdVar::scalar(BitPos, Sz)});
   NdVar Bit = S.makeTemp(1);
-  S.emit(NdOp::SUBBYTES, Bit, {Shifted, NdVar::cst(0, 4)});
-  S.emit(NdOp::INT_AND, Bit, {Bit, NdVar::cst(1, 1)});
+  S.emit(NdOp::SUBBYTES, Bit, {Shifted, NdVar::scalar(0, 4)});
+  S.emit(NdOp::INT_AND, Bit, {Bit, NdVar::scalar(1, 1)});
   return Bit;
 }
 
 void X86Lifter::emitShiftRotateOF(LiftState &S, NdVar Cnt, NdVar OfBit) {
   NdVar IsOne = S.makeTemp(1);
-  S.emit(NdOp::INT_EQUAL, IsOne, {Cnt, NdVar::cst(1, Cnt.Size)});
+  S.emit(NdOp::INT_EQUAL, IsOne, {Cnt, NdVar::scalar(1, Cnt.Size)});
   NdVar NewOF = S.makeTemp(1);
   S.emit(NdOp::SELECT, NewOF, {IsOne, OfBit, NdVar::reg(x86reg::OF, 1)});
   S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NewOF});
@@ -273,7 +288,7 @@ void X86Lifter::emitZeroCountFlagGuard(
     LiftState &S, NdVar Cnt,
     std::initializer_list<std::pair<int, NdVar>> Flags) {
   NdVar IsZero = S.makeTemp(1);
-  S.emit(NdOp::INT_EQUAL, IsZero, {Cnt, NdVar::cst(0, Cnt.Size)});
+  S.emit(NdOp::INT_EQUAL, IsZero, {Cnt, NdVar::scalar(0, Cnt.Size)});
   for (const auto &F : Flags) {
     NdVar Cur = S.makeTemp(1);
     S.emit(NdOp::COPY, Cur, {NdVar::reg(F.first, 1)});
@@ -287,13 +302,57 @@ void X86Lifter::emitZeroCountFlagGuard(
 // Main dispatch
 // ===----------------------------------------------------------------------===//
 
-void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops) {
+void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
+                     llvm::ArrayRef<RelocatedAddressOperand> Relocs) {
   auto *Detail = Insn->detail;
   if (!Detail)
     return;
 
   auto &X86 = Detail->x86;
   LiftState S(Insn->address, static_cast<uint16_t>(Insn->size), Ops);
+  bool ConflictingDisplacementOwners = false;
+  bool ConflictingImmediateOwners = false;
+  const cs_x86_op *ImmediateOperand = nullptr;
+  for (uint8_t I = 0; I < X86.op_count; ++I)
+    if (X86.operands[I].type == X86_OP_IMM) {
+      ImmediateOperand = &X86.operands[I];
+      break;
+    }
+  for (const RelocatedAddressOperand &Reloc : Relocs) {
+    if (Reloc.Width == 0)
+      continue;
+    const unsigned Bits = Reloc.Width * 8;
+    const uint64_t Mask = Bits >= 64 ? std::numeric_limits<uint64_t>::max()
+                                     : (uint64_t(1) << Bits) - 1;
+    if ((Reloc.TargetVA & Mask) != (Reloc.EncodedValue & Mask))
+      continue;
+    NdVar Candidate{VnodeSpace::CONST, Reloc.TargetVA, 8, Reloc.Provenance,
+                    Reloc.TargetOwnerVA};
+    if (X86.encoding.disp_size != 0 && Reloc.Width == X86.encoding.disp_size &&
+        Reloc.FieldVA == Insn->address + X86.encoding.disp_offset &&
+        (static_cast<uint64_t>(X86.disp) & Mask) ==
+            (Reloc.EncodedValue & Mask)) {
+      if (S.RelocatedDisplacement && *S.RelocatedDisplacement != Candidate)
+        ConflictingDisplacementOwners = true;
+      else
+        S.RelocatedDisplacement = Candidate;
+    }
+    if (ImmediateOperand && X86.encoding.imm_size != 0 &&
+        Reloc.Width == X86.encoding.imm_size &&
+        Reloc.FieldVA == Insn->address + X86.encoding.imm_offset &&
+        (static_cast<uint64_t>(ImmediateOperand->imm) & Mask) ==
+            (Reloc.EncodedValue & Mask)) {
+      if (S.RelocatedImmediate && *S.RelocatedImmediate != Candidate)
+        ConflictingImmediateOwners = true;
+      else
+        S.RelocatedImmediate = Candidate;
+    }
+  }
+  // Two loader owners for the same encoded field are corrupt/ambiguous
+  // provenance.  Falling back to a raw immediate would freeze the old VA, so
+  // reject the instruction before emitting any LowIR instead.
+  if (ConflictingDisplacementOwners || ConflictingImmediateOwners)
+    throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
 
   // Cleared per instruction; the FNINIT/FNCLEX handler sets it so the CFG
   // builder treats this as an absolute x87 TOP reset, not a relative push/pop.

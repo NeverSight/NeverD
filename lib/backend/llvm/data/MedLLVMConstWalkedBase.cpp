@@ -57,7 +57,8 @@ bool MedLLVMEmitter::valIsPointerDiffBase(uint64_t Val) const {
         continue;
       if (const PhiNode *Ph = findPhi(Cur)) {
         for (const auto &[Pred, A] : Ph->Args) {
-          (void)Pred;
+          if (!phiIncomingEdgeFeasible(*Ph, Pred))
+            continue;
           Work.push_back(A);
         }
         continue;
@@ -70,9 +71,14 @@ bool MedLLVMEmitter::valIsPointerDiffBase(uint64_t Val) const {
         switch (D->Opcode) {
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
-        case NdOp::SELECT:
           for (int I = 0; I < D->NumInputs; ++I)
             Work.push_back(D->Inputs[I]);
+          break;
+        case NdOp::SELECT:
+          if (!selectPreservesPointerValues(*D))
+            break;
+          Work.push_back(D->Inputs[1]);
+          Work.push_back(D->Inputs[2]);
           break;
         default:
           break;
@@ -141,7 +147,8 @@ bool MedLLVMEmitter::valIsAdvancingInductionBase(uint64_t Val) const {
         continue;
       if (const PhiNode *Ph = findPhi(Cur)) {
         for (const auto &[Pred, A] : Ph->Args) {
-          (void)Pred;
+          if (!phiIncomingEdgeFeasible(*Ph, Pred))
+            continue;
           Work.push_back(A);
         }
         continue;
@@ -154,9 +161,14 @@ bool MedLLVMEmitter::valIsAdvancingInductionBase(uint64_t Val) const {
         switch (D->Opcode) {
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
-        case NdOp::SELECT:
           for (int I = 0; I < D->NumInputs; ++I)
             Work.push_back(D->Inputs[I]);
+          break;
+        case NdOp::SELECT:
+          if (!selectPreservesPointerValues(*D))
+            break;
+          Work.push_back(D->Inputs[1]);
+          Work.push_back(D->Inputs[2]);
           break;
         default:
           break;
@@ -169,7 +181,8 @@ bool MedLLVMEmitter::valIsAdvancingInductionBase(uint64_t Val) const {
     for (const auto &P : Blk.Phis) {
       bool HasBase = false, HasAdvance = false;
       for (const auto &[Pred, Arg] : P.Args) {
-        (void)Pred;
+        if (!phiIncomingEdgeFeasible(P, Pred))
+          continue;
         if (walk(Arg, /*WantConst=*/true, P.Output))
           HasBase = true;
         // A self-advancing back-edge (`p = ... p ± stride ...`, possibly behind
@@ -312,7 +325,8 @@ bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) const {
           if (const PhiNode *P = findPhi(Cur)) {
             SawPhi = true;
             for (const auto &[Pred, Arg] : P->Args) {
-              (void)Pred;
+              if (!phiIncomingEdgeFeasible(*P, Pred))
+                continue;
               if (auto B = argBase(Arg))
                 note(*B);
               Work.push_back(Arg);
@@ -327,7 +341,8 @@ bool MedLLVMEmitter::isInductionRodataStringBase(uint64_t Val) const {
                      D->NumInputs >= 2) {
               Work.push_back(D->Inputs[0]);
               Work.push_back(D->Inputs[1]);
-            } else if (D->Opcode == NdOp::SELECT && D->NumInputs >= 3) {
+            } else if (D->Opcode == NdOp::SELECT &&
+                       selectPreservesPointerValues(*D)) {
               Work.push_back(D->Inputs[1]);
               Work.push_back(D->Inputs[2]);
             }

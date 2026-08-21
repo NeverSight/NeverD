@@ -482,6 +482,7 @@ Codegen::compileForRewrite(llvm::Module &Mod, Arch TargetArch,
   }
 
   llvm::TargetOptions TOpt;
+  TOpt.EmitBinaryRewriteFinalImage = true;
   // Darwin targets may omit DWARF CFI when a frame has a compact-unwind
   // encoding.  A Mach-O rewrite transaction needs an explicit unwind payload
   // that it can authenticate and install, including as the validated fallback

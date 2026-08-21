@@ -15,6 +15,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
@@ -59,8 +60,10 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
 
   auto getOrCreateDataGlobal = [&](va_t VA) -> llvm::GlobalVariable * {
     std::string Name = makeNdDataSymbol(VA);
-    if (auto *Existing = Mod.getGlobalVariable(Name, /*AllowInternal=*/true))
+    if (auto *Existing = Mod.getGlobalVariable(Name, /*AllowInternal=*/true)) {
+      Existing->setDSOLocal(true);
       return Existing;
+    }
     auto *GV = new llvm::GlobalVariable(Mod, I8, /*isConstant=*/false,
                                         llvm::GlobalValue::ExternalLinkage,
                                         /*Initializer=*/nullptr, Name);
@@ -97,7 +100,16 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
         Sym = Img.findSymbol(("_" + F.getName()).str());
       if (!Sym || !Sym->IsFunc || !Img.containsVA(Sym->Addr))
         continue;
-      llvm::Constant *DataG = getOrCreateDataGlobal(Sym->Addr);
+      llvm::GlobalVariable *DataG = getOrCreateDataGlobal(Sym->Addr);
+      if (Img.isMachO() && Img.Arch == Arch::ARM)
+        // Darwin ARM PIC normally forces every external declaration through a
+        // non-lazy pointer. Final-image rewrite has already authenticated and
+        // numerically resolves this synthetic original-entry symbol, while a
+        // newly emitted pointer slot would have no dyld rebase record. Mark
+        // the declaration so the ARM backend keeps the direct PC-relative
+        // relation and the address continues to slide with the image.
+        DataG->setMetadata("neverd.final_image_direct_symbol",
+                           llvm::MDNode::get(Mod.getContext(), {}));
       for (llvm::User *U : F.users()) {
         auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(U);
         if (!CE || CE->getOpcode() != llvm::Instruction::PtrToInt)

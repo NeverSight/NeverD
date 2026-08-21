@@ -17,6 +17,8 @@
 #ifndef NEVERD_BACKEND_CODEGEN_BINARYUTILS_H
 #define NEVERD_BACKEND_CODEGEN_BINARYUTILS_H
 
+#include "neverd/Common.h"
+
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Error.h"
@@ -84,6 +86,24 @@ std::string resolveSymbolAlias(const std::string &Name, const MapT &Map) {
   }
 
   return {};
+}
+
+/// Resolve an emitted source-function spelling back to its IR name. This is
+/// intentionally narrower than resolveSymbolAlias(): preserved definitions
+/// are not imports, and ELF leading underscores are meaningful symbol bytes.
+/// Mach-O and i386 COFF may add one ABI underscore to an IR function name.
+template <typename MapT>
+std::string resolveSourceFunctionAlias(const std::string &Name, const MapT &Map,
+                                       BinaryFormat Format, Arch TargetArch) {
+  const bool HasABIUnderscore =
+      Format == BinaryFormat::MachO ||
+      (Format == BinaryFormat::COFF && TargetArch == Arch::X86);
+  if (HasABIUnderscore && !Name.empty() && Name.front() == '_') {
+    std::string IRName = Name.substr(1);
+    return Map.count(IRName) ? IRName : std::string{};
+  }
+
+  return Map.count(Name) ? Name : std::string{};
 }
 
 } // namespace neverd

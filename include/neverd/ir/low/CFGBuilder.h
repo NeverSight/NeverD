@@ -152,6 +152,11 @@ private:
 
   struct JumpTableInfo {
     va_t BaseAddr = 0;
+    bool HasBaseAddr = false;
+    void setBaseAddr(va_t Address) {
+      BaseAddr = Address;
+      HasBaseAddr = true;
+    }
     uint16_t EntrySize = 0;
     /// Physical byte distance between adjacent entries.  Zero means packed
     /// entries and therefore uses EntrySize.

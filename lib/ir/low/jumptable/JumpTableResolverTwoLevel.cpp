@@ -261,7 +261,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   {
     va_t FoldAt = Ops[JmpLoadIdx].Addr;
     auto Folded = foldRegConstant(Img, Rec, JmpBaseReg, FoldAt);
-    if (!Folded || *Folded == 0)
+    if (!Folded || !Img.getSegmentFor(*Folded))
       return false;
     JmpTab = *Folded;
   }
@@ -271,9 +271,14 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   const auto *IdxSeg = Img.getSegmentFor(IdxTab);
   if (!JmpSeg || JmpSeg->Data.empty() || !IdxSeg || IdxSeg->Data.empty())
     return false;
+  const std::optional<va_t> JmpOwnerEnd = Img.mappedObjectOwnerEnd(JmpTab);
+  const std::optional<va_t> IdxOwnerEnd = Img.mappedObjectOwnerEnd(IdxTab);
+  if (!JmpOwnerEnd || !IdxOwnerEnd || *JmpOwnerEnd <= JmpTab ||
+      *IdxOwnerEnd <= IdxTab)
+    return false;
   // The index table lives in read-only data; a writable/executable "idxtab"
   // would not be a compiler-emitted constant index table.
-  if (IdxSeg->isWritable() || IdxSeg->isExecutable())
+  if (IdxSeg->isWritable() || Img.isCodeAddress(IdxTab))
     return false;
 
   // 5) The address table's signature: a run of loader-applied code-pointer
@@ -290,6 +295,11 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       Relative = true;
     }
   }
+  if (M < limits::kMinJumpTableEntries)
+    return false;
+  const uint64_t OwnerEntries = (*JmpOwnerEnd - JmpTab) / W2;
+  M = static_cast<uint32_t>(std::min<uint64_t>(
+      {M, std::numeric_limits<uint32_t>::max(), OwnerEntries}));
   if (M < limits::kMinJumpTableEntries)
     return false;
 
@@ -392,8 +402,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       GuardBound += 1;
   }
 
-  uint32_t IdxCap = static_cast<uint32_t>(
-      (IdxSeg->Data.size() - static_cast<size_t>(IdxTab - IdxSeg->VA)) / W1);
+  uint32_t IdxCap = static_cast<uint32_t>(std::min<uint64_t>(
+      (*IdxOwnerEnd - IdxTab) / W1, std::numeric_limits<uint32_t>::max()));
   uint32_t Scan = std::min(IdxCap, limits::kMaxJumpTableEntries);
   if (GuardBound > 0)
     Scan = std::min(Scan, GuardBound);
@@ -437,7 +447,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   if (Targets.size() < limits::kMinJumpTableEntries)
     return false;
 
-  Info.BaseAddr = JmpTab;
+  Info.setBaseAddr(JmpTab);
   Info.EntrySize = W2;
   Info.IsRelative = Relative;
   Info.IsSigned = Relative;

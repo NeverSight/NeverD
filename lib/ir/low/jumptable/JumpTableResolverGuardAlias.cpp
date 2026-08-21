@@ -58,6 +58,15 @@ bool CFGBuilder::guardUsesInclusiveCompare(const InsnRecord &Rec,
       Ops.push_back(Op);
   }
 
+  // The dispatch may index through a register copy/widening that is defined
+  // after the guarding compare (`cmp edi,N; ...; mov eax,edi; jmp *(,rax,8)`).
+  // Compare predicates are expressed in terms of the original register, so
+  // canonicalize the recovered table-index register through the complete
+  // prefix before matching the lifted CF/ZF graph.  Without this, an inclusive
+  // `ja default` bound is misread as N rather than N+1 and loses the last case.
+  if (!Ops.empty())
+    IndexReg = traceRegSource(Ops, static_cast<int>(Ops.size()) - 1, IndexReg);
+
   auto sameVar = [](const NdVar &A, const NdVar &B) {
     return A.Space == B.Space && A.Offset == B.Offset;
   };
@@ -272,7 +281,7 @@ bool CFGBuilder::inferBoundsFromLoadAliasGuard(const InsnRecord &Rec,
   // slot's stability is checked per-guard by the no-intervening-store test.
   if (IdxKey->Kind == 0) {
     const auto *Seg = CurrentImg->getSegmentFor(IdxKey->Addr);
-    if (!Seg || Seg->isWritable() || Seg->isExecutable())
+    if (!Seg || Seg->isWritable() || CurrentImg->isCodeAddress(IdxKey->Addr))
       return false;
   }
 

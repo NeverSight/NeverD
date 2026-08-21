@@ -15,6 +15,8 @@
 
 #include "neverd/lift/X86Regs.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <capstone/capstone.h>
 #include <initializer_list>
 #include <optional>
@@ -23,11 +25,14 @@
 
 namespace neverd {
 
+struct RelocatedAddressOperand;
+
 class X86Lifter {
 public:
   explicit X86Lifter(Arch TargetArch);
 
-  void lift(const cs_insn *Insn, std::vector<LowOp> &Ops);
+  void lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
+            llvm::ArrayRef<RelocatedAddressOperand> Relocs = {});
 
   void setStrict(bool S) { Strict = S; }
   bool isStrict() const { return Strict; }
@@ -95,6 +100,18 @@ public:
 
   struct LiftState : LiftStateBase {
     using LiftStateBase::LiftStateBase;
+
+    /// Loader-authenticated provenance for this instruction's encoded memory
+    /// displacement.  It is populated only after the relocation field is
+    /// matched against Capstone's disp_offset/disp_size, so an equal-valued
+    /// immediate elsewhere in the instruction cannot inherit it.
+    std::optional<NdVar> RelocatedDisplacement;
+
+    /// Loader-authenticated provenance for this instruction's encoded
+    /// immediate.  Kept separate from the displacement owner so an instruction
+    /// such as `mov $K, K(%reg)` cannot transfer one relocation field's role to
+    /// the equal-valued peer operand.
+    std::optional<NdVar> RelocatedImmediate;
 
     void emitIntrinsic(Intrinsic Id, NdVar Out = NdVar::reg(x86reg::RAX, 8),
                        std::initializer_list<NdVar> Extra = {}) {

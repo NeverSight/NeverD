@@ -23,6 +23,17 @@ namespace neverd {
 
 bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                    const cs_x86 &X86) {
+  auto readArithmeticOperand = [&](const cs_x86_op &Operand) {
+    NdVar Value = L.operandRead(S, Operand);
+    // Encoded arithmetic immediates are scalar bit patterns unless the loader
+    // attached provenance to this exact immediate field.  Keeping the exact
+    // occurrence override lets `cmp $symbol,%reg` remain relocatable while a
+    // loop bound that merely equals a low image VA stays numeric.
+    if (Operand.type == X86_OP_IMM && Value.isConst() &&
+        Value.Provenance == ConstantAddressProvenance::Unknown)
+      Value.Provenance = ConstantAddressProvenance::Scalar;
+    return Value;
+  };
   unsigned InsnId = Insn->id;
   switch (InsnId) {
 
@@ -30,8 +41,8 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_ADD: {
     if (X86.op_count < 2)
       break;
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    NdVar DstR = L.operandRead(S, X86.operands[0]);
+    NdVar Src = readArithmeticOperand(X86.operands[1]);
+    NdVar DstR = readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     // Snapshot operands into temps before INT_ADD writes to DstW, so that
     // sub-register aliasing in LowToMed cannot redirect the flag operands
@@ -53,8 +64,8 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_SUB: {
     if (X86.op_count < 2)
       break;
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    NdVar DstR = L.operandRead(S, X86.operands[0]);
+    NdVar Src = readArithmeticOperand(X86.operands[1]);
+    NdVar DstR = readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     NdVar FlagA = S.makeTemp(DstR.Size);
     S.emit(NdOp::COPY, FlagA, {DstR});
@@ -73,8 +84,8 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_CMP: {
     if (X86.op_count < 2)
       break;
-    NdVar A = L.operandRead(S, X86.operands[0]);
-    NdVar B = L.operandRead(S, X86.operands[1]);
+    NdVar A = readArithmeticOperand(X86.operands[0]);
+    NdVar B = readArithmeticOperand(X86.operands[1]);
     NdVar TmpR = S.makeTemp(A.Size);
     S.emit(NdOp::INT_SUB, TmpR, {A, B});
     L.emitFlagsArith(S, TmpR, A, B, true);
@@ -85,8 +96,8 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_TEST: {
     if (X86.op_count < 2)
       break;
-    NdVar A = L.operandRead(S, X86.operands[0]);
-    NdVar B = L.operandRead(S, X86.operands[1]);
+    NdVar A = readArithmeticOperand(X86.operands[0]);
+    NdVar B = readArithmeticOperand(X86.operands[1]);
     NdVar TmpR = S.makeTemp(A.Size);
     S.emit(NdOp::INT_AND, TmpR, {A, B});
     L.emitFlagsLogic(S, TmpR);
@@ -105,17 +116,17 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         X86.operands[1].type == X86_OP_REG &&
         X86.operands[0].reg == X86.operands[1].reg) {
       NdVar DstW = L.operandWrite(X86.operands[0]);
-      S.emit(NdOp::COPY, DstW, {NdVar::cst(0, DstW.Size)});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::ZF, 1), {NdVar::cst(1, 1)});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::SF, 1), {NdVar::cst(0, 1)});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::PF, 1), {NdVar::cst(1, 1)});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {NdVar::cst(0, 1)});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::cst(0, 1)});
+      S.emit(NdOp::COPY, DstW, {NdVar::scalar(0, DstW.Size)});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::ZF, 1), {NdVar::scalar(1, 1)});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::SF, 1), {NdVar::scalar(0, 1)});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::PF, 1), {NdVar::scalar(1, 1)});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {NdVar::scalar(0, 1)});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::scalar(0, 1)});
       break;
     }
 
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    NdVar DstR = L.operandRead(S, X86.operands[0]);
+    NdVar Src = readArithmeticOperand(X86.operands[1]);
+    NdVar DstR = readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
 
     // Idiom: test reg, reg (AND with itself) → just set flags, don't overwrite
@@ -149,9 +160,9 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_DEC: {
     if (X86.op_count < 1)
       break;
-    NdVar DstR = L.operandRead(S, X86.operands[0]);
+    NdVar DstR = readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
-    NdVar One = NdVar::cst(1, DstR.Size);
+    NdVar One = NdVar::scalar(1, DstR.Size);
     bool IsInc = (InsnId == X86_INS_INC);
     bool MemDst = (X86.operands[0].type == X86_OP_MEM);
     // Snapshot the source before INT_ADD/INT_SUB writes DstW: for a register
@@ -179,7 +190,7 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_NEG: {
     if (X86.op_count < 1)
       break;
-    NdVar DstR = L.operandRead(S, X86.operands[0]);
+    NdVar DstR = readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     bool MemDst = (X86.operands[0].type == X86_OP_MEM);
     // Snapshot before INT_NEG2 overwrites DstW (register NEG aliases DstR).
@@ -190,11 +201,11 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // CF/OF use the pre-update source (PreVal): a register NEG aliases
     // DstR/DstW so a post-2COMP read of DstR would be the negated value.
     S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::CF, 1),
-           {PreVal, NdVar::cst(0, DstR.Size)});
+           {PreVal, NdVar::scalar(0, DstR.Size)});
     L.emitZSPF(S, Result);
-    L.emitAF(S, Result, NdVar::cst(0, DstR.Size), PreVal);
+    L.emitAF(S, Result, NdVar::scalar(0, DstR.Size), PreVal);
     S.emit(NdOp::INT_SBOR, NdVar::reg(x86reg::OF, 1),
-           {NdVar::cst(0, DstR.Size), PreVal});
+           {NdVar::scalar(0, DstR.Size), PreVal});
     if (MemDst)
       S.storeToMem(X86.operands[0], Result);
     break;
@@ -202,7 +213,7 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_NOT: {
     if (X86.op_count < 1)
       break;
-    NdVar DstR = L.operandRead(S, X86.operands[0]);
+    NdVar DstR = readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     bool MemDst = (X86.operands[0].type == X86_OP_MEM);
     NdVar Result = MemDst ? S.makeTemp(DstR.Size) : DstW;
@@ -215,7 +226,7 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // --- IMUL ---
   case X86_INS_IMUL: {
     if (X86.op_count == 1) {
-      NdVar Src = L.operandRead(S, X86.operands[0]);
+      NdVar Src = readArithmeticOperand(X86.operands[0]);
       uint16_t Sz = Src.Size;
       if (Sz == 1) {
         // 8-bit: AX = AL * r/m8 (signed, Result in AX)
@@ -240,8 +251,8 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         S.emit(NdOp::INT_SEXT, ExtB, {Src});
         NdVar Full = S.makeTemp(Sz * 2);
         S.emit(NdOp::INT_MULT, Full, {ExtA, ExtB});
-        S.emit(NdOp::SUBBYTES, Rax, {Full, NdVar::cst(0, 4)});
-        S.emit(NdOp::SUBBYTES, Rdx, {Full, NdVar::cst(Sz, 4)});
+        S.emit(NdOp::SUBBYTES, Rax, {Full, NdVar::scalar(0, 4)});
+        S.emit(NdOp::SUBBYTES, Rdx, {Full, NdVar::scalar(Sz, 4)});
         NdVar LowSext = S.makeTemp(Sz * 2);
         S.emit(NdOp::INT_SEXT, LowSext, {Rax});
         S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::CF, 1), {LowSext, Full});
@@ -252,12 +263,12 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     }
     NdVar Dst{}, MulA{}, MulB{};
     if (X86.op_count == 2) {
-      MulA = L.operandRead(S, X86.operands[0]);
-      MulB = L.operandRead(S, X86.operands[1]);
+      MulA = readArithmeticOperand(X86.operands[0]);
+      MulB = readArithmeticOperand(X86.operands[1]);
       Dst = L.operandWrite(X86.operands[0]);
     } else if (X86.op_count == 3) {
-      MulA = L.operandRead(S, X86.operands[1]);
-      MulB = L.operandRead(S, X86.operands[2]);
+      MulA = readArithmeticOperand(X86.operands[1]);
+      MulB = readArithmeticOperand(X86.operands[2]);
       Dst = L.operandWrite(X86.operands[0]);
     } else {
       break;
@@ -281,20 +292,20 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::CF, 1), {ExtRes, Full});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::reg(x86reg::CF, 1)});
     S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::ZF, 1),
-           {Dst, NdVar::cst(0, Dst.Size)});
+           {Dst, NdVar::scalar(0, Dst.Size)});
     S.emit(NdOp::INT_SLESS, NdVar::reg(x86reg::SF, 1),
-           {Dst, NdVar::cst(0, Dst.Size)});
+           {Dst, NdVar::scalar(0, Dst.Size)});
     break;
   }
 
   // --- CDQ/CDQE/CQO ---
   case X86_INS_CDQ:
     S.emit(NdOp::INT_ASHR, NdVar::reg(x86reg::RDX, 4),
-           {NdVar::reg(x86reg::RAX, 4), NdVar::cst(31, 4)});
+           {NdVar::reg(x86reg::RAX, 4), NdVar::scalar(31, 4)});
     break;
   case X86_INS_CQO:
     S.emit(NdOp::INT_ASHR, NdVar::reg(x86reg::RDX, 8),
-           {NdVar::reg(x86reg::RAX, 8), NdVar::cst(63, 8)});
+           {NdVar::reg(x86reg::RAX, 8), NdVar::scalar(63, 8)});
     break;
   case X86_INS_CDQE:
     S.emit(NdOp::INT_SEXT, NdVar::reg(x86reg::RAX, 8),
@@ -305,7 +316,7 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_MUL: {
     if (X86.op_count < 1)
       break;
-    NdVar Src = L.operandRead(S, X86.operands[0]);
+    NdVar Src = readArithmeticOperand(X86.operands[0]);
     uint16_t Sz = Src.Size;
     if (Sz == 1) {
       // 8-bit: AX = AL * r/m8 (Result in AX, not DL:AL)
@@ -318,7 +329,7 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::INT_MULT, Ax, {ExtA, ExtB});
       NdVar Ah = NdVar::reg(x86reg::RAX + 1, 1);
       S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::CF, 1),
-             {Ah, NdVar::cst(0, 1)});
+             {Ah, NdVar::scalar(0, 1)});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1),
              {NdVar::reg(x86reg::CF, 1)});
     } else {
@@ -330,10 +341,10 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::INT_ZEXT, ExtB, {Src});
       NdVar Full = S.makeTemp(Sz * 2);
       S.emit(NdOp::INT_MULT, Full, {ExtA, ExtB});
-      S.emit(NdOp::SUBBYTES, Rax, {Full, NdVar::cst(0, 4)});
-      S.emit(NdOp::SUBBYTES, Rdx, {Full, NdVar::cst(Sz, 4)});
+      S.emit(NdOp::SUBBYTES, Rax, {Full, NdVar::scalar(0, 4)});
+      S.emit(NdOp::SUBBYTES, Rdx, {Full, NdVar::scalar(Sz, 4)});
       S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::CF, 1),
-             {Rdx, NdVar::cst(0, Sz)});
+             {Rdx, NdVar::scalar(0, Sz)});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1),
              {NdVar::reg(x86reg::CF, 1)});
     }
@@ -344,9 +355,9 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_SBB: {
     if (X86.op_count < 2)
       break;
-    NdVar DstR = L.operandRead(S, X86.operands[0]);
+    NdVar DstR = readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
+    NdVar Src = readArithmeticOperand(X86.operands[1]);
     bool MemDst = (X86.operands[0].type == X86_OP_MEM);
     // Snapshot operands before the result overwrites DstW, so the borrow/OF
     // flags read the pre-write values (DstW aliases operand[0]).  Without this
@@ -387,9 +398,9 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_ADC: {
     if (X86.op_count < 2)
       break;
-    NdVar DstR = L.operandRead(S, X86.operands[0]);
+    NdVar DstR = readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
+    NdVar Src = readArithmeticOperand(X86.operands[1]);
     bool MemDst = (X86.operands[0].type == X86_OP_MEM);
     // Snapshot operands before the result overwrites DstW, so the carry/OF
     // flags read the pre-write values (DstW aliases operand[0]).  Without this

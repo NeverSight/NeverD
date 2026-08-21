@@ -165,8 +165,7 @@ bool CFGBuilder::resolveConstantIndirectBranch(const BinaryImage &Img,
     auto Target = foldRegConstant(Img, Rec, Op.Inputs[0].Offset);
     if (!Target)
       return false;
-    const Segment *TargetSegment = Img.getSegmentFor(*Target);
-    if (!TargetSegment || !TargetSegment->isExecutable() ||
+    if (!Img.hasExecutableCodeOwnerAt(*Target) ||
         (*Target % getInsnAlignment()) != 0)
       return false;
 

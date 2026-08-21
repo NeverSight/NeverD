@@ -17,6 +17,8 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <capstone/capstone.h>
 #include <memory>
 #include <stdexcept>
@@ -67,6 +69,21 @@ struct DecodedInsn {
   cs_insn *Raw;
 };
 
+/// One loader-authenticated address occurrence inside an encoded instruction.
+/// FieldVA identifies the exact relocation field; TargetVA is the resolved
+/// address represented by that field, and Provenance records whether the
+/// loader classified it as data or code.  The architecture lifter must still
+/// match FieldVA to the decoded operand encoding before consuming it: numeric
+/// equality elsewhere in the same instruction is not occurrence provenance.
+struct RelocatedAddressOperand {
+  va_t FieldVA = InvalidVA;
+  uint64_t EncodedValue = 0;
+  va_t TargetVA = InvalidVA;
+  uint8_t Width = 0;
+  ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
+  va_t TargetOwnerVA = InvalidVA;
+};
+
 class Decoder {
 public:
   Decoder();
@@ -109,8 +126,11 @@ public:
   /// after it may still belong to the same function.  Only x86 `int3` is.
   bool isResumableTrap(const DecodedInsn &Insn) const;
 
-  /// Lift a single decoded instruction to LowIR ops.
-  void liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops);
+  /// Lift a single decoded instruction to LowIR ops. When supplied, \p Relocs
+  /// describes exact loader-authenticated address operands in the encoded
+  /// instruction; unsupported architectures/operand encodings ignore them.
+  void liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+                 llvm::ArrayRef<RelocatedAddressOperand> Relocs = {});
 
   /// Whether \p Insn ends a function's straight-line decode.  Dispatches to
   /// the active architecture lifter's terminator classification.

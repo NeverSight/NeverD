@@ -71,7 +71,9 @@ bool CFGBuilder::isOwnedInteriorTarget(const BinaryImage &Img,
     return false;
   if (KnownFuncEntries && KnownFuncEntries->count(Target))
     return false;
-  if ((Target % getInsnAlignment()) != 0 || !Img.isCodeAddress(Target) ||
+  if ((Target % getInsnAlignment()) != 0 ||
+      !Img.hasExecutableCodeOwnerAt(Target) ||
+      !Img.hasExecutableCodeOwnerRange(Target, getInsnAlignment()) ||
       !Img.readVA(Target, 1))
     return false;
   // Never let an x86 data value that happens to point into an instruction

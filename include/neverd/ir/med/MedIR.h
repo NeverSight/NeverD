@@ -52,6 +52,7 @@ struct MedVar {
   /// Kind==Const and remains separate from the numeric value so scalar,
   /// incomplete-page, and complete-address occurrences cannot share a model.
   ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
+  uint64_t AddressOwnerVA = InvalidVA;
 
   union {
     int64_t StackOff = 0;
@@ -64,7 +65,7 @@ struct MedVar {
       return false;
     if (Kind == Const)
       return ConstVal == O.ConstVal && Size == O.Size &&
-             Provenance == O.Provenance;
+             Provenance == O.Provenance && AddressOwnerVA == O.AddressOwnerVA;
     return Id == O.Id && SSAVer == O.SSAVer;
   }
   bool operator!=(const MedVar &O) const { return !(*this == O); }
@@ -73,13 +74,15 @@ struct MedVar {
 
   static MedVar makeConst(uint64_t Val, uint16_t Sz,
                           ConstantAddressProvenance AddressProvenance =
-                              ConstantAddressProvenance::Unknown) {
+                              ConstantAddressProvenance::Unknown,
+                          uint64_t AddressOwner = InvalidVA) {
     MedVar V;
     V.Kind = Const;
     V.Id = -1;
     V.Size = Sz;
     V.ConstVal = Val;
     V.Provenance = AddressProvenance;
+    V.AddressOwnerVA = AddressOwner;
     return V;
   }
 

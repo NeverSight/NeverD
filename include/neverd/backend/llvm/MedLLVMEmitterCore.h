@@ -345,9 +345,12 @@ private:
   };
   /// Conservatively summarize explicit constant provenance through
   /// pointer/value-preserving SSA, merges, arithmetic, and proven frame
-  /// reloads.  Escape sinks use this before any legacy value-global resolver:
-  /// explicit values have already been emitted according to their occurrence,
-  /// while an incomplete page fragment must never escape as a frozen VA.
+  /// reloads. Escape sinks use this before any value-global resolver. Scalar,
+  /// fragment, and mixed values do not acquire pointer meaning from numeric
+  /// coincidence; a complete Address relation may still need the consumer's
+  /// data owner because PC/literal and GOT/GOTOFF leaves intentionally remain
+  /// numeric until their final use. An incomplete page fragment must never
+  /// escape as a frozen VA.
   ConstantProvenanceSummary summarizeConstantProvenance(const MedVar &V) const;
   /// Query the exact function-wide address-fragment taint closure built before
   /// body emission. This is the authoritative sink policy; unlike the richer
@@ -381,7 +384,8 @@ private:
   /// Materialize one operand of a proven address relation without changing how
   /// another occurrence of the same numeric constant is classified.
   llvm::Value *materializeDataRelationConstant(uint64_t Val, uint16_t Size,
-                                               llvm::IRBuilder<> &Builder);
+                                               llvm::IRBuilder<> &Builder,
+                                               uint64_t OwnerVA = InvalidVA);
   void setVar(const MedVar &V, llvm::Value *Val, llvm::IRBuilder<> &Builder);
 
   /// Lower an INDIR_BR with a resolved jump table into an LLVM switch on the
@@ -510,6 +514,16 @@ private:
 
   llvm::Constant *tryResolveGlobalData(uint64_t Addr,
                                        uint16_t DataSizeHint = 0);
+  /// Resolve a direct memory-address occurrence without discarding its
+  /// relocation owner. COPY-folded exact occurrences use the owned route;
+  /// legacy numeric constants retain the value-only fallback.
+  llvm::Constant *tryResolveDirectGlobalDataAddress(const MedVar &Address,
+                                                    uint16_t DataSizeHint = 0);
+  /// Resolve a relocation-authenticated data address through the section/run
+  /// that owns the relocation symbol. Target and owner differ for one-past
+  /// pointers, and Target==0 may still name a mapped .bss in ET_REL input.
+  llvm::Constant *tryResolveOwnedGlobalData(uint64_t Addr, uint64_t OwnerVA,
+                                            uint16_t DataSizeHint = 0);
 
   /// True when tryResolveGlobalData has a concrete address-local route for
   /// \p Addr. Loader relocation evidence identifies pointer intent, but it does
@@ -597,6 +611,10 @@ private:
   /// the same predicate or one resolver can reject an address the next one is
   /// responsible for materializing.
   bool isMaterializableReadOnlyDataAddress(uint64_t VA) const;
+  /// Owner-aware form for relocation occurrences. The inclusive owner range
+  /// admits one-past pointers without reclassifying them as the next section;
+  /// a known owner never falls back to the numeric VA's section.
+  bool isMaterializableReadOnlyDataAddress(uint64_t VA, uint64_t OwnerVA) const;
 
   /// Compute the contiguous run of read-only-after-relocation segments (.rodata
   /// + adjacent .data.rel.ro, separated only by a small alignment gap) that
@@ -620,8 +638,9 @@ private:
   bool addrInCodePtrMirrorRun(uint64_t VA) const;
 
   /// If \p AddrVar provably indexes a single writable data segment, return that
-  /// segment's start VA; 0 otherwise (no writable base, or the address mixes
-  /// two distinct data segments).  Only constants in base position (an
+  /// segment's start VA; std::nullopt otherwise (no writable base, or the
+  /// address mixes two distinct data segments).  VA zero is a valid section
+  /// base in relocatable objects. Only constants in base position (an
   /// ADD/SUB/OR addend or the whole address) are considered; index sub-trees
   /// (MULT / AND / shift) are not descended, so a scale or mask that merely
   /// equals a .data VA is never mistaken for the base.
@@ -633,8 +652,8 @@ private:
   /// ordinary data immediate landing inside a wide low-VA run would otherwise
   /// be mistaken for a stored-pointer base; the relocation set is the ground
   /// truth for "address".
-  uint64_t writableDataSegOf(const MedVar &AddrVar,
-                             bool RequireRelocBase = false) const;
+  std::optional<uint64_t>
+  writableDataSegOf(const MedVar &AddrVar, bool RequireRelocBase = false) const;
 
   /// True when the stack slot identified by \p SlotAddr has its ADDRESS escape
   /// the current function — passed as a call argument or
@@ -870,13 +889,34 @@ private:
                       uint16_t *OriginSize = nullptr,
                       bool *SawArithmetic = nullptr) const;
 
-  /// Recover the possible read-only data targets of a pointer-width LOAD from
-  /// a loader-proven absolute data-pointer relocation table, including a
-  /// width-preserving ADD/SUB by a proven numeric constant.  Such a value is
+  struct DataAddressIdentity {
+    uint64_t VA = 0;
+    uint64_t OwnerVA = InvalidVA;
+
+    bool operator<(const DataAddressIdentity &Other) const {
+      return std::tie(VA, OwnerVA) < std::tie(Other.VA, Other.OwnerVA);
+    }
+  };
+
+  /// Recover the possible data identities of a pointer-width LOAD from a
+  /// loader-proven absolute data-pointer relocation table, including a
+  /// width-preserving ADD/SUB by a proven numeric constant. Such a value is
   /// emitted from the relocation mirror and therefore remains an already
-  /// symbolized pointer, not the raw table-slot bytes.
+  /// symbolized pointer, not the raw table-slot bytes. Preserve each target's
+  /// relocation-symbol owner: a one-past target may numerically equal the next
+  /// section's start, and VA zero is distinct from an unproven null.
+  bool recoverAbsoluteDataPointerLoadIdentities(
+      const MedVar &V, std::set<DataAddressIdentity> &Targets) const;
+  /// Value-only compatibility wrapper for callers that use this proof solely
+  /// as a boolean/model guard and never rematerialize a recovered target.
   bool recoverAbsoluteDataPointerLoadTargets(const MedVar &V,
                                              std::set<uint64_t> &Targets) const;
+
+  /// Resolve one read-only data base without discarding occurrence-local
+  /// relocation ownership. Known owners never fall back to numeric lookup.
+  llvm::Constant *tryResolveReadOnlyDataOccurrence(const MedVar &Occurrence,
+                                                   uint64_t Address,
+                                                   uint16_t SizeHint = 0);
 
   /// Recover `table_base + sext(load32(table_base + index))` when the loaded
   /// slots are loader-proven PC-relative data-pointer relocations.  Returns the
@@ -953,7 +993,8 @@ private:
   /// indirect call through it faults.  Null when \p AddrVar is not such a
   /// table.
   llvm::Value *tryResolveCodePtrTablePtr(const MedVar &AddrVar,
-                                         llvm::IRBuilder<> &Builder);
+                                         llvm::IRBuilder<> &Builder,
+                                         bool AllowImplicitZeroBase = false);
 
   /// Resolve a load/store whose address folds to a constant inside a segment
   /// holding relocated pointer slots — a *writable* function-pointer global
@@ -973,8 +1014,9 @@ private:
   /// the base VA of the SINGLE non-executable pointer-table segment that EVERY
   /// base-like constant reachable in \p AddrVar resolves into, so the whole
   /// address provably indexes that segment and can be redirected by its own
-  /// value. Returns 0 when the address has no such base, spans more than one
-  /// such segment, or carries an incomplete constant-leaf model. By default an
+  /// value. Returns std::nullopt when the address has no such base, spans more
+  /// than one such segment, or carries an incomplete constant-leaf model. By
+  /// default an
   /// already-symbolized base is also excluded, preserving the conservative
   /// contract for callers that can only rebase a raw original VA. A caller may
   /// set \p IncludeSymbolizedEvidence only when it subsequently proves the
@@ -982,9 +1024,12 @@ private:
   /// direct use or rebasing. Walks the address arithmetic
   /// (ADD/SUB/AND/OR/XOR/shift/mul/SELECT/PHI + width casts) and stops at a
   /// LOAD (a loaded value is not a base materialization, except for a proven
-  /// frame spill/reload whose source is followed explicitly).
-  uint64_t ptrTableUniqueSegment(const MedVar &AddrVar,
-                                 bool IncludeSymbolizedEvidence = false) const;
+  /// frame spill/reload whose source is followed explicitly).  An engaged
+  /// result may legitimately contain zero: relocatable objects can place the
+  /// first pointer-table run at VA 0, so absence must not share its value.
+  std::optional<uint64_t>
+  ptrTableUniqueSegment(const MedVar &AddrVar,
+                        bool IncludeSymbolizedEvidence = false) const;
 
   /// True when constant value \p Val is used in the current function as a
   /// genuine integer that merely coincides with a rodata relocation-target VA —
@@ -1058,7 +1103,8 @@ private:
   /// Resolve one occurrence-sensitive address operand through bit-preserving
   /// COPYs. Numeric membership in a mapped segment is insufficient: the leaf
   /// must carry architectural address origin or exact loader provenance.
-  bool resolveMaterializableDataAddress(const MedVar &V, uint64_t &Value) const;
+  bool resolveMaterializableDataAddress(const MedVar &V, uint64_t &Value,
+                                        uint64_t *OwnerVA = nullptr) const;
   bool constUsedAsPointerImpl(uint64_t Val) const;
   bool constValueUsedAsIntegerImpl(uint64_t Val) const;
 
@@ -1179,11 +1225,21 @@ private:
   /// that would otherwise freeze an original function VA.
   bool operationUsesRelocatableCodeIdentity(NdOp Opcode) const;
 
+  /// True when the current function's recovered jump-table metadata owns
+  /// \p Addr as table storage.  Inline switch tables may live in an instruction
+  /// section, so layout execute permission alone cannot turn their generic
+  /// PC-relative address into a code identity.
+  bool currentJumpTableOwnsStorageAddress(va_t Addr) const;
+
   /// Return true when \p V's pointer-preserving value graph contains an
-  /// occurrence that names an emitted function.  Unlike generic executable-
-  /// segment membership, this never treats an architectural PC/interior label
-  /// used for switch arithmetic as a function identity.
-  bool codeIdentityOccurrenceMayRelocate(const MedVar &V) const;
+  /// occurrence that names an emitted function or an exact lifted block on a
+  /// target without a readable architectural-PC GPR. The broader final-sink
+  /// role also includes layout-owned code so it remains an upper bound of the
+  /// precise proof. Unlike that role, the narrow arithmetic role never treats
+  /// an AArch32 PC seed used for switch arithmetic as a function identity.
+  bool
+  codeIdentityOccurrenceMayRelocate(const MedVar &V,
+                                    bool IncludeLayoutCodeOwners = false) const;
 
   /// Materialize a function identity used as an integer/arithmetic operand.
   /// Null means the operand has no such occurrence and its normal owner should
@@ -1213,6 +1269,17 @@ private:
   /// entry without reintroducing eager BlockAddress materialization.
   llvm::Value *tryResolveIndirectCallTarget(const MedVar &V,
                                             llvm::IRBuilder<> &Builder);
+
+  /// Resolve an address that is authenticated as a callable function entry.
+  /// The mixed FuncNames map also contains data bind/IAT slots, so a matching
+  /// declaration alone is not ownership proof. Lifted MedFunc entries and
+  /// loader-proven executable import veneers are the only accepted owners.
+  llvm::Function *resolveLiftedFunctionEntry(va_t Address) const;
+
+  /// Stable, module-order-independent ownership predicate paired with
+  /// resolveLiftedFunctionEntry. Unlike the materializer, this does not require
+  /// an import declaration to have been created by an earlier CALL.
+  bool hasAuthenticatedFunctionEntryVA(va_t Address) const;
 
   /// Resolve an original executable VA in an address-value context.  Callable
   /// entries become llvm::Function constants; relocation-proven labels inside
@@ -1293,6 +1360,12 @@ private:
                                     std::vector<MedVar> &IdxTerms, int Depth,
                                     bool *SawAmbiguousPhi,
                                     const PhiNode **AmbiguousPhi) const;
+
+  /// Return the unique occurrence-local data owner for p Value reachable in
+  /// the address-forming portion of p V. Conflicting owners set p Conflict;
+  /// a missing owner is distinct from a conflict and preserves legacy input.
+  std::optional<uint64_t>
+  uniqueDataAddressOwner(const MedVar &V, uint64_t Value, bool &Conflict) const;
 
   /// Literal-pool variant of collectIndexedGlobalBase: the base must fold
   /// through a literal-pool LOAD (the ARM `ldr rN,[pc]; add rN,pc` idiom), and
@@ -1414,7 +1487,7 @@ private:
   mutable std::set<uint64_t> InductionBaseVAs;
 
   using AddressProvenanceVarKey =
-      std::tuple<int, int, int, int, int, uint16_t, uint64_t, int>;
+      std::tuple<int, int, int, int, int, uint16_t, uint64_t, int, uint64_t>;
   struct IndexedGlobalBaseProof {
     bool Proven = false;
     uint64_t Base = 0;
@@ -1451,7 +1524,8 @@ private:
             V.SSAVer,
             V.Size,
             Payload,
-            static_cast<int>(V.Provenance)};
+            static_cast<int>(V.Provenance),
+            V.AddressOwnerVA};
   }
 
   // Exact, cycle-safe propagation of incomplete architectural address
@@ -1498,13 +1572,14 @@ private:
   mutable llvm::DenseMap<std::pair<int64_t, int>, const PhiNode *> PhiIndex;
 
   // Occurrence-level proof that a value graph contains an emitted function
-  // identity. Integer emission asks this for many operands, so memoize it per
-  // function instead of repeatedly walking large PHI/arithmetic DAGs. This is
-  // deliberately a structural upper bound over all PHI arms: it does not call
-  // feasibility/recurrence analysis and therefore cannot re-enter or depend
-  // on feasible-edge cache construction.
+  // identity. Integer emission asks this for many operands, so solve each
+  // uncached dependency subgraph to a fixed point and memoize its stable
+  // results per function. This is deliberately a structural upper bound over
+  // all PHI arms: it does not call feasibility/recurrence analysis and
+  // therefore cannot re-enter or depend on feasible-edge cache construction.
   mutable const MedFunc *CodeIdentityOccurrenceCacheFor = nullptr;
-  mutable std::map<AddressProvenanceVarKey, bool> CodeIdentityOccurrenceCache;
+  mutable std::map<std::pair<AddressProvenanceVarKey, bool>, bool>
+      CodeIdentityOccurrenceCache;
 
   // Conservative feasible CFG edges after pruning only statically proven
   // constant conditional branches. Used to ignore a dead PHI input without
@@ -1558,12 +1633,12 @@ private:
   // writable-base search descends the whole address DAG (and chases stack
   // spills), so it is memoized per non-constant address value; keyed with the
   // RequireRelocBase flag since the value/address contexts differ.
-  mutable std::map<std::tuple<int, int, int, bool>, uint64_t>
+  mutable std::map<std::tuple<int, int, int, bool>, std::optional<uint64_t>>
       WritableDataSegCache;
   // ptrTableUniqueSegment result per
   // (Kind,Id,SSAVer,IncludeSymbolizedEvidence) — a pure per-address DAG walk
   // over the (immutable during emit) function body.
-  mutable std::map<std::tuple<int64_t, int, bool>, uint64_t>
+  mutable std::map<std::tuple<int64_t, int, bool>, std::optional<uint64_t>>
       PtrTableUniqueSegCache;
 
   // Per-function memoized results of the two const classifiers, dropped when

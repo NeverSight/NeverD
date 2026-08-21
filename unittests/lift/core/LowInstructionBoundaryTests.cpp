@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -420,6 +421,391 @@ TEST(LowInstructionBoundary, X86EIPRelativeAddressWrapsBeforeZeroExtension) {
                          Op.Inputs[I].Provenance == Test.ExpectedProvenance &&
                          Op.Inputs[I].Offset == Test.ExpectedTaggedLeaf;
     EXPECT_TRUE(SawTaggedLeaf);
+  }
+}
+
+TEST(LowInstructionBoundary,
+     X86RelocatedDisplacementDoesNotTagEqualStoredImmediate) {
+  constexpr va_t DataVA = 0x250;
+  // movl $0x250, 0x250(%ebx); ret
+  //
+  // The disp32 and imm32 deliberately have the same bits.  Only the disp32
+  // relocation occurrence forms the destination address; the stored value is
+  // an ordinary integer and must not inherit DataAddress provenance merely
+  // because it is numerically equal to the relocation target.
+  const std::vector<uint8_t> Bytes = {0xc7, 0x83, 0x50, 0x02, 0x00, 0x00,
+                                      0x50, 0x02, 0x00, 0x00, 0xc3};
+
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Mode = InstructionMode::Default;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::ELF;
+  Image.Base = 0;
+  Image.Entry = kEntry;
+
+  Segment Data;
+  Data.VA = 0x200;
+  Data.Size = 0x100;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(Data.Size);
+  Image.Segments.push_back(std::move(Data));
+
+  Segment Text;
+  Text.VA = kEntry;
+  Text.Size = Bytes.size();
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = Bytes;
+  Image.Segments.push_back(std::move(Text));
+
+  // c7 /0 uses a ModR/M byte at +1, disp32 at +2, and imm32 at +6.
+  Image.DataAddressRelocOperands[kEntry + 2] = {DataVA, DataVA, 4};
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X86));
+  CFGBuilder Builder;
+  LowFunc Function =
+      Builder.build(Image, Dec, kEntry, "relocated_displacement_occurrence");
+
+  const LowBlock *Entry = findBlock(Function, kEntry);
+  ASSERT_NE(Entry, nullptr);
+  const LowOp *Store = nullptr;
+  unsigned TaggedTargetOccurrences = 0;
+  for (const LowOp &Op : Entry->Ops) {
+    if (Op.Opcode == NdOp::STORE)
+      Store = &Op;
+    for (uint8_t I = 0; I < Op.NumInputs; ++I)
+      if (Op.Inputs[I].isConst() &&
+          (Op.Inputs[I].Offset & uint64_t{0xffffffff}) == DataVA &&
+          Op.Inputs[I].Provenance == ConstantAddressProvenance::DataAddress)
+        ++TaggedTargetOccurrences;
+  }
+
+  ASSERT_NE(Store, nullptr);
+  ASSERT_GE(Store->NumInputs, 2u);
+  EXPECT_TRUE(Store->Inputs[1].isConst());
+  EXPECT_EQ(Store->Inputs[1].Offset, DataVA);
+  EXPECT_EQ(Store->Inputs[1].Provenance, ConstantAddressProvenance::Unknown);
+  EXPECT_EQ(TaggedTargetOccurrences, 1u);
+}
+
+TEST(LowInstructionBoundary,
+     X86BaseLessIndexedDisplacementIsScalarWithoutExactRelocation) {
+  // lea 0x2b(,%r8,4), %esi
+  //
+  // The displacement is one arithmetic component, not a complete address
+  // occurrence.  In a low-VA object 0x2b may also be a lifted block start;
+  // tagging this leaf Address would let numeric equality turn an index formula
+  // into a BlockAddress.  A loader descriptor still overrides this default for
+  // a genuine absolute table/global relocation.
+  const std::vector<uint8_t> Bytes = {0x42, 0x8d, 0x34, 0x85,
+                                      0x2b, 0x00, 0x00, 0x00};
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  DecodedInsn Insn{};
+  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn),
+            static_cast<int>(Bytes.size()));
+
+  auto displacementProvenance =
+      [&](llvm::ArrayRef<RelocatedAddressOperand> Relocs) {
+        std::vector<LowOp> Ops;
+        Dec.liftToLow(Insn, Ops, Relocs);
+        std::optional<ConstantAddressProvenance> Result;
+        for (const LowOp &Op : Ops)
+          for (uint8_t I = 0; I < Op.NumInputs; ++I)
+            if (Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 0x2b &&
+                Op.Inputs[I].Size == 8)
+              Result = Op.Inputs[I].Provenance;
+        return Result;
+      };
+
+  auto Plain = displacementProvenance({});
+  ASSERT_TRUE(Plain.has_value());
+  EXPECT_EQ(*Plain, ConstantAddressProvenance::Scalar);
+
+  RelocatedAddressOperand Reloc;
+  Reloc.FieldVA = kEntry + 4;
+  Reloc.EncodedValue = 0x2b;
+  Reloc.TargetVA = 0x2b;
+  Reloc.Width = 4;
+  Reloc.Provenance = ConstantAddressProvenance::DataAddress;
+  auto Relocated = displacementProvenance(
+      llvm::ArrayRef<RelocatedAddressOperand>(&Reloc, 1));
+  ASSERT_TRUE(Relocated.has_value());
+  EXPECT_EQ(*Relocated, ConstantAddressProvenance::DataAddress);
+}
+
+TEST(LowInstructionBoundary,
+     X86RelocatedDisplacementPreservesZeroAndUnsignedHighBitTargets) {
+  struct Case {
+    uint32_t Encoded;
+    std::vector<uint8_t> Bytes;
+  };
+  const std::vector<Case> Cases = {
+      {0, {0x8b, 0x83, 0x00, 0x00, 0x00, 0x00}},
+      {0x80000000u, {0x8b, 0x83, 0x00, 0x00, 0x00, 0x80}},
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Encoded);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::X86));
+    DecodedInsn Insn{};
+    ASSERT_EQ(
+        Dec.decodeOneForLift(C.Bytes.data(), C.Bytes.size(), kEntry, Insn),
+        static_cast<int>(C.Bytes.size()));
+
+    RelocatedAddressOperand Reloc;
+    Reloc.FieldVA = kEntry + 2;
+    Reloc.EncodedValue = C.Encoded;
+    Reloc.TargetVA = C.Encoded;
+    Reloc.Width = 4;
+    Reloc.Provenance = ConstantAddressProvenance::DataAddress;
+    std::vector<LowOp> Ops;
+    Dec.liftToLow(Insn, Ops,
+                  llvm::ArrayRef<RelocatedAddressOperand>(&Reloc, 1));
+
+    unsigned Matches = 0;
+    for (const LowOp &Op : Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (Op.Inputs[I].isConst() &&
+            Op.Inputs[I].Provenance == ConstantAddressProvenance::DataAddress) {
+          EXPECT_EQ(Op.Inputs[I].Offset, uint64_t(C.Encoded));
+          ++Matches;
+        }
+    EXPECT_EQ(Matches, 1u);
+  }
+}
+
+TEST(LowInstructionBoundary, X86ConflictingRelocationOwnersFailClosed) {
+  // mov 0x20(%rbx), %eax
+  const std::vector<uint8_t> Bytes = {0x8b, 0x43, 0x20};
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  DecodedInsn Insn{};
+  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn),
+            static_cast<int>(Bytes.size()));
+
+  const RelocatedAddressOperand Relocs[] = {
+      {kEntry + 2, 0x20, 0x20, 1, ConstantAddressProvenance::DataAddress},
+      {kEntry + 2, 0x20, 0x20, 1, ConstantAddressProvenance::CodeAddress},
+  };
+  std::vector<LowOp> Ops;
+  EXPECT_THROW(Dec.liftToLow(Insn, Ops, Relocs), UnliftedInstruction);
+  EXPECT_TRUE(Ops.empty());
+}
+
+TEST(LowInstructionBoundary, X86GeneratedShiftMaskIsAlwaysScalar) {
+  struct Case {
+    const char *Name;
+    std::vector<uint8_t> Bytes;
+  };
+  const std::vector<Case> Cases = {
+      {"shl", {0x48, 0xd3, 0xe0}},
+      {"rol", {0x48, 0xd3, 0xc0}},
+      {"shld", {0x48, 0x0f, 0xa5, 0xd8}},
+      {"shrd", {0x48, 0x0f, 0xad, 0xd8}},
+      {"rcr", {0x48, 0xd3, 0xd8}},
+      {"rcl", {0x48, 0xd3, 0xd0}},
+      {"rorx", {0xc4, 0xe3, 0xfb, 0xf0, 0xc3, 0x07}},
+      {"shrx", {0xc4, 0xe2, 0xf3, 0xf7, 0xc3}},
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::X64));
+    DecodedInsn Insn{};
+    ASSERT_EQ(
+        Dec.decodeOneForLift(C.Bytes.data(), C.Bytes.size(), kEntry, Insn),
+        static_cast<int>(C.Bytes.size()));
+
+    std::vector<LowOp> Ops;
+    Dec.liftToLow(Insn, Ops);
+    bool SawCountMask = false;
+    for (const LowOp &Op : Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+        const NdVar &Input = Op.Inputs[I];
+        if (!Input.isConst())
+          continue;
+        EXPECT_EQ(Input.Provenance, ConstantAddressProvenance::Scalar);
+        if (Op.Opcode == NdOp::INT_AND && Input.Offset == 0x3f &&
+            Input.Size == 8)
+          SawCountMask = true;
+      }
+    EXPECT_TRUE(SawCountMask);
+  }
+}
+
+TEST(LowInstructionBoundary, X86GeneratedArithmeticConstantsAreScalar) {
+  // incq %rax synthesizes a pointer-width `1` for the add and its flags.  In a
+  // low-VA object another function may genuinely live at VA 1; the generated
+  // increment must not inherit that function's value-global CodeRef identity.
+  const std::vector<uint8_t> Bytes = {0x48, 0xff, 0xc0};
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  DecodedInsn Insn{};
+  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn),
+            static_cast<int>(Bytes.size()));
+
+  std::vector<LowOp> Ops;
+  Dec.liftToLow(Insn, Ops);
+  bool SawPointerWidthOne = false;
+  for (const LowOp &Op : Ops)
+    for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+      const NdVar &Input = Op.Inputs[I];
+      if (!Input.isConst())
+        continue;
+      EXPECT_EQ(Input.Provenance, ConstantAddressProvenance::Scalar);
+      SawPointerWidthOne |= Input.Offset == 1 && Input.Size == 8;
+    }
+  EXPECT_TRUE(SawPointerWidthOne);
+}
+
+TEST(LowInstructionBoundary, X86GeneratedStringAndLoopConstantsAreScalar) {
+  struct Case {
+    const char *Name;
+    std::vector<uint8_t> Bytes;
+    NdOp Opcode;
+    uint64_t Value;
+  };
+  const std::vector<Case> Cases = {
+      // rep lodsq: RCX-1 selects the final load and RCX*8 advances RSI.
+      {"rep-lods", {0xf3, 0x48, 0xad}, NdOp::INT_SUB, 1},
+      // loop $-2: the encoded branch target remains a control-flow address,
+      // but the lifter-generated RCX decrement must be a scalar occurrence.
+      {"loop", {0xe2, 0xfe}, NdOp::INT_SUB, 1},
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::X64));
+    DecodedInsn Insn{};
+    ASSERT_EQ(
+        Dec.decodeOneForLift(C.Bytes.data(), C.Bytes.size(), kEntry, Insn),
+        static_cast<int>(C.Bytes.size()));
+
+    std::vector<LowOp> Ops;
+    Dec.liftToLow(Insn, Ops);
+    bool SawGeneratedScalar = false;
+    for (const LowOp &Op : Ops) {
+      if (Op.Opcode != C.Opcode)
+        continue;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+        const NdVar &Input = Op.Inputs[I];
+        if (!Input.isConst() || Input.Offset != C.Value || Input.Size != 8)
+          continue;
+        EXPECT_EQ(Input.Provenance, ConstantAddressProvenance::Scalar);
+        SawGeneratedScalar = true;
+      }
+    }
+    EXPECT_TRUE(SawGeneratedScalar);
+  }
+}
+
+TEST(LowInstructionBoundary,
+     X86VSIBGatherConsumesTheExactRelocatedDisplacement) {
+  // vpgatherdd %ymm2,0x11223344(,%ymm1,4),%ymm0.  The gather constructs its
+  // lane addresses directly instead of calling computeEA, but it must consume
+  // the same exact relocation descriptor (including a relocated zero) as an
+  // ordinary memory operand.  Its lane scale remains scalar.
+  const std::vector<uint8_t> Bytes = {0xc4, 0xe2, 0x6d, 0x90, 0x04,
+                                      0x8d, 0x44, 0x33, 0x22, 0x11};
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  DecodedInsn Insn{};
+  ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn),
+            static_cast<int>(Bytes.size()));
+
+  RelocatedAddressOperand Reloc;
+  Reloc.FieldVA = kEntry + 6;
+  Reloc.EncodedValue = 0x11223344;
+  Reloc.TargetVA = 0x11223344;
+  Reloc.Width = 4;
+  Reloc.Provenance = ConstantAddressProvenance::DataAddress;
+  std::vector<LowOp> Ops;
+  Dec.liftToLow(Insn, Ops, llvm::ArrayRef<RelocatedAddressOperand>(&Reloc, 1));
+
+  unsigned AddressMatches = 0;
+  bool SawScalarScale = false;
+  for (const LowOp &Op : Ops)
+    for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+      const NdVar &Input = Op.Inputs[I];
+      if (!Input.isConst())
+        continue;
+      if (Input.Offset == Reloc.TargetVA && Input.Size == 8) {
+        EXPECT_EQ(Input.Provenance, ConstantAddressProvenance::DataAddress);
+        ++AddressMatches;
+      }
+      if (Op.Opcode == NdOp::INT_MULT && Input.Offset == 4 && Input.Size == 8) {
+        EXPECT_EQ(Input.Provenance, ConstantAddressProvenance::Scalar);
+        SawScalarScale = true;
+      }
+    }
+  EXPECT_EQ(AddressMatches, 1u);
+  EXPECT_TRUE(SawScalarScale);
+}
+
+TEST(LowInstructionBoundary,
+     ArithmeticImmediatesAreScalarUnlessTheirExactFieldRelocates) {
+  {
+    // cmp rax,0x2000.  A large low-VA object can contain address 0x2000, but
+    // this unrelocated encoded bound is still a scalar occurrence.
+    const std::vector<uint8_t> Bytes = {0x48, 0x3d, 0x00, 0x20, 0x00, 0x00};
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::X64));
+    DecodedInsn Insn{};
+    ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn),
+              static_cast<int>(Bytes.size()));
+
+    std::vector<LowOp> Ops;
+    Dec.liftToLow(Insn, Ops);
+    bool SawScalarBound = false;
+    for (const LowOp &Op : Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 0x2000) {
+          EXPECT_EQ(Op.Inputs[I].Provenance, ConstantAddressProvenance::Scalar);
+          SawScalarBound = true;
+        }
+    EXPECT_TRUE(SawScalarBound);
+
+    // The same bytes with a loader-authenticated relocation on the exact imm32
+    // field must retain address identity.  A value-equal constant elsewhere in
+    // the instruction would not match FieldVA and therefore cannot inherit it.
+    RelocatedAddressOperand Reloc;
+    Reloc.FieldVA = kEntry + 2;
+    Reloc.EncodedValue = 0x2000;
+    Reloc.TargetVA = 0x2000;
+    Reloc.Width = 4;
+    Reloc.Provenance = ConstantAddressProvenance::DataAddress;
+    Ops.clear();
+    Dec.liftToLow(Insn, Ops,
+                  llvm::ArrayRef<RelocatedAddressOperand>(&Reloc, 1));
+    bool SawRelocatedBound = false;
+    for (const LowOp &Op : Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 0x2000) {
+          EXPECT_EQ(Op.Inputs[I].Provenance,
+                    ConstantAddressProvenance::DataAddress);
+          SawRelocatedBound = true;
+        }
+    EXPECT_TRUE(SawRelocatedBound);
+  }
+
+  {
+    // cmp r0,#0x100.  In a relocatable ARM object 0x100 can simultaneously be
+    // the .bss base; the compare occurrence must remain a scalar bound.
+    const std::vector<LowOp> Ops =
+        liftARMInstruction(InstructionMode::ARM, {0x01, 0x0c, 0x50, 0xe3});
+    bool SawScalarBound = false;
+    for (const LowOp &Op : Ops)
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (Op.Inputs[I].isConst() && Op.Inputs[I].Offset == 0x100) {
+          EXPECT_EQ(Op.Inputs[I].Provenance, ConstantAddressProvenance::Scalar);
+          SawScalarBound = true;
+        }
+    EXPECT_TRUE(SawScalarBound);
   }
 }
 

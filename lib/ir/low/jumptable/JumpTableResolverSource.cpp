@@ -401,7 +401,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
     } else {
       std::optional<uint64_t> RelBaseOpt =
           foldRegConstant(Img, Rec, BaseReg, FoldAt);
-      if (!RelBaseOpt || *RelBaseOpt == 0)
+      if (!RelBaseOpt || !Img.getSegmentFor(*RelBaseOpt))
         return false;
       TableAddr = *RelBaseOpt;
     }
@@ -411,7 +411,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   if (!Seg || Seg->Data.empty())
     return false;
 
-  Info.BaseAddr = TableAddr;
+  Info.setBaseAddr(TableAddr);
   Info.EntrySize = LoadWidth;
   Info.IndexReg = IndexReg;
 
@@ -493,7 +493,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
           if (D < 0) {
             if (V.isReg()) {
               auto F = foldRegConstant(Img, Rec, V.Offset, AddAddr);
-              if (F && *F)
+              if (F && Img.getSegmentFor(*F))
                 return *F;
             }
             return std::nullopt;
@@ -510,10 +510,9 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
       };
       for (int W = 0; W < 2; ++W) {
         auto Anchor = traceConstAnchor(BlockOps[AddD].Inputs[W], AddD - 1);
-        if (!Anchor || *Anchor == 0 || *Anchor == TableAddr)
+        if (!Anchor || *Anchor == TableAddr)
           continue;
-        const auto *AS = Img.getSegmentFor(*Anchor);
-        if (AS && AS->isExecutable()) {
+        if (Img.hasExecutableCodeOwnerAt(*Anchor)) {
           Info.TargetBase = *Anchor;
           Info.EntryScale = 1;
           break;

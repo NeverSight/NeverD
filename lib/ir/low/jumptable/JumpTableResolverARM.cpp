@@ -102,8 +102,7 @@ bool CFGBuilder::tryARMTableBranch(const BinaryImage &Img,
   if (!SawShift || ShiftAmount != 1)
     return false;
 
-  const auto *Seg = Img.getSegmentFor(PCBase);
-  if (!Seg || !Seg->isExecutable())
+  if (!Img.hasExecutableCodeOwnerAt(PCBase))
     return false;
 
   // The table typically starts right after the branch instruction.
@@ -111,7 +110,7 @@ bool CFGBuilder::tryARMTableBranch(const BinaryImage &Img,
   if (TableAddr == 0)
     TableAddr = Rec.Addr + Rec.Size;
 
-  Info.BaseAddr = TableAddr;
+  Info.setBaseAddr(TableAddr);
   Info.EntrySize = LoadWidth;
   Info.IsRelative = true;
   Info.IsSigned = false;
@@ -248,7 +247,7 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
     if (BaseCand == InvalidVA)
       continue;
     auto V = foldRegConstant(Img, Rec, BaseCand);
-    if (!V || *V == 0)
+    if (!V || !Img.getSegmentFor(*V))
       continue;
     const auto *S = Img.getSegmentFor(*V);
     if (S && !S->Data.empty()) {
@@ -292,16 +291,15 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
   }
   if (!Anchor && Ops[AddIdx].Inputs[AnchorWhich].isReg())
     Anchor = foldRegConstant(Img, Rec, Ops[AddIdx].Inputs[AnchorWhich].Offset);
-  if (!Anchor || *Anchor == 0)
+  if (!Anchor)
     return false;
-  const auto *ASeg = Img.getSegmentFor(*Anchor);
-  if (!ASeg || !ASeg->isExecutable())
+  if (!Img.hasExecutableCodeOwnerAt(*Anchor))
     return false;
 
   if (IndexReg != InvalidVA)
     IndexReg = traceRegSource(Ops, AddIdx, IndexReg);
 
-  Info.BaseAddr = *TableBase;
+  Info.setBaseAddr(*TableBase);
   Info.EntrySize = LoadWidth;
   Info.IsRelative = true;
   Info.IsSigned = Signed;

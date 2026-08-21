@@ -18,6 +18,7 @@
 #include "neverd/Limits.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/ELF.h"
@@ -378,6 +379,7 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       }
 
       va_t SymVal = 0;
+      va_t SymOwnerVA = InvalidVA;
       if (SymSH2 && RSym > 0) {
         auto SymsOr = ELF.symbols(SymSH2);
         if (SymsOr && RSym < SymsOr->size()) {
@@ -385,6 +387,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           SymVal = Sym.st_value;
           if (Sym.st_shndx != SHN_UNDEF && Sym.st_shndx < SHN_LORESERVE) {
             if (const Elf_Shdr *TSH = getShdr<ELFT>(Sections, Sym.st_shndx)) {
+              SymOwnerVA =
+                  sectionVA<ELFT>(IsRelocatable, SecBase, *TSH, Sym.st_shndx);
               if (SymVal > InvalidVA - SecBase[Sym.st_shndx])
                 continue;
               SymVal += SecBase[Sym.st_shndx];
@@ -404,11 +408,10 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       // GOTOFF `.rodata` base reached through a low VA that the numeric-VA
       // heuristic would otherwise read as an integer literal).
       auto RecordDataTarget = [&](uint64_t TargetVA) {
-        if (TargetVA == 0)
-          return;
         const Segment *TSeg = Img.getSegmentFor(TargetVA);
         if (TSeg && TSeg->isReadable() && !TSeg->isWritable() &&
-            !TSeg->isExecutable() && !TSeg->Data.empty())
+            !Img.hasExecutableCodeOwnerAt(TargetVA) &&
+            Img.hasObjectDataProvenance(TargetVA))
           Img.RelocDataAddrs.insert(TargetVA);
       };
 
@@ -422,37 +425,70 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       // Zero-init .bss carries no Data, so unlike RecordDataTarget this does
       // not require non-empty bytes.
       auto RecordWritableDataTarget = [&](uint64_t TargetVA) {
-        if (TargetVA == 0)
-          return;
         const Segment *TSeg = Img.getSegmentFor(TargetVA);
-        if (TSeg && TSeg->isWritable() && !TSeg->isExecutable())
+        if (TSeg && TSeg->isWritable() &&
+            !Img.hasExecutableCodeOwnerAt(TargetVA))
           Img.WritableRelocDataAddrs.insert(TargetVA);
       };
 
-      // Record this slot (at VA P) when it holds an absolute pointer into
-      // executable code — the entries of a computed-goto / threaded-dispatch
-      // jump table.  The jump-table resolver uses the run length as the exact
-      // entry count and to disambiguate absolute entries from PIC offsets.
-      auto RecordCodePtr = [&](uint64_t TargetVA) {
-        if (TargetVA == 0)
+      // Normalize full-width absolute fields through the shared slot/target
+      // classifier.  In particular, an absolute relocation embedded in an
+      // instruction proves the referenced address, but the instruction bytes
+      // themselves are not a pointer-table slot.  Narrow absolute fields on a
+      // wide target likewise cannot be published as pointer slots; when they
+      // live in code, retain only the executable target provenance so later
+      // consumers can fail closed rather than treating the truncated bits as
+      // a complete pointer.
+      auto RecordAbsoluteField = [&](uint64_t EncodedValue, uint64_t TargetVA,
+                                     uint64_t TargetOwnerVA,
+                                     size_t FieldWidth) {
+        if (TargetOwnerVA == InvalidVA)
           return;
-        const Segment *TSeg = Img.getSegmentFor(TargetVA);
-        if (TSeg && TSeg->isExecutable())
-          Img.CodePtrRelocSlots.insert(P);
-      };
-
-      // Record this slot when it holds an absolute pointer into read-only
-      // DATA (not code) — an absolute data-pointer table entry, e.g. the
-      // `.data.rel.ro` `const char*` array a 32-bit-target switch-returning-
-      // string lowers to.  The emitter rebuilds these as `ptrtoint(@data)` so
-      // they retarget the recompiled object instead of the stale original VA.
-      auto RecordDataPtr = [&](uint64_t TargetVA) {
-        if (TargetVA == 0)
+        if (FieldWidth == Img.getPointerSize()) {
+          recordAbsolutePointerRelocation(Img, P, TargetVA, TargetOwnerVA);
           return;
-        const Segment *TSeg = Img.getSegmentFor(TargetVA);
-        if (TSeg && TSeg->isReadable() && !TSeg->isExecutable() &&
-            !TSeg->Data.empty())
-          Img.DataPtrRelocSlots.insert(P);
+        }
+        if (!Img.hasExecutableCodeOwnerAt(P))
+          return;
+        const Segment *OwnerSeg = Img.getSegmentFor(TargetOwnerVA);
+        if (!OwnerSeg || !OwnerSeg->isReadable())
+          return;
+        if (OwnerSeg->Size > InvalidVA - OwnerSeg->VA)
+          return;
+        va_t OwnerBegin = OwnerSeg->VA;
+        va_t OwnerEnd = OwnerSeg->VA + OwnerSeg->Size;
+        bool OwnerWritable = OwnerSeg->isWritable();
+        if (const Section *OwnerSec = Img.getSectionFor(TargetOwnerVA)) {
+          if (OwnerSec->Size > InvalidVA - OwnerSec->VA)
+            return;
+          OwnerBegin = OwnerSec->VA;
+          OwnerEnd = OwnerSec->VA + OwnerSec->Size;
+          OwnerWritable =
+              OwnerSec->isWritable() &&
+              !section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) &&
+              !section_names::isReadOnlyAfterRelocSectionName(
+                  OwnerSec->SegmentName);
+        }
+        const bool OwnerIsCode = Img.hasExecutableCodeOwnerAt(TargetOwnerVA);
+        if (TargetVA < OwnerBegin ||
+            (OwnerIsCode ? TargetVA >= OwnerEnd : TargetVA > OwnerEnd))
+          return;
+        const RelocatedAddressField Field{EncodedValue, TargetVA,
+                                          static_cast<uint8_t>(FieldWidth),
+                                          OwnerBegin};
+        if (OwnerIsCode) {
+          Img.DataAddressRelocOperands.erase(P);
+          Img.CodeAddressRelocOperands[P] = Field;
+          Img.CodeRefTargets.insert(
+              normalizeCodeAddress(TargetVA, Img.Arch, Img.Mode));
+          return;
+        }
+        Img.CodeAddressRelocOperands.erase(P);
+        Img.DataAddressRelocOperands[P] = Field;
+        if (OwnerWritable)
+          Img.WritableRelocDataAddrs.insert(TargetVA);
+        else
+          Img.RelocDataAddrs.insert(TargetVA);
       };
 
       // Relative data-pointer table entry.  The slot contains a signed
@@ -464,10 +500,14 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       auto RecordRelDataPtr = [&](uint64_t TargetVA) {
         const Segment *PSeg = Img.getSegmentFor(P);
         const Segment *TSeg = Img.getSegmentFor(TargetVA);
+        const bool HasMappedSlotOwner =
+            Img.getSectionFor(P) != nullptr ||
+            (PSeg && !Img.segmentHasReadableSectionMetadata(*PSeg));
         if (PSeg && PSeg->isReadable() && !PSeg->isWritable() &&
-            !PSeg->isExecutable() && !PSeg->Data.empty() && TSeg &&
+            !Img.hasExecutableCodeOwnerAt(P) && HasMappedSlotOwner && TSeg &&
             TSeg->isReadable() && !TSeg->isWritable() &&
-            !TSeg->isExecutable() && !TSeg->Data.empty())
+            !Img.hasExecutableCodeOwnerAt(TargetVA) &&
+            Img.hasObjectDataProvenance(TargetVA))
           Img.RelDataPtrRelocSlots.insert(P);
       };
 
@@ -483,9 +523,12 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       // relocatable object), so it is not filtered out here.
       auto RecordRelCodePtr = [&](uint64_t SymVA) {
         const Segment *PSeg = Img.getSegmentFor(P);
-        const Segment *TSeg = Img.getSegmentFor(SymVA);
+        const bool HasMappedSlotOwner =
+            Img.getSectionFor(P) != nullptr ||
+            (PSeg && !Img.segmentHasReadableSectionMetadata(*PSeg));
         if (PSeg && PSeg->isReadable() && !PSeg->isWritable() &&
-            !PSeg->isExecutable() && TSeg && TSeg->isExecutable())
+            !Img.hasExecutableCodeOwnerAt(P) && HasMappedSlotOwner &&
+            Img.hasExecutableCodeOwnerAt(SymVA))
           Img.RelCodeRelocSlots.insert(P);
       };
 
@@ -503,8 +546,10 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       auto RecordRelTableAnchor = [&](uint64_t AnchorVA) {
         const Segment *PSeg = Img.getSegmentFor(P);
         const Segment *TSeg = Img.getSegmentFor(AnchorVA);
-        if (PSeg && PSeg->isExecutable() && TSeg && TSeg->isReadable() &&
-            !TSeg->isWritable() && !TSeg->isExecutable() && !TSeg->Data.empty())
+        if (PSeg && Img.hasExecutableCodeOwnerAt(P) && TSeg &&
+            TSeg->isReadable() && !TSeg->isWritable() &&
+            !Img.hasExecutableCodeOwnerAt(AnchorVA) &&
+            Img.hasObjectDataProvenance(AnchorVA))
           Img.RelCodeTableAnchors.insert(AnchorVA);
       };
 
@@ -516,13 +561,10 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       // absolute data-slot pointers (function-pointer tables) are handled by
       // the code- pointer table mirror and must NOT enter this value-keyed
       // set, where a genuine integer equal to a low table-entry function VA
-      // would be mis-symbolized.  VA 0 is skipped (indistinguishable from a
-      // real zero).
+      // would be mis-symbolized. A mapped VA 0 is accepted only here, where
+      // the relocation itself distinguishes an address from an integer null.
       auto RecordCodeRef = [&](uint64_t TargetVA) {
-        if (TargetVA == 0)
-          return;
-        const Segment *TSeg = Img.getSegmentFor(TargetVA);
-        if (TSeg && TSeg->isExecutable())
+        if (Img.hasExecutableCodeOwnerAt(TargetVA))
           Img.CodeRefTargets.insert(TargetVA);
       };
 
@@ -572,16 +614,25 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             continue;
           uint64_t Val = S + RAddend;
           std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 8);
-          RecordCodePtr(Val);
-          RecordDataPtr(Val);
-          RecordWritableDataTarget(Val);
+          RecordAbsoluteField(Val, Val, SymOwnerVA, 8);
         } else if (RType == R_X86_64_32 || RType == R_X86_64_32S) {
           if (RAddr + 4 > ApplySeg->Data.size())
             continue;
-          uint32_t Val = static_cast<uint32_t>(S + RAddend);
+          const uint64_t Full = S + RAddend;
+          const uint32_t Val = static_cast<uint32_t>(Full);
           std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
-          RecordCodePtr(Val);
-          RecordWritableDataTarget(Val);
+          const uint64_t Extended =
+              RType == R_X86_64_32S
+                  ? static_cast<uint64_t>(
+                        static_cast<int64_t>(static_cast<int32_t>(Val)))
+                  : static_cast<uint64_t>(Val);
+          // ELF linkers reject a relocation overflow.  This loader has no
+          // diagnostic channel here, so retain the historical written bytes
+          // but never publish a truncated field as complete address
+          // provenance.
+          if (Extended == Full) {
+            RecordAbsoluteField(Val, Full, SymOwnerVA, 4);
+          }
         } else if (RType == R_AARCH64_CALL26 || RType == R_AARCH64_JUMP26) {
           if (RAddr + 4 > ApplySeg->Data.size())
             continue;
@@ -666,18 +717,50 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           // load address becomes a known rodata VA the emitter redirects.
           switch (RType) {
           case R_386_GOTOFF: {
-            // GOTOFF materializes a symbol's address into a register (`leal
-            // sym@GOTOFF(%ebx)`); an executable target is a function pointer.
+            // Under the loader's GOT-base-zero model a GOTOFF field contains
+            // the complete folded address S+A.  Its semantic owner is still
+            // the relocation symbol S, not the segment in which the biased
+            // numeric result happens to land: a lookup table at .rodata+0x60
+            // with addend -0x10 legitimately encodes 0x50 inside .text.
+            // Likewise, a field stored in data is a pointer-table slot, not an
+            // instruction operand.  Decide both axes before publishing any
+            // downstream provenance so one occurrence never claims code and
+            // data simultaneously.
             uint32_t Folded = static_cast<uint32_t>(S + InPlace);
             Put32(Folded);
-            RecordDataTarget(Folded);
-            RecordWritableDataTarget(Folded);
-            RecordCodePtr(Folded);
-            RecordCodeRef(Folded);
-            // `leal table@GOTOFF(%ebx)` anchors a PIC switch table's base in
-            // read-only data; record it so the resolver bounds an over-long
-            // RelCodeReloc run at the next table's base.
-            RecordRelTableAnchor(Folded);
+            const va_t SymbolVA = static_cast<uint32_t>(S);
+            const va_t SymbolOwnerAnchor = SymOwnerVA;
+            const bool PlaceIsCode = Img.hasExecutableCodeOwnerAt(P);
+            const Segment *PlaceSeg = Img.getSegmentFor(P);
+            const bool PlaceIsData =
+                PlaceSeg && PlaceSeg->isReadable() && !PlaceIsCode;
+            const bool SymbolIsCode =
+                SymbolOwnerAnchor != InvalidVA &&
+                Img.hasExecutableCodeOwnerAt(SymbolOwnerAnchor);
+            const Segment *SymSeg = SymbolOwnerAnchor != InvalidVA
+                                        ? Img.getSegmentFor(SymbolOwnerAnchor)
+                                        : nullptr;
+            const bool SymbolIsData =
+                SymSeg && SymSeg->isReadable() && !SymbolIsCode;
+
+            if (PlaceIsCode && SymbolIsCode) {
+              RecordCodeRef(Folded);
+              Img.CodeAddressRelocOperands[P] = {Folded, Folded, 4,
+                                                 SymbolOwnerAnchor};
+            } else if (PlaceIsCode && SymbolIsData) {
+              RecordDataTarget(Folded);
+              RecordWritableDataTarget(Folded);
+              Img.DataAddressRelocOperands[P] = {Folded, Folded, 4,
+                                                 SymbolOwnerAnchor};
+              // `leal table@GOTOFF(%ebx)` anchors a PIC switch table's base in
+              // read-only data; record it so the resolver bounds an over-long
+              // RelCodeReloc run at the next table's base.
+              RecordRelTableAnchor(Folded);
+            } else if (PlaceIsData) {
+              recordAbsolutePointerRelocation(Img, P, Folded,
+                                              SymbolOwnerAnchor);
+            }
+
             // A switch-to-lookup-table indexed by the unbiased case value
             // folds the base to `table - min_case*stride` — a negative addend
             // that drops the base BEFORE the table's segment (often into
@@ -685,12 +768,15 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             // to the wrong segment.  When the *symbol* itself sits in clean
             // rodata, anchor the folded base to the symbol's own segment so
             // the emitter pins `base + runtime_index` back inside the table.
-            const Segment *SymSeg = Img.getSegmentFor(static_cast<uint32_t>(S));
-            if (SymSeg && SymSeg->isReadable() && !SymSeg->isWritable() &&
-                !SymSeg->isExecutable() && !SymSeg->Data.empty() &&
-                SymSeg->VA > Folded &&
-                SymSeg->VA - Folded <= limits::kMaxRodataAnchorBackDistance)
+            if (PlaceIsCode && SymbolIsData && SymSeg &&
+                !SymSeg->isWritable() &&
+                Img.hasObjectDataProvenance(SymbolVA) &&
+                !SymSeg->Data.empty() && SymSeg->VA > Folded &&
+                SymSeg->VA - Folded <= limits::kMaxRodataAnchorBackDistance) {
               Img.RodataAnchorSeg[Folded] = SymSeg->VA;
+              Img.DataAddressRelocOperands[P] = {Folded, Folded, 4,
+                                                 SymbolOwnerAnchor};
+            }
             break;
           }
           case R_386_32:
@@ -699,10 +785,9 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             // register materialization, so it is not recorded as a scalar
             // code ref.
             Put32(static_cast<uint32_t>(S + InPlace));
-            RecordDataTarget(static_cast<uint32_t>(S + InPlace));
-            RecordWritableDataTarget(static_cast<uint32_t>(S + InPlace));
-            RecordCodePtr(static_cast<uint32_t>(S + InPlace));
-            RecordDataPtr(static_cast<uint32_t>(S + InPlace));
+            RecordAbsoluteField(static_cast<uint32_t>(S + InPlace),
+                                static_cast<uint32_t>(S + InPlace), SymOwnerVA,
+                                4);
             break;
           case R_386_PC32:
           case R_386_PLT32:
@@ -721,9 +806,9 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           // the code-pointer table mirror) or a literal-pool word, not a
           // register materialization, so not recorded as a scalar code ref.
           Put32(static_cast<uint32_t>(S + InPlace));
-          RecordCodePtr(static_cast<uint32_t>(S + InPlace));
-          RecordDataPtr(static_cast<uint32_t>(S + InPlace));
-          RecordWritableDataTarget(static_cast<uint32_t>(S + InPlace));
+          RecordAbsoluteField(static_cast<uint32_t>(S + InPlace),
+                              static_cast<uint32_t>(S + InPlace), SymOwnerVA,
+                              4);
         } else if (RType == R_ARM_REL32) {
           Put32(static_cast<int32_t>(S + InPlace - P));
           RecordRelDataPtr(S);

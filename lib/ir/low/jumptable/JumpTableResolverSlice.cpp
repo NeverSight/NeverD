@@ -51,11 +51,11 @@ bool CFGBuilder::sliceBackForTableBase(const InsnRecord &Rec,
       case NdOp::INT_ADD:
         if (!FoundBase && Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
             Op.Inputs[1].Offset != 0) {
-          Info.BaseAddr = Op.Inputs[1].Offset;
+          Info.setBaseAddr(Op.Inputs[1].Offset);
           FoundBase = true;
         } else if (!FoundBase && Op.NumInputs >= 2 && Op.Inputs[0].isConst() &&
                    Op.Inputs[0].Offset != 0) {
-          Info.BaseAddr = Op.Inputs[0].Offset;
+          Info.setBaseAddr(Op.Inputs[0].Offset);
           FoundBase = true;
         }
         break;
@@ -113,7 +113,7 @@ bool CFGBuilder::sliceBackForTableBase(const InsnRecord &Rec,
         SawLoad = true;
         LoadWidth = Op.Output.Size;
         if (Op.NumInputs >= 1 && Op.Inputs[0].isConst() && !FoundBase) {
-          Info.BaseAddr = Op.Inputs[0].Offset;
+          Info.setBaseAddr(Op.Inputs[0].Offset);
           FoundBase = true;
         }
         break;
@@ -238,14 +238,13 @@ bool CFGBuilder::tryRelativeTable(const BinaryImage &Img, const InsnRecord &Rec,
   if (CodeBase == 0 || LoadSize == 0)
     return false;
 
-  const auto *CSeg = Img.getSegmentFor(CodeBase);
-  if (!CSeg || !CSeg->isExecutable())
+  if (!Img.hasExecutableCodeOwnerAt(CodeBase))
     return false;
 
   if (TableBase == 0)
     TableBase = CodeBase;
 
-  Info.BaseAddr = TableBase;
+  Info.setBaseAddr(TableBase);
   Info.EntrySize = LoadSize;
   Info.IsRelative = true;
   Info.IsSigned = HasSext || (LoadSize < limits::kMaxEntryBytes);

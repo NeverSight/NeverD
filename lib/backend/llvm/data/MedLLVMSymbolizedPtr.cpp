@@ -79,9 +79,16 @@ bool MedLLVMEmitter::reloadsSymbolizedWritablePtr(const MedVar &AddrVar) const {
       // double-relocate).  traceValueVA folds the `SUBBYTES(ZEXT(base0 +
       // GOTOFF))` materialization to the VA so symbolizesWritableRelocPtr can
       // mirror getVar's decision exactly.
+      uint64_t ExactVA = 0;
+      uint64_t ExactOwnerVA = InvalidVA;
+      const bool HasExactOwner =
+          resolveMaterializableDataAddress(Source, ExactVA, &ExactOwnerVA) &&
+          ExactOwnerVA != InvalidVA;
       auto StoreVA = traceValueVA(Source);
       bool StoreSymbolized =
-          StoreVA && symbolizesWritableRelocPtr(*StoreVA, Source.Size);
+          HasExactOwner
+              ? writableDataSegOf(Source, /*RequireRelocBase=*/true).has_value()
+              : StoreVA && symbolizesWritableRelocPtr(*StoreVA, Source.Size);
       if (!StoreSymbolized && varIsFrameDerived(Def->Inputs[0]) &&
           frameSlotHasMatchingKeyLoad(Def->Inputs[0]))
         continue; // store kept the original VA; the deref re-bases it
@@ -163,6 +170,21 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
     auto [Cur, DirectPhiConstant] = Work.back();
     Work.pop_back();
     if (Cur.isConst()) {
+      uint64_t ExactVA = 0;
+      uint64_t OwnerVA = InvalidVA;
+      if (resolveMaterializableDataAddress(Cur, ExactVA, &OwnerVA) &&
+          OwnerVA != InvalidVA) {
+        const Segment *OwnerSeg = Img->getSegmentFor(OwnerVA);
+        const Section *OwnerSec = Img->getSectionFor(OwnerVA);
+        if (OwnerSeg && OwnerSeg->VA == SegVA) {
+          const uint64_t Begin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
+          const uint64_t Size = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
+          if (Size <= InvalidVA - Begin && ExactVA >= Begin &&
+              ExactVA <= Begin + Size)
+            return true;
+        }
+        continue;
+      }
       // getVar symbolizes a constant above the threshold that lands in this run
       // to `@G + (C - RunStart)`.  The constUsedAsPointer gate mirrors getVar's
       // mutable-segment guard EXACTLY: a base const reached only through a PHI
@@ -174,8 +196,14 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
       // used directly, not re-based.
       if (dataOccurrenceSymbolizes(Cur, DirectPhiConstant)) {
         const Segment *S = Img->getSegmentFor(Cur.ConstVal);
-        if (S && S->VA == SegVA)
-          return true;
+        if (S) {
+          uint64_t RunStart = S->VA;
+          uint64_t RunEnd = S->VA + S->Data.size();
+          readOnlyAfterRelocRun(S, RunStart, RunEnd);
+          if (RunStart == SegVA && Cur.ConstVal >= RunStart &&
+              Cur.ConstVal < RunEnd)
+            return true;
+        }
       }
       continue;
     }
@@ -202,8 +230,9 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
           Work.emplace_back(D->Inputs[I], false);
         break;
       case NdOp::SELECT:
-        for (int I = 1; I < D->NumInputs; ++I)
-          Work.emplace_back(D->Inputs[I], false);
+        if (selectPreservesPointerValues(*D))
+          for (int I = 1; I < D->NumInputs; ++I)
+            Work.emplace_back(D->Inputs[I], false);
         break;
       default:
         break;
@@ -212,7 +241,8 @@ bool MedLLVMEmitter::addrHasSymbolizedSegConst(const MedVar &AddrVar,
     }
     if (const PhiNode *Phi = findPhi(Cur))
       for (const auto &[PredId, Arg] : Phi->Args) {
-        (void)PredId;
+        if (!phiIncomingEdgeFeasible(*Phi, PredId))
+          continue;
         Work.emplace_back(Arg, Arg.isConst());
       }
   }
@@ -228,9 +258,10 @@ MedLLVMEmitter::tryResolveCodePtrSegPtr(const MedVar &AddrVar,
   // for an in-segment base constant (this does not require the address to fold
   // to a constant, so it handles the i386 PIC `GOT_base + slot@GOTOFF` form the
   // constant-address path misses — the GOT base folds to 0 only at emit time).
-  uint64_t SegVA = ptrTableUniqueSegment(AddrVar);
-  if (!SegVA)
+  std::optional<uint64_t> SegVAOpt = ptrTableUniqueSegment(AddrVar);
+  if (!SegVAOpt)
     return nullptr;
+  uint64_t SegVA = *SegVAOpt;
   uint64_t SegOut = 0;
   llvm::Constant *Tbl = buildCodePtrSegmentGlobal(SegVA, SegOut);
   if (!Tbl)
@@ -308,16 +339,26 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
   // already materialized those leaves, but emitting the integer SSA merge
   // directly can mix raw and symbolized address models (and loses the
   // canonical run-relative form used by fixed pointer arguments).  Give the
-  // all-arms audit one opportunity to rebuild the merge, then stop: explicit
-  // provenance must never fall through to the legacy value-global heuristics.
-  if (Occurrence.Model == ConstantProvenanceSummary::ValueModel::Address)
-    return tryResolveSelectMergeTable(AddrVar, /*SizeHint=*/0, FailClosed,
-                                      Builder);
-  // Explicit occurrences were already materialized by getVar at their leaves.
-  // Running a value-global pointer resolver again would either override a
-  // scalar or apply a second base to an address expression.
+  // all-arms audit one opportunity to rebuild the merge.  A role-neutral
+  // Address is only producer evidence, however: ARM PC+literal and i386
+  // GOT+GOTOFF relations keep their numeric leaves until this pointer consumer
+  // selects a data owner.  If this is not a merge, let Address continue through
+  // the direct/writable/read-only resolvers below.  Their symbolized-vs-raw
+  // audits prevent a second base from being applied.
+  if (Occurrence.Model == ConstantProvenanceSummary::ValueModel::Address) {
+    bool SawAmbiguous = false;
+    if (llvm::Value *Merged = tryResolveSelectMergeTable(
+            AddrVar, /*SizeHint=*/0, FailClosed, Builder, &SawAmbiguous))
+      return Merged;
+    if (SawAmbiguous)
+      return nullptr;
+  }
+  // Scalar, fragment, and mixed explicit occurrences must never fall through
+  // to value-global heuristics.  Unlike Address, they carry no complete data-
+  // pointer relation for this consumer to own.
   if (Occurrence.hasExplicitProvenance())
-    return nullptr;
+    if (Occurrence.Model != ConstantProvenanceSummary::ValueModel::Address)
+      return nullptr;
   // A flat pointer-valued SELECT must be validated as one unit before creating
   // any globals: every non-null leaf has to be a mapped data address.  This
   // two-pass shape prevents a rejected code/scalar arm from leaving behind a
@@ -325,7 +366,8 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
   // coincidence from turning an ordinary integer SELECT into a pointer.
   if (!AddrVar.isConst())
     if (const MedOp *Top = lookupDef(AddrVar);
-        Top && Top->Opcode == NdOp::SELECT && Top->NumInputs >= 3) {
+        Top && Top->Opcode == NdOp::SELECT &&
+        selectPreservesPointerValues(*Top)) {
       const unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
       // ARM materializes a global address as `ldr reg, [pc, #literal]` plus
       // the current PC.  Such a SELECT leaf is fully constant, but only the
@@ -333,14 +375,37 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
       // at the LOAD.  Admit that form only when the fold actually crossed a
       // literal-pool load, preserving the all-arms pointer proof below for
       // ordinary computed integer SELECTs.
-      auto tracePointerLeafVA = [&](const MedVar &V) {
+      struct PointerLeaf {
+        uint64_t VA = 0;
+        uint64_t OwnerVA = InvalidVA;
+      };
+      auto tracePointerLeaf =
+          [&](const MedVar &V) -> std::optional<PointerLeaf> {
+        std::set<DataAddressIdentity> RelocatedIdentities;
+        if (recoverAbsoluteDataPointerLoadIdentities(V, RelocatedIdentities)) {
+          // An absolute pointer slot is authoritative.  Preserve its section
+          // owner through the SELECT, and never degrade a missing/ambiguous
+          // owner to a value-only lookup of a numerically adjacent object.
+          if (RelocatedIdentities.size() != 1 ||
+              RelocatedIdentities.begin()->OwnerVA == InvalidVA)
+            return std::nullopt;
+          return PointerLeaf{RelocatedIdentities.begin()->VA,
+                             RelocatedIdentities.begin()->OwnerVA};
+        }
+        uint64_t ExactVA = 0;
+        uint64_t ExactOwnerVA = InvalidVA;
+        if (resolveMaterializableDataAddress(V, ExactVA, &ExactOwnerVA) &&
+            ExactOwnerVA != InvalidVA)
+          return PointerLeaf{ExactVA, ExactOwnerVA};
         if (V.isConst())
-          return std::optional<uint64_t>(V.ConstVal);
+          return PointerLeaf{V.ConstVal, InvalidVA};
         if (auto VA = traceSSAConst(V))
-          return VA;
+          return PointerLeaf{*VA, InvalidVA};
         bool SawLiteralLoad = false;
         auto VA = traceTableBaseConst(V, 0, &SawLiteralLoad);
-        return SawLiteralLoad ? VA : std::optional<uint64_t>();
+        return SawLiteralLoad && VA
+                   ? std::optional<PointerLeaf>(PointerLeaf{*VA, InvalidVA})
+                   : std::nullopt;
       };
       std::function<bool(const MedVar &, int)> isDataTree =
           [&](const MedVar &V, int Depth) -> bool {
@@ -348,16 +413,19 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
           return false;
         if (!V.isConst())
           if (const MedOp *Def = lookupDef(V);
-              Def && Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
+              Def && Def->Opcode == NdOp::SELECT &&
+              selectPreservesPointerValues(*Def))
             return isDataTree(Def->Inputs[1], Depth + 1) &&
                    isDataTree(Def->Inputs[2], Depth + 1);
-        std::optional<uint64_t> VA = tracePointerLeafVA(V);
-        if (!VA)
+        std::optional<PointerLeaf> Leaf = tracePointerLeaf(V);
+        if (!Leaf)
           return false;
-        if (*VA == 0)
+        if (Leaf->OwnerVA != InvalidVA)
           return true;
-        return hasObjectDataProvenance(*VA) &&
-               !isFrameRelativeDisplacement(*VA, AddrBits);
+        if (Leaf->VA == 0)
+          return true;
+        return hasObjectDataProvenance(Leaf->VA) &&
+               !isFrameRelativeDisplacement(Leaf->VA, AddrBits);
       };
 
       if (isDataTree(AddrVar, 0)) {
@@ -367,7 +435,8 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
             return nullptr;
           if (!V.isConst())
             if (const MedOp *Def = lookupDef(V);
-                Def && Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
+                Def && Def->Opcode == NdOp::SELECT &&
+                selectPreservesPointerValues(*Def)) {
               llvm::Value *True = buildDataTree(Def->Inputs[1], Depth + 1);
               llvm::Value *False = buildDataTree(Def->Inputs[2], Depth + 1);
               llvm::Value *Cond = getVar(Def->Inputs[0], Builder);
@@ -383,13 +452,16 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
                     "ptrselc");
               return Builder.CreateSelect(Cond, True, False, "ptrsel");
             }
-          std::optional<uint64_t> VA = tracePointerLeafVA(V);
-          if (!VA)
+          std::optional<PointerLeaf> Leaf = tracePointerLeaf(V);
+          if (!Leaf)
             return nullptr;
-          if (*VA == 0)
+          if (Leaf->OwnerVA != InvalidVA)
+            return tryResolveOwnedGlobalData(Leaf->VA, Leaf->OwnerVA,
+                                             /*DataSizeHint=*/0);
+          if (Leaf->VA == 0)
             return llvm::ConstantPointerNull::get(
                 llvm::PointerType::getUnqual(*Ctx));
-          return tryResolveGlobalData(*VA, /*DataSizeHint=*/0);
+          return tryResolveGlobalData(Leaf->VA, /*DataSizeHint=*/0);
         };
         if (llvm::Value *Selected = buildDataTree(AddrVar, 0))
           return Selected;
@@ -404,22 +476,23 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
                                         Builder);
     }
 
-  // A direct &global (writable or read-only) folds to a constant address.
-  uint64_t ConstAddr = 0;
-  if (AddrVar.isConst())
-    ConstAddr = AddrVar.ConstVal;
-  else if (auto Traced = traceSSAConst(AddrVar))
-    ConstAddr = *Traced;
-  if (ConstAddr != 0) {
-    unsigned AddrBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
-    // A data-pointer argument never points into an instruction section, so a
-    // small integer argument that merely equals a low .text offset (e.g. an
-    // unrolled loop counter 3..9 passed by value) must NOT be mistaken for a
-    // global. Exact data/rodata classification also admits Mach-O data sections
-    // such as __TEXT,__cstring inside an executable segment.
-    if (hasObjectDataProvenance(ConstAddr) &&
-        !isFrameRelativeDisplacement(ConstAddr, AddrBits))
-      if (auto *G = tryResolveGlobalData(ConstAddr, /*DataSizeHint=*/0))
+  // A direct &global (or COPY thereof) first uses exact occurrence ownership.
+  // Pointer arguments are speculative ABI guesses, unlike a LOAD/STORE
+  // address: an ownerless integer that merely lands in mapped code/data must
+  // not acquire pointer meaning here.
+  uint64_t OwnedVA = 0;
+  uint64_t OwnerVA = InvalidVA;
+  if (resolveMaterializableDataAddress(AddrVar, OwnedVA, &OwnerVA) &&
+      OwnerVA != InvalidVA)
+    return tryResolveOwnedGlobalData(OwnedVA, OwnerVA,
+                                     /*DataSizeHint=*/0);
+  std::optional<uint64_t> ConstAddr =
+      AddrVar.isConst() ? std::optional<uint64_t>(AddrVar.ConstVal)
+                        : traceSSAConst(AddrVar);
+  if (ConstAddr && *ConstAddr != 0 && hasObjectDataProvenance(*ConstAddr)) {
+    const unsigned AddressBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
+    if (!isFrameRelativeDisplacement(*ConstAddr, AddressBits))
+      if (auto *G = tryResolveGlobalData(*ConstAddr, /*DataSizeHint=*/0))
         return G;
   }
   // A computed `&global[index]`: same resolver sequence as a LOAD address, with

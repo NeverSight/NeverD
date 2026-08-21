@@ -167,6 +167,62 @@ TEST(RuntimeMetadata, KeepsNativeIATAddressWhenRecordingStub) {
   EXPECT_EQ(Names[0x1010], "imported");
 }
 
+TEST(RuntimeMetadata, LegacyMachOIATStubFallbackRespectsSectionCodeAuthority) {
+  constexpr va_t LegacyIATAddr = 0x1010;
+
+  BinaryImage Img;
+  Img.Format = BinaryFormat::MachO;
+
+  Segment Text = makeSegment(0x1000, 0x100, true);
+  Text.Name = "__TEXT";
+  Img.Segments.push_back(std::move(Text));
+
+  Section Const;
+  Const.Name = "__const";
+  Const.SegmentName = "__TEXT";
+  Const.VA = 0x1000;
+  Const.Size = 0x40;
+  Const.FileSz = Const.Size;
+  Const.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Const.Type = llvm::MachO::S_REGULAR;
+  Img.Sections.push_back(std::move(Const));
+
+  Import Imp;
+  Imp.Name = "legacy_macho_import";
+  Imp.IATAddr = LegacyIATAddr;
+  Img.Imports.push_back(std::move(Imp));
+
+  EXPECT_FALSE(Img.isImportStubAt(LegacyIATAddr));
+
+  BinaryImage Sectionless = Img;
+  Sectionless.Sections.clear();
+  EXPECT_TRUE(Sectionless.isImportStubAt(LegacyIATAddr));
+
+  BinaryImage RangeBacked = Img;
+  ASSERT_TRUE(RangeBacked.recordImportStubRange(LegacyIATAddr, 8));
+  EXPECT_TRUE(RangeBacked.isImportStubAt(LegacyIATAddr));
+
+  ASSERT_TRUE(Img.recordImportStub(LegacyIATAddr, 0));
+  EXPECT_TRUE(Img.isImportStubAt(LegacyIATAddr));
+
+  for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(Format == BinaryFormat::ELF ? "ELF" : "COFF");
+
+    BinaryImage Native;
+    Native.Format = Format;
+    Native.Segments.push_back(makeSegment(0x1000, 0x100, true));
+
+    Import NativeImport;
+    NativeImport.Name = "native_import";
+    NativeImport.IATAddr = LegacyIATAddr;
+    Native.Imports.push_back(std::move(NativeImport));
+
+    EXPECT_FALSE(Native.isImportStubAt(LegacyIATAddr));
+    ASSERT_TRUE(Native.recordImportStub(LegacyIATAddr, 0));
+    EXPECT_TRUE(Native.isImportStubAt(LegacyIATAddr));
+  }
+}
+
 TEST(BinaryLoading, NormalizesEveryExternalMetadataField) {
   auto Malformed = [](llvm::StringRef Prefix) {
     std::string Value = Prefix.str();

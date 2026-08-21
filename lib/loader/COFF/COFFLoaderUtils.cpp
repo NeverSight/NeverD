@@ -216,7 +216,7 @@ void parseDelayImports(const COFFObjectFile &Obj, BinaryImage &Img) {
 }
 
 void parseSymbolTable(const COFFObjectFile &Obj, BinaryImage &Img,
-                      uint64_t ImageBase) {
+                      uint64_t ImageBase, llvm::ArrayRef<va_t> SectionVAs) {
   for (const auto &SymRef : Obj.symbols()) {
     COFFSymbolRef CoffSym = Obj.getCOFFSymbol(SymRef);
 
@@ -233,15 +233,24 @@ void parseSymbolTable(const COFFObjectFile &Obj, BinaryImage &Img,
 
     uint64_t Addr = CoffSym.getValue();
     if (CoffSym.getSectionNumber() > 0) {
-      auto SecOrErr = Obj.getSection(CoffSym.getSectionNumber());
-      if (SecOrErr) {
-        uint64_t Offset = static_cast<uint64_t>((*SecOrErr)->VirtualAddress) +
-                          CoffSym.getValue();
-        if (Offset > InvalidVA - ImageBase)
+      const size_t SectionNumber =
+          static_cast<size_t>(CoffSym.getSectionNumber());
+      if (SectionNumber < SectionVAs.size() &&
+          SectionVAs[SectionNumber] != InvalidVA) {
+        if (CoffSym.getValue() > InvalidVA - SectionVAs[SectionNumber])
           continue;
-        Addr = ImageBase + Offset;
+        Addr = SectionVAs[SectionNumber] + CoffSym.getValue();
       } else {
-        llvm::consumeError(SecOrErr.takeError());
+        auto SecOrErr = Obj.getSection(CoffSym.getSectionNumber());
+        if (SecOrErr) {
+          uint64_t Offset = static_cast<uint64_t>((*SecOrErr)->VirtualAddress) +
+                            CoffSym.getValue();
+          if (Offset > InvalidVA - ImageBase)
+            continue;
+          Addr = ImageBase + Offset;
+        } else {
+          llvm::consumeError(SecOrErr.takeError());
+        }
       }
     }
     bool IsFunc =

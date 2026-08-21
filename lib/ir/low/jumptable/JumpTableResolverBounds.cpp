@@ -394,7 +394,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(const InsnRecord &Rec,
 bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                                        const InsnRecord &Rec,
                                        JumpTableInfo &Info) {
-  if (Info.BaseAddr == 0 || Info.EntrySize == 0 || Info.IndexReg == InvalidVA)
+  if (!Info.HasBaseAddr || Info.EntrySize == 0 || Info.IndexReg == InvalidVA)
     return false;
 
   // Flatten from the function entry through the dispatch so both the

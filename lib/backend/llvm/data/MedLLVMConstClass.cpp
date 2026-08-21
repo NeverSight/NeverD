@@ -129,10 +129,9 @@ bool MedLLVMEmitter::constIsWritableRunEndPointer(uint64_t Val) const {
       if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
         continue;
       if (const PhiNode *Ph = findPhi(Cur)) {
-        for (const auto &[Pred, A] : Ph->Args) {
-          (void)Pred;
-          Work.push_back(A);
-        }
+        for (const auto &[Pred, A] : Ph->Args)
+          if (phiIncomingEdgeFeasible(*Ph, Pred))
+            Work.push_back(A);
         continue;
       }
       if (const MedOp *D = findDef(Cur))
@@ -147,8 +146,9 @@ bool MedLLVMEmitter::constIsWritableRunEndPointer(uint64_t Val) const {
             Work.push_back(D->Inputs[I]);
           break;
         case NdOp::SELECT:
-          for (int I = 1; I < D->NumInputs; ++I)
-            Work.push_back(D->Inputs[I]);
+          if (selectPreservesPointerValues(*D))
+            for (int I = 1; I < D->NumInputs; ++I)
+              Work.push_back(D->Inputs[I]);
           break;
         default:
           break;
@@ -193,7 +193,13 @@ bool MedLLVMEmitter::constIsWritableRunEndPointer(uint64_t Val) const {
 
 bool MedLLVMEmitter::writableRelocPtrHasSymbolizationIntent(
     uint64_t Val, uint16_t Size) const {
-  if (!Img || !Img->WritableRelocDataAddrs.count(Val))
+  // Numeric zero remains null unless the occurrence itself carries exact
+  // DataAddress ownership.  A relocation to a writable object at VA 0 may put
+  // zero in the image-wide target inventory, but that inventory cannot
+  // distinguish an unrelated literal null from the relocated occurrence.
+  // Exact VA-zero addresses bypass this legacy value-only classifier through
+  // the owner-aware materialization paths.
+  if (!Img || Val == 0 || !Img->WritableRelocDataAddrs.count(Val))
     return false;
   unsigned PtrSz = getTargetRegInfo(TargetArch).PointerSize;
   if (!(Size == 0 || PtrSz == 0 || Size >= PtrSz))
@@ -260,7 +266,10 @@ bool MedLLVMEmitter::hasSymbolizedWritableSibling(uint64_t Val) const {
         }
     }
     for (uint64_t C : Consts) {
-      if (!Img->WritableRelocDataAddrs.count(C))
+      // An untagged zero is null even when a distinct exact relocation names a
+      // writable object at VA 0.  Do not let that numeric collision seed the
+      // sibling cache and indirectly promote another raw select arm.
+      if (C == 0 || !Img->WritableRelocDataAddrs.count(C))
         continue;
       const Segment *Seg = Img->getSegmentFor(C);
       if (!Seg)
@@ -301,10 +310,9 @@ bool MedLLVMEmitter::mayBeWritableSelectPeerCycleFree(uint64_t Val) const {
       if (!Seen.insert({static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer}).second)
         continue;
       if (const PhiNode *Phi = lookupPhi(Cur)) {
-        for (const auto &[PredId, Arg] : Phi->Args) {
-          (void)PredId;
-          Work.push_back(Arg);
-        }
+        for (const auto &[PredId, Arg] : Phi->Args)
+          if (phiIncomingEdgeFeasible(*Phi, PredId))
+            Work.push_back(Arg);
         continue;
       }
       const MedOp *Def = lookupDef(Cur);
@@ -322,8 +330,9 @@ bool MedLLVMEmitter::mayBeWritableSelectPeerCycleFree(uint64_t Val) const {
         break;
       case NdOp::SELECT:
         // A SELECT condition is a scalar decision, never an address arm.
-        for (int I = 1; I < Def->NumInputs; ++I)
-          Work.push_back(Def->Inputs[I]);
+        if (selectPreservesPointerValues(*Def))
+          for (int I = 1; I < Def->NumInputs; ++I)
+            Work.push_back(Def->Inputs[I]);
         break;
       case NdOp::INT_AND:
       case NdOp::INT_OR:
@@ -350,7 +359,7 @@ bool MedLLVMEmitter::mayBeWritableSelectPeerCycleFree(uint64_t Val) const {
 
   for (const MedBlock &Block : CurMedFunc->Blocks)
     for (const MedOp &Op : Block.Ops) {
-      if (Op.Opcode == NdOp::SELECT && Op.NumInputs >= 3) {
+      if (Op.Opcode == NdOp::SELECT && selectPreservesPointerValues(Op)) {
         for (int I = 1; I < Op.NumInputs; ++I)
           for (int J = 1; J < Op.NumInputs; ++J)
             if (I != J && reaches(Op.Inputs[I], IsVal, false) &&
@@ -410,10 +419,9 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
       if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
         continue;
       if (const PhiNode *Ph = findPhi(Cur)) {
-        for (const auto &[Pred2, A] : Ph->Args) {
-          (void)Pred2;
-          Work.push_back(A);
-        }
+        for (const auto &[Pred2, A] : Ph->Args)
+          if (phiIncomingEdgeFeasible(*Ph, Pred2))
+            Work.push_back(A);
         continue;
       }
       if (const MedOp *D = findDef(Cur))
@@ -428,8 +436,9 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
             Work.push_back(D->Inputs[I]);
           break;
         case NdOp::SELECT:
-          for (int I = 1; I < D->NumInputs; ++I)
-            Work.push_back(D->Inputs[I]);
+          if (selectPreservesPointerValues(*D))
+            for (int I = 1; I < D->NumInputs; ++I)
+              Work.push_back(D->Inputs[I]);
           break;
         default:
           break;
@@ -450,7 +459,7 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
   // relocates.
   for (const auto &Blk : CurMedFunc->Blocks)
     for (const auto &Op : Blk.Ops) {
-      if (Op.Opcode != NdOp::SELECT || Op.NumInputs < 3)
+      if (Op.Opcode != NdOp::SELECT || !selectPreservesPointerValues(Op))
         continue;
       for (int I = 1; I < Op.NumInputs; ++I)
         for (int J = 1; J < Op.NumInputs; ++J) {
@@ -491,10 +500,9 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
       if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
         continue;
       if (const PhiNode *Ph = findPhi(Cur)) {
-        for (const auto &[Pred2, A] : Ph->Args) {
-          (void)Pred2;
-          Work.push_back(A);
-        }
+        for (const auto &[Pred2, A] : Ph->Args)
+          if (phiIncomingEdgeFeasible(*Ph, Pred2))
+            Work.push_back(A);
         continue;
       }
       if (const MedOp *D = findDef(Cur))
@@ -512,8 +520,9 @@ bool MedLLVMEmitter::symbolizesSelectPeer(uint64_t Val) const {
             Work.push_back(D->Inputs[I]);
           break;
         case NdOp::SELECT:
-          for (int I = 1; I < D->NumInputs; ++I)
-            Work.push_back(D->Inputs[I]);
+          if (selectPreservesPointerValues(*D))
+            for (int I = 1; I < D->NumInputs; ++I)
+              Work.push_back(D->Inputs[I]);
           break;
         default:
           break;

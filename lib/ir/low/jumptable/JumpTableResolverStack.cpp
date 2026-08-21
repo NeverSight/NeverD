@@ -473,7 +473,7 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
       return std::nullopt;
     std::optional<uint64_t> Folded =
         foldRegConstant(Img, Rec, AddrReg, Ld.Addr);
-    if (Folded && *Folded != 0)
+    if (Folded && Img.getSegmentFor(*Folded))
       return static_cast<va_t>(static_cast<int64_t>(*Folded) + AddrDisp);
     // i386 PIC GOTOFF init: the base register is the GOT base, which equals the
     // image base (0) in the relocatable model, so foldRegConstant (which
@@ -639,7 +639,8 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
         if (ConstBase)
           return static_cast<uint64_t>(static_cast<int64_t>(ConstVA) + Disp);
         if (Reg != InvalidVA) {
-          if (auto F = foldRegConstant(Img, Rec, Reg, Op.Addr); F && *F != 0)
+          if (auto F = foldRegConstant(Img, Rec, Reg, Op.Addr);
+              F && Img.getSegmentFor(*F))
             return static_cast<uint64_t>(static_cast<int64_t>(*F) + Disp);
           if (Disp != 0) // i386 GOTOFF init: GOT base == image base (0)
             return static_cast<uint64_t>(Disp);
@@ -657,7 +658,7 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
       if (canonFrameSlot(FuncOps, NdVar::reg(TRI.IntParamRegs[0], 8), I - 1,
                          DB, DOff, /*FollowSubpiece=*/true)) {
         if (auto F = foldRegConstant(Img, Rec, TRI.IntParamRegs[1], Op.Addr);
-            F && *F != 0) {
+            F && Img.getSegmentFor(*F)) {
           Folded = F;
           ArgsOk = true;
         }

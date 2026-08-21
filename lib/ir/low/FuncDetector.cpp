@@ -55,7 +55,7 @@ bool hasBoundedSemanticTerminator(const BinaryImage &Img, Decoder &Dec,
                                   va_t Addr) {
   constexpr int kMaxInsns = limits::kMaxVerifyInsns;
   const Segment *Seg = Img.getSegmentFor(Addr);
-  if (!Seg || !Seg->isExecutable())
+  if (!Seg || !Img.hasExecutableCodeOwnerAt(Addr))
     return false;
 
   const bool PreviousDetail = Dec.detailEnabled();
@@ -74,6 +74,8 @@ bool hasBoundedSemanticTerminator(const BinaryImage &Img, Decoder &Dec,
       const int Sz = Dec.decodeOneForLift(Seg->Data.data() + Off,
                                           Seg->Data.size() - Off, Cur, DI);
       if (Sz <= 0 || !DI.Raw)
+        return false;
+      if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
         return false;
       if (Dec.isFunctionTerminator(DI))
         return true;
@@ -108,6 +110,7 @@ std::vector<std::pair<va_t, std::string>>
 FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
   Entries.clear();
   std::vector<std::pair<va_t, std::string>> Results;
+  std::set<va_t> VerifiedCandidates;
 
   if (Img.Entry != 0) {
     Entries.insert(Img.Entry);
@@ -130,8 +133,18 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       continue;
     if (SkipAddrs.count(Exp.Addr))
       continue;
-    const auto *Seg = Img.getSegmentFor(Exp.Addr);
-    if (Seg && Seg->isExecutable()) {
+    // PE exports are untyped, so they are only candidates here and are
+    // decoded below before publication.  Keep the sectionless/packed-image
+    // executable-owner fallback for that verification path; requiring an
+    // exact section would discard legitimate stripped COFF exports before the
+    // decoder can distinguish them from executable-section data.  ELF and
+    // Mach-O exports, by contrast, are accepted from the export table itself
+    // only when exact instruction-section metadata owns the address.
+    const bool IsExportCandidate =
+        Img.Format == BinaryFormat::COFF
+            ? Img.hasExecutableCodeOwnerAt(Exp.Addr)
+            : Img.getSectionFor(Exp.Addr) && Img.isCodeAddress(Exp.Addr);
+    if (IsExportCandidate) {
       Entries.insert(Exp.Addr);
       Results.push_back({Exp.Addr, Exp.Name});
       if (Img.Format == BinaryFormat::COFF)
@@ -143,16 +156,14 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     if (!Sym.IsFunc)
       continue;
     if (Sym.Addr == 0) {
-      const auto *Seg = Img.getSegmentFor(0);
-      if (!Seg || !Seg->isExecutable())
+      if (!Img.hasExecutableCodeOwnerAt(0))
         continue;
     }
     if (Entries.count(Sym.Addr))
       continue;
     if (SkipAddrs.count(Sym.Addr))
       continue;
-    const auto *Seg = Img.getSegmentFor(Sym.Addr);
-    if (Seg && Seg->isExecutable()) {
+    if (Img.hasExecutableCodeOwnerAt(Sym.Addr)) {
       Entries.insert(Sym.Addr);
       Results.push_back({Sym.Addr, Sym.Name});
     }
@@ -184,11 +195,12 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     // the export directory alongside functions.  A COFF export is therefore
     // trusted only when unwind/function-symbol metadata below also identifies
     // it as code; otherwise it must pass the same decode validation as a scan
-    // hit.  ELF and Mach-O loaders create exports only from typed executable
-    // symbols, so their exports remain authoritative.
+    // hit. ELF and Mach-O exports can also name data in a coarse RX mapping, so
+    // only an exact format-aware code owner is authoritative there.
     if (Img.Format != BinaryFormat::COFF)
       for (const auto &Exp : Img.Exports)
-        Trusted.insert(Exp.Addr);
+        if (Img.getSectionFor(Exp.Addr) && Img.isCodeAddress(Exp.Addr))
+          Trusted.insert(Exp.Addr);
     for (const auto &Sym : Img.Symbols)
       if (Sym.IsFunc && Sym.Size > 0)
         Trusted.insert(Sym.Addr);
@@ -256,6 +268,11 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
           verifyIdx(LocalDec, NeedVerify[P]);
       });
     }
+
+    for (size_t I : NeedVerify)
+      if (Keep[I])
+        VerifiedCandidates.insert(
+            normalizeCodeAddress(Results[I].first, Img.Arch, Img.Mode));
 
     std::vector<std::pair<va_t, std::string>> Kept;
     Kept.reserve(N);
@@ -339,6 +356,16 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
     Results = std::move(Aligned);
   }
 
+  // Publish only verified candidates that survived every later overlap and
+  // alignment filter. A transient decoder hit must never become patch-time
+  // function identity after this routine has rejected it.
+  for (const auto &[Addr, Name] : Results) {
+    (void)Name;
+    const va_t Normalized = normalizeCodeAddress(Addr, Img.Arch, Img.Mode);
+    if (VerifiedCandidates.count(Normalized))
+      Img.VerifiedFunctionEntries.insert(Normalized);
+  }
+
   std::sort(Results.begin(), Results.end());
   return Results;
 }
@@ -351,7 +378,7 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
                                         va_t Addr, bool KeepInconclusive) {
   constexpr int kMaxInsns = limits::kMaxVerifyInsns;
   const auto *Seg = Img.getSegmentFor(Addr);
-  if (!Seg || !Seg->isExecutable())
+  if (!Seg || !Img.hasExecutableCodeOwnerAt(Addr))
     return false;
 
   va_t Cur = Addr;
@@ -371,6 +398,8 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
     if (Sz <= 0)
       return false;
     if (!DI.Raw)
+      return false;
+    if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
       return false;
 
     if (Dec.isFunctionTerminator(DI)) {
@@ -415,7 +444,7 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
           return true;
 
         const auto *PathSeg = Img.getSegmentFor(Cur);
-        if (!PathSeg || !PathSeg->isExecutable() || Cur < PathSeg->VA)
+        if (!PathSeg || !Img.hasExecutableCodeOwnerAt(Cur) || Cur < PathSeg->VA)
           return false;
         size_t Off = static_cast<size_t>(Cur - PathSeg->VA);
         if (Off >= PathSeg->Data.size())
@@ -425,6 +454,8 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
         int Sz = Dec.decodeOneForLift(PathSeg->Data.data() + Off,
                                       PathSeg->Data.size() - Off, Cur, DI);
         if (Sz <= 0)
+          return false;
+        if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
           return false;
         Explored.insert(Cur);
 
@@ -521,10 +552,14 @@ static void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
   va_t Cur = (Start + 3) & ~static_cast<va_t>(3);
   const uint8_t *Data = Seg->Data.data();
   const size_t DataSize = Seg->Data.size();
-  while (Cur < End) {
+  while (Cur <= End && End - Cur >= 4) {
     size_t Off = static_cast<size_t>(Cur - Seg->VA);
     if (Off + 4 > DataSize)
       break;
+    if (!Img.hasExecutableCodeOwnerRange(Cur, 4)) {
+      Cur += 4;
+      continue;
+    }
     const uint8_t *P = Data + Off;
     uint32_t Word = static_cast<uint32_t>(P[0]) |
                     (static_cast<uint32_t>(P[1]) << 8) |
@@ -532,8 +567,7 @@ static void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
                     (static_cast<uint32_t>(P[3]) << 24);
     va_t Tgt = AArch64Lifter::decodeBranchLinkTarget(Word, Cur);
     if (Tgt != InvalidVA) {
-      const auto *TS = Img.getSegmentFor(Tgt);
-      if (TS && TS->isExecutable())
+      if (Img.hasExecutableCodeOwnerAt(Tgt))
         Out.insert(Tgt);
     }
     Cur += 4;
@@ -554,28 +588,24 @@ static void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
     if (Off >= Seg->Data.size())
       break;
     DecodedInsn DI;
-    int Sz =
-        Dec.decodeOne(Seg->Data.data() + Off, Seg->Data.size() - Off, Cur, DI);
+    const size_t Remain =
+        static_cast<size_t>(std::min<va_t>(Seg->Data.size() - Off, End - Cur));
+    int Sz = Dec.decodeOne(Seg->Data.data() + Off, Remain, Cur, DI);
     if (Sz == 0) {
       Cur++;
       continue;
     }
+    if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz))) {
+      Cur += Sz;
+      continue;
+    }
     va_t Tgt = Dec.directCallTarget(DI);
     if (Tgt != InvalidVA) {
-      const auto *TS = Img.getSegmentFor(Tgt);
-      if (TS && TS->isExecutable())
+      if (Img.hasExecutableCodeOwnerAt(Tgt))
         Out.insert(Tgt);
     }
     Cur += Sz;
   }
-}
-
-static bool isAArch64InstructionSection(const BinaryImage &Img,
-                                        const Section &Sec) {
-  if (Img.Format != BinaryFormat::MachO)
-    return Sec.isExecutable();
-  return (Sec.Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
-                      llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) != 0;
 }
 
 void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec,
@@ -600,28 +630,43 @@ void FuncDetector::scanCallTargets(const BinaryImage &Img, Decoder &Dec,
         RequestedLen, Seg->Data.size() - static_cast<size_t>(StartOff)));
     if (ScanLen == 0)
       return;
-    const size_t ChunkSz = std::max(MinChunk, ScanLen / ThreadsN);
-    for (size_t Off = 0; Off < ScanLen; Off += ChunkSz) {
-      const size_t CEnd = std::min(Off + ChunkSz, ScanLen);
-      Chunks.push_back({Seg, Start + Off, Start + CEnd});
+    if (Img.Arch != Arch::AArch64) {
+      Chunks.push_back({Seg, Start, Start + ScanLen});
+      return;
+    }
+    const va_t End = Start + ScanLen;
+    const va_t AlignedStart = (Start + 3) & ~static_cast<va_t>(3);
+    if (AlignedStart >= End)
+      return;
+    const size_t AlignedLen = static_cast<size_t>(End - AlignedStart);
+    size_t ChunkSz = std::max(MinChunk, AlignedLen / ThreadsN);
+    ChunkSz = (ChunkSz + 3) & ~static_cast<size_t>(3);
+    for (size_t Off = 0; Off < AlignedLen; Off += ChunkSz) {
+      const size_t CEnd = std::min(Off + ChunkSz, AlignedLen);
+      Chunks.push_back({Seg, AlignedStart + Off, AlignedStart + CEnd});
     }
   };
 
-  // AArch64's fast BL classifier must not interpret constants that merely
-  // share an executable mapping with code.  Linked Mach-O images commonly put
-  // __text and __const in the same RX __TEXT segment; section instruction
-  // attributes are the authoritative boundary there.  Sectionless/raw images
-  // retain the segment-wide fallback.
-  if (Img.Arch == Arch::AArch64 && !Img.Sections.empty()) {
-    for (const Section &Sec : Img.Sections) {
-      if (!isAArch64InstructionSection(Img, Sec))
-        continue;
+  // Scan exact instruction sections when a mapping has section metadata.
+  // Packed/sectionless executable mappings retain the historical segment-wide
+  // fallback, independently for each segment.
+  for (const Section &Sec : Img.Sections)
+    if (Sec.Size != 0 && Sec.isReadable() && Img.isCodeAddress(Sec.VA))
       AddRange(Img.getSegmentFor(Sec.VA), Sec.VA, Sec.Size);
+  for (const auto &[Start, End] : Img.KnownCodeRanges)
+    if (End > Start)
+      AddRange(Img.getSegmentFor(Start), Start, End - Start);
+  for (const Symbol &Sym : Img.Symbols)
+    if (Sym.IsFunc && Sym.Size != 0) {
+      const va_t Start = normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode);
+      AddRange(Img.getSegmentFor(Start), Start, Sym.Size);
     }
-  } else {
-    for (const Segment &Seg : Img.Segments)
+  for (const auto &[Start, End] : Img.ImportStubRanges)
+    if (End > Start)
+      AddRange(Img.getSegmentFor(Start), Start, End - Start);
+  for (const Segment &Seg : Img.Segments)
+    if (!Img.segmentHasReadableSectionMetadata(Seg))
       AddRange(&Seg, Seg.VA, Seg.Data.size());
-  }
 
   if (Chunks.size() <= 1) {
     for (auto &[Seg, Start, End] : Chunks)

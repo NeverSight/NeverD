@@ -91,7 +91,7 @@ bool liftStringMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
           // MOVSD stores only the low 64 bits (scalar double)
           if (Src.Size > 8) {
             NdVar Lo = S.makeTemp(8);
-            S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::cst(0, 4)});
+            S.emit(NdOp::SUBBYTES, Lo, {Src, NdVar::scalar(0, 4)});
             Src = Lo;
           }
           S.storeToMem(X86.operands[0], Src);
@@ -106,9 +106,9 @@ bool liftStringMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
               Src.Size >= 16) {
             NdVar DstR = L.operandRead(S, X86.operands[0]);
             NdVar SrcLo = S.makeTemp(8);
-            S.emit(NdOp::SUBBYTES, SrcLo, {Src, NdVar::cst(0, 4)});
+            S.emit(NdOp::SUBBYTES, SrcLo, {Src, NdVar::scalar(0, 4)});
             NdVar DstHi = S.makeTemp(Dst.Size - 8);
-            S.emit(NdOp::SUBBYTES, DstHi, {DstR, NdVar::cst(8, 4)});
+            S.emit(NdOp::SUBBYTES, DstHi, {DstR, NdVar::scalar(8, 4)});
             S.emit(NdOp::CONCAT, Dst, {DstHi, SrcLo});
           } else if (X86.operands[1].type == X86_OP_MEM &&
                      Src.Size < Dst.Size) {
@@ -150,9 +150,9 @@ bool liftStringMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       // Signed pointer delta = DF ? -(RCX*ElemSz) : +(RCX*ElemSz); RCX -> 0.
       NdVar Bytes = S.makeTemp(8);
       S.emit(NdOp::INT_MULT, Bytes,
-             {NdVar::reg(x86reg::RCX, 8), NdVar::cst(ElemSz, 8)});
+             {NdVar::reg(x86reg::RCX, 8), NdVar::scalar(ElemSz, 8)});
       NdVar NegBytes = S.makeTemp(8);
-      S.emit(NdOp::INT_SUB, NegBytes, {NdVar::cst(0, 8), Bytes});
+      S.emit(NdOp::INT_SUB, NegBytes, {NdVar::scalar(0, 8), Bytes});
       NdVar Delta = S.makeTemp(8);
       S.emit(NdOp::SELECT, Delta, {Df, NegBytes, Bytes});
       if (!IsStos) {
@@ -163,7 +163,7 @@ bool liftStringMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       NdVar NewDi = S.makeTemp(8);
       S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, 8), Delta});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, 8), {NewDi});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RCX, 8), {NdVar::cst(0, 8)});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::RCX, 8), {NdVar::scalar(0, 8)});
     } else {
       // Single element (no REP): one store/copy; pointer(s) step per DF.
       NdVar Step = L.dirStep(S, ElemSz);
@@ -201,13 +201,13 @@ bool liftStringMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       // happens) so the recompiled code never dereferences a wild pointer.
       NdVar Rcx = NdVar::reg(x86reg::RCX, 8);
       NdVar RcxNZ = S.makeTemp(1);
-      S.emit(NdOp::INT_NOTEQUAL, RcxNZ, {Rcx, NdVar::cst(0, 8)});
+      S.emit(NdOp::INT_NOTEQUAL, RcxNZ, {Rcx, NdVar::scalar(0, 8)});
       NdVar RcxM1 = S.makeTemp(8);
-      S.emit(NdOp::INT_SUB, RcxM1, {Rcx, NdVar::cst(1, 8)});
+      S.emit(NdOp::INT_SUB, RcxM1, {Rcx, NdVar::scalar(1, 8)});
       NdVar LastOff = S.makeTemp(8);
-      S.emit(NdOp::INT_MULT, LastOff, {RcxM1, NdVar::cst(ElemSz, 8)});
+      S.emit(NdOp::INT_MULT, LastOff, {RcxM1, NdVar::scalar(ElemSz, 8)});
       NdVar SafeOff = S.makeTemp(8);
-      S.emit(NdOp::SELECT, SafeOff, {RcxNZ, LastOff, NdVar::cst(0, 8)});
+      S.emit(NdOp::SELECT, SafeOff, {RcxNZ, LastOff, NdVar::scalar(0, 8)});
       NdVar LastAddr = S.makeTemp(8);
       S.emit(NdOp::INT_ADD, LastAddr, {Rsi, SafeOff});
       NdVar LastVal = S.makeTemp(ElemSz);
@@ -217,11 +217,11 @@ bool liftStringMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
              {RcxNZ, LastVal, NdVar::reg(x86reg::RAX, ElemSz)});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::RAX, ElemSz), {NewAx});
       NdVar Bytes = S.makeTemp(8);
-      S.emit(NdOp::INT_MULT, Bytes, {Rcx, NdVar::cst(ElemSz, 8)});
+      S.emit(NdOp::INT_MULT, Bytes, {Rcx, NdVar::scalar(ElemSz, 8)});
       NdVar NewSi = S.makeTemp(8);
       S.emit(NdOp::INT_ADD, NewSi, {Rsi, Bytes});
       S.emit(NdOp::COPY, Rsi, {NewSi});
-      S.emit(NdOp::COPY, Rcx, {NdVar::cst(0, 8)});
+      S.emit(NdOp::COPY, Rcx, {NdVar::scalar(0, 8)});
     } else {
       S.emit(NdOp::LOAD, NdVar::reg(x86reg::RAX, ElemSz), {Rsi});
       NdVar NewSi = S.makeTemp(8);

@@ -54,9 +54,9 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       S.emit(NdOp::INT_DIV, Quot, {Ax, ExtSrc});
       S.emit(NdOp::INT_REM, Rem, {Ax, ExtSrc});
       S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX, 1),
-             {Quot, NdVar::cst(0, 4)});
+             {Quot, NdVar::scalar(0, 4)});
       S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX + 1, 1),
-             {Rem, NdVar::cst(0, 4)});
+             {Rem, NdVar::scalar(0, 4)});
     } else {
       NdVar Rax = NdVar::reg(x86reg::RAX, Sz);
       NdVar Rdx = NdVar::reg(x86reg::RDX, Sz);
@@ -82,7 +82,8 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         S.emit(NdOp::INT_ZEXT, ExtRAX, {Rax});
         S.emit(NdOp::INT_ZEXT, ExtRDX, {Rdx});
         NdVar HiShifted = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_LEFT, HiShifted, {ExtRDX, NdVar::cst(Sz * 8, Sz * 2)});
+        S.emit(NdOp::INT_LEFT, HiShifted,
+               {ExtRDX, NdVar::scalar(Sz * 8, Sz * 2)});
         NdVar Dividend = S.makeTemp(Sz * 2);
         S.emit(NdOp::INT_OR, Dividend, {HiShifted, ExtRAX});
         NdVar ExtSrc = S.makeTemp(Sz * 2);
@@ -91,8 +92,8 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         NdVar Rem = S.makeTemp(Sz * 2);
         S.emit(NdOp::INT_DIV, Quot, {Dividend, ExtSrc});
         S.emit(NdOp::INT_REM, Rem, {Dividend, ExtSrc});
-        S.emit(NdOp::SUBBYTES, Rax, {Quot, NdVar::cst(0, 4)});
-        S.emit(NdOp::SUBBYTES, Rdx, {Rem, NdVar::cst(0, 4)});
+        S.emit(NdOp::SUBBYTES, Rax, {Quot, NdVar::scalar(0, 4)});
+        S.emit(NdOp::SUBBYTES, Rdx, {Rem, NdVar::scalar(0, 4)});
       }
     }
     break;
@@ -111,9 +112,9 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       S.emit(NdOp::INT_SDIV, Quot, {Ax, ExtSrc});
       S.emit(NdOp::INT_SREM, Rem, {Ax, ExtSrc});
       S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX, 1),
-             {Quot, NdVar::cst(0, 4)});
+             {Quot, NdVar::scalar(0, 4)});
       S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX + 1, 1),
-             {Rem, NdVar::cst(0, 4)});
+             {Rem, NdVar::scalar(0, 4)});
     } else {
       NdVar Rax = NdVar::reg(x86reg::RAX, Sz);
       NdVar Rdx = NdVar::reg(x86reg::RDX, Sz);
@@ -140,7 +141,8 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         S.emit(NdOp::INT_ZEXT, ExtRAX, {Rax});
         S.emit(NdOp::INT_SEXT, ExtRDX, {Rdx});
         NdVar HiShifted = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_LEFT, HiShifted, {ExtRDX, NdVar::cst(Sz * 8, Sz * 2)});
+        S.emit(NdOp::INT_LEFT, HiShifted,
+               {ExtRDX, NdVar::scalar(Sz * 8, Sz * 2)});
         NdVar Dividend = S.makeTemp(Sz * 2);
         S.emit(NdOp::INT_OR, Dividend, {HiShifted, ExtRAX});
         NdVar ExtSrc = S.makeTemp(Sz * 2);
@@ -149,8 +151,8 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         NdVar Rem = S.makeTemp(Sz * 2);
         S.emit(NdOp::INT_SDIV, Quot, {Dividend, ExtSrc});
         S.emit(NdOp::INT_SREM, Rem, {Dividend, ExtSrc});
-        S.emit(NdOp::SUBBYTES, Rax, {Quot, NdVar::cst(0, 4)});
-        S.emit(NdOp::SUBBYTES, Rdx, {Rem, NdVar::cst(0, 4)});
+        S.emit(NdOp::SUBBYTES, Rax, {Quot, NdVar::scalar(0, 4)});
+        S.emit(NdOp::SUBBYTES, Rdx, {Rem, NdVar::scalar(0, 4)});
       }
     }
     break;
@@ -192,9 +194,10 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         S.emit(NdOp::INT_SEXT, IdxExt, {IdxRaw});
         NdVar ChunkOff = S.makeTemp(PtrSz);
         S.emit(NdOp::INT_ASHR, ChunkOff,
-               {IdxExt, NdVar::cst(LogSz + 3, PtrSz)});
+               {IdxExt, NdVar::scalar(LogSz + 3, PtrSz)});
         NdVar ByteOff = S.makeTemp(PtrSz);
-        S.emit(NdOp::INT_LEFT, ByteOff, {ChunkOff, NdVar::cst(LogSz, PtrSz)});
+        S.emit(NdOp::INT_LEFT, ByteOff,
+               {ChunkOff, NdVar::scalar(LogSz, PtrSz)});
         NdVar Adj = S.makeTemp(PtrSz);
         S.emit(NdOp::INT_ADD, Adj, {ByteAddr, ByteOff});
         ByteAddr = Adj;
@@ -207,19 +210,19 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
 
     // In-chunk bit position, taken modulo the operand width.
     NdVar Idx = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Idx, {IdxRaw, NdVar::cst(Bits - 1, Sz)});
+    S.emit(NdOp::INT_AND, Idx, {IdxRaw, NdVar::scalar(Bits - 1, Sz)});
 
     // CF = (Base >> Idx) & 1
     NdVar Shifted = S.makeTemp(Sz);
     S.emit(NdOp::INT_RIGHT, Shifted, {Base, Idx});
     NdVar Masked = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, Masked, {Shifted, NdVar::cst(1, Sz)});
+    S.emit(NdOp::INT_AND, Masked, {Shifted, NdVar::scalar(1, Sz)});
     S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::CF, 1),
-           {Masked, NdVar::cst(0, Sz)});
+           {Masked, NdVar::scalar(0, Sz)});
 
     if (InsnId != X86_INS_BT) {
       NdVar Mask = S.makeTemp(Sz);
-      S.emit(NdOp::INT_LEFT, Mask, {NdVar::cst(1, Sz), Idx});
+      S.emit(NdOp::INT_LEFT, Mask, {NdVar::scalar(1, Sz), Idx});
       NdVar Result = (MemBase || X86.operands[0].type == X86_OP_MEM)
                          ? S.makeTemp(Sz)
                          : operandWrite(X86.operands[0]);

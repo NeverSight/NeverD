@@ -221,7 +221,7 @@ bool MedLLVMEmitter::hasObjectDataProvenance(uint64_t VA) const {
 }
 
 bool MedLLVMEmitter::isMaterializableReadOnlyDataAddress(uint64_t VA) const {
-  if (!Img || VA == 0)
+  if (!Img)
     return false;
   const Segment *Seg = Img->getSegmentFor(VA);
   if (!Seg || !Seg->isReadable() || Seg->Data.empty() ||
@@ -249,6 +249,40 @@ bool MedLLVMEmitter::isMaterializableReadOnlyDataAddress(uint64_t VA) const {
       !HasReadOnlySectionEvidence)
     return false;
   return canResolveGlobalDataConstant(VA);
+}
+
+bool MedLLVMEmitter::isMaterializableReadOnlyDataAddress(
+    uint64_t VA, uint64_t OwnerVA) const {
+  if (OwnerVA == InvalidVA)
+    return isMaterializableReadOnlyDataAddress(VA);
+  if (!Img)
+    return false;
+
+  const Segment *OwnerSeg = Img->getSegmentFor(OwnerVA);
+  if (!OwnerSeg || !OwnerSeg->isReadable() || OwnerSeg->Data.empty())
+    return false;
+  const Section *OwnerSec = Img->getSectionFor(OwnerVA);
+  const uint64_t Begin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
+  const uint64_t Size = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
+  if (Size > InvalidVA - Begin || VA < Begin || VA > Begin + Size)
+    return false;
+
+  bool HasReadOnlySectionEvidence = false;
+  if (OwnerSec)
+    HasReadOnlySectionEvidence =
+        OwnerSec->isReadable() &&
+        (Img->isMachO() ? !Img->isCodeAddress(OwnerVA)
+                        : !OwnerSec->isExecutable()) &&
+        (!OwnerSec->isWritable() ||
+         section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) ||
+         section_names::isReadOnlyAfterRelocSectionName(OwnerSec->SegmentName));
+  if (OwnerSeg->isWritable() && !isReadOnlyAfterReloc(OwnerSeg) &&
+      !HasReadOnlySectionEvidence)
+    return false;
+  if (OwnerSeg->isExecutable() && Img->hasExecutableCodeOwnerAt(OwnerVA) &&
+      !HasReadOnlySectionEvidence)
+    return false;
+  return true;
 }
 
 void MedLLVMEmitter::readOnlyAfterRelocRun(const Segment *Seg,
@@ -290,7 +324,7 @@ void MedLLVMEmitter::readOnlyAfterRelocRun(const Segment *Seg,
 }
 
 bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
-  if (!Img || VA == 0)
+  if (!Img)
     return false;
   const Segment *Seg = Img->getSegmentFor(VA);
   // Keep this ownership predicate in lockstep with
@@ -320,7 +354,7 @@ bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
     if (!CurMedFunc)
       return false;
     for (const auto &JT : CurMedFunc->JumpTables) {
-      if (JT.BaseAddr == 0 || JT.EntrySize == 0 || JT.Targets.empty())
+      if (!JT.HasBaseAddr || JT.EntrySize == 0 || JT.Targets.empty())
         continue;
       uint64_t TblEnd =
           JT.BaseAddr + static_cast<uint64_t>(JT.EntrySize) * JT.Targets.size();

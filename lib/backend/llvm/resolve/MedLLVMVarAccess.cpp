@@ -106,7 +106,9 @@ const PhiNode *MedLLVMEmitter::lookupPhi(const MedVar &V) const {
 
 bool MedLLVMEmitter::getVarHasDirectDataSymbolizationIntent(
     uint64_t Val, uint16_t Size) const {
-  if (!Img)
+  // Untagged zero remains the null/scalar value even when a distinct exact
+  // relocation occurrence authenticates data at VA 0 in the same image.
+  if (!Img || Val == 0)
     return false;
   unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
   bool IsPointerWidth = Size == 0 || PtrSize == 0 || Size >= PtrSize;
@@ -201,9 +203,8 @@ bool MedLLVMEmitter::dataOccurrenceSymbolizes(
   if (IsPointerWidth && Img && Mod &&
       (Cur.ConstVal >= limits::kMinGlobalDataAddr ||
        Img->CodeRefTargets.count(Cur.ConstVal)))
-    if (auto FIt = FuncNames.find(Cur.ConstVal); FIt != FuncNames.end())
-      if (Mod->getFunction(FIt->second))
-        return false;
+    if (resolveLiftedFunctionEntry(Cur.ConstVal))
+      return false;
 
   if (symbolizesWritableRelocPtr(Cur.ConstVal, Cur.Size))
     return true;
@@ -251,12 +252,12 @@ bool MedLLVMEmitter::constantOccurrenceMayRelocate(
       (Cur.Provenance == ConstantAddressProvenance::Address &&
        Img->isCodeAddress(Cur.ConstVal)) ||
       (Cur.Provenance == ConstantAddressProvenance::Unknown &&
+       Cur.ConstVal != 0 &&
        (Cur.ConstVal >= limits::kMinGlobalDataAddr ||
         Img->CodeRefTargets.count(Cur.ConstVal)));
   if (!CodeIntent)
     return false;
-  auto FIt = FuncNames.find(Cur.ConstVal);
-  return FIt != FuncNames.end() && Mod->getFunction(FIt->second) != nullptr;
+  return resolveLiftedFunctionEntry(Cur.ConstVal) != nullptr;
 }
 
 MedLLVMEmitter::ConstantProvenanceSummary
@@ -553,6 +554,8 @@ bool MedLLVMEmitter::rejectEscapingAddressFragment(
 
 bool MedLLVMEmitter::getVarMayRelocateConstant(uint64_t Val,
                                                uint16_t Size) const {
+  if (Val == 0)
+    return false;
   if (getVarSymbolizesDataConstant(Val, Size) ||
       symbolizesWritableRelocPtr(Val, Size))
     return true;
@@ -567,17 +570,18 @@ bool MedLLVMEmitter::getVarMayRelocateConstant(uint64_t Val,
   if (!Img || !Mod ||
       (Val < limits::kMinGlobalDataAddr && !Img->CodeRefTargets.count(Val)))
     return false;
-  auto FIt = FuncNames.find(Val);
-  return FIt != FuncNames.end() && Mod->getFunction(FIt->second) != nullptr;
+  return resolveLiftedFunctionEntry(Val) != nullptr;
 }
 
-llvm::Value *
-MedLLVMEmitter::materializeDataRelationConstant(uint64_t Val, uint16_t Size,
-                                                llvm::IRBuilder<> &Builder) {
+llvm::Value *MedLLVMEmitter::materializeDataRelationConstant(
+    uint64_t Val, uint16_t Size, llvm::IRBuilder<> &Builder, uint64_t OwnerVA) {
   // A non-zero hint selects the identity-preserving raw/run representation;
   // the compact unnamed-string form may legally merge equal contents at two
   // original VAs and therefore cannot represent address algebra.
-  if (llvm::Constant *Global = tryResolveGlobalData(Val, Size))
+  llvm::Constant *Global = OwnerVA != InvalidVA
+                               ? tryResolveOwnedGlobalData(Val, OwnerVA, Size)
+                               : tryResolveGlobalData(Val, Size);
+  if (Global)
     return Builder.CreatePtrToInt(Global, sizeToType(Size), "gdatarel");
 
   if (!FatalCodePointerResolution && !FatalDataPointerResolution)
@@ -602,12 +606,12 @@ MedLLVMEmitter::getPhiIncomingConstant(const MedVar &V, uint16_t OutputSize,
                                 /*isSigned=*/true);
 }
 
-llvm::Value *
-MedLLVMEmitter::getPhiIncomingValue(const MedVar &V, uint16_t OutputSize,
-                                    llvm::IRBuilder<> &Builder) {
+llvm::Value *MedLLVMEmitter::getPhiIncomingValue(const MedVar &V,
+                                                 uint16_t OutputSize,
+                                                 llvm::IRBuilder<> &Builder) {
   if (codeIdentityOccurrenceMayRelocate(V))
-    if (llvm::Value *Code = tryResolveCodeAddressValue(
-            V, /*RequireCodeRole=*/false, Builder))
+    if (llvm::Value *Code =
+            tryResolveCodeAddressValue(V, /*RequireCodeRole=*/false, Builder))
       return Code;
   if (V.isConst())
     return getPhiIncomingConstant(V, OutputSize, Builder);
@@ -727,8 +731,10 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       }
 
       uint64_t Address = 0;
-      if (resolveMaterializableDataAddress(V, Address))
-        return materializeDataRelationConstant(Address, V.Size, Builder);
+      uint64_t OwnerVA = InvalidVA;
+      if (resolveMaterializableDataAddress(V, Address, &OwnerVA))
+        return materializeDataRelationConstant(Address, V.Size, Builder,
+                                               OwnerVA);
       if (V.Provenance == ConstantAddressProvenance::Address)
         return llvm::ConstantInt::get(sizeToType(V.Size), V.ConstVal);
       return failUnresolvableDataConstant();
@@ -777,12 +783,12 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // 4 bytes < 8, so the width guard keeps it an integer; the genuine
     // code-pointer call target is always materialized at the full pointer width
     // and is unaffected.
-    if (Img && (V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz) &&
+    if (Img && V.ConstVal != 0 &&
+        (V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz) &&
         (V.ConstVal >= kMinGlobalDataAddr ||
          Img->CodeRefTargets.count(V.ConstVal))) {
-      if (auto FIt = FuncNames.find(V.ConstVal); FIt != FuncNames.end())
-        if (llvm::Function *F = Mod->getFunction(FIt->second))
-          return Builder.CreatePtrToInt(F, sizeToType(V.Size), "fnptr");
+      if (llvm::Function *F = resolveLiftedFunctionEntry(V.ConstVal))
+        return Builder.CreatePtrToInt(F, sizeToType(V.Size), "fnptr");
     }
     // A constant the loader proved is a taken address `&G` inside a WRITABLE
     // .data/.bss segment is symbolized to the same whole-segment writable run

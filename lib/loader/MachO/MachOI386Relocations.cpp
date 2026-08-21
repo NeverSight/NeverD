@@ -8,6 +8,7 @@
 
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/MachO/MachORelocations.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/MachO.h"
@@ -231,9 +232,13 @@ mappedI386SectionForAddress(llvm::ArrayRef<SectionRef> ObjectSections,
   return std::nullopt;
 }
 
-std::optional<int64_t> resolveI386ExternalSymbol(
-    const MachOObjectFile &Obj, const llvm::MachO::any_relocation_info &Info,
-    llvm::ArrayRef<SectionRef> ObjectSections, const BinaryImage &Img) {
+std::optional<int64_t>
+resolveI386ExternalSymbol(const MachOObjectFile &Obj,
+                          const llvm::MachO::any_relocation_info &Info,
+                          llvm::ArrayRef<SectionRef> ObjectSections,
+                          const BinaryImage &Img, uint64_t *OwnerVA) {
+  if (OwnerVA)
+    *OwnerVA = InvalidVA;
   uint32_t SymbolIndex = Obj.getPlainRelocationSymbolNum(Info);
   llvm::MachO::symtab_command Symtab = Obj.getSymtabLoadCommand();
   if (SymbolIndex >= Symtab.nsyms)
@@ -258,24 +263,43 @@ std::optional<int64_t> resolveI386ExternalSymbol(
   uint64_t Offset = Entry.n_value - uint64_t(TargetSection->OriginalBase);
   if (Offset > TargetSection->Size)
     return std::nullopt;
+  if (OwnerVA)
+    *OwnerVA = static_cast<uint64_t>(TargetSection->FinalBase);
   return checkedI386AddressWithOffset(uint64_t(TargetSection->FinalBase),
                                       Offset);
 }
 
 I386AddressClass classifyI386Address(const BinaryImage &Img, uint64_t Address) {
   if (const Section *Sec = Img.getSectionFor(Address))
-    return {true, Sec->isReadable(), Sec->isWritable(), Sec->isExecutable(),
-            !Sec->Data.empty()};
+    return {true, Sec->isReadable(), Sec->isWritable(),
+            Img.hasExecutableCodeOwnerAt(Address), !Sec->Data.empty()};
   if (const Segment *Seg = Img.getSegmentFor(Address))
-    return {true, Seg->isReadable(), Seg->isWritable(), Seg->isExecutable(),
-            !Seg->Data.empty()};
+    return {true, Seg->isReadable(), Seg->isWritable(),
+            Img.hasExecutableCodeOwnerAt(Address), !Seg->Data.empty()};
   return {};
 }
 
 void recordI386RelocationProvenance(BinaryImage &Img, uint64_t Place,
-                                    uint64_t Target, bool IsPCRel) {
-  I386AddressClass TargetClass = classifyI386Address(Img, Target);
+                                    uint64_t Target, uint8_t Width,
+                                    bool IsPCRel,
+                                    uint64_t TargetOwnerVA = InvalidVA) {
+  // N_ABS/N_UNDF values are link-time scalar constants, not section-backed
+  // address identities.  Apply their encoded value, but never let numeric
+  // coincidence with a low-VA section authenticate pointer provenance.
+  if (TargetOwnerVA == InvalidVA)
+    return;
+  I386AddressClass TargetClass = classifyI386Address(Img, TargetOwnerVA);
   if (!TargetClass.IsValid)
+    return;
+  const Segment *OwnerSeg = Img.getSegmentFor(TargetOwnerVA);
+  const Section *OwnerSec = Img.getSectionFor(TargetOwnerVA);
+  const uint64_t OwnerBegin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
+  const uint64_t OwnerSize = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
+  if (OwnerSize > InvalidVA - OwnerBegin)
+    return;
+  const uint64_t OwnerEnd = OwnerBegin + OwnerSize;
+  if (Target < OwnerBegin ||
+      (TargetClass.IsExecutable ? Target >= OwnerEnd : Target > OwnerEnd))
     return;
   I386AddressClass PlaceClass = classifyI386Address(Img, Place);
 
@@ -295,13 +319,14 @@ void recordI386RelocationProvenance(BinaryImage &Img, uint64_t Place,
     return;
   }
 
-  if (TargetClass.IsExecutable) {
-    Img.CodePtrRelocSlots.insert(Place);
+  // Mach-O vanilla relocations may be 1, 2, or 4 bytes wide.  Only a complete
+  // target pointer can make its storage a pointer-table slot; a narrow field
+  // embedded in an instruction still proves the referenced code identity but
+  // must never be mirrored as a standalone pointer.
+  if (Width == Img.getPointerSize())
+    recordAbsolutePointerRelocation(Img, Place, Target, TargetOwnerVA);
+  else if (PlaceClass.IsExecutable && TargetClass.IsExecutable)
     Img.CodeRefTargets.insert(Target);
-  } else if (IsReadOnlyData) {
-    Img.DataPtrRelocSlots.insert(Place);
-    Img.RelocDataAddrs.insert(Target);
-  }
 }
 
 void recordI386SectionDifferenceDataProvenance(BinaryImage &Img,
@@ -475,6 +500,7 @@ void applyI386SectionRelocations(const MachOObjectFile &Obj,
     }
 
     int64_t Target = 0;
+    uint64_t TargetOwnerVA = InvalidVA;
     int64_t Addend = *Existing;
     if (IsScattered) {
       uint64_t EncodedTarget = Obj.getScatteredRelocationValue(Info);
@@ -487,9 +513,10 @@ void applyI386SectionRelocations(const MachOObjectFile &Obj,
         continue;
       }
       Target = TargetSection->FinalBase;
+      TargetOwnerVA = static_cast<uint64_t>(TargetSection->FinalBase);
     } else if (Obj.getPlainRelocationExternal(Info)) {
-      auto ExternalTarget =
-          resolveI386ExternalSymbol(Obj, Info, ObjectSections, Img);
+      auto ExternalTarget = resolveI386ExternalSymbol(Obj, Info, ObjectSections,
+                                                      Img, &TargetOwnerVA);
       if (!ExternalTarget) {
         diagnoseI386Relocation("external symbol is unresolved",
                                SecRef.getAddress(), RelocAddress);
@@ -506,6 +533,7 @@ void applyI386SectionRelocations(const MachOObjectFile &Obj,
         continue;
       }
       Target = TargetSection->FinalBase;
+      TargetOwnerVA = static_cast<uint64_t>(TargetSection->FinalBase);
     }
 
     if (!IsScattered && IsPCRel) {
@@ -535,8 +563,9 @@ void applyI386SectionRelocations(const MachOObjectFile &Obj,
                              RelocAddress);
       continue;
     }
-    recordI386RelocationProvenance(
-        Img, Place, static_cast<uint64_t>(ResolvedTarget), IsPCRel);
+    recordI386RelocationProvenance(Img, Place,
+                                   static_cast<uint64_t>(ResolvedTarget), Width,
+                                   IsPCRel, TargetOwnerVA);
   }
 }
 

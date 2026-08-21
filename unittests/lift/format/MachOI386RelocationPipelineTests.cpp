@@ -69,8 +69,12 @@ TEST_F(MachOI386Relocation,
   for (uint32_t Offset : {8u, 12u}) {
     auto RelocOffset = findRawRelocation(Bytes, *Data, Offset);
     ASSERT_TRUE(RelocOffset.has_value());
+    // Keep this mutation deliberately narrower than an i386 pointer. A
+    // four-byte relocation stored in data is a real DataPtrRelocSlot under the
+    // shared occurrence contract and must produce a mirror; a two-byte field
+    // remains an integer relation and exercises the zext false-positive guard.
     writeRawRelocation(Bytes, *RelocOffset, Offset,
-                       plainRelocationWord(2, false, 2, false,
+                       plainRelocationWord(2, false, 1, false,
                                            llvm::MachO::GENERIC_RELOC_VANILLA));
     writeSectionField(Bytes, *Data, Offset, Data->Address);
   }

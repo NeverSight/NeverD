@@ -77,6 +77,10 @@ struct NdVar {
   uint64_t Offset = 0;
   uint16_t Size = 0;
   ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
+  /// Occurrence-local owner for a loader-authenticated address constant.
+  /// Kept separate from the numeric payload so one-past == next-section-start
+  /// does not silently change object identity after relinking.
+  uint64_t AddressOwnerVA = InvalidVA;
 
   bool isConst() const { return Space == VnodeSpace::CONST; }
   bool isReg() const { return Space == VnodeSpace::REG; }
@@ -85,7 +89,7 @@ struct NdVar {
 
   bool operator==(const NdVar &O) const {
     return Space == O.Space && Offset == O.Offset && Size == O.Size &&
-           Provenance == O.Provenance;
+           Provenance == O.Provenance && AddressOwnerVA == O.AddressOwnerVA;
   }
   bool operator!=(const NdVar &O) const { return !(*this == O); }
 
@@ -108,11 +112,15 @@ struct NdVar {
   static NdVar address(uint64_t Val, uint16_t Sz) {
     return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::Address};
   }
-  static NdVar dataAddress(uint64_t Val, uint16_t Sz) {
-    return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::DataAddress};
+  static NdVar dataAddress(uint64_t Val, uint16_t Sz,
+                           uint64_t OwnerVA = InvalidVA) {
+    return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::DataAddress,
+            OwnerVA};
   }
-  static NdVar codeAddress(uint64_t Val, uint16_t Sz) {
-    return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::CodeAddress};
+  static NdVar codeAddress(uint64_t Val, uint16_t Sz,
+                           uint64_t OwnerVA = InvalidVA) {
+    return {VnodeSpace::CONST, Val, Sz, ConstantAddressProvenance::CodeAddress,
+            OwnerVA};
   }
   static NdVar ram(uint64_t Addr, uint16_t Sz) {
     return {VnodeSpace::RAM, Addr, Sz};
@@ -311,6 +319,9 @@ struct LowBlock {
 struct JumpTable {
   va_t InsnAddr = 0;
   va_t BaseAddr = 0;
+  /// Distinguishes an absent base from a relocation-proven table mapped at VA
+  /// zero in an ELF relocatable object.
+  bool HasBaseAddr = false;
   uint16_t EntrySize = 0;
   int IndexRegOff = -1;
   bool IsRelative = false;
@@ -379,6 +390,21 @@ struct JumpTable {
   /// Recovered original case label values (one per target).
   /// Empty when recovery is not possible (e.g., relocatable objects).
   std::vector<int64_t> CaseLabels;
+
+  /// True when \p Addr lies in the table-storage interval proven by this
+  /// recovery record.  This remains distinct from executable layout: compilers
+  /// may place relative switch entries inline in an instruction section.
+  bool ownsStorageAddress(va_t Addr) const {
+    if (!HasBaseAddr || Addr < BaseAddr)
+      return false;
+    if (Addr == BaseAddr)
+      return true;
+    if (EntrySize == 0 || Targets.empty())
+      return false;
+    const uint64_t Count = static_cast<uint64_t>(Targets.size());
+    return Count <= (InvalidVA - BaseAddr) / EntrySize &&
+           Addr < BaseAddr + Count * EntrySize;
+  }
 };
 
 struct LowFunc {

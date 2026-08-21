@@ -177,22 +177,25 @@ bool X86Lifter::liftVectorGather(LiftState &S, const cs_x86 &X86,
     RegInfo BaseRI = mapCapstoneReg(static_cast<x86_reg>(Mem->mem.base));
     Acc(NdVar::reg(BaseRI.Offset, 8));
   }
-  if (Mem->mem.disp != 0)
-    Acc(NdVar::cst(static_cast<uint64_t>(Mem->mem.disp), 8));
+  if (S.RelocatedDisplacement)
+    Acc(*S.RelocatedDisplacement);
+  else if (Mem->mem.disp != 0)
+    Acc(NdVar::scalar(static_cast<uint64_t>(Mem->mem.disp), 8));
   if (First)
-    Acc(NdVar::cst(0, 8));
+    Acc(NdVar::scalar(0, 8));
   unsigned Scale = Mem->mem.scale ? Mem->mem.scale : 1;
 
   NdVar Lanes[8];
   for (uint16_t I = 0; I < ValLanes; ++I) {
     if (I >= NumElems) {
-      Lanes[I] = NdVar::cst(0, ValSz); // SDM: lanes past the gather count = 0
+      Lanes[I] =
+          NdVar::scalar(0, ValSz); // SDM: lanes past the gather count = 0
       continue;
     }
     // addr = baseAddr + sext(index[I]) * scale.
     NdVar IdxElem = S.makeTemp(IdxSz);
     S.emit(NdOp::SUBBYTES, IdxElem,
-           {IdxVec, NdVar::cst(static_cast<uint64_t>(I) * IdxSz, 4)});
+           {IdxVec, NdVar::scalar(static_cast<uint64_t>(I) * IdxSz, 4)});
     NdVar Idx64 = IdxElem;
     if (IdxSz < 8) {
       Idx64 = S.makeTemp(8);
@@ -201,7 +204,7 @@ bool X86Lifter::liftVectorGather(LiftState &S, const cs_x86 &X86,
     NdVar Off = Idx64;
     if (Scale > 1) {
       Off = S.makeTemp(8);
-      S.emit(NdOp::INT_MULT, Off, {Idx64, NdVar::cst(Scale, 8)});
+      S.emit(NdOp::INT_MULT, Off, {Idx64, NdVar::scalar(Scale, 8)});
     }
     NdVar Addr = S.makeTemp(8);
     S.emit(NdOp::INT_ADD, Addr, {BaseAddr, Off});
@@ -211,12 +214,12 @@ bool X86Lifter::liftVectorGather(LiftState &S, const cs_x86 &X86,
     // lane (operands[0] is also the merge source for masked-off elements).
     NdVar MaskElem = S.makeTemp(ValSz);
     S.emit(NdOp::SUBBYTES, MaskElem,
-           {MaskVec, NdVar::cst(static_cast<uint64_t>(I) * ValSz, 4)});
+           {MaskVec, NdVar::scalar(static_cast<uint64_t>(I) * ValSz, 4)});
     NdVar SignSet = S.makeTemp(1);
-    S.emit(NdOp::INT_SLESS, SignSet, {MaskElem, NdVar::cst(0, ValSz)});
+    S.emit(NdOp::INT_SLESS, SignSet, {MaskElem, NdVar::scalar(0, ValSz)});
     NdVar OldLane = S.makeTemp(ValSz);
     S.emit(NdOp::SUBBYTES, OldLane,
-           {DstOld, NdVar::cst(static_cast<uint64_t>(I) * ValSz, 4)});
+           {DstOld, NdVar::scalar(static_cast<uint64_t>(I) * ValSz, 4)});
     NdVar Res = S.makeTemp(ValSz);
     S.emit(NdOp::SELECT, Res, {SignSet, Loaded, OldLane});
     Lanes[I] = Res;
@@ -238,7 +241,7 @@ bool X86Lifter::liftVectorGather(LiftState &S, const cs_x86 &X86,
 
   // The gather clears the entire mask register on completion.
   NdVar MaskOut = operandWrite(X86.operands[MaskIdx]);
-  S.emit(NdOp::COPY, MaskOut, {NdVar::cst(0, MaskVec.Size)});
+  S.emit(NdOp::COPY, MaskOut, {NdVar::scalar(0, MaskVec.Size)});
   return true;
 }
 

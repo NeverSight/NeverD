@@ -218,13 +218,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
   auto SerializeResolvedCode = [&](uint64_t VA, bool IsCode) {
     return IsCode ? serializeCodePointer(VA, TargetArch, ResolveMode) : VA;
   };
-  auto IsExecutable = [&](uint64_t VA) {
-    const Segment *Seg = Image.getSegmentFor(VA);
-    return Seg && Seg->isExecutable();
-  };
-  auto IsProvenCodeDataSymbol = [&](uint64_t VA) {
-    return IsExecutable(VA) && Image.CodeRefTargets.count(VA) != 0;
-  };
+  auto IsExecutable = [&](uint64_t VA) { return Image.isCodeAddress(VA); };
   std::map<std::string, uint64_t> ExportAddrs;
   for (const auto &E : Image.Exports)
     if (!E.Name.empty())
@@ -254,7 +248,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
         return serializeExportAddress(Image, VA);
       }
       if (auto Parsed = parseNdDataSymbol(Name))
-        return SerializeResolvedCode(*Parsed, IsProvenCodeDataSymbol(*Parsed));
+        return serializeImageDataSymbolAddress(Image, *Parsed);
       if (auto Parsed = parseNdCodePtrSymbol(Name))
         return SerializeResolvedCode(*Parsed, false);
       std::string AliasKey = resolveSymbolAlias(Name, SymByName);
@@ -386,7 +380,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
         return SerializeResolvedCode(VA, IsExecutable(VA));
       }
       if (auto Parsed = parseNdDataSymbol(Name))
-        return SerializeResolvedCode(*Parsed, IsProvenCodeDataSymbol(*Parsed));
+        return serializeImageDataSymbolAddress(Image, *Parsed);
       if (auto Parsed = parseNdCodePtrSymbol(Name))
         return SerializeResolvedCode(*Parsed, false);
       std::string AliasKey = resolveSymbolAlias(Name, SymByName);

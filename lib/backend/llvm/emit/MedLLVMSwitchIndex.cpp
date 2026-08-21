@@ -161,7 +161,7 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
     const MedVar &Val,
     const std::function<const MedOp *(const MedVar &)> &defOf,
     const JumpTable &JT) const {
-  if (JT.EntrySize == 0 || JT.BaseAddr == 0 || JT.Targets.empty() ||
+  if (JT.EntrySize == 0 || !JT.HasBaseAddr || JT.Targets.empty() ||
       Val.isConst())
     return std::nullopt;
 

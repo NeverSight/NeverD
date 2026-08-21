@@ -35,10 +35,15 @@ void LowToMedConverter::propagate(MedFunc &Func) {
 
   const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
   auto HasExactLoaderProvenance = [&](uint64_t Value) {
-    return Image && (Image->RelocDataAddrs.count(Value) != 0 ||
-                     Image->WritableRelocDataAddrs.count(Value) != 0 ||
-                     Image->RodataAnchorSeg.count(Value) != 0 ||
-                     Image->CodeRefTargets.count(Value) != 0);
+    // Value-global inventories cannot distinguish an unrelated numeric/null
+    // zero from a different relocation occurrence that legitimately targets
+    // VA zero. Exact DataAddress/CodeAddress occurrences are handled by the
+    // provenance branch in Describe below.
+    return Value != 0 && Image &&
+           (Image->RelocDataAddrs.count(Value) != 0 ||
+            Image->WritableRelocDataAddrs.count(Value) != 0 ||
+            Image->RodataAnchorSeg.count(Value) != 0 ||
+            Image->CodeRefTargets.count(Value) != 0);
   };
   auto MayConstantRelocate = [&](uint64_t Value, uint16_t Size) {
     const bool IsPointerWidth =
@@ -125,6 +130,7 @@ void LowToMedConverter::propagate(MedFunc &Func) {
           bool IsStableScalar = false;
           ConstantAddressProvenance Provenance =
               ConstantAddressProvenance::Unknown;
+          uint64_t AddressOwnerVA = InvalidVA;
         };
         auto ResolveConst =
             [&](const MedVar &V) -> std::optional<ConstantInfo> {
@@ -147,8 +153,9 @@ void LowToMedConverter::propagate(MedFunc &Func) {
                 C.Provenance == ConstantAddressProvenance::Scalar ||
                 (C.Provenance == ConstantAddressProvenance::Unknown &&
                  !MayRelocate);
-            return ConstantInfo{C.ConstVal, MayRelocate,  ExactOrigin,
-                                Fragment,   StableScalar, C.Provenance};
+            return ConstantInfo{C.ConstVal,      MayRelocate,  ExactOrigin,
+                                Fragment,        StableScalar, C.Provenance,
+                                C.AddressOwnerVA};
           };
           if (V.isConst())
             return Describe(V);
@@ -228,9 +235,11 @@ void LowToMedConverter::propagate(MedFunc &Func) {
         Op.Opcode = NdOp::COPY;
         ConstantAddressProvenance ResultProvenance =
             ConstantAddressProvenance::Unknown;
+        uint64_t ResultOwnerVA = InvalidVA;
         if (ResultHasAddressOrigin) {
           const ConstantInfo &Base =
               (A->HasAddressOrigin || A->HasAddressFragment) ? *A : *B;
+          ResultOwnerVA = Base.AddressOwnerVA;
           if (Base.Provenance == ConstantAddressProvenance::DataAddress)
             ResultProvenance = ConstantAddressProvenance::DataAddress;
           else if (Base.Provenance == ConstantAddressProvenance::CodeAddress)
@@ -240,8 +249,8 @@ void LowToMedConverter::propagate(MedFunc &Func) {
         } else if (A->Provenance == ConstantAddressProvenance::Scalar &&
                    B->Provenance == ConstantAddressProvenance::Scalar)
           ResultProvenance = ConstantAddressProvenance::Scalar;
-        Op.Inputs[0] =
-            MedVar::makeConst(Result, Op.Output.Size, ResultProvenance);
+        Op.Inputs[0] = MedVar::makeConst(Result, Op.Output.Size,
+                                         ResultProvenance, ResultOwnerVA);
         Op.NumInputs = 1;
         Changed = true;
       }

@@ -60,6 +60,8 @@ size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
     if (Imm & (1LL << kADRP_ImmBits))
       Imm |= ~((1LL << (kADRP_ImmBits + 1)) - 1);
     va_t AdrpVA = Seg.VA + I;
+    if (!Img.isCodeRange(AdrpVA, ThunkSize))
+      continue;
     va_t Page = (AdrpVA & kPageMask) + Imm;
     uint32_t LdrOff = ((W1 >> kLDR_Imm12Shift) & kLDR_Imm12Mask) << 3;
     va_t Target = Page + LdrOff;

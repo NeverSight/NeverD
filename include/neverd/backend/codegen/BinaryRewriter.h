@@ -82,6 +82,33 @@ struct PatchedFunctionEntry {
   std::string SourceFunction;
 };
 
+/// Exact subset of compiled source functions whose original entries can host
+/// a target trampoline without crossing another authenticated entry or a code
+/// owner boundary. Unsafe definitions are externalized before compilation;
+/// PreservedCount is a defensive signal that an unprepared definition reached
+/// the post-codegen plan.
+struct SourceTrampolinePlan {
+  std::vector<llvm::mc_rewrite::RewriteSourceFunctionOwner> Owners;
+  std::map<std::string, uint64_t> OriginalVAs;
+  size_t PreservedCount = 0;
+};
+
+/// Result of preparing a module for an exact source-identity rewrite. A source
+/// whose entry cannot safely host a trampoline is converted to an external
+/// declaration when another source remains replaceable, so generated callers
+/// bind to the authenticated original body and no duplicate unwind/code copy
+/// is emitted. If no source is replaceable, the whole patch is a no-op and the
+/// clone remains untouched.
+struct SourceFunctionPreparation {
+  bool HasExactSources = false;
+  std::map<std::string, uint64_t> ReplaceableOriginalVAs;
+  std::map<std::string, uint64_t> PreservedOriginalVAs;
+
+  bool isExactNoOp() const {
+    return HasExactSources && ReplaceableOriginalVAs.empty();
+  }
+};
+
 // ===--------------------------------------------------------------------===//
 // TextLayout — describes the location of the main code section
 // ===--------------------------------------------------------------------===//
@@ -295,8 +322,27 @@ inline uint8_t getDefaultFillByte(Arch A) {
 /// Serialize an analyzed export address according to the target ABI only when
 /// the loaded image proves that the export points into executable code.
 inline uint64_t serializeExportAddress(const BinaryImage &Image, uint64_t VA) {
-  const Segment *Seg = Image.getSegmentFor(VA);
-  return Seg && Seg->isExecutable()
+  return Image.isCodeAddress(VA)
+             ? serializeCodePointer(VA, Image.Arch, Image.Mode)
+             : VA;
+}
+
+/// Classify a synthetic `__nd_data_<VA>` occurrence as a function identity
+/// only when the loaded image supplies occurrence-level evidence. A typed
+/// function symbol is sufficient even when CodeRefTargets is empty; a generic
+/// executable address additionally needs an address-taken code reference.
+inline bool isAuthenticatedCodeDataSymbol(const BinaryImage &Image,
+                                          uint64_t VA) {
+  return Image.hasFunctionSymbolAt(VA) ||
+         (Image.isCodeAddress(VA) && Image.CodeRefTargets.count(VA) != 0);
+}
+
+/// Serialize an authenticated synthetic data-symbol address according to the
+/// target ABI. Sharing this policy prevents the in-place, ELF, and COFF
+/// resolvers from disagreeing about ARM/Thumb bit 0.
+inline uint64_t serializeImageDataSymbolAddress(const BinaryImage &Image,
+                                                uint64_t VA) {
+  return isAuthenticatedCodeDataSymbol(Image, VA)
              ? serializeCodePointer(VA, Image.Arch, Image.Mode)
              : VA;
 }
@@ -413,6 +459,23 @@ public:
           PatchFn);
 
 protected:
+  static std::vector<Export>
+  authenticatedFunctionExports(const BinaryImage *Image);
+  static bool validateSourceFunctionPatchPlan(const CompiledImage &Compiled,
+                                              const BinaryImage *Image,
+                                              std::string &Detail);
+  static bool
+  prepareSourceFunctionsForPatch(llvm::Module &Module, const BinaryImage *Image,
+                                 SourceFunctionPreparation &Preparation,
+                                 std::string &Detail);
+  static SourceTrampolinePlan
+  makeSourceTrampolinePlan(const CompiledImage &Compiled,
+                           const BinaryImage *Image);
+  static bool validatePatchedSourceTrampolineClosure(
+      const SourceTrampolinePlan &Plan,
+      llvm::ArrayRef<PatchedFunctionEntry> PatchedFunctions,
+      size_t TrampolineCount, std::string &Detail);
+
   const BinaryImage *CachedImage = nullptr;
   const std::vector<Export> *CachedExports = nullptr;
   const std::vector<Import> *CachedImports = nullptr;

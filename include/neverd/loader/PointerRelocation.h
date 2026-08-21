@@ -25,16 +25,22 @@ namespace neverd {
 /// while the same relocation embedded in code proves the materialized target
 /// address without turning instruction bytes into a pointer table.
 inline bool recordAbsolutePointerRelocation(BinaryImage &Img, va_t SlotVA,
-                                            va_t TargetVA) {
-  if (TargetVA == 0 || Img.ImportPtrSlots.count(SlotVA) ||
-      Img.DyldBindSlots.count(SlotVA))
+                                            va_t TargetVA,
+                                            va_t TargetOwnerVA = InvalidVA) {
+  if (Img.ImportPtrSlots.count(SlotVA) || Img.DyldBindSlots.count(SlotVA))
     return false;
+
+  if (TargetOwnerVA == InvalidVA)
+    TargetOwnerVA = TargetVA;
 
   struct AddressClass {
     bool Mapped = false;
     bool Readable = false;
     bool Writable = false;
     bool Executable = false;
+    bool HasOwnerRange = false;
+    va_t OwnerBegin = 0;
+    va_t OwnerEnd = 0;
   };
   auto Classify = [&](va_t Addr) {
     AddressClass C;
@@ -49,32 +55,70 @@ inline bool recordAbsolutePointerRelocation(BinaryImage &Img, va_t SlotVA,
           !section_names::isReadOnlyAfterRelocSectionName(Sec->Name) &&
           !section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName);
       // Linked Mach-O sections inherit their enclosing segment protection, so
-      // __TEXT,__cstring appears executable in Section::Flags.  Its instruction
-      // attributes are the exact authority.  ELF/COFF sections carry their own
+      // __TEXT,__cstring appears executable in Section::Flags. Its instruction
+      // attributes are the exact authority. ELF/COFF sections carry their own
       // execute bit and can likewise override a coarse executable load segment.
-      C.Executable =
-          Img.isMachO() ? Img.isCodeAddress(Addr) : Sec->isExecutable();
+      C.Executable = Img.hasExecutableCodeOwnerAt(Addr);
+      if (Sec->Size <= InvalidVA - Sec->VA) {
+        C.HasOwnerRange = true;
+        C.OwnerBegin = Sec->VA;
+        C.OwnerEnd = Sec->VA + Sec->Size;
+      }
     } else {
       C.Readable = Seg->isReadable();
       C.Writable = Seg->isWritable();
-      C.Executable = Seg->isExecutable();
+      // Keep absolute-relocation provenance aligned with BinaryImage's
+      // format-aware code classifier. In particular, a mapped header or
+      // alignment gap is relocatable data identity when section metadata
+      // exists.
+      C.Executable = Img.hasExecutableCodeOwnerAt(Addr);
+      if (Seg->Size <= InvalidVA - Seg->VA) {
+        C.HasOwnerRange = true;
+        C.OwnerBegin = Seg->VA;
+        C.OwnerEnd = Seg->VA + Seg->Size;
+      }
     }
     return C;
   };
 
   AddressClass Slot = Classify(SlotVA);
-  AddressClass Target = Classify(TargetVA);
+  AddressClass Target = Classify(TargetOwnerVA);
   if (!Slot.Mapped || !Target.Mapped)
+    return false;
+  // The relocation symbol/section owns the semantic role; the resolved addend
+  // may legally name its one-past data address, which has no mapped byte and
+  // may numerically coincide with the next section.  Code targets must still
+  // name an owned byte, while data targets admit that one-past endpoint.
+  if (!Target.HasOwnerRange || TargetVA < Target.OwnerBegin ||
+      (Target.Executable ? TargetVA >= Target.OwnerEnd
+                         : TargetVA > Target.OwnerEnd))
     return false;
 
   bool Changed = false;
+  auto RecordOperand = [&](auto &Occurrences) {
+    const RelocatedAddressField Field{
+        TargetVA, TargetVA, static_cast<uint8_t>(Img.getPointerSize()),
+        Target.OwnerBegin};
+    auto It = Occurrences.find(SlotVA);
+    if (It == Occurrences.end() ||
+        It->second.EncodedValue != Field.EncodedValue ||
+        It->second.TargetVA != Field.TargetVA ||
+        It->second.Width != Field.Width ||
+        It->second.TargetOwnerVA != Field.TargetOwnerVA) {
+      Occurrences[SlotVA] = Field;
+      Changed = true;
+    }
+  };
   if (Target.Executable) {
     if (Slot.Executable) {
+      Changed |= Img.DataAddressRelocOperands.erase(SlotVA) != 0;
       Changed |= Img.CodeRefTargets
                      .insert(normalizeCodeAddress(TargetVA, Img.Arch, Img.Mode))
                      .second;
+      RecordOperand(Img.CodeAddressRelocOperands);
     } else if (Slot.Readable) {
       Changed |= Img.DataPtrRelocSlots.erase(SlotVA) != 0;
+      Changed |= Img.DataPtrRelocTargetOwners.erase(SlotVA) != 0;
       Changed |= Img.CodePtrRelocSlots.insert(SlotVA).second;
     }
     return Changed;
@@ -87,9 +131,18 @@ inline bool recordAbsolutePointerRelocation(BinaryImage &Img, va_t SlotVA,
   else
     Changed |= Img.RelocDataAddrs.insert(TargetVA).second;
 
-  if (!Slot.Executable && Slot.Readable) {
+  if (Slot.Executable) {
+    Changed |= Img.CodeAddressRelocOperands.erase(SlotVA) != 0;
+    RecordOperand(Img.DataAddressRelocOperands);
+  } else if (Slot.Readable) {
     Changed |= Img.CodePtrRelocSlots.erase(SlotVA) != 0;
     Changed |= Img.DataPtrRelocSlots.insert(SlotVA).second;
+    auto OwnerIt = Img.DataPtrRelocTargetOwners.find(SlotVA);
+    if (OwnerIt == Img.DataPtrRelocTargetOwners.end() ||
+        OwnerIt->second != Target.OwnerBegin) {
+      Img.DataPtrRelocTargetOwners[SlotVA] = Target.OwnerBegin;
+      Changed = true;
+    }
   }
   return Changed;
 }

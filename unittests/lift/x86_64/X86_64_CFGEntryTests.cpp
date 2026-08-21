@@ -138,6 +138,51 @@ TEST(CFGBuilderCoverage, ReportsReachableDecodeLiftAndFailures) {
   EXPECT_EQ(TruncatedPath.TruncatedPathAddresses[0], 0x140001081u);
 }
 
+TEST(CFGBuilderCoverage, RejectsBranchTargetsOwnedByDataInAnRXMapping) {
+  constexpr va_t EntryVA = 0x5000;
+  constexpr va_t DataVA = EntryVA + 0x10;
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::ELF;
+  Img.Base = EntryVA;
+  Img.Entry = EntryVA;
+
+  Segment Mapping;
+  Mapping.VA = EntryVA;
+  Mapping.Size = 0x11;
+  Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Mapping.Data.assign(Mapping.Size, 0x90);
+  Mapping.Data[0] = 0xEB;
+  Mapping.Data[1] = 0x0E;                // jmp DataVA
+  Mapping.Data[DataVA - EntryVA] = 0xC3; // ret-shaped data
+  Img.Segments.push_back(std::move(Mapping));
+
+  Section Code;
+  Code.Name = ".text";
+  Code.VA = EntryVA;
+  Code.Size = 2;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Code));
+  Section Data;
+  Data.Name = ".rodata";
+  Data.VA = DataVA;
+  Data.Size = 1;
+  Data.Flags = SegmentFlags::Readable;
+  Img.Sections.push_back(std::move(Data));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  CFGBuilder Builder;
+  LowFunc Func = Builder.build(Img, Dec, EntryVA, "section_owner_probe");
+
+  EXPECT_EQ(Func.DecodedInstructionCount, 1u);
+  EXPECT_EQ(Func.LiftedInstructionCount, 1u);
+  ASSERT_EQ(Func.TruncatedPathAddresses.size(), 1u);
+  EXPECT_EQ(Func.TruncatedPathAddresses[0], DataVA);
+}
+
 TEST(FuncDetectorCoverage, RejectsCandidateWithUndecodableBranchArm) {
   BinaryImage Img;
   Img.Arch = Arch::X64;

@@ -7,6 +7,7 @@
 #include "MachORelocationsDetail.h"
 
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/MachO.h"
@@ -17,6 +18,29 @@
 namespace neverd::macho_loader {
 
 namespace {
+
+va_t symbolOwnerVA(const llvm::object::MachOObjectFile &Obj,
+                   llvm::object::symbol_iterator SymIt,
+                   const BinaryImage &Img) {
+  if (SymIt == Obj.symbol_end())
+    return InvalidVA;
+  llvm::object::DataRefImpl DRI = SymIt->getRawDataRefImpl();
+  uint8_t Type = 0;
+  uint8_t SectionNumber = 0;
+  if (Obj.is64Bit()) {
+    llvm::MachO::nlist_64 Entry = Obj.getSymbol64TableEntry(DRI);
+    Type = Entry.n_type & llvm::MachO::N_TYPE;
+    SectionNumber = Entry.n_sect;
+  } else {
+    llvm::MachO::nlist Entry = Obj.getSymbolTableEntry(DRI);
+    Type = Entry.n_type & llvm::MachO::N_TYPE;
+    SectionNumber = Entry.n_sect;
+  }
+  if (Type != llvm::MachO::N_SECT || SectionNumber == 0 ||
+      SectionNumber > Img.Sections.size())
+    return InvalidVA;
+  return Img.Sections[SectionNumber - 1].VA;
+}
 
 void synchronizeObjectSectionData(BinaryImage &Img) {
   for (Section &Sec : Img.Sections) {
@@ -57,6 +81,7 @@ void applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
       uint32_t RType = Reloc.getType();
       auto SymIt = Reloc.getSymbol();
       uint64_t SymVal = 0;
+      uint64_t SymOwnerVA = symbolOwnerVA(Obj, SymIt, Img);
       if (SymIt != Obj.symbol_end()) {
         auto AddrOrErr = SymIt->getAddress();
         if (AddrOrErr)
@@ -76,9 +101,9 @@ void applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
         const Segment *PSeg = Img.getSegmentFor(P);
         const Segment *TSeg = Img.getSegmentFor(S);
         if (PSeg && PSeg->isReadable() && !PSeg->isWritable() &&
-            !PSeg->isExecutable() && !PSeg->Data.empty() && TSeg &&
+            !Img.hasExecutableCodeOwnerAt(P) && !PSeg->Data.empty() && TSeg &&
             TSeg->isReadable() && !TSeg->isWritable() &&
-            !TSeg->isExecutable() && !TSeg->Data.empty())
+            !Img.hasExecutableCodeOwnerAt(S) && !TSeg->Data.empty())
           Img.RelDataPtrRelocSlots.insert(P);
       };
       if (Img.Arch == Arch::X64) {
@@ -95,11 +120,24 @@ void applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
         } else if (RType == X86_64_RELOC_UNSIGNED) {
           if (!rangeInBounds(SegOff, 8, ApplySeg->Data.size()))
             continue;
-          uint64_t Val = S;
+          uint64_t Addend = 0;
+          std::memcpy(&Addend, ApplySeg->Data.data() + SegOff, 8);
+          uint64_t Val = S + Addend;
           std::memcpy(ApplySeg->Data.data() + SegOff, &Val, 8);
+          if (SymOwnerVA != InvalidVA)
+            recordAbsolutePointerRelocation(Img, P, Val, SymOwnerVA);
         }
       } else if (Img.Arch == Arch::AArch64) {
-        if (RType == ARM64_RELOC_BRANCH26) {
+        if (RType == ARM64_RELOC_UNSIGNED) {
+          if (!rangeInBounds(SegOff, 8, ApplySeg->Data.size()))
+            continue;
+          uint64_t Addend = 0;
+          std::memcpy(&Addend, ApplySeg->Data.data() + SegOff, 8);
+          uint64_t Val = S + Addend;
+          std::memcpy(ApplySeg->Data.data() + SegOff, &Val, 8);
+          if (SymOwnerVA != InvalidVA)
+            recordAbsolutePointerRelocation(Img, P, Val, SymOwnerVA);
+        } else if (RType == ARM64_RELOC_BRANCH26) {
           if (!rangeInBounds(SegOff, 4, ApplySeg->Data.size()))
             continue;
           int64_t Disp = static_cast<int64_t>(S - P);
@@ -134,8 +172,12 @@ void applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
         if (RType == ARM_RELOC_VANILLA) {
           if (!rangeInBounds(SegOff, 4, ApplySeg->Data.size()))
             continue;
-          uint32_t Val = static_cast<uint32_t>(S);
+          uint32_t Addend = 0;
+          std::memcpy(&Addend, ApplySeg->Data.data() + SegOff, 4);
+          uint32_t Val = static_cast<uint32_t>(S + Addend);
           std::memcpy(ApplySeg->Data.data() + SegOff, &Val, 4);
+          if (SymOwnerVA != InvalidVA)
+            recordAbsolutePointerRelocation(Img, P, Val, SymOwnerVA);
         }
       }
     }

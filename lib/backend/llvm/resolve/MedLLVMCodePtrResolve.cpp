@@ -32,10 +32,34 @@
 
 namespace neverd {
 
-llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
-  if (auto NameIt = FuncNames.find(Address); NameIt != FuncNames.end())
+bool MedLLVMEmitter::hasAuthenticatedFunctionEntryVA(va_t Address) const {
+  return EmittedFuncNames.count(Address) != 0 ||
+         (Img && Img->isImportStubAt(Address));
+}
+
+llvm::Function *MedLLVMEmitter::resolveLiftedFunctionEntry(va_t Address) const {
+  if (!Mod)
+    return nullptr;
+
+  if (auto NameIt = EmittedFuncNames.find(Address);
+      NameIt != EmittedFuncNames.end())
     if (llvm::Function *Function = Mod->getFunction(NameIt->second))
       return Function;
+
+  // FuncNames intentionally mixes code entries with import bind/IAT slots.
+  // Only an executable veneer authenticated by the loader may use an import
+  // name as a function-entry identity; a data slot stays data even if a
+  // same-named declaration already exists in the module.
+  if (!hasAuthenticatedFunctionEntryVA(Address))
+    return nullptr;
+  if (auto NameIt = FuncNames.find(Address); NameIt != FuncNames.end())
+    return Mod->getFunction(NameIt->second);
+  return nullptr;
+}
+
+llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
+  if (llvm::Function *Function = resolveLiftedFunctionEntry(Address))
+    return Function;
   if (auto BlockIt = LiftedCodeBlocks.find(Address);
       BlockIt != LiftedCodeBlocks.end()) {
     llvm::BasicBlock *Block = BlockIt->second;
@@ -47,7 +71,7 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
 
 llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
                                                           uint64_t &OutSegVA) {
-  if (!Img || SlotVA == 0)
+  if (!Img)
     return nullptr;
   const unsigned PtrSz = Img->getPointerSize();
   if (PtrSz == 0)
@@ -86,6 +110,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     PtrSlotKind Kind;
     std::string ImportName;
     int64_t ImportAddend = 0;
+    uint64_t TargetOwnerVA = InvalidVA;
   };
   std::map<uint64_t, PtrSlot> SlotsByVA;
   auto slotInRun = [&](uint64_t S) {
@@ -95,8 +120,13 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     if (slotInRun(S))
       SlotsByVA.emplace(S, PtrSlot{S, PtrSlotKind::Code, {}});
   for (uint64_t S : Img->DataPtrRelocSlots)
-    if (slotInRun(S))
-      SlotsByVA.emplace(S, PtrSlot{S, PtrSlotKind::Data, {}});
+    if (slotInRun(S)) {
+      uint64_t OwnerVA = InvalidVA;
+      if (auto It = Img->DataPtrRelocTargetOwners.find(S);
+          It != Img->DataPtrRelocTargetOwners.end())
+        OwnerVA = It->second;
+      SlotsByVA.emplace(S, PtrSlot{S, PtrSlotKind::Data, {}, 0, OwnerVA});
+    }
   // The indirect-symbol view supplies slots on older images even when no bind
   // stream is present.  A decoded dyld binding is authoritative when both
   // views name the same address because it also carries the effective addend.
@@ -158,6 +188,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     PtrSlotKind Kind;
     std::string ImportName;
     int64_t ImportAddend;
+    uint64_t TargetOwnerVA;
   };
   std::vector<KeptSlot> Kept;
   size_t Cur = 0;
@@ -180,8 +211,8 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
         return nullptr;
       }
     }
-    Kept.push_back(
-        {Off, TargetVA, Slot.Kind, Slot.ImportName, Slot.ImportAddend});
+    Kept.push_back({Off, TargetVA, Slot.Kind, Slot.ImportName,
+                    Slot.ImportAddend, Slot.TargetOwnerVA});
     Cur = Off + PtrSz;
   }
 
@@ -238,9 +269,13 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
       }
       FieldVal = llvm::ConstantExpr::getPtrToInt(Target, PtrIntTy);
     } else if (K.Kind == PtrSlotKind::Data) {
-      if (K.TargetVA == 0)
+      if (K.TargetVA == 0 && K.TargetOwnerVA == InvalidVA &&
+          !Img->hasObjectDataProvenance(0))
         FieldVal = llvm::ConstantInt::get(PtrIntTy, 0);
-      else if (llvm::Constant *G = tryResolveGlobalData(K.TargetVA))
+      else if (llvm::Constant *G =
+                   K.TargetOwnerVA != InvalidVA
+                       ? tryResolveOwnedGlobalData(K.TargetVA, K.TargetOwnerVA)
+                       : tryResolveGlobalData(K.TargetVA))
         FieldVal = llvm::ConstantExpr::getPtrToInt(G, PtrIntTy);
       else {
         // This slot is loader-proven pointer state.  Keeping its original VA
@@ -283,13 +318,13 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   return GV;
 }
 
-uint64_t
+std::optional<uint64_t>
 MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
                                       bool IncludeSymbolizedEvidence) const {
   if (!CurMedFunc || !Img)
-    return 0;
+    return std::nullopt;
   if (V.isConst())
-    return 0;
+    return std::nullopt;
 
   // Memoize per non-constant address value: a pure function of the (immutable
   // during emit) function body, queried repeatedly for the same values.
@@ -374,7 +409,7 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
     return Pending.empty() ? ConstLeafModel::Raw : ConstLeafModel::Incomplete;
   };
 
-  auto compute = [&]() -> uint64_t {
+  auto compute = [&]() -> std::optional<uint64_t> {
     uint64_t SegVA = 0;
     bool Found = false;
     std::vector<std::pair<MedVar, bool>> Work{{V, false}};
@@ -412,11 +447,11 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
           if (LeafModel == ConstLeafModel::Incomplete ||
               (LeafModel == ConstLeafModel::Symbolized &&
                !IncludeSymbolizedEvidence && !ThroughFrameReload))
-            return 0;
+            return std::nullopt;
           uint64_t RunStart = 0, RunEnd = 0;
           readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
           if (Found && SegVA != RunStart)
-            return 0; // bases span distinct pointer-table mirror runs
+            return std::nullopt; // bases span distinct mirror runs
           SegVA = RunStart;
           Found = true;
         }
@@ -447,9 +482,16 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
         case NdOp::INT_SEXT:
         case NdOp::COPY:
         case NdOp::SUBBYTES:
-        case NdOp::SELECT:
           for (int I = 0; I < Def->NumInputs; ++I)
             Work.emplace_back(Def->Inputs[I], ThroughFrameReload);
+          break;
+        case NdOp::SELECT:
+          if (!selectPreservesPointerValues(*Def))
+            return std::nullopt;
+          // The condition chooses a pointer value; it is never part of that
+          // value's address provenance.
+          Work.emplace_back(Def->Inputs[1], ThroughFrameReload);
+          Work.emplace_back(Def->Inputs[2], ThroughFrameReload);
           break;
         case NdOp::LOAD:
           // Stack spill/reload: a register-constrained target (i386/ARM32)
@@ -470,21 +512,23 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
       }
       if (const PhiNode *Phi = findPhi(Cur))
         for (const auto &[PredId, Arg] : Phi->Args) {
-          (void)PredId;
+          if (!phiIncomingEdgeFeasible(*Phi, PredId))
+            continue;
           Work.emplace_back(Arg, ThroughFrameReload);
         }
     }
-    return Found ? SegVA : 0;
+    return Found ? std::optional<uint64_t>(SegVA) : std::nullopt;
   };
 
-  uint64_t Result = compute();
+  std::optional<uint64_t> Result = compute();
   PtrTableUniqueSegCache[CacheKey] = Result;
   return Result;
 }
 
 llvm::Value *
 MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
-                                          llvm::IRBuilder<> &Builder) {
+                                          llvm::IRBuilder<> &Builder,
+                                          bool AllowImplicitZeroBase) {
   if (!CurMedFunc || !Img || AddrVar.isConst())
     return nullptr;
 
@@ -497,13 +541,34 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
   std::vector<MedVar> IdxTerms;
   bool HaveConst =
       collectIndexedGlobalBase(AddrVar, Base, HaveBase, IdxTerms) && HaveBase &&
-      Base != 0 && !IdxTerms.empty();
+      !IdxTerms.empty();
   if (!HaveConst) {
     Base = 0;
     HaveBase = false;
     IdxTerms.clear();
     HaveConst = collectLiteralPoolBase(AddrVar, Base, HaveBase, IdxTerms) &&
-                HaveBase && Base != 0 && !IdxTerms.empty();
+                HaveBase && !IdxTerms.empty();
+  }
+
+  // In an ET_REL/MH_OBJECT image the first pointer table may start at VA 0.
+  // The linked expression `table + index*stride` then contains no observable
+  // base term at all: it is just `index*stride`.  Recover that algebraic zero
+  // only from a relocation-proven pointer slot at zero and a fully numeric,
+  // non-frame address expression.  This is occurrence proof, not a general
+  // invitation to reinterpret integer zero as an address.
+  if (!HaveConst && AllowImplicitZeroBase &&
+      Img->hasRelocationProvenanceAt(0) && !varIsFrameDerived(AddrVar) &&
+      valueIsStableAddressOffset(AddrVar)) {
+    const Segment *ZeroSeg = Img->getSegmentFor(0);
+    const bool PointerSlotAtZero =
+        Img->CodePtrRelocSlots.count(0) || Img->DataPtrRelocSlots.count(0) ||
+        Img->ImportPtrSlots.count(0) || Img->DyldBindSlots.count(0);
+    if (ZeroSeg && !ZeroSeg->isExecutable() && PointerSlotAtZero) {
+      Base = 0;
+      HaveBase = true;
+      IdxTerms = {AddrVar};
+      HaveConst = true;
+    }
   }
   // A single recognized pointer-table base does not make every remaining term
   // an index.  Prove each term stays scalar in rebuilt IR before Path 1 may
@@ -562,8 +627,9 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
   // a single constant base.  When every base-like constant in the address lands
   // in ONE pointer-table segment, the whole address provably indexes that
   // segment, so redirect by the address's own value: GEP(@seg, addr - segVA).
-  if (uint64_t SelSeg =
+  if (auto SelSegOpt =
           ptrTableUniqueSegment(AddrVar, /*IncludeSymbolizedEvidence=*/true)) {
+    const uint64_t SelSeg = *SelSegOpt;
     auto segmentHasPointerSlots = [&](const Segment *Seg) {
       if (!Seg)
         return false;
@@ -622,8 +688,13 @@ MedLLVMEmitter::tryResolveCodePtrTablePtr(const MedVar &AddrVar,
       if (Depth > 128)
         return invalidProof();
       if (Value.isConst()) {
+        // An exact relocation occurrence may name a real pointer-table slot at
+        // VA zero in ET_REL/MH_OBJECT.  Numeric/scalar zero remains the null
+        // value; only the occurrence tag grants zero an address owner.
         const Segment *Seg =
-            Value.ConstVal != 0 ? Img->getSegmentFor(Value.ConstVal) : nullptr;
+            (Value.ConstVal != 0 || isExactAddressProvenance(Value.Provenance))
+                ? Img->getSegmentFor(Value.ConstVal)
+                : nullptr;
         if (!Seg || Seg->isExecutable() || !segmentHasPointerSlots(Seg))
           return scalarProof();
         // A pointer-table constant is valid provenance in either address
@@ -847,6 +918,9 @@ MedLLVMEmitter::tryResolveCodeRefValue(const MedVar &V,
                                        llvm::IRBuilder<> &Builder) {
   if (!Img || !CurMedFunc || V.isConst())
     return nullptr;
+  std::set<DataAddressIdentity> DataIdentities;
+  if (recoverAbsoluteDataPointerLoadIdentities(V, DataIdentities))
+    return nullptr;
   bool SawLoad = false;
   auto VA = traceTableBaseConst(V, 0, &SawLoad);
   // Only a literal-pool-derived value (a genuine PC-relative address-of) is a
@@ -905,7 +979,17 @@ bool MedLLVMEmitter::operationUsesRelocatableCodeIdentity(NdOp Opcode) const {
   }
 }
 
-bool MedLLVMEmitter::codeIdentityOccurrenceMayRelocate(const MedVar &V) const {
+bool MedLLVMEmitter::currentJumpTableOwnsStorageAddress(va_t Addr) const {
+  if (!CurMedFunc)
+    return false;
+  for (const JumpTable &JT : CurMedFunc->JumpTables)
+    if (JT.ownsStorageAddress(Addr))
+      return true;
+  return false;
+}
+
+bool MedLLVMEmitter::codeIdentityOccurrenceMayRelocate(
+    const MedVar &V, bool IncludeLayoutCodeOwners) const {
   if (!Img || !CurMedFunc || !Mod)
     return false;
 
@@ -914,94 +998,132 @@ bool MedLLVMEmitter::codeIdentityOccurrenceMayRelocate(const MedVar &V) const {
     CodeIdentityOccurrenceCache.clear();
   }
 
-  struct ContainsResult {
-    bool Contains = false;
-    bool Complete = true;
+  const AddressProvenanceVarKey RootKey = addressProvenanceVarKey(V);
+  const auto RootCacheKey = std::make_pair(RootKey, IncludeLayoutCodeOwners);
+  if (auto It = CodeIdentityOccurrenceCache.find(RootCacheKey);
+      It != CodeIdentityOccurrenceCache.end())
+    return It->second;
+
+  // Build the uncached dependency subgraph iteratively, then solve the
+  // reachability property from genuine identity leaves back to their users.
+  // Publishing only after the whole graph is known makes false results safe
+  // for SCCs: a recurrent edge is neither negative evidence nor a reason to
+  // revisit the same exponentially branching graph.
+  std::set<AddressProvenanceVarKey> Discovered{RootKey};
+  std::map<AddressProvenanceVarKey, std::vector<AddressProvenanceVarKey>>
+      ReverseEdges;
+  std::set<AddressProvenanceVarKey> ContainsIdentity;
+  std::vector<AddressProvenanceVarKey> IdentityWorklist;
+  std::vector<MedVar> Worklist{V};
+
+  auto MarkIdentity = [&](const AddressProvenanceVarKey &Key) {
+    if (ContainsIdentity.insert(Key).second)
+      IdentityWorklist.push_back(Key);
   };
-  std::set<AddressProvenanceVarKey> Active;
-  std::function<ContainsResult(const MedVar &)> ContainsFunctionIdentity =
-      [&](const MedVar &Current) -> ContainsResult {
+  auto AddDependency = [&](const AddressProvenanceVarKey &UserKey,
+                           const MedVar &Dependency) {
+    const AddressProvenanceVarKey DependencyKey =
+        addressProvenanceVarKey(Dependency);
+    ReverseEdges[DependencyKey].push_back(UserKey);
+    if (auto It = CodeIdentityOccurrenceCache.find(
+            std::make_pair(DependencyKey, IncludeLayoutCodeOwners));
+        It != CodeIdentityOccurrenceCache.end()) {
+      if (It->second)
+        MarkIdentity(DependencyKey);
+      return;
+    }
+    if (Discovered.insert(DependencyKey).second)
+      Worklist.push_back(Dependency);
+  };
+
+  while (!Worklist.empty()) {
+    MedVar Current = Worklist.back();
+    Worklist.pop_back();
     const AddressProvenanceVarKey Key = addressProvenanceVarKey(Current);
-    if (auto It = CodeIdentityOccurrenceCache.find(Key);
-        It != CodeIdentityOccurrenceCache.end())
-      return {It->second, true};
-    if (!Active.insert(Key).second)
-      // A backedge is not negative evidence. Propagate incompleteness so an
-      // SCC member is never memoized false before a sibling initializer has
-      // exposed its function identity.
-      return {false, false};
-    auto Finish = [&](ContainsResult Result) {
-      Active.erase(Key);
-      if (Result.Contains || Result.Complete)
-        CodeIdentityOccurrenceCache.insert_or_assign(Key, Result.Contains);
-      return Result;
-    };
 
     if (Current.isConst()) {
       const va_t Normalized =
           normalizeCodeAddress(Current.ConstVal, Img->Arch, Img->Mode);
+      if (Current.Provenance == ConstantAddressProvenance::Address &&
+          currentJumpTableOwnsStorageAddress(Normalized))
+        continue;
+      // Match the precise proof's null boundary.  In low-VA relocatable
+      // objects, address-level CodeRefTargets may legitimately contain zero,
+      // but an untagged zero occurrence is still a scalar/null value.  Using
+      // the address map alone here would seed every arithmetic zero in the
+      // function and send otherwise scalar SCCs into the rich code proof.
+      if (Current.ConstVal == 0 &&
+          !isExactAddressProvenance(Current.Provenance))
+        continue;
       const bool HasStrongCodeProvenance =
           isCodeAddressProvenance(Current.Provenance) ||
           (Current.Provenance == ConstantAddressProvenance::Unknown &&
            Img->CodeRefTargets.count(Normalized) != 0);
-      bool HasLiftedIdentity = false;
-      if (auto It = FuncNames.find(Normalized); It != FuncNames.end())
-        HasLiftedIdentity = Mod->getFunction(It->second) != nullptr;
-      if (auto It = LiftedCodeBlocks.find(Normalized);
-          !HasLiftedIdentity && It != LiftedCodeBlocks.end())
-        HasLiftedIdentity = It->second && It->second->getParent();
-      if (!HasLiftedIdentity && !HasStrongCodeProvenance)
-        return Finish({false, true});
+      const bool HasAuthenticatedFunctionEntry =
+          hasAuthenticatedFunctionEntryVA(Normalized);
+      const bool HasLiftedFunctionIdentity =
+          resolveLiftedFunctionEntry(Normalized) != nullptr;
+      const bool HasLayoutCodeOwner =
+          IncludeLayoutCodeOwners &&
+          Current.Provenance == ConstantAddressProvenance::Address &&
+          Img->hasExecutableCodeOwnerAt(Normalized);
+      bool HasLiftedBlockIdentity = false;
+      // A generic Address occurrence can name an exact emitted block on
+      // targets without an architecturally readable PC GPR. AArch32 PC seeds
+      // remain numeric in the narrow arithmetic role. X86 base-less indexed
+      // displacements are tagged Scalar by the lifter, so numeric equality
+      // with a lifted block cannot authorize them here.
+      const bool AllowExactLiftedBlock =
+          IncludeLayoutCodeOwners || TargetArch == Arch::X86 ||
+          TargetArch == Arch::X64 || TargetArch == Arch::AArch64;
+      if (AllowExactLiftedBlock)
+        if (auto It = LiftedCodeBlocks.find(Normalized);
+            It != LiftedCodeBlocks.end())
+          HasLiftedBlockIdentity = It->second && It->second->getParent();
+      if (!HasLiftedFunctionIdentity && !HasLiftedBlockIdentity &&
+          !HasLayoutCodeOwner && !HasStrongCodeProvenance &&
+          !HasAuthenticatedFunctionEntry)
+        continue;
       const unsigned PointerSize = Img->getPointerSize();
       if (Current.Size != 0 && PointerSize != 0 && Current.Size < PointerSize)
-        return Finish({false, true});
-      if (HasStrongCodeProvenance)
-        return Finish({true, true});
-      if (Current.Provenance == ConstantAddressProvenance::Address)
-        return Finish({Img->isCodeAddress(Normalized), true});
-      return Finish({Current.Provenance == ConstantAddressProvenance::Unknown &&
-                         constantOccurrenceMayRelocate(Current),
-                     true});
+        continue;
+      if (HasStrongCodeProvenance ||
+          (Current.Provenance == ConstantAddressProvenance::Address &&
+           (HasAuthenticatedFunctionEntry || HasLiftedFunctionIdentity ||
+            HasLiftedBlockIdentity || HasLayoutCodeOwner)) ||
+          (Current.Provenance == ConstantAddressProvenance::Unknown &&
+           constantOccurrenceMayRelocate(Current))) {
+        MarkIdentity(Key);
+      }
+      continue;
     }
 
     if (const PhiNode *Phi = lookupPhi(Current)) {
-      bool Complete = true;
       for (const auto &[Pred, Arg] : Phi->Args) {
         (void)Pred;
-        ContainsResult Arm = ContainsFunctionIdentity(Arg);
-        if (Arm.Contains)
-          return Finish({true, true});
-        Complete &= Arm.Complete;
+        AddDependency(Key, Arg);
       }
-      return Finish({false, Complete});
+      continue;
     }
 
     const MedOp *Def = lookupDef(Current);
     if (!Def)
-      return Finish({false, true});
-    if (std::optional<MedVar> Forwarded = pointerPreservingInput(*Def))
-      return Finish(ContainsFunctionIdentity(*Forwarded));
+      continue;
+    if (std::optional<MedVar> Forwarded = pointerPreservingInput(*Def)) {
+      AddDependency(Key, *Forwarded);
+      continue;
+    }
     if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
-      ContainsResult TrueArm = ContainsFunctionIdentity(Def->Inputs[1]);
-      if (TrueArm.Contains)
-        return Finish({true, true});
-      ContainsResult FalseArm = ContainsFunctionIdentity(Def->Inputs[2]);
-      return Finish(
-          {FalseArm.Contains,
-           FalseArm.Contains || (TrueArm.Complete && FalseArm.Complete)});
+      AddDependency(Key, Def->Inputs[1]);
+      AddDependency(Key, Def->Inputs[2]);
+      continue;
     }
     if (Def->Opcode == NdOp::LOAD) {
       std::vector<MedVar> Sources;
-      if (!collectFrameReloadSources(*Def, Sources))
-        return Finish({false, true});
-      bool Complete = true;
-      for (const MedVar &Source : Sources) {
-        ContainsResult SourceResult = ContainsFunctionIdentity(Source);
-        if (SourceResult.Contains)
-          return Finish({true, true});
-        Complete &= SourceResult.Complete;
-      }
-      return Finish({false, Complete});
+      if (collectFrameReloadSources(*Def, Sources))
+        for (const MedVar &Source : Sources)
+          AddDependency(Key, Source);
+      continue;
     }
 
     switch (Def->Opcode) {
@@ -1010,25 +1132,46 @@ bool MedLLVMEmitter::codeIdentityOccurrenceMayRelocate(const MedVar &V) const {
     case NdOp::ATOMIC_XCHG:
     case NdOp::ATOMIC_ADD:
     case NdOp::ATOMIC_CMPXCHG:
-      return Finish({false, true});
+      continue;
     case NdOp::INTRINSIC:
       if (atomicIntrinsicAddressInput(*Def))
-        return Finish({false, true});
+        continue;
       break;
     default:
       break;
     }
-    bool Complete = true;
     for (uint8_t I = 0; I < Def->NumInputs; ++I) {
-      ContainsResult Input = ContainsFunctionIdentity(Def->Inputs[I]);
-      if (Input.Contains)
-        return Finish({true, true});
-      Complete &= Input.Complete;
+      // Layout membership is final-sink evidence for an identity-preserving
+      // value, not proof that every numeric operand of an arithmetic result
+      // is a code address.  This distinction matters for low-VA ET_REL: an
+      // index-only x86 LEA may contain a scalar displacement whose number also
+      // lands inside .text.  Arithmetic emitters audit their operands through
+      // the narrow role, so descend to that role at the operation boundary.
+      if (IncludeLayoutCodeOwners) {
+        if (codeIdentityOccurrenceMayRelocate(
+                Def->Inputs[I], /*IncludeLayoutCodeOwners=*/false))
+          MarkIdentity(Key);
+      } else {
+        AddDependency(Key, Def->Inputs[I]);
+      }
     }
-    return Finish({false, Complete});
-  };
+  }
 
-  return ContainsFunctionIdentity(V).Contains;
+  while (!IdentityWorklist.empty()) {
+    AddressProvenanceVarKey Key = IdentityWorklist.back();
+    IdentityWorklist.pop_back();
+    auto It = ReverseEdges.find(Key);
+    if (It == ReverseEdges.end())
+      continue;
+    for (const AddressProvenanceVarKey &UserKey : It->second)
+      MarkIdentity(UserKey);
+  }
+
+  for (const AddressProvenanceVarKey &Key : Discovered)
+    CodeIdentityOccurrenceCache.insert_or_assign(
+        std::make_pair(Key, IncludeLayoutCodeOwners),
+        ContainsIdentity.count(Key) != 0);
+  return ContainsIdentity.count(RootKey) != 0;
 }
 
 llvm::Value *
@@ -1049,6 +1192,17 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     rejectEscapingAddressFragment(V, "an observable code-address value");
     return nullptr;
   }
+  // Most observable integer values are pure runtime scalars. Avoid running the
+  // richer identity/convergence proof unless the complete structural graph
+  // contains either an explicit code occurrence or, at a final sink, an exact
+  // generic Address owned by executable layout. Arithmetic operands use the
+  // narrower default role so an architectural ARM PC seed remains numeric.
+  // A forced callable target always runs the precise proof: explicit scalar,
+  // data, or null targets must fail closed rather than take the raw fallback.
+  if (!RequireCodeRole &&
+      !codeIdentityOccurrenceMayRelocate(V,
+                                         /*IncludeLayoutCodeOwners=*/true))
+    return nullptr;
 
   struct CodeProof {
     std::optional<va_t> CommonTarget;
@@ -1090,14 +1244,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
   auto isPureIdentityRecurrence = [&](const PhiNode &Root,
                                       const MedVar &Start) {
     std::set<AddressProvenanceVarKey> Seen;
-    std::function<bool(const MedVar &)> ReachesRoot =
-        [&](const MedVar &Current) -> bool {
-      if (!Current.isConst() && Current.Kind == Root.Output.Kind &&
-          Current.Id == Root.Output.Id &&
-          Current.SSAVer == Root.Output.SSAVer)
+    MedVar Current = Start;
+    while (!Current.isConst()) {
+      if (addressProvenanceVarKey(Current) ==
+          addressProvenanceVarKey(Root.Output))
         return true;
-      if (Current.isConst())
-        return false;
       const AddressProvenanceVarKey Key = addressProvenanceVarKey(Current);
       if (!Seen.insert(Key).second)
         return false;
@@ -1107,9 +1258,9 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       std::optional<MedVar> Forwarded = pointerPreservingInput(*Def);
       if (!Forwarded || Forwarded->Size != Current.Size)
         return false;
-      return ReachesRoot(*Forwarded);
-    };
-    return ReachesRoot(Start);
+      Current = *Forwarded;
+    }
+    return false;
   };
 
   auto finishValueMerge = [](CodeProof Result) {
@@ -1117,8 +1268,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     // dependency arm was produced by an operation that materializes its code
     // leaves.  The merged value is therefore relocation-aware but no longer a
     // single identity that may be replaced with its initializer.
-    if (Result.SawCode &&
-        (Result.SawCodeDependency || Result.SawNull) &&
+    if (Result.SawCode && (Result.SawCodeDependency || Result.SawNull) &&
         !Result.SawNonCode && !Result.SawConflict &&
         !Result.SawUnsafeCodeDependency) {
       Result.SawCodeDependency = true;
@@ -1129,69 +1279,120 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     return Result;
   };
 
+  using CodeProofKey = std::pair<AddressProvenanceVarKey, bool>;
+
+  auto classifyCodeConstant = [&](const MedVar &Current,
+                                  bool IncludeLayoutCodeOwners) -> CodeProof {
+    if (Current.Provenance == ConstantAddressProvenance::AddressFragment)
+      return {.SawUnresolved = true, .SawExplicit = true};
+    if (Current.ConstVal == 0 && !isExactAddressProvenance(Current.Provenance))
+      return {.SawNull = true, .SawExplicit = true};
+    if (Current.Provenance == ConstantAddressProvenance::Scalar ||
+        Current.Provenance == ConstantAddressProvenance::DataAddress)
+      return {.SawNonCode = true, .SawExplicit = true};
+    const va_t Normalized =
+        normalizeCodeAddress(Current.ConstVal, Img->Arch, Img->Mode);
+    if (Current.Provenance == ConstantAddressProvenance::Address &&
+        currentJumpTableOwnsStorageAddress(Normalized))
+      return {.SawNonCode = true, .SawExplicit = true};
+    const bool HasLoaderCodeProvenance =
+        Current.Provenance == ConstantAddressProvenance::Unknown &&
+        Img->CodeRefTargets.count(Normalized) != 0;
+    if (Current.Provenance == ConstantAddressProvenance::Unknown &&
+        !HasLoaderCodeProvenance)
+      return {.SawUnresolved = true};
+    const bool HasFunctionIdentity =
+        resolveLiftedFunctionEntry(Normalized) != nullptr;
+    const bool HasAuthenticatedFunctionEntry =
+        hasAuthenticatedFunctionEntryVA(Normalized);
+    bool HasLiftedCodeIdentity = HasFunctionIdentity;
+    const bool AllowExactLiftedBlock =
+        IncludeLayoutCodeOwners || TargetArch == Arch::X86 ||
+        TargetArch == Arch::X64 || TargetArch == Arch::AArch64;
+    if (AllowExactLiftedBlock)
+      if (auto It = LiftedCodeBlocks.find(Normalized);
+          !HasLiftedCodeIdentity && It != LiftedCodeBlocks.end())
+        HasLiftedCodeIdentity = It->second && It->second->getParent();
+    const bool HasLayoutCodeOwner =
+        IncludeLayoutCodeOwners &&
+        Current.Provenance == ConstantAddressProvenance::Address &&
+        Img->hasExecutableCodeOwnerAt(Normalized);
+    const bool IsCode =
+        Current.Provenance == ConstantAddressProvenance::CodeAddress ||
+        HasLoaderCodeProvenance ||
+        (Current.Provenance == ConstantAddressProvenance::Address &&
+         (HasLayoutCodeOwner || HasAuthenticatedFunctionEntry ||
+          HasLiftedCodeIdentity));
+    if (!IsCode)
+      return {.SawNonCode = true, .SawExplicit = true};
+    if (Current.Size != 0 && PointerSize != 0 && Current.Size < PointerSize)
+      return {.SawCode = true, .SawUnresolved = true, .SawExplicit = true};
+    return {.CommonTarget = Normalized,
+            .SawCode = true,
+            .SawExplicit = true,
+            .SawFunctionIdentity = HasFunctionIdentity,
+            .SawLiftedCodeIdentity = HasLiftedCodeIdentity,
+            .SawStrongCodeProvenance =
+                isCodeAddressProvenance(Current.Provenance) ||
+                HasLoaderCodeProvenance || HasAuthenticatedFunctionEntry};
+  };
+
+  struct CodeProofResult {
+    CodeProof Proof;
+    bool Complete = true;
+  };
+  auto completeProof = [](CodeProof Proof) {
+    return CodeProofResult{std::move(Proof), true};
+  };
+
   // Classify code identity through the SSA value graph without changing the
   // generic getVar policy.  Only pointer-preserving forwarders and value
   // merges can publish a unique identity.  Other operations are scanned for a
   // code-bearing leaf so relocation-dependent arithmetic cannot silently fall
   // back to its old numeric result.
-  std::set<AddressProvenanceVarKey> Active;
-  std::function<CodeProof(const MedVar &)> proveCodeValue =
-      [&](const MedVar &Current) -> CodeProof {
-    if (Current.isConst()) {
-      if (Current.Provenance == ConstantAddressProvenance::AddressFragment)
-        return {.SawUnresolved = true, .SawExplicit = true};
-      if (Current.ConstVal == 0 &&
-          !isExactAddressProvenance(Current.Provenance))
-        return {.SawNull = true, .SawExplicit = true};
-      if (Current.Provenance == ConstantAddressProvenance::Scalar ||
-          Current.Provenance == ConstantAddressProvenance::DataAddress)
-        return {.SawNonCode = true, .SawExplicit = true};
-      const va_t Normalized =
-          normalizeCodeAddress(Current.ConstVal, Img->Arch, Img->Mode);
-      const bool HasLoaderCodeProvenance =
-          Current.Provenance == ConstantAddressProvenance::Unknown &&
-          Img->CodeRefTargets.count(Normalized) != 0;
-      if (Current.Provenance == ConstantAddressProvenance::Unknown &&
-          !HasLoaderCodeProvenance)
-        return {.SawUnresolved = true};
-      const bool IsCode =
-          Current.Provenance == ConstantAddressProvenance::CodeAddress ||
-          HasLoaderCodeProvenance ||
-          (Current.Provenance == ConstantAddressProvenance::Address &&
-           (Img->isCodeAddress(Normalized) || FuncNames.count(Normalized)));
-      if (!IsCode)
-        return {.SawNonCode = true, .SawExplicit = true};
-      if (Current.Size != 0 && PointerSize != 0 && Current.Size < PointerSize)
-        return {.SawCode = true, .SawUnresolved = true, .SawExplicit = true};
-      const auto FunctionIt = FuncNames.find(Normalized);
-      const bool HasFunctionIdentity =
-          FunctionIt != FuncNames.end() &&
-          Mod->getFunction(FunctionIt->second) != nullptr;
-      bool HasLiftedCodeIdentity = HasFunctionIdentity;
-      if (auto It = LiftedCodeBlocks.find(Normalized);
-          !HasLiftedCodeIdentity && It != LiftedCodeBlocks.end())
-        HasLiftedCodeIdentity = It->second && It->second->getParent();
-      return {.CommonTarget = Normalized,
-              .SawCode = true,
-              .SawExplicit = true,
-              .SawFunctionIdentity = HasFunctionIdentity,
-              .SawLiftedCodeIdentity = HasLiftedCodeIdentity,
-              .SawStrongCodeProvenance =
-                  isCodeAddressProvenance(Current.Provenance) ||
-                  HasLoaderCodeProvenance};
-    }
+  // The proof role is part of node identity. Layout ownership is valid at an
+  // observable value/target and through identity-preserving transports, but a
+  // generic arithmetic operand needs occurrence-level code evidence. Keeping
+  // the roles separate prevents a low-VA scalar displacement that merely
+  // lands in .text from poisoning the code-identity proof.
+  std::set<CodeProofKey> Active;
+  std::map<CodeProofKey, CodeProof> ProofCache;
+  std::function<CodeProofResult(const MedVar &, bool)> proveCodeValue =
+      [&](const MedVar &Current,
+          bool IncludeLayoutCodeOwners) -> CodeProofResult {
+    if (Current.isConst())
+      return completeProof(
+          classifyCodeConstant(Current, IncludeLayoutCodeOwners));
 
     const AddressProvenanceVarKey Key = addressProvenanceVarKey(Current);
-    if (!Active.insert(Key).second)
-      return {.SawUnresolved = true};
-    auto Finish = [&](CodeProof Result) {
-      Active.erase(Key);
+    const CodeProofKey ProofKey{Key, IncludeLayoutCodeOwners};
+    if (auto It = ProofCache.find(ProofKey); It != ProofCache.end())
+      return completeProof(It->second);
+    if (!Active.insert(ProofKey).second) {
+      // Residual cycles are those not already discharged by the PHI
+      // recurrence proof below. Cut them with a conservative, cacheable
+      // summary so a shared recurrent DAG is linear rather than exponential.
+      // The backedge itself contributes only a runtime, non-code value. Any
+      // actual code initializer or other exit from the SCC is still visited on
+      // the active DFS stack and merged by its owning transfer. Keeping this
+      // cut neutral is essential: a graph-reachability upper bound cannot tell
+      // code inside the residual cycle from a legitimate initializer entering
+      // `PHI(&f, COPY^N(phi))`. NonCode keeps PHI/SELECT merges conservative;
+      // a supported arithmetic user may clear it only while rebuilding every
+      // code-bearing operand through the same relocation-aware emitter path.
+      return completeProof({.SawNonCode = true, .SawUnresolved = true});
+    }
+    auto Finish = [&](CodeProofResult Result) {
+      Active.erase(ProofKey);
+      if (Result.Complete)
+        ProofCache.insert_or_assign(ProofKey, Result.Proof);
       return Result;
     };
 
     if (const PhiNode *Phi = lookupPhi(Current)) {
       CodeProof Combined;
       bool SawArm = false;
+      bool Complete = true;
       for (const auto &[Pred, Arg] : Phi->Args) {
         if (classifyPhiIncomingEdge(*Phi, Pred) ==
             PhiEdgeFeasibility::Infeasible)
@@ -1203,23 +1404,37 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
           }
           continue;
         }
-        Combined = mergeProof(std::move(Combined), proveCodeValue(Arg));
+        CodeProofResult Arm = proveCodeValue(Arg, IncludeLayoutCodeOwners);
+        Combined = mergeProof(std::move(Combined), Arm.Proof);
+        Complete &= Arm.Complete;
         SawArm = true;
       }
       if (!SawArm)
         Combined.SawUnresolved = true;
-      return Finish(finishValueMerge(std::move(Combined)));
+      return Finish({finishValueMerge(std::move(Combined)), Complete});
     }
 
     const MedOp *Def = lookupDef(Current);
     if (!Def)
-      return Finish({.SawUnresolved = true});
-    if (std::optional<MedVar> Forwarded = pointerPreservingInput(*Def))
-      return Finish(proveCodeValue(*Forwarded));
+      return Finish(completeProof({.SawUnresolved = true}));
+    if (std::optional<MedVar> Forwarded = pointerPreservingInput(*Def)) {
+      // Low-to-Med publishes entry-state registers as COPY R,R. This is a
+      // runtime input boundary, not an incomplete SSA recurrence. Treat the
+      // exact self-forwarder as one stable unknown leaf so every dependent
+      // arithmetic node can be memoized; following it through Active would
+      // otherwise make a large acyclic consumer DAG exponentially expensive.
+      if (addressProvenanceVarKey(*Forwarded) == Key)
+        return Finish(completeProof({.SawUnresolved = true}));
+      return Finish(proveCodeValue(*Forwarded, IncludeLayoutCodeOwners));
+    }
     if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
-      CodeProof Combined = mergeProof(proveCodeValue(Def->Inputs[1]),
-                                      proveCodeValue(Def->Inputs[2]));
-      return Finish(finishValueMerge(std::move(Combined)));
+      CodeProofResult TrueArm =
+          proveCodeValue(Def->Inputs[1], IncludeLayoutCodeOwners);
+      CodeProofResult FalseArm =
+          proveCodeValue(Def->Inputs[2], IncludeLayoutCodeOwners);
+      CodeProof Combined = mergeProof(std::move(TrueArm.Proof), FalseArm.Proof);
+      return Finish({finishValueMerge(std::move(Combined)),
+                     TrueArm.Complete && FalseArm.Complete});
     }
 
     // A proven local-frame reload inherits the occurrences stored into that
@@ -1229,11 +1444,16 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     if (Def->Opcode == NdOp::LOAD) {
       std::vector<MedVar> Sources;
       if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
-        return Finish({.SawUnresolved = true});
+        return Finish(completeProof({.SawUnresolved = true}));
       CodeProof Combined;
-      for (const MedVar &Source : Sources)
-        Combined = mergeProof(std::move(Combined), proveCodeValue(Source));
-      return Finish(std::move(Combined));
+      bool Complete = true;
+      for (const MedVar &Source : Sources) {
+        CodeProofResult SourceResult =
+            proveCodeValue(Source, IncludeLayoutCodeOwners);
+        Combined = mergeProof(std::move(Combined), SourceResult.Proof);
+        Complete &= SourceResult.Complete;
+      }
+      return Finish({std::move(Combined), Complete});
     }
 
     // Calls and atomic old-value results do not inherit provenance from their
@@ -1245,19 +1465,26 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     case NdOp::ATOMIC_XCHG:
     case NdOp::ATOMIC_ADD:
     case NdOp::ATOMIC_CMPXCHG:
-      return Finish({.SawUnresolved = true});
+      return Finish(completeProof({.SawUnresolved = true}));
     case NdOp::INTRINSIC:
       if (atomicIntrinsicAddressInput(*Def))
-        return Finish({.SawUnresolved = true});
+        return Finish(completeProof({.SawUnresolved = true}));
       break;
     default:
       break;
     }
 
     CodeProof Combined;
-    for (uint8_t I = 0; I < Def->NumInputs; ++I)
-      Combined =
-          mergeProof(std::move(Combined), proveCodeValue(Def->Inputs[I]));
+    bool Complete = true;
+    for (uint8_t I = 0; I < Def->NumInputs; ++I) {
+      // Operation results may carry a relocated relation, but mere executable
+      // layout membership of one numeric operand is not code identity. The
+      // operation emitter applies the same narrow role to each operand.
+      CodeProofResult Input = proveCodeValue(Def->Inputs[I],
+                                             /*IncludeLayoutCodeOwners=*/false);
+      Combined = mergeProof(std::move(Combined), Input.Proof);
+      Complete &= Input.Complete;
+    }
     if (Combined.SawCode || Combined.SawCodeDependency) {
       // Arithmetic/bit operations may use a numeric architectural PC as an
       // offset base (ARM switch lowering). They depend on code layout but no
@@ -1266,10 +1493,9 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       // reintroducing eager BlockAddress materialization.
       const bool RelocationAware =
           operationUsesRelocatableCodeIdentity(Def->Opcode);
-      Combined.SawUnsafeCodeDependency |=
-          (Combined.SawLiftedCodeIdentity ||
-           Combined.SawStrongCodeProvenance) &&
-          !RelocationAware;
+      Combined.SawUnsafeCodeDependency |= (Combined.SawLiftedCodeIdentity ||
+                                           Combined.SawStrongCodeProvenance) &&
+                                          !RelocationAware;
       Combined.SawCodeDependency = true;
       Combined.SawCode = false;
       Combined.CommonTarget.reset();
@@ -1284,10 +1510,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
         Combined.SawUnresolved = true;
       }
     }
-    return Finish(std::move(Combined));
+    return Finish({std::move(Combined), Complete});
   };
 
-  const CodeProof Proof = proveCodeValue(V);
+  const CodeProof Proof =
+      proveCodeValue(V, /*IncludeLayoutCodeOwners=*/true).Proof;
   const bool UniqueCode = Proof.SawCode && Proof.CommonTarget &&
                           !Proof.SawNonCode && !Proof.SawUnresolved &&
                           !Proof.SawConflict;
@@ -1297,8 +1524,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       // A CALL target must name a function entry.  An interior BlockAddress is
       // a relocatable code value, but calling it would bypass the lifted
       // function's ABI/prologue and is never a valid fallback.
-      if (auto It = FuncNames.find(*Proof.CommonTarget); It != FuncNames.end())
-        Identity = Mod->getFunction(It->second);
+      Identity = resolveLiftedFunctionEntry(*Proof.CommonTarget);
     } else {
       // Ordinary observable values (return/store/argument/identity relation)
       // may legitimately carry an interior label, for example x86
@@ -1341,23 +1567,33 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
   // computed-goto/jump-table ownership; using that broader result here would
   // emit an invalid call to an interior basic-block label.
   if (!V.isConst()) {
+    std::set<DataAddressIdentity> DataIdentities;
+    if (recoverAbsoluteDataPointerLoadIdentities(V, DataIdentities)) {
+      if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+        syncError() << "med_llvm_emitter: data-pointer relocation used as an "
+                       "indirect-call target in "
+                    << CurMedFunc->Name
+                    << "; refusing code-identity fallback\n";
+      FatalCodePointerResolution = true;
+      return nullptr;
+    }
     bool SawLoad = false;
     if (auto VA = traceTableBaseConst(V, 0, &SawLoad); VA && SawLoad) {
       const va_t Normalized = normalizeCodeAddress(*VA, Img->Arch, Img->Mode);
-      if (auto It = FuncNames.find(Normalized); It != FuncNames.end())
-        if (llvm::Function *Function = Mod->getFunction(It->second)) {
-          const unsigned PtrSize =
-              Img->getPointerSize()
-                  ? Img->getPointerSize()
-                  : static_cast<unsigned>(V.Size > 0 ? V.Size : 8);
-          return Builder.CreatePtrToInt(
-              Function,
-              sizeToType(V.Size > 0 ? V.Size : static_cast<uint16_t>(PtrSize)),
-              "icall.literal.target");
-        }
+      if (llvm::Function *Function = resolveLiftedFunctionEntry(Normalized)) {
+        const unsigned PtrSize =
+            Img->getPointerSize()
+                ? Img->getPointerSize()
+                : static_cast<unsigned>(V.Size > 0 ? V.Size : 8);
+        return Builder.CreatePtrToInt(
+            Function,
+            sizeToType(V.Size > 0 ? V.Size : static_cast<uint16_t>(PtrSize)),
+            "icall.literal.target");
+      }
 
-      if (Img->isCodeAddress(Normalized) ||
-          LiftedCodeBlocks.count(Normalized) || FuncNames.count(Normalized)) {
+      if (Img->hasExecutableCodeOwnerAt(Normalized) ||
+          LiftedCodeBlocks.count(Normalized) ||
+          Img->isImportStubAt(Normalized)) {
         if (!FatalCodePointerResolution && !FatalDataPointerResolution)
           syncError() << "med_llvm_emitter: literal indirect-call target 0x"
                       << llvm::utohexstr(Normalized) << " in "

@@ -81,10 +81,11 @@ bool hasRepOrRepnePrefix(const cs_x86 &X86) {
 // forward case keeps its original zero-cost lowering.
 NdVar X86Lifter::dirStep(LiftState &S, unsigned ElemSz) {
   NdVar Step = S.makeTemp(8);
-  S.emit(NdOp::SELECT, Step,
-         {NdVar::reg(x86reg::DF, 1),
-          NdVar::cst(static_cast<uint64_t>(-static_cast<int64_t>(ElemSz)), 8),
-          NdVar::cst(ElemSz, 8)});
+  S.emit(
+      NdOp::SELECT, Step,
+      {NdVar::reg(x86reg::DF, 1),
+       NdVar::scalar(static_cast<uint64_t>(-static_cast<int64_t>(ElemSz)), 8),
+       NdVar::scalar(ElemSz, 8)});
   return Step;
 }
 
@@ -112,14 +113,14 @@ void X86Lifter::liftRepCmpScas(LiftState &S, Intrinsic Id, unsigned ElemSz,
   NdVar Rdi = NdVar::reg(x86reg::RDI, 8);
   NdVar Rcx = NdVar::reg(x86reg::RCX, 8);
   NdVar Df = NdVar::reg(x86reg::DF, 1);
-  NdVar RepKind = NdVar::cst(IsRepne ? 1 : 0, 1);
+  NdVar RepKind = NdVar::scalar(IsRepne ? 1 : 0, 1);
 
   // Snapshot the entry count and "the loop body ran at least once" before the
   // count is overwritten.
   NdVar RcxIn = S.makeTemp(8);
   S.emit(NdOp::COPY, RcxIn, {Rcx});
   NdVar RcxNZ = S.makeTemp(1);
-  S.emit(NdOp::INT_NOTEQUAL, RcxNZ, {RcxIn, NdVar::cst(0, 8)});
+  S.emit(NdOp::INT_NOTEQUAL, RcxNZ, {RcxIn, NdVar::scalar(0, 8)});
   NdVar Step = dirStep(S, ElemSz);
 
   // The intrinsic yields the leftover count.  Note the destination is NOT the
@@ -151,7 +152,7 @@ void X86Lifter::liftRepCmpScas(LiftState &S, Intrinsic Id, unsigned ElemSz,
 
   // Re-read the last compared pair through the final pointers.
   NdVar Back = S.makeTemp(8);
-  S.emit(NdOp::SELECT, Back, {RcxNZ, Step, NdVar::cst(0, 8)});
+  S.emit(NdOp::SELECT, Back, {RcxNZ, Step, NdVar::scalar(0, 8)});
   NdVar DiLast = S.makeTemp(8);
   S.emit(NdOp::INT_SUB, DiLast, {NewDi, Back});
   // A MedIR LOAD is unconditional even when its value later feeds the false
@@ -238,8 +239,8 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
         // the low LaneSz bytes, not the full XMM register.
         NdVar La = S.makeTemp(LaneSz);
         NdVar Lb = S.makeTemp(LaneSz);
-        S.emit(NdOp::SUBBYTES, La, {Dst, NdVar::cst(I * LaneSz, 4)});
-        S.emit(NdOp::SUBBYTES, Lb, {Src, NdVar::cst(I * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, La, {Dst, NdVar::scalar(I * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, Lb, {Src, NdVar::scalar(I * LaneSz, 4)});
         NdVar CmpRes = S.makeTemp(1);
         bool Neg = false;
         switch (Pred) {
@@ -299,7 +300,7 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       }
       if (!IsPacked && Dst.Size > LaneSz) {
         NdVar Hi = S.makeTemp(Dst.Size - LaneSz);
-        S.emit(NdOp::SUBBYTES, Hi, {Dst, NdVar::cst(LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, Hi, {Dst, NdVar::scalar(LaneSz, 4)});
         S.emit(NdOp::CONCAT, Dst, {Hi, Acc});
       } else if (Acc.Size < Dst.Size) {
         NdVar Wide = S.makeTemp(Dst.Size);

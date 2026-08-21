@@ -27,6 +27,16 @@ namespace neverd {
 
 bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
                    const cs_arm &ARM) {
+  auto readArithmeticOperand = [&](const cs_arm_op &Operand) {
+    NdVar Value = L.operandRead(S, Operand);
+    // ARM data-processing immediates are scalar offsets, masks, or bounds.
+    // Address materialization retains its identity through the PC/base operand;
+    // a bare immediate that merely equals a low object VA must not acquire the
+    // role of a different relocation occurrence.
+    if (Operand.type == ARM_OP_IMM && Value.isConst())
+      Value.Provenance = ConstantAddressProvenance::Scalar;
+    return Value;
+  };
   switch (Insn->id) {
   // --- ADD / SUB / RSB ---
   case ARM_INS_ADD:
@@ -35,7 +45,7 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       if (ARM.op_count == 2) {
         NdVar Dst = L.operandWrite(ARM.operands[0]);
         NdVar A = NdVar::reg(Dst.Offset, 4);
-        NdVar B = L.operandRead(S, ARM.operands[1]);
+        NdVar B = readArithmeticOperand(ARM.operands[1]);
         if (ARM.update_flags) {
           A = L.snapForFlags(S, Dst, A);
           B = L.snapForFlags(S, Dst, B);
@@ -48,8 +58,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     }
     NdVar Dst = L.operandWrite(ARM.operands[0]);
-    NdVar A = L.operandRead(S, ARM.operands[1]);
-    NdVar B = L.operandRead(S, ARM.operands[2]);
+    NdVar A = readArithmeticOperand(ARM.operands[1]);
+    NdVar B = readArithmeticOperand(ARM.operands[2]);
     if (ARM.update_flags) {
       A = L.snapForFlags(S, Dst, A);
       B = L.snapForFlags(S, Dst, B);
@@ -66,7 +76,7 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     if (ARM.op_count < 3) {
       if (ARM.op_count == 2) {
         NdVar Dst = L.operandWrite(ARM.operands[0]);
-        NdVar B = L.operandRead(S, ARM.operands[1]);
+        NdVar B = readArithmeticOperand(ARM.operands[1]);
         NdVar AVal = NdVar::reg(Dst.Offset, 4);
         if (SetFlags) {
           AVal = L.snapForFlags(S, Dst, AVal);
@@ -80,8 +90,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     }
     NdVar Dst = L.operandWrite(ARM.operands[0]);
-    NdVar A = L.operandRead(S, ARM.operands[1]);
-    NdVar B = L.operandRead(S, ARM.operands[2]);
+    NdVar A = readArithmeticOperand(ARM.operands[1]);
+    NdVar B = readArithmeticOperand(ARM.operands[2]);
     if (SetFlags) {
       A = L.snapForFlags(S, Dst, A);
       B = L.snapForFlags(S, Dst, B);
@@ -95,8 +105,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     if (ARM.op_count < 3)
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
-    NdVar A = L.operandRead(S, ARM.operands[1]);
-    NdVar B = L.operandRead(S, ARM.operands[2]);
+    NdVar A = readArithmeticOperand(ARM.operands[1]);
+    NdVar B = readArithmeticOperand(ARM.operands[2]);
     if (ARM.update_flags) {
       A = L.snapForFlags(S, Dst, A);
       B = L.snapForFlags(S, Dst, B);
@@ -110,8 +120,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     if (ARM.op_count < 3)
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
-    NdVar A = L.operandRead(S, ARM.operands[1]);
-    NdVar B = L.operandRead(S, ARM.operands[2]);
+    NdVar A = readArithmeticOperand(ARM.operands[1]);
+    NdVar B = readArithmeticOperand(ARM.operands[2]);
     if (ARM.update_flags) {
       A = L.snapForFlags(S, Dst, A);
       B = L.snapForFlags(S, Dst, B);
@@ -123,9 +133,9 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::INT_ADD, Dst, {Sum, CfExt});
     if (ARM.update_flags) {
       S.emit(NdOp::INT_SLESS, NdVar::reg(armreg::NFLAG, 1),
-             {Dst, NdVar::cst(0, 4)});
+             {Dst, NdVar::scalar(0, 4)});
       S.emit(NdOp::INT_EQUAL, NdVar::reg(armreg::ZFLAG, 1),
-             {Dst, NdVar::cst(0, 4)});
+             {Dst, NdVar::scalar(0, 4)});
       NdVar C1 = S.makeTemp(1);
       S.emit(NdOp::INT_CARRY, C1, {A, B});
       NdVar C2 = S.makeTemp(1);
@@ -144,8 +154,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     if (ARM.op_count < 3)
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
-    NdVar A = L.operandRead(S, ARM.operands[1]);
-    NdVar B = L.operandRead(S, ARM.operands[2]);
+    NdVar A = readArithmeticOperand(ARM.operands[1]);
+    NdVar B = readArithmeticOperand(ARM.operands[2]);
     if (ARM.update_flags) {
       A = L.snapForFlags(S, Dst, A);
       B = L.snapForFlags(S, Dst, B);
@@ -159,9 +169,9 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::INT_ADD, Dst, {Sum, CfExt});
     if (ARM.update_flags) {
       S.emit(NdOp::INT_SLESS, NdVar::reg(armreg::NFLAG, 1),
-             {Dst, NdVar::cst(0, 4)});
+             {Dst, NdVar::scalar(0, 4)});
       S.emit(NdOp::INT_EQUAL, NdVar::reg(armreg::ZFLAG, 1),
-             {Dst, NdVar::cst(0, 4)});
+             {Dst, NdVar::scalar(0, 4)});
       NdVar C1 = S.makeTemp(1);
       S.emit(NdOp::INT_CARRY, C1, {A, NotB});
       NdVar C2 = S.makeTemp(1);
@@ -180,8 +190,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
   case ARM_INS_CMP: {
     if (ARM.op_count < 2)
       break;
-    NdVar A = L.operandRead(S, ARM.operands[0]);
-    NdVar B = L.operandRead(S, ARM.operands[1]);
+    NdVar A = readArithmeticOperand(ARM.operands[0]);
+    NdVar B = readArithmeticOperand(ARM.operands[1]);
     NdVar TmpR = S.makeTemp(4);
     S.emit(NdOp::INT_SUB, TmpR, {A, B});
     L.emitNZCV(S, TmpR, A, B, true);
@@ -190,8 +200,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
   case ARM_INS_CMN: {
     if (ARM.op_count < 2)
       break;
-    NdVar A = L.operandRead(S, ARM.operands[0]);
-    NdVar B = L.operandRead(S, ARM.operands[1]);
+    NdVar A = readArithmeticOperand(ARM.operands[0]);
+    NdVar B = readArithmeticOperand(ARM.operands[1]);
     NdVar TmpR = S.makeTemp(4);
     S.emit(NdOp::INT_ADD, TmpR, {A, B});
     L.emitNZCV(S, TmpR, A, B, false);
@@ -200,8 +210,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
   case ARM_INS_TST: {
     if (ARM.op_count < 2)
       break;
-    NdVar A = L.operandRead(S, ARM.operands[0]);
-    NdVar B = L.operandRead(S, ARM.operands[1]);
+    NdVar A = readArithmeticOperand(ARM.operands[0]);
+    NdVar B = readArithmeticOperand(ARM.operands[1]);
     NdVar TmpR = S.makeTemp(4);
     S.emit(NdOp::INT_AND, TmpR, {A, B});
     L.emitLogicalOpCarry(S, Insn, ARM.operands[1]);
@@ -211,8 +221,8 @@ bool liftCoreArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
   case ARM_INS_TEQ: {
     if (ARM.op_count < 2)
       break;
-    NdVar A = L.operandRead(S, ARM.operands[0]);
-    NdVar B = L.operandRead(S, ARM.operands[1]);
+    NdVar A = readArithmeticOperand(ARM.operands[0]);
+    NdVar B = readArithmeticOperand(ARM.operands[1]);
     NdVar TmpR = S.makeTemp(4);
     S.emit(NdOp::INT_XOR, TmpR, {A, B});
     L.emitLogicalOpCarry(S, Insn, ARM.operands[1]);

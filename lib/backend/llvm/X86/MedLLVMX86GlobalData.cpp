@@ -66,9 +66,11 @@ bool MedLLVMEmitter::i386WalkedPointerDeref(const MedVar &AddrVar) const {
       if (!StoreSymbolized && varIsFrameDerived(Def->Inputs[0]) &&
           frameSlotHasMatchingKeyLoad(Def->Inputs[0]))
         continue;
-      bool StoreSeg = writableDataSegOf(Source, /*RequireRelocBase=*/true);
+      bool StoreSeg =
+          writableDataSegOf(Source, /*RequireRelocBase=*/true).has_value();
       if (!StoreSeg)
-        StoreSeg = writableDataSegOf(Source, /*RequireRelocBase=*/false) != 0;
+        StoreSeg =
+            writableDataSegOf(Source, /*RequireRelocBase=*/false).has_value();
       if (StoreSymbolized || StoreSeg)
         return true;
     }
@@ -87,10 +89,9 @@ bool MedLLVMEmitter::i386WalkedPointerDeref(const MedVar &AddrVar) const {
     const MedOp *Def = findDef(Cur);
     if (!Def) {
       if (const PhiNode *Phi = findPhi(Cur))
-        for (const auto &[PredId, Arg] : Phi->Args) {
-          (void)PredId;
-          Work.push_back(Arg);
-        }
+        for (const auto &[PredId, Arg] : Phi->Args)
+          if (phiIncomingEdgeFeasible(*Phi, PredId))
+            Work.push_back(Arg);
       continue;
     }
     if (reloadIsSegmentRelative(Def))
@@ -177,7 +178,8 @@ bool MedLLVMEmitter::i386PeeledInitStoreAddr(const MedVar &AddrVar,
         bool HasSegEntry = false;
         bool HasUnrollStep = false;
         for (const auto &[PredId, Arg] : Phi->Args) {
-          (void)PredId;
+          if (!phiIncomingEdgeFeasible(*Phi, PredId))
+            continue;
           if (tracesToSegEntry(Arg, tracesToSegEntry, 0))
             HasSegEntry = true;
           if (tracesToUnrollStep(Arg, tracesToUnrollStep, 0))

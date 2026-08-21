@@ -14,6 +14,7 @@
 #include "neverd/backend/codegen/ELF/ELFPatch.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/ELF/ELFARMEHABIPatch.h"
 #include "neverd/backend/codegen/ELF/ELFExceptionPatch.h"
 #include "neverd/object/ELFLayout.h"
@@ -24,6 +25,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <cstring>
@@ -355,6 +357,21 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
         if (!parseLayout(Binary, Layout))
           return false;
 
+        auto CompileMod = llvm::CloneModule(Mod);
+        SourceFunctionPreparation SourcePreparation;
+        std::string SourceDetail;
+        if (!prepareSourceFunctionsForPatch(*CompileMod, CachedImage,
+                                            SourcePreparation, SourceDetail)) {
+          llvm::WithColor::error()
+              << "elf_patch: source identity preparation failed: "
+              << SourceDetail << "\n";
+          return false;
+        }
+        if (SourcePreparation.isExactNoOp()) {
+          Result.Success = true;
+          return true;
+        }
+
         uint64_t CodeStartVA = plannedExecSegmentVA(Binary, TargetArch);
         if (CodeStartVA == 0) {
           llvm::WithColor::error() << "elf_patch: cannot plan exec segment\n";
@@ -367,13 +384,17 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
                         : VA;
         };
         auto IsExecutable = [&](uint64_t VA) {
-          const Segment *Seg =
-              CachedImage ? CachedImage->getSegmentFor(VA) : nullptr;
-          return Seg && Seg->isExecutable();
+          return CachedImage && CachedImage->isCodeAddress(VA);
         };
         auto Resolve = [&](llvm::StringRef Sym,
                            uint32_t) -> std::optional<uint64_t> {
           std::string Name = Sym.str();
+          const std::string PreservedKey = resolveSourceFunctionAlias(
+              Name, SourcePreparation.PreservedOriginalVAs, BinaryFormat::ELF,
+              TargetArch);
+          if (!PreservedKey.empty())
+            return SerializeResolvedCode(
+                SourcePreparation.PreservedOriginalVAs.at(PreservedKey), true);
           if (CachedExports) {
             for (auto &E : *CachedExports)
               if (E.Name == Name)
@@ -391,9 +412,9 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
                 return SerializeResolvedCode(S.Addr, true);
           }
           if (auto VA = parseNdDataSymbol(Name)) {
-            bool IsCode = IsExecutable(*VA) && CachedImage &&
-                          CachedImage->CodeRefTargets.count(*VA) != 0;
-            return SerializeResolvedCode(*VA, IsCode);
+            return CachedImage
+                       ? serializeImageDataSymbolAddress(*CachedImage, *VA)
+                       : *VA;
           }
           if (auto VA = parseNdCodePtrSymbol(Name))
             return SerializeResolvedCode(*VA, false);
@@ -424,7 +445,7 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
             findELFARMEHABIRegion(Binary);
 
         CompiledImage Img = compileImageForPatchWithFixedSectionVAs(
-            Mod, TargetArch, BinaryFormat::ELF, CodeStartVA, Resolve,
+            *CompileMod, TargetArch, BinaryFormat::ELF, CodeStartVA, Resolve,
             FixedSectionVA);
         if (!Img.Success || Img.Bytes.empty()) {
           llvm::WithColor::error()
@@ -439,8 +460,8 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
         // over records that are perfectly good.
         llvm::Error Err =
             hasGeneratedELFARMEHABI(Img)
-                ? installELFARMEHABI(Binary, EHABIRegion, Img, Mod)
-                : installELFEHFrame(Binary, EHRegion, Img, Mod);
+                ? installELFARMEHABI(Binary, EHABIRegion, Img, *CompileMod)
+                : installELFEHFrame(Binary, EHRegion, Img, *CompileMod);
         if (Err) {
           llvm::WithColor::error() << llvm::toString(std::move(Err)) << "\n";
           return false;
@@ -459,11 +480,52 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
                                      << " unresolved symbols\n";
         }
 
-        size_t TrampCount =
-            installTrampolines(Binary, Img.SymbolAddrs, Layout.TextVA,
-                               Layout.TextSize, Layout.TextFileOff,
-                               /*ImageBase=*/0, TargetArch, CachedMode,
-                               CachedSymbols, CachedCodeRanges, CachedExports);
+        const std::vector<Export> AuthenticatedExports =
+            authenticatedFunctionExports(CachedImage);
+        const std::vector<Export> *TrampolineExports =
+            CachedImage ? &AuthenticatedExports : CachedExports;
+        std::vector<PatchedFunctionEntry> PatchedFunctions;
+        const bool HasExactSourcePlan = SourcePreparation.HasExactSources;
+        if (HasExactSourcePlan &&
+            !validateSourceFunctionPatchPlan(Img, CachedImage, SourceDetail)) {
+          llvm::WithColor::error()
+              << "elf_patch: source identity validation failed: "
+              << SourceDetail << "\n";
+          return false;
+        }
+        const SourceTrampolinePlan TrampolinePlan =
+            HasExactSourcePlan ? makeSourceTrampolinePlan(Img, CachedImage)
+                               : SourceTrampolinePlan{};
+        if (HasExactSourcePlan && TrampolinePlan.PreservedCount != 0) {
+          llvm::WithColor::error()
+              << "elf_patch: an unsafe source definition escaped the "
+                 "preservation prepass\n";
+          return false;
+        }
+
+        size_t TrampCount = 0;
+        if (HasExactSourcePlan) {
+          if (!TrampolinePlan.OriginalVAs.empty())
+            TrampCount = installTrampolines(
+                Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
+                Layout.TextFileOff, /*ImageBase=*/0, TargetArch, CachedMode,
+                CachedSymbols, CachedCodeRanges, TrampolineExports,
+                /*PatchedOriginalEntries=*/nullptr,
+                /*PatchedEntryMappings=*/nullptr, &PatchedFunctions,
+                TrampolinePlan.Owners, TrampolinePlan.OriginalVAs);
+          if (!validatePatchedSourceTrampolineClosure(
+                  TrampolinePlan, PatchedFunctions, TrampCount, SourceDetail)) {
+            llvm::WithColor::error()
+                << "elf_patch: source trampoline closure failed: "
+                << SourceDetail << "\n";
+            return false;
+          }
+        } else {
+          TrampCount = installTrampolines(
+              Binary, Img.SymbolAddrs, Layout.TextVA, Layout.TextSize,
+              Layout.TextFileOff, /*ImageBase=*/0, TargetArch, CachedMode,
+              CachedSymbols, CachedCodeRanges, TrampolineExports);
+        }
 
         Result.Success = true;
         Result.CodeSize = TextSize;

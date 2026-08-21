@@ -145,8 +145,11 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
         // absolute VA.  FP fields and plain integers fall through to getVar.
         const ConstantProvenanceSummary FieldOccurrence =
             summarizeConstantProvenance(*RV);
+        const bool FieldAddressRelation =
+            FieldOccurrence.Model ==
+            ConstantProvenanceSummary::ValueModel::Address;
         if (!RR.IsFP && FT->isIntegerTy() &&
-            !FieldOccurrence.hasExplicitProvenance())
+            (!FieldOccurrence.hasExplicitProvenance() || FieldAddressRelation))
           if (llvm::Value *Sym = tryResolveWritableData(
                   *RV, RV->Size, Builder, /*IsValueOperand=*/true))
             V = Builder.CreatePtrToInt(Sym, llvm::Type::getInt64Ty(*Ctx));
@@ -271,9 +274,13 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
         // rodata-table resolvers would false-positive on a computed integer
         // result that merely traces to a read-only base (e.g. a NEON kernel
         // folding a rodata vector).
+        const bool ReturnAddressRelation =
+            ReturnOccurrence.Model ==
+            ConstantProvenanceSummary::ValueModel::Address;
         if (!WantFloat && !WantWide64 && RetTy->isIntegerTy() && RetVal &&
             RetVal->getType()->isIntegerTy() &&
-            !ReturnOccurrence.hasExplicitProvenance())
+            (!ReturnOccurrence.hasExplicitProvenance() ||
+             ReturnAddressRelation))
           if (llvm::Value *Sym = tryResolveWritableData(
                   *RetVar, RetVar->Size, Builder, /*IsValueOperand=*/true))
             RetVal = Builder.CreatePtrToInt(Sym, RetTy);

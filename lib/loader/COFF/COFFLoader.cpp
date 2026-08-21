@@ -15,17 +15,19 @@
 #include "neverd/loader/COFF/COFFLoader.h"
 
 #include "neverd/Limits.h"
-#include "neverd/support/BinaryEncoding.h"
 #include "neverd/loader/COFF/COFFDelphiEH.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
-#include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/DWARF/ItaniumEH.h"
+#include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/Go/GoRuntimeEH.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/ObjC/ObjCEH.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/Rust/RustEH.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -33,7 +35,11 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <cstring>
+#include <optional>
+#include <vector>
 
 #define DEBUG_TYPE "neverd-coff-loader"
 
@@ -118,16 +124,67 @@ COFFLoader::load(const std::filesystem::path &Path) {
     Img.Entry = normalizeCodeAddress(Img.Entry, Img.Arch, Img.Mode);
   Img.Base = ImageBase;
 
+  // COFF object-file section headers are required to keep VirtualAddress at
+  // zero. Build a private mapped layout instead of mutating that format-native
+  // invariant or allowing every section to alias VA zero. This same table is
+  // the authority for section mapping, symbol values, and relocation S.
+  std::vector<va_t> SectionVAs(Obj.getNumberOfSections() + 1, InvalidVA);
+  std::vector<uint64_t> SectionSizes(Obj.getNumberOfSections() + 1, 0);
+  va_t NextRelocatableVA = 0x1000;
+  for (const SectionRef &SecRef : Obj.sections()) {
+    const unsigned SectionID = Obj.getSectionID(SecRef);
+    if (SectionID < SectionSizes.size())
+      SectionSizes[SectionID] = Obj.getSectionSize(Obj.getCOFFSection(SecRef));
+  }
+  if (IsRelocatable)
+    for (const SymbolRef &SymRef : Obj.symbols()) {
+      COFFSymbolRef Sym = Obj.getCOFFSymbol(SymRef);
+      if (Sym.getSectionNumber() <= 0)
+        continue;
+      const size_t SectionID = static_cast<size_t>(Sym.getSectionNumber());
+      const coff_aux_section_definition *Definition =
+          Sym.getSectionDefinition();
+      if (Definition && SectionID < SectionSizes.size())
+        SectionSizes[SectionID] =
+            std::max<uint64_t>(SectionSizes[SectionID], Definition->Length);
+    }
+
   // --- Sections ---
   for (const SectionRef &SecRef : Obj.sections()) {
     const coff_section *CoffSec = Obj.getCOFFSection(SecRef);
-    if (CoffSec->VirtualAddress > InvalidVA - ImageBase)
+    const unsigned SectionID = Obj.getSectionID(SecRef);
+    if (SectionID >= SectionVAs.size())
       return llvm::make_error<llvm::StringError>(
-          "coff: section address overflows", llvm::inconvertibleErrorCode());
-    va_t SectionVA = ImageBase + CoffSec->VirtualAddress;
-    if (CoffSec->VirtualSize > InvalidVA - SectionVA)
+          "coff: section index is out of range",
+          llvm::inconvertibleErrorCode());
+    const uint64_t SectionSize = IsRelocatable ? SectionSizes[SectionID]
+                                               : uint64_t(CoffSec->VirtualSize);
+    va_t SectionVA = 0;
+    if (IsRelocatable) {
+      const uint64_t Alignment = std::max<uint64_t>(CoffSec->getAlignment(), 1);
+      const uint64_t Remainder = NextRelocatableVA % Alignment;
+      const uint64_t Padding = Remainder == 0 ? 0 : Alignment - Remainder;
+      if (Padding > InvalidVA - NextRelocatableVA)
+        return llvm::make_error<llvm::StringError>(
+            "coff: synthetic section address overflows",
+            llvm::inconvertibleErrorCode());
+      SectionVA = NextRelocatableVA + Padding;
+      const uint64_t MappedSpan = std::max<uint64_t>(SectionSize, uint64_t(1));
+      if (MappedSpan > InvalidVA - SectionVA)
+        return llvm::make_error<llvm::StringError>(
+            "coff: synthetic section range overflows",
+            llvm::inconvertibleErrorCode());
+      NextRelocatableVA = SectionVA + MappedSpan;
+    } else {
+      if (CoffSec->VirtualAddress > InvalidVA - ImageBase)
+        return llvm::make_error<llvm::StringError>(
+            "coff: section address overflows", llvm::inconvertibleErrorCode());
+      SectionVA = ImageBase + CoffSec->VirtualAddress;
+    }
+    if (SectionSize > InvalidVA - SectionVA)
       return llvm::make_error<llvm::StringError>(
           "coff: section range overflows", llvm::inconvertibleErrorCode());
+    SectionVAs[SectionID] = SectionVA;
 
     Segment Seg;
     if (auto NameOrErr = Obj.getSectionName(CoffSec))
@@ -136,7 +193,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
       llvm::consumeError(NameOrErr.takeError());
 
     Seg.VA = SectionVA;
-    Seg.Size = CoffSec->VirtualSize;
+    Seg.Size = SectionSize;
     Seg.FileOff = CoffSec->PointerToRawData;
     Seg.FileSz = CoffSec->SizeOfRawData;
     Seg.Flags = coffFlagsToNd(CoffSec->Characteristics);
@@ -158,7 +215,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
     Section Sec;
     Sec.Name = Img.Segments.back().Name;
     Sec.VA = SectionVA;
-    Sec.Size = CoffSec->VirtualSize;
+    Sec.Size = SectionSize;
     Sec.FileOff = CoffSec->PointerToRawData;
     Sec.FileSz = CoffSec->SizeOfRawData;
     Sec.Type = CoffSec->Characteristics;
@@ -174,9 +231,14 @@ COFFLoader::load(const std::filesystem::path &Path) {
 
   // --- COFF Relocations ---
   for (const SectionRef &SecRef : Obj.sections()) {
+    const unsigned SectionID = Obj.getSectionID(SecRef);
+    if (SectionID >= SectionVAs.size() || SectionVAs[SectionID] == InvalidVA)
+      continue;
     for (const auto &Reloc : SecRef.relocations()) {
       RelocationEntry RE;
-      RE.Address = Reloc.getOffset();
+      if (Reloc.getOffset() > InvalidVA - SectionVAs[SectionID])
+        continue;
+      RE.Address = SectionVAs[SectionID] + Reloc.getOffset();
       RE.Type = Reloc.getType();
       auto SymOrErr = Reloc.getSymbol();
       if (SymOrErr != Obj.symbol_end()) {
@@ -200,7 +262,11 @@ COFFLoader::load(const std::filesystem::path &Path) {
       const coff_section *ApplySec = Obj.getCOFFSection(SecRef);
       if (!ApplySec)
         continue;
-      va_t ApplyVA = ImageBase + ApplySec->VirtualAddress;
+      const unsigned ApplySectionID = Obj.getSectionID(SecRef);
+      if (ApplySectionID >= SectionVAs.size() ||
+          SectionVAs[ApplySectionID] == InvalidVA)
+        continue;
+      va_t ApplyVA = SectionVAs[ApplySectionID];
       Segment *ApplySeg = nullptr;
       for (auto &Seg : Img.Segments) {
         if (Seg.VA == ApplyVA && !Seg.Data.empty()) {
@@ -219,12 +285,25 @@ COFFLoader::load(const std::filesystem::path &Path) {
           continue;
 
         uint64_t SymVal = 0;
-        auto SymAddrOrErr = SymIt->getAddress();
-        if (SymAddrOrErr)
-          SymVal = *SymAddrOrErr;
-        else {
-          llvm::consumeError(SymAddrOrErr.takeError());
-          continue;
+        va_t SymOwnerVA = InvalidVA;
+        COFFSymbolRef CoffSym = Obj.getCOFFSymbol(*SymIt);
+        if (CoffSym.getSectionNumber() > 0) {
+          const size_t SymbolSection =
+              static_cast<size_t>(CoffSym.getSectionNumber());
+          if (SymbolSection >= SectionVAs.size() ||
+              SectionVAs[SymbolSection] == InvalidVA ||
+              CoffSym.getValue() > InvalidVA - SectionVAs[SymbolSection])
+            continue;
+          SymOwnerVA = SectionVAs[SymbolSection];
+          SymVal = SectionVAs[SymbolSection] + CoffSym.getValue();
+        } else {
+          auto SymAddrOrErr = SymIt->getAddress();
+          if (SymAddrOrErr) {
+            SymVal = *SymAddrOrErr;
+          } else {
+            llvm::consumeError(SymAddrOrErr.takeError());
+            continue;
+          }
         }
 
         va_t S = SymVal;
@@ -232,6 +311,88 @@ COFFLoader::load(const std::filesystem::path &Path) {
 
         if (RAddr >= ApplySeg->Data.size())
           continue;
+
+        // COFF absolute relocations apply the signed, field-width in-place
+        // addend A to the symbol address S. Keep the linker's wrapping encoded
+        // value separate from the full address used for provenance: a negative
+        // addend is valid, but only publish provenance when S + A is a
+        // representable VA.
+        auto AddSignedAddend = [](uint64_t Base,
+                                  int64_t Addend) -> std::optional<uint64_t> {
+          if (Addend >= 0) {
+            const uint64_t Magnitude = static_cast<uint64_t>(Addend);
+            if (Magnitude > InvalidVA - Base)
+              return std::nullopt;
+            return Base + Magnitude;
+          }
+
+          const uint64_t Magnitude = static_cast<uint64_t>(-(Addend + 1)) + 1;
+          if (Magnitude > Base)
+            return std::nullopt;
+          return Base - Magnitude;
+        };
+
+        // A complete absolute address stored in data is a pointer slot, while
+        // the same field inside an instruction is occurrence provenance for
+        // exactly that operand. On AMD64, ADDR32 is narrower than a pointer,
+        // so it may only publish an exact executable-field occurrence; it is
+        // never a pointer-table slot. Image-relative ADDR32NB fields do not
+        // call this helper because their encoded RVA is not a complete VA.
+        auto RecordAbsoluteField = [&](uint64_t EncodedValue, uint64_t TargetVA,
+                                       uint64_t TargetOwnerVA,
+                                       size_t FieldWidth) {
+          if (TargetOwnerVA == InvalidVA)
+            return;
+          if (FieldWidth == Img.getPointerSize()) {
+            recordAbsolutePointerRelocation(Img, P, TargetVA, TargetOwnerVA);
+            return;
+          }
+          if (!Img.hasExecutableCodeOwnerAt(P))
+            return;
+
+          const Segment *TargetSeg = Img.getSegmentFor(TargetOwnerVA);
+          if (!TargetSeg)
+            return;
+          const Section *TargetSec = Img.getSectionFor(TargetOwnerVA);
+          const bool TargetReadable =
+              TargetSec ? TargetSec->isReadable() : TargetSeg->isReadable();
+          const bool TargetWritable =
+              TargetSec ? TargetSec->isWritable() &&
+                              !section_names::isReadOnlyAfterRelocSectionName(
+                                  TargetSec->Name) &&
+                              !section_names::isReadOnlyAfterRelocSectionName(
+                                  TargetSec->SegmentName)
+                        : TargetSeg->isWritable();
+          const bool TargetExecutable =
+              Img.hasExecutableCodeOwnerAt(TargetOwnerVA);
+          const va_t OwnerBegin = TargetSec ? TargetSec->VA : TargetSeg->VA;
+          const uint64_t OwnerSize =
+              TargetSec ? TargetSec->Size : TargetSeg->Size;
+          if (!TargetReadable || OwnerSize > InvalidVA - OwnerBegin)
+            return;
+          const va_t OwnerEnd = OwnerBegin + OwnerSize;
+          if (TargetVA < OwnerBegin ||
+              (TargetExecutable ? TargetVA >= OwnerEnd : TargetVA > OwnerEnd))
+            return;
+
+          const RelocatedAddressField Field{EncodedValue, TargetVA,
+                                            static_cast<uint8_t>(FieldWidth),
+                                            OwnerBegin};
+          if (TargetExecutable) {
+            Img.DataAddressRelocOperands.erase(P);
+            Img.CodeAddressRelocOperands[P] = Field;
+            Img.CodeRefTargets.insert(
+                normalizeCodeAddress(TargetVA, Img.Arch, Img.Mode));
+            return;
+          }
+
+          Img.CodeAddressRelocOperands.erase(P);
+          Img.DataAddressRelocOperands[P] = Field;
+          if (TargetWritable)
+            Img.WritableRelocDataAddrs.insert(TargetVA);
+          else
+            Img.RelocDataAddrs.insert(TargetVA);
+        };
 
         if (Img.Arch == Arch::X64) {
           if (RType == IMAGE_REL_AMD64_REL32 ||
@@ -250,18 +411,32 @@ COFFLoader::load(const std::filesystem::path &Path) {
           } else if (RType == IMAGE_REL_AMD64_ADDR64) {
             if (RAddr + 8 > ApplySeg->Data.size())
               continue;
-            uint64_t Val = S;
+            uint64_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 8);
+            uint64_t Val = S + InPlace;
             std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 8);
+            int64_t SignedAddend = 0;
+            std::memcpy(&SignedAddend, &InPlace, sizeof(SignedAddend));
+            if (auto FullTarget = AddSignedAddend(S, SignedAddend))
+              RecordAbsoluteField(Val, *FullTarget, SymOwnerVA, 8);
           } else if (RType == IMAGE_REL_AMD64_ADDR32NB) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            uint32_t Val = static_cast<uint32_t>(S - ImageBase);
+            uint32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            uint32_t Val = static_cast<uint32_t>(S - ImageBase + InPlace);
             std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
           } else if (RType == IMAGE_REL_AMD64_ADDR32) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            uint32_t Val = static_cast<uint32_t>(S);
+            int32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            const uint32_t Val =
+                static_cast<uint32_t>(S) + static_cast<uint32_t>(InPlace);
             std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
+            if (auto FullTarget = AddSignedAddend(S, InPlace);
+                FullTarget && *FullTarget <= UINT32_MAX)
+              RecordAbsoluteField(Val, *FullTarget, SymOwnerVA, 4);
           }
         } else if (Img.Arch == Arch::X86) {
           if (RType == IMAGE_REL_I386_REL32) {
@@ -272,8 +447,14 @@ COFFLoader::load(const std::filesystem::path &Path) {
           } else if (RType == IMAGE_REL_I386_DIR32) {
             if (RAddr + 4 > ApplySeg->Data.size())
               continue;
-            uint32_t Val = static_cast<uint32_t>(S);
+            int32_t InPlace = 0;
+            std::memcpy(&InPlace, ApplySeg->Data.data() + RAddr, 4);
+            const uint32_t Val =
+                static_cast<uint32_t>(S) + static_cast<uint32_t>(InPlace);
             std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
+            if (auto FullTarget = AddSignedAddend(S, InPlace);
+                FullTarget && *FullTarget <= UINT32_MAX)
+              RecordAbsoluteField(Val, *FullTarget, SymOwnerVA, 4);
           }
         } else if (Img.Arch == Arch::AArch64) {
           if (RType == IMAGE_REL_ARM64_BRANCH26) {
@@ -396,7 +577,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
   coff_loader::parseExceptions(Obj, Img, ImageBase);
 
   // --- COFF Symbol table ---
-  coff_loader::parseSymbolTable(Obj, Img, ImageBase);
+  coff_loader::parseSymbolTable(Obj, Img, ImageBase, SectionVAs);
 
   // --- TLS callbacks ---
   coff_loader::parseTLSDirectory(Obj, Img, ImageBase);

@@ -31,7 +31,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     uint16_t PtrSize = (TargetArch == Arch::X64) ? 8 : 4;
     uint16_t PushSz = Src.Size > 0 ? Src.Size : PtrSize;
     NdVar Rsp = NdVar::reg(x86reg::RSP, PtrSize);
-    S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::cst(PushSz, PtrSize)});
+    S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PushSz, PtrSize)});
     S.emit(NdOp::STORE, {}, {Rsp, Src});
     break;
   }
@@ -49,10 +49,12 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::COPY, DstW, {Val});
     // get-PC thunk: a `pop` immediately after `call $+5` yields the constant PC
     // (the i386 PIC GOT-base seed), not a stack value.  Overwrite the loaded
-    // value with the constant so the GOT/constant-pool address folds.
+    // value with a role-neutral address occurrence so GOTOFF/SECTDIFF scalar
+    // offsets retain the complete address relation without relying on numeric
+    // coincidence with a loader target inventory.
     if (GetPcArmedThisInsn)
-      S.emit(NdOp::COPY, DstW, {NdVar::cst(GetPcValue, PopSz)});
-    S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::cst(PopSz, PtrSize)});
+      S.emit(NdOp::COPY, DstW, {NdVar::address(GetPcValue, PopSz)});
+    S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(PopSz, PtrSize)});
     break;
   }
 
@@ -71,7 +73,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       // is a known constant VA the emitter resolves to rodata.
       if (Target == S.Addr + S.InsnSize) {
         NdVar Rsp = NdVar::reg(x86reg::RSP, PtrSize);
-        S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::cst(PtrSize, PtrSize)});
+        S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtrSize, PtrSize)});
         S.emit(NdOp::STORE, {}, {Rsp, NdVar::cst(Target, PtrSize)});
         GetPcPending = true;
         GetPcValue = Target;
@@ -212,7 +214,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
                         : (InsnId == X86_INS_JECXZ) ? 4
                                                     : 8;
       S.emit(NdOp::INT_EQUAL, Cond,
-             {NdVar::reg(x86reg::RCX, CxSize), NdVar::cst(0, CxSize)});
+             {NdVar::reg(x86reg::RCX, CxSize), NdVar::scalar(0, CxSize)});
       break;
     }
     default:
@@ -332,7 +334,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       break;
     }
     default:
-      S.emit(NdOp::COPY, Cond, {NdVar::cst(0, 1)});
+      S.emit(NdOp::COPY, Cond, {NdVar::scalar(0, 1)});
       break;
     }
 
@@ -365,13 +367,13 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       if (ByteOff > 0) {
         NdVar Shifted = S.makeTemp(WideSz);
         S.emit(NdOp::INT_LEFT, Shifted,
-               {CondW, NdVar::cst(ByteOff * 8, WideSz)});
+               {CondW, NdVar::scalar(ByteOff * 8, WideSz)});
         CondW = Shifted;
       }
       uint64_t WideMask = (WideSz >= 8) ? ~0ULL : ((1ULL << (WideSz * 8)) - 1);
       uint64_t ClearMask = (~(0xFFULL << (ByteOff * 8))) & WideMask;
       NdVar Cleared = S.makeTemp(WideSz);
-      S.emit(NdOp::INT_AND, Cleared, {Wide, NdVar::cst(ClearMask, WideSz)});
+      S.emit(NdOp::INT_AND, Cleared, {Wide, NdVar::scalar(ClearMask, WideSz)});
       NdVar Result = S.makeTemp(WideSz);
       S.emit(NdOp::INT_OR, Result, {Cleared, CondW});
       S.emit(NdOp::COPY, Wide, {Result});
@@ -388,7 +390,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     NdVar Val = S.makeTemp(PtrSize);
     S.emit(NdOp::LOAD, Val, {Rsp});
     S.emit(NdOp::COPY, Rbp, {Val});
-    S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::cst(PtrSize, PtrSize)});
+    S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(PtrSize, PtrSize)});
     break;
   }
 
@@ -485,7 +487,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       break;
     }
     default:
-      S.emit(NdOp::COPY, Cond, {NdVar::cst(1, 1)});
+      S.emit(NdOp::COPY, Cond, {NdVar::scalar(1, 1)});
       break;
     }
     NdVar CondExt = S.makeTemp(Sz);
@@ -510,9 +512,9 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       break;
     uint16_t CxSize = (TargetArch == Arch::X64) ? 8 : 4;
     NdVar Rcx = NdVar::reg(x86reg::RCX, CxSize);
-    S.emit(NdOp::INT_SUB, Rcx, {Rcx, NdVar::cst(1, CxSize)});
+    S.emit(NdOp::INT_SUB, Rcx, {Rcx, NdVar::scalar(1, CxSize)});
     NdVar NZ = S.makeTemp(1);
-    S.emit(NdOp::INT_NOTEQUAL, NZ, {Rcx, NdVar::cst(0, CxSize)});
+    S.emit(NdOp::INT_NOTEQUAL, NZ, {Rcx, NdVar::scalar(0, CxSize)});
     NdVar Cond = NZ;
     if (InsnId == X86_INS_LOOPE) {
       NdVar Merged = S.makeTemp(1);
@@ -537,7 +539,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     NdVar Rsp = NdVar::reg(x86reg::RSP, PtSz);
     for (uint64_t Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX, x86reg::RBX,
                          x86reg::RSP, x86reg::RBP, x86reg::RSI, x86reg::RDI}) {
-      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::cst(PtSz, PtSz)});
+      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtSz, PtSz)});
       S.emit(NdOp::STORE, {}, {Rsp, NdVar::reg(Reg, PtSz)});
     }
     break;
@@ -554,7 +556,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::LOAD, Val, {Rsp});
       if (Reg != x86reg::RSP)
         S.emit(NdOp::COPY, NdVar::reg(Reg, PtSz), {Val});
-      S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::cst(PtSz, PtSz)});
+      S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(PtSz, PtSz)});
     }
     break;
   }
@@ -601,7 +603,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
                          ? (static_cast<uint64_t>(X86.operands[1].imm) % 32)
                          : 0;
     // Push(RBP)
-    S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::cst(PtrSize, PtrSize)});
+    S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtrSize, PtrSize)});
     S.emit(NdOp::STORE, {}, {Rsp, Rbp});
     // FrameTemp = RSP
     NdVar FrameTemp = S.makeTemp(PtrSize);
@@ -609,21 +611,21 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     if (Level > 0) {
       // Display copy: FOR i = 1 TO level-1: RBP -= PtrSize; Push([RBP]).
       for (uint64_t I = 1; I < Level; ++I) {
-        S.emit(NdOp::INT_SUB, Rbp, {Rbp, NdVar::cst(PtrSize, PtrSize)});
+        S.emit(NdOp::INT_SUB, Rbp, {Rbp, NdVar::scalar(PtrSize, PtrSize)});
         NdVar Disp = S.makeTemp(PtrSize);
         S.emit(NdOp::LOAD, Disp, {Rbp});
-        S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::cst(PtrSize, PtrSize)});
+        S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtrSize, PtrSize)});
         S.emit(NdOp::STORE, {}, {Rsp, Disp});
       }
       // Push(FrameTemp)
-      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::cst(PtrSize, PtrSize)});
+      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtrSize, PtrSize)});
       S.emit(NdOp::STORE, {}, {Rsp, FrameTemp});
     }
     // RBP = FrameTemp
     S.emit(NdOp::COPY, Rbp, {FrameTemp});
     // RSP -= imm16
     if (AllocSz)
-      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::cst(AllocSz, PtrSize)});
+      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(AllocSz, PtrSize)});
     break;
   }
 
@@ -658,30 +660,30 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     if (Push) {
       // Assemble EFLAGS from the modelled flags (reserved bit 1 reads as 1).
       NdVar Eflags = S.makeTemp(PtrSize);
-      S.emit(NdOp::COPY, Eflags, {NdVar::cst(0x2, PtrSize)});
+      S.emit(NdOp::COPY, Eflags, {NdVar::scalar(0x2, PtrSize)});
       for (auto [Fl, Bit] : FlagBits) {
         NdVar Z = S.makeTemp(PtrSize);
         S.emit(NdOp::INT_ZEXT, Z, {NdVar::reg(Fl, 1)});
         NdVar Sh = S.makeTemp(PtrSize);
-        S.emit(NdOp::INT_LEFT, Sh, {Z, NdVar::cst(Bit, PtrSize)});
+        S.emit(NdOp::INT_LEFT, Sh, {Z, NdVar::scalar(Bit, PtrSize)});
         NdVar Next = S.makeTemp(PtrSize);
         S.emit(NdOp::INT_OR, Next, {Eflags, Sh});
         Eflags = Next;
       }
-      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::cst(PtrSize, PtrSize)});
+      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtrSize, PtrSize)});
       S.emit(NdOp::STORE, {}, {Rsp, Eflags});
     } else {
       // Load EFLAGS and scatter the modelled bits back into the flag registers.
       NdVar Val = S.makeTemp(PtrSize);
       S.emit(NdOp::LOAD, Val, {Rsp});
-      S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::cst(PtrSize, PtrSize)});
+      S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(PtrSize, PtrSize)});
       for (auto [Fl, Bit] : FlagBits) {
         NdVar Sh = S.makeTemp(PtrSize);
-        S.emit(NdOp::INT_RIGHT, Sh, {Val, NdVar::cst(Bit, PtrSize)});
+        S.emit(NdOp::INT_RIGHT, Sh, {Val, NdVar::scalar(Bit, PtrSize)});
         NdVar Bitv = S.makeTemp(PtrSize);
-        S.emit(NdOp::INT_AND, Bitv, {Sh, NdVar::cst(1, PtrSize)});
+        S.emit(NdOp::INT_AND, Bitv, {Sh, NdVar::scalar(1, PtrSize)});
         S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(Fl, 1),
-               {Bitv, NdVar::cst(0, PtrSize)});
+               {Bitv, NdVar::scalar(0, PtrSize)});
       }
     }
     break;

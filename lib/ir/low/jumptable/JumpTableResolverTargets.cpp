@@ -49,11 +49,8 @@ uint32_t CFGBuilder::getInsnAlignment() const {
 
 bool CFGBuilder::isValidTarget(const BinaryImage &Img, va_t Target,
                                va_t FuncEntry) {
-  if (Target == 0)
-    return false;
-
   const auto *Seg = Img.getSegmentFor(Target);
-  if (!Seg || !Seg->isExecutable())
+  if (!Seg || !Img.hasExecutableCodeOwnerAt(Target))
     return false;
 
   uint64_t Dist = Target > FuncEntry ? Target - FuncEntry : FuncEntry - Target;
@@ -62,6 +59,10 @@ bool CFGBuilder::isValidTarget(const BinaryImage &Img, va_t Target,
 
   uint32_t Align = getInsnAlignment();
   if (Align > 1 && (Target % Align) != 0)
+    return false;
+  const size_t Off = static_cast<size_t>(Target - Seg->VA);
+  if (!rangeInBounds(Off, Align, Seg->Data.size()) ||
+      !Img.hasExecutableCodeOwnerRange(Target, Align))
     return false;
 
   if (KnownFuncEntries && KnownFuncEntries->count(Target) &&
@@ -98,7 +99,7 @@ bool CFGBuilder::sanityCheckTargets(const BinaryImage &Img,
     }
 
     const auto *TSeg = Img.getSegmentFor(Targets[I]);
-    if (!TSeg || !TSeg->isExecutable()) {
+    if (!TSeg || !Img.hasExecutableCodeOwnerAt(Targets[I])) {
       TruncAt = I;
       break;
     }
@@ -107,7 +108,8 @@ bool CFGBuilder::sanityCheckTargets(const BinaryImage &Img,
     // fixed 4-byte slack wrongly rejects short trailing blocks (e.g. an x86
     // `ret` is 1 byte), truncating an otherwise valid table at that entry.
     size_t TOff = static_cast<size_t>(Targets[I] - TSeg->VA);
-    if (!rangeInBounds(TOff, getInsnAlignment(), TSeg->Data.size())) {
+    if (!rangeInBounds(TOff, getInsnAlignment(), TSeg->Data.size()) ||
+        !Img.hasExecutableCodeOwnerRange(Targets[I], getInsnAlignment())) {
       TruncAt = I;
       break;
     }
@@ -233,6 +235,10 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
   const auto *Seg = Img.getSegmentFor(Info.BaseAddr);
   if (!Seg || Seg->Data.empty())
     return {};
+  const std::optional<va_t> StorageEnd =
+      Img.mappedObjectOwnerEnd(Info.BaseAddr);
+  if (!StorageEnd || *StorageEnd <= Info.BaseAddr)
+    return {};
 
   const bool Bounded = Info.MaxEntries > 0;
   uint32_t Limit = Info.MaxEntries;
@@ -255,16 +261,18 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
     size_t EntryOff = Off + static_cast<size_t>(uint64_t(I) * EntryStride);
     if (!rangeInBounds(EntryOff, Info.EntrySize, Seg->Data.size()))
       break;
+    if (EntryOff > InvalidVA - Seg->VA || Info.EntrySize == 0)
+      break;
+    const va_t EntryVA = Seg->VA + EntryOff;
+    if (Info.EntrySize - 1 > InvalidVA - EntryVA)
+      break;
+    if (EntryVA >= *StorageEnd || Info.EntrySize > *StorageEnd - EntryVA)
+      break;
 
     const uint8_t *P = Seg->Data.data() + EntryOff;
     va_t Target =
         decodeTableEntry(P, Info.EntrySize, Info.IsRelative, Info.IsSigned,
                          Info.BaseAddr, Info.TargetBase, Info.EntryScale);
-
-    bool IsZeroOffset =
-        Info.IsRelative && Info.TargetBase == 0 && (Target == Info.BaseAddr);
-    if ((Target == 0 || IsZeroOffset) && !Bounded)
-      break;
 
     if (!isValidTarget(Img, Target, CurrentFuncEntry)) {
       if (Bounded) {

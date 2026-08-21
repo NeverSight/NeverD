@@ -44,7 +44,7 @@ namespace {
 /// live function is followed by the rest of that function.
 bool codeFollowsTrap(const BinaryImage &Img, Decoder &Dec, va_t Next) {
   const Segment *Seg = Img.getSegmentFor(Next);
-  if (!Seg || !Seg->isExecutable() || Next < Seg->VA)
+  if (!Seg || !Img.hasExecutableCodeOwnerAt(Next) || Next < Seg->VA)
     return false;
   const size_t Offset = static_cast<size_t>(Next - Seg->VA);
   if (Offset >= Seg->Data.size())
@@ -57,9 +57,11 @@ bool codeFollowsTrap(const BinaryImage &Img, Decoder &Dec, va_t Next) {
   DecodedInsn Peek;
   const int Size = Dec.decodeOneLight(Seg->Data.data() + Offset,
                                       Seg->Data.size() - Offset, Next, Peek);
-  const bool IsTrap = Size > 0 && Dec.isResumableTrap(Peek);
+  const bool HasCodeOwner = Size > 0 && Img.hasExecutableCodeOwnerRange(
+                                            Next, static_cast<uint64_t>(Size));
+  const bool IsTrap = HasCodeOwner && Dec.isResumableTrap(Peek);
   Dec.setDetail(PreviousDetail);
-  return Size > 0 && !IsTrap;
+  return HasCodeOwner && !IsTrap;
 }
 
 InstructionMode effectiveInstructionMode(Arch Architecture,
@@ -233,6 +235,26 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
 
   convertIndirectTailCalls(Func);
 
+  // A relocation-free RIP-relative LEA is initially only an address-of
+  // candidate.  Once jump-table recovery proves that the same address owns
+  // inline table storage (which Mach-O commonly places in __text), the data
+  // owner wins: publishing it as a global CodeRefTarget would make every
+  // numerically equal occurrence look like a function/label identity.
+  for (auto It = DiscoveredCodeRefs.begin(); It != DiscoveredCodeRefs.end();) {
+    bool IsJumpTableStorage = false;
+    for (const JumpTable &JT : Func.JumpTables)
+      if (JT.ownsStorageAddress(*It)) {
+        IsJumpTableStorage = true;
+        break;
+      }
+    if (IsJumpTableStorage) {
+      auto Erase = It++;
+      DiscoveredCodeRefs.erase(Erase);
+    } else {
+      ++It;
+    }
+  }
+
   Func.CodeRefTargets.assign(DiscoveredCodeRefs.begin(),
                              DiscoveredCodeRefs.end());
   Func.DecodedInstructionCount = DecodedInstructionCount;
@@ -265,7 +287,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       ExploredAddrs.insert(Cur);
 
       const auto *Seg = Img.getSegmentFor(Cur);
-      if (!Seg || !Seg->isExecutable()) {
+      if (!Seg || !Img.hasExecutableCodeOwnerAt(Cur)) {
         TruncatedPathAddresses.insert(Cur);
         break;
       }
@@ -286,6 +308,10 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         DecodeFailureAddresses.insert(Cur);
         break;
       }
+      if (!Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz))) {
+        TruncatedPathAddresses.insert(Cur);
+        break;
+      }
       ++DecodedInstructionCount;
 
       const va_t InsnSize = static_cast<va_t>(Sz);
@@ -302,8 +328,22 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       Rec.Immediate = Dec.returnImmediate(DI);
       Rec.TargetMode = Dec.controlTargetMode(DI, Rec.Mode);
       Rec.FpuTopIn = Dec.getX86FpuTop();
+      std::vector<RelocatedAddressOperand> RelocatedOperands;
+      auto selectRelocatedOperand =
+          [&](const std::map<va_t, RelocatedAddressField> &Occurrences,
+              ConstantAddressProvenance Provenance) {
+            auto It = Occurrences.lower_bound(Cur);
+            for (; It != Occurrences.end() && It->first < Next; ++It)
+              RelocatedOperands.push_back(RelocatedAddressOperand{
+                  It->first, It->second.EncodedValue, It->second.TargetVA,
+                  It->second.Width, Provenance, It->second.TargetOwnerVA});
+          };
+      selectRelocatedOperand(Img.DataAddressRelocOperands,
+                             ConstantAddressProvenance::DataAddress);
+      selectRelocatedOperand(Img.CodeAddressRelocOperands,
+                             ConstantAddressProvenance::CodeAddress);
       try {
-        Dec.liftToLow(DI, Rec.Ops);
+        Dec.liftToLow(DI, Rec.Ops, RelocatedOperands);
       } catch (const UnliftedInstruction &Failure) {
         UnsupportedInstructionAddresses.insert(Failure.getAddr());
         break;
@@ -317,8 +357,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // loader saw no relocation).  Record the target so the emitter symbolizes
       // the folded constant to `ptrtoint @func` rather than the stale VA.
       if (va_t Ref = Dec.pcRelCodeRefTarget(DI); Ref != InvalidVA) {
-        const auto *RefSeg = Img.getSegmentFor(Ref);
-        if (RefSeg && RefSeg->isExecutable())
+        if (Img.hasExecutableCodeOwnerAt(Ref))
           DiscoveredCodeRefs.insert(Ref);
       }
 

@@ -952,14 +952,19 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
                                   /*Depth=*/0, FailClosed))
       return nullptr;
   }
-  if (!HaveBase || Base == 0 || (IdxTerms.empty() && !DynamicSubtrahend))
+  bool OwnerConflict = false;
+  std::optional<uint64_t> BaseOwner =
+      HaveBase ? uniqueDataAddressOwner(AddrVar, Base, OwnerConflict)
+               : std::nullopt;
+  if (OwnerConflict || !HaveBase || (Base == 0 && !BaseOwner) ||
+      (IdxTerms.empty() && !DynamicSubtrahend))
     return nullptr;
 
   // A base at a real read-only data symbol is a genuine lookup table (the .o's
   // rodata reference went through a relocation to that symbol).  This is an
   // exact signal, so it bypasses the heuristic guards below that protect
   // against frame-synthesized absolute addresses misread as table bases.
-  bool BaseIsRodataSymbol = isReadOnlyDataSymbol(Base);
+  bool BaseIsRodataSymbol = BaseOwner || isReadOnlyDataSymbol(Base);
 
   unsigned BaseBits = AddrVar.Size > 0 ? AddrVar.Size * 8 : 64;
   if (!BaseIsRodataSymbol && isFrameRelativeDisplacement(Base, BaseBits))
@@ -999,7 +1004,8 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
       return nullptr;
   }
 
-  auto *G = tryResolveGlobalData(Base, SizeHint);
+  auto *G = BaseOwner ? tryResolveOwnedGlobalData(Base, *BaseOwner, SizeHint)
+                      : tryResolveGlobalData(Base, SizeHint);
   if (!G)
     return nullptr;
   // Only redirect into genuinely read-only globals; writable/BSS resolutions

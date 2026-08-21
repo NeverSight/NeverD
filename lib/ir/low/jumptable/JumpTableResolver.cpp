@@ -188,7 +188,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     }
 
     if (Shape && !Ambiguous) {
-      Info.BaseAddr = Shape->TableBase;
+      Info.setBaseAddr(Shape->TableBase);
       Info.EntrySize = Shape->EntrySize;
       Info.EntryStride = Shape->EntryStride;
       Info.IndexReg = ShapeIndex;
@@ -289,7 +289,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // genuinely guarded table (signed/normalized switch) keeps its guard-derived
   // bound untouched.
   if (!GuardFound && !Info.RelocAbsolute && Info.IsRelative &&
-      Info.BaseAddr != 0 && Info.EntrySize > 0) {
+      Info.HasBaseAddr && Info.EntrySize > 0) {
     uint32_t RelRun = countRelCodeRelocRun(Img, Info.BaseAddr, Info.EntrySize);
     // A second unguarded PIC table placed immediately after this one continues
     // the same RelCodeReloc run, so the raw count over-reads into it; cap the
@@ -316,7 +316,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // separate concerns.
   bool AbsCodePtrRun =
       !Info.RelocAbsolute && !Info.TwoTableSelect && Info.TargetBase == 0 &&
-      Info.BaseAddr != 0 && Info.EntrySize > 0 &&
+      Info.HasBaseAddr && Info.EntrySize > 0 &&
       countCodePtrRelocRun(Img, Info.BaseAddr, Info.EntrySize) >=
           limits::kMinJumpTableEntries;
   if (AbsCodePtrRun && Info.IsRelative) {
@@ -352,7 +352,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // table exactly and keeps the single-target readonly fallback below (which
   // only fires at MaxEntries == 0) from collapsing it to one entry.
   if (!GuardFound && Info.MaxEntries == 0 && !Info.RelocAbsolute &&
-      Info.IsRelative && Info.BaseAddr != 0 && Info.EntrySize > 0)
+      Info.IsRelative && Info.HasBaseAddr && Info.EntrySize > 0)
     inferBoundsFromModulo(Img, Rec, Info);
 
   // COND_BR-polarity: `cmp idx,N; ja default` (strict above) makes the table
@@ -452,10 +452,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // target" read below into a bounded 1-entry read, dropping every other
   // arm and degrading the dispatch to a broken indirect tail call — so the
   // single-value optimisation is restricted to non-executable segments.
-  if (Info.MaxEntries == 0 && Info.BaseAddr != 0) {
+  if (Info.MaxEntries == 0 && Info.HasBaseAddr) {
     const auto *BaseSeg = Img.getSegmentFor(Info.BaseAddr);
-    if (BaseSeg && !BaseSeg->isWritable() && !BaseSeg->isExecutable() &&
-        !BaseSeg->Data.empty()) {
+    if (BaseSeg && !BaseSeg->isWritable() &&
+        !Img.isCodeAddress(Info.BaseAddr) && !BaseSeg->Data.empty()) {
       size_t Off = static_cast<size_t>(Info.BaseAddr - BaseSeg->VA);
       if (rangeInBounds(Off, Info.EntrySize, BaseSeg->Data.size())) {
         va_t SingleTarget = decodeTableEntry(
@@ -484,7 +484,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // a COND_BR sends one path to a constant (default) and another to the
   // switch computation (default-value path with an explicit COND_BR split).
   if (Targets.size() < limits::kMinJumpTableEntries && Info.MaxEntries == 0 &&
-      Info.BaseAddr != 0) {
+      Info.HasBaseAddr) {
     if (tryDualPathRecovery(Rec, Info)) {
       auto AltTargets = readTableEntries(Img, Info);
       sanityCheckTargets(Img, AltTargets);
@@ -500,7 +500,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // Multi-stage fallback: if we got a base but the initial read produced
   // too few entries (no guard bound found), retry with relaxed parameters.
   if (Targets.size() < limits::kMinJumpTableEntries && Info.MaxEntries == 0 &&
-      Info.BaseAddr != 0) {
+      Info.HasBaseAddr) {
     for (uint16_t AltSize : {uint16_t(4), uint16_t(8), uint16_t(2)}) {
       if (AltSize == Info.EntrySize)
         continue;
@@ -584,7 +584,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // monotonic: it only fires where the branch would otherwise degrade to a tail
   // call, so it can never shrink an already-recovered table.
   if (Targets.size() < limits::kMinJumpTableEntries && Info.MaxEntries == 0 &&
-      Info.BaseAddr != 0 && CurrentImg) {
+      Info.HasBaseAddr && CurrentImg) {
     const auto *BaseSeg = Img.getSegmentFor(Info.BaseAddr);
     if (BaseSeg && !BaseSeg->isWritable() && !BaseSeg->Data.empty()) {
       auto EmuTargets =
@@ -622,9 +622,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   for (size_t I = 0; DenseStatic && I < KeptIdx.size(); ++I)
     DenseStatic = KeptIdx[I] == I;
   if (CurrentImg && DenseStatic && !Targets.empty() &&
-      Info.IndexReg != InvalidVA && Info.BaseAddr != 0 &&
-      Info.TargetBase == 0 && Info.EntryScale == 1 && !Info.PreScaledIndex &&
-      !Info.TwoTableSelect && !Info.RelocAbsolute && !Info.RelocBounded &&
+      Info.IndexReg != InvalidVA && Info.HasBaseAddr && Info.TargetBase == 0 &&
+      Info.EntryScale == 1 && !Info.PreScaledIndex && !Info.TwoTableSelect &&
+      !Info.RelocAbsolute && !Info.RelocBounded &&
       (Info.EntrySize == 1 || Info.EntrySize == 2 || Info.EntrySize == 4 ||
        Info.EntrySize == 8)) {
     bool Grounded = false;

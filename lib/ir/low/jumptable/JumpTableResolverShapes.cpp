@@ -117,7 +117,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
         if (CurFrom >= 0 && CurFrom < static_cast<int>(Ops.size()))
           FoldCutoff = std::min(FoldCutoff, Ops[CurFrom].Addr);
         auto F = foldRegConstant(Img, Rec, Cur.Offset, FoldCutoff);
-        if (F && *F) {
+        if (F && Img.getSegmentFor(*F)) {
           if (TableEntW == 0 || countCodePtrRelocRun(Img, *F, TableEntW) > 0)
             return F;
           if (!RegFallback)
@@ -342,7 +342,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
             Total > limits::kMaxJumpTableEntries)
           continue;
 
-        Info.BaseAddr = Lo;
+        Info.setBaseAddr(Lo);
         Info.EntrySize = W;
         Info.MaxEntries = Total;
         Info.RelocAbsolute = true;
@@ -397,7 +397,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       if (!readCodePtrRun(Lo, N, Union) || !readCodePtrRun(Hi, N, Union))
         continue;
 
-      Info.BaseAddr = Lo;
+      Info.setBaseAddr(Lo);
       Info.EntrySize = W;
       Info.MaxEntries = 2u * N;
       Info.RelocAbsolute = true;
@@ -531,11 +531,10 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
       else if (BaseV.isReg() || BaseV.isTemp()) {
         uint64_t BReg = traceToRegister(Ops, AddIdx - 1, BaseV);
         if (BReg != InvalidVA)
-          if (auto F = foldRegConstant(Img, Rec, BReg, L.Addr); F && *F)
+          if (auto F = foldRegConstant(Img, Rec, BReg, L.Addr);
+              F && Img.getSegmentFor(*F))
             Base = static_cast<va_t>(*F);
       }
-      if (Base == 0)
-        continue;
       const auto *Seg = Img.getSegmentFor(Base);
       if (!Seg || Seg->Data.empty())
         continue;
@@ -544,7 +543,7 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(const BinaryImage &Img,
         continue;
 
       uint64_t IdxSrc = traceRegSource(Ops, AddIdx - 1, Idx);
-      Info.BaseAddr = Base;
+      Info.setBaseAddr(Base);
       Info.EntrySize = W;
       Info.IsRelative = false;
       Info.IsSigned = false;

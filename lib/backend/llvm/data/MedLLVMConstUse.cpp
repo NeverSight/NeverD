@@ -40,7 +40,8 @@ void MedLLVMEmitter::ensureConstClassCache() const {
 }
 
 bool MedLLVMEmitter::resolveMaterializableDataAddress(const MedVar &V,
-                                                      uint64_t &Value) const {
+                                                      uint64_t &Value,
+                                                      uint64_t *OwnerVA) const {
   if (!Img)
     return false;
   const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
@@ -84,12 +85,26 @@ bool MedLLVMEmitter::resolveMaterializableDataAddress(const MedVar &V,
   if (Cur.Provenance == ConstantAddressProvenance::Address &&
       Img->isCodeAddress(Cur.ConstVal))
     return false;
+  bool HasOwnedRoute = false;
+  if (Cur.AddressOwnerVA != InvalidVA) {
+    const Segment *OwnerSeg = Img->getSegmentFor(Cur.AddressOwnerVA);
+    const Section *OwnerSec = Img->getSectionFor(Cur.AddressOwnerVA);
+    if (OwnerSeg && OwnerSeg->isReadable()) {
+      const uint64_t Begin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
+      const uint64_t Size = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
+      HasOwnedRoute = Size <= InvalidVA - Begin && Cur.ConstVal >= Begin &&
+                      Cur.ConstVal <= Begin + Size;
+    }
+  }
   if ((Cur.Provenance != ConstantAddressProvenance::DataAddress &&
        !Img->isPotentiallyRelocatableAddress(Cur.ConstVal)) ||
-      !canResolveGlobalDataConstant(Cur.ConstVal) ||
-      addrInCodePtrMirrorRun(Cur.ConstVal))
+      (!HasOwnedRoute && !canResolveGlobalDataConstant(Cur.ConstVal)) ||
+      (Cur.Provenance != ConstantAddressProvenance::DataAddress &&
+       addrInCodePtrMirrorRun(Cur.ConstVal)))
     return false;
   Value = Cur.ConstVal;
+  if (OwnerVA)
+    *OwnerVA = Cur.AddressOwnerVA;
   return true;
 }
 

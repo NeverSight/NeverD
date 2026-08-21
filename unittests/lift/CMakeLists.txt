@@ -110,6 +110,7 @@ add_neverd_unittest(NeverDLiftTests
   format/MachOFunctionListingTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
   format/MachOPointerRelocationBoundaryTests.cpp
+  format/COFFRelocatableAbsoluteRelocationTests.cpp
   format/NativePointerRelocationBoundaryTests.cpp
   core/MedCallingConvTests.cpp
   eh/COFFExceptionTests.cpp
@@ -305,6 +306,7 @@ target_include_directories(NeverDMachOPointerRelocationBoundaryTests PRIVATE
 # loader and end-to-end LLVM lift boundaries without relinking the aggregate
 # lift suite during RED/GREEN iterations.
 add_neverd_unittest(NeverDNativePointerRelocationBoundaryTests
+  format/COFFRelocatableAbsoluteRelocationTests.cpp
   format/NativePointerRelocationBoundaryTests.cpp
 
   LINK_COMPONENTS

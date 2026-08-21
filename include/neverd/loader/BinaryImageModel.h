@@ -51,6 +51,22 @@ struct ImportBindSlot {
   int64_t Addend = 0;
 };
 
+/// Exact encoded relocation field that materializes a complete address
+/// operand. EncodedValue is the canonical unsigned value written to Width
+/// bytes; TargetVA is the mapped address it denotes. Keeping both prevents a
+/// section-difference expression (whose field is A-B but whose eventual target
+/// is A) from being mistaken for a complete address occurrence.
+struct RelocatedAddressField {
+  uint64_t EncodedValue = 0;
+  va_t TargetVA = InvalidVA;
+  uint8_t Width = 0;
+  /// Address inside the section/segment that semantically owns TargetVA.
+  /// This differs from TargetVA for one-past relocations, which may
+  /// numerically coincide with the next section's first byte.  InvalidVA
+  /// means no occurrence-local owner was retained.
+  va_t TargetOwnerVA = InvalidVA;
+};
+
 // ===--------------------------------------------------------------------===//
 // BinaryImage — the unified output of all loaders
 // ===--------------------------------------------------------------------===//
@@ -92,6 +108,15 @@ struct BinaryImage {
   /// PC/page-relative forms (x86-64 rip, AArch64 ADRP) already resolve through
   /// the existing >kMinGlobalDataAddr path and are intentionally left out.
   std::set<uint64_t> RelocDataAddrs;
+  /// Exact relocation-field VA -> resolved data-address operand for relocation
+  /// forms that materialize the address in an instruction.  Unlike
+  /// RelocDataAddrs this is occurrence provenance: CFG lifting consults the
+  /// field inside the current instruction before tagging the matching constant
+  /// as DataAddress, so an unrelated integer that merely equals the same target
+  /// VA never inherits pointer meaning.  i386 R_386_GOTOFF is the canonical
+  /// producer; its relocated displacement is the complete target under the
+  /// loader's GOT-base-zero model.
+  std::map<va_t, RelocatedAddressField> DataAddressRelocOperands;
   /// Virtual addresses that a relocation resolves to inside a WRITABLE data
   /// segment (.data/.bss), filled by the loader as it applies relocations.  The
   /// writable counterpart of RelocDataAddrs: it proves a constant is a genuine
@@ -131,6 +156,11 @@ struct BinaryImage {
   /// the pointers survive relinking (the data analogue of CodePtrRelocSlots),
   /// instead of leaving the stale original VAs that would read unmapped memory.
   std::set<uint64_t> DataPtrRelocSlots;
+  /// Data-pointer slot -> address inside the relocation symbol's owning
+  /// section/segment.  Slot bytes alone cannot disambiguate a one-past target
+  /// from the next section's start, and VA zero is a valid ET_REL/COFF object
+  /// address rather than an implicit null when this map has an entry.
+  std::map<va_t, va_t> DataPtrRelocTargetOwners;
   /// Virtual addresses of 32-bit PC-relative relocation slots in read-only
   /// data whose targets are also non-code data.  Clang uses a contiguous run of
   /// these for a PIC switch that returns one of several data pointers (commonly
@@ -170,6 +200,17 @@ struct BinaryImage {
   /// rip` form carries no relocation and is recovered during lifting, when the
   /// image is const.
   mutable std::set<uint64_t> CodeRefTargets;
+  /// Code-address counterpart of DataAddressRelocOperands.  The value-keyed
+  /// CodeRefTargets remains the cross-stage relocation target inventory; this
+  /// map identifies the instruction occurrence whose relocated operand
+  /// actually materialized that target.
+  std::map<va_t, RelocatedAddressField> CodeAddressRelocOperands;
+  /// Function entries accepted only after FuncDetector's bounded semantic
+  /// decode. Keep these separate from untyped exports and address-taken code
+  /// references: both of those can legally identify data. Mutable because
+  /// discovery runs through a const pipeline view and patch-time source
+  /// authentication consumes the published result later in the same run.
+  mutable std::set<uint64_t> VerifiedFunctionEntries;
   /// Maps the virtual address of a non-lazy/lazy pointer slot (Mach-O __got /
   /// __la_symbol_ptr, the indirect-symbol-table backed import pointer tables)
   /// to the imported symbol it binds to.  Most external calls go through a
@@ -243,14 +284,30 @@ struct BinaryImage {
     return false;
   }
 
+  /// True when mapped/readable section metadata owns any byte of \p Seg.
+  /// This is segment-local: a partial/packed image may describe sections for
+  /// one mapping while leaving another mapping intentionally section-less.
+  bool segmentHasReadableSectionMetadata(const Segment &Seg) const {
+    if (Seg.Size > InvalidVA - Seg.VA)
+      return false;
+    const uint64_t SegmentEnd = Seg.VA + Seg.Size;
+    for (const Section &Candidate : Sections) {
+      if (!Candidate.isReadable() || Candidate.Size == 0 ||
+          Candidate.Size > InvalidVA - Candidate.VA)
+        continue;
+      const uint64_t CandidateEnd = Candidate.VA + Candidate.Size;
+      if (Candidate.VA < SegmentEnd && Seg.VA < CandidateEnd)
+        return true;
+    }
+    return false;
+  }
+
   /// True when \p Addr is backed by format-native object data, rather than
   /// merely falling inside a coarse readable load segment. Exact section
   /// metadata excludes executable bytes plus ELF/Mach-O headers and alignment
   /// gaps; section-less images conservatively fall back to non-executable
   /// file-backed segments.
   bool hasObjectDataProvenance(va_t Addr) const {
-    if (Addr == 0)
-      return false;
     const Segment *Seg = getSegmentFor(Addr);
     if (!Seg || Seg->Data.empty() || Addr < Seg->VA ||
         Addr - Seg->VA >= Seg->Data.size() || !Seg->isReadable())
@@ -263,22 +320,9 @@ struct BinaryImage {
              (isMachO() ? !isCodeAddress(Addr) : !Sec->isExecutable());
 
     // Some synthetic/stripped images describe a whole data segment but omit a
-    // section row for it. Fall back only if no readable section overlaps this
+    // section row for it. Fall back only if no section overlaps this
     // segment at all; otherwise an uncovered byte is a header/alignment gap.
-    bool SegmentHasSectionMetadata = false;
-    for (const Section &Candidate : Sections) {
-      if (!Candidate.isReadable() || Candidate.Size == 0 ||
-          Candidate.Size > InvalidVA - Candidate.VA ||
-          Seg->Size > InvalidVA - Seg->VA)
-        continue;
-      const uint64_t CandidateEnd = Candidate.VA + Candidate.Size;
-      const uint64_t SegmentEnd = Seg->VA + Seg->Size;
-      if (Candidate.VA < SegmentEnd && Seg->VA < CandidateEnd) {
-        SegmentHasSectionMetadata = true;
-        break;
-      }
-    }
-    return !SegmentHasSectionMetadata && !Seg->isExecutable();
+    return !segmentHasReadableSectionMetadata(*Seg) && !Seg->isExecutable();
   }
 
   /// Loader/layout-only upper bound for constants whose numeric value may
@@ -380,20 +424,61 @@ struct BinaryImage {
     return nullptr;
   }
 
+  /// Half-open end of the mapped section/object-storage owner containing
+  /// \p Addr. An uncovered gap in a segment that otherwise has section
+  /// metadata has no owner; a genuinely section-less segment owns its
+  /// materialized bytes as one compatibility range.
+  std::optional<va_t> mappedObjectOwnerEnd(va_t Addr) const {
+    const Segment *Seg = getSegmentFor(Addr);
+    if (!Seg || Addr < Seg->VA || Seg->Data.empty() ||
+        Seg->Data.size() > InvalidVA - Seg->VA)
+      return std::nullopt;
+    const va_t MaterializedEnd = Seg->VA + Seg->Data.size();
+    if (const Section *Sec = getSectionFor(Addr)) {
+      if (Sec->Size == 0 || Sec->Size > InvalidVA - Sec->VA)
+        return std::nullopt;
+      return std::min<va_t>(Sec->VA + Sec->Size, MaterializedEnd);
+    }
+    if (segmentHasReadableSectionMetadata(*Seg))
+      return std::nullopt;
+    return MaterializedEnd;
+  }
+
   /// Classify one mapped address using the finest format-native provenance.
-  /// Mach-O commonly places non-code sections such as __cstring in the RX
-  /// __TEXT segment, so an exact section's instruction attributes take
-  /// precedence over that coarse segment permission.  Other formats retain
-  /// the historical segment-based classification.
+  /// An exact format-native section takes precedence over coarse segment
+  /// permissions. Mach-O uses instruction attributes; ELF/COFF use the
+  /// section's executable flag. This matters when linkers place non-code data
+  /// in the same RX mapping as `.text`. A header or alignment gap is not code
+  /// when section metadata exists; section-less images retain the historical
+  /// segment fallback.
   bool isCodeAddress(va_t Addr) const {
     const Segment *Seg = getSegmentFor(Addr);
     if (!Seg)
       return false;
-    if (isMachO())
-      if (const Section *Sec = getSectionFor(Addr))
+    if (const Section *Sec = getSectionFor(Addr)) {
+      if (isMachO())
         return (Sec->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
                              llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) != 0;
+      return Sec->isExecutable();
+    }
+    if (segmentHasReadableSectionMetadata(*Seg))
+      return false;
     return Seg->isExecutable();
+  }
+
+  /// True when one complete half-open byte range has a single code owner.
+  bool isCodeRange(va_t Addr, uint64_t Size) const {
+    if (Size == 0 || Size - 1 > InvalidVA - Addr)
+      return false;
+    const va_t Last = Addr + Size - 1;
+    const Segment *FirstSeg = getSegmentFor(Addr);
+    if (!FirstSeg || getSegmentFor(Last) != FirstSeg || !isCodeAddress(Addr) ||
+        !isCodeAddress(Last))
+      return false;
+    const Section *FirstSec = getSectionFor(Addr);
+    const Section *LastSec = getSectionFor(Last);
+    return (!FirstSec && !LastSec) ||
+           (FirstSec && LastSec && FirstSec == LastSec);
   }
 
   bool isDataAddress(va_t Addr) const {
@@ -616,6 +701,18 @@ struct BinaryImage {
       if (Sym.Addr == Addr)
         return &Sym;
     return nullptr;
+  }
+
+  /// True when typed symbol metadata owns p Addr as a function entry.
+  /// Normalize ARM/Thumb spellings so patch-time synthetic original-VA
+  /// symbols can recover the same code identity after reloading the image.
+  bool hasFunctionSymbolAt(va_t Addr) const {
+    const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
+    for (const auto &Sym : Symbols)
+      if (Sym.IsFunc &&
+          normalizeCodeAddress(Sym.Addr, Arch, Mode) == Normalized)
+        return true;
+    return false;
   }
 
   /// Largest non-function symbol size defined exactly at \p Addr (0 if none).
@@ -849,12 +946,116 @@ struct BinaryImage {
       if (Addr >= Start && Addr < End)
         return true;
     // Compatibility for format loaders that historically put a code stub in
-    // IATAddr (Mach-O).  A PE/ELF data slot cannot pass the executable check.
+    // IATAddr (Mach-O). PE/ELF loaders register callable thunks explicitly;
+    // their IAT/GOT slots remain data even inside a coarse executable map.
+    if (!isMachO())
+      return false;
     for (const auto &Imp : Imports)
-      if (Imp.IATAddr == Addr) {
-        const Segment *Seg = getSegmentFor(Addr);
-        return Seg && Seg->isExecutable();
-      }
+      if (Imp.IATAddr == Addr)
+        return isCodeAddress(Addr);
+    return false;
+  }
+
+  /// True when loader or format metadata gives \p Addr an executable-code
+  /// owner. Exact section permissions are preferred, while typed function
+  /// extents, unwind ranges, and explicitly registered import veneers remain
+  /// authoritative for packed images whose section flags are incomplete.
+  bool hasExecutableCodeOwnerAt(va_t Addr) const {
+    const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
+    const Segment *Seg = getSegmentFor(Normalized);
+    if (!Seg || !Seg->isExecutable())
+      return false;
+    if (isCodeAddress(Normalized) || isImportStubAt(Addr) ||
+        isImportStubAt(Normalized) ||
+        (Entry != 0 && normalizeCodeAddress(Entry, Arch, Mode) == Normalized) ||
+        RuntimeFunctionAddrs.count(Addr) != 0 ||
+        RuntimeFunctionAddrs.count(Normalized) != 0 ||
+        VerifiedFunctionEntries.count(Normalized) != 0)
+      return true;
+    for (const auto &[Start, End] : KnownCodeRanges)
+      if (Normalized >= Start && Normalized < End)
+        return true;
+    for (const Symbol &Sym : Symbols) {
+      if (!Sym.IsFunc)
+        continue;
+      const va_t Start = normalizeCodeAddress(Sym.Addr, Arch, Mode);
+      if (Normalized == Start)
+        return true;
+      if (Sym.Size != 0 && Sym.Size <= InvalidVA - Start &&
+          Normalized > Start && Normalized < Start + Sym.Size)
+        return true;
+    }
+    return false;
+  }
+
+  /// True when p Addr is an authenticated callable entry, rather than merely
+  /// an address inside executable code. Untyped COFF exports are deliberately
+  /// excluded; they require decode/unwind evidence before a patcher may place
+  /// a trampoline over the original bytes.
+  bool hasAuthenticatedFunctionEntryAt(va_t Addr) const {
+    const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
+    if (!hasExecutableCodeOwnerAt(Normalized))
+      return false;
+    if ((Entry != 0 && normalizeCodeAddress(Entry, Arch, Mode) == Normalized) ||
+        RuntimeFunctionAddrs.count(Addr) != 0 ||
+        RuntimeFunctionAddrs.count(Normalized) != 0 ||
+        VerifiedFunctionEntries.count(Normalized) != 0 ||
+        ImportStubIndices.count(Addr) != 0 ||
+        ImportStubIndices.count(Normalized) != 0)
+      return true;
+    for (const auto &[Start, End] : ImportStubRanges)
+      if (Start < End && Start == Normalized)
+        return true;
+    for (const auto &[Start, End] : KnownCodeRanges)
+      if (Start < End && Start == Normalized)
+        return true;
+    if (hasFunctionSymbolAt(Normalized))
+      return true;
+    // Export tables are not type metadata: Mach-O export tries and PE/ELF
+    // dynamic exports may name data.  An export is callable on its own only
+    // when an exact mapped instruction section owns the address.  A
+    // section-less image still accepts typed symbols, unwind ranges, entry
+    // points, and explicit import stubs above, but never upgrades every RX
+    // export into a function merely because the segment is executable.
+    if (Format != BinaryFormat::COFF && getSectionFor(Normalized))
+      for (const Export &Exp : Exports)
+        if (normalizeCodeAddress(Exp.Addr, Arch, Mode) == Normalized &&
+            isCodeAddress(Normalized))
+          return true;
+    return false;
+  }
+
+  /// True when every byte in one decoded instruction/range has the same
+  /// structural code owner. This prevents a decoder from joining an opcode at
+  /// the end of a code section with displacement bytes from adjacent data.
+  bool hasExecutableCodeOwnerRange(va_t Addr, uint64_t Size) const {
+    if (Size == 0)
+      return false;
+    const va_t Start = normalizeCodeAddress(Addr, Arch, Mode);
+    if (Size - 1 > InvalidVA - Start)
+      return false;
+    const va_t Last = Start + Size - 1;
+    const Segment *Seg = getSegmentFor(Start);
+    if (!Seg || !Seg->isExecutable() || getSegmentFor(Last) != Seg)
+      return false;
+    if (isCodeRange(Start, Size))
+      return true;
+    for (const auto &[RangeStart, RangeEnd] : ImportStubRanges)
+      if (Start >= RangeStart && Last < RangeEnd)
+        return true;
+    for (const auto &[RangeStart, RangeEnd] : KnownCodeRanges)
+      if (Start >= RangeStart && Last < RangeEnd)
+        return true;
+    for (const Symbol &Sym : Symbols) {
+      if (!Sym.IsFunc)
+        continue;
+      const va_t SymStart = normalizeCodeAddress(Sym.Addr, Arch, Mode);
+      if (Sym.Size == 0)
+        continue;
+      if (Sym.Size <= InvalidVA - SymStart && Start >= SymStart &&
+          Last < SymStart + Sym.Size)
+        return true;
+    }
     return false;
   }
 

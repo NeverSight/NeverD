@@ -51,6 +51,12 @@ bool MedLLVMEmitter::controlConstantMayRelocate(const MedVar &V) const {
   if (V.Provenance == ConstantAddressProvenance::Scalar)
     return false;
 
+  // Numeric zero is a control/null value unless this exact occurrence carried
+  // address provenance above. A different relocation that legitimately names
+  // data or code at VA zero must not keep an unrelated `if (0)` edge alive.
+  if (Val == 0)
+    return false;
+
   // Match the high-VA direct getVar domain without consulting use-site
   // analysis. Readable executable bytes are intentionally included: an exact
   // literal-pool/data use inside .text can still be emitted as rebuilt data.
@@ -337,6 +343,11 @@ void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
   InductionBasesFor = nullptr;
   InductionBaseVAs.clear();
   PtrTableUniqueSegCache.clear();
+  WritableDataSegCache.clear();
+  FrameDerivedCacheFor = nullptr;
+  FrameDerivedCache.clear();
+  FrameAddressCacheFor = nullptr;
+  FrameAddressCache.clear();
 }
 
 void MedLLVMEmitter::ensureFeasibleEdgeCache() const {
@@ -609,6 +620,12 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   // or forwarded/arithmetic DAG that carries independently relocatable address
   // provenance. Runtime parameters and opaque scalar results remain valid
   // offsets because getVar does not rewrite them into another global pointer.
+  // Keep one budget for the complete proof, rather than one budget per copied
+  // DFS branch.  Lowered SELECT/PHI diamonds often share both value arms; a
+  // path-local depth limit alone still permits exponential re-traversal.  On
+  // exhaustion, false is conservative: callers retain the mixed/raw model
+  // instead of granting a scalar-offset proof.
+  int RemainingProofNodes = 4096;
   std::function<bool(const MedVar &, int, std::set<Key>,
                      std::set<FrameSlotKey>)>
       prove = [&](const MedVar &Start, int Depth, std::set<Key> Seen,
@@ -621,6 +638,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     if (!Start.isConst() && Seen.count(keyOf(Start)))
       return true;
     if (Depth > 128)
+      return false;
+    if (RemainingProofNodes-- <= 0)
       return false;
     auto constantIsMappedAddress = [&](uint64_t Value, uint16_t Size) {
       if (!Img || Value == 0)
@@ -638,8 +657,20 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     if (Start.isConst() &&
         Start.Provenance == ConstantAddressProvenance::Scalar)
       return true;
-    if (Start.isConst() && isAddressProvenance(Start.Provenance))
-      return false;
+    if (Start.isConst() && isAddressProvenance(Start.Provenance)) {
+      if (Start.Provenance != ConstantAddressProvenance::Address)
+        return false;
+      // A role-neutral architectural-PC seed (i386 call/pop) is numeric at a
+      // scalar-offset use when neither data nor code arbitration would rewrite
+      // this exact occurrence.  This keeps `pc + GOTOFF/SECTDIFF + index`
+      // eligible for the pointer-table owner while still rejecting explicit
+      // DataAddress/CodeAddress leaves and any Address occurrence that will be
+      // materialized as a global, function, or lifted block.
+      uint64_t MaterializedDataVA = 0;
+      return !resolveMaterializableDataAddress(Start, MaterializedDataVA) &&
+             !codeIdentityOccurrenceMayRelocate(
+                 Start, /*IncludeLayoutCodeOwners=*/false);
+    }
     if (Start.isConst())
       return !constantIsMappedAddress(Start.ConstVal, Start.Size);
     Seen.insert(keyOf(Start));
@@ -927,6 +958,31 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
     return TRI.isSubRegOf(A.RegOff, A.Size, B.RegOff, B.Size) ||
            TRI.isSubRegOf(B.RegOff, B.Size, A.RegOff, A.Size);
   };
+
+  // Pure COPY-like recurrences do not need the bounded general recurrence
+  // proof below.  Follow the single identity-preserving edge iteratively so a
+  // long lowered chain such as `p = PHI(&f, COPY^N(p))` still collapses to its
+  // unique initializer.  The incoming PHI edge was required to be proven
+  // feasible above; unknown edges must not acquire recurrence authority from
+  // this fast path.
+  {
+    MedVar Current = Arg;
+    std::set<AddressProvenanceVarKey> Seen;
+    while (!Current.isConst()) {
+      if (addressProvenanceVarKey(Current) ==
+          addressProvenanceVarKey(Phi.Output))
+        return true;
+      if (!Seen.insert(addressProvenanceVarKey(Current)).second)
+        break;
+      const MedOp *Def = lookupDef(Current);
+      if (!Def)
+        break;
+      std::optional<MedVar> Forwarded = pointerPreservingInput(*Def);
+      if (!Forwarded || Forwarded->Size != Current.Size)
+        break;
+      Current = *Forwarded;
+    }
+  }
 
   struct RecurrencePathProof {
     bool PreservesPointer = false;
@@ -1450,9 +1506,12 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
       return std::nullopt;
     uint64_t Val = 0;
     std::memcpy(&Val, Seg->Data.data() + Off, Sz);
-    // The literal stores a signed PC-relative displacement; sign-extend so the
-    // subsequent `+ pc` produces the absolute table address.
-    if (Sz < 8 && (Val & (1ull << (Sz * 8 - 1))))
+    // A native-width absolute data-pointer relocation is an address-sized bit
+    // pattern and must be zero/canonical-extended on a 32-bit target.  Other
+    // literal loads may be signed PC-relative displacements; preserve their
+    // historical sign extension so a subsequent `+ pc` reconstructs the VA.
+    const bool IsAbsoluteDataPointer = Img->DataPtrRelocSlots.count(*Addr) != 0;
+    if (!IsAbsoluteDataPointer && Sz < 8 && (Val & (1ull << (Sz * 8 - 1))))
       Val |= ~uint64_t(0) << (Sz * 8);
     if (SawLoad)
       *SawLoad = true;
@@ -1463,8 +1522,8 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
   }
 }
 
-bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
-    const MedVar &V, std::set<uint64_t> &Targets) const {
+bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadIdentities(
+    const MedVar &V, std::set<DataAddressIdentity> &Targets) const {
   Targets.clear();
   if (!CurMedFunc || !Img || V.isConst() || Img->DataPtrRelocSlots.empty())
     return false;
@@ -1490,6 +1549,7 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
 
   MedVar Cur = V;
   const MedOp *Load = nullptr;
+  uint64_t Adjustment = 0;
   for (int Depth = 0; Depth < 8; ++Depth) {
     const MedOp *Def = lookupDef(Cur);
     if (!Def)
@@ -1515,17 +1575,20 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
     if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
       if (isStableNumericOffset(Def->Inputs[1]) &&
           canCarryPointer(Def->Inputs[0])) {
+        Adjustment += Def->Inputs[1].ConstVal;
         Cur = Def->Inputs[0];
         continue;
       }
       if (isStableNumericOffset(Def->Inputs[0]) &&
           canCarryPointer(Def->Inputs[1])) {
+        Adjustment += Def->Inputs[0].ConstVal;
         Cur = Def->Inputs[1];
         continue;
       }
     } else if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2 &&
                isStableNumericOffset(Def->Inputs[1]) &&
                canCarryPointer(Def->Inputs[0])) {
+      Adjustment -= Def->Inputs[1].ConstVal;
       Cur = Def->Inputs[0];
       continue;
     }
@@ -1537,23 +1600,42 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
 
   auto recoverAddressBase = [&](const MedVar &Addr, uint64_t &Base,
                                 uint64_t &RunEnd) -> bool {
+    // Prefer an exactly folded slot over segment-wide pointer-table evidence.
+    // A single read-only-after-relocation run may contain both data-pointer
+    // and code-pointer slots (Mach-O i386 __data does).  Scanning every data
+    // slot in that run for an exact LOAD from a code slot would misclassify the
+    // loaded function pointer as data and reject a valid indirect call.
+    if (!Addr.isConst()) {
+      if (auto Exact = traceTableBaseConst(Addr)) {
+        uint64_t Slot = *Exact;
+        if (PtrSize < 8)
+          Slot &= (uint64_t(1) << (PtrSize * 8)) - 1;
+        if (Img->CodePtrRelocSlots.count(Slot) != 0)
+          return false;
+        if (Img->DataPtrRelocSlots.count(Slot) != 0) {
+          Base = Slot;
+          RunEnd = 0;
+          return true;
+        }
+      }
+    }
     // Absolute pointer tables commonly live in .data.rel.ro, whose segment is
     // writable in the object flags even though the emitter mirrors it as
     // read-only-after-relocation.  The ordinary rodata decomposition rejects
     // that segment by design; use the dedicated pointer-table proof first.
     if (!Addr.isConst())
-      if (uint64_t SegVA = ptrTableUniqueSegment(Addr)) {
-        Base = SegVA;
-        const Segment *Seg = Img->getSegmentFor(SegVA);
+      if (auto SegVA = ptrTableUniqueSegment(Addr)) {
+        Base = *SegVA;
+        const Segment *Seg = Img->getSegmentFor(*SegVA);
         uint64_t RunStart = 0;
         readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
-        if (!Seg || RunStart != SegVA || RunEnd <= RunStart)
+        if (!Seg || RunStart != *SegVA || RunEnd <= RunStart)
           return false;
         return true;
       }
     if (Addr.isConst()) {
       Base = Addr.ConstVal;
-      return Base != 0;
+      return Base != 0 || Img->DataPtrRelocSlots.count(0) != 0;
     }
     bool HaveBase = false;
     std::vector<MedVar> Terms;
@@ -1573,7 +1655,7 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
     if (!Folded || (SawArithmetic && !SawLoad))
       return false;
     Base = *Folded;
-    return Base != 0;
+    return Base != 0 || Img->DataPtrRelocSlots.count(0) != 0;
   };
 
   uint64_t Base = 0;
@@ -1588,9 +1670,14 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
       return false;
     uint64_t Target = 0;
     std::memcpy(&Target, Bytes, PtrSize);
-    if (!isMaterializableReadOnlyDataAddress(Target))
-      return false;
-    Targets.insert(Target);
+    Target += Adjustment;
+    if (PtrSize < 8)
+      Target &= (uint64_t(1) << (PtrSize * 8)) - 1;
+    uint64_t OwnerVA = InvalidVA;
+    if (auto It = Img->DataPtrRelocTargetOwners.find(Slot);
+        It != Img->DataPtrRelocTargetOwners.end())
+      OwnerVA = It->second;
+    Targets.insert({Target, OwnerVA});
     return true;
   };
 
@@ -1609,6 +1696,20 @@ bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
         break;
       Slot += PtrSize;
     }
+  }
+  return !Targets.empty();
+}
+
+bool MedLLVMEmitter::recoverAbsoluteDataPointerLoadTargets(
+    const MedVar &V, std::set<uint64_t> &Targets) const {
+  Targets.clear();
+  std::set<DataAddressIdentity> Identities;
+  if (!recoverAbsoluteDataPointerLoadIdentities(V, Identities))
+    return false;
+  for (const DataAddressIdentity &Identity : Identities) {
+    if (!isMaterializableReadOnlyDataAddress(Identity.VA, Identity.OwnerVA))
+      return false;
+    Targets.insert(Identity.VA);
   }
   return !Targets.empty();
 }
@@ -1843,6 +1944,89 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
   return Proven;
 }
 
+std::optional<uint64_t>
+MedLLVMEmitter::uniqueDataAddressOwner(const MedVar &V, uint64_t Value,
+                                       bool &Conflict) const {
+  Conflict = false;
+  std::optional<uint64_t> Owner;
+  std::vector<MedVar> Work{V};
+  std::set<AddressProvenanceVarKey> Seen;
+  int Budget = 4096;
+  auto mergeOwner = [&](uint64_t Candidate) {
+    if (Owner && *Owner != Candidate)
+      Conflict = true;
+    else
+      Owner = Candidate;
+  };
+
+  while (!Work.empty() && Budget-- > 0 && !Conflict) {
+    MedVar Cur = Work.back();
+    Work.pop_back();
+    if (Cur.isConst()) {
+      if (Cur.ConstVal == Value && isDataAddressProvenance(Cur.Provenance) &&
+          Cur.AddressOwnerVA != InvalidVA)
+        mergeOwner(Cur.AddressOwnerVA);
+      continue;
+    }
+    if (!Seen.insert(addressProvenanceVarKey(Cur)).second)
+      continue;
+    // Preserve the owner on the complete pointer expression, not just on its
+    // underlying LOAD. The recovery routine applies any width-preserving
+    // pointer +/- scalar adjustment, so `load(slot_to_A) + sizeof(A)` remains
+    // A's one-past occurrence even when its numeric value equals B's start.
+    std::set<DataAddressIdentity> Identities;
+    if (recoverAbsoluteDataPointerLoadIdentities(Cur, Identities)) {
+      const unsigned PtrSize = getTargetRegInfo(TargetArch).PointerSize;
+      const uint64_t Mask = PtrSize == 0 || PtrSize >= 8
+                                ? ~uint64_t(0)
+                                : (uint64_t(1) << (PtrSize * 8)) - 1;
+      for (const DataAddressIdentity &Identity : Identities) {
+        if ((Identity.VA & Mask) != (Value & Mask))
+          continue;
+        // The absolute relocation slot is authoritative for this occurrence.
+        // If its section owner was not preserved, do not silently fall back to
+        // the numerically adjacent object at the same VA.
+        if (Identity.OwnerVA == InvalidVA) {
+          Conflict = true;
+          break;
+        }
+        mergeOwner(Identity.OwnerVA);
+      }
+    }
+    if (const PhiNode *Phi = lookupPhi(Cur)) {
+      for (const auto &[PredId, Arg] : Phi->Args)
+        if (phiIncomingEdgeFeasible(*Phi, PredId))
+          Work.push_back(Arg);
+      continue;
+    }
+    const MedOp *Def = lookupDef(Cur);
+    if (!Def)
+      continue;
+    if (auto Forwarded = pointerPreservingInput(*Def)) {
+      Work.push_back(*Forwarded);
+      continue;
+    }
+    if (Def->Opcode == NdOp::LOAD) {
+      std::vector<MedVar> Sources;
+      if (collectFrameReloadSources(*Def, Sources))
+        Work.insert(Work.end(), Sources.begin(), Sources.end());
+      continue;
+    }
+    if (Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) {
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        Work.push_back(Def->Inputs[I]);
+      continue;
+    }
+    if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3) {
+      Work.push_back(Def->Inputs[1]);
+      Work.push_back(Def->Inputs[2]);
+    }
+  }
+  if (Budget <= 0)
+    Conflict = true;
+  return Conflict ? std::nullopt : Owner;
+}
+
 bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     const MedVar &V, uint64_t &Base, bool &HaveBase,
     std::vector<MedVar> &IdxTerms, int Depth, bool *SawAmbiguousPhi,
@@ -1851,9 +2035,14 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     return false;
 
   if (V.isConst()) {
-    if (!Img || V.ConstVal == 0)
+    if (!Img)
       return false;
-    const Segment *Seg = Img->getSegmentFor(V.ConstVal);
+    bool OwnerConflict = false;
+    std::optional<uint64_t> Owner =
+        uniqueDataAddressOwner(V, V.ConstVal, OwnerConflict);
+    if (OwnerConflict || (V.ConstVal == 0 && !Owner))
+      return false;
+    const Segment *Seg = Img->getSegmentFor(Owner.value_or(V.ConstVal));
     // Ordinary writable bytes are not immutable-table bases. A segment with
     // loader-proven pointer slots is different: the pointer-table mirror owns
     // it even when Mach-O/ELF object flags remain writable while relocations
@@ -1862,8 +2051,17 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     // all-arms audit, while the caller still rejects mixed/multiple bases.
     const bool LoaderOwnedPointerTable =
         Seg && !Seg->isExecutable() && segHasPtrRelocSlots(Seg);
-    if (!Seg || (Seg->isWritable() && !LoaderOwnedPointerTable) ||
-        !hasObjectDataProvenance(V.ConstVal) ||
+    bool HasOwnedBytes = false;
+    if (Owner && Seg) {
+      const Section *OwnerSec = Img->getSectionFor(*Owner);
+      const uint64_t Begin = OwnerSec ? OwnerSec->VA : Seg->VA;
+      const uint64_t Size = OwnerSec ? OwnerSec->Size : Seg->Size;
+      HasOwnedBytes = Size <= InvalidVA - Begin && V.ConstVal >= Begin &&
+                      V.ConstVal <= Begin + Size;
+    }
+    if (!Seg || Img->hasExecutableCodeOwnerAt(Owner.value_or(V.ConstVal)) ||
+        (Seg->isWritable() && !LoaderOwnedPointerTable) ||
+        !(Owner ? HasOwnedBytes : hasObjectDataProvenance(V.ConstVal)) ||
         (HaveBase && Base != V.ConstVal))
       return false;
     Base = V.ConstVal;
@@ -1890,6 +2088,8 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
       return false;
 
     std::optional<uint64_t> CommonBase;
+    uint64_t CommonOwner = InvalidVA;
+    bool HaveCommonOwner = false;
     bool SawFeasible = false;
     bool SawMappedData = false;
     bool SawUnproved = false;
@@ -1920,11 +2120,25 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
             HaveArmBase)
           Candidate = traceValueVA(Arg);
       }
-      const Segment *Seg = Candidate && *Candidate != 0
-                               ? Img->getSegmentFor(*Candidate)
+      bool OwnerConflict = false;
+      std::optional<uint64_t> Owner =
+          Candidate ? uniqueDataAddressOwner(Arg, *Candidate, OwnerConflict)
+                    : std::nullopt;
+      const Segment *Seg = Candidate && (*Candidate != 0 || Owner)
+                               ? Img->getSegmentFor(Owner.value_or(*Candidate))
                                : nullptr;
-      bool IsMappedReadOnlyData = Candidate && Seg && !Seg->isWritable() &&
-                                  hasObjectDataProvenance(*Candidate);
+      bool HasOwnedRange = false;
+      if (Candidate && Owner && Seg) {
+        const Section *OwnerSec = Img->getSectionFor(*Owner);
+        const uint64_t Begin = OwnerSec ? OwnerSec->VA : Seg->VA;
+        const uint64_t Size = OwnerSec ? OwnerSec->Size : Seg->Size;
+        HasOwnedRange = Size <= InvalidVA - Begin && *Candidate >= Begin &&
+                        *Candidate <= Begin + Size;
+      }
+      bool IsMappedReadOnlyData =
+          Candidate && !OwnerConflict && Seg && !Seg->isWritable() &&
+          !Img->hasExecutableCodeOwnerAt(Owner.value_or(*Candidate)) &&
+          (Owner ? HasOwnedRange : hasObjectDataProvenance(*Candidate));
       if (!IsMappedReadOnlyData) {
         auto Value = traceValueVA(Arg);
         SawTableShapedInvalid |= Value && hasObjectDataProvenance(*Value);
@@ -1936,6 +2150,13 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
         SawDifferent = true;
       else
         CommonBase = *Candidate;
+      const uint64_t OwnerKey = Owner.value_or(InvalidVA);
+      if (HaveCommonOwner && CommonOwner != OwnerKey)
+        SawDifferent = true;
+      else {
+        CommonOwner = OwnerKey;
+        HaveCommonOwner = true;
+      }
     }
 
     if (!SawFeasible || !SawMappedData) {
@@ -1972,15 +2193,36 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     if (!collectFrameReloadSources(*Def, Sources))
       return false;
     std::optional<uint64_t> CommonBase;
+    uint64_t CommonOwner = InvalidVA;
+    bool HaveCommonOwner = false;
     for (const MedVar &Source : Sources) {
       auto Candidate = traceSSAConst(Source);
-      if (!Candidate || *Candidate == 0)
+      bool OwnerConflict = false;
+      std::optional<uint64_t> Owner =
+          Candidate ? uniqueDataAddressOwner(Source, *Candidate, OwnerConflict)
+                    : std::nullopt;
+      if (!Candidate || OwnerConflict || (*Candidate == 0 && !Owner))
         return false;
-      if (!hasObjectDataProvenance(*Candidate))
+      const Segment *Seg = Img->getSegmentFor(Owner.value_or(*Candidate));
+      bool HasOwnedRange = false;
+      if (Owner && Seg) {
+        const Section *OwnerSec = Img->getSectionFor(*Owner);
+        const uint64_t Begin = OwnerSec ? OwnerSec->VA : Seg->VA;
+        const uint64_t Size = OwnerSec ? OwnerSec->Size : Seg->Size;
+        HasOwnedRange = Size <= InvalidVA - Begin && *Candidate >= Begin &&
+                        *Candidate <= Begin + Size;
+      }
+      if (!Seg || Img->hasExecutableCodeOwnerAt(Owner.value_or(*Candidate)) ||
+          !(Owner ? HasOwnedRange : hasObjectDataProvenance(*Candidate)))
         return false;
       if (CommonBase && *CommonBase != *Candidate)
         return false;
       CommonBase = *Candidate;
+      const uint64_t OwnerKey = Owner.value_or(InvalidVA);
+      if (HaveCommonOwner && CommonOwner != OwnerKey)
+        return false;
+      CommonOwner = OwnerKey;
+      HaveCommonOwner = true;
     }
     if (!CommonBase || (HaveBase && Base != *CommonBase))
       return false;
@@ -2017,17 +2259,31 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
   // the executable .text range (a .o places .text at VA 0) — treating it as the
   // base would lose the real table base nested deeper, so it is kept as an
   // index addend instead.
-  auto isBaseConst = [&](const std::optional<uint64_t> &C) {
-    if (!C || *C == 0)
+  auto isBaseConst = [&](const MedVar &Occurrence,
+                         const std::optional<uint64_t> &C) {
+    if (!C)
       return false;
-    return hasObjectDataProvenance(*C);
+    bool OwnerConflict = false;
+    std::optional<uint64_t> Owner =
+        uniqueDataAddressOwner(Occurrence, *C, OwnerConflict);
+    if (OwnerConflict || (*C == 0 && !Owner))
+      return false;
+    if (!Owner)
+      return hasObjectDataProvenance(*C);
+    const Segment *Seg = Img ? Img->getSegmentFor(*Owner) : nullptr;
+    if (!Seg || !Seg->isReadable() || Img->hasExecutableCodeOwnerAt(*Owner))
+      return false;
+    const Section *OwnerSec = Img->getSectionFor(*Owner);
+    const uint64_t Begin = OwnerSec ? OwnerSec->VA : Seg->VA;
+    const uint64_t Size = OwnerSec ? OwnerSec->Size : Seg->Size;
+    return Size <= InvalidVA - Begin && *C >= Begin && *C <= Begin + Size;
   };
   const MedVar &A = Def->Inputs[0];
   const MedVar &B = Def->Inputs[1];
   auto CA = traceSSAConst(A);
   auto CB = traceSSAConst(B);
-  bool ABase = isBaseConst(CA);
-  bool BBase = isBaseConst(CB);
+  bool ABase = isBaseConst(A, CA);
+  bool BBase = isBaseConst(B, CB);
   if (ABase && BBase)
     return false; // two segment-resident constants — ambiguous
   if (ABase) {
