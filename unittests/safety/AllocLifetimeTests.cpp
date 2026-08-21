@@ -622,6 +622,53 @@ TEST(AllocLifetime, UseAfterFree) {
   EXPECT_TRUE(has(Fs, VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, StringDuplicationReadsFreedSource) {
+  for (const char *Name : {"strdup", "strndup"}) {
+    SCOPED_TRACE(Name);
+    FB B("f", 0x100);
+    int b0 = B.block();
+    B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, 0x400);
+    std::vector<MedVar> Args = {temp(1)};
+    if (llvm::StringRef(Name) == "strndup")
+      Args.push_back(MedVar::makeConst(1, 8));
+    B.call(b0, Name, temp(2), std::move(Args), 0x9200, 0x408);
+    B.call(b0, "free", MedVar{}, {temp(2)});
+    B.ret(b0, {});
+
+    EXPECT_TRUE(has(audit({B.F}), VulnClass::UseAfterFree));
+  }
+}
+
+TEST(AllocLifetime, ZeroLengthStrndupDoesNotReadFreedSource) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, 0x400);
+  B.call(b0, "strndup", temp(2), {temp(1), MedVar::makeConst(0, 8)}, 0x9200,
+         0x408);
+  B.call(b0, "free", MedVar{}, {temp(2)});
+  B.ret(b0, {});
+
+  EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, RuntimeLengthStrndupUseAfterFreeFailsClosed) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, 0x400);
+  B.call(b0, "strndup", temp(2), {temp(1), temp(8)}, 0x9200, 0x408);
+  B.call(b0, "free", MedVar{}, {temp(2)});
+  B.ret(b0, {});
+
+  const std::vector<Finding> Fs = audit({B.F});
+  const Finding *Use = find(Fs, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Use->TheConfidence, Confidence::Low);
+}
+
 TEST(AllocLifetime, AtomicMemoryUseAfterFree) {
   FB B("f", 0x100);
   int b0 = B.block();

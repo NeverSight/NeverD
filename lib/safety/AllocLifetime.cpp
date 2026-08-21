@@ -1591,8 +1591,20 @@ private:
           return CallUse::None;
         return CallUse::Possible;
       case SinkKind::Alloc:
-        return E->HandleArg >= 0 && ArgIndex == E->HandleArg ? CallUse::Definite
-                                                             : CallUse::None;
+        if (E->HandleArg >= 0 && ArgIndex == E->HandleArg)
+          return CallUse::Definite;
+        if (ArgIndex != 0)
+          return CallUse::None;
+        if (SinkCatalog::normalize(callName(CI)) == "strdup")
+          return CallUse::Definite;
+        if (SinkCatalog::normalize(callName(CI)) == "strndup") {
+          if (CI.Args.size() <= 1)
+            return CallUse::Possible;
+          if (std::optional<uint64_t> Limit = unsignedConstant(CI.Args[1]))
+            return *Limit == 0 ? CallUse::None : CallUse::Definite;
+          return CallUse::Possible;
+        }
+        return CallUse::None;
       case SinkKind::Realloc:
         return ArgIndex == E->HandleArg ? CallUse::Definite : CallUse::None;
       case SinkKind::Free:
