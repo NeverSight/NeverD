@@ -1336,7 +1336,8 @@ private:
       case SinkKind::Copy:
         if (ArgIndex != E->DstArg && ArgIndex != E->SrcArg)
           return CallUse::None;
-        if (!detail::isExactCountedMemoryAccess(callName(CI)))
+        if (!detail::copyAccessRequiresPositiveCount(
+                callName(CI), /*IsDestination=*/ArgIndex == E->DstArg))
           return CallUse::Definite;
         if (E->LenArg < 0 || E->LenArg >= static_cast<int>(CI.Args.size()))
           return CallUse::Possible;

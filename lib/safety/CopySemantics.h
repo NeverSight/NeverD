@@ -62,6 +62,19 @@ inline bool isExactCountedMemoryAccess(llvm::StringRef Name) {
          Normalized == "memmove_chk" || Normalized == "memset_chk";
 }
 
+inline bool copyAccessRequiresPositiveCount(llvm::StringRef Name,
+                                            bool IsDestination) {
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  if (isExactCountedMemoryAccess(Normalized) || Normalized == "strncpy" ||
+      Normalized == "strncpy_chk")
+    return true;
+  if (Normalized == "strncat" || Normalized == "strncat_chk")
+    return !IsDestination;
+  if (Normalized == "strlcpy" || Normalized == "strlcat")
+    return IsDestination;
+  return false;
+}
+
 inline std::optional<uint64_t> exactCountedMemoryBytes(llvm::StringRef Name,
                                                        BinaryFormat Format,
                                                        uint64_t Count) {

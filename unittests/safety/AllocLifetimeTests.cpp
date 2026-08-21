@@ -726,6 +726,59 @@ TEST(AllocLifetime, RuntimeLengthMemcpyUseAfterFreeFailsClosed) {
   EXPECT_EQ(Use->TheConfidence, Confidence::Low);
 }
 
+TEST(AllocLifetime, ZeroLengthStrncpyDoesNotUseFreedStorage) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.call(b0, "strncpy", temp(2), {temp(1), temp(3), MedVar::makeConst(0, 8)});
+  B.ret(b0, {});
+
+  EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, ZeroSizeStrlOperationsUseOnlyTheirSource) {
+  for (const char *Name : {"strlcpy", "strlcat"}) {
+    FB FreedDst("freed_dst", 0x100);
+    int d0 = FreedDst.block();
+    FreedDst.call(d0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    FreedDst.call(d0, "free", MedVar{}, {temp(1)});
+    FreedDst.call(d0, Name, temp(2),
+                  {temp(1), temp(3), MedVar::makeConst(0, 8)});
+    FreedDst.ret(d0, {});
+    EXPECT_FALSE(has(audit({FreedDst.F}), VulnClass::UseAfterFree)) << Name;
+
+    FB FreedSrc("freed_src", 0x200);
+    int s0 = FreedSrc.block();
+    FreedSrc.call(s0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    FreedSrc.call(s0, "free", MedVar{}, {temp(1)});
+    FreedSrc.call(s0, Name, temp(2),
+                  {temp(3), temp(1), MedVar::makeConst(0, 8)});
+    FreedSrc.ret(s0, {});
+    EXPECT_TRUE(has(audit({FreedSrc.F}), VulnClass::UseAfterFree)) << Name;
+  }
+}
+
+TEST(AllocLifetime, ZeroCountStrncatUsesOnlyItsDestination) {
+  FB FreedSrc("freed_src", 0x100);
+  int s0 = FreedSrc.block();
+  FreedSrc.call(s0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  FreedSrc.call(s0, "free", MedVar{}, {temp(1)});
+  FreedSrc.call(s0, "strncat", temp(2),
+                {temp(3), temp(1), MedVar::makeConst(0, 8)});
+  FreedSrc.ret(s0, {});
+  EXPECT_FALSE(has(audit({FreedSrc.F}), VulnClass::UseAfterFree));
+
+  FB FreedDst("freed_dst", 0x200);
+  int d0 = FreedDst.block();
+  FreedDst.call(d0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  FreedDst.call(d0, "free", MedVar{}, {temp(1)});
+  FreedDst.call(d0, "strncat", temp(2),
+                {temp(1), temp(3), MedVar::makeConst(0, 8)});
+  FreedDst.ret(d0, {});
+  EXPECT_TRUE(has(audit({FreedDst.F}), VulnClass::UseAfterFree));
+}
+
 TEST(AllocLifetime, AtomicReadResultPreservesHeapAlias) {
   FB B("f", 0x100);
   int b0 = B.block();
