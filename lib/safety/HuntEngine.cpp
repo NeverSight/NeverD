@@ -290,6 +290,20 @@ bool expressionsMustEqual(SymContext &Ctx, SymRef Left, SymRef Right,
   return !pathFeasible(Ctx, Counterexample, Budgets, Unknown) && !Unknown;
 }
 
+bool writesStringTerminatorAtSource(SymContext &Ctx, SymState &State,
+                                    const LowOp &Op, SymRef Source,
+                                    const std::vector<SymRef> &Constraints,
+                                    const SafetyBudgets &Budgets) {
+  if (Op.Opcode != NdOp::STORE || Op.NumInputs < 2 || !Source.isValid())
+    return false;
+  const SymRef Value = readLowValue(Ctx, State, Op.Inputs[1]);
+  const std::optional<llvm::APInt> Constant = Ctx.asConst(Value);
+  if (!Constant || !Constant->isZero())
+    return false;
+  const SymRef Address = readLowValue(Ctx, State, Op.Inputs[0]);
+  return expressionsMustEqual(Ctx, Address, Source, Constraints, Budgets);
+}
+
 bool predicateMustHold(SymContext &Ctx, SymRef Predicate,
                        const std::vector<SymRef> &Constraints,
                        const SafetyBudgets &Budgets) {
@@ -900,16 +914,25 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.ImplicitFromLength = false;
             Cur.ImplicitLenIncludesTerminator = false;
           }
-        } else if (mayWriteMemory(Op.Opcode) &&
-                   (Cur.ImplicitFromLength ||
-                    !writeIsProvablyBeforeSource(Ctx, Cur.State, Op,
-                                                 Cur.ImplicitSource,
-                                                 Cur.Constraints, Budgets))) {
-          Cur.ImplicitLen = SymRef();
-          Cur.ImplicitSource = SymRef();
-          Cur.ImplicitSuccess = SymRef();
-          Cur.ImplicitFromLength = false;
-          Cur.ImplicitLenIncludesTerminator = false;
+        } else if (mayWriteMemory(Op.Opcode)) {
+          Cur.SourceEvents.erase(
+              std::remove_if(Cur.SourceEvents.begin(), Cur.SourceEvents.end(),
+                             [&](const auto &Event) {
+                               return writesStringTerminatorAtSource(
+                                   Ctx, Cur.State, Op, Event.second,
+                                   Cur.Constraints, Budgets);
+                             }),
+              Cur.SourceEvents.end());
+          if (Cur.ImplicitFromLength ||
+              !writeIsProvablyBeforeSource(Ctx, Cur.State, Op,
+                                           Cur.ImplicitSource, Cur.Constraints,
+                                           Budgets)) {
+            Cur.ImplicitLen = SymRef();
+            Cur.ImplicitSource = SymRef();
+            Cur.ImplicitSuccess = SymRef();
+            Cur.ImplicitFromLength = false;
+            Cur.ImplicitLenIncludesTerminator = false;
+          }
         }
         if (SR == StepResult::Unmodelled) {
           Cur.SemanticUnknown = true;

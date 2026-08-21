@@ -527,6 +527,26 @@ LowFunc fgetsThenStrcpyLow(va_t FgetsVA, va_t StrcpyVA, bool RequireSuccess) {
   return LF;
 }
 
+LowFunc readThenTerminateStrcpyLow(va_t ReadVA, va_t StrcpyVA, va_t SourceVA) {
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = kEntry;
+  Block.EndAddr = StrcpyVA + 8;
+  Block.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9100, 8)}, ReadVA));
+  Block.Ops.push_back(lop(NdOp::STORE, NdVar{},
+                          {NdVar::cst(SourceVA, 8), NdVar::cst(0, 1)},
+                          ReadVA + 4));
+  Block.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, StrcpyVA));
+  Block.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}, StrcpyVA + 4));
+  LF.Blocks.push_back(std::move(Block));
+  return LF;
+}
+
 LowFunc unmodelledThenSinkLow(va_t SinkVA) {
   LowFunc LF = reachableSinkLow(SinkVA);
   LF.Blocks[0].Ops.insert(
@@ -1805,6 +1825,31 @@ TEST(HuntEngine, MemoryWriteInvalidatesEarlierStringLength) {
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, NullTerminatorOverwriteInvalidatesEarlierSourceEvidence) {
+  constexpr va_t ReadVA = 0x400004;
+  constexpr va_t StrcpyVA = 0x400010;
+  constexpr va_t SourceVA = 0x7000;
+  MedVar Source = MedVar::makeConst(SourceVA, 8);
+  Source.Provenance = ConstantAddressProvenance::DataAddress;
+  Source.AddressOwnerVA = SourceVA;
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), Source, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = ReadVA;
+  B.call("strcpy", temp(0), {temp(1), Source});
+  B.F.Blocks[0].Ops.back().Addr = StrcpyVA;
+  LowFunc LF = readThenTerminateStrcpyLow(ReadVA, StrcpyVA, SourceVA);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
