@@ -97,7 +97,8 @@ template <typename ResolveOffset, typename MayBeFrameAddress>
 ReachingStackValues
 reachingStackValues(const MedFunc &F, int LoadBlockId, int LoadOpIdx,
                     int64_t TargetOffset, uint16_t LoadSize,
-                    ResolveOffset Resolve, MayBeFrameAddress MayBeFrame) {
+                    ResolveOffset Resolve, MayBeFrameAddress MayBeFrame,
+                    bool RequireMemoryRead = true) {
   ReachingStackValues Result;
   if (LoadOpIdx < 0 || LoadSize == 0)
     return Result;
@@ -109,7 +110,8 @@ reachingStackValues(const MedFunc &F, int LoadBlockId, int LoadOpIdx,
   auto LoadIt = Blocks.find(LoadBlockId);
   if (LoadIt == Blocks.end() ||
       LoadOpIdx >= static_cast<int>(LoadIt->second->Ops.size()) ||
-      !isStackMemoryRead(LoadIt->second->Ops[LoadOpIdx].Opcode))
+      (RequireMemoryRead &&
+       !isStackMemoryRead(LoadIt->second->Ops[LoadOpIdx].Opcode)))
     return Result;
 
   std::map<int, std::set<int>> Preds;

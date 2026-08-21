@@ -6,6 +6,7 @@
 
 #include "neverd/safety/AllocLifetime.h"
 
+#include "CopySemantics.h"
 #include "SourceSemantics.h"
 #include "StackSlotFlow.h"
 
@@ -25,6 +26,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <limits>
 #include <tuple>
 
 using namespace neverd;
@@ -245,6 +247,24 @@ struct MemModel {
     };
     return detail::reachingStackValues(F, B.Id, OpIdx, *Off, Op.Output.Size,
                                        Resolve, MayBeFrame);
+  }
+
+  detail::ReachingStackValues reachingRead(const MedBlock &B, int OpIdx,
+                                           const MedVar &Addr,
+                                           uint16_t Size) const {
+    if (Size == 0)
+      return {};
+    std::optional<int64_t> Off = stackOffset(Addr);
+    if (!Off)
+      return {};
+    auto Resolve = [&](const MedVar &V) { return stackOffset(V); };
+    auto MayBeFrame = [&](const MedVar &V) {
+      llvm::DenseSet<ValueKey> Seen;
+      return mayBeStackAddress(V, 0, Seen);
+    };
+    return detail::reachingStackValues(F, B.Id, OpIdx, *Off, Size, Resolve,
+                                       MayBeFrame,
+                                       /*RequireMemoryRead=*/false);
   }
 
   llvm::DenseSet<ValueKey> aliasClosureImpl(const MedVar &Seed,
@@ -1019,7 +1039,7 @@ private:
 
   Finding baseFinding(const MedFunc &F, VulnClass Class, va_t VA,
                       const std::string &Name, va_t CalleeAddr,
-                      bool IsIndirect) {
+                      bool IsIndirect) const {
     Finding Fn;
     Fn.Origin = Track::Audit;
     Fn.Class = Class;
@@ -1241,6 +1261,65 @@ private:
             Fn.SourceLoc = Loc->File + ":" + std::to_string(Loc->Line);
         Out.push_back(std::move(Fn));
       }
+
+    for (const MedCallInfo &CI : F.CallInfos) {
+      const SinkEntry *E = catalogSink(CI);
+      if (!E || E->Kind != SinkKind::Copy || E->SrcArg < 0 || E->LenArg < 0 ||
+          E->SrcArg >= static_cast<int>(CI.Args.size()) ||
+          E->LenArg >= static_cast<int>(CI.Args.size()))
+        continue;
+      const MedVar &Length = CI.Args[E->LenArg];
+      if (!Length.isConst() || Length.Size == 0 ||
+          Length.Size > sizeof(uint64_t))
+        continue;
+      const unsigned LengthBits = static_cast<unsigned>(Length.Size) * 8;
+      const uint64_t LengthMask = LengthBits == 64
+                                      ? std::numeric_limits<uint64_t>::max()
+                                      : (uint64_t{1} << LengthBits) - 1;
+      const std::optional<uint64_t> Bytes = detail::exactCopyReadBytes(
+          callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
+          Length.ConstVal & LengthMask);
+      if (!Bytes || *Bytes == 0)
+        continue;
+      const MedOp *CallOp = opAt(F, CI.BlockId, CI.OpIdx);
+      if (!CallOp ||
+          (CallOp->Opcode != NdOp::CALL && CallOp->Opcode != NdOp::INDIR_CALL))
+        continue;
+      const MedBlock *Block = nullptr;
+      for (const MedBlock &Candidate : F.Blocks)
+        if (Candidate.Id == CI.BlockId) {
+          Block = &Candidate;
+          break;
+        }
+      if (!Block)
+        continue;
+      const MedVar &Source = CI.Args[E->SrcArg];
+      const std::optional<int64_t> Offset = Mem.stackOffset(Source);
+      if (!Offset || *Offset >= 0)
+        continue;
+      const uint16_t ReadSize = static_cast<uint16_t>(
+          std::min<uint64_t>(*Bytes, std::numeric_limits<uint16_t>::max()));
+      const detail::ReachingStackValues Reaching =
+          Mem.reachingRead(*Block, CI.OpIdx, Source, ReadSize);
+      if (!Reaching.Reachable ||
+          (!Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites))
+        continue;
+
+      const bool Definite =
+          !Reaching.HasUnknownWrites && Reaching.Values.empty();
+      Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
+                               callName(CI), CI.TargetAddr, CI.IsIndirect);
+      Fn.ArgIndex = E->SrcArg;
+      Fn.TheVerdict = Definite ? Verdict::Unsafe : Verdict::Unknown;
+      Fn.TheConfidence = Definite ? Confidence::Medium : Confidence::Low;
+      Fn.Detail = Definite ? "copy source reads local stack bytes before any "
+                             "full-width initialization"
+                           : "copy source may read local stack bytes before "
+                             "initialization on a control-flow path";
+      if (Definite)
+        Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
+      Out.push_back(std::move(Fn));
+    }
   }
 
   enum class CallUse : uint8_t { None, Definite, Possible };

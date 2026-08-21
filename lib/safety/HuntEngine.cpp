@@ -6,6 +6,7 @@
 
 #include "neverd/safety/HuntEngine.h"
 
+#include "CopySemantics.h"
 #include "SourceSemantics.h"
 
 #include "neverd/debug/DebugContext.h"
@@ -163,41 +164,6 @@ bool isStringLengthCall(llvm::StringRef Name) {
   .Case(NAME, IS_LENGTH != 0)
 #include "neverd/safety/SafetyCallTraits.inc"
 #undef SAFETY_CALL_TRAIT
-      .Default(false);
-}
-
-bool usesWideElements(llvm::StringRef Name) {
-  return llvm::StringSwitch<bool>(SinkCatalog::normalize(Name))
-      .Cases({"wmemcpy", "wmemmove", "wcscpy", "wcscat"}, true)
-      .Default(false);
-}
-
-std::optional<uint64_t> countedWideElementBytes(llvm::StringRef Name,
-                                                BinaryFormat Format) {
-  const std::string Normalized = SinkCatalog::normalize(Name);
-  if (Normalized != "wmemcpy" && Normalized != "wmemmove")
-    return std::nullopt;
-  switch (Format) {
-  case BinaryFormat::COFF:
-    return 2;
-  case BinaryFormat::ELF:
-  case BinaryFormat::MachO:
-    return 4;
-  default:
-    return std::nullopt;
-  }
-}
-
-bool requiresStringExtents(llvm::StringRef Name) {
-  return llvm::StringSwitch<bool>(SinkCatalog::normalize(Name))
-      .Cases({"strcat", "strncat", "strlcat", "strlcpy"}, true)
-      .Cases({"strcat_chk", "strncat_chk"}, true)
-      .Default(false);
-}
-
-bool usesTotalDestinationBound(llvm::StringRef Name) {
-  return llvm::StringSwitch<bool>(SinkCatalog::normalize(Name))
-      .Cases({"strlcpy", "strlcat"}, true)
       .Default(false);
 }
 
@@ -1561,8 +1527,9 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
 
   Finding Out;
   stampSite(Out, In, F, Site);
-  const bool WideElements = usesWideElements(Site.Sink);
-  const bool NeedsStringExtents = requiresStringExtents(Site.Sink);
+  const bool WideElements = safety::detail::usesWideElements(Site.Sink);
+  const bool NeedsStringExtents =
+      safety::detail::requiresStringExtents(Site.Sink);
   const bool UnboundedInput = E->UnboundedWrite;
 
   ArgClassification Arg =
@@ -1613,7 +1580,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  if (usesTotalDestinationBound(Site.Sink) && Dst.Capacity &&
+  if (safety::detail::usesTotalDestinationBound(Site.Sink) && Dst.Capacity &&
       Dst.CapacityExact && Arg.UpperBound && *Arg.UpperBound <= *Dst.Capacity) {
     Out.TheVerdict = Verdict::Safe;
     Out.TheConfidence = Confidence::High;
@@ -1623,8 +1590,9 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
-  const std::optional<uint64_t> WideElementBytes = countedWideElementBytes(
-      Site.Sink, In.Img ? In.Img->Format : BinaryFormat::Unknown);
+  const std::optional<uint64_t> WideElementBytes =
+      safety::detail::countedWideElementBytes(
+          Site.Sink, In.Img ? In.Img->Format : BinaryFormat::Unknown);
   if (WideElementBytes && Dst.Capacity && Dst.CapacityExact && Arg.UpperBound &&
       *Arg.UpperBound <= *Dst.Capacity / *WideElementBytes) {
     Out.TheVerdict = Verdict::Safe;
