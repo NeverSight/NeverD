@@ -271,6 +271,32 @@ TEST(AllocLifetime, NoLeakWhenFreed) {
   EXPECT_FALSE(has(Fs, VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, MayAliasFreeDoesNotProveAllocationReleased) {
+  FB B("f", 0x100);
+  int entry = B.block();
+  int allocated = B.block();
+  int other = B.block();
+  int join = B.block();
+  B.call(entry, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.succ(entry, allocated);
+  B.succ(entry, other);
+  B.succ(allocated, join);
+  B.succ(other, join);
+  PhiNode Phi;
+  Phi.Output = temp(2);
+  Phi.Args = {{allocated, temp(1)}, {other, temp(9)}};
+  B.F.Blocks[join].Phis.push_back(std::move(Phi));
+  B.call(join, "free", MedVar{}, {temp(2)});
+  B.ret(join, {});
+
+  auto Fs = audit({B.F});
+  const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_FALSE(has(Fs, VulnClass::DoubleFree));
+  EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
+}
+
 TEST(AllocLifetime, NoLeakWhenReturned) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -299,6 +325,39 @@ TEST(AllocLifetime, NonEscapingHelperDoesNotHideLeak) {
     if (F.Class == VulnClass::HeapLeak && F.FuncEntry == 0x100)
       UserLeak = true;
   EXPECT_TRUE(UserLeak);
+}
+
+TEST(AllocLifetime, MayAliasFreeWrapperDoesNotProveCallerReleased) {
+  FB Helper("maybe_free", 0x200);
+  Helper.F.Params = {temp(0), temp(1)};
+  int hEntry = Helper.block();
+  int hFirst = Helper.block();
+  int hSecond = Helper.block();
+  int hJoin = Helper.block();
+  Helper.succ(hEntry, hFirst);
+  Helper.succ(hEntry, hSecond);
+  Helper.succ(hFirst, hJoin);
+  Helper.succ(hSecond, hJoin);
+  PhiNode Phi;
+  Phi.Output = temp(2);
+  Phi.Args = {{hFirst, temp(0)}, {hSecond, temp(1)}};
+  Helper.F.Blocks[hJoin].Phis.push_back(std::move(Phi));
+  Helper.call(hJoin, "free", MedVar{}, {temp(2)});
+  Helper.ret(hJoin, {});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "malloc", temp(3), {MedVar::makeConst(16, 8)});
+  User.call(u0, "maybe_free", MedVar{}, {temp(3), temp(9)}, 0x200);
+  User.ret(u0, {});
+
+  auto Fs = audit({Helper.F, User.F});
+  const Finding *UserLeak = nullptr;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+      UserLeak = &F;
+  ASSERT_NE(UserLeak, nullptr);
+  EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
 }
 
 TEST(AllocLifetime, DoubleFreeSequential) {

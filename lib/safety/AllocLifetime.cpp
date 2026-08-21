@@ -197,9 +197,8 @@ struct MemModel {
                                        Resolve, MayBeFrame);
   }
 
-  // Every value that aliases the seed, by SSA forwarding and by spill/reload
-  // through a stack slot.
-  llvm::DenseSet<ValueKey> aliasClosure(const MedVar &Seed) const {
+  llvm::DenseSet<ValueKey> aliasClosureImpl(const MedVar &Seed,
+                                            bool RequireAllPhiArms) const {
     llvm::DenseSet<ValueKey> Set;
     Set.insert(keyOf(Seed));
     bool Changed = true;
@@ -207,12 +206,19 @@ struct MemModel {
       Changed = false;
       for (const MedBlock &B : F.Blocks) {
         for (const PhiNode &Phi : B.Phis) {
-          if (Phi.Output.isConst())
+          if (Phi.Output.isConst() || Phi.Args.empty())
             continue;
-          for (const auto &[Pred, Arg] : Phi.Args)
-            if (!Arg.isConst() && Set.count(keyOf(Arg)) &&
-                Set.insert(keyOf(Phi.Output)).second)
-              Changed = true;
+          bool AnyAlias = false;
+          bool AllAlias = true;
+          for (const auto &[Pred, Arg] : Phi.Args) {
+            (void)Pred;
+            const bool Aliases = !Arg.isConst() && Set.count(keyOf(Arg));
+            AnyAlias |= Aliases;
+            AllAlias &= Aliases;
+          }
+          if ((RequireAllPhiArms ? AllAlias : AnyAlias) &&
+              Set.insert(keyOf(Phi.Output)).second)
+            Changed = true;
         }
         for (const MedOp &Op : B.Ops) {
           if (Op.Output.isConst() || Op.Output.Size == 0)
@@ -244,6 +250,17 @@ struct MemModel {
         }
     }
     return Set;
+  }
+
+  // Every value that may alias the seed, by SSA forwarding and by
+  // spill/reload through a stack slot.
+  llvm::DenseSet<ValueKey> aliasClosure(const MedVar &Seed) const {
+    return aliasClosureImpl(Seed, /*RequireAllPhiArms=*/false);
+  }
+
+  // Values that are guaranteed to derive from the seed on every PHI arm.
+  llvm::DenseSet<ValueKey> mustAliasClosure(const MedVar &Seed) const {
+    return aliasClosureImpl(Seed, /*RequireAllPhiArms=*/true);
   }
 };
 
@@ -498,8 +515,13 @@ private:
           if (F.Params[PI].isConst())
             continue;
           llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(F.Params[PI]);
-          if (Alias.count(keyOf(CI.Args[FA])))
+          llvm::DenseSet<ValueKey> MustAlias =
+              Mem.mustAliasClosure(F.Params[PI]);
+          const ValueKey ArgKey = keyOf(CI.Args[FA]);
+          if (MustAlias.count(ArgKey))
             S.FreesParam.insert(PI);
+          else if (Alias.count(ArgKey))
+            S.UnknownParam.insert(PI);
         }
       }
     }
@@ -844,23 +866,29 @@ private:
       }
 
       llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(AllocOp->Output);
+      llvm::DenseSet<ValueKey> MustAlias =
+          Mem.mustAliasClosure(AllocOp->Output);
       const va_t AllocVA = callVA(F, CI);
 
       std::vector<FreeEvent> Frees;
+      bool HasPotentialFree = false;
       for (const MedCallInfo &FC : F.CallInfos) {
         for (int FA : freeArgsOf(FC)) {
           if (FA < 0 || FA >= static_cast<int>(FC.Args.size()))
             continue;
-          if (Alias.count(keyOf(FC.Args[FA]))) {
+          const ValueKey ArgKey = keyOf(FC.Args[FA]);
+          if (MustAlias.count(ArgKey)) {
             Frees.push_back({FC.BlockId, FC.OpIdx, callVA(F, FC), FC.TargetAddr,
                              callName(FC), FC.IsIndirect});
             break;
           }
+          HasPotentialFree |= Alias.count(ArgKey) != 0;
         }
       }
 
       const EscapeState Escape = escapes(F, Mem, Alias, CI);
-      const bool UnresolvedLifecycle = hasUnresolvedLifecycleCall(F, G, CI);
+      const bool UnresolvedLifecycle =
+          HasPotentialFree || hasUnresolvedLifecycleCall(F, G, CI);
 
       bool ReportedDouble = false;
       for (size_t A = 0; A < Frees.size() && !ReportedDouble; ++A)
