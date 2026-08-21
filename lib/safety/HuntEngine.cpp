@@ -184,6 +184,11 @@ struct CountedSourceReturn {
   uint32_t ReturnBits = 0;
 };
 
+struct BoundedStringOutput {
+  int BufferArg = -1;
+  int BoundArg = -1;
+};
+
 CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
                                         BinaryFormat Format) {
   const std::string Normalized = SinkCatalog::normalize(Name);
@@ -193,6 +198,12 @@ CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
                                                                  : uint32_t(0)};
   if (Normalized == "fread")
     return {2, false, 0};
+  return {};
+}
+
+BoundedStringOutput boundedStringOutput(llvm::StringRef Name) {
+  if (SinkCatalog::normalize(Name) == "fgets")
+    return {0, 1};
   return {};
 }
 
@@ -241,6 +252,17 @@ bool expressionsMustEqual(SymContext &Ctx, SymRef Left, SymRef Right,
     return true;
   std::vector<SymRef> Counterexample = Constraints;
   Counterexample.push_back(Ctx.mkNe(Left, Right));
+  bool Unknown = false;
+  return !pathFeasible(Ctx, Counterexample, Budgets, Unknown) && !Unknown;
+}
+
+bool predicateMustHold(SymContext &Ctx, SymRef Predicate,
+                       const std::vector<SymRef> &Constraints,
+                       const SafetyBudgets &Budgets) {
+  if (!Predicate.isValid())
+    return true;
+  std::vector<SymRef> Counterexample = Constraints;
+  Counterexample.push_back(Ctx.mkNot(Predicate));
   bool Unknown = false;
   return !pathFeasible(Ctx, Counterexample, Budgets, Unknown) && !Unknown;
 }
@@ -485,8 +507,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     llvm::DenseMap<int, unsigned> Visits;
     SymRef ImplicitLen;
     SymRef ImplicitSource;
+    SymRef ImplicitSuccess;
     std::vector<std::pair<std::string, SymRef>> SourceEvents;
     bool ImplicitFromLength = false;
+    bool ImplicitLenIncludesTerminator = false;
     bool SemanticUnknown = false;
     explicit Frontier(SymContext &C) : State(C) {}
   };
@@ -593,11 +617,14 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               (Cur.ImplicitFromLength &&
                valuesShareUniqueLoadOrigin(Cur.State, Cur.ImplicitSource,
                                            SinkSource));
+          bool ConditionalBoundNotProven = false;
           if (!Len.isValid() && Cur.ImplicitLen.isValid() &&
               SameImplicitSource) {
             Len = Ctx.mkZExtOrTrunc(Cur.ImplicitLen, 64);
-            if (Implicit)
+            if (Implicit && !Cur.ImplicitLenIncludesTerminator)
               Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
+            ConditionalBoundNotProven = !predicateMustHold(
+                Ctx, Cur.ImplicitSuccess, Cur.Constraints, Budgets);
           }
           SymRef RuntimeCap;
           if (E.CapArg >= 0) {
@@ -614,6 +641,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           }
           Best.Reached = true;
           considerSink(Best, Ctx, Pred, Len, RuntimeCap, Capacity, Budgets);
+          if (ConditionalBoundNotProven)
+            Best.SemanticUnknown = true;
           ++Finished;
           HitSink = true;
           Stopped = true;
@@ -629,6 +658,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                          In.Img ? In.Img->Format
                                                 : BinaryFormat::Unknown)
                    : CountedSourceReturn{};
+        const BoundedStringOutput BoundedString =
+            Callee ? boundedStringOutput(CalleeName) : BoundedStringOutput{};
         const SourceEntry *CountedSource = Callee && CountedReturn.BoundArg >= 0
                                                ? Cat.matchSource(CalleeName)
                                                : nullptr;
@@ -661,16 +692,28 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           ReturnBound = readCallArgument(In, Fn, CountedReturn.BoundArg,
                                          *Callee, Cur.State);
         SymRef NextImplicitSource;
+        SymRef BoundedStringLimit;
         const bool CaptureLength = LengthCall && Callee;
         const bool CaptureCountedSource =
             E.LenArg >= 0 && Callee && CountedSource &&
             CountedSource->OutArg >= 0 &&
             CountedSource->OutArg < static_cast<int>(Callee->Args.size());
+        const bool CaptureBoundedString =
+            Implicit && Callee && CalleeSource &&
+            BoundedString.BufferArg >= 0 && BoundedString.BoundArg >= 0 &&
+            BoundedString.BufferArg < static_cast<int>(Callee->Args.size()) &&
+            BoundedString.BoundArg < static_cast<int>(Callee->Args.size());
         if (CaptureLength)
           NextImplicitSource = readCallArgument(In, Fn, 0, *Callee, Cur.State);
         else if (CaptureCountedSource)
           NextImplicitSource = readCallArgument(In, Fn, CountedSource->OutArg,
                                                 *Callee, Cur.State);
+        else if (CaptureBoundedString) {
+          NextImplicitSource = readCallArgument(In, Fn, BoundedString.BufferArg,
+                                                *Callee, Cur.State);
+          BoundedStringLimit = readCallArgument(In, Fn, BoundedString.BoundArg,
+                                                *Callee, Cur.State);
+        }
         if (IsCall) {
           bool Summarized = LengthCall;
           if (Callee && Cat.matchSource(CalleeName))
@@ -730,15 +773,43 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           if (CaptureLength) {
             Cur.ImplicitLen = captureReturn(Op, Cur.State, In);
             Cur.ImplicitSource = NextImplicitSource;
+            Cur.ImplicitSuccess = SymRef();
             Cur.ImplicitFromLength = true;
+            Cur.ImplicitLenIncludesTerminator = false;
           } else if (CaptureCountedSource && CountedReturnValue.isValid()) {
             Cur.ImplicitLen = CountedReturnValue;
             Cur.ImplicitSource = NextImplicitSource;
+            Cur.ImplicitSuccess = SymRef();
             Cur.ImplicitFromLength = false;
+            Cur.ImplicitLenIncludesTerminator = false;
+          } else if (CaptureBoundedString && NextImplicitSource.isValid() &&
+                     BoundedStringLimit.isValid()) {
+            const SymRef Ret = captureReturn(Op, Cur.State, In);
+            if (!Ret.isValid()) {
+              Cur.SemanticUnknown = true;
+              Cur.ImplicitLen = SymRef();
+              Cur.ImplicitSource = SymRef();
+              Cur.ImplicitSuccess = SymRef();
+              Cur.ImplicitFromLength = false;
+              Cur.ImplicitLenIncludesTerminator = false;
+            } else {
+              const SymRef WideRet = Ctx.mkZExtOrTrunc(Ret, 64);
+              const SymRef WideLimit =
+                  Ctx.mkZExtOrTrunc(BoundedStringLimit, 64);
+              Cur.ImplicitLen = WideLimit;
+              Cur.ImplicitSource = NextImplicitSource;
+              Cur.ImplicitSuccess =
+                  Ctx.mkAnd(Ctx.mkNe(WideRet, Ctx.mkZero(64)),
+                            Ctx.mkUgt(WideLimit, Ctx.mkZero(64)));
+              Cur.ImplicitFromLength = false;
+              Cur.ImplicitLenIncludesTerminator = true;
+            }
           } else {
             Cur.ImplicitLen = SymRef();
             Cur.ImplicitSource = SymRef();
+            Cur.ImplicitSuccess = SymRef();
             Cur.ImplicitFromLength = false;
+            Cur.ImplicitLenIncludesTerminator = false;
           }
         } else if (mayWriteMemory(Op.Opcode) &&
                    (Cur.ImplicitFromLength ||
@@ -747,7 +818,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                                  Cur.Constraints, Budgets))) {
           Cur.ImplicitLen = SymRef();
           Cur.ImplicitSource = SymRef();
+          Cur.ImplicitSuccess = SymRef();
           Cur.ImplicitFromLength = false;
+          Cur.ImplicitLenIncludesTerminator = false;
         }
         if (SR == StepResult::Unmodelled) {
           Cur.SemanticUnknown = true;

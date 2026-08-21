@@ -440,6 +440,49 @@ LowFunc sourceReturnThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
   return LF;
 }
 
+LowFunc fgetsThenStrcpyLow(va_t FgetsVA, va_t StrcpyVA, bool RequireSuccess) {
+  constexpr uint64_t kRax = 0;
+  constexpr uint64_t kFlag = 200;
+  constexpr va_t kEntry = 0x400000;
+  LowFunc LF;
+  LF.Entry = kEntry;
+  LowBlock Entry, Sink, Exit;
+  Entry.Id = 0;
+  Entry.StartAddr = kEntry;
+  Entry.EndAddr = StrcpyVA;
+  Entry.Ops.push_back(
+      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9100, 8)}, FgetsVA));
+  if (RequireSuccess) {
+    Entry.Ops.push_back(lop(NdOp::INT_NOTEQUAL, NdVar::reg(kFlag, 1),
+                            {NdVar::reg(kRax, 8), NdVar::cst(0, 8)},
+                            FgetsVA + 4));
+    Entry.Ops.push_back(lop(NdOp::COND_BR, NdVar{},
+                            {NdVar::cst(StrcpyVA, 8), NdVar::reg(kFlag, 1)},
+                            FgetsVA + 8));
+    Entry.Succs = {1, 2};
+  } else {
+    Entry.Ops.push_back(
+        lop(NdOp::BRANCH, NdVar{}, {NdVar::cst(StrcpyVA, 8)}, FgetsVA + 4));
+    Entry.Succs = {1};
+  }
+  Sink.Id = 1;
+  Sink.StartAddr = StrcpyVA;
+  Sink.EndAddr = StrcpyVA + 8;
+  Sink.Ops.push_back(
+      lop(NdOp::CALL, NdVar{}, {NdVar::cst(0x9000, 8)}, StrcpyVA));
+  Sink.Succs = {2};
+  Sink.Preds = {0};
+  Exit.Id = 2;
+  Exit.StartAddr = StrcpyVA + 8;
+  Exit.EndAddr = StrcpyVA + 16;
+  Exit.Ops.push_back(lop(NdOp::RETURN, NdVar{}, {}));
+  Exit.Preds = RequireSuccess ? std::vector<int>{0, 1} : std::vector<int>{1};
+  LF.Blocks.push_back(std::move(Entry));
+  LF.Blocks.push_back(std::move(Sink));
+  LF.Blocks.push_back(std::move(Exit));
+  return LF;
+}
+
 LowFunc unmodelledThenSinkLow(va_t SinkVA) {
   LowFunc LF = reachableSinkLow(SinkVA);
   LF.Blocks[0].Ops.insert(
@@ -759,6 +802,65 @@ TEST(HuntEngine, ReachableUnboundedScanfOutputIsUnsafe) {
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+  EXPECT_FALSE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, GuardedFgetsBoundsImplicitStringCopy) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("fgets", temp(5), {param(2), MedVar::makeConst(8, 8), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = fgetsThenStrcpyLow(SourceVA, SinkVA, /*RequireSuccess=*/true);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Safe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, UncheckedFgetsFailureDoesNotClaimBoundedString) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("fgets", temp(5), {param(2), MedVar::makeConst(8, 8), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = fgetsThenStrcpyLow(SourceVA, SinkVA, /*RequireSuccess=*/false);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low);
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, GuardedFgetsBoundCanWitnessImplicitCopyOverflow) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("fgets", temp(5), {param(2), MedVar::makeConst(9, 8), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = fgetsThenStrcpyLow(SourceVA, SinkVA, /*RequireSuccess=*/true);
+
+  auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
   EXPECT_FALSE(Fnd->Witness.empty());
 }
 
