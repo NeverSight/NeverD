@@ -1863,6 +1863,19 @@ TEST(AllocLifetime, ReallocIsNotAnUnconditionalRelease) {
   EXPECT_FALSE(has(Fs, VulnClass::DoubleFree));
 }
 
+TEST(AllocLifetime, ReallocfAlwaysReleasesOriginalAllocation) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(b0, "reallocf", temp(2), {temp(1), MedVar::makeConst(32, 8)});
+  B.op(b0, NdOp::LOAD, temp(3), {temp(1)}, 0x408);
+  B.call(b0, "free", MedVar{}, {temp(2)});
+  B.ret(b0, {});
+
+  auto Fs = audit({B.F});
+  EXPECT_TRUE(has(Fs, VulnClass::UseAfterFree));
+}
+
 TEST(AllocLifetime, FreeWrapperUseAfterFree) {
   FB Wrap("xfree", 0x200);
   Wrap.F.Params.push_back(temp(0));

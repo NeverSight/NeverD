@@ -704,6 +704,8 @@ private:
       return -1;
     if (E->Kind == SinkKind::Free)
       return E->HandleArg;
+    if (E->Kind == SinkKind::Realloc && E->Name == "reallocf")
+      return E->HandleArg;
     return -1;
   }
 
