@@ -96,7 +96,7 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
     return errorReport(Res.Error.empty() ? "lifting failed for this binary"
                                          : Res.Error);
   if (std::optional<std::string> CoverageError =
-          safety::validatePipelineCoverage(Res))
+          safety::validatePipelineCoverage(Res, &S->Img))
     return errorReport(*CoverageError);
 
   safety::AnalysisInput In;

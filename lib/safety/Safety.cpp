@@ -15,6 +15,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <set>
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -31,9 +32,10 @@ void describeImage(const AnalysisInput &In, SafetyReport &R) {
 } // namespace
 
 std::optional<std::string>
-neverd::safety::validatePipelineCoverage(const PipelineResult &Result) {
+neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
+                                         const BinaryImage *Img) {
   using Disposition = PipelineFunctionDisposition;
-  size_t AcceptedCount = 0;
+  std::set<va_t> AcceptedEntries;
   for (const PipelineFunctionAudit &Audit : Result.FunctionAudits) {
     bool Incomplete = false;
     switch (Audit.Disposition) {
@@ -45,7 +47,8 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result) {
       Incomplete = true;
       break;
     case Disposition::Accepted:
-      ++AcceptedCount;
+      if (!AcceptedEntries.insert(Audit.Entry).second)
+        return "incomplete safety lift inventory";
       Incomplete = !Audit.HasLowIR || !Audit.HasMedIR || !Audit.MedIRVerified ||
                    !Audit.DecodeFailures.empty() ||
                    !Audit.UnsupportedInstructions.empty() ||
@@ -62,9 +65,32 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result) {
     return "incomplete safety lift at 0x" + llvm::utohexstr(Audit.Entry) +
            " (" + pipelineFunctionDispositionName(Audit.Disposition) + ")";
   }
-  if (AcceptedCount == 0 || AcceptedCount != Result.LowFuncs.size() ||
-      AcceptedCount != Result.MedFuncs.size())
+  std::set<va_t> LowEntries;
+  for (const LowFunc &F : Result.LowFuncs)
+    if (!LowEntries.insert(F.Entry).second)
+      return "incomplete safety lift inventory";
+  std::set<va_t> MedEntries;
+  for (const MedFunc &F : Result.MedFuncs)
+    if (!MedEntries.insert(F.Entry).second)
+      return "incomplete safety lift inventory";
+  if (AcceptedEntries.empty() || AcceptedEntries != LowEntries ||
+      AcceptedEntries != MedEntries)
     return "incomplete safety lift inventory";
+  if (Img)
+    for (const LowFunc &F : Result.LowFuncs)
+      for (const LowBlock &Block : F.Blocks)
+        for (const LowOp &Op : Block.Ops) {
+          if (Op.Opcode != NdOp::CALL || Op.NumInputs == 0 ||
+              !Op.Inputs[0].isConst())
+            continue;
+          const va_t Target = Op.Inputs[0].Offset;
+          const Segment *TargetSegment = Img->getSegmentFor(Target);
+          if (!TargetSegment || !TargetSegment->isExecutable() ||
+              Img->isImportStubAt(Target) || AcceptedEntries.count(Target) != 0)
+            continue;
+          return "incomplete safety lift at 0x" + llvm::utohexstr(Target) +
+                 " (unresolved-internal-call)";
+        }
   return std::nullopt;
 }
 

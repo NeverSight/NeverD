@@ -29,7 +29,9 @@ TEST(SafetyReport, PipelineCoverageRejectsPartialFunctionLifts) {
   Accepted.MedIRVerified = true;
   Result.FunctionAudits.push_back(Accepted);
   Result.LowFuncs.resize(1);
+  Result.LowFuncs.front().Entry = Accepted.Entry;
   Result.MedFuncs.resize(1);
+  Result.MedFuncs.front().Entry = Accepted.Entry;
   EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
 
   neverd::PipelineFunctionAudit Import;
@@ -51,6 +53,36 @@ TEST(SafetyReport, PipelineCoverageRejectsPartialFunctionLifts) {
   ASSERT_TRUE(Error.has_value());
   EXPECT_NE(Error->find("0x3000"), std::string::npos);
   EXPECT_NE(Error->find("rejected-incomplete"), std::string::npos);
+}
+
+TEST(SafetyReport, PipelineCoverageMatchesAcceptedFunctionIdentities) {
+  auto accepted = [](neverd::va_t Entry) {
+    neverd::PipelineFunctionAudit Audit;
+    Audit.Entry = Entry;
+    Audit.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+    Audit.HasLowIR = true;
+    Audit.HasMedIR = true;
+    Audit.MedIRVerified = true;
+    return Audit;
+  };
+
+  neverd::PipelineResult DuplicateAudit;
+  DuplicateAudit.FunctionAudits = {accepted(0x1000), accepted(0x1000)};
+  DuplicateAudit.LowFuncs.resize(2);
+  DuplicateAudit.LowFuncs[0].Entry = 0x1000;
+  DuplicateAudit.LowFuncs[1].Entry = 0x2000;
+  DuplicateAudit.MedFuncs.resize(2);
+  DuplicateAudit.MedFuncs[0].Entry = 0x1000;
+  DuplicateAudit.MedFuncs[1].Entry = 0x2000;
+  EXPECT_TRUE(validatePipelineCoverage(DuplicateAudit).has_value());
+
+  neverd::PipelineResult CrossedInventories;
+  CrossedInventories.FunctionAudits = {accepted(0x1000)};
+  CrossedInventories.LowFuncs.resize(1);
+  CrossedInventories.LowFuncs[0].Entry = 0x1000;
+  CrossedInventories.MedFuncs.resize(1);
+  CrossedInventories.MedFuncs[0].Entry = 0x2000;
+  EXPECT_TRUE(validatePipelineCoverage(CrossedInventories).has_value());
 }
 
 TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {

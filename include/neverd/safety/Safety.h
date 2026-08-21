@@ -28,8 +28,9 @@
 #include <string>
 
 namespace neverd {
+struct BinaryImage;
 struct PipelineResult;
-}
+} // namespace neverd
 
 namespace neverd::safety {
 
@@ -38,7 +39,8 @@ namespace neverd::safety {
 /// analysis gaps.  A returned message means a caller must report UNKNOWN
 /// instead of aggregating the surviving functions into a false SAFE result.
 std::optional<std::string>
-validatePipelineCoverage(const PipelineResult &Result);
+validatePipelineCoverage(const PipelineResult &Result,
+                         const BinaryImage *Img = nullptr);
 
 /// Hunt every copy sink for a destination overflow.
 SafetyReport runHunt(const AnalysisInput &In, const SinkCatalog &Cat,

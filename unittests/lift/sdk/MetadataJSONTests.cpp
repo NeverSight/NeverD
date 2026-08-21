@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/sdk/NeverDCAPI.h"
+#include "neverd/sdk/NeverDCAPISafety.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -189,6 +190,25 @@ std::vector<uint8_t> makeInternalCallPE() {
   return Bytes;
 }
 
+std::vector<uint8_t> makePartiallyTruncatedInternalCallPE() {
+  constexpr size_t kDirectoryCount = 16;
+  constexpr size_t kFileHeaderOffset = kPEOffset + 4;
+  constexpr size_t kOptionalHeaderOffset =
+      kFileHeaderOffset + sizeof(coff_file_header);
+  constexpr size_t kDirectoriesOffset =
+      kOptionalHeaderOffset + sizeof(pe32plus_header);
+  constexpr size_t kSectionHeadersOffset =
+      kDirectoriesOffset + kDirectoryCount * sizeof(data_directory);
+
+  std::vector<uint8_t> Bytes = makeInternalCallPE();
+  coff_section Text{};
+  std::memcpy(&Text, Bytes.data() + kSectionHeadersOffset, sizeof(Text));
+  Text.VirtualSize = 9;
+  writeObject(Bytes, kSectionHeadersOffset, Text);
+  Bytes[kTextFileOffset + 8] = 0x0f;
+  return Bytes;
+}
+
 class TemporaryPE {
 public:
   explicit TemporaryPE(const std::vector<uint8_t> &Bytes) {
@@ -348,4 +368,40 @@ TEST(NeverDMetadataJSON, CoverageReportRejectsMissingInternalCallee) {
   EXPECT_EQ(FullAudit->getBoolean("complete"), true);
   EXPECT_EQ(FullAudit->getInteger("accepted_functions"), 2);
   EXPECT_EQ(FullAudit->getInteger("unresolved_internal_calls"), 0);
+}
+
+TEST(NeverDMetadataJSON, SafetyRejectsPartiallyLiftedFunctionInventory) {
+  const std::vector<uint8_t> Bytes = makePartiallyTruncatedInternalCallPE();
+  json::Object Coverage = runBench(Bytes);
+  const json::Object *Audit = Coverage.getObject("audit");
+  ASSERT_NE(Audit, nullptr);
+  EXPECT_EQ(Audit->getInteger("detected_functions"), 1);
+  EXPECT_EQ(Audit->getInteger("accepted_functions"), 1);
+  EXPECT_EQ(Audit->getInteger("rejected_functions"), 0);
+  EXPECT_EQ(Audit->getInteger("unresolved_internal_calls"), 1);
+  EXPECT_EQ(Audit->getBoolean("complete"), false);
+
+  TemporaryPE Input(Bytes);
+  ASSERT_FALSE(Input.error()) << Input.error().message();
+
+  SessionGuard Session;
+  ASSERT_TRUE(neverd_session_load(Session, Input.path().c_str()))
+      << takeString(neverd_last_error(Session));
+  neverd_safety_options Options{};
+  Options.struct_size = sizeof(Options);
+  for (auto Analyze : {neverd_session_hunt_json, neverd_session_audit_json}) {
+    const std::string JSON = takeString(Analyze(Session, &Options));
+    auto Parsed = json::parse(JSON);
+    ASSERT_TRUE(static_cast<bool>(Parsed))
+        << toString(Parsed.takeError()) << "\n"
+        << JSON;
+    const json::Object *Root = Parsed->getAsObject();
+    ASSERT_NE(Root, nullptr);
+    EXPECT_FALSE(Root->getBoolean("ok").value_or(true));
+    EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
+    EXPECT_EQ(Root->getString("confidence"), "LOW");
+    ASSERT_TRUE(Root->getString("error").has_value());
+    EXPECT_NE(Root->getString("error")->find("incomplete safety lift"),
+              StringRef::npos);
+  }
 }
