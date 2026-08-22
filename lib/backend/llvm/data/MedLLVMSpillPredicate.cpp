@@ -23,6 +23,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -147,6 +148,19 @@ bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
       ASize == 0 || BSize == 0)
     return false;
 
+  // Intermediate endpoint arithmetic can exceed int64_t by one pointer-width
+  // modulus plus an access size.  APInt keeps these proofs portable to MSVC,
+  // which has no native 128-bit integer extension, without weakening the
+  // overflow checks.
+  static constexpr unsigned WideArithmeticBits = 128;
+  auto wideSigned = [](int64_t Value) {
+    return llvm::APInt(WideArithmeticBits, static_cast<uint64_t>(Value),
+                       /*isSigned=*/true);
+  };
+  auto wideUnsigned = [](uint64_t Value) {
+    return llvm::APInt(WideArithmeticBits, Value);
+  };
+
   std::map<int, const MedBlock *> BlocksById;
   for (const MedBlock &Block : CurMedFunc->Blocks)
     if (!BlocksById.emplace(Block.Id, &Block).second)
@@ -226,11 +240,10 @@ bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
         return std::nullopt;
       SignedDelta = -SignedDelta;
     }
-    const __int128 Sum = static_cast<__int128>(*BaseDelta) + SignedDelta;
-    if (Sum < std::numeric_limits<int64_t>::min() ||
-        Sum > std::numeric_limits<int64_t>::max())
+    const llvm::APInt Sum = wideSigned(*BaseDelta) + wideSigned(SignedDelta);
+    if (!Sum.isSignedIntN(64))
       return std::nullopt;
-    return static_cast<int64_t>(Sum);
+    return Sum.getSExtValue();
   };
 
   auto phiBlock = [&](const PhiNode &Phi) -> const MedBlock * {
@@ -514,17 +527,16 @@ bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
       return {true, true, std::nullopt};
     auto extend = [&](const FrameOffsetRange &Base, const UnsignedRange &Delta,
                       bool Subtract) -> std::optional<FrameOffsetRange> {
-      const __int128 Min = static_cast<__int128>(Base.Min) +
-                           (Subtract ? -static_cast<__int128>(Delta.Max)
-                                     : static_cast<__int128>(Delta.Min));
-      const __int128 Max = static_cast<__int128>(Base.Max) +
-                           (Subtract ? -static_cast<__int128>(Delta.Min)
-                                     : static_cast<__int128>(Delta.Max));
-      if (Min < std::numeric_limits<int64_t>::min() ||
-          Max > std::numeric_limits<int64_t>::max())
+      const llvm::APInt Min =
+          wideSigned(Base.Min) +
+          (Subtract ? -wideUnsigned(Delta.Max) : wideUnsigned(Delta.Min));
+      const llvm::APInt Max =
+          wideSigned(Base.Max) +
+          (Subtract ? -wideUnsigned(Delta.Min) : wideUnsigned(Delta.Max));
+      if (!Min.isSignedIntN(64) || !Max.isSignedIntN(64))
         return std::nullopt;
-      return FrameOffsetRange{Base.Root, static_cast<int64_t>(Min),
-                              static_cast<int64_t>(Max)};
+      return FrameOffsetRange{Base.Root, Min.getSExtValue(),
+                              Max.getSExtValue()};
     };
     auto mergeProofs = [](const FrameRangeProof &Left,
                           const FrameRangeProof &Right) -> FrameRangeProof {
@@ -612,20 +624,23 @@ bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
 
   // Two byte ranges alias after pointer-width wrapping iff the signed
   // difference interval contains a multiple of 2^N.
-  const __int128 Modulus = __int128{1} << (PointerBytes * 8);
-  const __int128 DifferenceMin =
-      static_cast<__int128>(ARange->Min) -
-      (static_cast<__int128>(BRange->Max) + BSize - 1);
-  const __int128 DifferenceMax =
-      (static_cast<__int128>(ARange->Max) + ASize - 1) -
-      static_cast<__int128>(BRange->Min);
-  auto floorDiv = [](__int128 Value, __int128 Divisor) {
-    return Value >= 0 ? Value / Divisor : -((-Value + Divisor - 1) / Divisor);
+  const llvm::APInt Modulus = wideUnsigned(1).shl(PointerBytes * 8);
+  const llvm::APInt DifferenceMin =
+      wideSigned(ARange->Min) -
+      (wideSigned(BRange->Max) + wideUnsigned(BSize - 1));
+  const llvm::APInt DifferenceMax =
+      (wideSigned(ARange->Max) + wideUnsigned(ASize - 1)) -
+      wideSigned(BRange->Min);
+  auto floorDiv = [](const llvm::APInt &Value, const llvm::APInt &Divisor) {
+    if (!Value.isNegative())
+      return Value.sdiv(Divisor);
+    const llvm::APInt One(Value.getBitWidth(), 1);
+    return -((-Value + Divisor - One).sdiv(Divisor));
   };
-  auto ceilDiv = [&](const __int128 Value, const __int128 Divisor) {
+  auto ceilDiv = [&](const llvm::APInt &Value, const llvm::APInt &Divisor) {
     return -floorDiv(-Value, Divisor);
   };
-  return ceilDiv(DifferenceMin, Modulus) > floorDiv(DifferenceMax, Modulus);
+  return ceilDiv(DifferenceMin, Modulus).sgt(floorDiv(DifferenceMax, Modulus));
 }
 
 bool MedLLVMEmitter::collectFrameReloadSources(
