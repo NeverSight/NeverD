@@ -44,14 +44,22 @@ protected:
   static std::string_view functionBody(std::string_view IR,
                                        std::string_view Name) {
     const std::string Marker = "@" + std::string(Name) + "(";
-    const size_t NamePos = IR.find(Marker);
-    if (NamePos == std::string_view::npos)
-      return {};
-    const size_t Start = IR.rfind("define ", NamePos);
-    const size_t End = IR.find("\n}", NamePos);
-    if (Start == std::string_view::npos || End == std::string_view::npos)
-      return {};
-    return IR.substr(Start, End + 2 - Start);
+    size_t SearchFrom = 0;
+    while (true) {
+      const size_t NamePos = IR.find(Marker, SearchFrom);
+      if (NamePos == std::string_view::npos)
+        return {};
+      const size_t Start = IR.rfind("define ", NamePos);
+      const size_t FirstLineEnd = Start == std::string_view::npos
+                                      ? std::string_view::npos
+                                      : IR.find('\n', Start);
+      if (Start != std::string_view::npos && FirstLineEnd > NamePos) {
+        const size_t End = IR.find("\n}", NamePos);
+        if (End != std::string_view::npos)
+          return IR.substr(Start, End + 2 - Start);
+      }
+      SearchFrom = NamePos + Marker.size();
+    }
   }
 };
 
@@ -838,6 +846,86 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_NE(LLVM.out.find("getelementptr i8, ptr @__nd_codeptr_"),
             std::string::npos)
       << LLVM.out;
+#endif
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       ScalarSelectIndexCycleRemainsNumericTableOffset) {
+#if !defined(__APPLE__)
+  GTEST_SKIP() << "AArch64 Mach-O fixture is built only on Apple hosts";
+#else
+  const fs::path Path = fixture("test_scalar_index_cycle_a64_macho");
+  ASSERT_TRUE(fs::exists(Path));
+
+  auto ImgOrErr = loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(ImgOrErr))
+      << llvm::toString(ImgOrErr.takeError());
+  const BinaryImage &Img = *ImgOrErr;
+  ASSERT_EQ(Img.Format, BinaryFormat::MachO);
+  ASSERT_EQ(Img.Arch, Arch::AArch64);
+  ASSERT_EQ(Img.getPointerSize(), 8u);
+  const Section *Tables = Img.getSectionByName("__const");
+  ASSERT_NE(Tables, nullptr);
+  ASSERT_EQ(Tables->Size, 64u);
+  EXPECT_TRUE(Tables->isReadable());
+  EXPECT_FALSE(Tables->isWritable());
+  EXPECT_TRUE(Tables->isExecutable());
+  EXPECT_FALSE(Img.isCodeAddress(Tables->VA));
+  EXPECT_TRUE(Img.hasObjectDataProvenance(Tables->VA));
+
+#if defined(__aarch64__)
+  for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
+    RunResult Native = exec(Path.string(), {});
+    EXPECT_EQ(Native.exitCode, 0) << Native.err;
+  }
+#endif
+
+  RunResult Med = liftToMedIR(Path);
+  ASSERT_EQ(Med.exitCode, 0) << Med.err;
+  EXPECT_NE(Med.out.find("PHI X13.2"), std::string::npos) << Med.out;
+  EXPECT_NE(Med.out.find("PHI X28.2"), std::string::npos) << Med.out;
+  EXPECT_NE(Med.out.find("SELECT X28.3"), std::string::npos) << Med.out;
+  EXPECT_NE(Med.out.find("INT_LEFT"), std::string::npos) << Med.out;
+
+  RunResult LLVM = liftToLLVMIRUnopt(Path);
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  EXPECT_EQ(LLVM.err.find("refusing stale-address fallback"), std::string::npos)
+      << LLVM.err;
+  const std::string_view Probe = functionBody(LLVM.out, "probe");
+  ASSERT_FALSE(Probe.empty()) << LLVM.out;
+  EXPECT_NE(Probe.find("@__nd_data_"), std::string_view::npos) << Probe;
+  EXPECT_NE(Probe.find("getelementptr i8"), std::string_view::npos) << Probe;
+
+  const fs::path LLVMPath = tmpFile("scalar_index_cycle_a64_macho.ll");
+  const fs::path IntrinsicShim =
+      tmpFile("scalar_index_cycle_a64_macho_intrinsics.s");
+  const fs::path RebuiltPath = tmpFile("scalar_index_cycle_a64_macho.rebuilt");
+  const size_t ModuleStart = LLVM.out.find("; ModuleID");
+  ASSERT_NE(ModuleStart, std::string::npos) << LLVM.out;
+  {
+    std::ofstream OS(LLVMPath);
+    ASSERT_TRUE(OS) << LLVMPath;
+    OS << std::string_view(LLVM.out).substr(ModuleStart);
+  }
+  {
+    std::ofstream OS(IntrinsicShim);
+    ASSERT_TRUE(OS) << IntrinsicShim;
+    OS << ".text\n"
+          ".globl _llvm.returnaddress.p0\n"
+          "_llvm.returnaddress.p0:\n"
+          "  mov x0, x30\n"
+          "  ret\n";
+  }
+  RunResult Compile = exec(
+      NEVERD_TEST_CLANG, {"-target", "arm64-apple-macos14", LLVMPath.string(),
+                          IntrinsicShim.string(), "-o", RebuiltPath.string()});
+  ASSERT_EQ(Compile.exitCode, 0) << Compile.err;
+#if defined(__aarch64__)
+  for (unsigned Attempt = 0; Attempt < 5; ++Attempt) {
+    RunResult Rebuilt = exec(RebuiltPath.string(), {});
+    EXPECT_EQ(Rebuilt.exitCode, 0) << Rebuilt.err;
+  }
+#endif
 #endif
 }
 

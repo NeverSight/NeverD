@@ -9603,6 +9603,162 @@ TEST(LLVMDataPointerInvariantBoundary,
       }
 }
 
+TEST(LLVMDataPointerInvariantBoundary,
+     IncompleteExactNarrowFrameReloadRequiresPureFrameDomain) {
+  enum class Scenario {
+    ScalarByte,
+    ScalarCycle,
+    CyclicOnly,
+    FragmentCycle,
+    PointerWidth,
+    AddressFragment,
+    MissingWrite,
+    EscapedFrame,
+  };
+  auto makeLookup = [](Arch TargetArch, Scenario Case) {
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    const uint16_t PointerSize = static_cast<uint16_t>(TRI.PointerSize);
+    auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+      MedVar V;
+      V.Kind = Kind;
+      V.TheArch = TargetArch;
+      V.Id = Id;
+      V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+      V.Size = Size;
+      return V;
+    };
+
+    MedFunc Func;
+    Func.Entry = CallerVA;
+    Func.Name = "incomplete_exact_narrow_frame_domain";
+    Func.ReturnType = NdType::makeVoid();
+    Func.FrameSize = 16;
+
+    MedVar Index = makeVar(MedVar::Param, 0, PointerSize);
+    Index.RegOff = TRI.IntParamRegs[0];
+    MedVar Byte = makeVar(MedVar::Param, 1, 1);
+    Byte.RegOff = TRI.IntParamRegs[1];
+    Func.Params = {Index, Byte};
+
+    MedVar SP = makeVar(MedVar::Reg, 100, PointerSize);
+    SP.SSAVer = 0;
+    SP.RegOff = TRI.StackPointer;
+    MedVar ExactSlot = makeVar(MedVar::Temp, 1, PointerSize);
+    MedVar DynamicSlot = makeVar(MedVar::Temp, 2, PointerSize);
+    MedVar Reloaded =
+        makeVar(MedVar::Temp, 3,
+                Case == Scenario::PointerWidth ? PointerSize : uint16_t{1});
+    MedVar Selected = makeVar(MedVar::Temp, 4, 1);
+
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = CallerVA;
+    Block.EndAddr = CallerVA + 0x18;
+    MedOp FormExactSlot;
+    FormExactSlot.Opcode = NdOp::INT_ADD;
+    FormExactSlot.Output = ExactSlot;
+    FormExactSlot.addInput(SP);
+    FormExactSlot.addInput(MedVar::makeConst(
+        uint64_t(-8), PointerSize, ConstantAddressProvenance::Scalar));
+    Block.Ops.push_back(std::move(FormExactSlot));
+
+    MedOp FormDynamicSlot;
+    FormDynamicSlot.Opcode = NdOp::INT_ADD;
+    FormDynamicSlot.Output = DynamicSlot;
+    FormDynamicSlot.addInput(ExactSlot);
+    FormDynamicSlot.addInput(Index);
+    Block.Ops.push_back(std::move(FormDynamicSlot));
+
+    MedOp Reload;
+    Reload.Opcode = NdOp::LOAD;
+    Reload.Output = Reloaded;
+    Reload.addInput(ExactSlot);
+    Block.Ops.push_back(std::move(Reload));
+
+    MedVar StoredValue = Byte;
+    if (Case == Scenario::CyclicOnly) {
+      StoredValue = Reloaded;
+    } else if (Case == Scenario::ScalarCycle ||
+               Case == Scenario::FragmentCycle) {
+      MedOp Select;
+      Select.Opcode = NdOp::SELECT;
+      Select.Output = Selected;
+      Select.addInput(Index);
+      Select.addInput(Reloaded);
+      Select.addInput(
+          Case == Scenario::ScalarCycle
+              ? Byte
+              : MedVar::makeConst(TextVA, 1,
+                                  ConstantAddressProvenance::AddressFragment));
+      Block.Ops.push_back(std::move(Select));
+      StoredValue = Selected;
+    } else if (Case == Scenario::AddressFragment) {
+      StoredValue = MedVar::makeConst(
+          TextVA, 1, ConstantAddressProvenance::AddressFragment);
+    }
+
+    if (Case != Scenario::MissingWrite) {
+      MedOp Store;
+      Store.Opcode = NdOp::STORE;
+      Store.addInput(DynamicSlot);
+      Store.addInput(StoredValue);
+      Block.Ops.push_back(std::move(Store));
+    }
+
+    if (Case == Scenario::EscapedFrame) {
+      MedOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = CallerVA + 8;
+      Call.addInput(MedVar::makeConst(ImportStubVA, PointerSize));
+      const size_t CallIndex = Block.Ops.size();
+      Block.Ops.push_back(std::move(Call));
+      MedCallInfo Info;
+      Info.BlockId = Block.Id;
+      Info.OpIdx = CallIndex;
+      Info.TargetAddr = ImportStubVA;
+      Info.TargetName = "opaque_frame_consumer";
+      Info.Args.push_back(ExactSlot);
+      Func.CallInfos.push_back(std::move(Info));
+    }
+
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(std::move(Return));
+    Func.Blocks.push_back(std::move(Block));
+    return Func;
+  };
+
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+      for (Scenario Case : {Scenario::ScalarByte, Scenario::ScalarCycle,
+                            Scenario::CyclicOnly, Scenario::FragmentCycle,
+                            Scenario::PointerWidth, Scenario::AddressFragment,
+                            Scenario::MissingWrite, Scenario::EscapedFrame}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+        SCOPED_TRACE(static_cast<int>(Case));
+        BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+        MedFunc Func = makeLookup(TargetArch, Case);
+        const MedOp *Reload = nullptr;
+        for (const MedOp &Op : Func.Blocks.front().Ops)
+          if (Op.Opcode == NdOp::LOAD)
+            Reload = &Op;
+        ASSERT_NE(Reload, nullptr);
+
+        MedLLVMEmitter Emitter;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, Func, Image,
+                                                        TargetArch, Format);
+        std::vector<MedVar> Sources;
+        EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+            Emitter, Func, TargetArch, *Reload, Sources));
+        EXPECT_EQ(
+            MedLLVMProvenanceTestPeer::stableOffset(Emitter, Reload->Output,
+                                                    nullptr),
+            Case == Scenario::ScalarByte || Case == Scenario::ScalarCycle);
+      }
+}
+
 TEST(MachOLLVMDataPointerBoundary,
      ClearsProvenanceCachesAcrossFunctionsAndEmitterReuse) {
   {

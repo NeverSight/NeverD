@@ -1217,6 +1217,143 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     return Proof.Valid ? Proof.Root : std::nullopt;
   };
   std::set<FrameRootKey> ActiveFrameDomains;
+  // While one complete frame domain is being audited, a stored scalar update
+  // may depend on a LOAD from that same domain.  Detect only that value-flow
+  // recurrence: it is a neutral backedge once every potentially aliasing
+  // write is in the outer audit, but it is not an initializer by itself.
+  struct FrameDomainReachSummary {
+    bool ReachesBackedge = false;
+    bool HasIndependentAlternative = false;
+    bool Unknown = false;
+  };
+  auto mergeFrameDomainAlternatives =
+      [](const std::vector<FrameDomainReachSummary> &Alternatives) {
+        FrameDomainReachSummary Result;
+        for (const FrameDomainReachSummary &Alternative : Alternatives) {
+          Result.ReachesBackedge |= Alternative.ReachesBackedge;
+          Result.HasIndependentAlternative |=
+              Alternative.HasIndependentAlternative;
+          Result.Unknown |= Alternative.Unknown;
+        }
+        return Result;
+      };
+  auto mergeFrameDomainDependencies =
+      [](const std::vector<FrameDomainReachSummary> &Dependencies) {
+        FrameDomainReachSummary Result;
+        if (Dependencies.empty()) {
+          Result.Unknown = true;
+          return Result;
+        }
+        bool AllHaveIndependentAlternative = true;
+        unsigned BackedgeDependencies = 0;
+        for (const FrameDomainReachSummary &Dependency : Dependencies) {
+          Result.ReachesBackedge |= Dependency.ReachesBackedge;
+          Result.Unknown |= Dependency.Unknown;
+          AllHaveIndependentAlternative &= Dependency.HasIndependentAlternative;
+          BackedgeDependencies += Dependency.ReachesBackedge ? 1u : 0u;
+        }
+        // A scalar operation preserves an independently initialized value only
+        // when at most one operand conditionally carries the recurrence and
+        // every other operand is independently available. In particular,
+        // `load + 1` is not an initializer, while
+        // `select(load, initializer) + 1` retains the SELECT alternative.
+        Result.HasIndependentAlternative = !Result.Unknown &&
+                                           AllHaveIndependentAlternative &&
+                                           BackedgeDependencies <= 1;
+        return Result;
+      };
+  int RemainingFrameDomainReachNodes = 8192;
+  std::function<FrameDomainReachSummary(const MedVar &, const FrameRootKey &,
+                                        int, std::set<Key>)>
+      summarizeFrameDomainReach =
+          [&](const MedVar &Start, const FrameRootKey &TargetRoot, int Depth,
+              std::set<Key> Seen) -> FrameDomainReachSummary {
+    if (Depth > 128 || RemainingFrameDomainReachNodes-- <= 0)
+      return {.Unknown = true};
+    if (Start.isConst())
+      return {.HasIndependentAlternative = true};
+    if (!Seen.insert(keyOf(Start)).second)
+      return {};
+    if (const PhiNode *Phi = lookupPhi(Start)) {
+      bool SawFeasible = false;
+      std::vector<FrameDomainReachSummary> Alternatives;
+      for (const auto &[Pred, Arg] : Phi->Args) {
+        const PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, Pred);
+        if (Edge == PhiEdgeFeasibility::Infeasible)
+          continue;
+        if (Edge != PhiEdgeFeasibility::ProvenFeasible)
+          return {.Unknown = true};
+        SawFeasible = true;
+        Alternatives.push_back(
+            summarizeFrameDomainReach(Arg, TargetRoot, Depth + 1, Seen));
+      }
+      return SawFeasible ? mergeFrameDomainAlternatives(Alternatives)
+                         : FrameDomainReachSummary{.Unknown = true};
+    }
+    const MedOp *Def = lookupDef(Start);
+    if (!Def)
+      return {.HasIndependentAlternative = true};
+    if (Def->Opcode == NdOp::LOAD && Def->NumInputs >= 1) {
+      const auto Root = frameRoot(Def->Inputs[0], 0, {});
+      if (Root)
+        return *Root == TargetRoot
+                   ? FrameDomainReachSummary{.ReachesBackedge = true}
+                   : FrameDomainReachSummary{.HasIndependentAlternative = true};
+      return varMayBeFrameAddress(Def->Inputs[0])
+                 ? FrameDomainReachSummary{.Unknown = true}
+                 : FrameDomainReachSummary{.HasIndependentAlternative = true};
+    }
+    if (auto Forwarded = pointerPreservingInput(*Def))
+      return summarizeFrameDomainReach(*Forwarded, TargetRoot, Depth + 1, Seen);
+    if (Def->Opcode == NdOp::SELECT) {
+      if (Def->NumInputs < 3)
+        return {.Unknown = true};
+      return mergeFrameDomainAlternatives(
+          {summarizeFrameDomainReach(Def->Inputs[1], TargetRoot, Depth + 1,
+                                     Seen),
+           summarizeFrameDomainReach(Def->Inputs[2], TargetRoot, Depth + 1,
+                                     Seen)});
+    }
+    if (Def->Opcode == NdOp::INT_OR) {
+      MedVar Cond, ArmT, ArmF;
+      if (isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
+        return mergeFrameDomainAlternatives(
+            {summarizeFrameDomainReach(ArmT, TargetRoot, Depth + 1, Seen),
+             summarizeFrameDomainReach(ArmF, TargetRoot, Depth + 1, Seen)});
+    }
+    switch (Def->Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+    case NdOp::SUBBYTES:
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+    case NdOp::INT_MULT:
+    case NdOp::INT_DIV:
+    case NdOp::INT_SDIV:
+    case NdOp::INT_REM:
+    case NdOp::INT_SREM:
+    case NdOp::INT_LEFT:
+    case NdOp::INT_RIGHT:
+    case NdOp::INT_ASHR:
+    case NdOp::INT_AND:
+    case NdOp::INT_OR:
+    case NdOp::INT_XOR:
+    case NdOp::INT_NEG2:
+    case NdOp::INT_NEGATE:
+    case NdOp::INT_NOT: {
+      std::vector<FrameDomainReachSummary> Dependencies;
+      Dependencies.reserve(Def->NumInputs);
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        Dependencies.push_back(summarizeFrameDomainReach(
+            Def->Inputs[I], TargetRoot, Depth + 1, Seen));
+      return mergeFrameDomainDependencies(Dependencies);
+    }
+    default:
+      break;
+    }
+    return {.Unknown = true};
+  };
   // A relocation-free immutable scalar table can feed the index used by its
   // next lookup (for example, a finite-state transition table in a loop).
   // Record such a LOAD only after every reachable lane slot has been audited
@@ -1551,6 +1688,12 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // otherwise hide unproved address provenance.
       if (reachesAnchoredPhi(Start, AnchoredPhis))
         return true;
+      for (const FrameRootKey &Root : ActiveFrameDomains) {
+        const FrameDomainReachSummary Summary =
+            summarizeFrameDomainReach(Start, Root, 0, {});
+        if (!Summary.Unknown && Summary.ReachesBackedge)
+          return true;
+      }
       const MedOp *CycleDef = lookupDef(Start);
       if (CycleDef && CycleDef->Opcode == NdOp::LOAD &&
           CycleDef->NumInputs >= 1) {
@@ -1745,6 +1888,9 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // spilled scalar remains a valid offset.
       const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
       const auto ExactFrameSlot = canonicalFrameSlotKey(Def->Inputs[0]);
+      const auto ReloadFrameRoot = frameRoot(Def->Inputs[0], 0, {});
+      if (ReloadFrameRoot && ActiveFrameDomains.count(*ReloadFrameRoot))
+        return true;
       if (ExactFrameSlot) {
         // A loop-carried scalar can be represented through memory rather than
         // an SSA PHI: load(slot), update, store(slot), backedge. Once the exact
@@ -1777,12 +1923,15 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
           }
           return SawAnchoredSource;
         }
-        // An exact slot has a stronger contract than frame-domain purity: its
-        // reaching-store fixed point must cover the LOAD on every path.  A
-        // later same-slot STORE cannot initialize the first loop iteration,
-        // so do not let the broader dynamic-array audit below turn an
-        // incomplete exact proof into a scalar one.
-        return stableOffsetFailure("incomplete-frame-reload", Start, Depth);
+        // A pointer-width exact slot has a stronger contract than frame-domain
+        // purity: its reaching-store fixed point must cover the LOAD on every
+        // path. A narrow reload cannot carry a complete native pointer, so an
+        // incomplete exact-slot proof may continue into the same-root audit
+        // below. That audit still checks every possibly aliasing write and
+        // rejects address provenance, escapes, atomics, and unknown owners.
+        if (PointerSize == 0 || Def->Output.Size == 0 ||
+            Def->Output.Size >= PointerSize)
+          return stableOffsetFailure("incomplete-frame-reload", Start, Depth);
       }
 
       // Runtime-indexed local arrays cannot supply an exact SlotKey, and a
@@ -1793,7 +1942,6 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       // write must itself remain numeric, and no same-root address may escape
       // to a call or an untracked memory owner. This proves domain purity, not
       // a particular reaching value.
-      const auto ReloadFrameRoot = frameRoot(Def->Inputs[0], 0, {});
       if (ReloadFrameRoot) {
         const FrameRootKey Root = *ReloadFrameRoot;
         if (ActiveFrameDomains.count(Root))
@@ -1911,19 +2059,26 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
         if (!DomainInvalid && !DomainSources.empty()) {
           ActiveFrameDomains.insert(Root);
           bool DomainStable = true;
+          bool SawInitializer = false;
           for (const MedVar &Source : DomainSources)
             if (!prove(Source, Depth + 1, Seen, ActiveFrameSlots,
                        AnchoredPhis)) {
               DomainStable = false;
               break;
+            } else {
+              const FrameDomainReachSummary Summary =
+                  summarizeFrameDomainReach(Source, Root, 0, {});
+              if (!Summary.Unknown && Summary.HasIndependentAlternative)
+                SawInitializer = true;
             }
           ActiveFrameDomains.erase(Root);
-          if (DomainStable)
+          if (DomainStable && SawInitializer)
             return true;
         }
       }
 
-      if (ExactFrameSlot || varMayBeFrameAddress(Def->Inputs[0]))
+      if (ExactFrameSlot || ReloadFrameRoot ||
+          varMayBeFrameAddress(Def->Inputs[0]))
         return stableOffsetFailure("incomplete-frame-reload", Start, Depth);
 
       // A non-frame load narrower than the target pointer cannot transport a
