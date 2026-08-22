@@ -51,6 +51,7 @@ if(TARGET neverd_shared)
   )
   target_include_directories(NeverDSafetyIntegrationTests PRIVATE
     ${CMAKE_SOURCE_DIR}/include)
+  target_link_libraries(NeverDSafetyIntegrationTests PRIVATE LLVMSupport)
   target_compile_definitions(NeverDSafetyIntegrationTests PRIVATE
     SAFETY_FIXTURE_ROOT="${_safety_fixture_root}")
 endif()
