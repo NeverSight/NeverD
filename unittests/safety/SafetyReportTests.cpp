@@ -85,6 +85,68 @@ TEST(SafetyReport, PipelineCoverageMatchesAcceptedFunctionIdentities) {
   EXPECT_TRUE(validatePipelineCoverage(CrossedInventories).has_value());
 }
 
+TEST(SafetyReport, PipelineCoverageRejectsUnresolvedIndirectBranches) {
+  neverd::PipelineResult Result;
+  neverd::PipelineFunctionAudit Accepted;
+  Accepted.Entry = 0x1000;
+  Accepted.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+  Accepted.HasLowIR = true;
+  Accepted.HasMedIR = true;
+  Accepted.MedIRVerified = true;
+  Result.FunctionAudits.push_back(Accepted);
+
+  neverd::LowFunc Low;
+  Low.Entry = Accepted.Entry;
+  neverd::LowBlock Block;
+  Block.Id = 0;
+  neverd::LowOp Indirect;
+  Indirect.Opcode = neverd::NdOp::INDIR_BR;
+  Indirect.Addr = 0x1010;
+  Block.Ops.push_back(Indirect);
+  Low.Blocks.push_back(std::move(Block));
+  Result.LowFuncs.push_back(std::move(Low));
+  Result.MedFuncs.resize(1);
+  Result.MedFuncs.front().Entry = Accepted.Entry;
+
+  std::optional<std::string> Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("0x1010"), std::string::npos);
+  EXPECT_NE(Error->find("unresolved-indirect-branch"), std::string::npos);
+
+  neverd::JumpTable Table;
+  Table.InsnAddr = 0x1010;
+  Table.Targets = {0x1020, 0x1030};
+  Result.LowFuncs.front().JumpTables.push_back(Table);
+  EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  Result.LowFuncs.front().JumpTables.front().MutatedUnsafe = true;
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("unresolved-indirect-branch"), std::string::npos);
+
+  Result.LowFuncs.front().JumpTables.front().MutatedUnsafe = false;
+  neverd::MedBlock MedBlock;
+  MedBlock.Id = 0;
+  neverd::MedOp IndirectCall;
+  IndirectCall.Opcode = neverd::NdOp::INDIR_CALL;
+  IndirectCall.Addr = 0x1018;
+  MedBlock.Ops.push_back(IndirectCall);
+  Result.MedFuncs.front().Blocks.push_back(std::move(MedBlock));
+  neverd::MedCallInfo Call;
+  Call.BlockId = 0;
+  Call.OpIdx = 0;
+  Call.IsIndirect = true;
+  Result.MedFuncs.front().CallInfos.push_back(Call);
+
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("0x1018"), std::string::npos);
+  EXPECT_NE(Error->find("unresolved-indirect-call"), std::string::npos);
+
+  Result.MedFuncs.front().CallInfos.front().TargetAddr = 0x9000;
+  EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+}
+
 TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {
   SafetyReport Report;
   Report.Origin = Track::Hunt;

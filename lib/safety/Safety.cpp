@@ -76,6 +76,32 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
   if (AcceptedEntries.empty() || AcceptedEntries != LowEntries ||
       AcceptedEntries != MedEntries)
     return "incomplete safety lift inventory";
+  for (const LowFunc &F : Result.LowFuncs) {
+    std::set<va_t> ResolvedIndirectBranches;
+    for (const JumpTable &Table : F.JumpTables)
+      if (!Table.MutatedUnsafe && !Table.Targets.empty())
+        ResolvedIndirectBranches.insert(Table.InsnAddr);
+    for (const LowBlock &Block : F.Blocks)
+      for (const LowOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INDIR_BR &&
+            ResolvedIndirectBranches.count(Op.Addr) == 0)
+          return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
+                 " (unresolved-indirect-branch)";
+  }
+  for (const MedFunc &F : Result.MedFuncs)
+    for (const MedCallInfo &Call : F.CallInfos) {
+      if (!Call.IsIndirect || Call.TargetAddr != 0)
+        continue;
+      va_t CallVA = F.Entry;
+      for (const MedBlock &Block : F.Blocks)
+        if (Block.Id == Call.BlockId && Call.OpIdx >= 0 &&
+            static_cast<size_t>(Call.OpIdx) < Block.Ops.size()) {
+          CallVA = Block.Ops[static_cast<size_t>(Call.OpIdx)].Addr;
+          break;
+        }
+      return "incomplete safety lift at 0x" + llvm::utohexstr(CallVA) +
+             " (unresolved-indirect-call)";
+    }
   if (Img)
     for (const LowFunc &F : Result.LowFuncs)
       for (const LowBlock &Block : F.Blocks)
