@@ -559,6 +559,37 @@ TEST(AllocLifetime, NoLeakWhenReturned) {
   EXPECT_FALSE(has(Fs, VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, NarrowReturnDoesNotProveAllocationEscaped) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.ret(b0, {temp(1, 1)});
+
+  const std::vector<Finding> Fs = audit({B.F}, &Img);
+  const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low) << Leak->Detail;
+}
+
+TEST(AllocLifetime, NarrowStoredValueDoesNotProveAllocationEscaped) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {MedVar::makeConst(0x8000, 8), temp(1, 1)});
+  B.ret(b0, {});
+
+  const std::vector<Finding> Fs = audit({B.F}, &Img);
+  const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low) << Leak->Detail;
+}
+
 TEST(AllocLifetime, RuntimeAdjustedReturnDoesNotProveAllocationEscaped) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -2468,8 +2499,8 @@ TEST(AllocLifetime, WrapperAllocationLeakIsInterprocedural) {
 TEST(AllocLifetime, ThumbWrapperAllocationUsesCanonicalCalleeEntry) {
   FB Wrap("xmalloc", 0x200);
   int WrapperBlock = Wrap.block();
-  Wrap.call(WrapperBlock, "malloc", temp(1), {MedVar::makeConst(16, 4)});
-  Wrap.ret(WrapperBlock, {temp(1)});
+  Wrap.call(WrapperBlock, "malloc", temp(1, 4), {MedVar::makeConst(16, 4)});
+  Wrap.ret(WrapperBlock, {temp(1, 4)});
 
   FB User("user", 0x100);
   int UserBlock = User.block();
@@ -3038,4 +3069,58 @@ TEST(AllocLifetime, MissingAllocationResultFailsClosed) {
   ASSERT_NE(Leak, nullptr);
   EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
   EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, NarrowAllocationResultFailsClosed) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1, 1), {MedVar::makeConst(16, 8)}, 0x9000, 0x400);
+  B.ret(b0, {});
+
+  const std::vector<Finding> Fs = audit({B.F}, &Img);
+  const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low) << Leak->Detail;
+  EXPECT_EQ(Leak->Detail,
+            "allocation result has incompatible target pointer width");
+}
+
+TEST(AllocLifetime, NarrowFreeArgumentFailsClosed) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000, 0x400);
+  B.call(b0, "free", MedVar{}, {temp(1, 1)}, 0x9100, 0x408);
+  B.ret(b0, {});
+
+  const std::vector<Finding> Fs = audit({B.F}, &Img);
+  const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low) << Leak->Detail;
+  EXPECT_EQ(Leak->Detail,
+            "heap lifetime depends on a call with unrecovered arguments");
+}
+
+TEST(AllocLifetime, NarrowMemoryAddressDoesNotProveUseAfterFree) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000, 0x400);
+  B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, 0x408);
+  B.op(b0, NdOp::LOAD, temp(2), {temp(1, 1)}, 0x410);
+  B.ret(b0, {});
+
+  const std::vector<Finding> Fs = audit({B.F}, &Img);
+  const Finding *Use = find(Fs, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unknown) << Use->Detail;
+  EXPECT_EQ(Use->TheConfidence, Confidence::Low) << Use->Detail;
+  EXPECT_NE(Use->Detail.find("derived address may access"), std::string::npos)
+      << Use->Detail;
 }

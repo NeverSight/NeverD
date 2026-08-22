@@ -406,6 +406,35 @@ TEST(ObjectModel, SizedGlobalSymbolHasExactRemainingCapacityAcrossFormats) {
   }
 }
 
+TEST(ObjectModel, NarrowDestinationPointerFailsClosed) {
+  constexpr va_t BufferVA = 0x50;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = BufferVA;
+  Data.Size = 0x20;
+  Data.FileSz = 0x20;
+  Data.Data.resize(0x20);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.Symbols.push_back(Symbol{"buffer", BufferVA, 8, false});
+
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc(Arch::X64);
+  size_t Sink = pushCall(
+      F, "memcpy", temp(0),
+      {MedVar::makeConst(BufferVA, 1, ConstantAddressProvenance::DataAddress,
+                         BufferVA),
+       temp(2), MedVar::makeConst(9, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
 TEST(ObjectModel, WritableGlobalRunIsOnlyACapacityUpperBound) {
   BinaryImage Img;
   Img.Arch = Arch::X64;

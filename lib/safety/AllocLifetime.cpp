@@ -886,6 +886,14 @@ private:
     return Cat.matchSink(callName(CI));
   }
 
+  bool argumentHasPointerWidth(const MedCallInfo &CI, int ArgIndex) const {
+    return detail::callArgumentHasTargetPointerWidth(In.Img, CI, ArgIndex);
+  }
+
+  bool valueHasPointerWidth(const MedVar &Value) const {
+    return detail::hasTargetPointerWidth(In.Img, Value);
+  }
+
   bool returnsValue(const MedFunc &F) const {
     if (In.Dbg)
       if (auto Sym = In.Dbg->resolveFunction(F.Entry); Sym && Sym->ReturnType)
@@ -974,9 +982,12 @@ private:
       if (E->Kind == SinkKind::Realloc && ArgIndex == E->HandleArg)
         return EscapeState::Unknown;
     if (ArgIndex == catalogFreeArg(CI))
-      return EscapeState::No;
+      return argumentHasPointerWidth(CI, ArgIndex) ? EscapeState::No
+                                                   : EscapeState::Unknown;
 
     if (const MedFunc *Internal = internalCallee(CI)) {
+      if (!argumentHasPointerWidth(CI, ArgIndex))
+        return EscapeState::Unknown;
       auto It = Summaries.find(Internal->Entry);
       if (It == Summaries.end())
         return EscapeState::Unknown;
@@ -1008,6 +1019,10 @@ private:
               CI.Args[FA].isConst())
             continue;
           const ValueKey ArgKey = keyOf(CI.Args[FA]);
+          if (!argumentHasPointerWidth(CI, FA)) {
+            HasPotentialFree |= Alias.count(ArgKey) != 0;
+            continue;
+          }
           if (MustAlias.count(ArgKey)) {
             if (freeArgMayFail(CI, FA))
               HasPotentialFree = true;
@@ -1045,7 +1060,10 @@ private:
                 continue;
               const ValueKey InputKey = keyOf(Op.Inputs[I]);
               if (MustAlias.count(InputKey)) {
-                DefiniteEscapes.push_back({B.Id, OI});
+                if (valueHasPointerWidth(Op.Inputs[I]))
+                  DefiniteEscapes.push_back({B.Id, OI});
+                else
+                  HasPotentialEscape = true;
                 break;
               }
               HasPotentialEscape |= Alias.count(InputKey) != 0;
@@ -1056,9 +1074,12 @@ private:
             if (Val.isConst() || Mem.stackOffset(Addr))
               continue;
             const ValueKey StoredKey = keyOf(Val);
-            if (MustAlias.count(StoredKey))
-              DefiniteEscapes.push_back({B.Id, OI});
-            else
+            if (MustAlias.count(StoredKey)) {
+              if (valueHasPointerWidth(Val))
+                DefiniteEscapes.push_back({B.Id, OI});
+              else
+                HasPotentialEscape = true;
+            } else
               HasPotentialEscape |= Alias.count(StoredKey) != 0;
           }
         }
@@ -1113,10 +1134,12 @@ private:
       if (!Alloc)
         continue;
       const MedOp *Op = opAt(F, CI.BlockId, CI.OpIdx);
-      if (!Op || Op->Output.isConst() || Op->Output.Size == 0)
+      if (!Op || Op->Output.isConst() || Op->Output.Size == 0 ||
+          !valueHasPointerWidth(Op->Output))
         continue;
       llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(Op->Output);
       std::vector<FreeEvent> ReturnEvents;
+      bool HasIncompleteReturn = false;
       for (const MedBlock &B : F.Blocks)
         for (int OI = 0; OI < static_cast<int>(B.Ops.size()); ++OI) {
           const MedOp &O = B.Ops[OI];
@@ -1125,23 +1148,33 @@ private:
           for (unsigned Input = 0; Input < O.NumInputs; ++Input)
             if (!O.Inputs[Input].isConst() &&
                 MustAlias.count(keyOf(O.Inputs[Input]))) {
-              ReturnEvents.push_back({B.Id, OI});
+              if (valueHasPointerWidth(O.Inputs[Input]))
+                ReturnEvents.push_back({B.Id, OI});
+              else
+                HasIncompleteReturn = true;
               break;
             }
         }
       std::vector<FreeEvent> DefiniteFrees;
+      bool HasIncompleteFree = false;
       for (const MedCallInfo &FC : F.CallInfos)
         for (int FreeArg : freeArgsOf(FC)) {
           if (FreeArg < 0 || FreeArg >= static_cast<int>(FC.Args.size()) ||
               FC.Args[FreeArg].isConst())
             continue;
-          if (MustAlias.count(keyOf(FC.Args[FreeArg])) &&
-              !freeArgMayFail(FC, FreeArg)) {
+          const bool AliasesAllocation =
+              MustAlias.count(keyOf(FC.Args[FreeArg])) != 0;
+          if (!argumentHasPointerWidth(FC, FreeArg)) {
+            HasIncompleteFree |= AliasesAllocation;
+            continue;
+          }
+          if (AliasesAllocation && !freeArgMayFail(FC, FreeArg)) {
             DefiniteFrees.push_back({FC.BlockId, FC.OpIdx});
             break;
           }
         }
-      if (reachesAnyEventWithoutBlocker(F, CI.BlockId, CI.OpIdx, ReturnEvents,
+      if (!HasIncompleteReturn && !HasIncompleteFree &&
+          reachesAnyEventWithoutBlocker(F, CI.BlockId, CI.OpIdx, ReturnEvents,
                                         DefiniteFrees))
         S.ReturnsHeap = true;
     }
@@ -1338,10 +1371,12 @@ private:
       if (const SinkEntry *E = catalogSink(CI))
         if (E->Kind == SinkKind::Realloc &&
             (E->HandleArg < 0 ||
-             E->HandleArg >= static_cast<int>(CI.Args.size())))
+             E->HandleArg >= static_cast<int>(CI.Args.size()) ||
+             !argumentHasPointerWidth(CI, E->HandleArg)))
           return true;
       for (int FreeArg : freeArgsOf(CI))
-        if (FreeArg < 0 || FreeArg >= static_cast<int>(CI.Args.size()))
+        if (FreeArg < 0 || FreeArg >= static_cast<int>(CI.Args.size()) ||
+            !argumentHasPointerWidth(CI, FreeArg))
           return true;
       if (CI.Args.empty() && catalogSink(CI) == nullptr && !internalCallee(CI))
         return true;
@@ -1537,6 +1572,15 @@ private:
         Out.push_back(std::move(Fn));
         continue;
       }
+      if (!valueHasPointerWidth(AllocOp->Output)) {
+        Finding Fn = baseFinding(F, VulnClass::HeapLeak, callVA(F, CI),
+                                 callName(CI), CI.TargetAddr, CI.IsIndirect);
+        Fn.TheVerdict = Verdict::Unknown;
+        Fn.TheConfidence = Confidence::Low;
+        Fn.Detail = "allocation result has incompatible target pointer width";
+        Out.push_back(std::move(Fn));
+        continue;
+      }
 
       llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(AllocOp->Output);
       llvm::DenseSet<ValueKey> MustAlias =
@@ -1553,6 +1597,10 @@ private:
         for (int FA : freeArgsOf(FC)) {
           if (FA < 0 || FA >= static_cast<int>(FC.Args.size()))
             continue;
+          if (!argumentHasPointerWidth(FC, FA)) {
+            HasPotentialFree = true;
+            continue;
+          }
           const ValueKey ArgKey = keyOf(FC.Args[FA]);
           if (MustAlias.count(ArgKey)) {
             FreeEvent Event{FC.BlockId,    FC.OpIdx,     callVA(F, FC),
@@ -1966,6 +2014,8 @@ private:
       case SinkKind::Copy:
         if (ArgIndex != E->DstArg && ArgIndex != E->SrcArg)
           return CallUse::None;
+        if (!argumentHasPointerWidth(CI, ArgIndex))
+          return CallUse::Possible;
         if (E->UnboundedWrite && ArgIndex == E->DstArg &&
             Cat.matchSource(callName(CI)))
           return CallUse::Possible;
@@ -1991,6 +2041,9 @@ private:
           return *Count == 0 ? CallUse::None : CallUse::Definite;
         return CallUse::Possible;
       case SinkKind::Format:
+        if ((ArgIndex == E->FmtArg || ArgIndex == E->DstArg) &&
+            !argumentHasPointerWidth(CI, ArgIndex))
+          return CallUse::Possible;
         if (E->LenArg >= 0 && E->LenArg < static_cast<int>(CI.Args.size()) &&
             E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size()))
           if (std::optional<uint64_t> Limit =
@@ -2020,7 +2073,13 @@ private:
         return CallUse::Possible;
       case SinkKind::Alloc: {
         if (E->HandleArg >= 0 && ArgIndex == E->HandleArg)
-          return CallUse::Definite;
+          return argumentHasPointerWidth(CI, ArgIndex) ? CallUse::Definite
+                                                       : CallUse::Possible;
+        if (ArgIndex == 0 &&
+            stringDuplicationKind(callName(CI)) !=
+                StringDuplicationKind::None &&
+            !argumentHasPointerWidth(CI, ArgIndex))
+          return CallUse::Possible;
         if (ArgIndex != 0)
           return CallUse::None;
         const StringDuplicationKind DupKind =
@@ -2038,7 +2097,10 @@ private:
         return CallUse::None;
       }
       case SinkKind::Realloc:
-        return ArgIndex == E->HandleArg ? CallUse::Definite : CallUse::None;
+        return ArgIndex == E->HandleArg
+                   ? (argumentHasPointerWidth(CI, ArgIndex) ? CallUse::Definite
+                                                            : CallUse::Possible)
+                   : CallUse::None;
       case SinkKind::Free:
       case SinkKind::StackAlloc:
         return CallUse::None;
@@ -2052,8 +2114,10 @@ private:
             std::pair<std::string, safety::detail::FormattedSourceKind>>
             Formatted = safety::detail::formattedSourceName(Name)) {
       const unsigned FixedCount = libc::varArgFixedCount(Formatted->first);
-      return ArgIndex < static_cast<int>(FixedCount) ? CallUse::Definite
-                                                     : CallUse::Possible;
+      return ArgIndex < static_cast<int>(FixedCount)
+                 ? (argumentHasPointerWidth(CI, ArgIndex) ? CallUse::Definite
+                                                          : CallUse::Possible)
+                 : CallUse::Possible;
     }
     if (const SourceEntry *Source = Cat.matchSource(Name)) {
       if (ArgIndex != Source->OutArg)
@@ -2099,7 +2163,10 @@ private:
       return CallUse::Possible;
     }
     if (isStringLengthCall(Name))
-      return ArgIndex == 0 ? CallUse::Definite : CallUse::None;
+      return ArgIndex == 0
+                 ? (argumentHasPointerWidth(CI, ArgIndex) ? CallUse::Definite
+                                                          : CallUse::Possible)
+                 : CallUse::None;
     return CallUse::Possible;
   }
 
@@ -2126,7 +2193,9 @@ private:
           if (!Alias.count(AddrKey))
             continue;
           UseEvent Event{B.Id, Oi, Op.Addr, 0, "memory_access", false};
-          (MustAlias.count(AddrKey) ? Uses.Definite : Uses.Possible)
+          (MustAlias.count(AddrKey) && valueHasPointerWidth(*Addr)
+               ? Uses.Definite
+               : Uses.Possible)
               .push_back(std::move(Event));
         }
       }
@@ -2174,8 +2243,12 @@ private:
             const ValueKey InputKey = keyOf(Op.Inputs[I]);
             if (!Alias.count(InputKey))
               continue;
-            if (MustAlias.count(InputKey))
-              return EscapeState::Yes;
+            if (MustAlias.count(InputKey)) {
+              if (valueHasPointerWidth(Op.Inputs[I]))
+                return EscapeState::Yes;
+              Unknown = true;
+              continue;
+            }
             Unknown = true;
           }
         } else if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
@@ -2188,8 +2261,12 @@ private:
           const ValueKey StoredKey = keyOf(Val);
           if (!Alias.count(StoredKey))
             continue;
-          if (MustAlias.count(StoredKey))
-            return EscapeState::Yes;
+          if (MustAlias.count(StoredKey)) {
+            if (valueHasPointerWidth(Val))
+              return EscapeState::Yes;
+            Unknown = true;
+            continue;
+          }
           Unknown = true;
         }
       }

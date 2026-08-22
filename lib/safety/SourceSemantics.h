@@ -27,6 +27,22 @@
 
 namespace neverd::safety::detail {
 
+inline uint16_t targetPointerBytes(const BinaryImage *Img) {
+  return Img ? getTargetRegInfo(Img->Arch).PointerSize : 0;
+}
+
+inline bool hasTargetPointerWidth(const BinaryImage *Img, const MedVar &Value) {
+  const uint16_t PointerBytes = targetPointerBytes(Img);
+  return PointerBytes == 0 || Value.Size == PointerBytes;
+}
+
+inline bool callArgumentHasTargetPointerWidth(const BinaryImage *Img,
+                                              const MedCallInfo &Call,
+                                              int ArgIndex) {
+  return ArgIndex >= 0 && ArgIndex < static_cast<int>(Call.Args.size()) &&
+         hasTargetPointerWidth(Img, Call.Args[ArgIndex]);
+}
+
 enum class FormattedSourceKind : uint8_t {
   ExternalInput,
   DerivedInput,

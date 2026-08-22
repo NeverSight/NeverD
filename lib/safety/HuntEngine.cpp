@@ -291,6 +291,14 @@ uint32_t outputSourceReturnBits(llvm::StringRef Name, BinaryFormat Format) {
       .Default(0);
 }
 
+bool sourceReturnRequiresPointerWidth(llvm::StringRef Name) {
+  return llvm::StringSwitch<bool>(SinkCatalog::normalize(Name))
+      .Cases({"getenv", "secure_getenv", "GetCommandLineA", "GetCommandLineW",
+              "argv"},
+             true)
+      .Default(false);
+}
+
 bool mayWriteMemory(NdOp Opcode) {
   return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
          Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
@@ -489,15 +497,31 @@ uniqueLoadOriginInExpression(const SymContext &Ctx, const SymState &State,
 
 SymRef captureReturn(const LowOp &Op, SymState &State,
                      const AnalysisInput &In) {
-  if (Op.Output.isReg() && Op.Output.Size)
-    return State.read(SymSpace::Register, Op.Output.Offset, Op.Output.Size);
-  if (Op.Output.isTemp() && Op.Output.Size)
-    return State.read(SymSpace::Temporary, Op.Output.Offset, Op.Output.Size);
+  if (Op.Output.isReg())
+    return Op.Output.Size ? State.read(SymSpace::Register, Op.Output.Offset,
+                                       Op.Output.Size)
+                          : SymRef();
+  if (Op.Output.isTemp())
+    return Op.Output.Size ? State.read(SymSpace::Temporary, Op.Output.Offset,
+                                       Op.Output.Size)
+                          : SymRef();
   if (!In.Img)
     return {};
   const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
   const uint16_t Bytes = TRI.PointerSize ? TRI.PointerSize : 8;
   return State.read(SymSpace::Register, TRI.IntReturnReg, Bytes);
+}
+
+bool returnHasSemanticWidth(const AnalysisInput &In, SymContext &Ctx,
+                            SymRef Ret, uint32_t ExplicitBits = 0) {
+  if (!Ret.isValid())
+    return false;
+  if (ExplicitBits == 0 && In.Img) {
+    const uint16_t PointerBytes = safety::detail::targetPointerBytes(In.Img);
+    if (PointerBytes != 0)
+      return Ctx.width(Ret) == uint32_t(PointerBytes) * 8;
+  }
+  return ExplicitBits == 0 || Ctx.width(Ret) >= ExplicitBits;
 }
 
 llvm::DenseSet<int> reverseReachable(const LowFunc &LF, int SinkId) {
@@ -643,6 +667,20 @@ SymRef readCallArgument(const AnalysisInput &In, const MedFunc &Fn,
                                    Ctx.mkConst(64, StackOffset));
   const SymRef Loaded = State.load(Address, Bytes);
   return Ctx.mkZExtOrTrunc(Loaded, 64);
+}
+
+SymRef readPointerCallArgument(const AnalysisInput &In, const MedFunc &Fn,
+                               int ArgIndex, const MedCallInfo &CI,
+                               SymState &State) {
+  if (!In.Img)
+    return {};
+  const uint16_t PointerBytes = safety::detail::targetPointerBytes(In.Img);
+  if (PointerBytes == 0 || PointerBytes > sizeof(uint64_t))
+    return {};
+  if (ArgIndex >= 0 && ArgIndex < static_cast<int>(CI.Args.size()) &&
+      !safety::detail::hasTargetPointerWidth(In.Img, CI.Args[ArgIndex]))
+    return {};
+  return readCallArgument(In, Fn, ArgIndex, CI, State);
 }
 
 struct ExploreHit {
@@ -1134,8 +1172,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         bool HasFormattedSourceOutput = false;
         if (Callee && CalleeSource && CalleeSource->OutArg >= 0 &&
             CalleeSource->OutArg < static_cast<int>(Callee->Args.size())) {
-          SymRef Output = readCallArgument(In, Fn, CalleeSource->OutArg,
-                                           *Callee, Cur.State);
+          SymRef Output = readPointerCallArgument(In, Fn, CalleeSource->OutArg,
+                                                  *Callee, Cur.State);
           if (Output.isValid()) {
             NewSourceEvents.push_back(
                 {SinkCatalog::normalize(CalleeName), Output, SymRef()});
@@ -1155,8 +1193,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             if (Outputs->Kind ==
                     safety::detail::FormattedSourceKind::DerivedInput &&
                 Outputs->InputArg >= 0) {
-              SymRef Input = readCallArgument(In, Fn, Outputs->InputArg,
-                                              *Callee, Cur.State);
+              SymRef Input = readPointerCallArgument(In, Fn, Outputs->InputArg,
+                                                     *Callee, Cur.State);
               for (const SourceEvent &Event : Cur.SourceEvents) {
                 const std::optional<uint64_t> InputOffset =
                     constantForwardOffset(Ctx, Event.Buffer, Input,
@@ -1193,8 +1231,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               HasFormattedSourceOutput = true;
               for (const safety::detail::FormattedOutput &Formatted :
                    Outputs->UnboundedTextArgs) {
-                SymRef Output = readCallArgument(In, Fn, Formatted.ArgIndex,
-                                                 *Callee, Cur.State);
+                SymRef Output = readPointerCallArgument(
+                    In, Fn, Formatted.ArgIndex, *Callee, Cur.State);
                 if (Output.isValid()) {
                   NewSourceEvents.push_back(
                       {SinkCatalog::normalize(CalleeName), Output, InputSuccess,
@@ -1204,8 +1242,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               }
               for (const safety::detail::BoundedTextOutput &Bounded :
                    Outputs->BoundedTextArgs) {
-                SymRef Output = readCallArgument(In, Fn, Bounded.ArgIndex,
-                                                 *Callee, Cur.State);
+                SymRef Output = readPointerCallArgument(
+                    In, Fn, Bounded.ArgIndex, *Callee, Cur.State);
                 if (Output.isValid()) {
                   NewSourceEvents.push_back(
                       {SinkCatalog::normalize(CalleeName), Output, InputSuccess,
@@ -1218,8 +1256,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                    Outputs->ScalarArgs) {
                 if (Scalar.Bytes == 0 || !Scalar.AssignmentExecutionObservable)
                   continue;
-                SymRef Output = readCallArgument(In, Fn, Scalar.ArgIndex,
-                                                 *Callee, Cur.State);
+                SymRef Output = readPointerCallArgument(In, Fn, Scalar.ArgIndex,
+                                                        *Callee, Cur.State);
                 if (!Output.isValid())
                   continue;
                 NewSourceEvents.push_back({SinkCatalog::normalize(CalleeName),
@@ -1254,7 +1292,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         if (CountedOutputApplies) {
           OutputBound = readCallArgument(In, Fn, CountedOutput.BoundArg,
                                          *Callee, Cur.State);
-          OutputCountPointer = readCallArgument(
+          OutputCountPointer = readPointerCallArgument(
               In, Fn, CountedOutput.CountPointerArg, *Callee, Cur.State);
         }
         SymRef NextImplicitSource;
@@ -1273,13 +1311,14 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             BoundedString.BufferArg < static_cast<int>(Callee->Args.size()) &&
             BoundedString.BoundArg < static_cast<int>(Callee->Args.size());
         if (CaptureLength)
-          NextImplicitSource = readCallArgument(In, Fn, 0, *Callee, Cur.State);
+          NextImplicitSource =
+              readPointerCallArgument(In, Fn, 0, *Callee, Cur.State);
         else if (CaptureCountedSource)
-          NextImplicitSource = readCallArgument(In, Fn, CountedSource->OutArg,
-                                                *Callee, Cur.State);
+          NextImplicitSource = readPointerCallArgument(
+              In, Fn, CountedSource->OutArg, *Callee, Cur.State);
         else if (CaptureBoundedString) {
-          NextImplicitSource = readCallArgument(In, Fn, BoundedString.BufferArg,
-                                                *Callee, Cur.State);
+          NextImplicitSource = readPointerCallArgument(
+              In, Fn, BoundedString.BufferArg, *Callee, Cur.State);
           BoundedStringLimit = readCallArgument(In, Fn, BoundedString.BoundArg,
                                                 *Callee, Cur.State);
           if (BoundedString.ObjectSizeArg >= 0)
@@ -1290,7 +1329,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             ReturnedString.BoundArg >= 0 &&
             ReturnedString.BufferArg < static_cast<int>(Callee->Args.size()) &&
             ReturnedString.BoundArg < static_cast<int>(Callee->Args.size())) {
-          ReturnedStringBuffer = readCallArgument(
+          ReturnedStringBuffer = readPointerCallArgument(
               In, Fn, ReturnedString.BufferArg, *Callee, Cur.State);
           ReturnedStringLimit = readCallArgument(
               In, Fn, ReturnedString.BoundArg, *Callee, Cur.State);
@@ -1312,8 +1351,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         SymRef CountedReturnSuccess;
         if (CountedReturnRecognized && !CountedReturnApplies) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
-          if (!Ret.isValid()) {
+          if (!returnHasSemanticWidth(In, Ctx, Ret, CountedReturn.ReturnBits)) {
             Cur.SemanticUnknown = true;
+            NewSourceEvents.clear();
           } else {
             SymRef SemanticRet = Ret;
             if (CountedReturn.ReturnBits != 0 &&
@@ -1328,9 +1368,12 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         }
         if (CountedReturnApplies) {
           SymRef Ret = captureReturn(Op, Cur.State, In);
-          if (!ReturnBound.isValid() || !Ret.isValid())
+          if (!returnHasSemanticWidth(In, Ctx, Ret, CountedReturn.ReturnBits)) {
             Cur.SemanticUnknown = true;
-          else {
+            NewSourceEvents.clear();
+          } else if (!ReturnBound.isValid()) {
+            Cur.SemanticUnknown = true;
+          } else {
             SymRef ConstraintRet = Ret;
             if (CountedReturn.ReturnBits != 0 &&
                 CountedReturn.ReturnBits < Ctx.width(Ret))
@@ -1423,9 +1466,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         SymRef CountedOutputSuccess;
         if (CountedOutputApplies) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
-          if (!Ret.isValid())
+          if (!returnHasSemanticWidth(In, Ctx, Ret, CountedOutput.ReturnBits)) {
             Cur.SemanticUnknown = true;
-          else {
+            NewSourceEvents.clear();
+          } else {
             SymRef SemanticRet = Ret;
             if (CountedOutput.ReturnBits != 0 &&
                 CountedOutput.ReturnBits < Ctx.width(SemanticRet))
@@ -1437,7 +1481,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           const std::optional<llvm::APInt> CountPointerConstant =
               OutputCountPointer.isValid() ? Ctx.asConst(OutputCountPointer)
                                            : std::optional<llvm::APInt>();
-          if (!OutputBound.isValid() || !OutputCountPointer.isValid() ||
+          if (!CountedOutputSuccess.isValid() || !OutputBound.isValid() ||
+              !OutputCountPointer.isValid() ||
               (CountPointerConstant && CountPointerConstant->isZero())) {
             Cur.SemanticUnknown = true;
           } else {
@@ -1477,12 +1522,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         if (CalleeSource && CalleeSource->OutArg >= 0 &&
             CalleeSource->returnCarriesInput()) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
-          if (!Ret.isValid()) {
+          const uint32_t ReturnBits = outputSourceReturnBits(
+              CalleeName, In.Img ? In.Img->Format : BinaryFormat::Unknown);
+          if (!Ret.isValid() ||
+              (ReturnBits != 0 &&
+               !returnHasSemanticWidth(In, Ctx, Ret, ReturnBits))) {
             Cur.SemanticUnknown = true;
+            NewSourceEvents.clear();
           } else {
             SymRef SemanticRet = Ret;
-            const uint32_t ReturnBits = outputSourceReturnBits(
-                CalleeName, In.Img ? In.Img->Format : BinaryFormat::Unknown);
             if (ReturnBits != 0 && ReturnBits < Ctx.width(SemanticRet))
               SemanticRet = Ctx.mkExtract(SemanticRet, 0, ReturnBits);
             const SymRef ProducedInput =
@@ -1496,8 +1544,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         }
         if (ReturnedStringBuffer.isValid() && ReturnedStringLimit.isValid()) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
-          if (!Ret.isValid()) {
+          if (!returnHasSemanticWidth(In, Ctx, Ret,
+                                      ReturnedString.ReturnBits)) {
             Cur.SemanticUnknown = true;
+            NewSourceEvents.clear();
           } else {
             SymRef SemanticRet = Ret;
             if (ReturnedString.ReturnBits != 0 &&
@@ -1572,7 +1622,8 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         if (CalleeSource && CalleeSource->OutArg < 0 &&
             CalleeSource->returnCarriesInput()) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
-          if (!Ret.isValid()) {
+          if (!Ret.isValid() || (sourceReturnRequiresPointerWidth(CalleeName) &&
+                                 !returnHasSemanticWidth(In, Ctx, Ret))) {
             Cur.SemanticUnknown = true;
           } else {
             NewSourceEvents.push_back(
@@ -1678,11 +1729,21 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         }
         if (IsCall) {
           if (CaptureLength) {
-            Cur.ImplicitLen = captureReturn(Op, Cur.State, In);
-            Cur.ImplicitSource = NextImplicitSource;
-            Cur.ImplicitSuccess = SymRef();
-            Cur.ImplicitFromLength = true;
-            Cur.ImplicitLenIncludesTerminator = false;
+            const SymRef Ret = captureReturn(Op, Cur.State, In);
+            if (!returnHasSemanticWidth(In, Ctx, Ret)) {
+              Cur.SemanticUnknown = true;
+              Cur.ImplicitLen = SymRef();
+              Cur.ImplicitSource = SymRef();
+              Cur.ImplicitSuccess = SymRef();
+              Cur.ImplicitFromLength = false;
+              Cur.ImplicitLenIncludesTerminator = false;
+            } else {
+              Cur.ImplicitLen = Ret;
+              Cur.ImplicitSource = NextImplicitSource;
+              Cur.ImplicitSuccess = SymRef();
+              Cur.ImplicitFromLength = true;
+              Cur.ImplicitLenIncludesTerminator = false;
+            }
           } else if (CaptureCountedSource && (CountedReturnValue.isValid() ||
                                               CountedOutputValue.isValid())) {
             Cur.ImplicitLen = CountedReturnValue.isValid() ? CountedReturnValue
@@ -1694,7 +1755,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           } else if (CaptureBoundedString && NextImplicitSource.isValid() &&
                      BoundedStringLimit.isValid()) {
             const SymRef Ret = captureReturn(Op, Cur.State, In);
-            if (!Ret.isValid()) {
+            if (!returnHasSemanticWidth(In, Ctx, Ret)) {
               Cur.SemanticUnknown = true;
               Cur.ImplicitLen = SymRef();
               Cur.ImplicitSource = SymRef();
@@ -1871,7 +1932,18 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
       return Out;
     }
 
-    const MedVar &FormatArg = F.CallInfos[Site.CallInfoIndex].Args[E->FmtArg];
+    const MedCallInfo &SinkCall = F.CallInfos[Site.CallInfoIndex];
+    if (!safety::detail::callArgumentHasTargetPointerWidth(In.Img, SinkCall,
+                                                           E->FmtArg) ||
+        (E->DstArg >= 0 && !safety::detail::callArgumentHasTargetPointerWidth(
+                               In.Img, SinkCall, E->DstArg))) {
+      Out.TheVerdict = Verdict::Unknown;
+      Out.TheConfidence = Confidence::Low;
+      Out.Detail = "formatting pointer argument has incompatible target width";
+      return Out;
+    }
+
+    const MedVar &FormatArg = SinkCall.Args[E->FmtArg];
     ArgClassification Arg =
         classifyArgument(In, Cat, F, Site.CallInfoIndex, E->FmtArg);
     Out.Flow = Arg.Flow;
@@ -2076,6 +2148,22 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
 
   Finding Out;
   stampSite(Out, In, F, Site);
+  if (Site.CallInfoIndex >= F.CallInfos.size()) {
+    Out.TheVerdict = Verdict::Unknown;
+    Out.TheConfidence = Confidence::Low;
+    Out.Detail = "copy arguments were not recovered";
+    return Out;
+  }
+  const MedCallInfo &SinkCall = F.CallInfos[Site.CallInfoIndex];
+  if (!safety::detail::callArgumentHasTargetPointerWidth(In.Img, SinkCall,
+                                                         E->DstArg) ||
+      (E->SrcArg >= 0 && !safety::detail::callArgumentHasTargetPointerWidth(
+                             In.Img, SinkCall, E->SrcArg))) {
+    Out.TheVerdict = Verdict::Unknown;
+    Out.TheConfidence = Confidence::Low;
+    Out.Detail = "copy pointer argument has incompatible target width";
+    return Out;
+  }
   const bool WideElements = safety::detail::usesWideElements(Site.Sink);
   const bool NeedsStringExtents =
       safety::detail::requiresStringExtents(Site.Sink);

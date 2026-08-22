@@ -386,7 +386,8 @@ LowFunc mutuallyExclusiveSourceAndSinkLow(va_t MallocVA, va_t SourceVA,
 LowFunc sourceReturnThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
                                   bool RequireNonnegative,
                                   uint16_t ReturnBytes = 8,
-                                  uint64_t CopyLengthReg = 16) {
+                                  uint64_t CopyLengthReg = 16,
+                                  uint16_t CallOutputBytes = 8) {
   constexpr uint64_t kRax = 0;
   constexpr uint64_t kFlag = 200;
   constexpr va_t kEntry = 0x400000;
@@ -396,13 +397,13 @@ LowFunc sourceReturnThenMemcpyLow(va_t SourceVA, va_t MemcpyVA,
   Entry.Id = 0;
   Entry.StartAddr = kEntry;
   Entry.EndAddr = MemcpyVA;
-  Entry.Ops.push_back(
-      lop(NdOp::CALL, NdVar::reg(kRax, 8), {NdVar::cst(0x9000, 8)}, SourceVA));
-  NdVar ComparedReturn = NdVar::reg(kRax, 8);
+  Entry.Ops.push_back(lop(NdOp::CALL, NdVar::reg(kRax, CallOutputBytes),
+                          {NdVar::cst(0x9000, 8)}, SourceVA));
+  NdVar ComparedReturn = NdVar::reg(kRax, CallOutputBytes);
   if (ReturnBytes == 4) {
-    Entry.Ops.push_back(lop(NdOp::SUBBYTES, NdVar::reg(kRax, 4),
-                            {NdVar::reg(kRax, 8), NdVar::cst(0, 4)},
-                            SourceVA + 1));
+    Entry.Ops.push_back(lop(
+        NdOp::SUBBYTES, NdVar::reg(kRax, 4),
+        {NdVar::reg(kRax, CallOutputBytes), NdVar::cst(0, 4)}, SourceVA + 1));
     Entry.Ops.push_back(lop(NdOp::INT_SEXT, NdVar::reg(CopyLengthReg, 8),
                             {NdVar::reg(kRax, 4)}, SourceVA + 2));
     ComparedReturn = NdVar::reg(kRax, 4);
@@ -1659,6 +1660,36 @@ TEST(HuntEngine, ConstantCopyExceedsSizedGlobalOnReachablePath) {
   EXPECT_FALSE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, NarrowCopyDestinationPointerFailsClosed) {
+  constexpr va_t SinkVA = 0x400010;
+  constexpr va_t BufferVA = 0x50;
+  BinaryImage Img;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = BufferVA;
+  Data.Size = 0x20;
+  Data.FileSz = 0x20;
+  Data.Data.resize(0x20);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.Symbols.push_back(Symbol{"buffer", BufferVA, 8, false});
+
+  Builder B("main");
+  B.call("memcpy", temp(0),
+         {MedVar::makeConst(BufferVA, 1, ConstantAddressProvenance::DataAddress,
+                            BufferVA),
+          param(2), MedVar::makeConst(9, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = reachableSinkLow(SinkVA);
+
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                        BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
 TEST(HuntEngine, TaintedStrcpyWithoutReachabilityIsUnknown) {
   Builder B("main");
   B.op(NdOp::INT_SUB, mkReg(kSP, 1),
@@ -1934,6 +1965,28 @@ TEST(HuntEngine, ReachableTaintedFormatStringIsUnsafe) {
   EXPECT_FALSE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, NarrowReadOutputPointerFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  const MedVar NarrowBuffer = mkReg(24, 0, 1);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), NarrowBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {NarrowBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = sourceReturnThenMemcpyLow(SourceVA, SinkVA,
+                                         /*RequireNonnegative=*/false);
+
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
 TEST(HuntEngine, ReturnSourceCorroboratesReachableFormatInput) {
   constexpr va_t SourceVA = 0x400004;
   constexpr va_t SinkVA = 0x400020;
@@ -1950,6 +2003,29 @@ TEST(HuntEngine, ReturnSourceCorroboratesReachableFormatInput) {
   ASSERT_TRUE(Fnd.has_value());
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe) << Fnd->Detail;
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High) << Fnd->Detail;
+}
+
+TEST(HuntEngine, NarrowPointerReturnSourceWidthFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  const MedVar NarrowReturn = mkReg(0, 1, 1);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("getenv", NarrowReturn, {param(1)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {NarrowReturn});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA,
+                                         /*RequiredReturn=*/1,
+                                         /*ReturnBytes=*/1);
+  LF.Blocks[0].Ops[0].Output = NdVar::reg(0, 1);
+
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, NullReturnSourceDoesNotCorroborateFormatInput) {
@@ -2231,6 +2307,72 @@ TEST(HuntEngine, WritableConstantAddressDoesNotHideTaintedFormatString) {
   EXPECT_EQ(Fnd->Class, VulnClass::FormatString);
   EXPECT_EQ(Fnd->TheVerdict, Verdict::Unsafe);
   EXPECT_EQ(Fnd->TheConfidence, Confidence::High);
+}
+
+TEST(HuntEngine, NarrowFormattedDestinationPointerFailsClosed) {
+  constexpr va_t SinkVA = 0x400010;
+  constexpr va_t BufferVA = 0x50;
+  BinaryImage Img;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = BufferVA;
+  Data.Size = 0x20;
+  Data.FileSz = 0x20;
+  Data.Data.resize(0x20);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.Symbols.push_back(Symbol{"buffer", BufferVA, 8, false});
+  const va_t FormatVA = addCString(Img, "12345678");
+  const MedVar NarrowBuffer = MedVar::makeConst(
+      BufferVA, 1, ConstantAddressProvenance::DataAddress, BufferVA);
+
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("sprintf", temp(0), {NarrowBuffer, MedVar::makeConst(FormatVA, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = reachableSinkLow(SinkVA);
+
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                        BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, NarrowCopySourcePointerFailsClosed) {
+  constexpr va_t SinkVA = 0x400010;
+  constexpr va_t BufferVA = 0x50;
+  BinaryImage Img;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = BufferVA;
+  Data.Size = 0x40;
+  Data.FileSz = 0x40;
+  Data.Data.resize(0x40);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(Data));
+  Img.Symbols.push_back(Symbol{"buffer", BufferVA, 8, false});
+  const MedVar Destination = MedVar::makeConst(
+      BufferVA, 8, ConstantAddressProvenance::DataAddress, BufferVA);
+  const MedVar NarrowSource = MedVar::makeConst(
+      BufferVA + 0x20, 1, ConstantAddressProvenance::DataAddress, BufferVA);
+
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("memcpy", temp(0),
+         {Destination, NarrowSource, MedVar::makeConst(9, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+  LowFunc LF = reachableSinkLow(SinkVA);
+
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                        BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
 }
 
 TEST(HuntEngine, TaintedFormatWithoutPathEvidenceIsUnknown) {
@@ -3095,6 +3237,192 @@ TEST(HuntEngine, NarrowScanfReturnWidthFailsClosed) {
   EXPECT_TRUE(Fnd->Witness.empty());
 }
 
+TEST(HuntEngine, ZeroWidthScanfReturnFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  constexpr va_t LengthSlotVA = 0x7000;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%hhu");
+  const MedVar LengthSlot = MedVar::makeConst(
+      LengthSlotVA, 8, ConstantAddressProvenance::DataAddress, LengthSlotVA);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("scanf", temp(5, 4), {MedVar::makeConst(FormatVA, 8), LengthSlot});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.op(NdOp::LOAD, temp(6, 1), {LengthSlot});
+  B.op(NdOp::INT_ZEXT, temp(7), {temp(6, 1)});
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(7)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = formattedScalarThenMemcpyLow(SourceVA, SinkVA, LengthSlotVA,
+                                            /*RequiredAssignments=*/1,
+                                            /*ScalarBytes=*/1);
+  LF.Blocks[0].Ops[0].Output.Size = 0;
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                        BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, NarrowScanfOutputPointerFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  constexpr va_t LengthSlotVA = 0x70;
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%hhu");
+  MedVar NarrowLengthSlot = MedVar::makeConst(
+      LengthSlotVA, 1, ConstantAddressProvenance::DataAddress, LengthSlotVA);
+
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("scanf", temp(5, 4),
+         {MedVar::makeConst(FormatVA, 8), NarrowLengthSlot});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.op(NdOp::LOAD, temp(6, 1), {NarrowLengthSlot});
+  B.op(NdOp::INT_ZEXT, temp(7), {temp(6, 1)});
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(7)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = formattedScalarThenMemcpyLow(SourceVA, SinkVA, LengthSlotVA,
+                                            /*RequiredAssignments=*/1,
+                                            /*ScalarBytes=*/1);
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {},
+                        BinaryFormat::ELF, &Img);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, NarrowCountedSourceReturnWidthFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call("read", temp(5),
+         {MedVar::makeConst(0, 8), temp(2), MedVar::makeConst(8, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("memcpy", temp(0), {temp(1), temp(2), temp(5)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = sourceReturnThenMemcpyLow(SourceVA, SinkVA,
+                                         /*RequireNonnegative=*/true);
+  LF.Blocks[0].Ops[0].Output.Size = 1;
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, NarrowReadFileReturnWidthFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  constexpr va_t BytesReadVA = 0x700000;
+  const MedVar SourceBuffer = param(2);
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("ReadFile", temp(5, 4),
+         {MedVar::makeConst(1, 8), SourceBuffer, MedVar::makeConst(32, 8),
+          MedVar::makeConst(BytesReadVA, 8), MedVar::makeConst(0, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = readFileResultThenFormatLow(SourceVA, SinkVA, BytesReadVA,
+                                           /*ReturnValue=*/1,
+                                           /*BytesRead=*/1);
+  LF.Blocks[0].Ops[0].Output.Size = 1;
+  const auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, NarrowFgetsReturnWidthFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::SysV_AMD64;
+  B.call("malloc", temp(1), {MedVar::makeConst(8, 8)});
+  B.call("fgets", temp(5), {param(2), MedVar::makeConst(8, 8), temp(6)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("strcpy", temp(0), {temp(1), param(2)});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = fgetsThenStrcpyLow(SourceVA, SinkVA,
+                                  /*RequireSuccess=*/true);
+  LF.Blocks[0].Ops[0].Output.Size = 1;
+  const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, NarrowEnvironmentQueryReturnWidthFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  const MedVar SourceBuffer = mkReg(24, 0);
+  Builder B("main");
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("GetEnvironmentVariableA", mkReg(0, 1, 4),
+         {param(1), SourceBuffer, MedVar::makeConst(32, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = returnSourceThenFormatLow(SourceVA, SinkVA,
+                                         /*RequiredReturn=*/1,
+                                         /*ReturnBytes=*/1);
+  LF.Blocks[0].Ops[0].Output.Size = 1;
+  const auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
+TEST(HuntEngine, NonAbiStringLengthReturnWidthFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400010;
+  for (const uint16_t ReturnBytes : {uint16_t(1), uint16_t(16)}) {
+    SCOPED_TRACE(ReturnBytes);
+    Builder B;
+    B.F.Entry = 0x400000;
+    B.F.CC = CallingConv::SysV_AMD64;
+    B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call("strlen", temp(5, ReturnBytes), {param(2)});
+    B.F.Blocks[0].Ops.back().Addr = SourceVA;
+    B.call("strcpy", temp(0), {temp(1), param(2)});
+    B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+    LowFunc LF = strlenGuardedStrcpyLow(SourceVA, SinkVA,
+                                        /*OverflowGuard=*/false);
+    LF.Blocks[0].Ops[0].Output = NdVar::reg(0, ReturnBytes);
+    const auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
+    ASSERT_TRUE(Fnd.has_value());
+    EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+    EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+    EXPECT_TRUE(Fnd->Witness.empty());
+  }
+}
+
 TEST(HuntEngine, ScanfCharacterOutputCanDriveReachableOverflow) {
   constexpr va_t SourceVA = 0x400004;
   constexpr va_t SinkVA = 0x400010;
@@ -3585,7 +3913,10 @@ TEST(HuntEngine, NarrowCountedSourceBoundUsesDeclaredArgumentWidth) {
     B.F.Blocks[0].Ops.back().Addr = 0x400010;
     LowFunc LF = sourceReturnThenMemcpyLow(0x400004, 0x400010,
                                            /*RequireNonnegative=*/true,
-                                           /*ReturnBytes=*/4);
+                                           /*ReturnBytes=*/4,
+                                           /*CopyLengthReg=*/16,
+                                           /*CallOutputBytes=*/
+                                           C.TargetArch == Arch::ARM ? 4 : 8);
 
     auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, C.TargetArch, {}, C.Format);
     ASSERT_TRUE(Fnd.has_value());
@@ -4402,6 +4733,34 @@ TEST(HuntEngine, ReadFileByteCountGatesStringInput) {
   }
 }
 
+TEST(HuntEngine, NarrowReadFileCountPointerFailsClosed) {
+  constexpr va_t SourceVA = 0x400004;
+  constexpr va_t SinkVA = 0x400020;
+  constexpr va_t BytesReadVA = 0x70;
+  const MedVar SourceBuffer = param(2);
+  const MedVar NarrowBytesRead = MedVar::makeConst(
+      BytesReadVA, 1, ConstantAddressProvenance::DataAddress, BytesReadVA);
+  Builder B;
+  B.F.Entry = 0x400000;
+  B.F.CC = CallingConv::Win64;
+  B.call("ReadFile", temp(5, 4),
+         {MedVar::makeConst(1, 8), SourceBuffer, MedVar::makeConst(32, 8),
+          NarrowBytesRead, MedVar::makeConst(0, 8)});
+  B.F.Blocks[0].Ops.back().Addr = SourceVA;
+  B.call("printf", temp(0), {SourceBuffer});
+  B.F.Blocks[0].Ops.back().Addr = SinkVA;
+
+  LowFunc LF = readFileResultThenFormatLow(SourceVA, SinkVA, BytesReadVA,
+                                           /*ReturnValue=*/1,
+                                           /*BytesRead=*/1);
+  const auto Fnd =
+      hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64, {}, BinaryFormat::COFF);
+  ASSERT_TRUE(Fnd.has_value());
+  EXPECT_EQ(Fnd->TheVerdict, Verdict::Unknown) << Fnd->Detail;
+  EXPECT_EQ(Fnd->TheConfidence, Confidence::Low) << Fnd->Detail;
+  EXPECT_TRUE(Fnd->Witness.empty());
+}
+
 TEST(HuntEngine, ZeroByteReadFilePreservesEarlierInputEvidence) {
   constexpr va_t FirstSourceVA = 0x400004;
   constexpr va_t SecondSourceVA = 0x400010;
@@ -4606,10 +4965,10 @@ TEST(HuntEngine, ArmEabiMemsetUsesItsSecondArgumentAsLength) {
     SCOPED_TRACE(C.Count);
     SCOPED_TRACE(C.Value);
     Builder B;
-    B.call("malloc", temp(1), {MedVar::makeConst(16, 8)});
-    B.call("__aeabi_memset", temp(0),
-           {temp(1), MedVar::makeConst(C.Count, 8),
-            MedVar::makeConst(C.Value, 8)});
+    B.call("malloc", temp(1, 4), {MedVar::makeConst(16, 4)});
+    B.call("__aeabi_memset", temp(0, 4),
+           {temp(1, 4), MedVar::makeConst(C.Count, 4),
+            MedVar::makeConst(C.Value, 4)});
     B.F.Blocks[0].Ops.back().Addr = 0x400010;
     LowFunc LF = reachableSinkLow(0x400010);
 

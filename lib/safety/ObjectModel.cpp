@@ -6,6 +6,7 @@
 
 #include "neverd/safety/ObjectModel.h"
 
+#include "SourceSemantics.h"
 #include "StackSlotFlow.h"
 
 #include "neverd/debug/DebugContext.h"
@@ -87,6 +88,8 @@ public:
 
   DestObject resolve(const MedVar &Dst) {
     DestObject R;
+    if (!detail::hasTargetPointerWidth(In.Img, Dst))
+      return R;
 
     // A dynamic allocation with a known size gives an exact capacity while
     // preserving whether the object lives on the heap or stack.
