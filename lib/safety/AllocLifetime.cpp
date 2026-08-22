@@ -882,12 +882,39 @@ private:
     return It == Summaries.end() ? nullptr : &It->second;
   }
 
-  const SinkEntry *catalogSink(const MedCallInfo &CI) const {
+  const SinkEntry *matchedCatalogSink(const MedCallInfo &CI) const {
     return Cat.matchSink(callName(CI));
+  }
+
+  const SinkEntry *catalogSink(const MedCallInfo &CI) const {
+    const SinkEntry *Entry = matchedCatalogSink(CI);
+    return Entry && !debugSinkSummaryConflicts(In, CI, *Entry) ? Entry
+                                                               : nullptr;
   }
 
   bool argumentHasPointerWidth(const MedCallInfo &CI, int ArgIndex) const {
     return detail::callArgumentHasTargetPointerWidth(In.Img, CI, ArgIndex);
+  }
+
+  bool argumentHasSizeCarrierWidth(const MedCallInfo &CI, int ArgIndex) const {
+    if (ArgIndex < 0 || ArgIndex >= static_cast<int>(CI.Args.size()))
+      return false;
+    const MedVar &Value = CI.Args[ArgIndex];
+    if (detail::targetPointerBytes(In.Img) == 0 && Value.Size != 4 &&
+        Value.Size != 8)
+      return false;
+    return detail::hasTargetSizeCarrierWidth(In.Img, Value);
+  }
+
+  std::optional<uint64_t>
+  semanticArgumentConstant(const MedCallInfo &CI, int ArgIndex,
+                           uint32_t SemanticBits = 0) const {
+    if (!argumentHasSizeCarrierWidth(CI, ArgIndex))
+      return std::nullopt;
+    std::optional<uint64_t> Value = unsignedConstant(CI.Args[ArgIndex]);
+    if (!Value || SemanticBits == 0 || SemanticBits >= 64)
+      return Value;
+    return *Value & ((uint64_t{1} << SemanticBits) - 1);
   }
 
   bool valueHasPointerWidth(const MedVar &Value) const {
@@ -1545,6 +1572,17 @@ private:
     CFG G(F);
     MemModel Mem(F, In);
 
+    for (const MedCallInfo &CI : F.CallInfos)
+      if (const SinkEntry *Entry = matchedCatalogSink(CI);
+          Entry && debugSinkSummaryConflicts(In, CI, *Entry)) {
+        Finding Fn = baseFinding(F, Entry->Class, callVA(F, CI), callName(CI),
+                                 CI.TargetAddr, CI.IsIndirect);
+        Fn.TheVerdict = Verdict::Unknown;
+        Fn.TheConfidence = Confidence::Low;
+        Fn.Detail = "debug function signature conflicts with sink summary";
+        Out.push_back(std::move(Fn));
+      }
+
     if (IncludeStackReads)
       auditUninitializedStackReads(F, Mem, Out);
 
@@ -1854,6 +1892,27 @@ private:
         // This audit only claims local frame bytes below the entry SP.
         if (!Offset || *Offset >= 0)
           continue;
+        if (!valueHasPointerWidth(*Addr)) {
+          Finding Fn;
+          Fn.Origin = Track::Audit;
+          Fn.Class = VulnClass::UninitializedRead;
+          Fn.TheVerdict = Verdict::Unknown;
+          Fn.TheConfidence = Confidence::Low;
+          Fn.Function = F.Name;
+          Fn.FuncEntry = F.Entry;
+          Fn.Name = Op.Opcode == NdOp::LOAD ? "stack_load" : "stack_atomic";
+          Fn.Sink = Fn.Name;
+          Fn.CallVA = Op.Addr;
+          Fn.Source = NameSource::Synthetic;
+          Fn.Flow = ArgFlow::Unknown;
+          Fn.Detail = "memory address has incompatible target pointer width";
+          if (In.Dbg)
+            if (auto Loc = In.Dbg->sourceLocation(Op.Addr);
+                Loc && !Loc->File.empty())
+              Fn.SourceLoc = Loc->File + ":" + std::to_string(Loc->Line);
+          Out.push_back(std::move(Fn));
+          continue;
+        }
         const detail::ReachingStackValues Reaching =
             Mem.reachingRead(B, Oi, *Addr, Op.Output.Size);
         if (!Reaching.Reachable ||
@@ -1889,6 +1948,7 @@ private:
 
     auto auditCallStackSource = [&](const MedCallInfo &CI, int SourceArg,
                                     std::optional<uint64_t> Bytes,
+                                    bool AccessMayBeSuppressed,
                                     llvm::StringRef UnknownDetail,
                                     llvm::StringRef DefiniteDetail,
                                     llvm::StringRef PossibleDetail) {
@@ -1911,6 +1971,16 @@ private:
           Mem.stackOffsetThroughReloads(Source);
       if (!Offset || *Offset >= 0)
         return;
+      if (!argumentHasPointerWidth(CI, SourceArg)) {
+        Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
+                                 callName(CI), CI.TargetAddr, CI.IsIndirect);
+        Fn.ArgIndex = SourceArg;
+        Fn.TheVerdict = Verdict::Unknown;
+        Fn.TheConfidence = Confidence::Low;
+        Fn.Detail = "call source pointer has incompatible target width";
+        Out.push_back(std::move(Fn));
+        return;
+      }
       if (!Bytes || *Bytes > std::numeric_limits<uint16_t>::max()) {
         Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
                                  callName(CI), CI.TargetAddr, CI.IsIndirect);
@@ -1928,8 +1998,9 @@ private:
           (!Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites))
         return;
 
-      const bool Definite =
-          !Reaching.HasUnknownWrites && Reaching.Values.empty();
+      const bool Definite = !AccessMayBeSuppressed &&
+                            !Reaching.HasUnknownWrites &&
+                            Reaching.Values.empty();
       Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
                                callName(CI), CI.TargetAddr, CI.IsIndirect);
       Fn.ArgIndex = SourceArg;
@@ -1942,6 +2013,8 @@ private:
     };
 
     for (const MedCallInfo &CI : F.CallInfos) {
+      if (!catalogSink(CI))
+        continue;
       const StringDuplicationKind Kind = stringDuplicationKind(callName(CI));
       if (Kind == StringDuplicationKind::None)
         continue;
@@ -1950,7 +2023,8 @@ private:
       if (Kind == StringDuplicationKind::Counted) {
         if (CI.Args.size() <= 1)
           Bytes = std::nullopt;
-        else if (std::optional<uint64_t> Limit = unsignedConstant(CI.Args[1])) {
+        else if (std::optional<uint64_t> Limit =
+                     semanticArgumentConstant(CI, 1)) {
           if (*Limit == 0)
             continue;
         } else {
@@ -1958,7 +2032,7 @@ private:
         }
       }
       auditCallStackSource(
-          CI, 0, Bytes,
+          CI, 0, Bytes, /*AccessMayBeSuppressed=*/false,
           "string duplication source has a runtime length that may read "
           "uninitialized local stack bytes",
           "string duplication reads a local stack byte before initialization",
@@ -1974,7 +2048,7 @@ private:
         continue;
       if (!detail::isExactCopySourceRead(callName(CI)))
         continue;
-      std::optional<uint64_t> Count = unsignedConstant(CI.Args[E->LenArg]);
+      std::optional<uint64_t> Count = semanticArgumentConstant(CI, E->LenArg);
       if (Count && *Count == 0)
         continue;
       const std::optional<uint64_t> Bytes =
@@ -1982,17 +2056,19 @@ private:
                       callName(CI),
                       In.Img ? In.Img->Format : BinaryFormat::Unknown, *Count)
                 : std::nullopt;
-      if (Count && E->CapArg >= 0 &&
-          E->CapArg < static_cast<int>(CI.Args.size()))
-        if (std::optional<uint64_t> Capacity =
-                unsignedConstant(CI.Args[E->CapArg]);
-            Capacity &&
+      bool AccessMayBeSuppressed = false;
+      if (E->CapArg >= 0) {
+        const std::optional<uint64_t> Capacity =
+            semanticArgumentConstant(CI, E->CapArg);
+        AccessMayBeSuppressed = !Count || !Capacity;
+        if (Count && Capacity &&
             detail::fortifiedCountedAccessIsRejected(
                 callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
                 *Count, *Capacity))
           continue;
+      }
       auditCallStackSource(
-          CI, E->SrcArg, Bytes,
+          CI, E->SrcArg, Bytes, AccessMayBeSuppressed,
           !Count ? "copy source has a runtime length that may extend past "
                    "initialized local stack bytes"
                  : "copy source byte count exceeds the range of the local "
@@ -2020,24 +2096,25 @@ private:
             Cat.matchSource(callName(CI)))
           return CallUse::Possible;
         if (E->LenArg >= 0 && E->LenArg < static_cast<int>(CI.Args.size()) &&
-            E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size()))
-          if (std::optional<uint64_t> Count =
-                  unsignedConstant(CI.Args[E->LenArg]);
-              Count)
-            if (std::optional<uint64_t> Capacity =
-                    unsignedConstant(CI.Args[E->CapArg]);
-                Capacity && detail::fortifiedCountedAccessIsRejected(
-                                callName(CI),
-                                In.Img ? In.Img->Format : BinaryFormat::Unknown,
-                                *Count, *Capacity))
-              return CallUse::None;
+            E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size())) {
+          const std::optional<uint64_t> Count =
+              semanticArgumentConstant(CI, E->LenArg);
+          const std::optional<uint64_t> Capacity =
+              semanticArgumentConstant(CI, E->CapArg);
+          if (!Count || !Capacity)
+            return CallUse::Possible;
+          if (detail::fortifiedCountedAccessIsRejected(
+                  callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
+                  *Count, *Capacity))
+            return CallUse::None;
+        }
         if (!detail::copyAccessRequiresPositiveCount(
                 callName(CI), /*IsDestination=*/ArgIndex == E->DstArg))
           return CallUse::Definite;
         if (E->LenArg < 0 || E->LenArg >= static_cast<int>(CI.Args.size()))
           return CallUse::Possible;
         if (std::optional<uint64_t> Count =
-                unsignedConstant(CI.Args[E->LenArg]))
+                semanticArgumentConstant(CI, E->LenArg))
           return *Count == 0 ? CallUse::None : CallUse::Definite;
         return CallUse::Possible;
       case SinkKind::Format:
@@ -2045,17 +2122,18 @@ private:
             !argumentHasPointerWidth(CI, ArgIndex))
           return CallUse::Possible;
         if (E->LenArg >= 0 && E->LenArg < static_cast<int>(CI.Args.size()) &&
-            E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size()))
-          if (std::optional<uint64_t> Limit =
-                  unsignedConstant(CI.Args[E->LenArg]);
-              Limit)
-            if (std::optional<uint64_t> Capacity =
-                    unsignedConstant(CI.Args[E->CapArg]);
-                Capacity && detail::fortifiedCountedAccessIsRejected(
-                                callName(CI),
-                                In.Img ? In.Img->Format : BinaryFormat::Unknown,
-                                *Limit, *Capacity))
-              return CallUse::None;
+            E->CapArg >= 0 && E->CapArg < static_cast<int>(CI.Args.size())) {
+          const std::optional<uint64_t> Limit =
+              semanticArgumentConstant(CI, E->LenArg);
+          const std::optional<uint64_t> Capacity =
+              semanticArgumentConstant(CI, E->CapArg);
+          if (!Limit || !Capacity)
+            return CallUse::Possible;
+          if (detail::fortifiedCountedAccessIsRejected(
+                  callName(CI), In.Img ? In.Img->Format : BinaryFormat::Unknown,
+                  *Limit, *Capacity))
+            return CallUse::None;
+        }
         if (ArgIndex == E->FmtArg)
           return CallUse::Definite;
         if (ArgIndex == E->DstArg) {
@@ -2064,7 +2142,7 @@ private:
           if (E->LenArg >= static_cast<int>(CI.Args.size()))
             return CallUse::Possible;
           if (std::optional<uint64_t> Limit =
-                  unsignedConstant(CI.Args[E->LenArg]))
+                  semanticArgumentConstant(CI, E->LenArg))
             return *Limit == 0 ? CallUse::None : CallUse::Definite;
           return CallUse::Possible;
         }
@@ -2090,7 +2168,7 @@ private:
         if (DupKind == StringDuplicationKind::Counted) {
           if (CI.Args.size() <= 1)
             return CallUse::Possible;
-          if (std::optional<uint64_t> Limit = unsignedConstant(CI.Args[1]))
+          if (std::optional<uint64_t> Limit = semanticArgumentConstant(CI, 1))
             return *Limit == 0 ? CallUse::None : CallUse::Definite;
           return CallUse::Possible;
         }
@@ -2123,10 +2201,11 @@ private:
       if (ArgIndex != Source->OutArg)
         return CallUse::Possible;
       const std::string Normalized = SinkCatalog::normalize(Name);
-      auto countedOutputUse = [&](int CountArg) {
+      auto countedOutputUse = [&](int CountArg, uint32_t SemanticBits) {
         if (CountArg < 0 || CountArg >= static_cast<int>(CI.Args.size()))
           return CallUse::Possible;
-        if (std::optional<uint64_t> Count = unsignedConstant(CI.Args[CountArg]))
+        if (std::optional<uint64_t> Count =
+                semanticArgumentConstant(CI, CountArg, SemanticBits))
           if (*Count == 0)
             return CallUse::None;
         return CallUse::Possible;
@@ -2134,14 +2213,16 @@ private:
       if (Normalized == "read" || Normalized == "pread" ||
           Normalized == "read_chk" || Normalized == "pread_chk" ||
           Normalized == "recv" || Normalized == "recvfrom" ||
-          Normalized == "recv_chk" || Normalized == "recvfrom_chk" ||
-          Normalized == "ReadFile" || Normalized == "GetEnvironmentVariableA" ||
+          Normalized == "recv_chk" || Normalized == "recvfrom_chk")
+        return countedOutputUse(
+            2, In.Img && In.Img->Format == BinaryFormat::COFF ? 32 : 0);
+      if (Normalized == "ReadFile" || Normalized == "GetEnvironmentVariableA" ||
           Normalized == "GetEnvironmentVariableW")
-        return countedOutputUse(2);
+        return countedOutputUse(2, 32);
       if (Normalized == "fgets" || Normalized == "fgets_unlocked")
-        return countedOutputUse(1);
+        return countedOutputUse(1, 32);
       if (Normalized == "fgets_chk" || Normalized == "fgets_unlocked_chk")
-        return countedOutputUse(2);
+        return countedOutputUse(2, 32);
       if (Normalized == "fread" || Normalized == "fread_unlocked" ||
           Normalized == "fread_chk" || Normalized == "fread_unlocked_chk") {
         const bool Fortified = Normalized.ends_with("_chk");
@@ -2150,9 +2231,9 @@ private:
         if (ElementCountArg >= static_cast<int>(CI.Args.size()))
           return CallUse::Possible;
         const std::optional<uint64_t> ElementSize =
-            unsignedConstant(CI.Args[ElementSizeArg]);
+            semanticArgumentConstant(CI, ElementSizeArg);
         const std::optional<uint64_t> ElementCount =
-            unsignedConstant(CI.Args[ElementCountArg]);
+            semanticArgumentConstant(CI, ElementCountArg);
         if ((ElementSize && *ElementSize == 0) ||
             (ElementCount && *ElementCount == 0))
           return CallUse::None;

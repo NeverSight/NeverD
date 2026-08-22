@@ -1078,6 +1078,63 @@ TEST(ObjectModel, HeapAllocationSizeFollowsConstantSSA) {
   EXPECT_TRUE(D.CapacityExact);
 }
 
+TEST(ObjectModel, NarrowAllocationSizeIsNotAnExactCapacity) {
+  for (int Mode = 0; Mode < 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    BinaryImage Img;
+    Img.Arch = Mode == 0 ? Arch::X64 : Arch::Unknown;
+    AnalysisInput In;
+    In.Img = Mode == 2 ? nullptr : &Img;
+
+    MedFunc F = newFunc(Img.Arch);
+    pushCall(F, "malloc", temp(1), {MedVar::makeConst(16, 1)});
+    const size_t Sink = pushCall(F, "memcpy", temp(0),
+                                 {temp(1), temp(2), MedVar::makeConst(8, 8)});
+
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+    EXPECT_FALSE(D.Capacity.has_value());
+  }
+}
+
+TEST(ObjectModel, NarrowAllocationResultIsNotAPointerWithoutTargetInfo) {
+  AnalysisInput In;
+
+  MedFunc F = newFunc(Arch::Unknown);
+  pushCall(F, "malloc", temp(1, 1), {MedVar::makeConst(16, 8)});
+  const size_t Sink = pushCall(F, "memcpy", temp(0),
+                               {temp(1, 1), temp(2), MedVar::makeConst(8, 8)});
+
+  const DestObject D =
+      resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+  EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+  EXPECT_FALSE(D.Capacity.has_value());
+}
+
+TEST(ObjectModel, NarrowCallocOperandIsNotAnExactCapacity) {
+  for (const int NarrowArg : {0, 1}) {
+    SCOPED_TRACE(NarrowArg);
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    AnalysisInput In;
+    In.Img = &Img;
+
+    MedFunc F = newFunc(Arch::X64);
+    std::vector<MedVar> Args = {MedVar::makeConst(4, 8),
+                                MedVar::makeConst(8, 8)};
+    Args[NarrowArg] = MedVar::makeConst(Args[NarrowArg].ConstVal, 1);
+    pushCall(F, "calloc", temp(1), std::move(Args));
+    const size_t Sink = pushCall(F, "memcpy", temp(0),
+                                 {temp(1), temp(2), MedVar::makeConst(8, 8)});
+
+    const DestObject D =
+        resolveDestination(In, SinkCatalog::defaults(), F, Sink, 0);
+    EXPECT_EQ(D.Region, ObjectRegion::Unknown);
+    EXPECT_FALSE(D.Capacity.has_value());
+  }
+}
+
 TEST(ObjectModel, MalformedConstantSSAIsNotAnAllocationSize) {
   for (int Shape = 0; Shape < 6; ++Shape) {
     SCOPED_TRACE(Shape);

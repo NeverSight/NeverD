@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
@@ -154,14 +155,46 @@ struct FB {
   }
 };
 
+class TypedFunctionDebug : public NullDebugContext {
+public:
+  TypedFunctionDebug(va_t Address, std::string Name,
+                     std::vector<TypeRef> Params, TypeRef ReturnType = {})
+      : Address(Address), Name(std::move(Name)), Params(std::move(Params)),
+        ReturnType(std::move(ReturnType)) {}
+
+  std::optional<FunctionSym> resolveFunction(va_t Query) const override {
+    if (Query != Address)
+      return std::nullopt;
+    FunctionSym Result;
+    Result.Name = Name;
+    Result.Addr = Address;
+    Result.Size = 4;
+    Result.ReturnType = ReturnType;
+    for (size_t I = 0; I < Params.size(); ++I)
+      Result.Params.emplace_back("arg" + std::to_string(I), Params[I]);
+    return Result;
+  }
+
+  bool hasInfo() const override { return true; }
+
+private:
+  va_t Address;
+  std::string Name;
+  std::vector<TypeRef> Params;
+  TypeRef ReturnType;
+};
+
 std::vector<Finding> audit(std::vector<MedFunc> Funcs,
                            const BinaryImage *Image = nullptr,
                            bool StackRegs = false,
-                           bool IncludeStackReads = false) {
+                           bool IncludeStackReads = false,
+                           const DebugContext *Debug = nullptr) {
   static BinaryImage Img;
   AnalysisInput In;
   In.Img = Image ? Image : &Img;
   In.MedFuncs = &Funcs;
+  In.Dbg = Debug;
+  In.DebugKind = Debug ? DebugInfoKind::DWARF : DebugInfoKind::None;
   In.StackRegsKnown = StackRegs;
   In.StackPointerReg = kSP;
   return IncludeStackReads
@@ -334,6 +367,55 @@ TEST(AllocLifetime, NoLeakWhenFreed) {
   B.ret(b0, {});
   auto Fs = audit({B.F});
   EXPECT_FALSE(has(Fs, VulnClass::HeapLeak));
+}
+
+TEST(AllocLifetime, ConflictingDebugAllocatorSignatureFailsClosed) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  struct SignatureCase {
+    const char *Name;
+    std::vector<TypeRef> Params;
+    TypeRef ReturnType;
+    bool Conflict;
+  };
+  const std::vector<SignatureCase> Cases = {
+      {"compatible", {NdType::makeInt(8, false)}, NdType::makePtr(), false},
+      {"parameter conflict", {NdType::makePtr()}, NdType::makePtr(), true},
+      {"size width conflict",
+       {NdType::makeInt(1, false)},
+       NdType::makePtr(),
+       true},
+      {"return conflict",
+       {NdType::makeInt(8, false)},
+       NdType::makeInt(4, true),
+       true},
+      {"return-only conflict", {}, NdType::makeInt(4, true), true},
+      {"missing types", {}, {}, false},
+  };
+
+  for (const SignatureCase &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    FB B("f", 0x100);
+    const int Block = B.block();
+    B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000);
+    B.call(Block, "free", MedVar{}, {temp(1)}, 0x9010);
+    B.ret(Block, {});
+
+    TypedFunctionDebug Debug(0x9000, "malloc", C.Params, C.ReturnType);
+    const std::vector<Finding> Findings = audit(
+        {B.F}, &Img, /*StackRegs=*/false, /*IncludeStackReads=*/false, &Debug);
+    const Finding *Signature = find(Findings, VulnClass::Unknown);
+    if (!C.Conflict) {
+      EXPECT_EQ(Signature, nullptr);
+      continue;
+    }
+    ASSERT_NE(Signature, nullptr);
+    EXPECT_EQ(Signature->TheVerdict, Verdict::Unknown) << Signature->Detail;
+    EXPECT_EQ(Signature->TheConfidence, Confidence::Low);
+    EXPECT_EQ(Signature->Detail,
+              "debug function signature conflicts with sink summary");
+  }
 }
 
 TEST(AllocLifetime, FallibleWindowsReleasesRemainConditional) {
@@ -1160,6 +1242,24 @@ TEST(AllocLifetime, ZeroLengthStrndupDoesNotReadFreedSource) {
   EXPECT_FALSE(has(audit({B.F}), VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, NarrowZeroStrndupLimitDoesNotSuppressPossibleUse) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(Block, "free", MedVar{}, {temp(1)});
+  B.call(Block, "strndup", temp(2), {temp(1), MedVar::makeConst(0, 1)});
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings = audit({B.F}, &Img);
+  const Finding *Use = find(Findings, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unknown) << Use->Detail;
+  EXPECT_EQ(Use->TheConfidence, Confidence::Low) << Use->Detail;
+}
+
 TEST(AllocLifetime, RuntimeLengthStrndupUseAfterFreeFailsClosed) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -1210,6 +1310,24 @@ TEST(AllocLifetime, ZeroLengthMemcpyDoesNotUseFreedStorage) {
 
   auto Fs = audit({B.F});
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, NarrowZeroCopyLengthDoesNotSuppressPossibleUse) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(Block, "free", MedVar{}, {temp(1)});
+  B.call(Block, "memcpy", temp(2), {temp(3), temp(1), MedVar::makeConst(0, 1)});
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings = audit({B.F}, &Img);
+  const Finding *Use = find(Findings, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unknown) << Use->Detail;
+  EXPECT_EQ(Use->TheConfidence, Confidence::Low) << Use->Detail;
 }
 
 TEST(AllocLifetime, RelocatedZeroLengthDoesNotSuppressFreedStorageUse) {
@@ -1298,6 +1416,25 @@ TEST(AllocLifetime, AcceptedFortifiedCopyUsesFreedStorage) {
   B.ret(b0, {});
 
   EXPECT_TRUE(has(audit({B.F}), VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, NarrowFortifiedCapacityCannotSuppressPossibleUse) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(Block, "free", MedVar{}, {temp(1)});
+  B.call(Block, "memcpy_chk", temp(2),
+         {temp(3), temp(1), MedVar::makeConst(8, 8), MedVar::makeConst(4, 1)});
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings = audit({B.F}, &Img);
+  const Finding *Use = find(Findings, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unknown) << Use->Detail;
+  EXPECT_EQ(Use->TheConfidence, Confidence::Low) << Use->Detail;
 }
 
 TEST(AllocLifetime, RejectedFortifiedStringCopyDoesNotUseFreedStorage) {
@@ -1597,6 +1734,68 @@ TEST(AllocLifetime, ZeroLengthInputSourcesDoNotUseFreedOutputBuffer) {
   }
 }
 
+TEST(AllocLifetime, NarrowZeroInputBoundDoesNotSuppressPossibleUse) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Format = BinaryFormat::ELF;
+
+  struct SourceCase {
+    const char *Name;
+    std::vector<MedVar> Args;
+  } Cases[] = {
+      {"read", {temp(3), temp(1), MedVar::makeConst(0, 1)}},
+      {"fread",
+       {temp(1), MedVar::makeConst(0, 1), MedVar::makeConst(4, 8), temp(3)}},
+  };
+
+  for (const SourceCase &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    FB B("f", 0x100);
+    const int Block = B.block();
+    B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call(Block, "free", MedVar{}, {temp(1)});
+    B.call(Block, C.Name, temp(2), C.Args);
+    B.ret(Block, {});
+
+    const std::vector<Finding> Findings = audit({B.F}, &Img);
+    const Finding *Use = find(Findings, VulnClass::UseAfterFree);
+    ASSERT_NE(Use, nullptr);
+    EXPECT_EQ(Use->TheVerdict, Verdict::Unknown) << Use->Detail;
+    EXPECT_EQ(Use->TheConfidence, Confidence::Low) << Use->Detail;
+  }
+}
+
+TEST(AllocLifetime, Win32SourceCountsUseTheirLowCarrierBits) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Format = BinaryFormat::COFF;
+
+  struct SourceCase {
+    const char *Name;
+    std::vector<MedVar> Args;
+  } Cases[] = {
+      {"_read",
+       {temp(3), temp(1), MedVar::makeConst(UINT64_C(0x100000000), 8)}},
+      {"ReadFile",
+       {temp(3), temp(1), MedVar::makeConst(UINT64_C(0x100000000), 8), temp(4),
+        temp(5)}},
+      {"GetEnvironmentVariableA",
+       {temp(3), temp(1), MedVar::makeConst(UINT64_C(0x100000000), 8)}},
+  };
+
+  for (const SourceCase &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    FB B("f", 0x100);
+    const int Block = B.block();
+    B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    B.call(Block, "free", MedVar{}, {temp(1)});
+    B.call(Block, C.Name, temp(2), C.Args);
+    B.ret(Block, {});
+
+    EXPECT_FALSE(has(audit({B.F}, &Img), VulnClass::UseAfterFree));
+  }
+}
+
 TEST(AllocLifetime, FallibleInputSourceUseRemainsUnknown) {
   constexpr va_t MallocVA = 0x400;
   constexpr va_t FreeVA = 0x408;
@@ -1801,6 +2000,29 @@ TEST(AllocLifetime, UninitializedLocalStackLoadIsReported) {
   EXPECT_EQ(Read->CallVA, 0x408u);
 }
 
+TEST(AllocLifetime, NarrowStackLoadAddressFailsClosed) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(Block, NdOp::LOAD, temp(11), {temp(10, 1)}, 0x408);
+  B.ret(Block, {temp(11)});
+
+  const std::vector<Finding> Findings =
+      audit({B.F}, &Img, /*StackRegs=*/true, /*IncludeStackReads=*/true);
+  const Finding *Read = find(Findings, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown) << Read->Detail;
+  EXPECT_EQ(Read->TheConfidence, Confidence::Low) << Read->Detail;
+  EXPECT_EQ(Read->Detail,
+            "memory address has incompatible target pointer width");
+}
+
 TEST(AllocLifetime, RelocatedZeroCannotInitializeAStackSlot) {
   FB B("f", 0x100);
   const int Block = B.block();
@@ -1879,6 +2101,29 @@ TEST(AllocLifetime, UninitializedLocalStackMemcpySourceIsReported) {
   ASSERT_NE(Read, nullptr);
   EXPECT_EQ(Read->Name, "memcpy");
   EXPECT_EQ(Read->CallVA, 0x408u);
+}
+
+TEST(AllocLifetime, NarrowStackCopySourceFailsClosed) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(Block, "memcpy", temp(11),
+         {temp(12), temp(10, 1), MedVar::makeConst(8, 8)}, 0x9000, 0x408);
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings =
+      audit({B.F}, &Img, /*StackRegs=*/true, /*IncludeStackReads=*/true);
+  const Finding *Read = find(Findings, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown) << Read->Detail;
+  EXPECT_EQ(Read->TheConfidence, Confidence::Low) << Read->Detail;
+  EXPECT_EQ(Read->Detail, "call source pointer has incompatible target width");
 }
 
 TEST(AllocLifetime, StringDuplicationReadsUninitializedStackSource) {
@@ -1992,6 +2237,29 @@ TEST(AllocLifetime, ZeroLengthMemcpyDoesNotReadUninitializedSource) {
   EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
 }
 
+TEST(AllocLifetime, NarrowZeroLengthDoesNotSuppressPossibleStackRead) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(Block, "memcpy", temp(11),
+         {temp(12), temp(10), MedVar::makeConst(0, 1)}, 0x9000, 0x408);
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings =
+      audit({B.F}, &Img, /*StackRegs=*/true, /*IncludeStackReads=*/true);
+  const Finding *Read = find(Findings, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown) << Read->Detail;
+  EXPECT_EQ(Read->TheConfidence, Confidence::Low) << Read->Detail;
+  EXPECT_TRUE(Read->Corroboration.empty()) << Read->Corroboration;
+}
+
 TEST(AllocLifetime, RejectedFortifiedCopyDoesNotReadUninitializedSource) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -2022,6 +2290,31 @@ TEST(AllocLifetime, AcceptedFortifiedCopyReadsUninitializedSource) {
   auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
                   /*IncludeStackReads=*/true);
   EXPECT_TRUE(has(Fs, VulnClass::UninitializedRead));
+}
+
+TEST(AllocLifetime, NarrowFortifiedCapacityMakesStackReadConditional) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(Block, "memcpy_chk", temp(11),
+         {temp(12), temp(10), MedVar::makeConst(8, 8), MedVar::makeConst(4, 1)},
+         0x9000, 0x408);
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings =
+      audit({B.F}, &Img, /*StackRegs=*/true, /*IncludeStackReads=*/true);
+  const Finding *Read = find(Findings, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown) << Read->Detail;
+  EXPECT_EQ(Read->TheConfidence, Confidence::Low) << Read->Detail;
+  EXPECT_TRUE(Read->Corroboration.empty()) << Read->Corroboration;
+  EXPECT_NE(Read->Detail.find("may read"), std::string::npos) << Read->Detail;
 }
 
 TEST(AllocLifetime, WideCopyReadsPlatformSizedElements) {

@@ -762,7 +762,7 @@ private:
         return std::nullopt;
       const std::string Name = resolveCallName(In, *CI);
       const SinkEntry *E = Cat.matchSink(Name);
-      if (!E)
+      if (!E || debugSinkSummaryConflicts(In, *CI, *E))
         return std::nullopt;
       ObjectRegion Region = ObjectRegion::Unknown;
       switch (E->Kind) {
@@ -791,6 +791,8 @@ private:
       std::string Norm = SinkCatalog::normalize(Name);
       auto constArg = [&](int Idx) -> std::optional<uint64_t> {
         if (Idx < 0 || Idx >= static_cast<int>(CI->Args.size()))
+          return std::nullopt;
+        if (!detail::callArgumentHasTargetSizeCarrierWidth(In.Img, *CI, Idx))
           return std::nullopt;
         return constantValue(CI->Args[Idx], 0);
       };

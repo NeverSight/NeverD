@@ -33,7 +33,9 @@ inline uint16_t targetPointerBytes(const BinaryImage *Img) {
 
 inline bool hasTargetPointerWidth(const BinaryImage *Img, const MedVar &Value) {
   const uint16_t PointerBytes = targetPointerBytes(Img);
-  return PointerBytes == 0 || Value.Size == PointerBytes;
+  if (PointerBytes == 0)
+    return Value.Size == 4 || Value.Size == 8;
+  return Value.Size == PointerBytes;
 }
 
 inline bool callArgumentHasTargetPointerWidth(const BinaryImage *Img,
@@ -41,6 +43,25 @@ inline bool callArgumentHasTargetPointerWidth(const BinaryImage *Img,
                                               int ArgIndex) {
   return ArgIndex >= 0 && ArgIndex < static_cast<int>(Call.Args.size()) &&
          hasTargetPointerWidth(Img, Call.Args[ArgIndex]);
+}
+
+inline bool hasTargetSizeCarrierWidth(const BinaryImage *Img,
+                                      const MedVar &Value) {
+  const uint16_t PointerBytes = targetPointerBytes(Img);
+  if (PointerBytes == 0)
+    return Value.Size == 4 || Value.Size == 8;
+  if (Value.Size == PointerBytes)
+    return true;
+  if (!Img || PointerBytes != 8 || Value.Size != 4)
+    return false;
+  return Img->Arch == Arch::X64 || Img->Arch == Arch::AArch64;
+}
+
+inline bool callArgumentHasTargetSizeCarrierWidth(const BinaryImage *Img,
+                                                  const MedCallInfo &Call,
+                                                  int ArgIndex) {
+  return ArgIndex >= 0 && ArgIndex < static_cast<int>(Call.Args.size()) &&
+         hasTargetSizeCarrierWidth(Img, Call.Args[ArgIndex]);
 }
 
 enum class FormattedSourceKind : uint8_t {
