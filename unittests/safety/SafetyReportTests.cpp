@@ -137,6 +137,10 @@ TEST(SafetyReport, PipelineCoverageRejectsUnresolvedIndirectBranches) {
   Call.OpIdx = 0;
   Call.IsIndirect = true;
   Result.MedFuncs.front().CallInfos.push_back(Call);
+  neverd::LowOp IndirectCallLow;
+  IndirectCallLow.Opcode = neverd::NdOp::INDIR_CALL;
+  IndirectCallLow.Addr = 0x1018;
+  Result.LowFuncs.front().Blocks.front().Ops.push_back(IndirectCallLow);
 
   Error = validatePipelineCoverage(Result);
   ASSERT_TRUE(Error.has_value());
@@ -145,6 +149,131 @@ TEST(SafetyReport, PipelineCoverageRejectsUnresolvedIndirectBranches) {
 
   Result.MedFuncs.front().CallInfos.front().TargetAddr = 0x9000;
   EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+}
+
+TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedIndirectCallee) {
+  neverd::PipelineResult Result;
+  neverd::PipelineFunctionAudit Accepted;
+  Accepted.Entry = 0x1000;
+  Accepted.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+  Accepted.HasLowIR = true;
+  Accepted.HasMedIR = true;
+  Accepted.MedIRVerified = true;
+  Result.FunctionAudits.push_back(Accepted);
+
+  neverd::LowFunc Low;
+  Low.Entry = Accepted.Entry;
+  neverd::LowBlock LowBlock;
+  LowBlock.Id = 0;
+  neverd::LowOp LowCall;
+  LowCall.Opcode = neverd::NdOp::INDIR_CALL;
+  LowCall.Addr = 0x1010;
+  LowBlock.Ops.push_back(LowCall);
+  Low.Blocks.push_back(std::move(LowBlock));
+  Result.LowFuncs.push_back(std::move(Low));
+
+  neverd::MedFunc Med;
+  Med.Entry = Accepted.Entry;
+  neverd::MedBlock Block;
+  Block.Id = 0;
+  neverd::MedOp CallOp;
+  CallOp.Opcode = neverd::NdOp::INDIR_CALL;
+  CallOp.Addr = 0x1010;
+  Block.Ops.push_back(CallOp);
+  Med.Blocks.push_back(std::move(Block));
+  neverd::MedCallInfo Call;
+  Call.BlockId = 0;
+  Call.OpIdx = 0;
+  Call.TargetAddr = 0x2000;
+  Call.IsIndirect = true;
+  Med.CallInfos.push_back(Call);
+  Result.MedFuncs.push_back(std::move(Med));
+
+  neverd::BinaryImage Img;
+  neverd::Segment Text;
+  Text.Name = ".text";
+  Text.VA = 0x1000;
+  Text.Size = 0x2000;
+  Text.Flags = neverd::SegmentFlags::Readable |
+               neverd::SegmentFlags::Executable;
+  Img.Segments.push_back(std::move(Text));
+
+  std::optional<std::string> Error = validatePipelineCoverage(Result, &Img);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("0x2000"), std::string::npos);
+  EXPECT_NE(Error->find("unresolved-internal-call"), std::string::npos);
+
+  neverd::PipelineFunctionAudit Callee = Accepted;
+  Callee.Entry = 0x2000;
+  Result.FunctionAudits.push_back(Callee);
+  Result.LowFuncs.emplace_back();
+  Result.LowFuncs.back().Entry = Callee.Entry;
+  Result.MedFuncs.emplace_back();
+  Result.MedFuncs.back().Entry = Callee.Entry;
+  EXPECT_FALSE(validatePipelineCoverage(Result, &Img).has_value());
+
+  Img.Arch = neverd::Arch::ARM;
+  Img.Mode = neverd::InstructionMode::Thumb;
+  Result.MedFuncs.front().CallInfos.front().TargetAddr = 0x2001;
+  const std::optional<std::string> ThumbError =
+      validatePipelineCoverage(Result, &Img);
+  EXPECT_FALSE(ThumbError.has_value()) << ThumbError.value_or("");
+}
+
+TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
+  neverd::PipelineResult Result;
+  neverd::PipelineFunctionAudit Accepted;
+  Accepted.Entry = 0x1000;
+  Accepted.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+  Accepted.HasLowIR = true;
+  Accepted.HasMedIR = true;
+  Accepted.MedIRVerified = true;
+  Result.FunctionAudits.push_back(Accepted);
+
+  neverd::LowFunc Low;
+  Low.Entry = Accepted.Entry;
+  neverd::LowBlock LowBlock;
+  LowBlock.Id = 0;
+  neverd::LowOp LowCall;
+  LowCall.Opcode = neverd::NdOp::CALL;
+  LowCall.Addr = 0x1010;
+  LowBlock.Ops.push_back(LowCall);
+  Low.Blocks.push_back(std::move(LowBlock));
+  Result.LowFuncs.push_back(std::move(Low));
+
+  neverd::MedFunc Med;
+  Med.Entry = Accepted.Entry;
+  neverd::MedBlock MedBlock;
+  MedBlock.Id = 0;
+  neverd::MedOp MedCall;
+  MedCall.Opcode = neverd::NdOp::CALL;
+  MedCall.Addr = 0x1010;
+  MedBlock.Ops.push_back(MedCall);
+  Med.Blocks.push_back(std::move(MedBlock));
+  Result.MedFuncs.push_back(std::move(Med));
+
+  std::optional<std::string> Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("0x1010"), std::string::npos);
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+
+  neverd::MedCallInfo Call;
+  Call.BlockId = 0;
+  Call.OpIdx = 0;
+  Result.MedFuncs.front().CallInfos.push_back(Call);
+  EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  Result.MedFuncs.front().CallInfos.front().OpIdx = 1;
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+
+  Result.MedFuncs.front().CallInfos.clear();
+  Result.MedFuncs.front().Blocks.front().Ops.clear();
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("0x1010"), std::string::npos);
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
 }
 
 TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {
