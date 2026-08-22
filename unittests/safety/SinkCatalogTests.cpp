@@ -153,9 +153,45 @@ TEST(SinkCatalog, HeapAllocAndFree) {
   EXPECT_EQ(C.matchSink("free")->Kind, SinkKind::Free);
   EXPECT_EQ(C.matchSink("realloc")->Kind, SinkKind::Realloc);
   EXPECT_EQ(C.matchSink("reallocf")->Kind, SinkKind::Realloc);
+  EXPECT_FALSE(C.matchSink("free")->ReleaseMayFail);
+  for (const char *Name : {"HeapFree", "LocalFree", "GlobalFree"}) {
+    SCOPED_TRACE(Name);
+    const SinkEntry *Release = C.matchSink(Name);
+    ASSERT_NE(Release, nullptr);
+    EXPECT_EQ(Release->Kind, SinkKind::Free);
+    EXPECT_TRUE(Release->ReleaseMayFail);
+  }
   ASSERT_NE(C.matchSink("wcsdup"), nullptr);
   EXPECT_EQ(C.matchSink("wcsdup")->Kind, SinkKind::Alloc);
   EXPECT_EQ(C.matchSink("_wcsdup"), C.matchSink("wcsdup"));
+}
+
+TEST(SinkCatalog, FallibleReleaseSummaryIsValidatedTransactionally) {
+  const std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_fallible_release.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"custom_release","kind":"free",)"
+       << R"("handle":0,"release_may_fail":true}]})";
+  }
+  SinkCatalog C = SinkCatalog::defaults();
+  ASSERT_FALSE(static_cast<bool>(C.mergeSinksFromFile(Path)));
+  const SinkEntry *Release = C.matchSink("custom_release");
+  ASSERT_NE(Release, nullptr);
+  EXPECT_TRUE(Release->ReleaseMayFail);
+
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"would_publish","kind":"free",)"
+       << R"("handle":0},{"name":"bad","kind":"copy",)"
+       << R"("dst":0,"release_may_fail":true}]})";
+  }
+  SinkCatalog Transactional = SinkCatalog::defaults();
+  llvm::Error Error = Transactional.mergeSinksFromFile(Path);
+  ASSERT_TRUE(static_cast<bool>(Error));
+  EXPECT_NE(llvm::toString(std::move(Error)).find("only a release"),
+            std::string::npos);
+  EXPECT_EQ(Transactional.matchSink("would_publish"), nullptr);
 }
 
 TEST(SinkCatalog, MangledOperatorNewAndDelete) {
@@ -301,6 +337,23 @@ TEST(SinkCatalog, DefaultSourcesCoverPosixAndWin32) {
   ASSERT_NE(Read, nullptr);
   EXPECT_EQ(Read->OutArg, 1); // read(fd, buf, n) taints buf.
   EXPECT_TRUE(Read->returnCarriesInput());
+  for (const char *Name :
+       {"__read_chk", "__pread_chk", "__recv_chk", "__recvfrom_chk"}) {
+    SCOPED_TRACE(Name);
+    const SourceEntry *Source = C.matchSource(Name);
+    ASSERT_NE(Source, nullptr);
+    EXPECT_EQ(Source->OutArg, 1);
+    EXPECT_TRUE(Source->returnCarriesInput());
+  }
+  for (const char *Name :
+       {"fgets_unlocked", "fread_unlocked", "__fgets_chk", "__fread_chk",
+        "__fgets_unlocked_chk", "__fread_unlocked_chk"}) {
+    SCOPED_TRACE(Name);
+    const SourceEntry *Source = C.matchSource(Name);
+    ASSERT_NE(Source, nullptr);
+    EXPECT_EQ(Source->OutArg, 0);
+    EXPECT_TRUE(Source->returnCarriesInput());
+  }
   ASSERT_NE(C.matchSource("scanf"), nullptr);
   EXPECT_FALSE(C.matchSource("scanf")->returnCarriesInput());
   ASSERT_NE(C.matchSource("ReadFile"), nullptr);

@@ -202,6 +202,31 @@ TEST(AllocLifetime, LeakWhenNeitherFreedNorEscaped) {
   EXPECT_TRUE(has(Fs, VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, TruncatedStackAddressDoesNotHideAHeapEscape) {
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(Block, NdOp::COPY, temp(10, 4), {mkReg(kSP, 1)});
+  B.op(Block, NdOp::STORE, MedVar{}, {temp(10, 4), temp(1)});
+  B.ret(Block, {});
+
+  EXPECT_FALSE(has(audit({B.F}, nullptr, true), VulnClass::HeapLeak));
+}
+
+TEST(AllocLifetime, NarrowEncodedStackImmediateStillKeepsLocalSpill) {
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1, 8),
+       {mkReg(kSP, 0, 8), MedVar::makeConst(0x20, 4)});
+  B.op(Block, NdOp::STORE, MedVar{}, {mkReg(kSP, 1, 8), temp(1)});
+  B.ret(Block, {});
+
+  EXPECT_TRUE(has(audit({B.F}, nullptr, true), VulnClass::HeapLeak));
+}
+
 TEST(AllocLifetime, FindingUsesAllocatorIdentityOrigin) {
   BinaryImage Img;
   Import Malloc;
@@ -311,6 +336,58 @@ TEST(AllocLifetime, NoLeakWhenFreed) {
   EXPECT_FALSE(has(Fs, VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, FallibleWindowsReleasesRemainConditional) {
+  for (const char *Name : {"HeapFree", "LocalFree", "GlobalFree"}) {
+    SCOPED_TRACE(Name);
+    FB B("f", 0x100);
+    int b0 = B.block();
+    B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000, 0x400);
+    if (llvm::StringRef(Name) == "HeapFree")
+      B.call(b0, Name, temp(2), {temp(9), MedVar::makeConst(0, 8), temp(1)},
+             0x9100, 0x408);
+    else
+      B.call(b0, Name, temp(2), {temp(1)}, 0x9100, 0x408);
+    B.op(b0, NdOp::LOAD, temp(3), {temp(1)}, 0x410);
+    B.call(b0, "free", MedVar{}, {temp(1)}, 0x9200, 0x418);
+    B.ret(b0, {});
+
+    const auto Fs = audit({B.F});
+    const Finding *UAF = find(Fs, VulnClass::UseAfterFree);
+    ASSERT_NE(UAF, nullptr);
+    EXPECT_EQ(UAF->TheVerdict, Verdict::Unknown) << UAF->Detail;
+    EXPECT_EQ(UAF->TheConfidence, Confidence::Low) << UAF->Detail;
+    EXPECT_NE(UAF->Detail.find("conditional release"), std::string::npos);
+    const Finding *Double = find(Fs, VulnClass::DoubleFree);
+    ASSERT_NE(Double, nullptr);
+    EXPECT_EQ(Double->TheVerdict, Verdict::Unknown) << Double->Detail;
+    EXPECT_EQ(Double->TheConfidence, Confidence::Low) << Double->Detail;
+    EXPECT_NE(Double->Detail.find("conditional release"), std::string::npos);
+    EXPECT_FALSE(has(Fs, VulnClass::HeapLeak));
+  }
+}
+
+TEST(AllocLifetime, FallibleWindowsReleaseDoesNotHidePossibleLeak) {
+  for (const char *Name : {"HeapFree", "LocalFree", "GlobalFree"}) {
+    SCOPED_TRACE(Name);
+    FB B("f", 0x100);
+    int b0 = B.block();
+    B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000, 0x400);
+    if (llvm::StringRef(Name) == "HeapFree")
+      B.call(b0, Name, temp(2), {temp(9), MedVar::makeConst(0, 8), temp(1)},
+             0x9100, 0x408);
+    else
+      B.call(b0, Name, temp(2), {temp(1)}, 0x9100, 0x408);
+    B.ret(b0, {});
+
+    const auto Fs = audit({B.F});
+    const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+    ASSERT_NE(Leak, nullptr);
+    EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown) << Leak->Detail;
+    EXPECT_EQ(Leak->TheConfidence, Confidence::Low) << Leak->Detail;
+    EXPECT_EQ(Leak->Detail, "heap lifetime depends on a conditional release");
+  }
+}
+
 TEST(AllocLifetime, MayAliasFreeDoesNotProveAllocationReleased) {
   FB B("f", 0x100);
   int entry = B.block();
@@ -337,6 +414,75 @@ TEST(AllocLifetime, MayAliasFreeDoesNotProveAllocationReleased) {
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, NullCheckedConditionalFreeIsNotAHeapLeakWithoutReturnType) {
+  constexpr va_t MallocVA = 0x108;
+  constexpr va_t FreeVA = 0x118;
+  FB B("guarded_free", 0x100);
+  int Entry = B.block();
+  int Release = B.block();
+  int Exit = B.block();
+  B.call(Entry, "malloc", temp(1), {MedVar::makeConst(32, 8)}, 0x9000,
+         MallocVA);
+  B.op(Entry, NdOp::INT_EQUAL, temp(5, 1), {temp(1), MedVar::makeConst(0, 8)});
+  B.succ(Entry, Release);
+  B.succ(Entry, Exit);
+  B.call(Release, "free", temp(9), {temp(1)}, 0x9100, FreeVA);
+  B.succ(Release, Exit);
+  PhiNode Returned;
+  Returned.Output = temp(2);
+  Returned.Args = {{Entry, temp(1)}, {Release, temp(9)}};
+  B.F.Blocks[Exit].Phis.push_back(std::move(Returned));
+  B.ret(Exit, {temp(2)});
+
+  LowFunc LF;
+  LF.Entry = B.F.Entry;
+  LF.DecodedInstructionCount = 6;
+  LF.LiftedInstructionCount = 6;
+  LF.Blocks.resize(3);
+
+  LowBlock &LowEntry = LF.Blocks[Entry];
+  LowEntry.Id = Entry;
+  LowEntry.StartAddr = B.F.Entry;
+  LowEntry.EndAddr = 0x110;
+  LowEntry.Succs = {Release, Exit};
+  LowEntry.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, MallocVA));
+  LowEntry.Ops.push_back(lowOp(NdOp::INT_EQUAL, NdVar::reg(1, 1),
+                               {NdVar::reg(0, 8), NdVar::cst(0, 8)}, 0x10A));
+  LowEntry.Ops.push_back(lowOp(
+      NdOp::COND_BR, NdVar{}, {NdVar::cst(0x120, 8), NdVar::reg(1, 1)}, 0x10C));
+
+  LowBlock &LowRelease = LF.Blocks[Release];
+  LowRelease.Id = Release;
+  LowRelease.StartAddr = 0x110;
+  LowRelease.EndAddr = 0x120;
+  LowRelease.Preds = {Entry};
+  LowRelease.Succs = {Exit};
+  LowRelease.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9100, 8)}, FreeVA));
+  LowRelease.Ops.push_back(
+      lowOp(NdOp::BRANCH, NdVar{}, {NdVar::cst(0x120, 8)}, 0x11C));
+
+  LowBlock &LowExit = LF.Blocks[Exit];
+  LowExit.Id = Exit;
+  LowExit.StartAddr = 0x120;
+  LowExit.EndAddr = 0x128;
+  LowExit.Preds = {Entry, Release};
+  LowExit.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}, 0x120));
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::vector<MedFunc> MedFuncs{B.F};
+  std::vector<LowFunc> LowFuncs{std::move(LF)};
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &MedFuncs;
+  In.LowFuncs = &LowFuncs;
+
+  EXPECT_FALSE(has(auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{}),
+                   VulnClass::HeapLeak));
+}
+
 TEST(AllocLifetime, AdjustedPointerFreeDoesNotReleaseAllocation) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -351,6 +497,31 @@ TEST(AllocLifetime, AdjustedPointerFreeDoesNotReleaseAllocation) {
   EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
 }
 
+TEST(AllocLifetime, RelocatedZeroDoesNotProveAllocationReleased) {
+  for (const Arch A : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    const uint16_t PointerSize = (A == Arch::X86 || A == Arch::ARM) ? 4 : 8;
+    BinaryImage Img;
+    Img.Arch = A;
+
+    FB B("f", 0x100);
+    const int Block = B.block();
+    B.call(Block, "malloc", temp(1, PointerSize),
+           {MedVar::makeConst(16, PointerSize)});
+    B.op(Block, NdOp::INT_ADD, temp(2, PointerSize),
+         {temp(1, PointerSize),
+          MedVar::makeConst(0, PointerSize,
+                            ConstantAddressProvenance::DataAddress, 0)});
+    B.call(Block, "free", MedVar{}, {temp(2, PointerSize)});
+    B.ret(Block, {});
+
+    const std::vector<Finding> Findings = audit({B.F}, &Img);
+    const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+    ASSERT_NE(Leak, nullptr);
+    EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  }
+}
+
 TEST(AllocLifetime, SelectOfSamePointerCanReleaseAllocation) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -362,6 +533,23 @@ TEST(AllocLifetime, SelectOfSamePointerCanReleaseAllocation) {
   EXPECT_FALSE(has(audit({B.F}), VulnClass::HeapLeak));
 }
 
+TEST(AllocLifetime, WidthChangingPhiDoesNotProveAllocationReleased) {
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  PhiNode Phi;
+  Phi.Output = temp(2, 4);
+  Phi.Args = {{Block, temp(1)}, {Block, temp(1)}};
+  B.F.Blocks[Block].Phis.push_back(std::move(Phi));
+  B.call(Block, "free", MedVar{}, {temp(2, 4)});
+  B.ret(Block, {});
+
+  const std::vector<Finding> Findings = audit({B.F});
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+}
+
 TEST(AllocLifetime, NoLeakWhenReturned) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -369,6 +557,51 @@ TEST(AllocLifetime, NoLeakWhenReturned) {
   B.ret(b0, {temp(1)}); // handle escapes through the return value.
   auto Fs = audit({B.F});
   EXPECT_FALSE(has(Fs, VulnClass::HeapLeak));
+}
+
+TEST(AllocLifetime, RuntimeAdjustedReturnDoesNotProveAllocationEscaped) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(2), {temp(1), temp(9)});
+  B.ret(b0, {temp(2)});
+
+  const std::vector<Finding> Findings = audit({B.F});
+  const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, RuntimeAdjustedWrapperReturnIsNotAnOwnedHeapSummary) {
+  FB Helper("helper", 0x200);
+  Helper.F.Params.push_back(temp(9));
+  const int HelperBlock = Helper.block();
+  Helper.call(HelperBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  Helper.op(HelperBlock, NdOp::INT_ADD, temp(2), {temp(1), temp(9)});
+  Helper.ret(HelperBlock, {temp(2)});
+
+  FB User("user", 0x100);
+  const int UserBlock = User.block();
+  User.call(UserBlock, "helper", temp(3), {temp(8)}, Helper.F.Entry);
+  User.ret(UserBlock, {});
+
+  const std::vector<Finding> Findings = audit({Helper.F, User.F});
+  bool UserHeapFinding = false;
+  for (const Finding &Finding : Findings)
+    if (Finding.FuncEntry == User.F.Entry &&
+        Finding.Class == VulnClass::HeapLeak)
+      UserHeapFinding = true;
+  EXPECT_FALSE(UserHeapFinding);
+  const Finding *HelperLeak = nullptr;
+  for (const Finding &Finding : Findings)
+    if (Finding.FuncEntry == Helper.F.Entry &&
+        Finding.Class == VulnClass::HeapLeak) {
+      HelperLeak = &Finding;
+      break;
+    }
+  ASSERT_NE(HelperLeak, nullptr);
+  EXPECT_EQ(HelperLeak->TheVerdict, Verdict::Unknown);
 }
 
 TEST(AllocLifetime, NonEscapingHelperDoesNotHideLeak) {
@@ -452,6 +685,45 @@ TEST(AllocLifetime, ConditionalFreeWrapperDoesNotProveCallerReleased) {
       UserLeak = &F;
   ASSERT_NE(UserLeak, nullptr);
   EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, ConditionalFreeWrapperKeepsLaterUsesUncertain) {
+  FB Helper("conditional_free", 0x200);
+  Helper.F.Params = {temp(0)};
+  int hEntry = Helper.block();
+  int hFree = Helper.block();
+  int hSkip = Helper.block();
+  int hJoin = Helper.block();
+  Helper.succ(hEntry, hFree);
+  Helper.succ(hEntry, hSkip);
+  Helper.succ(hFree, hJoin);
+  Helper.succ(hSkip, hJoin);
+  Helper.call(hFree, "free", MedVar{}, {temp(0)});
+  Helper.ret(hJoin, {});
+
+  FB User("user", 0x100);
+  int u0 = User.block();
+  User.call(u0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(u0, "conditional_free", MedVar{}, {temp(1)}, 0x200, 0x400);
+  User.op(u0, NdOp::LOAD, temp(2), {temp(1)}, 0x408);
+  User.call(u0, "free", MedVar{}, {temp(1)}, 0x9100, 0x410);
+  User.ret(u0, {});
+
+  const auto Fs = audit({Helper.F, User.F});
+  const Finding *UAF = nullptr;
+  const Finding *Double = nullptr;
+  for (const Finding &F : Fs) {
+    if (F.FuncEntry != User.F.Entry)
+      continue;
+    if (F.Class == VulnClass::UseAfterFree)
+      UAF = &F;
+    if (F.Class == VulnClass::DoubleFree)
+      Double = &F;
+  }
+  ASSERT_NE(UAF, nullptr);
+  EXPECT_EQ(UAF->TheVerdict, Verdict::Unknown) << UAF->Detail;
+  ASSERT_NE(Double, nullptr);
+  EXPECT_EQ(Double->TheVerdict, Verdict::Unknown) << Double->Detail;
 }
 
 TEST(AllocLifetime, AlternateFreeSitesProveWrapperReleased) {
@@ -593,6 +865,126 @@ TEST(AllocLifetime, ExceptionalExitDoesNotProveWrapperReleased) {
   EXPECT_EQ(UserLeak->TheVerdict, Verdict::Unknown);
 }
 
+TEST(AllocLifetime, ExceptionalUseAfterFreeFailsClosed) {
+  FB B("f", 0x100);
+  int Allocate = B.block();
+  int MayThrow = B.block();
+  int Handler = B.block();
+  int Exit = B.block();
+  B.call(Allocate, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(Allocate, "free", MedVar{}, {temp(1)});
+  B.succ(Allocate, MayThrow);
+  B.call(MayThrow, "opaque_may_throw", MedVar{}, {});
+  B.succ(MayThrow, Exit);
+  ExceptionalEdge Edge;
+  Edge.BlockId = Handler;
+  B.F.Blocks[MayThrow].ExceptionalSuccs.push_back(Edge);
+  B.op(Handler, NdOp::LOAD, temp(2), {temp(1)}, 0x480);
+  B.ret(Handler, {temp(2)});
+  B.ret(Exit, {});
+
+  auto Fs = audit({B.F});
+  const Finding *UseAfterFree = find(Fs, VulnClass::UseAfterFree);
+  ASSERT_NE(UseAfterFree, nullptr);
+  EXPECT_EQ(UseAfterFree->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(UseAfterFree->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, ExceptionalDoubleFreeFailsClosed) {
+  FB B("f", 0x100);
+  int Allocate = B.block();
+  int MayThrow = B.block();
+  int Handler = B.block();
+  int Exit = B.block();
+  B.call(Allocate, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.call(Allocate, "free", MedVar{}, {temp(1)});
+  B.succ(Allocate, MayThrow);
+  B.call(MayThrow, "opaque_may_throw", MedVar{}, {});
+  B.succ(MayThrow, Exit);
+  ExceptionalEdge Edge;
+  Edge.BlockId = Handler;
+  B.F.Blocks[MayThrow].ExceptionalSuccs.push_back(Edge);
+  B.call(Handler, "free", MedVar{}, {temp(1)});
+  B.ret(Handler, {});
+  B.ret(Exit, {});
+
+  auto Fs = audit({B.F});
+  const Finding *DoubleFree = find(Fs, VulnClass::DoubleFree);
+  ASSERT_NE(DoubleFree, nullptr);
+  EXPECT_EQ(DoubleFree->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(DoubleFree->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, ExceptionalOnlyLeakSurvivesNormalPathCorroboration) {
+  FB User("user", 0x100);
+  int Allocate = User.block();
+  int MayThrow = User.block();
+  int Release = User.block();
+  int Handler = User.block();
+  User.call(Allocate, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000,
+            0x400);
+  User.succ(Allocate, MayThrow);
+  User.call(MayThrow, "helper", MedVar{}, {}, 0x200, 0x408);
+  User.succ(MayThrow, Release);
+  ExceptionalEdge MedEdge;
+  MedEdge.BlockId = Handler;
+  User.F.Blocks[MayThrow].ExceptionalSuccs.push_back(MedEdge);
+  User.call(Release, "free", MedVar{}, {temp(1)}, 0x9100, 0x410);
+  User.ret(Release, {});
+  User.ret(Handler, {});
+
+  FB Helper("helper", 0x200);
+  int HelperBlock = Helper.block();
+  Helper.ret(HelperBlock, {});
+
+  LowFunc Low;
+  Low.Entry = User.F.Entry;
+  Low.DecodedInstructionCount = 4;
+  Low.LiftedInstructionCount = 4;
+  Low.Blocks.resize(4);
+  for (int I = 0; I < 4; ++I)
+    Low.Blocks[I].Id = I;
+  Low.Blocks[Allocate].StartAddr = 0x400;
+  Low.Blocks[Allocate].EndAddr = 0x408;
+  Low.Blocks[Allocate].Succs = {MayThrow};
+  Low.Blocks[Allocate].Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, 0x400));
+  Low.Blocks[MayThrow].StartAddr = 0x408;
+  Low.Blocks[MayThrow].EndAddr = 0x410;
+  Low.Blocks[MayThrow].Preds = {Allocate};
+  Low.Blocks[MayThrow].Succs = {Release};
+  Low.Blocks[MayThrow].ExceptionalSuccs.push_back(MedEdge);
+  Low.Blocks[MayThrow].Ops.push_back(
+      lowOp(NdOp::CALL, NdVar{}, {NdVar::cst(0x200, 8)}, 0x408));
+  Low.Blocks[Release].StartAddr = 0x410;
+  Low.Blocks[Release].EndAddr = 0x418;
+  Low.Blocks[Release].Preds = {MayThrow};
+  Low.Blocks[Release].Ops.push_back(
+      lowOp(NdOp::CALL, NdVar{}, {NdVar::cst(0x9100, 8)}, 0x410));
+  Low.Blocks[Release].Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}));
+  Low.Blocks[Handler].StartAddr = 0x418;
+  Low.Blocks[Handler].EndAddr = 0x420;
+  ExceptionalEdge LowPred = MedEdge;
+  LowPred.BlockId = MayThrow;
+  Low.Blocks[Handler].ExceptionalPreds.push_back(LowPred);
+  Low.Blocks[Handler].Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}));
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::vector<MedFunc> MedFuncs{User.F, Helper.F};
+  std::vector<LowFunc> LowFuncs{std::move(Low)};
+  AnalysisInput In;
+  In.Img = &Img;
+  In.LowFuncs = &LowFuncs;
+  In.MedFuncs = &MedFuncs;
+  auto Fs = auditMemory(In, SinkCatalog::defaults(), SafetyBudgets{});
+
+  const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
 TEST(AllocLifetime, DoubleFreeSequential) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -660,6 +1052,50 @@ TEST(AllocLifetime, UseAfterFree) {
   B.ret(b0, {});
   auto Fs = audit({B.F});
   EXPECT_TRUE(has(Fs, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, RuntimeAdjustedPointerUseAfterFreeFailsClosed) {
+  constexpr va_t MallocVA = 0x400;
+  constexpr va_t FreeVA = 0x408;
+  constexpr va_t LoadVA = 0x410;
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000, MallocVA);
+  B.op(b0, NdOp::INT_ADD, temp(2), {temp(1), temp(9)});
+  B.call(b0, "free", MedVar{}, {temp(1)}, 0x9100, FreeVA);
+  B.op(b0, NdOp::LOAD, temp(3), {temp(2)}, LoadVA);
+  B.ret(b0, {});
+
+  LowFunc LF;
+  LF.Entry = B.F.Entry;
+  LF.DecodedInstructionCount = 1;
+  LF.LiftedInstructionCount = 1;
+  LowBlock LB;
+  LB.Id = b0;
+  LB.StartAddr = B.F.Entry;
+  LB.EndAddr = LoadVA + 8;
+  LB.Ops.push_back(
+      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, MallocVA));
+  LB.Ops.push_back(lowOp(NdOp::CALL, NdVar{}, {NdVar::cst(0x9100, 8)}, FreeVA));
+  LB.Ops.push_back(
+      lowOp(NdOp::LOAD, NdVar::reg(1, 8), {NdVar::reg(2, 8)}, LoadVA));
+  LB.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}, LoadVA + 4));
+  LF.Blocks.push_back(std::move(LB));
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::vector<MedFunc> MedFuncs{B.F};
+  std::vector<LowFunc> LowFuncs{std::move(LF)};
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &MedFuncs;
+  In.LowFuncs = &LowFuncs;
+  const std::vector<Finding> Findings =
+      auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const Finding *Use = find(Findings, VulnClass::UseAfterFree);
+  ASSERT_NE(Use, nullptr);
+  EXPECT_EQ(Use->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Use->TheConfidence, Confidence::Low);
 }
 
 TEST(AllocLifetime, StringDuplicationReadsFreedSource) {
@@ -743,6 +1179,31 @@ TEST(AllocLifetime, ZeroLengthMemcpyDoesNotUseFreedStorage) {
 
   auto Fs = audit({B.F});
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
+}
+
+TEST(AllocLifetime, RelocatedZeroLengthDoesNotSuppressFreedStorageUse) {
+  for (const Arch A : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    const uint16_t PointerSize = (A == Arch::X86 || A == Arch::ARM) ? 4 : 8;
+    BinaryImage Img;
+    Img.Arch = A;
+
+    FB B("f", 0x100);
+    const int Block = B.block();
+    B.call(Block, "malloc", temp(1, PointerSize),
+           {MedVar::makeConst(16, PointerSize)});
+    B.call(Block, "free", MedVar{}, {temp(1, PointerSize)});
+    B.call(Block, "memcpy", temp(2, PointerSize),
+           {temp(3, PointerSize), temp(1, PointerSize),
+            MedVar::makeConst(0, PointerSize,
+                              ConstantAddressProvenance::DataAddress, 0)});
+    B.ret(Block, {});
+
+    const std::vector<Finding> Findings = audit({B.F}, &Img);
+    const Finding *Use = find(Findings, VulnClass::UseAfterFree);
+    ASSERT_NE(Use, nullptr);
+    EXPECT_EQ(Use->TheVerdict, Verdict::Unknown);
+  }
 }
 
 TEST(AllocLifetime, ArmEabiMemoryHelpersHonorZeroLength) {
@@ -1267,6 +1728,31 @@ TEST(AllocLifetime, OverwrittenSpillDoesNotRemainAHeapAlias) {
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
 }
 
+TEST(AllocLifetime, DeepUnknownFrameWriteInvalidatesAHeapSpill) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(b0, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(10), temp(1)});
+
+  MedVar DeepAddress = temp(10);
+  for (int I = 0; I < 70; ++I) {
+    const MedVar Next = temp(100 + I);
+    B.op(b0, NdOp::COPY, Next, {DeepAddress});
+    DeepAddress = Next;
+  }
+  B.op(b0, NdOp::STORE, MedVar{}, {DeepAddress, MedVar::makeConst(0, 8)});
+  B.op(b0, NdOp::LOAD, temp(2), {temp(10)});
+  B.call(b0, "free", MedVar{}, {temp(1)});
+  B.op(b0, NdOp::LOAD, temp(3), {temp(2)});
+  B.ret(b0, {});
+
+  const auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true);
+  EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
+}
+
 TEST(AllocLifetime, UninitializedLocalStackLoadIsReported) {
   FB B("f", 0x100);
   int b0 = B.block();
@@ -1282,6 +1768,26 @@ TEST(AllocLifetime, UninitializedLocalStackLoadIsReported) {
   ASSERT_NE(Read, nullptr);
   EXPECT_EQ(Read->FuncEntry, 0x100u);
   EXPECT_EQ(Read->CallVA, 0x408u);
+}
+
+TEST(AllocLifetime, RelocatedZeroCannotInitializeAStackSlot) {
+  FB B("f", 0x100);
+  const int Block = B.block();
+  B.op(Block, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1),
+        MedVar::makeConst(0, 8, ConstantAddressProvenance::DataAddress, 0)});
+  B.op(Block, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(7, 8)});
+  B.op(Block, NdOp::LOAD, temp(11), {mkReg(kSP, 1)}, 0x408);
+  B.ret(Block, {temp(11)});
+
+  const std::vector<Finding> Findings =
+      audit({B.F}, nullptr, /*StackRegs=*/true,
+            /*IncludeStackReads=*/true);
+  const Finding *Read = find(Findings, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
 }
 
 TEST(AllocLifetime, UninitializedLocalStackLoadSurvivesPointerSpill) {
@@ -1700,6 +2206,55 @@ TEST(AllocLifetime, InitializedLocalStackLoadIsClean) {
   EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
 }
 
+TEST(AllocLifetime, DeepForwardedUninitializedStackLoadIsReported) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+
+  MedVar DeepAddress = temp(10);
+  for (int I = 0; I < 120; ++I) {
+    const MedVar Next = temp(100 + I);
+    B.op(b0, NdOp::COPY, Next, {DeepAddress});
+    DeepAddress = Next;
+  }
+  B.op(b0, NdOp::LOAD, temp(11), {DeepAddress}, 0x408);
+  B.ret(b0, {temp(11)});
+
+  const auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                        /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->CallVA, 0x408u);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+}
+
+TEST(AllocLifetime, DeepPartialFrameWriteInvalidatesInitializationProof) {
+  FB B("f", 0x100);
+  int b0 = B.block();
+  B.op(b0, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(b0, NdOp::INT_ADD, temp(10), {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.op(b0, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(0x1234, 8)});
+
+  MedVar DeepAddress = temp(10);
+  for (int I = 0; I < 120; ++I) {
+    const MedVar Next = temp(100 + I);
+    B.op(b0, NdOp::COPY, Next, {DeepAddress});
+    DeepAddress = Next;
+  }
+  B.op(b0, NdOp::STORE, MedVar{}, {DeepAddress, MedVar::makeConst(0xAA, 1)});
+  B.op(b0, NdOp::LOAD, temp(11), {temp(10)}, 0x408);
+  B.ret(b0, {temp(11)});
+
+  const auto Fs = audit({B.F}, nullptr, /*StackRegs=*/true,
+                        /*IncludeStackReads=*/true);
+  const Finding *Read = find(Fs, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
+}
+
 TEST(AllocLifetime, ConditionalStackInitializationFailsClosed) {
   FB B("f", 0x100);
   int entry = B.block();
@@ -1725,6 +2280,37 @@ TEST(AllocLifetime, ConditionalStackInitializationFailsClosed) {
   ASSERT_NE(Read, nullptr);
   EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
   EXPECT_EQ(Read->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, ExceptionalEdgeDoesNotObserveLaterStackInitialization) {
+  FB B("f", 0x100);
+  const int Entry = B.block();
+  const int NormalExit = B.block();
+  const int Handler = B.block();
+  B.op(Entry, NdOp::INT_SUB, mkReg(kSP, 1),
+       {mkReg(kSP, 0), MedVar::makeConst(0x20, 8)});
+  B.op(Entry, NdOp::INT_ADD, temp(10),
+       {mkReg(kSP, 1), MedVar::makeConst(8, 8)});
+  B.call(Entry, "may_throw", MedVar{}, {}, 0x9000, 0x408);
+  B.op(Entry, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(0x1234, 8)});
+  B.succ(Entry, NormalExit);
+  B.ret(NormalExit, {});
+
+  ExceptionalEdge ToHandler;
+  ToHandler.BlockId = Handler;
+  B.F.Blocks[Entry].ExceptionalSuccs.push_back(ToHandler);
+  ExceptionalEdge FromEntry = ToHandler;
+  FromEntry.BlockId = Entry;
+  B.F.Blocks[Handler].ExceptionalPreds.push_back(FromEntry);
+  B.op(Handler, NdOp::LOAD, temp(11), {temp(10)}, 0x420);
+  B.ret(Handler, {temp(11)});
+
+  const std::vector<Finding> Findings =
+      audit({B.F}, nullptr, /*StackRegs=*/true, /*IncludeStackReads=*/true);
+  const Finding *Read = find(Findings, VulnClass::UninitializedRead);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_EQ(Read->CallVA, 0x420u);
+  EXPECT_EQ(Read->TheVerdict, Verdict::Unknown);
 }
 
 TEST(AllocLifetime, PartialStackInitializationFailsClosed) {
@@ -1879,6 +2465,163 @@ TEST(AllocLifetime, WrapperAllocationLeakIsInterprocedural) {
   EXPECT_TRUE(UserLeak);
 }
 
+TEST(AllocLifetime, ThumbWrapperAllocationUsesCanonicalCalleeEntry) {
+  FB Wrap("xmalloc", 0x200);
+  int WrapperBlock = Wrap.block();
+  Wrap.call(WrapperBlock, "malloc", temp(1), {MedVar::makeConst(16, 4)});
+  Wrap.ret(WrapperBlock, {temp(1)});
+
+  FB User("user", 0x100);
+  int UserBlock = User.block();
+  User.call(UserBlock, "xmalloc", temp(9, 4), {MedVar::makeConst(16, 4)},
+            0x201);
+  User.ret(UserBlock, {});
+
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Mode = InstructionMode::Thumb;
+  auto Fs = audit({User.F, Wrap.F}, &Img);
+  bool UserLeak = false;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+      UserLeak = true;
+  EXPECT_TRUE(UserLeak);
+}
+
+TEST(AllocLifetime, ExternalPlaceholderZeroDoesNotBorrowLocalSummary) {
+  FB Local("local_zero", 0);
+  Local.F.Params.push_back(temp(0));
+  int LocalBlock = Local.block();
+  Local.op(LocalBlock, NdOp::STORE, MedVar{},
+           {MedVar::makeConst(0x8000, 8), temp(0)});
+  Local.ret(LocalBlock, {});
+
+  FB User("user", 0x100);
+  int UserBlock = User.block();
+  User.call(UserBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(UserBlock, "opaque_external", MedVar{}, {temp(1)}, 0);
+  User.ret(UserBlock, {});
+
+  auto Fs = audit({User.F, Local.F});
+  const Finding *Leak = nullptr;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry) {
+      Leak = &F;
+      break;
+    }
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, SyntheticExternalZeroDoesNotBorrowLocalSummary) {
+  FB Local("local_zero", 0);
+  Local.F.Params.push_back(temp(0));
+  int LocalBlock = Local.block();
+  Local.op(LocalBlock, NdOp::STORE, MedVar{},
+           {MedVar::makeConst(0x8000, 8), temp(0)});
+  Local.ret(LocalBlock, {});
+
+  FB User("user", 0x100);
+  int UserBlock = User.block();
+  User.call(UserBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(UserBlock, "sub_0", MedVar{}, {temp(1)}, 0);
+  User.ret(UserBlock, {});
+
+  auto Fs = audit({User.F, Local.F});
+  const Finding *Leak = nullptr;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry) {
+      Leak = &F;
+      break;
+    }
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, ImportedZeroDoesNotBorrowSameNamedLocalSummary) {
+  FB Local("ambiguous", 0);
+  Local.F.Params.push_back(temp(0));
+  int LocalBlock = Local.block();
+  Local.op(LocalBlock, NdOp::STORE, MedVar{},
+           {MedVar::makeConst(0x8000, 8), temp(0)});
+  Local.ret(LocalBlock, {});
+
+  FB User("user", 0x100);
+  int UserBlock = User.block();
+  User.call(UserBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(UserBlock, "ambiguous", MedVar{}, {temp(1)}, 0);
+  User.ret(UserBlock, {});
+
+  BinaryImage Img;
+  Import External;
+  External.Name = "ambiguous";
+  External.IATAddr = 0;
+  Img.Imports.push_back(std::move(External));
+
+  auto Fs = audit({User.F, Local.F}, &Img);
+  const Finding *Leak = nullptr;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry) {
+      Leak = &F;
+      break;
+    }
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, ImportedAddressDoesNotBorrowSameAddressLocalSummary) {
+  FB Local("ambiguous", 0x200);
+  Local.F.Params.push_back(temp(0));
+  const int LocalBlock = Local.block();
+  Local.op(LocalBlock, NdOp::STORE, MedVar{},
+           {MedVar::makeConst(0x8000, 8), temp(0)});
+  Local.ret(LocalBlock, {});
+
+  FB User("user", 0x100);
+  const int UserBlock = User.block();
+  User.call(UserBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(UserBlock, "ambiguous", MedVar{}, {temp(1)}, 0x200);
+  User.ret(UserBlock, {});
+
+  BinaryImage Img;
+  Img.Imports.push_back({"runtime", "ambiguous", 0, 0x200});
+
+  const std::vector<Finding> Findings = audit({User.F, Local.F}, &Img);
+  const Finding *Leak = nullptr;
+  for (const Finding &Finding : Findings)
+    if (Finding.Class == VulnClass::HeapLeak &&
+        Finding.FuncEntry == User.F.Entry) {
+      Leak = &Finding;
+      break;
+    }
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, NamedLocalZeroEntryKeepsItsInternalSummary) {
+  FB Local("local_zero", 0);
+  Local.F.Params.push_back(temp(0));
+  int LocalBlock = Local.block();
+  Local.op(LocalBlock, NdOp::STORE, MedVar{},
+           {MedVar::makeConst(0x8000, 8), temp(0)});
+  Local.ret(LocalBlock, {});
+
+  FB User("user", 0x100);
+  int UserBlock = User.block();
+  User.call(UserBlock, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+  User.call(UserBlock, "local_zero", MedVar{}, {temp(1)}, 0);
+  User.ret(UserBlock, {});
+
+  auto Fs = audit({User.F, Local.F});
+  for (const Finding &F : Fs)
+    EXPECT_FALSE(F.Class == VulnClass::HeapLeak && F.FuncEntry == User.F.Entry)
+        << F.Detail;
+}
+
 TEST(AllocLifetime, FreedAllocationIsNotReturnedAsOwnedHeap) {
   FB Wrap("released_factory", 0x200);
   int w0 = Wrap.block();
@@ -1946,6 +2689,114 @@ TEST(AllocLifetime, NestedWrapperAllocationLeak) {
     if (F.Class == VulnClass::HeapLeak && F.FuncEntry == 0x100)
       UserLeak = true;
   EXPECT_TRUE(UserLeak);
+}
+
+TEST(AllocLifetime, DeepWrapperAllocationLeakReachesTopLevelCaller) {
+  constexpr int kWrapperDepth = 40;
+  constexpr va_t kUserEntry = 0x100;
+  constexpr va_t kFirstWrapperEntry = 0x200;
+
+  std::vector<MedFunc> Funcs;
+  FB User("user", kUserEntry);
+  int UserBlock = User.block();
+  User.call(UserBlock, "wrapper_0", temp(9), {MedVar::makeConst(16, 8)},
+            kFirstWrapperEntry);
+  User.ret(UserBlock, {});
+  Funcs.push_back(std::move(User.F));
+
+  for (int I = 0; I < kWrapperDepth; ++I) {
+    const va_t Entry = kFirstWrapperEntry + static_cast<va_t>(I) * 0x100;
+    FB Wrapper("wrapper_" + std::to_string(I), Entry);
+    int Block = Wrapper.block();
+    if (I + 1 == kWrapperDepth) {
+      Wrapper.call(Block, "malloc", temp(1), {MedVar::makeConst(16, 8)});
+    } else {
+      const va_t CalleeEntry = Entry + 0x100;
+      Wrapper.call(Block, "wrapper_" + std::to_string(I + 1), temp(1),
+                   {MedVar::makeConst(16, 8)}, CalleeEntry);
+    }
+    Wrapper.ret(Block, {temp(1)});
+    Funcs.push_back(std::move(Wrapper.F));
+  }
+
+  auto Fs = audit(std::move(Funcs));
+  bool UserLeak = false;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::HeapLeak && F.FuncEntry == kUserEntry)
+      UserLeak = true;
+  EXPECT_TRUE(UserLeak);
+}
+
+TEST(AllocLifetime, DeepFreeWrapperUseAfterFreeReachesTopLevelCaller) {
+  constexpr int kWrapperDepth = 40;
+  constexpr va_t kUserEntry = 0x100;
+  constexpr va_t kFirstWrapperEntry = 0x200;
+
+  std::vector<MedFunc> Funcs;
+  FB User("user", kUserEntry);
+  int UserBlock = User.block();
+  User.call(UserBlock, "malloc", temp(9), {MedVar::makeConst(16, 8)});
+  User.call(UserBlock, "release_0", MedVar{}, {temp(9)}, kFirstWrapperEntry);
+  User.op(UserBlock, NdOp::LOAD, temp(10), {temp(9)}, 0x480);
+  User.ret(UserBlock, {});
+  Funcs.push_back(std::move(User.F));
+
+  for (int I = 0; I < kWrapperDepth; ++I) {
+    const va_t Entry = kFirstWrapperEntry + static_cast<va_t>(I) * 0x100;
+    FB Wrapper("release_" + std::to_string(I), Entry);
+    Wrapper.F.Params.push_back(temp(0));
+    int Block = Wrapper.block();
+    if (I + 1 == kWrapperDepth) {
+      Wrapper.call(Block, "free", MedVar{}, {temp(0)});
+    } else {
+      Wrapper.call(Block, "release_" + std::to_string(I + 1), MedVar{},
+                   {temp(0)}, Entry + 0x100);
+    }
+    Wrapper.ret(Block, {});
+    Funcs.push_back(std::move(Wrapper.F));
+  }
+
+  auto Fs = audit(std::move(Funcs));
+  bool UserUseAfterFree = false;
+  for (const Finding &F : Fs)
+    if (F.Class == VulnClass::UseAfterFree && F.FuncEntry == kUserEntry)
+      UserUseAfterFree = true;
+  EXPECT_TRUE(UserUseAfterFree);
+}
+
+TEST(AllocLifetime, DeepEscapeWrapperSuppressesTopLevelLeak) {
+  constexpr int kWrapperDepth = 40;
+  constexpr va_t kUserEntry = 0x100;
+  constexpr va_t kFirstWrapperEntry = 0x200;
+
+  std::vector<MedFunc> Funcs;
+  FB User("user", kUserEntry);
+  int UserBlock = User.block();
+  User.call(UserBlock, "malloc", temp(9), {MedVar::makeConst(16, 8)});
+  User.call(UserBlock, "escape_0", MedVar{}, {temp(9)}, kFirstWrapperEntry);
+  User.ret(UserBlock, {});
+  Funcs.push_back(std::move(User.F));
+
+  for (int I = 0; I < kWrapperDepth; ++I) {
+    const va_t Entry = kFirstWrapperEntry + static_cast<va_t>(I) * 0x100;
+    FB Wrapper("escape_" + std::to_string(I), Entry);
+    Wrapper.F.Params.push_back(temp(0));
+    int Block = Wrapper.block();
+    if (I + 1 == kWrapperDepth) {
+      Wrapper.op(Block, NdOp::STORE, MedVar{},
+                 {MedVar::makeConst(0x8000, 8), temp(0)});
+    } else {
+      Wrapper.call(Block, "escape_" + std::to_string(I + 1), MedVar{},
+                   {temp(0)}, Entry + 0x100);
+    }
+    Wrapper.ret(Block, {});
+    Funcs.push_back(std::move(Wrapper.F));
+  }
+
+  auto Fs = audit(std::move(Funcs));
+  for (const Finding &F : Fs)
+    EXPECT_FALSE(F.Class == VulnClass::HeapLeak && F.FuncEntry == kUserEntry)
+        << F.Detail;
 }
 
 TEST(AllocLifetime, OutParameterAllocatorStatusIsNotAHeapReturn) {
@@ -2141,6 +2992,25 @@ TEST(AllocLifetime, UnknownCalleeReceivingHandleFailsClosed) {
   ASSERT_NE(Leak, nullptr);
   EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
   EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, UnknownCallBeforeAllocationOnLoopBackedgeFailsClosed) {
+  FB B("f", 0x100);
+  int Loop = B.block();
+  int Exit = B.block();
+  B.call(Loop, "opaque_runtime", MedVar{}, {}, 0x9200, 0x400);
+  B.call(Loop, "malloc", temp(1), {MedVar::makeConst(16, 8)}, 0x9000, 0x408);
+  B.succ(Loop, Loop);
+  B.succ(Loop, Exit);
+  B.ret(Exit, {});
+
+  auto Fs = audit({B.F});
+  const Finding *Leak = find(Fs, VulnClass::HeapLeak);
+  ASSERT_NE(Leak, nullptr);
+  EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+  EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+  EXPECT_EQ(Leak->Detail,
+            "heap lifetime depends on a call with unrecovered arguments");
 }
 
 TEST(AllocLifetime, MissingFreeArgumentFailsClosed) {

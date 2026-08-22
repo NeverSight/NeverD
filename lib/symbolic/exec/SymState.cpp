@@ -260,10 +260,9 @@ SymRef SymState::load(SymRef Addr, uint16_t Bytes) {
   assert(Bytes > 0);
 
   Location Where = locate(Addr);
-  if (!Where.Base.isValid())
-    return readBank(AbsoluteMemory, Where.Offset, Bytes);
-
-  SymRef Value = readBank(bankFor(Where), Where.Offset, Bytes);
+  SymRef Value = !Where.Base.isValid()
+                     ? readBank(AbsoluteMemory, Where.Offset, Bytes)
+                     : readBank(bankFor(Where), Where.Offset, Bytes);
   // Keep what it was reading.  The value is only a name, so without this the
   // address is lost exactly when it becomes the interesting part.
   recordLoadOrigin(Value, LoadOrigin{Addr, Bytes});

@@ -10,6 +10,9 @@
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
 
+#include <array>
+#include <optional>
+
 using namespace neverd;
 using namespace neverd::safety;
 
@@ -63,53 +66,85 @@ std::string importNameAt(const BinaryImage &Img, va_t Addr) {
 
 ResolvedIdentity resolveIdentity(const AnalysisInput &In, va_t CalleeAddr,
                                  llvm::StringRef StatedName, bool IsIndirect) {
-  if (In.Renames && CalleeAddr) {
-    if (auto It = In.Renames->find(CalleeAddr); It != In.Renames->end())
-      return {It->second, NameSource::Rename};
+  const va_t CanonicalAddr =
+      In.Img ? normalizeCodeAddress(CalleeAddr, In.Img->Arch, In.Img->Mode)
+             : CalleeAddr;
+  const std::array<va_t, 2> IdentityAddrs = {CalleeAddr, CanonicalAddr};
+  // Address zero is a valid entry in relocatable images, but an unresolved
+  // indirect call also uses zero as its sentinel.  A direct call whose only
+  // stated identity is the synthesized address name is the occurrence that
+  // can safely consult address-keyed identity sources.  A named placeholder
+  // relocation and every unresolved indirect call stay name-only.
+  const bool HasAddressIdentity =
+      CalleeAddr != 0 || (!IsIndirect && isSynthesizedFuncName(StatedName));
+  const size_t NumIdentityAddrs =
+      HasAddressIdentity ? (CanonicalAddr == CalleeAddr ? 1 : 2) : 0;
+  std::optional<ResolvedIdentity> StatedIdentity;
+
+  if (In.Renames) {
+    for (size_t I = 0; I < NumIdentityAddrs; ++I)
+      if (auto It = In.Renames->find(IdentityAddrs[I]); It != In.Renames->end())
+        return {It->second, NameSource::Rename};
   }
 
   if (In.Img) {
-    if (std::string Name = importNameAt(*In.Img, CalleeAddr); !Name.empty())
-      return {std::move(Name), NameSource::Import};
+    for (size_t I = 0; I < NumIdentityAddrs; ++I)
+      if (std::string Name = importNameAt(*In.Img, IdentityAddrs[I]);
+          !Name.empty())
+        return {std::move(Name), NameSource::Import};
 
-    if (IsIndirect || CalleeAddr == 0) {
+    if (CalleeAddr == 0) {
       const std::string Norm = SinkCatalog::normalize(StatedName);
       if (!Norm.empty())
         for (const Import &Imp : In.Img->Imports)
           if (SinkCatalog::normalize(Imp.Name) == Norm)
             return {Imp.Name, NameSource::Import};
     }
+
+    for (size_t I = 0; I < NumIdentityAddrs; ++I)
+      if (const Export *Exp = In.Img->findExportAt(IdentityAddrs[I]);
+          Exp && !Exp->Name.empty() && !isSynthesizedFuncName(Exp->Name))
+        return {Exp->Name, NameSource::Export};
+    for (size_t I = 0; I < NumIdentityAddrs; ++I)
+      if (const Symbol *Sym = In.Img->findSymbolAt(IdentityAddrs[I]);
+          Sym && !Sym->Name.empty() && !isSynthesizedFuncName(Sym->Name)) {
+        StatedIdentity = ResolvedIdentity{Sym->Name, NameSource::Symbol};
+        break;
+      }
   }
 
-  if (In.Dbg && CalleeAddr) {
-    if (auto Fn = In.Dbg->resolveFunction(CalleeAddr);
-        Fn && !Fn->Name.empty() && !isSynthesizedFuncName(Fn->Name)) {
-      switch (In.DebugKind) {
-      case DebugInfoKind::PDB:
-        return {Fn->Name, NameSource::Pdb};
-      case DebugInfoKind::DWARF:
-        return {Fn->Name, NameSource::Dwarf};
-      case DebugInfoKind::Map:
-        return {Fn->Name, NameSource::Map};
-      case DebugInfoKind::None:
-        break;
+  if (!StatedName.empty() && !isSynthesizedFuncName(StatedName))
+    if (!StatedIdentity)
+      StatedIdentity = ResolvedIdentity{StatedName.str(), NameSource::Symbol};
+
+  if (In.Dbg) {
+    for (size_t I = 0; I < NumIdentityAddrs; ++I) {
+      if (auto Fn = In.Dbg->resolveFunction(IdentityAddrs[I]);
+          Fn && !Fn->Name.empty() && !isSynthesizedFuncName(Fn->Name)) {
+        if (StatedIdentity && StatedIdentity->Name != Fn->Name)
+          return *StatedIdentity;
+        switch (In.DebugKind) {
+        case DebugInfoKind::PDB:
+          return {Fn->Name, NameSource::Pdb};
+        case DebugInfoKind::DWARF:
+          return {Fn->Name, NameSource::Dwarf};
+        case DebugInfoKind::Map:
+          return {Fn->Name, NameSource::Map};
+        case DebugInfoKind::None:
+          break;
+        }
       }
     }
   }
 
-  if (In.Img && CalleeAddr) {
-    if (const Export *Exp = In.Img->findExportAt(CalleeAddr);
-        Exp && !Exp->Name.empty() && !isSynthesizedFuncName(Exp->Name))
-      return {Exp->Name, NameSource::Export};
-    if (const Symbol *Sym = In.Img->findSymbolAt(CalleeAddr);
-        Sym && !Sym->Name.empty() && !isSynthesizedFuncName(Sym->Name))
-      return {Sym->Name, NameSource::Symbol};
-  }
+  if (StatedIdentity)
+    return *StatedIdentity;
 
-  if (In.SignatureNames && CalleeAddr) {
-    if (auto It = In.SignatureNames->find(CalleeAddr);
-        It != In.SignatureNames->end() && !It->second.empty())
-      return {It->second, NameSource::Sig};
+  if (In.SignatureNames) {
+    for (size_t I = 0; I < NumIdentityAddrs; ++I)
+      if (auto It = In.SignatureNames->find(IdentityAddrs[I]);
+          It != In.SignatureNames->end() && !It->second.empty())
+        return {It->second, NameSource::Sig};
   }
 
   return {StatedName.str(), isSynthesizedFuncName(StatedName)

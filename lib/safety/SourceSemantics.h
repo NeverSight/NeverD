@@ -7,6 +7,7 @@
 #ifndef NEVERD_LIB_SAFETY_SOURCESEMANTICS_H
 #define NEVERD_LIB_SAFETY_SOURCESEMANTICS_H
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImageModel.h"
@@ -34,6 +35,8 @@ enum class FormattedSourceKind : uint8_t {
 struct FormattedOutput {
   int ArgIndex = -1;
   uint32_t RequiredAssignments = 0;
+  uint16_t Bytes = 0;
+  bool AssignmentExecutionObservable = true;
 };
 
 struct BoundedTextOutput {
@@ -71,20 +74,52 @@ formattedSourceName(llvm::StringRef StatedName) {
   return std::nullopt;
 }
 
+inline std::optional<uint64_t> canonicalConstantValue(const MedVar &Value) {
+  if (!Value.isConst() || Value.Size == 0 || Value.Size > sizeof(uint64_t))
+    return std::nullopt;
+  const uint32_t BitWidth = uint32_t(Value.Size) * 8;
+  if (BitWidth >= 64)
+    return Value.ConstVal;
+  return Value.ConstVal & ((uint64_t(1) << BitWidth) - 1);
+}
+
 inline std::optional<std::string> readMappedCString(const BinaryImage *Img,
                                                     const MedVar &Address) {
   constexpr size_t MaxFormatBytes = 4096;
-  if (!Img || !Address.isConst() ||
-      (Address.ConstVal == 0 && !isExactAddressProvenance(Address.Provenance)))
+  if (!Img)
     return std::nullopt;
-  const Segment *Seg = Img->getSegmentFor(Address.ConstVal);
-  if (!Seg || !Seg->isReadable() || Address.ConstVal < Seg->VA)
+  const uint16_t PointerBytes = getTargetRegInfo(Img->Arch).PointerSize;
+  if (PointerBytes == 0 || Address.Size != PointerBytes)
     return std::nullopt;
-  const uint64_t RawOffset = Address.ConstVal - Seg->VA;
+  const std::optional<uint64_t> AddressValue = canonicalConstantValue(Address);
+  if (!AddressValue ||
+      (*AddressValue == 0 && !isExactAddressProvenance(Address.Provenance)))
+    return std::nullopt;
+  const bool HasExactOwner = isExactAddressProvenance(Address.Provenance) &&
+                             Address.AddressOwnerVA != InvalidVA;
+  const Segment *Seg = Img->getSegmentFor(HasExactOwner ? Address.AddressOwnerVA
+                                                        : *AddressValue);
+  if (!Seg || !Seg->isReadable() || *AddressValue < Seg->VA)
+    return std::nullopt;
+  uint64_t OwnerAvailable = std::numeric_limits<uint64_t>::max();
+  if (HasExactOwner) {
+    if (!Seg->contains(*AddressValue))
+      return std::nullopt;
+    if (const Section *Owner = Img->getSectionFor(Address.AddressOwnerVA)) {
+      if (!Owner->isReadable() || !Owner->contains(*AddressValue))
+        return std::nullopt;
+      OwnerAvailable = Owner->Size - (*AddressValue - Owner->VA);
+    } else if (Img->segmentHasReadableSectionMetadata(*Seg)) {
+      return std::nullopt;
+    }
+  }
+  const uint64_t RawOffset = *AddressValue - Seg->VA;
   if (RawOffset >= Seg->Data.size())
     return std::nullopt;
   const size_t Offset = static_cast<size_t>(RawOffset);
-  const size_t Available = std::min(MaxFormatBytes, Seg->Data.size() - Offset);
+  const uint64_t SegmentAvailable = Seg->Data.size() - Offset;
+  const size_t Available = static_cast<size_t>(std::min<uint64_t>(
+      MaxFormatBytes, std::min(OwnerAvailable, SegmentAvailable)));
   const uint8_t *Begin = Seg->Data.data() + Offset;
   const uint8_t *End = std::find(Begin, Begin + Available, uint8_t(0));
   if (End == Begin + Available)
@@ -98,24 +133,29 @@ inline bool isDigit(char C) {
 }
 
 inline std::optional<ParsedScanfOutputs>
-parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
-                  size_t ArgCount) {
+parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount, size_t ArgCount,
+                  uint16_t PointerBytes, uint16_t LongBytes,
+                  uint16_t WideCharBytes) {
   if (FixedCount == 0 || FixedCount > ArgCount)
     return std::nullopt;
   int NextArg = static_cast<int>(FixedCount);
   uint32_t AssignmentCount = 0;
   bool InputExtentMayVary = false;
+  bool AssignmentCountProvesNextDirective = false;
   ParsedScanfOutputs Outputs;
   for (size_t I = 0; I < Format.size(); ++I) {
     if (Format[I] != '%') {
       InputExtentMayVary |=
           std::isspace(static_cast<unsigned char>(Format[I])) != 0;
+      AssignmentCountProvesNextDirective = false;
       continue;
     }
     if (++I >= Format.size())
       return std::nullopt;
-    if (Format[I] == '%')
+    if (Format[I] == '%') {
+      AssignmentCountProvesNextDirective = false;
       continue;
+    }
 
     size_t PositionalEnd = I;
     while (PositionalEnd < Format.size() && isDigit(Format[PositionalEnd]))
@@ -143,14 +183,30 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
     if (I >= Format.size() || Format[I] == 'm' || (HasWidth && Width == 0))
       return std::nullopt;
 
-    bool HasLength = false;
+    enum class LengthKind : uint8_t {
+      None,
+      Char,
+      Short,
+      Long,
+      LongLong,
+      IntMax,
+      Size,
+      PtrDiff,
+      LongDouble,
+    } Length = LengthKind::None;
     if (Format[I] == 'h' || Format[I] == 'l') {
-      const char Length = Format[I++];
-      HasLength = true;
-      if (I < Format.size() && Format[I] == Length)
+      const char LengthChar = Format[I++];
+      if (I < Format.size() && Format[I] == LengthChar) {
         ++I;
+        Length = LengthChar == 'h' ? LengthKind::Char : LengthKind::LongLong;
+      } else {
+        Length = LengthChar == 'h' ? LengthKind::Short : LengthKind::Long;
+      }
     } else if (llvm::StringRef("jztL").contains(Format[I])) {
-      HasLength = true;
+      Length = Format[I] == 'j'   ? LengthKind::IntMax
+               : Format[I] == 'z' ? LengthKind::Size
+               : Format[I] == 't' ? LengthKind::PtrDiff
+                                  : LengthKind::LongDouble;
       ++I;
     }
     if (I >= Format.size())
@@ -176,28 +232,75 @@ parseScanfOutputs(llvm::StringRef Format, unsigned FixedCount,
         Conversion != 'c' && Conversion != 'n';
     if (Suppressed) {
       InputExtentMayVary |= ConversionHasVariableExtent;
+      AssignmentCountProvesNextDirective = false;
       continue;
     }
     if (NextArg < 0 || static_cast<size_t>(NextArg) >= ArgCount)
       return std::nullopt;
     if (Conversion != 'n')
       ++AssignmentCount;
+    auto scalarBytes = [&]() -> uint16_t {
+      if (Conversion == 'p')
+        return PointerBytes;
+      if (llvm::StringRef("aAeEfFgG").contains(Conversion)) {
+        if (Length == LengthKind::None)
+          return 4;
+        if (Length == LengthKind::Long)
+          return 8;
+        return 0;
+      }
+      switch (Length) {
+      case LengthKind::None:
+        return 4;
+      case LengthKind::Char:
+        return 1;
+      case LengthKind::Short:
+        return 2;
+      case LengthKind::Long:
+        return LongBytes;
+      case LengthKind::LongLong:
+      case LengthKind::IntMax:
+        return 8;
+      case LengthKind::Size:
+      case LengthKind::PtrDiff:
+        return PointerBytes;
+      case LengthKind::LongDouble:
+        return 0;
+      }
+      return 0;
+    };
     if (Conversion == 'n' && InputExtentMayVary)
-      Outputs.ScalarArgs.push_back({NextArg, AssignmentCount});
-    else if (Conversion == 'c')
+      Outputs.ScalarArgs.push_back({NextArg, AssignmentCount, scalarBytes(),
+                                    AssignmentCountProvesNextDirective});
+    else if (Conversion == 'c') {
       Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
-    else if ((Conversion == 's' || IsScanSet) && HasLength)
+      uint64_t UnitBytes = 0;
+      if (Length == LengthKind::None)
+        UnitBytes = 1;
+      else if (Length == LengthKind::Long)
+        UnitBytes = WideCharBytes;
+      const uint64_t Characters = HasWidth ? Width : 1;
+      if (UnitBytes != 0 &&
+          Characters <= std::numeric_limits<uint16_t>::max() / UnitBytes)
+        Outputs.ScalarArgs.push_back(
+            {NextArg, AssignmentCount,
+             static_cast<uint16_t>(Characters * UnitBytes)});
+    } else if ((Conversion == 's' || IsScanSet) && Length != LengthKind::None)
       Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
-    else if ((Conversion == 's' || IsScanSet) && !HasWidth && !HasLength)
+    else if ((Conversion == 's' || IsScanSet) && !HasWidth &&
+             Length == LengthKind::None)
       Outputs.UnboundedTextArgs.push_back({NextArg, AssignmentCount});
-    else if ((Conversion == 's' || IsScanSet) && HasWidth && !HasLength) {
+    else if ((Conversion == 's' || IsScanSet) && HasWidth &&
+             Length == LengthKind::None) {
       if (Width == std::numeric_limits<uint64_t>::max())
         return std::nullopt;
       Outputs.BoundedTextArgs.push_back({NextArg, AssignmentCount, Width});
     } else if (Conversion != 's' && Conversion != 'n' && !IsScanSet)
-      Outputs.ScalarArgs.push_back({NextArg, AssignmentCount});
+      Outputs.ScalarArgs.push_back({NextArg, AssignmentCount, scalarBytes()});
     ++NextArg;
     InputExtentMayVary |= ConversionHasVariableExtent;
+    if (Conversion != 'n')
+      AssignmentCountProvesNextDirective = true;
   }
   return Outputs;
 }
@@ -217,8 +320,19 @@ recoverFormattedSourceOutputs(const BinaryImage *Img,
   std::optional<std::string> Format = readMappedCString(Img, Args[FormatArg]);
   if (!Format)
     return std::nullopt;
-  std::optional<ParsedScanfOutputs> Outputs =
-      parseScanfOutputs(*Format, FixedCount, Args.size());
+  const uint16_t PointerBytes = getTargetRegInfo(Img->Arch).PointerSize;
+  if (PointerBytes == 0 || Args.front().Size != PointerBytes)
+    return std::nullopt;
+  const uint16_t LongBytes =
+      Img && Img->Format == BinaryFormat::COFF ? uint16_t(4) : PointerBytes;
+  const uint16_t WideCharBytes =
+      !Img                                ? uint16_t(0)
+      : Img->Format == BinaryFormat::COFF ? uint16_t(2)
+      : Img->Format == BinaryFormat::ELF || Img->Format == BinaryFormat::MachO
+          ? uint16_t(4)
+          : uint16_t(0);
+  std::optional<ParsedScanfOutputs> Outputs = parseScanfOutputs(
+      *Format, FixedCount, Args.size(), PointerBytes, LongBytes, WideCharBytes);
   if (!Outputs)
     return std::nullopt;
   FormattedSourceOutputs Result;

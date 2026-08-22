@@ -43,10 +43,13 @@ safety::SafetyBudgets readBudgets(const neverd_safety_options *In) {
   return B;
 }
 
+using PathMember = const char *neverd_safety_options::*;
+
 const char *readPath(const neverd_safety_options *In, size_t End,
-                     const char *Value) {
+                     PathMember Field) {
   if (!In || !reaches(In->struct_size, End))
     return nullptr;
+  const char *Value = In->*Field;
   return (Value && Value[0]) ? Value : nullptr;
 }
 
@@ -69,12 +72,12 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
   safety::SinkCatalog Cat = safety::SinkCatalog::defaults();
   if (const char *P =
           readPath(Options, FIELD_END(neverd_safety_options, sinks_path),
-                   Options ? Options->sinks_path : nullptr))
+                   &neverd_safety_options::sinks_path))
     if (llvm::Error E = Cat.mergeSinksFromFile(P))
       return errorReport(llvm::toString(std::move(E)));
   if (const char *P =
           readPath(Options, FIELD_END(neverd_safety_options, sources_path),
-                   Options ? Options->sources_path : nullptr))
+                   &neverd_safety_options::sources_path))
     if (llvm::Error E = Cat.mergeSourcesFromFile(P))
       return errorReport(llvm::toString(std::move(E)));
 

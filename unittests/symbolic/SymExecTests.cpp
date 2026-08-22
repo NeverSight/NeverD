@@ -137,6 +137,18 @@ TEST(SymState, MemoryRemembersWhatWasStoredAtAKnownAddress) {
   EXPECT_EQ(Ctx.constValue(Middle).getZExtValue(), 0xADBEu);
 }
 
+TEST(SymState, AbsoluteLoadRetainsItsAddressOrigin) {
+  SymContext Ctx;
+  SymState State(Ctx);
+  SymRef Addr = Ctx.mkConst(64, 0x401000);
+
+  SymRef Loaded = State.load(Addr, 8);
+  const SymState::LoadOrigin *Origin = State.loadOrigin(Loaded);
+  ASSERT_NE(Origin, nullptr);
+  EXPECT_EQ(Origin->Address, Addr);
+  EXPECT_EQ(Origin->Bytes, 8u);
+}
+
 TEST(SymState, AStoreThroughAnUnknownAddressForgetsEverything) {
   // A store through a pointer may have landed on this number, and nothing here
   // can say it did not.  Giving up the numbers is the only answer that is

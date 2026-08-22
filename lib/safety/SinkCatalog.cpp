@@ -172,12 +172,14 @@ SinkEntry stackAllocSink(const char *Name, int SizeArg, unsigned Sev) {
   return E;
 }
 
-SinkEntry freeSink(const char *Name, int Handle, unsigned Sev) {
+SinkEntry freeSink(const char *Name, int Handle, unsigned Sev,
+                   bool MayFail = false) {
   SinkEntry E;
   E.Name = Name;
   E.Class = VulnClass::Unknown;
   E.Kind = SinkKind::Free;
   E.HandleArg = Handle;
+  E.ReleaseMayFail = MayFail;
   E.Severity = Sev;
   return E;
 }
@@ -209,6 +211,8 @@ SinkCatalog SinkCatalog::defaults() {
   C.addSink(stackAllocSink(#NAME, SIZE, SEV));
 #define SAFETY_FREE_SINK(NAME, HANDLE, SEV)                                    \
   C.addSink(freeSink(#NAME, HANDLE, SEV));
+#define SAFETY_FALLIBLE_FREE_SINK(NAME, HANDLE, SEV)                           \
+  C.addSink(freeSink(#NAME, HANDLE, SEV, true));
 #define SAFETY_REALLOC_SINK(NAME, HANDLE, LEN, SEV)                            \
   C.addSink(reallocSink(#NAME, HANDLE, LEN, SEV));
 #define SAFETY_SINK_ALIAS(NAME, ALIAS) C.addSinkAlias(#NAME, ALIAS);
@@ -341,11 +345,23 @@ llvm::Error SinkCatalog::mergeSinksFromFile(llvm::StringRef Path) {
             "sink field 'unbounded' is not a boolean");
       E.UnboundedWrite = *Value;
     }
+    if (const llvm::json::Value *Raw = O->get("release_may_fail")) {
+      std::optional<bool> Value = Raw->getAsBoolean();
+      if (!Value)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "sink field 'release_may_fail' is not a boolean");
+      E.ReleaseMayFail = *Value;
+    }
     if (E.UnboundedWrite && (E.Kind != SinkKind::Copy || E.DstArg < 0 ||
                              E.SrcArg >= 0 || E.LenArg >= 0))
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
           "an unbounded sink must be a destination-only copy");
+    if (E.ReleaseMayFail && E.Kind != SinkKind::Free)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "only a release sink may have 'release_may_fail'");
     llvm::Expected<unsigned> Severity = severityFieldOr(*O, 50);
     if (!Severity)
       return Severity.takeError();

@@ -113,6 +113,46 @@ TEST(SinkScanner, IndirectCallMatchesImportByName) {
   EXPECT_EQ(Sites[0].Source, NameSource::Import);
 }
 
+TEST(SinkScanner, DirectZeroEntryUsesOccurrenceIdentityButIndirectZeroDoesNot) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  std::map<va_t, std::string> Renames{{0, "memcpy"}};
+
+  std::vector<MedFunc> DirectFuncs;
+  DirectFuncs.push_back(makeCallFunc(0x100, "direct", 0, "sub_0"));
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &DirectFuncs;
+  In.Renames = &Renames;
+
+  std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_FALSE(Sites[0].IsIndirect);
+  EXPECT_EQ(Sites[0].Source, NameSource::Rename);
+
+  In.Renames = nullptr;
+  std::unordered_map<va_t, std::string> Signatures{{0, "memcpy"}};
+  In.SignatureNames = &Signatures;
+  Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].Source, NameSource::Sig);
+
+  std::vector<MedFunc> IndirectFuncs;
+  IndirectFuncs.push_back(
+      makeCallFunc(0x100, "indirect", 0, "sub_0", /*Indirect=*/true));
+  In.MedFuncs = &IndirectFuncs;
+  In.SignatureNames = &Signatures;
+  EXPECT_TRUE(scanSinks(In, SinkCatalog::defaults()).empty());
+
+  std::vector<MedFunc> PlaceholderFuncs;
+  PlaceholderFuncs.push_back(
+      makeCallFunc(0x100, "placeholder", 0, "safe_external"));
+  In.MedFuncs = &PlaceholderFuncs;
+  In.SignatureNames = nullptr;
+  In.Renames = &Renames;
+  EXPECT_TRUE(scanSinks(In, SinkCatalog::defaults()).empty());
+}
+
 TEST(SinkScanner, ImportAddressRecoversSyntheticCalleeName) {
   std::vector<MedFunc> Funcs;
   Funcs.push_back(makeCallFunc(0x100, "f", 0x2000, "sub_2000"));
@@ -144,6 +184,23 @@ TEST(SinkScanner, DirectInternalCallDoesNotBorrowUnrelatedImportIdentity) {
   In.Img = &Img;
 
   EXPECT_EQ(resolveCallName(In, Func.CallInfos[0]), "_memcpy");
+}
+
+TEST(SinkScanner, IndirectInternalCallDoesNotBorrowUnrelatedImportIdentity) {
+  BinaryImage Img;
+  Img.Imports.push_back({"runtime", "memcpy", 0, 0x2000});
+
+  std::vector<MedFunc> Funcs;
+  Funcs.push_back(
+      makeCallFunc(0x100, "f", 0x3000, "_memcpy", /*Indirect=*/true));
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &Funcs;
+
+  const std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].StatedName, "_memcpy");
+  EXPECT_EQ(Sites[0].Source, NameSource::Symbol);
 }
 
 TEST(SinkScanner, AArch64ELFPLTVeneerRecoversImportIdentity) {
@@ -204,6 +261,63 @@ TEST(SinkScanner, ImportBeatsDebugForCalleeName) {
   EXPECT_EQ(Sites[0].Source, NameSource::Import);
 }
 
+TEST(SinkScanner, StatedImageIdentityBeatsDebugCompanions) {
+  constexpr va_t CalleeVA = 0x5000;
+  std::vector<MedFunc> Funcs;
+  Funcs.push_back(makeCallFunc(0x100, "f", CalleeVA, "sub_5000"));
+
+  BinaryImage Img;
+  Export Exp;
+  Exp.Name = "memcpy";
+  Exp.Addr = CalleeVA;
+  Img.Exports.push_back(std::move(Exp));
+  OneFunctionDebug Dbg(CalleeVA, "free");
+
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &Funcs;
+  In.Dbg = &Dbg;
+  In.DebugKind = DebugInfoKind::DWARF;
+
+  std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].StatedName, "memcpy");
+  EXPECT_EQ(Sites[0].Source, NameSource::Export);
+
+  Img.Exports.clear();
+  Symbol Sym = Symbol::makeFunc(CalleeVA, 4);
+  Sym.Name = "memcpy";
+  Img.Symbols.push_back(std::move(Sym));
+  Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].StatedName, "memcpy");
+  EXPECT_EQ(Sites[0].Source, NameSource::Symbol);
+}
+
+TEST(SinkScanner, NonSyntheticStatedNameBeatsDebugAndSignatures) {
+  constexpr va_t CalleeVA = 0x5000;
+  MedFunc Func = makeCallFunc(0x100, "f", CalleeVA, "safe_helper");
+  OneFunctionDebug Dbg(CalleeVA, "memcpy");
+  std::unordered_map<va_t, std::string> SignatureNames{{CalleeVA, "memcpy"}};
+
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.Dbg = &Dbg;
+  In.DebugKind = DebugInfoKind::DWARF;
+  In.SignatureNames = &SignatureNames;
+
+  EXPECT_EQ(resolveCallName(In, Func.CallInfos[0]), "safe_helper");
+  EXPECT_EQ(classifyNameSource(In, CalleeVA, "safe_helper", false),
+            NameSource::Symbol);
+
+  In.Dbg = nullptr;
+  In.DebugKind = DebugInfoKind::None;
+  EXPECT_EQ(resolveCallName(In, Func.CallInfos[0]), "safe_helper");
+  EXPECT_EQ(classifyNameSource(In, CalleeVA, "safe_helper", false),
+            NameSource::Symbol);
+}
+
 TEST(SinkScanner, DebugKindSelectsNameSource) {
   BinaryImage Img;
   std::vector<MedFunc> Funcs;
@@ -226,6 +340,29 @@ TEST(SinkScanner, DebugKindSelectsNameSource) {
   EXPECT_EQ(scanSinks(In, SinkCatalog::defaults())[0].Source, NameSource::Map);
 }
 
+TEST(SinkScanner, PublishedDebugSymbolRetainsItsCompanionSource) {
+  constexpr va_t CalleeVA = 0x5000;
+  BinaryImage Img;
+  Symbol Published = Symbol::makeFunc(CalleeVA, 4);
+  Published.Name = "memcpy";
+  Img.Symbols.push_back(std::move(Published));
+
+  std::vector<MedFunc> Funcs;
+  Funcs.push_back(makeCallFunc(0x100, "f", CalleeVA, "memcpy"));
+  OneFunctionDebug Dbg(CalleeVA, "memcpy");
+
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &Funcs;
+  In.Dbg = &Dbg;
+  In.DebugKind = DebugInfoKind::DWARF;
+
+  const std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].StatedName, "memcpy");
+  EXPECT_EQ(Sites[0].Source, NameSource::Dwarf);
+}
+
 TEST(SinkScanner, RenameIsStrongest) {
   BinaryImage Img;
   Import Imp;
@@ -244,6 +381,66 @@ TEST(SinkScanner, RenameIsStrongest) {
 
   EXPECT_EQ(scanSinks(In, SinkCatalog::defaults())[0].Source,
             NameSource::Rename);
+}
+
+TEST(SinkScanner, ThumbCallUsesCanonicalEntryForCodeIdentitySources) {
+  constexpr va_t CanonicalEntry = 0x2000;
+  constexpr va_t ThumbTarget = CanonicalEntry | 1;
+
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Mode = InstructionMode::Thumb;
+  std::vector<MedFunc> Funcs;
+  Funcs.push_back(makeCallFunc(0x100, "f", ThumbTarget, "sub_2001"));
+
+  AnalysisInput In;
+  In.Img = &Img;
+  In.MedFuncs = &Funcs;
+
+  std::map<va_t, std::string> Renames{{CanonicalEntry, "memcpy"}};
+  In.Renames = &Renames;
+  std::vector<SinkSite> Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].Source, NameSource::Rename);
+
+  In.Renames = nullptr;
+  OneFunctionDebug Dbg(CanonicalEntry, "memcpy");
+  In.Dbg = &Dbg;
+  In.DebugKind = DebugInfoKind::DWARF;
+  Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].Source, NameSource::Dwarf);
+
+  In.Dbg = nullptr;
+  In.DebugKind = DebugInfoKind::None;
+  Export Exp;
+  Exp.Addr = CanonicalEntry;
+  Exp.Name = "memcpy";
+  Img.Exports.push_back(std::move(Exp));
+  Symbol RawAlias = Symbol::makeFunc(ThumbTarget, 4);
+  RawAlias.Name = "free";
+  Img.Symbols.push_back(std::move(RawAlias));
+  Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].Source, NameSource::Export);
+  EXPECT_EQ(Sites[0].StatedName, "memcpy");
+
+  Img.Exports.clear();
+  Img.Symbols.clear();
+  Symbol Sym = Symbol::makeFunc(CanonicalEntry, 4);
+  Sym.Name = "memcpy";
+  Img.Symbols.push_back(std::move(Sym));
+  Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].Source, NameSource::Symbol);
+
+  Img.Symbols.clear();
+  std::unordered_map<va_t, std::string> SignatureNames{
+      {CanonicalEntry, "memcpy"}};
+  In.SignatureNames = &SignatureNames;
+  Sites = scanSinks(In, SinkCatalog::defaults());
+  ASSERT_EQ(Sites.size(), 1u);
+  EXPECT_EQ(Sites[0].Source, NameSource::Sig);
 }
 
 TEST(SinkScanner, ExportAndSymbolAndSignatureFallbacks) {

@@ -83,7 +83,8 @@ minimumStringDuplicationReadBytes(StringDuplicationKind Kind,
 }
 
 std::optional<uint64_t> unsignedConstant(const MedVar &Value) {
-  if (!Value.isConst() || Value.Size == 0 || Value.Size > sizeof(uint64_t))
+  if (!Value.isConst() || Value.Size == 0 || Value.Size > sizeof(uint64_t) ||
+      isAddressProvenance(Value.Provenance))
     return std::nullopt;
   const unsigned Bits = static_cast<unsigned>(Value.Size) * 8;
   const uint64_t Mask = Bits == 64 ? std::numeric_limits<uint64_t>::max()
@@ -120,7 +121,8 @@ bool mustForwardPointerValue(const MedOp &Op,
   };
   auto isZero = [&](unsigned Input) {
     return Input < Op.NumInputs && Op.Inputs[Input].isConst() &&
-           Op.Inputs[Input].ConstVal == 0;
+           Op.Inputs[Input].ConstVal == 0 &&
+           !isAddressProvenance(Op.Inputs[Input].Provenance);
   };
 
   switch (Op.Opcode) {
@@ -128,16 +130,17 @@ bool mustForwardPointerValue(const MedOp &Op,
   case NdOp::CAST:
   case NdOp::INT_ZEXT:
   case NdOp::INT_SEXT:
-    return aliases(0) && sameSize(0);
+    return Op.NumInputs == 1 && aliases(0) && sameSize(0);
   case NdOp::SUBBYTES:
-    return aliases(0) && sameSize(0) && isZero(1);
+    return Op.NumInputs == 2 && aliases(0) && sameSize(0) && isZero(1);
   case NdOp::INT_ADD:
-    return (aliases(0) && sameSize(0) && isZero(1)) ||
-           (isZero(0) && aliases(1) && sameSize(1));
+    return Op.NumInputs == 2 && ((aliases(0) && sameSize(0) && isZero(1)) ||
+                                 (isZero(0) && aliases(1) && sameSize(1)));
   case NdOp::INT_SUB:
-    return aliases(0) && sameSize(0) && isZero(1);
+    return Op.NumInputs == 2 && aliases(0) && sameSize(0) && isZero(1);
   case NdOp::SELECT:
-    return aliases(1) && sameSize(1) && aliases(2) && sameSize(2);
+    return Op.NumInputs == 3 && aliases(1) && sameSize(1) && aliases(2) &&
+           sameSize(2);
   default:
     return false;
   }
@@ -152,6 +155,7 @@ struct MemModel {
   bool Have = false;
   llvm::DenseMap<ValueKey, std::pair<int, int>> OpDef;
   llvm::DenseMap<ValueKey, std::pair<int, int>> PhiDef;
+  static constexpr unsigned MaxProofSteps = 4096;
 
   MemModel(const MedFunc &Fn, const AnalysisInput &In) : F(Fn) {
     SP = In.StackPointerReg;
@@ -186,26 +190,39 @@ struct MemModel {
   std::optional<int64_t> stackOffsetThroughReloads(const MedVar &V) const {
     llvm::DenseSet<ValueKey> Active;
     std::map<ValueKey, std::optional<int64_t>> Cache;
-    std::function<std::optional<int64_t>(const MedVar &, int)> Resolve =
-        [&](const MedVar &Current, int Depth) -> std::optional<int64_t> {
-      if (std::optional<int64_t> Direct = stackOffset(Current))
-        return Direct;
-      if (Current.isConst() || Depth > 32)
+    unsigned Remaining = MaxProofSteps;
+    bool Incomplete = false;
+    std::function<std::optional<int64_t>(const MedVar &)> Resolve =
+        [&](const MedVar &Current) -> std::optional<int64_t> {
+      if (Current.isConst())
         return std::nullopt;
       const ValueKey Key = keyOf(Current);
       if (auto It = Cache.find(Key); It != Cache.end())
         return It->second;
-      if (!Active.insert(Key).second)
+      if (std::optional<int64_t> Direct = stackOffset(Current)) {
+        Cache[Key] = Direct;
+        return Direct;
+      }
+      if (Remaining == 0 || !Active.insert(Key).second) {
+        Incomplete = true;
         return std::nullopt;
+      }
       struct PopActive {
         llvm::DenseSet<ValueKey> &Set;
         ValueKey Key;
         ~PopActive() { Set.erase(Key); }
       } Guard{Active, Key};
+      --Remaining;
+
+      auto finish = [&](std::optional<int64_t> Result) {
+        if (!Incomplete)
+          Cache[Key] = Result;
+        return Result;
+      };
 
       auto merge = [&](std::optional<int64_t> &Result,
                        const MedVar &Candidate) {
-        std::optional<int64_t> Offset = Resolve(Candidate, Depth + 1);
+        std::optional<int64_t> Offset = Resolve(Candidate);
         if (!Offset || (Result && *Result != *Offset))
           return false;
         Result = Offset;
@@ -216,18 +233,18 @@ struct MemModel {
       if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
         const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
         if (Phi.Args.empty())
-          return Cache[Key] = std::nullopt;
+          return finish(std::nullopt);
         for (const auto &[Pred, Arg] : Phi.Args) {
           (void)Pred;
           if (!merge(Result, Arg))
-            return Cache[Key] = std::nullopt;
+            return finish(std::nullopt);
         }
-        return Cache[Key] = Result;
+        return finish(Result);
       }
 
       auto It = OpDef.find(Key);
       if (It == OpDef.end())
-        return Cache[Key] = std::nullopt;
+        return finish(std::nullopt);
       const MedBlock &Block = F.Blocks[It->second.first];
       const int OpIdx = It->second.second;
       const MedOp &Op = Block.Ops[OpIdx];
@@ -236,29 +253,30 @@ struct MemModel {
       };
       auto isZero = [&](unsigned Input) {
         return Input < Op.NumInputs && Op.Inputs[Input].isConst() &&
-               Op.Inputs[Input].ConstVal == 0;
+               Op.Inputs[Input].ConstVal == 0 &&
+               !isAddressProvenance(Op.Inputs[Input].Provenance);
       };
       switch (Op.Opcode) {
       case NdOp::COPY:
       case NdOp::CAST:
       case NdOp::INT_ZEXT:
       case NdOp::INT_SEXT:
-        if (sameSize(0))
-          Result = Resolve(Op.Inputs[0], Depth + 1);
+        if (Op.NumInputs == 1 && sameSize(0))
+          Result = Resolve(Op.Inputs[0]);
         break;
       case NdOp::SUBBYTES:
-        if (sameSize(0) && isZero(1))
-          Result = Resolve(Op.Inputs[0], Depth + 1);
+        if (Op.NumInputs == 2 && sameSize(0) && isZero(1))
+          Result = Resolve(Op.Inputs[0]);
         break;
       case NdOp::INT_ADD:
-        if (sameSize(0) && isZero(1))
-          Result = Resolve(Op.Inputs[0], Depth + 1);
-        else if (isZero(0) && sameSize(1))
-          Result = Resolve(Op.Inputs[1], Depth + 1);
+        if (Op.NumInputs == 2 && sameSize(0) && isZero(1))
+          Result = Resolve(Op.Inputs[0]);
+        else if (Op.NumInputs == 2 && isZero(0) && sameSize(1))
+          Result = Resolve(Op.Inputs[1]);
         break;
       case NdOp::INT_SUB:
-        if (sameSize(0) && isZero(1))
-          Result = Resolve(Op.Inputs[0], Depth + 1);
+        if (Op.NumInputs == 2 && sameSize(0) && isZero(1))
+          Result = Resolve(Op.Inputs[0]);
         break;
       case NdOp::SELECT:
         if (Op.NumInputs >= 3 && sameSize(1) && sameSize(2) &&
@@ -280,76 +298,100 @@ struct MemModel {
       default:
         break;
       }
-      Cache[Key] = Result;
-      return Result;
+      return finish(Result);
     };
-    return Resolve(V, 0);
+    return Resolve(V);
   }
 
   bool mayBeStackAddressThroughReloads(const MedVar &V) const {
+    llvm::DenseMap<ValueKey, bool> Cache;
     llvm::DenseSet<ValueKey> Active;
+    unsigned Remaining = MaxProofSteps;
+    bool Incomplete = false;
+
     std::function<bool(const MedVar &, int)> MayBe = [&](const MedVar &Current,
                                                          int Depth) {
-      if (stackOffsetThroughReloads(Current))
-        return true;
-      if (Current.isConst() || Depth > 32)
+      if (!Have || Current.isConst())
         return false;
       const ValueKey Key = keyOf(Current);
-      if (!Active.insert(Key).second)
-        return false;
+      if (auto It = Cache.find(Key); It != Cache.end())
+        return It->second;
+      if (stackOffset(Current)) {
+        Cache[Key] = true;
+        return true;
+      }
+      if (Depth > 64 || Remaining == 0) {
+        Incomplete = true;
+        return true;
+      }
+      if (!Active.insert(Key).second) {
+        Incomplete = true;
+        return true;
+      }
       struct PopActive {
         llvm::DenseSet<ValueKey> &Set;
         ValueKey Key;
         ~PopActive() { Set.erase(Key); }
       } Guard{Active, Key};
+      --Remaining;
 
+      bool Result = false;
       if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
         const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
         for (const auto &[Pred, Arg] : Phi.Args) {
           (void)Pred;
-          if (MayBe(Arg, Depth + 1))
-            return true;
+          if (MayBe(Arg, Depth + 1)) {
+            Result = true;
+            break;
+          }
         }
-        return false;
+      } else if (auto It = OpDef.find(Key); It != OpDef.end()) {
+        const MedBlock &Block = F.Blocks[It->second.first];
+        const int OpIdx = It->second.second;
+        const MedOp &Op = Block.Ops[OpIdx];
+        if (Op.Opcode == NdOp::LOAD) {
+          detail::ReachingStackValues Reaching = reachingLoad(Block, OpIdx, Op);
+          if (!Reaching.Complete) {
+            Incomplete = true;
+            Result = true;
+          } else {
+            for (const MedVar &Stored : Reaching.Values)
+              if (MayBe(Stored, Depth + 1)) {
+                Result = true;
+                break;
+              }
+          }
+        } else {
+          unsigned Begin = 0;
+          unsigned End = Op.NumInputs;
+          switch (Op.Opcode) {
+          case NdOp::COPY:
+          case NdOp::CAST:
+          case NdOp::INT_ZEXT:
+          case NdOp::INT_SEXT:
+          case NdOp::SUBBYTES:
+            End = std::min<unsigned>(End, 1);
+            break;
+          case NdOp::SELECT:
+            Begin = std::min<unsigned>(1, End);
+            break;
+          case NdOp::INT_ADD:
+          case NdOp::INT_SUB:
+            break;
+          default:
+            End = 0;
+            break;
+          }
+          for (unsigned I = Begin; I < End; ++I)
+            if (MayBe(Op.Inputs[I], Depth + 1)) {
+              Result = true;
+              break;
+            }
+        }
       }
-
-      auto It = OpDef.find(Key);
-      if (It == OpDef.end())
-        return false;
-      const MedBlock &Block = F.Blocks[It->second.first];
-      const int OpIdx = It->second.second;
-      const MedOp &Op = Block.Ops[OpIdx];
-      if (Op.Opcode == NdOp::LOAD) {
-        detail::ReachingStackValues Reaching = reachingLoad(Block, OpIdx, Op);
-        for (const MedVar &Stored : Reaching.Values)
-          if (MayBe(Stored, Depth + 1))
-            return true;
-        return false;
-      }
-
-      unsigned Begin = 0;
-      unsigned End = Op.NumInputs;
-      switch (Op.Opcode) {
-      case NdOp::COPY:
-      case NdOp::CAST:
-      case NdOp::INT_ZEXT:
-      case NdOp::INT_SEXT:
-      case NdOp::SUBBYTES:
-        End = std::min<unsigned>(End, 1);
-        break;
-      case NdOp::SELECT:
-        Begin = std::min<unsigned>(1, End);
-        break;
-      case NdOp::INT_ADD:
-      case NdOp::INT_SUB:
-        break;
-      default:
-        return false;
-      }
-      for (unsigned I = Begin; I < End; ++I)
-        if (MayBe(Op.Inputs[I], Depth + 1))
-          return true;
-      return false;
+      if (!Incomplete)
+        Cache[Key] = Result;
+      return Result;
     };
     return MayBe(V, 0);
   }
@@ -369,8 +411,10 @@ struct MemModel {
     switch (Op->Opcode) {
     case NdOp::COPY:
     case NdOp::CAST:
-      return Op->NumInputs >= 1 ? stackOffsetRec(Op->Inputs[0], Depth + 1, Seen)
-                                : std::nullopt;
+      return Op->NumInputs == 1 && Op->Output.Size > 0 &&
+                     Op->Output.Size == Op->Inputs[0].Size
+                 ? stackOffsetRec(Op->Inputs[0], Depth + 1, Seen)
+                 : std::nullopt;
     case NdOp::INT_ADD:
     case NdOp::INT_SUB:
       return affine(*Op, Depth, Seen);
@@ -381,14 +425,20 @@ struct MemModel {
 
   std::optional<int64_t> affine(const MedOp &Op, int Depth,
                                 llvm::DenseSet<ValueKey> &Seen) const {
-    if (Op.NumInputs < 2)
+    if (Op.NumInputs != 2 || Op.Output.Size == 0)
       return std::nullopt;
     const bool Sub = Op.Opcode == NdOp::INT_SUB;
     if (Op.Inputs[1].isConst()) {
+      if (Op.Inputs[0].Size != Op.Output.Size ||
+          Op.Inputs[1].Size > Op.Output.Size)
+        return std::nullopt;
       auto Delta = detail::signedStackConstant(Op.Inputs[1]);
       if (auto B = stackOffsetRec(Op.Inputs[0], Depth + 1, Seen); B && Delta)
         return detail::checkedStackOffset(*B, *Delta, Sub);
     } else if (Op.Inputs[0].isConst() && !Sub) {
+      if (Op.Inputs[1].Size != Op.Output.Size ||
+          Op.Inputs[0].Size > Op.Output.Size)
+        return std::nullopt;
       auto Delta = detail::signedStackConstant(Op.Inputs[0]);
       if (auto B = stackOffsetRec(Op.Inputs[1], Depth + 1, Seen); B && Delta)
         return detail::checkedStackOffset(*B, *Delta, false);
@@ -396,50 +446,78 @@ struct MemModel {
     return std::nullopt;
   }
 
-  bool mayBeStackAddress(const MedVar &V, int Depth,
-                         llvm::DenseSet<ValueKey> &Seen) const {
-    if (!Have || V.isConst() || Depth > 64 || !Seen.insert(keyOf(V)).second)
-      return false;
-    if (V.Kind == MedVar::Reg && (V.RegOff == SP || V.RegOff == FP))
-      return true;
-    if (auto It = PhiDef.find(keyOf(V)); It != PhiDef.end()) {
-      const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
-      for (const auto &[Pred, Arg] : Phi.Args) {
-        (void)Pred;
-        llvm::DenseSet<ValueKey> BranchSeen = Seen;
-        if (mayBeStackAddress(Arg, Depth + 1, BranchSeen))
-          return true;
-      }
-      return false;
-    }
-    const MedOp *Op = def(V);
-    if (!Op)
-      return false;
-    unsigned Begin = 0;
-    unsigned End = Op->NumInputs;
-    switch (Op->Opcode) {
-    case NdOp::COPY:
-    case NdOp::CAST:
-    case NdOp::INT_ZEXT:
-    case NdOp::INT_SEXT:
-    case NdOp::SUBBYTES:
-      End = std::min<unsigned>(End, 1);
-      break;
-    case NdOp::SELECT:
-      Begin = std::min<unsigned>(1, End);
-      break;
-    case NdOp::INT_ADD:
-    case NdOp::INT_SUB:
-      break;
-    default:
-      return false;
-    }
-    for (unsigned I = Begin; I < End; ++I) {
-      llvm::DenseSet<ValueKey> BranchSeen = Seen;
-      if (mayBeStackAddress(Op->Inputs[I], Depth + 1, BranchSeen))
+  bool mayBeStackAddress(const MedVar &Root) const {
+    llvm::DenseMap<ValueKey, bool> Cache;
+    llvm::DenseSet<ValueKey> Active;
+    unsigned Remaining = MaxProofSteps;
+    bool Incomplete = false;
+
+    std::function<bool(const MedVar &, int)> Prove = [&](const MedVar &V,
+                                                         int Depth) {
+      if (!Have || V.isConst())
+        return false;
+      const ValueKey Key = keyOf(V);
+      if (auto It = Cache.find(Key); It != Cache.end())
+        return It->second;
+      if (Depth > 64 || Remaining == 0) {
+        Incomplete = true;
         return true;
-    }
-    return false;
+      }
+      if (!Active.insert(Key).second) {
+        Incomplete = true;
+        return true;
+      }
+      struct PopActive {
+        llvm::DenseSet<ValueKey> &Set;
+        ValueKey Key;
+        ~PopActive() { Set.erase(Key); }
+      } Guard{Active, Key};
+      --Remaining;
+
+      bool Result = false;
+      if (V.Kind == MedVar::Reg && (V.RegOff == SP || V.RegOff == FP)) {
+        Result = true;
+      } else if (auto It = PhiDef.find(Key); It != PhiDef.end()) {
+        const PhiNode &Phi = F.Blocks[It->second.first].Phis[It->second.second];
+        for (const auto &[Pred, Arg] : Phi.Args) {
+          (void)Pred;
+          if (Prove(Arg, Depth + 1)) {
+            Result = true;
+            break;
+          }
+        }
+      } else if (const MedOp *Op = def(V)) {
+        unsigned Begin = 0;
+        unsigned End = Op->NumInputs;
+        switch (Op->Opcode) {
+        case NdOp::COPY:
+        case NdOp::CAST:
+        case NdOp::INT_ZEXT:
+        case NdOp::INT_SEXT:
+        case NdOp::SUBBYTES:
+          End = std::min<unsigned>(End, 1);
+          break;
+        case NdOp::SELECT:
+          Begin = std::min<unsigned>(1, End);
+          break;
+        case NdOp::INT_ADD:
+        case NdOp::INT_SUB:
+          break;
+        default:
+          End = 0;
+          break;
+        }
+        for (unsigned I = Begin; I < End; ++I)
+          if (Prove(Op->Inputs[I], Depth + 1)) {
+            Result = true;
+            break;
+          }
+      }
+      if (!Incomplete)
+        Cache[Key] = Result;
+      return Result;
+    };
+    return Prove(Root, 0);
   }
 
   detail::ReachingStackValues reachingLoad(const MedBlock &B, int OpIdx,
@@ -454,12 +532,21 @@ struct MemModel {
     if (!Off)
       return {};
     auto Resolve = [&](const MedVar &V) { return stackOffset(V); };
-    auto MayBeFrame = [&](const MedVar &V) {
-      llvm::DenseSet<ValueKey> Seen;
-      return mayBeStackAddress(V, 0, Seen);
+    auto MayBeFrame = [&](const MedVar &V) { return mayBeStackAddress(V); };
+    auto AliasesWholeFrame = [&](const MedVar &V) {
+      if (!Have)
+        return false;
+      auto FindOp = [&](const MedVar &Current) { return def(Current); };
+      auto FindPhi = [&](const MedVar &Current) -> const PhiNode * {
+        auto It = PhiDef.find(keyOf(Current));
+        return It == PhiDef.end()
+                   ? nullptr
+                   : &F.Blocks[It->second.first].Phis[It->second.second];
+      };
+      return detail::aliasesWholeFrame(V, SP, FP, FindOp, FindPhi);
     };
     return detail::reachingStackValues(F, B.Id, OpIdx, *Off, Op.Output.Size,
-                                       Resolve, MayBeFrame);
+                                       Resolve, MayBeFrame, AliasesWholeFrame);
   }
 
   detail::ReachingStackValues reachingRead(const MedBlock &B, int OpIdx,
@@ -476,8 +563,20 @@ struct MemModel {
     auto MayBeFrame = [&](const MedVar &V) {
       return mayBeStackAddressThroughReloads(V);
     };
+    auto AliasesWholeFrame = [&](const MedVar &V) {
+      if (!Have)
+        return false;
+      auto FindOp = [&](const MedVar &Current) { return def(Current); };
+      auto FindPhi = [&](const MedVar &Current) -> const PhiNode * {
+        auto It = PhiDef.find(keyOf(Current));
+        return It == PhiDef.end()
+                   ? nullptr
+                   : &F.Blocks[It->second.first].Phis[It->second.second];
+      };
+      return detail::aliasesWholeFrame(V, SP, FP, FindOp, FindPhi);
+    };
     return detail::reachingStackValues(F, B.Id, OpIdx, *Off, Size, Resolve,
-                                       MayBeFrame,
+                                       MayBeFrame, AliasesWholeFrame,
                                        /*RequireMemoryRead=*/false,
                                        /*InvalidateEscapedAddresses=*/false);
   }
@@ -499,7 +598,7 @@ struct MemModel {
             (void)Pred;
             const bool Aliases = !Arg.isConst() && Set.count(keyOf(Arg));
             AnyAlias |= Aliases;
-            AllAlias &= Aliases;
+            AllAlias &= Aliases && Arg.Size == Phi.Output.Size;
           }
           if ((RequireExactAlias ? AllAlias : AnyAlias) &&
               Set.insert(keyOf(Phi.Output)).second)
@@ -588,8 +687,17 @@ struct CFG {
   }
 
   bool after(int ABlock, int AOp, int BBlock, int BOp) const {
-    if (ABlock == BBlock)
-      return BOp > AOp;
+    if (ABlock == BBlock) {
+      if (BOp > AOp)
+        return true;
+      auto It = IdToIndex.find(ABlock);
+      if (It == IdToIndex.end())
+        return false;
+      for (int Succ : F.Blocks[It->second].Succs)
+        if (blockReaches(Succ, BBlock))
+          return true;
+      return false;
+    }
     return blockReaches(ABlock, BBlock);
   }
 };
@@ -612,6 +720,7 @@ va_t callVA(const MedFunc &F, const MedCallInfo &CI) {
 struct Summary {
   bool ReturnsHeap = false;
   llvm::DenseSet<int> FreesParam;
+  llvm::DenseSet<int> MayFreeParam;
   llvm::DenseSet<int> EscapesParam;
   llvm::DenseSet<int> UnknownParam;
 };
@@ -697,6 +806,22 @@ public:
     std::vector<Finding> All;
     if (!In.MedFuncs)
       return All;
+    if (!SummaryFixpointComplete && !In.MedFuncs->empty()) {
+      const MedFunc &F = In.MedFuncs->front();
+      Finding Fn;
+      Fn.Origin = Track::Audit;
+      Fn.Class = VulnClass::HeapLeak;
+      Fn.TheVerdict = Verdict::Unknown;
+      Fn.TheConfidence = Confidence::Low;
+      Fn.Function = F.Name;
+      Fn.FuncEntry = F.Entry;
+      Fn.Name = "interprocedural lifetime summary";
+      Fn.Sink = Fn.Name;
+      Fn.Detail = "interprocedural heap lifetime summaries did not converge";
+      Fn.BudgetHit = true;
+      All.push_back(std::move(Fn));
+      return All;
+    }
     for (const MedFunc &F : *In.MedFuncs)
       auditFunction(F, All);
     std::vector<Finding> Kept;
@@ -713,9 +838,48 @@ private:
   const SafetyBudgets &Budgets;
   bool IncludeStackReads = false;
   llvm::DenseMap<va_t, Summary> Summaries;
+  bool SummaryFixpointComplete = true;
 
   std::string callName(const MedCallInfo &CI) const {
     return resolveCallName(In, CI);
+  }
+
+  va_t canonicalCallTarget(const MedCallInfo &CI) const {
+    if (!In.Img)
+      return CI.TargetAddr;
+    return normalizeCodeAddress(CI.TargetAddr, In.Img->Arch, In.Img->Mode);
+  }
+
+  const MedFunc *internalCallee(const MedCallInfo &CI) const {
+    if (CI.IsIndirect)
+      return nullptr;
+    const MedFunc *Callee = In.findMedFunc(canonicalCallTarget(CI));
+    if (!Callee)
+      return Callee;
+    if (classifyNameSource(In, CI.TargetAddr, CI.TargetName, CI.IsIndirect) ==
+        NameSource::Import)
+      return nullptr;
+    if (CI.TargetAddr != 0)
+      return Callee;
+    if (CI.TargetName.empty() || isSynthesizedFuncName(CI.TargetName))
+      return nullptr;
+
+    const std::string TargetName = SinkCatalog::normalize(callName(CI));
+    const auto MatchesTarget = [&](llvm::StringRef Candidate) {
+      return !Candidate.empty() &&
+             SinkCatalog::normalize(Candidate) == TargetName;
+    };
+    if (!MatchesTarget(Callee->Name) && !MatchesTarget(Callee->DebugName))
+      return nullptr;
+    return Callee;
+  }
+
+  const Summary *callSummary(const MedCallInfo &CI) const {
+    const MedFunc *Callee = internalCallee(CI);
+    if (!Callee)
+      return nullptr;
+    auto It = Summaries.find(Callee->Entry);
+    return It == Summaries.end() ? nullptr : &It->second;
   }
 
   const SinkEntry *catalogSink(const MedCallInfo &CI) const {
@@ -740,6 +904,21 @@ private:
     return -1;
   }
 
+  bool catalogFreeMayFail(const MedCallInfo &CI) const {
+    const SinkEntry *E = catalogSink(CI);
+    return E && E->Kind == SinkKind::Free && E->ReleaseMayFail;
+  }
+
+  bool freeArgMayFail(const MedCallInfo &CI, int ArgIndex) const {
+    if (ArgIndex < 0)
+      return false;
+    if (ArgIndex == catalogFreeArg(CI))
+      return catalogFreeMayFail(CI);
+    if (const Summary *S = callSummary(CI))
+      return S->MayFreeParam.count(ArgIndex) != 0;
+    return false;
+  }
+
   llvm::SmallVector<int, 4> freeArgsOf(const MedCallInfo &CI) const {
     llvm::SmallVector<int, 4> Args;
     int FA = catalogFreeArg(CI);
@@ -747,10 +926,11 @@ private:
       Args.push_back(FA);
       return Args;
     }
-    if (!CI.IsIndirect) {
-      auto It = Summaries.find(CI.TargetAddr);
-      if (It != Summaries.end())
-        for (int Param : It->second.FreesParam)
+    if (const Summary *S = callSummary(CI)) {
+      for (int Param : S->FreesParam)
+        Args.push_back(Param);
+      for (int Param : S->MayFreeParam)
+        if (std::find(Args.begin(), Args.end(), Param) == Args.end())
           Args.push_back(Param);
     }
     return Args;
@@ -760,22 +940,23 @@ private:
     if (const SinkEntry *E = catalogSink(CI))
       if (E->Kind == SinkKind::Alloc || E->Kind == SinkKind::Realloc)
         return true;
-    if (!CI.IsIndirect) {
-      auto It = Summaries.find(CI.TargetAddr);
-      if (It != Summaries.end() && It->second.ReturnsHeap)
-        return true;
-    }
+    if (const Summary *S = callSummary(CI); S && S->ReturnsHeap)
+      return true;
     return false;
   }
 
   static bool sameSummary(const Summary &A, const Summary &B) {
     if (A.ReturnsHeap != B.ReturnsHeap ||
         A.FreesParam.size() != B.FreesParam.size() ||
+        A.MayFreeParam.size() != B.MayFreeParam.size() ||
         A.EscapesParam.size() != B.EscapesParam.size() ||
         A.UnknownParam.size() != B.UnknownParam.size())
       return false;
     for (int P : A.FreesParam)
       if (!B.FreesParam.count(P))
+        return false;
+    for (int P : A.MayFreeParam)
+      if (!B.MayFreeParam.count(P))
         return false;
     for (int P : A.EscapesParam)
       if (!B.EscapesParam.count(P))
@@ -795,17 +976,16 @@ private:
     if (ArgIndex == catalogFreeArg(CI))
       return EscapeState::No;
 
-    if (!CI.IsIndirect)
-      if (const MedFunc *Internal = In.findMedFunc(CI.TargetAddr)) {
-        auto It = Summaries.find(Internal->Entry);
-        if (It == Summaries.end())
-          return EscapeState::Unknown;
-        if (It->second.EscapesParam.count(ArgIndex))
-          return EscapeState::Yes;
-        if (It->second.UnknownParam.count(ArgIndex))
-          return EscapeState::Unknown;
-        return EscapeState::No;
-      }
+    if (const MedFunc *Internal = internalCallee(CI)) {
+      auto It = Summaries.find(Internal->Entry);
+      if (It == Summaries.end())
+        return EscapeState::Unknown;
+      if (It->second.EscapesParam.count(ArgIndex))
+        return EscapeState::Yes;
+      if (It->second.UnknownParam.count(ArgIndex))
+        return EscapeState::Unknown;
+      return EscapeState::No;
+    }
 
     // Catalogued runtime operations have a bounded, non-retaining contract.
     // Unknown and indirect callees remain explicitly unresolved.
@@ -829,9 +1009,12 @@ private:
             continue;
           const ValueKey ArgKey = keyOf(CI.Args[FA]);
           if (MustAlias.count(ArgKey)) {
-            DefiniteFrees.push_back({CI.BlockId, CI.OpIdx, callVA(F, CI),
-                                     CI.TargetAddr, callName(CI),
-                                     CI.IsIndirect});
+            if (freeArgMayFail(CI, FA))
+              HasPotentialFree = true;
+            else
+              DefiniteFrees.push_back({CI.BlockId, CI.OpIdx, callVA(F, CI),
+                                       CI.TargetAddr, callName(CI),
+                                       CI.IsIndirect});
             break;
           } else if (Alias.count(ArgKey))
             HasPotentialFree = true;
@@ -840,8 +1023,10 @@ private:
 
       if (eventsCoverEveryExit(F, DefiniteFrees))
         S.FreesParam.insert(PI);
-      else if (!DefiniteFrees.empty() || HasPotentialFree)
+      else if (!DefiniteFrees.empty() || HasPotentialFree) {
+        S.MayFreeParam.insert(PI);
         S.UnknownParam.insert(PI);
+      }
     }
 
     for (int PI = 0; PI < static_cast<int>(F.Params.size()); ++PI) {
@@ -922,16 +1107,14 @@ private:
           continue;
         Alloc = E->Kind == SinkKind::Alloc || E->Kind == SinkKind::Realloc;
       }
-      if (!Alloc && !CI.IsIndirect) {
-        auto It = Summaries.find(CI.TargetAddr);
-        Alloc = It != Summaries.end() && It->second.ReturnsHeap;
-      }
+      if (!Alloc)
+        if (const Summary *CalleeSummary = callSummary(CI))
+          Alloc = CalleeSummary->ReturnsHeap;
       if (!Alloc)
         continue;
       const MedOp *Op = opAt(F, CI.BlockId, CI.OpIdx);
       if (!Op || Op->Output.isConst() || Op->Output.Size == 0)
         continue;
-      llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(Op->Output);
       llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(Op->Output);
       std::vector<FreeEvent> ReturnEvents;
       for (const MedBlock &B : F.Blocks)
@@ -941,7 +1124,7 @@ private:
             continue;
           for (unsigned Input = 0; Input < O.NumInputs; ++Input)
             if (!O.Inputs[Input].isConst() &&
-                Alias.count(keyOf(O.Inputs[Input]))) {
+                MustAlias.count(keyOf(O.Inputs[Input]))) {
               ReturnEvents.push_back({B.Id, OI});
               break;
             }
@@ -952,7 +1135,8 @@ private:
           if (FreeArg < 0 || FreeArg >= static_cast<int>(FC.Args.size()) ||
               FC.Args[FreeArg].isConst())
             continue;
-          if (MustAlias.count(keyOf(FC.Args[FreeArg]))) {
+          if (MustAlias.count(keyOf(FC.Args[FreeArg])) &&
+              !freeArgMayFail(FC, FreeArg)) {
             DefiniteFrees.push_back({FC.BlockId, FC.OpIdx});
             break;
           }
@@ -967,17 +1151,58 @@ private:
   void buildSummaries() {
     if (!In.MedFuncs)
       return;
-    bool Changed = true;
-    for (int Guard = 0; Changed && Guard < 32; ++Guard) {
-      Changed = false;
-      for (const MedFunc &F : *In.MedFuncs) {
-        Summary S = summarize(F);
-        auto It = Summaries.find(F.Entry);
-        if (It == Summaries.end() || !sameSummary(It->second, S)) {
-          Summaries[F.Entry] = std::move(S);
-          Changed = true;
-        }
+
+    llvm::DenseMap<va_t, const MedFunc *> Functions;
+    llvm::DenseMap<va_t, llvm::SmallVector<va_t, 4>> Callers;
+    std::deque<va_t> Work;
+    llvm::DenseSet<va_t> Queued;
+    size_t SummaryStateUnits = In.MedFuncs->size();
+
+    for (const MedFunc &F : *In.MedFuncs) {
+      Functions[F.Entry] = &F;
+      Work.push_back(F.Entry);
+      Queued.insert(F.Entry);
+      SummaryStateUnits += F.Params.size() * 5;
+    }
+    for (const MedFunc &F : *In.MedFuncs)
+      for (const MedCallInfo &CI : F.CallInfos) {
+        const MedFunc *Callee = internalCallee(CI);
+        if (!Callee)
+          continue;
+        Callers[Callee->Entry].push_back(F.Entry);
       }
+
+    // Each summary has one return fact plus a finite set of per-parameter
+    // lifetime facts.  The input-scaled cap is only a termination guard for a
+    // malformed or unexpectedly non-monotone summary cycle; exhausting it is
+    // reported as UNKNOWN rather than publishing a partial fixed point.
+    const size_t MaxChanges = std::max<size_t>(1024, SummaryStateUnits * 8 + 1);
+    size_t Changes = 0;
+
+    while (!Work.empty()) {
+      const va_t Entry = Work.front();
+      Work.pop_front();
+      Queued.erase(Entry);
+      auto FunctionIt = Functions.find(Entry);
+      if (FunctionIt == Functions.end())
+        continue;
+
+      Summary S = summarize(*FunctionIt->second);
+      auto It = Summaries.find(Entry);
+      if (It != Summaries.end() && sameSummary(It->second, S))
+        continue;
+      Summaries[Entry] = std::move(S);
+      if (++Changes > MaxChanges) {
+        SummaryFixpointComplete = false;
+        break;
+      }
+
+      auto CallerIt = Callers.find(Entry);
+      if (CallerIt == Callers.end())
+        continue;
+      for (va_t Caller : CallerIt->second)
+        if (Queued.insert(Caller).second)
+          Work.push_back(Caller);
     }
   }
 
@@ -991,7 +1216,8 @@ private:
 
   bool reachesExitWithoutEvent(const MedFunc &F, int StartBlock, int StartOp,
                                const std::vector<FreeEvent> &Events,
-                               bool *ReachedEvent = nullptr) const {
+                               bool *ReachedEvent = nullptr,
+                               bool FollowExceptional = true) const {
     llvm::DenseSet<ValueKey> SeenPts;
     llvm::DenseSet<int> ExpandedExceptional;
     std::deque<std::pair<int, int>> Work;
@@ -1011,7 +1237,7 @@ private:
         }
       if (!Blk)
         continue;
-      if (ExpandedExceptional.insert(BlkId).second)
+      if (FollowExceptional && ExpandedExceptional.insert(BlkId).second)
         for (const ExceptionalEdge &Edge : Blk->ExceptionalSuccs) {
           if (Edge.BlockId < 0)
             return true;
@@ -1098,10 +1324,10 @@ private:
   }
 
   bool shouldReportLeak(const MedFunc &F, const MedCallInfo &Alloc,
-                        const std::vector<FreeEvent> &Frees) const {
-    if (Frees.empty())
-      return true;
-    return reachesExitWithoutEvent(F, Alloc.BlockId, Alloc.OpIdx, Frees);
+                        const std::vector<FreeEvent> &Frees,
+                        bool FollowExceptional = true) const {
+    return reachesExitWithoutEvent(F, Alloc.BlockId, Alloc.OpIdx, Frees,
+                                   nullptr, FollowExceptional);
   }
 
   bool hasUnresolvedLifecycleCall(const MedFunc &F, const CFG &G,
@@ -1117,8 +1343,7 @@ private:
       for (int FreeArg : freeArgsOf(CI))
         if (FreeArg < 0 || FreeArg >= static_cast<int>(CI.Args.size()))
           return true;
-      if (CI.Args.empty() && catalogSink(CI) == nullptr &&
-          (CI.IsIndirect || !In.findMedFunc(CI.TargetAddr)))
+      if (CI.Args.empty() && catalogSink(CI) == nullptr && !internalCallee(CI))
         return true;
     }
     return false;
@@ -1149,8 +1374,7 @@ private:
           continue;
         const std::string Name = callName(*Call);
         if (catalogSink(*Call) || Cat.matchSource(Name) ||
-            isStringLengthCall(Name) ||
-            (!Call->IsIndirect && In.findMedFunc(Call->TargetAddr)))
+            isStringLengthCall(Name) || internalCallee(*Call))
           ++Count;
       }
     }
@@ -1158,15 +1382,21 @@ private:
   }
 
   bool corroborate(Finding &Fn) {
-    if (Fn.TheVerdict != Verdict::Unsafe)
+    const bool ConfirmUnsafe = Fn.TheVerdict == Verdict::Unsafe;
+    const bool FilterUnknownLeakPath =
+        Fn.TheVerdict == Verdict::Unknown && Fn.RequireReturnedPath &&
+        Fn.RequireNonNullCallVA != 0 && !Fn.RequiredPathEvents.empty();
+    if (!ConfirmUnsafe && !FilterUnknownLeakPath)
       return true;
     const LowFunc *LF = In.findLowFunc(Fn.FuncEntry);
     auto failClosed = [&](llvm::StringRef Reason, bool Budget = false) {
-      Fn.TheVerdict = Verdict::Unknown;
-      Fn.TheConfidence = Confidence::Low;
+      if (ConfirmUnsafe) {
+        Fn.TheVerdict = Verdict::Unknown;
+        Fn.TheConfidence = Confidence::Low;
+        Fn.Detail = "symbolic corroboration did not establish the candidate";
+      }
       Fn.BudgetHit = Budget;
       Fn.Corroboration = Reason.str();
-      Fn.Detail = "symbolic corroboration did not establish the candidate";
     };
     if (!LF || LF->Blocks.empty()) {
       failClosed("no LowIR path was available for corroboration");
@@ -1236,9 +1466,12 @@ private:
         SolverUnknown = true;
         continue;
       }
-      Fn.TheConfidence = Confidence::High;
+      if (ConfirmUnsafe)
+        Fn.TheConfidence = Confidence::High;
       Fn.Corroboration =
-          "candidate event sequence is feasible on a symbolic path";
+          ConfirmUnsafe
+              ? "candidate event sequence is feasible on a symbolic path"
+              : "a necessary unresolved-lifetime path is feasible";
       if (!Ctx.isConstOnes(Pred))
         Fn.Constraints = Ctx.toString(Pred);
       return true;
@@ -1314,6 +1547,7 @@ private:
            CI.IsIndirect}};
 
       std::vector<FreeEvent> Frees;
+      std::vector<FreeEvent> FallibleFrees;
       bool HasPotentialFree = false;
       for (const MedCallInfo &FC : F.CallInfos) {
         for (int FA : freeArgsOf(FC)) {
@@ -1321,15 +1555,21 @@ private:
             continue;
           const ValueKey ArgKey = keyOf(FC.Args[FA]);
           if (MustAlias.count(ArgKey)) {
-            Frees.push_back({FC.BlockId, FC.OpIdx, callVA(F, FC), FC.TargetAddr,
-                             callName(FC), FC.IsIndirect});
+            FreeEvent Event{FC.BlockId,    FC.OpIdx,     callVA(F, FC),
+                            FC.TargetAddr, callName(FC), FC.IsIndirect};
+            if (freeArgMayFail(FC, FA)) {
+              FallibleFrees.push_back(std::move(Event));
+              HasPotentialFree = true;
+            } else {
+              Frees.push_back(std::move(Event));
+            }
             break;
           }
           HasPotentialFree |= Alias.count(ArgKey) != 0;
         }
       }
 
-      const EscapeState Escape = escapes(F, Mem, Alias, CI);
+      const EscapeState Escape = escapes(F, Mem, Alias, MustAlias, CI);
       const bool UnresolvedLifecycle =
           HasPotentialFree || hasUnresolvedLifecycleCall(F, G, CI);
 
@@ -1337,46 +1577,108 @@ private:
       for (size_t A = 0; A < Frees.size() && !ReportedDouble; ++A)
         for (size_t B = 0; B < Frees.size(); ++B) {
           const std::vector<FreeEvent> Target = {Frees[B]};
-          if (reachesAnyEventWithoutBlocker(F, Frees[A].BlockId, Frees[A].OpIdx,
+          const bool NormalPath = reachesAnyEventWithoutBlocker(
+              F, Frees[A].BlockId, Frees[A].OpIdx, Target, AllocationSite,
+              /*FollowExceptional=*/false);
+          const bool ExceptionalPath =
+              !NormalPath &&
+              reachesAnyEventWithoutBlocker(F, Frees[A].BlockId, Frees[A].OpIdx,
                                             Target, AllocationSite,
-                                            /*FollowExceptional=*/false)) {
+                                            /*FollowExceptional=*/true);
+          if (NormalPath || ExceptionalPath) {
             Finding Fn = baseFinding(F, VulnClass::DoubleFree, Frees[B].VA,
                                      Frees[B].Name, Frees[B].TargetAddr,
                                      Frees[B].IsIndirect);
-            Fn.TheConfidence = Confidence::High;
-            Fn.Detail = "handle released twice on a path";
-            Fn.RequiredPathEvents = {
-                {CI.BlockId, CI.OpIdx},
-                {Frees[A].BlockId, Frees[A].OpIdx},
-                {Frees[B].BlockId, Frees[B].OpIdx},
-            };
-            Fn.RequireNonNullCallVA = AllocVA;
+            if (ExceptionalPath) {
+              Fn.TheVerdict = Verdict::Unknown;
+              Fn.TheConfidence = Confidence::Low;
+              Fn.Detail = "a second release is reachable only through "
+                          "exceptional control flow";
+            } else {
+              Fn.TheConfidence = Confidence::High;
+              Fn.Detail = "handle released twice on a path";
+              Fn.RequiredPathEvents = {
+                  {CI.BlockId, CI.OpIdx},
+                  {Frees[A].BlockId, Frees[A].OpIdx},
+                  {Frees[B].BlockId, Frees[B].OpIdx},
+              };
+              Fn.RequireNonNullCallVA = AllocVA;
+            }
             Out.push_back(std::move(Fn));
             ReportedDouble = true;
             break;
           }
         }
 
-      CollectedUses Uses = collectUses(F, Alias, Frees);
+      if (!ReportedDouble && !FallibleFrees.empty()) {
+        struct ReleaseRef {
+          const FreeEvent *Event = nullptr;
+          bool MayFail = false;
+        };
+        std::vector<ReleaseRef> Releases;
+        Releases.reserve(Frees.size() + FallibleFrees.size());
+        for (const FreeEvent &Fr : Frees)
+          Releases.push_back({&Fr, false});
+        for (const FreeEvent &Fr : FallibleFrees)
+          Releases.push_back({&Fr, true});
+        for (const ReleaseRef &First : Releases) {
+          if (ReportedDouble)
+            break;
+          for (const ReleaseRef &Second : Releases) {
+            if (!First.MayFail && !Second.MayFail)
+              continue;
+            const std::vector<FreeEvent> Target = {*Second.Event};
+            if (!reachesAnyEventWithoutBlocker(
+                    F, First.Event->BlockId, First.Event->OpIdx, Target,
+                    AllocationSite, /*FollowExceptional=*/true))
+              continue;
+            Finding Fn = baseFinding(
+                F, VulnClass::DoubleFree, Second.Event->VA, Second.Event->Name,
+                Second.Event->TargetAddr, Second.Event->IsIndirect);
+            Fn.TheVerdict = Verdict::Unknown;
+            Fn.TheConfidence = Confidence::Low;
+            Fn.Detail = "a conditional release may have occurred before a "
+                        "later release";
+            Out.push_back(std::move(Fn));
+            ReportedDouble = true;
+            break;
+          }
+        }
+      }
+
+      CollectedUses Uses = collectUses(F, Alias, MustAlias, Frees);
       bool ReportedUAF = false;
       for (const FreeEvent &Fr : Frees) {
         if (ReportedUAF)
           break;
         for (const UseEvent &U : Uses.Definite) {
           const std::vector<FreeEvent> Target = {{U.BlockId, U.OpIdx}};
-          if (reachesAnyEventWithoutBlocker(F, Fr.BlockId, Fr.OpIdx, Target,
+          const bool NormalPath = reachesAnyEventWithoutBlocker(
+              F, Fr.BlockId, Fr.OpIdx, Target, AllocationSite,
+              /*FollowExceptional=*/false);
+          const bool ExceptionalPath =
+              !NormalPath &&
+              reachesAnyEventWithoutBlocker(F, Fr.BlockId, Fr.OpIdx, Target,
                                             AllocationSite,
-                                            /*FollowExceptional=*/false)) {
+                                            /*FollowExceptional=*/true);
+          if (NormalPath || ExceptionalPath) {
             Finding Fn = baseFinding(F, VulnClass::UseAfterFree, U.VA, Fr.Name,
                                      Fr.TargetAddr, Fr.IsIndirect);
-            Fn.TheConfidence = Confidence::High;
-            Fn.Detail = "handle used after it was released";
-            Fn.RequiredPathEvents = {
-                {CI.BlockId, CI.OpIdx},
-                {Fr.BlockId, Fr.OpIdx},
-                {U.BlockId, U.OpIdx},
-            };
-            Fn.RequireNonNullCallVA = AllocVA;
+            if (ExceptionalPath) {
+              Fn.TheVerdict = Verdict::Unknown;
+              Fn.TheConfidence = Confidence::Low;
+              Fn.Detail = "a post-release use is reachable only through "
+                          "exceptional control flow";
+            } else {
+              Fn.TheConfidence = Confidence::High;
+              Fn.Detail = "handle used after it was released";
+              Fn.RequiredPathEvents = {
+                  {CI.BlockId, CI.OpIdx},
+                  {Fr.BlockId, Fr.OpIdx},
+                  {U.BlockId, U.OpIdx},
+              };
+              Fn.RequireNonNullCallVA = AllocVA;
+            }
             Out.push_back(std::move(Fn));
             ReportedUAF = true;
             break;
@@ -1390,13 +1692,17 @@ private:
             const std::vector<FreeEvent> Target = {{U.BlockId, U.OpIdx}};
             if (!reachesAnyEventWithoutBlocker(F, Fr.BlockId, Fr.OpIdx, Target,
                                                AllocationSite,
-                                               /*FollowExceptional=*/false))
+                                               /*FollowExceptional=*/true))
               continue;
             Finding Fn = baseFinding(F, VulnClass::UseAfterFree, U.VA, U.Name,
                                      U.TargetAddr, U.IsIndirect);
             Fn.TheVerdict = Verdict::Unknown;
             Fn.TheConfidence = Confidence::Low;
-            Fn.Detail = "callee may access a handle after it was released";
+            Fn.Detail =
+                U.Name == "memory_access"
+                    ? "a derived address may access a handle after it "
+                      "was released"
+                    : "callee may access a handle after it was released";
             Out.push_back(std::move(Fn));
             ReportedPossibleUAF = true;
             break;
@@ -1405,7 +1711,43 @@ private:
             break;
         }
 
-      const bool MayLeak = shouldReportLeak(F, CI, Frees);
+      if (!ReportedUAF)
+        for (const FreeEvent &Fr : FallibleFrees) {
+          bool Found = false;
+          auto reportPossibleUse = [&](const UseEvent &U) {
+            const std::vector<FreeEvent> Target = {{U.BlockId, U.OpIdx}};
+            if (!reachesAnyEventWithoutBlocker(F, Fr.BlockId, Fr.OpIdx, Target,
+                                               AllocationSite,
+                                               /*FollowExceptional=*/true))
+              return false;
+            Finding Fn = baseFinding(F, VulnClass::UseAfterFree, U.VA, Fr.Name,
+                                     Fr.TargetAddr, Fr.IsIndirect);
+            Fn.TheVerdict = Verdict::Unknown;
+            Fn.TheConfidence = Confidence::Low;
+            Fn.Detail = "a conditional release may have occurred before this "
+                        "handle use";
+            Out.push_back(std::move(Fn));
+            return true;
+          };
+          for (const UseEvent &U : Uses.Definite)
+            if ((Found = reportPossibleUse(U)))
+              break;
+          if (!Found)
+            for (const UseEvent &U : Uses.Possible)
+              if ((Found = reportPossibleUse(U)))
+                break;
+          if (Found) {
+            ReportedUAF = true;
+            break;
+          }
+        }
+
+      const bool MayLeakOnNormalPath =
+          shouldReportLeak(F, CI, Frees, /*FollowExceptional=*/false);
+      const bool MayLeakOnlyOnExceptionalPath =
+          !MayLeakOnNormalPath &&
+          shouldReportLeak(F, CI, Frees, /*FollowExceptional=*/true);
+      const bool MayLeak = MayLeakOnNormalPath || MayLeakOnlyOnExceptionalPath;
       if (MayLeak && (Escape == EscapeState::Unknown || UnresolvedLifecycle)) {
         Finding Fn = baseFinding(F, VulnClass::HeapLeak, callVA(F, CI),
                                  callName(CI), CI.TargetAddr, CI.IsIndirect);
@@ -1413,19 +1755,36 @@ private:
         Fn.TheConfidence = Confidence::Low;
         Fn.Detail =
             UnresolvedLifecycle
-                ? "heap lifetime depends on a call with unrecovered arguments"
+                ? (!FallibleFrees.empty()
+                       ? "heap lifetime depends on a conditional release"
+                       : "heap lifetime depends on a call with unrecovered "
+                         "arguments")
                 : "heap handle reaches a call without a retention summary";
+        if (MayLeakOnNormalPath) {
+          Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
+          for (const FreeEvent &Fr : Frees)
+            Fn.ForbiddenPathEvents.push_back({Fr.BlockId, Fr.OpIdx});
+          Fn.RequireReturnedPath = true;
+          Fn.RequireNonNullCallVA = AllocVA;
+        }
         Out.push_back(std::move(Fn));
       } else if (MayLeak && Escape == EscapeState::No) {
         Finding Fn = baseFinding(F, VulnClass::HeapLeak, callVA(F, CI),
                                  callName(CI), CI.TargetAddr, CI.IsIndirect);
-        Fn.TheConfidence = Confidence::Medium;
-        Fn.Detail = "allocation neither released nor escaped on every path";
-        Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
-        for (const FreeEvent &Fr : Frees)
-          Fn.ForbiddenPathEvents.push_back({Fr.BlockId, Fr.OpIdx});
-        Fn.RequireReturnedPath = true;
-        Fn.RequireNonNullCallVA = AllocVA;
+        if (MayLeakOnlyOnExceptionalPath) {
+          Fn.TheVerdict = Verdict::Unknown;
+          Fn.TheConfidence = Confidence::Low;
+          Fn.Detail = "an unreleased allocation is reachable only through "
+                      "exceptional control flow";
+        } else {
+          Fn.TheConfidence = Confidence::Medium;
+          Fn.Detail = "allocation neither released nor escaped on every path";
+          Fn.RequiredPathEvents = {{CI.BlockId, CI.OpIdx}};
+          for (const FreeEvent &Fr : Frees)
+            Fn.ForbiddenPathEvents.push_back({Fr.BlockId, Fr.OpIdx});
+          Fn.RequireReturnedPath = true;
+          Fn.RequireNonNullCallVA = AllocVA;
+        }
         Out.push_back(std::move(Fn));
       }
     }
@@ -1709,17 +2068,27 @@ private:
         return CallUse::Possible;
       };
       if (Normalized == "read" || Normalized == "pread" ||
+          Normalized == "read_chk" || Normalized == "pread_chk" ||
           Normalized == "recv" || Normalized == "recvfrom" ||
+          Normalized == "recv_chk" || Normalized == "recvfrom_chk" ||
           Normalized == "ReadFile" || Normalized == "GetEnvironmentVariableA" ||
           Normalized == "GetEnvironmentVariableW")
         return countedOutputUse(2);
-      if (Normalized == "fread") {
-        if (CI.Args.size() <= 2)
+      if (Normalized == "fgets" || Normalized == "fgets_unlocked")
+        return countedOutputUse(1);
+      if (Normalized == "fgets_chk" || Normalized == "fgets_unlocked_chk")
+        return countedOutputUse(2);
+      if (Normalized == "fread" || Normalized == "fread_unlocked" ||
+          Normalized == "fread_chk" || Normalized == "fread_unlocked_chk") {
+        const bool Fortified = Normalized.ends_with("_chk");
+        const int ElementSizeArg = Fortified ? 2 : 1;
+        const int ElementCountArg = Fortified ? 3 : 2;
+        if (ElementCountArg >= static_cast<int>(CI.Args.size()))
           return CallUse::Possible;
         const std::optional<uint64_t> ElementSize =
-            unsignedConstant(CI.Args[1]);
+            unsignedConstant(CI.Args[ElementSizeArg]);
         const std::optional<uint64_t> ElementCount =
-            unsignedConstant(CI.Args[2]);
+            unsignedConstant(CI.Args[ElementCountArg]);
         if ((ElementSize && *ElementSize == 0) ||
             (ElementCount && *ElementCount == 0))
           return CallUse::None;
@@ -1736,6 +2105,7 @@ private:
 
   CollectedUses collectUses(const MedFunc &F,
                             const llvm::DenseSet<ValueKey> &Alias,
+                            const llvm::DenseSet<ValueKey> &MustAlias,
                             const std::vector<FreeEvent> &Frees) const {
     auto isFree = [&](int BlockId, int OpIdx) {
       for (const FreeEvent &Fr : Frees)
@@ -1750,8 +2120,14 @@ private:
         const MedOp &Op = B.Ops[Oi];
         if (Op.Opcode == NdOp::LOAD || detail::isStackMemoryWrite(Op.Opcode)) {
           const MedVar *Addr = detail::memoryAddress(Op);
-          if (Addr && !Addr->isConst() && Alias.count(keyOf(*Addr)))
-            Uses.Definite.push_back({B.Id, Oi, Op.Addr});
+          if (!Addr || Addr->isConst())
+            continue;
+          const ValueKey AddrKey = keyOf(*Addr);
+          if (!Alias.count(AddrKey))
+            continue;
+          UseEvent Event{B.Id, Oi, Op.Addr, 0, "memory_access", false};
+          (MustAlias.count(AddrKey) ? Uses.Definite : Uses.Possible)
+              .push_back(std::move(Event));
         }
       }
     for (const MedCallInfo &CI : F.CallInfos) {
@@ -1767,11 +2143,11 @@ private:
         if (!Alias.count(keyOf(CI.Args[I])))
           continue;
         const CallUse ArgUse = callUse(CI, I);
-        if (ArgUse == CallUse::Definite) {
+        if (ArgUse == CallUse::Definite && MustAlias.count(keyOf(CI.Args[I]))) {
           Use = CallUse::Definite;
           break;
         }
-        if (ArgUse == CallUse::Possible)
+        if (ArgUse != CallUse::None)
           Use = CallUse::Possible;
       }
       if (Use == CallUse::None)
@@ -1786,22 +2162,35 @@ private:
 
   EscapeState escapes(const MedFunc &F, const MemModel &Mem,
                       const llvm::DenseSet<ValueKey> &Alias,
+                      const llvm::DenseSet<ValueKey> &MustAlias,
                       const MedCallInfo &Alloc) const {
     bool Unknown = false;
     for (const MedBlock &B : F.Blocks)
       for (const MedOp &Op : B.Ops) {
         if (Op.Opcode == NdOp::RETURN && returnsValue(F)) {
-          for (unsigned I = 0; I < Op.NumInputs; ++I)
-            if (!Op.Inputs[I].isConst() && Alias.count(keyOf(Op.Inputs[I])))
+          for (unsigned I = 0; I < Op.NumInputs; ++I) {
+            if (Op.Inputs[I].isConst())
+              continue;
+            const ValueKey InputKey = keyOf(Op.Inputs[I]);
+            if (!Alias.count(InputKey))
+              continue;
+            if (MustAlias.count(InputKey))
               return EscapeState::Yes;
+            Unknown = true;
+          }
         } else if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
           const MedVar &Addr = Op.Inputs[Op.NumInputs >= 3 ? 1 : 0];
           const MedVar &Val = Op.Inputs[Op.NumInputs >= 3 ? 2 : 1];
           // Spilling the handle into its own stack frame is not an escape; only
           // a write through a non-stack address publishes it.
-          if (!Val.isConst() && Alias.count(keyOf(Val)) &&
-              !Mem.stackOffset(Addr))
+          if (Val.isConst() || Mem.stackOffset(Addr))
+            continue;
+          const ValueKey StoredKey = keyOf(Val);
+          if (!Alias.count(StoredKey))
+            continue;
+          if (MustAlias.count(StoredKey))
             return EscapeState::Yes;
+          Unknown = true;
         }
       }
     for (const MedCallInfo &CI : F.CallInfos) {
@@ -1817,7 +2206,10 @@ private:
           continue;
         switch (callArgEscape(CI, I)) {
         case EscapeState::Yes:
-          return EscapeState::Yes;
+          if (MustAlias.count(keyOf(CI.Args[I])))
+            return EscapeState::Yes;
+          Unknown = true;
+          break;
         case EscapeState::Unknown:
           Unknown = true;
           break;

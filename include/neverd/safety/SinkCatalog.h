@@ -33,18 +33,21 @@ namespace neverd::safety {
 /// the engine must reason about.  Argument indices are zero-based positions in
 /// the recovered call-argument list; -1 marks a slot the routine does not have.
 struct SinkEntry {
-  std::string Name;               ///< canonical normalized name.
+  std::string Name; ///< canonical normalized name.
   std::vector<std::string> Aliases;
   VulnClass Class = VulnClass::Unknown;
   SinkKind Kind = SinkKind::Copy;
 
-  int DstArg = -1; ///< destination buffer.
-  int SrcArg = -1; ///< source buffer (its length bounds an implicit copy).
-  int LenArg = -1; ///< explicit copy length / formatted-write limit.
-  int CapArg = -1; ///< explicit destination capacity (fortified variants).
-  int FmtArg = -1; ///< format-string argument.
+  int DstArg = -1;    ///< destination buffer.
+  int SrcArg = -1;    ///< source buffer (its length bounds an implicit copy).
+  int LenArg = -1;    ///< explicit copy length / formatted-write limit.
+  int CapArg = -1;    ///< explicit destination capacity (fortified variants).
+  int FmtArg = -1;    ///< format-string argument.
   int HandleArg = -1; ///< the freed / reallocated handle (audit).
   bool UnboundedWrite = false; ///< the call itself accepts unbounded input.
+  /// The release API reports failure and therefore cannot be treated as a
+  /// must-free event unless its result is proved successful.
+  bool ReleaseMayFail = false;
 
   unsigned Severity = 50;
 
@@ -109,7 +112,7 @@ public:
 
 private:
   std::vector<SinkEntry> SinkList;
-  llvm::StringMap<unsigned> SinkIndex;   ///< normalized name/alias -> SinkList.
+  llvm::StringMap<unsigned> SinkIndex; ///< normalized name/alias -> SinkList.
   std::vector<SourceEntry> SourceList;
   llvm::StringMap<unsigned> SourceIndex; ///< normalized name -> SourceList.
 };

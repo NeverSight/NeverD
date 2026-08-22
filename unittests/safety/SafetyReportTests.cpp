@@ -44,6 +44,12 @@ TEST(SafetyReport, PipelineCoverageRejectsPartialFunctionLifts) {
   EXPECT_TRUE(validatePipelineCoverage(Result).has_value());
   Result.FunctionAudits.front().TruncatedPaths.clear();
 
+  Result.FunctionAudits.front().DecodedInstructions = 1;
+  Result.FunctionAudits.front().LiftedInstructions = 2;
+  EXPECT_TRUE(validatePipelineCoverage(Result).has_value());
+  Result.FunctionAudits.front().LiftedInstructions = 1;
+  EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
   neverd::PipelineFunctionAudit Rejected;
   Rejected.Entry = 0x3000;
   Rejected.Disposition =
@@ -83,6 +89,61 @@ TEST(SafetyReport, PipelineCoverageMatchesAcceptedFunctionIdentities) {
   CrossedInventories.MedFuncs.resize(1);
   CrossedInventories.MedFuncs[0].Entry = 0x2000;
   EXPECT_TRUE(validatePipelineCoverage(CrossedInventories).has_value());
+}
+
+TEST(SafetyReport, PipelineCoverageAuthenticatesRemovedJumpTableTargets) {
+  neverd::PipelineResult Result;
+
+  neverd::PipelineFunctionAudit Accepted;
+  Accepted.Entry = 0x1000;
+  Accepted.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+  Accepted.HasLowIR = true;
+  Accepted.HasMedIR = true;
+  Accepted.MedIRVerified = true;
+  Result.FunctionAudits.push_back(Accepted);
+
+  neverd::PipelineFunctionAudit Removed;
+  Removed.Entry = 0x1010;
+  Removed.Disposition =
+      neverd::PipelineFunctionDisposition::RemovedJumpTableTarget;
+  Result.FunctionAudits.push_back(Removed);
+
+  Result.LowFuncs.resize(1);
+  Result.LowFuncs.front().Entry = Accepted.Entry;
+  Result.MedFuncs.resize(1);
+  Result.MedFuncs.front().Entry = Accepted.Entry;
+
+  // A disposition label alone is not proof that the removed candidate was an
+  // interior case.  The final published function must retain both the table
+  // target and its decoded instruction boundary.
+  EXPECT_TRUE(validatePipelineCoverage(Result).has_value());
+
+  neverd::JumpTable Table;
+  Table.InsnAddr = 0x1008;
+  Table.Targets = {Removed.Entry};
+  Result.LowFuncs.front().JumpTables.push_back(std::move(Table));
+  neverd::LowBlock Block;
+  Block.Id = 0;
+  Block.InstructionBoundaries.push_back({Removed.Entry, 4});
+  Result.LowFuncs.front().Blocks.push_back(std::move(Block));
+  EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  // A target that the loader still authenticates as its own function entry is
+  // not an interior-label exemption, even if an erroneous table absorbed it.
+  neverd::BinaryImage Img;
+  Img.Arch = neverd::Arch::X64;
+  Img.Format = neverd::BinaryFormat::ELF;
+  neverd::Segment Text;
+  Text.Name = "text";
+  Text.VA = 0x1000;
+  Text.Size = 0x40;
+  Text.FileSz = 0x40;
+  Text.Data.resize(0x40);
+  Text.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  Img.Segments.push_back(std::move(Text));
+  Img.Symbols.push_back(neverd::Symbol::makeFunc(Removed.Entry, 4));
+  EXPECT_TRUE(validatePipelineCoverage(Result, &Img).has_value());
 }
 
 TEST(SafetyReport, PipelineCoverageRejectsUnresolvedIndirectBranches) {
@@ -194,8 +255,8 @@ TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedIndirectCallee) {
   Text.Name = ".text";
   Text.VA = 0x1000;
   Text.Size = 0x2000;
-  Text.Flags = neverd::SegmentFlags::Readable |
-               neverd::SegmentFlags::Executable;
+  Text.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
   Img.Segments.push_back(std::move(Text));
 
   std::optional<std::string> Error = validatePipelineCoverage(Result, &Img);
@@ -218,6 +279,62 @@ TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedIndirectCallee) {
   const std::optional<std::string> ThumbError =
       validatePipelineCoverage(Result, &Img);
   EXPECT_FALSE(ThumbError.has_value()) << ThumbError.value_or("");
+}
+
+TEST(SafetyReport, PipelineCoverageRejectsUnliftedResolvedDirectCallee) {
+  neverd::PipelineResult Result;
+  neverd::PipelineFunctionAudit Accepted;
+  Accepted.Entry = 0x1000;
+  Accepted.Disposition = neverd::PipelineFunctionDisposition::Accepted;
+  Accepted.HasLowIR = true;
+  Accepted.HasMedIR = true;
+  Accepted.MedIRVerified = true;
+  Result.FunctionAudits.push_back(Accepted);
+
+  constexpr neverd::va_t kTarget = 0x2000;
+  neverd::LowFunc Low;
+  Low.Entry = Accepted.Entry;
+  neverd::LowBlock LowBlock;
+  LowBlock.Id = 0;
+  neverd::LowOp LowCall;
+  LowCall.Opcode = neverd::NdOp::CALL;
+  LowCall.Addr = 0x1010;
+  LowCall.addInput(neverd::NdVar::cst(kTarget, 8));
+  LowBlock.Ops.push_back(LowCall);
+  Low.Blocks.push_back(std::move(LowBlock));
+  Result.LowFuncs.push_back(std::move(Low));
+
+  neverd::MedFunc Med;
+  Med.Entry = Accepted.Entry;
+  neverd::MedBlock Block;
+  Block.Id = 0;
+  neverd::MedOp CallOp;
+  CallOp.Opcode = neverd::NdOp::CALL;
+  CallOp.Addr = 0x1010;
+  CallOp.addInput(neverd::MedVar::makeConst(kTarget, 8));
+  Block.Ops.push_back(CallOp);
+  Med.Blocks.push_back(std::move(Block));
+  neverd::MedCallInfo Call;
+  Call.BlockId = 0;
+  Call.OpIdx = 0;
+  Call.TargetAddr = kTarget;
+  Med.CallInfos.push_back(Call);
+  Result.MedFuncs.push_back(std::move(Med));
+
+  neverd::BinaryImage Img;
+  neverd::Segment Text;
+  Text.Name = ".text";
+  Text.VA = 0x1000;
+  Text.Size = 0x2000;
+  Text.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  Img.Segments.push_back(std::move(Text));
+
+  const std::optional<std::string> Error =
+      validatePipelineCoverage(Result, &Img);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("0x2000"), std::string::npos);
+  EXPECT_NE(Error->find("unresolved-internal-call"), std::string::npos);
 }
 
 TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
@@ -261,7 +378,31 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
   Call.BlockId = 0;
   Call.OpIdx = 0;
   Result.MedFuncs.front().CallInfos.push_back(Call);
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+
+  constexpr neverd::va_t kTarget = 0x2000;
+  Result.LowFuncs.front().Blocks.front().Ops.front().addInput(
+      neverd::NdVar::cst(kTarget, 8));
+  Result.MedFuncs.front().Blocks.front().Ops.front().addInput(
+      neverd::MedVar::makeConst(kTarget, 8));
+  Result.MedFuncs.front().CallInfos.front().TargetAddr = kTarget;
   EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  Result.MedFuncs.front().CallInfos.front().TargetAddr = kTarget + 0x10;
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  Result.MedFuncs.front().CallInfos.front().TargetAddr = kTarget;
+
+  Result.LowFuncs.front().Blocks.front().Ops.front().Inputs[0] =
+      neverd::NdVar::cst(kTarget + 0x20, 8);
+  Error = validatePipelineCoverage(Result);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  Result.LowFuncs.front().Blocks.front().Ops.front().Inputs[0] =
+      neverd::NdVar::cst(kTarget, 8);
 
   Result.MedFuncs.front().CallInfos.front().OpIdx = 1;
   Error = validatePipelineCoverage(Result);

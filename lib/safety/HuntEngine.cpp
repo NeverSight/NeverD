@@ -189,6 +189,8 @@ struct CountedSourceReturn {
   bool BoundIsSigned = false;
   int RequiredZeroArg = -1;
   int ZeroResultIfArgZero = -1;
+  int ObjectSizeArg = -1;
+  int ElementSizeArg = -1;
 };
 
 struct CountedSourceOutput {
@@ -205,6 +207,7 @@ struct BoundedStringOutput {
   int BoundArg = -1;
   uint32_t BoundBits = 0;
   bool BoundIsSigned = false;
+  int ObjectSizeArg = -1;
 };
 
 struct ReturnedStringOutput {
@@ -218,22 +221,35 @@ struct ReturnedStringOutput {
 CountedSourceReturn countedSourceReturn(llvm::StringRef Name,
                                         BinaryFormat Format) {
   const std::string Normalized = SinkCatalog::normalize(Name);
-  if (Normalized == "read" || Normalized == "pread") {
+  if (Normalized == "read" || Normalized == "pread" ||
+      Normalized == "read_chk" || Normalized == "pread_chk") {
     const bool WindowsRead =
         Normalized == "read" && Format == BinaryFormat::COFF;
-    return {2, true, WindowsRead ? uint32_t(32) : uint32_t(0),
-            WindowsRead ? uint32_t(32) : uint32_t(0)};
+    CountedSourceReturn Result{2, true,
+                               WindowsRead ? uint32_t(32) : uint32_t(0),
+                               WindowsRead ? uint32_t(32) : uint32_t(0)};
+    if (Normalized == "read_chk")
+      Result.ObjectSizeArg = 3;
+    else if (Normalized == "pread_chk")
+      Result.ObjectSizeArg = 4;
+    return Result;
   }
-  if (Normalized == "fread")
-    return {2, false, 0, 0, false, -1, 1};
-  if (Normalized == "recv" || Normalized == "recvfrom") {
+  if (Normalized == "fread" || Normalized == "fread_unlocked")
+    return {2, false, 0, 0, false, -1, 1, -1, 1};
+  if (Normalized == "fread_chk" || Normalized == "fread_unlocked_chk")
+    return {3, false, 0, 0, false, -1, 2, 1, 2};
+  if (Normalized == "recv" || Normalized == "recvfrom" ||
+      Normalized == "recv_chk" || Normalized == "recvfrom_chk") {
     const bool WindowsSocket = Format == BinaryFormat::COFF;
-    return {2,
-            true,
-            WindowsSocket ? uint32_t(32) : uint32_t(0),
-            WindowsSocket ? uint32_t(32) : uint32_t(0),
-            WindowsSocket,
-            3};
+    CountedSourceReturn Result{2,
+                               true,
+                               WindowsSocket ? uint32_t(32) : uint32_t(0),
+                               WindowsSocket ? uint32_t(32) : uint32_t(0),
+                               WindowsSocket,
+                               Normalized.ends_with("_chk") ? 4 : 3};
+    if (Normalized.ends_with("_chk"))
+      Result.ObjectSizeArg = 3;
+    return Result;
   }
   return {};
 }
@@ -247,8 +263,11 @@ CountedSourceOutput countedSourceOutput(llvm::StringRef Name,
 }
 
 BoundedStringOutput boundedStringOutput(llvm::StringRef Name) {
-  if (SinkCatalog::normalize(Name) == "fgets")
+  const std::string Normalized = SinkCatalog::normalize(Name);
+  if (Normalized == "fgets" || Normalized == "fgets_unlocked")
     return {0, 1, 32, true};
+  if (Normalized == "fgets_chk" || Normalized == "fgets_unlocked_chk")
+    return {0, 2, 32, true, 1};
   return {};
 }
 
@@ -278,7 +297,9 @@ bool mayWriteMemory(NdOp Opcode) {
 }
 
 SymRef readLowValue(SymContext &Ctx, SymState &State, const NdVar &Value) {
-  const uint16_t Bytes = Value.Size ? Value.Size : uint16_t(8);
+  if (Value.Size == 0)
+    return {};
+  const uint16_t Bytes = Value.Size;
   if (Value.isConst())
     return Ctx.mkConst(uint32_t(Bytes) * 8, Value.Offset);
   if (Value.isRam())
@@ -293,9 +314,15 @@ bool writeIsProvablyBeforeSource(SymContext &Ctx, SymState &State,
                                  const SafetyBudgets &Budgets) {
   if (!Source.isValid() || Op.NumInputs < 2)
     return false;
-  const SymRef Address =
-      Ctx.mkZExtOrTrunc(readLowValue(Ctx, State, Op.Inputs[0]), 64);
-  const uint64_t Bytes = Op.Inputs[1].Size ? Op.Inputs[1].Size : 1;
+  const bool HasAddressSpace = Op.Opcode == NdOp::STORE && Op.NumInputs >= 3;
+  const unsigned AddressIndex = HasAddressSpace ? 1 : 0;
+  const unsigned ValueIndex = HasAddressSpace ? 2 : 1;
+  const SymRef RawAddress = readLowValue(Ctx, State, Op.Inputs[AddressIndex]);
+  if (!RawAddress.isValid())
+    return false;
+  const SymRef Address = Ctx.mkZExtOrTrunc(RawAddress, 64);
+  const uint64_t Bytes =
+      Op.Inputs[ValueIndex].Size ? Op.Inputs[ValueIndex].Size : 1;
   const SymRef NoOverflow =
       Ctx.mkUle(Address, Ctx.mkConst(64, UINT64_MAX - Bytes));
   const SymRef End = Ctx.mkAdd(Address, Ctx.mkConst(64, Bytes));
@@ -321,18 +348,84 @@ bool expressionsMustEqual(SymContext &Ctx, SymRef Left, SymRef Right,
   return !pathFeasible(Ctx, Counterexample, Budgets, Unknown) && !Unknown;
 }
 
-bool writesStringTerminatorAtSource(SymContext &Ctx, SymState &State,
-                                    const LowOp &Op, SymRef Source,
-                                    const std::vector<SymRef> &Constraints,
-                                    const SafetyBudgets &Budgets) {
+std::optional<uint64_t>
+constantForwardOffset(SymContext &Ctx, SymRef Base, SymRef Address,
+                      const std::vector<SymRef> &Constraints,
+                      const SafetyBudgets &Budgets) {
+  if (!Base.isValid() || !Address.isValid())
+    return std::nullopt;
+  Base = Ctx.mkZExtOrTrunc(Base, 64);
+  Address = Ctx.mkZExtOrTrunc(Address, 64);
+  const std::optional<llvm::APInt> Delta =
+      Ctx.asConst(Ctx.mkSub(Address, Base));
+  if (!Delta)
+    return std::nullopt;
+  std::vector<SymRef> Wrapped = Constraints;
+  Wrapped.push_back(Ctx.mkUlt(Address, Base));
+  bool Unknown = false;
+  if (pathFeasible(Ctx, Wrapped, Budgets, Unknown) || Unknown)
+    return std::nullopt;
+  return Delta->getZExtValue();
+}
+
+bool expressionsShareInput(SymContext &Ctx, SymRef Left, SymRef Right) {
+  if (!Left.isValid() || !Right.isValid())
+    return false;
+  llvm::SmallVector<uint32_t, 8> LeftVars;
+  llvm::SmallVector<uint32_t, 8> RightVars;
+  Ctx.collectVars(Left, LeftVars);
+  Ctx.collectVars(Right, RightVars);
+  size_t LeftIndex = 0;
+  size_t RightIndex = 0;
+  while (LeftIndex < LeftVars.size() && RightIndex < RightVars.size()) {
+    if (LeftVars[LeftIndex] == RightVars[RightIndex])
+      return true;
+    if (LeftVars[LeftIndex] < RightVars[RightIndex])
+      ++LeftIndex;
+    else
+      ++RightIndex;
+  }
+  return false;
+}
+
+std::optional<uint64_t> storedStringTerminatorBound(
+    SymContext &Ctx, SymState &State, const LowOp &Op, SymRef Source,
+    const std::vector<SymRef> &Constraints, const SafetyBudgets &Budgets) {
   if (Op.Opcode != NdOp::STORE || Op.NumInputs < 2 || !Source.isValid())
-    return false;
-  const SymRef Value = readLowValue(Ctx, State, Op.Inputs[1]);
+    return std::nullopt;
+  const bool HasAddressSpace = Op.NumInputs >= 3;
+  const unsigned AddressIndex = HasAddressSpace ? 1 : 0;
+  const unsigned ValueIndex = HasAddressSpace ? 2 : 1;
+  const SymRef Value = readLowValue(Ctx, State, Op.Inputs[ValueIndex]);
+  if (!Value.isValid())
+    return std::nullopt;
   const std::optional<llvm::APInt> Constant = Ctx.asConst(Value);
-  if (!Constant || !Constant->isZero())
-    return false;
-  const SymRef Address = readLowValue(Ctx, State, Op.Inputs[0]);
-  return expressionsMustEqual(Ctx, Address, Source, Constraints, Budgets);
+  if (!Constant || Constant->getBitWidth() == 0 ||
+      Constant->getBitWidth() % 8 != 0 || !Constant->isZero())
+    return std::nullopt;
+
+  const SymRef RawAddress = readLowValue(Ctx, State, Op.Inputs[AddressIndex]);
+  if (!RawAddress.isValid())
+    return std::nullopt;
+  const SymRef Address = Ctx.mkZExtOrTrunc(RawAddress, 64);
+  Source = Ctx.mkZExtOrTrunc(Source, 64);
+  const uint64_t Bytes = Constant->getBitWidth() / 8;
+  const SymRef StoreDoesNotWrap =
+      Ctx.mkUle(Address, Ctx.mkConst(64, UINT64_MAX - (Bytes - 1)));
+  std::vector<SymRef> Wrapped = Constraints;
+  Wrapped.push_back(
+      Ctx.mkNot(Ctx.mkAnd(Ctx.mkUge(Address, Source), StoreDoesNotWrap)));
+  bool Unknown = false;
+  if (pathFeasible(Ctx, Wrapped, Budgets, Unknown) || Unknown)
+    return std::nullopt;
+  const std::optional<llvm::APInt> Delta =
+      Ctx.asConst(Ctx.mkSub(Address, Source));
+  if (!Delta || Delta->isNegative())
+    return std::nullopt;
+  const uint64_t BaseOffset = Delta->getZExtValue();
+  if (BaseOffset == UINT64_MAX)
+    return std::nullopt;
+  return BaseOffset + 1;
 }
 
 bool predicateMustHold(SymContext &Ctx, SymRef Predicate,
@@ -364,6 +457,34 @@ bool valuesShareUniqueLoadOrigin(const SymState &State, SymRef Left,
   const SymState::LoadOrigin *LeftOrigin = State.loadOrigin(Left);
   const SymState::LoadOrigin *RightOrigin = State.loadOrigin(Right);
   return LeftOrigin && RightOrigin && *LeftOrigin == *RightOrigin;
+}
+
+std::optional<SymState::LoadOrigin>
+uniqueLoadOriginInExpression(const SymContext &Ctx, const SymState &State,
+                             SymRef Value) {
+  if (!Value.isValid())
+    return std::nullopt;
+
+  llvm::SmallVector<SymRef, 16> Worklist{Value};
+  llvm::DenseSet<uint32_t> Seen;
+  std::optional<SymState::LoadOrigin> Unique;
+  while (!Worklist.empty()) {
+    const SymRef Current = Worklist.pop_back_val();
+    if (!Seen.insert(Current.index()).second)
+      continue;
+    // A literal can share its interned expression with a value read from
+    // memory elsewhere.  Only non-constant data-flow nodes carry occurrence
+    // evidence into this use.
+    if (!Ctx.isConst(Current))
+      for (const SymState::LoadOrigin &Origin : State.loadOrigins(Current)) {
+        if (Unique && *Unique != Origin)
+          return std::nullopt;
+        Unique = Origin;
+      }
+    for (SymRef Operand : Ctx.operands(Current))
+      Worklist.push_back(Operand);
+  }
+  return Unique;
 }
 
 SymRef captureReturn(const LowOp &Op, SymState &State,
@@ -415,11 +536,12 @@ std::optional<int> takenSucc(const LowFunc &LF, const LowBlock &B,
   SymRef T = Exec.branchTarget();
   if (!T.isValid() && Br.Inputs[0].isConst())
     T = Ctx.mkConst(64, Br.Inputs[0].Offset);
-  if (std::optional<llvm::APInt> Addr = Ctx.asConst(T)) {
-    int Id = blockIdAt(LF, Addr->getZExtValue());
-    if (Id >= 0 && B.hasSucc(Id))
-      return Id;
-  }
+  if (T.isValid())
+    if (std::optional<llvm::APInt> Addr = Ctx.asConst(T)) {
+      int Id = blockIdAt(LF, Addr->getZExtValue());
+      if (Id >= 0 && B.hasSucc(Id))
+        return Id;
+    }
   return std::nullopt;
 }
 
@@ -460,31 +582,67 @@ SymRef readCallArgument(const AnalysisInput &In, const MedFunc &Fn,
                         int ArgIndex, const MedCallInfo &CI, SymState &State) {
   SymContext &Ctx = State.context();
   auto fromVar = [&](const MedVar &V) -> SymRef {
-    if (V.isConst())
-      return Ctx.mkConst(64, V.ConstVal);
-    if (V.Kind == MedVar::Reg && V.Size > 0)
+    if (V.isConst()) {
+      if (V.Size == 0 || V.Size > sizeof(uint64_t))
+        return {};
+      const uint32_t BitWidth = uint32_t(V.Size) * 8;
+      return Ctx.mkConst(BitWidth, V.ConstVal);
+    }
+    if (V.Kind == MedVar::Reg && V.Size > 0 && V.Size <= sizeof(uint64_t))
       return State.read(SymSpace::Register, V.RegOff, V.Size);
-    if (V.Kind == MedVar::Param)
-      return Ctx.mkVar("param$" + std::to_string(V.Id),
-                       uint32_t(V.Size ? V.Size : uint16_t(8)) * 8);
+    if (V.Kind == MedVar::Param && V.Size > 0 && V.Size <= sizeof(uint64_t))
+      return Ctx.mkVar("param$" + std::to_string(V.Id), uint32_t(V.Size) * 8);
     return SymRef();
   };
 
+  const MedVar *RecoveredArg = nullptr;
   if (ArgIndex >= 0 && ArgIndex < static_cast<int>(CI.Args.size())) {
-    if (SymRef R = fromVar(CI.Args[ArgIndex]); R.isValid())
+    const MedVar &Arg = CI.Args[ArgIndex];
+    RecoveredArg = &Arg;
+    if (Arg.Size == 0 || Arg.Size > sizeof(uint64_t))
+      return {};
+    if (SymRef R = fromVar(Arg); R.isValid())
       return Ctx.mkZExtOrTrunc(R, 64);
+    if (Arg.isConst() || Arg.Kind == MedVar::Reg || Arg.Kind == MedVar::Param)
+      return {};
   }
 
   if (!In.Img)
     return SymRef();
   const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
-  llvm::ArrayRef<uint64_t> Params =
-      Fn.CC == CallingConv::Win64 ? TRI.Win64ParamRegs : TRI.IntParamRegs;
-  if (ArgIndex < 0 || ArgIndex >= static_cast<int>(Params.size()))
+  if (TRI.PointerSize == 0 || TRI.PointerSize > sizeof(uint64_t) ||
+      ArgIndex < 0)
     return SymRef();
-  const uint16_t Bytes = TRI.PointerSize ? TRI.PointerSize : 8;
-  return Ctx.mkZExtOrTrunc(
-      State.read(SymSpace::Register, Params[ArgIndex], Bytes), 64);
+
+  const bool IsCdecl = In.Img->Arch == Arch::X86 && Fn.CC == CallingConv::CDECL;
+  llvm::ArrayRef<uint64_t> Params = IsCdecl ? llvm::ArrayRef<uint64_t>()
+                                    : Fn.CC == CallingConv::Win64
+                                        ? TRI.Win64ParamRegs
+                                        : TRI.IntParamRegs;
+  if (ArgIndex < static_cast<int>(Params.size()))
+    return Ctx.mkZExtOrTrunc(
+        State.read(SymSpace::Register, Params[ArgIndex], TRI.PointerSize), 64);
+
+  const uint64_t StackIndex =
+      uint64_t(ArgIndex - static_cast<int>(Params.size()));
+  const uint64_t ShadowBytes =
+      Fn.CC == CallingConv::Win64
+          ? uint64_t(TRI.Win64ParamRegs.size()) * TRI.PointerSize
+          : 0;
+  if (StackIndex >
+      (std::numeric_limits<uint64_t>::max() - ShadowBytes) / TRI.PointerSize)
+    return {};
+  const uint64_t StackOffset =
+      ShadowBytes + StackIndex * uint64_t(TRI.PointerSize);
+  const uint16_t Bytes = RecoveredArg ? RecoveredArg->Size : TRI.PointerSize;
+  const SymRef StackPointer =
+      State.read(SymSpace::Register, TRI.StackPointer, TRI.PointerSize);
+  if (!StackPointer.isValid())
+    return {};
+  const SymRef Address = Ctx.mkAdd(Ctx.mkZExtOrTrunc(StackPointer, 64),
+                                   Ctx.mkConst(64, StackOffset));
+  const SymRef Loaded = State.load(Address, Bytes);
+  return Ctx.mkZExtOrTrunc(Loaded, 64);
 }
 
 struct ExploreHit {
@@ -598,6 +756,13 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
     SymRef ImplicitLen;
     bool ImplicitLenIncludesTerminator = false;
     uint32_t RequiredAssignments = 0;
+    SymRef ImplicitLenSuccess;
+    bool WritesBuffer = false;
+    SymRef ProducedValue;
+    SymRef ProducedValueSuccess;
+    uint16_t ScalarOutputBytes = 0;
+    SymRef PriorScalarValue;
+    SymRef WrittenBytes;
   };
 
   struct Frontier {
@@ -659,6 +824,16 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
       Exec.setCallPreservedRegisters(Preserved);
       for (size_t Oi = 0; Oi < Block->Ops.size(); ++Oi) {
         const LowOp &Op = Block->Ops[Oi];
+        constexpr size_t LowInputCapacity =
+            sizeof(Op.Inputs) / sizeof(Op.Inputs[0]);
+        if (Op.NumInputs > LowInputCapacity) {
+          Best.SemanticUnknown = true;
+          Best.Reached = true;
+          ++Finished;
+          HitSink = true;
+          Stopped = true;
+          break;
+        }
         const bool IsCall =
             Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
         if (++Cur.Steps > MaxSteps) {
@@ -666,8 +841,12 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           Stopped = true;
           break;
         }
+        if (std::any_of(Op.Inputs, Op.Inputs + Op.NumInputs,
+                        [](const NdVar &Input) { return Input.Size == 0; }))
+          Cur.SemanticUnknown = true;
 
         const bool IsSinkCall = IsCall && Op.Addr == Site.CallVA;
+        bool DeferredSinkCall = false;
         if (IsSinkCall) {
           bool Unknown = false;
           if (!pathFeasible(Ctx, Cur.Constraints, Budgets, Unknown)) {
@@ -703,81 +882,210 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
           SymRef SinkSource =
               CI ? readCallArgument(In, Fn, E.SrcArg, *CI, Cur.State)
                  : SymRef();
+          const std::optional<SymState::LoadOrigin> LengthOrigin =
+              !Implicit ? uniqueLoadOriginInExpression(Ctx, Cur.State, Len)
+                        : std::nullopt;
           SymRef EventImplicitLen;
           SymRef EventImplicitSuccess;
           SymRef ConditionalLenSuccess;
           bool EventLenIncludesTerminator = false;
           bool EventLenConflict = false;
-          for (const SourceEvent &Event : Cur.SourceEvents) {
-            const bool SameSource =
-                expressionsMustEqual(Ctx, Event.Buffer, SinkSource,
-                                     Cur.Constraints, Budgets) ||
-                valuesShareUniqueLoadOrigin(Cur.State, Event.Buffer,
-                                            SinkSource);
-            if (!SameSource ||
-                !predicateMayHold(Ctx, Event.Success, Cur.Constraints, Budgets))
-              continue;
-            if (!RequiredSource.empty() && Event.Name == RequiredSource)
-              Best.SourceEvidence = true;
-            if (!UseImplicitLength || !Event.ImplicitLen.isValid())
-              continue;
-            if (EventImplicitLen.isValid() &&
-                !expressionsMustEqual(Ctx, EventImplicitLen, Event.ImplicitLen,
-                                      Cur.Constraints, Budgets)) {
-              EventLenConflict = true;
-              continue;
-            }
-            EventImplicitLen = Event.ImplicitLen;
-            EventImplicitSuccess = Event.Success;
-            EventLenIncludesTerminator = Event.ImplicitLenIncludesTerminator;
-          }
+          bool HaveEventImplicitLen = false;
+          bool EventLenUnconditional = false;
+          bool HasRequiredSourceEvidence = RequiredSource.empty();
+          bool SourceEvidenceUnconditional = false;
+          SymRef SourceEvidenceSuccess;
           const bool SameImplicitSource =
               expressionsMustEqual(Ctx, Cur.ImplicitSource, SinkSource,
                                    Cur.Constraints, Budgets) ||
               (Cur.ImplicitFromLength &&
                valuesShareUniqueLoadOrigin(Cur.State, Cur.ImplicitSource,
                                            SinkSource));
-          bool ConditionalBoundNotProven = false;
-          if (!Len.isValid() && EventImplicitLen.isValid() &&
-              !EventLenConflict) {
-            Len = Ctx.mkZExtOrTrunc(EventImplicitLen, 64);
-            if (Implicit && !EventLenIncludesTerminator)
-              Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
-            ConditionalLenSuccess = EventImplicitSuccess;
-          } else if (UseImplicitLength && !Len.isValid() &&
-                     Cur.ImplicitLen.isValid() && SameImplicitSource) {
-            Len = Ctx.mkZExtOrTrunc(Cur.ImplicitLen, 64);
-            if (Implicit && !Cur.ImplicitLenIncludesTerminator)
-              Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
-            ConditionalLenSuccess = Cur.ImplicitSuccess;
-          }
-          if (ConditionalLenSuccess.isValid()) {
-            ConditionalBoundNotProven = !predicateMustHold(
-                Ctx, ConditionalLenSuccess, Cur.Constraints, Budgets);
-            SymRef Parts[] = {Pred, ConditionalLenSuccess};
-            Pred = Ctx.mkAnd(Parts);
-          }
-          SymRef RuntimeCap;
-          if (E.CapArg >= 0) {
-            RuntimeCap = CI ? readCallArgument(In, Fn, E.CapArg, *CI, Cur.State)
-                            : SymRef();
-            if (!RuntimeCap.isValid()) {
-              Best.SemanticUnknown = true;
-              Best.Reached = true;
-              ++Finished;
-              HitSink = true;
-              Stopped = true;
-              break;
+          for (const SourceEvent &Event : Cur.SourceEvents) {
+            SymRef SameBufferSuccess;
+            bool SameBuffer = false;
+            if (std::optional<uint64_t> Offset = constantForwardOffset(
+                    Ctx, Event.Buffer, SinkSource, Cur.Constraints, Budgets)) {
+              if (Event.WrittenBytes.isValid()) {
+                const SymRef HasInputByte = Ctx.mkUgt(
+                    Event.WrittenBytes,
+                    Ctx.mkConst(Ctx.width(Event.WrittenBytes), *Offset));
+                SameBufferSuccess = Event.Success.isValid()
+                                        ? Ctx.mkAnd(Event.Success, HasInputByte)
+                                        : HasInputByte;
+                SameBuffer = true;
+              } else if (*Offset == 0) {
+                SameBufferSuccess = Event.Success;
+                SameBuffer = true;
+              }
             }
+            if (!SameBuffer && SameImplicitSource &&
+                expressionsMustEqual(Ctx, Event.Buffer, Cur.ImplicitSource,
+                                     Cur.Constraints, Budgets)) {
+              SameBufferSuccess = Event.Success;
+              SameBuffer = true;
+            }
+            const bool SameProducedValue =
+                !Implicit && Event.ProducedValue.isValid() && Len.isValid() &&
+                (expressionsMustEqual(Ctx, Event.ProducedValue, Len,
+                                      Cur.Constraints, Budgets) ||
+                 expressionsShareInput(Ctx, Event.ProducedValue, Len));
+            const bool SameDerivedLength =
+                !Implicit && Cur.ImplicitFromLength &&
+                Cur.ImplicitLen.isValid() && Len.isValid() && SameBuffer &&
+                (expressionsMustEqual(Ctx, Cur.ImplicitLen, Len,
+                                      Cur.Constraints, Budgets) ||
+                 expressionsShareInput(Ctx, Cur.ImplicitLen, Len));
+            SymRef WrittenLoadSuccess;
+            bool SameWrittenLoad = false;
+            std::optional<uint64_t> WrittenLoadOffset;
+            if (LengthOrigin && Event.WrittenBytes.isValid())
+              WrittenLoadOffset = constantForwardOffset(
+                  Ctx, Event.Buffer, LengthOrigin->Address, Cur.Constraints,
+                  Budgets);
+            if (WrittenLoadOffset &&
+                *WrittenLoadOffset <=
+                    UINT64_MAX - uint64_t(LengthOrigin->Bytes)) {
+              // Address equality does not establish order.  Re-read the
+              // current memory epoch so a value loaded before the source call
+              // cannot borrow provenance from the later write.
+              const SymRef CurrentLoaded =
+                  Cur.State.load(LengthOrigin->Address, LengthOrigin->Bytes);
+              SameWrittenLoad = expressionsShareInput(Ctx, CurrentLoaded, Len);
+            }
+            if (SameWrittenLoad) {
+              const uint64_t RequiredBytes =
+                  *WrittenLoadOffset + LengthOrigin->Bytes;
+              const SymRef CoversLoad = Ctx.mkUge(
+                  Event.WrittenBytes,
+                  Ctx.mkConst(Ctx.width(Event.WrittenBytes), RequiredBytes));
+              WrittenLoadSuccess = Event.Success.isValid()
+                                       ? Ctx.mkAnd(Event.Success, CoversLoad)
+                                       : CoversLoad;
+            }
+            const bool SameSource =
+                Implicit ? SameBuffer
+                         : (SameProducedValue || SameDerivedLength ||
+                            SameWrittenLoad);
+            if (!SameSource)
+              continue;
+            SymRef EvidenceSuccess;
+            bool EvidenceUnconditional = false;
+            auto MergeEvidenceSuccess = [&](SymRef Success) {
+              if (!Success.isValid()) {
+                EvidenceUnconditional = true;
+                EvidenceSuccess = SymRef();
+              } else if (!EvidenceUnconditional) {
+                EvidenceSuccess = EvidenceSuccess.isValid()
+                                      ? Ctx.mkOr(EvidenceSuccess, Success)
+                                      : Success;
+              }
+            };
+            if (Implicit)
+              MergeEvidenceSuccess(SameBufferSuccess);
+            else {
+              if (SameProducedValue)
+                MergeEvidenceSuccess(Event.ProducedValueSuccess);
+              if (SameDerivedLength)
+                MergeEvidenceSuccess(SameBufferSuccess);
+              if (SameWrittenLoad)
+                MergeEvidenceSuccess(WrittenLoadSuccess);
+            }
+            if (predicateMayHold(Ctx, EvidenceSuccess, Cur.Constraints,
+                                 Budgets) &&
+                !RequiredSource.empty() && Event.Name == RequiredSource) {
+              Best.SourceEvidence = true;
+              HasRequiredSourceEvidence = true;
+              if (EvidenceUnconditional) {
+                SourceEvidenceUnconditional = true;
+                SourceEvidenceSuccess = SymRef();
+              } else if (!SourceEvidenceUnconditional) {
+                SourceEvidenceSuccess =
+                    SourceEvidenceSuccess.isValid()
+                        ? Ctx.mkOr(SourceEvidenceSuccess, EvidenceSuccess)
+                        : EvidenceSuccess;
+              }
+            }
+            if (!UseImplicitLength || !Event.ImplicitLen.isValid() ||
+                !predicateMayHold(Ctx, Event.ImplicitLenSuccess,
+                                  Cur.Constraints, Budgets))
+              continue;
+            if (HaveEventImplicitLen &&
+                !expressionsMustEqual(Ctx, EventImplicitLen, Event.ImplicitLen,
+                                      Cur.Constraints, Budgets)) {
+              EventLenConflict = true;
+              continue;
+            }
+            if (!HaveEventImplicitLen) {
+              EventImplicitLen = Event.ImplicitLen;
+              EventImplicitSuccess = Event.ImplicitLenSuccess;
+              EventLenUnconditional = !Event.ImplicitLenSuccess.isValid();
+              EventLenIncludesTerminator = Event.ImplicitLenIncludesTerminator;
+              HaveEventImplicitLen = true;
+            } else if (!EventLenUnconditional) {
+              if (!Event.ImplicitLenSuccess.isValid()) {
+                EventImplicitSuccess = SymRef();
+                EventLenUnconditional = true;
+              } else {
+                EventImplicitSuccess =
+                    Ctx.mkOr(EventImplicitSuccess, Event.ImplicitLenSuccess);
+              }
+            }
+            if (HaveEventImplicitLen)
+              EventLenIncludesTerminator &= Event.ImplicitLenIncludesTerminator;
           }
-          Best.Reached = true;
-          considerSink(Best, Ctx, Pred, Len, RuntimeCap, Capacity, Budgets);
-          if (ConditionalBoundNotProven)
-            Best.SemanticUnknown = true;
-          ++Finished;
-          HitSink = true;
-          Stopped = true;
-          break;
+          if (!HasRequiredSourceEvidence) {
+            Best.Reached = true;
+            DeferredSinkCall = true;
+          } else {
+            bool ConditionalBoundNotProven = false;
+            if (!Implicit && !SourceEvidenceUnconditional &&
+                SourceEvidenceSuccess.isValid()) {
+              SymRef Parts[] = {Pred, SourceEvidenceSuccess};
+              Pred = Ctx.mkAnd(Parts);
+            }
+            if (!Len.isValid() && EventImplicitLen.isValid() &&
+                !EventLenConflict) {
+              Len = Ctx.mkZExtOrTrunc(EventImplicitLen, 64);
+              if (Implicit && !EventLenIncludesTerminator)
+                Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
+              ConditionalLenSuccess = EventImplicitSuccess;
+            } else if (UseImplicitLength && !Len.isValid() &&
+                       Cur.ImplicitLen.isValid() && SameImplicitSource) {
+              Len = Ctx.mkZExtOrTrunc(Cur.ImplicitLen, 64);
+              if (Implicit && !Cur.ImplicitLenIncludesTerminator)
+                Len = Ctx.mkAdd(Len, Ctx.mkConst(64, 1));
+              ConditionalLenSuccess = Cur.ImplicitSuccess;
+            }
+            if (ConditionalLenSuccess.isValid()) {
+              ConditionalBoundNotProven = !predicateMustHold(
+                  Ctx, ConditionalLenSuccess, Cur.Constraints, Budgets);
+              SymRef Parts[] = {Pred, ConditionalLenSuccess};
+              Pred = Ctx.mkAnd(Parts);
+            }
+            SymRef RuntimeCap;
+            if (E.CapArg >= 0) {
+              RuntimeCap =
+                  CI ? readCallArgument(In, Fn, E.CapArg, *CI, Cur.State)
+                     : SymRef();
+              if (!RuntimeCap.isValid()) {
+                Best.SemanticUnknown = true;
+                Best.Reached = true;
+                ++Finished;
+                HitSink = true;
+                Stopped = true;
+                break;
+              }
+            }
+            Best.Reached = true;
+            considerSink(Best, Ctx, Pred, Len, RuntimeCap, Capacity, Budgets);
+            if (ConditionalBoundNotProven)
+              Best.SemanticUnknown = true;
+            ++Finished;
+            HitSink = true;
+            Stopped = true;
+            break;
+          }
         }
 
         const MedCallInfo *Callee = IsCall ? medCallAt(Fn, Op.Addr) : nullptr;
@@ -828,9 +1136,11 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             CalleeSource->OutArg < static_cast<int>(Callee->Args.size())) {
           SymRef Output = readCallArgument(In, Fn, CalleeSource->OutArg,
                                            *Callee, Cur.State);
-          if (Output.isValid())
+          if (Output.isValid()) {
             NewSourceEvents.push_back(
                 {SinkCatalog::normalize(CalleeName), Output, SymRef()});
+            NewSourceEvents.back().WritesBuffer = true;
+          }
         }
         if (Callee && CalleeSource)
           if (std::optional<safety::detail::FormattedSourceOutputs> Outputs =
@@ -848,21 +1158,34 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               SymRef Input = readCallArgument(In, Fn, Outputs->InputArg,
                                               *Callee, Cur.State);
               for (const SourceEvent &Event : Cur.SourceEvents) {
-                const bool SameInput =
-                    expressionsMustEqual(Ctx, Event.Buffer, Input,
-                                         Cur.Constraints, Budgets) ||
-                    valuesShareUniqueLoadOrigin(Cur.State, Event.Buffer, Input);
-                if (!SameInput || !predicateMayHold(Ctx, Event.Success,
-                                                    Cur.Constraints, Budgets))
+                const std::optional<uint64_t> InputOffset =
+                    constantForwardOffset(Ctx, Event.Buffer, Input,
+                                          Cur.Constraints, Budgets);
+                if (!InputOffset)
+                  continue;
+                SymRef EventInputSuccess = Event.Success;
+                if (Event.WrittenBytes.isValid()) {
+                  const SymRef HasInputByte = Ctx.mkUgt(
+                      Event.WrittenBytes,
+                      Ctx.mkConst(Ctx.width(Event.WrittenBytes), *InputOffset));
+                  EventInputSuccess =
+                      EventInputSuccess.isValid()
+                          ? Ctx.mkAnd(EventInputSuccess, HasInputByte)
+                          : HasInputByte;
+                } else if (*InputOffset != 0) {
+                  continue;
+                }
+                if (!predicateMayHold(Ctx, EventInputSuccess, Cur.Constraints,
+                                      Budgets))
                   continue;
                 InputIsTainted = true;
-                if (!Event.Success.isValid()) {
+                if (!EventInputSuccess.isValid()) {
                   InputIsUnconditionallyTainted = true;
                   InputSuccess = SymRef();
                 } else if (!InputIsUnconditionallyTainted) {
                   InputSuccess = InputSuccess.isValid()
-                                     ? Ctx.mkOr(InputSuccess, Event.Success)
-                                     : Event.Success;
+                                     ? Ctx.mkOr(InputSuccess, EventInputSuccess)
+                                     : EventInputSuccess;
                 }
               }
             }
@@ -872,20 +1195,41 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                    Outputs->UnboundedTextArgs) {
                 SymRef Output = readCallArgument(In, Fn, Formatted.ArgIndex,
                                                  *Callee, Cur.State);
-                if (Output.isValid())
+                if (Output.isValid()) {
                   NewSourceEvents.push_back(
                       {SinkCatalog::normalize(CalleeName), Output, InputSuccess,
                        SymRef(), false, Formatted.RequiredAssignments});
+                  NewSourceEvents.back().WritesBuffer = true;
+                }
               }
               for (const safety::detail::BoundedTextOutput &Bounded :
                    Outputs->BoundedTextArgs) {
                 SymRef Output = readCallArgument(In, Fn, Bounded.ArgIndex,
                                                  *Callee, Cur.State);
-                if (Output.isValid())
+                if (Output.isValid()) {
                   NewSourceEvents.push_back(
                       {SinkCatalog::normalize(CalleeName), Output, InputSuccess,
                        Ctx.mkConst(64, Bounded.MaxChars + 1), true,
                        Bounded.RequiredAssignments});
+                  NewSourceEvents.back().WritesBuffer = true;
+                }
+              }
+              for (const safety::detail::FormattedOutput &Scalar :
+                   Outputs->ScalarArgs) {
+                if (Scalar.Bytes == 0 || !Scalar.AssignmentExecutionObservable)
+                  continue;
+                SymRef Output = readCallArgument(In, Fn, Scalar.ArgIndex,
+                                                 *Callee, Cur.State);
+                if (!Output.isValid())
+                  continue;
+                NewSourceEvents.push_back({SinkCatalog::normalize(CalleeName),
+                                           Output, InputSuccess, SymRef(),
+                                           false, Scalar.RequiredAssignments});
+                SourceEvent &Event = NewSourceEvents.back();
+                Event.WritesBuffer = true;
+                Event.ScalarOutputBytes = Scalar.Bytes;
+                Event.PriorScalarValue =
+                    Cur.State.load(Output, Event.ScalarOutputBytes);
               }
             }
           }
@@ -897,6 +1241,14 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         if (CountedReturnApplies && CountedReturn.ZeroResultIfArgZero >= 0)
           ZeroResultArg = readCallArgument(
               In, Fn, CountedReturn.ZeroResultIfArgZero, *Callee, Cur.State);
+        SymRef CountedObjectSize;
+        if (CountedReturnApplies && CountedReturn.ObjectSizeArg >= 0)
+          CountedObjectSize = readCallArgument(
+              In, Fn, CountedReturn.ObjectSizeArg, *Callee, Cur.State);
+        SymRef CountedElementSize;
+        if (CountedReturnApplies && CountedReturn.ElementSizeArg >= 0)
+          CountedElementSize = readCallArgument(
+              In, Fn, CountedReturn.ElementSizeArg, *Callee, Cur.State);
         SymRef OutputBound;
         SymRef OutputCountPointer;
         if (CountedOutputApplies) {
@@ -907,6 +1259,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         }
         SymRef NextImplicitSource;
         SymRef BoundedStringLimit;
+        SymRef BoundedStringObjectSize;
         SymRef ReturnedStringBuffer;
         SymRef ReturnedStringLimit;
         const bool CaptureLength = LengthCall && Callee;
@@ -929,6 +1282,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                                                 *Callee, Cur.State);
           BoundedStringLimit = readCallArgument(In, Fn, BoundedString.BoundArg,
                                                 *Callee, Cur.State);
+          if (BoundedString.ObjectSizeArg >= 0)
+            BoundedStringObjectSize = readCallArgument(
+                In, Fn, BoundedString.ObjectSizeArg, *Callee, Cur.State);
         }
         if (Callee && ReturnedString.BufferArg >= 0 &&
             ReturnedString.BoundArg >= 0 &&
@@ -940,7 +1296,7 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               In, Fn, ReturnedString.BoundArg, *Callee, Cur.State);
         }
         if (IsCall) {
-          bool Summarized = LengthCall;
+          bool Summarized = LengthCall || DeferredSinkCall;
           if (Callee && Cat.matchSource(CalleeName))
             Summarized = true;
           if (Callee)
@@ -1028,11 +1384,41 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                              Ctx.mkEq(ConstraintRet, Ctx.mkZero(ReturnWidth))));
               }
             }
+            if (CountedReturn.ObjectSizeArg >= 0) {
+              if (!CountedObjectSize.isValid() ||
+                  (CountedReturn.ElementSizeArg >= 0 &&
+                   !CountedElementSize.isValid())) {
+                Cur.SemanticUnknown = true;
+              } else {
+                constexpr uint32_t ProductBits = 128;
+                SymRef Requested = Ctx.mkZExtOrTrunc(ReturnBound, ProductBits);
+                if (CountedReturn.ElementSizeArg >= 0)
+                  Requested =
+                      Ctx.mkMul(Requested, Ctx.mkZExtOrTrunc(CountedElementSize,
+                                                             ProductBits));
+                Cur.Constraints.push_back(
+                    Ctx.mkUle(Requested, Ctx.mkZExtOrTrunc(CountedObjectSize,
+                                                           ProductBits)));
+              }
+            }
           }
         }
         if (CountedReturnSuccess.isValid())
-          for (SourceEvent &Event : NewSourceEvents)
+          for (SourceEvent &Event : NewSourceEvents) {
             Event.Success = CountedReturnSuccess;
+            if (CountedReturnValue.isValid()) {
+              Event.ProducedValue = CountedReturnValue;
+              Event.WrittenBytes = Ctx.mkZExtOrTrunc(CountedReturnValue, 128);
+              if (CountedReturn.ElementSizeArg >= 0) {
+                if (CountedElementSize.isValid())
+                  Event.WrittenBytes =
+                      Ctx.mkMul(Event.WrittenBytes,
+                                Ctx.mkZExtOrTrunc(CountedElementSize, 128));
+                else
+                  Event.WrittenBytes = SymRef();
+              }
+            }
+          }
         SymRef CountedOutputValue;
         SymRef CountedOutputSuccess;
         if (CountedOutputApplies) {
@@ -1083,6 +1469,10 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Event.Success = Event.Success.isValid()
                                 ? Ctx.mkAnd(Event.Success, ProducedInput)
                                 : ProducedInput;
+          for (SourceEvent &Event : NewSourceEvents)
+            Event.ProducedValue = CountedOutputValue;
+          for (SourceEvent &Event : NewSourceEvents)
+            Event.WrittenBytes = Ctx.mkZExtOrTrunc(CountedOutputValue, 128);
         }
         if (CalleeSource && CalleeSource->OutArg >= 0 &&
             CalleeSource->returnCarriesInput()) {
@@ -1097,9 +1487,11 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
               SemanticRet = Ctx.mkExtract(SemanticRet, 0, ReturnBits);
             const SymRef ProducedInput =
                 Ctx.mkNe(SemanticRet, Ctx.mkZero(Ctx.width(SemanticRet)));
-            for (SourceEvent &Event : NewSourceEvents)
+            for (SourceEvent &Event : NewSourceEvents) {
               if (!Event.Success.isValid())
                 Event.Success = ProducedInput;
+              Event.ProducedValue = SemanticRet;
+            }
           }
         }
         if (ReturnedStringBuffer.isValid() && ReturnedStringLimit.isValid()) {
@@ -1141,8 +1533,9 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
         }
         if (HasFormattedSourceOutput) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
-          if (!Ret.isValid()) {
+          if (!Ret.isValid() || Ctx.width(Ret) < 32) {
             Cur.SemanticUnknown = true;
+            NewSourceEvents.clear();
           } else {
             SymRef SemanticRet = Ret;
             if (Ctx.width(SemanticRet) > 32)
@@ -1160,6 +1553,22 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             }
           }
         }
+        for (SourceEvent &Event : NewSourceEvents) {
+          if (Event.ScalarOutputBytes == 0 || !Event.PriorScalarValue.isValid())
+            continue;
+          SymRef Fresh = Cur.State.freshInput("formatted_source",
+                                              Event.ScalarOutputBytes * 8);
+          SymRef Stored =
+              Event.Success.isValid()
+                  ? Ctx.mkIte(Event.Success, Fresh, Event.PriorScalarValue)
+                  : Fresh;
+          Cur.State.store(Event.Buffer, Stored);
+          Event.ProducedValue = Fresh;
+          Event.ProducedValueSuccess = Event.Success;
+        }
+        for (SourceEvent &Event : NewSourceEvents)
+          if (Event.ImplicitLen.isValid())
+            Event.ImplicitLenSuccess = Event.Success;
         if (CalleeSource && CalleeSource->OutArg < 0 &&
             CalleeSource->returnCarriesInput()) {
           const SymRef Ret = captureReturn(Op, Cur.State, In);
@@ -1169,28 +1578,98 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             NewSourceEvents.push_back(
                 {SinkCatalog::normalize(CalleeName), Ret,
                  Ctx.mkNe(Ret, Ctx.mkZero(Ctx.width(Ret)))});
+            NewSourceEvents.back().ProducedValue = Ret;
           }
         }
         if (IsCall) {
           for (const SourceEvent &NewEvent : NewSourceEvents) {
-            auto SameBuffer = [&](const SourceEvent &OldEvent) {
-              return expressionsMustEqual(Ctx, OldEvent.Buffer, NewEvent.Buffer,
-                                          Cur.Constraints, Budgets);
-            };
-            if (!NewEvent.Success.isValid()) {
-              Cur.SourceEvents.erase(std::remove_if(Cur.SourceEvents.begin(),
-                                                    Cur.SourceEvents.end(),
-                                                    SameBuffer),
-                                     Cur.SourceEvents.end());
+            if (!NewEvent.WritesBuffer)
               continue;
-            }
-            for (SourceEvent &OldEvent : Cur.SourceEvents) {
-              if (!SameBuffer(OldEvent))
+
+            auto StartsAfterStringBound = [&](const SourceEvent &OldEvent) {
+              if (!OldEvent.ImplicitLen.isValid() ||
+                  !OldEvent.Buffer.isValid() || !NewEvent.Buffer.isValid())
+                return false;
+              const SymRef OldBuffer = Ctx.mkZExtOrTrunc(OldEvent.Buffer, 64);
+              const SymRef Length = Ctx.mkZExtOrTrunc(OldEvent.ImplicitLen, 64);
+              const SymRef NewBuffer = Ctx.mkZExtOrTrunc(NewEvent.Buffer, 64);
+              const SymRef End = Ctx.mkAdd(OldBuffer, Length);
+              const SymRef NoOverflow = Ctx.mkUge(End, OldBuffer);
+              return predicateMustHold(
+                  Ctx, Ctx.mkAnd(NoOverflow, Ctx.mkUge(NewBuffer, End)),
+                  Cur.Constraints, Budgets);
+            };
+
+            auto WrittenRangesAreDisjoint = [&](const SourceEvent &OldEvent) {
+              if (!OldEvent.Buffer.isValid() ||
+                  !OldEvent.WrittenBytes.isValid() ||
+                  !NewEvent.Buffer.isValid() ||
+                  !NewEvent.WrittenBytes.isValid())
+                return false;
+              constexpr uint32_t RangeBits = 128;
+              const SymRef OldBegin =
+                  Ctx.mkZExtOrTrunc(OldEvent.Buffer, RangeBits);
+              const SymRef NewBegin =
+                  Ctx.mkZExtOrTrunc(NewEvent.Buffer, RangeBits);
+              const SymRef OldEnd =
+                  Ctx.mkAdd(OldBegin, Ctx.mkZExtOrTrunc(OldEvent.WrittenBytes,
+                                                        RangeBits));
+              const SymRef NewEnd =
+                  Ctx.mkAdd(NewBegin, Ctx.mkZExtOrTrunc(NewEvent.WrittenBytes,
+                                                        RangeBits));
+              const SymRef OldBeforeNew = Ctx.mkAnd(
+                  Ctx.mkUge(OldEnd, OldBegin), Ctx.mkUle(OldEnd, NewBegin));
+              const SymRef NewBeforeOld = Ctx.mkAnd(
+                  Ctx.mkUge(NewEnd, NewBegin), Ctx.mkUle(NewEnd, OldBegin));
+              SymRef Disjoint = Ctx.mkOr(OldBeforeNew, NewBeforeOld);
+              if (OldEvent.Success.isValid())
+                Disjoint = Ctx.mkOr(Ctx.mkNot(OldEvent.Success), Disjoint);
+              if (NewEvent.Success.isValid())
+                Disjoint = Ctx.mkOr(Ctx.mkNot(NewEvent.Success), Disjoint);
+              return predicateMustHold(Ctx, Disjoint, Cur.Constraints, Budgets);
+            };
+
+            for (auto It = Cur.SourceEvents.begin();
+                 It != Cur.SourceEvents.end();) {
+              SourceEvent &OldEvent = *It;
+              const bool SameBuffer =
+                  expressionsMustEqual(Ctx, OldEvent.Buffer, NewEvent.Buffer,
+                                       Cur.Constraints, Budgets);
+              const bool MayClobberBound = OldEvent.ImplicitLen.isValid() &&
+                                           !StartsAfterStringBound(OldEvent);
+              const bool MayClobberWritten =
+                  OldEvent.WrittenBytes.isValid() &&
+                  !WrittenRangesAreDisjoint(OldEvent);
+              if (!NewEvent.Success.isValid()) {
+                if (SameBuffer || MayClobberWritten) {
+                  It = Cur.SourceEvents.erase(It);
+                  continue;
+                }
+                if (MayClobberBound) {
+                  OldEvent.ImplicitLen = SymRef();
+                  OldEvent.ImplicitLenSuccess = SymRef();
+                  OldEvent.ImplicitLenIncludesTerminator = false;
+                }
+                ++It;
                 continue;
-              const SymRef PriorSuccess =
-                  OldEvent.Success.isValid() ? OldEvent.Success : Ctx.mkTrue();
-              OldEvent.Success =
-                  Ctx.mkAnd(PriorSuccess, Ctx.mkNot(NewEvent.Success));
+              }
+
+              const SymRef NewFailed = Ctx.mkNot(NewEvent.Success);
+              if (SameBuffer || MayClobberWritten) {
+                const SymRef PriorSuccess = OldEvent.Success.isValid()
+                                                ? OldEvent.Success
+                                                : Ctx.mkTrue();
+                OldEvent.Success = Ctx.mkAnd(PriorSuccess, NewFailed);
+              }
+              if (MayClobberBound) {
+                const SymRef PriorLenSuccess =
+                    OldEvent.ImplicitLenSuccess.isValid()
+                        ? OldEvent.ImplicitLenSuccess
+                        : Ctx.mkTrue();
+                OldEvent.ImplicitLenSuccess =
+                    Ctx.mkAnd(PriorLenSuccess, NewFailed);
+              }
+              ++It;
             }
           }
           Cur.SourceEvents.insert(Cur.SourceEvents.end(),
@@ -1230,6 +1709,15 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
                 SemanticLimit =
                     Ctx.mkExtract(SemanticLimit, 0, BoundedString.BoundBits);
               const SymRef WideLimit = Ctx.mkZExtOrTrunc(SemanticLimit, 64);
+              if (BoundedString.ObjectSizeArg >= 0) {
+                if (!BoundedStringObjectSize.isValid()) {
+                  Cur.SemanticUnknown = true;
+                } else {
+                  Cur.Constraints.push_back(Ctx.mkUle(
+                      WideLimit,
+                      Ctx.mkZExtOrTrunc(BoundedStringObjectSize, 64)));
+                }
+              }
               const SymRef PositiveLimit =
                   BoundedString.BoundIsSigned
                       ? Ctx.mkSgt(SemanticLimit,
@@ -1253,14 +1741,31 @@ ExploreHit exploreSink(const AnalysisInput &In, const SinkCatalog &Cat,
             Cur.ImplicitLenIncludesTerminator = false;
           }
         } else if (mayWriteMemory(Op.Opcode)) {
-          Cur.SourceEvents.erase(
-              std::remove_if(Cur.SourceEvents.begin(), Cur.SourceEvents.end(),
-                             [&](const auto &Event) {
-                               return writesStringTerminatorAtSource(
-                                   Ctx, Cur.State, Op, Event.Buffer,
-                                   Cur.Constraints, Budgets);
-                             }),
-              Cur.SourceEvents.end());
+          for (SourceEvent &Event : Cur.SourceEvents) {
+            if (std::optional<uint64_t> Bound = storedStringTerminatorBound(
+                    Ctx, Cur.State, Op, Event.Buffer, Cur.Constraints,
+                    Budgets)) {
+              const std::optional<llvm::APInt> Prior =
+                  Event.ImplicitLen.isValid()
+                      ? Ctx.asConst(Ctx.mkZExtOrTrunc(Event.ImplicitLen, 64))
+                      : std::optional<llvm::APInt>();
+              if (!Prior || Prior->getZExtValue() > *Bound) {
+                Event.ImplicitLen = Ctx.mkConst(64, *Bound);
+                Event.ImplicitLenSuccess = SymRef();
+              }
+              Event.ImplicitLenIncludesTerminator = true;
+            } else if (!writeIsProvablyBeforeSource(Ctx, Cur.State, Op,
+                                                    Event.Buffer,
+                                                    Cur.Constraints, Budgets)) {
+              Event.ImplicitLen = SymRef();
+              Event.ImplicitLenSuccess = SymRef();
+              Event.ImplicitLenIncludesTerminator = false;
+            }
+            if (Event.WrittenBytes.isValid() &&
+                !writeIsProvablyBeforeSource(Ctx, Cur.State, Op, Event.Buffer,
+                                             Cur.Constraints, Budgets))
+              Event.WrittenBytes = SymRef();
+          }
           if (Cur.ImplicitFromLength ||
               !writeIsProvablyBeforeSource(Ctx, Cur.State, Op,
                                            Cur.ImplicitSource, Cur.Constraints,
@@ -1370,10 +1875,11 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     ArgClassification Arg =
         classifyArgument(In, Cat, F, Site.CallInfoIndex, E->FmtArg);
     Out.Flow = Arg.Flow;
-    const Segment *FormatSegment =
-        In.Img && FormatArg.isConst()
-            ? In.Img->getSegmentFor(FormatArg.ConstVal)
-            : nullptr;
+    const std::optional<uint64_t> FormatAddress =
+        safety::detail::canonicalConstantValue(FormatArg);
+    const Segment *FormatSegment = In.Img && FormatAddress
+                                       ? In.Img->getSegmentFor(*FormatAddress)
+                                       : nullptr;
     std::optional<std::string> ConstantFormat;
     if (Arg.Flow != ArgFlow::Tainted && FormatSegment &&
         !FormatSegment->isWritable())
@@ -1698,7 +2204,7 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
   }
 
   std::string RequiredSource;
-  if (!UnboundedInput && E->LenArg < 0 && E->SrcArg >= 0)
+  if (!UnboundedInput && Arg.Flow == ArgFlow::Tainted)
     if (const SourceEntry *Source = Cat.matchSource(Arg.TaintSource); Source) {
       const std::string NormalizedSource =
           SinkCatalog::normalize(Arg.TaintSource);

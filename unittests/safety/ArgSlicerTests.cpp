@@ -128,6 +128,23 @@ TEST(ArgSlicer, ConstantIsBounded) {
   EXPECT_EQ(*C.ConstValue, 8u);
 }
 
+TEST(ArgSlicer, RelocationAddressIsNotANumericCopyBound) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  const MedVar RelocatedBound =
+      MedVar::makeConst(8, 8, ConstantAddressProvenance::DataAddress, 0);
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), RelocatedBound});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.ConstValue.has_value());
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
 TEST(ArgSlicer, StrlenWithoutDestinationGuardIsNotBounded) {
   BinaryImage Img;
   AnalysisInput In;
@@ -240,6 +257,129 @@ TEST(ArgSlicer, StoreAfterLoadDoesNotBoundTheLoadedValue) {
   EXPECT_FALSE(C.UpperBound.has_value());
 }
 
+TEST(ArgSlicer, TruncatedStackAddressDoesNotBorrowAStackStore) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc();
+  MedOp Sub;
+  Sub.Opcode = NdOp::INT_SUB;
+  Sub.Output = mkReg(kSP, 1);
+  Sub.addInput(mkReg(kSP, 0));
+  Sub.addInput(MedVar::makeConst(0x20, 8));
+  F.Blocks[0].Ops.push_back(Sub);
+
+  MedOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.addInput(mkReg(kSP, 1));
+  Store.addInput(MedVar::makeConst(7, 8));
+  F.Blocks[0].Ops.push_back(Store);
+
+  defOp(F, NdOp::COPY, temp(10, 4), mkReg(kSP, 1));
+  defOp(F, NdOp::LOAD, temp(5), temp(10, 4));
+  const size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, NarrowEncodedStackImmediateStillFindsStackStore) {
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+
+  MedFunc F = newFunc();
+  MedOp Sub;
+  Sub.Opcode = NdOp::INT_SUB;
+  Sub.Output = mkReg(kSP, 1, 8);
+  Sub.addInput(mkReg(kSP, 0, 8));
+  Sub.addInput(MedVar::makeConst(0x20, 4));
+  F.Blocks[0].Ops.push_back(Sub);
+
+  MedOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.addInput(mkReg(kSP, 1, 8));
+  Store.addInput(MedVar::makeConst(7, 8));
+  F.Blocks[0].Ops.push_back(Store);
+
+  defOp(F, NdOp::LOAD, temp(5, 8), mkReg(kSP, 1, 8));
+  const size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5, 8)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 7u);
+}
+
+TEST(ArgSlicer, SharedNonFrameAddressDiamondIsCheckedInLinearWork) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  In.StackPointerReg = kSP;
+  In.StackRegsKnown = true;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  {
+    MedOp Sub;
+    Sub.Opcode = NdOp::INT_SUB;
+    Sub.Output = mkReg(kSP, 1);
+    Sub.addInput(mkReg(kSP, 0));
+    Sub.addInput(MedVar::makeConst(0x20, 8));
+    F.Blocks[0].Ops.push_back(Sub);
+  }
+  {
+    MedOp Add;
+    Add.Opcode = NdOp::INT_ADD;
+    Add.Output = temp(10);
+    Add.addInput(mkReg(kSP, 1));
+    Add.addInput(MedVar::makeConst(8, 8));
+    F.Blocks[0].Ops.push_back(Add);
+  }
+  {
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.addInput(temp(10));
+    Store.addInput(MedVar::makeConst(7, 8));
+    F.Blocks[0].Ops.push_back(Store);
+  }
+
+  MedVar Address = param(50);
+  for (int I = 0; I < 28; ++I) {
+    MedOp Sel;
+    Sel.Opcode = NdOp::SELECT;
+    Sel.Output = temp(100 + I);
+    Sel.addInput(param(1000 + I, 1));
+    Sel.addInput(Address);
+    Sel.addInput(Address);
+    F.Blocks[0].Ops.push_back(Sel);
+    Address = Sel.Output;
+  }
+  {
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.addInput(Address);
+    Store.addInput(MedVar::makeConst(1, 8));
+    F.Blocks[0].Ops.push_back(Store);
+  }
+  defOp(F, NdOp::LOAD, temp(5), temp(10));
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 7u);
+}
+
 TEST(ArgSlicer, FutureTaintedStoreDoesNotTaintAnEarlierLoad) {
   BinaryImage Img;
   AnalysisInput In;
@@ -331,6 +471,31 @@ TEST(ArgSlicer, MaskedValueIsBounded) {
   EXPECT_EQ(*C.UpperBound, 0x0fu);
 }
 
+TEST(ArgSlicer, RelocationAddressMaskDoesNotBoundCopyLength) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  defOp(F, NdOp::LOAD, temp(1), MedVar::makeConst(0x4000, 8));
+  {
+    MedOp And;
+    And.Opcode = NdOp::INT_AND;
+    And.Output = temp(2);
+    And.addInput(temp(1));
+    And.addInput(
+        MedVar::makeConst(0x0f, 8, ConstantAddressProvenance::DataAddress, 0));
+    F.Blocks[0].Ops.push_back(And);
+  }
+  size_t Idx = addSink(F, "memcpy", {temp(9), temp(8), temp(2)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.ConstValue.has_value());
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
 TEST(ArgSlicer, MainParameterIsTaintedArgv) {
   BinaryImage Img;
   AnalysisInput In;
@@ -377,6 +542,131 @@ TEST(ArgSlicer, SelectClampIsBounded) {
   EXPECT_EQ(C.Flow, ArgFlow::Bounded);
   ASSERT_TRUE(C.UpperBound.has_value());
   EXPECT_EQ(*C.UpperBound, 8u);
+}
+
+TEST(ArgSlicer, SharedSelectDiamondIsBoundedInLinearWork) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  MedVar Value = MedVar::makeConst(7, 8);
+  for (int I = 0; I < 28; ++I) {
+    MedOp Sel;
+    Sel.Opcode = NdOp::SELECT;
+    Sel.Output = temp(100 + I);
+    Sel.addInput(param(1000 + I, 1));
+    Sel.addInput(Value);
+    Sel.addInput(Value);
+    F.Blocks[0].Ops.push_back(Sel);
+    Value = Sel.Output;
+  }
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), Value});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Bounded);
+  ASSERT_TRUE(C.UpperBound.has_value());
+  EXPECT_EQ(*C.UpperBound, 7u);
+}
+
+TEST(ArgSlicer, SharedSelectDiamondPreservesTaintEvidence) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "read", temp(50));
+  MedVar Value = temp(50);
+  for (int I = 0; I < 28; ++I) {
+    MedOp Sel;
+    Sel.Opcode = NdOp::SELECT;
+    Sel.Output = temp(100 + I);
+    Sel.addInput(param(1000 + I, 1));
+    Sel.addInput(Value);
+    Sel.addInput(Value);
+    F.Blocks[0].Ops.push_back(Sel);
+    Value = Sel.Output;
+  }
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), Value});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(C.TaintSource, "read");
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, RecurrentPhiDoesNotPublishAContextualBound) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  PhiNode Phi;
+  Phi.Output = temp(50);
+  Phi.Args.push_back({0, MedVar::makeConst(8, 8)});
+  Phi.Args.push_back({0, Phi.Output});
+  F.Blocks[0].Phis.push_back(std::move(Phi));
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(50)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, RelocationAddressDoesNotProveASelectClamp) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "read", temp(5));
+  const MedVar RelocatedBound =
+      MedVar::makeConst(8, 8, ConstantAddressProvenance::DataAddress, 0);
+  {
+    MedOp Cmp;
+    Cmp.Opcode = NdOp::INT_LESSEQUAL;
+    Cmp.Output = temp(6);
+    Cmp.addInput(temp(5));
+    Cmp.addInput(RelocatedBound);
+    F.Blocks[0].Ops.push_back(Cmp);
+  }
+  {
+    MedOp Sel;
+    Sel.Opcode = NdOp::SELECT;
+    Sel.Output = temp(7);
+    Sel.addInput(temp(6));
+    Sel.addInput(temp(5));
+    Sel.addInput(RelocatedBound);
+    F.Blocks[0].Ops.push_back(Sel);
+  }
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(7)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_FALSE(C.ConstValue.has_value());
+  EXPECT_FALSE(C.UpperBound.has_value());
+}
+
+TEST(ArgSlicer, RelocationAddressDoesNotCapLengthReturn) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  const MedVar RelocatedCap =
+      MedVar::makeConst(8, 8, ConstantAddressProvenance::DataAddress, 0);
+  addCall(F, "strnlen", temp(5), {temp(4), RelocatedCap});
+  size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(5)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_FALSE(C.ConstValue.has_value());
+  EXPECT_FALSE(C.UpperBound.has_value());
 }
 
 TEST(ArgSlicer, SelectMaximumIsNotAClamp) {
@@ -456,6 +746,55 @@ TEST(ArgSlicer, SourceOutputBufferIsTainted) {
   EXPECT_EQ(C.TaintSource, "read");
 }
 
+TEST(ArgSlicer, SourceOutputSubrangeLoadIsTainted) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "read", temp(5),
+          {MedVar::makeConst(0, 8), temp(4), MedVar::makeConst(32, 8)});
+  MedOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Output = temp(6);
+  Add.addInput(temp(4));
+  Add.addInput(MedVar::makeConst(8, 8));
+  F.Blocks[0].Ops.push_back(Add);
+  defOp(F, NdOp::LOAD, temp(7), temp(6));
+  const size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(7)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(C.TaintSource, "read");
+}
+
+TEST(ArgSlicer, SourceOutputSubrangeRequiresTheSameRelocationOwner) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+  const MedVar Buffer = MedVar::makeConst(
+      0x2000, 8, ConstantAddressProvenance::DataAddress, 0x2000);
+
+  for (const auto &[Owner, Expected] :
+       {std::pair<va_t, ArgFlow>{0x2000, ArgFlow::Tainted},
+        {0x3000, ArgFlow::Unknown}}) {
+    SCOPED_TRACE(Owner);
+    MedFunc F = newFunc();
+    addCall(F, "read", temp(5),
+            {MedVar::makeConst(0, 8), Buffer, MedVar::makeConst(32, 8)});
+    const MedVar Address = MedVar::makeConst(
+        0x2008, 8, ConstantAddressProvenance::DataAddress, Owner);
+    defOp(F, NdOp::LOAD, temp(6), Address);
+    const size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(6)});
+
+    ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+    EXPECT_EQ(C.Flow, Expected);
+    EXPECT_EQ(C.TaintSource, Expected == ArgFlow::Tainted ? "read" : "");
+  }
+}
+
 TEST(ArgSlicer, ExactGlobalSourceOutputDoesNotTaintNumericCoincidences) {
   BinaryImage Img;
   Segment Data;
@@ -511,6 +850,88 @@ TEST(ArgSlicer, ScanfVariadicBufferOutputIsTainted) {
   ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
   EXPECT_EQ(C.Flow, ArgFlow::Tainted);
   EXPECT_EQ(C.TaintSource, "scanf");
+}
+
+TEST(ArgSlicer, ScanfFormatDoesNotBorrowAnAdjacentRelocationOwner) {
+  auto classifyOwner = [](va_t Owner) {
+    BinaryImage Img;
+    Segment First;
+    First.Name = "first";
+    First.VA = 0x1000;
+    First.Size = 4;
+    First.FileSz = 4;
+    First.Flags = SegmentFlags::Readable;
+    First.Data = {'x', 'x', 'x', 'x'};
+    Img.Segments.push_back(std::move(First));
+    Segment Second;
+    Second.Name = "second";
+    Second.VA = 0x1004;
+    Second.Flags = SegmentFlags::Readable;
+    Second.Data = {'%', '7', 's', 0};
+    Second.Size = Second.Data.size();
+    Second.FileSz = Second.Data.size();
+    Img.Segments.push_back(std::move(Second));
+
+    AnalysisInput In;
+    In.Img = &Img;
+    SinkCatalog Cat = SinkCatalog::defaults();
+    MedFunc F = newFunc();
+    const MedVar Format = MedVar::makeConst(
+        0x1004, 8, ConstantAddressProvenance::DataAddress, Owner);
+    addCall(F, "scanf", temp(5), {Format, temp(4)});
+    size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+    return classifyArgument(In, Cat, F, Idx, 1);
+  };
+
+  ArgClassification OnePastFirst = classifyOwner(0x1000);
+  EXPECT_EQ(OnePastFirst.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(OnePastFirst.TaintSource.empty());
+
+  ArgClassification StartOfSecond = classifyOwner(0x1004);
+  EXPECT_EQ(StartOfSecond.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(StartOfSecond.TaintSource, "scanf");
+}
+
+TEST(ArgSlicer, ScanfFormatMustTerminateWithinItsExactSectionOwner) {
+  BinaryImage Img;
+  Segment Data;
+  Data.Name = "data";
+  Data.VA = 0x1000;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data = {'%', '7', 's', 0};
+  Data.Size = Data.Data.size();
+  Data.FileSz = Data.Data.size();
+  Img.Segments.push_back(std::move(Data));
+
+  Section Owner;
+  Owner.Name = "first";
+  Owner.SegmentName = "data";
+  Owner.VA = 0x1000;
+  Owner.Size = 1;
+  Owner.FileSz = 1;
+  Owner.Flags = SegmentFlags::Readable;
+  Img.Sections.push_back(std::move(Owner));
+  Section Neighbour;
+  Neighbour.Name = "second";
+  Neighbour.SegmentName = "data";
+  Neighbour.VA = 0x1001;
+  Neighbour.Size = 3;
+  Neighbour.FileSz = 3;
+  Neighbour.Flags = SegmentFlags::Readable;
+  Img.Sections.push_back(std::move(Neighbour));
+
+  AnalysisInput In;
+  In.Img = &Img;
+  MedFunc F = newFunc();
+  const MedVar Format = MedVar::makeConst(
+      0x1000, 8, ConstantAddressProvenance::DataAddress, 0x1000);
+  addCall(F, "scanf", temp(5), {Format, temp(4)});
+  const size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+
+  const ArgClassification C =
+      classifyArgument(In, SinkCatalog::defaults(), F, Idx, 1);
+  EXPECT_EQ(C.Flow, ArgFlow::Unknown);
+  EXPECT_TRUE(C.TaintSource.empty());
 }
 
 TEST(ArgSlicer, VersionedScanfSpellingsPreserveOutputSemantics) {
@@ -715,6 +1136,23 @@ TEST(ArgSlicer, ScanfPercentNAfterVariableInputIsTainted) {
   EXPECT_EQ(C.TaintSource, "scanf");
 }
 
+TEST(ArgSlicer, ScanfPercentNAfterSuppressedInputRemainsMayTainted) {
+  BinaryImage Img;
+  const va_t FormatVA = addCString(Img, "%*s%n");
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  addCall(F, "scanf", temp(5), {MedVar::makeConst(FormatVA, 8), temp(7)});
+  defOp(F, NdOp::LOAD, temp(6), temp(7));
+  const size_t Idx = addSink(F, "memcpy", {temp(1), temp(2), temp(6)});
+
+  const ArgClassification C = classifyArgument(In, Cat, F, Idx, 2);
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(C.TaintSource, "scanf");
+}
+
 TEST(ArgSlicer, ScanfPercentNAfterFixedCharacterCountIsNotTainted) {
   BinaryImage Img;
   const va_t FormatVA = addCString(Img, "%7c%n");
@@ -771,6 +1209,24 @@ TEST(ArgSlicer, FutureSourceOutputDoesNotTaintEarlierUse) {
   ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
   EXPECT_EQ(C.Flow, ArgFlow::Unknown);
   EXPECT_TRUE(C.TaintSource.empty());
+}
+
+TEST(ArgSlicer, SourceAfterSinkInLoopTaintsTheNextIteration) {
+  BinaryImage Img;
+  AnalysisInput In;
+  In.Img = &Img;
+  SinkCatalog Cat = SinkCatalog::defaults();
+
+  MedFunc F = newFunc();
+  F.Blocks[0].Preds = {0};
+  F.Blocks[0].Succs = {0};
+  size_t Idx = addSink(F, "strcpy", {temp(1), temp(4)});
+  addCall(F, "read", temp(5),
+          {MedVar::makeConst(0, 8), temp(4), MedVar::makeConst(32, 8)});
+
+  ArgClassification C = classifyArgument(In, Cat, F, Idx, 1);
+  EXPECT_EQ(C.Flow, ArgFlow::Tainted);
+  EXPECT_EQ(C.TaintSource, "read");
 }
 
 TEST(ArgSlicer, SourceAndSinkOnSiblingPathsDoNotShareTaint) {
