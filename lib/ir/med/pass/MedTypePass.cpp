@@ -16,6 +16,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
@@ -269,7 +270,47 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
     for (const auto &Phi : Blk.Phis)
       if (Phi.Output.Size > 0)
         PhiDefs[{Phi.Output.Id, Phi.Output.SSAVer}] = &Phi;
-
+  auto phiFullyDefined = [&](const PhiNode &Phi) {
+    for (const auto &A : Phi.Args) {
+      if (A.second.isConst())
+        continue;
+      bool Defined = false;
+      for (const auto &B : Func.Blocks) {
+        if (B.Id != A.first)
+          continue;
+        for (const auto &O : B.Ops)
+          if (O.Output.Kind == A.second.Kind &&
+              O.Output.Id == A.second.Id &&
+              O.Output.SSAVer == A.second.SSAVer &&
+              O.Output.RegOff == A.second.RegOff &&
+              O.Output.Size >= A.second.Size) {
+            Defined = true;
+            break;
+          }
+        if (!Defined)
+          for (const auto &P : B.Phis)
+            if (P.Output.Kind == A.second.Kind &&
+                P.Output.Id == A.second.Id &&
+                P.Output.SSAVer == A.second.SSAVer &&
+                P.Output.RegOff == A.second.RegOff &&
+                P.Output.Size >= A.second.Size) {
+              Defined = true;
+              break;
+            }
+        break;
+      }
+      if (!Defined && A.second.Kind == MedVar::Reg &&
+          A.second.SSAVer == 0)
+        for (const auto &P : Func.Params)
+          if (P.RegOff == A.second.RegOff && P.Size >= A.second.Size) {
+            Defined = true;
+            break;
+          }
+      if (!Defined)
+        return false;
+    }
+    return true;
+  };
   // Aggregate across *every* RETURN, not just the first: a function with an
   // early `return arg` (no return-register write — the FP argument is passed
   // straight through in XMM0/D0) and a separate computed `return expr` path
@@ -281,6 +322,7 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
   uint16_t BestFloatElem = 0;
   const MedOp *BestInt = nullptr;
   uint16_t BestIntPhiWidth = 0;
+  uint16_t BestCompleteIntPhiWidth = 0;
 
   for (const auto &Blk : Func.Blocks) {
     for (auto Rit = Blk.Ops.rbegin(); Rit != Blk.Ops.rend(); ++Rit) {
@@ -407,9 +449,13 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
           if (Phi.Output.Kind == MedVar::Reg &&
               Phi.Output.RegOff == TRI.IntReturnReg)
             for (const auto &A : Phi.Args) {
-              uint16_t W = intRetEffWidth(Defs, PhiDefs, A.second, 0);
+              uint16_t W = std::min<uint16_t>(
+                  intRetEffWidth(Defs, PhiDefs, A.second, 0),
+                  Phi.Output.Size);
               if (W > BestIntPhiWidth)
                 BestIntPhiWidth = W;
+              if (phiFullyDefined(Phi) && W > BestCompleteIntPhiWidth)
+                BestCompleteIntPhiWidth = W;
             }
       }
     }
@@ -422,8 +468,11 @@ static TypeRef inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI,
     IntSize = (BestInt->Opcode == NdOp::INT_ZEXT && BestInt->NumInputs >= 1)
                   ? BestInt->Inputs[0].Size
                   : BestInt->Output.Size;
-  if (BestIntPhiWidth > IntSize)
-    IntSize = BestIntPhiWidth;
+  uint16_t PhiWidth = BestCompleteIntPhiWidth
+                              ? BestCompleteIntPhiWidth
+                              : BestIntPhiWidth;
+  if (PhiWidth > IntSize)
+    IntSize = PhiWidth;
   if (IntSize)
     return NdType::makeInt(IntSize);
   return NdType::makeInt(DefaultSize);

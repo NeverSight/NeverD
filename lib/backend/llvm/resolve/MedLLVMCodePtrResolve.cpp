@@ -608,7 +608,6 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
   const MedOp *LoadedOp = LoadedValue ? lookupDef(*LoadedValue) : nullptr;
   const JumpTable *RecoveredJumpTable =
       LoadedOp ? recoveredJumpTableForLoad(*LoadedOp) : nullptr;
-
   // The relocation mirror owns the memory representation of its complete
   // read-only run, including adjacent narrow scalar fields.  Do not confuse
   // that container role with the loaded value's callable role: indirect-call
@@ -623,7 +622,20 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
     const bool RelocationOwnedAccess =
         MemoryRoles.Complete && !MemoryRoles.SawConflict &&
         (MemoryRoles.SawCode || MemoryRoles.SawData || MemoryRoles.SawImport);
-    if (!RelocationOwnedAccess)
+    const auto FoldedBase = traceTableBaseConst(AddrVar);
+    const auto PointerRun =
+        ptrTableUniqueSegment(AddrVar, /*IncludeSymbolizedEvidence=*/true);
+    const Segment *BaseSegment =
+        PointerRun ? Img->getSegmentFor(*PointerRun)
+                   : (FoldedBase ? Img->getSegmentFor(*FoldedBase) : nullptr);
+    const bool HasObjectDataBase =
+        ((FoldedBase && Img->hasObjectDataProvenance(*FoldedBase)) ||
+         (PointerRun && Img->hasObjectDataProvenance(*PointerRun))) &&
+        BaseSegment && !BaseSegment->isExecutable();
+    // A scalar field load can still be an access into the same relocated
+    // pointer-table run. Accept it only with an object-backed non-executable
+    // base; arbitrary scalar loads must retain existing role rejection.
+    if (!RelocationOwnedAccess && !HasObjectDataBase)
       return nullptr;
   }
 

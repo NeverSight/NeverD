@@ -334,6 +334,36 @@ llvm::Value *MedLLVMEmitter::tryResolvePointerArg(const MedVar &AddrVar,
     rejectEscapingAddressFragment(AddrVar, "a call argument");
     return nullptr;
   }
+  // A pure forwarding PHI can carry one stable data pointer through a loop
+  // without acquiring explicit DataAddress provenance:
+  // `p = PHI(&table, p)`.  Pointer arguments need this proof even when the
+  // producer is an ADRP+ADD used only as a call operand.  Do not apply it to
+  // advancing or mixed recurrences; those remain owned by table/load audits.
+  auto resolvePureRecurrentDataPointer = [&]() -> llvm::Value * {
+    if (AddrVar.isConst())
+      return nullptr;
+    const PhiNode *Phi = lookupPhi(AddrVar);
+    if (!Phi || !phiIsSelfRecurrent(*Phi) ||
+        !phiHasPureForwardingCycle(*Phi))
+      return nullptr;
+    std::optional<uint64_t> Base;
+    for (const auto &[Pred, Arg] : Phi->Args) {
+      if (!phiIncomingEdgeFeasible(*Phi, Pred) ||
+          phiIncomingIsRecurrent(*Phi, Pred, Arg))
+        continue;
+      auto Candidate = traceSSAConst(Arg);
+      if (!Candidate || !isMaterializableReadOnlyDataAddress(*Candidate))
+        return nullptr;
+      if (Base && *Base != *Candidate)
+        return nullptr;
+      Base = *Candidate;
+    }
+    if (!Base)
+      return nullptr;
+    return tryResolveGlobalData(*Base, /*DataSizeHint=*/0);
+  };
+  if (llvm::Value *Stable = resolvePureRecurrentDataPointer())
+    return Stable;
   // An all-address PHI/SELECT still needs the structural merge owner even
   // though its leaves now carry exact occurrence provenance.  getVar has
   // already materialized those leaves, but emitting the integer SSA merge

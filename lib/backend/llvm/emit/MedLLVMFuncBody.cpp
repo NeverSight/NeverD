@@ -334,8 +334,21 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           Func.FrameSize > 0 ? static_cast<uint64_t>(Func.FrameSize) : 0);
       uint64_t EntryResidue =
           syntheticEntryStackResidue(TargetArch, TargetFormat);
+      const bool DarwinEntrySPWrapper =
+          TargetArch == Arch::AArch64 && TargetFormat == BinaryFormat::MachO &&
+          Func.VariadicFixedRegArgs > 0;
       uint64_t FrameBaseOffset =
           checkedSyntheticStackAdd(AlignedFrameSize, EntryResidue);
+      // LLVM gives these wrappers two extra pointer slots for the lowered
+      // return-address/prologue state. Their va_list still names the original
+      // caller entry SP, so point FrameEnd past those slots. Keep this narrow
+      // and use a non-inbounds GEP: ordinary variadic frames use the normal
+      // synthetic frame end, while this wrapper intentionally reaches the
+      // caller's overflow area.
+      uint64_t FrameEndOffset = FrameBaseOffset;
+      if (DarwinEntrySPWrapper)
+        FrameEndOffset = checkedSyntheticStackAdd(
+            FrameEndOffset, static_cast<uint64_t>(TRI.PointerSize * 2));
       // A variadic function reads its overflow (incoming-stack) arguments at
       // entry_sp + base + i*slot, above frame_end.  Reserve headroom there
       // (kept separate from frame_end so the SP self-copy stays at frame_end)
@@ -373,10 +386,16 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), StorageSize);
       FrameAlloca = FrameB.CreateAlloca(FrameTy, nullptr, "frame");
       FrameAlloca->setAlignment(llvm::Align(16));
-      auto *FrameEnd = FrameB.CreateInBoundsGEP(
-          llvm::Type::getInt8Ty(*Ctx), FrameAlloca,
-          llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), FrameBaseOffset),
-          "frame_end");
+      llvm::Value *FrameEnd = nullptr;
+      auto FrameEndIndex = llvm::ConstantInt::get(
+          llvm::Type::getInt64Ty(*Ctx), FrameEndOffset);
+      if (DarwinEntrySPWrapper)
+        FrameEnd = FrameB.CreateGEP(llvm::Type::getInt8Ty(*Ctx), FrameAlloca,
+                                    FrameEndIndex, "frame_end");
+      else
+        FrameEnd = FrameB.CreateInBoundsGEP(
+            llvm::Type::getInt8Ty(*Ctx), FrameAlloca, FrameEndIndex,
+            "frame_end");
       FrameBaseInt = FrameB.CreatePtrToInt(
           FrameEnd, llvm::Type::getInt64Ty(*Ctx), kRspInitValue);
 

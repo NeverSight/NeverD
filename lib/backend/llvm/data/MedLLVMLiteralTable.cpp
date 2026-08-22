@@ -999,8 +999,11 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     // accepts multiply/shift/flag-expanded induction DAGs, but rejects any
     // feasible data/code-address leaf, mixed PHI, incomplete frame reload, or
     // relocatable constant, so a second base cannot hide behind this shortcut.
-    if (valueIsStableAddressOffset(V))
-      return BaseProof::NoBase;
+    if (!findPhi(V)) {
+      const bool Stable = valueIsStableAddressOffset(V);
+      if (Stable)
+        return BaseProof::NoBase;
+    }
     auto Key = std::make_tuple(static_cast<int>(V.Kind), V.Id, V.SSAVer);
     if (!Seen.insert(Key).second)
       return BaseProof::Cycle;
@@ -1190,8 +1193,12 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
           SawInvalidPointerExpression = true;
         return BaseProof::Invalid;
       }
-      if (T == F)
+      if (T == F) {
+        if (T == BaseProof::HasBase &&
+            findPhi(Def->Inputs[1]) && findPhi(Def->Inputs[2]))
+          SawPointerValueMerge = true;
         return T;
+      }
       if ((T == BaseProof::HasBase && F == BaseProof::Cycle) ||
           (F == BaseProof::HasBase && T == BaseProof::Cycle)) {
         SawPointerValueMerge = true;
@@ -1638,9 +1645,10 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // or re-anchor an already computed address.  Scalar index PHIs do not set
   // SawPhi because the scalar-domain proof consumes them before this pointer
   // audit, so ordinary `base +/- scalar_phi` remains eligible.
-  if (!SawPointerValueMerge && !SawPhi) {
-    if (llvm::Value *Indexed =
-            tryResolveIndexedGlobalPtr(AddrVar, SizeHint, FailClosed, Builder))
+  if (!SawPhi || SawPointerValueMerge) {
+    llvm::Value *Indexed =
+        tryResolveIndexedGlobalPtr(AddrVar, SizeHint, FailClosed, Builder);
+    if (Indexed)
       return Indexed;
     if (FatalDataPointerResolution || FatalCodePointerResolution)
       return nullptr;

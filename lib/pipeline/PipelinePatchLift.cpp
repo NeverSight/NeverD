@@ -327,6 +327,10 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         }
       }
       std::sort(FPRegs.begin(), FPRegs.end());
+      if (MF.IsVariadic && Img.Arch == Arch::AArch64 &&
+          Img.Format == BinaryFormat::MachO &&
+          MF.VariadicFixedRegArgs > 0)
+        MaxRegIdx = MF.VariadicFixedRegArgs - 1;
       CalleeRegArity[MF.Entry] = MaxRegIdx + 1;
       CalleeTotalArity[MF.Entry] = callRecoveryTotalArity(MF, MaxIdx);
       CalleeHasSret[MF.Entry] = HasSret;

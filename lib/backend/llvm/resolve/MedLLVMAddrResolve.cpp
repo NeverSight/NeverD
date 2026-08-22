@@ -2128,6 +2128,262 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       if (exactImmutableScalarLoad())
         return true;
 
+      // A writable cell can still be a scalar offset when this function proves
+      // its complete local store domain. Keep this narrow: an exact address,
+      // full-width scalar stores, no relocation overlap, no unknown aliasing
+      // stores, and no call that can execute before the LOAD.
+      auto exactScalarStoreBackedLoad = [&]() {
+        if (!Img || PointerSize == 0 || Def->Output.Size != PointerSize)
+          return false;
+        {
+          struct AffineAddress {
+            bool Valid = false;
+            std::map<Key, int64_t> Terms;
+            int64_t Constant = 0;
+          };
+          auto addSignedValue = [](int64_t Left, int64_t Right,
+                                    int64_t &Out) {
+            if ((Right > 0 && Left > std::numeric_limits<int64_t>::max() - Right) ||
+                (Right < 0 && Left < std::numeric_limits<int64_t>::min() - Right))
+              return false;
+            Out = Left + Right;
+            return true;
+          };
+          auto scaleAffine = [&](AffineAddress Value, int64_t Factor) {
+            if (!Value.Valid)
+              return AffineAddress{};
+            for (auto &[TermKey, Coefficient] : Value.Terms) {
+              int64_t Scaled = 0;
+              if (!__builtin_mul_overflow(Coefficient, Factor, &Scaled))
+                Coefficient = Scaled;
+              else
+                return AffineAddress{};
+            }
+            int64_t ScaledConstant = 0;
+            if (__builtin_mul_overflow(Value.Constant, Factor,
+                                        &ScaledConstant))
+              return AffineAddress{};
+            Value.Constant = ScaledConstant;
+            return Value;
+          };
+          auto combineAffine = [&](AffineAddress Left, AffineAddress Right,
+                                     bool Subtract) {
+            if (!Left.Valid || !Right.Valid)
+              return AffineAddress{};
+            for (const auto &[TermKey, Coefficient] : Right.Terms) {
+              int64_t SignedCoefficient =
+                  Subtract ? -Coefficient : Coefficient;
+              int64_t Combined = 0;
+              auto It = Left.Terms.find(TermKey);
+              if (It != Left.Terms.end()) {
+                if (!addSignedValue(It->second, SignedCoefficient, Combined))
+                  return AffineAddress{};
+                if (Combined == 0)
+                  Left.Terms.erase(It);
+                else
+                  It->second = Combined;
+              } else if (SignedCoefficient != 0) {
+                Left.Terms.emplace(TermKey, SignedCoefficient);
+              }
+            }
+            int64_t CombinedConstant = 0;
+            if (!addSignedValue(Left.Constant,
+                                 Subtract ? -Right.Constant : Right.Constant,
+                                 CombinedConstant))
+              return AffineAddress{};
+            Left.Constant = CombinedConstant;
+            return Left;
+          };
+          std::function<AffineAddress(const MedVar &,
+                                      std::set<Key>)> normalizeAddress;
+          normalizeAddress = [&](const MedVar &Value, std::set<Key> Seen) {
+            if (Value.isConst()) {
+              if (Value.ConstVal >
+                  static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                return AffineAddress{};
+              return AffineAddress{true, {},
+                                    static_cast<int64_t>(Value.ConstVal)};
+            }
+            const Key ValueKey = keyOf(Value);
+            if (!Seen.insert(ValueKey).second)
+              return AffineAddress{true, {{ValueKey, 1}}, 0};
+            const MedOp *ValueDef = lookupDef(Value);
+            if (!ValueDef || ValueDef->NumInputs == 0)
+              return AffineAddress{true, {{ValueKey, 1}}, 0};
+            if (ValueDef->Opcode == NdOp::COPY ||
+                ValueDef->Opcode == NdOp::INT_ZEXT ||
+                ValueDef->Opcode == NdOp::INT_SEXT ||
+                (ValueDef->Opcode == NdOp::SUBBYTES &&
+                 ValueDef->NumInputs >= 2 && ValueDef->Inputs[1].isConst() &&
+                 ValueDef->Inputs[1].ConstVal == 0))
+              return normalizeAddress(ValueDef->Inputs[0], Seen);
+            if ((ValueDef->Opcode == NdOp::INT_ADD ||
+                 ValueDef->Opcode == NdOp::INT_SUB) &&
+                ValueDef->NumInputs >= 2)
+              return combineAffine(
+                  normalizeAddress(ValueDef->Inputs[0], Seen),
+                  normalizeAddress(ValueDef->Inputs[1], Seen),
+                  ValueDef->Opcode == NdOp::INT_SUB);
+            if (ValueDef->Opcode == NdOp::INT_LEFT &&
+                ValueDef->NumInputs >= 2 && ValueDef->Inputs[1].isConst() &&
+                ValueDef->Inputs[1].ConstVal < 63)
+              return scaleAffine(
+                  normalizeAddress(ValueDef->Inputs[0], Seen),
+                  int64_t(1) << ValueDef->Inputs[1].ConstVal);
+            if (ValueDef->Opcode == NdOp::INT_MULT &&
+                ValueDef->NumInputs >= 2) {
+              const MedVar &Constant = ValueDef->Inputs[0].isConst()
+                                             ? ValueDef->Inputs[0]
+                                             : ValueDef->Inputs[1];
+              const MedVar &Other = ValueDef->Inputs[0].isConst()
+                                         ? ValueDef->Inputs[1]
+                                         : ValueDef->Inputs[0];
+              if (Constant.isConst() &&
+                  Constant.ConstVal <
+                      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                return scaleAffine(normalizeAddress(Other, Seen),
+                                   static_cast<int64_t>(Constant.ConstVal));
+            }
+            if (ValueDef->Opcode == NdOp::LOAD && ValueDef->NumInputs >= 1) {
+              for (const MedBlock &Block : CurMedFunc->Blocks) {
+                for (size_t Index = 0; Index < Block.Ops.size(); ++Index) {
+                  if (&Block.Ops[Index] != ValueDef)
+                    continue;
+                  for (size_t Previous = Index; Previous > 0; --Previous) {
+                    const MedOp &Write = Block.Ops[Previous - 1];
+                    if (Write.Opcode == NdOp::STORE && Write.NumInputs >= 2 &&
+                        addressProvenanceVarKey(Write.Inputs[0]) ==
+                            addressProvenanceVarKey(ValueDef->Inputs[0]))
+                      return normalizeAddress(Write.Inputs[1], Seen);
+                  }
+                  break;
+                }
+              }
+            }
+            return AffineAddress{true, {{ValueKey, 1}}, 0};
+          };
+          const MedBlock *LoadBlock = nullptr;
+          size_t LoadIndex = 0;
+          for (const MedBlock &Block : CurMedFunc->Blocks)
+            for (size_t Index = 0; Index < Block.Ops.size(); ++Index)
+              if (&Block.Ops[Index] == Def) {
+                LoadBlock = &Block;
+                LoadIndex = Index;
+              }
+          if (LoadBlock) {
+            const AffineAddress LoadAddress =
+                normalizeAddress(Def->Inputs[0], {});
+            for (size_t Index = 0; Index < LoadIndex; ++Index) {
+              const MedOp &Write = LoadBlock->Ops[Index];
+              if (Write.Opcode != NdOp::STORE || Write.NumInputs < 2 ||
+                  Write.Inputs[1].Size != Def->Output.Size)
+                continue;
+              const AffineAddress StoreAddress =
+                  normalizeAddress(Write.Inputs[0], {});
+              if (!LoadAddress.Valid || !StoreAddress.Valid ||
+                  LoadAddress.Terms != StoreAddress.Terms ||
+                  LoadAddress.Constant != StoreAddress.Constant)
+                continue;
+              bool Opaque = false;
+              for (size_t Between = Index + 1; Between < LoadIndex; ++Between)
+                if (LoadBlock->Ops[Between].Opcode == NdOp::CALL ||
+                    LoadBlock->Ops[Between].Opcode == NdOp::INDIR_CALL ||
+                    LoadBlock->Ops[Between].Opcode == NdOp::INTRINSIC)
+                  Opaque = true;
+              if (!Opaque &&
+                  valueIsStableAddressOffset(Write.Inputs[1], &Start))
+                return true;
+            }
+          }
+        }
+        auto SlotVA = traceValueVA(Def->Inputs[0]);
+        if (!SlotVA)
+          return false;
+        const Segment *SlotSegment = Img->getSegmentFor(*SlotVA);
+        if (!SlotSegment || !SlotSegment->isReadable() ||
+            !SlotSegment->isWritable() ||
+            SlotSegment->isExecutable() || *SlotVA < SlotSegment->VA ||
+            *SlotVA - SlotSegment->VA > SlotSegment->Data.size() ||
+            Def->Output.Size >
+                SlotSegment->Data.size() - (*SlotVA - SlotSegment->VA))
+          return false;
+        const uint64_t FirstCandidate =
+            *SlotVA >= PointerSize - 1 ? *SlotVA - (PointerSize - 1) : 0;
+        if (*SlotVA > InvalidVA - Def->Output.Size)
+          return false;
+        const uint64_t LoadEnd = *SlotVA + Def->Output.Size;
+        for (uint64_t Candidate = FirstCandidate; Candidate < LoadEnd;
+             ++Candidate)
+          if (Img->hasRelocationProvenanceAt(Candidate))
+            return false;
+
+        int LoadBlockId = -1;
+        int LoadOpIndex = -1;
+        for (const MedBlock &Block : CurMedFunc->Blocks)
+          for (size_t OpIndex = 0; OpIndex < Block.Ops.size(); ++OpIndex)
+            if (&Block.Ops[OpIndex] == Def) {
+              LoadBlockId = Block.Id;
+              LoadOpIndex = static_cast<int>(OpIndex);
+            }
+        if (LoadBlockId < 0 || LoadOpIndex < 0)
+          return false;
+
+        auto canReachBlock = [&](int Start, int Goal) {
+          std::vector<int> Work{Start};
+          std::set<int> Seen;
+          while (!Work.empty()) {
+            const int Current = Work.back();
+            Work.pop_back();
+            if (Current == Goal)
+              return true;
+            if (!Seen.insert(Current).second)
+              continue;
+            auto It = std::find_if(
+                CurMedFunc->Blocks.begin(), CurMedFunc->Blocks.end(),
+                [&](const MedBlock &Block) { return Block.Id == Current; });
+            if (It == CurMedFunc->Blocks.end())
+              continue;
+            Work.insert(Work.end(), It->Succs.begin(), It->Succs.end());
+            for (const ExceptionalEdge &Edge : It->ExceptionalSuccs)
+              Work.push_back(Edge.BlockId);
+          }
+          return false;
+        };
+        for (const MedCallInfo &Call : CurMedFunc->CallInfos) {
+          if (Call.BlockId < 0 || Call.OpIdx < 0)
+            return false;
+          if (Call.BlockId == LoadBlockId) {
+            if (Call.OpIdx < LoadOpIndex)
+              return false;
+          } else if (canReachBlock(Call.BlockId, LoadBlockId)) {
+            return false;
+          }
+        }
+
+        bool SawStore = false;
+        for (const MedBlock &Block : CurMedFunc->Blocks) {
+          for (const MedOp &Write : Block.Ops) {
+            if (Write.Opcode != NdOp::STORE || Write.NumInputs < 2)
+              continue;
+            auto Destination = traceValueVA(Write.Inputs[0]);
+            if (!Destination) {
+              if (!varIsFrameDerived(Write.Inputs[0]))
+                return false;
+              continue;
+            }
+            if (*Destination != *SlotVA)
+              continue;
+            if (Write.Inputs[1].Size != Def->Output.Size ||
+                !valueIsStableAddressOffset(Write.Inputs[1], &Start))
+              return false;
+            SawStore = true;
+          }
+        }
+        return SawStore;
+      };
+      if (exactScalarStoreBackedLoad())
+        return true;
+
       // A pointer-width load can still be an ordinary scalar record field.
       // First recover its algebraic record lane without assuming anything
       // about the loop-carried index, then require every reachable slot in
@@ -3462,7 +3718,7 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
       return std::nullopt;
     if (Header->Succs[0] == Header->Succs[1] ||
         Blocks.count(Header->Succs[0]) == 0 ||
-        Blocks.count(Header->Succs[1]) == 0 || LoadBlock->Preds.size() != 1)
+        Blocks.count(Header->Succs[1]) == 0)
       return std::nullopt;
 
     std::set<int> StructuralHeaderPreds;
@@ -3479,12 +3735,14 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
       for (const ExceptionalEdge &Edge : Block->ExceptionalSuccs)
         recordIncoming(Edge.BlockId);
     }
-    if (StructuralHeaderPreds !=
-            std::set<int>(Header->Preds.begin(), Header->Preds.end()) ||
-        StructuralLoadPreds != std::set<int>{Header->Id} ||
-        std::set<int>(LoadBlock->Preds.begin(), LoadBlock->Preds.end()) !=
-            std::set<int>{Header->Id})
+    const std::set<int> RecordedHeaderPreds(Header->Preds.begin(),
+                                            Header->Preds.end());
+    const std::set<int> LoadPreds(LoadBlock->Preds.begin(),
+                                  LoadBlock->Preds.end());
+    if (StructuralHeaderPreds != RecordedHeaderPreds ||
+        StructuralLoadPreds != LoadPreds)
       return std::nullopt;
+
 
     struct PhiEdges {
       int InitialPred = -1;
@@ -3533,8 +3791,157 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     if (HeaderPreds !=
         std::set<int>{AddressEdges->InitialPred, AddressEdges->RecurrentPred})
       return std::nullopt;
-
-    const MedOp *Branch = nullptr;
+    auto PostLoopBound = [&]() -> std::optional<size_t> {
+    auto reachesBlock = [&](int Start, int Goal, int Forbidden) {
+      std::vector<int> Work{Start};
+      std::set<int> Seen;
+      while (!Work.empty()) {
+        const int Current = Work.back();
+        Work.pop_back();
+        if (Current == Goal)
+          return true;
+        if (Current == Forbidden || !Seen.insert(Current).second)
+          continue;
+        const auto It = Blocks.find(Current);
+        if (It == Blocks.end())
+          continue;
+        Work.insert(Work.end(), It->second->Succs.begin(), It->second->Succs.end());
+        for (const ExceptionalEdge &Edge : It->second->ExceptionalSuccs)
+          Work.push_back(Edge.BlockId);
+      }
+      return false;
+    };
+    std::function<bool(const MedVar &, const MedVar &, int,
+                       std::set<AddressProvenanceVarKey>)>
+        dependsOn = [&](const MedVar &Value, const MedVar &Target, int Depth,
+                        std::set<AddressProvenanceVarKey> Seen) {
+          if (sameValue(Value, Target))
+            return true;
+          if (Depth > 32 || Value.isConst() ||
+              !Seen.insert(addressProvenanceVarKey(Value)).second)
+            return false;
+          const MedOp *Def = lookupDef(Value);
+          if (!Def)
+            return false;
+          for (uint8_t I = 0; I < Def->NumInputs; ++I)
+            if (dependsOn(Def->Inputs[I], Target, Depth + 1, Seen))
+              return true;
+          return false;
+        };
+    const int RecurrentBlockId = AddressEdges->RecurrentPred;
+    if (Header->Succs[0] != RecurrentBlockId &&
+        Header->Succs[1] != RecurrentBlockId)
+      return std::nullopt;
+    const int MatchBlockId =
+        Header->Succs[0] == RecurrentBlockId ? Header->Succs[1] : Header->Succs[0];
+    if (LoadBlock->Id == RecurrentBlockId ||
+        !reachesBlock(MatchBlockId, LoadBlock->Id, RecurrentBlockId))
+      return std::nullopt;
+    bool PostReachedLoad = false;
+    for (const MedOp &Op : LoadBlock->Ops) {
+      if (&Op == Result.Load) {
+        PostReachedLoad = true;
+        break;
+      }
+      if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+          Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN)
+        return std::nullopt;
+    }
+    if (!PostReachedLoad)
+      return std::nullopt;
+    const auto RecurrentIt = Blocks.find(RecurrentBlockId);
+    if (RecurrentIt == Blocks.end() || RecurrentIt->second->Succs.size() != 2 ||
+        RecurrentIt->second->ExceptionalSuccs.size() != 0 ||
+        RecurrentIt->second->Ops.empty() ||
+        RecurrentIt->second->Ops.back().Opcode != NdOp::COND_BR)
+      return std::nullopt;
+    const MedOp &RecurrentBranch = RecurrentIt->second->Ops.back();
+    if (RecurrentBranch.NumInputs < 2)
+      return std::nullopt;
+    std::function<std::optional<int64_t>(const MedVar &, const MedVar &, int,
+                                         std::set<AddressProvenanceVarKey>)>
+        scalarDelta = [&](const MedVar &Value, const MedVar &Root, int Depth,
+                          std::set<AddressProvenanceVarKey> Seen)
+        -> std::optional<int64_t> {
+      if (Depth > 32 || Value.isConst())
+        return std::nullopt;
+      if (sameValue(Value, Root))
+        return int64_t(0);
+      if (!Seen.insert(addressProvenanceVarKey(Value)).second)
+        return std::nullopt;
+      const MedOp *Def = lookupDef(Value);
+      if (!Def || Def->NumInputs < 1)
+        return std::nullopt;
+      if (Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
+          Def->Opcode == NdOp::INT_SEXT ||
+          (Def->Opcode == NdOp::SUBBYTES && Def->NumInputs >= 2 &&
+           Def->Inputs[1].isConst() && Def->Inputs[1].ConstVal == 0))
+        return scalarDelta(Def->Inputs[0], Root, Depth + 1, Seen);
+      if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
+        auto Delta = signedOffset(Def->Inputs[1], Def->Output.Size * 8);
+        if (Delta && *Delta != std::numeric_limits<int64_t>::min()) {
+          auto Prefix = scalarDelta(Def->Inputs[0], Root, Depth + 1, Seen);
+          int64_t Combined = 0;
+          if (Prefix && addSigned(*Prefix, -*Delta, Combined))
+            return Combined;
+        }
+      }
+      return std::nullopt;
+    };
+    for (const PhiNode &Candidate : Header->Phis) {
+      if (&Candidate == AddressPhi || Candidate.Args.size() != 2)
+        continue;
+      const MedVar *InitialValue = nullptr;
+      const MedVar *RecurrentValue = nullptr;
+      int InitialPred = -1;
+      int RecurrentPred = -1;
+      bool Valid = true;
+      for (const auto &[Pred, Arg] : Candidate.Args) {
+        const bool Recurrent = phiIncomingIsRecurrent(Candidate, Pred, Arg);
+        const std::optional<int64_t> Delta =
+            Recurrent ? std::optional<int64_t>(0)
+                      : scalarDelta(Arg, Candidate.Output, 0, {});
+        if (Recurrent || (Delta && *Delta == -1)) {
+          if (RecurrentValue) {
+            Valid = false;
+            break;
+          }
+          RecurrentValue = &Arg;
+          RecurrentPred = Pred;
+        } else {
+          if (InitialValue) {
+            Valid = false;
+            break;
+          }
+          InitialValue = &Arg;
+          InitialPred = Pred;
+        }
+      }
+      if (!Valid || !InitialValue || !RecurrentValue ||
+          InitialPred != AddressEdges->InitialPred ||
+          RecurrentPred != AddressEdges->RecurrentPred)
+        continue;
+      bool DefinedAddressUpdate = false;
+      bool DefinedCounterUpdate = false;
+      for (const MedOp &Op : RecurrentIt->second->Ops) {
+        DefinedAddressUpdate |= sameValue(Op.Output, *AddressEdges->RecurrentValue);
+        DefinedCounterUpdate |= sameValue(Op.Output, *RecurrentValue);
+      }
+      if (!DefinedAddressUpdate || !DefinedCounterUpdate)
+        continue;
+      const std::optional<uint64_t> Initial = traceControlConst(*InitialValue);
+      if (!Initial || *Initial == 0 ||
+          *Initial > static_cast<uint64_t>(limits::kMaxSSANodes))
+        continue;
+      if (!dependsOn(RecurrentBranch.Inputs[1], Candidate.Output, 0, {}))
+        continue;
+      return static_cast<size_t>(*Initial);
+    }
+    return std::nullopt;
+  }();
+  if (PostLoopBound)
+    return PostLoopBound;
+  const MedOp *Branch = nullptr;
     for (const MedOp &Op : Header->Ops) {
       if (Op.Opcode == NdOp::COND_BR) {
         if (Branch)
@@ -3700,11 +4107,284 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
 
     return static_cast<size_t>(*Bound);
   };
+  auto boundedScalarTermCount = [&](const MedVar &Term) -> std::optional<size_t> {
+    auto sameValue = [](const MedVar &Left, const MedVar &Right) {
+      return addressProvenanceVarKey(Left) == addressProvenanceVarKey(Right);
+    };
+    std::map<int, const MedBlock *> Blocks;
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      Blocks.emplace(Block.Id, &Block);
+    std::function<std::optional<int64_t>(const MedVar &, const MedVar &, int,
+                                         std::set<AddressProvenanceVarKey>)>
+        scalarDelta = [&](const MedVar &Value, const MedVar &Root, int Depth,
+                          std::set<AddressProvenanceVarKey> Seen)
+        -> std::optional<int64_t> {
+      if (Depth > 32 || Value.isConst())
+        return std::nullopt;
+      if (sameValue(Value, Root))
+        return int64_t(0);
+      if (!Seen.insert(addressProvenanceVarKey(Value)).second)
+        return std::nullopt;
+      const MedOp *Def = lookupDef(Value);
+      if (!Def || Def->NumInputs < 1)
+        return std::nullopt;
+      if (Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
+          Def->Opcode == NdOp::INT_SEXT ||
+          (Def->Opcode == NdOp::SUBBYTES && Def->NumInputs >= 2 &&
+           Def->Inputs[1].isConst() && Def->Inputs[1].ConstVal == 0))
+        return scalarDelta(Def->Inputs[0], Root, Depth + 1, Seen);
+      if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
+        if (auto Delta = signedOffset(Def->Inputs[1], Def->Output.Size * 8))
+          if (auto Prefix = scalarDelta(Def->Inputs[0], Root, Depth + 1, Seen)) {
+            int64_t Combined = 0;
+            if (addSigned(*Prefix, *Delta, Combined))
+              return Combined;
+          }
+        if (auto Delta = signedOffset(Def->Inputs[0], Def->Output.Size * 8))
+          if (auto Prefix = scalarDelta(Def->Inputs[1], Root, Depth + 1, Seen)) {
+            int64_t Combined = 0;
+            if (addSigned(*Prefix, *Delta, Combined))
+              return Combined;
+          }
+      }
+      if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2)
+        if (auto Delta = signedOffset(Def->Inputs[1], Def->Output.Size * 8);
+            Delta && *Delta != std::numeric_limits<int64_t>::min())
+          if (auto Prefix = scalarDelta(Def->Inputs[0], Root, Depth + 1, Seen)) {
+            int64_t Combined = 0;
+            if (addSigned(*Prefix, -*Delta, Combined))
+              return Combined;
+          }
+      return std::nullopt;
+    };
+    auto blockAddress = [&](const MedBlock *Block) -> std::optional<va_t> {
+      if (!Block)
+        return std::nullopt;
+      return Block->StartAddr != 0 || Block->Ops.empty()
+                 ? std::optional<va_t>(Block->StartAddr)
+                 : std::optional<va_t>(Block->Ops.front().Addr);
+    };
+    std::function<bool(const MedVar &, const MedVar &, int,
+                       std::set<AddressProvenanceVarKey>)>
+        dependsOn = [&](const MedVar &Value, const MedVar &Target, int Depth,
+                        std::set<AddressProvenanceVarKey> Seen) {
+      if (sameValue(Value, Target))
+        return true;
+      if (Depth > 32 || Value.isConst() ||
+          !Seen.insert(addressProvenanceVarKey(Value)).second)
+        return false;
+      const MedOp *Def = lookupDef(Value);
+      if (!Def)
+        return false;
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        if (dependsOn(Def->Inputs[I], Target, Depth + 1, Seen))
+          return true;
+      return false;
+    };
+    auto reaches = [&](int Start, int Goal, int Forbidden, int HeaderId) {
+      std::vector<int> Work{Start};
+      std::set<int> Seen;
+      while (!Work.empty()) {
+        const int Current = Work.back();
+        Work.pop_back();
+        if (Current == Goal)
+          return true;
+        if (Current == Forbidden || Current == HeaderId ||
+            !Seen.insert(Current).second)
+          continue;
+        const auto It = Blocks.find(Current);
+        if (It == Blocks.end())
+          continue;
+        Work.insert(Work.end(), It->second->Succs.begin(), It->second->Succs.end());
+        for (const ExceptionalEdge &Edge : It->second->ExceptionalSuccs)
+          Work.push_back(Edge.BlockId);
+      }
+      return false;
+    };
+    std::function<std::optional<size_t>(const PhiNode *)> countForPhi =
+        [&](const PhiNode *Phi) -> std::optional<size_t> {
+      if (!Phi || Phi->Args.size() != 2 || Phi->Output.Size == 0 ||
+          Phi->Output.Size > 8)
+        return std::nullopt;
+      const MedBlock *Header = nullptr;
+      for (const MedBlock &Block : CurMedFunc->Blocks)
+        for (const PhiNode &Candidate : Block.Phis)
+          if (&Candidate == Phi)
+            Header = &Block;
+      const MedBlock *LoadBlock = nullptr;
+      for (const MedBlock &Block : CurMedFunc->Blocks)
+        for (const MedOp &Op : Block.Ops)
+          if (&Op == Result.Load)
+            LoadBlock = &Block;
+      if (!LoadBlock)
+        return std::nullopt;
+      if (!Header || Header->Preds.size() != 2 || Header->Succs.size() != 2 ||
+          Header->ExceptionalSuccs.size() != 0)
+        return std::nullopt;
+      const MedVar *InitialValue = nullptr;
+      const MedVar *RecurrentValue = nullptr;
+      int InitialPred = -1;
+      int RecurrentPred = -1;
+      for (const auto &[Pred, Arg] : Phi->Args) {
+        if (classifyPhiIncomingEdge(*Phi, Pred) !=
+            PhiEdgeFeasibility::ProvenFeasible)
+          return std::nullopt;
+        std::set<AddressProvenanceVarKey> Seen;
+        const auto Delta = scalarDelta(Arg, Phi->Output, 0, Seen);
+        if (Delta && *Delta == 1) {
+          if (RecurrentValue)
+            return std::nullopt;
+          RecurrentValue = &Arg;
+          RecurrentPred = Pred;
+        } else {
+          if (InitialValue)
+            return std::nullopt;
+          InitialValue = &Arg;
+          InitialPred = Pred;
+        }
+      }
+      if (!InitialValue || !RecurrentValue || InitialPred == RecurrentPred)
+        return std::nullopt;
+      const auto Initial = traceControlConst(*InitialValue);
+      if (!Initial || *Initial > static_cast<uint64_t>(limits::kMaxSSANodes))
+        return std::nullopt;
+      const auto RecurrentIt = Blocks.find(RecurrentPred);
+      if (RecurrentIt == Blocks.end() ||
+          RecurrentIt->second->Succs.size() != 2 ||
+          RecurrentIt->second->ExceptionalSuccs.size() != 0 ||
+          RecurrentIt->second->Ops.empty() ||
+          RecurrentIt->second->Ops.back().Opcode != NdOp::COND_BR)
+        return std::nullopt;
+      const MedOp &Branch = RecurrentIt->second->Ops.back();
+      if (Branch.NumInputs < 2 || !Branch.Inputs[0].isConst())
+        return std::nullopt;
+      if (std::find(Header->Succs.begin(), Header->Succs.end(), RecurrentPred) ==
+          Header->Succs.end())
+        return std::nullopt;
+      const int MatchSucc = Header->Succs[0] == RecurrentPred
+                                ? Header->Succs[1]
+                                : Header->Succs[0];
+      if (LoadBlock->Id == RecurrentPred ||
+          !reaches(MatchSucc, LoadBlock->Id, RecurrentPred, Header->Id))
+        return std::nullopt;
+      bool ReachedLoad = false;
+      for (const MedOp &Op : LoadBlock->Ops) {
+        if (&Op == Result.Load) {
+          ReachedLoad = true;
+          break;
+        }
+        if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+            Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN)
+          return std::nullopt;
+      }
+      if (!ReachedLoad)
+        return std::nullopt;
+      const auto HeaderAddress = blockAddress(Header);
+      bool BackedgeOnTrue = false;
+      bool SawBranchTarget = false;
+      for (int Succ : RecurrentIt->second->Succs) {
+        const auto SuccAddress = blockAddress(Blocks[Succ]);
+        if (!SuccAddress || *SuccAddress == Branch.Inputs[0].ConstVal) {
+          if (SuccAddress)
+            SawBranchTarget = true;
+          continue;
+        }
+      }
+      if (HeaderAddress && *HeaderAddress == Branch.Inputs[0].ConstVal) {
+        BackedgeOnTrue = true;
+        SawBranchTarget = true;
+      } else {
+        for (int Succ : RecurrentIt->second->Succs)
+          if (auto SuccAddress = blockAddress(Blocks[Succ]);
+              SuccAddress && *SuccAddress == Branch.Inputs[0].ConstVal)
+            SawBranchTarget = true;
+      }
+      if (!SawBranchTarget)
+        return std::nullopt;
+      MedVar Condition = Branch.Inputs[1];
+      bool Negated = false;
+      const MedOp *Compare = nullptr;
+      for (int Depth = 0; Depth < 16 && !Condition.isConst(); ++Depth) {
+        const MedOp *Def = lookupDef(Condition);
+        if (!Def)
+          return std::nullopt;
+        if (Def->Opcode == NdOp::BOOL_NOT && Def->NumInputs >= 1) {
+          Negated = !Negated;
+          Condition = Def->Inputs[0];
+          continue;
+        }
+        if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1) {
+          Condition = Def->Inputs[0];
+          continue;
+        }
+        if ((Def->Opcode == NdOp::INT_NOTEQUAL ||
+             Def->Opcode == NdOp::INT_EQUAL ||
+             Def->Opcode == NdOp::INT_LESS ||
+             Def->Opcode == NdOp::INT_LESSEQUAL) &&
+            Def->NumInputs >= 2) {
+          Compare = Def;
+          break;
+        }
+        return std::nullopt;
+      }
+      if (!Compare)
+        return std::nullopt;
+      int Related = -1;
+      int Other = -1;
+      for (int I = 0; I < 2; ++I)
+        if (dependsOn(Compare->Inputs[I], *RecurrentValue, 0, {}))
+          if (Related != -1)
+            return std::nullopt;
+          else
+            Related = I;
+      if (Related == -1)
+        return std::nullopt;
+      Other = 1 - Related;
+      const auto Bound = traceControlConst(Compare->Inputs[Other]);
+      if (!Bound || *Bound > static_cast<uint64_t>(limits::kMaxSSANodes))
+        return std::nullopt;
+      const bool CompareTrueBackedge = BackedgeOnTrue != Negated;
+      const bool LoopCondition =
+          Compare->Opcode == NdOp::INT_EQUAL ? !CompareTrueBackedge
+          : Compare->Opcode == NdOp::INT_LESSEQUAL ? CompareTrueBackedge
+          : CompareTrueBackedge;
+      if (!LoopCondition || *Bound < *Initial)
+        return std::nullopt;
+      uint64_t Count = *Bound - *Initial;
+      if (Compare->Opcode == NdOp::INT_LESSEQUAL) {
+        if (Count == std::numeric_limits<uint64_t>::max())
+          return std::nullopt;
+        ++Count;
+      }
+      if (Count == 0 || Count > static_cast<uint64_t>(limits::kMaxSSANodes))
+        return std::nullopt;
+      return static_cast<size_t>(Count);
+    };
+    std::function<std::optional<size_t>(const MedVar &,
+                                         std::set<AddressProvenanceVarKey>)>
+        findBound = [&](const MedVar &Value,
+                        std::set<AddressProvenanceVarKey> Seen)
+        -> std::optional<size_t> {
+      if (Value.isConst() || !Seen.insert(addressProvenanceVarKey(Value)).second)
+        return std::nullopt;
+      if (const PhiNode *Phi = lookupPhi(Value))
+        if (auto Count = countForPhi(Phi))
+          return Count;
+      const MedOp *Def = lookupDef(Value);
+      if (!Def || Def->NumInputs == 0 || Def->Opcode == NdOp::LOAD)
+        return std::nullopt;
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        if (auto Count = findBound(Def->Inputs[I], Seen))
+          return Count;
+      return std::nullopt;
+    };
+    return findBound(Term, {});
+  };
 
   AddressDomain Domain = analyzeAddress(LoadAddress, 0, {});
   const std::optional<size_t> GuardedIterations =
       Domain.Complete ? guardedIterationCount(LoadAddress, Domain.Step)
-                      : std::nullopt;
+      : std::nullopt;
   const std::optional<uint64_t> DiscoveredRun =
       ptrTableUniqueSegment(LoadAddress,
                             /*IncludeSymbolizedEvidence=*/true);
@@ -3758,6 +4438,20 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
     }
     if (!Lane.Complete)
       Lane = pointerLanes(nullptr, nullptr, false);
+    std::optional<size_t> LaneBound;
+    if (Lane.Complete && Lane.IndexTerms.size() == 1)
+      LaneBound = boundedScalarTermCount(Lane.IndexTerms.front());
+    if (LaneBound) {
+      if (*LaneBound == 0 || Lane.Slots.size() < *LaneBound)
+        Lane = {};
+      else {
+        std::set<uint64_t> BoundedSlots;
+        auto Slot = Lane.Slots.begin();
+        for (size_t I = 0; I < *LaneBound; ++I, ++Slot)
+          BoundedSlots.insert(*Slot);
+        Lane.Slots = std::move(BoundedSlots);
+      }
+    }
     const bool StableTerms =
         Lane.Complete &&
         std::all_of(Lane.IndexTerms.begin(), Lane.IndexTerms.end(),
@@ -3852,6 +4546,268 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
   if (Result.Slots.empty())
     return finish(Result);
 
+  {
+    const MedBlock *LoadBlock = nullptr;
+    for (const MedBlock &Block : CurMedFunc->Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (&Op == Result.Load)
+          LoadBlock = &Block;
+    if (LoadBlock) {
+      const MedOp *GuardBranch = nullptr;
+      bool AfterLoad = false;
+      for (const MedOp &Op : LoadBlock->Ops) {
+        if (&Op == Result.Load) {
+          AfterLoad = true;
+          continue;
+        }
+        if (AfterLoad && Op.Opcode == NdOp::COND_BR) {
+          GuardBranch = &Op;
+          break;
+        }
+      }
+      auto sameOccurrence = [](const MedVar &Left, const MedVar &Right) {
+        return addressProvenanceVarKey(Left) ==
+               addressProvenanceVarKey(Right);
+      };
+      std::function<bool(const MedVar &, const MedVar &, int,
+                         std::set<AddressProvenanceVarKey>)>
+          dependsOn = [&](const MedVar &Value, const MedVar &Target, int Depth,
+                          std::set<AddressProvenanceVarKey> Seen) {
+        if (sameOccurrence(Value, Target))
+          return true;
+        if (Depth > 32 || Value.isConst() ||
+            !Seen.insert(addressProvenanceVarKey(Value)).second)
+          return false;
+        if (const PhiNode *Phi = lookupPhi(Value)) {
+          bool SawFeasible = false;
+          for (const auto &[Pred, Arg] : Phi->Args) {
+            if (classifyPhiIncomingEdge(*Phi, Pred) !=
+                PhiEdgeFeasibility::ProvenFeasible)
+              continue;
+            SawFeasible = true;
+            if (dependsOn(Arg, Target, Depth + 1, Seen))
+              return true;
+          }
+          return false;
+        }
+        const MedOp *Def = lookupDef(Value);
+        if (!Def)
+          return false;
+        for (uint8_t I = 0; I < Def->NumInputs; ++I)
+          if (dependsOn(Def->Inputs[I], Target, Depth + 1, Seen))
+            return true;
+        return false;
+      };
+      auto blockAddress = [&](const MedBlock *Block) -> std::optional<va_t> {
+        if (!Block)
+          return std::nullopt;
+        return Block->StartAddr != 0 || Block->Ops.empty()
+                   ? std::optional<va_t>(Block->StartAddr)
+                   : std::optional<va_t>(Block->Ops.front().Addr);
+      };
+      auto containsIndirectCall = [&](int Start) {
+        std::vector<int> Work{Start};
+        std::set<int> Seen;
+        while (!Work.empty()) {
+          const int BlockId = Work.back();
+          Work.pop_back();
+          if (!Seen.insert(BlockId).second)
+            continue;
+          const auto It = std::find_if(
+              CurMedFunc->Blocks.begin(), CurMedFunc->Blocks.end(),
+              [&](const MedBlock &Block) { return Block.Id == BlockId; });
+          if (It == CurMedFunc->Blocks.end())
+            continue;
+          for (const MedOp &Op : It->Ops) {
+            if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs >= 1)
+              for (uint8_t I = 0; I < Op.NumInputs; ++I)
+                if (dependsOn(Op.Inputs[I], V, 0, {}))
+                  return true;
+            if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::RETURN)
+              return false;
+          }
+          Work.insert(Work.end(), It->Succs.begin(), It->Succs.end());
+        }
+        return false;
+      };
+      if (GuardBranch && GuardBranch->NumInputs >= 2 &&
+          GuardBranch->Inputs[0].isConst() &&
+          LoadBlock->Succs.size() == 2) {
+        int TrueSucc = -1;
+        for (int Succ : LoadBlock->Succs)
+          if (auto Address = blockAddress(
+                  CurMedFunc->Blocks.empty() ? nullptr :
+                  &*std::find_if(CurMedFunc->Blocks.begin(),
+                                 CurMedFunc->Blocks.end(),
+                                 [&](const MedBlock &Block) {
+                                   return Block.Id == Succ;
+                                 }));
+              Address && *Address == GuardBranch->Inputs[0].ConstVal)
+            TrueSucc = Succ;
+        const int FalseSucc =
+            TrueSucc == LoadBlock->Succs[0] ? LoadBlock->Succs[1]
+                                            : LoadBlock->Succs[0];
+        const bool CallOnTrue = TrueSucc >= 0 && containsIndirectCall(TrueSucc);
+        const bool CallOnFalse = TrueSucc >= 0 && containsIndirectCall(FalseSucc);
+        if (TrueSucc >= 0 && CallOnTrue != CallOnFalse) {
+          std::function<std::optional<bool>(const MedVar &, const MedVar &,
+                                             int,
+                                             std::set<AddressProvenanceVarKey>)>
+              highBitPredicate = [&](const MedVar &Condition,
+                                     const MedVar &GuardValue, int Depth,
+                                     std::set<AddressProvenanceVarKey> Seen)
+              -> std::optional<bool> {
+            if (Depth > 16 || Condition.isConst() ||
+                !Seen.insert(addressProvenanceVarKey(Condition)).second)
+              return std::nullopt;
+            const MedOp *Def = lookupDef(Condition);
+            if (!Def)
+              return std::nullopt;
+            if (Def->Opcode == NdOp::BOOL_NOT && Def->NumInputs >= 1)
+              if (auto Predicate = highBitPredicate(
+                      Def->Inputs[0], GuardValue, Depth + 1, Seen))
+                return !*Predicate;
+            if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1)
+              return highBitPredicate(Def->Inputs[0], GuardValue, Depth + 1,
+                                       Seen);
+            if ((Def->Opcode == NdOp::INT_NOTEQUAL ||
+                 Def->Opcode == NdOp::INT_EQUAL) &&
+                Def->NumInputs >= 2) {
+              int ValueInput = -1;
+              for (int I = 0; I < 2; ++I)
+                if (Def->Inputs[I].isConst() && Def->Inputs[I].ConstVal == 0)
+                  ValueInput = 1 - I;
+              if (ValueInput >= 0) {
+                const MedOp *MaskDef = lookupDef(Def->Inputs[ValueInput]);
+                if (MaskDef && MaskDef->Opcode == NdOp::INT_AND &&
+                    MaskDef->NumInputs >= 2) {
+                  int ShiftInput = -1;
+                  for (int I = 0; I < 2; ++I)
+                    if (MaskDef->Inputs[I].isConst() &&
+                        MaskDef->Inputs[I].ConstVal == 1)
+                      ShiftInput = 1 - I;
+                  if (ShiftInput >= 0) {
+                    const MedOp *ShiftDef =
+                        lookupDef(MaskDef->Inputs[ShiftInput]);
+                    if (ShiftDef && ShiftDef->Opcode == NdOp::INT_RIGHT &&
+                        ShiftDef->NumInputs >= 2 &&
+                        ShiftDef->Inputs[1].ConstVal ==
+                            (ShiftDef->Inputs[0].Size * 8 - 1) &&
+                        ShiftDef->Inputs[0].Size > 0 &&
+                        dependsOn(ShiftDef->Inputs[0], GuardValue, 0, {}))
+                      return Def->Opcode == NdOp::INT_NOTEQUAL;
+                  }
+                }
+              }
+            }
+            return std::nullopt;
+          };
+          std::vector<const MedOp *> GuardLoads;
+          std::function<void(const MedVar &,
+                             std::set<AddressProvenanceVarKey>)> collectLoads =
+              [&](const MedVar &Value,
+                  std::set<AddressProvenanceVarKey> Seen) {
+                if (Value.isConst() ||
+                    !Seen.insert(addressProvenanceVarKey(Value)).second)
+                  return;
+                const MedOp *Def = lookupDef(Value);
+                if (!Def)
+                  return;
+                if (Def->Opcode == NdOp::LOAD) {
+                  GuardLoads.push_back(Def);
+                  return;
+                }
+                for (uint8_t I = 0; I < Def->NumInputs; ++I)
+                  collectLoads(Def->Inputs[I], Seen);
+              };
+          collectLoads(GuardBranch->Inputs[1], {});
+          const MedOp *GuardLoad = nullptr;
+          std::optional<int64_t> GuardOffset;
+          for (const MedOp *Candidate : GuardLoads) {
+            if (Candidate->NumInputs < 1)
+              continue;
+            if (sameOccurrence(Candidate->Inputs[0], LoadAddress)) {
+              GuardLoad = Candidate;
+              GuardOffset = 0;
+              break;
+            }
+            const MedOp *AddressDef = lookupDef(Candidate->Inputs[0]);
+            if (!AddressDef || AddressDef->NumInputs < 2)
+              continue;
+            if (AddressDef->Opcode == NdOp::INT_ADD) {
+              if (sameOccurrence(AddressDef->Inputs[0], LoadAddress))
+                GuardOffset = signedOffset(AddressDef->Inputs[1], PtrBits);
+              else if (sameOccurrence(AddressDef->Inputs[1], LoadAddress))
+                GuardOffset = signedOffset(AddressDef->Inputs[0], PtrBits);
+            } else if (AddressDef->Opcode == NdOp::INT_SUB &&
+                       sameOccurrence(AddressDef->Inputs[0], LoadAddress)) {
+              if (auto Offset = signedOffset(AddressDef->Inputs[1], PtrBits);
+                  Offset && *Offset != std::numeric_limits<int64_t>::min())
+                GuardOffset = -*Offset;
+            }
+            if (GuardOffset) {
+              GuardLoad = Candidate;
+              break;
+            }
+          }
+          if (GuardLoad && GuardOffset && GuardLoad->Output.Size > 0 &&
+              GuardLoad->Output.Size <= 8) {
+            const auto HighBit = highBitPredicate(GuardBranch->Inputs[1],
+                                                  GuardLoad->Output, 0, {});
+            if (HighBit) {
+              std::set<uint64_t> CallableSlots;
+              std::set<uint64_t> GuardSlots = Result.Slots;
+              uint64_t TableBase = 0;
+              bool HaveTableBase = false;
+              std::vector<MedVar> TableTerms;
+              if (collectIndexedGlobalBase(LoadAddress, TableBase,
+                                            HaveTableBase, TableTerms) &&
+                  HaveTableBase && GuardSlots.size() > 1) {
+                auto First = GuardSlots.begin();
+                const uint64_t Step = *std::next(First) - *First;
+                if (Step != 0 && TableBase <=
+                        InvalidVA - Step * (GuardSlots.size() - 1)) {
+                  GuardSlots.clear();
+                  for (size_t I = 0; I < Result.Slots.size(); ++I)
+                    GuardSlots.insert(TableBase + Step * I);
+                }
+              }
+              bool CompleteGuard = true;
+              const unsigned GuardBits = GuardLoad->Output.Size * 8;
+              for (uint64_t Slot : GuardSlots) {
+                if (*GuardOffset < 0 ||
+                    Slot > InvalidVA - static_cast<uint64_t>(*GuardOffset)) {
+                  CompleteGuard = false;
+                  break;
+                }
+                const uint64_t GuardVA =
+                    Slot + static_cast<uint64_t>(*GuardOffset);
+                const Segment *Segment = Img->getSegmentFor(GuardVA);
+                if (!Segment || GuardVA < Segment->VA ||
+                    GuardVA - Segment->VA > Segment->Data.size() ||
+                    GuardLoad->Output.Size >
+                        Segment->Data.size() - (GuardVA - Segment->VA)) {
+                  CompleteGuard = false;
+                  break;
+                }
+                uint64_t Value = 0;
+                std::memcpy(&Value,
+                            Segment->Data.data() + (GuardVA - Segment->VA),
+                            GuardLoad->Output.Size);
+                const bool IsHigh =
+                    (Value & (uint64_t(1) << (GuardBits - 1))) != 0;
+                const bool BranchTaken = CallOnTrue ? IsHigh : !IsHigh;
+                if (BranchTaken)
+                  CallableSlots.insert(Slot);
+              }
+              if (CompleteGuard && !CallableSlots.empty())
+                Result.Slots = std::move(CallableSlots);
+            }
+              }
+            }
+      }
+    }
+  }
   for (uint64_t Slot : Result.Slots) {
     const bool IsCode = Img->CodePtrRelocSlots.count(Slot) != 0;
     const bool IsData = Img->DataPtrRelocSlots.count(Slot) != 0;

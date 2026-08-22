@@ -421,7 +421,65 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
           UsedAsLoad = true;
     Marked = !HomeSlots.empty() && (Reloaded || UsedAsLoad);
   }
-
+  // Darwin AArch64 variadic forwarders can construct va_list as an
+  // entry-SP pointer and pass it directly to an internal formatter without
+  // reloading a homed slot.  Recognize only that shape: a direct call with
+  // x2 or x3 formed from a non-negative entry-SP address in the same block.
+  // This covers both direct formatter calls and wrappers that forward through
+  // one fixed status argument while keeping ordinary local addresses out.
+  int DarwinFixedRegArgs = 0;
+  if (TargetArch == Arch::AArch64 && Fmt == BinaryFormat::MachO &&
+      TRI.IntParamRegs.size() > 3) {
+    for (uint64_t VaListReg :
+         {TRI.IntParamRegs[2], TRI.IntParamRegs[3]}) {
+      for (const auto &Blk : Func.Blocks) {
+        for (size_t I = 0; I < Blk.Ops.size() &&
+             DarwinFixedRegArgs == 0; ++I) {
+          const auto &Call = Blk.Ops[I];
+          if (Call.Opcode != NdOp::CALL || Call.NumInputs < 1 ||
+              !Call.Inputs[0].isConst())
+            continue;
+          for (size_t J = I; J-- > 0;) {
+            const auto &Prev = Blk.Ops[J];
+            if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
+              break;
+            if (Prev.Output.Kind != MedVar::Reg ||
+                Prev.Output.RegOff != VaListReg || Prev.NumInputs < 2 ||
+                !Prev.Inputs[1].isConst())
+              continue;
+            if (auto D = entrySpDelta(Func, SpOff, Prev.Output, 0))
+              if (*D >= 0 && *D <= limits::kVariadicOverflowBaseMax) {
+                Marked = true;
+                if (VaListReg == TRI.IntParamRegs[2]) {
+                  DarwinFixedRegArgs = 2;
+                } else {
+                  // X2 is a named argument unless the wrapper overwrites it
+                  // with X1 while preparing the internal formatter call.
+                  bool X2FormatAlias = false;
+                  for (const auto &Prefix : Blk.Ops) {
+                    if (&Prefix == &Call)
+                      break;
+                    if (Prefix.Output.Kind == MedVar::Reg &&
+                        Prefix.Output.RegOff == TRI.IntParamRegs[2] &&
+                        Prefix.Opcode == NdOp::COPY &&
+                        Prefix.NumInputs >= 1 &&
+                        Prefix.Inputs[0].Kind == MedVar::Reg &&
+                        Prefix.Inputs[0].RegOff == TRI.IntParamRegs[1]) {
+                      X2FormatAlias = true;
+                      break;
+                    }
+                  }
+                  DarwinFixedRegArgs = X2FormatAlias ? 2 : 3;
+                }
+              }
+            break;
+          }
+        }
+      }
+      if (DarwinFixedRegArgs > 0)
+        break;
+    }
+  }
   if (!Marked)
     return;
 
@@ -439,6 +497,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
               Base = *D;
 
   Func.IsVariadic = true;
+  Func.VariadicFixedRegArgs = DarwinFixedRegArgs;
   Func.VariadicOverflowBase =
       Base.value_or(TargetArch == Arch::X64 ? TRI.PointerSize : 0);
 }

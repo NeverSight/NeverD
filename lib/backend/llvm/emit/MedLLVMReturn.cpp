@@ -187,7 +187,24 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
     bool WantWide64 = !WantFloat && RetTy->isIntegerTy(64) &&
                       TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0;
     uint64_t HiRetOff = TRI.IntReturnReg2;
-
+    auto betterIntegerReturnView = [&](const MedVar *Current,
+                                       const MedVar &Candidate) {
+      if (!Current)
+        return true;
+      if (!RetTy->isIntegerTy())
+        return Candidate.Size > Current->Size;
+      uint16_t WantSize = static_cast<uint16_t>(
+          (RetTy->getIntegerBitWidth() + 7) / 8);
+      if (CurMedFunc->ReturnType &&
+          CurMedFunc->ReturnType->Kind == NdTypeKind::Int &&
+          CurMedFunc->ReturnType->Size > 0)
+        WantSize = CurMedFunc->ReturnType->Size;
+      const bool CandidateExact = Candidate.Size == WantSize;
+      const bool CurrentExact = Current->Size == WantSize;
+      if (CandidateExact != CurrentExact)
+        return CandidateExact;
+      return Candidate.Size > Current->Size;
+    };
     for (auto &Blk : CurMedFunc->Blocks) {
       bool HasThisRet = false;
       for (auto &BOp : Blk.Ops)
@@ -215,7 +232,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
             RetVar = &RIt->Output;
         }
         if (!WantFloat && RIt->Output.RegOff == IntRetOff) {
-          if (!RetVar || RIt->Output.Size > RetVar->Size)
+          if (betterIntegerReturnView(RetVar, RIt->Output))
             RetVar = &RIt->Output;
         }
         if (WantWide64 && RIt->Output.RegOff == HiRetOff) {
@@ -248,7 +265,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
               RetVar = &Phi.Output;
           }
           if (!WantFloat && Phi.Output.RegOff == IntRetOff) {
-            if (!RetVar || Phi.Output.Size > RetVar->Size)
+            if (betterIntegerReturnView(RetVar, Phi.Output))
               RetVar = &Phi.Output;
           }
         }

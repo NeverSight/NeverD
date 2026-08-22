@@ -19,8 +19,8 @@
 #include "neverd/object/SectionNames.h"
 
 #include "llvm/ADT/StringExtras.h"
-
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
@@ -401,7 +401,12 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             }
       }
       const int NumIntParamRegs = static_cast<int>(IntParamRegs.size());
-
+      const bool TailForwarder =
+          static_cast<size_t>(OI) + 1 < Blk.Ops.size() &&
+          Blk.Ops[OI + 1].Opcode == NdOp::RETURN &&
+          Blk.Ops[OI + 1].NumInputs >= 1 &&
+          Blk.Ops[OI + 1].Inputs[0].Kind == MedVar::Reg &&
+          Blk.Ops[OI + 1].Inputs[0].RegOff == Op.Output.RegOff;
       // An argument already resident in its parameter register — a loop-carried
       // value never re-moved before the call, e.g. `for(...) acc = f(acc, i)`
       // keeps `acc` in arg0 across iterations — leaves no in-block write for
@@ -425,7 +430,8 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       for (int K = 0; RegArgsApply && K < MaxArgs; ++K) {
         if (FoundMask[K])
           continue;
-        if (!CI.IsIndirect && K > RegPhiLimit)
+        if (!CI.IsIndirect && K > RegPhiLimit &&
+            !(TailForwarder && CalleeRegArgs > K))
           break; // direct call: never invent a trailing argument
         const PhiNode *Best =
             selectAuthoritativeArgPhi(Func, Blk, TRI, K, IsWin64);
@@ -455,7 +461,9 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           // Recover a pure live-in (a forwarded incoming register with no
           // reaching definition) only within the callee's arity, so a register
           // the callee never takes is not invented as an argument.
-          bool AllowLiveIn = (CalleeRegArgs >= 0 && K < CalleeRegArgs);
+          bool AllowLiveIn =
+              (CalleeRegArgs >= 0 && K < CalleeRegArgs) ||
+              (TailForwarder && CalleeArgs >= 0 && K < CalleeArgs);
           bool FromLiveIn = false;
           auto V = findReachingArgReg(Func, TRI, TheArch, Blk.Id, K, IsWin64,
                                       AllowLiveIn, &FromLiveIn);
@@ -829,6 +837,79 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
             FoundMask[SlotIdx] = true;
             FromStackScan[SlotIdx] = true;
           }
+        }
+      }
+
+      // A variadic call may merge paths after each path has placed stack
+      // varargs. Recover a slot only when every feasible predecessor supplies
+      // it; differing path values become a synthetic phi at the call block.
+      if (!CI.IsIndirect && DarwinVarArgBase >= 0 && TRI.PointerSize > 0 &&
+          !Blk.Preds.empty()) {
+        std::map<int, std::vector<std::pair<int, MedVar>>> StoresBySlot;
+        for (int PredId : Blk.Preds) {
+          const MedBlock *Pred = nullptr;
+          for (const auto &Candidate : Func.Blocks)
+            if (Candidate.Id == PredId) {
+              Pred = &Candidate;
+              break;
+            }
+          if (!Pred)
+            continue;
+          std::map<int, MedVar> PredStores;
+          for (auto It = Pred->Ops.rbegin(); It != Pred->Ops.rend(); ++It) {
+            const auto &Prev = *It;
+            if (Prev.Opcode == NdOp::CALL ||
+                Prev.Opcode == NdOp::INDIR_CALL ||
+                Prev.Opcode == NdOp::INTRINSIC)
+              break;
+            if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2)
+              continue;
+            auto StoreDelta = stackPtrDelta(*Pred, TRI, Prev.Inputs[0]);
+            if (!StoreDelta || *StoreDelta < CallSpDelta ||
+                ((*StoreDelta - CallSpDelta) % TRI.PointerSize) != 0)
+              continue;
+            const int Slot = DarwinVarArgBase +
+                             static_cast<int>((*StoreDelta - CallSpDelta) /
+                                              TRI.PointerSize);
+            if (Slot >= 0 && Slot < MaxArgs)
+              PredStores.emplace(Slot, Prev.Inputs[1]);
+          }
+          for (const auto &[Slot, Value] : PredStores)
+            StoresBySlot[Slot].emplace_back(PredId, Value);
+        }
+        for (const auto &[Slot, Inputs] : StoresBySlot) {
+          if (FoundMask[Slot] || Inputs.size() != Blk.Preds.size())
+            continue;
+          std::set<int> SeenPreds;
+          bool Complete = true;
+          for (const auto &[PredId, Value] : Inputs) {
+            (void)Value;
+            if (!SeenPreds.insert(PredId).second) {
+              Complete = false;
+              break;
+            }
+          }
+          if (!Complete)
+            continue;
+          const MedVar &First = Inputs.front().second;
+          const bool SameValue = std::all_of(
+              std::next(Inputs.begin()), Inputs.end(),
+              [&](const auto &Input) { return Input.second == First; });
+          MedVar Value = First;
+          if (!SameValue) {
+            PhiNode Phi;
+            Phi.Output.Kind = MedVar::Temp;
+            Phi.Output.Id = FreshId++;
+            Phi.Output.SSAVer = 0;
+            Phi.Output.Size = static_cast<uint16_t>(TRI.PointerSize);
+            Phi.Output.TheArch = TheArch;
+            Phi.Args = Inputs;
+            Value = Phi.Output;
+            Blk.Phis.push_back(std::move(Phi));
+          }
+          Found[Slot] = Value;
+          FoundMask[Slot] = true;
+          FromStackScan[Slot] = true;
         }
       }
 
@@ -1434,7 +1515,6 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
 
       if (!CI.IsIndirect && DarwinVarArgBase >= 0)
         CI.VarArgFixedCount = DarwinVarArgBase;
-
       Func.CallInfos.push_back(std::move(CI));
       if (!CallLaneOps.empty())
         Pending.push_back(
@@ -1497,15 +1577,24 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
   // parameter rather than an uninitialised register (0).  Done only when no
   // integer register parameter was already detected, to leave a function whose
   // register parameters are known untouched.
+  // Preserve already recovered register parameters, adding only promoted slots
+  // that are still absent.  Wrappers can have x0 recovered normally while x1
+  // and later incoming registers are discovered through tail-call forwarding.
   bool HasIntRegParam = false;
+  std::set<int> ExistingRegArgs;
   for (const auto &P : Func.Params)
-    if (P.RegOff != kNoParamReg && regToIntArgIdx(P.RegOff) >= 0) {
-      HasIntRegParam = true;
-      break;
+    if (P.RegOff != kNoParamReg) {
+      int I = regToIntArgIdx(P.RegOff);
+      if (I >= 0) {
+        HasIntRegParam = true;
+        ExistingRegArgs.insert(I);
+      }
     }
-  if (!HasIntRegParam && !PromoteParams.empty()) {
+  if (!PromoteParams.empty()) {
     std::vector<MedVar> RegParams;
     for (int I = 0; I <= PromoteParams.rbegin()->first; ++I) {
+      if (ExistingRegArgs.count(I))
+        continue;
       MedVar P;
       P.Kind = MedVar::Param;
       P.Id = -1;
@@ -1520,7 +1609,17 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       }
       RegParams.push_back(P);
     }
-    Func.Params.insert(Func.Params.begin(), RegParams.begin(), RegParams.end());
+    if (!RegParams.empty()) {
+      if (!HasIntRegParam)
+        Func.Params.insert(Func.Params.begin(), RegParams.begin(),
+                            RegParams.end());
+      else {
+        auto It = std::find_if(
+            Func.Params.begin(), Func.Params.end(),
+            [](const MedVar &P) { return P.RegOff == kNoParamReg; });
+        Func.Params.insert(It, RegParams.begin(), RegParams.end());
+      }
+    }
   }
 
   // Surface forwarded incoming FP/vector registers as parameters (the FP dual
@@ -1634,6 +1733,9 @@ void finalizeVariadicCallees(std::vector<MedFunc> &Funcs, Arch TheArch,
     if (!Callee.IsVariadic)
       continue;
     if (AddressTakenVariadic.count(Callee.Entry))
+      continue;
+    if (TheArch == Arch::AArch64 && Fmt == BinaryFormat::MachO &&
+        Callee.VariadicFixedRegArgs > 0)
       continue;
 
     // The fixed-argument prefix already recovered before this pass.  On the

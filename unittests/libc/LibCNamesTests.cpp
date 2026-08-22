@@ -72,7 +72,7 @@ TEST(VarArgFixedCount, FortifiedChkVariants) {
 // =====================================================================
 
 TEST(VarArgFixedCount, PosixWhitelist) {
-  EXPECT_EQ(varArgFixedCount("open"), 1u);
+  EXPECT_EQ(varArgFixedCount("open"), 2u);
   EXPECT_EQ(varArgFixedCount("openat"), 1u);
   EXPECT_EQ(varArgFixedCount("fcntl"), 1u);
   EXPECT_EQ(varArgFixedCount("ioctl"), 1u);

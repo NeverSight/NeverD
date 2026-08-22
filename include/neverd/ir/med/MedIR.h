@@ -244,6 +244,10 @@ struct MedFunc {
   /// recovered overflow stack parameters into it so the unchanged va_arg walk
   /// reads the correct values.
   bool IsVariadic = false;
+  /// Number of named integer-register arguments before a Darwin AArch64
+  /// entry-SP va_list forwarding wrapper's variadic tail. Zero for ordinary
+  /// variadic functions and non-Darwin targets.
+  int VariadicFixedRegArgs = 0;
 
   /// Byte offset above the entry stack pointer (frame_end) where the variadic
   /// overflow area starts — the first incoming stack argument the va_arg walk

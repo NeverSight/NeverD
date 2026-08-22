@@ -38,6 +38,9 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
       VecId = V.Id;
     }
   };
+  auto isCall = [](const MedOp &Op) {
+    return Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
+  };
   for (const auto &B : Func.Blocks) {
     for (const auto &Op : B.Ops) {
       consider(Op.Output);
@@ -139,6 +142,8 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
           continue;
         const MedVar &PV = Phi.Output;
         for (const auto &Nx : B.Ops) {
+          if (isCall(Nx))
+            break;
           if (!isFPRetSelfZero(Nx))
             for (uint8_t I = 0; I < Nx.NumInputs; ++I)
               if (Nx.Inputs[I].Kind == MedVar::Reg &&
@@ -188,6 +193,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
         continue;
       bool Redef = false;
       for (const auto &Nx : SB->Ops) {
+        if (isCall(Nx)) {
+          Redef = true;
+          break;
+        }
         if (!isFPRetSelfZero(Nx))
           for (uint8_t I = 0; I < Nx.NumInputs; ++I)
             if (Nx.Inputs[I].Kind == MedVar::Reg &&
@@ -222,6 +231,8 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
       bool ReadAfter = false, RedefAfter = false;
       for (size_t J = OI + 1; J < Blk.Ops.size(); ++J) {
         auto &Nx = Blk.Ops[J];
+        if (isCall(Nx))
+          break;
         // `xorps xmm0,xmm0` / `subss x,x` zeroes the register: it reads FPRet
         // only to discard it (result is 0, independent of the value), so it is
         // a redefinition, not a consumption of the call's FP return.  An
@@ -276,6 +287,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
       bool LaterRedef = false;
       for (size_t J = OI + 1; J < Blk.Ops.size(); ++J) {
         auto &Nx = Blk.Ops[J];
+        if (isCall(Nx)) {
+          LaterRedef = true;
+          break;
+        }
         for (uint8_t I = 0; I < Nx.NumInputs; ++I)
           if (Nx.Inputs[I].Kind == MedVar::Reg &&
               Nx.Inputs[I].RegOff == FPRet) {
@@ -322,6 +337,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
             continue; // the PHI (updated below) carries the value
           bool Redef = false;
           for (auto &Nx : SB->Ops) {
+            if (isCall(Nx)) {
+              Redef = true;
+              break;
+            }
             for (uint8_t I = 0; I < Nx.NumInputs; ++I)
               if (Nx.Inputs[I].Kind == MedVar::Reg &&
                   Nx.Inputs[I].RegOff == FPRet) {
