@@ -41,6 +41,12 @@ constexpr uint64_t kMaxSegmentZeroFill = 1ull << 30; // 1 GiB
 /// almost certainly false positives.
 constexpr uint32_t kMaxJumpTableEntries = 4096;
 
+/// Shared work budget for occurrence-level jump-table evidence discovery.
+/// Candidate enumeration is input-controlled; exceeding this budget fails the
+/// proof closed instead of allowing repeated whole-CFG query batches to grow
+/// quadratically with function size.
+constexpr uint32_t kMaxJumpTableEvidenceWork = 4096;
+
 /// Minimum number of resolved targets for a table to be accepted.
 constexpr uint32_t kMinJumpTableEntries = 2;
 
@@ -112,10 +118,11 @@ constexpr uint32_t kMinInsnAlignARM = 2;
 constexpr uint32_t kMinInsnAlignAArch64 = 4;
 constexpr uint32_t kMinInsnAlignX86 = 1;
 
-/// Maximum number of multi-stage recovery attempts.  Each stage
-/// re-analyzes previously unresolved INDIR_BR after the CFG has
-/// been extended by targets found in earlier stages.
-constexpr int kMaxMultiStageRetries = 3;
+/// Maximum number of multi-stage recovery attempts.  Each stage re-analyzes
+/// unresolved branches and every table whose range used a whole-CFG proof.
+/// The extra headroom lets nested target discovery reach a fixed point; an
+/// unfinished proof-dependent table is discarded when this budget expires.
+constexpr int kMaxMultiStageRetries = 16;
 
 /// Maximum number of LOAD records tracked during a single emulated
 /// path evaluation.  Exceeding this indicates runaway emulation.
