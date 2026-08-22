@@ -97,7 +97,7 @@ void expectCommonSuccess(const neverd_translate_object_result_v1 &Result,
   EXPECT_LE(Result.semantic_proof, NEVERD_TRANSLATE_PROOF_INVALID);
   EXPECT_EQ(Result.llvm_optimization_pipeline_ran, 1);
   EXPECT_EQ(Result.object_cache_identity_version, 1u);
-  EXPECT_EQ(Result.object_pipeline_schema_version, 3u);
+  EXPECT_EQ(Result.object_pipeline_schema_version, 4u);
 }
 
 TEST(NeverDTranslationCAPI, EmitsOwnedAuditedAArch64ELFObject) {
