@@ -49,6 +49,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -112,9 +113,17 @@ private:
     uint64_t IndexedBaseProofs = 0;
   };
 
+  struct FrameReloadSourceWorkCounts {
+    uint64_t Queries = 0;
+    uint64_t Builds = 0;
+    uint64_t Hits = 0;
+    uint64_t IndexBuilds = 0;
+  };
+
   // Deterministic test observability for the recursive provenance proofs. The
   // counters never participate in an emission decision.
   mutable AddressProvenanceWorkCounts AddressProvenanceWork;
+  mutable FrameReloadSourceWorkCounts FrameReloadSourceWork;
 
   /// Linkage for a synthesized data/table global: linkonce_odr in mergeable
   /// (sharded) mode so identical per-address globals from sibling shards merge;
@@ -688,6 +697,9 @@ private:
   /// callers must still prove what each value represents.
   bool collectFrameReloadSources(const MedOp &Load,
                                  std::vector<MedVar> &Sources) const;
+
+  bool collectFrameReloadSourcesUncached(const MedOp &Load,
+                                         std::vector<MedVar> &Sources) const;
 
   /// Prove that two frame-derived byte ranges cannot overlap for any runtime
   /// value admitted by their scalar address DAGs.  Both addresses are reduced
@@ -1611,6 +1623,43 @@ private:
             static_cast<int>(V.Provenance),
             V.AddressOwnerVA};
   }
+
+  using FrameReloadOccurrenceKey =
+      std::tuple<int, int, uint8_t, va_t, int, uint16_t,
+                 AddressProvenanceVarKey,
+                 std::array<AddressProvenanceVarKey, 6>>;
+  struct FrameReloadOccurrenceLocator {
+    size_t BlockIndex = 0;
+    size_t OpIndex = 0;
+  };
+  struct FrameReloadSourceResult {
+    bool Proven = false;
+    std::vector<MedVar> Sources;
+  };
+  enum class FrameReloadCacheState { Empty, Building, Ready };
+
+  static std::optional<FrameReloadOccurrenceKey>
+  frameReloadOccurrenceKey(const MedOp &Load);
+  void invalidateFrameReloadSourceCache() const;
+  bool ensureFrameReloadOccurrenceIndex() const;
+
+  // Stable, exact-occurrence memoization for all-path frame reload proofs.
+  // The cache never retains MedOp pointers: a key records the complete load
+  // occurrence and maps through a unique (block-index, op-index) locator in
+  // the immutable current MedFunc. Positive and negative answers own copied
+  // MedVar values. A miss is built transactionally; re-entry or feasible-CFG
+  // invalidation rolls it back instead of publishing a provisional answer.
+  mutable const MedFunc *FrameReloadSourceCacheFor = nullptr;
+  mutable FrameReloadCacheState FrameReloadOccurrenceIndexState =
+      FrameReloadCacheState::Empty;
+  mutable std::map<FrameReloadOccurrenceKey, FrameReloadOccurrenceLocator>
+      FrameReloadOccurrenceIndex;
+  mutable std::set<FrameReloadOccurrenceKey> AmbiguousFrameReloadOccurrences;
+  mutable FrameReloadCacheState FrameReloadSourceState =
+      FrameReloadCacheState::Empty;
+  mutable bool FrameReloadBuildSawReentrantQuery = false;
+  mutable std::map<FrameReloadOccurrenceKey, FrameReloadSourceResult>
+      FrameReloadSourceCache;
 
   // Exact, cycle-safe propagation of incomplete architectural address
   // fragments for the function currently being emitted. Observable sinks and

@@ -340,6 +340,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   MergeableGlobals = MergeableGlobals_;
   UnhandledValueIntrinsicCount = 0;
   AddressProvenanceWork = {};
+  FrameReloadSourceWork = {};
   GlobalDataCache.clear();
   ModuleJumpTableStorageRanges.clear();
   ModuleSuppressibleJumpTableRelocationSlots.clear();
@@ -419,6 +420,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   FrameDerivedCache.clear();
   FrameAddressCacheFor = nullptr;
   FrameAddressCache.clear();
+  invalidateFrameReloadSourceCache();
   AddrPredCacheFor = nullptr;
   SlotAddressEscapesCache.clear();
   SlotMatchingKeyLoadCache.clear();
@@ -433,6 +435,18 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   ImportedSymbolPlaceholders.clear();
   StringDataAddrs.clear();
   GlobalStrCounter = 0;
+
+  // Suppression preflight invokes the same address/provenance resolvers as
+  // body emission. Establish the complete function/import key domain before
+  // that first query so a cached proof cannot observe names left by a prior
+  // emit or a smaller domain than the later body phase. Exact emitted names
+  // are rebuilt below once native-personality conflicts have been resolved.
+  EmittedFuncNames.clear();
+  FuncNames.clear();
+  for (const MedFunc &Func : Funcs)
+    FuncNames.try_emplace(Func.Entry, Func.Name);
+  for (const auto &[Addr, Name] : Imports)
+    FuncNames.try_emplace(Addr, Name);
 
   // LowIR ownership establishes which relocation slots a recovered table may
   // suppress, but the backend can actually omit those mirror bytes only when
@@ -534,6 +548,15 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   }
   for (auto &[Addr, Name] : Imports)
     FuncNames[Addr] = llvm_name::fromObjectSymbol(Name, Fmt).str();
+
+  // Suppression preflight intentionally runs against the complete key domain
+  // before exact emitted spellings exist. Once those spellings are installed,
+  // begin a fresh frame-proof phase: no reload occurrence/result may flow from
+  // preflight into body emission merely because the same MedFunc storage is
+  // still current. Other feasible-edge-dependent caches key only on the stable
+  // function/import address domain established before preflight, so retaining
+  // them avoids repeating unrelated provenance work.
+  invalidateFrameReloadSourceCache();
 
   // Import function declarations are deferred to the CALL handler so
   // they get the correct parameter types from the actual call site.

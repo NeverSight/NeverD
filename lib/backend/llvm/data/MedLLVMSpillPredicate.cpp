@@ -643,7 +643,168 @@ bool MedLLVMEmitter::frameAccessesProvenDisjoint(const MedVar &A,
   return ceilDiv(DifferenceMin, Modulus).sgt(floorDiv(DifferenceMax, Modulus));
 }
 
+std::optional<MedLLVMEmitter::FrameReloadOccurrenceKey>
+MedLLVMEmitter::frameReloadOccurrenceKey(const MedOp &Load) {
+  if (Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 || Load.NumInputs > 6 ||
+      Load.Output.Size == 0)
+    return std::nullopt;
+  std::array<AddressProvenanceVarKey, 6> Inputs{};
+  for (uint8_t I = 0; I < Load.NumInputs; ++I)
+    Inputs[I] = addressProvenanceVarKey(Load.Inputs[I]);
+  return FrameReloadOccurrenceKey{static_cast<int>(Load.Opcode),
+                                  static_cast<int>(Load.MemoryOrdering),
+                                  Load.NumInputs,
+                                  Load.Addr,
+                                  Load.OriginSeq,
+                                  Load.Output.Size,
+                                  addressProvenanceVarKey(Load.Output),
+                                  std::move(Inputs)};
+}
+
+void MedLLVMEmitter::invalidateFrameReloadSourceCache() const {
+  FrameReloadSourceCacheFor = nullptr;
+  FrameReloadOccurrenceIndexState = FrameReloadCacheState::Empty;
+  FrameReloadOccurrenceIndex.clear();
+  AmbiguousFrameReloadOccurrences.clear();
+  FrameReloadSourceState = FrameReloadCacheState::Empty;
+  FrameReloadBuildSawReentrantQuery = false;
+  FrameReloadSourceCache.clear();
+}
+
+bool MedLLVMEmitter::ensureFrameReloadOccurrenceIndex() const {
+  if (FrameReloadSourceCacheFor != CurMedFunc) {
+    invalidateFrameReloadSourceCache();
+    FrameReloadSourceCacheFor = CurMedFunc;
+  }
+  if (!CurMedFunc)
+    return false;
+  if (FrameReloadOccurrenceIndexState == FrameReloadCacheState::Ready)
+    return true;
+  if (FrameReloadOccurrenceIndexState == FrameReloadCacheState::Building)
+    return false;
+
+  FrameReloadOccurrenceIndexState = FrameReloadCacheState::Building;
+  ++FrameReloadSourceWork.IndexBuilds;
+  std::map<FrameReloadOccurrenceKey, FrameReloadOccurrenceLocator> NextIndex;
+  std::set<FrameReloadOccurrenceKey> NextAmbiguous;
+  for (size_t BlockIndex = 0; BlockIndex < CurMedFunc->Blocks.size();
+       ++BlockIndex) {
+    const MedBlock &Block = CurMedFunc->Blocks[BlockIndex];
+    for (size_t OpIndex = 0; OpIndex < Block.Ops.size(); ++OpIndex) {
+      auto Key = frameReloadOccurrenceKey(Block.Ops[OpIndex]);
+      if (!Key || NextAmbiguous.count(*Key) != 0)
+        continue;
+      auto [It, Inserted] = NextIndex.emplace(
+          *Key, FrameReloadOccurrenceLocator{BlockIndex, OpIndex});
+      if (!Inserted) {
+        NextIndex.erase(It);
+        NextAmbiguous.insert(*Key);
+      }
+    }
+  }
+
+  // Publish only the complete index. The MedFunc body is immutable throughout
+  // emission, so these numeric locators remain stable until the owner changes.
+  FrameReloadOccurrenceIndex = std::move(NextIndex);
+  AmbiguousFrameReloadOccurrences = std::move(NextAmbiguous);
+  FrameReloadOccurrenceIndexState = FrameReloadCacheState::Ready;
+  return true;
+}
+
 bool MedLLVMEmitter::collectFrameReloadSources(
+    const MedOp &Load, std::vector<MedVar> &Sources) const {
+  Sources.clear();
+  ++FrameReloadSourceWork.Queries;
+
+  // Feasible-edge construction has not published a complete graph. Do not
+  // consume an older terminal answer or create a new one in that provisional
+  // generation.
+  const bool BuildingFeasibleEdges =
+      FeasibleEdgesFor == CurMedFunc &&
+      FeasibleEdgeState == FeasibleEdgeCacheState::Building;
+  if (BuildingFeasibleEdges) {
+    // This is a semantic dependency re-entering an unpublished CFG
+    // transaction. Make the feasible-edge builder discard every earlier
+    // constant-condition pruning decision and republish from structure only;
+    // returning a provisional negative here is conservative only when the
+    // whole generation observes that sticky fallback.
+    FeasibleEdgeBuildSawReentrantQuery = true;
+    if (FrameReloadSourceState == FrameReloadCacheState::Building)
+      FrameReloadBuildSawReentrantQuery = true;
+    return false;
+  }
+
+  if (!CurMedFunc)
+    return false;
+  // Establish one complete feasible-CFG generation before opening the frame
+  // proof transaction. Its start/publication invalidations then happen before
+  // the occurrence index and source result are built, rather than rolling a
+  // first otherwise-successful query back after callers have consumed it.
+  ensureFeasibleEdgeCache();
+  if (FeasibleEdgesFor != CurMedFunc ||
+      FeasibleEdgeState != FeasibleEdgeCacheState::Ready)
+    return false;
+
+  auto Key = frameReloadOccurrenceKey(Load);
+  if (!Key || !ensureFrameReloadOccurrenceIndex() ||
+      AmbiguousFrameReloadOccurrences.count(*Key) != 0)
+    return false;
+  auto Locator = FrameReloadOccurrenceIndex.find(*Key);
+  if (Locator == FrameReloadOccurrenceIndex.end() || !CurMedFunc ||
+      Locator->second.BlockIndex >= CurMedFunc->Blocks.size())
+    return false;
+  const MedBlock &Block = CurMedFunc->Blocks[Locator->second.BlockIndex];
+  if (Locator->second.OpIndex >= Block.Ops.size())
+    return false;
+  const MedOp &IndexedLoad = Block.Ops[Locator->second.OpIndex];
+  // A copied lookalike is not an occurrence in this function. Revalidate both
+  // membership and the complete stable key before consulting the proof cache.
+  if (&IndexedLoad != &Load || frameReloadOccurrenceKey(IndexedLoad) != Key)
+    return false;
+
+  if (FrameReloadSourceState == FrameReloadCacheState::Building) {
+    FrameReloadBuildSawReentrantQuery = true;
+    return false;
+  }
+  if (auto It = FrameReloadSourceCache.find(*Key);
+      It != FrameReloadSourceCache.end()) {
+    ++FrameReloadSourceWork.Hits;
+    Sources = It->second.Sources;
+    return It->second.Proven;
+  }
+
+  FrameReloadSourceState = FrameReloadCacheState::Building;
+  FrameReloadBuildSawReentrantQuery = false;
+  ++FrameReloadSourceWork.Builds;
+  std::vector<MedVar> NextSources;
+  const bool Proven = collectFrameReloadSourcesUncached(Load, NextSources);
+
+  const bool CanPublish =
+      FrameReloadSourceCacheFor == CurMedFunc &&
+      FrameReloadSourceState == FrameReloadCacheState::Building &&
+      !FrameReloadBuildSawReentrantQuery &&
+      !(FeasibleEdgesFor == CurMedFunc &&
+        FeasibleEdgeState == FeasibleEdgeCacheState::Building);
+  if (!CanPublish) {
+    if (FrameReloadSourceCacheFor == CurMedFunc &&
+        FrameReloadSourceState == FrameReloadCacheState::Building)
+      FrameReloadSourceState = FrameReloadSourceCache.empty()
+                                   ? FrameReloadCacheState::Empty
+                                   : FrameReloadCacheState::Ready;
+    FrameReloadBuildSawReentrantQuery = false;
+    Sources.clear();
+    return false;
+  }
+
+  auto [Published, Inserted] = FrameReloadSourceCache.emplace(
+      *Key, FrameReloadSourceResult{Proven, NextSources});
+  (void)Inserted;
+  FrameReloadSourceState = FrameReloadCacheState::Ready;
+  Sources = Published->second.Sources;
+  return Published->second.Proven;
+}
+
+bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     const MedOp &Load, std::vector<MedVar> &Sources) const {
   Sources.clear();
   const bool Escapes = CurMedFunc && Load.Opcode == NdOp::LOAD &&

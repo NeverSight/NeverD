@@ -49,6 +49,8 @@ public:
 class MedLLVMProvenanceTestPeer {
 public:
   using WorkCounts = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
+  using FrameReloadWorkCounts =
+      std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
 
   static WorkCounts addressProvenanceWork(const MedLLVMEmitter &Emitter) {
     const auto &Work = Emitter.AddressProvenanceWork;
@@ -58,6 +60,59 @@ public:
 
   static void resetAddressProvenanceWork(MedLLVMEmitter &Emitter) {
     Emitter.AddressProvenanceWork = {};
+  }
+
+  static FrameReloadWorkCounts
+  frameReloadSourceWork(const MedLLVMEmitter &Emitter) {
+    const auto &Work = Emitter.FrameReloadSourceWork;
+    return {Work.Queries, Work.Builds, Work.Hits, Work.IndexBuilds};
+  }
+
+  static size_t frameReloadSourceCacheSize(const MedLLVMEmitter &Emitter) {
+    return Emitter.FrameReloadSourceCache.size();
+  }
+
+  static void forceFeasibleEdgeBuildInProgress(MedLLVMEmitter &Emitter,
+                                               const MedFunc &Func) {
+    Emitter.CurMedFunc = &Func;
+    Emitter.FeasibleEdgesFor = &Func;
+    Emitter.FeasibleEdgeState =
+        MedLLVMEmitter::FeasibleEdgeCacheState::Building;
+    Emitter.FeasibleEdgeBuildSawReentrantQuery = false;
+  }
+
+  static void resetFeasibleEdgeBuild(MedLLVMEmitter &Emitter) {
+    Emitter.FeasibleEdgesFor = nullptr;
+    Emitter.FeasibleEdgeState = MedLLVMEmitter::FeasibleEdgeCacheState::Empty;
+    Emitter.FeasibleEdgeBuildSawReentrantQuery = false;
+    Emitter.invalidateFeasibleEdgeDependentCaches();
+  }
+
+  static void invalidateFeasibleEdgeDependentCaches(MedLLVMEmitter &Emitter) {
+    Emitter.invalidateFeasibleEdgeDependentCaches();
+  }
+
+  static void
+  installFrameReloadFeasibleReentryProbe(MedLLVMEmitter &Emitter,
+                                         const MedOp &Reload,
+                                         bool &ObservedConservativeReentry) {
+    Emitter.FeasibleEdgeBuildTestHook = [&Emitter, &Reload,
+                                         &ObservedConservativeReentry] {
+      std::vector<MedVar> Sources = {MedVar::makeConst(0xBAD, 8)};
+      const bool Proven = Emitter.collectFrameReloadSources(Reload, Sources);
+      ObservedConservativeReentry =
+          !Proven && Sources.empty() &&
+          Emitter.FeasibleEdgeBuildSawReentrantQuery &&
+          Emitter.FrameReloadSourceCache.empty();
+    };
+  }
+
+  static bool feasibleEdgeIsPublished(MedLLVMEmitter &Emitter, int From,
+                                      int To) {
+    Emitter.ensureFeasibleEdgeCache();
+    return Emitter.FeasibleEdgeState ==
+               MedLLVMEmitter::FeasibleEdgeCacheState::Ready &&
+           Emitter.FeasibleEdges.count({From, To}) != 0;
   }
 
   static bool edgeIsProven(MedLLVMEmitter &Emitter, const PhiNode &Phi,
@@ -1323,6 +1378,119 @@ MedFunc makeSpilledConstTableLookup(Arch TargetArch) {
   Block.EndAddr = CallerVA + 0x20;
   Func.Blocks.push_back(std::move(Block));
   return Func;
+}
+
+MedFunc makeConstantGuardedFrameReloadLookup() {
+  constexpr Arch TargetArch = Arch::X64;
+  const uint16_t PointerSize =
+      static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
+  MedFunc Func = makeSpilledConstTableLookup(TargetArch);
+  Func.Name = "constant_guarded_frame_reload";
+
+  MedBlock Live = std::move(Func.Blocks.front());
+  Live.Id = 1;
+  Live.StartAddr = CallerVA + 0x10;
+  Live.EndAddr = CallerVA + 0x30;
+  Live.Preds = {0, 2};
+
+  MedVar FoldedTrue;
+  FoldedTrue.Kind = MedVar::Temp;
+  FoldedTrue.TheArch = TargetArch;
+  FoldedTrue.Id = 200;
+  FoldedTrue.SSAVer = 1;
+  FoldedTrue.Size = 1;
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = Func.Entry;
+  Entry.EndAddr = CallerVA + 8;
+  Entry.Succs = {Live.Id, 2};
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_EQUAL;
+  Compare.Addr = Func.Entry;
+  Compare.Output = FoldedTrue;
+  Compare.addInput(MedVar::makeConst(1, PointerSize));
+  Compare.addInput(MedVar::makeConst(1, PointerSize));
+  Entry.Ops.push_back(std::move(Compare));
+  MedOp ChooseLive;
+  ChooseLive.Opcode = NdOp::COND_BR;
+  ChooseLive.Addr = Func.Entry + 4;
+  ChooseLive.addInput(MedVar::makeConst(Live.StartAddr, PointerSize));
+  ChooseLive.addInput(FoldedTrue);
+  Entry.Ops.push_back(std::move(ChooseLive));
+
+  MedBlock Dead;
+  Dead.Id = 2;
+  Dead.StartAddr = CallerVA + 0x40;
+  Dead.EndAddr = CallerVA + 0x44;
+  Dead.Preds = {Entry.Id};
+  Dead.Succs = {Live.Id};
+  MedOp DeadToLive;
+  DeadToLive.Opcode = NdOp::BRANCH;
+  DeadToLive.Addr = Dead.StartAddr;
+  DeadToLive.addInput(MedVar::makeConst(Live.StartAddr, PointerSize));
+  Dead.Ops.push_back(std::move(DeadToLive));
+
+  Func.Blocks.clear();
+  Func.Blocks.push_back(std::move(Entry));
+  Func.Blocks.push_back(std::move(Live));
+  Func.Blocks.push_back(std::move(Dead));
+  return Func;
+}
+
+void spillAuthenticatedTargetLoadBase(AuthenticatedTargetLoadFixture &Fixture) {
+  constexpr va_t TableVA = 0x2000;
+  constexpr uint16_t PointerSize = 8;
+  auto makeVar = [](MedVar::VarKind Kind, int Id) {
+    MedVar Value;
+    Value.Kind = Kind;
+    Value.TheArch = Arch::X64;
+    Value.Id = Id;
+    Value.SSAVer = Kind == MedVar::Reg ? 0 : 1;
+    Value.Size = PointerSize;
+    return Value;
+  };
+
+  MedVar StackPointer = makeVar(MedVar::Reg, 300);
+  StackPointer.RegOff = getTargetRegInfo(Arch::X64).StackPointer;
+  MedVar Slot = makeVar(MedVar::Temp, 301);
+  MedVar TableBase = makeVar(MedVar::Temp, 302);
+  MedVar ReloadedBase = makeVar(MedVar::Temp, 303);
+
+  MedOp FormSlot;
+  FormSlot.Opcode = NdOp::INT_ADD;
+  FormSlot.Addr = Fixture.Func.Entry;
+  FormSlot.Output = Slot;
+  FormSlot.addInput(StackPointer);
+  FormSlot.addInput(MedVar::makeConst(uint64_t(-8), PointerSize));
+  MedOp MaterializeBase;
+  MaterializeBase.Opcode = NdOp::COPY;
+  MaterializeBase.Addr = Fixture.Func.Entry + 1;
+  MaterializeBase.Output = TableBase;
+  MaterializeBase.addInput(MedVar::makeConst(
+      TableVA, PointerSize, ConstantAddressProvenance::DataAddress, TableVA));
+  MedOp Spill;
+  Spill.Opcode = NdOp::STORE;
+  Spill.Addr = Fixture.Func.Entry + 2;
+  Spill.addInput(Slot);
+  Spill.addInput(TableBase);
+  MedOp Reload;
+  Reload.Opcode = NdOp::LOAD;
+  Reload.Addr = Fixture.Func.Entry + 3;
+  Reload.Output = ReloadedBase;
+  Reload.addInput(Slot);
+
+  std::vector<MedOp> &Ops = Fixture.Func.Blocks.front().Ops;
+  ASSERT_FALSE(Ops.empty());
+  ASSERT_EQ(Ops.front().Opcode, NdOp::LOAD);
+  Ops.front().Inputs[0] = ReloadedBase;
+  std::vector<MedOp> Prefix;
+  Prefix.push_back(std::move(FormSlot));
+  Prefix.push_back(std::move(MaterializeBase));
+  Prefix.push_back(std::move(Spill));
+  Prefix.push_back(std::move(Reload));
+  Ops.insert(Ops.begin(), Prefix.begin(), Prefix.end());
+  Fixture.Func.FrameSize = 16;
 }
 
 MedFunc makeDeepScalarIndexTableLookup(Arch TargetArch) {
@@ -8978,6 +9146,233 @@ TEST(MachOLLVMDataPointerBoundary,
       EXPECT_FALSE(
           valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
     }
+}
+
+TEST(MachOLLVMDataPointerBoundary, ReusesPositiveAndNegativeFrameReloadProofs) {
+  constexpr uint64_t QueryCount = 64;
+  auto findReload = [](const MedFunc &Func) -> const MedOp * {
+    const uint16_t PointerSize =
+        static_cast<uint16_t>(getTargetRegInfo(Arch::X64).PointerSize);
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::LOAD && Op.Output.Size == PointerSize)
+          return &Op;
+    return nullptr;
+  };
+
+  MedFunc Positive = makeSpilledConstTableLookup(Arch::X64);
+  const MedOp *PositiveReload = findReload(Positive);
+  ASSERT_NE(PositiveReload, nullptr);
+  MedLLVMEmitter PositiveEmitter;
+  for (uint64_t I = 0; I < QueryCount; ++I) {
+    std::vector<MedVar> Sources = {MedVar::makeConst(0xBAD, 8)};
+    ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+        PositiveEmitter, Positive, Arch::X64, *PositiveReload, Sources));
+    ASSERT_EQ(Sources.size(), 1u);
+    EXPECT_EQ(Sources.front(), Positive.Blocks.front().Ops[1].Output);
+  }
+  EXPECT_EQ(
+      MedLLVMProvenanceTestPeer::frameReloadSourceWork(PositiveEmitter),
+      std::make_tuple(QueryCount, uint64_t{1}, QueryCount - 1, uint64_t{1}));
+
+  MedFunc Negative = makeRejectedFrameReloadLookup(
+      Arch::X64, ReachingStoreCase::StoreAfterLoad);
+  const MedOp *NegativeReload = findReload(Negative);
+  ASSERT_NE(NegativeReload, nullptr);
+  MedLLVMEmitter NegativeEmitter;
+  for (uint64_t I = 0; I < QueryCount; ++I) {
+    std::vector<MedVar> Sources = {MedVar::makeConst(0xBAD, 8)};
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+        NegativeEmitter, Negative, Arch::X64, *NegativeReload, Sources));
+    EXPECT_TRUE(Sources.empty());
+  }
+  EXPECT_EQ(
+      MedLLVMProvenanceTestPeer::frameReloadSourceWork(NegativeEmitter),
+      std::make_tuple(QueryCount, uint64_t{1}, QueryCount - 1, uint64_t{1}));
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     DistinguishesSameAddressFrameReloadOccurrences) {
+  MedFunc Func = makeSpilledConstTableLookup(Arch::X64);
+  std::vector<MedOp> &Ops = Func.Blocks.front().Ops;
+  auto FirstIt = std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+    return Op.Opcode == NdOp::LOAD && Op.Output.Size == 8;
+  });
+  ASSERT_NE(FirstIt, Ops.end());
+  FirstIt->Addr = CallerVA + 0x14;
+  FirstIt->OriginSeq = 7;
+  const int FirstOutputId = FirstIt->Output.Id;
+
+  MedVar PartialAddr = FirstIt->Inputs[0];
+  PartialAddr.Kind = MedVar::Temp;
+  PartialAddr.Id += 100;
+  PartialAddr.SSAVer = 1;
+  MedOp FormPartial;
+  FormPartial.Opcode = NdOp::INT_ADD;
+  FormPartial.Output = PartialAddr;
+  FormPartial.addInput(FirstIt->Inputs[0]);
+  FormPartial.addInput(MedVar::makeConst(4, 8));
+  MedOp PartialStore;
+  PartialStore.Opcode = NdOp::STORE;
+  PartialStore.addInput(PartialAddr);
+  PartialStore.addInput(MedVar::makeConst(0, 4));
+  MedOp SecondReload = *FirstIt;
+  SecondReload.Output.Id += 200;
+  const int SecondOutputId = SecondReload.Output.Id;
+
+  const size_t InsertAt =
+      static_cast<size_t>(std::distance(Ops.begin(), FirstIt)) + 1;
+  Ops.insert(Ops.begin() + static_cast<std::ptrdiff_t>(InsertAt),
+             std::move(FormPartial));
+  Ops.insert(Ops.begin() + static_cast<std::ptrdiff_t>(InsertAt + 1),
+             std::move(PartialStore));
+  Ops.insert(Ops.begin() + static_cast<std::ptrdiff_t>(InsertAt + 2),
+             std::move(SecondReload));
+
+  const MedOp *FirstReload = nullptr;
+  const MedOp *SecondReloadInFunc = nullptr;
+  for (const MedOp &Op : Ops) {
+    if (Op.Opcode != NdOp::LOAD)
+      continue;
+    if (Op.Output.Id == FirstOutputId)
+      FirstReload = &Op;
+    if (Op.Output.Id == SecondOutputId)
+      SecondReloadInFunc = &Op;
+  }
+  ASSERT_NE(FirstReload, nullptr);
+  ASSERT_NE(SecondReloadInFunc, nullptr);
+  ASSERT_EQ(FirstReload->Addr, SecondReloadInFunc->Addr);
+  ASSERT_EQ(FirstReload->OriginSeq, SecondReloadInFunc->OriginSeq);
+  ASSERT_EQ(FirstReload->Inputs[0], SecondReloadInFunc->Inputs[0]);
+
+  MedLLVMEmitter Emitter;
+  std::vector<MedVar> Sources;
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, *FirstReload, Sources));
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, *SecondReloadInFunc, Sources));
+  EXPECT_TRUE(Sources.empty());
+  EXPECT_EQ(
+      MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter),
+      std::make_tuple(uint64_t{2}, uint64_t{2}, uint64_t{0}, uint64_t{1}));
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::frameReloadSourceCacheSize(Emitter), 2u);
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RejectsNonMemberCloneOfFrameReloadOccurrence) {
+  MedFunc Func = makeSpilledConstTableLookup(Arch::X64);
+  const MedOp *Reload = nullptr;
+  for (const MedOp &Op : Func.Blocks.front().Ops)
+    if (Op.Opcode == NdOp::LOAD && Op.Output.Size == 8) {
+      Reload = &Op;
+      break;
+    }
+  ASSERT_NE(Reload, nullptr);
+  MedOp Clone = *Reload;
+
+  MedLLVMEmitter Emitter;
+  std::vector<MedVar> Sources = {MedVar::makeConst(0xBAD, 8)};
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, Clone, Sources));
+  EXPECT_TRUE(Sources.empty());
+  EXPECT_EQ(
+      MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter),
+      std::make_tuple(uint64_t{1}, uint64_t{0}, uint64_t{0}, uint64_t{1}));
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::frameReloadSourceCacheSize(Emitter), 0u);
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FrameReloadCacheRollsBackFeasibleGraphReentryAndInvalidation) {
+  MedFunc Func = makeSpilledConstTableLookup(Arch::X64);
+  const MedOp *Reload = nullptr;
+  for (const MedOp &Op : Func.Blocks.front().Ops)
+    if (Op.Opcode == NdOp::LOAD && Op.Output.Size == 8) {
+      Reload = &Op;
+      break;
+    }
+  ASSERT_NE(Reload, nullptr);
+
+  MedLLVMEmitter Emitter;
+  MedLLVMProvenanceTestPeer::forceFeasibleEdgeBuildInProgress(Emitter, Func);
+  std::vector<MedVar> Sources;
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, *Reload, Sources));
+  EXPECT_TRUE(Sources.empty());
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::frameReloadSourceCacheSize(Emitter), 0u);
+
+  MedLLVMProvenanceTestPeer::resetFeasibleEdgeBuild(Emitter);
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, *Reload, Sources));
+  const auto BeforeHit =
+      MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, *Reload, Sources));
+  const auto AfterHit =
+      MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
+  EXPECT_EQ(std::get<2>(AfterHit), std::get<2>(BeforeHit) + 1);
+
+  MedLLVMProvenanceTestPeer::invalidateFeasibleEdgeDependentCaches(Emitter);
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::frameReloadSourceCacheSize(Emitter), 0u);
+  const auto BeforeRebuild =
+      MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, *Reload, Sources));
+  const auto AfterRebuild =
+      MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
+  EXPECT_EQ(std::get<1>(AfterRebuild), std::get<1>(BeforeRebuild) + 1);
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     FrameReloadReentryRestoresEarlierConstantPrunedEdge) {
+  MedFunc Func = makeConstantGuardedFrameReloadLookup();
+  const MedOp *Reload = nullptr;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::LOAD && Op.Output.Size == 8)
+        Reload = &Op;
+  ASSERT_NE(Reload, nullptr);
+
+  BinaryImage Image = makeSpilledConstTableImage(Arch::X64);
+  MedLLVMEmitter Emitter;
+  MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+      Emitter, Func, Image, Arch::X64, BinaryFormat::MachO);
+  bool ObservedConservativeReentry = false;
+  MedLLVMProvenanceTestPeer::installFrameReloadFeasibleReentryProbe(
+      Emitter, *Reload, ObservedConservativeReentry);
+
+  EXPECT_TRUE(
+      MedLLVMProvenanceTestPeer::feasibleEdgeIsPublished(Emitter, 0, 1));
+  EXPECT_TRUE(ObservedConservativeReentry);
+  EXPECT_TRUE(MedLLVMProvenanceTestPeer::feasibleEdgeIsPublished(Emitter, 0, 2))
+      << "frame-proof re-entry must rebuild edges pruned before the hook";
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::frameReloadSourceCacheSize(Emitter), 0u);
+
+  std::vector<MedVar> Sources;
+  ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+      Emitter, Func, Arch::X64, *Reload, Sources));
+  EXPECT_EQ(Sources.size(), 1u);
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::frameReloadSourceCacheSize(Emitter), 1u);
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     RebuildsFrameReloadProofAfterSuppressionPreflightPhase) {
+  AuthenticatedTargetLoadFixture Fixture;
+  spillAuthenticatedTargetLoadBase(Fixture);
+
+  MedLLVMEmitter Emitter;
+  llvm::LLVMContext Context;
+  auto Module =
+      Emitter.emit({Fixture.Func}, Context, "frame-reload-preflight-phase",
+                   Arch::X64, {}, &Fixture.Image, BinaryFormat::ELF);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+
+  const auto Work = MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
+  EXPECT_EQ(std::get<1>(Work), 3u)
+      << "preflight must build the base reload once; body must rebuild it and "
+         "also cache the target LOAD's negative frame answer";
+  EXPECT_EQ(std::get<3>(Work), 2u)
+      << "the body phase must rebuild the stable occurrence index";
 }
 
 TEST(MachOLLVMDataPointerBoundary,

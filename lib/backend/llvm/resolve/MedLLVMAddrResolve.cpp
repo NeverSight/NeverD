@@ -737,6 +737,13 @@ void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
   FeasibleControlComponentsReady = false;
   FeasibleControlComponents.clear();
 
+  invalidateFrameReloadSourceCache();
+
+  AddrPredCacheFor = nullptr;
+  SlotAddressEscapesCache.clear();
+  SlotMatchingKeyLoadCache.clear();
+  SlotReloadUsedLocallyCache.clear();
+
   PhiRecurrenceCacheFor = nullptr;
   PhiRecurrenceCache.clear();
   SelfRecurrenceCacheFor = nullptr;
