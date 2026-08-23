@@ -18,6 +18,22 @@
 
 namespace neverd {
 
+/// Whether storage is writable after loader relocation processing completes.
+/// ELF `.data.rel.ro` and equivalent container sections carry a writable file
+/// flag only for relocation, then become immutable at runtime; downstream
+/// mutation analysis must use this semantic view rather than raw SHF_WRITE /
+/// section flags.
+inline bool isRuntimeWritableAddress(const BinaryImage &Img, va_t Address) {
+  if (const Section *Sec = Img.getSectionFor(Address))
+    return Sec->isWritable() &&
+           !section_names::isReadOnlyAfterRelocSectionName(Sec->Name) &&
+           !section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName);
+  if (const Segment *Seg = Img.getSegmentFor(Address))
+    return Seg->isWritable();
+  // Unknown ownership is not evidence of immutability.
+  return true;
+}
+
 /// Record the provenance carried by one full-width absolute pointer
 /// relocation.  Container formats spell these differently (Mach-O rebases,
 /// PE base relocations, ELF absolute/RELATIVE relocations), but downstream
@@ -50,10 +66,7 @@ inline bool recordAbsolutePointerRelocation(BinaryImage &Img, va_t SlotVA,
     C.Mapped = true;
     if (const Section *Sec = Img.getSectionFor(Addr)) {
       C.Readable = Sec->isReadable();
-      C.Writable =
-          Sec->isWritable() &&
-          !section_names::isReadOnlyAfterRelocSectionName(Sec->Name) &&
-          !section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName);
+      C.Writable = isRuntimeWritableAddress(Img, Addr);
       // Linked Mach-O sections inherit their enclosing segment protection, so
       // __TEXT,__cstring appears executable in Section::Flags. Its instruction
       // attributes are the exact authority. ELF/COFF sections carry their own

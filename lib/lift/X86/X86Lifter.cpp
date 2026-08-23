@@ -35,10 +35,40 @@ X86Lifter::X86Lifter(Arch A) : TargetArch(A) {}
 // ===----------------------------------------------------------------------===//
 
 NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
-  NdVar EA = makeTemp(8);
+  const uint16_t ArithmeticSize =
+      AddressSize == 2 || AddressSize == 4 || AddressSize == 8 ? AddressSize
+                                                               : uint16_t{8};
+  NdVar EA = makeTemp(ArithmeticSize);
   bool First = true;
   bool ConsumedDisplacement = false;
+  auto AtAddressWidth = [&](NdVar V) {
+    if (V.Size == ArithmeticSize)
+      return V;
+    if (V.isConst()) {
+      const uint64_t Original = V.Offset;
+      if (ArithmeticSize < 8)
+        V.Offset &= (uint64_t{1} << (ArithmeticSize * 8)) - 1;
+      V.Size = ArithmeticSize;
+      if (V.Offset != Original &&
+          V.Provenance != ConstantAddressProvenance::Unknown &&
+          V.Provenance != ConstantAddressProvenance::Scalar) {
+        // Truncating an authenticated object address changes its identity.
+        // Keep only the architectural-address role; the old container owner
+        // must not be transferred to the wrapped numeric value.
+        V.Provenance = ConstantAddressProvenance::Address;
+        V.AddressOwnerVA = InvalidVA;
+      }
+      return V;
+    }
+    NdVar Converted = makeTemp(ArithmeticSize);
+    if (V.Size < ArithmeticSize)
+      emit(NdOp::INT_ZEXT, Converted, {V});
+    else
+      emit(NdOp::SUBBYTES, Converted, {V, NdVar::scalar(0, ArithmeticSize)});
+    return Converted;
+  };
   auto Acc = [&](NdVar V) {
+    V = AtAddressWidth(V);
     if (First) {
       emit(NdOp::COPY, EA, {V});
       First = false;
@@ -48,28 +78,38 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
   };
   if (MemOp.mem.base != X86_REG_INVALID) {
     if (MemOp.mem.base == X86_REG_RIP) {
-      Acc(NdVar::address(Addr + InsnSize, 8));
+      if (RelocatedDisplacement && RelocatedDisplacementIsCompleteAddress) {
+        Acc(*RelocatedDisplacement);
+        ConsumedDisplacement = true;
+      } else {
+        Acc(NdVar::address(Addr + InsnSize, 8));
+      }
     } else if (MemOp.mem.base == X86_REG_EIP) {
       // In 64-bit mode an address-size override makes EIP-relative arithmetic
       // wrap at 32 bits and then zero-extend. Fold the displacement at that
       // architectural width; adding it to the full instruction VA preserves a
       // stale high half.
-      const uint32_t NextEIP = static_cast<uint32_t>(Addr + InsnSize);
-      const uint32_t Effective =
-          NextEIP + static_cast<uint32_t>(MemOp.mem.disp);
-      Acc(NdVar::address(Effective, 8));
+      if (RelocatedDisplacement && RelocatedDisplacementIsCompleteAddress) {
+        Acc(*RelocatedDisplacement);
+      } else {
+        const uint32_t NextEIP = static_cast<uint32_t>(Addr + InsnSize);
+        const uint32_t Effective =
+            NextEIP + static_cast<uint32_t>(MemOp.mem.disp);
+        Acc(NdVar::address(Effective, 8));
+      }
       ConsumedDisplacement = true;
     } else {
       auto RI = mapCapstoneReg(static_cast<x86_reg>(MemOp.mem.base));
-      Acc(NdVar::reg(RI.Offset, 8));
+      Acc(NdVar::reg(RI.Offset, RI.Size));
     }
   }
   if (MemOp.mem.index != X86_REG_INVALID) {
     auto RI = mapCapstoneReg(static_cast<x86_reg>(MemOp.mem.index));
-    NdVar Idx = NdVar::reg(RI.Offset, 8);
+    NdVar Idx = AtAddressWidth(NdVar::reg(RI.Offset, RI.Size));
     if (MemOp.mem.scale > 1) {
-      NdVar Scaled = makeTemp(8);
-      emit(NdOp::INT_MULT, Scaled, {Idx, NdVar::scalar(MemOp.mem.scale, 8)});
+      NdVar Scaled = makeTemp(ArithmeticSize);
+      emit(NdOp::INT_MULT, Scaled,
+           {Idx, NdVar::scalar(MemOp.mem.scale, ArithmeticSize)});
       Acc(Scaled);
     } else {
       Acc(Idx);
@@ -81,13 +121,19 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
     NdVar Displacement =
         RelocatedDisplacement ? *RelocatedDisplacement
         : IsCompleteAbsoluteAddress
-            ? NdVar::address(static_cast<uint64_t>(MemOp.mem.disp), 8)
-            : NdVar::scalar(static_cast<uint64_t>(MemOp.mem.disp), 8);
+            ? NdVar::address(static_cast<uint64_t>(MemOp.mem.disp),
+                             ArithmeticSize)
+            : NdVar::scalar(static_cast<uint64_t>(MemOp.mem.disp),
+                            ArithmeticSize);
     Acc(Displacement);
   }
   if (First)
-    Acc(NdVar::address(0, 8));
-  return EA;
+    Acc(NdVar::address(0, ArithmeticSize));
+  if (ArithmeticSize == 8)
+    return EA;
+  NdVar ExtendedEA = makeTemp(8);
+  emit(NdOp::INT_ZEXT, ExtendedEA, {EA});
+  return ExtendedEA;
 }
 
 void X86Lifter::LiftState::storeToMem(const cs_x86_op &MemOp, NdVar Val) {
@@ -304,12 +350,16 @@ void X86Lifter::emitZeroCountFlagGuard(
 
 void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
                      llvm::ArrayRef<RelocatedAddressOperand> Relocs) {
+  LastGetPcOccurrence.reset();
   auto *Detail = Insn->detail;
   if (!Detail)
     return;
 
   auto &X86 = Detail->x86;
   LiftState S(Insn->address, static_cast<uint16_t>(Insn->size), Ops);
+  S.AddressSize = X86.addr_size != 0
+                      ? static_cast<uint16_t>(X86.addr_size)
+                      : static_cast<uint16_t>(TargetArch == Arch::X64 ? 8 : 4);
   bool ConflictingDisplacementOwners = false;
   bool ConflictingImmediateOwners = false;
   const cs_x86_op *ImmediateOperand = nullptr;
@@ -324,7 +374,8 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
     const unsigned Bits = Reloc.Width * 8;
     const uint64_t Mask = Bits >= 64 ? std::numeric_limits<uint64_t>::max()
                                      : (uint64_t(1) << Bits) - 1;
-    if ((Reloc.TargetVA & Mask) != (Reloc.EncodedValue & Mask))
+    if (!Reloc.PCRelativeFromInstructionEnd &&
+        (Reloc.TargetVA & Mask) != (Reloc.EncodedValue & Mask))
       continue;
     NdVar Candidate{VnodeSpace::CONST, Reloc.TargetVA, 8, Reloc.Provenance,
                     Reloc.TargetOwnerVA};
@@ -332,16 +383,25 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
         Reloc.FieldVA == Insn->address + X86.encoding.disp_offset &&
         (static_cast<uint64_t>(X86.disp) & Mask) ==
             (Reloc.EncodedValue & Mask)) {
-      if (S.RelocatedDisplacement && *S.RelocatedDisplacement != Candidate)
+      if (S.RelocatedDisplacement &&
+          (*S.RelocatedDisplacement != Candidate ||
+           S.RelocatedDisplacementIsCompleteAddress !=
+               Reloc.PCRelativeFromInstructionEnd))
         ConflictingDisplacementOwners = true;
-      else
+      else {
         S.RelocatedDisplacement = Candidate;
+        S.RelocatedDisplacementIsCompleteAddress =
+            Reloc.PCRelativeFromInstructionEnd;
+      }
     }
-    if (ImmediateOperand && X86.encoding.imm_size != 0 &&
+    if ((!Reloc.PCRelativeFromInstructionEnd ||
+         Reloc.Provenance == ConstantAddressProvenance::CodeAddress) &&
+        ImmediateOperand && X86.encoding.imm_size != 0 &&
         Reloc.Width == X86.encoding.imm_size &&
         Reloc.FieldVA == Insn->address + X86.encoding.imm_offset &&
-        (static_cast<uint64_t>(ImmediateOperand->imm) & Mask) ==
-            (Reloc.EncodedValue & Mask)) {
+        (Reloc.PCRelativeFromInstructionEnd ||
+         (static_cast<uint64_t>(ImmediateOperand->imm) & Mask) ==
+             (Reloc.EncodedValue & Mask))) {
       if (S.RelocatedImmediate && *S.RelocatedImmediate != Candidate)
         ConflictingImmediateOwners = true;
       else

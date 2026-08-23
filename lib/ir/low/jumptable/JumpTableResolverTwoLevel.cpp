@@ -50,11 +50,13 @@ static uint32_t relocRunIn(const std::set<uint64_t> &Slots, va_t TableAddr,
   if (EntrySize == 0 || Slots.empty())
     return 0;
   uint32_t Run = 0;
-  for (va_t VA = TableAddr; Run < limits::kMaxJumpTableEntries;
-       VA += EntrySize) {
+  for (va_t VA = TableAddr; Run < limits::kMaxJumpTableEntries;) {
     if (!Slots.count(VA))
       break;
     ++Run;
+    if (EntrySize > InvalidVA - VA)
+      break;
+    VA += EntrySize;
   }
   return Run;
 }
@@ -69,7 +71,8 @@ static uint32_t relocRunIn(const std::set<uint64_t> &Slots, va_t TableAddr,
 bool CFGBuilder::decomposeIndexTableLoadAddr(
     const BinaryImage &Img, const InsnRecord &Rec,
     const std::vector<LowOp> &Ops, int LoadIdx, uint16_t EntryWidth,
-    va_t &TableAddr, uint64_t &IndexReg, uint32_t &Scale) const {
+    va_t &TableAddr, uint64_t &IndexReg, uint32_t &Scale, NdVar *IndexValue,
+    va_t *IndexUseAddr, int *IndexUseSeq) const {
   if (LoadIdx <= 0 || LoadIdx >= static_cast<int>(Ops.size()))
     return false;
   const LowOp &L = Ops[LoadIdx];
@@ -101,19 +104,23 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
       if (BaseReg == InvalidVA)
         continue;
       auto Folded = foldRegConstant(Img, Rec, BaseReg, LoadAddr);
-      if (!Folded || *Folded == 0)
+      if (!Folded)
         continue;
       Base = *Folded;
     } else {
       continue;
     }
-    if (Base == 0 || !Img.getSegmentFor(Base))
+    if (!Img.getSegmentFor(Base))
       continue;
 
     // The index may be scaled (halfword index table: `idx*2`) or plain (byte
     // index table: scale 1).  Require the scale to equal the entry width.
     uint32_t S = 1;
-    uint64_t IdxReg = scaledIndexReg(Ops, AddIdx - 1, IdxV);
+    NdVar CandidateValue;
+    va_t CandidateUseAddr = InvalidVA;
+    int CandidateUseSeq = -1;
+    uint64_t IdxReg = scaledIndexReg(Ops, AddIdx - 1, IdxV, &CandidateValue,
+                                     &CandidateUseAddr, &CandidateUseSeq);
     if (IdxReg != InvalidVA) {
       // Recover the concrete scale so it can be validated against EntryWidth.
       int SD = reachingDefIdx(Ops, AddIdx - 1, IdxV);
@@ -138,6 +145,9 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
       IdxReg = traceToRegister(Ops, AddIdx - 1, IdxV);
       if (IdxReg == InvalidVA)
         continue;
+      CandidateValue = IdxV;
+      CandidateUseAddr = Ops[AddIdx].Addr;
+      CandidateUseSeq = Ops[AddIdx].Seq;
     }
     if (S != EntryWidth)
       continue;
@@ -145,6 +155,12 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
     TableAddr = Base;
     IndexReg = IdxReg;
     Scale = S;
+    if (IndexValue)
+      *IndexValue = CandidateValue;
+    if (IndexUseAddr)
+      *IndexUseAddr = CandidateUseAddr;
+    if (IndexUseSeq)
+      *IndexUseSeq = CandidateUseSeq;
     return true;
   }
   return false;
@@ -251,9 +267,13 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // 3) Decompose the index-table load address into idxtab base + switch var.
   va_t IdxTab = 0;
   uint64_t SwitchIdxReg = InvalidVA;
+  NdVar SwitchIndexValue;
+  va_t SwitchIndexUseAddr = InvalidVA;
+  int SwitchIndexUseSeq = -1;
   uint32_t IdxScale = 1;
   if (!decomposeIndexTableLoadAddr(Img, Rec, Ops, IdxLoadIdx, W1, IdxTab,
-                                   SwitchIdxReg, IdxScale))
+                                   SwitchIdxReg, IdxScale, &SwitchIndexValue,
+                                   &SwitchIndexUseAddr, &SwitchIndexUseSeq))
     return false;
 
   // 4) Fold the address-table base and confirm it is distinct from idxtab.
@@ -381,6 +401,12 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     }
   }
 
+  // The two chained physical tables, narrow outer LOAD and relocation-backed
+  // inner address table are a distinguishing composite shape.  From here a
+  // failed outer-domain or occurrence certificate must not fall through to a
+  // generic resolver that would publish only jmptab on the intermediate index.
+  Info.CompositeShapeClaimed = true;
+
   // 6) Bound the number of switch cases (idxtab length).  Prefer an explicit
   //    range guard on the switch variable; otherwise self-bound by the idxtab
   //    entries themselves (each must index a valid jmptab slot).
@@ -392,59 +418,67 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // switch variable.  Its reaching definition at the load is the true switch
   // variable (the guarded `x` copied into the address register).
   uint64_t SwitchSrc = traceRegSource(Ops, IdxLoadIdx - 1, SwitchIdxReg);
-  uint32_t GuardBound = 0;
-  {
-    GuardBound = findBestBound(Pre, 0, SwitchSrc);
-    if (GuardBound == 0 && SwitchSrc != SwitchIdxReg)
-      GuardBound = findBestBound(Pre, 0, SwitchIdxReg);
-    if (GuardBound > 0 && GuardBound < limits::kMaxJumpTableEntries &&
-        guardUsesInclusiveCompare(Rec, SwitchSrc, GuardBound))
-      GuardBound += 1;
-  }
+  Info.IndexReg = SwitchSrc;
+  Info.IndexValueAtUse = SwitchIndexValue;
+  Info.IndexUseAddr = SwitchIndexUseAddr;
+  Info.IndexUseSeq = SwitchIndexUseSeq;
+  Info.TableLoadAddr = Ops[IdxLoadIdx].Addr;
+  Info.TableLoadSeq = Ops[IdxLoadIdx].Seq;
+  Info.TargetLoads = {{Ops[JmpLoadIdx].Output, Ops[JmpLoadIdx].Addr,
+                       Ops[JmpLoadIdx].Seq, /*DefinedAtPoint=*/true}};
+  // The outer domain must be proved at the exact index-table LOAD use.  A
+  // lexical compare on an older lifetime, or scanning until a byte happens to
+  // index past jmptab, does not constrain the runtime switch value.  Reuse the
+  // same CFG/lane/polarity proof as ordinary tables and require an exact bound
+  // before publishing the composed target vector.
+  if (!inferBoundsFromPreciseGuards(Rec, Info) ||
+      Info.MaxEntries < limits::kMinJumpTableEntries ||
+      Info.MaxEntries > limits::kMaxJumpTableEntries)
+    return false;
+  const uint32_t GuardBound = Info.MaxEntries;
 
   uint32_t IdxCap = static_cast<uint32_t>(std::min<uint64_t>(
       (*IdxOwnerEnd - IdxTab) / W1, std::numeric_limits<uint32_t>::max()));
-  uint32_t Scan = std::min(IdxCap, limits::kMaxJumpTableEntries);
-  if (GuardBound > 0)
-    Scan = std::min(Scan, GuardBound);
+  if (GuardBound > IdxCap)
+    return false;
+  const uint32_t Scan = GuardBound;
 
   // 7) Compose one target per switch value: idxtab[v] indexes jmptab.
   std::vector<va_t> Targets;
+  std::set<uint32_t> InnerSlots;
   Targets.reserve(std::min<uint32_t>(Scan, 64));
   for (uint32_t V = 0; V < Scan; ++V) {
     const uint8_t *IP = Img.readVA(IdxTab + static_cast<uint64_t>(V) * W1, W1);
     if (!IP)
-      break;
+      return false;
     uint32_t Iidx = 0;
     std::memcpy(&Iidx, IP, W1);
     if (Iidx >= M)
-      break; // out of the address-table run — past the index table's end
+      return false;
+    InnerSlots.insert(Iidx);
     const uint8_t *EP =
         Img.readVA(JmpTab + static_cast<uint64_t>(Iidx) * W2, W2);
     if (!EP)
-      break;
-    va_t Target = 0;
-    if (Relative) {
-      int64_t Off = 0;
-      if (W2 == 4) {
-        int32_t V32;
-        std::memcpy(&V32, EP, 4);
-        Off = V32;
-      } else {
-        int64_t V64;
-        std::memcpy(&V64, EP, 8);
-        Off = V64;
-      }
-      Target = static_cast<va_t>(static_cast<int64_t>(JmpTab) + Off);
-    } else {
-      std::memcpy(&Target, EP, W2);
+      return false;
+    auto TargetOpt = decodeTableEntry(
+        EP, W2, Relative, Relative, JmpTab, /*HasTargetBase=*/false,
+        /*TargetBase=*/0, /*Scale=*/1, Img.getPointerSize());
+    if (!TargetOpt)
+      return false;
+    va_t Target = *TargetOpt;
+    if (!Relative) {
+      std::optional<va_t> Canonical =
+          canonicalizeAbsoluteTableCodeTarget(Img, Target);
+      if (!Canonical)
+        return false;
+      Target = *Canonical;
     }
     if (!isValidTarget(Img, Target, CurrentFuncEntry))
-      break;
+      return false;
     Targets.push_back(Target);
   }
 
-  if (Targets.size() < limits::kMinJumpTableEntries)
+  if (Targets.size() != Scan)
     return false;
 
   Info.setBaseAddr(JmpTab);
@@ -453,7 +487,41 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   Info.IsSigned = Relative;
   Info.IndexReg = SwitchSrc;
   Info.TwoLevelIndex = true;
+  Info.IndexDomainAuthenticated = true;
   Info.ExplicitTargets = std::move(Targets);
+  Info.StorageRanges = {
+      JumpTableStorageRange{IdxTab, W1, W1, Info.ExplicitTargets.size()}};
+  // M is authenticated capacity for the inner address table, not proof that
+  // every slot in [0, M) belongs to this dispatch.  The outer index table may
+  // select a sparse subset while the gaps hold another table or independent
+  // function pointers, so publish ownership only for the actually selected
+  // inner slots.
+  for (uint32_t InnerSlot : InnerSlots) {
+    if (InnerSlot != 0 && W2 > (InvalidVA - JmpTab) / InnerSlot)
+      return false;
+    Info.StorageRanges.push_back(
+        JumpTableStorageRange{JmpTab + uint64_t(InnerSlot) * W2, W2, W2, 1});
+  }
+  JumpTableLoadRole OuterRole;
+  OuterRole.Load = {Ops[IdxLoadIdx].Output, Ops[IdxLoadIdx].Addr,
+                    Ops[IdxLoadIdx].Seq, /*DefinedAtPoint=*/true};
+  OuterRole.LoadWidth = W1;
+  OuterRole.AllowedBases = {IdxTab};
+  OuterRole.Indices = {{SwitchIndexValue, SwitchIndexUseAddr, SwitchIndexUseSeq,
+                        /*DefinedAtPoint=*/false}};
+  OuterRole.AddressScale = IdxScale;
+
+  JumpTableLoadRole InnerRole;
+  InnerRole.Load = {Ops[JmpLoadIdx].Output, Ops[JmpLoadIdx].Addr,
+                    Ops[JmpLoadIdx].Seq, /*DefinedAtPoint=*/true};
+  InnerRole.LoadWidth = W2;
+  InnerRole.AllowedBases = {JmpTab};
+  InnerRole.Indices = {{Ops[IdxLoadIdx].Output, Ops[IdxLoadIdx].Addr,
+                        Ops[IdxLoadIdx].Seq, /*DefinedAtPoint=*/true}};
+  InnerRole.AddressScale = W2;
+  InnerRole.AllowZeroExtension = true;
+  InnerRole.AllowSignExtension = false;
+  Info.LoadRoles = {std::move(OuterRole), std::move(InnerRole)};
   LLVM_DEBUG(llvm::dbgs() << "  two-level: idxtab 0x" << llvm::utohexstr(IdxTab)
                           << " (W1=" << W1 << ") -> jmptab 0x"
                           << llvm::utohexstr(JmpTab) << " (W2=" << W2

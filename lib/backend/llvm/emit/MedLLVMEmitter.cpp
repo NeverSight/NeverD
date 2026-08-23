@@ -341,6 +341,14 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   UnhandledValueIntrinsicCount = 0;
   AddressProvenanceWork = {};
   GlobalDataCache.clear();
+  ModuleJumpTableStorageRanges.clear();
+  ModuleSuppressibleJumpTableRelocationSlots.clear();
+  for (const MedFunc &Func : Funcs)
+    for (const JumpTable &JT : Func.JumpTables) {
+      ModuleJumpTableStorageRanges.insert(ModuleJumpTableStorageRanges.end(),
+                                          JT.StorageRanges.begin(),
+                                          JT.StorageRanges.end());
+    }
   IdentityPreservingDataAddrs.clear();
   for (const MedFunc &Func : Funcs)
     for (const MedBlock &Block : Func.Blocks) {
@@ -425,6 +433,48 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   ImportedSymbolPlaceholders.clear();
   StringDataAddrs.clear();
   GlobalStrCounter = 0;
+
+  // LowIR ownership establishes which relocation slots a recovered table may
+  // suppress, but the backend can actually omit those mirror bytes only when
+  // every authenticated target LOAD is still present after Med rewriting and
+  // its complete SSA use closure terminates exclusively at that table's
+  // INDIR_BR.  A side STORE/CALL/RETURN (or a missing/ambiguous occurrence)
+  // needs the real pointer bytes.  Treat that as a veto for the whole table;
+  // for shared storage, one veto dominates another dispatch's request.
+  std::set<va_t> RequestedSuppression;
+  std::set<va_t> VetoedSuppression;
+  for (const MedFunc &Func : Funcs) {
+    using LoadOccurrenceKey = std::tuple<va_t, int, uint16_t>;
+    std::map<LoadOccurrenceKey, std::vector<const MedOp *>> LoadsByOccurrence;
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::LOAD && Op.OriginSeq >= 0 && Op.Output.Size != 0)
+          LoadsByOccurrence[{Op.Addr, Op.OriginSeq, Op.Output.Size}].push_back(
+              &Op);
+
+    CurMedFunc = &Func;
+    for (const JumpTable &JT : Func.JumpTables) {
+      bool TerminalExclusive = !JT.AuthenticatedTableLoads.empty();
+      for (const JumpTableOpOccurrence &Occurrence :
+           JT.AuthenticatedTableLoads) {
+        auto It = LoadsByOccurrence.find(
+            {Occurrence.Addr, Occurrence.Seq, Occurrence.Size});
+        if (It == LoadsByOccurrence.end() || It->second.size() != 1 ||
+            recoveredJumpTableForLoad(*It->second.front()) != &JT) {
+          TerminalExclusive = false;
+          break;
+        }
+      }
+      std::set<va_t> &Destination =
+          TerminalExclusive ? RequestedSuppression : VetoedSuppression;
+      Destination.insert(JT.SuppressibleRelocationSlots.begin(),
+                         JT.SuppressibleRelocationSlots.end());
+    }
+  }
+  CurMedFunc = nullptr;
+  for (va_t Slot : RequestedSuppression)
+    if (!VetoedSuppression.count(Slot))
+      ModuleSuppressibleJumpTableRelocationSlots.insert(Slot);
 
   const char *Triple = llvmEmitTriple(TheArch, Fmt);
   if (Triple)

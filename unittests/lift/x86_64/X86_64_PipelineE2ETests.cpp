@@ -304,5 +304,13 @@ TEST_F(X86_64_PipelineE2E, PatchMachO_Switch) {
   if (cr.exitCode != 0)
     GTEST_SKIP() << "Cannot compile x64 Mach-O";
   verifyPatchProducesOutput(exe);
-  verifyLLVMIRNoUnreachable(exe);
+  auto LLVM = liftToLLVMIR(exe);
+  ASSERT_EQ(LLVM.exitCode, 0) << "LLVM IR lift failed: " << LLVM.err;
+  EXPECT_NE(LLVM.out.find("switch i32"), std::string::npos)
+      << "Expected the recovered classify switch:\n"
+      << LLVM.out;
+  // A proof-complete set of cases may still use an explicit trap for an
+  // unmodelled/default selector value.  That `unreachable` is intentional;
+  // the regression here is losing the dispatch itself, not the presence of a
+  // fail-closed default block.
 }

@@ -497,10 +497,13 @@ load_parameter_beside_zero_va_table:
   const std::string_view Dispatch =
       functionBody(LLVM.out, "dispatch_zero_va_table");
   ASSERT_FALSE(Dispatch.empty()) << LLVM.out;
-  EXPECT_NE(Dispatch.find("switch i64"), std::string_view::npos) << Dispatch;
-  EXPECT_NE(Dispatch.find("i64 0, label"), std::string_view::npos) << Dispatch;
-  EXPECT_NE(Dispatch.find("i64 1, label"), std::string_view::npos) << Dispatch;
-  EXPECT_NE(Dispatch.find("i64 2, label"), std::string_view::npos) << Dispatch;
+  // The public selector witness is the exact 32-bit `%edi` occurrence.  Its
+  // zero extension belongs to address formation, not to the switch domain,
+  // so lowering should preserve the source selector width.
+  EXPECT_NE(Dispatch.find("switch i32"), std::string_view::npos) << Dispatch;
+  EXPECT_NE(Dispatch.find("i32 0, label"), std::string_view::npos) << Dispatch;
+  EXPECT_NE(Dispatch.find("i32 1, label"), std::string_view::npos) << Dispatch;
+  EXPECT_NE(Dispatch.find("i32 2, label"), std::string_view::npos) << Dispatch;
   EXPECT_EQ(Dispatch.find("No predecessors"), std::string_view::npos)
       << Dispatch;
 

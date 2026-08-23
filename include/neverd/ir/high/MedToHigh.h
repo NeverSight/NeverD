@@ -100,7 +100,7 @@ private:
   void lowerBranch(HighFunc &Func, const MedOp &CurOp);
   void lowerBranchInd(HighFunc &Func, const MedBlock &CurBlock,
                       const MedOp &CurOp, const MedFunc &Med);
-  void lowerSwitchFromJumpTable(HighFunc &Func, const MedBlock &CurBlock,
+  bool lowerSwitchFromJumpTable(HighFunc &Func, const MedBlock &CurBlock,
                                 const MedOp &CurOp, const MedFunc &Med,
                                 const JumpTable &JT);
   void lowerReturn(HighFunc &Func, const MedBlock &CurBlock, const MedOp &CurOp,

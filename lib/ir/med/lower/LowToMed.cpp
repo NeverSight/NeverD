@@ -19,8 +19,11 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <map>
+#include <set>
 
 #define DEBUG_TYPE "neverd-low-to-med"
 
@@ -153,6 +156,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   Func.Entry = Low.Entry;
   Func.Name = Low.Name;
   Func.JumpTables = Low.JumpTables;
+  Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
   Func.ExceptionMetadata = Low.ExceptionMetadata;
 
   for (const auto &LB : Low.Blocks) {
@@ -181,6 +185,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
       MOp.Opcode = LOp.Opcode;
       MOp.MemoryOrdering = LOp.MemoryOrdering;
       MOp.Addr = LOp.Addr;
+      MOp.OriginSeq = LOp.Seq;
       if (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL) {
         MOp.CallSiteId = NextCallSiteId++;
         if (BoundaryIndex < LB.InstructionBoundaries.size()) {
@@ -422,10 +427,182 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   eliminateFlags(Func);
   debugVerifyMedFunc(Func, "eliminateFlags");
 
+  // Bind public LowIR selector occurrences only after every MedIR rewrite and
+  // SSA/propagation pass has finished.  A source op that disappeared, was
+  // duplicated, or no longer has the certified operand role deliberately
+  // yields no plan; backends must fail closed rather than fall back to a
+  // physical register-number scan.
+  resolveSwitchSelectorPlans(Func);
+  resolveScalarAddressModels(Func,
+                             Low.RelocatedInstructionScalarModelOccurrences);
+
   LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: " << Func.Blocks.size()
                           << " blocks, " << Func.Params.size() << " params, "
                           << Func.Locals.size() << " locals\n");
   return Func;
+}
+
+void LowToMedConverter::resolveScalarAddressModels(
+    MedFunc &Func,
+    const std::vector<RelocatedInstructionScalarModelOccurrence> &Models) {
+  Func.ScalarAddressModels.clear();
+  for (const RelocatedInstructionScalarModelOccurrence &Model : Models) {
+    if (Model.InstructionAddr == InvalidVA || Model.OpSeq < 0 ||
+        Model.Width == 0 || Model.OutputWitness.Size != Model.Width ||
+        (!Model.OutputWitness.isReg() && !Model.OutputWitness.isTemp()))
+      continue;
+
+    const MedVar Expected = ndVarToMedVar(Model.OutputWitness);
+    std::optional<MedVar> Bound;
+    bool Ambiguous = false;
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const MedOp &Op : Block.Ops) {
+        if (Op.Addr != Model.InstructionAddr || Op.OriginSeq != Model.OpSeq ||
+            Op.Opcode != Model.OutputOpcode || Op.Output.Size != Model.Width)
+          continue;
+        const MedVar &Candidate = Op.Output;
+        const bool SameLane =
+            !Candidate.isConst() && Candidate.Kind == Expected.Kind &&
+            Candidate.Id == Expected.Id && Candidate.Size == Expected.Size &&
+            (Candidate.Kind != MedVar::Reg ||
+             Candidate.RegOff == Expected.RegOff);
+        if (!SameLane)
+          continue;
+        if (Bound) {
+          Ambiguous = true;
+          break;
+        }
+        Bound = Candidate;
+      }
+      if (Ambiguous)
+        break;
+    }
+    if (Ambiguous || !Bound)
+      continue;
+    Func.ScalarAddressModels.push_back({Model.Model, *Bound});
+  }
+}
+
+void LowToMedConverter::resolveSwitchSelectorPlans(MedFunc &Func) {
+  Func.SwitchSelectorPlans.clear();
+  struct BoundSelector {
+    int BlockId = -1;
+    MedVar Value = {};
+  };
+  auto bindUseRef =
+      [&](const JumpTableSelectorUseRef &Ref) -> std::optional<BoundSelector> {
+    std::optional<BoundSelector> Bound;
+    bool Ambiguous = false;
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const MedOp &Op : Block.Ops) {
+        if (Op.Addr != Ref.Addr || Op.OriginSeq != Ref.Seq ||
+            Op.Opcode != Ref.ExpectedOpcode)
+          continue;
+        MedVar Candidate;
+        if (Ref.Role == JumpTableSelectorUseRef::ValueRole::Input) {
+          if (Ref.InputNo >= Op.NumInputs ||
+              Op.Inputs[Ref.InputNo].Size != Ref.ExpectedSize)
+            continue;
+          Candidate = Op.Inputs[Ref.InputNo];
+        } else {
+          if (Op.Output.Size != Ref.ExpectedSize)
+            continue;
+          Candidate = Op.Output;
+        }
+        if (Bound) {
+          Ambiguous = true;
+          break;
+        }
+        Bound = BoundSelector{Block.Id, Candidate};
+      }
+      if (Ambiguous)
+        break;
+    }
+    if (Ambiguous || !Bound || Bound->Value.Size == 0 || Bound->Value.isConst())
+      return std::nullopt;
+    return Bound;
+  };
+
+  for (const JumpTable &JT : Func.JumpTables) {
+    if (JT.CompositeSelectorUseRef) {
+      const JumpTableCompositeSelectorUseRef &Composite =
+          *JT.CompositeSelectorUseRef;
+      if (!JT.TwoTableSelect || !JT.SelectorUseRefs.empty() ||
+          Composite.RecipeKind !=
+              JumpTableCompositeSelectorUseRef::Kind::SelectOffset)
+        continue;
+      auto ByteIndex = bindUseRef(Composite.ByteIndex);
+      auto Condition = bindUseRef(Composite.Condition);
+      if (!ByteIndex || !Condition ||
+          ByteIndex->Value.Size != Composite.ResultSize)
+        continue;
+
+      MedSwitchSelectorPlan Plan;
+      Plan.PlanKind = MedSwitchSelectorPlan::Kind::SelectOffset;
+      Plan.Selector = ByteIndex->Value;
+      Plan.Condition = Condition->Value;
+      Plan.TrueOffset = Composite.TrueOffset;
+      Plan.FalseOffset = Composite.FalseOffset;
+      Plan.ResultSize = Composite.ResultSize;
+      Func.SwitchSelectorPlans.emplace(JT.InsnAddr, std::move(Plan));
+      continue;
+    }
+    if (JT.SelectorUseRefs.empty() || JT.TwoTableSelect)
+      continue;
+    if (JT.SelectorUseRefs.size() > 1) {
+      const MedBlock *Dispatch = nullptr;
+      bool AmbiguousDispatch = false;
+      for (const MedBlock &Block : Func.Blocks) {
+        for (const MedOp &Op : Block.Ops) {
+          if (Op.Addr == JT.InsnAddr && Op.Opcode == NdOp::INDIR_BR) {
+            if (Dispatch) {
+              AmbiguousDispatch = true;
+              break;
+            }
+            Dispatch = &Block;
+          }
+        }
+        if (AmbiguousDispatch)
+          break;
+      }
+      if (AmbiguousDispatch || !Dispatch || Dispatch->Preds.size() < 2 ||
+          Dispatch->Preds.size() != JT.SelectorUseRefs.size())
+        continue;
+
+      MedSwitchSelectorPlan Plan;
+      Plan.PlanKind = MedSwitchSelectorPlan::Kind::EdgeMerged;
+      std::set<int> SeenPreds;
+      bool Valid = true;
+      for (const JumpTableSelectorUseRef &Ref : JT.SelectorUseRefs) {
+        auto Selector = bindUseRef(Ref);
+        if (!Selector || Selector->Value.Size == 0 ||
+            (Plan.ResultSize != 0 && Selector->Value.Size != Plan.ResultSize) ||
+            std::find(Dispatch->Preds.begin(), Dispatch->Preds.end(),
+                      Selector->BlockId) == Dispatch->Preds.end() ||
+            !SeenPreds.insert(Selector->BlockId).second) {
+          Valid = false;
+          break;
+        }
+        Plan.ResultSize = Selector->Value.Size;
+        Plan.EdgeSelectors.emplace_back(Selector->BlockId, Selector->Value);
+      }
+      if (!Valid || SeenPreds.size() != Dispatch->Preds.size())
+        continue;
+      std::sort(Plan.EdgeSelectors.begin(), Plan.EdgeSelectors.end(),
+                [](const auto &A, const auto &B) { return A.first < B.first; });
+      Func.SwitchSelectorPlans.emplace(JT.InsnAddr, std::move(Plan));
+      continue;
+    }
+    auto Selector = bindUseRef(JT.SelectorUseRefs.front());
+    if (!Selector)
+      continue;
+
+    MedSwitchSelectorPlan Plan;
+    Plan.PlanKind = MedSwitchSelectorPlan::Kind::Direct;
+    Plan.Selector = Selector->Value;
+    Plan.ResultSize = Selector->Value.Size;
+    Func.SwitchSelectorPlans.emplace(JT.InsnAddr, std::move(Plan));
+  }
 }
 
 //===----------------------------------------------------------------------===//

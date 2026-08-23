@@ -54,8 +54,15 @@ public:
     GetPcPending = false;
     GetPcArmedThisInsn = false;
     GetPcValue = 0;
+    LastGetPcOccurrence.reset();
   }
   bool fpuDidReset() const { return FpuReset; }
+
+  /// Exact producer emitted by the most recently lifted instruction when it
+  /// completed a `call $+5; pop reg` get-PC pair.
+  const std::optional<I386GetPcOccurrence> &getLastGetPcOccurrence() const {
+    return LastGetPcOccurrence;
+  }
 
   /// Largest `ret imm` pop seen while lifting the current function (the i386
   /// SysV callee-cleanup byte count, e.g. 4 for the hidden sret pointer); 0 for
@@ -106,12 +113,20 @@ public:
     /// matched against Capstone's disp_offset/disp_size, so an equal-valued
     /// immediate elsewhere in the instruction cannot inherit it.
     std::optional<NdVar> RelocatedDisplacement;
+    bool RelocatedDisplacementIsCompleteAddress = false;
 
     /// Loader-authenticated provenance for this instruction's encoded
     /// immediate.  Kept separate from the displacement owner so an instruction
     /// such as `mov $K, K(%reg)` cannot transfer one relocation field's role to
     /// the equal-valued peer operand.
     std::optional<NdVar> RelocatedImmediate;
+
+    /// Architectural width of this instruction's effective-address
+    /// arithmetic, in bytes (Capstone cs_x86::addr_size).  LowIR memory
+    /// addresses are represented as 8-byte VAs, but i386 and x86-64 address-
+    /// size overrides must wrap base/index/scale/displacement at 32 bits
+    /// before that final zero-extension.
+    uint16_t AddressSize = 8;
 
     void emitIntrinsic(Intrinsic Id, NdVar Out = NdVar::reg(x86reg::RAX, 8),
                        std::initializer_list<NdVar> Extra = {}) {
@@ -206,6 +221,7 @@ private:
   bool GetPcPending = false;
   bool GetPcArmedThisInsn = false;
   uint64_t GetPcValue = 0;
+  std::optional<I386GetPcOccurrence> LastGetPcOccurrence;
 };
 
 } // namespace neverd

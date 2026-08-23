@@ -242,6 +242,14 @@ public:
     Emitter.CurMedFunc = &Func;
     return Emitter.collectFrameReloadSources(Load, Sources);
   }
+
+  static bool recoveredTargetLoadIsFullyConsumed(MedLLVMEmitter &Emitter,
+                                                 const MedFunc &Func,
+                                                 const BinaryImage &Image,
+                                                 const MedOp &Load) {
+    prepareFreshAnalysis(Emitter, Func, Image, Image.Arch, Image.Format);
+    return Emitter.recoveredJumpTableForLoad(Load) != nullptr;
+  }
 };
 
 } // namespace neverd
@@ -266,6 +274,349 @@ constexpr va_t WritableOwnerSize = 0x20;
 constexpr va_t ReadOnlyOwnerAVA = 0x2000;
 constexpr va_t ReadOnlyOwnerBVA = ReadOnlyOwnerAVA + 0x20;
 constexpr va_t ReadOnlyOwnerSize = 0x20;
+
+void expectValidModule(const llvm::Module &Module);
+
+struct AuthenticatedTargetLoadFixture {
+  BinaryImage Image;
+  MedFunc Func;
+
+  AuthenticatedTargetLoadFixture() {
+    constexpr va_t TableVA = 0x2000;
+    constexpr va_t LoadVA = 0x100;
+    constexpr int LoadSeq = 3;
+    constexpr va_t BranchVA = 0x120;
+
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Bits = Bitness::Bits64;
+    Segment Text;
+    Text.Name = ".text";
+    Text.VA = 0x80;
+    Text.Size = 0x300;
+    Text.FileSz = Text.Size;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.resize(Text.Size);
+    Image.Segments.push_back(std::move(Text));
+    Segment Data;
+    Data.Name = ".data.rel.ro";
+    Data.VA = TableVA;
+    Data.Size = 0x20;
+    Data.FileSz = Data.Size;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.resize(Data.Size);
+    const uint64_t StoredTargets[] = {0x300, 0x310};
+    std::memcpy(Data.Data.data(), StoredTargets, sizeof(StoredTargets));
+    Image.Segments.push_back(std::move(Data));
+    Image.CodePtrRelocSlots = {TableVA, TableVA + 8};
+    Image.CodeRefTargets = {0x300, 0x310};
+
+    Func.Name = "authenticated_target_load";
+    Func.Entry = 0x80;
+    Func.ReturnType = NdType::makeVoid();
+    MedVar Selector;
+    Selector.Kind = MedVar::Param;
+    Selector.TheArch = Arch::X64;
+    Selector.Id = 0;
+    Selector.SSAVer = 0;
+    Selector.Size = 8;
+    Selector.RegOff = getTargetRegInfo(Arch::X64).IntParamRegs.front();
+    Func.Params.push_back(Selector);
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Func.Entry;
+    Block.EndAddr = BranchVA + 1;
+
+    MedVar Loaded;
+    Loaded.Kind = MedVar::Temp;
+    Loaded.Id = 1;
+    Loaded.SSAVer = 1;
+    Loaded.Size = 8;
+    MedOp Load;
+    Load.Opcode = NdOp::LOAD;
+    Load.Output = Loaded;
+    Load.Addr = LoadVA;
+    Load.OriginSeq = LoadSeq;
+    Load.addInput(MedVar::makeConst(
+        TableVA, 8, ConstantAddressProvenance::DataAddress, TableVA));
+    Block.Ops.push_back(Load);
+
+    MedOp Branch;
+    Branch.Opcode = NdOp::INDIR_BR;
+    Branch.Addr = BranchVA;
+    Branch.addInput(Loaded);
+    Block.Ops.push_back(Branch);
+    Block.Succs = {1, 2};
+    Func.Blocks.push_back(std::move(Block));
+
+    auto AddTargetBlock = [&](int Id, va_t Address) {
+      MedBlock Target;
+      Target.Id = Id;
+      Target.StartAddr = Address;
+      Target.EndAddr = Address + 1;
+      Target.Preds = {0};
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = Address;
+      Target.Ops.push_back(Return);
+      Func.Blocks.push_back(std::move(Target));
+    };
+    AddTargetBlock(1, 0x300);
+    AddTargetBlock(2, 0x310);
+
+    JumpTable JT;
+    JT.InsnAddr = BranchVA;
+    JT.BaseAddr = TableVA;
+    JT.HasBaseAddr = true;
+    JT.EntrySize = 8;
+    JT.EntryStride = 8;
+    JT.Targets = {0x300, 0x310};
+    JT.SlotIndices = {0, 1};
+    JT.HasDispatchSlotMap = true;
+    JT.StorageRanges = {{TableVA, 8, 8, 2}};
+    JT.SuppressibleRelocationSlots = {TableVA, TableVA + 8};
+    JT.AuthenticatedTableLoads = {{LoadVA, LoadSeq, 8}};
+    Func.JumpTables.push_back(std::move(JT));
+
+    MedSwitchSelectorPlan Plan;
+    Plan.PlanKind = MedSwitchSelectorPlan::Kind::Direct;
+    Plan.Selector = Selector;
+    Plan.ResultSize = Selector.Size;
+    Func.SwitchSelectorPlans.emplace(BranchVA, Plan);
+  }
+
+  MedOp &load() { return Func.Blocks.front().Ops.front(); }
+
+  void makeTwoTable() {
+    JumpTable &JT = Func.JumpTables.front();
+    JT.TwoTableSelect = true;
+    JT.TwoTableOffset = 16;
+    JT.Targets = {0x300, 0x310, 0x320, 0x330};
+    JT.StorageRanges = {{0x2000, 8, 8, 2}, {0x2010, 8, 8, 2}};
+    JT.SuppressibleRelocationSlots = {0x2000, 0x2008, 0x2010, 0x2018};
+    Image.CodePtrRelocSlots = {0x2000, 0x2008, 0x2010, 0x2018};
+
+    JumpTableCompositeSelectorUseRef Recipe;
+    Recipe.ByteIndex.ExpectedSize = 8;
+    Recipe.Condition.ExpectedSize = 8;
+    Recipe.TrueOffset = 16;
+    Recipe.FalseOffset = 0;
+    Recipe.ResultSize = 8;
+    JT.CompositeSelectorUseRef = Recipe;
+
+    MedVar Condition;
+    Condition.Kind = MedVar::Param;
+    Condition.TheArch = Arch::X64;
+    Condition.Id = 1;
+    Condition.SSAVer = 0;
+    Condition.Size = 8;
+    Condition.RegOff = getTargetRegInfo(Arch::X64).IntParamRegs[1];
+    Func.Params.push_back(Condition);
+
+    MedSwitchSelectorPlan &Plan = Func.SwitchSelectorPlans.at(JT.InsnAddr);
+    Plan.PlanKind = MedSwitchSelectorPlan::Kind::SelectOffset;
+    Plan.Condition = Condition;
+    Plan.TrueOffset = Recipe.TrueOffset;
+    Plan.FalseOffset = Recipe.FalseOffset;
+    Plan.ResultSize = Recipe.ResultSize;
+  }
+};
+
+TEST(MedLLVMRecoveredTargetLoadBoundary,
+     RequiresExactOccurrenceAndRejectsObservableSideUses) {
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    MedLLVMEmitter Emitter;
+    EXPECT_TRUE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    // A same-width LOAD in the same target DAG is not authenticated merely by
+    // sharing its machine address or target flow.
+    Fixture.Func.JumpTables.front().AuthenticatedTableLoads.front().Seq++;
+    MedLLVMEmitter Emitter;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    // The authenticated target value may be omitted only when the recovered
+    // switch is its sole observable consumer.  A side STORE must keep the real
+    // load semantics and therefore reject the zero-substitution fast path.
+    MedOp SideStore;
+    SideStore.Opcode = NdOp::STORE;
+    SideStore.addInput(MedVar::makeConst(0x4000, 8));
+    SideStore.addInput(Fixture.load().Output);
+    Fixture.Func.Blocks.front().Ops.insert(
+        std::next(Fixture.Func.Blocks.front().Ops.begin()), SideStore);
+    MedLLVMEmitter Emitter;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    MedVar Forwarded;
+    Forwarded.Kind = MedVar::Temp;
+    Forwarded.Id = 2;
+    Forwarded.SSAVer = 1;
+    Forwarded.Size = 8;
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = Forwarded;
+    Copy.addInput(Fixture.load().Output);
+
+    MedVar LowByte;
+    LowByte.Kind = MedVar::Temp;
+    LowByte.Id = 3;
+    LowByte.SSAVer = 1;
+    LowByte.Size = 1;
+    MedOp Subpiece;
+    Subpiece.Opcode = NdOp::SUBBYTES;
+    Subpiece.Output = LowByte;
+    Subpiece.addInput(Forwarded);
+    Subpiece.addInput(MedVar::makeConst(0, 8));
+
+    MedOp SideStore;
+    SideStore.Opcode = NdOp::STORE;
+    SideStore.addInput(MedVar::makeConst(0x4000, 8));
+    SideStore.addInput(LowByte);
+
+    auto Insert = std::next(Fixture.Func.Blocks.front().Ops.begin());
+    Insert = Fixture.Func.Blocks.front().Ops.insert(Insert, Copy);
+    Insert =
+        Fixture.Func.Blocks.front().Ops.insert(std::next(Insert), Subpiece);
+    Fixture.Func.Blocks.front().Ops.insert(std::next(Insert), SideStore);
+    MedLLVMEmitter Emitter;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+}
+
+TEST(MedLLVMRecoveredTargetLoadBoundary,
+     TwoTableRequiresExactPlanStorageAndLoadOccurrence) {
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    Fixture.makeTwoTable();
+    MedLLVMEmitter Emitter;
+    EXPECT_TRUE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    Fixture.makeTwoTable();
+    Fixture.Func.SwitchSelectorPlans.clear();
+    MedLLVMEmitter Emitter;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    Fixture.makeTwoTable();
+    Fixture.Func.JumpTables.front().StorageRanges.back().EntryStride = 16;
+    MedLLVMEmitter Emitter;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    Fixture.makeTwoTable();
+    Fixture.Func.JumpTables.front().AuthenticatedTableLoads.front().Seq++;
+    MedLLVMEmitter Emitter;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    Fixture.makeTwoTable();
+    Fixture.Func.JumpTables.front().SuppressibleRelocationSlots.pop_back();
+    MedLLVMEmitter Emitter;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::recoveredTargetLoadIsFullyConsumed(
+        Emitter, Fixture.Func, Fixture.Image, Fixture.load()));
+  }
+}
+
+TEST(MedLLVMRecoveredTargetLoadBoundary,
+     ObservableSideUseVetoesModuleRelocationSuppression) {
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    Segment Sink;
+    Sink.Name = ".data";
+    Sink.VA = 0x4000;
+    Sink.Size = 8;
+    Sink.FileSz = Sink.Size;
+    Sink.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Sink.Data.resize(Sink.Size);
+    Fixture.Image.Segments.push_back(std::move(Sink));
+
+    MedOp SideStore;
+    SideStore.Opcode = NdOp::STORE;
+    SideStore.Addr = 0x110;
+    SideStore.addInput(MedVar::makeConst(
+        0x4000, 8, ConstantAddressProvenance::DataAddress, 0x4000));
+    SideStore.addInput(Fixture.load().Output);
+    Fixture.Func.Blocks.front().Ops.insert(
+        std::next(Fixture.Func.Blocks.front().Ops.begin()), SideStore);
+
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Fixture.Func}, Context, "observable-target-load",
+                              Arch::X64, {}, &Fixture.Image, BinaryFormat::ELF);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+
+    llvm::GlobalVariable *Mirror = Module->getNamedGlobal(
+        (kNdCodePtrPrefix + llvm::utohexstr(0x2000)).str());
+    ASSERT_NE(Mirror, nullptr);
+    ASSERT_TRUE(Mirror->hasInitializer());
+    std::string InitializerText;
+    llvm::raw_string_ostream InitializerOS(InitializerText);
+    Mirror->getInitializer()->print(InitializerOS);
+    InitializerOS.flush();
+    EXPECT_NE(InitializerText.find("blockaddress"), std::string::npos);
+
+    llvm::Function *Function = Module->getFunction("authenticated_target_load");
+    ASSERT_NE(Function, nullptr);
+    bool SawNonzeroSideStore = false;
+    for (llvm::BasicBlock &Block : *Function)
+      for (llvm::Instruction &Inst : Block)
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
+          const auto *Constant =
+              llvm::dyn_cast<llvm::ConstantInt>(Store->getValueOperand());
+          if (!Constant || !Constant->isZero())
+            SawNonzeroSideStore = true;
+        }
+    EXPECT_TRUE(SawNonzeroSideStore);
+  }
+
+  {
+    AuthenticatedTargetLoadFixture Fixture;
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Fixture.Func}, Context, "exclusive-target-load",
+                              Arch::X64, {}, &Fixture.Image, BinaryFormat::ELF);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction("authenticated_target_load");
+    ASSERT_NE(Function, nullptr);
+    bool SawSwitch = false;
+    bool SawLoad = false;
+    for (llvm::BasicBlock &Block : *Function)
+      for (llvm::Instruction &Inst : Block) {
+        SawSwitch |= llvm::isa<llvm::SwitchInst>(Inst);
+        SawLoad |= llvm::isa<llvm::LoadInst>(Inst);
+      }
+    EXPECT_TRUE(SawSwitch);
+    EXPECT_FALSE(SawLoad);
+  }
+}
 
 template <typename T>
 void writeObject(std::vector<uint8_t> &Bytes, size_t Off, const T &Value) {

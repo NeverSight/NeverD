@@ -22,6 +22,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/lift/ARMRegs.h"
 
 #include <optional>
 
@@ -49,71 +50,163 @@ bool CFGBuilder::tryARMTableBranch(const BinaryImage &Img,
   //
   // TBH: same but LOAD produces 2-byte value, shift by 1.
 
-  bool SawLoad = false;
-  uint16_t LoadWidth = 0;
-  va_t LoadBase = 0;
-  bool SawShift = false;
-  uint64_t ShiftAmount = 0;
-  va_t PCBase = 0;
+  const std::vector<LowOp> &Ops = Rec.Ops;
+  int BranchIdx = -1;
+  for (int I = static_cast<int>(Ops.size()) - 1; I >= 0; --I)
+    if (Ops[I].Opcode == NdOp::INDIR_BR && Ops[I].NumInputs >= 1) {
+      BranchIdx = I;
+      break;
+    }
+  if (BranchIdx < 0)
+    return false;
 
-  for (int I = static_cast<int>(Rec.Ops.size()) - 1; I >= 0; --I) {
-    if (Rec.Ops[I].Opcode != NdOp::INDIR_BR)
+  // Follow exactly the TBB/TBH semantic chain emitted by the ARM lifter:
+  //   target = architectural_pc + (zext(load(table_addr)) << 1).
+  // Anchoring the entry shift through the branch input avoids confusing it
+  // with TBH's independent address-index `<< 1`.
+  int TargetAddIdx =
+      reachingDefIdx(Ops, BranchIdx - 1, Ops[BranchIdx].Inputs[0]);
+  if (TargetAddIdx < 0 || Ops[TargetAddIdx].Opcode != NdOp::INT_ADD ||
+      Ops[TargetAddIdx].NumInputs < 2)
+    return false;
+
+  int EntryShiftIdx = -1;
+  int PCOperand = -1;
+  for (int Side = 0; Side < 2; ++Side) {
+    int D =
+        reachingDefIdx(Ops, TargetAddIdx - 1, Ops[TargetAddIdx].Inputs[Side]);
+    if (D >= 0 && Ops[D].Opcode == NdOp::INT_LEFT && Ops[D].NumInputs >= 2 &&
+        Ops[D].Inputs[1].isConst() && Ops[D].Inputs[1].Offset == 1) {
+      EntryShiftIdx = D;
+      PCOperand = 1 - Side;
+      break;
+    }
+  }
+  if (EntryShiftIdx < 0 || PCOperand < 0)
+    return false;
+
+  // TBB/TBH are the Thumb exception to the usual aligned PC read: both their
+  // Rn==PC table base and their branch-target base use raw (address + 4).
+  // Model the architectural 32-bit wrap explicitly; applying the general
+  // Thumb Align(PC, 4) rule to an instruction at address 2 modulo 4 points two
+  // bytes into the instruction rather than at the following table.
+  const va_t ArchitecturalPC =
+      Rec.Mode == InstructionMode::Thumb
+          ? static_cast<va_t>(static_cast<uint32_t>(
+                static_cast<uint32_t>(Rec.Addr) + uint32_t{4}))
+          : Rec.Addr + 8;
+  auto foldRegister = [&](uint64_t Reg) -> std::optional<va_t> {
+    if (Reg == armreg::PC)
+      return ArchitecturalPC;
+    return foldRegConstant(Img, Rec, Reg);
+  };
+  auto foldValue = [&](NdVar V, int From) -> std::optional<va_t> {
+    if (V.isConst())
+      return V.Offset;
+    uint64_t Reg = traceToRegister(Ops, From, V);
+    if (Reg == InvalidVA)
+      return std::nullopt;
+    return foldRegister(Reg);
+  };
+  std::optional<va_t> PCBase =
+      foldValue(Ops[TargetAddIdx].Inputs[PCOperand], TargetAddIdx - 1);
+  if (!PCBase || !Img.hasExecutableCodeOwnerAt(*PCBase))
+    return false;
+
+  int LoadIdx = -1;
+  NdVar Entry = Ops[EntryShiftIdx].Inputs[0];
+  int From = EntryShiftIdx - 1;
+  for (int Guard = 0; Guard < limits::kMaxSliceDepth; ++Guard) {
+    int D = reachingDefIdx(Ops, From, Entry);
+    if (D < 0)
+      break;
+    const LowOp &Def = Ops[D];
+    if ((Def.Opcode == NdOp::INT_ZEXT || Def.Opcode == NdOp::COPY) &&
+        Def.NumInputs >= 1) {
+      Entry = Def.Inputs[0];
+      From = D - 1;
       continue;
-
-    for (int J = I - 1; J >= 0; --J) {
-      auto &Op = Rec.Ops[J];
-      switch (Op.Opcode) {
-      case NdOp::INT_ADD:
-        if (PCBase == 0 && Op.NumInputs >= 2) {
-          if (Op.Inputs[0].isConst() && Op.Inputs[0].Offset != 0)
-            PCBase = Op.Inputs[0].Offset;
-          else if (Op.Inputs[1].isConst() && Op.Inputs[1].Offset != 0)
-            PCBase = Op.Inputs[1].Offset;
-        }
-        break;
-      case NdOp::INT_LEFT:
-        if (Op.NumInputs >= 2 && Op.Inputs[1].isConst()) {
-          SawShift = true;
-          ShiftAmount = Op.Inputs[1].Offset;
-        }
-        break;
-      case NdOp::LOAD:
-        SawLoad = true;
-        LoadWidth = Op.Output.Size;
-        if (Op.NumInputs >= 1 && Op.Inputs[0].isConst())
-          LoadBase = Op.Inputs[0].Offset;
-        break;
-      case NdOp::INT_ZEXT:
-      case NdOp::INT_SEXT:
-        break;
-      default:
-        break;
-      }
+    }
+    if (Def.Opcode == NdOp::LOAD) {
+      LoadIdx = D;
+      break;
     }
     break;
   }
-
-  if (!SawLoad || LoadWidth == 0 || PCBase == 0)
+  if (LoadIdx < 0 || Ops[LoadIdx].NumInputs < 1)
     return false;
-
-  // TBB uses 1-byte entries, TBH uses 2-byte entries. Both shift by 1.
+  const uint16_t LoadWidth = Ops[LoadIdx].Output.Size;
   if (LoadWidth != 1 && LoadWidth != 2)
     return false;
-  if (!SawShift || ShiftAmount != 1)
+
+  const NdVar &Address = Ops[LoadIdx].Inputs[Ops[LoadIdx].NumInputs - 1];
+  int AddrAddIdx = reachingDefIdx(Ops, LoadIdx - 1, Address);
+  if (AddrAddIdx < 0 || Ops[AddrAddIdx].Opcode != NdOp::INT_ADD ||
+      Ops[AddrAddIdx].NumInputs < 2)
     return false;
 
-  if (!Img.hasExecutableCodeOwnerAt(PCBase))
+  struct AddressCandidate {
+    uint64_t Reg = InvalidVA;
+    NdVar Value;
+    va_t UseAddr = InvalidVA;
+    int UseSeq = -1;
+    std::optional<va_t> Folded;
+  } Candidate[2];
+  for (int Side = 0; Side < 2; ++Side) {
+    const NdVar &V = Ops[AddrAddIdx].Inputs[Side];
+    Candidate[Side].Reg = traceToRegister(Ops, AddrAddIdx - 1, V);
+    if (Candidate[Side].Reg != InvalidVA) {
+      Candidate[Side].Value = V;
+      Candidate[Side].UseAddr = Ops[AddrAddIdx].Addr;
+      Candidate[Side].UseSeq = Ops[AddrAddIdx].Seq;
+    } else {
+      Candidate[Side].Reg =
+          scaledIndexReg(Ops, AddrAddIdx - 1, V, &Candidate[Side].Value,
+                         &Candidate[Side].UseAddr, &Candidate[Side].UseSeq);
+    }
+    if (Candidate[Side].Reg != InvalidVA)
+      Candidate[Side].Folded = foldRegister(Candidate[Side].Reg);
+  }
+
+  int BaseSide = -1;
+  for (int Side = 0; Side < 2; ++Side) {
+    if (!Candidate[Side].Folded)
+      continue;
+    const Segment *S = Img.getSegmentFor(*Candidate[Side].Folded);
+    if (S && !S->Data.empty()) {
+      if (BaseSide >= 0)
+        return false;
+      BaseSide = Side;
+    }
+  }
+  if (BaseSide < 0)
+    return false;
+  const int IndexSide = 1 - BaseSide;
+  if (Candidate[IndexSide].Reg == InvalidVA ||
+      (!Candidate[IndexSide].Value.isReg() &&
+       !Candidate[IndexSide].Value.isTemp()) ||
+      Candidate[IndexSide].Value.Size == 0 ||
+      Candidate[IndexSide].UseAddr == InvalidVA ||
+      Candidate[IndexSide].UseSeq < 0)
     return false;
 
-  // The table typically starts right after the branch instruction.
-  va_t TableAddr = LoadBase;
-  if (TableAddr == 0)
-    TableAddr = Rec.Addr + Rec.Size;
+  const va_t TableAddr = *Candidate[BaseSide].Folded;
+  uint64_t IndexReg = traceRegSource(Ops, AddrAddIdx, Candidate[IndexSide].Reg);
 
   Info.setBaseAddr(TableAddr);
   Info.EntrySize = LoadWidth;
   Info.IsRelative = true;
   Info.IsSigned = false;
+  Info.setTargetBase(*PCBase);
+  Info.EntryScale = 2;
+  Info.IndexReg = IndexReg;
+  Info.IndexValueAtUse = Candidate[IndexSide].Value;
+  Info.IndexUseAddr = Candidate[IndexSide].UseAddr;
+  Info.IndexUseSeq = Candidate[IndexSide].UseSeq;
+  Info.TableLoadAddr = Ops[LoadIdx].Addr;
+  Info.TableLoadSeq = Ops[LoadIdx].Seq;
+  Info.TargetLoads = {{Ops[LoadIdx].Output, Ops[LoadIdx].Addr, Ops[LoadIdx].Seq,
+                       /*DefinedAtPoint=*/true}};
   return true;
 }
 
@@ -190,7 +283,15 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
   // analyzer.
   bool Signed = false;
   uint16_t LoadWidth = 0;
-  uint64_t CandA = InvalidVA, CandB = InvalidVA, IndexReg = InvalidVA;
+  struct IndexCandidate {
+    uint64_t Reg = InvalidVA;
+    NdVar Value;
+    va_t UseAddr = InvalidVA;
+    int UseSeq = -1;
+  };
+  IndexCandidate CandA, CandB, IndexCandidateAtLoad;
+  uint64_t IndexReg = InvalidVA;
+  int TableLoadIdx = -1;
   {
     NdVar V = Ops[ShiftIdx].Inputs[0];
     int CurFrom = ShiftIdx - 1;
@@ -212,22 +313,32 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
         continue;
       }
       if (O.Opcode == NdOp::LOAD) {
+        TableLoadIdx = D;
         LoadWidth = O.Output.Size;
         const NdVar &AddrV = (O.NumInputs >= 2) ? O.Inputs[1] : O.Inputs[0];
         int A = reachingDefIdx(Ops, D - 1, AddrV);
         if (A >= 0 && Ops[A].Opcode == NdOp::INT_ADD && Ops[A].NumInputs >= 2) {
           // Each address operand is either a bare register (the table base, or
           // the index of a byte table `ldrb [base,idx]`) or a scaled index (the
-          // index of a halfword table `ldrh [base,idx,lsl #1]`, whose >127-entry
-          // form clang selects once byte offsets would overflow).  A bare-COPY
-          // trace misses the scaled index, dropping IndexReg and with it the
-          // `switch(x % N)` modulo bound — so fall back to the scaled-index
-          // trace when the operand is not a plain register.
-          auto candReg = [&](const NdVar &In) -> uint64_t {
+          // index of a halfword table `ldrh [base,idx,lsl #1]`, whose
+          // >127-entry form clang selects once byte offsets would overflow).  A
+          // bare-COPY trace misses the scaled index, dropping IndexReg and with
+          // it the `switch(x % N)` modulo bound — so fall back to the
+          // scaled-index trace when the operand is not a plain register.
+          auto candReg = [&](const NdVar &In) -> IndexCandidate {
+            IndexCandidate Candidate;
             uint64_t R = traceToRegister(Ops, A - 1, In);
-            if (R != InvalidVA)
-              return R;
-            return scaledIndexReg(Ops, A - 1, In);
+            if (R != InvalidVA) {
+              Candidate.Reg = R;
+              Candidate.Value = In;
+              Candidate.UseAddr = Ops[A].Addr;
+              Candidate.UseSeq = Ops[A].Seq;
+              return Candidate;
+            }
+            Candidate.Reg =
+                scaledIndexReg(Ops, A - 1, In, &Candidate.Value,
+                               &Candidate.UseAddr, &Candidate.UseSeq);
+            return Candidate;
           };
           CandA = candReg(Ops[A].Inputs[0]);
           CandB = candReg(Ops[A].Inputs[1]);
@@ -243,7 +354,7 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
   // base; the other is the switch index register.
   std::optional<uint64_t> TableBase;
   for (int Pick = 0; Pick < 2; ++Pick) {
-    uint64_t BaseCand = Pick == 0 ? CandA : CandB;
+    uint64_t BaseCand = Pick == 0 ? CandA.Reg : CandB.Reg;
     if (BaseCand == InvalidVA)
       continue;
     auto V = foldRegConstant(Img, Rec, BaseCand);
@@ -252,7 +363,8 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
     const auto *S = Img.getSegmentFor(*V);
     if (S && !S->Data.empty()) {
       TableBase = V;
-      IndexReg = Pick == 0 ? CandB : CandA;
+      IndexCandidateAtLoad = Pick == 0 ? CandB : CandA;
+      IndexReg = IndexCandidateAtLoad.Reg;
       break;
     }
   }
@@ -296,16 +408,30 @@ bool CFGBuilder::tryAArch64CompactTable(const BinaryImage &Img,
   if (!Img.hasExecutableCodeOwnerAt(*Anchor))
     return false;
 
-  if (IndexReg != InvalidVA)
+  if (IndexReg != InvalidVA) {
+    // Preserve the existing resolver-facing source trace.  Guard matching uses
+    // the separate point-sensitive identity below, so it need not redefine this
+    // field and perturb established table classification.
     IndexReg = traceRegSource(Ops, AddIdx, IndexReg);
+  }
 
   Info.setBaseAddr(*TableBase);
   Info.EntrySize = LoadWidth;
   Info.IsRelative = true;
   Info.IsSigned = Signed;
-  Info.TargetBase = *Anchor;
+  Info.setTargetBase(*Anchor);
   Info.EntryScale = 1u << Shift;
   Info.IndexReg = IndexReg;
+  Info.IndexValueAtUse = IndexCandidateAtLoad.Value;
+  Info.IndexUseAddr = IndexCandidateAtLoad.UseAddr;
+  Info.IndexUseSeq = IndexCandidateAtLoad.UseSeq;
+  if (TableLoadIdx >= 0) {
+    Info.TableLoadAddr = Ops[TableLoadIdx].Addr;
+    Info.TableLoadSeq = Ops[TableLoadIdx].Seq;
+    Info.TargetLoads = {{Ops[TableLoadIdx].Output, Ops[TableLoadIdx].Addr,
+                         Ops[TableLoadIdx].Seq,
+                         /*DefinedAtPoint=*/true}};
+  }
   return true;
 }
 

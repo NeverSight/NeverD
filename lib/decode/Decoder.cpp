@@ -265,6 +265,10 @@ int Decoder::getX86RetPopBytes() const {
   return X86 ? X86->getRetPopBytes() : 0;
 }
 
+std::optional<I386GetPcOccurrence> Decoder::getX86GetPcOccurrence() const {
+  return X86 ? X86->getLastGetPcOccurrence() : std::nullopt;
+}
+
 void Decoder::fixupDecodedInsn(cs_insn *I) const {
   if (!I)
     return;

@@ -261,7 +261,10 @@ bool CFGBuilder::refineRangeFromGuards(const InsnRecord &Rec,
 /// separately by detectStride/detectNormalization.
 bool CFGBuilder::inferBoundsFromRangePullback(const InsnRecord &Rec,
                                               JumpTableInfo &Info) {
-  if (Info.IndexReg == InvalidVA)
+  if (Info.IndexReg == InvalidVA ||
+      (!Info.IndexValueAtUse.isReg() && !Info.IndexValueAtUse.isTemp()) ||
+      Info.IndexValueAtUse.Size == 0 || Info.IndexUseAddr == InvalidVA ||
+      Info.IndexUseSeq < 0 || Info.TableLoadAddr == InvalidVA)
     return false;
 
   int VarSize = getTargetRegInfo(CurrentImg ? CurrentImg->Arch : Arch::Unknown)
@@ -293,6 +296,8 @@ bool CFGBuilder::inferBoundsFromRangePullback(const InsnRecord &Rec,
   std::set<int> GuardCmp;
   for (int I = 0; I < static_cast<int>(Ops.size()); ++I) {
     if (Ops[I].Opcode != NdOp::COND_BR || Ops[I].NumInputs < 2)
+      continue;
+    if (!branchControlsTableLoad(Ops[I].Addr, Info))
       continue;
     std::vector<std::pair<NdVar, int>> Work{{Ops[I].Inputs[1], I - 1}};
     std::set<int> Seen;
@@ -329,15 +334,14 @@ bool CFGBuilder::inferBoundsFromRangePullback(const InsnRecord &Rec,
   if (GuardCmp.empty())
     return false;
 
-  // The index register may itself be aliased from an earlier source register
-  // (`mov ecx,edi`); normalize both sides to their ultimate source so a guard
-  // on the original register still matches.
-  uint64_t IndexSrc =
-      traceRegSource(Ops, static_cast<int>(Ops.size()) - 1, Info.IndexReg);
-  auto isIndexReg = [&](uint64_t RegOff, int Before) -> bool {
-    if (RegOff == Info.IndexReg)
-      return true;
-    return traceRegSource(Ops, Before, RegOff) == IndexSrc;
+  auto isIndexValue = [&](const NdVar &V, int Before) -> bool {
+    int UseIdx = Before + 1;
+    if (UseIdx < 0 || UseIdx >= static_cast<int>(Ops.size()))
+      return false;
+    return tableIndexMatchesValueAtUse(V, Ops[UseIdx].Addr, Ops[UseIdx].Seq,
+                                       Info,
+                                       /*AllowZeroExtension=*/true,
+                                       /*AllowSignExtension=*/true);
   };
 
   uint32_t Best = 0;
@@ -357,7 +361,7 @@ bool CFGBuilder::inferBoundsFromRangePullback(const InsnRecord &Rec,
     int From = I - 1;
     bool Reached = false;
     for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
-      if (V.isReg() && isIndexReg(V.Offset, From)) {
+      if (isIndexValue(V, From)) {
         Reached = true;
         break;
       }

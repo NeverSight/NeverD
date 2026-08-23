@@ -457,6 +457,9 @@ COFFLoader::load(const std::filesystem::path &Path) {
           if (TargetVA < OwnerBegin ||
               (TargetExecutable ? TargetVA >= OwnerEnd : TargetVA > OwnerEnd))
             return;
+          if (IsAddressValue && Img.hasExecutableCodeOwnerAt(P))
+            Img.InstructionAddressMaterializations[P] = {TargetVA,
+                                                         TargetOwnerVA};
           if (TargetExecutable) {
             if (IsAddressValue)
               Img.CodeRefTargets.insert(
@@ -605,6 +608,9 @@ COFFLoader::load(const std::filesystem::path &Path) {
                 static_cast<uint32_t>(*PageDelta >> 14) & 0x7ffffu;
             Insn = (Insn & 0x9f00001fu) | (ImmLo << 29) | (ImmHi << 5);
             std::memcpy(ApplySeg->Data.data() + RAddr, &Insn, 4);
+            if (Img.hasExecutableCodeOwnerAt(P) &&
+                Img.relocatedTargetBelongsToOwner(*Target, SymOwnerVA))
+              Img.InstructionPageAddressFragments[P] = {*Target, SymOwnerVA};
           } else if (RType == IMAGE_REL_ARM64_PAGEOFFSET_12A ||
                      RType == IMAGE_REL_ARM64_PAGEOFFSET_12L) {
             if (RAddr + 4 > ApplySeg->Data.size())

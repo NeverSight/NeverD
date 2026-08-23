@@ -47,6 +47,20 @@ constexpr uint32_t kMaxJumpTableEntries = 4096;
 /// quadratically with function size.
 constexpr uint32_t kMaxJumpTableEvidenceWork = 4096;
 
+/// Maximum recursive depth while reconstructing one exact guard expression.
+/// The shared evidence-work budget bounds total graph size; this separate
+/// ceiling prevents a single adversarial linear chain from exhausting the C++
+/// call stack before the work counter can fail the proof closed.
+constexpr uint32_t kMaxJumpTableGuardExpressionDepth = 64;
+
+/// Deterministic resource ceilings for the exact bit-domain query used to
+/// validate a reconstructed jump-table guard.  Exhaustion means "no proof"
+/// and therefore rejects that guard; it never falls back to sampled values.
+constexpr uint64_t kMaxJumpTableGuardSolverConflicts = uint64_t(1) << 14;
+constexpr uint64_t kMaxJumpTableGuardSolverPropagations = uint64_t(1) << 20;
+constexpr uint64_t kMaxJumpTableGuardSolverWatchVisits = uint64_t(1) << 22;
+constexpr size_t kMaxJumpTableGuardSolverGates = size_t(1) << 18;
+
 /// Minimum number of resolved targets for a table to be accepted.
 constexpr uint32_t kMinJumpTableEntries = 2;
 

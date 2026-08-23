@@ -310,6 +310,12 @@ MedLLVMEmitter::summarizeConstantProvenance(const MedVar &V) const {
       // taint is absent.  Escape audits must fail closed for adversarially deep
       // forwarding chains instead of reopening legacy numeric heuristics.
       return {Model::Mixed, true};
+    // A final-CFG GOTPC model certificate turns this exact SSA definition into
+    // a scalar zero.  Stop before traversing its call/pop Address seed: the
+    // seed is an input to the relocation equation, not address provenance of
+    // the certified result or of arithmetic derived from that result.
+    if (valueIsAuthenticatedModelZero(Cur))
+      return {Model::Scalar, false};
     if (Cur.isConst()) {
       switch (Cur.Provenance) {
       case ConstantAddressProvenance::Unknown:

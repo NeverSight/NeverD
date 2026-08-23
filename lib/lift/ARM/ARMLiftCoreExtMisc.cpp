@@ -162,10 +162,40 @@ bool liftCoreExtMisc(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
   // Table branch
   case ARM_INS_TBB:
   case ARM_INS_TBH: {
-    if (ARM.op_count >= 1) {
-      NdVar Target = L.operandRead(S, ARM.operands[0]);
-      S.emit(NdOp::INDIR_BR, {}, {Target});
-    }
+    if (ARM.op_count < 1 || ARM.operands[0].type != ARM_OP_MEM)
+      break;
+
+    // TBB/TBH do not load a pointer-sized branch target.  They load an
+    // unsigned byte/halfword offset from [base,index{,lsl #1}], multiply it by
+    // two, and add it to the architectural PC value.  Treating the memory
+    // operand through operandRead() used to emit a 4-byte LOAD followed by a
+    // direct INDIR_BR of those table bytes, which both mis-modeled execution
+    // and erased the exact index operand needed by jump-table guard analysis.
+    // Most Thumb instructions read PC as Align(address + 4, 4), and the
+    // instruction prologue deliberately installs that value in the synthetic
+    // PC register.  TBB/TBH are the exception: their Rn==PC table base and
+    // branch target base both use the raw Thumb PC (address + 4), including
+    // when the 32-bit instruction starts at the second halfword of a word.
+    // Override PC only for this terminating instruction; the next instruction
+    // installs its own architectural PC value as usual.  Keep the arithmetic
+    // explicitly 32-bit so an instruction at the top of the address space
+    // wraps like the architecture.
+    const uint32_t RawThumbPC =
+        static_cast<uint32_t>(static_cast<uint32_t>(S.Addr) + uint32_t{4});
+    S.emit(NdOp::COPY, NdVar::reg(armreg::PC, 4),
+           {NdVar::address(RawThumbPC, 4)});
+
+    const uint16_t EntryWidth = Insn->id == ARM_INS_TBB ? 1 : 2;
+    NdVar Address = L.operandEffAddr(S, ARM.operands[0]);
+    NdVar Entry = S.makeTemp(EntryWidth);
+    NdVar Extended = S.makeTemp(4);
+    NdVar Scaled = S.makeTemp(4);
+    NdVar Target = S.makeTemp(4);
+    S.emit(NdOp::LOAD, Entry, {Address});
+    S.emit(NdOp::INT_ZEXT, Extended, {Entry});
+    S.emit(NdOp::INT_LEFT, Scaled, {Extended, NdVar::scalar(1, 4)});
+    S.emit(NdOp::INT_ADD, Target, {NdVar::reg(armreg::PC, 4), Scaled});
+    S.emit(NdOp::INDIR_BR, {}, {Target});
     break;
   }
 

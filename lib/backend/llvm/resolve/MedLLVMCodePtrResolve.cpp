@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
+#include "neverd/Limits.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/object/SectionNames.h"
@@ -22,6 +23,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/WithColor.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -104,7 +106,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   // pure data segments with no relocated pointers keep their existing handling.
   // Slots from both sets, anywhere in the run, are merged in address order
   // below.
-  enum class PtrSlotKind : uint8_t { Code, Data, Import };
+  enum class PtrSlotKind : uint8_t { Code, SuppressedCode, Data, Import };
   struct PtrSlot {
     uint64_t VA;
     PtrSlotKind Kind;
@@ -118,7 +120,11 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
   };
   for (uint64_t S : Img->CodePtrRelocSlots)
     if (slotInRun(S))
-      SlotsByVA.emplace(S, PtrSlot{S, PtrSlotKind::Code, {}});
+      SlotsByVA.emplace(S, PtrSlot{S,
+                                   currentJumpTableSuppressesRelocationSlot(S)
+                                       ? PtrSlotKind::SuppressedCode
+                                       : PtrSlotKind::Code,
+                                   {}});
   for (uint64_t S : Img->DataPtrRelocSlots)
     if (slotInRun(S)) {
       uint64_t OwnerVA = InvalidVA;
@@ -268,6 +274,13 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
         return nullptr;
       }
       FieldVal = llvm::ConstantExpr::getPtrToInt(Target, PtrIntTy);
+    } else if (K.Kind == PtrSlotKind::SuppressedCode) {
+      // A post-SSA terminal-use proof replaced every observable load of this
+      // slot with the recovered switch.  Keep an addressable, layout-preserving
+      // field so base arithmetic (including an ET_REL table at VA zero) still
+      // has a relocatable global identity, but never re-embed the stale guest
+      // code pointer that suppression was designed to remove.
+      FieldVal = llvm::ConstantInt::get(PtrIntTy, 0);
     } else if (K.Kind == PtrSlotKind::Data) {
       if (K.TargetVA == 0 && K.TargetOwnerVA == InvalidVA &&
           !Img->hasObjectDataProvenance(0))
@@ -527,74 +540,251 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
 
 const JumpTable *
 MedLLVMEmitter::recoveredJumpTableForLoad(const MedOp &Load) const {
-  if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
-      Load.Output.isConst() || Load.Output.Size == 0)
+  return jumpTableForLoad(Load, /*RequireTerminalExclusive=*/true);
+}
+
+const JumpTable *
+MedLLVMEmitter::authenticatedJumpTableForLoad(const MedOp &Load) const {
+  return jumpTableForLoad(Load, /*RequireTerminalExclusive=*/false);
+}
+
+const JumpTable *
+MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
+                                 bool RequireTerminalExclusive) const {
+  if (!CurMedFunc || !Img || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
+      Load.Output.isConst() || Load.Output.Size == 0 ||
+      Load.MemoryOrdering != NdMemoryOrdering::None || Load.OriginSeq < 0)
     return nullptr;
 
   const AddressProvenanceVarKey LoadKey = addressProvenanceVarKey(Load.Output);
-  std::function<bool(const MedVar &, int, std::set<AddressProvenanceVarKey>)>
-      dependsOnLoad = [&](const MedVar &Value, int Depth,
-                          std::set<AddressProvenanceVarKey> Seen) {
-        if (Depth > 128 || Value.isConst())
-          return false;
-        const AddressProvenanceVarKey Key = addressProvenanceVarKey(Value);
-        if (Key == LoadKey)
-          return true;
-        if (!Seen.insert(Key).second)
-          return false;
-        if (const PhiNode *Phi = lookupPhi(Value)) {
-          for (const auto &[Pred, Arg] : Phi->Args)
-            if (phiIncomingEdgeFeasible(*Phi, Pred) &&
-                dependsOnLoad(Arg, Depth + 1, Seen))
-              return true;
-          return false;
-        }
-        const MedOp *Def = lookupDef(Value);
-        if (!Def || Def->Opcode == NdOp::LOAD)
-          return false;
-        if (auto Forwarded = pointerPreservingInput(*Def))
-          return dependsOnLoad(*Forwarded, Depth + 1, std::move(Seen));
-        if (Def->Opcode == NdOp::SELECT && Def->NumInputs >= 3)
-          return dependsOnLoad(Def->Inputs[1], Depth + 1, Seen) ||
-                 dependsOnLoad(Def->Inputs[2], Depth + 1, std::move(Seen));
-        switch (Def->Opcode) {
-        case NdOp::COPY:
-        case NdOp::INT_ZEXT:
-        case NdOp::INT_SEXT:
-        case NdOp::SUBBYTES:
-        case NdOp::INT_ADD:
-        case NdOp::INT_SUB:
-        case NdOp::INT_MULT:
-        case NdOp::INT_DIV:
-        case NdOp::INT_SDIV:
-        case NdOp::INT_REM:
-        case NdOp::INT_SREM:
-        case NdOp::INT_LEFT:
-        case NdOp::INT_RIGHT:
-        case NdOp::INT_ASHR:
-        case NdOp::INT_AND:
-        case NdOp::INT_OR:
-        case NdOp::INT_XOR:
-        case NdOp::INT_NEG2:
-        case NdOp::INT_NEGATE:
-        case NdOp::INT_NOT:
-          for (uint8_t I = 0; I < Def->NumInputs; ++I)
-            if (dependsOnLoad(Def->Inputs[I], Depth + 1, Seen))
-              return true;
-          return false;
-        default:
-          return false;
-        }
-      };
 
   for (const JumpTable &JT : CurMedFunc->JumpTables) {
-    if (JT.EntrySize != Load.Output.Size || JT.Targets.empty())
+    if (JT.EntrySize != Load.Output.Size || JT.Targets.empty() ||
+        JT.MutatedUnsafe || JT.SuppressibleRelocationSlots.empty())
       continue;
-    for (const MedBlock &Block : CurMedFunc->Blocks)
-      for (const MedOp &Op : Block.Ops)
-        if (Op.Opcode == NdOp::INDIR_BR && Op.Addr == JT.InsnAddr &&
-            Op.NumInputs >= 1 && dependsOnLoad(Op.Inputs[0], 0, {}))
-          return &JT;
+
+    // The resolver authenticated a concrete Low LOAD occurrence.  Addr alone
+    // is not an identity: one machine instruction can expand to several
+    // memory operations, and later Med rewriting can retain the address while
+    // changing the value role.  Require the complete stable witness here.
+    const bool Authenticated = std::any_of(
+        JT.AuthenticatedTableLoads.begin(), JT.AuthenticatedTableLoads.end(),
+        [&](const JumpTableOpOccurrence &Occurrence) {
+          return Occurrence.Addr == Load.Addr &&
+                 Occurrence.Seq == Load.OriginSeq &&
+                 Occurrence.Size == Load.Output.Size;
+        });
+    if (!Authenticated)
+      continue;
+
+    // Bind the occurrence to the advertised target-storage role as a second
+    // certificate.  Ordinary tables can re-prove one concrete Med base.  A
+    // TwoTable address has a runtime SELECT/mask-blend base and deliberately
+    // has no single constant Med base; accept that shape only through the
+    // exact Low certificate exported as a bound composite selector plan plus
+    // complete ownership of both physical pointer runs.
+    if (JT.TwoTableSelect) {
+      const auto PlanIt = CurMedFunc->SwitchSelectorPlans.find(JT.InsnAddr);
+      if (!JT.CompositeSelectorUseRef ||
+          PlanIt == CurMedFunc->SwitchSelectorPlans.end())
+        continue;
+      const MedSwitchSelectorPlan &Plan = PlanIt->second;
+      const JumpTableCompositeSelectorUseRef &Recipe =
+          *JT.CompositeSelectorUseRef;
+      if (Plan.PlanKind != MedSwitchSelectorPlan::Kind::SelectOffset ||
+          Recipe.RecipeKind !=
+              JumpTableCompositeSelectorUseRef::Kind::SelectOffset ||
+          Plan.Selector.isConst() || Plan.Condition.isConst() ||
+          Plan.Selector.Size == 0 || Plan.Condition.Size == 0 ||
+          Plan.Selector.Size != Recipe.ByteIndex.ExpectedSize ||
+          Plan.Condition.Size != Recipe.Condition.ExpectedSize ||
+          Plan.ResultSize == 0 || Plan.ResultSize != Recipe.ResultSize ||
+          Plan.TrueOffset != Recipe.TrueOffset ||
+          Plan.FalseOffset != Recipe.FalseOffset ||
+          !((Plan.TrueOffset == 0 && Plan.FalseOffset == JT.TwoTableOffset) ||
+            (Plan.FalseOffset == 0 && Plan.TrueOffset == JT.TwoTableOffset)) ||
+          JT.StorageRanges.size() != 2)
+        continue;
+
+      const JumpTableStorageRange &Lo = JT.StorageRanges[0];
+      const JumpTableStorageRange &Hi = JT.StorageRanges[1];
+      if (Lo.BaseAddr >= Hi.BaseAddr || Lo.EntrySize != Load.Output.Size ||
+          Hi.EntrySize != Load.Output.Size ||
+          Lo.EntryStride != Load.Output.Size ||
+          Hi.EntryStride != Load.Output.Size || Lo.PhysicalSlotCount == 0 ||
+          Lo.PhysicalSlotCount != Hi.PhysicalSlotCount ||
+          Lo.PhysicalSlotCount > limits::kMaxJumpTableEntries / 2 ||
+          JT.Targets.size() != 2 * Lo.PhysicalSlotCount ||
+          Lo.PhysicalSlotCount >
+              std::numeric_limits<uint64_t>::max() / Load.Output.Size ||
+          uint64_t(Lo.PhysicalSlotCount) * Load.Output.Size !=
+              JT.TwoTableOffset)
+        continue;
+
+      bool CompleteStorage = true;
+      size_t CertifiedSlots = 0;
+      for (const JumpTableStorageRange *Range : {&Lo, &Hi}) {
+        for (uint64_t I = 0; I < Range->PhysicalSlotCount; ++I) {
+          if (I != 0 &&
+              Range->EntryStride > (InvalidVA - Range->BaseAddr) / I) {
+            CompleteStorage = false;
+            break;
+          }
+          const va_t Slot = Range->BaseAddr + I * Range->EntryStride;
+          if (!Img->CodePtrRelocSlots.count(Slot) ||
+              !JT.suppressesRelocationSlot(Slot)) {
+            CompleteStorage = false;
+            break;
+          }
+          ++CertifiedSlots;
+        }
+        if (!CompleteStorage)
+          break;
+      }
+      if (!CompleteStorage ||
+          CertifiedSlots != JT.SuppressibleRelocationSlots.size())
+        continue;
+    } else {
+      uint64_t Base = 0;
+      bool HaveBase = false;
+      std::vector<MedVar> IndexTerms;
+      bool Decomposed = collectIndexedGlobalBase(Load.Inputs[0], Base, HaveBase,
+                                                 IndexTerms) &&
+                        HaveBase;
+      if (!Decomposed) {
+        Base = 0;
+        HaveBase = false;
+        IndexTerms.clear();
+        Decomposed = collectLiteralPoolBase(Load.Inputs[0], Base, HaveBase,
+                                            IndexTerms) &&
+                     HaveBase;
+      }
+      if (!Decomposed && JT.HasBaseAddr && JT.BaseAddr == 0) {
+        Base = 0;
+        HaveBase = true;
+        Decomposed = true;
+      }
+      if (!Decomposed || !HaveBase)
+        continue;
+      const bool OwnsBase =
+          std::any_of(JT.StorageRanges.begin(), JT.StorageRanges.end(),
+                      [&](const JumpTableStorageRange &Range) {
+                        return Range.EntrySize == Load.Output.Size &&
+                               Range.ownsStorageAddress(Base);
+                      });
+      if (!OwnsBase)
+        continue;
+    }
+
+    if (!RequireTerminalExclusive)
+      return &JT;
+
+    // Suppressed relocation slots need no independent mirror when this exact
+    // target LOAD is semantically consumed only by the recovered switch.  Walk
+    // the post-SSA use graph in the forward direction: pure target transforms
+    // and PHIs are allowed, but any memory/control/observable use other than
+    // this JT's terminal INDIR_BR keeps the normal mirror path mandatory.
+    std::vector<MedVar> Work{Load.Output};
+    std::set<AddressProvenanceVarKey> Seen;
+    bool ReachesTerminalBranch = false;
+    bool EscapesSwitch = false;
+    while (!Work.empty() && !EscapesSwitch) {
+      const MedVar Current = Work.back();
+      Work.pop_back();
+      const AddressProvenanceVarKey CurrentKey =
+          addressProvenanceVarKey(Current);
+      if (!Seen.insert(CurrentKey).second)
+        continue;
+
+      for (const MedBlock &Block : CurMedFunc->Blocks) {
+        for (const PhiNode &Phi : Block.Phis) {
+          bool Used = false;
+          for (const auto &[Pred, Arg] : Phi.Args) {
+            (void)Pred;
+            Used |= addressProvenanceVarKey(Arg) == CurrentKey;
+          }
+          if (Used) {
+            // A PHI is an observable escape only through its consumers.  Keep
+            // walking the exact SSA output so a loop-carried target register
+            // that is used solely by this recovered INDIR_BR remains safe,
+            // while any STORE/CALL/RETURN/other branch reached from the PHI is
+            // still rejected below.
+            Work.push_back(Phi.Output);
+          }
+        }
+        for (const MedOp &Op : Block.Ops) {
+          bool Used = false;
+          for (uint8_t I = 0; I < Op.NumInputs; ++I)
+            Used |= addressProvenanceVarKey(Op.Inputs[I]) == CurrentKey;
+          if (!Used)
+            continue;
+
+          if (Op.Opcode == NdOp::INDIR_BR && Op.Addr == JT.InsnAddr) {
+            ReachesTerminalBranch = true;
+            continue;
+          }
+
+          switch (Op.Opcode) {
+          case NdOp::COPY:
+          case NdOp::INT_ZEXT:
+          case NdOp::INT_SEXT:
+            if (Op.Output.Size == 0 || Op.Output.isConst())
+              EscapesSwitch = true;
+            else
+              Work.push_back(Op.Output);
+            break;
+          case NdOp::SUBBYTES:
+            if (Op.NumInputs < 2 || !Op.Inputs[1].isConst() ||
+                Op.Inputs[1].ConstVal != 0 || Op.Output.Size == 0 ||
+                Op.Output.isConst())
+              EscapesSwitch = true;
+            else
+              Work.push_back(Op.Output);
+            break;
+          case NdOp::INT_ADD:
+          case NdOp::INT_SUB: {
+            // i386 GOTOFF tables load a target delta and add the GOT base
+            // before the terminal branch.  A final-CFG GOTPC certificate
+            // proves that exact base SSA is the linker model zero, so this is
+            // value transport just like COPY.  Do not generalize to an
+            // arbitrary stable/numeric zero: only the bound scalar-model
+            // occurrence may discharge the extra operand.
+            if (Op.NumInputs != 2 || Op.Output.Size != Current.Size ||
+                Op.Output.isConst()) {
+              EscapesSwitch = true;
+              break;
+            }
+            const bool CurrentOnLeft =
+                addressProvenanceVarKey(Op.Inputs[0]) == CurrentKey;
+            const bool CurrentOnRight =
+                addressProvenanceVarKey(Op.Inputs[1]) == CurrentKey;
+            const MedVar *ZeroInput = nullptr;
+            if (CurrentOnLeft != CurrentOnRight) {
+              if (CurrentOnLeft)
+                ZeroInput = &Op.Inputs[1];
+              else if (Op.Opcode == NdOp::INT_ADD)
+                ZeroInput = &Op.Inputs[0];
+            }
+            if (!ZeroInput || !valueIsAuthenticatedModelZero(*ZeroInput)) {
+              EscapesSwitch = true;
+              break;
+            }
+            Work.push_back(Op.Output);
+            break;
+          }
+          default:
+            EscapesSwitch = true;
+            break;
+          }
+          if (EscapesSwitch)
+            break;
+        }
+        if (EscapesSwitch)
+          break;
+      }
+    }
+    if (ReachesTerminalBranch && !EscapesSwitch)
+      return &JT;
   }
   return nullptr;
 }
@@ -607,7 +797,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
 
   const MedOp *LoadedOp = LoadedValue ? lookupDef(*LoadedValue) : nullptr;
   const JumpTable *RecoveredJumpTable =
-      LoadedOp ? recoveredJumpTableForLoad(*LoadedOp) : nullptr;
+      LoadedOp ? authenticatedJumpTableForLoad(*LoadedOp) : nullptr;
 
   // The relocation mirror owns the memory representation of its complete
   // read-only run, including adjacent narrow scalar fields.  Do not confuse
@@ -1099,12 +1289,14 @@ bool MedLLVMEmitter::operationUsesRelocatableCodeIdentity(NdOp Opcode) const {
 }
 
 bool MedLLVMEmitter::currentJumpTableOwnsStorageAddress(va_t Addr) const {
-  if (!CurMedFunc)
-    return false;
-  for (const JumpTable &JT : CurMedFunc->JumpTables)
-    if (JT.ownsStorageAddress(Addr))
+  for (const JumpTableStorageRange &Range : ModuleJumpTableStorageRanges)
+    if (Range.ownsStorageAddress(Addr))
       return true;
   return false;
+}
+
+bool MedLLVMEmitter::currentJumpTableSuppressesRelocationSlot(va_t Addr) const {
+  return ModuleSuppressibleJumpTableRelocationSlots.count(Addr) != 0;
 }
 
 bool MedLLVMEmitter::codeIdentityOccurrenceMayRelocate(

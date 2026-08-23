@@ -18,7 +18,10 @@ volatile int S;
 /* Single dispatch site. */
 int cg_single(int sel) {
   static const void *tab[] = {&&A, &&B, &&C, &&D, &&E};
-  goto *tab[sel % 5];
+  // The table domain is unsigned.  Signed `%` can produce a negative
+  // remainder and therefore is not, by itself, a proof that the memory index
+  // lies in [0,N).
+  goto *tab[(unsigned)sel % 5];
 A: S += 1; return 1;
 B: S *= 3; return 2;
 C: S ^= 7; return 3;
@@ -32,13 +35,37 @@ int cg_loop(int *ops, int n) {
   int i = 0, acc = 0;
   if (n <= 0)
     return 0;
-  goto *tab[ops[0] % 6];
-L0: acc += 1;  if (++i < n) goto *tab[ops[i] % 6]; return acc;
-L1: acc *= 3;  if (++i < n) goto *tab[ops[i] % 6]; return acc;
-L2: acc ^= 7;  if (++i < n) goto *tab[ops[i] % 6]; return acc;
-L3: acc -= 2;  if (++i < n) goto *tab[ops[i] % 6]; return acc;
-L4: acc <<= 1; if (++i < n) goto *tab[ops[i] % 6]; return acc;
-L5: acc |= 4;  if (++i < n) goto *tab[ops[i] % 6]; return acc;
+  goto *tab[(unsigned)ops[0] % 6];
+L0:
+  acc += 1;
+  if (++i < n)
+    goto *tab[(unsigned)ops[i] % 6];
+  return acc;
+L1:
+  acc *= 3;
+  if (++i < n)
+    goto *tab[(unsigned)ops[i] % 6];
+  return acc;
+L2:
+  acc ^= 7;
+  if (++i < n)
+    goto *tab[(unsigned)ops[i] % 6];
+  return acc;
+L3:
+  acc -= 2;
+  if (++i < n)
+    goto *tab[(unsigned)ops[i] % 6];
+  return acc;
+L4:
+  acc <<= 1;
+  if (++i < n)
+    goto *tab[(unsigned)ops[i] % 6];
+  return acc;
+L5:
+  acc |= 4;
+  if (++i < n)
+    goto *tab[(unsigned)ops[i] % 6];
+  return acc;
 }
 
 void _start(void) {

@@ -33,8 +33,12 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/symbolic/SymExpr.h"
+
+#include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace neverd {
@@ -66,7 +70,10 @@ uint64_t traceRegSource(const std::vector<LowOp> &Ops, int FromIdx,
 /// If a nd-var is a scaled index (traced through COPY/ZEXT/SEXT to an
 /// INT_MULT(reg, const>1) or INT_LEFT(reg, const)), return the source index
 /// register; otherwise InvalidVA.
-uint64_t scaledIndexReg(const std::vector<LowOp> &Ops, int FromIdx, NdVar V);
+uint64_t scaledIndexReg(const std::vector<LowOp> &Ops, int FromIdx, NdVar V,
+                        NdVar *IndexValue = nullptr,
+                        va_t *IndexUseAddr = nullptr,
+                        int *IndexUseSeq = nullptr);
 
 /// Follow a quasi-copy chain (COPY, power-of-two INT_AND, INT_OR of upper bits,
 /// ZEXT/SEXT, low-half SUBBYTES/CONCAT) backward to the earliest register in
@@ -101,18 +108,80 @@ bool resolveConstThroughCopy(const std::vector<LowOp> &Ops, int Before,
 /// entry count of an absolute-pointer jump table.  Defined in
 /// JumpTableResolverBounds.cpp.
 uint32_t countCodePtrRelocRun(const BinaryImage &Img, va_t TableAddr,
-                              uint16_t EntrySize);
+                              uint64_t EntryStride);
+
+/// Truncate an absolute code-pointer relocation run at the next independently
+/// materialized table-base anchor.  This prevents two adjacent absolute tables
+/// from being conflated into one physical owner.
+uint32_t boundCodePtrRunByNextAnchor(const BinaryImage &Img, va_t BaseAddr,
+                                     uint64_t EntryStride, uint32_t Run,
+                                     const std::set<va_t> &DecodedAnchors);
+
+/// True when the end of an absolute relocation run is independently bounded
+/// by the mapped storage owner or another materialized table-base anchor.
+bool codePtrRelocRunHasExactBoundary(const BinaryImage &Img, va_t BaseAddr,
+                                     uint64_t EntryStride, uint32_t Run,
+                                     const std::set<va_t> &DecodedAnchors);
 
 /// Count consecutive PC-relative-to-code relocation slots from \p TableAddr --
 /// the entry count of a PIC `switch` jump table.  Defined in
 /// JumpTableResolverBounds.cpp.
 uint32_t countRelCodeRelocRun(const BinaryImage &Img, va_t TableAddr,
-                              uint16_t EntrySize);
+                              uint64_t EntryStride);
 
 /// Truncate a RelCodeReloc entry \p Run so it stops at the next PIC jump-table
 /// base anchor after \p BaseAddr.  Defined in JumpTableResolverBounds.cpp.
 uint32_t boundRelRunByNextAnchor(const BinaryImage &Img, va_t BaseAddr,
-                                 uint16_t EntrySize, uint32_t Run);
+                                 uint64_t EntryStride, uint32_t Run,
+                                 const std::set<va_t> &DecodedAnchors);
+
+/// Apply LowIR's integer-coercion contract to an INT_AND mask: both operands
+/// are zero-extended/truncated to OutputSize before the operation, and a
+/// narrower dynamic operand cannot set newly introduced high bits.  Returns
+/// the effective set-bit mask, or nullopt for an unsupported width.
+std::optional<uint64_t> effectiveIntegerAndMask(uint64_t EncodedMask,
+                                                uint16_t MaskSize,
+                                                uint16_t DynamicSize,
+                                                uint16_t OutputSize);
+
+/// Apply the resolver's case-label affine mapping in the 64-bit modular guest
+/// domain.  This is the bit-pattern form of
+/// `(EntryIndex * Stride << NormShift) + NormBase`; nullopt rejects an
+/// unrepresentable shift instead of invoking host signed-shift overflow.
+std::optional<uint64_t> recoverCaseLabelBitPattern(uint64_t EntryIndex,
+                                                   uint32_t Stride,
+                                                   uint32_t NormShift,
+                                                   int64_t NormBase);
+
+/// Evaluate one primitive used by the precise jump-table guard proof.  Inputs
+/// carry their original LowIR widths because comparisons and arithmetic follow
+/// the emitter's integer-coercion contract rather than the host uint64_t
+/// width.  Exposed only through this internal header so semantic differential
+/// tests can keep the resolver evaluator aligned with production emission.
+std::optional<uint64_t>
+evaluateJumpTableGuardPrimitive(NdOp Opcode, uint16_t OutputSize,
+                                llvm::ArrayRef<uint64_t> Inputs,
+                                llvm::ArrayRef<uint16_t> InputSizes);
+
+/// Translate one integer LowIR operation to the shared symbolic bit-vector
+/// semantics used by complete-domain jump-table proofs.  Inputs are coerced
+/// exactly as the production emitter coerces them; unsupported or
+/// architecture-dependent width combinations return nullopt rather than
+/// authorizing a range from an approximate expression.
+std::optional<symbolic::SymRef>
+symbolizeJumpTableIntegerOperation(symbolic::SymContext &Ctx, NdOp Opcode,
+                                   uint16_t OutputSize,
+                                   llvm::ArrayRef<symbolic::SymRef> RawInputs);
+
+/// True when one relative-target transform operates in the complete guest
+/// pointer domain.  A mere widening event is not enough: scale and anchor
+/// operations must consume and produce pointer-width values, and the anchor
+/// operand itself must be pointer-width as well.
+bool relativeTargetTransformUsesPointerWidth(NdOp Opcode,
+                                             uint16_t DynamicInputSize,
+                                             uint16_t OtherInputSize,
+                                             uint16_t OutputSize,
+                                             uint16_t PointerSize);
 
 /// Resolve an address nd-var to a stack/frame slot key (frame register plus a
 /// constant byte offset); false for any non-frame or scaled-index address.
@@ -124,13 +193,23 @@ bool frameSlotKey(const std::vector<LowOp> &Ops, int FromIdx, NdVar AddrV,
 // Table entry decoding
 //===----------------------------------------------------------------------===//
 
-/// Decode a single table entry into a target address.  For the compact-table
-/// form (TargetBase != 0) the target is `TargetBase + entry * Scale`; otherwise
-/// relative tables use `BaseAddr + entry` and absolute tables store the target.
+/// Decode a single table entry into a target address.  When HasTargetBase is
+/// set, the target is `TargetBase + entry * Scale`; otherwise relative tables
+/// use `BaseAddr + entry` and absolute tables store the target.  Arithmetic is
+/// performed modulo AddressBytes so 32-bit wrapped tables match execution.
 /// Defined in JumpTableResolverTargets.cpp.
-va_t decodeTableEntry(const uint8_t *P, uint16_t EntrySize, bool IsRelative,
-                      bool IsSigned, va_t BaseAddr, va_t TargetBase = 0,
-                      uint32_t Scale = 1);
+std::optional<va_t> decodeTableEntry(const uint8_t *P, uint16_t EntrySize,
+                                     bool IsRelative, bool IsSigned,
+                                     va_t BaseAddr, bool HasTargetBase = false,
+                                     va_t TargetBase = 0, uint32_t Scale = 1,
+                                     uint16_t AddressBytes = 8);
+
+/// Canonicalize a serialized absolute code pointer for the image's uniform
+/// instruction mode.  ARM bit 0 is a mode tag, not part of the decode VA;
+/// mixed ARM/Thumb targets are rejected until CFG identity is keyed by
+/// (address, mode).  Relative and compact table entries must not use this.
+std::optional<va_t> canonicalizeAbsoluteTableCodeTarget(const BinaryImage &Img,
+                                                        va_t RawTarget);
 
 } // namespace neverd
 

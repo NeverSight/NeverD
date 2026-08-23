@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <iterator>
 #include <map>
+#include <queue>
 #include <vector>
 
 namespace neverd {
@@ -120,7 +121,159 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   }
 
   linkSuccessors(Func, AddrToBlock);
+
+  // Jump-table targets are discovered speculatively: decoding a case can add
+  // a backedge or sibling definition that invalidates the proof which admitted
+  // a later slot.  The instruction cache intentionally retains decoded bytes
+  // so a subsequently tightened table can be re-evaluated without decoding
+  // churn, but the public CFG must not retain blocks reachable only through a
+  // stale target.  Keep ordinary reachability from the function's persistent
+  // roots (entry, address-taken labels, exception entries) and remap the graph
+  // before exceptional edges and jump-table metadata are published.
+  std::vector<bool> Reachable(Func.Blocks.size(), false);
+  std::queue<int> Worklist;
+  std::map<va_t, int> InsnToBlock;
+  for (const LowBlock &Block : Func.Blocks)
+    for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
+      InsnToBlock[Boundary.Address] = Block.Id;
+  auto Flood = [&] {
+    while (!Worklist.empty()) {
+      const int Block = Worklist.front();
+      Worklist.pop();
+      for (int Succ : Func.Blocks[Block].Succs)
+        if (Succ >= 0 && Succ < static_cast<int>(Func.Blocks.size()) &&
+            !Reachable[Succ]) {
+          Reachable[Succ] = true;
+          Worklist.push(Succ);
+        }
+    }
+  };
+  std::set<va_t> CurrentReachableInsns;
+  auto RefreshReachableInsns = [&] {
+    CurrentReachableInsns.clear();
+    for (const auto &[InsnAddr, BlockId] : InsnToBlock)
+      if (BlockId >= 0 && BlockId < static_cast<int>(Reachable.size()) &&
+          Reachable[BlockId])
+        CurrentReachableInsns.insert(InsnAddr);
+  };
+  // Resolve conditional code roots and inline-table ownership together.  A
+  // purely additive closure is order-dependent: adding a code root can make a
+  // table owner reachable, which retroactively proves that root was table
+  // bytes.  Keep the set of discovered active owners monotone, but recompute
+  // reachability from durable roots after every owner growth.  A
+  // self-bootstrapped cycle (table bytes make their own owner reachable) is
+  // therefore rejected conservatively instead of oscillating or depending on
+  // map key order.
+  std::set<va_t> ActiveTableOwners;
+  std::set<va_t> CurrentAnalysisRoots;
+  for (;;) {
+    std::fill(Reachable.begin(), Reachable.end(), false);
+    Worklist = std::queue<int>();
+    CurrentAnalysisRoots.clear();
+    auto RelocationRootSuppressed = [&](va_t Root) {
+      if (DurableCFGRoots.count(Root))
+        return false;
+      auto Sources = RelocationCFGRootSources.find(Root);
+      if (Sources == RelocationCFGRootSources.end() || Sources->second.empty())
+        return false;
+      return std::all_of(
+          Sources->second.begin(), Sources->second.end(), [&](va_t Slot) {
+            return std::any_of(
+                ActiveTableOwners.begin(), ActiveTableOwners.end(),
+                [&](va_t BranchAddr) {
+                  auto Info = ResolvedTableInfo.find(BranchAddr);
+                  return Info != ResolvedTableInfo.end() &&
+                         std::binary_search(
+                             Info->second.SuppressibleRelocationSlots.begin(),
+                             Info->second.SuppressibleRelocationSlots.end(),
+                             Slot);
+                });
+          });
+    };
+    for (va_t Root : PersistentCFGRoots) {
+      if (RelocationRootSuppressed(Root))
+        continue;
+      auto It = AddrToBlock.find(Root);
+      if (It == AddrToBlock.end() || Reachable[It->second])
+        continue;
+      Reachable[It->second] = true;
+      Worklist.push(It->second);
+      CurrentAnalysisRoots.insert(Root);
+    }
+    Flood();
+
+    for (bool Added = true; Added;) {
+      Added = false;
+      for (const auto &[Target, Sources] : DiscoveredCodeRefSources) {
+        if (resolvedJumpTableOwnsStorageAddress(Target, &ActiveTableOwners))
+          continue;
+        auto TargetBlock = AddrToBlock.find(Target);
+        if (TargetBlock == AddrToBlock.end() || Reachable[TargetBlock->second])
+          continue;
+        const bool HasReachableSource =
+            std::any_of(Sources.begin(), Sources.end(), [&](va_t Source) {
+              auto SourceBlock = InsnToBlock.find(Source);
+              return SourceBlock != InsnToBlock.end() &&
+                     Reachable[SourceBlock->second];
+            });
+        if (!HasReachableSource)
+          continue;
+        Reachable[TargetBlock->second] = true;
+        Worklist.push(TargetBlock->second);
+        CurrentAnalysisRoots.insert(Target);
+        Added = true;
+      }
+      Flood();
+    }
+    RefreshReachableInsns();
+
+    bool OwnerAdded = false;
+    for (const auto &[BranchAddr, Info] : ResolvedTableInfo) {
+      (void)Info;
+      auto Rec = Insns.find(BranchAddr);
+      if (Rec == Insns.end() || Rec->second.JumpTableTargets.empty() ||
+          !CurrentReachableInsns.count(BranchAddr))
+        continue;
+      OwnerAdded |= ActiveTableOwners.insert(BranchAddr).second;
+    }
+    if (!OwnerAdded)
+      break;
+  }
+
+  if (std::find(Reachable.begin(), Reachable.end(), false) != Reachable.end()) {
+    std::vector<int> OldToNew(Func.Blocks.size(), -1);
+    std::vector<LowBlock> Pruned;
+    Pruned.reserve(static_cast<size_t>(
+        std::count(Reachable.begin(), Reachable.end(), true)));
+    for (size_t Old = 0; Old < Func.Blocks.size(); ++Old) {
+      if (!Reachable[Old])
+        continue;
+      OldToNew[Old] = static_cast<int>(Pruned.size());
+      Pruned.push_back(std::move(Func.Blocks[Old]));
+    }
+    for (LowBlock &Block : Pruned) {
+      std::vector<int> Succs;
+      Succs.reserve(Block.Succs.size());
+      for (int Succ : Block.Succs)
+        if (Succ >= 0 && Succ < static_cast<int>(OldToNew.size()) &&
+            OldToNew[Succ] >= 0)
+          Succs.push_back(OldToNew[Succ]);
+      Block.Succs = std::move(Succs);
+      Block.Preds.clear();
+      Block.Id = OldToNew[Block.Id];
+    }
+    for (LowBlock &Block : Pruned)
+      for (int Succ : Block.Succs)
+        Pruned[Succ].Preds.push_back(Block.Id);
+    Func.Blocks = std::move(Pruned);
+  }
+
   normalizeEntryBlock(Func);
+  PublishedReachableInsns = std::move(CurrentReachableInsns);
+  Func.ModuleAnalysisRoots.clear();
+  for (va_t Root : CurrentAnalysisRoots)
+    if (PublishedReachableInsns.count(Root))
+      Func.ModuleAnalysisRoots.insert(Root);
   linkExceptionalSuccessors(Func);
   extractJumpTables(Func);
   fixupFpuStack(Func);

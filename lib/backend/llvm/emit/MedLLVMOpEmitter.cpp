@@ -205,6 +205,14 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     break;
   }
   case NdOp::INT_ADD: {
+    // R_386_GOTPC is a relocation-defined scalar model, not an ordinary
+    // address addition.  LowIR proves the exact get-PC input and relocation
+    // field on the final CFG; LowToMed then binds that exact output after SSA
+    // and propagation.  Emit zero only for that complete occurrence identity.
+    if (valueIsAuthenticatedModelZero(Op.Output)) {
+      Result = llvm::ConstantInt::get(sizeToType(Op.Output.Size), 0);
+      break;
+    }
     if (auto *Dyn = tryResolveDynVlaAddr(Op, Builder)) {
       Result = Dyn;
       break;
@@ -739,6 +747,17 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   }
   case NdOp::LOAD: {
     auto *ValTy = sizeToType(Op.Output.Size);
+    // A resolver-authenticated target LOAD whose entire post-SSA value flow is
+    // consumed by this recovered switch does not need to read the suppressed
+    // code-pointer relocation bytes at all.  The branch emitter replaces its
+    // sole terminal use with the selector switch; leaving the raw LOAD in the
+    // rebuilt IR would instead demand a global relocation mirror for slots the
+    // same JT deliberately and exclusively owns.  The helper requires exact
+    // Addr+OriginSeq+width, storage-role, and all-use certificates.
+    if (recoveredJumpTableForLoad(Op)) {
+      Result = llvm::ConstantInt::get(ValTy, 0);
+      break;
+    }
     llvm::Value *Ptr = nullptr;
     const MedVar &AddrVar = Op.Inputs[0];
     if (Op.NumInputs >= 1 && Img)
@@ -757,7 +776,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // path.
       {
         bool AllowImplicitZeroBase = false;
-        if (const JumpTable *JT = recoveredJumpTableForLoad(Op))
+        if (const JumpTable *JT = authenticatedJumpTableForLoad(Op))
           AllowImplicitZeroBase = JT->HasBaseAddr && JT->BaseAddr == 0;
         Ptr = tryResolveCodePtrTablePtr(AddrVar, Builder, AllowImplicitZeroBase,
                                         &Op.Output);

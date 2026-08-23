@@ -19,6 +19,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 
 #include <map>
@@ -38,6 +39,32 @@ public:
   /// sanity checking can reject targets that overlap other functions.
   void setKnownFuncEntries(const std::set<va_t> *Entries) {
     KnownFuncEntries = Entries;
+  }
+
+  /// Freeze module-wide relocation consumers discovered after the first
+  /// per-function LowIR pass.  A protected slot may still be physical table
+  /// storage, but it must remain an independent CFG root and LLVM mirror
+  /// field.  The pointed-to set must outlive build().
+  void setProtectedJumpTableRelocationSlots(const std::set<va_t> *Slots) {
+    ProtectedJumpTableRelocationSlots = Slots;
+  }
+
+  /// Reject table metadata whose runtime storage is written by another
+  /// function.  The module LowIR pass discovers these writes only after every
+  /// provisional function has been built, then freezes the affected indirect
+  /// branch addresses while rebuilding their owners.  A stale static switch
+  /// is not a safe substitute for mutable table contents.
+  void setUnsafeJumpTableBranches(const std::set<va_t> *Branches) {
+    UnsafeJumpTableBranches = Branches;
+  }
+
+  /// Module evidence exhaustion restores every relocation root, which can
+  /// expose a table-shaped branch whose final role proof then fails before a
+  /// JumpTable record exists.  In that fail-closed rebuild, keep only branches
+  /// whose resolver actually claimed a table shape as INDIR_BR; unrelated
+  /// function-pointer tail calls retain their ordinary INDIR_CALL lowering.
+  void setPreservePotentialJumpTableBranches(bool Preserve) {
+    PreservePotentialJumpTableBranches = Preserve;
   }
 
 private:
@@ -78,6 +105,8 @@ private:
   /// page start is never sufficient, and a register adjusted by a nonzero
   /// PAGEOFF remains an AddressFragment for the ordinary address fold.
   void completeExactAArch64PageBases(const BinaryImage &Img);
+  void completeExactARMRelativeLiteralAddresses(const BinaryImage &Img);
+  void completeExactI386GOTBaseModels(const BinaryImage &Img);
   void splitBlocks();
   void linkSuccessors(LowFunc &Func, const std::map<va_t, int> &AddrToBlock);
   void linkExceptionalSuccessors(LowFunc &Func);
@@ -156,6 +185,90 @@ private:
   // by extractJumpTables to populate LowFunc::JumpTables.
   //===--------------------------------------------------------------------===//
 
+  struct JumpTableValueOccurrence {
+    NdVar Value = {};
+    va_t Addr = InvalidVA;
+    int Seq = -1;
+    bool DefinedAtPoint = false;
+
+    bool operator==(const JumpTableValueOccurrence &Other) const = default;
+  };
+
+  enum class JumpTableValueRelation : uint8_t {
+    /// Every feasible reaching value must equal one authenticated alternative.
+    MustEqual,
+    /// At least one feasible reaching value contains an authenticated
+    /// producer.  This is used for fail-closed domain-taint checks: a
+    /// condition-executed mask/offset is not a finite-domain proof, but any
+    /// path from that definition to the real table index makes byte/relocation
+    /// run fallbacks unsafe.
+    MayDepend,
+    /// Every feasible bit-pattern of the exact value at this use is strictly
+    /// below UnsignedUpperBound.  This is a complete bit-vector proof over the
+    /// resolver's CFG/lane-aware expression, not a sampled range or a table
+    /// storage-capacity inference.
+    UnsignedLessThan,
+  };
+
+  struct JumpTableValueQuery {
+    NdVar Candidate = {};
+    va_t UseAddr = InvalidVA;
+    int UseSeq = -1;
+    std::vector<JumpTableValueOccurrence> Alternatives;
+    bool AllowZeroExtension = false;
+    bool AllowSignExtension = false;
+    JumpTableValueRelation Relation = JumpTableValueRelation::MustEqual;
+    uint64_t UnsignedUpperBound = 0;
+    /// Do not apply the role-neutral architectural-address owner wildcard.
+    /// Scalar-model certificates use this to require the exact raw-PC owner
+    /// carried by their authenticated producer occurrence.
+    bool RequireExactAddressOwner = false;
+  };
+
+  /// Occurrence-level certificate for one physical LOAD in a recovered table
+  /// shape.  Composite tables carry one role per layer/run (for example the
+  /// outer byte-index LOAD and inner address LOAD of a two-level dispatch).
+  /// AddressScale is the byte multiplier in the actual LOAD address; an
+  /// already pre-scaled byte offset therefore uses 1, independently of the
+  /// table's entry width/physical stride.
+  struct JumpTableLoadRole {
+    JumpTableValueOccurrence Load;
+    uint16_t LoadWidth = 0;
+    std::vector<va_t> AllowedBases;
+    std::vector<JumpTableValueOccurrence> Indices;
+    /// Exact dynamic operand of the final table-address ADD.  For a scaled
+    /// table this is the MULT/LEFT output; for a pre-scaled table it is the
+    /// byte offset itself.  Composite selector consumers need this byte
+    /// coordinate, not the logical slot index recorded in Indices.
+    JumpTableValueOccurrence AddressIndex;
+    uint64_t AddressScale = 0;
+    bool AllowZeroExtension = false;
+    bool AllowSignExtension = false;
+
+    /// Exact runtime table-base SELECT, when present.  Keeping its condition
+    /// and true/false arm mapping prevents a lexical sibling SELECT from
+    /// reversing the two-table selector polarity in the emitter.
+    bool HasBaseSelect = false;
+    bool HasBaseMaskBlend = false;
+    JumpTableValueOccurrence SelectedBase;
+    JumpTableValueOccurrence SelectCondition;
+    va_t TrueBase = 0;
+    va_t FalseBase = 0;
+
+    /// Exact `(A & M) | (B & ~M)` base merge.  The recorded input-side
+    /// mapping keeps the positive-mask and negated-mask arms tied to their
+    /// concrete table owners instead of treating {A,B} as an unordered set.
+    JumpTableValueOccurrence PositiveBlendArm;
+    JumpTableValueOccurrence NegativeBlendArm;
+    JumpTableValueOccurrence PositiveMask;
+    JumpTableValueOccurrence NegativeMask;
+    uint8_t PositiveBlendInputSide = 0;
+    uint8_t PositiveBaseInputSide = 0;
+    uint8_t NegativeBaseInputSide = 0;
+
+    bool operator==(const JumpTableLoadRole &Other) const = default;
+  };
+
   struct JumpTableInfo {
     va_t BaseAddr = 0;
     bool HasBaseAddr = false;
@@ -168,6 +281,28 @@ private:
     /// entries and therefore uses EntrySize.
     uint64_t EntryStride = 0;
     uint32_t MaxEntries = 0;
+    /// Number of physical slots authenticated by relocation/object storage.
+    /// This is capacity only: it never proves that the runtime selector is in
+    /// range.  MaxEntries is published only after an independent exact index
+    /// domain (guard, mask, modulo, or composite recipe) is established.
+    uint32_t PhysicalCapacity = 0;
+    bool IndexDomainAuthenticated = false;
+    /// Exact proof witnesses retained so a provisional relocation-root
+    /// suppression can be revalidated after final runtime slots shrink the
+    /// candidate's ownership.  Capacity is never a substitute for any of
+    /// these witnesses.
+    uint32_t AuthenticatedGuardBound = 0;
+    uint32_t AuthenticatedModuloBound = 0;
+    std::vector<uint32_t> AuthenticatedMaskCoordinates;
+    /// Exact physical storage runs owned by this recovery.  Strategies with a
+    /// single dispatch table may leave this empty and let extraction derive
+    /// one range from BaseAddr/MaxEntries/EntryIndices.  Composite strategies
+    /// must populate every disjoint run explicitly.
+    std::vector<JumpTableStorageRange> StorageRanges;
+    /// Exact code-pointer relocation slots consumed exclusively by this
+    /// dispatch.  Unlike StorageRanges, this is an occurrence-level permission
+    /// to suppress an otherwise independent relocation root/mirror field.
+    std::vector<va_t> SuppressibleRelocationSlots;
     bool IsRelative = false;
     bool IsSigned = false;
 
@@ -177,18 +312,23 @@ private:
     /// (which such a table lacks) is skipped.
     bool RelocAbsolute = false;
 
-    /// Set when MaxEntries was derived from a relocation run (absolute OR the
-    /// PC-relative entries of a `switch(x % N)` table, whose modulus bounds the
-    /// index with no `cmp`/range guard).  The run length is the exact count, so
-    /// the guard search and normalization/stride adjustments are skipped — but
-    /// unlike RelocAbsolute the entry decoding (relative/signed) is unchanged.
+    /// Legacy layout marker retained for composite strategies whose runtime
+    /// domain is independently authenticated.  A relocation run by itself is
+    /// recorded only in PhysicalCapacity and must never set this flag.
     bool RelocBounded = false;
 
-    /// Compact-table form (AArch64 `ldrb`/`ldrh` + `adr anchor` + `add anchor,
-    /// entry, lsl #k` + `br`): entries are read from BaseAddr but each target
-    /// is `TargetBase + entry * EntryScale` rather than `BaseAddr + entry`.
-    /// When TargetBase is 0 the relative base is BaseAddr and EntryScale is 1.
+    /// Compact/separate-anchor relative-table form (AArch64 `ldrb`/`ldrh` +
+    /// `adr anchor` + `add anchor, entry, lsl #k` + `br`): entries are read
+    /// from BaseAddr but each target is `TargetBase + entry * EntryScale`
+    /// rather than `BaseAddr + entry`.  HasTargetBase distinguishes this form
+    /// from an ordinary table even when a relocatable image maps the anchor at
+    /// the valid address zero.
     va_t TargetBase = 0;
+    bool HasTargetBase = false;
+    void setTargetBase(va_t Address) {
+      TargetBase = Address;
+      HasTargetBase = true;
+    }
     uint32_t EntryScale = 1;
 
     /// Normalization parameters: table_index = (switch_var - NormBase) >>
@@ -211,6 +351,12 @@ private:
     /// BaseAddr; the emitter synthesizes a byte-offset selector.  See JumpTable
     /// for details.
     bool TwoTableSelect = false;
+
+    /// A composite detector recognized a distinguishing two-table/two-level
+    /// dataflow shape.  If its occurrence, domain, or mutation certificate
+    /// fails, generic single-table strategies must not recover only one arm or
+    /// the inner table.
+    bool CompositeShapeClaimed = false;
 
     /// Two-level (index-byte) table dispatch: a compact byte/halfword *index*
     /// table maps the switch variable to a small entry index, which then
@@ -241,6 +387,45 @@ private:
     /// table bound.
     uint64_t IndexReg = InvalidVA;
 
+    /// Exact register/temp view consumed by the table-address index expression,
+    /// together with that operand's LowIR use point.  Offset-only register
+    /// names are not value identities: W1 and X1 have different views, AH is a
+    /// distinct lane, and one physical register can have several lifetimes in
+    /// the same block.  Keeping the exact NdVar also retains explicit
+    /// zero/sign-extension and subpiece semantics in the reaching-value proof.
+    NdVar IndexValueAtUse = {};
+    va_t IndexUseAddr = InvalidVA;
+    int IndexUseSeq = -1;
+    /// Internal comparison mode used by occurrence-level target provenance:
+    /// IndexValueAtUse denotes the output defined by the operation at the
+    /// point, so resolution begins immediately after it.  Normal table-index
+    /// evidence denotes an input and leaves this false.
+    bool IndexValueDefinedAtUse = false;
+    /// Optional set form used by the shared target-origin proof.  A value at a
+    /// CFG join is accepted only when every merge arm resolves to one of these
+    /// authenticated occurrences.
+    std::vector<JumpTableValueOccurrence> IndexValueAlternatives;
+
+    /// Exact table LOAD point.  This is distinct from IndexUseAddr: a compiler
+    /// may materialize the scaled address, clobber the source register, and
+    /// only then issue the LOAD.  Guard control/dominance is checked against
+    /// the memory access, while value identity is checked at IndexUseAddr.
+    va_t TableLoadAddr = InvalidVA;
+    int TableLoadSeq = -1;
+
+    /// Exact LOAD occurrence whose value participates in the actual indirect
+    /// branch target.  This differs from TableLoadAddr for a two-level table:
+    /// the outer index-table LOAD is where the guard applies, while the inner
+    /// address-table LOAD produces the target.  Every publishing strategy must
+    /// fill this occurrence and pass the shared branch-target dependency proof.
+    std::vector<JumpTableValueOccurrence> TargetLoads;
+
+    /// Exact address roles for every table LOAD that participates in the
+    /// recovered shape.  TargetLoads proves value-flow into INDIR_BR;
+    /// LoadRoles independently proves that those occurrences (and any outer
+    /// index LOAD) read the declared physical table at the declared index.
+    std::vector<JumpTableLoadRole> LoadRoles;
+
     /// The actual table slot index of each kept target, in Targets order.  A
     /// bounded table may skip don't-care slots whose entry points outside the
     /// function (a peeled switch clang proved unreachable points its dead cases
@@ -248,6 +433,15 @@ private:
     /// indices — recoverCaseLabels must use these real indices for case values
     /// rather than the compacted Targets position.
     std::vector<uint32_t> EntryIndices;
+
+    /// Exact runtime selector coordinates and their corresponding physical
+    /// table slots.  A mask such as `x & 0x1e` has coordinates/slots
+    /// {0,2,...,30}; an already pre-scaled `x & 0x38` has coordinates
+    /// {0,8,...,56} but packed physical slots {0,1,...,7}.  Keeping the two
+    /// domains separate avoids treating a coordinate cover as an entry count.
+    /// Both vectors are ordered, unique, and have identical sizes.
+    std::vector<uint32_t> RuntimeCaseLabels;
+    std::vector<uint32_t> RuntimeSlotIndices;
 
     /// The complete, ordered target set of a table whose entries do not lie in
     /// one contiguous run and therefore cannot be reconstructed by a single
@@ -261,6 +455,27 @@ private:
     /// Precise modular-arithmetic value range for the switch variable.
     /// When non-empty, MaxEntries is derived from this range.
     CircleRange GuardRange;
+
+    /// This recovery consumed a whole-CFG reaching-value / dominance proof.
+    /// Such a result is provisional while newly discovered table targets can
+    /// still add predecessors or backedges.  multiStageResolve revalidates it
+    /// after every CFG extension until the target sets reach a fixed point.
+    bool RequiresCompleteCFGProof = false;
+
+    /// At least one conditional branch controls the table LOAD in the complete
+    /// resolver CFG.  If none of those branches can be tied to the exact index
+    /// value, an unbounded read may not substitute for the missing proof.
+    bool HasControllingGuard = false;
+
+    /// A controlling condition was tied to the exact table-index occurrence,
+    /// but its complete bit-domain was not a dense zero-based prefix (or the
+    /// exact proof exhausted its budget).  A relocation run is physical
+    /// storage evidence, not a replacement index-domain certificate, so this
+    /// state blocks that fallback unless a separate complete mask/modulo proof
+    /// establishes the runtime domain.
+    bool IncompleteGuardDomain = false;
+
+    bool operator==(const JumpTableInfo &Other) const = default;
   };
 
   bool sliceBackForTableBase(const InsnRecord &Rec, JumpTableInfo &Info);
@@ -331,17 +546,22 @@ private:
   bool analyzeTableLoadAddr(const std::vector<LowOp> &Ops, int FromIdx,
                             const NdVar &AddrV, uint64_t &BaseReg,
                             uint64_t &IndexReg, bool &HasScaledIndex,
-                            uint64_t &Disp, va_t *AddrAddVA = nullptr) const;
+                            uint64_t &Disp, va_t *AddrAddVA = nullptr,
+                            NdVar *IndexValue = nullptr,
+                            va_t *IndexUseAddr = nullptr,
+                            int *IndexUseSeq = nullptr) const;
   // Detect a size-optimized computed goto whose entry-size scale is folded into
   // the index (`shr idx,3; and idx,0x38; jmp *(table,idx)` — scale 1, the index
   // is already a byte offset).  Such a load carries no INT_MULT/INT_LEFT for
   // analyzeTableLoadAddr to anchor on, so it is matched here, gated on a run of
   // absolute code-pointer relocations at the folded base — the verifiable
   // signature of a label table that no plain pointer load or tail call shares.
-  bool detectUnscaledRelocTableLoad(const BinaryImage &Img,
-                                    const InsnRecord &Rec, uint64_t &BaseReg,
-                                    uint64_t &IndexReg, uint16_t &LoadWidth,
-                                    uint64_t &Disp, va_t &TableAddr) const;
+  bool detectUnscaledRelocTableLoad(
+      const BinaryImage &Img, const InsnRecord &Rec, uint64_t &BaseReg,
+      uint64_t &IndexReg, uint16_t &LoadWidth, uint64_t &Disp, va_t &TableAddr,
+      NdVar *LoadOutput = nullptr, va_t *LoadAddr = nullptr,
+      int *LoadSeq = nullptr, NdVar *IndexValue = nullptr,
+      va_t *IndexUseAddr = nullptr, int *IndexUseSeq = nullptr) const;
   // Detect a runtime-selected table base (`base = cond ? A : B; jmp
   // *base[idx]`), where A and B are two adjacent code-pointer tables (clang
   // lowers a computed goto whose label table is chosen at runtime, e.g. `tbl =
@@ -371,7 +591,10 @@ private:
                                    const InsnRecord &Rec,
                                    const std::vector<LowOp> &Ops, int LoadIdx,
                                    uint16_t EntryWidth, va_t &TableAddr,
-                                   uint64_t &IndexReg, uint32_t &Scale) const;
+                                   uint64_t &IndexReg, uint32_t &Scale,
+                                   NdVar *IndexValue = nullptr,
+                                   va_t *IndexUseAddr = nullptr,
+                                   int *IndexUseSeq = nullptr) const;
   std::optional<uint64_t> foldRegConstant(const BinaryImage &Img,
                                           const InsnRecord &Rec, uint64_t Reg,
                                           va_t CutoffAddr = InvalidVA) const;
@@ -410,18 +633,20 @@ private:
   /// Recover the entry count from an AND mask that confines the table index.
   /// By default only a clean contiguous low-bit mask (`2^k - 1`) is accepted,
   /// since it exactly bounds the index to [0, 2^k).  With \p AllowNonContiguous
-  /// set, an arbitrary mask is rounded up to its covering mask (all bits below
-  /// the top set bit filled) — a sound upper bound on the raw masked value —
-  /// which bounds a `switch(x & M)` table whose M is not `2^k - 1` (the table
-  /// is then dense over the raw index with filler in the gaps).  The
-  /// non-contiguous form is opt-in so it is used only as a last resort, where
-  /// no other strategy bounded the table.
-  uint32_t inferBoundsFromMask(const InsnRecord &Rec, const JumpTableInfo &Info,
-                               bool AllowNonContiguous = false) const;
+  /// set, an arbitrary mask supplies its exact raw-coordinate span [0,M], which
+  /// bounds a `switch(x & M)` table whose M is not `2^k - 1` (the table is then
+  /// dense over the raw index with filler in the gaps).  When that form
+  /// supplies the returned proof, \p UsedNonContiguous is set so consumers do
+  /// not mistake its zero-bit gaps for a case-label stride.
+  uint32_t inferBoundsFromMask(
+      const InsnRecord &Rec, const JumpTableInfo &Info,
+      bool AllowNonContiguous = false, bool *IncompleteIndexDomain = nullptr,
+      bool *UsedNonContiguous = nullptr,
+      std::vector<uint32_t> *FeasibleCoordinates = nullptr) const;
   void detectNormalization(const InsnRecord &Rec, JumpTableInfo &Info);
   void detectStride(const InsnRecord &Rec, JumpTableInfo &Info);
   uint32_t pullBackBound(uint32_t RawBound, const JumpTableInfo &Info) const;
-  void recoverCaseLabels(JumpTable &JT, const JumpTableInfo &Info) const;
+  bool recoverCaseLabels(JumpTable &JT, const JumpTableInfo &Info) const;
   std::vector<va_t>
   readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
                    std::vector<uint32_t> *KeptIndices = nullptr);
@@ -466,8 +691,64 @@ private:
   CircleRange extractGuardRange(const std::vector<LowOp> &Ops, const LowOp &Op,
                                 int VarSize) const;
   bool refineRangeFromGuards(const InsnRecord &Rec, JumpTableInfo &Info);
-  bool guardUsesInclusiveCompare(const InsnRecord &Rec, uint64_t IndexReg,
+  /// Derive a dense zero-based table bound only from CFG- and lane-proven
+  /// conditional branches.  The condition expression itself must have one
+  /// unambiguous reaching definition, its index leaf must denote the exact
+  /// table-index value at the comparison use, and the table-reaching branch
+  /// polarity is evaluated explicitly.  Sequential guards intersect; no
+  /// address-ordered comparison or same-location shortcut participates.
+  bool inferBoundsFromPreciseGuards(const InsnRecord &Rec, JumpTableInfo &Info);
+  bool guardUsesInclusiveCompare(const InsnRecord &Rec,
+                                 const JumpTableInfo &Info,
                                  uint64_t Bound) const;
+  /// Prove that Candidate at its exact LowIR use point denotes the same value
+  /// as the table index.  Every CFG predecessor must agree; sibling-only or
+  /// path-ambiguous definitions fail closed.  The optional extension matches
+  /// are semantic (not width-erasing aliases): they accept only an explicit
+  /// ZEXT/SEXT from Candidate to the exact index value.
+  bool tableIndexMatchesValueAtUse(const NdVar &Candidate, va_t UseAddr,
+                                   int UseSeq, const JumpTableInfo &Info,
+                                   bool AllowZeroExtension = false,
+                                   bool AllowSignExtension = false) const;
+  std::vector<bool>
+  tableValuesMatchAtUses(const std::vector<JumpTableValueQuery> &Queries,
+                         bool *AnalysisComplete = nullptr) const;
+  /// Prove that the actual INDIR_BR input is derived from the strategy's exact
+  /// TargetLoad occurrence on every feasible path.  Mere address co-occurrence
+  /// in static scans or emulation is not sufficient.
+  bool branchTargetDependsOnTableLoad(const InsnRecord &Rec,
+                                      const JumpTableInfo &Info) const;
+  /// Prove that every authenticated target LOAD reads the declared table role
+  /// at that exact occurrence: base + certified-index * physical stride.
+  /// Output-to-branch dependence alone is insufficient when a sibling or
+  /// ambiguous predecessor can supply a different LOAD address.
+  bool tableLoadAddressesMatchRole(JumpTableInfo &Info) const;
+  /// Build the root set used while proving one candidate table.  A
+  /// relocation-discovered interior label is not an independent entry when
+  /// every relocation that names it is a physical slot owned by this exact
+  /// candidate; durable entry/exception roots and labels with any outside
+  /// relocation source remain roots and therefore fail ambiguous proofs
+  /// closed.
+  std::set<va_t> jumpTableProofRoots(const JumpTableInfo &Info) const;
+  std::set<va_t> candidateReachableInstructions(
+      const InsnRecord &Candidate, const std::vector<va_t> &CandidateTargets,
+      const std::set<va_t> &Roots,
+      const std::vector<JumpTableStorageRange> &CandidateStorage) const;
+  /// Prove that the conditional branch at BranchAddr actually gates the table
+  /// LOAD: it dominates the LOAD and only one of its outgoing CFG edges can
+  /// reach the access.  A comparison in a sibling/case-body block is not a
+  /// dispatch guard even when it happens to consume the same register.
+  bool branchControlsTableLoad(va_t BranchAddr,
+                               const JumpTableInfo &Info) const;
+  /// Return the boolean value of a COND_BR condition on the unique edge that
+  /// reaches the table LOAD.  nullopt means the branch does not dominate/gate
+  /// the access or its successor polarity cannot be proved.
+  std::vector<std::optional<bool>>
+  tableLoadConditionValues(llvm::ArrayRef<va_t> BranchAddrs,
+                           const JumpTableInfo &Info,
+                           bool *AnalysisComplete = nullptr) const;
+  std::optional<bool> tableLoadConditionValue(va_t BranchAddr,
+                                              const JumpTableInfo &Info) const;
   bool isValidTarget(const BinaryImage &Img, va_t Target, va_t FuncEntry);
   bool sanityCheckTargets(const BinaryImage &Img,
                           std::vector<va_t> &Targets) const;
@@ -485,10 +766,44 @@ private:
   /// copy in the messier block adopts the most complete recovery.  Returns true
   /// when any branch's target set changed.
   bool reconcileSharedTables(const BinaryImage &Img, Decoder &Dec);
+  bool resolvedJumpTableOwnsStorageAddress(
+      va_t Address, const std::set<va_t> *ReachableInsnFilter = nullptr) const;
 
   /// Cached JumpTableInfo per INDIR_BR address, filled during resolution
   /// and consumed by extractJumpTables to avoid duplicate analysis.
   std::map<va_t, JumpTableInfo> ResolvedTableInfo;
+
+  /// Whole-function predecessor/lane proofs are only conclusive after the
+  /// initial recursive-descent worklist has decoded every direct CFG arm.
+  /// A proof requested during that discovery pass defers the indirect branch
+  /// to multiStageResolve instead of publishing a result from a partial CFG.
+  bool JumpTableProofContextComplete = false;
+  mutable bool RequestedCompleteJumpTableProof = false;
+
+  /// Entry points that remain legitimate disconnected CFG roots even when a
+  /// provisional jump-table target is later removed.  This includes the
+  /// function entry, relocation-proven labels, and exception handlers/landing
+  /// pads.  Relocation-free code references are conditional roots tracked by
+  /// DiscoveredCodeRefSources: they survive only while a reachable instruction
+  /// still takes their address.
+  std::set<va_t> PersistentCFGRoots;
+  /// Roots whose reachability is independent of code-pointer table storage:
+  /// the function entry and exception/runtime entries.  These may never be
+  /// suppressed by a candidate table proof.
+  std::set<va_t> DurableCFGRoots;
+  /// Relocation-proven interior roots and every concrete code-pointer slot
+  /// that names them.  Keeping the sources, rather than just target numbers,
+  /// lets a candidate suppress a computed-goto case root only when it owns all
+  /// evidence for that root.
+  std::map<va_t, std::set<va_t>> RelocationCFGRootSources;
+  /// Candidate-specific roots shared by all occurrence/lane proof queries in
+  /// one resolveJumpTable invocation.
+  mutable std::optional<std::set<va_t>> ActiveJumpTableProofRoots;
+  /// Instruction starts in the most recently rebuilt public CFG.  Resolver
+  /// metadata for decoded-but-pruned provisional cases remains cached for
+  /// revalidation, but it must not arbitrate table storage or conditional code
+  /// roots until its branch is reachable again.
+  std::set<va_t> PublishedReachableInsns;
 
   std::map<va_t, InsnRecord> Insns;
   std::set<va_t> BlockStarts;
@@ -505,15 +820,49 @@ private:
   /// sorted std::set), so this set's own iteration order does not affect
   /// output.
   llvm::DenseSet<va_t> DiscoveredCodeRefs;
+  std::map<va_t, std::set<va_t>> DiscoveredCodeRefSources;
   uint64_t DecodedInstructionCount = 0;
   uint64_t LiftedInstructionCount = 0;
+  /// Exact instruction starts successfully decoded/lifted during recursive
+  /// descent.  The public coverage inventory is filtered through the final
+  /// published CFG, so provisional jump-table cases do not survive merely
+  /// because their bytes were explored once.
+  std::set<va_t> DecodedInstructionAddresses;
+  std::set<va_t> LiftedInstructionAddresses;
   std::set<va_t> DecodeFailureAddresses;
   std::set<va_t> UnsupportedInstructionAddresses;
   std::set<va_t> TruncatedPathAddresses;
+  std::vector<RelocatedInstructionAddressOccurrence>
+      RelocatedInstructionAddressOccurrences;
+  std::vector<I386GetPcOccurrence> I386GetPcOccurrences;
+  std::vector<RelocatedInstructionScalarModelOccurrence>
+      RelocatedInstructionScalarModelOccurrences;
+  /// Exact table-base anchors materialized by relocation occurrences whose
+  /// source instruction belongs to the currently published proof graph.
+  /// Recomputed after each CFG rebuild so a speculative/pruned LEA cannot
+  /// remain a permanent next-anchor/storage-bound fact.
+  std::set<va_t>
+  currentRelocatedInstructionTableAnchors(const BinaryImage &Img) const;
   va_t CurrentFuncEntry = 0;
+  /// Conservative decode/exploration envelope.  The next independently
+  /// detected entry may bound this interval, but does not prove ownership of
+  /// every interior address.
   std::optional<std::pair<va_t, va_t>> CurrentFuncRange;
+  /// Function body range backed by positive ownership metadata: an exact-start
+  /// primary unwind record, KnownCodeRange, or sized function symbol.  A rough
+  /// next-entry boundary must never populate this range.
+  std::optional<std::pair<va_t, va_t>> AuthoritativeCurrentFuncRange;
   const BinaryImage *CurrentImg = nullptr;
   const std::set<va_t> *KnownFuncEntries = nullptr;
+  const std::set<va_t> *ProtectedJumpTableRelocationSlots = nullptr;
+  const std::set<va_t> *UnsafeJumpTableBranches = nullptr;
+  std::set<va_t> PotentialJumpTableBranches;
+  /// Indirect branches that published a validated jump table during this
+  /// build but lost every target after the final fixed-point revalidation.
+  /// They remain opaque INDIR_BR terminators: treating the now-unprovable
+  /// guest dispatch as a function-pointer tail call would change semantics.
+  std::set<va_t> LostValidatedJumpTableBranches;
+  bool PreservePotentialJumpTableBranches = false;
 };
 
 } // namespace neverd

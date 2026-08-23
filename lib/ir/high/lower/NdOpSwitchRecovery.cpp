@@ -73,7 +73,7 @@ static bool traceLoadedSwitchIndex(const MedBlock &Blk, const MedVar &Target,
 // lowerSwitchFromJumpTable
 //===----------------------------------------------------------------------===//
 
-void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
+bool MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
                                                   const MedBlock &CurBlock,
                                                   const MedOp &CurOp,
                                                   const MedFunc &Med,
@@ -88,7 +88,50 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
   // must be preserved verbatim.
   MedVar SwitchMedVar;
   bool HaveMedVar = false;
+  bool SelectorResolved = false;
   bool PeelOK = false;
+  uint16_t SelectorSize = 0;
+
+  auto PlanIt = Med.SwitchSelectorPlans.find(JT.InsnAddr);
+  if (PlanIt != Med.SwitchSelectorPlans.end() &&
+      PlanIt->second.PlanKind == MedSwitchSelectorPlan::Kind::Direct &&
+      PlanIt->second.Selector.Size != 0 &&
+      PlanIt->second.Selector.Size == PlanIt->second.ResultSize &&
+      !PlanIt->second.Selector.isConst()) {
+    SwitchMedVar = PlanIt->second.Selector;
+    HaveMedVar = true;
+    SelectorResolved = true;
+    PeelOK = !JT.PreScaledIndex && !JT.TwoLevelIndex;
+  } else if (PlanIt != Med.SwitchSelectorPlans.end() && JT.TwoTableSelect &&
+             JT.CompositeSelectorUseRef &&
+             PlanIt->second.PlanKind ==
+                 MedSwitchSelectorPlan::Kind::SelectOffset &&
+             PlanIt->second.Selector.Size != 0 &&
+             PlanIt->second.Selector.Size == PlanIt->second.ResultSize &&
+             !PlanIt->second.Selector.isConst() &&
+             PlanIt->second.Condition.Size != 0 &&
+             !PlanIt->second.Condition.isConst()) {
+    auto Offset = std::make_shared<HighExpr>();
+    Offset->Kind = ExprKind::BinOp;
+    Offset->Op = NdOp::SELECT;
+    Offset->Operands.push_back(medvarToExpr(PlanIt->second.Condition));
+    Offset->Operands.push_back(HighExpr::makeConst(PlanIt->second.TrueOffset,
+                                                   PlanIt->second.ResultSize));
+    Offset->Operands.push_back(HighExpr::makeConst(PlanIt->second.FalseOffset,
+                                                   PlanIt->second.ResultSize));
+    Offset->Type = NdType::makeInt(PlanIt->second.ResultSize);
+    SwitchVar = HighExpr::makeBinop(
+        NdOp::INT_ADD, medvarToExpr(PlanIt->second.Selector), Offset);
+    SelectorSize = PlanIt->second.ResultSize;
+    SelectorResolved = true;
+  } else if (!JT.SelectorUseRefs.empty() || JT.CompositeSelectorUseRef ||
+             JT.PreScaledIndex || JT.TwoLevelIndex || JT.TwoTableSelect) {
+    // These shapes cannot be reconstructed from the branch target: the
+    // physical index register may have a later lifetime, and a two-level
+    // target traces to the intermediate address-table index.  Missing or
+    // ambiguous exact occurrence metadata is therefore a hard failure.
+    return false;
+  }
 
   // Prefer the resolver-identified index register (the one that addresses the
   // table load) over the blind backward scan below.  This is essential for
@@ -98,7 +141,7 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
   // would fall back to a constant, collapsing the switch to a single edge.
   // Compact byte/halfword tables likewise dispatch on an index distinct from
   // the loaded entry, so both need this anchor.
-  if (JT.IndexRegOff >= 0) {
+  if (!SelectorResolved && JT.IndexRegOff >= 0) {
     for (int J = static_cast<int>(CurBlock.Ops.size()) - 1;
          J >= 0 && !HaveMedVar; --J) {
       auto &Prev = CurBlock.Ops[J];
@@ -107,6 +150,7 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
             static_cast<int>(Prev.Inputs[I].RegOff) == JT.IndexRegOff) {
           SwitchMedVar = Prev.Inputs[I];
           HaveMedVar = true;
+          SelectorResolved = true;
           PeelOK = true;
           break;
         }
@@ -119,23 +163,25 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
   // reliable dispatch value for a plain relative/absolute table whose scaling
   // lives in the dispatch block while its `add`/`cmp` normalization sits in a
   // predecessor guard block — where the in-block heuristics below find nothing.
-  if (!HaveMedVar && JT.TargetBase == 0 && !JT.PreScaledIndex &&
+  if (!SelectorResolved && !JT.HasTargetBase && !JT.PreScaledIndex &&
       !CurBlock.Ops.empty()) {
     const MedOp &Br = CurBlock.Ops.back();
     if (Br.Opcode == NdOp::INDIR_BR && Br.NumInputs >= 1 &&
         traceLoadedSwitchIndex(CurBlock, Br.Inputs[0], SwitchMedVar)) {
       HaveMedVar = true;
+      SelectorResolved = true;
       PeelOK = true;
     }
   }
 
   for (int J = static_cast<int>(CurBlock.Ops.size()) - 1;
-       !HaveMedVar && J >= 0; --J) {
+       !SelectorResolved && J >= 0; --J) {
     auto &Prev = CurBlock.Ops[J];
     if ((Prev.Opcode == NdOp::INT_ZEXT || Prev.Opcode == NdOp::INT_SEXT) &&
         Prev.NumInputs >= 1 && Prev.Inputs[0].Kind == MedVar::Reg) {
       SwitchMedVar = Prev.Inputs[0];
       HaveMedVar = true;
+      SelectorResolved = true;
       PeelOK = true;
       break;
     }
@@ -144,9 +190,10 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
         Prev.Inputs[1].isConst()) {
       SwitchMedVar = Prev.Inputs[0];
       HaveMedVar = true;
-      // A `sub` is switch-index normalization (`idx = x - lo`) whose base can be
-      // peeled; a mask (`switch(x & m)`) confines the dispatch and must keep its
-      // pre-mask value verbatim (peeling would drop the modular bound).
+      SelectorResolved = true;
+      // A `sub` is switch-index normalization (`idx = x - lo`) whose base can
+      // be peeled; a mask (`switch(x & m)`) confines the dispatch and must keep
+      // its pre-mask value verbatim (peeling would drop the modular bound).
       PeelOK = (Prev.Opcode == NdOp::INT_SUB);
       break;
     }
@@ -154,6 +201,7 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
         Prev.Inputs[0].Kind == MedVar::Reg && Prev.Output.Kind == MedVar::Reg) {
       SwitchMedVar = Prev.Inputs[0];
       HaveMedVar = true;
+      SelectorResolved = true;
       PeelOK = true;
     }
   }
@@ -161,7 +209,7 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
   // If we didn't find a switch variable in the current block, check
   // predecessor blocks for a bounds-check pattern (CMP / SUB feeding
   // the COND_BR) which often uses the switch variable.
-  if (!HaveMedVar) {
+  if (!SelectorResolved) {
     for (auto PredId : CurBlock.Preds) {
       if (PredId < 0 || PredId >= static_cast<int>(Med.Blocks.size()))
         continue;
@@ -175,9 +223,10 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
             PIt->Inputs[1].isConst()) {
           SwitchMedVar = PIt->Inputs[0];
           HaveMedVar = true;
-          // A range guard (`cmp idx,N`) or subtract-normalization constrains the
-          // switch index and is peelable; a mask (`and idx,m`) confines it and
-          // must be kept verbatim.
+          SelectorResolved = true;
+          // A range guard (`cmp idx,N`) or subtract-normalization constrains
+          // the switch index and is peelable; a mask (`and idx,m`) confines it
+          // and must be kept verbatim.
           PeelOK = (PIt->Opcode != NdOp::INT_AND);
           break;
         }
@@ -195,19 +244,35 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
   // affine step off the dispatch variable and shifting every label by the
   // inverse constant is an exact equivalence — the recovered switch selects the
   // same block for every input — that restores the original variable and
-  // labels.  Applied only when the resolver did not already express labels in
-  // the source coordinate (JT.CaseLabels, set for compact/pre-scaled/gapped
-  // tables) and the selection is a plain index (PeelOK).
-  int64_t LabelDelta = 0;
+  // labels.  CaseLabels are exact keys in the selector's current coordinate;
+  // an ordinary sparse/gapped table may therefore have explicit labels and
+  // still require this inverse affine step.  Compact/pre-scaled and target-base
+  // recipes use a different coordinate and are excluded below.
+  const bool HaveLabels = JT.CaseLabels.size() == JT.Targets.size();
+  std::vector<int64_t> Labels;
+  Labels.reserve(JT.Targets.size());
+  for (size_t K = 0; K < JT.Targets.size(); ++K)
+    Labels.push_back(HaveLabels ? JT.CaseLabels[K] : static_cast<int64_t>(K));
+  uint64_t LabelDelta = 0;
   if (HaveMedVar) {
-    if (PeelOK && JT.CaseLabels.empty() && !JT.PreScaledIndex &&
-        JT.TargetBase == 0)
-      SwitchMedVar = peelAffineSwitchVar(Med, SwitchMedVar, LabelDelta);
+    if (PeelOK && !JT.PreScaledIndex && !JT.HasTargetBase)
+      SwitchMedVar = peelAffineSwitchVar(Med, SwitchMedVar, LabelDelta,
+                                         /*MaxAffine=*/2, &Labels);
+    SelectorSize = SwitchMedVar.Size;
     SwitchVar = medvarToExpr(SwitchMedVar);
   }
 
-  if (!SwitchVar)
-    SwitchVar = HighExpr::makeConst(0, 4);
+  if (!SwitchVar || SelectorSize == 0)
+    return false;
+
+  // Validate the final selector-coordinate bit-patterns before consuming any
+  // target blocks.  A narrow selector cannot represent two distinct recovered
+  // labels that truncate to the same value; keeping such a switch would make
+  // HighIR ambiguous even when LLVM independently fails closed.
+  auto CaseBits = uniqueSwitchCaseBitPatterns(
+      Labels, LabelDelta, static_cast<unsigned>(SelectorSize) * 8u);
+  if (!CaseBits)
+    return false;
 
   std::map<va_t, int> TargetBlock;
   for (auto &MB : Med.Blocks) {
@@ -239,12 +304,6 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
       }
     }
   }
-
-  // Source-faithful case labels: the resolver records the original values in
-  // JT.CaseLabels (for compact/pre-scaled/gapped/normalized tables); when it is
-  // absent the labels are the positional table indices 0..N-1, shifted by any
-  // affine normalization peeled off the dispatch variable above.
-  const bool HaveLabels = JT.CaseLabels.size() == JT.Targets.size();
 
   HighStmt SW;
   SW.Kind = StmtKind::Switch;
@@ -287,14 +346,13 @@ void MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
       SW.DefaultBody = std::move(CaseBody);
     } else {
       SwitchCase SC;
-      int64_t Label = (HaveLabels ? JT.CaseLabels[K] : static_cast<int64_t>(K)) +
-                      LabelDelta;
-      SC.Value = static_cast<uint64_t>(Label);
+      SC.Value = (*CaseBits)[K];
       SC.Body = std::move(CaseBody);
       SW.Cases.push_back(std::move(SC));
     }
   }
   Func.Body.push_back(std::move(SW));
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -305,16 +363,21 @@ void MedToHighConverter::lowerBranchInd(HighFunc &Func,
                                         const MedBlock &CurBlock,
                                         const MedOp &CurOp,
                                         const MedFunc &Med) {
+  const bool MustFailClosed =
+      Med.UnsafeIndirectBranchAddresses.count(CurOp.Addr) != 0;
   // Try to find a matching jump table for switch recovery.
-  for (auto &JTE : JumpTables) {
-    if (JTE.InsnAddr == CurOp.Addr && !JTE.Targets.empty()) {
-      lowerSwitchFromJumpTable(Func, CurBlock, CurOp, Med, JTE);
-      return;
+  if (!MustFailClosed) {
+    for (auto &JTE : JumpTables) {
+      if (JTE.InsnAddr == CurOp.Addr && !JTE.Targets.empty() &&
+          !JTE.MutatedUnsafe) {
+        if (lowerSwitchFromJumpTable(Func, CurBlock, CurOp, Med, JTE))
+          return;
+      }
     }
   }
 
   // No jump table: tail call or plain indirect branch.
-  bool IsTailCall = CurBlock.Succs.empty();
+  bool IsTailCall = !MustFailClosed && CurBlock.Succs.empty();
 
   if (IsTailCall && CurOp.NumInputs >= 1) {
     ExprPtr TargetExpr = medvarToExpr(CurOp.Inputs[0]);

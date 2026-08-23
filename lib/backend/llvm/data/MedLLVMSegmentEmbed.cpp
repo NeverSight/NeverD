@@ -365,20 +365,11 @@ bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
   // jump-table slots must NOT make the run a code-pointer mirror: that would
   // wrongly keep a DATA pointer into the trailing array raw, and a consumer
   // that walks it with pointer arithmetic never re-symbolizes (it would read
-  // the stale original VA → unmapped).  Exclude code-pointer slots that fall
-  // inside a recovered table.
+  // the stale original VA → unmapped).  Exclude only relocation slots that
+  // the candidate-local proof marked exclusively consumed by the dispatch;
+  // physical table storage may also contain an independently used gap field.
   auto inJumpTable = [&](uint64_t S) -> bool {
-    if (!CurMedFunc)
-      return false;
-    for (const auto &JT : CurMedFunc->JumpTables) {
-      if (!JT.HasBaseAddr || JT.EntrySize == 0 || JT.Targets.empty())
-        continue;
-      uint64_t TblEnd =
-          JT.BaseAddr + static_cast<uint64_t>(JT.EntrySize) * JT.Targets.size();
-      if (S >= JT.BaseAddr && S < TblEnd)
-        return true;
-    }
-    return false;
+    return currentJumpTableSuppressesRelocationSlot(S);
   };
   auto inRun = [&](const std::set<uint64_t> &Slots, bool ExcludeJumpTables) {
     for (uint64_t S : Slots)

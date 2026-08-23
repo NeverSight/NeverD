@@ -20,6 +20,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,35 @@ struct MedVar {
   std::string display() const;
 };
 
+/// Selector identity resolved after Low-to-Med SSA and propagation.  Backends
+/// consume this plan instead of rediscovering a value from physical register
+/// numbers or by rescanning a mutable MedIR DAG.
+struct MedSwitchSelectorPlan {
+  enum class Kind : uint8_t { Direct, SelectOffset, EdgeMerged };
+
+  Kind PlanKind = Kind::Direct;
+  /// Direct selector, or byte-coordinate index for SelectOffset.
+  MedVar Selector = {};
+  /// Canonical table-selection condition for SelectOffset.
+  MedVar Condition = {};
+  uint64_t TrueOffset = 0;
+  uint64_t FalseOffset = 0;
+  uint16_t ResultSize = 0;
+  /// One exact selector per direct predecessor of the shared dispatch block.
+  /// Backends may materialize this edge merge without rediscovering values
+  /// from physical register numbers or target-spill address heuristics.
+  std::vector<std::pair<int, MedVar>> EdgeSelectors;
+};
+
+/// Post-SSA binding of a relocation-authenticated scalar address model.
+/// Backends compare the complete MedVar identity; a rewritten, deleted, or
+/// lane-changed defining operation therefore cannot inherit the certificate.
+struct MedScalarAddressModel {
+  RelocatedInstructionScalarModelOccurrence::ModelKind Model =
+      RelocatedInstructionScalarModelOccurrence::ModelKind::I386ELFGOTBaseZero;
+  MedVar Value = {};
+};
+
 struct PhiNode {
   MedVar Output;
   std::vector<std::pair<int, MedVar>> Args;
@@ -101,6 +131,10 @@ struct MedOp {
   MedVar Inputs[6] = {};
   uint8_t NumInputs = 0;
   va_t Addr = 0;
+  /// Sequence number of the original LowOp.  Synthetic MedOps keep -1, so a
+  /// public Low occurrence can be rebound only to its exact surviving op after
+  /// all SSA/fixup/propagation passes have completed.
+  int OriginSeq = -1;
   uint32_t CallSiteId = 0;
   bool Dead = false;
   bool PreservesCallerSaved = false;
@@ -276,6 +310,13 @@ struct MedFunc {
   /// Resolved jump tables (carried from LowFunc) so the LLVM emitter can
   /// lower an INDIR_BR into a switch on the table index.
   std::vector<JumpTable> JumpTables;
+  /// Exact Med SSA selector plans keyed by the indirect-branch address.
+  std::map<va_t, MedSwitchSelectorPlan> SwitchSelectorPlans;
+  std::vector<MedScalarAddressModel> ScalarAddressModels;
+  /// LowIR fail-closed identity for mutable/uncertain indirect branches.  Kept
+  /// separately from JumpTables so HighIR never turns a rejected table back
+  /// into an indirect call merely because the CFG has no static successors.
+  std::set<va_t> UnsafeIndirectBranchAddresses;
   std::optional<ExceptionFunction> ExceptionMetadata;
 
   bool hasTypeInfo() const { return ReturnType != nullptr; }

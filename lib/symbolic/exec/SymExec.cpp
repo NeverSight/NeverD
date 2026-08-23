@@ -410,22 +410,21 @@ StepResult SymExec::stepBits(const LowOp &Op) {
 }
 
 StepResult SymExec::stepMemory(const LowOp &Op) {
+  const LowMemoryOperandView Memory = lowMemoryOperands(Op);
   if (Op.Opcode == NdOp::LOAD) {
-    if (Op.NumInputs < 1 || widthOf(Op.Output) == 0)
+    if (!Memory.Complete || widthOf(Op.Output) == 0)
       return unmodelled(Op);
-    // A load names its address in the last operand it has: a leading space
-    // identifier is present in some lifts and absent in others.
-    const NdVar &AddrVar = Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
-    writeResult(Op.Output, State.load(read(AddrVar), Op.Output.Size));
+    writeResult(Op.Output,
+                State.load(read(*Memory.Address), Memory.AccessSize));
     return StepResult::Continue;
   }
 
   if (Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD) {
-    if (Op.NumInputs < 2 || widthOf(Op.Output) == 0)
+    if (!Memory.Complete || widthOf(Op.Output) == 0)
       return unmodelled(Op);
-    SymRef Addr = read(Op.Inputs[0]);
-    SymRef Old = State.load(Addr, Op.Output.Size);
-    SymRef Value = fit(read(Op.Inputs[1]), widthOf(Op.Output));
+    SymRef Addr = read(*Memory.Address);
+    SymRef Old = State.load(Addr, Memory.AccessSize);
+    SymRef Value = fit(read(*Memory.StoredValue), widthOf(Op.Output));
     writeResult(Op.Output, Old);
     SymRef NewValue =
         Op.Opcode == NdOp::ATOMIC_ADD ? Ctx.mkAdd(Old, Value) : Value;
@@ -437,12 +436,12 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
   }
 
   if (Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
-    if (Op.NumInputs < 3 || widthOf(Op.Output) == 0)
+    if (!Memory.Complete || widthOf(Op.Output) == 0)
       return unmodelled(Op);
-    SymRef Addr = read(Op.Inputs[0]);
-    SymRef Old = State.load(Addr, Op.Output.Size);
-    SymRef Expected = fit(read(Op.Inputs[1]), widthOf(Op.Output));
-    SymRef Desired = fit(read(Op.Inputs[2]), widthOf(Op.Output));
+    SymRef Addr = read(*Memory.Address);
+    SymRef Old = State.load(Addr, Memory.AccessSize);
+    SymRef Expected = fit(read(*Memory.ExpectedValue), widthOf(Op.Output));
+    SymRef Desired = fit(read(*Memory.StoredValue), widthOf(Op.Output));
     writeResult(Op.Output, Old);
     if (!State.store(Addr, Ctx.mkIte(Ctx.mkEq(Old, Expected), Desired, Old))) {
       ++Unmodelled;
@@ -451,11 +450,10 @@ StepResult SymExec::stepMemory(const LowOp &Op) {
     return StepResult::Continue;
   }
 
-  if (Op.NumInputs < 2)
+  if (!Memory.Complete)
     return unmodelled(Op);
-  const bool HasSpace = Op.NumInputs >= 3;
-  SymRef Addr = read(Op.Inputs[HasSpace ? 1 : 0]);
-  SymRef Value = read(Op.Inputs[HasSpace ? 2 : 1]);
+  SymRef Addr = read(*Memory.Address);
+  SymRef Value = read(*Memory.StoredValue);
   if (!State.store(Addr, Value)) {
     ++Unmodelled;
     ++MemoryHavocs;

@@ -65,6 +65,49 @@ struct RelocatedAddressField {
   /// numerically coincide with the next section's first byte.  InvalidVA
   /// means no occurrence-local owner was retained.
   va_t TargetOwnerVA = InvalidVA;
+  /// The encoded field is a signed PC-relative displacement whose complete
+  /// target depends on the containing instruction's end address.  Loaders do
+  /// not know that boundary; CFG lifting recomputes TargetVA occurrence-
+  /// locally before the architecture lifter consumes the field.
+  bool PCRelativeFromInstructionEnd = false;
+};
+
+/// Loader-authenticated instruction whose architectural output materializes a
+/// complete address even though the relocation patches a non-contiguous
+/// instruction bitfield rather than a standalone pointer-sized operand.
+/// AArch64 ADRP+ADD PAGEOFF and ARM MOVW/MOVT pairs are the canonical forms.
+/// Consumers must still bind this record to the exact decoded LowOp output;
+/// the target value alone is never address provenance.
+struct RelocatedInstructionAddressMaterialization {
+  va_t TargetVA = InvalidVA;
+  va_t TargetOwnerVA = InvalidVA;
+};
+
+/// One R_ARM_REL32 literal after the ELF loader has applied it to its mapped
+/// section.  RelocationEntry::Address is a raw section-relative r_offset for
+/// ET_REL inputs, so CFG consumers must use this applied SlotVA-keyed record
+/// rather than trying to match a mapped literal address against the global
+/// relocation list.  EncodedValue is the exact 32-bit displacement written at
+/// SlotVA; TargetVA/TargetOwnerVA retain the relocated symbol identity.
+struct AppliedARMRelativeLiteral {
+  uint32_t EncodedValue = 0;
+  va_t TargetVA = InvalidVA;
+  va_t TargetOwnerVA = InvalidVA;
+
+  bool operator==(const AppliedARMRelativeLiteral &Other) const = default;
+};
+
+/// One i386 R_386_GOTPC field after the ELF loader has applied it at its
+/// mapped instruction address.  The relocation establishes the architectural
+/// model used by NeverD's relocatable image: adding EncodedValue to the exact
+/// get-PC seed ExpectedPCValue produces the model-zero GOT base.  Consumers
+/// must still prove that the matching instruction input reaches that exact PC
+/// seed; the numeric zero alone is never provenance.
+struct AppliedI386GOTPCField {
+  uint32_t EncodedValue = 0;
+  uint32_t ExpectedPCValue = 0;
+
+  bool operator==(const AppliedI386GOTPCField &Other) const = default;
 };
 
 // ===--------------------------------------------------------------------===//
@@ -117,6 +160,26 @@ struct BinaryImage {
   /// producer; its relocated displacement is the complete target under the
   /// loader's GOT-base-zero model.
   std::map<va_t, RelocatedAddressField> DataAddressRelocOperands;
+  /// Exact instruction VA -> complete address written by that instruction.
+  /// Kept separate from DataAddressRelocOperands because PAGEOFF/MovW fields
+  /// are encoded bitfields, not byte-address operands a generic consumer may
+  /// read or use as a relocation slot.
+  std::map<va_t, RelocatedInstructionAddressMaterialization>
+      InstructionAddressMaterializations;
+  /// Exact ADRP/PAGEBASE instruction VA -> symbol target/owner whose page the
+  /// instruction materializes.  A PAGEOFF output is complete only when its
+  /// reaching base is a matching record from this map.
+  std::map<va_t, RelocatedInstructionAddressMaterialization>
+      InstructionPageAddressFragments;
+  /// Applied ARM-state R_ARM_REL32 literal fields keyed by mapped slot VA.
+  /// A record authenticates the literal field only; CFG lifting must still
+  /// prove that an exact LOAD of this slot reaches the architectural PC ADD.
+  std::map<va_t, AppliedARMRelativeLiteral> ARMRelativeLiteralFields;
+  /// Applied i386 R_386_GOTPC fields keyed by mapped relocation-field VA.
+  /// RelocationEntry::Address is section-relative for ET_REL, so CFG/Med
+  /// provenance must consume this mapped occurrence instead of rescanning the
+  /// raw relocation inventory.
+  std::map<va_t, AppliedI386GOTPCField> I386GOTPCFields;
   /// Virtual addresses that a relocation resolves to inside a WRITABLE data
   /// segment (.data/.bss), filled by the loader as it applies relocations.  The
   /// writable counterpart of RelocDataAddrs: it proves a constant is a genuine
@@ -422,6 +485,37 @@ struct BinaryImage {
       if (Sec.isReadable() && Sec.contains(Addr))
         return &Sec;
     return nullptr;
+  }
+
+  /// Verify an occurrence-local relocated target against the section/segment
+  /// owner retained by the loader.  Code addresses must lie strictly inside
+  /// their owner; data addresses may name the one-past value used by C/C++
+  /// address arithmetic.  Numeric adjacency is not ownership: a target equal
+  /// to the next section's base remains one-past the recorded owner.
+  bool relocatedTargetBelongsToOwner(va_t TargetVA, va_t OwnerVA) const {
+    if (OwnerVA == InvalidVA)
+      return false;
+    for (const Section &Sec : Sections) {
+      if (!Sec.isReadable() || Sec.VA != OwnerVA ||
+          Sec.Size > InvalidVA - Sec.VA)
+        continue;
+      const va_t End = Sec.VA + Sec.Size;
+      const bool OwnerIsCode = hasExecutableCodeOwnerAt(OwnerVA);
+      return TargetVA >= Sec.VA &&
+             (OwnerIsCode ? TargetVA < End && hasExecutableCodeOwnerAt(TargetVA)
+                          : TargetVA <= End);
+    }
+    for (const Segment &Seg : Segments) {
+      if (!Seg.isReadable() || Seg.VA != OwnerVA ||
+          Seg.Size > InvalidVA - Seg.VA)
+        continue;
+      const va_t End = Seg.VA + Seg.Size;
+      const bool OwnerIsCode = hasExecutableCodeOwnerAt(OwnerVA);
+      return TargetVA >= Seg.VA &&
+             (OwnerIsCode ? TargetVA < End && hasExecutableCodeOwnerAt(TargetVA)
+                          : TargetVA <= End);
+    }
+    return false;
   }
 
   /// Half-open end of the mapped section/object-storage owner containing

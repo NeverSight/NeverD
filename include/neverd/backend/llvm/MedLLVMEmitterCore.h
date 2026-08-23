@@ -397,14 +397,10 @@ private:
 
   /// Synthesize the byte-offset switch selector for a two-table dispatch
   /// (`base = cond ? A : B; jmp *base[idx]`, see JumpTable::TwoTableSelect):
-  /// the merged table is indexed by `idx_bytes + (cond selects the higher table
-  /// ? TwoTableOffset : 0)`, recovered from the runtime base select (a clean
-  /// SELECT or an `(A&M)|(B&~M)` mask blend) without re-folding the table
-  /// addresses. Returns the selector value, or null when the pattern is not
-  /// matched.
-  llvm::Value *synthesizeTwoTableSelector(const MedBlock &Blk,
-                                          const MedOp &BrOp,
-                                          const JumpTable &JT,
+  /// the merged table is indexed by the exact post-SSA SelectOffset plan
+  /// exported from the resolver-certified Low occurrences.  No MedIR DAG or
+  /// physical-register rescan is permitted here.
+  llvm::Value *synthesizeTwoTableSelector(const JumpTable &JT,
                                           llvm::IRBuilder<> &Builder);
 
   /// Trace an INDIR_BR target var back to the scaled index of its table load,
@@ -872,6 +868,9 @@ private:
   /// data constant, relocatable constant, LOAD, unknown CFG arm, or optional
   /// forbidden recurrence makes the proof fail closed.
   bool constantIsStableAddressOffset(const MedVar &V) const;
+  /// Exact post-SSA value whose LowIR definition was proven to implement the
+  /// loader's scalar model-zero address base (currently i386 ELF GOTPC).
+  bool valueIsAuthenticatedModelZero(const MedVar &V) const;
   bool valueIsStableAddressOffset(const MedVar &V,
                                   const MedVar *Forbidden = nullptr) const;
 
@@ -1059,12 +1058,20 @@ private:
                                          bool AllowImplicitZeroBase = false,
                                          const MedVar *LoadedValue = nullptr);
 
-  /// Return the recovered jump table whose indirect-branch target depends on
-  /// this exact LOAD result and whose entry width matches the LOAD.  JumpTable
-  /// metadata records the branch instruction, not the earlier table LOAD, so
-  /// ownership is a value-flow relation rather than an instruction-address
-  /// equality check.
+  /// Return the recovered jump table that exactly authenticates this LOAD and
+  /// fully consumes its post-SSA value flow at the recovered INDIR_BR.  The
+  /// proof binds Addr+OriginSeq+width, target storage, and every observable
+  /// use; callers may therefore omit the raw target LOAD when its relocation
+  /// slots were intentionally suppressed from the independent pointer mirror.
   const JumpTable *recoveredJumpTableForLoad(const MedOp &Load) const;
+
+  /// Return the recovered table that authenticates this exact LOAD address and
+  /// storage role, without requiring the loaded value to be terminal-exclusive.
+  /// This is sufficient to address the preserved relocation mirror; it is not
+  /// permission to replace the LOAD with zero or suppress its slots.
+  const JumpTable *authenticatedJumpTableForLoad(const MedOp &Load) const;
+  const JumpTable *jumpTableForLoad(const MedOp &Load,
+                                    bool RequireTerminalExclusive) const;
 
   /// Resolve a load/store whose address folds to a constant inside a segment
   /// holding relocated pointer slots — a *writable* function-pointer global
@@ -1295,11 +1302,18 @@ private:
   /// that would otherwise freeze an original function VA.
   bool operationUsesRelocatableCodeIdentity(NdOp Opcode) const;
 
-  /// True when the current function's recovered jump-table metadata owns
-  /// \p Addr as table storage.  Inline switch tables may live in an instruction
-  /// section, so layout execute permission alone cannot turn their generic
-  /// PC-relative address into a code identity.
+  /// True when any recovered jump table in the emitted module owns \p Addr as
+  /// table storage.  Pointer mirrors are module globals and may cover several
+  /// functions' adjacent tables, so current-function metadata alone is not a
+  /// complete ownership inventory.
   bool currentJumpTableOwnsStorageAddress(va_t Addr) const;
+
+  /// True only when a recovered dispatch exclusively consumes the concrete
+  /// code-pointer relocation slot at \p Addr.  Physical table storage can
+  /// contain a filler/gap slot with another reachable consumer, so pointer
+  /// mirrors and relocation roots must use this stricter permission rather
+  /// than ownsStorageAddress().
+  bool currentJumpTableSuppressesRelocationSlot(va_t Addr) const;
 
   /// Return true when \p V's pointer-preserving value graph contains an
   /// occurrence that names an emitted function or an exact lifted block on a
@@ -1734,6 +1748,8 @@ private:
   llvm::LLVMContext *Ctx = nullptr;
   llvm::Module *Mod = nullptr;
   const BinaryImage *Img = nullptr;
+  std::vector<JumpTableStorageRange> ModuleJumpTableStorageRanges;
+  std::set<va_t> ModuleSuppressibleJumpTableRelocationSlots;
   Arch TargetArch = Arch::X64;
   BinaryFormat TargetFormat = BinaryFormat::Unknown;
 

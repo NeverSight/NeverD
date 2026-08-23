@@ -31,7 +31,6 @@ bool isObservableInstructionEffect(NdOp Opcode) {
   case NdOp::ATOMIC_ADD:
   case NdOp::ATOMIC_CMPXCHG:
   case NdOp::INTRINSIC:
-  case NdOp::BRANCH:
   case NdOp::INDIR_BR:
   case NdOp::CALL:
   case NdOp::INDIR_CALL:
@@ -52,6 +51,12 @@ bool hasInstructionLocalGuard(const InstructionRecordT &Rec) {
     if (Guard.Opcode != NdOp::COND_BR || Guard.NumInputs < 1 ||
         !Guard.Inputs[0].isConst() || Guard.Inputs[0].Offset != NextAddress)
       continue;
+    // A real conditional direct branch is lifted as
+    // `COND_BR next,!condition; BRANCH target`.  The trailing BRANCH is the
+    // guest control transfer itself, not an instruction-local guard around an
+    // observable side effect.  isObservableInstructionEffect intentionally
+    // excludes BRANCH so these control-flow guards remain eligible as CFG
+    // range guards; predicated loads/stores/calls/returns stay marked.
     for (size_t I = GuardIndex + 1;
          I < Rec.Ops.size() && Rec.Ops[I].Addr == Guard.Addr; ++I)
       if (isObservableInstructionEffect(Rec.Ops[I].Opcode))
@@ -75,7 +80,11 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
     // goto) keeps its successors; a conditional one and a return are
     // unaffected.
     if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall || Rec.IsRet ||
-        Rec.IsCond || !Rec.JumpTableTargets.empty())
+        Rec.IsCond || !Rec.JumpTableTargets.empty() ||
+        LostValidatedJumpTableBranches.count(Addr) ||
+        (PreservePotentialJumpTableBranches &&
+         PotentialJumpTableBranches.count(Addr)) ||
+        (UnsafeJumpTableBranches && UnsafeJumpTableBranches->count(Addr)))
       continue;
     rewriteAsIndirectTailCall(Rec);
     Changed = true;

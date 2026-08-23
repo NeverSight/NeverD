@@ -110,8 +110,11 @@ bool TargetRegInfo::isSubRegOf(uint64_t NarrowOff, uint16_t NarrowSz,
 }
 
 bool TargetRegInfo::writeZeroExtends(uint64_t RegOff, uint16_t Size) const {
+  const bool HasWideVectorContainer = isVectorReg(RegOff) || isFPArgReg(RegOff);
   for (const auto &E : SubRegs) {
-    if (E.NarrowRegOff == RegOff && E.NarrowSize == Size && E.WriteZeroExtends)
+    if (E.NarrowRegOff == RegOff && E.NarrowSize == Size &&
+        (E.WideSize <= FullRegWidth || HasWideVectorContainer) &&
+        E.WriteZeroExtends)
       return true;
   }
   return false;
@@ -133,8 +136,10 @@ std::pair<uint64_t, uint16_t> TargetRegInfo::findWideReg(uint64_t RegOff,
                                                          uint16_t Size) const {
   uint64_t BestOff = RegOff;
   uint16_t BestSz = Size;
+  const bool HasWideVectorContainer = isVectorReg(RegOff) || isFPArgReg(RegOff);
   for (const auto &E : SubRegs) {
     if (E.NarrowRegOff == RegOff && E.NarrowSize == Size &&
+        (E.WideSize <= FullRegWidth || HasWideVectorContainer) &&
         E.WideSize > BestSz) {
       BestOff = E.WideRegOff;
       BestSz = E.WideSize;

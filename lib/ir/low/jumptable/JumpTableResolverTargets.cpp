@@ -24,17 +24,50 @@
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <set>
 #include <vector>
 
 #define DEBUG_TYPE "neverd-cfg-builder"
 
 namespace neverd {
+
+namespace {
+
+bool isExplicitlyOwnedFunctionFragment(const BinaryImage &Img,
+                                       va_t FunctionEntry, va_t Target) {
+  const auto &Functions = Img.ExceptionMetadata.Functions;
+  std::set<size_t> Primaries;
+  for (size_t I = 0; I < Functions.size(); ++I) {
+    const ExceptionFunction &Function = Functions[I];
+    if (Function.Kind == RuntimeFunctionKind::Primary &&
+        Function.CodeRange.Begin == FunctionEntry)
+      Primaries.insert(I);
+  }
+  if (Primaries.empty())
+    return false;
+
+  for (const ExceptionFunction &Fragment : Functions) {
+    if (Fragment.Kind == RuntimeFunctionKind::Primary ||
+        !Fragment.CodeRange.contains(Target))
+      continue;
+    if (Fragment.PrimaryFunctionIndex &&
+        Primaries.count(*Fragment.PrimaryFunctionIndex))
+      return true;
+    if (Fragment.ChainedPrimaryRange &&
+        Fragment.ChainedPrimaryRange->Begin == FunctionEntry)
+      return true;
+  }
+  return false;
+}
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // isValidTarget — sanity check a resolved target address
@@ -67,6 +100,18 @@ bool CFGBuilder::isValidTarget(const BinaryImage &Img, va_t Target,
 
   if (KnownFuncEntries && KnownFuncEntries->count(Target) &&
       Target != FuncEntry)
+    return false;
+
+  // Once the detector has a symbol/unwind/next-entry boundary, distance is no
+  // longer an ownership proof.  In particular, a relocation can name the
+  // middle of the next known function and evade the entry-only check above.
+  // Permit an out-of-envelope target only when runtime unwind metadata links
+  // its chained/cold fragment explicitly back to this exact primary function.
+  // With no usable boundary, retain the conservative distance policy above.
+  if (CurrentFuncRange &&
+      (Target < CurrentFuncRange->first ||
+       Target >= CurrentFuncRange->second) &&
+      !isExplicitlyOwnedFunctionFragment(Img, FuncEntry, Target))
     return false;
 
   return true;
@@ -147,59 +192,62 @@ bool CFGBuilder::sanityCheckTargets(const BinaryImage &Img,
 // readTableEntries — read entries from memory with format awareness
 //===----------------------------------------------------------------------===//
 
-/// Decode a single table entry into a target address.  For the compact-table
-/// form (TargetBase != 0) the target is `TargetBase + entry * Scale`; otherwise
-/// relative tables use `BaseAddr + entry` and absolute tables store the target.
-va_t decodeTableEntry(const uint8_t *P, uint16_t EntrySize, bool IsRelative,
-                      bool IsSigned, va_t BaseAddr, va_t TargetBase,
-                      uint32_t Scale) {
-  if (TargetBase != 0) {
-    int64_t Entry = 0;
+/// Decode a single table entry into a target address.  Address arithmetic is
+/// deliberately unsigned and masked to the guest pointer width: signed C++
+/// overflow is undefined, while every supported guest ISA wraps addresses.
+std::optional<va_t> decodeTableEntry(const uint8_t *P, uint16_t EntrySize,
+                                     bool IsRelative, bool IsSigned,
+                                     va_t BaseAddr, bool HasTargetBase,
+                                     va_t TargetBase, uint32_t Scale,
+                                     uint16_t AddressBytes) {
+  if (!P ||
+      (EntrySize != 1 && EntrySize != 2 && EntrySize != 4 && EntrySize != 8))
+    return std::nullopt;
+  const unsigned AddressBits =
+      AddressBytes > 0 && AddressBytes < sizeof(uint64_t)
+          ? static_cast<unsigned>(AddressBytes) * 8u
+          : 64u;
+  const uint64_t AddressMask = AddressBits == 64
+                                   ? std::numeric_limits<uint64_t>::max()
+                                   : (uint64_t(1) << AddressBits) - 1;
+
+  auto readEntryBits = [&]() -> uint64_t {
+    uint64_t Value = 0;
     switch (EntrySize) {
     case 1:
-      Entry = IsSigned ? static_cast<int8_t>(*P) : static_cast<uint8_t>(*P);
+      Value = *P;
       break;
     case 2: {
-      uint16_t Val;
-      std::memcpy(&Val, P, 2);
-      Entry = IsSigned ? static_cast<int16_t>(Val) : static_cast<int64_t>(Val);
+      uint16_t Raw = 0;
+      std::memcpy(&Raw, P, sizeof(Raw));
+      Value = Raw;
       break;
     }
     case 4: {
-      uint32_t Val;
-      std::memcpy(&Val, P, 4);
-      Entry = IsSigned ? static_cast<int32_t>(Val) : static_cast<int64_t>(Val);
+      uint32_t Raw = 0;
+      std::memcpy(&Raw, P, sizeof(Raw));
+      Value = Raw;
       break;
     }
+    case 8:
+      std::memcpy(&Value, P, sizeof(Value));
+      break;
     default:
-      break;
+      llvm_unreachable("entry width validated above");
     }
-    return static_cast<va_t>(static_cast<int64_t>(TargetBase) +
-                             Entry * static_cast<int64_t>(Scale));
-  }
-  if (IsRelative) {
-    int64_t Offset = 0;
-    switch (EntrySize) {
-    case 1:
-      Offset = IsSigned ? static_cast<int8_t>(*P) : static_cast<uint8_t>(*P);
-      break;
-    case 2: {
-      uint16_t Val;
-      std::memcpy(&Val, P, 2);
-      Offset = IsSigned ? static_cast<int16_t>(Val) : static_cast<int64_t>(Val);
-      break;
-    }
-    case 4: {
-      uint32_t Val;
-      std::memcpy(&Val, P, 4);
-      Offset = IsSigned ? static_cast<int32_t>(Val) : static_cast<int64_t>(Val);
-      break;
-    }
-    default:
-      break;
-    }
-    return static_cast<va_t>(static_cast<int64_t>(BaseAddr) + Offset);
-  }
+    const unsigned EntryBits = static_cast<unsigned>(EntrySize) * 8u;
+    if (IsSigned && EntryBits < 64 &&
+        (Value & (uint64_t(1) << (EntryBits - 1))) != 0)
+      Value |= ~((uint64_t(1) << EntryBits) - 1);
+    return Value;
+  };
+
+  const uint64_t Entry = readEntryBits();
+  if (HasTargetBase)
+    return static_cast<va_t>(
+        ((TargetBase & AddressMask) + (Entry * uint64_t(Scale))) & AddressMask);
+  if (IsRelative)
+    return static_cast<va_t>(((BaseAddr & AddressMask) + Entry) & AddressMask);
 
   va_t Target = 0;
   switch (EntrySize) {
@@ -224,7 +272,28 @@ va_t decodeTableEntry(const uint8_t *P, uint16_t EntrySize, bool IsRelative,
   default:
     break;
   }
-  return Target;
+  return Target & AddressMask;
+}
+
+std::optional<va_t> canonicalizeAbsoluteTableCodeTarget(const BinaryImage &Img,
+                                                        va_t RawTarget) {
+  if (Img.Arch != Arch::ARM)
+    return RawTarget;
+
+  const bool SerializedThumb = (RawTarget & 1) != 0;
+  switch (Img.Mode) {
+  case InstructionMode::Thumb:
+    if (!SerializedThumb)
+      return std::nullopt;
+    return normalizeCodeAddress(RawTarget, Img.Arch, Img.Mode);
+  case InstructionMode::Default:
+  case InstructionMode::ARM:
+    if (SerializedThumb)
+      return std::nullopt;
+    return RawTarget;
+  default:
+    return std::nullopt;
+  }
 }
 
 std::vector<va_t>
@@ -232,6 +301,16 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
                              std::vector<uint32_t> *KeptIndices) {
   if (KeptIndices)
     KeptIndices->clear();
+  if (!Info.HasBaseAddr || (Info.EntrySize != 1 && Info.EntrySize != 2 &&
+                            Info.EntrySize != 4 && Info.EntrySize != 8))
+    return {};
+  const uint64_t EntryStride =
+      Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+  if (EntryStride < Info.EntrySize)
+    return {};
+  if (Info.HasTargetBase && Info.EntryScale != 1 && Info.EntryScale != 2 &&
+      Info.EntryScale != 4 && Info.EntryScale != 8)
+    return {};
   const auto *Seg = Img.getSegmentFor(Info.BaseAddr);
   if (!Seg || Seg->Data.empty())
     return {};
@@ -240,51 +319,69 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
   if (!StorageEnd || *StorageEnd <= Info.BaseAddr)
     return {};
 
-  const bool Bounded = Info.MaxEntries > 0;
-  uint32_t Limit = Info.MaxEntries;
+  const bool ExplicitDomain = !Info.RuntimeSlotIndices.empty();
+  if (ExplicitDomain &&
+      Info.RuntimeSlotIndices.size() != Info.RuntimeCaseLabels.size())
+    return {};
+  const bool Bounded = Info.MaxEntries > 0 || ExplicitDomain;
+  uint32_t Limit = ExplicitDomain
+                       ? static_cast<uint32_t>(Info.RuntimeSlotIndices.size())
+                       : Info.MaxEntries;
   if (Limit == 0 || Limit > limits::kMaxJumpTableEntries)
     Limit = limits::kMaxJumpTableEntries;
 
   std::vector<va_t> Targets;
   Targets.reserve(std::min(Limit, 64u));
   size_t Off = static_cast<size_t>(Info.BaseAddr - Seg->VA);
-  const uint64_t EntryStride =
-      Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
   va_t PrevTarget = InvalidVA;
   int DuplicateRun = 0;
-  int SkippedRun = 0;
 
-  for (uint32_t I = 0; I < Limit; ++I) {
-    if (I != 0 &&
-        EntryStride > (std::numeric_limits<size_t>::max() - Off) / uint64_t(I))
-      break;
-    size_t EntryOff = Off + static_cast<size_t>(uint64_t(I) * EntryStride);
-    if (!rangeInBounds(EntryOff, Info.EntrySize, Seg->Data.size()))
-      break;
-    if (EntryOff > InvalidVA - Seg->VA || Info.EntrySize == 0)
-      break;
-    const va_t EntryVA = Seg->VA + EntryOff;
-    if (Info.EntrySize - 1 > InvalidVA - EntryVA)
-      break;
-    if (EntryVA >= *StorageEnd || Info.EntrySize > *StorageEnd - EntryVA)
-      break;
-
-    const uint8_t *P = Seg->Data.data() + EntryOff;
-    va_t Target =
-        decodeTableEntry(P, Info.EntrySize, Info.IsRelative, Info.IsSigned,
-                         Info.BaseAddr, Info.TargetBase, Info.EntryScale);
-
-    if (!isValidTarget(Img, Target, CurrentFuncEntry)) {
-      if (Bounded) {
-        ++SkippedRun;
-        if (SkippedRun > limits::kMaxSkippedEntries)
-          break;
-        continue;
-      }
+  for (uint32_t Position = 0; Position < Limit; ++Position) {
+    const uint32_t I =
+        ExplicitDomain ? Info.RuntimeSlotIndices[Position] : Position;
+    auto FailOrStop = [&]() { return Bounded; };
+    if (I != 0 && EntryStride > (std::numeric_limits<size_t>::max() - Off) /
+                                    uint64_t(I)) {
+      if (FailOrStop())
+        return {};
       break;
     }
-    SkippedRun = 0;
+    size_t EntryOff = Off + static_cast<size_t>(uint64_t(I) * EntryStride);
+    if (!rangeInBounds(EntryOff, Info.EntrySize, Seg->Data.size()) ||
+        EntryOff > InvalidVA - Seg->VA || Info.EntrySize == 0) {
+      if (FailOrStop())
+        return {};
+      break;
+    }
+    const va_t EntryVA = Seg->VA + EntryOff;
+    if (Info.EntrySize - 1 > InvalidVA - EntryVA || EntryVA >= *StorageEnd ||
+        Info.EntrySize > *StorageEnd - EntryVA) {
+      if (FailOrStop())
+        return {};
+      break;
+    }
 
+    const uint8_t *P = Seg->Data.data() + EntryOff;
+    auto TargetOpt =
+        decodeTableEntry(P, Info.EntrySize, Info.IsRelative, Info.IsSigned,
+                         Info.BaseAddr, Info.HasTargetBase, Info.TargetBase,
+                         Info.EntryScale, Img.getPointerSize());
+    if (!TargetOpt)
+      return {};
+    va_t Target = *TargetOpt;
+    if (!Info.IsRelative && !Info.HasTargetBase) {
+      std::optional<va_t> Canonical =
+          canonicalizeAbsoluteTableCodeTarget(Img, Target);
+      if (!Canonical)
+        return {};
+      Target = *Canonical;
+    }
+
+    if (!isValidTarget(Img, Target, CurrentFuncEntry)) {
+      if (Bounded)
+        return {};
+      break;
+    }
     if (Target == PrevTarget) {
       if (++DuplicateRun > limits::kMaxDuplicateRun && !Bounded)
         break;
@@ -297,6 +394,9 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
     if (KeptIndices)
       KeptIndices->push_back(I);
   }
+
+  if (Bounded && Targets.size() != Limit)
+    return {};
 
   return Targets;
 }

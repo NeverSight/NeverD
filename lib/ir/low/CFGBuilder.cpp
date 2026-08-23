@@ -18,12 +18,14 @@
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include "neverd/Limits.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iterator>
 #include <limits>
 #include <queue>
@@ -85,20 +87,38 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   ExploredAddrs.clear();
   CallTargets.clear();
   DiscoveredCodeRefs.clear();
+  DiscoveredCodeRefSources.clear();
   ResolvedTableInfo.clear();
+  JumpTableProofContextComplete = false;
+  RequestedCompleteJumpTableProof = false;
+  PersistentCFGRoots.clear();
+  DurableCFGRoots.clear();
+  RelocationCFGRootSources.clear();
+  ActiveJumpTableProofRoots.reset();
+  PotentialJumpTableBranches.clear();
+  LostValidatedJumpTableBranches.clear();
+  PublishedReachableInsns.clear();
   DecodedInstructionCount = 0;
   LiftedInstructionCount = 0;
+  DecodedInstructionAddresses.clear();
+  LiftedInstructionAddresses.clear();
   DecodeFailureAddresses.clear();
   UnsupportedInstructionAddresses.clear();
   TruncatedPathAddresses.clear();
+  RelocatedInstructionAddressOccurrences.clear();
+  I386GetPcOccurrences.clear();
+  RelocatedInstructionScalarModelOccurrences.clear();
 
   CurrentFuncEntry = EntryAddr;
   CurrentFuncRange.reset();
+  AuthoritativeCurrentFuncRange.reset();
   CurrentImg = &Img;
   // The x87 TOP counter persists across functions in the shared lifter; start
   // each function with an empty stack so the entry block's lift TOP is 0.
   Dec.resetX86FpuState();
   BlockStarts.insert(EntryAddr);
+  PersistentCFGRoots.insert(EntryAddr);
+  DurableCFGRoots.insert(EntryAddr);
 
   const ExceptionFunction *Exception = nullptr;
   for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
@@ -124,6 +144,8 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       if (Address == 0 || !Exception->CodeRange.contains(Address))
         return;
       AddBoundary(Address);
+      PersistentCFGRoots.insert(Address);
+      DurableCFGRoots.insert(Address);
       if (Address != EntryAddr)
         ExceptionalRoots.push_back(Address);
     };
@@ -235,13 +257,176 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
 
   multiStageResolve(Img, Dec, Func);
 
+  // PAGEOFF output provenance is consumed only after lifting, so authenticate
+  // it on the final resolver CFG rather than during linear instruction
+  // discovery.  In particular, an ADD that is also an address-taken/exception
+  // root has an independent live-in and must not borrow a preceding ADRP.
+  ActiveJumpTableProofRoots.reset();
+  JumpTableProofContextComplete = true;
+  completeExactAArch64PageBases(Img);
+  completeExactARMRelativeLiteralAddresses(Img);
+  completeExactI386GOTBaseModels(Img);
+  JumpTableProofContextComplete = false;
+
   convertIndirectTailCalls(Func);
+
+  std::set<va_t> ReachableInsnAddrs;
+  for (const LowBlock &Block : Func.Blocks)
+    for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
+      ReachableInsnAddrs.insert(Boundary.Address);
+
+  // A relocation-free code reference discovered only while decoding a
+  // provisional table case is not function-global evidence.  Once fixed-point
+  // recovery removes that case, drop both the reference and its conditional
+  // root instead of leaking an unreachable LEA into later functions.
+  for (auto It = DiscoveredCodeRefs.begin(); It != DiscoveredCodeRefs.end();) {
+    auto Sources = DiscoveredCodeRefSources.find(*It);
+    const bool HasReachableSource =
+        Sources != DiscoveredCodeRefSources.end() &&
+        std::any_of(
+            Sources->second.begin(), Sources->second.end(),
+            [&](va_t Source) { return ReachableInsnAddrs.count(Source) != 0; });
+    if (!HasReachableSource) {
+      auto Erase = It++;
+      DiscoveredCodeRefs.erase(Erase);
+    } else {
+      ++It;
+    }
+  }
+
+  Func.RelocatedInstructionAddressOccurrences.clear();
+  for (const RelocatedInstructionAddressOccurrence &Occurrence :
+       RelocatedInstructionAddressOccurrences) {
+    bool Published = false;
+    for (const LowBlock &Block : Func.Blocks) {
+      for (const LowInstructionBoundary &Boundary :
+           Block.InstructionBoundaries) {
+        if (Boundary.Address != Occurrence.InstructionAddr ||
+            (!Occurrence.DefinesOutput &&
+             (Boundary.Size > InvalidVA - Boundary.Address ||
+              Occurrence.FieldVA < Boundary.Address ||
+              Occurrence.FieldVA >= Boundary.Address + Boundary.Size)))
+          continue;
+        const uint64_t End = Boundary.FirstOp + Boundary.OpCount;
+        if (End > Block.Ops.size())
+          continue;
+        for (uint64_t I = Boundary.FirstOp; I < End; ++I) {
+          const LowOp &Op = Block.Ops[I];
+          if (Op.Addr != Occurrence.InstructionAddr ||
+              Op.Seq != Occurrence.OpSeq)
+            continue;
+          auto Matches = [&](const NdVar &Value) {
+            return Value.isConst() &&
+                   isExactAddressProvenance(Value.Provenance) &&
+                   Value.Provenance == Occurrence.Provenance &&
+                   Value.Offset == Occurrence.TargetVA &&
+                   (Occurrence.TargetOwnerVA == InvalidVA ||
+                    Value.AddressOwnerVA == Occurrence.TargetOwnerVA);
+          };
+          if (Occurrence.DefinesOutput) {
+            Published = Op.Opcode == Occurrence.OutputOpcode &&
+                        Op.Output == Occurrence.OutputWitness &&
+                        (Op.Output.isReg() || Op.Output.isTemp()) &&
+                        Op.Output.Size != 0;
+          } else {
+            Published = Matches(Op.Output);
+            for (uint8_t InputIndex = 0;
+                 !Published && InputIndex < Op.NumInputs; ++InputIndex)
+              Published = Matches(Op.Inputs[InputIndex]);
+          }
+          if (Published)
+            break;
+        }
+        if (Published)
+          break;
+      }
+      if (Published)
+        break;
+    }
+    if (Published) {
+      Func.RelocatedInstructionAddressOccurrences.push_back(Occurrence);
+      if (!Occurrence.OutputMayDepend &&
+          Occurrence.Provenance == ConstantAddressProvenance::CodeAddress)
+        DiscoveredCodeRefs.insert(
+            normalizeCodeAddress(Occurrence.TargetVA, Img.Arch, Img.Mode));
+    }
+  }
+
+  Func.I386GetPcOccurrences.clear();
+  for (const I386GetPcOccurrence &Occurrence : I386GetPcOccurrences) {
+    bool Published = false;
+    for (const LowBlock &Block : Func.Blocks) {
+      for (const LowInstructionBoundary &Boundary :
+           Block.InstructionBoundaries) {
+        if (Boundary.Address != Occurrence.InstructionAddr)
+          continue;
+        const uint64_t End = Boundary.FirstOp + Boundary.OpCount;
+        if (End > Block.Ops.size())
+          continue;
+        for (uint64_t I = Boundary.FirstOp; I < End; ++I) {
+          const LowOp &Op = Block.Ops[I];
+          if (Op.Addr == Occurrence.InstructionAddr &&
+              Op.Seq == Occurrence.OpSeq &&
+              Op.Opcode == Occurrence.OutputOpcode &&
+              Op.Output == Occurrence.OutputWitness) {
+            Published = true;
+            break;
+          }
+        }
+        if (Published)
+          break;
+      }
+      if (Published)
+        break;
+    }
+    if (Published)
+      Func.I386GetPcOccurrences.push_back(Occurrence);
+  }
+
+  Func.RelocatedInstructionScalarModelOccurrences.clear();
+  for (const RelocatedInstructionScalarModelOccurrence &Occurrence :
+       RelocatedInstructionScalarModelOccurrences) {
+    bool Published = false;
+    for (const LowBlock &Block : Func.Blocks) {
+      for (const LowInstructionBoundary &Boundary :
+           Block.InstructionBoundaries) {
+        if (Boundary.Address != Occurrence.InstructionAddr ||
+            Boundary.Size > InvalidVA - Boundary.Address ||
+            Occurrence.FieldVA < Boundary.Address ||
+            Occurrence.FieldVA >= Boundary.Address + Boundary.Size)
+          continue;
+        const uint64_t End = Boundary.FirstOp + Boundary.OpCount;
+        if (End > Block.Ops.size())
+          continue;
+        for (uint64_t I = Boundary.FirstOp; I < End; ++I) {
+          const LowOp &Op = Block.Ops[I];
+          if (Op.Addr == Occurrence.InstructionAddr &&
+              Op.Seq == Occurrence.OpSeq &&
+              Op.Opcode == Occurrence.OutputOpcode &&
+              Op.Output == Occurrence.OutputWitness &&
+              (Op.Output.isReg() || Op.Output.isTemp()) &&
+              Op.Output.Size == Occurrence.Width) {
+            Published = true;
+            break;
+          }
+        }
+        if (Published)
+          break;
+      }
+      if (Published)
+        break;
+    }
+    if (Published)
+      Func.RelocatedInstructionScalarModelOccurrences.push_back(Occurrence);
+  }
 
   // A relocation-free RIP-relative LEA is initially only an address-of
   // candidate.  Once jump-table recovery proves that the same address owns
   // inline table storage (which Mach-O commonly places in __text), the data
   // owner wins: publishing it as a global CodeRefTarget would make every
   // numerically equal occurrence look like a function/label identity.
+  // Apply the same arbitration to exact code-address relocation occurrences
+  // before publishing the function-local inventory.
   for (auto It = DiscoveredCodeRefs.begin(); It != DiscoveredCodeRefs.end();) {
     bool IsJumpTableStorage = false;
     for (const JumpTable &JT : Func.JumpTables)
@@ -256,18 +441,101 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
       ++It;
     }
   }
-
   Func.CodeRefTargets.assign(DiscoveredCodeRefs.begin(),
                              DiscoveredCodeRefs.end());
-  Func.DecodedInstructionCount = DecodedInstructionCount;
-  Func.LiftedInstructionCount = LiftedInstructionCount;
-  Func.DecodeFailureAddresses.assign(DecodeFailureAddresses.begin(),
-                                     DecodeFailureAddresses.end());
-  Func.UnsupportedInstructionAddresses.assign(
-      UnsupportedInstructionAddresses.begin(),
-      UnsupportedInstructionAddresses.end());
-  Func.TruncatedPathAddresses.assign(TruncatedPathAddresses.begin(),
-                                     TruncatedPathAddresses.end());
+  // Recursive descent intentionally retains decoded provisional jump-table
+  // cases across fixed-point rounds.  Coverage is a property of the final
+  // public function, however, so derive its inventory from the final roots and
+  // edges instead of publishing the exploration cache wholesale.  Terminal
+  // decode/lift failures have no LowInstructionBoundary of their own; retain
+  // them when a final edge (or an unsuppressed durable/address-taken root)
+  // attempted that address.
+  std::set<va_t> FinalAttemptedAddresses = PublishedReachableInsns;
+  auto AddAttempted = [&](va_t Address) {
+    if (Address != InvalidVA && ExploredAddrs.count(Address))
+      FinalAttemptedAddresses.insert(Address);
+  };
+  auto FinalTableSuppressesRelocationRoot = [&](va_t Root) {
+    if (DurableCFGRoots.count(Root))
+      return false;
+    const auto Sources = RelocationCFGRootSources.find(Root);
+    if (Sources == RelocationCFGRootSources.end() || Sources->second.empty())
+      return false;
+    return std::all_of(
+        Sources->second.begin(), Sources->second.end(), [&](va_t Slot) {
+          for (const auto &[BranchAddr, Info] : ResolvedTableInfo) {
+            const auto Branch = Insns.find(BranchAddr);
+            if (Branch == Insns.end() ||
+                Branch->second.JumpTableTargets.empty() ||
+                !PublishedReachableInsns.count(BranchAddr))
+              continue;
+            if (std::find(Info.SuppressibleRelocationSlots.begin(),
+                          Info.SuppressibleRelocationSlots.end(),
+                          Slot) != Info.SuppressibleRelocationSlots.end())
+              return true;
+          }
+          return false;
+        });
+  };
+  for (va_t Root : PersistentCFGRoots)
+    if (!FinalTableSuppressesRelocationRoot(Root))
+      AddAttempted(Root);
+  for (va_t Root : DiscoveredCodeRefs)
+    AddAttempted(Root);
+
+  for (va_t Address : PublishedReachableInsns) {
+    const auto It = Insns.find(Address);
+    if (It == Insns.end())
+      continue;
+    const InsnRecord &Rec = It->second;
+    if (Rec.IsRet) {
+      if (Rec.IsCond && Rec.IsBranch)
+        AddAttempted(Rec.BranchTarget);
+      continue;
+    }
+    if (Rec.IsBranch && !Rec.IsCall) {
+      if (Rec.IsIndirect)
+        for (va_t Target : Rec.JumpTableTargets)
+          AddAttempted(Target);
+      else
+        AddAttempted(Rec.BranchTarget);
+      if (Rec.IsCond && Rec.Size <= InvalidVA - Rec.Addr)
+        AddAttempted(Rec.Addr + Rec.Size);
+      continue;
+    }
+    if (Rec.IsNoReturnCall && !Rec.IsCond)
+      continue;
+    if (Rec.Size <= InvalidVA - Rec.Addr)
+      AddAttempted(Rec.Addr + Rec.Size);
+  }
+
+  Func.DecodedInstructionCount = static_cast<uint64_t>(std::count_if(
+      DecodedInstructionAddresses.begin(), DecodedInstructionAddresses.end(),
+      [&](va_t Address) { return FinalAttemptedAddresses.count(Address); }));
+  Func.LiftedInstructionCount = static_cast<uint64_t>(std::count_if(
+      LiftedInstructionAddresses.begin(), LiftedInstructionAddresses.end(),
+      [&](va_t Address) { return FinalAttemptedAddresses.count(Address); }));
+  auto PublishFailures = [&](const std::set<va_t> &Failures,
+                             std::vector<va_t> &Published) {
+    for (va_t Address : Failures)
+      if (FinalAttemptedAddresses.count(Address))
+        Published.push_back(Address);
+  };
+  PublishFailures(DecodeFailureAddresses, Func.DecodeFailureAddresses);
+  PublishFailures(UnsupportedInstructionAddresses,
+                  Func.UnsupportedInstructionAddresses);
+  PublishFailures(TruncatedPathAddresses, Func.TruncatedPathAddresses);
+  if (UnsafeJumpTableBranches)
+    for (va_t Addr : *UnsafeJumpTableBranches)
+      if (Insns.count(Addr))
+        Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  if (PreservePotentialJumpTableBranches)
+    for (va_t Addr : PotentialJumpTableBranches)
+      if (Insns.count(Addr))
+        Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  for (va_t Addr : LostValidatedJumpTableBranches)
+    if (Insns.count(Addr))
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
 
   LLVM_DEBUG(llvm::dbgs() << "CFG built: " << Func.Blocks.size()
                           << " blocks for " << Func.Name << " @ 0x"
@@ -315,6 +583,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         break;
       }
       ++DecodedInstructionCount;
+      DecodedInstructionAddresses.insert(Cur);
 
       const va_t InsnSize = static_cast<va_t>(Sz);
       if (InsnSize > std::numeric_limits<va_t>::max() - Cur) {
@@ -335,10 +604,31 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
           [&](const std::map<va_t, RelocatedAddressField> &Occurrences,
               ConstantAddressProvenance Provenance) {
             auto It = Occurrences.lower_bound(Cur);
-            for (; It != Occurrences.end() && It->first < Next; ++It)
+            for (; It != Occurrences.end() && It->first < Next; ++It) {
+              va_t TargetVA = It->second.TargetVA;
+              if (It->second.PCRelativeFromInstructionEnd) {
+                if (It->second.Width == 0 || It->second.Width > 8)
+                  continue;
+                const unsigned Bits = It->second.Width * 8;
+                uint64_t Disp = It->second.EncodedValue;
+                if (Bits < 64) {
+                  const uint64_t Mask = (uint64_t(1) << Bits) - 1;
+                  Disp &= Mask;
+                  if (Disp & (uint64_t(1) << (Bits - 1)))
+                    Disp |= ~Mask;
+                }
+                TargetVA = Next + Disp;
+                if (Img.getPointerSize() == 4)
+                  TargetVA = static_cast<uint32_t>(TargetVA);
+              }
+              if (!Img.relocatedTargetBelongsToOwner(TargetVA,
+                                                     It->second.TargetOwnerVA))
+                continue;
               RelocatedOperands.push_back(RelocatedAddressOperand{
-                  It->first, It->second.EncodedValue, It->second.TargetVA,
-                  It->second.Width, Provenance, It->second.TargetOwnerVA});
+                  It->first, It->second.EncodedValue, TargetVA,
+                  It->second.Width, Provenance, It->second.TargetOwnerVA,
+                  It->second.PCRelativeFromInstructionEnd});
+            }
           };
       selectRelocatedOperand(Img.DataAddressRelocOperands,
                              ConstantAddressProvenance::DataAddress);
@@ -350,7 +640,34 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         UnsupportedInstructionAddresses.insert(Failure.getAddr());
         break;
       }
+      if (std::optional<I386GetPcOccurrence> GetPc =
+              Dec.getX86GetPcOccurrence())
+        I386GetPcOccurrences.push_back(*GetPc);
+      for (const RelocatedAddressOperand &Reloc : RelocatedOperands) {
+        for (const LowOp &Op : Rec.Ops) {
+          auto Matches = [&](const NdVar &Value) {
+            return Value.isConst() &&
+                   isExactAddressProvenance(Value.Provenance) &&
+                   Value.Provenance == Reloc.Provenance &&
+                   Value.Offset == Reloc.TargetVA &&
+                   (Reloc.TargetOwnerVA == InvalidVA ||
+                    Value.AddressOwnerVA == Reloc.TargetOwnerVA);
+          };
+          bool Consumed = Matches(Op.Output);
+          for (uint8_t I = 0; !Consumed && I < Op.NumInputs; ++I)
+            Consumed = Matches(Op.Inputs[I]);
+          if (!Consumed)
+            continue;
+          RelocatedInstructionAddressOccurrences.push_back(
+              RelocatedInstructionAddressOccurrence{
+                  Reloc.FieldVA, Rec.Addr, Op.Seq, Reloc.TargetVA,
+                  Reloc.TargetOwnerVA, Reloc.Width, Reloc.Provenance,
+                  Reloc.PCRelativeFromInstructionEnd});
+          break;
+        }
+      }
       ++LiftedInstructionCount;
+      LiftedInstructionAddresses.insert(Cur);
       Rec.FpuTopOut = Dec.getX86FpuTop();
       Rec.FpuReset = Dec.x86FpuDidReset();
 
@@ -361,6 +678,8 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       if (va_t Ref = Dec.pcRelCodeRefTarget(DI); Ref != InvalidVA) {
         if (Img.hasExecutableCodeOwnerAt(Ref))
           DiscoveredCodeRefs.insert(Ref);
+        if (Img.hasExecutableCodeOwnerAt(Ref))
+          DiscoveredCodeRefSources[Ref].insert(Cur);
       }
 
       classifyInsn(Rec);
@@ -466,6 +785,165 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
   }
 }
 
+std::set<va_t> CFGBuilder::currentRelocatedInstructionTableAnchors(
+    const BinaryImage &Img) const {
+  std::set<va_t> Anchors;
+  for (const RelocatedInstructionAddressOccurrence &Occurrence :
+       RelocatedInstructionAddressOccurrences) {
+    if (!PublishedReachableInsns.count(Occurrence.InstructionAddr) ||
+        Occurrence.OutputMayDepend ||
+        Occurrence.Provenance != ConstantAddressProvenance::DataAddress)
+      continue;
+    if (Img.RelCodeRelocSlots.count(Occurrence.TargetVA) ||
+        Img.CodePtrRelocSlots.count(Occurrence.TargetVA))
+      Anchors.insert(Occurrence.TargetVA);
+  }
+  return Anchors;
+}
+
+void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
+  RelocatedInstructionScalarModelOccurrences.clear();
+  if (Img.Arch != Arch::X86 || !Img.isELF() || Img.getPointerSize() != 4 ||
+      !JumpTableProofContextComplete || Img.I386GOTPCFields.empty())
+    return;
+
+  struct PendingModel {
+    va_t FieldVA = InvalidVA;
+    const LowOp *Op = nullptr;
+    I386GetPcOccurrence Seed;
+    size_t QueryIndex = 0;
+  };
+  std::vector<JumpTableValueQuery> Queries;
+  std::vector<PendingModel> Pending;
+
+  for (const auto &[FieldVA, Field] : Img.I386GOTPCFields) {
+    const InsnRecord *Containing = nullptr;
+    for (const auto &[Addr, Rec] : Insns) {
+      if (Rec.Size == 0 || Rec.Size > InvalidVA - Addr || FieldVA < Addr ||
+          FieldVA >= Addr + Rec.Size)
+        continue;
+      if (Containing) {
+        Containing = nullptr;
+        break;
+      }
+      Containing = &Rec;
+    }
+    if (!Containing || Containing->IsInstructionGuard)
+      continue;
+
+    const LowOp *Candidate = nullptr;
+    uint8_t BaseInput = 0;
+    bool Ambiguous = false;
+    for (const LowOp &Op : Containing->Ops) {
+      if (Op.Opcode != NdOp::INT_ADD || Op.NumInputs != 2 ||
+          (!Op.Output.isReg() && !Op.Output.isTemp()) || Op.Output.Size != 4)
+        continue;
+      for (uint8_t ImmediateSide = 0; ImmediateSide < 2; ++ImmediateSide) {
+        const NdVar &Immediate = Op.Inputs[ImmediateSide];
+        const NdVar &Base = Op.Inputs[1 - ImmediateSide];
+        if (!Immediate.isConst() || Immediate.Size != 4 ||
+            Immediate.Provenance != ConstantAddressProvenance::Scalar ||
+            static_cast<uint32_t>(Immediate.Offset) != Field.EncodedValue ||
+            (!Base.isReg() && !Base.isTemp()) || Base.Size != 4)
+          continue;
+        if (Candidate) {
+          Ambiguous = true;
+          break;
+        }
+        Candidate = &Op;
+        BaseInput = 1 - ImmediateSide;
+      }
+      if (Ambiguous)
+        break;
+    }
+    if (Ambiguous || !Candidate)
+      continue;
+
+    // The relocation proves only the scalar adjustment.  Bind its other
+    // operand to an exact lifter-authenticated call/pop get-PC producer on
+    // every feasible incoming path before publishing the model-zero result.
+    // A role-neutral Address constant with the same numeric value is not a
+    // substitute: it need not move with this relocation at link time.
+    std::vector<JumpTableValueOccurrence> PCDefinitions;
+    std::vector<I386GetPcOccurrence> Seeds;
+    for (const I386GetPcOccurrence &GetPc : I386GetPcOccurrences) {
+      if (GetPc.PCValue != Field.ExpectedPCValue ||
+          GetPc.OutputOpcode != NdOp::COPY || GetPc.OutputWitness.Size != 4 ||
+          (!GetPc.OutputWitness.isReg() && !GetPc.OutputWitness.isTemp()) ||
+          !PublishedReachableInsns.count(GetPc.InstructionAddr))
+        continue;
+      const auto RecIt = Insns.find(GetPc.InstructionAddr);
+      if (RecIt == Insns.end() || RecIt->second.IsInstructionGuard)
+        continue;
+      const LowOp *Producer = nullptr;
+      for (const LowOp &Op : RecIt->second.Ops)
+        if (Op.Addr == GetPc.InstructionAddr && Op.Seq == GetPc.OpSeq &&
+            Op.Opcode == GetPc.OutputOpcode &&
+            Op.Output == GetPc.OutputWitness) {
+          if (Producer) {
+            Producer = nullptr;
+            break;
+          }
+          Producer = &Op;
+        }
+      if (!Producer || Producer->NumInputs != 1 ||
+          !Producer->Inputs[0].isConst() || Producer->Inputs[0].Size != 4 ||
+          Producer->Inputs[0].Provenance !=
+              ConstantAddressProvenance::Address ||
+          Producer->Inputs[0].AddressOwnerVA != InvalidVA ||
+          static_cast<uint32_t>(Producer->Inputs[0].Offset) != GetPc.PCValue)
+        continue;
+      PCDefinitions.push_back({GetPc.OutputWitness, GetPc.InstructionAddr,
+                               GetPc.OpSeq, /*DefinedAtPoint=*/true});
+      Seeds.push_back(GetPc);
+    }
+    if (PCDefinitions.empty() || PCDefinitions.size() != Seeds.size())
+      continue;
+
+    JumpTableValueQuery Query;
+    Query.Candidate = Candidate->Inputs[BaseInput];
+    Query.UseAddr = Candidate->Addr;
+    Query.UseSeq = Candidate->Seq;
+    Query.Alternatives = std::move(PCDefinitions);
+    Query.RequireExactAddressOwner = true;
+    // All accepted alternatives must be the same exact call/pop producer.
+    // Multiple distinct producers can carry the same PC number but do not
+    // define one stable cross-layer model witness.
+    if (Seeds.size() != 1)
+      continue;
+    Pending.push_back({FieldVA, Candidate, Seeds.front(), Queries.size()});
+    Queries.push_back(std::move(Query));
+  }
+
+  if (Queries.empty())
+    return;
+  bool AnalysisComplete = false;
+  const std::vector<bool> Matches =
+      tableValuesMatchAtUses(Queries, &AnalysisComplete);
+  if (!AnalysisComplete || Matches.size() != Queries.size())
+    return;
+
+  for (const PendingModel &Model : Pending) {
+    if (!Model.Op || Model.QueryIndex >= Matches.size() ||
+        !Matches[Model.QueryIndex])
+      continue;
+    RelocatedInstructionScalarModelOccurrence Occurrence;
+    Occurrence.FieldVA = Model.FieldVA;
+    Occurrence.InstructionAddr = Model.Op->Addr;
+    Occurrence.OpSeq = Model.Op->Seq;
+    Occurrence.Width = 4;
+    Occurrence.Model = RelocatedInstructionScalarModelOccurrence::ModelKind::
+        I386ELFGOTBaseZero;
+    Occurrence.OutputOpcode = Model.Op->Opcode;
+    Occurrence.OutputWitness = Model.Op->Output;
+    Occurrence.SeedInstructionAddr = Model.Seed.InstructionAddr;
+    Occurrence.SeedOpSeq = Model.Seed.OpSeq;
+    Occurrence.SeedOpcode = Model.Seed.OutputOpcode;
+    Occurrence.SeedOutputWitness = Model.Seed.OutputWitness;
+    RelocatedInstructionScalarModelOccurrences.push_back(std::move(Occurrence));
+  }
+}
+
 void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
   if (Img.Arch != Arch::AArch64)
     return;
@@ -499,16 +977,32 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
       continue;
 
     const va_t PageBase = Root.Inputs[0].Offset;
+    const auto PageMaterialization =
+        Img.InstructionPageAddressFragments.find(RootRec.Addr);
+    const bool HasAuthenticatedPage =
+        PageMaterialization != Img.InstructionPageAddressFragments.end() &&
+        PageMaterialization->second.TargetOwnerVA != InvalidVA &&
+        Img.relocatedTargetBelongsToOwner(
+            PageMaterialization->second.TargetVA,
+            PageMaterialization->second.TargetOwnerVA) &&
+        (PageMaterialization->second.TargetVA & ~AArch64PageMask) == PageBase;
+    const bool CanAuthenticatePageByDereference =
+        Img.hasObjectDataProvenance(PageBase) &&
+        !Img.hasExecutableCodeOwnerAt(PageBase);
     if ((PageBase & AArch64PageMask) != 0 ||
-        !Img.hasObjectDataProvenance(PageBase) ||
-        Img.hasExecutableCodeOwnerAt(PageBase))
+        (!HasAuthenticatedPage && !CanAuthenticatePageByDereference))
       continue;
+    if (HasAuthenticatedPage)
+      Root.Inputs[0].AddressOwnerVA = PageMaterialization->second.TargetOwnerVA;
 
-    const Segment *OwnerSegment = Img.getSegmentFor(PageBase);
-    if (!OwnerSegment)
-      continue;
-    const Section *OwnerSection = Img.getSectionFor(PageBase);
-    const va_t OwnerVA = OwnerSection ? OwnerSection->VA : OwnerSegment->VA;
+    va_t OwnerVA = InvalidVA;
+    if (CanAuthenticatePageByDereference) {
+      const Segment *OwnerSegment = Img.getSegmentFor(PageBase);
+      if (!OwnerSegment)
+        continue;
+      const Section *OwnerSection = Img.getSectionFor(PageBase);
+      OwnerVA = OwnerSection ? OwnerSection->VA : OwnerSegment->VA;
+    }
     const NdVar PageRegister = Root.Output;
 
     bool ProvedExactDereference = false;
@@ -545,7 +1039,8 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
 
       bool RedefinedPageRegister = false;
       for (const LowOp &Op : UseRec.Ops) {
-        if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+        if (CanAuthenticatePageByDereference &&
+            (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
             Op.NumInputs >= 1) {
           if (auto Offset = relativeOffset(Op.Inputs[0]);
               Offset && *Offset == 0) {
@@ -592,6 +1087,370 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
     Root.Inputs[0].Provenance = ConstantAddressProvenance::DataAddress;
     Root.Inputs[0].AddressOwnerVA = OwnerVA;
   }
+
+  if (!JumpTableProofContextComplete)
+    return;
+
+  // Output certificates are rebuilt from the current final proof graph.  A
+  // certificate from an earlier provisional CFG must not survive after a new
+  // root/predecessor makes the PAGEOFF base ambiguous.
+  RelocatedInstructionAddressOccurrences.erase(
+      std::remove_if(RelocatedInstructionAddressOccurrences.begin(),
+                     RelocatedInstructionAddressOccurrences.end(),
+                     [](const RelocatedInstructionAddressOccurrence &Item) {
+                       return Item.DefinesOutput;
+                     }),
+      RelocatedInstructionAddressOccurrences.end());
+
+  struct AuthenticatedPageDefinition {
+    va_t TargetVA = InvalidVA;
+    va_t TargetOwnerVA = InvalidVA;
+    JumpTableValueOccurrence Occurrence;
+  };
+  std::vector<AuthenticatedPageDefinition> PageDefinitions;
+  for (const auto &[Addr, Rec] : Insns) {
+    const auto Materialized = Img.InstructionPageAddressFragments.find(Addr);
+    if (Materialized == Img.InstructionPageAddressFragments.end() ||
+        Materialized->second.TargetOwnerVA == InvalidVA ||
+        !Img.relocatedTargetBelongsToOwner(
+            Materialized->second.TargetVA,
+            Materialized->second.TargetOwnerVA) ||
+        Rec.Ops.size() != 1)
+      continue;
+    const LowOp &Op = Rec.Ops.front();
+    const va_t PageBase = Materialized->second.TargetVA & ~AArch64PageMask;
+    if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 || !Op.Output.isReg() ||
+        Op.Output.Size != Img.getPointerSize() || !Op.Inputs[0].isConst() ||
+        Op.Inputs[0].Provenance != ConstantAddressProvenance::AddressFragment ||
+        Op.Inputs[0].Offset != PageBase)
+      continue;
+    PageDefinitions.push_back(
+        {Materialized->second.TargetVA,
+         Materialized->second.TargetOwnerVA,
+         {Op.Output, Op.Addr, Op.Seq, /*DefinedAtPoint=*/true}});
+  }
+
+  struct PendingMaterialization {
+    const LowOp *Op = nullptr;
+    RelocatedInstructionAddressMaterialization Materialized;
+    size_t ExactQuery = std::numeric_limits<size_t>::max();
+    size_t MayQuery = 0;
+  };
+  std::vector<JumpTableValueQuery> Queries;
+  std::vector<PendingMaterialization> Pending;
+  for (const auto &[Addr, Rec] : Insns) {
+    const auto Materialized = Img.InstructionAddressMaterializations.find(Addr);
+    if (Materialized == Img.InstructionAddressMaterializations.end() ||
+        Materialized->second.TargetOwnerVA == InvalidVA ||
+        !Img.relocatedTargetBelongsToOwner(
+            Materialized->second.TargetVA,
+            Materialized->second.TargetOwnerVA) ||
+        Rec.IsInstructionGuard)
+      continue;
+    const va_t PageBase = Materialized->second.TargetVA & ~AArch64PageMask;
+    const uint64_t PageOffset = Materialized->second.TargetVA & AArch64PageMask;
+    for (const LowOp &Op : Rec.Ops) {
+      if (Op.Opcode != NdOp::INT_ADD || Op.NumInputs != 2 ||
+          !Op.Output.isReg() || Op.Output.Size != Img.getPointerSize())
+        continue;
+      int BaseSide = -1;
+      for (int Side = 0; Side < 2; ++Side) {
+        const NdVar &Immediate = Op.Inputs[1 - Side];
+        if ((!Op.Inputs[Side].isReg() && !Op.Inputs[Side].isTemp()) ||
+            Op.Inputs[Side].Size != Img.getPointerSize() ||
+            !Immediate.isConst() ||
+            Immediate.Provenance != ConstantAddressProvenance::Scalar ||
+            Immediate.Offset != PageOffset)
+          continue;
+        if (BaseSide != -1) {
+          BaseSide = -2;
+          break;
+        }
+        BaseSide = Side;
+      }
+      if (BaseSide < 0)
+        continue;
+
+      std::vector<JumpTableValueOccurrence> ExactAlternatives;
+      std::vector<JumpTableValueOccurrence> AllPageAlternatives;
+      for (const AuthenticatedPageDefinition &Page : PageDefinitions)
+        if (Page.Occurrence.Value.Size == Op.Inputs[BaseSide].Size) {
+          AllPageAlternatives.push_back(Page.Occurrence);
+          if ((Page.TargetVA & ~AArch64PageMask) == PageBase)
+            ExactAlternatives.push_back(Page.Occurrence);
+        }
+      if (AllPageAlternatives.empty())
+        continue;
+      size_t ExactQuery = std::numeric_limits<size_t>::max();
+      if (!ExactAlternatives.empty()) {
+        ExactQuery = Queries.size();
+        Queries.push_back({Op.Inputs[BaseSide], Op.Addr, Op.Seq,
+                           std::move(ExactAlternatives), false, false});
+      }
+      const size_t MayQuery = Queries.size();
+      JumpTableValueQuery MayDepend{Op.Inputs[BaseSide],
+                                    Op.Addr,
+                                    Op.Seq,
+                                    std::move(AllPageAlternatives),
+                                    false,
+                                    false};
+      MayDepend.Relation = JumpTableValueRelation::MayDepend;
+      Queries.push_back(std::move(MayDepend));
+      Pending.push_back({&Op, Materialized->second, ExactQuery, MayQuery});
+    }
+  }
+
+  if (Queries.empty())
+    return;
+  bool AnalysisComplete = false;
+  const std::vector<bool> Matches =
+      tableValuesMatchAtUses(Queries, &AnalysisComplete);
+  const bool Complete = AnalysisComplete && Matches.size() == Queries.size();
+  for (const PendingMaterialization &Candidate : Pending) {
+    if (!Candidate.Op)
+      continue;
+    const bool HasExactQuery =
+        Candidate.ExactQuery != std::numeric_limits<size_t>::max();
+    const bool IsExact = Complete && HasExactQuery &&
+                         Candidate.ExactQuery < Matches.size() &&
+                         Matches[Candidate.ExactQuery];
+    const bool MayDepend = Complete && Candidate.MayQuery < Matches.size() &&
+                           Matches[Candidate.MayQuery];
+    // A complete query that proves no authenticated page reaches this ADD is
+    // not address evidence: an unrelated/sibling ADRP must not poison module
+    // arbitration.  An incomplete proof is different — the PAGEOFF output may
+    // still carry a reachable page definition, so publish an explicit partial
+    // certificate and let module arbitration fail closed.
+    if (Complete && !IsExact && !MayDepend)
+      continue;
+    const LowOp &Op = *Candidate.Op;
+    const RelocatedInstructionAddressMaterialization &Materialized =
+        Candidate.Materialized;
+    RelocatedInstructionAddressOccurrence Occurrence;
+    Occurrence.FieldVA = Op.Addr;
+    Occurrence.InstructionAddr = Op.Addr;
+    Occurrence.OpSeq = Op.Seq;
+    Occurrence.TargetVA = Materialized.TargetVA;
+    Occurrence.TargetOwnerVA = Materialized.TargetOwnerVA;
+    Occurrence.Width = 4;
+    Occurrence.Provenance = Img.hasExecutableCodeOwnerAt(Materialized.TargetVA)
+                                ? ConstantAddressProvenance::CodeAddress
+                                : ConstantAddressProvenance::DataAddress;
+    Occurrence.DefinesOutput = true;
+    Occurrence.OutputMayDepend = !IsExact;
+    Occurrence.OutputOpcode = Op.Opcode;
+    Occurrence.OutputWitness = Op.Output;
+    if (!llvm::is_contained(RelocatedInstructionAddressOccurrences, Occurrence))
+      RelocatedInstructionAddressOccurrences.push_back(std::move(Occurrence));
+  }
+}
+
+void CFGBuilder::completeExactARMRelativeLiteralAddresses(
+    const BinaryImage &Img) {
+  if (Img.Arch != Arch::ARM || !Img.isELF() || !JumpTableProofContextComplete ||
+      Img.getPointerSize() != 4)
+    return;
+
+  struct LiteralDefinition {
+    va_t SlotVA = InvalidVA;
+    va_t TargetVA = InvalidVA;
+    va_t TargetOwnerVA = InvalidVA;
+    uint32_t Encoded = 0;
+    JumpTableValueOccurrence Occurrence;
+  };
+  std::vector<LiteralDefinition> Literals;
+
+  // Resolve only instruction-local literal effective addresses.  This is not
+  // a CFG proof: it authenticates which exact LOAD occurrence read the
+  // relocation field.  The later batch query proves that LOAD's output reaches
+  // the ADD base on every feasible incoming path.
+  for (const auto &[Addr, Rec] : Insns) {
+    (void)Addr;
+    std::vector<std::pair<NdVar, uint32_t>> Known;
+    auto knownValue = [&](const NdVar &Value) -> std::optional<uint32_t> {
+      if (Value.isConst())
+        return static_cast<uint32_t>(Value.Offset);
+      for (auto It = Known.rbegin(); It != Known.rend(); ++It)
+        if (It->first == Value)
+          return It->second;
+      return std::nullopt;
+    };
+    for (const LowOp &Op : Rec.Ops) {
+      if (Op.Opcode == NdOp::LOAD) {
+        const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+        if (Memory.Complete && Memory.Address) {
+          const std::optional<uint32_t> Slot = knownValue(*Memory.Address);
+          const auto Applied = Slot ? Img.ARMRelativeLiteralFields.find(*Slot)
+                                    : Img.ARMRelativeLiteralFields.end();
+          const Segment *SlotSegment =
+              Slot ? Img.getSegmentFor(*Slot) : nullptr;
+          const uint8_t *Bytes =
+              Slot ? Img.readVA(*Slot, sizeof(uint32_t)) : nullptr;
+          if (Applied != Img.ARMRelativeLiteralFields.end() &&
+              Applied->second.TargetVA != InvalidVA &&
+              Applied->second.TargetOwnerVA != InvalidVA && SlotSegment &&
+              SlotSegment->isReadable() && !SlotSegment->isWritable() &&
+              Bytes && Op.Output.Size == 4) {
+            const AppliedARMRelativeLiteral &Field = Applied->second;
+            if (readLE<uint32_t>(Bytes) == Field.EncodedValue &&
+                Img.relocatedTargetBelongsToOwner(Field.TargetVA,
+                                                  Field.TargetOwnerVA))
+              Literals.push_back(
+                  {*Slot,
+                   Field.TargetVA,
+                   Field.TargetOwnerVA,
+                   Field.EncodedValue,
+                   {Op.Output, Op.Addr, Op.Seq, /*DefinedAtPoint=*/true}});
+          }
+        }
+      }
+
+      std::optional<uint32_t> Result;
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
+        Result = knownValue(Op.Inputs[0]);
+      } else if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2) {
+        const auto Left = knownValue(Op.Inputs[0]);
+        const auto Right = knownValue(Op.Inputs[1]);
+        if (Left && Right)
+          Result = static_cast<uint32_t>(*Left + *Right);
+      } else if (Op.Opcode == NdOp::INT_SUB && Op.NumInputs == 2) {
+        const auto Left = knownValue(Op.Inputs[0]);
+        const auto Right = knownValue(Op.Inputs[1]);
+        if (Left && Right)
+          Result = static_cast<uint32_t>(*Left - *Right);
+      }
+      if (Result && Op.Output.Size == 4)
+        Known.emplace_back(Op.Output, *Result);
+    }
+  }
+  if (Literals.empty())
+    return;
+
+  struct PendingMaterialization {
+    const LowOp *Op = nullptr;
+    va_t TargetVA = InvalidVA;
+    va_t TargetOwnerVA = InvalidVA;
+    size_t ExactQuery = 0;
+    std::vector<std::pair<const LiteralDefinition *, size_t>> Sources;
+  };
+  std::vector<JumpTableValueQuery> Queries;
+  std::vector<PendingMaterialization> Pending;
+  for (const auto &[Addr, Rec] : Insns) {
+    (void)Addr;
+    if (Rec.IsInstructionGuard)
+      continue;
+    std::vector<std::pair<NdVar, uint32_t>> Known;
+    auto knownValue = [&](const NdVar &Value) -> std::optional<uint32_t> {
+      if (Value.isConst())
+        return static_cast<uint32_t>(Value.Offset);
+      for (auto It = Known.rbegin(); It != Known.rend(); ++It)
+        if (It->first == Value)
+          return It->second;
+      return std::nullopt;
+    };
+    for (const LowOp &Op : Rec.Ops) {
+      if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2 &&
+          Op.Output.isReg() && Op.Output.Size == 4) {
+        int PCSide = -1;
+        for (int Side = 0; Side < 2; ++Side) {
+          const std::optional<uint32_t> PC = knownValue(Op.Inputs[Side]);
+          if (!PC || *PC != static_cast<uint32_t>(Op.Addr + 8))
+            continue;
+          if (PCSide != -1) {
+            PCSide = -2;
+            break;
+          }
+          PCSide = Side;
+        }
+        if (PCSide >= 0) {
+          using TargetKey = std::pair<va_t, va_t>;
+          std::map<TargetKey, std::vector<const LiteralDefinition *>> Groups;
+          const uint32_t PC = static_cast<uint32_t>(Op.Addr + 8);
+          for (const LiteralDefinition &Literal : Literals) {
+            if (static_cast<uint32_t>(PC + Literal.Encoded) !=
+                    static_cast<uint32_t>(Literal.TargetVA) ||
+                Literal.Occurrence.Value.Size != Op.Inputs[1 - PCSide].Size)
+              continue;
+            const TargetKey Key{Literal.TargetVA, Literal.TargetOwnerVA};
+            Groups[Key].push_back(&Literal);
+          }
+          for (auto &[Key, Sources] : Groups) {
+            std::vector<JumpTableValueOccurrence> Alternatives;
+            Alternatives.reserve(Sources.size());
+            for (const LiteralDefinition *Source : Sources)
+              Alternatives.push_back(Source->Occurrence);
+            const size_t ExactQuery = Queries.size();
+            Queries.push_back({Op.Inputs[1 - PCSide], Op.Addr, Op.Seq,
+                               Alternatives, false, false});
+            PendingMaterialization Candidate{
+                &Op, Key.first, Key.second, ExactQuery, {}};
+            Candidate.Sources.reserve(Sources.size());
+            for (const LiteralDefinition *Source : Sources) {
+              const size_t MayQuery = Queries.size();
+              JumpTableValueQuery MayDepend{
+                  Op.Inputs[1 - PCSide], Op.Addr, Op.Seq,
+                  {Source->Occurrence},  false,   false};
+              MayDepend.Relation = JumpTableValueRelation::MayDepend;
+              Queries.push_back(std::move(MayDepend));
+              Candidate.Sources.emplace_back(Source, MayQuery);
+            }
+            Pending.push_back(std::move(Candidate));
+          }
+        }
+      }
+
+      std::optional<uint32_t> Result;
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
+        Result = knownValue(Op.Inputs[0]);
+      } else if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2) {
+        const auto Left = knownValue(Op.Inputs[0]);
+        const auto Right = knownValue(Op.Inputs[1]);
+        if (Left && Right)
+          Result = static_cast<uint32_t>(*Left + *Right);
+      } else if (Op.Opcode == NdOp::INT_SUB && Op.NumInputs == 2) {
+        const auto Left = knownValue(Op.Inputs[0]);
+        const auto Right = knownValue(Op.Inputs[1]);
+        if (Left && Right)
+          Result = static_cast<uint32_t>(*Left - *Right);
+      }
+      if (Result && Op.Output.Size == 4)
+        Known.emplace_back(Op.Output, *Result);
+    }
+  }
+  if (Queries.empty())
+    return;
+
+  bool AnalysisComplete = false;
+  const std::vector<bool> Matches =
+      tableValuesMatchAtUses(Queries, &AnalysisComplete);
+  if (!AnalysisComplete || Matches.size() != Queries.size())
+    return;
+  for (const PendingMaterialization &Candidate : Pending) {
+    if (!Candidate.Op || Candidate.ExactQuery >= Matches.size())
+      continue;
+    const bool IsExact = Matches[Candidate.ExactQuery];
+    for (const auto &[Source, MayQuery] : Candidate.Sources) {
+      if (!Source || MayQuery >= Matches.size() || !Matches[MayQuery])
+        continue;
+      RelocatedInstructionAddressOccurrence Occurrence;
+      Occurrence.FieldVA = Source->SlotVA;
+      Occurrence.InstructionAddr = Candidate.Op->Addr;
+      Occurrence.OpSeq = Candidate.Op->Seq;
+      Occurrence.TargetVA = Candidate.TargetVA;
+      Occurrence.TargetOwnerVA = Candidate.TargetOwnerVA;
+      Occurrence.Width = 4;
+      Occurrence.Provenance = Img.hasExecutableCodeOwnerAt(Candidate.TargetVA)
+                                  ? ConstantAddressProvenance::CodeAddress
+                                  : ConstantAddressProvenance::DataAddress;
+      Occurrence.DefinesOutput = true;
+      Occurrence.OutputMayDepend = !IsExact;
+      Occurrence.OutputOpcode = Candidate.Op->Opcode;
+      Occurrence.OutputWitness = Candidate.Op->Output;
+      if (!llvm::is_contained(RelocatedInstructionAddressOccurrences,
+                              Occurrence))
+        RelocatedInstructionAddressOccurrences.push_back(std::move(Occurrence));
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -600,23 +1459,44 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
 
 void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
                                    LowFunc &Func) {
+  std::set<va_t> EverPublishedJumpTableBranches;
+  auto RememberPublishedJumpTables = [&]() {
+    for (const auto &[Addr, Rec] : Insns)
+      if (Rec.IsBranch && Rec.IsIndirect && !Rec.JumpTableTargets.empty())
+        EverPublishedJumpTableBranches.insert(Addr);
+  };
+  RememberPublishedJumpTables();
+
+  bool ReachedFixedPoint = false;
   for (int Stage = 0; Stage < limits::kMaxMultiStageRetries; ++Stage) {
-    std::vector<va_t> UnresolvedAddrs;
+    std::vector<va_t> CandidateAddrs;
     for (auto &[Addr, Rec] : Insns) {
       if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall)
         continue;
-      if (!Rec.JumpTableTargets.empty())
-        continue;
-      UnresolvedAddrs.push_back(Addr);
+      auto Info = ResolvedTableInfo.find(Addr);
+      const bool NeedsRevalidation = Info != ResolvedTableInfo.end() &&
+                                     Info->second.RequiresCompleteCFGProof;
+      if (Rec.JumpTableTargets.empty() || NeedsRevalidation)
+        CandidateAddrs.push_back(Addr);
     }
 
     bool MadeProgress = false;
-    for (va_t UA : UnresolvedAddrs) {
+    bool RefreshedProofMetadata = false;
+    for (va_t UA : CandidateAddrs) {
       auto It = Insns.find(UA);
       if (It == Insns.end())
         continue;
 
-      if (resolveRelocatedInteriorBranch(Img, It->second)) {
+      auto PriorInfo = ResolvedTableInfo.find(UA);
+      const bool WasProofDependent = PriorInfo != ResolvedTableInfo.end() &&
+                                     PriorInfo->second.RequiresCompleteCFGProof;
+      const std::optional<JumpTableInfo> OldInfo =
+          PriorInfo == ResolvedTableInfo.end()
+              ? std::nullopt
+              : std::optional<JumpTableInfo>(PriorInfo->second);
+
+      if (It->second.JumpTableTargets.empty() &&
+          resolveRelocatedInteriorBranch(Img, It->second)) {
         const va_t Target = It->second.BranchTarget;
         if (Target != InvalidVA) {
           BlockStarts.insert(Target);
@@ -627,12 +1507,22 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         continue;
       }
 
+      const std::vector<va_t> OldTargets = It->second.JumpTableTargets;
+      JumpTableProofContextComplete = true;
       auto Targets = resolveJumpTable(Img, It->second);
-      if (Targets.empty())
-        continue;
-
-      It->second.JumpTableTargets = Targets;
-      MadeProgress = true;
+      JumpTableProofContextComplete = false;
+      auto NewInfo = ResolvedTableInfo.find(UA);
+      const bool MetadataChanged =
+          OldInfo.has_value() != (NewInfo != ResolvedTableInfo.end()) ||
+          (OldInfo && NewInfo != ResolvedTableInfo.end() &&
+           *OldInfo != NewInfo->second);
+      RefreshedProofMetadata |= WasProofDependent && MetadataChanged;
+      if (Targets != OldTargets) {
+        It->second.JumpTableTargets = Targets;
+        MadeProgress = true;
+      }
+      if (!Targets.empty())
+        EverPublishedJumpTableBranches.insert(UA);
 
       for (va_t T : Targets) {
         if (!ExploredAddrs.count(T)) {
@@ -647,9 +1537,22 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     // when nothing was newly resolved this stage, so check it before bailing.
     if (reconcileSharedTables(Img, Dec))
       MadeProgress = true;
+    RememberPublishedJumpTables();
 
-    if (!MadeProgress)
+    if (!MadeProgress) {
+      // Targets can remain byte-for-byte equal while the complete CFG changes
+      // case labels, range/identity metadata, or mutation state.  Publish the
+      // freshly cached JumpTableInfo, then require another complete resolver
+      // round on that published CFG.  Only an equal target set *and* equal
+      // proof metadata in the following round is a fixed point; a metadata
+      // cycle consumes the bounded retry budget and is discarded below.
+      if (RefreshedProofMetadata) {
+        rebuildBlocks(Func);
+        continue;
+      }
+      ReachedFixedPoint = true;
       break;
+    }
 
     completeExactAArch64PageBases(Img);
     splitBlocks();
@@ -658,6 +1561,37 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     LLVM_DEBUG(llvm::dbgs()
                << "  multi-stage " << (Stage + 1) << ": rebuilt to "
                << Func.Blocks.size() << " blocks\n");
+  }
+
+  // A proof-dependent target set may only escape after one whole round saw no
+  // new decoded targets and no target-set change.  If the bounded iteration
+  // budget is exhausted first, discard those provisional edges rather than
+  // publishing a CFG whose validity depends on traversal order.
+  if (!ReachedFixedPoint) {
+    bool Changed = false;
+    for (auto &[Addr, Rec] : Insns) {
+      auto Info = ResolvedTableInfo.find(Addr);
+      if (Info == ResolvedTableInfo.end() ||
+          !Info->second.RequiresCompleteCFGProof)
+        continue;
+      Changed |= !Rec.JumpTableTargets.empty();
+      Rec.JumpTableTargets.clear();
+      ResolvedTableInfo.erase(Info);
+    }
+    if (Changed)
+      rebuildBlocks(Func);
+  }
+
+  // A transient empty target set can recover in a later stage, so classify a
+  // lost validated table only after convergence (or the bounded cleanup above)
+  // has established the final target state.  These addresses are not generic
+  // detector claims: every member published at least one concrete table edge
+  // earlier in this very build.
+  for (va_t Addr : EverPublishedJumpTableBranches) {
+    auto It = Insns.find(Addr);
+    if (It != Insns.end() && It->second.IsBranch && It->second.IsIndirect &&
+        !It->second.IsCall && It->second.JumpTableTargets.empty())
+      LostValidatedJumpTableBranches.insert(Addr);
   }
 }
 

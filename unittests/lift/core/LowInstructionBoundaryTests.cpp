@@ -1,18 +1,22 @@
 //===- LowInstructionBoundaryTests.cpp - LowIR instruction provenance ----===//
 
+#include "../../../lib/ir/low/jumptable/JumpTableResolverDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/LiftCommon.h"
+#include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Error.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -25,6 +29,297 @@ using namespace neverd;
 namespace {
 
 constexpr va_t kEntry = 0x1000;
+
+TEST(LowInstructionBoundary, JumpTableCaseLabelsUseModularArithmetic) {
+  EXPECT_EQ(recoverCaseLabelBitPattern(/*EntryIndex=*/0,
+                                       /*Stride=*/1, /*NormShift=*/0,
+                                       std::numeric_limits<int64_t>::min()),
+            UINT64_C(0x8000000000000000));
+  EXPECT_EQ(recoverCaseLabelBitPattern(UINT64_MAX, /*Stride=*/2,
+                                       /*NormShift=*/0, /*NormBase=*/0),
+            UINT64_C(0xfffffffffffffffe));
+  EXPECT_EQ(recoverCaseLabelBitPattern(/*EntryIndex=*/1,
+                                       /*Stride=*/1, /*NormShift=*/63,
+                                       std::numeric_limits<int64_t>::min()),
+            UINT64_C(0));
+  EXPECT_FALSE(recoverCaseLabelBitPattern(/*EntryIndex=*/1,
+                                          /*Stride=*/1, /*NormShift=*/64,
+                                          /*NormBase=*/0));
+}
+
+TEST(LowInstructionBoundary, GuardEvaluatorDistinguishesNotFromTwosComplement) {
+  const std::array<uint64_t, 1> Zero{0};
+  const std::array<uint16_t, 1> W32{4};
+  EXPECT_EQ(evaluateJumpTableGuardPrimitive(NdOp::INT_NEGATE, 4, Zero, W32),
+            UINT64_C(0xffffffff));
+  EXPECT_EQ(evaluateJumpTableGuardPrimitive(NdOp::INT_NEG2, 4, Zero, W32),
+            UINT64_C(0));
+}
+
+TEST(LowInstructionBoundary, GuardEvaluatorCoercesMixedWidthComparisons) {
+  const std::array<uint64_t, 2> Values{UINT64_C(0xffffffff),
+                                       UINT64_C(0x100000004)};
+  const std::array<uint16_t, 2> Widths{4, 8};
+  EXPECT_EQ(evaluateJumpTableGuardPrimitive(NdOp::INT_LESS, 1, Values, Widths),
+            UINT64_C(1));
+}
+
+TEST(LowInstructionBoundary, GuardEvaluatorRejectsValuesWiderThanU64) {
+  const std::array<uint64_t, 1> Value{0};
+  const std::array<uint16_t, 1> W128{16};
+  EXPECT_FALSE(
+      evaluateJumpTableGuardPrimitive(NdOp::INT_NEGATE, 16, Value, W128));
+}
+
+TEST(LowInstructionBoundary,
+     RelativeTableTargetsRequireCompletePointerWidthTransforms) {
+  EXPECT_TRUE(relativeTargetTransformUsesPointerWidth(
+      NdOp::INT_ZEXT, /*DynamicInputSize=*/4, /*OtherInputSize=*/0,
+      /*OutputSize=*/8, /*PointerSize=*/8));
+  EXPECT_FALSE(relativeTargetTransformUsesPointerWidth(
+      NdOp::INT_ZEXT, /*DynamicInputSize=*/1, /*OtherInputSize=*/0,
+      /*OutputSize=*/4, /*PointerSize=*/8));
+
+  EXPECT_TRUE(relativeTargetTransformUsesPointerWidth(
+      NdOp::INT_LEFT, /*DynamicInputSize=*/8, /*OtherInputSize=*/1,
+      /*OutputSize=*/8, /*PointerSize=*/8));
+  EXPECT_FALSE(relativeTargetTransformUsesPointerWidth(
+      NdOp::INT_LEFT, /*DynamicInputSize=*/4, /*OtherInputSize=*/1,
+      /*OutputSize=*/4, /*PointerSize=*/8));
+
+  EXPECT_TRUE(relativeTargetTransformUsesPointerWidth(
+      NdOp::INT_ADD, /*DynamicInputSize=*/8, /*OtherInputSize=*/8,
+      /*OutputSize=*/8, /*PointerSize=*/8));
+  EXPECT_FALSE(relativeTargetTransformUsesPointerWidth(
+      NdOp::INT_ADD, /*DynamicInputSize=*/4, /*OtherInputSize=*/4,
+      /*OutputSize=*/4, /*PointerSize=*/8));
+  EXPECT_FALSE(relativeTargetTransformUsesPointerWidth(
+      NdOp::INT_ADD, /*DynamicInputSize=*/8, /*OtherInputSize=*/4,
+      /*OutputSize=*/8, /*PointerSize=*/8));
+}
+
+TEST(LowInstructionBoundary, AbsoluteARMTableTargetsUseUniformImageMode) {
+  BinaryImage Thumb;
+  Thumb.Arch = Arch::ARM;
+  Thumb.Mode = InstructionMode::Thumb;
+  EXPECT_EQ(canonicalizeAbsoluteTableCodeTarget(Thumb, 0x1001), 0x1000u);
+  EXPECT_FALSE(canonicalizeAbsoluteTableCodeTarget(Thumb, 0x1000));
+
+  BinaryImage ARM;
+  ARM.Arch = Arch::ARM;
+  ARM.Mode = InstructionMode::ARM;
+  EXPECT_EQ(canonicalizeAbsoluteTableCodeTarget(ARM, 0x2000), 0x2000u);
+  EXPECT_FALSE(canonicalizeAbsoluteTableCodeTarget(ARM, 0x2001));
+
+  BinaryImage A64;
+  A64.Arch = Arch::AArch64;
+  A64.Mode = InstructionMode::Default;
+  EXPECT_EQ(canonicalizeAbsoluteTableCodeTarget(A64, 0x3001), 0x3001u);
+}
+
+TEST(LowInstructionBoundary, JumpTableTargetBasePresenceAllowsZeroAnchor) {
+  const uint8_t Entry = 3;
+  EXPECT_EQ(decodeTableEntry(&Entry, 1, /*IsRelative=*/true,
+                             /*IsSigned=*/false, /*BaseAddr=*/0x1000,
+                             /*HasTargetBase=*/true, /*TargetBase=*/0,
+                             /*Scale=*/4, /*AddressBytes=*/8),
+            12u);
+  EXPECT_EQ(decodeTableEntry(&Entry, 1, /*IsRelative=*/true,
+                             /*IsSigned=*/false, /*BaseAddr=*/0x1000,
+                             /*HasTargetBase=*/false, /*TargetBase=*/0,
+                             /*Scale=*/4, /*AddressBytes=*/8),
+            0x1003u);
+}
+
+TEST(LowInstructionBoundary,
+     RelocatedOwnerUsesMachOSectionCodeAuthorityForOnePast) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Mode = InstructionMode::Default;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::MachO;
+
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = 0x1000;
+  Text.Size = 0x200;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  Image.Segments.push_back(std::move(Text));
+
+  Section Code;
+  Code.Name = "__text";
+  Code.SegmentName = "__TEXT";
+  Code.VA = 0x1000;
+  Code.Size = 0x40;
+  Code.FileSz = Code.Size;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Type = llvm::MachO::S_REGULAR | llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+              llvm::MachO::S_ATTR_SOME_INSTRUCTIONS;
+  Image.Sections.push_back(Code);
+
+  Section CString;
+  CString.Name = "__cstring";
+  CString.SegmentName = "__TEXT";
+  CString.VA = 0x1100;
+  CString.Size = 0x10;
+  CString.FileSz = CString.Size;
+  CString.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  CString.Type = llvm::MachO::S_CSTRING_LITERALS;
+  Image.Sections.push_back(CString);
+
+  ASSERT_TRUE(Image.hasExecutableCodeOwnerAt(Code.VA));
+  ASSERT_FALSE(Image.hasExecutableCodeOwnerAt(CString.VA));
+  EXPECT_FALSE(
+      Image.relocatedTargetBelongsToOwner(Code.VA + Code.Size, Code.VA));
+  EXPECT_TRUE(Image.relocatedTargetBelongsToOwner(CString.VA + CString.Size,
+                                                  CString.VA));
+}
+
+TEST(LowInstructionBoundary, JumpTableTargetsUseGuestWidthModularArithmetic) {
+  const uint32_t PositiveOffset = 0x30;
+  EXPECT_EQ(decodeTableEntry(reinterpret_cast<const uint8_t *>(&PositiveOffset),
+                             4,
+                             /*IsRelative=*/true, /*IsSigned=*/true,
+                             /*BaseAddr=*/0xfffffffffffffff0ULL,
+                             /*HasTargetBase=*/false, /*TargetBase=*/0,
+                             /*Scale=*/1, /*AddressBytes=*/8),
+            0x20u);
+
+  const uint8_t WrappedOffset = 0x10;
+  EXPECT_EQ(decodeTableEntry(&WrappedOffset, 1, /*IsRelative=*/true,
+                             /*IsSigned=*/false, /*BaseAddr=*/0xfffffff8u,
+                             /*HasTargetBase=*/false, /*TargetBase=*/0,
+                             /*Scale=*/1, /*AddressBytes=*/4),
+            8u);
+
+  const uint8_t CompactEntry = 2;
+  EXPECT_EQ(decodeTableEntry(&CompactEntry, 1, /*IsRelative=*/true,
+                             /*IsSigned=*/false, /*BaseAddr=*/0x200,
+                             /*HasTargetBase=*/true,
+                             /*TargetBase=*/0xfffffffcu,
+                             /*Scale=*/4, /*AddressBytes=*/4),
+            4u);
+}
+
+TEST(LowInstructionBoundary, JumpTableKeepsPhysicalSlotsSeparateFromLabels) {
+  JumpTable Table;
+  Table.BaseAddr = 0x2000;
+  Table.HasBaseAddr = true;
+  Table.EntrySize = 8;
+  Table.EntryStride = 16;
+  Table.StorageRanges = {JumpTableStorageRange{0x2000, 8, 16, 3},
+                         JumpTableStorageRange{0x3000, 4, 4, 2}};
+  Table.Targets = {0x3000, 0x3020};
+  Table.SlotIndices = {0, 2};
+  Table.HasDispatchSlotMap = true;
+  Table.CaseLabels = {-7, 41};
+
+  EXPECT_EQ(Table.targetPositionForPhysicalSlot(0), 0u);
+  EXPECT_FALSE(Table.targetPositionForPhysicalSlot(1).has_value());
+  EXPECT_EQ(Table.targetPositionForPhysicalSlot(2), 1u);
+  EXPECT_TRUE(Table.ownsStorageAddress(0x2000));
+  EXPECT_FALSE(
+      Table.ownsStorageAddress(0x2008)); // strided padding is not owned
+  EXPECT_TRUE(Table.ownsStorageAddress(0x2010));
+  EXPECT_FALSE(Table.ownsStorageAddress(0x2018));
+  EXPECT_TRUE(Table.ownsStorageAddress(0x2027)); // end byte of trailing slot
+  EXPECT_FALSE(Table.ownsStorageAddress(0x2028));
+  EXPECT_FALSE(Table.ownsStorageAddress(0x2800)); // disjoint gap remains free
+  EXPECT_TRUE(Table.ownsStorageAddress(0x3007));
+  EXPECT_FALSE(Table.ownsStorageAddress(0x3008));
+  EXPECT_FALSE(Table.storageEnd().has_value());
+}
+
+TEST(LowInstructionBoundary, JumpTableRejectsUnsupportedEntryWidths) {
+  const uint8_t Bytes[16] = {};
+  EXPECT_FALSE(decodeTableEntry(Bytes, 3, /*IsRelative=*/true,
+                                /*IsSigned=*/false, /*BaseAddr=*/0,
+                                /*HasTargetBase=*/true,
+                                /*TargetBase=*/0x1000, /*Scale=*/4,
+                                /*AddressBytes=*/8));
+  EXPECT_FALSE(decodeTableEntry(Bytes, 16, /*IsRelative=*/false,
+                                /*IsSigned=*/false, /*BaseAddr=*/0));
+}
+
+TEST(LowInstructionBoundary, FrameSlotDeltasFollowArithmeticWidthCoercion) {
+  auto resolveOffset = [&](Arch Architecture, NdOp Opcode, NdVar Constant,
+                           uint16_t OutputSize) -> std::optional<int64_t> {
+    const TargetRegInfo &TRI = getTargetRegInfo(Architecture);
+    EXPECT_EQ(TRI.PointerSize, OutputSize);
+    LowOp Arithmetic;
+    Arithmetic.Opcode = Opcode;
+    Arithmetic.Output = NdVar::tmp(0x100, OutputSize);
+    Arithmetic.addInput(NdVar::reg(TRI.StackPointer, OutputSize));
+    Arithmetic.addInput(Constant);
+    std::vector<LowOp> Ops{Arithmetic};
+    uint64_t BaseReg = InvalidVA;
+    int64_t Offset = 0;
+    if (!frameSlotKey(Ops, 0, Arithmetic.Output, TRI, BaseReg, Offset))
+      return std::nullopt;
+    EXPECT_EQ(BaseReg, TRI.StackPointer);
+    return Offset;
+  };
+
+  // Integer operands are zero-extended to the operation width.  Treating the
+  // high bit of the i8 literal as a sign bit would analyze a different stack
+  // address than the emitted 32-bit ADD/SUB executes.
+  EXPECT_EQ(resolveOffset(Arch::X86, NdOp::INT_ADD, NdVar::scalar(0xf0, 1), 4),
+            240);
+  EXPECT_EQ(resolveOffset(Arch::X86, NdOp::INT_SUB, NdVar::scalar(0xf0, 1), 4),
+            -240);
+
+  // A genuine pointer-width two's-complement displacement remains negative.
+  EXPECT_EQ(resolveOffset(Arch::X86, NdOp::INT_ADD,
+                          NdVar::scalar(uint32_t{0xfffffff0}, 4), 4),
+            -16);
+  EXPECT_EQ(resolveOffset(Arch::X86, NdOp::INT_SUB,
+                          NdVar::scalar(uint32_t{0xfffffff0}, 4), 4),
+            16);
+
+  // Exercise the full-width mask/sign path as well; it must make the same
+  // distinction without shifting by 64 or relying on narrower truncation.
+  EXPECT_EQ(resolveOffset(Arch::X64, NdOp::INT_ADD, NdVar::scalar(0xf0, 1), 8),
+            240);
+  EXPECT_EQ(resolveOffset(Arch::X64, NdOp::INT_SUB, NdVar::scalar(0xf0, 1), 8),
+            -240);
+  EXPECT_EQ(resolveOffset(Arch::X64, NdOp::INT_ADD,
+                          NdVar::scalar(uint64_t{0xfffffffffffffff0}, 8), 8),
+            -16);
+  EXPECT_EQ(resolveOffset(Arch::X64, NdOp::INT_SUB,
+                          NdVar::scalar(uint64_t{0xfffffffffffffff0}, 8), 8),
+            16);
+}
+
+TEST(LowInstructionBoundary, IntegerAndMaskUsesOutputAndDynamicWidths) {
+  // A wider encoded immediate is truncated to the operation result.  Using
+  // the immediate's own width would invent a 512-value domain for an i8 AND.
+  EXPECT_EQ(effectiveIntegerAndMask(/*EncodedMask=*/0x1ff,
+                                    /*MaskSize=*/2,
+                                    /*DynamicSize=*/1,
+                                    /*OutputSize=*/1),
+            0xffu);
+
+  // A narrow dynamic input is zero-extended before a wider AND, so its newly
+  // introduced high output bits remain unreachable even when the mask sets
+  // them.
+  EXPECT_EQ(effectiveIntegerAndMask(/*EncodedMask=*/0x1ff,
+                                    /*MaskSize=*/2,
+                                    /*DynamicSize=*/1,
+                                    /*OutputSize=*/2),
+            0xffu);
+
+  // With a genuinely wide dynamic operand the ninth bit is reachable.
+  EXPECT_EQ(effectiveIntegerAndMask(/*EncodedMask=*/0x1ff,
+                                    /*MaskSize=*/2,
+                                    /*DynamicSize=*/2,
+                                    /*OutputSize=*/2),
+            0x1ffu);
+  EXPECT_FALSE(effectiveIntegerAndMask(/*EncodedMask=*/~uint64_t{0},
+                                       /*MaskSize=*/16,
+                                       /*DynamicSize=*/8,
+                                       /*OutputSize=*/8));
+}
 
 LowFunc buildFunction(Arch Architecture, InstructionMode Mode,
                       std::vector<uint8_t> Bytes,
@@ -92,6 +387,28 @@ std::vector<LowOp> liftAArch64Instruction(const std::vector<uint8_t> &Bytes,
                                           va_t Address = kEntry) {
   Decoder Dec;
   if (!Dec.init(Arch::AArch64, InstructionMode::Default)) {
+    ADD_FAILURE() << "decoder initialization failed";
+    return {};
+  }
+
+  DecodedInsn Insn{};
+  int Size = Dec.decodeOneForLift(Bytes.data(), Bytes.size(), Address, Insn);
+  if (Size <= 0) {
+    ADD_FAILURE() << "instruction decode failed";
+    return {};
+  }
+  EXPECT_EQ(static_cast<size_t>(Size), Bytes.size());
+
+  std::vector<LowOp> Ops;
+  Dec.liftToLow(Insn, Ops);
+  return Ops;
+}
+
+std::vector<LowOp> liftX86Instruction(Arch Architecture,
+                                      const std::vector<uint8_t> &Bytes,
+                                      va_t Address = kEntry) {
+  Decoder Dec;
+  if (!Dec.init(Architecture, InstructionMode::Default)) {
     ADD_FAILURE() << "decoder initialization failed";
     return {};
   }
@@ -436,6 +753,47 @@ TEST(LowInstructionBoundary, ARMPCReadUsesModeSpecificRelocatableAddress) {
   }
 }
 
+TEST(LowInstructionBoundary, ARMTableBranchUsesRawPCAndScalarScale) {
+  struct Case {
+    const char *Name;
+    std::vector<uint8_t> Bytes;
+    va_t Address;
+  };
+  const std::vector<Case> Cases = {
+      {"tbb", {0xdf, 0xe8, 0x00, 0xf0}, 0x1002},
+      {"tbh", {0xdf, 0xe8, 0x10, 0xf0}, 0x1002},
+  };
+
+  for (const Case &Test : Cases) {
+    SCOPED_TRACE(Test.Name);
+    const std::vector<LowOp> Ops =
+        liftARMInstruction(InstructionMode::Thumb, Test.Bytes, Test.Address);
+
+    auto PCWrite = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+      return Op.Opcode == NdOp::COPY &&
+             Op.Output == NdVar::reg(armreg::PC, 4) && Op.NumInputs == 1;
+    });
+    PCWrite = std::find_if(PCWrite, Ops.end(), [&](const LowOp &Op) {
+      return Op.Opcode == NdOp::COPY &&
+             Op.Output == NdVar::reg(armreg::PC, 4) && Op.NumInputs == 1 &&
+             Op.Inputs[0].isConst() && Op.Inputs[0].Offset == Test.Address + 4;
+    });
+    ASSERT_NE(PCWrite, Ops.end());
+    ASSERT_TRUE(PCWrite->Inputs[0].isConst());
+    EXPECT_EQ(PCWrite->Inputs[0].Offset, 0x1006u);
+    EXPECT_EQ(PCWrite->Inputs[0].Provenance,
+              ConstantAddressProvenance::Address);
+
+    auto Scale = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+      return Op.Opcode == NdOp::INT_LEFT && Op.NumInputs == 2 &&
+             Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 1 &&
+             Op.Inputs[1].Size == 4;
+    });
+    ASSERT_NE(Scale, Ops.end());
+    EXPECT_EQ(Scale->Inputs[1].Provenance, ConstantAddressProvenance::Scalar);
+  }
+}
+
 TEST(LowInstructionBoundary, X86EIPRelativeAddressWrapsBeforeZeroExtension) {
   constexpr va_t HighAddress = 0x100001000ULL;
   struct Case {
@@ -476,6 +834,87 @@ TEST(LowInstructionBoundary, X86EIPRelativeAddressWrapsBeforeZeroExtension) {
   }
 }
 
+TEST(LowInstructionBoundary, X86I386EffectiveAddressWrapsAtGuestPointerWidth) {
+  // mov ecx, dword ptr [eax + 1]
+  const std::vector<LowOp> Ops =
+      liftX86Instruction(Arch::X86, {0x8b, 0x48, 0x01});
+
+  auto BaseCopy = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    return Op.Opcode == NdOp::COPY && Op.Output.Size == 4 &&
+           Op.NumInputs == 1 && Op.Inputs[0] == NdVar::reg(x86reg::RAX, 4);
+  });
+  ASSERT_NE(BaseCopy, Ops.end());
+
+  auto Add = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    return Op.Opcode == NdOp::INT_ADD && Op.Output.Size == 4 &&
+           Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+           Op.Inputs[1].Offset == 1 && Op.Inputs[1].Size == 4;
+  });
+  ASSERT_NE(Add, Ops.end());
+
+  auto Extend = std::find_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+    return Op.Opcode == NdOp::INT_ZEXT && Op.Output.Size == 8 &&
+           Op.NumInputs == 1 && Op.Inputs[0] == Add->Output;
+  });
+  ASSERT_NE(Extend, Ops.end());
+  EXPECT_TRUE(std::any_of(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+    return Op.Opcode == NdOp::LOAD && Op.NumInputs != 0 &&
+           Op.Inputs[0] == Extend->Output;
+  }));
+
+  // In particular, EAX=0xffffffff plus one is computed by the i32 ADD and
+  // wraps to zero before the internal 8-byte VA representation is formed.
+  EXPECT_FALSE(std::any_of(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    for (uint8_t I = 0; I < Op.NumInputs; ++I)
+      if (Op.Inputs[I] == NdVar::reg(x86reg::RAX, 8))
+        return true;
+    return false;
+  }));
+}
+
+TEST(LowInstructionBoundary, X86AddressOverrideIgnoresTheHighHalfOfRAX) {
+  // addr32 mov ecx, dword ptr [eax + 1]
+  const std::vector<LowOp> Ops =
+      liftX86Instruction(Arch::X64, {0x67, 0x8b, 0x48, 0x01});
+
+  auto Add = std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    return Op.Opcode == NdOp::INT_ADD && Op.Output.Size == 4 &&
+           Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+           Op.Inputs[1].Offset == 1 && Op.Inputs[1].Size == 4;
+  });
+  ASSERT_NE(Add, Ops.end());
+  EXPECT_TRUE(std::any_of(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    return Op.Opcode == NdOp::COPY && Op.Output.Size == 4 &&
+           Op.NumInputs == 1 && Op.Inputs[0] == NdVar::reg(x86reg::RAX, 4);
+  }));
+  EXPECT_TRUE(std::any_of(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+    return Op.Opcode == NdOp::INT_ZEXT && Op.Output.Size == 8 &&
+           Op.NumInputs == 1 && Op.Inputs[0] == Add->Output;
+  }));
+  EXPECT_FALSE(std::any_of(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    for (uint8_t I = 0; I < Op.NumInputs; ++I)
+      if (Op.Inputs[I] == NdVar::reg(x86reg::RAX, 8))
+        return true;
+    return false;
+  }));
+}
+
+TEST(LowInstructionBoundary, X86Native64EffectiveAddressKeepsRAXWidth) {
+  // mov ecx, dword ptr [rax + 1]
+  const std::vector<LowOp> Ops =
+      liftX86Instruction(Arch::X64, {0x8b, 0x48, 0x01});
+
+  EXPECT_TRUE(std::any_of(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    return Op.Opcode == NdOp::COPY && Op.Output.Size == 8 &&
+           Op.NumInputs == 1 && Op.Inputs[0] == NdVar::reg(x86reg::RAX, 8);
+  }));
+  EXPECT_TRUE(std::any_of(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+    return Op.Opcode == NdOp::INT_ADD && Op.Output.Size == 8 &&
+           Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+           Op.Inputs[1].Offset == 1 && Op.Inputs[1].Size == 8;
+  }));
+}
+
 TEST(LowInstructionBoundary,
      X86RelocatedDisplacementDoesNotTagEqualStoredImmediate) {
   constexpr va_t DataVA = 0x250;
@@ -511,7 +950,7 @@ TEST(LowInstructionBoundary,
   Image.Segments.push_back(std::move(Text));
 
   // c7 /0 uses a ModR/M byte at +1, disp32 at +2, and imm32 at +6.
-  Image.DataAddressRelocOperands[kEntry + 2] = {DataVA, DataVA, 4};
+  Image.DataAddressRelocOperands[kEntry + 2] = {DataVA, DataVA, 4, 0x200};
 
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X86));
@@ -1133,6 +1572,28 @@ TEST(LowInstructionBoundary, ARMConditionalPCWritesKeepFalseFallthrough) {
     EXPECT_FALSE(static_cast<bool>(validateLowInstructionBoundaries(
         Function, LowInstructionBoundaryRequirement::Required)));
   }
+}
+
+TEST(LowInstructionBoundary, ARMConditionalDirectBranchIsNotLocalGuard) {
+  // bne +0 (to 0x1008); bx lr; bx lr.  The lifter spells the branch as
+  // `COND_BR next,!NE; BRANCH target`, but that pair is the guest control flow
+  // itself rather than a same-instruction guard around a memory/call effect.
+  LowFunc Function = buildFunction(
+      Arch::ARM, InstructionMode::ARM,
+      {0x00, 0x00, 0x00, 0x1a, 0x1e, 0xff, 0x2f, 0xe1, 0x1e, 0xff, 0x2f, 0xe1});
+
+  const LowBlock *Entry = findBlock(Function, kEntry);
+  ASSERT_NE(Entry, nullptr);
+  ASSERT_EQ(Entry->InstructionBoundaries.size(), 1u);
+  const LowInstructionBoundary &Boundary = Entry->InstructionBoundaries.front();
+  EXPECT_EQ(Boundary.Control, LowInstructionControl::Branch);
+  EXPECT_TRUE(hasLowInstructionControlFlag(
+      Boundary.ControlFlags, LowInstructionControlFlag::Conditional));
+  EXPECT_FALSE(hasLowInstructionControlFlag(
+      Boundary.ControlFlags, LowInstructionControlFlag::InstructionGuard));
+  EXPECT_EQ(Entry->Succs.size(), 2u);
+  EXPECT_FALSE(static_cast<bool>(validateLowInstructionBoundaries(
+      Function, LowInstructionBoundaryRequirement::Required)));
 }
 
 TEST(LowInstructionBoundary, ARMConditionalMemoryUsesOneInstructionLocalGuard) {

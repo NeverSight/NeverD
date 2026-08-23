@@ -98,6 +98,11 @@ TEST_F(NdOpEmulatorTest, StoreAndReload) {
   Store.addInput(NdVar::cst(0, 8));
   Store.addInput(NdVar::cst(0x1020, 8));
   Store.addInput(NdVar::reg(0, 4));
+  const LowMemoryOperandView StoreMemory = lowMemoryOperands(Store);
+  ASSERT_TRUE(StoreMemory.Complete);
+  EXPECT_EQ(StoreMemory.Address, &Store.Inputs[1]);
+  EXPECT_EQ(StoreMemory.StoredValue, &Store.Inputs[2]);
+  EXPECT_EQ(StoreMemory.AccessSize, 4u);
   ASSERT_TRUE(Emu.step(Store));
 
   // LOAD it back from the same address
@@ -120,6 +125,12 @@ TEST_F(NdOpEmulatorTest, AtomicAddReturnsOldValueAndStoresWrappedSum) {
   AtomicAdd.Output = NdVar::reg(8, 1);
   AtomicAdd.addInput(NdVar::cst(0x1020, 8));
   AtomicAdd.addInput(NdVar::cst(5, 1));
+  const LowMemoryOperandView AtomicMemory = lowMemoryOperands(AtomicAdd);
+  ASSERT_TRUE(AtomicMemory.Complete);
+  EXPECT_EQ(AtomicMemory.Address, &AtomicAdd.Inputs[0]);
+  EXPECT_EQ(AtomicMemory.StoredValue, &AtomicAdd.Inputs[1]);
+  EXPECT_EQ(AtomicMemory.AccessSize, 1u)
+      << "the pointer-width address must not widen the atomic access";
   ASSERT_TRUE(Emu.step(AtomicAdd));
   EXPECT_EQ(Emu.getRegister(8).value_or(0), 0xfeu);
 

@@ -52,8 +52,13 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     // value with a role-neutral address occurrence so GOTOFF/SECTDIFF scalar
     // offsets retain the complete address relation without relying on numeric
     // coincidence with a loader target inventory.
-    if (GetPcArmedThisInsn)
+    if (GetPcArmedThisInsn) {
+      const int GetPcSeq = S.Seq;
       S.emit(NdOp::COPY, DstW, {NdVar::address(GetPcValue, PopSz)});
+      LastGetPcOccurrence = I386GetPcOccurrence{
+          S.Addr, GetPcSeq, static_cast<uint32_t>(GetPcValue), NdOp::COPY,
+          DstW};
+    }
     S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(PopSz, PtrSize)});
     break;
   }
@@ -78,8 +83,12 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
         GetPcPending = true;
         GetPcValue = Target;
       } else {
-        S.emit(NdOp::CALL, NdVar::reg(x86reg::RAX, PtrSize),
-               {NdVar::cst(Target, PtrSize)});
+        NdVar TargetValue = NdVar::cst(Target, PtrSize);
+        if (S.RelocatedImmediate) {
+          TargetValue = *S.RelocatedImmediate;
+          TargetValue.Size = PtrSize;
+        }
+        S.emit(NdOp::CALL, NdVar::reg(x86reg::RAX, PtrSize), {TargetValue});
       }
     } else if (X86.operands[0].type == X86_OP_MEM &&
                X86.operands[0].mem.base == X86_REG_RIP &&

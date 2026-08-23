@@ -173,6 +173,10 @@ private:
   void buildSsa(MedFunc &Func);
   void runDce(MedFunc &Func);
   void propagate(MedFunc &Func);
+  void resolveSwitchSelectorPlans(MedFunc &Func);
+  void resolveScalarAddressModels(
+      MedFunc &Func,
+      const std::vector<RelocatedInstructionScalarModelOccurrence> &Models);
   void detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt);
   void simplifyCfg(MedFunc &Func);
   /// Split an ARM instruction-local predicate guard from the effects it

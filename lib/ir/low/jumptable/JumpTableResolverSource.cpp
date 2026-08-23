@@ -105,8 +105,9 @@ static bool isPreScaledIndex(const std::vector<LowOp> &Ops, int FromIdx,
 
 bool CFGBuilder::detectUnscaledRelocTableLoad(
     const BinaryImage &Img, const InsnRecord &Rec, uint64_t &BaseReg,
-    uint64_t &IndexReg, uint16_t &LoadWidth, uint64_t &Disp,
-    va_t &TableAddr) const {
+    uint64_t &IndexReg, uint16_t &LoadWidth, uint64_t &Disp, va_t &TableAddr,
+    NdVar *LoadOutput, va_t *LoadAddr, int *LoadSeq, NdVar *IndexValue,
+    va_t *IndexUseAddr, int *IndexUseSeq) const {
   // Flatten the whole function prefix up to the dispatch so the pre-scaling
   // mask (often hoisted into a register in the loop preheader) is in scope.
   std::vector<LowOp> Ops;
@@ -166,7 +167,7 @@ bool CFGBuilder::detectUnscaledRelocTableLoad(
         Ops[InnerIdx].Inputs[1].isConst())
       continue;
 
-    va_t LoadAddr = L.Addr;
+    va_t LoadInsnAddr = L.Addr;
     const LowOp &Sum = Ops[InnerIdx];
     for (int Side = 0; Side < 2; ++Side) {
       // The pre-scaling mask, whose stride equals the entry size, identifies
@@ -182,8 +183,8 @@ bool CFGBuilder::detectUnscaledRelocTableLoad(
       // verifiable label-table signature no ordinary load shares.
       va_t Table = LocalDisp;
       if (LocalDisp == 0) {
-        auto BaseAddrOpt = foldRegConstant(Img, Rec, Base, LoadAddr);
-        if (!BaseAddrOpt || *BaseAddrOpt == 0)
+        auto BaseAddrOpt = foldRegConstant(Img, Rec, Base, LoadInsnAddr);
+        if (!BaseAddrOpt)
           continue;
         Table = *BaseAddrOpt;
       }
@@ -194,6 +195,18 @@ bool CFGBuilder::detectUnscaledRelocTableLoad(
       LoadWidth = W;
       Disp = LocalDisp;
       TableAddr = Table;
+      if (LoadOutput)
+        *LoadOutput = L.Output;
+      if (LoadAddr)
+        *LoadAddr = L.Addr;
+      if (LoadSeq)
+        *LoadSeq = L.Seq;
+      if (IndexValue)
+        *IndexValue = Sum.Inputs[Side];
+      if (IndexUseAddr)
+        *IndexUseAddr = Sum.Addr;
+      if (IndexUseSeq)
+        *IndexUseSeq = Sum.Seq;
       return true;
     }
   }
@@ -236,6 +249,9 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
 
   uint64_t BaseReg = InvalidVA;
   uint64_t IndexReg = InvalidVA;
+  NdVar IndexValueAtUse;
+  va_t IndexUseAddr = InvalidVA;
+  int IndexUseSeq = -1;
   uint16_t LoadWidth = 0;
   bool HasScaledIndex = false;
   bool SawSext = false;
@@ -256,7 +272,8 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
     if (!AddrV.isReg() && !AddrV.isTemp())
       continue;
     if (analyzeTableLoadAddr(BlockOps, I - 1, AddrV, BaseReg, IndexReg,
-                             HasScaledIndex, Disp)) {
+                             HasScaledIndex, Disp, nullptr, &IndexValueAtUse,
+                             &IndexUseAddr, &IndexUseSeq)) {
       LoadWidth = W;
       LoadIdx = I;
       for (int K = I + 1; K < static_cast<int>(BlockOps.size()); ++K)
@@ -289,7 +306,9 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
         if (!AddrV.isReg() && !AddrV.isTemp())
           continue;
         if (analyzeTableLoadAddr(PathOps, I - 1, AddrV, BaseReg, IndexReg,
-                                 HasScaledIndex, Disp, &CrossBlockAddVA)) {
+                                 HasScaledIndex, Disp, &CrossBlockAddVA,
+                                 &IndexValueAtUse, &IndexUseAddr,
+                                 &IndexUseSeq)) {
           LoadWidth = W;
           LoadIdx = I;
           for (int K = I + 1; K < static_cast<int>(PathOps.size()); ++K)
@@ -306,9 +325,14 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // No scaled index found: try the pre-scaled (scale-1) computed-goto form,
   // where the size optimizer folded the entry-size scale into the index itself.
   va_t UnscaledTableAddr = 0;
+  NdVar UnscaledLoadOutput;
+  va_t UnscaledLoadAddr = InvalidVA;
+  int UnscaledLoadSeq = -1;
   if (BaseReg == InvalidVA)
-    Unscaled = detectUnscaledRelocTableLoad(Img, Rec, BaseReg, IndexReg,
-                                            LoadWidth, Disp, UnscaledTableAddr);
+    Unscaled = detectUnscaledRelocTableLoad(
+        Img, Rec, BaseReg, IndexReg, LoadWidth, Disp, UnscaledTableAddr,
+        &UnscaledLoadOutput, &UnscaledLoadAddr, &UnscaledLoadSeq,
+        &IndexValueAtUse, &IndexUseAddr, &IndexUseSeq);
 
   if (BaseReg == InvalidVA || LoadWidth == 0 || (!HasScaledIndex && !Unscaled))
     return false;
@@ -319,8 +343,10 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // and unrelated flag masks (e.g. the parity `and x,1`) are not mistaken for
   // the table bound.  The pre-scaled form already resolved its terminal index
   // register, so skip these block-local refinements for it.
-  if (!Unscaled && IndexReg != InvalidVA && LoadIdx > 0)
-    IndexReg = traceRegSource(BlockOps, LoadIdx - 1, IndexReg);
+  if (!Unscaled && IndexReg != InvalidVA) {
+    IndexReg = LoadIdx > 0 ? traceRegSource(BlockOps, LoadIdx - 1, IndexReg)
+                           : IndexReg;
+  }
 
   // At -O0 the guarded switch variable is spilled before the dispatch block and
   // reloaded into the index register (`str rX,[sp,#k]; ... ldr rIdx,[sp,#k]`),
@@ -414,6 +440,21 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   Info.setBaseAddr(TableAddr);
   Info.EntrySize = LoadWidth;
   Info.IndexReg = IndexReg;
+  Info.IndexValueAtUse = IndexValueAtUse;
+  Info.IndexUseAddr = IndexUseAddr;
+  Info.IndexUseSeq = IndexUseSeq;
+  if (LoadIdx >= 0) {
+    Info.TableLoadAddr = BlockOps[LoadIdx].Addr;
+    Info.TableLoadSeq = BlockOps[LoadIdx].Seq;
+    Info.TargetLoads = {{BlockOps[LoadIdx].Output, BlockOps[LoadIdx].Addr,
+                         BlockOps[LoadIdx].Seq,
+                         /*DefinedAtPoint=*/true}};
+  } else if (Unscaled && UnscaledLoadAddr != InvalidVA) {
+    Info.TargetLoads = {{UnscaledLoadOutput, UnscaledLoadAddr, UnscaledLoadSeq,
+                         /*DefinedAtPoint=*/true}};
+    Info.TableLoadAddr = UnscaledLoadAddr;
+    Info.TableLoadSeq = UnscaledLoadSeq;
+  }
 
   // Reloc-driven absolute table: a run of loader-applied absolute code-pointer
   // relocations starting at the base means the entries are absolute targets and
@@ -422,6 +463,9 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // the 4-byte absolute-vs-PIC-relative ambiguity — a PIC switch table carries
   // no relocations on its entries.
   uint32_t RelocRun = countCodePtrRelocRun(Img, TableAddr, LoadWidth);
+  RelocRun =
+      boundCodePtrRunByNextAnchor(Img, TableAddr, LoadWidth, RelocRun,
+                                  currentRelocatedInstructionTableAnchors(Img));
   // The pre-scaled form is only sound when a relocation run confirms the table;
   // without one there is no valid decoding for a bare base+index load.
   if (Unscaled && RelocRun < limits::kMinJumpTableEntries)
@@ -434,9 +478,8 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   if (RelocRun >= limits::kMinJumpTableEntries) {
     Info.IsRelative = false;
     Info.IsSigned = false;
-    Info.MaxEntries = RelocRun;
+    Info.PhysicalCapacity = RelocRun;
     Info.RelocAbsolute = true;
-    Info.RelocBounded = true;
     // A pre-scaled index already byte-scales the entry (`table + entry*size`),
     // so its case values are the byte offsets {0, size, 2*size, ...} rather
     // than 0..N-1; record the stride so recoverCaseLabels emits matching
@@ -464,7 +507,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
   // base.  x64 PIC (added operand is the non-executable rodata table) and ARM32
   // (anchor *is* the table base) do not match, so they keep table-relative
   // targets.
-  if (Info.IsRelative && Info.TargetBase == 0) {
+  if (Info.IsRelative && !Info.HasTargetBase) {
     uint64_t BrReg = InvalidVA;
     for (auto &Op : Rec.Ops)
       if (Op.Opcode == NdOp::INDIR_BR && Op.NumInputs >= 1 &&
@@ -513,7 +556,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(const BinaryImage &Img,
         if (!Anchor || *Anchor == TableAddr)
           continue;
         if (Img.hasExecutableCodeOwnerAt(*Anchor)) {
-          Info.TargetBase = *Anchor;
+          Info.setTargetBase(*Anchor);
           Info.EntryScale = 1;
           break;
         }

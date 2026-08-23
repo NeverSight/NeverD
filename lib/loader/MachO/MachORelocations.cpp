@@ -417,6 +417,8 @@ void recordARMAddressMaterialization(BinaryImage &Img, va_t Place,
   if (TargetVA < OwnerBegin ||
       (OwnerIsCode ? TargetVA >= OwnerEnd : TargetVA > OwnerEnd))
     return;
+  if (Img.hasExecutableCodeOwnerAt(Place))
+    Img.InstructionAddressMaterializations[Place] = {TargetVA, OwnerVA};
   if (OwnerIsCode) {
     Img.CodeRefTargets.insert(
         normalizeCodeAddress(TargetVA, Img.Arch, Img.Mode));
@@ -434,6 +436,13 @@ void recordARMAddressMaterialization(BinaryImage &Img, va_t Place,
   Img.RelocDataAddrs.insert(TargetVA);
   if (Img.hasExecutableCodeOwnerAt(Place))
     Img.RelCodeTableAnchors.insert(TargetVA);
+}
+
+void recordARMPageFragment(BinaryImage &Img, va_t Place, va_t TargetVA,
+                           va_t OwnerVA) {
+  if (Img.hasExecutableCodeOwnerAt(Place) && OwnerVA != InvalidVA &&
+      Img.relocatedTargetBelongsToOwner(TargetVA, OwnerVA))
+    Img.InstructionPageAddressFragments[Place] = {TargetVA, OwnerVA};
 }
 
 void synchronizeObjectSectionData(BinaryImage &Img) {
@@ -670,6 +679,13 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
             return relocationError("invalid ARM64 instruction relocation",
                                    SecAddr, RAddr);
           std::memcpy(ApplySeg->Data.data() + SegOff, &*Patched, 4);
+          if (RType == ARM64_RELOC_PAGE21) {
+            auto Target = addSigned(S, ARM64Addend);
+            if (!Target)
+              return relocationError("ARM64 page target overflows", SecAddr,
+                                     RAddr);
+            recordARMPageFragment(Img, P, *Target, SymOwnerVA);
+          }
           if (RType == ARM64_RELOC_PAGEOFF12 &&
               isARM64AddImmediate(Instruction)) {
             auto Target = addSigned(S, ARM64Addend);

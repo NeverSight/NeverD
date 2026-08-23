@@ -82,6 +82,7 @@ struct RelocatedAddressOperand {
   uint8_t Width = 0;
   ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
   va_t TargetOwnerVA = InvalidVA;
+  bool PCRelativeFromInstructionEnd = false;
 };
 
 class Decoder {
@@ -173,6 +174,10 @@ public:
   /// `ret`.  Reset by resetX86FpuState().  Read by the CFG builder after a
   /// function's instructions are lifted to record LowFunc::CalleePopBytes.
   int getX86RetPopBytes() const;
+
+  /// Exact LowIR producer for a completed i386 `call $+5; pop reg` pair in the
+  /// most recently lifted instruction.
+  std::optional<I386GetPcOccurrence> getX86GetPcOccurrence() const;
 
 private:
   /// Decode an x86 fence carrying otherwise redundant operand-size prefixes.

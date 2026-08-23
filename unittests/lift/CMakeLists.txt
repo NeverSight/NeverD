@@ -756,6 +756,17 @@ set(X86_64_TEST_SOURCES
   x86_64/test_switch.c
   x86_64/test_roundtrip.c
   x86_64/test_jumptable_enhanced.c
+  x86_64/test_jumptable_inclusive_postload_clobber.s
+  x86_64/test_jumptable_inclusive_postload_unrelated.s
+  x86_64/test_jumptable_inclusive_preload_alias.s
+  x86_64/test_jumptable_inclusive_preload_reuse.s
+  x86_64/test_jumptable_identity_cfg_lane.s
+  x86_64/test_jumptable_modulo_domain.s
+  x86_64/test_jumptable_raw_relative_domain.s
+  x86_64/test_jumptable_lost_published.s
+  x86_64/test_jumptable_target_ownership.s
+  x86_64/test_jumptable_selector_occurrence.s
+  x86_64/test_jumptable_mask_equal_bound.s
   x86_64/test_twolevel_switch.c
   x86_64/test_jumptable_masked_abs.c
   x86_64/test_jumptable_worldclass.c
@@ -764,6 +775,8 @@ set(X86_64_TEST_SOURCES
 )
 
 set(X86_32_TEST_SOURCES
+  x86_32/test_i386_gotpc_model.s
+  x86_32/test_jumptable_frame_lane32.s
   x86_32/test_arith32.c
   x86_32/test_control32.c
   x86_32/test_bitops32.c
@@ -787,6 +800,11 @@ set(X86_32_TEST_SOURCES
 
 set(AARCH64_TEST_SOURCES
   aarch64/test_param_phi_a64.s
+  aarch64/test_jumptable_index_identity_a64.s
+  aarch64/test_pageoff_reaching_a64.s
+  aarch64/test_pageoff_alternatives_a64.s
+  aarch64/test_pageoff_nominal_miss_a64.s
+  aarch64/test_jumptable_width_mismatch_a64.s
   aarch64/test_arith_a64.c
   aarch64/test_cond_a64.c
   aarch64/test_hbc_a64.c
@@ -818,6 +836,9 @@ set(AARCH64_TEST_SOURCES
 
 set(ARM32_TEST_SOURCES
   arm32/test_frame_pointer_void_arm.s
+  arm32/test_arm_rel32_reaching.s
+  arm32/test_arm_rel32_multiple_sources.s
+  arm32/test_module_predicated_escape_arm.s
   format/test_elf_pointer_reloc_arm32.s
   arm32/test_arith_arm.c
   arm32/test_mem_arm.c
@@ -835,6 +856,34 @@ set(ARM32_TEST_SOURCES
 )
 
 set(TEST_OBJECTS "")
+
+# TBB/TBH are Thumb-2-only.  Build the focused identity fixture as ARMNT
+# COFF so the loader has an unambiguous image-wide Thumb mode; ELF relocatable
+# symbols do not by themselves establish a uniform execution mode.
+set(thumb_jt_identity_src
+    "${CMAKE_CURRENT_SOURCE_DIR}/arm32/test_jumptable_index_identity_arm.s")
+set(thumb_jt_identity_obj
+    "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_index_identity_arm.obj")
+add_custom_command(
+  OUTPUT ${thumb_jt_identity_obj}
+  COMMAND ${CLANG_EXEC} -target thumbv7-windows-msvc -march=armv7-a
+          -nostdlib -c ${thumb_jt_identity_src} -o ${thumb_jt_identity_obj}
+  DEPENDS ${thumb_jt_identity_src}
+  COMMENT "Compiling Thumb-2 jump-table identity fixture (ARMNT COFF)")
+list(APPEND TEST_OBJECTS ${thumb_jt_identity_obj})
+
+set(thumb_jt_incomplete_domain_src
+    "${CMAKE_CURRENT_SOURCE_DIR}/arm32/test_jumptable_incomplete_domain_arm.s")
+set(thumb_jt_incomplete_domain_obj
+    "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_incomplete_domain_arm.obj")
+add_custom_command(
+  OUTPUT ${thumb_jt_incomplete_domain_obj}
+  COMMAND ${CLANG_EXEC} -target thumbv7-windows-msvc -march=armv7-a
+          -nostdlib -c ${thumb_jt_incomplete_domain_src}
+          -o ${thumb_jt_incomplete_domain_obj}
+  DEPENDS ${thumb_jt_incomplete_domain_src}
+  COMMENT "Compiling Thumb-2 incomplete-domain fixture (ARMNT COFF)")
+list(APPEND TEST_OBJECTS ${thumb_jt_incomplete_domain_obj})
 
 set(macho_i386_src
     "${CMAKE_CURRENT_SOURCE_DIR}/format/test_macho_i386.c")
@@ -1009,7 +1058,9 @@ foreach(src ${AARCH64_TEST_SOURCES})
   get_filename_component(base ${src} NAME_WE)
   set(obj "${CMAKE_CURRENT_BINARY_DIR}/${base}.o")
   set(a64_extra_flags)
-  if(src MATCHES "test_switch|test_jumptable")
+  if(src MATCHES "test_jumptable_index_identity_a64")
+    set(a64_extra_flags -O1 -march=armv8.1-a+lse)
+  elseif(src MATCHES "test_switch|test_jumptable")
     set(a64_extra_flags -O1)
   elseif(src MATCHES "test_fp_a64")
     set(a64_extra_flags -march=armv8.6-a+bf16)

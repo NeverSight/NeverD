@@ -8,9 +8,11 @@
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/ir/med/MedSwitchNorm.h"
 #include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/X86Regs.h"
 
@@ -316,6 +318,23 @@ TEST(TargetRegInfo, X86UsesSysVCalleeSavedRegisters) {
   EXPECT_FALSE(TRI.isCallPreserved(x86reg::RAX, 4));
   EXPECT_FALSE(TRI.isCallPreserved(x86reg::RCX, 4));
   EXPECT_FALSE(TRI.isCallPreserved(x86reg::RDX, 4));
+}
+
+TEST(TargetRegInfo, X86DoesNotInventX64GPRContainers) {
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X86);
+
+  EXPECT_EQ(TRI.FullRegWidth, 4u);
+  EXPECT_FALSE(TRI.writeZeroExtends(x86reg::RAX, 4));
+  EXPECT_FALSE(TRI.writeZeroExtends(x86reg::RSP, 4));
+  EXPECT_EQ(TRI.findWideReg(x86reg::RAX, 4),
+            std::make_pair(x86reg::RAX, uint16_t{4}));
+  EXPECT_EQ(TRI.findWideReg(x86reg::RSP, 4),
+            std::make_pair(x86reg::RSP, uint16_t{4}));
+
+  // SIMD registers retain their architecture-independent XMM/YMM container
+  // hierarchy even though an i386 integer register is only four bytes wide.
+  EXPECT_EQ(TRI.findWideReg(x86reg::XMM0, 16),
+            std::make_pair(x86reg::XMM0, uint16_t{32}));
 }
 
 TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
@@ -923,6 +942,368 @@ TEST(MedLLVMEmitterPredicatedControl,
   EXPECT_EQ(Switch->getNumCases(), 3u);
   for (const auto &Case : Switch->cases())
     EXPECT_NE(Case.getCaseSuccessor(), Guard->getSuccessor(0));
+}
+
+TEST(MedLLVMJumpTableSelector,
+     DuplicateCaseBitPatternsAfterSelectorTruncationFailClosed) {
+  constexpr va_t DispatchAddress = 0x3000;
+  MedFunc Func;
+  Func.Entry = DispatchAddress;
+  Func.Name = "duplicate_narrow_jump_table_cases";
+
+  MedVar Index = reg(1, 0, 1, /*RegOff=*/0x40, Arch::X64);
+  Func.Params.push_back(Index);
+
+  MedBlock Dispatch;
+  Dispatch.Id = 0;
+  Dispatch.StartAddr = DispatchAddress;
+  Dispatch.EndAddr = DispatchAddress + 1;
+  Dispatch.Succs = {1, 2};
+  MedOp Branch;
+  Branch.Opcode = NdOp::INDIR_BR;
+  Branch.Addr = DispatchAddress;
+  Branch.addInput(Index);
+  Dispatch.Ops.push_back(Branch);
+
+  auto makeReturnBlock = [](int Id, va_t Addr, uint64_t Value) {
+    MedBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = Addr;
+    Block.EndAddr = Addr + 1;
+    Block.Preds = {0};
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Addr;
+    Return.addInput(MedVar::makeConst(Value, 4));
+    Block.Ops.push_back(Return);
+    return Block;
+  };
+  Func.Blocks = {std::move(Dispatch), makeReturnBlock(1, 0x3100, 1),
+                 makeReturnBlock(2, 0x3200, 2)};
+
+  JumpTable Table;
+  Table.InsnAddr = DispatchAddress;
+  Table.EntrySize = 1;
+  Table.PreScaledIndex = true;
+  Table.IndexRegOff = static_cast<int>(Index.RegOff);
+  Table.Targets = {0x3100, 0x3200};
+  Table.CaseLabels = {0, 256};
+  Func.JumpTables.push_back(std::move(Table));
+  MedSwitchSelectorPlan Plan;
+  Plan.Selector = Index;
+  Plan.ResultSize = Index.Size;
+  Func.SwitchSelectorPlans.emplace(DispatchAddress, std::move(Plan));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+
+  bool SawSwitch = false;
+  bool SawTrap = false;
+  for (const llvm::BasicBlock &Block : *Function)
+    for (const llvm::Instruction &Instruction : Block) {
+      SawSwitch |= llvm::isa<llvm::SwitchInst>(Instruction);
+      if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction))
+        SawTrap |= Call->getIntrinsicID() == llvm::Intrinsic::trap;
+    }
+  EXPECT_FALSE(SawSwitch);
+  EXPECT_TRUE(SawTrap);
+}
+
+TEST(MedSwitchNorm, AffineConstantsFollowEmitterWidthCoercion) {
+  auto peelDelta = [](NdOp Opcode, uint64_t Constant, uint16_t ConstantSize) {
+    MedFunc Func;
+    MedVar Source = reg(1, 0, 8, x86reg::RDI, Arch::X64);
+    MedVar Index = temp(2, 0, 8, Arch::X64);
+    MedBlock Block;
+    Block.Id = 0;
+    Block.Ops.push_back(binary(Opcode, Index, Source,
+                               MedVar::makeConst(Constant, ConstantSize)));
+    Func.Blocks.push_back(std::move(Block));
+
+    uint64_t Delta = 0;
+    MedVar Peeled = peelAffineSwitchVar(Func, Index, Delta);
+    EXPECT_EQ(Peeled.Kind, Source.Kind);
+    EXPECT_EQ(Peeled.Id, Source.Id);
+    EXPECT_EQ(Peeled.SSAVer, Source.SSAVer);
+    EXPECT_EQ(Peeled.Size, Source.Size);
+    return Delta;
+  };
+
+  // Arithmetic first zero-extends/truncates the constant to the output width.
+  // An i8 0xf0 is therefore +240 in an i64 ADD/SUB, not signed -16.
+  EXPECT_EQ(peelDelta(NdOp::INT_ADD, 0xf0, 1), UINT64_C(0xffffffffffffff10));
+  EXPECT_EQ(peelDelta(NdOp::INT_SUB, 0xf0, 1), UINT64_C(0x00000000000000f0));
+
+  // A full-width bit-pattern keeps its modular two's-complement meaning.
+  EXPECT_EQ(peelDelta(NdOp::INT_ADD, UINT64_C(0xfffffffffffffff0), 8),
+            UINT64_C(0x10));
+  EXPECT_EQ(peelDelta(NdOp::INT_SUB, UINT64_C(0xfffffffffffffff0), 8),
+            UINT64_C(0xfffffffffffffff0));
+  EXPECT_EQ(peelDelta(NdOp::INT_ADD, UINT64_C(0x8000000000000000), 8),
+            UINT64_C(0x8000000000000000));
+}
+
+TEST(MedSwitchNorm, StopsAtWidthChangingExtension) {
+  MedFunc Func;
+  MedVar Narrow = reg(1, 0, 1, x86reg::RAX, Arch::X64);
+  MedVar Widened = temp(2, 0, 8, Arch::X64);
+  MedVar Index = temp(3, 0, 8, Arch::X64);
+  MedBlock Block;
+  Block.Id = 0;
+  Block.Ops.push_back(unary(NdOp::INT_ZEXT, Widened, Narrow));
+  Block.Ops.push_back(
+      binary(NdOp::INT_ADD, Index, Widened, MedVar::makeConst(1, 1)));
+  Func.Blocks.push_back(std::move(Block));
+
+  uint64_t Delta = 0;
+  MedVar Peeled = peelAffineSwitchVar(Func, Index, Delta);
+  EXPECT_EQ(Peeled.Kind, Widened.Kind);
+  EXPECT_EQ(Peeled.Id, Widened.Id);
+  EXPECT_EQ(Peeled.SSAVer, Widened.SSAVer);
+  EXPECT_EQ(Peeled.Size, 8u);
+  EXPECT_EQ(Delta, UINT64_MAX);
+}
+
+TEST(MedSwitchNorm, WidenedSelectorKeepsAllDistinctCaseBitPatterns) {
+  constexpr va_t DispatchAddress = 0x6000;
+  constexpr size_t CaseCount = 257;
+  MedFunc Func;
+  Func.Entry = DispatchAddress;
+  Func.Name = "widened_jump_table_selector";
+
+  MedVar Narrow = reg(1, 0, 1, x86reg::RDI, Arch::X64);
+  MedVar Widened = temp(2, 0, 8, Arch::X64);
+  MedVar Index = temp(3, 0, 8, Arch::X64);
+  Func.Params.push_back(Narrow);
+
+  MedBlock Dispatch;
+  Dispatch.Id = 0;
+  Dispatch.StartAddr = DispatchAddress;
+  Dispatch.EndAddr = DispatchAddress + 1;
+  Dispatch.Ops.push_back(unary(NdOp::INT_ZEXT, Widened, Narrow));
+  Dispatch.Ops.push_back(
+      binary(NdOp::INT_ADD, Index, Widened, MedVar::makeConst(1, 1)));
+  MedOp Branch;
+  Branch.Opcode = NdOp::INDIR_BR;
+  Branch.Addr = DispatchAddress;
+  Branch.addInput(Index);
+  Dispatch.Ops.push_back(Branch);
+
+  JumpTable Table;
+  Table.InsnAddr = DispatchAddress;
+  Table.EntrySize = 8;
+  Table.IndexRegOff = static_cast<int>(Narrow.RegOff);
+  JumpTableSelectorUseRef Ref;
+  Ref.Addr = DispatchAddress;
+  Ref.Seq = 0;
+  Ref.ExpectedOpcode = NdOp::INT_ADD;
+  Ref.Role = JumpTableSelectorUseRef::ValueRole::Output;
+  Ref.ExpectedSize = Index.Size;
+  Table.SelectorUseRefs.push_back(Ref);
+
+  for (size_t K = 0; K < CaseCount; ++K) {
+    const va_t TargetAddress = 0x7000 + static_cast<va_t>(K) * 0x10;
+    const int BlockId = static_cast<int>(K + 1);
+    Dispatch.Succs.push_back(BlockId);
+    Table.Targets.push_back(TargetAddress);
+
+    MedBlock Target;
+    Target.Id = BlockId;
+    Target.StartAddr = TargetAddress;
+    Target.EndAddr = TargetAddress + 1;
+    Target.Preds = {0};
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = TargetAddress;
+    Return.addInput(MedVar::makeConst(K, 8));
+    Target.Ops.push_back(Return);
+    Func.Blocks.push_back(std::move(Target));
+  }
+  Func.Blocks.insert(Func.Blocks.begin(), std::move(Dispatch));
+  Func.JumpTables.push_back(Table);
+  MedSwitchSelectorPlan Plan;
+  Plan.Selector = Index;
+  Plan.ResultSize = Index.Size;
+  Func.SwitchSelectorPlans.emplace(DispatchAddress, Plan);
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Func}, Context, Func.Name, Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Func.Name);
+  ASSERT_NE(Function, nullptr);
+  const llvm::SwitchInst *LLVMCaseSwitch = nullptr;
+  for (const llvm::BasicBlock &Block : *Function)
+    if (const auto *Candidate =
+            llvm::dyn_cast<llvm::SwitchInst>(Block.getTerminator())) {
+      LLVMCaseSwitch = Candidate;
+      break;
+    }
+  ASSERT_NE(LLVMCaseSwitch, nullptr);
+  EXPECT_EQ(LLVMCaseSwitch->getCondition()->getType()->getIntegerBitWidth(),
+            64u);
+  EXPECT_EQ(LLVMCaseSwitch->getNumCases(), CaseCount);
+
+  MedToHighConverter Converter;
+  Converter.setJumpTables({Table});
+  HighFunc High = Converter.convert(Func, Arch::X64);
+  auto HighSwitch = std::find_if(
+      High.Body.begin(), High.Body.end(),
+      [](const HighStmt &Stmt) { return Stmt.Kind == StmtKind::Switch; });
+  ASSERT_NE(HighSwitch, High.Body.end());
+  ASSERT_EQ(HighSwitch->Cases.size(), CaseCount);
+  std::set<uint64_t> HighCases;
+  for (const SwitchCase &Case : HighSwitch->Cases)
+    HighCases.insert(Case.Value);
+  EXPECT_EQ(HighCases.size(), CaseCount);
+  EXPECT_TRUE(HighCases.count(UINT64_MAX));
+  EXPECT_TRUE(HighCases.count(255));
+}
+
+TEST(MedSwitchNorm, DefinitionIdentityIncludesVariableKind) {
+  MedFunc Func;
+  MedVar Source = reg(1, 0, 8, x86reg::RDI, Arch::X64);
+  MedVar CollidingTemp = temp(6, 0, 8, Arch::X64);
+  MedBlock Block;
+  Block.Id = 0;
+  Block.Ops.push_back(
+      binary(NdOp::INT_ADD, CollidingTemp, Source, MedVar::makeConst(3, 8)));
+  Func.Blocks.push_back(std::move(Block));
+
+  MedVar Param;
+  Param.Kind = MedVar::Param;
+  Param.Id = CollidingTemp.Id;
+  Param.SSAVer = CollidingTemp.SSAVer;
+  Param.Size = CollidingTemp.Size;
+  Param.TheArch = Arch::X64;
+
+  uint64_t Delta = 0;
+  MedVar Unchanged = peelAffineSwitchVar(Func, Param, Delta);
+  EXPECT_EQ(Unchanged.Kind, MedVar::Param);
+  EXPECT_EQ(Unchanged.Id, Param.Id);
+  EXPECT_EQ(Delta, 0);
+
+  MedVar Peeled = peelAffineSwitchVar(Func, CollidingTemp, Delta);
+  EXPECT_EQ(Peeled.Kind, Source.Kind);
+  EXPECT_EQ(Peeled.Id, Source.Id);
+  EXPECT_EQ(Delta, UINT64_C(0xfffffffffffffffd));
+}
+
+TEST(JumpTableHighSelector,
+     DuplicateCaseBitPatternsAtSelectorWidthRemainUnresolved) {
+  constexpr va_t DispatchAddress = 0x3800;
+  MedFunc Func;
+  Func.Entry = DispatchAddress;
+  Func.Name = "high_duplicate_narrow_jump_table_cases";
+
+  MedVar Index = reg(1, 0, 1, x86reg::RAX, Arch::X64);
+  Func.Params.push_back(Index);
+
+  MedBlock Dispatch;
+  Dispatch.Id = 0;
+  Dispatch.StartAddr = DispatchAddress;
+  Dispatch.EndAddr = DispatchAddress + 1;
+  Dispatch.Succs = {1, 2};
+  MedOp Branch;
+  Branch.Opcode = NdOp::INDIR_BR;
+  Branch.Addr = DispatchAddress;
+  Branch.addInput(Index);
+  Dispatch.Ops.push_back(Branch);
+
+  auto makeReturnBlock = [](int Id, va_t Addr, uint64_t Value) {
+    MedBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = Addr;
+    Block.EndAddr = Addr + 1;
+    Block.Preds = {0};
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Addr;
+    Return.addInput(MedVar::makeConst(Value, 4));
+    Block.Ops.push_back(Return);
+    return Block;
+  };
+  Func.Blocks = {std::move(Dispatch), makeReturnBlock(1, 0x3810, 1),
+                 makeReturnBlock(2, 0x3820, 2)};
+
+  JumpTable Table;
+  Table.InsnAddr = DispatchAddress;
+  Table.EntrySize = 1;
+  Table.PreScaledIndex = true;
+  Table.IndexRegOff = static_cast<int>(Index.RegOff);
+  Table.Targets = {0x3810, 0x3820};
+  Table.CaseLabels = {0, 256};
+  MedSwitchSelectorPlan Plan;
+  Plan.Selector = Index;
+  Plan.ResultSize = Index.Size;
+  Func.SwitchSelectorPlans.emplace(DispatchAddress, Plan);
+
+  MedToHighConverter Converter;
+  Converter.setJumpTables({Table});
+  HighFunc High = Converter.convert(Func, Arch::X64);
+  EXPECT_TRUE(std::none_of(
+      High.Body.begin(), High.Body.end(),
+      [](const HighStmt &Stmt) { return Stmt.Kind == StmtKind::Switch; }));
+  EXPECT_TRUE(
+      std::any_of(High.Body.begin(), High.Body.end(), [](const HighStmt &Stmt) {
+        return Stmt.Kind == StmtKind::Goto && Stmt.GotoTarget == InvalidVA;
+      }));
+}
+
+TEST(LowToMedSelectorOccurrence,
+     ChangedSourceOpcodeDoesNotBindAStaleOperandRole) {
+  auto makeLow = [](bool OpcodeMismatch) {
+    LowFunc Low;
+    Low.Entry = 0x4000;
+    Low.Name = OpcodeMismatch ? "changed_selector_occurrence"
+                              : "surviving_selector_occurrence";
+
+    LowBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = 0x4000;
+    Block.EndAddr = 0x4002;
+    LowOp Selector;
+    Selector.Opcode = OpcodeMismatch ? NdOp::COPY : NdOp::INT_ADD;
+    Selector.Addr = 0x4000;
+    Selector.Seq = 7;
+    Selector.Output = NdVar::tmp(0x1000, 8);
+    Selector.addInput(NdVar::reg(x86reg::RDI, 8));
+    if (!OpcodeMismatch)
+      Selector.addInput(NdVar::scalar(2, 8));
+    Block.Ops.push_back(Selector);
+    LowOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = 0x4001;
+    Return.Seq = 0;
+    Return.addInput(Selector.Output);
+    Block.Ops.push_back(Return);
+    Low.Blocks.push_back(std::move(Block));
+
+    JumpTable Table;
+    Table.InsnAddr = 0x4010;
+    JumpTableSelectorUseRef Ref;
+    Ref.Addr = Selector.Addr;
+    Ref.Seq = Selector.Seq;
+    Ref.ExpectedOpcode = NdOp::INT_ADD;
+    Ref.Role = JumpTableSelectorUseRef::ValueRole::Input;
+    Ref.InputNo = 0;
+    Ref.ExpectedSize = Selector.Inputs[0].Size;
+    Table.SelectorUseRefs.push_back(Ref);
+    Low.JumpTables.push_back(std::move(Table));
+    return Low;
+  };
+
+  MedFunc Changed = LowToMedConverter().convert(makeLow(true), Arch::X64);
+  EXPECT_TRUE(Changed.SwitchSelectorPlans.empty())
+      << "COPY at the same Addr/Seq must not satisfy an INT_ADD use-ref";
+
+  MedFunc Surviving = LowToMedConverter().convert(makeLow(false), Arch::X64);
+  auto It = Surviving.SwitchSelectorPlans.find(0x4010);
+  ASSERT_NE(It, Surviving.SwitchSelectorPlans.end());
+  EXPECT_EQ(It->second.PlanKind, MedSwitchSelectorPlan::Kind::Direct);
+  EXPECT_EQ(It->second.Selector.Size, 8u);
 }
 
 } // namespace

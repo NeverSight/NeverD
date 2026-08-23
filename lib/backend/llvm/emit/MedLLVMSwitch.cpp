@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <climits>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -123,153 +124,48 @@ llvm::Value *MedLLVMEmitter::synthesizeSharedDispatchIndex(
   return Builder.CreateLoad(Ty, Slot, "cgoto_idx_v");
 }
 
-llvm::Value *MedLLVMEmitter::synthesizeTwoTableSelector(
-    const MedBlock &Blk, const MedOp &BrOp, const JumpTable &JT,
-    llvm::IRBuilder<> &Builder) {
-  std::map<std::pair<int, int>, const MedOp *> Defs;
-  for (auto &Op : Blk.Ops)
-    if (!Op.Output.isConst() && Op.Output.Size > 0)
-      Defs[{Op.Output.Id, Op.Output.SSAVer}] = &Op;
-  auto defOf = [&](const MedVar &V) -> const MedOp * {
-    if (V.isConst())
-      return nullptr;
-    auto It = Defs.find({V.Id, V.SSAVer});
-    return It == Defs.end() ? nullptr : It->second;
-  };
-  // Trace a value through COPY / extend / truncate to its real defining op.
-  auto skipCopies = [&](MedVar V) -> const MedOp * {
-    for (int G = 0; G < limits::kMaxQuasiCopyDepth; ++G) {
-      const MedOp *D = defOf(V);
-      if (!D)
-        return nullptr;
-      if ((D->Opcode == NdOp::COPY || D->Opcode == NdOp::INT_ZEXT ||
-           D->Opcode == NdOp::INT_SEXT || D->Opcode == NdOp::SUBBYTES) &&
-          D->NumInputs >= 1 && !D->Inputs[0].isConst()) {
-        V = D->Inputs[0];
-        continue;
-      }
-      return D;
-    }
+llvm::Value *
+MedLLVMEmitter::synthesizeTwoTableSelector(const JumpTable &JT,
+                                           llvm::IRBuilder<> &Builder) {
+  if (!CurMedFunc || !JT.CompositeSelectorUseRef)
     return nullptr;
-  };
-  // Classify a select mask: 0 = base mask M (INT_NEG2-derived), 1 = the
-  // negated ~M (INT_NOT-derived), -1 = not a mask.
-  auto maskKind = [&](MedVar M) -> int {
-    for (int G = 0; G < limits::kMaxQuasiCopyDepth; ++G) {
-      const MedOp *D = defOf(M);
-      if (!D)
-        return -1;
-      if (D->Opcode == NdOp::INT_NOT)
-        return 1;
-      if (D->Opcode == NdOp::INT_NEG2)
-        return 0;
-      if (D->Opcode == NdOp::COPY && D->NumInputs >= 1 &&
-          !D->Inputs[0].isConst()) {
-        M = D->Inputs[0];
-        continue;
-      }
-      return -1;
-    }
-    return -1;
-  };
-
-  // The branch target is the loaded table entry; trace it to the LOAD.
-  const MedOp *LoadOp = nullptr;
-  {
-    MedVar V = BrOp.Inputs[0];
-    for (int G = 0; G < limits::kMaxQuasiCopyDepth; ++G) {
-      const MedOp *D = defOf(V);
-      if (!D)
-        break;
-      if (D->Opcode == NdOp::LOAD) {
-        LoadOp = D;
-        break;
-      }
-      if (D->NumInputs >= 1 && !D->Inputs[0].isConst()) {
-        V = D->Inputs[0];
-        continue;
-      }
-      break;
-    }
-  }
-  if (!LoadOp || LoadOp->NumInputs < 1)
+  auto It = CurMedFunc->SwitchSelectorPlans.find(JT.InsnAddr);
+  if (It == CurMedFunc->SwitchSelectorPlans.end())
     return nullptr;
-  const MedVar &AddrV = LoadOp->Inputs[LoadOp->NumInputs >= 2 ? 1 : 0];
-  const MedOp *AddOp = skipCopies(AddrV);
-  if (!AddOp || AddOp->Opcode != NdOp::INT_ADD || AddOp->NumInputs < 2)
+  const MedSwitchSelectorPlan &Plan = It->second;
+  if (Plan.PlanKind != MedSwitchSelectorPlan::Kind::SelectOffset ||
+      Plan.Selector.Size == 0 || Plan.Selector.Size != Plan.ResultSize ||
+      Plan.Selector.isConst() || Plan.Condition.Size == 0 ||
+      Plan.Condition.isConst())
     return nullptr;
 
-  uint64_t D = JT.TwoTableOffset;
-  bool HiPositive = JT.TwoTableHiPositive;
-
-  // The base operand is the runtime-selected table pointer; the other is the
-  // already byte-scaled index contribution.  selector = idx_bytes + (the higher
-  // table is selected ? D : 0).
-  for (int BaseW = 0; BaseW < 2; ++BaseW) {
-    const MedOp *BD = skipCopies(AddOp->Inputs[BaseW]);
-    if (!BD)
-      continue;
-    llvm::Value *IdxVal = getVar(AddOp->Inputs[1 - BaseW], Builder);
-    if (!IdxVal || !IdxVal->getType()->isIntegerTy())
-      continue;
-    auto *Ty = llvm::cast<llvm::IntegerType>(IdxVal->getType());
-    llvm::Value *SelOff = nullptr;
-
-    if (BD->Opcode == NdOp::SELECT && BD->NumInputs >= 3) {
-      // base = cond ? in1 : in2; the higher table is the positive (true) arm
-      // when HiPositive.
-      llvm::Value *C = getVar(BD->Inputs[0], Builder);
-      if (!C)
-        continue;
-      if (!C->getType()->isIntegerTy(1))
-        C = Builder.CreateICmpNE(C, llvm::ConstantInt::get(C->getType(), 0));
-      llvm::Value *Dc = llvm::ConstantInt::get(Ty, D);
-      llvm::Value *Z = llvm::ConstantInt::get(Ty, 0);
-      SelOff = HiPositive ? Builder.CreateSelect(C, Dc, Z)
-                          : Builder.CreateSelect(C, Z, Dc);
-    } else if (BD->Opcode == NdOp::INT_OR && BD->NumInputs >= 2) {
-      // base = (A & M) | (B & ~M); the offset is D masked by whichever mask
-      // selects the higher table.
-      const MedOp *And0 = skipCopies(BD->Inputs[0]);
-      const MedOp *And1 = skipCopies(BD->Inputs[1]);
-      if (!And0 || !And1 || And0->Opcode != NdOp::INT_AND ||
-          And1->Opcode != NdOp::INT_AND || And0->NumInputs < 2 ||
-          And1->NumInputs < 2)
-        continue;
-      auto pickMask = [&](const MedOp *A) -> std::optional<MedVar> {
-        for (int W = 0; W < 2; ++W)
-          if (maskKind(A->Inputs[W]) >= 0)
-            return A->Inputs[W];
-        return std::nullopt;
-      };
-      auto M0 = pickMask(And0), M1 = pickMask(And1);
-      if (!M0 || !M1)
-        continue;
-      int K0 = maskKind(*M0), K1 = maskKind(*M1);
-      if (K0 < 0 || K1 < 0 || K0 == K1)
-        continue;
-      MedVar BaseMask = (K0 == 0) ? *M0 : *M1;
-      MedVar NotMask = (K0 == 1) ? *M0 : *M1;
-      llvm::Value *Mv = getVar(HiPositive ? BaseMask : NotMask, Builder);
-      if (!Mv || !Mv->getType()->isIntegerTy())
-        continue;
-      if (Mv->getType() != Ty)
-        Mv = Builder.CreateZExtOrTrunc(Mv, Ty);
-      SelOff = Builder.CreateAnd(Mv, llvm::ConstantInt::get(Ty, D));
-    } else {
-      continue;
-    }
-
-    if (SelOff)
-      return Builder.CreateAdd(IdxVal, SelOff, "twotbl.idx");
-  }
-  return nullptr;
+  llvm::Value *Index = getVar(Plan.Selector, Builder);
+  llvm::Value *Condition = getVar(Plan.Condition, Builder);
+  if (!Index || !Index->getType()->isIntegerTy() || !Condition ||
+      !Condition->getType()->isIntegerTy())
+    return nullptr;
+  auto *Ty = llvm::cast<llvm::IntegerType>(Index->getType());
+  if (Ty->getBitWidth() != Plan.ResultSize * CHAR_BIT)
+    return nullptr;
+  const unsigned Bits = Ty->getBitWidth();
+  if (Bits < 64 &&
+      ((Plan.TrueOffset >> Bits) != 0 || (Plan.FalseOffset >> Bits) != 0))
+    return nullptr;
+  if (!Condition->getType()->isIntegerTy(1))
+    Condition = Builder.CreateICmpNE(
+        Condition, llvm::ConstantInt::get(Condition->getType(), 0));
+  llvm::Value *Offset = Builder.CreateSelect(
+      Condition, llvm::ConstantInt::get(Ty, Plan.TrueOffset),
+      llvm::ConstantInt::get(Ty, Plan.FalseOffset), "twotbl.offset");
+  return Builder.CreateAdd(Index, Offset, "twotbl.idx");
 }
 
 bool MedLLVMEmitter::emitJumpTableSwitch(
     const MedBlock &Blk, const MedOp &BrOp,
     std::map<int, llvm::BasicBlock *> &BBMap, llvm::IRBuilder<> &Builder) {
   if (!CurMedFunc)
+    return false;
+  if (CurMedFunc->UnsafeIndirectBranchAddresses.count(BrOp.Addr))
     return false;
 
   const JumpTable *JT = nullptr;
@@ -294,6 +190,39 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     return false;
 
   std::optional<MedVar> IndexVar;
+  auto indexFromSelectorPlan = [&]() -> std::optional<MedVar> {
+    auto It = CurMedFunc->SwitchSelectorPlans.find(JT->InsnAddr);
+    if (It == CurMedFunc->SwitchSelectorPlans.end() ||
+        It->second.PlanKind != MedSwitchSelectorPlan::Kind::Direct ||
+        It->second.Selector.Size == 0 || It->second.Selector.isConst() ||
+        It->second.Selector.Size != It->second.ResultSize)
+      return std::nullopt;
+    return It->second.Selector;
+  };
+  auto edgeMergedIndexFromSelectorPlan = [&]() -> llvm::Value * {
+    auto It = CurMedFunc->SwitchSelectorPlans.find(JT->InsnAddr);
+    if (It == CurMedFunc->SwitchSelectorPlans.end() ||
+        It->second.PlanKind != MedSwitchSelectorPlan::Kind::EdgeMerged ||
+        It->second.ResultSize == 0 || It->second.EdgeSelectors.size() < 2 ||
+        It->second.EdgeSelectors.size() != Blk.Preds.size())
+      return nullptr;
+    const MedSwitchSelectorPlan &Plan = It->second;
+    std::set<int> ExpectedPreds(Blk.Preds.begin(), Blk.Preds.end());
+    std::set<int> PlannedPreds;
+    for (const auto &[Pred, Selector] : Plan.EdgeSelectors)
+      if (Selector.Size != Plan.ResultSize || Selector.isConst() ||
+          !ExpectedPreds.count(Pred) || !PlannedPreds.insert(Pred).second)
+        return nullptr;
+    if (PlannedPreds != ExpectedPreds)
+      return nullptr;
+
+    auto *Ty = sizeToType(Plan.ResultSize);
+    auto &Entry = CurFunc->getEntryBlock();
+    llvm::IRBuilder<> AllocB(&Entry, Entry.begin());
+    auto *Slot = AllocB.CreateAlloca(Ty, nullptr, "jt.edge.idx.slot");
+    PendingDispatchStores.push_back({Slot, Ty, Plan.EdgeSelectors});
+    return Builder.CreateLoad(Ty, Slot, "jt.edge.idx");
+  };
   // Pull the switch index from the resolver-identified register (the one that
   // addresses the table load).
   auto indexFromResolverReg = [&]() -> std::optional<MedVar> {
@@ -306,18 +235,96 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
           return It->Inputs[I];
     return std::nullopt;
   };
+  auto indexFromCompactTableLoad = [&]() -> std::optional<MedVar> {
+    if (JT->TableLoadAddr == InvalidVA || !JT->HasBaseAddr ||
+        JT->EntrySize == 0)
+      return std::nullopt;
+
+    const MedOp *TableLoad = nullptr;
+    for (const MedOp &Op : Blk.Ops) {
+      if (Op.Addr != JT->TableLoadAddr || Op.Opcode != NdOp::LOAD ||
+          Op.Output.Size != JT->EntrySize || Op.NumInputs < 1)
+        continue;
+      if (TableLoad)
+        return std::nullopt;
+      TableLoad = &Op;
+    }
+    if (!TableLoad)
+      return std::nullopt;
+
+    MedVar Address = TableLoad->Inputs[TableLoad->NumInputs >= 2 ? 1 : 0];
+    const MedOp *AddressDef = nullptr;
+    for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
+      AddressDef = lookupDef(Address);
+      if (!AddressDef)
+        return std::nullopt;
+      if (AddressDef->Opcode == NdOp::COPY && AddressDef->NumInputs >= 1) {
+        Address = AddressDef->Inputs[0];
+        continue;
+      }
+      break;
+    }
+    if (!AddressDef || AddressDef->Opcode != NdOp::INT_ADD ||
+        AddressDef->NumInputs < 2)
+      return std::nullopt;
+
+    std::optional<MedVar> Dynamic;
+    for (int BaseSide = 0; BaseSide < 2; ++BaseSide) {
+      auto Base = traceSSAConst(AddressDef->Inputs[BaseSide]);
+      if (!Base || *Base != JT->BaseAddr)
+        continue;
+      if (Dynamic)
+        return std::nullopt;
+      Dynamic = AddressDef->Inputs[1 - BaseSide];
+    }
+    if (!Dynamic || Dynamic->isConst())
+      return std::nullopt;
+
+    // TBH and halfword compact tables scale the index in the address.  Peel
+    // exactly that entry-size scale; do not use the later target-entry shift,
+    // which is the distinct value this helper exists to avoid.
+    const MedOp *Scale = lookupDef(*Dynamic);
+    if (Scale &&
+        (Scale->Opcode == NdOp::INT_MULT || Scale->Opcode == NdOp::INT_LEFT) &&
+        Scale->NumInputs >= 2) {
+      if (Scale->Opcode == NdOp::INT_MULT && Scale->Inputs[1].isConst() &&
+          Scale->Inputs[1].ConstVal == JT->EntrySize &&
+          !Scale->Inputs[0].isConst())
+        return Scale->Inputs[0];
+      if (Scale->Opcode == NdOp::INT_LEFT && Scale->Inputs[1].isConst() &&
+          JT->EntrySize > 0 && Scale->Inputs[1].ConstVal < 64 &&
+          (uint64_t{1} << Scale->Inputs[1].ConstVal) == JT->EntrySize &&
+          !Scale->Inputs[0].isConst())
+        return Scale->Inputs[0];
+      return std::nullopt;
+    }
+    return Dynamic;
+  };
 
   // A two-table dispatch synthesizes its byte-offset selector from the runtime
   // base select below; the single-table index recovery does not apply.
   if (!JT->TwoTableSelect) {
+    // Once LowIR publishes an exact occurrence, it is the selector contract.
+    // A missing final Med binding means the source op was deleted, duplicated,
+    // or changed role; never fall back to a physical register/DAG guess.
+    if (!JT->SelectorUseRefs.empty()) {
+      IndexVar = indexFromSelectorPlan();
+      const auto PlanIt = CurMedFunc->SwitchSelectorPlans.find(JT->InsnAddr);
+      const bool HasEdgeMergedPlan =
+          PlanIt != CurMedFunc->SwitchSelectorPlans.end() &&
+          PlanIt->second.PlanKind == MedSwitchSelectorPlan::Kind::EdgeMerged;
+      if (!IndexVar && !HasEdgeMergedPlan)
+        return false;
+    }
     // A two-level (index-byte) table composes its per-case targets from
     // `jmptab[idxtab[switchvar]]`; the switch condition is the *real* switch
     // variable that indexes idxtab, which the resolver recorded in IndexRegOff.
     // Tracing the branch target back (findSwitchIndex, below) would instead
     // find the intermediate address-table index, so anchor to the resolver
-    // register and require it — never fall through to the single-level tracers.
-    if (JT->TwoLevelIndex) {
-      IndexVar = indexFromResolverReg();
+    // occurrence and require it — never fall through to register-number or
+    // single-level tracers.
+    if (!IndexVar && JT->TwoLevelIndex) {
+      IndexVar = indexFromSelectorPlan();
       if (!IndexVar)
         return false;
     }
@@ -328,14 +335,22 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     // *index* into the load address and routinely reuse the resolver register
     // as the anchor and the branch target at -O0, so prefer findSwitchIndex,
     // which traces the scaled index cleanly through the table load.
-    if (JT->TargetBase != 0 && JT->EntrySize <= 2)
-      IndexVar = indexFromResolverReg();
+    if (!IndexVar && JT->HasTargetBase && JT->EntrySize <= 2) {
+      IndexVar = indexFromCompactTableLoad();
+      if (!IndexVar)
+        return false;
+    }
     // A pre-scaled computed goto has no scale multiply in the table address, so
     // findSwitchIndex would latch onto an unrelated multiply in the dispatch
     // block (e.g. an LCG step); the index register the resolver identified
-    // already holds the byte offset the switch dispatches on.
-    if (!IndexVar && JT->PreScaledIndex)
-      IndexVar = indexFromResolverReg();
+    // already holds the byte offset the switch dispatches on.  Consume only
+    // the exact post-SSA selector plan; a stale physical register lifetime is
+    // not a fallback identity.
+    if (!IndexVar && JT->PreScaledIndex) {
+      IndexVar = indexFromSelectorPlan();
+      if (!IndexVar)
+        return false;
+    }
     // Regular absolute/relative tables: trace the branch target back to the
     // scaled index.
     if (!IndexVar)
@@ -380,12 +395,20 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
   // cases 0..N-1 instead of the real (possibly negative) labels.  Peel that
   // affine step off the dispatch variable and shift every case label by the
   // inverse constant — an exact equivalence that restores the original variable
-  // and labels.  Skipped for the compact/pre-scaled/two-table forms, whose
-  // labels the resolver already expresses in the pre-normalization coordinate.
-  int64_t LabelDelta = 0;
+  // and labels.  Explicit CaseLabels are exact keys in the selector's current
+  // coordinate, so an ordinary sparse/gapped table can still require this
+  // inverse step.  Compact/pre-scaled/two-table forms use a different
+  // coordinate and are excluded below.
+  const bool HaveLabels = JT->CaseLabels.size() == JT->Targets.size();
+  std::vector<int64_t> Labels;
+  Labels.reserve(JT->Targets.size());
+  for (size_t K = 0; K < JT->Targets.size(); ++K)
+    Labels.push_back(HaveLabels ? JT->CaseLabels[K] : static_cast<int64_t>(K));
+  uint64_t LabelDelta = 0;
   if (IndexVar && !JT->TwoTableSelect && !JT->PreScaledIndex &&
-      JT->TargetBase == 0 && JT->CaseLabels.empty())
-    IndexVar = peelAffineSwitchVar(*CurMedFunc, *IndexVar, LabelDelta);
+      !JT->HasTargetBase)
+    IndexVar = peelAffineSwitchVar(*CurMedFunc, *IndexVar, LabelDelta,
+                                   /*MaxAffine=*/2, &Labels);
 
   // Map each target address to its block, resolving through the dispatching
   // block's own successors first.  An x87 peeled/steady loop yields duplicate
@@ -426,9 +449,11 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     return false;
 
   llvm::Value *Index =
-      JT->TwoTableSelect ? synthesizeTwoTableSelector(Blk, BrOp, *JT, Builder)
-      : IndexVar ? getVar(*IndexVar, Builder)
-                 : synthesizeSharedDispatchIndex(Blk, BrOp, *JT, Builder);
+      JT->TwoTableSelect ? synthesizeTwoTableSelector(*JT, Builder)
+      : IndexVar         ? getVar(*IndexVar, Builder)
+      : !JT->SelectorUseRefs.empty()
+          ? edgeMergedIndexFromSelectorPlan()
+          : synthesizeSharedDispatchIndex(Blk, BrOp, *JT, Builder);
   if (!Index || !Index->getType()->isIntegerTy())
     return false;
   auto *IdxTy = llvm::cast<llvm::IntegerType>(Index->getType());
@@ -446,25 +471,25 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     Index = Builder.CreateTrunc(Index, IdxTy, "jt.idx.machine");
   }
 
-  // A masked index covers every case, so the default is unreachable; route it
-  // to the first target to satisfy LLVM's required default destination.
-  auto *SW = Builder.CreateSwitch(Index, CaseBlocks[0],
+  const unsigned IdxBits = IdxTy->getBitWidth();
+  auto CaseBits = uniqueSwitchCaseBitPatterns(Labels, LabelDelta, IdxBits);
+  if (!CaseBits)
+    return false;
+
+  // A recovered table describes only the selectors whose target mapping was
+  // proved.  Routing any gap, truncated composite domain, or stale/out-of-
+  // range selector to case zero silently invents guest control flow.  Keep a
+  // distinct loud default even when an upstream mask normally makes it
+  // unreachable; LLVM may eliminate it only after proving that fact itself.
+  auto *DefaultBB = llvm::BasicBlock::Create(*Ctx, "jt.default.trap", CurFunc);
+  llvm::IRBuilder<> DefaultBuilder(DefaultBB);
+  DefaultBuilder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
+                                 llvm::Intrinsic::trap, {});
+  DefaultBuilder.CreateUnreachable();
+  auto *SW = Builder.CreateSwitch(Index, DefaultBB,
                                   static_cast<unsigned>(CaseBlocks.size()));
-  const bool HaveLabels = JT->CaseLabels.size() == JT->Targets.size();
-  unsigned IdxBits = IdxTy->getBitWidth();
-  for (size_t K = 0; K < CaseBlocks.size(); ++K) {
-    int64_t Label =
-        (HaveLabels ? JT->CaseLabels[K] : static_cast<int64_t>(K)) + LabelDelta;
-    // Truncate the (possibly negative or peeled) label to the index type's
-    // width before building the constant: an LLVM switch case must match the
-    // condition width exactly, and the unsigned ConstantInt path asserts when
-    // the raw value does not fit without implicit truncation.  Masking yields
-    // the correct two's-complement bit pattern the switch compares against.
-    uint64_t Bits = static_cast<uint64_t>(Label);
-    if (IdxBits < 64)
-      Bits &= (1ULL << IdxBits) - 1;
-    SW->addCase(llvm::ConstantInt::get(IdxTy, Bits), CaseBlocks[K]);
-  }
+  for (size_t K = 0; K < CaseBlocks.size(); ++K)
+    SW->addCase(llvm::ConstantInt::get(IdxTy, (*CaseBits)[K]), CaseBlocks[K]);
   return true;
 }
 

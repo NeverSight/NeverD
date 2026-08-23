@@ -20,6 +20,7 @@
 #include "JumpTableResolverDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include "llvm/Support/Debug.h"
@@ -174,9 +175,13 @@ void CFGBuilder::detectNormalization(const InsnRecord &Rec,
       continue;
     const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
     uint64_t BaseReg = InvalidVA, IdxReg = InvalidVA, LoadDisp = 0;
+    NdVar IndexValue;
+    va_t IndexUseAddr = InvalidVA;
+    int IndexUseSeq = -1;
     bool Scaled = false;
     if (!analyzeTableLoadAddr(BlockOps, I - 1, AddrV, BaseReg, IdxReg, Scaled,
-                              LoadDisp)) {
+                              LoadDisp, nullptr, &IndexValue, &IndexUseAddr,
+                              &IndexUseSeq)) {
       // analyzeTableLoadAddr requires a *register* base (`base + index*scale`).
       // A non-PIC absolute table folds the base to a constant in the dispatch
       // (`jmp *tab(,idx,8)` => addr = INT_ADD(index*scale, const)), so it is
@@ -196,7 +201,8 @@ void CFGBuilder::detectNormalization(const InsnRecord &Rec,
         continue;
       for (int W = 0; W < 2; ++W) {
         uint64_t Idx =
-            scaledIndexReg(BlockOps, AddIdx - 1, BlockOps[AddIdx].Inputs[W]);
+            scaledIndexReg(BlockOps, AddIdx - 1, BlockOps[AddIdx].Inputs[W],
+                           &IndexValue, &IndexUseAddr, &IndexUseSeq);
         if (Idx != InvalidVA) {
           IdxReg = Idx;
           break;
@@ -205,9 +211,28 @@ void CFGBuilder::detectNormalization(const InsnRecord &Rec,
       if (IdxReg == InvalidVA)
         continue;
     }
+    // Preserve the exact indexed operand and its semantic use point.  Do not
+    // overwrite evidence already captured by the cross-instruction resolver,
+    // whose table load may live in a predecessor outside this block.
+    if ((!Info.IndexValueAtUse.isReg() && !Info.IndexValueAtUse.isTemp()) ||
+        Info.IndexValueAtUse.Size == 0) {
+      Info.IndexValueAtUse = IndexValue;
+      Info.IndexUseAddr = IndexUseAddr;
+      Info.IndexUseSeq = IndexUseSeq;
+      Info.TableLoadAddr = L.Addr;
+      Info.TableLoadSeq = L.Seq;
+    }
+    // Keep the resolver's established dispatch-register semantics.  The
+    // point-sensitive source is supplemental guard evidence; replacing
+    // IndexReg with it also changes downstream table classification.
     if (Info.IndexReg == InvalidVA)
       Info.IndexReg = IdxReg;
-    traceIndexTransform(BlockOps, I - 1, NdVar::reg(IdxReg, 8), Info.NormBase,
+    NdVar TransformValue =
+        (IndexValue.isReg() || IndexValue.isTemp()) && IndexValue.Size > 0
+            ? IndexValue
+            : NdVar::reg(IdxReg,
+                         getTargetRegInfo(CurrentImg->Arch).PointerSize);
+    traceIndexTransform(BlockOps, I - 1, TransformValue, Info.NormBase,
                         Info.NormShift, Info.Stride);
     return;
   }

@@ -442,7 +442,7 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       auto RecordAbsoluteField = [&](uint64_t EncodedValue, uint64_t TargetVA,
                                      uint64_t TargetOwnerVA,
                                      size_t FieldWidth) {
-        if (TargetOwnerVA == InvalidVA)
+        if (!Img.relocatedTargetBelongsToOwner(TargetVA, TargetOwnerVA))
           return;
         if (FieldWidth == Img.getPointerSize()) {
           recordAbsolutePointerRelocation(Img, P, TargetVA, TargetOwnerVA);
@@ -453,16 +453,10 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         const Segment *OwnerSeg = Img.getSegmentFor(TargetOwnerVA);
         if (!OwnerSeg || !OwnerSeg->isReadable())
           return;
-        if (OwnerSeg->Size > InvalidVA - OwnerSeg->VA)
-          return;
         va_t OwnerBegin = OwnerSeg->VA;
-        va_t OwnerEnd = OwnerSeg->VA + OwnerSeg->Size;
         bool OwnerWritable = OwnerSeg->isWritable();
         if (const Section *OwnerSec = Img.getSectionFor(TargetOwnerVA)) {
-          if (OwnerSec->Size > InvalidVA - OwnerSec->VA)
-            return;
           OwnerBegin = OwnerSec->VA;
-          OwnerEnd = OwnerSec->VA + OwnerSec->Size;
           OwnerWritable =
               OwnerSec->isWritable() &&
               !section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) &&
@@ -470,9 +464,6 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
                   OwnerSec->SegmentName);
         }
         const bool OwnerIsCode = Img.hasExecutableCodeOwnerAt(TargetOwnerVA);
-        if (TargetVA < OwnerBegin ||
-            (OwnerIsCode ? TargetVA >= OwnerEnd : TargetVA > OwnerEnd))
-          return;
         const RelocatedAddressField Field{EncodedValue, TargetVA,
                                           static_cast<uint8_t>(FieldWidth),
                                           OwnerBegin};
@@ -489,6 +480,31 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           Img.WritableRelocDataAddrs.insert(TargetVA);
         else
           Img.RelocDataAddrs.insert(TargetVA);
+      };
+
+      auto RecordPCRelativeInstructionField = [&](uint64_t EncodedValue,
+                                                  uint64_t TargetOwnerVA,
+                                                  size_t FieldWidth) {
+        if (!Img.hasExecutableCodeOwnerAt(P) || TargetOwnerVA == InvalidVA ||
+            FieldWidth == 0 || FieldWidth > sizeof(uint64_t))
+          return;
+        const Section *OwnerSec = Img.getSectionFor(TargetOwnerVA);
+        const Segment *OwnerSeg = Img.getSegmentFor(TargetOwnerVA);
+        if ((!OwnerSec || OwnerSec->VA != TargetOwnerVA) &&
+            (!OwnerSeg || OwnerSeg->VA != TargetOwnerVA))
+          return;
+        const bool OwnerIsCode =
+            OwnerSec ? OwnerSec->isExecutable() : OwnerSeg->isExecutable();
+        const RelocatedAddressField Field{EncodedValue, InvalidVA,
+                                          static_cast<uint8_t>(FieldWidth),
+                                          TargetOwnerVA, true};
+        if (OwnerIsCode) {
+          Img.DataAddressRelocOperands.erase(P);
+          Img.CodeAddressRelocOperands[P] = Field;
+        } else {
+          Img.CodeAddressRelocOperands.erase(P);
+          Img.DataAddressRelocOperands[P] = Field;
+        }
       };
 
       // Relative data-pointer table entry.  The slot contains a signed
@@ -582,28 +598,21 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             continue;
           int32_t Val = static_cast<int32_t>(S + RAddend - P);
           std::memcpy(ApplySeg->Data.data() + RAddr, &Val, 4);
+          if (RType == R_X86_64_PC32 || RType == R_X86_64_PLT32 ||
+              RType == R_X86_64_GOTPCREL) {
+            RecordPCRelativeInstructionField(static_cast<uint32_t>(Val),
+                                             SymOwnerVA, 4);
+          }
           if (RType == R_X86_64_PC32 || RType == R_AARCH64_PREL32)
             RecordRelCodePtr(S);
           if (RType == R_X86_64_PC32 || RType == R_AARCH64_PREL32)
             RecordRelDataPtr(S);
-          // A PC-relative `lea`/`mov` of a writable global takes/accesses its
-          // address.  x86-64 RIP-relative measures the displacement from the
-          // END of the (4-byte-disp-trailing) instruction, so the target VA
-          // is `S + addend + 4` — clang uses a -4 addend for a bare `&g`, and
-          // `S + addend + 4` for a section-symbol-relative `&g[k]` (a SECOND
-          // global at a nonzero section offset, the ptrarr/gpstab shape).
-          // Recording the symbol base S alone would miss those offset
-          // globals.
-          if (RType == R_X86_64_PC32 || RType == R_X86_64_PLT32 ||
-              RType == R_X86_64_GOTPCREL)
-            RecordWritableDataTarget(S + RAddend + 4);
-          // The same `lea table(%rip)` that anchors a PIC switch table's base
-          // in read-only data (target VA = S + addend + 4, the RIP measured
-          // from the end of the 4-byte-disp instruction).  Recording it lets
-          // the resolver truncate an over-long RelCodeReloc run at the next
-          // table's base.
-          if (RType == R_X86_64_PC32)
-            RecordRelTableAnchor(S + RAddend + 4);
+          // Do not publish `S + A + 4` as a global address/anchor here.  Four
+          // is the displacement width, not necessarily the distance from the
+          // relocation field to the instruction end (for example a RIP-
+          // relative compare can encode an immediate after the displacement).
+          // CFG lifting recomputes `InsnEnd + sext(encoded)` after exact
+          // operand matching and records the occurrence-local target instead.
         } else if (RType == R_X86_64_64 || RType == R_AARCH64_ABS64) {
           // Absolute 64-bit data slot.  R_AARCH64_ABS64 fills the
           // .data.rel.ro code-pointer table a computed goto / threaded
@@ -653,6 +662,10 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           std::memcpy(&Insn, ApplySeg->Data.data() + RAddr, 4);
           Insn = (Insn & 0x9F00001Fu) | (ImmLo << 29) | (ImmHi << 5);
           std::memcpy(ApplySeg->Data.data() + RAddr, &Insn, 4);
+          const va_t PageTarget = S + RAddend;
+          if (Img.hasExecutableCodeOwnerAt(P) &&
+              Img.relocatedTargetBelongsToOwner(PageTarget, SymOwnerVA))
+            Img.InstructionPageAddressFragments[P] = {PageTarget, SymOwnerVA};
         } else if (RType == R_AARCH64_ADD_ABS_LO12_NC ||
                    RType == R_AARCH64_LDST64_ABS_LO12_NC ||
                    RType == R_AARCH64_LDST128_ABS_LO12_NC ||
@@ -666,8 +679,15 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           // register (a function pointer); record the full target VA.  The
           // LDST forms load *from* the address, so only the ADD form is an
           // address-of materialization.
-          if (RType == R_AARCH64_ADD_ABS_LO12_NC)
+          if (RType == R_AARCH64_ADD_ABS_LO12_NC) {
             RecordCodeRef(S + RAddend);
+            const va_t MaterializedTarget = S + RAddend;
+            if (Img.hasExecutableCodeOwnerAt(P) &&
+                Img.relocatedTargetBelongsToOwner(MaterializedTarget,
+                                                  SymOwnerVA))
+              Img.InstructionAddressMaterializations[P] = {MaterializedTarget,
+                                                           SymOwnerVA};
+          }
           // The same `adrp+add` of a writable global takes its address; the
           // LDST forms access it.  Either way the target VA is a genuine
           // mutable-data address (S + addend).
@@ -795,9 +815,19 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             if (RType == R_386_PC32)
               RecordRelDataPtr(S);
             break;
-          case R_386_GOTPC:
-            Put32(static_cast<uint32_t>(InPlace - P));
+          case R_386_GOTPC: {
+            const uint32_t Encoded = static_cast<uint32_t>(InPlace - P);
+            Put32(Encoded);
+            // Keep the mapped field occurrence.  RelocationEntry::Address is
+            // the section-relative r_offset in ET_REL and cannot safely be
+            // matched against a decoded instruction VA later.  The additive
+            // inverse is the exact get-PC seed this relocation expects under
+            // the loader's model-zero GOT convention.
+            if (Img.hasExecutableCodeOwnerAt(P))
+              Img.I386GOTPCFields[P] = {
+                  Encoded, static_cast<uint32_t>(uint32_t{0} - Encoded)};
             break;
+          }
           default:
             break;
           }
@@ -878,7 +908,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
                               static_cast<uint32_t>(S + InPlace), SymOwnerVA,
                               4);
         } else if (RType == R_ARM_REL32) {
-          Put32(static_cast<int32_t>(S + InPlace - P));
+          const uint32_t Encoded = static_cast<uint32_t>(S + InPlace - P);
+          Put32(Encoded);
           RecordRelDataPtr(S);
           // ARM32 non-PIC takes a writable global's address via a PC-relative
           // literal pool (`ldr rN,[pc]; add rN,pc,rN`), emitted as
@@ -887,6 +918,18 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           // the address), so record S — the base a runtime-indexed `&g[i]`
           // resolves to.
           RecordWritableDataTarget(S);
+          if (SymOwnerVA != InvalidVA &&
+              Img.relocatedTargetBelongsToOwner(S, SymOwnerVA)) {
+            const AppliedARMRelativeLiteral Applied{Encoded, S, SymOwnerVA};
+            auto [It, Inserted] =
+                Img.ARMRelativeLiteralFields.emplace(P, Applied);
+            if (!Inserted && It->second != Applied) {
+              // Multiple incompatible relocations for one applied field are
+              // malformed.  Keep an explicit invalid tombstone so a later
+              // duplicate cannot accidentally re-enable the occurrence.
+              It->second = {};
+            }
+          }
         } else if (RType == R_ARM_CALL || RType == R_ARM_JUMP24 ||
                    RType == R_ARM_PC24) {
           // ARM `bl`/`b`/`bcc`: the low 24 bits hold the target as a signed

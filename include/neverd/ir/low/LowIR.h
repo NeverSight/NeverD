@@ -20,9 +20,12 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace neverd {
@@ -217,6 +220,62 @@ struct LowOp {
   }
 };
 
+/// Canonical operand roles for LowIR memory effects.  LOAD/STORE may carry an
+/// explicit address-space operand in input 0; atomics do not.  Keeping this
+/// decoding beside LowOp prevents individual analyses from silently treating
+/// a 3-input STORE's address-space token as its runtime address.
+struct LowMemoryOperandView {
+  const NdVar *Address = nullptr;
+  const NdVar *StoredValue = nullptr;
+  const NdVar *ExpectedValue = nullptr;
+  uint16_t AccessSize = 0;
+  bool Complete = false;
+};
+
+inline LowMemoryOperandView lowMemoryOperands(const LowOp &Op) {
+  LowMemoryOperandView View;
+  switch (Op.Opcode) {
+  case NdOp::LOAD:
+    if (Op.NumInputs == 0 || Op.Output.Size == 0)
+      return View;
+    View.Address = &Op.Inputs[Op.NumInputs >= 2 ? 1 : 0];
+    View.AccessSize = Op.Output.Size;
+    View.Complete = true;
+    return View;
+  case NdOp::STORE: {
+    if (Op.NumInputs < 2)
+      return View;
+    const bool HasAddressSpace = Op.NumInputs >= 3;
+    View.Address = &Op.Inputs[HasAddressSpace ? 1 : 0];
+    View.StoredValue = &Op.Inputs[HasAddressSpace ? 2 : 1];
+    View.AccessSize = View.StoredValue->Size;
+    View.Complete = View.AccessSize != 0;
+    return View;
+  }
+  case NdOp::ATOMIC_XCHG:
+  case NdOp::ATOMIC_ADD:
+    if (Op.NumInputs < 2 || Op.Output.Size == 0)
+      return View;
+    View.Address = &Op.Inputs[0];
+    View.StoredValue = &Op.Inputs[1];
+    View.AccessSize = Op.Output.Size;
+    View.Complete = View.StoredValue->Size == View.AccessSize;
+    return View;
+  case NdOp::ATOMIC_CMPXCHG:
+    if (Op.NumInputs < 3 || Op.Output.Size == 0)
+      return View;
+    View.Address = &Op.Inputs[0];
+    View.ExpectedValue = &Op.Inputs[1];
+    View.StoredValue = &Op.Inputs[2];
+    View.AccessSize = Op.Output.Size;
+    View.Complete = View.ExpectedValue->Size == View.AccessSize &&
+                    View.StoredValue->Size == View.AccessSize;
+    return View;
+  default:
+    return View;
+  }
+}
+
 /// Instruction-level control classification retained beside flattened LowOps.
 /// Modifiers such as conditional and indirect remain flags so combinations
 /// produced by predicated ISAs do not need lossy enum cases.
@@ -391,6 +450,196 @@ struct LowBlock {
   }
 };
 
+/// One loader-authenticated address field that a final published LowIR
+/// instruction actually consumed.  Loader-side PC-relative records cannot
+/// name the semantic target until the containing instruction has been
+/// decoded: x86 displacements are relative to the instruction end, which need
+/// not immediately follow the relocation field.  Keeping the decoded
+/// instruction/op occurrence beside the recomputed target prevents global
+/// users from treating a loader approximation as address provenance.
+struct RelocatedInstructionAddressOccurrence {
+  va_t FieldVA = InvalidVA;
+  va_t InstructionAddr = InvalidVA;
+  int OpSeq = -1;
+  va_t TargetVA = InvalidVA;
+  va_t TargetOwnerVA = InvalidVA;
+  uint8_t Width = 0;
+  ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
+  bool PCRelativeFromInstructionEnd = false;
+  /// True when the relocation authenticates this exact operation's output
+  /// (for example a paired AArch64 ADRP+ADD), rather than a constant operand
+  /// encoded in the instruction.  The producing CFG proof must validate the
+  /// complete base+fragment chain before setting this bit.
+  bool DefinesOutput = false;
+  /// The exact output can depend on the authenticated materialization on only
+  /// a subset of feasible paths.  This is not a constant-value certificate:
+  /// consumers may retain/mark the target object unsafe, but may not use the
+  /// occurrence for exact symbolization or table-bound authorization.
+  bool OutputMayDepend = false;
+  /// Stable identity of the operation that was authenticated to define the
+  /// complete address.  Addr/Seq alone identify an operation occurrence, but
+  /// later LowIR rewrites must not retain the certificate after changing that
+  /// operation's output lane or semantic role.
+  NdOp OutputOpcode = NdOp::NOP;
+  NdVar OutputWitness = {};
+
+  bool operator==(const RelocatedInstructionAddressOccurrence &Other) const =
+      default;
+};
+
+/// Exact LowIR producer emitted only for the i386 PIC get-PC idiom
+/// `call $+5; pop reg`.  A role-neutral Address constant with the same numeric
+/// value is not equivalent: a relocation-free absolute materialization does
+/// not move with the GOTPC relocation when the object is linked elsewhere.
+struct I386GetPcOccurrence {
+  va_t InstructionAddr = InvalidVA;
+  int OpSeq = -1;
+  uint32_t PCValue = 0;
+  NdOp OutputOpcode = NdOp::NOP;
+  NdVar OutputWitness = {};
+
+  bool operator==(const I386GetPcOccurrence &Other) const = default;
+};
+
+/// Relocation-authenticated scalar address-model result at one exact LowOp.
+/// This is deliberately separate from RelocatedInstructionAddressOccurrence:
+/// the i386 GOTPC result is the numeric/model-zero GOT base, not an address and
+/// not permission to symbolize an equal constant elsewhere.
+struct RelocatedInstructionScalarModelOccurrence {
+  enum class ModelKind : uint8_t { I386ELFGOTBaseZero };
+
+  va_t FieldVA = InvalidVA;
+  va_t InstructionAddr = InvalidVA;
+  int OpSeq = -1;
+  uint8_t Width = 0;
+  ModelKind Model = ModelKind::I386ELFGOTBaseZero;
+  NdOp OutputOpcode = NdOp::NOP;
+  NdVar OutputWitness = {};
+  va_t SeedInstructionAddr = InvalidVA;
+  int SeedOpSeq = -1;
+  NdOp SeedOpcode = NdOp::NOP;
+  NdVar SeedOutputWitness = {};
+
+  bool operator==(
+      const RelocatedInstructionScalarModelOccurrence &Other) const = default;
+};
+
+/// One physically stored run that participates in a recovered jump-table
+/// shape.  Logical cases and targets are intentionally not stored here: a
+/// two-level table owns both its compact index run and its address run, while
+/// a runtime-selected two-table dispatch can own two disjoint runs.
+struct JumpTableStorageRange {
+  va_t BaseAddr = 0;
+  uint16_t EntrySize = 0;
+  uint64_t EntryStride = 0;
+  uint64_t PhysicalSlotCount = 0;
+
+  bool operator==(const JumpTableStorageRange &Other) const {
+    return BaseAddr == Other.BaseAddr && EntrySize == Other.EntrySize &&
+           EntryStride == Other.EntryStride &&
+           PhysicalSlotCount == Other.PhysicalSlotCount;
+  }
+
+  bool operator<(const JumpTableStorageRange &Other) const {
+    return std::tie(BaseAddr, EntrySize, EntryStride, PhysicalSlotCount) <
+           std::tie(Other.BaseAddr, Other.EntrySize, Other.EntryStride,
+                    Other.PhysicalSlotCount);
+  }
+
+  std::optional<uint64_t> storageSize() const {
+    if (EntrySize == 0 || EntryStride < EntrySize || PhysicalSlotCount == 0)
+      return std::nullopt;
+    const uint64_t LastSlot = PhysicalSlotCount - 1;
+    if (LastSlot > (InvalidVA - EntrySize) / EntryStride)
+      return std::nullopt;
+    return LastSlot * EntryStride + EntrySize;
+  }
+
+  /// Own only bytes occupied by table entries.  Padding between strided
+  /// records is not automatically table storage and may contain an unrelated
+  /// relocation-free code label or another record field.
+  bool ownsStorageAddress(va_t Addr) const {
+    auto Size = storageSize();
+    if (!Size || Addr < BaseAddr || *Size > InvalidVA - BaseAddr ||
+        Addr >= BaseAddr + *Size)
+      return false;
+    const uint64_t Offset = Addr - BaseAddr;
+    const uint64_t Slot = Offset / EntryStride;
+    return Slot < PhysicalSlotCount && Offset % EntryStride < EntrySize;
+  }
+
+  std::optional<va_t> storageEnd() const {
+    auto Size = storageSize();
+    if (!Size || *Size > InvalidVA - BaseAddr)
+      return std::nullopt;
+    return BaseAddr + *Size;
+  }
+};
+
+/// Stable identity for one authenticated LowIR operation occurrence.  An
+/// instruction address alone is insufficient because a lifted machine
+/// instruction commonly expands to several LowOps, and a physical register is
+/// not an SSA/value identity.  Jump-table consumers use this witness to
+/// distinguish the dispatch LOAD from an independent read of the same table.
+struct JumpTableOpOccurrence {
+  va_t Addr = InvalidVA;
+  int Seq = -1;
+  uint16_t Size = 0;
+
+  bool operator==(const JumpTableOpOccurrence &Other) const {
+    return Addr == Other.Addr && Seq == Other.Seq && Size == Other.Size;
+  }
+
+  bool operator<(const JumpTableOpOccurrence &Other) const {
+    return std::tie(Addr, Seq, Size) <
+           std::tie(Other.Addr, Other.Seq, Other.Size);
+  }
+};
+
+/// Stable public reference to the exact LowIR value occurrence used as a
+/// recovered switch selector.  The resolver's NdVar is intentionally not
+/// exported: a physical register name is not an SSA identity, and consumers
+/// must bind this operand only after Low-to-Med rewriting has completed.
+struct JumpTableSelectorUseRef {
+  enum class ValueRole : uint8_t { Input, Output };
+
+  va_t Addr = InvalidVA;
+  int Seq = -1;
+  NdOp ExpectedOpcode = NdOp::NOP;
+  ValueRole Role = ValueRole::Input;
+  uint8_t InputNo = 0;
+  uint16_t ExpectedSize = 0;
+
+  bool operator==(const JumpTableSelectorUseRef &Other) const {
+    return Addr == Other.Addr && Seq == Other.Seq &&
+           ExpectedOpcode == Other.ExpectedOpcode && Role == Other.Role &&
+           InputNo == Other.InputNo && ExpectedSize == Other.ExpectedSize;
+  }
+};
+
+/// Exact public recipe for a runtime-selected two-table switch condition.
+/// ByteIndex names the already-scaled dynamic operand of the authenticated
+/// table-address ADD.  Condition names the boolean value whose true/false arm
+/// selected the physical table base.  Backends concatenate the two physical
+/// runs in one selector coordinate as
+/// `ByteIndex + (Condition ? TrueOffset : FalseOffset)`.
+struct JumpTableCompositeSelectorUseRef {
+  enum class Kind : uint8_t { SelectOffset };
+
+  Kind RecipeKind = Kind::SelectOffset;
+  JumpTableSelectorUseRef ByteIndex;
+  JumpTableSelectorUseRef Condition;
+  uint64_t TrueOffset = 0;
+  uint64_t FalseOffset = 0;
+  uint16_t ResultSize = 0;
+
+  bool operator==(const JumpTableCompositeSelectorUseRef &Other) const {
+    return RecipeKind == Other.RecipeKind && ByteIndex == Other.ByteIndex &&
+           Condition == Other.Condition && TrueOffset == Other.TrueOffset &&
+           FalseOffset == Other.FalseOffset && ResultSize == Other.ResultSize;
+  }
+};
+
 struct JumpTable {
   va_t InsnAddr = 0;
   va_t BaseAddr = 0;
@@ -398,15 +647,53 @@ struct JumpTable {
   /// zero in an ELF relocatable object.
   bool HasBaseAddr = false;
   uint16_t EntrySize = 0;
+  /// Physical byte distance between adjacent table slots.  This may exceed
+  /// EntrySize for padded/strided layouts.
+  uint64_t EntryStride = 0;
+  /// Physical storage owned by this logical dispatch.  Ordinary tables have
+  /// one range; non-adjacent two-table and two-level shapes have two.  Never
+  /// infer these ranges from Targets.size(): logical cases and physical slots
+  /// are different domains for composite and sparse layouts.
+  std::vector<JumpTableStorageRange> StorageRanges;
+  /// Exact relocation slots whose stored code-pointer identity is fully
+  /// consumed by this recovered dispatch and may therefore be omitted from
+  /// independent CFG-root discovery and the LLVM code-pointer mirror.
+  /// Physical storage ownership alone is insufficient: a gap/filler slot can
+  /// live inside the same table object while another reachable consumer takes
+  /// its address or reads it independently.
+  std::vector<va_t> SuppressibleRelocationSlots;
+  /// Exact LOAD occurrences certified as the recovered dispatch's table
+  /// reads.  Module-wide consumer arbitration excludes only these operations;
+  /// another LOAD of the same runtime or filler slot is an independent
+  /// consumer and vetoes relocation suppression.
+  std::vector<JumpTableOpOccurrence> AuthenticatedTableLoads;
+  /// Exact LowIR selector occurrences.  These are converted into a Med-only
+  /// selector plan after SSA/copy propagation; absence or ambiguity is a hard
+  /// failure for shapes that require exact selector ownership.
+  std::vector<JumpTableSelectorUseRef> SelectorUseRefs;
+  /// Exact composite recipe for a runtime-selected table base.  This is kept
+  /// separate from SelectorUseRefs because its selector lives in the final
+  /// byte-address coordinate and also depends on a certified
+  /// condition/polarity.
+  std::optional<JumpTableCompositeSelectorUseRef> CompositeSelectorUseRef;
   int IndexRegOff = -1;
   bool IsRelative = false;
   bool IsSigned = false;
 
-  /// Non-zero for the AArch64 compact byte/halfword table form, where targets
-  /// are `TargetBase + entry*scale` and the switch dispatches on a table index
+  /// Set for the AArch64 compact byte/halfword table form, where targets are
+  /// `TargetBase + entry*scale` and the switch dispatches on a table index
   /// distinct from the loaded entry — switch recovery must use IndexRegOff
-  /// rather than the blind backward scan.
+  /// rather than the blind backward scan.  The separate presence bit is
+  /// required because relocatable objects may place the target anchor at VA 0.
   va_t TargetBase = 0;
+  bool HasTargetBase = false;
+
+  /// Exact machine-instruction address of the LOAD that reads the compact
+  /// table entry.  Low-to-Med copy propagation may replace the resolver's
+  /// physical index register with a reload temp, so the emitter anchors at
+  /// this LOAD and extracts the dynamic address term instead of scanning the
+  /// whole block for a same-numbered register or the later loaded entry.
+  va_t TableLoadAddr = InvalidVA;
 
   /// Set for a size-optimized computed goto whose index register already holds
   /// the byte offset (`table + entry*size`, scale folded into the index).  The
@@ -462,23 +749,54 @@ struct JumpTable {
 
   std::vector<va_t> Targets;
 
+  /// Physical table slot corresponding to each Targets element.  Keeping this
+  /// separate from CaseLabels is essential: source labels may be normalized,
+  /// shifted, or strided, while a constant table LOAD must map its physical
+  /// byte offset to exactly one kept target.  Dense tables carry {0,1,...}.
+  std::vector<uint32_t> SlotIndices;
+
+  /// True only when SlotIndices maps slots of the primary dispatch-table run
+  /// to Targets positions.  Composite tables deliberately leave this false:
+  /// their logical selector coordinate is not a physical slot coordinate.
+  bool HasDispatchSlotMap = false;
+
   /// Recovered original case label values (one per target).
   /// Empty when recovery is not possible (e.g., relocatable objects).
   std::vector<int64_t> CaseLabels;
+
+  std::optional<uint64_t>
+  targetPositionForPhysicalSlot(uint64_t PhysicalSlot) const {
+    if (!HasDispatchSlotMap)
+      return std::nullopt;
+    if (SlotIndices.size() != Targets.size())
+      return std::nullopt;
+    for (size_t I = 0; I < SlotIndices.size(); ++I)
+      if (SlotIndices[I] == PhysicalSlot)
+        return static_cast<uint64_t>(I);
+    return std::nullopt;
+  }
 
   /// True when \p Addr lies in the table-storage interval proven by this
   /// recovery record.  This remains distinct from executable layout: compilers
   /// may place relative switch entries inline in an instruction section.
   bool ownsStorageAddress(va_t Addr) const {
-    if (!HasBaseAddr || Addr < BaseAddr)
-      return false;
-    if (Addr == BaseAddr)
-      return true;
-    if (EntrySize == 0 || Targets.empty())
-      return false;
-    const uint64_t Count = static_cast<uint64_t>(Targets.size());
-    return Count <= (InvalidVA - BaseAddr) / EntrySize &&
-           Addr < BaseAddr + Count * EntrySize;
+    return std::any_of(StorageRanges.begin(), StorageRanges.end(),
+                       [&](const JumpTableStorageRange &Range) {
+                         return Range.ownsStorageAddress(Addr);
+                       });
+  }
+
+  bool suppressesRelocationSlot(va_t Addr) const {
+    return std::binary_search(SuppressibleRelocationSlots.begin(),
+                              SuppressibleRelocationSlots.end(), Addr);
+  }
+
+  /// End of the sole physical range.  Composite tables intentionally have no
+  /// single end; callers that arbitrate ownership must iterate StorageRanges.
+  std::optional<va_t> storageEnd() const {
+    if (StorageRanges.size() != 1)
+      return std::nullopt;
+    return StorageRanges.front().storageEnd();
   }
 };
 
@@ -491,6 +809,29 @@ struct LowFunc {
   uint32_t SourceLine = 0;
   std::vector<LowBlock> Blocks;
   std::vector<JumpTable> JumpTables;
+  /// Final CFG roots which independently seed this function's published
+  /// blocks: the real entry/exception roots, unsuppressed relocation roots,
+  /// and reachable address-taken code roots.  Module-wide evidence analysis
+  /// must start here instead of treating every textual LowBlock as
+  /// independently executable; the latter lets unreachable table filler
+  /// bootstrap its own relocation preservation.
+  std::set<va_t> ModuleAnalysisRoots;
+  /// Exact relocation occurrences consumed by final published instructions.
+  /// Speculatively decoded/pruned instructions are deliberately absent, as
+  /// are fields that merely fall inside an instruction's byte envelope.
+  std::vector<RelocatedInstructionAddressOccurrence>
+      RelocatedInstructionAddressOccurrences;
+  /// Exact call/pop get-PC producers retained from final published LowIR.
+  std::vector<I386GetPcOccurrence> I386GetPcOccurrences;
+  /// Exact scalar address-model outputs retained from final CFG proof.
+  std::vector<RelocatedInstructionScalarModelOccurrence>
+      RelocatedInstructionScalarModelOccurrences;
+  /// Indirect branches whose target storage may be mutable or whose module-
+  /// wide evidence analysis failed closed.  This identity is deliberately
+  /// independent of JumpTables: a later proof gate may reject all table
+  /// metadata, but the original branch must still remain an INDIR_BR and trap
+  /// rather than being reinterpreted as a function-pointer tail call.
+  std::set<va_t> UnsafeIndirectBranchAddresses;
   std::optional<ExceptionFunction> ExceptionMetadata;
 
   /// Coverage accounting for recursive-descent decode and lift.  These values

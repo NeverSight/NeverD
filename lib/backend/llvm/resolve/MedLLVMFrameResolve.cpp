@@ -442,8 +442,36 @@ MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V) const {
   // operand, a lossy cast, or a selectable path that does not reach the target
   // is not an exact slot recurrence.
   auto sameExactValue = [&](const MedVar &A, const MedVar &B) {
-    return !A.isConst() && !B.isConst() &&
-           addressProvenanceVarKey(A) == addressProvenanceVarKey(B);
+    if (A.isConst() || B.isConst())
+      return false;
+    if (addressProvenanceVarKey(A) == addressProvenanceVarKey(B))
+      return true;
+
+    // Low-to-Med keeps the architectural guest-width SP and its wider host
+    // container as parallel SSA values.  At a CFG join they are separate PHI
+    // nodes (for example ESP.27 and RSP.9 on i386), even though both denote the
+    // same guest pointer bits at the same program point.  Treat only such
+    // co-located frame-register PHIs as the same affine recurrence anchor; a
+    // same-numbered value from another block/lifetime remains distinct.
+    if (A.Kind != MedVar::Reg || B.Kind != MedVar::Reg ||
+        A.RegOff != B.RegOff || !TRI.isFrameReg(A.RegOff) || PointerSize == 0 ||
+        A.Size < PointerSize || B.Size < PointerSize)
+      return false;
+    const PhiNode *APhi = lookupPhi(A);
+    const PhiNode *BPhi = lookupPhi(B);
+    if (!APhi || !BPhi)
+      return false;
+    for (const MedBlock &Block : CurMedFunc->Blocks) {
+      bool HasA = false;
+      bool HasB = false;
+      for (const PhiNode &Phi : Block.Phis) {
+        HasA |= &Phi == APhi;
+        HasB |= &Phi == BPhi;
+      }
+      if (HasA || HasB)
+        return HasA && HasB;
+    }
+    return false;
   };
   std::function<std::optional<int64_t>(const MedVar &, const MedVar &, int,
                                        std::set<AddressProvenanceVarKey>)>

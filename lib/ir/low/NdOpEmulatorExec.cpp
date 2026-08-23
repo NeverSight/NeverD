@@ -102,14 +102,10 @@ bool NdOpEmulator::executeArith(const LowOp &Op) {
 }
 
 bool NdOpEmulator::executeLoad(const LowOp &Op) {
-  if (Op.NumInputs < 1)
+  const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+  if (!Memory.Complete)
     return false;
-
-  uint64_t Addr;
-  if (Op.NumInputs >= 2)
-    Addr = readOperand(Op.Inputs[1]);
-  else
-    Addr = readOperand(Op.Inputs[0]);
+  const uint64_t Addr = readOperand(*Memory.Address);
 
   if (CollectLoads &&
       static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
@@ -123,22 +119,12 @@ bool NdOpEmulator::executeLoad(const LowOp &Op) {
 }
 
 bool NdOpEmulator::executeStore(const LowOp &Op) {
-  if (Op.NumInputs < 2)
+  const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+  if (!Memory.Complete)
     return false;
-
-  uint64_t Addr;
-  uint64_t Val;
-  if (Op.NumInputs >= 3) {
-    Addr = readOperand(Op.Inputs[1]);
-    Val = readOperand(Op.Inputs[2]);
-  } else {
-    Addr = readOperand(Op.Inputs[0]);
-    Val = readOperand(Op.Inputs[1]);
-  }
-
-  uint16_t Size = Op.NumInputs >= 3 ? Op.Inputs[2].Size : Op.Inputs[1].Size;
-  if (Size == 0)
-    Size = 8;
+  const uint64_t Addr = readOperand(*Memory.Address);
+  const uint64_t Val = readOperand(*Memory.StoredValue);
+  const uint16_t Size = Memory.AccessSize;
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
     return false;
   if (!storeMemory(Addr, Size, Val))

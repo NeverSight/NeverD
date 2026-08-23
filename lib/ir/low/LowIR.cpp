@@ -56,7 +56,6 @@ bool isInstructionGuardEffect(NdOp Opcode) {
   case NdOp::ATOMIC_ADD:
   case NdOp::ATOMIC_CMPXCHG:
   case NdOp::INTRINSIC:
-  case NdOp::BRANCH:
   case NdOp::INDIR_BR:
   case NdOp::CALL:
   case NdOp::INDIR_CALL:
@@ -85,6 +84,10 @@ bool hasCanonicalInstructionGuard(const LowBlock &Block,
   if (!GuardIndex)
     return false;
 
+  // A direct conditional ARM branch is itself represented as
+  // `COND_BR next,!condition; BRANCH target`; the BRANCH is guest control
+  // flow, not a guarded same-instruction effect.  Keep it out of the effect
+  // set just as CFGBuilder's producer does.
   bool HasEffect = false;
   for (uint64_t I = Boundary.FirstOp; I < End; ++I) {
     const LowOp &Op = Block.Ops[static_cast<size_t>(I)];

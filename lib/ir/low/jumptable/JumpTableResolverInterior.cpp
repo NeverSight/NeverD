@@ -31,26 +31,35 @@ namespace neverd {
 void CFGBuilder::establishCurrentFuncRange(const BinaryImage &Img,
                                            const ExceptionFunction *Exception) {
   CurrentFuncRange.reset();
+  AuthoritativeCurrentFuncRange.reset();
   va_t End = InvalidVA;
+  va_t AuthoritativeEnd = InvalidVA;
   auto ConsiderEnd = [&](va_t Candidate) {
     if (Candidate > CurrentFuncEntry && (End == InvalidVA || Candidate < End))
       End = Candidate;
+  };
+  auto ConsiderAuthoritativeEnd = [&](va_t Candidate) {
+    if (Candidate <= CurrentFuncEntry)
+      return;
+    if (AuthoritativeEnd == InvalidVA || Candidate < AuthoritativeEnd)
+      AuthoritativeEnd = Candidate;
+    ConsiderEnd(Candidate);
   };
 
   // A containing unwind range can also contain a separately callable local
   // entry.  Only a primary record that starts here proves ownership.
   if (Exception && Exception->Kind == RuntimeFunctionKind::Primary &&
       Exception->CodeRange.Begin == CurrentFuncEntry)
-    ConsiderEnd(Exception->CodeRange.End);
+    ConsiderAuthoritativeEnd(Exception->CodeRange.End);
 
   for (const auto &[Begin, RangeEnd] : Img.KnownCodeRanges)
     if (Begin == CurrentFuncEntry)
-      ConsiderEnd(RangeEnd);
+      ConsiderAuthoritativeEnd(RangeEnd);
 
   for (const Symbol &Sym : Img.Symbols)
     if (Sym.IsFunc && Sym.Addr == CurrentFuncEntry && Sym.Size != 0 &&
         Sym.Size <= InvalidVA - Sym.Addr)
-      ConsiderEnd(Sym.Addr + Sym.Size);
+      ConsiderAuthoritativeEnd(Sym.Addr + Sym.Size);
 
   // Even without sized metadata, the next independently detected entry is a
   // hard upper boundary.  It does not prove an unbounded last function.
@@ -62,6 +71,9 @@ void CFGBuilder::establishCurrentFuncRange(const BinaryImage &Img,
 
   if (End != InvalidVA)
     CurrentFuncRange = std::make_pair(CurrentFuncEntry, End);
+  if (AuthoritativeEnd != InvalidVA)
+    AuthoritativeCurrentFuncRange =
+        std::make_pair(CurrentFuncEntry, AuthoritativeEnd);
 }
 
 bool CFGBuilder::isOwnedInteriorTarget(const BinaryImage &Img,
@@ -96,13 +108,18 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   std::set<va_t> Processed;
   for (;;) {
     std::set<va_t> Candidates;
+    std::set<va_t> RelocationCandidates;
+    std::map<va_t, std::set<va_t>> RelocationSources;
     const uint32_t PtrSz = Img.getPointerSize();
     if (PtrSz != 0)
       for (va_t Slot : Img.CodePtrRelocSlots)
-        if (const uint8_t *P = Img.readVA(Slot, PtrSz))
-          Candidates.insert(
-              normalizeCodeAddress(static_cast<va_t>(readPtr(P, Img.is64Bit())),
-                                   Img.Arch, Img.Mode));
+        if (const uint8_t *P = Img.readVA(Slot, PtrSz)) {
+          const va_t Target = normalizeCodeAddress(
+              static_cast<va_t>(readPtr(P, Img.is64Bit())), Img.Arch, Img.Mode);
+          RelocationCandidates.insert(Target);
+          RelocationSources[Target].insert(Slot);
+        }
+    Candidates.insert(RelocationCandidates.begin(), RelocationCandidates.end());
 
     // These references were observed by this builder while decoding this
     // function.  Do not use Img.CodeRefTargets here: it is the image-global
@@ -117,6 +134,13 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
         continue;
 
       BlockStarts.insert(Target);
+      if (RelocationCandidates.count(Target)) {
+        PersistentCFGRoots.insert(Target);
+        const auto Sources = RelocationSources.find(Target);
+        if (Sources != RelocationSources.end())
+          RelocationCFGRootSources[Target].insert(Sources->second.begin(),
+                                                  Sources->second.end());
+      }
       if (!ExploredAddrs.count(Target))
         explore(Img, Dec, Target);
       Added = true;

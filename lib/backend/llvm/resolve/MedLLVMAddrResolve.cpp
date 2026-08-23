@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -1015,6 +1016,20 @@ bool MedLLVMEmitter::constantIsStableAddressOffset(const MedVar &V) const {
          !hasObjectDataProvenance(Value);
 }
 
+bool MedLLVMEmitter::valueIsAuthenticatedModelZero(const MedVar &V) const {
+  if (!CurMedFunc || V.isConst() || V.Size == 0)
+    return false;
+  const AddressProvenanceVarKey Key = addressProvenanceVarKey(V);
+  return std::any_of(CurMedFunc->ScalarAddressModels.begin(),
+                     CurMedFunc->ScalarAddressModels.end(),
+                     [&](const MedScalarAddressModel &Model) {
+                       return Model.Model ==
+                                  RelocatedInstructionScalarModelOccurrence::
+                                      ModelKind::I386ELFGOTBaseZero &&
+                              addressProvenanceVarKey(Model.Value) == Key;
+                     });
+}
+
 bool MedLLVMEmitter::valueIsStableAddressOffset(const MedVar &V,
                                                 const MedVar *Forbidden) const {
   if (!CurMedFunc) {
@@ -1677,6 +1692,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
                   std::set<Key> AnchoredPhis) -> bool {
     if (Forbidden && sameVar(Start, *Forbidden))
       return stableOffsetFailure("forbidden", Start, Depth);
+    if (valueIsAuthenticatedModelZero(Start))
+      return true;
     // Recognize a scalar recurrence before applying the acyclic-depth budget:
     // a long lowered arithmetic chain can return to its PHI only after dozens
     // nodes.  Every non-cyclic initialization arm is still audited below.

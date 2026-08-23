@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,11 @@ struct PipelineOptions {
   /// does not: no chain is named anywhere in a program.
   sbf::RuntimeProfile SBFProfile;
   const sbf::AnchorIdl *SBFIdl = nullptr;
+  /// Unit-test-only override for the module jump-table evidence budget.  The
+  /// production default remains the compiled safety limit; unlike the former
+  /// environment variable, ordinary process state cannot silently alter lift
+  /// semantics.
+  std::optional<size_t> JumpTableEvidenceBudgetForTesting;
 };
 
 enum class PipelineFunctionDisposition {

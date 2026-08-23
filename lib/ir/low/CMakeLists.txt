@@ -33,5 +33,6 @@ add_neverd_component_library(NeverDIRLow
 
   LINK_COMPONENTS
   IRLowValidation
+  Solver
   Symbolic
 )

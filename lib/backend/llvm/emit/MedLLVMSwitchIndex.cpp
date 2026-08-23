@@ -41,6 +41,7 @@
 #include <cassert>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -196,7 +197,18 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
   // contribution can be modelled below; a genuine variable-index load carries a
   // scaled index (idx*scale) and is rejected so it falls through to the
   // variable-index recovery / loud trap.
-  int64_t ConstSum = 0;
+  const uint16_t AddressBytes =
+      Img && Img->getPointerSize() != 0
+          ? static_cast<uint16_t>(Img->getPointerSize())
+          : getTargetRegInfo(TargetArch).PointerSize;
+  const unsigned AddressBits =
+      AddressBytes > 0 && AddressBytes < sizeof(uint64_t)
+          ? unsigned(AddressBytes) * 8u
+          : 64u;
+  const uint64_t AddressMask = AddressBits == 64
+                                   ? std::numeric_limits<uint64_t>::max()
+                                   : (uint64_t(1) << AddressBits) - 1;
+  uint64_t ConstSum = 0;
   int BaseCount = 0;
   bool HasScaledIndex = false;
   bool TooDeep = false;
@@ -216,19 +228,27 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
     }
     return V;
   };
-  std::function<void(MedVar, int, int64_t)> walk = [&](MedVar V, int Depth,
-                                                       int64_t Sign) {
+  auto accumulate = [&](uint64_t Value, int Sign) {
+    ConstSum = Sign > 0 ? ConstSum + Value : ConstSum - Value;
+    ConstSum &= AddressMask;
+  };
+  std::function<void(MedVar, int, int)> walk = [&](MedVar V, int Depth,
+                                                   int Sign) {
     if (Depth > limits::kMaxQuasiCopyDepth) {
       TooDeep = true;
       return;
     }
     V = skipPassThrough(V);
     if (V.isConst()) {
-      ConstSum += Sign * static_cast<int64_t>(V.ConstVal);
+      accumulate(V.ConstVal & AddressMask, Sign);
       return;
     }
     const MedOp *D = defOf(V);
     if (!D || D->NumInputs < 1) {
+      if (Sign < 0) {
+        TooDeep = true; // subtraction of an opaque base has no supported model
+        return;
+      }
       ++BaseCount; // opaque base (PIC base, parameter, cross-scope value)
       OpaqueBase = V;
       return;
@@ -256,9 +276,14 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
     case NdOp::INT_LEFT:
       if (D->NumInputs >= 2 && D->Inputs[0].isConst() &&
           D->Inputs[1].isConst()) {
-        int64_t A = static_cast<int64_t>(D->Inputs[0].ConstVal);
-        int64_t B = static_cast<int64_t>(D->Inputs[1].ConstVal);
-        ConstSum += Sign * (D->Opcode == NdOp::INT_MULT ? A * B : (A << B));
+        const uint64_t A = D->Inputs[0].ConstVal & AddressMask;
+        const uint64_t B = D->Inputs[1].ConstVal;
+        uint64_t Term = 0;
+        if (D->Opcode == NdOp::INT_MULT)
+          Term = A * B;
+        else if (B < AddressBits)
+          Term = A << unsigned(B);
+        accumulate(Term & AddressMask, Sign);
       } else {
         HasScaledIndex = true; // a runtime-scaled index → variable dispatch
       }
@@ -291,12 +316,14 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
   //   * B == *litpool    — the opaque base is a LOAD of a PC-relative table
   //                        displacement from a constant literal-pool VA
   //                        (ARM32): offset = ConstSum + *litpool - JT.BaseAddr.
-  auto tryOffset = [&](int64_t Off) -> std::optional<uint64_t> {
-    if (Off < 0 || Off % static_cast<int64_t>(JT.EntrySize) != 0)
+  const uint64_t PhysicalStride =
+      JT.EntryStride != 0 ? JT.EntryStride : JT.EntrySize;
+  auto tryOffset = [&](uint64_t Off) -> std::optional<uint64_t> {
+    Off &= AddressMask;
+    if (PhysicalStride == 0 || Off % PhysicalStride != 0)
       return std::nullopt;
-    uint64_t Cand = static_cast<uint64_t>(Off) / JT.EntrySize;
-    return Cand < JT.Targets.size() ? std::optional<uint64_t>(Cand)
-                                    : std::nullopt;
+    const uint64_t PhysicalSlot = Off / PhysicalStride;
+    return JT.targetPositionForPhysicalSlot(PhysicalSlot);
   };
   std::optional<uint64_t> Chosen;
   bool Ambiguous = false;
@@ -308,7 +335,7 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
     else if (*Chosen != *C)
       Ambiguous = true; // two distinct in-range models → unresolvable
   };
-  consider(tryOffset(ConstSum - static_cast<int64_t>(JT.BaseAddr))); // B==0
+  consider(tryOffset(ConstSum - (JT.BaseAddr & AddressMask))); // B==0
   if (BaseCount == 1) {
     consider(
         tryOffset(ConstSum)); // B == JT.BaseAddr (table VA in the register)
@@ -323,12 +350,16 @@ std::optional<MedVar> MedLLVMEmitter::constIndexFromTableLoad(
         if (AddrV.isConst()) {
           uint32_t W = Img->getPointerSize();
           if (const uint8_t *P = Img->readVA(AddrV.ConstVal, W)) {
-            int64_t Lit = 0;
+            uint64_t Lit = 0;
             std::memcpy(&Lit, P, W);
-            if (W == 4) // sign-extend a 32-bit PC-relative displacement
-              Lit = static_cast<int32_t>(static_cast<uint32_t>(Lit));
-            consider(
-                tryOffset(ConstSum + Lit - static_cast<int64_t>(JT.BaseAddr)));
+            if (W > 0 && W < sizeof(uint64_t)) {
+              const unsigned LitBits = W * 8u;
+              const uint64_t LitMask = (uint64_t(1) << LitBits) - 1;
+              Lit &= LitMask;
+              if ((Lit & (uint64_t(1) << (LitBits - 1))) != 0)
+                Lit |= ~LitMask;
+            }
+            consider(tryOffset(ConstSum + Lit - (JT.BaseAddr & AddressMask)));
           }
         }
       }
