@@ -377,6 +377,45 @@ TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
   EXPECT_EQ(Func.CallInfos[0].Args[1].RegOff, TRI.IntParamRegs[1]);
 }
 
+TEST(MedABIPass, PromotedRegisterParamsRebaseMutableStackHomes) {
+  constexpr Arch TheArch = Arch::X86;
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "mixed_regparm_mutable_stack_forwarder";
+  Func.Blocks.resize(1);
+  Func.Blocks[0].Id = 0;
+  for (int I = 0; I < 3; ++I) {
+    MedVar Param;
+    Param.Kind = MedVar::Param;
+    Param.Id = I;
+    Param.RegOff = kNoParamReg;
+    Param.Size = TRI.PointerSize;
+    Param.TheArch = TheArch;
+    Func.Params.push_back(Param);
+  }
+  Func.MutableStackParamHomes = {{0, 4}, {2, 12}};
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Output = reg(1, 0, TRI.PointerSize, TRI.IntReturnReg, TheArch);
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  Func.Blocks[0].Ops.push_back(Call);
+
+  const std::map<va_t, std::string> Names{{Callee, "regparm_callee"}};
+  const std::map<va_t, int> RegArity{{Callee, 2}};
+  const std::map<va_t, int> TotalArity{{Callee, 5}};
+  recoverCallAbi(Func, TheArch, Names, nullptr, &RegArity, &TotalArity);
+
+  ASSERT_EQ(Func.Params.size(), 5u);
+  EXPECT_EQ(Func.Params[0].RegOff, TRI.IntParamRegs[0]);
+  EXPECT_EQ(Func.Params[1].RegOff, TRI.IntParamRegs[1]);
+  EXPECT_EQ(Func.MutableStackParamHomes,
+            (std::vector<std::pair<int, int64_t>>{{2, 4}, {4, 12}}));
+}
+
 TEST(MedABIPass, DirectCallUsesWidestEquallySeededArgumentPhi) {
   constexpr Arch TheArch = Arch::AArch64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
@@ -537,6 +576,70 @@ TEST(LowToMedSSA, VerifiesDisconnectedControlFlowComponents) {
 
   MedFunc Med = LowToMedConverter().convert(Low, Arch::X64);
   EXPECT_TRUE(verifyMedFunc(Med, "test-disconnected-cfg"));
+}
+
+TEST(LowToMedX86CallingConv,
+     StackAddressExtensionDoesNotCreateMutableParameterHome) {
+  constexpr Arch TheArch = Arch::X86;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Name = "extended_stack_parameter_address";
+  Low.Blocks.resize(1);
+  LowBlock &Block = Low.Blocks[0];
+  Block.Id = 0;
+  Block.StartAddr = 0x1000;
+  Block.EndAddr = 0x1004;
+
+  NdVar Address32 = NdVar::tmp(1, TRI.PointerSize);
+  LowOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Addr = 0x1000;
+  Add.Output = Address32;
+  Add.addInput(NdVar::reg(TRI.StackPointer, TRI.PointerSize));
+  Add.addInput(NdVar::cst(4, TRI.PointerSize));
+  Block.Ops.push_back(Add);
+
+  NdVar Address64 = NdVar::tmp(2, 8);
+  LowOp Extend;
+  Extend.Opcode = NdOp::INT_ZEXT;
+  Extend.Addr = 0x1001;
+  Extend.Output = Address64;
+  Extend.addInput(Address32);
+  Block.Ops.push_back(Extend);
+
+  NdVar Value = NdVar::tmp(3, 4);
+  LowOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = 0x1002;
+  Load.Output = Value;
+  Load.addInput(Address64);
+  Block.Ops.push_back(Load);
+
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = 0x1003;
+  Return.addInput(Value);
+  Block.Ops.push_back(Return);
+
+  MedFunc Med = LowToMedConverter().convert(Low, TheArch);
+  ASSERT_EQ(Med.Params.size(), 1u);
+  EXPECT_EQ(Med.Params[0].Kind, MedVar::Param);
+  EXPECT_EQ(Med.Params[0].Id, 0);
+  EXPECT_EQ(Med.Params[0].RegOff, kNoParamReg);
+  EXPECT_TRUE(Med.MutableStackParamHomes.empty());
+
+  bool SawParameterCopy = false;
+  for (const MedBlock &MedBlock : Med.Blocks)
+    for (const MedOp &Op : MedBlock.Ops) {
+      SawParameterCopy |= Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                          Op.Inputs[0].Kind == MedVar::Param &&
+                          Op.Inputs[0].Id == 0;
+      EXPECT_NE(Op.Opcode, NdOp::LOAD);
+    }
+  EXPECT_TRUE(SawParameterCopy);
+  EXPECT_TRUE(verifyMedFunc(Med, "test-extended-stack-parameter-address"));
 }
 
 TEST(LowToMedSSA, ModelsItaniumLandingPadRegistersAsExceptionalLiveIns) {

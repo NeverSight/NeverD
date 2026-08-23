@@ -422,6 +422,27 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
       if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1)
         if (auto Off = stackArgOffset(Op.Inputs[0]))
           MutableArgOffsets.insert(*Off); // direct write to the home slot
+      // The stack address can thread through these value-preserving operations
+      // before reaching its real use.  They are not escapes themselves; keep
+      // this list in sync with traceOff above.  In particular, i386 address
+      // arithmetic now carries explicit 32-bit ZEXT views, and treating their
+      // input as an escape turns ordinary read-only arguments into mutable
+      // homes.
+      const bool HasTraceableForwardedAddress =
+          Op.Output.Kind == MedVar::Temp &&
+          stackArgOffset(Op.Output).has_value();
+      if (HasTraceableForwardedAddress)
+        switch (Op.Opcode) {
+        case NdOp::COPY:
+        case NdOp::INT_ADD:
+        case NdOp::INT_SUB:
+        case NdOp::SUBBYTES:
+        case NdOp::INT_ZEXT:
+        case NdOp::INT_SEXT:
+          continue;
+        default:
+          break;
+        }
       // The home address used as anything but a load/store address (a call
       // argument, a stored value, ...) escapes and may be written through.
       for (uint8_t K = 0; K < Op.NumInputs; ++K) {

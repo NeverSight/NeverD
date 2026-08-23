@@ -1520,6 +1520,14 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       }
       RegParams.push_back(P);
     }
+    // MutableStackParamHomes stores positions in Func.Params, not the
+    // stack-parameter MedVar ids.  Promoting a forwarded register prefix shifts
+    // every existing stack parameter to the right; rebase the positional
+    // metadata before inserting that prefix so the emitter seeds each home
+    // from its original incoming stack argument.
+    const int ParamIndexShift = static_cast<int>(RegParams.size());
+    for (auto &Home : Func.MutableStackParamHomes)
+      Home.first += ParamIndexShift;
     Func.Params.insert(Func.Params.begin(), RegParams.begin(), RegParams.end());
   }
 

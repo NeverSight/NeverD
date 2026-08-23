@@ -78,6 +78,20 @@ static const std::vector<RoundTripTC> kX86 = {
    "static void __attribute__((noinline)) step(unsigned *p){ *p = *p*1103515245u + 12345u; }\n"
    "unsigned f(unsigned x){ for(int i=0;i<20;i++) step(&x); return x; }\n",
    {0x12345678u}, "StackParamUpd32", 0},
+
+  // At -O2, the static address-not-taken helpers use the compiler's internal
+  // i386 convention: x/y in ECX/EDX and z in its ordinary stack home.  The
+  // volatile update keeps a real store to z, so ABI recovery must seed that
+  // mutable home from parameter position 2 after it prepends the two promoted
+  // register parameters.
+  {"internal_regparm_mutable_tail",
+   "static unsigned __attribute__((noinline)) g3(unsigned x,unsigned y,unsigned z){\n"
+   "  return (x*2654435761u) ^ (y*2246822519u) ^ (z*3266489917u); }\n"
+   "static unsigned f3(unsigned x,unsigned y,unsigned z) __attribute__((noinline));\n"
+   "static unsigned f3(unsigned x,unsigned y,unsigned z){\n"
+   "  volatile unsigned *p=&z; *p += 0x1234u; return g3(x,y,z); }\n"
+   "unsigned f(unsigned a){ return f3(a,a^0x55u,a*7u); }\n",
+   {0x53u}, "StackParamUpd32", 2},
 };
 // clang-format on
 
