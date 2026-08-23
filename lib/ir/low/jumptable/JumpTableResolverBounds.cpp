@@ -874,6 +874,17 @@ uint32_t CFGBuilder::inferBoundsFromMask(
   std::vector<JumpTableValueQuery> DenseBoundQueries;
   std::vector<DenseBoundBatch> DenseBoundBatches;
   for (const BoundBatch &Batch : Batches) {
+    // This fallback may fill a missing domain proof, tighten an authenticated
+    // one, or replay an equal certificate during final validation.  It must
+    // never widen a complete guard/modulo domain: incidental low-level masks
+    // in a DIV implementation can supply a loose bound (for example 32 for an
+    // exact x%5 selector), which is a true less-than fact but not the table's
+    // runtime coordinate domain.
+    const bool HasIndependentDomain =
+        Info.AuthenticatedGuardBound != 0 || Info.AuthenticatedModuloBound != 0;
+    if (HasIndependentDomain && Info.MaxEntries != 0 &&
+        Batch.Bound > Info.MaxEntries)
+      continue;
     bool IsDenseZeroBased = !Batch.UsesNonContiguous && Batch.Bound != 0 &&
                             Batch.Coordinates.size() == Batch.Bound;
     for (size_t I = 0; IsDenseZeroBased && I < Batch.Coordinates.size(); ++I)

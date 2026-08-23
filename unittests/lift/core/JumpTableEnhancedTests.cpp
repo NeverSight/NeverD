@@ -1344,6 +1344,26 @@ TEST_F(JTE_X86_64, MaskBoundAcceptsDenseBoundedMerge) {
             (std::vector<int64_t>{0, 1, 2, 3}));
 }
 
+TEST_F(JTE_X86_64, MaskBoundReplaysTightenedDenseMerge) {
+  auto ImageOrErr = neverd::loadBinary(identityCfgLaneObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_identity_guard5_mask4_dense_merge");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+  EXPECT_EQ(Low.JumpTables.front().CaseLabels,
+            (std::vector<int64_t>{0, 1, 2, 3}));
+}
+
 TEST_F(JTE_X86_64, MaskBoundDistinguishesStackPointerEpochs) {
   auto R = liftToLowIR(identityCfgLaneObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;

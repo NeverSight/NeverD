@@ -1561,6 +1561,39 @@ jt_identity_mask_dense_bounded_merge:
         retq
         .size   jt_identity_mask_dense_bounded_merge, .-jt_identity_mask_dense_bounded_merge
 
+// The guard independently proves [0,5), while the merged selector's complete
+// mask domain tightens that to [0,4).  Revalidating the final jump-table proof
+// must replay the equal [0,4) mask certificate rather than treating it as a
+// stale attempt to widen the already-tightened bound.
+        .globl  jt_identity_guard5_mask4_dense_merge
+        .type   jt_identity_guard5_mask4_dense_merge,@function
+jt_identity_guard5_mask4_dense_merge:
+        xorl    %r10d, %r10d
+        jmp     .Lguard5_mask4_dispatch
+.Lguard5_mask4_case0:
+        movl    %edi, %r10d
+        andl    $3, %r10d
+.Lguard5_mask4_dispatch:
+        cmpl    $5, %r10d
+        jae     .Lguard5_mask4_default
+        leaq    .Lguard5_mask4_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+.Lguard5_mask4_case1:
+        movl    $4601, %eax
+        retq
+.Lguard5_mask4_case2:
+        movl    $4602, %eax
+        retq
+.Lguard5_mask4_case3:
+        movl    $4603, %eax
+        retq
+.Lguard5_mask4_default:
+        movl    $4699, %eax
+        retq
+        .size   jt_identity_guard5_mask4_dense_merge, .-jt_identity_guard5_mask4_dense_merge
+
         .section .rodata,"a",@progbits
         .p2align 2
 .Lmask_dense_merge_table:
@@ -1568,5 +1601,12 @@ jt_identity_mask_dense_bounded_merge:
         .long .Lmask_dense_merge_case1-.Lmask_dense_merge_table
         .long .Lmask_dense_merge_case2-.Lmask_dense_merge_table
         .long .Lmask_dense_merge_case3-.Lmask_dense_merge_table
+
+        .p2align 2
+.Lguard5_mask4_table:
+        .long .Lguard5_mask4_case0-.Lguard5_mask4_table
+        .long .Lguard5_mask4_case1-.Lguard5_mask4_table
+        .long .Lguard5_mask4_case2-.Lguard5_mask4_table
+        .long .Lguard5_mask4_case3-.Lguard5_mask4_table
 
         .section .note.GNU-stack,"",@progbits
