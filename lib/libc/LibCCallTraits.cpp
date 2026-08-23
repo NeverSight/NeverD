@@ -167,10 +167,13 @@ VarArgFixedParamKind varArgFixedParamKind(std::string_view Name,
   // The irregular registry intentionally carries only the fixed prefix the
   // recovery pass can prove.  Classify that prefix without guessing the types
   // of any optional tail arguments.
+  if (Name == "open")
+    return Index == 0 ? VarArgFixedParamKind::Pointer
+                      : VarArgFixedParamKind::Integer;
   if (Name == "syslog" || Name == "err" || Name == "errx" || Name == "openat" ||
       Name == "fcntl" || Name == "ioctl")
     return VarArgFixedParamKind::Integer;
-  if (Name == "warn" || Name == "warnx" || Name == "open" || Name == "execl" ||
+  if (Name == "warn" || Name == "warnx" || Name == "execl" ||
       Name == "execlp" || Name == "execle" || Name == "mq_open" ||
       Name == "sem_open")
     return VarArgFixedParamKind::Pointer;

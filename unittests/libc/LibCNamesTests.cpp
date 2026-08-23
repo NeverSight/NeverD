@@ -72,7 +72,7 @@ TEST(VarArgFixedCount, FortifiedChkVariants) {
 // =====================================================================
 
 TEST(VarArgFixedCount, PosixWhitelist) {
-  EXPECT_EQ(varArgFixedCount("open"), 1u);
+  EXPECT_EQ(varArgFixedCount("open"), 2u);
   EXPECT_EQ(varArgFixedCount("openat"), 1u);
   EXPECT_EQ(varArgFixedCount("fcntl"), 1u);
   EXPECT_EQ(varArgFixedCount("ioctl"), 1u);
@@ -149,6 +149,15 @@ TEST(VarArgFixedParamKind, PrintfFamilyPreservesScalarParameters) {
   EXPECT_EQ(varArgFixedParamKind("snprintf", 0), VarArgFixedParamKind::Pointer);
   EXPECT_EQ(varArgFixedParamKind("snprintf", 1), VarArgFixedParamKind::Integer);
   EXPECT_EQ(varArgFixedParamKind("snprintf", 2), VarArgFixedParamKind::Pointer);
+}
+
+TEST(VarArgFixedParamKind, OpenPreservesNamedPathAndFlags) {
+  EXPECT_EQ(varArgFixedParamKind("open", 0),
+            VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("open", 1),
+            VarArgFixedParamKind::Integer);
+  EXPECT_EQ(varArgFixedParamKind("open", 2),
+            VarArgFixedParamKind::Unknown);
 }
 
 TEST(VarArgFixedParamKind, FortifiedSnprintfShape) {
