@@ -578,17 +578,26 @@ TEST(LowToMedSSA, VerifiesDisconnectedControlFlowComponents) {
   EXPECT_TRUE(verifyMedFunc(Med, "test-disconnected-cfg"));
 }
 
-TEST(LowToMedCallReturnFP, LaterCallOwnsTheSubsequentFPResult) {
+MedFunc convertTwoCallFPFlow(NdOp SecondOpcode, bool ReadInSuccessor,
+                             bool PreserveSecondCall) {
   constexpr Arch TheArch = Arch::X64;
+  constexpr va_t SecondTarget = 0x3000;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
 
   LowFunc Low;
   Low.Entry = 0x1000;
   Low.Name = "two_call_fp_result";
-  Low.Blocks.resize(1);
+  Low.Blocks.resize(ReadInSuccessor ? 2 : 1);
   Low.Blocks[0].Id = 0;
   Low.Blocks[0].StartAddr = 0x1000;
-  Low.Blocks[0].EndAddr = 0x1005;
+  Low.Blocks[0].EndAddr = 0x1003;
+  if (ReadInSuccessor) {
+    Low.Blocks[0].Succs = {1};
+    Low.Blocks[1].Id = 1;
+    Low.Blocks[1].StartAddr = 0x1010;
+    Low.Blocks[1].EndAddr = 0x1013;
+    Low.Blocks[1].Preds = {0};
+  }
 
   LowOp FirstCall;
   FirstCall.Opcode = NdOp::CALL;
@@ -598,50 +607,70 @@ TEST(LowToMedCallReturnFP, LaterCallOwnsTheSubsequentFPResult) {
   Low.Blocks[0].Ops.push_back(FirstCall);
 
   NdVar FirstResult = NdVar::tmp(100, TRI.PointerSize);
-  LowOp SaveFirstResult;
-  SaveFirstResult.Opcode = NdOp::COPY;
-  SaveFirstResult.Addr = 0x1001;
-  SaveFirstResult.Output = FirstResult;
-  SaveFirstResult.addInput(NdVar::reg(TRI.IntReturnReg, TRI.PointerSize));
-  Low.Blocks[0].Ops.push_back(SaveFirstResult);
+  if (!PreserveSecondCall) {
+    LowOp SaveFirstResult;
+    SaveFirstResult.Opcode = NdOp::COPY;
+    SaveFirstResult.Addr = 0x1001;
+    SaveFirstResult.Output = FirstResult;
+    SaveFirstResult.addInput(NdVar::reg(TRI.IntReturnReg, TRI.PointerSize));
+    Low.Blocks[0].Ops.push_back(SaveFirstResult);
+  }
 
   LowOp SecondCall;
-  SecondCall.Opcode = NdOp::CALL;
+  SecondCall.Opcode = SecondOpcode;
   SecondCall.Addr = 0x1002;
   SecondCall.Output = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
-  SecondCall.addInput(NdVar::cst(0x3000, TRI.PointerSize));
+  SecondCall.addInput(NdVar::cst(SecondTarget, TRI.PointerSize));
   Low.Blocks[0].Ops.push_back(SecondCall);
 
   NdVar FPBits = NdVar::tmp(101, TRI.PointerSize);
   LowOp ExtractFPBits;
   ExtractFPBits.Opcode = NdOp::SUBBYTES;
-  ExtractFPBits.Addr = 0x1003;
+  ExtractFPBits.Addr = ReadInSuccessor ? 0x1010 : 0x1003;
   ExtractFPBits.Output = FPBits;
   ExtractFPBits.addInput(NdVar::reg(TRI.FPReturnReg, 16));
   ExtractFPBits.addInput(NdVar::cst(0, TRI.PointerSize));
-  Low.Blocks[0].Ops.push_back(ExtractFPBits);
-
-  NdVar Combined = NdVar::tmp(102, TRI.PointerSize);
-  LowOp Combine;
-  Combine.Opcode = NdOp::INT_ADD;
-  Combine.Addr = 0x1004;
-  Combine.Output = Combined;
-  Combine.addInput(FirstResult);
-  Combine.addInput(FPBits);
-  Low.Blocks[0].Ops.push_back(Combine);
+  LowBlock &UseBlock = Low.Blocks[ReadInSuccessor ? 1 : 0];
+  UseBlock.Ops.push_back(ExtractFPBits);
 
   LowOp Return;
   Return.Opcode = NdOp::RETURN;
-  Return.Addr = 0x1004;
-  Return.addInput(Combined);
-  Low.Blocks[0].Ops.push_back(Return);
+  if (PreserveSecondCall) {
+    Return.addInput(FPBits);
+  } else {
+    NdVar Combined = NdVar::tmp(102, TRI.PointerSize);
+    LowOp Combine;
+    Combine.Opcode = NdOp::INT_ADD;
+    Combine.Addr = ReadInSuccessor ? 0x1011 : 0x1004;
+    Combine.Output = Combined;
+    Combine.addInput(FirstResult);
+    Combine.addInput(FPBits);
+    UseBlock.Ops.push_back(Combine);
+    Return.addInput(Combined);
+  }
+  Return.Addr = ReadInSuccessor ? 0x1012 : 0x1005;
+  UseBlock.Ops.push_back(Return);
 
-  MedFunc Med = LowToMedConverter().convert(Low, TheArch);
+  const std::set<va_t> PreservingTargets =
+      PreserveSecondCall ? std::set<va_t>{SecondTarget} : std::set<va_t>{};
+  LowToMedConverter Converter;
+  Converter.setStackProbeSlots(&PreservingTargets);
+  return Converter.convert(Low, TheArch);
+}
+
+std::vector<const MedOp *> callOps(const MedFunc &Med) {
   std::vector<const MedOp *> Calls;
   for (const MedBlock &Block : Med.Blocks)
     for (const MedOp &Op : Block.Ops)
-      if (Op.Opcode == NdOp::CALL)
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
         Calls.push_back(&Op);
+  return Calls;
+}
+
+TEST(LowToMedCallReturnFP, LaterCallOwnsTheSubsequentFPResult) {
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  MedFunc Med = convertTwoCallFPFlow(NdOp::CALL, false, false);
+  std::vector<const MedOp *> Calls = callOps(Med);
 
   ASSERT_EQ(Calls.size(), 2u);
   EXPECT_EQ(Calls[0]->Output.Kind, MedVar::Reg);
@@ -653,74 +682,9 @@ TEST(LowToMedCallReturnFP, LaterCallOwnsTheSubsequentFPResult) {
 
 TEST(LowToMedCallReturnFP,
      LaterIndirectCallOwnsFPResultReadInDominatedSuccessor) {
-  constexpr Arch TheArch = Arch::X64;
-  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
-
-  LowFunc Low;
-  Low.Entry = 0x1000;
-  Low.Name = "two_call_cross_block_fp_result";
-  Low.Blocks.resize(2);
-  Low.Blocks[0].Id = 0;
-  Low.Blocks[0].StartAddr = 0x1000;
-  Low.Blocks[0].EndAddr = 0x1003;
-  Low.Blocks[0].Succs = {1};
-  Low.Blocks[1].Id = 1;
-  Low.Blocks[1].StartAddr = 0x1010;
-  Low.Blocks[1].EndAddr = 0x1013;
-  Low.Blocks[1].Preds = {0};
-
-  LowOp FirstCall;
-  FirstCall.Opcode = NdOp::CALL;
-  FirstCall.Addr = 0x1000;
-  FirstCall.Output = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
-  FirstCall.addInput(NdVar::cst(0x2000, TRI.PointerSize));
-  Low.Blocks[0].Ops.push_back(FirstCall);
-
-  NdVar FirstResult = NdVar::tmp(120, TRI.PointerSize);
-  LowOp SaveFirstResult;
-  SaveFirstResult.Opcode = NdOp::COPY;
-  SaveFirstResult.Addr = 0x1001;
-  SaveFirstResult.Output = FirstResult;
-  SaveFirstResult.addInput(NdVar::reg(TRI.IntReturnReg, TRI.PointerSize));
-  Low.Blocks[0].Ops.push_back(SaveFirstResult);
-
-  LowOp SecondCall;
-  SecondCall.Opcode = NdOp::INDIR_CALL;
-  SecondCall.Addr = 0x1002;
-  SecondCall.Output = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
-  SecondCall.addInput(NdVar::cst(0x3000, TRI.PointerSize));
-  Low.Blocks[0].Ops.push_back(SecondCall);
-
-  NdVar FPBits = NdVar::tmp(121, TRI.PointerSize);
-  LowOp ExtractFPBits;
-  ExtractFPBits.Opcode = NdOp::SUBBYTES;
-  ExtractFPBits.Addr = 0x1010;
-  ExtractFPBits.Output = FPBits;
-  ExtractFPBits.addInput(NdVar::reg(TRI.FPReturnReg, 16));
-  ExtractFPBits.addInput(NdVar::cst(0, TRI.PointerSize));
-  Low.Blocks[1].Ops.push_back(ExtractFPBits);
-
-  NdVar Combined = NdVar::tmp(122, TRI.PointerSize);
-  LowOp Combine;
-  Combine.Opcode = NdOp::INT_ADD;
-  Combine.Addr = 0x1011;
-  Combine.Output = Combined;
-  Combine.addInput(FirstResult);
-  Combine.addInput(FPBits);
-  Low.Blocks[1].Ops.push_back(Combine);
-
-  LowOp Return;
-  Return.Opcode = NdOp::RETURN;
-  Return.Addr = 0x1012;
-  Return.addInput(Combined);
-  Low.Blocks[1].Ops.push_back(Return);
-
-  MedFunc Med = LowToMedConverter().convert(Low, TheArch);
-  std::vector<const MedOp *> Calls;
-  for (const MedBlock &Block : Med.Blocks)
-    for (const MedOp &Op : Block.Ops)
-      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
-        Calls.push_back(&Op);
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  MedFunc Med = convertTwoCallFPFlow(NdOp::INDIR_CALL, true, false);
+  std::vector<const MedOp *> Calls = callOps(Med);
 
   ASSERT_EQ(Calls.size(), 2u);
   EXPECT_EQ(Calls[0]->Output.Kind, MedVar::Reg);
@@ -731,57 +695,9 @@ TEST(LowToMedCallReturnFP,
 }
 
 TEST(LowToMedCallReturnFP, CallerSavedPreservingCallKeepsPriorFPResult) {
-  constexpr Arch TheArch = Arch::X64;
-  constexpr va_t PreservingCallTarget = 0x3000;
-  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
-
-  LowFunc Low;
-  Low.Entry = 0x1000;
-  Low.Name = "preserved_fp_result";
-  Low.Blocks.resize(1);
-  Low.Blocks[0].Id = 0;
-  Low.Blocks[0].StartAddr = 0x1000;
-  Low.Blocks[0].EndAddr = 0x1004;
-
-  LowOp Producer;
-  Producer.Opcode = NdOp::CALL;
-  Producer.Addr = 0x1000;
-  Producer.Output = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
-  Producer.addInput(NdVar::cst(0x2000, TRI.PointerSize));
-  Low.Blocks[0].Ops.push_back(Producer);
-
-  LowOp PreservingCall;
-  PreservingCall.Opcode = NdOp::CALL;
-  PreservingCall.Addr = 0x1001;
-  PreservingCall.Output = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
-  PreservingCall.addInput(
-      NdVar::cst(PreservingCallTarget, TRI.PointerSize));
-  Low.Blocks[0].Ops.push_back(PreservingCall);
-
-  NdVar FPBits = NdVar::tmp(110, TRI.PointerSize);
-  LowOp ExtractFPBits;
-  ExtractFPBits.Opcode = NdOp::SUBBYTES;
-  ExtractFPBits.Addr = 0x1002;
-  ExtractFPBits.Output = FPBits;
-  ExtractFPBits.addInput(NdVar::reg(TRI.FPReturnReg, 16));
-  ExtractFPBits.addInput(NdVar::cst(0, TRI.PointerSize));
-  Low.Blocks[0].Ops.push_back(ExtractFPBits);
-
-  LowOp Return;
-  Return.Opcode = NdOp::RETURN;
-  Return.Addr = 0x1003;
-  Return.addInput(FPBits);
-  Low.Blocks[0].Ops.push_back(Return);
-
-  const std::set<va_t> PreservingTargets{PreservingCallTarget};
-  LowToMedConverter Converter;
-  Converter.setStackProbeSlots(&PreservingTargets);
-  MedFunc Med = Converter.convert(Low, TheArch);
-  std::vector<const MedOp *> Calls;
-  for (const MedBlock &Block : Med.Blocks)
-    for (const MedOp &Op : Block.Ops)
-      if (Op.Opcode == NdOp::CALL)
-        Calls.push_back(&Op);
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  MedFunc Med = convertTwoCallFPFlow(NdOp::CALL, false, true);
+  std::vector<const MedOp *> Calls = callOps(Med);
 
   ASSERT_EQ(Calls.size(), 2u);
   EXPECT_EQ(Calls[0]->Output.Kind, MedVar::Reg);
