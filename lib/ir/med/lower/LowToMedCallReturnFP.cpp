@@ -110,6 +110,22 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
            Op.Inputs[0].SSAVer == Op.Inputs[1].SSAVer;
   };
 
+  // SSA publishes the authoritative caller-saved definitions per exact call
+  // site.  Use that record instead of treating every call as a barrier: stack
+  // probes and other PreservesCallerSaved calls deliberately have no clobber,
+  // while both direct and indirect ordinary calls do.  A call may still read
+  // the previous FP value as an explicit argument; callers inspect inputs
+  // before applying this boundary.
+  std::set<uint32_t> FPRetClobberSites;
+  for (const MedCallClobber &Clobber : Func.CallClobbers)
+    if (Clobber.Value.Kind == MedVar::Reg &&
+        Clobber.Value.RegOff == FPRet)
+      FPRetClobberSites.insert(Clobber.CallSiteId);
+  auto clobbersFPRet = [&](const MedOp &Op) -> bool {
+    return !Op.PreservesCallerSaved && Op.CallSiteId != 0 &&
+           FPRetClobberSites.count(Op.CallSiteId) != 0;
+  };
+
   // A successor FP-return PHI fed by \p BlockId is the loop-carried result of
   // this call only when its value is GENUINELY consumed: read by a
   // non-self-zero op before the register is redefined in that successor.  A
@@ -145,6 +161,8 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
                   Nx.Inputs[I].RegOff == FPRet && Nx.Inputs[I].Id == PV.Id &&
                   Nx.Inputs[I].SSAVer == PV.SSAVer)
                 return true; // genuine consumer of the carried FP value
+          if (clobbersFPRet(Nx))
+            break;
           if (Nx.Output.Kind == MedVar::Reg && Nx.Output.RegOff == FPRet)
             break; // redefined before any genuine read
         }
@@ -193,6 +211,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
             if (Nx.Inputs[I].Kind == MedVar::Reg &&
                 Nx.Inputs[I].RegOff == FPRet)
               return true;
+        if (clobbersFPRet(Nx)) {
+          Redef = true;
+          break;
+        }
         if (Nx.Output.Kind == MedVar::Reg && Nx.Output.RegOff == FPRet) {
           Redef = true;
           break;
@@ -208,6 +230,8 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
     for (size_t OI = 0; OI < Blk.Ops.size(); ++OI) {
       auto &Op = Blk.Ops[OI];
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+        continue;
+      if (Op.PreservesCallerSaved)
         continue;
       // A call already remodeled as a multi-register struct return (its output
       // is the flat aggregate temp, its FP return register claimed by an
@@ -244,6 +268,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
             }
         if (ReadAfter)
           break;
+        if (clobbersFPRet(Nx)) {
+          RedefAfter = true;
+          break;
+        }
         if (Nx.Output.Kind == MedVar::Reg && Nx.Output.RegOff == FPRet) {
           RedefAfter = true;
           break;
@@ -282,6 +310,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
             Nx.Inputs[I].Id = VecId;
             Nx.Inputs[I].SSAVer = NewVer;
           }
+        if (clobbersFPRet(Nx)) {
+          LaterRedef = true;
+          break;
+        }
         if (Nx.Output.Kind == MedVar::Reg && Nx.Output.RegOff == FPRet &&
             !isFPRetExtraction(Nx)) {
           LaterRedef = true;
@@ -328,6 +360,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
                 Nx.Inputs[I].Id = VecId;
                 Nx.Inputs[I].SSAVer = NewVer;
               }
+            if (clobbersFPRet(Nx)) {
+              Redef = true;
+              break;
+            }
             if (Nx.Output.Kind == MedVar::Reg && Nx.Output.RegOff == FPRet &&
                 !isFPRetExtraction(Nx)) {
               Redef = true;
