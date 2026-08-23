@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PipelineLowIRDetail.h"
 #include "PipelineTrimStorage.h"
 
 #include "neverd/Limits.h"
@@ -40,6 +41,73 @@
 #include <vector>
 
 namespace neverd {
+
+namespace pipeline_detail {
+namespace {
+
+bool storageRangesMayOverlap(const JumpTableStorageRange &Left,
+                             const JumpTableStorageRange &Right,
+                             size_t &WorkRemaining) {
+  if (WorkRemaining == 0)
+    return true;
+  --WorkRemaining;
+  const std::optional<va_t> LeftEnd = Left.storageEnd();
+  const std::optional<va_t> RightEnd = Right.storageEnd();
+  if (!LeftEnd || !RightEnd)
+    return true;
+  if (*LeftEnd <= Right.BaseAddr || *RightEnd <= Left.BaseAddr)
+    return false;
+  if (Left.PhysicalSlotCount > limits::kMaxJumpTableEntries ||
+      Right.PhysicalSlotCount > limits::kMaxJumpTableEntries)
+    return true;
+
+  const JumpTableStorageRange *Probe = &Left;
+  const JumpTableStorageRange *Other = &Right;
+  va_t OtherEnd = *RightEnd;
+  if (Right.PhysicalSlotCount < Left.PhysicalSlotCount) {
+    Probe = &Right;
+    Other = &Left;
+    OtherEnd = *LeftEnd;
+  }
+  for (uint64_t I = 0; I < Probe->PhysicalSlotCount; ++I) {
+    if (WorkRemaining == 0)
+      return true;
+    --WorkRemaining;
+    const va_t ProbeStart = Probe->BaseAddr + I * Probe->EntryStride;
+    const va_t ProbeEnd = ProbeStart + Probe->EntrySize;
+    if (ProbeEnd <= Other->BaseAddr || ProbeStart >= OtherEnd)
+      continue;
+    const uint64_t LastStartBeforeProbeEnd = std::min<uint64_t>(
+        (ProbeEnd - 1 - Other->BaseAddr) / Other->EntryStride,
+        Other->PhysicalSlotCount - 1);
+    const va_t OtherStart =
+        Other->BaseAddr + LastStartBeforeProbeEnd * Other->EntryStride;
+    if (OtherStart + Other->EntrySize > ProbeStart)
+      return true;
+  }
+  return false;
+}
+
+} // namespace
+
+bool tableObjectSummaryMayAlias(
+    const BinaryImage & /*Img*/, va_t RootIdentity,
+    llvm::ArrayRef<JumpTableStorageRange> RootRanges, va_t OwnerIdentity,
+    llvm::ArrayRef<JumpTableStorageRange> OwnerRanges, size_t *WorkRemaining) {
+  if (RootIdentity == InvalidVA)
+    return false;
+  if (RootIdentity == OwnerIdentity)
+    return true;
+  size_t LocalWorkRemaining = limits::kMaxJumpTableEvidenceWork;
+  size_t &Remaining = WorkRemaining ? *WorkRemaining : LocalWorkRemaining;
+  for (const JumpTableStorageRange &RootRange : RootRanges)
+    for (const JumpTableStorageRange &OwnerRange : OwnerRanges)
+      if (storageRangesMayOverlap(RootRange, OwnerRange, Remaining))
+        return true;
+  return false;
+}
+
+} // namespace pipeline_detail
 
 namespace {
 
@@ -89,6 +157,23 @@ struct ModuleAddressAnchor {
   }
 };
 
+struct ModuleAddressRootScope {
+  /// TableObject is a durable logical-object may-dependency learned from an
+  /// exact in-envelope address.  Later concrete values may leave that numeric
+  /// envelope, but widening must retain the object identity rather than use a
+  /// representative address for alias decisions.  Container and Unknown are
+  /// progressively wider wildcard scopes.
+  va_t OwnerVA = InvalidVA;
+  ModuleAddressOwnerKind OwnerKind = ModuleAddressOwnerKind::Unknown;
+
+  bool operator==(const ModuleAddressRootScope &Other) const = default;
+
+  bool operator<(const ModuleAddressRootScope &Other) const {
+    return std::tie(OwnerVA, OwnerKind) <
+           std::tie(Other.OwnerVA, Other.OwnerKind);
+  }
+};
+
 va_t storageRangeOwnerVA(const BinaryImage &Img,
                          const JumpTableStorageRange &Range) {
   if (const Section *Sec = Img.getSectionFor(Range.BaseAddr))
@@ -126,6 +211,31 @@ bool storageEnvelopeContainsOrOnePast(const BinaryImage &Img,
                        return End && Anchor.Address >= Range.BaseAddr &&
                               Anchor.Address <= *End;
                      });
+}
+
+bool moduleAddressSummaryMayAliasOwner(
+    const BinaryImage &Img,
+    const std::map<va_t, std::set<va_t>> &TableObjectAliases,
+    const ModuleJumpTableOwner &Owner, const ModuleAddressRootScope &Root) {
+  switch (Root.OwnerKind) {
+  case ModuleAddressOwnerKind::Unknown:
+    return true;
+  case ModuleAddressOwnerKind::Container:
+    return Root.OwnerVA != InvalidVA &&
+           std::any_of(Owner.StorageRanges.begin(), Owner.StorageRanges.end(),
+                       [&](const JumpTableStorageRange &Range) {
+                         return storageRangeOwnerVA(Img, Range) == Root.OwnerVA;
+                       });
+  case ModuleAddressOwnerKind::TableObject:
+    if (Root.OwnerVA == InvalidVA)
+      return false;
+    if (Root.OwnerVA == Owner.StorageIdentityVA)
+      return true;
+    const auto It = TableObjectAliases.find(Root.OwnerVA);
+    return It != TableObjectAliases.end() &&
+           It->second.count(Owner.StorageIdentityVA) != 0;
+  }
+  return false;
 }
 
 struct StorageAccessIntersection {
@@ -279,13 +389,17 @@ struct ModuleAddressUse {
   int Seq = -1;
   Kind UseKind = Kind::PointerEscape;
   uint16_t AccessSize = 0;
-  std::set<ModuleAddressAnchor> Addresses;
+  std::set<ModuleAddressAnchor> ExactAddresses;
+  std::set<ModuleAddressRootScope> RootScopes;
   bool Imprecise = false;
 };
 
 using LowValueKey = std::tuple<VnodeSpace, uint64_t, uint16_t>;
 struct ModuleAddressFacts {
-  std::set<ModuleAddressAnchor> Roots;
+  /// Finite may-owner summaries identify a table object, containing section
+  /// or segment, or an unknown module object.  Concrete addresses live only
+  /// in ExactValues, so summary scopes can never enter numeric arithmetic.
+  std::set<ModuleAddressRootScope> Roots;
   std::set<ModuleAddressAnchor> ExactValues;
   std::set<int64_t> FrameOffsets;
   /// Persistent may-alias state for a STACK cell.  Once an address covering
@@ -296,6 +410,7 @@ struct ModuleAddressFacts {
   bool FrameCellOutgoingSeed = false;
   bool MayBeNonFrame = false;
   bool Imprecise = false;
+  bool ExactValuesWidened = false;
 
   bool empty() const { return Roots.empty() && ExactValues.empty(); }
   bool hasState() const {
@@ -310,7 +425,9 @@ struct ModuleAddressFacts {
            FrameCellEscaped == Other.FrameCellEscaped &&
            FrameCellPresent == Other.FrameCellPresent &&
            FrameCellOutgoingSeed == Other.FrameCellOutgoingSeed &&
-           MayBeNonFrame == Other.MayBeNonFrame && Imprecise == Other.Imprecise;
+           MayBeNonFrame == Other.MayBeNonFrame &&
+           Imprecise == Other.Imprecise &&
+           ExactValuesWidened == Other.ExactValuesWidened;
   }
 };
 using ModuleAddressState = std::map<LowValueKey, ModuleAddressFacts>;
@@ -398,8 +515,10 @@ bool adjustFrameOffsets(ModuleAddressFacts &Facts, uint64_t RawDelta,
 /// numeric coincidence never creates a use.
 bool collectLowAddressUses(const BinaryImage &Img,
                            const std::vector<LowFunc> &Funcs,
+                           const std::vector<ModuleJumpTableOwner> &Owners,
                            std::vector<ModuleAddressUse> &Uses,
-                           ModuleEvidenceBudget &Budget) {
+                           ModuleEvidenceBudget &Budget,
+                           std::optional<size_t> TestBudget) {
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const std::vector<TargetRegisterRange> PreservedRanges =
       TRI.callPreservedRanges(Img.Format);
@@ -410,7 +529,8 @@ bool collectLowAddressUses(const BinaryImage &Img,
   auto failCollect = [](const char *, size_t = 0, va_t = InvalidVA) {
     return false;
   };
-  size_t FixpointWorkRemaining = kMaxModuleAddressScanOps;
+  size_t FixpointWorkRemaining = std::min(
+      TestBudget.value_or(kMaxModuleAddressScanOps), kMaxModuleAddressScanOps);
   auto consumeFixpointWork = [&]() {
     if (FixpointWorkRemaining == 0)
       return false;
@@ -423,6 +543,113 @@ bool collectLowAddressUses(const BinaryImage &Img,
         return failCollect("scan-cap", 0, Block.StartAddr);
       ScanOps += Block.Ops.size();
     }
+
+  std::map<va_t, std::vector<const ModuleJumpTableOwner *>> OwnersByContainer;
+  for (const ModuleJumpTableOwner &Owner : Owners) {
+    if (Owner.StorageIdentityVA == InvalidVA)
+      return failCollect("invalid-owner-identity");
+    std::set<va_t> OwnerContainers;
+    for (const JumpTableStorageRange &Range : Owner.StorageRanges) {
+      const va_t ContainerVA = storageRangeOwnerVA(Img, Range);
+      if (ContainerVA == InvalidVA || !Range.storageEnd())
+        return failCollect("invalid-owner-range");
+      OwnerContainers.insert(ContainerVA);
+    }
+    for (va_t ContainerVA : OwnerContainers)
+      OwnersByContainer[ContainerVA].push_back(&Owner);
+  }
+
+  auto exactCouldMatchAnyOwner = [&](const ModuleAddressAnchor &Exact) {
+    switch (Exact.OwnerKind) {
+    case ModuleAddressOwnerKind::Unknown:
+      return true;
+    case ModuleAddressOwnerKind::Container:
+      return Exact.OwnerVA != InvalidVA &&
+             OwnersByContainer.count(Exact.OwnerVA) != 0;
+    case ModuleAddressOwnerKind::TableObject:
+      return Exact.OwnerVA != InvalidVA &&
+             std::any_of(Owners.begin(), Owners.end(),
+                         [&](const ModuleJumpTableOwner &Owner) {
+                           return Owner.StorageIdentityVA == Exact.OwnerVA;
+                         });
+    }
+    return false;
+  };
+
+  auto classifyExactRoot = [&](std::set<ModuleAddressRootScope> &Roots,
+                               const ModuleAddressAnchor &Exact,
+                               bool IncludeFallback) {
+    if (Exact.OwnerKind == ModuleAddressOwnerKind::Unknown ||
+        Exact.OwnerVA == InvalidVA) {
+      if (IncludeFallback)
+        Roots.insert({InvalidVA, ModuleAddressOwnerKind::Unknown});
+      return false;
+    }
+    if (Exact.OwnerKind == ModuleAddressOwnerKind::TableObject) {
+      Roots.insert({Exact.OwnerVA, ModuleAddressOwnerKind::TableObject});
+      return true;
+    }
+
+    bool MatchedTable = false;
+    if (auto It = OwnersByContainer.find(Exact.OwnerVA);
+        It != OwnersByContainer.end()) {
+      for (const ModuleJumpTableOwner *Owner : It->second) {
+        if (Owner->StorageIdentityVA == InvalidVA)
+          continue;
+        const bool Contains = std::any_of(
+            Owner->StorageRanges.begin(), Owner->StorageRanges.end(),
+            [&](const JumpTableStorageRange &Range) {
+              if (storageRangeOwnerVA(Img, Range) != Exact.OwnerVA)
+                return false;
+              const std::optional<va_t> End = Range.storageEnd();
+              return End && Exact.Address >= Range.BaseAddr &&
+                     Exact.Address <= *End;
+            });
+        if (!Contains)
+          continue;
+        Roots.insert(
+            {Owner->StorageIdentityVA, ModuleAddressOwnerKind::TableObject});
+        MatchedTable = true;
+      }
+    }
+    if (!MatchedTable && IncludeFallback)
+      Roots.insert({Exact.OwnerVA, ModuleAddressOwnerKind::Container});
+    return MatchedTable;
+  };
+
+  auto initializeExactRoots = [&](ModuleAddressFacts &Facts) {
+    Facts.Roots.clear();
+    for (auto It = Facts.ExactValues.begin(); It != Facts.ExactValues.end();) {
+      if (!exactCouldMatchAnyOwner(*It))
+        It = Facts.ExactValues.erase(It);
+      else
+        ++It;
+    }
+    for (const ModuleAddressAnchor &Exact : Facts.ExactValues)
+      classifyExactRoot(Facts.Roots, Exact, true);
+  };
+  auto reclassifyExactRoots = [&](ModuleAddressFacts &Facts) {
+    std::set<ModuleAddressRootScope> ObjectRoots;
+    std::set<ModuleAddressRootScope> FallbackRoots;
+    bool AllTableObjects = !Facts.ExactValues.empty();
+    for (const ModuleAddressAnchor &Exact : Facts.ExactValues) {
+      const bool IsTableObject = classifyExactRoot(ObjectRoots, Exact, false);
+      AllTableObjects &= IsTableObject;
+      if (!IsTableObject)
+        classifyExactRoot(FallbackRoots, Exact, true);
+    }
+    if (AllTableObjects && !Facts.Imprecise && !Facts.ExactValuesWidened) {
+      Facts.Roots = std::move(ObjectRoots);
+      return;
+    }
+    Facts.Roots.insert(ObjectRoots.begin(), ObjectRoots.end());
+    if (Facts.Roots.empty())
+      Facts.Roots.insert(FallbackRoots.begin(), FallbackRoots.end());
+  };
+
+  // Keep finite exact alternatives for slot-precise LOAD/STORE decisions.
+  // Larger joins widen to the durable owner-summary lattice above.
+  constexpr size_t kMaxExactAddressAlternatives = 16;
   for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
     const LowFunc &Func = Funcs[FuncIndex];
     const size_t BlockCount = Func.Blocks.size();
@@ -490,9 +717,15 @@ bool collectLowAddressUses(const BinaryImage &Img,
       Into.FrameCellOutgoingSeed |= From.FrameCellOutgoingSeed;
       Into.MayBeNonFrame |= From.MayBeNonFrame;
       Into.Imprecise |= From.Imprecise;
+      Into.ExactValuesWidened |= From.ExactValuesWidened;
+      if (Into.ExactValuesWidened ||
+          Into.ExactValues.size() > kMaxExactAddressAlternatives) {
+        Into.ExactValues.clear();
+        Into.ExactValuesWidened = true;
+        Into.Imprecise = true;
+      }
       const bool Complete =
           Into.Roots.size() <= limits::kMaxJumpTableEvidenceWork &&
-          Into.ExactValues.size() <= limits::kMaxJumpTableEvidenceWork &&
           Into.FrameOffsets.size() <= limits::kMaxJumpTableEvidenceWork;
       return Complete;
     };
@@ -625,8 +858,7 @@ bool collectLowAddressUses(const BinaryImage &Img,
               // low bits into a new exact address or frame epoch.
               if (Existing->Begin != Requested->Begin ||
                   Existing->End != Requested->End) {
-                View.Roots.insert(View.ExactValues.begin(),
-                                  View.ExactValues.end());
+                reclassifyExactRoots(View);
                 View.ExactValues.clear();
                 if (!View.FrameOffsets.empty()) {
                   View.FrameOffsets.clear();
@@ -657,9 +889,9 @@ bool collectLowAddressUses(const BinaryImage &Img,
                 Value.AddressOwnerVA == InvalidVA
                     ? ModuleAddressOwnerKind::Unknown
                     : ModuleAddressOwnerKind::Container};
-            Facts.Roots.insert(Anchor);
             Facts.ExactValues.insert(Anchor);
-            Facts.MayBeNonFrame = true;
+            initializeExactRoots(Facts);
+            Facts.MayBeNonFrame = !Facts.empty();
           }
           return Facts;
         }
@@ -689,47 +921,35 @@ bool collectLowAddressUses(const BinaryImage &Img,
         // containing physical object may be reached and the whole owner must
         // be preserved.
         if (!Facts.Imprecise && !Facts.ExactValues.empty())
-          Use.Addresses = Facts.ExactValues;
+          Use.ExactAddresses = Facts.ExactValues;
         else {
-          Use.Addresses = Facts.Roots;
-          Use.Addresses.insert(Facts.ExactValues.begin(),
-                               Facts.ExactValues.end());
+          Use.RootScopes = Facts.Roots;
+          Use.ExactAddresses = Facts.ExactValues;
         }
         Use.Imprecise = Facts.Imprecise;
         RecordedUses->push_back(std::move(Use));
         return true;
       };
       auto coerceFacts = [&](ModuleAddressFacts Facts, uint16_t Size) {
-        std::set<ModuleAddressAnchor> CoercedRoots;
-        for (ModuleAddressAnchor Anchor : Facts.Roots) {
-          Anchor.Address = coerceUnsigned(Anchor.Address, Size);
-          CoercedRoots.insert(Anchor);
-        }
         std::set<ModuleAddressAnchor> Coerced;
         for (ModuleAddressAnchor Anchor : Facts.ExactValues) {
           Anchor.Address = coerceUnsigned(Anchor.Address, Size);
           Coerced.insert(Anchor);
         }
-        Facts.Roots = std::move(CoercedRoots);
         Facts.ExactValues = std::move(Coerced);
+        reclassifyExactRoots(Facts);
         return Facts;
       };
       auto signExtendFacts = [&](ModuleAddressFacts Facts, uint16_t InputSize,
                                  uint16_t OutputSize) {
-        std::set<ModuleAddressAnchor> ExtendedRoots;
-        for (ModuleAddressAnchor Anchor : Facts.Roots) {
-          Anchor.Address =
-              signExtendUnsigned(Anchor.Address, InputSize, OutputSize);
-          ExtendedRoots.insert(Anchor);
-        }
         std::set<ModuleAddressAnchor> ExtendedValues;
         for (ModuleAddressAnchor Anchor : Facts.ExactValues) {
           Anchor.Address =
               signExtendUnsigned(Anchor.Address, InputSize, OutputSize);
           ExtendedValues.insert(Anchor);
         }
-        Facts.Roots = std::move(ExtendedRoots);
         Facts.ExactValues = std::move(ExtendedValues);
+        reclassifyExactRoots(Facts);
         return Facts;
       };
       auto frameMemoryKey = [](int64_t Offset, uint16_t Size) {
@@ -1281,8 +1501,7 @@ bool collectLowAddressUses(const BinaryImage &Img,
                 // may-alias root, but never manufacture an exact address from
                 // the low bytes; module arbitration will preserve the complete
                 // owning object.
-                Output.Roots.insert(Output.ExactValues.begin(),
-                                    Output.ExactValues.end());
+                reclassifyExactRoots(Output);
                 Output.ExactValues.clear();
                 Output.MayBeNonFrame = true;
                 Output.Imprecise = true;
@@ -1318,7 +1537,7 @@ bool collectLowAddressUses(const BinaryImage &Img,
                 if (!mergeFacts(Output, Left))
                   return false;
                 Output.ExactValues.clear();
-                if (Op.Inputs[1].isConst()) {
+                if (Op.Inputs[1].isConst() && !Output.ExactValuesWidened) {
                   for (ModuleAddressAnchor Anchor : Left.ExactValues) {
                     Anchor.Address = coerceUnsigned(
                         Op.Opcode == NdOp::INT_ADD
@@ -1327,8 +1546,7 @@ bool collectLowAddressUses(const BinaryImage &Img,
                         Op.Output.Size);
                     Output.ExactValues.insert(Anchor);
                   }
-                  if (!Output.ExactValues.empty())
-                    Output.Roots = Output.ExactValues;
+                  reclassifyExactRoots(Output);
                 } else {
                   Output.Imprecise = true;
                   Output.MayBeNonFrame |= !Output.FrameOffsets.empty();
@@ -1345,14 +1563,14 @@ bool collectLowAddressUses(const BinaryImage &Img,
                 }
                 if (!mergeFacts(Output, Right))
                   return false;
-                if (Op.Inputs[0].isConst()) {
+                if (Op.Inputs[0].isConst() && !Output.ExactValuesWidened) {
+                  Output.ExactValues.clear();
                   for (ModuleAddressAnchor Anchor : Right.ExactValues) {
                     Anchor.Address = coerceUnsigned(
                         Anchor.Address + Op.Inputs[0].Offset, Op.Output.Size);
                     Output.ExactValues.insert(Anchor);
                   }
-                  if (!Output.ExactValues.empty())
-                    Output.Roots = Output.ExactValues;
+                  reclassifyExactRoots(Output);
                 } else {
                   Output.ExactValues.clear();
                   Output.Imprecise = true;
@@ -1395,8 +1613,7 @@ bool collectLowAddressUses(const BinaryImage &Img,
               Input.FrameCellOutgoingSeed = false;
               if (Input.empty())
                 continue;
-              Input.Roots.insert(Input.ExactValues.begin(),
-                                 Input.ExactValues.end());
+              reclassifyExactRoots(Input);
               Input.ExactValues.clear();
               Input.MayBeNonFrame = true;
               Input.Imprecise = true;
@@ -1417,12 +1634,13 @@ bool collectLowAddressUses(const BinaryImage &Img,
                                              Occurrence.TargetOwnerVA,
                                              ModuleAddressOwnerKind::Container};
             ModuleAddressFacts Certified;
-            Certified.Roots.insert(Anchor);
-            Certified.MayBeNonFrame = true;
+            Certified.ExactValues.insert(Anchor);
+            initializeExactRoots(Certified);
+            Certified.MayBeNonFrame = !Certified.empty();
             if (!Occurrence.OutputMayDepend) {
-              Certified.ExactValues.insert(Anchor);
               Output = std::move(Certified);
             } else {
+              Certified.ExactValues.clear();
               Certified.Imprecise = true;
               if (!mergeFacts(Output, Certified))
                 return false;
@@ -1485,8 +1703,7 @@ bool collectLowAddressUses(const BinaryImage &Img,
                        Existing->End <= Written->End))
                     continue;
                   ModuleAddressFacts Surviving = ExistingFacts;
-                  Surviving.Roots.insert(Surviving.ExactValues.begin(),
-                                         Surviving.ExactValues.end());
+                  reclassifyExactRoots(Surviving);
                   Surviving.ExactValues.clear();
                   if (!Surviving.FrameOffsets.empty()) {
                     Surviving.FrameOffsets.clear();
@@ -1500,8 +1717,7 @@ bool collectLowAddressUses(const BinaryImage &Img,
                     return false;
                 }
                 ModuleAddressFacts NewLane = Output;
-                NewLane.Roots.insert(NewLane.ExactValues.begin(),
-                                     NewLane.ExactValues.end());
+                reclassifyExactRoots(NewLane);
                 NewLane.ExactValues.clear();
                 if (!NewLane.FrameOffsets.empty()) {
                   NewLane.FrameOffsets.clear();
@@ -1688,6 +1904,25 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
   if (!Budget.consume(Owners.size()) || !Budget.consume(Requested.size()))
     return abandonAnalysis();
 
+  std::map<va_t, std::set<va_t>> TableObjectAliases;
+  size_t TableAliasWorkRemaining = limits::kMaxJumpTableEvidenceWork;
+  for (const ModuleJumpTableOwner &Owner : Owners)
+    TableObjectAliases[Owner.StorageIdentityVA].insert(Owner.StorageIdentityVA);
+  for (size_t Left = 0; Left < Owners.size(); ++Left)
+    for (size_t Right = Left + 1; Right < Owners.size(); ++Right) {
+      if (!scanPair())
+        return abandonAnalysis();
+      if (!pipeline_detail::tableObjectSummaryMayAlias(
+              Img, Owners[Left].StorageIdentityVA, Owners[Left].StorageRanges,
+              Owners[Right].StorageIdentityVA, Owners[Right].StorageRanges,
+              &TableAliasWorkRemaining))
+        continue;
+      TableObjectAliases[Owners[Left].StorageIdentityVA].insert(
+          Owners[Right].StorageIdentityVA);
+      TableObjectAliases[Owners[Right].StorageIdentityVA].insert(
+          Owners[Left].StorageIdentityVA);
+    }
+
   std::set<va_t> &Protected = Result.ProtectedRelocationSlots;
   // Preserve/veto dominates a suppression request when two recovered tables
   // share physical storage or one table's local consumer audit retained a
@@ -1712,8 +1947,38 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
     Protected.insert(Owner.RequestedSlots.begin(), Owner.RequestedSlots.end());
   };
   std::vector<ModuleAddressUse> Uses;
-  if (!collectLowAddressUses(Img, Funcs, Uses, Budget))
+  if (!collectLowAddressUses(Img, Funcs, Owners, Uses, Budget, TestBudget))
     return abandonAnalysis();
+  auto summaryRootMayCoverField = [&](const ModuleAddressRootScope &Root,
+                                      va_t FieldVA, uint8_t FieldWidth) {
+    switch (Root.OwnerKind) {
+    case ModuleAddressOwnerKind::Unknown:
+      return true;
+    case ModuleAddressOwnerKind::Container: {
+      va_t FieldOwner = InvalidVA;
+      if (const Section *Sec = Img.getSectionFor(FieldVA))
+        FieldOwner = Sec->VA;
+      else if (const Segment *Seg = Img.getSegmentFor(FieldVA))
+        FieldOwner = Seg->VA;
+      return FieldOwner != InvalidVA && Root.OwnerVA == FieldOwner;
+    }
+    case ModuleAddressOwnerKind::TableObject:
+      for (const ModuleJumpTableOwner &Candidate : Owners) {
+        if (Candidate.StorageIdentityVA != Root.OwnerVA)
+          continue;
+        for (const JumpTableStorageRange &Range : Candidate.StorageRanges) {
+          const std::optional<va_t> End = Range.storageEnd();
+          if (!End)
+            return true;
+          const va_t FieldEnd = FieldVA + FieldWidth;
+          if (FieldVA < *End && Range.BaseAddr < FieldEnd)
+            return true;
+        }
+      }
+      return false;
+    }
+    return false;
+  };
   auto reachableLoadCoversField = [&](va_t FieldVA, uint8_t FieldWidth,
                                       const ModuleJumpTableOwner &Owner) {
     if (FieldWidth == 0 || FieldWidth > InvalidVA - FieldVA)
@@ -1732,20 +1997,10 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
       if (isAuthenticatedTableLoad(Funcs[Use.FuncIndex], Use.Addr, Use.Seq,
                                    Owner))
         continue;
-      for (const ModuleAddressAnchor &Anchor : Use.Addresses) {
-        if (Use.Imprecise) {
-          const va_t FieldOwner = [&] {
-            if (const Section *Sec = Img.getSectionFor(FieldVA))
-              return Sec->VA;
-            if (const Segment *Seg = Img.getSegmentFor(FieldVA))
-              return Seg->VA;
-            return InvalidVA;
-          }();
-          if (Anchor.OwnerKind == ModuleAddressOwnerKind::Unknown ||
-              (Anchor.OwnerKind == ModuleAddressOwnerKind::Container &&
-               FieldOwner != InvalidVA && Anchor.OwnerVA == FieldOwner))
-            return true;
-        }
+      for (const ModuleAddressRootScope &Root : Use.RootScopes)
+        if (summaryRootMayCoverField(Root, FieldVA, FieldWidth))
+          return true;
+      for (const ModuleAddressAnchor &Anchor : Use.ExactAddresses) {
         if (Use.AccessSize > InvalidVA - Anchor.Address)
           return true;
         const va_t AccessEnd = Anchor.Address + Use.AccessSize;
@@ -1909,7 +2164,10 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
       bool TouchesObject = false;
       bool IntersectionComplete = true;
       std::set<va_t> TouchedRequestedSlots;
-      for (const ModuleAddressAnchor &Address : Use.Addresses) {
+      for (const ModuleAddressRootScope &Root : Use.RootScopes)
+        TouchesObject |= moduleAddressSummaryMayAliasOwner(
+            Img, TableObjectAliases, Owner, Root);
+      for (const ModuleAddressAnchor &Address : Use.ExactAddresses) {
         if (Use.Imprecise ||
             Use.UseKind == ModuleAddressUse::Kind::PointerEscape) {
           TouchesObject |=
@@ -1948,6 +2206,19 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
 }
 
 } // namespace
+
+namespace pipeline_detail {
+
+ModuleJumpTableArbitrationTestResult
+arbitrateModuleJumpTablesForTesting(const BinaryImage &Img,
+                                    const std::vector<LowFunc> &Funcs,
+                                    std::optional<size_t> TestBudget) {
+  ModuleJumpTableArbitration Result =
+      collectModuleJumpTableArbitration(Img, Funcs, TestBudget);
+  return {std::move(Result.UnsafeBranches), Result.AnalysisComplete};
+}
+
+} // namespace pipeline_detail
 
 //===----------------------------------------------------------------------===//
 // buildLowIR — Phase 1

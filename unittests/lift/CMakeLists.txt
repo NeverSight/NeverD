@@ -181,6 +181,7 @@ target_compile_definitions(NeverDLiftTests PRIVATE
 target_include_directories(NeverDLiftTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/lib/pipeline
   ${CMAKE_SOURCE_DIR}/lib/loader/COFF/unwind
   ${LLVM_INCLUDE_DIRS}
 )
@@ -768,6 +769,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_target_ownership.s
   x86_64/test_jumptable_selector_occurrence.s
   x86_64/test_jumptable_mask_equal_bound.s
+  x86_64/test_module_address_owner_induction.s
   x86_64/test_twolevel_switch.c
   x86_64/test_jumptable_masked_abs.c
   x86_64/test_jumptable_worldclass.c

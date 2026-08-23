@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "NeverDLiftFixture.h"
+#include "PipelineLowIRDetail.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -455,6 +456,10 @@ static fs::path targetOwnershipX64Obj() {
 
 static fs::path maskEqualBoundObj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_mask_equal_bound.o";
+}
+
+static fs::path moduleAddressOwnerInductionObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_module_address_owner_induction.o";
 }
 
 static fs::path selectorOccurrenceX64Obj() {
@@ -1951,6 +1956,181 @@ TEST_F(JTE_X86_64, GlobalDataPointerToReadonlyTablePreservesSwitch) {
       lowFunctionBody(High.out, "jt_identity_readonly_dataptr_dispatch");
   ASSERT_FALSE(HighBody.empty()) << High.out;
   EXPECT_NE(HighBody.find("switch"), std::string::npos) << HighBody;
+}
+
+TEST_F(JTE_X86_64, UnrelatedAddressInductionDoesNotPoisonModuleOwners) {
+  auto ImageOrErr = neverd::loadBinary(moduleAddressOwnerInductionObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Safe = Image.findSymbol("module_owner_safe_dispatch");
+  const neverd::Symbol *Mutated =
+      Image.findSymbol("module_owner_mutated_dispatch");
+  const neverd::Symbol *Writer =
+      Image.findSymbol("module_owner_mutated_loop_writer");
+  const neverd::Symbol *Unrelated =
+      Image.findSymbol("module_owner_unrelated_pointer_induction");
+  ASSERT_NE(Safe, nullptr);
+  ASSERT_NE(Mutated, nullptr);
+  ASSERT_NE(Writer, nullptr);
+  ASSERT_NE(Unrelated, nullptr);
+
+  std::set<neverd::va_t> Entries{Safe->Addr, Mutated->Addr, Writer->Addr,
+                                 Unrelated->Addr};
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder Builder;
+  Builder.setKnownFuncEntries(&Entries);
+  const neverd::LowFunc SafeCandidate =
+      Builder.build(Image, Decoder, Safe->Addr, Safe->Name);
+  const neverd::LowFunc MutatedCandidate =
+      Builder.build(Image, Decoder, Mutated->Addr, Mutated->Name);
+  ASSERT_EQ(SafeCandidate.JumpTables.size(), 1u);
+  ASSERT_EQ(SafeCandidate.JumpTables.front().Targets.size(), 2u);
+  ASSERT_FALSE(SafeCandidate.JumpTables.front().StorageRanges.empty());
+  ASSERT_EQ(MutatedCandidate.JumpTables.size(), 1u);
+  ASSERT_EQ(MutatedCandidate.JumpTables.front().Targets.size(), 20u);
+  ASSERT_FALSE(MutatedCandidate.JumpTables.front().StorageRanges.empty());
+
+  DirectPipelineRun Run = runPipelineWithEvidenceBudget(Image, 256);
+  ASSERT_TRUE(Run.Result.Success) << Run.Result.Error;
+
+  const std::string SafeBody =
+      llvmFunctionBody(Run.LLVMIR, "module_owner_safe_dispatch");
+  ASSERT_FALSE(SafeBody.empty()) << Run.LLVMIR;
+  EXPECT_NE(SafeBody.find("switch i"), std::string::npos) << SafeBody;
+  EXPECT_TRUE(llvmHasSwitchCase(SafeBody, 0)) << SafeBody;
+  EXPECT_TRUE(llvmHasSwitchCase(SafeBody, 1)) << SafeBody;
+
+  const std::string MutatedBody =
+      llvmFunctionBody(Run.LLVMIR, "module_owner_mutated_dispatch");
+  ASSERT_FALSE(MutatedBody.empty()) << Run.LLVMIR;
+  EXPECT_EQ(MutatedBody.find("switch i"), std::string::npos) << MutatedBody;
+  EXPECT_NE(MutatedBody.find("llvm.trap"), std::string::npos) << MutatedBody;
+}
+
+TEST_F(JTE_X86_64, WidenedTableRootAliasesOverlappingLogicalSubtable) {
+  auto ImageOrErr = neverd::loadBinary(moduleAddressOwnerInductionObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const auto Data =
+      std::find_if(Image.Sections.begin(), Image.Sections.end(),
+                   [](const neverd::Section &S) {
+                     return S.Name == ".data.module_address_owner_induction";
+                   });
+  ASSERT_NE(Data, Image.Sections.end());
+
+  const neverd::JumpTableStorageRange Safe{Data->VA, 8, 8, 2};
+  const neverd::JumpTableStorageRange Wide{Data->VA + 24, 8, 8, 20};
+  const neverd::JumpTableStorageRange Nested{Wide.BaseAddr + 18 * 8, 8, 8, 2};
+  const neverd::JumpTableStorageRange Strided{Wide.BaseAddr, 4, 8, 20};
+  const neverd::JumpTableStorageRange Padding{Wide.BaseAddr + 4, 4, 8, 20};
+  EXPECT_TRUE(neverd::pipeline_detail::tableObjectSummaryMayAlias(
+      Image, Wide.BaseAddr, Wide, Nested.BaseAddr, Nested));
+  EXPECT_FALSE(neverd::pipeline_detail::tableObjectSummaryMayAlias(
+      Image, Wide.BaseAddr, Wide, Safe.BaseAddr, Safe));
+  EXPECT_FALSE(neverd::pipeline_detail::tableObjectSummaryMayAlias(
+      Image, Strided.BaseAddr, Strided, Padding.BaseAddr, Padding));
+
+  neverd::BinaryImage AdjacentImage;
+  neverd::Section LeftSection;
+  LeftSection.Name = "left";
+  LeftSection.VA = 0x1000;
+  LeftSection.Size = 0x10;
+  LeftSection.Flags = neverd::SegmentFlags::Readable;
+  neverd::Section RightSection;
+  RightSection.Name = "right";
+  RightSection.VA = 0x1010;
+  RightSection.Size = 0x10;
+  RightSection.Flags = neverd::SegmentFlags::Readable;
+  AdjacentImage.Sections = {LeftSection, RightSection};
+  neverd::Segment MappedSegment;
+  MappedSegment.Name = "mapped";
+  MappedSegment.VA = 0x1000;
+  MappedSegment.Size = 0x20;
+  MappedSegment.Flags = neverd::SegmentFlags::Readable;
+  AdjacentImage.Segments.push_back(std::move(MappedSegment));
+  const neverd::JumpTableStorageRange CrossesBoundary{0x1008, 8, 8, 2};
+  const neverd::JumpTableStorageRange InRightSection{0x1010, 8, 8, 1};
+  EXPECT_TRUE(neverd::pipeline_detail::tableObjectSummaryMayAlias(
+      AdjacentImage, CrossesBoundary.BaseAddr, CrossesBoundary,
+      InRightSection.BaseAddr, InRightSection));
+
+  std::vector<neverd::JumpTableStorageRange> ManyLeft;
+  std::vector<neverd::JumpTableStorageRange> ManyRight;
+  for (uint64_t I = 0; I < 65; ++I) {
+    ManyLeft.push_back({0x2000 + I * 16, 8, 8, 1});
+    ManyRight.push_back({0x200000 + I * 16, 8, 8, 1});
+  }
+  EXPECT_TRUE(neverd::pipeline_detail::tableObjectSummaryMayAlias(
+      AdjacentImage, ManyLeft.front().BaseAddr, ManyLeft,
+      ManyRight.front().BaseAddr, ManyRight));
+}
+
+TEST_F(JTE_X86_64, ModuleArbitrationPropagatesWidenedRootToOverlappingOwner) {
+  auto ImageOrErr = neverd::loadBinary(moduleAddressOwnerInductionObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Safe = Image.findSymbol("module_owner_safe_dispatch");
+  const neverd::Symbol *Mutated =
+      Image.findSymbol("module_owner_mutated_dispatch");
+  const neverd::Symbol *Writer =
+      Image.findSymbol("module_owner_mutated_loop_writer");
+  const neverd::Symbol *Unrelated =
+      Image.findSymbol("module_owner_unrelated_pointer_induction");
+  ASSERT_NE(Safe, nullptr);
+  ASSERT_NE(Mutated, nullptr);
+  ASSERT_NE(Writer, nullptr);
+  ASSERT_NE(Unrelated, nullptr);
+
+  std::set<neverd::va_t> Entries{Safe->Addr, Mutated->Addr, Writer->Addr,
+                                 Unrelated->Addr};
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder Builder;
+  Builder.setKnownFuncEntries(&Entries);
+  neverd::LowFunc SafeCandidate =
+      Builder.build(Image, Decoder, Safe->Addr, Safe->Name);
+  neverd::LowFunc MutatedCandidate =
+      Builder.build(Image, Decoder, Mutated->Addr, Mutated->Name);
+  neverd::LowFunc WriterCandidate =
+      Builder.build(Image, Decoder, Writer->Addr, Writer->Name);
+  ASSERT_EQ(SafeCandidate.JumpTables.size(), 1u);
+  ASSERT_EQ(MutatedCandidate.JumpTables.size(), 1u);
+  const neverd::JumpTable &WideTable = MutatedCandidate.JumpTables.front();
+  const neverd::va_t WideBranch = WideTable.InsnAddr;
+  ASSERT_GE(WideTable.StorageRanges.size(), 20u);
+  std::vector<neverd::JumpTableStorageRange> NestedRanges(
+      WideTable.StorageRanges.end() - 2, WideTable.StorageRanges.end());
+  constexpr neverd::va_t NestedBranch = 0x7FFF0000;
+  neverd::JumpTable NestedTable;
+  NestedTable.InsnAddr = NestedBranch;
+  NestedTable.BaseAddr = NestedRanges.front().BaseAddr;
+  NestedTable.HasBaseAddr = true;
+  NestedTable.EntrySize = NestedRanges.front().EntrySize;
+  NestedTable.EntryStride = NestedRanges.front().EntryStride;
+  NestedTable.StorageRanges = std::move(NestedRanges);
+  neverd::LowFunc NestedOwner;
+  NestedOwner.Entry = NestedBranch;
+  NestedOwner.Name = "synthetic_overlapping_subtable_owner";
+  NestedOwner.JumpTables.push_back(std::move(NestedTable));
+
+  std::vector<neverd::LowFunc> Functions;
+  Functions.push_back(std::move(SafeCandidate));
+  Functions.push_back(std::move(MutatedCandidate));
+  Functions.push_back(std::move(WriterCandidate));
+  Functions.push_back(std::move(NestedOwner));
+  const neverd::pipeline_detail::ModuleJumpTableArbitrationTestResult Result =
+      neverd::pipeline_detail::arbitrateModuleJumpTablesForTesting(Image,
+                                                                   Functions);
+  ASSERT_TRUE(Result.AnalysisComplete);
+  EXPECT_EQ(Result.UnsafeBranches.count(WideBranch), 1u);
+  EXPECT_EQ(Result.UnsafeBranches.count(NestedBranch), 1u);
+  EXPECT_EQ(Result.UnsafeBranches.count(
+                Functions.front().JumpTables.front().InsnAddr),
+            0u);
 }
 
 TEST_F(JTE_X86_64, EvidenceBudgetDoesNotCaptureIndexedCallbackTailCall) {
