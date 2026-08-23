@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Compare NeverD-side and reference JSON dumps and emit `bench_report.md`.
 
-Looks for paired files under --bench-dir:
-    <stem>.nd.functions.json   /  <stem>.ref.functions.json
+Looks for the current consolidated NeverD result and reference-side dumps:
+    <stem>.nd.bench.json       /  <stem>.ref.functions.json
     <stem>.nd.imports.json     /  <stem>.ref.imports.json
     <stem>.nd.strings.json     /  <stem>.ref.strings.json
-    <stem>.nd.lift.json
-    <stem>.nd.timings.json     /  <stem>.ref.timings.json
+                                  <stem>.ref.timings.json
 
 Pass/fail thresholds match the plan (Step 7.2).
 """
@@ -37,9 +36,32 @@ def load_json(p: Path) -> Any | None:
 
 def find_stems(d: Path) -> list[str]:
     stems = set()
-    for p in d.glob("*.nd.functions.json"):
-        stems.add(p.name.replace(".nd.functions.json", ""))
+    for p in d.glob("*.nd.bench.json"):
+        stems.add(p.name.replace(".nd.bench.json", ""))
     return sorted(stems)
+
+
+def parse_addr(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    return int(str(value), 0)
+
+
+def load_bench_sample(stem: str, d: Path) -> dict:
+    sample = load_json(d / f"{stem}.nd.bench.json")
+    if not isinstance(sample, dict):
+        raise ValueError("invalid JSON or top-level value is not an object")
+    if not isinstance(sample.get("functions"), list):
+        raise ValueError("missing functions array")
+    if not sample["functions"]:
+        raise ValueError("functions array is empty")
+    if not isinstance(sample.get("audit_functions"), list):
+        raise ValueError("missing audit_functions array")
+    if not sample["audit_functions"]:
+        raise ValueError("audit_functions array is empty")
+    if not isinstance(sample.get("total_time_ms"), (int, float)):
+        raise ValueError("missing numeric total_time_ms")
+    return sample
 
 
 def jaccard(a: set, b: set) -> float:
@@ -52,11 +74,11 @@ def jaccard(a: set, b: set) -> float:
 
 
 def compare_one(stem: str, d: Path) -> dict:
-    nd_funcs = load_json(d / f"{stem}.nd.functions.json") or []
+    nd_bench = load_bench_sample(stem, d)
+    nd_funcs = nd_bench.get("functions", [])
     nd_imps  = load_json(d / f"{stem}.nd.imports.json")   or []
     nd_strs  = load_json(d / f"{stem}.nd.strings.json")   or []
-    nd_lift  = load_json(d / f"{stem}.nd.lift.json")      or []
-    nd_time  = load_json(d / f"{stem}.nd.timings.json")   or {}
+    nd_lift  = nd_bench.get("audit_functions", [])
 
     ref_funcs = load_json(d / f"{stem}.ref.functions.json") or []
     ref_imps  = load_json(d / f"{stem}.ref.imports.json") or []
@@ -66,8 +88,8 @@ def compare_one(stem: str, d: Path) -> dict:
     r: dict = {"stem": stem}
 
     # --- Functions ---
-    nd_addrs = {int(f["addr"]) for f in nd_funcs}
-    ref_addrs = {int(f["addr"]) for f in ref_funcs}
+    nd_addrs = {parse_addr(f["entry"]) for f in nd_funcs}
+    ref_addrs = {parse_addr(f["addr"]) for f in ref_funcs}
     inter = nd_addrs & ref_addrs
     r["nd_func_count"] = len(nd_addrs)
     r["ref_func_count"] = len(ref_addrs)
@@ -100,16 +122,25 @@ def compare_one(stem: str, d: Path) -> dict:
     r["ref_str_count"] = len(ref_smap)
     r["str_addr_overlap"] = (len(shared) / len(ref_smap)) if ref_smap else 1.0
     r["str_content_match"] = (same_content / len(shared)) if shared else 1.0
-    r["str_pass"] = r["str_content_match"] >= PASS_STR_RATE
+    r["str_pass"] = (
+        r["str_addr_overlap"] >= PASS_XREF_RECALL
+        and r["str_content_match"] >= PASS_STR_RATE
+    )
 
     # --- Lift (only against reference-known funcs) ---
-    lift_by_addr = {int(x["addr"]): x for x in nd_lift}
+    lift_by_addr = {parse_addr(x["entry"]): x for x in nd_lift}
     ref_func_addrs = ref_addrs
     n_total = len(ref_func_addrs) or 1
-    n_low = sum(1 for a in ref_func_addrs if lift_by_addr.get(a, {}).get("low_ok"))
-    n_med = sum(1 for a in ref_func_addrs if lift_by_addr.get(a, {}).get("med_ok"))
-    n_high = sum(1 for a in ref_func_addrs if lift_by_addr.get(a, {}).get("high_ok"))
-    n_llvm = sum(1 for a in ref_func_addrs if lift_by_addr.get(a, {}).get("llvm_ok"))
+    n_low = sum(1 for a in ref_func_addrs if lift_by_addr.get(a, {}).get("low_ir"))
+    n_med = sum(1 for a in ref_func_addrs if lift_by_addr.get(a, {}).get("med_ir"))
+    # The consolidated audit has no separate per-function HighIR flag.  An
+    # LLVM definition is the available positive witness that the function
+    # traversed both HighIR and LLVM emission successfully.
+    n_high = sum(
+        1 for a in ref_func_addrs
+        if lift_by_addr.get(a, {}).get("llvm_definition")
+    )
+    n_llvm = n_high
     r["lift_low_rate"]  = n_low / n_total
     r["lift_med_rate"]  = n_med / n_total
     r["lift_high_rate"] = n_high / n_total
@@ -117,9 +148,9 @@ def compare_one(stem: str, d: Path) -> dict:
     r["lift_pass"] = r["lift_llvm_rate"] >= PASS_LLVM_RATE
 
     # --- Timings ---
-    r["nd_total_ms"]  = int(nd_time.get("total_ms") or 0)
+    r["nd_total_ms"]  = int(nd_bench.get("total_time_ms") or 0)
     r["ref_total_ms"] = int(ref_time.get("total_ms") or 0)
-    r["nd_rss_mb"]    = float(nd_time.get("peak_rss_mb") or 0.0)
+    r["nd_rss_mb"]    = float(nd_bench.get("peak_rss_mb") or 0.0)
     r["speed_pass"] = (r["nd_total_ms"] > 0 and r["ref_total_ms"] > 0
                         and r["nd_total_ms"] < r["ref_total_ms"])
     if r["nd_total_ms"] > 0 and r["ref_total_ms"] > 0:
@@ -127,7 +158,13 @@ def compare_one(stem: str, d: Path) -> dict:
     else:
         r["speedup"] = 0.0
 
-    r["overall_pass"] = (r["func_overlap_pass"] and r["lift_pass"] and r["speed_pass"])
+    r["overall_pass"] = (
+        r["func_overlap_pass"]
+        and r["imp_pass"]
+        and r["str_pass"]
+        and r["lift_pass"]
+        and r["speed_pass"]
+    )
     return r
 
 
@@ -180,6 +217,10 @@ def main():
     ap.add_argument("--bench-dir", required=True,
                     help="directory containing *.nd.*.json and *.ref.*.json")
     ap.add_argument("--out", default=None, help="output bench_report.md path")
+    ap.add_argument("--stem", action="append", default=[],
+                    help="compare only this binary stem (repeatable)")
+    ap.add_argument("--schema-only", action="store_true",
+                    help="validate NeverD samples without reference comparison")
     args = ap.parse_args()
 
     d = Path(args.bench_dir)
@@ -187,13 +228,39 @@ def main():
         sys.exit(f"bench dir not found: {d}")
     out = Path(args.out) if args.out else d / "bench_report.md"
 
+    stems = sorted(set(args.stem)) if args.stem else find_stems(d)
+    if not stems:
+        sys.exit(f"no .nd.bench.json samples found in {d}")
+
+    if args.schema_only:
+        valid_samples = 0
+        for stem in stems:
+            try:
+                load_bench_sample(stem, d)
+                valid_samples += 1
+            except (KeyError, TypeError, ValueError) as error:
+                print(f"invalid benchmark sample {stem}: {error}", file=sys.stderr)
+        if valid_samples != len(stems):
+            raise SystemExit(1)
+        print(f"validated {valid_samples} benchmark sample(s)")
+        return
+
     rows = []
-    for stem in find_stems(d):
-        rows.append(compare_one(stem, d))
+    invalid_samples = 0
+    for stem in stems:
+        try:
+            rows.append(compare_one(stem, d))
+        except (KeyError, TypeError, ValueError) as error:
+            invalid_samples += 1
+            print(f"invalid benchmark sample {stem}: {error}", file=sys.stderr)
+    if not rows:
+        sys.exit(f"no valid .nd.bench.json samples found in {d}")
     rows.sort(key=lambda r: (not r["overall_pass"], r["stem"]))
 
     write_report(rows, out)
     print(f"wrote {out} ({len(rows)} binaries, {sum(1 for r in rows if r['overall_pass'])} passing)")
+    if invalid_samples or any(not row["overall_pass"] for row in rows):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

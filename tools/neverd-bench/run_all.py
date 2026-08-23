@@ -19,10 +19,22 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
-NDBENCH = REPO / "build/tools/neverd-bench/neverd-bench"
+DEFAULT_BUILD_DIR = REPO / "build"
 REF_DUMP = REPO / "tools/neverd-bench/ref_dump.py"
 COMPARE = REPO / "tools/neverd-bench/compare.py"
 PROGRESS = "progress.json"
+ND_OUTPUT_SUFFIXES = (
+    ".nd.bench.json",
+    ".nd.decode.json",
+    ".nd.imports.json",
+    ".nd.strings.json",
+)
+REF_OUTPUT_SUFFIXES = (
+    ".ref.functions.json",
+    ".ref.imports.json",
+    ".ref.strings.json",
+    ".ref.timings.json",
+)
 
 
 def load_progress(p: Path) -> dict:
@@ -36,6 +48,11 @@ def load_progress(p: Path) -> dict:
 
 def save_progress(p: Path, data: dict) -> None:
     p.write_text(json.dumps(data, indent=2))
+
+
+def remove_stem_outputs(out_dir: Path, stem: str, suffixes: tuple[str, ...]) -> None:
+    for suffix in suffixes:
+        (out_dir / f"{stem}{suffix}").unlink(missing_ok=True)
 
 
 def run(cmd: list, timeout: int) -> tuple[int, str, str]:
@@ -52,6 +69,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin-dir", default=str(REPO / "bin_examples"))
     ap.add_argument("--out-dir", default=str(REPO / "build/bench_out"))
+    ap.add_argument("--build-dir", default=str(DEFAULT_BUILD_DIR),
+                    help="CMake build directory containing bin/neverd-bench")
+    ap.add_argument("--bench", default=None,
+                    help="explicit neverd-bench executable (overrides --build-dir)")
     ap.add_argument("--nd-timeout", type=int, default=600, help="seconds per neverd-bench run")
     ap.add_argument("--ref-timeout", type=int, default=1800, help="seconds per ref_dump run")
     ap.add_argument("--limit", type=int, default=0, help="process at most N binaries (0=all)")
@@ -64,6 +85,9 @@ def main():
 
     bin_dir = Path(args.bin_dir).resolve()
     out_dir = Path(args.out_dir).resolve()
+    bench_name = "neverd-bench.exe" if sys.platform == "win32" else "neverd-bench"
+    ndbench = (Path(args.bench).resolve() if args.bench else
+               Path(args.build_dir).resolve() / "bin" / bench_name)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     progress_path = out_dir / PROGRESS
@@ -89,8 +113,12 @@ def main():
     if args.limit:
         bins = bins[: args.limit]
 
+    if not bins:
+        sys.exit(f"no input binaries selected from {bin_dir}")
+
     print(f"Total binaries to process: {len(bins)}")
 
+    had_failures = False
     for i, b in enumerate(bins, 1):
         stem = b.stem
         if (not args.force) and stem in progress and progress[stem].get("status") == "ok":
@@ -103,11 +131,13 @@ def main():
         save_progress(progress_path, progress)
 
         # neverd-bench
+        remove_stem_outputs(out_dir, stem, ND_OUTPUT_SUFFIXES)
         nd_t0 = time.monotonic()
-        rc, nd_out, nd_err = run([str(NDBENCH), "--out-dir", str(out_dir), "-q", str(b)],
+        rc, nd_out, nd_err = run([str(ndbench), "--out-dir", str(out_dir), "-q", str(b)],
                                   timeout=args.nd_timeout)
         nd_elapsed = int((time.monotonic() - nd_t0) * 1000)
         if rc != 0:
+            had_failures = True
             entry["status"] = "nd_failed"
             entry["error"] = nd_err[-2000:] if nd_err else nd_out[-2000:]
             entry["nd_elapsed_ms"] = nd_elapsed
@@ -124,12 +154,14 @@ def main():
             continue
 
         # Reference dump
+        remove_stem_outputs(out_dir, stem, REF_OUTPUT_SUFFIXES)
         ref_t0 = time.monotonic()
         rc, ref_out, ref_err = run([sys.executable, str(REF_DUMP),
                                      "--out-dir", str(out_dir), str(b)],
                                     timeout=args.ref_timeout)
         ref_elapsed = int((time.monotonic() - ref_t0) * 1000)
         if rc != 0:
+            had_failures = True
             entry["status"] = "ref_failed"
             entry["error"] = ref_err[-2000:] if ref_err else ref_out[-2000:]
             entry["ref_elapsed_ms"] = ref_elapsed
@@ -145,12 +177,19 @@ def main():
         print(f"[{i}/{len(bins)}] OK {stem}: nd={nd_elapsed}ms ref={ref_elapsed}ms")
 
     # Generate report
-    rc, out, err = run([sys.executable, str(COMPARE), "--bench-dir", str(out_dir)],
-                        timeout=120)
+    compare_command = [sys.executable, str(COMPARE), "--bench-dir", str(out_dir)]
+    for stem in sorted({binary.stem for binary in bins}):
+        compare_command.extend(("--stem", stem))
+    if args.skip_ref:
+        compare_command.append("--schema-only")
+    rc, out, err = run(compare_command, timeout=120)
     if rc == 0:
         print(out.strip())
+        if had_failures:
+            raise SystemExit(1)
     else:
-        print("compare.py failed:", err)
+        print("compare.py failed:", err, file=sys.stderr)
+        raise SystemExit(rc)
 
 
 if __name__ == "__main__":
