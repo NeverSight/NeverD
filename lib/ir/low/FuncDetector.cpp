@@ -201,6 +201,11 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
       for (const auto &Exp : Img.Exports)
         if (Img.getSectionFor(Exp.Addr) && Img.isCodeAddress(Exp.Addr))
           Trusted.insert(Exp.Addr);
+    std::set<va_t> ExplicitFunctionStarts;
+    for (const auto &Sym : Img.Symbols)
+      if (Sym.IsFunc)
+        ExplicitFunctionStarts.insert(
+            normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode));
     for (const auto &Sym : Img.Symbols)
       if (Sym.IsFunc && Sym.Size > 0)
         Trusted.insert(Sym.Addr);
@@ -232,6 +237,8 @@ FuncDetector::detect(const BinaryImage &Img, Decoder &Dec) {
         Keep[I] = 1;
       else if (UntypedCOFFExports.count(Addr) ||
                IsCoveredMachODirectCallTarget(Addr) ||
+               ExplicitFunctionStarts.count(
+                   normalizeCodeAddress(Addr, Img.Arch, Img.Mode)) != 0 ||
                !InsideKnownButNotStart(Addr))
         NeedVerify.push_back(I);
     }

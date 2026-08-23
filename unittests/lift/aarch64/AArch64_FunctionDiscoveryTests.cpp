@@ -261,9 +261,10 @@ TEST(AArch64FunctionDiscovery,
 }
 
 TEST(AArch64FunctionDiscovery,
-     PreservesTypedSymbolInsideBroadCompactUnwindRange) {
+     VerifiesZeroSizedTypedSymbolsInsideBroadCompactUnwindRange) {
   constexpr va_t ImageVA = 0x2000;
   constexpr va_t LeafVA = ImageVA + 0x8;
+  constexpr va_t InvalidVA = ImageVA + 0x10;
 
   BinaryImage Img;
   Img.Arch = Arch::AArch64;
@@ -275,25 +276,29 @@ TEST(AArch64FunctionDiscovery,
   Segment Text;
   Text.Name = "__TEXT";
   Text.VA = ImageVA;
-  Text.Size = 0x10;
+  Text.Size = 0x14;
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data.assign(Text.Size, 0);
   writeLE<uint32_t>(Text.Data.data(), 0xD65F03C0u); // ret
   writeLE<uint32_t>(Text.Data.data() + (LeafVA - ImageVA),
                     0xD65F03C0u); // ret
+  writeLE<uint32_t>(Text.Data.data() + (InvalidVA - ImageVA),
+                    0xFFFFFFFFu); // undecodable
   Img.Segments.push_back(std::move(Text));
   Img.Sections.push_back(
-      makeMachOSection("__text", ImageVA, 0x10, /*ContainsInstructions=*/true));
+      makeMachOSection("__text", ImageVA, 0x14, /*ContainsInstructions=*/true));
 
-  Symbol Covering = Symbol::makeFunc(ImageVA, 0x10);
+  Symbol Covering = Symbol::makeFunc(ImageVA, 0x14);
   Covering.Name = "_covering";
   Img.Symbols.push_back(std::move(Covering));
   Symbol Leaf = Symbol::makeFunc(LeafVA);
   Leaf.Name = "_leaf";
   Img.Symbols.push_back(std::move(Leaf));
+  Symbol Invalid = Symbol::makeFunc(InvalidVA);
+  Invalid.Name = "_invalid";
+  Img.Symbols.push_back(std::move(Invalid));
   Img.Exports.push_back({"_covering", 0, ImageVA});
-  Img.Exports.push_back({"_leaf", 0, LeafVA});
-  Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x10);
+  Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x14);
 
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::AArch64));
@@ -306,6 +311,9 @@ TEST(AArch64FunctionDiscovery,
   EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
                           [](const auto &F) { return F.first == LeafVA; }),
             1u);
+  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                          [](const auto &F) { return F.first == InvalidVA; }),
+            0u);
 }
 
 TEST(AArch64FunctionDiscovery,
