@@ -26,6 +26,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       NEVERD_LLVM_PREBUILT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.use_prebuilt_llvm && 'ON' || 'OFF' }}
+      SCCACHE_GHA_ENABLED: 'true'
 
     strategy:
       fail-fast: false
@@ -70,6 +71,15 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python_version }}
+
+      # Keep the default source-built LLVM contract while avoiding recompiling
+      # unchanged LLVM and NeverD translation units on every runner.  The GHA
+      # backend is content-addressed, so compiler flags and source changes
+      # naturally miss instead of reusing an incompatible object.
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: 'v0.16.0'
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -188,6 +198,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER="$CC" \
             -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DBUILD_TESTING=ON \
             -DNEVERD_BUILD_PLUGINS=ON \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \

@@ -169,3 +169,18 @@ class CiConfigurationTests(unittest.TestCase):
             "- name:", 1
         )[0]
         self.assertNotIn("--target", build_section)
+
+    def test_workflow_caches_but_still_source_builds_llvm(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("SCCACHE_GHA_ENABLED: 'true'", source)
+        self.assertIn("mozilla-actions/sccache-action@", source)
+        self.assertIn("-DCMAKE_C_COMPILER_LAUNCHER=sccache", source)
+        self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=sccache", source)
+        self.assertIn(
+            "-DNEVERD_LLVM_PREBUILT=\"$NEVERD_LLVM_PREBUILT_MODE\"", source
+        )
+        self.assertEqual(
+            source.count("-DNEVERD_LLVM_PREBUILT="), 1,
+            "the compiler cache must not introduce a prebuilt-LLVM fast path",
+        )
