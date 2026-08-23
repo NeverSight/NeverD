@@ -1675,6 +1675,8 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
                        Owner.RequestedSlots.end());
       Owners.push_back(std::move(Owner));
     }
+  if (Owners.empty())
+    return Result;
   auto abandonAnalysis = [&]() {
     Result.AnalysisComplete = false;
     Result.ProtectedRelocationSlots.insert(Requested.begin(), Requested.end());
