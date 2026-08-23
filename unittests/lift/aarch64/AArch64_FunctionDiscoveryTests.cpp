@@ -314,6 +314,8 @@ TEST(AArch64FunctionDiscovery,
   EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
                           [](const auto &F) { return F.first == InvalidVA; }),
             0u);
+  EXPECT_EQ(Img.VerifiedFunctionEntries.count(LeafVA), 1u);
+  EXPECT_EQ(Img.VerifiedFunctionEntries.count(InvalidVA), 0u);
 }
 
 TEST(AArch64FunctionDiscovery,
