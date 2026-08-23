@@ -858,6 +858,62 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       return Batch.Bound;
     }
 
+  // A shared dispatch can have an initial constant selector and masked loop
+  // backedges.  The merged value is then not equal to the mask producer on
+  // every predecessor even though its complete domain is still [0, Bound).
+  // Admit that shape only for an exact dense zero-based coordinate set, and
+  // prove the actual selector at every occurrence with the CFG/lane-aware
+  // bit-vector solver.  Sparse masks and translated domains must keep their
+  // stronger occurrence relation; physical table capacity is never a domain
+  // certificate.
+  struct DenseBoundBatch {
+    const BoundBatch *Batch = nullptr;
+    size_t Begin = 0;
+    size_t End = 0;
+  };
+  std::vector<JumpTableValueQuery> DenseBoundQueries;
+  std::vector<DenseBoundBatch> DenseBoundBatches;
+  for (const BoundBatch &Batch : Batches) {
+    bool IsDenseZeroBased = !Batch.UsesNonContiguous && Batch.Bound != 0 &&
+                            Batch.Coordinates.size() == Batch.Bound;
+    for (size_t I = 0; IsDenseZeroBased && I < Batch.Coordinates.size(); ++I)
+      IsDenseZeroBased = Batch.Coordinates[I] == I;
+    if (!IsDenseZeroBased)
+      continue;
+    if (WorkBudget < IndexOccurrences.size())
+      return FailIncomplete();
+    WorkBudget -= IndexOccurrences.size();
+    const size_t Begin = DenseBoundQueries.size();
+    for (const JumpTableValueOccurrence &Index : IndexOccurrences) {
+      JumpTableValueQuery Query;
+      Query.Candidate = Index.Value;
+      Query.UseAddr = Index.Addr;
+      Query.UseSeq = Index.Seq;
+      Query.Relation = JumpTableValueRelation::UnsignedLessThan;
+      Query.UnsignedUpperBound = Batch.Bound;
+      DenseBoundQueries.push_back(std::move(Query));
+    }
+    DenseBoundBatches.push_back({&Batch, Begin, DenseBoundQueries.size()});
+  }
+  if (!DenseBoundQueries.empty()) {
+    bool DenseBoundAnalysisComplete = false;
+    const std::vector<bool> DenseBoundMatches =
+        tableValuesMatchAtUses(DenseBoundQueries, &DenseBoundAnalysisComplete);
+    if (!DenseBoundAnalysisComplete ||
+        DenseBoundMatches.size() != DenseBoundQueries.size())
+      return FailIncomplete();
+    for (const DenseBoundBatch &Proof : DenseBoundBatches)
+      if (std::all_of(DenseBoundMatches.begin() + Proof.Begin,
+                      DenseBoundMatches.begin() + Proof.End,
+                      [](bool Match) { return Match; })) {
+        if (UsedNonContiguous)
+          *UsedNonContiguous = false;
+        if (FeasibleCoordinates)
+          *FeasibleCoordinates = Proof.Batch->Coordinates;
+        return Proof.Batch->Bound;
+      }
+  }
+
   // No complete producer expression matched the actual table index.  Before
   // allowing relocation/object bounds to take over, ask the CFG resolver
   // whether the real index may nevertheless depend on any authenticated mask

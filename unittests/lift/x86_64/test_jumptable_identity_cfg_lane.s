@@ -1531,4 +1531,42 @@ jt_identity_fake_modulo_mixed_roots:
         .long .Lfake_mod5_case4-.Lfake_mod5_table
         .long 0
 
+// The first dispatch reaches the shared table with a literal zero index;
+// loop-back paths reach it with x&3.  The merged selector is not equal to the
+// mask producer on every predecessor, but its complete bit-vector domain is
+// still the same dense [0,4) interval.  This is the shape emitted by clang for
+// a threaded computed-goto loop whose initial pc is known to be zero.
+        .text
+        .globl  jt_identity_mask_dense_bounded_merge
+        .type   jt_identity_mask_dense_bounded_merge,@function
+jt_identity_mask_dense_bounded_merge:
+        xorl    %r10d, %r10d
+        jmp     .Lmask_dense_merge_dispatch
+.Lmask_dense_merge_case0:
+        movl    %edi, %r10d
+        andl    $3, %r10d
+.Lmask_dense_merge_dispatch:
+        leaq    .Lmask_dense_merge_table(%rip), %rax
+        movslq  (%rax,%r10,4), %rcx
+        addq    %rax, %rcx
+        jmpq    *%rcx
+.Lmask_dense_merge_case1:
+        movl    $4501, %eax
+        retq
+.Lmask_dense_merge_case2:
+        movl    $4502, %eax
+        retq
+.Lmask_dense_merge_case3:
+        movl    $4503, %eax
+        retq
+        .size   jt_identity_mask_dense_bounded_merge, .-jt_identity_mask_dense_bounded_merge
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+.Lmask_dense_merge_table:
+        .long .Lmask_dense_merge_case0-.Lmask_dense_merge_table
+        .long .Lmask_dense_merge_case1-.Lmask_dense_merge_table
+        .long .Lmask_dense_merge_case2-.Lmask_dense_merge_table
+        .long .Lmask_dense_merge_case3-.Lmask_dense_merge_table
+
         .section .note.GNU-stack,"",@progbits
