@@ -437,6 +437,10 @@ static fs::path moduloDomainObj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_modulo_domain.o";
 }
 
+static fs::path moduloDeadProducerObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_modulo_dead_producer.o";
+}
+
 static fs::path rawRelativeDomainObj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_raw_relative_domain.o";
 }
@@ -1078,6 +1082,58 @@ TEST_F(JTE_X86_64, JumpTableAcceptsExplicitSameOwnerUnwindFragment) {
             Low.JumpTables.front().Targets.end())
       << "a fragment is an out-of-range case only when unwind metadata links "
          "it to this exact primary function";
+}
+
+TEST_F(JTE_X86_64, ModuloBoundRecoversClangO0U140FrameReload) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_modulo_u140_spill_reload_loop");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Function->Size, 0u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  const neverd::JumpTable &JT = Low.JumpTables.front();
+  ASSERT_EQ(JT.Targets.size(), 140u);
+  EXPECT_EQ(std::set<neverd::va_t>(JT.Targets.begin(), JT.Targets.end()).size(),
+            140u);
+  ASSERT_TRUE(JT.HasDispatchSlotMap);
+  ASSERT_EQ(JT.SlotIndices.size(), 140u);
+  for (uint32_t Slot = 0; Slot < 140; ++Slot)
+    EXPECT_EQ(JT.SlotIndices[Slot], Slot);
+  uint64_t PhysicalSlots = 0;
+  for (const neverd::JumpTableStorageRange &Range : JT.StorageRanges) {
+    PhysicalSlots += Range.PhysicalSlotCount;
+    EXPECT_EQ(Range.EntrySize, 4u);
+    EXPECT_EQ(Range.EntryStride, 4u);
+  }
+  EXPECT_EQ(PhysicalSlots, 140u);
+}
+
+TEST_F(JTE_X86_64, ModuloBoundRejectsDeadExactProducer) {
+  auto ImageOrErr = neverd::loadBinary(moduloDeadProducerObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_modulo_u140_dead_producer");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Function->Size, 0u);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty());
 }
 
 TEST_F(JTE_X86_64, ModuloBoundRejectsIndependentQuotientRoot) {

@@ -1115,6 +1115,157 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
         }
         return false;
       };
+  // Clang 20 -O0 may spill the remainder to a frame slot before widening it
+  // for the table address.  The legacy lexical proposal scan below correctly
+  // stops at that LOAD, so use the exact physical relocation run only to
+  // propose one bounded divisor.  Capacity has no authority by itself: an
+  // exact `x - q*N` producer must first pass the structural recipe theorem,
+  // and every real selector occurrence must then equal one of those producers
+  // through the full CFG/frame resolver.
+  if (Info.PhysicalCapacity >= limits::kMinJumpTableEntries &&
+      Info.PhysicalCapacity <= limits::kMaxJumpTableEntries) {
+    JumpTableInfo Probe = Info;
+    Probe.MaxEntries = 0;
+    Probe.RuntimeCaseLabels.clear();
+    Probe.RuntimeSlotIndices.clear();
+    const uint32_t Bound = Info.PhysicalCapacity;
+    const size_t ReadableEntries = readTableEntries(Img, Probe).size();
+    if (ReadableEntries == Bound) {
+      size_t ExactModuloWork = limits::kMaxJumpTableEvidenceWork;
+      bool ExactModuloBudgetExhausted = false;
+      auto consumeExactModuloWork = [&]() {
+        if (ExactModuloWork == 0) {
+          ExactModuloBudgetExhausted = true;
+          return false;
+        }
+        --ExactModuloWork;
+        return true;
+      };
+      auto boundedReachingDefIdx = [&](int From, const NdVar &Value) {
+        for (int I = From; I >= 0; --I) {
+          if (!consumeExactModuloWork())
+            return -1;
+          const NdVar &Output = Ops[I].Output;
+          if (Output.Space == Value.Space && Output.Offset == Value.Offset)
+            return I;
+        }
+        return -1;
+      };
+      auto rhsHasDirectScalarMultiplier = [&](int From, NdVar Value) -> bool {
+        for (unsigned Depth = 0; Depth <= limits::kMaxQuasiCopyDepth; ++Depth) {
+          const int Definition = boundedReachingDefIdx(From, Value);
+          if (Definition < 0)
+            return false;
+          const LowOp &Op = Ops[Definition];
+          // x86 IMUL writes its native low lane, then the lifter explicitly
+          // widens that lane into the architectural container.  The following
+          // SUB still consumes the low lane; cross only this preserving write.
+          const bool PreservesQueriedLowLane =
+              Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
+              sameVar(Op.Inputs[0], Value) && Op.Output.Space == Value.Space &&
+              Op.Output.Offset == Value.Offset && Op.Output.Size > Value.Size;
+          if (PreservesQueriedLowLane) {
+            From = Definition - 1;
+            continue;
+          }
+          if (Op.Opcode != NdOp::INT_MULT || Op.NumInputs < 2)
+            return false;
+          for (int ConstantInput = 0; ConstantInput < 2; ++ConstantInput) {
+            const int DynamicInput = 1 - ConstantInput;
+            const NdVar &Constant = Op.Inputs[ConstantInput];
+            if (Constant.isConst() && Constant.Offset == Bound &&
+                Constant.Provenance == ConstantAddressProvenance::Scalar &&
+                (Op.Inputs[DynamicInput].isReg() ||
+                 Op.Inputs[DynamicInput].isTemp()))
+              return true;
+          }
+          return false;
+        }
+        return false;
+      };
+
+      constexpr size_t kMaxExactModuloProducers = 32;
+      std::vector<JumpTableValueOccurrence> ProducerCandidates;
+      bool TooManyProducers = false;
+      for (int I = 0; I < static_cast<int>(Ops.size()); ++I) {
+        if (!consumeExactModuloWork())
+          break;
+        const LowOp &Op = Ops[I];
+        if (Op.Opcode != NdOp::INT_SUB || Op.NumInputs < 2 ||
+            Op.Output.Size == 0 || (!Op.Output.isReg() && !Op.Output.isTemp()))
+          continue;
+        const auto RecIt = Insns.find(Op.Addr);
+        if (RecIt == Insns.end() || RecIt->second.IsInstructionGuard ||
+            !rhsHasDirectScalarMultiplier(I - 1, Op.Inputs[1]))
+          continue;
+        const JumpTableValueOccurrence Producer{Op.Output, Op.Addr, Op.Seq,
+                                                /*DefinedAtPoint=*/true};
+        if (std::find(ProducerCandidates.begin(), ProducerCandidates.end(),
+                      Producer) != ProducerCandidates.end())
+          continue;
+        if (ProducerCandidates.size() == kMaxExactModuloProducers) {
+          TooManyProducers = true;
+          break;
+        }
+        ProducerCandidates.push_back(Producer);
+      }
+
+      if (!ExactModuloBudgetExhausted && !TooManyProducers &&
+          !ProducerCandidates.empty()) {
+        std::vector<JumpTableValueQuery> StructuralQueries;
+        StructuralQueries.reserve(ProducerCandidates.size());
+        for (const JumpTableValueOccurrence &Producer : ProducerCandidates) {
+          JumpTableValueQuery Query;
+          Query.Candidate = Producer.Value;
+          Query.UseAddr = Producer.Addr;
+          Query.UseSeq = Producer.Seq;
+          Query.Relation = JumpTableValueRelation::ExactUnsignedModuloRecipe;
+          Query.UnsignedUpperBound = Bound;
+          StructuralQueries.push_back(std::move(Query));
+        }
+
+        bool StructuralComplete = false;
+        const std::vector<bool> StructuralResults =
+            tableValuesMatchAtUses(StructuralQueries, &StructuralComplete);
+        std::vector<JumpTableValueOccurrence> ProvenProducers;
+        if (StructuralComplete &&
+            StructuralResults.size() == ProducerCandidates.size())
+          for (size_t I = 0; I < StructuralResults.size(); ++I)
+            if (StructuralResults[I])
+              ProvenProducers.push_back(ProducerCandidates[I]);
+
+        if (!ProvenProducers.empty()) {
+          std::vector<JumpTableValueQuery> ReplayQueries;
+          ReplayQueries.reserve(IndexOccurrences.size());
+          for (const JumpTableValueOccurrence &Index : IndexOccurrences) {
+            JumpTableValueQuery Query;
+            Query.Candidate = Index.Value;
+            Query.UseAddr = Index.Addr;
+            Query.UseSeq = Index.Seq;
+            Query.Alternatives = ProvenProducers;
+            Query.AllowZeroExtension = true;
+            Query.RequireExactAlternativeDefinitions = true;
+            ReplayQueries.push_back(std::move(Query));
+          }
+          bool ReplayComplete = false;
+          const std::vector<bool> ReplayResults =
+              tableValuesMatchAtUses(ReplayQueries, &ReplayComplete);
+          if (ReplayComplete && ReplayResults.size() == ReplayQueries.size() &&
+              std::all_of(ReplayResults.begin(), ReplayResults.end(),
+                          [](bool Match) { return Match; })) {
+            Info.MaxEntries = Bound;
+            Info.IndexDomainAuthenticated = true;
+            Info.AuthenticatedModuloBound = Bound;
+            Info.NormBase = 0;
+            Info.NormShift = 0;
+            Info.Stride = 1;
+            return true;
+          }
+        }
+      }
+    }
+  }
+
   std::set<uint32_t> CandidateBounds;
   for (const JumpTableValueOccurrence &Index : IndexOccurrences) {
     std::vector<int> UsePoints;

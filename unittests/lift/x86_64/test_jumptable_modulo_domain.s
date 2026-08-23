@@ -222,4 +222,82 @@ jt_guard_domain_replays_after_root_restore:
         .quad .Lguard_replay_case1
         .quad .Lguard_replay_bypass_root
 
+// Clang 20 -O0-style unsigned `acc % 140` selector.  The remainder is
+// spilled as i32, widened, spilled again as i64, and reloaded for a 140-entry
+// rel32 code table.  Every case rejoins a real loop backedge.
+        .text
+        .globl  jt_modulo_u140_spill_reload_loop
+        .type   jt_modulo_u140_spill_reload_loop,@function
+jt_modulo_u140_spill_reload_loop:
+        pushq   %rbp
+        movq    %rsp, %rbp
+        movq    %rdi, -8(%rbp)
+        movq    -8(%rbp), %rax
+        orl     $1, %eax
+        movl    %eax, -12(%rbp)
+        movl    $0, -16(%rbp)
+
+.Lmod140_loop:
+        cmpl    $4, -16(%rbp)
+        jge     .Lmod140_done
+
+        // LLVM 20.1.8 unsigned division/modulo-by-140 recipe:
+        // q = ((x >> 2) * 0x3a83a83b) >> 35; r = x - q * 140.
+        movl    -12(%rbp), %eax
+        movl    %eax, %ecx
+        shrl    $2, %ecx
+        imulq   $0x3a83a83b, %rcx, %rcx
+        shrq    $35, %rcx
+        imull   $140, %ecx, %ecx
+        subl    %ecx, %eax
+
+        movl    %eax, -20(%rbp)
+        movl    -20(%rbp), %eax
+        movq    %rax, -32(%rbp)
+        movq    -32(%rbp), %rax
+
+        leaq    .Lmod140_table(%rip), %rcx
+        movslq  (%rcx,%rax,4), %rax
+        addq    %rcx, %rax
+        jmpq    *%rax
+
+        .altmacro
+        .macro  JT_MOD140_CASE
+.Lmod140_case_\+:
+        addl    $(5000+\+), -12(%rbp)
+        jmp     .Lmod140_continue
+        .endm
+        .rept   140
+        JT_MOD140_CASE
+        .endr
+        .purgem JT_MOD140_CASE
+        .noaltmacro
+
+.Lmod140_continue:
+        movl    -16(%rbp), %eax
+        imull   $131, %eax, %eax
+        addl    %eax, -12(%rbp)
+        addl    $1, -16(%rbp)
+        jmp     .Lmod140_loop
+
+.Lmod140_done:
+        movl    -12(%rbp), %eax
+        popq    %rbp
+        retq
+        .size   jt_modulo_u140_spill_reload_loop, .-jt_modulo_u140_spill_reload_loop
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+.Lmod140_table:
+        .altmacro
+        .macro  JT_MOD140_ENTRY
+        .long   .Lmod140_case_\+-.Lmod140_table
+        .endm
+        .rept   140
+        JT_MOD140_ENTRY
+        .endr
+        .purgem JT_MOD140_ENTRY
+        .noaltmacro
+        .long   0
+
         .section .note.GNU-stack,"",@progbits

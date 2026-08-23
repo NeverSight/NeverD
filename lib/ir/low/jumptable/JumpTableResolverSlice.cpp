@@ -1371,6 +1371,39 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       [&](va_t Address, const std::set<va_t> *ActiveOwners) {
         return resolvedJumpTableOwnsStorageAddress(Address, ActiveOwners);
       });
+  using ExactDefinitionKey =
+      std::tuple<va_t, int, VnodeSpace, uint64_t, uint16_t>;
+  auto exactDefinitionKey = [](va_t Addr, int Seq, const NdVar &Value) {
+    return ExactDefinitionKey{Addr, Seq, Value.Space, Value.Offset, Value.Size};
+  };
+  // Ordinary queries retain the historical PointToOp behavior.  Exact modulo
+  // queries opt into stronger definition certificates: locate the exact output
+  // lane and reject duplicate LowIR points instead of letting map insertion
+  // order choose a producer.
+  std::map<ExactDefinitionKey, std::pair<int, int>> ExactDefinitions;
+  std::set<ExactDefinitionKey> AmbiguousExactDefinitions;
+  const bool NeedsExactDefinitions = std::any_of(
+      Queries.begin(), Queries.end(), [](const JumpTableValueQuery &Query) {
+        return Query.Relation ==
+                   JumpTableValueRelation::ExactUnsignedModuloRecipe ||
+               Query.RequireExactAlternativeDefinitions;
+      });
+  if (NeedsExactDefinitions) {
+    for (int BlockIndex = 0; BlockIndex < static_cast<int>(Graph.Blocks.size());
+         ++BlockIndex) {
+      const ResolverFlowBlock &Block = Graph.Blocks[BlockIndex];
+      for (int OpIndex = 0; OpIndex < static_cast<int>(Block.Ops.size());
+           ++OpIndex) {
+        const LowOp &Op = Block.Ops[OpIndex];
+        if (Op.Output.Size == 0)
+          continue;
+        const ExactDefinitionKey Key =
+            exactDefinitionKey(Op.Addr, Op.Seq, Op.Output);
+        if (!ExactDefinitions.try_emplace(Key, BlockIndex, OpIndex).second)
+          AmbiguousExactDefinitions.insert(Key);
+      }
+    }
+  }
   const TargetRegInfo &TRI = getTargetRegInfo(CurrentImg->Arch);
   const std::vector<TargetRegisterRange> CallPreservedRanges =
       TRI.callPreservedRanges(CurrentImg->Format);
@@ -2465,14 +2498,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   };
 
   auto provesUnsignedUpperBound = [&](const ResolverValue &Value,
-                                      uint64_t Bound, bool &ProofComplete) {
+                                      uint64_t Bound, bool &ProofComplete,
+                                      bool ExactModuloRecipeOnly = false) {
     ProofComplete = false;
     if (!Value || Value->Size == 0 || Value->Size > sizeof(uint64_t) ||
         Bound == 0)
       return false;
 
     const uint32_t Width = uint32_t(Value->Size) * 8u;
-    if (Width < 64 && Bound >= (uint64_t{1} << Width)) {
+    if (!ExactModuloRecipeOnly && Width < 64 &&
+        Bound >= (uint64_t{1} << Width)) {
       ProofComplete = true;
       return true;
     }
@@ -2513,7 +2548,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         Result = unknown(Node);
         break;
       case ResolverValueExpr::Kind::Constant:
-        Result = Ctx.mkConst(NodeWidth, Node->Constant);
+        // Exact modulo structure is an integer-domain certificate.  A loader-
+        // authenticated address whose numeric bits happen to equal the magic
+        // reciprocal or divisor must never participate as an arithmetic
+        // literal in that proof.
+        if (!ExactModuloRecipeOnly ||
+            Node->Provenance == ConstantAddressProvenance::Scalar)
+          Result = Ctx.mkConst(NodeWidth, Node->Constant);
         break;
       case ResolverValueExpr::Kind::Zero:
         Result = Ctx.mkZero(NodeWidth);
@@ -2628,11 +2669,21 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     };
 
     symbolic::SymRef Index = Symbolize(Value, 0);
-    if (!Index || Exhausted || Ctx.width(Index) != Width)
+    if (!Index || Exhausted || Ctx.width(Index) != Width) {
+      if (ExactModuloRecipeOnly && !Exhausted)
+        ProofComplete = true;
       return false;
+    }
     if (provesLLVMUnsignedModuloRecipe(Ctx, Index, Bound)) {
       ProofComplete = true;
       return true;
+    }
+    if (ExactModuloRecipeOnly) {
+      // A fully symbolized expression that does not match the exact LLVM
+      // recipe is a completed negative structural result.  Do not let a
+      // generic range fact stand in for the required remainder identity.
+      ProofComplete = true;
+      return false;
     }
     symbolic::SymRef Counterexample =
         Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound)));
@@ -2653,6 +2704,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const JumpTableValueQuery &Query = Queries[QueryIndex];
     if (Query.Candidate.Size == 0 ||
         (Query.Relation != JumpTableValueRelation::UnsignedLessThan &&
+         Query.Relation != JumpTableValueRelation::ExactUnsignedModuloRecipe &&
          Query.Alternatives.empty()))
       continue;
 
@@ -2660,10 +2712,26 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (Query.Candidate.isConst()) {
       CandidateValue = constantValue(Query.Candidate);
     } else if (Query.Candidate.isReg() || Query.Candidate.isTemp()) {
-      auto CandidatePoint = Graph.PointToOp.find({Query.UseAddr, Query.UseSeq});
-      if (CandidatePoint == Graph.PointToOp.end())
-        continue;
-      const auto [CandidateBlock, CandidateBefore] = CandidatePoint->second;
+      std::pair<int, int> CandidateLocation;
+      if (Query.Relation == JumpTableValueRelation::ExactUnsignedModuloRecipe) {
+        const ExactDefinitionKey Key =
+            exactDefinitionKey(Query.UseAddr, Query.UseSeq, Query.Candidate);
+        const auto CandidatePoint = ExactDefinitions.find(Key);
+        if (CandidatePoint == ExactDefinitions.end() ||
+            AmbiguousExactDefinitions.count(Key) ||
+            Graph.InstructionGuards.count(Query.UseAddr))
+          continue;
+        CandidateLocation = CandidatePoint->second;
+      } else {
+        const auto CandidatePoint =
+            Graph.PointToOp.find({Query.UseAddr, Query.UseSeq});
+        if (CandidatePoint == Graph.PointToOp.end())
+          continue;
+        CandidateLocation = CandidatePoint->second;
+      }
+      auto [CandidateBlock, CandidateBefore] = CandidateLocation;
+      if (Query.Relation == JumpTableValueRelation::ExactUnsignedModuloRecipe)
+        ++CandidateBefore;
       CandidateValue =
           resolveValue(CandidateBlock, CandidateBefore, Query.Candidate);
     } else {
@@ -2671,7 +2739,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     }
     if (CandidateValue.Kind != ResolverResultKind::Value) {
       if (Query.Relation == JumpTableValueRelation::MayDepend ||
-          Query.Relation == JumpTableValueRelation::UnsignedLessThan)
+          Query.Relation == JumpTableValueRelation::UnsignedLessThan ||
+          (Query.Relation ==
+               JumpTableValueRelation::ExactUnsignedModuloRecipe &&
+           CandidateValue.Kind == ResolverResultKind::Cycle))
+        Complete = false;
+      continue;
+    }
+
+    if (Query.Relation == JumpTableValueRelation::ExactUnsignedModuloRecipe) {
+      bool ProofComplete = false;
+      Results[QueryIndex] = provesUnsignedUpperBound(
+          CandidateValue.Value, Query.UnsignedUpperBound, ProofComplete,
+          /*ExactModuloRecipeOnly=*/true);
+      if (!ProofComplete)
         Complete = false;
       continue;
     }
@@ -2692,16 +2773,30 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (Anchor.Value.isConst()) {
         IndexValue = constantValue(Anchor.Value);
       } else if (Anchor.Value.isReg() || Anchor.Value.isTemp()) {
-        auto IndexPoint = Graph.PointToOp.find({Anchor.Addr, Anchor.Seq});
         // Alternatives are a union of authenticated producers.  A producer
         // pruned from this candidate's proof graph cannot reach the queried
         // use and is therefore irrelevant; it must not poison every other
         // reachable alternative.  The candidate itself is still a must-value
         // over every feasible predecessor below, so dropping an unreachable
         // anchor cannot turn an ambiguous path into a match.
-        if (IndexPoint == Graph.PointToOp.end())
-          continue;
-        auto [IndexBlock, IndexBefore] = IndexPoint->second;
+        std::pair<int, int> IndexLocation;
+        if (Anchor.DefinedAtPoint && Query.RequireExactAlternativeDefinitions) {
+          const ExactDefinitionKey Key =
+              exactDefinitionKey(Anchor.Addr, Anchor.Seq, Anchor.Value);
+          const auto IndexPoint = ExactDefinitions.find(Key);
+          if (IndexPoint == ExactDefinitions.end() ||
+              AmbiguousExactDefinitions.count(Key) ||
+              Graph.InstructionGuards.count(Anchor.Addr))
+            continue;
+          IndexLocation = IndexPoint->second;
+        } else {
+          const auto IndexPoint =
+              Graph.PointToOp.find({Anchor.Addr, Anchor.Seq});
+          if (IndexPoint == Graph.PointToOp.end())
+            continue;
+          IndexLocation = IndexPoint->second;
+        }
+        auto [IndexBlock, IndexBefore] = IndexLocation;
         if (Anchor.DefinedAtPoint)
           ++IndexBefore;
         IndexValue = resolveValue(IndexBlock, IndexBefore, Anchor.Value);

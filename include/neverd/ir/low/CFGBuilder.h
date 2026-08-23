@@ -208,6 +208,12 @@ private:
     /// resolver's CFG/lane-aware expression, not a sampled range or a table
     /// storage-capacity inference.
     UnsignedLessThan,
+    /// The candidate is the exact output occurrence of an unsigned remainder
+    /// producer.  Resolve immediately after that definition and require the
+    /// complete LLVM constant-division recipe for UnsignedUpperBound as the
+    /// divisor.  This structural relation never falls back to a generic range
+    /// solver.
+    ExactUnsignedModuloRecipe,
   };
 
   struct JumpTableValueQuery {
@@ -218,6 +224,11 @@ private:
     bool AllowZeroExtension = false;
     bool AllowSignExtension = false;
     JumpTableValueRelation Relation = JumpTableValueRelation::MustEqual;
+    /// Resolve DefinedAtPoint alternatives by their exact output occurrence.
+    /// Ordinary queries retain the historical instruction-point anchoring.
+    bool RequireExactAlternativeDefinitions = false;
+    /// UnsignedLessThan's exclusive bound, or
+    /// ExactUnsignedModuloRecipe's exact divisor.
     uint64_t UnsignedUpperBound = 0;
     /// Do not apply the role-neutral architectural-address owner wildcard.
     /// Scalar-model certificates use this to require the exact raw-PC owner
