@@ -6,6 +6,8 @@
 
 #include "neverd/safety/SinkScanner.h"
 
+#include "SourceSemantics.h"
+
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
@@ -40,6 +42,8 @@ struct ResolvedIdentity {
   std::string Name;
   NameSource Source = NameSource::Symbol;
 };
+
+enum class DebugParamRole : uint8_t { Pointer, Integer };
 
 const MedOp *opFor(const MedFunc &F, int BlockId, int OpIdx) {
   for (const MedBlock &B : F.Blocks)
@@ -152,6 +156,48 @@ ResolvedIdentity resolveIdentity(const AnalysisInput &In, va_t CalleeAddr,
                                 : NameSource::Symbol};
 }
 
+std::optional<FunctionSym> debugFunctionForCall(const AnalysisInput &In,
+                                                const MedCallInfo &Call) {
+  if (!In.Dbg)
+    return std::nullopt;
+  const va_t CanonicalAddr =
+      In.Img ? normalizeCodeAddress(Call.TargetAddr, In.Img->Arch, In.Img->Mode)
+             : Call.TargetAddr;
+  const std::array<va_t, 2> Addresses = {Call.TargetAddr, CanonicalAddr};
+  const bool HasAddressIdentity =
+      Call.TargetAddr != 0 ||
+      (!Call.IsIndirect && isSynthesizedFuncName(Call.TargetName));
+  const size_t Count =
+      HasAddressIdentity ? (CanonicalAddr == Call.TargetAddr ? 1 : 2) : 0;
+  const std::string ResolvedName = SinkCatalog::normalize(
+      resolveIdentity(In, Call.TargetAddr, Call.TargetName, Call.IsIndirect)
+          .Name);
+  if (ResolvedName.empty())
+    return std::nullopt;
+  for (size_t I = 0; I < Count; ++I)
+    if (auto Fn = In.Dbg->resolveFunction(Addresses[I])) {
+      const va_t FunctionAddr =
+          In.Img ? normalizeCodeAddress(Fn->Addr, In.Img->Arch, In.Img->Mode)
+                 : Fn->Addr;
+      if (FunctionAddr == CanonicalAddr &&
+          SinkCatalog::normalize(Fn->Name) == ResolvedName)
+        return Fn;
+    }
+  return std::nullopt;
+}
+
+bool debugTypeMatchesRole(const TypeRef &Type, DebugParamRole Role,
+                          uint16_t IntegerBytes = 0) {
+  if (!Type || Type->Kind == NdTypeKind::Unknown)
+    return true;
+  if (Role == DebugParamRole::Integer) {
+    if (Type->Kind != NdTypeKind::Int)
+      return false;
+    return IntegerBytes == 0 || Type->Size == 0 || Type->Size == IntegerBytes;
+  }
+  return Type->Kind == NdTypeKind::Ptr || Type->Kind == NdTypeKind::Array;
+}
+
 } // namespace
 
 std::string neverd::safety::resolveCallName(const AnalysisInput &In,
@@ -165,6 +211,68 @@ NameSource neverd::safety::classifyNameSource(const AnalysisInput &In,
                                               llvm::StringRef StatedName,
                                               bool IsIndirect) {
   return resolveIdentity(In, CalleeAddr, StatedName, IsIndirect).Source;
+}
+
+bool neverd::safety::debugSinkSummaryConflicts(const AnalysisInput &In,
+                                               const MedCallInfo &Call,
+                                               const SinkEntry &Entry) {
+  const std::optional<FunctionSym> Debug = debugFunctionForCall(In, Call);
+  if (!Debug)
+    return false;
+
+  std::vector<std::pair<int, DebugParamRole>> Roles;
+  std::optional<DebugParamRole> ReturnRole;
+  const auto expect = [&](int Index, DebugParamRole Role) {
+    if (Index >= 0)
+      Roles.emplace_back(Index, Role);
+  };
+  switch (Entry.Kind) {
+  case SinkKind::Copy:
+    expect(Entry.DstArg, DebugParamRole::Pointer);
+    expect(Entry.SrcArg, DebugParamRole::Pointer);
+    expect(Entry.LenArg, DebugParamRole::Integer);
+    expect(Entry.CapArg, DebugParamRole::Integer);
+    break;
+  case SinkKind::Format:
+    expect(Entry.DstArg, DebugParamRole::Pointer);
+    expect(Entry.FmtArg, DebugParamRole::Pointer);
+    expect(Entry.LenArg, DebugParamRole::Integer);
+    expect(Entry.CapArg, DebugParamRole::Integer);
+    break;
+  case SinkKind::Alloc:
+    expect(Entry.LenArg, DebugParamRole::Integer);
+    expect(Entry.SrcArg, DebugParamRole::Integer);
+    expect(Entry.HandleArg, DebugParamRole::Pointer);
+    if (Entry.HandleArg < 0)
+      ReturnRole = DebugParamRole::Pointer;
+    break;
+  case SinkKind::StackAlloc:
+    expect(Entry.LenArg, DebugParamRole::Integer);
+    ReturnRole = DebugParamRole::Pointer;
+    break;
+  case SinkKind::Realloc:
+    expect(Entry.HandleArg, DebugParamRole::Pointer);
+    expect(Entry.LenArg, DebugParamRole::Integer);
+    ReturnRole = DebugParamRole::Pointer;
+    break;
+  case SinkKind::Free:
+    expect(Entry.HandleArg, DebugParamRole::Pointer);
+    break;
+  case SinkKind::Exec:
+  case SinkKind::Source:
+    break;
+  }
+
+  if (ReturnRole && !debugTypeMatchesRole(Debug->ReturnType, *ReturnRole))
+    return true;
+  const uint16_t IntegerBytes = detail::targetPointerBytes(In.Img);
+  for (const auto &[Index, Role] : Roles) {
+    if (Index >= static_cast<int>(Debug->Params.size()))
+      continue;
+    if (!debugTypeMatchesRole(Debug->Params[Index].second, Role, IntegerBytes))
+      return true;
+  }
+  return false;
 }
 
 std::vector<SinkSite> neverd::safety::scanSinks(const AnalysisInput &In,

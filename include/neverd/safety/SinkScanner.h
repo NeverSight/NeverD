@@ -37,12 +37,19 @@ namespace neverd::safety {
 std::string resolveCallName(const AnalysisInput &In, const MedCallInfo &Call);
 
 /// Decide where the name of the routine at \p CalleeAddr came from, honouring
-/// the per-format identity precedence: a rename, then an import, then a debug
-/// symbol (PDB / DWARF / MAP), then an export or image symbol, then a signature
-/// match, and finally a synthesized placeholder.  \p IsIndirect selects the
-/// import-slot lookups used for PE IAT / Mach-O dyld indirect calls.
+/// the per-format identity precedence: a rename, then an import, then a stated
+/// image export or symbol.  Debug information can establish a placeholder or
+/// agree with the stated identity, but cannot replace a different stated name;
+/// signatures precede only synthesized placeholders.  \p IsIndirect selects
+/// the import-slot lookups used for PE IAT / Mach-O dyld indirect calls.
 NameSource classifyNameSource(const AnalysisInput &In, va_t CalleeAddr,
                               llvm::StringRef StatedName, bool IsIndirect);
+
+/// Return true when debug information for this exact callee explicitly
+/// contradicts the catalog's pointer/integer parameter roles. Missing or
+/// partial type information is not a conflict and keeps the catalog fallback.
+bool debugSinkSummaryConflicts(const AnalysisInput &In, const MedCallInfo &Call,
+                               const SinkEntry &Entry);
 
 /// Scan every lifted function and return one record per catalog match.
 std::vector<SinkSite> scanSinks(const AnalysisInput &In,

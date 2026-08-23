@@ -41,12 +41,12 @@ PDB 过程签名用于区分有返回值的分配函数与 `void` 释放函数�
 
 1. `rename` — 调用方提供的重命名
 2. `import` — IAT（PE）、PLT（ELF）或 dyld-bind / stub（Mach-O）条目
-3. `pdb` / `dwarf` / `map` — 调试符号，按加载器种类
-4. `export` / `symbol` — 镜像导出表或符号表条目
+3. `export` / `symbol` — 镜像已经陈述的导出、符号表条目或其他非占位名
+4. `pdb` / `dwarf` / `map` — 为占位名建立身份或与镜像既有名称一致的调试符号
 5. `sig` — 签名库匹配
 6. `synthetic` — 为未命名例程铸造的占位名
 
-DWARF 命名的静态链接 `memcpy` 报告 `dwarf`；导入的 `memcpy` 在所有格式上都报告 `import`。签名匹配从不覆盖调试器或导入表已经给出的名字。
+仅由 DWARF 命名的静态链接 `memcpy` 报告 `dwarf`；导入的 `memcpy` 在所有格式上都报告 `import`。伴生文件不会覆盖镜像已经陈述的不同非占位名，签名匹配也不会覆盖任何已陈述身份。
 
 ---
 

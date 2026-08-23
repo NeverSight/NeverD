@@ -41,8 +41,8 @@ Jeder Fund trägt ein `name_source`, das die Herkunft des Callee-Namens nach die
 
 1. `rename` — eine vom Aufrufer gesetzte Umbenennung
 2. `import` — ein IAT- (PE), PLT- (ELF) oder dyld-Bind-/Stub-Eintrag (Mach-O)
-3. `pdb` / `dwarf` / `map` — ein Debug-Symbol, je nach Loader
-4. `export` / `symbol` — ein Export oder Symboltabelleneintrag
+3. `export` / `symbol` — ein bereits vom Image angegebener Export oder Symboltabelleneintrag
+4. `pdb` / `dwarf` / `map` — ein Debug-Symbol, das einen Platzhalter festlegt oder mit dem angegebenen Namen übereinstimmt
 5. `sig` — ein Signaturtreffer
 6. `synthetic` — Platzhalter für eine namenlose Routine
 

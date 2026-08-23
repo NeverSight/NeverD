@@ -13,6 +13,7 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <limits>
 #include <optional>
@@ -75,6 +76,29 @@ const SinkEntry *SinkCatalog::matchSink(llvm::StringRef StatedName) const {
 void SinkCatalog::addSink(SinkEntry E) {
   if (E.Name.empty())
     return;
+  const std::string Canonical = normalize(E.Name);
+  for (unsigned Idx = 0; Idx < SinkList.size(); ++Idx) {
+    if (normalize(SinkList[Idx].Name) != Canonical)
+      continue;
+    for (const std::string &Alias : SinkList[Idx].Aliases) {
+      const std::string NormalizedAlias = normalize(Alias);
+      const bool AlreadyPresent = std::any_of(
+          E.Aliases.begin(), E.Aliases.end(), [&](const std::string &Current) {
+            return normalize(Current) == NormalizedAlias;
+          });
+      if (!AlreadyPresent)
+        E.Aliases.push_back(Alias);
+    }
+    SinkList[Idx] = std::move(E);
+    SinkIndex[Canonical] = Idx;
+    for (const std::string &Alias : SinkList[Idx].Aliases) {
+      const std::string NormalizedAlias = normalize(Alias);
+      if (!NormalizedAlias.empty())
+        SinkIndex[NormalizedAlias] = Idx;
+    }
+    return;
+  }
+
   unsigned Idx = static_cast<unsigned>(SinkList.size());
   std::vector<std::string> Keys = E.Aliases;
   Keys.push_back(E.Name);

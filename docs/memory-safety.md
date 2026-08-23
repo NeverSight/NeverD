@@ -58,14 +58,17 @@ established, chosen by this precedence:
 
 1. `rename` — a caller-supplied rename
 2. `import` — an IAT (PE), PLT (ELF), or dyld-bind / stub (Mach-O) entry
-3. `pdb` / `dwarf` / `map` — a debug symbol, by loader kind
-4. `export` / `symbol` — an image export or symbol-table entry
+3. `export` / `symbol` — an already-stated image export, symbol-table entry,
+   or other non-placeholder image name
+4. `pdb` / `dwarf` / `map` — a debug symbol that establishes a placeholder or
+   agrees with the image's stated name, by loader kind
 5. `sig` — a signature-database match
 6. `synthetic` — a placeholder minted for an unnamed routine
 
-A statically-linked `memcpy` named by DWARF reports `dwarf`; an imported
-`memcpy` reports `import` on every format. A signature match never displaces a
-name a debugger or import table already stated.
+A statically-linked `memcpy` named only by DWARF reports `dwarf`; an imported
+`memcpy` reports `import` on every format. A companion never replaces a
+different non-placeholder name already stated by the image, and a signature
+match never displaces any stated identity.
 
 ---
 

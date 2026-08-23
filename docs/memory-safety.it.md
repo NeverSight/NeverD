@@ -41,8 +41,8 @@ Ogni reperto porta un `name_source` che descrive da dove proviene il nome del ca
 
 1. `rename` — un rinomina fornito dal chiamante
 2. `import` — una voce IAT (PE), PLT (ELF) o dyld-bind / stub (Mach-O)
-3. `pdb` / `dwarf` / `map` — un simbolo di debug, secondo il loader
-4. `export` / `symbol` — un export o una voce della tabella dei simboli
+3. `export` / `symbol` — un export o una voce simbolo già dichiarata dall’immagine
+4. `pdb` / `dwarf` / `map` — un simbolo di debug che stabilisce un segnaposto o coincide con il nome dichiarato
 5. `sig` — una corrispondenza di firme
 6. `synthetic` — un segnaposto per una routine senza nome
 

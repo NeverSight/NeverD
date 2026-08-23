@@ -425,6 +425,27 @@ TEST(SinkCatalog, FileOverrideReplacesEntry) {
   EXPECT_EQ(E->Severity, 90u);
 }
 
+TEST(SinkCatalog, CanonicalOverridePreservesBuiltInFormatAliases) {
+  const std::string Path =
+      std::string(::testing::TempDir()) + "/neverd_sink_alias_override.json";
+  {
+    std::ofstream OS(Path);
+    OS << R"({"sinks":[{"name":"memcpy","kind":"copy","dst":2,)"
+       << R"("src":1,"len":0,"severity":91}]})";
+  }
+
+  SinkCatalog C = SinkCatalog::defaults();
+  ASSERT_FALSE(static_cast<bool>(C.mergeSinksFromFile(Path)));
+  const SinkEntry *Canonical = C.matchSink("memcpy");
+  const SinkEntry *ArmEabi = C.matchSink("__aeabi_memcpy");
+  ASSERT_NE(Canonical, nullptr);
+  ASSERT_NE(ArmEabi, nullptr);
+  EXPECT_EQ(ArmEabi, Canonical);
+  EXPECT_EQ(ArmEabi->DstArg, 2);
+  EXPECT_EQ(ArmEabi->LenArg, 0);
+  EXPECT_EQ(ArmEabi->Severity, 91u);
+}
+
 TEST(SinkCatalog, RejectsUnknownSinkKind) {
   std::string Path =
       std::string(::testing::TempDir()) + "/neverd_bad_sink_kind.json";

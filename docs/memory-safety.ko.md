@@ -41,8 +41,8 @@ PDB 프로시저 시그니처는 값을 반환하는 할당 함수와 `void` 해
 
 1. `rename` — 호출자가 지정한 이름 변경
 2. `import` — IAT(PE), PLT(ELF), 또는 dyld-bind / stub(Mach-O)
-3. `pdb` / `dwarf` / `map` — 로더 종류에 따른 디버그 심볼
-4. `export` / `symbol` — 내보내기 표 또는 심볼 표
+3. `export` / `symbol` — 이미지가 이미 명시한 내보내기 또는 심볼 표 이름
+4. `pdb` / `dwarf` / `map` — 자리 표시자를 확정하거나 이미 명시된 이름과 일치하는 디버그 심볼
 5. `sig` — 시그니처 일치
 6. `synthetic` — 이름 없는 루틴의 자리 표시자
 

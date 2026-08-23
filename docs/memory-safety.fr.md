@@ -41,8 +41,8 @@ Chaque découverte porte un `name_source` indiquant d’où vient le nom du call
 
 1. `rename` — un renommage fourni par l’appelant
 2. `import` — une entrée IAT (PE), PLT (ELF) ou dyld-bind / stub (Mach-O)
-3. `pdb` / `dwarf` / `map` — un symbole de débogage, selon le chargeur
-4. `export` / `symbol` — une exportation ou une entrée de table de symboles
+3. `export` / `symbol` — une exportation ou entrée de symboles déjà déclarée par l’image
+4. `pdb` / `dwarf` / `map` — un symbole de débogage qui établit un placeholder ou concorde avec le nom déclaré
 5. `sig` — une correspondance de signatures
 6. `synthetic` — un placeholder pour une routine sans nom
 

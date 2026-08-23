@@ -41,8 +41,8 @@ Cada hallazgo lleva un `name_source` que describe de dónde salió el nombre del
 
 1. `rename` — un renombrado suministrado por el llamante
 2. `import` — una entrada IAT (PE), PLT (ELF) o dyld-bind / stub (Mach-O)
-3. `pdb` / `dwarf` / `map` — un símbolo de depuración, según el cargador
-4. `export` / `symbol` — una exportación o entrada de tabla de símbolos
+3. `export` / `symbol` — una exportación o entrada de símbolos ya declarada por la imagen
+4. `pdb` / `dwarf` / `map` — un símbolo de depuración que establece un marcador o coincide con el nombre declarado
 5. `sig` — una coincidencia de firmas
 6. `synthetic` — un marcador de posición para una rutina sin nombre
 

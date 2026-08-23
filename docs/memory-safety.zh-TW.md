@@ -41,12 +41,12 @@ PDB 程序簽章用來區分有回傳值的配置函式與 `void` 釋放函式�
 
 1. `rename` — 呼叫方提供的重新命名
 2. `import` — IAT（PE）、PLT（ELF）或 dyld-bind / stub（Mach-O）條目
-3. `pdb` / `dwarf` / `map` — 除錯符號，依載入器種類
-4. `export` / `symbol` — 映像匯出表或符號表條目
+3. `export` / `symbol` — 映像已陳述的匯出、符號表條目或其他非佔位名
+4. `pdb` / `dwarf` / `map` — 為佔位名建立身分或與映像既有名稱一致的除錯符號
 5. `sig` — 簽章庫匹配
 6. `synthetic` — 為未命名常式鑄造的佔位名
 
-DWARF 命名的靜態連結 `memcpy` 報告 `dwarf`；匯入的 `memcpy` 在所有格式上都報告 `import`。簽章匹配從不覆蓋除錯器或匯入表已經給出的名字。
+僅由 DWARF 命名的靜態連結 `memcpy` 報告 `dwarf`；匯入的 `memcpy` 在所有格式上都報告 `import`。伴生檔不會覆蓋映像已陳述的不同非佔位名，簽章匹配也不會覆蓋任何已陳述身分。
 
 ---
 

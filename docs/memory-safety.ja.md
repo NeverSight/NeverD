@@ -41,8 +41,8 @@ PDB のプロシージャ署名は、値を返す確保関数と `void` の解�
 
 1. `rename` — 呼び出し側が付けた改名
 2. `import` — IAT（PE）、PLT（ELF）、または dyld-bind / stub（Mach-O）
-3. `pdb` / `dwarf` / `map` — ローダ種別に応じたデバッグ記号
-4. `export` / `symbol` — エクスポート表または記号表
+3. `export` / `symbol` — イメージが既に表明したエクスポートまたは記号表の名前
+4. `pdb` / `dwarf` / `map` — プレースホルダを確定するか、表明済みの名前と一致するデバッグ記号
 5. `sig` — シグネチャ照合
 6. `synthetic` — 無名ルーチン向けのプレースホルダ
 
