@@ -201,6 +201,57 @@ jt_i386_gotoff_same_field_conflict_valid_branch:
   ret
 .size jt_i386_gotoff_same_field_conflict, .-jt_i386_gotoff_same_field_conflict
 
+// The GOT base itself is authenticated by one ordinary call/pop + GOTPC
+// field, but the table displacement has two value-writing relocation owners.
+// Both writers happen to leave the same model-zero bytes in this fixture;
+// numeric equality is still not occurrence provenance.  The affected dispatch
+// must remain an opaque branch while the independent callback below remains a
+// tail call.
+.p2align 2
+.globl jt_i386_gotoff_displacement_conflict
+.type jt_i386_gotoff_displacement_conflict, @function
+jt_i386_gotoff_displacement_conflict:
+  movl 4(%esp), %edx
+  testl %edx, %edx
+  jne .Lgotoff_displacement_conflict_callback
+
+  call .Lgotoff_displacement_conflict_pc
+.Lgotoff_displacement_conflict_pc:
+  popl %ebx
+  .byte 0x81, 0xc3                 // addl imm32, %ebx
+.Lgotoff_displacement_conflict_gotpc_field:
+  .long .Lgotoff_displacement_conflict_gotpc_field - .Lgotoff_displacement_conflict_pc
+  .reloc .Lgotoff_displacement_conflict_gotpc_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl 8(%esp), %ecx
+  cmpl $1, %ecx
+  ja .Lgotoff_displacement_conflict_default
+  .byte 0x8b, 0x84, 0x8b          // movl disp32(%ebx,%ecx,4), %eax
+.globl jt_i386_gotoff_displacement_conflict_field
+jt_i386_gotoff_displacement_conflict_field:
+  .long 0
+  .reloc jt_i386_gotoff_displacement_conflict_field, R_386_GOTOFF, jt_i386_gotoff_displacement_conflict_table
+  .reloc jt_i386_gotoff_displacement_conflict_field, R_386_32, jt_i386_gotoff_displacement_conflict_table
+  addl %ebx, %eax
+.globl jt_i386_gotoff_displacement_conflict_branch
+jt_i386_gotoff_displacement_conflict_branch:
+  jmp *%eax
+.Lgotoff_displacement_conflict_case0:
+  movl $5160, %eax
+  ret
+.Lgotoff_displacement_conflict_case1:
+  movl $5161, %eax
+  ret
+.Lgotoff_displacement_conflict_default:
+  movl $-1, %eax
+  ret
+
+.Lgotoff_displacement_conflict_callback:
+  movl 12(%esp), %eax
+.globl jt_i386_gotoff_displacement_conflict_callback_branch
+jt_i386_gotoff_displacement_conflict_callback_branch:
+  jmp *%eax
+.size jt_i386_gotoff_displacement_conflict, .-jt_i386_gotoff_displacement_conflict
+
 // The first immutable graph proves the ambiguous GOTPC path below.  Its
 // independent valid table then discovers a late case edge that enters the
 // ambiguous branch after the table-load slice, so the stable graph cannot
@@ -608,6 +659,14 @@ jt_i386_gotoff_conflict_valid_table:
   .long .Lgotoff_conflict_valid_case0@GOTOFF
   .long .Lgotoff_conflict_valid_case1@GOTOFF
 .size jt_i386_gotoff_conflict_valid_table, .-jt_i386_gotoff_conflict_valid_table
+
+.p2align 2
+.globl jt_i386_gotoff_displacement_conflict_table
+.type jt_i386_gotoff_displacement_conflict_table, @object
+jt_i386_gotoff_displacement_conflict_table:
+  .long .Lgotoff_displacement_conflict_case0@GOTOFF
+  .long .Lgotoff_displacement_conflict_case1@GOTOFF
+.size jt_i386_gotoff_displacement_conflict_table, .-jt_i386_gotoff_displacement_conflict_table
 
 .p2align 2
 .globl jt_i386_gotoff_late_table

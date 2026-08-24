@@ -131,6 +131,18 @@ public:
     /// the equal-valued peer operand.
     std::optional<NdVar> RelocatedImmediate;
 
+    /// Exact negative provenance for a multiply-owned i386 GOTOFF memory
+    /// displacement.  computeEA binds it to the one LowIR input produced from
+    /// Capstone's encoded displacement; it never upgrades the scalar to an
+    /// address.
+    bool HasAmbiguousI386GOTOFFDisplacement = false;
+    va_t AmbiguousI386GOTOFFFieldVA = InvalidVA;
+    uint64_t AmbiguousI386GOTOFFEncodedValue = 0;
+    uint8_t AmbiguousI386GOTOFFWidth = 0;
+    bool ConflictingAmbiguousI386GOTOFFUses = false;
+    std::optional<RelocatedInstructionScalarOperandOccurrence>
+        AmbiguousI386GOTOFFOccurrence;
+
     /// Architectural width of this instruction's effective-address
     /// arithmetic, in bytes (Capstone cs_x86::addr_size).  LowIR memory
     /// addresses are represented as 8-byte VAs, but i386 and x86-64 address-

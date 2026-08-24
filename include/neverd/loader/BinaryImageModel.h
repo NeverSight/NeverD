@@ -201,6 +201,12 @@ struct BinaryImage {
   /// output so only a GOTOFF consumer that may depend on the ambiguous field
   /// is retained as an opaque indirect branch.
   std::set<va_t> AmbiguousI386GOTPCFields;
+  /// Mapped i386 instruction fields for which an R_386_GOTOFF relocation and
+  /// another value-writing relocation overlap the same four-byte span.  The
+  /// loader still applies every record from the original REL addend, but this
+  /// negative certificate prevents the final numeric displacement from being
+  /// mistaken for a uniquely owned table address.
+  std::set<va_t> AmbiguousI386GOTOFFFields;
   /// Virtual addresses that a relocation resolves to inside a WRITABLE data
   /// segment (.data/.bss), filled by the loader as it applies relocations.  The
   /// writable counterpart of RelocDataAddrs: it proves a constant is a genuine

@@ -1037,6 +1037,19 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
               {*Ambiguous, Encoded, 4,
                RelocatedScalarOperand::Kind::I386ELFGOTPC});
         }
+        auto AmbiguousGOTOFF = Img.AmbiguousI386GOTOFFFields.lower_bound(Cur);
+        for (; AmbiguousGOTOFF != Img.AmbiguousI386GOTOFFFields.end() &&
+               *AmbiguousGOTOFF < Next;
+             ++AmbiguousGOTOFF) {
+          const uint8_t *EncodedBytes = Img.readVA(*AmbiguousGOTOFF, 4);
+          if (!EncodedBytes)
+            continue;
+          uint32_t Encoded = 0;
+          std::memcpy(&Encoded, EncodedBytes, sizeof(Encoded));
+          RelocatedScalarOperands.push_back(
+              {*AmbiguousGOTOFF, Encoded, 4,
+               RelocatedScalarOperand::Kind::I386ELFAmbiguousGOTOFF});
+        }
       }
       try {
         Dec.liftToLow(DI, Rec.Ops, RelocatedOperands,

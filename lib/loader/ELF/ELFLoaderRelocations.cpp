@@ -382,6 +382,7 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
   std::map<va_t, I386RelocationFieldState> I386RelocationFields;
   std::map<va_t, size_t> I386RelocationByteWriterCounts;
   std::set<va_t> I386GOTPCWriterStarts;
+  std::set<va_t> I386GOTOFFWriterStarts;
 
   // ELF32 REL entries all read their addend from the encoded field.  Snapshot
   // every i386 field before applying anything, and count all non-NONE
@@ -459,6 +460,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           }
           if (Type == R_386_GOTPC)
             I386GOTPCWriterStarts.insert(FieldVA);
+          if (Type == R_386_GOTOFF)
+            I386GOTOFFWriterStarts.insert(FieldVA);
           if (Footprint.Width == 4) {
             auto [It, Inserted] = I386RelocationFields.try_emplace(FieldVA);
             if (Inserted)
@@ -485,6 +488,19 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         }
         if (!HasUniqueFourByteOwner)
           Img.AmbiguousI386GOTPCFields.insert(FieldVA);
+      }
+      for (va_t FieldVA : I386GOTOFFWriterStarts) {
+        bool HasUniqueFourByteOwner = true;
+        for (size_t Byte = 0; Byte < 4; ++Byte) {
+          const auto Count = I386RelocationByteWriterCounts.find(FieldVA + Byte);
+          if (Count == I386RelocationByteWriterCounts.end() ||
+              Count->second != 1) {
+            HasUniqueFourByteOwner = false;
+            break;
+          }
+        }
+        if (!HasUniqueFourByteOwner)
+          Img.AmbiguousI386GOTOFFFields.insert(FieldVA);
       }
     }
   }
@@ -912,7 +928,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
               Field != I386RelocationFields.end() &&
               Field->second.ValueWriterCount == 1 &&
               HasUniqueFourByteSpan &&
-              !Img.AmbiguousI386GOTPCFields.count(P);
+              !Img.AmbiguousI386GOTPCFields.count(P) &&
+              !Img.AmbiguousI386GOTOFFFields.count(P);
           // i386 PIC: model _GLOBAL_OFFSET_TABLE_ at base 0.  The get-PC seed
           // (lifted to the constant next-PC) plus GOTPC then fold to the GOT
           // base, and GOTOFF folds back to the symbol VA — the base choice

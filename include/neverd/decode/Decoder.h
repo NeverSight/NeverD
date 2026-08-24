@@ -85,12 +85,16 @@ struct RelocatedAddressOperand {
   bool PCRelativeFromInstructionEnd = false;
 };
 
-/// One loader-authenticated scalar relocation field inside an encoded
-/// instruction.  Scalar relocations never confer address provenance; the x86
-/// lifter binds the exact immediate field to a LowOp input occurrence so a
-/// later CFG proof can consume it without matching by numeric value.
+/// One loader-authenticated scalar or negative relocation field inside an
+/// encoded instruction.  These records never confer address provenance; the
+/// x86 lifter binds the exact immediate/displacement field to a LowOp input so
+/// a later CFG proof can consume its identity without matching by numeric
+/// value.
 struct RelocatedScalarOperand {
-  enum class Kind : uint8_t { I386ELFGOTPC };
+  enum class Kind : uint8_t {
+    I386ELFGOTPC,
+    I386ELFAmbiguousGOTOFF,
+  };
 
   va_t FieldVA = InvalidVA;
   uint64_t EncodedValue = 0;

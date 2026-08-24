@@ -685,6 +685,87 @@ TEST_F(JTE_X86_32,
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 1u);
 }
 
+TEST_F(JTE_X86_32,
+       MultiplyOwnedI386GOTOFFDisplacementStaysOccurrenceLocalAndOpaque) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_displacement_conflict");
+  const neverd::Symbol *Field =
+      Image.findSymbol("jt_i386_gotoff_displacement_conflict_field");
+  const neverd::Symbol *Branch =
+      Image.findSymbol("jt_i386_gotoff_displacement_conflict_branch");
+  const neverd::Symbol *Callback = Image.findSymbol(
+      "jt_i386_gotoff_displacement_conflict_callback_branch");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_i386_gotoff_displacement_conflict_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Field, nullptr);
+  ASSERT_NE(Branch, nullptr);
+  ASSERT_NE(Callback, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 2u * 4u);
+  const uint8_t *FieldBytes = Image.readVA(Field->Addr, 4);
+  ASSERT_NE(FieldBytes, nullptr);
+  uint32_t AppliedField = 0;
+  std::memcpy(&AppliedField, FieldBytes, sizeof(AppliedField));
+  EXPECT_EQ(AppliedField, static_cast<uint32_t>(Table->Addr))
+      << "all relocation writers must still be applied from the original "
+         "REL addend";
+  EXPECT_EQ(Image.DataAddressRelocOperands.count(Field->Addr), 0u)
+      << "multiply-owned displacement bytes cannot publish positive address "
+         "provenance";
+  EXPECT_EQ(Image.AmbiguousI386GOTOFFFields.count(Field->Addr), 1u)
+      << "the exact field/span must retain a negative GOTOFF certificate";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  auto HasOpcodeAt = [&](neverd::va_t Addr, neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(HasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u);
+  EXPECT_EQ(Low.EverPublishedJumpTableBranchAddresses.count(Branch->Addr), 0u);
+
+  EXPECT_TRUE(HasOpcodeAt(Callback->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(HasOpcodeAt(Callback->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Callback->Addr), 0u)
+      << "the negative field certificate must not become function-wide "
+         "incompleteness";
+
+  neverd::Decoder ExhaustedDecoder;
+  ASSERT_TRUE(ExhaustedDecoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder ExhaustedBuilder;
+  ExhaustedBuilder.setI386GOTOFFProposalEvidenceBudgetForTesting(0);
+  const neverd::LowFunc Exhausted = ExhaustedBuilder.build(
+      Image, ExhaustedDecoder, Function->Addr, Function->Name);
+  auto ExhaustedHasOpcodeAt = [&](neverd::va_t Addr, neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Exhausted.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+  EXPECT_TRUE(Exhausted.JumpTables.empty());
+  EXPECT_TRUE(ExhaustedHasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(ExhaustedHasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Exhausted.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u);
+  EXPECT_TRUE(ExhaustedHasOpcodeAt(Callback->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Exhausted.UnsafeIndirectBranchAddresses.count(Callback->Addr), 0u);
+}
+
 TEST_F(JTE_X86_32, I386GOTPCReplayRetiresOnlyTheExactQueryKey) {
   using Key = neverd::detail::I386GOTOFFAmbiguityReplayKey;
   const neverd::va_t Branch = 0x1000;

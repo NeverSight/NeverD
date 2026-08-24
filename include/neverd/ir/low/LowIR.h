@@ -536,11 +536,15 @@ struct RelocatedInstructionAddressOccurrence {
       default;
 };
 
-/// Exact scalar relocation operand consumed by one LowOp input.  Unlike an
-/// address occurrence, an i386 GOTPC immediate is a scalar adjustment; only
-/// the completed CFG proof may turn its output into a model-zero witness.
+/// Exact scalar or negative relocation operand consumed by one LowOp input.
+/// Unlike an address occurrence, GOTPC is a scalar adjustment and an ambiguous
+/// GOTOFF displacement is only a fail-closed tombstone; neither grants address
+/// provenance by numeric equality.
 struct RelocatedInstructionScalarOperandOccurrence {
-  enum class OperandKind : uint8_t { I386ELFGOTPC };
+  enum class OperandKind : uint8_t {
+    I386ELFGOTPC,
+    I386ELFAmbiguousGOTOFF,
+  };
 
   va_t FieldVA = InvalidVA;
   va_t InstructionAddr = InvalidVA;

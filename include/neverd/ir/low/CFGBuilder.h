@@ -1292,10 +1292,10 @@ private:
   /// allowance.  Consumers must not interpret the resulting empty model
   /// inventory as definitive callback evidence.
   bool I386GOTModelEvidenceIncomplete = false;
-  /// The current exact GOTOFF base query is completely proven to reach a
-  /// decoded scalar field whose bytes have multiple relocation writers.  Kept
-  /// separate from the general proposal-budget flag so missing model metadata
-  /// elsewhere cannot preserve an unrelated i386 indirect branch.
+  /// The current exact GOTOFF base/address occurrence is completely proven to
+  /// reach a decoded scalar field whose bytes have multiple relocation
+  /// writers.  Kept separate from the general proposal-budget flag so missing
+  /// model metadata elsewhere cannot preserve an unrelated i386 branch.
   mutable bool I386GOTOFFAmbiguousModelReach = false;
   mutable bool I386GOTOFFGraphQueryIssuedForTesting = false;
   mutable bool I386GOTOFFGraphQueryBudgetExhaustedForTesting = false;

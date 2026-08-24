@@ -1924,15 +1924,111 @@ bool CFGBuilder::isExactI386GOTOFFInput(const LowOp &Add,
       ConstantSide >= Add.NumInputs || Add.Output.Size != 4)
     return false;
   const NdVar &Constant = Add.Inputs[ConstantSide];
-  if (!Constant.isConst() || Constant.Size != 4 ||
-      Constant.Provenance != ConstantAddressProvenance::DataAddress ||
-      Constant.AddressOwnerVA == InvalidVA)
+  if (!Constant.isConst() || Constant.Size != 4)
     return false;
   const auto Insn = Insns.find(Add.Addr);
   if (Insn == Insns.end() || Insn->second.IsInstructionGuard ||
       Insn->second.Size == 0 || Insn->second.Size > InvalidVA - Add.Addr)
     return false;
   const va_t End = Add.Addr + Insn->second.Size;
+  auto OrderedSetLookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (size_t N = Count; N > 1; N = (N + 1) / 2)
+      ++Work;
+    return Work;
+  };
+
+  const bool HasPositiveGOTOFFRole =
+      Constant.Provenance == ConstantAddressProvenance::DataAddress &&
+      Constant.AddressOwnerVA != InvalidVA;
+  if (!HasPositiveGOTOFFRole) {
+    // A multiply-owned GOTOFF field has no positive address provenance, but
+    // its exact instruction span is already a table-shape certificate.  Claim
+    // that shape before the budgeted occurrence scan: exhaustion must preserve
+    // this branch opaquely rather than turn it into a callback.  A completed
+    // scan still requires the precise LowOp input below, so an unrelated field
+    // or callback in the same function cannot acquire the semantic marker.
+    auto Field = CurrentImg->AmbiguousI386GOTOFFFields.lower_bound(Add.Addr);
+    if (Field == CurrentImg->AmbiguousI386GOTOFFFields.end() || *Field > End ||
+        End - *Field < 4)
+      return false;
+    const bool PriorShapeClaimed = I386GOTOFFProposalShapeClaimed;
+    I386GOTOFFProposalShapeClaimed = true;
+    auto NextField = Field;
+    ++NextField;
+    if (NextField != CurrentImg->AmbiguousI386GOTOFFFields.end() &&
+        *NextField < End) {
+      I386GOTOFFProposalEvidenceIncomplete = true;
+      return false;
+    }
+    if (!consumeI386GOTOFFProposalEvidence(
+            RelocatedInstructionScalarOperandOccurrences.size()) ||
+        !consumeI386GOTOFFProposalEvidence(
+            OrderedSetLookupWork(
+                CurrentImg->AmbiguousI386GOTOFFFields.size())))
+      return false;
+
+    const RelocatedInstructionScalarOperandOccurrence *Ambiguous = nullptr;
+    for (const RelocatedInstructionScalarOperandOccurrence &Occurrence :
+         RelocatedInstructionScalarOperandOccurrences) {
+      if (Occurrence.Kind !=
+              RelocatedInstructionScalarOperandOccurrence::OperandKind::
+                  I386ELFAmbiguousGOTOFF ||
+          Occurrence.InstructionAddr != Add.Addr ||
+          Occurrence.OpSeq != Add.Seq || Occurrence.FieldVA != *Field ||
+          Occurrence.Width != 4 || Occurrence.InputIndex != ConstantSide ||
+          Occurrence.EncodedValue != static_cast<uint32_t>(Constant.Offset) ||
+          Occurrence.Opcode != Add.Opcode ||
+          Occurrence.OutputWitness != Add.Output)
+        continue;
+      if (Ambiguous) {
+        I386GOTOFFProposalEvidenceIncomplete = true;
+        return false;
+      }
+      Ambiguous = &Occurrence;
+    }
+    if (!Ambiguous) {
+      I386GOTOFFProposalShapeClaimed = PriorShapeClaimed;
+      return false;
+    }
+    if (!consumeI386GOTOFFProposalEvidence(CurrentImg->Segments.size()))
+      return false;
+    const uint8_t *EncodedBytes = CurrentImg->readVA(Ambiguous->FieldVA, 4);
+    uint32_t Encoded = 0;
+    if (!EncodedBytes) {
+      I386GOTOFFProposalEvidenceIncomplete = true;
+      return false;
+    }
+    std::memcpy(&Encoded, EncodedBytes, sizeof(Encoded));
+    if (Encoded != static_cast<uint32_t>(Ambiguous->EncodedValue)) {
+      I386GOTOFFProposalEvidenceIncomplete = true;
+      return false;
+    }
+    if (ActiveJumpTableCandidateAddr == InvalidVA) {
+      I386GOTOFFProposalEvidenceIncomplete = true;
+      return false;
+    }
+    const I386GOTOFFAmbiguityReplayKey ReplayKey = std::make_tuple(
+        ActiveJumpTableCandidateAddr, Add.Addr, Add.Seq, ConstantSide,
+        static_cast<va_t>(Encoded));
+    constexpr size_t ReplayKeyWork = 5;
+    auto PrepayKeySetInsert = [&](const auto &Set) {
+      const size_t Lookup = OrderedSetLookupWork(Set.size());
+      if (Lookup > std::numeric_limits<size_t>::max() / ReplayKeyWork)
+        return consumeI386GOTOFFProposalEvidence(
+            std::numeric_limits<size_t>::max());
+      return consumeI386GOTOFFProposalEvidence(ReplayKeyWork * Lookup) &&
+             consumeI386GOTOFFProposalEvidence(ReplayKeyWork) &&
+             consumeI386GOTOFFProposalEvidence(1);
+    };
+    if (!PrepayKeySetInsert(StageReplayedI386GOTPCKeys) ||
+        !PrepayKeySetInsert(CurrentI386GOTOFFAmbiguityKeys))
+      return false;
+    StageReplayedI386GOTPCKeys.insert(ReplayKey);
+    CurrentI386GOTOFFAmbiguityKeys.insert(ReplayKey);
+    I386GOTOFFAmbiguousModelReach = true;
+    return false;
+  }
 
   unsigned InstructionDataFields = 0;
   const RelocatedAddressField *InstructionField = nullptr;

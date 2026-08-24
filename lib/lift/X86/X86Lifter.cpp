@@ -119,7 +119,9 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
       Acc(Idx);
     }
   }
-  if ((MemOp.mem.disp != 0 || RelocatedDisplacement) && !ConsumedDisplacement) {
+  if ((MemOp.mem.disp != 0 || RelocatedDisplacement ||
+       HasAmbiguousI386GOTOFFDisplacement) &&
+      !ConsumedDisplacement) {
     const bool IsCompleteAbsoluteAddress =
         MemOp.mem.base == X86_REG_INVALID && MemOp.mem.index == X86_REG_INVALID;
     NdVar Displacement =
@@ -129,7 +131,50 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp) {
                              ArithmeticSize)
             : NdVar::scalar(static_cast<uint64_t>(MemOp.mem.disp),
                             ArithmeticSize);
+    const size_t DisplacementOpStart = Ops.size();
     Acc(Displacement);
+    if (HasAmbiguousI386GOTOFFDisplacement &&
+        static_cast<uint32_t>(MemOp.mem.disp) ==
+            static_cast<uint32_t>(AmbiguousI386GOTOFFEncodedValue)) {
+      const LowOp *ExactAdd =
+          Ops.size() == DisplacementOpStart + 1
+              ? &Ops[DisplacementOpStart]
+              : nullptr;
+      uint8_t ExactInput = 0;
+      unsigned MatchingInputs = 0;
+      if (ExactAdd && ExactAdd->Addr == Addr &&
+          ExactAdd->Opcode == NdOp::INT_ADD) {
+        for (uint8_t Input = 0; Input < ExactAdd->NumInputs; ++Input)
+          if (ExactAdd->Inputs[Input].isConst() &&
+              ExactAdd->Inputs[Input].Size ==
+                  AmbiguousI386GOTOFFWidth &&
+              ExactAdd->Inputs[Input].Provenance ==
+                  ConstantAddressProvenance::Scalar &&
+              static_cast<uint32_t>(ExactAdd->Inputs[Input].Offset) ==
+                  static_cast<uint32_t>(
+                      AmbiguousI386GOTOFFEncodedValue)) {
+            ++MatchingInputs;
+            ExactInput = Input;
+          }
+      }
+      if (!ExactAdd || MatchingInputs != 1 ||
+          AmbiguousI386GOTOFFOccurrence) {
+        ConflictingAmbiguousI386GOTOFFUses = true;
+        AmbiguousI386GOTOFFOccurrence.reset();
+      } else {
+        AmbiguousI386GOTOFFOccurrence = {
+            AmbiguousI386GOTOFFFieldVA,
+            Addr,
+            ExactAdd->Seq,
+            AmbiguousI386GOTOFFWidth,
+            ExactInput,
+            AmbiguousI386GOTOFFEncodedValue,
+            RelocatedInstructionScalarOperandOccurrence::OperandKind::
+                I386ELFAmbiguousGOTOFF,
+            ExactAdd->Opcode,
+            ExactAdd->Output};
+      }
+    }
   }
   if (First)
     Acc(NdVar::address(0, ArithmeticSize));
@@ -484,6 +529,32 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
   }
   if (AmbiguousGOTPC)
     ExactGOTPC.reset();
+  std::optional<RelocatedScalarOperand> ExactAmbiguousGOTOFF;
+  bool ConflictingAmbiguousGOTOFF = false;
+  if (TargetArch == Arch::X86 && X86.encoding.disp_size == 4) {
+    for (const RelocatedScalarOperand &Reloc : ScalarRelocs) {
+      if (Reloc.Semantics !=
+              RelocatedScalarOperand::Kind::I386ELFAmbiguousGOTOFF ||
+          Reloc.Width != X86.encoding.disp_size ||
+          Reloc.FieldVA != Insn->address + X86.encoding.disp_offset ||
+          static_cast<uint32_t>(Reloc.EncodedValue) !=
+              static_cast<uint32_t>(X86.disp))
+        continue;
+      if (ExactAmbiguousGOTOFF) {
+        ConflictingAmbiguousGOTOFF = true;
+        break;
+      }
+      ExactAmbiguousGOTOFF = Reloc;
+    }
+  }
+  if (ConflictingAmbiguousGOTOFF)
+    ExactAmbiguousGOTOFF.reset();
+  if (ExactAmbiguousGOTOFF) {
+    S.HasAmbiguousI386GOTOFFDisplacement = true;
+    S.AmbiguousI386GOTOFFFieldVA = ExactAmbiguousGOTOFF->FieldVA;
+    S.AmbiguousI386GOTOFFEncodedValue = ExactAmbiguousGOTOFF->EncodedValue;
+    S.AmbiguousI386GOTOFFWidth = ExactAmbiguousGOTOFF->Width;
+  }
   // Two loader owners for the same encoded field are corrupt/ambiguous
   // provenance.  Falling back to a raw immediate would freeze the old VA, so
   // reject the instruction before emitting any LowIR instead.
@@ -597,6 +668,13 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
               I386ELFGOTPC,
           ExactAdd->Opcode,
           ExactAdd->Output};
+  }
+  if (S.AmbiguousI386GOTOFFOccurrence &&
+      !S.ConflictingAmbiguousI386GOTOFFUses) {
+    if (LastScalarOperandOccurrence)
+      LastScalarOperandOccurrence.reset();
+    else
+      LastScalarOperandOccurrence = S.AmbiguousI386GOTOFFOccurrence;
   }
 
   // A VEX/EVEX 128-bit *destination* write also defines the corresponding YMM
