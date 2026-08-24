@@ -70,4 +70,5 @@ add_neverd_component_library(NeverDLoader
 
   LINK_COMPONENTS
   EVM
+  SBF
 )

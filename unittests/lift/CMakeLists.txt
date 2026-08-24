@@ -328,8 +328,6 @@ add_neverd_unittest(NeverDNativePointerRelocationBoundaryTests
 
   LINK_COMPONENTS
   Support
-  Loader
-  SBF
 )
 
 target_compile_definitions(NeverDNativePointerRelocationBoundaryTests PRIVATE
