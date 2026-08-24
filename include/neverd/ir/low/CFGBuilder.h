@@ -36,6 +36,17 @@ using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
 using I386GOTOFFAmbiguityReplayKey =
     std::tuple<va_t, va_t, int, int, va_t>;
+/// Stage-local root-cache identity.  Consumer audits exclude the current
+/// branch's own frozen proposal, so sibling candidates sharing every other
+/// dimension must still receive distinct root sets.
+using I386GOTOFFProposalRootCacheKey =
+    std::tuple<va_t, va_t, uint32_t, bool>;
+
+constexpr I386GOTOFFProposalRootCacheKey makeI386GOTOFFProposalRootCacheKey(
+    va_t CandidateAddr, va_t TableBase, uint32_t ProofRank,
+    bool ConsumerAudit) {
+  return std::make_tuple(CandidateAddr, TableBase, ProofRank, ConsumerAudit);
+}
 
 /// Record one exact LowIR occurrence point.  A second operation carrying the
 /// same (address, sequence) key permanently makes the point ambiguous; callers
@@ -1357,10 +1368,12 @@ private:
   /// candidate-local account has prepaid all persistent set work.
   mutable std::set<I386GOTOFFAmbiguityReplayKey>
       CurrentI386GOTOFFAmbiguityKeys;
-  /// Candidate root sets are stable only within one resolver graph.  Cache
-  /// accepted and rejected table bases for the current stage, then clear this
-  /// map whenever multi-stage resolution rebuilds reachability.
-  mutable std::map<std::tuple<va_t, uint32_t, bool>,
+  /// Candidate root sets are stable only within one resolver graph.  The
+  /// current branch is part of the key because a consumer audit excludes that
+  /// branch's own frozen proposal while retaining its siblings.  Cache
+  /// accepted and rejected queries for the current stage, then clear this map
+  /// whenever multi-stage resolution rebuilds reachability.
+  mutable std::map<detail::I386GOTOFFProposalRootCacheKey,
                    std::optional<std::set<va_t>>>
       I386GOTOFFProposalRootCache;
   /// Whole-CFG reaching-value queries are the dominant proposal cost.  Cache

@@ -640,6 +640,41 @@ TEST_F(JTE_X86_32, I386GOTPCReplayRetiresOnlyTheExactQueryKey) {
 }
 
 TEST_F(JTE_X86_32,
+       I386GOTOFFProposalRootCacheSeparatesSiblingCandidates) {
+  using Key = neverd::detail::I386GOTOFFProposalRootCacheKey;
+  const neverd::va_t FirstBranch = 0x1000;
+  const neverd::va_t SecondBranch = 0x1100;
+  const neverd::va_t SharedTable = 0x2000;
+  constexpr uint32_t SharedProofRank = 3;
+  constexpr bool ConsumerAudit = true;
+  const Key First = neverd::detail::makeI386GOTOFFProposalRootCacheKey(
+      FirstBranch, SharedTable, SharedProofRank, ConsumerAudit);
+  const Key Second = neverd::detail::makeI386GOTOFFProposalRootCacheKey(
+      SecondBranch, SharedTable, SharedProofRank, ConsumerAudit);
+
+  EXPECT_NE(First, Second)
+      << "consumer-audit roots exclude the current candidate by address";
+
+  const std::optional<std::set<neverd::va_t>> FirstRoots =
+      std::set<neverd::va_t>{0x3100};
+  const std::optional<std::set<neverd::va_t>> SecondRoots =
+      std::set<neverd::va_t>{0x3000};
+  for (bool ReverseOrder : {false, true}) {
+    std::map<Key, std::optional<std::set<neverd::va_t>>> Cache;
+    if (ReverseOrder) {
+      Cache.emplace(Second, SecondRoots);
+      Cache.emplace(First, FirstRoots);
+    } else {
+      Cache.emplace(First, FirstRoots);
+      Cache.emplace(Second, SecondRoots);
+    }
+    EXPECT_EQ(Cache.size(), 2u);
+    EXPECT_EQ(Cache.at(First), FirstRoots);
+    EXPECT_EQ(Cache.at(Second), SecondRoots);
+  }
+}
+
+TEST_F(JTE_X86_32,
        AmbiguousI386GOTPCCarrySurvivesUnreplayedStableGraph) {
   auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))

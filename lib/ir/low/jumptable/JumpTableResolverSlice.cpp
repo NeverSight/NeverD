@@ -2256,10 +2256,11 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     ActiveJumpTableProofRoots = std::move(SavedProofRoots);
   };
   if (!ActiveJumpTableProofRoots) {
-    const auto ProposalRootKey = std::make_tuple(
-        TableBase, ActiveJumpTableCandidateProofRank,
-        ActiveJumpTableConsumerAudit);
-    constexpr size_t ProposalRootKeyWork = 3;
+    const auto ProposalRootKey = detail::makeI386GOTOFFProposalRootCacheKey(
+        ActiveJumpTableCandidateAddr, TableBase,
+        ActiveJumpTableCandidateProofRank, ActiveJumpTableConsumerAudit);
+    constexpr size_t ProposalRootKeyWork =
+        std::tuple_size_v<detail::I386GOTOFFProposalRootCacheKey>;
     if (!ConsumeProduct(
             ProposalRootKeyWork,
             OrderedLookupWork(I386GOTOFFProposalRootCache.size())))
