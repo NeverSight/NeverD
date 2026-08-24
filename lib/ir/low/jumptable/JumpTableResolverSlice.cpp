@@ -39,6 +39,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -2003,17 +2004,56 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
       CurrentImg->getPointerSize() != 4 || BaseSide < 0 ||
       BaseSide >= Use.NumInputs || Use.Inputs[BaseSide].Size != 4)
     return false;
+  // Both callers have already authenticated the outer R_386_GOTOFF field and
+  // a scaled table-load shape.  Record that exact branch identity before any
+  // model inventory or graph budget is consumed; an unfinished proof is
+  // resource-incomplete, not evidence that the branch is a callback.
+  I386GOTOFFProposalShapeClaimed = true;
   if (I386GOTModelEvidenceIncomplete) {
     I386GOTOFFProposalEvidenceIncomplete = true;
     return false;
   }
+  auto OrderedLookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (size_t N = Count; N > 1; N = (N + 1) / 2)
+      ++Work;
+    return Work;
+  };
+  auto ConsumeProduct = [&](size_t Count, size_t Cost) {
+    if (Count != 0 && Cost > std::numeric_limits<size_t>::max() / Count)
+      return consumeI386GOTOFFProposalEvidence(
+          std::numeric_limits<size_t>::max());
+    return consumeI386GOTOFFProposalEvidence(Count * Cost);
+  };
+  auto AccumulateProduct = [&](size_t &Total, size_t Count, size_t Cost) {
+    const size_t Max = std::numeric_limits<size_t>::max();
+    if (Count != 0 && Cost > Max / Count)
+      return false;
+    const size_t Product = Count * Cost;
+    if (Product > Max - Total)
+      return false;
+    Total += Product;
+    return true;
+  };
   if (!consumeI386GOTOFFProposalEvidence(
           RelocatedInstructionScalarModelOccurrences.size()))
     return false;
   std::vector<JumpTableValueOccurrence> Alternatives;
   using ModelOutputIdentity =
       std::tuple<va_t, int, uint8_t, uint64_t, uint16_t, uint8_t, uint64_t>;
+  constexpr size_t ModelOutputKeyWork = 7;
   std::set<ModelOutputIdentity> SeenModelOutputs;
+  std::set<ModelOutputIdentity> DuplicateModelOutputs;
+  std::vector<ModelOutputIdentity> AlternativeIdentities;
+  std::vector<JumpTableValueOccurrence> DuplicateAlternatives;
+  const size_t ModelCount = RelocatedInstructionScalarModelOccurrences.size();
+  // Three bounded vectors: capacity initialization, element writes/moves, and
+  // eventual destruction are all charged before the first push.
+  if (!ConsumeProduct(ModelCount, 6))
+    return false;
+  Alternatives.reserve(ModelCount);
+  AlternativeIdentities.reserve(ModelCount);
+  DuplicateAlternatives.reserve(ModelCount);
   for (const RelocatedInstructionScalarModelOccurrence &Model :
        RelocatedInstructionScalarModelOccurrences) {
     if (Model.Model != RelocatedInstructionScalarModelOccurrence::ModelKind::
@@ -2021,13 +2061,19 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
         Model.Width != 4 || Model.OutputWitness.Size != 4 ||
         (!Model.OutputWitness.isReg() && !Model.OutputWitness.isTemp()))
       continue;
+    if (!consumeI386GOTOFFProposalEvidence(OrderedLookupWork(Insns.size())))
+      return false;
     const auto ModelInsn = Insns.find(Model.InstructionAddr);
     if (ModelInsn == Insns.end() || ModelInsn->second.IsInstructionGuard ||
         ModelInsn->second.Size == 0 ||
         ModelInsn->second.Size > InvalidVA - Model.InstructionAddr ||
         Model.FieldVA < Model.InstructionAddr ||
-        Model.FieldVA >= Model.InstructionAddr + ModelInsn->second.Size ||
-        !CurrentImg->I386GOTPCFields.count(Model.FieldVA))
+        Model.FieldVA >= Model.InstructionAddr + ModelInsn->second.Size)
+      continue;
+    if (!consumeI386GOTOFFProposalEvidence(
+            OrderedLookupWork(CurrentImg->I386GOTPCFields.size())))
+      return false;
+    if (!CurrentImg->I386GOTPCFields.count(Model.FieldVA))
       continue;
     if (!consumeI386GOTOFFProposalEvidence(ModelInsn->second.Ops.size()))
       return false;
@@ -2049,12 +2095,145 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
                         Model.OutputWitness.Offset, Model.OutputWitness.Size,
                         static_cast<uint8_t>(Model.OutputWitness.Provenance),
                         Model.OutputWitness.AddressOwnerVA);
-    if (!SeenModelOutputs.insert(Identity).second)
+    if (!ConsumeProduct(ModelOutputKeyWork,
+                        OrderedLookupWork(SeenModelOutputs.size())) ||
+        !ConsumeProduct(ModelOutputKeyWork, 2) ||
+        !consumeI386GOTOFFProposalEvidence(1))
       return false;
+    if (!SeenModelOutputs.insert(Identity).second) {
+      if (!ConsumeProduct(ModelOutputKeyWork,
+                          OrderedLookupWork(DuplicateModelOutputs.size())) ||
+          !ConsumeProduct(ModelOutputKeyWork, 2) ||
+          !consumeI386GOTOFFProposalEvidence(1))
+        return false;
+      if (DuplicateModelOutputs.insert(Identity).second) {
+        // Duplicate model claims are negative alternatives only for a branch
+        // whose selected base may actually depend on this exact output.  A
+        // function-global duplicate must not preserve unrelated GOTOFF-shaped
+        // siblings.
+        DuplicateAlternatives.push_back(
+            {Model.OutputWitness, Model.InstructionAddr, Model.OpSeq,
+             /*DefinedAtPoint=*/true});
+      }
+      continue;
+    }
     Alternatives.push_back({Model.OutputWitness, Model.InstructionAddr,
                             Model.OpSeq, /*DefinedAtPoint=*/true});
+    AlternativeIdentities.push_back(Identity);
   }
-  if (Alternatives.empty())
+
+  if (!DuplicateModelOutputs.empty()) {
+    const size_t Lookup = OrderedLookupWork(DuplicateModelOutputs.size());
+    if (!ConsumeProduct(Alternatives.size(), 3) ||
+        !ConsumeProduct(Alternatives.size(), ModelOutputKeyWork * Lookup))
+      return false;
+    std::vector<JumpTableValueOccurrence> UniqueAlternatives;
+    UniqueAlternatives.reserve(Alternatives.size());
+    for (size_t I = 0; I < Alternatives.size(); ++I)
+      if (!DuplicateModelOutputs.count(AlternativeIdentities[I]))
+        UniqueAlternatives.push_back(std::move(Alternatives[I]));
+    Alternatives.swap(UniqueAlternatives);
+  }
+
+  // A multiply-owned GOTPC field is intentionally absent from the completed
+  // scalar-model inventory.  Keep its decoded output as a negative witness so
+  // an exact GOTOFF consumer can distinguish "no model reaches here" from
+  // "the reaching model field is ambiguous".  This remains occurrence-local:
+  // an unrelated ambiguous field elsewhere in the function does not preserve
+  // this branch unless the whole-CFG MayDepend query below connects it to the
+  // selected base input.
+  if (!consumeI386GOTOFFProposalEvidence(
+          RelocatedInstructionScalarOperandOccurrences.size()))
+    return false;
+  std::vector<JumpTableValueOccurrence> AmbiguousAlternatives;
+  const size_t OperandCount =
+      RelocatedInstructionScalarOperandOccurrences.size();
+  if (!ConsumeProduct(OperandCount, 2))
+    return false;
+  AmbiguousAlternatives.reserve(OperandCount);
+  std::set<ModelOutputIdentity> SeenAmbiguousOutputs;
+  for (const RelocatedInstructionScalarOperandOccurrence &Operand :
+       RelocatedInstructionScalarOperandOccurrences) {
+    if (Operand.Kind !=
+            RelocatedInstructionScalarOperandOccurrence::OperandKind::
+                I386ELFGOTPC ||
+        Operand.Width != 4 || Operand.InputIndex >= 2 ||
+        Operand.Opcode != NdOp::INT_ADD || Operand.OutputWitness.Size != 4 ||
+        (!Operand.OutputWitness.isReg() &&
+         !Operand.OutputWitness.isTemp()))
+      continue;
+    if (!consumeI386GOTOFFProposalEvidence(
+            OrderedLookupWork(CurrentImg->AmbiguousI386GOTPCFields.size())))
+      return false;
+    if (!CurrentImg->AmbiguousI386GOTPCFields.count(Operand.FieldVA))
+      continue;
+    if (!consumeI386GOTOFFProposalEvidence(OrderedLookupWork(Insns.size())))
+      return false;
+    const auto OperandInsn = Insns.find(Operand.InstructionAddr);
+    if (OperandInsn == Insns.end() || OperandInsn->second.IsInstructionGuard ||
+        OperandInsn->second.Size == 0 ||
+        OperandInsn->second.Size > InvalidVA - Operand.InstructionAddr ||
+        Operand.FieldVA < Operand.InstructionAddr ||
+        Operand.FieldVA >= Operand.InstructionAddr + OperandInsn->second.Size)
+      continue;
+    const uint8_t *EncodedBytes = CurrentImg->readVA(Operand.FieldVA, 4);
+    uint32_t Encoded = 0;
+    if (!EncodedBytes)
+      continue;
+    std::memcpy(&Encoded, EncodedBytes, sizeof(Encoded));
+    if (Encoded != static_cast<uint32_t>(Operand.EncodedValue))
+      continue;
+    if (!consumeI386GOTOFFProposalEvidence(OperandInsn->second.Ops.size()))
+      return false;
+
+    const LowOp *ExactOp = nullptr;
+    for (const LowOp &Op : OperandInsn->second.Ops)
+      if (Op.Addr == Operand.InstructionAddr && Op.Seq == Operand.OpSeq &&
+          Op.Opcode == Operand.Opcode && Op.Output == Operand.OutputWitness) {
+        if (ExactOp) {
+          ExactOp = nullptr;
+          break;
+        }
+        ExactOp = &Op;
+      }
+    if (!ExactOp || Operand.InputIndex >= ExactOp->NumInputs ||
+        !ExactOp->Inputs[Operand.InputIndex].isConst() ||
+        ExactOp->Inputs[Operand.InputIndex].Size != 4 ||
+        ExactOp->Inputs[Operand.InputIndex].Provenance !=
+            ConstantAddressProvenance::Scalar ||
+        static_cast<uint32_t>(ExactOp->Inputs[Operand.InputIndex].Offset) !=
+            Encoded)
+      continue;
+    const ModelOutputIdentity Identity = std::make_tuple(
+        Operand.InstructionAddr, Operand.OpSeq,
+        static_cast<uint8_t>(Operand.OutputWitness.Space),
+        Operand.OutputWitness.Offset, Operand.OutputWitness.Size,
+        static_cast<uint8_t>(Operand.OutputWitness.Provenance),
+        Operand.OutputWitness.AddressOwnerVA);
+    if (!ConsumeProduct(ModelOutputKeyWork,
+                        OrderedLookupWork(SeenAmbiguousOutputs.size())) ||
+        !ConsumeProduct(ModelOutputKeyWork, 2) ||
+        !consumeI386GOTOFFProposalEvidence(1))
+      return false;
+    if (!SeenAmbiguousOutputs.insert(Identity).second)
+      continue;
+    AmbiguousAlternatives.push_back(
+        {Operand.OutputWitness, Operand.InstructionAddr, Operand.OpSeq,
+         /*DefinedAtPoint=*/true});
+  }
+  if (!DuplicateAlternatives.empty()) {
+    if (DuplicateAlternatives.size() >
+        std::numeric_limits<size_t>::max() - AmbiguousAlternatives.size())
+      return false;
+    const size_t CombinedAlternatives =
+        AmbiguousAlternatives.size() + DuplicateAlternatives.size();
+    if (!ConsumeProduct(CombinedAlternatives, 2))
+      return false;
+    AmbiguousAlternatives.reserve(CombinedAlternatives);
+    std::move(DuplicateAlternatives.begin(), DuplicateAlternatives.end(),
+              std::back_inserter(AmbiguousAlternatives));
+  }
+  if (Alternatives.empty() && AmbiguousAlternatives.empty())
     return false;
 
   // A peeled/loop-body pair can dispatch through the same GOTOFF table.  On
@@ -2068,14 +2247,23 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
   // replays both the index and address-role certificates before publication.
   std::optional<std::set<va_t>> SavedProofRoots;
   if (ActiveJumpTableProofRoots) {
-    if (!consumeI386GOTOFFProposalEvidence(ActiveJumpTableProofRoots->size()))
+    // Copy traversal, destination nodes, and eventual local destruction.
+    if (!ConsumeProduct(ActiveJumpTableProofRoots->size(), 3))
       return false;
     SavedProofRoots = *ActiveJumpTableProofRoots;
   }
+  auto RestoreProofRoots = [&]() {
+    ActiveJumpTableProofRoots = std::move(SavedProofRoots);
+  };
   if (!ActiveJumpTableProofRoots) {
     const auto ProposalRootKey = std::make_tuple(
         TableBase, ActiveJumpTableCandidateProofRank,
         ActiveJumpTableConsumerAudit);
+    constexpr size_t ProposalRootKeyWork = 3;
+    if (!ConsumeProduct(
+            ProposalRootKeyWork,
+            OrderedLookupWork(I386GOTOFFProposalRootCache.size())))
+      return false;
     auto Cached = I386GOTOFFProposalRootCache.find(ProposalRootKey);
     if (Cached == I386GOTOFFProposalRootCache.end()) {
       std::optional<std::set<va_t>> ProposalRoots;
@@ -2085,6 +2273,11 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
       bool RunAnalysisComplete = true;
       while (Run < limits::kMaxJumpTableEntries) {
         if (!consumeI386GOTOFFProposalEvidence()) {
+          RunAnalysisComplete = false;
+          break;
+        }
+        if (!consumeI386GOTOFFProposalEvidence(
+                OrderedLookupWork(CurrentImg->CodePtrRelocSlots.size()))) {
           RunAnalysisComplete = false;
           break;
         }
@@ -2098,121 +2291,340 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
       if (!RunAnalysisComplete)
         return false;
 
-      if (!consumeI386GOTOFFProposalEvidence(
-              RelocatedInstructionAddressOccurrences.size()) ||
-          !consumeI386GOTOFFProposalEvidence(
-              CurrentImg->RelCodeTableAnchors.size()) ||
-          !consumeI386GOTOFFProposalEvidence(
-              CurrentImg->DataAddressRelocOperands.size()))
-        return false;
-      const std::set<va_t> DecodedAnchors =
-          currentRelocatedInstructionTableAnchors(*CurrentImg);
-      Run = boundCodePtrRunByNextAnchor(*CurrentImg, TableBase, PointerSize,
-                                        Run, DecodedAnchors);
-      if (!consumeI386GOTOFFProposalEvidence(DecodedAnchors.size()) ||
-          !consumeI386GOTOFFProposalEvidence(
-              CurrentImg->DataAddressRelocOperands.size()))
-        return false;
-      if (Run >= limits::kMinJumpTableEntries &&
-          codePtrRelocRunHasExactBoundary(*CurrentImg, TableBase, PointerSize,
-                                          Run, DecodedAnchors)) {
-        if (!consumeI386GOTOFFProposalEvidence(Run) ||
-            !consumeI386GOTOFFProposalEvidence(PersistentCFGRoots.size()) ||
-            !consumeI386GOTOFFProposalEvidence(RelocationCFGRootSources.size()))
+      if (Run >= limits::kMinJumpTableEntries) {
+        const size_t AddressOccurrenceCount =
+            RelocatedInstructionAddressOccurrences.size();
+        const size_t RelAnchorCount = CurrentImg->RelCodeTableAnchors.size();
+        const size_t DataFieldCount =
+            CurrentImg->DataAddressRelocOperands.size();
+        if (AddressOccurrenceCount >
+                std::numeric_limits<size_t>::max() - RelAnchorCount ||
+            AddressOccurrenceCount + RelAnchorCount >
+                std::numeric_limits<size_t>::max() - DataFieldCount)
+          return consumeI386GOTOFFProposalEvidence(
+                     std::numeric_limits<size_t>::max()),
+                 false;
+        const size_t AnchorUpper =
+            AddressOccurrenceCount + RelAnchorCount + DataFieldCount;
+        // currentRelocatedInstructionTableAnchors performs three ordered
+        // membership lookups per occurrence and may retain one set node.  Pay
+        // the maximum result allocation/destruction before construction.
+        const size_t CurrentAnchorPerOccurrence =
+            OrderedLookupWork(PublishedReachableInsns.size()) +
+            OrderedLookupWork(CurrentImg->RelCodeRelocSlots.size()) +
+            OrderedLookupWork(CurrentImg->CodePtrRelocSlots.size()) +
+            OrderedLookupWork(AddressOccurrenceCount) + 3;
+        if (!ConsumeProduct(AddressOccurrenceCount,
+                            CurrentAnchorPerOccurrence))
           return false;
-        for (const auto &[Root, Sources] : RelocationCFGRootSources) {
-          (void)Root;
-          if (!consumeI386GOTOFFProposalEvidence(Sources.size()))
-            return false;
-        }
-        if (!consumeI386GOTOFFProposalEvidence(
-                RelocatedInstructionAddressOccurrences.size()) ||
-            !consumeI386GOTOFFProposalEvidence(
-                CurrentImg->RelCodeTableAnchors.size()) ||
-            !consumeI386GOTOFFProposalEvidence(
-                CurrentImg->DataAddressRelocOperands.size()))
-          return false;
-        JumpTableInfo Candidate;
-        Candidate.setBaseAddr(TableBase);
-        Candidate.EntrySize = PointerSize;
-        Candidate.EntryStride = PointerSize;
-        Candidate.PhysicalCapacity = Run;
-        Candidate.RelocAbsolute = true;
-        Candidate.StorageRanges.push_back(
-            {TableBase, static_cast<uint16_t>(PointerSize), PointerSize, Run});
-        Candidate.SuppressibleRelocationSlots.reserve(Run);
-        for (uint32_t Slot = 0; Slot < Run; ++Slot)
-          Candidate.SuppressibleRelocationSlots.push_back(
-              TableBase + uint64_t(Slot) * PointerSize);
 
-        // Prepay the lower-rank proposal universe consumed by
-        // jumpTableProofRoots.  A rank-0 candidate proves itself against the
-        // full persistent-root set; later candidates may suppress only exact
-        // relocation slots from strictly lower ranks.
-        if (!consumeI386GOTOFFProposalEvidence(
-                PriorStrongJumpTableProposals.size()))
+        // boundCodePtrRunByNextAnchor copies/merges the complete anchor
+        // universe, audits every relocation field's executable owner and then
+        // walks the ordered suffix looking for the next code-pointer slot.
+        // The ELF owner classifier's worst case scans the segment/section,
+        // import-range, known-code and symbol inventories.  This conservative
+        // prepayment happens before either helper allocates a node.
+        size_t OwnerQueryWork = 1;
+        if (!AccumulateProduct(OwnerQueryWork, 3,
+                               CurrentImg->Segments.size()) ||
+            !AccumulateProduct(OwnerQueryWork, 2,
+                               CurrentImg->Sections.size()) ||
+            !AccumulateProduct(
+                OwnerQueryWork, 2,
+                OrderedLookupWork(CurrentImg->ImportStubIndices.size())) ||
+            !AccumulateProduct(OwnerQueryWork, 2,
+                               CurrentImg->ImportStubRanges.size()) ||
+            !AccumulateProduct(
+                OwnerQueryWork, 3,
+                OrderedLookupWork(CurrentImg->RuntimeFunctionAddrs.size())) ||
+            !AccumulateProduct(
+                OwnerQueryWork, 1,
+                OrderedLookupWork(
+                    CurrentImg->VerifiedFunctionEntries.size())) ||
+            !AccumulateProduct(OwnerQueryWork, 1,
+                               CurrentImg->KnownCodeRanges.size()) ||
+            !AccumulateProduct(OwnerQueryWork, 1,
+                               CurrentImg->Symbols.size()))
+          return consumeI386GOTOFFProposalEvidence(
+                     std::numeric_limits<size_t>::max()),
+                 false;
+        const size_t AnchorLookup = OrderedLookupWork(AnchorUpper);
+        if (!ConsumeProduct(RelAnchorCount, AnchorLookup + 3) ||
+            !ConsumeProduct(AddressOccurrenceCount, AnchorLookup + 3) ||
+            !ConsumeProduct(DataFieldCount,
+                            OwnerQueryWork + AnchorLookup + 4) ||
+            !consumeI386GOTOFFProposalEvidence(AnchorLookup) ||
+            !ConsumeProduct(
+                AnchorUpper,
+                OrderedLookupWork(CurrentImg->CodePtrRelocSlots.size()) + 1))
           return false;
-        for (const auto &[Addr, Proposal] :
-             PriorStrongJumpTableProposals) {
-          if (Addr == ActiveJumpTableCandidateAddr ||
-              (!ActiveJumpTableConsumerAudit &&
-               Proposal.ProofRank >= ActiveJumpTableCandidateProofRank))
-            continue;
-          if (!consumeI386GOTOFFProposalEvidence(
-                  Proposal.StorageRanges.size()) ||
-              !consumeI386GOTOFFProposalEvidence(
-                  Proposal.SuppressibleRelocationSlots.size()))
-            return false;
+        const std::set<va_t> DecodedAnchors =
+            currentRelocatedInstructionTableAnchors(*CurrentImg);
+        Run = boundCodePtrRunByNextAnchor(*CurrentImg, TableBase, PointerSize,
+                                          Run, DecodedAnchors);
+
+        // codePtrRelocRunHasExactBoundary first resolves the mapped owner,
+        // then checks both anchor sets and finally scans all data fields.  Its
+        // complete work is prepaid independently of the boolean result.
+        size_t OwnerEndWork = 1;
+        if (!AccumulateProduct(OwnerEndWork, 2,
+                               CurrentImg->Segments.size()) ||
+            !AccumulateProduct(OwnerEndWork, 2,
+                               CurrentImg->Sections.size()))
+          return consumeI386GOTOFFProposalEvidence(
+                     std::numeric_limits<size_t>::max()),
+                 false;
+        if (!consumeI386GOTOFFProposalEvidence(OwnerEndWork) ||
+            !consumeI386GOTOFFProposalEvidence(
+                OrderedLookupWork(CurrentImg->RelCodeTableAnchors.size())) ||
+            !consumeI386GOTOFFProposalEvidence(
+                OrderedLookupWork(DecodedAnchors.size())) ||
+            !ConsumeProduct(DataFieldCount, OwnerQueryWork + 1))
+          return false;
+        if (Run < limits::kMinJumpTableEntries ||
+            !codePtrRelocRunHasExactBoundary(
+                *CurrentImg, TableBase, PointerSize, Run, DecodedAnchors)) {
+          Run = 0;
         }
-        ProposalRoots = jumpTableProofRoots(Candidate);
+
+        if (Run >= limits::kMinJumpTableEntries) {
+          // Candidate owns one storage-range node and Run suppressible slot
+          // values.  Pay their construction and destruction before either
+          // temporary container is populated.
+          if (!ConsumeProduct(size_t{1}, size_t{2}) ||
+              !ConsumeProduct(Run, size_t{4}))
+            return false;
+          JumpTableInfo Candidate;
+          Candidate.setBaseAddr(TableBase);
+          Candidate.EntrySize = PointerSize;
+          Candidate.EntryStride = PointerSize;
+          Candidate.PhysicalCapacity = Run;
+          Candidate.RelocAbsolute = true;
+          Candidate.StorageRanges.push_back({
+              TableBase, static_cast<uint16_t>(PointerSize), PointerSize, Run});
+          Candidate.SuppressibleRelocationSlots.reserve(Run);
+          for (uint32_t Slot = 0; Slot < Run; ++Slot)
+            Candidate.SuppressibleRelocationSlots.push_back(
+                TableBase + uint64_t(Slot) * PointerSize);
+
+          // Mirror budgetedJumpTableProofRoots exactly.  A rank-0 candidate
+          // proves itself against the full persistent-root set; later
+          // candidates may suppress only exact relocation slots from strictly
+          // lower ranks.
+          if (!consumeI386GOTOFFProposalEvidence(
+                  PriorStrongJumpTableProposals.size()))
+            return false;
+          size_t StorageCount = 1;
+          size_t SuppressibleSlotCount = Run;
+          for (const auto &[Addr, Proposal] :
+               PriorStrongJumpTableProposals) {
+            if (Addr == ActiveJumpTableCandidateAddr ||
+                (!ActiveJumpTableConsumerAudit &&
+                 Proposal.ProofRank >= ActiveJumpTableCandidateProofRank))
+              continue;
+            if (Proposal.StorageRanges.size() >
+                    std::numeric_limits<size_t>::max() - StorageCount ||
+                Proposal.SuppressibleRelocationSlots.size() >
+                    std::numeric_limits<size_t>::max() -
+                        SuppressibleSlotCount)
+              return consumeI386GOTOFFProposalEvidence(
+                         std::numeric_limits<size_t>::max()),
+                     false;
+            StorageCount += Proposal.StorageRanges.size();
+            SuppressibleSlotCount +=
+                Proposal.SuppressibleRelocationSlots.size();
+          }
+          if (!ConsumeProduct(PersistentCFGRoots.size(), size_t{2}) ||
+              !ConsumeProduct(
+                  RelocatedInstructionAddressOccurrences.size(), size_t{2}) ||
+              !ConsumeProduct(StorageCount, size_t{2}) ||
+              !ConsumeProduct(SuppressibleSlotCount, size_t{4}) ||
+              !consumeI386GOTOFFProposalEvidence(
+                  ProtectedJumpTableRelocationSlots
+                      ? ProtectedJumpTableRelocationSlots->size()
+                      : 0) ||
+              !ConsumeProduct(SuppressibleSlotCount, StorageCount) ||
+              !ConsumeProduct(RelocationCFGRootSources.size(), size_t{2}))
+            return false;
+          if (StorageCount > std::numeric_limits<size_t>::max() - 2)
+            return consumeI386GOTOFFProposalEvidence(
+                       std::numeric_limits<size_t>::max()),
+                   false;
+          for (const auto &[Target, Sources] : RelocationCFGRootSources) {
+            (void)Target;
+            if (!ConsumeProduct(Sources.size(), StorageCount + 2))
+              return false;
+          }
+          // Candidate.StorageRanges carries the exact boundary authenticated
+          // above, so jumpTableProofRoots consumes it directly without
+          // rebuilding the anchor/boundary inventory a second time.
+          ProposalRoots = jumpTableProofRoots(Candidate, &DecodedAnchors);
+        }
       }
+      if (!ConsumeProduct(
+              ProposalRootKeyWork,
+              OrderedLookupWork(I386GOTOFFProposalRootCache.size() + 1)) ||
+          !ConsumeProduct(ProposalRootKeyWork, 2) ||
+          !consumeI386GOTOFFProposalEvidence(1))
+        return false;
       Cached = I386GOTOFFProposalRootCache
                    .emplace(ProposalRootKey, std::move(ProposalRoots))
                    .first;
     }
     if (Cached->second) {
-      if (!consumeI386GOTOFFProposalEvidence(Cached->second->size()))
+      // Source traversal plus destination nodes and their stage cleanup.
+      if (!ConsumeProduct(Cached->second->size(), 3))
         return false;
       ActiveJumpTableProofRoots = *Cached->second;
     }
   }
 
   std::vector<va_t> ProofRootIdentity;
-  if (ActiveJumpTableProofRoots)
+  if (ActiveJumpTableProofRoots) {
+    // Set traversal, vector elements, and eventual key/vector destruction.
+    if (!ConsumeProduct(ActiveJumpTableProofRoots->size(), 3)) {
+      RestoreProofRoots();
+      return false;
+    }
     ProofRootIdentity.assign(ActiveJumpTableProofRoots->begin(),
                              ActiveJumpTableProofRoots->end());
+  }
   const NdVar &BaseInput = Use.Inputs[BaseSide];
-  const I386GOTOFFModelReachKey ReachKey = std::make_tuple(
-      Use.Addr, Use.Seq, BaseSide, TableBase,
+  I386GOTOFFModelReachCacheKey CacheKey = std::make_tuple(
+      ActiveJumpTableCandidateAddr, Use.Addr, Use.Seq, BaseSide, TableBase,
       static_cast<uint8_t>(BaseInput.Space), BaseInput.Offset, BaseInput.Size,
       static_cast<uint8_t>(BaseInput.Provenance), BaseInput.AddressOwnerVA,
       std::move(ProofRootIdentity));
-  if (const auto Cached = I386GOTOFFModelReachCache.find(ReachKey);
-      Cached != I386GOTOFFModelReachCache.end()) {
-    ActiveJumpTableProofRoots = SavedProofRoots;
-    return Cached->second;
-  }
-
-  // tableValuesMatchAtUses builds and propagates a whole-function proof graph.
-  // Give it the same candidate-local account so graph construction, state
-  // propagation and symbolic comparison cannot restart an unmetered private
-  // allowance.  An unfinished query is not a cacheable false fact: a later
-  // tail-call conversion must see the sticky incomplete bit and preserve the
-  // table-shaped branch opaquely.
-  bool AnalysisComplete = false;
-  const std::vector<bool> Matches = tableValuesMatchAtUses(
-      {{Use.Inputs[BaseSide], Use.Addr, Use.Seq, std::move(Alternatives)}},
-      &AnalysisComplete, nullptr, InvalidVA, nullptr,
-      &I386GOTOFFProposalEvidenceRemaining);
-  if (!AnalysisComplete || Matches.size() != 1) {
-    I386GOTOFFProposalEvidenceIncomplete = true;
-    ActiveJumpTableProofRoots = SavedProofRoots;
+  I386GOTOFFAmbiguityReplayKey ReplayKey = std::make_tuple(
+      ActiveJumpTableCandidateAddr, Use.Addr, Use.Seq, BaseSide, TableBase);
+  const size_t CacheKeyWork = std::get<10>(CacheKey).size() + 11;
+  constexpr size_t ReplayKeyWork = 5;
+  auto PrepayKeySetInsert = [&](const auto &Set) {
+    return ConsumeProduct(ReplayKeyWork, OrderedLookupWork(Set.size())) &&
+           ConsumeProduct(ReplayKeyWork, 1) &&
+           consumeI386GOTOFFProposalEvidence(1);
+  };
+  auto PublishCompletedAmbiguousQuery =
+      [&](const I386GOTOFFModelReachResult &Result) {
+        if (!Result.AmbiguousQueryIssued)
+          return true;
+        if (!PrepayKeySetInsert(StageReplayedI386GOTPCKeys))
+          return false;
+        if (Result.AmbiguousReach &&
+            !PrepayKeySetInsert(CurrentI386GOTOFFAmbiguityKeys))
+          return false;
+        StageReplayedI386GOTPCKeys.insert(ReplayKey);
+        if (Result.AmbiguousReach)
+          CurrentI386GOTOFFAmbiguityKeys.insert(ReplayKey);
+        return true;
+      };
+  if (!ConsumeProduct(CacheKeyWork,
+                      OrderedLookupWork(I386GOTOFFModelReachCache.size()))) {
+    RestoreProofRoots();
     return false;
   }
-  const bool Result = Matches.front();
-  I386GOTOFFModelReachCache.emplace(ReachKey, Result);
-  ActiveJumpTableProofRoots = SavedProofRoots;
-  return Result;
+  const auto Cached = I386GOTOFFModelReachCache.find(CacheKey);
+  if (Cached != I386GOTOFFModelReachCache.end()) {
+    if (!PublishCompletedAmbiguousQuery(Cached->second)) {
+      RestoreProofRoots();
+      return false;
+    }
+    if (Cached->second.AmbiguousReach)
+      I386GOTOFFAmbiguousModelReach = true;
+    RestoreProofRoots();
+    return Cached->second.Authenticated && !Cached->second.AmbiguousReach;
+  }
+
+  std::vector<JumpTableValueQuery> Queries;
+  if (!consumeI386GOTOFFProposalEvidence(6)) {
+    RestoreProofRoots();
+    return false;
+  }
+  Queries.reserve(2);
+  std::optional<size_t> AuthenticatedQuery;
+  std::optional<size_t> AmbiguousQuery;
+  if (!Alternatives.empty()) {
+    AuthenticatedQuery = Queries.size();
+    JumpTableValueQuery Query;
+    Query.Candidate = Use.Inputs[BaseSide];
+    Query.UseAddr = Use.Addr;
+    Query.UseSeq = Use.Seq;
+    Query.Alternatives = std::move(Alternatives);
+    Queries.push_back(std::move(Query));
+  }
+  if (!AmbiguousAlternatives.empty()) {
+    AmbiguousQuery = Queries.size();
+    JumpTableValueQuery Query;
+    Query.Candidate = Use.Inputs[BaseSide];
+    Query.UseAddr = Use.Addr;
+    Query.UseSeq = Use.Seq;
+    Query.Alternatives = std::move(AmbiguousAlternatives);
+    Query.Relation = JumpTableValueRelation::MayDepend;
+    Queries.push_back(std::move(Query));
+  }
+  bool AnalysisComplete = false;
+  std::vector<bool> QueryAnalysisComplete;
+  I386GOTOFFGraphQueryIssuedForTesting = true;
+  const std::vector<bool> Matches = tableValuesMatchAtUses(
+      Queries, &AnalysisComplete, &QueryAnalysisComplete,
+      /*CandidateBranchOverride=*/InvalidVA,
+      /*CandidateTargetsOverride=*/nullptr,
+      &I386GOTOFFProposalEvidenceRemaining);
+  auto QueryComplete = [&](size_t Index) {
+    return Index < Matches.size() && Index < QueryAnalysisComplete.size() &&
+           QueryAnalysisComplete[Index];
+  };
+  const bool IssuedQueriesComplete =
+      AnalysisComplete && Matches.size() == Queries.size() &&
+      QueryAnalysisComplete.size() == Queries.size() &&
+      std::all_of(QueryAnalysisComplete.begin(), QueryAnalysisComplete.end(),
+                  [](bool Complete) { return Complete; });
+  if (!IssuedQueriesComplete) {
+    I386GOTOFFGraphQueryBudgetExhaustedForTesting |=
+        I386GOTOFFProposalEvidenceRemaining == 0;
+    // A graph/resource-incomplete query has no cacheable semantic result.
+    // Mark the candidate stage incomplete transactionally; a later graph with
+    // a fresh allowance must replay both authenticated and ambiguous paths.
+    I386GOTOFFProposalEvidenceIncomplete = true;
+    RestoreProofRoots();
+    return false;
+  }
+  I386GOTOFFModelReachResult Result;
+  Result.Authenticated =
+      AuthenticatedQuery && QueryComplete(*AuthenticatedQuery) &&
+      Matches[*AuthenticatedQuery];
+  Result.AmbiguousQueryIssued = AmbiguousQuery.has_value();
+  Result.AmbiguousReach =
+      AmbiguousQuery && QueryComplete(*AmbiguousQuery) &&
+      Matches[*AmbiguousQuery];
+  // Prepay both the generation-local replay records and the cache's ordered
+  // insertion/key ownership before publishing any of them.  CacheKey's root
+  // vector is copied into each set but moved into the cache node.
+  if (Result.AmbiguousQueryIssued) {
+    if (!PrepayKeySetInsert(StageReplayedI386GOTPCKeys) ||
+        (Result.AmbiguousReach &&
+         !PrepayKeySetInsert(CurrentI386GOTOFFAmbiguityKeys))) {
+      RestoreProofRoots();
+      return false;
+    }
+  }
+  if (!ConsumeProduct(
+          CacheKeyWork,
+          OrderedLookupWork(I386GOTOFFModelReachCache.size() + 1)) ||
+      !ConsumeProduct(CacheKeyWork, 2) ||
+      !consumeI386GOTOFFProposalEvidence(1)) {
+    RestoreProofRoots();
+    return false;
+  }
+  if (Result.AmbiguousQueryIssued)
+    StageReplayedI386GOTPCKeys.insert(ReplayKey);
+  if (Result.AmbiguousReach)
+    CurrentI386GOTOFFAmbiguityKeys.insert(ReplayKey);
+  if (Result.AmbiguousReach)
+    I386GOTOFFAmbiguousModelReach = true;
+  I386GOTOFFModelReachCache.emplace(std::move(CacheKey), Result);
+  RestoreProofRoots();
+  return Result.Authenticated && !Result.AmbiguousReach;
 }
 
 /// Resolve a LOAD address of the form INT_ADD(base, index*scale) into its

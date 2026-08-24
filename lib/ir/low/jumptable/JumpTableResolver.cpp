@@ -236,12 +236,16 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   } CandidateScope{ActiveJumpTableCandidateAddr,
                    ActiveJumpTableCandidateProofRank,
                    ActiveJumpTableConsumerAudit, Rec.Addr};
-  const size_t InitialI386GOTOFFEvidenceBudget = std::min<size_t>(
-      limits::kMaxJumpTableEvidenceWork,
+  const size_t RequestedI386GOTOFFEvidenceBudget = std::min<size_t>(
+      limits::kMaxJumpTableValueMatchEvidenceWork,
       I386GOTOFFProposalEvidenceBudgetForTesting.value_or(
-          limits::kMaxJumpTableEvidenceWork));
-  I386GOTOFFProposalEvidenceRemaining = InitialI386GOTOFFEvidenceBudget;
+          limits::kMaxJumpTableValueMatchEvidenceWork));
+  I386GOTOFFProposalEvidenceRemaining =
+      RequestedI386GOTOFFEvidenceBudget;
+  I386GOTOFFProposalShapeClaimed = false;
   I386GOTOFFProposalEvidenceIncomplete = false;
+  I386GOTOFFAmbiguousModelReach = false;
+  CurrentI386GOTOFFAmbiguityKeys.clear();
   const size_t CandidateEvidenceLimit = std::min<size_t>(
       limits::kMaxJumpTableMaskFixedPointEvidenceWork,
       MaskFixedPointEvidenceBudgetForTesting.value_or(
@@ -257,6 +261,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   bool CandidateEvidencePublished = false;
   bool CandidateEvidenceAnalysisIncomplete = false;
   bool CandidateEvidenceChargeFailed = false;
+  bool IncompleteBranchInsertPrepaid = false;
+  bool IncompleteBranchAlreadyInserted = false;
   bool CandidateTargetMaterializationStarted = false;
   bool CandidateValidatedPhysicalTableIdentity = false;
   bool CurrentCandidateIsStrongProposal = false;
@@ -267,10 +273,14 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     const size_t Initial;
     const size_t &Remaining;
     const bool &ShapeClaimed;
+    const bool &I386GOTOFFShapeClaimed;
     const bool &Published;
     const bool &AnalysisIncomplete;
     const bool &I386GOTOFFIncomplete;
+    const bool &I386GOTOFFSemanticAmbiguous;
     const bool &ChargeFailed;
+    const bool &IncompleteInsertPrepaid;
+    const bool &IncompleteAlreadyInserted;
     const bool &StrongProposalRecorded;
     const bool StageActive;
     size_t &StageRemaining;
@@ -287,7 +297,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       // branch fail-closed.  A completed semantic rejection is different: it
       // may describe a real callback table and receives unsafe branch identity
       // only from the explicit full-object/local-target ownership proof below.
-      if (ShapeClaimed && !Published && EvidenceIncomplete)
+      if ((ShapeClaimed || I386GOTOFFShapeClaimed) && !Published &&
+          EvidenceIncomplete && IncompleteInsertPrepaid &&
+          !IncompleteAlreadyInserted)
         IncompleteBranches.insert(BranchAddr);
       else if (!StageActive && (Published || !EvidenceIncomplete))
         IncompleteBranches.erase(BranchAddr);
@@ -307,6 +319,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       if (I386GOTOFFIncomplete || (!Published && EvidenceIncomplete)) {
         It->second = StrongJumpTableProposalOutcome::EvidenceIncomplete;
         StageIncomplete = true;
+      } else if (I386GOTOFFSemanticAmbiguous) {
+        It->second = StrongJumpTableProposalOutcome::SemanticOpaque;
       } else if (StrongProposalRecorded) {
         It->second = StrongJumpTableProposalOutcome::StrongProposed;
       } else {
@@ -320,10 +334,14 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       InitialCandidateEvidenceBudget,
       CandidateEvidenceBudget,
       CandidateEvidenceShapeClaimed,
+      I386GOTOFFProposalShapeClaimed,
       CandidateEvidencePublished,
       CandidateEvidenceAnalysisIncomplete,
       I386GOTOFFProposalEvidenceIncomplete,
+      I386GOTOFFAmbiguousModelReach,
       CandidateEvidenceChargeFailed,
+      IncompleteBranchInsertPrepaid,
+      IncompleteBranchAlreadyInserted,
       CandidateStrongProposalRecorded,
       CandidateProposalStageActive,
       CandidateProposalStageEvidenceRemaining,
@@ -363,6 +381,35 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         }
         return consumeCandidateEvidence(Product);
       };
+  auto orderedLookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (size_t N = Count; N > 1; N = (N + 1) / 2)
+      ++Work;
+    return Work;
+  };
+  // Reserve the exact branch-scoped incomplete marker before any nested proof
+  // can exhaust its allowance.  CandidateOutcome may then insert without
+  // allocating or performing an unmetered ordered lookup at zero balance; the
+  // reservation also covers final clear/destruction of the set node.
+  if (!consumeCandidateProducts(
+          {{1, orderedLookupWork(IndexDomainEvidenceIncompleteBranches.size())},
+           {1, 2}}))
+    return {};
+  IncompleteBranchInsertPrepaid = true;
+  auto insertIncompleteBranchOnce = [&]() {
+    if (IncompleteBranchAlreadyInserted)
+      return;
+    IndexDomainEvidenceIncompleteBranches.insert(Rec.Addr);
+    IncompleteBranchAlreadyInserted = true;
+  };
+  // Reserve the nested i386 allowance from the candidate/stage aggregate
+  // before the query can traverse the graph or publish cache/set state.  The
+  // dedicated value-match cap covers both exact proposal bookkeeping and the
+  // bounded whole-CFG query; the scope refunds only the unused tail.
+  const size_t InitialI386GOTOFFEvidenceBudget = std::min(
+      RequestedI386GOTOFFEvidenceBudget, CandidateEvidenceBudget);
+  CandidateEvidenceBudget -= InitialI386GOTOFFEvidenceBudget;
+  I386GOTOFFProposalEvidenceRemaining = InitialI386GOTOFFEvidenceBudget;
   struct CandidateI386GOTOFFEvidenceCharge {
     const size_t Initial;
     const size_t &Remaining;
@@ -370,12 +417,14 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     bool &CandidateChargeFailed;
 
     ~CandidateI386GOTOFFEvidenceCharge() {
-      if (Remaining > Initial || Initial - Remaining > CandidateRemaining) {
+      if (Remaining > Initial ||
+          Remaining >
+              std::numeric_limits<size_t>::max() - CandidateRemaining) {
         CandidateRemaining = 0;
         CandidateChargeFailed = true;
         return;
       }
-      CandidateRemaining -= Initial - Remaining;
+      CandidateRemaining += Remaining;
     }
   } CandidateI386Charge{InitialI386GOTOFFEvidenceBudget,
                         I386GOTOFFProposalEvidenceRemaining,
@@ -404,12 +453,6 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       }
     }
   }
-  auto orderedLookupWork = [](size_t Count) {
-    size_t Work = 1;
-    for (size_t N = Count; N > 1; N = (N + 1) / 2)
-      ++Work;
-    return Work;
-  };
   // Prepay every dynamic field that a JumpTableInfo copy or equality walk can
   // retain/visit.  The outer-vector charges happen before inspecting nested
   // vectors, and all nested charges happen before the caller performs the copy
@@ -950,6 +993,40 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Recovered = sliceBackForTableBase(Rec, Info);
     if (Recovered && !HasOccurrenceMetadata(Info))
       Recovered = RejectIncompleteCandidate();
+  }
+  CandidateEvidenceShapeClaimed |= I386GOTOFFProposalShapeClaimed;
+  if (I386GOTOFFAmbiguousModelReach) {
+    // A complete positive MayDepend proof is a semantic local rejection, not
+    // resource incompleteness.  Persist only this branch as opaque and let the
+    // stage commit independent callback/table candidates normally.
+    CandidateEvidenceShapeClaimed = true;
+    if (CurrentI386GOTOFFAmbiguityKeys.empty())
+      return {};
+    if (!consumeCandidateProducts(
+            {{1, orderedLookupWork(StageAmbiguousI386GOTPCBranches.size())},
+             {1, orderedLookupWork(
+                     PendingAmbiguousI386GOTPCBranches.size())},
+             // Prepay both set nodes and their eventual rollback/final-clear
+             // destruction before either generation-local mutation.
+             {1, 4}}))
+      return {};
+    size_t FuturePendingKeys = PendingAmbiguousI386GOTPCKeys.size();
+    for (const I386GOTOFFAmbiguityReplayKey &Key :
+         CurrentI386GOTOFFAmbiguityKeys) {
+      constexpr size_t KeyWork = 5;
+      const size_t PendingLookup =
+          orderedLookupWork(FuturePendingKeys++);
+      if (!consumeCandidateProducts(
+              {{KeyWork, PendingLookup + 1}, {1, 1}}))
+        return {};
+    }
+    StageAmbiguousI386GOTPCBranches.insert(Rec.Addr);
+    PendingAmbiguousI386GOTPCBranches.insert(Rec.Addr);
+    for (const I386GOTOFFAmbiguityReplayKey &Key :
+         CurrentI386GOTOFFAmbiguityKeys) {
+      PendingAmbiguousI386GOTPCKeys.insert(Key);
+    }
+    return {};
   }
   if (!Recovered) {
     if (I386GOTOFFProposalEvidenceIncomplete) {
@@ -1999,7 +2076,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   if ((IncompleteMaskDomain || SemanticMaskDomainAmbiguous) &&
       Info.AuthenticatedGuardBound == 0 && Info.AuthenticatedModuloBound == 0) {
     CandidateEvidenceAnalysisIncomplete |= IncompleteMaskDomain;
-    ClaimRejectedPhysicalTableIdentity();
+    const bool ClaimedPhysicalIdentity = ClaimRejectedPhysicalTableIdentity();
+    if (IncompleteMaskDomain && ClaimedPhysicalIdentity)
+      insertIncompleteBranchOnce();
     return {};
   }
   if (InitialModuloEvidenceIncomplete && !Info.IndexDomainAuthenticated &&

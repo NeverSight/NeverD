@@ -33,6 +33,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cctype>
+#include <cstring>
 #include <functional>
 #include <optional>
 #include <set>
@@ -425,6 +426,11 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
   const neverd::LowFunc Unauthenticated = Recover(*Negative);
   EXPECT_TRUE(Unauthenticated.JumpTables.empty())
       << "a numerically equal absolute seed is not an exact GOTPC producer";
+  EXPECT_TRUE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_BR))
+      << "missing model provenance alone must not be mistaken for a scoped "
+         "multiply-owned-field tombstone";
+  EXPECT_TRUE(Unauthenticated.UnsafeIndirectBranchAddresses.empty());
 
   std::vector<neverd::va_t> MatchingFields;
   for (const auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
@@ -455,6 +461,396 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
   EXPECT_TRUE(Recover(*Positive).JumpTables.empty())
       << "an absolute relocation with the same folded value and owner must "
          "not borrow GOTOFF semantics";
+}
+
+TEST_F(JTE_X86_32,
+       SameI386FieldWithMultipleValueRelocationsStaysOpaque) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_same_field_conflict");
+  const neverd::Symbol *PC =
+      Image.findSymbol("jt_i386_gotoff_same_field_conflict_pc");
+  const neverd::Symbol *Field =
+      Image.findSymbol("jt_i386_gotoff_same_field_conflict_field");
+  const neverd::Symbol *Bias =
+      Image.findSymbol("jt_i386_gotpc_conflict_bias");
+  const neverd::Symbol *TextBase =
+      Image.findSymbol("jt_i386_gotpc_text_base");
+  const neverd::Symbol *AmbiguousBranch = Image.findSymbol(
+      "jt_i386_gotoff_same_field_conflict_ambiguous_branch");
+  const neverd::Symbol *CallbackBranch = Image.findSymbol(
+      "jt_i386_gotoff_same_field_conflict_callback_branch");
+  const neverd::Symbol *ValidBranch = Image.findSymbol(
+      "jt_i386_gotoff_same_field_conflict_valid_branch");
+  const neverd::Symbol *ZeroBase = Image.findSymbol(
+      "jt_i386_gotoff_same_field_conflict_zero_base");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(PC, nullptr);
+  ASSERT_NE(Field, nullptr);
+  ASSERT_NE(Bias, nullptr);
+  ASSERT_NE(TextBase, nullptr);
+  ASSERT_NE(AmbiguousBranch, nullptr);
+  ASSERT_NE(CallbackBranch, nullptr);
+  ASSERT_NE(ValidBranch, nullptr);
+  ASSERT_NE(ZeroBase, nullptr);
+  ASSERT_NE(Bias->Addr, TextBase->Addr)
+      << "the nonzero symbol offset distinguishes original-addend semantics "
+         "from sequential relocation write-back";
+  EXPECT_EQ(Image.AmbiguousI386GOTPCFields.count(Field->Addr), 1u);
+  EXPECT_EQ(Image.I386GOTPCFields.count(Field->Addr), 0u)
+      << "a multiply-owned field is a negative certificate, never an "
+         "authenticated GOTPC model";
+  EXPECT_EQ(Image.CodeAddressRelocOperands.count(Field->Addr), 0u);
+  EXPECT_EQ(Image.DataAddressRelocOperands.count(Field->Addr), 0u);
+  EXPECT_EQ(Image.CodePtrRelocSlots.count(Field->Addr), 0u);
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(Field->Addr), 0u);
+  EXPECT_EQ(Image.CodeRefTargets.count(Bias->Addr), 0u)
+      << "the first R_386_32 writer cannot leave exact provenance behind";
+
+  const uint8_t *FieldBytes = Image.readVA(Field->Addr, 4);
+  ASSERT_NE(FieldBytes, nullptr);
+  uint32_t AppliedField = 0;
+  std::memcpy(&AppliedField, FieldBytes, sizeof(AppliedField));
+  // ld.lld evaluates the last R_386_GOTPC as GOT + A - P, where A is
+  // the original section addend, regardless of the preceding R_386_32.
+  // The loader deliberately models GOT as zero, so this is the exact linked
+  // formula normalized by subtracting the linked GOT base.
+  const uint32_t LLDModelZeroEncoded = static_cast<uint32_t>(
+      TextBase->Addr - PC->Addr - Bias->Addr);
+  EXPECT_EQ(AppliedField, LLDModelZeroEncoded)
+      << "each REL must consume the original section addend; the last "
+         "R_386_GOTPC write must match ld.lld under the loader's model-zero "
+         "GOT convention, rather than consume the preceding R_386_32 result";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low = Builder.build(
+      Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_FALSE(Builder.hasPendingI386GOTPCAmbiguityForTesting())
+      << "the stable graph replays the exact MayDepend query and commits the "
+         "semantic ambiguity certificate without an incomplete carry";
+
+  const neverd::LowOp *DecodedAdd = nullptr;
+  for (const neverd::LowBlock &Block : Low.Blocks)
+    for (const neverd::LowOp &Op : Block.Ops) {
+      if (Op.Addr != PC->Addr + 1 || Op.Opcode != neverd::NdOp::INT_ADD)
+        continue;
+      bool HasLLDImmediate = false;
+      for (unsigned I = 0; I < Op.NumInputs; ++I) {
+        const neverd::NdVar &Input = Op.Inputs[I];
+        HasLLDImmediate |= Input.isConst() && Input.Size == 4 &&
+                           static_cast<uint32_t>(Input.Offset) ==
+                               LLDModelZeroEncoded;
+      }
+      if (HasLLDImmediate)
+        DecodedAdd = &Op;
+    }
+  EXPECT_NE(DecodedAdd, nullptr)
+      << "the lifted add immediate must match the model-zero ld.lld formula";
+  const bool ZeroBaseDecoded = std::any_of(
+      Low.Blocks.begin(), Low.Blocks.end(), [&](const neverd::LowBlock &Block) {
+        return std::any_of(Block.Ops.begin(), Block.Ops.end(),
+                           [&](const neverd::LowOp &Op) {
+                             return Op.Addr == ZeroBase->Addr;
+                           });
+      });
+  EXPECT_TRUE(ZeroBaseDecoded)
+      << "the fourth-argument diamond must retain the zero-base arm that "
+         "distinguishes MayDepend from MustEqual";
+
+  EXPECT_TRUE(std::none_of(
+      Low.RelocatedInstructionScalarModelOccurrences.begin(),
+      Low.RelocatedInstructionScalarModelOccurrences.end(),
+      [&](const auto &Model) { return Model.FieldVA == Field->Addr; }))
+      << "a multiply-owned REL field cannot authenticate GOT-base zero";
+
+  auto HasOpcodeAt = [&](neverd::va_t Addr, neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+  EXPECT_TRUE(HasOpcodeAt(AmbiguousBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(AmbiguousBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(AmbiguousBranch->Addr),
+            1u);
+  EXPECT_EQ(Low.EverPublishedJumpTableBranchAddresses.count(
+                AmbiguousBranch->Addr),
+            0u)
+      << "the ambiguous branch must never publish a provisional table";
+
+  EXPECT_TRUE(HasOpcodeAt(CallbackBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(HasOpcodeAt(CallbackBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(CallbackBranch->Addr), 0u)
+      << "complete ambiguity is local semantic evidence, not stage-wide "
+         "incompleteness";
+
+  const auto ValidTable = std::find_if(
+      Low.JumpTables.begin(), Low.JumpTables.end(), [&](const auto &Table) {
+        return Table.InsnAddr == ValidBranch->Addr;
+      });
+  ASSERT_NE(ValidTable, Low.JumpTables.end());
+  EXPECT_EQ(ValidTable->Targets.size(), 2u);
+  EXPECT_TRUE(HasOpcodeAt(ValidBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(ValidBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(ValidBranch->Addr), 0u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 1u);
+}
+
+TEST_F(JTE_X86_32, I386GOTPCReplayRetiresOnlyTheExactQueryKey) {
+  using Key = neverd::detail::I386GOTOFFAmbiguityReplayKey;
+  const neverd::va_t Branch = 0x1000;
+  const Key First = std::make_tuple(Branch, 0x1010, 2, 0, 0x2000);
+  const Key Second = std::make_tuple(Branch, 0x1020, 4, 1, 0x3000);
+  std::set<Key> Pending{First, Second};
+  std::set<Key> Replayed{Second};
+
+  neverd::detail::retireReplayedI386GOTPCAmbiguities(Pending, Replayed);
+  EXPECT_EQ(Pending.size(), 1u);
+  EXPECT_EQ(Pending.count(First), 1u)
+      << "a completed sibling query on the same branch cannot retire a "
+         "different pending use";
+  EXPECT_EQ(Pending.count(Second), 0u);
+
+  Replayed = {First};
+  neverd::detail::retireReplayedI386GOTPCAmbiguities(Pending, Replayed);
+  EXPECT_TRUE(Pending.empty());
+
+  const neverd::va_t OtherBranch = 0x4000;
+  const Key SameBranchFirst =
+      std::make_tuple(Branch, 0x1030, 6, 0, 0x5000);
+  const Key SameBranchSecond =
+      std::make_tuple(Branch, 0x1040, 8, 1, 0x6000);
+  const Key Other =
+      std::make_tuple(OtherBranch, 0x4010, 2, 0, 0x7000);
+  Pending = {SameBranchFirst, SameBranchSecond, Other};
+  Replayed.clear();
+  const std::set<neverd::va_t> SafelyPublished{Branch};
+  neverd::detail::retireReplayedI386GOTPCAmbiguities(
+      Pending, Replayed, &SafelyPublished);
+  EXPECT_EQ(Pending.size(), 1u);
+  EXPECT_EQ(Pending.count(Other), 1u)
+      << "a stable validated table retires every old key only for its own "
+         "branch";
+}
+
+TEST_F(JTE_X86_32,
+       AmbiguousI386GOTPCCarrySurvivesUnreplayedStableGraph) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_ambiguous_late_shape_loss");
+  const neverd::Symbol *AmbiguousBranch = Image.findSymbol(
+      "jt_i386_gotoff_ambiguous_late_shape_loss_branch");
+  const neverd::Symbol *ValidBranch = Image.findSymbol(
+      "jt_i386_gotoff_ambiguous_late_shape_loss_valid_branch");
+  const neverd::Symbol *LateEdge =
+      Image.findSymbol("jt_i386_gotoff_ambiguous_late_shape_loss_edge");
+  const neverd::Symbol *ValidGOTPC = Image.findSymbol(
+      "jt_i386_gotoff_ambiguous_late_shape_loss_valid_gotpc_field");
+  const neverd::Symbol *ValidTable =
+      Image.findSymbol("jt_i386_gotoff_late_valid_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(AmbiguousBranch, nullptr);
+  ASSERT_NE(ValidBranch, nullptr);
+  ASSERT_NE(LateEdge, nullptr);
+  ASSERT_NE(ValidGOTPC, nullptr);
+  ASSERT_NE(ValidTable, nullptr);
+  ASSERT_EQ(ValidTable->Size, 8u);
+  EXPECT_EQ(Image.I386GOTPCFields.count(ValidGOTPC->Addr), 1u)
+      << "the sibling must use a supported single-writer call/pop GOTPC "
+         "model";
+  for (unsigned I = 0; I < 2; ++I) {
+    const neverd::va_t Slot = ValidTable->Addr + I * 4;
+    EXPECT_EQ(Image.CodePtrRelocSlots.count(Slot), 0u);
+    EXPECT_EQ(Image.DataPtrRelocSlots.count(Slot), 0u);
+    EXPECT_EQ(Image.RelCodeRelocSlots.count(Slot), 0u);
+  }
+  EXPECT_FALSE(LateEdge->IsFunc);
+  EXPECT_EQ(Image.CodeRefTargets.count(LateEdge->Addr), 0u)
+      << "raw table entries must not preseed the late predecessor as a CFG "
+         "root";
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_FALSE(Builder.proposalStageCommitTailEvidenceExhaustedForTesting())
+      << "pending carry must come from an unreplayed stable query, not a "
+         "resource rollback";
+
+  auto HasOpcodeAt = [&](neverd::va_t Addr, neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+  const bool LateEdgeDecoded = std::any_of(
+      Low.Blocks.begin(), Low.Blocks.end(), [&](const neverd::LowBlock &Block) {
+        return std::any_of(Block.Ops.begin(), Block.Ops.end(),
+                           [&](const neverd::LowOp &Op) {
+                             return Op.Addr == LateEdge->Addr;
+                           });
+      });
+  EXPECT_TRUE(LateEdgeDecoded)
+      << "the independently published table must decode the late predecessor";
+  EXPECT_TRUE(Builder.hasPendingI386GOTPCAmbiguityForTesting())
+      << "the stable graph lost the structural slice before reaching the exact "
+         "negative-replay seam";
+  EXPECT_TRUE(HasOpcodeAt(AmbiguousBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(AmbiguousBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(AmbiguousBranch->Addr),
+            1u);
+  EXPECT_EQ(Low.EverPublishedJumpTableBranchAddresses.count(
+                AmbiguousBranch->Addr),
+            0u);
+
+  const auto Valid = std::find_if(
+      Low.JumpTables.begin(), Low.JumpTables.end(), [&](const auto &Table) {
+        return Table.InsnAddr == ValidBranch->Addr;
+      });
+  ASSERT_NE(Valid, Low.JumpTables.end());
+  EXPECT_EQ(Valid->Targets.size(), 2u);
+  EXPECT_TRUE(HasOpcodeAt(ValidBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(ValidBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(ValidBranch->Addr), 0u);
+}
+
+TEST_F(JTE_X86_32,
+       AmbiguousI386GOTPCReplaySurvivesCommitTailExhaustion) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_same_field_conflict");
+  const neverd::Symbol *AmbiguousBranch = Image.findSymbol(
+      "jt_i386_gotoff_same_field_conflict_ambiguous_branch");
+  const neverd::Symbol *CallbackBranch = Image.findSymbol(
+      "jt_i386_gotoff_same_field_conflict_callback_branch");
+  const neverd::Symbol *ValidBranch = Image.findSymbol(
+      "jt_i386_gotoff_same_field_conflict_valid_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(AmbiguousBranch, nullptr);
+  ASSERT_NE(CallbackBranch, nullptr);
+  ASSERT_NE(ValidBranch, nullptr);
+
+  struct BudgetedBuild {
+    neverd::LowFunc Low;
+    bool CommitTailExhausted = false;
+    bool RollbackRetainedPending = false;
+    bool PendingCarry = false;
+  };
+  auto BuildWithBudget = [&](size_t Budget,
+                             bool ExhaustStableCommitTail = false) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(neverd::Arch::X86));
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    Builder.setExhaustStableI386AmbiguityCommitTailForTesting(
+        ExhaustStableCommitTail);
+    BudgetedBuild Result;
+    Result.Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    Result.CommitTailExhausted =
+        Builder.proposalStageCommitTailEvidenceExhaustedForTesting();
+    Result.RollbackRetainedPending =
+        Builder.commitTailRollbackRetainedPendingI386AmbiguityForTesting();
+    Result.PendingCarry =
+        Builder.hasPendingI386GOTPCAmbiguityForTesting();
+    return Result;
+  };
+  auto HasOpcodeAt = [](const neverd::LowFunc &Low, neverd::va_t Addr,
+                        neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+  auto IsComplete = [&](const BudgetedBuild &Result) {
+    const auto Valid = std::find_if(
+        Result.Low.JumpTables.begin(), Result.Low.JumpTables.end(),
+        [&](const auto &Table) { return Table.InsnAddr == ValidBranch->Addr; });
+    return Valid != Result.Low.JumpTables.end() &&
+           Valid->Targets.size() == 2 &&
+           HasOpcodeAt(Result.Low, AmbiguousBranch->Addr,
+                       neverd::NdOp::INDIR_BR) &&
+           HasOpcodeAt(Result.Low, CallbackBranch->Addr,
+                       neverd::NdOp::INDIR_CALL);
+  };
+
+  const size_t CompleteBudget =
+      neverd::limits::kMaxJumpTableMaskFixedPointEvidenceWork;
+  ASSERT_TRUE(IsComplete(BuildWithBudget(CompleteBudget)));
+
+  // Trigger the exact stable-stage transaction boundary directly.  Searching
+  // for "first complete minus one" is brittle because stricter candidate
+  // accounting can legitimately move an earlier proof boundary without
+  // changing the atomic commit tail itself.
+  const BudgetedBuild Boundary =
+      BuildWithBudget(CompleteBudget, /*ExhaustStableCommitTail=*/true);
+  EXPECT_TRUE(Boundary.CommitTailExhausted)
+      << "the one-shot hook must fail at the atomically prepaid stable commit "
+         "tail";
+  EXPECT_TRUE(Boundary.RollbackRetainedPending)
+      << "the injected commit-tail rollback must retain the exact pending key "
+         "before the next immutable graph retries";
+  EXPECT_FALSE(Boundary.PendingCarry)
+      << "the next stable graph must replay and retire the retained key";
+  EXPECT_TRUE(IsComplete(Boundary));
+  EXPECT_TRUE(HasOpcodeAt(Boundary.Low, AmbiguousBranch->Addr,
+                          neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(Boundary.Low, AmbiguousBranch->Addr,
+                           neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Boundary.Low.UnsafeIndirectBranchAddresses.count(
+                AmbiguousBranch->Addr),
+            1u);
+  EXPECT_EQ(Boundary.Low.EverPublishedJumpTableBranchAddresses.count(
+                AmbiguousBranch->Addr),
+            0u);
+  EXPECT_TRUE(HasOpcodeAt(Boundary.Low, CallbackBranch->Addr,
+                          neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(HasOpcodeAt(Boundary.Low, CallbackBranch->Addr,
+                           neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Boundary.Low.UnsafeIndirectBranchAddresses.count(
+                CallbackBranch->Addr),
+            0u);
+  EXPECT_TRUE(HasOpcodeAt(Boundary.Low, ValidBranch->Addr,
+                          neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(Boundary.Low, ValidBranch->Addr,
+                           neverd::NdOp::INDIR_CALL));
+  const auto BoundaryValid = std::find_if(
+      Boundary.Low.JumpTables.begin(), Boundary.Low.JumpTables.end(),
+      [&](const auto &Table) { return Table.InsnAddr == ValidBranch->Addr; });
+  ASSERT_NE(BoundaryValid, Boundary.Low.JumpTables.end());
+  EXPECT_EQ(BoundaryValid->Targets.size(), 2u);
+  EXPECT_EQ(Boundary.Low.UnsafeIndirectBranchAddresses.count(
+                ValidBranch->Addr),
+            0u);
+
+  const BudgetedBuild Complete = BuildWithBudget(CompleteBudget);
+  EXPECT_TRUE(IsComplete(Complete));
+  EXPECT_FALSE(Complete.CommitTailExhausted);
+  EXPECT_FALSE(Complete.PendingCarry)
+      << "a stable exact replay must retire the matching pending query key";
+  EXPECT_EQ(Complete.Low.UnsafeIndirectBranchAddresses.count(
+                AmbiguousBranch->Addr),
+            1u);
+  EXPECT_EQ(Complete.Low.UnsafeIndirectBranchAddresses.count(
+                CallbackBranch->Addr),
+            0u);
+  EXPECT_EQ(Complete.Low.UnsafeIndirectBranchAddresses.count(ValidBranch->Addr),
+            0u);
 }
 
 TEST_F(JTE_X86_32, GOTPCOperandBindingRejectsDisplacementImmediateCollision) {
@@ -583,7 +979,10 @@ TEST_F(JTE_X86_32, GOTPCModelBudgetExhaustionPublishesNoPartialProof) {
   neverd::BinaryImage &Image = *ImageOrErr;
   const neverd::Symbol *Function =
       Image.findSymbol("jt_i386_gotoff_switch_call_pop");
+  const neverd::Symbol *Branch =
+      Image.findSymbol("jt_i386_gotoff_switch_call_pop_branch");
   ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Branch, nullptr);
 
   neverd::Decoder Decoder;
   ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
@@ -595,9 +994,18 @@ TEST_F(JTE_X86_32, GOTPCModelBudgetExhaustionPublishesNoPartialProof) {
   EXPECT_TRUE(Low.RelocatedInstructionScalarModelOccurrences.empty());
   EXPECT_TRUE(Low.JumpTables.empty())
       << "budget exhaustion must not publish a partial GOT model batch";
-  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
-  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-  EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty());
+  auto HasOpcodeAt = [&](neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Branch->Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+  EXPECT_TRUE(HasOpcodeAt(neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u);
+  EXPECT_EQ(Low.EverPublishedJumpTableBranchAddresses.count(Branch->Addr),
+            0u);
 }
 
 TEST_F(JTE_X86_32, GOTPCModelGraphWorkExhaustionFailsClosed) {
@@ -633,48 +1041,71 @@ TEST_F(JTE_X86_32, GOTOFFProposalBudgetExhaustionFailsClosed) {
   neverd::BinaryImage &Image = *ImageOrErr;
   const neverd::Symbol *Function =
       Image.findSymbol("jt_i386_gotoff_switch_call_pop");
+  const neverd::Symbol *Branch =
+      Image.findSymbol("jt_i386_gotoff_switch_call_pop_branch");
   ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Branch, nullptr);
 
-  neverd::Decoder Decoder;
-  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
-  neverd::CFGBuilder Builder;
-  Builder.setI386GOTOFFProposalEvidenceBudgetForTesting(0);
-  const neverd::LowFunc Low = Builder.build(Image, Decoder, Function->Addr,
-                                            "jt_i386_gotoff_switch_call_pop");
+  struct BudgetedBuild {
+    neverd::LowFunc Low;
+    bool GraphQueryIssued = false;
+    bool GraphBudgetExhausted = false;
+  };
+  auto BuildWithBudget = [&](size_t Budget) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(neverd::Arch::X86));
+    neverd::CFGBuilder Builder;
+    Builder.setI386GOTOFFProposalEvidenceBudgetForTesting(Budget);
+    BudgetedBuild Result;
+    Result.Low = Builder.build(
+        Image, Decoder, Function->Addr, "jt_i386_gotoff_switch_call_pop");
+    Result.GraphQueryIssued =
+        Builder.i386GOTOFFGraphQueryIssuedForTesting();
+    Result.GraphBudgetExhausted =
+        Builder.i386GOTOFFGraphQueryBudgetExhaustedForTesting();
+    return Result;
+  };
+  auto ExpectOpaque = [&](const BudgetedBuild &Result, size_t Budget) {
+    SCOPED_TRACE(Budget);
+    const neverd::LowFunc &Low = Result.Low;
 
-  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u)
-      << "model completion has an independent transactional budget";
-  EXPECT_TRUE(Low.JumpTables.empty())
-      << "proposal-budget exhaustion must not suppress relocation roots or "
-         "publish a partial GOTOFF table proof";
-  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
-  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-  EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty());
-}
+    ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u)
+        << "model completion has an independent transactional budget";
+    EXPECT_TRUE(Low.JumpTables.empty())
+        << "proposal-budget exhaustion must not suppress relocation roots or "
+           "publish a partial GOTOFF table proof";
+    auto HasOpcodeAt = [&](neverd::NdOp Opcode) {
+      for (const neverd::LowBlock &Block : Low.Blocks)
+        for (const neverd::LowOp &Op : Block.Ops)
+          if (Op.Addr == Branch->Addr && Op.Opcode == Opcode)
+            return true;
+      return false;
+    };
+    EXPECT_TRUE(HasOpcodeAt(neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(HasOpcodeAt(neverd::NdOp::INDIR_CALL));
+    EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u)
+        << "an unfinished exact GOTOFF proof is opaque, not callback evidence";
+    EXPECT_EQ(
+        Low.EverPublishedJumpTableBranchAddresses.count(Branch->Addr), 0u);
+  };
+  // Budget zero stops before the combined reaching-value query.
+  const BudgetedBuild Zero = BuildWithBudget(0);
+  EXPECT_FALSE(Zero.GraphQueryIssued);
+  ExpectOpaque(Zero, 0);
 
-TEST_F(JTE_X86_32, GOTOFFProposalGraphWorkExhaustionFailsClosed) {
-  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
-  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
-      << llvm::toString(ImageOrErr.takeError());
-  neverd::BinaryImage &Image = *ImageOrErr;
-  const neverd::Symbol *Function =
-      Image.findSymbol("jt_i386_gotoff_switch_call_pop");
-  ASSERT_NE(Function, nullptr);
-
-  neverd::Decoder Decoder;
-  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
-  neverd::CFGBuilder Builder;
-  // Root/model lookup reaches the exact-use query with a non-zero balance;
-  // CFG construction and propagation must continue charging this account.
-  Builder.setI386GOTOFFProposalEvidenceBudgetForTesting(128);
-  const neverd::LowFunc Low = Builder.build(Image, Decoder, Function->Addr,
-                                            "jt_i386_gotoff_switch_call_pop");
-
-  ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
-  EXPECT_TRUE(Low.JumpTables.empty());
-  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
-  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-  EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty());
+  // This allowance reaches the combined query with margin after all
+  // root/model bookkeeping, then exhausts only inside metered graph
+  // propagation.  Passing a null GraphWorkBudget makes that query unbounded
+  // and incorrectly publishes the table (with EverPublished set and no unsafe
+  // identity), so the semantic assertions below are a true wiring mutation.
+  constexpr size_t QueryBudget = 2816;
+  const BudgetedBuild GraphBoundary = BuildWithBudget(QueryBudget);
+  EXPECT_TRUE(GraphBoundary.GraphQueryIssued);
+  EXPECT_TRUE(GraphBoundary.GraphBudgetExhausted)
+      << "the selected bounded combined query must consume its graph "
+         "allowance; budget="
+      << QueryBudget;
+  ExpectOpaque(GraphBoundary, QueryBudget);
 }
 
 TEST_F(JTE_X86_32, FullWidthESPPrivateFrameSpillPreservesSwitch) {

@@ -27,7 +27,9 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -328,11 +330,142 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
   using Elf_Rel = typename ELFT::Rel;
   using Elf_Rela = typename ELFT::Rela;
 
+  struct I386RelocationFieldState {
+    int32_t OriginalAddend = 0;
+    size_t ValueWriterCount = 0;
+    bool HasGOTPCWriter = false;
+  };
+  std::map<va_t, I386RelocationFieldState> I386RelocationFields;
+  std::map<va_t, size_t> I386RelocationByteWriterCounts;
+  std::set<va_t> I386GOTPCWriterStarts;
+
+  // ELF32 REL entries all read their addend from the encoded field.  Snapshot
+  // every i386 field before applying anything, and count all non-NONE
+  // relocation records that can claim that mapped location.  A real linker
+  // evaluates multiple REL records from the original section bytes; feeding
+  // one relocation's write-back into the next changes the expression and can
+  // manufacture an exact GOTPC/GOTOFF occurrence.  Never publish provenance
+  // for a multiply-owned field: this loader does not model the linker's
+  // composition rules for such inputs.
+  if constexpr (!ELFT::Is64Bits) {
+    if (Img.Arch == Arch::X86) {
+      for (const Elf_Shdr &RelocSH : Sections) {
+        const bool PreIsRela = RelocSH.sh_type == SHT_RELA;
+        if (!PreIsRela && RelocSH.sh_type != SHT_REL)
+          continue;
+        const size_t MinEntrySize =
+            PreIsRela ? sizeof(Elf_Rela) : sizeof(Elf_Rel);
+        if (RelocSH.sh_entsize < MinEntrySize ||
+            !rangeInBounds(RelocSH.sh_offset, RelocSH.sh_size, Size))
+          continue;
+
+        const Elf_Shdr *PreApplySH =
+            getShdr<ELFT>(Sections, RelocSH.sh_info);
+        if (!PreApplySH || !(PreApplySH->sh_flags & SHF_ALLOC))
+          continue;
+        const va_t PreApplyVA = sectionVA<ELFT>(
+            IsRelocatable, SecBase, *PreApplySH, RelocSH.sh_info);
+        const Segment *PreApplySeg = nullptr;
+        for (const Segment &Seg : Img.Segments)
+          if (Seg.VA == PreApplyVA && !Seg.Data.empty()) {
+            PreApplySeg = &Seg;
+            break;
+          }
+        if (!PreApplySeg)
+          continue;
+
+        const size_t PreCount =
+            static_cast<size_t>(RelocSH.sh_size / RelocSH.sh_entsize);
+        for (size_t I = 0; I < PreCount; ++I) {
+          const uint64_t EntryOff =
+              RelocSH.sh_offset +
+              static_cast<uint64_t>(I) * RelocSH.sh_entsize;
+          va_t FieldOffset = 0;
+          uint32_t Type = R_386_NONE;
+          if (PreIsRela) {
+            if (!rangeInBounds(EntryOff, sizeof(Elf_Rela), Size))
+              break;
+            Elf_Rela R;
+            std::memcpy(&R, Data + static_cast<size_t>(EntryOff), sizeof(R));
+            FieldOffset = R.r_offset;
+            Type = R.getType(false);
+          } else {
+            if (!rangeInBounds(EntryOff, sizeof(Elf_Rel), Size))
+              break;
+            Elf_Rel R;
+            std::memcpy(&R, Data + static_cast<size_t>(EntryOff), sizeof(R));
+            FieldOffset = R.r_offset;
+            Type = R.getType(false);
+          }
+          size_t WriterWidth = 4;
+          switch (Type) {
+          case R_386_NONE:
+            WriterWidth = 0;
+            break;
+          case R_386_8:
+          case R_386_PC8:
+            WriterWidth = 1;
+            break;
+          case R_386_16:
+          case R_386_PC16:
+            WriterWidth = 2;
+            break;
+          default:
+            // Unknown/legacy i386 records conservatively claim one full word.
+            // This may suppress exact provenance but can never manufacture it.
+            break;
+          }
+          if (WriterWidth == 0 ||
+              !rangeInBounds(FieldOffset, WriterWidth,
+                             PreApplySeg->Data.size()) ||
+              FieldOffset > InvalidVA - PreApplyVA)
+            continue;
+
+          const va_t FieldVA = PreApplyVA + FieldOffset;
+          for (size_t Byte = 0; Byte < WriterWidth; ++Byte) {
+            if (Byte > InvalidVA - FieldVA)
+              break;
+            ++I386RelocationByteWriterCounts[FieldVA + Byte];
+          }
+          if (Type == R_386_GOTPC)
+            I386GOTPCWriterStarts.insert(FieldVA);
+          if (WriterWidth == 4) {
+            auto [It, Inserted] = I386RelocationFields.try_emplace(FieldVA);
+            if (Inserted)
+              std::memcpy(&It->second.OriginalAddend,
+                          PreApplySeg->Data.data() + FieldOffset, 4);
+            ++It->second.ValueWriterCount;
+            It->second.HasGOTPCWriter |= Type == R_386_GOTPC;
+          }
+        }
+      }
+
+      // Publish ambiguity before applying any record.  The set is a negative
+      // certificate only: it lets the exact decoded use fail closed, but can
+      // never authenticate GOT-base zero or any relocated address.
+      for (va_t FieldVA : I386GOTPCWriterStarts) {
+        bool HasUniqueFourByteOwner = true;
+        for (size_t Byte = 0; Byte < 4; ++Byte) {
+          const auto Count = I386RelocationByteWriterCounts.find(FieldVA + Byte);
+          if (Count == I386RelocationByteWriterCounts.end() ||
+              Count->second != 1) {
+            HasUniqueFourByteOwner = false;
+            break;
+          }
+        }
+        if (!HasUniqueFourByteOwner)
+          Img.AmbiguousI386GOTPCFields.insert(FieldVA);
+      }
+    }
+  }
+
   for (const Elf_Shdr &SH : Sections) {
     bool IsRela = (SH.sh_type == SHT_RELA);
     if (!IsRela && SH.sh_type != SHT_REL)
       continue;
-    if (SH.sh_entsize == 0 || !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
+    const size_t MinEntrySize = IsRela ? sizeof(Elf_Rela) : sizeof(Elf_Rel);
+    if (SH.sh_entsize < MinEntrySize ||
+        !rangeInBounds(SH.sh_offset, SH.sh_size, Size))
       continue;
 
     const Elf_Shdr *ApplySH = getShdr<ELFT>(Sections, SH.sh_info);
@@ -720,9 +853,14 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         // arch.
         int64_t InPlace = RAddend;
         if (!IsRela && RAddr + 4 <= ApplySeg->Data.size()) {
-          int32_t Existing;
-          std::memcpy(&Existing, ApplySeg->Data.data() + RAddr, 4);
-          InPlace = Existing;
+          const auto Field = I386RelocationFields.find(P);
+          if (Img.Arch == Arch::X86 && Field != I386RelocationFields.end()) {
+            InPlace = Field->second.OriginalAddend;
+          } else {
+            int32_t Existing;
+            std::memcpy(&Existing, ApplySeg->Data.data() + RAddr, 4);
+            InPlace = Existing;
+          }
         }
         if (RAddr + 4 > ApplySeg->Data.size())
           continue;
@@ -730,6 +868,21 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           std::memcpy(ApplySeg->Data.data() + RAddr, &V, 4);
         };
         if (Img.Arch == Arch::X86) {
+          const auto Field = I386RelocationFields.find(P);
+          bool HasUniqueFourByteSpan = true;
+          for (size_t Byte = 0; Byte < 4; ++Byte) {
+            const auto Count = I386RelocationByteWriterCounts.find(P + Byte);
+            if (Count == I386RelocationByteWriterCounts.end() ||
+                Count->second != 1) {
+              HasUniqueFourByteSpan = false;
+              break;
+            }
+          }
+          const bool HasUniqueValueWriter =
+              Field != I386RelocationFields.end() &&
+              Field->second.ValueWriterCount == 1 &&
+              HasUniqueFourByteSpan &&
+              !Img.AmbiguousI386GOTPCFields.count(P);
           // i386 PIC: model _GLOBAL_OFFSET_TABLE_ at base 0.  The get-PC seed
           // (lifted to the constant next-PC) plus GOTPC then fold to the GOT
           // base, and GOTOFF folds back to the symbol VA — the base choice
@@ -748,6 +901,8 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             // data simultaneously.
             uint32_t Folded = static_cast<uint32_t>(S + InPlace);
             Put32(Folded);
+            if (!HasUniqueValueWriter)
+              break;
             const va_t SymbolVA = static_cast<uint32_t>(S);
             const va_t SymbolOwnerAnchor = SymOwnerVA;
             const bool PlaceIsCode = Img.hasExecutableCodeOwnerAt(P);
@@ -812,14 +967,15 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             // register materialization, so it is not recorded as a scalar
             // code ref.
             Put32(static_cast<uint32_t>(S + InPlace));
-            RecordAbsoluteField(static_cast<uint32_t>(S + InPlace),
-                                static_cast<uint32_t>(S + InPlace), SymOwnerVA,
-                                4);
+            if (HasUniqueValueWriter)
+              RecordAbsoluteField(static_cast<uint32_t>(S + InPlace),
+                                  static_cast<uint32_t>(S + InPlace),
+                                  SymOwnerVA, 4);
             break;
           case R_386_PC32:
           case R_386_PLT32:
             Put32(static_cast<uint32_t>(S + InPlace - P));
-            if (RType == R_386_PC32)
+            if (HasUniqueValueWriter && RType == R_386_PC32)
               RecordRelDataPtr(S);
             break;
           case R_386_GOTPC: {
@@ -830,7 +986,7 @@ void applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             // matched against a decoded instruction VA later.  The additive
             // inverse is the exact get-PC seed this relocation expects under
             // the loader's model-zero GOT convention.
-            if (Img.hasExecutableCodeOwnerAt(P))
+            if (HasUniqueValueWriter && Img.hasExecutableCodeOwnerAt(P))
               Img.I386GOTPCFields[P] = {
                   Encoded, static_cast<uint32_t>(uint32_t{0} - Encoded)};
             break;

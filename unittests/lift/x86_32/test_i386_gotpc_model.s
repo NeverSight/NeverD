@@ -1,5 +1,7 @@
 .text
 .p2align 2
+.globl jt_i386_gotpc_text_base
+jt_i386_gotpc_text_base:
 .Lgotpc_text_base:
 
 // A real i386 PIC get-PC seed.  The relocation addend is expressed so the
@@ -74,6 +76,8 @@ jt_i386_gotoff_switch_call_pop:
   ja .Lgotoff_switch_default
   movl .Lgotoff_switch_table@GOTOFF(%ebx,%ecx,4), %eax
   addl %ebx, %eax
+.globl jt_i386_gotoff_switch_call_pop_branch
+jt_i386_gotoff_switch_call_pop_branch:
   jmp *%eax
 .Lgotoff_switch_case0:
   movl $5100, %eax
@@ -94,6 +98,179 @@ jt_i386_gotoff_switch_call_pop:
   movl $-1, %eax
   ret
 .size jt_i386_gotoff_switch_call_pop, .-jt_i386_gotoff_switch_call_pop
+
+// Two value-writing relocations own the same encoded immediate.  A real ELF
+// linker evaluates each REL relocation from the original in-place addend; it
+// does not feed the R_386_32 result into the following R_386_GOTPC.  The
+// global text symbol must remain at a non-zero offset from .Lgotpc_text_base
+// so the two interpretations disagree by a visible K.
+.p2align 2
+.globl jt_i386_gotpc_conflict_bias
+.type jt_i386_gotpc_conflict_bias, @object
+jt_i386_gotpc_conflict_bias:
+  .long 0
+.size jt_i386_gotpc_conflict_bias, .-jt_i386_gotpc_conflict_bias
+
+.p2align 2
+.globl jt_i386_gotoff_same_field_conflict
+.type jt_i386_gotoff_same_field_conflict, @function
+jt_i386_gotoff_same_field_conflict:
+  movl 4(%esp), %edx
+  testl %edx, %edx
+  je .Lgotoff_conflict_dispatch
+  cmpl $1, %edx
+  je .Lgotoff_conflict_callback
+  jmp .Lgotoff_conflict_valid
+
+.Lgotoff_conflict_dispatch:
+  call .Lgotoff_conflict_pc
+.globl jt_i386_gotoff_same_field_conflict_pc
+jt_i386_gotoff_same_field_conflict_pc:
+.Lgotoff_conflict_pc:
+  popl %ebx
+  .byte 0x81, 0xc3                 // addl imm32, %ebx
+.globl jt_i386_gotoff_same_field_conflict_field
+jt_i386_gotoff_same_field_conflict_field:
+.Lgotoff_conflict_field:
+  .long .Lgotoff_conflict_field - .Lgotoff_conflict_pc - (jt_i386_gotpc_conflict_bias - .Lgotpc_text_base)
+  .reloc .Lgotoff_conflict_field, R_386_32, jt_i386_gotpc_conflict_bias
+  .reloc .Lgotoff_conflict_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  cmpl $0, 16(%esp)
+  je .Lgotoff_conflict_keep_ambiguous_base
+.globl jt_i386_gotoff_same_field_conflict_zero_base
+jt_i386_gotoff_same_field_conflict_zero_base:
+  xorl %ebx, %ebx
+.Lgotoff_conflict_keep_ambiguous_base:
+  movl 8(%esp), %ecx
+  cmpl $4, %ecx
+  ja .Lgotoff_conflict_default
+  movl .Lgotoff_conflict_table@GOTOFF(%ebx,%ecx,4), %eax
+  addl %ebx, %eax
+.globl jt_i386_gotoff_same_field_conflict_ambiguous_branch
+jt_i386_gotoff_same_field_conflict_ambiguous_branch:
+  jmp *%eax
+.Lgotoff_conflict_case0:
+  movl $5150, %eax
+  ret
+.Lgotoff_conflict_case1:
+  movl $5151, %eax
+  ret
+.Lgotoff_conflict_case2:
+  movl $5152, %eax
+  ret
+.Lgotoff_conflict_case3:
+  movl $5153, %eax
+  ret
+.Lgotoff_conflict_case4:
+  movl $5154, %eax
+  ret
+.Lgotoff_conflict_default:
+  movl $-1, %eax
+  ret
+
+.Lgotoff_conflict_callback:
+  movl 12(%esp), %eax
+.globl jt_i386_gotoff_same_field_conflict_callback_branch
+jt_i386_gotoff_same_field_conflict_callback_branch:
+  jmp *%eax
+
+.Lgotoff_conflict_valid:
+  call .Lgotoff_conflict_valid_pc
+.Lgotoff_conflict_valid_pc:
+  popl %ebx
+  .byte 0x81, 0xc3                 // addl imm32, %ebx
+.Lgotoff_conflict_valid_field:
+  .long .Lgotoff_conflict_valid_field - .Lgotoff_conflict_valid_pc
+  .reloc .Lgotoff_conflict_valid_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl 8(%esp), %ecx
+  cmpl $1, %ecx
+  ja .Lgotoff_conflict_valid_default
+  movl .Lgotoff_conflict_valid_table@GOTOFF(%ebx,%ecx,4), %eax
+  addl %ebx, %eax
+.globl jt_i386_gotoff_same_field_conflict_valid_branch
+jt_i386_gotoff_same_field_conflict_valid_branch:
+  jmp *%eax
+.Lgotoff_conflict_valid_case0:
+  movl $5170, %eax
+  ret
+.Lgotoff_conflict_valid_case1:
+  movl $5171, %eax
+  ret
+.Lgotoff_conflict_valid_default:
+  movl $-1, %eax
+  ret
+.size jt_i386_gotoff_same_field_conflict, .-jt_i386_gotoff_same_field_conflict
+
+// The first immutable graph proves the ambiguous GOTPC path below.  Its
+// independent valid table then discovers a late case edge that enters the
+// ambiguous branch after the table-load slice, so the stable graph cannot
+// replay exactI386ModelZeroReaches.  The earlier proof must remain only as a
+// fail-closed pending identity; global fixed-point stability is not a negative
+// replay certificate.
+.p2align 2
+.globl jt_i386_gotoff_ambiguous_late_shape_loss
+.type jt_i386_gotoff_ambiguous_late_shape_loss, @function
+jt_i386_gotoff_ambiguous_late_shape_loss:
+  movl 4(%esp), %edx
+  testl %edx, %edx
+  jne .Lgotoff_late_valid
+
+  call .Lgotoff_late_pc
+.Lgotoff_late_pc:
+  popl %ebx
+  .byte 0x81, 0xc3                 // addl imm32, %ebx
+.Lgotoff_late_field:
+  .long .Lgotoff_late_field - .Lgotoff_late_pc - (jt_i386_gotpc_conflict_bias - .Lgotpc_text_base)
+  .reloc .Lgotoff_late_field, R_386_32, jt_i386_gotpc_conflict_bias
+  .reloc .Lgotoff_late_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl 8(%esp), %ecx
+  cmpl $1, %ecx
+  ja .Lgotoff_late_default
+  movl .Lgotoff_late_table@GOTOFF(%ebx,%ecx,4), %eax
+  addl %ebx, %eax
+.globl jt_i386_gotoff_ambiguous_late_shape_loss_branch
+jt_i386_gotoff_ambiguous_late_shape_loss_branch:
+  jmp *%eax
+.Lgotoff_late_case0:
+  movl $5180, %eax
+  ret
+.Lgotoff_late_case1:
+  movl $5181, %eax
+  ret
+.Lgotoff_late_default:
+  movl $-1, %eax
+  ret
+
+.Lgotoff_late_valid:
+  call .Lgotoff_late_valid_pc
+.Lgotoff_late_valid_pc:
+  popl %ebx
+  .byte 0x81, 0xc3                 // addl imm32, %ebx
+.globl jt_i386_gotoff_ambiguous_late_shape_loss_valid_gotpc_field
+jt_i386_gotoff_ambiguous_late_shape_loss_valid_gotpc_field:
+.Lgotoff_late_valid_gotpc_field:
+  .long .Lgotoff_late_valid_gotpc_field - .Lgotoff_late_valid_pc
+  .reloc .Lgotoff_late_valid_gotpc_field, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl 8(%esp), %ecx
+  cmpl $1, %ecx
+  ja .Lgotoff_late_valid_default
+  movl jt_i386_gotoff_late_valid_table@GOTOFF(%ebx,%ecx,4), %eax
+  addl %ebx, %eax
+.globl jt_i386_gotoff_ambiguous_late_shape_loss_valid_branch
+jt_i386_gotoff_ambiguous_late_shape_loss_valid_branch:
+  jmp *%eax
+.Lgotoff_late_valid_case0:
+  movl $5190, %eax
+  ret
+.Lgotoff_late_valid_case1:
+.globl jt_i386_gotoff_ambiguous_late_shape_loss_edge
+jt_i386_gotoff_ambiguous_late_shape_loss_edge:
+  xorl %eax, %eax
+  jmp jt_i386_gotoff_ambiguous_late_shape_loss_branch
+.Lgotoff_late_valid_default:
+  movl $-1, %eax
+  ret
+.size jt_i386_gotoff_ambiguous_late_shape_loss, .-jt_i386_gotoff_ambiguous_late_shape_loss
 
 // The same switch spelling with the same numeric GOTPC input, but no
 // lifter-authenticated call/pop seed.  The GOTOFF field and readable table do
@@ -410,6 +587,45 @@ jt_i386_gotoff_switch_table:
   .long .Lgotoff_switch_case3@GOTOFF
   .long .Lgotoff_switch_case4@GOTOFF
 .size jt_i386_gotoff_switch_table, .-jt_i386_gotoff_switch_table
+
+.p2align 2
+.globl jt_i386_gotoff_conflict_table
+.type jt_i386_gotoff_conflict_table, @object
+jt_i386_gotoff_conflict_table:
+.Lgotoff_conflict_table:
+  .long .Lgotoff_conflict_case0@GOTOFF
+  .long .Lgotoff_conflict_case1@GOTOFF
+  .long .Lgotoff_conflict_case2@GOTOFF
+  .long .Lgotoff_conflict_case3@GOTOFF
+  .long .Lgotoff_conflict_case4@GOTOFF
+.size jt_i386_gotoff_conflict_table, .-jt_i386_gotoff_conflict_table
+
+.p2align 2
+.globl jt_i386_gotoff_conflict_valid_table
+.type jt_i386_gotoff_conflict_valid_table, @object
+jt_i386_gotoff_conflict_valid_table:
+.Lgotoff_conflict_valid_table:
+  .long .Lgotoff_conflict_valid_case0@GOTOFF
+  .long .Lgotoff_conflict_valid_case1@GOTOFF
+.size jt_i386_gotoff_conflict_valid_table, .-jt_i386_gotoff_conflict_valid_table
+
+.p2align 2
+.globl jt_i386_gotoff_late_table
+.type jt_i386_gotoff_late_table, @object
+jt_i386_gotoff_late_table:
+.Lgotoff_late_table:
+  .long .Lgotoff_late_case0@GOTOFF
+  .long .Lgotoff_late_case1@GOTOFF
+.size jt_i386_gotoff_late_table, .-jt_i386_gotoff_late_table
+
+.p2align 2
+.globl jt_i386_gotoff_late_valid_table
+.type jt_i386_gotoff_late_valid_table, @object
+jt_i386_gotoff_late_valid_table:
+.Lgotoff_late_valid_table:
+  .long .Lgotoff_late_valid_case0 - .Lgotpc_text_base
+  .long .Lgotoff_late_valid_case1 - .Lgotpc_text_base
+.size jt_i386_gotoff_late_valid_table, .-jt_i386_gotoff_late_valid_table
 
 .p2align 2
 .globl jt_i386_gotoff_switch_fake_table

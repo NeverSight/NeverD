@@ -26,6 +26,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cassert>
+#include <cstring>
 #include <initializer_list>
 #include <iterator>
 #include <limits>
@@ -35,6 +37,21 @@
 #define DEBUG_TYPE "neverd-cfg-builder"
 
 namespace neverd {
+
+void detail::retireReplayedI386GOTPCAmbiguities(
+    std::set<I386GOTOFFAmbiguityReplayKey> &Pending,
+    const std::set<I386GOTOFFAmbiguityReplayKey> &Replayed,
+    const std::set<va_t> *SafelyPublishedBranches) {
+  for (auto It = Pending.begin(); It != Pending.end();) {
+    const bool SafelyPublished =
+        SafelyPublishedBranches &&
+        SafelyPublishedBranches->count(std::get<0>(*It));
+    if (Replayed.count(*It) || SafelyPublished)
+      It = Pending.erase(It);
+    else
+      ++It;
+  }
+}
 
 namespace {
 
@@ -99,6 +116,10 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   CandidateProposalStageEvidenceRemaining = 0;
   CandidateProposalStageEvidenceIncomplete = false;
   ProposalStageCommitTailEvidenceExhaustedForTesting = false;
+  CommitTailRollbackRetainedPendingI386AmbiguityForTesting = false;
+  ExhaustedStableI386AmbiguityCommitTailForTesting = false;
+  ExhaustedProposalStageCommitTailForTesting = false;
+  ProposalStageForcedCommitTailRollbackPreservedStateForTesting = false;
   ProposalStageRollbackMutatedQuarantineForTesting = false;
   ProposalCleanupEvidenceForTesting = {};
   JumpTableProofContextComplete = false;
@@ -117,6 +138,12 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   IndexDomainEvidenceIncompleteBranches.clear();
   ValidatedPhysicalJumpTableBranches.clear();
   CandidateFixedPointExplorationTargets.clear();
+  AmbiguousI386GOTPCBranches.clear();
+  PendingAmbiguousI386GOTPCBranches.clear();
+  PendingAmbiguousI386GOTPCKeys.clear();
+  StageAmbiguousI386GOTPCBranches.clear();
+  StageReplayedI386GOTPCKeys.clear();
+  CurrentI386GOTOFFAmbiguityKeys.clear();
   PublishedReachableInsns.clear();
   DecodedInstructionCount = 0;
   LiftedInstructionCount = 0;
@@ -132,12 +159,16 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   I386GOTOFFProposalRootCache.clear();
   I386GOTOFFModelReachCache.clear();
   I386GOTOFFProposalEvidenceRemaining = 0;
+  I386GOTOFFProposalShapeClaimed = false;
   I386GOTOFFProposalEvidenceIncomplete = false;
   I386GOTModelEvidenceIncomplete = false;
-  StackTableEvidenceRemaining =
-      std::min<size_t>(limits::kMaxJumpTableEvidenceWork,
-                       StackTableEvidenceBudgetForTesting.value_or(
-                           limits::kMaxJumpTableEvidenceWork));
+  I386GOTOFFAmbiguousModelReach = false;
+  I386GOTOFFGraphQueryIssuedForTesting = false;
+  I386GOTOFFGraphQueryBudgetExhaustedForTesting = false;
+  StackTableEvidenceRemaining = std::min<size_t>(
+      limits::kMaxJumpTableEvidenceWork,
+      StackTableEvidenceBudgetForTesting.value_or(
+          limits::kMaxJumpTableEvidenceWork));
   PreviouslyPublishedJumpTableBranches =
       std::move(PendingPreviouslyPublishedJumpTableBranches);
   PendingPreviouslyPublishedJumpTableBranches.clear();
@@ -852,6 +883,12 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     if (auto It = Insns.find(Addr);
         It != Insns.end() && It->second.JumpTableTargets.empty())
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  for (va_t Addr : AmbiguousI386GOTPCBranches)
+    if (Insns.count(Addr))
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  for (va_t Addr : PendingAmbiguousI386GOTPCBranches)
+    if (Insns.count(Addr))
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
 
   LLVM_DEBUG(llvm::dbgs() << "CFG built: " << Func.Blocks.size()
                           << " blocks for " << Func.Name << " @ 0x"
@@ -878,6 +915,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
     while (true) {
       if (ExploredAddrs.count(Cur))
         break;
+      // An actual graph extension invalidates every generation-local replay
+      // and positive ambiguity shadow.  Pending exact query identities remain
+      // fail-closed carry, but only a fresh query on this immutable graph may
+      // retire them or commit a semantic certificate.
+      StageReplayedI386GOTPCKeys.clear();
+      StageAmbiguousI386GOTPCBranches.clear();
       ExploredAddrs.insert(Cur);
 
       const auto *Seg = Img.getSegmentFor(Cur);
@@ -973,6 +1016,19 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
           RelocatedScalarOperands.push_back(
               {Field->first, Field->second.EncodedValue, 4,
                RelocatedScalarOperand::Kind::I386ELFGOTPC});
+        auto Ambiguous = Img.AmbiguousI386GOTPCFields.lower_bound(Cur);
+        for (; Ambiguous != Img.AmbiguousI386GOTPCFields.end() &&
+               *Ambiguous < Next;
+             ++Ambiguous) {
+          const uint8_t *EncodedBytes = Img.readVA(*Ambiguous, 4);
+          if (!EncodedBytes)
+            continue;
+          uint32_t Encoded = 0;
+          std::memcpy(&Encoded, EncodedBytes, sizeof(Encoded));
+          RelocatedScalarOperands.push_back(
+              {*Ambiguous, Encoded, 4,
+               RelocatedScalarOperand::Kind::I386ELFGOTPC});
+        }
       }
       try {
         Dec.liftToLow(DI, Rec.Ops, RelocatedOperands,
@@ -1154,10 +1210,12 @@ std::set<va_t> CFGBuilder::currentRelocatedInstructionTableAnchors(
 }
 
 void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
+  // Destruction here was prepaid when the preceding generation published
+  // each occurrence.  I386GetPcOccurrence initializes RawPCAuthenticated to
+  // false; ELF stage refreshes never set it, while the non-ELF path runs only
+  // once after multi-stage resolution, so no per-stage reset scan is needed.
   RelocatedInstructionScalarModelOccurrences.clear();
   I386GOTModelEvidenceIncomplete = false;
-  for (I386GetPcOccurrence &Occurrence : I386GetPcOccurrences)
-    Occurrence.RawPCAuthenticated = false;
   if (Img.Arch != Arch::X86 || Img.getPointerSize() != 4 ||
       !JumpTableProofContextComplete)
     return;
@@ -1175,6 +1233,30 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
     EvidenceWork -= Amount;
     return true;
   };
+  auto OrderedLookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (size_t N = Count; N > 1; N = (N + 1) / 2)
+      ++Work;
+    return Work;
+  };
+  auto ConsumeProducts =
+      [&](std::initializer_list<std::pair<size_t, size_t>> Products) {
+        const size_t Max = std::numeric_limits<size_t>::max();
+        size_t Total = 0;
+        for (const auto &[Count, Cost] : Products) {
+          if (Count != 0 && Cost > Max / Count) {
+            Consume(Max);
+            return false;
+          }
+          const size_t Product = Count * Cost;
+          if (Product > Max - Total) {
+            Consume(Max);
+            return false;
+          }
+          Total += Product;
+        }
+        return Consume(Total);
+      };
   if (!Consume(RelocatedInstructionScalarOperandOccurrences.size()) ||
       !Consume(I386GetPcOccurrences.size()))
     return;
@@ -1182,7 +1264,7 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
   struct PendingModel {
     va_t FieldVA = InvalidVA;
     const LowOp *Op = nullptr;
-    I386GetPcOccurrence Seed;
+    const I386GetPcOccurrence *Seed = nullptr;
     size_t QueryIndex = 0;
   };
   std::vector<JumpTableValueQuery> Queries;
@@ -1190,9 +1272,29 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
 
   std::map<uint32_t, std::vector<const I386GetPcOccurrence *>> SeedsByPC;
   std::vector<I386GetPcOccurrence *> AuthenticatedGetPcSeeds;
-  std::vector<std::tuple<va_t, int, NdVar>> SeenSeedPoints;
+  using SeedIdentity =
+      std::tuple<va_t, int, uint8_t, uint64_t, uint16_t, uint8_t, uint64_t>;
+  constexpr size_t SeedIdentityWork = 7;
+  std::set<SeedIdentity> SeenSeedPoints;
+  const size_t GetPcCount = I386GetPcOccurrences.size();
+  const size_t OperandCount =
+      RelocatedInstructionScalarOperandOccurrences.size();
+  // Reserve every outer vector before scanning the graph.  Per-element copy,
+  // nested alternative allocation and eventual destruction are charged here;
+  // ordered map/set nodes remain charged immediately before insertion.
+  if (!ConsumeProducts({{GetPcCount, 4}, {OperandCount, 12}}))
+    return;
+  AuthenticatedGetPcSeeds.reserve(GetPcCount);
+  Queries.reserve(OperandCount);
+  Pending.reserve(OperandCount);
+  RelocatedInstructionScalarModelOccurrences.reserve(OperandCount);
   for (I386GetPcOccurrence &GetPc : I386GetPcOccurrences) {
     if (!Consume())
+      return;
+    if (!ConsumeProducts(
+            {{1, OrderedLookupWork(PublishedReachableInsns.size())},
+             {1, OrderedLookupWork(PersistentCFGRoots.size())},
+             {2, OrderedLookupWork(Insns.size())}}))
       return;
     if (GetPc.OutputOpcode != NdOp::COPY || GetPc.OutputWitness.Size != 4 ||
         (!GetPc.OutputWitness.isReg() && !GetPc.OutputWitness.isTemp()) ||
@@ -1216,6 +1318,8 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
       continue;
     const LowOp *PushAdjust = nullptr;
     const LowOp *PushStore = nullptr;
+    if (!Consume(CallIt->second.Ops.size()))
+      return;
     for (const LowOp &Op : CallIt->second.Ops) {
       if (Op.Opcode == NdOp::INT_SUB && Op.NumInputs == 2 &&
           Op.Output.isReg() && Op.Output.Size == 4 &&
@@ -1240,7 +1344,7 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
       continue;
     bool HasAlternateEntry = false;
     for (const auto &[Addr, Rec] : Insns) {
-      if (!Consume())
+      if (!Consume() || !Consume(Rec.JumpTableTargets.size()))
         return;
       if (Addr != GetPc.CallInstructionAddr && Rec.Size != 0 &&
           Rec.Size <= InvalidVA - Addr &&
@@ -1255,11 +1359,20 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
     }
     if (HasAlternateEntry)
       continue;
-    const auto Identity = std::make_tuple(
-        GetPc.InstructionAddr, GetPc.OpSeq, GetPc.OutputWitness);
-    if (llvm::is_contained(SeenSeedPoints, Identity))
+    const SeedIdentity Identity = std::make_tuple(
+        GetPc.InstructionAddr, GetPc.OpSeq,
+        static_cast<uint8_t>(GetPc.OutputWitness.Space),
+        GetPc.OutputWitness.Offset, GetPc.OutputWitness.Size,
+        static_cast<uint8_t>(GetPc.OutputWitness.Provenance),
+        GetPc.OutputWitness.AddressOwnerVA);
+    if (!ConsumeProducts(
+            {{SeedIdentityWork, OrderedLookupWork(SeenSeedPoints.size())},
+             {SeedIdentityWork, 2},
+             // Set-node allocation and its eventual destruction.
+             {1, 2}}))
       return;
-    SeenSeedPoints.push_back(Identity);
+    if (!SeenSeedPoints.insert(Identity).second)
+      return;
     const auto RecIt = Insns.find(GetPc.InstructionAddr);
     if (RecIt == Insns.end() || RecIt->second.IsInstructionGuard)
       continue;
@@ -1303,7 +1416,11 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
         PopAdjust->Output != PopLoad->Inputs[0] ||
         PopLoad->Seq >= Producer->Seq || Producer->Seq >= PopAdjust->Seq)
       continue;
-    if (!Consume())
+    if (!ConsumeProducts(
+            {{1, OrderedLookupWork(SeedsByPC.size())},
+             // Possible map node, nested vector element/allocation/destruction,
+             // and the authenticated-seed vector element/destruction.
+             {1, 7}}))
       return;
     SeedsByPC[GetPc.PCValue].push_back(&GetPc);
     AuthenticatedGetPcSeeds.push_back(&GetPc);
@@ -1317,6 +1434,8 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
   // value.  ELF keeps its stricter combined call/POP + exact GOTPC contract
   // below, so a raw encoded displacement cannot borrow this permission.
   if (!Img.isELF()) {
+    if (!ConsumeProducts({{AuthenticatedGetPcSeeds.size(), 2}}))
+      return;
     for (I386GetPcOccurrence *Seed : AuthenticatedGetPcSeeds)
       Seed->RawPCAuthenticated = true;
     return;
@@ -1327,7 +1446,18 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
   std::set<std::tuple<va_t, va_t, int>> SeenOperandPoints;
   for (const RelocatedInstructionScalarOperandOccurrence &Operand :
        RelocatedInstructionScalarOperandOccurrences) {
-    if (!Consume(3))
+    constexpr size_t OperandPointKeyWork = 3;
+    if (!Consume(3) ||
+        !ConsumeProducts(
+            {{1, OrderedLookupWork(PublishedReachableInsns.size())},
+             {OperandPointKeyWork,
+              OrderedLookupWork(SeenOperandPoints.size())},
+             {OperandPointKeyWork, 2},
+             // Set-node allocation and its eventual destruction.
+             {1, 2},
+             {2, OrderedLookupWork(Img.I386GOTPCFields.size())},
+             {1, OrderedLookupWork(Insns.size())},
+             {1, OrderedLookupWork(SeedsByPC.size())}}))
       return;
     if (Operand.Kind !=
             RelocatedInstructionScalarOperandOccurrence::OperandKind::
@@ -1404,22 +1534,30 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
                                   Seed.OpSeq, /*DefinedAtPoint=*/true});
     Query.RequireExactAddressOwner = true;
     Pending.push_back(
-        {Operand.FieldVA, Candidate, Seed, Queries.size()});
+        {Operand.FieldVA, Candidate, &Seed, Queries.size()});
     Queries.push_back(std::move(Query));
   }
 
   if (Queries.empty())
     return;
+  // Reserve the transactional commit tail before the graph resolver sees the
+  // remaining balance.  A complete query must still scan every pending model
+  // and release its result buffer; those operations cannot occur after graph
+  // propagation has consumed the final evidence unit.
+  if (!ConsumeProducts({{Pending.size(), 1}, {1, 1}}))
+    return;
   bool AnalysisComplete = false;
   const std::vector<bool> Matches = tableValuesMatchAtUses(
-      Queries, &AnalysisComplete, nullptr, InvalidVA, nullptr, &EvidenceWork);
+      Queries, &AnalysisComplete, /*QueryAnalysisComplete=*/nullptr,
+      /*CandidateBranchOverride=*/InvalidVA,
+      /*CandidateTargetsOverride=*/nullptr, &EvidenceWork);
   if (!AnalysisComplete || Matches.size() != Queries.size()) {
     I386GOTModelEvidenceIncomplete = true;
     return;
   }
 
   for (const PendingModel &Model : Pending) {
-    if (!Model.Op || Model.QueryIndex >= Matches.size() ||
+    if (!Model.Op || !Model.Seed || Model.QueryIndex >= Matches.size() ||
         !Matches[Model.QueryIndex])
       continue;
     RelocatedInstructionScalarModelOccurrence Occurrence;
@@ -1431,10 +1569,10 @@ void CFGBuilder::completeExactI386GOTBaseModels(const BinaryImage &Img) {
         I386ELFGOTBaseZero;
     Occurrence.OutputOpcode = Model.Op->Opcode;
     Occurrence.OutputWitness = Model.Op->Output;
-    Occurrence.SeedInstructionAddr = Model.Seed.InstructionAddr;
-    Occurrence.SeedOpSeq = Model.Seed.OpSeq;
-    Occurrence.SeedOpcode = Model.Seed.OutputOpcode;
-    Occurrence.SeedOutputWitness = Model.Seed.OutputWitness;
+    Occurrence.SeedInstructionAddr = Model.Seed->InstructionAddr;
+    Occurrence.SeedOpSeq = Model.Seed->OpSeq;
+    Occurrence.SeedOpcode = Model.Seed->OutputOpcode;
+    Occurrence.SeedOutputWitness = Model.Seed->OutputWitness;
     RelocatedInstructionScalarModelOccurrences.push_back(std::move(Occurrence));
   }
 }
@@ -2457,6 +2595,12 @@ void CFGBuilder::completeExactARMRelativeLiteralAddresses(
 
 void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
                                    LowFunc &Func) {
+  AmbiguousI386GOTPCBranches.clear();
+  PendingAmbiguousI386GOTPCBranches.clear();
+  PendingAmbiguousI386GOTPCKeys.clear();
+  StageAmbiguousI386GOTPCBranches.clear();
+  StageReplayedI386GOTPCKeys.clear();
+  CurrentI386GOTOFFAmbiguityKeys.clear();
   for (va_t Addr : PreviouslyPublishedJumpTableBranches) {
     auto It = Insns.find(Addr);
     if (It != Insns.end() && It->second.IsBranch && It->second.IsIndirect &&
@@ -2485,9 +2629,25 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     SavedIndexDomainEvidenceIncompleteBranches.swap(
         IndexDomainEvidenceIncompleteBranches);
     bool IncompleteBranchMarkerStageActive = true;
+    bool IncompleteBranchMarkerCleanupReserved = false;
     auto RestoreIncompleteBranchMarkers = [&]() {
       if (!IncompleteBranchMarkerStageActive)
         return;
+      // The initial inventory reserve can fail before any candidate has had a
+      // chance to populate the stage-local shadows.  Restore that boundary
+      // with two constant-time swaps; merge/clear below is reserved only after
+      // candidate mutation becomes possible.
+      if (StackTableEvidenceIncompleteBranches.empty() &&
+          IndexDomainEvidenceIncompleteBranches.empty()) {
+        StackTableEvidenceIncompleteBranches.swap(
+            SavedStackTableEvidenceIncompleteBranches);
+        IndexDomainEvidenceIncompleteBranches.swap(
+            SavedIndexDomainEvidenceIncompleteBranches);
+        IncompleteBranchMarkerStageActive = false;
+        return;
+      }
+      assert(IncompleteBranchMarkerCleanupReserved &&
+             "marker rollback requires prepaid cleanup");
       // A failed stage cannot commit deletion of an entry marker, but newly
       // observed resource-incomplete candidates must remain fail-closed when
       // bounded retries end.  Node-merge preserves both sets without a second
@@ -2506,10 +2666,15 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       IncompleteBranchMarkerStageActive = false;
     };
     auto CommitIncompleteBranchMarkers = [&]() {
+      assert(IncompleteBranchMarkerCleanupReserved &&
+             "marker commit requires prepaid cleanup");
       SavedStackTableEvidenceIncompleteBranches.clear();
       SavedIndexDomainEvidenceIncompleteBranches.clear();
       IncompleteBranchMarkerStageActive = false;
     };
+    bool ForcedStableAmbiguityCommitTailThisStage = false;
+    bool ForcedProposalCommitTailThisStage = false;
+    size_t ForcedPendingKeyCount = 0;
     // Reachability and relocation-root suppression can change after every
     // published candidate.  Reuse proposal roots within this stage only; the
     // fixed retry bound caps total work, while each newly published resolver
@@ -2521,6 +2686,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
                          StackTableEvidenceBudgetForTesting.value_or(
                              limits::kMaxJumpTableEvidenceWork));
     CandidateFixedPointExplorationTargets.clear();
+    StageAmbiguousI386GOTPCBranches.clear();
+    StageReplayedI386GOTPCKeys.clear();
     I386GOTOFFProposalRootCache.clear();
     I386GOTOFFModelReachCache.clear();
     NextStrongJumpTableProposals.clear();
@@ -2682,6 +2849,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       RestoreIncompleteBranchMarkers();
       continue;
     }
+    IncompleteBranchMarkerCleanupReserved = true;
     CandidateAddrs.reserve(Insns.size());
     for (auto &[Addr, Rec] : Insns) {
       if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall)
@@ -2870,8 +3038,10 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
         // distinct jump-table destination and must split the containing block;
         // exploration state answers only whether its bytes need decoding.
         MadeProgress |= BlockStarts.insert(T).second;
-        if (!ExploredAddrs.count(T))
+        if (!ExploredAddrs.count(T)) {
           explore(Img, Dec, T);
+          MadeProgress = true;
+        }
       }
     }
 
@@ -2890,6 +3060,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       }
       NextStrongJumpTableProposals.clear();
       StrongJumpTableProposalOutcomes.clear();
+      StageAmbiguousI386GOTPCBranches.clear();
+      StageReplayedI386GOTPCKeys.clear();
       CandidateProposalStageActive = false;
       RestoreIncompleteBranchMarkers();
       ProposalStageRollbackMutatedQuarantineForTesting |=
@@ -2978,9 +3150,20 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
           break;
         }
         if (OutcomeIt->second !=
-            StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss) {
+                StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss &&
+            OutcomeIt->second !=
+                StrongJumpTableProposalOutcome::SemanticOpaque) {
           CandidateProposalStageEvidenceIncomplete = true;
           break;
+        }
+        if (OutcomeIt->second ==
+            StrongJumpTableProposalOutcome::SemanticOpaque) {
+          // Complete semantic ambiguity removes the provisional role but is
+          // not a monotonic proof loss: the next immutable graph must replay
+          // MayDepend before the branch-level opaque certificate can commit.
+          ProposalUniverseChanged = true;
+          ++PriorIt;
+          continue;
         }
         // One retained vector slot and one future set node are both charged
         // before recording the loss.
@@ -3033,6 +3216,79 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       RollBackIncompleteProposalStage();
       continue;
     }
+    const bool StableStage = !MadeProgress && !RefreshedProofMetadata &&
+                             !ProposalUniverseChanged;
+    std::set<va_t> StableSafelyPublishedI386GOTPCBranches;
+    if (StableStage) {
+      const size_t InsnLookup = OrderedLookupWork(Insns.size());
+      const size_t SafeBranchLookup =
+          OrderedLookupWork(PendingAmbiguousI386GOTPCBranches.size());
+      if (!ConsumeProposalStageProducts(
+              {{PendingAmbiguousI386GOTPCBranches.size(),
+                InsnLookup + SafeBranchLookup + 4}})) {
+        CandidateProposalStageEvidenceIncomplete = true;
+      }
+      if (!CandidateProposalStageEvidenceIncomplete) {
+        for (va_t BranchAddr : PendingAmbiguousI386GOTPCBranches) {
+          const auto Branch = Insns.find(BranchAddr);
+          if (Branch != Insns.end() &&
+              !Branch->second.JumpTableTargets.empty())
+            StableSafelyPublishedI386GOTPCBranches.insert(BranchAddr);
+        }
+      }
+      for (const I386GOTOFFAmbiguityReplayKey &Key :
+           PendingAmbiguousI386GOTPCKeys) {
+        constexpr size_t KeyWork = 5;
+        const size_t ReplayLookup =
+            OrderedLookupWork(StageReplayedI386GOTPCKeys.size());
+        const size_t StablePublishedLookup = OrderedLookupWork(
+            StableSafelyPublishedI386GOTPCBranches.size());
+        if (!ConsumeProposalStageProducts(
+                {// Preflight plus commit each perform the exact ordered
+                 // replay/safe-publication membership checks.
+                 {KeyWork, 2 * ReplayLookup + 2},
+                 {2, StablePublishedLookup},
+                 // One possible erase and the insertion-prepaid node cleanup.
+                 {1, 1}}))
+          break;
+      }
+      // Rebuild the derived branch index allocation-free after key retirement.
+      // Prepay its full branch-by-key membership walk before persistent commit.
+      if (!CandidateProposalStageEvidenceIncomplete &&
+          !ConsumeProposalStageProducts(
+              {{PendingAmbiguousI386GOTPCBranches.size(),
+                PendingAmbiguousI386GOTPCKeys.size() + 1}})) {
+        CandidateProposalStageEvidenceIncomplete = true;
+      }
+    }
+    if (!CandidateProposalStageEvidenceIncomplete && StableStage &&
+        ExhaustStableI386AmbiguityCommitTailForTesting &&
+        !ExhaustedStableI386AmbiguityCommitTailForTesting &&
+        !PendingAmbiguousI386GOTPCKeys.empty()) {
+      ExhaustedStableI386AmbiguityCommitTailForTesting = true;
+      ForcedStableAmbiguityCommitTailThisStage = true;
+      ForcedPendingKeyCount = PendingAmbiguousI386GOTPCKeys.size();
+      ProposalStageCommitTailEvidenceExhaustedForTesting = true;
+      CandidateProposalStageEvidenceRemaining = 0;
+      CandidateProposalStageEvidenceIncomplete = true;
+    }
+    if (CandidateProposalStageEvidenceIncomplete) {
+      RollBackIncompleteProposalStage();
+      if (ForcedStableAmbiguityCommitTailThisStage &&
+          PendingAmbiguousI386GOTPCKeys.size() == ForcedPendingKeyCount)
+        CommitTailRollbackRetainedPendingI386AmbiguityForTesting = true;
+      continue;
+    }
+    if (!CandidateProposalStageEvidenceIncomplete &&
+        ExhaustProposalStageCommitTailForTesting &&
+        !ExhaustedProposalStageCommitTailForTesting &&
+        !DefinitiveLosses.empty()) {
+      ExhaustedProposalStageCommitTailForTesting = true;
+      ForcedProposalCommitTailThisStage = true;
+      ProposalStageCommitTailEvidenceExhaustedForTesting = true;
+      CandidateProposalStageEvidenceRemaining = 0;
+      CandidateProposalStageEvidenceIncomplete = true;
+    }
     // Preflight every ordered insertion and every container traversal needed
     // by the commit before the first persistent mutation.  In particular, an
     // exact budget boundary cannot insert a quarantine record and then fail on
@@ -3045,6 +3301,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
              {1, StrongJumpTableProposalOutcomes.size()}})) {
       ProposalStageCommitTailEvidenceExhaustedForTesting = true;
       RollBackIncompleteProposalStage();
+      if (ForcedProposalCommitTailThisStage &&
+          QuarantinedJumpTableProposals.size() == QuarantineSizeAtStageStart)
+        ProposalStageForcedCommitTailRollbackPreservedStateForTesting = true;
       continue;
     }
     for (va_t Addr : DefinitiveLosses)
@@ -3054,7 +3313,6 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     StrongJumpTableProposalOutcomes.clear();
     CandidateProposalStageActive = false;
 
-
     if (!MadeProgress) {
       // Targets can remain byte-for-byte equal while the complete CFG changes
       // case labels, range/identity metadata, or mutation state.  Publish the
@@ -3062,7 +3320,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       // round on that published CFG.  Only an equal target set *and* equal
       // proof metadata in the following round is a fixed point; a metadata
       // cycle consumes the bounded retry budget and is discarded below.
-      if (RefreshedProofMetadata || ProposalUniverseChanged) {
+      if (!StableStage) {
         // This stage committed proposal metadata, but the next round observes
         // a different proof universe.  Keep both the prior safety markers and
         // any newly incomplete candidates until a later no-progress round can
@@ -3073,6 +3331,28 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       }
       CommitIncompleteBranchMarkers();
       ReachedFixedPoint = true;
+      // A changed graph may publish some other table at the same branch, but
+      // that does not replay this exact use/base/occurrence query.
+      detail::retireReplayedI386GOTPCAmbiguities(
+          PendingAmbiguousI386GOTPCKeys, StageReplayedI386GOTPCKeys,
+          &StableSafelyPublishedI386GOTPCBranches);
+      for (auto It = PendingAmbiguousI386GOTPCBranches.begin();
+           It != PendingAmbiguousI386GOTPCBranches.end();) {
+        const va_t BranchAddr = *It;
+        const bool HasPendingKey = std::any_of(
+            PendingAmbiguousI386GOTPCKeys.begin(),
+            PendingAmbiguousI386GOTPCKeys.end(),
+            [&](const I386GOTOFFAmbiguityReplayKey &Key) {
+              return std::get<0>(Key) == BranchAddr;
+            });
+        if (!HasPendingKey)
+          It = PendingAmbiguousI386GOTPCBranches.erase(It);
+        else
+          ++It;
+      }
+      AmbiguousI386GOTPCBranches.swap(
+          StageAmbiguousI386GOTPCBranches);
+      StageAmbiguousI386GOTPCBranches.clear();
       break;
     }
 
@@ -3095,6 +3375,10 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
   // budget is exhausted first, discard those provisional edges rather than
   // publishing a CFG whose validity depends on traversal order.
   if (!ReachedFixedPoint) {
+    // A complete ambiguity result from a graph that never stabilized is not a
+    // semantic certificate, but neither is it callback evidence.  The
+    // insertion-time-prepaid pending set carries those exact candidates into
+    // tail-call conversion without allocating after evidence exhaustion.
     bool Changed = false;
     for (auto &[Addr, Rec] : Insns) {
       auto Info = ResolvedTableInfo.find(Addr);
@@ -3108,6 +3392,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     if (Changed)
       rebuildBlocks(Func);
   }
+  StageAmbiguousI386GOTPCBranches.clear();
+  StageReplayedI386GOTPCKeys.clear();
 
   // A transient empty target set can recover in a later stage, so classify a
   // lost validated table only after convergence (or the bounded cleanup above)

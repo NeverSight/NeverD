@@ -193,6 +193,14 @@ struct BinaryImage {
   /// provenance must consume this mapped occurrence instead of rescanning the
   /// raw relocation inventory.
   std::map<va_t, AppliedI386GOTPCField> I386GOTPCFields;
+  /// Mapped i386 instruction fields for which at least one R_386_GOTPC and
+  /// another value-writing relocation claim the same four bytes.  These are
+  /// deliberately not AppliedI386GOTPCFields: the loader applies every record
+  /// from the original REL addend, but no one record owns the final scalar
+  /// provenance.  CFG lifting binds this tombstone to the exact decoded
+  /// output so only a GOTOFF consumer that may depend on the ambiguous field
+  /// is retained as an opaque indirect branch.
+  std::set<va_t> AmbiguousI386GOTPCFields;
   /// Virtual addresses that a relocation resolves to inside a WRITABLE data
   /// segment (.data/.bss), filled by the loader as it applies relocations.  The
   /// writable counterpart of RelocDataAddrs: it proves a constant is a genuine

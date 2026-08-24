@@ -434,12 +434,14 @@ TEST_F(JumpTableProposalLFP,
     bool RollbackMutatedQuarantine = false;
     bool HasQuarantinedProposal = false;
     bool HasPendingExploration = false;
+    bool ForcedRollbackPreservedState = false;
   };
-  auto BuildWithBudget = [&](size_t Budget) {
+  auto BuildWithBudget = [&](size_t Budget, bool ExhaustCommitTail = false) {
     neverd::Decoder Decoder;
     EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
     neverd::CFGBuilder Builder;
     Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    Builder.setExhaustProposalStageCommitTailForTesting(ExhaustCommitTail);
     BudgetedBuild Result;
     Result.Low = Builder.build(Image, Decoder, Function->Addr, Function->Name);
     Result.CommitTailExhausted =
@@ -450,40 +452,35 @@ TEST_F(JumpTableProposalLFP,
         Builder.hasQuarantinedJumpTableProposalsForTesting();
     Result.HasPendingExploration =
         Builder.hasMaskFixedPointExplorationTargetsForTesting();
+    Result.ForcedRollbackPreservedState =
+        Builder
+            .proposalStageForcedCommitTailRollbackPreservedStateForTesting();
     return Result;
   };
 
   // This fixture first proposes and publishes a locally owned table, then
-  // loses that proof after a newly explored case contributes a backedge.  Find
-  // the exact aggregate budget at which that definitive loss can first commit
-  // to the quarantine set.  The search follows observable transaction state,
-  // so accounting changes do not turn the regression into an address- or
-  // work-count special case.
-  size_t NonCommittingBudget = 0;
-  size_t CommittingBudget =
+  // loses that proof after a newly explored case contributes a backedge.  Hit
+  // the final transaction boundary directly: first-success-minus-one is not a
+  // stable oracle because stricter proof accounting may legitimately move an
+  // earlier candidate boundary.
+  const size_t CommittingBudget =
       neverd::limits::kMaxJumpTableMaskFixedPointEvidenceWork;
-  ASSERT_FALSE(BuildWithBudget(NonCommittingBudget).HasQuarantinedProposal);
   ASSERT_TRUE(BuildWithBudget(CommittingBudget).HasQuarantinedProposal)
       << "the fixture must reach a prior strong proposal followed by a "
          "definitive local proof loss";
-  while (NonCommittingBudget + 1 < CommittingBudget) {
-    const size_t Midpoint =
-        NonCommittingBudget + (CommittingBudget - NonCommittingBudget) / 2;
-    if (BuildWithBudget(Midpoint).HasQuarantinedProposal)
-      CommittingBudget = Midpoint;
-    else
-      NonCommittingBudget = Midpoint;
-  }
-  ASSERT_EQ(NonCommittingBudget + 1, CommittingBudget);
 
-  const BudgetedBuild Boundary = BuildWithBudget(NonCommittingBudget);
+  const BudgetedBuild Boundary =
+      BuildWithBudget(CommittingBudget, /*ExhaustCommitTail=*/true);
   EXPECT_TRUE(Boundary.CommitTailExhausted)
-      << "one unit below the first complete quarantine commit must fail at "
-         "the atomically prepaid commit tail";
+      << "the one-shot hook must fail at the atomically prepaid commit tail";
+  EXPECT_TRUE(Boundary.ForcedRollbackPreservedState)
+      << "the forced rollback must observe the unchanged persistent "
+         "quarantine set before the next graph retries";
   EXPECT_FALSE(Boundary.RollbackMutatedQuarantine)
       << "an incomplete stage must restore the quarantine set it observed at "
          "stage entry";
-  EXPECT_FALSE(Boundary.HasQuarantinedProposal);
+  EXPECT_TRUE(Boundary.HasQuarantinedProposal)
+      << "a later complete retry must commit the same definitive loss";
   EXPECT_FALSE(Boundary.HasPendingExploration);
   EXPECT_TRUE(Boundary.Low.JumpTables.empty());
   EXPECT_TRUE(hasOpcode(Boundary.Low, neverd::NdOp::INDIR_BR));

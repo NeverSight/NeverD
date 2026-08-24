@@ -26,6 +26,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <vector>
 
 namespace neverd {
@@ -33,6 +34,8 @@ namespace neverd {
 namespace detail {
 using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
+using I386GOTOFFAmbiguityReplayKey =
+    std::tuple<va_t, va_t, int, int, va_t>;
 
 /// Record one exact LowIR occurrence point.  A second operation carrying the
 /// same (address, sequence) key permanently makes the point ambiguous; callers
@@ -41,6 +44,16 @@ bool recordUniqueJumpTableProofPoint(
     std::map<JumpTableProofPoint, JumpTableProofLocation> &UniquePoints,
     std::set<JumpTableProofPoint> &AmbiguousPoints, JumpTableProofPoint Point,
     JumpTableProofLocation Location);
+
+/// Retire exact stable-graph query identities, or every pending identity for a
+/// branch whose final stable graph published a validated jump table.  The
+/// caller owns budget preflight for all ordered lookups and erases; keeping
+/// this operation shared with focused tests prevents provisional publication
+/// from accidentally retiring persistent ambiguity evidence.
+void retireReplayedI386GOTPCAmbiguities(
+    std::set<I386GOTOFFAmbiguityReplayKey> &Pending,
+    const std::set<I386GOTOFFAmbiguityReplayKey> &Replayed,
+    const std::set<va_t> *SafelyPublishedBranches = nullptr);
 } // namespace detail
 
 class CFGBuilder {
@@ -89,11 +102,45 @@ public:
   bool hasMaskFixedPointExplorationTargetsForTesting() const {
     return !CandidateFixedPointExplorationTargets.empty();
   }
+  /// Report only whether stable replay could not retire a previously complete
+  /// i386 GOTPC ambiguity proof.  Focused graph-growth tests use this to
+  /// distinguish an explicit negative replay from a slice that never reached
+  /// the exact proof seam; no proof contents are exposed.
+  bool hasPendingI386GOTPCAmbiguityForTesting() const {
+    return !PendingAmbiguousI386GOTPCKeys.empty();
+  }
+  bool i386GOTOFFGraphQueryIssuedForTesting() const {
+    return I386GOTOFFGraphQueryIssuedForTesting;
+  }
+  bool i386GOTOFFGraphQueryBudgetExhaustedForTesting() const {
+    return I386GOTOFFGraphQueryBudgetExhaustedForTesting;
+  }
   /// Focused transaction boundary hooks.  They expose no proposal contents:
   /// tests only distinguish a commit-tail budget failure from an earlier proof
   /// failure and verify rollback did not mutate the persistent quarantine set.
   bool proposalStageCommitTailEvidenceExhaustedForTesting() const {
     return ProposalStageCommitTailEvidenceExhaustedForTesting;
+  }
+  bool commitTailRollbackRetainedPendingI386AmbiguityForTesting() const {
+    return CommitTailRollbackRetainedPendingI386AmbiguityForTesting;
+  }
+  /// Force one stable stage carrying pending i386 ambiguity evidence to fail
+  /// immediately before the atomic proposal commit.  This is a generic
+  /// transaction-boundary hook: it is independent of branch addresses and
+  /// fixture shapes, and exists only to verify rollback preserves fail-closed
+  /// carry without poisoning sibling candidates.
+  void setExhaustStableI386AmbiguityCommitTailForTesting(bool Enable) {
+    ExhaustStableI386AmbiguityCommitTailForTesting = Enable;
+  }
+  /// Force one proposal stage carrying a definitive quarantine loss to exhaust
+  /// immediately before the final persistent commit.  This generic hook lets
+  /// tests observe rollback directly instead of assuming that
+  /// first-success-minus-one always lands at the same accounting boundary.
+  void setExhaustProposalStageCommitTailForTesting(bool Enable) {
+    ExhaustProposalStageCommitTailForTesting = Enable;
+  }
+  bool proposalStageForcedCommitTailRollbackPreservedStateForTesting() const {
+    return ProposalStageForcedCommitTailRollbackPreservedStateForTesting;
   }
   bool proposalStageRollbackMutatedQuarantineForTesting() const {
     return ProposalStageRollbackMutatedQuarantineForTesting;
@@ -1092,6 +1139,7 @@ private:
   };
   enum class StrongJumpTableProposalOutcome : uint8_t {
     DefinitiveLocalProofLoss,
+    SemanticOpaque,
     EvidenceIncomplete,
     StrongProposed,
   };
@@ -1122,6 +1170,12 @@ private:
   size_t CandidateProposalStageEvidenceRemaining = 0;
   bool CandidateProposalStageEvidenceIncomplete = false;
   bool ProposalStageCommitTailEvidenceExhaustedForTesting = false;
+  bool CommitTailRollbackRetainedPendingI386AmbiguityForTesting = false;
+  bool ExhaustStableI386AmbiguityCommitTailForTesting = false;
+  bool ExhaustedStableI386AmbiguityCommitTailForTesting = false;
+  bool ExhaustProposalStageCommitTailForTesting = false;
+  bool ExhaustedProposalStageCommitTailForTesting = false;
+  bool ProposalStageForcedCommitTailRollbackPreservedStateForTesting = false;
   bool ProposalStageRollbackMutatedQuarantineForTesting = false;
   ProposalCleanupEvidenceStateForTesting ProposalCleanupEvidenceForTesting;
   bool ProposalOldStateCleanupEvidenceExhaustionForTesting = false;
@@ -1208,13 +1262,25 @@ private:
   /// It is reset exactly once at resolver entry; its actual use is charged to
   /// the candidate/stage aggregate before the candidate outcome is committed.
   mutable size_t I386GOTOFFProposalEvidenceRemaining = 0;
-  /// Whole-graph GOT-base model completion ran out of its independent
-  /// transactional allowance.  An exact GOTOFF consumer that subsequently
-  /// finds no model is evidence-incomplete, not a definitive non-table.
-  bool I386GOTModelEvidenceIncomplete = false;
+  /// An exact i386 GOTOFF address shape reached the model-zero proof seam for
+  /// the current candidate.  Set before any budgeted model/query work so
+  /// exhaustion cannot erase the branch identity and misclassify it as a
+  /// callback.
+  mutable bool I386GOTOFFProposalShapeClaimed = false;
   /// Sticky exhaustion bit for the current candidate.  An unfinished exact
   /// GOTOFF query is evidence-incomplete, never definitive proposal loss.
   mutable bool I386GOTOFFProposalEvidenceIncomplete = false;
+  /// The per-stage exact call/POP + GOTPC model batch exhausted its own graph
+  /// allowance.  Consumers must not interpret the resulting empty model
+  /// inventory as definitive callback evidence.
+  bool I386GOTModelEvidenceIncomplete = false;
+  /// The current exact GOTOFF base query is completely proven to reach a
+  /// decoded scalar field whose bytes have multiple relocation writers.  Kept
+  /// separate from the general proposal-budget flag so missing model metadata
+  /// elsewhere cannot preserve an unrelated i386 indirect branch.
+  mutable bool I386GOTOFFAmbiguousModelReach = false;
+  mutable bool I386GOTOFFGraphQueryIssuedForTesting = false;
+  mutable bool I386GOTOFFGraphQueryBudgetExhaustedForTesting = false;
   /// One transactional allowance for stack-materialized table evidence in the
   /// current resolver graph.  Candidate retries in one stage share the same
   /// monotonically decreasing balance; a bounded fixed-point rebuild receives
@@ -1242,20 +1308,66 @@ private:
   /// is definitively rejected.  This certificate preserves branch semantics;
   /// it never authorizes targets or relocation suppression.
   std::set<va_t> ValidatedPhysicalJumpTableBranches;
+  /// Cross-generation identity of the exact ambiguous MayDepend query.  It
+  /// deliberately excludes LowIR variables and proof-root sets: both are
+  /// generation-local representations.  The branch/use occurrence, selected
+  /// input side and table base are immutable and therefore suitable for exact
+  /// pending/replay retirement.
+  using I386GOTOFFAmbiguityReplayKey =
+      detail::I386GOTOFFAmbiguityReplayKey;
+  /// Same-stage memoization additionally includes the concrete LowIR input
+  /// and candidate proof roots, because those affect the actual graph query
+  /// even though they must not leak into the cross-generation replay key.
+  using I386GOTOFFModelReachCacheKey =
+      std::tuple<va_t, va_t, int, int, va_t, uint8_t, uint64_t, uint16_t,
+                 uint8_t, uint64_t, std::vector<va_t>>;
+  /// Exact i386 GOTOFF branches whose selected base completely and
+  /// positively depends on a multiply-owned GOTPC relocation field.  This is
+  /// a semantic local rejection, not resource incompleteness: retain only the
+  /// affected branch as opaque without rolling back sibling candidates.
+  std::set<va_t> AmbiguousI386GOTPCBranches;
+  /// Fail-closed carry for a complete ambiguity proof observed in any
+  /// non-stable resolver graph.  It is not a semantic certificate and is
+  /// replaced only by a successful stable-stage replay; rollback or graph
+  /// growth may therefore preserve the branch identity without publishing the
+  /// provisional proof.
+  std::set<va_t> PendingAmbiguousI386GOTPCBranches;
+  std::set<I386GOTOFFAmbiguityReplayKey>
+      PendingAmbiguousI386GOTPCKeys;
+  /// Generation-local shadow for AmbiguousI386GOTPCBranches.  A resolver
+  /// stage may discover new case edges after proving MayDepend, so only the
+  /// stable no-progress graph is allowed to commit this semantic certificate.
+  std::set<va_t> StageAmbiguousI386GOTPCBranches;
+  /// Branches whose exact GOTPC model/ambiguity query completed in the current
+  /// immutable graph, regardless of its boolean result.  A stable stage may
+  /// retire a pending fail-closed carry only with this per-branch replay marker
+  /// merely reaching a global fixed point does not prove that a changed slice
+  /// revisited the proof seam.
+  mutable std::set<I386GOTOFFAmbiguityReplayKey>
+      StageReplayedI386GOTPCKeys;
+  /// Positive ambiguity query keys accumulated by the current candidate.  The
+  /// top-level resolver moves them into stage/pending state only after the
+  /// candidate-local account has prepaid all persistent set work.
+  mutable std::set<I386GOTOFFAmbiguityReplayKey>
+      CurrentI386GOTOFFAmbiguityKeys;
   /// Candidate root sets are stable only within one resolver graph.  Cache
   /// accepted and rejected table bases for the current stage, then clear this
   /// map whenever multi-stage resolution rebuilds reachability.
   mutable std::map<std::tuple<va_t, uint32_t, bool>,
                    std::optional<std::set<va_t>>>
       I386GOTOFFProposalRootCache;
-  using I386GOTOFFModelReachKey =
-      std::tuple<va_t, int, int, va_t, uint8_t, uint64_t, uint16_t, uint8_t,
-                 uint64_t, std::vector<va_t>>;
   /// Whole-CFG reaching-value queries are the dominant proposal cost.  Cache
   /// the exact use/input/table/root-set identity within one resolver stage;
   /// roots are part of the key so a provisional proof can never authorize the
   /// stricter final revalidation graph.
-  mutable std::map<I386GOTOFFModelReachKey, bool> I386GOTOFFModelReachCache;
+  struct I386GOTOFFModelReachResult {
+    bool Authenticated = false;
+    bool AmbiguousQueryIssued = false;
+    bool AmbiguousReach = false;
+  };
+  mutable std::map<I386GOTOFFModelReachCacheKey,
+                   I386GOTOFFModelReachResult>
+      I386GOTOFFModelReachCache;
   bool consumeI386GOTOFFProposalEvidence(size_t Amount = 1) const {
     if (Amount > I386GOTOFFProposalEvidenceRemaining) {
       I386GOTOFFProposalEvidenceRemaining = 0;
