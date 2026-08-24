@@ -24,6 +24,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
 #include <cstdint>
@@ -129,7 +130,7 @@ static_assert([] {
 
 static size_t orderedEvidenceLookupWork(size_t Count) {
   size_t Work = 1;
-  for (size_t N = Count; N > 1; N = (N + 1) / 2)
+  for (size_t N = Count; N > 1; N = N / 2 + N % 2)
     ++Work;
   return Work;
 }
@@ -3012,13 +3013,62 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
         }
         return consumeFixedPointEvidence(Total);
       };
+  auto consumeFixedPointFactorProduct =
+      [&](std::initializer_list<size_t> Factors) {
+        const size_t Max = std::numeric_limits<size_t>::max();
+        size_t Product = 1;
+        for (size_t Factor : Factors) {
+          if (Factor != 0 && Product > Max / Factor)
+            return consumeFixedPointEvidence(Max);
+          Product *= Factor;
+        }
+        return consumeFixedPointEvidence(Product);
+      };
+  // Mirror the canonical JumpTableInfo traversal charge before any local
+  // copy.  Each dynamic element is retained by the copy and later destroyed;
+  // nested initializer/role vectors are charged before they are inspected.
+  auto consumeFixedPointInfoCopy = [&](const JumpTableInfo &Candidate) {
+    if (!consumeFixedPointProducts(
+            {{Candidate.AuthenticatedMaskCoordinates.size(), 2},
+             {Candidate.AuthenticatedMaskKnownOneWitnesses.size(), 2},
+             {Candidate.StorageRanges.size(), 2},
+             {Candidate.SuppressibleRelocationSlots.size(), 2},
+             {Candidate.IndexValueAlternatives.size(), 2},
+             {Candidate.TargetLoads.size(), 2},
+             {Candidate.AuthenticatedFrameStorage.Initializers.size(), 2},
+             {Candidate.AuthenticatedStorageConsumers.size(), 2},
+             {Candidate.LoadRoles.size(), 2},
+             {Candidate.EntryIndices.size(), 2},
+             {Candidate.RuntimeCaseLabels.size(), 2},
+             {Candidate.RuntimeSlotIndices.size(), 2},
+             {Candidate.ExplicitTargets.size(), 2}}))
+      return false;
+    for (const JumpTableFrameInitializerChunk &Initializer :
+         Candidate.AuthenticatedFrameStorage.Initializers)
+      if (!consumeFixedPointProducts(
+              {{Initializer.StaticSources.size(), 2}}))
+        return false;
+    for (const JumpTableLoadRole &Role : Candidate.LoadRoles) {
+      if (!consumeFixedPointProducts(
+              {{Role.AllowedBases.size(), 2},
+               {Role.Indices.size(), 2},
+               {Role.FrameStorage.Initializers.size(), 2}}))
+        return false;
+      for (const JumpTableFrameInitializerChunk &Initializer :
+           Role.FrameStorage.Initializers)
+        if (!consumeFixedPointProducts(
+                {{Initializer.StaticSources.size(), 2}}))
+          return false;
+    }
+    return consumeFixedPointEvidence();
+  };
 
   const bool TopLevelFixedPointAttempt =
       AllowFixedPointBootstrap && !CandidateTargetsOverride &&
       !ReachableInstructions;
   if (TopLevelFixedPointAttempt && CurrentImg &&
       Info.PhysicalCapacity >= limits::kMinJumpTableEntries &&
-      Info.PhysicalCapacity <= 64) {
+      Info.PhysicalCapacity <= limits::kMaxJumpTableEntries) {
     const uint64_t PhysicalStride =
         Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
     std::optional<uint64_t> AddressScale;
@@ -3038,19 +3088,90 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     }
     FixedPointEligible &= AddressScale && *AddressScale == PhysicalStride;
     if (FixedPointEligible) {
-      JumpTableInfo Physical = Info;
-      Physical.RuntimeSlotIndices.clear();
-      Physical.RuntimeCaseLabels.clear();
-      Physical.AuthenticatedMaskCoordinates.clear();
-      Physical.AuthenticatedMaskKnownOneWitnesses.clear();
+      // Do not copy the complete candidate before its attacker-shaped vectors
+      // have been charged.  The bounded physical read needs only this scalar
+      // layout projection; its runtime-domain vectors intentionally stay
+      // empty.
+      JumpTableInfo Physical;
+      Physical.BaseAddr = Info.BaseAddr;
+      Physical.HasBaseAddr = Info.HasBaseAddr;
+      Physical.EntrySize = Info.EntrySize;
+      Physical.EntryStride = Info.EntryStride;
+      Physical.IsRelative = Info.IsRelative;
+      Physical.IsSigned = Info.IsSigned;
+      Physical.TargetBase = Info.TargetBase;
+      Physical.HasTargetBase = Info.HasTargetBase;
+      Physical.EntryScale = Info.EntryScale;
       std::vector<va_t> PhysicalTargets;
       std::vector<uint32_t> PhysicalSlots;
       uint32_t Lower = limits::kMinJumpTableEntries;
       uint32_t Upper = Info.PhysicalCapacity;
+      // The bounded read below performs a logarithmic search over physical
+      // prefixes.  Prepay a safe upper bound for every slot that any search
+      // path can inspect, including the format-native executable-owner
+      // inventories traversed by isValidTarget.  Extending the fixed-point
+      // gate beyond 64 entries must not turn those attacker-shaped scans into
+      // unmetered work.
+      size_t SearchPasses = 0;
+      for (uint32_t Width = Upper - Lower + 1; Width != 0; Width >>= 1)
+        ++SearchPasses;
+      const size_t KnownEntryLookup =
+          KnownFuncEntries
+              ? orderedEvidenceLookupWork(KnownFuncEntries->size())
+              : 0;
+      const size_t RuntimeEntryLookup =
+          orderedEvidenceLookupWork(CurrentImg->RuntimeFunctionAddrs.size());
+      const size_t VerifiedEntryLookup = orderedEvidenceLookupWork(
+          CurrentImg->VerifiedFunctionEntries.size());
+      const size_t ImportStubLookup =
+          orderedEvidenceLookupWork(CurrentImg->ImportStubIndices.size());
+      const size_t FragmentLookup = orderedEvidenceLookupWork(
+          CurrentImg->ExceptionMetadata.Functions.size());
+      const size_t FragmentWorkPerEntry =
+          FragmentLookup <= (std::numeric_limits<size_t>::max() - 3) / 2
+              ? FragmentLookup * 2 + 3
+              : std::numeric_limits<size_t>::max();
+      if (SearchPasses != 0 && Upper >
+                                   std::numeric_limits<size_t>::max() /
+                                       SearchPasses) {
+        consumeFixedPointEvidence(std::numeric_limits<size_t>::max());
+        return false;
+      }
+      const size_t TargetReadUpperBound = size_t(Upper) * SearchPasses;
+      if (!consumeFixedPointProducts({{TargetReadUpperBound, 16}}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, CurrentImg->Symbols.size(), 4}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, CurrentImg->Segments.size(), 16}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, CurrentImg->Sections.size(), 8}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound,
+               CurrentImg->ExceptionMetadata.Functions.size(),
+               FragmentWorkPerEntry}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, CurrentImg->ImportStubRanges.size(), 3}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, CurrentImg->Imports.size(), 2}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, CurrentImg->KnownCodeRanges.size(), 2}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, CurrentImg->Imports.size(),
+               CurrentImg->Segments.size(), 4}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, CurrentImg->Imports.size(),
+               CurrentImg->Sections.size(), 4}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, RuntimeEntryLookup, 2}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, VerifiedEntryLookup, 2}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, ImportStubLookup, 2}) ||
+          !consumeFixedPointFactorProduct(
+              {TargetReadUpperBound, KnownEntryLookup}))
+        return false;
       while (Lower <= Upper) {
         const uint32_t Count = Lower + (Upper - Lower) / 2;
-        if (!consumeFixedPointEvidence(size_t(Count) * 3))
-          return false;
         Physical.MaxEntries = Count;
         std::vector<uint32_t> Slots;
         std::vector<va_t> Targets =
@@ -3069,27 +3190,30 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
       if (PhysicalTargets.size() >= limits::kMinJumpTableEntries) {
         const uint32_t CandidateCapacity =
             static_cast<uint32_t>(PhysicalTargets.size());
-        if (PhysicalSlots.empty()) {
-          PhysicalSlots.resize(PhysicalTargets.size());
-          for (uint32_t I = 0; I < PhysicalSlots.size(); ++I)
-            PhysicalSlots[I] = I;
-        }
-        const bool ExactDenseSlots =
-            PhysicalSlots.size() == PhysicalTargets.size() &&
-            std::all_of(PhysicalSlots.begin(), PhysicalSlots.end(),
-                        [&](uint32_t Slot) {
-                          return Slot < CandidateCapacity;
-                        }) &&
-            std::set<uint32_t>(PhysicalSlots.begin(), PhysicalSlots.end())
-                    .size() == PhysicalSlots.size();
+        if (!consumeFixedPointEvidence(PhysicalSlots.size()))
+          return false;
+        bool ExactDenseSlots =
+            PhysicalSlots.size() == PhysicalTargets.size();
+        for (uint32_t I = 0; ExactDenseSlots && I < PhysicalSlots.size(); ++I)
+          ExactDenseSlots = PhysicalSlots[I] == I;
         if (ExactDenseSlots) {
-          std::vector<JumpTableValueOccurrence> SeedOccurrences =
+          std::optional<JumpTableValueOccurrence> OwnedSeedOccurrence;
+          llvm::ArrayRef<JumpTableValueOccurrence> SeedOccurrences =
               Info.IndexValueAlternatives;
           if (SeedOccurrences.empty() && Info.IndexValueAtUse.Size != 0 &&
-              Info.IndexUseAddr != InvalidVA && Info.IndexUseSeq >= 0)
-            SeedOccurrences.push_back(
-                {Info.IndexValueAtUse, Info.IndexUseAddr, Info.IndexUseSeq,
-                 Info.IndexValueDefinedAtUse});
+              Info.IndexUseAddr != InvalidVA && Info.IndexUseSeq >= 0) {
+            if (!consumeFixedPointEvidence())
+              return false;
+            OwnedSeedOccurrence.emplace(
+                JumpTableValueOccurrence{Info.IndexValueAtUse,
+                                         Info.IndexUseAddr,
+                                         Info.IndexUseSeq,
+                                         Info.IndexValueDefinedAtUse});
+            SeedOccurrences = llvm::ArrayRef<JumpTableValueOccurrence>(
+                &*OwnedSeedOccurrence, 1);
+          }
+          if (!consumeFixedPointEvidence(SeedOccurrences.size()))
+            return false;
           const bool ValidSeedOccurrences =
               !SeedOccurrences.empty() &&
               std::none_of(SeedOccurrences.begin(), SeedOccurrences.end(),
@@ -3102,8 +3226,14 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
           if (ValidSeedOccurrences) {
             auto targetsFor = [&](const std::set<uint32_t> &Coordinates)
                 -> std::optional<std::vector<va_t>> {
-              if (!consumeFixedPointProducts({{PhysicalTargets.size(), 1},
-                                              {Coordinates.size(), 1}}))
+              // Pay the physical scan, every ordered coordinate lookup, and
+              // the retained result elements plus their eventual destruction
+              // before allocating the result vector.
+              if (!consumeFixedPointProducts(
+                      {{PhysicalTargets.size(), 1},
+                       {PhysicalTargets.size(),
+                        orderedEvidenceLookupWork(Coordinates.size())},
+                       {Coordinates.size(), 2}}))
                 return std::nullopt;
               std::vector<va_t> Targets;
               Targets.reserve(Coordinates.size());
@@ -3119,10 +3249,14 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                       {{Targets.size(),
                         orderedEvidenceLookupWork(ExploredAddrs.size())},
                        {Targets.size(),
+                        orderedEvidenceLookupWork(ExploredAddrs.size())},
+                       {Targets.size(),
+                        orderedEvidenceLookupWork(BlockStarts.size())},
+                       {Targets.size(),
                         orderedEvidenceLookupWork(BlockStarts.size())},
                        {Targets.size(),
                         orderedEvidenceLookupWork(Insns.size())},
-                       {Targets.size(), 1}}))
+                       {Targets.size(), 2}}))
                 return std::nullopt;
               const bool UndecodedAttempt =
                   std::any_of(Targets.begin(), Targets.end(), [&](va_t Target) {
@@ -3147,6 +3281,11 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 return std::nullopt;
               auto Existing =
                   CandidateFixedPointExplorationTargets.find(Rec.Addr);
+              if (Existing == CandidateFixedPointExplorationTargets.end() &&
+                  !consumeFixedPointProducts(
+                      {{1, orderedEvidenceLookupWork(
+                               CandidateFixedPointExplorationTargets.size())}}))
+                return std::nullopt;
               const size_t ExistingTargets =
                   Existing == CandidateFixedPointExplorationTargets.end()
                       ? 0
@@ -3154,7 +3293,12 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               if (Targets.size() >
                       std::numeric_limits<size_t>::max() - ExistingTargets ||
                   !consumeFixedPointProducts(
-                      {{1, 2}, {ExistingTargets + Targets.size(), 2}}))
+                      {{Existing ==
+                                CandidateFixedPointExplorationTargets.end()
+                            ? 1
+                            : 0,
+                        2},
+                       {ExistingTargets + Targets.size(), 2}}))
                 return std::nullopt;
               if (Existing == CandidateFixedPointExplorationTargets.end())
                 CandidateFixedPointExplorationTargets.emplace(Rec.Addr,
@@ -3171,54 +3315,63 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                                           : PersistentCFGRoots;
             std::set<uint32_t> Authorized;
             const size_t Capacity = CandidateCapacity;
-            if (SeedOccurrences.size() >
-                std::numeric_limits<size_t>::max() / Capacity)
-              return false;
-            const size_t SeedQueryCount =
-                Capacity * SeedOccurrences.size();
-            constexpr size_t SeedWorkPerQuery = 7;
-            if (SeedQueryCount >
-                    std::numeric_limits<size_t>::max() / SeedWorkPerQuery ||
-                !consumeFixedPointEvidence(SeedQueryCount * SeedWorkPerQuery))
-              return false;
-            std::vector<JumpTableValueQuery> SeedQueries;
-            SeedQueries.reserve(SeedQueryCount);
-            for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
-                 ++Coordinate)
-              for (const JumpTableValueOccurrence &Index : SeedOccurrences) {
-                JumpTableValueQuery Query;
-                Query.Candidate = Index.Value;
-                Query.UseAddr = Index.Addr;
-                Query.UseSeq = Index.Seq;
-                Query.Alternatives = {
-                    {NdVar::cst(Coordinate, Index.Value.Size), InvalidVA, -1,
-                     false},
-                    {NdVar::scalar(Coordinate, Index.Value.Size), InvalidVA, -1,
-                     false}};
-                Query.AllowZeroExtension = true;
-                SeedQueries.push_back(std::move(Query));
+            // Literal-coordinate discovery is intentionally small: it issues
+            // one query per physical slot and occurrence.  A large table may
+            // enter this fixed point only through the exact empty-edge modulo
+            // theorem below, which authorizes [0, N) without treating physical
+            // capacity (or any physical slot) as a runtime selector domain.
+            const bool AllowLiteralSeedBootstrap = CandidateCapacity <= 64;
+            if (AllowLiteralSeedBootstrap) {
+              if (SeedOccurrences.size() >
+                  std::numeric_limits<size_t>::max() / Capacity)
+                return false;
+              const size_t SeedQueryCount =
+                  Capacity * SeedOccurrences.size();
+              constexpr size_t SeedWorkPerQuery = 7;
+              if (SeedQueryCount >
+                      std::numeric_limits<size_t>::max() / SeedWorkPerQuery ||
+                  !consumeFixedPointEvidence(SeedQueryCount * SeedWorkPerQuery))
+                return false;
+              std::vector<JumpTableValueQuery> SeedQueries;
+              SeedQueries.reserve(SeedQueryCount);
+              for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
+                   ++Coordinate)
+                for (const JumpTableValueOccurrence &Index : SeedOccurrences) {
+                  JumpTableValueQuery Query;
+                  Query.Candidate = Index.Value;
+                  Query.UseAddr = Index.Addr;
+                  Query.UseSeq = Index.Seq;
+                  Query.Alternatives = {
+                      {NdVar::cst(Coordinate, Index.Value.Size), InvalidVA, -1,
+                       false},
+                      {NdVar::scalar(Coordinate, Index.Value.Size), InvalidVA,
+                       -1, false}};
+                  Query.AllowZeroExtension = true;
+                  SeedQueries.push_back(std::move(Query));
+                }
+              std::vector<bool> SeedComplete;
+              const std::vector<bool> SeedMatches = tableValuesMatchAtUses(
+                  SeedQueries, nullptr, &SeedComplete, Rec.Addr, &NoTargets,
+                  AggregateEvidenceBudget);
+              if (SeedMatches.size() != SeedQueries.size() ||
+                  SeedComplete.size() != SeedQueries.size() ||
+                  std::any_of(SeedComplete.begin(), SeedComplete.end(),
+                              [](bool Complete) { return !Complete; })) {
+                if (EvidenceIncomplete)
+                  *EvidenceIncomplete = true;
+                return false;
               }
-            std::vector<bool> SeedComplete;
-            const std::vector<bool> SeedMatches = tableValuesMatchAtUses(
-                SeedQueries, nullptr, &SeedComplete, Rec.Addr, &NoTargets,
-                AggregateEvidenceBudget);
-            if (SeedMatches.size() != SeedQueries.size() ||
-                SeedComplete.size() != SeedQueries.size() ||
-                std::any_of(SeedComplete.begin(), SeedComplete.end(),
-                            [](bool Complete) { return !Complete; })) {
-              if (EvidenceIncomplete)
-                *EvidenceIncomplete = true;
-              return false;
-            }
-            for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
-                 ++Coordinate) {
-              const size_t Begin = size_t(Coordinate) * SeedOccurrences.size();
-              const size_t End = Begin + SeedOccurrences.size();
-              if (std::all_of(SeedMatches.begin() + Begin,
-                              SeedMatches.begin() + End,
-                              [](bool Match) { return Match; })) {
-                Authorized.insert(Coordinate);
-                break;
+              for (uint32_t Coordinate = 0; Coordinate < CandidateCapacity;
+                   ++Coordinate) {
+                const size_t Begin =
+                    size_t(Coordinate) * SeedOccurrences.size();
+                const size_t End = Begin + SeedOccurrences.size();
+                if (std::all_of(SeedMatches.begin() + Begin,
+                                SeedMatches.begin() + End,
+                                [](bool Match) { return Match; })) {
+                  Authorized.insert(Coordinate);
+                  break;
+                }
               }
             }
             bool EntryReachabilityComplete = false;
@@ -3231,6 +3384,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 *EvidenceIncomplete = true;
               return false;
             }
+            if (!consumeFixedPointInfoCopy(Info))
+              return false;
             JumpTableInfo EntryInfo = Info;
             EntryInfo.PhysicalCapacity = CandidateCapacity;
             EntryInfo.MaxEntries = 0;
@@ -3248,10 +3403,24 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 *EvidenceIncomplete = true;
               return false;
             }
-            if (EntryModulo && EntryInfo.MaxEntries <= CandidateCapacity)
+            if (EntryModulo && EntryInfo.MaxEntries <= CandidateCapacity) {
+              if (EntryInfo.MaxEntries >
+                  std::numeric_limits<size_t>::max() - Authorized.size()) {
+                consumeFixedPointEvidence(
+                    std::numeric_limits<size_t>::max());
+                return false;
+              }
+              const size_t AuthorizedUpperBound =
+                  Authorized.size() + EntryInfo.MaxEntries;
+              const size_t InsertWork =
+                  orderedEvidenceLookupWork(AuthorizedUpperBound) + 2;
+              if (!consumeFixedPointProducts(
+                      {{EntryInfo.MaxEntries, InsertWork}}))
+                return false;
               for (uint32_t Coordinate = 0;
                    Coordinate < EntryInfo.MaxEntries; ++Coordinate)
                 Authorized.insert(Coordinate);
+            }
 
             // Some exact modulo theorems are replayable only by rediscovering
             // their full expression in each immutable graph (for example an
@@ -3275,7 +3444,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
             // coordinates for graph exploration, but it does not publish the
             // table: every case is decoded and the full selector/producer proof
             // is replayed below before closure.
-            if (Authorized.empty()) {
+            if (Authorized.empty() && AllowLiteralSeedBootstrap) {
               if (!consumeFixedPointProducts({{SeedOccurrences.size(), 5}}))
                 return false;
               std::vector<JumpTableValueQuery> BoundQueries;
@@ -3330,9 +3499,14 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                   *EvidenceIncomplete = true;
                 return false;
               }
+              if (!consumeFixedPointProducts(
+                      {{1, orderedEvidenceLookupWork(Reachable.size())}}))
+                return false;
               if (!Reachable.count(CurrentFuncEntry))
                 return false;
 
+              if (!consumeFixedPointInfoCopy(Info))
+                return false;
               JumpTableInfo CoreInfo = Info;
               CoreInfo.PhysicalCapacity = CandidateCapacity;
               CoreInfo.MaxEntries = 0;
@@ -3353,21 +3527,36 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
                 return false;
               }
 
-              if (!consumeFixedPointEvidence(Authorized.size()))
+              uint32_t CoreInsertCount = 0;
+              if (CoreModulo && CoreInfo.MaxEntries != 0 &&
+                  CoreInfo.MaxEntries <= CandidateCapacity)
+                CoreInsertCount = CoreInfo.MaxEntries;
+              if (CoreInsertCount >
+                  std::numeric_limits<size_t>::max() - Authorized.size()) {
+                consumeFixedPointEvidence(
+                    std::numeric_limits<size_t>::max());
+                return false;
+              }
+              const size_t NextUpperBound =
+                  Authorized.size() + CoreInsertCount;
+              // Copy traversal, destination nodes and their cleanup, plus the
+              // CoreClosed and equality scans, are all paid before Next is
+              // constructed.  Every possible insert separately prepays its
+              // ordered lookup, node construction, and future destruction.
+              if (!consumeFixedPointProducts(
+                      {{Authorized.size(), 5},
+                       {CoreInsertCount,
+                        orderedEvidenceLookupWork(NextUpperBound) + 2}}))
                 return false;
               std::set<uint32_t> Next = Authorized;
-              if (CoreModulo && CoreInfo.MaxEntries != 0 &&
-                  CoreInfo.MaxEntries <= CandidateCapacity) {
+              if (CoreInsertCount != 0) {
                 RetainedProducerBound = CoreProducers.empty()
                                             ? 0
                                             : CoreInfo.MaxEntries;
                 RetainedProducers = std::move(CoreProducers);
                 for (uint32_t Coordinate = 0;
-                     Coordinate < CoreInfo.MaxEntries; ++Coordinate) {
-                  if (!consumeFixedPointEvidence())
-                    return false;
+                     Coordinate < CoreInsertCount; ++Coordinate)
                   Next.insert(Coordinate);
-                }
               }
 
               const bool CoreClosed =
@@ -3444,6 +3633,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
         *EvidenceIncomplete = true;
       return false;
     }
+    if (!consumeFixedPointInfoCopy(Info))
+      return false;
     JumpTableInfo EntryInfo = Info;
     EntryInfo.MaxEntries = 0;
     EntryInfo.IndexDomainAuthenticated = false;
@@ -3490,6 +3681,8 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
         *EvidenceIncomplete = true;
       return false;
     }
+    if (!consumeFixedPointInfoCopy(Info))
+      return false;
     JumpTableInfo FullInfo = Info;
     FullInfo.MaxEntries = 0;
     FullInfo.IndexDomainAuthenticated = false;
@@ -4050,7 +4243,7 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
     // producer.
     // Thus physical capacity chooses N to test; it never proves x < N.
     if (ReachableInstructions && !RestrictProducerDiscovery) {
-      if (StructuralBudget.consume(
+      if (ProposalBudget.consume(
               orderedEvidenceLookupWork(ReachableInstructions->size()))) {
         for (va_t Addr : *ReachableInstructions) {
           if (!inProofEnvelope(Addr))
@@ -4058,14 +4251,14 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
           if (RetainedInstructionThrough != InvalidVA &&
               Addr <= RetainedInstructionThrough)
             continue;
-          if (!StructuralBudget.consume(
+          if (!ProposalBudget.consume(
                   orderedEvidenceLookupWork(Insns.size()) + 1)) {
             break;
           }
           const auto It = Insns.find(Addr);
           if (It == Insns.end() || It->second.IsInstructionGuard)
             continue;
-          if (!StructuralBudget.consume(It->second.Ops.size())) {
+          if (!ProposalBudget.consume(It->second.Ops.size())) {
             break;
           }
           for (const LowOp &Op : It->second.Ops) {
@@ -4075,12 +4268,12 @@ bool CFGBuilder::inferBoundsFromModulo(const BinaryImage &Img,
               continue;
             recordCandidateProducer(Info.PhysicalCapacity, Op,
                                     /*DefinitionIndex=*/-1,
-                                    StructuralBudget);
-            if (StructuralBudget.exhausted()) {
+                                    ProposalBudget);
+            if (ProposalBudget.exhausted()) {
               break;
             }
           }
-          if (StructuralBudget.exhausted())
+          if (ProposalBudget.exhausted())
             break;
         }
       }
