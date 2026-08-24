@@ -547,6 +547,68 @@ TEST_F(JTE_X86_32, TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTPCField) {
 }
 
 TEST_F(JTE_X86_32,
+       TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTOFFField) {
+  auto ImageOrErr = neverd::loadBinary(i386RelocationWriterFootprintObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *OverlapRecord =
+      Image.findSymbol("jt_i386_tls_desc_gotoff_overlap_record");
+  const neverd::Symbol *OverlapField =
+      Image.findSymbol("jt_i386_tls_desc_gotoff_overlap_field");
+  const neverd::Symbol *OverlapTarget =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_overlap_table");
+  const neverd::Symbol *NonOverlapRecord =
+      Image.findSymbol("jt_i386_tls_desc_gotoff_nonoverlap_record");
+  const neverd::Symbol *NonOverlapField =
+      Image.findSymbol("jt_i386_tls_desc_gotoff_nonoverlap_field");
+  const neverd::Symbol *NonOverlapTarget =
+      Image.findSymbol("jt_i386_gotoff_tls_desc_nonoverlap_table");
+  ASSERT_NE(OverlapRecord, nullptr);
+  ASSERT_NE(OverlapField, nullptr);
+  ASSERT_NE(OverlapTarget, nullptr);
+  ASSERT_NE(NonOverlapRecord, nullptr);
+  ASSERT_NE(NonOverlapField, nullptr);
+  ASSERT_NE(NonOverlapTarget, nullptr);
+  ASSERT_EQ(OverlapRecord->Addr + 4, OverlapField->Addr);
+  ASSERT_LE(NonOverlapRecord->Addr + 8, NonOverlapField->Addr);
+
+  auto Read32 = [&](neverd::va_t Addr) -> std::optional<uint32_t> {
+    const uint8_t *Bytes = Image.readVA(Addr, 4);
+    if (!Bytes)
+      return std::nullopt;
+    uint32_t Value = 0;
+    std::memcpy(&Value, Bytes, sizeof(Value));
+    return Value;
+  };
+  ASSERT_EQ(Read32(OverlapField->Addr),
+            std::optional<uint32_t>(
+                static_cast<uint32_t>(OverlapTarget->Addr)))
+      << "ambiguity suppresses provenance, not the supported GOTOFF write";
+  ASSERT_EQ(Read32(NonOverlapField->Addr),
+            std::optional<uint32_t>(
+                static_cast<uint32_t>(NonOverlapTarget->Addr)));
+
+  EXPECT_EQ(Image.AmbiguousI386GOTOFFFields.count(OverlapField->Addr), 1u);
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(OverlapField->Addr), 0u);
+  EXPECT_EQ(Image.DataPtrRelocTargetOwners.count(OverlapField->Addr), 0u);
+  EXPECT_EQ(Image.DataAddressRelocOperands.count(OverlapField->Addr), 0u)
+      << "the TLS descriptor's biased P+4 write overlaps this exact field";
+  EXPECT_EQ(Image.AmbiguousI386GOTOFFFields.count(NonOverlapField->Addr), 0u);
+  EXPECT_EQ(Image.DataPtrRelocSlots.count(NonOverlapField->Addr), 1u);
+  const neverd::Section *NonOverlapTargetOwner =
+      Image.getSectionFor(NonOverlapTarget->Addr);
+  ASSERT_NE(NonOverlapTargetOwner, nullptr);
+  const auto RecordedOwner =
+      Image.DataPtrRelocTargetOwners.find(NonOverlapField->Addr);
+  ASSERT_NE(RecordedOwner, Image.DataPtrRelocTargetOwners.end());
+  EXPECT_EQ(RecordedOwner->second, NonOverlapTargetOwner->VA);
+  EXPECT_EQ(Image.DataAddressRelocOperands.count(NonOverlapField->Addr), 0u)
+      << "data-resident GOTOFF is recorded as a pointer-table slot rather "
+         "than an instruction operand";
+}
+
+TEST_F(JTE_X86_32,
        SameI386FieldWithMultipleValueRelocationsStaysOpaque) {
   auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -725,6 +787,7 @@ TEST_F(JTE_X86_32,
   neverd::CFGBuilder Builder;
   const neverd::LowFunc Low =
       Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_GT(Builder.i386GOTOFFTombstoneLookupCountForTesting(), 0u);
 
   auto HasOpcodeAt = [&](neverd::va_t Addr, neverd::NdOp Opcode) {
     for (const neverd::LowBlock &Block : Low.Blocks)
@@ -764,6 +827,36 @@ TEST_F(JTE_X86_32,
   EXPECT_EQ(Exhausted.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u);
   EXPECT_TRUE(ExhaustedHasOpcodeAt(Callback->Addr, neverd::NdOp::INDIR_CALL));
   EXPECT_EQ(Exhausted.UnsafeIndirectBranchAddresses.count(Callback->Addr), 0u);
+  EXPECT_GT(ExhaustedBuilder.i386GOTOFFTombstoneLookupCountForTesting(), 0u)
+      << "the user-controlled nested proof budget cannot suppress the "
+         "separately metered exact-field lookup";
+
+  neverd::Decoder LookupExhaustedDecoder;
+  ASSERT_TRUE(LookupExhaustedDecoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder LookupExhaustedBuilder;
+  LookupExhaustedBuilder
+      .setI386GOTOFFTombstoneBookkeepingBudgetForTesting(0);
+  const neverd::LowFunc LookupExhausted = LookupExhaustedBuilder.build(
+      Image, LookupExhaustedDecoder, Function->Addr, Function->Name);
+  auto LookupExhaustedHasOpcodeAt = [&](neverd::va_t Addr,
+                                        neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : LookupExhausted.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+  EXPECT_EQ(
+      LookupExhaustedBuilder.i386GOTOFFTombstoneLookupCountForTesting(), 0u)
+      << "ordered-set lookup must not execute after its independent "
+         "bookkeeping account is exhausted";
+  EXPECT_TRUE(LookupExhausted.JumpTables.empty());
+  EXPECT_TRUE(
+      LookupExhaustedHasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(
+      LookupExhaustedHasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(
+      LookupExhausted.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u);
 }
 
 TEST_F(JTE_X86_32, I386GOTPCReplayRetiresOnlyTheExactQueryKey) {

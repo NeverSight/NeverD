@@ -104,6 +104,35 @@ jt_i386_gotoff_tls_desc_nonoverlap_table:
   .long .Lgotoff_tls_desc_nonoverlap_case1@GOTOFF
 .size jt_i386_gotoff_tls_desc_nonoverlap_table, .-jt_i386_gotoff_tls_desc_nonoverlap_table
 
+// Mirror the biased-writer boundary with GOTOFF rather than GOTPC.  The
+// descriptor record at P writes P+4, exactly overlapping the following
+// GOTOFF word.  Every supported relocation is still applied from the original
+// REL addend, but the GOTOFF field must retain only negative provenance.
+.section .data.rel.ro,"aw",@progbits
+.p2align 2
+.globl jt_i386_tls_desc_gotoff_overlap_record
+jt_i386_tls_desc_gotoff_overlap_record:
+  .long 0
+.globl jt_i386_tls_desc_gotoff_overlap_field
+jt_i386_tls_desc_gotoff_overlap_field:
+  .long 0
+  .reloc jt_i386_tls_desc_gotoff_overlap_record, R_386_TLS_DESC, jt_i386_tls_desc_target
+  .reloc jt_i386_tls_desc_gotoff_overlap_field, R_386_GOTOFF, jt_i386_gotoff_tls_desc_overlap_table
+
+// Positive control: the TLS descriptor's P+4 word ends before this GOTOFF
+// field, so the exact GOTOFF provenance and final bytes remain available.
+.p2align 2
+.globl jt_i386_tls_desc_gotoff_nonoverlap_record
+jt_i386_tls_desc_gotoff_nonoverlap_record:
+  .long 0
+  .long 0
+  .long 0
+.globl jt_i386_tls_desc_gotoff_nonoverlap_field
+jt_i386_tls_desc_gotoff_nonoverlap_field:
+  .long 0
+  .reloc jt_i386_tls_desc_gotoff_nonoverlap_record, R_386_TLS_DESC, jt_i386_tls_desc_target
+  .reloc jt_i386_tls_desc_gotoff_nonoverlap_field, R_386_GOTOFF, jt_i386_gotoff_tls_desc_nonoverlap_table
+
 .section .tdata,"awT",@progbits
 .p2align 2
 .globl jt_i386_tls_desc_target

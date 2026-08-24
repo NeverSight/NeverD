@@ -69,6 +69,13 @@ bool detail::recordUniqueJumpTableProofPoint(
 
 namespace {
 
+size_t orderedSetLookupWork(size_t Count) {
+  size_t Work = 1;
+  for (size_t N = Count; N > 1; N = (N + 1) / 2)
+    ++Work;
+  return Work;
+}
+
 bool intrinsicMayClobberFrameMemory(const LowOp &Op) {
   if (Op.Opcode != NdOp::INTRINSIC)
     return false;
@@ -1960,6 +1967,33 @@ uint64_t scaledIndexReg(const std::vector<LowOp> &Ops, int FromIdx, NdVar V,
   return InvalidVA;
 }
 
+std::optional<va_t> CFGBuilder::lookupAmbiguousI386GOTOFFField(
+    va_t Begin, va_t End, bool &HasAdditionalField) const {
+  HasAdditionalField = false;
+  if (!CurrentImg || Begin > End)
+    return std::nullopt;
+
+  // Keep the actual ordered lookup and its test observer behind one bounded
+  // entry point.  This makes "no debit, no lookup" structural: a zero
+  // bookkeeping allowance cannot even inspect the attacker-sized field set.
+  if (!consumeI386GOTOFFTombstoneBookkeepingEvidence(
+          orderedSetLookupWork(
+              CurrentImg->AmbiguousI386GOTOFFFields.size()) +
+          1))
+    return std::nullopt;
+  ++I386GOTOFFTombstoneLookupCountForTesting;
+  auto Field = CurrentImg->AmbiguousI386GOTOFFFields.lower_bound(Begin);
+  if (Field == CurrentImg->AmbiguousI386GOTOFFFields.end() || *Field > End ||
+      End - *Field < 4)
+    return std::nullopt;
+  auto NextField = Field;
+  ++NextField;
+  HasAdditionalField =
+      NextField != CurrentImg->AmbiguousI386GOTOFFFields.end() &&
+      *NextField < End;
+  return *Field;
+}
+
 bool CFGBuilder::isExactI386GOTOFFInput(const LowOp &Add,
                                         int ConstantSide) const {
   if (!CurrentImg || CurrentImg->Arch != Arch::X86 || !CurrentImg->isELF() ||
@@ -1974,12 +2008,6 @@ bool CFGBuilder::isExactI386GOTOFFInput(const LowOp &Add,
       Insn->second.Size == 0 || Insn->second.Size > InvalidVA - Add.Addr)
     return false;
   const va_t End = Add.Addr + Insn->second.Size;
-  auto OrderedSetLookupWork = [](size_t Count) {
-    size_t Work = 1;
-    for (size_t N = Count; N > 1; N = (N + 1) / 2)
-      ++Work;
-    return Work;
-  };
 
   const bool HasPositiveGOTOFFRole =
       Constant.Provenance == ConstantAddressProvenance::DataAddress &&
@@ -1991,24 +2019,25 @@ bool CFGBuilder::isExactI386GOTOFFInput(const LowOp &Add,
     // this branch opaquely rather than turn it into a callback.  A completed
     // scan still requires the precise LowOp input below, so an unrelated field
     // or callback in the same function cannot acquire the semantic marker.
-    auto Field = CurrentImg->AmbiguousI386GOTOFFFields.lower_bound(Add.Addr);
-    if (Field == CurrentImg->AmbiguousI386GOTOFFFields.end() || *Field > End ||
-        End - *Field < 4)
+    // This lookup is required to claim the exact negative shape, so it cannot
+    // run on the user-controlled nested proof balance: budget zero must still
+    // identify the affected branch.  Debit a separate function-scoped
+    // bookkeeping account before touching the ordered set.  Its exhaustion
+    // shares the incomplete-marker function-level fail-closed bit, avoiding
+    // both an unmetered lookup and a shape-less tail-call conversion.
+    bool HasAdditionalField = false;
+    const std::optional<va_t> Field = lookupAmbiguousI386GOTOFFField(
+        Add.Addr, End, HasAdditionalField);
+    if (!Field)
       return false;
     const bool PriorShapeClaimed = I386GOTOFFProposalShapeClaimed;
     I386GOTOFFProposalShapeClaimed = true;
-    auto NextField = Field;
-    ++NextField;
-    if (NextField != CurrentImg->AmbiguousI386GOTOFFFields.end() &&
-        *NextField < End) {
+    if (HasAdditionalField) {
       I386GOTOFFProposalEvidenceIncomplete = true;
       return false;
     }
     if (!consumeI386GOTOFFProposalEvidence(
-            RelocatedInstructionScalarOperandOccurrences.size()) ||
-        !consumeI386GOTOFFProposalEvidence(
-            OrderedSetLookupWork(
-                CurrentImg->AmbiguousI386GOTOFFFields.size())))
+            RelocatedInstructionScalarOperandOccurrences.size()))
       return false;
 
     const RelocatedInstructionScalarOperandOccurrence *Ambiguous = nullptr;
@@ -2056,7 +2085,7 @@ bool CFGBuilder::isExactI386GOTOFFInput(const LowOp &Add,
         static_cast<va_t>(Encoded));
     constexpr size_t ReplayKeyWork = 5;
     auto PrepayKeySetInsert = [&](const auto &Set) {
-      const size_t Lookup = OrderedSetLookupWork(Set.size());
+      const size_t Lookup = orderedSetLookupWork(Set.size());
       if (Lookup > std::numeric_limits<size_t>::max() / ReplayKeyWork)
         return consumeI386GOTOFFProposalEvidence(
             std::numeric_limits<size_t>::max());

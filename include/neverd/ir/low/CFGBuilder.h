@@ -92,6 +92,14 @@ public:
   setI386GOTOFFProposalEvidenceBudgetForTesting(std::optional<size_t> Limit) {
     I386GOTOFFProposalEvidenceBudgetForTesting = Limit;
   }
+  /// Override only the bounded bookkeeping account that authenticates an
+  /// ambiguous GOTOFF field before the user-controlled nested proof starts.
+  /// Exhaustion is function-level fail-closed, matching the persistent
+  /// incomplete-marker bookkeeping policy.
+  void setI386GOTOFFTombstoneBookkeepingBudgetForTesting(
+      std::optional<size_t> Limit) {
+    I386GOTOFFTombstoneBookkeepingBudgetForTesting = Limit;
+  }
   /// Override the per-resolver-stage stack-materialized jump-table evidence
   /// budget in focused tests.  Production callers leave this unset; every
   /// candidate in one immutable resolver graph shares the global ceiling.
@@ -125,6 +133,9 @@ public:
   }
   bool i386GOTOFFGraphQueryBudgetExhaustedForTesting() const {
     return I386GOTOFFGraphQueryBudgetExhaustedForTesting;
+  }
+  size_t i386GOTOFFTombstoneLookupCountForTesting() const {
+    return I386GOTOFFTombstoneLookupCountForTesting;
   }
   /// Focused transaction boundary hooks.  They expose no proposal contents:
   /// tests only distinguish a commit-tail budget failure from an earlier proof
@@ -1186,7 +1197,15 @@ private:
   /// exhausting this separate bounded account conservatively preserves every
   /// remaining indirect jump in the function.
   size_t IncompleteBranchMarkerEvidenceRemaining = 0;
-  bool IncompleteBranchMarkerEvidenceIncomplete = false;
+  mutable bool IncompleteBranchMarkerEvidenceIncomplete = false;
+  /// Exact ambiguous-GOTOFF field lookup is bookkeeping, not user-controlled
+  /// semantic proof work.  Keep one function-scoped bounded account so a zero
+  /// nested proof budget can still identify the precise branch, while its own
+  /// exhaustion reuses the marker account's conservative function-level bit.
+  mutable size_t I386GOTOFFTombstoneBookkeepingEvidenceRemaining = 0;
+  std::optional<size_t>
+      I386GOTOFFTombstoneBookkeepingBudgetForTesting;
+  mutable size_t I386GOTOFFTombstoneLookupCountForTesting = 0;
   bool ProposalStageCommitTailEvidenceExhaustedForTesting = false;
   bool CommitTailRollbackRetainedPendingI386AmbiguityForTesting = false;
   bool ExhaustStableI386AmbiguityCommitTailForTesting = false;
@@ -1397,6 +1416,19 @@ private:
     I386GOTOFFProposalEvidenceRemaining -= Amount;
     return true;
   }
+  bool consumeI386GOTOFFTombstoneBookkeepingEvidence(
+      size_t Amount = 1) const {
+    if (Amount > I386GOTOFFTombstoneBookkeepingEvidenceRemaining) {
+      I386GOTOFFTombstoneBookkeepingEvidenceRemaining = 0;
+      IncompleteBranchMarkerEvidenceIncomplete = true;
+      return false;
+    }
+    I386GOTOFFTombstoneBookkeepingEvidenceRemaining -= Amount;
+    return true;
+  }
+  std::optional<va_t>
+  lookupAmbiguousI386GOTOFFField(va_t Begin, va_t End,
+                                 bool &HasAdditionalField) const;
   bool consumeStackTableEvidence(size_t Amount = 1) const {
     if (Amount > StackTableEvidenceRemaining) {
       StackTableEvidenceRemaining = 0;

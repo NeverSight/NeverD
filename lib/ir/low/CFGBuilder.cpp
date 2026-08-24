@@ -118,6 +118,11 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   IncompleteBranchMarkerEvidenceRemaining =
       limits::kMaxJumpTableProposalStageEvidenceWork;
   IncompleteBranchMarkerEvidenceIncomplete = false;
+  I386GOTOFFTombstoneBookkeepingEvidenceRemaining = std::min<size_t>(
+      limits::kMaxJumpTableProposalStageEvidenceWork,
+      I386GOTOFFTombstoneBookkeepingBudgetForTesting.value_or(
+          limits::kMaxJumpTableProposalStageEvidenceWork));
+  I386GOTOFFTombstoneLookupCountForTesting = 0;
   ProposalStageCommitTailEvidenceExhaustedForTesting = false;
   CommitTailRollbackRetainedPendingI386AmbiguityForTesting = false;
   ExhaustedStableI386AmbiguityCommitTailForTesting = false;
