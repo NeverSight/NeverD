@@ -1768,6 +1768,95 @@ TEST(MedLLVMEmitterConstants, NarrowUnsignedPhiConstantKeepsItsLowBitPattern) {
   EXPECT_TRUE(StoredExpectedLowBits);
 }
 
+TEST(MedLLVMEmitterReturn,
+     ProjectsCrossBlockYmmParentToTheDeclaredXmmAbiWidth) {
+  constexpr Arch TheArch = Arch::X64;
+  constexpr va_t EntryAddress = 0x4100;
+  constexpr va_t ConsumerAddress = 0x4110;
+
+  LowFunc Low;
+  Low.Entry = EntryAddress;
+  Low.Name = "cross_block_scalar_xmm_return_with_ymm_consumer";
+  Low.Blocks.resize(2);
+
+  LowBlock &Writer = Low.Blocks[0];
+  Writer.Id = 0;
+  Writer.StartAddr = EntryAddress;
+  Writer.EndAddr = EntryAddress + 4;
+  Writer.Succs = {1};
+
+  // A legacy/scalar XMM write preserves the upper YMM half.  The Low-to-Med
+  // alias repair must therefore keep a 32-byte parent for the real YMM use in
+  // the successor; the function return below must not expose that physical
+  // container when the recovered ABI declares only XMM0's low 16 bytes.
+  LowOp ScalarWrite;
+  ScalarWrite.Opcode = NdOp::COPY;
+  ScalarWrite.Addr = EntryAddress;
+  ScalarWrite.Output = NdVar::reg(x86reg::XMM0, 4);
+  ScalarWrite.addInput(NdVar::scalar(UINT64_C(0x3f800000), 4));
+  Writer.Ops.push_back(ScalarWrite);
+
+  LowBlock &Consumer = Low.Blocks[1];
+  Consumer.Id = 1;
+  Consumer.StartAddr = ConsumerAddress;
+  Consumer.EndAddr = ConsumerAddress + 4;
+  Consumer.Preds = {0};
+
+  LowOp WideStore;
+  WideStore.Opcode = NdOp::STORE;
+  WideStore.Addr = ConsumerAddress;
+  WideStore.addInput(NdVar::reg(x86reg::RDI, 8));
+  WideStore.addInput(NdVar::reg(x86reg::XMM0, 32));
+  Consumer.Ops.push_back(WideStore);
+
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = ConsumerAddress + 1;
+  Consumer.Ops.push_back(Return);
+
+  MedFunc Med = LowToMedConverter().convert(Low, TheArch);
+  Med.ReturnType = NdType::makeFloat(8);
+
+  bool SawWideParent = false;
+  bool SawWideConsumer = false;
+  for (const MedBlock &Block : Med.Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      SawWideParent |= Op.Output.Kind == MedVar::Reg &&
+                       Op.Output.RegOff == x86reg::XMM0 && Op.Output.Size == 32;
+      if (Op.Opcode == NdOp::STORE)
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          SawWideConsumer |= Op.Inputs[I].Size == 32;
+    }
+  ASSERT_TRUE(SawWideParent)
+      << "the preserving scalar write must still merge into its YMM parent";
+  ASSERT_TRUE(SawWideConsumer)
+      << "the successor's true YMM consumer must retain all 32 bytes";
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit({Med}, Context, Med.Name, TheArch);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Function = verifiedFunction(*Module, Med.Name);
+  ASSERT_NE(Function, nullptr);
+  ASSERT_TRUE(Function->getReturnType()->isVectorTy());
+  EXPECT_EQ(Function->getReturnType()->getPrimitiveSizeInBits(), 128u);
+
+  bool SawProjectedReturn = false;
+  bool SawI256Store = false;
+  for (const llvm::BasicBlock &Block : *Function)
+    for (const llvm::Instruction &Instruction : Block) {
+      if (const auto *Ret = llvm::dyn_cast<llvm::ReturnInst>(&Instruction)) {
+        ASSERT_NE(Ret->getReturnValue(), nullptr);
+        SawProjectedReturn |=
+            Ret->getReturnValue()->getType() == Function->getReturnType();
+      }
+      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
+        SawI256Store |= Store->getValueOperand()->getType()->isIntegerTy(256);
+    }
+  EXPECT_TRUE(SawProjectedReturn);
+  EXPECT_TRUE(SawI256Store)
+      << "the ABI projection must not narrow a real YMM consumer";
+}
+
 TEST(LowToMedSelectorOccurrence,
      ChangedSourceOpcodeDoesNotBindAStaleOperandRole) {
   auto makeLow = [](bool OpcodeMismatch) {

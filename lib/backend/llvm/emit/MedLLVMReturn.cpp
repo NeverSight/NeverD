@@ -422,12 +422,13 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder) {
         RetVal = Builder.CreateTrunc(RetVal, RetTy);
       else
         RetVal = Builder.CreateZExt(RetVal, RetTy);
-    } else if ((RetTy->isFloatTy() || RetTy->isDoubleTy()) &&
+    } else if (!RetVal->getType()->isPointerTy() && !RetTy->isPointerTy() &&
                RetVal->getType()->getPrimitiveSizeInBits() >
                    RetTy->getPrimitiveSizeInBits()) {
-      // A scalar FP return (i386 x87 st0 convention) extracted from the wider
-      // XMM return register: reinterpret the wide value as an integer, take
-      // the low lane, then bitcast to the scalar FP type.
+      // The selected physical return-register value may be a wider alias than
+      // the recovered ABI type (for example a 32-byte YMM parent carrying the
+      // 16-byte XMM0 result).  Preserve the register model for real wide
+      // consumers, but project its low ABI lane at the RETURN boundary.
       unsigned WideBits = RetVal->getType()->getPrimitiveSizeInBits();
       llvm::Value *WideInt =
           Builder.CreateBitCast(RetVal, llvm::Type::getIntNTy(*Ctx, WideBits));
